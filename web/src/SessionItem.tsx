@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import type { Replying, SessionSummary } from './api'
 import { hm, md } from './format'
 import { SynthTag } from './SynthTag'
@@ -18,8 +19,13 @@ interface Props {
 
 /** サイドバーの一覧の1行 */
 export function SessionItem({ s, active, replying, now }: Props) {
+  // 選ばれたら見えるところまでサイドバーをスクロールする（キーボードで移動したとき用。見えていれば動かない）
+  const ref = useRef<HTMLAnchorElement>(null)
+  useEffect(() => {
+    if (active) ref.current?.scrollIntoView({ block: 'nearest' })
+  }, [active])
   return (
-    <a className={`item${active ? ' active' : ''}${s.archived ? ' archived' : ''}`} href={`#/s/${encodeURIComponent(s.id)}`} title={s.id}>
+    <a ref={ref} className={`item${active ? ' active' : ''}${s.archived ? ' archived' : ''}`} href={`#/s/${encodeURIComponent(s.id)}`} title={s.id}>
       <span className="top">
         <span className="repo">
           <span className={`dot ${s.agent}`} />

@@ -37,7 +37,10 @@ export interface SessionSummary {
   branches: string[]
   cwd: string
   turns: number
-  /** first_user_text があればそれ、無ければ最初の text の1行目。60文字で切る */
+  /**
+   * 一番新しい user_text の1行目（画面からの返信でも端末で打った指示でも、最後の入力に追従する）。
+   * 無ければ first_user_text、それも無ければ最初の text の1行目。60文字で切る
+   */
   title: string
   title_full: string
   /** 1行でも synth があれば synth */

@@ -46,7 +46,7 @@ before(async () => {
   const lines = [
     JSON.stringify(row(new Date(now.getTime() - min(10)), 'S1', { first_user_text: '題名' })),
     'this line is broken',
-    JSON.stringify(row(new Date(now.getTime() - min(5)), 'S1', { text: 'two' })),
+    JSON.stringify(row(new Date(now.getTime() - min(5)), 'S1', { text: 'two', user_text: '続きの題名' })),
     JSON.stringify(row(new Date(now.getTime() - min(1)), 'S2', { agent: 'codex', repo: 'sai' })),
     // 返信用: cwd が実在する Claude / Codex のセッション、合成セッション、エージェント不明
     JSON.stringify(row(new Date(now.getTime() - min(4)), 'C1', { repo: 'r', cwd: dir })),
@@ -125,7 +125,7 @@ test('/api/sessions', async () => {
   assert.deepEqual(data.filters.agents, ['claude', 'codex', 'unknown'])
   const s1 = data.sessions.find((s) => s.id === 'S1@kanban')!
   assert.equal(s1.turns, 2)
-  assert.equal(s1.title, '題名')
+  assert.equal(s1.title, '続きの題名', '一番新しい user_text がタイトル')
   assert.ok(data.rev)
 })
 

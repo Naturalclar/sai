@@ -21,15 +21,15 @@ function row(over: Partial<FeedRow>): FeedRow {
 
 test('feedReplyTargets: エンティティごとに1件、新しい順、ラベルは一番新しい行のもの', () => {
   const rows = [
-    row({ ts: '2026-09-02T10:00:00+09:00', session: 's1', branch: 'main' }),
+    row({ ts: '2026-09-02T10:00:00+09:00', session: 's1', branch: 'main', user_text: '最初の指示' }),
     row({ ts: '2026-09-02T10:05:00+09:00', session: 's2', repo: 'other', first_user_text: 'other の指示' }),
-    row({ ts: '2026-09-02T10:10:00+09:00', session: 's1', branch: 'feat/x' }),
+    row({ ts: '2026-09-02T10:10:00+09:00', session: 's1', branch: 'feat/x', user_text: '続きの指示\n2行目' }),
   ]
   const targets = feedReplyTargets(rows)
   assert.deepEqual(
     targets.map((t) => [t.id, t.repo, t.branch, t.title, t.blocked]),
     [
-      ['s1@sai', 'sai', 'feat/x', '最初の指示', ''],
+      ['s1@sai', 'sai', 'feat/x', '続きの指示', ''],
       ['s2@other', 'other', 'main', 'other の指示', ''],
     ],
   )

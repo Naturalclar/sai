@@ -31,6 +31,12 @@ python3 -m unittest feed.test_record.RecordTest.test_garbage_stdin_exits_zero_an
 python3 -m unittest feed.test_record -k synth
 ```
 
+### PR とマージ
+
+- PR のベースは **必ず `main`**。積み重ねた PR は下が入ってからリベースしてベースを `main` に付け替える（#6 はベースがマージ済みの作業ブランチのままマージされ、`main` に入らなかった）
+- マージは **squash マージ**（`gh pr merge <番号> --squash`）。`main` は PR 1つ = コミット1つにする
+- `gh pr edit --base` が GraphQL の非推奨エラーで失敗することがある。そのときは `gh api -X PATCH repos/<owner>/<repo>/pulls/<番号> -f base=main` を使う
+
 ### Node のバージョン
 
 サーバとテストは Node の型剥がしで `.ts` を直接実行するため **Node 22.18+** が前提（`package.json` の `engines`）。このマシンの asdf 既定は 22.14.0 で、そのままだと `pnpm test` / `pnpm start` が `ERR_UNKNOWN_FILE_EXTENSION` で落ちる。asdf に 22.23.1 が入っているので `asdf shell nodejs 22.23.1` で切り替えるか、応急処置として `node --experimental-strip-types ...` を付ける。

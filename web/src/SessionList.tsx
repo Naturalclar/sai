@@ -1,10 +1,12 @@
-import { api, type SessionFilters } from './api'
-import { usePolling } from './hooks'
+import type { SessionFilters, SessionsResponse } from './api'
+import type { Polled } from './hooks'
 import { DaysSelect } from './DaysSelect'
 import { FacetSelect } from './FacetSelect'
 import { SessionItem } from './SessionItem'
 
 interface Props {
+  /** 一覧の取得結果。ポーリングは App が持つ（フィードの @ の候補にも使う） */
+  list: Polled<SessionsResponse>
   filters: SessionFilters
   setFilters: (next: Partial<SessionFilters>) => void
   /** 右側で開いているセッションのID。無ければフィード */
@@ -12,8 +14,8 @@ interface Props {
 }
 
 /** 左サイドバー。絞り込み、固定の「フィード」、その下にセッション一覧（新しい順） */
-export function SessionList({ filters, setFilters, selectedId }: Props) {
-  const { data, error, updatedAt } = usePolling(() => api.sessions(filters), [filters.repo, filters.agent, filters.date, filters.days])
+export function SessionList({ list, filters, setFilters, selectedId }: Props) {
+  const { data, error, updatedAt } = list
   const now = updatedAt?.getTime() ?? 0
 
   const facets = data?.filters ?? { repos: [], agents: [], dates: [] }

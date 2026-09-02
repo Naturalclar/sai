@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
-import { useHashRoute, useLocalState } from './hooks'
+import { useHashRoute, useLocalState, usePolling } from './hooks'
 import { SessionList } from './SessionList'
 import { SessionView } from './SessionView'
 import { FeedView } from './FeedView'
 import { hm } from './format'
 import { MenuMark } from './MenuMark'
 import { GitHubMark } from './GitHubMark'
-import type { SessionFilters } from './api'
+import { api, type SessionFilters } from './api'
 
 export interface StatusProps {
   onStatus: (updatedAt: Date | null, error: string | null) => void
@@ -39,6 +39,8 @@ export function App() {
 
   // 絞り込みはサイドバーのもの。フィードのリポジトリはこれに従う（同じ画面に「リポジトリ」を2つ出さない）
   const [filters, setFilters] = useLocalState<SessionFilters>('sai.filters', DEFAULT_FILTERS)
+  // 一覧はここで1回だけ取り、サイドバー（表示）とフィード（@ の候補）の両方に渡す。同じ URL を2回叩かない
+  const list = usePolling(() => api.sessions(filters), [filters.repo, filters.agent, filters.date, filters.days])
 
   // サイドバーの開閉。レイアウトは main の class で CSS が切り替える。狭い画面では CSS 側が無視する
   const [ui, setUi] = useLocalState<UiState>('sai.ui', DEFAULT_UI)
@@ -92,14 +94,14 @@ export function App() {
         <aside className="sidebar">
           {/* 幅を固定した箱に入れる。開閉の遷移中に列だけが縮み、中身は折り返さない */}
           <div className="side-inner">
-            <SessionList filters={filters} setFilters={setFilters} selectedId={route.name === 'session' ? route.id : null} />
+            <SessionList list={list} filters={filters} setFilters={setFilters} selectedId={route.name === 'session' ? route.id : null} />
           </div>
         </aside>
         <div className="pane">
           {route.name === 'session' ? (
             <SessionView id={route.id} onStatus={onStatus} onOpenSidebar={openSidebar} />
           ) : (
-            <FeedView repo={filters.repo} onStatus={onStatus} onOpenSidebar={openSidebar} />
+            <FeedView repo={filters.repo} sessions={list.data?.sessions} onStatus={onStatus} onOpenSidebar={openSidebar} />
           )}
         </div>
       </main>

@@ -39,21 +39,19 @@ test('clip はコードポイントで数える', () => {
   assert.equal(clip('😀'.repeat(5), 3), '😀😀…')
 })
 
-test('セッション単位にまとめて新しい順', () => {
+test('(セッション, リポジトリ) 単位にまとめて新しい順', () => {
   const base = new Date('2026-09-02T01:00:00Z')
   const rows = [
     row(base, 'A', { text: '第一声\n二行目', first_user_text: 'やりたいこと' }),
     row(new Date(base.getTime() + min(5)), 'A', { branch: 'feat', text: 'second' }),
-    row(new Date(base.getTime() + min(9)), 'A', { repo: 'other', text: 'third' }),
     row(new Date(base.getTime() + min(60)), 'B', { agent: 'codex', text: 'codex says', session_source: 'synth' }),
   ]
   const sessions = aggregate(rows)
-  assert.deepEqual(sessions.map((s) => s.id), ['B', 'A'])
+  assert.deepEqual(sessions.map((s) => s.id), ['B@kanban', 'A@kanban'])
   const a = sessions[1]!
-  assert.equal(a.turns, 3)
+  assert.equal(a.turns, 2)
   assert.equal(a.title, 'やりたいこと')
-  assert.equal(a.repo, 'other')
-  assert.deepEqual(a.repos, ['kanban', 'other'])
+  assert.equal(a.repo, 'kanban')
   assert.equal(a.branch, 'feat')
   assert.deepEqual(a.branches, ['main', 'feat'])
   assert.equal(a.session_source, 'payload')
@@ -61,6 +59,17 @@ test('セッション単位にまとめて新しい順', () => {
   const b = sessions[0]!
   assert.equal(b.title, 'codex says', 'first_user_text が無ければ最初の text の1行目')
   assert.equal(b.session_source, 'synth')
+})
+
+test('同じセッションIDでもリポジトリが違えば別エンティティ', () => {
+  const base = new Date('2026-09-02T01:00:00Z')
+  const sessions = aggregate([
+    row(base, 'A', { text: 'kanban 側' }),
+    row(new Date(base.getTime() + min(9)), 'A', { repo: 'other', text: 'other 側' }),
+  ])
+  assert.deepEqual(sessions.map((s) => s.id), ['A@other', 'A@kanban'])
+  assert.deepEqual(sessions.map((s) => s.turns), [1, 1])
+  assert.deepEqual(sessions.map((s) => s.repos), [['other'], ['kanban']])
 })
 
 test('タイトルは60文字で切る', () => {
@@ -78,13 +87,13 @@ test('絞り込みと候補', () => {
     row(new Date(base.getTime() - min(60 * 24)), 'C', { repo: 'x' }),
   ])
   const ids = (list: typeof sessions) => new Set(list.map((s) => s.id))
-  assert.deepEqual(ids(filterSessions(sessions, 'x', '', '')), new Set(['A', 'C']))
-  assert.deepEqual(ids(filterSessions(sessions, '', 'codex', '')), new Set(['B']))
-  assert.deepEqual(ids(filterSessions(sessions, 'x', '', '2026-09-01')), new Set(['C']))
+  assert.deepEqual(ids(filterSessions(sessions, 'x', '', '')), new Set(['A@x', 'C@x']))
+  assert.deepEqual(ids(filterSessions(sessions, '', 'codex', '')), new Set(['B@y']))
+  assert.deepEqual(ids(filterSessions(sessions, 'x', '', '2026-09-01')), new Set(['C@x']))
   assert.deepEqual(facets(sessions), { repos: ['x', 'y'], agents: ['claude', 'codex'], dates: ['2026-09-02', '2026-09-01'] })
 })
 
-test('session が空の行は unknown- にまとめる', () => {
+test('session が空の行は unknown-<日付> にまとめる（リポジトリ別）', () => {
   const s = aggregate([row(new Date('2026-09-02T01:00:00Z'), '', { repo: 'r' })])[0]!
-  assert.equal(s.id, 'unknown-r-2026-09-02')
+  assert.equal(s.id, 'unknown-2026-09-02@r')
 })

@@ -18,7 +18,8 @@ sai/
 │   ├── record.py        … フックから呼ばれて1行 append する（Python）
 │   └── test_record.py
 ├── shared/
-│   └── types.ts         … 1行の形と API の形。サーバと画面が両方 import する
+│   ├── types.ts         … 1行の形と API の形。サーバと画面が両方 import する
+│   └── entity.ts        … エンティティID（(セッション, リポジトリ) の組）の作り方
 ├── server/              … 127.0.0.1 専用の HTTP サーバ（TypeScript / Node）。集計と API、dist/ の配信
 │   ├── main.ts          … 入口。引数と bind 先のチェック
 │   ├── app.ts           … ルーティング
@@ -156,13 +157,13 @@ Claude の `Stop` は `session_id` を stdin の JSON に含むが、Codex の `
 
 ### 画面1: セッション一覧
 
-行ごとに1セッション。新しい順。
+行ごとに1エンティティ = **(セッション, リポジトリ)** の組。新しい順。同じセッションIDが別リポジトリに現れても（IDの衝突や cwd の移動）、リポジトリごとに別の行になる。IDは `<セッション>@<リポジトリ>`。
 
 | 列 | 出どころ |
 | --- | --- |
-| 開始 – 終了 | そのセッションの最初と最後の `ts` |
+| 開始 – 終了 | そのエンティティの最初と最後の `ts` |
 | エージェント | `agent`（色分け） |
-| リポジトリ / ブランチ | `repo` / `branch`。途中で変わったら最後の値を出して「+N」 |
+| リポジトリ / ブランチ | `repo` / `branch`。ブランチが途中で変わったら最後の値を出して「+N」 |
 | ターン数 | 行数 |
 | タイトル | `first_user_text` があればそれ、無ければ最初の `text` の1行目。60文字で切る |
 | 印 | `session_source` が `synth` なら「合成」 |
@@ -182,10 +183,10 @@ Slack のチャット風。同一セッションの連続した発言（10分以
 | `GET /` | ビューア（`web/dist/index.html`） |
 | `GET /assets/*` | ビルド成果物。`dist/` の外には出ない |
 | `GET /api/sessions?days=7&repo=&agent=&date=` | セッション一覧（集計済み）。`filters` に絞り込み候補も返す |
-| `GET /api/sessions/<id>?days=30` | そのセッションの全行 |
+| `GET /api/sessions/<id>?days=30` | そのエンティティの全行。`<id>` は `<セッション>@<リポジトリ>` |
 | `GET /api/feed?days=3&repo=` | 生の行 |
 
-集計はサーバ側（`server/aggregate.ts`）。ファイルは `(mtime, size)` で覚えていて、変わっていなければ再パースしない（`server/store.ts`）。1日開きっぱなしにしても重くならないのはこのため。
+集計はサーバ側（`server/aggregate.ts`）。エンティティのキー（`<セッション>@<リポジトリ>`、セッションが取れない行は `unknown-<日付>`）は `shared/entity.ts` にあり、サーバの集計と画面のリンクが同じ関数を使う。ファイルは `(mtime, size)` で覚えていて、変わっていなければ再パースしない（`server/store.ts`）。1日開きっぱなしにしても重くならないのはこのため。
 
 レスポンスの形は `shared/types.ts` に1つだけ書いてあり、サーバの集計と画面の受け取りが同じ型を見る。フィールドを足すときはそこに足すと、片方だけ忘れたときに `pnpm typecheck` で止まる。
 

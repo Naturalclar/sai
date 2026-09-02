@@ -81,7 +81,7 @@ test('/api/sessions', async () => {
   const res = await get('/api/sessions?days=7')
   assert.equal(res.status, 200)
   const data = (await res.json()) as SessionsResponse
-  assert.deepEqual(data.sessions.map((s) => s.id), ['S2', 'S1'])
+  assert.deepEqual(data.sessions.map((s) => s.id), ['S2@sai', 'S1@kanban'])
   assert.deepEqual(data.filters.repos, ['kanban', 'sai'])
   assert.deepEqual(data.filters.agents, ['claude', 'codex'])
   assert.equal(data.sessions[1]!.turns, 2)
@@ -91,17 +91,18 @@ test('/api/sessions', async () => {
 
 test('/api/sessions は絞り込み前の全体から filters を作る', async () => {
   const data = (await (await get('/api/sessions?days=7&agent=codex')).json()) as SessionsResponse
-  assert.deepEqual(data.sessions.map((s) => s.id), ['S2'])
+  assert.deepEqual(data.sessions.map((s) => s.id), ['S2@sai'])
   assert.equal(data.total, 2)
   assert.deepEqual(data.filters.agents, ['claude', 'codex'])
 })
 
 test('/api/sessions/<id>', async () => {
-  const res = await get('/api/sessions/S1')
+  const res = await get(`/api/sessions/${encodeURIComponent('S1@kanban')}`)
   assert.equal(res.status, 200)
   const data = (await res.json()) as SessionDetailResponse
-  assert.equal(data.session.id, 'S1')
+  assert.equal(data.session.id, 'S1@kanban')
   assert.deepEqual(data.rows.map((r) => r.text), ['hi', 'two'])
+  assert.equal((await get('/api/sessions/S1')).status, 404, 'リポジトリ抜きの旧IDでは引けない')
   assert.equal((await get('/api/sessions/nope')).status, 404)
   assert.equal((await get('/api/sessions/')).status, 400)
 })

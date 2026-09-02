@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { extname, resolve, sep } from 'node:path'
 import type { FeedResponse, SessionDetailResponse, SessionsResponse } from '../shared/types.ts'
-import { facets, filterSessions } from './aggregate.ts'
+import { entityId, facets, filterSessions } from './aggregate.ts'
 import { rev as revOf } from './store.ts'
 import type { FeedStore } from './store.ts'
 
@@ -95,7 +95,7 @@ export function createApp(store: FeedStore, distDir: string): Handler {
         const { rev, sessions } = await store.sessions(days)
         const session = sessions.find((s) => s.id === id)
         if (!session) return error(res, 404, 'session not found in window')
-        const rows = (await store.rows(days)).filter((r) => r.session === id)
+        const rows = (await store.rows(days)).filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
         const body: SessionDetailResponse = { rev, session, rows }
         return json(res, body)
       }

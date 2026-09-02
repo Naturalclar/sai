@@ -76,6 +76,7 @@ export function FeedView({ repo, sessions = NO_SESSIONS, onStatus, onOpenSidebar
         <Chat
           rows={rows}
           showChannel
+          sessions={sessions}
           trailer={
             pending.length > 0 &&
             pending.map((p) => (

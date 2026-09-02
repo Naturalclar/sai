@@ -314,8 +314,12 @@ def resolve_codex_session(cwd: str) -> str:
     except Exception:
         return ""
     candidates.sort(key=lambda item: item[0], reverse=True)
+    # macOS の /var → /private/var のように、片方だけシンボリックリンクを解決した
+    # パスになっていることがあるので、比較のときだけ realpath に揃える（記録する cwd は変えない）
+    wanted = os.path.realpath(cwd)
     for _, path in candidates[:ROLLOUT_SCAN_LIMIT]:
-        if _rollout_cwd(path) == cwd:
+        found = _rollout_cwd(path)
+        if found and os.path.realpath(found) == wanted:
             return _rollout_id(path)
     return ""
 

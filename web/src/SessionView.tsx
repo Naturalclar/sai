@@ -6,7 +6,8 @@ import { dayLabel, hm } from './format'
 import { AgentChip, SynthTag } from './AgentChip'
 import { Chat, PendingBubble } from './Chat'
 import { ReplyBox } from './ReplyBox'
-import type { StatusProps } from './App'
+import { BackLink } from './BackLink'
+import type { PaneProps } from './App'
 
 /** 送信した返信。どのエンティティに、そのとき何行あったか */
 interface Sent {
@@ -15,7 +16,7 @@ interface Sent {
   rowsAtSend: number
 }
 
-export function SessionView({ id, onStatus }: { id: string } & StatusProps) {
+export function SessionView({ id, onStatus, onOpenSidebar }: { id: string } & PaneProps) {
   const { data, error, updatedAt } = usePolling(() => api.session(id), [id])
   useEffect(() => onStatus(updatedAt, error), [updatedAt, error, onStatus])
 
@@ -42,7 +43,7 @@ export function SessionView({ id, onStatus }: { id: string } & StatusProps) {
   const blocked = s ? replyBlockedReason(s) : ''
   return (
     <section>
-      <a className="back" href="#/">← 一覧</a>
+      <BackLink onOpenSidebar={onOpenSidebar} />
       {s && (
         <div className="chat-head">
           <h1><span className="hash">#</span>{s.repo}</h1>

@@ -10,7 +10,18 @@ export interface StatusProps {
   onStatus: (updatedAt: Date | null, error: string | null) => void
 }
 
+/** 右ペイン（チャット）に渡すもの。「← 一覧」が広い画面ではサイドバーを開くだけなので、その口も渡す */
+export interface PaneProps extends StatusProps {
+  onOpenSidebar: () => void
+}
+
 const DEFAULT_FILTERS: SessionFilters = { repo: '', agent: '', date: '', days: '7' }
+
+/** 画面の見た目の状態。フィルタと同じく localStorage に残す */
+interface UiState {
+  sidebar: 'open' | 'closed'
+}
+const DEFAULT_UI: UiState = { sidebar: 'open' }
 
 /**
  * 1画面。左のサイドバーにセッション一覧、右にチャット（フィード or 選んだセッション）。
@@ -27,6 +38,24 @@ export function App() {
   // 絞り込みはサイドバーのもの。フィードのリポジトリはこれに従う（同じ画面に「リポジトリ」を2つ出さない）
   const [filters, setFilters] = useLocalState<SessionFilters>('sai.filters', DEFAULT_FILTERS)
 
+  // サイドバーの開閉。レイアウトは main の class で CSS が切り替える。狭い画面では CSS 側が無視する
+  const [ui, setUi] = useLocalState<UiState>('sai.ui', DEFAULT_UI)
+  const sidebarOpen = ui.sidebar !== 'closed'
+  const toggleSidebar = useCallback(() => setUi({ sidebar: sidebarOpen ? 'closed' : 'open' }), [setUi, sidebarOpen])
+  const openSidebar = useCallback(() => setUi({ sidebar: 'open' }), [setUi])
+
+  // Cmd/Ctrl + \ で開閉（VS Code と同じ）。入力欄にフォーカスがあっても効く。IME 変換中は無視
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== '\\' || !(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return
+      if (e.isComposing) return
+      e.preventDefault()
+      toggleSidebar()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [toggleSidebar])
+
   useEffect(() => {
     document.title = route.name === 'session' ? `SAI · ${route.id.slice(0, 12)}` : 'SAI'
   }, [route])
@@ -34,6 +63,17 @@ export function App() {
   return (
     <>
       <header>
+        <button
+          type="button"
+          className="sidebar-toggle"
+          onClick={toggleSidebar}
+          aria-expanded={sidebarOpen}
+          aria-keyshortcuts="Meta+\ Control+\"
+          aria-label={sidebarOpen ? '一覧を隠す' : '一覧を出す'}
+          title={`${sidebarOpen ? '一覧を隠す' : '一覧を出す'} (⌘\\ / Ctrl+\\)`}
+        >
+          <MenuMark />
+        </button>
         <div className="logo">
           SAI <small>agent-feed viewer</small>
         </div>
@@ -46,15 +86,28 @@ export function App() {
           </a>
         )}
       </header>
-      <main className={`layout route-${route.name}`}>
+      <main className={`layout route-${route.name}${sidebarOpen ? '' : ' sidebar-closed'}`}>
         <aside className="sidebar">
           <SessionList filters={filters} setFilters={setFilters} selectedId={route.name === 'session' ? route.id : null} />
         </aside>
         <div className="pane">
-          {route.name === 'session' ? <SessionView id={route.id} onStatus={onStatus} /> : <FeedView repo={filters.repo} onStatus={onStatus} />}
+          {route.name === 'session' ? (
+            <SessionView id={route.id} onStatus={onStatus} onOpenSidebar={openSidebar} />
+          ) : (
+            <FeedView repo={filters.repo} onStatus={onStatus} onOpenSidebar={openSidebar} />
+          )}
         </div>
       </main>
     </>
+  )
+}
+
+/** サイドバー開閉の「≡」。色は currentColor に任せる */
+function MenuMark() {
+  return (
+    <svg viewBox="0 0 16 16" width="20" height="20" aria-hidden="true" fill="currentColor">
+      <path d="M1 3.5A.5.5 0 0 1 1.5 3h13a.5.5 0 0 1 0 1h-13a.5.5 0 0 1-.5-.5zm0 4.5a.5.5 0 0 1 .5-.5h13a.5.5 0 0 1 0 1h-13A.5.5 0 0 1 1 8zm0 4.5a.5.5 0 0 1 .5-.5h13a.5.5 0 0 1 0 1h-13a.5.5 0 0 1-.5-.5z" />
+    </svg>
   )
 }
 

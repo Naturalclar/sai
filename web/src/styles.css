@@ -1,0 +1,89 @@
+:root {
+    --bg: #f6f6f4; --panel: #ffffff; --ink: #1f1f1f; --muted: #6b6b6b; --line: #e3e3df;
+    --accent: #3b5bdb; --hover: #f0f0ec; --chip: #ecece8;
+    --claude: #d97757; --codex: #10a37f; --unknown: #8a8a8a; --synth: #b8860b;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1b1b1d; --panel: #232326; --ink: #ececec; --muted: #9a9a9a; --line: #333337;
+      --accent: #8da2fb; --hover: #2b2b2f; --chip: #2f2f34;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--bg); color: var(--ink); font: 14px/1.5 -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  header { display: flex; align-items: center; gap: 16px; padding: 10px 18px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 2; }
+  header .logo { font-weight: 700; font-size: 18px; letter-spacing: .08em; }
+  header .logo small { font-weight: 400; color: var(--muted); letter-spacing: 0; margin-left: 8px; font-size: 12px; }
+  header nav a { margin-right: 12px; color: var(--muted); }
+  header nav a.active { color: var(--ink); font-weight: 600; }
+  header .status { margin-left: auto; color: var(--muted); font-size: 12px; }
+  header .status.error { color: var(--claude); }
+
+  main { padding: 16px 18px 48px; max-width: 1200px; margin: 0 auto; }
+
+  /* -- filters */
+  .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+  .filters select, .filters input { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font: inherit; }
+  .filters .count { color: var(--muted); font-size: 12px; margin-left: auto; }
+  .filters button { background: transparent; border: 1px solid var(--line); color: var(--muted); border-radius: 6px; padding: 5px 10px; font: inherit; cursor: pointer; }
+  .filters button:hover { background: var(--hover); color: var(--ink); }
+
+  /* -- session table */
+  table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  th, td { padding: 8px 10px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+  th.num { text-align: right; }
+  th { font-size: 12px; color: var(--muted); font-weight: 600; white-space: nowrap; background: var(--bg); }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: var(--hover); }
+  td.time { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px; }
+  td.time b { color: var(--ink); font-weight: 500; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.title { max-width: 520px; }
+  td.title .t { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  td.title .last { display: block; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .repo { font-family: var(--mono); font-size: 12px; }
+  .repo .br { color: var(--muted); }
+  .repo .more { color: var(--muted); font-size: 11px; margin-left: 4px; }
+  .empty { padding: 40px; text-align: center; color: var(--muted); }
+
+  .agent { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; white-space: nowrap; }
+  .dot { width: 10px; height: 10px; border-radius: 3px; display: inline-block; background: var(--unknown); }
+  .dot.claude { background: var(--claude); }
+  .dot.codex { background: var(--codex); }
+  .tag { display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 4px; background: var(--chip); color: var(--muted); margin-left: 6px; vertical-align: middle; }
+  .tag.synth { background: color-mix(in srgb, var(--synth) 18%, transparent); color: var(--synth); font-weight: 600; }
+
+  /* -- chat */
+  .chat-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+  .chat-head h1 { font-size: 18px; margin: 0; }
+  .chat-head h1 .hash { color: var(--muted); font-weight: 400; }
+  .chat-head .meta { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; min-width: 0; }
+  .chat-head .meta.wide { flex-basis: 100%; }
+  .chat-head .meta code { font-family: var(--mono); background: var(--chip); padding: 1px 5px; border-radius: 4px; }
+  .chat { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; max-height: calc(100vh - 220px); overflow-y: auto; }
+  .day { text-align: center; color: var(--muted); font-size: 11px; padding: 10px 0 2px; position: relative; }
+  .day span { background: var(--panel); padding: 0 8px; position: relative; }
+  .day::before { content: ""; position: absolute; left: 16px; right: 16px; top: 18px; border-top: 1px solid var(--line); }
+  .group { display: grid; grid-template-columns: 36px 1fr; gap: 10px; padding: 10px 16px 4px; }
+  .group + .group { border-top: 0; }
+  .avatar { width: 36px; height: 36px; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; font-size: 13px; background: var(--unknown); }
+  .avatar.claude { background: var(--claude); }
+  .avatar.codex { background: var(--codex); }
+  .gh { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .gh .name { font-weight: 700; }
+  .gh .ch { font-family: var(--mono); font-size: 12px; color: var(--accent); }
+  .gh .time, .msg .time { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .msg { position: relative; padding: 2px 0 6px; }
+  .msg .time { position: absolute; left: -46px; top: 4px; width: 40px; text-align: right; opacity: 0; }
+  .msg:hover .time { opacity: 1; }
+  .msg .body { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }
+  .msg .body.clamped { max-height: 9.5em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent); }
+  .msg .more { font-size: 12px; color: var(--accent); cursor: pointer; background: none; border: 0; padding: 0; font-family: inherit; }
+  .msg .empty-text { color: var(--muted); font-style: italic; }
+  .msg .branch { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .back { display: inline-block; margin-bottom: 10px; color: var(--muted); }

@@ -1,0 +1,9 @@
+*.jsonl
+.agent-feed/
+sessions/
+
+__pycache__/
+*.pyc
+
+node_modules/
+web/dist/

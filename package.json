@@ -2,6 +2,7 @@
   "name": "sai",
   "private": true,
   "version": "0.2.0",
+  "repository": "https://github.com/Naturalclar/sai",
   "type": "module",
   "engines": { "node": ">=22.18" },
   "scripts": {

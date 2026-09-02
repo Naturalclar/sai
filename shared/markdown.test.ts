@@ -47,10 +47,23 @@ test('箇条書き: 記号と深さ、記号なしの続き行は前の項目に
   const items = blocks[0]!.kind === 'list' ? blocks[0]!.items : []
   assert.deepEqual(
     items.map((i) => [i.marker, i.depth]),
-    [['-', 0], ['-', 0], ['-', 1], ['-', 1], ['1.', 0], ['2)', 0]],
+    [['-', 0], ['-', 0], ['-', 1], ['-', 2], ['1.', 0], ['2)', 0]],
   )
   assert.deepEqual(items[1]!.lines, [[b(t('b'))]])
   assert.deepEqual(items[5]!.lines, [[t('f')], [t('続き')]])
+})
+
+test('箇条書きの深さ: 2 スペースで 1 段。番号付きの下の 3 スペースも 1 段、タブは 2 スペース扱い、5 段で頭打ち', () => {
+  const depths = (src: string) => {
+    const block = parseMarkdown(src)[0]!
+    return block.kind === 'list' ? block.items.map((i) => i.depth) : []
+  }
+  // #60: 4 スペースの 3 段目が 2 段目と同じ深さになっていた
+  assert.deepEqual(depths(['- a', '  - b', '    - c', '      - d'].join('\n')), [0, 1, 2, 3])
+  assert.deepEqual(depths(['1. a', '   - b', '   1. c'].join('\n')), [0, 1, 1])
+  assert.deepEqual(depths(['- a', '\t- b', '\t\t- c'].join('\n')), [0, 1, 2])
+  assert.deepEqual(depths(['- a', ' - b', '   - c'].join('\n')), [0, 0, 1])
+  assert.deepEqual(depths(['- a', '            - b'].join('\n')), [0, 5])
 })
 
 test('コードブロック: 中身は一切解釈しない。閉じが無ければ末尾まで', () => {

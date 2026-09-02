@@ -103,6 +103,18 @@ class HttpTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn("text/html", ctype)
         self.assertIn(b"SAI", body)
+        if (serve.DIST / "index.html").exists():
+            self.assertIn(b"/assets/", body, "ビルド済みなら dist/index.html を返す")
+        else:
+            self.assertIn(b"pnpm build", body, "未ビルドなら案内を出す")
+
+    def test_static_does_not_escape_dist(self):
+        with self.assertRaises(HTTPError) as ctx:
+            self.get("/assets/../serve.py")
+        self.assertEqual(ctx.exception.code, 404)
+        with self.assertRaises(HTTPError) as ctx:
+            self.get("/assets/nope.js")
+        self.assertEqual(ctx.exception.code, 404)
 
     def test_sessions(self):
         status, _, body = self.get("/api/sessions?days=7")

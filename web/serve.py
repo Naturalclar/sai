@@ -9,7 +9,7 @@
   python3 web/serve.py --port 9000 --feed-dir ~/.agent-feed
 
 エンドポイント:
-  GET /                                  ビューア
+  GET /                                  ビューア（web/dist/。`pnpm build` の成果物）
   GET /api/sessions?days=7&repo=&agent=&date=
   GET /api/sessions/<id>?days=30
   GET /api/feed?days=3
@@ -29,7 +29,23 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 HERE = Path(__file__).resolve().parent
-VIEWER = HERE / "viewer.html"
+DIST = HERE / "dist"  # `pnpm build` の成果物
+MIME = {
+    ".html": "text/html; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".json": "application/json; charset=utf-8",
+    ".map": "application/json; charset=utf-8",
+    ".woff2": "font/woff2",
+}
+NO_DIST = (
+    "<!doctype html><meta charset=utf-8><title>SAI</title>"
+    "<body style='font-family:sans-serif;padding:2em'>"
+    "<h1>SAI</h1><p><code>web/dist/</code> がありません。先にビルドしてください:</p>"
+    "<pre>cd web &amp;&amp; pnpm install &amp;&amp; pnpm build</pre>"
+    "<p>開発中は <code>pnpm dev</code> で Vite を立てると、このサーバの API に流れます。</p>"
+)
 
 TITLE_LEN = 60
 TITLE_FULL_LEN = 300
@@ -246,7 +262,9 @@ class Handler(BaseHTTPRequestHandler):
         path = url.path
         try:
             if path == "/" or path == "/index.html":
-                return self._send_viewer()
+                return self._send_static("index.html")
+            if path.startswith("/assets/"):
+                return self._send_static(path.lstrip("/"))
             if path == "/api/sessions":
                 return self._api_sessions(query)
             if path.startswith("/api/sessions/"):
@@ -263,12 +281,21 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- ルート
 
-    def _send_viewer(self):
+    def _send_static(self, relative: str):
+        """dist/ の中だけを配る。外に出る path は 404"""
+        root = DIST.resolve()
+        target = (root / relative).resolve()
+        if root not in target.parents and target != root:
+            return self._error(404, "not found")
+        if not target.is_file():
+            if relative == "index.html":
+                return self._respond(200, NO_DIST.encode("utf-8"), "text/html; charset=utf-8")
+            return self._error(404, "not found")
         try:
-            body = VIEWER.read_bytes()
+            body = target.read_bytes()
         except OSError:
-            return self._error(500, "viewer.html not found")
-        self._respond(200, body, "text/html; charset=utf-8")
+            return self._error(500, "read failed")
+        self._respond(200, body, MIME.get(target.suffix, "application/octet-stream"))
 
     def _api_sessions(self, query: dict):
         days = _days(query.get("days"), 7)

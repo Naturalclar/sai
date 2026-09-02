@@ -17,12 +17,14 @@ sai/
 │   ├── record.py        … フックから呼ばれて1行 append する
 │   └── test_record.py
 └── web/
-    ├── serve.py         … 127.0.0.1 専用の HTTP サーバ。集計もここ
-    ├── viewer.html      … 画面（依存なし・単一ファイル）
-    └── test_serve.py
+    ├── serve.py         … 127.0.0.1 専用の HTTP サーバ。集計と API、dist/ の配信
+    ├── test_serve.py
+    ├── src/             … 画面（React + TypeScript）
+    ├── package.json     … pnpm。lint は oxlint、ビルドは Vite
+    └── dist/            … `pnpm build` の成果物（コミットしない）
 ```
 
-依存は Python 3.9+ の標準ライブラリだけ。
+配管とサーバは Python 3.9+ の標準ライブラリだけ。画面は pnpm + React + TypeScript + oxlint。
 
 ## 使い方
 
@@ -48,14 +50,23 @@ notify = ["python3", "/absolute/path/to/sai/feed/record.py"]
 
 どちらも絶対パスで。`notify` の JSON が「最後の引数」で来るか stdin で来るかは資料によって食い違うので、`record.py` は両方受ける。
 
-### 2. サーバを立てる
+### 2. 画面をビルドしてサーバを立てる
 
 ```
+cd web && pnpm install && pnpm build && cd ..
 python3 web/serve.py            # http://127.0.0.1:8787/
 python3 web/serve.py --port 9000 --feed-dir ~/.agent-feed
 ```
 
-`file://` で開くと fetch が CORS で止まるので、必ずこのサーバ経由で開く。`127.0.0.1` 以外には bind を拒否する。
+`serve.py` は `web/dist/` を配る。未ビルドなら `/` にその旨が出る。`file://` で開くと fetch が CORS で止まるので、必ずこのサーバ経由で開く。`127.0.0.1` 以外には bind を拒否する。
+
+画面を触るときは `serve.py` を立てたまま `cd web && pnpm dev`。Vite が `/api` を `127.0.0.1:8787` に流す。
+
+```
+pnpm lint        # oxlint
+pnpm typecheck   # tsc --noEmit
+pnpm build       # typecheck してから vite build
+```
 
 ### 3. 確かめる
 
@@ -67,6 +78,7 @@ python3 web/serve.py --port 9000 --feed-dir ~/.agent-feed
 
 ```
 python3 -m unittest feed.test_record web.test_serve
+cd web && pnpm lint && pnpm typecheck
 ```
 
 ## データ
@@ -151,7 +163,7 @@ Claude の `Stop` は `session_id` を stdin の JSON に含むが、Codex の `
 
 ### 画面2: セッションの中身
 
-Slack のチャット風。同一セッションの連続した発言は Slack と同じくまとめる。リポジトリ名がチャンネル。3秒ごとに更新するが、サーバが返す `rev` が変わっていなければ描き直さない。
+Slack のチャット風。同一セッションの連続した発言（10分以内）は Slack と同じくまとめる。リポジトリ名がチャンネル。3秒ごとに更新するが、サーバが返す `rev` が変わっていなければ state を触らない（= 描き直さない）。タブが隠れている間は止まる。
 
 「フィード」タブは全チャンネルを時系列に流したもの（`/api/feed`）。
 
@@ -159,7 +171,8 @@ Slack のチャット風。同一セッションの連続した発言は Slack �
 
 | | |
 | --- | --- |
-| `GET /` | ビューア |
+| `GET /` | ビューア（`web/dist/index.html`） |
+| `GET /assets/*` | ビルド成果物。`dist/` の外には出ない |
 | `GET /api/sessions?days=7&repo=&agent=&date=` | セッション一覧（集計済み）。`filters` に絞り込み候補も返す |
 | `GET /api/sessions/<id>?days=30` | そのセッションの全行 |
 | `GET /api/feed?days=3&repo=` | 生の行 |

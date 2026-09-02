@@ -4,3 +4,6 @@ sessions/
 
 __pycache__/
 *.pyc
+
+node_modules/
+web/dist/

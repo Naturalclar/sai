@@ -6,7 +6,7 @@ import { mkdtemp, rm, writeFile, appendFile, mkdir, stat, utimes, readFile } fro
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Replying, ReplyResponse, SessionsResponse, SessionDetailResponse, SessionMetaResponse, FeedResponse } from '../shared/types.ts'
-import { createApp, parseDays, revWith } from './app.ts'
+import { createApp, parseDays, revWith, sessionIdFrom } from './app.ts'
 import { FeedStore } from './store.ts'
 import { localDate } from './aggregate.ts'
 import { replyCommand } from './runner.ts'
@@ -148,6 +148,36 @@ test('/api/sessions/<id>', async () => {
   assert.equal((await get('/api/sessions/S1')).status, 404, 'リポジトリ抜きの旧IDでは引けない')
   assert.equal((await get('/api/sessions/nope')).status, 404)
   assert.equal((await get('/api/sessions/')).status, 400)
+})
+
+test('sessionIdFrom: 空・/ 入り・壊れた %-エンコードは null。詳細だけ末尾の / を許す', () => {
+  assert.equal(sessionIdFrom('/api/sessions/S1%40kanban'), 'S1@kanban')
+  assert.equal(sessionIdFrom('/api/sessions/S1%40kanban/'), 'S1@kanban')
+  assert.equal(sessionIdFrom('/api/sessions/S1%40kanban/meta', '/meta'), 'S1@kanban')
+  assert.equal(sessionIdFrom('/api/sessions/S1%40kanban/reply', '/reply'), 'S1@kanban')
+  assert.equal(sessionIdFrom('/api/sessions/'), null)
+  assert.equal(sessionIdFrom('/api/sessions//meta', '/meta'), null)
+  assert.equal(sessionIdFrom('/api/sessions/a%2Fb'), null, 'デコード後の / も断る')
+  assert.equal(sessionIdFrom('/api/sessions/%E0%A4%A'), null, 'URIError を投げない')
+  assert.equal(sessionIdFrom('/api/sessions/%E0%A4%A/meta', '/meta'), null)
+  assert.equal(sessionIdFrom('/api/sessions/%'), null)
+})
+
+test('id の %-エンコードが壊れていれば 3 経路とも 400（500 にしない）', async () => {
+  for (const path of ['/api/sessions/%E0%A4%A', '/api/sessions/%E0%A4%A/meta', '/api/sessions/%/meta']) {
+    const res = await get(path)
+    assert.equal(res.status, 400, path)
+    assert.deepEqual(await res.json(), { error: 'bad session id' }, path)
+  }
+  const res = await fetch(`${base}/api/sessions/%E0%A4%A/reply`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text: 'x' }),
+  })
+  assert.equal(res.status, 400)
+  assert.deepEqual(await res.json(), { error: 'bad session id' })
+  // 正しい id は今までどおり
+  assert.equal((await get('/api/sessions/S1%40kanban/')).status, 200, '詳細は末尾の / を許す')
 })
 
 test('/api/feed は壊れた行を落とす', async () => {

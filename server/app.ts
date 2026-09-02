@@ -33,6 +33,24 @@ const REPLY_SUFFIX = '/reply'
 const META_SUFFIX = '/meta'
 
 /**
+ * `/api/sessions/<id>[<suffix>]` から id を取り出す。空、`/` を含む、%-エンコードが壊れている
+ * （decodeURIComponent の URIError）は null で、呼び出し側は 400 bad session id にする。
+ * 詳細 / reply / meta の 3 経路が同じ判定を使い、「id がおかしい」の扱いを揃える。
+ * suffix 無し（詳細）のときだけ末尾の `/` を許す（`/api/sessions/<id>/`）
+ */
+export function sessionIdFrom(path: string, suffix = ''): string | null {
+  let raw = path.slice(SESSIONS_PREFIX.length, path.length - suffix.length)
+  if (!suffix) raw = raw.replace(/\/+$/, '')
+  let id: string
+  try {
+    id = decodeURIComponent(raw)
+  } catch {
+    return null // URIError: URI malformed。クライアントの入力ミスなので 500 にしない
+  }
+  return !id || id.includes('/') ? null : id
+}
+
+/**
  * 別オリジンからの POST か。ブラウザからコマンドが走るので、ローカルで開いている別サイトからの
  * CSRF でエージェントを走らせない。ブラウザは POST に Origin か Sec-Fetch-Site を必ず付ける。
  * どちらも無いのは curl などブラウザ以外なので通す（そもそもコマンドを直接叩ける相手）。
@@ -234,8 +252,8 @@ export function createApp(store: FeedStore, distDir: string, runner?: Runner): H
     try {
       if (isReply) {
         if (method !== 'POST') return error(res, 405, 'method not allowed')
-        const id = decodeURIComponent(path.slice(SESSIONS_PREFIX.length, -REPLY_SUFFIX.length))
-        if (!id || id.includes('/')) return error(res, 400, 'bad session id')
+        const id = sessionIdFrom(path, REPLY_SUFFIX)
+        if (id === null) return error(res, 400, 'bad session id')
         return await reply(req, res, id, parseDays(q.get('days'), 90))
       }
       if (path.startsWith('/api/')) {
@@ -244,8 +262,8 @@ export function createApp(store: FeedStore, distDir: string, runner?: Runner): H
         if (build) res.setHeader('X-SAI-Build', build)
       }
       if (isMeta) {
-        const id = decodeURIComponent(path.slice(SESSIONS_PREFIX.length, -META_SUFFIX.length))
-        if (!id || id.includes('/')) return error(res, 400, 'bad session id')
+        const id = sessionIdFrom(path, META_SUFFIX)
+        if (id === null) return error(res, 400, 'bad session id')
         if (method === 'PUT') return await putMeta(req, res, id, parseDays(q.get('days'), 90))
         const payload: SessionMetaResponse = { id, meta: (await metaStore.get(id)) ?? {} }
         return json(res, payload)
@@ -274,8 +292,8 @@ export function createApp(store: FeedStore, distDir: string, runner?: Runner): H
       }
 
       if (path.startsWith(SESSIONS_PREFIX)) {
-        const id = decodeURIComponent(path.slice(SESSIONS_PREFIX.length)).replace(/\/+$/, '')
-        if (!id || id.includes('/')) return error(res, 400, 'bad session id')
+        const id = sessionIdFrom(path)
+        if (id === null) return error(res, 400, 'bad session id')
         const days = parseDays(q.get('days'), 30)
         const { rev, sessions } = await sessionsWithMeta(days)
         const session = sessions.find((s) => s.id === id)

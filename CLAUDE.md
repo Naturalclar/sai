@@ -74,7 +74,8 @@ Codex CLI (notify) ──────┘                                   │
 - **`record.py` は必ず exit 0。** フックが非0で終わるとエージェント本体を止めるため、失敗は黙って諦める（`AGENT_FEED_DEBUG=1` で `record-errors.log` に残す）。SIGALRM による15秒の自殺タイマーも入っている。stdin より先に argv を見るのも意図的（Codex 経路で閉じられない stdin を read してハングしない）。
 - **セッション終了は掴めない**ので、両エージェントとも「ターン完了」を1行として記録し、セッションはサーバ側の `aggregate()` でまとめる。
 - **Codex の notify にはセッションIDが無い**ので、`~/.codex/sessions/` の rollout ファイルを cwd で引く（`session_source: rollout`）。引けなければ `(repo, cwd, agent)` が同じで30分以内の前行と同じセッションにする（`synth`）。`session_index.jsonl` は壊れていることがあるので索引は使わない。
-- **`first_user_text` は毎行に載せる。** 集計は最古の行の値を使うので、`days` の窓から1行目が落ちてもタイトルが残る。
+- **セッションのタイトルは一番新しい `user_text` に追従する。** `aggregate.ts` の `sessionTitle()` が新しい行から遡って最初の `user_text` の1行目を使うので、画面から返信しても端末で続きの指示を打っても、次のターンが記録された時点で説明文が変わる。フィードの `@` メンション候補のラベル（`feedReplyTargets`）も同じ順。`user_text` が1行も無いときだけ `first_user_text` に落ちる。
+- **`first_user_text` は毎行に載せる。** フォールバック時の集計は最古の行の値を使うので、`days` の窓から1行目が落ちてもタイトルが残る。
 - **エンティティの単位は (セッション, リポジトリ)。** IDは `<セッション>@<リポジトリ>`（セッションが取れない行は `unknown-<日付>`）。キーの作り方は `shared/entity.ts` の `entityId()` にあり、サーバの集計（`aggregate.ts`）・詳細APIの行の絞り込み（`app.ts`）・画面のリンク（`Chat.tsx`）が全部これを使う。別々に組み立てるとリンク切れになるので必ず共有関数を通す。
 - 日付の切り方は `Asia/Tokyo` 固定（`record.py` の `tz()` と `shared/entity.ts` の `TIME_ZONE`）。
 - **SAI は外に出さない。** `127.0.0.1` / `localhost` / `::1` 以外への bind は `main.ts` が拒否する。中身は作業内容そのものなので、デプロイ・ホスティング・Slack への送信はしない。

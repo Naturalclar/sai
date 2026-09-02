@@ -1,6 +1,8 @@
 // 返信（= セッションを再開して1ターン回す）ができるかの判定。
-// サーバの POST 受付（server/app.ts）と画面の入力欄の出し分け（web/src/SessionView.tsx）が同じ関数を使い、ずれない。
-import type { SessionSummary } from './types.ts'
+// サーバの POST 受付（server/app.ts）と画面の入力欄の出し分け（web/src/SessionView.tsx、web/src/FeedView.tsx）が
+// 同じ関数を使い、ずれない。
+import { entityId } from './entity.ts'
+import type { FeedRow, SessionSummary } from './types.ts'
 
 /** 返信できない理由。空文字なら返信できる */
 export function replyBlockedReason(s: Pick<SessionSummary, 'id' | 'agent' | 'session_source'>): string {
@@ -9,4 +11,65 @@ export function replyBlockedReason(s: Pick<SessionSummary, 'id' | 'agent' | 'ses
   if (s.session_source === 'synth') return 'このセッションは再開できません（IDが合成）'
   if (s.session_source !== 'payload' && s.session_source !== 'rollout') return 'このセッションは再開できません（IDの出どころが不明）'
   return ''
+}
+
+// ---- フィードからの返信: @ メンションで返信先を選ぶ（web/src/ReplyBox.tsx / FeedView.tsx）
+
+/** 返信先の候補。フィードの行からエンティティごとに1件 */
+export interface ReplyTarget {
+  id: string
+  repo: string
+  branch: string
+  /** first_user_text の1行目（無ければ text の1行目）。60文字 */
+  title: string
+  /** 返信できない理由。空なら選べる */
+  blocked: string
+}
+
+const TARGET_TITLE_LEN = 60
+
+/**
+ * フィードの行から返信先の候補を作る。エンティティ（entityId）ごとに1件、新しい順（rows は古い順の前提）。
+ * ラベルは一番新しい行の repo / branch / first_user_text。一覧の API を別に叩かないのは、
+ * サイドバーとフィードで days が違い、一覧に無いセッションがフィードに出ることがあるため
+ */
+export function feedReplyTargets(rows: FeedRow[]): ReplyTarget[] {
+  const seen = new Map<string, ReplyTarget>()
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const r = rows[i]!
+    const id = entityId(r.session, r.repo, r.ts)
+    if (seen.has(id)) continue
+    const title = ((r.first_user_text || r.text || '').split('\n')[0] ?? '').trim()
+    seen.set(id, {
+      id,
+      repo: r.repo,
+      branch: r.branch,
+      title: title.length > TARGET_TITLE_LEN ? `${title.slice(0, TARGET_TITLE_LEN)}…` : title,
+      blocked: replyBlockedReason({ id, agent: r.agent, session_source: r.session_source }),
+    })
+  }
+  return [...seen.values()]
+}
+
+/** 検索語でリポジトリ / ブランチ / タイトルを部分一致（大文字小文字は無視）。空なら全部 */
+export function filterReplyTargets(targets: ReplyTarget[], query: string): ReplyTarget[] {
+  const q = query.toLowerCase()
+  if (!q) return targets
+  return targets.filter((t) => `${t.repo}\n${t.branch}\n${t.title}`.toLowerCase().includes(q))
+}
+
+/**
+ * 入力欄の caret 位置から見て、いま打ちかけの @ メンション。
+ * caret より前の最後の `@` が行頭か空白の直後にあり、そこから caret までに空白が無ければ
+ * `{ start: その @ の位置, query: @ の後ろの文字 }`。無ければ null。
+ * 半角の `@` だけ見る（全角の ＠ は普通の文字）。メールアドレスの途中では開かない
+ */
+export function mentionQuery(text: string, caret: number): { start: number; query: string } | null {
+  const head = text.slice(0, caret)
+  const start = head.lastIndexOf('@')
+  if (start < 0) return null
+  if (start > 0 && !/\s/.test(head.charAt(start - 1))) return null
+  const query = head.slice(start + 1)
+  if (/\s/.test(query)) return null
+  return { start, query }
 }

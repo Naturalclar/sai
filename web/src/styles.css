@@ -138,10 +138,27 @@
   .avatar.me { background: var(--accent); }
   .group.pending { opacity: .65; }
   .group.pending .msg .body { font-style: italic; }
-  .reply { display: flex; gap: 8px; align-items: flex-end; margin-top: 10px; }
+  .reply { position: relative; display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+  .reply .row { display: flex; gap: 8px; align-items: flex-end; }
   .reply textarea { flex: 1; resize: vertical; min-height: 2.6em; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font: inherit; }
   .reply textarea:focus { outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent); border-color: var(--accent); }
-  .reply button { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 8px 14px; font: inherit; font-weight: 600; cursor: pointer; white-space: nowrap; }
-  .reply button:disabled { opacity: .5; cursor: default; }
+  .reply .row button { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 8px 14px; font: inherit; font-weight: 600; cursor: pointer; white-space: nowrap; }
+  .reply .row button:disabled { opacity: .5; cursor: default; }
+  /* 返信先チップ（フィード）。→ #repo branch「タイトル」 */
+  .reply .target { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); min-width: 0; }
+  .reply .target b { color: var(--ink); }
+  .reply .target code, .mention code { font-family: var(--mono); font-size: 11px; background: var(--chip); padding: 1px 5px; border-radius: 4px; }
+  .reply .target .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .reply .target .hint { color: var(--muted); opacity: .7; white-space: nowrap; }
+  .reply .target .clear { background: none; border: 0; color: var(--muted); cursor: pointer; font: inherit; padding: 0 4px; line-height: 1; }
+  .reply .target .clear:hover { color: var(--ink); }
+  /* @ の候補。入力欄の上に開く（狭い画面でも隠れない） */
+  .mention { position: absolute; left: 0; right: 0; bottom: 100%; margin: 0 0 6px; padding: 4px 0; list-style: none; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 24px rgba(0, 0, 0, .12); max-height: 40vh; overflow-y: auto; z-index: 3; }
+  .mention li { display: flex; align-items: baseline; gap: 8px; padding: 6px 12px; cursor: pointer; min-width: 0; font-size: 13px; }
+  .mention li.active { background: var(--hover); }
+  .mention li.blocked { opacity: .5; cursor: default; }
+  .mention li.none { color: var(--muted); cursor: default; }
+  .mention li .title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+  .mention li .why { font-size: 11px; color: var(--synth); white-space: nowrap; }
   .notice { color: var(--muted); font-size: 12px; margin-top: 10px; }
   .notice.error { color: var(--claude); }

@@ -100,8 +100,11 @@ function closesFence(line: string, fence: string): boolean {
   return !!m && m[1]!.charAt(0) === fence.charAt(0) && m[1]!.length >= fence.length
 }
 
-/** 字下げの幅から箇条書きの深さ。2〜4 スペースを1段と見なす（タブは 2 スペース扱い） */
-const depthOf = (indent: string) => Math.min(Math.floor((indent.replace(/\t/g, '  ').length + 1) / 3), 5)
+/**
+ * 字下げの幅から箇条書きの深さ。2 スペース = 1 段（タブは 2 スペース扱い）。
+ * `1. ` の下に 3 スペースで揃えた続きも 1 段に丸める（2 → 1、3 → 1、4 → 2、6 → 3）。深さは 5 で頭打ち
+ */
+const depthOf = (indent: string) => Math.min(Math.floor(indent.replace(/\t/g, '  ').length / 2), 5)
 
 export function parseMarkdown(text: string): Block[] {
   const lines = text.replace(/\r\n?/g, '\n').split('\n')

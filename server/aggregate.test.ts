@@ -14,6 +14,7 @@ export function row(ts: Date, session: string, over: Partial<FeedRow> = {}): Fee
     cwd: '/home/u/kanban',
     event: 'Stop',
     text: 'hi',
+    user_text: 'やって',
     first_user_text: '',
     ...over,
   }

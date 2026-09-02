@@ -30,6 +30,7 @@ from pathlib import Path
 # ---------------------------------------------------------------- 設定
 
 MAX_TEXT = 2000
+MAX_USER_TEXT = 2000
 MAX_FIRST_USER = 300
 SYNTH_GAP_SECONDS = 30 * 60
 ROLLOUT_MAX_AGE_SECONDS = 48 * 3600
@@ -247,6 +248,58 @@ def last_assistant_text(path: Path) -> str:
     return ""
 
 
+_COMMAND_NAME_RE = re.compile(r"<command-name>(.*?)</command-name>", re.S)
+_COMMAND_ARGS_RE = re.compile(r"<command-args>(.*?)</command-args>", re.S)
+
+
+def _slash_command(text: str) -> str:
+    """スラッシュコマンドで始めたターンの user 行は `<command-name>/foo</command-name>` の形。
+    人が打ったのは `/foo 引数` なので、それを復元する。コマンドでなければ空。"""
+    match = _COMMAND_NAME_RE.search(text)
+    if not match:
+        return ""
+    name = match.group(1).strip()
+    args = _COMMAND_ARGS_RE.search(text)
+    tail = args.group(1).strip() if args else ""
+    return f"{name} {tail}".strip() if name else ""
+
+
+def _is_tool_result_only(content) -> bool:
+    """ツールの戻りは role=user の行として書かれる。人の入力と区別するため、
+    content が tool_result ブロックだけならそれとみなす。"""
+    if not isinstance(content, list) or not content:
+        return False
+    return all(isinstance(b, dict) and b.get("type") == "tool_result" for b in content)
+
+
+def last_user_text(path: Path) -> str:
+    """Claude の transcript から、最後のターンの入力（人が打った文）を取る。
+
+    末尾から遡って最初に見つかる「人の入力」を返す。ツールの戻り（tool_result だけの
+    user 行）と isMeta の行は飛ばす。`<system-reminder>` や `[Request interrupted` の
+    ような差し込みも飛ばして、その手前の入力を探す。スラッシュコマンドは `/foo 引数`
+    の形に戻す。画像だけの入力（text ブロックが無い）は空文字で止まる。
+    """
+    entries = list(_iter_jsonl(path))
+    for entry in reversed(entries):
+        if entry.get("isMeta") or entry.get("isSidechain"):
+            continue
+        message = entry.get("message")
+        if entry.get("type") != "user" or not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if _is_tool_result_only(content):
+            continue
+        text = _blocks_to_text(content).strip()
+        command = _slash_command(text)
+        if command:
+            return command
+        if text and _is_noise(text):
+            continue
+        return text
+    return ""
+
+
 def first_user_text(path: Path, limit: int = 400) -> str:
     for entry in _iter_jsonl(path, limit=limit):
         role, text = _role_and_text(entry)
@@ -377,6 +430,7 @@ def build_row(payload: dict, now: datetime, directory: Path) -> dict | None:
     cwd = detect_cwd(payload)
     repo, branch = git_facts(cwd)
     text = ""
+    user_text = ""
     first_user = ""
     session = ""
     source = ""
@@ -389,6 +443,7 @@ def build_row(payload: dict, now: datetime, directory: Path) -> dict | None:
         if isinstance(transcript, str) and transcript:
             path = Path(transcript).expanduser()
             text = last_assistant_text(path)
+            user_text = last_user_text(path)
             first_user = first_user_text(path)
 
     elif agent == "codex":
@@ -402,15 +457,15 @@ def build_row(payload: dict, now: datetime, directory: Path) -> dict | None:
             resolved = resolve_codex_session(cwd)
             if resolved:
                 session, source = resolved, "rollout"
+        # input-messages はそのターンの入力そのもの（文字列の配列。念のため文字列も受ける）
+        inputs = payload.get("input-messages") or payload.get("input_messages")
+        if isinstance(inputs, (list, str)):
+            user_text = _blocks_to_text(inputs)
         rollout = find_codex_rollout(session) if source == "rollout" else None
         if rollout is not None:
             first_user = first_user_text(rollout)
         if not first_user:
-            inputs = payload.get("input-messages") or payload.get("input_messages")
-            if isinstance(inputs, list):
-                first_user = _blocks_to_text(inputs)
-            elif isinstance(inputs, str):
-                first_user = inputs
+            first_user = user_text
 
     if not session:
         session = synth_session(directory, now, repo, cwd, agent)
@@ -426,6 +481,8 @@ def build_row(payload: dict, now: datetime, directory: Path) -> dict | None:
         "cwd": cwd,
         "event": detect_event(payload),
         "text": clip(text, MAX_TEXT),
+        # そのターンの入力（人が打った文）。チャットで自分側のバブルになる
+        "user_text": clip(user_text, MAX_USER_TEXT),
         # 一覧のタイトル用。集計側は「一番古い行の値」を使うので、1行目だけに
         # 焼くのではなく毎行に載せる。そうしないと days で切った窓の外に
         # セッションの1行目が落ちたときにタイトルが消える。

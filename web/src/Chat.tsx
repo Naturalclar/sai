@@ -5,23 +5,48 @@ import { AGENT_INITIAL, AGENT_LABEL, type FeedRow } from './api'
 import { dayLabel, hm, minutesBetween, ymd } from './format'
 import { Markdown } from './Markdown'
 
+/** 発言者。自分（ターンの入力）か、エージェント */
+type Speaker = 'me' | FeedRow['agent']
+
+/**
+ * 1つのバブル。1行（= 1ターン）は「自分の入力（user_text）」と「エージェントの返答（text）」の
+ * 2つの発言に展開する。user_text が無い行（古い JSONL など）はエージェントの発言だけ
+ */
+interface Utterance {
+  speaker: Speaker
+  row: FeedRow
+  text: string
+  key: string
+}
+
 interface Group {
-  agent: string
+  speaker: Speaker
   repo: string
   branch: string
   session: string
   firstTs: string
   lastTs: string
-  rows: { row: FeedRow; index: number }[]
+  items: Utterance[]
 }
 
 const GROUP_GAP_MIN = 10
 
-/** Slack と同じ: 同じ発言者（agent+session）が10分以内に続けば1つにまとめる */
+function toUtterances(rows: FeedRow[]): Utterance[] {
+  const out: Utterance[] = []
+  rows.forEach((row, index) => {
+    const mine = row.user_text ?? ''
+    if (mine.trim()) out.push({ speaker: 'me', row, text: mine, key: `${row.ts}:${index}:me` })
+    out.push({ speaker: row.agent, row, text: row.text ?? '', key: `${row.ts}:${index}` })
+  })
+  return out
+}
+
+/** Slack と同じ: 同じ発言者（speaker+session）が10分以内に続けば1つにまとめる */
 function groupRows(rows: FeedRow[]): { day: string; label: string; groups: Group[] }[] {
   const days: { day: string; label: string; groups: Group[] }[] = []
   let current: Group | null = null
-  rows.forEach((row, index) => {
+  for (const u of toUtterances(rows)) {
+    const { row } = u
     const day = ymd(row.ts)
     let bucket = days[days.length - 1]
     if (!bucket || bucket.day !== day) {
@@ -31,18 +56,18 @@ function groupRows(rows: FeedRow[]): { day: string; label: string; groups: Group
     }
     const same =
       current &&
-      current.agent === row.agent &&
+      current.speaker === u.speaker &&
       current.repo === row.repo &&
       current.session === row.session &&
       minutesBetween(current.lastTs, row.ts) < GROUP_GAP_MIN
     if (same && current) {
-      current.rows.push({ row, index })
+      current.items.push(u)
       current.lastTs = row.ts
     } else {
-      current = { agent: row.agent, repo: row.repo, branch: row.branch, session: row.session, firstTs: row.ts, lastTs: row.ts, rows: [{ row, index }] }
+      current = { speaker: u.speaker, repo: row.repo, branch: row.branch, session: row.session, firstTs: row.ts, lastTs: row.ts, items: [u] }
       bucket.groups.push(current)
     }
-  })
+  }
   return days
 }
 
@@ -70,18 +95,21 @@ export function Chat({ rows, showChannel, trailer }: { rows: FeedRow[]; showChan
         <div key={day.day}>
           <div className="day"><span>{day.label}</span></div>
           {day.groups.map((g) => (
-            <div className="group" key={`${g.session}:${g.firstTs}`}>
-              <div className={`avatar ${g.agent}`}>{AGENT_INITIAL[g.agent] ?? '?'}</div>
+            <div className="group" key={`${g.speaker}:${g.session}:${g.firstTs}`}>
+              <div className={`avatar ${g.speaker}`}>{g.speaker === 'me' ? '私' : (AGENT_INITIAL[g.speaker] ?? '?')}</div>
               <div>
                 <div className="gh">
-                  <span className="name">{AGENT_LABEL[g.agent] ?? g.agent}</span>
+                  <span className="name">{g.speaker === 'me' ? 'あなた' : (AGENT_LABEL[g.speaker] ?? g.speaker)}</span>
                   {showChannel && (
                     <a className="ch" href={`#/s/${encodeURIComponent(entityId(g.session, g.repo, g.firstTs))}`} title={g.session}>#{g.repo}</a>
                   )}
                   {g.branch && <span className="branch">{g.branch}</span>}
                   <span className="time">{hm(g.firstTs)}</span>
                 </div>
-                {g.rows.map(({ row, index }) => <Message key={`${row.ts}:${index}`} row={row} />)}
+                {g.items.map((u) => (
+                  // 自分の入力は Markdown にしない（打ったままを出す）。エージェントの返答は Markdown
+                  <Message key={u.key} ts={u.row.ts} text={u.text} markdown={u.speaker !== 'me'} />
+                ))}
               </div>
             </div>
           ))}
@@ -92,7 +120,7 @@ export function Chat({ rows, showChannel, trailer }: { rows: FeedRow[]; showChan
   )
 }
 
-/** 送信した返信の仮バブル。フックで行が届いたら SessionView が消す */
+/** 送信した返信の仮バブル。フックで行が届いたら SessionView が消す（届いた行の user_text が本物になる） */
 export function PendingBubble({ text }: { text: string }) {
   return (
     <div className="group pending">
@@ -113,15 +141,14 @@ export function PendingBubble({ text }: { text: string }) {
 // 折りたたむかは描画前の生の長さで見る（コードブロック1つで8行を超えても折りたたむ。今まで通り）
 const isLong = (text: string) => text.length > 600 || text.split('\n').length > 8
 
-function Message({ row }: { row: FeedRow }) {
+function Message({ ts, text, markdown }: { ts: string; text: string; markdown: boolean }) {
   const [open, setOpen] = useState(false)
-  const text = row.text ?? ''
   const long = isLong(text)
   return (
     <div className="msg">
-      <span className="time">{hm(row.ts)}</span>
+      <span className="time">{hm(ts)}</span>
       {text ? (
-        <div className={`body${long && !open ? ' clamped' : ''}`}><Markdown text={text} /></div>
+        <div className={`body${long && !open ? ' clamped' : ''}`}>{markdown ? <Markdown text={text} /> : text}</div>
       ) : (
         <div className="empty-text">(本文なし)</div>
       )}

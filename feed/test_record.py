@@ -146,10 +146,74 @@ class RecordTest(unittest.TestCase):
         self.assertEqual(row["cwd"], str(self.cwd))
         self.assertEqual(row["text"], "背中のメニューを出した。\nワンハンドロウ 10kg×10×3。")
         self.assertEqual(row["first_user_text"], "背中のメニューを出して")
+        self.assertEqual(row["user_text"], "背中のメニューを出して", "tool_result だけの user 行は飛ばす")
         self.assertRegex(row["ts"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+09:00$")
         # 日付ファイル名は Asia/Tokyo
         today = datetime.now(JST).strftime("%Y-%m-%d")
         self.assertTrue((self.feed_dir / f"{today}.jsonl").exists())
+
+    def _claude_row(self, entries: list[dict]) -> dict:
+        transcript = Path(self.tmp.name) / "transcript.jsonl"
+        write_jsonl(transcript, entries)
+        payload = {"session_id": "s", "transcript_path": str(transcript), "cwd": str(self.cwd), "hook_event_name": "Stop"}
+        result = run(stdin=json.dumps(payload), env=self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return read_rows(self.feed_dir)[-1]
+
+    def test_user_text_is_the_last_turn_input(self):
+        # 2ターン目の入力を取る（1ターン目の「最初の依頼」ではない）
+        row = self._claude_row([
+            {"type": "user", "message": {"role": "user", "content": "最初の依頼"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "1ターン目"}]}},
+            {"type": "user", "message": {"role": "user", "content": "続きの依頼"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "name": "Bash", "input": {}}]}},
+            {"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "content": [{"type": "text", "text": "ツールの戻り"}]}]}},
+            {"type": "user", "isMeta": True, "message": {"role": "user", "content": [{"type": "text", "text": "Base directory for this skill: ..."}]}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "2ターン目"}]}},
+        ])
+        self.assertEqual(row["user_text"], "続きの依頼")
+        self.assertEqual(row["first_user_text"], "最初の依頼")
+        self.assertEqual(row["text"], "2ターン目")
+
+    def test_user_text_skips_injected_rows_and_restores_slash_command(self):
+        # 入力の後ろに差し込まれた system-reminder は飛ばして、その手前の入力を取る
+        row = self._claude_row([
+            {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "直して"}]}},
+            {"type": "user", "message": {"role": "user", "content": "<system-reminder>何か</system-reminder>"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "直した"}]}},
+        ])
+        self.assertEqual(row["user_text"], "直して")
+        # スラッシュコマンドは「/名前 引数」の形に戻す。前のターンの入力までは遡らない
+        row = self._claude_row([
+            {"type": "user", "message": {"role": "user", "content": "前のターン"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "前の返答"}]}},
+            {"type": "user", "message": {"role": "user", "content": "<command-message>start-issue</command-message>\n<command-name>/start-issue</command-name>\n<command-args>19</command-args>"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "着手します"}]}},
+        ])
+        self.assertEqual(row["user_text"], "/start-issue 19")
+
+    def test_user_text_is_empty_for_image_only_or_noise_only(self):
+        # 画像だけの入力は空で止まる（前のターンの入力までは遡らない）
+        row = self._claude_row([
+            {"type": "user", "message": {"role": "user", "content": "前のターン"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "前の返答"}]}},
+            {"type": "user", "message": {"role": "user", "content": [{"type": "image", "source": {}}]}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "画像を見た"}]}},
+        ])
+        self.assertEqual(row["user_text"], "")
+        # 差し込みしか無ければ空
+        row = self._claude_row([
+            {"type": "user", "message": {"role": "user", "content": "<local-command-stdout>...</local-command-stdout>"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "返答"}]}},
+        ])
+        self.assertEqual(row["user_text"], "")
+
+    def test_user_text_is_clipped_to_2000(self):
+        row = self._claude_row([
+            {"type": "user", "message": {"role": "user", "content": "い" * 5000}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "ok"}]}},
+        ])
+        self.assertEqual(len(row["user_text"]), 2000)
 
     def test_text_is_clipped_to_2000(self):
         transcript = Path(self.tmp.name) / "transcript.jsonl"
@@ -200,6 +264,7 @@ class RecordTest(unittest.TestCase):
         self.assertEqual(row["session_source"], "rollout")
         self.assertEqual(row["text"], "README を直した。")
         self.assertEqual(row["first_user_text"], "README を直して")
+        self.assertEqual(row["user_text"], "README を直して")
         self.assertEqual(row["repo"], "myrepo")
 
     def test_codex_accepts_stdin_too(self):
@@ -221,6 +286,20 @@ class RecordTest(unittest.TestCase):
         self.assertEqual(rows[0]["session_source"], "synth")
         self.assertEqual(rows[0]["session"], rows[1]["session"], "30分以内なら同じセッション")
         self.assertEqual(rows[0]["first_user_text"], "first ask")
+        self.assertEqual(rows[0]["user_text"], "first ask")
+        self.assertEqual(rows[1]["user_text"], "first ask", "input-messages はターンごとの入力なので毎行に載る")
+
+    def test_codex_user_text_accepts_string_and_blocks(self):
+        for inputs, want in (
+            ("文字列のまま", "文字列のまま"),
+            ([{"type": "text", "text": "ブロック"}, {"type": "input_text", "text": "2つ目"}], "ブロック\n2つ目"),
+            (None, ""),
+        ):
+            payload = {"type": "agent-turn-complete", "last-assistant-message": "x", "cwd": str(self.cwd)}
+            if inputs is not None:
+                payload["input-messages"] = inputs
+            run(stdin=json.dumps(payload), env=self.env)
+            self.assertEqual(read_rows(self.feed_dir)[-1]["user_text"], want, repr(inputs))
 
     def test_synth_starts_new_session_after_gap(self):
         self.feed_dir.mkdir(parents=True)

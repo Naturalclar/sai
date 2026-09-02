@@ -45,10 +45,33 @@ sai/
   "hooks": {
     "Stop": [
       { "hooks": [ { "type": "command", "command": "python3 /absolute/path/to/sai/feed/record.py" } ] }
+    ],
+    "PermissionRequest": [
+      { "hooks": [ { "type": "command", "command": "python3 /absolute/path/to/sai/feed/record.py" } ] }
+    ],
+    "PreToolUse": [
+      { "matcher": "AskUserQuestion|ExitPlanMode", "hooks": [ { "type": "command", "command": "python3 /absolute/path/to/sai/feed/record.py" } ] }
+    ],
+    "Notification": [
+      { "matcher": "idle_prompt|agent_needs_input|elicitation_dialog|elicitation_url_dialog|permission_prompt", "hooks": [ { "type": "command", "command": "python3 /absolute/path/to/sai/feed/record.py" } ] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command", "command": "python3 /absolute/path/to/sai/feed/record.py" } ] }
     ]
   }
 }
 ```
+
+`Stop` だけでもターンは記録される。残りは**人を待って止まったとき**に「何を待っているか」を出すためのもの:
+
+| フック | いつ鳴るか | 行にするもの |
+| --- | --- | --- |
+| `PermissionRequest` | ツール実行の許可ダイアログが出た瞬間 | `許可待ち: Bash: rm -rf node_modules` のように、ツール名と入力の要約 |
+| `PreToolUse`（`AskUserQuestion` / `ExitPlanMode` だけ） | 質問・プランの承認を求めた | `質問: どのフレームワーク?` / `プランの承認待ち: <先頭3行>`。他のツールで鳴っても何も書かない |
+| `Notification` | 入力待ちなどが 6〜60 秒続いた | `入力待ち` など型ごとの日本語。`permission_prompt` は直前が許可待ちの行なら重ねない。`auth_success` や `agent_completed` のような待ちでない型は書かない |
+| `UserPromptSubmit` | 人が答えて再開した | 本文の無い行。直前が待ちの行のときだけ書く（待ちの解消の合図。それ以外の入力は `Stop` の `user_text` で足りる） |
+
+`record.py` は待ちのフックで **stdout に何も出さない**（`decision` を出すと許可の判断そのものに触ってしまう）。許可するかどうかはいつも通り端末で答える。
 
 **Codex CLI** — `~/.codex/config.toml` に:
 
@@ -129,7 +152,8 @@ Codex CLI ──[notify]───────┘
 | --- | --- |
 | `agent` | `claude` / `codex` / `unknown` |
 | `session_source` | `payload`（ペイロードから）/ `rollout`（Codex のファイルから）/ `synth`（時間で合成）。一覧の信頼度がここで分かる |
-| `text` | 最後のアシスタント発話。Claude は `transcript_path` の末尾から、Codex は `last-assistant-message`。2,000文字で切る |
+| `event` | 何の行か。ターン完了は `Stop`（Claude）/ `agent-turn-complete`（Codex）。人を待って止まった行は `PermissionRequest` / `PreToolUse` / `Notification`、人が答えて再開した行は `UserPromptSubmit`。読み方は `shared/events.ts` の `eventKind()` にまとめてあり、集計と画面が同じ判定を使う |
+| `text` | ターン完了なら最後のアシスタント発話。Claude は `transcript_path` の末尾から、Codex は `last-assistant-message`。2,000文字で切る。待ちの行なら「何を待っているか」（300文字）、再開の行は空 |
 | `user_text` | そのターンの入力（人が打った文）。Claude は `transcript_path` を末尾から遡って最後の入力（ツールの戻りや差し込みは飛ばす。スラッシュコマンドは `/foo 引数` に戻す）、Codex は `input-messages`。画面2で自分側のバブルになり、一番新しい行のものが一覧のタイトルになる。2,000文字で切る |
 | `first_user_text` | 最初のユーザー発話。`user_text` が1行も無い古いセッションのタイトルに使う。300文字で切る |
 
@@ -163,7 +187,7 @@ Codex CLI ──[notify]───────┘
 
 ## 先に確かめた前提
 
-**素朴に作ると動かない点が2つある。**
+**素朴に作ると動かない点が3つある。**
 
 ### 1. 「セッション終了」は掴めない
 
@@ -180,6 +204,19 @@ Claude の `Stop` は `session_id` を stdin の JSON に含むが、Codex の `
 
 それも取れなかったときは `(repo, cwd, agent)` が同じで前の行から**30分以内**なら同じセッションとみなし、ID は `synth-<repo>-<開始時刻>` にする。合成であることが後から分かるよう `session_source` を `synth` にする。一覧では「合成」の印が付く。
 
+### 3. 「待っている」はターン完了とは別の行で掴む
+
+許可待ち・質問待ち・プランの承認待ちで止まっている間は `Stop` が来ないので、ターン完了だけ記録していると一覧では「最後のターンから動いていない」ようにしか見えない。
+
+→ 止まった瞬間に鳴る `PermissionRequest`（許可）と `PreToolUse`（`AskUserQuestion` / `ExitPlanMode`）で「何を待っているか」を待ちの行として書き、後に `Stop` か `UserPromptSubmit` が来たら解消したとみなす（集計は「最後の行が待ちか」だけを見る）。`Notification` は 6〜60 秒遅れて鳴る補欠。
+
+確かめた範囲で分かっていること:
+
+- `PermissionRequest` には `tool_use_id` が無い（`PreToolUse` にはある）。重複は「同じセッションの直前の行と同じ text」で落とす
+- 非対話（`claude -p`。画面からの返信もこれ）で許可が要るツールを呼ぶと、**自動で拒否されて `PermissionRequest` は鳴らない**（Claude Code 2.1.258 で確認）。`AskUserQuestion` は `-p` ではそもそもツールとして出ない。つまり返信経路で許可待ちに入ることは無く、拒否されたあとの返答が普通のターンとして届く
+- `AskUserQuestion` / `ExitPlanMode` で `PermissionRequest` が鳴るかは端末でしか確かめられないので、`PreToolUse` を matcher 付きで並走させている。両方鳴っても同じ text なので1行になる
+- Codex の `notify` は `agent-turn-complete` しか無いので、Codex の承認待ちは記録できない
+
 ## SAI（画面）
 
 ### 1画面: 左にセッション一覧、右にチャット
@@ -193,16 +230,16 @@ Slack と同じ形。左のサイドバーがチャンネル一覧（先頭に�
 | 出すもの | 出どころ |
 | --- | --- |
 | リポジトリ / ブランチ | `repo` / `branch`。ブランチが途中で変わったら最後の値を出して「+N」。先頭の色の点が `agent` |
-| 最終更新 · ターン数 | 最後の `ts` と行数 |
+| 最終更新 · ターン数 | 最後の `ts` と、ターン完了の行数（待ち・再開の行は数えない） |
 | タイトル | 一番新しい `user_text` の1行目。画面から返信しても端末で続きの指示を打っても、次のターンが記録された時点で最後の入力に変わる。`user_text` が無ければ `first_user_text`、それも無ければ最初の `text` の1行目。60文字で切る |
 | 最後の発言 | 最後の `text` の1行目（Markdown の記号は落とす） |
-| 印 | `session_source` が `synth` なら「合成」。アーカイブ済みなら「アーカイブ」（「アーカイブ済みを見る」のときだけ出る） |
+| 印 | `session_source` が `synth` なら「合成」。最後の行が待ちの行（`waiting`）なら「待機中」（マウスを乗せると何を待っているか）。画面からの返信を処理中なら「返信中」。アーカイブ済みなら「アーカイブ」（「アーカイブ済みを見る」のときだけ出る） |
 
 絞り込み（リポジトリ / エージェント / 日付 / 日数）はサイドバーの上。「アーカイブ済みを見る」を押すとアーカイブ済みのセッションだけが薄く出る（既定では出ない）。フィードのリポジトリはここで選んだものに従う（同じ画面に「リポジトリ」を2つ出さない）。フィードの日数だけはチャット側の右上で選ぶ。
 
 ### チャット
 
-Slack のチャット風。1ターンは「自分の入力（`user_text`）→ エージェントの返答（`text`）」の2つのバブルで出るので、往復で読める。同じ発言者の連続した発言（10分以内）は Slack と同じくまとめる。リポジトリ名がチャンネル。自分のバブルは Markdown にせずそのまま出す。3秒ごとに更新するが、サーバが返す `rev` が変わっていなければ state を触らない（= 描き直さない）。タブが隠れている間は止まる。
+Slack のチャット風。1ターンは「自分の入力（`user_text`）→ エージェントの返答（`text`）」の2つのバブルで出るので、往復で読める。同じ発言者の連続した発言（10分以内）は Slack と同じくまとめる。人を待って止まった行（`PermissionRequest` など）は `⏳ 許可待ち: Bash: rm -rf node_modules` のような**待ちのバブル**になり、後にターン完了か再開の行が来ていれば薄く残る。再開の行（`UserPromptSubmit`）は本文が無いのでバブルにしない。リポジトリ名がチャンネル。自分のバブルは Markdown にせずそのまま出す。3秒ごとに更新するが、サーバが返す `rev` が変わっていなければ state を触らない（= 描き直さない）。タブが隠れている間は止まる。
 
 バブルの本文は **Markdown として描く**（`shared/markdown.ts` → `web/src/Markdown.tsx`）。扱うのはエージェントの返答で頻出するものだけ: URL と `[ラベル](URL)` のリンク（別タブで開く。先が http(s) 以外ならリンクにしない）、`**太字**`、`` `コード` ``、`- ` / `1. ` の箇条書き、`#` 見出し、` ``` ` のコードブロック、`> ` 引用、`---` 罫線。それ以外はそのまま改行を保って出す。HTML 文字列は組み立てず React 要素にするので、`text` に HTML が入っていてもただの文字として出る。一覧の「最後の発言」は同じ字句解析で記号だけ落とした1行。
 
@@ -229,7 +266,7 @@ Slack のチャット風。1ターンは「自分の入力（`user_text`）→ �
 | --- | --- |
 | `GET /` | ビューア（`web/dist/index.html`） |
 | `GET /assets/*` | ビルド成果物。`dist/` の外には出ない |
-| `GET /api/sessions?days=7&repo=&agent=&date=&archived=` | セッション一覧（集計済み）。`filters` に絞り込み候補、`replying` に処理中の返信（ID → `{ since, text }`）も返す。既定ではアーカイブ済みを除き、`archived=1` でアーカイブ済みだけ（`total` と `filters` もその集合から） |
+| `GET /api/sessions?days=7&repo=&agent=&date=&archived=` | セッション一覧（集計済み）。各セッションの `waiting` は人を待って止まっていれば「何を待っているか」、そうでなければ空。`filters` に絞り込み候補、`replying` に処理中の返信（ID → `{ since, text }`）も返す。既定ではアーカイブ済みを除き、`archived=1` でアーカイブ済みだけ（`total` と `filters` もその集合から） |
 | `GET /api/sessions/<id>?days=30` | そのエンティティの全行と `replying`。`<id>` は `<セッション>@<リポジトリ>` |
 | `POST /api/sessions/<id>/reply?days=90` | body `{ "text": "..." }`。そのセッションを `cwd` で再開して1ターン回すのを投げっぱなしにし、`202` を返す。合成 ID は `400`、進行中は `409`、別オリジンは `403` |
 | `GET /api/sessions/<id>/meta` | 表示名・アイコン・アーカイブ。`{ "id", "meta": { "name"?, "icon"?, "archived_at"? } }`。無ければ `meta` は `{}` |

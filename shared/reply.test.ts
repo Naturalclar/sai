@@ -48,6 +48,7 @@ function summary(over: Partial<SessionSummary>): SessionSummary {
     session_source: 'payload',
     sources: ['payload'],
     last_text: '返答',
+    waiting: '',
     ...over,
   }
 }

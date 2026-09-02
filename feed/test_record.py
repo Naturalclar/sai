@@ -224,6 +224,112 @@ class RecordTest(unittest.TestCase):
         run(stdin=json.dumps(payload), env=self.env)
         self.assertEqual(len(read_rows(self.feed_dir)[0]["text"]), 2000)
 
+    # -- Claude の待ち（許可待ち・質問待ち）と再開
+
+    def _hook(self, payload: dict, transcript: list[dict] | None = None) -> subprocess.CompletedProcess:
+        base = {"session_id": "sess-w", "cwd": str(self.cwd), "permission_mode": "default"}
+        if transcript is not None:
+            path = Path(self.tmp.name) / "transcript.jsonl"
+            write_jsonl(path, transcript)
+            base["transcript_path"] = str(path)
+        base.update(payload)
+        result = run(stdin=json.dumps(base), env=self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result
+
+    def _stop(self):
+        self._hook({"hook_event_name": "Stop"}, transcript=[
+            {"type": "user", "message": {"role": "user", "content": "最初の依頼"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "やった"}]}},
+        ])
+
+    def test_permission_request_records_waiting_row_and_prints_nothing(self):
+        result = self._hook(
+            {"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": {"command": "rm -rf node_modules", "description": "掃除"}},
+            transcript=[{"type": "user", "message": {"role": "user", "content": "掃除して"}}],
+        )
+        # 観測するだけ。stdout に decision を出すと許可の判断に触ってしまう
+        self.assertEqual(result.stdout, "")
+        rows = read_rows(self.feed_dir)
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["event"], "PermissionRequest")
+        self.assertEqual(row["text"], "許可待ち: Bash: rm -rf node_modules")
+        self.assertEqual(row["user_text"], "", "待ちの行は自分側のバブルにしない")
+        self.assertEqual(row["first_user_text"], "掃除して", "タイトル用の first_user_text は待ちの行にも載せる")
+        self.assertEqual(row["session"], "sess-w")
+
+    def test_ask_user_question_and_exit_plan_mode_summaries(self):
+        self._hook({"hook_event_name": "PermissionRequest", "tool_name": "AskUserQuestion", "tool_input": {
+            "questions": [{"question": "どのフレームワーク?", "header": "FW", "options": [{"label": "React"}]}, {"question": "型は?", "options": []}],
+        }})
+        self._hook({"hook_event_name": "PreToolUse", "tool_name": "ExitPlanMode", "tool_input": {
+            "plan": "## 認証を直す\n\n1. トークンの検証を足す\n2. テスト\n3. README\n4. これは出ない",
+        }})
+        texts = [r["text"] for r in read_rows(self.feed_dir)]
+        self.assertEqual(texts, [
+            "質問: どのフレームワーク? / 型は?",
+            "プランの承認待ち: ## 認証を直す\n1. トークンの検証を足す\n2. テスト",
+        ])
+
+    def test_pretooluse_for_other_tools_records_nothing(self):
+        self._hook({"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "ls"}})
+        self.assertEqual(read_rows(self.feed_dir), [])
+
+    def test_waiting_text_is_clipped_to_300(self):
+        self._hook({"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": {"command": "x" * 1000}})
+        self.assertEqual(read_rows(self.feed_dir)[0]["text"], "許可待ち: Bash: " + "x" * 300)
+
+    def test_notification_records_only_waiting_types(self):
+        self._hook({"hook_event_name": "Notification", "notification_type": "idle_prompt", "message": "Claude is waiting for your input"})
+        self._hook({"hook_event_name": "Notification", "notification_type": "elicitation_dialog", "message": "Server asks for a token"})
+        for kind in ("auth_success", "agent_completed", "quota_auto_resume_fired", "elicitation_complete", "elicitation_response"):
+            self._hook({"hook_event_name": "Notification", "notification_type": kind, "message": "..."})
+        rows = read_rows(self.feed_dir)
+        self.assertEqual([r["event"] for r in rows], ["Notification", "Notification"])
+        self.assertEqual(rows[0]["text"], "入力待ち", "idle_prompt は英語の定型文を添えない")
+        self.assertEqual(rows[1]["text"], "MCP サーバーの入力待ち: Server asks for a token")
+
+    def test_permission_prompt_notification_is_dropped_after_permission_request(self):
+        self._hook({"hook_event_name": "PermissionRequest", "tool_name": "Edit", "tool_input": {"file_path": "/x/a.ts"}})
+        self._hook({"hook_event_name": "Notification", "notification_type": "permission_prompt", "message": "Claude needs your permission"})
+        rows = read_rows(self.feed_dir)
+        self.assertEqual(len(rows), 1, "6秒後の補欠は重ねない")
+        self.assertEqual(rows[0]["text"], "許可待ち: Edit: /x/a.ts")
+        # 直前が許可待ちでなければ permission_prompt も書く（サンドボックスのネットワーク許可は PermissionRequest が鳴らない）
+        self._stop()
+        self._hook({"hook_event_name": "Notification", "notification_type": "permission_prompt", "message": "Claude needs your permission"})
+        self.assertEqual(read_rows(self.feed_dir)[-1]["text"], "許可待ち: Claude needs your permission")
+
+    def test_same_waiting_is_not_duplicated_but_a_new_one_is(self):
+        ask = {"hook_event_name": "PreToolUse", "tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": "赤か青か?"}]}}
+        self._hook(ask)
+        self._hook(dict(ask, hook_event_name="PermissionRequest"))
+        self.assertEqual(len(read_rows(self.feed_dir)), 1, "PreToolUse と PermissionRequest の両方で鳴っても1行")
+        # 拒否のあと別の許可を求めたら、それは新しい待ち
+        self._hook({"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": {"command": "git push"}})
+        self.assertEqual([r["text"] for r in read_rows(self.feed_dir)], ["質問: 赤か青か?", "許可待ち: Bash: git push"])
+
+    def test_user_prompt_submit_is_recorded_only_to_resolve_a_wait(self):
+        self._hook({"hook_event_name": "UserPromptSubmit", "prompt": "最初の依頼"})
+        self.assertEqual(read_rows(self.feed_dir), [], "待っていないときの入力は Stop で足りるので書かない")
+        self._hook({"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": {"command": "ls"}})
+        self._hook({"hook_event_name": "UserPromptSubmit", "prompt": "やめて"})
+        rows = read_rows(self.feed_dir)
+        self.assertEqual([r["event"] for r in rows], ["PermissionRequest", "UserPromptSubmit"])
+        self.assertEqual(rows[1]["text"], "")
+        self.assertEqual(rows[1]["user_text"], "", "再開の行は合図だけ。入力は次の Stop の user_text に載る")
+        self._hook({"hook_event_name": "UserPromptSubmit", "prompt": "つづき"})
+        self.assertEqual(len(read_rows(self.feed_dir)), 2, "直前が再開の行なら、もう待っていない")
+
+    def test_stop_after_waiting_still_records_a_normal_turn(self):
+        self._hook({"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": {"command": "ls"}})
+        self._stop()
+        rows = read_rows(self.feed_dir)
+        self.assertEqual([r["event"] for r in rows], ["PermissionRequest", "Stop"])
+        self.assertEqual(rows[1]["text"], "やった")
+        self.assertEqual(rows[1]["user_text"], "最初の依頼")
+
     # -- Codex
 
     def _rollout(self, session_id: str, cwd: str, day: datetime | None = None, first_user: str = "最初の依頼") -> Path:

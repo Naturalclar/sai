@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
-"""agent-feed: エージェントのターン完了を JSONL に1行 append する。
+"""agent-feed: エージェントのターン完了（と、人を待って止まったこと）を JSONL に1行 append する。
 
-Claude Code の Stop フックと Codex CLI の notify の両方から呼ばれる。
-どちらの経路でも「1行 = 1ターン」で、集計も表示もここではやらない。
+Claude Code のフック（Stop / PermissionRequest / PreToolUse / Notification / UserPromptSubmit）と
+Codex CLI の notify の両方から呼ばれる。基本は「1行 = 1ターン」で、Claude では加えて
+「許可待ち・質問待ちで止まった」ときに待ちの1行、「人が答えて再開した」ときに再開の1行を書く。
+集計も表示もここではやらない。
+
+待ちのフック（PermissionRequest / PreToolUse）は stdout に decision を含む JSON を出したときだけ
+許可の判断に影響する。このスクリプトは **観測するだけ** で、stdout には何も出さない。
 
 このスクリプトは **絶対に失敗しない**（必ず exit 0）。フックが非0で終わると
 エージェント本体を止めてしまうので、記録に失敗したら黙って諦める。
@@ -313,6 +318,110 @@ def clip(text: str, size: int) -> str:
     return text if len(text) <= size else text[:size]
 
 
+# ---------------------------------------------------------------- 待ち（人を待って止まった）
+
+MAX_WAITING_TEXT = 300
+
+# PreToolUse はツール呼び出しごとに鳴るので、人を待つこの2つだけを待ちとして扱う。
+# 他のツールで呼ばれても何も書かない（フック設定の matcher を広く書いても大丈夫なように）
+_PRETOOL_WAITING_TOOLS = ("AskUserQuestion", "ExitPlanMode")
+
+# Notification のうち「人を待っている」型だけ。それ以外（auth_success, agent_completed, quota_* など）は書かない。
+# permission_prompt は PermissionRequest と同じ場面で6秒後に鳴る補欠なので、直前が許可待ちの行なら重ねない
+_WAITING_NOTIFICATIONS = {
+    "permission_prompt": "許可待ち",
+    "idle_prompt": "入力待ち",
+    "agent_needs_input": "入力待ち（バックグラウンドのセッション）",
+    "elicitation_dialog": "MCP サーバーの入力待ち",
+    "elicitation_url_dialog": "ブラウザで開くのを待っている",
+}
+# 型だけで分かる待ちは message（英語の定型文）を添えない
+_NOTIFICATION_WITHOUT_MESSAGE = ("idle_prompt", "agent_needs_input")
+
+
+def _first_lines(text: str, n: int) -> str:
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    return "\n".join(lines[:n])
+
+
+def tool_summary(tool_name: str, tool_input) -> str:
+    """許可ダイアログに出るのと同じ「何をしようとしているか」を1つの文字列に。300文字で切る。"""
+    if not isinstance(tool_input, dict):
+        tool_input = {}
+    if tool_name == "AskUserQuestion":
+        questions = tool_input.get("questions")
+        if isinstance(questions, list):
+            texts = [q.get("question") for q in questions if isinstance(q, dict) and isinstance(q.get("question"), str)]
+            if texts:
+                return clip(" / ".join(t.strip() for t in texts if t.strip()), MAX_WAITING_TEXT)
+    elif tool_name == "ExitPlanMode":
+        plan = tool_input.get("plan")
+        if isinstance(plan, str) and plan.strip():
+            return clip(_first_lines(plan, 3), MAX_WAITING_TEXT)
+    for key in ("command", "file_path", "notebook_path", "url", "description", "prompt", "pattern", "query"):
+        value = tool_input.get(key)
+        if isinstance(value, str) and value.strip():
+            return clip(value.strip(), MAX_WAITING_TEXT)
+    try:
+        return clip(json.dumps(tool_input, ensure_ascii=False, sort_keys=True), MAX_WAITING_TEXT)
+    except Exception:
+        return ""
+
+
+def waiting_text(payload: dict) -> str | None:
+    """待ちの行の text。「何を待っているか」を日本語の接頭辞付きで返す。待ちでなければ None（行を書かない）。"""
+    event = detect_event(payload)
+    if event in ("PermissionRequest", "PreToolUse"):
+        tool_name = payload.get("tool_name")
+        if not isinstance(tool_name, str) or not tool_name:
+            return None
+        if event == "PreToolUse" and tool_name not in _PRETOOL_WAITING_TOOLS:
+            return None
+        summary = tool_summary(tool_name, payload.get("tool_input"))
+        if tool_name == "AskUserQuestion":
+            return f"質問: {summary}" if summary else "質問に答えるのを待っている"
+        if tool_name == "ExitPlanMode":
+            return f"プランの承認待ち: {summary}" if summary else "プランの承認待ち"
+        return f"許可待ち: {tool_name}: {summary}" if summary else f"許可待ち: {tool_name}"
+    if event == "Notification":
+        kind = payload.get("notification_type")
+        label = _WAITING_NOTIFICATIONS.get(kind) if isinstance(kind, str) else None
+        if not label:
+            return None
+        message = payload.get("message")
+        if kind not in _NOTIFICATION_WITHOUT_MESSAGE and isinstance(message, str) and message.strip():
+            return clip(f"{label}: {message.strip()}", MAX_WAITING_TEXT)
+        return label
+    return None
+
+
+def is_waiting_event(event: str) -> bool:
+    return event in ("PermissionRequest", "PreToolUse", "Notification")
+
+
+def last_session_row(directory: Path, now: datetime, session: str, repo: str) -> dict | None:
+    """同じ (セッション, リポジトリ) の直前の行。待ちの重複と、再開の行を書くかの判断に使う。"""
+    previous = None
+    for row in _recent_rows(directory, now):
+        if row.get("session") == session and row.get("repo") == repo:
+            previous = row
+    return previous
+
+
+def skip_waiting(previous: dict | None, event: str, payload: dict, text: str) -> bool:
+    """待ちの行を重ねない。
+    - 直前が同じ text の待ち → 同じ待ちが二重に鳴った（PermissionRequest と PreToolUse の両方など）
+    - 直前が許可待ち（PermissionRequest / PreToolUse）で、今回が Notification の permission_prompt → 6秒後の補欠
+    """
+    if not previous or not is_waiting_event(str(previous.get("event") or "")):
+        return False
+    if previous.get("text") == text:
+        return True
+    if event == "Notification" and payload.get("notification_type") == "permission_prompt":
+        return previous.get("event") in ("PermissionRequest", "PreToolUse")
+    return False
+
+
 # ---------------------------------------------------------------- Codex セッションID
 
 _UUID_RE = re.compile(
@@ -435,16 +544,28 @@ def build_row(payload: dict, now: datetime, directory: Path) -> dict | None:
     session = ""
     source = ""
 
+    event = detect_event(payload)
+    waiting = None
+
     if agent == "claude":
         session_id = payload.get("session_id")
         if isinstance(session_id, str) and session_id:
             session, source = session_id, "payload"
+        if is_waiting_event(event):
+            # 待ちの行。text は「何を待っているか」で、待ちでない型（auth_success など）なら書かない
+            waiting = waiting_text(payload)
+            if waiting is None:
+                return None
         transcript = payload.get("transcript_path")
         if isinstance(transcript, str) and transcript:
             path = Path(transcript).expanduser()
-            text = last_assistant_text(path)
-            user_text = last_user_text(path)
+            # タイトル用の first_user_text はどの行にも載せる。本文と入力はターン完了の行だけ
             first_user = first_user_text(path)
+            if event not in ("UserPromptSubmit",) and waiting is None:
+                text = last_assistant_text(path)
+                user_text = last_user_text(path)
+        if waiting is not None:
+            text = waiting
 
     elif agent == "codex":
         value = payload.get("last-assistant-message") or payload.get("last_assistant_message")
@@ -471,6 +592,14 @@ def build_row(payload: dict, now: datetime, directory: Path) -> dict | None:
         session = synth_session(directory, now, repo, cwd, agent)
         source = "synth"
 
+    if agent == "claude" and (waiting is not None or event == "UserPromptSubmit"):
+        previous = last_session_row(directory, now, session, repo)
+        # 再開（UserPromptSubmit）は毎ターン鳴るので、待ちを解消するときだけ書く（それ以外は Stop で足りる）
+        if event == "UserPromptSubmit" and not (previous and is_waiting_event(str(previous.get("event") or ""))):
+            return None
+        if waiting is not None and skip_waiting(previous, event, payload, waiting):
+            return None
+
     return {
         "ts": now.isoformat(timespec="seconds"),
         "agent": agent,
@@ -479,7 +608,7 @@ def build_row(payload: dict, now: datetime, directory: Path) -> dict | None:
         "session": session,
         "session_source": source,
         "cwd": cwd,
-        "event": detect_event(payload),
+        "event": event,
         "text": clip(text, MAX_TEXT),
         # そのターンの入力（人が打った文）。チャットで自分側のバブルになる
         "user_text": clip(user_text, MAX_USER_TEXT),

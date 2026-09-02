@@ -3,6 +3,7 @@ import { hm, md } from './format'
 import { SynthTag } from './SynthTag'
 import { ReplyingTag } from './ReplyingTag'
 import { ArchivedTag } from './ArchivedTag'
+import { WaitingTag } from './WaitingTag'
 import { More } from './More'
 import { stripMarkdown } from '../../shared/markdown.ts'
 
@@ -31,6 +32,7 @@ export function SessionItem({ s, active, replying, now }: Props) {
         {s.meta?.icon && <span className="icon">{s.meta.icon}</span>}
         {s.meta?.name || s.title || '(無題)'}
         {s.session_source === 'synth' && <SynthTag />}
+        {s.waiting && <WaitingTag text={s.waiting} />}
         {replying && <ReplyingTag since={replying.since} now={now} />}
         {s.archived && <ArchivedTag />}
       </span>

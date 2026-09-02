@@ -45,3 +45,25 @@ test('日付が変わったら日ごとの束を分け、グループも跨が�
   assert.equal(days[0]!.groups.length, 1)
   assert.equal(days[1]!.groups.length, 1)
 })
+
+test('待ちの行は待ちの発言になり、後に同じセッションの行が来ていれば resolved', () => {
+  const wait = row(1, { event: 'PermissionRequest', text: '許可待ち: Bash: ls', user_text: '' })
+  const open = toUtterances([row(0), wait])
+  assert.equal(open.length, 2)
+  assert.deepEqual([open[1]!.waiting, open[1]!.resolved, open[1]!.text, open[1]!.speaker], [true, false, '許可待ち: Bash: ls', 'claude'])
+
+  const closed = toUtterances([row(0), wait, row(2)])
+  assert.equal(closed[1]!.resolved, true)
+
+  // 別セッションの行では解消しない
+  const other = toUtterances([row(0), wait, row(2, { session: 's2' })])
+  assert.equal(other[1]!.resolved, false)
+})
+
+test('再開（UserPromptSubmit）の行はバブルにしないが、待ちの解消にはなる', () => {
+  const us = toUtterances([row(0, { event: 'PermissionRequest', text: '許可待ち: Bash: ls', user_text: '' }), row(1, { event: 'UserPromptSubmit', text: '', user_text: '' })])
+  assert.equal(us.length, 1)
+  assert.equal(us[0]!.resolved, true)
+  const days = groupRows([row(0), row(1, { event: 'UserPromptSubmit', text: '', user_text: '' })])
+  assert.equal(days[0]!.groups[0]!.items.length, 1)
+})

@@ -187,6 +187,8 @@
   .group.pending .msg .body { font-style: italic; }
   /* 5分を超えて処理中。長引いていることが見えるように時刻の色を変える */
   .group.pending.long .gh .time { color: var(--synth); font-weight: 600; }
+  .pending-line { display: flex; gap: 8px; align-items: baseline; padding: 2px 16px 10px 62px; color: var(--muted); font-size: 12px; }
+  .pending-line.long .time { color: var(--synth); font-weight: 600; }
   .reply { position: relative; display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
   .reply .row { display: flex; gap: 8px; align-items: flex-end; }
   .reply textarea { flex: 1; resize: vertical; min-height: 2.6em; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font: inherit; }

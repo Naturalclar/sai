@@ -310,18 +310,32 @@ class RecordTest(unittest.TestCase):
         self._hook({"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": {"command": "git push"}})
         self.assertEqual([r["text"] for r in read_rows(self.feed_dir)], ["質問: 赤か青か?", "許可待ち: Bash: git push"])
 
-    def test_user_prompt_submit_is_recorded_only_to_resolve_a_wait(self):
-        self._hook({"hook_event_name": "UserPromptSubmit", "prompt": "最初の依頼"})
-        self.assertEqual(read_rows(self.feed_dir), [], "待っていないときの入力は Stop で足りるので書かない")
+    def test_user_prompt_submit_records_the_prompt(self):
+        self._hook({"hook_event_name": "UserPromptSubmit", "prompt": "  最初の依頼 "})
+        rows = read_rows(self.feed_dir)
+        self.assertEqual([r["event"] for r in rows], ["UserPromptSubmit"])
+        self.assertEqual(rows[0]["text"], "", "返答はまだ無い")
+        self.assertEqual(rows[0]["user_text"], "最初の依頼", "入力はその場で載せる。画面は Stop を待たずに自分側のバブルを出す")
+        self.assertEqual(rows[0]["first_user_text"], "最初の依頼", "transcript がまだ無くてもタイトルが付く")
+        self.assertEqual(rows[0]["session"], "sess-w")
+
+        # 待ちの後の入力は、入力の行であり待ちの解消の合図でもある
         self._hook({"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": {"command": "ls"}})
         self._hook({"hook_event_name": "UserPromptSubmit", "prompt": "やめて"})
         rows = read_rows(self.feed_dir)
-        self.assertEqual([r["event"] for r in rows], ["PermissionRequest", "UserPromptSubmit"])
-        self.assertEqual(rows[1]["text"], "")
-        self.assertEqual(rows[1]["user_text"], "", "再開の行は合図だけ。入力は次の Stop の user_text に載る")
-        self._hook({"hook_event_name": "UserPromptSubmit", "prompt": "つづき"})
-        self.assertEqual(len(read_rows(self.feed_dir)), 2, "直前が再開の行なら、もう待っていない")
+        self.assertEqual([r["event"] for r in rows], ["UserPromptSubmit", "PermissionRequest", "UserPromptSubmit"])
+        self.assertEqual(rows[2]["user_text"], "やめて")
 
+    def test_user_prompt_submit_without_prompt_only_resolves_a_wait(self):
+        self._hook({"hook_event_name": "UserPromptSubmit", "prompt": ""})
+        self.assertEqual(read_rows(self.feed_dir), [], "入力が空で、待ってもいないなら書くものが無い")
+        self._hook({"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": {"command": "ls"}})
+        self._hook({"hook_event_name": "UserPromptSubmit"})
+        rows = read_rows(self.feed_dir)
+        self.assertEqual([r["event"] for r in rows], ["PermissionRequest", "UserPromptSubmit"])
+        self.assertEqual(rows[1]["user_text"], "", "合図だけの行")
+        self._hook({"hook_event_name": "UserPromptSubmit"})
+        self.assertEqual(len(read_rows(self.feed_dir)), 2, "直前が再開の行なら、もう待っていない")
     def test_stop_after_waiting_still_records_a_normal_turn(self):
         self._hook({"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": {"command": "ls"}})
         self._stop()

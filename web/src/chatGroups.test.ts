@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { FeedRow } from '../../shared/types.ts'
-import { groupRows, toUtterances } from './chatGroups.ts'
+import { groupRows, promptArrived, toUtterances } from './chatGroups.ts'
 
 // 時刻は Asia/Tokyo 固定のプロセスに依存しないよう、同じ日の中で分だけ動かす
 const base = new Date('2026-09-02T03:00:00Z')
@@ -60,10 +60,46 @@ test('待ちの行は待ちの発言になり、後に同じセッションの�
   assert.equal(other[1]!.resolved, false)
 })
 
-test('再開（UserPromptSubmit）の行はバブルにしないが、待ちの解消にはなる', () => {
+test('入力の行（UserPromptSubmit + user_text）は自分の発言になり、続くターン完了の同じ入力は重ねない', () => {
+  const prompt = row(0, { event: 'UserPromptSubmit', text: '', user_text: '頼み' })
+  // 入力 → 返答。自分のバブルは入力の行の分だけ
+  const us = toUtterances([prompt, row(1, { user_text: '頼み' })])
+  assert.deepEqual(us.map((u) => [u.speaker, u.text]), [['me', '頼み'], ['claude', '返答']])
+  assert.equal(us[0]!.row, prompt, '自分の発言は入力の行から')
+
+  // 途中で待ちを挟んでも同じ
+  const waited = toUtterances([prompt, row(1, { event: 'PermissionRequest', text: '許可待ち: Bash: ls', user_text: '' }), row(2, { user_text: '頼み' })])
+  assert.deepEqual(waited.map((u) => u.speaker), ['me', 'claude', 'claude'])
+  assert.equal(waited[1]!.resolved, true)
+
+  // ターン完了の入力が違えば（端末で別の指示を打った）それは出す
+  const differ = toUtterances([prompt, row(1, { user_text: '別の指示' })])
+  assert.deepEqual(differ.map((u) => [u.speaker, u.text]), [['me', '頼み'], ['me', '別の指示'], ['claude', '返答']])
+
+  // 一度重ねなかったら忘れる。次のターンの同じ入力は出す（入力の行が無かった = フック未設定）
+  const again = toUtterances([prompt, row(1, { user_text: '頼み' }), row(2, { user_text: '頼み' })])
+  assert.deepEqual(again.map((u) => u.speaker), ['me', 'claude', 'me', 'claude'])
+
+  // 別セッションの入力の行は関係ない
+  const other = toUtterances([row(0, { event: 'UserPromptSubmit', text: '', user_text: '頼み', session: 's2' }), row(1, { user_text: '頼み' })])
+  assert.deepEqual(other.map((u) => [u.speaker, u.row.session]), [['me', 's2'], ['me', 's1'], ['claude', 's1']])
+})
+
+test('合図だけの再開の行（user_text 無し）はバブルにしないが、待ちの解消にはなる', () => {
   const us = toUtterances([row(0, { event: 'PermissionRequest', text: '許可待ち: Bash: ls', user_text: '' }), row(1, { event: 'UserPromptSubmit', text: '', user_text: '' })])
   assert.equal(us.length, 1)
   assert.equal(us[0]!.resolved, true)
   const days = groupRows([row(0), row(1, { event: 'UserPromptSubmit', text: '', user_text: '' })])
   assert.equal(days[0]!.groups[0]!.items.length, 1)
+})
+
+test('promptArrived: 送った返信と同じ入力の行が、送信時刻より後（1分の許容）に同じエンティティにあるか', () => {
+  const since = at(10)
+  const prompt = row(10, { event: 'UserPromptSubmit', text: '', user_text: ' 続きを ' })
+  assert.equal(promptArrived([row(0), prompt], 's1@sai', '続きを', since), true)
+  assert.equal(promptArrived([row(0), row(10, { event: 'UserPromptSubmit', text: '', user_text: '続きを', session: 's2' })], 's1@sai', '続きを', since), false, '別エンティティ')
+  assert.equal(promptArrived([row(0), row(10, { user_text: '続きを' })], 's1@sai', '続きを', since), false, 'ターン完了の行では判定しない')
+  assert.equal(promptArrived([row(0), prompt], 's1@sai', '違う文', since), false)
+  assert.equal(promptArrived([row(0), row(5, { event: 'UserPromptSubmit', text: '', user_text: '続きを' })], 's1@sai', '続きを', since), false, '送信より前（許容を超える）')
+  assert.equal(promptArrived([row(0), row(9.5, { event: 'UserPromptSubmit', text: '', user_text: '続きを' })], 's1@sai', '続きを', since), true, '30秒前は許容')
 })

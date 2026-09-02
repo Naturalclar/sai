@@ -564,6 +564,14 @@ def build_row(payload: dict, now: datetime, directory: Path) -> dict | None:
             if event not in ("UserPromptSubmit",) and waiting is None:
                 text = last_assistant_text(path)
                 user_text = last_user_text(path)
+        if event == "UserPromptSubmit":
+            # 入力した瞬間の行。本文は無く、打った文を user_text にそのまま載せる
+            # （画面は Stop を待たずに自分側のバブルを出す）。transcript にはまだ無いので payload から
+            prompt = payload.get("prompt")
+            if isinstance(prompt, str):
+                user_text = prompt.strip()
+            if not first_user:
+                first_user = user_text
         if waiting is not None:
             text = waiting
 
@@ -592,12 +600,14 @@ def build_row(payload: dict, now: datetime, directory: Path) -> dict | None:
         session = synth_session(directory, now, repo, cwd, agent)
         source = "synth"
 
-    if agent == "claude" and (waiting is not None or event == "UserPromptSubmit"):
+    if agent == "claude" and event == "UserPromptSubmit" and not user_text:
+        # 入力が取れなかった行は、直前の待ちを解消する合図としてだけ書く。それ以外は書くものが無い
         previous = last_session_row(directory, now, session, repo)
-        # 再開（UserPromptSubmit）は毎ターン鳴るので、待ちを解消するときだけ書く（それ以外は Stop で足りる）
-        if event == "UserPromptSubmit" and not (previous and is_waiting_event(str(previous.get("event") or ""))):
+        if not (previous and is_waiting_event(str(previous.get("event") or ""))):
             return None
-        if waiting is not None and skip_waiting(previous, event, payload, waiting):
+    if agent == "claude" and waiting is not None:
+        previous = last_session_row(directory, now, session, repo)
+        if skip_waiting(previous, event, payload, waiting):
             return None
 
     return {

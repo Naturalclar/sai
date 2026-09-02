@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { entityId } from '../../shared/entity.ts'
+import { eventKind } from '../../shared/events.ts'
+import { promptArrived } from './chatGroups'
 import { feedReplyTargets, mergeReplyTargets, sessionReplyTargets } from '../../shared/reply.ts'
 import { api, type SessionSummary } from './api'
 import { useLocalState, usePolling } from './hooks'
@@ -37,6 +39,8 @@ export function FeedView({ repo, sessions = NO_SESSIONS, onStatus, onOpenSidebar
   const counts = useMemo(() => {
     const m = new Map<string, number>()
     for (const r of rows) {
+      // ターン完了の行だけ数える。入力の行（UserPromptSubmit）が増えても返信は終わっていない
+      if (eventKind(r.event) !== 'turn') continue
       const id = entityId(r.session, r.repo, r.ts)
       m.set(id, (m.get(id) ?? 0) + 1)
     }
@@ -72,7 +76,12 @@ export function FeedView({ repo, sessions = NO_SESSIONS, onStatus, onOpenSidebar
         <Chat
           rows={rows}
           showChannel
-          trailer={pending.length > 0 && pending.map((p) => <PendingBubble key={p.id} text={p.text} since={p.since} now={now} repo={repoOf(p.id)} />)}
+          trailer={
+            pending.length > 0 &&
+            pending.map((p) => (
+              <PendingBubble key={p.id} text={p.text} since={p.since} now={now} repo={repoOf(p.id)} quiet={promptArrived(rows, p.id, p.text, p.since)} />
+            ))
+          }
         />
       )}
       {data &&

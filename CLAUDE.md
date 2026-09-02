@@ -77,6 +77,7 @@ Codex CLI (notify) ──────┘                                   │
 - **Codex の notify にはセッションIDが無い**ので、`~/.codex/sessions/` の rollout ファイルを cwd で引く（`session_source: rollout`）。引けなければ `(repo, cwd, agent)` が同じで30分以内の前行と同じセッションにする（`synth`）。`session_index.jsonl` は壊れていることがあるので索引は使わない。
 - **セッションのタイトルは一番新しい `user_text` に追従する。** `aggregate.ts` の `sessionTitle()` が新しい行から遡って最初の `user_text` の1行目を使うので、画面から返信しても端末で続きの指示を打っても、次のターンが記録された時点で説明文が変わる。フィードの `@` メンション候補のラベル（`feedReplyTargets`）も同じ順。`user_text` が1行も無いときだけ `first_user_text` に落ちる。
 - **`first_user_text` は毎行に載せる。** フォールバック時の集計は最古の行の値を使うので、`days` の窓から1行目が落ちてもタイトルが残る。
+- **自分の入力は `UserPromptSubmit` の行で先に届く。** `record.py` は Claude の入力のたびに `user_text` だけの行（`event: UserPromptSubmit`、`text` は空）を書き、続く `Stop` の行にも同じ `user_text` が載る。画面（`web/src/chatGroups.ts`）は同じエンティティで直前の入力行と同じ文なら `Stop` 側の自分バブルを出さない。`turns` と「返信が終わった」の判定は `Stop` の行だけで数える（`eventKind() === 'turn'`）。画面から返信したときの仮バブルは、入力の行が届いたら `promptArrived()` で本文を消して「処理中」の1行にする。
 - **エンティティの単位は (セッション, リポジトリ)。** IDは `<セッション>@<リポジトリ>`（セッションが取れない行は `unknown-<日付>`）。キーの作り方は `shared/entity.ts` の `entityId()` にあり、サーバの集計（`aggregate.ts`）・詳細APIの行の絞り込み（`app.ts`）・画面のリンク（`Chat.tsx`）が全部これを使う。別々に組み立てるとリンク切れになるので必ず共有関数を通す。
 - 日付の切り方は `Asia/Tokyo` 固定（`record.py` の `tz()` と `shared/entity.ts` の `TIME_ZONE`）。
 - **SAI は外に出さない。** `127.0.0.1` / `localhost` / `::1` 以外への bind は `main.ts` が拒否する。中身は作業内容そのものなので、デプロイ・ホスティング・Slack への送信はしない。

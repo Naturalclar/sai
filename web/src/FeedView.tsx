@@ -12,6 +12,7 @@ import { useReply } from './useReply'
 import type { PaneProps } from './App'
 
 const NO_ROWS: never[] = []
+const NO_REPLYING = {}
 
 /** 全チャンネルを時系列に流す。リポジトリはサイドバーの絞り込みに従い、日数だけここで選ぶ */
 export function FeedView({ repo, onStatus, onOpenSidebar }: { repo: string } & PaneProps) {
@@ -37,7 +38,10 @@ export function FeedView({ repo, onStatus, onOpenSidebar }: { repo: string } & P
   // 既定は一番新しい行のセッション（再開できるもののうち）
   const target = pickedTarget ?? targets.find((t) => !t.blocked) ?? null
 
-  const { pending, failed, send } = useReply((id) => counts.get(id) ?? 0)
+  const { pending: allPending, failed, send } = useReply((id) => counts.get(id) ?? 0, data?.replying ?? NO_REPLYING, updatedAt)
+  // サーバの replying にはこのフィードの窓（days / repo）の外のセッションも入る。ここに出ているものだけ
+  const pending = allPending.filter((p) => counts.has(p.id))
+  const now = updatedAt?.getTime() ?? 0
   const repoOf = (id: string) => targets.find((t) => t.id === id)?.repo
 
   return (
@@ -55,7 +59,7 @@ export function FeedView({ repo, onStatus, onOpenSidebar }: { repo: string } & P
         <Chat
           rows={rows}
           showChannel
-          trailer={pending.length > 0 && pending.map((p) => <PendingBubble key={p.id} text={p.text} repo={repoOf(p.id)} />)}
+          trailer={pending.length > 0 && pending.map((p) => <PendingBubble key={p.id} text={p.text} since={p.since} now={now} repo={repoOf(p.id)} />)}
         />
       )}
       {data &&
@@ -63,6 +67,8 @@ export function FeedView({ repo, onStatus, onOpenSidebar }: { repo: string } & P
           <ReplyBox
             repo={target.repo}
             busy={pending.some((p) => p.id === target.id)}
+            busySince={pending.find((p) => p.id === target.id)?.since}
+            now={now}
             onSend={(text) => void send(target.id, text)}
             mention={{ targets, target, picked: pickedTarget ? picked : null, onPick: setPicked }}
           />

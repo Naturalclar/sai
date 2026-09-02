@@ -203,7 +203,9 @@ Slack のチャット風。1ターンは「自分の入力（`user_text`）→ �
 | Claude Code | `claude -p --resume <session> "<text>"` |
 | Codex CLI | `codex exec resume <session> "<text>"` |
 
-回したターンが完了すれば既存のフック（Stop / notify）が動いて JSONL に1行増えるので、返信の結果は今のポーリングでそのまま画面に流れてくる。送信直後は「送信中…」の仮バブルが出て、行が増えたら消える（増えた行の `user_text` が同じ文なので、見た目はそのまま本物の自分のバブルに変わる）。`session_source` が `synth` のセッション、`unknown-<日付>` に丸められたセッション、`agent` が `unknown` のセッションは ID が合成なので再開できず、入力欄の代わりにその旨が出る。
+回したターンが完了すれば既存のフック（Stop / notify）が動いて JSONL に1行増えるので、返信の結果は今のポーリングでそのまま画面に流れてくる。送信直後は「送信中…」の仮バブルが出て、行が増えたら消える（増えた行の `user_text` が同じ文なので、見た目はそのまま本物の自分のバブルに変わる）。
+
+「処理中」の正はサーバ（子プロセスが exit するまで `replying` として `GET /api/sessions` / `GET /api/sessions/<id>` / `GET /api/feed` に載る）。画面はそれを見て仮バブルと閉じた入力欄を出すので、リロードしても別タブでも同じ状態になり、一覧のそのセッションには「返信中」が付く。1分を超えると仮バブルに経過（「処理中 3分」）が出て、5分を超えると色が変わる。`replying` が変わると `rev` も変わるので、JSONL が増えなくても画面は描き直す。プロセスが終わったのに行が増えなかったとき（`claude -p` が許可待ちで落ちた、フックが失敗した）は「返信は終わったが記録が増えなかった」と出て入力欄が開く。手がかりは `~/.agent-feed/reply.log`。`session_source` が `synth` のセッション、`unknown-<日付>` に丸められたセッション、`agent` が `unknown` のセッションは ID が合成なので再開できず、入力欄の代わりにその旨が出る。
 
 「フィード」は全チャンネルを時系列に流したもの（`/api/feed`）。フィードからも返信できる。全セッションが混ざっているので返信先を選ぶ必要があり、入力欄で半角の `@` を打つと候補（フィードに出ているセッション。リポジトリ / ブランチ / タイトルで絞れる）が出て、↑↓ と Enter で選ぶと、Slack と同じく入力欄の中に表記（`@repo`。同じリポジトリが複数なら `@repo/branch`）が入り、入力欄の上のチップ（`→ #repo branch「タイトル」`）も差し替わる。表記は送信時に本文から外す。表記を手で消すか、チップの ✕ を押すと既定に戻る。何も選ばなければ一番新しい行のセッションに送る（既定でもチップに出る）。再開できないセッションは候補に薄く出て選べない。送る先は同じ `POST /api/sessions/<id>/reply`。
 
@@ -213,12 +215,12 @@ Slack のチャット風。1ターンは「自分の入力（`user_text`）→ �
 | --- | --- |
 | `GET /` | ビューア（`web/dist/index.html`） |
 | `GET /assets/*` | ビルド成果物。`dist/` の外には出ない |
-| `GET /api/sessions?days=7&repo=&agent=&date=` | セッション一覧（集計済み）。`filters` に絞り込み候補も返す |
-| `GET /api/sessions/<id>?days=30` | そのエンティティの全行。`<id>` は `<セッション>@<リポジトリ>` |
+| `GET /api/sessions?days=7&repo=&agent=&date=` | セッション一覧（集計済み）。`filters` に絞り込み候補、`replying` に処理中の返信（ID → `{ since, text }`）も返す |
+| `GET /api/sessions/<id>?days=30` | そのエンティティの全行と `replying`。`<id>` は `<セッション>@<リポジトリ>` |
 | `POST /api/sessions/<id>/reply?days=90` | body `{ "text": "..." }`。そのセッションを `cwd` で再開して1ターン回すのを投げっぱなしにし、`202` を返す。合成 ID は `400`、進行中は `409`、別オリジンは `403` |
 | `GET /api/sessions/<id>/meta` | 表示名とアイコン。`{ "id", "meta": { "name"?, "icon"? } }`。無ければ `meta` は `{}` |
 | `PUT /api/sessions/<id>/meta?days=90` | body `{ "name"?: "...", "icon"?: "🧪" }` で置き換える。空文字や省略は「消す」で、両方消えたらエントリごと消える。アイコンは絵文字1つ、名前は100文字まで（超えたら `400`）。窓の中に無いセッションは `404`、別オリジンは `403` |
-| `GET /api/feed?days=3&repo=` | 生の行 |
+| `GET /api/feed?days=3&repo=` | 生の行と `replying` |
 
 返信の実行は `server/runner.ts`。`claude` / `codex` は `detached` で起動して待たず、stdout/stderr は `~/.agent-feed/reply.log` に追記する（うまく動かないときはここを見る）。同じエンティティに同時に2本は走らせない。
 

@@ -1,4 +1,5 @@
 // ルーティング。main.ts が node:http に載せ、テストは createApp() を直接叩く。
+import { createHash } from 'node:crypto'
 import { readFile, stat } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { extname, join, resolve, sep } from 'node:path'
@@ -8,6 +9,7 @@ import type {
   FeedResponse,
   ReplyRequest,
   ReplyResponse,
+  ReplyingMap,
   SessionDetailResponse,
   SessionMetaResponse,
   SessionsResponse,
@@ -77,6 +79,18 @@ export function parseDays(raw: string | null, fallback: number): number {
   const n = Number.parseInt(raw ?? '', 10)
   if (Number.isNaN(n)) return fallback
   return Math.max(1, Math.min(MAX_DAYS, n))
+}
+
+/**
+ * 処理中の返信を rev に混ぜる。画面は rev が同じなら state を触らないので、JSONL が変わらないまま
+ * 「処理中 → 終了」になっても再描画されない。since まで含めるので、同じ id の連続した返信も区別できる
+ */
+export function revWith(rev: string, replying: ReplyingMap): string {
+  const ids = Object.keys(replying).sort()
+  if (ids.length === 0) return rev
+  const h = createHash('sha1')
+  for (const id of ids) h.update(`${id}\n${replying[id]!.since}\n`)
+  return `${rev}:${h.digest('hex').slice(0, 8)}`
 }
 
 export type Handler = (req: IncomingMessage, res: ServerResponse) => Promise<void>
@@ -235,12 +249,14 @@ export function createApp(store: FeedStore, distDir: string, runner?: Runner): H
       if (path === '/api/sessions') {
         const days = parseDays(q.get('days'), 7)
         const { rev, sessions } = await sessionsWithMeta(days)
+        const replying = run.snapshot()
         const body: SessionsResponse = {
-          rev,
+          rev: revWith(rev, replying),
           days,
           total: sessions.length,
           sessions: filterSessions(sessions, q.get('repo') ?? '', q.get('agent') ?? '', q.get('date') ?? ''),
           filters: facets(sessions),
+          replying,
         }
         return json(res, body)
       }
@@ -253,7 +269,8 @@ export function createApp(store: FeedStore, distDir: string, runner?: Runner): H
         const session = sessions.find((s) => s.id === id)
         if (!session) return error(res, 404, 'session not found in window')
         const rows = (await store.rows(days)).filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
-        const body: SessionDetailResponse = { rev, session, rows }
+        const replying = run.snapshot()
+        const body: SessionDetailResponse = { rev: revWith(rev, replying), session, rows, replying }
         return json(res, body)
       }
 
@@ -262,7 +279,8 @@ export function createApp(store: FeedStore, distDir: string, runner?: Runner): H
         const repo = q.get('repo') ?? ''
         let rows = await store.rows(days)
         if (repo) rows = rows.filter((r) => r.repo === repo)
-        const body: FeedResponse = { rev: revOf(await store.signature(days)), days, rows }
+        const replying = run.snapshot()
+        const body: FeedResponse = { rev: revWith(revOf(await store.signature(days)), replying), days, rows, replying }
         return json(res, body)
       }
 

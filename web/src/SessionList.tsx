@@ -13,7 +13,8 @@ interface Props {
 
 /** 左サイドバー。絞り込み、固定の「フィード」、その下にセッション一覧（新しい順） */
 export function SessionList({ filters, setFilters, selectedId }: Props) {
-  const { data, error } = usePolling(() => api.sessions(filters), [filters.repo, filters.agent, filters.date, filters.days])
+  const { data, error, updatedAt } = usePolling(() => api.sessions(filters), [filters.repo, filters.agent, filters.date, filters.days])
+  const now = updatedAt?.getTime() ?? 0
 
   const facets = data?.filters ?? { repos: [], agents: [], dates: [] }
   const sessions = data?.sessions ?? []
@@ -34,7 +35,7 @@ export function SessionList({ filters, setFilters, selectedId }: Props) {
           <span className="t">フィード</span>
           <span className="last">{filters.repo ? `#${filters.repo}` : '全リポジトリ'}を時系列に</span>
         </a>
-        {sessions.map((s) => <SessionItem key={s.id} s={s} active={s.id === selectedId} />)}
+        {sessions.map((s) => <SessionItem key={s.id} s={s} active={s.id === selectedId} replying={data?.replying[s.id] ?? null} now={now} />)}
       </nav>
       {data && sessions.length === 0 && <div className="empty">この条件のセッションはありません</div>}
     </>

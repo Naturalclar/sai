@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { entityId } from '../../shared/entity.ts'
 import { AGENT_INITIAL, AGENT_LABEL, type FeedRow } from './api'
 import { dayLabel, hm, minutesBetween, ymd } from './format'
 
@@ -72,7 +73,7 @@ export function Chat({ rows, showChannel }: { rows: FeedRow[]; showChannel: bool
                 <div className="gh">
                   <span className="name">{AGENT_LABEL[g.agent] ?? g.agent}</span>
                   {showChannel && (
-                    <a className="ch" href={`#/s/${encodeURIComponent(g.session)}`} title={g.session}>#{g.repo}</a>
+                    <a className="ch" href={`#/s/${encodeURIComponent(entityId(g.session, g.repo, g.firstTs))}`} title={g.session}>#{g.repo}</a>
                   )}
                   {g.branch && <span className="branch">{g.branch}</span>}
                   <span className="time">{hm(g.firstTs)}</span>

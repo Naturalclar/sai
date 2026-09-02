@@ -1,22 +1,11 @@
-// 行 → セッションの集計。
+// 行 → セッションの集計。エンティティの単位は (セッション, リポジトリ)。キーは shared/entity.ts。
+import { entityId, localDate } from '../shared/entity.ts'
 import type { Agent, Facets, FeedRow, SessionSource, SessionSummary } from '../shared/types.ts'
+
+export { entityId, localDate, TIME_ZONE } from '../shared/entity.ts'
 
 export const TITLE_LEN = 60
 export const TITLE_FULL_LEN = 300
-export const TIME_ZONE = 'Asia/Tokyo'
-
-const dateFmt = new Intl.DateTimeFormat('en-CA', {
-  timeZone: TIME_ZONE,
-  year: 'numeric',
-  month: '2-digit',
-  day: '2-digit',
-})
-
-/** ts を Asia/Tokyo の YYYY-MM-DD にする。parse できなければ先頭10文字 */
-export function localDate(ts: string): string {
-  const d = new Date(ts)
-  return Number.isNaN(d.getTime()) ? ts.slice(0, 10) : dateFmt.format(d)
-}
 
 /** 今日（Asia/Tokyo）から days 日ぶんの YYYY-MM-DD を新しい順に */
 export function recentDates(days: number, now: Date = new Date()): string[] {
@@ -49,14 +38,14 @@ function orderedUnique<T>(values: Iterable<T>): T[] {
   return seen
 }
 
-/** 行をセッション単位にまとめる。入力は ts 昇順であること。新しい順に返す */
+/** 行を (セッション, リポジトリ) 単位にまとめる。入力は ts 昇順であること。新しい順に返す */
 export function aggregate(rows: FeedRow[]): SessionSummary[] {
   const groups = new Map<string, FeedRow[]>()
   for (const row of rows) {
-    const session = row.session || `unknown-${row.repo ?? ''}-${localDate(String(row.ts ?? ''))}`
-    const list = groups.get(session)
+    const id = entityId(row.session ?? '', row.repo ?? '', String(row.ts ?? ''))
+    const list = groups.get(id)
     if (list) list.push(row)
-    else groups.set(session, [row])
+    else groups.set(id, [row])
   }
 
   const sessions: SessionSummary[] = []

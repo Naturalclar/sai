@@ -15,6 +15,8 @@ export interface FeedRow {
   cwd: string
   event: string
   text: string
+  /** そのターンの入力（人が打った文）。チャットで自分側のバブルになる。古い行には無い */
+  user_text?: string
   first_user_text?: string
 }
 

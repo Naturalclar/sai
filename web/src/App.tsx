@@ -88,7 +88,10 @@ export function App() {
       </header>
       <main className={`layout route-${route.name}${sidebarOpen ? '' : ' sidebar-closed'}`}>
         <aside className="sidebar">
-          <SessionList filters={filters} setFilters={setFilters} selectedId={route.name === 'session' ? route.id : null} />
+          {/* 幅を固定した箱に入れる。開閉の遷移中に列だけが縮み、中身は折り返さない */}
+          <div className="side-inner">
+            <SessionList filters={filters} setFilters={setFilters} selectedId={route.name === 'session' ? route.id : null} />
+          </div>
         </aside>
         <div className="pane">
           {route.name === 'session' ? (

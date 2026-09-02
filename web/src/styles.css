@@ -56,7 +56,8 @@
   .sidebar .filters { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); z-index: 1; }
   .sidebar .filters select { min-width: 0; width: 100%; font-size: 12px; padding: 4px 6px; }
   .sidebar .filters button { font-size: 12px; padding: 4px 8px; }
-  .sidebar .filters .count { margin-left: 0; text-align: right; align-self: center; }
+  .sidebar .filters .count { grid-column: 1 / -1; margin-left: 0; text-align: right; align-self: center; }
+  .sidebar .filters button.on { background: var(--hover); color: var(--ink); border-color: var(--muted); }
   .side-error { padding: 8px 12px; color: var(--claude); font-size: 12px; border-bottom: 1px solid var(--line); }
 
   /* -- sidebar: 1項目 = 1エンティティ。先頭に固定の「フィード」 */
@@ -65,6 +66,8 @@
   .channels .item:hover { background: var(--hover); text-decoration: none; }
   .channels .item.active { background: color-mix(in srgb, var(--accent) 10%, transparent); box-shadow: inset 3px 0 var(--accent); }
   .channels .item.feed .t { font-weight: 600; }
+  .channels .item.archived { opacity: .6; }
+  .channels .head { padding: 6px 12px; font-size: 11px; color: var(--muted); background: var(--bg); border-bottom: 1px solid var(--line); }
   .channels .top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
   .channels .when { flex: none; color: var(--muted); font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; }
   .channels .when b { color: var(--ink); font-weight: 500; }
@@ -96,6 +99,7 @@
   .tag { display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 4px; background: var(--chip); color: var(--muted); margin-left: 6px; vertical-align: middle; }
   .tag.synth { background: color-mix(in srgb, var(--synth) 18%, transparent); color: var(--synth); font-weight: 600; }
   .tag.replying { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); font-weight: 600; }
+  .tag.archived { background: color-mix(in srgb, var(--muted) 18%, transparent); color: var(--muted); font-weight: 600; }
 
   /* -- chat */
   .chat-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
@@ -118,6 +122,7 @@
   .chat-head .session-name .name-input { flex: 1; min-width: 12em; max-width: 32em; }
   .chat-head .session-name button[type="submit"] { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 5px 12px; font: inherit; font-weight: 600; cursor: pointer; }
   .chat-head .session-name button:disabled { opacity: .5; cursor: default; }
+  .chat-head .archive .err { color: var(--claude); margin-left: 6px; }
   .linkish { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-size: 12px; cursor: pointer; }
   .linkish:hover { text-decoration: underline; }
   .chat { flex: 1; min-height: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow-y: auto; }

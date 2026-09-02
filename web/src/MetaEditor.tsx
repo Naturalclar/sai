@@ -52,7 +52,8 @@ export function MetaEditor({ id, meta }: { id: string; meta: SessionMeta | undef
     setBusy(true)
     setError('')
     try {
-      const res = await api.setMeta(id, {})
+      // PUT は重ねる意味なので、消すときは明示的に空を送る（アーカイブなど他のキーは触らない）
+      const res = await api.setMeta(id, { name: '', icon: '' })
       setSaved(res.meta)
       setEditing(false)
     } catch (err) {

@@ -2,6 +2,7 @@ import type { Replying, SessionSummary } from './api'
 import { hm, md } from './format'
 import { SynthTag } from './SynthTag'
 import { ReplyingTag } from './ReplyingTag'
+import { ArchivedTag } from './ArchivedTag'
 import { More } from './More'
 import { stripMarkdown } from '../../shared/markdown.ts'
 
@@ -17,7 +18,7 @@ interface Props {
 /** サイドバーの一覧の1行 */
 export function SessionItem({ s, active, replying, now }: Props) {
   return (
-    <a className={`item${active ? ' active' : ''}`} href={`#/s/${encodeURIComponent(s.id)}`} title={s.id}>
+    <a className={`item${active ? ' active' : ''}${s.archived ? ' archived' : ''}`} href={`#/s/${encodeURIComponent(s.id)}`} title={s.id}>
       <span className="top">
         <span className="repo">
           <span className={`dot ${s.agent}`} />
@@ -31,6 +32,7 @@ export function SessionItem({ s, active, replying, now }: Props) {
         {s.meta?.name || s.title || '(無題)'}
         {s.session_source === 'synth' && <SynthTag />}
         {replying && <ReplyingTag since={replying.since} now={now} />}
+        {s.archived && <ArchivedTag />}
       </span>
       {s.turns > 1 && s.last_text && <span className="last">{stripMarkdown(s.last_text)}</span>}
     </a>

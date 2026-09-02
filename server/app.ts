@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { readFile, stat } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { extname, join, resolve, sep } from 'node:path'
-import { normalizeMeta } from '../shared/meta.ts'
+import { mergeMeta } from '../shared/meta.ts'
 import { replyBlockedReason } from '../shared/reply.ts'
 import type {
   FeedResponse,
@@ -19,7 +19,6 @@ import { entityId, facets, filterSessions } from './aggregate.ts'
 import { META_FILE, MetaStore } from './meta.ts'
 import { ProcessRunner, replyCommand } from './runner.ts'
 import type { Runner } from './runner.ts'
-import { rev as revOf } from './store.ts'
 import type { FeedStore } from './store.ts'
 
 export const MAX_DAYS = 366
@@ -101,15 +100,22 @@ export function createApp(store: FeedStore, distDir: string, runner?: Runner): H
   const metaStore = new MetaStore(join(store.directory, META_FILE))
 
   /**
-   * 集計済みのセッションに表示名・アイコンを載せる。store のキャッシュ配列は触らず新しい配列を返す。
-   * rev にメタファイルの状態も混ぜるので、名前を付けただけでも画面のポーリングが拾う
+   * 集計済みのセッションにメタ（表示名・アイコン・アーカイブ）を載せる。store のキャッシュ配列は触らず新しい配列を返す。
+   * rev にメタファイルの状態も混ぜるので、名前を付けた・アーカイブしただけでも画面のポーリングが拾う。
+   * アーカイブ済みかは `archived_at >= end` で決める（集計 aggregate.ts は JSONL だけから作る、を守る）。
+   * アーカイブ後に行が増えると end が archived_at を追い越すので、メタを書き換えずに自動で戻る
    */
   const sessionsWithMeta = async (days: number): Promise<{ rev: string; sessions: SessionSummary[] }> => {
     const [{ rev, sessions }, meta] = await Promise.all([store.sessions(days), metaStore.all()])
     if (!meta.rev) return { rev, sessions }
     return {
       rev: `${rev}-${meta.rev}`,
-      sessions: sessions.map((s) => (meta.entries[s.id] ? { ...s, meta: meta.entries[s.id] } : s)),
+      sessions: sessions.map((s) => {
+        const m = meta.entries[s.id]
+        if (!m) return s
+        const archived = !!m.archived_at && Date.parse(m.archived_at) >= Date.parse(s.end)
+        return archived ? { ...s, meta: m, archived: true } : { ...s, meta: m }
+      }),
     }
   }
 
@@ -182,7 +188,10 @@ export function createApp(store: FeedStore, distDir: string, runner?: Runner): H
     return json(res, payload, 202)
   }
 
-  /** PUT /api/sessions/<id>/meta。表示名・アイコンを置き換える（空なら消す）。窓の中に無いセッションには付けない */
+  /**
+   * PUT /api/sessions/<id>/meta。いまの値に body を重ねる（省略は据え置き、空や null は消す）。
+   * アーカイブは archived_at を載せるだけで、専用のエンドポイントは無い。窓の中に無いセッションには付けない
+   */
   const putMeta = async (req: IncomingMessage, res: ServerResponse, id: string, days: number) => {
     if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
     let body: unknown
@@ -191,7 +200,7 @@ export function createApp(store: FeedStore, distDir: string, runner?: Runner): H
     } catch (err) {
       return error(res, 400, err instanceof Error ? err.message : 'bad body')
     }
-    const { meta, error: reason } = normalizeMeta(body)
+    const { meta, error: reason } = mergeMeta((await metaStore.get(id)) ?? {}, body)
     if (reason) return error(res, 400, reason)
     const { sessions } = await store.sessions(days)
     if (!sessions.some((s) => s.id === id)) return error(res, 404, 'session not found in window')
@@ -250,12 +259,15 @@ export function createApp(store: FeedStore, distDir: string, runner?: Runner): H
         const days = parseDays(q.get('days'), 7)
         const { rev, sessions } = await sessionsWithMeta(days)
         const replying = run.snapshot()
+        // 既定はアーカイブ済みを除く。archived=1 でアーカイブ済みだけ。total と filters はその集合の絞り込み前から作る
+        const wantArchived = q.get('archived') === '1'
+        const pool = sessions.filter((s) => Boolean(s.archived) === wantArchived)
         const body: SessionsResponse = {
           rev: revWith(rev, replying),
           days,
-          total: sessions.length,
-          sessions: filterSessions(sessions, q.get('repo') ?? '', q.get('agent') ?? '', q.get('date') ?? ''),
-          filters: facets(sessions),
+          total: pool.length,
+          sessions: filterSessions(pool, q.get('repo') ?? '', q.get('agent') ?? '', q.get('date') ?? ''),
+          filters: facets(pool),
           replying,
         }
         return json(res, body)
@@ -277,10 +289,15 @@ export function createApp(store: FeedStore, distDir: string, runner?: Runner): H
       if (path === '/api/feed') {
         const days = parseDays(q.get('days'), 3)
         const repo = q.get('repo') ?? ''
+        // アーカイブ済みセッションの行は流さない（一覧から消えてもフィードに流れていたら隠した意味が無い）
+        const { rev, sessions } = await sessionsWithMeta(days)
+        const archived = new Set(sessions.filter((s) => s.archived).map((s) => s.id))
         let rows = await store.rows(days)
         if (repo) rows = rows.filter((r) => r.repo === repo)
+        if (archived.size) rows = rows.filter((r) => !archived.has(entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? ''))))
         const replying = run.snapshot()
-        const body: FeedResponse = { rev: revWith(revOf(await store.signature(days)), replying), days, rows, replying }
+        // rev はメタ（アーカイブ）と処理中の集合も混ぜる
+        const body: FeedResponse = { rev: revWith(rev, replying), days, rows, replying }
         return json(res, body)
       }
 

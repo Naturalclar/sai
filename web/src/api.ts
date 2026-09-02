@@ -22,9 +22,29 @@ async function failure(res: Response, url: string): Promise<Error> {
   return new Error(`${res.status} ${url}`)
 }
 
+/** いま開いている画面が、どのビルド（サーバの X-SAI-Build）から来たか */
+let knownBuild: string | null = null
+
+/**
+ * 別ターミナルで pnpm build されて dist/ が入れ替わったら、画面を丸ごと読み直す。
+ * 3秒ポーリングのついでにヘッダを見るだけなので追加のリクエストは無い。
+ * pnpm dev（Vite）中は HMR に任せるので何もしない。
+ */
+function watchBuild(res: Response): void {
+  if (!import.meta.env.PROD) return
+  const build = res.headers.get('x-sai-build')
+  if (!build) return
+  if (knownBuild !== null && knownBuild !== build) {
+    location.reload()
+    return
+  }
+  knownBuild = build
+}
+
 async function getJSON<T>(url: string): Promise<T> {
   const res = await fetch(url, { cache: 'no-store' })
   if (!res.ok) throw await failure(res, url)
+  watchBuild(res)
   return (await res.json()) as T
 }
 

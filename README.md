@@ -63,12 +63,14 @@ notify = ["python3", "/absolute/path/to/sai/feed/record.py"]
 ```
 pnpm install && pnpm build
 pnpm start                                   # http://127.0.0.1:8787/
-pnpm start -- --port 9000 --feed-dir ~/.agent-feed
+pnpm start --port 9000 --feed-dir ~/.agent-feed   # pnpm 10 は「--」もそのまま渡すので付けない
 ```
 
 サーバは `web/dist/` を配る。未ビルドなら `/` にその旨が出る。`file://` で開くと fetch が CORS で止まるので、必ずこのサーバ経由で開く。`127.0.0.1` 以外には bind を拒否する。
 
 画面を触るときはサーバを立てたまま `pnpm dev`。Vite が `/api` を `127.0.0.1:8787` に流す。
+
+`main` を取り込んだときは、サーバを止めずに別のターミナルで `git pull && pnpm build` するだけでいい。サーバは `web/dist/` を毎回ディスクから読み、`/api/*` の応答に `X-SAI-Build`（`dist/index.html` の更新時刻）を付けるので、開いているブラウザは 3 秒以内に自分でリロードする。`server/` や `shared/` が変わったときの再起動まで任せたければ `pnpm start:watch`（`node --watch`）で立てる。
 
 ```
 pnpm lint        # oxlint（web/src, server, shared）
@@ -76,6 +78,7 @@ pnpm typecheck   # tsc（web と server の両方）
 pnpm test        # node:test（server/）
 pnpm test:feed   # python3 -m unittest（feed/）
 pnpm build       # typecheck してから vite build
+pnpm start:watch # server/ shared/ が変わったら自動で再起動（node --watch）
 ```
 
 ### 3. 確かめる

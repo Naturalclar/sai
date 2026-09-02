@@ -11,7 +11,8 @@ Claude Code / Codex CLI のターン完了をフックで `~/.agent-feed/YYYY-MM
 ```
 pnpm install
 pnpm start                  # 127.0.0.1:8787。web/dist/ を配る（未ビルドなら案内ページ）
-pnpm start -- --port 9000 --feed-dir ~/.agent-feed
+pnpm start --port 9000 --feed-dir ~/.agent-feed   # pnpm 10 は「--」もそのまま渡すので付けない
+pnpm start:watch            # server/ shared/ の変更で自動再起動（node --watch）
 pnpm dev                    # Vite。/api を 127.0.0.1:8787 に proxy するので pnpm start も並走させる
 pnpm build                  # typecheck → vite build web（web/dist/ へ）
 pnpm lint                   # oxlint web/src server shared
@@ -59,6 +60,7 @@ Codex CLI (notify) ──────┘                                   │
 - **`server/`** は node:http 直書きで依存ゼロ。`main.ts` は引数処理と bind 先チェックだけで、ルーティングは `createApp(store, distDir)` にあり、テストはこれを直接叩く。`store.ts` は日付ファイルを `(mtime, size)` で覚えて変わらなければ再パースせず、そのシグネチャのハッシュを `rev` として返す。
 - **`web/src/`** は React 19 + Vite、ルーティングは hash（`#/`、`#/s/<id>`、`#/feed`）。`hooks.ts` の `usePolling` がデータ取得の中心で、`rev` が変わらない限り state を触らず、タブが隠れている間は止まる。フィルタは `useLocalState` で localStorage に残る。
 - **返信**（`POST /api/sessions/<id>/reply`）は `server/runner.ts` が `claude -p --resume` / `codex exec resume` を `cwd` で detached 起動する。結果は既存のフックが JSONL に足す1行として届くので、返信専用の記録経路は無い。返信できるかの判定は `shared/reply.ts` の `replyBlockedReason()` にあり、サーバの受付と画面の入力欄の出し分けが同じ関数を使う。テストは `createApp(store, distDir, runner)` に `FakeRunner` を渡して実際には起動しない。
+- **別ターミナルの `pnpm build` に追従する。** サーバは `web/dist/` を毎回ディスクから読み、`/api/*` に `X-SAI-Build`（`dist/index.html` の mtime）を付ける。`web/src/api.ts` の `watchBuild` がポーリングのついでにそれを見て、変わっていたら `location.reload()` する（`pnpm dev` 中は HMR に任せて何もしない）。サーバ側の再起動は `pnpm start:watch`。
 
 ## 設計上の前提（変えるときは README も直す）
 

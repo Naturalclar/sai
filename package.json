@@ -6,6 +6,7 @@
   "engines": { "node": ">=22.18" },
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning server/main.ts",
+    "start:watch": "node --watch --disable-warning=ExperimentalWarning server/main.ts",
     "dev": "vite web",
     "build": "pnpm typecheck && vite build web",
     "preview": "vite preview web",

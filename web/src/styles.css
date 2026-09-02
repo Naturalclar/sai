@@ -12,46 +12,63 @@
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; }
+  #root { display: flex; flex-direction: column; height: 100%; }
   body { background: var(--bg); color: var(--ink); font: 14px/1.5 -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif; }
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
 
-  header { display: flex; align-items: center; gap: 16px; padding: 10px 18px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 2; }
+  header { flex: none; display: flex; align-items: center; gap: 16px; padding: 10px 18px; border-bottom: 1px solid var(--line); background: var(--panel); }
   header .logo { font-weight: 700; font-size: 18px; letter-spacing: .08em; }
   header .logo small { font-weight: 400; color: var(--muted); letter-spacing: 0; margin-left: 8px; font-size: 12px; }
-  header nav a { margin-right: 12px; color: var(--muted); }
-  header nav a.active { color: var(--ink); font-weight: 600; }
   header .status { margin-left: auto; color: var(--muted); font-size: 12px; }
   header .status.error { color: var(--claude); }
   header .github { display: inline-flex; color: var(--muted); }
   header .github:hover { color: var(--ink); text-decoration: none; }
 
-  main { padding: 16px 18px 48px; max-width: 1200px; margin: 0 auto; }
+  /* -- layout: 左サイドバー（一覧）+ 右ペイン（チャット）。ヘッダ以外の高さを使い、それぞれがスクロールする */
+  main.layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 320px minmax(0, 1fr); }
+  .sidebar { min-height: 0; overflow-y: auto; border-right: 1px solid var(--line); background: var(--panel); }
+  .pane { min-height: 0; display: flex; flex-direction: column; padding: 12px 18px 14px; }
+  .pane > section { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  .back { display: none; margin-bottom: 8px; color: var(--muted); }
 
   /* -- filters */
-  .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+  .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   .filters select, .filters input { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font: inherit; }
   .filters .count { color: var(--muted); font-size: 12px; margin-left: auto; }
   .filters button { background: transparent; border: 1px solid var(--line); color: var(--muted); border-radius: 6px; padding: 5px 10px; font: inherit; cursor: pointer; }
   .filters button:hover { background: var(--hover); color: var(--ink); }
+  .sidebar .filters { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); z-index: 1; }
+  .sidebar .filters select { min-width: 0; width: 100%; font-size: 12px; padding: 4px 6px; }
+  .sidebar .filters button { font-size: 12px; padding: 4px 8px; }
+  .sidebar .filters .count { margin-left: 0; text-align: right; align-self: center; }
+  .side-error { padding: 8px 12px; color: var(--claude); font-size: 12px; border-bottom: 1px solid var(--line); }
 
-  /* -- session table */
-  table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
-  th, td { padding: 8px 10px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
-  th.num { text-align: right; }
-  th { font-size: 12px; color: var(--muted); font-weight: 600; white-space: nowrap; background: var(--bg); }
-  tbody tr { cursor: pointer; }
-  tbody tr:hover { background: var(--hover); }
-  td.time { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px; }
-  td.time b { color: var(--ink); font-weight: 500; }
-  td.num { text-align: right; font-variant-numeric: tabular-nums; }
-  td.title { max-width: 520px; }
-  td.title .t { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  td.title .last { display: block; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .repo { font-family: var(--mono); font-size: 12px; }
+  /* -- sidebar: 1項目 = 1エンティティ。先頭に固定の「フィード」 */
+  .channels { display: block; }
+  .channels .item { display: block; padding: 8px 12px 8px 14px; border-bottom: 1px solid var(--line); color: inherit; min-width: 0; }
+  .channels .item:hover { background: var(--hover); text-decoration: none; }
+  .channels .item.active { background: color-mix(in srgb, var(--accent) 10%, transparent); box-shadow: inset 3px 0 var(--accent); }
+  .channels .item.feed .t { font-weight: 600; }
+  .channels .top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .channels .when { flex: none; color: var(--muted); font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .channels .when b { color: var(--ink); font-weight: 500; }
+  .channels .t { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .channels .last { display: block; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .repo { font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .repo .dot { margin-right: 6px; vertical-align: -1px; }
   .repo .br { color: var(--muted); }
   .repo .more { color: var(--muted); font-size: 11px; margin-left: 4px; }
   .empty { padding: 40px; text-align: center; color: var(--muted); }
+
+  /* -- 狭い画面: 一覧かチャットのどちらかだけ。#/ が一覧、#/feed と #/s/<id> がチャット */
+  @media (max-width: 900px) {
+    main.layout { grid-template-columns: 1fr; }
+    main.route-feed .sidebar, main.route-session .sidebar { display: none; }
+    main.route-list .pane { display: none; }
+    .sidebar { border-right: 0; }
+    .back { display: inline-block; }
+  }
 
   .agent { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; white-space: nowrap; }
   .dot { width: 10px; height: 10px; border-radius: 3px; display: inline-block; background: var(--unknown); }
@@ -66,8 +83,10 @@
   .chat-head h1 .hash { color: var(--muted); font-weight: 400; }
   .chat-head .meta { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; min-width: 0; }
   .chat-head .meta.wide { flex-basis: 100%; }
+  .chat-head .meta.pull { margin-left: auto; }
+  .chat-head .meta select { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; font: inherit; font-size: 12px; }
   .chat-head .meta code { font-family: var(--mono); background: var(--chip); padding: 1px 5px; border-radius: 4px; }
-  .chat { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; max-height: calc(100vh - 220px); overflow-y: auto; }
+  .chat { flex: 1; min-height: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow-y: auto; }
   .day { text-align: center; color: var(--muted); font-size: 11px; padding: 10px 0 2px; position: relative; }
   .day span { background: var(--panel); padding: 0 8px; position: relative; }
   .day::before { content: ""; position: absolute; left: 16px; right: 16px; top: 18px; border-top: 1px solid var(--line); }
@@ -104,7 +123,6 @@
   .msg .more { font-size: 12px; color: var(--accent); cursor: pointer; background: none; border: 0; padding: 0; font-family: inherit; }
   .msg .empty-text { color: var(--muted); font-style: italic; }
   .msg .branch { font-family: var(--mono); font-size: 11px; color: var(--muted); }
-  .back { display: inline-block; margin-bottom: 10px; color: var(--muted); }
 
   /* -- reply */
   .avatar.me { background: var(--accent); }

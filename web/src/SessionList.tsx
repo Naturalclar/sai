@@ -1,25 +1,26 @@
-import { useEffect } from 'react'
 import { api, type SessionFilters, type SessionSummary } from './api'
-import { useLocalState, usePolling } from './hooks'
-import { hm, md, ymd } from './format'
-import { AgentChip, SynthTag } from './AgentChip'
+import { usePolling } from './hooks'
+import { hm, md } from './format'
+import { SynthTag } from './AgentChip'
 import { DaysSelect, FacetSelect } from './Select'
-import type { StatusProps } from './App'
 import { stripMarkdown } from '../../shared/markdown.ts'
 
-const DEFAULT: SessionFilters = { repo: '', agent: '', date: '', days: '7' }
+interface Props {
+  filters: SessionFilters
+  setFilters: (next: Partial<SessionFilters>) => void
+  /** 右側で開いているセッションのID。無ければフィード */
+  selectedId: string | null
+}
 
-export function SessionList({ onStatus }: StatusProps) {
-  const [filters, setFilters] = useLocalState<SessionFilters>('sai.filters', DEFAULT)
-  const { data, error, updatedAt } = usePolling(() => api.sessions(filters), [filters.repo, filters.agent, filters.date, filters.days])
-
-  useEffect(() => onStatus(updatedAt, error), [updatedAt, error, onStatus])
+/** 左サイドバー。絞り込み、固定の「フィード」、その下にセッション一覧（新しい順） */
+export function SessionList({ filters, setFilters, selectedId }: Props) {
+  const { data, error } = usePolling(() => api.sessions(filters), [filters.repo, filters.agent, filters.date, filters.days])
 
   const facets = data?.filters ?? { repos: [], agents: [], dates: [] }
   const sessions = data?.sessions ?? []
 
   return (
-    <section>
+    <>
       <div className="filters">
         <FacetSelect label="リポジトリ" value={filters.repo} options={facets.repos} onChange={(repo) => setFilters({ repo })} />
         <FacetSelect label="エージェント" value={filters.agent} options={facets.agents} onChange={(agent) => setFilters({ agent })} />
@@ -28,55 +29,37 @@ export function SessionList({ onStatus }: StatusProps) {
         <button type="button" onClick={() => setFilters({ repo: '', agent: '', date: '' })}>絞り込みを消す</button>
         {data && <span className="count">{sessions.length} / {data.total} セッション</span>}
       </div>
-      <table>
-        <thead>
-          <tr>
-            <th>開始 – 終了</th>
-            <th>エージェント</th>
-            <th>リポジトリ / ブランチ</th>
-            <th className="num">ターン</th>
-            <th>タイトル</th>
-          </tr>
-        </thead>
-        <tbody>
-          {sessions.map((s) => <Row key={s.id} s={s} />)}
-        </tbody>
-      </table>
+      {error && <div className="side-error">取得失敗: {error}</div>}
+      <nav className="channels">
+        <a className={`item feed${selectedId === null ? ' active' : ''}`} href="#/feed">
+          <span className="t">フィード</span>
+          <span className="last">{filters.repo ? `#${filters.repo}` : '全リポジトリ'}を時系列に</span>
+        </a>
+        {sessions.map((s) => <Item key={s.id} s={s} active={s.id === selectedId} />)}
+      </nav>
       {data && sessions.length === 0 && <div className="empty">この条件のセッションはありません</div>}
-    </section>
-  )
-}
-
-function Span({ start, end }: { start: string; end: string }) {
-  const same = ymd(start) === ymd(end)
-  return (
-    <>
-      <b>{md(start)}</b> {hm(start)} – {same ? hm(end) : <><b>{md(end)}</b> {hm(end)}</>}
     </>
   )
 }
 
 const More = ({ n }: { n: number }) => (n > 1 ? <span className="more">+{n - 1}</span> : null)
 
-function Row({ s }: { s: SessionSummary }) {
+function Item({ s, active }: { s: SessionSummary; active: boolean }) {
   return (
-    <tr onClick={() => { location.hash = `#/s/${encodeURIComponent(s.id)}` }} title={s.id}>
-      <td className="time"><Span start={s.start} end={s.end} /></td>
-      <td><AgentChip agent={s.agent} /></td>
-      <td>
+    <a className={`item${active ? ' active' : ''}`} href={`#/s/${encodeURIComponent(s.id)}`} title={s.id}>
+      <span className="top">
         <span className="repo">
+          <span className={`dot ${s.agent}`} />
           {s.repo || '—'}<More n={s.repos.length} />
           {s.branch && <span className="br"> / {s.branch}<More n={s.branches.length} /></span>}
         </span>
-      </td>
-      <td className="num">{s.turns}</td>
-      <td className="title">
-        <span className="t" title={s.title_full}>
-          {s.title || '(無題)'}
-          {s.session_source === 'synth' && <SynthTag />}
-        </span>
-        {s.turns > 1 && s.last_text && <span className="last">{stripMarkdown(s.last_text)}</span>}
-      </td>
-    </tr>
+        <span className="when"><b>{md(s.end)}</b> {hm(s.end)} · {s.turns}</span>
+      </span>
+      <span className="t" title={s.title_full}>
+        {s.title || '(無題)'}
+        {s.session_source === 'synth' && <SynthTag />}
+      </span>
+      {s.turns > 1 && s.last_text && <span className="last">{stripMarkdown(s.last_text)}</span>}
+    </a>
   )
 }

@@ -39,7 +39,7 @@ python3 -m unittest feed.test_record -k synth
 
 ### Node のバージョン
 
-サーバとテストは Node の型剥がしで `.ts` を直接実行するため **Node 22.18+** が前提（`package.json` の `engines`）。このマシンの asdf 既定は 22.14.0 で、そのままだと `pnpm test` / `pnpm start` が `ERR_UNKNOWN_FILE_EXTENSION` で落ちる。asdf に 22.23.1 が入っているので `asdf shell nodejs 22.23.1` で切り替えるか、応急処置として `node --experimental-strip-types ...` を付ける。
+サーバとテストは Node の型剥がしで `.ts` を直接実行するため **Node 22.18+** が前提（`package.json` の `engines`）。古い Node だと `pnpm test` / `pnpm start` が `ERR_UNKNOWN_FILE_EXTENSION` で落ちる。バージョンを上げるのが本筋で、応急処置なら `node --experimental-strip-types ...` を付ける。
 
 `server/tsconfig.json` は `erasableSyntaxOnly: true`。サーバ側では enum / namespace / パラメータプロパティなど型剥がしで消せない構文は使えない。
 

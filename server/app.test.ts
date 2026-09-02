@@ -9,7 +9,7 @@ import type { Replying, ReplyResponse, SessionsResponse, SessionDetailResponse, 
 import { createApp, parseDays, revWith, sessionIdFrom } from './app.ts'
 import { FeedStore } from './store.ts'
 import { localDate } from './aggregate.ts'
-import { replyCommand } from './runner.ts'
+import { replyCommand, splitArgs } from './runner.ts'
 import type { ReplyCommand, Runner } from './runner.ts'
 import { row } from './aggregate.test.ts'
 
@@ -467,6 +467,25 @@ test('replyCommand は本文が - で始まってもフラグにならない（-
     const x = replyCommand('codex', 'S', text, '/w', {})!
     assert.deepEqual(x.args.slice(-2), ['--', text])
   }
+})
+
+test('replyCommand: SAI_*_ARGS の追加引数。Claude は先頭（--allowedTools が本文を飲まないように）、Codex は resume の直後', () => {
+  assert.deepEqual(
+    replyCommand('claude', 'S', 'gh pr create', '/w', { SAI_CLAUDE_ARGS: '--allowedTools "Bash(gh *)" --permission-mode acceptEdits' })!.args,
+    ['--allowedTools', 'Bash(gh *)', '--permission-mode', 'acceptEdits', '-p', '--resume', 'S', '--', 'gh pr create'],
+  )
+  assert.deepEqual(replyCommand('codex', 'S', 'hi', '/w', { SAI_CODEX_ARGS: '-s workspace-write' })!.args, ['exec', 'resume', '-s', 'workspace-write', 'S', '--', 'hi'])
+  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', { SAI_CLAUDE_ARGS: '   ' })!.args, ['-p', '--resume', 'S', '--', 'hi'], '空白だけなら何も足さない')
+})
+
+test('splitArgs: シェル風に割る', () => {
+  assert.deepEqual(splitArgs(undefined), [])
+  assert.deepEqual(splitArgs(''), [])
+  assert.deepEqual(splitArgs('  a   b  '), ['a', 'b'])
+  assert.deepEqual(splitArgs('--allowedTools "Bash(gh *)" Edit'), ['--allowedTools', 'Bash(gh *)', 'Edit'])
+  assert.deepEqual(splitArgs("--allowedTools 'Bash(git *) Edit'"), ['--allowedTools', 'Bash(git *) Edit'])
+  assert.deepEqual(splitArgs('a\\ b "c \\" d" ""'), ['a b', 'c " d', ''], 'バックスラッシュと空の引用')
+  assert.deepEqual(splitArgs('--model=x --flag'), ['--model=x', '--flag'])
 })
 
 test('キャッシュは追記で無効になり、変わらなければ再パースしない', async () => {

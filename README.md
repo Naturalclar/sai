@@ -268,6 +268,20 @@ Slack のチャット風。1ターンは「自分の入力（`user_text`）→ �
 
 「処理中」の正はサーバ（子プロセスが exit するまで `replying` として `GET /api/sessions` / `GET /api/sessions/<id>` / `GET /api/feed` に載る）。画面はそれを見て仮バブルと閉じた入力欄を出すので、リロードしても別タブでも同じ状態になり、一覧のそのセッションには「返信中」が付く。1分を超えると仮バブルに経過（「処理中 3分」）が出て、5分を超えると色が変わる。`replying` が変わると `rev` も変わるので、JSONL が増えなくても画面は描き直す。プロセスが終わったのに行が増えなかったとき（`claude -p` が許可待ちで落ちた、フックが失敗した）は「返信は終わったが記録が増えなかった」と出て入力欄が開く。手がかりは `~/.agent-feed/reply.log`。`session_source` が `synth` のセッション、`unknown-<日付>` に丸められたセッション、`agent` が `unknown` のセッションは ID が合成なので再開できず、入力欄の代わりにその旨が出る。
 
+#### 返信と許可
+
+返信は非対話モード（`claude -p` / `codex exec`）で回すので、**許可ダイアログを出せない**。端末なら「このコマンドを実行していい？」と聞かれる場面（`gh pr create` など、設定で許可していないツール）は、非対話では拒否されて、エージェントは「許可が要る」と言って止まる。SAI からは答えられない。
+
+先に許可しておくには、環境変数でサーバに追加の引数を渡す:
+
+```sh
+SAI_CLAUDE_ARGS='--allowedTools "Bash(gh *)"' pnpm start        # gh だけ通す
+SAI_CLAUDE_ARGS='--permission-mode acceptEdits' pnpm start       # ファイル編集は聞かない（コマンドは聞く）
+SAI_CODEX_ARGS='-s workspace-write' pnpm start                    # Codex: 作業ディレクトリへの書き込みまで
+```
+
+`claude` の `--allowedTools` は `~/.claude/settings.json` の `permissions.allow` と同じ書き方で、こちらは SAI からの返信にだけ効く（端末の許可設定はそのまま）。**SAI 自身は既定で何も付けない。** `--dangerously-skip-permissions` / `--permission-mode bypassPermissions` / Codex の `--dangerously-bypass-approvals-and-sandbox` も書けるが、返信の POST はブラウザから飛ぶので、その状態で別サイトからの CSRF が通ればエージェントが何でもできる（同一オリジンの検査で止めてはいる）。許可はツール単位で最小にする。
+
 「フィード」は全チャンネルを時系列に流したもの（`/api/feed`）。フィードからも返信できる。全セッションが混ざっているので返信先を選ぶ必要があり、入力欄で半角の `@` を打つと候補が出て、↑↓ と Enter で選ぶと、Slack と同じく入力欄の中に表記（`@repo`。同じリポジトリが複数なら `@repo/branch`）が入り、入力欄の上のチップ（`→ #repo branch「タイトル」`）も差し替わる。表記は送信時に本文から外す。表記を手で消すか、チップの ✕ を押すと既定に戻る。何も選ばなければ一番新しい行のセッションに送る（既定でもチップに出る）。再開できないセッションは候補に薄く出て選べない。送る先は同じ `POST /api/sessions/<id>/reply`。
 
 候補は**サイドバーの一覧に出ているセッション**（絞り込みと日数はサイドバーのもの。表示名・アイコンが付いていればそれで出る）を先に、一覧に無くてフィードにだけ出ている行のセッションを後ろに並べる。リポジトリ / ブランチ / タイトルで絞れる。一覧の取得は画面全体で 1 回で、サイドバーとフィードが同じ結果を見る。
@@ -309,3 +323,5 @@ Slack のチャット風。1ターンは「自分の入力（`user_text`）→ �
 | `SAI_PORT` | サーバの既定ポート（既定 `8787`） |
 | `SAI_CLAUDE_BIN` | 返信で起動する `claude` の実行ファイル（既定は PATH の `claude`）。launchd などで PATH が最小のときに |
 | `SAI_CODEX_BIN` | 同じく `codex` |
+| `SAI_CLAUDE_ARGS` | 返信の `claude -p --resume` に足す引数。空白区切りで、空白を含む値は `"…"` か `'…'` で囲む。例: `--allowedTools "Bash(gh *)"`、`--permission-mode acceptEdits`。「返信と許可」の項を読んでから |
+| `SAI_CODEX_ARGS` | 同じく `codex exec resume` に足す引数。例: `-s workspace-write` |

@@ -81,7 +81,7 @@ Codex CLI (notify) ──────┘                                   │
 - **エンティティの単位は (セッション, リポジトリ)。** IDは `<セッション>@<リポジトリ>`（セッションが取れない行は `unknown-<日付>`）。キーの作り方は `shared/entity.ts` の `entityId()` にあり、サーバの集計（`aggregate.ts`）・詳細APIの行の絞り込み（`app.ts`）・画面のリンク（`Chat.tsx`）が全部これを使う。別々に組み立てるとリンク切れになるので必ず共有関数を通す。
 - 日付の切り方は `Asia/Tokyo` 固定（`record.py` の `tz()` と `shared/entity.ts` の `TIME_ZONE`）。
 - **SAI は外に出さない。** `127.0.0.1` / `localhost` / `::1` 以外への bind は `main.ts` が拒否する。中身は作業内容そのものなので、デプロイ・ホスティング・Slack への送信はしない。
-- **返信の POST は同一オリジンのみ。** ブラウザから任意の `cwd` でコマンドが走るので、`app.ts` の `isCrossOrigin()`（`Origin` / `Sec-Fetch-Site`）は外さない。起動するコマンドに権限バイパスのフラグも付けない。
+- **返信の POST は同一オリジンのみ。** ブラウザから任意の `cwd` でコマンドが走るので、`app.ts` の `isCrossOrigin()`（`Origin` / `Sec-Fetch-Site`）は外さない。SAI 自身は起動するコマンドに権限のフラグを付けない（非対話なので許可ダイアログは出せず、未許可のツールは拒否される）。運用者が `SAI_CLAUDE_ARGS` / `SAI_CODEX_ARGS` で明示的に渡すのは可で、それは README の「返信と許可」に書いてある範囲（ツール単位の `--allowedTools` を勧め、バイパスは CSRF の観点から勧めない）。
 - 履歴（`*.jsonl`、`.agent-feed/`、`sessions/`）はコミットしない。`.gitignore` 済み。
 
 ## 環境変数
@@ -93,3 +93,4 @@ Codex CLI (notify) ──────┘                                   │
 | `CODEX_HOME` | Codex のホーム（既定 `~/.codex`） |
 | `SAI_PORT` | サーバの既定ポート（既定 `8787`） |
 | `SAI_CLAUDE_BIN` / `SAI_CODEX_BIN` | 返信で起動する CLI の実行ファイル（既定は PATH の `claude` / `codex`） |
+| `SAI_CLAUDE_ARGS` / `SAI_CODEX_ARGS` | 返信のコマンドに足す引数（`--allowedTools "Bash(gh *)"` など。シェル風に割る。`server/runner.ts` の `splitArgs()`）。Claude は先頭に置く（`--allowedTools` は可変長で、後ろだと本文を飲む） |

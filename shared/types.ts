@@ -47,6 +47,22 @@ export interface SessionSummary {
   session_source: SessionSource
   sources: SessionSource[]
   last_text: string
+  /** ブラウザから付けた表示名・アイコン。無ければ undefined（title を使う） */
+  meta?: SessionMeta
+}
+
+/** セッションに人が付けるもの。~/.agent-feed/session-meta.json に JSONL とは別で持つ */
+export interface SessionMeta {
+  /** 表示名。一覧とチャット見出しで title の代わりに出す */
+  name?: string
+  /** 絵文字1つ */
+  icon?: string
+}
+
+/** GET/PUT /api/sessions/<id>/meta。PUT の body は SessionMeta（空文字や省略は「消す」） */
+export interface SessionMetaResponse {
+  id: string
+  meta: SessionMeta
 }
 
 export interface Facets {

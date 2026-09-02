@@ -137,6 +137,16 @@ Codex CLI ──[notify]───────┘
 
 `first_user_text` は1行目だけでなく**毎行**に載せている。集計は「一番古い行の値」を使うので結果は同じで、`days` で切った窓の外にセッションの1行目が落ちてもタイトルが消えない。
 
+### セッションの表示名とアイコン
+
+一覧の名前は入力（`user_text` / `first_user_text`）から自動で作るが、ブラウザから自分で付けた表示名と絵文字のアイコンで上書きできる（チャット見出しの「名前を付ける」）。これは JSONL ではなく `~/.agent-feed/session-meta.json` に持つ。
+
+```json
+{ "sess-abc@kanban": { "name": "背中メニュー", "icon": "🏋️" } }
+```
+
+キーはエンティティID（`<セッション>@<リポジトリ>`）。記録側（`record.py`）はこのファイルを知らないし、集計（`aggregate()`）も触らない。サーバが応答を返すときに載せるだけなので、消しても履歴は壊れない。
+
 ### 履歴はリポジトリに入れない
 
 `~/.agent-feed/` はリポジトリの外。作業内容の断片が入るので、うっかりコミットされない場所に置く。`.gitignore` の `*.jsonl` / `.agent-feed/` / `sessions/` は、手元にコピーしたときの保険として最初のコミットから入っている。
@@ -206,6 +216,8 @@ Slack のチャット風。1ターンは「自分の入力（`user_text`）→ �
 | `GET /api/sessions?days=7&repo=&agent=&date=` | セッション一覧（集計済み）。`filters` に絞り込み候補も返す |
 | `GET /api/sessions/<id>?days=30` | そのエンティティの全行。`<id>` は `<セッション>@<リポジトリ>` |
 | `POST /api/sessions/<id>/reply?days=90` | body `{ "text": "..." }`。そのセッションを `cwd` で再開して1ターン回すのを投げっぱなしにし、`202` を返す。合成 ID は `400`、進行中は `409`、別オリジンは `403` |
+| `GET /api/sessions/<id>/meta` | 表示名とアイコン。`{ "id", "meta": { "name"?, "icon"? } }`。無ければ `meta` は `{}` |
+| `PUT /api/sessions/<id>/meta?days=90` | body `{ "name"?: "...", "icon"?: "🧪" }` で置き換える。空文字や省略は「消す」で、両方消えたらエントリごと消える。アイコンは絵文字1つ、名前は100文字まで（超えたら `400`）。窓の中に無いセッションは `404`、別オリジンは `403` |
 | `GET /api/feed?days=3&repo=` | 生の行 |
 
 返信の実行は `server/runner.ts`。`claude` / `codex` は `detached` で起動して待たず、stdout/stderr は `~/.agent-feed/reply.log` に追記する（うまく動かないときはここを見る）。同じエンティティに同時に2本は走らせない。

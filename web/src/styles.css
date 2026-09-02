@@ -105,6 +105,20 @@
   .chat-head .meta.pull { margin-left: auto; }
   .chat-head .meta select { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; font: inherit; font-size: 12px; }
   .chat-head .meta code { font-family: var(--mono); background: var(--chip); padding: 1px 5px; border-radius: 4px; }
+  /* 表示名・アイコン（ブラウザから付けるもの） */
+  .channels .t .icon { margin-right: 4px; }
+  .chat-head .session-name { display: flex; align-items: center; gap: 8px; color: var(--ink); font-size: 14px; margin: 0; }
+  .chat-head .session-name .icon { font-size: 18px; line-height: 1; }
+  .chat-head .session-name .none { color: var(--muted); }
+  .chat-head .session-name .err { color: var(--claude); font-size: 12px; }
+  .chat-head .session-name input { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; font: inherit; }
+  .chat-head .session-name input:focus { outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent); border-color: var(--accent); }
+  .chat-head .session-name .icon-input { width: 4em; text-align: center; }
+  .chat-head .session-name .name-input { flex: 1; min-width: 12em; max-width: 32em; }
+  .chat-head .session-name button[type="submit"] { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 5px 12px; font: inherit; font-weight: 600; cursor: pointer; }
+  .chat-head .session-name button:disabled { opacity: .5; cursor: default; }
+  .linkish { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-size: 12px; cursor: pointer; }
+  .linkish:hover { text-decoration: underline; }
   .chat { flex: 1; min-height: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow-y: auto; }
   .day { text-align: center; color: var(--muted); font-size: 11px; padding: 10px 0 2px; position: relative; }
   .day span { background: var(--panel); padding: 0 8px; position: relative; }

@@ -73,3 +73,28 @@ export function mentionQuery(text: string, caret: number): { start: number; quer
   if (/\s/.test(query)) return null
   return { start, query }
 }
+
+/**
+ * 候補ごとの、入力欄に差し込む表記。`@repo`。同じリポジトリが複数あれば `@repo/branch`、
+ * それでも被れば `~2` `~3` を足す（targets の順に若い番号。新しい順なので新しい方が無印）。
+ * 空白を含まないので、後ろに空白を付けて差し込めば mentionQuery は「打ちかけ」と見なさない。
+ * 表記は選んだ時点のものを FeedView が覚えるので、後で候補が増えて表記が変わっても本文の中は動かない
+ */
+export function mentionLabels(targets: ReplyTarget[]): Map<string, string> {
+  const perRepo = new Map<string, number>()
+  for (const t of targets) perRepo.set(t.repo, (perRepo.get(t.repo) ?? 0) + 1)
+  const used = new Map<string, number>()
+  const out = new Map<string, string>()
+  for (const t of targets) {
+    const base = (perRepo.get(t.repo) ?? 0) > 1 && t.branch ? `@${t.repo}/${t.branch}` : `@${t.repo}`
+    const n = (used.get(base) ?? 0) + 1
+    used.set(base, n)
+    out.set(t.id, n > 1 ? `${base}~${n}` : base)
+  }
+  return out
+}
+
+/** 本文から表記を外す（送信するときと、✕ で返信先を戻すとき）。残った空白は1つにまとめる */
+export function stripMention(text: string, label: string): string {
+  return text.split(label).join('').replace(/[ \t]{2,}/g, ' ').replace(/^[ \t]+|[ \t]+$/gm, '').trim()
+}

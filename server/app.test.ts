@@ -96,8 +96,8 @@ test('/ は未ビルドなら案内、あれば index.html', async () => {
 test('/api/* は X-SAI-Build（dist/index.html の mtime）を返し、ビルドし直すと変わる', async () => {
   const index = join(distDir, 'index.html')
   let res = await get('/api/health')
-  const before = res.headers.get('x-sai-build')
-  assert.equal(before, String((await stat(index)).mtimeMs))
+  const first = res.headers.get('x-sai-build')
+  assert.equal(first, String((await stat(index)).mtimeMs))
   // 静的ファイルには付けない
   assert.equal((await get('/')).headers.get('x-sai-build'), null)
 
@@ -105,9 +105,9 @@ test('/api/* は X-SAI-Build（dist/index.html の mtime）を返し、ビルド
   const later = new Date(Date.now() + 5_000)
   await utimes(index, later, later)
   res = await get('/api/health')
-  const after = res.headers.get('x-sai-build')
-  assert.notEqual(after, before)
-  assert.equal(after, String((await stat(index)).mtimeMs))
+  const second = res.headers.get('x-sai-build')
+  assert.notEqual(second, first)
+  assert.equal(second, String((await stat(index)).mtimeMs))
 })
 
 test('dist/ の外には出ない', async () => {

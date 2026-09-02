@@ -23,6 +23,8 @@
   header nav a.active { color: var(--ink); font-weight: 600; }
   header .status { margin-left: auto; color: var(--muted); font-size: 12px; }
   header .status.error { color: var(--claude); }
+  header .github { display: inline-flex; color: var(--muted); }
+  header .github:hover { color: var(--ink); text-decoration: none; }
 
   main { padding: 16px 18px 48px; max-width: 1200px; margin: 0 auto; }
 

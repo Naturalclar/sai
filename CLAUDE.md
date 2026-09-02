@@ -11,7 +11,7 @@ Claude Code / Codex CLI のターン完了をフックで `~/.agent-feed/YYYY-MM
 ```
 pnpm install
 pnpm start                  # 127.0.0.1:8787。web/dist/ を配る（未ビルドなら案内ページ）
-pnpm start --port 9000 --feed-dir ~/.agent-feed   # pnpm 10 は「--」もそのまま渡すので付けない
+pnpm start --port 9000 --feed-dir ~/.agent-feed   # pnpm 10 は「--」もそのまま渡すが、先頭の「--」は落とすので付けてもよい
 pnpm start:watch            # server/ shared/ の変更で自動再起動（node --watch）
 pnpm dev                    # Vite。/api を 127.0.0.1:8787 に proxy するので pnpm start も並走させる
 pnpm build                  # typecheck → vite build web（web/dist/ へ）

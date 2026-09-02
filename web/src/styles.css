@@ -62,8 +62,22 @@
 
   /* -- sidebar: 1項目 = 1エンティティ。先頭に固定の「フィード」 */
   .channels { display: block; }
-  .channels .item { display: block; padding: 8px 12px 8px 14px; border-bottom: 1px solid var(--line); color: inherit; min-width: 0; }
-  .channels .item:hover { background: var(--hover); text-decoration: none; }
+  .channels .item { position: relative; display: block; border-bottom: 1px solid var(--line); color: inherit; min-width: 0; }
+  .channels .item > .link, .channels a.item { display: block; padding: 8px 12px 8px 14px; color: inherit; }
+  .channels .item:hover { background: var(--hover); }
+  .channels .item:hover .link, .channels a.item:hover { text-decoration: none; }
+  /* 項目の右上の「アーカイブ」。ホバーかフォーカスで出て、そのとき時刻の代わりに置く。ホバーの無い端末では常に出す */
+  .channels .archive-btn { position: absolute; top: 6px; right: 8px; z-index: 1; opacity: 0; font: inherit; font-size: 11px; line-height: 1; padding: 3px 7px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--muted); cursor: pointer; }
+  .channels .archive-btn:hover { color: var(--ink); border-color: var(--muted); }
+  .channels .archive-btn:disabled { cursor: default; }
+  .channels .archive-btn.error { color: var(--claude); border-color: var(--claude); opacity: 1; }
+  .channels .item:hover .archive-btn, .channels .item:focus-within .archive-btn { opacity: 1; }
+  .channels .item:hover .when, .channels .item:focus-within .when { visibility: hidden; }
+  @media (hover: none) {
+    .channels .archive-btn { opacity: 1; top: auto; bottom: 6px; }
+    .channels .item:hover .when { visibility: visible; }
+    .channels .item:has(.archive-btn) .last, .channels .item:has(.archive-btn) .t { padding-right: 5.5em; }
+  }
   .channels .item.active { background: color-mix(in srgb, var(--accent) 10%, transparent); box-shadow: inset 3px 0 var(--accent); }
   .channels .item.feed .t { font-weight: 600; }
   .channels .item.archived { opacity: .6; }

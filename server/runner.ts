@@ -26,8 +26,10 @@ export function replyCommand(
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
 ): ReplyCommand | null {
-  if (agent === 'claude') return { bin: env.SAI_CLAUDE_BIN || 'claude', args: ['-p', '--resume', session, text], cwd, text }
-  if (agent === 'codex') return { bin: env.SAI_CODEX_BIN || 'codex', args: ['exec', 'resume', session, text], cwd, text }
+  // 本文の前に `--` を置く。本文が `-` で始まると（`-v` や `--help`）CLI がフラグとして解釈して
+  // ターンが回らない（`--dangerously-skip-permissions` ならフラグとして効いてしまう）。両 CLI とも `--` を受け付ける
+  if (agent === 'claude') return { bin: env.SAI_CLAUDE_BIN || 'claude', args: ['-p', '--resume', session, '--', text], cwd, text }
+  if (agent === 'codex') return { bin: env.SAI_CODEX_BIN || 'codex', args: ['exec', 'resume', session, '--', text], cwd, text }
   return null
 }
 

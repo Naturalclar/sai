@@ -186,13 +186,13 @@ test('POST reply: Claude のセッションを cwd で再開する', async () =>
   const { id, cmd } = runner.started[0]!
   assert.equal(id, 'C1@r')
   assert.equal(cmd.cwd, dir)
-  assert.deepEqual(cmd.args, ['-p', '--resume', 'C1', '続きをやって'])
+  assert.deepEqual(cmd.args, ['-p', '--resume', 'C1', '--', '続きをやって'])
 })
 
 test('POST reply: Codex は codex exec resume', async () => {
   runner.started.length = 0
   assert.equal((await post('X1@r', { text: 'go' })).status, 202)
-  assert.deepEqual(runner.started[0]!.cmd.args, ['exec', 'resume', 'X1', 'go'])
+  assert.deepEqual(runner.started[0]!.cmd.args, ['exec', 'resume', 'X1', '--', 'go'])
 })
 
 test('POST reply: 合成・不明・cwd 無しは受け付けない', async () => {
@@ -421,10 +421,22 @@ test('PUT meta: archived_at でアーカイブ。一覧とフィードから消�
 })
 
 test('replyCommand は SAI_*_BIN で実行ファイルを差し替えられる', () => {
-  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', {}), { bin: 'claude', args: ['-p', '--resume', 'S', 'hi'], cwd: '/w', text: 'hi' })
+  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', {}), { bin: 'claude', args: ['-p', '--resume', 'S', '--', 'hi'], cwd: '/w', text: 'hi' })
+  assert.deepEqual(replyCommand('codex', 'S', 'hi', '/w', {})!.args, ['exec', 'resume', 'S', '--', 'hi'])
   assert.equal(replyCommand('claude', 'S', 'hi', '/w', { SAI_CLAUDE_BIN: '/opt/claude' })!.bin, '/opt/claude')
   assert.equal(replyCommand('codex', 'S', 'hi', '/w', { SAI_CODEX_BIN: '/opt/codex' })!.bin, '/opt/codex')
   assert.equal(replyCommand('unknown', 'S', 'hi', '/w', {}), null)
+})
+
+test('replyCommand は本文が - で始まってもフラグにならない（-- の後ろに置く）', () => {
+  // `claude -p --resume S "--version"` は版を出して終わり、`codex exec resume S "--help"` はヘルプを出す。`--` で区切ると本文になる
+  for (const text of ['--version', '-h', '--dangerously-skip-permissions']) {
+    const c = replyCommand('claude', 'S', text, '/w', {})!
+    assert.equal(c.args[c.args.length - 1], text)
+    assert.equal(c.args[c.args.length - 2], '--')
+    const x = replyCommand('codex', 'S', text, '/w', {})!
+    assert.deepEqual(x.args.slice(-2), ['--', text])
+  }
 })
 
 test('キャッシュは追記で無効になり、変わらなければ再パースしない', async () => {

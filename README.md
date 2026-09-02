@@ -251,8 +251,10 @@ Slack のチャット風。1ターンは「自分の入力（`user_text`）→ �
 
 | エージェント | コマンド |
 | --- | --- |
-| Claude Code | `claude -p --resume <session> "<text>"` |
-| Codex CLI | `codex exec resume <session> "<text>"` |
+| Claude Code | `claude -p --resume <session> -- "<text>"` |
+| Codex CLI | `codex exec resume <session> -- "<text>"` |
+
+`--` は本文が `-` で始まっても（`-v` や `--help`）CLI のフラグとして解釈されないようにするため。
 
 回したターンが完了すれば既存のフック（Stop / notify）が動いて JSONL に1行増えるので、返信の結果は今のポーリングでそのまま画面に流れてくる。送信直後は「送信中…」の仮バブルが出て、`UserPromptSubmit` の行が届けば本文はそちらの本物のバブルに置き換わり「処理中」の1行だけ残る。行が増えたら消える（増えた行の `user_text` が同じ文なので、見た目はそのまま本物の自分のバブルに変わる）。
 

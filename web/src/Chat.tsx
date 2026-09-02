@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import { entityId } from '../../shared/entity.ts'
 import { AGENT_INITIAL, AGENT_LABEL, type FeedRow } from './api'
 import { dayLabel, hm, minutesBetween, ymd } from './format'
@@ -44,22 +45,23 @@ function groupRows(rows: FeedRow[]): { day: string; label: string; groups: Group
   return days
 }
 
-export function Chat({ rows, showChannel }: { rows: FeedRow[]; showChannel: boolean }) {
+/** trailer は末尾に足す仮の要素（送信中の返信など）。行と同じく最下部追従の対象 */
+export function Chat({ rows, showChannel, trailer }: { rows: FeedRow[]; showChannel: boolean; trailer?: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
 
   // 最下部を見ていたときだけ、更新後も最下部に追従する
   useEffect(() => {
     const el = ref.current
-    if (el && stickToBottom.current && rows.length > 0) el.scrollTop = el.scrollHeight
-  }, [rows])
+    if (el && stickToBottom.current && (rows.length > 0 || trailer)) el.scrollTop = el.scrollHeight
+  }, [rows, trailer])
 
   const onScroll = () => {
     const el = ref.current
     if (el) stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
   }
 
-  if (rows.length === 0) return <div className="empty">まだ何もありません</div>
+  if (rows.length === 0 && !trailer) return <div className="empty">まだ何もありません</div>
 
   return (
     <div className="chat" ref={ref} onScroll={onScroll}>
@@ -84,6 +86,25 @@ export function Chat({ rows, showChannel }: { rows: FeedRow[]; showChannel: bool
           ))}
         </div>
       ))}
+      {trailer}
+    </div>
+  )
+}
+
+/** 送信した返信の仮バブル。フックで行が届いたら SessionView が消す */
+export function PendingBubble({ text }: { text: string }) {
+  return (
+    <div className="group pending">
+      <div className="avatar me">私</div>
+      <div>
+        <div className="gh">
+          <span className="name">あなた</span>
+          <span className="time">送信中…</span>
+        </div>
+        <div className="msg">
+          <div className="body">{text}</div>
+        </div>
+      </div>
     </div>
   )
 }

@@ -72,6 +72,23 @@ export interface FeedResponse {
   rows: FeedRow[]
 }
 
+/** POST /api/sessions/<id>/reply の body */
+export interface ReplyRequest {
+  text: string
+}
+
+/**
+ * 202 で返す。ターンは裏で走るので、結果はそのセッションに増えた行で見る。
+ * session は CLI に渡した生のセッションID（エンティティIDではない）
+ */
+export interface ReplyResponse {
+  accepted: true
+  id: string
+  agent: Agent
+  session: string
+  cwd: string
+}
+
 export interface SessionFilters {
   repo: string
   agent: string

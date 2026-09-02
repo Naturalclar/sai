@@ -56,6 +56,7 @@ Codex CLI (notify) ──────┘                                   │
 - **`feed/record.py`** は Python 3.9+ 標準ライブラリのみ（エージェントの子プロセスとして PATH が最小の環境で呼ばれるので node に依存させない）。集計も表示もしない。
 - **`server/`** は node:http 直書きで依存ゼロ。`main.ts` は引数処理と bind 先チェックだけで、ルーティングは `createApp(store, distDir)` にあり、テストはこれを直接叩く。`store.ts` は日付ファイルを `(mtime, size)` で覚えて変わらなければ再パースせず、そのシグネチャのハッシュを `rev` として返す。
 - **`web/src/`** は React 19 + Vite、ルーティングは hash（`#/`、`#/s/<id>`、`#/feed`）。`hooks.ts` の `usePolling` がデータ取得の中心で、`rev` が変わらない限り state を触らず、タブが隠れている間は止まる。フィルタは `useLocalState` で localStorage に残る。
+- **返信**（`POST /api/sessions/<id>/reply`）は `server/runner.ts` が `claude -p --resume` / `codex exec resume` を `cwd` で detached 起動する。結果は既存のフックが JSONL に足す1行として届くので、返信専用の記録経路は無い。返信できるかの判定は `shared/reply.ts` の `replyBlockedReason()` にあり、サーバの受付と画面の入力欄の出し分けが同じ関数を使う。テストは `createApp(store, distDir, runner)` に `FakeRunner` を渡して実際には起動しない。
 
 ## 設計上の前提（変えるときは README も直す）
 
@@ -66,6 +67,7 @@ Codex CLI (notify) ──────┘                                   │
 - **エンティティの単位は (セッション, リポジトリ)。** IDは `<セッション>@<リポジトリ>`（セッションが取れない行は `unknown-<日付>`）。キーの作り方は `shared/entity.ts` の `entityId()` にあり、サーバの集計（`aggregate.ts`）・詳細APIの行の絞り込み（`app.ts`）・画面のリンク（`Chat.tsx`）が全部これを使う。別々に組み立てるとリンク切れになるので必ず共有関数を通す。
 - 日付の切り方は `Asia/Tokyo` 固定（`record.py` の `tz()` と `shared/entity.ts` の `TIME_ZONE`）。
 - **SAI は外に出さない。** `127.0.0.1` / `localhost` / `::1` 以外への bind は `main.ts` が拒否する。中身は作業内容そのものなので、デプロイ・ホスティング・Slack への送信はしない。
+- **返信の POST は同一オリジンのみ。** ブラウザから任意の `cwd` でコマンドが走るので、`app.ts` の `isCrossOrigin()`（`Origin` / `Sec-Fetch-Site`）は外さない。起動するコマンドに権限バイパスのフラグも付けない。
 - 履歴（`*.jsonl`、`.agent-feed/`、`sessions/`）はコミットしない。`.gitignore` 済み。
 
 ## 環境変数
@@ -76,3 +78,4 @@ Codex CLI (notify) ──────┘                                   │
 | `AGENT_FEED_DEBUG` | `1` で record.py の例外をログに残す |
 | `CODEX_HOME` | Codex のホーム（既定 `~/.codex`） |
 | `SAI_PORT` | サーバの既定ポート（既定 `8787`） |
+| `SAI_CLAUDE_BIN` / `SAI_CODEX_BIN` | 返信で起動する CLI の実行ファイル（既定は PATH の `claude` / `codex`） |

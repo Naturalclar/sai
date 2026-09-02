@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SAI</title>
+<style>
+  :root {
+    --bg: #f6f6f4; --panel: #ffffff; --ink: #1f1f1f; --muted: #6b6b6b; --line: #e3e3df;
+    --accent: #3b5bdb; --hover: #f0f0ec; --chip: #ecece8;
+    --claude: #d97757; --codex: #10a37f; --unknown: #8a8a8a; --synth: #b8860b;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1b1b1d; --panel: #232326; --ink: #ececec; --muted: #9a9a9a; --line: #333337;
+      --accent: #8da2fb; --hover: #2b2b2f; --chip: #2f2f34;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--bg); color: var(--ink); font: 14px/1.5 -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  header { display: flex; align-items: center; gap: 16px; padding: 10px 18px; border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 2; }
+  header .logo { font-weight: 700; font-size: 18px; letter-spacing: .08em; }
+  header .logo small { font-weight: 400; color: var(--muted); letter-spacing: 0; margin-left: 8px; font-size: 12px; }
+  header nav a { margin-right: 12px; color: var(--muted); }
+  header nav a.active { color: var(--ink); font-weight: 600; }
+  header .status { margin-left: auto; color: var(--muted); font-size: 12px; }
+
+  main { padding: 16px 18px 48px; max-width: 1200px; margin: 0 auto; }
+  .hidden { display: none !important; }
+
+  /* -- filters */
+  .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+  .filters select, .filters input { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font: inherit; }
+  .filters .count { color: var(--muted); font-size: 12px; margin-left: auto; }
+  .filters button { background: transparent; border: 1px solid var(--line); color: var(--muted); border-radius: 6px; padding: 5px 10px; font: inherit; cursor: pointer; }
+  .filters button:hover { background: var(--hover); color: var(--ink); }
+
+  /* -- session table */
+  table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  th, td { padding: 8px 10px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+  th { font-size: 12px; color: var(--muted); font-weight: 600; white-space: nowrap; background: var(--bg); }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: var(--hover); }
+  td.time { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px; }
+  td.time b { color: var(--ink); font-weight: 500; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.title { max-width: 520px; }
+  td.title .t { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  td.title .last { display: block; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .repo { font-family: var(--mono); font-size: 12px; }
+  .repo .br { color: var(--muted); }
+  .repo .more { color: var(--muted); font-size: 11px; margin-left: 4px; }
+  .empty { padding: 40px; text-align: center; color: var(--muted); }
+
+  .agent { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; white-space: nowrap; }
+  .dot { width: 10px; height: 10px; border-radius: 3px; display: inline-block; background: var(--unknown); }
+  .dot.claude { background: var(--claude); }
+  .dot.codex { background: var(--codex); }
+  .tag { display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 4px; background: var(--chip); color: var(--muted); margin-left: 6px; vertical-align: middle; }
+  .tag.synth { background: color-mix(in srgb, var(--synth) 18%, transparent); color: var(--synth); font-weight: 600; }
+
+  /* -- chat */
+  .chat-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+  .chat-head h1 { font-size: 18px; margin: 0; }
+  .chat-head h1 .hash { color: var(--muted); font-weight: 400; }
+  .chat-head .meta { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; min-width: 0; }
+  .chat-head .meta code { font-family: var(--mono); background: var(--chip); padding: 1px 5px; border-radius: 4px; }
+  .chat { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+  .day { text-align: center; color: var(--muted); font-size: 11px; padding: 10px 0 2px; position: relative; }
+  .day span { background: var(--panel); padding: 0 8px; position: relative; }
+  .day::before { content: ""; position: absolute; left: 16px; right: 16px; top: 18px; border-top: 1px solid var(--line); }
+  .group { display: grid; grid-template-columns: 36px 1fr; gap: 10px; padding: 10px 16px 4px; }
+  .group + .group { border-top: 0; }
+  .avatar { width: 36px; height: 36px; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; font-size: 13px; background: var(--unknown); }
+  .avatar.claude { background: var(--claude); }
+  .avatar.codex { background: var(--codex); }
+  .gh { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .gh .name { font-weight: 700; }
+  .gh .ch { font-family: var(--mono); font-size: 12px; color: var(--accent); }
+  .gh .time, .msg .time { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .msg { position: relative; padding: 2px 0 6px; }
+  .msg .time { position: absolute; left: -46px; top: 4px; width: 40px; text-align: right; opacity: 0; }
+  .msg:hover .time { opacity: 1; }
+  .msg .body { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }
+  .msg .body.clamped { max-height: 9.5em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent); }
+  .msg .more { font-size: 12px; color: var(--accent); cursor: pointer; background: none; border: 0; padding: 0; font-family: inherit; }
+  .msg .empty-text { color: var(--muted); font-style: italic; }
+  .msg .branch { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+  .back { display: inline-block; margin-bottom: 10px; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">SAI <small>agent-feed viewer</small></div>
+  <nav>
+    <a href="#/" data-nav="list">セッション</a>
+    <a href="#/feed" data-nav="feed">フィード</a>
+  </nav>
+  <div class="status" id="status"></div>
+</header>
+
+<main>
+  <!-- 画面1: セッション一覧 -->
+  <section id="view-list">
+    <div class="filters">
+      <select id="f-repo"><option value="">リポジトリ: すべて</option></select>
+      <select id="f-agent"><option value="">エージェント: すべて</option></select>
+      <select id="f-date"><option value="">日付: すべて</option></select>
+      <select id="f-days">
+        <option value="1">直近1日</option>
+        <option value="3">直近3日</option>
+        <option value="7" selected>直近7日</option>
+        <option value="30">直近30日</option>
+        <option value="90">直近90日</option>
+      </select>
+      <button id="f-clear" type="button">絞り込みを消す</button>
+      <span class="count" id="list-count"></span>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>開始 – 終了</th>
+          <th>エージェント</th>
+          <th>リポジトリ / ブランチ</th>
+          <th style="text-align:right">ターン</th>
+          <th>タイトル</th>
+        </tr>
+      </thead>
+      <tbody id="list-body"></tbody>
+    </table>
+    <div class="empty hidden" id="list-empty">この条件のセッションはありません</div>
+  </section>
+
+  <!-- 画面2: セッションの中身 / 全チャンネルのフィード -->
+  <section id="view-chat" class="hidden">
+    <a class="back" href="#/">← セッション一覧</a>
+    <div class="chat-head" id="chat-head"></div>
+    <div class="filters" id="feed-filters">
+      <select id="feed-repo"><option value="">リポジトリ: すべて</option></select>
+      <select id="feed-days">
+        <option value="1">直近1日</option>
+        <option value="3" selected>直近3日</option>
+        <option value="7">直近7日</option>
+      </select>
+    </div>
+    <div class="chat" id="chat"></div>
+    <div class="empty hidden" id="chat-empty">まだ何もありません</div>
+  </section>
+</main>
+
+<script>
+(() => {
+  const POLL_MS = 3000;
+  const $ = (id) => document.getElementById(id);
+  const AGENT_LABEL = { claude: 'Claude Code', codex: 'Codex CLI', unknown: 'unknown' };
+  const AGENT_INITIAL = { claude: 'C', codex: 'X', unknown: '?' };
+
+  const state = {
+    route: null,           // {name:'list'} | {name:'session', id} | {name:'feed'}
+    rev: null,             // 直近に描画したレスポンスの rev。同じなら再描画しない
+    timer: null,
+    filters: load('sai.filters', { repo: '', agent: '', date: '', days: '7' }),
+    feed: load('sai.feed', { repo: '', days: '3' }),
+    expanded: new Set(),
+  };
+
+  function load(key, fallback) {
+    try { return Object.assign({}, fallback, JSON.parse(localStorage.getItem(key) || '{}')); }
+    catch { return fallback; }
+  }
+  function save(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} }
+
+  // ---------------------------------------------------------- 整形
+  function esc(s) { return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+  function pad(n) { return String(n).padStart(2, '0'); }
+  function parseTs(ts) { const d = new Date(ts); return isNaN(d) ? null : d; }
+  function hm(ts) { const d = parseTs(ts); return d ? `${pad(d.getHours())}:${pad(d.getMinutes())}` : ''; }
+  function ymd(ts) { const d = parseTs(ts); return d ? `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}` : ''; }
+  function md(ts) { const d = parseTs(ts); return d ? `${d.getMonth() + 1}/${d.getDate()}` : ''; }
+  function dayLabel(ts) {
+    const d = parseTs(ts); if (!d) return ts;
+    const w = ['日', '月', '火', '水', '木', '金', '土'][d.getDay()];
+    return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} (${w})`;
+  }
+  function span(start, end) {
+    const same = ymd(start) === ymd(end);
+    const left = `<b>${esc(md(start))}</b> ${esc(hm(start))}`;
+    const right = same ? esc(hm(end)) : `<b>${esc(md(end))}</b> ${esc(hm(end))}`;
+    return `${left} – ${right}`;
+  }
+  function agentChip(agent) {
+    return `<span class="agent"><span class="dot ${esc(agent)}"></span>${esc(AGENT_LABEL[agent] || agent)}</span>`;
+  }
+  function repoCell(s) {
+    const more = (n) => n > 1 ? `<span class="more">+${n - 1}</span>` : '';
+    return `<span class="repo">${esc(s.repo || '—')}${more(s.repos.length)}` +
+      (s.branch ? ` <span class="br">/ ${esc(s.branch)}${more(s.branches.length)}</span>` : '') + `</span>`;
+  }
+
+  // ---------------------------------------------------------- 通信
+  async function getJSON(url) {
+    const res = await fetch(url, { cache: 'no-store' });
+    if (!res.ok) throw new Error(`${res.status} ${url}`);
+    return res.json();
+  }
+  function setStatus(text, error) {
+    const el = $('status'); el.textContent = text; el.style.color = error ? 'var(--claude)' : '';
+  }
+
+  // ---------------------------------------------------------- 画面1
+  function fillSelect(sel, values, current, label) {
+    const html = [`<option value="">${label}: すべて</option>`]
+      .concat(values.map((v) => `<option value="${esc(v)}"${v === current ? ' selected' : ''}>${esc(v)}</option>`)).join('');
+    if (sel.innerHTML !== html) sel.innerHTML = html;
+  }
+
+  async function loadList() {
+    const f = state.filters;
+    const q = new URLSearchParams({ days: f.days, repo: f.repo, agent: f.agent, date: f.date });
+    const data = await getJSON(`/api/sessions?${q}`);
+    const key = `${data.rev}|${q}`;
+    if (state.rev === key) return;
+    state.rev = key;
+
+    fillSelect($('f-repo'), data.filters.repos, f.repo, 'リポジトリ');
+    fillSelect($('f-agent'), data.filters.agents, f.agent, 'エージェント');
+    fillSelect($('f-date'), data.filters.dates, f.date, '日付');
+    $('f-days').value = f.days;
+    $('list-count').textContent = `${data.sessions.length} / ${data.total} セッション`;
+
+    const rows = data.sessions.map((s) => `
+      <tr data-id="${esc(s.id)}" title="${esc(s.id)}">
+        <td class="time">${span(s.start, s.end)}</td>
+        <td>${agentChip(s.agent)}</td>
+        <td>${repoCell(s)}</td>
+        <td class="num">${s.turns}</td>
+        <td class="title">
+          <span class="t" title="${esc(s.title_full)}">${esc(s.title || '(無題)')}${s.session_source === 'synth' ? '<span class="tag synth" title="セッションIDが取れず、時間で合成">合成</span>' : ''}</span>
+          ${s.turns > 1 && s.last_text ? `<span class="last">${esc(s.last_text)}</span>` : ''}
+        </td>
+      </tr>`).join('');
+    $('list-body').innerHTML = rows;
+    $('list-empty').classList.toggle('hidden', data.sessions.length > 0);
+  }
+
+  $('list-body').addEventListener('click', (e) => {
+    const tr = e.target.closest('tr[data-id]');
+    if (tr) location.hash = `#/s/${encodeURIComponent(tr.dataset.id)}`;
+  });
+  for (const [id, key] of [['f-repo', 'repo'], ['f-agent', 'agent'], ['f-date', 'date'], ['f-days', 'days']]) {
+    $(id).addEventListener('change', (e) => { state.filters[key] = e.target.value; save('sai.filters', state.filters); state.rev = null; refresh(); });
+  }
+  $('f-clear').addEventListener('click', () => {
+    state.filters = { repo: '', agent: '', date: '', days: state.filters.days }; save('sai.filters', state.filters); state.rev = null; refresh();
+  });
+
+  // ---------------------------------------------------------- 画面2
+  function renderChat(rows, { showChannel }) {
+    const chat = $('chat');
+    const atBottom = chat.scrollHeight - chat.scrollTop - chat.clientHeight < 40;
+    let html = '';
+    let lastDay = '';
+    let group = null;   // {agent, repo, session, ts}
+
+    rows.forEach((r, i) => {
+      const day = ymd(r.ts);
+      if (day !== lastDay) { html += `<div class="day"><span>${esc(dayLabel(r.ts))}</span></div>`; lastDay = day; group = null; }
+      const sameGroup = group && group.agent === r.agent && group.repo === r.repo && group.session === r.session
+        && (parseTs(r.ts) - parseTs(group.ts)) < 10 * 60 * 1000;
+      if (!sameGroup) {
+        if (group) html += '</div></div>';
+        group = { agent: r.agent, repo: r.repo, session: r.session, ts: r.ts };
+        html += `<div class="group"><div class="avatar ${esc(r.agent)}">${esc(AGENT_INITIAL[r.agent] || '?')}</div><div>` +
+          `<div class="gh"><span class="name">${esc(AGENT_LABEL[r.agent] || r.agent)}</span>` +
+          (showChannel ? `<a class="ch" href="#/s/${encodeURIComponent(r.session)}" title="${esc(r.session)}">#${esc(r.repo)}</a>` : '') +
+          (r.branch ? `<span class="branch">${esc(r.branch)}</span>` : '') +
+          `<span class="time">${esc(hm(r.ts))}</span></div>`;
+      }
+      group.ts = r.ts;
+      const key = `${r.session}:${r.ts}:${i}`;
+      const text = r.text || '';
+      const long = text.length > 600 || text.split('\n').length > 8;
+      const open = state.expanded.has(key);
+      html += `<div class="msg"><span class="time">${esc(hm(r.ts))}</span>` +
+        (text ? `<div class="body${long && !open ? ' clamped' : ''}">${esc(text)}</div>` : `<div class="empty-text">(本文なし)</div>`) +
+        (long ? `<button class="more" data-key="${esc(key)}">${open ? '折りたたむ' : 'もっと見る'}</button>` : '') +
+        `</div>`;
+    });
+    if (group) html += '</div></div>';
+    chat.innerHTML = html;
+    $('chat-empty').classList.toggle('hidden', rows.length > 0);
+    if (atBottom) chat.scrollTop = chat.scrollHeight;
+  }
+
+  $('chat').addEventListener('click', (e) => {
+    const btn = e.target.closest('button.more');
+    if (!btn) return;
+    const key = btn.dataset.key;
+    if (state.expanded.has(key)) state.expanded.delete(key); else state.expanded.add(key);
+    state.rev = null; refresh();
+  });
+
+  async function loadSession(id) {
+    const data = await getJSON(`/api/sessions/${encodeURIComponent(id)}?days=90`);
+    if (state.rev === data.rev) return;
+    state.rev = data.rev;
+    const s = data.session;
+    $('chat-head').innerHTML =
+      `<h1><span class="hash">#</span>${esc(s.repo)}</h1>` +
+      `<span class="meta">${agentChip(s.agent)}</span>` +
+      (s.branch ? `<span class="meta"><code>${esc(s.branch)}</code></span>` : '') +
+      `<span class="meta">${esc(dayLabel(s.start))} ${esc(hm(s.start))} – ${esc(hm(s.end))} · ${s.turns} ターン</span>` +
+      `<span class="meta" title="${esc(s.id)}">${s.session_source === 'synth' ? '<span class="tag synth">合成</span>' : `<span class="tag">${esc(s.session_source)}</span>`}</span>` +
+      (s.title_full ? `<div class="meta" style="flex-basis:100%">${esc(s.title_full)}</div>` : '');
+    renderChat(data.rows, { showChannel: false });
+  }
+
+  async function loadFeed() {
+    const f = state.feed;
+    const q = new URLSearchParams({ days: f.days, repo: f.repo });
+    const data = await getJSON(`/api/feed?${q}`);
+    const key = `${data.rev}|${q}|${state.expanded.size}`;
+    if (state.rev === key) return;
+    state.rev = key;
+    const repos = [...new Set(data.rows.map((r) => r.repo).filter(Boolean))].sort();
+    if (f.repo && !repos.includes(f.repo)) repos.push(f.repo);
+    fillSelect($('feed-repo'), repos, f.repo, 'リポジトリ');
+    $('feed-days').value = f.days;
+    $('chat-head').innerHTML = `<h1>フィード</h1><span class="meta">全リポジトリ · ${data.rows.length} ターン · 直近${data.days}日</span>`;
+    renderChat(data.rows, { showChannel: true });
+  }
+  for (const [id, key] of [['feed-repo', 'repo'], ['feed-days', 'days']]) {
+    $(id).addEventListener('change', (e) => { state.feed[key] = e.target.value; save('sai.feed', state.feed); state.rev = null; refresh(); });
+  }
+
+  // ---------------------------------------------------------- ルーティング / ポーリング
+  function parseRoute() {
+    const h = location.hash || '#/';
+    let m;
+    if ((m = h.match(/^#\/s\/(.+)$/))) return { name: 'session', id: decodeURIComponent(m[1]) };
+    if (h === '#/feed') return { name: 'feed' };
+    return { name: 'list' };
+  }
+
+  function show(route) {
+    const chat = route.name !== 'list';
+    $('view-list').classList.toggle('hidden', chat);
+    $('view-chat').classList.toggle('hidden', !chat);
+    $('feed-filters').classList.toggle('hidden', route.name !== 'feed');
+    document.querySelectorAll('[data-nav]').forEach((a) => a.classList.toggle('active', a.dataset.nav === (route.name === 'feed' ? 'feed' : 'list')));
+    document.title = route.name === 'session' ? `SAI · ${route.id.slice(0, 12)}` : route.name === 'feed' ? 'SAI · フィード' : 'SAI';
+  }
+
+  async function refresh() {
+    const route = state.route;
+    try {
+      if (route.name === 'list') await loadList();
+      else if (route.name === 'session') await loadSession(route.id);
+      else await loadFeed();
+      setStatus(`更新 ${hm(new Date().toISOString())}`);
+    } catch (err) {
+      setStatus(`取得失敗: ${err.message}`, true);
+    }
+  }
+
+  function navigate() {
+    state.route = parseRoute();
+    state.rev = null;
+    state.expanded.clear();
+    show(state.route);
+    $('chat').innerHTML = '';
+    refresh();
+  }
+
+  window.addEventListener('hashchange', navigate);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+  navigate();
+  state.timer = setInterval(() => { if (!document.hidden) refresh(); }, POLL_MS);
+})();
+</script>
+</body>
+</html>

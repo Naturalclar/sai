@@ -1,0 +1,6 @@
+*.jsonl
+.agent-feed/
+sessions/
+
+__pycache__/
+*.pyc

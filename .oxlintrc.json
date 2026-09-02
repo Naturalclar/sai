@@ -6,6 +6,7 @@
     "no-unused-vars": "error",
     "react/exhaustive-deps": "error",
     "react/react-in-jsx-scope": "off",
+    "react/no-multi-comp": "error",
     "import/no-unassigned-import": "off"
   },
   "ignorePatterns": ["dist", "node_modules"]

@@ -12,7 +12,8 @@
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; }
-  #root { display: flex; flex-direction: column; height: 100%; }
+  /* 高さは見えている範囲（dvh）。iOS Safari の 100% はツールバーを含む高さなので、最下段の返信欄がツールバーの裏に隠れる */
+  #root { display: flex; flex-direction: column; height: 100%; height: 100dvh; }
   body { background: var(--bg); color: var(--ink); font: 14px/1.5 -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif; }
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
@@ -77,6 +78,8 @@
     .channels .archive-btn { opacity: 1; top: auto; bottom: 6px; }
     .channels .item:hover .when { visibility: visible; }
     .channels .item:has(.archive-btn) .last, .channels .item:has(.archive-btn) .t { padding-right: 5.5em; }
+    /* バブルごとの時刻はホバーで出すものなので、ホバーの無い端末では常に出す */
+    .msg .time { opacity: 1; }
   }
   .channels .item.active { background: color-mix(in srgb, var(--accent) 10%, transparent); box-shadow: inset 3px 0 var(--accent); }
   .channels .item.feed .t { font-weight: 600; }
@@ -104,6 +107,32 @@
     .sidebar { box-shadow: none; }
     .side-inner { width: auto; }
     .back { display: inline-block; }
+    /* スマホの幅: 余白とアバターを詰めて本文の幅を稼ぐ。ヘッダは logo の説明を隠し、長いエラーは省略する */
+    header { gap: 10px; padding: 10px 12px; }
+    header .logo small { display: none; }
+    header .status { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .pane { padding: 8px 8px calc(10px + env(safe-area-inset-bottom)); }
+    .group { grid-template-columns: 28px 1fr; padding: 8px 8px 4px; }
+    .avatar { width: 28px; height: 28px; font-size: 12px; }
+    .msg .time { left: -38px; width: 34px; }
+    .pending-line { padding-left: 46px; }
+    .day::before { left: 8px; right: 8px; }
+    .reply .target { flex-wrap: wrap; }
+  }
+
+  /* -- タッチ端末: 指で押せる大きさにする。幅ではなく pointer で当てる（タブレットも対象） */
+  @media (pointer: coarse) {
+    /* iOS Safari は 16px 未満の入力欄にフォーカスすると画面を拡大するので、入力系は 16px にする */
+    .reply textarea, .filters select, .filters input, .sidebar .filters select, .chat-head .meta select, .chat-head .session-name input { font-size: 16px; }
+    .sidebar .filters select, .sidebar .filters button { min-height: 40px; }
+    .chat-head .meta select { min-height: 36px; }
+    .channels .archive-btn { padding: 8px 10px; font-size: 12px; }
+    .channels .item:has(.archive-btn) .last, .channels .item:has(.archive-btn) .t { padding-right: 6.5em; }
+    /* 文字だけのボタン・リンクは見た目を変えずに当たり判定だけ広げる（負のマージンで周りをずらさない） */
+    .linkish, .msg .more, .reply .target .clear { padding: 8px 6px; margin: -8px -6px; }
+    .back { padding: 8px 6px; margin: -8px -6px 0; }
+    .reply textarea { min-height: 44px; }
+    .reply .row button { min-height: 44px; }
   }
 
   .agent { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; white-space: nowrap; }

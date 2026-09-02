@@ -90,6 +90,8 @@ pnpm build       # typecheck してから vite build
 pnpm test && pnpm test:feed && pnpm lint && pnpm typecheck
 ```
 
+同じ一式（＋ `pnpm build`）を GitHub Actions でも回す（`.github/workflows/ci.yml`）。`main` への push と PR が対象で、Node は 22 系の最新、Python は 3.9 と最新の両方。
+
 ## データ
 
 ### 受け口は JSONL 1本だけ

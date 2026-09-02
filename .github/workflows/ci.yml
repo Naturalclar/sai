@@ -1,0 +1,75 @@
+# CI: main への push と PR で、CLAUDE.md の「コミット前の一式」を全部回す。
+#   pnpm test && pnpm test:feed && pnpm lint && pnpm typecheck（＋ pnpm build）
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 同じブランチで新しい push があったら古い実行は捨てる
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # サーバ / 画面（TypeScript）
+  node:
+    name: node (test / lint / typecheck / build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      # サーバとテストは Node の型剥がしで .ts を直接実行するので 22.18 以上が必須（package.json の engines）。
+      # 22 系の最新を取る。
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          check-latest: true
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: node:test（server/**/*.test.ts）
+        run: pnpm test
+
+      - name: oxlint
+        run: pnpm lint
+
+      - name: tsc（web と server）
+        run: pnpm typecheck
+
+      - name: vite build（web/dist/ が生成できること）
+        run: pnpm build
+
+  # フック（Python）。record.py は 3.9+ 標準ライブラリのみが前提なので、下限と最新の両方で回す。
+  feed:
+    name: feed (python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.x"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      # テストが git init するので名前だけ入れておく
+      - run: |
+          git config --global user.email ci@example.com
+          git config --global user.name ci
+
+      - name: unittest（feed/test_record.py）
+        run: python3 -m unittest -v feed.test_record

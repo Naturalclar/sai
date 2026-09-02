@@ -85,6 +85,25 @@ notify = ["python3", "/absolute/path/to/sai/feed/record.py"]
 
 こちらは絶対パスで。`notify` は引数の配列をそのまま実行する（シェルを通らない）ので、`$SAI_HOME` のような変数は展開されない。`notify` の JSON が「最後の引数」で来るか stdin で来るかは資料によって食い違うので、`record.py` は両方受ける。
 
+**`notify` は 1 つしか持てない。** Codex Computer Use のクライアントなど、すでに別の受け手を `notify` に入れているなら、上をそのまま書くとそちらが動かなくなる（逆に、そちらを残したままだと SAI に Codex の行が 1 行も来ない）。その場合は受け手を順に呼ぶ小さなラッパーを 1 つ置いて、`notify` はそれだけを指す。Codex が最後の引数に付けるイベントの JSON を `"$@"` でそのまま渡す。どれかが失敗しても他を止めず、常に exit 0:
+
+```sh
+#!/usr/bin/env bash
+# sai-codex-notify - Codex の notify を複数の受け手に配る
+set -uo pipefail
+cu="$HOME/.codex/computer-use/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient"
+[ -x "$cu" ] && "$cu" turn-ended "$@" >/dev/null 2>&1 || true
+script="${SAI_HOME:-$HOME/src/sai}/feed/record.py"
+[ -f "$script" ] && python3 "$script" "$@" >/dev/null 2>&1 || true
+exit 0
+```
+
+```toml
+notify = ["/Users/<me>/.scripts/sai-codex-notify"]
+```
+
+ラッパーはシェルスクリプトなので、その中では `$SAI_HOME` が使える。向け直したら Codex で 1 ターン回し、`~/.agent-feed/` の行に `"agent": "codex"` が増えて `session_source` が `rollout` になることを見る（`synth` なら下の「Codex のセッション ID」を疑う）。
+
 ### 2. 画面をビルドしてサーバを立てる
 
 ```

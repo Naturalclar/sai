@@ -87,3 +87,15 @@
   .msg .empty-text { color: var(--muted); font-style: italic; }
   .msg .branch { font-family: var(--mono); font-size: 11px; color: var(--muted); }
   .back { display: inline-block; margin-bottom: 10px; color: var(--muted); }
+
+  /* -- reply */
+  .avatar.me { background: var(--accent); }
+  .group.pending { opacity: .65; }
+  .group.pending .msg .body { font-style: italic; }
+  .reply { display: flex; gap: 8px; align-items: flex-end; margin-top: 10px; }
+  .reply textarea { flex: 1; resize: vertical; min-height: 2.6em; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font: inherit; }
+  .reply textarea:focus { outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent); border-color: var(--accent); }
+  .reply button { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 8px 14px; font: inherit; font-weight: 600; cursor: pointer; white-space: nowrap; }
+  .reply button:disabled { opacity: .5; cursor: default; }
+  .notice { color: var(--muted); font-size: 12px; margin-top: 10px; }
+  .notice.error { color: var(--claude); }

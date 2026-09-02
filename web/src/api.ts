@@ -1,11 +1,36 @@
 // serve 側の実装は server/。型は shared/types.ts に1つだけ置いて両方から import する
-import type { FeedFilters, FeedResponse, SessionDetailResponse, SessionFilters, SessionsResponse } from '../../shared/types.ts'
+import type {
+  FeedFilters,
+  FeedResponse,
+  ReplyRequest,
+  ReplyResponse,
+  SessionDetailResponse,
+  SessionFilters,
+  SessionsResponse,
+} from '../../shared/types.ts'
 
 export type { Agent, FeedRow, SessionSource, SessionSummary, Facets, SessionFilters, FeedFilters } from '../../shared/types.ts'
 
+/** サーバは失敗を { error } で返す。それがあればそのまま見せる */
+async function failure(res: Response, url: string): Promise<Error> {
+  try {
+    const body = (await res.json()) as { error?: unknown }
+    if (typeof body.error === 'string' && body.error) return new Error(body.error)
+  } catch {
+    // JSON でない
+  }
+  return new Error(`${res.status} ${url}`)
+}
+
 async function getJSON<T>(url: string): Promise<T> {
   const res = await fetch(url, { cache: 'no-store' })
-  if (!res.ok) throw new Error(`${res.status} ${url}`)
+  if (!res.ok) throw await failure(res, url)
+  return (await res.json()) as T
+}
+
+async function postJSON<T>(url: string, body: object): Promise<T> {
+  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  if (!res.ok) throw await failure(res, url)
   return (await res.json()) as T
 }
 
@@ -16,6 +41,8 @@ export const api = {
   session: (id: string, days = 90) =>
     getJSON<SessionDetailResponse>(`/api/sessions/${encodeURIComponent(id)}?days=${days}`),
   feed: (f: FeedFilters) => getJSON<FeedResponse>(`/api/feed?${qs(f)}`),
+  reply: (id: string, text: string, days = 90) =>
+    postJSON<ReplyResponse>(`/api/sessions/${encodeURIComponent(id)}/reply?days=${days}`, { text } satisfies ReplyRequest),
 }
 
 export const AGENT_LABEL: Record<string, string> = { claude: 'Claude Code', codex: 'Codex CLI', unknown: 'unknown' }

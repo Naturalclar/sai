@@ -1,16 +1,45 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
+import { replyBlockedReason } from '../../shared/reply.ts'
 import { api } from './api'
 import { usePolling } from './hooks'
 import { dayLabel, hm } from './format'
 import { AgentChip, SynthTag } from './AgentChip'
-import { Chat } from './Chat'
+import { Chat, PendingBubble } from './Chat'
+import { ReplyBox } from './ReplyBox'
 import type { StatusProps } from './App'
+
+/** 送信した返信。どのエンティティに、そのとき何行あったか */
+interface Sent {
+  id: string
+  text: string
+  rowsAtSend: number
+}
 
 export function SessionView({ id, onStatus }: { id: string } & StatusProps) {
   const { data, error, updatedAt } = usePolling(() => api.session(id), [id])
   useEffect(() => onStatus(updatedAt, error), [updatedAt, error, onStatus])
 
+  const [sent, setSent] = useState<Sent | null>(null)
+  const [sendError, setSendError] = useState<{ id: string; message: string } | null>(null)
+  // 「送信中」は state を消すのではなく描画時に決める。返信の結果は既存のフックが JSONL に足す
+  // 1行として届くので、行数が送信時より増えたら消える。rev ではなく行数で見るのは、同じ日の
+  // ファイルに別セッションの行が増えても rev は変わるため
+  const pending = sent && sent.id === id && (data?.rows.length ?? 0) <= sent.rowsAtSend ? sent : null
+  const failed = sendError && sendError.id === id ? sendError.message : null
+
+  const send = async (text: string) => {
+    setSendError(null)
+    setSent({ id, text, rowsAtSend: data?.rows.length ?? 0 })
+    try {
+      await api.reply(id, text)
+    } catch (err) {
+      setSent(null)
+      setSendError({ id, message: err instanceof Error ? err.message : String(err) })
+    }
+  }
+
   const s = data?.session
+  const blocked = s ? replyBlockedReason(s) : ''
   return (
     <section>
       <a className="back" href="#/">← セッション一覧</a>
@@ -27,7 +56,9 @@ export function SessionView({ id, onStatus }: { id: string } & StatusProps) {
         </div>
       )}
       {error && !data && <div className="empty">{error}</div>}
-      {data && <Chat rows={data.rows} showChannel={false} />}
+      {data && <Chat rows={data.rows} showChannel={false} trailer={pending && <PendingBubble text={pending.text} />} />}
+      {s && (blocked ? <div className="notice">{blocked}</div> : <ReplyBox repo={s.repo} busy={pending !== null} onSend={send} />)}
+      {failed && <div className="notice error">送信失敗: {failed}</div>}
     </section>
   )
 }

@@ -63,7 +63,8 @@ Codex CLI (notify) ──────┘                                   │
 - **セッション終了は掴めない**ので、両エージェントとも「ターン完了」を1行として記録し、セッションはサーバ側の `aggregate()` でまとめる。
 - **Codex の notify にはセッションIDが無い**ので、`~/.codex/sessions/` の rollout ファイルを cwd で引く（`session_source: rollout`）。引けなければ `(repo, cwd, agent)` が同じで30分以内の前行と同じセッションにする（`synth`）。`session_index.jsonl` は壊れていることがあるので索引は使わない。
 - **`first_user_text` は毎行に載せる。** 集計は最古の行の値を使うので、`days` の窓から1行目が落ちてもタイトルが残る。
-- 日付の切り方は `Asia/Tokyo` 固定（`record.py` の `tz()` と `aggregate.ts` の `TIME_ZONE`）。
+- **エンティティの単位は (セッション, リポジトリ)。** IDは `<セッション>@<リポジトリ>`（セッションが取れない行は `unknown-<日付>`）。キーの作り方は `shared/entity.ts` の `entityId()` にあり、サーバの集計（`aggregate.ts`）・詳細APIの行の絞り込み（`app.ts`）・画面のリンク（`Chat.tsx`）が全部これを使う。別々に組み立てるとリンク切れになるので必ず共有関数を通す。
+- 日付の切り方は `Asia/Tokyo` 固定（`record.py` の `tz()` と `shared/entity.ts` の `TIME_ZONE`）。
 - **SAI は外に出さない。** `127.0.0.1` / `localhost` / `::1` 以外への bind は `main.ts` が拒否する。中身は作業内容そのものなので、デプロイ・ホスティング・Slack への送信はしない。
 - 履歴（`*.jsonl`、`.agent-feed/`、`sessions/`）はコミットしない。`.gitignore` 済み。
 

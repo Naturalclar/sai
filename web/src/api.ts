@@ -83,5 +83,3 @@ export const api = {
     sendJSON<SessionMetaResponse>('PUT', `/api/sessions/${encodeURIComponent(id)}/meta?days=${days}`, meta),
 }
 
-export const AGENT_LABEL: Record<string, string> = { claude: 'Claude Code', codex: 'Codex CLI', unknown: 'unknown' }
-export const AGENT_INITIAL: Record<string, string> = { claude: 'C', codex: 'X', unknown: '?' }

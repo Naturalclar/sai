@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { FeedRow } from '../../shared/types.ts'
-import { groupRows, promptArrived, toUtterances } from './chatGroups.ts'
+import { groupRows, promptArrived, speakerLabel, toUtterances } from './chatGroups.ts'
 
 // 時刻は Asia/Tokyo 固定のプロセスに依存しないよう、同じ日の中で分だけ動かす
 const base = new Date('2026-09-02T03:00:00Z')
@@ -102,4 +102,14 @@ test('promptArrived: 送った返信と同じ入力の行が、送信時刻よ�
   assert.equal(promptArrived([row(0), prompt], 's1@sai', '違う文', since), false)
   assert.equal(promptArrived([row(0), row(5, { event: 'UserPromptSubmit', text: '', user_text: '続きを' })], 's1@sai', '続きを', since), false, '送信より前（許容を超える）')
   assert.equal(promptArrived([row(0), row(9.5, { event: 'UserPromptSubmit', text: '', user_text: '続きを' })], 's1@sai', '続きを', since), true, '30秒前は許容')
+})
+
+test('speakerLabel: 表示名・アイコンがあればそれ、無ければエージェントの固定値。自分は固定', () => {
+  assert.deepEqual(speakerLabel('claude', undefined), { name: 'Claude Code', mark: 'C' })
+  assert.deepEqual(speakerLabel('codex', {}), { name: 'Codex CLI', mark: 'X' })
+  assert.deepEqual(speakerLabel('unknown', undefined), { name: 'unknown', mark: '?' })
+  assert.deepEqual(speakerLabel('claude', { name: '背中メニュー', icon: '🏋️' }), { name: '背中メニュー', mark: '🏋️' })
+  assert.deepEqual(speakerLabel('claude', { name: '背中メニュー' }), { name: '背中メニュー', mark: 'C' }, '名前だけならアバターは頭文字のまま')
+  assert.deepEqual(speakerLabel('claude', { icon: '🏋️' }), { name: 'Claude Code', mark: '🏋️' })
+  assert.deepEqual(speakerLabel('me', { name: '背中メニュー', icon: '🏋️' }), { name: 'あなた', mark: '私' }, '自分側はセッションの表示名に引きずられない')
 })

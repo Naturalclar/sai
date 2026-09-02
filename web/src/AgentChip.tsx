@@ -1,4 +1,4 @@
-import { AGENT_LABEL } from './api'
+import { AGENT_LABEL } from './chatGroups'
 
 export function AgentChip({ agent }: { agent: string }) {
   return (

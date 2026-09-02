@@ -60,6 +60,7 @@ export function SessionView({ id, onStatus, onOpenSidebar }: { id: string } & Pa
         <Chat
           rows={data.rows}
           showChannel={false}
+          sessions={[data.session]}
           trailer={mine && <PendingBubble text={mine.text} since={mine.since} now={now} quiet={promptArrived(data.rows, id, mine.text, mine.since)} />}
         />
       )}

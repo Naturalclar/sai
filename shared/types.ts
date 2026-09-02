@@ -70,7 +70,7 @@ export interface SessionSummary {
 
 /** セッションに人が付けるもの。~/.agent-feed/session-meta.json に JSONL とは別で持つ */
 export interface SessionMeta {
-  /** 表示名。一覧とチャット見出しで title の代わりに出す */
+  /** 表示名。一覧とチャット見出しで title の代わりに出し、チャットのバブルの発言者名にもなる */
   name?: string
   /** 絵文字1つ */
   icon?: string

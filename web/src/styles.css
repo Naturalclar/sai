@@ -28,16 +28,24 @@
   header .sidebar-toggle:hover { background: var(--hover); color: var(--ink); }
 
   /* -- layout: 左サイドバー（一覧）+ 右ペイン（チャット）。ヘッダ以外の高さを使い、それぞれがスクロールする */
-  main.layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 320px minmax(0, 1fr); }
-  .sidebar { min-height: 0; overflow-y: auto; border-right: 1px solid var(--line); background: var(--panel); }
+  main.layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 320px minmax(0, 1fr); transition: grid-template-columns .2s ease; }
+  /* 境界線は border ではなく内側の影。幅 0 のときに 1px の線が残らない */
+  .sidebar { min-height: 0; overflow: hidden auto; box-shadow: inset -1px 0 var(--line); background: var(--panel); }
+  /* 中身の幅は固定。列の幅だけが動き、遷移中に中身が折り返さない */
+  .side-inner { width: 320px; }
   .pane { min-height: 0; display: flex; flex-direction: column; padding: 12px 18px 14px; }
   .pane > section { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .back { display: none; margin-bottom: 8px; color: var(--muted); }
-  /* サイドバーを閉じたとき。幅のアニメーションは付けない（一覧が3秒ごとに更新されるので遷移中にちらつく）。
-     狭い画面ではこの状態を無視する（下の @media で打ち消す） */
-  main.layout.sidebar-closed { grid-template-columns: minmax(0, 1fr); }
-  main.sidebar-closed .sidebar { display: none; }
+  /* サイドバーを閉じたとき。列の幅を 0 に遷移させる（display: none は遷移できない）。
+     閉じ切ったら visibility を hidden にして、見えない一覧にフォーカスが移らないようにする
+     （閉じるときは遷移が終わってから、開くときは即座に）。狭い画面ではこの状態を無視する（下の @media で打ち消す） */
+  main.layout.sidebar-closed { grid-template-columns: 0px minmax(0, 1fr); }
+  .sidebar { visibility: visible; transition: visibility 0s; }
+  main.sidebar-closed .sidebar { visibility: hidden; transition: visibility 0s .2s; }
   main.sidebar-closed .back { display: inline-block; }
+  @media (prefers-reduced-motion: reduce) {
+    main.layout, .sidebar { transition: none; }
+  }
 
   /* -- filters */
   .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
@@ -71,12 +79,13 @@
   /* -- 狭い画面: 一覧かチャットのどちらかだけ。#/ が一覧、#/feed と #/s/<id> がチャット */
   @media (max-width: 900px) {
     header .sidebar-toggle { display: none; }
-    main.layout, main.layout.sidebar-closed { grid-template-columns: 1fr; }
+    main.layout, main.layout.sidebar-closed { grid-template-columns: 1fr; transition: none; }
     main.route-feed .sidebar, main.route-session .sidebar { display: none; }
     /* 「閉じた」を無視して、#/ では一覧を必ず出す */
-    main.layout.route-list .sidebar { display: block; }
+    main.layout.route-list .sidebar { display: block; visibility: visible; }
     main.route-list .pane { display: none; }
-    .sidebar { border-right: 0; }
+    .sidebar { box-shadow: none; }
+    .side-inner { width: auto; }
     .back { display: inline-block; }
   }
 

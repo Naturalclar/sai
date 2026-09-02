@@ -2,7 +2,7 @@ import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
-import { mkdtemp, rm, writeFile, appendFile, mkdir } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile, appendFile, mkdir, stat, utimes } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ReplyResponse, SessionsResponse, SessionDetailResponse, FeedResponse } from '../shared/types.ts'
@@ -91,6 +91,23 @@ test('/ は未ビルドなら案内、あれば index.html', async () => {
   res = await get('/assets/a.js')
   assert.equal(res.status, 200)
   assert.match(res.headers.get('content-type') ?? '', /javascript/)
+})
+
+test('/api/* は X-SAI-Build（dist/index.html の mtime）を返し、ビルドし直すと変わる', async () => {
+  const index = join(distDir, 'index.html')
+  let res = await get('/api/health')
+  const before = res.headers.get('x-sai-build')
+  assert.equal(before, String((await stat(index)).mtimeMs))
+  // 静的ファイルには付けない
+  assert.equal((await get('/')).headers.get('x-sai-build'), null)
+
+  // ビルドし直したつもりで mtime を進める
+  const later = new Date(Date.now() + 5_000)
+  await utimes(index, later, later)
+  res = await get('/api/health')
+  const after = res.headers.get('x-sai-build')
+  assert.notEqual(after, before)
+  assert.equal(after, String((await stat(index)).mtimeMs))
 })
 
 test('dist/ の外には出ない', async () => {

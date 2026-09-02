@@ -140,6 +140,18 @@ export function createApp(store: FeedStore, distDir: string, runner?: Runner): H
     return json(res, payload, 202)
   }
 
+  /**
+   * いま配っているビルドの識別子（dist/index.html の mtime）。未ビルドなら空。
+   * Vite のアセット名はハッシュ入りなので、JS が変われば index.html も必ず変わる。
+   */
+  const buildId = async (): Promise<string> => {
+    try {
+      return String((await stat(resolve(distRoot, 'index.html'))).mtimeMs)
+    } catch {
+      return ''
+    }
+  }
+
   return async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1')
     const q = url.searchParams
@@ -154,6 +166,11 @@ export function createApp(store: FeedStore, distDir: string, runner?: Runner): H
         const id = decodeURIComponent(path.slice(SESSIONS_PREFIX.length, -REPLY_SUFFIX.length))
         if (!id || id.includes('/')) return error(res, 400, 'bad session id')
         return await reply(req, res, id, parseDays(q.get('days'), 90))
+      }
+      if (path.startsWith('/api/')) {
+        // 画面はポーリングのついでにこれを見て、別ターミナルで pnpm build されたらリロードする
+        const build = await buildId()
+        if (build) res.setHeader('X-SAI-Build', build)
       }
       if (path === '/' || path === '/index.html') return await sendStatic(res, 'index.html')
       if (path.startsWith('/assets/')) return await sendStatic(res, path.slice(1))

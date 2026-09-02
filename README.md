@@ -13,18 +13,25 @@ Claude Code と Codex CLI のターン完了をフックで1本の流れに集�
 
 ```
 sai/
+├── package.json         … pnpm。画面とサーバをまとめて扱う。lint は oxlint
 ├── feed/
-│   ├── record.py        … フックから呼ばれて1行 append する
+│   ├── record.py        … フックから呼ばれて1行 append する（Python）
 │   └── test_record.py
+├── shared/
+│   └── types.ts         … 1行の形と API の形。サーバと画面が両方 import する
+├── server/              … 127.0.0.1 専用の HTTP サーバ（TypeScript / Node）。集計と API、dist/ の配信
+│   ├── main.ts          … 入口。引数と bind 先のチェック
+│   ├── app.ts           … ルーティング
+│   ├── store.ts         … 日付ファイルの読み込みと (mtime, size) キャッシュ
+│   ├── aggregate.ts     … 行 → セッションの集計
+│   └── *.test.ts        … node:test
 └── web/
-    ├── serve.py         … 127.0.0.1 専用の HTTP サーバ。集計と API、dist/ の配信
-    ├── test_serve.py
     ├── src/             … 画面（React + TypeScript）
-    ├── package.json     … pnpm。lint は oxlint、ビルドは Vite
+    ├── vite.config.ts
     └── dist/            … `pnpm build` の成果物（コミットしない）
 ```
 
-配管とサーバは Python 3.9+ の標準ライブラリだけ。画面は pnpm + React + TypeScript + oxlint。
+**フックだけ Python**（3.9+ 標準ライブラリのみ）。毎ターン、エージェントの子プロセスとして PATH が最小の環境で呼ばれうるので、`node` が見つからず黙って止まるリスクを避けるため。サーバと画面は pnpm + TypeScript で、サーバは Node 22.18+ の型剥がしで `.ts` を直接動かす（ビルド不要）。
 
 ## 使い方
 
@@ -53,18 +60,20 @@ notify = ["python3", "/absolute/path/to/sai/feed/record.py"]
 ### 2. 画面をビルドしてサーバを立てる
 
 ```
-cd web && pnpm install && pnpm build && cd ..
-python3 web/serve.py            # http://127.0.0.1:8787/
-python3 web/serve.py --port 9000 --feed-dir ~/.agent-feed
+pnpm install && pnpm build
+pnpm start                                   # http://127.0.0.1:8787/
+pnpm start -- --port 9000 --feed-dir ~/.agent-feed
 ```
 
-`serve.py` は `web/dist/` を配る。未ビルドなら `/` にその旨が出る。`file://` で開くと fetch が CORS で止まるので、必ずこのサーバ経由で開く。`127.0.0.1` 以外には bind を拒否する。
+サーバは `web/dist/` を配る。未ビルドなら `/` にその旨が出る。`file://` で開くと fetch が CORS で止まるので、必ずこのサーバ経由で開く。`127.0.0.1` 以外には bind を拒否する。
 
-画面を触るときは `serve.py` を立てたまま `cd web && pnpm dev`。Vite が `/api` を `127.0.0.1:8787` に流す。
+画面を触るときはサーバを立てたまま `pnpm dev`。Vite が `/api` を `127.0.0.1:8787` に流す。
 
 ```
-pnpm lint        # oxlint
-pnpm typecheck   # tsc --noEmit
+pnpm lint        # oxlint（web/src, server, shared）
+pnpm typecheck   # tsc（web と server の両方）
+pnpm test        # node:test（server/）
+pnpm test:feed   # python3 -m unittest（feed/）
 pnpm build       # typecheck してから vite build
 ```
 
@@ -77,8 +86,7 @@ pnpm build       # typecheck してから vite build
 テスト:
 
 ```
-python3 -m unittest feed.test_record web.test_serve
-cd web && pnpm lint && pnpm typecheck
+pnpm test && pnpm test:feed && pnpm lint && pnpm typecheck
 ```
 
 ## データ
@@ -177,7 +185,9 @@ Slack のチャット風。同一セッションの連続した発言（10分以
 | `GET /api/sessions/<id>?days=30` | そのセッションの全行 |
 | `GET /api/feed?days=3&repo=` | 生の行 |
 
-集計はサーバ側。ファイルは `(mtime, size)` で覚えていて、変わっていなければ再パースしない。1日開きっぱなしにしても重くならないのはこのため。
+集計はサーバ側（`server/aggregate.ts`）。ファイルは `(mtime, size)` で覚えていて、変わっていなければ再パースしない（`server/store.ts`）。1日開きっぱなしにしても重くならないのはこのため。
+
+レスポンスの形は `shared/types.ts` に1つだけ書いてあり、サーバの集計と画面の受け取りが同じ型を見る。フィールドを足すときはそこに足すと、片方だけ忘れたときに `pnpm typecheck` で止まる。
 
 ## 守ること
 
@@ -190,8 +200,7 @@ Slack のチャット風。同一セッションの連続した発言（10分以
 
 | | |
 | --- | --- |
-| `AGENT_FEED_DIR` | 出力先（既定 `~/.agent-feed`）。`record.py` と `serve.py` の両方が見る |
+| `AGENT_FEED_DIR` | 出力先（既定 `~/.agent-feed`）。`record.py` とサーバの両方が見る |
 | `AGENT_FEED_DEBUG` | `1` で `record.py` の例外をログに残す |
 | `CODEX_HOME` | Codex のホーム（既定 `~/.codex`） |
-| `SAI_PORT` | `serve.py` の既定ポート（既定 `8787`） |
-| `SAI_VERBOSE` | `1` でアクセスログを出す |
+| `SAI_PORT` | サーバの既定ポート（既定 `8787`） |

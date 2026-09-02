@@ -1,0 +1,90 @@
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import type { FeedRow } from '../shared/types.ts'
+import { aggregate, clip, facets, filterSessions, localDate, recentDates } from './aggregate.ts'
+
+export function row(ts: Date, session: string, over: Partial<FeedRow> = {}): FeedRow {
+  return {
+    ts: ts.toISOString().replace(/\.\d{3}Z$/, '+00:00'),
+    agent: 'claude',
+    repo: 'kanban',
+    branch: 'main',
+    session,
+    session_source: 'payload',
+    cwd: '/home/u/kanban',
+    event: 'Stop',
+    text: 'hi',
+    first_user_text: '',
+    ...over,
+  }
+}
+
+const min = (n: number) => n * 60_000
+
+test('localDate は Asia/Tokyo で切る', () => {
+  assert.equal(localDate('2026-09-02T00:30:00+09:00'), '2026-09-02')
+  assert.equal(localDate('2026-09-01T16:30:00Z'), '2026-09-02', 'UTC 16:30 は JST の翌日')
+  assert.equal(localDate('2026-09-01T14:30:00Z'), '2026-09-01')
+  assert.equal(localDate('garbage-but-long'), 'garbage-bu')
+})
+
+test('recentDates は今日から新しい順', () => {
+  const dates = recentDates(3, new Date('2026-09-01T16:00:00Z')) // JST 9/2 01:00
+  assert.deepEqual(dates, ['2026-09-02', '2026-09-01', '2026-08-31'])
+})
+
+test('clip はコードポイントで数える', () => {
+  assert.equal(clip('あ'.repeat(60), 60).length, 60)
+  assert.equal(clip('あ'.repeat(61), 60), 'あ'.repeat(59) + '…')
+  assert.equal(clip('😀'.repeat(5), 3), '😀😀…')
+})
+
+test('セッション単位にまとめて新しい順', () => {
+  const base = new Date('2026-09-02T01:00:00Z')
+  const rows = [
+    row(base, 'A', { text: '第一声\n二行目', first_user_text: 'やりたいこと' }),
+    row(new Date(base.getTime() + min(5)), 'A', { branch: 'feat', text: 'second' }),
+    row(new Date(base.getTime() + min(9)), 'A', { repo: 'other', text: 'third' }),
+    row(new Date(base.getTime() + min(60)), 'B', { agent: 'codex', text: 'codex says', session_source: 'synth' }),
+  ]
+  const sessions = aggregate(rows)
+  assert.deepEqual(sessions.map((s) => s.id), ['B', 'A'])
+  const a = sessions[1]!
+  assert.equal(a.turns, 3)
+  assert.equal(a.title, 'やりたいこと')
+  assert.equal(a.repo, 'other')
+  assert.deepEqual(a.repos, ['kanban', 'other'])
+  assert.equal(a.branch, 'feat')
+  assert.deepEqual(a.branches, ['main', 'feat'])
+  assert.equal(a.session_source, 'payload')
+  assert.equal(a.date, '2026-09-02')
+  const b = sessions[0]!
+  assert.equal(b.title, 'codex says', 'first_user_text が無ければ最初の text の1行目')
+  assert.equal(b.session_source, 'synth')
+})
+
+test('タイトルは60文字で切る', () => {
+  const s = aggregate([row(new Date(), 'A', { first_user_text: 'あ'.repeat(100) })])[0]!
+  assert.equal(Array.from(s.title).length, 60)
+  assert.ok(s.title.endsWith('…'))
+  assert.equal(Array.from(s.title_full).length, 100)
+})
+
+test('絞り込みと候補', () => {
+  const base = new Date('2026-09-02T01:00:00Z')
+  const sessions = aggregate([
+    row(base, 'A', { repo: 'x' }),
+    row(base, 'B', { repo: 'y', agent: 'codex' }),
+    row(new Date(base.getTime() - min(60 * 24)), 'C', { repo: 'x' }),
+  ])
+  const ids = (list: typeof sessions) => new Set(list.map((s) => s.id))
+  assert.deepEqual(ids(filterSessions(sessions, 'x', '', '')), new Set(['A', 'C']))
+  assert.deepEqual(ids(filterSessions(sessions, '', 'codex', '')), new Set(['B']))
+  assert.deepEqual(ids(filterSessions(sessions, 'x', '', '2026-09-01')), new Set(['C']))
+  assert.deepEqual(facets(sessions), { repos: ['x', 'y'], agents: ['claude', 'codex'], dates: ['2026-09-02', '2026-09-01'] })
+})
+
+test('session が空の行は unknown- にまとめる', () => {
+  const s = aggregate([row(new Date('2026-09-02T01:00:00Z'), '', { repo: 'r' })])[0]!
+  assert.equal(s.id, 'unknown-r-2026-09-02')
+})

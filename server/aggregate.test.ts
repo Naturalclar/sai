@@ -143,6 +143,18 @@ test('待ちの行: 後にターン完了か再開が来れば waiting は空', 
   assert.equal(byResume[0]!.last_text, 'hi')
 })
 
+test('入力の行（UserPromptSubmit + user_text）はターンに数えないが、タイトルはすぐ追従する', () => {
+  const t0 = new Date('2026-09-02T01:00:00Z')
+  const [s] = aggregate([
+    row(t0, 's1', { user_text: '最初' }),
+    row(new Date(t0.getTime() + min(1)), 's1', { event: 'UserPromptSubmit', text: '', user_text: '次の指示' }),
+  ])
+  assert.equal(s!.turns, 1)
+  assert.equal(s!.title, '次の指示', '返答を待たずにタイトルが変わる')
+  assert.equal(s!.last_text, 'hi', '最後の発言はターン完了の行のまま')
+  assert.equal(s!.waiting, '')
+})
+
 test('待ちの行だけのセッションでも壊れない', () => {
   const [s] = aggregate([row(new Date('2026-09-02T01:00:00Z'), 's1', { event: 'Notification', text: '入力待ち', user_text: '', first_user_text: '頼み' })])
   assert.equal(s!.turns, 0)

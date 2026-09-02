@@ -2,14 +2,16 @@
 import type { FeedRow } from '../../shared/types.ts'
 import { entityId } from '../../shared/entity.ts'
 import { eventKind } from '../../shared/events.ts'
-import { dayLabel, minutesBetween, ymd } from './format.ts'
+import { dayLabel, minutesBetween, parseTs, ymd } from './format.ts'
 
 /** 発言者。自分（ターンの入力）か、エージェント */
 export type Speaker = 'me' | FeedRow['agent']
 
 /**
  * 1つのバブル。1行（= 1ターン）は「自分の入力（user_text）」と「エージェントの返答（text）」の
- * 2つの発言に展開する。user_text が無い行（古い JSONL など）はエージェントの発言だけ
+ * 2つの発言に展開する。user_text が無い行（古い JSONL など）はエージェントの発言だけ。
+ * Claude は入力した瞬間に UserPromptSubmit の行（user_text だけ）が先に届くので、自分の発言はそこで立て、
+ * 続くターン完了の行に載っている同じ入力は重ねない
  */
 export interface Utterance {
   speaker: Speaker
@@ -45,21 +47,51 @@ export function toUtterances(rows: FeedRow[]): Utterance[] {
   const lastIndex = new Map<string, number>()
   rows.forEach((row, index) => lastIndex.set(entityId(row.session, row.repo, row.ts), index))
 
+  // エンティティごとに、入力の行で出した直近の入力。次のターン完了の行に同じ入力が載っていたら重ねない
+  const prompted = new Map<string, string>()
+
   const out: Utterance[] = []
   rows.forEach((row, index) => {
+    const id = entityId(row.session, row.repo, row.ts)
     const kind = eventKind(row.event)
-    // 再開（UserPromptSubmit）は待ちを解消する合図なだけで本文が無い。バブルにしない
-    if (kind === 'resume') return
+    const mine = (row.user_text ?? '').trim()
+    if (kind === 'resume') {
+      // 入力した瞬間の行。user_text があれば自分の発言。無い（合図だけの古い形）ならバブルにしない
+      if (mine) {
+        out.push({ speaker: 'me', row, text: row.user_text ?? '', key: `${row.ts}:${index}:me` })
+        prompted.set(id, mine)
+      }
+      return
+    }
     if (kind === 'waiting') {
-      const resolved = (lastIndex.get(entityId(row.session, row.repo, row.ts)) ?? index) > index
+      const resolved = (lastIndex.get(id) ?? index) > index
       out.push({ speaker: row.agent, row, text: row.text ?? '', key: `${row.ts}:${index}`, waiting: true, resolved })
       return
     }
-    const mine = row.user_text ?? ''
-    if (mine.trim()) out.push({ speaker: 'me', row, text: mine, key: `${row.ts}:${index}:me` })
+    if (mine && prompted.get(id) !== mine) out.push({ speaker: 'me', row, text: row.user_text ?? '', key: `${row.ts}:${index}:me` })
+    prompted.delete(id)
     out.push({ speaker: row.agent, row, text: row.text ?? '', key: `${row.ts}:${index}` })
   })
   return out
+}
+
+/** 時計のずれの許容。since はサーバが起動した時刻、行の ts はフックが書いた時刻で、同じマシンだが順序は保証しない */
+const PROMPT_SLACK_MS = 60_000
+
+/**
+ * 画面から送った返信（text）が、入力の行（UserPromptSubmit）として届いているか。
+ * 届いていれば仮バブルの本文はもう要らない（本物の自分バブルが出ている）ので、「処理中」の1行だけにする
+ */
+export function promptArrived(rows: FeedRow[], id: string, text: string, since: string): boolean {
+  const want = text.trim()
+  const from = (parseTs(since)?.getTime() ?? 0) - PROMPT_SLACK_MS
+  return rows.some(
+    (r) =>
+      eventKind(r.event) === 'resume' &&
+      (r.user_text ?? '').trim() === want &&
+      entityId(r.session, r.repo, r.ts) === id &&
+      (parseTs(r.ts)?.getTime() ?? 0) >= from,
+  )
 }
 
 /** Slack と同じ: 同じ発言者（speaker+session）が10分以内に続けば1つにまとめる */

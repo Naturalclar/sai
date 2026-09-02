@@ -1,5 +1,7 @@
 import { useEffect } from 'react'
 import { replyBlockedReason } from '../../shared/reply.ts'
+import { eventKind } from '../../shared/events.ts'
+import { promptArrived } from './chatGroups'
 import { api } from './api'
 import { usePolling } from './hooks'
 import { dayLabel, hm } from './format'
@@ -23,8 +25,9 @@ export function SessionView({ id, onStatus, onOpenSidebar }: { id: string } & Pa
   const { data, error, updatedAt } = usePolling(() => api.session(id), [id])
   useEffect(() => onStatus(updatedAt, error), [updatedAt, error, onStatus])
 
-  // 返信先はこのセッションだけなので、行数はこの画面の行数そのもの
-  const { pending, failed, send } = useReply((target) => (target === id ? (data?.rows.length ?? 0) : 0), data?.replying ?? NO_REPLYING, updatedAt)
+  // 返信先はこのセッションだけなので、行数はこの画面のターン完了の行数（入力の行は返信の終わりではない）
+  const turns = data?.rows.reduce((n, r) => n + (eventKind(r.event) === 'turn' ? 1 : 0), 0) ?? 0
+  const { pending, failed, send } = useReply((target) => (target === id ? turns : 0), data?.replying ?? NO_REPLYING, updatedAt)
   const mine = pending.find((p) => p.id === id) ?? null
   const now = updatedAt?.getTime() ?? 0
   const failedHere = failed && failed.id === id ? failed.message : null
@@ -53,7 +56,13 @@ export function SessionView({ id, onStatus, onOpenSidebar }: { id: string } & Pa
         </div>
       )}
       {error && !data && <div className="empty">{error}</div>}
-      {data && <Chat rows={data.rows} showChannel={false} trailer={mine && <PendingBubble text={mine.text} since={mine.since} now={now} />} />}
+      {data && (
+        <Chat
+          rows={data.rows}
+          showChannel={false}
+          trailer={mine && <PendingBubble text={mine.text} since={mine.since} now={now} quiet={promptArrived(data.rows, id, mine.text, mine.since)} />}
+        />
+      )}
       {s &&
         (s.archived ? (
           <div className="notice">アーカイブ済みのセッションには返信できません。続けるなら「戻す」を押してください（端末で続けて新しい行が届けば自動で戻ります）</div>

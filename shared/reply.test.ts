@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { feedReplyTargets, filterReplyTargets, mentionQuery, replyBlockedReason } from './reply.ts'
+import { feedReplyTargets, filterReplyTargets, mentionLabels, mentionQuery, replyBlockedReason, stripMention } from './reply.ts'
 import type { FeedRow } from './types.ts'
 
 function row(over: Partial<FeedRow>): FeedRow {
@@ -80,4 +80,27 @@ test('mentionQuery: 行頭か空白の直後の半角 @ だけ。caret までに
   assert.equal(mentionQuery('＠sai', 4), null)
   // caret の手前だけを見る（後ろに何があっても関係ない）
   assert.deepEqual(mentionQuery('@sa 後ろ', 3), { start: 0, query: 'sa' })
+})
+
+test('mentionLabels: @repo。同じリポジトリが複数なら @repo/branch、それでも被れば ~2', () => {
+  const targets = feedReplyTargets([
+    row({ session: 'd', repo: 'dotfiles', branch: 'main', ts: '2026-09-02T09:00:00+09:00' }),
+    row({ session: 'c', repo: 'sai', branch: 'feat/x', ts: '2026-09-02T09:10:00+09:00' }),
+    row({ session: 'b', repo: 'sai', branch: 'feat/x', ts: '2026-09-02T09:20:00+09:00' }),
+    row({ session: 'a', repo: 'sai', branch: 'main', ts: '2026-09-02T09:30:00+09:00' }),
+  ])
+  const labels = mentionLabels(targets)
+  assert.equal(labels.get('a@sai'), '@sai/main')
+  assert.equal(labels.get('b@sai'), '@sai/feat/x')
+  assert.equal(labels.get('c@sai'), '@sai/feat/x~2')
+  assert.equal(labels.get('d@dotfiles'), '@dotfiles')
+  // 表記は空白を含まないので、後ろに空白を付ければ打ちかけとは見なされない
+  assert.equal(mentionQuery('@sai/main ', 10), null)
+})
+
+test('stripMention: 表記を外して空白を整える', () => {
+  assert.equal(stripMention('@sai/main テスト本文', '@sai/main'), 'テスト本文')
+  assert.equal(stripMention('先に @sai/main を見て', '@sai/main'), '先に を見て')
+  assert.equal(stripMention('1行目 @sai\n2行目', '@sai'), '1行目\n2行目')
+  assert.equal(stripMention('表記なし', '@sai'), '表記なし')
 })

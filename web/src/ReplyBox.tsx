@@ -1,6 +1,6 @@
-import { useRef, useState } from 'react'
+import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent, SyntheticEvent } from 'react'
-import { filterReplyTargets, mentionQuery, type ReplyTarget } from '../../shared/reply.ts'
+import { filterReplyTargets, mentionLabels, mentionQuery, stripMention, type ReplyTarget } from '../../shared/reply.ts'
 
 /**
  * @ メンションで返信先を選ぶための道具（フィード用）。渡さなければ `@` はただの文字（セッション画面）。
@@ -11,10 +11,18 @@ export interface MentionProps {
   targets: ReplyTarget[]
   /** いまの返信先。チップに出す */
   target: ReplyTarget
-  /** 手で選んだものなら true（✕ で既定に戻せる）。既定のままなら false */
-  picked: boolean
-  /** id を選ぶ。null で既定に戻す */
-  onPick: (id: string | null) => void
+  /**
+   * 手で選んだもの（✕ で既定に戻せる）。既定のままなら null。
+   * label は選んだ時点の表記で、本文の中に `@repo ` として入っている。送信時に外す
+   */
+  picked: Picked | null
+  /** 選ぶ。null で既定に戻す */
+  onPick: (picked: Picked | null) => void
+}
+
+export interface Picked {
+  id: string
+  label: string
 }
 
 interface Props {
@@ -34,7 +42,18 @@ export function ReplyBox({ repo, busy, onSend, mention }: Props) {
   // Esc で閉じた検索語。続きを打って検索語が変われば開き直す
   const [dismissed, setDismissed] = useState<string | null>(null)
   const ref = useRef<HTMLTextAreaElement>(null)
+  // 確定で本文を差し替えた直後に置きたいカーソル位置。React が新しい値を書いた直後（描画前）に同期で当てる。
+  // requestAnimationFrame だと、その前に打たれた文字の後ろへ戻ってしまう
+  const wantCaret = useRef<number | null>(null)
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (el && wantCaret.current !== null) {
+      el.setSelectionRange(wantCaret.current, wantCaret.current)
+      wantCaret.current = null
+    }
+  })
 
+  const labels = useMemo(() => mentionLabels(mention?.targets ?? []), [mention?.targets])
   const hit = mention ? mentionQuery(text, caret) : null
   const open = hit !== null && dismissed !== hit.query
   const shown = open && mention ? filterReplyTargets(mention.targets, hit.query) : []
@@ -45,27 +64,47 @@ export function ReplyBox({ repo, busy, onSend, mention }: Props) {
 
   const track = (e: SyntheticEvent<HTMLTextAreaElement>) => setCaret(e.currentTarget.selectionStart)
 
-  /** 候補を確定する。`@検索語` を入力欄から消し、返信先だけ差し替える（本文にメンションは残さない） */
+  /**
+   * 候補を確定する。`@検索語` を、その候補の表記（`@repo ` のように空白付き）に置き換えて本文に残す。
+   * Slack と同じで、入力欄の中に返信先が見える。前に選んだ表記が残っていればそれは外す（返信先は1つ）
+   */
   const pick = (t: ReplyTarget) => {
     if (!mention || !hit || t.blocked) return
-    const next = text.slice(0, hit.start) + text.slice(caret)
+    const label = labels.get(t.id) ?? `@${t.repo}`
+    const before = mention.picked ? stripMention(text.slice(0, hit.start), mention.picked.label) : text.slice(0, hit.start)
+    const head = before && !/\s$/.test(before) ? `${before} ` : before
+    const next = `${head}${label} ${text.slice(caret)}`
+    const at = head.length + label.length + 1
     setText(next)
-    setCaret(hit.start)
+    setCaret(at)
     setDismissed(null)
-    mention.onPick(t.id)
-    const el = ref.current
-    if (el) {
-      el.focus()
-      requestAnimationFrame(() => el.setSelectionRange(hit.start, hit.start))
-    }
+    mention.onPick({ id: t.id, label })
+    wantCaret.current = at
+    ref.current?.focus()
+  }
+
+  /** 本文が変わったとき。選んだ表記が本文から消えていたら返信先も既定に戻す */
+  const change = (next: string) => {
+    setText(next)
+    if (mention?.picked && !next.includes(mention.picked.label)) mention.onPick(null)
+  }
+
+  /** チップの ✕。表記も本文から外す */
+  const clear = () => {
+    if (!mention?.picked) return
+    setText(stripMention(text, mention.picked.label))
+    mention.onPick(null)
   }
 
   const submit = () => {
-    const t = text.trim()
-    if (!t || busy) return
-    onSend(t)
+    // 送る本文からは表記を外す（エージェントにメンションは渡さない）
+    const body = (mention?.picked ? stripMention(text, mention.picked.label) : text).trim()
+    if (!body || busy) return
+    onSend(body)
     setText('')
     setCaret(0)
+    // 表記ごと本文が消えるので返信先も既定に戻す。送信中でも別の返信先へ続けて打てる
+    if (mention?.picked) mention.onPick(null)
   }
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -114,7 +153,7 @@ export function ReplyBox({ repo, busy, onSend, mention }: Props) {
           {mention.target.branch && <code>{mention.target.branch}</code>}
           {mention.target.title && <span className="title">「{mention.target.title}」</span>}
           {mention.picked ? (
-            <button type="button" className="clear" onClick={() => mention.onPick(null)} aria-label="返信先を既定に戻す" title="返信先を既定に戻す">✕</button>
+            <button type="button" className="clear" onClick={clear} aria-label="返信先を既定に戻す" title="返信先を既定に戻す">✕</button>
           ) : (
             <span className="hint">@ で変更</span>
           )}
@@ -125,16 +164,17 @@ export function ReplyBox({ repo, busy, onSend, mention }: Props) {
           ref={ref}
           value={text}
           onChange={(e) => {
-            setText(e.target.value)
+            change(e.target.value)
             track(e)
           }}
           onSelect={track}
           onKeyDown={onKeyDown}
           placeholder={`#${repo} に返信（Enter で送信、Shift+Enter で改行）`}
           rows={2}
-          disabled={busy}
+          // フィードでは送信中でも別の返信先へ打てるよう入力欄は止めない（送信ボタンだけ止める）
+          disabled={busy && !mention}
         />
-        <button type="submit" disabled={busy || !text.trim()}>
+        <button type="submit" disabled={busy || !(mention?.picked ? stripMention(text, mention.picked.label) : text).trim()}>
           {busy ? '送信中…' : '送信'}
         </button>
       </div>
@@ -159,8 +199,7 @@ export function ReplyBox({ repo, busy, onSend, mention }: Props) {
                 if (i >= 0) moveCursor(i)
               }}
             >
-              <b>#{t.repo}</b>
-              {t.branch && <code>{t.branch}</code>}
+              <b>{labels.get(t.id) ?? `@${t.repo}`}</b>
               <span className="title">{t.title || '(無題)'}</span>
               {t.blocked && <span className="why">{t.blocked}</span>}
             </li>

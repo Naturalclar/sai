@@ -5,7 +5,7 @@ import { api } from './api'
 import { useLocalState, usePolling } from './hooks'
 import { Chat } from './Chat'
 import { PendingBubble } from './PendingBubble'
-import { ReplyBox } from './ReplyBox'
+import { ReplyBox, type Picked } from './ReplyBox'
 import { DaysSelect } from './DaysSelect'
 import { BackLink } from './BackLink'
 import { useReply } from './useReply'
@@ -31,11 +31,11 @@ export function FeedView({ repo, onStatus, onOpenSidebar }: { repo: string } & P
     return m
   }, [rows])
 
-  // 手で選んだ返信先（id）。候補から消えたら（days やリポジトリの変更）既定に戻る
-  const [pickedId, setPickedId] = useState<string | null>(null)
-  const picked = pickedId ? (targets.find((t) => t.id === pickedId && !t.blocked) ?? null) : null
+  // 手で選んだ返信先（id と、本文に入れた表記）。候補から消えたら（days やリポジトリの変更）既定に戻る
+  const [picked, setPicked] = useState<Picked | null>(null)
+  const pickedTarget = picked ? (targets.find((t) => t.id === picked.id && !t.blocked) ?? null) : null
   // 既定は一番新しい行のセッション（再開できるもののうち）
-  const target = picked ?? targets.find((t) => !t.blocked) ?? null
+  const target = pickedTarget ?? targets.find((t) => !t.blocked) ?? null
 
   const { pending, failed, send } = useReply((id) => counts.get(id) ?? 0)
   const repoOf = (id: string) => targets.find((t) => t.id === id)?.repo
@@ -64,7 +64,7 @@ export function FeedView({ repo, onStatus, onOpenSidebar }: { repo: string } & P
             repo={target.repo}
             busy={pending.some((p) => p.id === target.id)}
             onSend={(text) => void send(target.id, text)}
-            mention={{ targets, target, picked: picked !== null, onPick: setPickedId }}
+            mention={{ targets, target, picked: pickedTarget ? picked : null, onPick: setPicked }}
           />
         ) : (
           <div className="notice">返信できるセッションがありません</div>

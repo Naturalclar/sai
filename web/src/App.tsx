@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useHashRoute, useLocalState, usePolling } from './hooks'
 import { SessionList } from './SessionList'
 import { SessionView } from './SessionView'
@@ -7,6 +7,7 @@ import { hm } from './format'
 import { MenuMark } from './MenuMark'
 import { GitHubMark } from './GitHubMark'
 import { api, type SessionFilters } from './api'
+import { isTypingTarget, navAction, neighborSessionId } from './sessionNav'
 
 export interface StatusProps {
   onStatus: (updatedAt: Date | null, error: string | null) => void
@@ -60,6 +61,30 @@ export function App() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [toggleSidebar])
 
+  // ↑↓（j / k）でサイドバーの並びのまま隣のセッションへ、Esc でフィードへ。起点は「いま開いているセッション」なので state は持たない。
+  // 入力欄にフォーカスがあるときはそちらの操作（caret の移動、@ の候補）なので触らない。サイドバーを閉じていても効く
+  const selectedId = route.name === 'session' ? route.id : null
+  const sessionIds = useMemo(() => list.data?.sessions.map((s) => s.id) ?? [], [list.data])
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const action = navAction(e)
+      if (!action || isTypingTarget(e.target as HTMLElement | null)) return
+      if (action === 'feed') {
+        if (selectedId === null) return
+        e.preventDefault()
+        location.hash = '#/feed'
+        return
+      }
+      const to = neighborSessionId(sessionIds, selectedId, action)
+      // 端では何もしない。preventDefault もしない（ページのスクロールに残す）
+      if (to === null) return
+      e.preventDefault()
+      location.hash = `#/s/${encodeURIComponent(to)}`
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [sessionIds, selectedId])
+
   useEffect(() => {
     document.title = route.name === 'session' ? `SAI · ${route.id.slice(0, 12)}` : 'SAI'
   }, [route])
@@ -74,7 +99,7 @@ export function App() {
           aria-expanded={sidebarOpen}
           aria-keyshortcuts="Meta+\ Control+\"
           aria-label={sidebarOpen ? '一覧を隠す' : '一覧を出す'}
-          title={`${sidebarOpen ? '一覧を隠す' : '一覧を出す'} (⌘\\ / Ctrl+\\)`}
+          title={`${sidebarOpen ? '一覧を隠す' : '一覧を出す'} (⌘\\ / Ctrl+\\)\nセッションの移動: ↑↓ または k / j、フィードへ戻る: Esc`}
         >
           <MenuMark />
         </button>
@@ -94,7 +119,7 @@ export function App() {
         <aside className="sidebar">
           {/* 幅を固定した箱に入れる。開閉の遷移中に列だけが縮み、中身は折り返さない */}
           <div className="side-inner">
-            <SessionList list={list} filters={filters} setFilters={setFilters} selectedId={route.name === 'session' ? route.id : null} />
+            <SessionList list={list} filters={filters} setFilters={setFilters} selectedId={selectedId} />
           </div>
         </aside>
         <div className="pane">

@@ -10,6 +10,7 @@ import { PendingBubble } from './PendingBubble'
 import { ReplyBox } from './ReplyBox'
 import { BackLink } from './BackLink'
 import { useReply } from './useReply'
+import { MetaEditor } from './MetaEditor'
 import type { PaneProps } from './App'
 
 export function SessionView({ id, onStatus, onOpenSidebar }: { id: string } & PaneProps) {
@@ -35,6 +36,7 @@ export function SessionView({ id, onStatus, onOpenSidebar }: { id: string } & Pa
           <span className="meta" title={s.id}>
             {s.session_source === 'synth' ? <SynthTag /> : <span className="tag">{s.session_source}</span>}
           </span>
+          <MetaEditor key={s.id} id={s.id} meta={s.meta} />
           {s.title_full && <div className="meta wide">{s.title_full}</div>}
         </div>
       )}

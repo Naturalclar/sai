@@ -6,10 +6,12 @@ import type {
   ReplyResponse,
   SessionDetailResponse,
   SessionFilters,
+  SessionMeta,
+  SessionMetaResponse,
   SessionsResponse,
 } from '../../shared/types.ts'
 
-export type { Agent, FeedRow, SessionSource, SessionSummary, Facets, SessionFilters, FeedFilters } from '../../shared/types.ts'
+export type { Agent, FeedRow, SessionSource, SessionSummary, SessionMeta, Facets, SessionFilters, FeedFilters } from '../../shared/types.ts'
 
 /** サーバは失敗を { error } で返す。それがあればそのまま見せる */
 async function failure(res: Response, url: string): Promise<Error> {
@@ -48,8 +50,8 @@ async function getJSON<T>(url: string): Promise<T> {
   return (await res.json()) as T
 }
 
-async function postJSON<T>(url: string, body: object): Promise<T> {
-  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+async function sendJSON<T>(method: 'POST' | 'PUT', url: string, body: object): Promise<T> {
+  const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
   if (!res.ok) throw await failure(res, url)
   return (await res.json()) as T
 }
@@ -62,7 +64,11 @@ export const api = {
     getJSON<SessionDetailResponse>(`/api/sessions/${encodeURIComponent(id)}?days=${days}`),
   feed: (f: FeedFilters) => getJSON<FeedResponse>(`/api/feed?${qs(f)}`),
   reply: (id: string, text: string, days = 90) =>
-    postJSON<ReplyResponse>(`/api/sessions/${encodeURIComponent(id)}/reply?days=${days}`, { text } satisfies ReplyRequest),
+    sendJSON<ReplyResponse>('POST', `/api/sessions/${encodeURIComponent(id)}/reply?days=${days}`, { text } satisfies ReplyRequest),
+  meta: (id: string) => getJSON<SessionMetaResponse>(`/api/sessions/${encodeURIComponent(id)}/meta`),
+  /** 表示名・アイコンを置き換える。{} を送ると消える */
+  setMeta: (id: string, meta: SessionMeta, days = 90) =>
+    sendJSON<SessionMetaResponse>('PUT', `/api/sessions/${encodeURIComponent(id)}/meta?days=${days}`, meta),
 }
 
 export const AGENT_LABEL: Record<string, string> = { claude: 'Claude Code', codex: 'Codex CLI', unknown: 'unknown' }

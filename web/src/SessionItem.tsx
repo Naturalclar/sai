@@ -17,7 +17,8 @@ export function SessionItem({ s, active }: { s: SessionSummary; active: boolean 
         <span className="when"><b>{md(s.end)}</b> {hm(s.end)} · {s.turns}</span>
       </span>
       <span className="t" title={s.title_full}>
-        {s.title || '(無題)'}
+        {s.meta?.icon && <span className="icon">{s.meta.icon}</span>}
+        {s.meta?.name || s.title || '(無題)'}
         {s.session_source === 'synth' && <SynthTag />}
       </span>
       {s.turns > 1 && s.last_text && <span className="last">{stripMarkdown(s.last_text)}</span>}

@@ -2,10 +2,10 @@ import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
-import { mkdtemp, rm, writeFile, appendFile, mkdir, stat, utimes } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile, appendFile, mkdir, stat, utimes, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ReplyResponse, SessionsResponse, SessionDetailResponse, FeedResponse } from '../shared/types.ts'
+import type { ReplyResponse, SessionsResponse, SessionDetailResponse, SessionMetaResponse, FeedResponse } from '../shared/types.ts'
 import { createApp, parseDays } from './app.ts'
 import { FeedStore } from './store.ts'
 import { localDate } from './aggregate.ts'
@@ -245,6 +245,82 @@ test('POST reply: 進行中なら 409、起動できなければ 500', async () 
     runner.fail = null
   }
   assert.equal(runner.started.length, 0)
+})
+
+const putMeta = (id: string, body: unknown, headers: Record<string, string> = {}) =>
+  fetch(`${base}/api/sessions/${encodeURIComponent(id)}/meta`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...headers },
+    body: typeof body === 'string' ? body : JSON.stringify(body),
+  })
+
+test('PUT meta: 表示名とアイコンが一覧と詳細に載り、rev が変わり、ファイルに残る', async () => {
+  const initial = (await (await get('/api/sessions?days=7')).json()) as SessionsResponse
+  assert.equal(initial.sessions.find((s) => s.id === 'C1@r')!.meta, undefined)
+
+  let res = await putMeta('C1@r', { name: '  README  直し\n', icon: ' 🧪 ' })
+  assert.equal(res.status, 200)
+  let data = (await res.json()) as SessionMetaResponse
+  assert.deepEqual(data, { id: 'C1@r', meta: { name: 'README 直し', icon: '🧪' } }, '空白は詰め、前後は落とす')
+
+  const updated = (await (await get('/api/sessions?days=7')).json()) as SessionsResponse
+  assert.notEqual(updated.rev, initial.rev, '名前を付けただけでも rev が変わる（画面のポーリングが拾う）')
+  assert.deepEqual(updated.sessions.find((s) => s.id === 'C1@r')!.meta, { name: 'README 直し', icon: '🧪' })
+  assert.equal(updated.sessions.find((s) => s.id === 'X1@r')!.meta, undefined, '他のセッションには付かない')
+  assert.equal(
+    updated.sessions.find((s) => s.id === 'C1@r')!.title,
+    initial.sessions.find((s) => s.id === 'C1@r')!.title,
+    'title は元のまま（画面側で出し分ける）',
+  )
+  const detail = (await (await get('/api/sessions/C1%40r')).json()) as SessionDetailResponse
+  assert.deepEqual(detail.session.meta, { name: 'README 直し', icon: '🧪' })
+  res = await get('/api/sessions/C1%40r/meta')
+  assert.deepEqual(await res.json(), { id: 'C1@r', meta: { name: 'README 直し', icon: '🧪' } })
+
+  const file = JSON.parse(await readFile(join(feedDir, 'session-meta.json'), 'utf-8')) as Record<string, unknown>
+  assert.deepEqual(file, { 'C1@r': { name: 'README 直し', icon: '🧪' } })
+
+  // 名前だけ消す → icon だけ残る。両方消す → エントリごと消える
+  res = await putMeta('C1@r', { icon: '🧪' })
+  assert.deepEqual(((await res.json()) as SessionMetaResponse).meta, { icon: '🧪' })
+  res = await putMeta('C1@r', { name: '', icon: '' })
+  assert.deepEqual(((await res.json()) as SessionMetaResponse).meta, {})
+  const gone = (await (await get('/api/sessions?days=7')).json()) as SessionsResponse
+  assert.equal(gone.sessions.find((s) => s.id === 'C1@r')!.meta, undefined)
+  assert.deepEqual(JSON.parse(await readFile(join(feedDir, 'session-meta.json'), 'utf-8')), {})
+  assert.deepEqual(await (await get('/api/sessions/C1%40r/meta')).json(), { id: 'C1@r', meta: {} }, '無ければ空')
+})
+
+test('PUT meta: 検査', async () => {
+  const bad = async (body: unknown, re: RegExp) => {
+    const res = await putMeta('C1@r', body)
+    assert.equal(res.status, 400)
+    assert.match(((await res.json()) as { error: string }).error, re)
+  }
+  await bad({ icon: '🧪🧪' }, /絵文字1つ/)
+  await bad({ icon: 'ab' }, /絵文字1つ/)
+  await bad({ name: 'x'.repeat(101) }, /100 文字/)
+  await bad({ name: 1 }, /文字列/)
+  await bad('not json', /JSON|Unexpected|token/i)
+  await bad([1], /オブジェクト/)
+  assert.equal((await putMeta('C1@r', { name: 'x'.repeat(5 * 1024) })).status, 400, '大きすぎる body')
+  assert.equal((await putMeta('nope@r', { name: 'x' })).status, 404, '窓の中に無いセッションには付けない')
+  assert.equal((await putMeta('', { name: 'x' })).status, 400, 'id が空')
+  // ZWJ で繋いだ絵文字は1文字として通る
+  const res = await putMeta('C1@r', { icon: '👨‍👩‍👧' })
+  assert.equal(res.status, 200)
+  await putMeta('C1@r', {})
+})
+
+test('PUT meta: 別オリジンは 403、メソッド違いは 405', async () => {
+  const host = base.replace('http://', '')
+  assert.equal((await putMeta('C1@r', { name: 'x' }, { Origin: 'http://evil.local:8787' })).status, 403)
+  assert.equal((await putMeta('C1@r', { name: 'x' }, { 'Sec-Fetch-Site': 'cross-site' })).status, 403)
+  assert.equal((await putMeta('C1@r', { name: 'x' }, { Origin: `http://${host}`, 'Sec-Fetch-Site': 'same-origin' })).status, 200)
+  await putMeta('C1@r', {})
+  assert.equal((await fetch(`${base}/api/sessions/C1%40r/meta`, { method: 'POST' })).status, 405)
+  assert.equal((await fetch(`${base}/api/sessions/C1%40r/reply`, { method: 'PUT' })).status, 405)
+  assert.equal((await fetch(`${base}/api/sessions`, { method: 'PUT' })).status, 405)
 })
 
 test('replyCommand は SAI_*_BIN で実行ファイルを差し替えられる', () => {

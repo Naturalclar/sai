@@ -2,9 +2,19 @@
 import { readFile, stat } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { extname, join, resolve, sep } from 'node:path'
+import { normalizeMeta } from '../shared/meta.ts'
 import { replyBlockedReason } from '../shared/reply.ts'
-import type { FeedResponse, ReplyRequest, ReplyResponse, SessionDetailResponse, SessionsResponse } from '../shared/types.ts'
+import type {
+  FeedResponse,
+  ReplyRequest,
+  ReplyResponse,
+  SessionDetailResponse,
+  SessionMetaResponse,
+  SessionsResponse,
+  SessionSummary,
+} from '../shared/types.ts'
 import { entityId, facets, filterSessions } from './aggregate.ts'
+import { META_FILE, MetaStore } from './meta.ts'
 import { ProcessRunner, replyCommand } from './runner.ts'
 import type { Runner } from './runner.ts'
 import { rev as revOf } from './store.ts'
@@ -14,8 +24,12 @@ export const MAX_DAYS = 366
 /** 返信 body の上限。指示文なので十分 */
 export const MAX_REPLY_BYTES = 64 * 1024
 
+/** 表示名・アイコンの body の上限。名前と絵文字1つなので十分 */
+export const MAX_META_BYTES = 4 * 1024
+
 const SESSIONS_PREFIX = '/api/sessions/'
 const REPLY_SUFFIX = '/reply'
+const META_SUFFIX = '/meta'
 
 /**
  * 別オリジンからの POST か。ブラウザからコマンドが走るので、ローカルで開いている別サイトからの
@@ -70,6 +84,20 @@ export type Handler = (req: IncomingMessage, res: ServerResponse) => Promise<voi
 export function createApp(store: FeedStore, distDir: string, runner?: Runner): Handler {
   const distRoot = resolve(distDir)
   const run: Runner = runner ?? new ProcessRunner(join(store.directory, 'reply.log'))
+  const metaStore = new MetaStore(join(store.directory, META_FILE))
+
+  /**
+   * 集計済みのセッションに表示名・アイコンを載せる。store のキャッシュ配列は触らず新しい配列を返す。
+   * rev にメタファイルの状態も混ぜるので、名前を付けただけでも画面のポーリングが拾う
+   */
+  const sessionsWithMeta = async (days: number): Promise<{ rev: string; sessions: SessionSummary[] }> => {
+    const [{ rev, sessions }, meta] = await Promise.all([store.sessions(days), metaStore.all()])
+    if (!meta.rev) return { rev, sessions }
+    return {
+      rev: `${rev}-${meta.rev}`,
+      sessions: sessions.map((s) => (meta.entries[s.id] ? { ...s, meta: meta.entries[s.id] } : s)),
+    }
+  }
 
   const send = (res: ServerResponse, status: number, body: Buffer | string, type: string) => {
     const buf = typeof body === 'string' ? Buffer.from(body, 'utf-8') : body
@@ -140,6 +168,24 @@ export function createApp(store: FeedStore, distDir: string, runner?: Runner): H
     return json(res, payload, 202)
   }
 
+  /** PUT /api/sessions/<id>/meta。表示名・アイコンを置き換える（空なら消す）。窓の中に無いセッションには付けない */
+  const putMeta = async (req: IncomingMessage, res: ServerResponse, id: string, days: number) => {
+    if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
+    let body: unknown
+    try {
+      body = await readJson(req, MAX_META_BYTES)
+    } catch (err) {
+      return error(res, 400, err instanceof Error ? err.message : 'bad body')
+    }
+    const { meta, error: reason } = normalizeMeta(body)
+    if (reason) return error(res, 400, reason)
+    const { sessions } = await store.sessions(days)
+    if (!sessions.some((s) => s.id === id)) return error(res, 404, 'session not found in window')
+    const saved = await metaStore.set(id, meta)
+    const payload: SessionMetaResponse = { id, meta: saved ?? {} }
+    return json(res, payload)
+  }
+
   /**
    * いま配っているビルドの識別子（dist/index.html の mtime）。未ビルドなら空。
    * Vite のアセット名はハッシュ入りなので、JS が変われば index.html も必ず変わる。
@@ -157,12 +203,14 @@ export function createApp(store: FeedStore, distDir: string, runner?: Runner): H
     const q = url.searchParams
     const path = url.pathname
     const isReply = path.startsWith(SESSIONS_PREFIX) && path.endsWith(REPLY_SUFFIX)
-    if (req.method === 'POST' ? !isReply : req.method !== 'GET' && req.method !== 'HEAD') {
-      return error(res, 405, 'method not allowed')
-    }
+    const isMeta = path.startsWith(SESSIONS_PREFIX) && path.endsWith(META_SUFFIX)
+    const method = req.method ?? 'GET'
+    // 書き込みは「返信は POST」「表示名は PUT」の2つだけ。それ以外は GET / HEAD のみ
+    const writable = (method === 'POST' && isReply) || (method === 'PUT' && isMeta)
+    if (!writable && method !== 'GET' && method !== 'HEAD') return error(res, 405, 'method not allowed')
     try {
       if (isReply) {
-        if (req.method !== 'POST') return error(res, 405, 'method not allowed')
+        if (method !== 'POST') return error(res, 405, 'method not allowed')
         const id = decodeURIComponent(path.slice(SESSIONS_PREFIX.length, -REPLY_SUFFIX.length))
         if (!id || id.includes('/')) return error(res, 400, 'bad session id')
         return await reply(req, res, id, parseDays(q.get('days'), 90))
@@ -172,6 +220,13 @@ export function createApp(store: FeedStore, distDir: string, runner?: Runner): H
         const build = await buildId()
         if (build) res.setHeader('X-SAI-Build', build)
       }
+      if (isMeta) {
+        const id = decodeURIComponent(path.slice(SESSIONS_PREFIX.length, -META_SUFFIX.length))
+        if (!id || id.includes('/')) return error(res, 400, 'bad session id')
+        if (method === 'PUT') return await putMeta(req, res, id, parseDays(q.get('days'), 90))
+        const payload: SessionMetaResponse = { id, meta: (await metaStore.get(id)) ?? {} }
+        return json(res, payload)
+      }
       if (path === '/' || path === '/index.html') return await sendStatic(res, 'index.html')
       if (path.startsWith('/assets/')) return await sendStatic(res, path.slice(1))
       if (path === '/favicon.ico') return send(res, 204, '', 'image/x-icon')
@@ -179,7 +234,7 @@ export function createApp(store: FeedStore, distDir: string, runner?: Runner): H
 
       if (path === '/api/sessions') {
         const days = parseDays(q.get('days'), 7)
-        const { rev, sessions } = await store.sessions(days)
+        const { rev, sessions } = await sessionsWithMeta(days)
         const body: SessionsResponse = {
           rev,
           days,
@@ -194,7 +249,7 @@ export function createApp(store: FeedStore, distDir: string, runner?: Runner): H
         const id = decodeURIComponent(path.slice(SESSIONS_PREFIX.length)).replace(/\/+$/, '')
         if (!id || id.includes('/')) return error(res, 400, 'bad session id')
         const days = parseDays(q.get('days'), 30)
-        const { rev, sessions } = await store.sessions(days)
+        const { rev, sessions } = await sessionsWithMeta(days)
         const session = sessions.find((s) => s.id === id)
         if (!session) return error(res, 404, 'session not found in window')
         const rows = (await store.rows(days)).filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)

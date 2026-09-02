@@ -12,6 +12,8 @@ import { ReplyBox } from './ReplyBox'
 import { BackLink } from './BackLink'
 import { useReply } from './useReply'
 import { MetaEditor } from './MetaEditor'
+import { ArchiveButton } from './ArchiveButton'
+import { ArchivedTag } from './ArchivedTag'
 import type { PaneProps } from './App'
 
 const NO_REPLYING = {}
@@ -40,7 +42,10 @@ export function SessionView({ id, onStatus, onOpenSidebar }: { id: string } & Pa
           <span className="meta" title={s.id}>
             {s.session_source === 'synth' ? <SynthTag /> : <span className="tag">{s.session_source}</span>}
             {mine && <ReplyingTag since={mine.since} now={now} />}
+            {s.archived && <ArchivedTag />}
           </span>
+          {/* 合成 ID は集計の切れ方で付け先がずれるのでアーカイブできない */}
+          {s.session_source !== 'synth' && <ArchiveButton key={`${s.id}:${s.archived ? 1 : 0}`} id={s.id} archived={Boolean(s.archived)} />}
           <MetaEditor key={s.id} id={s.id} meta={s.meta} />
           {s.title_full && <div className="meta wide">{s.title_full}</div>}
         </div>
@@ -48,7 +53,9 @@ export function SessionView({ id, onStatus, onOpenSidebar }: { id: string } & Pa
       {error && !data && <div className="empty">{error}</div>}
       {data && <Chat rows={data.rows} showChannel={false} trailer={mine && <PendingBubble text={mine.text} since={mine.since} now={now} />} />}
       {s &&
-        (blocked ? (
+        (s.archived ? (
+          <div className="notice">アーカイブ済みのセッションには返信できません。続けるなら「戻す」を押してください（端末で続けて新しい行が届けば自動で戻ります）</div>
+        ) : blocked ? (
           <div className="notice">{blocked}</div>
         ) : (
           <ReplyBox repo={s.repo} busy={mine !== null} busySince={mine?.since} now={now} onSend={(text) => void send(id, text)} />

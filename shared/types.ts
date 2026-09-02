@@ -47,8 +47,13 @@ export interface SessionSummary {
   session_source: SessionSource
   sources: SessionSource[]
   last_text: string
-  /** ブラウザから付けた表示名・アイコン。無ければ undefined（title を使う） */
+  /** ブラウザから付けた表示名・アイコン・アーカイブ。無ければ undefined（title を使う） */
   meta?: SessionMeta
+  /**
+   * アーカイブ済みか。サーバが応答時に `meta.archived_at >= end` で決める（アーカイブ後に行が増えると
+   * end が追い越すので、メタを書き換えずに自動で戻る）。一覧・フィードの既定では出ない。false なら省略
+   */
+  archived?: boolean
 }
 
 /** セッションに人が付けるもの。~/.agent-feed/session-meta.json に JSONL とは別で持つ */
@@ -57,9 +62,14 @@ export interface SessionMeta {
   name?: string
   /** 絵文字1つ */
   icon?: string
+  /** アーカイブした時刻（ISO）。これより新しい行が届いていなければアーカイブ済み */
+  archived_at?: string
 }
 
-/** GET/PUT /api/sessions/<id>/meta。PUT の body は SessionMeta（空文字や省略は「消す」） */
+/**
+ * GET/PUT /api/sessions/<id>/meta。PUT の body は SessionMeta の一部で、いまの値に重ねる:
+ * 省略したキーは据え置き、空文字や null は「消す」。名前を付けるだけ・アーカイブを切り替えるだけ、が互いを消さない
+ */
 export interface SessionMetaResponse {
   id: string
   meta: SessionMeta
@@ -133,6 +143,8 @@ export interface SessionFilters {
   agent: string
   date: string
   days: string
+  /** '1' ならアーカイブ済みだけを出す。それ以外はアーカイブ済みを除く（クエリ文字列に載せるので文字列） */
+  archived: string
 }
 
 export interface FeedFilters {

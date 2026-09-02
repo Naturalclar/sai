@@ -322,8 +322,10 @@ test('PUT meta: 表示名とアイコンが一覧と詳細に載り、rev が変
   const file = JSON.parse(await readFile(join(feedDir, 'session-meta.json'), 'utf-8')) as Record<string, unknown>
   assert.deepEqual(file, { 'C1@r': { name: 'README 直し', icon: '🧪' } })
 
-  // 名前だけ消す → icon だけ残る。両方消す → エントリごと消える
+  // 省略したキーは据え置き。名前だけ消す → icon だけ残る。両方消す → エントリごと消える
   res = await putMeta('C1@r', { icon: '🧪' })
+  assert.deepEqual(((await res.json()) as SessionMetaResponse).meta, { name: 'README 直し', icon: '🧪' }, 'name は省略なので残る')
+  res = await putMeta('C1@r', { name: '' })
   assert.deepEqual(((await res.json()) as SessionMetaResponse).meta, { icon: '🧪' })
   res = await putMeta('C1@r', { name: '', icon: '' })
   assert.deepEqual(((await res.json()) as SessionMetaResponse).meta, {})
@@ -351,7 +353,7 @@ test('PUT meta: 検査', async () => {
   // ZWJ で繋いだ絵文字は1文字として通る
   const res = await putMeta('C1@r', { icon: '👨‍👩‍👧' })
   assert.equal(res.status, 200)
-  await putMeta('C1@r', {})
+  await putMeta('C1@r', { name: '', icon: '' }) // PUT は重ねる意味なので {} では消えない
 })
 
 test('PUT meta: 別オリジンは 403、メソッド違いは 405', async () => {
@@ -359,10 +361,63 @@ test('PUT meta: 別オリジンは 403、メソッド違いは 405', async () =>
   assert.equal((await putMeta('C1@r', { name: 'x' }, { Origin: 'http://evil.local:8787' })).status, 403)
   assert.equal((await putMeta('C1@r', { name: 'x' }, { 'Sec-Fetch-Site': 'cross-site' })).status, 403)
   assert.equal((await putMeta('C1@r', { name: 'x' }, { Origin: `http://${host}`, 'Sec-Fetch-Site': 'same-origin' })).status, 200)
-  await putMeta('C1@r', {})
+  await putMeta('C1@r', { name: '', icon: '' }) // PUT は重ねる意味なので {} では消えない
   assert.equal((await fetch(`${base}/api/sessions/C1%40r/meta`, { method: 'POST' })).status, 405)
   assert.equal((await fetch(`${base}/api/sessions/C1%40r/reply`, { method: 'PUT' })).status, 405)
   assert.equal((await fetch(`${base}/api/sessions`, { method: 'PUT' })).status, 405)
+})
+
+test('PUT meta: archived_at でアーカイブ。一覧とフィードから消え、archived=1 で出て、新しい行が届くと自動で戻る', async () => {
+  const initial = (await (await get('/api/sessions?days=7')).json()) as SessionsResponse
+  assert.ok(initial.sessions.some((s) => s.id === 'S2@sai'))
+  assert.equal(initial.total, 6)
+  assert.equal(((await (await get('/api/feed?days=3&repo=sai')).json()) as FeedResponse).rows.length, 1)
+
+  // 名前を付けてからアーカイブしても名前は残る（PUT は重ねる）
+  await putMeta('S2@sai', { name: '終わった' })
+  const at = new Date().toISOString()
+  let res = await putMeta('S2@sai', { archived_at: at })
+  assert.equal(res.status, 200)
+  assert.deepEqual(((await res.json()) as SessionMetaResponse).meta, { name: '終わった', archived_at: at })
+
+  const list = (await (await get('/api/sessions?days=7')).json()) as SessionsResponse
+  assert.notEqual(list.rev, initial.rev, 'アーカイブしただけでも rev が変わる')
+  assert.ok(!list.sessions.some((s) => s.id === 'S2@sai'), '既定ではアーカイブ済みは出ない')
+  assert.equal(list.total, 5, 'total もアーカイブ済みを除く')
+  assert.deepEqual(list.filters.repos, ['kanban', 'r'], 'filters もアーカイブ済みを除いた集合から')
+
+  const arch = (await (await get('/api/sessions?days=7&archived=1')).json()) as SessionsResponse
+  assert.deepEqual(arch.sessions.map((s) => [s.id, s.archived]), [['S2@sai', true]])
+  assert.equal(arch.total, 1)
+
+  const detail = (await (await get('/api/sessions/S2%40sai')).json()) as SessionDetailResponse
+  assert.equal(detail.session.archived, true, '直接開けば読める')
+  assert.equal(detail.rows.length, 1)
+
+  const feed = (await (await get('/api/feed?days=3&repo=sai')).json()) as FeedResponse
+  assert.equal(feed.rows.length, 0, 'フィードにも流れない')
+  assert.equal(((await (await get('/api/feed?days=3')).json()) as FeedResponse).rows.length, 6)
+
+  // 新しい行が届くと、メタを書き換えずに戻る
+  const later = new Date(Date.now() + 1000)
+  await appendFile(join(feedDir, `${localDate(later.toISOString())}.jsonl`), JSON.stringify(row(later, 'S2', { agent: 'codex', repo: 'sai', text: 'again' })) + '\n')
+  const back = (await (await get('/api/sessions?days=7')).json()) as SessionsResponse
+  const s2 = back.sessions.find((s) => s.id === 'S2@sai')!
+  assert.ok(s2, '一覧に戻る')
+  assert.equal(s2.archived, undefined)
+  assert.deepEqual(s2.meta, { name: '終わった', archived_at: at }, 'メタはそのまま')
+  assert.equal(((await (await get('/api/sessions?days=7&archived=1')).json()) as SessionsResponse).sessions.length, 0)
+  assert.equal(((await (await get('/api/feed?days=3&repo=sai')).json()) as FeedResponse).rows.length, 2)
+
+  // 戻す = archived_at を消す。名前は残る
+  res = await putMeta('S2@sai', { archived_at: '' })
+  assert.deepEqual(((await res.json()) as SessionMetaResponse).meta, { name: '終わった' })
+  await putMeta('S2@sai', { name: '' })
+  assert.deepEqual(JSON.parse(await readFile(join(feedDir, 'session-meta.json'), 'utf-8')), {})
+
+  // 検査
+  assert.equal((await putMeta('S2@sai', { archived_at: 'yesterday' })).status, 400)
+  assert.equal((await putMeta('S2@sai', { archived_at: 1 })).status, 400)
 })
 
 test('replyCommand は SAI_*_BIN で実行ファイルを差し替えられる', () => {

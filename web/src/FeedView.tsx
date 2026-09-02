@@ -31,7 +31,8 @@ export function FeedView({ repo, sessions = NO_SESSIONS, onStatus, onOpenSidebar
   // 返信先の候補は、サイドバーの一覧（表示名・アイコン付き）を先に、フィードにしか無いセッションを後ろに。
   // 既定の返信先は「一番新しい行のセッション」なのでフィード側の先頭を覚えておく
   const feedTargets = useMemo(() => feedReplyTargets(rows), [rows])
-  const targets = useMemo(() => mergeReplyTargets(sessionReplyTargets(sessions), feedTargets), [sessions, feedTargets])
+  // 「アーカイブ済みを見る」中はサイドバーの一覧がアーカイブ済みだけになるので、候補にはしない（フィードにも流れていない）
+  const targets = useMemo(() => mergeReplyTargets(sessionReplyTargets(sessions.filter((s) => !s.archived)), feedTargets), [sessions, feedTargets])
   // 返信先ごとの行数（「送信中」の解除に使う）はフィードの行から数える
   const counts = useMemo(() => {
     const m = new Map<string, number>()

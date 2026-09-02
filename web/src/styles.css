@@ -24,6 +24,8 @@
   header .status.error { color: var(--claude); }
   header .github { display: inline-flex; color: var(--muted); }
   header .github:hover { color: var(--ink); text-decoration: none; }
+  header .sidebar-toggle { display: inline-flex; margin-left: -6px; padding: 4px; background: transparent; border: 0; border-radius: 6px; color: var(--muted); cursor: pointer; }
+  header .sidebar-toggle:hover { background: var(--hover); color: var(--ink); }
 
   /* -- layout: 左サイドバー（一覧）+ 右ペイン（チャット）。ヘッダ以外の高さを使い、それぞれがスクロールする */
   main.layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 320px minmax(0, 1fr); }
@@ -31,6 +33,11 @@
   .pane { min-height: 0; display: flex; flex-direction: column; padding: 12px 18px 14px; }
   .pane > section { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .back { display: none; margin-bottom: 8px; color: var(--muted); }
+  /* サイドバーを閉じたとき。幅のアニメーションは付けない（一覧が3秒ごとに更新されるので遷移中にちらつく）。
+     狭い画面ではこの状態を無視する（下の @media で打ち消す） */
+  main.layout.sidebar-closed { grid-template-columns: minmax(0, 1fr); }
+  main.sidebar-closed .sidebar { display: none; }
+  main.sidebar-closed .back { display: inline-block; }
 
   /* -- filters */
   .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
@@ -63,8 +70,11 @@
 
   /* -- 狭い画面: 一覧かチャットのどちらかだけ。#/ が一覧、#/feed と #/s/<id> がチャット */
   @media (max-width: 900px) {
-    main.layout { grid-template-columns: 1fr; }
+    header .sidebar-toggle { display: none; }
+    main.layout, main.layout.sidebar-closed { grid-template-columns: 1fr; }
     main.route-feed .sidebar, main.route-session .sidebar { display: none; }
+    /* 「閉じた」を無視して、#/ では一覧を必ず出す */
+    main.layout.route-list .sidebar { display: block; }
     main.route-list .pane { display: none; }
     .sidebar { border-right: 0; }
     .back { display: inline-block; }

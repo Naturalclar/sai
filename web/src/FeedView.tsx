@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { entityId } from '../../shared/entity.ts'
-import { feedReplyTargets } from '../../shared/reply.ts'
-import { api } from './api'
+import { feedReplyTargets, mergeReplyTargets, sessionReplyTargets } from '../../shared/reply.ts'
+import { api, type SessionSummary } from './api'
 import { useLocalState, usePolling } from './hooks'
 import { Chat } from './Chat'
 import { PendingBubble } from './PendingBubble'
@@ -12,17 +12,27 @@ import { useReply } from './useReply'
 import type { PaneProps } from './App'
 
 const NO_ROWS: never[] = []
+const NO_SESSIONS: never[] = []
 const NO_REPLYING = {}
 
+interface Props extends PaneProps {
+  repo: string
+  /** サイドバーの一覧（App が取ったもの）。@ の候補はこれを主にする。まだ無ければ undefined */
+  sessions: SessionSummary[] | undefined
+}
+
 /** 全チャンネルを時系列に流す。リポジトリはサイドバーの絞り込みに従い、日数だけここで選ぶ */
-export function FeedView({ repo, onStatus, onOpenSidebar }: { repo: string } & PaneProps) {
+export function FeedView({ repo, sessions = NO_SESSIONS, onStatus, onOpenSidebar }: Props) {
   const [local, setLocal] = useLocalState<{ days: string }>('sai.feed', { days: '3' })
   const { data, error, updatedAt } = usePolling(() => api.feed({ repo, days: local.days }), [repo, local.days])
   useEffect(() => onStatus(updatedAt, error), [updatedAt, error, onStatus])
 
   const rows = data?.rows ?? NO_ROWS
-  // 返信先の候補と、返信先ごとの行数（「送信中」の解除に使う）はフィードの行から作る
-  const targets = useMemo(() => feedReplyTargets(rows), [rows])
+  // 返信先の候補は、サイドバーの一覧（表示名・アイコン付き）を先に、フィードにしか無いセッションを後ろに。
+  // 既定の返信先は「一番新しい行のセッション」なのでフィード側の先頭を覚えておく
+  const feedTargets = useMemo(() => feedReplyTargets(rows), [rows])
+  const targets = useMemo(() => mergeReplyTargets(sessionReplyTargets(sessions), feedTargets), [sessions, feedTargets])
+  // 返信先ごとの行数（「送信中」の解除に使う）はフィードの行から数える
   const counts = useMemo(() => {
     const m = new Map<string, number>()
     for (const r of rows) {
@@ -35,12 +45,14 @@ export function FeedView({ repo, onStatus, onOpenSidebar }: { repo: string } & P
   // 手で選んだ返信先（id と、本文に入れた表記）。候補から消えたら（days やリポジトリの変更）既定に戻る
   const [picked, setPicked] = useState<Picked | null>(null)
   const pickedTarget = picked ? (targets.find((t) => t.id === picked.id && !t.blocked) ?? null) : null
-  // 既定は一番新しい行のセッション（再開できるもののうち）
-  const target = pickedTarget ?? targets.find((t) => !t.blocked) ?? null
+  // 既定は一番新しい行のセッション（再開できるもののうち）。フィードに何も無ければ一覧の先頭
+  const defaultId = feedTargets.find((t) => !t.blocked)?.id
+  const target = pickedTarget ?? (defaultId ? targets.find((t) => t.id === defaultId) : undefined) ?? targets.find((t) => !t.blocked) ?? null
 
   const { pending: allPending, failed, send } = useReply((id) => counts.get(id) ?? 0, data?.replying ?? NO_REPLYING, updatedAt)
-  // サーバの replying にはこのフィードの窓（days / repo）の外のセッションも入る。ここに出ているものだけ
-  const pending = allPending.filter((p) => counts.has(p.id))
+  // サーバの replying にはこの画面の外のセッションも入る。フィードに行があるか、候補に出ているものだけ
+  // （一覧にだけあるセッションへ送った直後は、まだフィードに行が無い）
+  const pending = allPending.filter((p) => counts.has(p.id) || targets.some((t) => t.id === p.id))
   const now = updatedAt?.getTime() ?? 0
   const repoOf = (id: string) => targets.find((t) => t.id === id)?.repo
 

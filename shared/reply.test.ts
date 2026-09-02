@@ -1,7 +1,16 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { feedReplyTargets, filterReplyTargets, mentionLabels, mentionQuery, replyBlockedReason, stripMention } from './reply.ts'
-import type { FeedRow } from './types.ts'
+import {
+  feedReplyTargets,
+  filterReplyTargets,
+  mentionLabels,
+  mentionQuery,
+  mergeReplyTargets,
+  replyBlockedReason,
+  sessionReplyTargets,
+  stripMention,
+} from './reply.ts'
+import type { FeedRow, SessionSummary } from './types.ts'
 
 function row(over: Partial<FeedRow>): FeedRow {
   return {
@@ -18,6 +27,70 @@ function row(over: Partial<FeedRow>): FeedRow {
     ...over,
   }
 }
+
+function summary(over: Partial<SessionSummary>): SessionSummary {
+  return {
+    id: 's1@sai',
+    start: '2026-09-02T10:00:00+09:00',
+    end: '2026-09-02T10:10:00+09:00',
+    date: '2026-09-02',
+    dates: ['2026-09-02'],
+    agent: 'claude',
+    agents: ['claude'],
+    repo: 'sai',
+    repos: ['sai'],
+    branch: 'main',
+    branches: ['main'],
+    cwd: '/tmp/sai',
+    turns: 2,
+    title: '一覧のタイトル',
+    title_full: '一覧のタイトル',
+    session_source: 'payload',
+    sources: ['payload'],
+    last_text: '返答',
+    ...over,
+  }
+}
+
+test('sessionReplyTargets: 一覧の順のまま。表示名・アイコンがあればそれ、無ければ一覧のタイトル', () => {
+  const targets = sessionReplyTargets([
+    summary({ id: 's1@sai', meta: { name: 'CI 整備', icon: '🛠️' } }),
+    summary({ id: 's2@other', repo: 'other', branch: 'feat', title: 'other の指示' }),
+    summary({ id: 's3@sai', meta: { icon: '🧪' } }),
+    summary({ id: 'synth-x@sai', session_source: 'synth' }),
+    summary({ id: 's4@sai', meta: { name: 'あ'.repeat(70) } }),
+  ])
+  assert.deepEqual(
+    targets.map((t) => [t.id, t.repo, t.branch, t.title, t.icon, t.blocked !== '']),
+    [
+      ['s1@sai', 'sai', 'main', 'CI 整備', '🛠️', false],
+      ['s2@other', 'other', 'feat', 'other の指示', undefined, false],
+      ['s3@sai', 'sai', 'main', '一覧のタイトル', '🧪', false],
+      ['synth-x@sai', 'sai', 'main', '一覧のタイトル', undefined, true],
+      ['s4@sai', 'sai', 'main', `${'あ'.repeat(60)}…`, undefined, false],
+    ],
+  )
+  assert.equal('icon' in targets[1]!, false, 'アイコンが無ければキーごと無い')
+})
+
+test('mergeReplyTargets: 一覧が先、フィードにしか無いものが後ろ。同じ id は一覧側が勝つ', () => {
+  const list = sessionReplyTargets([summary({ id: 's1@sai', meta: { name: '名前', icon: '🛠️' } }), summary({ id: 's2@sai' })])
+  const feed = feedReplyTargets([
+    row({ ts: '2026-09-02T10:00:00+09:00', session: 's3', user_text: 'フィードだけ' }),
+    row({ ts: '2026-09-02T10:05:00+09:00', session: 's1', user_text: 'フィード側の指示' }),
+  ])
+  const merged = mergeReplyTargets(list, feed)
+  assert.deepEqual(
+    merged.map((t) => [t.id, t.title, t.icon]),
+    [
+      ['s1@sai', '名前', '🛠️'],
+      ['s2@sai', '一覧のタイトル', undefined],
+      ['s3@sai', 'フィードだけ', undefined],
+    ],
+  )
+  assert.deepEqual(mergeReplyTargets([], feed), feed, '一覧が空ならフィードだけ')
+  assert.deepEqual(mergeReplyTargets(list, []), list)
+})
 
 test('feedReplyTargets: エンティティごとに1件、新しい順、ラベルは一番新しい行のもの', () => {
   const rows = [

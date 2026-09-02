@@ -15,23 +15,50 @@ export function replyBlockedReason(s: Pick<SessionSummary, 'id' | 'agent' | 'ses
 
 // ---- フィードからの返信: @ メンションで返信先を選ぶ（web/src/ReplyBox.tsx / FeedView.tsx）
 
-/** 返信先の候補。フィードの行からエンティティごとに1件 */
+/** 返信先の候補。エンティティごとに1件 */
 export interface ReplyTarget {
   id: string
   repo: string
   branch: string
-  /** 一番新しい行の user_text の1行目（無ければ first_user_text、それも無ければ text）。60文字 */
+  /** 表示名（付いていれば）、無ければ一番新しい入力の1行目。60文字 */
   title: string
+  /** ブラウザから付けたアイコン（絵文字1つ）。一覧から作った候補にだけ付く */
+  icon?: string
   /** 返信できない理由。空なら選べる */
   blocked: string
 }
 
 const TARGET_TITLE_LEN = 60
 
+function clipTitle(title: string): string {
+  const t = (title.split('\n')[0] ?? '').trim()
+  return t.length > TARGET_TITLE_LEN ? `${t.slice(0, TARGET_TITLE_LEN)}…` : t
+}
+
+/**
+ * サイドバーの一覧（集計済みのセッション）から返信先の候補を作る。順番は一覧のまま（新しい順）。
+ * ラベルは表示名（meta.name）があればそれ、無ければ一覧のタイトル。アイコンも載せる。
+ * フィードの `@` はこれを主にし、一覧に無いものだけ feedReplyTargets で足す（mergeReplyTargets）
+ */
+export function sessionReplyTargets(sessions: SessionSummary[]): ReplyTarget[] {
+  return sessions.map((s) => {
+    const t: ReplyTarget = {
+      id: s.id,
+      repo: s.repo,
+      branch: s.branch,
+      title: clipTitle(s.meta?.name || s.title),
+      blocked: replyBlockedReason(s),
+    }
+    if (s.meta?.icon) t.icon = s.meta.icon
+    return t
+  })
+}
+
 /**
  * フィードの行から返信先の候補を作る。エンティティ（entityId）ごとに1件、新しい順（rows は古い順の前提）。
- * ラベルは一番新しい行の repo / branch / user_text（一覧のタイトルと同じく最後の入力に追従する）。一覧の API を別に叩かないのは、
- * サイドバーとフィードで days が違い、一覧に無いセッションがフィードに出ることがあるため
+ * ラベルは一番新しい行の repo / branch / user_text（一覧のタイトルと同じく最後の入力に追従する）。
+ * サイドバーとフィードで days や絞り込みが違い、一覧に無いセッションがフィードに出ることがあるので、
+ * 一覧から作った候補（sessionReplyTargets）の後ろにこれを足す
  */
 export function feedReplyTargets(rows: FeedRow[]): ReplyTarget[] {
   const seen = new Map<string, ReplyTarget>()
@@ -39,16 +66,21 @@ export function feedReplyTargets(rows: FeedRow[]): ReplyTarget[] {
     const r = rows[i]!
     const id = entityId(r.session, r.repo, r.ts)
     if (seen.has(id)) continue
-    const title = ((r.user_text?.trim() || r.first_user_text?.trim() || r.text || '').split('\n')[0] ?? '').trim()
     seen.set(id, {
       id,
       repo: r.repo,
       branch: r.branch,
-      title: title.length > TARGET_TITLE_LEN ? `${title.slice(0, TARGET_TITLE_LEN)}…` : title,
+      title: clipTitle(r.user_text?.trim() || r.first_user_text?.trim() || r.text || ''),
       blocked: replyBlockedReason({ id, agent: r.agent, session_source: r.session_source }),
     })
   }
   return [...seen.values()]
+}
+
+/** 一覧の候補を先に、フィードにしか無いものを後ろに。同じ id は一覧側（表示名・アイコン付き）が勝つ */
+export function mergeReplyTargets(list: ReplyTarget[], feed: ReplyTarget[]): ReplyTarget[] {
+  const ids = new Set(list.map((t) => t.id))
+  return [...list, ...feed.filter((t) => !ids.has(t.id))]
 }
 
 /** 検索語でリポジトリ / ブランチ / タイトルを部分一致（大文字小文字は無視）。空なら全部 */

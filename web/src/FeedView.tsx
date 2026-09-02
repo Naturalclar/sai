@@ -1,30 +1,27 @@
-import { useEffect, useMemo } from 'react'
-import { api, type FeedFilters } from './api'
+import { useEffect } from 'react'
+import { api } from './api'
 import { useLocalState, usePolling } from './hooks'
 import { Chat } from './Chat'
-import { DaysSelect, FacetSelect } from './Select'
+import { DaysSelect } from './Select'
 import type { StatusProps } from './App'
 
-const DEFAULT: FeedFilters = { repo: '', days: '3' }
-
-export function FeedView({ onStatus }: StatusProps) {
-  const [filters, setFilters] = useLocalState<FeedFilters>('sai.feed', DEFAULT)
-  const { data, error, updatedAt } = usePolling(() => api.feed(filters), [filters.repo, filters.days])
+/** 全チャンネルを時系列に流す。リポジトリはサイドバーの絞り込みに従い、日数だけここで選ぶ */
+export function FeedView({ repo, onStatus }: { repo: string } & StatusProps) {
+  const [local, setLocal] = useLocalState<{ days: string }>('sai.feed', { days: '3' })
+  const { data, error, updatedAt } = usePolling(() => api.feed({ repo, days: local.days }), [repo, local.days])
   useEffect(() => onStatus(updatedAt, error), [updatedAt, error, onStatus])
-
-  const repos = useMemo(() => [...new Set((data?.rows ?? []).map((r) => r.repo).filter(Boolean))].sort(), [data])
 
   return (
     <section>
-      <a className="back" href="#/">← セッション一覧</a>
+      <a className="back" href="#/">← 一覧</a>
       <div className="chat-head">
         <h1>フィード</h1>
-        {data && <span className="meta">全リポジトリ · {data.rows.length} ターン · 直近{data.days}日</span>}
+        <span className="meta">{repo ? `#${repo}` : '全リポジトリ'}{data && ` · ${data.rows.length} ターン · 直近${data.days}日`}</span>
+        <span className="meta pull">
+          <DaysSelect value={local.days} options={[1, 3, 7]} onChange={(days) => setLocal({ days })} />
+        </span>
       </div>
-      <div className="filters">
-        <FacetSelect label="リポジトリ" value={filters.repo} options={repos} onChange={(repo) => setFilters({ repo })} />
-        <DaysSelect value={filters.days} options={[1, 3, 7]} onChange={(days) => setFilters({ days })} />
-      </div>
+      {error && !data && <div className="empty">{error}</div>}
       {data && <Chat rows={data.rows} showChannel />}
     </section>
   )

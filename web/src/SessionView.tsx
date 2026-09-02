@@ -42,7 +42,7 @@ export function SessionView({ id, onStatus }: { id: string } & StatusProps) {
   const blocked = s ? replyBlockedReason(s) : ''
   return (
     <section>
-      <a className="back" href="#/">← セッション一覧</a>
+      <a className="back" href="#/">← 一覧</a>
       {s && (
         <div className="chat-head">
           <h1><span className="hash">#</span>{s.repo}</h1>

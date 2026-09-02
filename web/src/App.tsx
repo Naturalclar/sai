@@ -1,23 +1,34 @@
 import { useCallback, useEffect, useState } from 'react'
-import { useHashRoute } from './hooks'
+import { useHashRoute, useLocalState } from './hooks'
 import { SessionList } from './SessionList'
 import { SessionView } from './SessionView'
 import { FeedView } from './FeedView'
 import { hm } from './format'
+import type { SessionFilters } from './api'
 
 export interface StatusProps {
   onStatus: (updatedAt: Date | null, error: string | null) => void
 }
 
+const DEFAULT_FILTERS: SessionFilters = { repo: '', agent: '', date: '', days: '7' }
+
+/**
+ * 1画面。左のサイドバーにセッション一覧、右にチャット（フィード or 選んだセッション）。
+ * `#/` と `#/feed` は広い画面では同じ表示（サイドバー + フィード）。狭い画面では `#/` が一覧だけ、
+ * `#/feed` と `#/s/<id>` がチャットだけになる（CSS の main.route-* で切り替える）。
+ */
 export function App() {
   const route = useHashRoute()
+  // ヘッダの「更新 hh:mm」は右側（チャット）の分だけ。サイドバーは自分の失敗を自分の中に出す
   const [status, setStatus] = useState<{ at: Date | null; error: string | null }>({ at: null, error: null })
   // 子の useEffect の依存に入るので、毎回作り直すと無限に再描画する
   const onStatus = useCallback<StatusProps['onStatus']>((at, error) => setStatus({ at, error }), [])
 
-  const navActive = route.name === 'feed' ? 'feed' : 'list'
+  // 絞り込みはサイドバーのもの。フィードのリポジトリはこれに従う（同じ画面に「リポジトリ」を2つ出さない）
+  const [filters, setFilters] = useLocalState<SessionFilters>('sai.filters', DEFAULT_FILTERS)
+
   useEffect(() => {
-    document.title = route.name === 'session' ? `SAI · ${route.id.slice(0, 12)}` : route.name === 'feed' ? 'SAI · フィード' : 'SAI'
+    document.title = route.name === 'session' ? `SAI · ${route.id.slice(0, 12)}` : 'SAI'
   }, [route])
 
   return (
@@ -26,10 +37,6 @@ export function App() {
         <div className="logo">
           SAI <small>agent-feed viewer</small>
         </div>
-        <nav>
-          <a href="#/" className={navActive === 'list' ? 'active' : ''}>セッション</a>
-          <a href="#/feed" className={navActive === 'feed' ? 'active' : ''}>フィード</a>
-        </nav>
         <div className={`status${status.error ? ' error' : ''}`}>
           {status.error ? `取得失敗: ${status.error}` : status.at ? `更新 ${hm(status.at.toISOString())}` : ''}
         </div>
@@ -39,10 +46,13 @@ export function App() {
           </a>
         )}
       </header>
-      <main>
-        {route.name === 'list' && <SessionList onStatus={onStatus} />}
-        {route.name === 'session' && <SessionView id={route.id} onStatus={onStatus} />}
-        {route.name === 'feed' && <FeedView onStatus={onStatus} />}
+      <main className={`layout route-${route.name}`}>
+        <aside className="sidebar">
+          <SessionList filters={filters} setFilters={setFilters} selectedId={route.name === 'session' ? route.id : null} />
+        </aside>
+        <div className="pane">
+          {route.name === 'session' ? <SessionView id={route.id} onStatus={onStatus} /> : <FeedView repo={filters.repo} onStatus={onStatus} />}
+        </div>
       </main>
     </>
   )

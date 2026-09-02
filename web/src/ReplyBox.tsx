@@ -188,6 +188,8 @@ export function ReplyBox({ repo, busy, busySince, now = 0, onSend, mention }: Pr
           {busy ? '送信中…' : '送信'}
         </button>
       </div>
+      {/* 送った返信は対話側の画面には出ない（トランスクリプトには追記される）。README の「返信」の節と同じ */}
+      <div className="note">送った返信と返答は、このセッションを開いている端末や Desktop の画面には出ない（履歴には残るので、開き直せば見える）</div>
       {open && (
         <ul className="mention" role="listbox" aria-label="返信先">
           {shown.length === 0 && <li className="none">該当するセッションがありません</li>}

@@ -196,5 +196,6 @@
   .mention li .title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
   .mention li .why { font-size: 11px; color: var(--synth); white-space: nowrap; }
   .mention li .icon, .reply .target .icon { flex: none; line-height: 1; }
+  .reply .note { color: var(--muted); font-size: 11px; }
   .notice { color: var(--muted); font-size: 12px; margin-top: 10px; }
   .notice.error { color: var(--claude); }

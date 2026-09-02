@@ -20,7 +20,7 @@ export interface ReplyTarget {
   id: string
   repo: string
   branch: string
-  /** first_user_text の1行目（無ければ text の1行目）。60文字 */
+  /** 一番新しい行の user_text の1行目（無ければ first_user_text、それも無ければ text）。60文字 */
   title: string
   /** 返信できない理由。空なら選べる */
   blocked: string
@@ -30,7 +30,7 @@ const TARGET_TITLE_LEN = 60
 
 /**
  * フィードの行から返信先の候補を作る。エンティティ（entityId）ごとに1件、新しい順（rows は古い順の前提）。
- * ラベルは一番新しい行の repo / branch / first_user_text。一覧の API を別に叩かないのは、
+ * ラベルは一番新しい行の repo / branch / user_text（一覧のタイトルと同じく最後の入力に追従する）。一覧の API を別に叩かないのは、
  * サイドバーとフィードで days が違い、一覧に無いセッションがフィードに出ることがあるため
  */
 export function feedReplyTargets(rows: FeedRow[]): ReplyTarget[] {
@@ -39,7 +39,7 @@ export function feedReplyTargets(rows: FeedRow[]): ReplyTarget[] {
     const r = rows[i]!
     const id = entityId(r.session, r.repo, r.ts)
     if (seen.has(id)) continue
-    const title = ((r.first_user_text || r.text || '').split('\n')[0] ?? '').trim()
+    const title = ((r.user_text?.trim() || r.first_user_text?.trim() || r.text || '').split('\n')[0] ?? '').trim()
     seen.set(id, {
       id,
       repo: r.repo,

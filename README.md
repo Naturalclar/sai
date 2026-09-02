@@ -130,8 +130,8 @@ Codex CLI ──[notify]───────┘
 | `agent` | `claude` / `codex` / `unknown` |
 | `session_source` | `payload`（ペイロードから）/ `rollout`（Codex のファイルから）/ `synth`（時間で合成）。一覧の信頼度がここで分かる |
 | `text` | 最後のアシスタント発話。Claude は `transcript_path` の末尾から、Codex は `last-assistant-message`。2,000文字で切る |
-| `user_text` | そのターンの入力（人が打った文）。Claude は `transcript_path` を末尾から遡って最後の入力（ツールの戻りや差し込みは飛ばす。スラッシュコマンドは `/foo 引数` に戻す）、Codex は `input-messages`。画面2で自分側のバブルになる。2,000文字で切る |
-| `first_user_text` | 最初のユーザー発話。一覧のタイトルに使う。300文字で切る |
+| `user_text` | そのターンの入力（人が打った文）。Claude は `transcript_path` を末尾から遡って最後の入力（ツールの戻りや差し込みは飛ばす。スラッシュコマンドは `/foo 引数` に戻す）、Codex は `input-messages`。画面2で自分側のバブルになり、一番新しい行のものが一覧のタイトルになる。2,000文字で切る |
+| `first_user_text` | 最初のユーザー発話。`user_text` が1行も無い古いセッションのタイトルに使う。300文字で切る |
 
 日付は `Asia/Tokyo` で切る。
 
@@ -174,7 +174,7 @@ Slack と同じ形。左のサイドバーがチャンネル一覧（先頭に�
 | --- | --- |
 | リポジトリ / ブランチ | `repo` / `branch`。ブランチが途中で変わったら最後の値を出して「+N」。先頭の色の点が `agent` |
 | 最終更新 · ターン数 | 最後の `ts` と行数 |
-| タイトル | `first_user_text` があればそれ、無ければ最初の `text` の1行目。60文字で切る |
+| タイトル | 一番新しい `user_text` の1行目。画面から返信しても端末で続きの指示を打っても、次のターンが記録された時点で最後の入力に変わる。`user_text` が無ければ `first_user_text`、それも無ければ最初の `text` の1行目。60文字で切る |
 | 最後の発言 | 最後の `text` の1行目（Markdown の記号は落とす） |
 | 印 | `session_source` が `synth` なら「合成」 |
 

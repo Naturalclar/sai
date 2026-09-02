@@ -38,6 +38,21 @@ function orderedUnique<T>(values: Iterable<T>): T[] {
   return seen
 }
 
+/**
+ * セッションのタイトル。一番新しい user_text の1行目。返信や端末での続きの指示があるたびに、最後の入力に追従する。
+ * user_text が1行も無ければ first_user_text（毎行に載っているので窓から1行目が落ちても残る）、それも無ければ最初の text の1行目
+ */
+export function sessionTitle(items: FeedRow[]): string {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const t = items[i]!.user_text
+    if (t?.trim()) return firstLine(t)
+  }
+  for (const row of items) {
+    if (row.first_user_text?.trim()) return firstLine(row.first_user_text)
+  }
+  return firstLine(items[0]?.text ?? '')
+}
+
 /** 行を (セッション, リポジトリ) 単位にまとめる。入力は ts 昇順であること。新しい順に返す */
 export function aggregate(rows: FeedRow[]): SessionSummary[] {
   const groups = new Map<string, FeedRow[]>()
@@ -57,14 +72,7 @@ export function aggregate(rows: FeedRow[]): SessionSummary[] {
     const agents = orderedUnique(items.map((r) => (r.agent ?? 'unknown') as Agent))
     const sources = orderedUnique(items.map((r) => (r.session_source ?? '') as SessionSource))
 
-    let titleFull = ''
-    for (const row of items) {
-      if (row.first_user_text?.trim()) {
-        titleFull = firstLine(row.first_user_text)
-        break
-      }
-    }
-    if (!titleFull) titleFull = firstLine(first.text ?? '')
+    const titleFull = sessionTitle(items)
 
     sessions.push({
       id,

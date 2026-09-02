@@ -38,29 +38,33 @@ sai/
 
 ### 1. フックを向ける
 
-**Claude Code** — `~/.claude/settings.json`（全リポジトリ）か `.claude/settings.json`（そのリポジトリだけ）に:
+**Claude Code** — `~/.claude/settings.json`（全リポジトリ）か `.claude/settings.json`（そのリポジトリだけ）に。`record.py` の場所は `env` の `SAI_HOME` に1回だけ書き、各フックはそれを参照する:
 
 ```json
 {
+  "env": { "SAI_HOME": "/path/to/sai" },
   "hooks": {
     "Stop": [
-      { "hooks": [ { "type": "command", "command": "python3 /absolute/path/to/sai/feed/record.py" } ] }
+      { "hooks": [ { "type": "command", "command": "python3 \"$SAI_HOME/feed/record.py\" || true" } ] }
     ],
     "PermissionRequest": [
-      { "hooks": [ { "type": "command", "command": "python3 /absolute/path/to/sai/feed/record.py" } ] }
+      { "hooks": [ { "type": "command", "command": "python3 \"$SAI_HOME/feed/record.py\" || true" } ] }
     ],
     "PreToolUse": [
-      { "matcher": "AskUserQuestion|ExitPlanMode", "hooks": [ { "type": "command", "command": "python3 /absolute/path/to/sai/feed/record.py" } ] }
+      { "matcher": "AskUserQuestion|ExitPlanMode", "hooks": [ { "type": "command", "command": "python3 \"$SAI_HOME/feed/record.py\" || true" } ] }
     ],
     "Notification": [
-      { "matcher": "idle_prompt|agent_needs_input|elicitation_dialog|elicitation_url_dialog|permission_prompt", "hooks": [ { "type": "command", "command": "python3 /absolute/path/to/sai/feed/record.py" } ] }
+      { "matcher": "idle_prompt|agent_needs_input|elicitation_dialog|elicitation_url_dialog|permission_prompt", "hooks": [ { "type": "command", "command": "python3 \"$SAI_HOME/feed/record.py\" || true" } ] }
     ],
     "UserPromptSubmit": [
-      { "hooks": [ { "type": "command", "command": "python3 /absolute/path/to/sai/feed/record.py" } ] }
+      { "hooks": [ { "type": "command", "command": "python3 \"$SAI_HOME/feed/record.py\" || true" } ] }
     ]
   }
 }
 ```
+
+- `env` の値はセッションとそのサブプロセスに渡るので、フックのコマンドからも `$SAI_HOME` で見える。フックのコマンドはシェル（`sh -c`）で動くので変数はそのまま展開される。シェルの rc で `export SAI_HOME=...` しておいても同じ
+- `|| true` は保険。`SAI_HOME` が未設定・間違いだと `python3` がファイルを見つけられず exit 2 になり、`Stop` フックの exit 2 は「Claude を止めない」の意味なので、付けないとターンが終われなくなる。`record.py` 自身は常に exit 0 なので、これで潰れるのはパスの間違いだけ
 
 `Stop` だけでもターンは記録される。`UserPromptSubmit` は入力した瞬間に自分の入力をチャットに出すためのもの。残りは**人を待って止まったとき**に「何を待っているか」を出すためのもの:
 
@@ -79,7 +83,7 @@ sai/
 notify = ["python3", "/absolute/path/to/sai/feed/record.py"]
 ```
 
-どちらも絶対パスで。`notify` の JSON が「最後の引数」で来るか stdin で来るかは資料によって食い違うので、`record.py` は両方受ける。
+こちらは絶対パスで。`notify` は引数の配列をそのまま実行する（シェルを通らない）ので、`$SAI_HOME` のような変数は展開されない。`notify` の JSON が「最後の引数」で来るか stdin で来るかは資料によって食い違うので、`record.py` は両方受ける。
 
 ### 2. 画面をビルドしてサーバを立てる
 
@@ -303,6 +307,7 @@ Slack のチャット風。1ターンは「自分の入力（`user_text`）→ �
 
 | | |
 | --- | --- |
+| `SAI_HOME` | このリポジトリの場所。上のフック設定例が `$SAI_HOME/feed/record.py` として使う（`record.py` やサーバ自身は読まない） |
 | `AGENT_FEED_DIR` | 出力先（既定 `~/.agent-feed`）。`record.py` とサーバの両方が見る |
 | `AGENT_FEED_DEBUG` | `1` で `record.py` の例外をログに残す |
 | `CODEX_HOME` | Codex のホーム（既定 `~/.codex`） |

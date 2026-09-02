@@ -75,7 +75,7 @@ pnpm start --port 9000 --feed-dir ~/.agent-feed   # pnpm 10 は「--」もその
 ```
 pnpm lint        # oxlint（web/src, server, shared）
 pnpm typecheck   # tsc（web と server の両方）
-pnpm test        # node:test（server/）
+pnpm test        # node:test（server/、shared/、web/src/）
 pnpm test:feed   # python3 -m unittest（feed/）
 pnpm build       # typecheck してから vite build
 pnpm start:watch # server/ shared/ が変わったら自動で再起動（node --watch）

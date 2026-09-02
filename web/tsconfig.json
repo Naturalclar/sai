@@ -6,5 +6,5 @@
     "types": ["vite/client"]
   },
   "include": ["src", "vite.config.ts", "../shared"],
-  "exclude": ["../shared/**/*.test.ts"]
+  "exclude": ["../shared/**/*.test.ts", "src/**/*.test.ts"]
 }

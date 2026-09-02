@@ -1,9 +1,8 @@
-import { api, type SessionFilters, type SessionSummary } from './api'
+import { api, type SessionFilters } from './api'
 import { usePolling } from './hooks'
-import { hm, md } from './format'
-import { SynthTag } from './AgentChip'
-import { DaysSelect, FacetSelect } from './Select'
-import { stripMarkdown } from '../../shared/markdown.ts'
+import { DaysSelect } from './DaysSelect'
+import { FacetSelect } from './FacetSelect'
+import { SessionItem } from './SessionItem'
 
 interface Props {
   filters: SessionFilters
@@ -35,31 +34,10 @@ export function SessionList({ filters, setFilters, selectedId }: Props) {
           <span className="t">フィード</span>
           <span className="last">{filters.repo ? `#${filters.repo}` : '全リポジトリ'}を時系列に</span>
         </a>
-        {sessions.map((s) => <Item key={s.id} s={s} active={s.id === selectedId} />)}
+        {sessions.map((s) => <SessionItem key={s.id} s={s} active={s.id === selectedId} />)}
       </nav>
       {data && sessions.length === 0 && <div className="empty">この条件のセッションはありません</div>}
     </>
   )
 }
 
-const More = ({ n }: { n: number }) => (n > 1 ? <span className="more">+{n - 1}</span> : null)
-
-function Item({ s, active }: { s: SessionSummary; active: boolean }) {
-  return (
-    <a className={`item${active ? ' active' : ''}`} href={`#/s/${encodeURIComponent(s.id)}`} title={s.id}>
-      <span className="top">
-        <span className="repo">
-          <span className={`dot ${s.agent}`} />
-          {s.repo || '—'}<More n={s.repos.length} />
-          {s.branch && <span className="br"> / {s.branch}<More n={s.branches.length} /></span>}
-        </span>
-        <span className="when"><b>{md(s.end)}</b> {hm(s.end)} · {s.turns}</span>
-      </span>
-      <span className="t" title={s.title_full}>
-        {s.title || '(無題)'}
-        {s.session_source === 'synth' && <SynthTag />}
-      </span>
-      {s.turns > 1 && s.last_text && <span className="last">{stripMarkdown(s.last_text)}</span>}
-    </a>
-  )
-}

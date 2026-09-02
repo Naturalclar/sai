@@ -11,7 +11,7 @@
     "dev": "vite web",
     "build": "pnpm typecheck && vite build web",
     "preview": "vite preview web",
-    "test": "node --test --disable-warning=ExperimentalWarning \"server/**/*.test.ts\" \"shared/**/*.test.ts\"",
+    "test": "node --test --disable-warning=ExperimentalWarning \"server/**/*.test.ts\" \"shared/**/*.test.ts\" \"web/src/**/*.test.ts\"",
     "test:feed": "python3 -m unittest feed.test_record",
     "lint": "oxlint web/src server shared",
     "typecheck": "tsc -p web && tsc -p server"

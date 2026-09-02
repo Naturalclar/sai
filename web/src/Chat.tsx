@@ -1,75 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import type { ReactNode } from 'react'
 import { entityId } from '../../shared/entity.ts'
 import { AGENT_INITIAL, AGENT_LABEL, type FeedRow } from './api'
-import { dayLabel, hm, minutesBetween, ymd } from './format'
-import { Markdown } from './Markdown'
-
-/** 発言者。自分（ターンの入力）か、エージェント */
-type Speaker = 'me' | FeedRow['agent']
-
-/**
- * 1つのバブル。1行（= 1ターン）は「自分の入力（user_text）」と「エージェントの返答（text）」の
- * 2つの発言に展開する。user_text が無い行（古い JSONL など）はエージェントの発言だけ
- */
-interface Utterance {
-  speaker: Speaker
-  row: FeedRow
-  text: string
-  key: string
-}
-
-interface Group {
-  speaker: Speaker
-  repo: string
-  branch: string
-  session: string
-  firstTs: string
-  lastTs: string
-  items: Utterance[]
-}
-
-const GROUP_GAP_MIN = 10
-
-function toUtterances(rows: FeedRow[]): Utterance[] {
-  const out: Utterance[] = []
-  rows.forEach((row, index) => {
-    const mine = row.user_text ?? ''
-    if (mine.trim()) out.push({ speaker: 'me', row, text: mine, key: `${row.ts}:${index}:me` })
-    out.push({ speaker: row.agent, row, text: row.text ?? '', key: `${row.ts}:${index}` })
-  })
-  return out
-}
-
-/** Slack と同じ: 同じ発言者（speaker+session）が10分以内に続けば1つにまとめる */
-function groupRows(rows: FeedRow[]): { day: string; label: string; groups: Group[] }[] {
-  const days: { day: string; label: string; groups: Group[] }[] = []
-  let current: Group | null = null
-  for (const u of toUtterances(rows)) {
-    const { row } = u
-    const day = ymd(row.ts)
-    let bucket = days[days.length - 1]
-    if (!bucket || bucket.day !== day) {
-      bucket = { day, label: dayLabel(row.ts), groups: [] }
-      days.push(bucket)
-      current = null
-    }
-    const same =
-      current &&
-      current.speaker === u.speaker &&
-      current.repo === row.repo &&
-      current.session === row.session &&
-      minutesBetween(current.lastTs, row.ts) < GROUP_GAP_MIN
-    if (same && current) {
-      current.items.push(u)
-      current.lastTs = row.ts
-    } else {
-      current = { speaker: u.speaker, repo: row.repo, branch: row.branch, session: row.session, firstTs: row.ts, lastTs: row.ts, items: [u] }
-      bucket.groups.push(current)
-    }
-  }
-  return days
-}
+import { hm } from './format'
+import { groupRows } from './chatGroups.ts'
+import { Message } from './Message'
 
 /** trailer は末尾に足す仮の要素（送信中の返信など）。行と同じく最下部追従の対象 */
 export function Chat({ rows, showChannel, trailer }: { rows: FeedRow[]; showChannel: boolean; trailer?: ReactNode }) {
@@ -116,51 +51,6 @@ export function Chat({ rows, showChannel, trailer }: { rows: FeedRow[]; showChan
         </div>
       ))}
       {trailer}
-    </div>
-  )
-}
-
-/**
- * 送信した返信の仮バブル。フックで行が届いたら useReply の pending から外れて消える
- * （届いた行の user_text が本物になる）。フィードでは repo を渡してチャンネル名を添える
- */
-export function PendingBubble({ text, repo }: { text: string; repo?: string }) {
-  return (
-    <div className="group pending">
-      <div className="avatar me">私</div>
-      <div>
-        <div className="gh">
-          <span className="name">あなた</span>
-          {repo && <span className="ch">#{repo}</span>}
-          <span className="time">送信中…</span>
-        </div>
-        <div className="msg">
-          <div className="body">{text}</div>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// 折りたたむかは描画前の生の長さで見る（コードブロック1つで8行を超えても折りたたむ。今まで通り）
-const isLong = (text: string) => text.length > 600 || text.split('\n').length > 8
-
-function Message({ ts, text, markdown }: { ts: string; text: string; markdown: boolean }) {
-  const [open, setOpen] = useState(false)
-  const long = isLong(text)
-  return (
-    <div className="msg">
-      <span className="time">{hm(ts)}</span>
-      {text ? (
-        <div className={`body${long && !open ? ' clamped' : ''}`}>{markdown ? <Markdown text={text} /> : text}</div>
-      ) : (
-        <div className="empty-text">(本文なし)</div>
-      )}
-      {long && (
-        <button type="button" className="more" onClick={() => setOpen((v) => !v)}>
-          {open ? '折りたたむ' : 'もっと見る'}
-        </button>
-      )}
     </div>
   )
 }

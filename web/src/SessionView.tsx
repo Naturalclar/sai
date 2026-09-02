@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { replyBlockedReason } from '../../shared/reply.ts'
 import { api } from './api'
 import { usePolling } from './hooks'
@@ -7,37 +7,17 @@ import { AgentChip, SynthTag } from './AgentChip'
 import { Chat, PendingBubble } from './Chat'
 import { ReplyBox } from './ReplyBox'
 import { BackLink } from './BackLink'
+import { useReply } from './useReply'
 import type { PaneProps } from './App'
-
-/** 送信した返信。どのエンティティに、そのとき何行あったか */
-interface Sent {
-  id: string
-  text: string
-  rowsAtSend: number
-}
 
 export function SessionView({ id, onStatus, onOpenSidebar }: { id: string } & PaneProps) {
   const { data, error, updatedAt } = usePolling(() => api.session(id), [id])
   useEffect(() => onStatus(updatedAt, error), [updatedAt, error, onStatus])
 
-  const [sent, setSent] = useState<Sent | null>(null)
-  const [sendError, setSendError] = useState<{ id: string; message: string } | null>(null)
-  // 「送信中」は state を消すのではなく描画時に決める。返信の結果は既存のフックが JSONL に足す
-  // 1行として届くので、行数が送信時より増えたら消える。rev ではなく行数で見るのは、同じ日の
-  // ファイルに別セッションの行が増えても rev は変わるため
-  const pending = sent && sent.id === id && (data?.rows.length ?? 0) <= sent.rowsAtSend ? sent : null
-  const failed = sendError && sendError.id === id ? sendError.message : null
-
-  const send = async (text: string) => {
-    setSendError(null)
-    setSent({ id, text, rowsAtSend: data?.rows.length ?? 0 })
-    try {
-      await api.reply(id, text)
-    } catch (err) {
-      setSent(null)
-      setSendError({ id, message: err instanceof Error ? err.message : String(err) })
-    }
-  }
+  // 返信先はこのセッションだけなので、行数はこの画面の行数そのもの
+  const { pending, failed, send } = useReply((target) => (target === id ? (data?.rows.length ?? 0) : 0))
+  const mine = pending.find((p) => p.id === id) ?? null
+  const failedHere = failed && failed.id === id ? failed.message : null
 
   const s = data?.session
   const blocked = s ? replyBlockedReason(s) : ''
@@ -57,9 +37,9 @@ export function SessionView({ id, onStatus, onOpenSidebar }: { id: string } & Pa
         </div>
       )}
       {error && !data && <div className="empty">{error}</div>}
-      {data && <Chat rows={data.rows} showChannel={false} trailer={pending && <PendingBubble text={pending.text} />} />}
-      {s && (blocked ? <div className="notice">{blocked}</div> : <ReplyBox repo={s.repo} busy={pending !== null} onSend={send} />)}
-      {failed && <div className="notice error">送信失敗: {failed}</div>}
+      {data && <Chat rows={data.rows} showChannel={false} trailer={mine && <PendingBubble text={mine.text} />} />}
+      {s && (blocked ? <div className="notice">{blocked}</div> : <ReplyBox repo={s.repo} busy={mine !== null} onSend={(text) => void send(id, text)} />)}
+      {failedHere && <div className="notice error">送信失敗: {failedHere}</div>}
     </section>
   )
 }

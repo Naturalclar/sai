@@ -95,6 +95,7 @@
   .dot.codex { background: var(--codex); }
   .tag { display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 4px; background: var(--chip); color: var(--muted); margin-left: 6px; vertical-align: middle; }
   .tag.synth { background: color-mix(in srgb, var(--synth) 18%, transparent); color: var(--synth); font-weight: 600; }
+  .tag.replying { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); font-weight: 600; }
 
   /* -- chat */
   .chat-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
@@ -147,6 +148,8 @@
   .avatar.me { background: var(--accent); }
   .group.pending { opacity: .65; }
   .group.pending .msg .body { font-style: italic; }
+  /* 5分を超えて処理中。長引いていることが見えるように時刻の色を変える */
+  .group.pending.long .gh .time { color: var(--synth); font-weight: 600; }
   .reply { position: relative; display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
   .reply .row { display: flex; gap: 8px; align-items: flex-end; }
   .reply textarea { flex: 1; resize: vertical; min-height: 2.6em; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font: inherit; }

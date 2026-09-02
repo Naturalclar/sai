@@ -49,6 +49,20 @@ export interface SessionSummary {
   last_text: string
 }
 
+/**
+ * 返信（POST /api/sessions/<id>/reply）で回したターンが、まだ終わっていない。
+ * 正本はサーバのメモリ（server/runner.ts）で、子プロセスが exit するまで残る。画面はこれを「送信中」の正とする
+ */
+export interface Replying {
+  /** 起動した時刻 */
+  since: string
+  /** 送った文。リロードしても仮バブルに出せる */
+  text: string
+}
+
+/** エンティティID → 処理中の返信。無ければ空 */
+export type ReplyingMap = Record<string, Replying>
+
 export interface Facets {
   repos: string[]
   agents: Agent[]
@@ -63,18 +77,22 @@ export interface SessionsResponse {
   sessions: SessionSummary[]
   /** 絞り込み前の全体から作った候補 */
   filters: Facets
+  /** 処理中の返信（窓の外のセッションも含む全部）。これが変わると rev も変わる */
+  replying: ReplyingMap
 }
 
 export interface SessionDetailResponse {
   rev: string
   session: SessionSummary
   rows: FeedRow[]
+  replying: ReplyingMap
 }
 
 export interface FeedResponse {
   rev: string
   days: number
   rows: FeedRow[]
+  replying: ReplyingMap
 }
 
 /** POST /api/sessions/<id>/reply の body */

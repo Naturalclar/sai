@@ -88,6 +88,7 @@ Codex CLI (notify) ──────┘                                   │
 
 | | |
 | --- | --- |
+| `SAI_HOME` | このリポジトリの場所。README のフック設定例（`settings.json` の `env`）が使うだけで、コードは読まない |
 | `AGENT_FEED_DIR` | JSONL の置き場（既定 `~/.agent-feed`）。record.py とサーバの両方が見る |
 | `AGENT_FEED_DEBUG` | `1` で record.py の例外をログに残す |
 | `CODEX_HOME` | Codex のホーム（既定 `~/.codex`） |

@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 import { entityId } from '../../shared/entity.ts'
 import { AGENT_INITIAL, AGENT_LABEL, type FeedRow } from './api'
 import { dayLabel, hm, minutesBetween, ymd } from './format'
+import { Markdown } from './Markdown'
 
 interface Group {
   agent: string
@@ -109,6 +110,7 @@ export function PendingBubble({ text }: { text: string }) {
   )
 }
 
+// 折りたたむかは描画前の生の長さで見る（コードブロック1つで8行を超えても折りたたむ。今まで通り）
 const isLong = (text: string) => text.length > 600 || text.split('\n').length > 8
 
 function Message({ row }: { row: FeedRow }) {
@@ -119,7 +121,7 @@ function Message({ row }: { row: FeedRow }) {
     <div className="msg">
       <span className="time">{hm(row.ts)}</span>
       {text ? (
-        <div className={`body${long && !open ? ' clamped' : ''}`}>{text}</div>
+        <div className={`body${long && !open ? ' clamped' : ''}`}><Markdown text={text} /></div>
       ) : (
         <div className="empty-text">(本文なし)</div>
       )}

@@ -5,8 +5,8 @@ import type { Server } from 'node:http'
 import { mkdtemp, rm, writeFile, appendFile, mkdir, stat, utimes, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ReplyResponse, SessionsResponse, SessionDetailResponse, SessionMetaResponse, FeedResponse } from '../shared/types.ts'
-import { createApp, parseDays } from './app.ts'
+import type { Replying, ReplyResponse, SessionsResponse, SessionDetailResponse, SessionMetaResponse, FeedResponse } from '../shared/types.ts'
+import { createApp, parseDays, revWith } from './app.ts'
 import { FeedStore } from './store.ts'
 import { localDate } from './aggregate.ts'
 import { replyCommand } from './runner.ts'
@@ -23,10 +23,13 @@ let store: FeedStore
 /** 実際には起動しない。受け取ったコマンドを覚え、busy に入れた id は「進行中」と答える */
 class FakeRunner implements Runner {
   started: { id: string; cmd: ReplyCommand }[] = []
-  busy = new Set<string>()
+  busy = new Map<string, Replying>()
   fail: Error | null = null
   running(id: string) {
     return this.busy.has(id)
+  }
+  snapshot() {
+    return Object.fromEntries(this.busy)
   }
   async start(id: string, cmd: ReplyCommand) {
     if (this.fail) throw this.fail
@@ -227,9 +230,48 @@ test('POST reply: 別オリジンは 403、同一オリジンとブラウザ以�
   assert.equal(runner.started.length, 1)
 })
 
+test('処理中の返信は一覧・詳細・フィードの replying に載り、rev も変わる', async () => {
+  const quiet = {
+    sessions: (await (await get('/api/sessions?days=7')).json()) as SessionsResponse,
+    detail: (await (await get('/api/sessions/C1%40r?days=7')).json()) as SessionDetailResponse,
+    feed: (await (await get('/api/feed?days=7')).json()) as FeedResponse,
+  }
+  assert.deepEqual(quiet.sessions.replying, {})
+  assert.deepEqual(quiet.detail.replying, {})
+  assert.deepEqual(quiet.feed.replying, {})
+
+  const entry: Replying = { since: '2026-09-02T12:00:00.000Z', text: '続きをやって' }
+  runner.busy.set('C1@r', entry)
+  try {
+    const sessions = (await (await get('/api/sessions?days=7')).json()) as SessionsResponse
+    assert.deepEqual(sessions.replying, { 'C1@r': entry })
+    assert.notEqual(sessions.rev, quiet.sessions.rev, 'JSONL が変わらなくても rev が変わる（画面が再描画する）')
+    const detail = (await (await get('/api/sessions/C1%40r?days=7')).json()) as SessionDetailResponse
+    assert.deepEqual(detail.replying, { 'C1@r': entry })
+    assert.notEqual(detail.rev, quiet.detail.rev)
+    const feed = (await (await get('/api/feed?days=7')).json()) as FeedResponse
+    assert.deepEqual(feed.replying, { 'C1@r': entry })
+    assert.notEqual(feed.rev, quiet.feed.rev)
+  } finally {
+    runner.busy.delete('C1@r')
+  }
+  // 終わったら元の rev に戻る
+  assert.equal(((await (await get('/api/sessions?days=7')).json()) as SessionsResponse).rev, quiet.sessions.rev)
+})
+
+test('revWith は処理中の集合と since で変わり、空なら素の rev', () => {
+  const a: Replying = { since: '2026-09-02T12:00:00.000Z', text: 'x' }
+  const b: Replying = { since: '2026-09-02T12:05:00.000Z', text: 'x' }
+  assert.equal(revWith('r1', {}), 'r1')
+  assert.notEqual(revWith('r1', { A: a }), 'r1')
+  assert.equal(revWith('r1', { A: a, B: b }), revWith('r1', { B: b, A: a }), '順序に依らない')
+  assert.notEqual(revWith('r1', { A: a }), revWith('r1', { A: b }), '同じ id でも since が違えば別（連続した返信）')
+  assert.notEqual(revWith('r1', { A: a }), revWith('r2', { A: a }))
+})
+
 test('POST reply: 進行中なら 409、起動できなければ 500', async () => {
   runner.started.length = 0
-  runner.busy.add('C1@r')
+  runner.busy.set('C1@r', { since: new Date().toISOString(), text: 'x' })
   try {
     const res = await post('C1@r', { text: 'x' })
     assert.equal(res.status, 409)
@@ -324,7 +366,7 @@ test('PUT meta: 別オリジンは 403、メソッド違いは 405', async () =>
 })
 
 test('replyCommand は SAI_*_BIN で実行ファイルを差し替えられる', () => {
-  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', {}), { bin: 'claude', args: ['-p', '--resume', 'S', 'hi'], cwd: '/w' })
+  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', {}), { bin: 'claude', args: ['-p', '--resume', 'S', 'hi'], cwd: '/w', text: 'hi' })
   assert.equal(replyCommand('claude', 'S', 'hi', '/w', { SAI_CLAUDE_BIN: '/opt/claude' })!.bin, '/opt/claude')
   assert.equal(replyCommand('codex', 'S', 'hi', '/w', { SAI_CODEX_BIN: '/opt/codex' })!.bin, '/opt/codex')
   assert.equal(replyCommand('unknown', 'S', 'hi', '/w', {}), null)

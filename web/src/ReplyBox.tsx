@@ -1,6 +1,7 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent, SyntheticEvent } from 'react'
 import { filterReplyTargets, mentionLabels, mentionQuery, stripMention, type ReplyTarget } from '../../shared/reply.ts'
+import { elapsedLabel } from './format'
 
 /**
  * @ メンションで返信先を選ぶための道具（フィード用）。渡さなければ `@` はただの文字（セッション画面）。
@@ -28,12 +29,16 @@ export interface Picked {
 interface Props {
   repo: string
   busy: boolean
+  /** busy のとき、前の返信を起動した時刻。placeholder に「前の返信を処理中（3分）」と出す */
+  busySince?: string
+  /** 経過の基準（ポーリングの updatedAt）。busySince とセット */
+  now?: number
   onSend: (text: string) => void
   mention?: MentionProps
 }
 
 /** 入力欄。Enter で送信、Shift+Enter で改行。IME 変換中の Enter は送らない */
-export function ReplyBox({ repo, busy, onSend, mention }: Props) {
+export function ReplyBox({ repo, busy, busySince, now = 0, onSend, mention }: Props) {
   const [text, setText] = useState('')
   // caret は「@ の検出」に使う。onChange と onSelect（カーソル移動）で追う
   const [caret, setCaret] = useState(0)
@@ -169,7 +174,11 @@ export function ReplyBox({ repo, busy, onSend, mention }: Props) {
           }}
           onSelect={track}
           onKeyDown={onKeyDown}
-          placeholder={`#${repo} に返信（Enter で送信、Shift+Enter で改行）`}
+          placeholder={
+            busy
+              ? `前の返信を処理中${busySince && elapsedLabel(busySince, now) ? `（${elapsedLabel(busySince, now)}）` : ''}。終わるまで待ってください`
+              : `#${repo} に返信（Enter で送信、Shift+Enter で改行）`
+          }
           rows={2}
           // フィードでは送信中でも別の返信先へ打てるよう入力欄は止めない（送信ボタンだけ止める）
           disabled={busy && !mention}

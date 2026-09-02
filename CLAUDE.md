@@ -16,7 +16,7 @@ pnpm dev                    # Vite。/api を 127.0.0.1:8787 に proxy するの
 pnpm build                  # typecheck → vite build web（web/dist/ へ）
 pnpm lint                   # oxlint web/src server shared
 pnpm typecheck              # tsc -p web && tsc -p server
-pnpm test                   # node:test（server/**/*.test.ts）
+pnpm test                   # node:test（server/**/*.test.ts と shared/**/*.test.ts）
 pnpm test:feed              # python3 -m unittest feed.test_record
 ```
 
@@ -58,6 +58,7 @@ Codex CLI (notify) ──────┘                                   │
 - **`feed/record.py`** は Python 3.9+ 標準ライブラリのみ（エージェントの子プロセスとして PATH が最小の環境で呼ばれるので node に依存させない）。集計も表示もしない。
 - **`server/`** は node:http 直書きで依存ゼロ。`main.ts` は引数処理と bind 先チェックだけで、ルーティングは `createApp(store, distDir)` にあり、テストはこれを直接叩く。`store.ts` は日付ファイルを `(mtime, size)` で覚えて変わらなければ再パースせず、そのシグネチャのハッシュを `rev` として返す。
 - **`web/src/`** は React 19 + Vite、ルーティングは hash（`#/`、`#/s/<id>`、`#/feed`）。`hooks.ts` の `usePolling` がデータ取得の中心で、`rev` が変わらない限り state を触らず、タブが隠れている間は止まる。フィルタは `useLocalState` で localStorage に残る。
+- **チャットの本文は Markdown**。`shared/markdown.ts` が `text` を木（`Block` / `Inline`）にし、`web/src/Markdown.tsx` が React 要素に組み立てる（HTML 文字列は作らない）。パーサは DOM 非依存なので `shared/markdown.test.ts` を node:test で回す。web の `tsconfig` は `../shared/**/*.test.ts` を除外している（`node:test` の型が無いため）。一覧の `last_text` は同じファイルの `stripMarkdown()` で記号を落とす。
 - **返信**（`POST /api/sessions/<id>/reply`）は `server/runner.ts` が `claude -p --resume` / `codex exec resume` を `cwd` で detached 起動する。結果は既存のフックが JSONL に足す1行として届くので、返信専用の記録経路は無い。返信できるかの判定は `shared/reply.ts` の `replyBlockedReason()` にあり、サーバの受付と画面の入力欄の出し分けが同じ関数を使う。テストは `createApp(store, distDir, runner)` に `FakeRunner` を渡して実際には起動しない。
 
 ## 設計上の前提（変えるときは README も直す）

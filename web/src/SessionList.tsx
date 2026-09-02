@@ -5,6 +5,7 @@ import { hm, md, ymd } from './format'
 import { AgentChip, SynthTag } from './AgentChip'
 import { DaysSelect, FacetSelect } from './Select'
 import type { StatusProps } from './App'
+import { stripMarkdown } from '../../shared/markdown.ts'
 
 const DEFAULT: SessionFilters = { repo: '', agent: '', date: '', days: '7' }
 
@@ -74,7 +75,7 @@ function Row({ s }: { s: SessionSummary }) {
           {s.title || '(無題)'}
           {s.session_source === 'synth' && <SynthTag />}
         </span>
-        {s.turns > 1 && s.last_text && <span className="last">{s.last_text}</span>}
+        {s.turns > 1 && s.last_text && <span className="last">{stripMarkdown(s.last_text)}</span>}
       </td>
     </tr>
   )

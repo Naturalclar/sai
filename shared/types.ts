@@ -13,7 +13,12 @@ export interface FeedRow {
   session: string
   session_source: SessionSource
   cwd: string
-  event: string
+  /**
+   * 何の行か。Claude はフック名（`Stop` / `PermissionRequest` / `PreToolUse` / `Notification` / `UserPromptSubmit`）、
+   * Codex は `agent-turn-complete`。読み方は shared/events.ts の eventKind()
+   */
+  event: 'Stop' | 'PermissionRequest' | 'PreToolUse' | 'Notification' | 'UserPromptSubmit' | 'agent-turn-complete' | (string & {})
+  /** ターン完了の行は最後のアシスタント発話。待ちの行は「何を待っているか」（`許可待ち: Bash: rm -rf node_modules` など） */
   text: string
   /** そのターンの入力（人が打った文）。チャットで自分側のバブルになる。古い行には無い */
   user_text?: string
@@ -36,7 +41,13 @@ export interface SessionSummary {
   branch: string
   branches: string[]
   cwd: string
+  /** ターン完了の行の数（待ちや再開の行は数えない） */
   turns: number
+  /**
+   * 人を待って止まっている。最後の行が待ちの行ならその text、ターン完了か再開が後に来ていれば空。
+   * 一覧の「待機中」の印と、チャット見出しに出す
+   */
+  waiting: string
   /**
    * 一番新しい user_text の1行目（画面からの返信でも端末で打った指示でも、最後の入力に追従する）。
    * 無ければ first_user_text、それも無ければ最初の text の1行目。60文字で切る
@@ -46,6 +57,7 @@ export interface SessionSummary {
   /** 1行でも synth があれば synth */
   session_source: SessionSource
   sources: SessionSource[]
+  /** 最後のターン完了の text の1行目（待ちの行は見ない） */
   last_text: string
   /** ブラウザから付けた表示名・アイコン・アーカイブ。無ければ undefined（title を使う） */
   meta?: SessionMeta

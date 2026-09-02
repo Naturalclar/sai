@@ -43,7 +43,7 @@ export function Chat({ rows, showChannel, trailer }: { rows: FeedRow[]; showChan
                 </div>
                 {g.items.map((u) => (
                   // 自分の入力は Markdown にしない（打ったままを出す）。エージェントの返答は Markdown
-                  <Message key={u.key} ts={u.row.ts} text={u.text} markdown={u.speaker !== 'me'} />
+                  <Message key={u.key} ts={u.row.ts} text={u.text} markdown={u.speaker !== 'me'} waiting={u.waiting} resolved={u.resolved} />
                 ))}
               </div>
             </div>

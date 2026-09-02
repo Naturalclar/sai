@@ -114,3 +114,39 @@ test('session が空の行は unknown-<日付> にまとめる（リポジトリ
   const s = aggregate([row(new Date('2026-09-02T01:00:00Z'), '', { repo: 'r' })])[0]!
   assert.equal(s.id, 'unknown-2026-09-02@r')
 })
+
+test('待ちの行: 最後が待ちなら waiting にその text、ターン数と最後の発言には数えない', () => {
+  const t0 = new Date('2026-09-02T01:00:00Z')
+  const rows = [
+    row(t0, 's1', { text: '始めた' }),
+    row(new Date(t0.getTime() + min(1)), 's1', { event: 'PermissionRequest', text: '許可待ち: Bash: rm -rf node_modules', user_text: '' }),
+  ]
+  const [s] = aggregate(rows)
+  assert.equal(s!.waiting, '許可待ち: Bash: rm -rf node_modules')
+  assert.equal(s!.turns, 1)
+  assert.equal(s!.last_text, '始めた', '待ちの行の text は「最後の発言」にしない')
+  assert.equal(s!.end, rows[1]!.ts, '最終更新は待ち始めた時刻')
+})
+
+test('待ちの行: 後にターン完了か再開が来れば waiting は空', () => {
+  const t0 = new Date('2026-09-02T01:00:00Z')
+  const wait = row(new Date(t0.getTime() + min(1)), 's1', { event: 'PreToolUse', text: '質問: 赤か青か?', user_text: '' })
+  const byStop = aggregate([row(t0, 's1'), wait, row(new Date(t0.getTime() + min(2)), 's1', { text: '青にした', user_text: '青' })])
+  assert.equal(byStop[0]!.waiting, '')
+  assert.equal(byStop[0]!.turns, 2)
+  assert.equal(byStop[0]!.last_text, '青にした')
+  assert.equal(byStop[0]!.title, '青', 'タイトルは最新の user_text（待ちの行は空なので飛ばす）')
+
+  const byResume = aggregate([row(t0, 's1'), wait, row(new Date(t0.getTime() + min(2)), 's1', { event: 'UserPromptSubmit', text: '', user_text: '' })])
+  assert.equal(byResume[0]!.waiting, '', '再開の行で解消')
+  assert.equal(byResume[0]!.turns, 1, '再開の行はターンではない')
+  assert.equal(byResume[0]!.last_text, 'hi')
+})
+
+test('待ちの行だけのセッションでも壊れない', () => {
+  const [s] = aggregate([row(new Date('2026-09-02T01:00:00Z'), 's1', { event: 'Notification', text: '入力待ち', user_text: '', first_user_text: '頼み' })])
+  assert.equal(s!.turns, 0)
+  assert.equal(s!.last_text, '')
+  assert.equal(s!.waiting, '入力待ち')
+  assert.equal(s!.title, '頼み')
+})

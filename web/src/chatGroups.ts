@@ -1,5 +1,7 @@
 // チャットの行をバブルの塊にまとめる。DOM に依存しないので node:test で回す（chatGroups.test.ts）
 import type { FeedRow } from '../../shared/types.ts'
+import { entityId } from '../../shared/entity.ts'
+import { eventKind } from '../../shared/events.ts'
 import { dayLabel, minutesBetween, ymd } from './format.ts'
 
 /** 発言者。自分（ターンの入力）か、エージェント */
@@ -14,6 +16,10 @@ export interface Utterance {
   row: FeedRow
   text: string
   key: string
+  /** 待ちの行（許可待ち・質問待ち）。text は「何を待っているか」で、Markdown にしない */
+  waiting?: boolean
+  /** 待ちの行で、後に同じセッションの行が来ている（= もう解消している）。薄く出す */
+  resolved?: boolean
 }
 
 export interface Group {
@@ -35,8 +41,20 @@ export interface DayGroups {
 const GROUP_GAP_MIN = 10
 
 export function toUtterances(rows: FeedRow[]): Utterance[] {
+  // 待ちが解消したかは「同じエンティティの行が後にあるか」で見る。最後の行の位置を先に控える
+  const lastIndex = new Map<string, number>()
+  rows.forEach((row, index) => lastIndex.set(entityId(row.session, row.repo, row.ts), index))
+
   const out: Utterance[] = []
   rows.forEach((row, index) => {
+    const kind = eventKind(row.event)
+    // 再開（UserPromptSubmit）は待ちを解消する合図なだけで本文が無い。バブルにしない
+    if (kind === 'resume') return
+    if (kind === 'waiting') {
+      const resolved = (lastIndex.get(entityId(row.session, row.repo, row.ts)) ?? index) > index
+      out.push({ speaker: row.agent, row, text: row.text ?? '', key: `${row.ts}:${index}`, waiting: true, resolved })
+      return
+    }
     const mine = row.user_text ?? ''
     if (mine.trim()) out.push({ speaker: 'me', row, text: mine, key: `${row.ts}:${index}:me` })
     out.push({ speaker: row.agent, row, text: row.text ?? '', key: `${row.ts}:${index}` })

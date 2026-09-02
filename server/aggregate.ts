@@ -1,5 +1,6 @@
 // 行 → セッションの集計。エンティティの単位は (セッション, リポジトリ)。キーは shared/entity.ts。
 import { entityId, localDate } from '../shared/entity.ts'
+import { eventKind } from '../shared/events.ts'
 import type { Agent, Facets, FeedRow, SessionSource, SessionSummary } from '../shared/types.ts'
 
 export { entityId, localDate, TIME_ZONE } from '../shared/entity.ts'
@@ -73,6 +74,11 @@ export function aggregate(rows: FeedRow[]): SessionSummary[] {
     const sources = orderedUnique(items.map((r) => (r.session_source ?? '') as SessionSource))
 
     const titleFull = sessionTitle(items)
+    // ターンはターン完了の行だけ。待ち（PermissionRequest など）と再開（UserPromptSubmit）は数えないし、最後の発言にもしない
+    const turnRows = items.filter((r) => eventKind(r.event) === 'turn')
+    const lastTurn = turnRows[turnRows.length - 1]
+    // 最後の行が待ちなら、まだ人を待っている。後にターン完了か再開が来ていれば解消
+    const waiting = eventKind(last.event) === 'waiting' ? (last.text ?? '') : ''
 
     sessions.push({
       id,
@@ -87,12 +93,13 @@ export function aggregate(rows: FeedRow[]): SessionSummary[] {
       branch: branches[branches.length - 1] ?? '',
       branches: branches.filter(Boolean),
       cwd: last.cwd ?? '',
-      turns: items.length,
+      turns: turnRows.length,
+      waiting,
       title: clip(titleFull, TITLE_LEN),
       title_full: clip(titleFull, TITLE_FULL_LEN),
       session_source: sources.includes('synth') ? 'synth' : (sources[sources.length - 1] ?? ''),
       sources,
-      last_text: clip(firstLine(last.text ?? ''), 120),
+      last_text: clip(firstLine(lastTurn?.text ?? ''), 120),
     })
   }
   sessions.sort((a, b) => (a.end < b.end ? 1 : a.end > b.end ? -1 : 0))

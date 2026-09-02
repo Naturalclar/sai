@@ -6,6 +6,7 @@ import { dayLabel, hm } from './format'
 import { AgentChip } from './AgentChip'
 import { SynthTag } from './SynthTag'
 import { ReplyingTag } from './ReplyingTag'
+import { WaitingTag } from './WaitingTag'
 import { Chat } from './Chat'
 import { PendingBubble } from './PendingBubble'
 import { ReplyBox } from './ReplyBox'
@@ -41,6 +42,7 @@ export function SessionView({ id, onStatus, onOpenSidebar }: { id: string } & Pa
           <span className="meta">{dayLabel(s.start)} {hm(s.start)} – {hm(s.end)} · {s.turns} ターン</span>
           <span className="meta" title={s.id}>
             {s.session_source === 'synth' ? <SynthTag /> : <span className="tag">{s.session_source}</span>}
+            {s.waiting && <WaitingTag text={s.waiting} />}
             {mine && <ReplyingTag since={mine.since} now={now} />}
             {s.archived && <ArchivedTag />}
           </span>

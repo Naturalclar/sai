@@ -329,7 +329,7 @@ SAI_CODEX_ARGS='-s workspace-write' pnpm start                    # Codex: 作�
 
 ### 返信中の許可・質問に画面から答える
 
-端末と同じく、返信で回したエージェントが **許可（ツール実行の確認）や `AskUserQuestion` で止まったら、SAI のチャットに ⏳ のバブルと [許可] [拒否]（質問なら選択肢）が出て、そこから答えられる**。答えるまでエージェントは待っていて、一覧には「待機中」が付く。
+端末と同じく、返信で回したエージェントが **許可（ツール実行の確認）や `AskUserQuestion` で止まったら、SAI のチャットに ⏳ のバブルと [許可] [常に許可] [拒否]（質問なら選択肢）が出て、そこから答えられる**。答えるまでエージェントは待っていて、一覧には「待機中」が付く。
 
 仕組みは `claude -p` の `--permission-prompt-tool`。SAI は返信の `claude` に自分の MCP サーバ（`server/approve-mcp.ts`。stdio、依存ゼロ）を `--mcp-config` で足し、許可が要るたびにそのツールが呼ばれる。ツールは SAI サーバに預けて（`POST /api/approvals`）答えが付くまで待ち（`GET /api/approvals/<id>?wait=1`）、画面の答え（`POST /api/approvals/<id>/answer`）をそのまま CLI に返す。
 
@@ -343,7 +343,7 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 
 - 答え待ちはサーバのメモリだけ。返信のプロセスが終われば（許可を待たずに落ちた、`claude` を kill した）その分は拒否扱いで消える。MCP 側が 90 秒取りに来なければ捨てる
 - `AskUserQuestion` は質問と選択肢がそのまま出て、全部に答えると `answers` 付きで返す（複数選択は 1 つだけ選ぶ）。`ExitPlanMode` はプランの先頭が出て、許可すれば進む
-- 許可は「その 1 回」だけ。「今後も許可」は覚えない（`--allowedTools` か `~/.claude/settings.json` で先に許しておく）
+- **[常に許可]** は端末の「今後も許可」と同じ。決定に `updatedPermissions`（`Bash(gh pr:*)` のような Claude の許可ルール。`destination: localSettings`）を付けて返すと、CLI が返信先の cwd の `.claude/settings.local.json` に書き、次のプロセスからその形は聞かれない（CLI 2.1.259 で確認）。ルールは SAI が組み立てる（`shared/approvals.ts` の `alwaysAllowRule`。CLI は候補を送ってこない）: Bash はコマンドの先頭 1 語、`gh` / `git` / `npm` のようにサブコマンドを持つ CLI は 2 語で前方一致。MCP ツールはそのツール名。Edit / Write などファイル系と `AskUserQuestion` / `ExitPlanMode` には出さない（設定に焼くには広すぎる）。ボタンにマウスを乗せると書かれるルールが見える。「常に拒否」は無い
 - 答える口は同一オリジンのみ（`isCrossOrigin`）。ここが通ると別サイトから許可が押せてしまうので外さない
 - **Claude だけ。** Codex に同等の口は無い（返信は今までどおり、承認が要るものは拒否される）
 - 外すなら `SAI_APPROVE=0`。運用者が `SAI_CLAUDE_ARGS` に自前の `--permission-prompt-tool` を入れていれば SAI は足さない。`--mcp-config` は追加なので、`~/.claude.json` や `.mcp.json` の MCP サーバはそのまま使える（`--strict-mcp-config` は付けない）

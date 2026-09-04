@@ -174,6 +174,28 @@ export interface ApprovalAnswer {
   updatedInput?: Record<string, unknown>
   /** deny の理由。エージェントに見える */
   message?: string
+  /**
+   * 画面 → サーバ。「常に許可」。サーバがルールを組み立てて updatedPermissions に変える（画面はルールを送らない）。
+   * `local` = 返信の cwd の .claude/settings.local.json に書く（端末の「今後も許可」と同じ。新しいプロセスでも聞かれない）
+   */
+  remember?: 'local'
+  /** サーバ → CLI。許可のルールを覚えさせる。CLI（--permission-prompt-tool）が自分で設定に書く */
+  updatedPermissions?: PermissionUpdate[]
+}
+
+/** Claude Code に覚えさせる許可のルール（SDK の PermissionUpdate のうち SAI が使う形） */
+export interface PermissionUpdate {
+  type: 'addRules'
+  rules: PermissionRule[]
+  behavior: 'allow'
+  /** session = そのプロセスだけ、localSettings = cwd の .claude/settings.local.json */
+  destination: 'session' | 'localSettings'
+}
+
+/** `Bash(gh pr:*)` なら { toolName: 'Bash', ruleContent: 'gh pr:*' }。ruleContent 無しはそのツール全部 */
+export interface PermissionRule {
+  toolName: string
+  ruleContent?: string
 }
 
 export interface Facets {

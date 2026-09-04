@@ -25,6 +25,7 @@ import type {
 } from '../shared/types.ts'
 import { entityId, facets, filterSessions } from './aggregate.ts'
 import { ICONS_DIR, IconStore, iconKey } from './icons.ts'
+import { alwaysAllowRule, ruleLabel } from '../shared/approvals.ts'
 import { Approvals, WAIT_MS } from './approvals.ts'
 import { BuildFreshness } from './buildFreshness.ts'
 import { META_FILE, MetaStore } from './meta.ts'
@@ -310,13 +311,21 @@ export function createApp(
     }
     const b = (body ?? {}) as Partial<ApprovalAnswer>
     if (b.behavior !== 'allow' && b.behavior !== 'deny') return error(res, 400, 'behavior は allow か deny')
+    if (b.remember !== undefined && b.remember !== 'local') return error(res, 400, 'remember は local だけ')
     const current = approvals.get(approvalId)
     if (!current) return error(res, 404, 'approval not found')
     const answer: ApprovalAnswer = b.behavior === 'allow'
       ? { behavior: 'allow', updatedInput: b.updatedInput && typeof b.updatedInput === 'object' && !Array.isArray(b.updatedInput) ? b.updatedInput : current.input }
       : { behavior: 'deny', message: typeof b.message === 'string' && b.message.trim() ? b.message.trim() : 'SAI の画面で拒否された' }
+    if (answer.behavior === 'allow' && b.remember === 'local') {
+      // 「常に許可」。ルールは画面から受け取らず、預かっているツール名と入力からサーバが組み立てる。
+      // CLI がそれを cwd の .claude/settings.local.json に書く（端末の「今後も許可」と同じ）
+      const rule = alwaysAllowRule(current.tool_name, current.input)
+      if (!rule) return error(res, 400, 'このツールには「常に許可」は無い')
+      answer.updatedPermissions = [{ type: 'addRules', rules: [rule], behavior: 'allow', destination: 'localSettings' }]
+    }
     if (!approvals.answer(approvalId, answer)) return error(res, 409, 'already answered')
-    return json(res, { ok: true, approval_id: approvalId, behavior: answer.behavior })
+    return json(res, { ok: true, approval_id: approvalId, behavior: answer.behavior, remembered: answer.updatedPermissions ? ruleLabel(answer.updatedPermissions[0]!.rules[0]!) : undefined })
   }
 
   /**

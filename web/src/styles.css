@@ -275,6 +275,7 @@
   .group.approval .actions { display: flex; gap: 8px; margin-top: 8px; }
   .group.approval .actions button { font: inherit; font-size: 13px; padding: 4px 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; }
   .group.approval .actions button.allow { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .group.approval .actions button.always { border-color: var(--accent); color: var(--accent); }
   .group.approval .actions button:disabled { opacity: .5; cursor: default; }
   .group.approval .questions { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
   .group.approval .question .q { margin-bottom: 4px; }

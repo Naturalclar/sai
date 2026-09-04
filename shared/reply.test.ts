@@ -53,20 +53,20 @@ function summary(over: Partial<SessionSummary>): SessionSummary {
   }
 }
 
-test('sessionReplyTargets: 一覧の順のまま。表示名・アイコンがあればそれ、無ければ一覧のタイトル', () => {
+test('sessionReplyTargets: 一覧の順のまま。表示名・アイコン画像があればそれ、無ければ一覧のタイトル', () => {
   const targets = sessionReplyTargets([
-    summary({ id: 's1@sai', meta: { name: 'CI 整備', icon: '🛠️' } }),
+    summary({ id: 's1@sai', meta: { name: 'CI 整備' }, icon: '/api/sessions/s1%40sai/icon?v=1' }),
     summary({ id: 's2@other', repo: 'other', branch: 'feat', title: 'other の指示' }),
-    summary({ id: 's3@sai', meta: { icon: '🧪' } }),
+    summary({ id: 's3@sai', icon: '/api/sessions/s3%40sai/icon?v=2' }),
     summary({ id: 'synth-x@sai', session_source: 'synth' }),
     summary({ id: 's4@sai', meta: { name: 'あ'.repeat(70) } }),
   ])
   assert.deepEqual(
     targets.map((t) => [t.id, t.repo, t.branch, t.title, t.icon, t.blocked !== '']),
     [
-      ['s1@sai', 'sai', 'main', 'CI 整備', '🛠️', false],
+      ['s1@sai', 'sai', 'main', 'CI 整備', '/api/sessions/s1%40sai/icon?v=1', false],
       ['s2@other', 'other', 'feat', 'other の指示', undefined, false],
-      ['s3@sai', 'sai', 'main', '一覧のタイトル', '🧪', false],
+      ['s3@sai', 'sai', 'main', '一覧のタイトル', '/api/sessions/s3%40sai/icon?v=2', false],
       ['synth-x@sai', 'sai', 'main', '一覧のタイトル', undefined, true],
       ['s4@sai', 'sai', 'main', `${'あ'.repeat(60)}…`, undefined, false],
     ],
@@ -75,7 +75,7 @@ test('sessionReplyTargets: 一覧の順のまま。表示名・アイコンが�
 })
 
 test('mergeReplyTargets: 一覧が先、フィードにしか無いものが後ろ。同じ id は一覧側が勝つ', () => {
-  const list = sessionReplyTargets([summary({ id: 's1@sai', meta: { name: '名前', icon: '🛠️' } }), summary({ id: 's2@sai' })])
+  const list = sessionReplyTargets([summary({ id: 's1@sai', meta: { name: '名前' }, icon: '/i/1' }), summary({ id: 's2@sai' })])
   const feed = feedReplyTargets([
     row({ ts: '2026-09-02T10:00:00+09:00', session: 's3', user_text: 'フィードだけ' }),
     row({ ts: '2026-09-02T10:05:00+09:00', session: 's1', user_text: 'フィード側の指示' }),
@@ -84,7 +84,7 @@ test('mergeReplyTargets: 一覧が先、フィードにしか無いものが後�
   assert.deepEqual(
     merged.map((t) => [t.id, t.title, t.icon]),
     [
-      ['s1@sai', '名前', '🛠️'],
+      ['s1@sai', '名前', '/i/1'],
       ['s2@sai', '一覧のタイトル', undefined],
       ['s3@sai', 'フィードだけ', undefined],
     ],

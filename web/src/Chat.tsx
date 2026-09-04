@@ -20,8 +20,8 @@ interface Props {
 export function Chat({ rows, showChannel, sessions = NO_SESSIONS, trailer }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
-  // エンティティID → meta。バブルの見出しは行しか持っていないので、entityId で引く
-  const metaById = useMemo(() => new Map(sessions.filter((s) => s.meta).map((s) => [s.id, s.meta!] as const)), [sessions])
+  // エンティティID → セッション（表示名・アイコン画像）。バブルの見出しは行しか持っていないので、entityId で引く
+  const byId = useMemo(() => new Map(sessions.map((s) => [s.id, s] as const)), [sessions])
 
   // 最下部を見ていたときだけ、更新後も最下部に追従する
   useEffect(() => {
@@ -43,10 +43,10 @@ export function Chat({ rows, showChannel, sessions = NO_SESSIONS, trailer }: Pro
           <div className="day"><span>{day.label}</span></div>
           {day.groups.map((g) => {
             const id = entityId(g.session, g.repo, g.firstTs)
-            const who = speakerLabel(g.speaker, metaById.get(id))
+            const who = speakerLabel(g.speaker, byId.get(id))
             return (
               <div className="group" key={`${g.speaker}:${g.session}:${g.firstTs}`}>
-                <div className={`avatar ${g.speaker}`}>{who.mark}</div>
+                <div className={`avatar ${g.speaker}`}>{who.icon ? <img src={who.icon} alt="" /> : who.mark}</div>
                 <div>
                   <div className="gh">
                     <span className="name">{who.name}</span>

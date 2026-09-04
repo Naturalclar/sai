@@ -1,5 +1,5 @@
-// セッションごとの表示名・アイコン。JSONL（記録側）は触らず、同じディレクトリの session-meta.json に別で持つ。
-// 形は { "<エンティティID>": { "name": "...", "icon": "🧪" }, ... }。(mtime, size) で覚えて変わらなければ再パースしない。
+// セッションごとの表示名・アーカイブ。JSONL（記録側）は触らず、同じディレクトリの session-meta.json に別で持つ。
+// 形は { "<エンティティID>": { "name": "...", "archived_at": "..." }, ... }。アイコン画像はファイルで別（icons.ts）。(mtime, size) で覚えて変わらなければ再パースしない。
 import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { isEmptyMeta, normalizeMeta } from '../shared/meta.ts'

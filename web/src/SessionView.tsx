@@ -51,7 +51,7 @@ export function SessionView({ id, onStatus, onOpenSidebar }: { id: string } & Pa
           </span>
           {/* 合成 ID は集計の切れ方で付け先がずれるのでアーカイブできない */}
           {s.session_source !== 'synth' && <ArchiveButton key={`${s.id}:${s.archived ? 1 : 0}`} id={s.id} archived={Boolean(s.archived)} />}
-          <MetaEditor key={s.id} id={s.id} meta={s.meta} />
+          <MetaEditor key={s.id} id={s.id} meta={s.meta} icon={s.icon} />
           {s.title_full && <div className="meta wide">{s.title_full}</div>}
         </div>
       )}

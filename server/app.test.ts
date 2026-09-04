@@ -5,13 +5,14 @@ import type { Server } from 'node:http'
 import { mkdtemp, rm, writeFile, appendFile, mkdir, stat, utimes, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { Replying, ReplyResponse, SessionsResponse, SessionDetailResponse, SessionMetaResponse, FeedResponse } from '../shared/types.ts'
+import type { Replying, ReplyResponse, SessionsResponse, SessionDetailResponse, SessionIconResponse, SessionMetaResponse, FeedResponse } from '../shared/types.ts'
 import { createApp, parseDays, revWith, sessionIdFrom } from './app.ts'
 import { FeedStore } from './store.ts'
 import { localDate } from './aggregate.ts'
 import { replyCommand, splitArgs } from './runner.ts'
 import type { ReplyCommand, Runner } from './runner.ts'
 import { row } from './aggregate.test.ts'
+import { JPEG, PNG } from './icons.test.ts'
 
 let dir: string
 let feedDir: string
@@ -326,18 +327,18 @@ const putMeta = (id: string, body: unknown, headers: Record<string, string> = {}
     body: typeof body === 'string' ? body : JSON.stringify(body),
   })
 
-test('PUT meta: 表示名とアイコンが一覧と詳細に載り、rev が変わり、ファイルに残る', async () => {
+test('PUT meta: 表示名が一覧と詳細に載り、rev が変わり、ファイルに残る', async () => {
   const initial = (await (await get('/api/sessions?days=7')).json()) as SessionsResponse
   assert.equal(initial.sessions.find((s) => s.id === 'C1@r')!.meta, undefined)
 
-  let res = await putMeta('C1@r', { name: '  README  直し\n', icon: ' 🧪 ' })
+  let res = await putMeta('C1@r', { name: '  README  直し\n', icon: '🧪' })
   assert.equal(res.status, 200)
   let data = (await res.json()) as SessionMetaResponse
-  assert.deepEqual(data, { id: 'C1@r', meta: { name: 'README 直し', icon: '🧪' } }, '空白は詰め、前後は落とす')
+  assert.deepEqual(data, { id: 'C1@r', meta: { name: 'README 直し' } }, '空白は詰め、前後は落とす。昔の絵文字の icon は捨てる')
 
   const updated = (await (await get('/api/sessions?days=7')).json()) as SessionsResponse
   assert.notEqual(updated.rev, initial.rev, '名前を付けただけでも rev が変わる（画面のポーリングが拾う）')
-  assert.deepEqual(updated.sessions.find((s) => s.id === 'C1@r')!.meta, { name: 'README 直し', icon: '🧪' })
+  assert.deepEqual(updated.sessions.find((s) => s.id === 'C1@r')!.meta, { name: 'README 直し' })
   assert.equal(updated.sessions.find((s) => s.id === 'X1@r')!.meta, undefined, '他のセッションには付かない')
   assert.equal(
     updated.sessions.find((s) => s.id === 'C1@r')!.title,
@@ -345,19 +346,19 @@ test('PUT meta: 表示名とアイコンが一覧と詳細に載り、rev が変
     'title は元のまま（画面側で出し分ける）',
   )
   const detail = (await (await get('/api/sessions/C1%40r')).json()) as SessionDetailResponse
-  assert.deepEqual(detail.session.meta, { name: 'README 直し', icon: '🧪' })
+  assert.deepEqual(detail.session.meta, { name: 'README 直し' })
   res = await get('/api/sessions/C1%40r/meta')
-  assert.deepEqual(await res.json(), { id: 'C1@r', meta: { name: 'README 直し', icon: '🧪' } })
+  assert.deepEqual(await res.json(), { id: 'C1@r', meta: { name: 'README 直し' } })
 
   const file = JSON.parse(await readFile(join(feedDir, 'session-meta.json'), 'utf-8')) as Record<string, unknown>
-  assert.deepEqual(file, { 'C1@r': { name: 'README 直し', icon: '🧪' } })
+  assert.deepEqual(file, { 'C1@r': { name: 'README 直し' } })
 
-  // 省略したキーは据え置き。名前だけ消す → icon だけ残る。両方消す → エントリごと消える
-  res = await putMeta('C1@r', { icon: '🧪' })
-  assert.deepEqual(((await res.json()) as SessionMetaResponse).meta, { name: 'README 直し', icon: '🧪' }, 'name は省略なので残る')
+  // 省略したキーは据え置き。名前を消す → エントリごと消える
+  res = await putMeta('C1@r', { archived_at: '2000-01-01T00:00:00Z' })
+  assert.deepEqual(((await res.json()) as SessionMetaResponse).meta, { name: 'README 直し', archived_at: '2000-01-01T00:00:00.000Z' }, 'name は省略なので残る')
+  res = await putMeta('C1@r', { archived_at: '' })
+  assert.deepEqual(((await res.json()) as SessionMetaResponse).meta, { name: 'README 直し' })
   res = await putMeta('C1@r', { name: '' })
-  assert.deepEqual(((await res.json()) as SessionMetaResponse).meta, { icon: '🧪' })
-  res = await putMeta('C1@r', { name: '', icon: '' })
   assert.deepEqual(((await res.json()) as SessionMetaResponse).meta, {})
   const gone = (await (await get('/api/sessions?days=7')).json()) as SessionsResponse
   assert.equal(gone.sessions.find((s) => s.id === 'C1@r')!.meta, undefined)
@@ -371,8 +372,6 @@ test('PUT meta: 検査', async () => {
     assert.equal(res.status, 400)
     assert.match(((await res.json()) as { error: string }).error, re)
   }
-  await bad({ icon: '🧪🧪' }, /絵文字1つ/)
-  await bad({ icon: 'ab' }, /絵文字1つ/)
   await bad({ name: 'x'.repeat(101) }, /100 文字/)
   await bad({ name: 1 }, /文字列/)
   await bad('not json', /JSON|Unexpected|token/i)
@@ -380,10 +379,6 @@ test('PUT meta: 検査', async () => {
   assert.equal((await putMeta('C1@r', { name: 'x'.repeat(5 * 1024) })).status, 400, '大きすぎる body')
   assert.equal((await putMeta('nope@r', { name: 'x' })).status, 404, '窓の中に無いセッションには付けない')
   assert.equal((await putMeta('', { name: 'x' })).status, 400, 'id が空')
-  // ZWJ で繋いだ絵文字は1文字として通る
-  const res = await putMeta('C1@r', { icon: '👨‍👩‍👧' })
-  assert.equal(res.status, 200)
-  await putMeta('C1@r', { name: '', icon: '' }) // PUT は重ねる意味なので {} では消えない
 })
 
 test('PUT meta: 別オリジンは 403、メソッド違いは 405', async () => {
@@ -391,10 +386,90 @@ test('PUT meta: 別オリジンは 403、メソッド違いは 405', async () =>
   assert.equal((await putMeta('C1@r', { name: 'x' }, { Origin: 'http://evil.local:8787' })).status, 403)
   assert.equal((await putMeta('C1@r', { name: 'x' }, { 'Sec-Fetch-Site': 'cross-site' })).status, 403)
   assert.equal((await putMeta('C1@r', { name: 'x' }, { Origin: `http://${host}`, 'Sec-Fetch-Site': 'same-origin' })).status, 200)
-  await putMeta('C1@r', { name: '', icon: '' }) // PUT は重ねる意味なので {} では消えない
+  await putMeta('C1@r', { name: '' }) // PUT は重ねる意味なので {} では消えない
   assert.equal((await fetch(`${base}/api/sessions/C1%40r/meta`, { method: 'POST' })).status, 405)
   assert.equal((await fetch(`${base}/api/sessions/C1%40r/reply`, { method: 'PUT' })).status, 405)
   assert.equal((await fetch(`${base}/api/sessions`, { method: 'PUT' })).status, 405)
+})
+
+const putIcon = (id: string, body: string | Uint8Array, headers: Record<string, string> = {}) =>
+  fetch(`${base}/api/sessions/${encodeURIComponent(id)}/icon`, { method: 'PUT', headers, body })
+const deleteIcon = (id: string, headers: Record<string, string> = {}) =>
+  fetch(`${base}/api/sessions/${encodeURIComponent(id)}/icon`, { method: 'DELETE', headers })
+
+test('PUT icon: 画像を置くと一覧・詳細に URL が載り、GET で返り、rev が変わり、DELETE で消える', async () => {
+  const initial = (await (await get('/api/sessions?days=7')).json()) as SessionsResponse
+  assert.equal(initial.sessions.find((s) => s.id === 'C1@r')!.icon, undefined)
+  assert.equal((await get('/api/sessions/C1%40r/icon')).status, 404, '無ければ 404')
+
+  let res = await putIcon('C1@r', PNG)
+  assert.equal(res.status, 200)
+  const put = (await res.json()) as SessionIconResponse
+  assert.equal(put.id, 'C1@r')
+  assert.match(put.icon!, /^\/api\/sessions\/C1%40r\/icon\?v=[\d.]+$/)
+
+  const updated = (await (await get('/api/sessions?days=7')).json()) as SessionsResponse
+  assert.notEqual(updated.rev, initial.rev, '画像を置いただけでも rev が変わる')
+  assert.equal(updated.sessions.find((s) => s.id === 'C1@r')!.icon, put.icon)
+  assert.equal(updated.sessions.find((s) => s.id === 'C1@r')!.meta, undefined, '画像は meta には入らない')
+  assert.equal(updated.sessions.find((s) => s.id === 'X1@r')!.icon, undefined, '他のセッションには付かない')
+  const detail = (await (await get('/api/sessions/C1%40r')).json()) as SessionDetailResponse
+  assert.equal(detail.session.icon, put.icon)
+  assert.equal(await stat(join(feedDir, 'session-icons')).then((s) => s.isDirectory()), true)
+  assert.deepEqual(JSON.parse(await readFile(join(feedDir, 'session-meta.json'), 'utf-8').catch(() => '{}')), {}, 'session-meta.json には書かない')
+
+  res = await get(put.icon!)
+  assert.equal(res.status, 200)
+  assert.equal(res.headers.get('content-type'), 'image/png')
+  assert.equal(res.headers.get('cache-control'), 'private, max-age=31536000, immutable', 'v が合っていれば長くキャッシュ')
+  assert.deepEqual(new Uint8Array(await res.arrayBuffer()), PNG)
+  res = await get('/api/sessions/C1%40r/icon')
+  assert.equal(res.headers.get('cache-control'), 'no-store', 'v 無しはキャッシュしない')
+  assert.equal((await fetch(`${base}${put.icon}`, { method: 'HEAD' })).status, 200)
+
+  // 差し替え: 種類が変わっても同じ URL の形で、v が変わる
+  await new Promise((r) => setTimeout(r, 15))
+  res = await putIcon('C1@r', JPEG)
+  const replaced = (await res.json()) as SessionIconResponse
+  assert.notEqual(replaced.icon, put.icon)
+  res = await get(replaced.icon!)
+  assert.equal(res.headers.get('content-type'), 'image/jpeg')
+  const replacedList = (await (await get('/api/sessions?days=7')).json()) as SessionsResponse
+  assert.notEqual(replacedList.rev, updated.rev)
+
+  res = await deleteIcon('C1@r')
+  assert.equal(res.status, 200)
+  assert.deepEqual(await res.json(), { id: 'C1@r', icon: null })
+  assert.equal((await get('/api/sessions/C1%40r/icon')).status, 404)
+  const gone = (await (await get('/api/sessions?days=7')).json()) as SessionsResponse
+  assert.equal(gone.sessions.find((s) => s.id === 'C1@r')!.icon, undefined)
+  assert.equal((await deleteIcon('C1@r')).status, 200, '無くても消せる')
+})
+
+test('PUT icon: 検査。画像でない・空・大きすぎる・窓に無いセッション', async () => {
+  const bad = async (id: string, body: string | Uint8Array, status: number, re: RegExp) => {
+    const res = await putIcon(id, body)
+    assert.equal(res.status, status)
+    assert.match(((await res.json()) as { error: string }).error, re)
+  }
+  await bad('C1@r', new Uint8Array([1, 2, 3, 4, 5]), 400, /画像ファイル/)
+  await bad('C1@r', '<svg xmlns="http://www.w3.org/2000/svg"></svg>', 400, /画像ファイル/)
+  await bad('C1@r', new Uint8Array(0), 400, /空/)
+  await bad('C1@r', new Uint8Array(1024 * 1024 + 1), 413, /1MB/)
+  await bad('nope@r', PNG, 404, /not found/)
+  assert.equal((await putIcon('', PNG)).status, 400, 'id が空')
+  assert.equal((await get('/api/sessions/C1%40r/icon')).status, 404, '何も置かれていない')
+})
+
+test('PUT/DELETE icon: 別オリジンは 403、メソッド違いは 405', async () => {
+  const host = base.replace('http://', '')
+  assert.equal((await putIcon('C1@r', PNG, { Origin: 'http://evil.local:8787' })).status, 403)
+  assert.equal((await putIcon('C1@r', PNG, { 'Sec-Fetch-Site': 'cross-site' })).status, 403)
+  assert.equal((await deleteIcon('C1@r', { Origin: 'http://evil.local:8787' })).status, 403)
+  assert.equal((await putIcon('C1@r', PNG, { Origin: `http://${host}`, 'Sec-Fetch-Site': 'same-origin' })).status, 200)
+  await deleteIcon('C1@r')
+  assert.equal((await fetch(`${base}/api/sessions/C1%40r/icon`, { method: 'POST' })).status, 405)
+  assert.equal((await fetch(`${base}/api/sessions/C1%40r/meta`, { method: 'DELETE' })).status, 405, 'DELETE はアイコンだけ')
 })
 
 test('PUT meta: archived_at でアーカイブ。一覧とフィードから消え、archived=1 で出て、新しい行が届くと自動で戻る', async () => {

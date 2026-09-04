@@ -1,6 +1,7 @@
 *.jsonl
 .agent-feed/
 sessions/
+session-icons/
 
 __pycache__/
 *.pyc

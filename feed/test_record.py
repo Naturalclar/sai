@@ -215,6 +215,36 @@ class RecordTest(unittest.TestCase):
         ])
         self.assertEqual(len(row["user_text"]), 2000)
 
+    def test_task_notification_turn_has_no_user_text(self):
+        notice = "<task-notification>\n<task-id>a7e44ec6</task-id>\n<output-file>/tmp/x</output-file>\n</task-notification>"
+        # 新しい版: promptSource: system が付く
+        row = self._claude_row([
+            {"type": "user", "promptSource": "typed", "message": {"role": "user", "content": "46に対応して"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "thinking", "thinking": "前の思考"}, {"type": "text", "text": "裏で回します"}]}},
+            {"type": "user", "promptSource": "system", "origin": {"kind": "task-notification"}, "message": {"role": "user", "content": notice}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "thinking", "thinking": "終わったので報告する"}, {"type": "text", "text": "終わりました"}]}},
+        ])
+        self.assertEqual(row["user_text"], "", "通知で始まったターンに人の入力は無い。手前の入力を拾って二重に出さない")
+        self.assertEqual(row["text"], "終わりました")
+        self.assertEqual(row["thinking"], "終わったので報告する", "思考も通知のターンの分だけ")
+        self.assertEqual(row["first_user_text"], "46に対応して")
+        # 古い版: promptSource が無い。本文の接頭辞で見る
+        row = self._claude_row([
+            {"type": "user", "message": {"role": "user", "content": "やって"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "裏で回します"}]}},
+            {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": notice}]}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "終わりました"}]}},
+        ])
+        self.assertEqual(row["user_text"], "")
+        # 通知が 1 行目でもタイトルにはしない
+        row = self._claude_row([
+            {"type": "user", "promptSource": "system", "message": {"role": "user", "content": notice}},
+            {"type": "user", "message": {"role": "user", "content": "最初の依頼"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "ok"}]}},
+        ])
+        self.assertEqual(row["first_user_text"], "最初の依頼")
+        self.assertEqual(row["user_text"], "最初の依頼")
+
     def test_thinking_joins_this_turns_blocks_and_skips_signature_only(self):
         think = lambda t: {"type": "thinking", "thinking": t, "signature": "sig"}
         row = self._claude_row([
@@ -352,6 +382,16 @@ class RecordTest(unittest.TestCase):
         rows = read_rows(self.feed_dir)
         self.assertEqual([r["event"] for r in rows], ["UserPromptSubmit", "PermissionRequest", "UserPromptSubmit"])
         self.assertEqual(rows[2]["user_text"], "やめて")
+
+    def test_user_prompt_submit_with_task_notification_is_not_an_input(self):
+        notice = "<task-notification>\n<task-id>b739ne05a</task-id>\n</task-notification>"
+        self._hook({"hook_event_name": "UserPromptSubmit", "prompt": notice})
+        self.assertEqual(read_rows(self.feed_dir), [], "通知は人の入力ではないので、待ってもいないなら書かない")
+        self._hook({"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": {"command": "ls"}})
+        self._hook({"hook_event_name": "UserPromptSubmit", "prompt": notice})
+        rows = read_rows(self.feed_dir)
+        self.assertEqual([r["event"] for r in rows], ["PermissionRequest", "UserPromptSubmit"])
+        self.assertEqual(rows[1]["user_text"], "", "待ちの直後なら解消の合図としてだけ書く")
 
     def test_user_prompt_submit_without_prompt_only_resolves_a_wait(self):
         self._hook({"hook_event_name": "UserPromptSubmit", "prompt": ""})

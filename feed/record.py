@@ -192,6 +192,7 @@ _NOISE_PREFIXES = (
     "<command-name>",
     "<command-message>",
     "<local-command-stdout>",
+    "<local-command-caveat>",
     "<user-prompt-submit-hook>",
     "<system-reminder>",
     "Caveat: The messages below",
@@ -205,6 +206,22 @@ _NOISE_PREFIXES = (
 def _is_noise(text: str) -> bool:
     stripped = text.strip()
     return not stripped or stripped.startswith(_NOISE_PREFIXES)
+
+
+# Claude Code が人の代わりに差し込む「入力」。バックグラウンドのタスク（run_in_background の Bash や
+# サブエージェント）が終わったときの通知など。新しいターンの起点にはなるが、人が打ったものではない
+_SYSTEM_PROMPT_PREFIXES = ("<task-notification>",)
+
+
+def _is_system_prompt(entry: dict, text: str) -> bool:
+    """人ではなく Claude Code が差し込んだ入力の行か。
+
+    新しい版の transcript は `promptSource: "system"`（`origin.kind: task-notification`）が付く。
+    古い版には無いので本文の接頭辞でも見る。人の入力に promptSource: system は付かない。
+    """
+    if entry.get("promptSource") == "system":
+        return True
+    return text.lstrip().startswith(_SYSTEM_PROMPT_PREFIXES)
 
 
 def _iter_jsonl(path: Path, limit: int | None = None):
@@ -285,6 +302,10 @@ def last_user_text(path: Path) -> str:
     user 行）と isMeta の行は飛ばす。`<system-reminder>` や `[Request interrupted` の
     ような差し込みも飛ばして、その手前の入力を探す。スラッシュコマンドは `/foo 引数`
     の形に戻す。画像だけの入力（text ブロックが無い）は空文字で止まる。
+
+    Claude Code が差し込んだ入力（`<task-notification>`、promptSource: system）に当たったら
+    空文字で止まる。それは新しいターンの起点で、そのターンに人の入力は無い。飛ばして手前の
+    入力を探すと、前のターンの入力が 2 回目の Stop にも載って画面で二重に出る。
     """
     entries = list(_iter_jsonl(path))
     for entry in reversed(entries):
@@ -297,6 +318,8 @@ def last_user_text(path: Path) -> str:
         if _is_tool_result_only(content):
             continue
         text = _blocks_to_text(content).strip()
+        if _is_system_prompt(entry, text):
+            return ""
         command = _slash_command(text)
         if command:
             return command
@@ -317,6 +340,8 @@ def _is_prompt_row(entry: dict) -> bool:
     if _is_tool_result_only(content):
         return False
     text = _blocks_to_text(content).strip()
+    if _is_system_prompt(entry, text):
+        return True  # 人の入力ではないが、ターンの起点ではある
     if text and _is_noise(text) and not _slash_command(text):
         return False
     return True
@@ -384,7 +409,7 @@ def rollout_last_turn_reasoning(path: Path) -> str:
 def first_user_text(path: Path, limit: int = 400) -> str:
     for entry in _iter_jsonl(path, limit=limit):
         role, text = _role_and_text(entry)
-        if role in ("user", "user_message") and not _is_noise(text):
+        if role in ("user", "user_message") and not _is_noise(text) and not _is_system_prompt(entry, text):
             return text.strip()
     return ""
 
@@ -645,8 +670,10 @@ def build_row(payload: dict, now: datetime, directory: Path) -> dict | None:
         if event == "UserPromptSubmit":
             # 入力した瞬間の行。本文は無く、打った文を user_text にそのまま載せる
             # （画面は Stop を待たずに自分側のバブルを出す）。transcript にはまだ無いので payload から
+            # バックグラウンドの通知（<task-notification>）でも鳴るが、それは人の入力ではないので載せない
+            # （user_text が空の行の扱いに落ちる: 直前が待ちなら合図としてだけ書く、それ以外は書かない）
             prompt = payload.get("prompt")
-            if isinstance(prompt, str):
+            if isinstance(prompt, str) and not _is_system_prompt(payload, prompt):
                 user_text = prompt.strip()
             if not first_user:
                 first_user = user_text

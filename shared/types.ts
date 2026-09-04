@@ -59,8 +59,13 @@ export interface SessionSummary {
   sources: SessionSource[]
   /** 最後のターン完了の text の1行目（待ちの行は見ない） */
   last_text: string
-  /** ブラウザから付けた表示名・アイコン・アーカイブ。無ければ undefined（title を使う） */
+  /** ブラウザから付けた表示名・アーカイブ。無ければ undefined（title を使う） */
   meta?: SessionMeta
+  /**
+   * ブラウザから置いたアイコン画像の URL（`/api/sessions/<id>/icon?v=<mtime>`）。無ければ省略。
+   * 画像は ~/.agent-feed/session-icons/ にあり、サーバが応答時にファイルの有無を見て載せる
+   */
+  icon?: string
   /**
    * アーカイブ済みか。サーバが応答時に `meta.archived_at >= end` で決める（アーカイブ後に行が増えると
    * end が追い越すので、メタを書き換えずに自動で戻る）。一覧・フィードの既定では出ない。false なら省略
@@ -68,12 +73,10 @@ export interface SessionSummary {
   archived?: boolean
 }
 
-/** セッションに人が付けるもの。~/.agent-feed/session-meta.json に JSONL とは別で持つ */
+/** セッションに人が付けるもの。~/.agent-feed/session-meta.json に JSONL とは別で持つ（アイコン画像はファイルで別、SessionSummary.icon） */
 export interface SessionMeta {
   /** 表示名。一覧とチャット見出しで title の代わりに出し、チャットのバブルの発言者名にもなる */
   name?: string
-  /** 絵文字1つ */
-  icon?: string
   /** アーカイブした時刻（ISO）。これより新しい行が届いていなければアーカイブ済み */
   archived_at?: string
 }
@@ -85,6 +88,15 @@ export interface SessionMeta {
 export interface SessionMetaResponse {
   id: string
   meta: SessionMeta
+}
+
+/**
+ * PUT/DELETE /api/sessions/<id>/icon。PUT の body は画像そのもの（PNG / JPEG / GIF / WebP、1MB まで）。
+ * icon は置いた画像の URL（SessionSummary.icon と同じ形）、消したら null
+ */
+export interface SessionIconResponse {
+  id: string
+  icon: string | null
 }
 
 /**

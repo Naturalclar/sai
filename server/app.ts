@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { readFile, stat } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { extname, join, resolve, sep } from 'node:path'
+import { ICON_MAX_BYTES, iconUrl } from '../shared/icon.ts'
 import { mergeMeta } from '../shared/meta.ts'
 import { replyBlockedReason } from '../shared/reply.ts'
 import type {
@@ -11,11 +12,13 @@ import type {
   ReplyResponse,
   ReplyingMap,
   SessionDetailResponse,
+  SessionIconResponse,
   SessionMetaResponse,
   SessionsResponse,
   SessionSummary,
 } from '../shared/types.ts'
 import { entityId, facets, filterSessions } from './aggregate.ts'
+import { ICONS_DIR, IconStore, iconKey } from './icons.ts'
 import { META_FILE, MetaStore } from './meta.ts'
 import { ProcessRunner, replyCommand } from './runner.ts'
 import type { Runner } from './runner.ts'
@@ -25,17 +28,18 @@ export const MAX_DAYS = 366
 /** 返信 body の上限。指示文なので十分 */
 export const MAX_REPLY_BYTES = 64 * 1024
 
-/** 表示名・アイコンの body の上限。名前と絵文字1つなので十分 */
+/** 表示名の body の上限。名前だけなので十分 */
 export const MAX_META_BYTES = 4 * 1024
 
 const SESSIONS_PREFIX = '/api/sessions/'
 const REPLY_SUFFIX = '/reply'
 const META_SUFFIX = '/meta'
+const ICON_SUFFIX = '/icon'
 
 /**
  * `/api/sessions/<id>[<suffix>]` から id を取り出す。空、`/` を含む、%-エンコードが壊れている
  * （decodeURIComponent の URIError）は null で、呼び出し側は 400 bad session id にする。
- * 詳細 / reply / meta の 3 経路が同じ判定を使い、「id がおかしい」の扱いを揃える。
+ * 詳細 / reply / meta / icon の 4 経路が同じ判定を使い、「id がおかしい」の扱いを揃える。
  * suffix 無し（詳細）のときだけ末尾の `/` を許す（`/api/sessions/<id>/`）
  */
 export function sessionIdFrom(path: string, suffix = ''): string | null {
@@ -63,7 +67,7 @@ export function isCrossOrigin(req: IncomingMessage): boolean {
   return false
 }
 
-async function readJson(req: IncomingMessage, limit: number): Promise<unknown> {
+async function readBody(req: IncomingMessage, limit: number): Promise<Buffer> {
   const chunks: Buffer[] = []
   let size = 0
   for await (const chunk of req) {
@@ -72,7 +76,11 @@ async function readJson(req: IncomingMessage, limit: number): Promise<unknown> {
     if (size > limit) throw new Error('body too large')
     chunks.push(buf)
   }
-  return JSON.parse(Buffer.concat(chunks).toString('utf-8') || 'null')
+  return Buffer.concat(chunks)
+}
+
+async function readJson(req: IncomingMessage, limit: number): Promise<unknown> {
+  return JSON.parse((await readBody(req, limit)).toString('utf-8') || 'null')
 }
 
 const MIME: Record<string, string> = {
@@ -116,23 +124,30 @@ export function createApp(store: FeedStore, distDir: string, runner?: Runner): H
   const distRoot = resolve(distDir)
   const run: Runner = runner ?? new ProcessRunner(join(store.directory, 'reply.log'))
   const metaStore = new MetaStore(join(store.directory, META_FILE))
+  const iconStore = new IconStore(join(store.directory, ICONS_DIR))
 
   /**
-   * 集計済みのセッションにメタ（表示名・アイコン・アーカイブ）を載せる。store のキャッシュ配列は触らず新しい配列を返す。
-   * rev にメタファイルの状態も混ぜるので、名前を付けた・アーカイブしただけでも画面のポーリングが拾う。
+   * 集計済みのセッションにメタ（表示名・アーカイブ）とアイコン画像の URL を載せる。store のキャッシュ配列は触らず新しい配列を返す。
+   * rev にメタファイルとアイコンの状態も混ぜるので、名前を付けた・画像を差し替えた・アーカイブしただけでも画面のポーリングが拾う。
    * アーカイブ済みかは `archived_at >= end` で決める（集計 aggregate.ts は JSONL だけから作る、を守る）。
    * アーカイブ後に行が増えると end が archived_at を追い越すので、メタを書き換えずに自動で戻る
    */
   const sessionsWithMeta = async (days: number): Promise<{ rev: string; sessions: SessionSummary[] }> => {
-    const [{ rev, sessions }, meta] = await Promise.all([store.sessions(days), metaStore.all()])
-    if (!meta.rev) return { rev, sessions }
+    const [{ rev, sessions }, meta, icons] = await Promise.all([store.sessions(days), metaStore.all(), iconStore.all()])
+    if (!meta.rev && !icons.rev) return { rev, sessions }
     return {
-      rev: `${rev}-${meta.rev}`,
+      rev: `${rev}-${meta.rev}-${icons.rev}`,
       sessions: sessions.map((s) => {
         const m = meta.entries[s.id]
-        if (!m) return s
-        const archived = !!m.archived_at && Date.parse(m.archived_at) >= Date.parse(s.end)
-        return archived ? { ...s, meta: m, archived: true } : { ...s, meta: m }
+        const icon = icons.entries.get(iconKey(s.id))
+        if (!m && !icon) return s
+        const out: SessionSummary = { ...s }
+        if (m) {
+          out.meta = m
+          if (!!m.archived_at && Date.parse(m.archived_at) >= Date.parse(s.end)) out.archived = true
+        }
+        if (icon) out.icon = iconUrl(s.id, icon.version)
+        return out
       }),
     }
   }
@@ -227,6 +242,52 @@ export function createApp(store: FeedStore, distDir: string, runner?: Runner): H
     return json(res, payload)
   }
 
+  /** GET /api/sessions/<id>/icon。?v= がいまのファイルと同じなら長くキャッシュさせる（差し替えれば URL が変わる） */
+  const getIcon = async (req: IncomingMessage, res: ServerResponse, id: string, version: string | null) => {
+    const icon = await iconStore.get(id)
+    if (!icon) return error(res, 404, 'icon not found')
+    let body: Buffer
+    try {
+      body = await readFile(icon.path)
+    } catch {
+      return error(res, 404, 'icon not found')
+    }
+    res.writeHead(200, {
+      'Content-Type': icon.mime,
+      'Content-Length': body.length,
+      'Cache-Control': version === icon.version ? 'private, max-age=31536000, immutable' : 'no-store',
+    })
+    res.end(req.method === 'HEAD' ? undefined : body)
+  }
+
+  /**
+   * PUT /api/sessions/<id>/icon。body は画像そのもの。中身で種類を見て、画像でなければ 400。
+   * DELETE で消す。どちらも別オリジンは 403、窓の中に無いセッションは 404（表示名と同じ）
+   */
+  const putIcon = async (req: IncomingMessage, res: ServerResponse, id: string, days: number) => {
+    if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
+    let bytes: Buffer
+    try {
+      bytes = await readBody(req, ICON_MAX_BYTES)
+    } catch (err) {
+      const big = err instanceof Error && err.message === 'body too large'
+      return error(res, big ? 413 : 400, big ? `画像は ${ICON_MAX_BYTES / 1024 / 1024}MB までです` : (err instanceof Error ? err.message : 'bad body'))
+    }
+    if (bytes.length === 0) return error(res, 400, '画像が空です')
+    const { sessions } = await store.sessions(days)
+    if (!sessions.some((s) => s.id === id)) return error(res, 404, 'session not found in window')
+    const { icon, error: reason } = await iconStore.put(id, bytes)
+    if (reason || !icon) return error(res, 400, reason || '保存できませんでした')
+    const payload: SessionIconResponse = { id, icon: iconUrl(id, icon.version) }
+    return json(res, payload)
+  }
+  const deleteIcon = async (req: IncomingMessage, res: ServerResponse, id: string) => {
+    if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
+    await iconStore.remove(id)
+    const payload: SessionIconResponse = { id, icon: null }
+    return json(res, payload)
+  }
+
   /**
    * いま配っているビルドの識別子（dist/index.html の mtime）。未ビルドなら空。
    * Vite のアセット名はハッシュ入りなので、JS が変われば index.html も必ず変わる。
@@ -245,9 +306,10 @@ export function createApp(store: FeedStore, distDir: string, runner?: Runner): H
     const path = url.pathname
     const isReply = path.startsWith(SESSIONS_PREFIX) && path.endsWith(REPLY_SUFFIX)
     const isMeta = path.startsWith(SESSIONS_PREFIX) && path.endsWith(META_SUFFIX)
+    const isIcon = path.startsWith(SESSIONS_PREFIX) && path.endsWith(ICON_SUFFIX)
     const method = req.method ?? 'GET'
-    // 書き込みは「返信は POST」「表示名は PUT」の2つだけ。それ以外は GET / HEAD のみ
-    const writable = (method === 'POST' && isReply) || (method === 'PUT' && isMeta)
+    // 書き込みは「返信は POST」「表示名は PUT」「アイコンは PUT / DELETE」だけ。それ以外は GET / HEAD のみ
+    const writable = (method === 'POST' && isReply) || (method === 'PUT' && isMeta) || ((method === 'PUT' || method === 'DELETE') && isIcon)
     if (!writable && method !== 'GET' && method !== 'HEAD') return error(res, 405, 'method not allowed')
     try {
       if (isReply) {
@@ -267,6 +329,13 @@ export function createApp(store: FeedStore, distDir: string, runner?: Runner): H
         if (method === 'PUT') return await putMeta(req, res, id, parseDays(q.get('days'), 90))
         const payload: SessionMetaResponse = { id, meta: (await metaStore.get(id)) ?? {} }
         return json(res, payload)
+      }
+      if (isIcon) {
+        const id = sessionIdFrom(path, ICON_SUFFIX)
+        if (id === null) return error(res, 400, 'bad session id')
+        if (method === 'PUT') return await putIcon(req, res, id, parseDays(q.get('days'), 90))
+        if (method === 'DELETE') return await deleteIcon(req, res, id)
+        return await getIcon(req, res, id, q.get('v'))
       }
       if (path === '/' || path === '/index.html') return await sendStatic(res, 'index.html')
       if (path.startsWith('/assets/')) return await sendStatic(res, path.slice(1))

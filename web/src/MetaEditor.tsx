@@ -1,29 +1,34 @@
-import { useState } from 'react'
-import type { KeyboardEvent } from 'react'
+import { useRef, useState } from 'react'
+import type { ChangeEvent, KeyboardEvent } from 'react'
+import { ICON_ACCEPT, ICON_MAX_BYTES, ICON_MIME } from '../../shared/icon.ts'
 import { META_NAME_MAX, normalizeMeta } from '../../shared/meta.ts'
 import type { SessionMeta } from '../../shared/types.ts'
 import { api } from './api'
 
+const ICON_TYPES = new Set<string>(Object.values(ICON_MIME))
+
 /**
- * チャット見出しの「表示名とアイコン」。見るだけのときは絵文字と名前、「変更」で入力欄に変わる。
- * 保存はサーバ（PUT /api/sessions/<id>/meta）。保存直後は返ってきた値をそのまま出し、
- * 3秒ポーリングが追いついたら props の meta に戻る。
+ * チャット見出しの「表示名とアイコン画像」。見るだけのときは画像と名前、「変更」で名前の入力欄に変わる。
+ * 画像は「画像を選ぶ」で手元のファイルを選んだ瞬間に送る（PUT /api/sessions/<id>/icon）。「画像を消す」は DELETE。
+ * 名前の保存はサーバ（PUT /api/sessions/<id>/meta）。保存直後は返ってきた値をそのまま出し、
+ * 3秒ポーリングが追いついたら props の meta / icon に戻る。
  * 呼び出し側は key={id} を付けること（別のセッションに移ったら編集状態ごと作り直す）。
  */
-export function MetaEditor({ id, meta }: { id: string; meta: SessionMeta | undefined }) {
+export function MetaEditor({ id, meta, icon }: { id: string; meta: SessionMeta | undefined; icon: string | undefined }) {
   const [editing, setEditing] = useState(false)
   const [name, setName] = useState('')
-  const [icon, setIcon] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [saved, setSaved] = useState<SessionMeta | null>(null)
+  // 画像を置いた・消した直後の URL。null は「消した」、undefined はまだ触っていない（props を見る）
+  const [savedIcon, setSavedIcon] = useState<string | null | undefined>(undefined)
+  const fileRef = useRef<HTMLInputElement>(null)
 
   const current = saved ?? meta ?? {}
-  const hasMeta = Boolean(current.name || current.icon)
+  const currentIcon = savedIcon === undefined ? icon : (savedIcon ?? undefined)
 
   const start = () => {
     setName(current.name ?? '')
-    setIcon(current.icon ?? '')
     setError('')
     setEditing(true)
   }
@@ -32,7 +37,7 @@ export function MetaEditor({ id, meta }: { id: string; meta: SessionMeta | undef
     setError('')
   }
   const save = async () => {
-    const { meta: next, error: reason } = normalizeMeta({ name, icon })
+    const { meta: next, error: reason } = normalizeMeta({ name })
     if (reason) return setError(reason)
     setBusy(true)
     setError('')
@@ -46,16 +51,45 @@ export function MetaEditor({ id, meta }: { id: string; meta: SessionMeta | undef
       setBusy(false)
     }
   }
-  const clear = async () => {
+  const clearName = async () => {
     setName('')
-    setIcon('')
     setBusy(true)
     setError('')
     try {
       // PUT は重ねる意味なので、消すときは明示的に空を送る（アーカイブなど他のキーは触らない）
-      const res = await api.setMeta(id, { name: '', icon: '' })
+      const res = await api.setMeta(id, { name: '' })
       setSaved(res.meta)
       setEditing(false)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const pickIcon = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = '' // 同じファイルをもう一度選んでも change が飛ぶように
+    if (!file) return
+    // 送る前に弾けるものは弾く（種類と大きさ）。中身の検査はサーバがする
+    if (file.type && !ICON_TYPES.has(file.type)) return setError('画像ファイル（PNG / JPEG / GIF / WebP）を選んでください')
+    if (file.size > ICON_MAX_BYTES) return setError(`画像は ${ICON_MAX_BYTES / 1024 / 1024}MB までです`)
+    setBusy(true)
+    setError('')
+    try {
+      const res = await api.setIcon(id, file)
+      setSavedIcon(res.icon)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const clearIcon = async () => {
+    setBusy(true)
+    setError('')
+    try {
+      await api.clearIcon(id)
+      setSavedIcon(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -71,14 +105,30 @@ export function MetaEditor({ id, meta }: { id: string; meta: SessionMeta | undef
     }
   }
 
+  // 画像の操作は見るだけのときも編集中も同じ
+  const iconControls = (
+    <>
+      <input ref={fileRef} className="file" type="file" accept={ICON_ACCEPT} onChange={(e) => void pickIcon(e)} disabled={busy} aria-label="アイコン画像" />
+      <button type="button" className="linkish" onClick={() => fileRef.current?.click()} disabled={busy}>
+        {currentIcon ? '画像を変える' : '画像を選ぶ'}
+      </button>
+      {currentIcon && (
+        <button type="button" className="linkish" onClick={() => void clearIcon()} disabled={busy}>
+          画像を消す
+        </button>
+      )}
+    </>
+  )
+
   if (!editing) {
     return (
       <div className="meta wide session-name">
-        {current.icon && <span className="icon">{current.icon}</span>}
+        {currentIcon && <img className="icon" src={currentIcon} alt="" />}
         {current.name ? <b>{current.name}</b> : <span className="none">表示名なし</span>}
-        <button type="button" className="linkish" onClick={start}>
-          {hasMeta ? '変更' : '名前を付ける'}
+        <button type="button" className="linkish" onClick={start} disabled={busy}>
+          {current.name ? '変更' : '名前を付ける'}
         </button>
+        {iconControls}
         {error && <span className="err">{error}</span>}
       </div>
     )
@@ -91,15 +141,7 @@ export function MetaEditor({ id, meta }: { id: string; meta: SessionMeta | undef
         void save()
       }}
     >
-      <input
-        className="icon-input"
-        value={icon}
-        onChange={(e) => setIcon(e.target.value)}
-        onKeyDown={onKeyDown}
-        placeholder="絵文字"
-        aria-label="アイコン（絵文字1つ）"
-        disabled={busy}
-      />
+      {currentIcon && <img className="icon" src={currentIcon} alt="" />}
       <input
         className="name-input"
         value={name}
@@ -117,11 +159,12 @@ export function MetaEditor({ id, meta }: { id: string; meta: SessionMeta | undef
       <button type="button" className="linkish" onClick={cancel} disabled={busy}>
         やめる
       </button>
-      {hasMeta && (
-        <button type="button" className="linkish" onClick={() => void clear()} disabled={busy}>
-          消す
+      {current.name && (
+        <button type="button" className="linkish" onClick={() => void clearName()} disabled={busy}>
+          名前を消す
         </button>
       )}
+      {iconControls}
       {error && <span className="err">{error}</span>}
     </form>
   )

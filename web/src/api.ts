@@ -6,6 +6,7 @@ import type {
   ReplyResponse,
   SessionDetailResponse,
   SessionFilters,
+  SessionIconResponse,
   SessionMeta,
   SessionMetaResponse,
   SessionsResponse,
@@ -68,6 +69,13 @@ async function sendJSON<T>(method: 'POST' | 'PUT', url: string, body: object): P
   return (await res.json()) as T
 }
 
+/** 画像などをそのまま送る（PUT）か、消す（DELETE） */
+async function sendRaw<T>(method: 'PUT' | 'DELETE', url: string, body?: Blob): Promise<T> {
+  const res = await fetch(url, { method, body })
+  if (!res.ok) throw await failure(res, url)
+  return (await res.json()) as T
+}
+
 const qs = (params: object) => new URLSearchParams(Object.entries(params)).toString()
 
 export const api = {
@@ -78,8 +86,12 @@ export const api = {
   reply: (id: string, text: string, days = 90) =>
     sendJSON<ReplyResponse>('POST', `/api/sessions/${encodeURIComponent(id)}/reply?days=${days}`, { text } satisfies ReplyRequest),
   meta: (id: string) => getJSON<SessionMetaResponse>(`/api/sessions/${encodeURIComponent(id)}/meta`),
-  /** 表示名・アイコンを置き換える。{} を送ると消える */
+  /** 表示名をいまの値に重ねる。空文字は「消す」 */
   setMeta: (id: string, meta: SessionMeta, days = 90) =>
     sendJSON<SessionMetaResponse>('PUT', `/api/sessions/${encodeURIComponent(id)}/meta?days=${days}`, meta),
+  /** アイコン画像を置く。返ってくる icon が新しい URL */
+  setIcon: (id: string, file: Blob, days = 90) =>
+    sendRaw<SessionIconResponse>('PUT', `/api/sessions/${encodeURIComponent(id)}/icon?days=${days}`, file),
+  clearIcon: (id: string) => sendRaw<SessionIconResponse>('DELETE', `/api/sessions/${encodeURIComponent(id)}/icon`),
 }
 

@@ -1,5 +1,5 @@
 // チャットの行をバブルの塊にまとめる。DOM に依存しないので node:test で回す（chatGroups.test.ts）
-import type { FeedRow, SessionMeta } from '../../shared/types.ts'
+import type { FeedRow, SessionSummary } from '../../shared/types.ts'
 import { entityId } from '../../shared/entity.ts'
 import { eventKind } from '../../shared/events.ts'
 import { dayLabel, minutesBetween, parseTs, ymd } from './format.ts'
@@ -127,22 +127,25 @@ export function groupRows(rows: FeedRow[]): DayGroups[] {
 export const AGENT_LABEL: Record<string, string> = { claude: 'Claude Code', codex: 'Codex CLI', unknown: 'unknown' }
 export const AGENT_INITIAL: Record<string, string> = { claude: 'C', codex: 'X', unknown: '?' }
 
-/** バブルの見出しに出す発言者。name は名前、mark はアバターの中身（アイコンか頭文字） */
+/** バブルの見出しに出す発言者。name は名前、mark は頭文字、icon は画像の URL（あれば mark の代わりにアバターに出す） */
 export interface SpeakerLabel {
   name: string
   mark: string
+  icon?: string
 }
 
 /**
- * 発言者の名前とアバター。自分は固定（「あなた」/「私」）。エージェント側は、そのセッションに表示名・アイコンが
+ * 発言者の名前とアバター。自分は固定（「あなた」/「私」）。エージェント側は、そのセッションに表示名・アイコン画像が
  * 付いていればそれ、無ければエージェントの固定値（Claude Code / C など）。
- * meta はセッション一覧（SessionSummary.meta）から引く。一覧の窓に無いセッションの行がフィードに出ることがあるので、
+ * session はセッション一覧（SessionSummary）から引く。一覧の窓に無いセッションの行がフィードに出ることがあるので、
  * 引けなければ固定値に落ちる
  */
-export function speakerLabel(speaker: Speaker, meta: SessionMeta | undefined): SpeakerLabel {
+export function speakerLabel(speaker: Speaker, session: Pick<SessionSummary, 'meta' | 'icon'> | undefined): SpeakerLabel {
   if (speaker === 'me') return { name: 'あなた', mark: '私' }
-  return {
-    name: meta?.name || AGENT_LABEL[speaker] || speaker,
-    mark: meta?.icon || AGENT_INITIAL[speaker] || '?',
+  const out: SpeakerLabel = {
+    name: session?.meta?.name || AGENT_LABEL[speaker] || speaker,
+    mark: AGENT_INITIAL[speaker] || '?',
   }
+  if (session?.icon) out.icon = session.icon
+  return out
 }

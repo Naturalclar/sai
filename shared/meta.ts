@@ -1,23 +1,12 @@
-// セッションのメタ（ブラウザから付ける表示名・アイコン・アーカイブ）の検査。
+// セッションのメタ（ブラウザから付ける表示名・アーカイブ）の検査。アイコン画像は別（shared/icon.ts、server/icons.ts）。
 // サーバの PUT 受付（server/app.ts）と画面の入力欄（web/src/MetaEditor.tsx）が同じ関数を使い、ずれない。
 import type { SessionMeta } from './types.ts'
 
 export const META_NAME_MAX = 100
-/** アイコンは絵文字1つ。ZWJ で繋いだ絵文字（👨‍👩‍👧 など）でもコード単位ではこの程度に収まる */
-export const META_ICON_MAX_UNITS = 32
-
-function graphemes(text: string): number {
-  if (typeof Intl.Segmenter === 'function') {
-    let n = 0
-    for (const _ of new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text)) n++
-    return n
-  }
-  return [...text].length
-}
 
 /**
  * current に input を重ねて正規化する。input に無いキー（undefined）は据え置き、null / 空文字は「消す」、
- * それ以外は検査して置き換える。error が空でなければ受け付けない。
+ * それ以外は検査して置き換える。知らないキー（昔の絵文字の icon など）は捨てる。error が空でなければ受け付けない。
  * PUT /api/sessions/<id>/meta の意味そのもの。名前を付けるだけ・アーカイブを切り替えるだけ、が互いを消さない
  */
 export function mergeMeta(current: SessionMeta, input: unknown): { meta: SessionMeta; error: string } {
@@ -31,14 +20,6 @@ export function mergeMeta(current: SessionMeta, input: unknown): { meta: Session
     if (name.length > META_NAME_MAX) return { meta: {}, error: `表示名は ${META_NAME_MAX} 文字までです` }
     if (name) meta.name = name
     else delete meta.name
-  }
-
-  if (raw.icon !== undefined) {
-    if (raw.icon !== null && typeof raw.icon !== 'string') return { meta: {}, error: 'icon は文字列で送ってください' }
-    const icon = (raw.icon ?? '').trim()
-    if (icon.length > META_ICON_MAX_UNITS || graphemes(icon) > 1) return { meta: {}, error: 'アイコンは絵文字1つ（1文字）までです' }
-    if (icon) meta.icon = icon
-    else delete meta.icon
   }
 
   if (raw.archived_at !== undefined) {
@@ -63,5 +44,5 @@ export function normalizeMeta(input: unknown): { meta: SessionMeta; error: strin
 
 /** 何も付いていないか */
 export function isEmptyMeta(meta: SessionMeta | undefined): boolean {
-  return !meta || (!meta.name && !meta.icon && !meta.archived_at)
+  return !meta || (!meta.name && !meta.archived_at)
 }

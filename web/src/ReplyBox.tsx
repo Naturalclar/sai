@@ -154,7 +154,7 @@ export function ReplyBox({ repo, busy, busySince, now = 0, onSend, mention }: Pr
       {mention && (
         <div className="target" title={mention.target.id}>
           <span className="arrow">→</span>
-          {mention.target.icon && <span className="icon">{mention.target.icon}</span>}
+          {mention.target.icon && <img className="icon" src={mention.target.icon} alt="" />}
           <b>#{mention.target.repo}</b>
           {mention.target.branch && <code>{mention.target.branch}</code>}
           {mention.target.title && <span className="title">「{mention.target.title}」</span>}
@@ -211,7 +211,7 @@ export function ReplyBox({ repo, busy, busySince, now = 0, onSend, mention }: Pr
                 if (i >= 0) moveCursor(i)
               }}
             >
-              {t.icon && <span className="icon">{t.icon}</span>}
+              {t.icon && <img className="icon" src={t.icon} alt="" />}
               <b>{labels.get(t.id) ?? `@${t.repo}`}</b>
               <span className="title">{t.title || '(無題)'}</span>
               {t.blocked && <span className="why">{t.blocked}</span>}

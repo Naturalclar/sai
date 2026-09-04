@@ -22,7 +22,7 @@ export interface ReplyTarget {
   branch: string
   /** 表示名（付いていれば）、無ければ一番新しい入力の1行目。60文字 */
   title: string
-  /** ブラウザから付けたアイコン（絵文字1つ）。一覧から作った候補にだけ付く */
+  /** ブラウザから置いたアイコン画像の URL（SessionSummary.icon）。一覧から作った候補にだけ付く */
   icon?: string
   /** 返信できない理由。空なら選べる */
   blocked: string
@@ -49,7 +49,7 @@ export function sessionReplyTargets(sessions: SessionSummary[]): ReplyTarget[] {
       title: clipTitle(s.meta?.name || s.title),
       blocked: replyBlockedReason(s),
     }
-    if (s.meta?.icon) t.icon = s.meta.icon
+    if (s.icon) t.icon = s.icon
     return t
   })
 }

@@ -104,12 +104,12 @@ test('promptArrived: 送った返信と同じ入力の行が、送信時刻よ�
   assert.equal(promptArrived([row(0), row(9.5, { event: 'UserPromptSubmit', text: '', user_text: '続きを' })], 's1@sai', '続きを', since), true, '30秒前は許容')
 })
 
-test('speakerLabel: 表示名・アイコンがあればそれ、無ければエージェントの固定値。自分は固定', () => {
+test('speakerLabel: 表示名・アイコン画像があればそれ、無ければエージェントの固定値。自分は固定', () => {
   assert.deepEqual(speakerLabel('claude', undefined), { name: 'Claude Code', mark: 'C' })
   assert.deepEqual(speakerLabel('codex', {}), { name: 'Codex CLI', mark: 'X' })
   assert.deepEqual(speakerLabel('unknown', undefined), { name: 'unknown', mark: '?' })
-  assert.deepEqual(speakerLabel('claude', { name: '背中メニュー', icon: '🏋️' }), { name: '背中メニュー', mark: '🏋️' })
-  assert.deepEqual(speakerLabel('claude', { name: '背中メニュー' }), { name: '背中メニュー', mark: 'C' }, '名前だけならアバターは頭文字のまま')
-  assert.deepEqual(speakerLabel('claude', { icon: '🏋️' }), { name: 'Claude Code', mark: '🏋️' })
-  assert.deepEqual(speakerLabel('me', { name: '背中メニュー', icon: '🏋️' }), { name: 'あなた', mark: '私' }, '自分側はセッションの表示名に引きずられない')
+  assert.deepEqual(speakerLabel('claude', { meta: { name: '背中メニュー' }, icon: '/i/1' }), { name: '背中メニュー', mark: 'C', icon: '/i/1' })
+  assert.deepEqual(speakerLabel('claude', { meta: { name: '背中メニュー' } }), { name: '背中メニュー', mark: 'C' }, '名前だけなら icon キーは無い（頭文字のまま）')
+  assert.deepEqual(speakerLabel('claude', { icon: '/i/1' }), { name: 'Claude Code', mark: 'C', icon: '/i/1' })
+  assert.deepEqual(speakerLabel('me', { meta: { name: '背中メニュー' }, icon: '/i/1' }), { name: 'あなた', mark: '私' }, '自分側はセッションの表示名・画像に引きずられない')
 })

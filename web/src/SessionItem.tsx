@@ -42,7 +42,7 @@ export function SessionItem({ s, active, replying, now }: Props) {
         <span className="when"><b>{md(s.end)}</b> {hm(s.end)} · {s.turns}</span>
       </span>
       <span className="t" title={s.title_full}>
-        {s.meta?.icon && <span className="icon">{s.meta.icon}</span>}
+        {s.icon && <img className="icon" src={s.icon} alt="" />}
         {s.meta?.name || s.title || '(無題)'}
         {s.session_source === 'synth' && <SynthTag />}
         {s.waiting && <WaitingTag text={s.waiting} />}

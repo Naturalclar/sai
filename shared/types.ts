@@ -29,6 +29,11 @@ export interface FeedRow {
    */
   thinking?: string
   first_user_text?: string
+  /**
+   * text をチャットの一言コメントに言い換えたもの（性格つき）。JSONL には無く、サーバが応答時に
+   * ~/.agent-feed/digest.jsonl から載せる（server/digest.ts）。無ければ省略で、画面は text を出す
+   */
+  summary?: string
 }
 
 /** 行をセッション単位にまとめたもの。GET /api/sessions の1件 */
@@ -65,6 +70,10 @@ export interface SessionSummary {
   sources: SessionSource[]
   /** 最後のターン完了の text の1行目（待ちの行は見ない） */
   last_text: string
+  /** 最後のターン完了の行の ts（一言を引くキー）。ターン完了が無ければ空。集計が付けるので、手で組む fixture では省略可 */
+  last_turn_ts?: string
+  /** last_text の一言版（digest）。無ければ省略で、画面は last_text を出す */
+  last_summary?: string
   /** ブラウザから付けた表示名・アーカイブ。無ければ undefined（title を使う） */
   meta?: SessionMeta
   /**
@@ -261,6 +270,35 @@ export interface ReplyResponse {
   agent: Agent
   session: string
   cwd: string
+}
+
+/** 一言コメントの性格。'none' は性格なし。表と口調は shared/persona.ts */
+export type PersonaId =
+  | 'none'
+  | 'INTJ' | 'INTP' | 'ENTJ' | 'ENTP'
+  | 'INFJ' | 'INFP' | 'ENFJ' | 'ENFP'
+  | 'ISTJ' | 'ISFJ' | 'ESTJ' | 'ESFJ'
+  | 'ISTP' | 'ISFP' | 'ESTP' | 'ESFP'
+
+/**
+ * GET/PUT /api/settings。サーバ側の設定（~/.agent-feed/settings.json）。
+ * 一言はサーバが作るので性格もサーバに持つ。digest / model は環境変数（SAI_DIGEST / SAI_DIGEST_MODEL）の状態で、PUT では変えられない
+ */
+export interface SettingsResponse {
+  persona: PersonaId
+  /** 一言を作る配線が有効か（SAI_DIGEST=1） */
+  digest: boolean
+  model: string
+}
+
+/** PUT /api/settings の body */
+export interface SettingsRequest {
+  persona?: PersonaId
+}
+
+/** POST /api/digest/backfill?n=20 の応答。列に積んだ数 */
+export interface DigestBackfillResponse {
+  queued: number
 }
 
 export interface SessionFilters {

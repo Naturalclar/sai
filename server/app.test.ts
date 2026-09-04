@@ -5,9 +5,11 @@ import type { Server } from 'node:http'
 import { mkdtemp, rm, writeFile, appendFile, mkdir, stat, utimes, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { Replying, ReplyResponse, SessionsResponse, SessionDetailResponse, SessionIconResponse, SessionMetaResponse, FeedResponse } from '../shared/types.ts'
+import type { Replying, ReplyResponse, SessionsResponse, SessionDetailResponse, SessionIconResponse, SessionMetaResponse, FeedResponse, SettingsResponse, DigestBackfillResponse } from '../shared/types.ts'
 import { createApp, parseDays, revWith, sessionIdFrom, stripThinking } from './app.ts'
 import { BuildFreshness } from './buildFreshness.ts'
+import { DigestStore, Digester } from './digest.ts'
+import type { Summarizer } from './digest.ts'
 import { FeedStore } from './store.ts'
 import { localDate } from './aggregate.ts'
 import { replyCommand, splitArgs } from './runner.ts'
@@ -41,6 +43,19 @@ class FakeRunner implements Runner {
 }
 const runner = new FakeRunner()
 
+/** 一言（digest）の偽物。プロンプトの本文の先頭を返す。null を返す設定なら失敗 */
+class FakeSummarizer implements Summarizer {
+  prompts: string[] = []
+  fail = false
+  async summarize(prompt: string): Promise<string> {
+    this.prompts.push(prompt)
+    if (this.fail) throw new Error('fake failure')
+    return `一言: ${(prompt.split('\n---\n')[1] ?? '').slice(0, 8)}`
+  }
+}
+const summarizer = new FakeSummarizer()
+let digester: Digester
+
 const min = (n: number) => n * 60_000
 
 before(async () => {
@@ -66,7 +81,8 @@ before(async () => {
   // ビルドが古いかは、この dist と temp の src ディレクトリの mtime で判定させる（ttl 0 で毎回見る）
   srcDir = join(dir, 'src')
   await mkdir(srcDir)
-  const app = createApp(store, distDir, runner, undefined, new BuildFreshness(distDir, [srcDir], 0))
+  digester = new Digester(new DigestStore(join(feedDir, 'digest.jsonl')), summarizer, { enabled: true, model: 'fake', persona: async () => 'none' })
+  const app = createApp(store, distDir, runner, undefined, new BuildFreshness(distDir, [srcDir], 0), digester)
   server = createServer((req, res) => void app(req, res))
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const addr = server.address()
@@ -578,6 +594,86 @@ test('PUT meta: archived_at でアーカイブ。一覧とフィードから消�
   assert.equal((await putMeta('S2@sai', { archived_at: 1 })).status, 400)
 })
 
+test('GET/PUT /api/settings: 性格。知らない値は 400、別オリジンは 403、ファイルに残る', async () => {
+  let res = await get('/api/settings')
+  assert.equal(res.status, 200)
+  let data = (await res.json()) as SettingsResponse
+  assert.deepEqual(data, { persona: 'ENFP', digest: true, model: 'fake' }, '既定は ENFP。digest はテストでは有効')
+  const put = (body: unknown, headers: Record<string, string> = {}) =>
+    fetch(`${base}/api/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) })
+  res = await put({ persona: 'ISTJ' })
+  assert.equal(res.status, 200)
+  data = (await res.json()) as SettingsResponse
+  assert.equal(data.persona, 'ISTJ')
+  assert.equal(((await (await get('/api/settings')).json()) as SettingsResponse).persona, 'ISTJ')
+  assert.deepEqual(JSON.parse(await readFile(join(feedDir, 'settings.json'), 'utf-8')), { persona: 'ISTJ' })
+  assert.equal((await put({ persona: 'XXXX' })).status, 400)
+  assert.equal((await put({ persona: 1 })).status, 400)
+  assert.equal((await put('nope')).status, 400)
+  assert.equal((await put({ persona: 'ENFP' }, { Origin: 'http://evil.local' })).status, 403)
+  assert.equal((await fetch(`${base}/api/settings`, { method: 'POST' })).status, 405)
+  await put({ persona: 'none' })
+})
+
+test('digest: 起動後に増えた行に一言が付いて feed / 詳細 / 一覧に載り、rev が変わる。backfill は既にあった行も積む', async () => {
+  const now = new Date()
+  const feedBefore = (await (await get('/api/feed?days=3')).json()) as FeedResponse
+  // 起動時（最初の /api の応答）にあった行には付かない。前のテストが追記した行は「起動後に増えた行」なので付いていてよい
+  assert.equal(feedBefore.rows.find((r) => r.session === 'S1' && r.text === 'hi')!.summary, undefined, '起動時にあった行には付かない')
+  const promptsBefore = summarizer.prompts.length
+  const withBefore = feedBefore.rows.filter((r) => r.summary).length
+
+  // 新しい行が届く → 次の応答のついでに列に積まれ、直列で作られる
+  const path = join(feedDir, `${localDate(now.toISOString())}.jsonl`)
+  const ts = new Date(now.getTime() + 2000)
+  await appendFile(path, JSON.stringify(row(ts, 'D1', { repo: 'r', text: 'PR #35 をマージしました。次は #31 です。', user_text: 'マージして' })) + '\n')
+  await get('/api/feed?days=3')
+  await digester.drain()
+  assert.equal(summarizer.prompts.length, promptsBefore + 1)
+  const prompt = summarizer.prompts[summarizer.prompts.length - 1]!
+  assert.match(prompt, /PR #35 をマージしました/)
+  assert.match(prompt, /口調: /)
+
+  const feedAfter = (await (await get('/api/feed?days=3')).json()) as FeedResponse
+  const d1 = feedAfter.rows.find((r) => r.session === 'D1')!
+  assert.equal(d1.summary, '一言: PR #35 を')
+  assert.notEqual(feedAfter.rev, feedBefore.rev)
+  assert.equal(feedAfter.rows.find((r) => r.session === 'S1' && r.text === 'hi')!.summary, undefined)
+
+  const detail = (await (await get('/api/sessions/D1%40r')).json()) as SessionDetailResponse
+  assert.equal(detail.rows[0]!.summary, '一言: PR #35 を')
+  assert.equal(detail.session.last_summary, '一言: PR #35 を')
+  const list = (await (await get('/api/sessions?days=7')).json()) as SessionsResponse
+  assert.equal(list.sessions.find((s) => s.id === 'D1@r')!.last_summary, '一言: PR #35 を')
+  assert.equal(list.sessions.find((s) => s.id === 'S1@kanban')!.last_summary, undefined, '起動時にあった行しか無いセッションには付かない')
+
+  // ファイルに残っている（作ったときの性格つき）
+  const saved = (await readFile(join(feedDir, 'digest.jsonl'), 'utf-8')).trim().split('\n').map((l) => JSON.parse(l) as { key: string; persona: string; summary: string })
+  const mine = saved.find((e) => e.key.startsWith('D1@r|'))!
+  assert.ok(mine)
+  assert.equal(mine.persona, 'none')
+  assert.equal(mine.summary, '一言: PR #35 を')
+
+  // backfill: 起動時にあった行も、まだ無いものを新しい順に n 件
+  const bf = await fetch(`${base}/api/digest/backfill?n=2&days=7`, { method: 'POST' })
+  assert.equal(bf.status, 202)
+  assert.deepEqual(await bf.json(), { queued: 2 } satisfies DigestBackfillResponse)
+  await digester.drain()
+  const after = (await (await get('/api/feed?days=3')).json()) as FeedResponse
+  assert.equal(after.rows.filter((r) => r.summary).length, withBefore + 1 + 2, '前からあった分 + D1 + backfill の 2 件')
+  assert.equal((await fetch(`${base}/api/digest/backfill?n=1`, { method: 'POST', headers: { Origin: 'http://evil.local' } })).status, 403)
+  assert.equal((await fetch(`${base}/api/digest/backfill`, { method: 'GET' })).status, 405)
+
+  // 失敗した行は無いまま（画面は本文を出す）
+  summarizer.fail = true
+  await appendFile(path, JSON.stringify(row(new Date(now.getTime() + 3000), 'D1', { repo: 'r', text: '失敗する' })) + '\n')
+  await get('/api/feed?days=3')
+  await digester.drain()
+  summarizer.fail = false
+  const failed = (await (await get('/api/feed?days=3')).json()) as FeedResponse
+  assert.equal(failed.rows.find((r) => r.text === '失敗する')!.summary, undefined)
+})
+
 test('replyCommand は SAI_*_BIN で実行ファイルを差し替えられる', () => {
   assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', {}), { bin: 'claude', args: ['-p', '--resume', 'S', '--', 'hi'], cwd: '/w', text: 'hi' })
   assert.deepEqual(replyCommand('codex', 'S', 'hi', '/w', {})!.args, ['exec', 'resume', 'S', '--', 'hi'])
@@ -614,6 +710,24 @@ test('splitArgs: シェル風に割る', () => {
   assert.deepEqual(splitArgs("--allowedTools 'Bash(git *) Edit'"), ['--allowedTools', 'Bash(git *) Edit'])
   assert.deepEqual(splitArgs('a\\ b "c \\" d" ""'), ['a b', 'c " d', ''], 'バックスラッシュと空の引用')
   assert.deepEqual(splitArgs('--model=x --flag'), ['--model=x', '--flag'])
+})
+
+test('store.rows: cwd がフィードのディレクトリ（SAI 自身が回した子）の行は読み飛ばす', async () => {
+  const d = await mkdtemp(join(tmpdir(), 'sai-own-'))
+  try {
+    const now = new Date()
+    const lines = [
+      row(new Date(now.getTime() - min(3)), 'real', { cwd: '/home/u/kanban' }),
+      row(new Date(now.getTime() - min(2)), 'child', { cwd: d, text: '一言' }),
+      row(new Date(now.getTime() - min(1)), 'child2', { cwd: join(d, 'sub'), text: '一言' }),
+    ]
+    await writeFile(join(d, `${localDate(now.toISOString())}.jsonl`), lines.map((l) => JSON.stringify(l)).join('\n') + '\n')
+    const s = new FeedStore(d)
+    assert.deepEqual((await s.rows(7)).map((r) => r.session), ['real'])
+    assert.deepEqual((await s.sessions(7)).sessions.map((x) => x.id), ['real@kanban'])
+  } finally {
+    await rm(d, { recursive: true, force: true })
+  }
 })
 
 test('キャッシュは追記で無効になり、変わらなければ再パースしない', async () => {

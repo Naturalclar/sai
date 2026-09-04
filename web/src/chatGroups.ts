@@ -24,6 +24,8 @@ export interface Utterance {
   resolved?: boolean
   /** エージェントの発言で、そのターンの思考があればそれ。セッション画面だけが出す */
   thinking?: string
+  /** エージェントの発言の一言版（digest）。あればバブルの本文はこれで、元の text は「詳細」で開く */
+  summary?: string
 }
 
 export interface Group {
@@ -74,6 +76,7 @@ export function toUtterances(rows: FeedRow[]): Utterance[] {
     prompted.delete(id)
     const theirs: Utterance = { speaker: row.agent, row, text: row.text ?? '', key: `${row.ts}:${index}` }
     if (row.thinking?.trim()) theirs.thinking = row.thinking
+    if (row.summary?.trim()) theirs.summary = row.summary
     out.push(theirs)
   })
   return out

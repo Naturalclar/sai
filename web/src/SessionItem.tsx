@@ -52,7 +52,7 @@ export function SessionItem({ s, active, replying, approval, now }: Props) {
         {replying && <ReplyingTag since={replying.since} now={now} />}
         {s.archived && <ArchivedTag />}
       </span>
-      {s.turns > 1 && s.last_text && <span className="last">{stripMarkdown(s.last_text)}</span>}
+      {s.turns > 1 && (s.last_summary || s.last_text) && <span className="last">{s.last_summary || stripMarkdown(s.last_text)}</span>}
     </a>
     </div>
   )

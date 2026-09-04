@@ -73,6 +73,7 @@ export function Chat({ rows, showChannel, sessions = NO_SESSIONS, trailer, showT
                       resolved={u.resolved}
                       thinking={showThinking ? u.thinking : undefined}
                       thinkingOpen={thinkingOpen}
+                      summary={u.summary}
                     />
                   ))}
                 </div>

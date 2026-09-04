@@ -6,10 +6,12 @@ import { extname, join, resolve, sep } from 'node:path'
 import { ICON_MAX_BYTES, iconUrl } from '../shared/icon.ts'
 import { mergeMeta } from '../shared/meta.ts'
 import { mergeProfile, PROFILE_ICON_ID, profileIconUrl } from '../shared/profile.ts'
+import { isPersonaId } from '../shared/persona.ts'
 import { replyBlockedReason } from '../shared/reply.ts'
 import type {
   ApprovalAnswer,
   ApprovalRequest,
+  DigestBackfillResponse,
   FeedResponse,
   Profile,
   ProfileResponse,
@@ -22,14 +24,19 @@ import type {
   SessionMetaResponse,
   SessionsResponse,
   SessionSummary,
+  SettingsRequest,
+  SettingsResponse,
 } from '../shared/types.ts'
 import { entityId, facets, filterSessions } from './aggregate.ts'
 import { ICONS_DIR, IconStore, iconKey } from './icons.ts'
 import { alwaysAllowRule, ruleLabel } from '../shared/approvals.ts'
 import { Approvals, WAIT_MS } from './approvals.ts'
 import { BuildFreshness } from './buildFreshness.ts'
+import { DIGEST_FILE, DigestStore, digesterFromEnv } from './digest.ts'
+import type { Digester } from './digest.ts'
 import { META_FILE, MetaStore } from './meta.ts'
 import { PROFILE_FILE, ProfileStore } from './profile.ts'
+import { SETTINGS_FILE, SettingsStore } from './settings.ts'
 import { ProcessRunner, replyCommand } from './runner.ts'
 import type { Runner } from './runner.ts'
 import type { FeedStore } from './store.ts'
@@ -47,6 +54,10 @@ const APPROVALS_PREFIX = '/api/approvals/'
 const ANSWER_SUFFIX = '/answer'
 /** 承認 body の上限。ツールの入力そのもの（Edit の new_string など）が入るので返信より大きめ */
 export const MAX_APPROVAL_BYTES = 1024 * 1024
+const SETTINGS_PATH = '/api/settings'
+const DIGEST_BACKFILL_PATH = '/api/digest/backfill'
+/** 設定 body の上限 */
+export const MAX_SETTINGS_BYTES = 4 * 1024
 const REPLY_SUFFIX = '/reply'
 const META_SUFFIX = '/meta'
 const ICON_SUFFIX = '/icon'
@@ -127,14 +138,16 @@ export function parseDays(raw: string | null, fallback: number): number {
  * 処理中の返信を rev に混ぜる。画面は rev が同じなら state を触らないので、JSONL が変わらないまま
  * 「処理中 → 終了」になっても再描画されない。since まで含めるので、同じ id の連続した返信も区別できる
  */
-export function revWith(rev: string, replying: ReplyingMap, approvalsKey = '', buildStale = false): string {
+export function revWith(rev: string, replying: ReplyingMap, approvalsKey = '', buildStale = false, digestKey = ''): string {
   const ids = Object.keys(replying).sort()
-  if (ids.length === 0 && !approvalsKey && !buildStale) return rev
+  if (ids.length === 0 && !approvalsKey && !buildStale && !digestKey) return rev
   const h = createHash('sha1')
   for (const id of ids) h.update(`${id}\n${replying[id]!.since}\n`)
   h.update(`approvals:${approvalsKey}`)
   // ビルドが古いかが変わったら画面に伝えたい（画面は rev が同じなら描き直さない）
   h.update(`stale:${buildStale ? 1 : 0}`)
+  // 一言（digest）ができたら、JSONL が変わらなくても差し替えたい
+  h.update(`digest:${digestKey}`)
   return `${rev}:${h.digest('hex').slice(0, 8)}`
 }
 
@@ -154,6 +167,7 @@ export function createApp(
   runner?: Runner,
   approvals: Approvals = new Approvals(),
   freshness: BuildFreshness = new BuildFreshness(distDir),
+  digester?: Digester,
 ): Handler {
   const distRoot = resolve(distDir)
   const run: Runner = runner ?? new ProcessRunner(join(store.directory, 'reply.log'))
@@ -171,6 +185,18 @@ export function createApp(
     if (name) profile.name = name
     if (icon) profile.icon = profileIconUrl(icon.version)
     return { rev: `${rev}|${icon?.version ?? ''}`, profile }
+  }
+
+  const settingsStore = new SettingsStore(join(store.directory, SETTINGS_FILE))
+  // 一言コメント（digest）。テストは Summarizer を差し替えた Digester を渡す。既定は環境変数で組む（SAI_DIGEST=1 でなければ無効）
+  const digest: Digester = digester ?? digesterFromEnv(store.directory, new DigestStore(join(store.directory, DIGEST_FILE)), settingsStore)
+  const digestReady = digest.store.load()
+
+  /** 一言の対象を探して列に積む。3 秒ごとの応答のついでに呼ぶので軽い（無効なら何もしない） */
+  const scanDigest = async (days: number): Promise<void> => {
+    if (!digest.enabled) return
+    await digestReady
+    digest.scan(await store.rows(days))
   }
 
   /**
@@ -197,6 +223,42 @@ export function createApp(
         return out
       }),
     }
+  }
+
+  /** 一覧の「最後の発言」に一言を載せる。無い行はそのまま */
+  const withLastSummary = (sessions: SessionSummary[]): SessionSummary[] => {
+    if (digest.store.size === 0) return sessions
+    return sessions.map((s) => {
+      const summary = digest.summaryFor(s.id, s.last_turn_ts ?? '')
+      return summary ? { ...s, last_summary: summary } : s
+    })
+  }
+
+  /** GET/PUT /api/settings。PUT は同一オリジンのみ。変えられるのは性格だけ（digest の有効/無効とモデルは環境変数） */
+  const settingsPayload = async (): Promise<SettingsResponse> => ({ ...(await settingsStore.get()), digest: digest.enabled, model: digest.model })
+  const putSettings = async (req: IncomingMessage, res: ServerResponse) => {
+    if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
+    let body: unknown
+    try {
+      body = await readJson(req, MAX_SETTINGS_BYTES)
+    } catch (err) {
+      return error(res, 400, err instanceof Error ? err.message : 'bad body')
+    }
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return error(res, 400, 'body はオブジェクトで送ってください')
+    const b = body as Partial<SettingsRequest>
+    if (!isPersonaId(b.persona)) return error(res, 400, 'persona が不明です（shared/persona.ts にある id を送ってください）')
+    await settingsStore.set({ persona: b.persona })
+    return json(res, await settingsPayload())
+  }
+
+  /** POST /api/digest/backfill?n=20&days=7。直近 n 件の一言を作る（既定オフのときは 400）。同一オリジンのみ */
+  const backfillDigest = async (req: IncomingMessage, res: ServerResponse, n: number, days: number) => {
+    if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
+    if (!digest.enabled) return error(res, 400, '一言は無効です（SAI_DIGEST=1 で起動してください）')
+    await digestReady
+    const queued = digest.backfill(await store.rows(days), n)
+    const payload: DigestBackfillResponse = { queued }
+    return json(res, payload, 202)
   }
 
   const send = (res: ServerResponse, status: number, body: Buffer | string, type: string) => {
@@ -459,12 +521,14 @@ export function createApp(
     const isAnswer = path.startsWith(APPROVALS_PREFIX) && path.endsWith(ANSWER_SUFFIX)
     const isProfile = path === PROFILE_PATH
     const isProfileIcon = path === PROFILE_ICON_PATH
+    const isSettings = path === SETTINGS_PATH
+    const isBackfill = path === DIGEST_BACKFILL_PATH
     const method = req.method ?? 'GET'
-    // 書き込みは「返信は POST」「表示名は PUT」「アイコンは PUT / DELETE」「承認の預かりと答えは POST」「自分の表示名は PUT、アイコンは PUT / DELETE」だけ。
-    // それ以外は GET / HEAD のみ
+    // 書き込みは「返信は POST」「表示名は PUT」「アイコンは PUT / DELETE」「承認の預かりと答えは POST」「自分の表示名は PUT、アイコンは PUT / DELETE」
+    // 「設定は PUT」「一言の backfill は POST」だけ。それ以外は GET / HEAD のみ
     const writable =
-      (method === 'POST' && (isReply || isAsk || isAnswer)) ||
-      (method === 'PUT' && (isMeta || isProfile)) ||
+      (method === 'POST' && (isReply || isAsk || isAnswer || isBackfill)) ||
+      (method === 'PUT' && (isMeta || isProfile || isSettings)) ||
       ((method === 'PUT' || method === 'DELETE') && (isIcon || isProfileIcon))
     if (!writable && method !== 'GET' && method !== 'HEAD') return error(res, 405, 'method not allowed')
     try {
@@ -518,6 +582,14 @@ export function createApp(
       if (path.startsWith('/assets/')) return await sendStatic(res, path.slice(1))
       if (path === '/favicon.ico') return send(res, 204, '', 'image/x-icon')
       if (path === '/api/health') return json(res, { ok: true })
+      if (isSettings) {
+        if (method === 'PUT') return await putSettings(req, res)
+        return json(res, await settingsPayload())
+      }
+      if (isBackfill) {
+        if (method !== 'POST') return error(res, 405, 'method not allowed')
+        return await backfillDigest(req, res, Math.min(200, Math.max(1, Number.parseInt(q.get('n') ?? '20', 10) || 20)), parseDays(q.get('days'), 7))
+      }
 
       if (path === '/api/sessions') {
         const days = parseDays(q.get('days'), 7)
@@ -530,11 +602,12 @@ export function createApp(
         const pool = sessions.filter((s) => Boolean(s.archived) === wantArchived)
         // 配っている画面が古ければ知らせる（画面はヘッダの下にバナーを出す）。判定は 30 秒に1回
         const build_stale = await freshness.stale()
+        await scanDigest(days)
         const body: SessionsResponse = {
-          rev: revWith(rev, replying, approvals.revKey(), build_stale),
+          rev: revWith(rev, replying, approvals.revKey(), build_stale, digest.revKey()),
           days,
           total: pool.length,
-          sessions: filterSessions(pool, q.get('repo') ?? '', q.get('agent') ?? '', q.get('date') ?? ''),
+          sessions: withLastSummary(filterSessions(pool, q.get('repo') ?? '', q.get('agent') ?? '', q.get('date') ?? '')),
           filters: facets(pool),
           replying,
           approvals: pendingApprovals,
@@ -551,11 +624,12 @@ export function createApp(
         const [{ rev: sessionsRev, sessions }, me] = await Promise.all([sessionsWithMeta(days), profileNow()])
         const session = sessions.find((s) => s.id === id)
         if (!session) return error(res, 404, 'session not found in window')
-        const rows = (await store.rows(days)).filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
+        await scanDigest(days)
+        const rows = digest.attach((await store.rows(days)).filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id))
         const replying = run.snapshot()
         const body: SessionDetailResponse = {
-          rev: revWith(`${sessionsRev}~${me.rev}`, replying, approvals.revKey()),
-          session,
+          rev: revWith(`${sessionsRev}~${me.rev}`, replying, approvals.revKey(), false, digest.revKey()),
+          session: withLastSummary([session])[0]!,
           rows,
           replying,
           approvals: approvals.snapshot(),
@@ -575,12 +649,13 @@ export function createApp(
         if (repo) rows = rows.filter((r) => r.repo === repo)
         if (archived.size) rows = rows.filter((r) => !archived.has(entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? ''))))
         // 思考はフィードには出さないので運ばない（3秒ごとに全行を返す。セッション画面だけが使う）
-        rows = rows.map(stripThinking)
+        await scanDigest(days)
+        rows = digest.attach(rows.map(stripThinking))
         const replying = run.snapshot()
-        // rev はメタ（アーカイブ）と処理中の集合、答え待ちの承認、ビルドが古いかも混ぜる
+        // rev はメタ（アーカイブ）と処理中の集合、答え待ちの承認、ビルドが古いか、一言の有無も混ぜる
         const build_stale = await freshness.stale()
         const body: FeedResponse = {
-          rev: revWith(rev, replying, approvals.revKey(), build_stale),
+          rev: revWith(rev, replying, approvals.revKey(), build_stale, digest.revKey()),
           days,
           rows,
           replying,

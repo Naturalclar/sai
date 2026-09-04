@@ -100,6 +100,7 @@ export function aggregate(rows: FeedRow[]): SessionSummary[] {
       session_source: sources.includes('synth') ? 'synth' : (sources[sources.length - 1] ?? ''),
       sources,
       last_text: clip(firstLine(lastTurn?.text ?? ''), 120),
+      last_turn_ts: lastTurn?.ts ?? '',
     })
   }
   sessions.sort((a, b) => (a.end < b.end ? 1 : a.end > b.end ? -1 : 0))

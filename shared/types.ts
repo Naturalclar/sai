@@ -178,6 +178,8 @@ export interface SessionsResponse {
   replying: ReplyingMap
   /** 返信中のエージェントが待っている許可・質問（ID → 古い順）。これが変わると rev も変わる */
   approvals: ApprovalMap
+  /** 配っている web/dist/ が web/src / shared より古い（git pull のあと pnpm build していない）。これが変わると rev も変わる */
+  build_stale: boolean
 }
 
 export interface SessionDetailResponse {
@@ -196,6 +198,8 @@ export interface FeedResponse {
   replying: ReplyingMap
   /** 返信中のエージェントが待っている許可・質問（ID → 古い順）。これが変わると rev も変わる */
   approvals: ApprovalMap
+  /** 配っている web/dist/ が web/src / shared より古い。SessionsResponse と同じ */
+  build_stale: boolean
 }
 
 /** POST /api/sessions/<id>/reply の body */

@@ -116,7 +116,7 @@ pnpm start --port 9000 --feed-dir ~/.agent-feed   # pnpm 10 は「--」もその
 
 画面を触るときはサーバを立てたまま `pnpm dev`。Vite が `/api` を `127.0.0.1:8787` に流す。
 
-`main` を取り込んだときは、サーバを止めずに別のターミナルで `git pull && pnpm build` するだけでいい。サーバは `web/dist/` を毎回ディスクから読み、`/api/*` の応答に `X-SAI-Build`（`dist/index.html` の更新時刻）を付けるので、開いているブラウザは 3 秒以内に自分でリロードする。`server/` や `shared/` が変わったときの再起動まで任せたければ `pnpm start:watch`（`node --watch`）で立てる。
+`main` を取り込んだときは、サーバを止めずに別のターミナルで `git pull && pnpm build` するだけでいい。`pnpm build` を忘れて `web/dist/` が `web/src` / `shared` より古いままだと、画面のヘッダの下に「画面のビルドが古い」と出る（サーバが mtime を比べて `build_stale` で伝える。`pnpm dev` では出ない）。サーバは `web/dist/` を毎回ディスクから読み、`/api/*` の応答に `X-SAI-Build`（`dist/index.html` の更新時刻）を付けるので、開いているブラウザは 3 秒以内に自分でリロードする。`server/` や `shared/` が変わったときの再起動まで任せたければ `pnpm start:watch`（`node --watch`）で立てる。
 
 ```
 pnpm lint        # oxlint（web/src, server, shared）

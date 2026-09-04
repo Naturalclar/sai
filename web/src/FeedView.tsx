@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { entityId } from '../../shared/entity.ts'
 import { eventKind } from '../../shared/events.ts'
 import { promptArrived } from './chatGroups'
-import { feedReplyTargets, mergeReplyTargets, sessionReplyTargets } from '../../shared/reply.ts'
+import { defaultReplyTarget, feedReplyTargets, mergeReplyTargets, sessionReplyTargets } from '../../shared/reply.ts'
 import { api, type ApprovalMap, type SessionSummary } from './api'
 import { useLocalState, usePolling } from './hooks'
 import { Chat } from './Chat'
@@ -49,18 +49,25 @@ export function FeedView({ repo, sessions = NO_SESSIONS, onStatus, onOpenSidebar
     return m
   }, [rows])
 
-  // 手で選んだ返信先（id と、本文に入れた表記）。候補から消えたら（days やリポジトリの変更）既定に戻る
-  const [picked, setPicked] = useState<Picked | null>(null)
-  const pickedTarget = picked ? (targets.find((t) => t.id === picked.id && !t.blocked) ?? null) : null
-  // 既定は一番新しい行のセッション（再開できるもののうち）。フィードに何も無ければ一覧の先頭
-  const defaultId = feedTargets.find((t) => !t.blocked)?.id
-  const target = pickedTarget ?? (defaultId ? targets.find((t) => t.id === defaultId) : undefined) ?? targets.find((t) => !t.blocked) ?? null
-
   const { pending: allPending, failed, send } = useReply((id) => counts.get(id) ?? 0, data?.replying ?? NO_REPLYING, updatedAt)
   // サーバの replying にはこの画面の外のセッションも入る。フィードに行があるか、候補に出ているものだけ
   // （一覧にだけあるセッションへ送った直後は、まだフィードに行が無い）
   const pending = allPending.filter((p) => counts.has(p.id) || targets.some((t) => t.id === p.id))
+  const busyIds = useMemo(() => new Set(pending.map((p) => p.id)), [pending])
   const now = updatedAt?.getTime() ?? 0
+
+  // 手で選んだ返信先（id と、本文に入れた表記）。候補から消えたら（days やリポジトリの変更）既定に戻る
+  const [picked, setPicked] = useState<Picked | null>(null)
+  const pickedTarget = picked ? (targets.find((t) => t.id === picked.id && !t.blocked) ?? null) : null
+  // 既定は一番新しい行のセッション（再開できて、処理中でないもの）。A に返信しても次の B にそのまま打てる
+  const computedDefault = defaultReplyTarget(feedTargets, targets, busyIds)
+  // 入力中は既定を動かさない。A の Stop が届いてから子プロセスが exit するまでの数秒で既定が B → A と揺れるので、
+  // 打っている途中に返信先が変わらないように、本文が空でない間は最後の既定を持つ（描画中に state を合わせる、React の定石）
+  const [drafting, setDrafting] = useState(false)
+  const [heldId, setHeldId] = useState<string | null>(null)
+  if (!drafting && heldId !== (computedDefault?.id ?? null)) setHeldId(computedDefault?.id ?? null)
+  const held = drafting && heldId ? (targets.find((t) => t.id === heldId && !t.blocked) ?? null) : null
+  const target = pickedTarget ?? held ?? computedDefault
   const repoOf = (id: string) => targets.find((t) => t.id === id)?.repo
   // 答え待ちの許可・質問も、処理中の返信と同じく、この画面に関係あるものだけ
   const approvals = Object.values(data?.approvals ?? NO_APPROVALS).flat().filter((a) => counts.has(a.id) || targets.some((t) => t.id === a.id))
@@ -101,7 +108,8 @@ export function FeedView({ repo, sessions = NO_SESSIONS, onStatus, onOpenSidebar
             busySince={pending.find((p) => p.id === target.id)?.since}
             now={now}
             onSend={(text) => void send(target.id, text)}
-            mention={{ targets, target, picked: pickedTarget ? picked : null, onPick: setPicked }}
+            onDraft={setDrafting}
+            mention={{ targets, target, picked: pickedTarget ? picked : null, onPick: setPicked, busyIds }}
           />
         ) : (
           <div className="notice">返信できるセッションがありません</div>

@@ -77,6 +77,21 @@ export function feedReplyTargets(rows: FeedRow[]): ReplyTarget[] {
   return [...seen.values()]
 }
 
+/**
+ * フィードの既定の返信先。「一番新しい行のセッションで、再開できて、処理中でないもの」。
+ * A に返信すると数秒で A の入力の行が届いてフィードの先頭になるので、「一番新しい」だけだと既定が
+ * 処理中の A 自身に固定され、B に返信するたび @ で選び直すことになる。処理中（busyIds）を飛ばして次を選ぶ。
+ * 全部が処理中なら一番新しいもの（処理中）を返し、呼び出し側は送信だけ止める。
+ * feed はフィードの行から作った候補（新しい順）、targets は一覧を先に並べた全候補（表示名・アイコン付き）。
+ * 返すのは targets 側の同じ id（無ければ feed 側）。フィードに何も無ければ targets の先頭から同じ基準で選ぶ
+ */
+export function defaultReplyTarget(feed: ReplyTarget[], targets: ReplyTarget[], busyIds: ReadonlySet<string>): ReplyTarget | null {
+  const first = (list: ReplyTarget[], skipBusy: boolean) => list.find((t) => !t.blocked && (!skipBusy || !busyIds.has(t.id)))
+  const newest = first(feed, true) ?? first(feed, false)
+  if (newest) return targets.find((t) => t.id === newest.id) ?? newest
+  return first(targets, true) ?? first(targets, false) ?? null
+}
+
 /** 一覧の候補を先に、フィードにしか無いものを後ろに。同じ id は一覧側（表示名・アイコン付き）が勝つ */
 export function mergeReplyTargets(list: ReplyTarget[], feed: ReplyTarget[]): ReplyTarget[] {
   const ids = new Set(list.map((t) => t.id))

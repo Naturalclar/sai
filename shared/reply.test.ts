@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  defaultReplyTarget,
   feedReplyTargets,
   filterReplyTargets,
   mentionLabels,
@@ -9,6 +10,7 @@ import {
   replyBlockedReason,
   sessionReplyTargets,
   stripMention,
+  type ReplyTarget,
 } from './reply.ts'
 import type { FeedRow, SessionSummary } from './types.ts'
 
@@ -177,4 +179,24 @@ test('stripMention: 表記を外して空白を整える', () => {
   assert.equal(stripMention('先に @sai/main を見て', '@sai/main'), '先に を見て')
   assert.equal(stripMention('1行目 @sai\n2行目', '@sai'), '1行目\n2行目')
   assert.equal(stripMention('表記なし', '@sai'), '表記なし')
+})
+
+test('defaultReplyTarget: 一番新しい行のセッションのうち処理中でないもの。全部処理中なら一番新しいもの', () => {
+  const t = (id: string, over: Partial<ReplyTarget> = {}): ReplyTarget => ({ id, repo: id, branch: '', title: '', blocked: '', ...over })
+  const feed = [t('a'), t('b'), t('c')] // 新しい順
+  const list = [t('b', { title: '一覧の b' }), t('a', { title: '一覧の a' })]
+  const targets = mergeReplyTargets(list, feed)
+  const none = new Set<string>()
+  assert.equal(defaultReplyTarget(feed, targets, none)?.title, '一覧の a', '処理中が無ければ一番新しい a。返すのは一覧側（表示名付き）')
+  assert.equal(defaultReplyTarget(feed, targets, new Set(['a']))?.title, '一覧の b', 'a が処理中なら次に新しい b')
+  assert.equal(defaultReplyTarget(feed, targets, new Set(['a', 'b']))?.id, 'c', 'c は一覧に無いのでフィード側の候補')
+  assert.equal(defaultReplyTarget(feed, targets, new Set(['a', 'b', 'c']))?.id, 'a', '全部処理中なら一番新しいもの（送信だけ止める）')
+  // 再開できないものは飛ばす
+  const blockedFirst = [t('x', { blocked: '合成' }), t('y')]
+  assert.equal(defaultReplyTarget(blockedFirst, blockedFirst, none)?.id, 'y')
+  // フィードに何も無ければ一覧から同じ基準で
+  assert.equal(defaultReplyTarget([], list, new Set(['b']))?.id, 'a')
+  assert.equal(defaultReplyTarget([], list, new Set(['a', 'b']))?.id, 'b', '一覧も全部処理中なら先頭')
+  assert.equal(defaultReplyTarget([], [], none), null)
+  assert.equal(defaultReplyTarget([t('x', { blocked: '合成' })], [t('x', { blocked: '合成' })], none), null, '再開できるものが無ければ null')
 })

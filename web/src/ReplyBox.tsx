@@ -1,4 +1,4 @@
-import { useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent, SyntheticEvent } from 'react'
 import { filterReplyTargets, mentionLabels, mentionQuery, stripMention, type ReplyTarget } from '../../shared/reply.ts'
 import { elapsedLabel } from './format'
@@ -19,6 +19,8 @@ export interface MentionProps {
   picked: Picked | null
   /** 選ぶ。null で既定に戻す */
   onPick: (picked: Picked | null) => void
+  /** 返信を処理中のセッション。候補に「処理中」を付ける（選べるが、選ぶと送信が止まる） */
+  busyIds?: ReadonlySet<string>
 }
 
 export interface Picked {
@@ -34,11 +36,13 @@ interface Props {
   /** 経過の基準（ポーリングの updatedAt）。busySince とセット */
   now?: number
   onSend: (text: string) => void
+  /** 本文が空でないかが変わったら知らせる。FeedView は入力中に既定の返信先を動かさないために使う */
+  onDraft?: (drafting: boolean) => void
   mention?: MentionProps
 }
 
 /** 入力欄。Enter で送信、Shift+Enter で改行。IME 変換中の Enter は送らない */
-export function ReplyBox({ repo, busy, busySince, now = 0, onSend, mention }: Props) {
+export function ReplyBox({ repo, busy, busySince, now = 0, onSend, onDraft, mention }: Props) {
   const [text, setText] = useState('')
   // caret は「@ の検出」に使う。onChange と onSelect（カーソル移動）で追う
   const [caret, setCaret] = useState(0)
@@ -57,6 +61,11 @@ export function ReplyBox({ repo, busy, busySince, now = 0, onSend, mention }: Pr
       wantCaret.current = null
     }
   })
+
+  const drafting = text.trim() !== ''
+  useEffect(() => {
+    onDraft?.(drafting)
+  }, [drafting, onDraft])
 
   const labels = useMemo(() => mentionLabels(mention?.targets ?? []), [mention?.targets])
   const hit = mention ? mentionQuery(text, caret) : null
@@ -177,7 +186,9 @@ export function ReplyBox({ repo, busy, busySince, now = 0, onSend, mention }: Pr
           onKeyDown={onKeyDown}
           placeholder={
             busy
-              ? `前の返信を処理中${busySince && elapsedLabel(busySince, now) ? `（${elapsedLabel(busySince, now)}）` : ''}。終わるまで待ってください`
+              ? mention
+                ? `#${repo} は前の返信を処理中${busySince && elapsedLabel(busySince, now) ? `（${elapsedLabel(busySince, now)}）` : ''}。@ で別のセッションに返信できます`
+                : `前の返信を処理中${busySince && elapsedLabel(busySince, now) ? `（${elapsedLabel(busySince, now)}）` : ''}。終わるまで待ってください`
               : `#${repo} に返信（Enter で送信、Shift+Enter で改行）`
           }
           rows={2}
@@ -185,7 +196,7 @@ export function ReplyBox({ repo, busy, busySince, now = 0, onSend, mention }: Pr
           disabled={busy && !mention}
         />
         <button type="submit" disabled={busy || !(mention?.picked ? stripMention(text, mention.picked.label) : text).trim()}>
-          {busy ? '送信中…' : '送信'}
+          {busy ? (mention ? `#${repo} は処理中` : '送信中…') : '送信'}
         </button>
       </div>
       {/* 送った返信は対話側の画面には出ない（トランスクリプトには追記される）。README の「返信」の節と同じ */}
@@ -214,6 +225,7 @@ export function ReplyBox({ repo, busy, busySince, now = 0, onSend, mention }: Pr
               {t.icon && <img className="icon" src={t.icon} alt="" />}
               <b>{labels.get(t.id) ?? `@${t.repo}`}</b>
               <span className="title">{t.title || '(無題)'}</span>
+              {mention?.busyIds?.has(t.id) && <span className="tag replying" title="前の返信を処理中。選べるが、終わるまで送れない">処理中</span>}
               {t.blocked && <span className="why">{t.blocked}</span>}
             </li>
           ))}

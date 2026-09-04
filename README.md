@@ -198,7 +198,9 @@ Codex CLI ──[notify]───────┘
 
 キーはエンティティID（`<セッション>@<リポジトリ>`）。記録側（`record.py`）はこのファイルを知らないし、集計（`aggregate()`）も触らない。サーバが応答を返すときに載せるだけなので、消しても履歴は壊れない。
 
-アイコン画像は `~/.agent-feed/session-icons/<sha1(ID) の先頭16桁>.<png|jpeg|gif|webp>` にファイルで置く（`session-meta.json` には書かない。ファイルの有無が正）。PNG / JPEG / GIF / WebP で 1MB まで。種類はファイルの中身（先頭のバイト列）で見るので、拡張子だけ画像のファイルは置けない（SVG も受けない）。一覧の各セッションには `icon`（`/api/sessions/<id>/icon?v=<mtime>`）として URL が載り、差し替えると `v` が変わってブラウザのキャッシュを引かない。画像を置いた・消しただけでも一覧の `rev` が変わるので、開いている画面にそのまま反映される。昔の絵文字のアイコン（`icon` キー）は読むときに捨てる。
+「画像を選ぶ」でファイルを選ぶと**加工のモーダル**が開き、正方形の枠に対してドラッグで位置、ホイールかスライダで大きさを決めて「これにする」を押すと、**256px 四方・角丸（一辺の 20%）の PNG** にしてから置く。元のファイルは送らない（ブラウザの Canvas で加工する。サーバ側に画像処理は無い）。選べるファイルは 20MB まで（`ICON_SOURCE_MAX_BYTES`）、置く加工後の PNG は 1MB まで（`ICON_MAX_BYTES`）。GIF はアニメーションが止まる（1 フレーム目）。画面の角丸 CSS も同じ 20% なので、加工前に置いた古い画像も同じ見た目で出る。
+
+アイコン画像は `~/.agent-feed/session-icons/<sha1(ID) の先頭16桁>.<png|jpeg|gif|webp>` にファイルで置く（`session-meta.json` には書かない。ファイルの有無が正）。PNG / JPEG / GIF / WebP で 1MB まで（画面から置くものは加工後の PNG。API を直接叩けば他の種類も置ける）。種類はファイルの中身（先頭のバイト列）で見るので、拡張子だけ画像のファイルは置けない（SVG も受けない）。一覧の各セッションには `icon`（`/api/sessions/<id>/icon?v=<mtime>`）として URL が載り、差し替えると `v` が変わってブラウザのキャッシュを引かない。画像を置いた・消しただけでも一覧の `rev` が変わるので、開いている画面にそのまま反映される。昔の絵文字のアイコン（`icon` キー）は読むときに捨てる。
 
 ### アーカイブ
 
@@ -360,7 +362,7 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 | `GET /api/sessions/<id>/meta` | 表示名・アーカイブ。`{ "id", "meta": { "name"?, "archived_at"? } }`。無ければ `meta` は `{}` |
 | `PUT /api/sessions/<id>/meta?days=90` | body `{ "name"?: "...", "archived_at"?: "<ISO>" }` をいまの値に重ねる。省略したキーは据え置き、空文字や `null` は「消す」で、全部消えたらエントリごと消える。知らないキーは捨てる。名前は100文字まで、`archived_at` は読める時刻（違えば `400`）。窓の中に無いセッションは `404`、別オリジンは `403` |
 | `GET /api/sessions/<id>/icon?v=<mtime>` | アイコン画像そのもの（`image/png` など）。無ければ `404`。`v` がいまのファイルと同じなら `Cache-Control: immutable`、無ければ `no-store` |
-| `PUT /api/sessions/<id>/icon?days=90` | body は画像そのもの（PNG / JPEG / GIF / WebP、1MB まで。種類は中身で見る）。`{ "id", "icon": "<URL>" }` を返す。画像でなければ `400`、大きすぎれば `413`、窓の中に無いセッションは `404`、別オリジンは `403` |
+| `PUT /api/sessions/<id>/icon?days=90` | body は画像そのもの（PNG / JPEG / GIF / WebP、1MB まで。種類は中身で見る。画面からは加工後の 256px の PNG が来る）。`{ "id", "icon": "<URL>" }` を返す。画像でなければ `400`、大きすぎれば `413`、窓の中に無いセッションは `404`、別オリジンは `403` |
 | `DELETE /api/sessions/<id>/icon` | 画像を消す。`{ "id", "icon": null }`。無くても `200`。別オリジンは `403` |
 | `GET /api/feed?days=3&repo=` | 生の行と `replying`。アーカイブ済みセッションの行は除く |
 

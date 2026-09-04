@@ -157,10 +157,11 @@
   .chat-head .meta select { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; font: inherit; font-size: 12px; }
   .chat-head .meta code { font-family: var(--mono); background: var(--chip); padding: 1px 5px; border-radius: 4px; }
   /* 表示名・アイコン画像（ブラウザから付けるもの）。画像は角丸の正方形に切る */
-  img.icon { width: 16px; height: 16px; object-fit: cover; border-radius: 4px; vertical-align: -3px; }
+  /* 角丸は加工で焼き込む値（shared/icon.ts の ICON_RADIUS_RATIO = 20%）と同じ比率。加工前の古い画像も同じ見た目になる */
+  img.icon { width: 16px; height: 16px; object-fit: cover; border-radius: 20%; vertical-align: -3px; }
   .channels .t .icon { margin-right: 4px; }
   .chat-head .session-name { display: flex; align-items: center; gap: 8px; color: var(--ink); font-size: 14px; margin: 0; flex-wrap: wrap; }
-  .chat-head .session-name img.icon { width: 28px; height: 28px; border-radius: 6px; vertical-align: middle; }
+  .chat-head .session-name img.icon { width: 28px; height: 28px; border-radius: 20%; vertical-align: middle; }
   .chat-head .session-name .file { display: none; }
   .chat-head .session-name .none { color: var(--muted); }
   .chat-head .session-name .err { color: var(--claude); font-size: 12px; }
@@ -169,6 +170,21 @@
   .chat-head .session-name .name-input { flex: 1; min-width: 12em; max-width: 32em; }
   .chat-head .session-name button[type="submit"] { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 5px 12px; font: inherit; font-weight: 600; cursor: pointer; }
   .chat-head .session-name button:disabled { opacity: .5; cursor: default; }
+  /* -- アイコン加工のモーダル（IconCropper） */
+  .modal-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, .45); display: flex; align-items: center; justify-content: center; z-index: 20; }
+  .modal { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 10px; padding: 16px; box-shadow: 0 12px 40px rgba(0, 0, 0, .3); max-width: calc(100vw - 24px); outline: none; }
+  .modal .title { font-weight: 700; margin-bottom: 10px; }
+  .modal.cropper .stage { margin: 0 auto; background: var(--chip); border-radius: 6px; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+  .modal.cropper canvas { display: block; touch-action: none; cursor: grab; }
+  .modal.cropper canvas:active { cursor: grabbing; }
+  .modal.cropper .loading { color: var(--muted); font-size: 12px; padding: 16px; text-align: center; }
+  .modal.cropper .zoom { display: flex; align-items: center; gap: 10px; margin-top: 12px; font-size: 12px; color: var(--muted); }
+  .modal.cropper .zoom input { flex: 1; }
+  .modal.cropper .hint { color: var(--muted); font-size: 11px; margin-top: 6px; }
+  .modal.cropper .err { color: var(--claude); font-size: 12px; margin-top: 6px; }
+  .modal.cropper .actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 12px; align-items: center; }
+  .modal.cropper .actions .primary { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 6px 14px; font: inherit; font-weight: 600; cursor: pointer; }
+  .modal.cropper .actions button:disabled { opacity: .5; cursor: default; }
   .chat-head .archive .err { color: var(--claude); margin-left: 6px; }
   .linkish { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-size: 12px; cursor: pointer; }
   .linkish:hover { text-decoration: underline; }
@@ -179,7 +195,7 @@
   .group { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 10px; padding: 10px 16px 4px; }
   .group + .group { border-top: 0; }
   .avatar { width: 36px; height: 36px; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; font-size: 13px; background: var(--unknown); }
-  .avatar { overflow: hidden; }
+  .avatar { overflow: hidden; border-radius: 20%; }
   .avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .avatar.claude { background: var(--claude); }
   .avatar.codex { background: var(--codex); }

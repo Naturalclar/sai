@@ -3,6 +3,8 @@
 // 依存ゼロで JSON-RPC を最小限（initialize / tools/list / tools/call）だけ話す。
 //
 // tools/call が来たら SAI サーバ（SAI_URL）に預けて、画面で答えが付くまで待ち、その決定を CLI に返す。
+// 決定に updatedPermissions（「常に許可」のルール）が付いていればそのまま返す。CLI がそれを自分の設定に書く。
+// CLI（2.1.259）はこのツールに permission_suggestions を送ってこない（tool_name / input / tool_use_id だけ）。
 // stdout は MCP の配線そのものなので、ログは stderr（CLI が reply.log に流す）にしか書かない。
 //
 // 環境変数（runner.ts が --mcp-config の env で渡す）:

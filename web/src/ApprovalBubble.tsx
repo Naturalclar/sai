@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { askQuestions, answerAsk } from '../../shared/approvals.ts'
+import { alwaysAllowRule, answerAsk, askQuestions, ruleLabel } from '../../shared/approvals.ts'
 import { api, type Approval } from './api'
 import { elapsedLabel, hm } from './format'
 
@@ -12,24 +12,27 @@ interface Props {
 }
 
 /**
- * 返信中のエージェントが待っている許可・質問。[許可] [拒否] で答える。
+ * 返信中のエージェントが待っている許可・質問。[許可] [常に許可] [拒否] で答える（常に許可は Bash と MCP ツールだけ）。
  * AskUserQuestion は選択肢をボタンで出し、全部の質問に答えたら送る。
  * 答えるとサーバの approvals から消え、次のポーリングでこのバブルも消える（送った直後は done で押せなくする）
  */
 export function ApprovalBubble({ approval, now, repo }: Props) {
   const [busy, setBusy] = useState(false)
-  const [done, setDone] = useState<'allow' | 'deny' | null>(null)
+  const [done, setDone] = useState<'allow' | 'always' | 'deny' | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [answers, setAnswers] = useState<Record<string, string>>({})
   const questions = approval.tool_name === 'AskUserQuestion' ? askQuestions(approval.input) : []
   const elapsed = elapsedLabel(approval.since, now)
+
+  // 「常に許可」で書かれるルール。無いツール（Edit や質問）にはボタンを出さない
+  const always = questions.length === 0 ? alwaysAllowRule(approval.tool_name, approval.input) : null
 
   const send = async (body: Parameters<typeof api.answerApproval>[1]) => {
     setBusy(true)
     setError(null)
     try {
       await api.answerApproval(approval.approval_id, body)
-      setDone(body.behavior)
+      setDone(body.remember ? 'always' : body.behavior)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -90,6 +93,17 @@ export function ApprovalBubble({ approval, now, repo }: Props) {
               <button type="button" className="allow" disabled={busy || done !== null} onClick={() => void send({ behavior: 'allow' })}>
                 {done === 'allow' ? '許可した' : '許可'}
               </button>
+              {always && (
+                <button
+                  type="button"
+                  className="always"
+                  disabled={busy || done !== null}
+                  title={`${ruleLabel(always)} を返信先の .claude/settings.local.json に書く。以後この形は聞かれない（端末の「今後も許可」と同じ）`}
+                  onClick={() => void send({ behavior: 'allow', remember: 'local' })}
+                >
+                  {done === 'always' ? `常に許可した（${ruleLabel(always)}）` : '常に許可'}
+                </button>
+              )}
               <button type="button" className="deny" disabled={busy || done !== null} onClick={() => void send({ behavior: 'deny' })}>
                 {done === 'deny' ? '拒否した' : '拒否'}
               </button>

@@ -693,6 +693,43 @@ test('approvals: 返信を処理中のセッションの分だけ預かり、一
   runner.busy.delete('C1@r')
 })
 
+test('approvals: 常に許可（remember: local）はサーバがルールを組み立てて updatedPermissions で CLI に渡す', async () => {
+  runner.busy.set('C1@r', { since: new Date().toISOString(), text: 'やって' })
+  let res = await postJson('/api/approvals', { id: 'C1@r', tool_name: 'Bash', input: { command: 'gh pr create --fill', description: 'PR' } })
+  const bash = ((await res.json()) as { approval_id: string }).approval_id
+  res = await postJson(`/api/approvals/${bash}/answer`, { behavior: 'allow', remember: 'local' }, { Origin: base })
+  assert.equal(res.status, 200)
+  assert.equal(((await res.json()) as { remembered?: string }).remembered, 'Bash(gh pr:*)')
+  assert.deepEqual(await (await get(`/api/approvals/${bash}`)).json(), {
+    behavior: 'allow',
+    updatedInput: { command: 'gh pr create --fill', description: 'PR' },
+    updatedPermissions: [{ type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'gh pr:*' }], behavior: 'allow', destination: 'localSettings' }],
+  })
+
+  // 画面がルールを送っても無視して、サーバが組み立てたものになる
+  res = await postJson('/api/approvals', { id: 'C1@r', tool_name: 'Bash', input: { command: 'mkdir x' } })
+  const forged = ((await res.json()) as { approval_id: string }).approval_id
+  res = await postJson(
+    `/api/approvals/${forged}/answer`,
+    { behavior: 'allow', remember: 'local', updatedPermissions: [{ type: 'addRules', rules: [{ toolName: 'Bash' }], behavior: 'allow', destination: 'userSettings' }] },
+    { Origin: base },
+  )
+  assert.equal(res.status, 200)
+  const forgedAnswer = (await (await get(`/api/approvals/${forged}`)).json()) as { updatedPermissions: unknown[] }
+  assert.deepEqual(forgedAnswer.updatedPermissions, [{ type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'mkdir:*' }], behavior: 'allow', destination: 'localSettings' }])
+
+  // 「常に」が無いツール（Edit / AskUserQuestion）は 400。deny に remember を付けても何も起きない
+  res = await postJson('/api/approvals', { id: 'C1@r', tool_name: 'Edit', input: { file_path: '/x' } })
+  const edit = ((await res.json()) as { approval_id: string }).approval_id
+  res = await postJson(`/api/approvals/${edit}/answer`, { behavior: 'allow', remember: 'local' }, { Origin: base })
+  assert.equal(res.status, 400)
+  assert.match(((await res.json()) as { error: string }).error, /常に許可/)
+  assert.equal((await postJson(`/api/approvals/${edit}/answer`, { behavior: 'allow', remember: 'forever' }, { Origin: base })).status, 400, '知らない remember')
+  assert.equal((await postJson(`/api/approvals/${edit}/answer`, { behavior: 'deny', remember: 'local' }, { Origin: base })).status, 200)
+  assert.deepEqual(await (await get(`/api/approvals/${edit}`)).json(), { behavior: 'deny', message: 'SAI の画面で拒否された' })
+  runner.busy.delete('C1@r')
+})
+
 test('approvals: 不正な body と無い id', async () => {
   runner.busy.set('C1@r', { since: new Date().toISOString(), text: 'やって' })
   assert.equal((await postJson('/api/approvals', { id: 'C1@r', tool_name: 'Bash' })).status, 400, 'input が無い')

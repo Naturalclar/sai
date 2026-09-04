@@ -34,7 +34,9 @@
   .sidebar { min-height: 0; overflow: hidden auto; box-shadow: inset -1px 0 var(--line); background: var(--panel); }
   /* 中身の幅は固定。列の幅だけが動き、遷移中に中身が折り返さない */
   .side-inner { width: 320px; }
-  .pane { min-height: 0; display: flex; flex-direction: column; padding: 12px 18px 14px; }
+  /* min-width: 0 が無いと、チャット内の長い1行（コードブロックなど）の最小幅がここまで伝わって右ペインが画面幅を超え、
+     モバイルではページ全体が縮小されて文字が極端に小さくなる */
+  .pane { min-height: 0; min-width: 0; display: flex; flex-direction: column; padding: 12px 18px 14px; }
   .pane > section { flex: 1; min-height: 0; display: flex; flex-direction: column; }
   .back { display: none; margin-bottom: 8px; color: var(--muted); }
   /* サイドバーを閉じたとき。列の幅を 0 に遷移させる（display: none は遷移できない）。
@@ -99,7 +101,7 @@
   /* -- 狭い画面: 一覧かチャットのどちらかだけ。#/ が一覧、#/feed と #/s/<id> がチャット */
   @media (max-width: 900px) {
     header .sidebar-toggle { display: none; }
-    main.layout, main.layout.sidebar-closed { grid-template-columns: 1fr; transition: none; }
+    main.layout, main.layout.sidebar-closed { grid-template-columns: minmax(0, 1fr); transition: none; }
     main.route-feed .sidebar, main.route-session .sidebar { display: none; }
     /* 「閉じた」を無視して、#/ では一覧を必ず出す */
     main.layout.route-list .sidebar { display: block; visibility: visible; }
@@ -112,7 +114,7 @@
     header .logo small { display: none; }
     header .status { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .pane { padding: 8px 8px calc(10px + env(safe-area-inset-bottom)); }
-    .group { grid-template-columns: 28px 1fr; padding: 8px 8px 4px; }
+    .group { grid-template-columns: 28px minmax(0, 1fr); padding: 8px 8px 4px; }
     .avatar { width: 28px; height: 28px; font-size: 12px; }
     .msg .time { left: -38px; width: 34px; }
     .pending-line { padding-left: 46px; }
@@ -170,11 +172,11 @@
   .chat-head .archive .err { color: var(--claude); margin-left: 6px; }
   .linkish { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-size: 12px; cursor: pointer; }
   .linkish:hover { text-decoration: underline; }
-  .chat { flex: 1; min-height: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow-y: auto; }
+  .chat { flex: 1; min-height: 0; min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow-y: auto; }
   .day { text-align: center; color: var(--muted); font-size: 11px; padding: 10px 0 2px; position: relative; }
   .day span { background: var(--panel); padding: 0 8px; position: relative; }
   .day::before { content: ""; position: absolute; left: 16px; right: 16px; top: 18px; border-top: 1px solid var(--line); }
-  .group { display: grid; grid-template-columns: 36px 1fr; gap: 10px; padding: 10px 16px 4px; }
+  .group { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 10px; padding: 10px 16px 4px; }
   .group + .group { border-top: 0; }
   .avatar { width: 36px; height: 36px; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; font-size: 13px; background: var(--unknown); }
   .avatar { overflow: hidden; }

@@ -16,6 +16,7 @@ Codex CLI の notify の両方から呼ばれる。基本は「1行 = 1ターン
 環境変数:
   AGENT_FEED_DIR    出力先ディレクトリ（既定 ~/.agent-feed）
   AGENT_FEED_DEBUG  1 なら例外を <dir>/record-errors.log に残す
+  AGENT_FEED_SKIP   1 なら何も記録しない（SAI が裏で回す claude -p が自分を記録しないため）
   CODEX_HOME        Codex のホーム（既定 ~/.codex）
 """
 
@@ -775,6 +776,10 @@ def _log_error(directory: Path) -> None:
 
 
 def main(argv: list[str]) -> None:
+    # SAI が一言コメント（digest）を作るために回す `claude -p` は、フックが鳴っても記録しない。
+    # その子プロセスが Stop の行として載り、それをまた要約する、を防ぐ（環境変数はフックにそのまま渡る）
+    if os.environ.get("AGENT_FEED_SKIP") == "1":
+        return
     payload = read_payload(argv)
     if not payload:
         return

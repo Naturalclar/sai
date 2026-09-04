@@ -13,9 +13,12 @@ import type {
   SessionMeta,
   SessionMetaResponse,
   SessionsResponse,
+  DigestBackfillResponse,
+  SettingsRequest,
+  SettingsResponse,
 } from '../../shared/types.ts'
 
-export type { Agent, FeedRow, SessionSource, SessionSummary, SessionMeta, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, Approval, ApprovalMap, ApprovalAnswer, Profile } from '../../shared/types.ts'
+export type { Agent, FeedRow, SessionSource, SessionSummary, SessionMeta, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, Approval, ApprovalMap, ApprovalAnswer, Profile, PersonaId, SettingsResponse, SettingsRequest, DigestBackfillResponse } from '../../shared/types.ts'
 
 /** サーバは失敗を { error } で返す。それがあればそのまま見せる */
 async function failure(res: Response, url: string): Promise<Error> {
@@ -93,5 +96,10 @@ export const api = {
   setProfile: (profile: Pick<Profile, 'name'>) => sendJSON<ProfileResponse>('PUT', '/api/profile', profile),
   setProfileIcon: (file: Blob) => sendRaw<ProfileResponse>('PUT', '/api/profile/icon', file),
   clearProfileIcon: () => sendRaw<ProfileResponse>('DELETE', '/api/profile/icon'),
+  /** サーバ側の設定（一言の性格。digest が有効か） */
+  settings: () => getJSON<SettingsResponse>('/api/settings'),
+  setSettings: (body: SettingsRequest) => sendJSON<SettingsResponse>('PUT', '/api/settings', body),
+  /** 直近 n 件の一言を作らせる（SAI_DIGEST=1 のときだけ通る） */
+  backfillDigest: (n = 20) => sendJSON<DigestBackfillResponse>('POST', `/api/digest/backfill?n=${n}`, {}),
 }
 

@@ -353,6 +353,16 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 
 候補は**サイドバーの一覧に出ているセッション**（絞り込みと日数はサイドバーのもの。表示名・アイコンが付いていればそれで出る）を先に、一覧に無くてフィードにだけ出ている行のセッションを後ろに並べる。リポジトリ / ブランチ / タイトルで絞れる。一覧の取得は画面全体で 1 回で、サイドバーとフィードが同じ結果を見る。
 
+### 一言コメントと性格（digest）
+
+エージェントの返答は長い説明になりがちで、フィードを眺めるには重い。`SAI_DIGEST=1` でサーバを起動すると、**新しく届いたターン完了の行**ごとに本文を **1〜2 文の一言コメント**（「#35 マージしたよ！ブランチも消しといた。次は #31 やる？」のような）に言い換えて、バブルの本文をそれにする。元の本文は消えず、一言の横の「詳細」で今までどおり Markdown で開ける。自分の入力と待ちバブルは変えない。一覧の「最後の発言」も一言があればそれになる。
+
+- **作るのは LLM**で、返信と同じ `claude` CLI を `claude -p --model haiku --output-format json` で叩く（`SAI_CLAUDE_BIN` も効く。モデルは `SAI_DIGEST_MODEL` で変えられる）。結果は `~/.agent-feed/digest.jsonl` に追記する。JSONL（記録）は触らず、派生データなので消しても履歴は壊れない
+- **既定はオフ。** トークンと時間を使うのと、本文を LLM に送るので、黙って走らせない。オンにしても**サーバが起動したあとに増えた行**だけ作る（過去の行は作らない）。ヘッダの「直近20件に一言」で、まだ無い直近 20 件だけ積める
+- 1 行ずつ直列で回す。失敗した行（`claude` が無い、ログインしていない、90 秒で終わらない）は一言無しのままで、画面は本文を出す。理由は `~/.agent-feed/digest.log` に残る
+- 一言を作る `claude -p` が自分自身を記録しないよう、その子プロセスには `AGENT_FEED_SKIP=1` を渡す（`record.py` はこれが立っていると何も書かない）。`--bare` は OAuth を読まないので使えない。フックが指す `record.py` が古くてこれを知らない間は子のターンが JSONL に書かれてしまうが、子は `~/.agent-feed` を `cwd` にして起動するので、サーバは **`cwd` がそこの行を SAI 自身の雑音として読み飛ばす**（画面に出ず、要約もしない）。フックの checkout を最新にすれば書かれなくなる
+- **性格は MBTI の 16 タイプから**ヘッダの select で選ぶ（性格なしも選べる）。口調の指示だけが変わり、中身（何をしたか）は変えない。サーバが作るので設定はサーバ側（`~/.agent-feed/settings.json`、`GET/PUT /api/settings`）にあり、変えると**以後の行から**効く。過去の一言は作ったときの性格のまま。MBTI は口調の「型」として借りるだけで、診断や性格分析の話にはしない。口調の表は `shared/persona.ts`
+
 ### エンドポイント
 
 | | |
@@ -374,6 +384,9 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 | `PUT /api/profile` | body `{ "name"?: "..." }` をいまの値に重ねる。空文字や `null` は「消す」。100文字まで（超えたら `400`）。別オリジンは `403` |
 | `GET /api/profile/icon?v=<mtime>` | 自分のアイコン画像そのもの。無ければ `404`。キャッシュの扱いはセッションのアイコンと同じ |
 | `PUT /api/profile/icon` / `DELETE /api/profile/icon` | 画像を置く / 消す（受け付ける種類・上限はセッションのアイコンと同じ）。`{ "profile": … }` を返す。別オリジンは `403` |
+| `GET /api/settings` | サーバ側の設定。`{ "persona", "digest", "model" }`。`digest` は一言の配線が有効か（`SAI_DIGEST=1`） |
+| `PUT /api/settings` | body `{ "persona": "ENFP" }` で性格を変える。`shared/persona.ts` に無い値は `400`、別オリジンは `403` |
+| `POST /api/digest/backfill?n=20&days=7` | まだ一言が無い直近 `n` 件を作る列に積む。`{ "queued" }` を `202` で返す。無効なら `400`、別オリジンは `403` |
 | `GET /api/feed?days=3&repo=` | 生の行と `replying`。アーカイブ済みセッションの行は除く |
 
 返信の実行は `server/runner.ts`。`claude` / `codex` は `detached` で起動して待たず、stdout/stderr は `~/.agent-feed/reply.log` に追記する（うまく動かないときはここを見る）。同じエンティティに同時に2本は走らせない。
@@ -388,6 +401,7 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 - **本物の Slack には投げない。** 投げ先が会社のワークスペースになるので、個人リポジトリのセッション記録がそこに流れるのは避ける
 - **SAI は外に出さない。** `127.0.0.1` 限定。デプロイもホスティングもしない。中身は作業内容そのもの
 - **ブラウザからコマンドが走る。** 返信は `claude` / `codex` を任意の `cwd` で起動する。ローカルで開いている別サイトからの CSRF でエージェントを走らせないよう、`POST` は `Origin` / `Sec-Fetch-Site` が同一オリジンでなければ `403`（どちらも無い curl などブラウザ以外は通す）。この確認は外さない。権限のバイパス（`--dangerously-skip-permissions` など）も付けない
+- **一言（digest）は本文を LLM に送る。** `SAI_DIGEST=1` のときだけで、既定はオフ。返信と同じ `claude` CLI 経由だが、仕事のリポジトリの返答をそのまま要約に出すことになるのは分かって使う
 - **一覧のタイトルに機密が乗りうる。** 仕事のリポジトリのセッションだと issue の内容がそのまま出る。スクリーンショットを撮るときは自分で気をつける
 
 ## 環境変数
@@ -403,4 +417,7 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 | `SAI_CODEX_BIN` | 同じく `codex` |
 | `SAI_CLAUDE_ARGS` | 返信の `claude -p --resume` に足す引数。空白区切りで、空白を含む値は `"…"` か `'…'` で囲む。例: `--allowedTools "Bash(gh *)"`、`--permission-mode acceptEdits`。「返信と許可」の項を読んでから |
 | `SAI_CODEX_ARGS` | 同じく `codex exec resume` に足す引数。例: `-s workspace-write` |
+| `AGENT_FEED_SKIP` | `1` なら `record.py` は何も記録しない。SAI が一言を作るために回す `claude -p` に付ける（自分自身を記録しない） |
+| `SAI_DIGEST` | `1` で一言コメント（digest）を作る。既定はオフ |
+| `SAI_DIGEST_MODEL` | 一言を作るモデル（既定 `haiku`）。`claude -p --model` にそのまま渡す |
 | `SAI_APPROVE` | `0` で「返信中の許可・質問に画面から答える」配線（`--mcp-config` + `--permission-prompt-tool`）を付けない |

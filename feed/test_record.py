@@ -73,6 +73,18 @@ class RecordTest(unittest.TestCase):
 
     # -- 絶対に失敗しない
 
+    def test_skip_env_records_nothing_and_exits_zero(self):
+        # SAI が一言（digest）を作るために回す claude -p の子。フックが鳴っても何も書かない
+        payload = {"hook_event_name": "Stop", "session_id": "skip-1", "transcript_path": "/nonexistent", "cwd": str(self.cwd)}
+        result = run(stdin=json.dumps(payload), env={"AGENT_FEED_DIR": str(self.feed_dir), "AGENT_FEED_SKIP": "1"})
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(read_rows(self.feed_dir), [])
+        # 立っていなければ普通に記録する
+        result = run(stdin=json.dumps(payload), env={"AGENT_FEED_DIR": str(self.feed_dir), "AGENT_FEED_SKIP": ""})
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(len(read_rows(self.feed_dir)), 1)
+
     def test_garbage_stdin_exits_zero_and_records_nothing(self):
         result = run(stdin="not json at all", env=self.env)
         self.assertEqual(result.returncode, 0, result.stderr)

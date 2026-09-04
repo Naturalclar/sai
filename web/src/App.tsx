@@ -9,6 +9,8 @@ import { GitHubMark } from './GitHubMark'
 import { UserMenu } from './UserMenu'
 import { api, type SessionFilters } from './api'
 import { isTypingTarget, navAction, neighborSessionId } from './sessionNav'
+import { PersonaSelect } from './PersonaSelect'
+import { useSettings } from './useSettings'
 
 export interface StatusProps {
   onStatus: (updatedAt: Date | null, error: string | null) => void
@@ -90,6 +92,19 @@ export function App() {
     document.title = route.name === 'session' ? `SAI · ${route.id.slice(0, 12)}` : 'SAI'
   }, [route])
 
+  // 一言コメント（digest）の性格。サーバ側の設定なので取って来て、変えたら PUT。SAI_DIGEST=1 でないときは出さない
+  const { settings, busy: settingsBusy, error: settingsError, setPersona } = useSettings()
+  const [backfill, setBackfill] = useState<{ busy: boolean; note: string }>({ busy: false, note: '' })
+  const runBackfill = async () => {
+    setBackfill({ busy: true, note: '' })
+    try {
+      const r = await api.backfillDigest(20)
+      setBackfill({ busy: false, note: r.queued ? `${r.queued} 件を作っています` : '作る行がありません' })
+    } catch (err) {
+      setBackfill({ busy: false, note: err instanceof Error ? err.message : String(err) })
+    }
+  }
+
   return (
     <>
       <header>
@@ -107,6 +122,15 @@ export function App() {
         <div className="logo">
           SAI <small>agent-feed viewer</small>
         </div>
+        {settings?.digest && (
+          <div className="digest-ctl" title={settingsError || `一言コメント: ${settings.model}`}>
+            <PersonaSelect value={settings.persona} busy={settingsBusy} onChange={(p) => void setPersona(p)} />
+            <button type="button" className="linkish" onClick={() => void runBackfill()} disabled={backfill.busy} title="まだ一言が無い直近 20 件に一言を付ける（起動後に増えた行には自動で付く）">
+              {backfill.busy ? '…' : '直近20件に一言'}
+            </button>
+            {(backfill.note || settingsError) && <span className="note">{settingsError || backfill.note}</span>}
+          </div>
+        )}
         <div className={`status${status.error ? ' error' : ''}`}>
           {status.error ? `取得失敗: ${status.error}` : status.at ? `更新 ${hm(status.at.toISOString())}` : ''}
         </div>

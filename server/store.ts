@@ -1,7 +1,7 @@
 // 日付ファイルの読み込みとキャッシュ。(mtime, size) で覚えて、変わっていなければ再パースしない。
 import { createHash } from 'node:crypto'
 import { readFile, stat } from 'node:fs/promises'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import type { FeedRow, SessionSummary } from '../shared/types.ts'
 import { aggregate, recentDates } from './aggregate.ts'
 
@@ -80,9 +80,19 @@ export class FeedStore {
     return rows
   }
 
+  /**
+   * SAI が自分で回す子プロセス（一言を作る claude -p。server/digest.ts）は、このディレクトリを cwd にして起動する。
+   * フックの record.py が古くて AGENT_FEED_SKIP を知らないと、その子のターンが行として書かれてしまうので、
+   * cwd がここ（かその下）の行は SAI 自身の雑音として読み飛ばす（自分の要約を自分でまた要約する、も防ぐ）
+   */
+  private isOwnNoise(row: FeedRow): boolean {
+    const cwd = row.cwd ?? ''
+    return cwd === this.directory || cwd.startsWith(this.directory + sep)
+  }
+
   async rows(days: number): Promise<FeedRow[]> {
     const rows: FeedRow[] = []
-    for (const path of this.paths(days)) rows.push(...(await this.readFile(path)))
+    for (const path of this.paths(days)) for (const r of await this.readFile(path)) if (!this.isOwnNoise(r)) rows.push(r)
     rows.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0))
     return rows
   }

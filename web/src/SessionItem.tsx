@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import type { Replying, SessionSummary } from './api'
+import type { Approval, Replying, SessionSummary } from './api'
 import { hm, md } from './format'
 import { SynthTag } from './SynthTag'
 import { ReplyingTag } from './ReplyingTag'
@@ -14,6 +14,8 @@ interface Props {
   active: boolean
   /** 画面から送った返信を処理中なら、その中身。「返信中」を付ける */
   replying: Replying | null
+  /** 返信中のエージェントが答えを待っていれば、その先頭。「待機中」を付ける */
+  approval: Approval | null
   /** 経過の基準（ポーリングの updatedAt） */
   now: number
 }
@@ -22,7 +24,7 @@ interface Props {
  * サイドバーの一覧の1行。リンク（<a>）と、その上に重ねる「アーカイブ」ボタンは兄弟にする
  * （<a> の中に <button> は置けない。押してもページを動かさない）
  */
-export function SessionItem({ s, active, replying, now }: Props) {
+export function SessionItem({ s, active, replying, approval, now }: Props) {
   // 選ばれたら見えるところまでサイドバーをスクロールする（キーボードで移動したとき用。見えていれば動かない）
   const ref = useRef<HTMLAnchorElement>(null)
   useEffect(() => {
@@ -46,6 +48,7 @@ export function SessionItem({ s, active, replying, now }: Props) {
         {s.meta?.name || s.title || '(無題)'}
         {s.session_source === 'synth' && <SynthTag />}
         {s.waiting && <WaitingTag text={s.waiting} />}
+        {!s.waiting && approval && <WaitingTag text={approval.text} />}
         {replying && <ReplyingTag since={replying.since} now={now} />}
         {s.archived && <ArchivedTag />}
       </span>

@@ -220,6 +220,19 @@
   /* 5分を超えて処理中。長引いていることが見えるように時刻の色を変える */
   .group.pending.long .gh .time { color: var(--synth); font-weight: 600; }
   .pending-line { display: flex; gap: 8px; align-items: baseline; padding: 2px 16px 10px 62px; color: var(--muted); font-size: 12px; }
+  /* 返信中の許可・質問。答えるまでエージェントが止まっているので、待ちの色（synth）で目立たせる */
+  .group.approval .msg .body { display: inline-block; padding: 4px 10px; border-radius: 6px; background: color-mix(in srgb, var(--synth) 12%, transparent); color: var(--synth); font-style: italic; }
+  .group.approval .detail { font-family: var(--mono); font-size: 12px; background: var(--chip); padding: 8px 10px; border-radius: 6px; margin: 6px 0 0; white-space: pre-wrap; word-break: break-word; max-height: 12em; overflow: auto; }
+  .group.approval .actions { display: flex; gap: 8px; margin-top: 8px; }
+  .group.approval .actions button { font: inherit; font-size: 13px; padding: 4px 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; }
+  .group.approval .actions button.allow { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .group.approval .actions button:disabled { opacity: .5; cursor: default; }
+  .group.approval .questions { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
+  .group.approval .question .q { margin-bottom: 4px; }
+  .group.approval .options { display: flex; flex-wrap: wrap; gap: 6px; }
+  .group.approval .options button { font: inherit; font-size: 13px; padding: 3px 10px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; }
+  .group.approval .options button.picked { background: color-mix(in srgb, var(--accent) 16%, transparent); border-color: var(--accent); color: var(--accent); }
+  .group.approval.done { opacity: .6; }
   .pending-line.long .time { color: var(--synth); font-weight: 600; }
   .reply { position: relative; display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
   .reply .row { display: flex; gap: 8px; align-items: flex-end; }

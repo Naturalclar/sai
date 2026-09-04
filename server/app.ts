@@ -7,6 +7,8 @@ import { ICON_MAX_BYTES, iconUrl } from '../shared/icon.ts'
 import { mergeMeta } from '../shared/meta.ts'
 import { replyBlockedReason } from '../shared/reply.ts'
 import type {
+  ApprovalAnswer,
+  ApprovalRequest,
   FeedResponse,
   ReplyRequest,
   ReplyResponse,
@@ -19,6 +21,7 @@ import type {
 } from '../shared/types.ts'
 import { entityId, facets, filterSessions } from './aggregate.ts'
 import { ICONS_DIR, IconStore, iconKey } from './icons.ts'
+import { Approvals, WAIT_MS } from './approvals.ts'
 import { META_FILE, MetaStore } from './meta.ts'
 import { ProcessRunner, replyCommand } from './runner.ts'
 import type { Runner } from './runner.ts'
@@ -32,6 +35,11 @@ export const MAX_REPLY_BYTES = 64 * 1024
 export const MAX_META_BYTES = 4 * 1024
 
 const SESSIONS_PREFIX = '/api/sessions/'
+const APPROVALS_PATH = '/api/approvals'
+const APPROVALS_PREFIX = '/api/approvals/'
+const ANSWER_SUFFIX = '/answer'
+/** 承認 body の上限。ツールの入力そのもの（Edit の new_string など）が入るので返信より大きめ */
+export const MAX_APPROVAL_BYTES = 1024 * 1024
 const REPLY_SUFFIX = '/reply'
 const META_SUFFIX = '/meta'
 const ICON_SUFFIX = '/icon'
@@ -110,17 +118,18 @@ export function parseDays(raw: string | null, fallback: number): number {
  * 処理中の返信を rev に混ぜる。画面は rev が同じなら state を触らないので、JSONL が変わらないまま
  * 「処理中 → 終了」になっても再描画されない。since まで含めるので、同じ id の連続した返信も区別できる
  */
-export function revWith(rev: string, replying: ReplyingMap): string {
+export function revWith(rev: string, replying: ReplyingMap, approvalsKey = ''): string {
   const ids = Object.keys(replying).sort()
-  if (ids.length === 0) return rev
+  if (ids.length === 0 && !approvalsKey) return rev
   const h = createHash('sha1')
   for (const id of ids) h.update(`${id}\n${replying[id]!.since}\n`)
+  h.update(`approvals:${approvalsKey}`)
   return `${rev}:${h.digest('hex').slice(0, 8)}`
 }
 
 export type Handler = (req: IncomingMessage, res: ServerResponse) => Promise<void>
 
-export function createApp(store: FeedStore, distDir: string, runner?: Runner): Handler {
+export function createApp(store: FeedStore, distDir: string, runner?: Runner, approvals: Approvals = new Approvals()): Handler {
   const distRoot = resolve(distDir)
   const run: Runner = runner ?? new ProcessRunner(join(store.directory, 'reply.log'))
   const metaStore = new MetaStore(join(store.directory, META_FILE))
@@ -208,10 +217,13 @@ export function createApp(store: FeedStore, distDir: string, runner?: Runner): H
       return error(res, 400, `cwd が見つかりません: ${cwd || '(空)'}`)
     }
     if (run.running(id)) return error(res, 409, 'このセッションはまだ前の返信を処理中です')
-    const cmd = replyCommand(session.agent, raw, text, cwd)
+    // 許可・質問を画面で答える配線。MCP の子プロセスは、ブラウザがこのサーバに来たのと同じ宛先（Host）に預ける
+    const via = req.headers.host ? { url: `http://${req.headers.host}`, entity: id } : undefined
+    const cmd = replyCommand(session.agent, raw, text, cwd, process.env, via)
     if (!cmd) return error(res, 400, replyBlockedReason(session) || 'unsupported agent')
     try {
-      await run.start(id, cmd)
+      // プロセスが終わったら、そのセッションの答え待ちは deny で片付ける（もう誰も答えを取りに来ない）
+      await run.start(id, cmd, () => approvals.drop(id))
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code
       const hint = code === 'ENOENT' ? `${cmd.bin} が見つかりません（SAI_CLAUDE_BIN / SAI_CODEX_BIN で指定できます）` : ''
@@ -219,6 +231,55 @@ export function createApp(store: FeedStore, distDir: string, runner?: Runner): H
     }
     const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd }
     return json(res, payload, 202)
+  }
+
+  /**
+   * POST /api/approvals。返信中の CLI から（server/approve-mcp.ts 経由で）許可・質問を預かる。
+   * 返信を回していないエンティティの分は受けない（誰が投げたか分からないものを画面に出さない）
+   */
+  const askApproval = async (req: IncomingMessage, res: ServerResponse) => {
+    if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
+    let body: unknown
+    try {
+      body = await readJson(req, MAX_APPROVAL_BYTES)
+    } catch (err) {
+      return error(res, 400, err instanceof Error ? err.message : 'bad body')
+    }
+    const b = (body ?? {}) as Partial<ApprovalRequest>
+    if (typeof b.id !== 'string' || !b.id) return error(res, 400, 'id is required')
+    if (typeof b.tool_name !== 'string' || !b.tool_name) return error(res, 400, 'tool_name is required')
+    if (!b.input || typeof b.input !== 'object' || Array.isArray(b.input)) return error(res, 400, 'input must be an object')
+    if (!run.running(b.id)) return error(res, 409, 'このセッションは返信を処理中ではありません')
+    const approval = approvals.ask(b.id, b.tool_name, b.input, typeof b.tool_use_id === 'string' ? b.tool_use_id : '')
+    return json(res, { approval_id: approval.approval_id }, 201)
+  }
+
+  /** GET /api/approvals/<approval_id>?wait=1。答えが付いていれば 200 でその決定、まだなら（wait なら最大 WAIT_MS 待って）202 */
+  const pollApproval = async (res: ServerResponse, approvalId: string, wait: boolean) => {
+    const answer = await approvals.wait(approvalId, wait ? WAIT_MS : 0)
+    if (answer === undefined) return error(res, 404, 'approval not found')
+    if (answer === null) return json(res, { pending: true }, 202)
+    return json(res, answer)
+  }
+
+  /** POST /api/approvals/<approval_id>/answer。画面から。同一オリジンのみ（ここが通ると CSRF で許可が押せる） */
+  const answerApproval = async (req: IncomingMessage, res: ServerResponse, approvalId: string) => {
+    if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
+    let body: unknown
+    try {
+      body = await readJson(req, MAX_APPROVAL_BYTES)
+    } catch (err) {
+      return error(res, 400, err instanceof Error ? err.message : 'bad body')
+    }
+    const b = (body ?? {}) as Partial<ApprovalAnswer>
+    if (b.behavior !== 'allow' && b.behavior !== 'deny') return error(res, 400, 'behavior は allow か deny')
+    const current = approvals.get(approvalId)
+    if (!current) return error(res, 404, 'approval not found')
+    const answer: ApprovalAnswer = b.behavior === 'allow'
+      ? { behavior: 'allow', updatedInput: b.updatedInput && typeof b.updatedInput === 'object' && !Array.isArray(b.updatedInput) ? b.updatedInput : current.input }
+      : { behavior: 'deny', message: typeof b.message === 'string' && b.message.trim() ? b.message.trim() : 'SAI の画面で拒否された' }
+    if (!approvals.answer(approvalId, answer)) return error(res, 409, 'already answered')
+    return json(res, { ok: true, approval_id: approvalId, behavior: answer.behavior })
   }
 
   /**
@@ -307,9 +368,12 @@ export function createApp(store: FeedStore, distDir: string, runner?: Runner): H
     const isReply = path.startsWith(SESSIONS_PREFIX) && path.endsWith(REPLY_SUFFIX)
     const isMeta = path.startsWith(SESSIONS_PREFIX) && path.endsWith(META_SUFFIX)
     const isIcon = path.startsWith(SESSIONS_PREFIX) && path.endsWith(ICON_SUFFIX)
+    const isAsk = path === APPROVALS_PATH
+    const isAnswer = path.startsWith(APPROVALS_PREFIX) && path.endsWith(ANSWER_SUFFIX)
     const method = req.method ?? 'GET'
-    // 書き込みは「返信は POST」「表示名は PUT」「アイコンは PUT / DELETE」だけ。それ以外は GET / HEAD のみ
-    const writable = (method === 'POST' && isReply) || (method === 'PUT' && isMeta) || ((method === 'PUT' || method === 'DELETE') && isIcon)
+    // 書き込みは「返信は POST」「表示名は PUT」「アイコンは PUT / DELETE」「承認の預かりと答えは POST」だけ。それ以外は GET / HEAD のみ
+    const writable =
+      (method === 'POST' && (isReply || isAsk || isAnswer)) || (method === 'PUT' && isMeta) || ((method === 'PUT' || method === 'DELETE') && isIcon)
     if (!writable && method !== 'GET' && method !== 'HEAD') return error(res, 405, 'method not allowed')
     try {
       if (isReply) {
@@ -317,6 +381,17 @@ export function createApp(store: FeedStore, distDir: string, runner?: Runner): H
         const id = sessionIdFrom(path, REPLY_SUFFIX)
         if (id === null) return error(res, 400, 'bad session id')
         return await reply(req, res, id, parseDays(q.get('days'), 90))
+      }
+      if (isAsk) {
+        if (method !== 'POST') return error(res, 405, 'method not allowed')
+        return await askApproval(req, res)
+      }
+      if (isAnswer) {
+        if (method !== 'POST') return error(res, 405, 'method not allowed')
+        return await answerApproval(req, res, path.slice(APPROVALS_PREFIX.length, -ANSWER_SUFFIX.length))
+      }
+      if (path.startsWith(APPROVALS_PREFIX)) {
+        return await pollApproval(res, path.slice(APPROVALS_PREFIX.length), q.get('wait') === '1')
       }
       if (path.startsWith('/api/')) {
         // 画面はポーリングのついでにこれを見て、別ターミナルで pnpm build されたらリロードする
@@ -346,16 +421,18 @@ export function createApp(store: FeedStore, distDir: string, runner?: Runner): H
         const days = parseDays(q.get('days'), 7)
         const { rev, sessions } = await sessionsWithMeta(days)
         const replying = run.snapshot()
+        const pendingApprovals = approvals.snapshot()
         // 既定はアーカイブ済みを除く。archived=1 でアーカイブ済みだけ。total と filters はその集合の絞り込み前から作る
         const wantArchived = q.get('archived') === '1'
         const pool = sessions.filter((s) => Boolean(s.archived) === wantArchived)
         const body: SessionsResponse = {
-          rev: revWith(rev, replying),
+          rev: revWith(rev, replying, approvals.revKey()),
           days,
           total: pool.length,
           sessions: filterSessions(pool, q.get('repo') ?? '', q.get('agent') ?? '', q.get('date') ?? ''),
           filters: facets(pool),
           replying,
+          approvals: pendingApprovals,
         }
         return json(res, body)
       }
@@ -369,7 +446,7 @@ export function createApp(store: FeedStore, distDir: string, runner?: Runner): H
         if (!session) return error(res, 404, 'session not found in window')
         const rows = (await store.rows(days)).filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
         const replying = run.snapshot()
-        const body: SessionDetailResponse = { rev: revWith(rev, replying), session, rows, replying }
+        const body: SessionDetailResponse = { rev: revWith(rev, replying, approvals.revKey()), session, rows, replying, approvals: approvals.snapshot() }
         return json(res, body)
       }
 
@@ -383,8 +460,8 @@ export function createApp(store: FeedStore, distDir: string, runner?: Runner): H
         if (repo) rows = rows.filter((r) => r.repo === repo)
         if (archived.size) rows = rows.filter((r) => !archived.has(entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? ''))))
         const replying = run.snapshot()
-        // rev はメタ（アーカイブ）と処理中の集合も混ぜる
-        const body: FeedResponse = { rev: revWith(rev, replying), days, rows, replying }
+        // rev はメタ（アーカイブ）と処理中の集合、答え待ちの承認も混ぜる
+        const body: FeedResponse = { rev: revWith(rev, replying, approvals.revKey()), days, rows, replying, approvals: approvals.snapshot() }
         return json(res, body)
       }
 

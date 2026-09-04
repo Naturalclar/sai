@@ -311,6 +311,28 @@ SAI_CODEX_ARGS='-s workspace-write' pnpm start                    # Codex: 作�
 
 `claude` の `--allowedTools` は `~/.claude/settings.json` の `permissions.allow` と同じ書き方で、こちらは SAI からの返信にだけ効く（端末の許可設定はそのまま）。**SAI 自身は既定で何も付けない。** `--dangerously-skip-permissions` / `--permission-mode bypassPermissions` / Codex の `--dangerously-bypass-approvals-and-sandbox` も書けるが、返信の POST はブラウザから飛ぶので、その状態で別サイトからの CSRF が通ればエージェントが何でもできる（同一オリジンの検査で止めてはいる）。許可はツール単位で最小にする。
 
+### 返信中の許可・質問に画面から答える
+
+端末と同じく、返信で回したエージェントが **許可（ツール実行の確認）や `AskUserQuestion` で止まったら、SAI のチャットに ⏳ のバブルと [許可] [拒否]（質問なら選択肢）が出て、そこから答えられる**。答えるまでエージェントは待っていて、一覧には「待機中」が付く。
+
+仕組みは `claude -p` の `--permission-prompt-tool`。SAI は返信の `claude` に自分の MCP サーバ（`server/approve-mcp.ts`。stdio、依存ゼロ）を `--mcp-config` で足し、許可が要るたびにそのツールが呼ばれる。ツールは SAI サーバに預けて（`POST /api/approvals`）答えが付くまで待ち（`GET /api/approvals/<id>?wait=1`）、画面の答え（`POST /api/approvals/<id>/answer`）をそのまま CLI に返す。
+
+```
+claude -p --resume … --mcp-config '{"mcpServers":{"sai":…}}' --permission-prompt-tool mcp__sai__approve
+   │ 許可が要る
+   ▼
+approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /api/approvals/<id>/answer── 画面の [許可] [拒否]
+               ◀─{ behavior: allow | deny }─┘
+```
+
+- 答え待ちはサーバのメモリだけ。返信のプロセスが終われば（許可を待たずに落ちた、`claude` を kill した）その分は拒否扱いで消える。MCP 側が 90 秒取りに来なければ捨てる
+- `AskUserQuestion` は質問と選択肢がそのまま出て、全部に答えると `answers` 付きで返す（複数選択は 1 つだけ選ぶ）。`ExitPlanMode` はプランの先頭が出て、許可すれば進む
+- 許可は「その 1 回」だけ。「今後も許可」は覚えない（`--allowedTools` か `~/.claude/settings.json` で先に許しておく）
+- 答える口は同一オリジンのみ（`isCrossOrigin`）。ここが通ると別サイトから許可が押せてしまうので外さない
+- **Claude だけ。** Codex に同等の口は無い（返信は今までどおり、承認が要るものは拒否される）
+- 外すなら `SAI_APPROVE=0`。運用者が `SAI_CLAUDE_ARGS` に自前の `--permission-prompt-tool` を入れていれば SAI は足さない。`--mcp-config` は追加なので、`~/.claude.json` や `.mcp.json` の MCP サーバはそのまま使える（`--strict-mcp-config` は付けない）
+- 返信のプロセスと画面の間は `127.0.0.1` の HTTP だけで、外には出ない。宛先はブラウザがサーバに来た `Host`（普通は `127.0.0.1:8787`）
+
 「フィード」は全チャンネルを時系列に流したもの（`/api/feed`）。フィードからも返信できる。全セッションが混ざっているので返信先を選ぶ必要があり、入力欄で半角の `@` を打つと候補が出て、↑↓ と Enter で選ぶと、Slack と同じく入力欄の中に表記（`@repo`。同じリポジトリが複数なら `@repo/branch`）が入り、入力欄の上のチップ（`→ #repo branch「タイトル」`）も差し替わる。表記は送信時に本文から外す。表記を手で消すか、チップの ✕ を押すと既定に戻る。何も選ばなければ一番新しい行のセッションに送る（既定でもチップに出る）。再開できないセッションは候補に薄く出て選べない。送る先は同じ `POST /api/sessions/<id>/reply`。
 
 候補は**サイドバーの一覧に出ているセッション**（絞り込みと日数はサイドバーのもの。表示名・アイコンが付いていればそれで出る）を先に、一覧に無くてフィードにだけ出ている行のセッションを後ろに並べる。リポジトリ / ブランチ / タイトルで絞れる。一覧の取得は画面全体で 1 回で、サイドバーとフィードが同じ結果を見る。
@@ -321,9 +343,12 @@ SAI_CODEX_ARGS='-s workspace-write' pnpm start                    # Codex: 作�
 | --- | --- |
 | `GET /` | ビューア（`web/dist/index.html`） |
 | `GET /assets/*` | ビルド成果物。`dist/` の外には出ない |
-| `GET /api/sessions?days=7&repo=&agent=&date=&archived=` | セッション一覧（集計済み）。各セッションの `waiting` は人を待って止まっていれば「何を待っているか」、そうでなければ空。`filters` に絞り込み候補、`replying` に処理中の返信（ID → `{ since, text }`）も返す。既定ではアーカイブ済みを除き、`archived=1` でアーカイブ済みだけ（`total` と `filters` もその集合から） |
+| `GET /api/sessions?days=7&repo=&agent=&date=&archived=` | セッション一覧（集計済み）。各セッションの `waiting` は人を待って止まっていれば「何を待っているか」、そうでなければ空。`filters` に絞り込み候補、`replying` に処理中の返信（ID → `{ since, text }`）、`approvals` に返信中のエージェントが待っている許可・質問（ID → 古い順の配列）も返す。既定ではアーカイブ済みを除き、`archived=1` でアーカイブ済みだけ（`total` と `filters` もその集合から） |
 | `GET /api/sessions/<id>?days=30` | そのエンティティの全行と `replying`。`<id>` は `<セッション>@<リポジトリ>` |
 | `POST /api/sessions/<id>/reply?days=90` | body `{ "text": "..." }`。そのセッションを `cwd` で再開して1ターン回すのを投げっぱなしにし、`202` を返す。合成 ID は `400`、進行中は `409`、別オリジンは `403` |
+| `POST /api/approvals` | 返信中の CLI（`server/approve-mcp.ts`）が許可・質問を預ける。body `{ "id", "tool_name", "input", "tool_use_id"? }`。返信を処理中でないエンティティは `409`。`201` で `{ "approval_id" }` |
+| `GET /api/approvals/<approval_id>?wait=1` | 答えが付いていれば `200` で `{ "behavior": "allow" \| "deny", "updatedInput"?, "message"? }`（渡したら消える）。まだなら `wait=1` で最大 20 秒待って `202`。無ければ `404` |
+| `POST /api/approvals/<approval_id>/answer` | 画面から答える。body `{ "behavior": "allow" \| "deny", "updatedInput"?, "message"? }`。`allow` で `updatedInput` を省けば元の入力のまま。別オリジンは `403`、答え済みは `404` |
 | `GET /api/sessions/<id>/meta` | 表示名・アーカイブ。`{ "id", "meta": { "name"?, "archived_at"? } }`。無ければ `meta` は `{}` |
 | `PUT /api/sessions/<id>/meta?days=90` | body `{ "name"?: "...", "archived_at"?: "<ISO>" }` をいまの値に重ねる。省略したキーは据え置き、空文字や `null` は「消す」で、全部消えたらエントリごと消える。知らないキーは捨てる。名前は100文字まで、`archived_at` は読める時刻（違えば `400`）。窓の中に無いセッションは `404`、別オリジンは `403` |
 | `GET /api/sessions/<id>/icon?v=<mtime>` | アイコン画像そのもの（`image/png` など）。無ければ `404`。`v` がいまのファイルと同じなら `Cache-Control: immutable`、無ければ `no-store` |
@@ -358,3 +383,4 @@ SAI_CODEX_ARGS='-s workspace-write' pnpm start                    # Codex: 作�
 | `SAI_CODEX_BIN` | 同じく `codex` |
 | `SAI_CLAUDE_ARGS` | 返信の `claude -p --resume` に足す引数。空白区切りで、空白を含む値は `"…"` か `'…'` で囲む。例: `--allowedTools "Bash(gh *)"`、`--permission-mode acceptEdits`。「返信と許可」の項を読んでから |
 | `SAI_CODEX_ARGS` | 同じく `codex exec resume` に足す引数。例: `-s workspace-write` |
+| `SAI_APPROVE` | `0` で「返信中の許可・質問に画面から答える」配線（`--mcp-config` + `--permission-prompt-tool`）を付けない |

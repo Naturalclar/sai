@@ -158,6 +158,7 @@
     .channels .item:has(.archive-btn) .last, .channels .item:has(.archive-btn) .t { padding-right: 6.5em; }
     /* 文字だけのボタン・リンクは見た目を変えずに当たり判定だけ広げる（負のマージンで周りをずらさない） */
     .linkish, .msg .more, .msg .think-toggle, .reply .target .clear { padding: 8px 6px; margin: -8px -6px; }
+    .iconbtn { width: 36px; height: 36px; }
     .back { padding: 8px 6px; margin: -8px -6px 0; }
     .reply textarea { min-height: 44px; }
     .reply .row button { min-height: 44px; }
@@ -214,6 +215,12 @@
   .chat-head .archive .err { color: var(--claude); margin-left: 6px; }
   .linkish { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-size: 12px; cursor: pointer; }
   .linkish:hover { text-decoration: underline; }
+  /* 文字を出さないアイコンのボタン（IconButton）。色は薄く、ホバーで背景が付く */
+  .iconbtn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; background: transparent; border: 0; border-radius: 6px; color: var(--muted); cursor: pointer; flex: none; }
+  .iconbtn:hover { background: var(--hover); color: var(--ink); }
+  .iconbtn:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent); }
+  .iconbtn:disabled { opacity: .5; cursor: default; background: transparent; }
+  .iconbtn svg { width: 16px; height: 16px; }
   .chat { flex: 1; min-height: 0; min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow-y: auto; }
   .day { text-align: center; color: var(--muted); font-size: 11px; padding: 10px 0 2px; position: relative; }
   .day span { background: var(--panel); padding: 0 8px; position: relative; }

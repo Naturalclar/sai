@@ -3,7 +3,7 @@ import { replyBlockedReason } from '../../shared/reply.ts'
 import { eventKind } from '../../shared/events.ts'
 import { promptArrived } from './chatGroups'
 import { api } from './api'
-import { usePolling } from './hooks'
+import { useLocalState, usePolling } from './hooks'
 import { dayLabel, hm } from './format'
 import { AgentChip } from './AgentChip'
 import { SynthTag } from './SynthTag'
@@ -36,6 +36,10 @@ export function SessionView({ id, onStatus, onOpenSidebar }: { id: string } & Pa
 
   const approvals = data?.approvals[id] ?? NO_APPROVALS
 
+  // 思考の折りたたみを全部開いておくか。localStorage に残る。思考のある行が1つも無ければトグルは出さない
+  const [thinkingUi, setThinkingUi] = useLocalState<{ open: boolean }>('sai.thinking', { open: false })
+  const hasThinking = data?.rows.some((r) => Boolean(r.thinking?.trim())) ?? false
+
   const s = data?.session
   const blocked = s ? replyBlockedReason(s) : ''
   return (
@@ -57,6 +61,13 @@ export function SessionView({ id, onStatus, onOpenSidebar }: { id: string } & Pa
           {/* 合成 ID は集計の切れ方で付け先がずれるのでアーカイブできない */}
           {s.session_source !== 'synth' && <ArchiveButton key={`${s.id}:${s.archived ? 1 : 0}`} id={s.id} archived={Boolean(s.archived)} />}
           <MetaEditor key={s.id} id={s.id} meta={s.meta} icon={s.icon} />
+          {hasThinking && (
+            <span className="meta">
+              <button type="button" className="linkish" onClick={() => setThinkingUi({ open: !thinkingUi.open })} title="エージェントの思考（thinking）の折りたたみを全部開く／閉じる">
+                {thinkingUi.open ? '思考を全部閉じる' : '思考を全部開く'}
+              </button>
+            </span>
+          )}
           {s.title_full && <div className="meta wide">{s.title_full}</div>}
         </div>
       )}
@@ -66,6 +77,8 @@ export function SessionView({ id, onStatus, onOpenSidebar }: { id: string } & Pa
           rows={data.rows}
           showChannel={false}
           sessions={[data.session]}
+          showThinking
+          thinkingOpen={thinkingUi.open}
           trailer={
             <>
               {mine && <PendingBubble text={mine.text} since={mine.since} now={now} quiet={promptArrived(data.rows, id, mine.text, mine.since)} />}

@@ -1,5 +1,5 @@
 // チャットの行をバブルの塊にまとめる。DOM に依存しないので node:test で回す（chatGroups.test.ts）
-import type { FeedRow, SessionSummary } from '../../shared/types.ts'
+import type { FeedRow, Profile, SessionSummary } from '../../shared/types.ts'
 import { entityId } from '../../shared/entity.ts'
 import { eventKind } from '../../shared/events.ts'
 import { dayLabel, minutesBetween, parseTs, ymd } from './format.ts'
@@ -139,13 +139,17 @@ export interface SpeakerLabel {
 }
 
 /**
- * 発言者の名前とアバター。自分は固定（「あなた」/「私」）。エージェント側は、そのセッションに表示名・アイコン画像が
- * 付いていればそれ、無ければエージェントの固定値（Claude Code / C など）。
+ * 発言者の名前とアバター。自分は profile（ヘッダーのメニューで付けた表示名・アイコン）、無ければ「あなた」/「私」。
+ * エージェント側は、そのセッションに表示名・アイコン画像が付いていればそれ、無ければエージェントの固定値（Claude Code / C など）。
  * session はセッション一覧（SessionSummary）から引く。一覧の窓に無いセッションの行がフィードに出ることがあるので、
  * 引けなければ固定値に落ちる
  */
-export function speakerLabel(speaker: Speaker, session: Pick<SessionSummary, 'meta' | 'icon'> | undefined): SpeakerLabel {
-  if (speaker === 'me') return { name: 'あなた', mark: '私' }
+export function speakerLabel(speaker: Speaker, session: Pick<SessionSummary, 'meta' | 'icon'> | undefined, profile?: Profile): SpeakerLabel {
+  if (speaker === 'me') {
+    const me: SpeakerLabel = { name: profile?.name || 'あなた', mark: '私' }
+    if (profile?.icon) me.icon = profile.icon
+    return me
+  }
   const out: SpeakerLabel = {
     name: session?.meta?.name || AGENT_LABEL[speaker] || speaker,
     mark: AGENT_INITIAL[speaker] || '?',

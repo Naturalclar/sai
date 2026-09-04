@@ -3,6 +3,8 @@ import type {
   ApprovalAnswer,
   FeedFilters,
   FeedResponse,
+  Profile,
+  ProfileResponse,
   ReplyRequest,
   ReplyResponse,
   SessionDetailResponse,
@@ -13,7 +15,7 @@ import type {
   SessionsResponse,
 } from '../../shared/types.ts'
 
-export type { Agent, FeedRow, SessionSource, SessionSummary, SessionMeta, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, Approval, ApprovalMap, ApprovalAnswer } from '../../shared/types.ts'
+export type { Agent, FeedRow, SessionSource, SessionSummary, SessionMeta, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, Approval, ApprovalMap, ApprovalAnswer, Profile } from '../../shared/types.ts'
 
 /** サーバは失敗を { error } で返す。それがあればそのまま見せる */
 async function failure(res: Response, url: string): Promise<Error> {
@@ -85,5 +87,11 @@ export const api = {
   setIcon: (id: string, file: Blob, days = 90) =>
     sendRaw<SessionIconResponse>('PUT', `/api/sessions/${encodeURIComponent(id)}/icon?days=${days}`, file),
   clearIcon: (id: string) => sendRaw<SessionIconResponse>('DELETE', `/api/sessions/${encodeURIComponent(id)}/icon`),
+  /** 自分の表示名とアイコン。一覧・詳細・フィードにも profile として載るので、普段はそちらを見る */
+  profile: () => getJSON<ProfileResponse>('/api/profile'),
+  /** 表示名を置く。空文字は「消す」 */
+  setProfile: (profile: Pick<Profile, 'name'>) => sendJSON<ProfileResponse>('PUT', '/api/profile', profile),
+  setProfileIcon: (file: Blob) => sendRaw<ProfileResponse>('PUT', '/api/profile/icon', file),
+  clearProfileIcon: () => sendRaw<ProfileResponse>('DELETE', '/api/profile/icon'),
 }
 

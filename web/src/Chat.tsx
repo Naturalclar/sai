@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react'
 import type { ReactNode } from 'react'
 import { entityId } from '../../shared/entity.ts'
-import type { FeedRow, SessionSummary } from './api'
+import type { FeedRow, Profile, SessionSummary } from './api'
 import { hm } from './format'
 import { groupRows, speakerLabel } from './chatGroups.ts'
 import { Message } from './Message'
@@ -19,9 +19,11 @@ interface Props {
   showThinking?: boolean
   /** 思考を最初から開いておく（ヘッダの「思考を全部開く」） */
   thinkingOpen?: boolean
+  /** 自分の表示名とアイコン（自分側のバブル） */
+  profile?: Profile
 }
 
-export function Chat({ rows, showChannel, sessions = NO_SESSIONS, trailer, showThinking = false, thinkingOpen = false }: Props) {
+export function Chat({ rows, showChannel, sessions = NO_SESSIONS, trailer, showThinking = false, thinkingOpen = false, profile }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
   // エンティティID → セッション（表示名・アイコン画像）。バブルの見出しは行しか持っていないので、entityId で引く
@@ -47,7 +49,7 @@ export function Chat({ rows, showChannel, sessions = NO_SESSIONS, trailer, showT
           <div className="day"><span>{day.label}</span></div>
           {day.groups.map((g) => {
             const id = entityId(g.session, g.repo, g.firstTs)
-            const who = speakerLabel(g.speaker, byId.get(id))
+            const who = speakerLabel(g.speaker, byId.get(id), profile)
             return (
               <div className="group" key={`${g.speaker}:${g.session}:${g.firstTs}`}>
                 <div className={`avatar ${g.speaker}`}>{who.icon ? <img src={who.icon} alt="" /> : who.mark}</div>

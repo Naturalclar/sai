@@ -5,11 +5,14 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { extname, join, resolve, sep } from 'node:path'
 import { ICON_MAX_BYTES, iconUrl } from '../shared/icon.ts'
 import { mergeMeta } from '../shared/meta.ts'
+import { mergeProfile, PROFILE_ICON_ID, profileIconUrl } from '../shared/profile.ts'
 import { replyBlockedReason } from '../shared/reply.ts'
 import type {
   ApprovalAnswer,
   ApprovalRequest,
   FeedResponse,
+  Profile,
+  ProfileResponse,
   FeedRow,
   ReplyingMap,
   ReplyRequest,
@@ -25,6 +28,7 @@ import { ICONS_DIR, IconStore, iconKey } from './icons.ts'
 import { Approvals, WAIT_MS } from './approvals.ts'
 import { BuildFreshness } from './buildFreshness.ts'
 import { META_FILE, MetaStore } from './meta.ts'
+import { PROFILE_FILE, ProfileStore } from './profile.ts'
 import { ProcessRunner, replyCommand } from './runner.ts'
 import type { Runner } from './runner.ts'
 import type { FeedStore } from './store.ts'
@@ -45,6 +49,8 @@ export const MAX_APPROVAL_BYTES = 1024 * 1024
 const REPLY_SUFFIX = '/reply'
 const META_SUFFIX = '/meta'
 const ICON_SUFFIX = '/icon'
+const PROFILE_PATH = '/api/profile'
+const PROFILE_ICON_PATH = '/api/profile/icon'
 
 /**
  * `/api/sessions/<id>[<suffix>]` から id を取り出す。空、`/` を含む、%-エンコードが壊れている
@@ -152,6 +158,19 @@ export function createApp(
   const run: Runner = runner ?? new ProcessRunner(join(store.directory, 'reply.log'))
   const metaStore = new MetaStore(join(store.directory, META_FILE))
   const iconStore = new IconStore(join(store.directory, ICONS_DIR))
+  const profileStore = new ProfileStore(join(store.directory, PROFILE_FILE))
+
+  /**
+   * 自分の表示名とアイコン。rev は profile.json とアイコンの状態で、名前や画像を変えたら応答の rev も変わる
+   * （アイコンは session-icons/ に置くので iconStore の rev にも入るが、名前の分はここでしか変わらない）
+   */
+  const profileNow = async (): Promise<{ rev: string; profile: Profile }> => {
+    const [{ rev, name }, icon] = await Promise.all([profileStore.get(), iconStore.get(PROFILE_ICON_ID)])
+    const profile: Profile = {}
+    if (name) profile.name = name
+    if (icon) profile.icon = profileIconUrl(icon.version)
+    return { rev: `${rev}|${icon?.version ?? ''}`, profile }
+  }
 
   /**
    * 集計済みのセッションにメタ（表示名・アーカイブ）とアイコン画像の URL を載せる。store のキャッシュ配列は触らず新しい配列を返す。
@@ -343,21 +362,62 @@ export function createApp(
    * PUT /api/sessions/<id>/icon。body は画像そのもの。中身で種類を見て、画像でなければ 400。
    * DELETE で消す。どちらも別オリジンは 403、窓の中に無いセッションは 404（表示名と同じ）
    */
-  const putIcon = async (req: IncomingMessage, res: ServerResponse, id: string, days: number) => {
-    if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
+  /** 画像の body を読む。大きすぎれば 413、空なら 400。失敗したら応答を書いて null */
+  const readIconBody = async (req: IncomingMessage, res: ServerResponse): Promise<Buffer | null> => {
     let bytes: Buffer
     try {
       bytes = await readBody(req, ICON_MAX_BYTES)
     } catch (err) {
       const big = err instanceof Error && err.message === 'body too large'
-      return error(res, big ? 413 : 400, big ? `画像は ${ICON_MAX_BYTES / 1024 / 1024}MB までです` : (err instanceof Error ? err.message : 'bad body'))
+      error(res, big ? 413 : 400, big ? `画像は ${ICON_MAX_BYTES / 1024 / 1024}MB までです` : (err instanceof Error ? err.message : 'bad body'))
+      return null
     }
-    if (bytes.length === 0) return error(res, 400, '画像が空です')
+    if (bytes.length === 0) {
+      error(res, 400, '画像が空です')
+      return null
+    }
+    return bytes
+  }
+  const putIcon = async (req: IncomingMessage, res: ServerResponse, id: string, days: number) => {
+    if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
+    const bytes = await readIconBody(req, res)
+    if (!bytes) return
     const { sessions } = await store.sessions(days)
     if (!sessions.some((s) => s.id === id)) return error(res, 404, 'session not found in window')
     const { icon, error: reason } = await iconStore.put(id, bytes)
     if (reason || !icon) return error(res, 400, reason || '保存できませんでした')
     const payload: SessionIconResponse = { id, icon: iconUrl(id, icon.version) }
+    return json(res, payload)
+  }
+  /** PUT /api/profile。body { name? } をいまの値に重ねる（空は消す）。GET は profileNow をそのまま */
+  const putProfile = async (req: IncomingMessage, res: ServerResponse) => {
+    if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
+    let body: unknown
+    try {
+      body = await readJson(req, MAX_META_BYTES)
+    } catch (err) {
+      return error(res, 400, err instanceof Error ? err.message : 'bad body')
+    }
+    const { name, error: reason } = mergeProfile({ name: (await profileStore.get()).name }, body)
+    if (reason) return error(res, 400, reason)
+    await profileStore.set(name)
+    const payload: ProfileResponse = { profile: (await profileNow()).profile }
+    return json(res, payload)
+  }
+  /** PUT / DELETE /api/profile/icon。セッションのアイコンと同じ IconStore に固定の鍵で置く（窓の検査は無い） */
+  const putProfileIcon = async (req: IncomingMessage, res: ServerResponse) => {
+    if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
+    const bytes = await readIconBody(req, res)
+    if (!bytes) return
+    const { icon, error: reason } = await iconStore.put(PROFILE_ICON_ID, bytes)
+    if (reason || !icon) return error(res, 400, reason || '保存できませんでした')
+    const payload: ProfileResponse = { profile: (await profileNow()).profile }
+    return json(res, payload)
+  }
+  const deleteProfileIcon = async (req: IncomingMessage, res: ServerResponse) => {
+    if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
+    await iconStore.remove(PROFILE_ICON_ID)
+    const payload: ProfileResponse = { profile: (await profileNow()).profile }
     return json(res, payload)
   }
   const deleteIcon = async (req: IncomingMessage, res: ServerResponse, id: string) => {
@@ -388,10 +448,15 @@ export function createApp(
     const isIcon = path.startsWith(SESSIONS_PREFIX) && path.endsWith(ICON_SUFFIX)
     const isAsk = path === APPROVALS_PATH
     const isAnswer = path.startsWith(APPROVALS_PREFIX) && path.endsWith(ANSWER_SUFFIX)
+    const isProfile = path === PROFILE_PATH
+    const isProfileIcon = path === PROFILE_ICON_PATH
     const method = req.method ?? 'GET'
-    // 書き込みは「返信は POST」「表示名は PUT」「アイコンは PUT / DELETE」「承認の預かりと答えは POST」だけ。それ以外は GET / HEAD のみ
+    // 書き込みは「返信は POST」「表示名は PUT」「アイコンは PUT / DELETE」「承認の預かりと答えは POST」「自分の表示名は PUT、アイコンは PUT / DELETE」だけ。
+    // それ以外は GET / HEAD のみ
     const writable =
-      (method === 'POST' && (isReply || isAsk || isAnswer)) || (method === 'PUT' && isMeta) || ((method === 'PUT' || method === 'DELETE') && isIcon)
+      (method === 'POST' && (isReply || isAsk || isAnswer)) ||
+      (method === 'PUT' && (isMeta || isProfile)) ||
+      ((method === 'PUT' || method === 'DELETE') && (isIcon || isProfileIcon))
     if (!writable && method !== 'GET' && method !== 'HEAD') return error(res, 405, 'method not allowed')
     try {
       if (isReply) {
@@ -430,6 +495,16 @@ export function createApp(
         if (method === 'DELETE') return await deleteIcon(req, res, id)
         return await getIcon(req, res, id, q.get('v'))
       }
+      if (isProfile) {
+        if (method === 'PUT') return await putProfile(req, res)
+        const payload: ProfileResponse = { profile: (await profileNow()).profile }
+        return json(res, payload)
+      }
+      if (isProfileIcon) {
+        if (method === 'PUT') return await putProfileIcon(req, res)
+        if (method === 'DELETE') return await deleteProfileIcon(req, res)
+        return await getIcon(req, res, PROFILE_ICON_ID, q.get('v'))
+      }
       if (path === '/' || path === '/index.html') return await sendStatic(res, 'index.html')
       if (path.startsWith('/assets/')) return await sendStatic(res, path.slice(1))
       if (path === '/favicon.ico') return send(res, 204, '', 'image/x-icon')
@@ -437,7 +512,8 @@ export function createApp(
 
       if (path === '/api/sessions') {
         const days = parseDays(q.get('days'), 7)
-        const { rev, sessions } = await sessionsWithMeta(days)
+        const [{ rev: sessionsRev, sessions }, me] = await Promise.all([sessionsWithMeta(days), profileNow()])
+        const rev = `${sessionsRev}~${me.rev}`
         const replying = run.snapshot()
         const pendingApprovals = approvals.snapshot()
         // 既定はアーカイブ済みを除く。archived=1 でアーカイブ済みだけ。total と filters はその集合の絞り込み前から作る
@@ -454,6 +530,7 @@ export function createApp(
           replying,
           approvals: pendingApprovals,
           build_stale,
+          profile: me.profile,
         }
         return json(res, body)
       }
@@ -462,12 +539,19 @@ export function createApp(
         const id = sessionIdFrom(path)
         if (id === null) return error(res, 400, 'bad session id')
         const days = parseDays(q.get('days'), 30)
-        const { rev, sessions } = await sessionsWithMeta(days)
+        const [{ rev: sessionsRev, sessions }, me] = await Promise.all([sessionsWithMeta(days), profileNow()])
         const session = sessions.find((s) => s.id === id)
         if (!session) return error(res, 404, 'session not found in window')
         const rows = (await store.rows(days)).filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
         const replying = run.snapshot()
-        const body: SessionDetailResponse = { rev: revWith(rev, replying, approvals.revKey()), session, rows, replying, approvals: approvals.snapshot() }
+        const body: SessionDetailResponse = {
+          rev: revWith(`${sessionsRev}~${me.rev}`, replying, approvals.revKey()),
+          session,
+          rows,
+          replying,
+          approvals: approvals.snapshot(),
+          profile: me.profile,
+        }
         return json(res, body)
       }
 
@@ -475,7 +559,8 @@ export function createApp(
         const days = parseDays(q.get('days'), 3)
         const repo = q.get('repo') ?? ''
         // アーカイブ済みセッションの行は流さない（一覧から消えてもフィードに流れていたら隠した意味が無い）
-        const { rev, sessions } = await sessionsWithMeta(days)
+        const [{ rev: sessionsRev, sessions }, me] = await Promise.all([sessionsWithMeta(days), profileNow()])
+        const rev = `${sessionsRev}~${me.rev}`
         const archived = new Set(sessions.filter((s) => s.archived).map((s) => s.id))
         let rows = await store.rows(days)
         if (repo) rows = rows.filter((r) => r.repo === repo)
@@ -492,6 +577,7 @@ export function createApp(
           replying,
           approvals: approvals.snapshot(),
           build_stale,
+          profile: me.profile,
         }
         return json(res, body)
       }

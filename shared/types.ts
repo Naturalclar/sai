@@ -106,6 +106,22 @@ export interface SessionIconResponse {
 }
 
 /**
+ * 自分（人）の表示名とアイコン。SAI は1人のローカルの道具なので1つだけ。
+ * 表示名は ~/.agent-feed/profile.json、アイコンは session-icons/ に固定の鍵（shared/profile.ts の PROFILE_ICON_ID）で置く。
+ * チャットの自分側のバブルの名前とアバターになる（無ければ「あなた」/「私」）
+ */
+export interface Profile {
+  name?: string
+  /** アイコン画像の URL（/api/profile/icon?v=<mtime>）。無ければ undefined */
+  icon?: string
+}
+
+/** GET/PUT /api/profile、PUT/DELETE /api/profile/icon の応答 */
+export interface ProfileResponse {
+  profile: Profile
+}
+
+/**
  * 返信（POST /api/sessions/<id>/reply）で回したターンが、まだ終わっていない。
  * 正本はサーバのメモリ（server/runner.ts）で、子プロセスが exit するまで残る。画面はこれを「送信中」の正とする
  */
@@ -180,6 +196,8 @@ export interface SessionsResponse {
   approvals: ApprovalMap
   /** 配っている web/dist/ が web/src / shared より古い（git pull のあと pnpm build していない）。これが変わると rev も変わる */
   build_stale: boolean
+  /** 自分の表示名とアイコン。変わると rev も変わる */
+  profile: Profile
 }
 
 export interface SessionDetailResponse {
@@ -189,6 +207,8 @@ export interface SessionDetailResponse {
   replying: ReplyingMap
   /** 返信中のエージェントが待っている許可・質問（ID → 古い順）。これが変わると rev も変わる */
   approvals: ApprovalMap
+  /** 自分の表示名とアイコン。変わると rev も変わる */
+  profile: Profile
 }
 
 export interface FeedResponse {
@@ -200,6 +220,8 @@ export interface FeedResponse {
   approvals: ApprovalMap
   /** 配っている web/dist/ が web/src / shared より古い。SessionsResponse と同じ */
   build_stale: boolean
+  /** 自分の表示名とアイコン。変わると rev も変わる */
+  profile: Profile
 }
 
 /** POST /api/sessions/<id>/reply の body */

@@ -77,11 +77,12 @@ export function SessionView({ id, onStatus, onOpenSidebar }: { id: string } & Pa
           rows={data.rows}
           showChannel={false}
           sessions={[data.session]}
+          profile={data.profile}
           showThinking
           thinkingOpen={thinkingUi.open}
           trailer={
             <>
-              {mine && <PendingBubble text={mine.text} since={mine.since} now={now} quiet={promptArrived(data.rows, id, mine.text, mine.since)} />}
+              {mine && <PendingBubble text={mine.text} since={mine.since} now={now} quiet={promptArrived(data.rows, id, mine.text, mine.since)} profile={data.profile} />}
               {approvals.map((a) => <ApprovalBubble key={a.approval_id} approval={a} now={now} />)}
             </>
           }

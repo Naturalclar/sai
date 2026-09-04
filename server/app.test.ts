@@ -648,14 +648,14 @@ test('approvals: 返信を処理中のセッションの分だけ預かり、一
   assert.equal(res.status, 409)
 
   runner.busy.set('C1@r', { since: new Date().toISOString(), text: 'やって' })
-  const before = ((await (await get('/api/sessions?days=30')).json()) as SessionsResponse).rev
+  const prev = ((await (await get('/api/sessions?days=30')).json()) as SessionsResponse).rev
   res = await postJson('/api/approvals', { id: 'C1@r', tool_name: 'Bash', input: { command: 'gh pr create', description: 'PR' }, tool_use_id: 't1' })
   assert.equal(res.status, 201)
   const { approval_id } = (await res.json()) as { approval_id: string }
   assert.ok(approval_id)
 
   const list = (await (await get('/api/sessions?days=30')).json()) as SessionsResponse
-  assert.notEqual(list.rev, before, '答え待ちが増えたら rev が変わる（JSONL は変わっていない）')
+  assert.notEqual(list.rev, prev, '答え待ちが増えたら rev が変わる（JSONL は変わっていない）')
   assert.equal(list.approvals['C1@r']?.length, 1)
   assert.equal(list.approvals['C1@r']![0]!.text, '許可待ち: Bash: gh pr create')
   assert.equal(list.approvals['C1@r']![0]!.tool_use_id, 't1')
@@ -681,8 +681,8 @@ test('approvals: 返信を処理中のセッションの分だけ預かり、一
   assert.equal(res.status, 200)
   assert.deepEqual(await res.json(), { behavior: 'allow', updatedInput: { command: 'gh pr create', description: 'PR' } }, 'updatedInput を省けば元の入力')
   assert.equal((await get(`/api/approvals/${approval_id}`)).status, 404, '渡したら消える')
-  const after = (await (await get('/api/sessions?days=30')).json()) as SessionsResponse
-  assert.equal(after.approvals['C1@r'], undefined)
+  const next = (await (await get('/api/sessions?days=30')).json()) as SessionsResponse
+  assert.equal(next.approvals['C1@r'], undefined)
   assert.equal((await postJson(`/api/approvals/${approval_id}/answer`, { behavior: 'deny' }, { Origin: base })).status, 404)
 
   // 拒否は message 付きで届く
@@ -721,4 +721,69 @@ test('replyCommand: approve を渡すと Claude だけに --mcp-config と --per
   // approve 無し・Codex には何も付かない
   assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', {})!.args, ['-p', '--resume', 'S', '--', 'hi'])
   assert.deepEqual(replyCommand('codex', 'S', 'hi', '/w', {}, via)!.args, ['exec', 'resume', 'S', '--', 'hi'])
+})
+
+// -- 自分の表示名とアイコン（profile）
+
+test('profile: 表示名を置くと一覧・詳細・フィードの profile に載り、rev が変わり、空で消える', async () => {
+  const prev = (await (await get('/api/sessions?days=30')).json()) as SessionsResponse
+  assert.deepEqual(prev.profile, {}, '何も付けていなければ空')
+  assert.deepEqual(await (await get('/api/profile')).json(), { profile: {} })
+
+  let res = await fetch(base + '/api/profile', { method: 'PUT', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ name: '  Jesse  ' }) })
+  assert.equal(res.status, 200)
+  assert.deepEqual(await res.json(), { profile: { name: 'Jesse' } }, '空白は詰める')
+
+  const list = (await (await get('/api/sessions?days=30')).json()) as SessionsResponse
+  assert.deepEqual(list.profile, { name: 'Jesse' })
+  assert.notEqual(list.rev, prev.rev, '名前を付けただけで rev が変わる（JSONL は変わっていない）')
+  assert.deepEqual(((await (await get('/api/sessions/S1%40kanban?days=30')).json()) as SessionDetailResponse).profile, { name: 'Jesse' })
+  assert.deepEqual(((await (await get('/api/feed?days=30')).json()) as FeedResponse).profile, { name: 'Jesse' })
+  assert.match(await readFile(join(feedDir, 'profile.json'), 'utf-8'), /"name": "Jesse"/)
+
+  // 検査。長すぎ・文字列でない
+  res = await fetch(base + '/api/profile', { method: 'PUT', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ name: 'x'.repeat(101) }) })
+  assert.equal(res.status, 400)
+  res = await fetch(base + '/api/profile', { method: 'PUT', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ name: 1 }) })
+  assert.equal(res.status, 400)
+  // 空で消す
+  res = await fetch(base + '/api/profile', { method: 'PUT', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ name: '' }) })
+  assert.deepEqual(await res.json(), { profile: {} })
+})
+
+test('profile icon: 画像を置くと profile.icon に URL が載り、GET で返り、DELETE で消える', async () => {
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64')
+  const prev = ((await (await get('/api/sessions?days=30')).json()) as SessionsResponse).rev
+  let res = await fetch(base + '/api/profile/icon', { method: 'PUT', headers: { Origin: base }, body: png })
+  assert.equal(res.status, 200)
+  const { profile } = (await res.json()) as { profile: { icon?: string; name?: string } }
+  assert.match(profile.icon ?? '', /^\/api\/profile\/icon\?v=/)
+  assert.equal(profile.name, undefined)
+
+  res = await get(profile.icon!)
+  assert.equal(res.status, 200)
+  assert.equal(res.headers.get('content-type'), 'image/png')
+  assert.match(res.headers.get('cache-control') ?? '', /immutable/)
+  const list = (await (await get('/api/sessions?days=30')).json()) as SessionsResponse
+  assert.equal(list.profile.icon, profile.icon)
+  assert.notEqual(list.rev, prev)
+  // セッションの一覧には混ざらない（固定の鍵 me はエンティティ ID ではない）
+  assert.equal(list.sessions.some((s) => s.icon === profile.icon), false)
+
+  // 画像でないもの、空
+  assert.equal((await fetch(base + '/api/profile/icon', { method: 'PUT', headers: { Origin: base }, body: 'not an image' })).status, 400)
+  assert.equal((await fetch(base + '/api/profile/icon', { method: 'PUT', headers: { Origin: base }, body: '' })).status, 400)
+
+  res = await fetch(base + '/api/profile/icon', { method: 'DELETE', headers: { Origin: base } })
+  assert.deepEqual(await res.json(), { profile: {} })
+  assert.equal((await get('/api/profile/icon')).status, 404)
+})
+
+test('profile: 別オリジンは 403、メソッド違いは 405', async () => {
+  const evil = { Origin: 'http://evil.example', 'Content-Type': 'application/json' }
+  assert.equal((await fetch(base + '/api/profile', { method: 'PUT', headers: evil, body: '{"name":"x"}' })).status, 403)
+  assert.equal((await fetch(base + '/api/profile/icon', { method: 'PUT', headers: { Origin: 'http://evil.example' }, body: 'x' })).status, 403)
+  assert.equal((await fetch(base + '/api/profile/icon', { method: 'DELETE', headers: { Origin: 'http://evil.example' } })).status, 403)
+  assert.equal((await fetch(base + '/api/profile', { method: 'POST', headers: evil, body: '{}' })).status, 405)
+  assert.equal((await fetch(base + '/api/profile', { method: 'DELETE', headers: evil })).status, 405)
 })

@@ -30,6 +30,29 @@
   header .github:hover { color: var(--ink); text-decoration: none; }
   header .sidebar-toggle { display: inline-flex; margin-left: -6px; padding: 4px; background: transparent; border: 0; border-radius: 6px; color: var(--muted); cursor: pointer; }
   header .sidebar-toggle:hover { background: var(--hover); color: var(--ink); }
+  /* 右端の自分のアイコンとメニュー（UserMenu） */
+  header .user-menu { position: relative; display: inline-flex; }
+  header .user-menu .user { display: inline-flex; padding: 0; background: transparent; border: 0; border-radius: 20%; cursor: pointer; }
+  header .user-menu .user .avatar { width: 28px; height: 28px; font-size: 12px; }
+  header .user-menu .user:hover .avatar { outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent); }
+  header .user-menu .menu { position: absolute; top: calc(100% + 6px); right: 0; min-width: 12em; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, .18); padding: 6px 0; z-index: 15; }
+  header .user-menu .menu .who { padding: 6px 12px 8px; font-weight: 700; border-bottom: 1px solid var(--line); margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 18em; }
+  header .user-menu .menu button { display: block; width: 100%; text-align: left; padding: 6px 12px; background: transparent; border: 0; color: var(--ink); font: inherit; cursor: pointer; }
+  header .user-menu .menu button:hover { background: var(--hover); }
+  /* 自分の表示名とアイコンのモーダル（ProfileEditor） */
+  .modal.profile { width: 360px; }
+  .modal.profile .row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+  .modal.profile .avatar.big { width: 56px; height: 56px; font-size: 18px; flex: none; }
+  .modal.profile .icon-actions { display: flex; gap: 12px; }
+  .modal.profile .file { display: none; }
+  .modal.profile .field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+  .modal.profile .field input { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: inherit; font-size: 14px; }
+  .modal.profile .field input:focus { outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent); border-color: var(--accent); }
+  .modal.profile .hint { color: var(--muted); font-size: 11px; margin-top: 6px; }
+  .modal.profile .err { color: var(--claude); font-size: 12px; margin-top: 6px; }
+  .modal.profile .actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 12px; align-items: center; }
+  .modal.profile .actions .primary { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 6px 14px; font: inherit; font-weight: 600; cursor: pointer; }
+  .modal.profile .actions button:disabled { opacity: .5; cursor: default; }
 
   /* -- layout: 左サイドバー（一覧）+ 右ペイン（チャット）。ヘッダ以外の高さを使い、それぞれがスクロールする */
   main.layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 320px minmax(0, 1fr); transition: grid-template-columns .2s ease; }

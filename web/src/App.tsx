@@ -6,6 +6,7 @@ import { FeedView } from './FeedView'
 import { hm } from './format'
 import { MenuMark } from './MenuMark'
 import { GitHubMark } from './GitHubMark'
+import { UserMenu } from './UserMenu'
 import { api, type SessionFilters } from './api'
 import { isTypingTarget, navAction, neighborSessionId } from './sessionNav'
 
@@ -114,6 +115,7 @@ export function App() {
             <GitHubMark />
           </a>
         )}
+        <UserMenu profile={list.data?.profile} />
       </header>
       {/* 配っている web/dist/ がソースより古い（git pull のあと pnpm build していない）。pnpm dev は HMR で常に最新なので出さない */}
       {import.meta.env.PROD && list.data?.build_stale && (

@@ -1,3 +1,4 @@
+import type { Profile } from './api'
 import { elapsedLabel, hm, LONG_REPLY_MS, parseTs } from './format'
 
 /**
@@ -6,7 +7,7 @@ import { elapsedLabel, hm, LONG_REPLY_MS, parseTs } from './format'
  * （入力の行が先に届いて本物の自分バブルがもう出ている）。フィードでは repo を渡して
  * チャンネル名を添える。since からの経過を出し、長引いていれば色を変える。now はポーリングの updatedAt
  */
-export function PendingBubble({ text, since, now, repo, quiet }: { text: string; since: string; now: number; repo?: string; quiet?: boolean }) {
+export function PendingBubble({ text, since, now, repo, quiet, profile }: { text: string; since: string; now: number; repo?: string; quiet?: boolean; profile?: Profile }) {
   const started = parseTs(since)?.getTime() ?? now
   const long = now - started > LONG_REPLY_MS
   const elapsed = elapsedLabel(since, now)
@@ -22,10 +23,10 @@ export function PendingBubble({ text, since, now, repo, quiet }: { text: string;
   }
   return (
     <div className={`group pending${long ? ' long' : ''}`}>
-      <div className="avatar me">私</div>
+      <div className="avatar me">{profile?.icon ? <img src={profile.icon} alt="" /> : '私'}</div>
       <div>
         <div className="gh">
-          <span className="name">あなた</span>
+          <span className="name">{profile?.name || 'あなた'}</span>
           {repo && <span className="ch">#{repo}</span>}
           <span className="time" title={`${hm(since)} に送信`}>{elapsed ? `処理中 ${elapsed}` : '送信中…'}</span>
         </div>

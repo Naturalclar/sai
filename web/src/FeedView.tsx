@@ -88,11 +88,12 @@ export function FeedView({ repo, sessions = NO_SESSIONS, onStatus, onOpenSidebar
           rows={rows}
           showChannel
           sessions={sessions}
+          profile={data.profile}
           trailer={
             (pending.length > 0 || approvals.length > 0) && (
               <>
                 {pending.map((p) => (
-                  <PendingBubble key={p.id} text={p.text} since={p.since} now={now} repo={repoOf(p.id)} quiet={promptArrived(rows, p.id, p.text, p.since)} />
+                  <PendingBubble key={p.id} text={p.text} since={p.since} now={now} repo={repoOf(p.id)} quiet={promptArrived(rows, p.id, p.text, p.since)} profile={data.profile} />
                 ))}
                 {approvals.map((a) => <ApprovalBubble key={a.approval_id} approval={a} now={now} repo={repoOf(a.id)} />)}
               </>

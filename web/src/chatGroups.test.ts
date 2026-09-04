@@ -123,3 +123,11 @@ test('speakerLabel: 表示名・アイコン画像があればそれ、無けれ
   assert.deepEqual(speakerLabel('claude', { icon: '/i/1' }), { name: 'Claude Code', mark: 'C', icon: '/i/1' })
   assert.deepEqual(speakerLabel('me', { meta: { name: '背中メニュー' }, icon: '/i/1' }), { name: 'あなた', mark: '私' }, '自分側はセッションの表示名・画像に引きずられない')
 })
+
+test('speakerLabel: 自分は profile があればその名前とアイコン、無ければ「あなた」「私」', () => {
+  assert.deepEqual(speakerLabel('me', undefined), { name: 'あなた', mark: '私' })
+  assert.deepEqual(speakerLabel('me', undefined, {}), { name: 'あなた', mark: '私' })
+  assert.deepEqual(speakerLabel('me', undefined, { name: 'Jesse', icon: '/api/profile/icon?v=1' }), { name: 'Jesse', mark: '私', icon: '/api/profile/icon?v=1' })
+  // エージェント側は profile を見ない
+  assert.equal(speakerLabel('claude', undefined, { name: 'Jesse' }).name, 'Claude Code')
+})

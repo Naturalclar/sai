@@ -48,7 +48,7 @@ export function SessionList({ list, filters, setFilters, selectedId }: Props) {
           <span className="last">{filters.repo ? `#${filters.repo}` : '全リポジトリ'}を時系列に</span>
         </a>
         {archived && <div className="head">アーカイブ済み（薄く出る。開いて「戻す」か、新しい行が届けば自動で戻る）</div>}
-        {sessions.map((s) => <SessionItem key={s.id} s={s} active={s.id === selectedId} replying={data?.replying[s.id] ?? null} now={now} />)}
+        {sessions.map((s) => <SessionItem key={s.id} s={s} active={s.id === selectedId} replying={data?.replying[s.id] ?? null} approval={data?.approvals[s.id]?.[0] ?? null} now={now} />)}
       </nav>
       {data && sessions.length === 0 && <div className="empty">{archived ? 'アーカイブ済みのセッションはありません' : 'この条件のセッションはありません'}</div>}
     </>

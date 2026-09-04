@@ -1,5 +1,6 @@
 // serve 側の実装は server/。型は shared/types.ts に1つだけ置いて両方から import する
 import type {
+  ApprovalAnswer,
   FeedFilters,
   FeedResponse,
   ReplyRequest,
@@ -12,19 +13,7 @@ import type {
   SessionsResponse,
 } from '../../shared/types.ts'
 
-export type {
-  Agent,
-  FeedRow,
-  SessionSource,
-  SessionSummary,
-  SessionMeta,
-  SessionsResponse,
-  Facets,
-  SessionFilters,
-  FeedFilters,
-  Replying,
-  ReplyingMap,
-} from '../../shared/types.ts'
+export type { Agent, FeedRow, SessionSource, SessionSummary, SessionMeta, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, Approval, ApprovalMap, ApprovalAnswer } from '../../shared/types.ts'
 
 /** サーバは失敗を { error } で返す。それがあればそのまま見せる */
 async function failure(res: Response, url: string): Promise<Error> {
@@ -86,6 +75,9 @@ export const api = {
   reply: (id: string, text: string, days = 90) =>
     sendJSON<ReplyResponse>('POST', `/api/sessions/${encodeURIComponent(id)}/reply?days=${days}`, { text } satisfies ReplyRequest),
   meta: (id: string) => getJSON<SessionMetaResponse>(`/api/sessions/${encodeURIComponent(id)}/meta`),
+  /** 返信中の許可・質問に答える。allow は updatedInput を省けば元の入力のまま */
+  answerApproval: (approvalId: string, answer: ApprovalAnswer) =>
+    sendJSON<{ ok: true }>('POST', `/api/approvals/${encodeURIComponent(approvalId)}/answer`, answer),
   /** 表示名をいまの値に重ねる。空文字は「消す」 */
   setMeta: (id: string, meta: SessionMeta, days = 90) =>
     sendJSON<SessionMetaResponse>('PUT', `/api/sessions/${encodeURIComponent(id)}/meta?days=${days}`, meta),

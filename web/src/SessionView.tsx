@@ -11,6 +11,7 @@ import { ReplyingTag } from './ReplyingTag'
 import { WaitingTag } from './WaitingTag'
 import { Chat } from './Chat'
 import { PendingBubble } from './PendingBubble'
+import { ApprovalBubble } from './ApprovalBubble'
 import { ReplyBox } from './ReplyBox'
 import { BackLink } from './BackLink'
 import { useReply } from './useReply'
@@ -20,6 +21,7 @@ import { ArchivedTag } from './ArchivedTag'
 import type { PaneProps } from './App'
 
 const NO_REPLYING = {}
+const NO_APPROVALS: never[] = []
 
 export function SessionView({ id, onStatus, onOpenSidebar }: { id: string } & PaneProps) {
   const { data, error, updatedAt } = usePolling(() => api.session(id), [id])
@@ -31,6 +33,8 @@ export function SessionView({ id, onStatus, onOpenSidebar }: { id: string } & Pa
   const mine = pending.find((p) => p.id === id) ?? null
   const now = updatedAt?.getTime() ?? 0
   const failedHere = failed && failed.id === id ? failed.message : null
+
+  const approvals = data?.approvals[id] ?? NO_APPROVALS
 
   const s = data?.session
   const blocked = s ? replyBlockedReason(s) : ''
@@ -46,6 +50,7 @@ export function SessionView({ id, onStatus, onOpenSidebar }: { id: string } & Pa
           <span className="meta" title={s.id}>
             {s.session_source === 'synth' ? <SynthTag /> : <span className="tag">{s.session_source}</span>}
             {s.waiting && <WaitingTag text={s.waiting} />}
+            {approvals.length > 0 && <WaitingTag text={approvals[0]!.text} />}
             {mine && <ReplyingTag since={mine.since} now={now} />}
             {s.archived && <ArchivedTag />}
           </span>
@@ -61,7 +66,12 @@ export function SessionView({ id, onStatus, onOpenSidebar }: { id: string } & Pa
           rows={data.rows}
           showChannel={false}
           sessions={[data.session]}
-          trailer={mine && <PendingBubble text={mine.text} since={mine.since} now={now} quiet={promptArrived(data.rows, id, mine.text, mine.since)} />}
+          trailer={
+            <>
+              {mine && <PendingBubble text={mine.text} since={mine.since} now={now} quiet={promptArrived(data.rows, id, mine.text, mine.since)} />}
+              {approvals.map((a) => <ApprovalBubble key={a.approval_id} approval={a} now={now} />)}
+            </>
+          }
         />
       )}
       {s &&

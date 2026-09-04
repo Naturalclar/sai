@@ -60,7 +60,9 @@ before(async () => {
   ]
   await writeFile(join(feedDir, `${localDate(now.toISOString())}.jsonl`), lines.join('\n') + '\n')
   store = new FeedStore(feedDir)
-  server = createServer((req, res) => void createApp(store, distDir, runner)(req, res))
+  // アプリは 1 つ（答え待ちの承認はメモリに持つので、リクエストごとに作り直すと消える）
+  const app = createApp(store, distDir, runner)
+  server = createServer((req, res) => void app(req, res))
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const addr = server.address()
   base = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`
@@ -217,7 +219,14 @@ test('POST reply: Claude のセッションを cwd で再開する', async () =>
   const { id, cmd } = runner.started[0]!
   assert.equal(id, 'C1@r')
   assert.equal(cmd.cwd, dir)
-  assert.deepEqual(cmd.args, ['-p', '--resume', 'C1', '--', '続きをやって'])
+  // 許可・質問を画面で答える配線（--mcp-config は SAI 自身の MCP サーバ、宛先はブラウザが来た Host）
+  assert.deepEqual(cmd.args.slice(0, 1), ['--mcp-config'])
+  assert.deepEqual(cmd.args.slice(2), ['--permission-prompt-tool', 'mcp__sai__approve', '-p', '--resume', 'C1', '--', '続きをやって'])
+  const mcp = JSON.parse(cmd.args[1]!) as { mcpServers: { sai: { type: string; command: string; args: string[]; env: Record<string, string> } } }
+  assert.equal(mcp.mcpServers.sai.type, 'stdio')
+  assert.equal(mcp.mcpServers.sai.env.SAI_URL, base)
+  assert.equal(mcp.mcpServers.sai.env.SAI_ENTITY, 'C1@r')
+  assert.match(mcp.mcpServers.sai.args[mcp.mcpServers.sai.args.length - 1]!, /approve-mcp\.ts$/)
 })
 
 test('POST reply: Codex は codex exec resume', async () => {
@@ -582,4 +591,90 @@ test('キャッシュは追記で無効になり、変わらなければ再パ�
   } finally {
     await rm(d, { recursive: true, force: true })
   }
+})
+
+// -- 返信中の許可・質問（approvals）
+
+const postJson = (path: string, body: unknown, headers: Record<string, string> = {}) =>
+  fetch(base + path, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) })
+
+test('approvals: 返信を処理中のセッションの分だけ預かり、一覧・詳細・フィードに載って rev が変わる', async () => {
+  // 処理中でなければ受けない
+  let res = await postJson('/api/approvals', { id: 'C1@r', tool_name: 'Bash', input: { command: 'gh pr create' } })
+  assert.equal(res.status, 409)
+
+  runner.busy.set('C1@r', { since: new Date().toISOString(), text: 'やって' })
+  const before = ((await (await get('/api/sessions?days=30')).json()) as SessionsResponse).rev
+  res = await postJson('/api/approvals', { id: 'C1@r', tool_name: 'Bash', input: { command: 'gh pr create', description: 'PR' }, tool_use_id: 't1' })
+  assert.equal(res.status, 201)
+  const { approval_id } = (await res.json()) as { approval_id: string }
+  assert.ok(approval_id)
+
+  const list = (await (await get('/api/sessions?days=30')).json()) as SessionsResponse
+  assert.notEqual(list.rev, before, '答え待ちが増えたら rev が変わる（JSONL は変わっていない）')
+  assert.equal(list.approvals['C1@r']?.length, 1)
+  assert.equal(list.approvals['C1@r']![0]!.text, '許可待ち: Bash: gh pr create')
+  assert.equal(list.approvals['C1@r']![0]!.tool_use_id, 't1')
+  const detail = (await (await get('/api/sessions/C1%40r?days=30')).json()) as SessionDetailResponse
+  assert.equal(detail.approvals['C1@r']?.[0]?.approval_id, approval_id)
+  const feed = (await (await get('/api/feed?days=30')).json()) as FeedResponse
+  assert.equal(feed.approvals['C1@r']?.[0]?.approval_id, approval_id)
+
+  // まだ答えが無い: wait 無しなら即 202
+  res = await get(`/api/approvals/${approval_id}`)
+  assert.equal(res.status, 202)
+
+  // 別オリジンからは答えられない（ここが通ると CSRF で許可が押せる）
+  res = await postJson(`/api/approvals/${approval_id}/answer`, { behavior: 'allow' }, { Origin: 'http://evil.example' })
+  assert.equal(res.status, 403)
+  res = await postJson(`/api/approvals/${approval_id}/answer`, { behavior: 'maybe' })
+  assert.equal(res.status, 400)
+
+  // 画面から許可 → MCP 側の取りに来た分に決定が渡り、一覧からは消える
+  res = await postJson(`/api/approvals/${approval_id}/answer`, { behavior: 'allow' }, { Origin: base })
+  assert.equal(res.status, 200)
+  res = await get(`/api/approvals/${approval_id}?wait=1`)
+  assert.equal(res.status, 200)
+  assert.deepEqual(await res.json(), { behavior: 'allow', updatedInput: { command: 'gh pr create', description: 'PR' } }, 'updatedInput を省けば元の入力')
+  assert.equal((await get(`/api/approvals/${approval_id}`)).status, 404, '渡したら消える')
+  const after = (await (await get('/api/sessions?days=30')).json()) as SessionsResponse
+  assert.equal(after.approvals['C1@r'], undefined)
+  assert.equal((await postJson(`/api/approvals/${approval_id}/answer`, { behavior: 'deny' }, { Origin: base })).status, 404)
+
+  // 拒否は message 付きで届く
+  res = await postJson('/api/approvals', { id: 'C1@r', tool_name: 'Edit', input: { file_path: '/x' } })
+  const second = ((await res.json()) as { approval_id: string }).approval_id
+  assert.equal((await postJson(`/api/approvals/${second}/answer`, { behavior: 'deny', message: 'だめ' }, { Origin: base })).status, 200)
+  assert.deepEqual(await (await get(`/api/approvals/${second}`)).json(), { behavior: 'deny', message: 'だめ' })
+  runner.busy.delete('C1@r')
+})
+
+test('approvals: 不正な body と無い id', async () => {
+  runner.busy.set('C1@r', { since: new Date().toISOString(), text: 'やって' })
+  assert.equal((await postJson('/api/approvals', { id: 'C1@r', tool_name: 'Bash' })).status, 400, 'input が無い')
+  assert.equal((await postJson('/api/approvals', { tool_name: 'Bash', input: {} })).status, 400, 'id が無い')
+  assert.equal((await postJson('/api/approvals', { id: 'C1@r', tool_name: 'Bash', input: {} }, { Origin: 'http://evil.example' })).status, 403)
+  assert.equal((await get('/api/approvals/nope')).status, 404)
+  assert.equal((await postJson('/api/approvals/nope/answer', { behavior: 'allow' }, { Origin: base })).status, 404)
+  assert.equal((await fetch(base + '/api/approvals', { method: 'PUT' })).status, 405)
+  runner.busy.delete('C1@r')
+})
+
+test('replyCommand: approve を渡すと Claude だけに --mcp-config と --permission-prompt-tool が付く', () => {
+  const via = { url: 'http://127.0.0.1:8787', entity: 'S@r' }
+  const c = replyCommand('claude', 'S', 'hi', '/w', {}, via)!
+  assert.deepEqual(c.args.slice(2), ['--permission-prompt-tool', 'mcp__sai__approve', '-p', '--resume', 'S', '--', 'hi'])
+  assert.equal(c.args[0], '--mcp-config')
+  assert.deepEqual(JSON.parse(c.args[1]!).mcpServers.sai.env, { SAI_URL: 'http://127.0.0.1:8787', SAI_ENTITY: 'S@r' })
+  // 運用者の引数は先頭のまま。--mcp-config は可変長なので、直後がフラグ（--permission-prompt-tool）である並び
+  const withExtra = replyCommand('claude', 'S', 'hi', '/w', { SAI_CLAUDE_ARGS: '--allowedTools "Bash(gh *)"' }, via)!
+  assert.deepEqual(withExtra.args.slice(0, 3), ['--allowedTools', 'Bash(gh *)', '--mcp-config'])
+  // 外す: SAI_APPROVE=0、または運用者が自前の --permission-prompt-tool を持っている
+  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', { SAI_APPROVE: '0' }, via)!.args, ['-p', '--resume', 'S', '--', 'hi'])
+  const own = replyCommand('claude', 'S', 'hi', '/w', { SAI_CLAUDE_ARGS: '--permission-prompt-tool mcp__x__y' }, via)!
+  assert.equal(own.args.filter((a) => a === '--permission-prompt-tool').length, 1)
+  assert.equal(own.args.includes('--mcp-config'), false)
+  // approve 無し・Codex には何も付かない
+  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', {})!.args, ['-p', '--resume', 'S', '--', 'hi'])
+  assert.deepEqual(replyCommand('codex', 'S', 'hi', '/w', {}, via)!.args, ['exec', 'resume', 'S', '--', 'hi'])
 })

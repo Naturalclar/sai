@@ -113,6 +113,47 @@ export interface Replying {
 /** エンティティID → 処理中の返信。無ければ空 */
 export type ReplyingMap = Record<string, Replying>
 
+/**
+ * 返信中のエージェントが人の答えを待っている（ツール実行の許可、AskUserQuestion）。
+ * `claude -p` の `--permission-prompt-tool` が SAI の MCP ツール（server/approve-mcp.ts）を呼び、
+ * それが SAI サーバに預けたもの。画面の [許可] [拒否] で答えるまでエージェントは止まっている。
+ * 正本はサーバのメモリ（server/approvals.ts）で、返信のプロセスが exit したら消える
+ */
+export interface Approval {
+  approval_id: string
+  /** どのエンティティ（返信先）か */
+  id: string
+  since: string
+  tool_name: string
+  /** ツールに渡そうとしている入力そのもの（Bash なら { command, description }） */
+  input: Record<string, unknown>
+  tool_use_id: string
+  /** 何を聞かれているか（`許可待ち: Bash: rm -rf node_modules` / `質問: どのフレームワーク?`）。shared/approvals.ts */
+  text: string
+}
+
+/** エンティティID → 答え待ちの承認（古い順）。無ければ空 */
+export type ApprovalMap = Record<string, Approval[]>
+
+/** POST /api/approvals の body。MCP ツール（server/approve-mcp.ts）が送る */
+export interface ApprovalRequest {
+  id: string
+  tool_name: string
+  input: Record<string, unknown>
+  tool_use_id?: string
+}
+
+/**
+ * POST /api/approvals/<approval_id>/answer の body と、MCP ツールが CLI に返す決定。
+ * allow のとき updatedInput を省けば元の input のまま。AskUserQuestion は answers を足した input を返す
+ */
+export interface ApprovalAnswer {
+  behavior: 'allow' | 'deny'
+  updatedInput?: Record<string, unknown>
+  /** deny の理由。エージェントに見える */
+  message?: string
+}
+
 export interface Facets {
   repos: string[]
   agents: Agent[]
@@ -129,6 +170,8 @@ export interface SessionsResponse {
   filters: Facets
   /** 処理中の返信（窓の外のセッションも含む全部）。これが変わると rev も変わる */
   replying: ReplyingMap
+  /** 返信中のエージェントが待っている許可・質問（ID → 古い順）。これが変わると rev も変わる */
+  approvals: ApprovalMap
 }
 
 export interface SessionDetailResponse {
@@ -136,6 +179,8 @@ export interface SessionDetailResponse {
   session: SessionSummary
   rows: FeedRow[]
   replying: ReplyingMap
+  /** 返信中のエージェントが待っている許可・質問（ID → 古い順）。これが変わると rev も変わる */
+  approvals: ApprovalMap
 }
 
 export interface FeedResponse {
@@ -143,6 +188,8 @@ export interface FeedResponse {
   days: number
   rows: FeedRow[]
   replying: ReplyingMap
+  /** 返信中のエージェントが待っている許可・質問（ID → 古い順）。これが変わると rev も変わる */
+  approvals: ApprovalMap
 }
 
 /** POST /api/sessions/<id>/reply の body */

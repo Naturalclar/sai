@@ -5,7 +5,35 @@
 // 結果は今のポーリングで画面に流れてくる。返信専用の記録経路は作らない。
 import { spawn } from 'node:child_process'
 import { closeSync, openSync, writeSync } from 'node:fs'
+import { dirname, resolve as resolvePath } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { Agent, Replying, ReplyingMap } from '../shared/types.ts'
+
+/** `--permission-prompt-tool` に渡す名前。`mcp__<サーバ名>__<ツール名>` で、サーバ名は --mcp-config のキー */
+export const APPROVE_TOOL = 'mcp__sai__approve'
+export const APPROVE_MCP_PATH = resolvePath(dirname(fileURLToPath(import.meta.url)), 'approve-mcp.ts')
+
+/** 返信中の許可・質問を SAI の画面で答えるための配線。無ければ付けない（非対話のまま。未許可のツールは拒否される） */
+export interface ApproveVia {
+  /** SAI サーバ（http://127.0.0.1:8787）。MCP の子プロセスがここに預ける */
+  url: string
+  /** 返信先のエンティティID */
+  entity: string
+}
+
+/** `--mcp-config` に渡す JSON 文字列。子は node で approve-mcp.ts を直接実行する（サーバ本体と同じ型剥がし） */
+export function approveMcpConfig(via: ApproveVia, execPath: string = process.execPath, mcpPath: string = APPROVE_MCP_PATH): string {
+  return JSON.stringify({
+    mcpServers: {
+      sai: {
+        type: 'stdio',
+        command: execPath,
+        args: ['--disable-warning=ExperimentalWarning', mcpPath],
+        env: { SAI_URL: via.url, SAI_ENTITY: via.entity },
+      },
+    },
+  })
+}
 
 export interface ReplyCommand {
   bin: string
@@ -67,11 +95,19 @@ export function replyCommand(
   text: string,
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
+  approve?: ApproveVia,
 ): ReplyCommand | null {
   // 本文の前に `--` を置く。本文が `-` で始まると（`-v` や `--help`）CLI がフラグとして解釈して
   // ターンが回らない（`--dangerously-skip-permissions` ならフラグとして効いてしまう）。両 CLI とも `--` を受け付ける
   if (agent === 'claude') {
-    return { bin: env.SAI_CLAUDE_BIN || 'claude', args: [...splitArgs(env.SAI_CLAUDE_ARGS), '-p', '--resume', session, '--', text], cwd, text }
+    const extra = splitArgs(env.SAI_CLAUDE_ARGS)
+    // 許可・質問を画面で答える配線（Claude だけ。Codex に同等の口は無い）。
+    // SAI_APPROVE=0 で外せる。運用者が自分の --permission-prompt-tool を足していればそちらを尊重する。
+    // `--mcp-config` は可変長なので、直後に別のフラグ（--permission-prompt-tool）が来る並びにしておく
+    const wire = approve && env.SAI_APPROVE !== '0' && !extra.includes('--permission-prompt-tool')
+      ? ['--mcp-config', approveMcpConfig(approve), '--permission-prompt-tool', APPROVE_TOOL]
+      : []
+    return { bin: env.SAI_CLAUDE_BIN || 'claude', args: [...extra, ...wire, '-p', '--resume', session, '--', text], cwd, text }
   }
   if (agent === 'codex') {
     return { bin: env.SAI_CODEX_BIN || 'codex', args: ['exec', 'resume', ...splitArgs(env.SAI_CODEX_ARGS), session, '--', text], cwd, text }
@@ -84,8 +120,8 @@ export interface Runner {
   running(id: string): boolean
   /** 処理中の返信を全部。API に載せて画面に伝える */
   snapshot(): ReplyingMap
-  /** 起動する。プロセスが立ち上がらなければ（ENOENT など）reject */
-  start(id: string, cmd: ReplyCommand): Promise<void>
+  /** 起動する。プロセスが立ち上がらなければ（ENOENT など）reject。onExit はプロセスが終わったとき（答え待ちの片付けに使う） */
+  start(id: string, cmd: ReplyCommand, onExit?: () => void): Promise<void>
 }
 
 /** node:child_process で実際に起動する。テストは FakeRunner に差し替える */
@@ -106,7 +142,7 @@ export class ProcessRunner implements Runner {
     return Object.fromEntries(this.active)
   }
 
-  async start(id: string, cmd: ReplyCommand): Promise<void> {
+  async start(id: string, cmd: ReplyCommand, onExit?: () => void): Promise<void> {
     let fd: number | null = null
     if (this.logPath) {
       try {
@@ -123,8 +159,12 @@ export class ProcessRunner implements Runner {
       stdio: ['ignore', fd ?? 'ignore', fd ?? 'ignore'],
     })
     this.active.set(id, { since: new Date().toISOString(), text: cmd.text })
+    let released = false
     const release = () => {
+      if (released) return
+      released = true
       this.active.delete(id)
+      onExit?.()
       if (fd !== null) {
         try {
           closeSync(fd)

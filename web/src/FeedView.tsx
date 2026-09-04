@@ -3,10 +3,11 @@ import { entityId } from '../../shared/entity.ts'
 import { eventKind } from '../../shared/events.ts'
 import { promptArrived } from './chatGroups'
 import { feedReplyTargets, mergeReplyTargets, sessionReplyTargets } from '../../shared/reply.ts'
-import { api, type SessionSummary } from './api'
+import { api, type ApprovalMap, type SessionSummary } from './api'
 import { useLocalState, usePolling } from './hooks'
 import { Chat } from './Chat'
 import { PendingBubble } from './PendingBubble'
+import { ApprovalBubble } from './ApprovalBubble'
 import { ReplyBox, type Picked } from './ReplyBox'
 import { DaysSelect } from './DaysSelect'
 import { BackLink } from './BackLink'
@@ -16,6 +17,7 @@ import type { PaneProps } from './App'
 const NO_ROWS: never[] = []
 const NO_SESSIONS: never[] = []
 const NO_REPLYING = {}
+const NO_APPROVALS: ApprovalMap = {}
 
 interface Props extends PaneProps {
   repo: string
@@ -60,6 +62,8 @@ export function FeedView({ repo, sessions = NO_SESSIONS, onStatus, onOpenSidebar
   const pending = allPending.filter((p) => counts.has(p.id) || targets.some((t) => t.id === p.id))
   const now = updatedAt?.getTime() ?? 0
   const repoOf = (id: string) => targets.find((t) => t.id === id)?.repo
+  // 答え待ちの許可・質問も、処理中の返信と同じく、この画面に関係あるものだけ
+  const approvals = Object.values(data?.approvals ?? NO_APPROVALS).flat().filter((a) => counts.has(a.id) || targets.some((t) => t.id === a.id))
 
   return (
     <section>
@@ -78,10 +82,14 @@ export function FeedView({ repo, sessions = NO_SESSIONS, onStatus, onOpenSidebar
           showChannel
           sessions={sessions}
           trailer={
-            pending.length > 0 &&
-            pending.map((p) => (
-              <PendingBubble key={p.id} text={p.text} since={p.since} now={now} repo={repoOf(p.id)} quiet={promptArrived(rows, p.id, p.text, p.since)} />
-            ))
+            (pending.length > 0 || approvals.length > 0) && (
+              <>
+                {pending.map((p) => (
+                  <PendingBubble key={p.id} text={p.text} since={p.since} now={now} repo={repoOf(p.id)} quiet={promptArrived(rows, p.id, p.text, p.since)} />
+                ))}
+                {approvals.map((a) => <ApprovalBubble key={a.approval_id} approval={a} now={now} repo={repoOf(a.id)} />)}
+              </>
+            )
           }
         />
       )}

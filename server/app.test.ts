@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Replying, ReplyResponse, SessionsResponse, SessionDetailResponse, SessionIconResponse, SessionMetaResponse, FeedResponse } from '../shared/types.ts'
 import { createApp, parseDays, revWith, sessionIdFrom, stripThinking } from './app.ts'
+import { BuildFreshness } from './buildFreshness.ts'
 import { FeedStore } from './store.ts'
 import { localDate } from './aggregate.ts'
 import { replyCommand, splitArgs } from './runner.ts'
@@ -17,6 +18,7 @@ import { JPEG, PNG } from './icons.test.ts'
 let dir: string
 let feedDir: string
 let distDir: string
+let srcDir: string
 let server: Server
 let base: string
 let store: FeedStore
@@ -61,7 +63,10 @@ before(async () => {
   await writeFile(join(feedDir, `${localDate(now.toISOString())}.jsonl`), lines.join('\n') + '\n')
   store = new FeedStore(feedDir)
   // アプリは 1 つ（答え待ちの承認はメモリに持つので、リクエストごとに作り直すと消える）
-  const app = createApp(store, distDir, runner)
+  // ビルドが古いかは、この dist と temp の src ディレクトリの mtime で判定させる（ttl 0 で毎回見る）
+  srcDir = join(dir, 'src')
+  await mkdir(srcDir)
+  const app = createApp(store, distDir, runner, undefined, new BuildFreshness(distDir, [srcDir], 0))
   server = createServer((req, res) => void app(req, res))
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const addr = server.address()
@@ -151,6 +156,30 @@ test('/api/sessions/<id>', async () => {
   assert.equal((await get('/api/sessions/S1')).status, 404, 'リポジトリ抜きの旧IDでは引けない')
   assert.equal((await get('/api/sessions/nope')).status, 404)
   assert.equal((await get('/api/sessions/')).status, 400)
+})
+
+test('build_stale: dist がソースより古ければ true になり rev も変わる。ビルドし直せば false', async () => {
+  const index = join(distDir, 'index.html')
+  const src = join(srcDir, 'App.tsx')
+  const initial = (await (await get('/api/sessions?days=7')).json()) as SessionsResponse
+  assert.equal(initial.build_stale, false, 'ソースがまだ無い')
+
+  // ソースを dist より新しくする
+  await writeFile(src, '')
+  const later = new Date((await stat(index)).mtimeMs + 60_000)
+  await utimes(src, later, later)
+  const stale = (await (await get('/api/sessions?days=7')).json()) as SessionsResponse
+  assert.equal(stale.build_stale, true)
+  assert.notEqual(stale.rev, initial.rev, '画面が拾えるよう rev が変わる')
+  const feed = (await (await get('/api/feed?days=3')).json()) as FeedResponse
+  assert.equal(feed.build_stale, true, 'フィードにも載る')
+
+  // ビルドし直したつもりで dist を新しくする
+  const rebuilt = new Date(later.getTime() + 60_000)
+  await utimes(index, rebuilt, rebuilt)
+  const fresh = (await (await get('/api/sessions?days=7')).json()) as SessionsResponse
+  assert.equal(fresh.build_stale, false)
+  assert.equal(fresh.rev, initial.rev, '元に戻れば rev も戻る')
 })
 
 test('sessionIdFrom: 空・/ 入り・壊れた %-エンコードは null。詳細だけ末尾の / を許す', () => {

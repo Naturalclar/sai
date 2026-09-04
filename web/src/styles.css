@@ -24,6 +24,9 @@
   header .status { margin-left: auto; color: var(--muted); font-size: 12px; }
   header .status.error { color: var(--claude); }
   header .github { display: inline-flex; color: var(--muted); }
+  /* ヘッダの下の警告（ビルドが古い）。#54 の record.py の版の警告もここに出す予定 */
+  .banner { flex: none; padding: 6px 18px; font-size: 12px; color: var(--synth); background: color-mix(in srgb, var(--synth) 14%, transparent); border-bottom: 1px solid var(--line); }
+  .banner code { font-family: var(--mono); background: var(--chip); padding: 1px 5px; border-radius: 4px; color: var(--ink); }
   header .github:hover { color: var(--ink); text-decoration: none; }
   header .sidebar-toggle { display: inline-flex; margin-left: -6px; padding: 4px; background: transparent; border: 0; border-radius: 6px; color: var(--muted); cursor: pointer; }
   header .sidebar-toggle:hover { background: var(--hover); color: var(--ink); }

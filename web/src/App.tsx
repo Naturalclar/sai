@@ -115,6 +115,12 @@ export function App() {
           </a>
         )}
       </header>
+      {/* 配っている web/dist/ がソースより古い（git pull のあと pnpm build していない）。pnpm dev は HMR で常に最新なので出さない */}
+      {import.meta.env.PROD && list.data?.build_stale && (
+        <div className="banner" role="status">
+          画面のビルドが古い。別のターミナルで <code>pnpm build</code> してください（終わると自動で読み直す）
+        </div>
+      )}
       <main className={`layout route-${route.name}${sidebarOpen ? '' : ' sidebar-closed'}`}>
         <aside className="sidebar">
           {/* 幅を固定した箱に入れる。開閉の遷移中に列だけが縮み、中身は折り返さない */}

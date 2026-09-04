@@ -23,6 +23,7 @@ import type {
 import { entityId, facets, filterSessions } from './aggregate.ts'
 import { ICONS_DIR, IconStore, iconKey } from './icons.ts'
 import { Approvals, WAIT_MS } from './approvals.ts'
+import { BuildFreshness } from './buildFreshness.ts'
 import { META_FILE, MetaStore } from './meta.ts'
 import { ProcessRunner, replyCommand } from './runner.ts'
 import type { Runner } from './runner.ts'
@@ -119,12 +120,14 @@ export function parseDays(raw: string | null, fallback: number): number {
  * 処理中の返信を rev に混ぜる。画面は rev が同じなら state を触らないので、JSONL が変わらないまま
  * 「処理中 → 終了」になっても再描画されない。since まで含めるので、同じ id の連続した返信も区別できる
  */
-export function revWith(rev: string, replying: ReplyingMap, approvalsKey = ''): string {
+export function revWith(rev: string, replying: ReplyingMap, approvalsKey = '', buildStale = false): string {
   const ids = Object.keys(replying).sort()
-  if (ids.length === 0 && !approvalsKey) return rev
+  if (ids.length === 0 && !approvalsKey && !buildStale) return rev
   const h = createHash('sha1')
   for (const id of ids) h.update(`${id}\n${replying[id]!.since}\n`)
   h.update(`approvals:${approvalsKey}`)
+  // ビルドが古いかが変わったら画面に伝えたい（画面は rev が同じなら描き直さない）
+  h.update(`stale:${buildStale ? 1 : 0}`)
   return `${rev}:${h.digest('hex').slice(0, 8)}`
 }
 
@@ -138,7 +141,13 @@ export function stripThinking(row: FeedRow): FeedRow {
 
 export type Handler = (req: IncomingMessage, res: ServerResponse) => Promise<void>
 
-export function createApp(store: FeedStore, distDir: string, runner?: Runner, approvals: Approvals = new Approvals()): Handler {
+export function createApp(
+  store: FeedStore,
+  distDir: string,
+  runner?: Runner,
+  approvals: Approvals = new Approvals(),
+  freshness: BuildFreshness = new BuildFreshness(distDir),
+): Handler {
   const distRoot = resolve(distDir)
   const run: Runner = runner ?? new ProcessRunner(join(store.directory, 'reply.log'))
   const metaStore = new MetaStore(join(store.directory, META_FILE))
@@ -434,14 +443,17 @@ export function createApp(store: FeedStore, distDir: string, runner?: Runner, ap
         // 既定はアーカイブ済みを除く。archived=1 でアーカイブ済みだけ。total と filters はその集合の絞り込み前から作る
         const wantArchived = q.get('archived') === '1'
         const pool = sessions.filter((s) => Boolean(s.archived) === wantArchived)
+        // 配っている画面が古ければ知らせる（画面はヘッダの下にバナーを出す）。判定は 30 秒に1回
+        const build_stale = await freshness.stale()
         const body: SessionsResponse = {
-          rev: revWith(rev, replying, approvals.revKey()),
+          rev: revWith(rev, replying, approvals.revKey(), build_stale),
           days,
           total: pool.length,
           sessions: filterSessions(pool, q.get('repo') ?? '', q.get('agent') ?? '', q.get('date') ?? ''),
           filters: facets(pool),
           replying,
           approvals: pendingApprovals,
+          build_stale,
         }
         return json(res, body)
       }
@@ -471,8 +483,16 @@ export function createApp(store: FeedStore, distDir: string, runner?: Runner, ap
         // 思考はフィードには出さないので運ばない（3秒ごとに全行を返す。セッション画面だけが使う）
         rows = rows.map(stripThinking)
         const replying = run.snapshot()
-        // rev はメタ（アーカイブ）と処理中の集合、答え待ちの承認も混ぜる
-        const body: FeedResponse = { rev: revWith(rev, replying, approvals.revKey()), days, rows, replying, approvals: approvals.snapshot() }
+        // rev はメタ（アーカイブ）と処理中の集合、答え待ちの承認、ビルドが古いかも混ぜる
+        const build_stale = await freshness.stale()
+        const body: FeedResponse = {
+          rev: revWith(rev, replying, approvals.revKey(), build_stale),
+          days,
+          rows,
+          replying,
+          approvals: approvals.snapshot(),
+          build_stale,
+        }
         return json(res, body)
       }
 

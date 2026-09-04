@@ -15,9 +15,13 @@ interface Props {
   sessions?: SessionSummary[]
   /** 末尾に足す仮の要素（送信中の返信など）。行と同じく最下部追従の対象 */
   trailer?: ReactNode
+  /** エージェントのバブルに思考の折りたたみを出す（セッション画面だけ。フィードは出さない） */
+  showThinking?: boolean
+  /** 思考を最初から開いておく（ヘッダの「思考を全部開く」） */
+  thinkingOpen?: boolean
 }
 
-export function Chat({ rows, showChannel, sessions = NO_SESSIONS, trailer }: Props) {
+export function Chat({ rows, showChannel, sessions = NO_SESSIONS, trailer, showThinking = false, thinkingOpen = false }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
   // エンティティID → セッション（表示名・アイコン画像）。バブルの見出しは行しか持っていないので、entityId で引く
@@ -58,7 +62,16 @@ export function Chat({ rows, showChannel, sessions = NO_SESSIONS, trailer }: Pro
                   </div>
                   {g.items.map((u) => (
                     // 自分の入力は Markdown にしない（打ったままを出す）。エージェントの返答は Markdown
-                    <Message key={u.key} ts={u.row.ts} text={u.text} markdown={u.speaker !== 'me'} waiting={u.waiting} resolved={u.resolved} />
+                    <Message
+                      key={u.key}
+                      ts={u.row.ts}
+                      text={u.text}
+                      markdown={u.speaker !== 'me'}
+                      waiting={u.waiting}
+                      resolved={u.resolved}
+                      thinking={showThinking ? u.thinking : undefined}
+                      thinkingOpen={thinkingOpen}
+                    />
                   ))}
                 </div>
               </div>

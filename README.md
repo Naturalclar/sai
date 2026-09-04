@@ -167,6 +167,7 @@ Codex CLI ──[notify]───────┘
   "event": "Stop",
   "text": "背中のメニューを出した。ワンハンドロウ 10kg×10×3。",
   "user_text": "背中のメニューを出して",
+  "thinking": "背中は前回ラットプルダウンだったので、今回はロウ系を中心にする",
   "first_user_text": "背中のメニューを出して"
 }
 ```
@@ -178,6 +179,7 @@ Codex CLI ──[notify]───────┘
 | `event` | 何の行か。ターン完了は `Stop`（Claude）/ `agent-turn-complete`（Codex）。人を待って止まった行は `PermissionRequest` / `PreToolUse` / `Notification`、人が答えて再開した行は `UserPromptSubmit`。読み方は `shared/events.ts` の `eventKind()` にまとめてあり、集計と画面が同じ判定を使う |
 | `text` | ターン完了なら最後のアシスタント発話。Claude は `transcript_path` の末尾から、Codex は `last-assistant-message`。2,000文字で切る。待ちの行なら「何を待っているか」（300文字）、再開の行は空 |
 | `user_text` | そのターンの入力（人が打った文）。Claude の `UserPromptSubmit` の行はペイロードの `prompt` そのもの。`Stop` の行は `transcript_path` を末尾から遡って最後の入力（ツールの戻りや差し込みは飛ばす。スラッシュコマンドは `/foo 引数` に戻す）、Codex は `input-messages`。画面2で自分側のバブルになり、一番新しい行のものが一覧のタイトルになる。2,000文字で切る |
+| `thinking` | そのターンの思考。Claude は `transcript_path` の最後のターン（最後の入力より後）の `thinking` ブロックの本文を `\n\n` で繋いだもの（`signature` だけのブロックは飛ばす）、Codex は rollout の最後のターンの `reasoning` の `summary[].text`。**無いことが多い**（下の「先に確かめた前提」の 4）。ターン完了の行だけ。4,000文字で切る（先頭側を残す）。画面2のエージェントのバブルに折りたたんで出す。`GET /api/feed` の行からは落とす |
 | `first_user_text` | 最初のユーザー発話。`user_text` が1行も無い古いセッションのタイトルに使う。300文字で切る |
 
 日付は `Asia/Tokyo` で切る。
@@ -214,7 +216,7 @@ Codex CLI ──[notify]───────┘
 
 ## 先に確かめた前提
 
-**素朴に作ると動かない点が3つある。**
+**素朴に作ると動かない点が3つと、期待しすぎると外れる点が1つある。**
 
 ### 1. 「セッション終了」は掴めない
 
@@ -244,6 +246,12 @@ Claude の `Stop` は `session_id` を stdin の JSON に含むが、Codex の `
 - `AskUserQuestion` / `ExitPlanMode` で `PermissionRequest` が鳴るかは端末でしか確かめられないので、`PreToolUse` を matcher 付きで並走させている。両方鳴っても同じ text なので1行になる
 - Codex の `notify` は `agent-turn-complete` しか無いので、Codex の承認待ちは記録できない
 
+### 4. transcript に残る思考は短い要約で、ターンの 4 分の 1 程度
+
+Claude Code の transcript には assistant の `thinking` ブロックが書かれるが、手元の 12 本（154 ターン）を数えると **781 個のうち本文があるのは 77 個（10%）** で、残りは `signature` だけ。思考が読めるターンは **35 / 154（23%）**、読めるときも 1 ターン合計で中央値 200 文字、最大 530 文字（Claude Code 2.1.258）。
+
+→ `thinking` は「モデルの推論を全部読める」ものではなく、**あれば出す**。大半のバブルには何も付かない。Codex の rollout の `reasoning` は既定では `summary: []` + `encrypted_content` で何も読めない（`~/.codex/config.toml` の `model_reasoning_summary` で summary が入るかは未確認）。
+
 ## SAI（画面）
 
 ### 1画面: 左にセッション一覧、右にチャット
@@ -268,7 +276,7 @@ Slack と同じ形。左のサイドバーがチャンネル一覧（先頭に�
 
 ### チャット
 
-Slack のチャット風。1ターンは「自分の入力（`user_text`）→ エージェントの返答（`text`）」の2つのバブルで出るので、往復で読める。Claude は入力した瞬間に `UserPromptSubmit` の行が先に届くので、自分のバブルはターン完了を待たずに出る（続く `Stop` の行に載っている同じ入力は重ねない）。同じ発言者の連続した発言（10分以内）は Slack と同じくまとめる。人を待って止まった行（`PermissionRequest` など）は `⏳ 許可待ち: Bash: rm -rf node_modules` のような**待ちのバブル**になり、後にターン完了か再開の行が来ていれば薄く残る。再開の行（`UserPromptSubmit`）は本文が無いのでバブルにしない。リポジトリ名がチャンネル。自分のバブルは Markdown にせずそのまま出す。3秒ごとに更新するが、サーバが返す `rev` が変わっていなければ state を触らない（= 描き直さない）。タブが隠れている間は止まる。
+Slack のチャット風。1ターンは「自分の入力（`user_text`）→ エージェントの返答（`text`）」の2つのバブルで出るので、往復で読める。Claude は入力した瞬間に `UserPromptSubmit` の行が先に届くので、自分のバブルはターン完了を待たずに出る（続く `Stop` の行に載っている同じ入力は重ねない）。同じ発言者の連続した発言（10分以内）は Slack と同じくまとめる。人を待って止まった行（`PermissionRequest` など）は `⏳ 許可待ち: Bash: rm -rf node_modules` のような**待ちのバブル**になり、後にターン完了か再開の行が来ていれば薄く残る。再開の行（`UserPromptSubmit`）は本文が無いのでバブルにしない。リポジトリ名がチャンネル。自分のバブルは Markdown にせずそのまま出す。エージェントのバブルにそのターンの思考（`thinking`）があれば、本文の上に「▸ 思考（N 文字）」の折りたたみが付き、押すと薄い字でそのまま（Markdown にせず）出る。見出しの「思考を全部開く」で全部開いた状態にでき、localStorage に残る。フィードには出さない（API の行からも落とす）。3秒ごとに更新するが、サーバが返す `rev` が変わっていなければ state を触らない（= 描き直さない）。タブが隠れている間は止まる。
 
 バブルの本文は **Markdown として描く**（`shared/markdown.ts` → `web/src/Markdown.tsx`）。扱うのはエージェントの返答で頻出するものだけ: URL と `[ラベル](URL)` のリンク（別タブで開く。先が http(s) 以外ならリンクにしない）、`**太字**`、`` `コード` ``、`- ` / `1. ` の箇条書き、`#` 見出し、` ``` ` のコードブロック、`> ` 引用、`---` 罫線。それ以外はそのまま改行を保って出す。HTML 文字列は組み立てず React 要素にするので、`text` に HTML が入っていてもただの文字として出る。一覧の「最後の発言」は同じ字句解析で記号だけ落とした1行。
 

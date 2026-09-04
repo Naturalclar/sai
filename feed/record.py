@@ -36,6 +36,7 @@ from pathlib import Path
 
 MAX_TEXT = 2000
 MAX_USER_TEXT = 2000
+MAX_THINKING = 4000
 MAX_FIRST_USER = 300
 SYNTH_GAP_SECONDS = 30 * 60
 ROLLOUT_MAX_AGE_SECONDS = 48 * 3600
@@ -305,6 +306,81 @@ def last_user_text(path: Path) -> str:
     return ""
 
 
+def _is_prompt_row(entry: dict) -> bool:
+    """人の入力の行か（ツールの戻りや差し込みではない）。ターンの境目を見つけるのに使う。"""
+    if entry.get("isMeta") or entry.get("isSidechain"):
+        return False
+    message = entry.get("message")
+    if entry.get("type") != "user" or not isinstance(message, dict):
+        return False
+    content = message.get("content")
+    if _is_tool_result_only(content):
+        return False
+    text = _blocks_to_text(content).strip()
+    if text and _is_noise(text) and not _slash_command(text):
+        return False
+    return True
+
+
+def last_turn_thinking(path: Path) -> str:
+    """Claude の transcript から、最後のターンの思考（thinking ブロック）を取る。
+
+    末尾から遡って、人の入力の行に当たるまでの assistant 行の thinking ブロックを集め、
+    元の順に `\n\n` で繋ぐ。本文が空のブロック（signature だけ）は飛ばす。
+    `text`（返答）とは別に拾うので、_blocks_to_text() には混ざらない。
+    """
+    entries = list(_iter_jsonl(path))
+    parts: list[str] = []
+    for entry in reversed(entries):
+        if _is_prompt_row(entry):
+            break
+        if entry.get("isMeta") or entry.get("isSidechain") or entry.get("type") != "assistant":
+            continue
+        message = entry.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            continue
+        for block in reversed(content):
+            if isinstance(block, dict) and block.get("type") == "thinking":
+                value = block.get("thinking")
+                if isinstance(value, str) and value.strip():
+                    parts.append(value.strip())
+    parts.reverse()
+    return "\n\n".join(parts)
+
+
+def rollout_last_turn_reasoning(path: Path) -> str:
+    """Codex の rollout から、最後のターンの reasoning の summary を取る。
+
+    末尾から遡って、人の入力（event_msg の user_message か role=user の message）に当たるまでの
+    `reasoning` の `summary[].text` を集め、元の順に `\n\n` で繋ぐ。既定の設定では summary は
+    空（本文は encrypted_content）なので、たいてい空文字になる。
+    """
+    entries = list(_iter_jsonl(path))
+    parts: list[str] = []
+    for entry in reversed(entries):
+        payload = entry.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        kind = payload.get("type")
+        if kind == "user_message":
+            break
+        if kind == "message" and payload.get("role") == "user":
+            text = _blocks_to_text(payload.get("content"))
+            if not _is_noise(text):
+                break
+            continue
+        if kind == "reasoning":
+            summary = payload.get("summary")
+            if isinstance(summary, list):
+                for item in reversed(summary):
+                    value = item.get("text") if isinstance(item, dict) else item
+                    if isinstance(value, str) and value.strip():
+                        parts.append(value.strip())
+    parts.reverse()
+    return "\n\n".join(parts)
+
+
 def first_user_text(path: Path, limit: int = 400) -> str:
     for entry in _iter_jsonl(path, limit=limit):
         role, text = _role_and_text(entry)
@@ -540,6 +616,7 @@ def build_row(payload: dict, now: datetime, directory: Path) -> dict | None:
     repo, branch = git_facts(cwd)
     text = ""
     user_text = ""
+    thinking = ""
     first_user = ""
     session = ""
     source = ""
@@ -564,6 +641,7 @@ def build_row(payload: dict, now: datetime, directory: Path) -> dict | None:
             if event not in ("UserPromptSubmit",) and waiting is None:
                 text = last_assistant_text(path)
                 user_text = last_user_text(path)
+                thinking = last_turn_thinking(path)
         if event == "UserPromptSubmit":
             # 入力した瞬間の行。本文は無く、打った文を user_text にそのまま載せる
             # （画面は Stop を待たずに自分側のバブルを出す）。transcript にはまだ無いので payload から
@@ -593,6 +671,7 @@ def build_row(payload: dict, now: datetime, directory: Path) -> dict | None:
         rollout = find_codex_rollout(session) if source == "rollout" else None
         if rollout is not None:
             first_user = first_user_text(rollout)
+            thinking = rollout_last_turn_reasoning(rollout)
         if not first_user:
             first_user = user_text
 
@@ -622,6 +701,9 @@ def build_row(payload: dict, now: datetime, directory: Path) -> dict | None:
         "text": clip(text, MAX_TEXT),
         # そのターンの入力（人が打った文）。チャットで自分側のバブルになる
         "user_text": clip(user_text, MAX_USER_TEXT),
+        # そのターンの思考（Claude の thinking / Codex の reasoning summary）。無いことが多い。
+        # 長ければ先頭側を残す（考え始めが「何をしようとしたか」を表す）。セッション画面だけに出す
+        "thinking": clip(thinking, MAX_THINKING),
         # 一覧のタイトル用。集計側は「一番古い行の値」を使うので、1行目だけに
         # 焼くのではなく毎行に載せる。そうしないと days で切った窓の外に
         # セッションの1行目が落ちたときにタイトルが消える。

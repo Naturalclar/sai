@@ -10,9 +10,10 @@ import type {
   ApprovalAnswer,
   ApprovalRequest,
   FeedResponse,
+  FeedRow,
+  ReplyingMap,
   ReplyRequest,
   ReplyResponse,
-  ReplyingMap,
   SessionDetailResponse,
   SessionIconResponse,
   SessionMetaResponse,
@@ -125,6 +126,14 @@ export function revWith(rev: string, replying: ReplyingMap, approvalsKey = ''): 
   for (const id of ids) h.update(`${id}\n${replying[id]!.since}\n`)
   h.update(`approvals:${approvalsKey}`)
   return `${rev}:${h.digest('hex').slice(0, 8)}`
+}
+
+/** フィード用に行から thinking を落とす。無い行はそのまま返す（コピーしない） */
+export function stripThinking(row: FeedRow): FeedRow {
+  if (row.thinking === undefined) return row
+  const rest = { ...row }
+  delete rest.thinking
+  return rest
 }
 
 export type Handler = (req: IncomingMessage, res: ServerResponse) => Promise<void>
@@ -459,6 +468,8 @@ export function createApp(store: FeedStore, distDir: string, runner?: Runner, ap
         let rows = await store.rows(days)
         if (repo) rows = rows.filter((r) => r.repo === repo)
         if (archived.size) rows = rows.filter((r) => !archived.has(entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? ''))))
+        // 思考はフィードには出さないので運ばない（3秒ごとに全行を返す。セッション画面だけが使う）
+        rows = rows.map(stripThinking)
         const replying = run.snapshot()
         // rev はメタ（アーカイブ）と処理中の集合、答え待ちの承認も混ぜる
         const body: FeedResponse = { rev: revWith(rev, replying, approvals.revKey()), days, rows, replying, approvals: approvals.snapshot() }

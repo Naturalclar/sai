@@ -6,7 +6,7 @@ import { mkdtemp, rm, writeFile, appendFile, mkdir, stat, utimes, readFile } fro
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Replying, ReplyResponse, SessionsResponse, SessionDetailResponse, SessionIconResponse, SessionMetaResponse, FeedResponse } from '../shared/types.ts'
-import { createApp, parseDays, revWith, sessionIdFrom } from './app.ts'
+import { createApp, parseDays, revWith, sessionIdFrom, stripThinking } from './app.ts'
 import { FeedStore } from './store.ts'
 import { localDate } from './aggregate.ts'
 import { replyCommand, splitArgs } from './runner.ts'
@@ -50,7 +50,7 @@ before(async () => {
   const lines = [
     JSON.stringify(row(new Date(now.getTime() - min(10)), 'S1', { first_user_text: '題名' })),
     'this line is broken',
-    JSON.stringify(row(new Date(now.getTime() - min(5)), 'S1', { text: 'two', user_text: '続きの題名' })),
+    JSON.stringify(row(new Date(now.getTime() - min(5)), 'S1', { text: 'two', user_text: '続きの題名', thinking: '考えた' })),
     JSON.stringify(row(new Date(now.getTime() - min(1)), 'S2', { agent: 'codex', repo: 'sai' })),
     // 返信用: cwd が実在する Claude / Codex のセッション、合成セッション、エージェント不明
     JSON.stringify(row(new Date(now.getTime() - min(4)), 'C1', { repo: 'r', cwd: dir })),
@@ -181,6 +181,21 @@ test('id の %-エンコードが壊れていれば 3 経路とも 400（500 に
   assert.deepEqual(await res.json(), { error: 'bad session id' })
   // 正しい id は今までどおり
   assert.equal((await get('/api/sessions/S1%40kanban/')).status, 200, '詳細は末尾の / を許す')
+})
+
+test('thinking はセッション詳細の行には載り、フィードの行からは落ちる', async () => {
+  const detail = (await (await get('/api/sessions/S1%40kanban?days=3')).json()) as SessionDetailResponse
+  assert.deepEqual(detail.rows.map((r) => r.thinking ?? ''), ['', '考えた'])
+  const feed = (await (await get('/api/feed?days=3')).json()) as FeedResponse
+  assert.ok(feed.rows.length > 0)
+  assert.ok(feed.rows.every((r) => !('thinking' in r)), 'フィードには thinking を運ばない')
+  assert.ok(feed.rows.some((r) => r.text === 'two'), '行そのものは残る')
+  // 無い行はコピーせずそのまま
+  const plain = row(new Date(), 'X')
+  assert.equal(stripThinking(plain), plain)
+  const withThinking = row(new Date(), 'X', { thinking: 't' })
+  assert.equal(stripThinking(withThinking).thinking, undefined)
+  assert.equal(withThinking.thinking, 't', '元の行は変えない')
 })
 
 test('/api/feed は壊れた行を落とす', async () => {

@@ -22,6 +22,8 @@ export interface Utterance {
   waiting?: boolean
   /** 待ちの行で、後に同じセッションの行が来ている（= もう解消している）。薄く出す */
   resolved?: boolean
+  /** エージェントの発言で、そのターンの思考があればそれ。セッション画面だけが出す */
+  thinking?: string
 }
 
 export interface Group {
@@ -70,7 +72,9 @@ export function toUtterances(rows: FeedRow[]): Utterance[] {
     }
     if (mine && prompted.get(id) !== mine) out.push({ speaker: 'me', row, text: row.user_text ?? '', key: `${row.ts}:${index}:me` })
     prompted.delete(id)
-    out.push({ speaker: row.agent, row, text: row.text ?? '', key: `${row.ts}:${index}` })
+    const theirs: Utterance = { speaker: row.agent, row, text: row.text ?? '', key: `${row.ts}:${index}` }
+    if (row.thinking?.trim()) theirs.thinking = row.thinking
+    out.push(theirs)
   })
   return out
 }

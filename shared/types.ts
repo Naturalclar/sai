@@ -20,8 +20,14 @@ export interface FeedRow {
   event: 'Stop' | 'PermissionRequest' | 'PreToolUse' | 'Notification' | 'UserPromptSubmit' | 'agent-turn-complete' | (string & {})
   /** ターン完了の行は最後のアシスタント発話。待ちの行は「何を待っているか」（`許可待ち: Bash: rm -rf node_modules` など） */
   text: string
-  /** そのターンの入力（人が打った文）。チャットで自分側のバブルになる。古い行には無い */
+  /** そのターンの入力（人が打った文）。チャットで自分側 のバブルになる。古い行には無い */
   user_text?: string
+  /**
+   * そのターンの思考（Claude の thinking ブロック / Codex の reasoning summary）。ターン完了の行だけで、
+   * 無いことが多い（transcript に残るのは短い要約で、ターンの 4 分の 1 程度）。セッション画面のバブルに
+   * 折りたたんで出す。GET /api/feed の行からは落とす（フィードには出さないので運ばない）
+   */
+  thinking?: string
   first_user_text?: string
 }
 

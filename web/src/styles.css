@@ -129,7 +129,7 @@
     .channels .archive-btn { padding: 8px 10px; font-size: 12px; }
     .channels .item:has(.archive-btn) .last, .channels .item:has(.archive-btn) .t { padding-right: 6.5em; }
     /* 文字だけのボタン・リンクは見た目を変えずに当たり判定だけ広げる（負のマージンで周りをずらさない） */
-    .linkish, .msg .more, .reply .target .clear { padding: 8px 6px; margin: -8px -6px; }
+    .linkish, .msg .more, .msg .think-toggle, .reply .target .clear { padding: 8px 6px; margin: -8px -6px; }
     .back { padding: 8px 6px; margin: -8px -6px 0; }
     .reply textarea { min-height: 44px; }
     .reply .row button { min-height: 44px; }
@@ -189,6 +189,11 @@
   .msg .time { position: absolute; left: -46px; top: 4px; width: 40px; text-align: right; opacity: 0; }
   .msg:hover .time { opacity: 1; }
   .msg .body { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }
+  /* -- 思考（thinking）。本文の上に折りたたみ。Markdown にせず、薄く小さく、左の線で本文と区別する */
+  .msg .thinking { margin: 0 0 4px; }
+  .msg .think-toggle { display: inline-block; background: none; border: 0; padding: 0; margin: 0 0 2px; font: inherit; font-size: 12px; color: var(--muted); cursor: pointer; }
+  .msg .think-toggle:hover { color: var(--ink); }
+  .msg .think-body { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; color: var(--muted); font-size: 13px; border-left: 2px solid var(--line); padding: 2px 0 2px 10px; margin: 2px 0 6px; }
   /* -- markdown（バブルの本文。shared/markdown.ts が木にして web/src/Markdown.tsx が組み立てる） */
   .body p, .body blockquote, .body ul { margin: 0; }
   .body > * + * { margin-top: 6px; }

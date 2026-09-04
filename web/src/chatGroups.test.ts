@@ -22,6 +22,16 @@ test('user_text があれば「自分」の発言が先に立ち、無ければ�
   assert.deepEqual(only.map((u) => u.speaker), ['claude', 'claude'])
 })
 
+test('thinking はエージェントの発言にだけ載り、空なら載らない', () => {
+  const [mine, theirs] = toUtterances([row(0, { user_text: '頼み', thinking: 'まず調べる' })])
+  assert.equal(mine?.thinking, undefined)
+  assert.equal(theirs?.thinking, 'まず調べる')
+  const [plain] = toUtterances([row(1, { thinking: '   ' })])
+  assert.equal(plain?.thinking, undefined)
+  const [waiting] = toUtterances([row(2, { event: 'PermissionRequest', text: '許可待ち: Bash', thinking: 'x' })])
+  assert.equal(waiting?.thinking, undefined, '待ちの行には付けない')
+})
+
 test('同じ発言者が10分以内に続けば1つのグループ、10分空けば別のグループ', () => {
   const days = groupRows([row(0), row(9), row(19)])
   assert.equal(days.length, 1)

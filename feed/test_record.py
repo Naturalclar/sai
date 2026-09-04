@@ -215,6 +215,33 @@ class RecordTest(unittest.TestCase):
         ])
         self.assertEqual(len(row["user_text"]), 2000)
 
+    def test_thinking_joins_this_turns_blocks_and_skips_signature_only(self):
+        think = lambda t: {"type": "thinking", "thinking": t, "signature": "sig"}
+        row = self._claude_row([
+            {"type": "user", "message": {"role": "user", "content": "前のターン"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [think("前の思考"), {"type": "text", "text": "前の返答"}]}},
+            {"type": "user", "message": {"role": "user", "content": "今のターン"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [think("まず調べる"), {"type": "tool_use", "name": "Read", "input": {}}]}},
+            {"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "content": "..."}]}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [think(""), {"type": "thinking", "signature": "only"}]}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [think("次に直す"), {"type": "text", "text": "直した"}]}},
+        ])
+        self.assertEqual(row["thinking"], "まず調べる\n\n次に直す", "前のターンの思考は拾わず、空のブロックは飛ばす")
+        self.assertEqual(row["text"], "直した", "思考は text に混ざらない")
+
+    def test_thinking_is_empty_when_absent_and_keeps_the_head_when_clipped(self):
+        row = self._claude_row([
+            {"type": "user", "message": {"role": "user", "content": "やって"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "やった"}]}},
+        ])
+        self.assertEqual(row["thinking"], "")
+        row = self._claude_row([
+            {"type": "user", "message": {"role": "user", "content": "やって"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "thinking", "thinking": "頭" + "あ" * 5000 + "尾"}, {"type": "text", "text": "ok"}]}},
+        ])
+        self.assertEqual(len(row["thinking"]), 4000)
+        self.assertTrue(row["thinking"].startswith("頭"), "切るときは先頭側を残す")
+
     def test_text_is_clipped_to_2000(self):
         transcript = Path(self.tmp.name) / "transcript.jsonl"
         write_jsonl(transcript, [
@@ -346,15 +373,36 @@ class RecordTest(unittest.TestCase):
 
     # -- Codex
 
-    def _rollout(self, session_id: str, cwd: str, day: datetime | None = None, first_user: str = "最初の依頼") -> Path:
+    def _rollout(self, session_id: str, cwd: str, day: datetime | None = None, first_user: str = "最初の依頼", tail: list[dict] | None = None) -> Path:
         day = day or datetime.now(JST)
         path = self.codex_home / "sessions" / day.strftime("%Y/%m/%d") / f"rollout-{day.strftime('%Y-%m-%dT%H-%M-%S')}-{session_id}.jsonl"
         write_jsonl(path, [
             {"timestamp": day.isoformat(), "type": "session_meta", "payload": {"id": session_id, "cwd": cwd, "originator": "codex_cli_rs"}},
             {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "<environment_context>\n</environment_context>"}]}},
             {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": first_user}]}},
-        ])
+        ] + (tail or []))
         return path
+
+    def test_codex_thinking_comes_from_reasoning_summary_of_the_last_turn(self):
+        wanted = "0c6bd4c9-4444-4a2b-9c3d-dddddddddddd"
+        self._rollout(wanted, str(self.cwd), tail=[
+            {"type": "response_item", "payload": {"type": "reasoning", "summary": [{"type": "summary_text", "text": "前のターンの要約"}], "encrypted_content": "x"}},
+            {"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "前の返答"}]}},
+            {"type": "event_msg", "payload": {"type": "user_message", "message": "続き"}},
+            {"type": "response_item", "payload": {"type": "reasoning", "summary": [], "encrypted_content": "x"}},
+            {"type": "response_item", "payload": {"type": "reasoning", "summary": [{"type": "summary_text", "text": "**調べる**"}, {"type": "summary_text", "text": "直す"}], "encrypted_content": "x"}},
+            {"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "直した"}]}},
+        ])
+        payload = {"type": "agent-turn-complete", "input-messages": ["続き"], "last-assistant-message": "直した"}
+        result = subprocess.run(
+            [sys.executable, str(RECORD), json.dumps(payload)],
+            cwd=str(self.cwd), capture_output=True, text=True,
+            env=dict(os.environ, **self.env), timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        row = read_rows(self.feed_dir)[-1]
+        self.assertEqual(row["session"], wanted)
+        self.assertEqual(row["thinking"], "**調べる**\n\n直す", "前のターンの要約は拾わない。summary が空の reasoning は飛ばす")
 
     def test_codex_resolves_session_from_rollout(self):
         wanted = "0c6bd4c9-1111-4a2b-9c3d-aaaaaaaaaaaa"
@@ -394,6 +442,7 @@ class RecordTest(unittest.TestCase):
         result = run(stdin=json.dumps(payload), env=self.env)
         self.assertEqual(result.returncode, 0)
         self.assertEqual(read_rows(self.feed_dir)[0]["session"], wanted)
+        self.assertEqual(read_rows(self.feed_dir)[0]["thinking"], "", "reasoning が無い rollout なら空")
 
     def test_codex_without_rollout_synthesizes_and_reuses_within_gap(self):
         payload = {"type": "agent-turn-complete", "last-assistant-message": "one", "cwd": str(self.cwd), "input-messages": ["first ask"]}

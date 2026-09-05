@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -124,6 +125,23 @@ class RecordTest(unittest.TestCase):
         rows = read_rows(self.feed_dir)
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["text"], "")
+
+    # -- 行の形の版
+
+    def test_row_carries_record_version_matching_shared_types(self):
+        """行の v は shared/types.ts の RECORD_VERSION と同じ値。行の形を変えたら両方上げる"""
+        # どちらもソースを文字列で読む（record を import すると同じ秒内の書き換えで古い __pycache__ を拾うことがある）
+        types_ts = (HERE.parent / "shared" / "types.ts").read_text(encoding="utf-8")
+        match = re.search(r"export const RECORD_VERSION = (\d+)", types_ts)
+        self.assertIsNotNone(match, "shared/types.ts に RECORD_VERSION が無い")
+        in_py = re.search(r"^RECORD_VERSION = (\d+)$", RECORD.read_text(encoding="utf-8"), re.M)
+        self.assertIsNotNone(in_py, "record.py に RECORD_VERSION が無い")
+        payload = {"hook_event_name": "Stop", "session_id": "s", "cwd": str(self.cwd)}
+        result = run(stdin=json.dumps(payload), env=self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        row = read_rows(self.feed_dir)[0]
+        self.assertEqual(row["v"], int(in_py.group(1)), "行の v は record.py の RECORD_VERSION")
+        self.assertEqual(row["v"], int(match.group(1)), "shared/types.ts の RECORD_VERSION とずれている")
 
     # -- Claude
 

@@ -27,7 +27,7 @@ import type {
   SettingsRequest,
   SettingsResponse,
 } from '../shared/types.ts'
-import { entityId, facets, filterSessions } from './aggregate.ts'
+import { entityId, facets, filterSessions, recordVersionOf } from './aggregate.ts'
 import { ICONS_DIR, IconStore, iconKey } from './icons.ts'
 import { alwaysAllowRule, ruleLabel } from '../shared/approvals.ts'
 import { Approvals, WAIT_MS } from './approvals.ts'
@@ -603,6 +603,8 @@ export function createApp(
         // 配っている画面が古ければ知らせる（画面はヘッダの下にバナーを出す）。判定は 30 秒に1回
         const build_stale = await freshness.stale()
         await scanDigest(days)
+        // 記録側の版は窓の中の一番新しい行から。行が変われば rev も変わるので、ここでは rev に混ぜない
+        const record_version = recordVersionOf(await store.rows(days))
         const body: SessionsResponse = {
           rev: revWith(rev, replying, approvals.revKey(), build_stale, digest.revKey()),
           days,
@@ -612,6 +614,7 @@ export function createApp(
           replying,
           approvals: pendingApprovals,
           build_stale,
+          record_version,
           profile: me.profile,
         }
         return json(res, body)

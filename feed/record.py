@@ -35,6 +35,9 @@ from pathlib import Path
 
 # ---------------------------------------------------------------- 設定
 
+# 行の形の版。行に `v` として載せる。行の形（キー）を変えるたびに上げ、shared/types.ts の RECORD_VERSION と揃える
+# （ずれると feed/test_record.py が止まる）。画面は窓の中の一番新しい行の v が古いと「record.py が古い」と出す
+RECORD_VERSION = 2
 MAX_TEXT = 2000
 MAX_USER_TEXT = 2000
 MAX_THINKING = 4000
@@ -719,6 +722,8 @@ def build_row(payload: dict, now: datetime, directory: Path) -> dict | None:
 
     return {
         "ts": now.isoformat(timespec="seconds"),
+        # 記録側の版。無い行は試作か古い record.py が書いたもの（= 1）
+        "v": RECORD_VERSION,
         "agent": agent,
         "repo": repo,
         "branch": branch,

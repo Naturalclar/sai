@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { FeedRow } from '../shared/types.ts'
-import { aggregate, clip, facets, filterSessions, localDate, recentDates } from './aggregate.ts'
+import { aggregate, clip, facets, filterSessions, localDate, recentDates, recordVersionOf } from './aggregate.ts'
 
 export function row(ts: Date, session: string, over: Partial<FeedRow> = {}): FeedRow {
   return {
@@ -161,4 +161,12 @@ test('待ちの行だけのセッションでも壊れない', () => {
   assert.equal(s!.last_text, '')
   assert.equal(s!.waiting, '入力待ち')
   assert.equal(s!.title, '頼み')
+})
+
+test('recordVersionOf は一番新しい行の v。無い行は 1（試作か古い record.py）、行が無ければ 0', () => {
+  const t0 = new Date('2026-09-05T01:00:00Z')
+  assert.equal(recordVersionOf([]), 0)
+  assert.equal(recordVersionOf([row(t0, 's1')]), 1, 'fixture の行には v が無い = 旧形式')
+  assert.equal(recordVersionOf([row(t0, 's1'), row(new Date(t0.getTime() + min(1)), 's1', { v: 2 })]), 2)
+  assert.equal(recordVersionOf([row(t0, 's1', { v: 2 }), row(new Date(t0.getTime() + min(1)), 's2')]), 1, '新しい行が旧形式なら古い record.py が混ざっている')
 })

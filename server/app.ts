@@ -170,7 +170,8 @@ export function createApp(
   digester?: Digester,
 ): Handler {
   const distRoot = resolve(distDir)
-  const run: Runner = runner ?? new ProcessRunner(join(store.directory, 'reply.log'))
+  // 処理中の返信は replying.json にも持ち、サーバを再起動しても生きている分を引き取る（#100）
+  const run: Runner = runner ?? new ProcessRunner(join(store.directory, 'reply.log'), join(store.directory, 'replying.json'))
   const metaStore = new MetaStore(join(store.directory, META_FILE))
   const iconStore = new IconStore(join(store.directory, ICONS_DIR))
   const profileStore = new ProfileStore(join(store.directory, PROFILE_FILE))

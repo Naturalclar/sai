@@ -87,6 +87,7 @@ Codex CLI (notify) ──────┘                                   │
 - **SAI は外に出さない。** `127.0.0.1` / `localhost` / `::1` 以外への bind は `main.ts` が拒否する。中身は作業内容そのものなので、デプロイ・ホスティング・Slack への送信はしない。
 - **返信の POST は同一オリジンのみ。** ブラウザから任意の `cwd` でコマンドが走るので、`app.ts` の `isCrossOrigin()`（`Origin` / `Sec-Fetch-Site`）は外さない。SAI 自身は起動するコマンドに権限のフラグを付けない（非対話なので許可ダイアログは出せず、未許可のツールは拒否される）。運用者が `SAI_CLAUDE_ARGS` / `SAI_CODEX_ARGS` で明示的に渡すのは可で、それは README の「返信と許可」に書いてある範囲（ツール単位の `--allowedTools` を勧め、バイパスは CSRF の観点から勧めない）。
 - **承認の答え（`POST /api/approvals/<id>/answer`）も同一オリジンのみ。** ここが通ると別サイトから「許可」が押せる。`POST /api/approvals`（預ける側）は返信を処理中のエンティティの分しか受けない。
+- **「処理中の返信」はメモリと `~/.agent-feed/replying.json` の両方。** `server/runner.ts` の `ProcessRunner` が `start` で書き `exit` で消し、起動時に読んで生きている pid の分だけ引き取る（見るたびに `kill(pid, 0)` で生存確認）。サーバの再起動で「処理中」を忘れて同じセッションに返信が二重に走った（#100）ため。承認（`Approvals`）はメモリだけ。
 - 履歴（`*.jsonl`、`.agent-feed/`、`sessions/`）はコミットしない。`.gitignore` 済み。
 
 ## 環境変数

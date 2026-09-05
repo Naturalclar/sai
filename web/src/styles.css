@@ -42,6 +42,7 @@
   header .user-menu .user:hover .avatar { outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent); }
   header .user-menu .menu { position: absolute; top: calc(100% + 6px); right: 0; min-width: 12em; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, .18); padding: 6px 0; z-index: 15; }
   header .user-menu .menu .who { padding: 6px 12px 8px; font-weight: 700; border-bottom: 1px solid var(--line); margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 18em; }
+  header .user-menu .menu .who .login { display: block; font-weight: 400; font-size: 11px; color: var(--muted); }
   header .user-menu .menu button { display: block; width: 100%; text-align: left; padding: 6px 12px; background: transparent; border: 0; color: var(--ink); font: inherit; cursor: pointer; }
   header .user-menu .menu button:hover { background: var(--hover); }
   /* 自分の表示名とアイコンのモーダル（ProfileEditor） */

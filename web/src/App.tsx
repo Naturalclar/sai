@@ -140,7 +140,7 @@ export function App() {
             <GitHubMark />
           </a>
         )}
-        <UserMenu profile={list.data?.profile} />
+        <UserMenu profile={list.data?.profile} viewer={list.data?.viewer ?? null} />
       </header>
       {/* 記録側の record.py が古い（フックが古い checkout や試作を呼んでいる）。窓の中の一番新しい行の v で見る */}
       {list.data && list.data.record_version > 0 && list.data.record_version < RECORD_VERSION && (

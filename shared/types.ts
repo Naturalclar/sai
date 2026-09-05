@@ -239,6 +239,20 @@ export interface SessionsResponse {
   record_version: number
   /** 自分の表示名とアイコン。変わると rev も変わる */
   profile: Profile
+  /** 誰として見ているか。tailnet 経由（tailscale serve）ならログイン名、ローカルの直アクセスなら null */
+  viewer: Viewer | null
+}
+
+/** tailnet 経由のアクセス者。Serve のヘッダを `tailscale whois` で突き合わせた後の値 */
+export interface Viewer {
+  login: string
+  name?: string
+}
+
+/** GET /api/health */
+export interface HealthResponse {
+  ok: true
+  viewer: Viewer | null
 }
 
 export interface SessionDetailResponse {
@@ -263,6 +277,8 @@ export interface FeedResponse {
   build_stale: boolean
   /** 自分の表示名とアイコン。変わると rev も変わる */
   profile: Profile
+  /** 誰として見ているか（SessionsResponse と同じ） */
+  viewer: Viewer | null
 }
 
 /** POST /api/sessions/<id>/reply の body */

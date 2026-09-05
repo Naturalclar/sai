@@ -16,6 +16,7 @@ import type {
   Profile,
   ProfileResponse,
   FeedRow,
+  HealthResponse,
   ReplyingMap,
   ReplyRequest,
   ReplyResponse,
@@ -26,6 +27,7 @@ import type {
   SessionSummary,
   SettingsRequest,
   SettingsResponse,
+  Viewer,
 } from '../shared/types.ts'
 import { entityId, facets, filterSessions, recordVersionOf } from './aggregate.ts'
 import { ICONS_DIR, IconStore, iconKey } from './icons.ts'
@@ -39,6 +41,8 @@ import { PROFILE_FILE, ProfileStore } from './profile.ts'
 import { SETTINGS_FILE, SettingsStore } from './settings.ts'
 import { ProcessRunner, replyCommand } from './runner.ts'
 import type { Runner } from './runner.ts'
+import { Authenticator, tailscaleWhois } from './auth.ts'
+import type { Identity } from './auth.ts'
 import type { FeedStore } from './store.ts'
 
 export const MAX_DAYS = 366
@@ -91,8 +95,16 @@ export function isCrossOrigin(req: IncomingMessage): boolean {
   const site = req.headers['sec-fetch-site']
   if (typeof site === 'string' && site !== 'same-origin' && site !== 'none') return true
   const origin = req.headers.origin
-  if (typeof origin === 'string' && origin !== `http://${req.headers.host ?? ''}`) return true
+  // tailscale serve 経由だとブラウザは https で Serve に繋ぎ、Origin は https://<MagicDNS 名> になる。
+  // Serve が付ける X-Forwarded-Proto でスキームを合わせる（ブラウザは X-Forwarded-* を自分では付けられない）
+  const proto = req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http'
+  if (typeof origin === 'string' && origin !== `${proto}://${req.headers.host ?? ''}`) return true
   return false
+}
+
+/** API に載せる形。ローカルの直アクセスは null */
+export function viewerOf(who: Identity): Viewer | null {
+  return who.kind === 'tailnet' ? (who.name ? { login: who.login, name: who.name } : { login: who.login }) : null
 }
 
 async function readBody(req: IncomingMessage, limit: number): Promise<Buffer> {
@@ -168,6 +180,7 @@ export function createApp(
   approvals: Approvals = new Approvals(),
   freshness: BuildFreshness = new BuildFreshness(distDir),
   digester?: Digester,
+  auth: Authenticator = new Authenticator(tailscaleWhois()),
 ): Handler {
   const distRoot = resolve(distDir)
   const run: Runner = runner ?? new ProcessRunner(join(store.directory, 'reply.log'))
@@ -511,6 +524,16 @@ export function createApp(
   }
 
   return async (req, res) => {
+    // 全リクエストに先に掛ける。tailnet 経由（Serve のヘッダ付き）は whois で本人を確かめ、合わなければ 401。
+    // ヘッダ無しはループバックからの直アクセスだけ通す
+    let who: Identity | null
+    try {
+      who = await auth.identify(req)
+    } catch (err) {
+      return error(res, 500, err instanceof Error ? `${err.name}: ${err.message}` : String(err))
+    }
+    if (!who) return error(res, 401, 'unauthorized: Tailscale-User-Login が whois と一致しない')
+    const viewer = viewerOf(who)
     const url = new URL(req.url ?? '/', 'http://127.0.0.1')
     const q = url.searchParams
     const path = url.pathname
@@ -581,7 +604,10 @@ export function createApp(
       if (path === '/' || path === '/index.html') return await sendStatic(res, 'index.html')
       if (path.startsWith('/assets/')) return await sendStatic(res, path.slice(1))
       if (path === '/favicon.ico') return send(res, 204, '', 'image/x-icon')
-      if (path === '/api/health') return json(res, { ok: true })
+      if (path === '/api/health') {
+        const payload: HealthResponse = { ok: true, viewer }
+        return json(res, payload)
+      }
       if (isSettings) {
         if (method === 'PUT') return await putSettings(req, res)
         return json(res, await settingsPayload())
@@ -616,6 +642,7 @@ export function createApp(
           build_stale,
           record_version,
           profile: me.profile,
+          viewer,
         }
         return json(res, body)
       }
@@ -665,6 +692,7 @@ export function createApp(
           approvals: approvals.snapshot(),
           build_stale,
           profile: me.profile,
+          viewer,
         }
         return json(res, body)
       }

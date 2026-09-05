@@ -11,7 +11,7 @@ Claude Code / Codex CLI のターン完了をフックで `~/.agent-feed/YYYY-MM
 ```
 pnpm install
 pnpm start                  # 127.0.0.1:8787。web/dist/ を配る（未ビルドなら案内ページ）
-pnpm start --port 9000 --feed-dir ~/.agent-feed   # pnpm 10 は「--」もそのまま渡すが、先頭の「--」は落とすので付けてもよい
+pnpm start --port 9000 --feed-dir ~/.agent-feed   # pnpm は「--」もそのまま渡すが、先頭の「--」は落とすので付けてもよい
 pnpm start:watch            # server/ shared/ の変更で自動再起動（node --watch）
 pnpm dev                    # Vite。/api を 127.0.0.1:8787 に proxy するので pnpm start も並走させる
 pnpm build                  # typecheck → vite build web（web/dist/ へ）
@@ -45,6 +45,15 @@ python3 -m unittest feed.test_record -k synth
 サーバとテストは Node の型剥がしで `.ts` を直接実行するため **Node 22.18+** が前提（`package.json` の `engines`）。古い Node だと `pnpm test` / `pnpm start` が `ERR_UNKNOWN_FILE_EXTENSION` で落ちる。バージョンを上げるのが本筋で、応急処置なら `node --experimental-strip-types ...` を付ける。
 
 `server/tsconfig.json` は `erasableSyntaxOnly: true`。サーバ側では enum / namespace / パラメータプロパティなど型剥がしで消せない構文は使えない。
+
+### pnpm のバージョン
+
+**pnpm 12 系**が前提（CI の `pnpm/action-setup` も `version: 12`）。設定は `package.json` の `"pnpm"` フィールドではなく **`pnpm-workspace.yaml`** に置く（12 系は前者を読まず、WARN を出して無視する）。
+
+- `allowBuilds: { esbuild: true }` — インストール時のビルドスクリプトの許可。無いと `ERR_PNPM_IGNORED_BUILDS` で `pnpm install` が落ち、通しても esbuild のバイナリが無く `pnpm build` が失敗する。
+- `packages: [.]` — 単一パッケージでも必須。無いと `pnpm build` の中の入れ子の `pnpm typecheck` が `packages field missing or empty` で落ちる。
+
+`package.json` に `packageManager` は**書かない**。pnpm 12 のバイナリは corepack のキャッシュに `bin/pnpm.cjs` を持たないため、入れ子の `pnpm` 呼び出しが `Cannot find module .../pnpm.cjs` で落ちる。
 
 ## 構造
 

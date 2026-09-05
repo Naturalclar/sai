@@ -28,6 +28,5 @@
     "oxlint": "^1.0.0",
     "typescript": "^5.8.0",
     "vite": "^6.3.0"
-  },
-  "pnpm": { "onlyBuiltDependencies": ["esbuild"] }
+  }
 }

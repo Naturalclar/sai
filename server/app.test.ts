@@ -1,12 +1,12 @@
 import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createServer } from 'node:http'
+import { createServer, request as httpRequest } from 'node:http'
 import type { Server } from 'node:http'
 import { mkdtemp, rm, writeFile, appendFile, mkdir, stat, utimes, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Replying, ReplyResponse, SessionsResponse, SessionDetailResponse, SessionIconResponse, SessionMetaResponse, FeedResponse, SettingsResponse, DigestBackfillResponse, HealthResponse } from '../shared/types.ts'
-import { createApp, parseDays, revWith, sessionIdFrom, stripThinking } from './app.ts'
+import { createApp, parseDays, revWith, selfUrl, sessionIdFrom, stripThinking } from './app.ts'
 import { BuildFreshness } from './buildFreshness.ts'
 import { Authenticator } from './auth.ts'
 import { DigestStore, Digester } from './digest.ts'
@@ -99,6 +99,15 @@ after(async () => {
 })
 
 const get = (path: string) => fetch(base + path)
+
+test('selfUrl: ソケットの待ち受けアドレス。IPv6 は角括弧、IPv4-mapped は IPv4 に戻す、無ければ既定', () => {
+  const at = (localAddress: string, localPort: number) => selfUrl({ socket: { localAddress, localPort } } as never)
+  assert.equal(at('127.0.0.1', 8787), 'http://127.0.0.1:8787')
+  assert.equal(at('::1', 9000), 'http://[::1]:9000')
+  assert.equal(at('::ffff:127.0.0.1', 8787), 'http://127.0.0.1:8787')
+  assert.equal(selfUrl({ socket: undefined } as never), 'http://127.0.0.1:8787')
+  assert.equal(at('', 0), 'http://127.0.0.1:8787')
+})
 
 test('parseDays', () => {
   assert.equal(parseDays(null, 7), 7)
@@ -283,7 +292,7 @@ test('POST reply: Claude のセッションを cwd で再開する', async () =>
   const { id, cmd } = runner.started[0]!
   assert.equal(id, 'C1@r')
   assert.equal(cmd.cwd, dir)
-  // 許可・質問を画面で答える配線（--mcp-config は SAI 自身の MCP サーバ、宛先はブラウザが来た Host）
+  // 許可・質問を画面で答える配線（--mcp-config は SAI 自身の MCP サーバ、宛先はこのサーバ自身のループバック）
   assert.deepEqual(cmd.args.slice(0, 1), ['--mcp-config'])
   assert.deepEqual(cmd.args.slice(2), ['--permission-prompt-tool', 'mcp__sai__approve', '-p', '--resume', 'C1', '--', '続きをやって'])
   const mcp = JSON.parse(cmd.args[1]!) as { mcpServers: { sai: { type: string; command: string; args: string[]; env: Record<string, string> } } }
@@ -291,6 +300,27 @@ test('POST reply: Claude のセッションを cwd で再開する', async () =>
   assert.equal(mcp.mcpServers.sai.env.SAI_URL, base)
   assert.equal(mcp.mcpServers.sai.env.SAI_ENTITY, 'C1@r')
   assert.match(mcp.mcpServers.sai.args[mcp.mcpServers.sai.args.length - 1]!, /approve-mcp\.ts$/)
+})
+
+test('POST reply: tailscale serve 経由（Host が ts.net）でも SAI_URL はサーバ自身のループバック', async () => {
+  runner.started.length = 0
+  // fetch は Host を差し替えさせてくれない（黙って落とす）ので node:http で送る。Serve が付ける X-Forwarded-Proto も真似る
+  const { port } = new URL(base)
+  const status = await new Promise<number>((resolve, reject) => {
+    const body = JSON.stringify({ text: 'go' })
+    const req = httpRequest(
+      { host: '127.0.0.1', port, method: 'POST', path: '/api/sessions/C1%40r/reply', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), Host: 'jesses-mac-mini.taild2a5cb.ts.net', 'X-Forwarded-Proto': 'https' } },
+      (res) => {
+        res.resume()
+        res.on('end', () => resolve(res.statusCode ?? 0))
+      },
+    )
+    req.on('error', reject)
+    req.end(body)
+  })
+  assert.equal(status, 202)
+  const mcp = JSON.parse(runner.started[0]!.cmd.args[1]!) as { mcpServers: { sai: { env: Record<string, string> } } }
+  assert.equal(mcp.mcpServers.sai.env.SAI_URL, base, 'ブラウザの Host（80 番も https も誰も聞いていない）ではなく 127.0.0.1:<port>')
 })
 
 test('POST reply: Codex は codex exec resume', async () => {

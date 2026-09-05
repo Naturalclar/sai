@@ -173,6 +173,21 @@ export function stripThinking(row: FeedRow): FeedRow {
   return rest
 }
 
+/**
+ * このリクエストを受けたサーバ自身の URL（`http://127.0.0.1:8787` など）。同じマシンの子プロセス（approve-mcp.ts）が
+ * サーバに戻ってくるための宛先で、ブラウザの Host（tailscale serve のホスト名など）は使わない。
+ * IPv6（::1）は角括弧で囲む。ソケットが無い（テストの偽物など）ときは localhost:8787
+ */
+export function selfUrl(req: Pick<IncomingMessage, 'socket'>): string {
+  const address = req.socket?.localAddress ?? ''
+  const port = req.socket?.localPort ?? 0
+  if (!address || !port) return 'http://127.0.0.1:8787'
+  const host = address.includes(':') ? `[${address.replace(/^::ffff:/, '')}]` : address
+  // IPv4-mapped IPv6（::ffff:127.0.0.1）は IPv4 に戻す
+  const v4 = address.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/)
+  return `http://${v4 ? v4[1] : host}:${port}`
+}
+
 export type Handler = (req: IncomingMessage, res: ServerResponse) => Promise<void>
 
 /** 端末（tmux）への打ち込みに使うもの。テストでは差し替える */
@@ -372,8 +387,10 @@ export function createApp(
         // ペインが消えた・tmux が無い → 別プロセスで回す
       }
     }
-    // 許可・質問を画面で答える配線。MCP の子プロセスは、ブラウザがこのサーバに来たのと同じ宛先（Host）に預ける
-    const via = req.headers.host ? { url: `http://${req.headers.host}`, entity: id } : undefined
+    // 許可・質問を画面で答える配線。MCP の子プロセスはこのサーバと同じマシンで動くので、宛先はブラウザが来た Host ではなく
+    // このサーバ自身が待ち受けているアドレス（ループバック）。Host だと tailscale serve 経由（https://<host>.ts.net → 127.0.0.1:8787）で
+    // 開いた画面からの返信が `http://<host>.ts.net`（80 番、誰も聞いていない）に投げて「SAI に届かない: fetch failed」になる
+    const via = { url: selfUrl(req), entity: id }
     // セッションに返信のモデルが設定されていれば（PUT /api/sessions/<id>/meta の model）それで回す
     const model = (await metaStore.get(id))?.model
     const cmd = replyCommand(session.agent, raw, text, cwd, process.env, via, model)

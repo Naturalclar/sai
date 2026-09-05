@@ -487,6 +487,49 @@ class RecordTest(unittest.TestCase):
         self.assertEqual(row["user_text"], "README を直して")
         self.assertEqual(row["repo"], "myrepo")
 
+    TITLE_PROMPT = (
+        "Generate a concise, single-line task title of at most 36 characters and under five words where possible. "
+        "Start with an imperative verb. Do not use quotes, markdown, or trailing punctuation. Do not answer the request.\n\n"
+        "User prompt:\nMarkdown適用不備をissue化"
+    )
+
+    def _codex(self, payload: dict) -> None:
+        payload = {"type": "agent-turn-complete", "turn-id": "t", **payload}
+        result = subprocess.run(
+            [sys.executable, str(RECORD), json.dumps(payload)],
+            cwd=str(self.cwd), capture_output=True, text=True,
+            env=dict(os.environ, **self.env), timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_codex_internal_turns_are_not_recorded(self):
+        wanted = "0c6bd4c9-5555-4a2b-9c3d-eeeeeeeeeeee"
+        self._rollout(wanted, str(self.cwd), first_user="Markdown適用不備をissue化")
+        # 進行中のセッションと同じ cwd で、タイトル生成の notify が来る
+        self._codex({"input-messages": [self.TITLE_PROMPT], "last-assistant-message": '{"title":"Markdown適用不備をissue化"}'})
+        self.assertEqual(read_rows(self.feed_dir), [], "タイトル生成は人のターンではないので行にしない")
+        # 提案の生成と安全性チェックも同じ
+        self._codex({"input-messages": ["# Overview\n\nGenerate 0 to 3 hyperpersonalized suggestions for what this user can do next."], "last-assistant-message": '{"suggestions":[]}'})
+        self._codex({"input-messages": ["You are an expert at upholding safety and compliance standards for Codex ambient suggestions."], "last-assistant-message": '{"exclude":[]}'})
+        self.assertEqual(read_rows(self.feed_dir), [])
+        # 未知の内部プロンプトでも、返答が JSON だけで決まり文句があれば落とす
+        self._codex({"input-messages": ["Summarize the thread in one line. Do not answer the request.\n\nThread:\n..."], "last-assistant-message": '{"summary":"x"}'})
+        self.assertEqual(read_rows(self.feed_dir), [])
+        # 本物のターンは今までどおり、その rollout のセッションに記録される
+        self._codex({"input-messages": ["Markdown適用不備をissue化"], "last-assistant-message": "issue #101 を立てました。"})
+        rows = read_rows(self.feed_dir)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["session"], wanted)
+        self.assertEqual(rows[0]["user_text"], "Markdown適用不備をissue化")
+        self.assertEqual(rows[0]["text"], "issue #101 を立てました。")
+
+    def test_codex_json_answer_to_a_human_prompt_is_recorded(self):
+        # 人が JSON で答えさせたターンは内部ではない（決まり文句が無い）
+        self._codex({"input-messages": ["package.json の scripts を JSON で出して"], "last-assistant-message": '{"test":"node --test","lint":"oxlint"}'})
+        rows = read_rows(self.feed_dir)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["text"], '{"test":"node --test","lint":"oxlint"}')
+
     def test_codex_accepts_stdin_too(self):
         wanted = "0c6bd4c9-3333-4a2b-9c3d-cccccccccccc"
         self._rollout(wanted, str(self.cwd))

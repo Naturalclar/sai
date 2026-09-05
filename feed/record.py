@@ -407,6 +407,32 @@ def rollout_last_turn_reasoning(path: Path) -> str:
     return "\n\n".join(parts)
 
 
+# Codex が人の入力とは別に裏で回す LLM 呼び出し。これらも agent-turn-complete の notify を鳴らすが、
+# セッション ID が無く rollout にも書かれないので、同じ cwd の進行中のセッションに紛れ込む。
+# 手元で見つかった 3 種類（タスクのタイトル生成 / 提案の生成 / 安全性チェック）。返答はどれも JSON だけ
+_CODEX_INTERNAL_PROMPT_PREFIXES = (
+    "Generate a concise, single-line task title",
+    "# Overview\n\nGenerate 0 to 3 hyperpersonalized suggestions",
+    "You are an expert at upholding safety and compliance standards for Codex",
+)
+
+
+def is_codex_internal_turn(user_text: str, text: str) -> bool:
+    """Codex の内部の LLM 呼び出し（人のターンではない）の notify か。
+
+    入力（input-messages）が既知の内部プロンプトで始まるか、返答が JSON オブジェクトだけで
+    入力に「Do not answer the request」（内部プロンプトの決まり文句）が入っていれば内部とみなす。
+    人が JSON で答えさせたターンは後者に当たらない（決まり文句が無い）。
+    """
+    prompt = (user_text or "").lstrip()
+    if prompt.startswith(_CODEX_INTERNAL_PROMPT_PREFIXES):
+        return True
+    reply = (text or "").strip()
+    if reply.startswith("{") and reply.endswith("}") and "Do not answer the request" in prompt:
+        return True
+    return False
+
+
 def first_user_text(path: Path, limit: int = 400) -> str:
     for entry in _iter_jsonl(path, limit=limit):
         role, text = _role_and_text(entry)
@@ -696,6 +722,10 @@ def build_row(payload: dict, now: datetime, directory: Path) -> dict | None:
         inputs = payload.get("input-messages") or payload.get("input_messages")
         if isinstance(inputs, (list, str)):
             user_text = _blocks_to_text(inputs)
+        # タイトル生成などの内部の呼び出しは人のターンではない。行にすると進行中のセッションに
+        # JSON だけの返答が混ざる（issue #102）
+        if is_codex_internal_turn(user_text, text):
+            return None
         rollout = find_codex_rollout(session) if source == "rollout" else None
         if rollout is not None:
             first_user = first_user_text(rollout)

@@ -333,7 +333,9 @@ export function createApp(
     if (run.running(id)) return error(res, 409, 'このセッションはまだ前の返信を処理中です')
     // 許可・質問を画面で答える配線。MCP の子プロセスは、ブラウザがこのサーバに来たのと同じ宛先（Host）に預ける
     const via = req.headers.host ? { url: `http://${req.headers.host}`, entity: id } : undefined
-    const cmd = replyCommand(session.agent, raw, text, cwd, process.env, via)
+    // セッションに返信のモデルが設定されていれば（PUT /api/sessions/<id>/meta の model）それで回す
+    const model = (await metaStore.get(id))?.model
+    const cmd = replyCommand(session.agent, raw, text, cwd, process.env, via, model)
     if (!cmd) return error(res, 400, replyBlockedReason(session) || 'unsupported agent')
     try {
       // プロセスが終わったら、そのセッションの答え待ちは deny で片付ける（もう誰も答えを取りに来ない）

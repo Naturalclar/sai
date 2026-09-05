@@ -439,6 +439,32 @@ test('PUT meta: 表示名が一覧と詳細に載り、rev が変わり、ファ
   assert.deepEqual(await (await get('/api/sessions/C1%40r/meta')).json(), { id: 'C1@r', meta: {} }, '無ければ空')
 })
 
+test('PUT meta: model は次の返信の claude / codex に --model / -m として付き、消せば付かない', async () => {
+  runner.started.length = 0
+  // Claude: --model
+  assert.equal((await putMeta('C1@r', { model: 'opus' })).status, 200)
+  assert.equal(((await (await get('/api/sessions/C1%40r?days=7')).json()) as SessionDetailResponse).session.meta?.model, 'opus', '詳細の meta に載る')
+  assert.equal((await post('C1@r', { text: 'つづき' })).status, 202)
+  let args = runner.started[0]!.cmd.args
+  assert.deepEqual(args.slice(args.indexOf('--model'), args.indexOf('--model') + 2), ['--model', 'opus'])
+  assert.ok(args.indexOf('--model') < args.indexOf('-p'), '--model は -p より前')
+  // Codex: -m
+  assert.equal((await putMeta('X1@r', { model: 'gpt-5' })).status, 200)
+  assert.equal((await post('X1@r', { text: 'go' })).status, 202)
+  args = runner.started[1]!.cmd.args
+  assert.deepEqual(args.slice(0, 4), ['exec', 'resume', '-m', 'gpt-5'])
+  // 消すと付かない
+  assert.equal((await putMeta('C1@r', { model: '' })).status, 200)
+  assert.equal((await putMeta('X1@r', { model: null })).status, 200)
+  assert.equal((await post('C1@r', { text: 'x' })).status, 202)
+  assert.ok(!runner.started[2]!.cmd.args.includes('--model'), '既定に戻したら付かない')
+  assert.equal((await post('X1@r', { text: 'x' })).status, 202)
+  assert.ok(!runner.started[3]!.cmd.args.includes('-m'))
+  // 検査は mergeMeta と同じ
+  assert.equal((await putMeta('C1@r', { model: '--dangerously-skip-permissions' })).status, 400)
+  assert.equal((await putMeta('C1@r', { model: 'a'.repeat(65) })).status, 400)
+})
+
 test('PUT meta: 検査', async () => {
   const bad = async (body: unknown, re: RegExp) => {
     const res = await putMeta('C1@r', body)
@@ -744,6 +770,14 @@ test('replyCommand: SAI_*_ARGS の追加引数。Claude は先頭（--allowedToo
   )
   assert.deepEqual(replyCommand('codex', 'S', 'hi', '/w', { SAI_CODEX_ARGS: '-s workspace-write' })!.args, ['exec', 'resume', '-s', 'workspace-write', 'S', '--', 'hi'])
   assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', { SAI_CLAUDE_ARGS: '   ' })!.args, ['-p', '--resume', 'S', '--', 'hi'], '空白だけなら何も足さない')
+  // セッションの返信モデル。運用者の --model より後ろに置いて勝たせる
+  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', {}, undefined, 'opus')!.args, ['--model', 'opus', '-p', '--resume', 'S', '--', 'hi'])
+  assert.deepEqual(
+    replyCommand('claude', 'S', 'hi', '/w', { SAI_CLAUDE_ARGS: '--model sonnet' }, undefined, 'opus')!.args,
+    ['--model', 'sonnet', '--model', 'opus', '-p', '--resume', 'S', '--', 'hi'],
+  )
+  assert.deepEqual(replyCommand('codex', 'S', 'hi', '/w', {}, undefined, 'gpt-5')!.args, ['exec', 'resume', '-m', 'gpt-5', 'S', '--', 'hi'])
+  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', {}, undefined, '')!.args, ['-p', '--resume', 'S', '--', 'hi'], '空なら付けない')
 })
 
 test('splitArgs: シェル風に割る', () => {

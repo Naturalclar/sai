@@ -37,10 +37,11 @@ from pathlib import Path
 
 # 行の形の版。行に `v` として載せる。行の形（キー）を変えるたびに上げ、shared/types.ts の RECORD_VERSION と揃える
 # （ずれると feed/test_record.py が止まる）。画面は窓の中の一番新しい行の v が古いと「record.py が古い」と出す
-RECORD_VERSION = 2
+RECORD_VERSION = 3
 MAX_TEXT = 2000
 MAX_USER_TEXT = 2000
 MAX_THINKING = 4000
+MAX_MODEL = 100
 MAX_FIRST_USER = 300
 SYNTH_GAP_SECONDS = 30 * 60
 ROLLOUT_MAX_AGE_SECONDS = 48 * 3600
@@ -378,6 +379,40 @@ def last_turn_thinking(path: Path) -> str:
     return "\n\n".join(parts)
 
 
+def last_assistant_model(path: Path) -> str:
+    """Claude の transcript から、最後の assistant 行のモデル名（message.model）を取る。
+    CLI が合成した行（`<synthetic>`）は飛ばす。"""
+    entries = list(_iter_jsonl(path))
+    for entry in reversed(entries):
+        if entry.get("isMeta") or entry.get("isSidechain") or entry.get("type") != "assistant":
+            continue
+        message = entry.get("message")
+        model = message.get("model") if isinstance(message, dict) else None
+        if isinstance(model, str) and model.strip() and not model.startswith("<"):
+            return model.strip()
+    return ""
+
+
+def rollout_last_model(path: Path) -> str:
+    """Codex の rollout から、最後のターンのモデル名を取る（turn_context.model。無ければ thread_settings_applied）。"""
+    entries = list(_iter_jsonl(path))
+    fallback = ""
+    for entry in reversed(entries):
+        payload = entry.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        if entry.get("type") == "turn_context":
+            model = payload.get("model")
+            if isinstance(model, str) and model.strip():
+                return model.strip()
+        if payload.get("type") == "thread_settings_applied" and not fallback:
+            settings = payload.get("thread_settings")
+            model = settings.get("model") if isinstance(settings, dict) else None
+            if isinstance(model, str) and model.strip():
+                fallback = model.strip()
+    return fallback
+
+
 def rollout_last_turn_reasoning(path: Path) -> str:
     """Codex の rollout から、最後のターンの reasoning の summary を取る。
 
@@ -672,6 +707,7 @@ def build_row(payload: dict, now: datetime, directory: Path) -> dict | None:
     text = ""
     user_text = ""
     thinking = ""
+    model = ""
     first_user = ""
     session = ""
     source = ""
@@ -697,6 +733,7 @@ def build_row(payload: dict, now: datetime, directory: Path) -> dict | None:
                 text = last_assistant_text(path)
                 user_text = last_user_text(path)
                 thinking = last_turn_thinking(path)
+                model = last_assistant_model(path)
         if event == "UserPromptSubmit":
             # 入力した瞬間の行。本文は無く、打った文を user_text にそのまま載せる
             # （画面は Stop を待たずに自分側のバブルを出す）。transcript にはまだ無いので payload から
@@ -733,6 +770,7 @@ def build_row(payload: dict, now: datetime, directory: Path) -> dict | None:
         if rollout is not None:
             first_user = first_user_text(rollout)
             thinking = rollout_last_turn_reasoning(rollout)
+            model = rollout_last_model(rollout)
         if not first_user:
             first_user = user_text
 
@@ -767,6 +805,8 @@ def build_row(payload: dict, now: datetime, directory: Path) -> dict | None:
         # そのターンの思考（Claude の thinking / Codex の reasoning summary）。無いことが多い。
         # 長ければ先頭側を残す（考え始めが「何をしようとしたか」を表す）。セッション画面だけに出す
         "thinking": clip(thinking, MAX_THINKING),
+        # そのターンを回したモデル（Claude は transcript の assistant 行の message.model、Codex は rollout の turn_context.model）
+        "model": clip(model, MAX_MODEL),
         # 一覧のタイトル用。集計側は「一番古い行の値」を使うので、1行目だけに
         # 焼くのではなく毎行に載せる。そうしないと days で切った窓の外に
         # セッションの1行目が落ちたときにタイトルが消える。

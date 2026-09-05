@@ -3,6 +3,12 @@
 import type { SessionMeta } from './types.ts'
 
 export const META_NAME_MAX = 100
+export const META_MODEL_MAX = 64
+/**
+ * モデル名・別名に使える文字。`claude-opus-5`、`opus`、`gpt-5.6-sol`、設定の `fable[1m]` のような形。
+ * 先頭は英数字（`-` で始まると CLI の引数に化ける）
+ */
+export const META_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/[\]-]*$/
 
 /**
  * current に input を重ねて正規化する。input に無いキー（undefined）は据え置き、null / 空文字は「消す」、
@@ -34,6 +40,15 @@ export function mergeMeta(current: SessionMeta, input: unknown): { meta: Session
     }
   }
 
+  if (raw.model !== undefined) {
+    if (raw.model !== null && typeof raw.model !== 'string') return { meta: {}, error: 'model は文字列で送ってください' }
+    const model = (raw.model ?? '').trim()
+    if (model.length > META_MODEL_MAX) return { meta: {}, error: `モデル名は ${META_MODEL_MAX} 文字までです` }
+    if (model && !META_MODEL_RE.test(model)) return { meta: {}, error: 'モデル名は英数字で始め、使えるのは英数字と . _ : / - [ ] です' }
+    if (model) meta.model = model
+    else delete meta.model
+  }
+
   return { meta, error: '' }
 }
 
@@ -44,5 +59,5 @@ export function normalizeMeta(input: unknown): { meta: SessionMeta; error: strin
 
 /** 何も付いていないか */
 export function isEmptyMeta(meta: SessionMeta | undefined): boolean {
-  return !meta || (!meta.name && !meta.archived_at)
+  return !meta || (!meta.name && !meta.archived_at && !meta.model)
 }

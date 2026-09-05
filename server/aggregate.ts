@@ -86,6 +86,9 @@ export function aggregate(rows: FeedRow[]): SessionSummary[] {
     const lastTurn = turnRows[turnRows.length - 1]
     // 最後の行が待ちなら、まだ人を待っている。後にターン完了か再開が来ていれば解消
     const waiting = eventKind(last.event) === 'waiting' ? (last.text ?? '') : ''
+    // モデルはターン完了の行だけが持つ。途中で変わっていれば全部（出てきた順）、表示は一番新しい行のもの
+    const models = orderedUnique(turnRows.map((r) => (r.model ?? '').trim()).filter(Boolean))
+    const lastModelRow = [...turnRows].reverse().find((r) => r.model?.trim())
 
     sessions.push({
       id,
@@ -108,6 +111,8 @@ export function aggregate(rows: FeedRow[]): SessionSummary[] {
       sources,
       last_text: clip(firstLine(lastTurn?.text ?? ''), 120),
       last_turn_ts: lastTurn?.ts ?? '',
+      model: lastModelRow?.model?.trim() ?? '',
+      models,
     })
   }
   sessions.sort((a, b) => (a.end < b.end ? 1 : a.end > b.end ? -1 : 0))

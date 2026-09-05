@@ -4,7 +4,7 @@
 // 回したターンが完了すれば既存のフック（Stop / notify）が動いて JSONL に1行増えるので、
 // 結果は今のポーリングで画面に流れてくる。返信専用の記録経路は作らない。
 import { spawn } from 'node:child_process'
-import { closeSync, openSync, writeSync } from 'node:fs'
+import { closeSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync, writeSync } from 'node:fs'
 import { dirname, resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Agent, Replying, ReplyingMap } from '../shared/types.ts'
@@ -124,22 +124,96 @@ export interface Runner {
   start(id: string, cmd: ReplyCommand, onExit?: () => void): Promise<void>
 }
 
-/** node:child_process で実際に起動する。テストは FakeRunner に差し替える */
-export class ProcessRunner implements Runner {
-  private active = new Map<string, Replying>()
-  readonly logPath: string | null
+/** replying.json の1件。画面に出す Replying に、生存確認用の pid を足したもの。pid 0 は spawn 待ち（自分の子で、まだ pid が無い） */
+interface Persisted extends Replying {
+  pid: number
+}
 
-  /** logPath があれば子プロセスの stdout/stderr を追記する（うまく動かないときの手がかり） */
-  constructor(logPath: string | null) {
+/** pid が生きているか。EPERM は「居るが触れない」なので生きている扱い。0 以下（spawn 待ちの自分の子）は生きている扱い */
+export function isAlive(pid: number): boolean {
+  if (pid <= 0) return true
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+/**
+ * node:child_process で実際に起動する。テストは FakeRunner に差し替える。
+ *
+ * 「処理中」の正はここだが、メモリだけだとサーバの再起動（pnpm start:watch で server/ が変わった、など）で
+ * 忘れる。子は detached なので生き残っているのに、画面の「処理中」が消えて人がもう一度送り、同じセッションに
+ * 返信が二重に走った（#100）。生き残った子からの許可の POST も 409 になっていた。
+ * そこで statePath（~/.agent-feed/replying.json）にも書き、起動時に読んで生きている pid の分を引き取る。
+ * 引き取った分は exit を待てないので、見るたびに kill(pid, 0) で生存を確かめ、死んでいたら落とす。
+ */
+export class ProcessRunner implements Runner {
+  private active = new Map<string, Persisted>()
+  readonly logPath: string | null
+  readonly statePath: string | null
+
+  /** logPath があれば子プロセスの stdout/stderr を追記する（うまく動かないときの手がかり）。statePath があれば処理中をそこにも持つ */
+  constructor(logPath: string | null, statePath: string | null = null) {
     this.logPath = logPath
+    this.statePath = statePath
+    this.adopt()
+  }
+
+  /** 前のサーバが残した replying.json を読み、まだ生きている pid の分だけ引き取る。壊れていれば無視 */
+  private adopt(): void {
+    if (!this.statePath) return
+    let raw: unknown
+    try {
+      raw = JSON.parse(readFileSync(this.statePath, 'utf-8'))
+    } catch {
+      return
+    }
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return
+    for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
+      if (!value || typeof value !== 'object') continue
+      const { pid, since, text } = value as Partial<Persisted>
+      if (typeof pid !== 'number' || pid <= 0 || typeof since !== 'string' || typeof text !== 'string') continue
+      if (isAlive(pid)) this.active.set(id, { pid, since, text })
+    }
+    this.persist() // 死んでいた分を落とした形で書き直す
+  }
+
+  /** いまの active を書く。tmp → rename（session-meta.json と同じ）。書けなくても返信は止めない */
+  private persist(): void {
+    if (!this.statePath) return
+    try {
+      mkdirSync(dirname(this.statePath), { recursive: true })
+      const tmp = `${this.statePath}.${process.pid}.tmp`
+      writeFileSync(tmp, JSON.stringify(Object.fromEntries(this.active), null, 2) + '\n', { mode: 0o600 })
+      renameSync(tmp, this.statePath)
+    } catch {
+      // 書けなくても処理中の判定はメモリで続く
+    }
+  }
+
+  /** 引き取った分（exit を受け取れない）が死んでいたら落とす。自分の子は exit で消えるが、ここで消えても同じ */
+  private sweep(): void {
+    let changed = false
+    for (const [id, r] of this.active) {
+      if (!isAlive(r.pid)) {
+        this.active.delete(id)
+        changed = true
+      }
+    }
+    if (changed) this.persist()
   }
 
   running(id: string): boolean {
+    this.sweep()
     return this.active.has(id)
   }
 
   snapshot(): ReplyingMap {
-    return Object.fromEntries(this.active)
+    this.sweep()
+    // pid は画面に要らない
+    return Object.fromEntries([...this.active].map(([id, { since, text }]) => [id, { since, text }]))
   }
 
   async start(id: string, cmd: ReplyCommand, onExit?: () => void): Promise<void> {
@@ -158,12 +232,15 @@ export class ProcessRunner implements Runner {
       // stdin は閉じておく。`claude -p` はパイプが繋がっていると stdin も読みに行く
       stdio: ['ignore', fd ?? 'ignore', fd ?? 'ignore'],
     })
-    this.active.set(id, { since: new Date().toISOString(), text: cmd.text })
+    // spawn を待つ前から「処理中」にする（同じセッションへの2つ目をこの隙に通さない）。pid は spawn したら入れる
+    const entry: Persisted = { pid: 0, since: new Date().toISOString(), text: cmd.text }
+    this.active.set(id, entry)
     let released = false
     const release = () => {
       if (released) return
       released = true
       this.active.delete(id)
+      this.persist()
       onExit?.()
       if (fd !== null) {
         try {
@@ -183,6 +260,8 @@ export class ProcessRunner implements Runner {
       release()
       throw err
     }
+    entry.pid = child.pid ?? 0
+    this.persist()
     child.once('exit', release)
     child.once('error', release)
     child.unref()

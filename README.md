@@ -111,8 +111,10 @@ notify = ["/Users/<me>/.scripts/sai-codex-notify"]
 ```
 pnpm install && pnpm build
 pnpm start                                   # http://127.0.0.1:8787/
-pnpm start --port 9000 --feed-dir ~/.agent-feed   # pnpm 10 は「--」もそのまま渡すが、先頭の「--」は落とすので付けてもよい
+pnpm start --port 9000 --feed-dir ~/.agent-feed   # pnpm は「--」もそのまま渡すが、先頭の「--」は落とすので付けてもよい
 ```
+
+pnpm は 12 系（設定は `pnpm-workspace.yaml`）、Node は 22.18 以上が要る。
 
 サーバは `web/dist/` を配る。未ビルドなら `/` にその旨が出る。`file://` で開くと fetch が CORS で止まるので、必ずこのサーバ経由で開く。`127.0.0.1` 以外には bind を拒否する。
 

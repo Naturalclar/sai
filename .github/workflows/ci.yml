@@ -24,9 +24,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # pnpm 12 系。10 系は package.json の "pnpm" フィールドを見るが 12 系は見ないので、
+      # ビルドスクリプトの許可は pnpm-workspace.yaml の allowBuilds に置いてある。
+      # ここを 10 に戻すと esbuild の postinstall が走らず vite build が落ちる。
       - uses: pnpm/action-setup@v4
         with:
-          version: 10
+          version: 12
 
       # サーバとテストは Node の型剥がしで .ts を直接実行するので 22.18 以上が必須（package.json の engines）。
       # 22 系の最新を取る。

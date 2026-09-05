@@ -84,7 +84,7 @@ Codex CLI (notify) ──────┘                                   │
 - **自分の入力は `UserPromptSubmit` の行で先に届く。** `record.py` は Claude の入力のたびに `user_text` だけの行（`event: UserPromptSubmit`、`text` は空）を書き、続く `Stop` の行にも同じ `user_text` が載る。Claude Code が差し込む入力（バックグラウンドのタスク完了の `<task-notification>`。transcript では `promptSource: system`）は人の入力ではないので `user_text` にしない（`record.py` の `_is_system_prompt()`）。画面（`web/src/chatGroups.ts`）は同じエンティティで直前の入力行と同じ文なら `Stop` 側の自分バブルを出さない。`turns` と「返信が終わった」の判定は `Stop` の行だけで数える（`eventKind() === 'turn'`）。画面から返信したときの仮バブルは、入力の行が届いたら `promptArrived()` で本文を消して「処理中」の1行にする。
 - **エンティティの単位は (セッション, リポジトリ)。** IDは `<セッション>@<リポジトリ>`（セッションが取れない行は `unknown-<日付>`）。キーの作り方は `shared/entity.ts` の `entityId()` にあり、サーバの集計（`aggregate.ts`）・詳細APIの行の絞り込み（`app.ts`）・画面のリンク（`Chat.tsx`）が全部これを使う。別々に組み立てるとリンク切れになるので必ず共有関数を通す。
 - 日付の切り方は `Asia/Tokyo` 固定（`record.py` の `tz()` と `shared/entity.ts` の `TIME_ZONE`）。
-- **SAI は外に出さない。** `127.0.0.1` / `localhost` / `::1` 以外への bind は `main.ts` が拒否する。中身は作業内容そのものなので、デプロイ・ホスティング・Slack への送信はしない。
+- **SAI は外に出さない。** `127.0.0.1` / `localhost` / `::1` 以外への bind は `main.ts` が拒否する。中身は作業内容そのものなので、デプロイ・ホスティング・Slack への送信はしない。出してよいのは tailnet までで、`tailscale serve` 経由だけ（bind は変えない、funnel は使わない）。Serve の `Tailscale-User-Login` は `server/auth.ts` の `Authenticator` が `tailscale whois <X-Forwarded-For>` で突き合わせ、合わなければ全リクエスト 401。ヘッダ無しはループバックからだけ通す。`createApp(..., auth)` で `Whois` を差し替えてテストする。Serve 経由は `Origin` が `https://` になるので `isCrossOrigin()` は `X-Forwarded-Proto` を見る。
 - **返信の POST は同一オリジンのみ。** ブラウザから任意の `cwd` でコマンドが走るので、`app.ts` の `isCrossOrigin()`（`Origin` / `Sec-Fetch-Site`）は外さない。SAI 自身は起動するコマンドに権限のフラグを付けない（非対話なので許可ダイアログは出せず、未許可のツールは拒否される）。運用者が `SAI_CLAUDE_ARGS` / `SAI_CODEX_ARGS` で明示的に渡すのは可で、それは README の「返信と許可」に書いてある範囲（ツール単位の `--allowedTools` を勧め、バイパスは CSRF の観点から勧めない）。
 - **承認の答え（`POST /api/approvals/<id>/answer`）も同一オリジンのみ。** ここが通ると別サイトから「許可」が押せる。`POST /api/approvals`（預ける側）は返信を処理中のエンティティの分しか受けない。
 - 履歴（`*.jsonl`、`.agent-feed/`、`sessions/`）はコミットしない。`.gitignore` 済み。
@@ -99,6 +99,7 @@ Codex CLI (notify) ──────┘                                   │
 | `CODEX_HOME` | Codex のホーム（既定 `~/.codex`） |
 | `SAI_PORT` | サーバの既定ポート（既定 `8787`） |
 | `SAI_CLAUDE_BIN` / `SAI_CODEX_BIN` | 返信で起動する CLI の実行ファイル（既定は PATH の `claude` / `codex`） |
+| `SAI_TAILSCALE_BIN` | tailnet 経由の認証の `whois` に使う `tailscale`（既定は PATH、無ければ macOS の GUI 版） |
 | `SAI_CLAUDE_ARGS` / `SAI_CODEX_ARGS` | 返信のコマンドに足す引数（`--allowedTools "Bash(gh *)"` など。シェル風に割る。`server/runner.ts` の `splitArgs()`）。Claude は先頭に置く（`--allowedTools` は可変長で、後ろだと本文を飲む） |
 | `AGENT_FEED_SKIP` | `1` で record.py は何も記録しない（一言を作る `claude -p` に付ける） |
 | `SAI_DIGEST` / `SAI_DIGEST_MODEL` | `1` で一言コメントを作る（既定オフ）。モデルは既定 `haiku` |

@@ -5,9 +5,10 @@ import type { Server } from 'node:http'
 import { mkdtemp, rm, writeFile, appendFile, mkdir, stat, utimes, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { Replying, ReplyResponse, SessionsResponse, SessionDetailResponse, SessionIconResponse, SessionMetaResponse, FeedResponse, SettingsResponse, DigestBackfillResponse } from '../shared/types.ts'
+import type { Replying, ReplyResponse, SessionsResponse, SessionDetailResponse, SessionIconResponse, SessionMetaResponse, FeedResponse, SettingsResponse, DigestBackfillResponse, HealthResponse } from '../shared/types.ts'
 import { createApp, parseDays, revWith, sessionIdFrom, stripThinking } from './app.ts'
 import { BuildFreshness } from './buildFreshness.ts'
+import { Authenticator } from './auth.ts'
 import { DigestStore, Digester } from './digest.ts'
 import type { Summarizer } from './digest.ts'
 import { FeedStore } from './store.ts'
@@ -24,6 +25,7 @@ let srcDir: string
 let server: Server
 let base: string
 let store: FeedStore
+let auth: Authenticator
 
 /** 実際には起動しない。受け取ったコマンドを覚え、busy に入れた id は「進行中」と答える */
 class FakeRunner implements Runner {
@@ -82,7 +84,9 @@ before(async () => {
   srcDir = join(dir, 'src')
   await mkdir(srcDir)
   digester = new Digester(new DigestStore(join(feedDir, 'digest.jsonl')), summarizer, { enabled: true, model: 'fake', persona: async () => 'none' })
-  const app = createApp(store, distDir, runner, undefined, new BuildFreshness(distDir, [srcDir], 0), digester)
+  // 認証は whois を差し替える: 100.64.0.1 の持ち主は me@example.com、それ以外は引けない
+  auth = new Authenticator(async (addr) => (addr === '100.64.0.1' ? 'me@example.com' : null), 30_000)
+  const app = createApp(store, distDir, runner, undefined, new BuildFreshness(distDir, [srcDir], 0), digester, auth)
   server = createServer((req, res) => void app(req, res))
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const addr = server.address()
@@ -448,6 +452,46 @@ test('PUT meta: 検査', async () => {
   assert.equal((await putMeta('C1@r', { name: 'x'.repeat(5 * 1024) })).status, 400, '大きすぎる body')
   assert.equal((await putMeta('nope@r', { name: 'x' })).status, 404, '窓の中に無いセッションには付けない')
   assert.equal((await putMeta('', { name: 'x' })).status, 400, 'id が空')
+})
+
+const TAILNET = { 'Tailscale-User-Login': 'me@example.com', 'Tailscale-User-Name': 'Me', 'X-Forwarded-For': '100.64.0.1', 'X-Forwarded-Proto': 'https' }
+
+test('認証: ヘッダ無しのローカル直アクセスは通り、viewer は null', async () => {
+  const health = (await (await get('/api/health')).json()) as HealthResponse
+  assert.deepEqual(health, { ok: true, viewer: null })
+  const list = (await (await get('/api/sessions?days=7')).json()) as SessionsResponse
+  assert.equal(list.viewer, null)
+})
+
+test('認証: Tailscale-User-Login は whois と一致したときだけ通り、viewer にログイン名が載る', async () => {
+  const res = await fetch(`${base}/api/health`, { headers: TAILNET })
+  assert.equal(res.status, 200)
+  assert.deepEqual(((await res.json()) as HealthResponse).viewer, { login: 'me@example.com', name: 'Me' })
+  const list = (await (await fetch(`${base}/api/sessions?days=7`, { headers: TAILNET })).json()) as SessionsResponse
+  assert.deepEqual(list.viewer, { login: 'me@example.com', name: 'Me' })
+  // 画面（静的ファイル）も同じ検査を通る
+  assert.equal((await fetch(`${base}/`, { headers: TAILNET })).status, 200)
+})
+
+test('認証: ヘッダだけ付けても 401（whois と突き合わせている）', async () => {
+  const forged = async (headers: Record<string, string>) => (await fetch(`${base}/api/health`, { headers })).status
+  assert.equal(await forged({ 'Tailscale-User-Login': 'someone@example.com' }), 401, 'X-Forwarded-For が無い')
+  assert.equal(await forged({ 'Tailscale-User-Login': 'someone@example.com', 'X-Forwarded-For': '100.64.0.1' }), 401, 'whois は me@example.com')
+  assert.equal(await forged({ 'Tailscale-User-Login': 'me@example.com', 'X-Forwarded-For': '100.64.0.9' }), 401, 'whois で引けない')
+  assert.equal(await forged({ 'Tailscale-User-Login': 'ME@example.com', 'X-Forwarded-For': '100.64.0.1' }), 200, '大文字小文字は無視')
+  // 静的ファイルも 401
+  assert.equal((await fetch(`${base}/`, { headers: { 'Tailscale-User-Login': 'someone@example.com', 'X-Forwarded-For': '100.64.0.1' } })).status, 401)
+})
+
+test('認証: Serve 経由の書き込みは Origin が https://<host> になるが、X-Forwarded-Proto で同一オリジンと分かる', async () => {
+  const host = base.replace('http://', '')
+  const put = (headers: Record<string, string>) =>
+    fetch(`${base}/api/sessions/C1%40r/meta`, { method: 'PUT', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify({}) })
+  assert.equal((await put({ ...TAILNET, Origin: `https://${host}` })).status, 200, 'Serve 経由の同一オリジン')
+  assert.equal((await put({ ...TAILNET, Origin: `http://${host}` })).status, 403, 'https 経由なのに http の Origin は別オリジン')
+  assert.equal((await put({ ...TAILNET, Origin: 'https://evil.example' })).status, 403)
+  assert.equal((await put({ Origin: `http://${host}` })).status, 200, '直アクセスは今までどおり http')
+  assert.equal((await put({ Origin: `https://${host}` })).status, 403, '直アクセスで https の Origin は別オリジン（X-Forwarded-Proto 無し）')
 })
 
 test('PUT meta: 別オリジンは 403、メソッド違いは 405', async () => {

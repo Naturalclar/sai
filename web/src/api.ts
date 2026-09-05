@@ -18,7 +18,7 @@ import type {
   SettingsResponse,
 } from '../../shared/types.ts'
 
-export type { Agent, FeedRow, SessionSource, SessionSummary, SessionMeta, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, Approval, ApprovalMap, ApprovalAnswer, Profile, PersonaId, SettingsResponse, SettingsRequest, DigestBackfillResponse } from '../../shared/types.ts'
+export type { Agent, FeedRow, SessionSource, SessionSummary, SessionMeta, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, Approval, ApprovalMap, ApprovalAnswer, Profile, PersonaId, SettingsResponse, SettingsRequest, DigestBackfillResponse, Viewer } from '../../shared/types.ts'
 
 /** サーバは失敗を { error } で返す。それがあればそのまま見せる */
 async function failure(res: Response, url: string): Promise<Error> {

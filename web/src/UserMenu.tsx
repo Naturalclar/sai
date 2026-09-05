@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Profile } from './api'
+import type { Profile, Viewer } from './api'
 import { ProfileEditor } from './ProfileEditor'
 
 /**
@@ -7,7 +7,7 @@ import { ProfileEditor } from './ProfileEditor'
  * profile は一覧のポーリング（App）から。編集直後はモーダルが返した値を出し、ポーリングが追いついたら props に戻る。
  * Esc と外側クリックで閉じる。設定が増えたらここに項目を足す
  */
-export function UserMenu({ profile }: { profile: Profile | undefined }) {
+export function UserMenu({ profile, viewer }: { profile: Profile | undefined; viewer: Viewer | null }) {
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState(false)
   const [saved, setSaved] = useState<Profile | null>(null)
@@ -51,13 +51,17 @@ export function UserMenu({ profile }: { profile: Profile | undefined }) {
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label="自分のメニュー"
-        title={current.name || 'あなた'}
+        title={viewer ? `${current.name || viewer.name || 'あなた'}（${viewer.login} として tailnet 経由）` : current.name || 'あなた'}
       >
         <span className="avatar me">{current.icon ? <img src={current.icon} alt="" /> : '私'}</span>
       </button>
       {open && (
         <div className="menu" role="menu">
-          <div className="who">{current.name || 'あなた'}</div>
+          <div className="who">
+            {current.name || viewer?.name || 'あなた'}
+            {/* tailnet 経由（tailscale serve）のときだけ。Serve のヘッダを whois で確かめた後のログイン名 */}
+            {viewer && <span className="login" title="tailscale serve 経由。Tailscale のログイン名">{viewer.login}</span>}
+          </div>
           <button type="button" role="menuitem" onClick={edit}>
             表示名とアイコン
           </button>

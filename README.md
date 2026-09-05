@@ -129,6 +129,26 @@ pnpm build       # typecheck してから vite build
 pnpm start:watch # server/ shared/ が変わったら自動で再起動（node --watch）
 ```
 
+### （任意）tailnet に出す
+
+iPad やスマホから見たいときは **Tailscale Serve** で tailnet 内にだけ出す。アプリの bind は `127.0.0.1` のまま（Serve が前段で TLS を受けて 127.0.0.1 にプロキシする）。`tailscale funnel`（インターネット公開）は使わない。
+
+```
+tailscale serve --bg 8787                 # https://<このマシン>.<tailnet>.ts.net/ → 127.0.0.1:8787
+tailscale serve status                    # 出ているものの確認
+tailscale serve --bg 8787 off             # やめる
+```
+
+Serve 経由のリクエストには `Tailscale-User-Login`（誰か）と `X-Forwarded-For`（tailnet 側のアドレス）が付く。サーバはこのヘッダを**そのまま信じず**、`tailscale whois <X-Forwarded-For>` でローカルの Tailscale デーモンに本人を引き直し、一致したときだけ通す（`server/auth.ts`）。一致しなければ `401`。ヘッダが無いリクエストはループバックからの直アクセスとして通す。通ったログイン名は `/api/health` と一覧の `viewer` に載り、画面右上の自分のメニューに出る。
+
+同じホスト上から偽のヘッダを付けても通らないことは、こう確かめる（`401` になるのが正しい。`200` なら二段構えが効いていない）:
+
+```
+curl -H 'Tailscale-User-Login: someone@example.com' http://127.0.0.1:8787/api/health
+```
+
+`whois` の結果はアドレスごとに 30 秒キャッシュする（3 秒ごとのポーリングで毎回デーモンに聞かない）。`tailscale` の実行ファイルは PATH、無ければ macOS の GUI 版（`/Applications/Tailscale.app/Contents/MacOS/Tailscale`）、`SAI_TAILSCALE_BIN` で差し替えられる。Serve 経由だとブラウザの `Origin` は `https://<MagicDNS 名>` になるので、書き込みの同一オリジン検査は Serve が付ける `X-Forwarded-Proto` でスキームを合わせる。
+
 ### 3. 確かめる
 
 - Claude で1ターン回す → `~/.agent-feed/YYYY-MM-DD.jsonl` が1行増え、`session_source` が `payload`
@@ -374,7 +394,8 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 | --- | --- |
 | `GET /` | ビューア（`web/dist/index.html`） |
 | `GET /assets/*` | ビルド成果物。`dist/` の外には出ない |
-| `GET /api/sessions?days=7&repo=&agent=&date=&archived=` | セッション一覧（集計済み）。`record_version` は窓の中の一番新しい行の `v`（画面の「record.py が古い」の判定）。各セッションの `waiting` は人を待って止まっていれば「何を待っているか」、そうでなければ空。`filters` に絞り込み候補、`replying` に処理中の返信（ID → `{ since, text }`）、`approvals` に返信中のエージェントが待っている許可・質問（ID → 古い順の配列）、`profile` に自分の表示名とアイコンも返す。既定ではアーカイブ済みを除き、`archived=1` でアーカイブ済みだけ（`total` と `filters` もその集合から） |
+| `GET /api/sessions?days=7&repo=&agent=&date=&archived=` | セッション一覧（集計済み）。`record_version` は窓の中の一番新しい行の `v`（画面の「record.py が古い」の判定）。各セッションの `waiting` は人を待って止まっていれば「何を待っているか」、そうでなければ空。`filters` に絞り込み候補、`replying` に処理中の返信（ID → `{ since, text }`）、`approvals` に返信中のエージェントが待っている許可・質問（ID → 古い順の配列）、`profile` に自分の表示名とアイコンも返す。既定ではアーカイブ済みを除き、`archived=1` でアーカイブ済みだけ（`total` と `filters` もその集合から）。`viewer` は tailnet 経由ならログイン名、直アクセスなら `null` |
+| `GET /api/health` | `{ ok: true, viewer }`。認証の確認にも使う（偽ヘッダで `401` になること） |
 | `GET /api/sessions/<id>?days=30` | そのエンティティの全行と `replying`。`<id>` は `<セッション>@<リポジトリ>` |
 | `POST /api/sessions/<id>/reply?days=90` | body `{ "text": "..." }`。そのセッションを `cwd` で再開して1ターン回すのを投げっぱなしにし、`202` を返す。合成 ID は `400`、進行中は `409`、別オリジンは `403` |
 | `POST /api/approvals` | 返信中の CLI（`server/approve-mcp.ts`）が許可・質問を預ける。body `{ "id", "tool_name", "input", "tool_use_id"? }`。返信を処理中でないエンティティは `409`。`201` で `{ "approval_id" }` |
@@ -404,7 +425,7 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 
 - **`record.py` は絶対に失敗しない。** 必ず exit 0。フックが落ちるとエージェント本体を止めてしまうので、記録に失敗しても黙って諦める。何が起きたか見たいときは `AGENT_FEED_DEBUG=1` で `~/.agent-feed/record-errors.log` に残る。15秒で自分を殺す保険も入っている
 - **本物の Slack には投げない。** 投げ先が会社のワークスペースになるので、個人リポジトリのセッション記録がそこに流れるのは避ける
-- **SAI は外に出さない。** `127.0.0.1` 限定。デプロイもホスティングもしない。中身は作業内容そのもの
+- **SAI は外に出さない。** `127.0.0.1` 限定。デプロイもホスティングもしない。中身は作業内容そのもの。出してよいのは **tailnet まで**で、それも `tailscale serve`（前段のプロキシ）経由だけ。アプリ自身の bind は変えないし、`tailscale funnel` は使わない。Serve のヘッダは `whois` で突き合わせ、合わなければ `401`
 - **ブラウザからコマンドが走る。** 返信は `claude` / `codex` を任意の `cwd` で起動する。ローカルで開いている別サイトからの CSRF でエージェントを走らせないよう、`POST` は `Origin` / `Sec-Fetch-Site` が同一オリジンでなければ `403`（どちらも無い curl などブラウザ以外は通す）。この確認は外さない。権限のバイパス（`--dangerously-skip-permissions` など）も付けない
 - **一言（digest）は本文を LLM に送る。** `SAI_DIGEST=1` のときだけで、既定はオフ。返信と同じ `claude` CLI 経由だが、仕事のリポジトリの返答をそのまま要約に出すことになるのは分かって使う
 - **一覧のタイトルに機密が乗りうる。** 仕事のリポジトリのセッションだと issue の内容がそのまま出る。スクリーンショットを撮るときは自分で気をつける
@@ -421,6 +442,7 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 | `SAI_CLAUDE_BIN` | 返信で起動する `claude` の実行ファイル（既定は PATH の `claude`）。launchd などで PATH が最小のときに |
 | `SAI_CODEX_BIN` | 同じく `codex` |
 | `SAI_CLAUDE_ARGS` | 返信の `claude -p --resume` に足す引数。空白区切りで、空白を含む値は `"…"` か `'…'` で囲む。例: `--allowedTools "Bash(gh *)"`、`--permission-mode acceptEdits`。「返信と許可」の項を読んでから |
+| `SAI_TAILSCALE_BIN` | tailnet 経由の認証で `whois` に使う `tailscale` の実行ファイル（既定は PATH、無ければ macOS の GUI 版） |
 | `SAI_CODEX_ARGS` | 同じく `codex exec resume` に足す引数。例: `-s workspace-write` |
 | `AGENT_FEED_SKIP` | `1` なら `record.py` は何も記録しない。SAI が一言を作るために回す `claude -p` に付ける（自分自身を記録しない） |
 | `SAI_DIGEST` | `1` で一言コメント（digest）を作る。既定はオフ |

@@ -20,10 +20,12 @@ interface Props {
   thinkingOpen?: boolean
   /** 一言版（digest）。あればこれを本文にして、元の text は「詳細」で開く */
   summary?: string
+  /** このターンからモデルが変わった。そのモデル名を小さく出す */
+  model?: string
 }
 
 /** バブル1つ分の本文。長ければ折りたたんで「もっと見る」を付ける */
-export function Message({ ts, text, markdown, waiting, resolved, thinking, thinkingOpen = false, summary }: Props) {
+export function Message({ ts, text, markdown, waiting, resolved, thinking, thinkingOpen = false, summary, model }: Props) {
   const [open, setOpen] = useState(false)
   // 一言があるとき、元の本文（詳細）を開いているか
   const [details, setDetails] = useState(false)
@@ -64,6 +66,7 @@ export function Message({ ts, text, markdown, waiting, resolved, thinking, think
   return (
     <div className="msg">
       <span className="time">{hm(ts)}</span>
+      {model && <span className="tag model" title="このターンからモデルが変わった">{model}</span>}
       {thinking && <ThinkingBlock text={thinking} openAll={thinkingOpen} />}
       {text ? (
         <div className={`body${long && !open ? ' clamped' : ''}`}>{markdown ? <Markdown text={text} /> : text}</div>

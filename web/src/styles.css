@@ -176,6 +176,15 @@
   .tag { display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 4px; background: var(--chip); color: var(--muted); margin-left: 6px; vertical-align: middle; }
   .tag.synth { background: color-mix(in srgb, var(--synth) 18%, transparent); color: var(--synth); font-weight: 600; }
   .tag.replying { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); font-weight: 600; }
+  /* バブルの中の「ここからモデルが変わった」。等幅で、本文の上に 1 行 */
+  .msg .tag.model { display: inline-block; margin: 0 0 4px; font-family: var(--mono); }
+  /* 見出しのモデル。使ったモデル（code）と、返信で使うモデルの選択 */
+  .chat-head .model-pick { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .chat-head .model-pick code .more { color: var(--muted); margin-left: 4px; font-size: 11px; }
+  .chat-head .model-pick .reply-model { display: inline-flex; align-items: center; gap: 4px; }
+  .chat-head .model-pick .custom { display: inline-flex; align-items: center; gap: 6px; }
+  .chat-head .model-pick .custom input { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; font: inherit; font-size: 12px; width: 14em; }
+  .chat-head .model-pick .err { color: var(--claude); }
   .tag.archived { background: color-mix(in srgb, var(--muted) 18%, transparent); color: var(--muted); font-weight: 600; }
   .tag.waiting { background: color-mix(in srgb, var(--synth) 18%, transparent); color: var(--synth); font-weight: 600; }
 

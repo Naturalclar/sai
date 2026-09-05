@@ -36,6 +36,21 @@ test('mergeMeta: 無いキーは据え置き、null / 空文字は消す', () =>
   assert.notEqual(mergeMeta(cur, null).error, '')
 })
 
+test('mergeMeta: model は別名かモデル名。空 / null で消え、変な文字と長すぎるものは弾く。他のキーは触らない', () => {
+  const cur = { name: 'A' }
+  assert.deepEqual(mergeMeta(cur, { model: ' opus ' }).meta, { name: 'A', model: 'opus' })
+  assert.deepEqual(mergeMeta(cur, { model: 'claude-opus-5' }).meta, { name: 'A', model: 'claude-opus-5' })
+  assert.deepEqual(mergeMeta(cur, { model: 'fable[1m]' }).meta, { name: 'A', model: 'fable[1m]' }, '設定ファイルの書き方も通す')
+  assert.deepEqual(mergeMeta({ name: 'A', model: 'opus' }, { model: '' }).meta, { name: 'A' })
+  assert.deepEqual(mergeMeta({ name: 'A', model: 'opus' }, { model: null }).meta, { name: 'A' })
+  assert.deepEqual(mergeMeta({ name: 'A', model: 'opus' }, { name: 'B' }).meta, { name: 'B', model: 'opus' }, '名前だけ変えてもモデルは残る')
+  assert.notEqual(mergeMeta(cur, { model: 'opus; rm -rf /' }).error, '')
+  assert.notEqual(mergeMeta(cur, { model: '--dangerously-skip-permissions' }).error, '', '引数に化けない')
+  assert.notEqual(mergeMeta(cur, { model: 'a'.repeat(65) }).error, '')
+  assert.notEqual(mergeMeta(cur, { model: 1 }).error, '')
+  assert.equal(isEmptyMeta({ model: 'opus' }), false, 'モデルだけでもエントリは残る')
+})
+
 test('MetaStore: 無ければ空、set で書け、空にすると消え、壊れたファイルは空扱い', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'sai-meta-'))
   try {

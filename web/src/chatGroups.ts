@@ -26,6 +26,8 @@ export interface Utterance {
   thinking?: string
   /** エージェントの発言の一言版（digest）。あればバブルの本文はこれで、元の text は「詳細」で開く */
   summary?: string
+  /** エージェントの発言で、そのターンからモデルが変わったならそのモデル名（毎回は出さない。変わったときだけ） */
+  model?: string
 }
 
 export interface Group {
@@ -53,6 +55,8 @@ export function toUtterances(rows: FeedRow[]): Utterance[] {
 
   // エンティティごとに、入力の行で出した直近の入力。次のターン完了の行に同じ入力が載っていたら重ねない
   const prompted = new Map<string, string>()
+  // エンティティごとの直前のターンのモデル。変わったバブルにだけモデル名を出す
+  const lastModel = new Map<string, string>()
 
   const out: Utterance[] = []
   rows.forEach((row, index) => {
@@ -77,6 +81,12 @@ export function toUtterances(rows: FeedRow[]): Utterance[] {
     const theirs: Utterance = { speaker: row.agent, row, text: row.text ?? '', key: `${row.ts}:${index}` }
     if (row.thinking?.trim()) theirs.thinking = row.thinking
     if (row.summary?.trim()) theirs.summary = row.summary
+    const model = (row.model ?? '').trim()
+    if (model) {
+      const prev = lastModel.get(id)
+      if (prev !== undefined && prev !== model) theirs.model = model
+      lastModel.set(id, model)
+    }
     out.push(theirs)
   })
   return out

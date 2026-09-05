@@ -38,11 +38,13 @@ interface Props {
   onSend: (text: string) => void
   /** 本文が空でないかが変わったら知らせる。FeedView は入力中に既定の返信先を動かさないために使う */
   onDraft?: (drafting: boolean) => void
+  /** このセッションの返信で使うモデル（設定があれば）。placeholder に添える */
+  replyModel?: string
   mention?: MentionProps
 }
 
 /** 入力欄。Enter で送信、Shift+Enter で改行。IME 変換中の Enter は送らない */
-export function ReplyBox({ repo, busy, busySince, now = 0, onSend, onDraft, mention }: Props) {
+export function ReplyBox({ repo, busy, busySince, now = 0, onSend, onDraft, replyModel, mention }: Props) {
   const [text, setText] = useState('')
   // caret は「@ の検出」に使う。onChange と onSelect（カーソル移動）で追う
   const [caret, setCaret] = useState(0)
@@ -189,7 +191,7 @@ export function ReplyBox({ repo, busy, busySince, now = 0, onSend, onDraft, ment
               ? mention
                 ? `#${repo} は前の返信を処理中${busySince && elapsedLabel(busySince, now) ? `（${elapsedLabel(busySince, now)}）` : ''}。@ で別のセッションに返信できます`
                 : `前の返信を処理中${busySince && elapsedLabel(busySince, now) ? `（${elapsedLabel(busySince, now)}）` : ''}。終わるまで待ってください`
-              : `#${repo} に返信（Enter で送信、Shift+Enter で改行）`
+              : `#${repo} に返信（${replyModel ? `${replyModel} で回す。` : ''}Enter で送信、Shift+Enter で改行）`
           }
           rows={2}
           // フィードでは送信中でも別の返信先へ打てるよう入力欄は止めない（送信ボタンだけ止める）

@@ -32,6 +32,18 @@ test('thinking はエージェントの発言にだけ載り、空なら載ら�
   assert.equal(waiting?.thinking, undefined, '待ちの行には付けない')
 })
 
+test('model は前のターンから変わったバブルにだけ載る（最初のターンや同じモデルの続きには載らない）', () => {
+  const us = toUtterances([
+    row(0, { model: 'claude-fable-5' }),
+    row(1, { model: 'claude-fable-5' }),
+    row(2, { model: 'claude-opus-5' }),
+    row(3),
+    row(4, { model: 'claude-opus-5' }),
+    row(5, { model: 'claude-fable-5', session: 's2' }),
+  ])
+  assert.deepEqual(us.map((u) => u.model ?? ''), ['', '', 'claude-opus-5', '', '', ''], '別のセッションの最初のターンにも出さない')
+})
+
 test('同じ発言者が10分以内に続けば1つのグループ、10分空けば別のグループ', () => {
   const days = groupRows([row(0), row(9), row(19)])
   assert.equal(days.length, 1)

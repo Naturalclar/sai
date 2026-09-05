@@ -8,7 +8,7 @@ export type SessionSource = 'payload' | 'rollout' | 'synth' | ''
  * 行の形の版。feed/record.py の RECORD_VERSION と同じ値（ずれると pnpm test:feed が止まる）。
  * 行の形を変えるたびに上げる。画面は窓の中の一番新しい行の v がこれより古いと「record.py が古い」と出す
  */
-export const RECORD_VERSION = 2
+export const RECORD_VERSION = 3
 
 /** ~/.agent-feed/YYYY-MM-DD.jsonl の1行 = 1ターン */
 export interface FeedRow {
@@ -36,6 +36,11 @@ export interface FeedRow {
    * 折りたたんで出す。GET /api/feed の行からは落とす（フィードには出さないので運ばない）
    */
   thinking?: string
+  /**
+   * そのターンを回したモデル（`claude-fable-5-1` / `gpt-5.6-sol` など）。Claude は transcript の assistant 行の
+   * `message.model`、Codex は rollout の `turn_context.model`。ターン完了の行だけ。古い行には無い
+   */
+  model?: string
   first_user_text?: string
   /**
    * text をチャットの一言コメントに言い換えたもの（性格つき）。JSONL には無く、サーバが応答時に
@@ -82,6 +87,9 @@ export interface SessionSummary {
   last_turn_ts?: string
   /** last_text の一言版（digest）。無ければ省略で、画面は last_text を出す */
   last_summary?: string
+  /** 一番新しいターン完了の行のモデル。無ければ空。途中で変わった全部は models に（出てきた順） */
+  model: string
+  models: string[]
   /** ブラウザから付けた表示名・アーカイブ。無ければ undefined（title を使う） */
   meta?: SessionMeta
   /**
@@ -102,6 +110,12 @@ export interface SessionMeta {
   name?: string
   /** アーカイブした時刻（ISO）。これより新しい行が届いていなければアーカイブ済み */
   archived_at?: string
+  /**
+   * SAI からの返信で使うモデル（`opus` のような別名か `claude-opus-5` のようなモデル名）。無ければ CLI の既定。
+   * 返信の `claude -p --resume` に `--model`、`codex exec resume` に `-m` として付く。
+   * Claude は `--resume` に `--model` を付けるとセッションのモデル設定そのものが変わる（端末で再開したときもそのモデル）
+   */
+  model?: string
 }
 
 /**

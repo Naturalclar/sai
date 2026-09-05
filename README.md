@@ -170,6 +170,7 @@ Codex CLI ──[notify]───────┘
   "text": "背中のメニューを出した。ワンハンドロウ 10kg×10×3。",
   "user_text": "背中のメニューを出して",
   "thinking": "背中は前回ラットプルダウンだったので、今回はロウ系を中心にする",
+  "model": "claude-fable-5-1",
   "first_user_text": "背中のメニューを出して"
 }
 ```
@@ -183,6 +184,7 @@ Codex CLI ──[notify]───────┘
 | `text` | ターン完了なら最後のアシスタント発話。Claude は `transcript_path` の末尾から、Codex は `last-assistant-message`。2,000文字で切る。待ちの行なら「何を待っているか」（300文字）、再開の行は空 |
 | `user_text` | そのターンの入力（人が打った文）。Claude の `UserPromptSubmit` の行はペイロードの `prompt` そのもの。`Stop` の行は `transcript_path` を末尾から遡って最後の入力（ツールの戻りや差し込みは飛ばす。スラッシュコマンドは `/foo 引数` に戻す。バックグラウンドのタスク完了の通知 `<task-notification>`（`promptSource: system`）で始まったターンは人の入力が無いので空）、Codex は `input-messages`。画面2で自分側のバブルになり、一番新しい行のものが一覧のタイトルになる。2,000文字で切る |
 | `thinking` | そのターンの思考。Claude は `transcript_path` の最後のターン（最後の入力より後）の `thinking` ブロックの本文を `\n\n` で繋いだもの（`signature` だけのブロックは飛ばす）、Codex は rollout の最後のターンの `reasoning` の `summary[].text`。**無いことが多い**（下の「先に確かめた前提」の 4）。ターン完了の行だけ。4,000文字で切る（先頭側を残す）。画面2のエージェントのバブルに折りたたんで出す。`GET /api/feed` の行からは落とす |
+| `model` | そのターンを回したモデル。Claude は `transcript_path` の最後の assistant 行の `message.model`（`claude-fable-5-1` など。CLI が合成した `<synthetic>` は飛ばす）、Codex は rollout の最後の `turn_context.model`（`gpt-5.6-sol` など）。ターン完了の行だけ。画面2の見出しに出す |
 | `first_user_text` | 最初のユーザー発話。`user_text` が1行も無い古いセッションのタイトルに使う。300文字で切る |
 
 日付は `Asia/Tokyo` で切る。
@@ -281,6 +283,7 @@ Slack と同じ形。左のサイドバーがチャンネル一覧（先頭に�
 | --- | --- |
 | リポジトリ / ブランチ | `repo` / `branch`。ブランチが途中で変わったら最後の値を出して「+N」。先頭の色の点が `agent` |
 | 最終更新 · ターン数 | 最後の `ts` と、ターン完了の行数（待ち・再開の行は数えない） |
+| モデル（画面2の見出しだけ） | 一番新しいターンの `model`。途中で変わっていれば「+N」（マウスを乗せると順に全部）。変わった位置のバブルにもモデル名が小さく出る。一覧とフィードには出さない |
 | タイトル | 一番新しい `user_text` の1行目。画面から返信しても端末で続きの指示を打っても、次のターンが記録された時点で最後の入力に変わる。`user_text` が無ければ `first_user_text`、それも無ければ最初の `text` の1行目。60文字で切る |
 | 最後の発言 | 最後の `text` の1行目（Markdown の記号は落とす） |
 | 印 | `session_source` が `synth` なら「合成」。最後の行が待ちの行（`waiting`）なら「待機中」（マウスを乗せると何を待っているか）。画面からの返信を処理中なら「返信中」。アーカイブ済みなら「アーカイブ」（「アーカイブ済みを見る」のときだけ出る） |
@@ -301,6 +304,10 @@ Slack のチャット風。1ターンは「自分の入力（`user_text`）→ �
 | --- | --- |
 | Claude Code | `claude -p --resume <session> -- "<text>"` |
 | Codex CLI | `codex exec resume <session> -- "<text>"` |
+
+**返信のモデル**は見出しの「返信:」で選べる（そのセッションで出てきたモデル、Claude なら別名 `fable` / `opus` / `sonnet` / `haiku`、あとは自由入力。「既定」に戻せる）。選ぶと `session-meta.json` の `model` に残り、次の返信から Claude は `--model <m>`、Codex は `-m <m>` が付く（`SAI_CLAUDE_ARGS` に `--model` があってもセッションの設定が後ろに来て勝つ）。見出しの `claude-fable-5-1` のような表示は**実際に使われた**モデル（記録から）で、設定とは別。返信が終わって行が届けば表示のほうも変わる。
+
+注意: Claude は `--resume` に `--model` を付けると**セッションのモデル設定そのものが変わる**（確認済み: `--model sonnet` で 1 回返信したあと、`--model` 無しで再開しても `claude-sonnet-5` のまま）。つまり SAI から返信のモデルを変えると、端末でそのセッションを再開したときのモデルも変わる。端末で `/model` を打ち直せば戻る。
 
 `--` は本文が `-` で始まっても（`-v` や `--help`）CLI のフラグとして解釈されないようにするため。
 
@@ -381,7 +388,7 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 | `GET /api/approvals/<approval_id>?wait=1` | 答えが付いていれば `200` で `{ "behavior": "allow" \| "deny", "updatedInput"?, "message"? }`（渡したら消える）。まだなら `wait=1` で最大 20 秒待って `202`。無ければ `404` |
 | `POST /api/approvals/<approval_id>/answer` | 画面から答える。body `{ "behavior": "allow" \| "deny", "updatedInput"?, "message"? }`。`allow` で `updatedInput` を省けば元の入力のまま。別オリジンは `403`、答え済みは `404` |
 | `GET /api/sessions/<id>/meta` | 表示名・アーカイブ。`{ "id", "meta": { "name"?, "archived_at"? } }`。無ければ `meta` は `{}` |
-| `PUT /api/sessions/<id>/meta?days=90` | body `{ "name"?: "...", "archived_at"?: "<ISO>" }` をいまの値に重ねる。省略したキーは据え置き、空文字や `null` は「消す」で、全部消えたらエントリごと消える。知らないキーは捨てる。名前は100文字まで、`archived_at` は読める時刻（違えば `400`）。窓の中に無いセッションは `404`、別オリジンは `403` |
+| `PUT /api/sessions/<id>/meta?days=90` | body `{ "name"?: "...", "archived_at"?: "<ISO>", "model"?: "opus" }` をいまの値に重ねる。省略したキーは据え置き、空文字や `null` は「消す」で、全部消えたらエントリごと消える。知らないキーは捨てる。名前は100文字まで、`archived_at` は読める時刻、`model` は英数字で始まる 64 文字までの名前（違えば `400`）。窓の中に無いセッションは `404`、別オリジンは `403` |
 | `GET /api/sessions/<id>/icon?v=<mtime>` | アイコン画像そのもの（`image/png` など）。無ければ `404`。`v` がいまのファイルと同じなら `Cache-Control: immutable`、無ければ `no-store` |
 | `PUT /api/sessions/<id>/icon?days=90` | body は画像そのもの（PNG / JPEG / GIF / WebP、1MB まで。種類は中身で見る。画面からは加工後の 256px の PNG が来る）。`{ "id", "icon": "<URL>" }` を返す。画像でなければ `400`、大きすぎれば `413`、窓の中に無いセッションは `404`、別オリジンは `403` |
 | `DELETE /api/sessions/<id>/icon` | 画像を消す。`{ "id", "icon": null }`。無くても `200`。別オリジンは `403` |

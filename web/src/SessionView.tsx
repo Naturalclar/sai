@@ -16,6 +16,7 @@ import { ReplyBox } from './ReplyBox'
 import { BackLink } from './BackLink'
 import { useReply } from './useReply'
 import { MetaEditor } from './MetaEditor'
+import { ModelPicker } from './ModelPicker'
 import { ArchiveButton } from './ArchiveButton'
 import { ArchivedTag } from './ArchivedTag'
 import type { PaneProps } from './App'
@@ -49,6 +50,9 @@ export function SessionView({ id, onStatus, onOpenSidebar }: { id: string } & Pa
         <div className="chat-head">
           <h1><span className="hash">#</span>{s.repo}</h1>
           <span className="meta"><AgentChip agent={s.agent} /></span>
+          <span className="meta">
+            <ModelPicker key={s.id} id={s.id} agent={s.agent} model={s.model} models={s.models} replyModel={s.meta?.model} canReply={!blocked && !s.archived} />
+          </span>
           {s.branch && <span className="meta"><code>{s.branch}</code></span>}
           <span className="meta">{dayLabel(s.start)} {hm(s.start)} – {hm(s.end)} · {s.turns} ターン</span>
           <span className="meta" title={s.id}>
@@ -94,7 +98,7 @@ export function SessionView({ id, onStatus, onOpenSidebar }: { id: string } & Pa
         ) : blocked ? (
           <div className="notice">{blocked}</div>
         ) : (
-          <ReplyBox repo={s.repo} busy={mine !== null} busySince={mine?.since} now={now} onSend={(text) => void send(id, text)} />
+          <ReplyBox repo={s.repo} busy={mine !== null} busySince={mine?.since} now={now} replyModel={s.meta?.model} onSend={(text) => void send(id, text)} />
         ))}
       {failedHere && <div className="notice error">送信失敗: {failedHere}</div>}
     </section>

@@ -275,6 +275,21 @@ class RecordTest(unittest.TestCase):
         self.assertEqual(row["first_user_text"], "最初の依頼")
         self.assertEqual(row["user_text"], "最初の依頼")
 
+    def test_model_comes_from_the_last_assistant_row_and_skips_synthetic(self):
+        row = self._claude_row([
+            {"type": "user", "message": {"role": "user", "content": "やって"}},
+            {"type": "assistant", "message": {"role": "assistant", "model": "claude-opus-5", "content": [{"type": "text", "text": "前"}]}},
+            {"type": "user", "message": {"role": "user", "content": "続けて"}},
+            {"type": "assistant", "message": {"role": "assistant", "model": "claude-fable-5-1", "content": [{"type": "text", "text": "後"}]}},
+            {"type": "assistant", "message": {"role": "assistant", "model": "<synthetic>", "content": [{"type": "text", "text": "合成"}]}},
+        ])
+        self.assertEqual(row["model"], "claude-fable-5-1", "最後の assistant 行のモデル。<synthetic> は飛ばす")
+        row = self._claude_row([
+            {"type": "user", "message": {"role": "user", "content": "やって"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "モデル無し"}]}},
+        ])
+        self.assertEqual(row["model"], "")
+
     def test_thinking_joins_this_turns_blocks_and_skips_signature_only(self):
         think = lambda t: {"type": "thinking", "thinking": t, "signature": "sig"}
         row = self._claude_row([
@@ -473,6 +488,25 @@ class RecordTest(unittest.TestCase):
         row = read_rows(self.feed_dir)[-1]
         self.assertEqual(row["session"], wanted)
         self.assertEqual(row["thinking"], "**調べる**\n\n直す", "前のターンの要約は拾わない。summary が空の reasoning は飛ばす")
+        self.assertEqual(row["model"], "", "turn_context が無ければ空")
+
+    def test_codex_model_comes_from_the_last_turn_context(self):
+        wanted = "0c6bd4c9-5555-4a2b-9c3d-eeeeeeeeeeee"
+        self._rollout(wanted, str(self.cwd), tail=[
+            {"type": "event_msg", "payload": {"type": "thread_settings_applied", "thread_settings": {"model": "gpt-5"}}},
+            {"type": "turn_context", "payload": {"turn_id": "t1", "model": "gpt-5"}},
+            {"type": "event_msg", "payload": {"type": "user_message", "message": "続き"}},
+            {"type": "turn_context", "payload": {"turn_id": "t2", "model": "gpt-5.6-sol"}},
+            {"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "ok"}]}},
+        ])
+        payload = {"type": "agent-turn-complete", "input-messages": ["続き"], "last-assistant-message": "ok"}
+        result = subprocess.run(
+            [sys.executable, str(RECORD), json.dumps(payload)],
+            cwd=str(self.cwd), capture_output=True, text=True,
+            env=dict(os.environ, **self.env), timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(read_rows(self.feed_dir)[-1]["model"], "gpt-5.6-sol", "最後の turn_context のモデル")
 
     def test_codex_resolves_session_from_rollout(self):
         wanted = "0c6bd4c9-1111-4a2b-9c3d-aaaaaaaaaaaa"

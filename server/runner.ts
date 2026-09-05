@@ -96,7 +96,11 @@ export function replyCommand(
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
   approve?: ApproveVia,
+  /** このセッションの返信で使うモデル（session-meta.json の model）。無ければ CLI の既定 */
+  model?: string,
 ): ReplyCommand | null {
+  // 運用者の SAI_*_ARGS に --model があっても、セッションの設定を後ろに置いてそちらを勝たせる（後勝ち）
+  const pick = model ? (agent === 'codex' ? ['-m', model] : ['--model', model]) : []
   // 本文の前に `--` を置く。本文が `-` で始まると（`-v` や `--help`）CLI がフラグとして解釈して
   // ターンが回らない（`--dangerously-skip-permissions` ならフラグとして効いてしまう）。両 CLI とも `--` を受け付ける
   if (agent === 'claude') {
@@ -107,10 +111,10 @@ export function replyCommand(
     const wire = approve && env.SAI_APPROVE !== '0' && !extra.includes('--permission-prompt-tool')
       ? ['--mcp-config', approveMcpConfig(approve), '--permission-prompt-tool', APPROVE_TOOL]
       : []
-    return { bin: env.SAI_CLAUDE_BIN || 'claude', args: [...extra, ...wire, '-p', '--resume', session, '--', text], cwd, text }
+    return { bin: env.SAI_CLAUDE_BIN || 'claude', args: [...extra, ...wire, ...pick, '-p', '--resume', session, '--', text], cwd, text }
   }
   if (agent === 'codex') {
-    return { bin: env.SAI_CODEX_BIN || 'codex', args: ['exec', 'resume', ...splitArgs(env.SAI_CODEX_ARGS), session, '--', text], cwd, text }
+    return { bin: env.SAI_CODEX_BIN || 'codex', args: ['exec', 'resume', ...splitArgs(env.SAI_CODEX_ARGS), ...pick, session, '--', text], cwd, text }
   }
   return null
 }

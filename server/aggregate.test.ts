@@ -170,3 +170,19 @@ test('recordVersionOf は一番新しい行の v。無い行は 1（試作か古
   assert.equal(recordVersionOf([row(t0, 's1'), row(new Date(t0.getTime() + min(1)), 's1', { v: 2 })]), 2)
   assert.equal(recordVersionOf([row(t0, 's1', { v: 2 }), row(new Date(t0.getTime() + min(1)), 's2')]), 1, '新しい行が旧形式なら古い record.py が混ざっている')
 })
+
+test('model は一番新しいターン完了の行のもの、models は出てきた順の重複なし。無い行は数えない', () => {
+  const base = new Date('2026-09-02T01:00:00Z')
+  const [s] = aggregate([
+    row(base, 'M', { model: 'claude-fable-5' }),
+    row(new Date(base.getTime() + min(1)), 'M', { model: 'claude-opus-5' }),
+    row(new Date(base.getTime() + min(2)), 'M', { event: 'PermissionRequest', text: '許可待ち', model: 'ignored' }),
+    row(new Date(base.getTime() + min(3)), 'M'),
+    row(new Date(base.getTime() + min(4)), 'M', { model: 'claude-fable-5' }),
+  ])
+  assert.equal(s!.model, 'claude-fable-5')
+  assert.deepEqual(s!.models, ['claude-fable-5', 'claude-opus-5'], '待ちの行のモデルは見ない。同じモデルは1回')
+  const [none] = aggregate([row(base, 'N')])
+  assert.equal(none!.model, '')
+  assert.deepEqual(none!.models, [])
+})

@@ -186,3 +186,18 @@ test('model は一番新しいターン完了の行のもの、models は出て�
   assert.equal(none!.model, '')
   assert.deepEqual(none!.models, [])
 })
+
+test('pane / pid / last_turn は一番新しい行から（待ちの行は last_turn に数えない）', () => {
+  const t0 = new Date('2026-09-06T01:00:00Z')
+  const rows = [
+    row(t0, 's1', { pane: '%1', pid: 100 }),
+    row(new Date(t0.getTime() + min(1)), 's1', { pane: '%2', pid: 200 }),
+    row(new Date(t0.getTime() + min(2)), 's1', { event: 'PermissionRequest', text: '許可待ち: Bash: ls', user_text: '', pane: '%2', pid: 200 }),
+  ]
+  const [s] = aggregate(rows)
+  assert.equal(s!.pane, '%2')
+  assert.equal(s!.pid, 200)
+  assert.equal(s!.last_turn, rows[1]!.ts)
+  const [old] = aggregate([row(t0, 's1')])
+  assert.deepEqual([old!.pane, old!.pid], ['', 0], '旧形式の行には無い')
+})

@@ -326,6 +326,31 @@ class RecordTest(unittest.TestCase):
         run(stdin=json.dumps(payload), env=self.env)
         self.assertEqual(len(read_rows(self.feed_dir)[0]["text"]), 2000)
 
+    # -- 端末の居場所（pane / pid）
+
+    def test_row_carries_tmux_pane_and_session_pid(self):
+        """フックは本体の子プロセスなので、TMUX_PANE と CLAUDE_PID（Codex は親 pid）で居場所が分かる"""
+        env = dict(self.env, TMUX_PANE="%42", CLAUDE_PID="12345")
+        result = run(stdin=json.dumps({"hook_event_name": "Stop", "session_id": "s", "cwd": str(self.cwd)}), env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        row = read_rows(self.feed_dir)[-1]
+        self.assertEqual(row["pane"], "%42")
+        self.assertEqual(row["pid"], 12345)
+        # Codex の notify は codex 自身が spawn するので、親 = 本体。テストでは親はこのプロセス
+        result = run(argv=[json.dumps({"type": "agent-turn-complete", "last-assistant-message": "yo", "cwd": str(self.cwd)})], env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        row = read_rows(self.feed_dir)[-1]
+        self.assertEqual(row["agent"], "codex")
+        self.assertEqual(row["pane"], "%42")
+        self.assertEqual(row["pid"], os.getpid())
+        # tmux の外・CLAUDE_PID が無い
+        env = {k: v for k, v in self.env.items()}
+        env.update(TMUX_PANE="", CLAUDE_PID="")
+        run(stdin=json.dumps({"hook_event_name": "Stop", "session_id": "s", "cwd": str(self.cwd)}), env=env)
+        row = read_rows(self.feed_dir)[-1]
+        self.assertEqual(row["pane"], "")
+        self.assertEqual(row["pid"], 0)
+
     # -- Claude の待ち（許可待ち・質問待ち）と再開
 
     def _hook(self, payload: dict, transcript: list[dict] | None = None) -> subprocess.CompletedProcess:

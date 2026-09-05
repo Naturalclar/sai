@@ -207,6 +207,7 @@ Codex CLI ──[notify]───────┘
 | `user_text` | そのターンの入力（人が打った文）。Claude の `UserPromptSubmit` の行はペイロードの `prompt` そのもの。`Stop` の行は `transcript_path` を末尾から遡って最後の入力（ツールの戻りや差し込みは飛ばす。スラッシュコマンドは `/foo 引数` に戻す。バックグラウンドのタスク完了の通知 `<task-notification>`（`promptSource: system`）で始まったターンは人の入力が無いので空）、Codex は `input-messages`。画面2で自分側のバブルになり、一番新しい行のものが一覧のタイトルになる。2,000文字で切る |
 | `thinking` | そのターンの思考。Claude は `transcript_path` の最後のターン（最後の入力より後）の `thinking` ブロックの本文を `\n\n` で繋いだもの（`signature` だけのブロックは飛ばす）、Codex は rollout の最後のターンの `reasoning` の `summary[].text`。**無いことが多い**（下の「先に確かめた前提」の 4）。ターン完了の行だけ。4,000文字で切る（先頭側を残す）。画面2のエージェントのバブルに折りたたんで出す。`GET /api/feed` の行からは落とす |
 | `model` | そのターンを回したモデル。Claude は `transcript_path` の最後の assistant 行の `message.model`（`claude-fable-5-1` など。CLI が合成した `<synthetic>` は飛ばす）、Codex は rollout の最後の `turn_context.model`（`gpt-5.6-sol` など）。ターン完了の行だけ。画面2の見出しに出す |
+| `pane` / `pid` | セッションが開いている tmux のペイン（`%12`。フックが受け取る `TMUX_PANE`）と本体の pid（Claude は `CLAUDE_PID`、Codex は notify の親）。SAI の返信をそのペインに打ち込むのに使う。tmux の外なら `pane` は空 |
 | `first_user_text` | 最初のユーザー発話。`user_text` が1行も無い古いセッションのタイトルに使う。300文字で切る |
 
 日付は `Asia/Tokyo` で切る。
@@ -335,7 +336,20 @@ Slack のチャット風。1ターンは「自分の入力（`user_text`）→ �
 
 回したターンが完了すれば既存のフック（Stop / notify）が動いて JSONL に1行増えるので、返信の結果は今のポーリングでそのまま画面に流れてくる。送信直後は「送信中…」の仮バブルが出て、`UserPromptSubmit` の行が届けば本文はそちらの本物のバブルに置き換わり「処理中」の1行だけ残る。行が増えたら消える（増えた行の `user_text` が同じ文なので、見た目はそのまま本物の自分のバブルに変わる）。
 
-**送った返信と返答は、そのセッションを開いている端末や Desktop の画面には出ない。** SAI には出るし履歴にも残るが、開いている対話側は会話をメモリに持っていて、外で回ったターンを読み直さない。入力欄の下にもこの注意を出している。確かめたこと（Claude Code 2.1.258 / Codex CLI 0.139）:
+#### 端末（tmux）で開いているセッションには打ち込む
+
+セッションが **tmux のペインで開いていれば、返信はそのペインに打ち込む**（`tmux load-buffer` → `paste-buffer -p` → `send-keys Enter`）。別プロセスを立てないので、端末に入力と返答がそのまま出て、フックが普通のターンとして JSONL に足す。開いているセッションに 1 ターン足すだけなのでプロンプトキャッシュも効き、トークンも一番少ない。見出しに「端末」の印が付き、`POST /reply` の応答は `via: "terminal"`。
+
+「開いているか」は行の `pane`（フックが受け取る `TMUX_PANE`）と `pid`（Claude は `CLAUDE_PID`、Codex は notify の親）で見る。一番新しい行に両方あり、`pid` が生きていれば端末で開いている。打ち込む前に、ペインが今もあってその `pid` がペインのプロセスの子孫であること（別のセッションに打ち込まない）、入力欄が空でダイアログ中でないこと（打ちかけの文字に混ぜない、許可の答えにしない）を確かめ、だめなら `409` で何も打たない。ペインが消えていれば下の別プロセスに戻る。
+
+- 打ち込んだ返信の許可ダイアログは**端末側に出る**（下の `--permission-prompt-tool` は使わない）。SAI には待ちの行で「許可待ち」が出るが、答えるのは端末
+- 「処理中」は、その後にターン完了の行が届いたら解消（30 分届かなければ諦める）
+- `SAI_TERMINAL=0` で切る（常に別プロセス）。`SAI_TMUX_BIN` で `tmux` の実行ファイルを差し替え
+- tmux 以外の端末と Claude Desktop には届かない（下のとおり別プロセスで回る）
+
+#### 端末で開いていないセッションは別プロセスで回す
+
+**別プロセスで回した返信と返答は、そのセッションを開いている端末や Desktop の画面には出ない。** SAI には出るし履歴にも残るが、開いている対話側は会話をメモリに持っていて、外で回ったターンを読み直さない。入力欄の下にもこの注意を出している。確かめたこと（Claude Code 2.1.258 / Codex CLI 0.139）:
 
 - `claude -p --resume <session>` は同じセッションのトランスクリプト（`~/.claude/projects/<project>/<session>.jsonl`）に**追記する**。セッション ID も同じで、別セッションには分岐しない（`--fork-session` を付けたときだけ分岐する）
 - `codex exec resume <session>` も同じ rollout ファイル（`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`）に追記する。新しい rollout は作らない
@@ -450,6 +464,8 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 | `AGENT_FEED_DEBUG` | `1` で `record.py` の例外をログに残す |
 | `CODEX_HOME` | Codex のホーム（既定 `~/.codex`） |
 | `SAI_PORT` | サーバの既定ポート（既定 `8787`） |
+| `SAI_TERMINAL` | `0` で「tmux のペインに打ち込む」を切り、返信を常に別プロセスで回す |
+| `SAI_TMUX_BIN` | ペインに打ち込むときの `tmux` の実行ファイル（既定は PATH の `tmux`） |
 | `SAI_CLAUDE_BIN` | 返信で起動する `claude` の実行ファイル（既定は PATH の `claude`）。launchd などで PATH が最小のときに |
 | `SAI_CODEX_BIN` | 同じく `codex` |
 | `SAI_CLAUDE_ARGS` | 返信の `claude -p --resume` に足す引数。空白区切りで、空白を含む値は `"…"` か `'…'` で囲む。例: `--allowedTools "Bash(gh *)"`、`--permission-mode acceptEdits`。「返信と許可」の項を読んでから |

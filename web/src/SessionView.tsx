@@ -9,6 +9,7 @@ import { AgentChip } from './AgentChip'
 import { SynthTag } from './SynthTag'
 import { ReplyingTag } from './ReplyingTag'
 import { WaitingTag } from './WaitingTag'
+import { TerminalTag } from './TerminalTag'
 import { Chat } from './Chat'
 import { PendingBubble } from './PendingBubble'
 import { ApprovalBubble } from './ApprovalBubble'
@@ -57,6 +58,7 @@ export function SessionView({ id, onStatus, onOpenSidebar }: { id: string } & Pa
           <span className="meta">{dayLabel(s.start)} {hm(s.start)} – {hm(s.end)} · {s.turns} ターン</span>
           <span className="meta" title={s.id}>
             {s.session_source === 'synth' ? <SynthTag /> : <span className="tag">{s.session_source}</span>}
+            {s.terminal && <TerminalTag terminal={s.terminal} />}
             {s.waiting && <WaitingTag text={s.waiting} />}
             {approvals.length > 0 && <WaitingTag text={approvals[0]!.text} />}
             {mine && <ReplyingTag since={mine.since} now={now} />}
@@ -98,7 +100,7 @@ export function SessionView({ id, onStatus, onOpenSidebar }: { id: string } & Pa
         ) : blocked ? (
           <div className="notice">{blocked}</div>
         ) : (
-          <ReplyBox repo={s.repo} busy={mine !== null} busySince={mine?.since} now={now} replyModel={s.meta?.model} onSend={(text) => void send(id, text)} />
+          <ReplyBox repo={s.repo} terminal={Boolean(s.terminal)} busy={mine !== null} busySince={mine?.since} now={now} replyModel={s.meta?.model} onSend={(text) => void send(id, text)} />
         ))}
       {failedHere && <div className="notice error">送信失敗: {failedHere}</div>}
     </section>

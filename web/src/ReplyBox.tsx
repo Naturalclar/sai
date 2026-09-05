@@ -30,6 +30,8 @@ export interface Picked {
 
 interface Props {
   repo: string
+  /** 返信先が端末（tmux）で開いている = 打ち込む。false は -p で別プロセス。省略はどちらか分からない（フィード） */
+  terminal?: boolean
   busy: boolean
   /** busy のとき、前の返信を起動した時刻。placeholder に「前の返信を処理中（3分）」と出す */
   busySince?: string
@@ -44,7 +46,7 @@ interface Props {
 }
 
 /** 入力欄。Enter で送信、Shift+Enter で改行。IME 変換中の Enter は送らない */
-export function ReplyBox({ repo, busy, busySince, now = 0, onSend, onDraft, replyModel, mention }: Props) {
+export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onDraft, replyModel, mention }: Props) {
   const [text, setText] = useState('')
   // caret は「@ の検出」に使う。onChange と onSelect（カーソル移動）で追う
   const [caret, setCaret] = useState(0)
@@ -202,7 +204,13 @@ export function ReplyBox({ repo, busy, busySince, now = 0, onSend, onDraft, repl
         </button>
       </div>
       {/* 送った返信は対話側の画面には出ない（トランスクリプトには追記される）。README の「返信」の節と同じ */}
-      <div className="note">送った返信と返答は、このセッションを開いている端末や Desktop の画面には出ない（履歴には残るので、開き直せば見える）</div>
+      <div className="note">
+        {terminal === true
+          ? '端末（tmux）で開いているセッションに打ち込む。端末にも入力と返答が出る'
+          : terminal === false
+            ? '別プロセスで 1 ターン回す。開いている端末や Desktop の画面には出ない（履歴には残るので、開き直せば見える）'
+            : '端末（tmux）で開いているセッションにはそのまま打ち込む。そうでなければ別プロセスで回す（その場合、開いている端末の画面には出ない）'}
+      </div>
       {open && (
         <ul className="mention" role="listbox" aria-label="返信先">
           {shown.length === 0 && <li className="none">該当するセッションがありません</li>}

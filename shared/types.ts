@@ -8,7 +8,7 @@ export type SessionSource = 'payload' | 'rollout' | 'synth' | ''
  * 行の形の版。feed/record.py の RECORD_VERSION と同じ値（ずれると pnpm test:feed が止まる）。
  * 行の形を変えるたびに上げる。画面は窓の中の一番新しい行の v がこれより古いと「record.py が古い」と出す
  */
-export const RECORD_VERSION = 3
+export const RECORD_VERSION = 4
 
 /** ~/.agent-feed/YYYY-MM-DD.jsonl の1行 = 1ターン */
 export interface FeedRow {
@@ -41,6 +41,10 @@ export interface FeedRow {
    * `message.model`、Codex は rollout の `turn_context.model`。ターン完了の行だけ。古い行には無い
    */
   model?: string
+  /** セッションが開いている tmux のペイン（`%12` など。tmux の外なら空）。SAI の返信をここに打ち込む */
+  pane?: string
+  /** セッション本体（claude / codex）の pid。生きていれば端末で開いている */
+  pid?: number
   first_user_text?: string
   /**
    * text をチャットの一言コメントに言い換えたもの（性格つき）。JSONL には無く、サーバが応答時に
@@ -90,6 +94,16 @@ export interface SessionSummary {
   /** 一番新しいターン完了の行のモデル。無ければ空。途中で変わった全部は models に（出てきた順） */
   model: string
   models: string[]
+  /** 一番新しい行の pane / pid（JSONL から）。生きているかは見ない（terminal の方を見る） */
+  pane: string
+  pid: number
+  /** 一番新しいターン完了の行の ts（無ければ空）。端末に打ち込んだ返信が終わったかの判定に使う */
+  last_turn: string
+  /**
+   * 端末（tmux）で開いている。一番新しい行に pane と pid があり、pid が生きているときだけ。
+   * 返信はこのペインに打ち込む（-p で別プロセスを立てない）。サーバが応答時に載せる（集計は JSONL だけ）
+   */
+  terminal?: Terminal | null
   /** ブラウザから付けた表示名・アーカイブ。無ければ undefined（title を使う） */
   meta?: SessionMeta
   /**
@@ -304,10 +318,17 @@ export interface ReplyRequest {
  * 202 で返す。ターンは裏で走るので、結果はそのセッションに増えた行で見る。
  * session は CLI に渡した生のセッションID（エンティティIDではない）
  */
+export interface Terminal {
+  pane: string
+  pid: number
+}
+
 export interface ReplyResponse {
   accepted: true
   id: string
   agent: Agent
+  /** terminal: 開いている tmux のペインに打ち込んだ。process: -p で別プロセスを立てた */
+  via: 'terminal' | 'process'
   session: string
   cwd: string
 }

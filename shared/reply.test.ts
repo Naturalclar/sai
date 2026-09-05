@@ -53,6 +53,9 @@ function summary(over: Partial<SessionSummary>): SessionSummary {
     model: '',
     models: [],
     waiting: '',
+    pane: '',
+    pid: 0,
+    last_turn: '',
     ...over,
   }
 }

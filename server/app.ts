@@ -40,6 +40,8 @@ import { META_FILE, MetaStore } from './meta.ts'
 import { PROFILE_FILE, ProfileStore } from './profile.ts'
 import { SETTINGS_FILE, SettingsStore } from './settings.ts'
 import { ProcessRunner, replyCommand } from './runner.ts'
+import { alive, RealTmux, realPs, TerminalBusy, TerminalGone, TerminalReplies, typeInto } from './terminal.ts'
+import type { PsFn, Tmux } from './terminal.ts'
 import type { Runner } from './runner.ts'
 import { Authenticator, tailscaleWhois } from './auth.ts'
 import type { Identity } from './auth.ts'
@@ -173,6 +175,15 @@ export function stripThinking(row: FeedRow): FeedRow {
 
 export type Handler = (req: IncomingMessage, res: ServerResponse) => Promise<void>
 
+/** 端末（tmux）への打ち込みに使うもの。テストでは差し替える */
+export interface TerminalDeps {
+  tmux: Tmux
+  ps: PsFn
+  replies?: TerminalReplies
+  /** pid の生存確認。テストでは差し替える */
+  alive?: (pid: number) => boolean
+}
+
 export function createApp(
   store: FeedStore,
   distDir: string,
@@ -181,8 +192,21 @@ export function createApp(
   freshness: BuildFreshness = new BuildFreshness(distDir),
   digester?: Digester,
   auth: Authenticator = new Authenticator(tailscaleWhois()),
+  terminal: TerminalDeps = { tmux: new RealTmux(), ps: realPs },
 ): Handler {
   const distRoot = resolve(distDir)
+  // 端末に打ち込んだ返信の「処理中」。子プロセスの方（run）とは別に持ち、画面には合わせて出す
+  const typed = terminal.replies ?? new TerminalReplies()
+  const isAlive = terminal.alive ?? alive
+  const terminalEnabled = process.env.SAI_TERMINAL !== '0'
+  /** 一番新しい行に pane と pid があり、pid が生きていれば端末で開いている */
+  const terminalOf = (s: SessionSummary) => (terminalEnabled && s.pane && s.pid && isAlive(s.pid) ? { pane: s.pane, pid: s.pid } : null)
+  /** 処理中の返信（子プロセス + 端末）。端末の分は、ターン完了の行が届いていれば先に片付ける */
+  const replyingOf = (sessions: SessionSummary[]): ReplyingMap => {
+    typed.settle((id) => sessions.find((s) => s.id === id)?.last_turn)
+    return { ...typed.snapshot(), ...run.snapshot() }
+  }
+  const busy = (id: string) => run.running(id) || typed.running(id)
   // 処理中の返信は replying.json にも持ち、サーバを再起動しても生きている分を引き取る（#100）
   const run: Runner = runner ?? new ProcessRunner(join(store.directory, 'reply.log'), join(store.directory, 'replying.json'))
   const metaStore = new MetaStore(join(store.directory, META_FILE))
@@ -221,14 +245,13 @@ export function createApp(
    */
   const sessionsWithMeta = async (days: number): Promise<{ rev: string; sessions: SessionSummary[] }> => {
     const [{ rev, sessions }, meta, icons] = await Promise.all([store.sessions(days), metaStore.all(), iconStore.all()])
-    if (!meta.rev && !icons.rev) return { rev, sessions }
     return {
       rev: `${rev}-${meta.rev}-${icons.rev}`,
       sessions: sessions.map((s) => {
         const m = meta.entries[s.id]
         const icon = icons.entries.get(iconKey(s.id))
-        if (!m && !icon) return s
-        const out: SessionSummary = { ...s }
+        // 端末で開いているか（pid の生存）は毎回見る。rev には混ぜない（端末を閉じても次の行で rev が変わる）
+        const out: SessionSummary = { ...s, terminal: terminalOf(s) }
         if (m) {
           out.meta = m
           if (!!m.archived_at && Date.parse(m.archived_at) >= Date.parse(s.end)) out.archived = true
@@ -330,7 +353,25 @@ export function createApp(
     } catch {
       return error(res, 400, `cwd が見つかりません: ${cwd || '(空)'}`)
     }
-    if (run.running(id)) return error(res, 409, 'このセッションはまだ前の返信を処理中です')
+    if (busy(id)) return error(res, 409, 'このセッションはまだ前の返信を処理中です')
+
+    // 端末（tmux）で開いていれば、そのペインに打ち込む。別プロセスを立てないので端末にも出て、トークンも少ない。
+    // ペインが無い・別のプロセスなら -p にフォールバック。入力中・ダイアログ中なら 409（何も打ち込まない）
+    const term = terminalOf(session)
+    if (term) {
+      try {
+        await typeInto(terminal.tmux, terminal.ps, term, session.agent, text)
+        typed.start(id, text)
+        const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd, via: 'terminal' }
+        return json(res, payload, 202)
+      } catch (err) {
+        if (err instanceof TerminalBusy) return error(res, 409, `端末に打ち込めない: ${err.message}`)
+        if (!(err instanceof TerminalGone) && (err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          return error(res, 500, `端末に打ち込めなかった: ${err instanceof Error ? err.message : String(err)}`)
+        }
+        // ペインが消えた・tmux が無い → 別プロセスで回す
+      }
+    }
     // 許可・質問を画面で答える配線。MCP の子プロセスは、ブラウザがこのサーバに来たのと同じ宛先（Host）に預ける
     const via = req.headers.host ? { url: `http://${req.headers.host}`, entity: id } : undefined
     // セッションに返信のモデルが設定されていれば（PUT /api/sessions/<id>/meta の model）それで回す
@@ -345,7 +386,7 @@ export function createApp(
       const hint = code === 'ENOENT' ? `${cmd.bin} が見つかりません（SAI_CLAUDE_BIN / SAI_CODEX_BIN で指定できます）` : ''
       return error(res, 500, hint || (err instanceof Error ? err.message : String(err)))
     }
-    const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd }
+    const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd, via: 'process' }
     return json(res, payload, 202)
   }
 
@@ -624,7 +665,7 @@ export function createApp(
         const days = parseDays(q.get('days'), 7)
         const [{ rev: sessionsRev, sessions }, me] = await Promise.all([sessionsWithMeta(days), profileNow()])
         const rev = `${sessionsRev}~${me.rev}`
-        const replying = run.snapshot()
+        const replying = replyingOf(sessions)
         const pendingApprovals = approvals.snapshot()
         // 既定はアーカイブ済みを除く。archived=1 でアーカイブ済みだけ。total と filters はその集合の絞り込み前から作る
         const wantArchived = q.get('archived') === '1'
@@ -659,7 +700,7 @@ export function createApp(
         if (!session) return error(res, 404, 'session not found in window')
         await scanDigest(days)
         const rows = digest.attach((await store.rows(days)).filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id))
-        const replying = run.snapshot()
+        const replying = replyingOf(sessions)
         const body: SessionDetailResponse = {
           rev: revWith(`${sessionsRev}~${me.rev}`, replying, approvals.revKey(), false, digest.revKey()),
           session: withLastSummary([session])[0]!,
@@ -684,7 +725,7 @@ export function createApp(
         // 思考はフィードには出さないので運ばない（3秒ごとに全行を返す。セッション画面だけが使う）
         await scanDigest(days)
         rows = digest.attach(rows.map(stripThinking))
-        const replying = run.snapshot()
+        const replying = replyingOf(sessions)
         // rev はメタ（アーカイブ）と処理中の集合、答え待ちの承認、ビルドが古いか、一言の有無も混ぜる
         const build_stale = await freshness.stale()
         const body: FeedResponse = {

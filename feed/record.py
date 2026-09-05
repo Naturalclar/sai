@@ -37,7 +37,7 @@ from pathlib import Path
 
 # 行の形の版。行に `v` として載せる。行の形（キー）を変えるたびに上げ、shared/types.ts の RECORD_VERSION と揃える
 # （ずれると feed/test_record.py が止まる）。画面は窓の中の一番新しい行の v が古いと「record.py が古い」と出す
-RECORD_VERSION = 3
+RECORD_VERSION = 4
 MAX_TEXT = 2000
 MAX_USER_TEXT = 2000
 MAX_THINKING = 4000
@@ -697,6 +697,20 @@ def synth_session(directory: Path, now: datetime, repo: str, cwd: str, agent: st
 
 # ---------------------------------------------------------------- 行の組み立て
 
+def session_pid(agent: str) -> int:
+    """セッション本体（claude / codex）の pid。フックはその子プロセスなので環境か親から分かる。
+    Claude は CLAUDE_PID を渡してくる。Codex の notify は codex 自身が直接 spawn するので親が本体。取れなければ 0"""
+    if agent == "claude":
+        raw = os.environ.get("CLAUDE_PID", "")
+        return int(raw) if raw.isdigit() else 0
+    if agent == "codex":
+        try:
+            return os.getppid()
+        except Exception:
+            return 0
+    return 0
+
+
 def build_row(payload: dict, now: datetime, directory: Path) -> dict | None:
     agent = detect_agent(payload)
     if agent == "unknown" and not payload:
@@ -798,6 +812,9 @@ def build_row(payload: dict, now: datetime, directory: Path) -> dict | None:
         "session": session,
         "session_source": source,
         "cwd": cwd,
+        # セッションが開いている tmux のペインと本体の pid。SAI の返信をそのペインに打ち込むのに使う（tmux の外なら空）
+        "pane": os.environ.get("TMUX_PANE", "") or "",
+        "pid": session_pid(agent),
         "event": event,
         "text": clip(text, MAX_TEXT),
         # そのターンの入力（人が打った文）。チャットで自分側のバブルになる

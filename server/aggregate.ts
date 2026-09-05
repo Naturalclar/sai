@@ -54,6 +54,13 @@ export function sessionTitle(items: FeedRow[]): string {
   return firstLine(items[0]?.text ?? '')
 }
 
+/** 窓の中の一番新しい行の記録側の版。v の無い行は 1（試作か古い record.py）、行が無ければ 0。入力は ts 昇順 */
+export function recordVersionOf(rows: FeedRow[]): number {
+  const last = rows[rows.length - 1]
+  if (!last) return 0
+  return typeof last.v === 'number' && last.v >= 1 ? last.v : 1
+}
+
 /** 行を (セッション, リポジトリ) 単位にまとめる。入力は ts 昇順であること。新しい順に返す */
 export function aggregate(rows: FeedRow[]): SessionSummary[] {
   const groups = new Map<string, FeedRow[]>()

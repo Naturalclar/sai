@@ -4,9 +4,17 @@
 export type Agent = 'claude' | 'codex' | 'unknown'
 export type SessionSource = 'payload' | 'rollout' | 'synth' | ''
 
+/**
+ * 行の形の版。feed/record.py の RECORD_VERSION と同じ値（ずれると pnpm test:feed が止まる）。
+ * 行の形を変えるたびに上げる。画面は窓の中の一番新しい行の v がこれより古いと「record.py が古い」と出す
+ */
+export const RECORD_VERSION = 2
+
 /** ~/.agent-feed/YYYY-MM-DD.jsonl の1行 = 1ターン */
 export interface FeedRow {
   ts: string
+  /** 記録側の版（record.py の RECORD_VERSION）。無い行は試作か古い record.py が書いたもの（1 扱い） */
+  v?: number
   agent: Agent
   repo: string
   branch: string
@@ -227,6 +235,8 @@ export interface SessionsResponse {
   approvals: ApprovalMap
   /** 配っている web/dist/ が web/src / shared より古い（git pull のあと pnpm build していない）。これが変わると rev も変わる */
   build_stale: boolean
+  /** 窓の中の一番新しい行の v（無い行は 1、行が無ければ 0）。RECORD_VERSION より小さければ記録側の record.py が古い */
+  record_version: number
   /** 自分の表示名とアイコン。変わると rev も変わる */
   profile: Profile
 }

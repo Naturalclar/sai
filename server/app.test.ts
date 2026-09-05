@@ -938,3 +938,8 @@ test('profile: 別オリジンは 403、メソッド違いは 405', async () => 
   assert.equal((await fetch(base + '/api/profile', { method: 'POST', headers: evil, body: '{}' })).status, 405)
   assert.equal((await fetch(base + '/api/profile', { method: 'DELETE', headers: evil })).status, 405)
 })
+
+test('GET /api/sessions は record_version を返す（fixture は v 無し = 1）', async () => {
+  const data = (await (await get('/api/sessions?days=30')).json()) as SessionsResponse
+  assert.equal(data.record_version, 1)
+})

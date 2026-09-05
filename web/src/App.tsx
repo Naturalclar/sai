@@ -11,6 +11,7 @@ import { api, type SessionFilters } from './api'
 import { isTypingTarget, navAction, neighborSessionId } from './sessionNav'
 import { PersonaSelect } from './PersonaSelect'
 import { useSettings } from './useSettings'
+import { RECORD_VERSION } from '../../shared/types.ts'
 
 export interface StatusProps {
   onStatus: (updatedAt: Date | null, error: string | null) => void
@@ -141,6 +142,12 @@ export function App() {
         )}
         <UserMenu profile={list.data?.profile} />
       </header>
+      {/* 記録側の record.py が古い（フックが古い checkout や試作を呼んでいる）。窓の中の一番新しい行の v で見る */}
+      {list.data && list.data.record_version > 0 && list.data.record_version < RECORD_VERSION && (
+        <div className="banner" role="status">
+          記録側の <code>record.py</code> が古い（v{list.data.record_version}、最新は v{RECORD_VERSION}）。フックの向け先を確かめてください（README「1. フックを向ける」）
+        </div>
+      )}
       {/* 配っている web/dist/ がソースより古い（git pull のあと pnpm build していない）。pnpm dev は HMR で常に最新なので出さない */}
       {import.meta.env.PROD && list.data?.build_stale && (
         <div className="banner" role="status">

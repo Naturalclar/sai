@@ -14,7 +14,7 @@
     "test": "node --test --disable-warning=ExperimentalWarning \"server/**/*.test.ts\" \"shared/**/*.test.ts\" \"web/src/**/*.test.ts\"",
     "test:feed": "python3 -m unittest feed.test_record",
     "lint": "oxlint web/src server shared",
-    "typecheck": "tsc -p web && tsc -p server"
+    "typecheck": "tsc -p web && tsc -p web/tsconfig.test.json && tsc -p server"
   },
   "dependencies": {
     "react": "^19.1.0",

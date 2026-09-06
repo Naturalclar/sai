@@ -18,6 +18,7 @@ import { BackLink } from './BackLink'
 import { useReply } from './useReply'
 import { ReplaceConfirm } from './ReplaceConfirm'
 import { MetaEditor } from './MetaEditor'
+import { SessionPersonaSelect } from './SessionPersonaSelect'
 import { ModelPicker } from './ModelPicker'
 import { ArchiveButton } from './ArchiveButton'
 import { ArchivedTag } from './ArchivedTag'
@@ -26,7 +27,7 @@ import type { PaneProps } from './App'
 const NO_REPLYING = {}
 const NO_APPROVALS: never[] = []
 
-export function SessionView({ id, onStatus, onOpenSidebar, linear }: { id: string } & PaneProps) {
+export function SessionView({ id, onStatus, onOpenSidebar, linear, settings }: { id: string } & PaneProps) {
   const { data, error, updatedAt } = usePolling(() => api.session(id), [id])
   useEffect(() => onStatus(updatedAt, error), [updatedAt, error, onStatus])
 
@@ -69,6 +70,8 @@ export function SessionView({ id, onStatus, onOpenSidebar, linear }: { id: strin
           {/* 合成 ID は集計の切れ方で付け先がずれるのでアーカイブできない */}
           {s.session_source !== 'synth' && <ArchiveButton key={`${s.id}:${s.archived ? 1 : 0}`} id={s.id} archived={Boolean(s.archived)} />}
           <MetaEditor key={s.id} id={s.id} meta={s.meta} icon={s.icon} />
+          {/* 一言が有効なときだけ。このセッションの性格（無ければヘッダの既定に従う） */}
+          {settings?.digest && <SessionPersonaSelect key={s.id} id={s.id} value={s.meta?.persona} defaultPersona={settings.persona} />}
           {hasThinking && (
             <span className="meta">
               <button type="button" className="linkish" onClick={() => setThinkingUi({ open: !thinkingUi.open })} title="エージェントの思考（thinking）の折りたたみを全部開く／閉じる">

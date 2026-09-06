@@ -161,8 +161,8 @@ export interface DigesterOptions {
   model: string
   /** 一言を作る子プロセスの cwd（フィードのディレクトリ）。ここを cwd にした行は自分の雑音なので作らない */
   ownDir?: string
-  /** いまの性格。作る直前に引く（変えたら以後の行から効く） */
-  persona: () => Promise<PersonaId>
+  /** その行の性格。作る直前に行ごとに引く（セッションのメタに persona があればそれ、無ければ全体の既定。変えたら以後の行から効く） */
+  persona: (row: FeedRow) => Promise<PersonaId>
   /** 失敗の記録先（無ければ捨てる） */
   logPath?: string
 }
@@ -172,7 +172,7 @@ export class Digester {
   readonly enabled: boolean
   readonly model: string
   private readonly summarizer: Summarizer | null
-  private readonly persona: () => Promise<PersonaId>
+  private readonly persona: (row: FeedRow) => Promise<PersonaId>
   private readonly logPath: string | undefined
   private readonly ownDir: string | undefined
   /** 起動時に既にあった行。作らない（過去の行の一括生成はしない） */
@@ -277,7 +277,7 @@ export class Digester {
     try {
       while (this.queue.length > 0) {
         const { key, row } = this.queue.shift()!
-        const persona = await this.persona()
+        const persona = await this.persona(row)
         try {
           const summary = await this.summarizer.summarize(digestPrompt(persona, row.text))
           await this.store.append({ key, persona, summary, model: this.model, ts: new Date().toISOString() })
@@ -303,15 +303,30 @@ export class Digester {
   }
 }
 
+/** 全体の既定（settings.json）とセッションのメタ（session-meta.json の persona）から、その行の性格を決める */
+export interface PersonaSources {
+  settings: { get(): Promise<{ persona: PersonaId }> }
+  /** セッションのメタ。無ければ既定だけ */
+  meta?: { get(id: string): Promise<{ persona?: PersonaId } | undefined> }
+}
+
+/** 行 → 性格。セッション（エンティティ）のメタに persona があればそれ、無ければ全体の既定 */
+export function personaResolver(sources: PersonaSources): (row: FeedRow) => Promise<PersonaId> {
+  return async (row) => {
+    const own = sources.meta ? (await sources.meta.get(entityId(row.session, row.repo, row.ts)))?.persona : undefined
+    return own ?? (await sources.settings.get()).persona
+  }
+}
+
 /** 環境変数から本物を組む。SAI_DIGEST=1 でなければ無効（summarizer は作らない） */
-export function digesterFromEnv(feedDir: string, store: DigestStore, settings: { get(): Promise<{ persona: PersonaId }> }, env: NodeJS.ProcessEnv = process.env): Digester {
+export function digesterFromEnv(feedDir: string, store: DigestStore, sources: PersonaSources, env: NodeJS.ProcessEnv = process.env): Digester {
   const enabled = env.SAI_DIGEST === '1'
   const model = env.SAI_DIGEST_MODEL || DEFAULT_DIGEST_MODEL
   return new Digester(store, enabled ? new ClaudeSummarizer(model, feedDir, env) : null, {
     enabled,
     model,
     ownDir: feedDir,
-    persona: async () => (await settings.get()).persona,
+    persona: personaResolver(sources),
     logPath: `${feedDir}/digest.log`,
   })
 }

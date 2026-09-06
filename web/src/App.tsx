@@ -7,7 +7,7 @@ import { hm } from './format'
 import { MenuMark } from './MenuMark'
 import { GitHubMark } from './GitHubMark'
 import { UserMenu } from './UserMenu'
-import { api, type SessionFilters } from './api'
+import { api, type SessionFilters, type SettingsResponse } from './api'
 import { isTypingTarget, navAction, neighborSessionId } from './sessionNav'
 import { PersonaSelect } from './PersonaSelect'
 import { LinearWorkspaceInput } from './LinearWorkspaceInput'
@@ -21,6 +21,8 @@ export interface StatusProps {
 /** 右ペイン（チャット）に渡すもの。「← 一覧」が広い画面ではサイドバーを開くだけなので、その口も渡す */
 export interface PaneProps extends StatusProps {
   onOpenSidebar: () => void
+  /** サーバ側の設定（一言が有効か、既定の性格）。まだ取れていなければ null */
+  settings: SettingsResponse | null
   /** Linear の workspace（設定）。一言の中の PGR-123 のリンク先。空ならリンクにしない */
   linear: string
 }
@@ -168,9 +170,9 @@ export function App() {
         </aside>
         <div className="pane">
           {route.name === 'session' ? (
-            <SessionView id={route.id} onStatus={onStatus} onOpenSidebar={openSidebar} linear={linear} />
+            <SessionView id={route.id} onStatus={onStatus} onOpenSidebar={openSidebar} linear={linear} settings={settings} />
           ) : (
-            <FeedView repo={filters.repo} sessions={list.data?.sessions} onStatus={onStatus} onOpenSidebar={openSidebar} linear={linear} />
+            <FeedView repo={filters.repo} sessions={list.data?.sessions} onStatus={onStatus} onOpenSidebar={openSidebar} linear={linear} settings={settings} />
           )}
         </div>
       </main>

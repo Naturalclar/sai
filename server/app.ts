@@ -245,7 +245,8 @@ export function createApp(
 
   const settingsStore = new SettingsStore(join(store.directory, SETTINGS_FILE))
   // 一言コメント（digest）。テストは Summarizer を差し替えた Digester を渡す。既定は環境変数で組む（SAI_DIGEST=1 でなければ無効）
-  const digest: Digester = digester ?? digesterFromEnv(store.directory, new DigestStore(join(store.directory, DIGEST_FILE)), settingsStore)
+  // 一言の性格は、セッションのメタに persona があればそれ、無ければ全体の既定（settings.json）
+  const digest: Digester = digester ?? digesterFromEnv(store.directory, new DigestStore(join(store.directory, DIGEST_FILE)), { settings: settingsStore, meta: metaStore })
   const digestReady = digest.store.load()
 
   /** 一言の対象を探して列に積む。3 秒ごとの応答のついでに呼ぶので軽い（無効なら何もしない） */

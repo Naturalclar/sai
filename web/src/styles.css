@@ -114,7 +114,8 @@
   @media (hover: none) {
     .channels .archive-btn { opacity: 1; top: auto; bottom: 6px; }
     .channels .item:hover .when { visibility: visible; }
-    .channels .item:has(.archive-btn) .last, .channels .item:has(.archive-btn) .t { padding-right: 5.5em; }
+    /* ボタンは右下固定なので、.last の無い2行の項目では時刻（.top の .when）の上に乗る。.top にも逃げ道を作る */
+    .channels .item:has(.archive-btn) .top, .channels .item:has(.archive-btn) .last, .channels .item:has(.archive-btn) .t { padding-right: 5.5em; }
     /* バブルごとの時刻はホバーで出すものなので、ホバーの無い端末では常に出す */
     .msg .time { opacity: 1; }
   }
@@ -172,9 +173,7 @@
     .sidebar .filters select, .sidebar .filters button { min-height: 40px; }
     .chat-head .meta select { min-height: 36px; }
     .channels .archive-btn { padding: 8px 10px; font-size: 12px; }
-    .channels .item:has(.archive-btn) .last, .channels .item:has(.archive-btn) .t { padding-right: 6.5em; }
-    /* 文字だけのボタン・リンクは見た目を変えずに当たり判定だけ広げる（負のマージンで周りをずらさない） */
-    .linkish, .msg .more, .msg .think-toggle, .reply .target .clear { padding: 8px 6px; margin: -8px -6px; }
+    .channels .item:has(.archive-btn) .top, .channels .item:has(.archive-btn) .last, .channels .item:has(.archive-btn) .t { padding-right: 6.5em; }
     .iconbtn { width: 36px; height: 36px; }
     .back { padding: 8px 6px; margin: -8px -6px 0; }
     .reply .row textarea { min-height: 44px; }
@@ -344,6 +343,12 @@
   .reply .target .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .reply .target .hint { color: var(--muted); opacity: .7; white-space: nowrap; }
   .reply .target .clear { background: none; border: 0; color: var(--muted); cursor: pointer; font: inherit; padding: 0 4px; line-height: 1; }
+  /* 文字だけのボタン・リンクは見た目を変えずに当たり判定だけ広げる（負のマージンで周りをずらさない）。
+     上の .linkish / .msg .more / .msg .think-toggle / .reply .target .clear が同じ詳細度で padding: 0 を書くので、
+     それより後ろに置く。前に置くと padding だけ負けて負のマージンだけが残り、文字が左上に 6〜8px ずれる */
+  @media (pointer: coarse) {
+    .linkish, .msg .more, .msg .think-toggle, .reply .target .clear { padding: 8px 6px; margin: -8px -6px; }
+  }
   .reply .target .clear:hover { color: var(--ink); }
   /* @ の候補。入力欄の上に開く（狭い画面でも隠れない） */
   .mention { position: absolute; left: 0; right: 0; bottom: 100%; margin: 0 0 6px; padding: 4px 0; list-style: none; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 24px rgba(0, 0, 0, .12); max-height: 40vh; overflow-y: auto; z-index: 3; }

@@ -2,10 +2,10 @@ import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
-import { appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ReplyResponse, SessionsResponse } from '../shared/types.ts'
+import type { ReplyError, ReplyResponse, SessionsResponse } from '../shared/types.ts'
 import { createApp } from './app.ts'
 import { Approvals } from './approvals.ts'
 import { localDate } from './aggregate.ts'
@@ -38,6 +38,8 @@ class FakeTmux implements Tmux {
       return '100\n'
     }
     if (args[0] === 'capture-pane') return this.screen
+    // C-u で入力欄が空になる（Claude Code の実機と同じ）
+    if (args[0] === 'send-keys' && args.includes('C-u')) this.screen = IDLE
     return ''
   }
 }
@@ -83,11 +85,11 @@ after(async () => {
   await rm(work, { recursive: true, force: true })
 })
 
-const post = (id: string, text: string) =>
+const post = (id: string, text: string, extra: object = {}) =>
   fetch(`${base}/api/sessions/${encodeURIComponent(id)}/reply?days=30`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Origin: base },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, ...extra }),
   })
 const sessions = async () => (await (await fetch(`${base}/api/sessions?days=30`)).json()) as SessionsResponse
 
@@ -120,13 +122,43 @@ test('返信: 端末で開いていればペインに打ち込み（via terminal
   assert.equal(list.replying['T1@r'], undefined)
 })
 
-test('返信: 入力中・ダイアログ中は 409 で何も打たない', async () => {
+test('返信: 入力中は 409 で code: terminal_typed と typed を返し、何も打たない', async () => {
   tmux.calls.length = 0
-  tmux.screen = IDLE.replace('❯ Try "refactor <filepath>"', '❯ 打ちかけ')
+  tmux.screen = IDLE.replace('❯ Try "refactor <filepath>"', '❯ 提案されているsub issueを立てて')
   const res = await post('T1@r', 'x')
   assert.equal(res.status, 409)
-  assert.match(((await res.json()) as { error: string }).error, /打ちかけ/)
-  assert.equal(tmux.calls.some((c) => c[0] === 'paste-buffer'), false)
+  const body = (await res.json()) as ReplyError
+  assert.match(body.error, /打ちかけ/)
+  assert.equal(body.code, 'terminal_typed')
+  assert.equal(body.typed, '提案されているsub issueを立てて')
+  assert.equal(tmux.calls.some((c) => c[0] === 'paste-buffer' || c.includes('C-u')), false)
+  tmux.screen = IDLE
+})
+
+test('返信: replace_typed で打ちかけを消してから打ち込み、reply.log に消した文が残る', async () => {
+  tmux.calls.length = 0
+  tmux.screen = IDLE.replace('❯ Try "refactor <filepath>"', '❯ 消される文')
+  const res = await post('T1@r', '本文', { replace_typed: true })
+  assert.equal(res.status, 202, JSON.stringify(await res.clone().json()))
+  assert.equal(((await res.json()) as ReplyResponse).via, 'terminal')
+  const ops = tmux.calls.map((c) => (c[0] === 'send-keys' ? `send-keys ${c[3]}` : c[0]))
+  assert.deepEqual(ops, ['display-message', 'capture-pane', 'send-keys C-u', 'capture-pane', 'load-buffer', 'paste-buffer', 'send-keys Enter'])
+  const log = await readFile(join(dir, 'reply.log'), 'utf-8')
+  assert.match(log, /端末の打ちかけを消して打ち込んだ: "消される文"/)
+  // 処理中になったので片付ける（ターン完了の行を足す）
+  await appendFile(feedFile, JSON.stringify(row(new Date(), 'T1', { repo: 'r', cwd: work, pane: '%9', pid: 200, user_text: '本文', text: 'ok' })) + '\n')
+  await sessions()
+})
+
+test('返信: ダイアログ中は replace_typed でも 409（code: terminal_dialog）で消さない', async () => {
+  tmux.calls.length = 0
+  tmux.screen = IDLE + '  ❯ 1. Yes\n    2. No\n  Enter to confirm · Esc to cancel\n'
+  const res = await post('T1@r', 'x', { replace_typed: true })
+  assert.equal(res.status, 409)
+  const body = (await res.json()) as ReplyError
+  assert.equal(body.code, 'terminal_dialog')
+  assert.equal(body.typed, undefined)
+  assert.equal(tmux.calls.some((c) => c.includes('C-u') || c[0] === 'paste-buffer'), false)
   tmux.screen = IDLE
 })
 

@@ -340,3 +340,8 @@
   .reply .note { color: var(--muted); font-size: 11px; }
   .notice { color: var(--muted); font-size: 12px; margin-top: 10px; }
   .notice.error { color: var(--claude); }
+  /* 端末の打ちかけを消して送るかの確認（#117） */
+  .notice.confirm { color: var(--ink); background: color-mix(in srgb, var(--synth) 12%, transparent); border: 1px solid color-mix(in srgb, var(--synth) 40%, transparent); border-radius: 8px; padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; }
+  .notice.confirm code { font-family: var(--mono); background: var(--chip); padding: 1px 6px; border-radius: 4px; overflow-wrap: anywhere; }
+  .notice.confirm .actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .notice.confirm .primary { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 5px 12px; font: inherit; font-weight: 600; cursor: pointer; }

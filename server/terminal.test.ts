@@ -37,6 +37,19 @@ test('promptState: Codex は › か > が入力欄', () => {
   assert.equal(promptState('some output\n› typing', 'codex').idle, false)
 })
 
+test('promptState: kind と typed。番号付きの選択肢や「Press enter to continue」はダイアログ', () => {
+  assert.deepEqual(promptState(CLAUDE_IDLE, 'claude'), { idle: true, kind: 'idle', reason: '', typed: '' })
+  const typing = promptState(CLAUDE_IDLE.replace('❯ Try "refactor <filepath>"', '❯ 提案されているsub issueを立てて'), 'claude')
+  assert.equal(typing.kind, 'typed')
+  assert.equal(typing.typed, '提案されているsub issueを立てて', 'typed は切らない（reason は 40 文字）')
+  assert.equal(promptState(CLAUDE_IDLE + '\n  ❯ 1. Yes\n    2. No\n  Enter to confirm · Esc to cancel', 'claude').kind, 'dialog')
+  // Codex の信頼確認。› の後ろが「1. Yes, continue」なので打ちかけに見えるが、ダイアログ
+  const trust = '> You are in /x\n  Do you trust the contents of this directory?\n› 1. Yes, continue\n  2. No, quit\n  Press enter to continue'
+  assert.equal(promptState(trust, 'codex').kind, 'dialog')
+  assert.equal(promptState('some output\n› 1. first option\n  2. second', 'codex').kind, 'dialog', '番号付きの選択肢だけでもダイアログ')
+  assert.equal(promptState('$ ls\nfoo\n$ ', 'claude').kind, 'unknown')
+})
+
 test('parsePs / isDescendant', () => {
   const parents = parsePs('  1     0\n 100     1\n 200   100\n 300   200\n')
   assert.equal(isDescendant(300, 100, parents), true)
@@ -48,6 +61,8 @@ test('parsePs / isDescendant', () => {
 class FakeTmux implements Tmux {
   calls: { args: string[]; input?: string }[] = []
   screen = CLAUDE_IDLE
+  /** C-u を受けたらこの画面に変わる（null なら変わらない = 消せない端末） */
+  afterClear: string | null = CLAUDE_IDLE
   panePid: string | null = '100'
   async run(args: string[], input?: string): Promise<string> {
     this.calls.push({ args, input })
@@ -56,6 +71,7 @@ class FakeTmux implements Tmux {
       return this.panePid + '\n'
     }
     if (args[0] === 'capture-pane') return this.screen
+    if (args[0] === 'send-keys' && args.includes('C-u') && this.afterClear !== null) this.screen = this.afterClear
     return ''
   }
 }
@@ -69,6 +85,44 @@ test('typeInto: ペインの子孫で入力欄が空なら load-buffer → paste
   assert.equal(tmux.calls[2]!.input, '続きを\nやって', '本文は引数ではなく stdin で渡す')
   assert.ok(tmux.calls[3]!.args.includes('-p'), 'bracketed paste')
   assert.deepEqual(tmux.calls[4]!.args, ['send-keys', '-t', '%9', 'Enter'])
+})
+
+test('typeInto: replaceTyped なら打ちかけを C-u で消し、空になったのを見てから貼る。消えなければ貼らない', async () => {
+  const typedScreen = CLAUDE_IDLE.replace('❯ Try "refactor <filepath>"', '❯ 打ちかけの文')
+  const tmux = new FakeTmux()
+  tmux.screen = typedScreen
+  const result = await typeInto(tmux, ps, { pane: '%9', pid: 200 }, 'claude', '本文', { replaceTyped: true, settleMs: 0 })
+  assert.equal(result.cleared, '打ちかけの文', '消した文を返す（reply.log に残す）')
+  assert.deepEqual(
+    tmux.calls.map((c) => (c.args[0] === 'send-keys' ? `send-keys ${c.args[3]}` : c.args[0])),
+    ['display-message', 'capture-pane', 'send-keys C-u', 'capture-pane', 'load-buffer', 'paste-buffer', 'send-keys Enter'],
+    'C-u → もう一度 capture → 貼る',
+  )
+
+  // replaceTyped が無ければ今までどおり TerminalBusy（kind: typed、typed に文）
+  const plain = new FakeTmux()
+  plain.screen = typedScreen
+  const err = await typeInto(plain, ps, { pane: '%9', pid: 200 }, 'claude', '本文').catch((e: unknown) => e)
+  assert.ok(err instanceof TerminalBusy)
+  assert.equal(err.kind, 'typed')
+  assert.equal(err.typed, '打ちかけの文')
+  assert.equal(plain.calls.some((c) => c.args.includes('C-u')), false, '確認なしでは消さない')
+
+  // C-u が効かない端末（画面が変わらない）なら貼らない
+  const stuck = new FakeTmux()
+  stuck.screen = typedScreen
+  stuck.afterClear = null
+  const e2 = await typeInto(stuck, ps, { pane: '%9', pid: 200 }, 'claude', '本文', { replaceTyped: true, settleMs: 0 }).catch((e: unknown) => e)
+  assert.ok(e2 instanceof TerminalBusy)
+  assert.equal(stuck.calls.some((c) => c.args[0] === 'paste-buffer'), false)
+
+  // ダイアログ中は replaceTyped でも消さない
+  const dialog = new FakeTmux()
+  dialog.screen = CLAUDE_IDLE + '\n  ❯ 1. Yes\n    2. No\n  Enter to confirm · Esc to cancel'
+  const e3 = await typeInto(dialog, ps, { pane: '%9', pid: 200 }, 'claude', '本文', { replaceTyped: true, settleMs: 0 }).catch((e: unknown) => e)
+  assert.ok(e3 instanceof TerminalBusy)
+  assert.equal(e3.kind, 'dialog')
+  assert.equal(dialog.calls.some((c) => c.args.includes('C-u') || c.args[0] === 'paste-buffer'), false)
 })
 
 test('typeInto: ペインが無い・別のプロセスなら TerminalGone、入力中なら TerminalBusy（何も打たない）', async () => {

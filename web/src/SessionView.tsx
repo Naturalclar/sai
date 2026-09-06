@@ -16,6 +16,7 @@ import { ApprovalBubble } from './ApprovalBubble'
 import { ReplyBox } from './ReplyBox'
 import { BackLink } from './BackLink'
 import { useReply } from './useReply'
+import { ReplaceConfirm } from './ReplaceConfirm'
 import { MetaEditor } from './MetaEditor'
 import { ModelPicker } from './ModelPicker'
 import { ArchiveButton } from './ArchiveButton'
@@ -31,10 +32,11 @@ export function SessionView({ id, onStatus, onOpenSidebar }: { id: string } & Pa
 
   // 返信先はこのセッションだけなので、行数はこの画面のターン完了の行数（入力の行は返信の終わりではない）
   const turns = data?.rows.reduce((n, r) => n + (eventKind(r.event) === 'turn' ? 1 : 0), 0) ?? 0
-  const { pending, failed, send } = useReply((target) => (target === id ? turns : 0), data?.replying ?? NO_REPLYING, updatedAt)
+  const { pending, failed, send, confirm, confirmReplace, cancelConfirm } = useReply((target) => (target === id ? turns : 0), data?.replying ?? NO_REPLYING, updatedAt)
   const mine = pending.find((p) => p.id === id) ?? null
   const now = updatedAt?.getTime() ?? 0
   const failedHere = failed && failed.id === id ? failed.message : null
+  const confirmHere = confirm && confirm.id === id ? confirm : null
 
   const approvals = data?.approvals[id] ?? NO_APPROVALS
 
@@ -100,8 +102,9 @@ export function SessionView({ id, onStatus, onOpenSidebar }: { id: string } & Pa
         ) : blocked ? (
           <div className="notice">{blocked}</div>
         ) : (
-          <ReplyBox repo={s.repo} terminal={Boolean(s.terminal)} busy={mine !== null} busySince={mine?.since} now={now} replyModel={s.meta?.model} onSend={(text) => void send(id, text)} />
+          <ReplyBox repo={s.repo} terminal={Boolean(s.terminal)} busy={mine !== null} busySince={mine?.since} now={now} replyModel={s.meta?.model} onSend={async (text) => (await send(id, text)) !== 'confirm'} />
         ))}
+      {confirmHere && <ReplaceConfirm confirm={confirmHere} onReplace={() => void confirmReplace()} onCancel={cancelConfirm} />}
       {failedHere && <div className="notice error">送信失敗: {failedHere}</div>}
     </section>
   )

@@ -1,6 +1,6 @@
 // ルーティング。main.ts が node:http に載せ、テストは createApp() を直接叩く。
 import { createHash } from 'node:crypto'
-import { readFile, stat } from 'node:fs/promises'
+import { appendFile, readFile, stat } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { extname, join, resolve, sep } from 'node:path'
 import { ICON_MAX_BYTES, iconUrl } from '../shared/icon.ts'
@@ -17,6 +17,7 @@ import type {
   ProfileResponse,
   FeedRow,
   HealthResponse,
+  ReplyError,
   ReplyingMap,
   ReplyRequest,
   ReplyResponse,
@@ -351,6 +352,7 @@ export function createApp(
     }
     const text = typeof (body as ReplyRequest | null)?.text === 'string' ? (body as ReplyRequest).text.trim() : ''
     if (!text) return error(res, 400, 'text is required')
+    const replaceTyped = (body as ReplyRequest).replace_typed === true
 
     const { sessions } = await store.sessions(days)
     const session = sessions.find((s) => s.id === id)
@@ -375,12 +377,21 @@ export function createApp(
     const term = terminalOf(session)
     if (term) {
       try {
-        await typeInto(terminal.tmux, terminal.ps, term, session.agent, text)
+        const { cleared } = await typeInto(terminal.tmux, terminal.ps, term, session.agent, text, { replaceTyped })
+        if (cleared !== undefined) {
+          // 消した打ちかけは戻せないので、手がかりとして reply.log に残す
+          await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} 端末の打ちかけを消して打ち込んだ: ${JSON.stringify(cleared)}\n`).catch(() => {})
+        }
         typed.start(id, text)
         const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd, via: 'terminal' }
         return json(res, payload, 202)
       } catch (err) {
-        if (err instanceof TerminalBusy) return error(res, 409, `端末に打ち込めない: ${err.message}`)
+        if (err instanceof TerminalBusy) {
+          // 画面は code で出し分ける。typed のときだけ「消して送る」の確認を出せる
+          const payload: ReplyError = { error: `端末に打ち込めない: ${err.message}`, code: `terminal_${err.kind}` }
+          if (err.kind === 'typed') payload.typed = err.typed
+          return json(res, payload, 409)
+        }
         if (!(err instanceof TerminalGone) && (err as NodeJS.ErrnoException).code !== 'ENOENT') {
           return error(res, 500, `端末に打ち込めなかった: ${err instanceof Error ? err.message : String(err)}`)
         }

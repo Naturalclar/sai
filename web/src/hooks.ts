@@ -101,3 +101,19 @@ export function usePolling<T extends { rev: string }>(fetcher: () => Promise<T>,
 
   return state
 }
+
+/**
+ * メディアクエリが当たるか。最初の描画では false で、effect で本当の値に更新し、以後は変化に追従する
+ * （描画中に matchMedia を呼ばない）
+ */
+export function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(false)
+  useEffect(() => {
+    const mq = window.matchMedia(query)
+    const update = () => setMatches(mq.matches)
+    update()
+    mq.addEventListener('change', update)
+    return () => mq.removeEventListener('change', update)
+  }, [query])
+  return matches
+}

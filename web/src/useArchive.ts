@@ -1,16 +1,29 @@
 import { useState } from 'react'
 import { api } from './api'
 
+export interface ArchiveHandle {
+  /** いま画面に出す状態（押した直後は先に反転している） */
+  shown: boolean
+  busy: boolean
+  error: string
+  toggle: () => Promise<void>
+}
+
 /**
  * アーカイブ / 戻す。PUT /api/sessions/<id>/meta に archived_at を載せるだけ（戻すは空文字で消す）。
  * 押した直後は表示を先に反転し（shown）、rev が変わって次のポーリングで本物が届く。
- * チャット見出し（ArchiveButton）とサイドバーの項目（SessionArchiveButton）が共用する。
- * 呼び出し側は key に archived を含めること（届いたら作り直して反転を捨てる）
+ * チャット見出し（ArchiveButton）とサイドバーの項目（SessionItem。アイコンとスワイプのレールが同じものを使う）が共用する。
+ * 本物（archived）が変わったら反転は捨てる（呼び出し側が key で作り直さなくてよい）
  */
-export function useArchive(id: string, archived: boolean) {
+export function useArchive(id: string, archived: boolean): ArchiveHandle {
   const [busy, setBusy] = useState(false)
   const [flipped, setFlipped] = useState(false)
   const [error, setError] = useState('')
+  const [seen, setSeen] = useState(archived)
+  if (seen !== archived) {
+    setSeen(archived)
+    setFlipped(false)
+  }
   const shown = flipped ? !archived : archived
 
   const toggle = async () => {

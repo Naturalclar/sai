@@ -1,14 +1,17 @@
-// サーバ側の設定（いまは一言コメントの性格だけ）。~/.agent-feed/settings.json。
+// サーバ側の設定（一言コメントの性格、Linear の workspace）。~/.agent-feed/settings.json。
 // 一言はサーバが作るので性格もサーバに持つ（localStorage だと作る側が知らない）。
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { DEFAULT_PERSONA, isPersonaId } from '../shared/persona.ts'
+import { isLinearWorkspace } from '../shared/refs.ts'
 import type { PersonaId } from '../shared/types.ts'
 
 export const SETTINGS_FILE = 'settings.json'
 
 export interface Settings {
   persona: PersonaId
+  /** Linear の workspace。空なら設定なし */
+  linear_workspace: string
 }
 
 export class SettingsStore {
@@ -23,13 +26,15 @@ export class SettingsStore {
   async get(): Promise<Settings> {
     if (this.cache) return this.cache
     let persona: PersonaId = DEFAULT_PERSONA
+    let linear_workspace = ''
     try {
-      const raw = JSON.parse(await readFile(this.path, 'utf-8')) as { persona?: unknown }
+      const raw = JSON.parse(await readFile(this.path, 'utf-8')) as { persona?: unknown; linear_workspace?: unknown }
       if (isPersonaId(raw?.persona)) persona = raw.persona
+      if (isLinearWorkspace(raw?.linear_workspace)) linear_workspace = raw.linear_workspace
     } catch {
       // 無い・壊れている
     }
-    this.cache = { persona }
+    this.cache = { persona, linear_workspace }
     return this.cache
   }
 

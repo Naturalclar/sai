@@ -86,6 +86,35 @@ class RecordTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertEqual(len(read_rows(self.feed_dir)), 1)
 
+    # -- remote（origin の URL）
+
+    def test_normalize_remote(self):
+        from feed.record import normalize_remote
+
+        for raw, want in [
+            ("https://github.com/acme/kanban.git", "https://github.com/acme/kanban"),
+            ("https://github.com/acme/kanban", "https://github.com/acme/kanban"),
+            ("git@github.com:acme/kanban.git", "https://github.com/acme/kanban"),
+            ("ssh://git@github.com/acme/kanban.git", "https://github.com/acme/kanban"),
+            ("ssh://git@gitlab.example.com:2222/grp/sub/repo.git", "https://gitlab.example.com/grp/sub/repo"),
+            ("https://user:token@github.com/acme/kanban.git", "https://github.com/acme/kanban"),
+            ("/Users/me/repos/local", ""),
+            ("file:///Users/me/repos/local", ""),
+            ("", ""),
+            ("   ", ""),
+        ]:
+            with self.subTest(raw=raw):
+                self.assertEqual(normalize_remote(raw), want)
+
+    def test_row_carries_normalized_remote(self):
+        # origin があれば正規化した URL、無ければ空
+        payload = {"hook_event_name": "Stop", "session_id": "rem-1", "transcript_path": "/nonexistent", "cwd": str(self.cwd)}
+        run(stdin=json.dumps(payload), env=self.env)
+        self.assertEqual(read_rows(self.feed_dir)[-1]["remote"], "")
+        subprocess.run(["git", "-C", str(self.cwd), "remote", "add", "origin", "git@github.com:acme/myrepo.git"], check=True)
+        run(stdin=json.dumps(payload), env=self.env)
+        self.assertEqual(read_rows(self.feed_dir)[-1]["remote"], "https://github.com/acme/myrepo")
+
     def test_garbage_stdin_exits_zero_and_records_nothing(self):
         result = run(stdin="not json at all", env=self.env)
         self.assertEqual(result.returncode, 0, result.stderr)

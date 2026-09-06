@@ -694,11 +694,11 @@ test('PUT meta: archived_at でアーカイブ。一覧とフィードから消�
   assert.equal((await putMeta('S2@sai', { archived_at: 1 })).status, 400)
 })
 
-test('GET/PUT /api/settings: 性格。知らない値は 400、別オリジンは 403、ファイルに残る', async () => {
+test('GET/PUT /api/settings: 性格と Linear の workspace。知らない値は 400、別オリジンは 403、ファイルに残る', async () => {
   let res = await get('/api/settings')
   assert.equal(res.status, 200)
   let data = (await res.json()) as SettingsResponse
-  assert.deepEqual(data, { persona: 'ENFP', digest: true, model: 'fake' }, '既定は ENFP。digest はテストでは有効')
+  assert.deepEqual(data, { persona: 'ENFP', digest: true, model: 'fake', linear_workspace: '' }, '既定は ENFP。digest はテストでは有効。Linear は未設定')
   const put = (body: unknown, headers: Record<string, string> = {}) =>
     fetch(`${base}/api/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) })
   res = await put({ persona: 'ISTJ' })
@@ -706,7 +706,18 @@ test('GET/PUT /api/settings: 性格。知らない値は 400、別オリジン�
   data = (await res.json()) as SettingsResponse
   assert.equal(data.persona, 'ISTJ')
   assert.equal(((await (await get('/api/settings')).json()) as SettingsResponse).persona, 'ISTJ')
-  assert.deepEqual(JSON.parse(await readFile(join(feedDir, 'settings.json'), 'utf-8')), { persona: 'ISTJ' })
+  assert.deepEqual(JSON.parse(await readFile(join(feedDir, 'settings.json'), 'utf-8')), { persona: 'ISTJ', linear_workspace: '' })
+  // Linear の workspace。省略したキー（persona）は据え置き。大文字と前後の空白は正規化、形が違えば 400、空は「設定なし」
+  res = await put({ linear_workspace: ' Acme ' })
+  assert.equal(res.status, 200)
+  data = (await res.json()) as SettingsResponse
+  assert.equal(data.linear_workspace, 'acme')
+  assert.equal(data.persona, 'ISTJ', 'persona は据え置き')
+  assert.deepEqual(JSON.parse(await readFile(join(feedDir, 'settings.json'), 'utf-8')), { persona: 'ISTJ', linear_workspace: 'acme' })
+  assert.equal((await put({ linear_workspace: 'a b' })).status, 400)
+  assert.equal((await put({ linear_workspace: 1 })).status, 400)
+  assert.equal((await put({})).status, 400, 'どちらも無ければ 400')
+  assert.equal(((await (await put({ linear_workspace: '' })).json()) as SettingsResponse).linear_workspace, '', '空で設定なしに戻る')
   assert.equal((await put({ persona: 'XXXX' })).status, 400)
   assert.equal((await put({ persona: 1 })).status, 400)
   assert.equal((await put('nope')).status, 400)

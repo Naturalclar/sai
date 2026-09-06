@@ -21,9 +21,11 @@ interface Props {
   thinkingOpen?: boolean
   /** 自分の表示名とアイコン（自分側のバブル） */
   profile?: Profile
+  /** Linear の workspace（設定）。一言の中の PGR-123 のリンク先。空ならリンクにしない */
+  linear?: string
 }
 
-export function Chat({ rows, showChannel, sessions = NO_SESSIONS, trailer, showThinking = false, thinkingOpen = false, profile }: Props) {
+export function Chat({ rows, showChannel, sessions = NO_SESSIONS, trailer, showThinking = false, thinkingOpen = false, profile, linear = '' }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
   // エンティティID → セッション（表示名・アイコン画像）。バブルの見出しは行しか持っていないので、entityId で引く
@@ -75,6 +77,8 @@ export function Chat({ rows, showChannel, sessions = NO_SESSIONS, trailer, showT
                       thinkingOpen={thinkingOpen}
                       summary={u.summary}
                       model={u.model}
+                      remote={u.row.remote}
+                      linear={linear}
                     />
                   ))}
                 </div>

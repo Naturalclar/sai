@@ -27,7 +27,7 @@ interface Props extends PaneProps {
 }
 
 /** 全チャンネルを時系列に流す。リポジトリはサイドバーの絞り込みに従い、日数だけここで選ぶ */
-export function FeedView({ repo, sessions = NO_SESSIONS, onStatus, onOpenSidebar }: Props) {
+export function FeedView({ repo, sessions = NO_SESSIONS, onStatus, onOpenSidebar, linear }: Props) {
   const [local, setLocal] = useLocalState<{ days: string }>('sai.feed', { days: '3' })
   const { data, error, updatedAt } = usePolling(() => api.feed({ repo, days: local.days }), [repo, local.days])
   useEffect(() => onStatus(updatedAt, error), [updatedAt, error, onStatus])
@@ -90,6 +90,7 @@ export function FeedView({ repo, sessions = NO_SESSIONS, onStatus, onOpenSidebar
           showChannel
           sessions={sessions}
           profile={data.profile}
+          linear={linear}
           trailer={
             (pending.length > 0 || approvals.length > 0) && (
               <>

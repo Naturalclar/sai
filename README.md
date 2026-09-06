@@ -199,6 +199,7 @@ Codex CLI ──[notify]───────┘
 
 | フィールド | |
 | --- | --- |
+| `remote` | origin の URL を `https://host/owner/repo` に正規化したもの（`record.py` の `normalize_remote()`。ssh の `git@host:o/r.git` も同じ形、認証情報と `.git` は落とす）。origin が無ければ空。画面が一言の中の `#123` をこのリポジトリの issue に向けるのに使う |
 | `v` | 記録側の版（`record.py` の `RECORD_VERSION`。`shared/types.ts` にも同じ値があり、ずれると `pnpm test:feed` が止まる）。行の形を変えるたびに上げる。無い行は試作か古い `record.py` が書いたもの（1 扱い） |
 | `agent` | `claude` / `codex` / `unknown` |
 | `session_source` | `payload`（ペイロードから）/ `rollout`（Codex のファイルから）/ `synth`（時間で合成）。一覧の信頼度がここで分かる |
@@ -413,6 +414,7 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 - **既定はオフ。** トークンと時間を使うのと、本文を LLM に送るので、黙って走らせない。オンにしても**サーバが起動したあとに増えた行**だけ作る（過去の行は作らない）。ヘッダの「直近20件に一言」で、まだ無い直近 20 件だけ積める
 - 1 行ずつ直列で回す。失敗した行（`claude` が無い、ログインしていない、90 秒で終わらない）は一言無しのままで、画面は本文を出す。理由は `~/.agent-feed/digest.log` に残る
 - 一言を作る `claude -p` が自分自身を記録しないよう、その子プロセスには `AGENT_FEED_SKIP=1` を渡す（`record.py` はこれが立っていると何も書かない）。`--bare` は OAuth を読まないので使えない。フックが指す `record.py` が古くてこれを知らない間は子のターンが JSONL に書かれてしまうが、子は `~/.agent-feed` を `cwd` にして起動するので、サーバは **`cwd` がそこの行を SAI 自身の雑音として読み飛ばす**（画面に出ず、要約もしない）。フックの checkout を最新にすれば書かれなくなる
+- **一言の中の参照はリンクになる**（`shared/refs.ts`）。`#123` / `PR #123` は行の `remote`（GitHub のとき）の issue へ、`owner/repo#123` はそのリポジトリへ、`PGR-10891` のような Linear の識別子は `https://linear.app/<workspace>/issue/…` へ、URL はそのまま。Linear の workspace（URL の `linear.app/<workspace>/` の部分）は行からは分からないので、ヘッダの入力欄で設定する（`settings.json` の `linear_workspace`。空ならリンクにしない）。`remote` の無い古い行では番号は文字のまま。URL の途中の `#` や `` `code` `` の中、`SHA-256` のような語は触らない。サイドバーの「最後の発言」はリンクにしない（項目自体がリンクなので）
 - **性格は MBTI の 16 タイプから**ヘッダの select で選ぶ（性格なしも選べる）。口調の指示だけが変わり、中身（何をしたか）は変えない。サーバが作るので設定はサーバ側（`~/.agent-feed/settings.json`、`GET/PUT /api/settings`）にあり、変えると**以後の行から**効く。過去の一言は作ったときの性格のまま。MBTI は口調の「型」として借りるだけで、診断や性格分析の話にはしない。口調の表は `shared/persona.ts`
 
 ### エンドポイント
@@ -437,8 +439,8 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 | `PUT /api/profile` | body `{ "name"?: "..." }` をいまの値に重ねる。空文字や `null` は「消す」。100文字まで（超えたら `400`）。別オリジンは `403` |
 | `GET /api/profile/icon?v=<mtime>` | 自分のアイコン画像そのもの。無ければ `404`。キャッシュの扱いはセッションのアイコンと同じ |
 | `PUT /api/profile/icon` / `DELETE /api/profile/icon` | 画像を置く / 消す（受け付ける種類・上限はセッションのアイコンと同じ）。`{ "profile": … }` を返す。別オリジンは `403` |
-| `GET /api/settings` | サーバ側の設定。`{ "persona", "digest", "model" }`。`digest` は一言の配線が有効か（`SAI_DIGEST=1`） |
-| `PUT /api/settings` | body `{ "persona": "ENFP" }` で性格を変える。`shared/persona.ts` に無い値は `400`、別オリジンは `403` |
+| `GET /api/settings` | サーバ側の設定。`{ "persona", "digest", "model", "linear_workspace" }`。`digest` は一言の配線が有効か（`SAI_DIGEST=1`） |
+| `PUT /api/settings` | body `{ "persona": "ENFP" }` / `{ "linear_workspace": "acme" }` をいまの値に重ねる（省略は据え置き）。`shared/persona.ts` に無い性格、`linear.app/<workspace>/` の形でない workspace は `400`（空文字は「設定なし」）。別オリジンは `403` |
 | `POST /api/digest/backfill?n=20&days=7` | まだ一言が無い直近 `n` 件を作る列に積む。`{ "queued" }` を `202` で返す。無効なら `400`、別オリジンは `403` |
 | `GET /api/feed?days=3&repo=` | 生の行と `replying`。アーカイブ済みセッションの行は除く |
 

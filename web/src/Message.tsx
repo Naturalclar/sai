@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { hm } from './format'
 import { Markdown } from './Markdown'
+import { Inlines } from './Inlines'
+import { linkifyRefs } from '../../shared/refs.ts'
 import { ThinkingBlock } from './ThinkingBlock'
 import { useReveal } from './useReveal'
 
@@ -21,12 +23,16 @@ interface Props {
   thinkingOpen?: boolean
   /** 一言版（digest）。あればこれを本文にして、元の text は「詳細」で開く */
   summary?: string
+  /** 一言の中の #123 の向き先（行の remote）。無ければ番号はリンクにしない */
+  remote?: string
+  /** 一言の中の PGR-123 の向き先（設定の Linear の workspace）。空ならリンクにしない */
+  linear?: string
   /** このターンからモデルが変わった。そのモデル名を小さく出す */
   model?: string
 }
 
 /** バブル1つ分の本文。長ければ折りたたんで「もっと見る」を付ける */
-export function Message({ ts, text, markdown, waiting, resolved, thinking, thinkingOpen = false, summary, model }: Props) {
+export function Message({ ts, text, markdown, waiting, resolved, thinking, thinkingOpen = false, summary, model, remote, linear }: Props) {
   const [open, setOpen] = useState(false)
   // 一言があるとき、元の本文（詳細）を開いているか
   const [details, setDetails] = useState(false)
@@ -49,7 +55,8 @@ export function Message({ ts, text, markdown, waiting, resolved, thinking, think
         <span className="time">{hm(ts)}</span>
         {thinking && <ThinkingBlock text={thinking} openAll={thinkingOpen} />}
         <div className="summary" ref={summaryRef}>
-          <span className="line">{summary}</span>
+          {/* 一言の中の URL・#123・PGR-123 はリンクにする（shared/refs.ts）。HTML 文字列は作らない */}
+          <span className="line"><Inlines nodes={linkifyRefs(summary, { remote, linear })} /></span>
           <button type="button" className="linkish details-toggle" onClick={() => setDetails((v) => !v)} aria-expanded={details}>
             {details ? '詳細を閉じる' : '詳細'}
           </button>

@@ -222,7 +222,7 @@ Codex CLI ──[notify]───────┘
 表示名は JSONL ではなく `~/.agent-feed/session-meta.json` に持つ。
 
 ```json
-{ "sess-abc@kanban": { "name": "背中メニュー" } }
+{ "sess-abc@kanban": { "name": "背中メニュー", "persona": "ISTJ" } }
 ```
 
 キーはエンティティID（`<セッション>@<リポジトリ>`）。記録側（`record.py`）はこのファイルを知らないし、集計（`aggregate()`）も触らない。サーバが応答を返すときに載せるだけなので、消しても履歴は壊れない。
@@ -415,7 +415,7 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 - 1 行ずつ直列で回す。失敗した行（`claude` が無い、ログインしていない、90 秒で終わらない）は一言無しのままで、画面は本文を出す。理由は `~/.agent-feed/digest.log` に残る
 - 一言を作る `claude -p` が自分自身を記録しないよう、その子プロセスには `AGENT_FEED_SKIP=1` を渡す（`record.py` はこれが立っていると何も書かない）。`--bare` は OAuth を読まないので使えない。フックが指す `record.py` が古くてこれを知らない間は子のターンが JSONL に書かれてしまうが、子は `~/.agent-feed` を `cwd` にして起動するので、サーバは **`cwd` がそこの行を SAI 自身の雑音として読み飛ばす**（画面に出ず、要約もしない）。フックの checkout を最新にすれば書かれなくなる
 - **一言の中の参照はリンクになる**（`shared/refs.ts`）。`#123` / `PR #123` は行の `remote`（GitHub のとき）の issue へ、`owner/repo#123` はそのリポジトリへ、`PGR-10891` のような Linear の識別子は `https://linear.app/<workspace>/issue/…` へ、URL はそのまま。Linear の workspace（URL の `linear.app/<workspace>/` の部分）は行からは分からないので、ヘッダの入力欄で設定する（`settings.json` の `linear_workspace`。空ならリンクにしない）。`remote` の無い古い行では番号は文字のまま。URL の途中の `#` や `` `code` `` の中、`SHA-256` のような語は触らない。サイドバーの「最後の発言」はリンクにしない（項目自体がリンクなので）
-- **性格は MBTI の 16 タイプから**ヘッダの select で選ぶ（性格なしも選べる）。口調の指示だけが変わり、中身（何をしたか）は変えない。サーバが作るので設定はサーバ側（`~/.agent-feed/settings.json`、`GET/PUT /api/settings`）にあり、変えると**以後の行から**効く。過去の一言は作ったときの性格のまま。MBTI は口調の「型」として借りるだけで、診断や性格分析の話にはしない。口調の表は `shared/persona.ts`
+- **性格は MBTI の 16 タイプから**選ぶ（性格なしも選べる）。口調の指示だけが変わり、中身（何をしたか）は変えない。**全体の既定**はヘッダの select（`~/.agent-feed/settings.json` の `persona`、`GET/PUT /api/settings`）、**セッションごと**はチャット見出しの select（セッションのメタ `session-meta.json` の `persona`、`PUT /api/sessions/<id>/meta`）。セッションに設定が無ければ既定に従い、「既定」を選び直せば消える。サーバが作るときに行のセッションのメタを引いて決めるので、変えると**以後の行から**効く。過去の一言は作ったときの性格のまま（作り直さない）。MBTI は口調の「型」として借りるだけで、診断や性格分析の話にはしない。口調の表は `shared/persona.ts`
 
 ### エンドポイント
 
@@ -430,8 +430,8 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 | `POST /api/approvals` | 返信中の CLI（`server/approve-mcp.ts`）が許可・質問を預ける。body `{ "id", "tool_name", "input", "tool_use_id"? }`。返信を処理中でないエンティティは `409`。`201` で `{ "approval_id" }` |
 | `GET /api/approvals/<approval_id>?wait=1` | 答えが付いていれば `200` で `{ "behavior": "allow" \| "deny", "updatedInput"?, "message"? }`（渡したら消える）。まだなら `wait=1` で最大 20 秒待って `202`。無ければ `404` |
 | `POST /api/approvals/<approval_id>/answer` | 画面から答える。body `{ "behavior": "allow" \| "deny", "updatedInput"?, "message"? }`。`allow` で `updatedInput` を省けば元の入力のまま。別オリジンは `403`、答え済みは `404` |
-| `GET /api/sessions/<id>/meta` | 表示名・アーカイブ。`{ "id", "meta": { "name"?, "archived_at"? } }`。無ければ `meta` は `{}` |
-| `PUT /api/sessions/<id>/meta?days=90` | body `{ "name"?: "...", "archived_at"?: "<ISO>", "model"?: "opus" }` をいまの値に重ねる。省略したキーは据え置き、空文字や `null` は「消す」で、全部消えたらエントリごと消える。知らないキーは捨てる。名前は100文字まで、`archived_at` は読める時刻、`model` は英数字で始まる 64 文字までの名前（違えば `400`）。窓の中に無いセッションは `404`、別オリジンは `403` |
+| `GET /api/sessions/<id>/meta` | 表示名・アーカイブ・返信のモデル・一言の性格。`{ "id", "meta": { "name"?, "archived_at"?, "model"?, "persona"? } }`。無ければ `meta` は `{}` |
+| `PUT /api/sessions/<id>/meta?days=90` | body `{ "name"?: "...", "archived_at"?: "<ISO>", "model"?: "opus", "persona"?: "ISTJ" }` をいまの値に重ねる。省略したキーは据え置き、空文字や `null` は「消す」で、全部消えたらエントリごと消える。知らないキーは捨てる。名前は100文字まで、`archived_at` は読める時刻、`model` は英数字で始まる 64 文字までの名前、`persona` は `shared/persona.ts` にある id（違えば `400`）。窓の中に無いセッションは `404`、別オリジンは `403` |
 | `GET /api/sessions/<id>/icon?v=<mtime>` | アイコン画像そのもの（`image/png` など）。無ければ `404`。`v` がいまのファイルと同じなら `Cache-Control: immutable`、無ければ `no-store` |
 | `PUT /api/sessions/<id>/icon?days=90` | body は画像そのもの（PNG / JPEG / GIF / WebP、1MB まで。種類は中身で見る。画面からは加工後の 256px の PNG が来る）。`{ "id", "icon": "<URL>" }` を返す。画像でなければ `400`、大きすぎれば `413`、窓の中に無いセッションは `404`、別オリジンは `403` |
 | `DELETE /api/sessions/<id>/icon` | 画像を消す。`{ "id", "icon": null }`。無くても `200`。別オリジンは `403` |

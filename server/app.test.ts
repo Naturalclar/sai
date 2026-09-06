@@ -9,7 +9,8 @@ import type { Replying, ReplyResponse, SessionsResponse, SessionDetailResponse, 
 import { createApp, parseDays, revWith, selfUrl, sessionIdFrom, stripThinking } from './app.ts'
 import { BuildFreshness } from './buildFreshness.ts'
 import { Authenticator } from './auth.ts'
-import { DigestStore, Digester } from './digest.ts'
+import { DigestStore, Digester, personaResolver } from './digest.ts'
+import { META_FILE, MetaStore } from './meta.ts'
 import type { Summarizer } from './digest.ts'
 import { FeedStore } from './store.ts'
 import { localDate } from './aggregate.ts'
@@ -83,7 +84,12 @@ before(async () => {
   // ビルドが古いかは、この dist と temp の src ディレクトリの mtime で判定させる（ttl 0 で毎回見る）
   srcDir = join(dir, 'src')
   await mkdir(srcDir)
-  digester = new Digester(new DigestStore(join(feedDir, 'digest.jsonl')), summarizer, { enabled: true, model: 'fake', persona: async () => 'none' })
+  // 性格は、セッションのメタ（アプリと同じ session-meta.json）に persona があればそれ、無ければ 'none'
+  digester = new Digester(new DigestStore(join(feedDir, 'digest.jsonl')), summarizer, {
+    enabled: true,
+    model: 'fake',
+    persona: personaResolver({ settings: { get: async () => ({ persona: 'none' }) }, meta: new MetaStore(join(feedDir, META_FILE)) }),
+  })
   // 認証は whois を差し替える: 100.64.0.1 の持ち主は me@example.com、それ以外は引けない
   auth = new Authenticator(async (addr) => (addr === '100.64.0.1' ? 'me@example.com' : null), 30_000)
   const app = createApp(store, distDir, runner, undefined, new BuildFreshness(distDir, [srcDir], 0), digester, auth)
@@ -765,13 +771,41 @@ test('digest: 起動後に増えた行に一言が付いて feed / 詳細 / 一�
   assert.equal(mine.persona, 'none')
   assert.equal(mine.summary, '一言: PR #35 を')
 
+  // セッションに性格を付けると、そのセッションの行だけその口調で作られる（他は既定のまま）。作った一言にはその性格が残る
+  const meta = await fetch(`${base}/api/sessions/D2%40r/meta`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ persona: 'ISTJ' }) })
+  assert.equal(meta.status, 404, 'まだ窓に無いセッションには付けられない')
+  await appendFile(path, JSON.stringify(row(new Date(now.getTime() + 3000), 'D2', { repo: 'r', text: '最初のターン', user_text: 'やって' })) + '\n')
+  await get('/api/feed?days=3')
+  await digester.drain()
+  const meta2 = await fetch(`${base}/api/sessions/D2%40r/meta`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ persona: 'ISTJ' }) })
+  assert.equal(meta2.status, 200)
+  assert.equal(((await meta2.json()) as SessionMetaResponse).meta.persona, 'ISTJ')
+  const promptsMid = summarizer.prompts.length
+  await appendFile(path, JSON.stringify(row(new Date(now.getTime() + 4000), 'D2', { repo: 'r', text: 'ISTJ で作る行', user_text: 'やって' })) + '\n')
+  await appendFile(path, JSON.stringify(row(new Date(now.getTime() + 5000), 'D1', { repo: 'r', text: '既定で作る行', user_text: 'やって' })) + '\n')
+  await get('/api/feed?days=3')
+  await digester.drain()
+  assert.equal(summarizer.prompts.length, promptsMid + 2)
+  // 積まれる順は問わない。本文で見分ける
+  const recent = summarizer.prompts.slice(-2)
+  const p2 = recent.find((p) => p.includes('ISTJ で作る行'))!
+  const p1 = recent.find((p) => p.includes('既定で作る行'))!
+  assert.match(p2, /淡々と事実だけ/, 'D2 は ISTJ の口調')
+  assert.doesNotMatch(p1, /淡々と事実だけ/, 'D1 は既定（none）のまま')
+  const saved2 = (await readFile(join(feedDir, 'digest.jsonl'), 'utf-8')).trim().split('\n').map((l) => JSON.parse(l) as { key: string; persona: string })
+  assert.equal(saved2.find((e) => e.key.startsWith('D2@r|') && e.key.endsWith(new Date(now.getTime() + 4000).toISOString().replace(/\.\d{3}Z$/, '+00:00')))?.persona, 'ISTJ')
+  // 既定に戻す（空を送る）
+  const meta3 = await fetch(`${base}/api/sessions/D2%40r/meta`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ persona: '' }) })
+  assert.equal(((await meta3.json()) as SessionMetaResponse).meta.persona, undefined)
+  assert.equal((await fetch(`${base}/api/sessions/D2%40r/meta`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ persona: 'XXXX' }) })).status, 400)
+
   // backfill: 起動時にあった行も、まだ無いものを新しい順に n 件
   const bf = await fetch(`${base}/api/digest/backfill?n=2&days=7`, { method: 'POST' })
   assert.equal(bf.status, 202)
   assert.deepEqual(await bf.json(), { queued: 2 } satisfies DigestBackfillResponse)
   await digester.drain()
   const after = (await (await get('/api/feed?days=3')).json()) as FeedResponse
-  assert.equal(after.rows.filter((r) => r.summary).length, withBefore + 1 + 2, '前からあった分 + D1 + backfill の 2 件')
+  assert.equal(after.rows.filter((r) => r.summary).length, withBefore + 1 + 3 + 2, '前からあった分 + D1 + 性格の確認で足した 3 行 + backfill の 2 件')
   assert.equal((await fetch(`${base}/api/digest/backfill?n=1`, { method: 'POST', headers: { Origin: 'http://evil.local' } })).status, 403)
   assert.equal((await fetch(`${base}/api/digest/backfill`, { method: 'GET' })).status, 405)
 

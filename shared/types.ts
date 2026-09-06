@@ -132,6 +132,8 @@ export interface SessionMeta {
    * Claude は `--resume` に `--model` を付けるとセッションのモデル設定そのものが変わる（端末で再開したときもそのモデル）
    */
   model?: string
+  /** このセッションの一言（digest）の性格。無ければ全体の既定（settings.json の persona）に従う。変えると以後の行から効く */
+  persona?: PersonaId
 }
 
 /**

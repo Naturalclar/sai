@@ -212,6 +212,7 @@
   /* 角丸は加工で焼き込む値（shared/icon.ts の ICON_RADIUS_RATIO = 20%）と同じ比率。加工前の古い画像も同じ見た目になる */
   img.icon { width: 16px; height: 16px; object-fit: cover; border-radius: 20%; vertical-align: -3px; }
   .channels .t .icon { margin-right: 4px; }
+  .chat-head .session-persona .err { color: var(--claude); font-size: 12px; margin-left: 6px; }
   .chat-head .session-name { display: flex; align-items: center; gap: 8px; color: var(--ink); font-size: 14px; margin: 0; flex-wrap: wrap; }
   .chat-head .session-name img.icon { width: 28px; height: 28px; border-radius: 20%; vertical-align: middle; }
   .chat-head .session-name .file { display: none; }

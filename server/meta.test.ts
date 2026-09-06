@@ -36,6 +36,18 @@ test('mergeMeta: 無いキーは据え置き、null / 空文字は消す', () =>
   assert.notEqual(mergeMeta(cur, null).error, '')
 })
 
+test('mergeMeta: persona は shared/persona.ts の id。空 / null で消え（既定に従う）、知らない値は弾く。他のキーは触らない', () => {
+  const cur = { name: 'A' }
+  assert.deepEqual(mergeMeta(cur, { persona: 'ISTJ' }).meta, { name: 'A', persona: 'ISTJ' })
+  assert.deepEqual(mergeMeta(cur, { persona: ' none ' }).meta, { name: 'A', persona: 'none' }, '「性格なし」も選べる')
+  assert.deepEqual(mergeMeta({ name: 'A', persona: 'ISTJ' }, { persona: '' }).meta, { name: 'A' })
+  assert.deepEqual(mergeMeta({ name: 'A', persona: 'ISTJ' }, { persona: null }).meta, { name: 'A' })
+  assert.deepEqual(mergeMeta({ name: 'A', persona: 'ISTJ' }, { name: 'B' }).meta, { name: 'B', persona: 'ISTJ' }, '名前だけ変えても性格は残る')
+  assert.notEqual(mergeMeta(cur, { persona: 'XXXX' }).error, '')
+  assert.notEqual(mergeMeta(cur, { persona: 1 }).error, '')
+  assert.equal(isEmptyMeta({ persona: 'ISTJ' }), false)
+})
+
 test('mergeMeta: model は別名かモデル名。空 / null で消え、変な文字と長すぎるものは弾く。他のキーは触らない', () => {
   const cur = { name: 'A' }
   assert.deepEqual(mergeMeta(cur, { model: ' opus ' }).meta, { name: 'A', model: 'opus' })

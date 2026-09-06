@@ -1,5 +1,6 @@
-// セッションのメタ（ブラウザから付ける表示名・アーカイブ）の検査。アイコン画像は別（shared/icon.ts、server/icons.ts）。
+// セッションのメタ（ブラウザから付ける表示名・アーカイブ・返信のモデル・一言の性格）の検査。アイコン画像は別（shared/icon.ts、server/icons.ts）。
 // サーバの PUT 受付（server/app.ts）と画面の入力欄（web/src/MetaEditor.tsx）が同じ関数を使い、ずれない。
+import { isPersonaId } from './persona.ts'
 import type { SessionMeta } from './types.ts'
 
 export const META_NAME_MAX = 100
@@ -49,6 +50,17 @@ export function mergeMeta(current: SessionMeta, input: unknown): { meta: Session
     else delete meta.model
   }
 
+  if (raw.persona !== undefined) {
+    if (raw.persona !== null && typeof raw.persona !== 'string') return { meta: {}, error: 'persona は文字列で送ってください' }
+    const persona = (raw.persona ?? '').trim()
+    if (persona) {
+      if (!isPersonaId(persona)) return { meta: {}, error: 'persona が不明です（shared/persona.ts にある id を送ってください）' }
+      meta.persona = persona
+    } else {
+      delete meta.persona
+    }
+  }
+
   return { meta, error: '' }
 }
 
@@ -59,5 +71,5 @@ export function normalizeMeta(input: unknown): { meta: SessionMeta; error: strin
 
 /** 何も付いていないか */
 export function isEmptyMeta(meta: SessionMeta | undefined): boolean {
-  return !meta || (!meta.name && !meta.archived_at && !meta.model)
+  return !meta || (!meta.name && !meta.archived_at && !meta.model && !meta.persona)
 }

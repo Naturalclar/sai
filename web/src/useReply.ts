@@ -100,8 +100,13 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
     } catch (err) {
       // 409（前の返信を処理中）もここ。次のポーリングでサーバの replying が付いて入力欄は閉じる
       setSent((list) => list.filter((s) => s !== entry))
-      // 端末の入力欄に打ちかけがあるだけなら失敗ではなく、消して送るかを聞く
+      // 端末の入力欄に打ちかけがあるだけなら失敗ではなく、消して送るかを聞く。
+      // ただし「消して送る」で送り直してなお残っているなら、同じ確認を出し直さず失敗として見せる（消せない端末）
       if (err instanceof ApiError && err.code === 'terminal_typed') {
+        if (options.replaceTyped) {
+          setFailed({ id, message: `端末の打ちかけを消せなかった（まだ残っている: ${(err.typed ?? '').split('\n')[0]}）。端末側で消してから送ってください` })
+          return 'failed'
+        }
         setConfirm({ id, text, typed: err.typed ?? '' })
         return 'confirm'
       }

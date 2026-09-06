@@ -324,7 +324,7 @@
   .pending-line.long .time { color: var(--synth); font-weight: 600; }
   .reply { position: relative; display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
   /* 返信欄は 1 つのバブル（Slack / Claude の返信欄と同じ）: 枠は .row に 1 つだけ。上の行が textarea（全幅、枠なし、
-     入力に合わせて伸びる）、下の行が注意（左）と送信ボタン（右）。フォーカスは枠の色で示す。
+     入力に合わせて伸びる）、下の行が送信ボタン（右端）。注意文はバブルの上。フォーカスは枠の色で示す。
      textarea を全幅にするのは、送信を右に並べると画面幅より狭くなり iOS Safari がフォーカスで拡大することがあるため（#122） */
   .reply .row { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 8px 10px 6px; }
   .reply .row:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent); }
@@ -350,7 +350,8 @@
   .mention li .title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
   .mention li .why { font-size: 11px; color: var(--synth); white-space: nowrap; }
   .mention li .icon, .reply .target .icon { flex: none; line-height: 1; }
-  .reply .note { color: var(--muted); font-size: 11px; flex: 1 1 auto; min-width: 0; order: 2; }
+  /* どこで回すかの短い注意。入力欄（バブル）の上に 1 行 */
+  .reply .note { color: var(--muted); font-size: 11px; padding: 0 2px; }
   .notice { color: var(--muted); font-size: 12px; margin-top: 10px; }
   .notice.error { color: var(--claude); }
   /* 端末の打ちかけを消して送るかの確認（#117） */

@@ -192,6 +192,10 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
           )}
         </div>
       )}
+      {/* どこで回すかの短い注意。入力欄の上に 1 行。詳しい説明（送った返信は対話側の画面には出ない、など）は README の「返信」の節 */}
+      <div className="note">
+        {terminal === true ? '端末（tmux）に打ち込む' : terminal === false ? '別プロセスで回す。端末には出ない' : '端末で開いていれば打ち込む'}
+      </div>
       <div className="row">
         <textarea
           ref={ref}
@@ -213,15 +217,6 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
           // フィードでは送信中でも別の返信先へ打てるよう入力欄は止めない（送信ボタンだけ止める）
           disabled={busy && !mention}
         />
-        {/* 送った返信は対話側の画面には出ない（トランスクリプトには追記される）。README の「返信」の節と同じ。
-            .row が 1 つのバブルで、textarea の下の行に注意（左）と送信ボタン（右）が並ぶ */}
-        <div className="note">
-          {terminal === true
-            ? '端末（tmux）で開いているセッションに打ち込む。端末にも入力と返答が出る'
-            : terminal === false
-              ? '別プロセスで 1 ターン回す。開いている端末や Desktop の画面には出ない（履歴には残るので、開き直せば見える）'
-              : '端末（tmux）で開いているセッションにはそのまま打ち込む。そうでなければ別プロセスで回す（その場合、開いている端末の画面には出ない）'}
-        </div>
         <button type="submit" disabled={busy || !(mention?.picked ? stripMention(text, mention.picked.label) : text).trim()}>
           {busy ? (mention ? `#${repo} は処理中` : '送信中…') : '送信'}
         </button>

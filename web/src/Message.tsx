@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { hm } from './format'
 import { Markdown } from './Markdown'
 import { ThinkingBlock } from './ThinkingBlock'
+import { useReveal } from './useReveal'
 
 // 折りたたむかは描画前の生の長さで見る（コードブロック1つで8行を超えても折りたたむ。今まで通り）
 const isLong = (text: string) => text.length > 600 || text.split('\n').length > 8
@@ -30,6 +31,9 @@ export function Message({ ts, text, markdown, waiting, resolved, thinking, think
   // 一言があるとき、元の本文（詳細）を開いているか
   const [details, setDetails] = useState(false)
   const long = isLong(text)
+  // 開いたら中身が見えるところまでスクロールする（#119）。詳細は .details、「もっと見る」は本文そのもの
+  const [detailsRef, summaryRef] = useReveal<HTMLDivElement, HTMLDivElement>(details)
+  const [bodyRef, moreRef] = useReveal<HTMLDivElement, HTMLButtonElement>(open)
   if (waiting) {
     return (
       <div className={`msg waiting${resolved ? ' resolved' : ''}`}>
@@ -44,17 +48,17 @@ export function Message({ ts, text, markdown, waiting, resolved, thinking, think
       <div className="msg">
         <span className="time">{hm(ts)}</span>
         {thinking && <ThinkingBlock text={thinking} openAll={thinkingOpen} />}
-        <div className="summary">
+        <div className="summary" ref={summaryRef}>
           <span className="line">{summary}</span>
           <button type="button" className="linkish details-toggle" onClick={() => setDetails((v) => !v)} aria-expanded={details}>
             {details ? '詳細を閉じる' : '詳細'}
           </button>
         </div>
         {details && (
-          <div className="details">
-            <div className={`body${long && !open ? ' clamped' : ''}`}>{markdown ? <Markdown text={text} /> : text}</div>
+          <div className="details" ref={detailsRef}>
+            <div className={`body${long && !open ? ' clamped' : ''}`} ref={bodyRef}>{markdown ? <Markdown text={text} /> : text}</div>
             {long && (
-              <button type="button" className="more" onClick={() => setOpen((v) => !v)}>
+              <button type="button" className="more" onClick={() => setOpen((v) => !v)} ref={moreRef}>
                 {open ? '折りたたむ' : 'もっと見る'}
               </button>
             )}
@@ -69,12 +73,12 @@ export function Message({ ts, text, markdown, waiting, resolved, thinking, think
       {model && <span className="tag model" title="このターンからモデルが変わった">{model}</span>}
       {thinking && <ThinkingBlock text={thinking} openAll={thinkingOpen} />}
       {text ? (
-        <div className={`body${long && !open ? ' clamped' : ''}`}>{markdown ? <Markdown text={text} /> : text}</div>
+        <div className={`body${long && !open ? ' clamped' : ''}`} ref={bodyRef}>{markdown ? <Markdown text={text} /> : text}</div>
       ) : (
         <div className="empty-text">(本文なし)</div>
       )}
       {long && (
-        <button type="button" className="more" onClick={() => setOpen((v) => !v)}>
+        <button type="button" className="more" onClick={() => setOpen((v) => !v)} ref={moreRef}>
           {open ? '折りたたむ' : 'もっと見る'}
         </button>
       )}

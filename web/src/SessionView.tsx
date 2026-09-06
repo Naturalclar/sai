@@ -26,7 +26,7 @@ import type { PaneProps } from './App'
 const NO_REPLYING = {}
 const NO_APPROVALS: never[] = []
 
-export function SessionView({ id, onStatus, onOpenSidebar }: { id: string } & PaneProps) {
+export function SessionView({ id, onStatus, onOpenSidebar, linear }: { id: string } & PaneProps) {
   const { data, error, updatedAt } = usePolling(() => api.session(id), [id])
   useEffect(() => onStatus(updatedAt, error), [updatedAt, error, onStatus])
 
@@ -86,6 +86,7 @@ export function SessionView({ id, onStatus, onOpenSidebar }: { id: string } & Pa
           showChannel={false}
           sessions={[data.session]}
           profile={data.profile}
+          linear={linear}
           showThinking
           thinkingOpen={thinkingUi.open}
           trailer={

@@ -10,6 +10,7 @@ import { UserMenu } from './UserMenu'
 import { api, type SessionFilters } from './api'
 import { isTypingTarget, navAction, neighborSessionId } from './sessionNav'
 import { PersonaSelect } from './PersonaSelect'
+import { LinearWorkspaceInput } from './LinearWorkspaceInput'
 import { useSettings } from './useSettings'
 import { RECORD_VERSION } from '../../shared/types.ts'
 
@@ -20,6 +21,8 @@ export interface StatusProps {
 /** 右ペイン（チャット）に渡すもの。「← 一覧」が広い画面ではサイドバーを開くだけなので、その口も渡す */
 export interface PaneProps extends StatusProps {
   onOpenSidebar: () => void
+  /** Linear の workspace（設定）。一言の中の PGR-123 のリンク先。空ならリンクにしない */
+  linear: string
 }
 
 const DEFAULT_FILTERS: SessionFilters = { repo: '', agent: '', date: '', days: '7', archived: '' }
@@ -94,7 +97,8 @@ export function App() {
   }, [route])
 
   // 一言コメント（digest）の性格。サーバ側の設定なので取って来て、変えたら PUT。SAI_DIGEST=1 でないときは出さない
-  const { settings, busy: settingsBusy, error: settingsError, setPersona } = useSettings()
+  const { settings, busy: settingsBusy, error: settingsError, setPersona, setLinearWorkspace } = useSettings()
+  const linear = settings?.linear_workspace ?? ''
   const [backfill, setBackfill] = useState<{ busy: boolean; note: string }>({ busy: false, note: '' })
   const runBackfill = async () => {
     setBackfill({ busy: true, note: '' })
@@ -126,6 +130,7 @@ export function App() {
         {settings?.digest && (
           <div className="digest-ctl" title={settingsError || `一言コメント: ${settings.model}`}>
             <PersonaSelect value={settings.persona} busy={settingsBusy} onChange={(p) => void setPersona(p)} />
+            <LinearWorkspaceInput value={settings.linear_workspace} busy={settingsBusy} onChange={(ws) => void setLinearWorkspace(ws)} />
             <button type="button" className="linkish" onClick={() => void runBackfill()} disabled={backfill.busy} title="まだ一言が無い直近 20 件に一言を付ける（起動後に増えた行には自動で付く）">
               {backfill.busy ? '…' : '直近20件に一言'}
             </button>
@@ -163,9 +168,9 @@ export function App() {
         </aside>
         <div className="pane">
           {route.name === 'session' ? (
-            <SessionView id={route.id} onStatus={onStatus} onOpenSidebar={openSidebar} />
+            <SessionView id={route.id} onStatus={onStatus} onOpenSidebar={openSidebar} linear={linear} />
           ) : (
-            <FeedView repo={filters.repo} sessions={list.data?.sessions} onStatus={onStatus} onOpenSidebar={openSidebar} />
+            <FeedView repo={filters.repo} sessions={list.data?.sessions} onStatus={onStatus} onOpenSidebar={openSidebar} linear={linear} />
           )}
         </div>
       </main>

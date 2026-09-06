@@ -8,7 +8,7 @@ export type SessionSource = 'payload' | 'rollout' | 'synth' | ''
  * 行の形の版。feed/record.py の RECORD_VERSION と同じ値（ずれると pnpm test:feed が止まる）。
  * 行の形を変えるたびに上げる。画面は窓の中の一番新しい行の v がこれより古いと「record.py が古い」と出す
  */
-export const RECORD_VERSION = 4
+export const RECORD_VERSION = 5
 
 /** ~/.agent-feed/YYYY-MM-DD.jsonl の1行 = 1ターン */
 export interface FeedRow {
@@ -18,6 +18,8 @@ export interface FeedRow {
   agent: Agent
   repo: string
   branch: string
+  /** origin の URL（https://host/owner/repo に正規化。record.py の normalize_remote）。無い行は古い record.py が書いたもの。一言の #123 のリンク先に使う */
+  remote?: string
   session: string
   session_source: SessionSource
   cwd: string
@@ -367,11 +369,15 @@ export interface SettingsResponse {
   /** 一言を作る配線が有効か（SAI_DIGEST=1） */
   digest: boolean
   model: string
+  /** Linear の workspace（URL の linear.app/<workspace>/ の部分）。一言の中の PGR-123 のような識別子のリンク先。空なら組まない */
+  linear_workspace: string
 }
 
-/** PUT /api/settings の body */
+/** PUT /api/settings の body。省略したキーは据え置き */
 export interface SettingsRequest {
   persona?: PersonaId
+  /** 空文字で「設定なし」に戻す */
+  linear_workspace?: string
 }
 
 /** POST /api/digest/backfill?n=20 の応答。列に積んだ数 */

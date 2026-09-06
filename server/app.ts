@@ -40,6 +40,8 @@ import type { Digester } from './digest.ts'
 import { META_FILE, MetaStore } from './meta.ts'
 import { PROFILE_FILE, ProfileStore } from './profile.ts'
 import { SETTINGS_FILE, SettingsStore } from './settings.ts'
+import type { Settings } from './settings.ts'
+import { isLinearWorkspace } from '../shared/refs.ts'
 import { ProcessRunner, replyCommand } from './runner.ts'
 import { alive, RealTmux, realPs, TerminalBusy, TerminalGone, TerminalReplies, typeInto } from './terminal.ts'
 import type { PsFn, Tmux } from './terminal.ts'
@@ -298,9 +300,20 @@ export function createApp(
       return error(res, 400, err instanceof Error ? err.message : 'bad body')
     }
     if (!body || typeof body !== 'object' || Array.isArray(body)) return error(res, 400, 'body はオブジェクトで送ってください')
+    // 省略したキーは据え置き。persona と linear_workspace のどちらか（か両方）
     const b = body as Partial<SettingsRequest>
-    if (!isPersonaId(b.persona)) return error(res, 400, 'persona が不明です（shared/persona.ts にある id を送ってください）')
-    await settingsStore.set({ persona: b.persona })
+    const patch: Partial<Settings> = {}
+    if (b.persona !== undefined) {
+      if (!isPersonaId(b.persona)) return error(res, 400, 'persona が不明です（shared/persona.ts にある id を送ってください）')
+      patch.persona = b.persona
+    }
+    if (b.linear_workspace !== undefined) {
+      const ws = typeof b.linear_workspace === 'string' ? b.linear_workspace.trim().toLowerCase() : b.linear_workspace
+      if (!isLinearWorkspace(ws)) return error(res, 400, 'linear_workspace は URL の linear.app/<workspace>/ の部分（小文字の英数字と -）で送ってください')
+      patch.linear_workspace = ws
+    }
+    if (Object.keys(patch).length === 0) return error(res, 400, 'persona か linear_workspace を送ってください')
+    await settingsStore.set(patch)
     return json(res, await settingsPayload())
   }
 

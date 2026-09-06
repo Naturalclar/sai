@@ -37,7 +37,7 @@ from pathlib import Path
 
 # 行の形の版。行に `v` として載せる。行の形（キー）を変えるたびに上げ、shared/types.ts の RECORD_VERSION と揃える
 # （ずれると feed/test_record.py が止まる）。画面は窓の中の一番新しい行の v が古いと「record.py が古い」と出す
-RECORD_VERSION = 4
+RECORD_VERSION = 5
 MAX_TEXT = 2000
 MAX_USER_TEXT = 2000
 MAX_THINKING = 4000
@@ -158,6 +158,39 @@ def _git(cwd: str, *args: str) -> str:
     except Exception:
         return ""
     return out.stdout.strip() if out.returncode == 0 else ""
+
+
+def normalize_remote(url: str) -> str:
+    """origin の URL を https://host/owner/repo の形にする。
+    https://host/o/r.git、git@host:o/r.git、ssh://git@host/o/r を同じ形にし、認証情報（user:token@）とポート、
+    末尾の .git は落とす。読めない形（ローカルパスなど）は空。画面が一言の中の #123 のリンク先を組むのに使う。"""
+    u = (url or "").strip()
+    if not u:
+        return ""
+    if "://" in u:
+        scheme, rest = u.split("://", 1)
+        if scheme not in ("http", "https", "ssh", "git"):
+            return ""
+        host_part, _, path = rest.partition("/")
+        host = host_part.rsplit("@", 1)[-1].split(":")[0]
+    else:
+        m = re.match(r"^(?:[\w.-]+@)?([\w.-]+):(.+)$", u)
+        if not m:
+            return ""
+        host, path = m.group(1), m.group(2)
+    path = path.strip("/")
+    if path.endswith(".git"):
+        path = path[:-4]
+    if not host or not path or "/" not in path:
+        return ""
+    return f"https://{host}/{path}"
+
+
+def git_remote(cwd: str) -> str:
+    """origin の URL（正規化済み）。無ければ空"""
+    if not cwd or not os.path.isdir(cwd):
+        return ""
+    return normalize_remote(_git(cwd, "remote", "get-url", "origin"))
 
 
 def git_facts(cwd: str) -> tuple[str, str]:
@@ -718,6 +751,7 @@ def build_row(payload: dict, now: datetime, directory: Path) -> dict | None:
 
     cwd = detect_cwd(payload)
     repo, branch = git_facts(cwd)
+    remote = git_remote(cwd)
     text = ""
     user_text = ""
     thinking = ""
@@ -809,6 +843,8 @@ def build_row(payload: dict, now: datetime, directory: Path) -> dict | None:
         "agent": agent,
         "repo": repo,
         "branch": branch,
+        # origin の URL（https://host/owner/repo に正規化）。画面が一言の中の #123 をこのリポジトリの issue に向けるのに使う
+        "remote": remote,
         "session": session,
         "session_source": source,
         "cwd": cwd,

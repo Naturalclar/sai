@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { api, type PersonaId, type SettingsResponse } from './api'
 
 /**
- * サーバ側の設定（一言の性格）。起動時に 1 回取り、変えたら PUT して返ってきた値で置き換える。
+ * サーバ側の設定（一言の性格、Linear の workspace）。起動時に 1 回取り、変えたら PUT して返ってきた値で置き換える。
  * ポーリングはしない（性格は自分しか変えない）
  */
 export function useSettings() {
@@ -33,5 +33,17 @@ export function useSettings() {
     }
   }, [])
 
-  return { settings, busy, error, setPersona }
+  const setLinearWorkspace = useCallback(async (linear_workspace: string) => {
+    setBusy(true)
+    setError('')
+    try {
+      setSettings(await api.setSettings({ linear_workspace }))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }, [])
+
+  return { settings, busy, error, setPersona, setLinearWorkspace }
 }

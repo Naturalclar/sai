@@ -41,7 +41,7 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: node:test（server/**/*.test.ts）
+      - name: node:test（server/ shared/ web/src/ の *.test.ts）
         run: pnpm test
 
       - name: oxlint

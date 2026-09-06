@@ -411,7 +411,7 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 エージェントの返答は長い説明になりがちで、フィードを眺めるには重い。`SAI_DIGEST=1` でサーバを起動すると、**新しく届いたターン完了の行**ごとに本文を **1〜2 文の一言コメント**（「#35 マージしたよ！ブランチも消しといた。次は #31 やる？」のような）に言い換えて、バブルの本文をそれにする。元の本文は消えず、一言の横の「詳細」で今までどおり Markdown で開ける。自分の入力と待ちバブルは変えない。一覧の「最後の発言」も一言があればそれになる。
 
 - **作るのは LLM**で、返信と同じ `claude` CLI を `claude -p --model haiku --output-format json` で叩く（`SAI_CLAUDE_BIN` も効く。モデルは `SAI_DIGEST_MODEL` で変えられる）。結果は `~/.agent-feed/digest.jsonl` に追記する。JSONL（記録）は触らず、派生データなので消しても履歴は壊れない
-- **既定はオフ。** トークンと時間を使うのと、本文を LLM に送るので、黙って走らせない。オンにしても**サーバが起動したあとに増えた行**だけ作る（過去の行は作らない）。ヘッダの「直近20件に一言」で、まだ無い直近 20 件だけ積める
+- **既定はオフ。** トークンと時間を使うのと、本文を LLM に送るので、黙って走らせない。オンにしても**サーバが起動したあとに増えた行**だけ作る（過去の行は作らない）
 - 1 行ずつ直列で回す。失敗した行（`claude` が無い、ログインしていない、90 秒で終わらない）は一言無しのままで、画面は本文を出す。理由は `~/.agent-feed/digest.log` に残る
 - 一言を作る `claude -p` が自分自身を記録しないよう、その子プロセスには `AGENT_FEED_SKIP=1` を渡す（`record.py` はこれが立っていると何も書かない）。`--bare` は OAuth を読まないので使えない。フックが指す `record.py` が古くてこれを知らない間は子のターンが JSONL に書かれてしまうが、子は `~/.agent-feed` を `cwd` にして起動するので、サーバは **`cwd` がそこの行を SAI 自身の雑音として読み飛ばす**（画面に出ず、要約もしない）。フックの checkout を最新にすれば書かれなくなる
 - **一言の中の参照はリンクになる**（`shared/refs.ts`）。`#123` / `PR #123` は行の `remote`（GitHub のとき）の issue へ、`owner/repo#123` はそのリポジトリへ、`PGR-10891` のような Linear の識別子は `https://linear.app/<workspace>/issue/…` へ、URL はそのまま。Linear の workspace（URL の `linear.app/<workspace>/` の部分）は行からは分からないので、ヘッダの入力欄で設定する（`settings.json` の `linear_workspace`。空ならリンクにしない）。`remote` の無い古い行では番号は文字のまま。URL の途中の `#` や `` `code` `` の中、`SHA-256` のような語は触らない。サイドバーの「最後の発言」はリンクにしない（項目自体がリンクなので）
@@ -441,7 +441,6 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 | `PUT /api/profile/icon` / `DELETE /api/profile/icon` | 画像を置く / 消す（受け付ける種類・上限はセッションのアイコンと同じ）。`{ "profile": … }` を返す。別オリジンは `403` |
 | `GET /api/settings` | サーバ側の設定。`{ "persona", "digest", "model", "linear_workspace" }`。`digest` は一言の配線が有効か（`SAI_DIGEST=1`） |
 | `PUT /api/settings` | body `{ "persona": "ENFP" }` / `{ "linear_workspace": "acme" }` をいまの値に重ねる（省略は据え置き）。`shared/persona.ts` に無い性格、`linear.app/<workspace>/` の形でない workspace は `400`（空文字は「設定なし」）。別オリジンは `403` |
-| `POST /api/digest/backfill?n=20&days=7` | まだ一言が無い直近 `n` 件を作る列に積む。`{ "queued" }` を `202` で返す。無効なら `400`、別オリジンは `403` |
 | `GET /api/feed?days=3&repo=` | 生の行と `replying`。アーカイブ済みセッションの行は除く |
 
 返信の実行は `server/runner.ts`。`claude` / `codex` は `detached` で起動して待たず、stdout/stderr は `~/.agent-feed/reply.log` に追記する（うまく動かないときはここを見る）。同じエンティティに同時に2本は走らせない。

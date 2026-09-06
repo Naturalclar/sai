@@ -5,7 +5,7 @@ import type { Server } from 'node:http'
 import { mkdtemp, rm, writeFile, appendFile, mkdir, stat, utimes, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { Replying, ReplyResponse, SessionsResponse, SessionDetailResponse, SessionIconResponse, SessionMetaResponse, FeedResponse, SettingsResponse, DigestBackfillResponse, HealthResponse } from '../shared/types.ts'
+import type { Replying, ReplyResponse, SessionsResponse, SessionDetailResponse, SessionIconResponse, SessionMetaResponse, FeedResponse, SettingsResponse, HealthResponse } from '../shared/types.ts'
 import { createApp, parseDays, revWith, selfUrl, sessionIdFrom, stripThinking } from './app.ts'
 import { BuildFreshness } from './buildFreshness.ts'
 import { Authenticator } from './auth.ts'
@@ -732,7 +732,7 @@ test('GET/PUT /api/settings: 性格と Linear の workspace。知らない値は
   await put({ persona: 'none' })
 })
 
-test('digest: 起動後に増えた行に一言が付いて feed / 詳細 / 一覧に載り、rev が変わる。backfill は既にあった行も積む', async () => {
+test('digest: 起動後に増えた行に一言が付いて feed / 詳細 / 一覧に載り、rev が変わる', async () => {
   const now = new Date()
   const feedBefore = (await (await get('/api/feed?days=3')).json()) as FeedResponse
   // 起動時（最初の /api の応答）にあった行には付かない。前のテストが追記した行は「起動後に増えた行」なので付いていてよい
@@ -799,15 +799,11 @@ test('digest: 起動後に増えた行に一言が付いて feed / 詳細 / 一�
   assert.equal(((await meta3.json()) as SessionMetaResponse).meta.persona, undefined)
   assert.equal((await fetch(`${base}/api/sessions/D2%40r/meta`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ persona: 'XXXX' }) })).status, 400)
 
-  // backfill: 起動時にあった行も、まだ無いものを新しい順に n 件
-  const bf = await fetch(`${base}/api/digest/backfill?n=2&days=7`, { method: 'POST' })
-  assert.equal(bf.status, 202)
-  assert.deepEqual(await bf.json(), { queued: 2 } satisfies DigestBackfillResponse)
+  // 起動時にあった行には付かない（増えた分だけ）
   await digester.drain()
   const after = (await (await get('/api/feed?days=3')).json()) as FeedResponse
-  assert.equal(after.rows.filter((r) => r.summary).length, withBefore + 1 + 3 + 2, '前からあった分 + D1 + 性格の確認で足した 3 行 + backfill の 2 件')
-  assert.equal((await fetch(`${base}/api/digest/backfill?n=1`, { method: 'POST', headers: { Origin: 'http://evil.local' } })).status, 403)
-  assert.equal((await fetch(`${base}/api/digest/backfill`, { method: 'GET' })).status, 405)
+  assert.equal(after.rows.filter((r) => r.summary).length, withBefore + 1 + 3, '前からあった分 + D1 + 性格の確認で足した 3 行')
+  assert.equal((await fetch(`${base}/api/digest/backfill`, { method: 'POST' })).status, 405, 'backfill の口は無い')
 
   // 失敗した行は無いまま（画面は本文を出す）
   summarizer.fail = true

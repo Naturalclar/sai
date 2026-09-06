@@ -382,11 +382,6 @@ export interface SettingsRequest {
   linear_workspace?: string
 }
 
-/** POST /api/digest/backfill?n=20 の応答。列に積んだ数 */
-export interface DigestBackfillResponse {
-  queued: number
-}
-
 export interface SessionFilters {
   repo: string
   agent: string

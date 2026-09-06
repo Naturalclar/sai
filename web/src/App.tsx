@@ -101,16 +101,6 @@ export function App() {
   // 一言コメント（digest）の性格。サーバ側の設定なので取って来て、変えたら PUT。SAI_DIGEST=1 でないときは出さない
   const { settings, busy: settingsBusy, error: settingsError, setPersona, setLinearWorkspace } = useSettings()
   const linear = settings?.linear_workspace ?? ''
-  const [backfill, setBackfill] = useState<{ busy: boolean; note: string }>({ busy: false, note: '' })
-  const runBackfill = async () => {
-    setBackfill({ busy: true, note: '' })
-    try {
-      const r = await api.backfillDigest(20)
-      setBackfill({ busy: false, note: r.queued ? `${r.queued} 件を作っています` : '作る行がありません' })
-    } catch (err) {
-      setBackfill({ busy: false, note: err instanceof Error ? err.message : String(err) })
-    }
-  }
 
   return (
     <>
@@ -133,10 +123,7 @@ export function App() {
           <div className="digest-ctl" title={settingsError || `一言コメント: ${settings.model}`}>
             <PersonaSelect value={settings.persona} busy={settingsBusy} onChange={(p) => void setPersona(p)} />
             <LinearWorkspaceInput value={settings.linear_workspace} busy={settingsBusy} onChange={(ws) => void setLinearWorkspace(ws)} />
-            <button type="button" className="linkish" onClick={() => void runBackfill()} disabled={backfill.busy} title="まだ一言が無い直近 20 件に一言を付ける（起動後に増えた行には自動で付く）">
-              {backfill.busy ? '…' : '直近20件に一言'}
-            </button>
-            {(backfill.note || settingsError) && <span className="note">{settingsError || backfill.note}</span>}
+            {settingsError && <span className="note">{settingsError}</span>}
           </div>
         )}
         <div className={`status${status.error ? ' error' : ''}`}>

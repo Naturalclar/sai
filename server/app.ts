@@ -11,7 +11,6 @@ import { replyBlockedReason } from '../shared/reply.ts'
 import type {
   ApprovalAnswer,
   ApprovalRequest,
-  DigestBackfillResponse,
   FeedResponse,
   Profile,
   ProfileResponse,
@@ -64,7 +63,6 @@ const ANSWER_SUFFIX = '/answer'
 /** 承認 body の上限。ツールの入力そのもの（Edit の new_string など）が入るので返信より大きめ */
 export const MAX_APPROVAL_BYTES = 1024 * 1024
 const SETTINGS_PATH = '/api/settings'
-const DIGEST_BACKFILL_PATH = '/api/digest/backfill'
 /** 設定 body の上限 */
 export const MAX_SETTINGS_BYTES = 4 * 1024
 const REPLY_SUFFIX = '/reply'
@@ -316,16 +314,6 @@ export function createApp(
     if (Object.keys(patch).length === 0) return error(res, 400, 'persona か linear_workspace を送ってください')
     await settingsStore.set(patch)
     return json(res, await settingsPayload())
-  }
-
-  /** POST /api/digest/backfill?n=20&days=7。直近 n 件の一言を作る（既定オフのときは 400）。同一オリジンのみ */
-  const backfillDigest = async (req: IncomingMessage, res: ServerResponse, n: number, days: number) => {
-    if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
-    if (!digest.enabled) return error(res, 400, '一言は無効です（SAI_DIGEST=1 で起動してください）')
-    await digestReady
-    const queued = digest.backfill(await store.rows(days), n)
-    const payload: DigestBackfillResponse = { queued }
-    return json(res, payload, 202)
   }
 
   const send = (res: ServerResponse, status: number, body: Buffer | string, type: string) => {
@@ -631,12 +619,11 @@ export function createApp(
     const isProfile = path === PROFILE_PATH
     const isProfileIcon = path === PROFILE_ICON_PATH
     const isSettings = path === SETTINGS_PATH
-    const isBackfill = path === DIGEST_BACKFILL_PATH
     const method = req.method ?? 'GET'
     // 書き込みは「返信は POST」「表示名は PUT」「アイコンは PUT / DELETE」「承認の預かりと答えは POST」「自分の表示名は PUT、アイコンは PUT / DELETE」
-    // 「設定は PUT」「一言の backfill は POST」だけ。それ以外は GET / HEAD のみ
+    // 「設定は PUT」だけ。それ以外は GET / HEAD のみ
     const writable =
-      (method === 'POST' && (isReply || isAsk || isAnswer || isBackfill)) ||
+      (method === 'POST' && (isReply || isAsk || isAnswer)) ||
       (method === 'PUT' && (isMeta || isProfile || isSettings)) ||
       ((method === 'PUT' || method === 'DELETE') && (isIcon || isProfileIcon))
     if (!writable && method !== 'GET' && method !== 'HEAD') return error(res, 405, 'method not allowed')
@@ -697,10 +684,6 @@ export function createApp(
       if (isSettings) {
         if (method === 'PUT') return await putSettings(req, res)
         return json(res, await settingsPayload())
-      }
-      if (isBackfill) {
-        if (method !== 'POST') return error(res, 405, 'method not allowed')
-        return await backfillDigest(req, res, Math.min(200, Math.max(1, Number.parseInt(q.get('n') ?? '20', 10) || 20)), parseDays(q.get('days'), 7))
       }
 
       if (path === '/api/sessions') {

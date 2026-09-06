@@ -2,8 +2,8 @@
 //
 // 作るのは LLM で、返信と同じ `claude` CLI を `-p` で叩く（依存を足さない。SAI_CLAUDE_BIN も効く）。
 // 結果は ~/.agent-feed/digest.jsonl に追記し、JSONL（記録）は触らない。派生データなので消しても履歴は壊れない。
-// 既定はオフ（SAI_DIGEST=1 で有効）。オンでも「サーバが起動したあとに増えた行」だけ作り、過去の行は作らない
-// （POST /api/digest/backfill で直近 N 件だけ積める）。1 行ずつ直列で回し、失敗した行は無いまま（画面は text を出す）。
+// 既定はオフ（SAI_DIGEST=1 で有効）。オンでも「サーバが起動したあとに増えた行」だけ作り、過去の行は作らない。
+// 1 行ずつ直列で回し、失敗した行は無いまま（画面は text を出す）。
 import { spawn } from 'node:child_process'
 import { appendFile, mkdir, readFile, stat } from 'node:fs/promises'
 import { dirname } from 'node:path'
@@ -242,26 +242,7 @@ export class Digester {
     void this.pump()
   }
 
-  /** 直近 n 件（新しい順）の、まだ一言が無い行を列に積む。既にあった行も対象にする。積んだ数を返す */
-  backfill(rows: FeedRow[], n: number): number {
-    if (!this.enabled) return 0
-    if (this.baseline === null) this.baseline = new Set(rows.filter((r) => this.wants(r)).map(digestKey))
-    const candidates = rows
-      .filter((r) => this.wants(r))
-      .sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : 0))
-      .map((row) => ({ key: digestKey(row), row }))
-      .filter((c) => !this.queued.has(c.key) && !this.store.get(c.key))
-      .slice(0, Math.max(0, n))
-    for (const c of candidates) {
-      this.baseline.delete(c.key)
-      this.queued.add(c.key)
-      this.queue.push(c)
-    }
-    void this.pump()
-    return candidates.length
-  }
-
-  /** 列の長さ（テストと backfill の応答用） */
+  /** 列の長さ（テスト用） */
   pending(): number {
     return this.queue.length + (this.pumping ? 1 : 0)
   }

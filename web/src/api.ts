@@ -14,12 +14,11 @@ import type {
   SessionMeta,
   SessionMetaResponse,
   SessionsResponse,
-  DigestBackfillResponse,
   SettingsRequest,
   SettingsResponse,
 } from '../../shared/types.ts'
 
-export type { Agent, FeedRow, SessionSource, SessionSummary, SessionMeta, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, Approval, ApprovalMap, ApprovalAnswer, Profile, PersonaId, SettingsResponse, SettingsRequest, DigestBackfillResponse, Viewer } from '../../shared/types.ts'
+export type { Agent, FeedRow, SessionSource, SessionSummary, SessionMeta, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, Approval, ApprovalMap, ApprovalAnswer, Profile, PersonaId, SettingsResponse, SettingsRequest, Viewer } from '../../shared/types.ts'
 
 /** サーバの失敗。`code` / `typed` は返信の 409（ReplyError）から。画面はこれで「消して送る」の確認を出し分ける */
 export class ApiError extends Error {
@@ -120,7 +119,5 @@ export const api = {
   /** サーバ側の設定（一言の性格。digest が有効か） */
   settings: () => getJSON<SettingsResponse>('/api/settings'),
   setSettings: (body: SettingsRequest) => sendJSON<SettingsResponse>('PUT', '/api/settings', body),
-  /** 直近 n 件の一言を作らせる（SAI_DIGEST=1 のときだけ通る） */
-  backfillDigest: (n = 20) => sendJSON<DigestBackfillResponse>('POST', `/api/digest/backfill?n=${n}`, {}),
 }
 

@@ -105,15 +105,7 @@ test('Digester: 起動時にあった行は作らず、新しく現れた行だ�
     await d.drain()
     assert.equal(store.get(digestKey(n3))?.persona, 'ENFP')
     assert.equal(store.get(digestKey(n1))?.persona, 'ISTJ', '過去の一言は変わらない')
-
-    assert.equal(d.backfill([old1, old2, n1, n2, bad, skip, n3], 2), 2)
-    await d.drain()
-    assert.equal(store.get(digestKey(old2))?.summary, '一言: 古い2')
-    assert.equal(store.get(digestKey(old1)), undefined, '2 件目までなので old1 はまだ')
-    assert.equal(store.get(digestKey(bad)), undefined, 'bad はまた失敗')
-    assert.equal(d.backfill([old1, old2], 10), 1)
-    await d.drain()
-    assert.equal(store.get(digestKey(old1))?.summary, '一言: 古い1')
+    assert.equal(store.get(digestKey(old1)), undefined, '起動時にあった行は作らない')
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -132,7 +124,6 @@ test('Digester: 自分が回した子（cwd がフィードのディレクトリ
     d.scan([own, under, real])
     await d.drain()
     assert.deepEqual(fake.prompts.map((p) => p.split('\n---\n')[1]), ['本物'])
-    assert.equal(d.backfill([own, under], 5), 0)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -146,7 +137,6 @@ test('Digester: 無効なら何もしない', async () => {
     const d = new Digester(store, fake, { enabled: false, model: 'haiku', persona: async () => 'none' })
     d.scan([row(at(0), 'S1')])
     d.scan([row(at(0), 'S1'), row(at(1), 'S1')])
-    assert.equal(d.backfill([row(at(0), 'S1')], 5), 0)
     await d.drain()
     assert.equal(fake.prompts.length, 0)
     assert.equal(d.enabled, false)

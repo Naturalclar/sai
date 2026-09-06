@@ -84,6 +84,7 @@
   @media (prefers-reduced-motion: reduce) {
     main.layout, .sidebar { transition: none; }
     .jump-bottom { animation: none; }
+    .channels .item > .link { transition: none; }
   }
 
   /* -- filters */
@@ -101,22 +102,34 @@
 
   /* -- sidebar: 1項目 = 1エンティティ。先頭に固定の「フィード」 */
   .channels { display: block; }
-  .channels .item { position: relative; display: block; border-bottom: 1px solid var(--line); color: inherit; min-width: 0; }
+  .channels .item { position: relative; display: block; border-bottom: 1px solid var(--line); color: inherit; min-width: 0; overflow: hidden; }
   .channels .item > .link, .channels a.item { display: block; padding: 8px 12px 8px 14px; color: inherit; }
   .channels .item:hover { background: var(--hover); }
   .channels .item:hover .link, .channels a.item:hover { text-decoration: none; }
-  /* 項目の右上の「アーカイブ」。ホバーかフォーカスで出て、そのとき時刻の代わりに置く。ホバーの無い端末では常に出す */
-  .channels .archive-btn { position: absolute; top: 6px; right: 8px; z-index: 1; opacity: 0; font: inherit; font-size: 11px; line-height: 1; padding: 3px 7px; border: 1px solid var(--line); border-radius: 5px; background: var(--panel); color: var(--muted); cursor: pointer; }
-  .channels .archive-btn:hover { color: var(--ink); border-color: var(--muted); }
-  .channels .archive-btn:disabled { cursor: default; }
+  /* 項目の右上の「アーカイブ」（箱のアイコン）。ホバーかフォーカスで出て、そのとき時刻の代わりに置く。
+     ホバーの無い端末ではスワイプで出すレールが代わり（下）。ボタン自体は残してフォーカスで出る（読み上げの経路） */
+  .channels .archive-btn { position: absolute; top: 4px; right: 6px; z-index: 1; opacity: 0; background: var(--panel); border: 1px solid var(--line); }
+  .channels .archive-btn:hover { border-color: var(--muted); }
+  .channels .archive-btn:disabled { background: var(--panel); }
   .channels .archive-btn.error { color: var(--claude); border-color: var(--claude); opacity: 1; }
   .channels .item:hover .archive-btn, .channels .item:focus-within .archive-btn { opacity: 1; }
   .channels .item:hover .when, .channels .item:focus-within .when { visibility: hidden; }
+  /* -- スワイプで出すレール（タッチ端末だけ描く）。<a> を左にずらすと下から見える */
+  .channels .item .rail { position: absolute; top: 0; bottom: 0; right: 0; width: 72px; display: flex; align-items: center; justify-content: center; background: var(--accent); color: #fff; visibility: hidden; }
+  .channels .item.dragging .rail, .channels .item.open .rail { visibility: visible; }
+  .channels .item .rail .rail-btn { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 8px; background: none; border: 0; color: inherit; font: inherit; font-size: 11px; line-height: 1; cursor: pointer; }
+  .channels .item .rail .rail-btn:disabled { opacity: .6; }
+  .channels .item .rail .rail-btn svg { width: 18px; height: 18px; }
+  .channels .item .rail .rail-btn svg [fill] { fill: var(--accent); }
+  .channels .item > .link { transition: transform .2s ease; }
+  .channels .item.dragging > .link { transition: none; }
+  /* ずらしている間は <a> に不透明な背景を付けてレールを隠す（普段は .item の背景を透かす） */
+  .channels .item.dragging > .link, .channels .item.open > .link { background: var(--panel); position: relative; z-index: 2; }
+  .channels .item.open .archive-btn { opacity: 0; }
   @media (hover: none) {
-    .channels .archive-btn { opacity: 1; top: auto; bottom: 6px; }
     .channels .item:hover .when { visibility: visible; }
-    /* ボタンは右下固定なので、.last の無い2行の項目では時刻（.top の .when）の上に乗る。.top にも逃げ道を作る */
-    .channels .item:has(.archive-btn) .top, .channels .item:has(.archive-btn) .last, .channels .item:has(.archive-btn) .t { padding-right: 5.5em; }
+    /* 横スワイプを自分で追うので、縦のスクロールだけブラウザに任せる */
+    .channels .item { touch-action: pan-y; }
     /* バブルごとの時刻はホバーで出すものなので、ホバーの無い端末では常に出す */
     .msg .time { opacity: 1; }
   }
@@ -173,8 +186,6 @@
     .reply .row textarea, .filters select, .filters input, .sidebar .filters select, .chat-head .meta select, .chat-head .session-name input { font-size: 16px; }
     .sidebar .filters select, .sidebar .filters button { min-height: 40px; }
     .chat-head .meta select { min-height: 36px; }
-    .channels .archive-btn { padding: 8px 10px; font-size: 12px; }
-    .channels .item:has(.archive-btn) .top, .channels .item:has(.archive-btn) .last, .channels .item:has(.archive-btn) .t { padding-right: 6.5em; }
     .iconbtn { width: 36px; height: 36px; }
     .back { padding: 8px 6px; margin: -8px -6px 0; }
     .reply .row textarea { min-height: 44px; }

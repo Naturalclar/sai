@@ -23,6 +23,8 @@ pnpm test:feed              # python3 -m unittest feed.test_record
 
 コミット前の一式: `pnpm test && pnpm test:feed && pnpm lint && pnpm typecheck`
 
+main worktree を最新の `main` に進めてビルドし直すのは `/sync-main`（`.claude/skills/sync-main/SKILL.md`。別の worktree から呼んでも main worktree だけを触る）。
+
 CI（`.github/workflows/ci.yml`）も同じ一式＋ `pnpm build` を `main` への push と PR で回す。Node 22 系の最新、Python 3.9 と最新。スクリプトを足したら CI にも足す。
 
 単体で回す:

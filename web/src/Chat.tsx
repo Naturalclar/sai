@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { entityId } from '../../shared/entity.ts'
 import type { FeedRow, Profile, SessionSummary } from './api'
 import { hm } from './format'
 import { groupRows, speakerLabel } from './chatGroups.ts'
 import { Message } from './Message'
+import { JumpToBottom } from './JumpToBottom'
 
 const NO_SESSIONS: never[] = []
 
@@ -28,6 +29,10 @@ interface Props {
 export function Chat({ rows, showChannel, sessions = NO_SESSIONS, trailer, showThinking = false, thinkingOpen = false, profile, linear = '' }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
+  // 最下部が見えているか（描画にも使うので state）。見えていないときは「一番下へ」を出す
+  const [atBottom, setAtBottom] = useState(true)
+  // 最下部から離れた時点の行数。離れている間に増えた行の数をボタンに添える。最下部なら null
+  const [awayAt, setAwayAt] = useState<number | null>(null)
   // エンティティID → セッション（表示名・アイコン画像）。バブルの見出しは行しか持っていないので、entityId で引く
   const byId = useMemo(() => new Map(sessions.map((s) => [s.id, s] as const)), [sessions])
 
@@ -39,55 +44,77 @@ export function Chat({ rows, showChannel, sessions = NO_SESSIONS, trailer, showT
 
   const onScroll = () => {
     const el = ref.current
-    if (el) stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+    if (!el) return
+    const near = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+    stickToBottom.current = near
+    // onScroll は連続して鳴るので、値が変わったときだけ state を触る
+    if (near !== atBottom) {
+      setAtBottom(near)
+      setAwayAt(near ? null : rows.length)
+    }
+  }
+
+  /** 「一番下へ」。動き終われば onScroll が最下部と判定して、以後の新しい行に追従する */
+  const jump = () => {
+    const el = ref.current
+    if (!el) return
+    stickToBottom.current = true
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    el.scrollTo({ top: el.scrollHeight, behavior: reduced ? 'auto' : 'smooth' })
   }
 
   if (rows.length === 0 && !trailer) return <div className="empty">まだ何もありません</div>
 
+  // 離れている間に増えた行。フィルタが変わって行が減ることもあるので 0 で止める。trailer（仮バブル）は数えない
+  const arrived = atBottom || awayAt === null ? 0 : Math.max(0, rows.length - awayAt)
+
   return (
-    <div className="chat" ref={ref} onScroll={onScroll}>
-      {groupRows(rows).map((day) => (
-        <div key={day.day}>
-          <div className="day"><span>{day.label}</span></div>
-          {day.groups.map((g) => {
-            const id = entityId(g.session, g.repo, g.firstTs)
-            const who = speakerLabel(g.speaker, byId.get(id), profile)
-            return (
-              <div className="group" key={`${g.speaker}:${g.session}:${g.firstTs}`}>
-                <div className={`avatar ${g.speaker}`}>{who.icon ? <img src={who.icon} alt="" /> : who.mark}</div>
-                <div>
-                  <div className="gh">
-                    <span className="name">{who.name}</span>
-                    {showChannel && (
-                      <a className="ch" href={`#/s/${encodeURIComponent(id)}`} title={g.session}>#{g.repo}</a>
-                    )}
-                    {g.branch && <span className="branch">{g.branch}</span>}
-                    <span className="time">{hm(g.firstTs)}</span>
+    <div className="chat-wrap">
+      <div className="chat" ref={ref} onScroll={onScroll}>
+        {groupRows(rows).map((day) => (
+          <div key={day.day}>
+            <div className="day"><span>{day.label}</span></div>
+            {day.groups.map((g) => {
+              const id = entityId(g.session, g.repo, g.firstTs)
+              const who = speakerLabel(g.speaker, byId.get(id), profile)
+              return (
+                <div className="group" key={`${g.speaker}:${g.session}:${g.firstTs}`}>
+                  <div className={`avatar ${g.speaker}`}>{who.icon ? <img src={who.icon} alt="" /> : who.mark}</div>
+                  <div>
+                    <div className="gh">
+                      <span className="name">{who.name}</span>
+                      {showChannel && (
+                        <a className="ch" href={`#/s/${encodeURIComponent(id)}`} title={g.session}>#{g.repo}</a>
+                      )}
+                      {g.branch && <span className="branch">{g.branch}</span>}
+                      <span className="time">{hm(g.firstTs)}</span>
+                    </div>
+                    {g.items.map((u) => (
+                      // 自分の入力は Markdown にしない（打ったままを出す）。エージェントの返答は Markdown
+                      <Message
+                        key={u.key}
+                        ts={u.row.ts}
+                        text={u.text}
+                        markdown={u.speaker !== 'me'}
+                        waiting={u.waiting}
+                        resolved={u.resolved}
+                        thinking={showThinking ? u.thinking : undefined}
+                        thinkingOpen={thinkingOpen}
+                        summary={u.summary}
+                        model={u.model}
+                        remote={u.row.remote}
+                        linear={linear}
+                      />
+                    ))}
                   </div>
-                  {g.items.map((u) => (
-                    // 自分の入力は Markdown にしない（打ったままを出す）。エージェントの返答は Markdown
-                    <Message
-                      key={u.key}
-                      ts={u.row.ts}
-                      text={u.text}
-                      markdown={u.speaker !== 'me'}
-                      waiting={u.waiting}
-                      resolved={u.resolved}
-                      thinking={showThinking ? u.thinking : undefined}
-                      thinkingOpen={thinkingOpen}
-                      summary={u.summary}
-                      model={u.model}
-                      remote={u.row.remote}
-                      linear={linear}
-                    />
-                  ))}
                 </div>
-              </div>
-            )
-          })}
-        </div>
-      ))}
-      {trailer}
+              )
+            })}
+          </div>
+        ))}
+        {trailer}
+      </div>
+      {!atBottom && <JumpToBottom count={arrived} onClick={jump} />}
     </div>
   )
 }

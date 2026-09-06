@@ -83,6 +83,7 @@
   main.sidebar-closed .back { display: inline-block; }
   @media (prefers-reduced-motion: reduce) {
     main.layout, .sidebar { transition: none; }
+    .jump-bottom { animation: none; }
   }
 
   /* -- filters */
@@ -178,6 +179,7 @@
     .back { padding: 8px 6px; margin: -8px -6px 0; }
     .reply .row textarea { min-height: 44px; }
     .reply .row button { min-height: 44px; }
+    .jump-bottom { height: 44px; min-width: 44px; border-radius: 22px; }
   }
 
   .agent { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; white-space: nowrap; }
@@ -248,7 +250,14 @@
   .iconbtn:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent); }
   .iconbtn:disabled { opacity: .5; cursor: default; background: transparent; }
   .iconbtn svg { width: 16px; height: 16px; }
+  /* .chat はスクロールする箱そのものなので、「一番下へ」を浮かせる基準（position: relative）は外側の箱に */
+  .chat-wrap { position: relative; flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; }
   .chat { flex: 1; min-height: 0; min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow-y: auto; }
+  /* -- 一番下へ。最下部が見えていないときだけ右下に。上にいる間に届いた行の数を添える */
+  .jump-bottom { position: absolute; right: 14px; bottom: 14px; display: inline-flex; align-items: center; justify-content: center; gap: 4px; height: 36px; min-width: 36px; padding: 0 10px; border-radius: 18px; background: var(--panel); color: var(--ink); border: 1px solid var(--line); box-shadow: 0 4px 14px rgba(0, 0, 0, .14); font: inherit; font-size: 15px; cursor: pointer; z-index: 2; animation: jump-in .15s ease; }
+  .jump-bottom:hover { background: var(--hover); }
+  .jump-bottom .n { font-size: 12px; font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; }
+  @keyframes jump-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
   .day { text-align: center; color: var(--muted); font-size: 11px; padding: 10px 0 2px; position: relative; }
   .day span { background: var(--panel); padding: 0 8px; position: relative; }
   .day::before { content: ""; position: absolute; left: 16px; right: 16px; top: 18px; border-top: 1px solid var(--line); }

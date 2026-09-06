@@ -67,6 +67,15 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
     }
   })
 
+  // 入力に合わせて高さを伸ばす（Slack / Claude の返信欄と同じ）。上限は CSS の max-height（40vh）で、超えたらスクロール。
+  // 毎描画で測るが、scrollHeight を読んで height を当てるだけなので安い（本文以外の描画でも幅が変われば合わせたい）
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  })
+
   const drafting = text.trim() !== ''
   useEffect(() => {
     onDraft?.(drafting)
@@ -200,12 +209,12 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
                 : `前の返信を処理中${busySince && elapsedLabel(busySince, now) ? `（${elapsedLabel(busySince, now)}）` : ''}。終わるまで待ってください`
               : `#${repo} に返信（${replyModel ? `${replyModel} で回す。` : ''}Enter で送信、Shift+Enter で改行）`
           }
-          rows={2}
+          rows={1}
           // フィードでは送信中でも別の返信先へ打てるよう入力欄は止めない（送信ボタンだけ止める）
           disabled={busy && !mention}
         />
         {/* 送った返信は対話側の画面には出ない（トランスクリプトには追記される）。README の「返信」の節と同じ。
-            row の中に置くのは、狭い幅で送信ボタンと同じ行（左に注意、右にボタン）に並べるため。広い画面では CSS の order で下の行に落ちる */}
+            .row が 1 つのバブルで、textarea の下の行に注意（左）と送信ボタン（右）が並ぶ */}
         <div className="note">
           {terminal === true
             ? '端末（tmux）で開いているセッションに打ち込む。端末にも入力と返答が出る'

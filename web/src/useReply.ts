@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, type ReplyingMap } from './api'
+import { api, ApiError, type ReplyingMap } from './api'
 
 /** 画面に出す「処理中の返信」。サーバが伝えてきたものと、送った直後のローカルのものを同じ形にする */
 export interface Pending {
@@ -25,6 +25,18 @@ const GRACE_MS = 1000
 
 export const ENDED_WITHOUT_ROW = '返信は終わったが記録が増えなかった（~/.agent-feed/reply.log を見る）'
 
+/** 端末の入力欄に打ちかけの文字があって送れなかった。人に「消して送る」かを聞く（#117） */
+export interface ReplaceConfirm {
+  id: string
+  /** 送ろうとした本文 */
+  text: string
+  /** 端末の入力欄に見えている文 */
+  typed: string
+}
+
+/** send の結果。confirm のとき呼び出し側は本文を入力欄に戻す */
+export type SendOutcome = 'sent' | 'confirm' | 'failed'
+
 /**
  * 返信の送信と「処理中」の判定。SessionView と FeedView で共用。
  *
@@ -41,6 +53,7 @@ export const ENDED_WITHOUT_ROW = '返信は終わったが記録が増えなか�
 export function useReply(countRows: (id: string) => number, replying: ReplyingMap, updatedAt: Date | null) {
   const [sent, setSent] = useState<Sent[]>([])
   const [failed, setFailed] = useState<{ id: string; message: string } | null>(null)
+  const [confirm, setConfirm] = useState<ReplaceConfirm | null>(null)
   // サーバが「処理中」と言った id と、最初にそう見えたときの行数。消えたときに行が増えていなければ失敗
   const seen = useRef(new Map<string, number>())
 
@@ -75,19 +88,35 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
     ...sent.filter((s) => !replying[s.id]).map((s) => ({ id: s.id, text: s.text, since: new Date(s.sentAt).toISOString() })),
   ]
 
-  const send = async (id: string, text: string) => {
+  const send = async (id: string, text: string, options: { replaceTyped?: boolean } = {}): Promise<SendOutcome> => {
     const entry: Sent = { id, text, rowsAtSend: countRows(id), sentAt: Date.now(), acceptedAt: null }
     setFailed(null)
+    setConfirm(null)
     setSent((list) => [...list.filter((s) => s.id !== id), entry])
     try {
-      await api.reply(id, text)
+      await api.reply(id, text, options)
       setSent((list) => list.map((s) => (s === entry ? { ...s, acceptedAt: Date.now() } : s)))
+      return 'sent'
     } catch (err) {
       // 409（前の返信を処理中）もここ。次のポーリングでサーバの replying が付いて入力欄は閉じる
       setSent((list) => list.filter((s) => s !== entry))
+      // 端末の入力欄に打ちかけがあるだけなら失敗ではなく、消して送るかを聞く
+      if (err instanceof ApiError && err.code === 'terminal_typed') {
+        setConfirm({ id, text, typed: err.typed ?? '' })
+        return 'confirm'
+      }
       setFailed({ id, message: err instanceof Error ? err.message : String(err) })
+      return 'failed'
     }
   }
 
-  return { pending, failed, send }
+  /** 確認に「消して送る」と答えた。打ちかけを消して同じ本文を送り直す */
+  const confirmReplace = async (): Promise<SendOutcome> => {
+    if (!confirm) return 'failed'
+    const { id, text } = confirm
+    return send(id, text, { replaceTyped: true })
+  }
+  const cancelConfirm = () => setConfirm(null)
+
+  return { pending, failed, send, confirm, confirmReplace, cancelConfirm }
 }

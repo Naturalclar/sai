@@ -42,16 +42,25 @@ export function isDescendant(pid: number, ancestor: number, parents: Map<number,
   return false
 }
 
+/** 打ち込めない理由の種類。typed だけは人の確認のうえで消して打ち込める（#117） */
+export type PromptKind = 'idle' | 'typed' | 'dialog' | 'unknown'
+
 export interface PromptState {
   /** 打ち込んでよいか */
   idle: boolean
+  kind: PromptKind
   /** だめな理由（画面の 409 に出す） */
   reason: string
+  /** kind が typed のとき、入力欄に見えている文（1 行ぶん） */
+  typed: string
 }
+
+const DIALOG = /Enter to confirm|Esc to cancel|Press enter to continue/i
 
 /**
  * ペインの画面（capture-pane の末尾）から、いま打ち込んでよいかを決める。
- * - 「Enter to confirm」「Esc to cancel」があれば許可ダイアログや質問の最中（打ち込むと答えになってしまう）
+ * - 「Enter to confirm」「Esc to cancel」「Press enter to continue」があれば許可ダイアログや質問の最中（打ち込むと答えになってしまう）。
+ *   `❯ 1. Yes` のように番号付きの選択肢が入力欄の位置に見えていてもダイアログ（Codex の信頼確認など）
  * - 入力欄（Claude Code は `❯`、Codex は `›` か `>`）に打ちかけの文字があれば混ぜない。
  *   Claude Code は空のとき `Try "refactor <filepath>"` のような薄い placeholder を出すので、それは空扱い
  * 入力欄が見つからないときは「分からない」ので止める（別のプログラムに打ち込まない）
@@ -63,17 +72,19 @@ export function promptState(screen: string, agent: Agent): PromptState {
     .map((l) => l.replace(/[\s\u00a0]+$/, ''))
     .filter((l) => l.trim())
   const tail = lines.slice(-25).join('\n')
-  if (/Enter to confirm|Esc to cancel/.test(tail)) return { idle: false, reason: '端末が許可や質問のダイアログを出している' }
+  const dialog: PromptState = { idle: false, kind: 'dialog', reason: '端末が許可や質問のダイアログを出している', typed: '' }
+  if (DIALOG.test(tail)) return dialog
   // 入力欄の行。Claude Code は `❯` の後ろが NBSP（\u00a0）。ダイアログの選択肢（`  ❯ 1. Yes`）は上の検査で先に弾いている
   const markers = agent === 'codex' ? /^\s*[›>][\s\u00a0]?(.*)$/ : /^\s*(?:│\s*)?❯[\s\u00a0]?(.*)$/
   for (let i = lines.length - 1; i >= 0 && i >= lines.length - 25; i--) {
     const m = lines[i]!.match(markers)
     if (!m) continue
     const typed = (m[1] ?? '').trim()
-    if (!typed || /^Try "/.test(typed) || /^Try /.test(typed)) return { idle: true, reason: '' }
-    return { idle: false, reason: `端末の入力欄に打ちかけの文字がある: ${typed.slice(0, 40)}` }
+    if (!typed || /^Try "/.test(typed) || /^Try /.test(typed)) return { idle: true, kind: 'idle', reason: '', typed: '' }
+    if (/^\d+\.\s/.test(typed)) return dialog
+    return { idle: false, kind: 'typed', reason: `端末の入力欄に打ちかけの文字がある: ${typed.slice(0, 40)}`, typed }
   }
-  return { idle: false, reason: '端末の入力欄が見つからない（セッションが動いていない、または画面が違う）' }
+  return { idle: false, kind: 'unknown', reason: '端末の入力欄が見つからない（セッションが動いていない、または画面が違う）', typed: '' }
 }
 
 /** tmux を叩く口。テストでは差し替える */
@@ -114,15 +125,42 @@ export const realPs: PsFn = () =>
     child.once('close', () => resolve(out))
   })
 
-export class TerminalBusy extends Error {}
+/** 入力中・ダイアログ中で打ち込めない。kind と typed は 409 の body に載せ、画面が「消して送る」を出すかを決める */
+export class TerminalBusy extends Error {
+  readonly kind: Exclude<PromptKind, 'idle'>
+  readonly typed: string
+  constructor(state: PromptState) {
+    super(state.reason)
+    this.kind = state.kind === 'idle' ? 'unknown' : state.kind
+    this.typed = state.typed
+  }
+}
 export class TerminalGone extends Error {}
+
+export interface TypeOptions {
+  /** 入力欄の打ちかけを消してから打ち込んでよい（人が確認済み）。ダイアログ中・入力欄不明には効かない */
+  replaceTyped?: boolean
+  /** 消すキーを送ってから画面を描き直すまでの待ち。テストは 0 */
+  settleMs?: number
+}
+
+export interface TypeResult {
+  /** 打ちかけを消してから打ち込んだなら、消した文（reply.log に残す。戻せないので） */
+  cleared?: string
+}
+
+/** 消すキーを送ったあと、画面が描き直るのを待つ既定 */
+const SETTLE_MS = 150
 
 /**
  * ペインに打ち込む。
  * - TerminalGone: ペインが無い、または pid がそのペインの子孫ではない（フォールバックして -p で回す）
  * - TerminalBusy: 入力中・ダイアログ中（409。何も打ち込まない）
+ * - replaceTyped のときだけ、打ちかけ（kind: typed）を C-u で消してから打つ。Claude Code は C-u で入力欄が 1 回で空になり
+ *   「Ctrl+Y to paste deleted text」と出るので人が戻せる（実機で確認）。消したあとにもう一度 capture-pane して
+ *   本当に空になったときだけ貼る（キーが効かない端末で文を混ぜない）
  */
-export async function typeInto(tmux: Tmux, ps: PsFn, terminal: Terminal, agent: Agent, text: string): Promise<void> {
+export async function typeInto(tmux: Tmux, ps: PsFn, terminal: Terminal, agent: Agent, text: string, options: TypeOptions = {}): Promise<TypeResult> {
   let panePid = 0
   try {
     panePid = Number((await tmux.run(['display-message', '-p', '-t', terminal.pane, '#{pane_pid}'])).trim())
@@ -131,9 +169,17 @@ export async function typeInto(tmux: Tmux, ps: PsFn, terminal: Terminal, agent: 
   }
   if (!panePid) throw new TerminalGone(`ペイン ${terminal.pane} の pid が取れない`)
   if (!isDescendant(terminal.pid, panePid, parsePs(await ps()))) throw new TerminalGone(`ペイン ${terminal.pane} で動いているのは別のプロセス`)
-  const screen = await tmux.run(['capture-pane', '-p', '-t', terminal.pane])
-  const state = promptState(screen, agent)
-  if (!state.idle) throw new TerminalBusy(state.reason)
+  let state = promptState(await tmux.run(['capture-pane', '-p', '-t', terminal.pane]), agent)
+  const result: TypeResult = {}
+  if (state.kind === 'typed' && options.replaceTyped) {
+    const cleared = state.typed
+    await tmux.run(['send-keys', '-t', terminal.pane, 'C-u'])
+    const settle = options.settleMs ?? SETTLE_MS
+    if (settle > 0) await new Promise((r) => setTimeout(r, settle))
+    state = promptState(await tmux.run(['capture-pane', '-p', '-t', terminal.pane]), agent)
+    if (state.idle) result.cleared = cleared
+  }
+  if (!state.idle) throw new TerminalBusy(state)
   const buffer = `sai-${process.pid}-${Date.now()}`
   await tmux.run(['load-buffer', '-b', buffer, '-'], text)
   try {
@@ -143,6 +189,7 @@ export async function typeInto(tmux: Tmux, ps: PsFn, terminal: Terminal, agent: 
     throw err
   }
   await tmux.run(['send-keys', '-t', terminal.pane, 'Enter'])
+  return result
 }
 
 /**

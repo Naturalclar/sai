@@ -312,6 +312,23 @@ export interface FeedResponse {
 /** POST /api/sessions/<id>/reply の body */
 export interface ReplyRequest {
   text: string
+  /**
+   * 端末（tmux）の入力欄に打ちかけの文字があっても、それを消してから打ち込んでよい。
+   * 画面が 409（code: terminal_typed）を受けて人に確認したあとに true で送り直す。ダイアログ中には効かない
+   */
+  replace_typed?: boolean
+}
+
+/**
+ * 返信の 409 の body。`error` は今までどおり人向けの文。`code` があれば画面が出し分けられる:
+ * - terminal_typed: 端末の入力欄に打ちかけの文字がある（`typed` にその文）。消して送るかを確認できる
+ * - terminal_dialog: 端末が許可や質問のダイアログを出している（消させない）
+ * - terminal_unknown: 入力欄が見つからない（別のプログラムに打ち込まない）
+ */
+export interface ReplyError {
+  error: string
+  code?: 'terminal_typed' | 'terminal_dialog' | 'terminal_unknown'
+  typed?: string
 }
 
 /**

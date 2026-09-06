@@ -37,7 +37,8 @@ interface Props {
   busySince?: string
   /** 経過の基準（ポーリングの updatedAt）。busySince とセット */
   now?: number
-  onSend: (text: string) => void
+  /** 送る。false を返したら（端末の打ちかけの確認待ちなど、送れなかった）本文を入力欄に戻す */
+  onSend: (text: string) => void | boolean | Promise<void | boolean>
   /** 本文が空でないかが変わったら知らせる。FeedView は入力中に既定の返信先を動かさないために使う */
   onDraft?: (drafting: boolean) => void
   /** このセッションの返信で使うモデル（設定があれば）。placeholder に添える */
@@ -118,11 +119,15 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
     // 送る本文からは表記を外す（エージェントにメンションは渡さない）
     const body = (mention?.picked ? stripMention(text, mention.picked.label) : text).trim()
     if (!body || busy) return
-    onSend(body)
+    const sent = text
     setText('')
     setCaret(0)
     // 表記ごと本文が消えるので返信先も既定に戻す。送信中でも別の返信先へ続けて打てる
     if (mention?.picked) mention.onPick(null)
+    void Promise.resolve(onSend(body)).then((ok) => {
+      // 送れなかった（端末の打ちかけの確認待ちなど）ら、まだ何も打っていなければ本文を戻す
+      if (ok === false) setText((t) => (t ? t : sent))
+    })
   }
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {

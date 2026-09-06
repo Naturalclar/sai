@@ -12,6 +12,7 @@ import { ReplyBox, type Picked } from './ReplyBox'
 import { DaysSelect } from './DaysSelect'
 import { BackLink } from './BackLink'
 import { useReply } from './useReply'
+import { ReplaceConfirm } from './ReplaceConfirm'
 import type { PaneProps } from './App'
 
 const NO_ROWS: never[] = []
@@ -49,7 +50,7 @@ export function FeedView({ repo, sessions = NO_SESSIONS, onStatus, onOpenSidebar
     return m
   }, [rows])
 
-  const { pending: allPending, failed, send } = useReply((id) => counts.get(id) ?? 0, data?.replying ?? NO_REPLYING, updatedAt)
+  const { pending: allPending, failed, send, confirm, confirmReplace, cancelConfirm } = useReply((id) => counts.get(id) ?? 0, data?.replying ?? NO_REPLYING, updatedAt)
   // サーバの replying にはこの画面の外のセッションも入る。フィードに行があるか、候補に出ているものだけ
   // （一覧にだけあるセッションへ送った直後は、まだフィードに行が無い）
   const pending = allPending.filter((p) => counts.has(p.id) || targets.some((t) => t.id === p.id))
@@ -108,13 +109,14 @@ export function FeedView({ repo, sessions = NO_SESSIONS, onStatus, onOpenSidebar
             busy={pending.some((p) => p.id === target.id)}
             busySince={pending.find((p) => p.id === target.id)?.since}
             now={now}
-            onSend={(text) => void send(target.id, text)}
+            onSend={async (text) => (await send(target.id, text)) !== 'confirm'}
             onDraft={setDrafting}
             mention={{ targets, target, picked: pickedTarget ? picked : null, onPick: setPicked, busyIds }}
           />
         ) : (
           <div className="notice">返信できるセッションがありません</div>
         ))}
+      {confirm && <ReplaceConfirm confirm={confirm} repo={repoOf(confirm.id)} onReplace={() => void confirmReplace()} onCancel={cancelConfirm} />}
       {failed && <div className="notice error">送信失敗（{repoOf(failed.id) ? `#${repoOf(failed.id)}` : failed.id}）: {failed.message}</div>}
     </section>
   )

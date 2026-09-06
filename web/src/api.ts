@@ -5,6 +5,7 @@ import type {
   FeedResponse,
   Profile,
   ProfileResponse,
+  ReplyError,
   ReplyRequest,
   ReplyResponse,
   SessionDetailResponse,
@@ -20,15 +21,30 @@ import type {
 
 export type { Agent, FeedRow, SessionSource, SessionSummary, SessionMeta, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, Approval, ApprovalMap, ApprovalAnswer, Profile, PersonaId, SettingsResponse, SettingsRequest, DigestBackfillResponse, Viewer } from '../../shared/types.ts'
 
+/** サーバの失敗。`code` / `typed` は返信の 409（ReplyError）から。画面はこれで「消して送る」の確認を出し分ける */
+export class ApiError extends Error {
+  readonly status: number
+  readonly code?: ReplyError['code']
+  readonly typed?: string
+  constructor(message: string, status: number, code?: ReplyError['code'], typed?: string) {
+    super(message)
+    this.status = status
+    this.code = code
+    this.typed = typed
+  }
+}
+
 /** サーバは失敗を { error } で返す。それがあればそのまま見せる */
 async function failure(res: Response, url: string): Promise<Error> {
   try {
-    const body = (await res.json()) as { error?: unknown }
-    if (typeof body.error === 'string' && body.error) return new Error(body.error)
+    const body = (await res.json()) as Partial<ReplyError>
+    if (typeof body.error === 'string' && body.error) {
+      return new ApiError(body.error, res.status, body.code, typeof body.typed === 'string' ? body.typed : undefined)
+    }
   } catch {
     // JSON でない
   }
-  return new Error(`${res.status} ${url}`)
+  return new ApiError(`${res.status} ${url}`, res.status)
 }
 
 /** いま開いている画面が、どのビルド（サーバの X-SAI-Build）から来たか */
@@ -77,8 +93,13 @@ export const api = {
   session: (id: string, days = 90) =>
     getJSON<SessionDetailResponse>(`/api/sessions/${encodeURIComponent(id)}?days=${days}`),
   feed: (f: FeedFilters) => getJSON<FeedResponse>(`/api/feed?${qs(f)}`),
-  reply: (id: string, text: string, days = 90) =>
-    sendJSON<ReplyResponse>('POST', `/api/sessions/${encodeURIComponent(id)}/reply?days=${days}`, { text } satisfies ReplyRequest),
+  /** 返信。replaceTyped は端末の打ちかけを消して打ち込んでよい（409 の code: terminal_typed を人が確認したあと） */
+  reply: (id: string, text: string, options: { replaceTyped?: boolean } = {}, days = 90) =>
+    sendJSON<ReplyResponse>(
+      'POST',
+      `/api/sessions/${encodeURIComponent(id)}/reply?days=${days}`,
+      { text, ...(options.replaceTyped ? { replace_typed: true } : {}) } satisfies ReplyRequest,
+    ),
   meta: (id: string) => getJSON<SessionMetaResponse>(`/api/sessions/${encodeURIComponent(id)}/meta`),
   /** 返信中の許可・質問に答える。allow は updatedInput を省けば元の入力のまま */
   answerApproval: (approvalId: string, answer: ApprovalAnswer) =>

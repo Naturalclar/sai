@@ -57,6 +57,16 @@ export interface PromptState {
 
 const DIALOG = /Enter to confirm|Esc to cancel|Press enter to continue/i
 
+/** 空の入力欄に出る placeholder。打ちかけではない。文言は CLI の版で変わりうるので、見つけたら足す */
+const PLACEHOLDER: Record<'claude' | 'codex', RegExp> = {
+  claude: /^Try ["\u201c]|^Try /,
+  codex: /^Ask Codex to do anything/,
+}
+/** 入力欄の続きの行ではないもの（区切り線、状態行、モデル名の行）。ここで打ちかけの続きを読むのを止める */
+const NOT_INPUT = /^\s*(⏵⏵|─|╰|╭|\? for shortcuts|\S+ (minimal|low|medium|high|xhigh) ·)/
+/** 打ちかけを消すために送る C-u の上限。1 回で 1 行しか消えないので行数ぶん要る */
+export const MAX_CLEAR_KEYS = 20
+
 /**
  * ペインの画面（capture-pane の末尾）から、いま打ち込んでよいかを決める。
  * - 「Enter to confirm」「Esc to cancel」「Press enter to continue」があれば許可ダイアログや質問の最中（打ち込むと答えになってしまう）。
@@ -76,13 +86,22 @@ export function promptState(screen: string, agent: Agent): PromptState {
   if (DIALOG.test(tail)) return dialog
   // 入力欄の行。Claude Code は `❯` の後ろが NBSP（\u00a0）。ダイアログの選択肢（`  ❯ 1. Yes`）は上の検査で先に弾いている
   const markers = agent === 'codex' ? /^\s*[›>][\s\u00a0]?(.*)$/ : /^\s*(?:│\s*)?❯[\s\u00a0]?(.*)$/
+  const placeholder = agent === 'codex' ? PLACEHOLDER.codex : PLACEHOLDER.claude
   for (let i = lines.length - 1; i >= 0 && i >= lines.length - 25; i--) {
     const m = lines[i]!.match(markers)
     if (!m) continue
-    const typed = (m[1] ?? '').trim()
-    if (!typed || /^Try "/.test(typed) || /^Try /.test(typed)) return { idle: true, kind: 'idle', reason: '', typed: '' }
-    if (/^\d+\.\s/.test(typed)) return dialog
-    return { idle: false, kind: 'typed', reason: `端末の入力欄に打ちかけの文字がある: ${typed.slice(0, 40)}`, typed }
+    const first = (m[1] ?? '').trim()
+    if (!first || placeholder.test(first)) return { idle: true, kind: 'idle', reason: '', typed: '' }
+    if (/^\d+\.\s/.test(first)) return dialog
+    // 複数行の打ちかけは、続きの行が 2 文字下げで並ぶ（Claude Code も Codex も同じ）。区切り線や状態行の手前まで
+    const rest: string[] = []
+    for (let j = i + 1; j < lines.length; j++) {
+      const l = lines[j]!
+      if (!/^ {2}\S/.test(l) || NOT_INPUT.test(l)) break
+      rest.push(l.trim())
+    }
+    const typed = [first, ...rest].join('\n')
+    return { idle: false, kind: 'typed', reason: `端末の入力欄に打ちかけの文字がある: ${first.slice(0, 40)}`, typed }
   }
   return { idle: false, kind: 'unknown', reason: '端末の入力欄が見つからない（セッションが動いていない、または画面が違う）', typed: '' }
 }
@@ -156,9 +175,12 @@ const SETTLE_MS = 150
  * ペインに打ち込む。
  * - TerminalGone: ペインが無い、または pid がそのペインの子孫ではない（フォールバックして -p で回す）
  * - TerminalBusy: 入力中・ダイアログ中（409。何も打ち込まない）
- * - replaceTyped のときだけ、打ちかけ（kind: typed）を C-u で消してから打つ。Claude Code は C-u で入力欄が 1 回で空になり
- *   「Ctrl+Y to paste deleted text」と出るので人が戻せる（実機で確認）。消したあとにもう一度 capture-pane して
- *   本当に空になったときだけ貼る（キーが効かない端末で文を混ぜない）
+ * - replaceTyped のときだけ、打ちかけ（kind: typed）を C-u で消してから打つ。C-u は Claude Code も Codex も
+ *   **いまの行しか消さない**。消したあとカーソルは空になった行に残るので、BSpace でその行の改行を消して前の行末に
+ *   戻してから、次の C-u を送る。空になるまで繰り返す（上限 MAX_CLEAR_KEYS。画面が変わらなくなったら止める）。
+ *   1 行のときは C-u で空になり、空の入力欄への BSpace は何もしない（実機で確認）。
+ *   消したあとにもう一度 capture-pane して本当に空になったときだけ貼る（キーが効かない端末で文を混ぜない）。
+ *   最後に消した 1 行は「Ctrl+Y to paste deleted text」で戻せるが、複数行は戻せないので消した全文を返す（reply.log に残す）
  */
 export async function typeInto(tmux: Tmux, ps: PsFn, terminal: Terminal, agent: Agent, text: string, options: TypeOptions = {}): Promise<TypeResult> {
   let panePid = 0
@@ -173,10 +195,16 @@ export async function typeInto(tmux: Tmux, ps: PsFn, terminal: Terminal, agent: 
   const result: TypeResult = {}
   if (state.kind === 'typed' && options.replaceTyped) {
     const cleared = state.typed
-    await tmux.run(['send-keys', '-t', terminal.pane, 'C-u'])
     const settle = options.settleMs ?? SETTLE_MS
-    if (settle > 0) await new Promise((r) => setTimeout(r, settle))
-    state = promptState(await tmux.run(['capture-pane', '-p', '-t', terminal.pane]), agent)
+    for (let n = 0; n < MAX_CLEAR_KEYS && state.kind === 'typed'; n++) {
+      const before = state.typed
+      // C-u: いまの行を消す。BSpace: 空になった行の改行を消して前の行末へ（1 行なら何も起きない）
+      await tmux.run(['send-keys', '-t', terminal.pane, 'C-u', 'BSpace'])
+      if (settle > 0) await new Promise((r) => setTimeout(r, settle))
+      state = promptState(await tmux.run(['capture-pane', '-p', '-t', terminal.pane]), agent)
+      // 画面が変わらない = このキーでは消せない端末。繰り返しても同じなので止める
+      if (state.kind === 'typed' && state.typed === before) break
+    }
     if (state.idle) result.cleared = cleared
   }
   if (!state.idle) throw new TerminalBusy(state)

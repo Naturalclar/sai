@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { isDescendant, parsePs, promptState, TerminalBusy, TerminalGone, TerminalReplies, typeInto, TERMINAL_REPLY_TTL_MS } from './terminal.ts'
+import { isDescendant, MAX_CLEAR_KEYS, parsePs, promptState, TerminalBusy, TerminalGone, TerminalReplies, typeInto, TERMINAL_REPLY_TTL_MS } from './terminal.ts'
 import type { Tmux } from './terminal.ts'
 
 const CLAUDE_IDLE = [
@@ -63,6 +63,8 @@ class FakeTmux implements Tmux {
   screen = CLAUDE_IDLE
   /** C-u を受けたらこの画面に変わる（null なら変わらない = 消せない端末） */
   afterClear: string | null = CLAUDE_IDLE
+  /** C-u 1 回ごとにこの順で画面が変わる（複数行の打ちかけ）。空なら afterClear */
+  clearSteps: string[] = []
   panePid: string | null = '100'
   async run(args: string[], input?: string): Promise<string> {
     this.calls.push({ args, input })
@@ -71,7 +73,10 @@ class FakeTmux implements Tmux {
       return this.panePid + '\n'
     }
     if (args[0] === 'capture-pane') return this.screen
-    if (args[0] === 'send-keys' && args.includes('C-u') && this.afterClear !== null) this.screen = this.afterClear
+    if (args[0] === 'send-keys' && args.includes('C-u')) {
+      if (this.clearSteps.length > 0) this.screen = this.clearSteps.shift()!
+      else if (this.afterClear !== null) this.screen = this.afterClear
+    }
     return ''
   }
 }
@@ -96,7 +101,7 @@ test('typeInto: replaceTyped なら打ちかけを C-u で消し、空になっ�
   assert.deepEqual(
     tmux.calls.map((c) => (c.args[0] === 'send-keys' ? `send-keys ${c.args[3]}` : c.args[0])),
     ['display-message', 'capture-pane', 'send-keys C-u', 'capture-pane', 'load-buffer', 'paste-buffer', 'send-keys Enter'],
-    'C-u → もう一度 capture → 貼る',
+    'C-u（+ BSpace）→ もう一度 capture → 貼る',
   )
 
   // replaceTyped が無ければ今までどおり TerminalBusy（kind: typed、typed に文）
@@ -150,4 +155,48 @@ test('TerminalReplies: ターン完了の行が since より新しくなった�
   now += TERMINAL_REPLY_TTL_MS + 1
   r.settle(() => undefined)
   assert.equal(r.running('T@r'), false)
+})
+
+const CODEX_IDLE = [
+  '• You have 3 usage limit resets available. Run /usage to use one.',
+  '› Ask Codex to do anything',
+  '  gpt-5.6-sol medium · /Users/me/repo',
+].join('\n')
+
+test('promptState: Codex の placeholder「Ask Codex to do anything」は空扱い、打ちかけは typed、モデルの行は続きに含めない（#133）', () => {
+  assert.deepEqual(promptState(CODEX_IDLE, 'codex'), { idle: true, kind: 'idle', reason: '', typed: '' })
+  const typing = promptState(CODEX_IDLE.replace('› Ask Codex to do anything', '› これは打ちかけ'), 'codex')
+  assert.equal(typing.kind, 'typed')
+  assert.equal(typing.typed, 'これは打ちかけ', 'モデルの行（  gpt-5.6-sol medium · …）は打ちかけの続きではない')
+  const multi = promptState(CODEX_IDLE.replace('› Ask Codex to do anything', '› a1\n  b2\n  c3'), 'codex')
+  assert.equal(multi.typed, 'a1\nb2\nc3')
+})
+
+test('promptState: Claude の複数行の打ちかけは続きの行（2 文字下げ）も typed に入る（#128）', () => {
+  const multi = promptState(CLAUDE_IDLE.replace('❯ Try "refactor <filepath>"', '❯\u00a01行目\n  2行目\n  3行目'), 'claude')
+  assert.equal(multi.kind, 'typed')
+  assert.equal(multi.typed, '1行目\n2行目\n3行目')
+  assert.match(multi.reason, /1行目/)
+})
+
+test('typeInto: 複数行の打ちかけは空になるまで C-u を繰り返してから貼る。消えなくなったら止めて貼らない（#128）', async () => {
+  const line = (rest: string) => CLAUDE_IDLE.replace('❯ Try "refactor <filepath>"', rest)
+  const tmux = new FakeTmux()
+  tmux.screen = line('❯ 1行目\n  2行目\n  3行目')
+  tmux.clearSteps = [line('❯ 1行目\n  2行目'), line('❯ 1行目'), CLAUDE_IDLE]
+  const result = await typeInto(tmux, ps, { pane: '%9', pid: 200 }, 'claude', '本文', { replaceTyped: true, settleMs: 0 })
+  assert.equal(result.cleared, '1行目\n2行目\n3行目', '消した全文（reply.log に残す）')
+  assert.equal(tmux.calls.filter((c) => c.args.includes('C-u')).length, 3, '行数ぶん C-u')
+  assert.equal(tmux.calls.some((c) => c.args[0] === 'paste-buffer'), true)
+
+  // 2 回目で画面が変わらなくなったら、それ以上送らずに 409
+  const stuck = new FakeTmux()
+  stuck.screen = line('❯ 1行目\n  2行目\n  3行目')
+  stuck.clearSteps = [line('❯ 1行目\n  2行目')]
+  stuck.afterClear = null
+  const err = await typeInto(stuck, ps, { pane: '%9', pid: 200 }, 'claude', '本文', { replaceTyped: true, settleMs: 0 }).catch((e: unknown) => e)
+  assert.ok(err instanceof TerminalBusy)
+  assert.equal(err.typed, '1行目\n2行目', '残っている分')
+  assert.equal(stuck.calls.filter((c) => c.args.includes('C-u')).length, 2, '変わらなくなった時点で止める')
+  assert.ok(MAX_CLEAR_KEYS >= 20)
 })

@@ -152,6 +152,12 @@
     .pending-line { padding-left: 46px; }
     .day::before { left: 8px; right: 8px; }
     .reply .target { flex-wrap: wrap; }
+    /* 入力欄は全幅、送信ボタンはその下の行の右端（左に注意）。送信を右に並べると textarea が画面幅より狭くなり、
+       iOS Safari がフォーカスでその幅に合わせて拡大することがある（#122）。16px も幅の条件で当てる（pointer: coarse に
+       ならない iPad + トラックパッドなどの取りこぼし） */
+    .reply .row textarea { flex: 1 1 100%; font-size: 16px; }
+    .reply .row .note { flex: 1 1 auto; order: 2; min-width: 0; }
+    .reply .row button { order: 3; margin-left: auto; }
   }
 
   /* -- タッチ端末: 指で押せる大きさにする。幅ではなく pointer で当てる（タブレットも対象） */
@@ -315,7 +321,8 @@
   .group.approval.done { opacity: .6; }
   .pending-line.long .time { color: var(--synth); font-weight: 600; }
   .reply { position: relative; display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
-  .reply .row { display: flex; gap: 8px; align-items: flex-end; }
+  /* 広い画面: [textarea][送信] の横並び、注意（.note）はその下の行（order で後ろに回す） */
+  .reply .row { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: flex-end; }
   .reply textarea { flex: 1; resize: vertical; min-height: 2.6em; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font: inherit; }
   .reply textarea:focus { outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent); border-color: var(--accent); }
   .reply .row button { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 8px 14px; font: inherit; font-weight: 600; cursor: pointer; white-space: nowrap; }
@@ -337,7 +344,7 @@
   .mention li .title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
   .mention li .why { font-size: 11px; color: var(--synth); white-space: nowrap; }
   .mention li .icon, .reply .target .icon { flex: none; line-height: 1; }
-  .reply .note { color: var(--muted); font-size: 11px; }
+  .reply .note { color: var(--muted); font-size: 11px; flex-basis: 100%; order: 3; }
   .notice { color: var(--muted); font-size: 12px; margin-top: 10px; }
   .notice.error { color: var(--claude); }
   /* 端末の打ちかけを消して送るかの確認（#117） */

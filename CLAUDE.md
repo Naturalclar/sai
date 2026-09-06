@@ -17,7 +17,7 @@ pnpm dev                    # Vite。/api を 127.0.0.1:8787 に proxy するの
 pnpm build                  # typecheck → vite build web（web/dist/ へ）
 pnpm lint                   # oxlint web/src server shared
 pnpm typecheck              # tsc -p web && tsc -p server
-pnpm test                   # node:test（server/**/*.test.ts と shared/**/*.test.ts）
+pnpm test                   # node:test（server/、shared/、web/src/ の *.test.ts）
 pnpm test:feed              # python3 -m unittest feed.test_record
 ```
 
@@ -111,9 +111,13 @@ Codex CLI (notify) ──────┘                                   │
 | `AGENT_FEED_DEBUG` | `1` で record.py の例外をログに残す |
 | `CODEX_HOME` | Codex のホーム（既定 `~/.codex`） |
 | `SAI_PORT` | サーバの既定ポート（既定 `8787`） |
+| `SAI_TERMINAL` | `0` で「tmux のペインに打ち込む」を切り、返信を常に別プロセス（`claude -p` / `codex exec`）で回す |
+| `SAI_TMUX_BIN` | ペインに打ち込むときの `tmux` の実行ファイル（既定は PATH の `tmux`） |
 | `SAI_CLAUDE_BIN` / `SAI_CODEX_BIN` | 返信で起動する CLI の実行ファイル（既定は PATH の `claude` / `codex`） |
 | `SAI_TAILSCALE_BIN` | tailnet 経由の認証の `whois` に使う `tailscale`（既定は PATH、無ければ macOS の GUI 版） |
 | `SAI_CLAUDE_ARGS` / `SAI_CODEX_ARGS` | 返信のコマンドに足す引数（`--allowedTools "Bash(gh *)"` など。シェル風に割る。`server/runner.ts` の `splitArgs()`）。Claude は先頭に置く（`--allowedTools` は可変長で、後ろだと本文を飲む） |
 | `AGENT_FEED_SKIP` | `1` で record.py は何も記録しない（一言を作る `claude -p` に付ける） |
 | `SAI_DIGEST` / `SAI_DIGEST_MODEL` | `1` で一言コメントを作る（既定オフ）。モデルは既定 `haiku` |
 | `SAI_APPROVE` | `0` で返信中の許可・質問を画面で答える配線（`--mcp-config` + `--permission-prompt-tool`）を付けない |
+
+コードが読む環境変数がこの表と README の表の両方に載っていることは `server/docs.test.ts` が見る（変数を足したら両方の表に足す）。

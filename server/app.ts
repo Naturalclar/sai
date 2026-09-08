@@ -288,8 +288,8 @@ export function createApp(
     })
   }
 
-  /** GET/PUT /api/settings。PUT は同一オリジンのみ。変えられるのは性格だけ（digest の有効/無効とモデルは環境変数） */
-  const settingsPayload = async (): Promise<SettingsResponse> => ({ ...(await settingsStore.get()), digest: digest.enabled, model: digest.model })
+  /** GET/PUT /api/settings。PUT は同一オリジンのみ。変えられるのは性格だけ（digest の有効/無効・口・モデルは環境変数） */
+  const settingsPayload = async (): Promise<SettingsResponse> => ({ ...(await settingsStore.get()), digest: digest.enabled, provider: digest.provider, model: digest.model })
   const putSettings = async (req: IncomingMessage, res: ServerResponse) => {
     if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
     let body: unknown

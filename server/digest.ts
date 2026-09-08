@@ -1,6 +1,7 @@
 // チャットの一言コメント（digest）。エージェントの返答（text）を、性格つきの 1〜2 文に言い換える。
 //
-// 作るのは LLM で、返信と同じ `claude` CLI を `-p` で叩く（依存を足さない。SAI_CLAUDE_BIN も効く）。
+// 作るのは LLM で、既定は返信と同じ `claude` CLI を `-p` で叩く（依存を足さない。SAI_CLAUDE_BIN も効く）。
+// SAI_DIGEST_PROVIDER=openai なら OpenAI 互換の HTTP（Ollama / LM Studio / llama.cpp / vLLM）を Node の fetch で叩く。
 // 結果は ~/.agent-feed/digest.jsonl に追記し、JSONL（記録）は触らない。派生データなので消しても履歴は壊れない。
 // 既定はオフ（SAI_DIGEST=1 で有効）。オンでも「サーバが起動したあとに増えた行」だけ作り、過去の行は作らない。
 // 1 行ずつ直列で回し、失敗した行は無いまま（画面は text を出す）。
@@ -10,10 +11,12 @@ import { dirname } from 'node:path'
 import { entityId } from '../shared/entity.ts'
 import { eventKind } from '../shared/events.ts'
 import { digestPrompt } from '../shared/persona.ts'
-import type { FeedRow, PersonaId } from '../shared/types.ts'
+import type { DigestProvider, FeedRow, PersonaId } from '../shared/types.ts'
 
 export const DIGEST_FILE = 'digest.jsonl'
 export const DEFAULT_DIGEST_MODEL = 'haiku'
+/** SAI_DIGEST_PROVIDER=openai のときの既定の base URL（Ollama。LM Studio は http://127.0.0.1:1234/v1） */
+export const DEFAULT_OPENAI_URL = 'http://127.0.0.1:11434/v1'
 /** 1 件あたりの上限。これを超えたら失敗扱い（次の行へ） */
 export const DIGEST_TIMEOUT_MS = 90_000
 
@@ -103,6 +106,65 @@ export class ClaudeSummarizer implements Summarizer {
   }
 }
 
+/** `POST <base>/chat/completions` の組み立て。テストで形を見る。末尾の `/` は有っても無くてもよい */
+export function summarizeRequest(baseUrl: string, model: string, prompt: string, apiKey?: string): { url: string; init: RequestInit } {
+  const headers: Record<string, string> = { 'content-type': 'application/json' }
+  if (apiKey) headers.authorization = `Bearer ${apiKey}`
+  return {
+    url: `${baseUrl.replace(/\/+$/, '')}/chat/completions`,
+    init: {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], stream: false }),
+    },
+  }
+}
+
+/** 思考つきのモデル（qwen3 など）が OpenAI 互換の口でも本文の先頭に混ぜる `<think>…</think>` を落とす。閉じていなければそこから後ろを全部落とす */
+export function stripThinking(text: string): string {
+  return text
+    .replace(/<think>[\s\S]*?<\/think>/g, '')
+    .replace(/<think>[\s\S]*$/, '')
+    .trim()
+}
+
+/**
+ * OpenAI 互換の HTTP で作る（Ollama / LM Studio / llama.cpp / vLLM）。依存は足さず Node の fetch。
+ * 子プロセスを立てないので AGENT_FEED_SKIP の話は無い。`claude` が無い環境でも動く
+ */
+export class OpenAISummarizer implements Summarizer {
+  private readonly baseUrl: string
+  private readonly model: string
+  private readonly apiKey: string | undefined
+  private readonly timeoutMs: number
+  private readonly fetchFn: typeof fetch
+
+  constructor(baseUrl: string, model: string, apiKey?: string, timeoutMs = DIGEST_TIMEOUT_MS, fetchFn: typeof fetch = fetch) {
+    this.baseUrl = baseUrl
+    this.model = model
+    this.apiKey = apiKey
+    this.timeoutMs = timeoutMs
+    this.fetchFn = fetchFn
+  }
+
+  async summarize(prompt: string): Promise<string> {
+    const { url, init } = summarizeRequest(this.baseUrl, this.model, prompt, this.apiKey)
+    const res = await this.fetchFn(url, { ...init, signal: AbortSignal.timeout(this.timeoutMs) })
+    const body = await res.text()
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${body.trim().slice(0, 200)}`)
+    let parsed: { choices?: { message?: { content?: unknown } }[] }
+    try {
+      parsed = JSON.parse(body) as { choices?: { message?: { content?: unknown } }[] }
+    } catch {
+      throw new Error(`not JSON: ${body.trim().slice(0, 200)}`)
+    }
+    const content = parsed.choices?.[0]?.message?.content
+    const text = typeof content === 'string' ? stripThinking(content) : ''
+    if (!text) throw new Error('empty result')
+    return text
+  }
+}
+
 /** digest.jsonl。起動時に全部読み、以後は追記した分をメモリにも足す */
 export class DigestStore {
   readonly path: string
@@ -159,6 +221,8 @@ export class DigestStore {
 export interface DigesterOptions {
   enabled: boolean
   model: string
+  /** 一言を作る口。表示用（/api/settings の provider）。無ければ claude */
+  provider?: DigestProvider
   /** 一言を作る子プロセスの cwd（フィードのディレクトリ）。ここを cwd にした行は自分の雑音なので作らない */
   ownDir?: string
   /** その行の性格。作る直前に行ごとに引く（セッションのメタに persona があればそれ、無ければ全体の既定。変えたら以後の行から効く） */
@@ -171,6 +235,7 @@ export class Digester {
   readonly store: DigestStore
   readonly enabled: boolean
   readonly model: string
+  readonly provider: DigestProvider
   private readonly summarizer: Summarizer | null
   private readonly persona: (row: FeedRow) => Promise<PersonaId>
   private readonly logPath: string | undefined
@@ -186,6 +251,7 @@ export class Digester {
     this.summarizer = summarizer
     this.enabled = opts.enabled && summarizer !== null
     this.model = opts.model
+    this.provider = opts.provider ?? 'claude'
     this.persona = opts.persona
     this.logPath = opts.logPath
     this.ownDir = opts.ownDir
@@ -299,15 +365,38 @@ export function personaResolver(sources: PersonaSources): (row: FeedRow) => Prom
   }
 }
 
-/** 環境変数から本物を組む。SAI_DIGEST=1 でなければ無効（summarizer は作らない） */
-export function digesterFromEnv(feedDir: string, store: DigestStore, sources: PersonaSources, env: NodeJS.ProcessEnv = process.env): Digester {
+/**
+ * 環境変数から本物を組む。SAI_DIGEST=1 でなければ無効（summarizer は作らない）。
+ * 口は SAI_DIGEST_PROVIDER: claude（既定。`claude -p`）か openai（SAI_DIGEST_URL の `/chat/completions`。SAI_DIGEST_MODEL は必須）。
+ * 設定の間違いはサーバを落とさず、log（既定 stderr）に理由を出して一言を無効のまま立てる
+ */
+export function digesterFromEnv(
+  feedDir: string,
+  store: DigestStore,
+  sources: PersonaSources,
+  env: NodeJS.ProcessEnv = process.env,
+  log: (line: string) => void = (line) => console.error(line),
+): Digester {
   const enabled = env.SAI_DIGEST === '1'
+  const providerRaw = env.SAI_DIGEST_PROVIDER || 'claude'
+  const provider: DigestProvider = providerRaw === 'openai' ? 'openai' : 'claude'
+  const common = { enabled, ownDir: feedDir, persona: personaResolver(sources), logPath: `${feedDir}/digest.log` }
+
+  if (providerRaw !== 'claude' && providerRaw !== 'openai') {
+    if (enabled) log(`digest: SAI_DIGEST_PROVIDER=${providerRaw} は知らない口（claude / openai）。一言は作らない`)
+    return new Digester(store, null, { ...common, model: env.SAI_DIGEST_MODEL || '', provider })
+  }
+  if (provider === 'openai') {
+    const model = env.SAI_DIGEST_MODEL || ''
+    const url = env.SAI_DIGEST_URL || DEFAULT_OPENAI_URL
+    if (enabled && !model) {
+      log('digest: SAI_DIGEST_PROVIDER=openai には SAI_DIGEST_MODEL が要る（ローカルのモデル名。例 qwen3:8b）。一言は作らない')
+      return new Digester(store, null, { ...common, model, provider })
+    }
+    if (enabled) log(`digest: openai ${url} model=${model}`)
+    return new Digester(store, enabled ? new OpenAISummarizer(url, model, env.SAI_DIGEST_API_KEY || undefined) : null, { ...common, model, provider })
+  }
   const model = env.SAI_DIGEST_MODEL || DEFAULT_DIGEST_MODEL
-  return new Digester(store, enabled ? new ClaudeSummarizer(model, feedDir, env) : null, {
-    enabled,
-    model,
-    ownDir: feedDir,
-    persona: personaResolver(sources),
-    logPath: `${feedDir}/digest.log`,
-  })
+  if (enabled) log(`digest: claude model=${model}`)
+  return new Digester(store, enabled ? new ClaudeSummarizer(model, feedDir, env) : null, { ...common, model, provider })
 }

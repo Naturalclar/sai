@@ -411,10 +411,17 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 
 エージェントの返答は長い説明になりがちで、フィードを眺めるには重い。`SAI_DIGEST=1` でサーバを起動すると、**新しく届いたターン完了の行**ごとに本文を **1〜2 文の一言コメント**（「#35 マージしたよ！ブランチも消しといた。次は #31 やる？」のような）に言い換えて、バブルの本文をそれにする。元の本文は消えず、一言の横の「詳細」で今までどおり Markdown で開ける。自分の入力と待ちバブルは変えない。一覧の「最後の発言」も一言があればそれになる。
 
-- **作るのは LLM**で、返信と同じ `claude` CLI を `claude -p --model haiku --output-format json` で叩く（`SAI_CLAUDE_BIN` も効く。モデルは `SAI_DIGEST_MODEL` で変えられる）。結果は `~/.agent-feed/digest.jsonl` に追記する。JSONL（記録）は触らず、派生データなので消しても履歴は壊れない
+- **作るのは LLM**で、既定は返信と同じ `claude` CLI を `claude -p --model haiku --output-format json` で叩く（`SAI_CLAUDE_BIN` も効く。モデルは `SAI_DIGEST_MODEL` で変えられる）。ローカルの LLM で作る口もある（下）。結果は `~/.agent-feed/digest.jsonl` に追記する。JSONL（記録）は触らず、派生データなので消しても履歴は壊れない
 - **既定はオフ。** トークンと時間を使うのと、本文を LLM に送るので、黙って走らせない。オンにしても**サーバが起動したあとに増えた行**だけ作る（過去の行は作らない）
 - 1 行ずつ直列で回す。失敗した行（`claude` が無い、ログインしていない、90 秒で終わらない）は一言無しのままで、画面は本文を出す。理由は `~/.agent-feed/digest.log` に残る
 - 一言を作る `claude -p` が自分自身を記録しないよう、その子プロセスには `AGENT_FEED_SKIP=1` を渡す（`record.py` はこれが立っていると何も書かない）。`--bare` は OAuth を読まないので使えない。フックが指す `record.py` が古くてこれを知らない間は子のターンが JSONL に書かれてしまうが、子は `~/.agent-feed` を `cwd` にして起動するので、サーバは **`cwd` がそこの行を SAI 自身の雑音として読み飛ばす**（画面に出ず、要約もしない）。フックの checkout を最新にすれば書かれなくなる
+- **ローカルの LLM で作る**（Ollama / LM Studio / llama.cpp / vLLM）: `SAI_DIGEST_PROVIDER=openai` にすると、`claude` の代わりに OpenAI 互換の `POST <SAI_DIGEST_URL>/chat/completions` を Node の `fetch` で叩く（依存は足さない。`server/digest.ts` の `OpenAISummarizer`）。`SAI_DIGEST_URL` の既定は Ollama の `http://127.0.0.1:11434/v1`、LM Studio なら `http://127.0.0.1:1234/v1`。**`SAI_DIGEST_MODEL` は必須**（`haiku` はローカルに無い。忘れると起動時に stderr に理由が出て一言が付かないだけで、サーバは立つ）。鍵が要る口には `SAI_DIGEST_API_KEY`（`Authorization: Bearer`）。思考つきのモデル（qwen3 など）が本文に混ぜる `<think>…</think>` は落とす。子プロセスを立てないので `AGENT_FEED_SKIP` の話は無く、`claude` が無い環境でも動く。口調（MBTI）の指示は同じプロンプトで出すので、小さいモデルだと崩れる。崩れるならモデルを上げる。例:
+
+  ```
+  ollama pull qwen3:8b
+  SAI_DIGEST=1 SAI_DIGEST_PROVIDER=openai SAI_DIGEST_MODEL=qwen3:8b pnpm start
+  ```
+
 - **一言の中の参照はリンクになる**（`shared/refs.ts`）。`#123` / `PR #123` は行の `remote`（GitHub のとき）の issue へ、`owner/repo#123` はそのリポジトリへ、`PGR-10891` のような Linear の識別子は `https://linear.app/<workspace>/issue/…` へ、URL はそのまま。Linear の workspace（URL の `linear.app/<workspace>/` の部分）は行からは分からないので、ヘッダの入力欄で設定する（`settings.json` の `linear_workspace`。空ならリンクにしない）。`remote` の無い古い行では番号は文字のまま。URL の途中の `#` や `` `code` `` の中、`SHA-256` のような語は触らない。サイドバーの「最後の発言」はリンクにしない（項目自体がリンクなので）
 - **性格は MBTI の 16 タイプから**選ぶ（性格なしも選べる）。口調の指示だけが変わり、中身（何をしたか）は変えない。**全体の既定**はヘッダの select（`~/.agent-feed/settings.json` の `persona`、`GET/PUT /api/settings`）、**セッションごと**はチャット見出しの select（セッションのメタ `session-meta.json` の `persona`、`PUT /api/sessions/<id>/meta`）。セッションに設定が無ければ既定に従い、「既定」を選び直せば消える。サーバが作るときに行のセッションのメタを引いて決めるので、変えると**以後の行から**効く。過去の一言は作ったときの性格のまま（作り直さない）。MBTI は口調の「型」として借りるだけで、診断や性格分析の話にはしない。口調の表は `shared/persona.ts`
 
@@ -440,7 +447,7 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 | `PUT /api/profile` | body `{ "name"?: "..." }` をいまの値に重ねる。空文字や `null` は「消す」。100文字まで（超えたら `400`）。別オリジンは `403` |
 | `GET /api/profile/icon?v=<mtime>` | 自分のアイコン画像そのもの。無ければ `404`。キャッシュの扱いはセッションのアイコンと同じ |
 | `PUT /api/profile/icon` / `DELETE /api/profile/icon` | 画像を置く / 消す（受け付ける種類・上限はセッションのアイコンと同じ）。`{ "profile": … }` を返す。別オリジンは `403` |
-| `GET /api/settings` | サーバ側の設定。`{ "persona", "digest", "model", "linear_workspace" }`。`digest` は一言の配線が有効か（`SAI_DIGEST=1`） |
+| `GET /api/settings` | サーバ側の設定。`{ "persona", "digest", "provider", "model", "linear_workspace" }`。`digest` は一言の配線が有効か（`SAI_DIGEST=1`）、`provider` はその口（`claude` / `openai`） |
 | `PUT /api/settings` | body `{ "persona": "ENFP" }` / `{ "linear_workspace": "acme" }` をいまの値に重ねる（省略は据え置き）。`shared/persona.ts` に無い性格、`linear.app/<workspace>/` の形でない workspace は `400`（空文字は「設定なし」）。別オリジンは `403` |
 | `GET /api/feed?days=3&repo=` | 生の行と `replying`。アーカイブ済みセッションの行は除く |
 
@@ -456,7 +463,7 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 - **本物の Slack には投げない。** 投げ先が会社のワークスペースになるので、個人リポジトリのセッション記録がそこに流れるのは避ける
 - **SAI は外に出さない。** `127.0.0.1` 限定。デプロイもホスティングもしない。中身は作業内容そのもの。出してよいのは **tailnet まで**で、それも `tailscale serve`（前段のプロキシ）経由だけ。アプリ自身の bind は変えないし、`tailscale funnel` は使わない。Serve のヘッダは `whois` で突き合わせ、合わなければ `401`
 - **ブラウザからコマンドが走る。** 返信は `claude` / `codex` を任意の `cwd` で起動する。ローカルで開いている別サイトからの CSRF でエージェントを走らせないよう、`POST` は `Origin` / `Sec-Fetch-Site` が同一オリジンでなければ `403`（どちらも無い curl などブラウザ以外は通す）。この確認は外さない。権限のバイパス（`--dangerously-skip-permissions` など）も付けない
-- **一言（digest）は本文を LLM に送る。** `SAI_DIGEST=1` のときだけで、既定はオフ。返信と同じ `claude` CLI 経由だが、仕事のリポジトリの返答をそのまま要約に出すことになるのは分かって使う
+- **一言（digest）は本文を LLM に送る。** `SAI_DIGEST=1` のときだけで、既定はオフ。既定は返信と同じ `claude` CLI 経由で、仕事のリポジトリの返答をそのまま要約に出すことになるのは分かって使う。外に出したくなければ `SAI_DIGEST_PROVIDER=openai` でローカルの LLM に向ける（`SAI_DIGEST_URL` が `127.0.0.1` を指している限り本文は手元から出ない）
 - **一覧のタイトルに機密が乗りうる。** 仕事のリポジトリのセッションだと issue の内容がそのまま出る。スクリーンショットを撮るときは自分で気をつける
 
 ## 環境変数
@@ -477,5 +484,8 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 | `SAI_CODEX_ARGS` | 同じく `codex exec resume` に足す引数。例: `-s workspace-write` |
 | `AGENT_FEED_SKIP` | `1` なら `record.py` は何も記録しない。SAI が一言を作るために回す `claude -p` に付ける（自分自身を記録しない） |
 | `SAI_DIGEST` | `1` で一言コメント（digest）を作る。既定はオフ |
-| `SAI_DIGEST_MODEL` | 一言を作るモデル（既定 `haiku`）。`claude -p --model` にそのまま渡す |
+| `SAI_DIGEST_PROVIDER` | 一言を作る口。`claude`（既定。`claude -p`）か `openai`（OpenAI 互換の `/v1/chat/completions`。Ollama / LM Studio などローカルの LLM はこちら） |
+| `SAI_DIGEST_MODEL` | 一言を作るモデル。`claude` なら既定 `haiku`（`claude -p --model` にそのまま渡す）。`openai` なら必須（`qwen3:8b` のようなローカルのモデル名。無ければ一言を作らないでサーバは立つ） |
+| `SAI_DIGEST_URL` | `openai` のときの base URL（既定 `http://127.0.0.1:11434/v1` = Ollama。LM Studio は `http://127.0.0.1:1234/v1`）。末尾に `/chat/completions` を足して叩く |
+| `SAI_DIGEST_API_KEY` | `openai` のときの鍵（任意。`Authorization: Bearer`）。Ollama / LM Studio は不要 |
 | `SAI_APPROVE` | `0` で「返信中の許可・質問に画面から答える」配線（`--mcp-config` + `--permission-prompt-tool`）を付けない |

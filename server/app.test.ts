@@ -704,7 +704,7 @@ test('GET/PUT /api/settings: 性格と Linear の workspace。知らない値は
   let res = await get('/api/settings')
   assert.equal(res.status, 200)
   let data = (await res.json()) as SettingsResponse
-  assert.deepEqual(data, { persona: 'ENFP', digest: true, model: 'fake', linear_workspace: '' }, '既定は ENFP。digest はテストでは有効。Linear は未設定')
+  assert.deepEqual(data, { persona: 'ENFP', digest: true, provider: 'claude', model: 'fake', linear_workspace: '' }, '既定は ENFP。digest はテストでは有効（口は既定の claude）。Linear は未設定')
   const put = (body: unknown, headers: Record<string, string> = {}) =>
     fetch(`${base}/api/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) })
   res = await put({ persona: 'ISTJ' })

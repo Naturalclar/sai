@@ -46,6 +46,10 @@ MAX_MODEL = 100
 MAX_MODE = 40
 # ホスト名。短い形なので十分
 MAX_HOST = 64
+# 日付ファイルに付ける host（#113）で、これ以外の文字は `-` にする。`.` を許さないのは、
+# 読む側（server/store.ts）が `YYYY-MM-DD.<host>.jsonl` として見るため。host_name() が
+# ドメイン部分を落としているので、そもそも `.` はここまで来ない
+_FILE_HOST_RE = re.compile(r"[^A-Za-z0-9_-]")
 MAX_FIRST_USER = 300
 SYNTH_GAP_SECONDS = 30 * 60
 ROLLOUT_MAX_AGE_SECONDS = 48 * 3600
@@ -83,6 +87,18 @@ def host_name() -> str:
         except Exception:
             raw = ""
     return clip(raw.strip().split(".")[0], MAX_HOST)
+
+
+def day_file(now: datetime) -> str:
+    """その日の記録先のファイル名（#113）。
+
+    **`AGENT_FEED_HOST` を設定したときだけ** `YYYY-MM-DD.<host>.jsonl` に分ける。無ければ今までどおり
+    `YYYY-MM-DD.jsonl`（1台で使っている人の置き場は変えない）。分けるのは、同期フォルダ（iCloud /
+    Syncthing / rsync）で複数のマシンが同じファイルに追記すると、片方が捨てられるか競合コピーが
+    できるため。`<host>` は行に載る `host` と同じもの（`host_name()`）を、ファイル名に使える文字だけに落とす"""
+    date = now.strftime("%Y-%m-%d")
+    host = _FILE_HOST_RE.sub("-", host_name()) if os.environ.get("AGENT_FEED_HOST", "").strip() else ""
+    return f"{date}.{host}.jsonl" if host else f"{date}.jsonl"
 
 
 def codex_home() -> Path:
@@ -772,9 +788,14 @@ def find_codex_rollout(session_id: str) -> Path | None:
 # ---------------------------------------------------------------- 合成セッション
 
 def _recent_rows(directory: Path, now: datetime, days: int = 2) -> list[dict]:
+    """直前の行を探すための、**このマシンが書いたぶんだけ**（#113）。
+
+    合成セッションも待ちの重複判定も自分のマシンの続きを見るものなので、集めてきた
+    別マシンのファイル（`YYYY-MM-DD.<別のhost>.jsonl`）は読まなくてよい。`day_file()` を通すので、
+    `AGENT_FEED_HOST` を設定していれば自分のファイル、設定していなければ今までのファイルを見る"""
     rows: list[dict] = []
     for offset in range(days):
-        path = directory / f"{(now - timedelta(days=offset)).strftime('%Y-%m-%d')}.jsonl"
+        path = directory / day_file(now - timedelta(days=offset))
         if path.exists():
             rows.extend(_iter_jsonl(path))
     return rows
@@ -961,7 +982,7 @@ def append_row(directory: Path, row: dict, now: datetime) -> Path:
         os.chmod(directory, 0o700)
     except OSError:
         pass
-    path = directory / f"{now.strftime('%Y-%m-%d')}.jsonl"
+    path = directory / day_file(now)
     line = json.dumps(row, ensure_ascii=False) + "\n"
     handle = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     try:

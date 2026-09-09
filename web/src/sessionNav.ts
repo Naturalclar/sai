@@ -34,23 +34,27 @@ export function isTypingTarget(target: { tagName?: string; isContentEditable?: b
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable === true
 }
 
-/** 移動の行き先。サイドバーの並びと同じで、フィードはセッションより上（0 番目） */
-export type NavTarget = { kind: 'feed' } | { kind: 'session'; id: string }
+/** 移動の行き先＝サイドバーの項目。固定の「フィード」「要対応」がセッションより上に並ぶ */
+export type NavTarget = { kind: 'feed' } | { kind: 'todo' } | { kind: 'session'; id: string }
+
+/** サイドバーの固定項目（見た目の並びと同じ順）。セッションはこの後ろ */
+const PINNED: NavTarget[] = [{ kind: 'feed' }, { kind: 'todo' }]
+
+const same = (a: NavTarget, b: NavTarget) => a.kind === b.kind && (a.kind !== 'session' || a.id === (b as { id: string }).id)
 
 /**
- * 一覧の並び（サイドバーに出ている順）で隣へ。**「フィード」を 0 番目の項目として扱う**ので、
- * 一番上のセッションで prev はフィードに行き、フィードで prev は止まる（サイドバーの見た目と同じ順序）。
- * 起点は「いま開いているセッション」（フィードを見ているときは null）。端では null で、呼び出し側は何もしない。
+ * 一覧の並び（サイドバーに出ている順）で隣へ。**固定項目（フィード → 要対応）をセッションより上として扱う**ので、
+ * 一番上のセッションで prev は「要対応」に行き、フィードで prev は止まる（サイドバーの見た目と同じ順序）。
+ * 端では null で、呼び出し側は何もしない。
  * 開いているセッションが一覧に無いとき（絞り込みで隠れた）は、今までどおり先頭のセッションへ
  */
-export function navTarget(ids: readonly string[], currentId: string | null, direction: 'prev' | 'next'): NavTarget | null {
-  const first = ids[0]
-  // フィードを見ている: 上には何も無い。下は先頭のセッション（あれば）
-  if (currentId === null) return direction === 'prev' || first === undefined ? null : { kind: 'session', id: first }
-  const at = ids.indexOf(currentId)
+export function navTarget(ids: readonly string[], from: NavTarget, direction: 'prev' | 'next'): NavTarget | null {
+  const all: NavTarget[] = [...PINNED, ...ids.map((id): NavTarget => ({ kind: 'session', id }))]
+  const at = all.findIndex((t) => same(t, from))
   // 一覧に無いセッションを開いている（絞り込みで隠れた）。どちらのキーでも先頭のセッションへ
-  if (at < 0) return first === undefined ? null : { kind: 'session', id: first }
-  if (direction === 'prev') return at === 0 ? { kind: 'feed' } : { kind: 'session', id: ids[at - 1]! }
-  const next = ids[at + 1]
-  return next === undefined ? null : { kind: 'session', id: next }
+  if (at < 0) {
+    const first = ids[0]
+    return first === undefined ? null : { kind: 'session', id: first }
+  }
+  return all[at + (direction === 'next' ? 1 : -1)] ?? null
 }

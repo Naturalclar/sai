@@ -34,7 +34,7 @@ const NO_ROWS: never[] = []
 const NO_REPLYING = {}
 const NO_APPROVALS: never[] = []
 
-export function SessionView({ id, onStatus, onOpenSidebar, linear, settings }: { id: string } & PaneProps) {
+export function SessionView({ id, onStatus, onOpenSidebar, onOpenDiff, linear, settings }: { id: string } & PaneProps) {
   const { data, error, updatedAt } = usePolling(() => api.session(id), [id])
   useEffect(() => onStatus(updatedAt, error), [updatedAt, error, onStatus])
 
@@ -83,7 +83,7 @@ export function SessionView({ id, onStatus, onOpenSidebar, linear, settings }: {
           {/* 合成 ID は集計の切れ方で付け先がずれるのでアーカイブできない */}
           {s.session_source !== 'synth' && <ArchiveButton key={`${s.id}:${s.archived ? 1 : 0}`} id={s.id} archived={Boolean(s.archived)} />}
           <MetaEditor key={s.id} id={s.id} meta={s.meta} icon={s.icon} />
-          <DiffButton key={`diff:${s.id}`} id={s.id} />
+          <DiffButton onOpen={() => onOpenDiff(s.id)} />
           {s.agent === 'claude' && <PermissionsButton key={s.id} id={s.id} />}
           {/* SAI から返信するときの許可モード。端末に打ち込む経路では効かないので、そのときは薄く出す */}
           {s.agent === 'claude' && <SessionPermissionModeSelect key={s.id} id={s.id} value={s.meta?.permission_mode} terminal={Boolean(s.terminal)} />}

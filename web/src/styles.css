@@ -130,6 +130,18 @@
      閉じ切ったら visibility を hidden にして、見えない一覧にフォーカスが移らないようにする
      （閉じるときは遷移が終わってから、開くときは即座に）。狭い画面ではこの状態を無視する（下の @media で打ち消す） */
   main.layout.sidebar-closed { grid-template-columns: 0px minmax(0, 1fr); }
+  /* 差分を出しているときは3列目。チャットは狭くなるが隠れない（モーダルと違って会話を見ながら読める） */
+  main.layout.diff-open { grid-template-columns: 320px minmax(0, 1fr) clamp(360px, 38vw, 760px); }
+  main.layout.sidebar-closed.diff-open { grid-template-columns: 0px minmax(0, 1fr) clamp(360px, 38vw, 760px); }
+  .diff-pane { min-height: 0; min-width: 0; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--panel); }
+  .diff-pane .diff-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  .diff-pane .diff-head .title { font-weight: 700; margin-right: auto; }
+  .diff-pane .diff-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 12px; }
+  .diff-pane .where { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+  .diff-pane .where code { font-family: var(--mono); background: var(--chip); padding: 1px 6px; border-radius: 4px; color: var(--ink); }
+  .diff-pane .warn { color: var(--synth); font-size: 12px; margin-top: 6px; }
+  .diff-pane .none { color: var(--muted); font-size: 12px; padding: 2px 0 8px; }
+  .diff-pane .err { color: var(--claude); font-size: 12px; }
   .sidebar { visibility: visible; transition: visibility 0s; }
   main.sidebar-closed .sidebar { visibility: hidden; transition: visibility 0s .2s; }
   main.sidebar-closed .back { display: inline-block; }
@@ -203,7 +215,8 @@
   /* -- 狭い画面: 一覧かチャットのどちらかだけ。#/ が一覧、#/feed と #/s/<id> がチャット */
   @media (max-width: 900px) {
     header .sidebar-toggle { display: none; }
-    main.layout, main.layout.sidebar-closed { grid-template-columns: minmax(0, 1fr); transition: none; }
+    main.layout, main.layout.sidebar-closed, main.layout.diff-open, main.layout.sidebar-closed.diff-open { grid-template-columns: minmax(0, 1fr); transition: none; }
+    .diff-pane { display: none; }
     main.route-feed .sidebar, main.route-session .sidebar { display: none; }
     /* 「閉じた」を無視して、#/ では一覧を必ず出す */
     main.layout.route-list .sidebar { display: block; visibility: visible; }

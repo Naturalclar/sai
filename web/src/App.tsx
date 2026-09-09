@@ -2,6 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useHashRoute, useLocalState, usePolling } from './hooks'
 import { SessionList } from './SessionList'
 import { SessionView } from './SessionView'
+import { DiffPane } from './DiffPane'
+import { DiffModal } from './DiffModal'
+import { useNarrow } from './useNarrow'
 import { FeedView } from './FeedView'
 import { hm } from './format'
 import { MenuMark } from './MenuMark'
@@ -21,6 +24,8 @@ export interface StatusProps {
 /** 右ペイン（チャット）に渡すもの。「← 一覧」が広い画面ではサイドバーを開くだけなので、その口も渡す */
 export interface PaneProps extends StatusProps {
   onOpenSidebar: () => void
+  /** そのセッションの差分を開く。出し方（右のペイン / モーダル）は App が幅で決める */
+  onOpenDiff: (id: string) => void
   /** サーバ側の設定（一言が有効か、既定の性格）。まだ取れていなければ null */
   settings: SettingsResponse | null
   /** Linear の workspace（設定）。一言の中の PGR-123 のリンク先。空ならリンクにしない */
@@ -58,6 +63,14 @@ export function App() {
   const toggleSidebar = useCallback(() => setUi({ sidebar: sidebarOpen ? 'closed' : 'open' }), [setUi, sidebarOpen])
   const openSidebar = useCallback(() => setUi({ sidebar: 'open' }), [setUi])
 
+  // 差分を出しているセッション。広い画面はチャットの右にペイン、狭い画面はモーダル（useNarrow）
+  const [diffId, setDiffId] = useState<string | null>(null)
+  const narrow = useNarrow()
+  const closeDiff = useCallback(() => setDiffId(null), [])
+  // 出すのは、いま開いているセッションの分だけ。別のセッションやフィードへ移っている間は出さない
+  // （そのセッションに戻ってくれば、また出る。閉じるまでそのセッションのものとして覚えておく）
+  const diffOpen = diffId !== null && route.name === 'session' && route.id === diffId ? diffId : null
+
   // Cmd/Ctrl + \ で開閉（VS Code と同じ）。入力欄にフォーカスがあっても効く。IME 変換中は無視
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -78,6 +91,12 @@ export function App() {
     const onKeyDown = (e: KeyboardEvent) => {
       const action = navAction(e)
       if (!action || isTypingTarget(e.target as HTMLElement | null)) return
+      if (action === 'feed' && diffOpen !== null) {
+        // 差分を出しているときの Esc は、まずそれを閉じる
+        e.preventDefault()
+        setDiffId(null)
+        return
+      }
       if (action === 'feed') {
         if (selectedId === null) return
         e.preventDefault()
@@ -92,7 +111,7 @@ export function App() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [sessionIds, selectedId])
+  }, [sessionIds, selectedId, diffOpen])
 
   useEffect(() => {
     document.title = route.name === 'session' ? `SAI · ${route.id.slice(0, 12)}` : 'SAI'
@@ -148,7 +167,7 @@ export function App() {
           画面のビルドが古い。別のターミナルで <code>pnpm build</code> してください（終わると自動で読み直す）
         </div>
       )}
-      <main className={`layout route-${route.name}${sidebarOpen ? '' : ' sidebar-closed'}`}>
+      <main className={`layout route-${route.name}${sidebarOpen ? '' : ' sidebar-closed'}${diffOpen !== null && !narrow ? ' diff-open' : ''}`}>
         <aside className="sidebar">
           {/* 幅を固定した箱に入れる。開閉の遷移中に列だけが縮み、中身は折り返さない */}
           <div className="side-inner">
@@ -157,12 +176,15 @@ export function App() {
         </aside>
         <div className="pane">
           {route.name === 'session' ? (
-            <SessionView id={route.id} onStatus={onStatus} onOpenSidebar={openSidebar} linear={linear} settings={settings} />
+            <SessionView id={route.id} onStatus={onStatus} onOpenSidebar={openSidebar} onOpenDiff={setDiffId} linear={linear} settings={settings} />
           ) : (
-            <FeedView project={filters.project} sessions={list.data?.sessions} onStatus={onStatus} onOpenSidebar={openSidebar} linear={linear} settings={settings} />
+            <FeedView project={filters.project} sessions={list.data?.sessions} onStatus={onStatus} onOpenSidebar={openSidebar} onOpenDiff={setDiffId} linear={linear} settings={settings} />
           )}
         </div>
+        {/* 広い画面はチャットの右にもう1枚。狭い画面は今までどおりモーダルで重ねる */}
+        {diffOpen !== null && !narrow && <DiffPane id={diffOpen} onClose={closeDiff} />}
       </main>
+      {diffOpen !== null && narrow && <DiffModal id={diffOpen} onClose={closeDiff} />}
     </>
   )
 }

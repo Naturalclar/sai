@@ -32,8 +32,11 @@ export const PERSONAS: readonly Persona[] = [
 
 export const DEFAULT_PERSONA: PersonaId = 'ENFP'
 
-/** 一言の長さの目安（文字）。プロンプトで指示するだけで、超えても切らない */
-export const DIGEST_MAX_CHARS = 60
+/**
+ * 一言の長さの目安（文字）。プロンプトで指示するだけで、超えても切らない。
+ * 60 だと「番号 + 何をするものか」が入りきらず、中身のほうが削られていた（#165）
+ */
+export const DIGEST_MAX_CHARS = 80
 
 export function isPersonaId(value: unknown): value is PersonaId {
   return typeof value === 'string' && PERSONAS.some((p) => p.id === value)
@@ -54,6 +57,9 @@ export function digestPrompt(persona: PersonaId | string | undefined, text: stri
     `- 日本語で 1〜2 文、${DIGEST_MAX_CHARS} 文字以内`,
     '- 何をしたか（と、あれば次の一手や確認したいこと）だけ。前置きや説明は省く',
     '- URL、番号（#35、PR #12 など）、ファイル名は残す',
+    // 番号だけ残ると「#134 を作った」で何を作ったか分からない。本文にはたいてい書いてあるので、そこから拾わせる
+    // 例に実在の番号や、このリポジトリにありそうな内容を使うと、関係ない行でもそれを書き写す。無関係な題材にする
+    '- issue / PR の番号には「何をするものか」を短く添える（例:「PR #12 作成、ログイン失敗時のリトライを追加」）。本文から分からなければ番号だけでよい。番号が複数あるときは主なものだけでよい',
     '- 質問や指示（「〜していい？」「〜を選んで」）が含まれていれば、それを優先して残す',
     '- 出力は一言だけ。引用符、「一言:」などの前置き、説明は付けない',
     `- 口調: ${p.tone}`,

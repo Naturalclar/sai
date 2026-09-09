@@ -23,8 +23,13 @@ test('isPersonaId / personaOf: 知らない値は既定に落ちる', () => {
 test('digestPrompt: 共通の骨格 + 口調 + 本文。本文は末尾にそのまま入る', () => {
   const text = 'PR #35 を squash マージしました。\n- main は fad19a4'
   const p = digestPrompt('ISTJ', text)
-  assert.match(p, /1〜2 文、60 文字以内/)
+  assert.match(p, /1〜2 文、80 文字以内/)
   assert.match(p, /番号（#35、PR #12 など）/)
+  // 番号だけでなく「何をするものか」も残させる（#165）
+  assert.match(p, /issue \/ PR の番号には「何をするものか」を短く添える/)
+  assert.match(p, /本文から分からなければ番号だけでよい/)
+  // 例に実在の番号を使うと、関係ない行でもモデルがそれを書き写す
+  assert.doesNotMatch(p, /#163|worktree 名でなく/, '例は無関係な題材にする')
   assert.ok(p.includes(personaOf('ISTJ').tone))
   assert.ok(p.endsWith(`---\n${text}`))
   const q = digestPrompt('ENFP', text)

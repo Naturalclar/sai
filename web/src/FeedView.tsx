@@ -78,6 +78,15 @@ export function FeedView({ project, sessions = NO_SESSIONS, onStatus, onOpenSide
   const history = useMemo(() => historyFrom(rows, targetId, targetPending ? [targetPending.text] : []), [rows, targetId, targetPending])
 
   const repoOf = (id: string) => targets.find((t) => t.id === id)?.repo
+  /**
+   * 送信ボタンの左に出すモデルの選択。サイドバーの一覧に居るセッションだけ（フィードの行だけからは
+   * agent と出てきたモデルが分からない）。一覧に無ければ出さない。
+   * 毎描画で作り直すと `ReplyBox` に渡る props の中身が変わるので useMemo で固定する
+   */
+  const replyModel = useMemo(() => {
+    const s = targetId ? sessions.find((x) => x.id === targetId) : undefined
+    return s ? { id: s.id, agent: s.agent, models: s.models, value: s.meta?.model } : undefined
+  }, [sessions, targetId])
   // 答え待ちの許可・質問も、処理中の返信と同じく、この画面に関係あるものだけ
   const approvals = Object.values(data?.approvals ?? NO_APPROVALS).flat().filter((a) => counts.has(a.id) || targets.some((t) => t.id === a.id))
 
@@ -124,6 +133,7 @@ export function FeedView({ project, sessions = NO_SESSIONS, onStatus, onOpenSide
             busySince={pending.find((p) => p.id === target.id)?.since}
             now={now}
             onSend={async (text, attachments) => (await send(target.id, text, { attachments })) !== 'confirm'}
+            model={replyModel}
             onDraft={setDrafting}
             mention={{ targets, target, picked: pickedTarget ? picked : null, onPick: setPicked, busyIds }}
           />

@@ -22,7 +22,7 @@ import { ReplaceConfirm } from './ReplaceConfirm'
 import { MetaEditor } from './MetaEditor'
 import { SessionPersonaSelect } from './SessionPersonaSelect'
 import { SessionPermissionModeSelect } from './SessionPermissionModeSelect'
-import { ModelPicker } from './ModelPicker'
+import { ModelTag } from './ModelTag'
 import { ArchiveButton } from './ArchiveButton'
 import { ArchivedTag } from './ArchivedTag'
 import { PermissionModeTag } from './PermissionModeTag'
@@ -65,9 +65,8 @@ export function SessionView({ id, onStatus, onOpenSidebar, linear, settings }: {
           {/* bare clone だと repo は worktree 名なので、リポジトリ名（project）。worktree は右の branch で分かる */}
           <h1><span className="hash">#</span>{projectName(s.project) || s.repo}</h1>
           <span className="meta"><AgentChip agent={s.agent} /></span>
-          <span className="meta">
-            <ModelPicker key={s.id} id={s.id} agent={s.agent} model={s.model} models={s.models} replyModel={s.meta?.model} canReply={!blocked && !s.archived} />
-          </span>
+          {/* 使ったモデルの表示だけ。返信で使うモデルを変えるのは入力欄（送信ボタンの左） */}
+          {s.model && <span className="meta"><ModelTag model={s.model} models={s.models} /></span>}
           {s.branch && <span className="meta"><code>{s.branch}</code></span>}
           <span className="meta">{dayLabel(s.start)} {hm(s.start)} – {hm(s.end)} · {s.turns} ターン</span>
           <span className="meta" title={s.id}>
@@ -132,7 +131,7 @@ export function SessionView({ id, onStatus, onOpenSidebar, linear, settings }: {
             busy={mine !== null}
             busySince={mine?.since}
             now={now}
-            replyModel={s.meta?.model}
+            model={{ id: s.id, agent: s.agent, models: s.models, value: s.meta?.model }}
             onSend={async (text, attachments) => (await send(id, text, { attachments })) !== 'confirm'}
           />
         ))}

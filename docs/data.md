@@ -62,7 +62,7 @@ Codex CLI ──[notify]───────┘
 | `thinking` | そのターンの思考。Claude は `transcript_path` の最後のターン（最後の入力より後）の `thinking` ブロックの本文を `\n\n` で繋いだもの（`signature` だけのブロックは飛ばす）、Codex は rollout の最後のターンの `reasoning` の `summary[].text`。**無いことが多い**（[design-notes.md](design-notes.md) の 4）。ターン完了の行だけ。4,000文字で切る（先頭側を残す）。画面2のエージェントのバブルに折りたたんで出す。`GET /api/feed` の行からは落とす |
 | `model` | そのターンを回したモデル。Claude は `transcript_path` の最後の assistant 行の `message.model`（`claude-fable-5-1` など。CLI が合成した `<synthetic>` は飛ばす）、Codex は rollout の最後の `turn_context.model`（`gpt-5.6-sol` など）。ターン完了の行だけ。画面2の見出しに出す |
 | `host` | どのマシンで記録したか（#112）。`AGENT_FEED_HOST` があればそれ、無ければ `gethostname()` の短い形（`mbp.local` → `mbp`）。**複数のマシンの JSONL を 1 か所に集めたとき**（[#24](https://github.com/Naturalclar/sai/issues/24)）に行の出どころを分けるためのもので、1 台で使う分には見えない。合成セッション（`synth`）のまとめ方もこれで割るので、別のマシンの同じ `repo` / `cwd` の行が 30 分以内に来ても同じセッションにはならない |
-| `pane` / `pid` | セッションが開いている tmux のペイン（`%12`。フックが受け取る `TMUX_PANE`）と本体の pid（Claude は `CLAUDE_PID`、Codex は notify の親）。SAI の返信をそのペインに打ち込むのに使う。tmux の外なら `pane` は空 |
+| `pane` / `pid` | セッションが開いている tmux のペイン（`%12`。フックが受け取る `TMUX_PANE`）と本体の pid（Claude は `CLAUDE_PID`、Codex は notify の親）。SAI の返信をそのペインに打ち込むのに使う。tmux の外なら `pane` は空。**SAI が起動したターン（`claude -p` など）でも空**（サーバが子に `TMUX_PANE` を渡さない。#234）|
 | `permission_mode` | そのターンの許可モード（Claude のフックの `permission_mode`。`default` / `acceptEdits` / `plan` / `auto` / `dontAsk` / `bypassPermissions`）。Codex には無い。一番新しい行の値が一覧とチャット見出しの印になる |
 | `first_user_text` | 最初のユーザー発話。`user_text` が1行も無い古いセッションのタイトルに使う。300文字で切る |
 

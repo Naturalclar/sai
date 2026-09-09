@@ -11,6 +11,7 @@ import { dirname } from 'node:path'
 import { entityId } from '../shared/entity.ts'
 import { eventKind } from '../shared/events.ts'
 import { digestPrompt } from '../shared/persona.ts'
+import { childEnv } from './runner.ts'
 import type { DigestProvider, FeedRow, PersonaId } from '../shared/types.ts'
 
 export const DIGEST_FILE = 'digest.jsonl'
@@ -78,8 +79,9 @@ export class ClaudeSummarizer implements Summarizer {
     return new Promise<string>((resolve, reject) => {
       const child = spawn(bin, args, {
         cwd: this.cwd,
-        // フック（record.py）に「記録するな」を伝える。この子が Stop の行として載るのを防ぐ
-        env: { ...this.env, AGENT_FEED_SKIP: '1' },
+        // フック（record.py）に「記録するな」を伝える。この子が Stop の行として載るのを防ぐ。
+        // 万一記録されても、SAI が起動した子なのでサーバのペインは継がせない（childEnv。#234）
+        env: { ...childEnv(this.env), AGENT_FEED_SKIP: '1' },
         stdio: ['pipe', 'pipe', 'pipe'],
       })
       const out: Buffer[] = []

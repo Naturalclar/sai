@@ -197,6 +197,23 @@ interface Persisted extends Replying {
   failedAt?: number
 }
 
+/**
+ * SAI が起動した子に渡す環境。**`TMUX_PANE` を落とす**（#234）。
+ *
+ * 子は SAI サーバの環境をそのまま継ぐので、そのままだと `pnpm start` を打ったペインの `TMUX_PANE` が
+ * 渡り、そこで動く `record.py` が**サーバ自身のペイン**を行に書いてしまう（手元では 6 つの worktree の
+ * セッションが全部 1 つのペインに付いていた）。そうなると `SessionSummary.terminal` が偽陽性になり、
+ * 「端末で開いているから処理中でも送れる」と誤判定して二重起動の歯止め（#100 / #170）が外れる。
+ *
+ * 落とすのは `TMUX_PANE` だけで、`TMUX`（サーバのソケット）は残す。エージェントがターンの中で
+ * `tmux` を使うことはあるので、tmux ごと見えなくはしない。
+ */
+export function childEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const next = { ...env }
+  delete next.TMUX_PANE
+  return next
+}
+
 /** pid が生きているか。EPERM は「居るが触れない」なので生きている扱い。0 以下（spawn 待ちの自分の子）は生きている扱い */
 export function isAlive(pid: number): boolean {
   if (pid <= 0) return true
@@ -310,6 +327,8 @@ export class ProcessRunner implements Runner {
     const child = spawn(cmd.bin, cmd.args, {
       cwd: cmd.cwd,
       detached: true,
+      // SAI が起動した子は「端末で開いている」ではない。サーバのペインを継がせない（#234）
+      env: childEnv(),
       // stdin は閉じておく。`claude -p` はパイプが繋がっていると stdin も読みに行く
       stdio: ['ignore', fd ?? 'ignore', fd ?? 'ignore'],
     })

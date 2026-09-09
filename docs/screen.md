@@ -130,7 +130,11 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 - **キーボードで答えられる。** `⌘Enter`（Windows / Linux は `Ctrl+Enter`）で **許可**、`⌘⇧Enter` で **常に許可**。「常に許可」のボタンが無いバブル（`Edit` など）では `⌘⇧Enter` も許可になる。フィードのように複数出ているときは**一番上のバブル**だけが受ける。`AskUserQuestion`（選択肢を選ぶもの）と、処理中・答え済みのバブルは受けない。判定は `web/src/approvalKeys.ts` の `approvalAction()`
 - ショートカットは入力欄に文字を打っている最中でも効く（keydown を capture で先に取る）。**答え待ちのバブルが無ければ入力欄の `⌘Enter` は今までどおり送信**で、拾ったときだけ入力欄に渡さない
 - 答え待ちはサーバのメモリだけ。返信のプロセスが終われば（許可を待たずに落ちた、`claude` を kill した）その分は拒否扱いで消える。MCP 側が 90 秒取りに来なければ捨てる
-- `AskUserQuestion` は質問と選択肢がそのまま出て、全部に答えると `answers` 付きで返す（複数選択は 1 つだけ選ぶ）。`ExitPlanMode` はプランの先頭が出て、許可すれば進む
+- `AskUserQuestion` は **1 問ずつ**出る（1 回で最大 4 問聞かれるので、全部積むと携帯で読めない）。「1 / 3」の残数と [戻る] が付き、最後の 1 問に答えた時点で全問ぶんの `answers` をまとめて 1 回で返す（1 問でも欠けると CLI が「答えが無い」扱いにする）。`ExitPlanMode` はプランの先頭が出て、許可すれば進む
+  - **選択肢のほかに [その他] の自由記入がある**（端末の同じダイアログと同じ）。書いた文字列はそのままエージェントに届く（label 以外でも CLI が受け取ることは実測ずみ）
+  - **推奨には「推奨」バッジが付く。** 印の付きかたはツールが決めているわけではなく質問を書くモデルの書き癖なので、label 末尾の `(Recommended)` / `（推奨）` と、`description` の書き出しの `推奨` / `Recommended` の両方を拾う（label からは印を落とす）。判定は `shared/approvals.ts` の `askQuestions()`
+  - **`description` は選択肢の下にそのまま出す**（ツールチップだと携帯で読めない）。`multiSelect: true` の質問はいくつでも選べて、答えはカンマ区切りになる
+  - 画面は `web/src/AskQuestions.tsx`
 **いま何が許可されているかは見出しの盾のアイコンから見られる。** そのセッションの `cwd` に効いている設定を読んで、評価の順（**拒否 → 毎回聞く → 許可**）に出す。読む先は強い順に、組織の `managed-settings.json`（macOS は `/Library/Application Support/ClaudeCode/`）、`<cwd>/.claude/settings.local.json`（**[常に許可] が書く先**）、`<cwd>/.claude/settings.json`、`~/.claude/settings.json`、それと `SAI_CLAUDE_ARGS` の `--allowedTools` / `--disallowedTools`（SAI から返信したターンにだけ効く）。**拒否はどの出どころのものでも許可に勝つ**ので、階段ではなく種類ごとに並べて出どころを添える。端末側の `claude --settings` は SAI からは分からないので読まない。読むだけで、ここからは足せない・消せない。
 
 許可モード（`permission_mode`。行に載っている一番新しい値）も併せて出す。ルールが 1 件も無くても `auto` や `bypassPermissions` なら通ってしまうので、ルールだけ見ると誤解する。`default` 以外のときは一覧とチャット見出しに印が付く。Codex は許可の形が別（`~/.codex/config.toml` の `approval_policy` / `trust_level`）なので対象外。

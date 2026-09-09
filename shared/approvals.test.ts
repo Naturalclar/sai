@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { answerAsk, approvalText, askQuestions, toolSummary, alwaysAllowRule, ruleLabel } from './approvals.ts'
+import { answerAsk, answersReady, approvalText, askQuestions, joinAnswer, toolSummary, alwaysAllowRule, ruleLabel } from './approvals.ts'
 import type { Approval } from './types.ts'
 
 test('approvalText は record.py の waiting_text と同じ接頭辞', () => {
@@ -17,9 +17,44 @@ test('askQuestions は壊れた形を落とし、answerAsk は元の入力に an
   const input = { questions: [{ question: '赤か青か?', header: '色', options: [{ label: '赤', description: 'red' }, { label: '青' }], multiSelect: false }, { nope: 1 }, 'x'] }
   const qs = askQuestions(input)
   assert.equal(qs.length, 1)
-  assert.deepEqual(qs[0], { question: '赤か青か?', header: '色', options: [{ label: '赤', description: 'red' }, { label: '青', description: '' }], multiSelect: false })
+  assert.deepEqual(qs[0], {
+    question: '赤か青か?',
+    header: '色',
+    options: [{ label: '赤', description: 'red', recommended: false }, { label: '青', description: '', recommended: false }],
+    multiSelect: false,
+  })
   const approval: Approval = { approval_id: 'a', id: 'S@r', since: '', tool_name: 'AskUserQuestion', input, tool_use_id: '', text: '' }
   assert.deepEqual(answerAsk(approval, { '赤か青か?': '青' }), { behavior: 'allow', updatedInput: { questions: input.questions, answers: { '赤か青か?': '青' } } })
+  // 選択肢に無い答え（その他の自由記入）もそのまま渡す。CLI が受け取ることは実測ずみ（#195）
+  assert.deepEqual(answerAsk(approval, { '赤か青か?': 'むらさき' }).updatedInput?.answers, { '赤か青か?': 'むらさき' })
+})
+
+test('askQuestions は推奨の印を拾って label からは落とす（label 末尾でも description の書き出しでも）', () => {
+  const opts = (options: unknown[]) => askQuestions({ questions: [{ question: 'q', options }] })[0]!.options
+  // 英語のお約束: label の末尾に (Recommended)
+  assert.deepEqual(opts([{ label: 'Vite (Recommended)', description: '速い' }]), [{ label: 'Vite', description: '速い', recommended: true }])
+  // 日本語で聞かれたとき: 全角かっこ、あるいは description の書き出しが「推奨」（実測はこちらだった）
+  assert.deepEqual(opts([{ label: '青（推奨）' }]), [{ label: '青', description: '', recommended: true }])
+  assert.deepEqual(opts([{ label: '青', description: '推奨' }]), [{ label: '青', description: '推奨', recommended: true }])
+  assert.deepEqual(opts([{ label: '青', description: '推奨: 一番速い' }]), [{ label: '青', description: '推奨: 一番速い', recommended: true }])
+  // 語の途中に混ざっただけのものは印にしない
+  assert.deepEqual(opts([{ label: '推奨されない案' }]), [{ label: '推奨されない案', description: '', recommended: false }])
+  assert.deepEqual(opts([{ label: 'A', description: 'これは推奨しない' }]), [{ label: 'A', description: 'これは推奨しない', recommended: false }])
+  // 印だけの label は空にせず元のまま残す
+  assert.deepEqual(opts([{ label: '(Recommended)' }]), [{ label: '(Recommended)', description: '', recommended: true }])
+})
+
+test('joinAnswer は選んだ label と自由記入を繋ぎ、answersReady は全問そろって初めて真', () => {
+  assert.equal(joinAnswer(['赤'], ''), '赤')
+  assert.equal(joinAnswer(['赤', '青'], ''), '赤, 青')
+  assert.equal(joinAnswer([], 'むらさき'), 'むらさき')
+  assert.equal(joinAnswer(['赤'], ' きん '), '赤, きん')
+  assert.equal(joinAnswer([], '   '), '')
+  const qs = askQuestions({ questions: [{ question: 'a' }, { question: 'b' }] })
+  assert.equal(answersReady(qs, { a: '1' }), false)
+  assert.equal(answersReady(qs, { a: '1', b: '  ' }), false)
+  assert.equal(answersReady(qs, { a: '1', b: '2' }), true)
+  assert.equal(answersReady([], {}), false)
 })
 
 test('alwaysAllowRule: Bash は先頭 1 語（サブコマンドを持つ CLI は 2 語）の前方一致、MCP はツール名、他は無し', () => {

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { alwaysAllowRule, answerAsk, askQuestions, ruleLabel } from '../../shared/approvals.ts'
 import { approvalAction } from './approvalKeys'
 import { api, type Approval } from './api'
+import { AskQuestions } from './AskQuestions'
 import { elapsedLabel, hm } from './format'
 
 interface Props {
@@ -19,14 +20,13 @@ interface Props {
 
 /**
  * 返信中のエージェントが待っている許可・質問。[許可] [常に許可] [拒否] で答える（常に許可は Bash と MCP ツールだけ）。
- * AskUserQuestion は選択肢をボタンで出し、全部の質問に答えたら送る。
+ * AskUserQuestion は AskQuestions が 1 問ずつ出し、全部そろったら送る。
  * 答えるとサーバの approvals から消え、次のポーリングでこのバブルも消える（送った直後は done で押せなくする）
  */
 export function ApprovalBubble({ approval, now, repo, hotkey = false }: Props) {
   const [busy, setBusy] = useState(false)
   const [done, setDone] = useState<'allow' | 'always' | 'deny' | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [answers, setAnswers] = useState<Record<string, string>>({})
   const questions = approval.tool_name === 'AskUserQuestion' ? askQuestions(approval.input) : []
   const elapsed = elapsedLabel(approval.since, now)
 
@@ -81,40 +81,13 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false }: Props) {
           <div className="body">⏳ {approval.text}</div>
           {detail && <pre className="detail">{detail}</pre>}
           {questions.length > 0 ? (
-            <div className="questions">
-              {questions.map((q) => (
-                <div className="question" key={q.question}>
-                  <div className="q">{q.header && <b>{q.header}: </b>}{q.question}</div>
-                  <div className="options">
-                    {q.options.map((o) => (
-                      <button
-                        type="button"
-                        key={o.label}
-                        className={answers[q.question] === o.label ? 'picked' : ''}
-                        title={o.description}
-                        disabled={busy || done !== null}
-                        onClick={() => setAnswers((a) => ({ ...a, [q.question]: o.label }))}
-                      >
-                        {o.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ))}
-              <div className="actions">
-                <button
-                  type="button"
-                  className="allow"
-                  disabled={busy || done !== null || questions.some((q) => !answers[q.question])}
-                  onClick={() => void send(answerAsk(approval, answers))}
-                >
-                  {done === 'allow' ? '答えた' : '答える'}
-                </button>
-                <button type="button" className="deny" disabled={busy || done !== null} onClick={() => void send({ behavior: 'deny', message: 'SAI の画面で答えなかった' })}>
-                  {done === 'deny' ? '答えなかった' : '答えない'}
-                </button>
-              </div>
-            </div>
+            <AskQuestions
+              questions={questions}
+              busy={busy}
+              done={done !== null}
+              onAnswer={(answers) => void send(answerAsk(approval, answers))}
+              onDecline={() => void send({ behavior: 'deny', message: 'SAI の画面で答えなかった' })}
+            />
           ) : (
             <div className="actions">
               <button

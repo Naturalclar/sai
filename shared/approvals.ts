@@ -19,12 +19,27 @@ const firstLines = (text: string, n: number) =>
     .join('\n')
 
 /** AskUserQuestion の入力から質問を取り出す。形が違えば空 */
+export interface AskOption {
+  label: string
+  description: string
+  /** 推奨の印が付いていた（label 末尾の `(Recommended)` か description の書き出し）。label からは印を落としてある */
+  recommended: boolean
+}
+
 export interface AskQuestion {
   question: string
   header: string
-  options: { label: string; description: string }[]
+  options: AskOption[]
   multiSelect: boolean
 }
+
+/**
+ * 推奨の印。CLI が決まった形で送ってくるわけではなく、質問を書くモデルの書き癖なので 2 通り拾う（実測 #195）:
+ * - label の末尾に `(Recommended)`（英語でのお約束。日本語なら `（推奨）`）
+ * - description の書き出しが `推奨` / `Recommended`（日本語で聞かれると実際にこちらになった）
+ */
+const RECOMMENDED_LABEL = /[（(]\s*(?:recommended|推奨)\s*[)）]\s*$/i
+const RECOMMENDED_DESC = /^\s*(?:recommended|推奨)(?:[。.、,:：]|\s|$)/i
 
 export function askQuestions(input: Record<string, unknown>): AskQuestion[] {
   const raw = input.questions
@@ -37,11 +52,29 @@ export function askQuestions(input: Record<string, unknown>): AskQuestion[] {
     const options = Array.isArray(o.options)
       ? o.options
           .filter((x): x is Record<string, unknown> => !!x && typeof x === 'object' && typeof (x as Record<string, unknown>).label === 'string')
-          .map((x) => ({ label: String(x.label), description: typeof x.description === 'string' ? x.description : '' }))
+          .map((x) => {
+            const given = String(x.label)
+            const description = typeof x.description === 'string' ? x.description : ''
+            const label = given.replace(RECOMMENDED_LABEL, '').trim() || given
+            return { label, description, recommended: RECOMMENDED_LABEL.test(given) || RECOMMENDED_DESC.test(description) }
+          })
       : []
     out.push({ question: o.question, header: typeof o.header === 'string' ? o.header : '', options, multiSelect: o.multiSelect === true })
   }
   return out
+}
+
+/** 1問ぶんの答え。選んだ label に、選択肢に無い答え（その他の自由記入）を足したもの */
+export function joinAnswer(labels: string[], other: string): string {
+  return [...labels, other]
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .join(', ')
+}
+
+/** 全部の質問に答えが入ったか。CLI は 1 問でも欠けると「答えが無い」扱いにするので、送るのは揃ってから */
+export function answersReady(questions: AskQuestion[], answers: Record<string, string>): boolean {
+  return questions.length > 0 && questions.every((q) => (answers[q.question] ?? '').trim() !== '')
 }
 
 /** 許可ダイアログに出るのと同じ「何をしようとしているか」。300文字で切る */
@@ -75,8 +108,9 @@ export function approvalText(toolName: string, input: Record<string, unknown>): 
 }
 
 /**
- * AskUserQuestion の答え。CLI は `updatedInput.answers`（質問文 → 選んだ label。複数選択はカンマ区切り）を読む。
- * 元の questions をそのまま返さないと「答えが無い」扱いになる
+ * AskUserQuestion の答え。CLI は `updatedInput.answers`（質問文 → 答え。複数選択はカンマ区切り）を読む。
+ * 元の questions をそのまま返さないと「答えが無い」扱いになる。
+ * **label 以外の文字列（その他の自由記入）もそのままエージェントに届く**（#195 で実測）
  */
 export function answerAsk(approval: Approval, answers: Record<string, string>): ApprovalAnswer {
   return { behavior: 'allow', updatedInput: { ...approval.input, answers } }

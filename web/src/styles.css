@@ -276,7 +276,7 @@
   @media (pointer: coarse) {
     /* iOS Safari は 16px 未満の入力欄にフォーカスすると画面を拡大するので、入力系は 16px にする */
     /* .reply .row textarea にしているのは、後ろにある基本の `.reply textarea { font: inherit }` に同じ詳細度で負けないため */
-    .reply .row textarea, .filters select, .filters input, .sidebar .filters select, .chat-head .meta select, .chat-head .session-name input { font-size: 16px; }
+    .reply .row textarea, .reply .row .field .ghost, .filters select, .filters input, .sidebar .filters select, .chat-head .meta select, .chat-head .session-name input { font-size: 16px; }
     .sidebar .filters select, .sidebar .filters button { min-height: 40px; }
     .chat-head .meta select { min-height: 36px; }
     /* リポジトリの切り替えは日数の select と同じ大きさに（携帯ではここが唯一の切り替え口。#215） */
@@ -495,6 +495,16 @@
      textarea を全幅にするのは、送信を右に並べると画面幅より狭くなり iOS Safari がフォーカスで拡大することがあるため（#122） */
   .reply .row { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 8px 10px 6px; }
   .reply .row:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent); }
+  /* オートサジェスト（#219）。textarea の背面に**同じ字送りで**ゴーストを敷き、続きだけ薄く出す。
+     字送りに関わる指定（font / padding / white-space / 折り返し）がずれると 2 行目以降で本文と重なるので、
+     必ず両方に当てる（狭い画面の font-size の上書きも同じ） */
+  .reply .row .field { flex: 1 1 100%; position: relative; min-width: 0; }
+  .reply .row .field textarea { display: block; width: 100%; }
+  .reply .row .field .ghost {
+    position: absolute; inset: 0; pointer-events: none; overflow: hidden; color: transparent;
+    white-space: pre-wrap; overflow-wrap: break-word; padding: 2px 0 4px; font: inherit;
+  }
+  .reply .row .field .ghost .rest { color: var(--muted); }
   .reply textarea { flex: 1 1 100%; resize: none; min-height: 1.5em; max-height: 40vh; overflow-y: auto; background: transparent; color: var(--ink); border: 0; border-radius: 0; padding: 2px 0 4px; font: inherit; }
   .reply textarea:focus { outline: none; }
   .reply textarea:disabled { color: var(--muted); }

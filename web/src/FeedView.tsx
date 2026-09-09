@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
 import { entityId } from '../../shared/entity.ts'
-import { projectName } from '../../shared/project.ts'
 import { eventKind } from '../../shared/events.ts'
 import { promptArrived } from './chatGroups'
 import { defaultReplyTarget, feedReplyTargets, mergeReplyTargets, sessionReplyTargets } from '../../shared/reply.ts'
@@ -11,6 +10,7 @@ import { PendingBubble } from './PendingBubble'
 import { ApprovalBubble } from './ApprovalBubble'
 import { ReplyBox, type Picked } from './ReplyBox'
 import { DaysSelect } from './DaysSelect'
+import { FeedProjectPicker } from './FeedProjectPicker'
 import { BackLink } from './BackLink'
 import { useReply } from './useReply'
 import { historyFrom } from './replyHistory'
@@ -25,12 +25,16 @@ const NO_APPROVALS: ApprovalMap = {}
 interface Props extends PaneProps {
   /** サイドバーで選んでいるリポジトリ（`Naturalclar/sai`）。空なら全部 */
   project: string
+  /** リポジトリの候補（App が取った `filters.projects`）。見出しの切り替えに使う */
+  projects: readonly string[]
+  /** リポジトリを変える。サイドバーと同じ `filters.project` を触る（#215） */
+  onProject: (project: string) => void
   /** サイドバーの一覧（App が取ったもの）。@ の候補はこれを主にする。まだ無ければ undefined */
   sessions: SessionSummary[] | undefined
 }
 
-/** 全チャンネルを時系列に流す。リポジトリはサイドバーの絞り込みに従い、日数だけここで選ぶ */
-export function FeedView({ project, sessions = NO_SESSIONS, onStatus, onOpenSidebar, onLeaveToSidebar, linear }: Props) {
+/** 全チャンネルを時系列に流す。リポジトリと日数を見出しで選ぶ（リポジトリはサイドバーの絞り込みと同じ値） */
+export function FeedView({ project, projects, onProject, sessions = NO_SESSIONS, onStatus, onOpenSidebar, onLeaveToSidebar, linear }: Props) {
   const [local, setLocal] = useLocalState<{ days: string }>('sai.feed', { days: '3' })
   const { data, error, updatedAt } = usePolling(() => api.feed({ project, days: local.days }), [project, local.days])
   useEffect(() => onStatus(updatedAt, error), [updatedAt, error, onStatus])
@@ -95,7 +99,10 @@ export function FeedView({ project, sessions = NO_SESSIONS, onStatus, onOpenSide
       <BackLink onOpenSidebar={onOpenSidebar} />
       <div className="chat-head">
         <h1>フィード</h1>
-        <span className="meta">{project ? `#${projectName(project)}` : '全リポジトリ'}{data && ` · ${data.rows.length} ターン · 直近${data.days}日`}</span>
+        <span className="meta">
+          <FeedProjectPicker value={project} projects={projects} onChange={onProject} />
+          {data && ` · ${data.rows.length} ターン · 直近${data.days}日`}
+        </span>
         <span className="meta pull">
           <DaysSelect value={local.days} options={[1, 3, 7]} onChange={(days) => setLocal({ days })} />
         </span>

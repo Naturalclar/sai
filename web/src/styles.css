@@ -253,6 +253,9 @@
     .reply .row textarea, .filters select, .filters input, .sidebar .filters select, .chat-head .meta select, .chat-head .session-name input { font-size: 16px; }
     .sidebar .filters select, .sidebar .filters button { min-height: 40px; }
     .chat-head .meta select { min-height: 36px; }
+    /* リポジトリの切り替えは日数の select と同じ大きさに（携帯ではここが唯一の切り替え口。#215） */
+    .chat-head .project-pick > button { min-height: 36px; border-color: var(--line); }
+    .chat-head .project-pick .menu button { min-height: 40px; }
     .iconbtn { width: 36px; height: 36px; }
     .back { padding: 8px 6px; margin: -8px -6px 0; }
     .reply .row textarea { min-height: 44px; }
@@ -307,6 +310,15 @@
   .chat-head a.repo-link { color: var(--muted); text-decoration: none; white-space: nowrap; }
   .chat-head a.repo-link svg { vertical-align: -3px; margin-right: 4px; }
   .chat-head a.repo-link:hover { color: var(--ink); text-decoration: underline; }
+  /* フィードの見出しのリポジトリ切り替え（#215）。前は読むだけの字だったので、見た目はほぼそのままで押せるだけ */
+  .chat-head .project-pick { position: relative; display: inline-block; }
+  .chat-head .project-pick > button { background: transparent; color: var(--muted); border: 1px solid transparent; border-radius: 6px; padding: 2px 6px; margin-left: -6px; font: inherit; font-size: 12px; cursor: pointer; }
+  .chat-head .project-pick > button:hover { background: var(--hover); border-color: var(--line); color: var(--ink); }
+  .chat-head .project-pick > button[aria-expanded="true"] { background: var(--hover); border-color: var(--line); color: var(--ink); }
+  .chat-head .project-pick .menu { position: absolute; top: calc(100% + 4px); left: 0; min-width: 12em; max-height: 50vh; overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 24px rgba(0, 0, 0, .12); padding: 4px 0; z-index: 5; }
+  .chat-head .project-pick .menu button { display: block; width: 100%; text-align: left; padding: 6px 12px; background: transparent; border: 0; color: var(--ink); font: inherit; font-size: 13px; white-space: nowrap; cursor: pointer; }
+  .chat-head .project-pick .menu button.at { background: var(--hover); }
+  .chat-head .project-pick .menu button.picked { font-weight: 700; }
   /* 表示名・アイコン画像（ブラウザから付けるもの）。画像は角丸の正方形に切る */
   /* 角丸は加工で焼き込む値（shared/icon.ts の ICON_RADIUS_RATIO = 20%）と同じ比率。加工前の古い画像も同じ見た目になる */
   img.icon { width: 16px; height: 16px; object-fit: cover; border-radius: 20%; vertical-align: -3px; }

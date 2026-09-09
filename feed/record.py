@@ -322,6 +322,9 @@ _NOISE_PREFIXES = (
     "Caveat: The messages below",
     "[Request interrupted",
     "<environment_context>",
+    # Codexが人の入力より前／ターン間に差し込む。rolloutではrole=userだが人の発話ではない（#202）。
+    "<recommended_plugins>",
+    "<turn_aborted>",
     "<user_instructions>",
     "<permissions instructions>",
 )

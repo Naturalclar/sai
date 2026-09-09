@@ -325,6 +325,9 @@ _NOISE_PREFIXES = (
     # Codexが人の入力より前／ターン間に差し込む。rolloutではrole=userだが人の発話ではない（#202）。
     "<recommended_plugins>",
     "<turn_aborted>",
+    # これだけタグの形をしていない（`# AGENTS.md instructions for <パス>`）。手元の rollout 22 本のうち
+    # 8 本がこれで始まっていて、タグだけを外していると一番多い形が残る
+    "# AGENTS.md instructions for ",
     "<user_instructions>",
     "<permissions instructions>",
 )

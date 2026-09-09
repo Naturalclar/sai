@@ -1,6 +1,6 @@
 // 日付ファイルの読み込みとキャッシュ。(mtime, size) で覚えて、変わっていなければ再パースしない。
 import { createHash } from 'node:crypto'
-import { readFile, stat } from 'node:fs/promises'
+import { readdir, readFile, stat } from 'node:fs/promises'
 import { join, sep } from 'node:path'
 import type { FeedRow, SessionSummary } from '../shared/types.ts'
 import { aggregate, recentDates } from './aggregate.ts'
@@ -15,6 +15,35 @@ type Signature = [name: string, mtimeMs: number, size: number][]
 
 export function rev(signature: Signature): string {
   return createHash('sha1').update(JSON.stringify(signature)).digest('hex').slice(0, 12)
+}
+
+/** `YYYY-MM-DD.jsonl` と、マシンごとに分けた `YYYY-MM-DD.<host>.jsonl`（#113） */
+const FEED_FILE_RE = /^(\d{4}-\d{2}-\d{2})(?:\.(.+))?\.jsonl$/
+
+/**
+ * 置き場のファイル名から、その日付ぶんを読む順に並べて返す（#113）。
+ *
+ * 記録側が書く host は `[A-Za-z0-9_-]` だけだが、読む側はゆるく受ける（手で置いたものも読めるように）。
+ * 並びは **日付 → host 名**（host 無しが先）で固定する。同じ `ts` の行の前後は読んだ順で決まるので、
+ * ここが `readdir` の順（OS 任せ）のままだとマシンによって画面の並びが変わってしまう
+ */
+export function feedFiles(names: readonly string[], dates: readonly string[]): string[] {
+  const byDate = new Map<string, { host: string; name: string }[]>()
+  for (const name of names) {
+    const m = FEED_FILE_RE.exec(name)
+    if (!m) continue
+    const found = byDate.get(m[1]!)
+    if (found) found.push({ host: m[2] ?? '', name })
+    else byDate.set(m[1]!, [{ host: m[2] ?? '', name }])
+  }
+  const out: string[] = []
+  for (const date of dates) {
+    const found = byDate.get(date)
+    if (!found) continue
+    found.sort((a, b) => (a.host < b.host ? -1 : a.host > b.host ? 1 : 0))
+    for (const f of found) out.push(f.name)
+  }
+  return out
 }
 
 export function parseRows(text: string): FeedRow[] {
@@ -43,18 +72,28 @@ export class FeedStore {
     this.directory = directory
   }
 
-  private paths(days: number): string[] {
-    return recentDates(days).map((d) => join(this.directory, `${d}.jsonl`))
+  /**
+   * 読むファイル名（#113）。1台なら日付ぶんの1つだが、複数マシンの記録を集めていれば
+   * 同じ日に `<host>` 違いが並ぶので、`readdir` して拾う（日付から組み立てると別マシンのぶんが落ちる）
+   */
+  private async names(days: number): Promise<string[]> {
+    let entries: string[]
+    try {
+      entries = await readdir(this.directory)
+    } catch {
+      return [] // 置き場がまだ無い
+    }
+    return feedFiles(entries, recentDates(days))
   }
 
   async signature(days: number): Promise<Signature> {
     const parts: Signature = []
-    for (const path of this.paths(days)) {
+    for (const name of await this.names(days)) {
       try {
-        const st = await stat(path)
-        parts.push([path.slice(this.directory.length + 1), st.mtimeMs, st.size])
+        const st = await stat(join(this.directory, name))
+        parts.push([name, st.mtimeMs, st.size])
       } catch {
-        // 無い日は飛ばす
+        // 読む直前に消えたぶんは飛ばす
       }
     }
     return parts
@@ -92,7 +131,10 @@ export class FeedStore {
 
   async rows(days: number): Promise<FeedRow[]> {
     const rows: FeedRow[] = []
-    for (const path of this.paths(days)) for (const r of await this.readFile(path)) if (!this.isOwnNoise(r)) rows.push(r)
+    for (const name of await this.names(days)) {
+      for (const r of await this.readFile(join(this.directory, name))) if (!this.isOwnNoise(r)) rows.push(r)
+    }
+    // 別マシンのファイルは日付ごとに丸ごと後ろに付くので、ここで ts に並べ直す（sort は安定なので同じ ts は読んだ順）
     rows.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0))
     return rows
   }

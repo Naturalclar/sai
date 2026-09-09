@@ -12,6 +12,22 @@ Codex CLI ──[notify]───────┘
 
 フックがやるのは1行 append するだけ。集計も表示もしない。記録が壊れても表示が壊れるだけで済むし、表示を作り変えても記録側は触らずに済む。
 
+### 複数のマシンで使うときはファイルを分ける（#113）
+
+`AGENT_FEED_HOST` を設定すると、書き込み先が `YYYY-MM-DD.<host>.jsonl` になる（設定しなければ今までどおり `YYYY-MM-DD.jsonl`）。同期フォルダ（iCloud / Syncthing / rsync）で 1 つの置き場を共有すると、**複数のマシンが同じファイルに追記して片方が捨てられるか競合コピーができる**ため。
+
+```
+~/.agent-feed/
+  2026-09-09.jsonl        ← AGENT_FEED_HOST 無しのマシン
+  2026-09-09.mini.jsonl   ← AGENT_FEED_HOST=mini
+  2026-09-09.air.jsonl    ← AGENT_FEED_HOST=air
+```
+
+- `<host>` は行の `host` と同じもの（`gethostname()` の短い形か `AGENT_FEED_HOST`）を、`[A-Za-z0-9_-]` 以外を `-` にして使う。`.` は `host` の時点で落ちているので、ファイル名が `日付.host.jsonl` として読めなくなることはない
+- **サーバはその日の `YYYY-MM-DD.jsonl` と `YYYY-MM-DD.*.jsonl` を全部読む**（`server/store.ts` の `feedFiles()`）。読む順は日付 → `host` 名（`host` 無しが先）で固定し、行は `ts` で並べ直す。`(mtime, size)` のキャッシュと `rev` はファイルごとなので、別のマシンのファイルが増えたり追記されたりすれば画面のポーリングが拾う
+- **記録側は自分のファイルしか読まない**。合成セッション（`synth`）と待ちの重複判定は自分のマシンの続きを見るものなので、同期されてきたファイルは探索の対象外
+- 同期の途中で末尾が切れた行は JSON として壊れているので `parseRows()` が落とす。次のポーリングで揃う
+
 ## 1行の形
 
 ```json

@@ -742,25 +742,40 @@ class RecordTest(unittest.TestCase):
     def test_host_comes_from_env_or_hostname(self):
         """どのマシンで記録したか（#112）。AGENT_FEED_HOST があればそれ、無ければホスト名の短い形"""
         payload = {"type": "agent-turn-complete", "last-assistant-message": "x", "cwd": str(self.cwd)}
-        run(stdin=json.dumps(payload), env={**self.env, "AGENT_FEED_HOST": "  mac-mini  "})
-        self.assertEqual(read_rows(self.feed_dir)[-1]["host"], "mac-mini", "前後の空白は落とす")
 
-        run(stdin=json.dumps(payload), env={**self.env, "AGENT_FEED_HOST": "mbp.local"})
-        self.assertEqual(read_rows(self.feed_dir)[-1]["host"], "mbp", "ドメイン部分は落とす")
+        def host_of(value: str | None, case: str) -> str:
+            """AGENT_FEED_HOST を 1 つ与えて 1 行書き、その host を返す。
 
+            置き場は毎回分ける。AGENT_FEED_HOST の有無で書き込み先のファイルが変わる（#113）ので、
+            1 つの置き場に混ぜると「最後に書いた行」が名前順で最後とは限らなくなる"""
+            directory = Path(self.tmp.name) / f"feed-{case}"
+            env = {**self.env, "AGENT_FEED_DIR": str(directory)}
+            if value is None:
+                env.pop("AGENT_FEED_HOST", None)
+            else:
+                env["AGENT_FEED_HOST"] = value
+            run(stdin=json.dumps(payload), env=env)
+            rows = read_rows(directory)
+            self.assertEqual(len(rows), 1, case)
+            return rows[0]["host"]
+
+        self.assertEqual(host_of("  mac-mini  ", "spaces"), "mac-mini", "前後の空白は落とす")
+        self.assertEqual(host_of("mbp.local", "domain"), "mbp", "ドメイン部分は落とす")
         # 指定が無ければ gethostname() の短い形。中身はマシン次第なので、そこから作った値と突き合わせる
-        run(stdin=json.dumps(payload), env=self.env)
-        self.assertEqual(read_rows(self.feed_dir)[-1]["host"], socket.gethostname().split(".")[0])
-
-        run(stdin=json.dumps(payload), env={**self.env, "AGENT_FEED_HOST": "   "})
-        self.assertEqual(read_rows(self.feed_dir)[-1]["host"], socket.gethostname().split(".")[0], "空白だけなら指定なし扱い")
+        short = socket.gethostname().split(".")[0]
+        self.assertEqual(host_of(None, "unset"), short)
+        self.assertEqual(host_of("   ", "blank"), short, "空白だけなら指定なし扱い")
 
     def test_synth_does_not_merge_rows_from_another_host(self):
-        """別のマシンの行（#24 で JSONL を集めたとき）は、同じ repo / cwd でも同じセッションに寄せない（#112）"""
+        """別のマシンの行（#24 で JSONL を集めたとき）は、同じ repo / cwd でも同じセッションに寄せない（#112）
+
+        普段は #113 でファイルごと分かれるので別マシンの行はそもそも読まないが、集めたファイルを
+        1つに繋いだときや、AGENT_FEED_HOST を後から設定したときは同じファイルに混ざる。
+        その保険が効いていることを見るので、**自分が読むファイル**に別マシンの行を置く"""
         self.feed_dir.mkdir(parents=True)
         recent = (datetime.now(JST) - timedelta(minutes=5)).isoformat(timespec="seconds")
         today = datetime.now(JST).strftime("%Y-%m-%d")
-        write_jsonl(self.feed_dir / f"{today}.jsonl", [{
+        write_jsonl(self.feed_dir / f"{today}.this-mac.jsonl", [{
             "ts": recent, "agent": "codex", "repo": "myrepo", "branch": "feature/x", "host": "another-mac",
             "session": "synth-myrepo-elsewhere", "session_source": "synth", "cwd": str(self.cwd),
             "event": "agent-turn-complete", "text": "別のマシン", "first_user_text": "",
@@ -781,6 +796,57 @@ class RecordTest(unittest.TestCase):
         rows = read_rows(self.feed_dir)
         self.assertEqual(rows[0]["session"], rows[1]["session"])
         self.assertEqual(rows[0]["host"], "this-mac")
+
+    def test_day_file_is_split_per_host_only_when_env_is_set(self):
+        """AGENT_FEED_HOST があるときだけ YYYY-MM-DD.<host>.jsonl に書く（#113）"""
+        payload = {"type": "agent-turn-complete", "last-assistant-message": "x", "cwd": str(self.cwd)}
+        today = datetime.now(JST).strftime("%Y-%m-%d")
+
+        run(stdin=json.dumps(payload), env=self.env)
+        self.assertEqual([p.name for p in self.feed_dir.glob("*.jsonl")], [f"{today}.jsonl"], "指定が無ければ今までどおり")
+
+        mini = Path(self.tmp.name) / "feed-mini"
+        run(stdin=json.dumps(payload), env={**self.env, "AGENT_FEED_DIR": str(mini), "AGENT_FEED_HOST": "mini"})
+        self.assertEqual([p.name for p in mini.glob("*.jsonl")], [f"{today}.mini.jsonl"])
+
+    def test_day_file_host_drops_characters_that_break_the_name(self):
+        """ファイル名に使えない文字は `-` に。ドメイン部分は行の host と同じく落ちる（#113）"""
+        payload = {"type": "agent-turn-complete", "last-assistant-message": "x", "cwd": str(self.cwd)}
+        today = datetime.now(JST).strftime("%Y-%m-%d")
+
+        run(stdin=json.dumps(payload), env={**self.env, "AGENT_FEED_HOST": "work laptop"})
+        self.assertEqual([p.name for p in self.feed_dir.glob("*.jsonl")], [f"{today}.work-laptop.jsonl"])
+        self.assertEqual(read_rows(self.feed_dir)[0]["host"], "work laptop", "行にはそのまま載る")
+
+        air = Path(self.tmp.name) / "feed-air"
+        run(stdin=json.dumps(payload), env={**self.env, "AGENT_FEED_DIR": str(air), "AGENT_FEED_HOST": "air.local"})
+        self.assertEqual([p.name for p in air.glob("*.jsonl")], [f"{today}.air.jsonl"], "ドメイン部分は付けない")
+
+        # 置き場の外に出られない。`/` は `-` になり、そもそも `.` から先が落ちるので `..` は空になる
+        evil = Path(self.tmp.name) / "feed-evil"
+        run(stdin=json.dumps(payload), env={**self.env, "AGENT_FEED_DIR": str(evil), "AGENT_FEED_HOST": "../../etc/passwd"})
+        self.assertEqual([p.name for p in evil.glob("*.jsonl")], [f"{today}.jsonl"])
+
+    def test_recent_rows_only_reads_this_hosts_file(self):
+        """合成セッションの探索も、書き込みと同じ自分のファイルだけ見る（#113）
+
+        置いてあるのは **host まで同じ**（`mac`）で 30分以内・同じ repo / cwd の行なので、#112 の
+        host の比較では弾かれない。それでも寄らないのは、`YYYY-MM-DD.jsonl` を読みに行かなくなったから"""
+        self.feed_dir.mkdir(parents=True)
+        recent = (datetime.now(JST) - timedelta(minutes=5)).isoformat(timespec="seconds")
+        today = datetime.now(JST).strftime("%Y-%m-%d")
+        write_jsonl(self.feed_dir / f"{today}.jsonl", [{
+            "ts": recent, "agent": "codex", "repo": "myrepo", "branch": "feature/x", "host": "mac",
+            "session": "synth-in-another-file", "session_source": "synth", "cwd": str(self.cwd),
+            "event": "agent-turn-complete", "text": "別のファイル", "first_user_text": "",
+        }])
+        payload = {"type": "agent-turn-complete", "last-assistant-message": "こっち", "cwd": str(self.cwd)}
+        run(stdin=json.dumps(payload), env={**self.env, "AGENT_FEED_HOST": "mac"})
+        other = (self.feed_dir / f"{today}.jsonl").read_text(encoding="utf-8").strip().splitlines()
+        self.assertEqual(len(other), 1, "自分のファイル以外には書かない")
+        mine = [json.loads(line) for line in (self.feed_dir / f"{today}.mac.jsonl").read_text(encoding="utf-8").strip().splitlines()]
+        self.assertEqual(len(mine), 1)
+        self.assertNotEqual(mine[0]["session"], "synth-in-another-file", "別のファイルの行は探索の対象外")
 
     def test_synth_starts_new_session_after_gap(self):
         self.feed_dir.mkdir(parents=True)

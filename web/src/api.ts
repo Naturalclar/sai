@@ -11,6 +11,7 @@ import type {
   ReplyResponse,
   SessionDetailResponse,
   SessionDiffResponse,
+  SessionDiffSummaryResponse,
   SessionFilters,
   SessionIconResponse,
   SessionMeta,
@@ -22,7 +23,7 @@ import type {
   SettingsResponse,
 } from '../../shared/types.ts'
 
-export type { Agent, FeedRow, SessionSource, SessionSummary, SessionMeta, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, Approval, ApprovalMap, ApprovalAnswer, Profile, PersonaId, SettingsResponse, SettingsRequest, Viewer, SessionPermissionsResponse, SessionDiffResponse, DiffSection, DiffFileStat, AttachmentResponse } from '../../shared/types.ts'
+export type { Agent, FeedRow, SessionSource, SessionSummary, SessionMeta, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, Approval, ApprovalMap, ApprovalAnswer, Profile, PersonaId, SettingsResponse, SettingsRequest, Viewer, SessionPermissionsResponse, SessionDiffResponse, SessionDiffSummaryResponse, DiffPr, DiffSection, DiffFileStat, AttachmentResponse } from '../../shared/types.ts'
 
 /** サーバの失敗。`code` / `typed` は返信の 409（ReplyError）から。画面はこれで「消して送る」の確認を出し分ける */
 export class ApiError extends Error {
@@ -117,6 +118,8 @@ export const api = {
   /** そのセッションの worktree の差分（開いたときだけ。ポーリングには乗せない） */
   diff: (id: string, base = '') =>
     getJSON<SessionDiffResponse>(`/api/sessions/${encodeURIComponent(id)}/diff${base ? `?base=${encodeURIComponent(base)}` : ''}`),
+  /** 差分の大きさと PR 番号だけ（本文は作らない）。入力欄のボタンが開く前に出す（#211） */
+  diffSummary: (id: string) => getJSON<SessionDiffSummaryResponse>(`/api/sessions/${encodeURIComponent(id)}/diff?summary=1`),
   /** そのセッションの cwd に効いている許可ルール。画面が開いたときだけ取る（ポーリングには乗せない） */
   permissions: (id: string, days = 90) =>
     getJSON<SessionPermissionsResponse>(`/api/sessions/${encodeURIComponent(id)}/permissions?days=${days}`),

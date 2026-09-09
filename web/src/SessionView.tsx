@@ -28,14 +28,23 @@ import { ArchiveButton } from './ArchiveButton'
 import { ArchivedTag } from './ArchivedTag'
 import { PermissionModeTag } from './PermissionModeTag'
 import { PermissionsButton } from './PermissionsButton'
-import { DiffButton } from './DiffButton'
+import { useDiffSummary } from './useDiffSummary'
+import { hasDiff } from './diffCount'
 import type { PaneProps } from './App'
 
 const NO_ROWS: never[] = []
 const NO_REPLYING = {}
 const NO_APPROVALS: never[] = []
 
-export function SessionView({ id, onStatus, onOpenSidebar, onOpenDiff, onLeaveToSidebar, linear, settings }: { id: string } & PaneProps) {
+/** 差分のペインの開閉（#211）。ボタンは入力欄の中なので、セッション画面だけが受け取る */
+export interface DiffProps {
+  /** そのセッションの差分を開く／閉じる。出し方（右のペイン / モーダル）は App が幅で決める */
+  onToggleDiff: (id: string) => void
+  /** いま差分を出しているか */
+  diffOpen: boolean
+}
+
+export function SessionView({ id, onStatus, onOpenSidebar, onToggleDiff, diffOpen, onLeaveToSidebar, linear, settings }: { id: string } & PaneProps & DiffProps) {
   const { data, error, updatedAt } = usePolling(() => api.session(id), [id])
   useEffect(() => onStatus(updatedAt, error), [updatedAt, error, onStatus])
 
@@ -58,6 +67,8 @@ export function SessionView({ id, onStatus, onOpenSidebar, onOpenDiff, onLeaveTo
 
   const s = data?.session
   const blocked = s ? replyBlockedReason(s) : ''
+  // 差分ボタンに出す行数と PR 番号（#211）。ポーリングには載せず、開いたときと新しいターンが記録されたときだけ取る
+  const summary = useDiffSummary(s?.id, s?.last_turn_ts)
   return (
     <section>
       <BackLink onOpenSidebar={onOpenSidebar} />
@@ -85,7 +96,6 @@ export function SessionView({ id, onStatus, onOpenSidebar, onOpenDiff, onLeaveTo
           {/* 合成 ID は集計の切れ方で付け先がずれるのでアーカイブできない */}
           {s.session_source !== 'synth' && <ArchiveButton key={`${s.id}:${s.archived ? 1 : 0}`} id={s.id} archived={Boolean(s.archived)} />}
           <MetaEditor key={s.id} id={s.id} meta={s.meta} icon={s.icon} />
-          <DiffButton onOpen={() => onOpenDiff(s.id)} />
           {s.agent === 'claude' && <PermissionsButton key={s.id} id={s.id} />}
           {/* SAI から返信するときの許可モード。端末に打ち込む経路では効かないので、そのときは薄く出す */}
           {s.agent === 'claude' && <SessionPermissionModeSelect key={s.id} id={s.id} value={s.meta?.permission_mode} terminal={Boolean(s.terminal)} />}
@@ -136,6 +146,7 @@ export function SessionView({ id, onStatus, onOpenSidebar, onOpenDiff, onLeaveTo
             busySince={mine?.since}
             now={now}
             model={{ id: s.id, agent: s.agent, models: s.models, value: s.meta?.model }}
+            {...(summary && hasDiff(summary) ? { diff: { summary, open: diffOpen, onToggle: () => onToggleDiff(s.id) } } : {})}
             onSend={async (text, attachments) => (await send(id, text, { attachments })) !== 'confirm'}
           />
         ))}

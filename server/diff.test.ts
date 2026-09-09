@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { SKIPPED_MARK } from '../shared/diff.ts'
-import { clampPatch, NotAGitRepo, parseStats, RealGit, resolveBase, sessionDiff, validBase } from './diff.ts'
+import { clampPatch, NotAGitRepo, parseStats, RealGit, resolveBase, sessionDiff, sessionDiffSummary, validBase } from './diff.ts'
 import type { Git } from './diff.ts'
 
 const run = promisify(execFile)
@@ -161,11 +161,78 @@ test('sessionDiff: 本物のリポジトリで、ブランチの差分と未コ�
   }
 })
 
+test('sessionDiffSummary: 行数だけを返し、patch は作らない（#211）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-diffsum-'))
+  try {
+    await git(dir, 'init', '-q', '-b', 'main')
+    await writeFile(join(dir, 'a.ts'), 'one\ntwo\nthree\n')
+    await git(dir, 'add', '.')
+    await git(dir, 'commit', '-q', '-m', 'first')
+    await git(dir, 'checkout', '-q', '-b', 'feat/x')
+    await writeFile(join(dir, 'a.ts'), 'one\nTWO\nthree\n')
+    await writeFile(join(dir, 'b.ts'), 'new file\n')
+    await git(dir, 'add', '.')
+    await git(dir, 'commit', '-q', '-m', 'work')
+    // 未コミット。a.ts はブランチの差分にも出るので、files は重複を畳んで 2 になる
+    await writeFile(join(dir, 'a.ts'), 'one\nTWO\nTHREE\n')
+    await writeFile(join(dir, 'untracked.ts'), 'not added\n')
+
+    const s = await sessionDiffSummary(new RealGit(), dir)
+    assert.equal(s.base, 'main')
+    assert.equal(s.head, 'feat/x')
+    assert.equal(s.head_branch, 'feat/x', 'detached でなければブランチ名が入る')
+    assert.deepEqual(s.branch, { files: 2, added: 2, removed: 1 }, 'ブランチの差分は a.ts(+1-1) と b.ts(+1)')
+    assert.deepEqual(s.working, { files: 1, added: 1, removed: 1 }, '未コミットは a.ts だけ')
+    assert.equal(s.files, 2, 'a.ts が両方に出るので 2 ファイル（3 ではない）')
+    assert.equal(s.added, 3)
+    assert.equal(s.removed, 2)
+    assert.equal(s.untracked, 1)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('sessionDiffSummary: 呼ぶ git は numstat だけで、本文（diff 単体）は取らない', async () => {
+  const g = new FakeGit()
+  g.answers.set('symbolic-ref -q --short HEAD', 'feat/x\n')
+  g.answers.set('rev-parse --verify --quiet main^{commit}', 'sha\n')
+  g.fail.add('symbolic-ref -q --short refs/remotes/origin/HEAD')
+  g.fail.add('rev-parse --verify --quiet origin/main^{commit}')
+  g.fail.add('rev-parse --verify --quiet origin/master^{commit}')
+  await sessionDiffSummary(g, '/tmp/x')
+  const diffs = g.calls.filter((a) => a[0] === 'diff')
+  assert.ok(diffs.length > 0, 'diff は呼ぶ')
+  assert.ok(
+    diffs.every((a) => a.includes('--numstat')),
+    `本文を作る素の diff は呼ばない: ${JSON.stringify(diffs)}`,
+  )
+  assert.ok(!g.calls.some((a) => a.includes('--name-status')), 'status は使わないので name-status も呼ばない')
+})
+
+test('sessionDiffSummary: detached HEAD では head_branch が空（PR を引かせない）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-detach-'))
+  try {
+    await git(dir, 'init', '-q', '-b', 'main')
+    await writeFile(join(dir, 'a.ts'), 'one\n')
+    await git(dir, 'add', '.')
+    await git(dir, 'commit', '-q', '-m', 'first')
+    await git(dir, 'checkout', '-q', '--detach', 'HEAD')
+    const s = await sessionDiffSummary(new RealGit(), dir)
+    assert.equal(s.head_branch, '', 'detached ではブランチ名を返さない')
+    assert.match(s.head, /^[0-9a-f]{4,}$/, 'head は短い SHA')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 test('sessionDiff: git のリポジトリでなければ NotAGitRepo', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'sai-nodiff-'))
   try {
     await assert.rejects(sessionDiff(new RealGit(), dir), NotAGitRepo)
     await assert.rejects(sessionDiff(new RealGit(), ''), NotAGitRepo)
+    // 要約の側も同じ扱い（画面は 404 を見てボタンを出さない）
+    await assert.rejects(sessionDiffSummary(new RealGit(), dir), NotAGitRepo)
+    await assert.rejects(sessionDiffSummary(new RealGit(), ''), NotAGitRepo)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

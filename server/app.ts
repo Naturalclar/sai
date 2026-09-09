@@ -25,6 +25,7 @@ import type {
   ReplyResponse,
   SessionDetailResponse,
   SessionDiffResponse,
+  SessionDiffSummaryResponse,
   SessionIconResponse,
   SessionMetaResponse,
   SessionPermissionsResponse,
@@ -48,9 +49,11 @@ import type { Digester } from './digest.ts'
 import { META_FILE, MetaStore } from './meta.ts'
 import { collectPermissions } from './permissions.ts'
 import { compareUrl } from '../shared/diff.ts'
-import { NotAGitRepo, RealGit, sessionDiff } from './diff.ts'
+import { NotAGitRepo, RealGit, sessionDiff, sessionDiffSummary } from './diff.ts'
 import { fillRepo, ProjectResolver } from './project.ts'
 import type { Git } from './diff.ts'
+import { prLookupFromEnv } from './pr.ts'
+import type { PrLookup } from './pr.ts'
 import { AttachmentStore } from './attachments.ts'
 import { PROFILE_FILE, ProfileStore } from './profile.ts'
 import { SETTINGS_FILE, SettingsStore } from './settings.ts'
@@ -238,6 +241,7 @@ export function createApp(
   terminal: TerminalDeps = { tmux: new RealTmux(), ps: realPs },
   skillStore: SkillStore = new SkillStore(),
   git: Git = new RealGit(),
+  pr: PrLookup = prLookupFromEnv(),
 ): Handler {
   const distRoot = resolve(distDir)
   // 端末に打ち込んだ返信の「処理中」。子プロセスの方（run）とは別に持ち、画面には合わせて出す
@@ -606,6 +610,39 @@ export function createApp(
    * GET /api/sessions/<id>/diff?base=。そのセッションの worktree の差分を git から読む（#171。読むだけ）。
    * cwd はセッションの行から取り、リクエストからは受けない。3 秒のポーリングには乗せない（画面が開いたときだけ）
    */
+  /**
+   * GET /api/sessions/<id>/diff?summary=1。patch を作らない軽い版（#211）。入力欄の差分ボタンが
+   * 「開く前に」行数と PR 番号を出すのに使う。PR は `gh` に任せ、引けなければ付けないだけ
+   */
+  const getDiffSummary = async (res: ServerResponse, id: string, base: string, days: number) => {
+    const { sessions } = await store.sessions(days)
+    const session = sessions.find((s) => s.id === id)
+    if (!session) return error(res, 404, 'session not found in window')
+    let d
+    try {
+      d = await sessionDiffSummary(git, session.cwd, base)
+    } catch (err) {
+      if (err instanceof NotAGitRepo) {
+        return error(res, 404, `作業ディレクトリで git が読めません（消えた、または git のリポジトリではない）: ${session.cwd || '(空)'}`)
+      }
+      throw err
+    }
+    const found = await pr.find(session.cwd, d.head_branch)
+    const payload: SessionDiffSummaryResponse = {
+      id,
+      base: d.base,
+      head: d.head,
+      files: d.files,
+      added: d.added,
+      removed: d.removed,
+      branch: d.branch,
+      working: d.working,
+      untracked: d.untracked,
+      ...(found ? { pr: found } : {}),
+    }
+    return json(res, payload)
+  }
+
   const getDiff = async (res: ServerResponse, id: string, base: string, days: number) => {
     const { sessions } = await store.sessions(days)
     const session = sessions.find((s) => s.id === id)
@@ -834,7 +871,10 @@ export function createApp(
       if (isDiff) {
         const id = sessionIdFrom(path, DIFF_SUFFIX)
         if (id === null) return error(res, 400, 'bad session id')
-        return await getDiff(res, id, q.get('base') ?? '', parseDays(q.get('days'), 90))
+        const base = q.get('base') ?? ''
+        const days = parseDays(q.get('days'), 90)
+        // summary=1 は行数と PR 番号だけ（本文を作らない。#211）
+        return q.get('summary') === '1' ? await getDiffSummary(res, id, base, days) : await getDiff(res, id, base, days)
       }
       if (isAttachUpload) {
         const id = sessionIdFrom(path, ATTACHMENTS_SUFFIX)

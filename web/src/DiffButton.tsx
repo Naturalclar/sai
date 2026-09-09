@@ -1,14 +1,31 @@
-import { IconButton } from './IconButton'
+import type { SessionDiffSummaryResponse } from './api'
 import { DiffMark } from './DiffMark'
+import { diffTitle, shortCount } from './diffCount'
+
+export interface DiffButtonProps {
+  /** 行数と PR 番号（`useDiffSummary`）。まだ取れていなければ null */
+  summary: SessionDiffSummaryResponse | null
+  /** いま差分を出しているか。押すと閉じる */
+  open: boolean
+  onToggle: () => void
+}
 
 /**
- * チャット見出しの「差分」。押したときにだけ git を読みに行く（ポーリングには乗せない）。
- * 出し方（広い画面は右のペイン、狭い画面はモーダル）は App が決めるので、ここは開く合図を送るだけ
+ * 入力欄の、モデルの左に出す差分のボタン（#211）。中身（patch）を取りに行くのは押したときで、
+ * ここに出す行数と PR 番号だけを軽い口（`?summary=1`）から先に取ってある。
+ * 押すとトグル（出し方 — 広い画面は右のペイン、狭い画面はモーダル — は App が幅で決める）
  */
-export function DiffButton({ onOpen }: { onOpen: () => void }) {
+export function DiffButton({ summary, open, onToggle }: DiffButtonProps) {
   return (
-    <IconButton label="このセッションの差分を見る" onClick={onOpen}>
+    <button type="button" className={`diff-btn${open ? ' on' : ''}`} onClick={onToggle} aria-pressed={open} title={diffTitle(summary, open)}>
       <DiffMark />
-    </IconButton>
+      {summary && (
+        <>
+          <span className="add">+{shortCount(summary.added)}</span>
+          <span className="del">-{shortCount(summary.removed)}</span>
+          {summary.pr && <span className="pr">#{summary.pr.number}</span>}
+        </>
+      )}
+    </button>
   )
 }

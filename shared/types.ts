@@ -211,6 +211,48 @@ export interface SessionDiffResponse {
   untracked: string[]
 }
 
+/**
+ * そのブランチに出ている GitHub の PR（#211）。`gh` が無い・ログインしていない・PR が無ければ
+ * 付かない（差分そのものの表示は落とさない）
+ */
+export interface DiffPr {
+  number: number
+  url: string
+  /** `gh pr view` の state（`OPEN` / `MERGED` / `CLOSED`）。表示は番号だけだが、後で色を変えるときのために持つ */
+  state: string
+  draft: boolean
+}
+
+/**
+ * GET /api/sessions/<id>/diff?summary=1。本文（patch）を作らない軽い版（#211）。
+ * 入力欄の差分ボタンが「開く前に」行数と PR 番号を出すために使う。
+ * 3 秒のポーリングには載せない（セッションを開いたときと、新しいターンが記録されたときだけ）
+ */
+export interface SessionDiffSummaryResponse {
+  id: string
+  base: string
+  head: string
+  /** 変わったファイルの数（ブランチの差分 + 未コミット。同じファイルが両方にあれば 1 つ） */
+  files: number
+  /** 足した行・消した行の合計（ブランチの差分 + 未コミット） */
+  added: number
+  removed: number
+  /** 内訳。ボタンの title に出す */
+  branch: DiffCounts
+  working: DiffCounts
+  /** 追跡外のファイルの数 */
+  untracked: number
+  /** そのブランチに出ている PR。無ければ省略 */
+  pr?: DiffPr
+}
+
+/** 差分の大きさだけ（本文もファイル名も持たない） */
+export interface DiffCounts {
+  files: number
+  added: number
+  removed: number
+}
+
 /** GET /api/sessions/<id>/skills。`/` の候補。Claude 以外は空 */
 export interface SessionSkillsResponse {
   id: string

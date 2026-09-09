@@ -26,8 +26,6 @@ export interface StatusProps {
 /** 右ペイン（チャット）に渡すもの。「← 一覧」が広い画面ではサイドバーを開くだけなので、その口も渡す */
 export interface PaneProps extends StatusProps {
   onOpenSidebar: () => void
-  /** そのセッションの差分を開く。出し方（右のペイン / モーダル）は App が幅で決める */
-  onOpenDiff: (id: string) => void
   /** 入力欄が空のときの `←`。サイドバーの選ばれている項目にフォーカスを戻す（#204） */
   onLeaveToSidebar: () => void
   /** サーバ側の設定（一言が有効か、既定の性格）。まだ取れていなければ null */
@@ -76,6 +74,8 @@ export function App() {
   const [diffId, setDiffId] = useState<string | null>(null)
   const narrow = useNarrow()
   const closeDiff = useCallback(() => setDiffId(null), [])
+  // 入力欄のボタンはトグル（開いていれば閉じる。#211）
+  const toggleDiff = useCallback((id: string) => setDiffId((prev) => (prev === id ? null : id)), [])
   // 出すのは、いま開いているセッションの分だけ。別のセッションやフィードへ移っている間は出さない
   // （そのセッションに戻ってくれば、また出る。閉じるまでそのセッションのものとして覚えておく）
   const diffOpen = diffId !== null && route.name === 'session' && route.id === diffId ? diffId : null
@@ -243,9 +243,9 @@ export function App() {
         </aside>
         <div className="pane">
           {route.name === 'session' ? (
-            <SessionView id={route.id} onStatus={onStatus} onOpenSidebar={openSidebar} onLeaveToSidebar={focusSidebar} onOpenDiff={setDiffId} linear={linear} settings={settings} />
+            <SessionView id={route.id} onStatus={onStatus} onOpenSidebar={openSidebar} onLeaveToSidebar={focusSidebar} onToggleDiff={toggleDiff} diffOpen={diffOpen !== null} linear={linear} settings={settings} />
           ) : (
-            <FeedView project={filters.project} sessions={list.data?.sessions} onStatus={onStatus} onOpenSidebar={openSidebar} onLeaveToSidebar={focusSidebar} onOpenDiff={setDiffId} linear={linear} settings={settings} />
+            <FeedView project={filters.project} sessions={list.data?.sessions} onStatus={onStatus} onOpenSidebar={openSidebar} onLeaveToSidebar={focusSidebar} linear={linear} settings={settings} />
           )}
         </div>
         {/* 広い画面はチャットの右にもう1枚。狭い画面は今までどおりモーダルで重ねる */}

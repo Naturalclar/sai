@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { parseRoute, useHashRoute, useLocalState, usePolling } from './hooks'
+import { HIDDEN_POLL_MS, parseRoute, useHashRoute, useLocalState, usePolling } from './hooks'
+import { todoItems } from './todoItems'
+import { titleWith } from './notify.ts'
+import { useNotify } from './useNotify'
 import { SessionList } from './SessionList'
 import { SessionView } from './SessionView'
 import { DiffPane } from './DiffPane'
@@ -65,7 +68,13 @@ export function App() {
   // 絞り込みはサイドバーのもの。フィードのリポジトリはこれに従う（同じ画面に「リポジトリ」を2つ出さない）
   const [filters, setFilters] = useLocalState<SessionFilters>('sai.filters', DEFAULT_FILTERS)
   // 一覧はここで1回だけ取り、サイドバー（表示）とフィード（@ の候補）の両方に渡す。同じ URL を2回叩かない
-  const list = usePolling(() => api.sessions(filters), [filters.project, filters.repo, filters.agent, filters.date, filters.days, filters.archived])
+  // タブが裏にある間も間隔を空けて叩き続ける（#231）。待ちが増えたことを題名と通知で伝えるため。
+  // チャットとフィードは見ていないので今までどおり止まる
+  const list = usePolling(() => api.sessions(filters), [filters.project, filters.repo, filters.agent, filters.date, filters.days, filters.archived], { hiddenMs: HIDDEN_POLL_MS })
+
+  // いま自分を待っているもの。サイドバーのバッジ・要対応の画面と同じ組み立てを使う（食い違わせない）
+  const todo = useMemo(() => (list.data ? todoItems(list.data.sessions, list.data.approvals) : null), [list.data])
+  const notify = useNotify(todo)
 
   // サイドバーの開閉。レイアウトは main の class で CSS が切り替える。狭い画面では CSS 側が無視する
   const [ui, setUi] = useLocalState<UiState>('sai.ui', DEFAULT_UI)
@@ -172,9 +181,10 @@ export function App() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [sessionIds, diffOpen, narrow, focusSoon])
 
+  // 待っている件数をタブの題名に出す（#231）。通知と違って許可が要らないので、切っていても出る
   useEffect(() => {
-    document.title = route.name === 'session' ? `SAI · ${route.id.slice(0, 12)}` : 'SAI'
-  }, [route])
+    document.title = titleWith(todo?.length ?? 0, route.name === 'session' ? route.id.slice(0, 12) : '')
+  }, [route, todo])
 
   /** 入力欄で `←` を押されたとき。見えていない所には当てないので、閉じたサイドバーは開き、狭い画面は一覧側へ移る */
   const focusSidebar = useCallback(() => {
@@ -227,7 +237,7 @@ export function App() {
             <GitHubMark />
           </a>
         )}
-        <UserMenu profile={list.data?.profile} viewer={list.data?.viewer ?? null} />
+        <UserMenu profile={list.data?.profile} viewer={list.data?.viewer ?? null} notify={notify} />
       </header>
       {/* 記録側の record.py が古い（フックが古い checkout や試作を呼んでいる）。窓の中の一番新しい行の v で見る */}
       {list.data && list.data.record_version > 0 && list.data.record_version < RECORD_VERSION && (

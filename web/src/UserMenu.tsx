@@ -1,13 +1,22 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Profile, Viewer } from './api'
 import { ProfileEditor } from './ProfileEditor'
+import type { useNotify } from './useNotify'
+
+interface Props {
+  profile: Profile | undefined
+  viewer: Viewer | null
+  /** 待ちの通知の入切（#231）。入にした時だけブラウザの許可を求める */
+  notify: ReturnType<typeof useNotify>
+}
 
 /**
- * ヘッダー右端の自分のアイコン。押すとメニュー（名前、「表示名とアイコン」）が開き、そこからモーダルで編集する。
+ * ヘッダー右端の自分のアイコン。押すとメニュー（名前、「表示名とアイコン」、通知の入切）が開き、
+ * そこからモーダルで編集する。
  * profile は一覧のポーリング（App）から。編集直後はモーダルが返した値を出し、ポーリングが追いついたら props に戻る。
  * Esc と外側クリックで閉じる。設定が増えたらここに項目を足す
  */
-export function UserMenu({ profile, viewer }: { profile: Profile | undefined; viewer: Viewer | null }) {
+export function UserMenu({ profile, viewer, notify }: Props) {
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState(false)
   const [saved, setSaved] = useState<Profile | null>(null)
@@ -65,6 +74,16 @@ export function UserMenu({ profile, viewer }: { profile: Profile | undefined; vi
           <button type="button" role="menuitem" onClick={edit}>
             表示名とアイコン
           </button>
+          {/* 待ちの通知。ブラウザが拒否を覚えている間は押しても出せないので、その旨だけ出す */}
+          {notify.state === 'denied' ? (
+            <div className="note">通知はブラウザ側で拒否されています（サイトの設定から許可してください）</div>
+          ) : notify.state === 'unsupported' ? (
+            <div className="note">この環境では通知を出せません</div>
+          ) : (
+            <button type="button" role="menuitemcheckbox" aria-checked={notify.on} onClick={() => void notify.toggle()}>
+              {notify.on ? '✓ ' : ''}待っているときに通知する
+            </button>
+          )}
         </div>
       )}
       {editing && <ProfileEditor profile={current} onClose={closeEditor} />}

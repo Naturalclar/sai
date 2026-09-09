@@ -107,7 +107,7 @@ export function SessionView({ id, onStatus, onOpenSidebar, linear, settings }: {
           trailer={
             <>
               {mine && <PendingBubble text={mine.text} since={mine.since} now={now} quiet={promptArrived(data.rows, id, mine.text, mine.since)} profile={data.profile} />}
-              {approvals.map((a) => <ApprovalBubble key={a.approval_id} approval={a} now={now} />)}
+              {approvals.map((a, i) => <ApprovalBubble key={a.approval_id} approval={a} now={now} hotkey={i === 0} />)}
             </>
           }
         />

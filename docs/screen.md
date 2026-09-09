@@ -123,6 +123,8 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
                ◀─{ behavior: allow | deny }─┘
 ```
 
+- **キーボードで答えられる。** `⌘Enter`（Windows / Linux は `Ctrl+Enter`）で **許可**、`⌘⇧Enter` で **常に許可**。「常に許可」のボタンが無いバブル（`Edit` など）では `⌘⇧Enter` も許可になる。フィードのように複数出ているときは**一番上のバブル**だけが受ける。`AskUserQuestion`（選択肢を選ぶもの）と、処理中・答え済みのバブルは受けない。判定は `web/src/approvalKeys.ts` の `approvalAction()`
+- ショートカットは入力欄に文字を打っている最中でも効く（keydown を capture で先に取る）。**答え待ちのバブルが無ければ入力欄の `⌘Enter` は今までどおり送信**で、拾ったときだけ入力欄に渡さない
 - 答え待ちはサーバのメモリだけ。返信のプロセスが終われば（許可を待たずに落ちた、`claude` を kill した）その分は拒否扱いで消える。MCP 側が 90 秒取りに来なければ捨てる
 - `AskUserQuestion` は質問と選択肢がそのまま出て、全部に答えると `answers` 付きで返す（複数選択は 1 つだけ選ぶ）。`ExitPlanMode` はプランの先頭が出て、許可すれば進む
 **いま何が許可されているかは見出しの盾のアイコンから見られる。** そのセッションの `cwd` に効いている設定を読んで、評価の順（**拒否 → 毎回聞く → 許可**）に出す。読む先は強い順に、組織の `managed-settings.json`（macOS は `/Library/Application Support/ClaudeCode/`）、`<cwd>/.claude/settings.local.json`（**[常に許可] が書く先**）、`<cwd>/.claude/settings.json`、`~/.claude/settings.json`、それと `SAI_CLAUDE_ARGS` の `--allowedTools` / `--disallowedTools`（SAI から返信したターンにだけ効く）。**拒否はどの出どころのものでも許可に勝つ**ので、階段ではなく種類ごとに並べて出どころを添える。端末側の `claude --settings` は SAI からは分からないので読まない。読むだけで、ここからは足せない・消せない。

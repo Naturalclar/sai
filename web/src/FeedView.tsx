@@ -99,7 +99,8 @@ export function FeedView({ project, sessions = NO_SESSIONS, onStatus, onOpenSide
                 {pending.map((p) => (
                   <PendingBubble key={p.id} text={p.text} since={p.since} now={now} repo={repoOf(p.id)} quiet={promptArrived(rows, p.id, p.text, p.since)} profile={data.profile} />
                 ))}
-                {approvals.map((a) => <ApprovalBubble key={a.approval_id} approval={a} now={now} repo={repoOf(a.id)} />)}
+                {/* ショートカット（⌘Enter）が効くのは一番上の 1 つだけ。複数出るので、どれに効いたか分からなくならないように */}
+                {approvals.map((a, i) => <ApprovalBubble key={a.approval_id} approval={a} now={now} repo={repoOf(a.id)} hotkey={i === 0} />)}
               </>
             )
           }

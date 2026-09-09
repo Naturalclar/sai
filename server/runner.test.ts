@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { failureOf, isAlive, ProcessRunner, tailFrom } from './runner.ts'
+import { childEnv, failureOf, isAlive, ProcessRunner, tailFrom } from './runner.ts'
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
 /** 300ms 生きて exit する子。node 自身を使う（PATH に依らず必ずある） */
@@ -36,6 +36,37 @@ test('ProcessRunner は起動できなければ reject して何も残さない'
   await assert.rejects(runner.start('B@r', { bin: '/nonexistent/sai-no-such-bin', args: [], cwd: process.cwd(), text: 'x' }))
   assert.equal(runner.running('B@r'), false)
   assert.deepEqual(runner.snapshot(), {})
+})
+
+test('childEnv: TMUX_PANE だけ落とし、TMUX と他はそのまま。元の環境は触らない（#234）', () => {
+  const env = { PATH: '/usr/bin', TMUX_PANE: '%249', TMUX: '/tmp/tmux-501/default,2050,13', SAI_CLAUDE_BIN: 'claude' }
+  const next = childEnv(env)
+  assert.equal(next.TMUX_PANE, undefined, 'サーバのペインを継がせない')
+  assert.equal(next.TMUX, '/tmp/tmux-501/default,2050,13', 'ターンの中で tmux を使うことはあるので、tmux ごと隠さない')
+  assert.equal(next.PATH, '/usr/bin')
+  assert.equal(next.SAI_CLAUDE_BIN, 'claude')
+  assert.equal(env.TMUX_PANE, '%249', '渡された環境は書き換えない')
+  assert.equal(childEnv({ PATH: '/usr/bin' }).TMUX_PANE, undefined, '元から無くても落ちない')
+})
+
+test('ProcessRunner が起動した子に TMUX_PANE が渡らない（record.py がサーバのペインを書かない。#234）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-runner-'))
+  const before = process.env.TMUX_PANE
+  try {
+    // サーバが tmux のペインで動いている状況を作る
+    process.env.TMUX_PANE = '%249'
+    const out = join(dir, 'seen.txt')
+    const runner = new ProcessRunner(null)
+    // 子から見た TMUX_PANE を書き出す。record.py が読むのと同じ環境変数
+    const code = `require('fs').writeFileSync(${JSON.stringify(out)}, String(process.env.TMUX_PANE ?? '(unset)'))`
+    await runner.start('T@r', { bin: process.execPath, args: ['-e', code], cwd: process.cwd(), text: 'x' })
+    for (let i = 0; i < 50 && runner.running('T@r'); i++) await wait(20)
+    assert.equal(await readFile(out, 'utf-8'), '(unset)')
+  } finally {
+    if (before === undefined) delete process.env.TMUX_PANE
+    else process.env.TMUX_PANE = before
+    await rm(dir, { recursive: true, force: true })
+  }
 })
 
 test('isAlive: 自分は生きている、居ない pid は死んでいる、0 以下は spawn 待ちとして生きている扱い', () => {

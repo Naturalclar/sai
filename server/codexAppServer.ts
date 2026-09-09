@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import type { Approval, ApprovalAnswer, ApprovalMap, ReplyingMap } from '../shared/types.ts'
-import { splitArgs } from './runner.ts'
+import { childEnv, splitArgs } from './runner.ts'
 
 type RpcId = string | number
 type JsonObject = Record<string, unknown>
@@ -95,7 +95,8 @@ export function realCodexConnector(env: NodeJS.ProcessEnv = process.env): CodexC
   const bin = env.SAI_CODEX_BIN || 'codex'
   const extra = splitArgs(env.SAI_CODEX_APP_SERVER_ARGS)
   return async () => {
-    const child = spawn(bin, ['app-server', ...extra, '--stdio'], { stdio: ['pipe', 'pipe', 'pipe'] })
+    // ここで回るターンも SAI が起動した子なので、サーバのペインを継がせない（#234）
+    const child = spawn(bin, ['app-server', ...extra, '--stdio'], { env: childEnv(env), stdio: ['pipe', 'pipe', 'pipe'] })
     await new Promise<void>((resolve, reject) => {
       child.once('spawn', resolve)
       child.once('error', reject)

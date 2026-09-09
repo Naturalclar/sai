@@ -3,7 +3,7 @@ import { stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { ReplyCommand } from './runner.ts'
-import { splitArgs } from './runner.ts'
+import { childEnv, splitArgs } from './runner.ts'
 
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -50,7 +50,9 @@ export type CodexQueue = (cmd: ReplyCommand) => Promise<void>
 
 export const runCodexQueue: CodexQueue = (cmd) =>
   new Promise((resolve, reject) => {
-    execFile(cmd.bin, cmd.args, { cwd: cmd.cwd, timeout: 30_000, maxBuffer: 1024 * 1024 }, (err, _stdout, stderr) => {
+    // ここも SAI が起動する子なので、サーバのペインを継がせない（#234。queue した先の TUI 自身は
+    // 本物のペインを持っているので、ターンの行にはそちらの pane が載る）
+    execFile(cmd.bin, cmd.args, { cwd: cmd.cwd, env: childEnv(), timeout: 30_000, maxBuffer: 1024 * 1024 }, (err, _stdout, stderr) => {
       if (!err) return resolve()
       const message = stderr.trim() || err.message
       const failure = new Error(message) as NodeJS.ErrnoException

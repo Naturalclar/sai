@@ -1,6 +1,7 @@
 // セッションのメタ（ブラウザから付ける表示名・アーカイブ・返信のモデル・一言の性格）の検査。アイコン画像は別（shared/icon.ts、server/icons.ts）。
 // サーバの PUT 受付（server/app.ts）と画面の入力欄（web/src/MetaEditor.tsx）が同じ関数を使い、ずれない。
 import { isPersonaId } from './persona.ts'
+import { REPLY_MODES, isReplyPermissionMode } from './permissions.ts'
 import type { SessionMeta } from './types.ts'
 
 export const META_NAME_MAX = 100
@@ -50,6 +51,18 @@ export function mergeMeta(current: SessionMeta, input: unknown): { meta: Session
     else delete meta.model
   }
 
+  if (raw.permission_mode !== undefined) {
+    if (raw.permission_mode !== null && typeof raw.permission_mode !== 'string') return { meta: {}, error: 'permission_mode は文字列で送ってください' }
+    const mode = (raw.permission_mode ?? '').trim()
+    if (mode) {
+      // 素通し系（auto / bypassPermissions）はここで弾く。画面に出さないだけでなく、口としても受けない
+      if (!isReplyPermissionMode(mode)) return { meta: {}, error: `permission_mode に使えるのは ${REPLY_MODES.join(' / ')} だけです` }
+      meta.permission_mode = mode
+    } else {
+      delete meta.permission_mode
+    }
+  }
+
   if (raw.persona !== undefined) {
     if (raw.persona !== null && typeof raw.persona !== 'string') return { meta: {}, error: 'persona は文字列で送ってください' }
     const persona = (raw.persona ?? '').trim()
@@ -71,5 +84,5 @@ export function normalizeMeta(input: unknown): { meta: SessionMeta; error: strin
 
 /** 何も付いていないか */
 export function isEmptyMeta(meta: SessionMeta | undefined): boolean {
-  return !meta || (!meta.name && !meta.archived_at && !meta.model && !meta.persona)
+  return !meta || (!meta.name && !meta.archived_at && !meta.model && !meta.persona && !meta.permission_mode)
 }

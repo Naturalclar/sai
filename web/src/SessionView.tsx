@@ -20,6 +20,7 @@ import { useReply } from './useReply'
 import { ReplaceConfirm } from './ReplaceConfirm'
 import { MetaEditor } from './MetaEditor'
 import { SessionPersonaSelect } from './SessionPersonaSelect'
+import { SessionPermissionModeSelect } from './SessionPermissionModeSelect'
 import { ModelPicker } from './ModelPicker'
 import { ArchiveButton } from './ArchiveButton'
 import { ArchivedTag } from './ArchivedTag'
@@ -79,6 +80,8 @@ export function SessionView({ id, onStatus, onOpenSidebar, linear, settings }: {
           <MetaEditor key={s.id} id={s.id} meta={s.meta} icon={s.icon} />
           <DiffButton key={`diff:${s.id}`} id={s.id} />
           {s.agent === 'claude' && <PermissionsButton key={s.id} id={s.id} />}
+          {/* SAI から返信するときの許可モード。端末に打ち込む経路では効かないので、そのときは薄く出す */}
+          {s.agent === 'claude' && <SessionPermissionModeSelect key={s.id} id={s.id} value={s.meta?.permission_mode} terminal={Boolean(s.terminal)} />}
           {/* 一言が有効なときだけ。このセッションの性格（無ければヘッダの既定に従う） */}
           {settings?.digest && <SessionPersonaSelect key={s.id} id={s.id} value={s.meta?.persona} defaultPersona={settings.persona} />}
           {hasThinking && (

@@ -154,6 +154,13 @@ export interface SessionMeta {
   model?: string
   /** このセッションの一言（digest）の性格。無ければ全体の既定（settings.json の persona）に従う。変えると以後の行から効く */
   persona?: PersonaId
+  /**
+   * SAI から返信するときの許可モード。無ければ CLI の既定（読み取り以外は聞く）。
+   * `claude -p --resume` に `--permission-mode` として付く。**そのターン限り**で、セッションには残らない
+   * （`--model` と違うところ。確かめた: フラグ付きで回したセッションをフラグ無しで再開すると元に戻る）。
+   * 端末（tmux）に打ち込む経路ではフラグを渡す先が無いので効かない
+   */
+  permission_mode?: ReplyPermissionMode
 }
 
 /**
@@ -491,6 +498,13 @@ export interface FeedFilters {
 
 /** 許可モード。Claude Code のフックの `permission_mode` の値 */
 export type PermissionMode = 'default' | 'acceptEdits' | 'plan' | 'auto' | 'dontAsk' | 'bypassPermissions'
+
+/**
+ * SAI の画面から**選べる**許可モード（`SessionMeta.permission_mode`）。返信の `claude -p` に `--permission-mode` として付く。
+ * 素通し系（`auto` / `bypassPermissions`）は入れない: 返信の POST はブラウザから飛ぶので、そこが通ると何でもできる
+ * （README「返信と許可」の「許可はツール単位で最小にする」）。環境変数 `SAI_CLAUDE_ARGS` で明示的に渡す道は残っている
+ */
+export type ReplyPermissionMode = 'acceptEdits'
 
 /** ルールの種類。評価は deny → ask → allow の順で、最初に当たったものが決まる */
 export type PermissionKind = 'deny' | 'ask' | 'allow'

@@ -98,9 +98,16 @@ export function replyCommand(
   approve?: ApproveVia,
   /** このセッションの返信で使うモデル（session-meta.json の model）。無ければ CLI の既定 */
   model?: string,
+  /**
+   * このセッションの返信の許可モード（session-meta.json の permission_mode）。無ければ CLI の既定。
+   * そのターン限りで、セッションには残らない（確かめた: フラグ付きで回したセッションをフラグ無しで再開すると元に戻る）
+   */
+  permissionMode?: string,
 ): ReplyCommand | null {
-  // 運用者の SAI_*_ARGS に --model があっても、セッションの設定を後ろに置いてそちらを勝たせる（後勝ち）
+  // 運用者の SAI_*_ARGS に --model / --permission-mode があっても、セッションの設定を後ろに置いてそちらを勝たせる（後勝ち）
   const pick = model ? (agent === 'codex' ? ['-m', model] : ['--model', model]) : []
+  // 許可モードは Claude だけ（codex exec resume に同等のフラグは無い）
+  const mode = permissionMode && agent === 'claude' ? ['--permission-mode', permissionMode] : []
   // 本文の前に `--` を置く。本文が `-` で始まると（`-v` や `--help`）CLI がフラグとして解釈して
   // ターンが回らない（`--dangerously-skip-permissions` ならフラグとして効いてしまう）。両 CLI とも `--` を受け付ける
   if (agent === 'claude') {
@@ -111,7 +118,7 @@ export function replyCommand(
     const wire = approve && env.SAI_APPROVE !== '0' && !extra.includes('--permission-prompt-tool')
       ? ['--mcp-config', approveMcpConfig(approve), '--permission-prompt-tool', APPROVE_TOOL]
       : []
-    return { bin: env.SAI_CLAUDE_BIN || 'claude', args: [...extra, ...wire, ...pick, '-p', '--resume', session, '--', text], cwd, text }
+    return { bin: env.SAI_CLAUDE_BIN || 'claude', args: [...extra, ...wire, ...pick, ...mode, '-p', '--resume', session, '--', text], cwd, text }
   }
   if (agent === 'codex') {
     return { bin: env.SAI_CODEX_BIN || 'codex', args: ['exec', 'resume', ...splitArgs(env.SAI_CODEX_ARGS), ...pick, session, '--', text], cwd, text }

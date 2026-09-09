@@ -306,6 +306,7 @@
   .modal.cropper .actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 12px; align-items: center; }
   .modal.cropper .actions .primary { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 6px 14px; font: inherit; font-weight: 600; cursor: pointer; }
   .modal.cropper .actions button:disabled { opacity: .5; cursor: default; }
+  .chat-head .session-permission-mode.inactive select { opacity: .55; }
   .chat-head .archive .err { color: var(--claude); margin-left: 6px; }
   .linkish { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-size: 12px; cursor: pointer; }
   .linkish:hover { text-decoration: underline; }

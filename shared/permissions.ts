@@ -1,5 +1,5 @@
 // 許可ルールの並びと言い換え。サーバ（server/permissions.ts の並べ替え）と画面（PermissionsModal）が同じ値を使う。
-import type { PermissionKind, PermissionMode, PermissionSourceKind } from './types.ts'
+import type { PermissionKind, PermissionMode, PermissionSourceKind, ReplyPermissionMode } from './types.ts'
 
 /**
  * ルールの評価順。deny → ask → allow の順に見て、最初に当たったものが決まる（ルールの細かさは順に関係しない）。
@@ -40,6 +40,17 @@ export const MODE_LABEL: Record<PermissionMode, string> = {
   auto: '自動（安全性の確認つきで何でも実行）',
   dontAsk: '聞かない（許可済みだけ実行し、他は自動で拒否）',
   bypassPermissions: '全部素通し（許可の確認をしない）',
+}
+
+/**
+ * SAI の画面（チャット見出しの select）から選べる許可モード。素通し系は並べない（ReplyPermissionMode の説明）。
+ * サーバの検査（shared/meta.ts の mergeMeta）と画面の select が同じ一覧を見る
+ */
+export const REPLY_MODES: ReplyPermissionMode[] = ['acceptEdits']
+
+/** 画面から選べる許可モードか。知らない値・素通し系は false */
+export function isReplyPermissionMode(value: unknown): value is ReplyPermissionMode {
+  return typeof value === 'string' && (REPLY_MODES as string[]).includes(value)
 }
 
 /** ルールの一覧に関係なく通ってしまうモードか。画面で目立たせる */

@@ -598,6 +598,63 @@ class RecordTest(unittest.TestCase):
         ] + (tail or []))
         return path
 
+    def test_codex_first_user_text_skips_recommended_plugins(self):
+        """Codexが本物の入力より前に差し込むプラグイン一覧をタイトルにしない（#202）。"""
+        from feed.record import first_user_text
+
+        path = self._rollout("0c6bd4c9-0202-4a2b-9c3d-aaaaaaaaaaaa", str(self.cwd))
+        entries = list(path.read_text(encoding="utf-8").splitlines())
+        plugin_list = {
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": "<recommended_plugins>\nHere is a list of plugins that are available but not installed.\n- Airtable\n</recommended_plugins>",
+                }],
+            },
+        }
+        entries.insert(1, json.dumps(plugin_list, ensure_ascii=False))
+        entries.insert(-1, json.dumps({
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "<turn_aborted>\nThe user interrupted the previous turn."}],
+            },
+        }, ensure_ascii=False))
+        path.write_text("\n".join(entries) + "\n", encoding="utf-8")
+
+        self.assertEqual(first_user_text(path), "最初の依頼")
+
+    def test_codex_first_user_text_skips_agents_md_instructions(self):
+        """AGENTS.md の差し込みもタイトルにしない（#202）。
+
+        これだけタグの形をしていないので、`<...>` を外しただけでは残る。手元の rollout 22 本のうち
+        8 本がこれで始まっていて（`<recommended_plugins>` の 4 本より多い）、しかもその 8 本には
+        `<environment_context>` も `<recommended_plugins>` も無かった。
+        """
+        from feed.record import first_user_text
+
+        path = self._rollout("0c6bd4c9-0202-4a2b-9c3d-bbbbbbbbbbbb", str(self.cwd))
+        entries = list(path.read_text(encoding="utf-8").splitlines())
+        agents_md = {
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": "# AGENTS.md instructions for /Users/me/repo\n\nコミットメッセージは日本語で書く。",
+                }],
+            },
+        }
+        entries.insert(1, json.dumps(agents_md, ensure_ascii=False))
+        path.write_text("\n".join(entries) + "\n", encoding="utf-8")
+
+        self.assertEqual(first_user_text(path), "最初の依頼")
+
     def test_codex_thinking_comes_from_reasoning_summary_of_the_last_turn(self):
         wanted = "0c6bd4c9-4444-4a2b-9c3d-dddddddddddd"
         self._rollout(wanted, str(self.cwd), tail=[

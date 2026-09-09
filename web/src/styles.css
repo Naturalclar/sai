@@ -187,19 +187,24 @@
   .todo { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--panel); }
   .todo.answer { border-left: 3px solid var(--accent); }
   .todo.watch { border-left: 3px solid var(--synth); }
-  .todo .who { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; color: inherit; font-size: 13px; }
+  /* 1 行に収める（折り返すと「N 待っている」だけが次の行の右端に飛ぶ）。溢れる名前は … で切る */
+  .todo .who { display: flex; align-items: center; gap: 6px; color: inherit; font-size: 13px; min-width: 0; }
   .todo .who:hover { text-decoration: none; }
-  .todo .who .name { font-weight: 700; overflow-wrap: anywhere; }
+  .todo .who .name { font-weight: 700; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .todo .who:hover .name { text-decoration: underline; }
-  .todo .who .icon { width: 20px; height: 20px; border-radius: 20%; }
-  .todo .who .where, .todo .who .waited { color: var(--muted); font-size: 11px; }
-  .todo .who .waited { margin-left: auto; white-space: nowrap; }
+  .todo .who .icon { flex: none; width: 20px; height: 20px; border-radius: 20%; }
+  .todo .who .where, .todo .who .waited { flex: none; color: var(--muted); font-size: 11px; white-space: nowrap; }
+  .todo .who .waited { margin-left: auto; }
   .todo .why { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; margin-top: 6px; font-size: 13px; }
   .todo .why .text { overflow-wrap: anywhere; }
   .todo .why .note { color: var(--muted); font-size: 11px; }
-  /* カードの中のバブルはアバターを出さない（誰のものかは上の行に書いてある） */
-  .todo .group.approval { margin-top: 4px; }
-  .todo .group.approval .avatar, .todo .group.approval .gh .name { display: none; }
+  /* カードの中のバブルはチャットの 2 列（アバター + 本文）ではなく 1 列にする。
+     アバターを display:none にすると grid のアイテムから外れ、残った本文が 1 列目（36px、狭い画面は 28px）に
+     潰れる（#227）。列を 1 つにしてから消すこと。見出し（.gh）も上の行と重複するので出さない */
+  .todo .group.approval { grid-template-columns: minmax(0, 1fr); gap: 0; padding: 6px 0 0; }
+  .todo .group.approval .avatar, .todo .group.approval .gh { display: none; }
+  /* 時刻はアバター列の余白（left: -46px）に置く作りなので、カードの中では外に飛び出す。経過は上の行に出ている */
+  .todo .group.approval .msg .time { display: none; }
   .channels .archive-btn { position: absolute; top: 4px; right: 6px; z-index: 1; opacity: 0; background: var(--panel); border: 1px solid var(--line); }
   .channels .archive-btn:hover { border-color: var(--muted); }
   .channels .archive-btn:disabled { background: var(--panel); }
@@ -324,7 +329,7 @@
   .tag.terminal { background: color-mix(in srgb, var(--codex) 16%, transparent); color: var(--codex); font-weight: 600; }
 
   /* -- chat */
-  .chat-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+  .chat-head { flex: none; display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
   .chat-head h1 { font-size: 18px; margin: 0; }
   .chat-head h1 .hash { color: var(--muted); font-weight: 400; }
   .chat-head .meta { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; min-width: 0; }

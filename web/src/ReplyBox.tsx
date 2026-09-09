@@ -9,6 +9,7 @@ import { useAttachments } from './useAttachments'
 import { AttachmentStrip } from './AttachmentStrip'
 import { IconButton } from './IconButton'
 import { ReplyModelPicker, type ReplyModelProps } from './ReplyModelPicker'
+import { leavesToSidebar } from './replyFocus'
 import { PhotoMark } from './PhotoMark'
 import { ATTACHMENT_MAX_COUNT } from '../../shared/attachments.ts'
 import { NOT_IN_HISTORY, canGoBack, canGoForward, stepHistory } from './replyHistory'
@@ -60,13 +61,18 @@ interface Props {
   attachId?: string
   /** ↑ で呼び戻せる、この返信先に前に送った内容（新しい順）。渡さなければ ↑ は普通のカーソル移動 */
   history?: readonly string[]
+  /** 本文が空のときの `←`。サイドバーのいま開いている項目にフォーカスを戻す（#204）。渡さなければ ← はカーソル移動のまま */
+  onLeaveToSidebar?: () => void
   mention?: MentionProps
 }
 
 const NO_HISTORY: readonly string[] = []
 
+/** React の合成イベントから修飾キーだけ取り出す（isComposing は nativeEvent 側なので呼び出し側が足す） */
+const keyOf = (e: KeyboardEvent<HTMLTextAreaElement>) => ({ key: e.key, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, shiftKey: e.shiftKey })
+
 /** 入力欄。Enter で送信、Shift+Enter で改行。IME 変換中の Enter は送らない */
-export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onDraft, model, skillsId, attachId, history = NO_HISTORY, mention }: Props) {
+export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onDraft, model, skillsId, attachId, history = NO_HISTORY, onLeaveToSidebar, mention }: Props) {
   const [text, setText] = useState('')
   const attach = useAttachments(attachId)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -277,6 +283,12 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
         else setDismissed(hit.query) // 候補が無いときの Enter は送信せず閉じるだけ
         return
       }
+    }
+    // 本文が空なら ← でサイドバーへ戻る（#204）。書きかけの文中はカーソル移動のまま
+    if (onLeaveToSidebar && leavesToSidebar({ ...keyOf(e), isComposing: composing }, { text, menuOpen: open })) {
+      e.preventDefault()
+      onLeaveToSidebar()
+      return
     }
     // 候補メニューが閉じているときの ↑ / ↓ は履歴。本文が空か、カーソルが 1 行目（↓ は最終行）のときだけ。
     // 複数行を書いている途中は普通のカーソル移動でないと編集できない

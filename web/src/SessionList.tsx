@@ -39,7 +39,8 @@ export function SessionList({ list, filters, setFilters, selectedId }: Props) {
   return (
     <>
       <div className="filters">
-        <FacetSelect label="リポジトリ" value={filters.repo} options={facets.repos} onChange={(repo) => setFilters({ repo })} />
+        {/* 値は repo フィールド（worktree ならそのディレクトリ名）。GitHub のリポジトリではないので画面では「セッション」と呼ぶ（#151） */}
+        <FacetSelect label="セッション" value={filters.repo} options={facets.repos} onChange={(repo) => setFilters({ repo })} />
         <FacetSelect label="エージェント" value={filters.agent} options={facets.agents} onChange={(agent) => setFilters({ agent })} />
         <FacetSelect label="日付" value={filters.date} options={facets.dates} onChange={(date) => setFilters({ date })} />
         <DaysSelect value={filters.days} options={[1, 3, 7, 30, 90]} onChange={(days) => setFilters({ days })} />
@@ -53,13 +54,13 @@ export function SessionList({ list, filters, setFilters, selectedId }: Props) {
         >
           {archived ? 'アーカイブ済みを見ている' : 'アーカイブ済みを見る'}
         </button>
-        {data && <span className="count">{sessions.length} / {data.total} セッション</span>}
+        {data && <span className="count">{sessions.length} / {data.total} 件</span>}
       </div>
       {error && <div className="side-error">取得失敗: {error}</div>}
       <nav className="channels" onPointerDownCapture={onPointerDownCapture}>
         <a className={`item feed${selectedId === null ? ' active' : ''}`} href="#/feed">
           <span className="t">フィード</span>
-          <span className="last">{filters.repo ? `#${filters.repo}` : '全リポジトリ'}を時系列に</span>
+          <span className="last">{filters.repo ? `#${filters.repo}` : '全セッション'}を時系列に</span>
         </a>
         {archived && <div className="head">アーカイブ済み（薄く出る。開いて「戻す」か、新しい行が届けば自動で戻る）</div>}
         {sessions.map((s) => (

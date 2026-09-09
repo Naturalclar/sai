@@ -264,6 +264,20 @@ def _blocks_to_text(content) -> str:
     return "\n".join(p for p in parts if p).strip()
 
 
+def _codex_input_text(inputs) -> str:
+    """Codex notify から今回の入力だけを取り出す。"""
+    if isinstance(inputs, str):
+        return inputs
+    if not isinstance(inputs, list) or not inputs:
+        return ""
+    # text block の配列は 1 メッセージの表現なので、従来どおり全部を連結する。
+    if all(isinstance(item, dict) for item in inputs):
+        return _blocks_to_text(inputs)
+    # resume/queue 後は過去分を含むメッセージ列が届くため、今回分の末尾だけを使う。
+    latest = inputs[-1]
+    return _blocks_to_text(latest if isinstance(latest, list) else [latest])
+
+
 _NOISE_PREFIXES = (
     "<command-name>",
     "<command-message>",
@@ -848,10 +862,9 @@ def build_row(payload: dict, now: datetime, directory: Path) -> dict | None:
             resolved = resolve_codex_session(cwd)
             if resolved:
                 session, source = resolved, "rollout"
-        # input-messages はそのターンの入力そのもの（文字列の配列。念のため文字列も受ける）
+        # resume/queue 後の input-messages は過去の入力も含むため、末尾の今回分だけを使う。
         inputs = payload.get("input-messages") or payload.get("input_messages")
-        if isinstance(inputs, (list, str)):
-            user_text = _blocks_to_text(inputs)
+        user_text = _codex_input_text(inputs)
         # タイトル生成などの内部の呼び出しは人のターンではない。行にすると進行中のセッションに
         # JSON だけの返答が混ざる（issue #102）
         if is_codex_internal_turn(user_text, text):

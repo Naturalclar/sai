@@ -41,6 +41,8 @@ function summary(over: Partial<SessionSummary>): SessionSummary {
     agents: ['claude'],
     repo: 'sai',
     repos: ['sai'],
+    project: 'Naturalclar/sai',
+    projects: ['Naturalclar/sai'],
     branch: 'main',
     branches: ['main'],
     cwd: '/tmp/sai',

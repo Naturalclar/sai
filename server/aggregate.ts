@@ -1,5 +1,6 @@
 // 行 → セッションの集計。エンティティの単位は (セッション, リポジトリ)。キーは shared/entity.ts。
 import { entityId, localDate } from '../shared/entity.ts'
+import { rowProject } from '../shared/project.ts'
 import { eventKind } from '../shared/events.ts'
 import type { Agent, Facets, FeedRow, SessionSource, SessionSummary } from '../shared/types.ts'
 
@@ -76,6 +77,8 @@ export function aggregate(rows: FeedRow[]): SessionSummary[] {
     const first = items[0]!
     const last = items[items.length - 1]!
     const repos = orderedUnique(items.map((r) => r.repo ?? ''))
+    // どのリポジトリか。古い行には project が無いので remote から補う（shared/project.ts）
+    const projects = orderedUnique(items.map(rowProject))
     const branches = orderedUnique(items.map((r) => r.branch ?? ''))
     const agents = orderedUnique(items.map((r) => (r.agent ?? 'unknown') as Agent))
     const sources = orderedUnique(items.map((r) => (r.session_source ?? '') as SessionSource))
@@ -100,6 +103,8 @@ export function aggregate(rows: FeedRow[]): SessionSummary[] {
       agents,
       repo: repos[repos.length - 1] ?? '',
       repos: repos.filter(Boolean),
+      project: projects[projects.length - 1] ?? '',
+      projects: projects.filter(Boolean),
       branch: branches[branches.length - 1] ?? '',
       branches: branches.filter(Boolean),
       cwd: last.cwd ?? '',
@@ -122,8 +127,18 @@ export function aggregate(rows: FeedRow[]): SessionSummary[] {
   return sessions
 }
 
-export function filterSessions(sessions: SessionSummary[], repo: string, agent: string, date: string): SessionSummary[] {
+export interface SessionFilter {
+  /** リポジトリ（`Naturalclar/sai`）。主軸 */
+  project?: string
+  /** worktree（git の toplevel の basename）。project の中をさらに絞る */
+  repo?: string
+  agent?: string
+  date?: string
+}
+
+export function filterSessions(sessions: SessionSummary[], { project = '', repo = '', agent = '', date = '' }: SessionFilter): SessionSummary[] {
   let result = sessions
+  if (project) result = result.filter((s) => s.projects.includes(project))
   if (repo) result = result.filter((s) => s.repos.includes(repo))
   if (agent) result = result.filter((s) => s.agents.includes(agent as Agent))
   if (date) result = result.filter((s) => s.dates.includes(date))
@@ -131,15 +146,18 @@ export function filterSessions(sessions: SessionSummary[], repo: string, agent: 
 }
 
 export function facets(sessions: SessionSummary[]): Facets {
+  const projects = new Set<string>()
   const repos = new Set<string>()
   const agents = new Set<Agent>()
   const dates = new Set<string>()
   for (const s of sessions) {
+    for (const p of s.projects) projects.add(p)
     for (const r of s.repos) repos.add(r)
     for (const a of s.agents) agents.add(a)
     for (const d of s.dates) dates.add(d)
   }
   return {
+    projects: [...projects].sort(),
     repos: [...repos].sort(),
     agents: [...agents].sort(),
     dates: [...dates].sort().reverse(),

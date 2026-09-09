@@ -157,6 +157,62 @@ class RecordTest(unittest.TestCase):
 
     # -- 行の形の版
 
+    # -- project（どのリポジトリか。#163）
+
+    def test_project_from_remote(self):
+        """正規化済みの remote から owner/repo。shared/project.ts の projectFromRemote と同じ答え"""
+        from feed.record import project_from_remote
+
+        for remote, want in [
+            ("https://github.com/Naturalclar/sai", "Naturalclar/sai"),
+            ("https://github.com/Naturalclar/sai/", "Naturalclar/sai"),
+            ("https://gitlab.example.com/grp/sub/repo", "sub/repo"),
+            ("https://github.com/onlyowner", ""),
+            ("", ""),
+        ]:
+            with self.subTest(remote=remote):
+                self.assertEqual(project_from_remote(remote), want)
+
+    def test_project_is_the_repository_not_the_worktree(self):
+        """bare clone の worktree でも project はリポジトリ名（#163）。repo は今までどおり worktree 名"""
+        from feed.record import git_facts, git_project
+
+        root = Path(self.tmp.name)
+        src = root / "src"
+        src.mkdir()
+        subprocess.run(["git", "init", "-q", "-b", "main", str(src)], check=True)
+        subprocess.run(["git", "-C", str(src), "commit", "-q", "--allow-empty", "-m", "x"], check=True)
+        # bare clone + worktree（ghq --vcs や git clone --bare + git worktree add の形）
+        bare = root / "sai.git"
+        subprocess.run(["git", "clone", "-q", "--bare", str(src), str(bare)], check=True)
+        wt = bare / "dev-min"
+        subprocess.run(["git", "-C", str(bare), "worktree", "add", "-q", str(wt), "main"], check=True)
+
+        # remote が無いので --git-common-dir から取る（bare は `…/sai.git` を返す）
+        self.assertEqual(git_project(str(wt), ""), "sai")
+        # repo（toplevel の basename）は worktree 名のまま = これが #163 の原因
+        self.assertEqual(git_facts(str(wt))[0], "dev-min")
+
+        # 普通の clone も、そのサブディレクトリからも同じ答え
+        self.assertEqual(git_project(str(src), ""), "src")
+        sub = src / "a" / "b"
+        sub.mkdir(parents=True)
+        self.assertEqual(git_project(str(sub), ""), "src")
+
+        # remote があればそちらが優先（owner ごと分かる）
+        self.assertEqual(git_project(str(wt), "https://github.com/Naturalclar/sai"), "Naturalclar/sai")
+        # git の外なら空
+        outside = root / "not-a-repo"
+        outside.mkdir()
+        self.assertEqual(git_project(str(outside), ""), "")
+
+        # 行にも載る
+        payload = {"hook_event_name": "Stop", "session_id": "pj-1", "transcript_path": "/nonexistent", "cwd": str(wt)}
+        run(stdin=json.dumps(payload), env=self.env)
+        row = read_rows(self.feed_dir)[-1]
+        self.assertEqual(row["project"], "sai")
+        self.assertEqual(row["repo"], "dev-min")
+
     def test_row_carries_record_version_matching_shared_types(self):
         """行の v は shared/types.ts の RECORD_VERSION と同じ値。行の形を変えたら両方上げる"""
         # どちらもソースを文字列で読む（record を import すると同じ秒内の書き換えで古い __pycache__ を拾うことがある）

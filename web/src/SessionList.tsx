@@ -22,7 +22,7 @@ export function SessionList({ list, filters, setFilters, selectedId }: Props) {
   const now = updatedAt?.getTime() ?? 0
   const archived = filters.archived === '1'
 
-  const facets = data?.filters ?? { repos: [], agents: [], dates: [] }
+  const facets = data?.filters ?? { projects: [], repos: [], agents: [], dates: [] }
   const sessions = data?.sessions ?? []
 
   // タッチ端末では項目を左にスワイプしてアーカイブを出す。開いている項目は 1 つだけ
@@ -40,11 +40,15 @@ export function SessionList({ list, filters, setFilters, selectedId }: Props) {
     <>
       <div className="filters">
         {/* 値は repo フィールド（worktree ならそのディレクトリ名）。GitHub のリポジトリではないので画面では「セッション」と呼ぶ（#151） */}
-        <FacetSelect label="セッション" value={filters.repo} options={facets.repos} onChange={(repo) => setFilters({ repo })} />
+        <FacetSelect label="リポジトリ" value={filters.project} options={facets.projects} onChange={(project) => setFilters({ project })} />
+        {/* worktree（git の toplevel の basename）。bare clone だと 1 リポジトリに複数あるので、2 つ以上あるときだけ出す */}
+        {(facets.repos.length > 1 || filters.repo) && (
+          <FacetSelect label="worktree" value={filters.repo} options={facets.repos} onChange={(repo) => setFilters({ repo })} />
+        )}
         <FacetSelect label="エージェント" value={filters.agent} options={facets.agents} onChange={(agent) => setFilters({ agent })} />
         <FacetSelect label="日付" value={filters.date} options={facets.dates} onChange={(date) => setFilters({ date })} />
         <DaysSelect value={filters.days} options={[1, 3, 7, 30, 90]} onChange={(days) => setFilters({ days })} />
-        <button type="button" onClick={() => setFilters({ repo: '', agent: '', date: '' })}>絞り込みを消す</button>
+        <button type="button" onClick={() => setFilters({ project: '', repo: '', agent: '', date: '' })}>絞り込みを消す</button>
         <button
           type="button"
           className={archived ? 'on' : ''}

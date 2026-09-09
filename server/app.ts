@@ -31,6 +31,7 @@ import type {
   Viewer,
 } from '../shared/types.ts'
 import { entityId, facets, filterSessions, recordVersionOf } from './aggregate.ts'
+import { rowProject } from '../shared/project.ts'
 import { ICONS_DIR, IconStore, iconKey } from './icons.ts'
 import { alwaysAllowRule, ruleLabel } from '../shared/approvals.ts'
 import { Approvals, WAIT_MS } from './approvals.ts'
@@ -725,7 +726,9 @@ export function createApp(
           rev: revWith(rev, replying, approvals.revKey(), build_stale, digest.revKey()),
           days,
           total: pool.length,
-          sessions: withLastSummary(filterSessions(pool, q.get('repo') ?? '', q.get('agent') ?? '', q.get('date') ?? '')),
+          sessions: withLastSummary(
+            filterSessions(pool, { project: q.get('project') ?? '', repo: q.get('repo') ?? '', agent: q.get('agent') ?? '', date: q.get('date') ?? '' }),
+          ),
           filters: facets(pool),
           replying,
           approvals: pendingApprovals,
@@ -761,11 +764,13 @@ export function createApp(
       if (path === '/api/feed') {
         const days = parseDays(q.get('days'), 3)
         const repo = q.get('repo') ?? ''
+        const project = q.get('project') ?? ''
         // アーカイブ済みセッションの行は流さない（一覧から消えてもフィードに流れていたら隠した意味が無い）
         const [{ rev: sessionsRev, sessions }, me] = await Promise.all([sessionsWithMeta(days), profileNow()])
         const rev = `${sessionsRev}~${me.rev}`
         const archived = new Set(sessions.filter((s) => s.archived).map((s) => s.id))
         let rows = await store.rows(days)
+        if (project) rows = rows.filter((r) => rowProject(r) === project)
         if (repo) rows = rows.filter((r) => r.repo === repo)
         if (archived.size) rows = rows.filter((r) => !archived.has(entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? ''))))
         // 思考はフィードには出さないので運ばない（3秒ごとに全行を返す。セッション画面だけが使う）

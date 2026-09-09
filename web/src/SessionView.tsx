@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { replyBlockedReason } from '../../shared/reply.ts'
+import { projectName } from '../../shared/project.ts'
 import { eventKind } from '../../shared/events.ts'
 import { promptArrived } from './chatGroups'
 import { api } from './api'
@@ -52,7 +53,8 @@ export function SessionView({ id, onStatus, onOpenSidebar, linear, settings }: {
       <BackLink onOpenSidebar={onOpenSidebar} />
       {s && (
         <div className="chat-head">
-          <h1><span className="hash">#</span>{s.repo}</h1>
+          {/* bare clone だと repo は worktree 名なので、リポジトリ名（project）。worktree は右の branch で分かる */}
+          <h1><span className="hash">#</span>{projectName(s.project) || s.repo}</h1>
           <span className="meta"><AgentChip agent={s.agent} /></span>
           <span className="meta">
             <ModelPicker key={s.id} id={s.id} agent={s.agent} model={s.model} models={s.models} replyModel={s.meta?.model} canReply={!blocked && !s.archived} />

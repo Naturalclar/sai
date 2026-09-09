@@ -27,7 +27,7 @@ export interface PaneProps extends StatusProps {
   linear: string
 }
 
-const DEFAULT_FILTERS: SessionFilters = { repo: '', agent: '', date: '', days: '7', archived: '' }
+const DEFAULT_FILTERS: SessionFilters = { project: '', repo: '', agent: '', date: '', days: '7', archived: '' }
 
 /** 画面の見た目の状態。フィルタと同じく localStorage に残す */
 interface UiState {
@@ -50,7 +50,7 @@ export function App() {
   // 絞り込みはサイドバーのもの。フィードのリポジトリはこれに従う（同じ画面に「リポジトリ」を2つ出さない）
   const [filters, setFilters] = useLocalState<SessionFilters>('sai.filters', DEFAULT_FILTERS)
   // 一覧はここで1回だけ取り、サイドバー（表示）とフィード（@ の候補）の両方に渡す。同じ URL を2回叩かない
-  const list = usePolling(() => api.sessions(filters), [filters.repo, filters.agent, filters.date, filters.days, filters.archived])
+  const list = usePolling(() => api.sessions(filters), [filters.project, filters.repo, filters.agent, filters.date, filters.days, filters.archived])
 
   // サイドバーの開閉。レイアウトは main の class で CSS が切り替える。狭い画面では CSS 側が無視する
   const [ui, setUi] = useLocalState<UiState>('sai.ui', DEFAULT_UI)
@@ -159,7 +159,7 @@ export function App() {
           {route.name === 'session' ? (
             <SessionView id={route.id} onStatus={onStatus} onOpenSidebar={openSidebar} linear={linear} settings={settings} />
           ) : (
-            <FeedView repo={filters.repo} sessions={list.data?.sessions} onStatus={onStatus} onOpenSidebar={openSidebar} linear={linear} settings={settings} />
+            <FeedView project={filters.project} sessions={list.data?.sessions} onStatus={onStatus} onOpenSidebar={openSidebar} linear={linear} settings={settings} />
           )}
         </div>
       </main>

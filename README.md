@@ -202,7 +202,8 @@ Codex CLI ──[notify]───────┘
 | `remote` | origin の URL を `https://host/owner/repo` に正規化したもの（`record.py` の `normalize_remote()`。ssh の `git@host:o/r.git` も同じ形、認証情報と `.git` は落とす）。origin が無ければ空。画面が一言の中の `#123` をこのリポジトリの issue に向けるのに使う |
 | `v` | 記録側の版（`record.py` の `RECORD_VERSION`。`shared/types.ts` にも同じ値があり、ずれると `pnpm test:feed` が止まる）。行の形を変えるたびに上げる。無い行は試作か古い `record.py` が書いたもの（1 扱い） |
 | `agent` | `claude` / `codex` / `unknown` |
-| `repo` | `git rev-parse --show-toplevel` の basename。bare + worktree の構成では worktree のディレクトリ名（`dev-kanade` など）になり、GitHub のリポジトリ名とは限らない。画面ではこれを「セッション」と呼ぶ（絞り込み、`#repo` のチャンネル名） |
+| `repo` | `git rev-parse --show-toplevel` の basename。bare + worktree の構成では worktree のディレクトリ名（`dev-kanade` など）になり、GitHub のリポジトリ名とは限らない。画面では「worktree」と呼ぶ（同じリポジトリに複数あるときだけ絞り込みに出る）。エンティティID（`<セッション>@<リポジトリ>`）はこれで作るので、値は変えない |
+| `project` | **どのリポジトリのものか**（`Naturalclar/sai`）。`remote` があればその `owner/repo`、無ければ `git rev-parse --git-common-dir` から取ったリポジトリ名だけ（bare なら `…/sai.git` → `sai`、普通の clone なら `<toplevel>/.git` → その親、のどちらでも同じ答えになる）。画面の絞り込みと見出しはこれを使う。無い行（古い `record.py`）はサーバが `remote` から補う（`shared/project.ts` の `rowProject()`） |
 | `session_source` | `payload`（ペイロードから）/ `rollout`（Codex のファイルから）/ `synth`（時間で合成）。一覧の信頼度がここで分かる |
 | `event` | 何の行か。ターン完了は `Stop`（Claude）/ `agent-turn-complete`（Codex）。人を待って止まった行は `PermissionRequest` / `PreToolUse` / `Notification`、人が答えて再開した行は `UserPromptSubmit`。読み方は `shared/events.ts` の `eventKind()` にまとめてあり、集計と画面が同じ判定を使う |
 | `text` | ターン完了なら最後のアシスタント発話。Claude は `transcript_path` の末尾から、Codex は `last-assistant-message`。2,000文字で切る。待ちの行なら「何を待っているか」（300文字）、再開の行は空 |
@@ -314,7 +315,7 @@ Slack と同じ形。左のサイドバーがチャンネル一覧（先頭に�
 | 印 | `session_source` が `synth` なら「合成」。最後の行が待ちの行（`waiting`）なら「待機中」（マウスを乗せると何を待っているか）。画面からの返信を処理中なら「返信中」。アーカイブ済みなら「アーカイブ」（「アーカイブ済みを見る」のときだけ出る） |
 | アーカイブ | 項目にマウスを乗せると右上に箱のアイコン。押すと一覧とフィードから隠れる（新しい行が届けば自動で戻る）。タッチ端末では項目を左にスワイプすると右からレールが出て、途中で止めればアイコンを押す、幅の半分近くまで引いて離せばそのまま実行（Gmail と同じ）。アーカイブ済み一覧では同じ操作で「戻す」。合成 ID の項目にはどちらも無い |
 
-絞り込み（セッション / エージェント / 日付 / 日数）はサイドバーの上。件数は「N / M 件」（M は絞り込み前）。「アーカイブ済みを見る」を押すとアーカイブ済みのセッションだけが薄く出る（既定では出ない）。項目にマウスを載せる（かフォーカスする）と右上に「アーカイブ」が出て、セッションを開かずにその場でアーカイブできる（「アーカイブ済みを見る」中は「戻す」）。フィードのリポジトリはここで選んだものに従う（同じ画面に「リポジトリ」を2つ出さない）。フィードの日数だけはチャット側の右上で選ぶ。
+絞り込み（リポジトリ / worktree / エージェント / 日付 / 日数）はサイドバーの上。**リポジトリ**は行の `project`（`Naturalclar/sai`）で、bare + worktree の構成でも worktree ごとに分かれない。**worktree** は行の `repo`（toplevel の basename）で、同じリポジトリに複数あるときだけ出る。件数は「N / M 件」（M は絞り込み前）。「アーカイブ済みを見る」を押すとアーカイブ済みのセッションだけが薄く出る（既定では出ない）。項目にマウスを載せる（かフォーカスする）と右上に「アーカイブ」が出て、セッションを開かずにその場でアーカイブできる（「アーカイブ済みを見る」中は「戻す」）。フィードのリポジトリはここで選んだものに従う（同じ画面に「リポジトリ」を2つ出さない）。フィードの日数だけはチャット側の右上で選ぶ。
 
 ### チャット
 
@@ -436,7 +437,7 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 | --- | --- |
 | `GET /` | ビューア（`web/dist/index.html`） |
 | `GET /assets/*` | ビルド成果物。`dist/` の外には出ない |
-| `GET /api/sessions?days=7&repo=&agent=&date=&archived=` | セッション一覧（集計済み）。`record_version` は窓の中の一番新しい行の `v`（画面の「record.py が古い」の判定）。各セッションの `waiting` は人を待って止まっていれば「何を待っているか」、そうでなければ空。`filters` に絞り込み候補、`replying` に処理中の返信（ID → `{ since, text }`）、`approvals` に返信中のエージェントが待っている許可・質問（ID → 古い順の配列）、`profile` に自分の表示名とアイコンも返す。既定ではアーカイブ済みを除き、`archived=1` でアーカイブ済みだけ（`total` と `filters` もその集合から）。`viewer` は tailnet 経由ならログイン名、直アクセスなら `null` |
+| `GET /api/sessions?days=7&project=&repo=&agent=&date=&archived=` | セッション一覧（集計済み）。`record_version` は窓の中の一番新しい行の `v`（画面の「record.py が古い」の判定）。各セッションの `waiting` は人を待って止まっていれば「何を待っているか」、そうでなければ空。`filters` に絞り込み候補、`replying` に処理中の返信（ID → `{ since, text }`）、`approvals` に返信中のエージェントが待っている許可・質問（ID → 古い順の配列）、`profile` に自分の表示名とアイコンも返す。既定ではアーカイブ済みを除き、`archived=1` でアーカイブ済みだけ（`total` と `filters` もその集合から）。`viewer` は tailnet 経由ならログイン名、直アクセスなら `null` |
 | `GET /api/health` | `{ ok: true, viewer }`。認証の確認にも使う（偽ヘッダで `401` になること） |
 | `GET /api/sessions/<id>?days=30` | そのエンティティの全行と `replying`。`<id>` は `<セッション>@<リポジトリ>` |
 | `POST /api/sessions/<id>/reply?days=90` | body `{ "text": "..." }`。そのセッションを `cwd` で再開して1ターン回すのを投げっぱなしにし、`202` を返す。合成 ID は `400`、進行中は `409`、別オリジンは `403` |
@@ -455,7 +456,7 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 | `PUT /api/profile/icon` / `DELETE /api/profile/icon` | 画像を置く / 消す（受け付ける種類・上限はセッションのアイコンと同じ）。`{ "profile": … }` を返す。別オリジンは `403` |
 | `GET /api/settings` | サーバ側の設定。`{ "persona", "digest", "provider", "model", "linear_workspace" }`。`digest` は一言の配線が有効か（`SAI_DIGEST=1`）、`provider` はその口（`claude` / `openai`） |
 | `PUT /api/settings` | body `{ "persona": "ENFP" }` / `{ "linear_workspace": "acme" }` をいまの値に重ねる（省略は据え置き）。`shared/persona.ts` に無い性格、`linear.app/<workspace>/` の形でない workspace は `400`（空文字は「設定なし」）。別オリジンは `403` |
-| `GET /api/feed?days=3&repo=` | 生の行と `replying`。アーカイブ済みセッションの行は除く |
+| `GET /api/feed?days=3&project=` | 生の行と `replying`。アーカイブ済みセッションの行は除く |
 
 返信の実行は `server/runner.ts`。`claude` / `codex` は `detached` で起動して待たず、stdout/stderr は `~/.agent-feed/reply.log` に追記する（うまく動かないときはここを見る）。同じエンティティに同時に2本は走らせない。
 

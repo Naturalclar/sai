@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { alwaysAllowRule, answerAsk, askQuestions, ruleLabel } from '../../shared/approvals.ts'
+import { approvalAction } from './approvalKeys'
 import { api, type Approval } from './api'
 import { elapsedLabel, hm } from './format'
 
@@ -9,6 +10,11 @@ interface Props {
   now: number
   /** フィードではチャンネル名を添える */
   repo?: string
+  /**
+   * このバブルがキーボードショートカットの対象か。複数出るフィードでは**一番上の 1 つ**だけ true にする。
+   * 決めるのは親（FeedView / SessionView）で、描画順の先頭
+   */
+  hotkey?: boolean
 }
 
 /**
@@ -16,7 +22,7 @@ interface Props {
  * AskUserQuestion は選択肢をボタンで出し、全部の質問に答えたら送る。
  * 答えるとサーバの approvals から消え、次のポーリングでこのバブルも消える（送った直後は done で押せなくする）
  */
-export function ApprovalBubble({ approval, now, repo }: Props) {
+export function ApprovalBubble({ approval, now, repo, hotkey = false }: Props) {
   const [busy, setBusy] = useState(false)
   const [done, setDone] = useState<'allow' | 'always' | 'deny' | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -27,18 +33,39 @@ export function ApprovalBubble({ approval, now, repo }: Props) {
   // 「常に許可」で書かれるルール。無いツール（Edit や質問）にはボタンを出さない
   const always = questions.length === 0 ? alwaysAllowRule(approval.tool_name, approval.input) : null
 
-  const send = async (body: Parameters<typeof api.answerApproval>[1]) => {
-    setBusy(true)
-    setError(null)
-    try {
-      await api.answerApproval(approval.approval_id, body)
-      setDone(body.remember ? 'always' : body.behavior)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setBusy(false)
+  const send = useCallback(
+    async (body: Parameters<typeof api.answerApproval>[1]) => {
+      setBusy(true)
+      setError(null)
+      try {
+        await api.answerApproval(approval.approval_id, body)
+        setDone(body.remember ? 'always' : body.behavior)
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err))
+      } finally {
+        setBusy(false)
+      }
+    },
+    [approval.approval_id],
+  )
+
+  // ⌘Enter で許可、⌘⇧Enter で常に許可。答えるだけの質問（AskUserQuestion）と、処理中・答え済みのバブルは受けない。
+  // **capture** で張るので、入力欄（ReplyBox）が ⌘Enter を「送信」として扱うより先に来る。
+  // 拾ったときだけ stopPropagation するので、答え待ちのバブルが無ければ入力欄の ⌘Enter は今までどおり
+  const hasAlways = always !== null
+  const armed = hotkey && !busy && done === null && questions.length === 0
+  useEffect(() => {
+    if (!armed) return
+    const onKeyDown = (e: KeyboardEvent) => {
+      const action = approvalAction(e, hasAlways)
+      if (!action) return
+      e.preventDefault()
+      e.stopPropagation()
+      void send(action === 'always' ? { behavior: 'allow', remember: 'local' } : { behavior: 'allow' })
     }
-  }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [armed, hasAlways, send])
 
   const detail = detailOf(approval)
   return (
@@ -90,7 +117,13 @@ export function ApprovalBubble({ approval, now, repo }: Props) {
             </div>
           ) : (
             <div className="actions">
-              <button type="button" className="allow" disabled={busy || done !== null} onClick={() => void send({ behavior: 'allow' })}>
+              <button
+                type="button"
+                className="allow"
+                disabled={busy || done !== null}
+                title={armed ? '許可（⌘Enter / Ctrl+Enter）' : '許可'}
+                onClick={() => void send({ behavior: 'allow' })}
+              >
                 {done === 'allow' ? '許可した' : '許可'}
               </button>
               {always && (
@@ -98,7 +131,7 @@ export function ApprovalBubble({ approval, now, repo }: Props) {
                   type="button"
                   className="always"
                   disabled={busy || done !== null}
-                  title={`${ruleLabel(always)} を返信先の .claude/settings.local.json に書く。以後この形は聞かれない（端末の「今後も許可」と同じ）`}
+                  title={`${ruleLabel(always)} を返信先の .claude/settings.local.json に書く。以後この形は聞かれない（端末の「今後も許可」と同じ）${armed ? '。⌘⇧Enter / Ctrl+⇧Enter' : ''}`}
                   onClick={() => void send({ behavior: 'allow', remember: 'local' })}
                 >
                   {done === 'always' ? `常に許可した（${ruleLabel(always)}）` : '常に許可'}

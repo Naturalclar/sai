@@ -34,6 +34,8 @@ export interface Group {
   speaker: Speaker
   repo: string
   branch: string
+  /** どのマシンで記録された行か（#114）。空なら自分のマシン扱い。フィードの見出しに `@host` を出すのに使う */
+  host: string
   session: string
   firstTs: string
   lastTs: string
@@ -137,7 +139,7 @@ export function groupRows(rows: FeedRow[]): DayGroups[] {
       current.items.push(u)
       current.lastTs = row.ts
     } else {
-      current = { speaker: u.speaker, repo: row.repo, branch: row.branch, session: row.session, firstTs: row.ts, lastTs: row.ts, items: [u] }
+      current = { speaker: u.speaker, repo: row.repo, branch: row.branch, host: row.host ?? '', session: row.session, firstTs: row.ts, lastTs: row.ts, items: [u] }
       bucket.groups.push(current)
     }
   }

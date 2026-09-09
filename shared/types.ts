@@ -93,6 +93,12 @@ export interface SessionSummary {
   remote: string
   branch: string
   branches: string[]
+  /**
+   * どのマシンで記録されたか（一番新しい行の `host`。#114）。載せない古い行しか無ければ空 = 自分のマシン扱い。
+   * 全部は hosts に（出てきた順）。自分のマシンかの判定は `shared/host.ts` の `isRemoteHost()` に 1 つだけある
+   */
+  host: string
+  hosts: string[]
   cwd: string
   /** ターン完了の行の数（待ちや再開の行は数えない） */
   turns: number
@@ -404,6 +410,8 @@ export interface Facets {
   repos: string[]
   agents: Agent[]
   dates: string[]
+  /** どのマシンで記録されたか（#114）。1 台しか無ければ画面は絞り込みを出さない */
+  hosts: string[]
 }
 
 export interface SessionsResponse {
@@ -426,6 +434,12 @@ export interface SessionsResponse {
   profile: Profile
   /** 誰として見ているか。tailnet 経由（tailscale serve）ならログイン名、ローカルの直アクセスなら null */
   viewer: Viewer | null
+  /**
+   * このサーバが動いているマシンの名前（`SAI_HOST` か `os.hostname()` の短い形。#114）。
+   * 画面はこれと `SessionSummary.host` を見て「別のマシンのセッション」の印を出し、返信の口を出さない。
+   * 取れなければ空で、そのときは何もリモートにしない
+   */
+  host: string
 }
 
 /** tailnet 経由のアクセス者。Serve のヘッダを `tailscale whois` で突き合わせた後の値 */
@@ -449,6 +463,8 @@ export interface SessionDetailResponse {
   approvals: ApprovalMap
   /** 自分の表示名とアイコン。変わると rev も変わる */
   profile: Profile
+  /** このサーバのマシン名（SessionsResponse と同じ。#114）。セッション画面は一覧を持たないのでここにも載せる */
+  host: string
 }
 
 export interface FeedResponse {
@@ -572,6 +588,8 @@ export interface SessionFilters {
   repo: string
   agent: string
   date: string
+  /** どのマシンで記録されたか（#114）。1 台しか無ければ画面は選択肢を出さない */
+  host: string
   days: string
   /** '1' ならアーカイブ済みだけを出す。それ以外はアーカイブ済みを除く（クエリ文字列に載せるので文字列） */
   archived: string

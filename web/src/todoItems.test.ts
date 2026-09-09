@@ -3,6 +3,9 @@ import assert from 'node:assert/strict'
 import type { Approval, ApprovalMap, ReplyingMap, SessionSummary } from '../../shared/types.ts'
 import { todoItems } from './todoItems.ts'
 
+/** このサーバが動いているマシン（#114）。行の host が違えば「別のマシン」 */
+const SELF = 'mac'
+
 function summary(over: Partial<SessionSummary>): SessionSummary {
   return {
     id: 's1@sai',
@@ -19,6 +22,8 @@ function summary(over: Partial<SessionSummary>): SessionSummary {
     remote: '',
     branch: 'main',
     branches: ['main'],
+    host: '',
+    hosts: [],
     cwd: '/tmp/sai',
     turns: 2,
     title: 'タイトル',
@@ -57,7 +62,7 @@ test('todoItems: 答え待ちは answer、行から見た待ちは watch。待�
     summary({ id: 'c@sai', end: '2026-09-02T10:40:00+09:00' }),
   ]
   const approvals: ApprovalMap = { 'c@sai': [approval({ id: 'c@sai', since: '2026-09-02T10:00:00+09:00', text: '質問: どれ?' })] }
-  const items = todoItems(sessions, approvals)
+  const items = todoItems(sessions, approvals, SELF)
   assert.deepEqual(
     items.map((t) => [t.id, t.kind, t.text, t.since]),
     [
@@ -73,7 +78,7 @@ test('todoItems: 答え待ちは answer、行から見た待ちは watch。待�
 test('todoItems: 答え待ちは絞り込みで一覧から消えていても出す（session は null）', () => {
   // approvals はサーバの Approvals.snapshot() そのもので、絞り込みを通っていない。
   // エージェントを止めているものなので、一覧に居なくても取りこぼさない
-  const items = todoItems([], { 'x@other': [approval({ id: 'x@other' })] })
+  const items = todoItems([], { 'x@other': [approval({ id: 'x@other' })] }, SELF)
   assert.equal(items.length, 1)
   assert.equal(items[0]!.id, 'x@other')
   assert.equal(items[0]!.session, null)
@@ -81,26 +86,26 @@ test('todoItems: 答え待ちは絞り込みで一覧から消えていても出
 })
 
 test('todoItems: 同じセッションに両方あれば answer だけ（二重に出さない）', () => {
-  const items = todoItems([summary({ id: 's1@sai', waiting: '許可待ち: Bash: ls' })], { 's1@sai': [approval({})] })
+  const items = todoItems([summary({ id: 's1@sai', waiting: '許可待ち: Bash: ls' })], { 's1@sai': [approval({})] }, SELF)
   assert.deepEqual(items.map((t) => t.kind), ['answer'])
 })
 
 test('todoItems: 待っていないセッションとアーカイブ済みは出さない', () => {
-  assert.deepEqual(todoItems([summary({ id: 's1@sai' })], {}), [])
-  assert.deepEqual(todoItems([summary({ id: 's1@sai', waiting: '許可待ち', archived: true })], {}), [])
+  assert.deepEqual(todoItems([summary({ id: 's1@sai' })], {}, SELF), [])
+  assert.deepEqual(todoItems([summary({ id: 's1@sai', waiting: '許可待ち', archived: true })], {}, SELF), [])
   // アーカイブ済みでも答え待ちなら出す（プロセスが止まっているのは変わらない）
-  assert.equal(todoItems([summary({ id: 's1@sai', archived: true })], { 's1@sai': [approval({})] }).length, 1)
+  assert.equal(todoItems([summary({ id: 's1@sai', archived: true })], { 's1@sai': [approval({})] }, SELF).length, 1)
 })
 
 test('todoItems: 同時刻は ID で決めて、ポーリングのたびに並びが揺れない', () => {
   const at = '2026-09-02T10:00:00+09:00'
   const sessions = [summary({ id: 'b@sai', end: at, waiting: 'w' }), summary({ id: 'a@sai', end: at, waiting: 'w' })]
-  assert.deepEqual(todoItems(sessions, {}).map((t) => t.id), ['a@sai', 'b@sai'])
-  assert.deepEqual(todoItems([...sessions].reverse(), {}).map((t) => t.id), ['a@sai', 'b@sai'])
+  assert.deepEqual(todoItems(sessions, {}, SELF).map((t) => t.id), ['a@sai', 'b@sai'])
+  assert.deepEqual(todoItems([...sessions].reverse(), {}, SELF).map((t) => t.id), ['a@sai', 'b@sai'])
 })
 
 test('todoItems: 空の approvals の配列は無視する', () => {
-  assert.deepEqual(todoItems([summary({ id: 's1@sai' })], { 's1@sai': [] }), [])
+  assert.deepEqual(todoItems([summary({ id: 's1@sai' })], { 's1@sai': [] }, SELF), [])
 })
 
 // ---- #232: 別プロセスの返信を処理中なら「待っている」ではなく「動いている」
@@ -111,10 +116,10 @@ test('todoItems: 別プロセスの返信を処理中のセッションは watch
   // -p の許可・質問は必ず approvals に載るので、載っていなければ待っていない
   const sessions = [summary({ id: 's1@sai', waiting: '質問: opencode を入れていい?' })]
   const replying: ReplyingMap = { 's1@sai': { since: '2026-09-02T10:11:00+09:00', text: '209に着手して' } }
-  assert.deepEqual(todoItems(sessions, {}, replying), [], '動いている間は出さない')
+  assert.deepEqual(todoItems(sessions, {}, SELF, replying), [], '動いている間は出さない')
 
   // 本当に答えを待っているなら approvals に載るので、そちらで出る（答えられる方）
-  const withAsk = todoItems(sessions, { 's1@sai': [approval({ text: '質問: どれ?' })] }, replying)
+  const withAsk = todoItems(sessions, { 's1@sai': [approval({ text: '質問: どれ?' })] }, SELF, replying)
   assert.deepEqual(withAsk.map((t) => t.kind), ['answer'])
 })
 
@@ -122,36 +127,46 @@ test('todoItems: 端末に打ち込んだ返信（via: terminal）の処理中�
   // 端末のセッションには SAI から答える口が無く、行の waiting だけが手がかりなので消してはいけない
   const sessions = [summary({ id: 's1@sai', waiting: '許可待ち: Bash: rm -rf x' })]
   const replying: ReplyingMap = { 's1@sai': { since: '2026-09-02T10:11:00+09:00', text: '続けて', via: 'terminal' } }
-  assert.deepEqual(todoItems(sessions, {}, replying).map((t) => t.kind), ['watch'])
+  assert.deepEqual(todoItems(sessions, {}, SELF, replying).map((t) => t.kind), ['watch'])
 })
 
 test('todoItems: 失敗して残っている replying は「動いている」ではないので watch を出す', () => {
   const sessions = [summary({ id: 's1@sai', waiting: '許可待ち: Bash: ls' })]
   const replying: ReplyingMap = { 's1@sai': { since: '2026-09-02T10:11:00+09:00', text: 'x', failed: { code: 1, tail: 'boom' } } }
-  assert.deepEqual(todoItems(sessions, {}, replying).map((t) => t.kind), ['watch'])
+  assert.deepEqual(todoItems(sessions, {}, SELF, replying).map((t) => t.kind), ['watch'])
 })
 
 test('todoItems: replying を渡さなくても今までどおり（既定は空）', () => {
   const sessions = [summary({ id: 's1@sai', waiting: '許可待ち: Bash: ls' })]
-  assert.deepEqual(todoItems(sessions, {}).map((t) => t.kind), ['watch'])
+  assert.deepEqual(todoItems(sessions, {}, SELF).map((t) => t.kind), ['watch'])
 })
 
 // ---- #232: 「SAI からは答えられない」と決めつけない
 
 test('todoItems: watch の replyable は、その会話に返信欄から打てるかで決まる', () => {
-  const canReply = todoItems([summary({ id: 's1@sai', waiting: '許可待ち: Bash: ls' })], {})
+  const canReply = todoItems([summary({ id: 's1@sai', waiting: '許可待ち: Bash: ls' })], {}, SELF)
   assert.equal(canReply[0]!.replyable, true, '普通のセッションは開いて返信欄から答えられる')
 
   // 合成 ID・出どころ不明は再開できない（shared/reply.ts の replyBlockedReason）ので、端末で答えるしかない
-  const synth = todoItems([summary({ id: 's1@sai', waiting: 'w', session_source: 'synth', sources: ['synth'] })], {})
+  const synth = todoItems([summary({ id: 's1@sai', waiting: 'w', session_source: 'synth', sources: ['synth'] })], {}, SELF)
   assert.equal(synth[0]!.replyable, false)
-  const unknownId = todoItems([summary({ id: 'unknown-2026-09-02@sai', waiting: 'w' })], {})
+  const unknownId = todoItems([summary({ id: 'unknown-2026-09-02@sai', waiting: 'w' })], {}, SELF)
   assert.equal(unknownId[0]!.replyable, false)
-  const codexTui = todoItems([summary({ id: 's1@sai', waiting: 'w', agent: 'unknown', agents: ['unknown'] })], {})
+  const codexTui = todoItems([summary({ id: 's1@sai', waiting: 'w', agent: 'unknown', agents: ['unknown'] })], {}, SELF)
   assert.equal(codexTui[0]!.replyable, false, 'エージェントが分からなければ再開できない')
 })
 
+test('todoItems: 別のマシンのセッションは出すが、ここからは答えられない（#114）', () => {
+  // 待っていることに変わりはないので項目としては出す（あちらのマシンへ行けば答えられる）
+  const remote = todoItems([summary({ id: 's1@sai', waiting: '許可待ち: Bash: ls', host: 'mini', hosts: ['mini'] })], {}, SELF)
+  assert.equal(remote.length, 1)
+  assert.equal(remote[0]!.replyable, false)
+  // 同じマシンの行と、host を載せない古い行は今までどおり
+  assert.equal(todoItems([summary({ id: 's1@sai', waiting: 'w', host: 'mac', hosts: ['mac'] })], {}, SELF)[0]!.replyable, true)
+  assert.equal(todoItems([summary({ id: 's1@sai', waiting: 'w' })], {}, SELF)[0]!.replyable, true)
+})
+
 test('todoItems: answer の replyable は使わないので false のまま', () => {
-  const items = todoItems([summary({ id: 's1@sai' })], { 's1@sai': [approval({})] })
+  const items = todoItems([summary({ id: 's1@sai' })], { 's1@sai': [approval({})] }, SELF)
   assert.equal(items[0]!.replyable, false)
 })

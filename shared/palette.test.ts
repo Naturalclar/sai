@@ -18,6 +18,8 @@ function session(over: Partial<SessionSummary>): SessionSummary {
     repos: ['dev-kanade'],
     branch: 'main',
     branches: ['main'],
+    host: '',
+    hosts: [],
     cwd: '/w',
     turns: 1,
     waiting: '',

@@ -1,5 +1,6 @@
 import { useEffect, useMemo } from 'react'
 import { replyBlockedReason } from '../../shared/reply.ts'
+import { isRemoteHost } from '../../shared/host.ts'
 import { projectName } from '../../shared/project.ts'
 import { eventKind } from '../../shared/events.ts'
 import { promptArrived } from './chatGroups'
@@ -9,6 +10,7 @@ import { dayLabel, hm } from './format'
 import { AgentChip } from './AgentChip'
 import { RepoLink } from './RepoLink'
 import { SynthTag } from './SynthTag'
+import { HostTag } from './HostTag'
 import { ReplyingTag } from './ReplyingTag'
 import { WaitingTag } from './WaitingTag'
 import { TerminalTag } from './TerminalTag'
@@ -66,7 +68,7 @@ export function SessionView({ id, onStatus, onOpenSidebar, onToggleDiff, diffOpe
   const history = useMemo(() => historyFrom(data?.rows ?? NO_ROWS, id, mine ? [mine.text] : []), [data?.rows, id, mine])
 
   const s = data?.session
-  const blocked = s ? replyBlockedReason(s) : ''
+  const blocked = s ? replyBlockedReason(s, data?.host ?? '') : ''
   // 差分ボタンに出す行数と PR 番号（#211）。ポーリングには載せず、開いたときと新しいターンが記録されたときだけ取る
   const summary = useDiffSummary(s?.id, s?.last_turn_ts)
   return (
@@ -84,6 +86,7 @@ export function SessionView({ id, onStatus, onOpenSidebar, onToggleDiff, diffOpe
           {s.branch && <span className="meta"><code>{s.branch}</code></span>}
           <span className="meta">{dayLabel(s.start)} {hm(s.start)} – {hm(s.end)} · {s.turns} ターン</span>
           <span className="meta" title={s.id}>
+            {isRemoteHost(s.host, data?.host ?? '') && <HostTag host={s.host} />}
             {s.session_source === 'synth' ? <SynthTag /> : <span className="tag">{s.session_source}</span>}
             {s.terminal && <TerminalTag terminal={s.terminal} />}
             {s.waiting && <WaitingTag text={s.waiting} />}

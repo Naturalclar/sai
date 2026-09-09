@@ -44,8 +44,11 @@ export interface TodoItem {
  * **待ちの行より後にターン完了の行が届くまで消えない**ので、答えたあとも残ってしまう
  * （許可や質問への回答は `UserPromptSubmit` ではないため `record.py` は再開の行を書かない）。
  * 端末に打ち込んだ返信（`via: 'terminal'`）は SAI に口が無く、行の `waiting` だけが手がかりなので**残す**。
+ *
+ * `selfHost` はこのサーバのマシン名（応答の `host`。#114）。別のマシンのセッションは項目としては出すが
+ * （待っていることに変わりはない）、ここからは答えられないので `replyable` は false になる。
  */
-export function todoItems(sessions: readonly SessionSummary[], approvals: ApprovalMap, replying: ReplyingMap = {}): TodoItem[] {
+export function todoItems(sessions: readonly SessionSummary[], approvals: ApprovalMap, selfHost: string, replying: ReplyingMap = {}): TodoItem[] {
   const byId = new Map(sessions.map((s) => [s.id, s]))
   const out: TodoItem[] = []
   for (const [id, list] of Object.entries(approvals)) {
@@ -58,7 +61,7 @@ export function todoItems(sessions: readonly SessionSummary[], approvals: Approv
     // 答え待ちが出ているセッションは上で入れてある（そちらの方が新しくて具体的）
     if (!s.waiting || answering.has(s.id) || s.archived) continue
     if (processReplying(replying[s.id])) continue
-    out.push({ id: s.id, kind: 'watch', text: s.waiting, since: s.end, session: s, approval: null, replyable: replyBlockedReason(s) === '' })
+    out.push({ id: s.id, kind: 'watch', text: s.waiting, since: s.end, session: s, approval: null, replyable: replyBlockedReason(s, selfHost) === '' })
   }
   return out.sort((a, b) => (a.since === b.since ? a.id.localeCompare(b.id) : a.since < b.since ? -1 : 1))
 }

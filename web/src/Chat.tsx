@@ -1,17 +1,24 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { entityId } from '../../shared/entity.ts'
+import { isRemoteHost } from '../../shared/host.ts'
 import type { FeedRow, Profile, SessionSummary } from './api'
 import { hm } from './format'
 import { groupRows, speakerLabel } from './chatGroups.ts'
 import { Message } from './Message'
 import { JumpToBottom } from './JumpToBottom'
+import { HostTag } from './HostTag'
 
 const NO_SESSIONS: never[] = []
 
 interface Props {
   rows: FeedRow[]
   showChannel: boolean
+  /**
+   * このサーバのマシン名（#114）。`showChannel` のときだけ使い、別のマシンの行なら `#repo` の隣に `@host` を出す。
+   * セッション画面は見出しに 1 つ出ているので、バブルごとには出さない
+   */
+  selfHost?: string
   /** 発言者の表示名・アイコンを引く元（SessionSummary.meta）。セッション画面はその1件、フィードはサイドバーの一覧 */
   sessions?: SessionSummary[]
   /** 末尾に足す仮の要素（送信中の返信など）。行と同じく最下部追従の対象 */
@@ -26,7 +33,7 @@ interface Props {
   linear?: string
 }
 
-export function Chat({ rows, showChannel, sessions = NO_SESSIONS, trailer, showThinking = false, thinkingOpen = false, profile, linear = '' }: Props) {
+export function Chat({ rows, showChannel, selfHost = '', sessions = NO_SESSIONS, trailer, showThinking = false, thinkingOpen = false, profile, linear = '' }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
   // 最下部が見えているか（描画にも使うので state）。見えていないときは「一番下へ」を出す
@@ -86,6 +93,7 @@ export function Chat({ rows, showChannel, sessions = NO_SESSIONS, trailer, showT
                       {showChannel && (
                         <a className="ch" href={`#/s/${encodeURIComponent(id)}`} title={g.session}>#{g.repo}</a>
                       )}
+                      {showChannel && isRemoteHost(g.host, selfHost) && <HostTag host={g.host} />}
                       {g.branch && <span className="branch">{g.branch}</span>}
                       <span className="time">{hm(g.firstTs)}</span>
                     </div>

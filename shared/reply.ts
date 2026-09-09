@@ -2,11 +2,20 @@
 // サーバの POST 受付（server/app.ts）と画面の入力欄の出し分け（web/src/SessionView.tsx、web/src/FeedView.tsx）が
 // 同じ関数を使い、ずれない。
 import { entityId } from './entity.ts'
+import { isRemoteHost } from './host.ts'
 import type { FeedRow, SessionSummary } from './types.ts'
 
-/** 返信できない理由。空文字なら返信できる */
-export function replyBlockedReason(s: Pick<SessionSummary, 'id' | 'agent' | 'session_source'>): string {
+/**
+ * 返信できない理由。空文字なら返信できる。
+ *
+ * `selfHost` はこのサーバのマシン名（応答の `host`）。**引数は省略できない**ようにしてある。
+ * 既定値を持たせると、渡し忘れた呼び出し側が黙って「全部ローカル」の判定になり、別のマシンの
+ * セッションに向けて `claude --resume` を回してしまう（そのセッションの記録はここには無い）
+ */
+export function replyBlockedReason(s: Pick<SessionSummary, 'id' | 'agent' | 'session_source'> & { host?: string }, selfHost: string): string {
   if (s.agent !== 'claude' && s.agent !== 'codex') return 'エージェントが不明なので再開できません'
+  // 別のマシンのセッションは、ここで再開しても続きにならない（CLI もその履歴もあちら側にある）
+  if (isRemoteHost(s.host, selfHost)) return `別のマシン（${s.host}）のセッションなので、ここからは再開できません`
   if (s.id.startsWith('unknown-')) return 'このセッションは再開できません（セッションIDが取れていない）'
   if (s.session_source === 'synth') return 'このセッションは再開できません（IDが合成）'
   if (s.session_source !== 'payload' && s.session_source !== 'rollout') return 'このセッションは再開できません（IDの出どころが不明）'
@@ -45,14 +54,14 @@ function clipTitle(title: string): string {
  * ラベルは表示名（meta.name）があればそれ、無ければ一覧のタイトル。アイコンも載せる。
  * フィードの `@` はこれを主にし、一覧に無いものだけ feedReplyTargets で足す（mergeReplyTargets）
  */
-export function sessionReplyTargets(sessions: SessionSummary[]): ReplyTarget[] {
+export function sessionReplyTargets(sessions: SessionSummary[], selfHost: string): ReplyTarget[] {
   return sessions.map((s) => {
     const t: ReplyTarget = {
       id: s.id,
       repo: s.repo,
       branch: s.branch,
       title: clipTitle(s.meta?.name || s.title),
-      blocked: replyBlockedReason(s),
+      blocked: replyBlockedReason(s, selfHost),
     }
     if (s.icon) t.icon = s.icon
     if (s.terminal) t.terminal = true
@@ -66,7 +75,7 @@ export function sessionReplyTargets(sessions: SessionSummary[]): ReplyTarget[] {
  * サイドバーとフィードで days や絞り込みが違い、一覧に無いセッションがフィードに出ることがあるので、
  * 一覧から作った候補（sessionReplyTargets）の後ろにこれを足す
  */
-export function feedReplyTargets(rows: FeedRow[]): ReplyTarget[] {
+export function feedReplyTargets(rows: FeedRow[], selfHost: string): ReplyTarget[] {
   const seen = new Map<string, ReplyTarget>()
   for (let i = rows.length - 1; i >= 0; i--) {
     const r = rows[i]!
@@ -77,7 +86,7 @@ export function feedReplyTargets(rows: FeedRow[]): ReplyTarget[] {
       repo: r.repo,
       branch: r.branch,
       title: clipTitle(r.user_text?.trim() || r.first_user_text?.trim() || r.text || ''),
-      blocked: replyBlockedReason({ id, agent: r.agent, session_source: r.session_source }),
+      blocked: replyBlockedReason({ id, agent: r.agent, session_source: r.session_source, host: r.host ?? '' }, selfHost),
     })
   }
   return [...seen.values()]

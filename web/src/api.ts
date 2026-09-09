@@ -13,6 +13,7 @@ import type {
   SessionIconResponse,
   SessionMeta,
   SessionMetaResponse,
+  SessionSkillsResponse,
   SessionsResponse,
   SettingsRequest,
   SettingsResponse,
@@ -103,6 +104,8 @@ export const api = {
       { text, ...(options.replaceTyped ? { replace_typed: true } : {}), ...(options.via ? { via: options.via } : {}) } satisfies ReplyRequest,
     ),
   meta: (id: string) => getJSON<SessionMetaResponse>(`/api/sessions/${encodeURIComponent(id)}/meta`),
+  /** `/` の候補になるスキル。入力欄で `/` を打った時に 1 回だけ取る */
+  sessionSkills: (id: string) => getJSON<SessionSkillsResponse>(`/api/sessions/${encodeURIComponent(id)}/skills`),
   /** 返信中の許可・質問に答える。allow は updatedInput を省けば元の入力のまま */
   answerApproval: (approvalId: string, answer: ApprovalAnswer) =>
     sendJSON<{ ok: true }>('POST', `/api/approvals/${encodeURIComponent(approvalId)}/answer`, answer),

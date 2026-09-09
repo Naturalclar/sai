@@ -107,6 +107,7 @@ export function FeedView({ repo, sessions = NO_SESSIONS, onStatus, onOpenSidebar
         (target ? (
           <ReplyBox
             repo={target.repo}
+            skillsId={target.id}
             busy={pending.some((p) => p.id === target.id)}
             busySince={pending.find((p) => p.id === target.id)?.since}
             now={now}

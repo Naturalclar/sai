@@ -5,7 +5,7 @@ import type { Server } from 'node:http'
 import { mkdtemp, rm, writeFile, appendFile, mkdir, stat, utimes, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { Replying, ReplyResponse, SessionsResponse, SessionDetailResponse, SessionIconResponse, SessionMetaResponse, FeedResponse, SettingsResponse, HealthResponse } from '../shared/types.ts'
+import type { Replying, ReplyResponse, SessionsResponse, SessionDetailResponse, SessionIconResponse, SessionMetaResponse, FeedResponse, SettingsResponse, HealthResponse, SessionSkillsResponse } from '../shared/types.ts'
 import { createApp, parseDays, revWith, selfUrl, sessionIdFrom, stripThinking } from './app.ts'
 import { BuildFreshness } from './buildFreshness.ts'
 import { Authenticator } from './auth.ts'
@@ -13,6 +13,7 @@ import { DigestStore, Digester, personaResolver } from './digest.ts'
 import { META_FILE, MetaStore } from './meta.ts'
 import type { Summarizer } from './digest.ts'
 import { FeedStore } from './store.ts'
+import { SkillStore } from './skills.ts'
 import { localDate } from './aggregate.ts'
 import { replyCommand, splitArgs } from './runner.ts'
 import type { ReplyCommand, Runner } from './runner.ts'
@@ -92,7 +93,12 @@ before(async () => {
   })
   // 認証は whois を差し替える: 100.64.0.1 の持ち主は me@example.com、それ以外は引けない
   auth = new Authenticator(async (addr) => (addr === '100.64.0.1' ? 'me@example.com' : null), 30_000)
-  const app = createApp(store, distDir, runner, undefined, new BuildFreshness(distDir, [srcDir], 0), digester, auth)
+  // `/` の候補になるスキル。ユーザー側は temp に作った分だけを見せる（この Mac の ~/.claude/skills に依存させない）
+  await mkdir(join(dir, 'skills', 'issue-triage'), { recursive: true })
+  await writeFile(join(dir, 'skills', 'issue-triage', 'SKILL.md'), '---\nname: issue-triage\ndescription: issueの優先度をつけて\n---\n')
+  await mkdir(join(dir, '.claude', 'skills', 'sync-main'), { recursive: true })
+  await writeFile(join(dir, '.claude', 'skills', 'sync-main', 'SKILL.md'), '---\nname: sync-main\ndescription: main を最新にする\n---\n')
+  const app = createApp(store, distDir, runner, undefined, new BuildFreshness(distDir, [srcDir], 0), digester, auth, undefined, new SkillStore(join(dir, 'skills')))
   server = createServer((req, res) => void app(req, res))
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const addr = server.address()
@@ -1091,4 +1097,23 @@ test('profile: 別オリジンは 403、メソッド違いは 405', async () => 
 test('GET /api/sessions は record_version を返す（fixture は v 無し = 1）', async () => {
   const data = (await (await get('/api/sessions?days=30')).json()) as SessionsResponse
   assert.equal(data.record_version, 1)
+})
+
+test('GET /api/sessions/<id>/skills: プロジェクトを先に、Codex には出さない', async () => {
+  const res = await get('/api/sessions/C1%40r/skills')
+  assert.equal(res.status, 200)
+  const data = (await res.json()) as SessionSkillsResponse
+  assert.equal(data.id, 'C1@r')
+  assert.deepEqual(
+    data.skills.map((s) => [s.name, s.source]),
+    [
+      ['sync-main', 'project'],
+      ['issue-triage', 'user'],
+    ],
+    'cwd の .claude/skills が先、同じ名前はプロジェクトが勝つ',
+  )
+  // Codex にスキルの仕組みは無い
+  assert.deepEqual(((await (await get('/api/sessions/X1%40r/skills')).json()) as SessionSkillsResponse).skills, [])
+  assert.equal((await get('/api/sessions/nope%40x/skills')).status, 404)
+  assert.equal((await fetch(base + '/api/sessions/C1%40r/skills', { method: 'POST' })).status, 405)
 })

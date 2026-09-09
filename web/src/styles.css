@@ -378,6 +378,9 @@
   .mention li.none { color: var(--muted); cursor: default; }
   .mention li .title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
   .mention li .why { font-size: 11px; color: var(--synth); white-space: nowrap; }
+  /* スキルの候補（`/`）。名前は等幅、プロジェクト側は印を付ける */
+  .mention.skills li b { font-family: var(--mono); flex: none; }
+  .mention.skills li .tag { flex: none; margin-left: 0; }
   .mention li .icon, .reply .target .icon { flex: none; line-height: 1; }
   /* どこで回すかの短い注意。入力欄（バブル）の上に 1 行 */
   .reply .note { color: var(--muted); font-size: 11px; padding: 0 2px; }

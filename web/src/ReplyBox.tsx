@@ -1,7 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent, SyntheticEvent } from 'react'
 import { filterReplyTargets, mentionLabels, mentionQuery, stripMention, type ReplyTarget } from '../../shared/reply.ts'
+import { filterSkills, skillSummary, slashQuery, type Skill } from '../../shared/skills.ts'
 import { elapsedLabel } from './format'
+import { useSkills } from './useSkills'
 
 /**
  * @ メンションで返信先を選ぶための道具（フィード用）。渡さなければ `@` はただの文字（セッション画面）。
@@ -43,11 +45,13 @@ interface Props {
   onDraft?: (drafting: boolean) => void
   /** このセッションの返信で使うモデル（設定があれば）。placeholder に添える */
   replyModel?: string
+  /** `/` でスキルの候補を出す返信先（エンティティID）。渡さなければ `/` はただの文字 */
+  skillsId?: string
   mention?: MentionProps
 }
 
 /** 入力欄。Enter で送信、Shift+Enter で改行。IME 変換中の Enter は送らない */
-export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onDraft, replyModel, mention }: Props) {
+export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onDraft, replyModel, skillsId, mention }: Props) {
   const [text, setText] = useState('')
   // caret は「@ の検出」に使う。onChange と onSelect（カーソル移動）で追う
   const [caret, setCaret] = useState(0)
@@ -82,12 +86,22 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
   }, [drafting, onDraft])
 
   const labels = useMemo(() => mentionLabels(mention?.targets ?? []), [mention?.targets])
-  const hit = mention ? mentionQuery(text, caret) : null
-  const open = hit !== null && dismissed !== hit.query
-  const shown = open && mention ? filterReplyTargets(mention.targets, hit.query) : []
+  const mentionHit = mention ? mentionQuery(text, caret) : null
+  // `@` と `/` は同時には立たない（`/` は先頭だけ、`@` は前が空白か行頭）
+  const slashHit = skillsId && !mentionHit ? slashQuery(text, caret) : null
+  const skills = useSkills(skillsId, slashHit !== null)
+  const shownSkills = slashHit ? filterSkills(skills, slashHit.query) : []
+  const hit = mentionHit ?? slashHit
+  const mentionOpen = mentionHit !== null && dismissed !== mentionHit.query
+  // スキルは当たりが無ければ開かない。先頭がパス（`/Users/…`）のときに空の候補で Enter を食べないため
+  const skillOpen = slashHit !== null && dismissed !== slashHit.query && shownSkills.length > 0
+  const open = mentionOpen || skillOpen
+  const shown = mentionOpen && mention && mentionHit ? filterReplyTargets(mention.targets, mentionHit.query) : []
   const selectable = shown.filter((t) => !t.blocked)
   const index = hit && cursor.query === hit.query ? cursor.index : 0
   const active = selectable.length ? (selectable[Math.min(index, selectable.length - 1)] ?? null) : null
+  const activeSkill = skillOpen && shownSkills.length ? (shownSkills[Math.min(index, shownSkills.length - 1)] ?? null) : null
+  const count = skillOpen ? shownSkills.length : selectable.length
   const moveCursor = (i: number) => hit && setCursor({ query: hit.query, index: i })
 
   const track = (e: SyntheticEvent<HTMLTextAreaElement>) => setCaret(e.currentTarget.selectionStart)
@@ -107,6 +121,17 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
     setCaret(at)
     setDismissed(null)
     mention.onPick({ id: t.id, label })
+    wantCaret.current = at
+    ref.current?.focus()
+  }
+
+  /** スキルの候補を確定する。本文の先頭を `/<name> ` にして、続けて引数を打てるようにする。展開は CLI に任せる */
+  const pickSkill = (s: Skill) => {
+    if (!slashHit) return
+    const at = s.name.length + 2
+    setText(`/${s.name} ${text.slice(caret)}`)
+    setCaret(at)
+    setDismissed(null)
     wantCaret.current = at
     ref.current?.focus()
   }
@@ -145,7 +170,7 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
     if (open && hit) {
       if (e.key === 'ArrowDown') {
         e.preventDefault()
-        moveCursor(Math.min(index + 1, Math.max(selectable.length - 1, 0)))
+        moveCursor(Math.min(index + 1, Math.max(count - 1, 0)))
         return
       }
       if (e.key === 'ArrowUp') {
@@ -161,6 +186,7 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
       if ((e.key === 'Enter' || e.key === 'Tab') && !composing) {
         e.preventDefault()
         if (active) pick(active)
+        else if (activeSkill) pickSkill(activeSkill)
         else setDismissed(hit.query) // 候補が無いときの Enter は送信せず閉じるだけ
         return
       }
@@ -221,7 +247,32 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
           {busy ? (mention ? `#${repo} は処理中` : '送信中…') : '送信'}
         </button>
       </div>
-      {open && (
+      {skillOpen && (
+        <ul className="mention skills" role="listbox" aria-label="スキル">
+          {shownSkills.map((s) => (
+            <li
+              key={`${s.source}:${s.name}`}
+              role="option"
+              aria-selected={s === activeSkill}
+              className={s === activeSkill ? 'active' : ''}
+              // mousedown で選ぶ（click だと先に textarea が blur して caret が動く）
+              onMouseDown={(e) => {
+                e.preventDefault()
+                pickSkill(s)
+              }}
+              onMouseEnter={() => {
+                const i = shownSkills.indexOf(s)
+                if (i >= 0) moveCursor(i)
+              }}
+            >
+              <b>/{s.name}</b>
+              <span className="title">{skillSummary(s.description)}</span>
+              {s.source === 'project' && <span className="tag">プロジェクト</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+      {mentionOpen && (
         <ul className="mention" role="listbox" aria-label="返信先">
           {shown.length === 0 && <li className="none">該当するセッションがありません</li>}
           {shown.map((t) => (

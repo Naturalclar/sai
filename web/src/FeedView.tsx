@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { entityId } from '../../shared/entity.ts'
+import { projectName } from '../../shared/project.ts'
 import { eventKind } from '../../shared/events.ts'
 import { promptArrived } from './chatGroups'
 import { defaultReplyTarget, feedReplyTargets, mergeReplyTargets, sessionReplyTargets } from '../../shared/reply.ts'
@@ -21,15 +22,16 @@ const NO_REPLYING = {}
 const NO_APPROVALS: ApprovalMap = {}
 
 interface Props extends PaneProps {
-  repo: string
+  /** サイドバーで選んでいるリポジトリ（`Naturalclar/sai`）。空なら全部 */
+  project: string
   /** サイドバーの一覧（App が取ったもの）。@ の候補はこれを主にする。まだ無ければ undefined */
   sessions: SessionSummary[] | undefined
 }
 
-/** 全チャンネルを時系列に流す。セッション（repo）はサイドバーの絞り込みに従い、日数だけここで選ぶ */
-export function FeedView({ repo, sessions = NO_SESSIONS, onStatus, onOpenSidebar, linear }: Props) {
+/** 全チャンネルを時系列に流す。リポジトリはサイドバーの絞り込みに従い、日数だけここで選ぶ */
+export function FeedView({ project, sessions = NO_SESSIONS, onStatus, onOpenSidebar, linear }: Props) {
   const [local, setLocal] = useLocalState<{ days: string }>('sai.feed', { days: '3' })
-  const { data, error, updatedAt } = usePolling(() => api.feed({ repo, days: local.days }), [repo, local.days])
+  const { data, error, updatedAt } = usePolling(() => api.feed({ project, days: local.days }), [project, local.days])
   useEffect(() => onStatus(updatedAt, error), [updatedAt, error, onStatus])
 
   const rows = data?.rows ?? NO_ROWS
@@ -78,7 +80,7 @@ export function FeedView({ repo, sessions = NO_SESSIONS, onStatus, onOpenSidebar
       <BackLink onOpenSidebar={onOpenSidebar} />
       <div className="chat-head">
         <h1>フィード</h1>
-        <span className="meta">{repo ? `#${repo}` : '全セッション'}{data && ` · ${data.rows.length} ターン · 直近${data.days}日`}</span>
+        <span className="meta">{project ? `#${projectName(project)}` : '全リポジトリ'}{data && ` · ${data.rows.length} ターン · 直近${data.days}日`}</span>
         <span className="meta pull">
           <DaysSelect value={local.days} options={[1, 3, 7]} onChange={(days) => setLocal({ days })} />
         </span>

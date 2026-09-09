@@ -104,10 +104,37 @@ test('絞り込みと候補', () => {
     row(new Date(base.getTime() - min(60 * 24)), 'C', { repo: 'x' }),
   ])
   const ids = (list: typeof sessions) => new Set(list.map((s) => s.id))
-  assert.deepEqual(ids(filterSessions(sessions, 'x', '', '')), new Set(['A@x', 'C@x']))
-  assert.deepEqual(ids(filterSessions(sessions, '', 'codex', '')), new Set(['B@y']))
-  assert.deepEqual(ids(filterSessions(sessions, 'x', '', '2026-09-01')), new Set(['C@x']))
-  assert.deepEqual(facets(sessions), { repos: ['x', 'y'], agents: ['claude', 'codex'], dates: ['2026-09-02', '2026-09-01'] })
+  assert.deepEqual(ids(filterSessions(sessions, { repo: 'x' })), new Set(['A@x', 'C@x']))
+  assert.deepEqual(ids(filterSessions(sessions, { agent: 'codex' })), new Set(['B@y']))
+  assert.deepEqual(ids(filterSessions(sessions, { repo: 'x', date: '2026-09-01' })), new Set(['C@x']))
+  assert.deepEqual(facets(sessions), { projects: ['x', 'y'], repos: ['x', 'y'], agents: ['claude', 'codex'], dates: ['2026-09-02', '2026-09-01'] })
+})
+
+test('project: bare clone の worktree でもリポジトリでまとまる（repo は worktree 名のまま）', () => {
+  const base = new Date('2026-09-02T01:00:00Z')
+  const sai = 'https://github.com/Naturalclar/sai'
+  const sessions = aggregate([
+    // 同じ sai の別 worktree。repo は dev-min / dev-alqa と分かれるが project は 1 つ
+    row(base, 'A', { repo: 'dev-min', remote: sai }),
+    row(base, 'B', { repo: 'dev-alqa', remote: sai }),
+    // worktree 名は同じ「main」でも別のリポジトリ
+    row(base, 'C', { repo: 'main', remote: 'https://github.com/Naturalclar/kanban' }),
+    row(base, 'D', { repo: 'main', remote: sai, project: 'Naturalclar/sai' }),
+    // remote も project も無い古い行は repo に落ちる
+    row(base, 'E', { repo: 'local-only', remote: undefined }),
+  ])
+  const by = Object.fromEntries(sessions.map((s) => [s.id, s.project]))
+  assert.equal(by['A@dev-min'], 'Naturalclar/sai')
+  assert.equal(by['B@dev-alqa'], 'Naturalclar/sai', '古い行でも remote から補う')
+  assert.equal(by['C@main'], 'Naturalclar/kanban')
+  assert.equal(by['D@main'], 'Naturalclar/sai', '同じ worktree 名でも別リポジトリ')
+  assert.equal(by['E@local-only'], 'local-only', 'remote が無ければ repo のまま')
+
+  const ids = (list: typeof sessions) => new Set(list.map((s) => s.id))
+  assert.deepEqual(ids(filterSessions(sessions, { project: 'Naturalclar/sai' })), new Set(['A@dev-min', 'B@dev-alqa', 'D@main']))
+  assert.deepEqual(ids(filterSessions(sessions, { project: 'Naturalclar/sai', repo: 'dev-min' })), new Set(['A@dev-min']), 'worktree でさらに絞れる')
+  assert.deepEqual(facets(sessions).projects, ['Naturalclar/kanban', 'Naturalclar/sai', 'local-only'])
+  assert.deepEqual(facets(sessions).repos, ['dev-alqa', 'dev-min', 'local-only', 'main'])
 })
 
 test('session が空の行は unknown-<日付> にまとめる（リポジトリ別）', () => {

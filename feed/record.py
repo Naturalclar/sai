@@ -37,7 +37,7 @@ from pathlib import Path
 
 # 行の形の版。行に `v` として載せる。行の形（キー）を変えるたびに上げ、shared/types.ts の RECORD_VERSION と揃える
 # （ずれると feed/test_record.py が止まる）。画面は窓の中の一番新しい行の v が古いと「record.py が古い」と出す
-RECORD_VERSION = 5
+RECORD_VERSION = 6
 MAX_TEXT = 2000
 MAX_USER_TEXT = 2000
 MAX_THINKING = 4000
@@ -191,6 +191,43 @@ def git_remote(cwd: str) -> str:
     if not cwd or not os.path.isdir(cwd):
         return ""
     return normalize_remote(_git(cwd, "remote", "get-url", "origin"))
+
+
+def project_from_remote(remote: str) -> str:
+    """正規化済みの remote（https://host/owner/repo）から `owner/repo`。
+    GitLab のサブグループ（https://host/grp/sub/repo）は最後の2つ。読めなければ空。
+    shared/project.ts の projectFromRemote と同じ答えを返す（shared/project.test.ts と test_record.py の両方で見る）"""
+    path = re.sub(r"^[a-zA-Z]+://[^/]+/", "", (remote or "").strip()).rstrip("/")
+    if not path or "://" in path:
+        return ""
+    parts = [p for p in path.split("/") if p]
+    return "/".join(parts[-2:]) if len(parts) >= 2 else ""
+
+
+def git_project(cwd: str, remote: str) -> str:
+    """このセッションがどのリポジトリのものか。remote があれば `owner/repo`、無ければリポジトリ名だけ。
+
+    `repo`（= toplevel の basename）は bare clone の worktree（`…/sai.git/dev-min`）だと **worktree 名**に
+    なるので、一覧の絞り込みに使えない（#163）。`--git-common-dir` はどの形でも共有の .git を指すので、
+    そこからリポジトリ名を取る:
+      普通の clone       → `.git` / `../../.git`（cwd からの相対）  → 親の basename が `sai`
+      その worktree      → `/…/sai/.git`                            → 同上
+      bare clone         → `/…/sai.git`                             → `.git` を落として `sai`
+    """
+    from_remote = project_from_remote(remote)
+    if from_remote:
+        return from_remote
+    if not cwd or not os.path.isdir(cwd):
+        return ""
+    common = _git(cwd, "rev-parse", "--git-common-dir")
+    if not common:
+        return ""
+    path = common if os.path.isabs(common) else os.path.join(cwd, common)
+    path = os.path.normpath(path).rstrip(os.sep)
+    name = os.path.basename(path)
+    if name == ".git":
+        return os.path.basename(os.path.dirname(path))
+    return name[: -len(".git")] if name.endswith(".git") else name
 
 
 def git_facts(cwd: str) -> tuple[str, str]:
@@ -752,6 +789,7 @@ def build_row(payload: dict, now: datetime, directory: Path) -> dict | None:
     cwd = detect_cwd(payload)
     repo, branch = git_facts(cwd)
     remote = git_remote(cwd)
+    project = git_project(cwd, remote)
     text = ""
     user_text = ""
     thinking = ""
@@ -845,6 +883,8 @@ def build_row(payload: dict, now: datetime, directory: Path) -> dict | None:
         "branch": branch,
         # origin の URL（https://host/owner/repo に正規化）。画面が一言の中の #123 をこのリポジトリの issue に向けるのに使う
         "remote": remote,
+        # どのリポジトリのものか。repo は bare clone だと worktree 名になるので、一覧の絞り込みはこちらを使う
+        "project": project,
         "session": session,
         "session_source": source,
         "cwd": cwd,

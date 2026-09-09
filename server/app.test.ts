@@ -188,6 +188,41 @@ test('/api/sessions は絞り込み前の全体から filters を作る', async 
   assert.deepEqual(data.filters.agents, ['claude', 'codex', 'unknown'])
 })
 
+test('/api/sessions?project= で絞る（bare clone の worktree でもリポジトリでまとまる。#163）', async () => {
+  // 共有の fixture に足すと他のテストの件数が狂うので、days=7 の窓の外（10日前）に別の日として置いて days=30 で見る
+  const base = new Date(Date.now() - 10 * 24 * 60 * 60_000)
+  const path = join(feedDir, `${localDate(base.toISOString())}.jsonl`)
+  const sai = 'https://github.com/Naturalclar/sai'
+  await appendFile(
+    path,
+    [
+      // 同じ sai の別 worktree。project 無し（古い行）なので remote から補う
+      JSON.stringify(row(base, 'PJ1', { repo: 'wt-a', cwd: dir, remote: sai })),
+      // record.py が載せた project がそのまま使われる
+      JSON.stringify(row(new Date(base.getTime() + min(1)), 'PJ2', { repo: 'wmain', cwd: dir, project: 'Naturalclar/sai' })),
+      // worktree 名は同じ「wmain」でも別のリポジトリ
+      JSON.stringify(row(new Date(base.getTime() + min(2)), 'PJ3', { repo: 'wmain', cwd: dir, remote: 'https://github.com/Naturalclar/kanban' })),
+    ].join('\n') + '\n',
+  )
+
+  const all = (await (await get('/api/sessions?days=30')).json()) as SessionsResponse
+  assert.ok(all.filters.projects.includes('Naturalclar/sai'))
+  assert.ok(all.filters.projects.includes('Naturalclar/kanban'))
+  assert.equal(all.sessions.find((s) => s.id === 'PJ1@wt-a')?.project, 'Naturalclar/sai', '古い行（project 無し）は remote から補う')
+  assert.equal(all.sessions.find((s) => s.id === 'PJ3@wmain')?.project, 'Naturalclar/kanban', '同じ worktree 名でも別リポジトリ')
+
+  const picked = (await (await get(`/api/sessions?days=30&project=${encodeURIComponent('Naturalclar/sai')}`)).json()) as SessionsResponse
+  const ids = picked.sessions.map((s) => s.id)
+  assert.ok(ids.includes('PJ1@wt-a') && ids.includes('PJ2@wmain'), 'worktree をまたいで残る')
+  assert.ok(!ids.includes('PJ3@wmain'), '別リポジトリは落ちる')
+
+  const narrowed = (await (await get(`/api/sessions?days=30&project=${encodeURIComponent('Naturalclar/sai')}&repo=wt-a`)).json()) as SessionsResponse
+  assert.deepEqual(narrowed.sessions.map((s) => s.id), ['PJ1@wt-a'], 'worktree でさらに絞れる')
+
+  const feed = (await (await get(`/api/feed?days=30&project=${encodeURIComponent('Naturalclar/kanban')}`)).json()) as FeedResponse
+  assert.deepEqual([...new Set(feed.rows.map((r) => r.session))], ['PJ3'], 'フィードも project で絞れる')
+})
+
 test('/api/sessions/<id>', async () => {
   const res = await get(`/api/sessions/${encodeURIComponent('S1@kanban')}`)
   assert.equal(res.status, 200)

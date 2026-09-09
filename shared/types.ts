@@ -10,7 +10,7 @@ export type SessionSource = 'payload' | 'rollout' | 'synth' | ''
  * 行の形の版。feed/record.py の RECORD_VERSION と同じ値（ずれると pnpm test:feed が止まる）。
  * 行の形を変えるたびに上げる。画面は窓の中の一番新しい行の v がこれより古いと「record.py が古い」と出す
  */
-export const RECORD_VERSION = 5
+export const RECORD_VERSION = 6
 
 /** ~/.agent-feed/YYYY-MM-DD.jsonl の1行 = 1ターン */
 export interface FeedRow {
@@ -22,6 +22,12 @@ export interface FeedRow {
   branch: string
   /** origin の URL（https://host/owner/repo に正規化。record.py の normalize_remote）。無い行は古い record.py が書いたもの。一言の #123 のリンク先に使う */
   remote?: string
+  /**
+   * どのリポジトリのものか（`Naturalclar/sai`。remote が無ければリポジトリ名だけ）。`repo` は git の toplevel の
+   * basename なので bare clone の worktree だと worktree 名になる（#163）。一覧の絞り込みはこちらで行う。
+   * 無い行はサーバが remote から補う（shared/project.ts の rowProject）
+   */
+  project?: string
   session: string
   session_source: SessionSource
   cwd: string
@@ -67,9 +73,12 @@ export interface SessionSummary {
   dates: string[]
   agent: Agent
   agents: Agent[]
-  /** 途中で変わったら最後の値。全部は repos に */
+  /** 途中で変わったら最後の値。全部は repos に。bare clone の worktree では worktree 名（表示と絞り込みは project を使う） */
   repo: string
   repos: string[]
+  /** どのリポジトリか（`Naturalclar/sai`）。一覧の絞り込みと表示はこちら。全部は projects に */
+  project: string
+  projects: string[]
   branch: string
   branches: string[]
   cwd: string
@@ -256,6 +265,9 @@ export interface PermissionRule {
 }
 
 export interface Facets {
+  /** リポジトリ（`Naturalclar/sai`）。絞り込みの主軸 */
+  projects: string[]
+  /** git の toplevel の basename。bare clone では worktree 名（同じリポジトリの中の枝分かれ） */
   repos: string[]
   agents: Agent[]
   dates: string[]
@@ -404,6 +416,9 @@ export interface SettingsRequest {
 }
 
 export interface SessionFilters {
+  /** リポジトリ（`Naturalclar/sai`）。主軸 */
+  project: string
+  /** worktree（git の toplevel の basename）。project の中をさらに絞る */
   repo: string
   agent: string
   date: string
@@ -413,6 +428,7 @@ export interface SessionFilters {
 }
 
 export interface FeedFilters {
-  repo: string
+  /** リポジトリ（`Naturalclar/sai`）。サイドバーの絞り込みに従う */
+  project: string
   days: string
 }

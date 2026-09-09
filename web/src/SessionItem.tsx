@@ -7,6 +7,7 @@ import { ReplyingTag } from './ReplyingTag'
 import { ArchivedTag } from './ArchivedTag'
 import { WaitingTag } from './WaitingTag'
 import { More } from './More'
+import { projectName } from '../../shared/project.ts'
 import { SessionArchiveButton } from './SessionArchiveButton'
 import { ArchiveMark } from './ArchiveMark'
 import { useArchive } from './useArchive'
@@ -104,7 +105,8 @@ export function SessionItem({ s, active, replying, approval, now, swipe, reduced
         <span className="top">
           <span className="repo">
             <span className={`dot ${s.agent}`} />
-            {s.repo || '—'}<More n={s.repos.length} />
+            {/* bare clone だと repo は worktree 名なので、リポジトリ名（project）を出す。枝は右の branch で分かる */}
+            {projectName(s.project) || s.repo || '—'}<More n={s.projects.length} />
             {s.branch && <span className="br"> / {s.branch}<More n={s.branches.length} /></span>}
           </span>
           <span className="when"><b>{md(s.end)}</b> {hm(s.end)} · {s.turns}</span>

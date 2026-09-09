@@ -96,8 +96,8 @@ export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggl
             {/* 通常のモードは印を出さない（普段と違うときだけ目立たせる） */}
             {s.permission_mode && s.permission_mode !== 'default' && <PermissionModeTag mode={s.permission_mode} />}
           </span>
-          {/* 合成 ID は集計の切れ方で付け先がずれるのでアーカイブできない */}
-          {s.session_source !== 'synth' && <ArchiveButton key={`${s.id}:${s.archived ? 1 : 0}`} id={s.id} archived={Boolean(s.archived)} />}
+          {/* 合成 ID（synth）でも出す（#248）。アーカイブは表示の都合なので、再開できるかとは別 */}
+          <ArchiveButton key={`${s.id}:${s.archived ? 1 : 0}`} id={s.id} archived={Boolean(s.archived)} />
           <MetaEditor key={s.id} id={s.id} meta={s.meta} icon={s.icon} />
           {s.agent === 'claude' && <PermissionsButton key={s.id} id={s.id} />}
           {/* SAI から返信するときの許可モード。端末に打ち込む経路では効かないので、そのときは薄く出す */}

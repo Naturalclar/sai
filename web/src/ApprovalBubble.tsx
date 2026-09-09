@@ -19,8 +19,9 @@ interface Props {
 }
 
 /**
- * 返信中のエージェントが待っている許可・質問。[許可] [常に許可] [拒否] で答える（常に許可は Bash と MCP ツールだけ）。
+ * エージェントが待っている許可・質問。[許可] [常に許可] [拒否] で答える（常に許可は Bash と MCP ツールだけ）。
  * AskUserQuestion は AskQuestions が 1 問ずつ出し、全部そろったら送る。
+ * 通常起動の Codex TUI は待機を検出できても安全な回答経路が無いので、端末で答える案内だけを出す。
  * 答えるとサーバの approvals から消え、次のポーリングでこのバブルも消える（送った直後は done で押せなくする）
  */
 export function ApprovalBubble({ approval, now, repo, hotkey = false }: Props) {
@@ -29,6 +30,8 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false }: Props) {
   const [error, setError] = useState<string | null>(null)
   const questions = approval.tool_name === 'AskUserQuestion' ? askQuestions(approval.input) : []
   const elapsed = elapsedLabel(approval.since, now)
+  const agent = approval.agent ?? 'claude'
+  const answerable = approval.answerable !== false
 
   // 「常に許可」で書かれるルール。無いツール（Edit や質問）にはボタンを出さない
   const always = questions.length === 0 ? alwaysAllowRule(approval.tool_name, approval.input) : null
@@ -53,7 +56,7 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false }: Props) {
   // **capture** で張るので、入力欄（ReplyBox）が ⌘Enter を「送信」として扱うより先に来る。
   // 拾ったときだけ stopPropagation するので、答え待ちのバブルが無ければ入力欄の ⌘Enter は今までどおり
   const hasAlways = always !== null
-  const armed = hotkey && !busy && done === null && questions.length === 0
+  const armed = answerable && hotkey && !busy && done === null && questions.length === 0
   useEffect(() => {
     if (!armed) return
     const onKeyDown = (e: KeyboardEvent) => {
@@ -70,17 +73,19 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false }: Props) {
   const detail = detailOf(approval)
   return (
     <div className={`group approval${done ? ' done' : ''}`}>
-      <div className="avatar claude">C</div>
+      <div className={`avatar ${agent}`}>{agent === 'codex' ? 'X' : 'C'}</div>
       <div>
         <div className="gh">
-          <span className="name">Claude Code</span>
+          <span className="name">{agent === 'codex' ? 'Codex CLI' : 'Claude Code'}</span>
           {repo && <span className="ch">#{repo}</span>}
           <span className="time" title={`${hm(approval.since)} から待っている`}>{elapsed ? `待っている ${elapsed}` : '答えを待っている'}</span>
         </div>
         <div className="msg">
           <div className="body">⏳ {approval.text}</div>
           {detail && <pre className="detail">{detail}</pre>}
-          {questions.length > 0 ? (
+          {!answerable ? (
+            <div className="notice">このCodexは端末で起動されているため、回答はtmuxの画面で行ってください。</div>
+          ) : questions.length > 0 ? (
             <AskQuestions
               questions={questions}
               busy={busy}

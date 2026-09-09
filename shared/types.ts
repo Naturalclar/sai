@@ -333,6 +333,10 @@ export interface Approval {
   tool_use_id: string
   /** 何を聞かれているか（`許可待ち: Bash: rm -rf node_modules` / `質問: どのフレームワーク?`）。shared/approvals.ts */
   text: string
+  /** 表示するエージェント。古い値と Claude の MCP 経路は省略（claude 扱い） */
+  agent?: Agent
+  /** false は検出専用。SAI から答えを返す安全な経路が無いので、端末で回答する案内だけを出す */
+  answerable?: boolean
 }
 
 /** エンティティID → 答え待ちの承認（古い順）。無ければ空 */

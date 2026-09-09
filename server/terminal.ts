@@ -57,7 +57,7 @@ export interface PromptState {
   menu?: boolean
 }
 
-const DIALOG = /Enter to confirm|Esc to cancel|Press enter to continue/i
+const DIALOG = /Enter to (?:confirm|select|submit)|Esc to cancel|Press enter to continue|Waiting for user input/i
 
 /** 空の入力欄に出る placeholder。打ちかけではない。文言は CLI の版で変わりうるので、見つけたら足す */
 const PLACEHOLDER: Record<'claude' | 'codex', RegExp> = {
@@ -187,6 +187,22 @@ export class TerminalBusy extends Error {
   }
 }
 export class TerminalGone extends Error {}
+
+/**
+ * ペインが今も同じセッションのものか確かめて、現在の入力状態を読む。
+ * 能動監視でも返信直前と同じ所有者確認を通し、別のプロセスの画面を誤って表示しない。
+ */
+export async function inspectPrompt(tmux: Tmux, ps: PsFn, terminal: Terminal, agent: Agent): Promise<PromptState> {
+  let panePid = 0
+  try {
+    panePid = Number((await tmux.run(['display-message', '-p', '-t', terminal.pane, '#{pane_pid}'])).trim())
+  } catch (err) {
+    throw new TerminalGone(`ペイン ${terminal.pane} が無い: ${err instanceof Error ? err.message : String(err)}`)
+  }
+  if (!panePid) throw new TerminalGone(`ペイン ${terminal.pane} の pid が取れない`)
+  if (!isDescendant(terminal.pid, panePid, parsePs(await ps()))) throw new TerminalGone(`ペイン ${terminal.pane} で動いているのは別のプロセス`)
+  return promptState(await tmux.run(['capture-pane', '-p', '-t', terminal.pane]), agent)
+}
 
 export interface TypeOptions {
   /** 入力欄の打ちかけを消してから打ち込んでよい（人が確認済み）。ダイアログ中・入力欄不明には効かない */

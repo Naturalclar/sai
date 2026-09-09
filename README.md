@@ -79,6 +79,8 @@ sai/
 
 Codex の `notify` はターン完了時にしか来ない。Codex が tmux で開いていれば、SAI サーバが画面のポーリング時にそのペインを確認し、質問・許可ダイアログ中なら一覧とチャットに「Codex の画面で回答待ち」を一時表示する。通常起動の Codex TUI から質問内容や選択肢を構造化して受け取る口はないため、回答は tmux の画面で行う。ダイアログが閉じれば表示も消え、JSONL の履歴には残らない。
 
+SAI から閉じた Codex セッションへ返信するときは、SAIサーバー配下で長寿命の `codex app-server --stdio` を保持し、`thread/resume` → `turn/start` を行う。コマンド・ファイル変更・追加権限の承認と `request_user_input` は同じJSON-RPC接続で受け、提示された選択肢だけをSAIに表示して回答を返す。通常起動のTUIは所有しないので、上記のtmux表示または `codex queue` のまま。Codex CLI 0.153.2以降を想定し、問題があれば `SAI_CODEX_APP_SERVER=0` で従来の `codex exec resume` に戻せる（この場合、SAIからCodexの質問・許可には答えられない）。
+
 **フックは足し算で鳴る。** リポジトリ側の `.claude/settings.json` にも `Stop` フックがあると、ユーザー設定の分と両方が動いて 1 ターンが 2 行になる（試作を置いていたリポジトリで実際に起きた）。SAI を更新したら `record.py` の向け先も同じ checkout を指しているか確かめる。**記録側が古いと画面が知らせる**: 行には `v`（`record.py` の `RECORD_VERSION`）が載り、窓の中の一番新しい行の `v` が最新より小さいとヘッダの下に「記録側の `record.py` が古い」と出る。`v` の無い行は試作か古い `record.py` のもの。
 
 **Codex CLI** — `~/.codex/config.toml` に:
@@ -190,7 +192,9 @@ pnpm test && pnpm test:feed && pnpm lint && pnpm typecheck
 | `SAI_CODEX_BIN` | 同じく `codex` |
 | `SAI_CLAUDE_ARGS` | 返信の `claude -p --resume` に足す引数。空白区切りで、空白を含む値は `"…"` か `'…'` で囲む。例: `--allowedTools "Bash(gh *)"`、`--permission-mode acceptEdits`。「返信と許可」の項を読んでから |
 | `SAI_TAILSCALE_BIN` | tailnet 経由の認証で `whois` に使う `tailscale` の実行ファイル（既定は PATH、無ければ macOS の GUI 版） |
-| `SAI_CODEX_ARGS` | 同じく `codex exec resume` / `codex queue` に足す引数。例: `-s workspace-write` |
+| `SAI_CODEX_ARGS` | 開いている Codex の `codex queue` と、`SAI_CODEX_APP_SERVER=0` の `codex exec resume` に足す引数。例: `-s workspace-write` |
+| `SAI_CODEX_APP_SERVER` | `0` で閉じたCodexのapp-server管理を切り、従来の `codex exec resume` に戻す。既定は有効 |
+| `SAI_CODEX_APP_SERVER_ARGS` | `codex app-server --stdio` に足す引数。空白を含む値は引用符で囲む。例: `-c sandbox_mode="workspace-write"` |
 | `AGENT_FEED_SKIP` | `1` なら `record.py` は何も記録しない。SAI が一言を作るために回す `claude -p` に付ける（自分自身を記録しない） |
 | `SAI_DIGEST` | `1` で一言コメント（digest）を作る。既定はオフ |
 | `SAI_DIGEST_PROVIDER` | 一言を作る口。`claude`（既定。`claude -p`）か `openai`（OpenAI 互換の `/v1/chat/completions`。Ollama / LM Studio などローカルの LLM はこちら） |

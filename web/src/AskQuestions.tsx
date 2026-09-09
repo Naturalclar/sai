@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { answersReady, joinAnswer, type AskQuestion } from '../../shared/approvals.ts'
+import { answersReady, joinAnswer, questionKey, type AskQuestion } from '../../shared/approvals.ts'
 
 interface Props {
   questions: AskQuestion[]
@@ -7,7 +7,7 @@ interface Props {
   busy: boolean
   /** もう答えた（ボタンを押せなくする） */
   done: boolean
-  /** 全問そろったら呼ぶ。質問文 → 答え */
+  /** 全問そろったら呼ぶ。Codexはquestion id、Claudeは質問文 → 答え */
   onAnswer: (answers: Record<string, string>) => void
   onDecline: () => void
 }
@@ -35,13 +35,17 @@ export function AskQuestions({ questions, busy, done, onAnswer, onDecline }: Pro
 
   const q = questions[Math.min(step, questions.length - 1)]
   if (!q) return null
-  const pick = picks[q.question] ?? EMPTY
+  const key = questionKey(q)
+  const pick = picks[key] ?? EMPTY
   const answers: Record<string, string> = {}
-  for (const item of questions) answers[item.question] = answerOf(picks[item.question] ?? EMPTY)
+  for (const item of questions) {
+    const itemKey = questionKey(item)
+    answers[itemKey] = answerOf(picks[itemKey] ?? EMPTY)
+  }
   const last = step >= questions.length - 1
   const frozen = busy || done
 
-  const update = (next: Pick) => setPicks((all) => ({ ...all, [q.question]: next }))
+  const update = (next: Pick) => setPicks((all) => ({ ...all, [key]: next }))
   const toggle = (label: string) => {
     if (q.multiSelect) {
       const has = pick.labels.includes(label)
@@ -79,15 +83,17 @@ export function AskQuestions({ questions, busy, done, onAnswer, onDecline }: Pro
               {o.description && <span className="desc">{o.description}</span>}
             </button>
           ))}
-          <button type="button" className={pick.otherOn ? 'picked' : ''} disabled={frozen} onClick={toggleOther}>
-            <span className="label">その他</span>
-            <span className="desc">選択肢に無い答えを書く</span>
-          </button>
+          {q.other && (
+            <button type="button" className={pick.otherOn ? 'picked' : ''} disabled={frozen} onClick={toggleOther}>
+              <span className="label">その他</span>
+              <span className="desc">選択肢に無い答えを書く</span>
+            </button>
+          )}
         </div>
         {pick.otherOn && (
-          <textarea
+          <input
+            type={q.secret ? 'password' : 'text'}
             className="other"
-            rows={2}
             placeholder="答えをそのまま書く（エージェントにこの文字列が届く）"
             value={pick.other}
             disabled={frozen}
@@ -102,7 +108,7 @@ export function AskQuestions({ questions, busy, done, onAnswer, onDecline }: Pro
           </button>
         )}
         {!last ? (
-          <button type="button" className="allow" disabled={frozen || !answers[q.question]!.trim()} onClick={() => setStep(step + 1)}>
+          <button type="button" className="allow" disabled={frozen || !answers[key]!.trim()} onClick={() => setStep(step + 1)}>
             次へ
           </button>
         ) : (

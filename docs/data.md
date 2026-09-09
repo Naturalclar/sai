@@ -70,6 +70,8 @@ Codex CLI ──[notify]───────┘
 
 Codex TUI の質問・許可待ちは `notify` から取れないため、JSONL の行にはしない。サーバの `CodexDialogs` が tmux ペインを確認し、ダイアログ中だけ API の `approvals` に `agent: codex`, `answerable: false` の検出専用項目を足す。ペイン、pid、ダイアログのいずれかが確認できなくなれば消える一時状態で、履歴には残らない。
 
+SAIから開始したCodex turnの待機もJSONLにはせず、`CodexAppServer` のメモリに持つ。`Approval.decisions` は画面用の不透明なid・ラベル・allow/deny表示だけで、app-serverへ返すdecision本体とJSON-RPC request idはブラウザへ出さない。回答、`serverRequest/resolved`、turn完了、切断のいずれかで消える。
+
 `first_user_text` は1行目だけでなく**毎行**に載せている。集計は「一番古い行の値」を使うので結果は同じで、`days` で切った窓の外にセッションの1行目が落ちてもタイトルが消えない。
 
 ## セッションの表示名とアイコン

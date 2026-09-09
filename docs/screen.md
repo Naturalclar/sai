@@ -100,7 +100,7 @@ Slack のチャット風。1ターンは「自分の入力（`user_text`）→ �
 | エージェント | コマンド |
 | --- | --- |
 | Claude Code | `claude -p --resume <session> -- "<text>"` |
-| Codex CLI | 閉じていれば `codex exec resume`、開いていれば `codex queue --thread ... --message ...` |
+| Codex CLI | 閉じていればapp-serverの `thread/resume` → `turn/start`、開いていれば `codex queue --thread ... --message ...` |
 
 **返信のモデル**は**入力欄の、送信ボタンの左**で選べる（#193。Claude Desktop の入力欄と同じ位置）。押すとメニューが開き、そのセッションで出てきたモデル、Claude なら別名 `fable` / `opus` / `sonnet` / `haiku`、「既定」、候補に無い名前を入れる「その他…」（モーダル）が並ぶ。閉じているときは短い名前（`claude-opus-5` → `opus`）で、全体はマウスを乗せると出る。メニューには正式名を出す（別名と見分けが付かなくなるため）。セッション画面でもフィードでも同じ（フィードはサイドバーの一覧に居るセッションのときだけ）。選ぶと `session-meta.json` の `model` に残り、次の返信から Claude は `--model <m>`、Codex は `-m <m>` が付く（`SAI_CLAUDE_ARGS` に `--model` があってもセッションの設定が後ろに来て勝つ）。見出しの `claude-fable-5-1` のような表示は**実際に使われた**モデル（記録から）で、設定とは別。見出しに操作は無い（変えるのは入力欄の 1 か所だけ）。返信が終わって行が届けば表示のほうも変わる。
 
@@ -108,7 +108,7 @@ Slack のチャット風。1ターンは「自分の入力（`user_text`）→ �
 
 `--` は本文が `-` で始まっても（`-v` や `--help`）CLI のフラグとして解釈されないようにするため。
 
-**返信に画像を添えられる。** 入力欄への貼り付け・ドロップ・写真のボタン（iPhone ではカメラロール）の 3 つで、1 回 4 枚・1 枚 10MB まで。選んだ瞬間に `POST /api/sessions/<id>/attachments` で `~/.agent-feed/attachments/<sha1(ID) の先頭16桁>/<sha1(中身) の先頭16桁>.<ext>` に置き、送信時にそのパスを `attachments` で渡す。サーバは**そのセッションの置き場のパスだけを通す**（画面から来た絶対パスをそのまま CLI に渡すと任意のファイルを読ませられる）。渡し方はエージェントで違う: **Claude** は画像のフラグが無いので本文の末尾に `添付した画像:` とパスを足す（`claude -p` が cwd の外の画像も Read で読めることを確認済み）。**Codex** は `codex exec resume -i <FILE>` でも渡す（本文にも足すので、記録と自分バブルの見た目は Claude と同じ）。画面はパスの文字列ではなくサムネイルを出す（`shared/attachments.ts` の `splitAttachments()`）。中身で種類を見るので、iPhone の HEIC は選んだ瞬間に弾く。
+**返信に画像を添えられる。** 入力欄への貼り付け・ドロップ・写真のボタン（iPhone ではカメラロール）の 3 つで、1 回 4 枚・1 枚 10MB まで。選んだ瞬間に `POST /api/sessions/<id>/attachments` で `~/.agent-feed/attachments/<sha1(ID) の先頭16桁>/<sha1(中身) の先頭16桁>.<ext>` に置き、送信時にそのパスを `attachments` で渡す。サーバは**そのセッションの置き場のパスだけを通す**。**Claude** は本文末尾のパスをReadし、**Codex** はapp-serverの `localImage` と本文末尾のパスの両方で受ける。画面はパスではなくサムネイルを出す。中身で種類を見るのでHEICは選んだ瞬間に弾く。
 
 回したターンが完了すれば既存のフック（Stop / notify）が動いて JSONL に1行増えるので、返信の結果は今のポーリングでそのまま画面に流れてくる。送信直後は「送信中…」の仮バブルが出て、`UserPromptSubmit` の行が届けば本文はそちらの本物のバブルに置き換わり「処理中」の1行だけ残る。行が増えたら消える（増えた行の `user_text` が同じ文なので、見た目はそのまま本物の自分のバブルに変わる）。
 
@@ -132,12 +132,12 @@ Slack のチャット風。1ターンは「自分の入力（`user_text`）→ �
 - `SAI_TERMINAL=0` で切る（Claude と閉じた Codex は別プロセス、開いている Codex は queue）。`SAI_TMUX_BIN` で `tmux` の実行ファイルを差し替え
 - tmux 以外の端末と Claude Desktop には届かない（下のとおり別プロセスで回る）
 
-### Claude と閉じた Codex は別プロセスで回す
+### Claudeは別プロセス、閉じたCodexはapp-serverで回す
 
 **`resume` で別プロセスから回した返信と返答は、そのセッションを開いている端末や Desktop の画面には出ない。** SAI には出るし履歴にも残るが、開いている対話側は会話をメモリに持っていて、外で回ったターンを読み直さない。開いている Codex に使う `queue` はこの制約の対象外で、その会話へ直接届く。確かめたこと（Claude Code 2.1.258 / Codex CLI 0.139）:
 
 - `claude -p --resume <session>` は同じセッションのトランスクリプト（`~/.claude/projects/<project>/<session>.jsonl`）に**追記する**。セッション ID も同じで、別セッションには分岐しない（`--fork-session` を付けたときだけ分岐する）
-- `codex exec resume <session>` も同じ rollout ファイル（`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`）に追記する。新しい rollout は作らない
+- app-serverの `thread/resume` → `turn/start` も同じ rollout ファイル（`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`）に追記する。新しい rollout は作らない
 - なので、端末を閉じて `claude --resume <session>`（Codex は `codex resume <session>`）で**開き直せば**、SAI から送った返信とその返答も履歴に並ぶ
 - 開いたままの端末で続きを打つと、その端末は SAI のターンを知らないまま進む。Claude Code の資料も「同じセッションを2つの端末で再開すると、両方のメッセージが1つのトランスクリプトに交互に入る」としている（[Manage sessions](https://code.claude.com/docs/en/sessions)）。壊れはしないが、対話側のエージェントは SAI で頼んだことを覚えていない
 - Claude Desktop は CLI と「別のセッション履歴」を持つ（[Desktop の資料](https://code.claude.com/docs/en/desktop)）。`settings.json` は共有なのでフックは動いて SAI には出るが、Desktop のセッションを `claude -p --resume` で再開できるか、Desktop の画面に出るかは未確認（この Mac に Desktop が無い）
@@ -166,14 +166,14 @@ Claude の対話側にも出したいなら、SAI から送るのではなく端
 
 ### 返信と許可
 
-返信は非対話モード（`claude -p` / `codex exec`）で回すので、**許可ダイアログを出せない**。端末なら「このコマンドを実行していい？」と聞かれる場面（`gh pr create` など、設定で許可していないツール）は、非対話では拒否されて、エージェントは「許可が要る」と言って止まる。SAI からは答えられない。
+Claudeの返信は `claude -p`、閉じたCodexの返信はapp-serverで回す。Claudeは下記MCP、Codexはapp-serverのserver requestを使うため、どちらもSAIから許可・質問へ答えられる。通常起動のCodex TUIはapp-server接続をSAIが所有していないので、回答は端末で行う。
 
 先に許可しておくには、環境変数でサーバに追加の引数を渡す:
 
 ```sh
 SAI_CLAUDE_ARGS='--allowedTools "Bash(gh *)"' pnpm start        # gh だけ通す
 SAI_CLAUDE_ARGS='--permission-mode acceptEdits' pnpm start       # ファイル編集は聞かない（コマンドは聞く）
-SAI_CODEX_ARGS='-s workspace-write' pnpm start                    # Codex: 作業ディレクトリへの書き込みまで
+SAI_CODEX_APP_SERVER_ARGS='-c sandbox_mode="workspace-write"' pnpm start  # app-serverのCodex設定
 ```
 
 `claude` の `--allowedTools` は `~/.claude/settings.json` の `permissions.allow` と同じ書き方で、こちらは SAI からの返信にだけ効く（端末の許可設定はそのまま）。**SAI 自身は既定で何も付けない。** `--dangerously-skip-permissions` / `--permission-mode bypassPermissions` / Codex の `--dangerously-bypass-approvals-and-sandbox` も書けるが、返信の POST はブラウザから飛ぶので、その状態で別サイトからの CSRF が通ればエージェントが何でもできる（同一オリジンの検査で止めてはいる）。許可はツール単位で最小にする。
@@ -186,7 +186,9 @@ SAI_CODEX_ARGS='-s workspace-write' pnpm start                    # Codex: 作�
 
 ## 返信中の許可・質問に画面から答える
 
-端末と同じく、返信で回したエージェントが **許可（ツール実行の確認）や `AskUserQuestion` で止まったら、SAI のチャットに ⏳ のバブルと [許可] [常に許可] [拒否]（質問なら選択肢）が出て、そこから答えられる**。答えるまでエージェントは待っていて、一覧には「待機中」が付く。
+端末と同じく、返信で回したエージェントが **許可（ツール実行の確認）や質問で止まったら、SAI のチャットに ⏳ のバブルと、実際に選べる決定（質問なら選択肢）が出て、そこから答えられる**。答えるまでエージェントは待っていて、一覧には「待機中」が付く。Claudeだけは [常に許可] も持つ。
+
+Codexは `server/codexAppServer.ts` がSAIサーバー配下に長寿命の `codex app-server --stdio` を持ち、`experimentalApi: true`、`approvalsReviewer: user` で `thread/resume` / `turn/start` する。`item/tool/requestUserInput`、`item/commandExecution/requestApproval`、`item/fileChange/requestApproval`、`item/permissions/requestApproval` を受け、同じJSON-RPC request idへ応答する。コマンドは `availableDecisions` の実値をサーバ内に置き、画面へは不透明なidしか出さない。別thread/turn、未提示decision、二重回答は拒否し、request解消・turn完了・切断で待機を消す。
 
 仕組みは `claude -p` の `--permission-prompt-tool`。SAI は返信の `claude` に自分の MCP サーバ（`server/approve-mcp.ts`。stdio、依存ゼロ）を `--mcp-config` で足し、許可が要るたびにそのツールが呼ばれる。ツールは SAI サーバに預けて（`POST /api/approvals`）答えが付くまで待ち（`GET /api/approvals/<id>?wait=1`）、画面の答え（`POST /api/approvals/<id>/answer`）をそのまま CLI に返す。
 

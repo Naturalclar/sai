@@ -5,7 +5,7 @@ import type { Server } from 'node:http'
 import { mkdtemp, rm, writeFile, appendFile, mkdir, stat, utimes, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ApprovalMap, Replying, ReplyResponse, SessionsResponse, SessionDetailResponse, SessionIconResponse, SessionMetaResponse, FeedResponse, SettingsResponse, HealthResponse, SessionSkillsResponse, SessionPermissionsResponse, UsageResponse } from '../shared/types.ts'
+import type { ApprovalAnswer, ApprovalMap, Replying, ReplyResponse, SessionsResponse, SessionDetailResponse, SessionIconResponse, SessionMetaResponse, FeedResponse, SettingsResponse, HealthResponse, SessionSkillsResponse, SessionPermissionsResponse, UsageResponse } from '../shared/types.ts'
 import { createApp, parseDays, revWith, selfUrl, sessionIdFrom, stripThinking } from './app.ts'
 import { BuildFreshness } from './buildFreshness.ts'
 import { Authenticator } from './auth.ts'
@@ -21,6 +21,7 @@ import type { ReplyCommand, Runner } from './runner.ts'
 import { row } from './aggregate.test.ts'
 import { JPEG, PNG } from './icons.test.ts'
 import type { CodexDialogSource } from './codexDialogs.ts'
+import type { CodexApp, CodexTurnInput } from './codexAppServer.ts'
 
 let dir: string
 let feedDir: string
@@ -57,6 +58,34 @@ class FakeCodexDialogs implements CodexDialogSource {
   }
 }
 const codexDialogs = new FakeCodexDialogs()
+
+class FakeCodexApp implements CodexApp {
+  started: CodexTurnInput[] = []
+  busy = new Map<string, Replying>()
+  active: ApprovalMap = {}
+  answered: { id: string; answer: ApprovalAnswer }[] = []
+  fail: Error | null = null
+  running(id: string) { return this.busy.has(id) }
+  replying() { return Object.fromEntries(this.busy) }
+  snapshot() { return this.active }
+  getApproval(approvalId: string) { return Object.values(this.active).flat().find((approval) => approval.approval_id === approvalId) }
+  async start(input: CodexTurnInput) {
+    if (this.fail) throw this.fail
+    this.started.push(input)
+  }
+  answer(approvalId: string, answer: ApprovalAnswer) {
+    const approval = this.getApproval(approvalId)
+    if (!approval) return { ok: false as const, status: 404 as const, error: 'approval not found' }
+    this.answered.push({ id: approvalId, answer })
+    for (const [id, list] of Object.entries(this.active)) {
+      const remaining = list.filter((item) => item.approval_id !== approvalId)
+      if (remaining.length) this.active[id] = remaining
+      else delete this.active[id]
+    }
+    return { ok: true as const }
+  }
+}
+const codexApp = new FakeCodexApp()
 
 /** 一言（digest）の偽物。プロンプトの本文の先頭を返す。null を返す設定なら失敗 */
 class FakeSummarizer implements Summarizer {
@@ -117,6 +146,7 @@ before(async () => {
     tmux: { run: async () => { throw new Error('unused') } },
     ps: async () => '',
     codexDialogs,
+    codexApp,
   }
   // 使用量も、この Mac の ~/.codex / ~/.claude ではなく temp に作った偽の置き場だけを見せる
   await mkdir(join(dir, 'codex-sessions', '2026', '09', '09'), { recursive: true })
@@ -474,10 +504,12 @@ test('POST reply: tailscale serve 経由（Host が ts.net）でも SAI_URL は�
   assert.equal(mcp.mcpServers.sai.env.SAI_URL, base, 'ブラウザの Host（80 番も https も誰も聞いていない）ではなく 127.0.0.1:<port>')
 })
 
-test('POST reply: Codex は codex exec resume', async () => {
-  runner.started.length = 0
-  assert.equal((await post('X1@r', { text: 'go' })).status, 202)
-  assert.deepEqual(runner.started[0]!.cmd.args, ['exec', 'resume', 'X1', '--', 'go'])
+test('POST reply: Codex はapp-serverでresumeしてturnを開始する', async () => {
+  codexApp.started.length = 0
+  const res = await post('X1@r', { text: 'go' })
+  assert.equal(res.status, 202)
+  assert.equal(((await res.json()) as ReplyResponse).via, 'app-server')
+  assert.deepEqual(codexApp.started[0], { id: 'X1@r', threadId: 'X1', text: 'go', cwd: dir, model: undefined, attachments: [] })
 })
 
 test('POST reply: 合成・不明・cwd 無しは受け付けない', async () => {
@@ -651,6 +683,7 @@ test('PUT meta: 表示名が一覧と詳細に載り、rev が変わり、ファ
 
 test('PUT meta: model は次の返信の claude / codex に --model / -m として付き、消せば付かない', async () => {
   runner.started.length = 0
+  codexApp.started.length = 0
   // Claude: --model
   assert.equal((await putMeta('C1@r', { model: 'opus' })).status, 200)
   assert.equal(((await (await get('/api/sessions/C1%40r?days=7')).json()) as SessionDetailResponse).session.meta?.model, 'opus', '詳細の meta に載る')
@@ -661,15 +694,14 @@ test('PUT meta: model は次の返信の claude / codex に --model / -m とし�
   // Codex: -m
   assert.equal((await putMeta('X1@r', { model: 'gpt-5' })).status, 200)
   assert.equal((await post('X1@r', { text: 'go' })).status, 202)
-  args = runner.started[1]!.cmd.args
-  assert.deepEqual(args.slice(0, 4), ['exec', 'resume', '-m', 'gpt-5'])
+  assert.equal(codexApp.started[0]!.model, 'gpt-5')
   // 消すと付かない
   assert.equal((await putMeta('C1@r', { model: '' })).status, 200)
   assert.equal((await putMeta('X1@r', { model: null })).status, 200)
   assert.equal((await post('C1@r', { text: 'x' })).status, 202)
-  assert.ok(!runner.started[2]!.cmd.args.includes('--model'), '既定に戻したら付かない')
+  assert.ok(!runner.started[1]!.cmd.args.includes('--model'), '既定に戻したら付かない')
   assert.equal((await post('X1@r', { text: 'x' })).status, 202)
-  assert.ok(!runner.started[3]!.cmd.args.includes('-m'))
+  assert.equal(codexApp.started[1]!.model, undefined)
   // 検査は mergeMeta と同じ
   assert.equal((await putMeta('C1@r', { model: '--dangerously-skip-permissions' })).status, 400)
   assert.equal((await putMeta('C1@r', { model: 'a'.repeat(65) })).status, 400)
@@ -1146,6 +1178,25 @@ test('Codex TUIのダイアログは一覧・詳細・フィードへ検出専�
   const afterDialogs = (await (await get('/api/sessions?days=30')).json()) as SessionsResponse
   assert.notEqual(afterDialogs.rev, list.rev)
   assert.equal(afterDialogs.approvals['X1@r'], undefined)
+})
+
+test('Codex app-serverの承認はAPIへ載り、decisionを同じ管理接続へ1回だけ返す', async () => {
+  codexApp.active = {
+    'X1@r': [{
+      approval_id: 'codex-rpc-1', id: 'X1@r', since: new Date().toISOString(), tool_name: 'CodexCommand',
+      input: { command: 'git status' }, tool_use_id: 'cmd-1', text: '許可待ち: コマンド: git status', agent: 'codex', answerable: true,
+      decisions: [{ id: 'd0', label: '許可', behavior: 'allow' }, { id: 'd1', label: '拒否', behavior: 'deny' }],
+    }],
+  }
+  codexApp.answered.length = 0
+  const list = (await (await get('/api/sessions?days=30')).json()) as SessionsResponse
+  assert.equal(list.approvals['X1@r']?.[0]?.decisions?.[0]?.label, '許可')
+  let res = await postJson('/api/approvals/codex-rpc-1/answer', { behavior: 'allow', decision: 'd0', remember: 'local' }, { Origin: base })
+  assert.equal(res.status, 400, 'CodexにはClaudeの常に許可を送れない')
+  res = await postJson('/api/approvals/codex-rpc-1/answer', { behavior: 'allow', decision: 'd0' }, { Origin: base })
+  assert.equal(res.status, 200)
+  assert.deepEqual(codexApp.answered, [{ id: 'codex-rpc-1', answer: { behavior: 'allow', decision: 'd0' } }])
+  assert.equal((await postJson('/api/approvals/codex-rpc-1/answer', { behavior: 'allow', decision: 'd0' }, { Origin: base })).status, 404)
 })
 
 test('approvals: 返信を処理中のセッションの分だけ預かり、一覧・詳細・フィードに載って rev が変わる', async () => {

@@ -27,11 +27,20 @@ export interface AskOption {
 }
 
 export interface AskQuestion {
+  /** Codex app-serverではresponseのキーになる。Claudeの質問には無い */
+  id?: string
   question: string
   header: string
   options: AskOption[]
   multiSelect: boolean
+  /** 選択肢に無い自由入力を受けられる */
+  other: boolean
+  /** 入力値を画面で隠す */
+  secret: boolean
 }
+
+/** Codexは安定したquestion id、従来のClaudeは質問文を回答キーにする。 */
+export const questionKey = (question: Pick<AskQuestion, 'id' | 'question'>) => question.id ?? question.question
 
 /**
  * 推奨の印。CLI が決まった形で送ってくるわけではなく、質問を書くモデルの書き癖なので 2 通り拾う（実測 #195）:
@@ -59,7 +68,16 @@ export function askQuestions(input: Record<string, unknown>): AskQuestion[] {
             return { label, description, recommended: RECOMMENDED_LABEL.test(given) || RECOMMENDED_DESC.test(description) }
           })
       : []
-    out.push({ question: o.question, header: typeof o.header === 'string' ? o.header : '', options, multiSelect: o.multiSelect === true })
+    out.push({
+      ...(typeof o.id === 'string' ? { id: o.id } : {}),
+      question: o.question,
+      header: typeof o.header === 'string' ? o.header : '',
+      options,
+      multiSelect: o.multiSelect === true,
+      // Claudeの従来形式にはisOtherが無く、これまで常に「その他」を出していたので互換を保つ。
+      other: o.isOther !== false,
+      secret: o.isSecret === true,
+    })
   }
   return out
 }
@@ -74,7 +92,7 @@ export function joinAnswer(labels: string[], other: string): string {
 
 /** 全部の質問に答えが入ったか。CLI は 1 問でも欠けると「答えが無い」扱いにするので、送るのは揃ってから */
 export function answersReady(questions: AskQuestion[], answers: Record<string, string>): boolean {
-  return questions.length > 0 && questions.every((q) => (answers[q.question] ?? '').trim() !== '')
+  return questions.length > 0 && questions.every((q) => (answers[questionKey(q)] ?? '').trim() !== '')
 }
 
 /** 許可ダイアログに出るのと同じ「何をしようとしているか」。300文字で切る */
@@ -108,7 +126,7 @@ export function approvalText(toolName: string, input: Record<string, unknown>): 
 }
 
 /**
- * AskUserQuestion の答え。CLI は `updatedInput.answers`（質問文 → 答え。複数選択はカンマ区切り）を読む。
+ * AskUserQuestion の答え。CLI は `updatedInput.answers`（Claudeは質問文、Codexはquestion id → 答え。複数選択はカンマ区切り）を読む。
  * 元の questions をそのまま返さないと「答えが無い」扱いになる。
  * **label 以外の文字列（その他の自由記入）もそのままエージェントに届く**（#195 で実測）
  */

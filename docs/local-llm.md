@@ -27,7 +27,7 @@ codex --oss --local-provider=ollama -m qwen3:8b            # 対話で始める�
 
 ### SAI からの返信（ここが違う）
 
-SAI の返信は `codex exec resume` を使うが、**`resume` は `--oss` と `--local-provider` を受け付けない**:
+`SAI_CODEX_APP_SERVER=0` の従来経路は `codex exec resume` を使うが、**`resume` は `--oss` と `--local-provider` を受け付けない**:
 
 ```
 $ codex exec resume --oss … <id> -- "…"
@@ -41,10 +41,10 @@ error: unexpected argument '--oss' found
 ~/.codex/config.toml に model_provider と model を書く
 
 # サーバを立てるシェルで渡す（SAI からの返信にだけ効く）
-SAI_CODEX_ARGS='-c model_provider=ollama -c model=qwen3:8b' pnpm start
+SAI_CODEX_APP_SERVER_ARGS='-c model_provider=ollama -c model=qwen3:8b' pnpm start
 ```
 
-`SAI_CODEX_ARGS` は `server/runner.ts` の `splitArgs()` がシェル風に割って `exec resume` の後ろに置く。この形で画面から返信すると、ローカルのモデルで回って行が届く（確認済み）。
+`SAI_CODEX_APP_SERVER_ARGS` は `server/runner.ts` の `splitArgs()` がシェル風に割り、長寿命の `codex app-server --stdio` に渡す。この形で画面から返信するとローカルモデルで回る。従来の `exec resume` に戻す場合だけ `SAI_CODEX_ARGS` を使う。
 
 セッションごとのモデル（チャット見出しの `ModelPicker`）は `-m` として渡るので **`resume` でも効く**。`model_provider` だけ設定に置いて、モデルはセッションごとに選ぶ、という使い方ができる。モデル名の `:` は通る（`shared/meta.ts` の `META_MODEL_RE` が `.` `_` `:` `/` `-` `[` `]` を許す）。
 

@@ -525,7 +525,7 @@
   .group.approval .options .label { font-weight: 600; }
   .group.approval .options .rec { margin-left: 6px; padding: 1px 6px; border-radius: 8px; background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); font-size: 11px; font-weight: 600; }
   .group.approval .options .desc { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; font-weight: 400; }
-  .group.approval .questions .other { margin-top: 6px; width: 100%; box-sizing: border-box; font: inherit; font-size: 16px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); resize: vertical; }
+  .group.approval .questions .other { margin-top: 6px; width: 100%; box-sizing: border-box; font: inherit; font-size: 16px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
   .group.approval.done { opacity: .6; }
   .pending-line.long .time { color: var(--synth); font-weight: 600; }
   .reply { position: relative; display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }

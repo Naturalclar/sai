@@ -34,7 +34,8 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false }: Props) {
   const answerable = approval.answerable !== false
 
   // 「常に許可」で書かれるルール。無いツール（Edit や質問）にはボタンを出さない
-  const always = questions.length === 0 ? alwaysAllowRule(approval.tool_name, approval.input) : null
+  const always = agent === 'claude' && questions.length === 0 ? alwaysAllowRule(approval.tool_name, approval.input) : null
+  const decisions = approval.decisions ?? []
 
   const send = useCallback(
     async (body: Parameters<typeof api.answerApproval>[1]) => {
@@ -56,7 +57,7 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false }: Props) {
   // **capture** で張るので、入力欄（ReplyBox）が ⌘Enter を「送信」として扱うより先に来る。
   // 拾ったときだけ stopPropagation するので、答え待ちのバブルが無ければ入力欄の ⌘Enter は今までどおり
   const hasAlways = always !== null
-  const armed = answerable && hotkey && !busy && done === null && questions.length === 0
+  const armed = agent === 'claude' && answerable && hotkey && !busy && done === null && questions.length === 0
   useEffect(() => {
     if (!armed) return
     const onKeyDown = (e: KeyboardEvent) => {
@@ -93,6 +94,20 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false }: Props) {
               onAnswer={(answers) => void send(answerAsk(approval, answers))}
               onDecline={() => void send({ behavior: 'deny', message: 'SAI の画面で答えなかった' })}
             />
+          ) : decisions.length > 0 ? (
+            <div className="actions">
+              {decisions.map((decision) => (
+                <button
+                  type="button"
+                  key={decision.id}
+                  className={decision.behavior === 'allow' ? 'allow' : 'deny'}
+                  disabled={busy || done !== null}
+                  onClick={() => void send({ behavior: decision.behavior, decision: decision.id })}
+                >
+                  {decision.label}
+                </button>
+              ))}
+            </div>
           ) : (
             <div className="actions">
               <button
@@ -130,6 +145,34 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false }: Props) {
 /** text（1行の要約）に入り切らない中身。Bash はコマンド全文、Edit/Write は差し込む内容の先頭 */
 function detailOf(a: Approval): string {
   const i = a.input
+  if (a.tool_name === 'CodexCommand') {
+    const command = typeof i.command === 'string' ? i.command : ''
+    const cwd = typeof i.cwd === 'string' ? i.cwd : ''
+    const reason = typeof i.reason === 'string' ? i.reason : ''
+    const permissionDetails = Object.fromEntries([
+      ['追加権限', i.additionalPermissions],
+      ['ネットワーク', i.networkApprovalContext],
+      ['実行規則の提案', i.proposedExecpolicyAmendment],
+      ['ネットワーク規則の提案', i.proposedNetworkPolicyAmendments],
+    ].filter((entry) => entry[1] !== undefined && entry[1] !== null))
+    const permissions = Object.keys(permissionDetails).length ? JSON.stringify(permissionDetails, null, 2) : ''
+    return [command, cwd && `cwd: ${cwd}`, reason && `理由: ${reason}`, permissions].filter(Boolean).join('\n')
+  }
+  if (a.tool_name === 'CodexFileChange') {
+    const changes = Array.isArray(i.changes) ? i.changes : []
+    const bodies = changes.flatMap((raw) => {
+      if (!raw || typeof raw !== 'object') return []
+      const change = raw as Record<string, unknown>
+      const path = typeof change.path === 'string' ? change.path : ''
+      const diff = typeof change.diff === 'string' ? change.diff : ''
+      return path || diff ? [`${path}${diff ? `\n${diff}` : ''}`] : []
+    })
+    const reason = typeof i.reason === 'string' ? `理由: ${i.reason}` : ''
+    return [bodies.join('\n\n') || (typeof i.grantRoot === 'string' ? i.grantRoot : ''), reason].filter(Boolean).join('\n')
+  }
+  if (a.tool_name === 'CodexPermissions') {
+    return JSON.stringify(i.permissions ?? {}, null, 2)
+  }
   if (a.tool_name === 'Bash' && typeof i.command === 'string' && (i.command.length > 80 || i.command.includes('\n'))) return i.command
   if ((a.tool_name === 'Write' || a.tool_name === 'Edit') && typeof i.file_path === 'string') {
     const body = typeof i.new_string === 'string' ? i.new_string : typeof i.content === 'string' ? i.content : ''

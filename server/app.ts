@@ -46,6 +46,8 @@ import { Approvals, WAIT_MS } from './approvals.ts'
 import { BuildFreshness } from './buildFreshness.ts'
 import { codexQueueCommand, codexWriterActive, runCodexQueue } from './codex.ts'
 import type { CodexQueue } from './codex.ts'
+import { CodexAppServer } from './codexAppServer.ts'
+import type { CodexApp } from './codexAppServer.ts'
 import { approvalMapKey, CodexDialogs, mergeApprovalMaps } from './codexDialogs.ts'
 import type { CodexDialogSource } from './codexDialogs.ts'
 import { DIGEST_FILE, DigestStore, digesterFromEnv } from './digest.ts'
@@ -236,6 +238,8 @@ export interface TerminalDeps {
   codexQueue?: CodexQueue
   /** 開いている Codex TUI の質問・許可ダイアログ監視。テストでは差し替える */
   codexDialogs?: CodexDialogSource
+  /** SAIから開始するCodex turnのapp-server client。テストでは差し替える */
+  codexApp?: CodexApp
 }
 
 export function createApp(
@@ -261,13 +265,15 @@ export function createApp(
   const isCodexWriterActive = terminal.codexWriterActive ?? codexWriterActive
   const queueCodex = terminal.codexQueue ?? runCodexQueue
   const codexDialogs = terminal.codexDialogs ?? new CodexDialogs(terminal.tmux, terminal.ps)
+  const codexApp = terminal.codexApp ?? new CodexAppServer()
+  const codexAppEnabled = process.env.SAI_CODEX_APP_SERVER !== '0'
   const terminalEnabled = process.env.SAI_TERMINAL !== '0'
   /** 一番新しい行に pane と pid があり、pid が生きていれば端末で開いている */
   const terminalOf = (s: SessionSummary) => (terminalEnabled && s.pane && s.pid && isAlive(s.pid) ? { pane: s.pane, pid: s.pid } : null)
   /** 処理中の返信（子プロセス + 端末）。端末の分は、ターン完了の行が届いていれば先に片付ける */
   const replyingOf = (sessions: SessionSummary[]): ReplyingMap => {
     typed.settle((id) => sessions.find((s) => s.id === id)?.last_turn)
-    return { ...typed.snapshot(), ...run.snapshot() }
+    return { ...typed.snapshot(), ...run.snapshot(), ...codexApp.replying() }
   }
   // 処理中の返信は replying.json にも持ち、サーバを再起動しても生きている分を引き取る（#100）
   const run: Runner = runner ?? new ProcessRunner(join(store.directory, 'reply.log'), join(store.directory, 'replying.json'))
@@ -276,9 +282,9 @@ export function createApp(
   const attachmentStore = new AttachmentStore(join(store.directory, ATTACHMENTS_DIR))
   const profileStore = new ProfileStore(join(store.directory, PROFILE_FILE))
 
-  /** Claude の双方向 Approval と、Codex TUI の検出専用ダイアログを合わせる。 */
+  /** Claude、SAI管理のCodex、通常Codex TUIの検出専用ダイアログを合わせる。 */
   const approvalsNow = async (sessions: SessionSummary[]) =>
-    mergeApprovalMaps(approvals.snapshot(), terminalEnabled ? await codexDialogs.scan(sessions) : {})
+    mergeApprovalMaps(mergeApprovalMaps(approvals.snapshot(), codexApp.snapshot()), terminalEnabled ? await codexDialogs.scan(sessions) : {})
 
   /**
    * 自分の表示名とアイコン。rev は profile.json とアイコンの状態で、名前や画像を変えたら応答の rev も変わる
@@ -444,7 +450,7 @@ export function createApp(
     // 端末（tmux）で開いていれば、前のターンが動いていても打ち込んでよい。TUI が次のターンに回すので、
     // 端末で人が続けて打つのと同じになる。別プロセス（-p）の経路だけは二重起動になるので止める（#100, #170）
     const openTerminal = terminalOf(session)
-    if (run.running(id) || (typed.running(id) && !openTerminal)) {
+    if (run.running(id) || codexApp.running(id) || (typed.running(id) && !openTerminal)) {
       return error(res, 409, 'このセッションはまだ前の返信を処理中です')
     }
 
@@ -502,6 +508,19 @@ export function createApp(
     }
     // terminalOf() の後にペインが消えた場合も、開いている Codex は resume せず queue へ送る。
     if (codexActive) return sendQueue()
+    // SAIから開始するCodex turnはapp-serverでresumeする。server requestとresponseを同じ接続で
+    // 往復できるので、質問・承認をWeb UIで安全に答えられる。通常起動TUIは上の経路のまま。
+    if (session.agent === 'codex' && codexAppEnabled) {
+      try {
+        await codexApp.start({ id, threadId: raw, text, cwd, model, attachments })
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code
+        const hint = code === 'ENOENT' ? `${process.env.SAI_CODEX_BIN || 'codex'} が見つかりません（SAI_CODEX_BIN で指定できます）` : ''
+        return error(res, 500, hint || `Codex app-serverで再開できませんでした: ${err instanceof Error ? err.message : String(err)}`)
+      }
+      const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd, via: 'app-server' }
+      return json(res, payload, 202)
+    }
     // 許可・質問を画面で答える配線。MCP の子プロセスはこのサーバと同じマシンで動くので、宛先はブラウザが来た Host ではなく
     // このサーバ自身が待ち受けているアドレス（ループバック）。Host だと tailscale serve 経由（https://<host>.ts.net → 127.0.0.1:8787）で
     // 開いた画面からの返信が `http://<host>.ts.net`（80 番、誰も聞いていない）に投げて「SAI に届かない: fetch failed」になる
@@ -562,6 +581,18 @@ export function createApp(
     const b = (body ?? {}) as Partial<ApprovalAnswer>
     if (b.behavior !== 'allow' && b.behavior !== 'deny') return error(res, 400, 'behavior は allow か deny')
     if (b.remember !== undefined && b.remember !== 'local') return error(res, 400, 'remember は local だけ')
+    const codexCurrent = codexApp.getApproval(approvalId)
+    if (codexCurrent) {
+      if (b.remember !== undefined) return error(res, 400, 'Codexでは提示されたdecisionだけ選べます')
+      const answer: ApprovalAnswer = {
+        behavior: b.behavior,
+        ...(typeof b.decision === 'string' ? { decision: b.decision } : {}),
+        ...(b.updatedInput && typeof b.updatedInput === 'object' && !Array.isArray(b.updatedInput) ? { updatedInput: b.updatedInput } : {}),
+      }
+      const result = codexApp.answer(approvalId, answer)
+      if (!result.ok) return error(res, result.status, result.error)
+      return json(res, { ok: true, approval_id: approvalId, behavior: answer.behavior })
+    }
     const current = approvals.get(approvalId)
     if (!current) return error(res, 404, 'approval not found')
     const answer: ApprovalAnswer = b.behavior === 'allow'

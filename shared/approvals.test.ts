@@ -22,6 +22,8 @@ test('askQuestions は壊れた形を落とし、answerAsk は元の入力に an
     header: '色',
     options: [{ label: '赤', description: 'red', recommended: false }, { label: '青', description: '', recommended: false }],
     multiSelect: false,
+    other: true,
+    secret: false,
   })
   const approval: Approval = { approval_id: 'a', id: 'S@r', since: '', tool_name: 'AskUserQuestion', input, tool_use_id: '', text: '' }
   assert.deepEqual(answerAsk(approval, { '赤か青か?': '青' }), { behavior: 'allow', updatedInput: { questions: input.questions, answers: { '赤か青か?': '青' } } })
@@ -55,6 +57,8 @@ test('joinAnswer は選んだ label と自由記入を繋ぎ、answersReady は�
   assert.equal(answersReady(qs, { a: '1', b: '  ' }), false)
   assert.equal(answersReady(qs, { a: '1', b: '2' }), true)
   assert.equal(answersReady([], {}), false)
+  const codex = askQuestions({ questions: [{ id: 'first', question: '同じ質問' }, { id: 'second', question: '同じ質問' }] })
+  assert.equal(answersReady(codex, { first: '1', second: '2' }), true, 'Codexは重複する質問文でもidで区別する')
 })
 
 test('alwaysAllowRule: Bash は先頭 1 語（サブコマンドを持つ CLI は 2 語）の前方一致、MCP はツール名、他は無し', () => {

@@ -18,6 +18,11 @@ export const MAX_GIT_OUTPUT_BYTES = 16 * 1024 * 1024
 
 /** 呼んでよい git のサブコマンド。書き込むものは入れない */
 const READ_ONLY = new Set(['rev-parse', 'symbolic-ref', 'merge-base', 'diff', 'ls-files', 'status'])
+/**
+ * サブコマンド自体は書き込めるが、この動詞なら読むだけ、というもの。
+ * `remote get-url` は origin の URL を読むだけ（`remote add` などは弾く）
+ */
+const READ_ONLY_VERBS: Record<string, Set<string>> = { remote: new Set(['get-url']) }
 
 /** git を叩く口。テストでは差し替える */
 export interface Git {
@@ -31,8 +36,10 @@ export class RealGit implements Git {
     this.bin = bin
   }
   run(cwd: string, args: string[]): Promise<string> {
-    const sub = args.find((a) => !a.startsWith('-'))
-    if (!sub || !READ_ONLY.has(sub)) return Promise.reject(new Error(`読むだけのコマンドしか呼ばない: ${sub ?? '(無し)'}`))
+    const words = args.filter((a) => !a.startsWith('-'))
+    const [sub, verb] = [words[0], words[1]]
+    const ok = Boolean(sub) && (READ_ONLY.has(sub!) || Boolean(verb && READ_ONLY_VERBS[sub!]?.has(verb)))
+    if (!ok) return Promise.reject(new Error(`読むだけのコマンドしか呼ばない: ${[sub, verb].filter(Boolean).join(' ') || '(無し)'}`))
     return new Promise((resolve, reject) => {
       // --no-pager と color.ui=false で、人の設定に関係なく素の出力にする
       const child = spawn(this.bin, ['-C', cwd, '--no-pager', '-c', 'color.ui=false', ...args], { stdio: ['ignore', 'pipe', 'pipe'] })

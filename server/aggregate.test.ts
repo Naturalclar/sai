@@ -107,7 +107,8 @@ test('絞り込みと候補', () => {
   assert.deepEqual(ids(filterSessions(sessions, { repo: 'x' })), new Set(['A@x', 'C@x']))
   assert.deepEqual(ids(filterSessions(sessions, { agent: 'codex' })), new Set(['B@y']))
   assert.deepEqual(ids(filterSessions(sessions, { repo: 'x', date: '2026-09-01' })), new Set(['C@x']))
-  assert.deepEqual(facets(sessions), { projects: ['x', 'y'], repos: ['x', 'y'], agents: ['claude', 'codex'], dates: ['2026-09-02', '2026-09-01'] })
+  // remote も project も無い行なので、リポジトリの候補は空（worktree 名は混ぜない。#182）
+  assert.deepEqual(facets(sessions), { projects: [], repos: ['x', 'y'], agents: ['claude', 'codex'], dates: ['2026-09-02', '2026-09-01'] })
 })
 
 test('project: bare clone の worktree でもリポジトリでまとまる（repo は worktree 名のまま）', () => {
@@ -128,12 +129,12 @@ test('project: bare clone の worktree でもリポジトリでまとまる（re
   assert.equal(by['B@dev-alqa'], 'Naturalclar/sai', '古い行でも remote から補う')
   assert.equal(by['C@main'], 'Naturalclar/kanban')
   assert.equal(by['D@main'], 'Naturalclar/sai', '同じ worktree 名でも別リポジトリ')
-  assert.equal(by['E@local-only'], 'local-only', 'remote が無ければ repo のまま')
+  assert.equal(by['E@local-only'], '', 'remote も project も無ければ空（サーバが cwd から埋める。#182）')
 
   const ids = (list: typeof sessions) => new Set(list.map((s) => s.id))
   assert.deepEqual(ids(filterSessions(sessions, { project: 'Naturalclar/sai' })), new Set(['A@dev-min', 'B@dev-alqa', 'D@main']))
   assert.deepEqual(ids(filterSessions(sessions, { project: 'Naturalclar/sai', repo: 'dev-min' })), new Set(['A@dev-min']), 'worktree でさらに絞れる')
-  assert.deepEqual(facets(sessions).projects, ['Naturalclar/kanban', 'Naturalclar/sai', 'local-only'])
+  assert.deepEqual(facets(sessions).projects, ['Naturalclar/kanban', 'Naturalclar/sai'], '分からないものは候補に出さない')
   assert.deepEqual(facets(sessions).repos, ['dev-alqa', 'dev-min', 'local-only', 'main'])
 })
 

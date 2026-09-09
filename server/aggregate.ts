@@ -78,7 +78,8 @@ export function aggregate(rows: FeedRow[]): SessionSummary[] {
     const last = items[items.length - 1]!
     const repos = orderedUnique(items.map((r) => r.repo ?? ''))
     // どのリポジトリか。古い行には project が無いので remote から補う（shared/project.ts）
-    const projects = orderedUnique(items.map(rowProject))
+    // 分からない行は空なので混ぜない（worktree 名には落とさない。#182）。空のままならサーバが cwd から埋める
+    const projects = orderedUnique(items.map(rowProject)).filter(Boolean)
     const remotes = orderedUnique(items.map((r) => (r.remote ?? '').trim())).filter(Boolean)
     const branches = orderedUnique(items.map((r) => r.branch ?? ''))
     const agents = orderedUnique(items.map((r) => (r.agent ?? 'unknown') as Agent))
@@ -107,7 +108,7 @@ export function aggregate(rows: FeedRow[]): SessionSummary[] {
       repo: repos[repos.length - 1] ?? '',
       repos: repos.filter(Boolean),
       project: projects[projects.length - 1] ?? '',
-      projects: projects.filter(Boolean),
+      projects,
       remote: remotes[remotes.length - 1] ?? '',
       branch: branches[branches.length - 1] ?? '',
       branches: branches.filter(Boolean),

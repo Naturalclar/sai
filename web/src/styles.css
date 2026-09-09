@@ -404,6 +404,8 @@
   .mention li .why { font-size: 11px; color: var(--synth); white-space: nowrap; }
   /* スキルの候補（`/`）。名前は等幅、プロジェクト側は印を付ける */
   .mention.skills li b { font-family: var(--mono); flex: none; }
+  .mention.emoji-list li b { font-family: var(--mono); flex: none; color: var(--muted); font-weight: 400; }
+  .mention.emoji-list li .char { flex: none; font-size: 17px; line-height: 1.2; width: 1.4em; text-align: center; }
   .mention.skills li .tag { flex: none; margin-left: 0; }
   .mention li .icon, .reply .target .icon { flex: none; line-height: 1; }
   /* どこで回すかの短い注意。入力欄（バブル）の上に 1 行 */

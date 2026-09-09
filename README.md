@@ -166,6 +166,71 @@ pnpm test && pnpm test:feed && pnpm lint && pnpm typecheck
 
 同じ一式（＋ `pnpm build`）を GitHub Actions でも回す（`.github/workflows/ci.yml`）。`main` への push と PR が対象で、Node は 22 系の最新、Python は 3.9 と最新の両方。
 
+### 4. 別のマシンの分も見る（任意）
+
+1 台で使うなら要らない。**複数のマシンで回している分を 1 つの画面で眺めたい**ときだけ設定する（[#24](https://github.com/Naturalclar/sai/issues/24)）。SAI 自身は他のマシンに通信しない（「SAI は外に出さない」は変わらない）。集めるのは**外の道具（rsync / 同期フォルダ）の仕事**で、SAI は置き場にあるファイルを読むだけ。
+
+**まず各マシンで `AGENT_FEED_HOST` を設定する。** フックやプラグインの向け先は今までどおり（そのマシンの checkout の `record.py`）で、環境変数を 1 つ足すだけ。**シェルの設定に置くのが確実**で、そこから起動する Claude / Codex / OpenCode のどれもが `record.py` に渡す:
+
+```sh
+# ~/.zshrc など
+export AGENT_FEED_HOST=mini
+```
+
+Claude だけなら `settings.json` の `env` でもよい（`notify` はシェルを通らないので **Codex には効かない**。OpenCode のプラグインは OpenCode のプロセスの環境を継ぐ）:
+
+```json
+{
+  "env": { "SAI_HOME": "/path/to/sai", "AGENT_FEED_HOST": "mini" }
+}
+```
+
+これで行に `host` が載り、書き込み先が `~/.agent-feed/YYYY-MM-DD.mini.jsonl` に分かれる（設定しないと今までどおり `YYYY-MM-DD.jsonl`）。**マシンごとに違う短い名前**にする。
+
+**画面を開くマシンでは、サーバにも同じ名前を渡す。**
+
+```sh
+SAI_HOST=mac pnpm start        # そのマシンの AGENT_FEED_HOST と同じ名前
+```
+
+記録側（`AGENT_FEED_HOST`）とサーバ側（`SAI_HOST`）は別の変数で、**片方だけ設定するとずれる**。ずれると SAI は自分のセッションを「別のマシン」と見なし、**自分の返信の口まで消える**（何も設定しなければ両方 `hostname` を見るので揃う）。
+
+#### 集め方 1: rsync（勧める方）
+
+見る側のマシンで、記録側から `.jsonl` を**片方向に**引いてくる。片方向なので書き込みがぶつからない。
+
+```sh
+rsync -a --include='????-??-??.*.jsonl' --exclude='*' mini:~/.agent-feed/ ~/.agent-feed/
+```
+
+**`--include` をこの形にするのは大事**（`'*.jsonl'` にしない）。`????-??-??.*.jsonl` は「日付 + host」のファイルだけに当たるので:
+
+- 相手の `digest.jsonl`（一言のキャッシュ）で**自分のを上書きしない**
+- 相手が `AGENT_FEED_HOST` を設定し忘れて `YYYY-MM-DD.jsonl` に書いていても、**自分の同名のファイルを潰さない**（代わりに何も来ないので、行が増えなければまずここを疑う）
+- `session-meta.json`・`session-icons/`・`attachments/` も持ってこない（表示名やアイコンは見る側のものが正）
+
+`--delete` は付けない（相手で消えても手元には残る）。rsync は既定でテンポラリに書いてから rename するので、転送中の半端なファイルが SAI に見えることはない。
+
+1 分ごとに回すなら cron:
+
+```
+* * * * * /usr/bin/rsync -a --include='????-??-??.*.jsonl' --exclude='*' mini:~/.agent-feed/ ~/.agent-feed/ >/dev/null 2>&1
+```
+
+**tailnet 越しなら Tailscale SSH**（相手で `tailscale up --ssh`、ACL で許可）にしておくと鍵を配らなくてよい。相手側に `rsync` が要る。
+
+#### 集め方 2: 同期フォルダ（iCloud Drive / Syncthing）
+
+両方のマシンの `AGENT_FEED_DIR` を同じ同期フォルダに向ける。日付ファイルがマシンごとに分かれているので、追記がぶつかって競合コピーができることはない。
+
+ただし **`session-meta.json` / `session-icons/` / `digest.jsonl` も同じフォルダに入る**（表示名・アイコン・一言はマシンごとではない）。これらは同時に書くと競合するので、**画面を開くのが 1 台のときだけ**にする。同期の途中で末尾が切れた行は SAI が落とすので、次のポーリングで揃う。
+
+#### そのあと
+
+- 一覧・フィード・チャット見出しに `@mini` の印が付き、**別のマシンのセッションには返信の口が出ない**（CLI もその履歴もあちら側にあるので、ここで再開しても続きにならない）。サイドバーに「マシン」の絞り込みが増える
+- 自分のセッションにまで `@` の印が付いて返信できないなら、`AGENT_FEED_HOST` と `SAI_HOST` がずれている（上）
+- **`record.py` は両方のマシンで更新する。** 行の形の版（`v`）はマシンごとに違いうるので、古い方の行が一番新しいと画面に「record.py が古い」が出る
+
 ## もっと詳しく
 
 使い方の先（何がどう記録され、画面がどう出し、API が何を返すか）は `docs/` にある。
@@ -175,7 +240,7 @@ pnpm test && pnpm test:feed && pnpm lint && pnpm typecheck
 | [docs/screen.md](docs/screen.md) | 画面の見え方、チャット、返信（tmux への打ち込み / 別プロセス）、許可・質問、差分、使用量、一言コメント |
 | [docs/api.md](docs/api.md) | エンドポイントの一覧と、集計・返信の実行の中身 |
 | [docs/data.md](docs/data.md) | JSONL の1行の形、表示名とアイコン、アーカイブ |
-| [docs/design-notes.md](docs/design-notes.md) | 先に確かめた前提（セッション終了は掴めない、Codex のセッションID、待ちの行、思考の量） |
+| [docs/design-notes.md](docs/design-notes.md) | 先に確かめた前提（セッション終了は掴めない、Codex のセッションID、待ちの行、思考の量、リモートの行は見るだけ） |
 | [docs/local-llm.md](docs/local-llm.md) | ローカル LLM（Ollama / LM Studio）で使う。CLI の向き先の変え方と、返信の経路ごとの違い |
 | [docs/tailnet.md](docs/tailnet.md) | tailnet（Tailscale Serve）に出すときの手順と認証 |
 

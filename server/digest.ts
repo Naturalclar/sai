@@ -19,6 +19,13 @@ export const DEFAULT_DIGEST_MODEL = 'haiku'
 export const DEFAULT_OPENAI_URL = 'http://127.0.0.1:11434/v1'
 /** 1 件あたりの上限。これを超えたら失敗扱い（次の行へ） */
 export const DIGEST_TIMEOUT_MS = 90_000
+/**
+ * 「起動したあと」の境目を、起動時刻より少しだけ前に置く幅。
+ * 行の `ts` はフックの中で `record.py` が採った時刻で、その行が JSONL に書かれるのは（トランスクリプトを読む分だけ）
+ * 数百ミリ秒〜数秒あと。ちょうどその間にサーバが起動すると、起動後に届いた行なのに `ts` は起動より古い。
+ * 取りこぼすより 1 件多く作る方が害が小さいので、この幅だけ遡って対象にする
+ */
+export const DIGEST_SINCE_SLACK_MS = 5_000
 
 export interface DigestEntry {
   /** 行を一意に指す。`<entityId>|<ts>` */
@@ -227,6 +234,11 @@ export interface DigesterOptions {
   ownDir?: string
   /** その行の性格。作る直前に行ごとに引く（セッションのメタに persona があればそれ、無ければ全体の既定。変えたら以後の行から効く） */
   persona: (row: FeedRow) => Promise<PersonaId>
+  /**
+   * これより古い `ts` の行は作らない（= サーバが起動した時刻。ISO）。既定は「いま」＝ Digester を作った時刻。
+   * テストから固定値を渡すためにある。読めない値なら「いま」に落とす
+   */
+  since?: string
   /** 失敗の記録先（無ければ捨てる） */
   logPath?: string
 }
@@ -240,8 +252,11 @@ export class Digester {
   private readonly persona: (row: FeedRow) => Promise<PersonaId>
   private readonly logPath: string | undefined
   private readonly ownDir: string | undefined
-  /** 起動時に既にあった行。作らない（過去の行の一括生成はしない） */
-  private baseline: Set<string> | null = null
+  /**
+   * この時刻より古い行は作らない（ミリ秒）。サーバが起動した時刻 - DIGEST_SINCE_SLACK_MS。
+   * 「起動時に見えていた行の集合」ではなく時刻で切るので、あとから `days` が広がって古い行が見えても積まれない（#159）
+   */
+  private readonly sinceMs: number
   private queue: { key: string; row: FeedRow }[] = []
   private queued = new Set<string>()
   private pumping = false
@@ -255,6 +270,17 @@ export class Digester {
     this.persona = opts.persona
     this.logPath = opts.logPath
     this.ownDir = opts.ownDir
+    const since = opts.since === undefined ? Date.now() : Date.parse(opts.since)
+    this.sinceMs = (Number.isNaN(since) ? Date.now() : since) - DIGEST_SINCE_SLACK_MS
+  }
+
+  /**
+   * サーバが起動する前に記録された行か。`ts` は `+09:00`、起動時刻は `Z` と書式が違うので、
+   * 文字列ではなくミリ秒で比べる。読めない `ts` は「古い」側に倒す（作らない）
+   */
+  private isPast(row: FeedRow): boolean {
+    const ms = Date.parse(row.ts ?? '')
+    return Number.isNaN(ms) || ms < this.sinceMs
   }
 
   /** 対象の行か。ターン完了で本文があり、自分が回した子（cwd がフィードのディレクトリ）ではない */
@@ -283,20 +309,18 @@ export class Digester {
   }
 
   /**
-   * いま見えている行を渡す。最初の呼び出しはその時点の行を「既にあった行」として覚えるだけ。
-   * 以後、新しく現れた対象の行を新しい順に列に積む。3 秒ごとの応答のついでに呼ばれる前提で、軽い
+   * いま見えている行を渡す。サーバが起動したあとの `ts` を持つ対象の行だけを、新しい順に列に積む。
+   * 3 秒ごとの応答のついでに呼ばれる前提で、軽い。
+   * 渡される行は呼び出し側（app.ts の scanDigest）の `days` の窓ぶんなので、窓が広がると古い行も入ってくる。
+   * 基準が時刻なのでそれらは積まれない（行の集合を基準にすると、窓が広がった瞬間に過去が全部「新しい行」になる。#159）
    */
   scan(rows: FeedRow[]): void {
     if (!this.enabled) return
-    if (this.baseline === null) {
-      this.baseline = new Set(rows.filter((r) => this.wants(r)).map(digestKey))
-      return
-    }
     const fresh: { key: string; row: FeedRow }[] = []
     for (const row of rows) {
-      if (!this.wants(row)) continue
+      if (!this.wants(row) || this.isPast(row)) continue
       const key = digestKey(row)
-      if (this.baseline.has(key) || this.queued.has(key) || this.store.get(key)) continue
+      if (this.queued.has(key) || this.store.get(key)) continue
       fresh.push({ key, row })
     }
     if (fresh.length === 0) return

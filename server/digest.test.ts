@@ -65,19 +65,20 @@ test('DigestStore: 無ければ空、append で残り、読み直せる。壊れ
   }
 })
 
-test('Digester: 起動時にあった行は作らず、新しく現れた行だけ新しい順に作る。失敗した行は無いまま。性格は作る直前の値', async () => {
+test('Digester: 起動より前の行は作らず、あとに現れた行だけ新しい順に作る。失敗した行は無いまま。性格は作る直前の値', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'sai-digest-'))
   try {
     const store = new DigestStore(join(dir, 'digest.jsonl'))
     await store.load()
     const fake = new FakeSummarizer()
     let persona: PersonaId = 'ISTJ'
-    const d = new Digester(store, fake, { enabled: true, model: 'haiku', persona: async () => persona, logPath: join(dir, 'digest.log') })
+    // 起動時刻は at(2)。at(0) / at(1) の行は起動より前なので作らない
+    const d = new Digester(store, fake, { enabled: true, model: 'haiku', since: at(2).toISOString(), persona: async () => persona, logPath: join(dir, 'digest.log') })
     const old1 = row(at(0), 'S1', { repo: 'r', text: '古い1' })
     const old2 = row(at(1), 'S1', { repo: 'r', text: '古い2' })
-    d.scan([old1, old2]) // baseline
+    d.scan([old1, old2])
     await d.drain()
-    assert.equal(fake.prompts.length, 0, '起動時にあった行は作らない')
+    assert.equal(fake.prompts.length, 0, '起動より前の行は作らない')
 
     const n1 = row(at(2), 'S1', { repo: 'r', text: '新しい1' })
     const n2 = row(at(3), 'S2', { repo: 'r', text: '新しい2' })
@@ -107,7 +108,70 @@ test('Digester: 起動時にあった行は作らず、新しく現れた行だ�
     await d.drain()
     assert.equal(store.get(digestKey(n3))?.persona, 'ENFP')
     assert.equal(store.get(digestKey(n1))?.persona, 'ISTJ', '過去の一言は変わらない')
-    assert.equal(store.get(digestKey(old1)), undefined, '起動時にあった行は作らない')
+    assert.equal(store.get(digestKey(old1)), undefined, '起動より前の行は作らない')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+/** 一言を作らせずに列だけ見たいとき用。summarize は返さないので pump が 1 件目で止まる */
+class BlockedSummarizer implements Summarizer {
+  prompts: string[] = []
+  summarize(prompt: string): Promise<string> {
+    this.prompts.push(prompt)
+    return new Promise<string>(() => {}) // 解決しない
+  }
+}
+
+test('Digester: 基準は起動時刻。あとから days が広がって古い行が見えても積まない（#159）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-digest-'))
+  try {
+    const store = new DigestStore(join(dir, 'digest.jsonl'))
+    const fake = new BlockedSummarizer()
+    // 起動は at(10)。at(0) / at(5) の行は起動より前
+    const d = new Digester(store, fake, { enabled: true, model: 'haiku', since: at(10).toISOString(), persona: async () => 'none' })
+    const old1 = row(at(0), 'S1', { repo: 'r', text: '起動前1' })
+    const old2 = row(at(5), 'S1', { repo: 'r', text: '起動前2' })
+    const fresh1 = row(at(11), 'S2', { repo: 'r', text: '起動後1' })
+    const fresh2 = row(at(12), 'S2', { repo: 'r', text: '起動後2' })
+
+    // 起動直後の 1 回目。まだ対象の行は届いていない
+    d.scan([])
+    assert.equal(d.pending(), 0)
+
+    // 狭い窓（?days=1）で叩かれ、今日の行だけが見える
+    d.scan([fresh1])
+    assert.equal(d.pending(), 1)
+
+    // そのあとブラウザが既定の広い窓（?days=7）でポーリングし、過去の行が一気に見える。ここが #159 の再現:
+    // 基準が「最初の scan で見えた行の集合」だと、この瞬間に古い行が全部「新しく現れた行」になって積まれる
+    d.scan([old1, old2, fresh1, fresh2])
+    assert.equal(d.pending(), 2, '窓が広がっても、積まれるのは起動後の 2 件だけ')
+
+    // 同じ行を何度渡しても増えない
+    d.scan([old1, old2, fresh1, fresh2])
+    assert.equal(d.pending(), 2)
+
+    // pump は性格を引くところで一度 await するので、1 tick 待ってから何を渡したか見る
+    await new Promise((r) => setTimeout(r, 5))
+    assert.deepEqual(fake.prompts.map((p) => p.split('\n---\n')[1]), ['起動後1'], '1 件目（一番新しい起動後の行）から作る')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('Digester: since を渡さなければ「いま」が基準。過去の行は窓に入っていても作らない', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-digest-'))
+  try {
+    const store = new DigestStore(join(dir, 'digest.jsonl'))
+    const fake = new FakeSummarizer()
+    const d = new Digester(store, fake, { enabled: true, model: 'haiku', persona: async () => 'none' })
+    // at(n) は 2026-09-04 で、実行時刻より過去
+    d.scan([row(at(0), 'S1', { repo: 'r', text: '過去の行' })])
+    // 数秒の緩み（DIGEST_SINCE_SLACK_MS）の内側なので、いま書かれた行は拾う
+    d.scan([row(new Date(), 'S2', { repo: 'r', text: 'いまの行' })])
+    await d.drain()
+    assert.deepEqual(fake.prompts.map((p) => p.split('\n---\n')[1]), ['いまの行'])
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -118,8 +182,7 @@ test('Digester: 自分が回した子（cwd がフィードのディレクトリ
   try {
     const store = new DigestStore(join(dir, 'digest.jsonl'))
     const fake = new FakeSummarizer()
-    const d = new Digester(store, fake, { enabled: true, model: 'haiku', persona: async () => 'none', ownDir: '/home/u/.agent-feed' })
-    d.scan([])
+    const d = new Digester(store, fake, { enabled: true, model: 'haiku', since: at(0).toISOString(), persona: async () => 'none', ownDir: '/home/u/.agent-feed' })
     const own = row(at(0), 'child', { cwd: '/home/u/.agent-feed', text: '一言です' })
     const under = row(at(1), 'child2', { cwd: '/home/u/.agent-feed/sub', text: '一言です' })
     const real = row(at(2), 'S1', { cwd: '/home/u/.agent-feed-other', text: '本物' })
@@ -136,13 +199,13 @@ test('Digester: 無効なら何もしない', async () => {
   try {
     const store = new DigestStore(join(dir, 'digest.jsonl'))
     const fake = new FakeSummarizer()
-    const d = new Digester(store, fake, { enabled: false, model: 'haiku', persona: async () => 'none' })
+    const d = new Digester(store, fake, { enabled: false, model: 'haiku', since: at(0).toISOString(), persona: async () => 'none' })
     d.scan([row(at(0), 'S1')])
     d.scan([row(at(0), 'S1'), row(at(1), 'S1')])
     await d.drain()
     assert.equal(fake.prompts.length, 0)
     assert.equal(d.enabled, false)
-    assert.equal(new Digester(store, null, { enabled: true, model: 'haiku', persona: async () => 'none' }).enabled, false)
+    assert.equal(new Digester(store, null, { enabled: true, model: 'haiku', since: at(0).toISOString(), persona: async () => 'none' }).enabled, false)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

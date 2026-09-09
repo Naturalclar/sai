@@ -25,13 +25,19 @@ const GRACE_MS = 1000
 
 export const ENDED_WITHOUT_ROW = '返信は終わったが記録が増えなかった（~/.agent-feed/reply.log を見る）'
 
-/** 端末の入力欄に打ちかけの文字があって送れなかった。人に「消して送る」かを聞く（#117） */
+/**
+ * 端末に打ち込めなくて送れなかった。人にどうするかを聞く（#117、#157）。
+ * typed: 打ちかけがある（「消して送る」か「別プロセスで送る」）。process: 消せなかった・ダイアログ中・入力欄が読めない（「別プロセスで送る」だけ）
+ */
 export interface ReplaceConfirm {
   id: string
+  kind: 'typed' | 'process'
   /** 送ろうとした本文 */
   text: string
-  /** 端末の入力欄に見えている文 */
+  /** 端末の入力欄に見えている文（typed のとき） */
   typed: string
+  /** 端末に打てない理由（process のとき。サーバの文） */
+  reason: string
 }
 
 /** send の結果。confirm のとき呼び出し側は本文を入力欄に戻す */
@@ -88,7 +94,7 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
     ...sent.filter((s) => !replying[s.id]).map((s) => ({ id: s.id, text: s.text, since: new Date(s.sentAt).toISOString() })),
   ]
 
-  const send = async (id: string, text: string, options: { replaceTyped?: boolean } = {}): Promise<SendOutcome> => {
+  const send = async (id: string, text: string, options: { replaceTyped?: boolean; via?: 'process' } = {}): Promise<SendOutcome> => {
     const entry: Sent = { id, text, rowsAtSend: countRows(id), sentAt: Date.now(), acceptedAt: null }
     setFailed(null)
     setConfirm(null)
@@ -100,14 +106,19 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
     } catch (err) {
       // 409（前の返信を処理中）もここ。次のポーリングでサーバの replying が付いて入力欄は閉じる
       setSent((list) => list.filter((s) => s !== entry))
-      // 端末の入力欄に打ちかけがあるだけなら失敗ではなく、消して送るかを聞く。
-      // ただし「消して送る」で送り直してなお残っているなら、同じ確認を出し直さず失敗として見せる（消せない端末）
-      if (err instanceof ApiError && err.code === 'terminal_typed') {
-        if (options.replaceTyped) {
-          setFailed({ id, message: `端末の打ちかけを消せなかった（まだ残っている: ${(err.typed ?? '').split('\n')[0]}）。端末側で消してから送ってください` })
-          return 'failed'
+      // 端末に打ち込めなかった（打ちかけ・ダイアログ中・入力欄が読めない）。失敗ではなく、どうするかを聞く。
+      // 打ちかけがあるだけなら「消して送る」も出す。「消して送る」で送り直してなお残っている（消せない端末）、
+      // ダイアログ中、入力欄不明なら「別プロセスで送る」だけ（#157。SAI から何も送れない、にしない）
+      if (err instanceof ApiError && err.canProcess) {
+        if (err.code === 'terminal_typed' && !options.replaceTyped) {
+          setConfirm({ id, kind: 'typed', text, typed: err.typed ?? '', reason: err.message })
+          return 'confirm'
         }
-        setConfirm({ id, text, typed: err.typed ?? '' })
+        const reason =
+          err.code === 'terminal_typed'
+            ? `端末の打ちかけを消せなかった（まだ残っている: ${(err.typed ?? '').split('\n')[0]}）`
+            : err.message
+        setConfirm({ id, kind: 'process', text, typed: err.typed ?? '', reason })
         return 'confirm'
       }
       setFailed({ id, message: err instanceof Error ? err.message : String(err) })
@@ -121,7 +132,13 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
     const { id, text } = confirm
     return send(id, text, { replaceTyped: true })
   }
+  /** 確認に「別プロセスで送る」と答えた。端末を見ずに -p で同じ本文を送る */
+  const confirmProcess = async (): Promise<SendOutcome> => {
+    if (!confirm) return 'failed'
+    const { id, text } = confirm
+    return send(id, text, { via: 'process' })
+  }
   const cancelConfirm = () => setConfirm(null)
 
-  return { pending, failed, send, confirm, confirmReplace, cancelConfirm }
+  return { pending, failed, send, confirm, confirmReplace, confirmProcess, cancelConfirm }
 }

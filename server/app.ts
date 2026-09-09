@@ -355,6 +355,7 @@ export function createApp(
     const text = typeof (body as ReplyRequest | null)?.text === 'string' ? (body as ReplyRequest).text.trim() : ''
     if (!text) return error(res, 400, 'text is required')
     const replaceTyped = (body as ReplyRequest).replace_typed === true
+    const forceProcess = (body as ReplyRequest).via === 'process'
 
     const { sessions } = await store.sessions(days)
     const session = sessions.find((s) => s.id === id)
@@ -377,7 +378,11 @@ export function createApp(
     // 端末（tmux）で開いていれば、そのペインに打ち込む。別プロセスを立てないので端末にも出て、トークンも少ない。
     // ペインが無い・別のプロセスなら -p にフォールバック。入力中・ダイアログ中なら 409（何も打ち込まない）
     const term = terminalOf(session)
-    if (term) {
+    if (term && forceProcess) {
+      // 端末に打ちかけが消せない・ダイアログ中などで、画面が「別プロセスで送る」を選んだ。端末には出ない
+      await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} 端末で開いているが別プロセスで回す（画面の指定 via: process）\n`).catch(() => {})
+    }
+    if (term && !forceProcess) {
       try {
         const { cleared } = await typeInto(terminal.tmux, terminal.ps, term, session.agent, text, { replaceTyped })
         if (cleared !== undefined) {
@@ -390,7 +395,8 @@ export function createApp(
       } catch (err) {
         if (err instanceof TerminalBusy) {
           // 画面は code で出し分ける。typed のときだけ「消して送る」の確認を出せる
-          const payload: ReplyError = { error: `端末に打ち込めない: ${err.message}`, code: `terminal_${err.kind}` }
+          // can_process: 端末に打てなくても via: process で送り直せる（画面が「別プロセスで送る」を出す）
+          const payload: ReplyError = { error: `端末に打ち込めない: ${err.message}`, code: `terminal_${err.kind}`, can_process: true }
           if (err.kind === 'typed') payload.typed = err.typed
           return json(res, payload, 409)
         }

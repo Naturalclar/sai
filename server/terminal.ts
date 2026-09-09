@@ -53,6 +53,8 @@ export interface PromptState {
   reason: string
   /** kind が typed のとき、入力欄に見えている文（1 行ぶん） */
   typed: string
+  /** スラッシュコマンドの候補メニューが開いている（`/` で始めると入力欄の下に並ぶ）。消す前に Escape で閉じる */
+  menu?: boolean
 }
 
 const DIALOG = /Enter to confirm|Esc to cancel|Press enter to continue/i
@@ -66,6 +68,12 @@ const PLACEHOLDER: Record<'claude' | 'codex', RegExp> = {
 const NOT_INPUT = /^\s*(⏵⏵|─|╰|╭|\? for shortcuts|\S+ (minimal|low|medium|high|xhigh) ·)/
 /** 打ちかけを消すために送る C-u の上限。1 回で 1 行しか消えないので行数ぶん要る */
 export const MAX_CLEAR_KEYS = 20
+/** C-u のあと画面が変わっていないとき、描き直しの遅れを疑って capture-pane をやり直す回数 */
+export const CLEAR_RECAPTURES = 3
+/** 区切り線（Claude Code は入力欄の上下に `──…` を引く）。入力欄はその直上の行 */
+const SEPARATOR = /^\s*─{3,}/
+/** スラッシュコマンドの候補メニューの行（`❯ /issue-triage   説明` / `  /clear   説明`）。入力欄の下に並ぶ */
+const MENU_ROW = /^\s*(?:❯[\s\u00a0]*)?\/[\w:-]+(?:\s{2,}\S.*)?$/
 
 /**
  * ペインの画面（capture-pane の末尾）から、いま打ち込んでよいかを決める。
@@ -87,21 +95,45 @@ export function promptState(screen: string, agent: Agent): PromptState {
   // 入力欄の行。Claude Code は `❯` の後ろが NBSP（\u00a0）。ダイアログの選択肢（`  ❯ 1. Yes`）は上の検査で先に弾いている
   const markers = agent === 'codex' ? /^\s*[›>][\s\u00a0]?(.*)$/ : /^\s*(?:│\s*)?❯[\s\u00a0]?(.*)$/
   const placeholder = agent === 'codex' ? PLACEHOLDER.codex : PLACEHOLDER.claude
-  for (let i = lines.length - 1; i >= 0 && i >= lines.length - 25; i--) {
-    const m = lines[i]!.match(markers)
-    if (!m) continue
+  const from = Math.max(0, lines.length - 25)
+  // Claude Code は入力欄の直下に区切り線を引く。スラッシュコマンドの候補メニュー（`❯ /issue-triage  説明`）の
+  // 選択行にも ❯ が付くので、「一番下の ❯」ではなく「入力欄（区切り線の直上）」を優先して探す。
+  // 区切り線が無い画面（古い版、Codex）は今までどおり一番下の ❯ / ›
+  let at = -1
+  const hasSeparator = agent !== 'codex' && lines.slice(from).some((l) => SEPARATOR.test(l))
+  for (let i = lines.length - 1; i >= from; i--) {
+    if (!markers.test(lines[i]!)) continue
+    if (!hasSeparator) {
+      at = i
+      break
+    }
+    // 直下（複数行の打ちかけならその続きの下）が区切り線なら入力欄
+    let j = i + 1
+    while (j < lines.length && /^ {2}\S/.test(lines[j]!) && !NOT_INPUT.test(lines[j]!)) j++
+    if (j < lines.length && SEPARATOR.test(lines[j]!)) {
+      at = i
+      break
+    }
+    if (at < 0) at = i // 区切り線の直上に見つからなければ一番下の ❯ に落ちる
+  }
+  if (at >= 0) {
+    const m = lines[at]!.match(markers)!
     const first = (m[1] ?? '').trim()
     if (!first || placeholder.test(first)) return { idle: true, kind: 'idle', reason: '', typed: '' }
     if (/^\d+\.\s/.test(first)) return dialog
     // 複数行の打ちかけは、続きの行が 2 文字下げで並ぶ（Claude Code も Codex も同じ）。区切り線や状態行の手前まで
     const rest: string[] = []
-    for (let j = i + 1; j < lines.length; j++) {
+    let j = at + 1
+    for (; j < lines.length; j++) {
       const l = lines[j]!
       if (!/^ {2}\S/.test(l) || NOT_INPUT.test(l)) break
       rest.push(l.trim())
     }
     const typed = [first, ...rest].join('\n')
-    return { idle: false, kind: 'typed', reason: `端末の入力欄に打ちかけの文字がある: ${first.slice(0, 40)}`, typed }
+    const state: PromptState = { idle: false, kind: 'typed', reason: `端末の入力欄に打ちかけの文字がある: ${first.slice(0, 40)}`, typed }
+    // `/` で始めていて、入力欄の下（区切り線の下）に候補の行が並んでいればメニューが開いている
+    if (first.startsWith('/') && lines.slice(j).some((l) => MENU_ROW.test(l))) state.menu = true
+    return state
   }
   return { idle: false, kind: 'unknown', reason: '端末の入力欄が見つからない（セッションが動いていない、または画面が違う）', typed: '' }
 }
@@ -191,19 +223,34 @@ export async function typeInto(tmux: Tmux, ps: PsFn, terminal: Terminal, agent: 
   }
   if (!panePid) throw new TerminalGone(`ペイン ${terminal.pane} の pid が取れない`)
   if (!isDescendant(terminal.pid, panePid, parsePs(await ps()))) throw new TerminalGone(`ペイン ${terminal.pane} で動いているのは別のプロセス`)
-  let state = promptState(await tmux.run(['capture-pane', '-p', '-t', terminal.pane]), agent)
+  const capture = async () => promptState(await tmux.run(['capture-pane', '-p', '-t', terminal.pane]), agent)
+  let state = await capture()
   const result: TypeResult = {}
   if (state.kind === 'typed' && options.replaceTyped) {
     const cleared = state.typed
     const settle = options.settleMs ?? SETTLE_MS
+    const wait = () => (settle > 0 ? new Promise((r) => setTimeout(r, settle)) : Promise.resolve())
+    // スラッシュコマンドの候補メニューが開いていると C-u がメニューに食われることがあるので、先に Escape で閉じる
+    if (state.menu) {
+      await tmux.run(['send-keys', '-t', terminal.pane, 'Escape'])
+      await wait()
+      state = await capture()
+    }
     for (let n = 0; n < MAX_CLEAR_KEYS && state.kind === 'typed'; n++) {
       const before = state.typed
       // C-u: いまの行を消す。BSpace: 空になった行の改行を消して前の行末へ（1 行なら何も起きない）
       await tmux.run(['send-keys', '-t', terminal.pane, 'C-u', 'BSpace'])
-      if (settle > 0) await new Promise((r) => setTimeout(r, settle))
-      state = promptState(await tmux.run(['capture-pane', '-p', '-t', terminal.pane]), agent)
-      // 画面が変わらない = このキーでは消せない端末。繰り返しても同じなので止める
-      if (state.kind === 'typed' && state.typed === before) break
+      await wait()
+      state = await capture()
+      // 画面が変わらないときは描き直しの遅れかもしれないので、少し待って何回か見直す。
+      // それでも同じなら、このキーでは消せない端末。繰り返しても同じなので止める
+      let same = state.kind === 'typed' && state.typed === before
+      for (let k = 0; same && k < CLEAR_RECAPTURES; k++) {
+        await wait()
+        state = await capture()
+        same = state.kind === 'typed' && state.typed === before
+      }
+      if (same) break
     }
     if (state.idle) result.cleared = cleared
   }

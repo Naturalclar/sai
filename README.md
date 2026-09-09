@@ -120,7 +120,7 @@ pnpm は 12 系（設定は `pnpm-workspace.yaml`）、Node は 22.18 以上が�
 
 画面を触るときはサーバを立てたまま `pnpm dev`。Vite が `/api` を `127.0.0.1:8787` に流す。
 
-`main` を取り込んだときは、サーバを止めずに別のターミナルで `git pull && pnpm build` するだけでいい。 Claude Code からなら `/sync-main`（`.claude/skills/sync-main/SKILL.md`）が、main worktree の fetch → ff-only merge → `pnpm install` → `pnpm build` → サーバが追従したかの確認までをやる（別の worktree から呼んでも main worktree だけを触る。起動はしない）。`pnpm build` を忘れて `web/dist/` が `web/src` / `shared` より古いままだと、画面のヘッダの下に「画面のビルドが古い」と出る（サーバが mtime を比べて `build_stale` で伝える。`pnpm dev` では出ない）。サーバは `web/dist/` を毎回ディスクから読み、`/api/*` の応答に `X-SAI-Build`（`dist/index.html` の更新時刻）を付けるので、開いているブラウザは 3 秒以内に自分でリロードする。`server/` や `shared/` が変わったときの再起動まで任せたければ `pnpm start:watch`（`node --watch`）で立てる。
+`main` を取り込んだときは、サーバを止めずに別のターミナルで `git pull && pnpm build` するだけでいい。 Claude Code からなら `/sync-main`（`.claude/skills/sync-main/SKILL.md`）が、main worktree の fetch → ff-only merge → `pnpm install` → `pnpm build` → サーバが追従したかの確認までをやる（別の worktree から呼んでも main worktree だけを触る）。サーバが古いコードのままなら、動いているペインで一言つき（既定はローカルの `qwen3:8b`）に立て直すところまでやる。止まっているサーバは起動しない。`pnpm build` を忘れて `web/dist/` が `web/src` / `shared` より古いままだと、画面のヘッダの下に「画面のビルドが古い」と出る（サーバが mtime を比べて `build_stale` で伝える。`pnpm dev` では出ない）。サーバは `web/dist/` を毎回ディスクから読み、`/api/*` の応答に `X-SAI-Build`（`dist/index.html` の更新時刻）を付けるので、開いているブラウザは 3 秒以内に自分でリロードする。`server/` や `shared/` が変わったときの再起動まで任せたければ `pnpm start:watch`（`node --watch`）で立てる。
 
 ```
 pnpm lint        # oxlint（web/src, server, shared）

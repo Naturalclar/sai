@@ -157,6 +157,7 @@ pnpm test && pnpm test:feed && pnpm lint && pnpm typecheck
 | [docs/api.md](docs/api.md) | エンドポイントの一覧と、集計・返信の実行の中身 |
 | [docs/data.md](docs/data.md) | JSONL の1行の形、表示名とアイコン、アーカイブ |
 | [docs/design-notes.md](docs/design-notes.md) | 先に確かめた前提（セッション終了は掴めない、Codex のセッションID、待ちの行、思考の量） |
+| [docs/local-llm.md](docs/local-llm.md) | ローカル LLM（Ollama / LM Studio）で使う。CLI の向き先の変え方と、返信の経路ごとの違い |
 | [docs/tailnet.md](docs/tailnet.md) | tailnet（Tailscale Serve）に出すときの手順と認証 |
 
 ## 守ること

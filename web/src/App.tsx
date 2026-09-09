@@ -11,6 +11,7 @@ import { hm } from './format'
 import { MenuMark } from './MenuMark'
 import { GitHubMark } from './GitHubMark'
 import { UserMenu } from './UserMenu'
+import { UsageChip } from './UsageChip'
 import { api, type SessionFilters, type SettingsResponse } from './api'
 import { isTypingTarget, navAction, navTarget, type NavTarget } from './sessionNav'
 import { PersonaSelect } from './PersonaSelect'
@@ -219,6 +220,8 @@ export function App() {
         <div className={`status${status.error ? ' error' : ''}`}>
           {status.error ? `取得失敗: ${status.error}` : status.at ? `更新 ${hm(status.at.toISOString())}` : ''}
         </div>
+        {/* 各エージェントの使用量。取れなければ何も出さない（3秒のポーリングには乗せない） */}
+        <UsageChip />
         {import.meta.env.REPO_URL && (
           <a className="github" href={import.meta.env.REPO_URL} target="_blank" rel="noopener noreferrer" aria-label="GitHub リポジトリ" title="GitHub リポジトリ">
             <GitHubMark />

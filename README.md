@@ -155,7 +155,7 @@ pnpm test && pnpm test:feed && pnpm lint && pnpm typecheck
 
 | | |
 | --- | --- |
-| [docs/screen.md](docs/screen.md) | 画面の見え方、チャット、返信（tmux への打ち込み / 別プロセス）、許可・質問、差分、一言コメント |
+| [docs/screen.md](docs/screen.md) | 画面の見え方、チャット、返信（tmux への打ち込み / 別プロセス）、許可・質問、差分、使用量、一言コメント |
 | [docs/api.md](docs/api.md) | エンドポイントの一覧と、集計・返信の実行の中身 |
 | [docs/data.md](docs/data.md) | JSONL の1行の形、表示名とアイコン、アーカイブ |
 | [docs/design-notes.md](docs/design-notes.md) | 先に確かめた前提（セッション終了は掴めない、Codex のセッションID、待ちの行、思考の量） |

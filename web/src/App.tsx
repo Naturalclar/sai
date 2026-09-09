@@ -46,6 +46,7 @@ interface UiState {
 const DEFAULT_UI: UiState = { sidebar: 'open' }
 /** ⌘K の候補がまだ何も無いとき（一覧の取得前）。毎回作り直すと再描画が増える */
 const EMPTY_SESSIONS: never[] = []
+const EMPTY_PROJECTS: never[] = []
 
 /**
  * 1画面。左のサイドバーにセッション一覧、右にチャット（フィード or 選んだセッション）。
@@ -245,7 +246,17 @@ export function App() {
           {route.name === 'session' ? (
             <SessionView id={route.id} onStatus={onStatus} onOpenSidebar={openSidebar} onLeaveToSidebar={focusSidebar} onToggleDiff={toggleDiff} diffOpen={diffOpen !== null} linear={linear} settings={settings} />
           ) : (
-            <FeedView project={filters.project} sessions={list.data?.sessions} onStatus={onStatus} onOpenSidebar={openSidebar} onLeaveToSidebar={focusSidebar} linear={linear} settings={settings} />
+            <FeedView
+              project={filters.project}
+              projects={list.data?.filters.projects ?? EMPTY_PROJECTS}
+              onProject={(project) => setFilters({ project })}
+              sessions={list.data?.sessions}
+              onStatus={onStatus}
+              onOpenSidebar={openSidebar}
+              onLeaveToSidebar={focusSidebar}
+              linear={linear}
+              settings={settings}
+            />
           )}
         </div>
         {/* 広い画面はチャットの右にもう1枚。狭い画面は今までどおりモーダルで重ねる */}

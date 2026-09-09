@@ -4,10 +4,51 @@
 // 回したターンが完了すれば既存のフック（Stop / notify）が動いて JSONL に1行増えるので、
 // 結果は今のポーリングで画面に流れてくる。返信専用の記録経路は作らない。
 import { spawn } from 'node:child_process'
-import { closeSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync, writeSync } from 'node:fs'
+import { closeSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, writeFileSync, writeSync } from 'node:fs'
 import { dirname, resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { Agent, Replying, ReplyingMap } from '../shared/types.ts'
+import type { Agent, Replying, ReplyFailure, ReplyingMap } from '../shared/types.ts'
+
+/** 失敗した返信を画面に見せておく時間。ポーリングは3秒なので、これだけあれば拾える */
+export const FAILED_TTL_MS = 2 * 60_000
+/** reply.log から拾う末尾の長さ */
+const TAIL_BYTES = 4096
+const TAIL_CHARS = 300
+const TAIL_LINES = 3
+
+/**
+ * reply.log の offset 以降（= このターンの子プロセスが書いた分）の末尾を数行。
+ * 大きく育つファイルなので末尾だけ読む。読めなければ空
+ */
+export function tailFrom(path: string, offset: number): string {
+  let fd: number | null = null
+  try {
+    fd = openSync(path, 'r')
+    const { size } = fstatSync(fd)
+    const start = Math.max(offset, size - TAIL_BYTES)
+    const len = size - start
+    if (len <= 0) return ''
+    const buf = Buffer.alloc(len)
+    readSync(fd, buf, 0, len, start)
+    const lines = buf
+      .toString('utf-8')
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean)
+    const text = lines.slice(-TAIL_LINES).join(' / ')
+    return text.length <= TAIL_CHARS ? text : `${text.slice(0, TAIL_CHARS)}…`
+  } catch {
+    return ''
+  } finally {
+    if (fd !== null) {
+      try {
+        closeSync(fd)
+      } catch {
+        // 閉じ損ねても実害なし
+      }
+    }
+  }
+}
 
 /** `--permission-prompt-tool` に渡す名前。`mcp__<サーバ名>__<ツール名>` で、サーバ名は --mcp-config のキー */
 export const APPROVE_TOOL = 'mcp__sai__approve'
@@ -136,8 +177,20 @@ export interface Runner {
 }
 
 /** replying.json の1件。画面に出す Replying に、生存確認用の pid を足したもの。pid 0 は spawn 待ち（自分の子で、まだ pid が無い） */
+/**
+ * 終了の仕方から「失敗」を作る。0 で終わったなら null（失敗ではない）。
+ * シグナルで死んだときはコードが無いので負の値（-15 = SIGTERM）にして区別できるようにする
+ */
+export function failureOf(code: number | null | undefined, signal: NodeJS.Signals | null | undefined, logPath: string | null, offset: number): ReplyFailure | null {
+  if (signal) return { code: -1, tail: `シグナル ${signal} で終了${logPath ? `。${tailFrom(logPath, offset)}` : ''}`.trim() }
+  if (code === 0 || code === null || code === undefined) return null
+  return { code, tail: logPath ? tailFrom(logPath, offset) : '' }
+}
+
 interface Persisted extends Replying {
   pid: number
+  /** 非0で終わった時刻（ミリ秒）。FAILED_TTL_MS を過ぎたら捨てる。失敗の分は replying.json に書かない */
+  failedAt?: number
 }
 
 /** pid が生きているか。EPERM は「居るが触れない」なので生きている扱い。0 以下（spawn 待ちの自分の子）は生きている扱い */
@@ -197,7 +250,8 @@ export class ProcessRunner implements Runner {
     try {
       mkdirSync(dirname(this.statePath), { recursive: true })
       const tmp = `${this.statePath}.${process.pid}.tmp`
-      writeFileSync(tmp, JSON.stringify(Object.fromEntries(this.active), null, 2) + '\n', { mode: 0o600 })
+      const alive = [...this.active].filter(([, r]) => r.failedAt === undefined)
+      writeFileSync(tmp, JSON.stringify(Object.fromEntries(alive), null, 2) + '\n', { mode: 0o600 })
       renameSync(tmp, this.statePath)
     } catch {
       // 書けなくても処理中の判定はメモリで続く
@@ -207,7 +261,13 @@ export class ProcessRunner implements Runner {
   /** 引き取った分（exit を受け取れない）が死んでいたら落とす。自分の子は exit で消えるが、ここで消えても同じ */
   private sweep(): void {
     let changed = false
+    const now = Date.now()
     for (const [id, r] of this.active) {
+      // 失敗した分は pid が死んでいても、画面が拾えるまで少し残す
+      if (r.failedAt !== undefined) {
+        if (now - r.failedAt > FAILED_TTL_MS) this.active.delete(id)
+        continue
+      }
       if (!isAlive(r.pid)) {
         this.active.delete(id)
         changed = true
@@ -216,23 +276,29 @@ export class ProcessRunner implements Runner {
     if (changed) this.persist()
   }
 
+  /** 処理中か。失敗して残しているだけの分は「処理中ではない」（次の返信を止めない） */
   running(id: string): boolean {
     this.sweep()
-    return this.active.has(id)
+    return this.active.get(id)?.failedAt === undefined && this.active.has(id)
   }
 
   snapshot(): ReplyingMap {
     this.sweep()
-    // pid は画面に要らない
-    return Object.fromEntries([...this.active].map(([id, { since, text }]) => [id, { since, text }]))
+    // pid と failedAt は画面に要らない
+    return Object.fromEntries(
+      [...this.active].map(([id, { since, text, failed }]) => [id, failed ? { since, text, failed } : { since, text }]),
+    )
   }
 
   async start(id: string, cmd: ReplyCommand, onExit?: () => void): Promise<void> {
     let fd: number | null = null
+    // 子が書き始める位置。非0で終わったとき、ここから末尾を読んで理由にする（#172）
+    let logOffset = 0
     if (this.logPath) {
       try {
         fd = openSync(this.logPath, 'a', 0o600)
         writeSync(fd, `--- ${new Date().toISOString()} ${id} ${cmd.bin} ${JSON.stringify(cmd.args)} (cwd ${cmd.cwd})\n`)
+        logOffset = fstatSync(fd).size
       } catch {
         fd = null
       }
@@ -247,10 +313,19 @@ export class ProcessRunner implements Runner {
     const entry: Persisted = { pid: 0, since: new Date().toISOString(), text: cmd.text }
     this.active.set(id, entry)
     let released = false
-    const release = () => {
+    /**
+     * プロセスが終わった。非0（かシグナル）なら、画面が理由を出せるように少し残す。
+     * 0 なら今までどおり消す（記録が増えたかは画面が行数で見る）
+     */
+    const release = (code?: number | null, signal?: NodeJS.Signals | null) => {
       if (released) return
       released = true
-      this.active.delete(id)
+      const failure = failureOf(code, signal, this.logPath, logOffset)
+      if (failure) {
+        this.active.set(id, { ...entry, failed: failure, failedAt: Date.now() })
+      } else {
+        this.active.delete(id)
+      }
       this.persist()
       onExit?.()
       if (fd !== null) {
@@ -273,8 +348,9 @@ export class ProcessRunner implements Runner {
     }
     entry.pid = child.pid ?? 0
     this.persist()
-    child.once('exit', release)
-    child.once('error', release)
+    child.once('exit', (code, signal) => release(code, signal))
+    // spawn した後の error（EPIPE など）。終了コードは分からないので失敗としては残さない
+    child.once('error', () => release())
     child.unref()
   }
 }

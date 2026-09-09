@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { api, ApiError, type ReplyingMap } from './api'
+import { api, ApiError, type Replying, type ReplyingMap } from './api'
 
 /** 画面に出す「処理中の返信」。サーバが伝えてきたものと、送った直後のローカルのものを同じ形にする */
 export interface Pending {
@@ -24,6 +24,12 @@ interface Sent {
 const GRACE_MS = 1000
 
 export const ENDED_WITHOUT_ROW = '返信は終わったが記録が増えなかった（~/.agent-feed/reply.log を見る）'
+
+/** サーバが「プロセスが非0で終わった」と言っているときの文（#172）。理由は reply.log の末尾から来る */
+export function replyFailureMessage(failed: NonNullable<Replying['failed']>): string {
+  const why = failed.tail.trim()
+  return `返信が失敗しました（終了コード ${failed.code}）${why ? `: ${why}` : '。~/.agent-feed/reply.log を見てください'}`
+}
 
 /**
  * 端末に打ち込めなくて送れなかった。人にどうするかを聞く（#117、#157）。
@@ -64,10 +70,21 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
   const [confirm, setConfirm] = useState<ReplaceConfirm | null>(null)
   // サーバが「処理中」と言った id と、最初にそう見えたときの行数。消えたときに行が増えていなければ失敗
   const seen = useRef(new Map<string, number>())
+  // 失敗を出した id。サーバは少しの間その分を返し続けるので、毎回のポーリングで出し直さない
+  const reportedFailure = useRef(new Set<string>())
 
   useEffect(() => {
     if (!updatedAt) return
     const now = updatedAt.getTime()
+
+    // サーバが「プロセスが非0で終わった」と言っている。処理中ではなく理由を出す
+    for (const [id, r] of Object.entries(replying)) {
+      if (!r.failed || reportedFailure.current.has(id)) continue
+      reportedFailure.current.add(id)
+      seen.current.delete(id) // 消えたときに「記録が増えなかった」を重ねて出さない
+      setFailed({ id, message: replyFailureMessage(r.failed) })
+    }
+    for (const id of reportedFailure.current) if (!replying[id]?.failed) reportedFailure.current.delete(id)
 
     // サーバが処理中と言っていたものが消えた
     for (const [id, rowsAtSeen] of seen.current) {
@@ -92,7 +109,10 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
   }, [updatedAt])
 
   const pending: Pending[] = [
-    ...Object.entries(replying).map(([id, r]) => ({ id, text: r.text, since: r.since })),
+    // 失敗した分は「処理中」ではない（入力欄を開けて、理由は failed に出す）
+    ...Object.entries(replying)
+      .filter(([, r]) => !r.failed)
+      .map(([id, r]) => ({ id, text: r.text, since: r.since })),
     ...sent.filter((s) => !replying[s.id]).map((s) => ({ id: s.id, text: s.text, since: new Date(s.sentAt).toISOString() })),
   ]
 

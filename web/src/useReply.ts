@@ -96,7 +96,7 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
     ...sent.filter((s) => !replying[s.id]).map((s) => ({ id: s.id, text: s.text, since: new Date(s.sentAt).toISOString() })),
   ]
 
-  const send = async (id: string, text: string, options: { replaceTyped?: boolean; via?: 'process' } = {}): Promise<SendOutcome> => {
+  const send = async (id: string, text: string, options: { replaceTyped?: boolean; via?: 'process'; attachments?: string[] } = {}): Promise<SendOutcome> => {
     const entry: Sent = { id, text, rowsAtSend: countRows(id), sentAt: Date.now(), acceptedAt: null }
     setFailed(null)
     setConfirm(null)

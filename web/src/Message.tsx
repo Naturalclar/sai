@@ -5,6 +5,8 @@ import { Inlines } from './Inlines'
 import { linkifyRefs } from '../../shared/refs.ts'
 import { ThinkingBlock } from './ThinkingBlock'
 import { useReveal } from './useReveal'
+import { AttachedImages } from './AttachedImages'
+import { splitAttachments } from '../../shared/attachments.ts'
 
 // 折りたたむかは描画前の生の長さで見る（コードブロック1つで8行を超えても折りたたむ。今まで通り）
 const isLong = (text: string) => text.length > 600 || text.split('\n').length > 8
@@ -32,7 +34,9 @@ interface Props {
 }
 
 /** バブル1つ分の本文。長ければ折りたたんで「もっと見る」を付ける */
-export function Message({ ts, text, markdown, waiting, resolved, thinking, thinkingOpen = false, summary, model, remote, linear }: Props) {
+export function Message({ ts, text: raw, markdown, waiting, resolved, thinking, thinkingOpen = false, summary, model, remote, linear }: Props) {
+  // 自分の入力に添えた画像は、パスの文字列ではなくサムネイルで出す（本文の末尾に足してある。shared/attachments.ts）
+  const { body: text, urls } = markdown ? { body: raw, urls: [] as string[] } : splitAttachments(raw)
   const [open, setOpen] = useState(false)
   // 一言があるとき、元の本文（詳細）を開いているか
   const [details, setDetails] = useState(false)
@@ -82,8 +86,9 @@ export function Message({ ts, text, markdown, waiting, resolved, thinking, think
       {text ? (
         <div className={`body${long && !open ? ' clamped' : ''}`} ref={bodyRef}>{markdown ? <Markdown text={text} /> : text}</div>
       ) : (
-        <div className="empty-text">(本文なし)</div>
+        urls.length === 0 && <div className="empty-text">(本文なし)</div>
       )}
+      <AttachedImages urls={urls} />
       {long && (
         <button type="button" className="more" onClick={() => setOpen((v) => !v)} ref={moreRef}>
           {open ? '折りたたむ' : 'もっと見る'}

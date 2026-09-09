@@ -241,6 +241,7 @@
     .iconbtn { width: 36px; height: 36px; }
     .back { padding: 8px 6px; margin: -8px -6px 0; }
     .reply .row textarea { min-height: 44px; }
+    .reply .thumb button { width: 22px; height: 22px; }
     .reply .row button { min-height: 44px; }
     .jump-bottom { height: 44px; min-width: 44px; border-radius: 22px; }
   }
@@ -411,6 +412,22 @@
   .reply textarea:disabled { color: var(--muted); }
   .reply .row button { order: 3; margin-left: auto; background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 6px 12px; font: inherit; font-weight: 600; cursor: pointer; white-space: nowrap; }
   .reply .row button:disabled { opacity: .5; cursor: default; }
+  /* -- 返信に添える画像（#135）。入力欄の上にサムネイル、送信ボタンの隣に写真のボタン */
+  .reply.dropping { outline: 2px dashed var(--accent); outline-offset: 4px; border-radius: 12px; }
+  .reply .file { display: none; }
+  /* .reply .row button の見た目（塗りつぶし）に勝たせる。textarea は 100% で 1 行使うので、送信の左に並ぶ */
+  .reply .row button.iconbtn { order: 2; margin-left: 0; background: transparent; color: var(--muted); padding: 0; border-radius: 6px; font-weight: 400; }
+  .reply .row button.iconbtn:hover { background: var(--hover); color: var(--ink); }
+  .reply .row button.iconbtn:disabled { opacity: .5; background: transparent; }
+  .reply .attachments { display: flex; flex-wrap: wrap; gap: 8px; }
+  .reply .thumb { position: relative; display: inline-flex; }
+  .reply .thumb img { width: 56px; height: 56px; object-fit: cover; border-radius: 6px; border: 1px solid var(--line); display: block; }
+  .reply .thumb button { position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; padding: 0; border-radius: 50%; border: 1px solid var(--line); background: var(--panel); color: var(--muted); font-size: 11px; line-height: 1; cursor: pointer; }
+  .reply .thumb button:hover { color: var(--ink); }
+  .reply .note.err { color: var(--claude); }
+  /* バブルの中の添付。押すと元の大きさで開く */
+  .msg .attached { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+  .msg .attached img { max-width: 220px; max-height: 220px; border-radius: 8px; border: 1px solid var(--line); display: block; }
   /* 返信先チップ（フィード）。→ #repo branch「タイトル」 */
   .reply .target { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); min-width: 0; }
   .reply .target b { color: var(--ink); }

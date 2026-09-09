@@ -111,10 +111,11 @@ export function FeedView({ project, sessions = NO_SESSIONS, onStatus, onOpenSide
             repo={target.repo}
             skillsId={target.id}
             terminal={target.terminal}
+            attachId={target.id}
             busy={pending.some((p) => p.id === target.id)}
             busySince={pending.find((p) => p.id === target.id)?.since}
             now={now}
-            onSend={async (text) => (await send(target.id, text)) !== 'confirm'}
+            onSend={async (text, attachments) => (await send(target.id, text, { attachments })) !== 'confirm'}
             onDraft={setDrafting}
             mention={{ targets, target, picked: pickedTarget ? picked : null, onPick: setPicked, busyIds }}
           />

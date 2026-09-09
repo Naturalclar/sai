@@ -407,6 +407,23 @@ export interface ReplyRequest {
    * 端末に打ちかけが消せない・ダイアログ中・入力欄が読めないときの逃げ道（#157）。端末には出ない
    */
   via?: 'auto' | 'process'
+  /**
+   * 返信に添える画像の絶対パス（`POST /api/sessions/<id>/attachments` が返した `path`）。
+   * サーバはそのセッションの置き場のものだけを通す（任意のファイルを CLI に読ませない）。
+   * 本文の末尾にパスを足して渡し、Codex にはさらに `-i` でも渡す
+   */
+  attachments?: string[]
+}
+
+/** POST /api/sessions/<id>/attachments。body は画像そのもの */
+export interface AttachmentResponse {
+  id: string
+  /** 返信の `attachments` に入れる絶対パス */
+  path: string
+  /** <img src> に使う URL */
+  url: string
+  mime: string
+  size: number
 }
 
 /**

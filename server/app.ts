@@ -5,6 +5,7 @@ import { appendFile, readFile, stat } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { extname, join, resolve, sep } from 'node:path'
 import { ICON_MAX_BYTES, iconUrl } from '../shared/icon.ts'
+import { ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_COUNT, ATTACHMENTS_DIR, withAttachments } from '../shared/attachments.ts'
 import { mergeMeta } from '../shared/meta.ts'
 import { mergeProfile, PROFILE_ICON_ID, profileIconUrl } from '../shared/profile.ts'
 import { isPersonaId } from '../shared/persona.ts'
@@ -12,6 +13,7 @@ import { replyBlockedReason } from '../shared/reply.ts'
 import type {
   ApprovalAnswer,
   ApprovalRequest,
+  AttachmentResponse,
   FeedResponse,
   FeedRow,
   HealthResponse,
@@ -47,6 +49,7 @@ import { collectPermissions } from './permissions.ts'
 import { compareUrl } from '../shared/diff.ts'
 import { NotAGitRepo, RealGit, sessionDiff } from './diff.ts'
 import type { Git } from './diff.ts'
+import { AttachmentStore } from './attachments.ts'
 import { PROFILE_FILE, ProfileStore } from './profile.ts'
 import { SETTINGS_FILE, SettingsStore } from './settings.ts'
 import type { Settings } from './settings.ts'
@@ -82,6 +85,9 @@ const ICON_SUFFIX = '/icon'
 const SKILLS_SUFFIX = '/skills'
 const PERMISSIONS_SUFFIX = '/permissions'
 const DIFF_SUFFIX = '/diff'
+const ATTACHMENTS_SUFFIX = '/attachments'
+/** 配る側。GET /api/attachments/<dir>/<name> */
+const ATTACHMENTS_PREFIX = `/api/${ATTACHMENTS_DIR}/`
 const PROFILE_PATH = '/api/profile'
 const PROFILE_ICON_PATH = '/api/profile/icon'
 
@@ -245,6 +251,7 @@ export function createApp(
   const run: Runner = runner ?? new ProcessRunner(join(store.directory, 'reply.log'), join(store.directory, 'replying.json'))
   const metaStore = new MetaStore(join(store.directory, META_FILE))
   const iconStore = new IconStore(join(store.directory, ICONS_DIR))
+  const attachmentStore = new AttachmentStore(join(store.directory, ATTACHMENTS_DIR))
   const profileStore = new ProfileStore(join(store.directory, PROFILE_FILE))
 
   /**
@@ -370,7 +377,22 @@ export function createApp(
     } catch (err) {
       return error(res, 400, err instanceof Error ? err.message : 'bad body')
     }
-    const text = typeof (body as ReplyRequest | null)?.text === 'string' ? (body as ReplyRequest).text.trim() : ''
+    const typedText = typeof (body as ReplyRequest | null)?.text === 'string' ? (body as ReplyRequest).text.trim() : ''
+    // 添える画像。**画面から来た絶対パスは信じない**。そのセッションの置き場のものだけを通してから CLI に渡す
+    const wanted = (body as ReplyRequest | null)?.attachments
+    if (wanted !== undefined && (!Array.isArray(wanted) || wanted.some((p) => typeof p !== 'string'))) {
+      return error(res, 400, 'attachments は文字列の配列で送ってください')
+    }
+    const asked = (wanted ?? []) as string[]
+    if (asked.length > ATTACHMENT_MAX_COUNT) return error(res, 400, `画像は ${ATTACHMENT_MAX_COUNT} 枚までです`)
+    const attachments: string[] = []
+    for (const p of asked) {
+      const resolved = attachmentStore.resolvePath(id, p)
+      if (!resolved) return error(res, 400, 'このセッションに預けた画像ではありません')
+      attachments.push(resolved)
+    }
+    // 本文の末尾にパスを足す（Claude はこれを Read で読む。Codex は -i でも渡すが、記録と自分バブルのために本文にも）
+    const text = withAttachments(typedText, attachments)
     if (!text) return error(res, 400, 'text is required')
     const replaceTyped = (body as ReplyRequest).replace_typed === true
     const forceProcess = (body as ReplyRequest).via === 'process'
@@ -446,7 +468,7 @@ export function createApp(
     // セッションに返信のモデルが設定されていれば（PUT /api/sessions/<id>/meta の model）それで回す
     const own = await metaStore.get(id)
     const model = own?.model
-    const cmd = replyCommand(session.agent, raw, text, cwd, process.env, via, model, own?.permission_mode)
+    const cmd = replyCommand(session.agent, raw, text, cwd, process.env, via, model, own?.permission_mode, attachments)
     if (!cmd) return error(res, 400, replyBlockedReason(session) || 'unsupported agent')
     try {
       // プロセスが終わったら、そのセッションの答え待ちは deny で片付ける（もう誰も答えを取りに来ない）
@@ -521,6 +543,28 @@ export function createApp(
    * PUT /api/sessions/<id>/meta。いまの値に body を重ねる（省略は据え置き、空や null は消す）。
    * アーカイブは archived_at を載せるだけで、専用のエンドポイントは無い。窓の中に無いセッションには付けない
    */
+  /**
+   * POST /api/sessions/<id>/attachments。body は画像そのもの（Content-Type は見ず中身で判定）。
+   * 返した path を返信の `attachments` に入れると、本文の末尾に足されて CLI に渡る
+   */
+  const postAttachment = async (req: IncomingMessage, res: ServerResponse, id: string, days: number) => {
+    if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
+    let bytes: Buffer
+    try {
+      bytes = await readBody(req, ATTACHMENT_MAX_BYTES)
+    } catch (err) {
+      const big = err instanceof Error && err.message === 'body too large'
+      return error(res, big ? 413 : 400, big ? `画像は ${ATTACHMENT_MAX_BYTES / 1024 / 1024}MB までです` : err instanceof Error ? err.message : 'bad body')
+    }
+    if (bytes.length === 0) return error(res, 400, '画像が空です')
+    const { sessions } = await store.sessions(days)
+    if (!sessions.some((s) => s.id === id)) return error(res, 404, 'session not found in window')
+    const { attachment, error: reason } = await attachmentStore.put(id, bytes)
+    if (!attachment) return error(res, 400, reason || '保存できませんでした')
+    const payload: AttachmentResponse = { id, path: attachment.path, url: attachment.url, mime: attachment.mime, size: attachment.size }
+    return json(res, payload)
+  }
+
   /**
    * GET /api/sessions/<id>/permissions。そのセッションの cwd に効いている許可ルールを読んで返す（読むだけ）。
    * パスは cwd から固定で組み立てる（リクエストからは受け取らない）。3 秒のポーリングには乗せない（画面が開いたときだけ）
@@ -704,6 +748,8 @@ export function createApp(
     const isSkills = path.startsWith(SESSIONS_PREFIX) && path.endsWith(SKILLS_SUFFIX)
     const isPermissions = path.startsWith(SESSIONS_PREFIX) && path.endsWith(PERMISSIONS_SUFFIX)
     const isDiff = path.startsWith(SESSIONS_PREFIX) && path.endsWith(DIFF_SUFFIX)
+    const isAttachUpload = path.startsWith(SESSIONS_PREFIX) && path.endsWith(ATTACHMENTS_SUFFIX)
+    const isAttachFile = path.startsWith(ATTACHMENTS_PREFIX)
     const isAsk = path === APPROVALS_PATH
     const isAnswer = path.startsWith(APPROVALS_PREFIX) && path.endsWith(ANSWER_SUFFIX)
     const isProfile = path === PROFILE_PATH
@@ -713,7 +759,7 @@ export function createApp(
     // 書き込みは「返信は POST」「表示名は PUT」「アイコンは PUT / DELETE」「承認の預かりと答えは POST」「自分の表示名は PUT、アイコンは PUT / DELETE」
     // 「設定は PUT」だけ。それ以外は GET / HEAD のみ
     const writable =
-      (method === 'POST' && (isReply || isAsk || isAnswer)) ||
+      (method === 'POST' && (isReply || isAsk || isAnswer || isAttachUpload)) ||
       (method === 'PUT' && (isMeta || isProfile || isSettings)) ||
       ((method === 'PUT' || method === 'DELETE') && (isIcon || isProfileIcon))
     if (!writable && method !== 'GET' && method !== 'HEAD') return error(res, 405, 'method not allowed')
@@ -768,6 +814,26 @@ export function createApp(
         const id = sessionIdFrom(path, DIFF_SUFFIX)
         if (id === null) return error(res, 400, 'bad session id')
         return await getDiff(res, id, q.get('base') ?? '', parseDays(q.get('days'), 90))
+      }
+      if (isAttachUpload) {
+        const id = sessionIdFrom(path, ATTACHMENTS_SUFFIX)
+        if (id === null) return error(res, 400, 'bad session id')
+        return await postAttachment(req, res, id, parseDays(q.get('days'), 90))
+      }
+      if (isAttachFile) {
+        const [dir = '', name = '', ...rest] = path.slice(ATTACHMENTS_PREFIX.length).split('/')
+        const found = rest.length > 0 ? null : await attachmentStore.find(dir, name)
+        if (!found) return error(res, 404, 'attachment not found')
+        let body: Buffer
+        try {
+          body = await readFile(found.path)
+        } catch {
+          return error(res, 404, 'attachment not found')
+        }
+        // 名前が中身のハッシュなので、同じ URL の中身は変わらない
+        res.writeHead(200, { 'Content-Type': found.mime, 'Content-Length': body.length, 'Cache-Control': 'private, max-age=31536000, immutable' })
+        res.end(req.method === 'HEAD' ? undefined : body)
+        return
       }
       if (isPermissions) {
         const id = sessionIdFrom(path, PERMISSIONS_SUFFIX)

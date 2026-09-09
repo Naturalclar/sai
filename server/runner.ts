@@ -103,6 +103,8 @@ export function replyCommand(
    * そのターン限りで、セッションには残らない（確かめた: フラグ付きで回したセッションをフラグ無しで再開すると元に戻る）
    */
   permissionMode?: string,
+  /** 添える画像の絶対パス。本文には呼び出し側が足しておく（ここでは Codex の -i だけ組む） */
+  attachments: readonly string[] = [],
 ): ReplyCommand | null {
   // 運用者の SAI_*_ARGS に --model / --permission-mode があっても、セッションの設定を後ろに置いてそちらを勝たせる（後勝ち）
   const pick = model ? (agent === 'codex' ? ['-m', model] : ['--model', model]) : []
@@ -121,7 +123,9 @@ export function replyCommand(
     return { bin: env.SAI_CLAUDE_BIN || 'claude', args: [...extra, ...wire, ...pick, ...mode, '-p', '--resume', session, '--', text], cwd, text }
   }
   if (agent === 'codex') {
-    return { bin: env.SAI_CODEX_BIN || 'codex', args: ['exec', 'resume', ...splitArgs(env.SAI_CODEX_ARGS), ...pick, session, '--', text], cwd, text }
+    // Codex は画像を受ける口がある（`-i, --image <FILE>  Optional image(s) to attach to the prompt sent after resuming`）
+    const images = attachments.flatMap((p) => ['-i', p])
+    return { bin: env.SAI_CODEX_BIN || 'codex', args: ['exec', 'resume', ...splitArgs(env.SAI_CODEX_ARGS), ...pick, ...images, session, '--', text], cwd, text }
   }
   return null
 }

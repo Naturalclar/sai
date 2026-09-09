@@ -21,6 +21,8 @@
 | `GET /api/sessions/<id>/icon?v=<mtime>` | アイコン画像そのもの（`image/png` など）。無ければ `404`。`v` がいまのファイルと同じなら `Cache-Control: immutable`、無ければ `no-store` |
 | `PUT /api/sessions/<id>/icon?days=90` | body は画像そのもの（PNG / JPEG / GIF / WebP、1MB まで。種類は中身で見る。画面からは加工後の 256px の PNG が来る）。`{ "id", "icon": "<URL>" }` を返す。画像でなければ `400`、大きすぎれば `413`、窓の中に無いセッションは `404`、別オリジンは `403` |
 | `DELETE /api/sessions/<id>/icon` | 画像を消す。`{ "id", "icon": null }`。無くても `200`。別オリジンは `403` |
+| `POST /api/sessions/<id>/attachments` | 返信に添える画像を預ける。body は画像そのもの。`{ "id", "path", "url", "mime", "size" }`。10MB まで、種類は中身で見る。別オリジンは `403`、窓の中に無いセッションは `404` |
+| `GET /api/attachments/<dir>/<name>` | 預けた画像を配る。名前が中身のハッシュなので中身は変わらない（`immutable`）。形の合わないパスは `404` |
 | `GET /api/profile` | 自分の表示名とアイコン。`{ "profile": { "name"?, "icon"? } }`。`icon` は `/api/profile/icon?v=<mtime>` |
 | `PUT /api/profile` | body `{ "name"?: "..." }` をいまの値に重ねる。空文字や `null` は「消す」。100文字まで（超えたら `400`）。別オリジンは `403` |
 | `GET /api/profile/icon?v=<mtime>` | 自分のアイコン画像そのもの。無ければ `404`。キャッシュの扱いはセッションのアイコンと同じ |

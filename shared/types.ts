@@ -622,3 +622,45 @@ export interface SessionPermissionsResponse {
   /** deny → ask → allow の順 */
   rules: PermissionRuleEntry[]
 }
+
+/** 使用量の枠 1 つ。Codex の rate_limits の primary（5 時間）/ secondary（週） */
+export interface UsageWindow {
+  /** 0〜100 */
+  used_percent: number
+  /** 枠の長さ（分）。300 なら 5 時間、10080 なら 1 週間 */
+  window_minutes: number
+  /** 枠が戻る時刻（epoch 秒）。載っていないことがある */
+  resets_at?: number
+}
+
+/** Codex の使用量。rollout の token_count の行から読む（口座単位なので画面に 1 つ） */
+export interface CodexUsage {
+  primary: UsageWindow
+  secondary?: UsageWindow
+  /** plan_type（`plus` など） */
+  plan?: string
+  /** 拾った行の時刻（ISO）。いつ時点の値か */
+  at: string
+}
+
+/**
+ * Claude の使用量。ローカルには「上限に当たった」記録しか無いので、割合は出せない。
+ * transcript の quotaLimits が `status: rejected` で、まだ戻っていないときだけ載る
+ */
+export interface ClaudeUsage {
+  /** 戻る時刻（epoch 秒） */
+  resets_at: number
+  /** rateLimitType（`five_hour` など）。無ければ空 */
+  kind: string
+  /** 拾った行の時刻（ISO） */
+  at: string
+}
+
+/**
+ * GET /api/usage。ローカルのファイルから読むだけで、API は叩かない（「SAI は外に出さない」）。
+ * 取れなかったエージェントはキーごと付かない（画面は黙って出さない）
+ */
+export interface UsageResponse {
+  codex?: CodexUsage
+  claude?: ClaudeUsage
+}

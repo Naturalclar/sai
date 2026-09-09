@@ -34,6 +34,7 @@ import type {
   SessionSummary,
   SettingsRequest,
   SettingsResponse,
+  UsageResponse,
   Viewer,
 } from '../shared/types.ts'
 import { entityId, facets, filterSessions, recordVersionOf } from './aggregate.ts'
@@ -63,6 +64,7 @@ import type { Settings } from './settings.ts'
 import { isLinearWorkspace } from '../shared/refs.ts'
 import { ProcessRunner, replyCommand } from './runner.ts'
 import { SkillStore } from './skills.ts'
+import { UsageStore } from './usage.ts'
 import { alive, RealTmux, realPs, TerminalBusy, TerminalGone, TerminalReplies, typeInto } from './terminal.ts'
 import type { PsFn, Tmux } from './terminal.ts'
 import type { Runner } from './runner.ts'
@@ -84,6 +86,7 @@ const ANSWER_SUFFIX = '/answer'
 /** 承認 body の上限。ツールの入力そのもの（Edit の new_string など）が入るので返信より大きめ */
 export const MAX_APPROVAL_BYTES = 1024 * 1024
 const SETTINGS_PATH = '/api/settings'
+const USAGE_PATH = '/api/usage'
 /** 設定 body の上限 */
 export const MAX_SETTINGS_BYTES = 4 * 1024
 const REPLY_SUFFIX = '/reply'
@@ -246,6 +249,7 @@ export function createApp(
   skillStore: SkillStore = new SkillStore(),
   git: Git = new RealGit(),
   pr: PrLookup = prLookupFromEnv(),
+  usageStore: UsageStore = new UsageStore(),
 ): Handler {
   const distRoot = resolve(distDir)
   // 端末に打ち込んだ返信の「処理中」。子プロセスの方（run）とは別に持ち、画面には合わせて出す
@@ -930,6 +934,12 @@ export function createApp(
       if (isSettings) {
         if (method === 'PUT') return await putSettings(req, res)
         return json(res, await settingsPayload())
+      }
+      // 各エージェントの使用量。ローカルのファイルを読むだけで、外の API は叩かない（#216）。
+      // ファイルを漁るので 3 秒のポーリングには乗せず、画面が開いたときだけ取る（中でも 30 秒キャッシュ）
+      if (path === USAGE_PATH) {
+        const payload: UsageResponse = await usageStore.get()
+        return json(res, payload)
       }
 
       if (path === '/api/sessions') {

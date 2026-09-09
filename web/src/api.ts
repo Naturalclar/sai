@@ -21,9 +21,10 @@ import type {
   SessionsResponse,
   SettingsRequest,
   SettingsResponse,
+  UsageResponse,
 } from '../../shared/types.ts'
 
-export type { Agent, FeedRow, SessionSource, SessionSummary, SessionMeta, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, Approval, ApprovalMap, ApprovalAnswer, Profile, PersonaId, SettingsResponse, SettingsRequest, Viewer, SessionPermissionsResponse, SessionDiffResponse, SessionDiffSummaryResponse, DiffPr, DiffSection, DiffFileStat, AttachmentResponse } from '../../shared/types.ts'
+export type { Agent, FeedRow, SessionSource, SessionSummary, SessionMeta, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, Approval, ApprovalMap, ApprovalAnswer, Profile, PersonaId, SettingsResponse, SettingsRequest, Viewer, SessionPermissionsResponse, SessionDiffResponse, SessionDiffSummaryResponse, DiffPr, DiffSection, DiffFileStat, AttachmentResponse, UsageResponse, UsageWindow, CodexUsage, ClaudeUsage } from '../../shared/types.ts'
 
 /** サーバの失敗。`code` / `typed` は返信の 409（ReplyError）から。画面はこれで「消して送る」の確認を出し分ける */
 export class ApiError extends Error {
@@ -142,6 +143,8 @@ export const api = {
   setProfile: (profile: Pick<Profile, 'name'>) => sendJSON<ProfileResponse>('PUT', '/api/profile', profile),
   setProfileIcon: (file: Blob) => sendRaw<ProfileResponse>('PUT', '/api/profile/icon', file),
   clearProfileIcon: () => sendRaw<ProfileResponse>('DELETE', '/api/profile/icon'),
+  /** 各エージェントの使用量。ローカルのファイルから読むだけ（ポーリングには乗せない） */
+  usage: () => getJSON<UsageResponse>('/api/usage'),
   /** サーバ側の設定（一言の性格。digest が有効か） */
   settings: () => getJSON<SettingsResponse>('/api/settings'),
   setSettings: (body: SettingsRequest) => sendJSON<SettingsResponse>('PUT', '/api/settings', body),

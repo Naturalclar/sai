@@ -48,6 +48,33 @@
   header .user-menu .menu .who .login { display: block; font-weight: 400; font-size: 11px; color: var(--muted); }
   header .user-menu .menu button { display: block; width: 100%; text-align: left; padding: 6px 12px; background: transparent; border: 0; color: var(--ink); font: inherit; cursor: pointer; }
   header .user-menu .menu button:hover { background: var(--hover); }
+  /* 使用量（#216）。取れたエージェントの分だけ出る。Codex は割合、Claude は上限に当たっているときだけ */
+  header .usage { position: relative; display: inline-flex; }
+  header .usage-chip { display: inline-flex; align-items: center; gap: 8px; padding: 3px 8px; font: inherit; font-size: 12px; color: var(--muted); background: var(--chip); border: 1px solid transparent; border-radius: 999px; cursor: pointer; white-space: nowrap; }
+  header .usage-chip:hover { color: var(--ink); border-color: var(--line); }
+  header .usage-chip b { font-weight: 700; color: var(--ink); }
+  header .usage-chip.warn { color: var(--synth); background: color-mix(in srgb, var(--synth) 14%, transparent); }
+  header .usage-chip.warn b { color: var(--synth); }
+  header .usage-chip.high { color: var(--claude); background: color-mix(in srgb, var(--claude) 16%, transparent); }
+  header .usage-chip.high b { color: var(--claude); }
+  header .usage-chip .usage-part { display: inline-flex; align-items: center; gap: 4px; }
+  header .usage-chip .usage-part.hit { color: var(--claude); font-weight: 700; }
+  header .usage-chip .dot { width: 8px; height: 8px; }
+  .usage-panel { position: absolute; top: calc(100% + 6px); right: 0; width: 16em; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, .18); padding: 10px 12px; z-index: 15; font-size: 12px; }
+  .usage-panel section + section { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+  .usage-panel h3 { display: flex; align-items: baseline; gap: 6px; margin: 0 0 6px; font-size: 12px; }
+  .usage-panel h3 .usage-plan { padding: 0 5px; background: var(--chip); border-radius: 4px; font-weight: 400; color: var(--muted); }
+  .usage-panel h3 .usage-at { margin-left: auto; font-weight: 400; color: var(--muted); }
+  .usage-panel .usage-note, .usage-panel .usage-hit { margin: 6px 0 0; color: var(--muted); line-height: 1.45; }
+  .usage-panel .usage-hit { color: var(--claude); }
+  .usage-bar + .usage-bar { margin-top: 8px; }
+  .usage-bar-top { display: flex; align-items: baseline; gap: 6px; }
+  .usage-bar-top .usage-window { color: var(--muted); }
+  .usage-bar-top .usage-reset { margin-left: auto; color: var(--muted); }
+  .usage-track { margin-top: 3px; height: 6px; border-radius: 3px; background: var(--chip); overflow: hidden; }
+  .usage-fill { height: 100%; background: var(--accent); border-radius: 3px; }
+  .usage-bar.warn .usage-fill { background: var(--synth); }
+  .usage-bar.high .usage-fill { background: var(--claude); }
   /* 自分の表示名とアイコンのモーダル（ProfileEditor） */
   /* -- 許可の一覧（#162）。読むだけのモーダル */
   .modal.permissions { width: 520px; max-width: calc(100vw - 32px); max-height: 80vh; overflow-y: auto; }
@@ -261,6 +288,9 @@
     header { gap: 10px; padding: 8px 12px; flex-wrap: wrap; row-gap: 6px; }
     header .logo small { display: none; }
     header .status { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-left: auto; }
+    /* 使用量はエージェント名を落として色の点だけにする（「● 92% ● 上限中」。ヘッダの 1 行に収めるため） */
+    header .usage-chip { gap: 6px; padding: 3px 6px; }
+    header .usage-chip .usage-name { display: none; }
     /* digest の操作（性格の select と Linear の入力）は 1 行に収まらないので 2 行目に落とし、入力を残りの幅に広げる */
     header .digest-ctl { order: 10; flex-basis: 100%; margin-left: 0; }
     header .digest-ctl .linear-ws { flex: 1; min-width: 6em; width: auto; }

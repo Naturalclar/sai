@@ -5,7 +5,7 @@ import type { Server } from 'node:http'
 import { mkdtemp, rm, writeFile, appendFile, mkdir, stat, utimes, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ApprovalMap, Replying, ReplyResponse, SessionsResponse, SessionDetailResponse, SessionIconResponse, SessionMetaResponse, FeedResponse, SettingsResponse, HealthResponse, SessionSkillsResponse, SessionPermissionsResponse } from '../shared/types.ts'
+import type { ApprovalMap, Replying, ReplyResponse, SessionsResponse, SessionDetailResponse, SessionIconResponse, SessionMetaResponse, FeedResponse, SettingsResponse, HealthResponse, SessionSkillsResponse, SessionPermissionsResponse, UsageResponse } from '../shared/types.ts'
 import { createApp, parseDays, revWith, selfUrl, sessionIdFrom, stripThinking } from './app.ts'
 import { BuildFreshness } from './buildFreshness.ts'
 import { Authenticator } from './auth.ts'
@@ -14,6 +14,7 @@ import { META_FILE, MetaStore } from './meta.ts'
 import type { Summarizer } from './digest.ts'
 import { FeedStore } from './store.ts'
 import { SkillStore } from './skills.ts'
+import { UsageStore } from './usage.ts'
 import { localDate } from './aggregate.ts'
 import { replyCommand, splitArgs } from './runner.ts'
 import type { ReplyCommand, Runner } from './runner.ts'
@@ -113,7 +114,33 @@ before(async () => {
     ps: async () => '',
     codexDialogs,
   }
-  const app = createApp(store, distDir, runner, undefined, new BuildFreshness(distDir, [srcDir], 0), digester, auth, terminal, new SkillStore(join(dir, 'skills')))
+  // 使用量も、この Mac の ~/.codex / ~/.claude ではなく temp に作った偽の置き場だけを見せる
+  await mkdir(join(dir, 'codex-sessions', '2026', '09', '09'), { recursive: true })
+  await writeFile(
+    join(dir, 'codex-sessions', '2026', '09', '09', 'rollout-a.jsonl'),
+    `${JSON.stringify({
+      timestamp: '2026-09-09T08:39:28.618Z',
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        rate_limits: { primary: { used_percent: 59, window_minutes: 300, resets_at: 1788956513 }, secondary: { used_percent: 20, window_minutes: 10080 }, plan_type: 'plus' },
+      },
+    })}\n`,
+  )
+  const app = createApp(
+    store,
+    distDir,
+    runner,
+    undefined,
+    new BuildFreshness(distDir, [srcDir], 0),
+    digester,
+    auth,
+    terminal,
+    new SkillStore(join(dir, 'skills')),
+    undefined,
+    undefined,
+    new UsageStore(join(dir, 'codex-sessions'), join(dir, 'claude-projects')),
+  )
   server = createServer((req, res) => void app(req, res))
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const addr = server.address()
@@ -360,6 +387,20 @@ test('GET /api/sessions/<id>/permissions: cwd の設定を読んで deny → all
   assert.equal((await get('/api/sessions/nope%40r/permissions')).status, 404)
   assert.equal((await get('/api/sessions/%2Fetc%2Fpasswd/permissions')).status, 400, 'パスは受け取らない')
   assert.equal((await fetch(`${base}/api/sessions/C1%40r/permissions`, { method: 'POST' })).status, 405, '読むだけ')
+})
+
+test('GET /api/usage: ローカルのファイルから読むだけ。Claude は上限に当たっていなければ載らない（#216）', async () => {
+  const res = await get('/api/usage')
+  assert.equal(res.status, 200)
+  const data = (await res.json()) as UsageResponse
+  assert.deepEqual(data.codex, {
+    primary: { used_percent: 59, window_minutes: 300, resets_at: 1788956513 },
+    secondary: { used_percent: 20, window_minutes: 10080 },
+    plan: 'plus',
+    at: '2026-09-09T08:39:28.618Z',
+  })
+  assert.equal(data.claude, undefined, '弾かれた記録が無ければキーごと付かない（画面は黙って出さない）')
+  assert.equal((await fetch(`${base}/api/usage`, { method: 'POST' })).status, 405, '読むだけ')
 })
 
 test('/api/feed は壊れた行を落とす', async () => {

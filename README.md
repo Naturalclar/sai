@@ -110,6 +110,21 @@ notify = ["/Users/<me>/.scripts/sai-codex-notify"]
 
 ラッパーはシェルスクリプトなので、その中では `$SAI_HOME` が使える。向け直したら Codex で 1 ターン回し、`~/.agent-feed/` の行に `"agent": "codex"` が増えて `session_source` が `rollout` になることを見る（`synth` なら [docs/design-notes.md](docs/design-notes.md) の「Codex の notify ペイロードにセッションIDが無い」を疑う）。
 
+**OpenCode** — フックの仕組みが無く、**プラグイン**でイベントを受ける。このリポジトリの `feed/opencode/sai.js` を OpenCode のプラグイン置き場に置く（全プロジェクトなら `~/.config/opencode/plugin/`、そのプロジェクトだけなら `.opencode/plugin/`）:
+
+```
+mkdir -p ~/.config/opencode/plugin
+ln -s "$SAI_HOME/feed/opencode/sai.js" ~/.config/opencode/plugin/sai.js
+```
+
+`record.py` の在り処はプラグインが `SAI_HOME` から引く。無ければ**置いたファイルの隣**（`feed/opencode/` → `feed/`）から辿るので、symlink ならそのままでも動く（中身をコピーしたなら `SAI_HOME` が要る）。
+
+プラグインは `session.idle`（ターン完了）で最後のアシスタントの発話と直前の入力を、`permission.asked` / `permission.replied` で待ちと再開を `record.py --agent opencode` に渡す。**OpenCode ぶんの payload はプラグインが組み立てるので、形では当てられず送り側が名乗る**（`--agent`）。Claude と Codex の設定は今までどおり形で判定するので触らなくてよい。
+
+向け直したら OpenCode で 1 ターン回し、`~/.agent-feed/` に `"agent": "opencode"` の行が増えることを見る。`session_source` は `payload`（セッションIDがイベントに載っている）。
+
+許可を SAI の画面から答える口は無い（Claude の `--permission-prompt-tool` に当たるものが無い）ので、`permission.asked` は**待ちの行として出すだけ**で、答えるのは端末側。プロバイダを差し替えれば手元のモデルでも動く → [docs/local-llm.md](docs/local-llm.md)。
+
 ### 2. 画面をビルドしてサーバを立てる
 
 ```
@@ -190,11 +205,13 @@ pnpm test && pnpm test:feed && pnpm lint && pnpm typecheck
 | `SAI_GH` / `SAI_GH_BIN` | `0` で差分ボタンの PR 番号を引かない（既定は引く）。実行ファイルは既定で PATH の `gh`。叩くのは `gh pr view` だけで、引けなければ番号が付かないだけ |
 | `SAI_CLAUDE_BIN` | 返信で起動する `claude` の実行ファイル（既定は PATH の `claude`）。launchd などで PATH が最小のときに |
 | `SAI_CODEX_BIN` | 同じく `codex` |
+| `SAI_OPENCODE_BIN` | 同じく `opencode` |
 | `SAI_CLAUDE_ARGS` | 返信の `claude -p --resume` に足す引数。空白区切りで、空白を含む値は `"…"` か `'…'` で囲む。例: `--allowedTools "Bash(gh *)"`、`--permission-mode acceptEdits`。「返信と許可」の項を読んでから |
 | `SAI_TAILSCALE_BIN` | tailnet 経由の認証で `whois` に使う `tailscale` の実行ファイル（既定は PATH、無ければ macOS の GUI 版） |
 | `SAI_CODEX_ARGS` | 開いている Codex の `codex queue` と、`SAI_CODEX_APP_SERVER=0` の `codex exec resume` に足す引数。例: `-s workspace-write` |
 | `SAI_CODEX_APP_SERVER` | `0` で閉じたCodexのapp-server管理を切り、従来の `codex exec resume` に戻す。既定は有効 |
 | `SAI_CODEX_APP_SERVER_ARGS` | `codex app-server --stdio` に足す引数。空白を含む値は引用符で囲む。例: `-c sandbox_mode="workspace-write"` |
+| `SAI_OPENCODE_ARGS` | 同じく `opencode run` に足す引数。例: `--agent build` |
 | `AGENT_FEED_SKIP` | `1` なら `record.py` は何も記録しない。SAI が一言を作るために回す `claude -p` に付ける（自分自身を記録しない） |
 | `SAI_DIGEST` | `1` で一言コメント（digest）を作る。既定はオフ |
 | `SAI_DIGEST_PROVIDER` | 一言を作る口。`claude`（既定。`claude -p`）か `openai`（OpenAI 互換の `/v1/chat/completions`。Ollama / LM Studio などローカルの LLM はこちら） |

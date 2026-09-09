@@ -890,5 +890,51 @@ class RecordTest(unittest.TestCase):
         self.assertEqual(rows[0]["session_source"], "synth")
 
 
+    # ---- OpenCode（#209）。プラグインが payload を組み立てて `--agent opencode` と名乗る
+
+    def _opencode(self, **over):
+        payload = {"type": "session.idle", "session_id": "ses_abc123", "cwd": str(self.cwd)}
+        payload.update(over)
+        return run(stdin=json.dumps(payload), argv=["--agent", "opencode"], env=self.env)
+
+    def test_opencode_turn_is_recorded_from_the_plugin_payload(self):
+        result = self._opencode(text="直しました", user_text="直して", model="ollama/qwen3:8b")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        row = read_rows(self.feed_dir)[-1]
+        self.assertEqual(row["agent"], "opencode")
+        self.assertEqual(row["event"], "session.idle")
+        self.assertEqual(row["session"], "ses_abc123")
+        self.assertEqual(row["session_source"], "payload", "セッションIDはイベントに載っているので合成しない")
+        self.assertEqual(row["text"], "直しました")
+        self.assertEqual(row["user_text"], "直して")
+        self.assertEqual(row["first_user_text"], "直して")
+        self.assertEqual(row["model"], "ollama/qwen3:8b")
+        self.assertEqual(row["cwd"], str(self.cwd))
+
+    def test_opencode_permission_asked_is_a_waiting_row_and_replied_resumes(self):
+        self.assertEqual(self._opencode(type="permission.asked", text="許可待ち: bash: ls -la").returncode, 0)
+        self.assertEqual(self._opencode(type="permission.replied").returncode, 0)
+        rows = read_rows(self.feed_dir)
+        self.assertEqual([r["event"] for r in rows], ["permission.asked", "permission.replied"])
+        self.assertEqual(rows[0]["text"], "許可待ち: bash: ls -la")
+        self.assertEqual(rows[1]["text"], "", "答えた行は合図だけ")
+
+    def test_opencode_waiting_row_without_text_is_dropped(self):
+        # 何を待っているか分からない行を書いても画面に出せるものが無い
+        self.assertEqual(self._opencode(type="permission.asked", text="").returncode, 0)
+        self.assertEqual(read_rows(self.feed_dir), [])
+
+    def test_agent_flag_only_accepts_known_names(self):
+        # 知らない名前は名乗っていない扱い（形で当てる）。行の agent に素性の分からない値を入れない
+        result = run(stdin=json.dumps({"hello": "x", "cwd": str(self.cwd)}), argv=["--agent", "bogus"], env=self.env)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(read_rows(self.feed_dir)[-1]["agent"], "unknown")
+
+    def test_agent_flag_does_not_change_claude_and_codex(self):
+        # 名乗り無しの既存の設定はそのまま動く
+        self.assertEqual(run(stdin=json.dumps({"type": "agent-turn-complete", "last-assistant-message": "x", "cwd": str(self.cwd)}), env=self.env).returncode, 0)
+        self.assertEqual(read_rows(self.feed_dir)[-1]["agent"], "codex")
+
+
 if __name__ == "__main__":
     unittest.main()

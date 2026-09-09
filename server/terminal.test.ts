@@ -43,6 +43,44 @@ test('promptState: Codex の質問選択・自由入力待ちもダイアログ'
   assert.equal(promptState('確認\n› answer\nEnter to submit · Esc to cancel', 'codex').kind, 'dialog')
 })
 
+// OpenCode（1.18.30 の実機の capture-pane を写したもの）。箱の各行が `┃` で、下に枠線。
+// 右側には作業ディレクトリのパスが同じ行に描かれ、箱の最後の行はモードとモデル
+const OPENCODE_IDLE = [
+  '                                    ▣  Build · Qwen3 8B · 55.7s',
+  '',
+  '  ┃                                                     /private/tmp/work',
+  '  ┃  Ask anything… "Fix broken tests"                    naturalclar-mac-mini/',
+  '  ┃',
+  '  ┃  Build · Qwen3 8B Ollama                             work:main',
+  '  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀',
+  '  /private/tmp/work',
+].join('\n')
+/** placeholder の行を差し替える（打ちかけを入れる / 空にする） */
+const opencodeWith = (line: string) => OPENCODE_IDLE.replace('  ┃  Ask anything… "Fix broken tests"                    naturalclar-mac-mini/', line)
+
+test('promptState: OpenCode は枠線の上の ┃ の連なりが入力欄。placeholder もターン後の空も idle', () => {
+  assert.deepEqual(promptState(OPENCODE_IDLE, 'opencode'), { idle: true, kind: 'idle', reason: '', typed: '' })
+  // 1 ターン回した後は placeholder が出ず、箱が空になる（実測）。右側のパスだけが残る
+  assert.equal(promptState(opencodeWith('  ┃                                                    naturalclar-mac-mini/'), 'opencode').idle, true)
+  const typing = promptState(opencodeWith('  ┃  まだ送っていない文                                 naturalclar-mac-mini/'), 'opencode')
+  assert.equal(typing.kind, 'typed')
+  assert.equal(typing.typed, 'まだ送っていない文', '右側の列（パス）は打ちかけに混ぜない')
+  // 複数行の打ちかけも `┃` で並ぶ
+  const multi = promptState(opencodeWith('  ┃  1行目\n  ┃  2行目'), 'opencode')
+  assert.equal(multi.typed, '1行目\n2行目')
+})
+
+test('promptState: OpenCode は会話の履歴も ┃ を使うので、枠線が無ければ打ち込まない', () => {
+  // 履歴だけが見えていて入力欄の枠線が流れて消えた画面
+  const history = ['  ┃  前のターンの返事', '  ┃  その続き', ''].join('\n')
+  assert.equal(promptState(history, 'opencode').kind, 'unknown')
+  // 枠線はあるが、その上が `┃` でない（別のプログラム）
+  assert.equal(promptState('$ ls\nfoo\n  ╹▀▀▀▀▀▀▀▀▀▀', 'opencode').kind, 'unknown')
+  // モード・モデルの行が読めない形に変わったら落とさず、空の入力欄でも打ちかけ側（打ち込まない）に倒れる
+  const noStatus = opencodeWith('  ┃').replace('  ┃  Build · Qwen3 8B Ollama                             work:main', '  ┃  Build')
+  assert.equal(promptState(noStatus, 'opencode').kind, 'typed')
+})
+
 test('promptState: kind と typed。番号付きの選択肢や「Press enter to continue」はダイアログ', () => {
   assert.deepEqual(promptState(CLAUDE_IDLE, 'claude'), { idle: true, kind: 'idle', reason: '', typed: '' })
   const typing = promptState(CLAUDE_IDLE.replace('❯ Try "refactor <filepath>"', '❯ 提案されているsub issueを立てて'), 'claude')

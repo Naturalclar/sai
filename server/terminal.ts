@@ -60,10 +60,18 @@ export interface PromptState {
 const DIALOG = /Enter to (?:confirm|select|submit)|Esc to cancel|Press enter to continue|Waiting for user input/i
 
 /** 空の入力欄に出る placeholder。打ちかけではない。文言は CLI の版で変わりうるので、見つけたら足す */
-const PLACEHOLDER: Record<'claude' | 'codex', RegExp> = {
+const PLACEHOLDER: Record<'claude' | 'codex' | 'opencode', RegExp> = {
   claude: /^Try ["\u201c]|^Try /,
   codex: /^Ask Codex to do anything/,
+  opencode: /^Ask anything/,
 }
+/** OpenCode の入力欄。箱の各行が `┃` で始まり、最後の `┃` 行はモードとモデル（`Build · GPT-5.6 …`）。1.18.30 で確認 */
+const OPENCODE_LINE = /^\s*┃[\s\u00a0]?(.*)$/
+const OPENCODE_STATUS = /\s·\s/
+/** 入力欄の箱の下の枠線（`╹▀▀▀…`）。会話の履歴も `┃` を使うので、ここから上に辿って箱だけを取る */
+const OPENCODE_BORDER = /^\s*╹?[▀▔]{3,}/
+/** 箱の右側にはパスなどの別の列が同じ行に描かれる。3 つ以上の空白で切って左（入力欄）だけを読む */
+const OPENCODE_GAP = /\s{3,}/
 /** 入力欄の続きの行ではないもの（区切り線、状態行、モデル名の行）。ここで打ちかけの続きを読むのを止める */
 const NOT_INPUT = /^\s*(⏵⏵|─|╰|╭|\? for shortcuts|\S+ (minimal|low|medium|high|xhigh) ·)/
 /** 打ちかけを消すために送る C-u の上限。1 回で 1 行しか消えないので行数ぶん要る */
@@ -92,6 +100,8 @@ export function promptState(screen: string, agent: Agent): PromptState {
   const tail = lines.slice(-25).join('\n')
   const dialog: PromptState = { idle: false, kind: 'dialog', reason: '端末が許可や質問のダイアログを出している', typed: '' }
   if (DIALOG.test(tail)) return dialog
+  // OpenCode は箱の形が違い、空行も箱の一部なので、空行を落とす前の画面から読む
+  if (agent === 'opencode') return opencodePrompt(screen.split('\n').map((l) => l.replace(/[\s\u00a0]+$/, '')))
   // 入力欄の行。Claude Code は `❯` の後ろが NBSP（\u00a0）。ダイアログの選択肢（`  ❯ 1. Yes`）は上の検査で先に弾いている
   const markers = agent === 'codex' ? /^\s*[›>][\s\u00a0]?(.*)$/ : /^\s*(?:│\s*)?❯[\s\u00a0]?(.*)$/
   const placeholder = agent === 'codex' ? PLACEHOLDER.codex : PLACEHOLDER.claude
@@ -136,6 +146,42 @@ export function promptState(screen: string, agent: Agent): PromptState {
     return state
   }
   return { idle: false, kind: 'unknown', reason: '端末の入力欄が見つからない（セッションが動いていない、または画面が違う）', typed: '' }
+}
+
+/**
+ * OpenCode の入力欄（1.18.30 で確認）。他の CLI（`❯` / `›` の 1 行 + 2 文字下げの続き）と形が違い、
+ * **箱の各行が `┃`**、その下に枠線（`╹▀▀▀…`）が引かれる。会話の履歴も `┃` を使うので、
+ * 「一番下の枠線のすぐ上にある `┃` の連なり」だけを箱として読む（空行も箱の一部なので、空行は落とさずに渡す）。
+ *
+ * 箱の最後の行はモードとモデル（`Build · Qwen3 8B Ollama`）。それを落として上下の空行を落とした残りが打ちかけ。
+ * 箱の右側には作業ディレクトリのパスが同じ行に描かれるので、空白が 3 つ以上続いたらそこから右は捨てる。
+ * 新しいセッションは placeholder（`Ask anything…`）が出るが、**1 ターン回した後は何も出ない**ので、空の箱は空扱い。
+ */
+function opencodePrompt(raw: string[]): PromptState {
+  const unknown = (reason: string): PromptState => ({ idle: false, kind: 'unknown', reason, typed: '' })
+  let border = -1
+  for (let i = raw.length - 1; i >= 0; i--) {
+    if (OPENCODE_BORDER.test(raw[i]!)) {
+      border = i
+      break
+    }
+  }
+  if (border < 0) return unknown('端末の入力欄が見つからない（セッションが動いていない、または画面が違う）')
+  const box: string[] = []
+  for (let i = border - 1; i >= 0; i--) {
+    const m = raw[i]!.match(OPENCODE_LINE)
+    if (!m) break
+    // 右側の列（作業ディレクトリのパスなど）を落とす。入力欄との間は空白が続くので、そこで切る
+    box.unshift((m[1] ?? '').split(OPENCODE_GAP)[0]!.trim())
+  }
+  if (box.length === 0) return unknown('端末の入力欄が見つからない（枠線の上に入力欄が無い）')
+  // 最後の行はモード・モデル。形が違えば落とさない（打ちかけとして残す = 打ち込まない側に倒す）
+  const body = OPENCODE_STATUS.test(box[box.length - 1] ?? '') ? box.slice(0, -1) : box
+  while (body.length && !body[0]) body.shift()
+  while (body.length && !body[body.length - 1]) body.pop()
+  const first = body[0] ?? ''
+  if (!body.length || PLACEHOLDER.opencode.test(first)) return { idle: true, kind: 'idle', reason: '', typed: '' }
+  return { idle: false, kind: 'typed', reason: `端末の入力欄に打ちかけの文字がある: ${first.slice(0, 40)}`, typed: body.join('\n') }
 }
 
 /** tmux を叩く口。テストでは差し替える */

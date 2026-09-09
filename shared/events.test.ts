@@ -7,6 +7,15 @@ test('eventKind: ターン完了は名指し（Claude の Stop、Codex の agent
   assert.equal(eventKind('agent-turn-complete'), 'turn')
 })
 
+test('eventKind: OpenCode のイベント名（プラグインが載せる。#209）', () => {
+  assert.equal(eventKind('session.idle'), 'turn')
+  assert.equal(eventKind('permission.asked'), 'waiting')
+  assert.equal(eventKind('permission.replied'), 'resume')
+  // 名前は OpenCode のイベント名そのままなので、渡していないものは other のまま
+  assert.equal(eventKind('session.updated'), 'other')
+  assert.equal(eventKind('message.part.updated'), 'other')
+})
+
 test('eventKind: unknown と空も turn（record.py の detect_event が今も返す）', () => {
   // hook_event_name も type も無いペイロードで detect_event() が返す値。古い行だけの話ではない
   assert.equal(eventKind('unknown'), 'turn')
@@ -37,7 +46,7 @@ test('eventKind: 知らない event は other（turn に落とさない。#235�
   for (const e of ['session-configured', 'task-started', 'task-complete']) {
     assert.equal(eventKind(e), 'other', e)
   }
-  // 将来のエージェント（#192 / #209）で増える分もここに落ちる
+  // 将来のエージェント（#192）で増える分もここに落ちる
   assert.equal(eventKind('gemini-turn-done'), 'other')
   assert.equal(eventKind('  Stop  '), 'other', '前後の空白は詰めない（record.py は詰めて書く）')
   assert.equal(eventKind('stop'), 'other', '大文字小文字は区別する')

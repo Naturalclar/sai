@@ -148,7 +148,7 @@ export function replyCommand(
   attachments: readonly string[] = [],
 ): ReplyCommand | null {
   // 運用者の SAI_*_ARGS に --model / --permission-mode があっても、セッションの設定を後ろに置いてそちらを勝たせる（後勝ち）
-  const pick = model ? (agent === 'codex' ? ['-m', model] : ['--model', model]) : []
+  const pick = model ? (agent === 'claude' ? ['--model', model] : ['-m', model]) : []
   // 許可モードは Claude だけ（codex exec resume に同等のフラグは無い）
   const mode = permissionMode && agent === 'claude' ? ['--permission-mode', permissionMode] : []
   // 本文の前に `--` を置く。本文が `-` で始まると（`-v` や `--help`）CLI がフラグとして解釈して
@@ -167,6 +167,13 @@ export function replyCommand(
     // Codex は画像を受ける口がある（`-i, --image <FILE>  Optional image(s) to attach to the prompt sent after resuming`）
     const images = attachments.flatMap((p) => ['-i', p])
     return { bin: env.SAI_CODEX_BIN || 'codex', args: ['exec', 'resume', ...splitArgs(env.SAI_CODEX_ARGS), ...pick, ...images, session, '--', text], cwd, text }
+  }
+  if (agent === 'opencode') {
+    // `opencode run -s <session> -m <provider/model> -f <file> -- <text>`（1.18.30 で確認）。
+    // 画像は `-f/--file`（添付するファイル）。許可・質問を画面で答える口は無いので approve の配線はしない。
+    // 非対話でも本体の中でプラグインが動くので、この返信ぶんも普通のターンとして記録される（返信専用の記録経路は無い）
+    const files = attachments.flatMap((p) => ['-f', p])
+    return { bin: env.SAI_OPENCODE_BIN || 'opencode', args: ['run', ...splitArgs(env.SAI_OPENCODE_ARGS), ...pick, ...files, '-s', session, '--', text], cwd, text }
   }
   return null
 }

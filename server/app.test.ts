@@ -1077,6 +1077,8 @@ test('replyCommand は SAI_*_BIN で実行ファイルを差し替えられる',
   assert.deepEqual(replyCommand('codex', 'S', 'hi', '/w', {})!.args, ['exec', 'resume', 'S', '--', 'hi'])
   assert.equal(replyCommand('claude', 'S', 'hi', '/w', { SAI_CLAUDE_BIN: '/opt/claude' })!.bin, '/opt/claude')
   assert.equal(replyCommand('codex', 'S', 'hi', '/w', { SAI_CODEX_BIN: '/opt/codex' })!.bin, '/opt/codex')
+  assert.deepEqual(replyCommand('opencode', 'S', 'hi', '/w', {})!.args, ['run', '-s', 'S', '--', 'hi'])
+  assert.equal(replyCommand('opencode', 'S', 'hi', '/w', { SAI_OPENCODE_BIN: '/opt/opencode' })!.bin, '/opt/opencode')
   assert.equal(replyCommand('unknown', 'S', 'hi', '/w', {}), null)
 })
 

@@ -6,6 +6,44 @@ Claude / OpenAI のクラウドに出さず、手元のモデル（Ollama / LM S
 
 以下は実際に Ollama（`qwen3:8b`）で通したもの。通らなかったことも最後に書いてある。
 
+## OpenCode
+
+**ここが一番素直**（プロバイダの差し替えが素の作りに入っていて、SAI からの返信も同じモデルで回る）。プラグインの置き方は [README](../README.md)。
+
+プロジェクトの `opencode.json`（全体なら `~/.config/opencode/opencode.json`）に Ollama を足して既定のモデルにする:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "ollama": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ollama",
+      "options": { "baseURL": "http://127.0.0.1:11434/v1" },
+      "models": { "qwen3:8b": { "name": "Qwen3 8B" } }
+    }
+  },
+  "model": "ollama/qwen3:8b"
+}
+```
+
+これで回したターンは、プラグインが入っていればそのまま記録される:
+
+```json
+{"agent": "opencode", "event": "session.idle", "session_source": "payload", "model": "ollama/qwen3:8b", …}
+```
+
+`model` は `provider/model` の形でそのまま載る。セッションIDはイベントに載っているので `session_source` は常に `payload`（Codex のような rollout 引きも合成も要らない）。
+
+### SAI からの返信
+
+**Codex と違って、返信でモデルを指定し直す必要が無い**。端末（tmux）で開いていればその TUI に打ち込むだけだし、閉じていれば `opencode run -s <session>` で再開し、どちらも `opencode.json` の設定をそのまま使う。`SAI_OPENCODE_ARGS` で `--agent build` のような引数を足せる。
+
+### 分かっていること
+
+- 許可を SAI の画面から答える口は無い（`--permission-prompt-tool` に当たるものが無い）。`permission.asked` は待ちの行として出るだけで、答えるのは端末側
+- 一言コメント（digest）は SAI 側の設定（`SAI_DIGEST_PROVIDER=openai`）なので、エージェントが何であっても同じローカルのモデルで作れる
+
 ## Codex CLI
 
 ### 新しいセッション（端末で始める）

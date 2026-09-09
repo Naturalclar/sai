@@ -51,6 +51,36 @@
   /* 自分の表示名とアイコンのモーダル（ProfileEditor） */
   /* -- 許可の一覧（#162）。読むだけのモーダル */
   .modal.permissions { width: 520px; max-width: calc(100vw - 32px); max-height: 80vh; overflow-y: auto; }
+  /* 差分（#171）。本文は等幅で横スクロール、行番号は左に固定幅で並べる */
+  .modal.diff { width: 900px; max-width: calc(100vw - 32px); max-height: 85vh; overflow-y: auto; }
+  .modal.diff .where { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+  .modal.diff .where code { font-family: var(--mono); background: var(--chip); padding: 1px 6px; border-radius: 4px; color: var(--ink); }
+  .modal.diff .warn { color: var(--synth); font-size: 12px; margin-top: 6px; }
+  .modal.diff .none { color: var(--muted); font-size: 12px; padding: 2px 0 8px; }
+  .diff-section { margin-bottom: 14px; }
+  .diff-section .head { font-size: 12px; font-weight: 700; color: var(--muted); border-bottom: 1px solid var(--line); padding-bottom: 2px; margin-bottom: 4px; }
+  .diff-section .head .n { font-weight: 400; margin-left: 6px; }
+  .diff-section ul { list-style: none; margin: 0; padding: 0; }
+  .diff-section .file { display: flex; align-items: baseline; gap: 8px; width: 100%; background: none; border: 0; padding: 4px 2px; font: inherit; font-size: 13px; color: inherit; cursor: pointer; text-align: left; }
+  .diff-section .file:hover { background: var(--hover); }
+  .diff-section .file .mark { color: var(--muted); flex: none; }
+  .diff-section .file .path { font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+  .diff-section .file .tag { flex: none; }
+  .diff-section .file .counts { margin-left: auto; flex: none; font-family: var(--mono); font-size: 11px; }
+  .diff-section .counts .add { color: var(--codex); margin-right: 6px; }
+  .diff-section .counts .del { color: var(--claude); }
+  .diff-section .untracked li { font-size: 13px; padding: 2px 2px; }
+  .diff-section .untracked code, .diff-section .patch .note { font-family: var(--mono); font-size: 12px; }
+  .diff-section .patch { border: 1px solid var(--line); border-radius: 6px; margin: 2px 0 8px; overflow-x: auto; background: var(--panel); }
+  .diff-section .patch .note { color: var(--muted); padding: 6px 10px; font-family: inherit; font-size: 12px; }
+  .diff-section .hunk + .hunk { border-top: 1px solid var(--line); }
+  .diff-section .hh { font-family: var(--mono); font-size: 11px; color: var(--muted); background: var(--bg); padding: 2px 10px; white-space: pre; }
+  .diff-section .ln { display: flex; font-family: var(--mono); font-size: 12px; line-height: 1.5; white-space: pre; }
+  .diff-section .ln .no { flex: none; width: 3.5em; text-align: right; padding-right: 8px; color: var(--muted); opacity: .7; user-select: none; }
+  .diff-section .ln .sign { flex: none; width: 1.2em; user-select: none; }
+  .diff-section .ln .src { flex: 1; padding-right: 10px; }
+  .diff-section .ln.add { background: color-mix(in srgb, var(--codex) 14%, transparent); }
+  .diff-section .ln.del { background: color-mix(in srgb, var(--claude) 14%, transparent); }
   .modal.permissions .mode { font-size: 13px; margin-bottom: 10px; }
   .modal.permissions .mode b.loud { color: var(--claude); }
   .modal.permissions .mode .warn { color: var(--claude); font-size: 12px; margin-top: 2px; }

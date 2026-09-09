@@ -223,6 +223,17 @@ test('/api/sessions?project= で絞る（bare clone の worktree でもリポジ
   assert.deepEqual([...new Set(feed.rows.map((r) => r.session))], ['PJ3'], 'フィードも project で絞れる')
 })
 
+test('GET /api/sessions/<id>/diff: git のリポジトリでない cwd は 404、知らないセッションも 404', async () => {
+  // fixture の行の cwd は git のリポジトリではない temp なので、そこで git は読めない
+  const res = await get('/api/sessions/C1%40r/diff')
+  assert.equal(res.status, 404)
+  assert.match(((await res.json()) as { error: string }).error, /git が読めません/)
+
+  assert.equal((await get('/api/sessions/nope%40r/diff')).status, 404)
+  assert.equal((await get('/api/sessions//diff')).status, 400, 'id が空')
+  assert.equal((await fetch(`${base}/api/sessions/C1%40r/diff`, { method: 'POST' })).status, 405, '読むだけ')
+})
+
 test('/api/sessions/<id>', async () => {
   const res = await get(`/api/sessions/${encodeURIComponent('S1@kanban')}`)
   assert.equal(res.status, 200)

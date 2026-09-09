@@ -209,3 +209,12 @@ test('defaultReplyTarget: 一番新しい行のセッションのうち処理中
   assert.equal(defaultReplyTarget([], [], none), null)
   assert.equal(defaultReplyTarget([t('x', { blocked: '合成' })], [t('x', { blocked: '合成' })], none), null, '再開できるものが無ければ null')
 })
+
+test('sessionReplyTargets: 端末で開いていれば terminal が付く（フィードの行から作った候補には付かない）', () => {
+  const open = summary({ id: 'T1@sai', terminal: { pane: '%9', pid: 200 } })
+  const closed = summary({ id: 'D1@sai' })
+  const [a, b] = sessionReplyTargets([open, closed])
+  assert.equal(a?.terminal, true)
+  assert.equal(b?.terminal, undefined, '端末で開いていなければ付けない')
+  assert.equal(feedReplyTargets([row({ session: 'T1' })])[0]?.terminal, undefined, '行だけからは分からない')
+})

@@ -60,6 +60,8 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
   const [cursor, setCursor] = useState<{ query: string; index: number }>({ query: '', index: 0 })
   // Esc で閉じた検索語。続きを打って検索語が変われば開き直す
   const [dismissed, setDismissed] = useState<string | null>(null)
+  // 処理中で送れないときに Enter を押した。黙って無視すると「送信できない」に見えるので理由を出す（#170）
+  const [hitBusy, setHitBusy] = useState(false)
   const ref = useRef<HTMLTextAreaElement>(null)
   // 確定で本文を差し替えた直後に置きたいカーソル位置。React が新しい値を書いた直後（描画前）に同期で当てる。
   // requestAnimationFrame だと、その前に打たれた文字の後ろへ戻ってしまう
@@ -80,6 +82,10 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
     el.style.height = 'auto'
     el.style.height = `${el.scrollHeight}px`
   })
+
+  // 端末（tmux）で開いていれば、前のターンが動いていても打ち込める（TUI が次のターンに回す）。
+  // 別プロセス（-p）の経路だけは二重起動になるので止める（#100, #170）
+  const blocked = busy && terminal !== true
 
   const drafting = text.trim() !== ''
   useEffect(() => {
@@ -160,6 +166,7 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
   /** 本文が変わったとき。選んだ表記が本文から消えていたら返信先も既定に戻す */
   const change = (next: string) => {
     setText(next)
+    setHitBusy(false)
     if (mention?.picked && !next.includes(mention.picked.label)) mention.onPick(null)
   }
 
@@ -173,7 +180,11 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
   const submit = () => {
     // 送る本文からは表記を外す（エージェントにメンションは渡さない）
     const body = (mention?.picked ? stripMention(text, mention.picked.label) : text).trim()
-    if (!body || busy) return
+    if (!body) return
+    if (blocked) {
+      setHitBusy(true)
+      return
+    }
     const sent = text
     setText('')
     setCaret(0)
@@ -241,8 +252,16 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
         </div>
       )}
       {/* どこで回すかの短い注意。入力欄の上に 1 行。詳しい説明（送った返信は対話側の画面には出ない、など）は README の「返信」の節 */}
-      <div className="note">
-        {terminal === true ? '端末（tmux）に打ち込む' : terminal === false ? '別プロセスで回す。端末には出ない' : '端末で開いていれば打ち込む'}
+      <div className={`note${hitBusy && blocked ? ' blocked' : ''}`}>
+        {hitBusy && blocked
+          ? mention
+            ? `#${repo} は前の返信を処理中。終わるまで待つか、@ で別のセッションに送ってください`
+            : '前の返信を処理中。終わるまで待ってください'
+          : terminal === true
+            ? '端末（tmux）に打ち込む'
+            : terminal === false
+              ? '別プロセスで回す。端末には出ない'
+              : '端末で開いていれば打ち込む'}
       </div>
       <div className="row">
         <textarea
@@ -263,10 +282,10 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
           }
           rows={1}
           // フィードでは送信中でも別の返信先へ打てるよう入力欄は止めない（送信ボタンだけ止める）
-          disabled={busy && !mention}
+          disabled={blocked && !mention}
         />
-        <button type="submit" disabled={busy || !(mention?.picked ? stripMention(text, mention.picked.label) : text).trim()}>
-          {busy ? (mention ? `#${repo} は処理中` : '送信中…') : '送信'}
+        <button type="submit" disabled={blocked || !(mention?.picked ? stripMention(text, mention.picked.label) : text).trim()}>
+          {blocked ? (mention ? `#${repo} は処理中` : '送信中…') : '送信'}
         </button>
       </div>
       {skillOpen && (

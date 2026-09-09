@@ -6,23 +6,26 @@ import { useMediaQuery } from './hooks'
 import { DaysSelect } from './DaysSelect'
 import { FacetSelect } from './FacetSelect'
 import { SessionItem } from './SessionItem'
+import type { NavTarget } from './sessionNav'
+import { todoItems } from './todoItems'
 
 interface Props {
   /** 一覧の取得結果。ポーリングは App が持つ（フィードの @ の候補にも使う） */
   list: Polled<SessionsResponse>
   filters: SessionFilters
   setFilters: (next: Partial<SessionFilters>) => void
-  /** 右側で開いているセッションのID。無ければフィード */
-  selectedId: string | null
+  /** サイドバーで選ばれている項目（固定の「フィード」「要対応」もここに入る） */
+  active: NavTarget
 }
 
 /** 左サイドバー。絞り込み、固定の「フィード」、その下にセッション一覧（新しい順） */
-export function SessionList({ list, filters, setFilters, selectedId }: Props) {
-  // キーボードでフィードに移ったとき、サイドバーの一番上まで見えるようにする（SessionItem と同じ扱い）
-  const feedRef = useRef<HTMLAnchorElement>(null)
+export function SessionList({ list, filters, setFilters, active }: Props) {
+  // キーボードで固定項目に移ったとき、サイドバーの一番上まで見えるようにする（SessionItem と同じ扱い）
+  const pinnedRef = useRef<HTMLAnchorElement>(null)
+  const pinned = active.kind === 'feed' || active.kind === 'todo'
   useEffect(() => {
-    if (selectedId === null) feedRef.current?.scrollIntoView({ block: 'nearest' })
-  }, [selectedId])
+    if (pinned) pinnedRef.current?.scrollIntoView({ block: 'nearest' })
+  }, [pinned])
 
   const { data, error, updatedAt } = list
   const now = updatedAt?.getTime() ?? 0
@@ -30,6 +33,7 @@ export function SessionList({ list, filters, setFilters, selectedId }: Props) {
 
   const facets = data?.filters ?? { projects: [], repos: [], agents: [], dates: [] }
   const sessions = data?.sessions ?? []
+  const todo = data ? todoItems(data.sessions, data.approvals).length : 0
 
   // タッチ端末では項目を左にスワイプしてアーカイブを出す。開いている項目は 1 つだけ
   const swipe = useMediaQuery('(hover: none) and (pointer: coarse)')
@@ -68,16 +72,21 @@ export function SessionList({ list, filters, setFilters, selectedId }: Props) {
       </div>
       {error && <div className="side-error">取得失敗: {error}</div>}
       <nav className="channels" onPointerDownCapture={onPointerDownCapture}>
-        <a ref={feedRef} className={`item feed${selectedId === null ? ' active' : ''}`} href="#/feed">
+        <a ref={pinnedRef} className={`item feed${active.kind === 'feed' ? ' active' : ''}`} href="#/feed">
           <span className="t">フィード</span>
           <span className="last">{filters.repo ? `#${filters.repo}` : '全セッション'}を時系列に</span>
+        </a>
+        {/* 要対応（#224）。件数は一覧と同じ取得結果から数えるので、ここでも取りに行かない */}
+        <a className={`item todo${active.kind === 'todo' ? ' active' : ''}`} href="#/todo">
+          <span className="t">要対応{todo > 0 && <span className="n">{todo}</span>}</span>
+          <span className="last">{todo > 0 ? 'あなたを待っています' : '待っているものはありません'}</span>
         </a>
         {archived && <div className="head">アーカイブ済み（薄く出る。開いて「戻す」か、新しい行が届けば自動で戻る）</div>}
         {sessions.map((s) => (
           <SessionItem
             key={s.id}
             s={s}
-            active={s.id === selectedId}
+            active={active.kind === 'session' && s.id === active.id}
             replying={data?.replying[s.id] ?? null}
             approval={data?.approvals[s.id]?.[0] ?? null}
             now={now}

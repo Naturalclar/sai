@@ -179,6 +179,27 @@
   .channels .item:hover .link, .channels a.item:hover { text-decoration: none; }
   /* 項目の右上の「アーカイブ」（箱のアイコン）。ホバーかフォーカスで出て、そのとき時刻の代わりに置く。
      ホバーの無い端末ではスワイプで出すレールが代わり（下）。ボタン自体は残してフォーカスで出る（読み上げの経路） */
+  /* 固定の「要対応」（#224）。件数のバッジ付き。数が 0 のときは普通の項目と同じ見た目 */
+  .channels .item.todo .t { display: flex; align-items: center; gap: 6px; }
+  .channels .item.todo .t .n { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--synth); color: #fff; font-size: 11px; font-weight: 700; }
+  /* 要対応の画面。1 件 = 1 枚のカード。答えられるものは中に ApprovalBubble をそのまま置く */
+  .todo-list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding-bottom: 8px; }
+  .todo { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--panel); }
+  .todo.answer { border-left: 3px solid var(--accent); }
+  .todo.watch { border-left: 3px solid var(--synth); }
+  .todo .who { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; color: inherit; font-size: 13px; }
+  .todo .who:hover { text-decoration: none; }
+  .todo .who .name { font-weight: 700; overflow-wrap: anywhere; }
+  .todo .who:hover .name { text-decoration: underline; }
+  .todo .who .icon { width: 20px; height: 20px; border-radius: 20%; }
+  .todo .who .where, .todo .who .waited { color: var(--muted); font-size: 11px; }
+  .todo .who .waited { margin-left: auto; white-space: nowrap; }
+  .todo .why { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; margin-top: 6px; font-size: 13px; }
+  .todo .why .text { overflow-wrap: anywhere; }
+  .todo .why .note { color: var(--muted); font-size: 11px; }
+  /* カードの中のバブルはアバターを出さない（誰のものかは上の行に書いてある） */
+  .todo .group.approval { margin-top: 4px; }
+  .todo .group.approval .avatar, .todo .group.approval .gh .name { display: none; }
   .channels .archive-btn { position: absolute; top: 4px; right: 6px; z-index: 1; opacity: 0; background: var(--panel); border: 1px solid var(--line); }
   .channels .archive-btn:hover { border-color: var(--muted); }
   .channels .archive-btn:disabled { background: var(--panel); }
@@ -224,7 +245,7 @@
     header .sidebar-toggle { display: none; }
     main.layout, main.layout.sidebar-closed, main.layout.diff-open, main.layout.sidebar-closed.diff-open { grid-template-columns: minmax(0, 1fr); transition: none; }
     .diff-pane { display: none; }
-    main.route-feed .sidebar, main.route-session .sidebar { display: none; }
+    main.route-feed .sidebar, main.route-session .sidebar, main.route-todo .sidebar { display: none; }
     /* 「閉じた」を無視して、#/ では一覧を必ず出す */
     main.layout.route-list .sidebar { display: block; visibility: visible; }
     main.route-list .pane { display: none; }

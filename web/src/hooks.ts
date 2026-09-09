@@ -2,12 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 export const POLL_MS = 3000
 
-export type Route = { name: 'list' } | { name: 'session'; id: string } | { name: 'feed' }
+export type Route = { name: 'list' } | { name: 'session'; id: string } | { name: 'feed' } | { name: 'todo' }
 
 export function parseRoute(hash: string): Route {
   const m = hash.match(/^#\/s\/(.+)$/)
   if (m?.[1]) return { name: 'session', id: decodeURIComponent(m[1]) }
   if (hash === '#/feed') return { name: 'feed' }
+  // 要対応（#224）。いま自分を待っているものだけ
+  if (hash === '#/todo') return { name: 'todo' }
   return { name: 'list' }
 }
 

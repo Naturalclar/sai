@@ -6,12 +6,13 @@ import { DiffPane } from './DiffPane'
 import { DiffModal } from './DiffModal'
 import { useNarrow } from './useNarrow'
 import { FeedView } from './FeedView'
+import { TodoView } from './TodoView'
 import { hm } from './format'
 import { MenuMark } from './MenuMark'
 import { GitHubMark } from './GitHubMark'
 import { UserMenu } from './UserMenu'
 import { api, type SessionFilters, type SettingsResponse } from './api'
-import { isTypingTarget, navAction, navTarget } from './sessionNav'
+import { isTypingTarget, navAction, navTarget, type NavTarget } from './sessionNav'
 import { PersonaSelect } from './PersonaSelect'
 import { LinearWorkspaceInput } from './LinearWorkspaceInput'
 import { useSettings } from './useSettings'
@@ -51,7 +52,7 @@ const EMPTY_PROJECTS: never[] = []
 /**
  * 1画面。左のサイドバーにセッション一覧、右にチャット（フィード or 選んだセッション）。
  * `#/` と `#/feed` は広い画面では同じ表示（サイドバー + フィード）。狭い画面では `#/` が一覧だけ、
- * `#/feed` と `#/s/<id>` がチャットだけになる（CSS の main.route-* で切り替える）。
+ * `#/feed` / `#/todo` / `#/s/<id>` がチャットだけになる（CSS の main.route-* で切り替える）。
  */
 export function App() {
   const route = useHashRoute()
@@ -125,9 +126,10 @@ export function App() {
     [applyFocus],
   )
 
-  // ↑↓（j / k）でサイドバーの並びのまま隣へ（フィードは一番上の項目）、Esc でフィードへ。起点は「いま開いているセッション」なので state は持たない。
+  // ↑↓（j / k）でサイドバーの並びのまま隣へ（フィード → 要対応 → セッション）、Esc でフィードへ。起点は「いま開いているセッション」なので state は持たない。
   // 入力欄にフォーカスがあるときはそちらの操作（caret の移動、@ の候補）なので触らない。サイドバーを閉じていても効く
-  const selectedId = route.name === 'session' ? route.id : null
+  // サイドバーで選ばれている項目。固定の「フィード」「要対応」もセッションと同じ 1 項目として扱う（#224）
+  const active: NavTarget = route.name === 'session' ? { kind: 'session', id: route.id } : route.name === 'todo' ? { kind: 'todo' } : { kind: 'feed' }
   const sessionIds = useMemo(() => list.data?.sessions.map((s) => s.id) ?? [], [list.data])
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -148,7 +150,8 @@ export function App() {
         return
       }
       if (action === 'feed') {
-        if (parseRoute(location.hash).name !== 'session') return
+        const name = parseRoute(location.hash).name
+        if (name !== 'session' && name !== 'todo') return
         e.preventDefault()
         location.hash = '#/feed'
         return
@@ -156,13 +159,13 @@ export function App() {
       // 起点は「押した瞬間の URL」。state（selectedId）だと、連打したとき再描画が追いつかず
       // 同じ場所から2回動こうとして取りこぼす
       const at = parseRoute(location.hash)
-      const from = at.name === 'session' ? at.id : null
-      // 行き先はサイドバーの並びどおり（フィードが 0 番目）。端では何もしない。
+      const from: NavTarget = at.name === 'session' ? { kind: 'session', id: at.id } : at.name === 'todo' ? { kind: 'todo' } : { kind: 'feed' }
+      // 行き先はサイドバーの並びどおり（フィード → 要対応 → セッション）。端では何もしない。
       // preventDefault もしない（ページのスクロールに残す）
       const to = navTarget(sessionIds, from, action)
       if (to === null) return
       e.preventDefault()
-      location.hash = to.kind === 'feed' ? '#/feed' : `#/s/${encodeURIComponent(to.id)}`
+      location.hash = to.kind === 'session' ? `#/s/${encodeURIComponent(to.id)}` : `#/${to.kind}`
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
@@ -239,11 +242,13 @@ export function App() {
         <aside className="sidebar">
           {/* 幅を固定した箱に入れる。開閉の遷移中に列だけが縮み、中身は折り返さない */}
           <div className="side-inner">
-            <SessionList list={list} filters={filters} setFilters={setFilters} selectedId={selectedId} />
+            <SessionList list={list} filters={filters} setFilters={setFilters} active={active} />
           </div>
         </aside>
         <div className="pane">
-          {route.name === 'session' ? (
+          {route.name === 'todo' ? (
+            <TodoView list={list} onStatus={onStatus} onOpenSidebar={openSidebar} onLeaveToSidebar={focusSidebar} linear={linear} settings={settings} />
+          ) : route.name === 'session' ? (
             <SessionView id={route.id} onStatus={onStatus} onOpenSidebar={openSidebar} onLeaveToSidebar={focusSidebar} onToggleDiff={toggleDiff} diffOpen={diffOpen !== null} linear={linear} settings={settings} />
           ) : (
             <FeedView

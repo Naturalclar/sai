@@ -392,6 +392,12 @@ SAI_CODEX_ARGS='-s workspace-write' pnpm start                    # Codex: 作�
 
 `claude` の `--allowedTools` は `~/.claude/settings.json` の `permissions.allow` と同じ書き方で、こちらは SAI からの返信にだけ効く（端末の許可設定はそのまま）。**SAI 自身は既定で何も付けない。** `--dangerously-skip-permissions` / `--permission-mode bypassPermissions` / Codex の `--dangerously-bypass-approvals-and-sandbox` も書けるが、返信の POST はブラウザから飛ぶので、その状態で別サイトからの CSRF が通ればエージェントが何でもできる（同一オリジンの検査で止めてはいる）。許可はツール単位で最小にする。
 
+**「ファイル編集は聞かない」はセッションごとに画面から切り替えられる。** チャット見出しの select（Claude のセッションだけ）で選ぶと、そのセッションへの SAI からの返信に `--permission-mode acceptEdits` が付き、編集の許可を聞かれなくなる（コマンドは今までどおり聞く）。値はセッションのメタ（`session-meta.json` の `permission_mode`、`PUT /api/sessions/<id>/meta`）。
+
+- **そのターン限りで、セッションには残らない。** `--model` と違うところ（`--model` は `--resume` に付けるとセッションの設定そのものが変わる）。フラグ付きで回したセッションを端末やフラグ無しで再開すると、許可は元どおり聞かれる
+- **端末（tmux）に打ち込む返信には効かない。** その経路は CLI を起動せずペインに文字を送るだけなので、フラグを渡す先が無い（端末側は Shift+Tab で切り替える）。端末で開いている間は select を薄く出す
+- **select に並ぶのは「ファイル編集は聞かない」まで。** 素通し系（`auto` / `bypassPermissions`）は並べず、`PUT` の口でも `400` にする（上の CSRF の理由）。それでも使うなら `SAI_CLAUDE_ARGS` で明示的に渡す
+
 ### 返信中の許可・質問に画面から答える
 
 端末と同じく、返信で回したエージェントが **許可（ツール実行の確認）や `AskUserQuestion` で止まったら、SAI のチャットに ⏳ のバブルと [許可] [常に許可] [拒否]（質問なら選択肢）が出て、そこから答えられる**。答えるまでエージェントは待っていて、一覧には「待機中」が付く。
@@ -476,7 +482,7 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 | `GET /api/sessions/<id>/permissions?days=90` | そのセッションの `cwd` に効いている許可ルール。`{ "id", "cwd", "agent", "mode", "sources", "rules" }`。`rules` は評価順（`deny` → `ask` → `allow`）。**読むだけ**で、パスは `cwd` から固定で組み立てる。Codex は `sources` / `rules` とも空 |
 | `GET /api/sessions/<id>/diff?base=&days=90` | そのセッションの worktree の差分（`git` を読むだけ）。`branch` が `base...HEAD`、`working` が未コミット、`untracked` は追跡外のファイル名。大きすぎれば `truncated`。`cwd` が git のリポジトリでなければ `404` |
 | `GET /api/sessions/<id>/meta` | 表示名・アーカイブ・返信のモデル・一言の性格。`{ "id", "meta": { "name"?, "archived_at"?, "model"?, "persona"? } }`。無ければ `meta` は `{}` |
-| `PUT /api/sessions/<id>/meta?days=90` | body `{ "name"?: "...", "archived_at"?: "<ISO>", "model"?: "opus", "persona"?: "ISTJ" }` をいまの値に重ねる。省略したキーは据え置き、空文字や `null` は「消す」で、全部消えたらエントリごと消える。知らないキーは捨てる。名前は100文字まで、`archived_at` は読める時刻、`model` は英数字で始まる 64 文字までの名前、`persona` は `shared/persona.ts` にある id（違えば `400`）。窓の中に無いセッションは `404`、別オリジンは `403` |
+| `PUT /api/sessions/<id>/meta?days=90` | body `{ "name"?: "...", "archived_at"?: "<ISO>", "model"?: "opus", "persona"?: "ISTJ", "permission_mode"?: "acceptEdits" }` をいまの値に重ねる。省略したキーは据え置き、空文字や `null` は「消す」で、全部消えたらエントリごと消える。知らないキーは捨てる。名前は100文字まで、`archived_at` は読める時刻、`model` は英数字で始まる 64 文字までの名前、`persona` は `shared/persona.ts` にある id、`permission_mode` は `acceptEdits` だけ（違えば `400`）。窓の中に無いセッションは `404`、別オリジンは `403` |
 | `GET /api/sessions/<id>/icon?v=<mtime>` | アイコン画像そのもの（`image/png` など）。無ければ `404`。`v` がいまのファイルと同じなら `Cache-Control: immutable`、無ければ `no-store` |
 | `PUT /api/sessions/<id>/icon?days=90` | body は画像そのもの（PNG / JPEG / GIF / WebP、1MB まで。種類は中身で見る。画面からは加工後の 256px の PNG が来る）。`{ "id", "icon": "<URL>" }` を返す。画像でなければ `400`、大きすぎれば `413`、窓の中に無いセッションは `404`、別オリジンは `403` |
 | `DELETE /api/sessions/<id>/icon` | 画像を消す。`{ "id", "icon": null }`。無くても `200`。別オリジンは `403` |

@@ -48,6 +48,24 @@ test('mergeMeta: persona は shared/persona.ts の id。空 / null で消え（�
   assert.equal(isEmptyMeta({ persona: 'ISTJ' }), false)
 })
 
+test('mergeMeta: permission_mode は画面から選べるものだけ。素通し系は弾く。空 / null で消え、他のキーは触らない', () => {
+  const cur = { name: 'A' }
+  assert.deepEqual(mergeMeta(cur, { permission_mode: 'acceptEdits' }).meta, { name: 'A', permission_mode: 'acceptEdits' })
+  assert.deepEqual(mergeMeta(cur, { permission_mode: ' acceptEdits ' }).meta, { name: 'A', permission_mode: 'acceptEdits' })
+  assert.deepEqual(mergeMeta({ name: 'A', permission_mode: 'acceptEdits' }, { permission_mode: '' }).meta, { name: 'A' })
+  assert.deepEqual(mergeMeta({ name: 'A', permission_mode: 'acceptEdits' }, { permission_mode: null }).meta, { name: 'A' })
+  assert.deepEqual(
+    mergeMeta({ name: 'A', permission_mode: 'acceptEdits' }, { name: 'B' }).meta,
+    { name: 'B', permission_mode: 'acceptEdits' },
+    '名前だけ変えてもモードは残る',
+  )
+  // 素通し系は口としても受けない（画面に並べないだけでなく）
+  for (const bad of ['bypassPermissions', 'auto', 'dontAsk', 'default', 'plan', 'XXX', 1]) {
+    assert.notEqual(mergeMeta(cur, { permission_mode: bad }).error, '', `${String(bad)} は弾く`)
+  }
+  assert.equal(isEmptyMeta({ permission_mode: 'acceptEdits' }), false, 'モードだけでも空ではない（エントリが消えない）')
+})
+
 test('mergeMeta: model は別名かモデル名。空 / null で消え、変な文字と長すぎるものは弾く。他のキーは触らない', () => {
   const cur = { name: 'A' }
   assert.deepEqual(mergeMeta(cur, { model: ' opus ' }).meta, { name: 'A', model: 'opus' })

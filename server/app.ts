@@ -440,8 +440,9 @@ export function createApp(
     // 開いた画面からの返信が `http://<host>.ts.net`（80 番、誰も聞いていない）に投げて「SAI に届かない: fetch failed」になる
     const via = { url: selfUrl(req), entity: id }
     // セッションに返信のモデルが設定されていれば（PUT /api/sessions/<id>/meta の model）それで回す
-    const model = (await metaStore.get(id))?.model
-    const cmd = replyCommand(session.agent, raw, text, cwd, process.env, via, model)
+    const own = await metaStore.get(id)
+    const model = own?.model
+    const cmd = replyCommand(session.agent, raw, text, cwd, process.env, via, model, own?.permission_mode)
     if (!cmd) return error(res, 400, replyBlockedReason(session) || 'unsupported agent')
     try {
       // プロセスが終わったら、そのセッションの答え待ちは deny で片付ける（もう誰も答えを取りに来ない）

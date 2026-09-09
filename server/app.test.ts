@@ -586,6 +586,28 @@ test('PUT meta: model は次の返信の claude / codex に --model / -m とし�
   assert.equal((await putMeta('C1@r', { model: 'a'.repeat(65) })).status, 400)
 })
 
+test('PUT meta: permission_mode は次の返信の claude に --permission-mode として付き、消せば付かない。素通し系は 400', async () => {
+  runner.started.length = 0
+  assert.equal((await putMeta('C1@r', { permission_mode: 'acceptEdits' })).status, 200)
+  const detail = (await (await get('/api/sessions/C1%40r?days=7')).json()) as SessionDetailResponse
+  assert.equal(detail.session.meta?.permission_mode, 'acceptEdits', '詳細の meta に載る')
+
+  assert.equal((await post('C1@r', { text: 'つづき' })).status, 202)
+  const args = runner.started[0]!.cmd.args
+  assert.deepEqual(args.slice(args.indexOf('--permission-mode'), args.indexOf('--permission-mode') + 2), ['--permission-mode', 'acceptEdits'])
+  assert.ok(args.indexOf('--permission-mode') < args.indexOf('-p'), '--permission-mode は -p より前')
+
+  // 消すと付かない
+  assert.equal((await putMeta('C1@r', { permission_mode: '' })).status, 200)
+  assert.equal((await post('C1@r', { text: 'x' })).status, 202)
+  assert.ok(!runner.started[1]!.cmd.args.includes('--permission-mode'), '既定に戻したら付かない')
+
+  // 素通し系は口としても受けない
+  assert.equal((await putMeta('C1@r', { permission_mode: 'bypassPermissions' })).status, 400)
+  assert.equal((await putMeta('C1@r', { permission_mode: 'auto' })).status, 400)
+  assert.equal((await putMeta('C1@r', { permission_mode: 'plan' })).status, 400)
+})
+
 test('PUT meta: 検査', async () => {
   const bad = async (body: unknown, re: RegExp) => {
     const res = await putMeta('C1@r', body)
@@ -935,6 +957,29 @@ test('replyCommand: SAI_*_ARGS の追加引数。Claude は先頭（--allowedToo
   )
   assert.deepEqual(replyCommand('codex', 'S', 'hi', '/w', {}, undefined, 'gpt-5')!.args, ['exec', 'resume', '-m', 'gpt-5', 'S', '--', 'hi'])
   assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', {}, undefined, '')!.args, ['-p', '--resume', 'S', '--', 'hi'], '空なら付けない')
+})
+
+test('replyCommand: セッションの許可モードは Claude だけに --permission-mode として付く（運用者の指定より後ろ）', () => {
+  assert.deepEqual(
+    replyCommand('claude', 'S', 'hi', '/w', {}, undefined, undefined, 'acceptEdits')!.args,
+    ['--permission-mode', 'acceptEdits', '-p', '--resume', 'S', '--', 'hi'],
+  )
+  assert.deepEqual(
+    replyCommand('claude', 'S', 'hi', '/w', {}, undefined, 'opus', 'acceptEdits')!.args,
+    ['--model', 'opus', '--permission-mode', 'acceptEdits', '-p', '--resume', 'S', '--', 'hi'],
+    'モードと一緒でも並ぶ',
+  )
+  assert.deepEqual(
+    replyCommand('claude', 'S', 'hi', '/w', { SAI_CLAUDE_ARGS: '--permission-mode plan' }, undefined, undefined, 'acceptEdits')!.args,
+    ['--permission-mode', 'plan', '--permission-mode', 'acceptEdits', '-p', '--resume', 'S', '--', 'hi'],
+    '運用者の指定より後ろ（後勝ち）',
+  )
+  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', {}, undefined, undefined, '')!.args, ['-p', '--resume', 'S', '--', 'hi'], '空なら付けない')
+  assert.deepEqual(
+    replyCommand('codex', 'S', 'hi', '/w', {}, undefined, undefined, 'acceptEdits')!.args,
+    ['exec', 'resume', 'S', '--', 'hi'],
+    'Codex に同等のフラグは無いので付けない',
+  )
 })
 
 test('splitArgs: シェル風に割る', () => {

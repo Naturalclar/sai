@@ -49,7 +49,7 @@ import { META_FILE, MetaStore } from './meta.ts'
 import { collectPermissions } from './permissions.ts'
 import { compareUrl } from '../shared/diff.ts'
 import { NotAGitRepo, RealGit, sessionDiff } from './diff.ts'
-import { fillProjects, ProjectResolver } from './project.ts'
+import { fillRepo, ProjectResolver } from './project.ts'
 import type { Git } from './diff.ts'
 import { AttachmentStore } from './attachments.ts'
 import { PROFILE_FILE, ProfileStore } from './profile.ts'
@@ -295,8 +295,8 @@ export function createApp(
    */
   const sessionsWithMeta = async (days: number): Promise<{ rev: string; sessions: SessionSummary[] }> => {
     const [{ rev, sessions: raw }, meta, icons] = await Promise.all([store.sessions(days), metaStore.all(), iconStore.all()])
-    // project の無い古い行のセッションは cwd から git で引いて埋める（cwd ごとに 1 回だけ。#182）
-    const sessions = await fillProjects(projects, raw)
+    // project / remote の無い古い行のセッションは cwd から git で引いて埋める（cwd ごとに 1 回だけ。#182、#212）
+    const sessions = await fillRepo(projects, raw)
     return {
       rev: `${rev}-${meta.rev}-${icons.rev}`,
       sessions: sessions.map((s) => {

@@ -303,6 +303,10 @@
   .chat-head .meta.pull { margin-left: auto; }
   .chat-head .meta select { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; font: inherit; font-size: 12px; }
   .chat-head .meta code { font-family: var(--mono); background: var(--chip); padding: 1px 5px; border-radius: 4px; }
+  /* そのセッションのリポジトリへのリンク（#212）。見出しは baseline 揃えなので、アイコンは文字に対してずらす（img.icon と同じ） */
+  .chat-head a.repo-link { color: var(--muted); text-decoration: none; white-space: nowrap; }
+  .chat-head a.repo-link svg { vertical-align: -3px; margin-right: 4px; }
+  .chat-head a.repo-link:hover { color: var(--ink); text-decoration: underline; }
   /* 表示名・アイコン画像（ブラウザから付けるもの）。画像は角丸の正方形に切る */
   /* 角丸は加工で焼き込む値（shared/icon.ts の ICON_RADIUS_RATIO = 20%）と同じ比率。加工前の古い画像も同じ見た目になる */
   img.icon { width: 16px; height: 16px; object-fit: cover; border-radius: 20%; vertical-align: -3px; }

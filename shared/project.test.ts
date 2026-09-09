@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { normalizeRemote, projectFromCommonDir, projectFromRemote, projectName, rowProject } from './project.ts'
+import { normalizeRemote, projectFromCommonDir, projectFromRemote, projectName, remoteHost, repoLink, rowProject } from './project.ts'
 
 test('projectFromRemote: 正規化済みの remote から owner/repo。読めなければ空', () => {
   assert.equal(projectFromRemote('https://github.com/Naturalclar/sai'), 'Naturalclar/sai')
@@ -55,4 +55,34 @@ test('projectName: 表示用の短い名前', () => {
   assert.equal(projectName('Naturalclar/sai'), 'sai')
   assert.equal(projectName('sai'), 'sai')
   assert.equal(projectName(''), '')
+})
+
+test('remoteHost: 正規化済みの remote のホスト。その形でなければ空', () => {
+  assert.equal(remoteHost('https://github.com/Naturalclar/sai'), 'github.com')
+  assert.equal(remoteHost('https://gitlab.example.com/grp/sub/repo'), 'gitlab.example.com')
+  assert.equal(remoteHost('git@github.com:Naturalclar/sai.git'), '', '正規化前は読まない')
+  assert.equal(remoteHost('https://github.com'), '', 'パスが無い')
+  assert.equal(remoteHost(''), '')
+  assert.equal(remoteHost(undefined), '')
+})
+
+test('repoLink: remote が無ければ null。GitHub 以外にはロゴを出さない', () => {
+  assert.deepEqual(repoLink({ project: 'Naturalclar/sai', remote: 'https://github.com/Naturalclar/sai' }), {
+    url: 'https://github.com/Naturalclar/sai',
+    label: 'Naturalclar/sai',
+    host: 'github.com',
+    github: true,
+  })
+  // remote が無ければ飛び先が無い。project だけあっても出さない
+  assert.equal(repoLink({ project: 'Naturalclar/sai', remote: '' }), null)
+  assert.equal(repoLink({ project: 'sai' }), null)
+  assert.equal(repoLink({}), null)
+  // project が空でも remote のパスから作れる
+  assert.equal(repoLink({ remote: 'https://github.com/o/r' })?.label, 'o/r')
+  // GitLab（サブグループ）や self-hosted はリンクにはするが、ロゴは GitHub のものにしない
+  const gitlab = repoLink({ project: 'sub/repo', remote: 'https://gitlab.example.com/grp/sub/repo' })
+  assert.equal(gitlab?.github, false)
+  assert.equal(gitlab?.host, 'gitlab.example.com')
+  assert.equal(gitlab?.url, 'https://gitlab.example.com/grp/sub/repo', '飛び先はサブグループごと')
+  assert.equal(repoLink({ project: 'o/r', remote: 'https://github.example.com/o/r' })?.github, false, 'ホスト名に github が入っていても github.com ではない')
 })

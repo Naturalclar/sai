@@ -90,3 +90,36 @@ export function projectName(project: string): string {
   const parts = (project ?? '').split('/').filter(Boolean)
   return parts[parts.length - 1] ?? ''
 }
+
+/**
+ * 正規化済みの remote のホスト（`https://github.com/o/r` → `github.com`）。
+ * normalizeRemote() を通ったものだけを渡す前提なので、その形でなければ空
+ */
+export function remoteHost(remote: string | undefined): string {
+  return (remote ?? '').trim().match(/^https:\/\/([^/]+)\//)?.[1] ?? ''
+}
+
+/** 見出しに出すリポジトリへのリンク（#212） */
+export interface RepoLink {
+  /** 飛び先。正規化済みの remote そのもの */
+  url: string
+  /** 出す文字（`Naturalclar/sai`） */
+  label: string
+  host: string
+  /** GitHub のロゴを出してよいか */
+  github: boolean
+}
+
+/**
+ * セッションのリポジトリへのリンク。**remote が無ければ null**（飛び先が無いので何も出さない）。
+ * ラベルは `project`、無ければ remote のパスから作る。
+ * ロゴは `github.com` のときだけ GitHub のものにする（GitLab や self-hosted に GitHub のロゴを出さない）
+ */
+export function repoLink(s: { project?: string; remote?: string }): RepoLink | null {
+  const url = (s.remote ?? '').trim()
+  const host = remoteHost(url)
+  if (!host) return null
+  const label = (s.project ?? '').trim() || projectFromRemote(url)
+  if (!label) return null
+  return { url, label, host, github: host === 'github.com' }
+}

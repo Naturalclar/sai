@@ -7,6 +7,7 @@ import { api } from './api'
 import { useLocalState, usePolling } from './hooks'
 import { dayLabel, hm } from './format'
 import { AgentChip } from './AgentChip'
+import { RepoLink } from './RepoLink'
 import { SynthTag } from './SynthTag'
 import { ReplyingTag } from './ReplyingTag'
 import { WaitingTag } from './WaitingTag'
@@ -65,6 +66,8 @@ export function SessionView({ id, onStatus, onOpenSidebar, onOpenDiff, onLeaveTo
           {/* bare clone だと repo は worktree 名なので、リポジトリ名（project）。worktree は右の branch で分かる */}
           <h1><span className="hash">#</span>{projectName(s.project) || s.repo}</h1>
           <span className="meta"><AgentChip agent={s.agent} /></span>
+          {/* origin が分かるときだけ、そのリポジトリへのリンク（remote が無ければ何も出ない） */}
+          <RepoLink project={s.project} remote={s.remote} />
           {/* 使ったモデルの表示だけ。返信で使うモデルを変えるのは入力欄（送信ボタンの左） */}
           {s.model && <span className="meta"><ModelTag model={s.model} models={s.models} /></span>}
           {s.branch && <span className="meta"><code>{s.branch}</code></span>}

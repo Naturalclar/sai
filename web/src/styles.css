@@ -431,11 +431,18 @@
   .group.approval .actions button.allow { background: var(--accent); border-color: var(--accent); color: #fff; }
   .group.approval .actions button.always { border-color: var(--accent); color: var(--accent); }
   .group.approval .actions button:disabled { opacity: .5; cursor: default; }
+  /* 質問（AskUserQuestion）は 1 問ずつ。選択肢は縦に積んで説明を label の下に出す（携帯ではツールチップが読めないため） */
   .group.approval .questions { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
-  .group.approval .question .q { margin-bottom: 4px; }
-  .group.approval .options { display: flex; flex-wrap: wrap; gap: 6px; }
-  .group.approval .options button { font: inherit; font-size: 13px; padding: 3px 10px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; }
+  .group.approval .question .q { margin-bottom: 6px; }
+  .group.approval .question .q .step { display: inline-block; margin-right: 6px; padding: 1px 6px; border-radius: 8px; background: var(--chip); color: var(--muted); font-size: 11px; }
+  .group.approval .question .q .multi { margin-left: 6px; color: var(--muted); font-size: 11px; }
+  .group.approval .options { display: flex; flex-direction: column; gap: 6px; align-items: stretch; }
+  .group.approval .options button { font: inherit; font-size: 13px; text-align: left; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; }
   .group.approval .options button.picked { background: color-mix(in srgb, var(--accent) 16%, transparent); border-color: var(--accent); color: var(--accent); }
+  .group.approval .options .label { font-weight: 600; }
+  .group.approval .options .rec { margin-left: 6px; padding: 1px 6px; border-radius: 8px; background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); font-size: 11px; font-weight: 600; }
+  .group.approval .options .desc { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; font-weight: 400; }
+  .group.approval .questions .other { margin-top: 6px; width: 100%; box-sizing: border-box; font: inherit; font-size: 16px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); resize: vertical; }
   .group.approval.done { opacity: .6; }
   .pending-line.long .time { color: var(--synth); font-weight: 600; }
   .reply { position: relative; display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }

@@ -30,7 +30,8 @@ Claude の `Stop` は `session_id` を stdin の JSON に含むが、Codex の `
 確かめた範囲で分かっていること:
 
 - `PermissionRequest` には `tool_use_id` が無い（`PreToolUse` にはある）。重複は「同じセッションの直前の行と同じ text」で落とす
-- 非対話（`claude -p`。画面からの返信もこれ）で許可が要るツールを呼ぶと、**自動で拒否されて `PermissionRequest` は鳴らない**（Claude Code 2.1.258 で確認）。`AskUserQuestion` は `-p` ではそもそもツールとして出ない。つまり返信経路で許可待ちに入ることは無く、拒否されたあとの返答が普通のターンとして届く
+- 非対話（`claude -p`。画面からの返信もこれ）で許可が要るツールを呼ぶと、**自動で拒否されて `PermissionRequest` は鳴らない**（Claude Code 2.1.258 で確認）。つまり返信経路で許可待ちに入ることは無く、拒否されたあとの返答が普通のターンとして届く
+- **`AskUserQuestion` / `ExitPlanMode` が `-p` に出るかは `--permission-prompt-tool` 次第**（2.1.266 で測り直した。`-p --output-format stream-json --verbose` の最初の `system` 行の `tools` を見る）。素の `-p` では両方とも出ないが、`--permission-prompt-tool` を付けると**どちらも出る**（`--mcp-config` だけでは出ない。効いているのは前者）。SAI の返信は必ず付けている（`SAI_APPROVE=0` のときだけ外れる）ので、**返信中に質問で止まることはある**。答えの `answers` には選択肢の label 以外の文字列（その他の自由記入）を入れてもそのままエージェントに届く（#195）
 - `AskUserQuestion` / `ExitPlanMode` で `PermissionRequest` が鳴るかは端末でしか確かめられないので、`PreToolUse` を matcher 付きで並走させている。両方鳴っても同じ text なので1行になる
 - Codex の `notify` は `agent-turn-complete` しか無いので、Codex の承認待ちは記録できない
 

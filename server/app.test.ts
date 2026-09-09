@@ -824,6 +824,7 @@ test('digest: 起動後に増えた行に一言が付いて feed / 詳細 / 一�
   const prompt = summarizer.prompts[summarizer.prompts.length - 1]!
   assert.match(prompt, /PR #35 をマージしました/)
   assert.match(prompt, /口調: /)
+  assert.match(prompt, /「何をするものか」を短く添える/, '番号だけでなく中身も残させる')
 
   const feedAfter = (await (await get('/api/feed?days=3')).json()) as FeedResponse
   const d1 = feedAfter.rows.find((r) => r.session === 'D1')!

@@ -1,17 +1,20 @@
 // チャットのバブルに出す `text` を Markdown として描くための最小パーサ。
 // 扱うのはエージェントの返答で頻出するものだけ:
-//   URL / [ラベル](URL) / **太字** / `コード` / 箇条書き / 見出し / ```コードブロック / > 引用 / --- 罫線
+//   URL / [ラベル](URL) / **太字** / `コード` / :絵文字: / 箇条書き / 見出し / ```コードブロック / > 引用 / --- 罫線
 // HTML 文字列は作らず木（Block / Inline）を返す。React 要素への組み立ては web/src/Markdown.tsx。
 // `text` にはリポジトリの中身（issue のタイトルや他人のコミットメッセージ）がそのまま入るので、
 // HTML として解釈させない（`<script>` はただの文字として text ノードになる）。
 // 依存ゼロ・DOM 非依存なので node:test で回せる（shared/markdown.test.ts）。
 // 一覧の1行表示（last_text）から記号だけ落とす stripMarkdown() も同じ字句解析を使う。
+import { lookupEmoji } from './emoji.ts'
 
 export type Inline =
   | { kind: 'text'; text: string }
   | { kind: 'code'; text: string }
   | { kind: 'strong'; children: Inline[] }
   | { kind: 'link'; href: string; children: Inline[] }
+  /** `:tada:` → 🎉。表（shared/emoji.ts）に載っている名前だけ。name は元の名前で、画面は title に出す */
+  | { kind: 'emoji'; name: string; char: string }
 
 export interface ListItem {
   /** 字下げの深さ（0 が最上位）。描画側でインデント量にする */
@@ -32,10 +35,11 @@ export type Block =
 
 // 行内。左から一番早く始まるものを採る（同じ位置なら alternation の順）。
 //   1: `コード`    2: **太字**（中身は空白で始まらず終わらない）
-//   3: [ラベル](http(s) の URL)    4: むき出しの URL
+//   3: [ラベル](http(s) の URL)    4: :絵文字:    5: むき出しの URL
 // リンク先は http(s) だけ。`[file](web/src/x.ts)` のような相対パスや javascript: はリンクにしない。
-// むき出しの URL は空白・<> のほか全角の句読点・閉じ括弧（、。）」など）の手前で終わる。日本語の文中に URL が置かれるため
-const INLINE = /(`[^`\n]+`)|(\*\*\S(?:[^\n]*?\S)?\*\*)|(\[[^\]\n]*\]\(https?:\/\/[^\s)]*\))|(https?:\/\/[^\s<>、。，．）」』】〕》〉]+)/g
+// むき出しの URL は空白・<> のほか全角の句読点・閉じ括弧（、。）」など）の手前で終わる。日本語の文中に URL が置かれるため。
+// 絵文字は形が当たっただけでは採らず、表に載っている名前だけ（`14:08:30` の `:08:` のような時刻を絵文字にしないため）
+const INLINE = /(`[^`\n]+`)|(\*\*\S(?:[^\n]*?\S)?\*\*)|(\[[^\]\n]*\]\(https?:\/\/[^\s)]*\))|(:[a-z0-9_+-]{2,}:)|(https?:\/\/[^\s<>、。，．）」』】〕》〉]+)/g
 
 /** 1行分の行内要素。改行を含む文字列も受けるが、太字は行をまたがない */
 export function parseInline(src: string): Inline[] {
@@ -45,6 +49,12 @@ export function parseInline(src: string): Inline[] {
   let m: RegExpExecArray | null
   while ((m = re.exec(src))) {
     const whole = m[0]
+    // 表に無い名前はただの文字。開きの `:` の次から探し直す（`:foo::tada:` の後ろを拾うため）。
+    // ここで抜けると pos を進めないので、この部分は後ろの text ノードに含まれる
+    if (m[4] && !lookupEmoji(whole.slice(1, -1))) {
+      re.lastIndex = m.index + 1
+      continue
+    }
     if (m.index > pos) out.push({ kind: 'text', text: src.slice(pos, m.index) })
     if (m[1]) {
       out.push({ kind: 'code', text: whole.slice(1, -1) })
@@ -53,6 +63,9 @@ export function parseInline(src: string): Inline[] {
     } else if (m[3]) {
       const close = whole.indexOf('](')
       out.push({ kind: 'link', href: whole.slice(close + 2, -1), children: parseInline(whole.slice(1, close)) })
+    } else if (m[4]) {
+      const name = whole.slice(1, -1)
+      out.push({ kind: 'emoji', name, char: lookupEmoji(name)! })
     } else {
       // 文末の句読点や閉じ括弧は URL に含めない。`**https://...**` の閉じ `**` もここで外れる
       const href = trimUrl(whole)
@@ -185,5 +198,11 @@ export function stripMarkdown(line: string): string {
 }
 
 function plain(nodes: Inline[]): string {
-  return nodes.map((n) => (n.kind === 'text' || n.kind === 'code' ? n.text : plain(n.children))).join('')
+  return nodes
+    .map((n) => {
+      if (n.kind === 'text' || n.kind === 'code') return n.text
+      if (n.kind === 'emoji') return n.char
+      return plain(n.children)
+    })
+    .join('')
 }

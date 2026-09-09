@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent, SyntheticEvent } from 'react'
 import { filterReplyTargets, mentionLabels, mentionQuery, stripMention, type ReplyTarget } from '../../shared/reply.ts'
 import { filterSkills, skillSummary, slashQuery, type Skill } from '../../shared/skills.ts'
+import { emojiQuery, filterEmoji, type EmojiHit } from '../../shared/emoji.ts'
 import { elapsedLabel } from './format'
 import { useSkills } from './useSkills'
 
@@ -91,17 +92,23 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
   const slashHit = skillsId && !mentionHit ? slashQuery(text, caret) : null
   const skills = useSkills(skillsId, slashHit !== null)
   const shownSkills = slashHit ? filterSkills(skills, slashHit.query) : []
-  const hit = mentionHit ?? slashHit
+  // `:` は文中どこでも開くので、`@` と `/` が立っていないときだけ見る
+  const emojiHit = !mentionHit && !slashHit ? emojiQuery(text, caret) : null
+  const shownEmoji = emojiHit ? filterEmoji(emojiHit.query) : []
+  const hit = mentionHit ?? slashHit ?? emojiHit
   const mentionOpen = mentionHit !== null && dismissed !== mentionHit.query
   // スキルは当たりが無ければ開かない。先頭がパス（`/Users/…`）のときに空の候補で Enter を食べないため
   const skillOpen = slashHit !== null && dismissed !== slashHit.query && shownSkills.length > 0
-  const open = mentionOpen || skillOpen
+  // 絵文字も同じ。`14:08:30` のような時刻では当たりが無いので開かない
+  const emojiOpen = emojiHit !== null && dismissed !== emojiHit.query && shownEmoji.length > 0
+  const open = mentionOpen || skillOpen || emojiOpen
   const shown = mentionOpen && mention && mentionHit ? filterReplyTargets(mention.targets, mentionHit.query) : []
   const selectable = shown.filter((t) => !t.blocked)
   const index = hit && cursor.query === hit.query ? cursor.index : 0
   const active = selectable.length ? (selectable[Math.min(index, selectable.length - 1)] ?? null) : null
   const activeSkill = skillOpen && shownSkills.length ? (shownSkills[Math.min(index, shownSkills.length - 1)] ?? null) : null
-  const count = skillOpen ? shownSkills.length : selectable.length
+  const activeEmoji = emojiOpen && shownEmoji.length ? (shownEmoji[Math.min(index, shownEmoji.length - 1)] ?? null) : null
+  const count = skillOpen ? shownSkills.length : emojiOpen ? shownEmoji.length : selectable.length
   const moveCursor = (i: number) => hit && setCursor({ query: hit.query, index: i })
 
   const track = (e: SyntheticEvent<HTMLTextAreaElement>) => setCaret(e.currentTarget.selectionStart)
@@ -130,6 +137,20 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
     if (!slashHit) return
     const at = s.name.length + 2
     setText(`/${s.name} ${text.slice(caret)}`)
+    setCaret(at)
+    setDismissed(null)
+    wantCaret.current = at
+    ref.current?.focus()
+  }
+
+  /**
+   * 絵文字の候補を確定する。`:名前` を**絵文字そのもの**に置き換える（`:tada:` ではなく 🎉 を本文に入れる）。
+   * 送る本文にも絵文字が入るので、Markdown を通さない自分のバブルにも、エージェント側にもそのまま出る
+   */
+  const pickEmoji = (e: EmojiHit) => {
+    if (!emojiHit) return
+    const at = emojiHit.start + e.char.length
+    setText(`${text.slice(0, emojiHit.start)}${e.char}${text.slice(caret)}`)
     setCaret(at)
     setDismissed(null)
     wantCaret.current = at
@@ -187,6 +208,7 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
         e.preventDefault()
         if (active) pick(active)
         else if (activeSkill) pickSkill(activeSkill)
+        else if (activeEmoji) pickEmoji(activeEmoji)
         else setDismissed(hit.query) // 候補が無いときの Enter は送信せず閉じるだけ
         return
       }
@@ -268,6 +290,30 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
               <b>/{s.name}</b>
               <span className="title">{skillSummary(s.description)}</span>
               {s.source === 'project' && <span className="tag">プロジェクト</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+      {emojiOpen && (
+        <ul className="mention emoji-list" role="listbox" aria-label="絵文字">
+          {shownEmoji.map((e) => (
+            <li
+              key={e.name}
+              role="option"
+              aria-selected={e === activeEmoji}
+              className={e === activeEmoji ? 'active' : ''}
+              // mousedown で選ぶ（click だと先に textarea が blur して caret が動く）
+              onMouseDown={(ev) => {
+                ev.preventDefault()
+                pickEmoji(e)
+              }}
+              onMouseEnter={() => {
+                const i = shownEmoji.indexOf(e)
+                if (i >= 0) moveCursor(i)
+              }}
+            >
+              <span className="char">{e.char}</span>
+              <b>:{e.name}:</b>
             </li>
           ))}
         </ul>

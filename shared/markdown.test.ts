@@ -9,6 +9,7 @@ const c = (text: string): Inline => ({ kind: 'code', text })
 const b = (...children: Inline[]): Inline => ({ kind: 'strong', children })
 const a = (href: string, ...children: Inline[]): Inline => ({ kind: 'link', href, children: children.length ? children : [t(href)] })
 const p = (...lines: Inline[][]): Block => ({ kind: 'paragraph', lines })
+const e = (name: string, char: string): Inline => ({ kind: 'emoji', name, char })
 
 test('issue の例: 太字の中の URL がリンクになりアスタリスクが消える', () => {
   const src = 'PR を作成しました: **https://github.com/Naturalclar/sai/pull/6**'
@@ -109,4 +110,25 @@ test('stripMarkdown: 一覧の1行表示から記号だけ落とす', () => {
   assert.equal(stripMarkdown('> 引用'), '引用')
   assert.equal(stripMarkdown('1. 手順'), '手順')
   assert.equal(stripMarkdown('記号なし'), '記号なし')
+})
+
+test('絵文字: 表にある `:name:` だけ絵文字にする', () => {
+  assert.deepEqual(parseInline('やった:tada:'), [t('やった'), e('tada', '🎉')])
+  assert.deepEqual(parseInline(':+1: と :100:'), [e('+1', '👍'), t(' と '), e('100', '💯')])
+  assert.deepEqual(parseInline('**:tada:**'), [b(e('tada', '🎉'))], '太字の中でも効く')
+})
+
+test('絵文字: 表に無い名前・コード・時刻はそのまま', () => {
+  assert.deepEqual(parseInline(':nosuchname:'), [t(':nosuchname:')], '表に無ければただの文字')
+  assert.deepEqual(parseInline(':foo::tada:'), [t(':foo:'), e('tada', '🎉')], '表に無い名前の後ろも探す')
+  assert.deepEqual(parseInline('14:08:30 に終わった'), [t('14:08:30 に終わった')], '時刻は絵文字にしない')
+  assert.deepEqual(parseInline('PATH=a:b:c'), [t('PATH=a:b:c')])
+  assert.deepEqual(parseInline('`:tada:`'), [c(':tada:')], 'コードの中は解釈しない')
+  assert.deepEqual(parseMarkdown('```\n:tada:\n```'), [{ kind: 'code', lang: '', text: ':tada:' }], 'コードブロックの中も')
+  // URL が先に当たる（左から一番早い）。末尾の `:` は前からある trimUrl が URL から外すので、そこだけ文字として残る
+  assert.deepEqual(parseInline('https://x.test/a:tada:'), [a('https://x.test/a:tada'), t(':')], 'URL の中は絵文字にしない')
+})
+
+test('絵文字: stripMarkdown では絵文字の文字だけ残す', () => {
+  assert.equal(stripMarkdown('- **やった** :tada: 終わり'), 'やった 🎉 終わり')
 })

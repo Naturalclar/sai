@@ -719,6 +719,7 @@ class RecordTest(unittest.TestCase):
         for inputs, want in (
             ("文字列のまま", "文字列のまま"),
             ([{"type": "text", "text": "ブロック"}, {"type": "input_text", "text": "2つ目"}], "ブロック\n2つ目"),
+            ([[{"type": "text", "text": "古い入力"}], [{"type": "text", "text": "最新"}, {"type": "input_text", "text": "2ブロック目"}]], "最新\n2ブロック目"),
             (None, ""),
         ):
             payload = {"type": "agent-turn-complete", "last-assistant-message": "x", "cwd": str(self.cwd)}
@@ -726,6 +727,16 @@ class RecordTest(unittest.TestCase):
                 payload["input-messages"] = inputs
             run(stdin=json.dumps(payload), env=self.env)
             self.assertEqual(read_rows(self.feed_dir)[-1]["user_text"], want, repr(inputs))
+
+    def test_codex_resume_uses_only_latest_input_message(self):
+        payload = {
+            "type": "agent-turn-complete",
+            "last-assistant-message": "done",
+            "cwd": str(self.cwd),
+            "input-messages": ["最初の依頼", "前の返信", "今回の返信"],
+        }
+        run(stdin=json.dumps(payload), env=self.env)
+        self.assertEqual(read_rows(self.feed_dir)[-1]["user_text"], "今回の返信")
 
     def test_synth_starts_new_session_after_gap(self):
         self.feed_dir.mkdir(parents=True)

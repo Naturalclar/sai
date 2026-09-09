@@ -370,10 +370,15 @@ export interface SettingsResponse {
   persona: PersonaId
   /** 一言を作る配線が有効か（SAI_DIGEST=1） */
   digest: boolean
+  /** 一言を作る口（SAI_DIGEST_PROVIDER）。claude は `claude -p`、openai は OpenAI 互換の HTTP（Ollama / LM Studio など） */
+  provider: DigestProvider
   model: string
   /** Linear の workspace（URL の linear.app/<workspace>/ の部分）。一言の中の PGR-123 のような識別子のリンク先。空なら組まない */
   linear_workspace: string
 }
+
+/** 一言を作る口。`claude`（`claude -p`。既定）か `openai`（OpenAI 互換の `/v1/chat/completions`。ローカルの LLM はこちら） */
+export type DigestProvider = 'claude' | 'openai'
 
 /** PUT /api/settings の body。省略したキーは据え置き */
 export interface SettingsRequest {

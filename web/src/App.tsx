@@ -120,7 +120,7 @@ export function App() {
           SAI <small>agent-feed viewer</small>
         </div>
         {settings?.digest && (
-          <div className="digest-ctl" title={settingsError || `一言コメント: ${settings.model}`}>
+          <div className="digest-ctl" title={settingsError || `一言コメント: ${settings.model}（${settings.provider}）`}>
             <PersonaSelect value={settings.persona} busy={settingsBusy} onChange={(p) => void setPersona(p)} />
             <LinearWorkspaceInput value={settings.linear_workspace} busy={settingsBusy} onChange={(ws) => void setLinearWorkspace(ws)} />
             {settingsError && <span className="note">{settingsError}</span>}

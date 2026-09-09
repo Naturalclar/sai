@@ -3,7 +3,9 @@ import assert from 'node:assert/strict'
 import { appendFile, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { DigestStore, Digester, digestKey, digestable, summarizeCommand } from './digest.ts'
+import { createServer } from 'node:http'
+import type { Server } from 'node:http'
+import { DEFAULT_OPENAI_URL, DigestStore, Digester, OpenAISummarizer, digestKey, digestable, digesterFromEnv, stripThinking, summarizeCommand, summarizeRequest } from './digest.ts'
 import type { Summarizer } from './digest.ts'
 import { row } from './aggregate.test.ts'
 import type { PersonaId } from '../shared/types.ts'
@@ -141,6 +143,164 @@ test('Digester: 無効なら何もしない', async () => {
     assert.equal(fake.prompts.length, 0)
     assert.equal(d.enabled, false)
     assert.equal(new Digester(store, null, { enabled: true, model: 'haiku', persona: async () => 'none' }).enabled, false)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+// ---------------------------------------------------------------- OpenAI 互換の口（ローカル LLM）
+
+test('summarizeRequest: <base>/chat/completions に user 1 通、stream なし。末尾の / は無視。鍵があれば Bearer', () => {
+  const r = summarizeRequest('http://127.0.0.1:11434/v1', 'qwen3:8b', 'プロンプト')
+  assert.equal(r.url, 'http://127.0.0.1:11434/v1/chat/completions')
+  assert.equal(r.init.method, 'POST')
+  assert.deepEqual(r.init.headers, { 'content-type': 'application/json' })
+  assert.deepEqual(JSON.parse(String(r.init.body)), { model: 'qwen3:8b', messages: [{ role: 'user', content: 'プロンプト' }], stream: false })
+  assert.equal(summarizeRequest('http://127.0.0.1:1234/v1/', 'm', 'p').url, 'http://127.0.0.1:1234/v1/chat/completions')
+  assert.deepEqual(summarizeRequest('http://x/v1', 'm', 'p', 'sk-1').init.headers, { 'content-type': 'application/json', authorization: 'Bearer sk-1' })
+})
+
+test('stripThinking: <think>…</think> を落とす。閉じていなければそこから後ろを全部落とす', () => {
+  assert.equal(stripThinking('<think>\n考え中\n</think>\n\n#35 マージした。'), '#35 マージした。')
+  assert.equal(stripThinking('前<think>a</think>中<think>b</think>後'), '前中後')
+  assert.equal(stripThinking('本文だけ'), '本文だけ')
+  assert.equal(stripThinking('<think>閉じない'), '')
+})
+
+/** /v1/chat/completions を偽装する。handler が返した status/body をそのまま返す。null なら応答しない（タイムアウトの確認用） */
+async function fakeOpenAI(handler: (body: Record<string, unknown>, headers: Record<string, string | string[] | undefined>) => { status: number; body: string } | null) {
+  const seen: { path: string; body: Record<string, unknown>; headers: Record<string, string | string[] | undefined> }[] = []
+  const server: Server = createServer((req, res) => {
+    const chunks: Buffer[] = []
+    req.on('data', (c: Buffer) => chunks.push(c))
+    req.on('end', () => {
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf-8')) as Record<string, unknown>
+      seen.push({ path: req.url ?? '', body, headers: req.headers })
+      const out = handler(body, req.headers)
+      if (!out) return // 応答しない
+      res.writeHead(out.status, { 'content-type': 'application/json' })
+      res.end(out.body)
+    })
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const addr = server.address()
+  const port = typeof addr === 'object' && addr ? addr.port : 0
+  return {
+    url: `http://127.0.0.1:${port}/v1`,
+    seen,
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.closeAllConnections()
+        server.close(() => resolve())
+      }),
+  }
+}
+
+const completion = (content: string) => ({ status: 200, body: JSON.stringify({ choices: [{ message: { role: 'assistant', content } }] }) })
+
+test('OpenAISummarizer: 普通の返答は content をそのまま。model と prompt が body に載る', async () => {
+  const fake = await fakeOpenAI(() => completion('  #35 マージしたよ。次は #31？  '))
+  try {
+    const s = new OpenAISummarizer(fake.url, 'qwen3:8b')
+    assert.equal(await s.summarize('P1'), '#35 マージしたよ。次は #31？')
+    assert.equal(fake.seen.length, 1)
+    assert.equal(fake.seen[0]!.path, '/v1/chat/completions')
+    assert.equal(fake.seen[0]!.body.model, 'qwen3:8b')
+    assert.deepEqual(fake.seen[0]!.body.messages, [{ role: 'user', content: 'P1' }])
+    assert.equal(fake.seen[0]!.headers.authorization, undefined, '鍵が無ければ Authorization を付けない')
+  } finally {
+    await fake.close()
+  }
+})
+
+test('OpenAISummarizer: <think> 付きの返答から思考が落ちる。鍵は Bearer で届く', async () => {
+  const fake = await fakeOpenAI(() => completion('<think>\nどう言い換えるか\n</think>\n\nテストも足した。'))
+  try {
+    const s = new OpenAISummarizer(fake.url, 'qwen3:8b', 'sk-local')
+    assert.equal(await s.summarize('P'), 'テストも足した。')
+    assert.equal(fake.seen[0]!.headers.authorization, 'Bearer sk-local')
+  } finally {
+    await fake.close()
+  }
+})
+
+test('OpenAISummarizer: HTTP エラー、content が空、思考だけ、JSON でない、は throw（Digester 側が「無いまま」にする）', async () => {
+  let mode: 'error' | 'empty' | 'think-only' | 'not-json' = 'error'
+  const fake = await fakeOpenAI(() => {
+    if (mode === 'error') return { status: 500, body: JSON.stringify({ error: { message: 'model not found' } }) }
+    if (mode === 'empty') return completion('')
+    if (mode === 'think-only') return completion('<think>…</think>')
+    return { status: 200, body: 'this is not json' }
+  })
+  try {
+    const s = new OpenAISummarizer(fake.url, 'm')
+    await assert.rejects(s.summarize('P'), /HTTP 500: .*model not found/)
+    mode = 'empty'
+    await assert.rejects(s.summarize('P'), /empty result/)
+    mode = 'think-only'
+    await assert.rejects(s.summarize('P'), /empty result/)
+    mode = 'not-json'
+    await assert.rejects(s.summarize('P'), /not JSON/)
+  } finally {
+    await fake.close()
+  }
+})
+
+test('OpenAISummarizer: 応答が無ければ timeoutMs で諦める', async () => {
+  const fake = await fakeOpenAI(() => null)
+  try {
+    const s = new OpenAISummarizer(fake.url, 'm', undefined, 100)
+    await assert.rejects(s.summarize('P'), (err: unknown) => err instanceof Error && err.name === 'TimeoutError')
+  } finally {
+    await fake.close()
+  }
+})
+
+test('digesterFromEnv: SAI_DIGEST_PROVIDER で口を選ぶ。openai は SAI_DIGEST_MODEL が無いと無効のまま立つ（落とさない）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-digest-env-'))
+  const sources = { settings: { get: async () => ({ persona: 'ENFP' as PersonaId }) } }
+  const logs: string[] = []
+  const log = (l: string) => logs.push(l)
+  try {
+    const store = new DigestStore(join(dir, 'digest.jsonl'))
+    // 既定は claude / haiku、SAI_DIGEST が無ければ無効で何も言わない
+    let d = digesterFromEnv(dir, store, sources, {}, log)
+    assert.equal(d.enabled, false)
+    assert.equal(d.provider, 'claude')
+    assert.equal(d.model, 'haiku')
+    assert.deepEqual(logs, [])
+    // claude を有効に
+    d = digesterFromEnv(dir, store, sources, { SAI_DIGEST: '1' }, log)
+    assert.equal(d.enabled, true)
+    assert.equal(d.provider, 'claude')
+    assert.deepEqual(logs, ['digest: claude model=haiku'])
+    // openai: モデル必須
+    logs.length = 0
+    d = digesterFromEnv(dir, store, sources, { SAI_DIGEST: '1', SAI_DIGEST_PROVIDER: 'openai' }, log)
+    assert.equal(d.enabled, false, 'モデルが無ければ summarizer を作らない')
+    assert.equal(d.provider, 'openai')
+    assert.match(logs[0] ?? '', /SAI_DIGEST_MODEL が要る/)
+    // openai: URL は既定 Ollama
+    logs.length = 0
+    d = digesterFromEnv(dir, store, sources, { SAI_DIGEST: '1', SAI_DIGEST_PROVIDER: 'openai', SAI_DIGEST_MODEL: 'qwen3:8b' }, log)
+    assert.equal(d.enabled, true)
+    assert.equal(d.provider, 'openai')
+    assert.equal(d.model, 'qwen3:8b')
+    assert.deepEqual(logs, [`digest: openai ${DEFAULT_OPENAI_URL} model=qwen3:8b`])
+    // openai: URL を変える
+    logs.length = 0
+    d = digesterFromEnv(dir, store, sources, { SAI_DIGEST: '1', SAI_DIGEST_PROVIDER: 'openai', SAI_DIGEST_MODEL: 'm', SAI_DIGEST_URL: 'http://127.0.0.1:1234/v1' }, log)
+    assert.deepEqual(logs, ['digest: openai http://127.0.0.1:1234/v1 model=m'])
+    // 知らない口は無効のまま
+    logs.length = 0
+    d = digesterFromEnv(dir, store, sources, { SAI_DIGEST: '1', SAI_DIGEST_PROVIDER: 'gemini' }, log)
+    assert.equal(d.enabled, false)
+    assert.match(logs[0] ?? '', /知らない口/)
+    // SAI_DIGEST が無ければ、口の設定が間違っていても黙っている
+    logs.length = 0
+    d = digesterFromEnv(dir, store, sources, { SAI_DIGEST_PROVIDER: 'openai' }, log)
+    assert.equal(d.enabled, false)
+    assert.deepEqual(logs, [])
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

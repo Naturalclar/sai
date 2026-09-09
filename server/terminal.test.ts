@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { isDescendant, MAX_CLEAR_KEYS, parsePs, promptState, TerminalBusy, TerminalGone, TerminalReplies, typeInto, TERMINAL_REPLY_TTL_MS } from './terminal.ts'
+import { CLEAR_RECAPTURES, isDescendant, MAX_CLEAR_KEYS, parsePs, promptState, TerminalBusy, TerminalGone, TerminalReplies, typeInto, TERMINAL_REPLY_TTL_MS } from './terminal.ts'
 import type { Tmux } from './terminal.ts'
 
 const CLAUDE_IDLE = [
@@ -66,16 +66,38 @@ class FakeTmux implements Tmux {
   /** C-u 1 回ごとにこの順で画面が変わる（複数行の打ちかけ）。空なら afterClear */
   clearSteps: string[] = []
   panePid: string | null = '100'
+  /** Escape を受けたらこの画面に変わる（候補メニューが閉じる）。null なら変わらない */
+  afterEscape: string | null = null
+  /** キーを送ったあと、この回数だけ capture-pane が古い画面を返す（描き直しの遅れ） */
+  lag = 0
+  private pendingScreen: string | null = null
+  private lagLeft = 0
   async run(args: string[], input?: string): Promise<string> {
     this.calls.push({ args, input })
     if (args[0] === 'display-message') {
       if (this.panePid === null) throw new Error("can't find pane %9")
       return this.panePid + '\n'
     }
-    if (args[0] === 'capture-pane') return this.screen
+    if (args[0] === 'capture-pane') {
+      if (this.pendingScreen !== null) {
+        if (this.lagLeft > 0) {
+          this.lagLeft--
+          return this.screen
+        }
+        this.screen = this.pendingScreen
+        this.pendingScreen = null
+      }
+      return this.screen
+    }
+    if (args[0] === 'send-keys' && args.includes('Escape') && this.afterEscape !== null) this.screen = this.afterEscape
     if (args[0] === 'send-keys' && args.includes('C-u')) {
-      if (this.clearSteps.length > 0) this.screen = this.clearSteps.shift()!
-      else if (this.afterClear !== null) this.screen = this.afterClear
+      const next = this.clearSteps.length > 0 ? this.clearSteps.shift()! : this.afterClear
+      if (next !== null) {
+        if (this.lag > 0) {
+          this.pendingScreen = next
+          this.lagLeft = this.lag
+        } else this.screen = next
+      }
     }
     return ''
   }
@@ -199,4 +221,47 @@ test('typeInto: 複数行の打ちかけは空になるまで C-u を繰り返�
   assert.equal(err.typed, '1行目\n2行目', '残っている分')
   assert.equal(stuck.calls.filter((c) => c.args.includes('C-u')).length, 2, '変わらなくなった時点で止める')
   assert.ok(MAX_CLEAR_KEYS >= 20)
+})
+
+/** `/issue-tri` と打ってスラッシュコマンドの候補メニューが開いた画面。選択行にも ❯ が付く（#157） */
+const CLAUDE_MENU = [
+  '──────────────────────────────────────',
+  '❯ /issue-tri',
+  '──────────────────────────────────────',
+  '❯ /issue-triage          List the open GitHub issues and order them',
+  '  /issue-write           Create or update an issue',
+  '  ⏵⏵ auto mode on (shift+tab to cycle)',
+].join('\n')
+
+test('promptState: 入力欄は区切り線の直上の ❯。候補メニューの選択行（❯ /issue-triage 説明）を打ちかけと読まない（#157）', () => {
+  const st = promptState(CLAUDE_MENU, 'claude')
+  assert.equal(st.kind, 'typed')
+  assert.equal(st.typed, '/issue-tri', 'メニューの行ではなく入力欄の文')
+  assert.equal(st.menu, true)
+  // メニューが無ければ menu は付かない。区切り線が無い画面は今までどおり一番下の ❯
+  assert.equal(promptState(CLAUDE_IDLE.replace('❯ Try "refactor <filepath>"', '❯ /clear'), 'claude').menu, undefined)
+  assert.equal(promptState('some output\n❯ 打ちかけ', 'claude').typed, '打ちかけ')
+  // メニューが開いていても入力欄が空（`/` だけ消した直後など）なら idle
+  assert.equal(promptState(CLAUDE_MENU.replace('❯ /issue-tri', '❯ '), 'claude').idle, true)
+})
+
+test('typeInto: 候補メニューが開いていれば Escape で閉じてから C-u。描き直しが遅れても見直して貼る（#157）', async () => {
+  const tmux = new FakeTmux()
+  tmux.screen = CLAUDE_MENU
+  tmux.afterEscape = CLAUDE_IDLE.replace('❯ Try "refactor <filepath>"', '❯ /issue-tri')
+  tmux.afterClear = CLAUDE_IDLE
+  const result = await typeInto(tmux, ps, { pane: '%9', pid: 200 }, 'claude', '本文', { replaceTyped: true, settleMs: 0 })
+  assert.equal(result.cleared, '/issue-tri')
+  const keys = tmux.calls.filter((c) => c.args[0] === 'send-keys').map((c) => c.args[3])
+  assert.deepEqual(keys, ['Escape', 'C-u', 'Enter'], 'Escape → C-u → 貼って Enter')
+
+  // C-u のあと 2 回は古い画面が返る（描き直しの遅れ）。見直して空を確かめてから貼る
+  const slow = new FakeTmux()
+  slow.screen = CLAUDE_IDLE.replace('❯ Try "refactor <filepath>"', '❯ 打ちかけ')
+  slow.lag = 2
+  const r2 = await typeInto(slow, ps, { pane: '%9', pid: 200 }, 'claude', '本文', { replaceTyped: true, settleMs: 0 })
+  assert.equal(r2.cleared, '打ちかけ')
+  assert.equal(slow.calls.filter((c) => c.args.includes('C-u')).length, 1, '見直しの間は C-u を重ねない')
+  assert.ok(slow.calls.some((c) => c.args[0] === 'paste-buffer'))
+  assert.ok(CLEAR_RECAPTURES >= 2)
 })

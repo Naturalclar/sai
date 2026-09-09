@@ -162,6 +162,38 @@ test('返信: ダイアログ中は replace_typed でも 409（code: terminal_di
   tmux.screen = IDLE
 })
 
+test('返信: 端末に打てない 409 には can_process が付き、via: process なら端末を見ずに別プロセスで回す（#157）', async () => {
+  // 打ちかけ・ダイアログ・入力欄不明のどれでも can_process
+  tmux.calls.length = 0
+  started.length = 0
+  tmux.screen = IDLE.replace('❯ Try "refactor <filepath>"', '❯ 消せない文')
+  let res = await post('T1@r', 'x')
+  assert.equal(res.status, 409)
+  assert.equal(((await res.json()) as ReplyError).can_process, true)
+  tmux.screen = IDLE + '  ❯ 1. Yes\n    2. No\n  Enter to confirm · Esc to cancel\n'
+  res = await post('T1@r', 'x')
+  assert.equal(((await res.json()) as ReplyError).can_process, true)
+  tmux.screen = '$ ls\n$ '
+  res = await post('T1@r', 'x')
+  assert.equal(((await res.json()) as ReplyError).code, 'terminal_unknown')
+  assert.equal(((await res.json().catch(() => ({}))) as ReplyError).can_process ?? true, true)
+  assert.equal(started.length, 0)
+
+  // via: process。端末は触らず（capture-pane も送らず）、-p を立てる
+  tmux.calls.length = 0
+  tmux.screen = IDLE.replace('❯ Try "refactor <filepath>"', '❯ 消せない文')
+  res = await post('T1@r', '別で送る', { via: 'process' })
+  assert.equal(res.status, 202, JSON.stringify(await res.clone().json()))
+  assert.equal(((await res.json()) as ReplyResponse).via, 'process')
+  assert.equal(tmux.calls.length, 0, '端末には何も送らない')
+  assert.equal(started.length, 1)
+  const args = started[0]!.cmd.args
+  assert.deepEqual(args.slice(args.indexOf('-p'), args.indexOf('-p') + 3), ['-p', '--resume', 'T1'], '今までの -p の経路そのもの')
+  const log = await readFile(join(dir, 'reply.log'), 'utf-8')
+  assert.match(log, /別プロセスで回す（画面の指定 via: process）/)
+  tmux.screen = IDLE
+})
+
 test('返信: ペインが消えていれば -p にフォールバック。端末で開いていないセッションも -p', async () => {
   tmux.paneExists = false
   started.length = 0

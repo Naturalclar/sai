@@ -50,7 +50,7 @@ export function FeedView({ repo, sessions = NO_SESSIONS, onStatus, onOpenSidebar
     return m
   }, [rows])
 
-  const { pending: allPending, failed, send, confirm, confirmReplace, cancelConfirm } = useReply((id) => counts.get(id) ?? 0, data?.replying ?? NO_REPLYING, updatedAt)
+  const { pending: allPending, failed, send, confirm, confirmReplace, confirmProcess, cancelConfirm } = useReply((id) => counts.get(id) ?? 0, data?.replying ?? NO_REPLYING, updatedAt)
   // サーバの replying にはこの画面の外のセッションも入る。フィードに行があるか、候補に出ているものだけ
   // （一覧にだけあるセッションへ送った直後は、まだフィードに行が無い）
   const pending = allPending.filter((p) => counts.has(p.id) || targets.some((t) => t.id === p.id))
@@ -117,7 +117,7 @@ export function FeedView({ repo, sessions = NO_SESSIONS, onStatus, onOpenSidebar
         ) : (
           <div className="notice">返信できるセッションがありません</div>
         ))}
-      {confirm && <ReplaceConfirm confirm={confirm} repo={repoOf(confirm.id)} onReplace={() => void confirmReplace()} onCancel={cancelConfirm} />}
+      {confirm && <ReplaceConfirm confirm={confirm} repo={repoOf(confirm.id)} onReplace={() => void confirmReplace()} onProcess={() => void confirmProcess()} onCancel={cancelConfirm} />}
       {failed && <div className="notice error">送信失敗（{repoOf(failed.id) ? `#${repoOf(failed.id)}` : failed.id}）: {failed.message}</div>}
     </section>
   )

@@ -321,6 +321,12 @@ export interface ReplyRequest {
    * 画面が 409（code: terminal_typed）を受けて人に確認したあとに true で送り直す。ダイアログ中には効かない
    */
   replace_typed?: boolean
+  /**
+   * 送り方。省略（auto）は「端末で開いていればペインに打ち込み、だめなら 409」。
+   * process は端末を見ずに別プロセス（`claude -p --resume` / `codex exec resume`）で回す。
+   * 端末に打ちかけが消せない・ダイアログ中・入力欄が読めないときの逃げ道（#157）。端末には出ない
+   */
+  via?: 'auto' | 'process'
 }
 
 /**
@@ -333,6 +339,8 @@ export interface ReplyError {
   error: string
   code?: 'terminal_typed' | 'terminal_dialog' | 'terminal_unknown'
   typed?: string
+  /** true なら `via: 'process'` で送り直せば端末を見ずに別プロセスで回せる（端末に打てない 409 に付く） */
+  can_process?: boolean
 }
 
 /**

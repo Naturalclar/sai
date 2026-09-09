@@ -33,7 +33,7 @@ export function SessionView({ id, onStatus, onOpenSidebar, linear, settings }: {
 
   // 返信先はこのセッションだけなので、行数はこの画面のターン完了の行数（入力の行は返信の終わりではない）
   const turns = data?.rows.reduce((n, r) => n + (eventKind(r.event) === 'turn' ? 1 : 0), 0) ?? 0
-  const { pending, failed, send, confirm, confirmReplace, cancelConfirm } = useReply((target) => (target === id ? turns : 0), data?.replying ?? NO_REPLYING, updatedAt)
+  const { pending, failed, send, confirm, confirmReplace, confirmProcess, cancelConfirm } = useReply((target) => (target === id ? turns : 0), data?.replying ?? NO_REPLYING, updatedAt)
   const mine = pending.find((p) => p.id === id) ?? null
   const now = updatedAt?.getTime() ?? 0
   const failedHere = failed && failed.id === id ? failed.message : null
@@ -108,7 +108,7 @@ export function SessionView({ id, onStatus, onOpenSidebar, linear, settings }: {
         ) : (
           <ReplyBox repo={s.repo} terminal={Boolean(s.terminal)} busy={mine !== null} busySince={mine?.since} now={now} replyModel={s.meta?.model} onSend={async (text) => (await send(id, text)) !== 'confirm'} />
         ))}
-      {confirmHere && <ReplaceConfirm confirm={confirmHere} onReplace={() => void confirmReplace()} onCancel={cancelConfirm} />}
+      {confirmHere && <ReplaceConfirm confirm={confirmHere} onReplace={() => void confirmReplace()} onProcess={() => void confirmProcess()} onCancel={cancelConfirm} />}
       {failedHere && <div className="notice error">送信失敗: {failedHere}</div>}
     </section>
   )

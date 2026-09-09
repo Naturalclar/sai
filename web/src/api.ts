@@ -25,11 +25,14 @@ export class ApiError extends Error {
   readonly status: number
   readonly code?: ReplyError['code']
   readonly typed?: string
-  constructor(message: string, status: number, code?: ReplyError['code'], typed?: string) {
+  /** 端末に打てない 409 で、via: process なら別プロセスで送れる */
+  readonly canProcess: boolean
+  constructor(message: string, status: number, code?: ReplyError['code'], typed?: string, canProcess = false) {
     super(message)
     this.status = status
     this.code = code
     this.typed = typed
+    this.canProcess = canProcess
   }
 }
 
@@ -38,7 +41,7 @@ async function failure(res: Response, url: string): Promise<Error> {
   try {
     const body = (await res.json()) as Partial<ReplyError>
     if (typeof body.error === 'string' && body.error) {
-      return new ApiError(body.error, res.status, body.code, typeof body.typed === 'string' ? body.typed : undefined)
+      return new ApiError(body.error, res.status, body.code, typeof body.typed === 'string' ? body.typed : undefined, body.can_process === true)
     }
   } catch {
     // JSON でない
@@ -93,11 +96,11 @@ export const api = {
     getJSON<SessionDetailResponse>(`/api/sessions/${encodeURIComponent(id)}?days=${days}`),
   feed: (f: FeedFilters) => getJSON<FeedResponse>(`/api/feed?${qs(f)}`),
   /** 返信。replaceTyped は端末の打ちかけを消して打ち込んでよい（409 の code: terminal_typed を人が確認したあと） */
-  reply: (id: string, text: string, options: { replaceTyped?: boolean } = {}, days = 90) =>
+  reply: (id: string, text: string, options: { replaceTyped?: boolean; via?: 'process' } = {}, days = 90) =>
     sendJSON<ReplyResponse>(
       'POST',
       `/api/sessions/${encodeURIComponent(id)}/reply?days=${days}`,
-      { text, ...(options.replaceTyped ? { replace_typed: true } : {}) } satisfies ReplyRequest,
+      { text, ...(options.replaceTyped ? { replace_typed: true } : {}), ...(options.via ? { via: options.via } : {}) } satisfies ReplyRequest,
     ),
   meta: (id: string) => getJSON<SessionMetaResponse>(`/api/sessions/${encodeURIComponent(id)}/meta`),
   /** 返信中の許可・質問に答える。allow は updatedInput を省けば元の入力のまま */

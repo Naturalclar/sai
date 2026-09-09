@@ -31,9 +31,14 @@ interface Props {
   profile?: Profile
   /** Linear の workspace（設定）。一言の中の PGR-123 のリンク先。空ならリンクにしない */
   linear?: string
+  /**
+   * 検索から飛んできた当たりの `ts`（#230）。その発言まで送って光らせ、**最下部には送らない**。
+   * その ts の行がまだ無ければ（窓の外、取得待ち）何もしない
+   */
+  focusTs?: string
 }
 
-export function Chat({ rows, showChannel, selfHost = '', sessions = NO_SESSIONS, trailer, showThinking = false, thinkingOpen = false, profile, linear = '' }: Props) {
+export function Chat({ rows, showChannel, selfHost = '', sessions = NO_SESSIONS, trailer, showThinking = false, thinkingOpen = false, profile, linear = '', focusTs = '' }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
   // 最下部が見えているか（描画にも使うので state）。見えていないときは「一番下へ」を出す
@@ -43,11 +48,28 @@ export function Chat({ rows, showChannel, selfHost = '', sessions = NO_SESSIONS,
   // エンティティID → セッション（表示名・アイコン画像）。バブルの見出しは行しか持っていないので、entityId で引く
   const byId = useMemo(() => new Map(sessions.map((s) => [s.id, s] as const)), [sessions])
 
-  // 最下部を見ていたときだけ、更新後も最下部に追従する
+  // 検索から飛んできたら、その発言まで送る（#230）。当てるまでは最下部に追従しない
+  // （追従すると、行が届くたびに下へ持っていかれて読めない）
+  const landed = useRef('')
   useEffect(() => {
+    if (!focusTs) {
+      landed.current = ''
+      return
+    }
+    if (landed.current === focusTs) return
+    const el = ref.current?.querySelector<HTMLElement>(`.msg[data-ts="${CSS.escape(focusTs)}"]`)
+    if (!el) return // まだ描画されていない（取得待ち）。次の描画で探し直す
+    landed.current = focusTs
+    stickToBottom.current = false
+    el.scrollIntoView({ block: 'center' })
+  })
+
+  // 最下部を見ていたときだけ、更新後も最下部に追従する。当たりへ送る間は割り込まない
+  useEffect(() => {
+    if (focusTs && landed.current !== focusTs) return
     const el = ref.current
     if (el && stickToBottom.current && (rows.length > 0 || trailer)) el.scrollTop = el.scrollHeight
-  }, [rows, trailer])
+  }, [rows, trailer, focusTs])
 
   const onScroll = () => {
     const el = ref.current
@@ -112,6 +134,7 @@ export function Chat({ rows, showChannel, selfHost = '', sessions = NO_SESSIONS,
                         model={u.model}
                         remote={u.row.remote}
                         linear={linear}
+                        found={focusTs !== '' && u.row.ts === focusTs}
                       />
                     ))}
                   </div>

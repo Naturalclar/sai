@@ -11,6 +11,7 @@ import type {
   ReplyResponse,
   SessionDetailResponse,
   SessionDiffResponse,
+  SearchResponse,
   SessionDiffSummaryResponse,
   SessionFilters,
   SessionIconResponse,
@@ -24,7 +25,7 @@ import type {
   UsageResponse,
 } from '../../shared/types.ts'
 
-export type { Agent, FeedRow, SessionSource, SessionSummary, SessionMeta, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, Approval, ApprovalMap, ApprovalAnswer, Profile, PersonaId, SettingsResponse, SettingsRequest, Viewer, SessionPermissionsResponse, SessionDiffResponse, SessionDiffSummaryResponse, DiffPr, DiffSection, DiffFileStat, AttachmentResponse, UsageResponse, UsageWindow, CodexUsage, ClaudeUsage } from '../../shared/types.ts'
+export type { Agent, FeedRow, SessionSource, SessionSummary, SessionMeta, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, Approval, ApprovalMap, ApprovalAnswer, Profile, PersonaId, SettingsResponse, SettingsRequest, Viewer, SessionPermissionsResponse, SessionDiffResponse, SessionDiffSummaryResponse, SearchResponse, SearchHit, DiffPr, DiffSection, DiffFileStat, AttachmentResponse, UsageResponse, UsageWindow, CodexUsage, ClaudeUsage } from '../../shared/types.ts'
 
 /** サーバの失敗。`code` / `typed` は返信の 409（ReplyError）から。画面はこれで「消して送る」の確認を出し分ける */
 export class ApiError extends Error {
@@ -116,6 +117,8 @@ export const api = {
   meta: (id: string) => getJSON<SessionMetaResponse>(`/api/sessions/${encodeURIComponent(id)}/meta`),
   /** `/` の候補になるスキル。入力欄で `/` を打った時に 1 回だけ取る */
   sessionSkills: (id: string) => getJSON<SessionSkillsResponse>(`/api/sessions/${encodeURIComponent(id)}/skills`),
+  /** 発言の本文を検索する（#230）。⌘K で打ち終わったときだけ叩く（ポーリングには乗せない） */
+  search: (q: string, days = 90) => getJSON<SearchResponse>(`/api/search?q=${encodeURIComponent(q)}&days=${days}`),
   /** そのセッションの worktree の差分（開いたときだけ。ポーリングには乗せない） */
   diff: (id: string, base = '') =>
     getJSON<SessionDiffResponse>(`/api/sessions/${encodeURIComponent(id)}/diff${base ? `?base=${encodeURIComponent(base)}` : ''}`),

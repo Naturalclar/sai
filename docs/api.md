@@ -33,6 +33,7 @@
 | `GET /api/settings` | サーバ側の設定。`{ "persona", "digest", "provider", "model", "linear_workspace" }`。`digest` は一言の配線が有効か（`SAI_DIGEST=1`）、`provider` はその口（`claude` / `openai`） |
 | `PUT /api/settings` | body `{ "persona": "ENFP" }` / `{ "linear_workspace": "acme" }` をいまの値に重ねる（省略は据え置き）。`shared/persona.ts` に無い性格、`linear.app/<workspace>/` の形でない workspace は `400`（空文字は「設定なし」）。別オリジンは `403` |
 | `GET /api/feed?days=3&project=` | 生の行と `replying`。アーカイブ済みセッションの行は除く |
+| `GET /api/search?q=&days=90` | 発言の本文で探す（#230）。`hits` は新しい順（上限 100 件、超えたら `truncated`）。1 件に `id` / `ts`（飛び先は `#/s/<id>?ts=<ts>`）、`who`（`me` / `agent`）、`excerpt` と強調の場所 `hits`。舐めるのは `text` と `user_text` だけで `thinking` と待ちの行は見ない。**アーカイブ済みも含む**。`q` が空（か空白だけ）なら行も読まず空で返す |
 
 返信の実行は `server/runner.ts`。`claude` / `codex` は `detached` で起動して待たず、stdout/stderr は `~/.agent-feed/reply.log` に追記する（うまく動かないときはここを見る）。同じエンティティに同時に2本は走らせない。
 

@@ -5,7 +5,7 @@ import type { Server } from 'node:http'
 import { mkdtemp, rm, writeFile, appendFile, mkdir, stat, utimes, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ApprovalAnswer, ApprovalMap, Replying, ReplyResponse, SessionsResponse, SessionDetailResponse, SessionIconResponse, SessionMetaResponse, FeedResponse, SettingsResponse, HealthResponse, SessionSkillsResponse, SessionPermissionsResponse, UsageResponse } from '../shared/types.ts'
+import type { ApprovalAnswer, ApprovalMap, Replying, ReplyResponse, SessionsResponse, SessionDetailResponse, SessionIconResponse, SessionMetaResponse, FeedResponse, SettingsResponse, HealthResponse, SessionSkillsResponse, SessionPermissionsResponse, SearchResponse, UsageResponse } from '../shared/types.ts'
 import { createApp, parseDays, revWith, selfUrl, sessionIdFrom, stripThinking } from './app.ts'
 import { BuildFreshness } from './buildFreshness.ts'
 import { Authenticator } from './auth.ts'
@@ -421,6 +421,34 @@ test('GET /api/sessions/<id>/permissions: cwd の設定を読んで deny → all
   assert.equal((await get('/api/sessions/nope%40r/permissions')).status, 404)
   assert.equal((await get('/api/sessions/%2Fetc%2Fpasswd/permissions')).status, 400, 'パスは受け取らない')
   assert.equal((await fetch(`${base}/api/sessions/C1%40r/permissions`, { method: 'POST' })).status, 405, '読むだけ')
+})
+
+test('GET /api/search: 発言の本文で探す（#230）。飛び先は id と ts', async () => {
+  // fixture の S1 は text: 'two' / user_text: '続きの題名' / thinking: '考えた'
+  const res = await get('/api/search?q=two')
+  assert.equal(res.status, 200)
+  const data = (await res.json()) as SearchResponse
+  assert.equal(data.q, 'two')
+  assert.equal(data.days, 90, '既定は 90 日')
+  assert.ok(data.scanned > 0, '舐めた行数を返す')
+  assert.deepEqual(data.hits.map((h) => [h.id, h.who, h.excerpt]), [['S1@kanban', 'agent', 'two']])
+  assert.match(data.hits[0]!.ts, /^\d{4}-\d{2}-\d{2}T/, '飛び先の ts')
+  assert.deepEqual(data.hits[0]!.hits, [[0, 3]], '強調する場所')
+
+  // 自分の入力にも当たる
+  const mine = (await (await get(`/api/search?q=${encodeURIComponent('続きの題名')}`)).json()) as SearchResponse
+  assert.deepEqual(mine.hits.map((h) => h.who), ['me'])
+
+  // thinking は舐めない
+  const thought = (await (await get(`/api/search?q=${encodeURIComponent('考えた')}`)).json()) as SearchResponse
+  assert.deepEqual(thought.hits, [])
+
+  // 空の q は全件を返さない（サーバも舐めない）
+  const empty = (await (await get('/api/search?q=%20%20')).json()) as SearchResponse
+  assert.deepEqual(empty.hits, [])
+  assert.equal(empty.scanned, 0, '語が無ければ行も読まない')
+
+  assert.equal((await fetch(`${base}/api/search?q=two`, { method: 'POST' })).status, 405, '読むだけ')
 })
 
 test('GET /api/usage: ローカルのファイルから読むだけ。Claude は上限に当たっていなければ載らない（#216）', async () => {

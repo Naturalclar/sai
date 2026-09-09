@@ -2,15 +2,36 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 export const POLL_MS = 3000
 
-export type Route = { name: 'list' } | { name: 'session'; id: string } | { name: 'feed' } | { name: 'todo' }
+export type Route =
+  | { name: 'list' }
+  /** `ts` は検索から飛んできたとき（#230）。その発言まで送って光らせる */
+  | { name: 'session'; id: string; ts?: string }
+  | { name: 'feed' }
+  | { name: 'todo' }
 
 export function parseRoute(hash: string): Route {
-  const m = hash.match(/^#\/s\/(.+)$/)
-  if (m?.[1]) return { name: 'session', id: decodeURIComponent(m[1]) }
+  // id は encodeURIComponent 済みなので `?` は含まれない（%3F になる）。後ろが検索から来た ts
+  const m = hash.match(/^#\/s\/([^?]+)(?:\?(.*))?$/)
+  if (m?.[1]) {
+    let id: string
+    try {
+      id = decodeURIComponent(m[1])
+    } catch {
+      id = m[1] // 壊れた %-エンコードでも「そのセッションが無い」に落とす（画面を白くしない）
+    }
+    const ts = new URLSearchParams(m[2] ?? '').get('ts')
+    return ts ? { name: 'session', id, ts } : { name: 'session', id }
+  }
   if (hash === '#/feed') return { name: 'feed' }
   // 要対応（#224）。いま自分を待っているものだけ
   if (hash === '#/todo') return { name: 'todo' }
   return { name: 'list' }
+}
+
+/** 検索の当たりへ飛ぶ hash（#230）。`ts` が無ければ普通のセッションの hash */
+export function sessionHash(id: string, ts = ''): string {
+  const base = `#/s/${encodeURIComponent(id)}`
+  return ts ? `${base}?ts=${encodeURIComponent(ts)}` : base
 }
 
 export function useHashRoute(): Route {

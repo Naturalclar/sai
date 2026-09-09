@@ -10,7 +10,7 @@ export type SessionSource = 'payload' | 'rollout' | 'synth' | ''
  * 行の形の版。feed/record.py の RECORD_VERSION と同じ値（ずれると pnpm test:feed が止まる）。
  * 行の形を変えるたびに上げる。画面は窓の中の一番新しい行の v がこれより古いと「record.py が古い」と出す
  */
-export const RECORD_VERSION = 6
+export const RECORD_VERSION = 7
 
 /** ~/.agent-feed/YYYY-MM-DD.jsonl の1行 = 1ターン */
 export interface FeedRow {
@@ -56,6 +56,11 @@ export interface FeedRow {
    * `acceptEdits` / `auto` / `dontAsk` / `bypassPermissions`）。Codex には無い。古い行にも無い
    */
   permission_mode?: string
+  /**
+   * どのマシンで記録したか（`AGENT_FEED_HOST` か `gethostname()` の短い形。#112）。古い行には無い。
+   * 複数マシンの JSONL を 1 か所に集めたとき（#24）に、行の出どころを分けるためのもの
+   */
+  host?: string
   /** セッションが開いている tmux のペイン（`%12` など。tmux の外なら空）。SAI の返信をここに打ち込む */
   pane?: string
   /** セッション本体（claude / codex）の pid。生きていれば端末で開いている */

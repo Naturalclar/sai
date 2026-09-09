@@ -123,6 +123,7 @@ Codex CLI (notify) ──────┘                                   │
 | `SAI_HOME` | このリポジトリの場所。README のフック設定例（`settings.json` の `env`）が使うだけで、コードは読まない |
 | `AGENT_FEED_DIR` | JSONL の置き場（既定 `~/.agent-feed`）。record.py とサーバの両方が見る |
 | `AGENT_FEED_DEBUG` | `1` で record.py の例外をログに残す |
+| `AGENT_FEED_HOST` | 行の `host`（既定は `gethostname()` の短い形）。複数マシンの JSONL を集めるとき用で、合成セッションもこれで割る |
 | `CODEX_HOME` | Codex のホーム（既定 `~/.codex`） |
 | `SAI_PORT` | サーバの既定ポート（既定 `8787`）。`web/vite.config.ts` の `/api` の proxy 先もこれ（判定は `shared/port.ts`。`--port` は Vite から見えない） |
 | `SAI_TERMINAL` | `0` で「tmux のペインに打ち込む」を切る。Claude と閉じた Codex は別プロセス、開いている Codex は queue |

@@ -41,7 +41,8 @@ import { ICONS_DIR, IconStore, iconKey } from './icons.ts'
 import { alwaysAllowRule, ruleLabel } from '../shared/approvals.ts'
 import { Approvals, WAIT_MS } from './approvals.ts'
 import { BuildFreshness } from './buildFreshness.ts'
-import { codexWriterActive } from './codex.ts'
+import { codexQueueCommand, codexWriterActive, runCodexQueue } from './codex.ts'
+import type { CodexQueue } from './codex.ts'
 import { DIGEST_FILE, DigestStore, digesterFromEnv } from './digest.ts'
 import type { Digester } from './digest.ts'
 import { META_FILE, MetaStore } from './meta.ts'
@@ -222,6 +223,8 @@ export interface TerminalDeps {
   alive?: (pid: number) => boolean
   /** Codex の thread writer lock。テストでは差し替える */
   codexWriterActive?: (session: string) => Promise<boolean>
+  /** 開いている Codex への queue。テストでは差し替える */
+  codexQueue?: CodexQueue
 }
 
 export function createApp(
@@ -243,6 +246,7 @@ export function createApp(
   // project の無いセッションを cwd から埋める（cwd をキーにキャッシュ）
   const projects = new ProjectResolver(git)
   const isCodexWriterActive = terminal.codexWriterActive ?? codexWriterActive
+  const queueCodex = terminal.codexQueue ?? runCodexQueue
   const terminalEnabled = process.env.SAI_TERMINAL !== '0'
   /** 一番新しい行に pane と pid があり、pid が生きていれば端末で開いている */
   const terminalOf = (s: SessionSummary) => (terminalEnabled && s.pane && s.pid && isAlive(s.pid) ? { pane: s.pane, pid: s.pid } : null)
@@ -429,16 +433,29 @@ export function createApp(
     // 端末（tmux）で開いていれば、そのペインに打ち込む。別プロセスを立てないので端末にも出て、トークンも少ない。
     // ペインが無い・別のプロセスなら -p にフォールバック。入力中・ダイアログ中なら 409（何も打ち込まない）
     const term = openTerminal
-    // Codex は開いているスレッドを別プロセスで resume すると thread-store の active writer と競合して必ず失敗する。
-    // tmux のペインへ直接打ち込める場合だけ先へ進め、tmux 外や画面が明示した process 経路は即時に断る（#160）。
+    // Codex は開いているスレッドを exec resume すると active writer と競合する。tmux に打てない場合は
+    // app-server の queue へ渡す（別プロセスは短く起動するが、writer を奪わず開いている会話に届く）。
     const codexActive = session.agent === 'codex' && ((await isCodexWriterActive(raw)) || (session.pid > 0 && isAlive(session.pid)))
-    const codexActiveError = (): ReplyError => ({
-      error: 'Codex セッションは別の画面で開いているため、別プロセスでは再開できません。tmux の入力欄から送るか、Codex セッションを閉じてからもう一度送ってください',
-      code: 'codex_active',
-    })
-    if (codexActive && (!term || forceProcess)) return json(res, codexActiveError(), 409)
+    // モデルと画像は queue / exec resume の両方で使う。
+    const own = await metaStore.get(id)
+    const model = own?.model
+    const sendQueue = async () => {
+      const cmd = codexQueueCommand(raw, text, cwd, process.env, model, attachments)
+      await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} 開いている Codex へ queue ${JSON.stringify(cmd.args)} (cwd ${cwd})\n`).catch(() => {})
+      try {
+        await queueCodex(cmd)
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code
+        const hint = code === 'ENOENT' ? `${cmd.bin} が見つかりません（SAI_CODEX_BIN で指定できます）` : ''
+        return error(res, 500, hint || `Codex へキュー送信できませんでした: ${err instanceof Error ? err.message : String(err)}`)
+      }
+      typed.start(id, text)
+      const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd, via: 'queue' }
+      return json(res, payload, 202)
+    }
+    if (codexActive && (!term || forceProcess)) return sendQueue()
     if (term && forceProcess) {
-      // 端末に打ちかけが消せない・ダイアログ中などで、画面が「別プロセスで送る」を選んだ。端末には出ない
+      // 端末に打ちかけが消せない・ダイアログ中などで、画面が「端末を使わず送る」を選んだ
       await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} 端末で開いているが別プロセスで回す（画面の指定 via: process）\n`).catch(() => {})
     }
     if (term && !forceProcess) {
@@ -454,8 +471,8 @@ export function createApp(
       } catch (err) {
         if (err instanceof TerminalBusy) {
           // 画面は code で出し分ける。typed のときだけ「消して送る」の確認を出せる
-          // can_process: 端末に打てなくても via: process で送り直せる（画面が「別プロセスで送る」を出す）
-          const payload: ReplyError = { error: `端末に打ち込めない: ${err.message}`, code: `terminal_${err.kind}`, can_process: session.agent !== 'codex' }
+          // can_process: Claude は exec resume、active Codex は queue へ送り直せる。
+          const payload: ReplyError = { error: `端末に打ち込めない: ${err.message}`, code: `terminal_${err.kind}`, can_process: true }
           if (err.kind === 'typed') payload.typed = err.typed
           return json(res, payload, 409)
         }
@@ -465,15 +482,13 @@ export function createApp(
         // ペインが消えた・tmux が無い → 別プロセスで回す
       }
     }
-    // terminalOf() の後にペインが消えた場合も、開いている Codex を別プロセスへ落とさない。
-    if (codexActive) return json(res, codexActiveError(), 409)
+    // terminalOf() の後にペインが消えた場合も、開いている Codex は resume せず queue へ送る。
+    if (codexActive) return sendQueue()
     // 許可・質問を画面で答える配線。MCP の子プロセスはこのサーバと同じマシンで動くので、宛先はブラウザが来た Host ではなく
     // このサーバ自身が待ち受けているアドレス（ループバック）。Host だと tailscale serve 経由（https://<host>.ts.net → 127.0.0.1:8787）で
     // 開いた画面からの返信が `http://<host>.ts.net`（80 番、誰も聞いていない）に投げて「SAI に届かない: fetch failed」になる
     const via = { url: selfUrl(req), entity: id }
     // セッションに返信のモデルが設定されていれば（PUT /api/sessions/<id>/meta の model）それで回す
-    const own = await metaStore.get(id)
-    const model = own?.model
     const cmd = replyCommand(session.agent, raw, text, cwd, process.env, via, model, own?.permission_mode, attachments)
     if (!cmd) return error(res, 400, replyBlockedReason(session) || 'unsupported agent')
     try {

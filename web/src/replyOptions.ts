@@ -1,4 +1,4 @@
 import type { ReplaceConfirm } from './useReply.ts'
 
-/** 開いている Codex は別プロセスの resume と競合するので、サーバが許したときだけ逃げ道を出す。 */
+/** サーバが別経路（Claude の resume / Codex の queue）を許したときだけ逃げ道を出す。 */
 export const showProcessOption = (confirm: Pick<ReplaceConfirm, 'canProcess'>): boolean => confirm.canProcess

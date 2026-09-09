@@ -48,11 +48,11 @@ export function SessionItem({ s, active, replying, approval, now, swipe, reduced
     if (active) ref.current?.scrollIntoView({ block: 'nearest' })
   }, [active])
 
-  // 合成 ID は集計の切れ方で付け先がずれるのでアーカイブできない（#31 と同じ）
-  const canArchive = s.session_source !== 'synth'
+  // 合成 ID（synth）でもアーカイブできる（#248）。ID は record.py が記録時に決めて行に書き込むので、
+  // 集計の切れ方や days の窓で変わらない（#31 の「付け先がずれる」は当時の見込みで、実装はそうなっていない）
   const archive = useArchive(s.id, Boolean(s.archived))
   const sw = useSwipe({
-    enabled: swipe && canArchive,
+    enabled: swipe,
     open,
     onOpenChange,
     onCommit: () => {
@@ -80,7 +80,7 @@ export function SessionItem({ s, active, replying, approval, now, swipe, reduced
       onPointerUp={sw.onPointerUp}
       onPointerCancel={sw.onPointerCancel}
     >
-      {canArchive && swipe && (
+      {swipe && (
         <div className="rail" aria-hidden={!open}>
           <button
             type="button"
@@ -97,7 +97,7 @@ export function SessionItem({ s, active, replying, approval, now, swipe, reduced
           </button>
         </div>
       )}
-      {canArchive && <SessionArchiveButton archive={archive} />}
+      <SessionArchiveButton archive={archive} />
       <a
         ref={ref}
         className="link"

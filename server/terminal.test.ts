@@ -37,6 +37,12 @@ test('promptState: Codex は › か > が入力欄', () => {
   assert.equal(promptState('some output\n› typing', 'codex').idle, false)
 })
 
+test('promptState: Codex の質問選択・自由入力待ちもダイアログ', () => {
+  assert.equal(promptState('質問\n› 1. A\n  2. B\nEnter to select · Esc to cancel', 'codex').kind, 'dialog')
+  assert.equal(promptState('Waiting for user input\n› Type your answer', 'codex').kind, 'dialog')
+  assert.equal(promptState('確認\n› answer\nEnter to submit · Esc to cancel', 'codex').kind, 'dialog')
+})
+
 test('promptState: kind と typed。番号付きの選択肢や「Press enter to continue」はダイアログ', () => {
   assert.deepEqual(promptState(CLAUDE_IDLE, 'claude'), { idle: true, kind: 'idle', reason: '', typed: '' })
   const typing = promptState(CLAUDE_IDLE.replace('❯ Try "refactor <filepath>"', '❯ 提案されているsub issueを立てて'), 'claude')

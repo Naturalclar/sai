@@ -5,7 +5,7 @@ import type { Server } from 'node:http'
 import { mkdtemp, rm, writeFile, appendFile, mkdir, stat, utimes, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { Replying, ReplyResponse, SessionsResponse, SessionDetailResponse, SessionIconResponse, SessionMetaResponse, FeedResponse, SettingsResponse, HealthResponse, SessionSkillsResponse, SessionPermissionsResponse } from '../shared/types.ts'
+import type { ApprovalMap, Replying, ReplyResponse, SessionsResponse, SessionDetailResponse, SessionIconResponse, SessionMetaResponse, FeedResponse, SettingsResponse, HealthResponse, SessionSkillsResponse, SessionPermissionsResponse } from '../shared/types.ts'
 import { createApp, parseDays, revWith, selfUrl, sessionIdFrom, stripThinking } from './app.ts'
 import { BuildFreshness } from './buildFreshness.ts'
 import { Authenticator } from './auth.ts'
@@ -19,6 +19,7 @@ import { replyCommand, splitArgs } from './runner.ts'
 import type { ReplyCommand, Runner } from './runner.ts'
 import { row } from './aggregate.test.ts'
 import { JPEG, PNG } from './icons.test.ts'
+import type { CodexDialogSource } from './codexDialogs.ts'
 
 let dir: string
 let feedDir: string
@@ -46,6 +47,15 @@ class FakeRunner implements Runner {
   }
 }
 const runner = new FakeRunner()
+
+class FakeCodexDialogs implements CodexDialogSource {
+  active: ApprovalMap = {}
+  async scan(sessions: { id: string }[]) {
+    const ids = new Set(sessions.map((s) => s.id))
+    return Object.fromEntries(Object.entries(this.active).filter(([id]) => ids.has(id)))
+  }
+}
+const codexDialogs = new FakeCodexDialogs()
 
 /** 一言（digest）の偽物。プロンプトの本文の先頭を返す。null を返す設定なら失敗 */
 class FakeSummarizer implements Summarizer {
@@ -98,7 +108,12 @@ before(async () => {
   await writeFile(join(dir, 'skills', 'issue-triage', 'SKILL.md'), '---\nname: issue-triage\ndescription: issueの優先度をつけて\n---\n')
   await mkdir(join(dir, '.claude', 'skills', 'sync-main'), { recursive: true })
   await writeFile(join(dir, '.claude', 'skills', 'sync-main', 'SKILL.md'), '---\nname: sync-main\ndescription: main を最新にする\n---\n')
-  const app = createApp(store, distDir, runner, undefined, new BuildFreshness(distDir, [srcDir], 0), digester, auth, undefined, new SkillStore(join(dir, 'skills')))
+  const terminal = {
+    tmux: { run: async () => { throw new Error('unused') } },
+    ps: async () => '',
+    codexDialogs,
+  }
+  const app = createApp(store, distDir, runner, undefined, new BuildFreshness(distDir, [srcDir], 0), digester, auth, terminal, new SkillStore(join(dir, 'skills')))
   server = createServer((req, res) => void app(req, res))
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const addr = server.address()
@@ -1035,6 +1050,29 @@ test('キャッシュは追記で無効になり、変わらなければ再パ�
 
 const postJson = (path: string, body: unknown, headers: Record<string, string> = {}) =>
   fetch(base + path, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) })
+
+test('Codex TUIのダイアログは一覧・詳細・フィードへ検出専用Approvalとして載り、解消でrevが変わる', async () => {
+  const beforeDialogs = (await (await get('/api/sessions?days=30')).json()) as SessionsResponse
+  codexDialogs.active = {
+    'X1@r': [{
+      approval_id: 'codex-dialog-x1', id: 'X1@r', since: new Date().toISOString(), tool_name: 'CodexDialog', input: {}, tool_use_id: '',
+      text: 'Codex の画面で質問または許可への回答を待っている', agent: 'codex', answerable: false,
+    }],
+  }
+  const list = (await (await get('/api/sessions?days=30')).json()) as SessionsResponse
+  assert.notEqual(list.rev, beforeDialogs.rev)
+  assert.equal(list.approvals['X1@r']?.[0]?.agent, 'codex')
+  assert.equal(list.approvals['X1@r']?.[0]?.answerable, false)
+  const detail = (await (await get('/api/sessions/X1%40r?days=30')).json()) as SessionDetailResponse
+  assert.equal(detail.approvals['X1@r']?.[0]?.approval_id, 'codex-dialog-x1')
+  const feed = (await (await get('/api/feed?days=30')).json()) as FeedResponse
+  assert.equal(feed.approvals['X1@r']?.[0]?.approval_id, 'codex-dialog-x1')
+
+  codexDialogs.active = {}
+  const afterDialogs = (await (await get('/api/sessions?days=30')).json()) as SessionsResponse
+  assert.notEqual(afterDialogs.rev, list.rev)
+  assert.equal(afterDialogs.approvals['X1@r'], undefined)
+})
 
 test('approvals: 返信を処理中のセッションの分だけ預かり、一覧・詳細・フィードに載って rev が変わる', async () => {
   // 処理中でなければ受けない

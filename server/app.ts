@@ -43,6 +43,8 @@ import { Approvals, WAIT_MS } from './approvals.ts'
 import { BuildFreshness } from './buildFreshness.ts'
 import { codexQueueCommand, codexWriterActive, runCodexQueue } from './codex.ts'
 import type { CodexQueue } from './codex.ts'
+import { approvalMapKey, CodexDialogs, mergeApprovalMaps } from './codexDialogs.ts'
+import type { CodexDialogSource } from './codexDialogs.ts'
 import { DIGEST_FILE, DigestStore, digesterFromEnv } from './digest.ts'
 import type { Digester } from './digest.ts'
 import { META_FILE, MetaStore } from './meta.ts'
@@ -225,6 +227,8 @@ export interface TerminalDeps {
   codexWriterActive?: (session: string) => Promise<boolean>
   /** 開いている Codex への queue。テストでは差し替える */
   codexQueue?: CodexQueue
+  /** 開いている Codex TUI の質問・許可ダイアログ監視。テストでは差し替える */
+  codexDialogs?: CodexDialogSource
 }
 
 export function createApp(
@@ -247,6 +251,7 @@ export function createApp(
   const projects = new ProjectResolver(git)
   const isCodexWriterActive = terminal.codexWriterActive ?? codexWriterActive
   const queueCodex = terminal.codexQueue ?? runCodexQueue
+  const codexDialogs = terminal.codexDialogs ?? new CodexDialogs(terminal.tmux, terminal.ps)
   const terminalEnabled = process.env.SAI_TERMINAL !== '0'
   /** 一番新しい行に pane と pid があり、pid が生きていれば端末で開いている */
   const terminalOf = (s: SessionSummary) => (terminalEnabled && s.pane && s.pid && isAlive(s.pid) ? { pane: s.pane, pid: s.pid } : null)
@@ -261,6 +266,10 @@ export function createApp(
   const iconStore = new IconStore(join(store.directory, ICONS_DIR))
   const attachmentStore = new AttachmentStore(join(store.directory, ATTACHMENTS_DIR))
   const profileStore = new ProfileStore(join(store.directory, PROFILE_FILE))
+
+  /** Claude の双方向 Approval と、Codex TUI の検出専用ダイアログを合わせる。 */
+  const approvalsNow = async (sessions: SessionSummary[]) =>
+    mergeApprovalMaps(approvals.snapshot(), terminalEnabled ? await codexDialogs.scan(sessions) : {})
 
   /**
    * 自分の表示名とアイコン。rev は profile.json とアイコンの状態で、名前や画像を変えたら応答の rev も変わる
@@ -888,7 +897,7 @@ export function createApp(
         const [{ rev: sessionsRev, sessions }, me] = await Promise.all([sessionsWithMeta(days), profileNow()])
         const rev = `${sessionsRev}~${me.rev}`
         const replying = replyingOf(sessions)
-        const pendingApprovals = approvals.snapshot()
+        const pendingApprovals = await approvalsNow(sessions)
         // 既定はアーカイブ済みを除く。archived=1 でアーカイブ済みだけ。total と filters はその集合の絞り込み前から作る
         const wantArchived = q.get('archived') === '1'
         const pool = sessions.filter((s) => Boolean(s.archived) === wantArchived)
@@ -898,7 +907,7 @@ export function createApp(
         // 記録側の版は窓の中の一番新しい行から。行が変われば rev も変わるので、ここでは rev に混ぜない
         const record_version = recordVersionOf(await store.rows(days))
         const body: SessionsResponse = {
-          rev: revWith(rev, replying, approvals.revKey(), build_stale, digest.revKey()),
+          rev: revWith(rev, replying, approvalMapKey(pendingApprovals), build_stale, digest.revKey()),
           days,
           total: pool.length,
           sessions: withLastSummary(
@@ -925,12 +934,13 @@ export function createApp(
         await scanDigest(days)
         const rows = digest.attach((await store.rows(days)).filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id))
         const replying = replyingOf(sessions)
+        const pendingApprovals = await approvalsNow(sessions)
         const body: SessionDetailResponse = {
-          rev: revWith(`${sessionsRev}~${me.rev}`, replying, approvals.revKey(), false, digest.revKey()),
+          rev: revWith(`${sessionsRev}~${me.rev}`, replying, approvalMapKey(pendingApprovals), false, digest.revKey()),
           session: withLastSummary([session])[0]!,
           rows,
           replying,
-          approvals: approvals.snapshot(),
+          approvals: pendingApprovals,
           profile: me.profile,
         }
         return json(res, body)
@@ -952,14 +962,15 @@ export function createApp(
         await scanDigest(days)
         rows = digest.attach(rows.map(stripThinking))
         const replying = replyingOf(sessions)
+        const pendingApprovals = await approvalsNow(sessions)
         // rev はメタ（アーカイブ）と処理中の集合、答え待ちの承認、ビルドが古いか、一言の有無も混ぜる
         const build_stale = await freshness.stale()
         const body: FeedResponse = {
-          rev: revWith(rev, replying, approvals.revKey(), build_stale, digest.revKey()),
+          rev: revWith(rev, replying, approvalMapKey(pendingApprovals), build_stale, digest.revKey()),
           days,
           rows,
           replying,
-          approvals: approvals.snapshot(),
+          approvals: pendingApprovals,
           build_stale,
           profile: me.profile,
           viewer,

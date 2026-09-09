@@ -130,6 +130,8 @@ test('返信: 端末で開いていればペインに打ち込み（via terminal
 
   let list = await sessions()
   assert.equal(list.replying['T1@r']?.text, '続きをやって')
+  // 画面（要対応）が別プロセスの返信と区別できるように via が載る（#232）
+  assert.equal(list.replying['T1@r']?.via, 'terminal')
 
   // 端末で開いている間は、前のターンが動いていても打ち込める（TUI が次のターンに回す。#170）
   tmux.calls.length = 0

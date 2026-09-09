@@ -19,8 +19,9 @@ interface Props extends PaneProps {
  * セッションが増えるとサイドバーの「待機中」を目で探すことになり、狭い画面ではなおさら見落とすため。
  *
  * 2 種類あって、見た目で分けている:
- * - **答え待ち**（`answer`）は SAI が返信を回している最中のもので、`ApprovalBubble` をそのまま置くので**ここで答えられる**
- * - **待機中**（`watch`）は記録の行から見た待ちで、端末で止まっている。ここからは答えられないので開くだけ
+ * - **答え待ち**（`answer`）は SAI が口を持っているもので、`ApprovalBubble` をそのまま置くので**ここで答えられる**
+ * - **待機中**（`watch`）は記録の行から見た待ち。選択肢が SAI に届いていないのでボタンは出せないが、
+ *   **返信欄からは打てることが多い**ので、その会話でできることを出す（`replyable`。#232）
  *
  * データは `/api/sessions` の応答にすべて載っているので、サーバも足していないし取得も増えていない。
  */
@@ -29,7 +30,8 @@ export function TodoView({ list, onStatus, onOpenSidebar }: Props) {
   // 自分では取りに行かないが、出しているのはこの取得結果なのでヘッダの「更新 hh:mm」はこれに合わせる
   useEffect(() => onStatus(updatedAt, error), [updatedAt, error, onStatus])
 
-  const items = data ? todoItems(data.sessions, data.approvals) : []
+  // replying を渡すのは、別プロセスの返信を処理中なら「待っている」ではなく「動いている」ため（#232）
+  const items = data ? todoItems(data.sessions, data.approvals, data.replying) : []
   const now = updatedAt?.getTime() ?? 0
 
   return (
@@ -63,7 +65,8 @@ export function TodoView({ list, onStatus, onOpenSidebar }: Props) {
                 <div className="why">
                   <WaitingTag text={t.text} />
                   <span className="text">{t.text}</span>
-                  <span className="note">端末で答える（SAI からは答えられない）</span>
+                  {/* 選択肢は SAI に届いていないのでボタンは出せないが、返信欄からは打てる（#232） */}
+                  <span className="note">{t.replyable ? '開いて返信欄から答えられます' : '端末で答えてください'}</span>
                 </div>
               )}
             </div>

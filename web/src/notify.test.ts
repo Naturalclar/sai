@@ -12,6 +12,7 @@ function item(over: Partial<TodoItem> = {}): TodoItem {
     since: '2026-09-09T10:00:00+09:00',
     session: { title: 'CI の整備' } as SessionSummary,
     approval: null,
+    replyable: true,
     ...over,
   }
 }

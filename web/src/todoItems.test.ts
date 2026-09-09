@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import type { Approval, ApprovalMap, SessionSummary } from '../../shared/types.ts'
+import type { Approval, ApprovalMap, ReplyingMap, SessionSummary } from '../../shared/types.ts'
 import { todoItems } from './todoItems.ts'
 
 function summary(over: Partial<SessionSummary>): SessionSummary {
@@ -101,4 +101,57 @@ test('todoItems: 同時刻は ID で決めて、ポーリングのたびに並�
 
 test('todoItems: 空の approvals の配列は無視する', () => {
   assert.deepEqual(todoItems([summary({ id: 's1@sai' })], { 's1@sai': [] }), [])
+})
+
+// ---- #232: 別プロセスの返信を処理中なら「待っている」ではなく「動いている」
+
+test('todoItems: 別プロセスの返信を処理中のセッションは watch を出さない', () => {
+  // 行の waiting は「待ちの行のあとターン完了が来るまで」消えない。許可や質問に答えても
+  // 再開の行は書かれないので、答えたあとも要対応に残ってしまっていた（#232）。
+  // -p の許可・質問は必ず approvals に載るので、載っていなければ待っていない
+  const sessions = [summary({ id: 's1@sai', waiting: '質問: opencode を入れていい?' })]
+  const replying: ReplyingMap = { 's1@sai': { since: '2026-09-02T10:11:00+09:00', text: '209に着手して' } }
+  assert.deepEqual(todoItems(sessions, {}, replying), [], '動いている間は出さない')
+
+  // 本当に答えを待っているなら approvals に載るので、そちらで出る（答えられる方）
+  const withAsk = todoItems(sessions, { 's1@sai': [approval({ text: '質問: どれ?' })] }, replying)
+  assert.deepEqual(withAsk.map((t) => t.kind), ['answer'])
+})
+
+test('todoItems: 端末に打ち込んだ返信（via: terminal）の処理中は watch を残す', () => {
+  // 端末のセッションには SAI から答える口が無く、行の waiting だけが手がかりなので消してはいけない
+  const sessions = [summary({ id: 's1@sai', waiting: '許可待ち: Bash: rm -rf x' })]
+  const replying: ReplyingMap = { 's1@sai': { since: '2026-09-02T10:11:00+09:00', text: '続けて', via: 'terminal' } }
+  assert.deepEqual(todoItems(sessions, {}, replying).map((t) => t.kind), ['watch'])
+})
+
+test('todoItems: 失敗して残っている replying は「動いている」ではないので watch を出す', () => {
+  const sessions = [summary({ id: 's1@sai', waiting: '許可待ち: Bash: ls' })]
+  const replying: ReplyingMap = { 's1@sai': { since: '2026-09-02T10:11:00+09:00', text: 'x', failed: { code: 1, tail: 'boom' } } }
+  assert.deepEqual(todoItems(sessions, {}, replying).map((t) => t.kind), ['watch'])
+})
+
+test('todoItems: replying を渡さなくても今までどおり（既定は空）', () => {
+  const sessions = [summary({ id: 's1@sai', waiting: '許可待ち: Bash: ls' })]
+  assert.deepEqual(todoItems(sessions, {}).map((t) => t.kind), ['watch'])
+})
+
+// ---- #232: 「SAI からは答えられない」と決めつけない
+
+test('todoItems: watch の replyable は、その会話に返信欄から打てるかで決まる', () => {
+  const canReply = todoItems([summary({ id: 's1@sai', waiting: '許可待ち: Bash: ls' })], {})
+  assert.equal(canReply[0]!.replyable, true, '普通のセッションは開いて返信欄から答えられる')
+
+  // 合成 ID・出どころ不明は再開できない（shared/reply.ts の replyBlockedReason）ので、端末で答えるしかない
+  const synth = todoItems([summary({ id: 's1@sai', waiting: 'w', session_source: 'synth', sources: ['synth'] })], {})
+  assert.equal(synth[0]!.replyable, false)
+  const unknownId = todoItems([summary({ id: 'unknown-2026-09-02@sai', waiting: 'w' })], {})
+  assert.equal(unknownId[0]!.replyable, false)
+  const codexTui = todoItems([summary({ id: 's1@sai', waiting: 'w', agent: 'unknown', agents: ['unknown'] })], {})
+  assert.equal(codexTui[0]!.replyable, false, 'エージェントが分からなければ再開できない')
+})
+
+test('todoItems: answer の replyable は使わないので false のまま', () => {
+  const items = todoItems([summary({ id: 's1@sai' })], { 's1@sai': [approval({})] })
+  assert.equal(items[0]!.replyable, false)
 })

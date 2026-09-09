@@ -1,6 +1,7 @@
 // 返信中の許可・質問（Approval）の読み書き。サーバ（server/approvals.ts）が text を作り、
 // 画面（web/src/ApprovalBubble.tsx）が AskUserQuestion の選択肢を出して answers を組み立てる。
 // 文言は feed/record.py の待ちの行（tool_summary / waiting_text）と揃えてある
+import { dumpsLikePython } from './pyjson.ts'
 import type { Approval, ApprovalAnswer, PermissionRule } from './types.ts'
 
 export const APPROVAL_TEXT_MAX = 300
@@ -111,7 +112,10 @@ export function toolSummary(toolName: string, input: Record<string, unknown>): s
     if (typeof v === 'string' && v.trim()) return clip(v.trim(), APPROVAL_TEXT_MAX)
   }
   try {
-    return clip(JSON.stringify(input), APPROVAL_TEXT_MAX)
+    // record.py の `json.dumps(..., ensure_ascii=False, sort_keys=True)` と同じ文字列にする（#147）。
+    // `JSON.stringify` だと区切りの空白が無く、キーも挿入順なので、同じ 1 回の許可に対して
+    // 待ちの行（record.py）と承認バブル（ここ）が別の文字で並ぶ
+    return clip(dumpsLikePython(input), APPROVAL_TEXT_MAX)
   } catch {
     return ''
   }

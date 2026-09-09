@@ -493,6 +493,25 @@ class RecordTest(unittest.TestCase):
         self._hook({"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": {"command": "x" * 1000}})
         self.assertEqual(read_rows(self.feed_dir)[0]["text"], "許可待ち: Bash: " + "x" * 300)
 
+    def test_waiting_text_matches_approval_text_for_json_tools(self):
+        """専用の要約が無いツール（MCP・未知）は tool_input をそのまま JSON にする（#147）。
+
+        shared/approvals.test.ts の「approvalText: JSON にフォールバックする経路は record.py と
+        1 文字も違わない」に**同じ入力と同じ期待文字列**がある。片方だけ変えればもう片方が落ちる。
+        """
+        cases = [
+            ("mcp__x__y", {"foo": 1}, '許可待ち: mcp__x__y: {"foo": 1}'),
+            # キーは挿入順ではなくソート
+            ("mcp__github__create_issue", {"title": "題", "body": "本文"}, '許可待ち: mcp__github__create_issue: {"body": "本文", "title": "題"}'),
+            # 入れ子の中まで並べ替え、配列の区切りにも空白が入る
+            ("SomeUnknownTool", {"b": {"y": 2, "x": 1}, "a": [1, {"q": "日本語"}]}, '許可待ち: SomeUnknownTool: {"a": [1, {"q": "日本語"}], "b": {"x": 1, "y": 2}}'),
+            # 中身が空なら JSON も出す（`{}`）。ツール名だけにはしない
+            ("SomeUnknownTool", {}, "許可待ち: SomeUnknownTool: {}"),
+        ]
+        for tool_name, tool_input, _ in cases:
+            self._hook({"hook_event_name": "PermissionRequest", "tool_name": tool_name, "tool_input": tool_input})
+        self.assertEqual([r["text"] for r in read_rows(self.feed_dir)], [want for _, _, want in cases])
+
     def test_notification_records_only_waiting_types(self):
         self._hook({"hook_event_name": "Notification", "notification_type": "idle_prompt", "message": "Claude is waiting for your input"})
         self._hook({"hook_event_name": "Notification", "notification_type": "elicitation_dialog", "message": "Server asks for a token"})

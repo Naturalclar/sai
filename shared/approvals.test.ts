@@ -9,8 +9,23 @@ test('approvalText は record.py の waiting_text と同じ接頭辞', () => {
   assert.equal(approvalText('AskUserQuestion', { questions: [{ question: 'どれ?', options: [] }, { question: '型は?' }] }), '質問: どれ? / 型は?')
   assert.equal(approvalText('AskUserQuestion', {}), '質問に答えるのを待っている')
   assert.equal(approvalText('ExitPlanMode', { plan: '## 直す\n\n1. a\n2. b\n3. c\n4. d' }), 'プランの承認待ち: ## 直す\n1. a\n2. b')
-  assert.equal(approvalText('mcp__x__y', { foo: 1 }), '許可待ち: mcp__x__y: {"foo":1}')
   assert.equal(toolSummary('Bash', { command: 'x'.repeat(1000) }).length, 300)
+})
+
+/**
+ * 専用の要約が無いツール（MCP のツール、未知のツール）は `tool_input` をそのまま JSON にする経路（#147）。
+ *
+ * **`feed/test_record.py` の `test_waiting_text_matches_approval_text_for_json_tools` に同じ入力と
+ * 同じ期待文字列がある。**片方だけ変えるともう片方が落ちるので、2 つの実装が離れない
+ */
+test('approvalText: JSON にフォールバックする経路は record.py と 1 文字も違わない（#147）', () => {
+  assert.equal(approvalText('mcp__x__y', { foo: 1 }), '許可待ち: mcp__x__y: {"foo": 1}')
+  // キーは挿入順ではなくソート
+  assert.equal(approvalText('mcp__github__create_issue', { title: '題', body: '本文' }), '許可待ち: mcp__github__create_issue: {"body": "本文", "title": "題"}')
+  // 入れ子の中まで並べ替え、配列の区切りにも空白が入る
+  assert.equal(approvalText('SomeUnknownTool', { b: { y: 2, x: 1 }, a: [1, { q: '日本語' }] }), '許可待ち: SomeUnknownTool: {"a": [1, {"q": "日本語"}], "b": {"x": 1, "y": 2}}')
+  // 中身が空なら JSON も出す（`{}`）。ツール名だけにはしない
+  assert.equal(approvalText('SomeUnknownTool', {}), '許可待ち: SomeUnknownTool: {}')
 })
 
 test('askQuestions は壊れた形を落とし、answerAsk は元の入力に answers を足す', () => {

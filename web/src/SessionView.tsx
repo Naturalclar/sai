@@ -118,7 +118,17 @@ export function SessionView({ id, onStatus, onOpenSidebar, linear, settings }: {
         ) : blocked ? (
           <div className="notice">{blocked}</div>
         ) : (
-          <ReplyBox repo={s.repo} skillsId={id} terminal={Boolean(s.terminal)} busy={mine !== null} busySince={mine?.since} now={now} replyModel={s.meta?.model} onSend={async (text) => (await send(id, text)) !== 'confirm'} />
+          <ReplyBox
+            repo={s.repo}
+            skillsId={id}
+            attachId={id}
+            terminal={Boolean(s.terminal)}
+            busy={mine !== null}
+            busySince={mine?.since}
+            now={now}
+            replyModel={s.meta?.model}
+            onSend={async (text, attachments) => (await send(id, text, { attachments })) !== 'confirm'}
+          />
         ))}
       {confirmHere && <ReplaceConfirm confirm={confirmHere} onReplace={() => void confirmReplace()} onProcess={() => void confirmProcess()} onCancel={cancelConfirm} />}
       {failedHere && <div className="notice error">送信失敗: {failedHere}</div>}

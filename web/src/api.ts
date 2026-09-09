@@ -1,6 +1,7 @@
 // serve 側の実装は server/。型は shared/types.ts に1つだけ置いて両方から import する
 import type {
   ApprovalAnswer,
+  AttachmentResponse,
   FeedFilters,
   FeedResponse,
   Profile,
@@ -21,7 +22,7 @@ import type {
   SettingsResponse,
 } from '../../shared/types.ts'
 
-export type { Agent, FeedRow, SessionSource, SessionSummary, SessionMeta, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, Approval, ApprovalMap, ApprovalAnswer, Profile, PersonaId, SettingsResponse, SettingsRequest, Viewer, SessionPermissionsResponse, SessionDiffResponse, DiffSection, DiffFileStat } from '../../shared/types.ts'
+export type { Agent, FeedRow, SessionSource, SessionSummary, SessionMeta, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, Approval, ApprovalMap, ApprovalAnswer, Profile, PersonaId, SettingsResponse, SettingsRequest, Viewer, SessionPermissionsResponse, SessionDiffResponse, DiffSection, DiffFileStat, AttachmentResponse } from '../../shared/types.ts'
 
 /** サーバの失敗。`code` / `typed` は返信の 409（ReplyError）から。画面はこれで「消して送る」の確認を出し分ける */
 export class ApiError extends Error {
@@ -85,7 +86,7 @@ async function sendJSON<T>(method: 'POST' | 'PUT', url: string, body: object): P
 }
 
 /** 画像などをそのまま送る（PUT）か、消す（DELETE） */
-async function sendRaw<T>(method: 'PUT' | 'DELETE', url: string, body?: Blob): Promise<T> {
+async function sendRaw<T>(method: 'POST' | 'PUT' | 'DELETE', url: string, body?: Blob): Promise<T> {
   const res = await fetch(url, { method, body })
   if (!res.ok) throw await failure(res, url)
   return (await res.json()) as T
@@ -99,11 +100,16 @@ export const api = {
     getJSON<SessionDetailResponse>(`/api/sessions/${encodeURIComponent(id)}?days=${days}`),
   feed: (f: FeedFilters) => getJSON<FeedResponse>(`/api/feed?${qs(f)}`),
   /** 返信。replaceTyped は端末の打ちかけを消して打ち込んでよい（409 の code: terminal_typed を人が確認したあと） */
-  reply: (id: string, text: string, options: { replaceTyped?: boolean; via?: 'process' } = {}, days = 90) =>
+  reply: (id: string, text: string, options: { replaceTyped?: boolean; via?: 'process'; attachments?: string[] } = {}, days = 90) =>
     sendJSON<ReplyResponse>(
       'POST',
       `/api/sessions/${encodeURIComponent(id)}/reply?days=${days}`,
-      { text, ...(options.replaceTyped ? { replace_typed: true } : {}), ...(options.via ? { via: options.via } : {}) } satisfies ReplyRequest,
+      {
+        text,
+        ...(options.replaceTyped ? { replace_typed: true } : {}),
+        ...(options.via ? { via: options.via } : {}),
+        ...(options.attachments?.length ? { attachments: options.attachments } : {}),
+      } satisfies ReplyRequest,
     ),
   meta: (id: string) => getJSON<SessionMetaResponse>(`/api/sessions/${encodeURIComponent(id)}/meta`),
   /** `/` の候補になるスキル。入力欄で `/` を打った時に 1 回だけ取る */
@@ -121,6 +127,9 @@ export const api = {
   setMeta: (id: string, meta: SessionMeta, days = 90) =>
     sendJSON<SessionMetaResponse>('PUT', `/api/sessions/${encodeURIComponent(id)}/meta?days=${days}`, meta),
   /** アイコン画像を置く。返ってくる icon が新しい URL */
+  /** 返信に添える画像を預ける。返った path を reply の attachments に入れる */
+  addAttachment: (id: string, file: Blob, days = 90) =>
+    sendRaw<AttachmentResponse>('POST', `/api/sessions/${encodeURIComponent(id)}/attachments?days=${days}`, file),
   setIcon: (id: string, file: Blob, days = 90) =>
     sendRaw<SessionIconResponse>('PUT', `/api/sessions/${encodeURIComponent(id)}/icon?days=${days}`, file),
   clearIcon: (id: string) => sendRaw<SessionIconResponse>('DELETE', `/api/sessions/${encodeURIComponent(id)}/icon`),

@@ -2,6 +2,7 @@
 .agent-feed/
 sessions/
 session-icons/
+attachments/
 
 __pycache__/
 *.pyc

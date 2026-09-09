@@ -5,6 +5,11 @@ import { filterSkills, skillSummary, slashQuery, type Skill } from '../../shared
 import { emojiQuery, filterEmoji, type EmojiHit } from '../../shared/emoji.ts'
 import { elapsedLabel } from './format'
 import { useSkills } from './useSkills'
+import { useAttachments } from './useAttachments'
+import { AttachmentStrip } from './AttachmentStrip'
+import { IconButton } from './IconButton'
+import { PhotoMark } from './PhotoMark'
+import { ATTACHMENT_MAX_COUNT } from '../../shared/attachments.ts'
 
 /**
  * @ メンションで返信先を選ぶための道具（フィード用）。渡さなければ `@` はただの文字（セッション画面）。
@@ -41,19 +46,25 @@ interface Props {
   /** 経過の基準（ポーリングの updatedAt）。busySince とセット */
   now?: number
   /** 送る。false を返したら（端末の打ちかけの確認待ちなど、送れなかった）本文を入力欄に戻す */
-  onSend: (text: string) => void | boolean | Promise<void | boolean>
+  onSend: (text: string, attachments: string[]) => void | boolean | Promise<void | boolean>
   /** 本文が空でないかが変わったら知らせる。FeedView は入力中に既定の返信先を動かさないために使う */
   onDraft?: (drafting: boolean) => void
   /** このセッションの返信で使うモデル（設定があれば）。placeholder に添える */
   replyModel?: string
   /** `/` でスキルの候補を出す返信先（エンティティID）。渡さなければ `/` はただの文字 */
   skillsId?: string
+  /** 画像を預ける先（エンティティID）。渡さなければ画像は添えられない */
+  attachId?: string
   mention?: MentionProps
 }
 
 /** 入力欄。Enter で送信、Shift+Enter で改行。IME 変換中の Enter は送らない */
-export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onDraft, replyModel, skillsId, mention }: Props) {
+export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onDraft, replyModel, skillsId, attachId, mention }: Props) {
   const [text, setText] = useState('')
+  const attach = useAttachments(attachId)
+  const fileRef = useRef<HTMLInputElement>(null)
+  // 画像を落とせる場所だと分かるように、ドラッグ中は枠を光らせる
+  const [dropping, setDropping] = useState(false)
   // caret は「@ の検出」に使う。onChange と onSelect（カーソル移動）で追う
   const [caret, setCaret] = useState(0)
   // 候補のハイライト位置。検索語が変わったら 0 に戻したいので、どの検索語での位置かを一緒に持つ
@@ -180,20 +191,31 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
   const submit = () => {
     // 送る本文からは表記を外す（エージェントにメンションは渡さない）
     const body = (mention?.picked ? stripMention(text, mention.picked.label) : text).trim()
-    if (!body) return
+    // 画像だけでも送れる（本文が空でも添付があれば通す）
+    if (!body && attach.items.length === 0) return
+    if (attach.busy) return
     if (blocked) {
       setHitBusy(true)
       return
     }
     const sent = text
+    const paths = attach.paths
     setText('')
     setCaret(0)
+    attach.clear()
     // 表記ごと本文が消えるので返信先も既定に戻す。送信中でも別の返信先へ続けて打てる
     if (mention?.picked) mention.onPick(null)
-    void Promise.resolve(onSend(body)).then((ok) => {
+    void Promise.resolve(onSend(body, paths)).then((ok) => {
       // 送れなかった（端末の打ちかけの確認待ちなど）ら、まだ何も打っていなければ本文を戻す
       if (ok === false) setText((t) => (t ? t : sent))
     })
+  }
+
+  /** 貼り付け・ドロップ・ファイル選択から来た画像を預ける（画像でないものは useAttachments が弾く） */
+  const takeFiles = (list: FileList | null | undefined) => {
+    const files = [...(list ?? [])].filter((f) => f.type.startsWith('image/') || f.type === '')
+    if (files.length > 0) void attach.add(files)
+    return files.length > 0
   }
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -231,10 +253,22 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
 
   return (
     <form
-      className="reply"
+      className={`reply${dropping ? ' dropping' : ''}`}
       onSubmit={(e) => {
         e.preventDefault()
         submit()
+      }}
+      onDragOver={(e) => {
+        if (!attachId || !e.dataTransfer.types.includes('Files')) return
+        e.preventDefault()
+        setDropping(true)
+      }}
+      onDragLeave={(e) => e.currentTarget.contains(e.relatedTarget as Node) || setDropping(false)}
+      onDrop={(e) => {
+        if (!attachId) return
+        e.preventDefault()
+        setDropping(false)
+        takeFiles(e.dataTransfer.files)
       }}
     >
       {mention && (
@@ -263,7 +297,31 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
               ? '別プロセスで回す。端末には出ない'
               : '端末で開いていれば打ち込む'}
       </div>
+      <AttachmentStrip items={attach.items} onRemove={attach.remove} disabled={attach.busy} />
+      {attach.error && <div className="note err">{attach.error}</div>}
       <div className="row">
+        {attachId && (
+          <>
+            <input
+              ref={fileRef}
+              className="file"
+              type="file"
+              accept="image/png,image/jpeg,image/gif,image/webp"
+              multiple
+              onChange={(e) => {
+                takeFiles(e.target.files)
+                e.target.value = ''
+              }}
+            />
+            <IconButton
+              label={attach.items.length >= ATTACHMENT_MAX_COUNT ? `画像は ${ATTACHMENT_MAX_COUNT} 枚までです` : '画像を添える（貼り付け・ドロップでも添えられる）'}
+              onClick={() => fileRef.current?.click()}
+              disabled={attach.busy || attach.items.length >= ATTACHMENT_MAX_COUNT}
+            >
+              <PhotoMark />
+            </IconButton>
+          </>
+        )}
         <textarea
           ref={ref}
           value={text}
@@ -273,6 +331,10 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
           }}
           onSelect={track}
           onKeyDown={onKeyDown}
+          onPaste={(e) => {
+            // 画像を貼ったらファイルとして預ける。文字の貼り付けは今までどおり
+            if (attachId && takeFiles(e.clipboardData.files)) e.preventDefault()
+          }}
           placeholder={
             busy
               ? mention
@@ -284,7 +346,10 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
           // フィードでは送信中でも別の返信先へ打てるよう入力欄は止めない（送信ボタンだけ止める）
           disabled={blocked && !mention}
         />
-        <button type="submit" disabled={blocked || !(mention?.picked ? stripMention(text, mention.picked.label) : text).trim()}>
+        <button
+          type="submit"
+          disabled={blocked || attach.busy || (!(mention?.picked ? stripMention(text, mention.picked.label) : text).trim() && attach.items.length === 0)}
+        >
           {blocked ? (mention ? `#${repo} は処理中` : '送信中…') : '送信'}
         </button>
       </div>

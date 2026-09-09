@@ -110,6 +110,7 @@ export function FeedView({ project, sessions = NO_SESSIONS, onStatus, onOpenSide
           <ReplyBox
             repo={target.repo}
             skillsId={target.id}
+            terminal={target.terminal}
             busy={pending.some((p) => p.id === target.id)}
             busySince={pending.find((p) => p.id === target.id)?.since}
             now={now}

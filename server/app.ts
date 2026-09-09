@@ -241,7 +241,6 @@ export function createApp(
     typed.settle((id) => sessions.find((s) => s.id === id)?.last_turn)
     return { ...typed.snapshot(), ...run.snapshot() }
   }
-  const busy = (id: string) => run.running(id) || typed.running(id)
   // 処理中の返信は replying.json にも持ち、サーバを再起動しても生きている分を引き取る（#100）
   const run: Runner = runner ?? new ProcessRunner(join(store.directory, 'reply.log'), join(store.directory, 'replying.json'))
   const metaStore = new MetaStore(join(store.directory, META_FILE))
@@ -392,11 +391,16 @@ export function createApp(
     } catch {
       return error(res, 400, `cwd が見つかりません: ${cwd || '(空)'}`)
     }
-    if (busy(id)) return error(res, 409, 'このセッションはまだ前の返信を処理中です')
+    // 端末（tmux）で開いていれば、前のターンが動いていても打ち込んでよい。TUI が次のターンに回すので、
+    // 端末で人が続けて打つのと同じになる。別プロセス（-p）の経路だけは二重起動になるので止める（#100, #170）
+    const openTerminal = terminalOf(session)
+    if (run.running(id) || (typed.running(id) && !openTerminal)) {
+      return error(res, 409, 'このセッションはまだ前の返信を処理中です')
+    }
 
     // 端末（tmux）で開いていれば、そのペインに打ち込む。別プロセスを立てないので端末にも出て、トークンも少ない。
     // ペインが無い・別のプロセスなら -p にフォールバック。入力中・ダイアログ中なら 409（何も打ち込まない）
-    const term = terminalOf(session)
+    const term = openTerminal
     // Codex は開いているスレッドを別プロセスで resume すると thread-store の active writer と競合して必ず失敗する。
     // tmux のペインへ直接打ち込める場合だけ先へ進め、tmux 外や画面が明示した process 経路は即時に断る（#160）。
     const codexActive = session.agent === 'codex' && ((await isCodexWriterActive(raw)) || (session.pid > 0 && isAlive(session.pid)))

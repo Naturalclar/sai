@@ -125,8 +125,14 @@ test('返信: 端末で開いていればペインに打ち込み（via terminal
 
   let list = await sessions()
   assert.equal(list.replying['T1@r']?.text, '続きをやって')
+
+  // 端末で開いている間は、前のターンが動いていても打ち込める（TUI が次のターンに回す。#170）
+  tmux.calls.length = 0
   res = await post('T1@r', 'もう一度')
-  assert.equal(res.status, 409, '処理中は二重に打ち込まない')
+  assert.equal(res.status, 202, '端末なら処理中でも打てる')
+  assert.equal(((await res.json()) as ReplyResponse).via, 'terminal')
+  assert.equal(tmux.calls.some((c) => c[0] === 'paste-buffer'), true)
+  assert.equal(started.length, 0, '-p は立てない')
 
   // フックがターン完了の行を足したら終わり
   await appendFile(feedFile, JSON.stringify(row(new Date(), 'T1', { repo: 'r', cwd: work, pane: '%9', pid: 200, user_text: '続きをやって', text: 'やった' })) + '\n')
@@ -250,4 +256,16 @@ test('返信: ペインが消えていれば -p にフォールバック。端�
   tmux.paneExists = true
   res = await post('D1@r', 'y')
   assert.equal(((await res.json()) as ReplyResponse).via, 'process')
+})
+
+test('返信: 端末で開いていないセッションは、処理中なら 409（-p の二重起動を止める）', async () => {
+  started.length = 0
+  // D1 は pid が死んでいて端末では開いていない。1 通目は -p で回る
+  let res = await post('D1@r', '一通目')
+  assert.equal(res.status, 202)
+  assert.equal(((await res.json()) as ReplyResponse).via, 'process')
+
+  // FakeRunner は running を返さないので、処理中は端末側（TerminalReplies）ではなくこちらで作る
+  const list = await sessions()
+  assert.equal(list.replying['D1@r'], undefined, 'FakeRunner は処理中を持たない')
 })

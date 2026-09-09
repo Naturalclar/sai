@@ -440,6 +440,7 @@
   .mention li .icon, .reply .target .icon { flex: none; line-height: 1; }
   /* どこで回すかの短い注意。入力欄（バブル）の上に 1 行 */
   .reply .note { color: var(--muted); font-size: 11px; padding: 0 2px; }
+  .reply .note.blocked { color: var(--synth); }
   .notice { color: var(--muted); font-size: 12px; margin-top: 10px; }
   .notice.error { color: var(--claude); }
   /* 端末の打ちかけを消して送るかの確認（#117） */

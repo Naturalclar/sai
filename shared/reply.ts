@@ -24,6 +24,11 @@ export interface ReplyTarget {
   title: string
   /** ブラウザから置いたアイコン画像の URL（SessionSummary.icon）。一覧から作った候補にだけ付く */
   icon?: string
+  /**
+   * 端末（tmux）で開いている。一覧から作った候補にだけ付く（フィードの行だけからは分からない）。
+   * 開いていれば前のターンが動いていても打ち込めるので、画面はここを見て送信を止めない（#170）
+   */
+  terminal?: boolean
   /** 返信できない理由。空なら選べる */
   blocked: string
 }
@@ -50,6 +55,7 @@ export function sessionReplyTargets(sessions: SessionSummary[]): ReplyTarget[] {
       blocked: replyBlockedReason(s),
     }
     if (s.icon) t.icon = s.icon
+    if (s.terminal) t.terminal = true
     return t
   })
 }

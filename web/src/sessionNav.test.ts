@@ -66,3 +66,11 @@ test('navTarget: 一覧に無ければ先頭のセッションへ。一覧が空
   assert.equal(navTarget([], null, 'prev'), null)
   assert.equal(navTarget([], null, 'next'), null, '一覧が空ならフィードから下へも行けない')
 })
+
+test('navAction: → は入力欄へ', () => {
+  assert.equal(navAction(key('ArrowRight')), 'input')
+  assert.equal(navAction(key('ArrowRight', { metaKey: true })), null)
+  assert.equal(navAction(key('ArrowRight', { shiftKey: true })), null)
+  assert.equal(navAction(key('ArrowRight', { isComposing: true })), null)
+  assert.equal(navAction(key('ArrowLeft')), null, '← は入力欄側（replyFocus.ts）が見る')
+})

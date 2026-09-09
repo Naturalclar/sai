@@ -2,7 +2,7 @@
 // キーを受けるのは App.tsx（window の keydown）、選択項目を見えるところまで動かすのは SessionItem.tsx と SessionList.tsx（フィードの項目）。
 
 /** キー入力がセッション移動のどれに当たるか。修飾キー付きと IME 変換中は何もしない */
-export type NavAction = 'prev' | 'next' | 'feed'
+export type NavAction = 'prev' | 'next' | 'feed' | 'input'
 
 interface KeyLike {
   key: string
@@ -14,13 +14,15 @@ interface KeyLike {
 }
 
 /**
- * ↑ / k で1つ上（新しい方）、↓ / j で1つ下（古い方）、Esc でフィードへ。
- * j / k は vim 風。修飾キーが1つでも押されていれば null（⌘↑ や Shift+j をブラウザやアプリに残す）
+ * ↑ / k で1つ上（新しい方）、↓ / j で1つ下（古い方）、Esc でフィードへ、→ で返信の入力欄へ。
+ * j / k は vim 風。修飾キーが1つでも押されていれば null（⌘↑ や Shift+j をブラウザやアプリに残す）。
+ * 入力欄から一覧へ戻る ← は入力欄しか本文の中身を知らないので、こちらではなく `replyFocus.ts` にある
  */
 export function navAction(e: KeyLike): NavAction | null {
   if (e.isComposing || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return null
   if (e.key === 'ArrowUp' || e.key === 'k') return 'prev'
   if (e.key === 'ArrowDown' || e.key === 'j') return 'next'
+  if (e.key === 'ArrowRight') return 'input'
   if (e.key === 'Escape') return 'feed'
   return null
 }

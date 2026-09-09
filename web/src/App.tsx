@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { parseRoute, useHashRoute, useLocalState, usePolling } from './hooks'
 import { SessionList } from './SessionList'
 import { SessionView } from './SessionView'
@@ -28,11 +28,16 @@ export interface PaneProps extends StatusProps {
   onOpenSidebar: () => void
   /** そのセッションの差分を開く。出し方（右のペイン / モーダル）は App が幅で決める */
   onOpenDiff: (id: string) => void
+  /** 入力欄が空のときの `←`。サイドバーの選ばれている項目にフォーカスを戻す（#204） */
+  onLeaveToSidebar: () => void
   /** サーバ側の設定（一言が有効か、既定の性格）。まだ取れていなければ null */
   settings: SettingsResponse | null
   /** Linear の workspace（設定）。一言の中の PGR-123 のリンク先。空ならリンクにしない */
   linear: string
 }
+
+/** `→` / `←` の当て先が描画されるのを待つ上限。過ぎたら諦める */
+const FOCUS_WAIT_MS = 2000
 
 const DEFAULT_FILTERS: SessionFilters = { project: '', repo: '', agent: '', date: '', days: '7', archived: '' }
 
@@ -87,6 +92,38 @@ export function App() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [toggleSidebar])
 
+  /**
+   * キーボードで入力欄とサイドバーを行き来する（#204）。`→` で入力欄へ、空の入力欄で `←` で一覧へ。
+   * 当て先はその場に居ないことがある（狭い画面では先に route を変える、閉じたサイドバーを開く、フィードの取得待ち）ので、
+   * まずその場で当ててみて、無ければ描画のあとにもう一度探す。FOCUS_WAIT_MS を過ぎたら諦める（当て先が
+   * 出てこないとき（アーカイブ済みで入力欄が無いなど）に、あとの描画で不意にフォーカスを奪わないため）
+   */
+  const focusLater = useRef<{ want: 'input' | 'sidebar'; at: number } | null>(null)
+  const applyFocus = useCallback(() => {
+    const pending = focusLater.current
+    if (!pending) return
+    const el =
+      pending.want === 'input'
+        ? document.querySelector<HTMLTextAreaElement>('.reply textarea')
+        : // サイドバーの選ばれている項目。フィードは <a> そのもの、セッションは <div> の中の <a class="link">
+          (() => {
+            const item = document.querySelector<HTMLElement>('.channels .item.active')
+            return item?.matches('a') ? item : (item?.querySelector<HTMLElement>('.link') ?? null)
+          })()
+    if (!el && Date.now() - pending.at < FOCUS_WAIT_MS) return // まだ描画されていない。次の描画で探し直す
+    focusLater.current = null
+    el?.focus()
+  }, [])
+  // 描画のあとに毎回。当て先が出てくるのを待つのはここだけで、state は増やさない
+  useEffect(applyFocus)
+  const focusSoon = useCallback(
+    (want: 'input' | 'sidebar') => {
+      focusLater.current = { want, at: Date.now() }
+      applyFocus()
+    },
+    [applyFocus],
+  )
+
   // ↑↓（j / k）でサイドバーの並びのまま隣へ（フィードは一番上の項目）、Esc でフィードへ。起点は「いま開いているセッション」なので state は持たない。
   // 入力欄にフォーカスがあるときはそちらの操作（caret の移動、@ の候補）なので触らない。サイドバーを閉じていても効く
   const selectedId = route.name === 'session' ? route.id : null
@@ -95,6 +132,14 @@ export function App() {
     const onKeyDown = (e: KeyboardEvent) => {
       const action = navAction(e)
       if (!action || isTypingTarget(e.target as HTMLElement | null)) return
+      if (action === 'input') {
+        // 狭い画面の `#/` は一覧しか出ていない（.pane が display:none）ので、先にチャット側へ移る。
+        // 入力欄が無いとき（アーカイブ済み、再開できないセッション）は、描画のあとの effect が何も見つけずに終わる
+        e.preventDefault()
+        if (narrow && parseRoute(location.hash).name === 'list') location.hash = '#/feed'
+        focusSoon('input')
+        return
+      }
       if (action === 'feed' && diffOpen !== null) {
         // 差分を出しているときの Esc は、まずそれを閉じる
         e.preventDefault()
@@ -120,11 +165,18 @@ export function App() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [sessionIds, diffOpen])
+  }, [sessionIds, diffOpen, narrow, focusSoon])
 
   useEffect(() => {
     document.title = route.name === 'session' ? `SAI · ${route.id.slice(0, 12)}` : 'SAI'
   }, [route])
+
+  /** 入力欄で `←` を押されたとき。見えていない所には当てないので、閉じたサイドバーは開き、狭い画面は一覧側へ移る */
+  const focusSidebar = useCallback(() => {
+    openSidebar()
+    if (narrow) location.hash = '#/'
+    focusSoon('sidebar')
+  }, [narrow, openSidebar, focusSoon])
 
   // 一言コメント（digest）の性格。サーバ側の設定なので取って来て、変えたら PUT。SAI_DIGEST=1 でないときは出さない
   const { settings, busy: settingsBusy, error: settingsError, setPersona, setLinearWorkspace } = useSettings()
@@ -146,7 +198,7 @@ export function App() {
           aria-expanded={sidebarOpen}
           aria-keyshortcuts="Meta+\ Control+\"
           aria-label={sidebarOpen ? '一覧を隠す' : '一覧を出す'}
-          title={`${sidebarOpen ? '一覧を隠す' : '一覧を出す'} (⌘\\ / Ctrl+\\)\nセッションの移動: ↑↓ または k / j、フィードへ戻る: Esc\n検索して移動: ⌘K / Ctrl+K`}
+          title={`${sidebarOpen ? '一覧を隠す' : '一覧を出す'} (⌘\\ / Ctrl+\\)\nセッションの移動: ↑↓ または k / j、フィードへ戻る: Esc\n入力欄へ: →、空の入力欄から一覧へ: ←\n検索して移動: ⌘K / Ctrl+K`}
         >
           <MenuMark />
         </button>
@@ -191,9 +243,9 @@ export function App() {
         </aside>
         <div className="pane">
           {route.name === 'session' ? (
-            <SessionView id={route.id} onStatus={onStatus} onOpenSidebar={openSidebar} onOpenDiff={setDiffId} linear={linear} settings={settings} />
+            <SessionView id={route.id} onStatus={onStatus} onOpenSidebar={openSidebar} onLeaveToSidebar={focusSidebar} onOpenDiff={setDiffId} linear={linear} settings={settings} />
           ) : (
-            <FeedView project={filters.project} sessions={list.data?.sessions} onStatus={onStatus} onOpenSidebar={openSidebar} onOpenDiff={setDiffId} linear={linear} settings={settings} />
+            <FeedView project={filters.project} sessions={list.data?.sessions} onStatus={onStatus} onOpenSidebar={openSidebar} onLeaveToSidebar={focusSidebar} onOpenDiff={setDiffId} linear={linear} settings={settings} />
           )}
         </div>
         {/* 広い画面はチャットの右にもう1枚。狭い画面は今までどおりモーダルで重ねる */}

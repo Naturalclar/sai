@@ -34,7 +34,7 @@ const NO_ROWS: never[] = []
 const NO_REPLYING = {}
 const NO_APPROVALS: never[] = []
 
-export function SessionView({ id, onStatus, onOpenSidebar, onOpenDiff, linear, settings }: { id: string } & PaneProps) {
+export function SessionView({ id, onStatus, onOpenSidebar, onOpenDiff, onLeaveToSidebar, linear, settings }: { id: string } & PaneProps) {
   const { data, error, updatedAt } = usePolling(() => api.session(id), [id])
   useEffect(() => onStatus(updatedAt, error), [updatedAt, error, onStatus])
 
@@ -126,6 +126,7 @@ export function SessionView({ id, onStatus, onOpenSidebar, onOpenDiff, linear, s
             repo={s.repo}
             skillsId={id}
             history={history}
+            onLeaveToSidebar={onLeaveToSidebar}
             attachId={id}
             terminal={Boolean(s.terminal)}
             busy={mine !== null}

@@ -46,7 +46,7 @@ export interface DiffProps {
   diffOpen: boolean
 }
 
-export function SessionView({ id, onStatus, onOpenSidebar, onToggleDiff, diffOpen, onLeaveToSidebar, linear, settings }: { id: string } & PaneProps & DiffProps) {
+export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggleDiff, diffOpen, onLeaveToSidebar, linear, settings }: { id: string; focusTs?: string } & PaneProps & DiffProps) {
   const { data, error, updatedAt } = usePolling(() => api.session(id), [id])
   useEffect(() => onStatus(updatedAt, error), [updatedAt, error, onStatus])
 
@@ -124,6 +124,7 @@ export function SessionView({ id, onStatus, onOpenSidebar, onToggleDiff, diffOpe
           linear={linear}
           showThinking
           thinkingOpen={thinkingUi.open}
+          focusTs={focusTs}
           trailer={
             <>
               {mine && <PendingBubble text={mine.text} since={mine.since} now={now} quiet={promptArrived(data.rows, id, mine.text, mine.since)} profile={data.profile} />}

@@ -495,6 +495,42 @@ export interface FeedResponse {
   viewer: Viewer | null
 }
 
+/** 検索で当たった発言 1 つ（#230）。飛び先は `#/s/<id>?ts=<ts>` */
+export interface SearchHit {
+  /** エンティティID */
+  id: string
+  /** その行の ts。セッション画面はこれで当たった発言まで送る */
+  ts: string
+  /** 自分の入力（`user_text`）に当たったか、エージェントの返答（`text`）か */
+  who: 'me' | 'agent'
+  /** セッションの表示名（一覧から引けたとき）。引けなければ ID */
+  label: string
+  /** リポジトリ / ブランチ。⌘K の候補と同じ */
+  hint: string
+  icon?: string
+  archived?: boolean
+  /** 当たったところを中心に切り出した本文（`shared/search.ts` の `excerptOf`） */
+  excerpt: string
+  /** `excerpt` の中で強調する場所（開始, 長さ）。重なりは畳んである */
+  hits: [number, number][]
+}
+
+/**
+ * GET /api/search?q=&days=90。発言の本文（`text` / `user_text`）を舐めて探す（#230）。
+ * **索引は持たない**（実測で 9 日ぶん 1.52MB。重くなったらそのとき考える）。
+ * 3 秒のポーリングには載せない（⌘K で打ち終わったときだけ叩く）
+ */
+export interface SearchResponse {
+  q: string
+  days: number
+  /** 新しい順。上限は shared/search.ts の SEARCH_LIMIT */
+  hits: SearchHit[]
+  /** 上限で切った（古い方を落とした） */
+  truncated: boolean
+  /** 舐めた行数。「見つからない」ときに範囲を伝えるため */
+  scanned: number
+}
+
 /** POST /api/sessions/<id>/reply の body */
 export interface ReplyRequest {
   text: string

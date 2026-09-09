@@ -263,7 +263,7 @@ export function App() {
           {route.name === 'todo' ? (
             <TodoView list={list} onStatus={onStatus} onOpenSidebar={openSidebar} onLeaveToSidebar={focusSidebar} linear={linear} settings={settings} />
           ) : route.name === 'session' ? (
-            <SessionView id={route.id} onStatus={onStatus} onOpenSidebar={openSidebar} onLeaveToSidebar={focusSidebar} onToggleDiff={toggleDiff} diffOpen={diffOpen !== null} linear={linear} settings={settings} />
+            <SessionView id={route.id} focusTs={route.ts ?? ''} onStatus={onStatus} onOpenSidebar={openSidebar} onLeaveToSidebar={focusSidebar} onToggleDiff={toggleDiff} diffOpen={diffOpen !== null} linear={linear} settings={settings} />
           ) : (
             <FeedView
               project={filters.project}

@@ -31,6 +31,7 @@ import type {
   SessionMetaResponse,
   SessionPermissionsResponse,
   SessionSkillsResponse,
+  SearchResponse,
   SessionsResponse,
   SessionSummary,
   SettingsRequest,
@@ -68,6 +69,8 @@ import { isLinearWorkspace } from '../shared/refs.ts'
 import { ProcessRunner, replyCommand } from './runner.ts'
 import { SkillStore } from './skills.ts'
 import { UsageStore } from './usage.ts'
+import { searchRows } from './search.ts'
+import { searchWords } from '../shared/search.ts'
 import { alive, RealTmux, realPs, TerminalBusy, TerminalGone, TerminalReplies, typeInto } from './terminal.ts'
 import type { PsFn, Tmux } from './terminal.ts'
 import type { Runner } from './runner.ts'
@@ -90,6 +93,7 @@ const ANSWER_SUFFIX = '/answer'
 export const MAX_APPROVAL_BYTES = 1024 * 1024
 const SETTINGS_PATH = '/api/settings'
 const USAGE_PATH = '/api/usage'
+const SEARCH_PATH = '/api/search'
 /** 設定 body の上限 */
 export const MAX_SETTINGS_BYTES = 4 * 1024
 const REPLY_SUFFIX = '/reply'
@@ -972,6 +976,19 @@ export function createApp(
       if (path === USAGE_PATH) {
         const payload: UsageResponse = await usageStore.get()
         return json(res, payload)
+      }
+      // 発言の本文の検索（#230）。索引は持たず、store が持っている行を舐めるだけ。
+      // 3 秒のポーリングには乗せない（⌘K で打ち終わったときだけ叩く）
+      if (path === SEARCH_PATH) {
+        const days = parseDays(q.get('days'), 90)
+        const rawQuery = q.get('q') ?? ''
+        const words = searchWords(rawQuery)
+        if (words.length === 0) {
+          return json(res, { q: rawQuery, days, hits: [], truncated: false, scanned: 0 } satisfies SearchResponse)
+        }
+        const [rows, { sessions }] = await Promise.all([store.rows(days), sessionsWithMeta(days)])
+        const { hits, truncated } = searchRows(rows, words, sessions)
+        return json(res, { q: rawQuery, days, hits, truncated, scanned: rows.length } satisfies SearchResponse)
       }
 
       if (path === '/api/sessions') {

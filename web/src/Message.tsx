@@ -31,10 +31,15 @@ interface Props {
   linear?: string
   /** このターンからモデルが変わった。そのモデル名を小さく出す */
   model?: string
+  /**
+   * 検索から飛んできた当たり（#230）。`Chat` がこの印で場所を探して、そこまでスクロールして光らせる。
+   * 行ごとに DOM の目印を置くのはここだけなので、3 つの分岐すべてに同じものを付ける
+   */
+  found?: boolean
 }
 
 /** バブル1つ分の本文。長ければ折りたたんで「もっと見る」を付ける */
-export function Message({ ts, text: raw, markdown, waiting, resolved, thinking, thinkingOpen = false, summary, model, remote, linear }: Props) {
+export function Message({ ts, text: raw, markdown, waiting, resolved, thinking, thinkingOpen = false, summary, model, remote, linear, found = false }: Props) {
   // 自分の入力に添えた画像は、パスの文字列ではなくサムネイルで出す（本文の末尾に足してある。shared/attachments.ts）
   const { body: text, urls } = markdown ? { body: raw, urls: [] as string[] } : splitAttachments(raw)
   const [open, setOpen] = useState(false)
@@ -44,9 +49,12 @@ export function Message({ ts, text: raw, markdown, waiting, resolved, thinking, 
   // 開いたら中身が見えるところまでスクロールする（#119）。詳細は .details、「もっと見る」は本文そのもの
   const [detailsRef, summaryRef] = useReveal<HTMLDivElement, HTMLDivElement>(details)
   const [bodyRef, moreRef] = useReveal<HTMLDivElement, HTMLButtonElement>(open)
+  // 検索から飛ぶための目印。`Chat` が data-ts で引くので、どの分岐でも同じものを付ける
+  const anchor = { 'data-ts': ts }
+  const mark = found ? ' found' : ''
   if (waiting) {
     return (
-      <div className={`msg waiting${resolved ? ' resolved' : ''}`}>
+      <div className={`msg waiting${resolved ? ' resolved' : ''}${mark}`} {...anchor}>
         <span className="time">{hm(ts)}</span>
         <div className="body" title={resolved ? 'この待ちはもう解消している' : '人の答えを待って止まっている'}>⏳ {text || '人を待って止まっている'}</div>
       </div>
@@ -55,7 +63,7 @@ export function Message({ ts, text: raw, markdown, waiting, resolved, thinking, 
   if (summary && text) {
     // 一言 + 「詳細」。詳細を開いたら元の本文を今までどおり（Markdown、長ければ折りたたみ）
     return (
-      <div className="msg">
+      <div className={`msg${mark}`} {...anchor}>
         <span className="time">{hm(ts)}</span>
         {thinking && <ThinkingBlock text={thinking} openAll={thinkingOpen} />}
         <div className="summary" ref={summaryRef}>
@@ -79,7 +87,7 @@ export function Message({ ts, text: raw, markdown, waiting, resolved, thinking, 
     )
   }
   return (
-    <div className="msg">
+    <div className={`msg${mark}`} {...anchor}>
       <span className="time">{hm(ts)}</span>
       {model && <span className="tag model" title="このターンからモデルが変わった">{model}</span>}
       {thinking && <ThinkingBlock text={thinking} openAll={thinkingOpen} />}

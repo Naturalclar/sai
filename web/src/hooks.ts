@@ -55,13 +55,27 @@ export interface Polled<T> {
   updatedAt: Date | null
 }
 
+/** タブが裏にある間の間隔（#231）。表の 3 秒より大きく空ける */
+export const HIDDEN_POLL_MS = 20000
+
+export interface PollOptions {
+  /**
+   * タブが隠れている間も、この間隔で叩き続ける（省略すると隠れている間は止まる）。
+   * **一覧だけに付ける。** 裏に回っている間に「あなたを待っています」が増えたことを、
+   * タブの題名と通知で伝えるため（#231）。チャットやフィードは見ていないので止めたままでよい
+   */
+  hiddenMs?: number
+}
+
 /**
- * 3秒ごとに fetcher を叩く。レスポンスの rev が前と同じなら state を更新しない
- * （= 再描画しない）。タブが隠れている間は止まり、戻ったら即1回叩く。
+ * 3秒ごとに fetcher を叩く。レスポンスの rev が前と同じなら state を更新しない（= 再描画しない）。
+ * タブが隠れている間は止まり、戻ったら即1回叩く。
+ * **`hiddenMs` を渡したときだけ**、隠れている間もその間隔で叩き続ける。
  */
-export function usePolling<T extends { rev: string }>(fetcher: () => Promise<T>, deps: unknown[]): Polled<T> {
+export function usePolling<T extends { rev: string }>(fetcher: () => Promise<T>, deps: unknown[], options: PollOptions = {}): Polled<T> {
   const [state, setState] = useState<Polled<T>>({ data: null, error: null, updatedAt: null })
   const lastRev = useRef<string | null>(null)
+  const { hiddenMs } = options
 
   // deps は呼び出し側が「この値が変わったら取り直す」と決めたもの
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -73,7 +87,7 @@ export function usePolling<T extends { rev: string }>(fetcher: () => Promise<T>,
     setState({ data: null, error: null, updatedAt: null })
 
     const tick = async () => {
-      if (document.hidden) return
+      if (document.hidden && !hiddenMs) return
       try {
         const next = await load()
         if (!alive) return
@@ -88,9 +102,19 @@ export function usePolling<T extends { rev: string }>(fetcher: () => Promise<T>,
       }
     }
 
+    // 表と裏で間隔が違うので、切り替わるたびにタイマーを張り直す
+    let timer: ReturnType<typeof setInterval> | undefined
+    const arm = () => {
+      clearInterval(timer)
+      const ms = document.hidden ? hiddenMs : POLL_MS
+      if (ms) timer = setInterval(() => void tick(), ms)
+    }
+
     void tick()
-    const timer = setInterval(() => void tick(), POLL_MS)
+    arm()
     const onVisible = () => {
+      arm()
+      // 表に戻ったら待たずに 1 回。裏へ回ったときは次の周期でよい
       if (!document.hidden) void tick()
     }
     document.addEventListener('visibilitychange', onVisible)
@@ -99,7 +123,7 @@ export function usePolling<T extends { rev: string }>(fetcher: () => Promise<T>,
       clearInterval(timer)
       document.removeEventListener('visibilitychange', onVisible)
     }
-  }, [load])
+  }, [load, hiddenMs])
 
   return state
 }

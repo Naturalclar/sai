@@ -48,6 +48,8 @@
   header .user-menu .menu .who .login { display: block; font-weight: 400; font-size: 11px; color: var(--muted); }
   header .user-menu .menu button { display: block; width: 100%; text-align: left; padding: 6px 12px; background: transparent; border: 0; color: var(--ink); font: inherit; cursor: pointer; }
   header .user-menu .menu button:hover { background: var(--hover); }
+  /* 押せないときの断り書き（通知がブラウザ側で拒否されている / 出せない環境。#231） */
+  header .user-menu .menu .note { padding: 6px 12px; font-size: 11px; color: var(--muted); max-width: 18em; }
   /* 使用量（#216）。取れたエージェントの分だけ出る。Codex は割合、Claude は上限に当たっているときだけ */
   header .usage { position: relative; display: inline-flex; }
   header .usage-chip { display: inline-flex; align-items: center; gap: 8px; padding: 3px 8px; font: inherit; font-size: 12px; color: var(--muted); background: var(--chip); border: 1px solid transparent; border-radius: 999px; cursor: pointer; white-space: nowrap; }

@@ -54,6 +54,7 @@ function summary(over: Partial<SessionSummary>): SessionSummary {
     last_text: '返答',
     model: '',
     models: [],
+    permission_mode: '',
     waiting: '',
     pane: '',
     pid: 0,

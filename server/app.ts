@@ -1,5 +1,6 @@
 // ルーティング。main.ts が node:http に載せ、テストは createApp() を直接叩く。
 import { createHash } from 'node:crypto'
+import { homedir } from 'node:os'
 import { appendFile, readFile, stat } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { extname, join, resolve, sep } from 'node:path'
@@ -12,10 +13,10 @@ import type {
   ApprovalAnswer,
   ApprovalRequest,
   FeedResponse,
-  Profile,
-  ProfileResponse,
   FeedRow,
   HealthResponse,
+  Profile,
+  ProfileResponse,
   ReplyError,
   ReplyingMap,
   ReplyRequest,
@@ -24,6 +25,7 @@ import type {
   SessionIconResponse,
   SessionMetaResponse,
   SessionSkillsResponse,
+  SessionPermissionsResponse,
   SessionsResponse,
   SessionSummary,
   SettingsRequest,
@@ -39,6 +41,7 @@ import { BuildFreshness } from './buildFreshness.ts'
 import { DIGEST_FILE, DigestStore, digesterFromEnv } from './digest.ts'
 import type { Digester } from './digest.ts'
 import { META_FILE, MetaStore } from './meta.ts'
+import { collectPermissions } from './permissions.ts'
 import { PROFILE_FILE, ProfileStore } from './profile.ts'
 import { SETTINGS_FILE, SettingsStore } from './settings.ts'
 import type { Settings } from './settings.ts'
@@ -72,6 +75,7 @@ const REPLY_SUFFIX = '/reply'
 const META_SUFFIX = '/meta'
 const ICON_SUFFIX = '/icon'
 const SKILLS_SUFFIX = '/skills'
+const PERMISSIONS_SUFFIX = '/permissions'
 const PROFILE_PATH = '/api/profile'
 const PROFILE_ICON_PATH = '/api/profile/icon'
 
@@ -492,6 +496,22 @@ export function createApp(
    * PUT /api/sessions/<id>/meta。いまの値に body を重ねる（省略は据え置き、空や null は消す）。
    * アーカイブは archived_at を載せるだけで、専用のエンドポイントは無い。窓の中に無いセッションには付けない
    */
+  /**
+   * GET /api/sessions/<id>/permissions。そのセッションの cwd に効いている許可ルールを読んで返す（読むだけ）。
+   * パスは cwd から固定で組み立てる（リクエストからは受け取らない）。3 秒のポーリングには乗せない（画面が開いたときだけ）
+   */
+  const getPermissions = async (res: ServerResponse, id: string, days: number) => {
+    const { sessions } = await store.sessions(days)
+    const session = sessions.find((s) => s.id === id)
+    if (!session) return error(res, 404, 'session not found in window')
+    const cwd = session.cwd
+    const empty: SessionPermissionsResponse = { id, cwd, agent: session.agent, mode: session.permission_mode, sources: [], rules: [] }
+    // 許可の形が Claude Code のものなので、Codex には当てない（Codex は config.toml の approval_policy / trust_level）
+    if (session.agent !== 'claude' || !cwd) return json(res, empty)
+    const { sources, rules } = await collectPermissions(cwd, { home: homedir() })
+    return json(res, { ...empty, sources, rules } satisfies SessionPermissionsResponse)
+  }
+
   const putMeta = async (req: IncomingMessage, res: ServerResponse, id: string, days: number) => {
     if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
     let body: unknown
@@ -626,6 +646,7 @@ export function createApp(
     const isMeta = path.startsWith(SESSIONS_PREFIX) && path.endsWith(META_SUFFIX)
     const isIcon = path.startsWith(SESSIONS_PREFIX) && path.endsWith(ICON_SUFFIX)
     const isSkills = path.startsWith(SESSIONS_PREFIX) && path.endsWith(SKILLS_SUFFIX)
+    const isPermissions = path.startsWith(SESSIONS_PREFIX) && path.endsWith(PERMISSIONS_SUFFIX)
     const isAsk = path === APPROVALS_PATH
     const isAnswer = path.startsWith(APPROVALS_PREFIX) && path.endsWith(ANSWER_SUFFIX)
     const isProfile = path === PROFILE_PATH
@@ -685,6 +706,11 @@ export function createApp(
         if (method === 'PUT') return await putIcon(req, res, id, parseDays(q.get('days'), 90))
         if (method === 'DELETE') return await deleteIcon(req, res, id)
         return await getIcon(req, res, id, q.get('v'))
+      }
+      if (isPermissions) {
+        const id = sessionIdFrom(path, PERMISSIONS_SUFFIX)
+        if (id === null) return error(res, 400, 'bad session id')
+        return await getPermissions(res, id, parseDays(q.get('days'), 90))
       }
       if (isProfile) {
         if (method === 'PUT') return await putProfile(req, res)

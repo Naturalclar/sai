@@ -42,6 +42,7 @@ MAX_TEXT = 2000
 MAX_USER_TEXT = 2000
 MAX_THINKING = 4000
 MAX_MODEL = 100
+MAX_MODE = 40
 MAX_FIRST_USER = 300
 SYNTH_GAP_SECONDS = 30 * 60
 ROLLOUT_MAX_AGE_SECONDS = 48 * 3600
@@ -800,6 +801,9 @@ def build_row(payload: dict, now: datetime, directory: Path) -> dict | None:
 
     event = detect_event(payload)
     waiting = None
+    # Claude のフックはどのイベントでも permission_mode を載せてくる（イベントによっては無い）。Codex には無い
+    raw_mode = payload.get("permission_mode")
+    permission_mode = raw_mode.strip() if isinstance(raw_mode, str) else ""
 
     if agent == "claude":
         session_id = payload.get("session_id")
@@ -900,6 +904,9 @@ def build_row(payload: dict, now: datetime, directory: Path) -> dict | None:
         "thinking": clip(thinking, MAX_THINKING),
         # そのターンを回したモデル（Claude は transcript の assistant 行の message.model、Codex は rollout の turn_context.model）
         "model": clip(model, MAX_MODEL),
+        # そのターンの許可モード（Claude のフックのペイロードそのまま。Codex には無いので空）。
+        # ルールが 1 件も無くても auto / bypassPermissions なら通るので、画面はルールと並べて出す
+        "permission_mode": clip(permission_mode, MAX_MODE),
         # 一覧のタイトル用。集計側は「一番古い行の値」を使うので、1行目だけに
         # 焼くのではなく毎行に載せる。そうしないと days で切った窓の外に
         # セッションの1行目が落ちたときにタイトルが消える。

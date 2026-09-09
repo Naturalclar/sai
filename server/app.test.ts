@@ -5,7 +5,7 @@ import type { Server } from 'node:http'
 import { mkdtemp, rm, writeFile, appendFile, mkdir, stat, utimes, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { Replying, ReplyResponse, SessionsResponse, SessionDetailResponse, SessionIconResponse, SessionMetaResponse, FeedResponse, SettingsResponse, HealthResponse, SessionSkillsResponse } from '../shared/types.ts'
+import type { Replying, ReplyResponse, SessionsResponse, SessionDetailResponse, SessionIconResponse, SessionMetaResponse, FeedResponse, SettingsResponse, HealthResponse, SessionSkillsResponse, SessionPermissionsResponse } from '../shared/types.ts'
 import { createApp, parseDays, revWith, selfUrl, sessionIdFrom, stripThinking } from './app.ts'
 import { BuildFreshness } from './buildFreshness.ts'
 import { Authenticator } from './auth.ts'
@@ -301,6 +301,39 @@ test('thinking はセッション詳細の行には載り、フィードの行�
   const withThinking = row(new Date(), 'X', { thinking: 't' })
   assert.equal(stripThinking(withThinking).thinking, undefined)
   assert.equal(withThinking.thinking, 't', '元の行は変えない')
+})
+
+test('GET /api/sessions/<id>/permissions: cwd の設定を読んで deny → allow の順に返す。Codex と不明なセッションは空（#162）', async () => {
+  // C1@r の cwd は dir。そこに「常に許可」が書く先を置く
+  await mkdir(join(dir, '.claude'), { recursive: true })
+  await writeFile(
+    join(dir, '.claude', 'settings.local.json'),
+    JSON.stringify({ permissions: { allow: ['Bash(gh api:*)', 'mcp__github__add_issue_comment'], deny: ['Read(./.env)'] } }),
+  )
+  const res = await get('/api/sessions/C1%40r/permissions?days=7')
+  assert.equal(res.status, 200)
+  const data = (await res.json()) as SessionPermissionsResponse
+  assert.equal(data.id, 'C1@r')
+  assert.equal(data.cwd, dir)
+  assert.deepEqual(
+    data.rules.map((r) => `${r.kind}/${r.source}/${r.rule}`),
+    ['deny/local/Read(./.env)', 'allow/local/Bash(gh api:*)', 'allow/local/mcp__github__add_issue_comment'],
+  )
+  const local = data.sources.find((x) => x.kind === 'local')!
+  assert.equal(local.path, join(dir, '.claude', 'settings.local.json'))
+  assert.equal(local.missing, undefined)
+  assert.deepEqual(data.sources.map((x) => x.kind), ['managed', 'local', 'project', 'user', 'sai_args'], '無い先も返す')
+  assert.equal(data.sources.find((x) => x.kind === 'project')!.missing, true)
+
+  // Codex は許可の形が別（config.toml）なので当てない
+  const codex = (await (await get('/api/sessions/X1%40r/permissions?days=7')).json()) as SessionPermissionsResponse
+  assert.equal(codex.agent, 'codex')
+  assert.deepEqual(codex.rules, [])
+  assert.deepEqual(codex.sources, [])
+
+  assert.equal((await get('/api/sessions/nope%40r/permissions')).status, 404)
+  assert.equal((await get('/api/sessions/%2Fetc%2Fpasswd/permissions')).status, 400, 'パスは受け取らない')
+  assert.equal((await fetch(`${base}/api/sessions/C1%40r/permissions`, { method: 'POST' })).status, 405, '読むだけ')
 })
 
 test('/api/feed は壊れた行を落とす', async () => {

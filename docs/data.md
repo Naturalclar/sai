@@ -38,7 +38,7 @@ Codex CLI ──[notify]───────┘
 | `v` | 記録側の版（`record.py` の `RECORD_VERSION`。`shared/types.ts` にも同じ値があり、ずれると `pnpm test:feed` が止まる）。行の形を変えるたびに上げる。無い行は試作か古い `record.py` が書いたもの（1 扱い） |
 | `agent` | `claude` / `codex` / `unknown` |
 | `repo` | `git rev-parse --show-toplevel` の basename。bare + worktree の構成では worktree のディレクトリ名（`dev-kanade` など）になり、GitHub のリポジトリ名とは限らない。画面では「worktree」と呼ぶ（同じリポジトリに複数あるときだけ絞り込みに出る）。エンティティID（`<セッション>@<リポジトリ>`）はこれで作るので、値は変えない |
-| `project` | **どのリポジトリのものか**（`Naturalclar/sai`）。`remote` があればその `owner/repo`、無ければ `git rev-parse --git-common-dir` から取ったリポジトリ名だけ（bare なら `…/sai.git` → `sai`、普通の clone なら `<toplevel>/.git` → その親、のどちらでも同じ答えになる）。画面の絞り込みと見出しはこれを使う。無い行（古い `record.py`）はサーバが `remote` から補う（`shared/project.ts` の `rowProject()`） |
+| `project` | **どのリポジトリのものか**（`Naturalclar/sai`）。`remote` があればその `owner/repo`、無ければ `git rev-parse --git-common-dir` から取ったリポジトリ名だけ（bare なら `…/sai.git` → `sai`、普通の clone なら `<toplevel>/.git` → その親、のどちらでも同じ答えになる）。画面の絞り込みと見出しはこれを使う。無い行（古い `record.py`）はサーバが `remote` から補い、それも無ければ **`cwd` で git を読んで埋める**（`server/project.ts`。cwd ごとに 1 回だけ）。**それでも分からなければ空**で、絞り込みの候補には出さない（`repo` = worktree 名には落とさない。#182） |
 | `session_source` | `payload`（ペイロードから）/ `rollout`（Codex のファイルから）/ `synth`（時間で合成）。一覧の信頼度がここで分かる |
 | `event` | 何の行か。ターン完了は `Stop`（Claude）/ `agent-turn-complete`（Codex）。人を待って止まった行は `PermissionRequest` / `PreToolUse` / `Notification`、人が答えて再開した行は `UserPromptSubmit`。読み方は `shared/events.ts` の `eventKind()` にまとめてあり、集計と画面が同じ判定を使う |
 | `text` | ターン完了なら最後のアシスタント発話。Claude は `transcript_path` の末尾から、Codex は `last-assistant-message`。2,000文字で切る。待ちの行なら「何を待っているか」（300文字）、再開の行は空 |

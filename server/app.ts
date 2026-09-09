@@ -46,6 +46,7 @@ import { META_FILE, MetaStore } from './meta.ts'
 import { collectPermissions } from './permissions.ts'
 import { compareUrl } from '../shared/diff.ts'
 import { NotAGitRepo, RealGit, sessionDiff } from './diff.ts'
+import { fillProjects, ProjectResolver } from './project.ts'
 import type { Git } from './diff.ts'
 import { PROFILE_FILE, ProfileStore } from './profile.ts'
 import { SETTINGS_FILE, SettingsStore } from './settings.ts'
@@ -232,6 +233,8 @@ export function createApp(
   // 端末に打ち込んだ返信の「処理中」。子プロセスの方（run）とは別に持ち、画面には合わせて出す
   const typed = terminal.replies ?? new TerminalReplies()
   const isAlive = terminal.alive ?? alive
+  // project の無いセッションを cwd から埋める（cwd をキーにキャッシュ）
+  const projects = new ProjectResolver(git)
   const isCodexWriterActive = terminal.codexWriterActive ?? codexWriterActive
   const terminalEnabled = process.env.SAI_TERMINAL !== '0'
   /** 一番新しい行に pane と pid があり、pid が生きていれば端末で開いている */
@@ -279,7 +282,9 @@ export function createApp(
    * アーカイブ後に行が増えると end が archived_at を追い越すので、メタを書き換えずに自動で戻る
    */
   const sessionsWithMeta = async (days: number): Promise<{ rev: string; sessions: SessionSummary[] }> => {
-    const [{ rev, sessions }, meta, icons] = await Promise.all([store.sessions(days), metaStore.all(), iconStore.all()])
+    const [{ rev, sessions: raw }, meta, icons] = await Promise.all([store.sessions(days), metaStore.all(), iconStore.all()])
+    // project の無い古い行のセッションは cwd から git で引いて埋める（cwd ごとに 1 回だけ。#182）
+    const sessions = await fillProjects(projects, raw)
     return {
       rev: `${rev}-${meta.rev}-${icons.rev}`,
       sessions: sessions.map((s) => {

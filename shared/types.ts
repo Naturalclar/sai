@@ -361,10 +361,11 @@ export interface ReplyRequest {
  * - terminal_typed: 端末の入力欄に打ちかけの文字がある（`typed` にその文）。消して送るかを確認できる
  * - terminal_dialog: 端末が許可や質問のダイアログを出している（消させない）
  * - terminal_unknown: 入力欄が見つからない（別のプログラムに打ち込まない）
+ * - codex_active: Codex が別の画面で開いており、別プロセスの resume は active writer と競合する
  */
 export interface ReplyError {
   error: string
-  code?: 'terminal_typed' | 'terminal_dialog' | 'terminal_unknown'
+  code?: 'terminal_typed' | 'terminal_dialog' | 'terminal_unknown' | 'codex_active'
   typed?: string
   /** true なら `via: 'process'` で送り直せば端末を見ずに別プロセスで回せる（端末に打てない 409 に付く） */
   can_process?: boolean

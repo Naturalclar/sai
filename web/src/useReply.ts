@@ -38,6 +38,8 @@ export interface ReplaceConfirm {
   typed: string
   /** 端末に打てない理由（process のとき。サーバの文） */
   reason: string
+  /** 別プロセスで再開できる。開いている Codex は active writer と競合するので false */
+  canProcess: boolean
 }
 
 /** send の結果。confirm のとき呼び出し側は本文を入力欄に戻す */
@@ -109,17 +111,20 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
       // 端末に打ち込めなかった（打ちかけ・ダイアログ中・入力欄が読めない）。失敗ではなく、どうするかを聞く。
       // 打ちかけがあるだけなら「消して送る」も出す。「消して送る」で送り直してなお残っている（消せない端末）、
       // ダイアログ中、入力欄不明なら「別プロセスで送る」だけ（#157。SAI から何も送れない、にしない）
-      if (err instanceof ApiError && err.canProcess) {
+      if (err instanceof ApiError) {
+        // Codex は別プロセスへ逃がせないが、tmux の打ちかけを確認して消す道は残す。
         if (err.code === 'terminal_typed' && !options.replaceTyped) {
-          setConfirm({ id, kind: 'typed', text, typed: err.typed ?? '', reason: err.message })
+          setConfirm({ id, kind: 'typed', text, typed: err.typed ?? '', reason: err.message, canProcess: err.canProcess })
           return 'confirm'
         }
-        const reason =
-          err.code === 'terminal_typed'
-            ? `端末の打ちかけを消せなかった（まだ残っている: ${(err.typed ?? '').split('\n')[0]}）`
-            : err.message
-        setConfirm({ id, kind: 'process', text, typed: err.typed ?? '', reason })
-        return 'confirm'
+        if (err.canProcess) {
+          const reason =
+            err.code === 'terminal_typed'
+              ? `端末の打ちかけを消せなかった（まだ残っている: ${(err.typed ?? '').split('\n')[0]}）`
+              : err.message
+          setConfirm({ id, kind: 'process', text, typed: err.typed ?? '', reason, canProcess: true })
+          return 'confirm'
+        }
       }
       setFailed({ id, message: err instanceof Error ? err.message : String(err) })
       return 'failed'

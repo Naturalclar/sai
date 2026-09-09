@@ -13,6 +13,7 @@ import { ReplyBox, type Picked } from './ReplyBox'
 import { DaysSelect } from './DaysSelect'
 import { BackLink } from './BackLink'
 import { useReply } from './useReply'
+import { historyFrom } from './replyHistory'
 import { ReplaceConfirm } from './ReplaceConfirm'
 import type { PaneProps } from './App'
 
@@ -71,6 +72,11 @@ export function FeedView({ project, sessions = NO_SESSIONS, onStatus, onOpenSide
   if (!drafting && heldId !== (computedDefault?.id ?? null)) setHeldId(computedDefault?.id ?? null)
   const held = drafting && heldId ? (targets.find((t) => t.id === heldId && !t.blocked) ?? null) : null
   const target = pickedTarget ?? held ?? computedDefault
+  // ↑ で呼び戻す履歴。いまの返信先の行から作り、送った直後のまだ届いていない分を先頭に足す
+  const targetId = target?.id ?? ''
+  const targetPending = pending.find((p) => p.id === targetId)
+  const history = useMemo(() => historyFrom(rows, targetId, targetPending ? [targetPending.text] : []), [rows, targetId, targetPending])
+
   const repoOf = (id: string) => targets.find((t) => t.id === id)?.repo
   // 答え待ちの許可・質問も、処理中の返信と同じく、この画面に関係あるものだけ
   const approvals = Object.values(data?.approvals ?? NO_APPROVALS).flat().filter((a) => counts.has(a.id) || targets.some((t) => t.id === a.id))
@@ -110,6 +116,7 @@ export function FeedView({ project, sessions = NO_SESSIONS, onStatus, onOpenSide
           <ReplyBox
             repo={target.repo}
             skillsId={target.id}
+            history={history}
             terminal={target.terminal}
             attachId={target.id}
             busy={pending.some((p) => p.id === target.id)}

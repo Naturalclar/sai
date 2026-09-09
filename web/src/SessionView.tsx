@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import { replyBlockedReason } from '../../shared/reply.ts'
 import { projectName } from '../../shared/project.ts'
 import { eventKind } from '../../shared/events.ts'
@@ -17,6 +17,7 @@ import { ApprovalBubble } from './ApprovalBubble'
 import { ReplyBox } from './ReplyBox'
 import { BackLink } from './BackLink'
 import { useReply } from './useReply'
+import { historyFrom } from './replyHistory'
 import { ReplaceConfirm } from './ReplaceConfirm'
 import { MetaEditor } from './MetaEditor'
 import { SessionPersonaSelect } from './SessionPersonaSelect'
@@ -29,6 +30,7 @@ import { PermissionsButton } from './PermissionsButton'
 import { DiffButton } from './DiffButton'
 import type { PaneProps } from './App'
 
+const NO_ROWS: never[] = []
 const NO_REPLYING = {}
 const NO_APPROVALS: never[] = []
 
@@ -49,6 +51,9 @@ export function SessionView({ id, onStatus, onOpenSidebar, linear, settings }: {
   // 思考の折りたたみを全部開いておくか。localStorage に残る。思考のある行が1つも無ければトグルは出さない
   const [thinkingUi, setThinkingUi] = useLocalState<{ open: boolean }>('sai.thinking', { open: false })
   const hasThinking = data?.rows.some((r) => Boolean(r.thinking?.trim())) ?? false
+
+  // ↑ で呼び戻す履歴。行の user_text から作り、送った直後のまだ届いていない分を先頭に足す
+  const history = useMemo(() => historyFrom(data?.rows ?? NO_ROWS, id, mine ? [mine.text] : []), [data?.rows, id, mine])
 
   const s = data?.session
   const blocked = s ? replyBlockedReason(s) : ''
@@ -121,6 +126,7 @@ export function SessionView({ id, onStatus, onOpenSidebar, linear, settings }: {
           <ReplyBox
             repo={s.repo}
             skillsId={id}
+            history={history}
             attachId={id}
             terminal={Boolean(s.terminal)}
             busy={mine !== null}

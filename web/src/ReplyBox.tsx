@@ -10,6 +10,8 @@ import { AttachmentStrip } from './AttachmentStrip'
 import { IconButton } from './IconButton'
 import { PhotoMark } from './PhotoMark'
 import { ATTACHMENT_MAX_COUNT } from '../../shared/attachments.ts'
+import { NOT_IN_HISTORY, canGoBack, canGoForward, stepHistory } from './replyHistory'
+import type { HistoryState } from './replyHistory'
 
 /**
  * @ メンションで返信先を選ぶための道具（フィード用）。渡さなければ `@` はただの文字（セッション画面）。
@@ -55,11 +57,15 @@ interface Props {
   skillsId?: string
   /** 画像を預ける先（エンティティID）。渡さなければ画像は添えられない */
   attachId?: string
+  /** ↑ で呼び戻せる、この返信先に前に送った内容（新しい順）。渡さなければ ↑ は普通のカーソル移動 */
+  history?: readonly string[]
   mention?: MentionProps
 }
 
+const NO_HISTORY: readonly string[] = []
+
 /** 入力欄。Enter で送信、Shift+Enter で改行。IME 変換中の Enter は送らない */
-export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onDraft, replyModel, skillsId, attachId, mention }: Props) {
+export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onDraft, replyModel, skillsId, attachId, history = NO_HISTORY, mention }: Props) {
   const [text, setText] = useState('')
   const attach = useAttachments(attachId)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -74,6 +80,9 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
   // 処理中で送れないときに Enter を押した。黙って無視すると「送信できない」に見えるので理由を出す（#170）
   const [hitBusy, setHitBusy] = useState(false)
   const ref = useRef<HTMLTextAreaElement>(null)
+  // ↑ で呼び戻す履歴の位置と、入る前の打ちかけ。描画には出ないので ref（履歴そのものは props をその場で見る）。
+  // id を一緒に持ち、返信先が変わっていたら押された時に捨てる（別のセッションの履歴に入ったままにしない）
+  const hist = useRef<{ id: string; index: number; draft: string }>({ id: '', index: NOT_IN_HISTORY, draft: '' })
   // 確定で本文を差し替えた直後に置きたいカーソル位置。React が新しい値を書いた直後（描画前）に同期で当てる。
   // requestAnimationFrame だと、その前に打たれた文字の後ろへ戻ってしまう
   const wantCaret = useRef<number | null>(null)
@@ -174,10 +183,31 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
     ref.current?.focus()
   }
 
+  /**
+   * ↑ / ↓ で履歴を出し入れする。動かせなければ false（呼び出し側は既定のカーソル移動に任せる）。
+   * 入れた本文はカーソルを末尾に置くので、そのまま続けて打てる
+   */
+  const stepInHistory = (dir: 'back' | 'forward'): boolean => {
+    const id = skillsId ?? ''
+    const at: HistoryState =
+      hist.current.id === id
+        ? { items: history, index: hist.current.index, draft: hist.current.draft }
+        : { items: history, index: NOT_IN_HISTORY, draft: '' }
+    const step = stepHistory(at, dir, text)
+    if (!step) return false
+    hist.current = { id, index: step.state.index, draft: step.state.draft }
+    setText(step.text)
+    setCaret(step.text.length)
+    wantCaret.current = step.text.length
+    return true
+  }
+
   /** 本文が変わったとき。選んだ表記が本文から消えていたら返信先も既定に戻す */
   const change = (next: string) => {
     setText(next)
     setHitBusy(false)
+    // 手で書き換えたら履歴から抜ける（次の ↑ は一番新しいものから）
+    hist.current = { ...hist.current, index: NOT_IN_HISTORY, draft: '' }
     if (mention?.picked && !next.includes(mention.picked.label)) mention.onPick(null)
   }
 
@@ -203,6 +233,7 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
     setText('')
     setCaret(0)
     attach.clear()
+    hist.current = { ...hist.current, index: NOT_IN_HISTORY, draft: '' }
     // 表記ごと本文が消えるので返信先も既定に戻す。送信中でも別の返信先へ続けて打てる
     if (mention?.picked) mention.onPick(null)
     void Promise.resolve(onSend(body, paths)).then((ok) => {
@@ -245,6 +276,16 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
         else setDismissed(hit.query) // 候補が無いときの Enter は送信せず閉じるだけ
         return
       }
+    }
+    // 候補メニューが閉じているときの ↑ / ↓ は履歴。本文が空か、カーソルが 1 行目（↓ は最終行）のときだけ。
+    // 複数行を書いている途中は普通のカーソル移動でないと編集できない
+    if (!composing && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      const back = e.key === 'ArrowUp'
+      if (history.length === 0 || !(back ? canGoBack : canGoForward)(text, caret)) return
+      // 履歴の端でも既定のカーソル移動はさせない（シェルと同じで、押しても動かないだけ）
+      e.preventDefault()
+      stepInHistory(back ? 'back' : 'forward')
+      return
     }
     if (e.key !== 'Enter' || e.shiftKey || composing) return
     e.preventDefault()

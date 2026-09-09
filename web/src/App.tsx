@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useHashRoute, useLocalState, usePolling } from './hooks'
+import { parseRoute, useHashRoute, useLocalState, usePolling } from './hooks'
 import { SessionList } from './SessionList'
 import { SessionView } from './SessionView'
 import { DiffPane } from './DiffPane'
@@ -11,7 +11,7 @@ import { MenuMark } from './MenuMark'
 import { GitHubMark } from './GitHubMark'
 import { UserMenu } from './UserMenu'
 import { api, type SessionFilters, type SettingsResponse } from './api'
-import { isTypingTarget, navAction, neighborSessionId } from './sessionNav'
+import { isTypingTarget, navAction, navTarget } from './sessionNav'
 import { PersonaSelect } from './PersonaSelect'
 import { LinearWorkspaceInput } from './LinearWorkspaceInput'
 import { useSettings } from './useSettings'
@@ -87,7 +87,7 @@ export function App() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [toggleSidebar])
 
-  // ↑↓（j / k）でサイドバーの並びのまま隣のセッションへ、Esc でフィードへ。起点は「いま開いているセッション」なので state は持たない。
+  // ↑↓（j / k）でサイドバーの並びのまま隣へ（フィードは一番上の項目）、Esc でフィードへ。起点は「いま開いているセッション」なので state は持たない。
   // 入力欄にフォーカスがあるときはそちらの操作（caret の移動、@ の候補）なので触らない。サイドバーを閉じていても効く
   const selectedId = route.name === 'session' ? route.id : null
   const sessionIds = useMemo(() => list.data?.sessions.map((s) => s.id) ?? [], [list.data])
@@ -102,20 +102,25 @@ export function App() {
         return
       }
       if (action === 'feed') {
-        if (selectedId === null) return
+        if (parseRoute(location.hash).name !== 'session') return
         e.preventDefault()
         location.hash = '#/feed'
         return
       }
-      const to = neighborSessionId(sessionIds, selectedId, action)
-      // 端では何もしない。preventDefault もしない（ページのスクロールに残す）
+      // 起点は「押した瞬間の URL」。state（selectedId）だと、連打したとき再描画が追いつかず
+      // 同じ場所から2回動こうとして取りこぼす
+      const at = parseRoute(location.hash)
+      const from = at.name === 'session' ? at.id : null
+      // 行き先はサイドバーの並びどおり（フィードが 0 番目）。端では何もしない。
+      // preventDefault もしない（ページのスクロールに残す）
+      const to = navTarget(sessionIds, from, action)
       if (to === null) return
       e.preventDefault()
-      location.hash = `#/s/${encodeURIComponent(to)}`
+      location.hash = to.kind === 'feed' ? '#/feed' : `#/s/${encodeURIComponent(to.id)}`
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [sessionIds, selectedId, diffOpen])
+  }, [sessionIds, diffOpen])
 
   useEffect(() => {
     document.title = route.name === 'session' ? `SAI · ${route.id.slice(0, 12)}` : 'SAI'

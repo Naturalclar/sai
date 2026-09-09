@@ -1,5 +1,5 @@
 // サイドバーのセッションをキーボードで移動するためのロジック。DOM に依存しないので sessionNav.test.ts を node:test で回す。
-// キーを受けるのは App.tsx（window の keydown）、選択項目を見えるところまで動かすのは SessionItem.tsx。
+// キーを受けるのは App.tsx（window の keydown）、選択項目を見えるところまで動かすのは SessionItem.tsx と SessionList.tsx（フィードの項目）。
 
 /** キー入力がセッション移動のどれに当たるか。修飾キー付きと IME 変換中は何もしない */
 export type NavAction = 'prev' | 'next' | 'feed'
@@ -32,15 +32,23 @@ export function isTypingTarget(target: { tagName?: string; isContentEditable?: b
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable === true
 }
 
+/** 移動の行き先。サイドバーの並びと同じで、フィードはセッションより上（0 番目） */
+export type NavTarget = { kind: 'feed' } | { kind: 'session'; id: string }
+
 /**
- * 一覧の並び（サイドバーに出ている順）で隣のセッションID。
- * 起点は「いま開いているセッション」。一覧に無ければ（フィードを見ている、絞り込みで隠れた）先頭。端では null
+ * 一覧の並び（サイドバーに出ている順）で隣へ。**「フィード」を 0 番目の項目として扱う**ので、
+ * 一番上のセッションで prev はフィードに行き、フィードで prev は止まる（サイドバーの見た目と同じ順序）。
+ * 起点は「いま開いているセッション」（フィードを見ているときは null）。端では null で、呼び出し側は何もしない。
+ * 開いているセッションが一覧に無いとき（絞り込みで隠れた）は、今までどおり先頭のセッションへ
  */
-export function neighborSessionId(ids: readonly string[], currentId: string | null, direction: 'prev' | 'next'): string | null {
-  if (ids.length === 0) return null
-  const at = currentId === null ? -1 : ids.indexOf(currentId)
-  if (at < 0) return ids[0] ?? null
-  const to = at + (direction === 'next' ? 1 : -1)
-  if (to < 0 || to >= ids.length) return null
-  return ids[to] ?? null
+export function navTarget(ids: readonly string[], currentId: string | null, direction: 'prev' | 'next'): NavTarget | null {
+  const first = ids[0]
+  // フィードを見ている: 上には何も無い。下は先頭のセッション（あれば）
+  if (currentId === null) return direction === 'prev' || first === undefined ? null : { kind: 'session', id: first }
+  const at = ids.indexOf(currentId)
+  // 一覧に無いセッションを開いている（絞り込みで隠れた）。どちらのキーでも先頭のセッションへ
+  if (at < 0) return first === undefined ? null : { kind: 'session', id: first }
+  if (direction === 'prev') return at === 0 ? { kind: 'feed' } : { kind: 'session', id: ids[at - 1]! }
+  const next = ids[at + 1]
+  return next === undefined ? null : { kind: 'session', id: next }
 }

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { isTypingTarget, navAction, neighborSessionId } from './sessionNav.ts'
+import { isTypingTarget, navAction, navTarget } from './sessionNav.ts'
 
 const key = (name: string, over: Partial<Parameters<typeof navAction>[0]> = {}) => ({
   key: name,
@@ -41,19 +41,28 @@ test('isTypingTarget: 入力欄と contentEditable だけ', () => {
   assert.equal(isTypingTarget(null), false)
 })
 
-test('neighborSessionId: 開いているセッションを起点に隣へ、端では止まる', () => {
+const feed = { kind: 'feed' } as const
+const session = (id: string) => ({ kind: 'session', id }) as const
+
+test('navTarget: 開いているセッションを起点に隣へ。末尾の ↓ は止まる', () => {
   const ids = ['a', 'b', 'c']
-  assert.equal(neighborSessionId(ids, 'b', 'next'), 'c')
-  assert.equal(neighborSessionId(ids, 'b', 'prev'), 'a')
-  assert.equal(neighborSessionId(ids, 'c', 'next'), null, '末尾で ↓')
-  assert.equal(neighborSessionId(ids, 'a', 'prev'), null, '先頭で ↑')
+  assert.deepEqual(navTarget(ids, 'b', 'next'), session('c'))
+  assert.deepEqual(navTarget(ids, 'b', 'prev'), session('a'))
+  assert.equal(navTarget(ids, 'c', 'next'), null, '末尾で ↓ は止まる')
 })
 
-test('neighborSessionId: 一覧に無ければ先頭から。一覧が空なら null', () => {
+test('navTarget: フィードはサイドバーと同じく 0 番目の項目', () => {
+  const ids = ['a', 'b', 'c']
+  assert.deepEqual(navTarget(ids, 'a', 'prev'), feed, '一番上のセッションで ↑ はフィードへ')
+  assert.equal(navTarget(ids, null, 'prev'), null, 'フィードで ↑ は止まる（下へ動かない）')
+  assert.deepEqual(navTarget(ids, null, 'next'), session('a'), 'フィードで ↓ は先頭のセッションへ')
+})
+
+test('navTarget: 一覧に無ければ先頭のセッションへ。一覧が空なら行き先なし', () => {
   const ids = ['a', 'b']
-  assert.equal(neighborSessionId(ids, null, 'next'), 'a', 'フィードを見ているとき')
-  assert.equal(neighborSessionId(ids, null, 'prev'), 'a')
-  assert.equal(neighborSessionId(ids, 'zzz', 'next'), 'a', '絞り込みで隠れたセッションを開いているとき')
-  assert.equal(neighborSessionId([], 'a', 'next'), null)
-  assert.equal(neighborSessionId([], null, 'prev'), null)
+  assert.deepEqual(navTarget(ids, 'zzz', 'next'), session('a'), '絞り込みで隠れたセッションを開いているとき')
+  assert.deepEqual(navTarget(ids, 'zzz', 'prev'), session('a'))
+  assert.equal(navTarget([], 'a', 'next'), null)
+  assert.equal(navTarget([], null, 'prev'), null)
+  assert.equal(navTarget([], null, 'next'), null, '一覧が空ならフィードから下へも行けない')
 })

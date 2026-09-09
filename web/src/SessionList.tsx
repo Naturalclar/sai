@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import type { PointerEvent } from 'react'
 import type { SessionFilters, SessionsResponse } from './api'
 import type { Polled } from './hooks'
@@ -18,6 +18,12 @@ interface Props {
 
 /** 左サイドバー。絞り込み、固定の「フィード」、その下にセッション一覧（新しい順） */
 export function SessionList({ list, filters, setFilters, selectedId }: Props) {
+  // キーボードでフィードに移ったとき、サイドバーの一番上まで見えるようにする（SessionItem と同じ扱い）
+  const feedRef = useRef<HTMLAnchorElement>(null)
+  useEffect(() => {
+    if (selectedId === null) feedRef.current?.scrollIntoView({ block: 'nearest' })
+  }, [selectedId])
+
   const { data, error, updatedAt } = list
   const now = updatedAt?.getTime() ?? 0
   const archived = filters.archived === '1'
@@ -62,7 +68,7 @@ export function SessionList({ list, filters, setFilters, selectedId }: Props) {
       </div>
       {error && <div className="side-error">取得失敗: {error}</div>}
       <nav className="channels" onPointerDownCapture={onPointerDownCapture}>
-        <a className={`item feed${selectedId === null ? ' active' : ''}`} href="#/feed">
+        <a ref={feedRef} className={`item feed${selectedId === null ? ' active' : ''}`} href="#/feed">
           <span className="t">フィード</span>
           <span className="last">{filters.repo ? `#${filters.repo}` : '全セッション'}を時系列に</span>
         </a>

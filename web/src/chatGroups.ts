@@ -146,8 +146,8 @@ export function groupRows(rows: FeedRow[]): DayGroups[] {
   return days
 }
 
-export const AGENT_LABEL: Record<string, string> = { claude: 'Claude Code', codex: 'Codex CLI', unknown: 'unknown' }
-export const AGENT_INITIAL: Record<string, string> = { claude: 'C', codex: 'X', unknown: '?' }
+export const AGENT_LABEL: Record<string, string> = { claude: 'Claude Code', codex: 'Codex CLI', opencode: 'OpenCode', unknown: 'unknown' }
+export const AGENT_INITIAL: Record<string, string> = { claude: 'C', codex: 'X', opencode: 'O', unknown: '?' }
 
 /** バブルの見出しに出す発言者。name は名前、mark は頭文字、icon は画像の URL（あれば mark の代わりにアバターに出す） */
 export interface SpeakerLabel {

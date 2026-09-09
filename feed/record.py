@@ -158,6 +158,31 @@ def _read_stdin_obj(timeout: float = 5.0) -> dict | None:
 
 # ---------------------------------------------------------------- 素性
 
+#: 名乗り（--agent）で受け付ける名前。ここに無いものは名乗っていないものとして扱う
+#: （知らない値をそのまま行に載せると、画面の Agent 型と絞り込みの候補が壊れる）
+KNOWN_AGENTS = ("claude", "codex", "opencode")
+
+
+def agent_from_argv(argv: list[str]) -> str:
+    """フックのコマンドが `--agent opencode` と名乗っていればその名前。無ければ空。
+
+    Claude と Codex は payload の形で当てられるが、OpenCode のプラグインは payload を
+    自分で組み立てるので形からは当てられない（#209）。**送り側が名乗る**形にして、
+    名乗りが無ければ今までどおり形で当てる（既存の設定はそのまま動く）。
+    payload より先に見るので、stdin を触らずに決まる。
+    """
+    for i, arg in enumerate(argv):
+        name = ""
+        if arg == "--agent" and i + 1 < len(argv):
+            name = argv[i + 1]
+        elif arg.startswith("--agent="):
+            name = arg[len("--agent="):]
+        name = name.strip().lower()
+        if name in KNOWN_AGENTS:
+            return name
+    return ""
+
+
 def detect_agent(payload: dict) -> str:
     if payload.get("hook_event_name") or ("transcript_path" in payload and "session_id" in payload):
         return "claude"
@@ -681,7 +706,8 @@ def waiting_text(payload: dict) -> str | None:
 
 
 def is_waiting_event(event: str) -> bool:
-    return event in ("PermissionRequest", "PreToolUse", "Notification")
+    # OpenCode の permission.asked も待ち（shared/events.ts の eventKind() と同じ並び）
+    return event in ("PermissionRequest", "PreToolUse", "Notification", "permission.asked")
 
 
 def last_session_row(directory: Path, now: datetime, session: str, repo: str) -> dict | None:
@@ -829,12 +855,24 @@ def synth_session(directory: Path, now: datetime, repo: str, cwd: str, agent: st
 
 # ---------------------------------------------------------------- 行の組み立て
 
-def session_pid(agent: str) -> int:
-    """セッション本体（claude / codex）の pid。フックはその子プロセスなので環境か親から分かる。
-    Claude は CLAUDE_PID を渡してくる。Codex の notify は codex 自身が直接 spawn するので親が本体。取れなければ 0"""
+def session_pid(agent: str, payload: dict | None = None) -> int:
+    """セッション本体（claude / codex / opencode）の pid。画面が「端末で開いているか」を見るのに使う。
+
+    Claude は CLAUDE_PID を渡してくる。Codex の notify は codex 自身が直接 spawn するので親が本体。
+    **OpenCode はプラグインが payload に載せてくる**（`pid`）: プラグインは本体の中で動くので
+    本体の pid を知っているが、record.py を `detached` で切り離して呼ぶため（そうしないと
+    `opencode run` の終了に巻き込まれて行が消える）、こちらから見た親は init（1）になってしまう。
+    取れなければ 0"""
     if agent == "claude":
         raw = os.environ.get("CLAUDE_PID", "")
         return int(raw) if raw.isdigit() else 0
+    if agent == "opencode":
+        raw = (payload or {}).get("pid")
+        if isinstance(raw, int) and raw > 1:
+            return raw
+        if isinstance(raw, str) and raw.isdigit() and int(raw) > 1:
+            return int(raw)
+        return 0
     if agent == "codex":
         try:
             return os.getppid()
@@ -843,8 +881,9 @@ def session_pid(agent: str) -> int:
     return 0
 
 
-def build_row(payload: dict, now: datetime, directory: Path) -> dict | None:
-    agent = detect_agent(payload)
+def build_row(payload: dict, now: datetime, directory: Path, declared: str = "") -> dict | None:
+    # 名乗り（--agent）があればそれ。無ければ今までどおり payload の形で当てる
+    agent = declared or detect_agent(payload)
     if agent == "unknown" and not payload:
         return None
 
@@ -924,6 +963,30 @@ def build_row(payload: dict, now: datetime, directory: Path) -> dict | None:
         if not first_user:
             first_user = user_text
 
+    elif agent == "opencode":
+        # OpenCode にフックは無く、プラグイン（feed/opencode/sai.js）が payload を組み立てて渡す。
+        # つまり形で当てるものが無く、必要なものは全部プラグインが載せてくる（#209）。
+        # セッションIDはイベントに必ず載っている（`session.idle` の properties.sessionID）ので、
+        # Codex のような rollout 引きも合成も要らない。
+        session_id = payload.get("session_id")
+        if isinstance(session_id, str) and session_id:
+            session, source = session_id, "payload"
+        for key, target in (("text", "text"), ("user_text", "user_text"), ("model", "model")):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                if target == "text":
+                    text = value
+                elif target == "user_text":
+                    user_text = value
+                else:
+                    model = value
+        if is_waiting_event(event):
+            # 待ちの行。何を待っているかはプラグインが text に入れてくる（許可待ち: bash: …）
+            waiting = text
+            if not waiting:
+                return None
+        first_user = user_text
+
     if not session:
         session = synth_session(directory, now, repo, cwd, agent, host_name())
         source = "synth"
@@ -956,7 +1019,7 @@ def build_row(payload: dict, now: datetime, directory: Path) -> dict | None:
         "host": host_name(),
         # セッションが開いている tmux のペインと本体の pid。SAI の返信をそのペインに打ち込むのに使う（tmux の外なら空）
         "pane": os.environ.get("TMUX_PANE", "") or "",
-        "pid": session_pid(agent),
+        "pid": session_pid(agent, payload),
         "event": event,
         "text": clip(text, MAX_TEXT),
         # そのターンの入力（人が打った文）。チャットで自分側のバブルになる
@@ -1017,12 +1080,13 @@ def main(argv: list[str]) -> None:
     # その子プロセスが Stop の行として載り、それをまた要約する、を防ぐ（環境変数はフックにそのまま渡る）
     if os.environ.get("AGENT_FEED_SKIP") == "1":
         return
+    declared = agent_from_argv(argv)
     payload = read_payload(argv)
     if not payload:
         return
     directory = feed_dir()
     now = datetime.now(tz())
-    row = build_row(payload, now, directory)
+    row = build_row(payload, now, directory, declared)
     if row:
         append_row(directory, row, now)
 

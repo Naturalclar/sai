@@ -5,9 +5,9 @@
 export type EventKind = 'turn' | 'waiting' | 'resume' | 'other'
 
 /**
- * - `turn`: ターン完了。`Stop`（Claude）/ `agent-turn-complete`（Codex）。`unknown` と空もここ
- * - `waiting`: 人を待って止まった。`PermissionRequest`（許可）/ `PreToolUse`（AskUserQuestion / ExitPlanMode）/ `Notification`（入力待ちなど）
- * - `resume`: 人が入力した。`UserPromptSubmit`。`user_text` にその入力が載り（本文 `text` は無い）、直前が待ちならその解消の合図でもある。
+ * - `turn`: ターン完了。`Stop`（Claude）/ `agent-turn-complete`（Codex）/ `session.idle`（OpenCode）。`unknown` と空もここ
+ * - `waiting`: 人を待って止まった。`PermissionRequest`（許可）/ `PreToolUse`（AskUserQuestion / ExitPlanMode）/ `Notification`（入力待ちなど）/ `permission.asked`（OpenCode）
+ * - `resume`: 人が入力した。`UserPromptSubmit` / `permission.replied`（OpenCode。答えて動き出した）。`user_text` にその入力が載り（本文 `text` は無い）、直前が待ちならその解消の合図でもある。
  *   古い行は `user_text` も無い（合図だけ）
  * - `other`: 知らない event。**数えないし出さない**
  *
@@ -19,11 +19,14 @@ export type EventKind = 'turn' | 'waiting' | 'resume' | 'other'
  *
  * `unknown` は **`record.py` の `detect_event()` が `hook_event_name` も `type` も無いペイロードに
  * 対して今も返す値**なので（古い行だけの話ではない）、turn として名指しで残す。
+ *
+ * OpenCode の名前は SAI のプラグイン（feed/opencode/）が載せる。名前は OpenCode のイベント名そのまま（#209）
  */
 export function eventKind(event: string | undefined): EventKind {
   switch (event) {
     case 'Stop':
     case 'agent-turn-complete':
+    case 'session.idle':
     case 'unknown':
     case '':
     case undefined:
@@ -31,8 +34,10 @@ export function eventKind(event: string | undefined): EventKind {
     case 'PermissionRequest':
     case 'PreToolUse':
     case 'Notification':
+    case 'permission.asked':
       return 'waiting'
     case 'UserPromptSubmit':
+    case 'permission.replied':
       return 'resume'
     default:
       return 'other'

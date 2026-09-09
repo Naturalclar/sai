@@ -11,6 +11,7 @@ import { IconButton } from './IconButton'
 import { ReplyModelPicker, type ReplyModelProps } from './ReplyModelPicker'
 import { leavesToSidebar } from './replyFocus'
 import { DiffButton, type DiffButtonProps } from './DiffButton'
+import { acceptsSuggestion, suggestFrom } from './replySuggest'
 import { PhotoMark } from './PhotoMark'
 import { ATTACHMENT_MAX_COUNT } from '../../shared/attachments.ts'
 import { NOT_IN_HISTORY, canGoBack, canGoForward, stepHistory } from './replyHistory'
@@ -98,6 +99,10 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
   const hist = useRef<{ id: string; index: number; draft: string }>({ id: '', index: NOT_IN_HISTORY, draft: '' })
   // 確定で本文を差し替えた直後に置きたいカーソル位置。React が新しい値を書いた直後（描画前）に同期で当てる。
   // requestAnimationFrame だと、その前に打たれた文字の後ろへ戻ってしまう
+  // IME 変換中はゴーストを出さない（変換前の文字列に前方一致をかけても意味が無く、ちらつく）。
+  // onKeyDown の中の composing とは別（あちらはそのキーの分だけ）。名前を分けているのは shadow を避けるため
+  const [imeOn, setImeOn] = useState(false)
+  const ghostRef = useRef<HTMLDivElement>(null)
   const wantCaret = useRef<number | null>(null)
   useLayoutEffect(() => {
     const el = ref.current
@@ -114,6 +119,8 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
     if (!el) return
     el.style.height = 'auto'
     el.style.height = `${el.scrollHeight}px`
+    // ゴーストは textarea の背面に敷いてあるので、はみ出してスクロールしている分を合わせる
+    if (ghostRef.current) ghostRef.current.scrollTop = el.scrollTop
   })
 
   // 端末（tmux）で開いていれば、前のターンが動いていても打ち込める（TUI が次のターンに回す）。
@@ -262,6 +269,20 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
     return files.length > 0
   }
 
+  /**
+   * 打った文の続き（#219）。候補メニューが開いている間と IME 変換中は出さない。
+   * 出典は ↑ の履歴と同じ（`history`）なので、サーバは要らない
+   */
+  const suggestion = imeOn || open ? '' : suggestFrom(history, text)
+
+  /** 続きを本文に入れてカーソルを末尾へ */
+  const acceptSuggestion = () => {
+    const at = text.length + suggestion.length
+    setText(text + suggestion)
+    setCaret(at)
+    wantCaret.current = at
+  }
+
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     // 日本語入力の確定 Enter で送らない・選ばない（isComposing が立つ。古い実装は keyCode 229）
     const composing = e.nativeEvent.isComposing || e.keyCode === 229
@@ -289,6 +310,12 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
         else setDismissed(hit.query) // 候補が無いときの Enter は送信せず閉じるだけ
         return
       }
+    }
+    // カーソルが末尾なら → で続きを受け入れる（#219）。文の途中はカーソル移動のまま
+    if (acceptsSuggestion({ ...keyOf(e), isComposing: composing }, { caret, length: text.length, menuOpen: open, suggestion })) {
+      e.preventDefault()
+      acceptSuggestion()
+      return
     }
     // 本文が空なら ← でサイドバーへ戻る（#204）。書きかけの文中はカーソル移動のまま
     if (onLeaveToSidebar && leavesToSidebar({ ...keyOf(e), isComposing: composing }, { text, menuOpen: open })) {
@@ -382,7 +409,15 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
             </IconButton>
           </>
         )}
-        <textarea
+        <div className="field">
+          {/* 打った文の続き（#219）。textarea は背景が透明なので、同じ字送りでこれを背面に敷くと続きだけ薄く見える */}
+          {suggestion && (
+            <div className="ghost" ref={ghostRef} aria-hidden="true">
+              {text}
+              <span className="rest">{suggestion}</span>
+            </div>
+          )}
+          <textarea
           ref={ref}
           value={text}
           onChange={(e) => {
@@ -403,9 +438,15 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
               : `#${repo} に返信（Enter で送信、Shift+Enter で改行）`
           }
           rows={1}
+          onCompositionStart={() => setImeOn(true)}
+          onCompositionEnd={() => setImeOn(false)}
+          onScroll={() => {
+            if (ghostRef.current && ref.current) ghostRef.current.scrollTop = ref.current.scrollTop
+          }}
           // フィードでは送信中でも別の返信先へ打てるよう入力欄は止めない（送信ボタンだけ止める）
           disabled={blocked && !mention}
         />
+        </div>
         {/* 送信ボタンの左。textarea が 1 行を占めるので、画像ボタンと並んで下の行に入る */}
         {diff && <DiffButton {...diff} />}
         {model && <ReplyModelPicker key={model.id} {...model} />}

@@ -26,6 +26,7 @@ import json
 import os
 import re
 import select
+import socket
 import signal
 import subprocess
 import sys
@@ -37,12 +38,14 @@ from pathlib import Path
 
 # 行の形の版。行に `v` として載せる。行の形（キー）を変えるたびに上げ、shared/types.ts の RECORD_VERSION と揃える
 # （ずれると feed/test_record.py が止まる）。画面は窓の中の一番新しい行の v が古いと「record.py が古い」と出す
-RECORD_VERSION = 6
+RECORD_VERSION = 7
 MAX_TEXT = 2000
 MAX_USER_TEXT = 2000
 MAX_THINKING = 4000
 MAX_MODEL = 100
 MAX_MODE = 40
+# ホスト名。短い形なので十分
+MAX_HOST = 64
 MAX_FIRST_USER = 300
 SYNTH_GAP_SECONDS = 30 * 60
 ROLLOUT_MAX_AGE_SECONDS = 48 * 3600
@@ -65,6 +68,21 @@ def tz() -> timezone:
 def feed_dir() -> Path:
     raw = os.environ.get("AGENT_FEED_DIR")
     return Path(raw).expanduser() if raw else Path.home() / ".agent-feed"
+
+
+def host_name() -> str:
+    """どのマシンで記録したか（#112）。AGENT_FEED_HOST があればそれ、無ければホスト名の短い形。
+
+    複数のマシンの JSONL を 1 か所に集めるとき（#24）に、行がどこから来たか分かるようにする。
+    `.local` などのドメイン部分は落とす（同じ Mac が `mbp` と `mbp.local` で 2 台に見えないように）。
+    標準ライブラリだけで取れる。取れなければ空（古い行と同じ扱いになるだけ）"""
+    raw = os.environ.get("AGENT_FEED_HOST", "").strip()
+    if not raw:
+        try:
+            raw = socket.gethostname()
+        except Exception:
+            raw = ""
+    return clip(raw.strip().split(".")[0], MAX_HOST)
 
 
 def codex_home() -> Path:
@@ -762,11 +780,19 @@ def _recent_rows(directory: Path, now: datetime, days: int = 2) -> list[dict]:
     return rows
 
 
-def synth_session(directory: Path, now: datetime, repo: str, cwd: str, agent: str) -> str:
-    """(repo, cwd, agent) が同じで前の行から30分以内なら、同じセッションとみなす。"""
+def synth_session(directory: Path, now: datetime, repo: str, cwd: str, agent: str, host: str) -> str:
+    """(host, repo, cwd, agent) が同じで前の行から30分以内なら、同じセッションとみなす。
+
+    host も見るのは、複数マシンの JSONL を 1 か所に集めたとき（#24）に、別のマシンで同じ repo / cwd の
+    行が 30 分以内に来ても同じセッションに寄せないため（#112）。host の無い古い行は空として比べる"""
     previous = None
     for row in _recent_rows(directory, now):
-        if row.get("repo") == repo and row.get("cwd") == cwd and row.get("agent") == agent:
+        if (
+            row.get("repo") == repo
+            and row.get("cwd") == cwd
+            and row.get("agent") == agent
+            and (row.get("host") or "") == host
+        ):
             previous = row
     if previous:
         try:
@@ -878,7 +904,7 @@ def build_row(payload: dict, now: datetime, directory: Path) -> dict | None:
             first_user = user_text
 
     if not session:
-        session = synth_session(directory, now, repo, cwd, agent)
+        session = synth_session(directory, now, repo, cwd, agent, host_name())
         source = "synth"
 
     if agent == "claude" and event == "UserPromptSubmit" and not user_text:
@@ -905,6 +931,8 @@ def build_row(payload: dict, now: datetime, directory: Path) -> dict | None:
         "session": session,
         "session_source": source,
         "cwd": cwd,
+        # どのマシンで記録したか（#112）。複数マシンの JSONL を集めたときに行の出どころが分かる
+        "host": host_name(),
         # セッションが開いている tmux のペインと本体の pid。SAI の返信をそのペインに打ち込むのに使う（tmux の外なら空）
         "pane": os.environ.get("TMUX_PANE", "") or "",
         "pid": session_pid(agent),

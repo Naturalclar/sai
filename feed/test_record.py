@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import tempfile
@@ -737,6 +738,49 @@ class RecordTest(unittest.TestCase):
         }
         run(stdin=json.dumps(payload), env=self.env)
         self.assertEqual(read_rows(self.feed_dir)[-1]["user_text"], "今回の返信")
+
+    def test_host_comes_from_env_or_hostname(self):
+        """どのマシンで記録したか（#112）。AGENT_FEED_HOST があればそれ、無ければホスト名の短い形"""
+        payload = {"type": "agent-turn-complete", "last-assistant-message": "x", "cwd": str(self.cwd)}
+        run(stdin=json.dumps(payload), env={**self.env, "AGENT_FEED_HOST": "  mac-mini  "})
+        self.assertEqual(read_rows(self.feed_dir)[-1]["host"], "mac-mini", "前後の空白は落とす")
+
+        run(stdin=json.dumps(payload), env={**self.env, "AGENT_FEED_HOST": "mbp.local"})
+        self.assertEqual(read_rows(self.feed_dir)[-1]["host"], "mbp", "ドメイン部分は落とす")
+
+        # 指定が無ければ gethostname() の短い形。中身はマシン次第なので、そこから作った値と突き合わせる
+        run(stdin=json.dumps(payload), env=self.env)
+        self.assertEqual(read_rows(self.feed_dir)[-1]["host"], socket.gethostname().split(".")[0])
+
+        run(stdin=json.dumps(payload), env={**self.env, "AGENT_FEED_HOST": "   "})
+        self.assertEqual(read_rows(self.feed_dir)[-1]["host"], socket.gethostname().split(".")[0], "空白だけなら指定なし扱い")
+
+    def test_synth_does_not_merge_rows_from_another_host(self):
+        """別のマシンの行（#24 で JSONL を集めたとき）は、同じ repo / cwd でも同じセッションに寄せない（#112）"""
+        self.feed_dir.mkdir(parents=True)
+        recent = (datetime.now(JST) - timedelta(minutes=5)).isoformat(timespec="seconds")
+        today = datetime.now(JST).strftime("%Y-%m-%d")
+        write_jsonl(self.feed_dir / f"{today}.jsonl", [{
+            "ts": recent, "agent": "codex", "repo": "myrepo", "branch": "feature/x", "host": "another-mac",
+            "session": "synth-myrepo-elsewhere", "session_source": "synth", "cwd": str(self.cwd),
+            "event": "agent-turn-complete", "text": "別のマシン", "first_user_text": "",
+        }])
+        payload = {"type": "agent-turn-complete", "last-assistant-message": "こっち", "cwd": str(self.cwd)}
+        run(stdin=json.dumps(payload), env={**self.env, "AGENT_FEED_HOST": "this-mac"})
+        rows = read_rows(self.feed_dir)
+        self.assertEqual(len(rows), 2)
+        self.assertNotEqual(rows[1]["session"], "synth-myrepo-elsewhere", "30分以内でも host が違えば別のセッション")
+
+    def test_synth_reuses_session_from_the_same_host(self):
+        """同じマシンなら今までどおり寄せる（host を見るようにして壊れていないこと）"""
+        payload = {"type": "agent-turn-complete", "last-assistant-message": "one", "cwd": str(self.cwd)}
+        env = {**self.env, "AGENT_FEED_HOST": "this-mac"}
+        run(stdin=json.dumps(payload), env=env)
+        payload["last-assistant-message"] = "two"
+        run(stdin=json.dumps(payload), env=env)
+        rows = read_rows(self.feed_dir)
+        self.assertEqual(rows[0]["session"], rows[1]["session"])
+        self.assertEqual(rows[0]["host"], "this-mac")
 
     def test_synth_starts_new_session_after_gap(self):
         self.feed_dir.mkdir(parents=True)

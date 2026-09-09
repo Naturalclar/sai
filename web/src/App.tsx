@@ -15,6 +15,8 @@ import { isTypingTarget, navAction, neighborSessionId } from './sessionNav'
 import { PersonaSelect } from './PersonaSelect'
 import { LinearWorkspaceInput } from './LinearWorkspaceInput'
 import { useSettings } from './useSettings'
+import { useCommandPalette } from './useCommandPalette'
+import { CommandPalette } from './CommandPalette'
 import { RECORD_VERSION } from '../../shared/types.ts'
 
 export interface StatusProps {
@@ -39,6 +41,8 @@ interface UiState {
   sidebar: 'open' | 'closed'
 }
 const DEFAULT_UI: UiState = { sidebar: 'open' }
+/** ⌘K の候補がまだ何も無いとき（一覧の取得前）。毎回作り直すと再描画が増える */
+const EMPTY_SESSIONS: never[] = []
 
 /**
  * 1画面。左のサイドバーにセッション一覧、右にチャット（フィード or 選んだセッション）。
@@ -121,8 +125,14 @@ export function App() {
   const { settings, busy: settingsBusy, error: settingsError, setPersona, setLinearWorkspace } = useSettings()
   const linear = settings?.linear_workspace ?? ''
 
+  // ⌘K でフィードとセッションを名前で探して移動する（#197）。開いたときに絞り込み無しで取り直す
+  const palette = useCommandPalette()
+
   return (
     <>
+      {palette.open && (
+        <CommandPalette sessions={palette.all ?? list.data?.sessions ?? EMPTY_SESSIONS} loading={palette.all === null} onClose={palette.close} />
+      )}
       <header>
         <button
           type="button"
@@ -131,7 +141,7 @@ export function App() {
           aria-expanded={sidebarOpen}
           aria-keyshortcuts="Meta+\ Control+\"
           aria-label={sidebarOpen ? '一覧を隠す' : '一覧を出す'}
-          title={`${sidebarOpen ? '一覧を隠す' : '一覧を出す'} (⌘\\ / Ctrl+\\)\nセッションの移動: ↑↓ または k / j、フィードへ戻る: Esc`}
+          title={`${sidebarOpen ? '一覧を隠す' : '一覧を出す'} (⌘\\ / Ctrl+\\)\nセッションの移動: ↑↓ または k / j、フィードへ戻る: Esc\n検索して移動: ⌘K / Ctrl+K`}
         >
           <MenuMark />
         </button>

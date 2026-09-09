@@ -320,6 +320,19 @@
   .modal-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, .45); display: flex; align-items: center; justify-content: center; z-index: 20; }
   .modal { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 10px; padding: 16px; box-shadow: 0 12px 40px rgba(0, 0, 0, .3); max-width: calc(100vw - 24px); outline: none; }
   .modal .title { font-weight: 700; margin-bottom: 10px; }
+  /* -- ⌘K の移動用モーダル（#197）。画面の上の方に出す（一覧が下に伸びるので中央だと落ち着かない） */
+  .modal-backdrop:has(.modal.palette) { align-items: flex-start; padding-top: 12vh; }
+  .modal.palette { width: 520px; padding: 12px; }
+  .modal.palette input { width: 100%; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font: inherit; }
+  .modal.palette input:focus { outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent); border-color: var(--accent); }
+  /* 候補は .mention の見た目を借りるが、入力欄の下に普通に並べる（浮かせない） */
+  .modal.palette .palette-list { position: static; margin: 8px 0 0; max-height: 50vh; box-shadow: none; }
+  /* 候補は本物のリンク。li ではなく a に余白を持たせる（li の padding は 0 にする） */
+  .modal.palette .palette-list li { padding: 0; }
+  .modal.palette .palette-list li a { display: flex; align-items: baseline; gap: 8px; padding: 6px 12px; min-width: 0; flex: 1; color: inherit; }
+  .modal.palette .palette-list li a:hover { text-decoration: none; }
+  .modal.palette .palette-list li b { flex: none; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .modal.palette .hint { color: var(--muted); font-size: 11px; margin-top: 8px; }
   .modal.cropper .stage { margin: 0 auto; background: var(--chip); border-radius: 6px; overflow: hidden; display: flex; align-items: center; justify-content: center; }
   .modal.cropper canvas { display: block; touch-action: none; cursor: grab; }
   .modal.cropper canvas:active { cursor: grabbing; }

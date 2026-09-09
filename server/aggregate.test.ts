@@ -191,6 +191,25 @@ test('待ちの行だけのセッションでも壊れない', () => {
   assert.equal(s!.title, '頼み')
 })
 
+test('知らない event の行は末尾にあっても turns / last_text / last_turn_ts を奪わない（#235）', () => {
+  const t0 = new Date('2026-09-02T01:00:00Z')
+  const stop = row(t0, 's1', { text: 'PR #35 をマージした' })
+  // record.py はフック名・notify の type をそのまま載せるので、こういう行が実際に書かれうる
+  for (const event of ['SubagentStop', 'session-configured', 'PreCompact']) {
+    const [s] = aggregate([stop, row(new Date(t0.getTime() + min(1)), 's1', { event, text: '', user_text: '' })])
+    assert.equal(s!.turns, 1, `${event}: ターンに数えない`)
+    assert.equal(s!.last_text, 'PR #35 をマージした', `${event}: 最後の発言を空にしない`)
+    assert.equal(s!.last_turn_ts, stop.ts, `${event}: last_turn_ts は最後の Stop のまま（ずれると一言が消える）`)
+  }
+})
+
+test('知らない event の行しか無いセッションは 0 ターン（待ちにも最後の発言にもしない。#235）', () => {
+  const [s] = aggregate([row(new Date('2026-09-02T01:00:00Z'), 's1', { event: 'SessionStart', text: '', user_text: '', first_user_text: '頼み' })])
+  assert.equal(s!.turns, 0)
+  assert.equal(s!.last_text, '')
+  assert.equal(s!.waiting, '', '待ちでもない')
+})
+
 test('recordVersionOf は一番新しい行の v。無い行は 1（試作か古い record.py）、行が無ければ 0', () => {
   const t0 = new Date('2026-09-05T01:00:00Z')
   assert.equal(recordVersionOf([]), 0)

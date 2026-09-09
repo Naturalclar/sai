@@ -76,6 +76,9 @@ export function toUtterances(rows: FeedRow[]): Utterance[] {
       out.push({ speaker: row.agent, row, text: row.text ?? '', key: `${row.ts}:${index}`, waiting: true, resolved })
       return
     }
+    // 知らない event（#235）。ここまでで返さないと下のターン完了の経路に落ちてバブルになる。
+    // 集計側が数えていないものを出すと「N ターン」と見えているバブルの数が合わなくなる
+    if (kind === 'other') return
     if (mine && prompted.get(id) !== mine) out.push({ speaker: 'me', row, text: row.user_text ?? '', key: `${row.ts}:${index}:me` })
     prompted.delete(id)
     const theirs: Utterance = { speaker: row.agent, row, text: row.text ?? '', key: `${row.ts}:${index}` }

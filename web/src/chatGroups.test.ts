@@ -115,6 +115,12 @@ test('合図だけの再開の行（user_text 無し）はバブルにしない�
   assert.equal(days[0]!.groups[0]!.items.length, 1)
 })
 
+test('知らない event の行はバブルにしない（#235）', () => {
+  // 集計が数えていないものを出すと、見出しの「N ターン」とバブルの数が合わなくなる
+  const out = toUtterances([row(0), row(1, { event: 'SubagentStop', text: '' }), row(2, { event: 'session-configured', text: '中身があっても出さない' })])
+  assert.deepEqual(out.map((u) => u.text), ['返答'])
+})
+
 test('promptArrived: 送った返信と同じ入力の行が、送信時刻より後（1分の許容）に同じエンティティにあるか', () => {
   const since = at(10)
   const prompt = row(10, { event: 'UserPromptSubmit', text: '', user_text: ' 続きを ' })

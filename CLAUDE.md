@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 何のリポジトリか
 
-Claude Code / Codex CLI のターン完了をフックで `~/.agent-feed/YYYY-MM-DD.jsonl` に集め（**agent-feed** = `feed/`）、ローカルの画面で眺める（**SAI** = `server/` + `web/`）。詳細は README.md。コメント・コミットメッセージ・UI 文言は日本語で書く。
+Claude Code / Codex CLI のターン完了をフックで `~/.agent-feed/YYYY-MM-DD.jsonl` に集め（**agent-feed** = `feed/`）、ローカルの画面で眺める（**SAI** = `server/` + `web/`）。詳細は README.md（何をするものか・セットアップ）と `docs/`（画面・API・データの形・先に確かめた前提）。コメント・コミットメッセージ・UI 文言は日本語で書く。
 
 ## コマンド
 
@@ -91,7 +91,7 @@ Codex CLI (notify) ──────┘                                   │
 - **別ターミナルの `pnpm build` に追従する。** サーバは `web/dist/` を毎回ディスクから読み、`/api/*` に `X-SAI-Build`（`dist/index.html` の mtime）を付ける。`web/src/api.ts` の `watchBuild` がポーリングのついでにそれを見て、変わっていたら `location.reload()` する（`pnpm dev` 中は HMR に任せて何もしない）。サーバ側の再起動は `pnpm start:watch`。
 - **ビルドが古いことはサーバが判定して画面に出す。** `server/buildFreshness.ts` が `web/dist/index.html` と `web/src` / `web/index.html` / `shared`（`*.test.ts` を除く）の mtime を 30 秒に1回比べ、`/api/sessions` と `/api/feed` の `build_stale` に載せる（`rev` にも混ぜる）。`App.tsx` はそれでヘッダの下にバナーを出す（`pnpm dev` では出さない）。git は叩かない。
 
-## 設計上の前提（変えるときは README も直す）
+## 設計上の前提（変えるときは README / docs も直す）
 
 - **`record.py` は必ず exit 0。** フックが非0で終わるとエージェント本体を止めるため、失敗は黙って諦める（`AGENT_FEED_DEBUG=1` で `record-errors.log` に残す）。SIGALRM による15秒の自殺タイマーも入っている。stdin より先に argv を見るのも意図的（Codex 経路で閉じられない stdin を read してハングしない）。
 - **セッション終了は掴めない**ので、両エージェントとも「ターン完了」を1行として記録し、セッションはサーバ側の `aggregate()` でまとめる。
@@ -103,7 +103,7 @@ Codex CLI (notify) ──────┘                                   │
 - **エンティティの単位は (セッション, リポジトリ)。** IDは `<セッション>@<リポジトリ>`（セッションが取れない行は `unknown-<日付>`）。キーの作り方は `shared/entity.ts` の `entityId()` にあり、サーバの集計（`aggregate.ts`）・詳細APIの行の絞り込み（`app.ts`）・画面のリンク（`Chat.tsx`）が全部これを使う。別々に組み立てるとリンク切れになるので必ず共有関数を通す。
 - 日付の切り方は `Asia/Tokyo` 固定（`record.py` の `tz()` と `shared/entity.ts` の `TIME_ZONE`）。
 - **SAI は外に出さない。** `127.0.0.1` / `localhost` / `::1` 以外への bind は `main.ts` が拒否する。中身は作業内容そのものなので、デプロイ・ホスティング・Slack への送信はしない。出してよいのは tailnet までで、`tailscale serve` 経由だけ（bind は変えない、funnel は使わない）。Serve の `Tailscale-User-Login` は `server/auth.ts` の `Authenticator` が `tailscale whois <X-Forwarded-For>` で突き合わせ、合わなければ全リクエスト 401。ヘッダ無しはループバックからだけ通す。`createApp(..., auth)` で `Whois` を差し替えてテストする。Serve 経由は `Origin` が `https://` になるので `isCrossOrigin()` は `X-Forwarded-Proto` を見る。
-- **返信の POST は同一オリジンのみ。** ブラウザから任意の `cwd` でコマンドが走るので、`app.ts` の `isCrossOrigin()`（`Origin` / `Sec-Fetch-Site`）は外さない。SAI 自身は起動するコマンドに権限のフラグを付けない（非対話なので許可ダイアログは出せず、未許可のツールは拒否される）。運用者が `SAI_CLAUDE_ARGS` / `SAI_CODEX_ARGS` で明示的に渡すのは可で、それは README の「返信と許可」に書いてある範囲（ツール単位の `--allowedTools` を勧め、バイパスは CSRF の観点から勧めない）。
+- **返信の POST は同一オリジンのみ。** ブラウザから任意の `cwd` でコマンドが走るので、`app.ts` の `isCrossOrigin()`（`Origin` / `Sec-Fetch-Site`）は外さない。SAI 自身は起動するコマンドに権限のフラグを付けない（非対話なので許可ダイアログは出せず、未許可のツールは拒否される）。運用者が `SAI_CLAUDE_ARGS` / `SAI_CODEX_ARGS` で明示的に渡すのは可で、それは `docs/screen.md` の「返信と許可」に書いてある範囲（ツール単位の `--allowedTools` を勧め、バイパスは CSRF の観点から勧めない）。
 - **承認の答え（`POST /api/approvals/<id>/answer`）も同一オリジンのみ。** ここが通ると別サイトから「許可」が押せる。`POST /api/approvals`（預ける側）は返信を処理中のエンティティの分しか受けない。
 - **「処理中の返信」はメモリと `~/.agent-feed/replying.json` の両方。** `server/runner.ts` の `ProcessRunner` が `start` で書き `exit` で消し、起動時に読んで生きている pid の分だけ引き取る（見るたびに `kill(pid, 0)` で生存確認）。サーバの再起動で「処理中」を忘れて同じセッションに返信が二重に走った（#100）ため。承認（`Approvals`）はメモリだけ。
 - 履歴（`*.jsonl`、`.agent-feed/`、`sessions/`）はコミットしない。`.gitignore` 済み。

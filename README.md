@@ -210,6 +210,7 @@ Codex CLI ──[notify]───────┘
 | `thinking` | そのターンの思考。Claude は `transcript_path` の最後のターン（最後の入力より後）の `thinking` ブロックの本文を `\n\n` で繋いだもの（`signature` だけのブロックは飛ばす）、Codex は rollout の最後のターンの `reasoning` の `summary[].text`。**無いことが多い**（下の「先に確かめた前提」の 4）。ターン完了の行だけ。4,000文字で切る（先頭側を残す）。画面2のエージェントのバブルに折りたたんで出す。`GET /api/feed` の行からは落とす |
 | `model` | そのターンを回したモデル。Claude は `transcript_path` の最後の assistant 行の `message.model`（`claude-fable-5-1` など。CLI が合成した `<synthetic>` は飛ばす）、Codex は rollout の最後の `turn_context.model`（`gpt-5.6-sol` など）。ターン完了の行だけ。画面2の見出しに出す |
 | `pane` / `pid` | セッションが開いている tmux のペイン（`%12`。フックが受け取る `TMUX_PANE`）と本体の pid（Claude は `CLAUDE_PID`、Codex は notify の親）。SAI の返信をそのペインに打ち込むのに使う。tmux の外なら `pane` は空 |
+| `permission_mode` | そのターンの許可モード（Claude のフックの `permission_mode`。`default` / `acceptEdits` / `plan` / `auto` / `dontAsk` / `bypassPermissions`）。Codex には無い。一番新しい行の値が一覧とチャット見出しの印になる |
 | `first_user_text` | 最初のユーザー発話。`user_text` が1行も無い古いセッションのタイトルに使う。300文字で切る |
 
 日付は `Asia/Tokyo` で切る。
@@ -402,6 +403,10 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 
 - 答え待ちはサーバのメモリだけ。返信のプロセスが終われば（許可を待たずに落ちた、`claude` を kill した）その分は拒否扱いで消える。MCP 側が 90 秒取りに来なければ捨てる
 - `AskUserQuestion` は質問と選択肢がそのまま出て、全部に答えると `answers` 付きで返す（複数選択は 1 つだけ選ぶ）。`ExitPlanMode` はプランの先頭が出て、許可すれば進む
+**いま何が許可されているかは見出しの盾のアイコンから見られる。** そのセッションの `cwd` に効いている設定を読んで、評価の順（**拒否 → 毎回聞く → 許可**）に出す。読む先は強い順に、組織の `managed-settings.json`（macOS は `/Library/Application Support/ClaudeCode/`）、`<cwd>/.claude/settings.local.json`（**[常に許可] が書く先**）、`<cwd>/.claude/settings.json`、`~/.claude/settings.json`、それと `SAI_CLAUDE_ARGS` の `--allowedTools` / `--disallowedTools`（SAI から返信したターンにだけ効く）。**拒否はどの出どころのものでも許可に勝つ**ので、階段ではなく種類ごとに並べて出どころを添える。端末側の `claude --settings` は SAI からは分からないので読まない。読むだけで、ここからは足せない・消せない。
+
+許可モード（`permission_mode`。行に載っている一番新しい値）も併せて出す。ルールが 1 件も無くても `auto` や `bypassPermissions` なら通ってしまうので、ルールだけ見ると誤解する。`default` 以外のときは一覧とチャット見出しに印が付く。Codex は許可の形が別（`~/.codex/config.toml` の `approval_policy` / `trust_level`）なので対象外。
+
 - **[常に許可]** は端末の「今後も許可」と同じ。決定に `updatedPermissions`（`Bash(gh pr:*)` のような Claude の許可ルール。`destination: localSettings`）を付けて返すと、CLI が返信先の cwd の `.claude/settings.local.json` に書き、次のプロセスからその形は聞かれない（CLI 2.1.259 で確認）。ルールは SAI が組み立てる（`shared/approvals.ts` の `alwaysAllowRule`。CLI は候補を送ってこない）: Bash はコマンドの先頭 1 語、`gh` / `git` / `npm` のようにサブコマンドを持つ CLI は 2 語で前方一致。MCP ツールはそのツール名。Edit / Write などファイル系と `AskUserQuestion` / `ExitPlanMode` には出さない（設定に焼くには広すぎる）。ボタンにマウスを乗せると書かれるルールが見える。「常に拒否」は無い
 - 答える口は同一オリジンのみ（`isCrossOrigin`）。ここが通ると別サイトから許可が押せてしまうので外さない
 - **Claude だけ。** Codex に同等の口は無い（返信は今までどおり、承認が要るものは拒否される）
@@ -444,6 +449,7 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 | `GET /api/approvals/<approval_id>?wait=1` | 答えが付いていれば `200` で `{ "behavior": "allow" \| "deny", "updatedInput"?, "message"? }`（渡したら消える）。まだなら `wait=1` で最大 20 秒待って `202`。無ければ `404` |
 | `POST /api/approvals/<approval_id>/answer` | 画面から答える。body `{ "behavior": "allow" \| "deny", "updatedInput"?, "message"? }`。`allow` で `updatedInput` を省けば元の入力のまま。別オリジンは `403`、答え済みは `404` |
 | `GET /api/sessions/<id>/skills?days=90` | `/` の候補になるスキル。`{ "id", "skills": [{ "name", "description", "source": "user" \| "project" }] }`。`~/.claude/skills/` とセッションの `cwd` の `.claude/skills/` から集め、プロジェクト側を先に、同じ名前はプロジェクトが勝つ。Claude 以外は空。窓の中に無いセッションは `404` |
+| `GET /api/sessions/<id>/permissions?days=90` | そのセッションの `cwd` に効いている許可ルール。`{ "id", "cwd", "agent", "mode", "sources", "rules" }`。`rules` は評価順（`deny` → `ask` → `allow`）。**読むだけ**で、パスは `cwd` から固定で組み立てる。Codex は `sources` / `rules` とも空 |
 | `GET /api/sessions/<id>/meta` | 表示名・アーカイブ・返信のモデル・一言の性格。`{ "id", "meta": { "name"?, "archived_at"?, "model"?, "persona"? } }`。無ければ `meta` は `{}` |
 | `PUT /api/sessions/<id>/meta?days=90` | body `{ "name"?: "...", "archived_at"?: "<ISO>", "model"?: "opus", "persona"?: "ISTJ" }` をいまの値に重ねる。省略したキーは据え置き、空文字や `null` は「消す」で、全部消えたらエントリごと消える。知らないキーは捨てる。名前は100文字まで、`archived_at` は読める時刻、`model` は英数字で始まる 64 文字までの名前、`persona` は `shared/persona.ts` にある id（違えば `400`）。窓の中に無いセッションは `404`、別オリジンは `403` |
 | `GET /api/sessions/<id>/icon?v=<mtime>` | アイコン画像そのもの（`image/png` など）。無ければ `404`。`v` がいまのファイルと同じなら `Cache-Control: immutable`、無ければ `no-store` |

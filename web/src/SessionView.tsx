@@ -22,6 +22,8 @@ import { SessionPersonaSelect } from './SessionPersonaSelect'
 import { ModelPicker } from './ModelPicker'
 import { ArchiveButton } from './ArchiveButton'
 import { ArchivedTag } from './ArchivedTag'
+import { PermissionModeTag } from './PermissionModeTag'
+import { PermissionsButton } from './PermissionsButton'
 import type { PaneProps } from './App'
 
 const NO_REPLYING = {}
@@ -66,10 +68,13 @@ export function SessionView({ id, onStatus, onOpenSidebar, linear, settings }: {
             {approvals.length > 0 && <WaitingTag text={approvals[0]!.text} />}
             {mine && <ReplyingTag since={mine.since} now={now} />}
             {s.archived && <ArchivedTag />}
+            {/* 通常のモードは印を出さない（普段と違うときだけ目立たせる） */}
+            {s.permission_mode && s.permission_mode !== 'default' && <PermissionModeTag mode={s.permission_mode} />}
           </span>
           {/* 合成 ID は集計の切れ方で付け先がずれるのでアーカイブできない */}
           {s.session_source !== 'synth' && <ArchiveButton key={`${s.id}:${s.archived ? 1 : 0}`} id={s.id} archived={Boolean(s.archived)} />}
           <MetaEditor key={s.id} id={s.id} meta={s.meta} icon={s.icon} />
+          {s.agent === 'claude' && <PermissionsButton key={s.id} id={s.id} />}
           {/* 一言が有効なときだけ。このセッションの性格（無ければヘッダの既定に従う） */}
           {settings?.digest && <SessionPersonaSelect key={s.id} id={s.id} value={s.meta?.persona} defaultPersona={settings.persona} />}
           {hasThinking && (

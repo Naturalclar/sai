@@ -10,7 +10,7 @@ export type SessionSource = 'payload' | 'rollout' | 'synth' | ''
  * 行の形の版。feed/record.py の RECORD_VERSION と同じ値（ずれると pnpm test:feed が止まる）。
  * 行の形を変えるたびに上げる。画面は窓の中の一番新しい行の v がこれより古いと「record.py が古い」と出す
  */
-export const RECORD_VERSION = 5
+export const RECORD_VERSION = 6
 
 /** ~/.agent-feed/YYYY-MM-DD.jsonl の1行 = 1ターン */
 export interface FeedRow {
@@ -45,6 +45,11 @@ export interface FeedRow {
    * `message.model`、Codex は rollout の `turn_context.model`。ターン完了の行だけ。古い行には無い
    */
   model?: string
+  /**
+   * そのターンの許可モード（Claude のフックのペイロードの `permission_mode`。`default` / `plan` /
+   * `acceptEdits` / `auto` / `dontAsk` / `bypassPermissions`）。Codex には無い。古い行にも無い
+   */
+  permission_mode?: string
   /** セッションが開いている tmux のペイン（`%12` など。tmux の外なら空）。SAI の返信をここに打ち込む */
   pane?: string
   /** セッション本体（claude / codex）の pid。生きていれば端末で開いている */
@@ -98,6 +103,8 @@ export interface SessionSummary {
   /** 一番新しいターン完了の行のモデル。無ければ空。途中で変わった全部は models に（出てきた順） */
   model: string
   models: string[]
+  /** 一番新しい行の許可モード（`permission_mode`）。無ければ空 */
+  permission_mode: string
   /** 一番新しい行の pane / pid（JSONL から）。生きているかは見ない（terminal の方を見る） */
   pane: string
   pid: number
@@ -415,4 +422,51 @@ export interface SessionFilters {
 export interface FeedFilters {
   repo: string
   days: string
+}
+
+// ---- 許可（GET /api/sessions/<id>/permissions）
+
+/** 許可モード。Claude Code のフックの `permission_mode` の値 */
+export type PermissionMode = 'default' | 'acceptEdits' | 'plan' | 'auto' | 'dontAsk' | 'bypassPermissions'
+
+/** ルールの種類。評価は deny → ask → allow の順で、最初に当たったものが決まる */
+export type PermissionKind = 'deny' | 'ask' | 'allow'
+
+/**
+ * ルールの出どころ。強い順は managed > local > project > user だが、deny はどの出どころでも allow に勝つ。
+ * `sai_args` は SAI_CLAUDE_ARGS の `--allowedTools` / `--disallowedTools` で、SAI から返信したターンにだけ効く
+ */
+export type PermissionSourceKind = 'managed' | 'local' | 'project' | 'user' | 'sai_args'
+
+/** 読んだ設定ファイル 1 つ分 */
+export interface PermissionSource {
+  kind: PermissionSourceKind
+  /** 読んだファイルの絶対パス。`sai_args` は環境変数名 */
+  path: string
+  /** ファイルが無い（`sai_args` なら未設定） */
+  missing?: boolean
+  /** あるが JSON として読めない */
+  broken?: boolean
+  /** そのファイルの `permissions.defaultMode` */
+  default_mode?: string
+}
+
+export interface PermissionRuleEntry {
+  kind: PermissionKind
+  /** `Bash(gh pr:*)` / `mcp__github__create_issue` のような表記そのまま */
+  rule: string
+  source: PermissionSourceKind
+}
+
+/** GET /api/sessions/<id>/permissions。そのセッションの cwd から読む（読むだけ） */
+export interface SessionPermissionsResponse {
+  id: string
+  cwd: string
+  agent: Agent
+  /** 一番新しい行の許可モード。無ければ空 */
+  mode: string
+  /** 読んだ先（無かったものも含む。どこを直せばいいか分かるように） */
+  sources: PermissionSource[]
+  /** deny → ask → allow の順 */
+  rules: PermissionRuleEntry[]
 }

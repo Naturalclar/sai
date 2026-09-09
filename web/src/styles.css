@@ -49,6 +49,28 @@
   header .user-menu .menu button { display: block; width: 100%; text-align: left; padding: 6px 12px; background: transparent; border: 0; color: var(--ink); font: inherit; cursor: pointer; }
   header .user-menu .menu button:hover { background: var(--hover); }
   /* 自分の表示名とアイコンのモーダル（ProfileEditor） */
+  /* -- 許可の一覧（#162）。読むだけのモーダル */
+  .modal.permissions { width: 520px; max-width: calc(100vw - 32px); max-height: 80vh; overflow-y: auto; }
+  .modal.permissions .mode { font-size: 13px; margin-bottom: 10px; }
+  .modal.permissions .mode b.loud { color: var(--claude); }
+  .modal.permissions .mode .warn { color: var(--claude); font-size: 12px; margin-top: 2px; }
+  .modal.permissions .group, .modal.permissions .files { margin-bottom: 10px; }
+  .modal.permissions .head { font-size: 12px; font-weight: 700; color: var(--muted); border-bottom: 1px solid var(--line); padding-bottom: 2px; margin-bottom: 4px; }
+  .modal.permissions .head .n { font-weight: 400; margin-left: 6px; }
+  .modal.permissions .group.deny .head { color: var(--claude); }
+  .modal.permissions .group.ask .head { color: var(--synth); }
+  .modal.permissions ul { list-style: none; margin: 0; padding: 0; }
+  .modal.permissions li { display: flex; align-items: baseline; gap: 8px; padding: 2px 0; font-size: 13px; }
+  .modal.permissions code { font-family: var(--mono); font-size: 12px; background: var(--chip); padding: 1px 6px; border-radius: 4px; overflow-wrap: anywhere; }
+  .modal.permissions .src { flex: none; font-size: 11px; color: var(--muted); }
+  .modal.permissions .files li { color: var(--muted); font-size: 11px; }
+  .modal.permissions .files li.missing code { opacity: .5; }
+  .modal.permissions .files li.broken .note { color: var(--claude); }
+  .modal.permissions .note { flex: none; font-size: 11px; }
+  .modal.permissions .hint { color: var(--muted); font-size: 11px; margin-top: 8px; }
+  .modal.permissions .err { color: var(--claude); font-size: 12px; }
+  .modal.permissions .actions { display: flex; justify-content: flex-end; margin-top: 12px; }
+  .modal.permissions .actions .primary { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 6px 14px; font: inherit; font-weight: 600; cursor: pointer; }
   .modal.profile { width: 360px; }
   .modal.profile .row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
   .modal.profile .avatar.big { width: 56px; height: 56px; font-size: 18px; flex: none; }
@@ -209,6 +231,8 @@
   .chat-head .model-pick .custom { display: inline-flex; align-items: center; gap: 6px; }
   .chat-head .model-pick .custom input { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; font: inherit; font-size: 12px; width: 14em; }
   .chat-head .model-pick .err { color: var(--claude); }
+  .tag.mode { background: color-mix(in srgb, var(--muted) 18%, transparent); color: var(--muted); font-family: var(--mono); font-weight: 600; }
+  .tag.mode.loud { background: color-mix(in srgb, var(--claude) 18%, transparent); color: var(--claude); }
   .tag.archived { background: color-mix(in srgb, var(--muted) 18%, transparent); color: var(--muted); font-weight: 600; }
   .tag.waiting { background: color-mix(in srgb, var(--synth) 18%, transparent); color: var(--synth); font-weight: 600; }
   .tag.terminal { background: color-mix(in srgb, var(--codex) 16%, transparent); color: var(--codex); font-weight: 600; }

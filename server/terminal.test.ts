@@ -185,6 +185,12 @@ test('TerminalReplies: ターン完了の行が since より新しくなった�
   assert.equal(r.running('T@r'), false)
 })
 
+test('TerminalReplies: via: terminal を付ける（要対応が別プロセスの返信と区別する。#232）', () => {
+  const r = new TerminalReplies(() => Date.parse('2026-09-06T01:00:00Z'))
+  assert.equal(r.start('S@r', 'やって').via, 'terminal')
+  assert.equal(r.snapshot()['S@r']?.via, 'terminal', 'スナップショットにも載る（画面はこれを見る）')
+})
+
 const CODEX_IDLE = [
   '• You have 3 usage limit resets available. Run /usage to use one.',
   '› Ask Codex to do anything',

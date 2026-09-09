@@ -33,7 +33,8 @@ export function SessionList({ list, filters, setFilters, active }: Props) {
 
   const facets = data?.filters ?? { projects: [], repos: [], agents: [], dates: [] }
   const sessions = data?.sessions ?? []
-  const todo = data ? todoItems(data.sessions, data.approvals).length : 0
+  // バッジの数は要対応の画面と必ず同じ引数で数える（replying を渡し忘れると件数だけずれる。#232）
+  const todo = data ? todoItems(data.sessions, data.approvals, data.replying).length : 0
 
   // タッチ端末では項目を左にスワイプしてアーカイブを出す。開いている項目は 1 つだけ
   const swipe = useMediaQuery('(hover: none) and (pointer: coarse)')

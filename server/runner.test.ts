@@ -22,6 +22,8 @@ test('ProcessRunner は起動から exit までを snapshot に出し、exit で
   assert.equal(snap['A@r']?.text, 'やって')
   const since = Date.parse(snap['A@r']?.since ?? '')
   assert.ok(since >= before - 1000 && since <= Date.now() + 1000, 'since は起動時刻')
+  // 別プロセスの返信には via を付けない（端末に打ち込んだ分だけ 'terminal'。要対応の出し分け。#232）
+  assert.equal(snap['A@r']?.via, undefined)
   assert.deepEqual(Object.keys(runner.snapshot()), ['A@r'])
 
   for (let i = 0; i < 50 && runner.running('A@r'); i++) await wait(50)

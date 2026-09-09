@@ -300,7 +300,8 @@ export class TerminalReplies {
     return Object.fromEntries(this.active)
   }
   start(id: string, text: string): Replying {
-    const entry: Replying = { since: new Date(this.now()).toISOString(), text }
+    // via で「端末に打ち込んだ返信」だと分かるようにする（#232。要対応の出し分けが使う）
+    const entry: Replying = { since: new Date(this.now()).toISOString(), text, via: 'terminal' }
     this.active.set(id, entry)
     return entry
   }

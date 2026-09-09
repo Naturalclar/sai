@@ -72,8 +72,9 @@ export function App() {
   // チャットとフィードは見ていないので今までどおり止まる
   const list = usePolling(() => api.sessions(filters), [filters.project, filters.repo, filters.agent, filters.date, filters.days, filters.archived], { hiddenMs: HIDDEN_POLL_MS })
 
-  // いま自分を待っているもの。サイドバーのバッジ・要対応の画面と同じ組み立てを使う（食い違わせない）
-  const todo = useMemo(() => (list.data ? todoItems(list.data.sessions, list.data.approvals) : null), [list.data])
+  // いま自分を待っているもの。サイドバーのバッジ・要対応の画面と同じ組み立てを使う（食い違わせない）。
+  // replying も必ず渡す（渡し忘れると、題名と通知だけが処理中のセッションを数えてしまう。#232）
+  const todo = useMemo(() => (list.data ? todoItems(list.data.sessions, list.data.approvals, list.data.replying) : null), [list.data])
   const notify = useNotify(todo)
 
   // サイドバーの開閉。レイアウトは main の class で CSS が切り替える。狭い画面では CSS 側が無視する

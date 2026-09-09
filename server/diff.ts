@@ -8,7 +8,7 @@
 // cwd はセッションの行から取り、リクエストからは受けない（返信と同じ）。
 import { spawn } from 'node:child_process'
 import { SKIPPED_MARK } from '../shared/diff.ts'
-import type { DiffFileStat, DiffSection, DiffStatusCode } from '../shared/types.ts'
+import type { DiffCounts, DiffFileStat, DiffSection, DiffStatusCode } from '../shared/types.ts'
 
 /** 本文の上限。全体（1 セクション）と 1 ファイル。この repo の PR 1 つが 61KB 程度なので普段は切れない */
 export const MAX_DIFF_BYTES = 2 * 1024 * 1024
@@ -175,18 +175,97 @@ export function clampPatch(patch: string, maxTotal = MAX_DIFF_BYTES, maxFile = M
   return { patch: out.join('\n'), truncated }
 }
 
-/** そのセッションの worktree が今いるブランチ。detached なら短い SHA */
-export async function headOf(git: Git, cwd: string): Promise<string> {
+/**
+ * いま居るところ。`branch` は detached だと空（PR を引くときはブランチ名でないと使えないので分けて返す）、
+ * `head` は表示用でブランチ名か短い SHA
+ */
+export async function headRef(git: Git, cwd: string): Promise<{ head: string; branch: string }> {
   try {
     const branch = (await git.run(cwd, ['symbolic-ref', '-q', '--short', 'HEAD'])).trim()
-    if (branch) return branch
+    if (branch) return { head: branch, branch }
   } catch {
     // detached
   }
   try {
-    return (await git.run(cwd, ['rev-parse', '--short', 'HEAD'])).trim()
+    return { head: (await git.run(cwd, ['rev-parse', '--short', 'HEAD'])).trim(), branch: '' }
   } catch {
-    return ''
+    return { head: '', branch: '' }
+  }
+}
+
+/** そのセッションの worktree が今いるブランチ。detached なら短い SHA */
+export async function headOf(git: Git, cwd: string): Promise<string> {
+  return (await headRef(git, cwd)).head
+}
+
+/**
+ * 大きさだけ（#211）。`--numstat` 1 回で済むので、本文を作る section() よりずっと軽い。
+ * `--name-status` も要らない（status は使わないので `parseStats` は通さない）
+ */
+async function counts(git: Git, cwd: string, args: string[]): Promise<{ counts: DiffCounts; paths: string[] }> {
+  const numstat = await git.run(cwd, ['diff', '--numstat', ...args])
+  const paths: string[] = []
+  let added = 0
+  let removed = 0
+  for (const line of numstat.split('\n')) {
+    const parts = line.split('\t')
+    if (parts.length < 3) continue
+    const [add, del] = [parts[0]!, parts[1]!]
+    paths.push(parts[2]!)
+    // バイナリは `-`。ファイルとしては数えるが行は数えない
+    added += add === '-' ? 0 : Number(add) || 0
+    removed += del === '-' ? 0 : Number(del) || 0
+  }
+  return { counts: { files: paths.length, added, removed }, paths }
+}
+
+export interface SessionDiffSummary {
+  base: string
+  head: string
+  /** いま居るブランチ。detached なら空（PR を引くのに使う） */
+  head_branch: string
+  /** 変わったファイルの数（両方に出るファイルは 1 つ） */
+  files: number
+  added: number
+  removed: number
+  branch: DiffCounts
+  working: DiffCounts
+  untracked: number
+}
+
+const NO_COUNTS: DiffCounts = { files: 0, added: 0, removed: 0 }
+
+/**
+ * `sessionDiff()` の軽い版。patch を作らないので、開く前の「行数」を出すのに使える（#211）。
+ * base が決まらなければブランチの差分は 0 で、未コミットだけ返す
+ */
+export async function sessionDiffSummary(git: Git, cwd: string, want = ''): Promise<SessionDiffSummary> {
+  if (!cwd) throw new NotAGitRepo('作業ディレクトリが分かりません')
+  try {
+    await git.run(cwd, ['rev-parse', '--git-dir'])
+  } catch (err) {
+    throw new NotAGitRepo(err instanceof Error ? err.message : String(err))
+  }
+  const [base, ref] = await Promise.all([resolveBase(git, cwd, want), headRef(git, cwd)])
+  const [branch, working, untracked] = await Promise.all([
+    base ? counts(git, cwd, [`${base}...HEAD`]) : Promise.resolve({ counts: NO_COUNTS, paths: [] as string[] }),
+    counts(git, cwd, ['HEAD']),
+    git
+      .run(cwd, ['ls-files', '--others', '--exclude-standard'])
+      .then((out) => out.split('\n').filter(Boolean).length)
+      .catch(() => 0),
+  ])
+  return {
+    base,
+    head: ref.head,
+    head_branch: ref.branch,
+    // 同じファイルがブランチの差分と未コミットの両方に出ることがあるので、重複は 1 つに畳む
+    files: new Set([...branch.paths, ...working.paths]).size,
+    added: branch.counts.added + working.counts.added,
+    removed: branch.counts.removed + working.counts.removed,
+    branch: branch.counts,
+    working: working.counts,
+    untracked,
   }
 }
 

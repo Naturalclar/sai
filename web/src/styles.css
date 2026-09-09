@@ -469,6 +469,14 @@
   .reply .row button.iconbtn { order: 2; margin-left: 0; background: transparent; color: var(--muted); padding: 0; border-radius: 6px; font-weight: 400; }
   .reply .row button.iconbtn:hover { background: var(--hover); color: var(--ink); }
   .reply .row button.iconbtn:disabled { opacity: .5; background: transparent; }
+  /* -- 差分のボタン（#211）。写真とモデルと同じ下の行に並ぶ。行数はここに出し、内訳は title に出す。
+     押すとトグルなので、出している間は枠を濃くする（aria-pressed と同じことを見た目でも言う） */
+  .reply .row button.diff-btn { order: 2; margin-left: 0; display: inline-flex; align-items: center; gap: 5px; background: transparent; color: var(--muted); border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px; font-size: 12px; font-weight: 400; }
+  .reply .row button.diff-btn:hover { background: var(--hover); color: var(--ink); }
+  .reply .row button.diff-btn.on { background: var(--hover); color: var(--ink); border-color: var(--accent); }
+  .reply .row button.diff-btn .add { color: var(--codex); font-family: var(--mono); }
+  .reply .row button.diff-btn .del { color: var(--claude); font-family: var(--mono); }
+  .reply .row button.diff-btn .pr { color: var(--accent); font-family: var(--mono); }
   .reply .attachments { display: flex; flex-wrap: wrap; gap: 8px; }
   .reply .thumb { position: relative; display: inline-flex; }
   .reply .thumb img { width: 56px; height: 56px; object-fit: cover; border-radius: 6px; border: 1px solid var(--line); display: block; }

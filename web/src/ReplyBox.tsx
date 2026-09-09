@@ -10,6 +10,7 @@ import { AttachmentStrip } from './AttachmentStrip'
 import { IconButton } from './IconButton'
 import { ReplyModelPicker, type ReplyModelProps } from './ReplyModelPicker'
 import { leavesToSidebar } from './replyFocus'
+import { DiffButton, type DiffButtonProps } from './DiffButton'
 import { PhotoMark } from './PhotoMark'
 import { ATTACHMENT_MAX_COUNT } from '../../shared/attachments.ts'
 import { NOT_IN_HISTORY, canGoBack, canGoForward, stepHistory } from './replyHistory'
@@ -55,6 +56,11 @@ interface Props {
   onDraft?: (drafting: boolean) => void
   /** 送信ボタンの左に出すモデルの選択。渡さなければ出さない（返信先が一覧に無いフィードの候補など） */
   model?: ReplyModelProps
+  /**
+   * モデルの左に出す差分のボタン（#211）。渡さなければ出さない。
+   * フィードには渡さない（差分のペインは開いているセッションの分だけなので、押しても何も起きない）
+   */
+  diff?: DiffButtonProps
   /** `/` でスキルの候補を出す返信先（エンティティID）。渡さなければ `/` はただの文字 */
   skillsId?: string
   /** 画像を預ける先（エンティティID）。渡さなければ画像は添えられない */
@@ -72,7 +78,7 @@ const NO_HISTORY: readonly string[] = []
 const keyOf = (e: KeyboardEvent<HTMLTextAreaElement>) => ({ key: e.key, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, shiftKey: e.shiftKey })
 
 /** 入力欄。Enter で送信、Shift+Enter で改行。IME 変換中の Enter は送らない */
-export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onDraft, model, skillsId, attachId, history = NO_HISTORY, onLeaveToSidebar, mention }: Props) {
+export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onDraft, model, diff, skillsId, attachId, history = NO_HISTORY, onLeaveToSidebar, mention }: Props) {
   const [text, setText] = useState('')
   const attach = useAttachments(attachId)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -401,6 +407,7 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
           disabled={blocked && !mention}
         />
         {/* 送信ボタンの左。textarea が 1 行を占めるので、画像ボタンと並んで下の行に入る */}
+        {diff && <DiffButton {...diff} />}
         {model && <ReplyModelPicker key={model.id} {...model} />}
         <button
           type="submit"

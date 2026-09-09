@@ -10,10 +10,10 @@
 | `GET /api/health` | `{ ok: true, viewer }`。認証の確認にも使う（偽ヘッダで `401` になること） |
 | `GET /api/sessions/<id>?days=30` | そのエンティティの全行と `replying`。`<id>` は `<セッション>@<リポジトリ>` |
 | （`replying` の中身） | `{ "<エンティティID>": { "since", "text", "via"?: "terminal", "failed"?: { "code", "tail" } } }`。`via` は端末（tmux）に打ち込んだ返信のときだけ付く（省略なら別プロセス。要対応の出し分けが見る）。`failed` は返信の子プロセスが 0 以外で終わったとき 2 分だけ付く（`tail` は `reply.log` のそのターンぶんの末尾）。付いている間は「処理中」ではない |
-| `POST /api/sessions/<id>/reply?days=90` | body `{ "text": "..." }`。そのセッションを `cwd` で再開して1ターン回すのを投げっぱなしにし、`202` を返す。合成 ID は `400`、進行中は `409`、別オリジンは `403` |
+| `POST /api/sessions/<id>/reply?days=90` | body `{ "text": "..." }`。そのセッションを `cwd` で再開して1ターン回すのを投げっぱなしにし、`202` を返す。閉じたCodexはapp-server管理で応答の `via` が `app-server`。合成 ID は `400`、進行中は `409`、別オリジンは `403` |
 | `POST /api/approvals` | 返信中の CLI（`server/approve-mcp.ts`）が許可・質問を預ける。body `{ "id", "tool_name", "input", "tool_use_id"? }`。返信を処理中でないエンティティは `409`。`201` で `{ "approval_id" }` |
 | `GET /api/approvals/<approval_id>?wait=1` | 答えが付いていれば `200` で `{ "behavior": "allow" \| "deny", "updatedInput"?, "message"? }`（渡したら消える）。まだなら `wait=1` で最大 20 秒待って `202`。無ければ `404` |
-| `POST /api/approvals/<approval_id>/answer` | 画面から答える。body `{ "behavior": "allow" \| "deny", "updatedInput"?, "message"? }`。`allow` で `updatedInput` を省けば元の入力のまま。別オリジンは `403`、答え済みは `404` |
+| `POST /api/approvals/<approval_id>/answer` | 画面から答える。Claudeはbody `{ "behavior": "allow" \| "deny", "updatedInput"?, "message"? }`。Codexの承認はAPIに載った `decisions[].id` を `{ "behavior", "decision" }` で返し、質問は `updatedInput.answers` を返す。未提示decisionは `400`、別thread/turnや切断済みは `409`、答え済みは `404` |
 | `GET /api/sessions/<id>/skills?days=90` | `/` の候補になるスキル。`{ "id", "skills": [{ "name", "description", "source": "user" \| "project" }] }`。`~/.claude/skills/` とセッションの `cwd` の `.claude/skills/` から集め、プロジェクト側を先に、同じ名前はプロジェクトが勝つ。Claude 以外は空。窓の中に無いセッションは `404` |
 | `GET /api/sessions/<id>/permissions?days=90` | そのセッションの `cwd` に効いている許可ルール。`{ "id", "cwd", "agent", "mode", "sources", "rules" }`。`rules` は評価順（`deny` → `ask` → `allow`）。**読むだけ**で、パスは `cwd` から固定で組み立てる。Codex は `sources` / `rules` とも空 |
 | `GET /api/sessions/<id>/diff?base=&days=90` | そのセッションの worktree の差分（`git` を読むだけ）。`branch` が `base...HEAD`、`working` が未コミット、`untracked` は追跡外のファイル名。大きすぎれば `truncated`。`cwd` が git のリポジトリでなければ `404` |

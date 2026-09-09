@@ -16,6 +16,7 @@ import { Authenticator } from './auth.ts'
 import { TerminalReplies } from './terminal.ts'
 import type { Tmux } from './terminal.ts'
 import type { ReplyCommand, Runner } from './runner.ts'
+import type { CodexApp, CodexTurnInput } from './codexAppServer.ts'
 
 let dir: string
 let server: Server
@@ -25,7 +26,16 @@ let feedFile: string
 let work: string
 const started: { id: string; cmd: ReplyCommand }[] = []
 const queued: ReplyCommand[] = []
+const codexStarted: CodexTurnInput[] = []
 const runner: Runner = { running: () => false, snapshot: () => ({}), async start(id, cmd) { started.push({ id, cmd }) } }
+const codexApp: CodexApp = {
+  running: () => false,
+  replying: () => ({}),
+  snapshot: () => ({}),
+  getApproval: () => undefined,
+  async start(input) { codexStarted.push(input) },
+  answer: () => ({ ok: false, status: 404, error: 'approval not found' }),
+}
 
 const IDLE = '──────\n❯ Try "refactor <filepath>"\n──────\n'
 class FakeTmux implements Tmux {
@@ -88,6 +98,7 @@ before(async () => {
         if (cmd.text === '失敗') throw new Error('queue rejected')
         queued.push(cmd)
       },
+      codexApp,
     },
   )
   server = createServer((req, res) => void app(req, res))
@@ -121,6 +132,7 @@ test('一覧: pid が生きていて pane があるセッションだけ termina
 test('返信: 端末で開いていればペインに打ち込み（via terminal）、ターン完了の行が届くまで処理中', async () => {
   tmux.calls.length = 0
   started.length = 0
+  codexStarted.length = 0
   let res = await post('T1@r', '続きをやって')
   assert.equal(res.status, 202)
   const data = (await res.json()) as ReplyResponse
@@ -251,11 +263,12 @@ test('返信: 開いている Codex は active writer と競合する resume で
   assert.equal(queued.length, 2)
   assert.equal(started.length, 0)
 
-  // 閉じた Codex は従来どおり別プロセスで再開できる
+  // 閉じた Codex はapp-serverで再開し、許可・質問も同じ接続で扱える
   res = await post('X3@r', 'x')
   assert.equal(res.status, 202)
-  assert.equal(((await res.json()) as ReplyResponse).via, 'process')
-  assert.equal(started.length, 1)
+  assert.equal(((await res.json()) as ReplyResponse).via, 'app-server')
+  assert.equal(codexStarted[0]?.threadId, 'X3')
+  assert.equal(started.length, 0)
   tmux.screen = IDLE
 })
 

@@ -153,7 +153,8 @@ export interface SessionMeta {
   archived_at?: string
   /**
    * SAI からの返信で使うモデル（`opus` のような別名か `claude-opus-5` のようなモデル名）。無ければ CLI の既定。
-   * 返信の `claude -p --resume` に `--model`、`codex exec resume` に `-m` として付く。
+   * 返信の `claude -p --resume` には `--model`、Codex app-serverには `turn/start.model` として渡す。
+   * `SAI_CODEX_APP_SERVER=0` の従来経路だけ `codex exec resume -m` になる。
    * Claude は `--resume` に `--model` を付けるとセッションのモデル設定そのものが変わる（端末で再開したときもそのモデル）
    */
   model?: string
@@ -351,6 +352,16 @@ export interface Approval {
   agent?: Agent
   /** false は検出専用。SAI から答えを返す安全な経路が無いので、端末で回答する案内だけを出す */
   answerable?: boolean
+  /** Codex app-server がこのrequestで提示した決定だけ。idから実際のdecisionを引くのはサーバ */
+  decisions?: ApprovalDecision[]
+}
+
+export interface ApprovalDecision {
+  /** 画面へ渡す不透明な値。app-serverのdecision本体はブラウザへ信頼させない */
+  id: string
+  label: string
+  /** 押した後の表示にだけ使う */
+  behavior: 'allow' | 'deny'
 }
 
 /** エンティティID → 答え待ちの承認（古い順）。無ければ空 */
@@ -370,6 +381,8 @@ export interface ApprovalRequest {
  */
 export interface ApprovalAnswer {
   behavior: 'allow' | 'deny'
+  /** Codex app-serverの承認で、Approval.decisionsから選んだ不透明なid */
+  decision?: string
   updatedInput?: Record<string, unknown>
   /** deny の理由。エージェントに見える */
   message?: string
@@ -526,8 +539,8 @@ export interface ReplyResponse {
   accepted: true
   id: string
   agent: Agent
-  /** terminal: tmux に打ち込んだ。process: 非対話で再開した。queue: 開いている Codex に足した */
-  via: 'terminal' | 'process' | 'queue'
+  /** terminal: tmux。process: 非対話CLI。queue: 開いているCodex。app-server: SAI管理のCodex */
+  via: 'terminal' | 'process' | 'queue' | 'app-server'
   session: string
   cwd: string
 }

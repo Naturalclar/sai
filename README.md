@@ -118,7 +118,7 @@ pnpm は 12 系（設定は `pnpm-workspace.yaml`）、Node は 22.18 以上が�
 
 サーバは `web/dist/` を配る。未ビルドなら `/` にその旨が出る。`file://` で開くと fetch が CORS で止まるので、必ずこのサーバ経由で開く。`127.0.0.1` 以外には bind を拒否する。
 
-画面を触るときはサーバを立てたまま `pnpm dev`。Vite が `/api` を `127.0.0.1:8787` に流す。
+画面を触るときはサーバを立てたまま `pnpm dev`。Vite が `/api` をサーバに流す（流す先は `SAI_PORT`。既定は `127.0.0.1:8787`）。**`pnpm start --port 9000` のような起動引数は Vite からは見えない**ので、ポートを変えるなら `SAI_PORT` も同じ値にする（`SAI_PORT` がおかしい値なら既定に落ちて、Vite の起動時に警告が出る）。
 
 `main` を取り込んだときは、サーバを止めずに別のターミナルで `git pull && pnpm build` するだけでいい。 Claude Code からなら `/sync-main`（`.claude/skills/sync-main/SKILL.md`）が、main worktree の fetch → ff-only merge → `pnpm install` → `pnpm build` → サーバが追従したかの確認までをやる（別の worktree から呼んでも main worktree だけを触る）。サーバが古いコードのままなら、動いているペインで一言つき（既定はローカルの `qwen3:8b`）に立て直すところまでやる。止まっているサーバは起動しない。`pnpm build` を忘れて `web/dist/` が `web/src` / `shared` より古いままだと、画面のヘッダの下に「画面のビルドが古い」と出る（サーバが mtime を比べて `build_stale` で伝える。`pnpm dev` では出ない）。サーバは `web/dist/` を毎回ディスクから読み、`/api/*` の応答に `X-SAI-Build`（`dist/index.html` の更新時刻）を付けるので、開いているブラウザは 3 秒以内に自分でリロードする。`server/` や `shared/` が変わったときの再起動まで任せたければ `pnpm start:watch`（`node --watch`）で立てる。
 
@@ -176,7 +176,7 @@ pnpm test && pnpm test:feed && pnpm lint && pnpm typecheck
 | `AGENT_FEED_DIR` | 出力先（既定 `~/.agent-feed`）。`record.py` とサーバの両方が見る |
 | `AGENT_FEED_DEBUG` | `1` で `record.py` の例外をログに残す |
 | `CODEX_HOME` | Codex のホーム（既定 `~/.codex`） |
-| `SAI_PORT` | サーバの既定ポート（既定 `8787`） |
+| `SAI_PORT` | サーバの既定ポート（既定 `8787`）。`pnpm dev` の `/api` の proxy 先もこれ（`--port` は見ない。#146） |
 | `SAI_TERMINAL` | `0` で「tmux のペインに打ち込む」を切り、返信を常に別プロセスで回す |
 | `SAI_TMUX_BIN` | ペインに打ち込むときの `tmux` の実行ファイル（既定は PATH の `tmux`） |
 | `SAI_GIT_BIN` | 差分を読むときの `git` の実行ファイル（既定は PATH の `git`）。読むだけのコマンドしか呼ばない |

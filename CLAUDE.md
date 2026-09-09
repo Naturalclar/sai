@@ -13,7 +13,7 @@ pnpm install
 pnpm start                  # 127.0.0.1:8787。web/dist/ を配る（未ビルドなら案内ページ）
 pnpm start --port 9000 --feed-dir ~/.agent-feed   # pnpm は「--」もそのまま渡すが、先頭の「--」は落とすので付けてもよい
 pnpm start:watch            # server/ shared/ の変更で自動再起動（node --watch）
-pnpm dev                    # Vite。/api を 127.0.0.1:8787 に proxy するので pnpm start も並走させる
+pnpm dev                    # Vite。/api をサーバに proxy するので pnpm start も並走させる（先は SAI_PORT。--port は見えない）
 pnpm build                  # typecheck → vite build web（web/dist/ へ）
 pnpm lint                   # oxlint web/src server shared
 pnpm typecheck              # tsc -p web && tsc -p web/tsconfig.test.json && tsc -p server
@@ -118,7 +118,7 @@ Codex CLI (notify) ──────┘                                   │
 | `AGENT_FEED_DIR` | JSONL の置き場（既定 `~/.agent-feed`）。record.py とサーバの両方が見る |
 | `AGENT_FEED_DEBUG` | `1` で record.py の例外をログに残す |
 | `CODEX_HOME` | Codex のホーム（既定 `~/.codex`） |
-| `SAI_PORT` | サーバの既定ポート（既定 `8787`） |
+| `SAI_PORT` | サーバの既定ポート（既定 `8787`）。`web/vite.config.ts` の `/api` の proxy 先もこれ（判定は `shared/port.ts`。`--port` は Vite から見えない） |
 | `SAI_TERMINAL` | `0` で「tmux のペインに打ち込む」を切り、返信を常に別プロセス（`claude -p` / `codex exec`）で回す |
 | `SAI_TMUX_BIN` | ペインに打ち込むときの `tmux` の実行ファイル（既定は PATH の `tmux`） |
 | `SAI_GIT_BIN` | 差分を読むときの `git` の実行ファイル（既定は PATH の `git`）。読むだけのコマンドしか呼ばない |

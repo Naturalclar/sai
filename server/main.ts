@@ -21,6 +21,7 @@ import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { fileURLToPath } from 'node:url'
+import { DEFAULT_PORT, parsePort } from '../shared/port.ts'
 import { createApp } from './app.ts'
 import { FeedStore } from './store.ts'
 
@@ -54,7 +55,7 @@ export function parseOptions(argv: string[], env: NodeJS.ProcessEnv = process.en
     ;({ values } = parseArgs({
       args,
       options: {
-        port: { type: 'string', default: env.SAI_PORT ?? '8787' },
+        port: { type: 'string', default: env.SAI_PORT ?? String(DEFAULT_PORT) },
         host: { type: 'string', default: '127.0.0.1' },
         'feed-dir': { type: 'string', default: env.AGENT_FEED_DIR ?? join(homedir(), '.agent-feed') },
       },
@@ -64,8 +65,9 @@ export function parseOptions(argv: string[], env: NodeJS.ProcessEnv = process.en
     return { ok: false, error: `${err instanceof Error ? err.message : String(err)}\n${USAGE}` }
   }
   if (!LOCAL_HOSTS.has(values.host)) return { ok: false, error: `refusing to bind to ${values.host}: SAI is local-only` }
-  const port = /^\d+$/.test(values.port) ? Number.parseInt(values.port, 10) : Number.NaN
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+  // 判定は shared/port.ts に 1 つだけ置く（Vite の proxy 先も同じ規則で決める。#146）
+  const port = parsePort(values.port)
+  if (port === null) {
     return { ok: false, error: `invalid port: ${values.port}（1〜65535 の整数。--port か SAI_PORT で指定する）` }
   }
   return { ok: true, options: { port, host: values.host, feedDir: resolve(expandHome(values['feed-dir'])) } }

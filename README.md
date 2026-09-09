@@ -36,6 +36,8 @@ sai/
 
 ## 使い方
 
+clone したところで Claude Code を開いているなら、**`/setup-sai`** が下の 1〜3 を代わりにやる（`.claude/skills/setup-sai/SKILL.md`）。フックや `notify` に既に別のものが入っていても、**読んで差分を見せてから足す**ので消えない。「記録が来ない」ときの点検（書き込み無し）にも使える。以下は自分で書くときの正本。
+
 ### 1. フックを向ける
 
 **Claude Code** — `~/.claude/settings.json`（全リポジトリ）か `.claude/settings.json`（そのリポジトリだけ）に。`record.py` の場所は `env` の `SAI_HOME` に1回だけ書き、各フックはそれを参照する:

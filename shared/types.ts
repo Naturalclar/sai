@@ -1,6 +1,8 @@
 // agent-feed の1行と、SAI の API の形。サーバ（server/）と画面（web/src/）が両方ここを import する。
 // フィールドを足すときはここに足す。JSONL の形は feed/record.py が正本。
 
+import type { Skill } from './skills.ts'
+
 export type Agent = 'claude' | 'codex' | 'unknown'
 export type SessionSource = 'payload' | 'rollout' | 'synth' | ''
 
@@ -140,6 +142,12 @@ export interface SessionMeta {
  * GET/PUT /api/sessions/<id>/meta。PUT の body は SessionMeta の一部で、いまの値に重ねる:
  * 省略したキーは据え置き、空文字や null は「消す」。名前を付けるだけ・アーカイブを切り替えるだけ、が互いを消さない
  */
+/** GET /api/sessions/<id>/skills。`/` の候補。Claude 以外は空 */
+export interface SessionSkillsResponse {
+  id: string
+  skills: Skill[]
+}
+
 export interface SessionMetaResponse {
   id: string
   meta: SessionMeta

@@ -326,6 +326,8 @@ Slack のチャット風。1ターンは「自分の入力（`user_text`）→ �
 
 セッションを開いているときは、下の入力欄から**そのセッションに続きの指示を送れる**（Enter で送信、Shift+Enter で改行）。サーバが `cwd` でセッションを非対話モードの CLI で再開して1ターン回す:
 
+入力欄の**先頭で `/` を打つと、そのセッションで使えるスキルの候補**が出る（`@` と同じ操作で、↑↓ で移動、Enter / Tab で確定、Esc で閉じる）。候補は `~/.claude/skills/` と**そのセッションの `cwd` の `.claude/skills/`** から集めるので、worktree ごとに違う。名前でも説明でも絞れる（説明には「issueの優先度をつけて」のような呼び出し文句が入っている）。選ぶと本文が `/<name> ` になるだけで、展開は CLI に任せる（端末に打ち込む経路でも `-p` でも同じように効く）。`/` は先頭のときだけ拾うので、文中のパス（`/Users/…`）では出ない。当たりが無いときも出ないので、Enter はそのまま送信になる。スキルは Claude Code の仕組みなので、Codex のセッションでは何も出ない。
+
 | エージェント | コマンド |
 | --- | --- |
 | Claude Code | `claude -p --resume <session> -- "<text>"` |
@@ -441,6 +443,7 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 | `POST /api/approvals` | 返信中の CLI（`server/approve-mcp.ts`）が許可・質問を預ける。body `{ "id", "tool_name", "input", "tool_use_id"? }`。返信を処理中でないエンティティは `409`。`201` で `{ "approval_id" }` |
 | `GET /api/approvals/<approval_id>?wait=1` | 答えが付いていれば `200` で `{ "behavior": "allow" \| "deny", "updatedInput"?, "message"? }`（渡したら消える）。まだなら `wait=1` で最大 20 秒待って `202`。無ければ `404` |
 | `POST /api/approvals/<approval_id>/answer` | 画面から答える。body `{ "behavior": "allow" \| "deny", "updatedInput"?, "message"? }`。`allow` で `updatedInput` を省けば元の入力のまま。別オリジンは `403`、答え済みは `404` |
+| `GET /api/sessions/<id>/skills?days=90` | `/` の候補になるスキル。`{ "id", "skills": [{ "name", "description", "source": "user" \| "project" }] }`。`~/.claude/skills/` とセッションの `cwd` の `.claude/skills/` から集め、プロジェクト側を先に、同じ名前はプロジェクトが勝つ。Claude 以外は空。窓の中に無いセッションは `404` |
 | `GET /api/sessions/<id>/meta` | 表示名・アーカイブ・返信のモデル・一言の性格。`{ "id", "meta": { "name"?, "archived_at"?, "model"?, "persona"? } }`。無ければ `meta` は `{}` |
 | `PUT /api/sessions/<id>/meta?days=90` | body `{ "name"?: "...", "archived_at"?: "<ISO>", "model"?: "opus", "persona"?: "ISTJ" }` をいまの値に重ねる。省略したキーは据え置き、空文字や `null` は「消す」で、全部消えたらエントリごと消える。知らないキーは捨てる。名前は100文字まで、`archived_at` は読める時刻、`model` は英数字で始まる 64 文字までの名前、`persona` は `shared/persona.ts` にある id（違えば `400`）。窓の中に無いセッションは `404`、別オリジンは `403` |
 | `GET /api/sessions/<id>/icon?v=<mtime>` | アイコン画像そのもの（`image/png` など）。無ければ `404`。`v` がいまのファイルと同じなら `Cache-Control: immutable`、無ければ `no-store` |

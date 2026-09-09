@@ -23,6 +23,7 @@ import type {
   SessionDetailResponse,
   SessionIconResponse,
   SessionMetaResponse,
+  SessionSkillsResponse,
   SessionsResponse,
   SessionSummary,
   SettingsRequest,
@@ -42,6 +43,7 @@ import { SETTINGS_FILE, SettingsStore } from './settings.ts'
 import type { Settings } from './settings.ts'
 import { isLinearWorkspace } from '../shared/refs.ts'
 import { ProcessRunner, replyCommand } from './runner.ts'
+import { SkillStore } from './skills.ts'
 import { alive, RealTmux, realPs, TerminalBusy, TerminalGone, TerminalReplies, typeInto } from './terminal.ts'
 import type { PsFn, Tmux } from './terminal.ts'
 import type { Runner } from './runner.ts'
@@ -68,6 +70,7 @@ export const MAX_SETTINGS_BYTES = 4 * 1024
 const REPLY_SUFFIX = '/reply'
 const META_SUFFIX = '/meta'
 const ICON_SUFFIX = '/icon'
+const SKILLS_SUFFIX = '/skills'
 const PROFILE_PATH = '/api/profile'
 const PROFILE_ICON_PATH = '/api/profile/icon'
 
@@ -209,6 +212,7 @@ export function createApp(
   digester?: Digester,
   auth: Authenticator = new Authenticator(tailscaleWhois()),
   terminal: TerminalDeps = { tmux: new RealTmux(), ps: realPs },
+  skillStore: SkillStore = new SkillStore(),
 ): Handler {
   const distRoot = resolve(distDir)
   // 端末に打ち込んだ返信の「処理中」。子プロセスの方（run）とは別に持ち、画面には合わせて出す
@@ -620,6 +624,7 @@ export function createApp(
     const isReply = path.startsWith(SESSIONS_PREFIX) && path.endsWith(REPLY_SUFFIX)
     const isMeta = path.startsWith(SESSIONS_PREFIX) && path.endsWith(META_SUFFIX)
     const isIcon = path.startsWith(SESSIONS_PREFIX) && path.endsWith(ICON_SUFFIX)
+    const isSkills = path.startsWith(SESSIONS_PREFIX) && path.endsWith(SKILLS_SUFFIX)
     const isAsk = path === APPROVALS_PATH
     const isAnswer = path.startsWith(APPROVALS_PREFIX) && path.endsWith(ANSWER_SUFFIX)
     const isProfile = path === PROFILE_PATH
@@ -661,6 +666,16 @@ export function createApp(
         if (id === null) return error(res, 400, 'bad session id')
         if (method === 'PUT') return await putMeta(req, res, id, parseDays(q.get('days'), 90))
         const payload: SessionMetaResponse = { id, meta: (await metaStore.get(id)) ?? {} }
+        return json(res, payload)
+      }
+      if (isSkills) {
+        const id = sessionIdFrom(path, SKILLS_SUFFIX)
+        if (id === null) return error(res, 400, 'bad session id')
+        const { sessions } = await store.sessions(parseDays(q.get('days'), 90))
+        const session = sessions.find((s) => s.id === id)
+        if (!session) return error(res, 404, 'session not found in window')
+        // スキルは Claude Code の仕組み。Codex には無いので空で返す
+        const payload: SessionSkillsResponse = { id, skills: session.agent === 'claude' ? await skillStore.forCwd(session.cwd) : [] }
         return json(res, payload)
       }
       if (isIcon) {

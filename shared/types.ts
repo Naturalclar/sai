@@ -256,6 +256,19 @@ export interface Replying {
   since: string
   /** 送った文。リロードしても仮バブルに出せる */
   text: string
+  /**
+   * 返信の子プロセスが非0で終わった（#172）。画面はこれを「処理中」ではなく失敗として出す。
+   * `tail` は `reply.log` のそのターンぶんの末尾で、理由（Codex の active writer、CLI が見つからない、など）が入る。
+   * サーバは少しの間だけ持っていて（画面が拾えるように）、そのあと消す
+   */
+  failed?: ReplyFailure
+}
+
+export interface ReplyFailure {
+  /** プロセスの終了コード。シグナルで死んだときは負の値（-15 なら SIGTERM） */
+  code: number
+  /** reply.log のそのターンぶんの末尾（数行、300文字まで） */
+  tail: string
 }
 
 /** エンティティID → 処理中の返信。無ければ空 */

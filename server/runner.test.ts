@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { isAlive, ProcessRunner } from './runner.ts'
+import { failureOf, isAlive, ProcessRunner, tailFrom } from './runner.ts'
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
 /** 300ms 生きて exit する子。node 自身を使う（PATH に依らず必ずある） */
@@ -112,4 +112,65 @@ test('ProcessRunner は replying.json が無い・壊れていても起動する
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
+})
+
+test('tailFrom: offset 以降の末尾を数行だけ返す。読めなければ空', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-tail-'))
+  const log = join(dir, 'reply.log')
+  await writeFile(log, '--- 見出し\n1行目\n2行目\n3行目\n4行目\n')
+  assert.equal(tailFrom(log, 0), '2行目 / 3行目 / 4行目', '末尾 3 行')
+  const offset = '--- 見出し\n1行目\n'.length * 3 // 日本語なので UTF-8 で 3 倍
+  assert.equal(tailFrom(log, offset).includes('見出し'), false, 'offset より前は読まない')
+  assert.equal(tailFrom(join(dir, 'nope.log'), 0), '', '無いファイル')
+  await rm(dir, { recursive: true, force: true })
+})
+
+test('failureOf: 0 は失敗ではない。非0はコード、シグナルは -1', () => {
+  assert.equal(failureOf(0, null, null, 0), null)
+  assert.equal(failureOf(null, null, null, 0), null, 'コードもシグナルも無ければ失敗にしない')
+  assert.deepEqual(failureOf(3, null, null, 0), { code: 3, tail: '' })
+  const bySignal = failureOf(null, 'SIGTERM', null, 0)
+  assert.equal(bySignal?.code, -1)
+  assert.match(bySignal?.tail ?? '', /SIGTERM/)
+})
+
+test('ProcessRunner は非0で終わった返信を、理由つきで少しの間だけ残す（#172）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-fail-'))
+  const log = join(dir, 'reply.log')
+  const runner = new ProcessRunner(log)
+  // stderr に理由を書いて 3 で終わる子
+  await runner.start('F@r', {
+    bin: process.execPath,
+    args: ['-e', 'console.error("thread-store conflict: already has an active writer"); process.exit(3)'],
+    cwd: process.cwd(),
+    text: '着手して',
+  })
+  for (let i = 0; i < 60 && runner.running('F@r'); i++) await wait(50)
+
+  assert.equal(runner.running('F@r'), false, '失敗した分は「処理中」ではない（次の返信を止めない）')
+  const failed = runner.snapshot()['F@r']
+  assert.equal(failed?.text, '着手して')
+  assert.equal(failed?.failed?.code, 3)
+  assert.match(failed?.failed?.tail ?? '', /active writer/, 'reply.log の末尾が理由になる')
+  await rm(dir, { recursive: true, force: true })
+})
+
+test('ProcessRunner は 0 で終わった返信を残さない', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-ok-'))
+  const runner = new ProcessRunner(join(dir, 'reply.log'))
+  await runner.start('S@r', { bin: process.execPath, args: ['-e', 'process.exit(0)'], cwd: process.cwd(), text: 'やって' })
+  for (let i = 0; i < 60 && Object.keys(runner.snapshot()).length > 0; i++) await wait(50)
+  assert.deepEqual(runner.snapshot(), {}, '成功したら消える')
+  await rm(dir, { recursive: true, force: true })
+})
+
+test('失敗した分は replying.json に書かない（引き取ると死んだ pid が残る）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-failstate-'))
+  const state = join(dir, 'replying.json')
+  const runner = new ProcessRunner(join(dir, 'reply.log'), state)
+  await runner.start('F@r', { bin: process.execPath, args: ['-e', 'process.exit(4)'], cwd: process.cwd(), text: 'x' })
+  for (let i = 0; i < 60 && runner.running('F@r'); i++) await wait(50)
+  assert.equal(runner.snapshot()['F@r']?.failed?.code, 4)
+  assert.deepEqual(await readState(state), {}, '失敗の分は書かない')
+  await rm(dir, { recursive: true, force: true })
 })

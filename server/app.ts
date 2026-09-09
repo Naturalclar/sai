@@ -178,7 +178,8 @@ export function revWith(rev: string, replying: ReplyingMap, approvalsKey = '', b
   const ids = Object.keys(replying).sort()
   if (ids.length === 0 && !approvalsKey && !buildStale && !digestKey) return rev
   const h = createHash('sha1')
-  for (const id of ids) h.update(`${id}\n${replying[id]!.since}\n`)
+  // 失敗が付いたときも画面に伝えたい（since は変わらないので、そのままでは rev が動かない）
+  for (const id of ids) h.update(`${id}\n${replying[id]!.since}\n${replying[id]!.failed?.code ?? ''}\n`)
   h.update(`approvals:${approvalsKey}`)
   // ビルドが古いかが変わったら画面に伝えたい（画面は rev が同じなら描き直さない）
   h.update(`stale:${buildStale ? 1 : 0}`)

@@ -269,12 +269,23 @@
   /* バブルの中の「ここからモデルが変わった」。等幅で、本文の上に 1 行 */
   .msg .tag.model { display: inline-block; margin: 0 0 4px; font-family: var(--mono); }
   /* 見出しのモデル。使ったモデル（code）と、返信で使うモデルの選択 */
-  .chat-head .model-pick { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .chat-head .model-pick code .more { color: var(--muted); margin-left: 4px; font-size: 11px; }
-  .chat-head .model-pick .reply-model { display: inline-flex; align-items: center; gap: 4px; }
-  .chat-head .model-pick .custom { display: inline-flex; align-items: center; gap: 6px; }
-  .chat-head .model-pick .custom input { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; font: inherit; font-size: 12px; width: 14em; }
-  .chat-head .model-pick .err { color: var(--claude); }
+  .chat-head .model-tag .more { color: var(--muted); margin-left: 4px; font-size: 11px; }
+  /* 入力欄の、送信ボタンの左のモデル。押すとメニュー（UserMenu と同じ作り）。名前は短くして幅も切る */
+  .reply .row .model-pick { order: 2; position: relative; display: inline-flex; align-items: center; gap: 6px; }
+  .reply .row .model-pick > button { order: 0; margin-left: 0; background: transparent; color: var(--muted); border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px; font: inherit; font-size: 12px; font-weight: 400; max-width: 10em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+  .reply .row .model-pick > button:hover:not(:disabled) { background: var(--hover); color: var(--ink); }
+  .reply .row .model-pick .menu { position: absolute; bottom: calc(100% + 6px); left: 0; min-width: 12em; max-height: 40vh; overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 24px rgba(0, 0, 0, .12); padding: 4px 0; z-index: 3; }
+  .reply .row .model-pick .menu button { display: block; width: 100%; text-align: left; margin-left: 0; padding: 6px 12px; background: transparent; border: 0; border-radius: 0; color: var(--ink); font: inherit; font-size: 13px; font-weight: 400; white-space: nowrap; cursor: pointer; }
+  .reply .row .model-pick .menu button:hover { background: var(--hover); }
+  .reply .row .model-pick .menu button.picked { font-weight: 700; }
+  .reply .row .model-pick .menu button .why { color: var(--muted); font-size: 11px; margin-left: 6px; }
+  .reply .row .model-pick .err { color: var(--claude); font-size: 11px; }
+  .modal.model-name { max-width: 26em; display: flex; flex-direction: column; gap: 8px; }
+  .modal.model-name input { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: inherit; }
+  .modal.model-name .note { color: var(--muted); font-size: 12px; }
+  .modal.model-name .err { color: var(--claude); font-size: 12px; }
+  .modal.model-name .actions { display: flex; align-items: center; gap: 10px; }
+  .modal.model-name .actions button[type="submit"] { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 5px 12px; font: inherit; font-weight: 600; cursor: pointer; }
   .tag.mode { background: color-mix(in srgb, var(--muted) 18%, transparent); color: var(--muted); font-family: var(--mono); font-weight: 600; }
   .tag.mode.loud { background: color-mix(in srgb, var(--claude) 18%, transparent); color: var(--claude); }
   .tag.archived { background: color-mix(in srgb, var(--muted) 18%, transparent); color: var(--muted); font-weight: 600; }

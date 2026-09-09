@@ -8,6 +8,7 @@ import { useSkills } from './useSkills'
 import { useAttachments } from './useAttachments'
 import { AttachmentStrip } from './AttachmentStrip'
 import { IconButton } from './IconButton'
+import { ReplyModelPicker, type ReplyModelProps } from './ReplyModelPicker'
 import { PhotoMark } from './PhotoMark'
 import { ATTACHMENT_MAX_COUNT } from '../../shared/attachments.ts'
 import { NOT_IN_HISTORY, canGoBack, canGoForward, stepHistory } from './replyHistory'
@@ -51,8 +52,8 @@ interface Props {
   onSend: (text: string, attachments: string[]) => void | boolean | Promise<void | boolean>
   /** 本文が空でないかが変わったら知らせる。FeedView は入力中に既定の返信先を動かさないために使う */
   onDraft?: (drafting: boolean) => void
-  /** このセッションの返信で使うモデル（設定があれば）。placeholder に添える */
-  replyModel?: string
+  /** 送信ボタンの左に出すモデルの選択。渡さなければ出さない（返信先が一覧に無いフィードの候補など） */
+  model?: ReplyModelProps
   /** `/` でスキルの候補を出す返信先（エンティティID）。渡さなければ `/` はただの文字 */
   skillsId?: string
   /** 画像を預ける先（エンティティID）。渡さなければ画像は添えられない */
@@ -65,7 +66,7 @@ interface Props {
 const NO_HISTORY: readonly string[] = []
 
 /** 入力欄。Enter で送信、Shift+Enter で改行。IME 変換中の Enter は送らない */
-export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onDraft, replyModel, skillsId, attachId, history = NO_HISTORY, mention }: Props) {
+export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onDraft, model, skillsId, attachId, history = NO_HISTORY, mention }: Props) {
   const [text, setText] = useState('')
   const attach = useAttachments(attachId)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -381,12 +382,14 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
               ? mention
                 ? `#${repo} は前の返信を処理中${busySince && elapsedLabel(busySince, now) ? `（${elapsedLabel(busySince, now)}）` : ''}。@ で別のセッションに返信できます`
                 : `前の返信を処理中${busySince && elapsedLabel(busySince, now) ? `（${elapsedLabel(busySince, now)}）` : ''}。終わるまで待ってください`
-              : `#${repo} に返信（${replyModel ? `${replyModel} で回す。` : ''}Enter で送信、Shift+Enter で改行）`
+              : `#${repo} に返信（Enter で送信、Shift+Enter で改行）`
           }
           rows={1}
           // フィードでは送信中でも別の返信先へ打てるよう入力欄は止めない（送信ボタンだけ止める）
           disabled={blocked && !mention}
         />
+        {/* 送信ボタンの左。textarea が 1 行を占めるので、画像ボタンと並んで下の行に入る */}
+        {model && <ReplyModelPicker key={model.id} {...model} />}
         <button
           type="submit"
           disabled={blocked || attach.busy || (!(mention?.picked ? stripMention(text, mention.picked.label) : text).trim() && attach.items.length === 0)}

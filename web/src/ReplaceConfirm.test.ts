@@ -2,10 +2,10 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { showProcessOption } from './replyOptions.ts'
 
-test('開いている Codex では「別プロセスで送る」を出さない（#160）', () => {
+test('別経路が使えなければ「端末を使わず送る」を出さない', () => {
   assert.equal(showProcessOption({ canProcess: false }), false)
 })
 
-test('別プロセスで再開できる場合は選択肢を出す', () => {
+test('resume または queue が使える場合は選択肢を出す', () => {
   assert.equal(showProcessOption({ canProcess: true }), true)
 })

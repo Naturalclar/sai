@@ -24,6 +24,7 @@ let feedFile: string
 /** 行の cwd。フィードのディレクトリの下に置くと store が「SAI 自身の雑音」として読み飛ばすので、別の場所 */
 let work: string
 const started: { id: string; cmd: ReplyCommand }[] = []
+const queued: ReplyCommand[] = []
 const runner: Runner = { running: () => false, snapshot: () => ({}), async start(id, cmd) { started.push({ id, cmd }) } }
 
 const IDLE = '──────\n❯ Try "refactor <filepath>"\n──────\n'
@@ -83,6 +84,10 @@ before(async () => {
       replies: new TerminalReplies(),
       alive: (pid) => alivePids.has(pid),
       codexWriterActive: async (session) => session === 'X1' || session === 'X2',
+      codexQueue: async (cmd) => {
+        if (cmd.text === '失敗') throw new Error('queue rejected')
+        queued.push(cmd)
+      },
     },
   )
   server = createServer((req, res) => void app(req, res))
@@ -212,30 +217,36 @@ test('返信: 端末に打てない 409 には can_process が付き、via: proc
   tmux.screen = IDLE
 })
 
-test('返信: 開いている Codex は active writer と競合する別プロセスへフォールバックしない（#160）', async () => {
+test('返信: 開いている Codex は active writer と競合する resume ではなく queue へ送る', async () => {
   started.length = 0
+  queued.length = 0
   tmux.calls.length = 0
   tmux.screen = '› 打ちかけ\n  gpt-5.6-sol medium · /tmp/repo\n'
 
-  // tmux に打ち込めない場合も「別プロセスで送る」は提示しない
+  // tmux に打ち込めなければ queue の選択肢を提示する
   let res = await post('X1@r', 'x')
   assert.equal(res.status, 409)
   let body = (await res.json()) as ReplyError
   assert.equal(body.code, 'terminal_typed')
-  assert.equal(body.can_process, false)
+  assert.equal(body.can_process, true)
 
-  // API を直接 via: process で呼んでも codex exec resume は立てない
+  // API を via: process で呼ぶと、名前は互換のまま active Codex には queue する
   res = await post('X1@r', 'x', { via: 'process' })
-  assert.equal(res.status, 409)
-  body = (await res.json()) as ReplyError
-  assert.equal(body.code, 'codex_active')
+  assert.equal(res.status, 202)
+  assert.equal(((await res.json()) as ReplyResponse).via, 'queue')
+  assert.deepEqual(queued[0]?.args, ['queue', '--thread', 'X1', '--message', 'x'])
 
-  // tmux 外（Codex アプリなど）で pid が生きている場合も即時に理由を返す
+  // queue 自体が失敗したら 202 にせず、CLI の理由を画面へ返す
+  res = await post('X2@r', '失敗')
+  assert.equal(res.status, 500)
+  assert.match(((await res.json()) as ReplyError).error, /queue rejected/)
+  assert.equal(queued.length, 1)
+
+  // tmux 外（Codex アプリなど）で開いていても queue で会話へ届く
   res = await post('X2@r', 'x')
-  assert.equal(res.status, 409)
-  body = (await res.json()) as ReplyError
-  assert.equal(body.code, 'codex_active')
-  assert.match(body.error, /別の画面で開いている/)
+  assert.equal(res.status, 202)
+  assert.equal(((await res.json()) as ReplyResponse).via, 'queue')
+  assert.equal(queued.length, 2)
   assert.equal(started.length, 0)
 
   // 閉じた Codex は従来どおり別プロセスで再開できる

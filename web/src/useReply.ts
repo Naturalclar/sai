@@ -33,7 +33,7 @@ export function replyFailureMessage(failed: NonNullable<Replying['failed']>): st
 
 /**
  * 端末に打ち込めなくて送れなかった。人にどうするかを聞く（#117、#157）。
- * typed: 打ちかけがある（「消して送る」か「別プロセスで送る」）。process: 消せなかった・ダイアログ中・入力欄が読めない（「別プロセスで送る」だけ）
+ * typed: 打ちかけがある（「消して送る」か「端末を使わず送る」）。process: 消せなかった・ダイアログ中・入力欄が読めない（後者だけ）
  */
 export interface ReplaceConfirm {
   id: string
@@ -44,7 +44,7 @@ export interface ReplaceConfirm {
   typed: string
   /** 端末に打てない理由（process のとき。サーバの文） */
   reason: string
-  /** 別プロセスで再開できる。開いている Codex は active writer と競合するので false */
+  /** 端末を使わない経路がある（Claude は resume、active Codex は queue） */
   canProcess: boolean
 }
 
@@ -130,9 +130,9 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
       setSent((list) => list.filter((s) => s !== entry))
       // 端末に打ち込めなかった（打ちかけ・ダイアログ中・入力欄が読めない）。失敗ではなく、どうするかを聞く。
       // 打ちかけがあるだけなら「消して送る」も出す。「消して送る」で送り直してなお残っている（消せない端末）、
-      // ダイアログ中、入力欄不明なら「別プロセスで送る」だけ（#157。SAI から何も送れない、にしない）
+      // ダイアログ中、入力欄不明なら「端末を使わず送る」だけ（#157。SAI から何も送れない、にしない）
       if (err instanceof ApiError) {
-        // Codex は別プロセスへ逃がせないが、tmux の打ちかけを確認して消す道は残す。
+        // 打ちかけを消すか、端末を使わない経路（Claude の resume / Codex の queue）を選べる。
         if (err.code === 'terminal_typed' && !options.replaceTyped) {
           setConfirm({ id, kind: 'typed', text, typed: err.typed ?? '', reason: err.message, canProcess: err.canProcess })
           return 'confirm'
@@ -157,7 +157,7 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
     const { id, text } = confirm
     return send(id, text, { replaceTyped: true })
   }
-  /** 確認に「別プロセスで送る」と答えた。端末を見ずに -p で同じ本文を送る */
+  /** 確認に「端末を使わず送る」と答えた。サーバが resume / queue を選んで同じ本文を送る */
   const confirmProcess = async (): Promise<SendOutcome> => {
     if (!confirm) return 'failed'
     const { id, text } = confirm

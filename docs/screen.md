@@ -41,7 +41,7 @@ Slack のチャット風。1ターンは「自分の入力（`user_text`）→ �
 | エージェント | コマンド |
 | --- | --- |
 | Claude Code | `claude -p --resume <session> -- "<text>"` |
-| Codex CLI | `codex exec resume <session> -- "<text>"` |
+| Codex CLI | 閉じていれば `codex exec resume`、開いていれば `codex queue --thread ... --message ...` |
 
 **返信のモデル**は見出しの「返信:」で選べる（そのセッションで出てきたモデル、Claude なら別名 `fable` / `opus` / `sonnet` / `haiku`、あとは自由入力。「既定」に戻せる）。選ぶと `session-meta.json` の `model` に残り、次の返信から Claude は `--model <m>`、Codex は `-m <m>` が付く（`SAI_CLAUDE_ARGS` に `--model` があってもセッションの設定が後ろに来て勝つ）。見出しの `claude-fable-5-1` のような表示は**実際に使われた**モデル（記録から）で、設定とは別。返信が終わって行が届けば表示のほうも変わる。
 
@@ -57,23 +57,23 @@ Slack のチャット風。1ターンは「自分の入力（`user_text`）→ �
 
 セッションが **tmux のペインで開いていれば、返信はそのペインに打ち込む**（`tmux load-buffer` → `paste-buffer -p` → `send-keys Enter`）。別プロセスを立てないので、端末に入力と返答がそのまま出て、フックが普通のターンとして JSONL に足す。開いているセッションに 1 ターン足すだけなのでプロンプトキャッシュも効き、トークンも一番少ない。見出しに「端末」の印が付き、`POST /reply` の応答は `via: "terminal"`。
 
-「開いているか」は行の `pane`（フックが受け取る `TMUX_PANE`）と `pid`（Claude は `CLAUDE_PID`、Codex は notify の親）で見る。一番新しい行に両方あり、`pid` が生きていれば端末で開いている。打ち込む前に、ペインが今もあってその `pid` がペインのプロセスの子孫であること（別のセッションに打ち込まない）、入力欄が空でダイアログ中でないこと（打ちかけの文字に混ぜない、許可の答えにしない）を確かめ、だめなら `409` で何も打たない。ペインが消えていれば下の別プロセスに戻る（writer lock がある Codex は `409`）。
+「開いているか」は行の `pane`（フックが受け取る `TMUX_PANE`）と `pid`（Claude は `CLAUDE_PID`、Codex は notify の親）で見る。一番新しい行に両方あり、`pid` が生きていれば端末で開いている。打ち込む前に、ペインが今もあってその `pid` がペインのプロセスの子孫であること（別のセッションに打ち込まない）、入力欄が空でダイアログ中でないこと（打ちかけの文字に混ぜない、許可の答えにしない）を確かめ、だめなら `409` で何も打たない。ペインが消えていれば、Claude と閉じた Codex は別プロセス、開いている Codex は queue に戻る。
 
 打ちかけの文字があるときだけ（`409` の `code: terminal_typed`、`typed` にその文）、画面が「端末の入力欄に打ちかけの文字があります。これを消して送りますか？」と確認する。「消して送る」は `replace_typed: true` で送り直し、サーバは `C-u` で入力欄を空にし、**もう一度 `capture-pane` して本当に空になったときだけ**貼る（キーが効かない端末で文を混ぜない）。Claude Code は `C-u` で 1 回で空になり「Ctrl+Y to paste deleted text」と出るので端末側で戻せる。消した文は `reply.log` にも残す。許可・質問のダイアログ中（`code: terminal_dialog`）と入力欄が見つからないとき（`terminal_unknown`）は確認を出さず、消させない。 `C-u` は Claude Code も Codex も**いまの行しか消さない**ので、複数行の打ちかけは空になるまで繰り返す（上限 20 回。画面が変わらなくなったら止めて `409`）。消した全文は `reply.log` に残す（`Ctrl+Y` で戻せるのは最後の 1 行だけ）。空の入力欄に出る placeholder（Claude Code の `Try "…"`、Codex の `Ask Codex to do anything`）は打ちかけではないので、そのまま打ち込む。入力欄は区切り線（`──`）の直上の `❯` の行で見る。`/` で始めると出るスラッシュコマンドの候補メニューは選択行にも `❯` が付くが、区切り線の下なので入力欄とは読まない。メニューが開いていれば `Escape` で閉じてから `C-u` を送り、`C-u` のあと画面が変わらないときは描き直しの遅れを疑って何回か見直してから「消せない」と決める。
 
-**Claude Code は端末に打ち込めなくても送れる。** 打ちかけを消せなかった、許可・質問のダイアログ中、入力欄が読めない、のどれでも `409` の body に `can_process: true` が付き、画面の確認に「**別プロセスで送る**」が出る（打ちかけがあるだけなら「消して送る」と並ぶ）。押すと `via: "process"` で送り直し、サーバは端末を見ずに下の `claude -p --resume` で回す（#117 より前の経路そのもの）。注意: 端末には出ず、返答は SAI と JSONL にだけ届く。端末で開いたままの会話はそのターンを知らないので、次に端末で打つとそのターンを飛ばした会話になる（transcript には両方書かれる）。`reply.log` に「別プロセスで回す（画面の指定 via: process）」と残す。
+**端末に打ち込めなくても送れる。** 打ちかけを消せなかった、許可・質問のダイアログ中、入力欄が読めない、のどれでも `409` の body に `can_process: true` が付き、画面の確認に「**端末を使わず送る**」が出る（打ちかけがあるだけなら「消して送る」と並ぶ）。押すと `via: "process"` で送り直す。Claude は下の `claude -p --resume`、開いている Codex は `codex queue` を使う。
 
-**開いている Codex は別プロセスへフォールバックしない。** Codex は1つのスレッドを別プロセスから `codex exec resume` すると、`thread-store conflict: ... already has an active writer` で失敗する。`CODEX_HOME/thread-writer-locks/<session>.lock`（補欠で記録時の pid）がある Codex は、tmux のペインへ直接打ち込める場合だけ返信できる。打ちかけがあれば「消して送る」は出すが「別プロセスで送る」は出さない。tmux 外（Codex アプリなど）で開いている、ダイアログ中、入力欄が読めない、ペインが途中で消えた場合は `409`（`code: codex_active` または端末の理由）を即時に返す。セッションを閉じれば、下の別プロセスで再開できる。
+**開いている Codex は queue へ送る。** 同じスレッドを別プロセスから `codex exec resume` すると、`thread-store conflict: ... already has an active writer` で失敗する。`CODEX_HOME/thread-writer-locks/<session>.lock`（補欠で記録時の pid）があるときは `codex queue --thread <session> --message <text>` を実行し、active writerを奪わず開いている会話へ足す。queueコマンドの終了まで待つので、受付に失敗したのに `202` を返すことはない。応答の `via` は `queue`。
 
 - 打ち込んだ返信の許可ダイアログは**端末側に出る**（下の `--permission-prompt-tool` は使わない）。SAI には待ちの行で「許可待ち」が出るが、答えるのは端末
 - 「処理中」は、その後にターン完了の行が届いたら解消（30 分届かなければ諦める）
 - **処理中でも打ち込める。** 端末で開いている間は、前のターンが動いていても送れる（Claude Code の TUI が次のターンに回す。端末で人が続けて打つのと同じ）。止めるのは別プロセス（`-p`）の経路だけで、そちらは二重起動になるので `409`。長いターンの間フィードから何も送れないのを避けるため（#170）
-- `SAI_TERMINAL=0` で切る（Claude と閉じた Codex は常に別プロセス。writer lock がある Codex は送れない）。`SAI_TMUX_BIN` で `tmux` の実行ファイルを差し替え
+- `SAI_TERMINAL=0` で切る（Claude と閉じた Codex は別プロセス、開いている Codex は queue）。`SAI_TMUX_BIN` で `tmux` の実行ファイルを差し替え
 - tmux 以外の端末と Claude Desktop には届かない（下のとおり別プロセスで回る）
 
-### 端末で開いていないセッションは別プロセスで回す
+### Claude と閉じた Codex は別プロセスで回す
 
-**別プロセスで回した返信と返答は、そのセッションを開いている端末や Desktop の画面には出ない。** SAI には出るし履歴にも残るが、開いている対話側は会話をメモリに持っていて、外で回ったターンを読み直さない。入力欄の上にも短い注意（「別プロセスで回す。端末には出ない」）を出している。確かめたこと（Claude Code 2.1.258 / Codex CLI 0.139）:
+**`resume` で別プロセスから回した返信と返答は、そのセッションを開いている端末や Desktop の画面には出ない。** SAI には出るし履歴にも残るが、開いている対話側は会話をメモリに持っていて、外で回ったターンを読み直さない。開いている Codex に使う `queue` はこの制約の対象外で、その会話へ直接届く。確かめたこと（Claude Code 2.1.258 / Codex CLI 0.139）:
 
 - `claude -p --resume <session>` は同じセッションのトランスクリプト（`~/.claude/projects/<project>/<session>.jsonl`）に**追記する**。セッション ID も同じで、別セッションには分岐しない（`--fork-session` を付けたときだけ分岐する）
 - `codex exec resume <session>` も同じ rollout ファイル（`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`）に追記する。新しい rollout は作らない
@@ -81,7 +81,7 @@ Slack のチャット風。1ターンは「自分の入力（`user_text`）→ �
 - 開いたままの端末で続きを打つと、その端末は SAI のターンを知らないまま進む。Claude Code の資料も「同じセッションを2つの端末で再開すると、両方のメッセージが1つのトランスクリプトに交互に入る」としている（[Manage sessions](https://code.claude.com/docs/en/sessions)）。壊れはしないが、対話側のエージェントは SAI で頼んだことを覚えていない
 - Claude Desktop は CLI と「別のセッション履歴」を持つ（[Desktop の資料](https://code.claude.com/docs/en/desktop)）。`settings.json` は共有なのでフックは動いて SAI には出るが、Desktop のセッションを `claude -p --resume` で再開できるか、Desktop の画面に出るかは未確認（この Mac に Desktop が無い）
 
-対話側にも出したいなら、SAI から送るのではなく端末側で打つしかない。SAI からの返信は「端末を離れているときに1ターン進めておく」用途で、戻ったら開き直す、が前提。
+Claude の対話側にも出したいなら、SAI から送るのではなく端末側で打つしかない。Codex は開いていれば queue が同じ会話へ届き、閉じていれば別プロセスで再開する。
 
 「処理中」の正はサーバ（子プロセスが exit するまで `replying` として `GET /api/sessions` / `GET /api/sessions/<id>` / `GET /api/feed` に載る）。画面はそれを見て仮バブルと閉じた入力欄を出すので、リロードしても別タブでも同じ状態になり、一覧のそのセッションには「返信中」が付く。1分を超えると仮バブルに経過（「処理中 3分」）が出て、5分を超えると色が変わる。`replying` が変わると `rev` も変わるので、JSONL が増えなくても画面は描き直す。プロセスが終わったのに行が増えなかったとき（`claude -p` が許可待ちで落ちた、フックが失敗した）は「返信は終わったが記録が増えなかった」と出て入力欄が開く。手がかりは `~/.agent-feed/reply.log`。`session_source` が `synth` のセッション、`unknown-<日付>` に丸められたセッション、`agent` が `unknown` のセッションは ID が合成なので再開できず、入力欄の代わりにその旨が出る。
 

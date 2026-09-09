@@ -416,7 +416,7 @@ export interface ReplyRequest {
   replace_typed?: boolean
   /**
    * 送り方。省略（auto）は「端末で開いていればペインに打ち込み、だめなら 409」。
-   * process は端末を見ずに別プロセス（`claude -p --resume` / `codex exec resume`）で回す。
+   * process は端末を見ずに送る（Claude と閉じた Codex は resume、開いている Codex は queue）。
    * 端末に打ちかけが消せない・ダイアログ中・入力欄が読めないときの逃げ道（#157）。端末には出ない
    */
   via?: 'auto' | 'process'
@@ -444,11 +444,10 @@ export interface AttachmentResponse {
  * - terminal_typed: 端末の入力欄に打ちかけの文字がある（`typed` にその文）。消して送るかを確認できる
  * - terminal_dialog: 端末が許可や質問のダイアログを出している（消させない）
  * - terminal_unknown: 入力欄が見つからない（別のプログラムに打ち込まない）
- * - codex_active: Codex が別の画面で開いており、別プロセスの resume は active writer と競合する
  */
 export interface ReplyError {
   error: string
-  code?: 'terminal_typed' | 'terminal_dialog' | 'terminal_unknown' | 'codex_active'
+  code?: 'terminal_typed' | 'terminal_dialog' | 'terminal_unknown'
   typed?: string
   /** true なら `via: 'process'` で送り直せば端末を見ずに別プロセスで回せる（端末に打てない 409 に付く） */
   can_process?: boolean
@@ -467,8 +466,8 @@ export interface ReplyResponse {
   accepted: true
   id: string
   agent: Agent
-  /** terminal: 開いている tmux のペインに打ち込んだ。process: -p で別プロセスを立てた */
-  via: 'terminal' | 'process'
+  /** terminal: tmux に打ち込んだ。process: 非対話で再開した。queue: 開いている Codex に足した */
+  via: 'terminal' | 'process' | 'queue'
   session: string
   cwd: string
 }

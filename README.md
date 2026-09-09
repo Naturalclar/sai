@@ -420,6 +420,24 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 
 候補は**サイドバーの一覧に出ているセッション**（絞り込みと日数はサイドバーのもの。表示名・アイコンが付いていればそれで出る）を先に、一覧に無くてフィードにだけ出ている行のセッションを後ろに並べる。リポジトリ / ブランチ / タイトルで絞れる。一覧の取得は画面全体で 1 回で、サイドバーとフィードが同じ結果を見る。
 
+### 変更内容の diff を見る
+
+チャット見出しの差分のボタンを押すと、**そのセッションの worktree の差分**がその場で出る（GitHub を開かなくてよい）。**ローカルの git を読むだけ**で、GitHub の API もトークンも使わないので、PR が立つ前の途中の作業でも見られる。
+
+| | 何を | git |
+| --- | --- | --- |
+| ブランチの差分 | GitHub の PR で見るのと同じもの | `git diff <base>...HEAD`（merge-base から） |
+| 未コミット | まだコミットしていない書き換え | `git diff HEAD` |
+| 追跡外 | 新しく置かれたファイル（名前だけ） | `git ls-files --others --exclude-standard` |
+
+比べる相手（base）は `origin/HEAD` → `origin/main` → `origin/master` → `main` → `master` の順にローカルで探す（ネットワークは叩かない）。**`origin/HEAD` は bare clone だと未設定**なので、この順で落ちるようにしてある。`?base=` で他のブランチやタグに変えられる。
+
+- **読むだけ。** `rev-parse` / `symbolic-ref` / `merge-base` / `diff` / `ls-files` しか呼ばない（`server/diff.ts` の `RealGit` が他を弾く）。`cwd` はセッションの行から取り、リクエストからは受けない
+- 3 秒のポーリングには乗せない。ボタンを押したときに 1 回だけ読む
+- 大きすぎる差分は本文を落とす（1 ファイル 200KB、1 セクション 2MB）。**ファイルの一覧は必ず全部返す**ので何が変わったかは分かり、`remote` があれば GitHub の compare へのリンクを添える
+- worktree が別のブランチに移っていれば、セッションの `branch` と今の `HEAD` の食い違いを出す
+- `cwd` が消えている・git のリポジトリでないときは `404`
+
 ### 一言コメントと性格（digest）
 
 エージェントの返答は長い説明になりがちで、フィードを眺めるには重い。`SAI_DIGEST=1` でサーバを起動すると、**新しく届いたターン完了の行**ごとに本文を **1〜2 文の一言コメント**（「PR #35 マージ、返信の二重起動を直したやつ。次は #31 やる？」のような）に言い換えて、バブルの本文をそれにする。元の本文は消えず、一言の横の「詳細」で今までどおり Markdown で開ける。自分の入力と待ちバブルは変えない。一覧の「最後の発言」も一言があればそれになる。
@@ -454,6 +472,7 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 | `POST /api/approvals/<approval_id>/answer` | 画面から答える。body `{ "behavior": "allow" \| "deny", "updatedInput"?, "message"? }`。`allow` で `updatedInput` を省けば元の入力のまま。別オリジンは `403`、答え済みは `404` |
 | `GET /api/sessions/<id>/skills?days=90` | `/` の候補になるスキル。`{ "id", "skills": [{ "name", "description", "source": "user" \| "project" }] }`。`~/.claude/skills/` とセッションの `cwd` の `.claude/skills/` から集め、プロジェクト側を先に、同じ名前はプロジェクトが勝つ。Claude 以外は空。窓の中に無いセッションは `404` |
 | `GET /api/sessions/<id>/permissions?days=90` | そのセッションの `cwd` に効いている許可ルール。`{ "id", "cwd", "agent", "mode", "sources", "rules" }`。`rules` は評価順（`deny` → `ask` → `allow`）。**読むだけ**で、パスは `cwd` から固定で組み立てる。Codex は `sources` / `rules` とも空 |
+| `GET /api/sessions/<id>/diff?base=&days=90` | そのセッションの worktree の差分（`git` を読むだけ）。`branch` が `base...HEAD`、`working` が未コミット、`untracked` は追跡外のファイル名。大きすぎれば `truncated`。`cwd` が git のリポジトリでなければ `404` |
 | `GET /api/sessions/<id>/meta` | 表示名・アーカイブ・返信のモデル・一言の性格。`{ "id", "meta": { "name"?, "archived_at"?, "model"?, "persona"? } }`。無ければ `meta` は `{}` |
 | `PUT /api/sessions/<id>/meta?days=90` | body `{ "name"?: "...", "archived_at"?: "<ISO>", "model"?: "opus", "persona"?: "ISTJ" }` をいまの値に重ねる。省略したキーは据え置き、空文字や `null` は「消す」で、全部消えたらエントリごと消える。知らないキーは捨てる。名前は100文字まで、`archived_at` は読める時刻、`model` は英数字で始まる 64 文字までの名前、`persona` は `shared/persona.ts` にある id（違えば `400`）。窓の中に無いセッションは `404`、別オリジンは `403` |
 | `GET /api/sessions/<id>/icon?v=<mtime>` | アイコン画像そのもの（`image/png` など）。無ければ `404`。`v` がいまのファイルと同じなら `Cache-Control: immutable`、無ければ `no-store` |
@@ -493,6 +512,7 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 | `SAI_PORT` | サーバの既定ポート（既定 `8787`） |
 | `SAI_TERMINAL` | `0` で「tmux のペインに打ち込む」を切り、返信を常に別プロセスで回す |
 | `SAI_TMUX_BIN` | ペインに打ち込むときの `tmux` の実行ファイル（既定は PATH の `tmux`） |
+| `SAI_GIT_BIN` | 差分を読むときの `git` の実行ファイル（既定は PATH の `git`）。読むだけのコマンドしか呼ばない |
 | `SAI_CLAUDE_BIN` | 返信で起動する `claude` の実行ファイル（既定は PATH の `claude`）。launchd などで PATH が最小のときに |
 | `SAI_CODEX_BIN` | 同じく `codex` |
 | `SAI_CLAUDE_ARGS` | 返信の `claude -p --resume` に足す引数。空白区切りで、空白を含む値は `"…"` か `'…'` で囲む。例: `--allowedTools "Bash(gh *)"`、`--permission-mode acceptEdits`。「返信と許可」の項を読んでから |

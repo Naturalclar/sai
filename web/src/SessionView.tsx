@@ -25,6 +25,7 @@ import { ArchiveButton } from './ArchiveButton'
 import { ArchivedTag } from './ArchivedTag'
 import { PermissionModeTag } from './PermissionModeTag'
 import { PermissionsButton } from './PermissionsButton'
+import { DiffButton } from './DiffButton'
 import type { PaneProps } from './App'
 
 const NO_REPLYING = {}
@@ -76,6 +77,7 @@ export function SessionView({ id, onStatus, onOpenSidebar, linear, settings }: {
           {/* 合成 ID は集計の切れ方で付け先がずれるのでアーカイブできない */}
           {s.session_source !== 'synth' && <ArchiveButton key={`${s.id}:${s.archived ? 1 : 0}`} id={s.id} archived={Boolean(s.archived)} />}
           <MetaEditor key={s.id} id={s.id} meta={s.meta} icon={s.icon} />
+          <DiffButton key={`diff:${s.id}`} id={s.id} />
           {s.agent === 'claude' && <PermissionsButton key={s.id} id={s.id} />}
           {/* 一言が有効なときだけ。このセッションの性格（無ければヘッダの既定に従う） */}
           {settings?.digest && <SessionPersonaSelect key={s.id} id={s.id} value={s.meta?.persona} defaultPersona={settings.persona} />}

@@ -79,6 +79,7 @@ export function aggregate(rows: FeedRow[]): SessionSummary[] {
     const repos = orderedUnique(items.map((r) => r.repo ?? ''))
     // どのリポジトリか。古い行には project が無いので remote から補う（shared/project.ts）
     const projects = orderedUnique(items.map(rowProject))
+    const remotes = orderedUnique(items.map((r) => (r.remote ?? '').trim())).filter(Boolean)
     const branches = orderedUnique(items.map((r) => r.branch ?? ''))
     const agents = orderedUnique(items.map((r) => (r.agent ?? 'unknown') as Agent))
     const sources = orderedUnique(items.map((r) => (r.session_source ?? '') as SessionSource))
@@ -107,6 +108,7 @@ export function aggregate(rows: FeedRow[]): SessionSummary[] {
       repos: repos.filter(Boolean),
       project: projects[projects.length - 1] ?? '',
       projects: projects.filter(Boolean),
+      remote: remotes[remotes.length - 1] ?? '',
       branch: branches[branches.length - 1] ?? '',
       branches: branches.filter(Boolean),
       cwd: last.cwd ?? '',

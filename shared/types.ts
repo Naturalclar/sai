@@ -84,6 +84,8 @@ export interface SessionSummary {
   /** どのリポジトリか（`Naturalclar/sai`）。一覧の絞り込みと表示はこちら。全部は projects に */
   project: string
   projects: string[]
+  /** origin の URL（`https://github.com/Naturalclar/sai`）。一番新しい行のもの。無ければ空。差分の compare リンクに使う */
+  remote: string
   branch: string
   branches: string[]
   cwd: string
@@ -158,6 +160,50 @@ export interface SessionMeta {
  * GET/PUT /api/sessions/<id>/meta。PUT の body は SessionMeta の一部で、いまの値に重ねる:
  * 省略したキーは据え置き、空文字や null は「消す」。名前を付けるだけ・アーカイブを切り替えるだけ、が互いを消さない
  */
+/** `git diff --name-status` の1文字の読み方。`binary` は numstat が `-` のとき */
+export type DiffStatusCode = 'added' | 'modified' | 'deleted' | 'renamed' | 'binary' | 'other'
+
+/** 変わったファイル1つぶんの見出し（`--numstat` と `--name-status`）。本文が切れていてもこれは全部返す */
+export interface DiffFileStat {
+  path: string
+  /** リネーム前。無ければ省略 */
+  old_path?: string
+  status: DiffStatusCode
+  added: number
+  removed: number
+}
+
+/** 差分のひとまとまり。patch は unified diff そのもの（画面が shared/diff.ts で木にする） */
+export interface DiffSection {
+  files: DiffFileStat[]
+  patch: string
+  /** 大きすぎて本文の一部を落とした。files は全部入っている */
+  truncated: boolean
+}
+
+/**
+ * GET /api/sessions/<id>/diff?base=。そのセッションの worktree を git で読むだけ（#171）。
+ * cwd が git のリポジトリでなければ 404。3 秒のポーリングには載せない（開いたときだけ取る）
+ */
+export interface SessionDiffResponse {
+  id: string
+  cwd: string
+  /** 比べた相手（`origin/main`）。決まらなければ空で、branch は空になる */
+  base: string
+  /** いまその worktree がいるブランチ（detached なら短い SHA） */
+  head: string
+  /** セッションの行の branch。head と違えば画面が注意を出す */
+  session_branch: string
+  /** GitHub の compare の URL（remote があれば）。切れているときの逃げ道 */
+  compare_url: string
+  /** base...HEAD。GitHub の PR で見るのと同じもの */
+  branch: DiffSection
+  /** HEAD からの未コミット */
+  working: DiffSection
+  /** 追跡外のファイル名（中身は出さない） */
+  untracked: string[]
+}
+
 /** GET /api/sessions/<id>/skills。`/` の候補。Claude 以外は空 */
 export interface SessionSkillsResponse {
   id: string

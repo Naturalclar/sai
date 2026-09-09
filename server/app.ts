@@ -22,10 +22,11 @@ import type {
   ReplyRequest,
   ReplyResponse,
   SessionDetailResponse,
+  SessionDiffResponse,
   SessionIconResponse,
   SessionMetaResponse,
-  SessionSkillsResponse,
   SessionPermissionsResponse,
+  SessionSkillsResponse,
   SessionsResponse,
   SessionSummary,
   SettingsRequest,
@@ -42,6 +43,9 @@ import { DIGEST_FILE, DigestStore, digesterFromEnv } from './digest.ts'
 import type { Digester } from './digest.ts'
 import { META_FILE, MetaStore } from './meta.ts'
 import { collectPermissions } from './permissions.ts'
+import { compareUrl } from '../shared/diff.ts'
+import { NotAGitRepo, RealGit, sessionDiff } from './diff.ts'
+import type { Git } from './diff.ts'
 import { PROFILE_FILE, ProfileStore } from './profile.ts'
 import { SETTINGS_FILE, SettingsStore } from './settings.ts'
 import type { Settings } from './settings.ts'
@@ -76,6 +80,7 @@ const META_SUFFIX = '/meta'
 const ICON_SUFFIX = '/icon'
 const SKILLS_SUFFIX = '/skills'
 const PERMISSIONS_SUFFIX = '/permissions'
+const DIFF_SUFFIX = '/diff'
 const PROFILE_PATH = '/api/profile'
 const PROFILE_ICON_PATH = '/api/profile/icon'
 
@@ -218,6 +223,7 @@ export function createApp(
   auth: Authenticator = new Authenticator(tailscaleWhois()),
   terminal: TerminalDeps = { tmux: new RealTmux(), ps: realPs },
   skillStore: SkillStore = new SkillStore(),
+  git: Git = new RealGit(),
 ): Handler {
   const distRoot = resolve(distDir)
   // 端末に打ち込んだ返信の「処理中」。子プロセスの方（run）とは別に持ち、画面には合わせて出す
@@ -512,6 +518,37 @@ export function createApp(
     return json(res, { ...empty, sources, rules } satisfies SessionPermissionsResponse)
   }
 
+  /**
+   * GET /api/sessions/<id>/diff?base=。そのセッションの worktree の差分を git から読む（#171。読むだけ）。
+   * cwd はセッションの行から取り、リクエストからは受けない。3 秒のポーリングには乗せない（画面が開いたときだけ）
+   */
+  const getDiff = async (res: ServerResponse, id: string, base: string, days: number) => {
+    const { sessions } = await store.sessions(days)
+    const session = sessions.find((s) => s.id === id)
+    if (!session) return error(res, 404, 'session not found in window')
+    let d
+    try {
+      d = await sessionDiff(git, session.cwd, base)
+    } catch (err) {
+      if (err instanceof NotAGitRepo) {
+        return error(res, 404, `作業ディレクトリで git が読めません（消えた、または git のリポジトリではない）: ${session.cwd || '(空)'}`)
+      }
+      throw err
+    }
+    const payload: SessionDiffResponse = {
+      id,
+      cwd: session.cwd,
+      base: d.base,
+      head: d.head,
+      session_branch: session.branch,
+      compare_url: compareUrl(session.remote, d.base, d.head),
+      branch: d.branch,
+      working: d.working,
+      untracked: d.untracked,
+    }
+    return json(res, payload)
+  }
+
   const putMeta = async (req: IncomingMessage, res: ServerResponse, id: string, days: number) => {
     if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
     let body: unknown
@@ -647,6 +684,7 @@ export function createApp(
     const isIcon = path.startsWith(SESSIONS_PREFIX) && path.endsWith(ICON_SUFFIX)
     const isSkills = path.startsWith(SESSIONS_PREFIX) && path.endsWith(SKILLS_SUFFIX)
     const isPermissions = path.startsWith(SESSIONS_PREFIX) && path.endsWith(PERMISSIONS_SUFFIX)
+    const isDiff = path.startsWith(SESSIONS_PREFIX) && path.endsWith(DIFF_SUFFIX)
     const isAsk = path === APPROVALS_PATH
     const isAnswer = path.startsWith(APPROVALS_PREFIX) && path.endsWith(ANSWER_SUFFIX)
     const isProfile = path === PROFILE_PATH
@@ -706,6 +744,11 @@ export function createApp(
         if (method === 'PUT') return await putIcon(req, res, id, parseDays(q.get('days'), 90))
         if (method === 'DELETE') return await deleteIcon(req, res, id)
         return await getIcon(req, res, id, q.get('v'))
+      }
+      if (isDiff) {
+        const id = sessionIdFrom(path, DIFF_SUFFIX)
+        if (id === null) return error(res, 400, 'bad session id')
+        return await getDiff(res, id, q.get('base') ?? '', parseDays(q.get('days'), 90))
       }
       if (isPermissions) {
         const id = sessionIdFrom(path, PERMISSIONS_SUFFIX)

@@ -9,18 +9,19 @@ import type {
   ReplyRequest,
   ReplyResponse,
   SessionDetailResponse,
+  SessionDiffResponse,
   SessionFilters,
   SessionIconResponse,
   SessionMeta,
   SessionMetaResponse,
-  SessionSkillsResponse,
   SessionPermissionsResponse,
+  SessionSkillsResponse,
   SessionsResponse,
   SettingsRequest,
   SettingsResponse,
 } from '../../shared/types.ts'
 
-export type { Agent, FeedRow, SessionSource, SessionSummary, SessionMeta, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, Approval, ApprovalMap, ApprovalAnswer, Profile, PersonaId, SettingsResponse, SettingsRequest, Viewer, SessionPermissionsResponse } from '../../shared/types.ts'
+export type { Agent, FeedRow, SessionSource, SessionSummary, SessionMeta, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, Approval, ApprovalMap, ApprovalAnswer, Profile, PersonaId, SettingsResponse, SettingsRequest, Viewer, SessionPermissionsResponse, SessionDiffResponse, DiffSection, DiffFileStat } from '../../shared/types.ts'
 
 /** サーバの失敗。`code` / `typed` は返信の 409（ReplyError）から。画面はこれで「消して送る」の確認を出し分ける */
 export class ApiError extends Error {
@@ -107,6 +108,9 @@ export const api = {
   meta: (id: string) => getJSON<SessionMetaResponse>(`/api/sessions/${encodeURIComponent(id)}/meta`),
   /** `/` の候補になるスキル。入力欄で `/` を打った時に 1 回だけ取る */
   sessionSkills: (id: string) => getJSON<SessionSkillsResponse>(`/api/sessions/${encodeURIComponent(id)}/skills`),
+  /** そのセッションの worktree の差分（開いたときだけ。ポーリングには乗せない） */
+  diff: (id: string, base = '') =>
+    getJSON<SessionDiffResponse>(`/api/sessions/${encodeURIComponent(id)}/diff${base ? `?base=${encodeURIComponent(base)}` : ''}`),
   /** そのセッションの cwd に効いている許可ルール。画面が開いたときだけ取る（ポーリングには乗せない） */
   permissions: (id: string, days = 90) =>
     getJSON<SessionPermissionsResponse>(`/api/sessions/${encodeURIComponent(id)}/permissions?days=${days}`),

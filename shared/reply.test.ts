@@ -43,6 +43,7 @@ function summary(over: Partial<SessionSummary>): SessionSummary {
     repos: ['sai'],
     project: 'Naturalclar/sai',
     projects: ['Naturalclar/sai'],
+    remote: 'https://github.com/Naturalclar/sai',
     branch: 'main',
     branches: ['main'],
     cwd: '/tmp/sai',

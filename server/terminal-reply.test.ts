@@ -44,7 +44,7 @@ class FakeTmux implements Tmux {
   }
 }
 const tmux = new FakeTmux()
-const alivePids = new Set([200])
+const alivePids = new Set([200, 201])
 const now = new Date()
 const min = (n: number) => n * 60_000
 
@@ -61,6 +61,12 @@ before(async () => {
       JSON.stringify(row(new Date(now.getTime() - min(4)), 'D1', { repo: 'r', cwd: work, pane: '%8', pid: 300 })),
       // 旧形式（pane 無し）
       JSON.stringify(row(new Date(now.getTime() - min(3)), 'P1', { repo: 'r', cwd: work })),
+      // tmux で開いている Codex（pid 201 は生きている）
+      JSON.stringify(row(new Date(now.getTime() - min(2)), 'X1', { agent: 'codex', repo: 'r', cwd: work, pane: '%10', pid: 201, session_source: 'rollout' })),
+      // tmux の外で開いている Codex（記録時の pid は死んだが writer lock は残っている）
+      JSON.stringify(row(new Date(now.getTime() - min(1)), 'X2', { agent: 'codex', repo: 'r', cwd: work, pane: '', pid: 302, session_source: 'rollout' })),
+      // 閉じた Codex（pid 301 は死んでいる）
+      JSON.stringify(row(new Date(now.getTime() - min(1)), 'X3', { agent: 'codex', repo: 'r', cwd: work, pane: '', pid: 301, session_source: 'rollout' })),
     ].join('\n') + '\n',
   )
   const app = createApp(
@@ -71,7 +77,13 @@ before(async () => {
     new BuildFreshness(join(dir, 'dist'), [], 0),
     undefined,
     new Authenticator(async () => null),
-    { tmux, ps: async () => ' 100     1\n 200   100\n', replies: new TerminalReplies(), alive: (pid) => alivePids.has(pid) },
+    {
+      tmux,
+      ps: async () => ' 100     1\n 200   100\n 201   100\n',
+      replies: new TerminalReplies(),
+      alive: (pid) => alivePids.has(pid),
+      codexWriterActive: async (session) => session === 'X1' || session === 'X2',
+    },
   )
   server = createServer((req, res) => void app(req, res))
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -191,6 +203,40 @@ test('返信: 端末に打てない 409 には can_process が付き、via: proc
   assert.deepEqual(args.slice(args.indexOf('-p'), args.indexOf('-p') + 3), ['-p', '--resume', 'T1'], '今までの -p の経路そのもの')
   const log = await readFile(join(dir, 'reply.log'), 'utf-8')
   assert.match(log, /別プロセスで回す（画面の指定 via: process）/)
+  tmux.screen = IDLE
+})
+
+test('返信: 開いている Codex は active writer と競合する別プロセスへフォールバックしない（#160）', async () => {
+  started.length = 0
+  tmux.calls.length = 0
+  tmux.screen = '› 打ちかけ\n  gpt-5.6-sol medium · /tmp/repo\n'
+
+  // tmux に打ち込めない場合も「別プロセスで送る」は提示しない
+  let res = await post('X1@r', 'x')
+  assert.equal(res.status, 409)
+  let body = (await res.json()) as ReplyError
+  assert.equal(body.code, 'terminal_typed')
+  assert.equal(body.can_process, false)
+
+  // API を直接 via: process で呼んでも codex exec resume は立てない
+  res = await post('X1@r', 'x', { via: 'process' })
+  assert.equal(res.status, 409)
+  body = (await res.json()) as ReplyError
+  assert.equal(body.code, 'codex_active')
+
+  // tmux 外（Codex アプリなど）で pid が生きている場合も即時に理由を返す
+  res = await post('X2@r', 'x')
+  assert.equal(res.status, 409)
+  body = (await res.json()) as ReplyError
+  assert.equal(body.code, 'codex_active')
+  assert.match(body.error, /別の画面で開いている/)
+  assert.equal(started.length, 0)
+
+  // 閉じた Codex は従来どおり別プロセスで再開できる
+  res = await post('X3@r', 'x')
+  assert.equal(res.status, 202)
+  assert.equal(((await res.json()) as ReplyResponse).via, 'process')
+  assert.equal(started.length, 1)
   tmux.screen = IDLE
 })
 

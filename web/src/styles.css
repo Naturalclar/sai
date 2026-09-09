@@ -334,6 +334,8 @@
   .tag { display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 4px; background: var(--chip); color: var(--muted); margin-left: 6px; vertical-align: middle; }
   .tag.synth { background: color-mix(in srgb, var(--synth) 18%, transparent); color: var(--synth); font-weight: 600; }
   .tag.replying { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); font-weight: 600; }
+  /* 別のマシンで記録されたセッション（#114）。返信できないので、目立たせず「ここのものではない」とだけ分かればよい */
+  .tag.host { font-family: var(--mono); }
   /* バブルの中の「ここからモデルが変わった」。等幅で、本文の上に 1 行 */
   .msg .tag.model { display: inline-block; margin: 0 0 4px; font-family: var(--mono); }
   /* 見出しのモデル。使ったモデル（code）と、返信で使うモデルの選択 */

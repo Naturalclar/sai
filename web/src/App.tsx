@@ -42,7 +42,7 @@ export interface PaneProps extends StatusProps {
 /** `→` / `←` の当て先が描画されるのを待つ上限。過ぎたら諦める */
 const FOCUS_WAIT_MS = 2000
 
-const DEFAULT_FILTERS: SessionFilters = { project: '', repo: '', agent: '', date: '', days: '7', archived: '' }
+const DEFAULT_FILTERS: SessionFilters = { project: '', repo: '', agent: '', date: '', host: '', days: '7', archived: '' }
 
 /** 画面の見た目の状態。フィルタと同じく localStorage に残す */
 interface UiState {
@@ -74,7 +74,7 @@ export function App() {
 
   // いま自分を待っているもの。サイドバーのバッジ・要対応の画面と同じ組み立てを使う（食い違わせない）。
   // replying も必ず渡す（渡し忘れると、題名と通知だけが処理中のセッションを数えてしまう。#232）
-  const todo = useMemo(() => (list.data ? todoItems(list.data.sessions, list.data.approvals, list.data.replying) : null), [list.data])
+  const todo = useMemo(() => (list.data ? todoItems(list.data.sessions, list.data.approvals, list.data.host, list.data.replying) : null), [list.data])
   const notify = useNotify(todo)
 
   // サイドバーの開閉。レイアウトは main の class で CSS が切り替える。狭い画面では CSS 側が無視する
@@ -270,6 +270,7 @@ export function App() {
               projects={list.data?.filters.projects ?? EMPTY_PROJECTS}
               onProject={(project) => setFilters({ project })}
               sessions={list.data?.sessions}
+              selfHost={list.data?.host ?? ''}
               onStatus={onStatus}
               onOpenSidebar={openSidebar}
               onLeaveToSidebar={focusSidebar}

@@ -107,8 +107,38 @@ test('絞り込みと候補', () => {
   assert.deepEqual(ids(filterSessions(sessions, { repo: 'x' })), new Set(['A@x', 'C@x']))
   assert.deepEqual(ids(filterSessions(sessions, { agent: 'codex' })), new Set(['B@y']))
   assert.deepEqual(ids(filterSessions(sessions, { repo: 'x', date: '2026-09-01' })), new Set(['C@x']))
-  // remote も project も無い行なので、リポジトリの候補は空（worktree 名は混ぜない。#182）
-  assert.deepEqual(facets(sessions), { projects: [], repos: ['x', 'y'], agents: ['claude', 'codex'], dates: ['2026-09-02', '2026-09-01'] })
+  // remote も project も無い行なので、リポジトリの候補は空（worktree 名は混ぜない。#182）。
+  // host を載せない行しか無いのでマシンの候補も空（画面は 1 台以下なら絞り込みを出さない。#114）
+  assert.deepEqual(facets(sessions), { projects: [], repos: ['x', 'y'], agents: ['claude', 'codex'], dates: ['2026-09-02', '2026-09-01'], hosts: [] })
+})
+
+test('host: 一番新しい行のものを出し、出てきた全部を hosts に。絞り込みと候補にも出る（#114）', () => {
+  const base = new Date('2026-09-02T01:00:00Z')
+  const sessions = aggregate([
+    row(base, 'A', { repo: 'x', host: 'mac' }),
+    row(new Date(base.getTime() + min(1)), 'A', { repo: 'x', host: 'mac' }),
+    row(base, 'B', { repo: 'y', host: 'mini' }),
+    // host を載せない古い record.py の行。空は数えない（自分のマシン扱い）
+    row(base, 'C', { repo: 'z' }),
+  ])
+  const byId = new Map(sessions.map((s) => [s.id, s]))
+  assert.deepEqual([byId.get('A@x')!.host, byId.get('A@x')!.hosts], ['mac', ['mac']])
+  assert.deepEqual([byId.get('B@y')!.host, byId.get('B@y')!.hosts], ['mini', ['mini']])
+  assert.deepEqual([byId.get('C@z')!.host, byId.get('C@z')!.hosts], ['', []])
+
+  const ids = (list: typeof sessions) => new Set(list.map((s) => s.id))
+  assert.deepEqual(ids(filterSessions(sessions, { host: 'mini' })), new Set(['B@y']))
+  assert.deepEqual(ids(filterSessions(sessions, { host: 'mac' })), new Set(['A@x']))
+  assert.deepEqual(facets(sessions).hosts, ['mac', 'mini'], 'host の無いセッションは候補に出さない')
+})
+
+test('host: 途中でマシンが変わったら、出てきた順に全部（集めた JSONL を繋いだとき）', () => {
+  const base = new Date('2026-09-02T01:00:00Z')
+  const [s] = aggregate([
+    row(base, 'A', { repo: 'x', host: 'mini' }),
+    row(new Date(base.getTime() + min(1)), 'A', { repo: 'x', host: 'mac' }),
+  ])
+  assert.deepEqual([s!.host, s!.hosts], ['mac', ['mini', 'mac']], '表示は一番新しい行のもの')
 })
 
 test('project: bare clone の worktree でもリポジトリでまとまる（repo は worktree 名のまま）', () => {

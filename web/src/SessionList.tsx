@@ -31,10 +31,10 @@ export function SessionList({ list, filters, setFilters, active }: Props) {
   const now = updatedAt?.getTime() ?? 0
   const archived = filters.archived === '1'
 
-  const facets = data?.filters ?? { projects: [], repos: [], agents: [], dates: [] }
+  const facets = data?.filters ?? { projects: [], repos: [], agents: [], dates: [], hosts: [] }
   const sessions = data?.sessions ?? []
   // バッジの数は要対応の画面と必ず同じ引数で数える（replying を渡し忘れると件数だけずれる。#232）
-  const todo = data ? todoItems(data.sessions, data.approvals, data.replying).length : 0
+  const todo = data ? todoItems(data.sessions, data.approvals, data.host, data.replying).length : 0
 
   // タッチ端末では項目を左にスワイプしてアーカイブを出す。開いている項目は 1 つだけ
   const swipe = useMediaQuery('(hover: none) and (pointer: coarse)')
@@ -56,10 +56,14 @@ export function SessionList({ list, filters, setFilters, active }: Props) {
         {(facets.repos.length > 1 || filters.repo) && (
           <FacetSelect label="worktree" value={filters.repo} options={facets.repos} onChange={(repo) => setFilters({ repo })} />
         )}
+        {/* どのマシンで記録されたか（#114）。集めていなければ 1 台しか無いので出さない */}
+        {(facets.hosts.length > 1 || filters.host) && (
+          <FacetSelect label="マシン" value={filters.host} options={facets.hosts} onChange={(host) => setFilters({ host })} />
+        )}
         <FacetSelect label="エージェント" value={filters.agent} options={facets.agents} onChange={(agent) => setFilters({ agent })} />
         <FacetSelect label="日付" value={filters.date} options={facets.dates} onChange={(date) => setFilters({ date })} />
         <DaysSelect value={filters.days} options={[1, 3, 7, 30, 90]} onChange={(days) => setFilters({ days })} />
-        <button type="button" onClick={() => setFilters({ project: '', repo: '', agent: '', date: '' })}>絞り込みを消す</button>
+        <button type="button" onClick={() => setFilters({ project: '', repo: '', agent: '', date: '', host: '' })}>絞り込みを消す</button>
         <button
           type="button"
           className={archived ? 'on' : ''}
@@ -92,6 +96,7 @@ export function SessionList({ list, filters, setFilters, active }: Props) {
             approval={data?.approvals[s.id]?.[0] ?? null}
             now={now}
             swipe={swipe}
+            selfHost={data?.host ?? ''}
             reduced={reduced}
             open={openId === s.id}
             onOpenChange={(open) => setOpenId(open ? s.id : openId === s.id ? null : openId)}

@@ -31,7 +31,7 @@ export function TodoView({ list, onStatus, onOpenSidebar }: Props) {
   useEffect(() => onStatus(updatedAt, error), [updatedAt, error, onStatus])
 
   // replying を渡すのは、別プロセスの返信を処理中なら「待っている」ではなく「動いている」ため（#232）
-  const items = data ? todoItems(data.sessions, data.approvals, data.replying) : []
+  const items = data ? todoItems(data.sessions, data.approvals, data.host, data.replying) : []
   const now = updatedAt?.getTime() ?? 0
 
   return (

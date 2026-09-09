@@ -14,6 +14,9 @@ import {
 } from './reply.ts'
 import type { FeedRow, SessionSummary } from './types.ts'
 
+/** このサーバが動いているマシン（#114）。ここを起点に「別のマシンか」を決める */
+const SELF = 'mac'
+
 function row(over: Partial<FeedRow>): FeedRow {
   return {
     ts: '2026-09-02T10:00:00+09:00',
@@ -46,6 +49,8 @@ function summary(over: Partial<SessionSummary>): SessionSummary {
     remote: 'https://github.com/Naturalclar/sai',
     branch: 'main',
     branches: ['main'],
+    host: '',
+    hosts: [],
     cwd: '/tmp/sai',
     turns: 2,
     title: '一覧のタイトル',
@@ -64,6 +69,34 @@ function summary(over: Partial<SessionSummary>): SessionSummary {
   }
 }
 
+test('replyBlockedReason: 別のマシンのセッションは再開できない（#114）', () => {
+  assert.equal(replyBlockedReason(summary({ host: 'mac' }), SELF), '', '同じマシンなら通る')
+  assert.equal(replyBlockedReason(summary({ host: '' }), SELF), '', 'host の無い古い行は自分のマシン扱い')
+  assert.equal(replyBlockedReason(summary({ host: 'MAC.local' }), SELF), '', 'ドメイン部分は見ない（記録側と同じ規則で短くする）')
+
+  const blocked = replyBlockedReason(summary({ host: 'mini' }), SELF)
+  assert.match(blocked, /別のマシン（mini）/)
+
+  // サーバが自分の名前を決められないとき（SAI_HOST も hostname も取れない）は、何も止めない
+  assert.equal(replyBlockedReason(summary({ host: 'mini' }), ''), '')
+})
+
+test('replyBlockedReason: 別のマシンなら、合成 ID より先にそちらを理由にする', () => {
+  // どちらも本当だが、「別のマシン」の方が根本の理由。ID が取れていても、あちらの CLI と履歴には手が届かない。
+  // 「IDが合成」だけ出すと「ID さえ取れれば返信できる」と読めてしまう
+  assert.match(replyBlockedReason(summary({ host: 'mini', session_source: 'synth' }), SELF), /別のマシン（mini）/)
+})
+
+test('sessionReplyTargets / feedReplyTargets: 別のマシンのものは blocked が付く（#114）', () => {
+  const [mine, theirs] = sessionReplyTargets([summary({ id: 's1@sai', host: 'mac' }), summary({ id: 's2@sai', host: 'mini' })], SELF)
+  assert.equal(mine!.blocked, '')
+  assert.match(theirs!.blocked, /別のマシン（mini）/)
+
+  const fromFeed = feedReplyTargets([row({ session: 'r1', host: 'mini' })], SELF)
+  assert.match(fromFeed[0]!.blocked, /別のマシン（mini）/)
+  assert.equal(feedReplyTargets([row({ session: 'r2' })], SELF)[0]!.blocked, '', 'host の無い行は今までどおり')
+})
+
 test('sessionReplyTargets: 一覧の順のまま。表示名・アイコン画像があればそれ、無ければ一覧のタイトル', () => {
   const targets = sessionReplyTargets([
     summary({ id: 's1@sai', meta: { name: 'CI 整備' }, icon: '/api/sessions/s1%40sai/icon?v=1' }),
@@ -71,7 +104,7 @@ test('sessionReplyTargets: 一覧の順のまま。表示名・アイコン画�
     summary({ id: 's3@sai', icon: '/api/sessions/s3%40sai/icon?v=2' }),
     summary({ id: 'synth-x@sai', session_source: 'synth' }),
     summary({ id: 's4@sai', meta: { name: 'あ'.repeat(70) } }),
-  ])
+  ], SELF)
   assert.deepEqual(
     targets.map((t) => [t.id, t.repo, t.branch, t.title, t.icon, t.blocked !== '']),
     [
@@ -86,11 +119,11 @@ test('sessionReplyTargets: 一覧の順のまま。表示名・アイコン画�
 })
 
 test('mergeReplyTargets: 一覧が先、フィードにしか無いものが後ろ。同じ id は一覧側が勝つ', () => {
-  const list = sessionReplyTargets([summary({ id: 's1@sai', meta: { name: '名前' }, icon: '/i/1' }), summary({ id: 's2@sai' })])
+  const list = sessionReplyTargets([summary({ id: 's1@sai', meta: { name: '名前' }, icon: '/i/1' }), summary({ id: 's2@sai' })], SELF)
   const feed = feedReplyTargets([
     row({ ts: '2026-09-02T10:00:00+09:00', session: 's3', user_text: 'フィードだけ' }),
     row({ ts: '2026-09-02T10:05:00+09:00', session: 's1', user_text: 'フィード側の指示' }),
-  ])
+  ], SELF)
   const merged = mergeReplyTargets(list, feed)
   assert.deepEqual(
     merged.map((t) => [t.id, t.title, t.icon]),
@@ -110,7 +143,7 @@ test('feedReplyTargets: エンティティごとに1件、新しい順、ラベ�
     row({ ts: '2026-09-02T10:05:00+09:00', session: 's2', repo: 'other', first_user_text: 'other の指示' }),
     row({ ts: '2026-09-02T10:10:00+09:00', session: 's1', branch: 'feat/x', user_text: '続きの指示\n2行目' }),
   ]
-  const targets = feedReplyTargets(rows)
+  const targets = feedReplyTargets(rows, SELF)
   assert.deepEqual(
     targets.map((t) => [t.id, t.repo, t.branch, t.title, t.blocked]),
     [
@@ -128,21 +161,21 @@ test('feedReplyTargets: 再開できないものは blocked に理由が入る�
     row({ session: 's-unknown', agent: 'unknown', ts: '2026-09-02T10:02:00+09:00' }),
     row({ session: 's-notitle', first_user_text: '', text: `${long}\n2行目`, ts: '2026-09-02T10:03:00+09:00' }),
   ]
-  const targets = feedReplyTargets(rows)
+  const targets = feedReplyTargets(rows, SELF)
   assert.equal(targets.length, 4)
   assert.equal(targets[0]!.title, `${'あ'.repeat(60)}…`)
   assert.equal(targets[0]!.blocked, '')
-  assert.equal(targets[1]!.blocked, replyBlockedReason({ id: 's-unknown@sai', agent: 'unknown', session_source: 'payload' }))
+  assert.equal(targets[1]!.blocked, replyBlockedReason({ id: 's-unknown@sai', agent: 'unknown', session_source: 'payload' }, SELF))
   assert.match(targets[2]!.id, /^unknown-2026-09-02@sai$/)
   assert.notEqual(targets[2]!.blocked, '')
-  assert.equal(targets[3]!.blocked, replyBlockedReason({ id: 's-synth@sai', agent: 'claude', session_source: 'synth' }))
+  assert.equal(targets[3]!.blocked, replyBlockedReason({ id: 's-synth@sai', agent: 'claude', session_source: 'synth' }, SELF))
 })
 
 test('filterReplyTargets: リポジトリ / ブランチ / タイトルの部分一致、大文字小文字は無視', () => {
   const targets = feedReplyTargets([
     row({ session: 'a', repo: 'sai', branch: 'feat/Markdown', first_user_text: 'PR を作る' }),
     row({ session: 'b', repo: 'dotfiles', branch: 'main', first_user_text: 'zsh の設定', ts: '2026-09-02T10:01:00+09:00' }),
-  ])
+  ], SELF)
   assert.deepEqual(filterReplyTargets(targets, '').map((t) => t.id), ['b@dotfiles', 'a@sai'])
   assert.deepEqual(filterReplyTargets(targets, 'markdown').map((t) => t.id), ['a@sai'])
   assert.deepEqual(filterReplyTargets(targets, 'ZSH').map((t) => t.id), ['b@dotfiles'])
@@ -173,7 +206,7 @@ test('mentionLabels: @repo。同じリポジトリが複数なら @repo/branch�
     row({ session: 'c', repo: 'sai', branch: 'feat/x', ts: '2026-09-02T09:10:00+09:00' }),
     row({ session: 'b', repo: 'sai', branch: 'feat/x', ts: '2026-09-02T09:20:00+09:00' }),
     row({ session: 'a', repo: 'sai', branch: 'main', ts: '2026-09-02T09:30:00+09:00' }),
-  ])
+  ], SELF)
   const labels = mentionLabels(targets)
   assert.equal(labels.get('a@sai'), '@sai/main')
   assert.equal(labels.get('b@sai'), '@sai/feat/x')
@@ -213,8 +246,8 @@ test('defaultReplyTarget: 一番新しい行のセッションのうち処理中
 test('sessionReplyTargets: 端末で開いていれば terminal が付く（フィードの行から作った候補には付かない）', () => {
   const open = summary({ id: 'T1@sai', terminal: { pane: '%9', pid: 200 } })
   const closed = summary({ id: 'D1@sai' })
-  const [a, b] = sessionReplyTargets([open, closed])
+  const [a, b] = sessionReplyTargets([open, closed], SELF)
   assert.equal(a?.terminal, true)
   assert.equal(b?.terminal, undefined, '端末で開いていなければ付けない')
-  assert.equal(feedReplyTargets([row({ session: 'T1' })])[0]?.terminal, undefined, '行だけからは分からない')
+  assert.equal(feedReplyTargets([row({ session: 'T1' })], SELF)[0]?.terminal, undefined, '行だけからは分からない')
 })

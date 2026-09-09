@@ -92,6 +92,8 @@ export function aggregate(rows: FeedRow[]): SessionSummary[] {
     // 最後の行が待ちなら、まだ人を待っている。後にターン完了か再開が来ていれば解消
     const waiting = eventKind(last.event) === 'waiting' ? (last.text ?? '') : ''
     // モデルはターン完了の行だけが持つ。途中で変わっていれば全部（出てきた順）、表示は一番新しい行のもの
+    // どのマシンで記録されたか（#114）。載せない古い行は空のまま数えない（自分のマシン扱い）
+    const hosts = orderedUnique(items.map((r) => (r.host ?? '').trim()).filter(Boolean))
     const models = orderedUnique(turnRows.map((r) => (r.model ?? '').trim()).filter(Boolean))
     const lastModelRow = [...turnRows].reverse().find((r) => r.model?.trim())
     // 許可モードは待ちや再開の行にも載る（フックのペイロード）。一番新しい、値のある行のもの
@@ -112,6 +114,8 @@ export function aggregate(rows: FeedRow[]): SessionSummary[] {
       remote: remotes[remotes.length - 1] ?? '',
       branch: branches[branches.length - 1] ?? '',
       branches: branches.filter(Boolean),
+      host: hosts[hosts.length - 1] ?? '',
+      hosts,
       cwd: last.cwd ?? '',
       turns: turnRows.length,
       waiting,
@@ -140,14 +144,17 @@ export interface SessionFilter {
   repo?: string
   agent?: string
   date?: string
+  /** どのマシンで記録されたか（#114） */
+  host?: string
 }
 
-export function filterSessions(sessions: SessionSummary[], { project = '', repo = '', agent = '', date = '' }: SessionFilter): SessionSummary[] {
+export function filterSessions(sessions: SessionSummary[], { project = '', repo = '', agent = '', date = '', host = '' }: SessionFilter): SessionSummary[] {
   let result = sessions
   if (project) result = result.filter((s) => s.projects.includes(project))
   if (repo) result = result.filter((s) => s.repos.includes(repo))
   if (agent) result = result.filter((s) => s.agents.includes(agent as Agent))
   if (date) result = result.filter((s) => s.dates.includes(date))
+  if (host) result = result.filter((s) => s.hosts.includes(host))
   return result
 }
 
@@ -156,16 +163,19 @@ export function facets(sessions: SessionSummary[]): Facets {
   const repos = new Set<string>()
   const agents = new Set<Agent>()
   const dates = new Set<string>()
+  const hosts = new Set<string>()
   for (const s of sessions) {
     for (const p of s.projects) projects.add(p)
     for (const r of s.repos) repos.add(r)
     for (const a of s.agents) agents.add(a)
     for (const d of s.dates) dates.add(d)
+    for (const h of s.hosts) hosts.add(h)
   }
   return {
     projects: [...projects].sort(),
     repos: [...repos].sort(),
     agents: [...agents].sort(),
     dates: [...dates].sort().reverse(),
+    hosts: [...hosts].sort(),
   }
 }

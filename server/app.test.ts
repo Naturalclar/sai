@@ -74,6 +74,8 @@ let digester: Digester
 const min = (n: number) => n * 60_000
 
 before(async () => {
+  // このサーバのマシン名（#114）。決め打ちしないと、この Mac の hostname 次第でリモート判定が変わる
+  process.env.SAI_HOST = 'testmac'
   dir = await mkdtemp(join(tmpdir(), 'sai-'))
   feedDir = join(dir, 'feed')
   distDir = join(dir, 'dist')
@@ -89,6 +91,8 @@ before(async () => {
     JSON.stringify(row(new Date(now.getTime() - min(3)), 'X1', { agent: 'codex', repo: 'r', cwd: dir, session_source: 'rollout' })),
     JSON.stringify(row(new Date(now.getTime() - min(2)), 'synth-r-1', { repo: 'r', cwd: dir, session_source: 'synth' })),
     JSON.stringify(row(new Date(now.getTime() - min(2)), 'U1', { agent: 'unknown', repo: 'r', cwd: dir })),
+    // 別のマシンで記録されたセッション（#114）。ほかは C1 と同じで、host だけが違う
+    JSON.stringify(row(new Date(now.getTime() - min(2)), 'R1', { repo: 'r', cwd: dir, host: 'mini' })),
   ]
   await writeFile(join(feedDir, `${localDate(now.toISOString())}.jsonl`), lines.join('\n') + '\n')
   store = new FeedStore(feedDir)
@@ -226,7 +230,7 @@ test('/api/sessions', async () => {
 test('/api/sessions は絞り込み前の全体から filters を作る', async () => {
   const data = (await (await get('/api/sessions?days=7&agent=codex')).json()) as SessionsResponse
   assert.deepEqual(data.sessions.map((s) => s.id), ['S2@sai', 'X1@r'])
-  assert.equal(data.total, 6)
+  assert.equal(data.total, 7)
   assert.deepEqual(data.filters.agents, ['claude', 'codex', 'unknown'])
 })
 
@@ -405,7 +409,7 @@ test('GET /api/usage: ローカルのファイルから読むだけ。Claude は
 
 test('/api/feed は壊れた行を落とす', async () => {
   const data = (await (await get('/api/feed?days=3')).json()) as FeedResponse
-  assert.equal(data.rows.length, 7)
+  assert.equal(data.rows.length, 8)
   const only = (await (await get('/api/feed?days=3&repo=sai')).json()) as FeedResponse
   assert.equal(only.rows.length, 1)
 })
@@ -488,6 +492,35 @@ test('POST reply: 合成・不明・cwd 無しは受け付けない', async () =
   assert.match(((await res.json()) as { error: string }).error, /cwd/)
   assert.equal((await post('nope@r', { text: 'x' })).status, 404)
   assert.equal(runner.started.length, 0)
+})
+
+test('POST reply: 別のマシンのセッションは 400（#114）', async () => {
+  runner.started.length = 0
+  const res = await post('R1@r', { text: 'x' })
+  assert.equal(res.status, 400)
+  assert.match(((await res.json()) as { error: string }).error, /別のマシン（mini）/)
+  assert.equal(runner.started.length, 0, 'あちらのマシンのセッションに向けて CLI を起動しない')
+  // 同じ置き場の、自分のマシンの行（host 無し）は今までどおり通る
+  assert.equal((await post('C1@r', { text: 'x' })).status, 202)
+})
+
+test('GET /api/sessions: 自分のマシン名と、行の host を載せる（#114）', async () => {
+  const data = (await (await fetch(`${base}/api/sessions?days=7`)).json()) as SessionsResponse
+  assert.equal(data.host, 'testmac', '画面はこれと行の host を見てリモートを判定する')
+  const remote = data.sessions.find((x) => x.id === 'R1@r')
+  assert.deepEqual([remote?.host, remote?.hosts], ['mini', ['mini']])
+  const mine = data.sessions.find((x) => x.id === 'C1@r')
+  assert.deepEqual([mine?.host, mine?.hosts], ['', []], 'host を載せない行は空 = 自分のマシン扱い')
+  assert.deepEqual(data.filters.hosts, ['mini'], 'マシンの候補')
+  // 絞り込み
+  const only = (await (await fetch(`${base}/api/sessions?days=7&host=mini`)).json()) as SessionsResponse
+  assert.deepEqual(only.sessions.map((x) => x.id), ['R1@r'])
+})
+
+test('GET /api/sessions/<id>: セッション画面も自分のマシン名を受け取る（#114）', async () => {
+  const data = (await (await fetch(`${base}/api/sessions/${encodeURIComponent('R1@r')}?days=7`)).json()) as SessionDetailResponse
+  assert.equal(data.host, 'testmac')
+  assert.equal(data.session.host, 'mini')
 })
 
 test('POST reply: body の検査', async () => {
@@ -813,7 +846,7 @@ test('PUT/DELETE icon: 別オリジンは 403、メソッド違いは 405', asyn
 test('PUT meta: archived_at でアーカイブ。一覧とフィードから消え、archived=1 で出て、新しい行が届くと自動で戻る', async () => {
   const initial = (await (await get('/api/sessions?days=7')).json()) as SessionsResponse
   assert.ok(initial.sessions.some((s) => s.id === 'S2@sai'))
-  assert.equal(initial.total, 6)
+  assert.equal(initial.total, 7)
   assert.equal(((await (await get('/api/feed?days=3&repo=sai')).json()) as FeedResponse).rows.length, 1)
 
   // 名前を付けてからアーカイブしても名前は残る（PUT は重ねる）
@@ -826,7 +859,7 @@ test('PUT meta: archived_at でアーカイブ。一覧とフィードから消�
   const list = (await (await get('/api/sessions?days=7')).json()) as SessionsResponse
   assert.notEqual(list.rev, initial.rev, 'アーカイブしただけでも rev が変わる')
   assert.ok(!list.sessions.some((s) => s.id === 'S2@sai'), '既定ではアーカイブ済みは出ない')
-  assert.equal(list.total, 5, 'total もアーカイブ済みを除く')
+  assert.equal(list.total, 6, 'total もアーカイブ済みを除く')
   assert.deepEqual(list.filters.repos, ['kanban', 'r'], 'filters もアーカイブ済みを除いた集合から')
 
   const arch = (await (await get('/api/sessions?days=7&archived=1')).json()) as SessionsResponse
@@ -839,7 +872,7 @@ test('PUT meta: archived_at でアーカイブ。一覧とフィードから消�
 
   const feed = (await (await get('/api/feed?days=3&repo=sai')).json()) as FeedResponse
   assert.equal(feed.rows.length, 0, 'フィードにも流れない')
-  assert.equal(((await (await get('/api/feed?days=3')).json()) as FeedResponse).rows.length, 6)
+  assert.equal(((await (await get('/api/feed?days=3')).json()) as FeedResponse).rows.length, 7)
 
   // 新しい行が届くと、メタを書き換えずに戻る
   const later = new Date(Date.now() + 1000)

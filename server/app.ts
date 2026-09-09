@@ -10,6 +10,7 @@ import { mergeMeta } from '../shared/meta.ts'
 import { mergeProfile, PROFILE_ICON_ID, profileIconUrl } from '../shared/profile.ts'
 import { isPersonaId } from '../shared/persona.ts'
 import { replyBlockedReason } from '../shared/reply.ts'
+import { selfHost } from './host.ts'
 import type {
   ApprovalAnswer,
   ApprovalRequest,
@@ -427,7 +428,7 @@ export function createApp(
     const { sessions } = await store.sessions(days)
     const session = sessions.find((s) => s.id === id)
     if (!session) return error(res, 404, 'session not found in window')
-    const blocked = replyBlockedReason(session)
+    const blocked = replyBlockedReason(session, selfHost())
     if (blocked) return error(res, 400, blocked)
 
     // CLI に渡す生のセッションIDは URL から切り出さず、行の session を使う（entity.ts に逆変換を足さない）
@@ -507,7 +508,7 @@ export function createApp(
     const via = { url: selfUrl(req), entity: id }
     // セッションに返信のモデルが設定されていれば（PUT /api/sessions/<id>/meta の model）それで回す
     const cmd = replyCommand(session.agent, raw, text, cwd, process.env, via, model, own?.permission_mode, attachments)
-    if (!cmd) return error(res, 400, replyBlockedReason(session) || 'unsupported agent')
+    if (!cmd) return error(res, 400, replyBlockedReason(session, selfHost()) || 'unsupported agent')
     try {
       // プロセスが終わったら、そのセッションの答え待ちは deny で片付ける（もう誰も答えを取りに来ない）
       await run.start(id, cmd, () => approvals.drop(id))
@@ -961,7 +962,13 @@ export function createApp(
           days,
           total: pool.length,
           sessions: withLastSummary(
-            filterSessions(pool, { project: q.get('project') ?? '', repo: q.get('repo') ?? '', agent: q.get('agent') ?? '', date: q.get('date') ?? '' }),
+            filterSessions(pool, {
+              project: q.get('project') ?? '',
+              repo: q.get('repo') ?? '',
+              agent: q.get('agent') ?? '',
+              date: q.get('date') ?? '',
+              host: q.get('host') ?? '',
+            }),
           ),
           filters: facets(pool),
           replying,
@@ -970,6 +977,7 @@ export function createApp(
           record_version,
           profile: me.profile,
           viewer,
+          host: selfHost(),
         }
         return json(res, body)
       }
@@ -992,6 +1000,7 @@ export function createApp(
           replying,
           approvals: pendingApprovals,
           profile: me.profile,
+          host: selfHost(),
         }
         return json(res, body)
       }

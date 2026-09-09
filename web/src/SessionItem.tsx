@@ -3,6 +3,8 @@ import type { MouseEvent } from 'react'
 import type { Approval, Replying, SessionSummary } from './api'
 import { hm, md } from './format'
 import { SynthTag } from './SynthTag'
+import { HostTag } from './HostTag'
+import { isRemoteHost } from '../../shared/host.ts'
 import { ReplyingTag } from './ReplyingTag'
 import { ArchivedTag } from './ArchivedTag'
 import { WaitingTag } from './WaitingTag'
@@ -27,6 +29,8 @@ interface Props {
   swipe: boolean
   /** 動きを追わず即座に開閉する（prefers-reduced-motion） */
   reduced: boolean
+  /** このサーバのマシン名（#114）。違うマシンの行なら印を出す */
+  selfHost: string
   /** レールが開いているか（一覧で 1 つだけ。SessionList が持つ） */
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -37,7 +41,7 @@ interface Props {
  * （<a> の中に <button> は置けない。押してもページを動かさない）。
  * タッチ端末では <a> を左にずらして、下のレール（アーカイブ / 戻す）を見せる
  */
-export function SessionItem({ s, active, replying, approval, now, swipe, reduced, open, onOpenChange }: Props) {
+export function SessionItem({ s, active, replying, approval, now, swipe, reduced, selfHost, open, onOpenChange }: Props) {
   // 選ばれたら見えるところまでサイドバーをスクロールする（キーボードで移動したとき用。見えていれば動かない）
   const ref = useRef<HTMLAnchorElement>(null)
   useEffect(() => {
@@ -114,6 +118,7 @@ export function SessionItem({ s, active, replying, approval, now, swipe, reduced
         <span className="t" title={s.title_full}>
           {s.icon && <img className="icon" src={s.icon} alt="" />}
           {s.meta?.name || s.title || '(無題)'}
+          {isRemoteHost(s.host, selfHost) && <HostTag host={s.host} />}
           {s.session_source === 'synth' && <SynthTag />}
           {s.waiting && <WaitingTag text={s.waiting} />}
           {!s.waiting && approval && <WaitingTag text={approval.text} />}

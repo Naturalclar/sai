@@ -31,10 +31,15 @@ interface Props extends PaneProps {
   onProject: (project: string) => void
   /** サイドバーの一覧（App が取ったもの）。@ の候補はこれを主にする。まだ無ければ undefined */
   sessions: SessionSummary[] | undefined
+  /**
+   * このサーバのマシン名（一覧の応答の `host`。#114）。別のマシンのセッションには返信の口を出さない。
+   * フィード自身の応答には載せていない（App が一覧をポーリングして両方に配る形に揃える）
+   */
+  selfHost: string
 }
 
 /** 全チャンネルを時系列に流す。リポジトリと日数を見出しで選ぶ（リポジトリはサイドバーの絞り込みと同じ値） */
-export function FeedView({ project, projects, onProject, sessions = NO_SESSIONS, onStatus, onOpenSidebar, onLeaveToSidebar, linear }: Props) {
+export function FeedView({ project, projects, onProject, sessions = NO_SESSIONS, selfHost, onStatus, onOpenSidebar, onLeaveToSidebar, linear }: Props) {
   const [local, setLocal] = useLocalState<{ days: string }>('sai.feed', { days: '3' })
   const { data, error, updatedAt } = usePolling(() => api.feed({ project, days: local.days }), [project, local.days])
   useEffect(() => onStatus(updatedAt, error), [updatedAt, error, onStatus])
@@ -42,9 +47,12 @@ export function FeedView({ project, projects, onProject, sessions = NO_SESSIONS,
   const rows = data?.rows ?? NO_ROWS
   // 返信先の候補は、サイドバーの一覧（表示名・アイコン付き）を先に、フィードにしか無いセッションを後ろに。
   // 既定の返信先は「一番新しい行のセッション」なのでフィード側の先頭を覚えておく
-  const feedTargets = useMemo(() => feedReplyTargets(rows), [rows])
+  const feedTargets = useMemo(() => feedReplyTargets(rows, selfHost), [rows, selfHost])
   // 「アーカイブ済みを見る」中はサイドバーの一覧がアーカイブ済みだけになるので、候補にはしない（フィードにも流れていない）
-  const targets = useMemo(() => mergeReplyTargets(sessionReplyTargets(sessions.filter((s) => !s.archived)), feedTargets), [sessions, feedTargets])
+  const targets = useMemo(
+    () => mergeReplyTargets(sessionReplyTargets(sessions.filter((s) => !s.archived), selfHost), feedTargets),
+    [sessions, selfHost, feedTargets],
+  )
   // 返信先ごとの行数（「送信中」の解除に使う）はフィードの行から数える
   const counts = useMemo(() => {
     const m = new Map<string, number>()
@@ -112,6 +120,7 @@ export function FeedView({ project, projects, onProject, sessions = NO_SESSIONS,
         <Chat
           rows={rows}
           showChannel
+          selfHost={selfHost}
           sessions={sessions}
           profile={data.profile}
           linear={linear}

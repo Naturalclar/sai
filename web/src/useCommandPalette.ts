@@ -31,7 +31,7 @@ export function useCommandPalette() {
     if (!open) return
     let alive = true
     void api
-      .sessions({ project: '', repo: '', agent: '', date: '', days: '90', archived: '' })
+      .sessions({ project: '', repo: '', agent: '', date: '', host: '', days: '90', archived: '' })
       .then((res) => {
         if (alive) setAll(res.sessions)
       })

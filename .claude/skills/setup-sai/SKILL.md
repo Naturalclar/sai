@@ -113,7 +113,7 @@ Claude の 5 時間・週の使用率をヘッダに出すための口（#250）
 
 **割合はここからしか手元に来ない。** transcript の `quotaLimits` は弾かれたときにしか載らず、`claude` CLI に `usage` のサブコマンドも無い（TUI の `/usage` が叩く API は OAuth のトークンが要るので SAI は使わない）。
 
-まず**結果を見る**（フックと同じ順序）。判定はサーバと同じ規則にする（`server/usage.ts` の `isClaudeUsageFile`、`shared/usage.ts` の `STATUS_MAX_AGE_MS`）:
+まず**結果を見る**（フックと同じ順序）。判定はサーバと同じ規則にする（`server/local/usage.ts` の `isClaudeUsageFile`、`shared/usage.ts` の `STATUS_MAX_AGE_MS`）:
 
 ```sh
 python3 - <<'PY'

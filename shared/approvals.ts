@@ -1,4 +1,4 @@
-// 返信中の許可・質問（Approval）の読み書き。サーバ（server/approvals.ts）が text を作り、
+// 返信中の許可・質問（Approval）の読み書き。サーバ（server/approvals/approvals.ts）が text を作り、
 // 画面（web/src/ApprovalBubble.tsx）が AskUserQuestion の選択肢を出して answers を組み立てる。
 // 文言は feed/record.py の待ちの行（tool_summary / waiting_text）と揃えてある
 import { dumpsLikePython } from './pyjson.ts'

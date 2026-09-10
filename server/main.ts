@@ -23,7 +23,7 @@ import { parseArgs } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { DEFAULT_PORT, parsePort } from '../shared/port.ts'
 import { createApp } from './app.ts'
-import { FeedStore } from './store.ts'
+import { FeedStore } from './rows/store.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 export const DIST_DIR = resolve(HERE, '..', 'web', 'dist')

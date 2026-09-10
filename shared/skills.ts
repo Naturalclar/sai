@@ -1,6 +1,6 @@
 // 返信の入力欄で `/` を打った時に出すスキルの候補。
 // 置き場は `~/.claude/skills/<name>/SKILL.md`（ユーザー）と `<セッションの cwd>/.claude/skills/`（プロジェクト）で、
-// 読み取りは `server/skills.ts`。ここは SKILL.md の頭の読み方と、`/` の検出・絞り込みだけ（fs も DOM も触らない）。
+// 読み取りは `server/local/skills.ts`。ここは SKILL.md の頭の読み方と、`/` の検出・絞り込みだけ（fs も DOM も触らない）。
 // 候補を選んでも SAI は本文を `/<name> ` にするだけで、展開は CLI に任せる（端末でも `-p` でも同じ）。
 
 /** SKILL.md 1つ分。中身は読まない（一覧に出すのは名前と説明だけ） */

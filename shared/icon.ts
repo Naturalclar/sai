@@ -1,6 +1,6 @@
 // セッションのアイコン画像の受け付け条件。サーバの PUT 受付（server/app.ts）と画面の「画像を選ぶ」
 // （web/src/MetaEditor.tsx）が同じ値を見て、選んだ瞬間に弾けるものは送らない。
-// 画像そのものは ~/.agent-feed/session-icons/ に置く（server/icons.ts）。session-meta.json には書かない
+// 画像そのものは ~/.agent-feed/session-icons/ に置く（server/meta/icons.ts）。session-meta.json には書かない
 
 /** サーバに置く画像の上限。画面で正方形に切って ICON_SIZE px の PNG にしてから送るので十分 */
 export const ICON_MAX_BYTES = 1024 * 1024

@@ -11,7 +11,7 @@
 | `GET /api/sessions/<id>?days=30` | そのエンティティの全行と `replying`。`<id>` は `<セッション>@<リポジトリ>` |
 | （`replying` の中身） | `{ "<エンティティID>": { "since", "text", "via"?: "terminal", "permission_mode"?: "acceptEdits", "failed"?: { "code", "tail" } } }`。`via` は端末（tmux）に打ち込んだ返信のときだけ付く（省略なら別プロセス。要対応の出し分けが見る）。`permission_mode` は Claude の返信を**起動したときに**付けた許可モード（`""` はフラグ無し＝既定、省略は分からない。#272）。動いている CLI には後から当てられないので、画面はセッションのメタと違えば「次の返信から」と出す。`failed` は返信の子プロセスが 0 以外で終わったとき 2 分だけ付く（`tail` は `reply.log` のそのターンぶんの末尾）。付いている間は「処理中」ではない |
 | `POST /api/sessions/<id>/reply?days=90` | body `{ "text": "..." }`。そのセッションを `cwd` で再開して1ターン回すのを投げっぱなしにし、`202` を返す。閉じたCodexはapp-server管理で応答の `via` が `app-server`。合成 ID は `400`、進行中は `409`、別オリジンは `403` |
-| `POST /api/approvals` | 返信中の CLI（`server/approve-mcp.ts`）が許可・質問を預ける。body `{ "id", "tool_name", "input", "tool_use_id"? }`。返信を処理中でないエンティティは `409`。`201` で `{ "approval_id" }` |
+| `POST /api/approvals` | 返信中の CLI（`server/approvals/approve-mcp.ts`）が許可・質問を預ける。body `{ "id", "tool_name", "input", "tool_use_id"? }`。返信を処理中でないエンティティは `409`。`201` で `{ "approval_id" }` |
 | `GET /api/approvals/<approval_id>?wait=1` | 答えが付いていれば `200` で `{ "behavior": "allow" \| "deny", "updatedInput"?, "message"? }`（渡したら消える）。まだなら `wait=1` で最大 20 秒待って `202`。無ければ `404` |
 | `POST /api/approvals/<approval_id>/answer` | 画面から答える。Claudeはbody `{ "behavior": "allow" \| "deny", "updatedInput"?, "message"? }`。Codexの承認はAPIに載った `decisions[].id` を `{ "behavior", "decision" }` で返し、質問は `updatedInput.answers` を返す。未提示decisionは `400`、別thread/turnや切断済みは `409`、答え済みは `404` |
 | `GET /api/sessions/<id>/skills?days=90` | `/` の候補になるスキル。`{ "id", "skills": [{ "name", "description", "source": "user" \| "project" }] }`。`~/.claude/skills/` とセッションの `cwd` の `.claude/skills/` から集め、プロジェクト側を先に、同じ名前はプロジェクトが勝つ。Claude 以外は空。窓の中に無いセッションは `404` |
@@ -35,8 +35,8 @@
 | `GET /api/feed?days=3&project=` | 生の行と `replying`。アーカイブ済みセッションの行は除く |
 | `GET /api/search?q=&days=90` | 発言の本文で探す（#230）。`hits` は新しい順（上限 100 件、超えたら `truncated`）。1 件に `id` / `ts`（飛び先は `#/s/<id>?ts=<ts>`）、`who`（`me` / `agent`）、`excerpt` と強調の場所 `hits`。舐めるのは `text` と `user_text` だけで `thinking` と待ちの行は見ない。**アーカイブ済みも含む**。`q` が空（か空白だけ）なら行も読まず空で返す |
 
-返信の実行は `server/runner.ts`。`claude` / `codex` は `detached` で起動して待たず、stdout/stderr は `~/.agent-feed/reply.log` に追記する（うまく動かないときはここを見る）。同じエンティティに同時に2本は走らせない。
+返信の実行は `server/reply/runner.ts`。`claude` / `codex` は `detached` で起動して待たず、stdout/stderr は `~/.agent-feed/reply.log` に追記する（うまく動かないときはここを見る）。同じエンティティに同時に2本は走らせない。
 
-集計はサーバ側（`server/aggregate.ts`）。エンティティのキー（`<セッション>@<リポジトリ>`、セッションが取れない行は `unknown-<日付>`）は `shared/entity.ts` にあり、サーバの集計と画面のリンクが同じ関数を使う。ファイルは `(mtime, size)` で覚えていて、変わっていなければ再パースしない（`server/store.ts`）。1日開きっぱなしにしても重くならないのはこのため。
+集計はサーバ側（`server/rows/aggregate.ts`）。エンティティのキー（`<セッション>@<リポジトリ>`、セッションが取れない行は `unknown-<日付>`）は `shared/entity.ts` にあり、サーバの集計と画面のリンクが同じ関数を使う。ファイルは `(mtime, size)` で覚えていて、変わっていなければ再パースしない（`server/rows/store.ts`）。1日開きっぱなしにしても重くならないのはこのため。
 
 レスポンスの形は `shared/types.ts` に1つだけ書いてあり、サーバの集計と画面の受け取りが同じ型を見る。フィールドを足すときはそこに足すと、片方だけ忘れたときに `pnpm typecheck` で止まる。

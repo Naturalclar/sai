@@ -60,7 +60,7 @@ Slack と同じ形。左のサイドバーがチャンネル一覧（先頭に�
 
 - **「SAI からは答えられない」とは言わない**（#232）。端末（tmux）で開いていればそのペインに打ち込めるし、開いていなくても `-p` / `codex queue` で再開できる。判定は返信欄と同じ `replyBlockedReason()` を使う（`TodoItem.replyable`）
 - **別プロセスの返信を処理中のセッションは「待機中」を出さない**（#232）。`claude -p` の許可・質問は必ず `--permission-prompt-tool` を通るので、答え待ちがあれば「答え待ち」の側に載っている。載っていないなら待っているのではなく動いている。行の `waiting` は**待ちの行のあとにターン完了の行が届くまで消えない**（許可や質問への回答は `UserPromptSubmit` ではないので `record.py` は再開の行を書かない）ため、これをしないと答えたあとも残り続ける。端末に打ち込んだ返信（`replying[].via === 'terminal'`）は SAI に口が無く行の `waiting` しか手がかりが無いので、そのまま残す
-- **端末で答えたら、次のターンを待たずに消える**（#255）。行の `waiting` は答えても消えない（上のとおり再開の行が書かれない）ので、**端末で開いていて行の上では待っているセッションだけ、ペインを見て畳む**（`server/waitingSettle.ts`）。ダイアログが消えていれば人が答えたということなので `waiting` を空にする。**分からないときは畳まない**（入力欄が読めない・ペインが消えた・別のプロセスになった、は全部「残す」側）。畳むのは応答を組み立てるときだけで記録は触らないので、**要対応・サイドバーの「待機中」・チャット見出しが同時に**正しくなる。`SAI_TERMINAL=0` なら見に行かない
+- **端末で答えたら、次のターンを待たずに消える**（#255）。行の `waiting` は答えても消えない（上のとおり再開の行が書かれない）ので、**端末で開いていて行の上では待っているセッションだけ、ペインを見て畳む**（`server/reply/waitingSettle.ts`）。ダイアログが消えていれば人が答えたということなので `waiting` を空にする。**分からないときは畳まない**（入力欄が読めない・ペインが消えた・別のプロセスになった、は全部「残す」側）。畳むのは応答を組み立てるときだけで記録は触らないので、**要対応・サイドバーの「待機中」・チャット見出しが同時に**正しくなる。`SAI_TERMINAL=0` なら見に行かない
 - **答え待ちは絞り込みに関わらず全部出す。** サーバが返す `approvals` はリポジトリや日数の絞り込みを通っていない（`Approvals.snapshot()` そのもの）。エージェントを止めている＝取りこぼすと困るものなので、一覧から消えていても出す（その場合は名前が分からないので ID を出す）。逆に **待機中は `SessionSummary` からしか作れないので絞り込みに従う**
 - **返信の失敗（`replying[].failed`）はここには出さない。** 2 分（`FAILED_TTL_MS`）で消える作りなので、一覧に出しても取りこぼす。失敗はいままでどおり送った画面にその場で出る（#172）
 - アーカイブ済みは出さない（ただし答え待ちだけは出す。プロセスが止まっているのは変わらないため）
@@ -105,7 +105,7 @@ Slack のチャット風。1ターンは「自分の入力（`user_text`）→ �
 
 バブルの本文は **Markdown として描く**（`shared/markdown.ts` → `web/src/Markdown.tsx`）。扱うのはエージェントの返答で頻出するものだけ: URL と `[ラベル](URL)` のリンク（別タブで開く。先が http(s) 以外ならリンクにしない）、`**太字**`、`` `コード` ``、`- ` / `1. ` の箇条書き、`#` 見出し、` ``` ` のコードブロック、`> ` 引用、`---` 罫線、`:tada:` の絵文字（Slack と同じ記法。`shared/emoji.ts` の表に載っている名前だけを 🎉 にする。`14:08:30` のような時刻や表に無い名前はただの文字のまま。`` `:tada:` `` とコードブロックの中も変えない）。それ以外はそのまま改行を保って出す。HTML 文字列は組み立てず React 要素にするので、`text` に HTML が入っていてもただの文字として出る。一覧の「最後の発言」は同じ字句解析で記号だけ落とした1行。
 
-チャット見出しには**そのリポジトリへのリンク**が出る（#212。GitHub のアイコン + `Naturalclar/sai`。押すと別タブで開く）。飛び先は行の `remote`（`record.py` が origin を `https://host/owner/repo` に正規化して載せる）で、**古い行で `remote` が無いセッションはサーバが `cwd` の git から埋める**（`server/project.ts`。`project` を引くときにどのみち origin を読んでいる）。origin の無いリポジトリでは飛び先が無いので**何も出さない**。ホストが `github.com` のときだけ GitHub のロゴを使い、GitLab や self-hosted には汎用のリポジトリの印を出す。出すのは見出しだけで、一覧とフィードには出さない。
+チャット見出しには**そのリポジトリへのリンク**が出る（#212。GitHub のアイコン + `Naturalclar/sai`。押すと別タブで開く）。飛び先は行の `remote`（`record.py` が origin を `https://host/owner/repo` に正規化して載せる）で、**古い行で `remote` が無いセッションはサーバが `cwd` の git から埋める**（`server/git/project.ts`。`project` を引くときにどのみち origin を読んでいる）。origin の無いリポジトリでは飛び先が無いので**何も出さない**。ホストが `github.com` のときだけ GitHub のロゴを使い、GitLab や self-hosted には汎用のリポジトリの印を出す。出すのは見出しだけで、一覧とフィードには出さない。
 
 チャット見出しの「アーカイブ」でそのセッションを一覧とフィードから隠せる（アーカイブ済みなら「戻す」）。アーカイブ済みのセッションは `#/s/<id>` で直接開けば普通に読めるが、入力欄は出ない（返すなら先に戻す）。
 
@@ -220,9 +220,9 @@ SAI_CODEX_APP_SERVER_ARGS='-c sandbox_mode="workspace-write"' pnpm start  # app-
 
 端末と同じく、返信で回したエージェントが **許可（ツール実行の確認）や質問で止まったら、SAI のチャットに ⏳ のバブルと、実際に選べる決定（質問なら選択肢）が出て、そこから答えられる**。答えるまでエージェントは待っていて、一覧には「待機中」が付く。Claudeだけは [常に許可] も持つ。
 
-Codexは `server/codexAppServer.ts` がSAIサーバー配下に長寿命の `codex app-server --stdio` を持ち、`experimentalApi: true`、`approvalsReviewer: user` で `thread/resume` / `turn/start` する。`item/tool/requestUserInput`、`item/commandExecution/requestApproval`、`item/fileChange/requestApproval`、`item/permissions/requestApproval` を受け、同じJSON-RPC request idへ応答する。コマンドは `availableDecisions` の実値をサーバ内に置き、画面へは不透明なidしか出さない。別thread/turn、未提示decision、二重回答は拒否し、request解消・turn完了・切断で待機を消す。
+Codexは `server/reply/codexAppServer.ts` がSAIサーバー配下に長寿命の `codex app-server --stdio` を持ち、`experimentalApi: true`、`approvalsReviewer: user` で `thread/resume` / `turn/start` する。`item/tool/requestUserInput`、`item/commandExecution/requestApproval`、`item/fileChange/requestApproval`、`item/permissions/requestApproval` を受け、同じJSON-RPC request idへ応答する。コマンドは `availableDecisions` の実値をサーバ内に置き、画面へは不透明なidしか出さない。別thread/turn、未提示decision、二重回答は拒否し、request解消・turn完了・切断で待機を消す。
 
-仕組みは `claude -p` の `--permission-prompt-tool`。SAI は返信の `claude` に自分の MCP サーバ（`server/approve-mcp.ts`。stdio、依存ゼロ）を `--mcp-config` で足し、許可が要るたびにそのツールが呼ばれる。ツールは SAI サーバに預けて（`POST /api/approvals`）答えが付くまで待ち（`GET /api/approvals/<id>?wait=1`）、画面の答え（`POST /api/approvals/<id>/answer`）をそのまま CLI に返す。
+仕組みは `claude -p` の `--permission-prompt-tool`。SAI は返信の `claude` に自分の MCP サーバ（`server/approvals/approve-mcp.ts`。stdio、依存ゼロ）を `--mcp-config` で足し、許可が要るたびにそのツールが呼ばれる。ツールは SAI サーバに預けて（`POST /api/approvals`）答えが付くまで待ち（`GET /api/approvals/<id>?wait=1`）、画面の答え（`POST /api/approvals/<id>/answer`）をそのまま CLI に返す。
 
 ```
 claude -p --resume … --mcp-config '{"mcpServers":{"sai":…}}' --permission-prompt-tool mcp__sai__approve
@@ -272,7 +272,7 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 
 比べる相手（base）は `origin/HEAD` → `origin/main` → `origin/master` → `main` → `master` の順にローカルで探す（ネットワークは叩かない）。**`origin/HEAD` は bare clone だと未設定**なので、この順で落ちるようにしてある。`?base=` で他のブランチやタグに変えられる。
 
-- **読むだけ。** `rev-parse` / `symbolic-ref` / `merge-base` / `diff` / `ls-files` しか呼ばない（`server/diff.ts` の `RealGit` が他を弾く）。`cwd` はセッションの行から取り、リクエストからは受けない
+- **読むだけ。** `rev-parse` / `symbolic-ref` / `merge-base` / `diff` / `ls-files` しか呼ばない（`server/git/diff.ts` の `RealGit` が他を弾く）。`cwd` はセッションの行から取り、リクエストからは受けない
 - 3 秒のポーリングには乗せない。**本文（patch）はボタンを押したときに 1 回だけ**、**行数と PR 番号は `?summary=1` の軽い口**（`--numstat` だけで patch を作らない）から、セッションを開いたときと新しいターンが記録されたときだけ読む
 - 大きすぎる差分は本文を落とす（1 ファイル 200KB、1 セクション 2MB）。**ファイルの一覧は必ず全部返す**ので何が変わったかは分かり、`remote` があれば GitHub の compare へのリンクを添える
 - worktree が別のブランチに移っていれば、セッションの `branch` と今の `HEAD` の食い違いを出す
@@ -280,7 +280,7 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 
 ### ボタンに出る PR 番号
 
-そのブランチに GitHub の PR が出ていれば `#211` のように併記する。**ここが SAI で唯一、外のネットワークに問い合わせる場所**なので次のように閉じてある（`server/pr.ts`）:
+そのブランチに GitHub の PR が出ていれば `#211` のように併記する。**ここが SAI で唯一、外のネットワークに問い合わせる場所**なので次のように閉じてある（`server/git/pr.ts`）:
 
 - 叩くのは `gh pr view <branch> --json number,url,state,isDraft` の **1 形だけ**。他のサブコマンドは組み立てられない
 - **認証は `gh` に任せる**（SAI は鍵を持たない）。`gh` が入っていない・ログインしていない・その PR が無い・ネットワークが死んでいる、のどれでも**番号が付かないだけ**で、差分そのものは今までどおり出る
@@ -299,7 +299,7 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 - **既定はオフ。** トークンと時間を使うのと、本文を LLM に送るので、黙って走らせない。オンにしても**サーバが起動したあとに増えた行**だけ作る（過去の行は作らない）
 - 1 行ずつ直列で回す。失敗した行（`claude` が無い、ログインしていない、90 秒で終わらない）は一言無しのままで、画面は本文を出す。理由は `~/.agent-feed/digest.log` に残る
 - 一言を作る `claude -p` が自分自身を記録しないよう、その子プロセスには `AGENT_FEED_SKIP=1` を渡す（`record.py` はこれが立っていると何も書かない）。`--bare` は OAuth を読まないので使えない。フックが指す `record.py` が古くてこれを知らない間は子のターンが JSONL に書かれてしまうが、子は `~/.agent-feed` を `cwd` にして起動するので、サーバは **`cwd` がそこの行を SAI 自身の雑音として読み飛ばす**（画面に出ず、要約もしない）。フックの checkout を最新にすれば書かれなくなる
-- **ローカルの LLM で作る**（Ollama / LM Studio / llama.cpp / vLLM）: `SAI_DIGEST_PROVIDER=openai` にすると、`claude` の代わりに OpenAI 互換の `POST <SAI_DIGEST_URL>/chat/completions` を Node の `fetch` で叩く（依存は足さない。`server/digest.ts` の `OpenAISummarizer`）。`SAI_DIGEST_URL` の既定は Ollama の `http://127.0.0.1:11434/v1`、LM Studio なら `http://127.0.0.1:1234/v1`。**`SAI_DIGEST_MODEL` は必須**（`haiku` はローカルに無い。忘れると起動時に stderr に理由が出て一言が付かないだけで、サーバは立つ）。鍵が要る口には `SAI_DIGEST_API_KEY`（`Authorization: Bearer`）。思考つきのモデル（qwen3 など）が本文に混ぜる `<think>…</think>` は落とす。子プロセスを立てないので `AGENT_FEED_SKIP` の話は無く、`claude` が無い環境でも動く。口調（MBTI）の指示は同じプロンプトで出すので、小さいモデルだと崩れる。崩れるならモデルを上げる。例:
+- **ローカルの LLM で作る**（Ollama / LM Studio / llama.cpp / vLLM）: `SAI_DIGEST_PROVIDER=openai` にすると、`claude` の代わりに OpenAI 互換の `POST <SAI_DIGEST_URL>/chat/completions` を Node の `fetch` で叩く（依存は足さない。`server/digest/digest.ts` の `OpenAISummarizer`）。`SAI_DIGEST_URL` の既定は Ollama の `http://127.0.0.1:11434/v1`、LM Studio なら `http://127.0.0.1:1234/v1`。**`SAI_DIGEST_MODEL` は必須**（`haiku` はローカルに無い。忘れると起動時に stderr に理由が出て一言が付かないだけで、サーバは立つ）。鍵が要る口には `SAI_DIGEST_API_KEY`（`Authorization: Bearer`）。思考つきのモデル（qwen3 など）が本文に混ぜる `<think>…</think>` は落とす。子プロセスを立てないので `AGENT_FEED_SKIP` の話は無く、`claude` が無い環境でも動く。口調（MBTI）の指示は同じプロンプトで出すので、小さいモデルだと崩れる。崩れるならモデルを上げる。例:
 
   ```
   ollama pull qwen3:8b

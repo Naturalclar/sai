@@ -1,6 +1,6 @@
 // エンティティID。一覧・詳細の1エンティティ = 1 (セッション, リポジトリ)。
 // 同じセッションIDが別リポジトリに現れても（IDの衝突や cwd の移動）別エンティティとして扱う。
-// サーバの集計（server/aggregate.ts）と画面のリンク（web/src/Chat.tsx）が同じ関数を使い、ずれない。
+// サーバの集計（server/rows/aggregate.ts）と画面のリンク（web/src/Chat.tsx）が同じ関数を使い、ずれない。
 
 export const TIME_ZONE = 'Asia/Tokyo'
 

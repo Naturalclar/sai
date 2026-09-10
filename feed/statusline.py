@@ -32,7 +32,7 @@ from pathlib import Path
 # record.py は実行部分が __main__ ガードの中なので、import しても何も起きない
 import record
 
-#: このファイルの形の版。増やすときはサーバ側（server/usage.ts）も直す
+#: このファイルの形の版。増やすときはサーバ側（server/local/usage.ts）も直す
 USAGE_VERSION = 1
 #: 記録するもの。ここに無い窓（gateway の spend_limit など）は今は捨てる
 WINDOWS = ("five_hour", "seven_day")

@@ -12,10 +12,10 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import type { DiffPr, SessionDiffSummaryResponse } from '../shared/types.ts'
 import { createApp } from './app.ts'
-import { FeedStore } from './store.ts'
-import { localDate } from './aggregate.ts'
-import { row } from './aggregate.test.ts'
-import type { PrLookup } from './pr.ts'
+import { FeedStore } from './rows/store.ts'
+import { localDate } from './rows/aggregate.ts'
+import { row } from './rows/aggregate.test.ts'
+import type { PrLookup } from './git/pr.ts'
 
 const run = promisify(execFile)
 const git = async (cwd: string, ...args: string[]) => {

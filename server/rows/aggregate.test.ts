@@ -1,0 +1,309 @@
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import type { FeedRow } from '../../shared/types.ts'
+import { aggregate, clip, facets, filterSessions, localDate, recentDates, recordVersionOf } from './aggregate.ts'
+
+export function row(ts: Date, session: string, over: Partial<FeedRow> = {}): FeedRow {
+  return {
+    ts: ts.toISOString().replace(/\.\d{3}Z$/, '+00:00'),
+    agent: 'claude',
+    repo: 'kanban',
+    branch: 'main',
+    session,
+    session_source: 'payload',
+    cwd: '/home/u/kanban',
+    event: 'Stop',
+    text: 'hi',
+    user_text: 'やって',
+    first_user_text: '',
+    ...over,
+  }
+}
+
+const min = (n: number) => n * 60_000
+
+test('localDate は Asia/Tokyo で切る', () => {
+  assert.equal(localDate('2026-09-02T00:30:00+09:00'), '2026-09-02')
+  assert.equal(localDate('2026-09-01T16:30:00Z'), '2026-09-02', 'UTC 16:30 は JST の翌日')
+  assert.equal(localDate('2026-09-01T14:30:00Z'), '2026-09-01')
+  assert.equal(localDate('garbage-but-long'), 'garbage-bu')
+})
+
+test('recentDates は今日から新しい順', () => {
+  const dates = recentDates(3, new Date('2026-09-01T16:00:00Z')) // JST 9/2 01:00
+  assert.deepEqual(dates, ['2026-09-02', '2026-09-01', '2026-08-31'])
+})
+
+test('clip はコードポイントで数える', () => {
+  assert.equal(clip('あ'.repeat(60), 60).length, 60)
+  assert.equal(clip('あ'.repeat(61), 60), 'あ'.repeat(59) + '…')
+  assert.equal(clip('😀'.repeat(5), 3), '😀😀…')
+})
+
+test('(セッション, リポジトリ) 単位にまとめて新しい順', () => {
+  const base = new Date('2026-09-02T01:00:00Z')
+  const rows = [
+    row(base, 'A', { text: '第一声\n二行目', user_text: '', first_user_text: 'やりたいこと' }),
+    row(new Date(base.getTime() + min(5)), 'A', { branch: 'feat', text: 'second', user_text: '' }),
+    row(new Date(base.getTime() + min(60)), 'B', { agent: 'codex', text: 'codex says', user_text: '', session_source: 'synth' }),
+  ]
+  const sessions = aggregate(rows)
+  assert.deepEqual(sessions.map((s) => s.id), ['B@kanban', 'A@kanban'])
+  const a = sessions[1]!
+  assert.equal(a.turns, 2)
+  assert.equal(a.title, 'やりたいこと')
+  assert.equal(a.repo, 'kanban')
+  assert.equal(a.branch, 'feat')
+  assert.deepEqual(a.branches, ['main', 'feat'])
+  assert.equal(a.session_source, 'payload')
+  assert.equal(a.date, '2026-09-02')
+  const b = sessions[0]!
+  assert.equal(b.title, 'codex says', 'first_user_text が無ければ最初の text の1行目')
+  assert.equal(b.session_source, 'synth')
+})
+
+test('一番新しい、値のある行の値を使う（途中に古い行が混ざっても、前の値に戻っても。#283）', () => {
+  const base = new Date('2026-09-02T01:00:00Z')
+  const at = (n: number) => new Date(base.getTime() + min(n))
+  const remote = 'https://github.com/o/kanban'
+  const s = aggregate([
+    row(at(0), 'A', { branch: 'main', host: 'mini', remote, project: 'o/kanban' }),
+    // 試作の record.py が書いた、出どころもホストも無い行（#54 の残り。JSON にキーが無いのと同じく空で扱う）
+    row(at(1), 'A', { branch: 'feat', session_source: '' }),
+    row(at(2), 'A', { branch: 'main' }),
+    // ブランチもホストも取れなかった行は上書きしない
+    row(at(3), 'A', { branch: '', host: '' }),
+  ])[0]!
+  assert.equal(s.session_source, 'payload', '空の出どころが途中に 1 本あっても、一番新しい payload を使う（前は空になり返信を弾いていた）')
+  assert.deepEqual(s.sources, ['payload', ''], '出てきた順の一覧はそのまま')
+  assert.equal(s.branch, 'main', 'main → feat → main と戻れば main（前は feat のままだった）')
+  assert.deepEqual(s.branches, ['main', 'feat'])
+  assert.equal(s.host, 'mini')
+  assert.equal(s.remote, remote)
+  assert.equal(s.project, 'o/kanban')
+
+  // 合成（synth）が 1 本でもあれば synth（返信できない方に倒す。今までどおり）
+  const synth = aggregate([row(at(0), 'B', { session_source: 'synth' }), row(at(1), 'B', { session_source: 'payload' })])[0]!
+  assert.equal(synth.session_source, 'synth')
+
+  // 出どころが 1 本も無ければ空（「IDの出どころが不明」のまま）
+  const none = aggregate([row(at(0), 'C', { session_source: '' })])[0]!
+  assert.equal(none.session_source, '')
+})
+
+test('タイトルは一番新しい user_text に追従する（返信や端末での続きの指示で変わる）', () => {
+  const base = new Date('2026-09-02T01:00:00Z')
+  const first = [row(base, 'A', { user_text: '最初の指示', first_user_text: '最初の指示' })]
+  assert.equal(aggregate(first)[0]!.title, '最初の指示')
+
+  const replied = [...first, row(new Date(base.getTime() + min(5)), 'A', { user_text: '続きの指示\n2行目', first_user_text: '最初の指示' })]
+  assert.equal(aggregate(replied)[0]!.title, '続きの指示', '1行目だけ')
+  assert.equal(aggregate(replied)[0]!.title_full, '続きの指示')
+
+  const blank = [...replied, row(new Date(base.getTime() + min(10)), 'A', { user_text: '  ', first_user_text: '最初の指示' })]
+  assert.equal(aggregate(blank)[0]!.title, '続きの指示', 'user_text が空の行は飛ばす')
+
+  const old = [row(base, 'B', { user_text: '', first_user_text: '古い行' }), row(new Date(base.getTime() + min(5)), 'B', { user_text: '', first_user_text: '古い行' })]
+  assert.equal(aggregate(old)[0]!.title, '古い行', 'user_text が1行も無ければ first_user_text')
+})
+
+test('同じセッションIDでもリポジトリが違えば別エンティティ', () => {
+  const base = new Date('2026-09-02T01:00:00Z')
+  const sessions = aggregate([
+    row(base, 'A', { text: 'kanban 側' }),
+    row(new Date(base.getTime() + min(9)), 'A', { repo: 'other', text: 'other 側' }),
+  ])
+  assert.deepEqual(sessions.map((s) => s.id), ['A@other', 'A@kanban'])
+  assert.deepEqual(sessions.map((s) => s.turns), [1, 1])
+  assert.deepEqual(sessions.map((s) => s.repos), [['other'], ['kanban']])
+})
+
+test('タイトルは60文字で切る', () => {
+  const s = aggregate([row(new Date(), 'A', { user_text: 'あ'.repeat(100) })])[0]!
+  assert.equal(Array.from(s.title).length, 60)
+  assert.ok(s.title.endsWith('…'))
+  assert.equal(Array.from(s.title_full).length, 100)
+})
+
+test('絞り込みと候補', () => {
+  const base = new Date('2026-09-02T01:00:00Z')
+  const sessions = aggregate([
+    row(base, 'A', { repo: 'x' }),
+    row(base, 'B', { repo: 'y', agent: 'codex' }),
+    row(new Date(base.getTime() - min(60 * 24)), 'C', { repo: 'x' }),
+  ])
+  const ids = (list: typeof sessions) => new Set(list.map((s) => s.id))
+  assert.deepEqual(ids(filterSessions(sessions, { repo: 'x' })), new Set(['A@x', 'C@x']))
+  assert.deepEqual(ids(filterSessions(sessions, { agent: 'codex' })), new Set(['B@y']))
+  assert.deepEqual(ids(filterSessions(sessions, { repo: 'x', date: '2026-09-01' })), new Set(['C@x']))
+  // remote も project も無い行なので、リポジトリの候補は空（worktree 名は混ぜない。#182）。
+  // host を載せない行しか無いのでマシンの候補も空（画面は 1 台以下なら絞り込みを出さない。#114）
+  assert.deepEqual(facets(sessions), { projects: [], repos: ['x', 'y'], agents: ['claude', 'codex'], dates: ['2026-09-02', '2026-09-01'], hosts: [] })
+})
+
+test('host: 一番新しい行のものを出し、出てきた全部を hosts に。絞り込みと候補にも出る（#114）', () => {
+  const base = new Date('2026-09-02T01:00:00Z')
+  const sessions = aggregate([
+    row(base, 'A', { repo: 'x', host: 'mac' }),
+    row(new Date(base.getTime() + min(1)), 'A', { repo: 'x', host: 'mac' }),
+    row(base, 'B', { repo: 'y', host: 'mini' }),
+    // host を載せない古い record.py の行。空は数えない（自分のマシン扱い）
+    row(base, 'C', { repo: 'z' }),
+  ])
+  const byId = new Map(sessions.map((s) => [s.id, s]))
+  assert.deepEqual([byId.get('A@x')!.host, byId.get('A@x')!.hosts], ['mac', ['mac']])
+  assert.deepEqual([byId.get('B@y')!.host, byId.get('B@y')!.hosts], ['mini', ['mini']])
+  assert.deepEqual([byId.get('C@z')!.host, byId.get('C@z')!.hosts], ['', []])
+
+  const ids = (list: typeof sessions) => new Set(list.map((s) => s.id))
+  assert.deepEqual(ids(filterSessions(sessions, { host: 'mini' })), new Set(['B@y']))
+  assert.deepEqual(ids(filterSessions(sessions, { host: 'mac' })), new Set(['A@x']))
+  assert.deepEqual(facets(sessions).hosts, ['mac', 'mini'], 'host の無いセッションは候補に出さない')
+})
+
+test('host: 途中でマシンが変わったら、出てきた順に全部（集めた JSONL を繋いだとき）', () => {
+  const base = new Date('2026-09-02T01:00:00Z')
+  const [s] = aggregate([
+    row(base, 'A', { repo: 'x', host: 'mini' }),
+    row(new Date(base.getTime() + min(1)), 'A', { repo: 'x', host: 'mac' }),
+  ])
+  assert.deepEqual([s!.host, s!.hosts], ['mac', ['mini', 'mac']], '表示は一番新しい行のもの')
+})
+
+test('project: bare clone の worktree でもリポジトリでまとまる（repo は worktree 名のまま）', () => {
+  const base = new Date('2026-09-02T01:00:00Z')
+  const sai = 'https://github.com/Naturalclar/sai'
+  const sessions = aggregate([
+    // 同じ sai の別 worktree。repo は dev-min / dev-alqa と分かれるが project は 1 つ
+    row(base, 'A', { repo: 'dev-min', remote: sai }),
+    row(base, 'B', { repo: 'dev-alqa', remote: sai }),
+    // worktree 名は同じ「main」でも別のリポジトリ
+    row(base, 'C', { repo: 'main', remote: 'https://github.com/Naturalclar/kanban' }),
+    row(base, 'D', { repo: 'main', remote: sai, project: 'Naturalclar/sai' }),
+    // remote も project も無い古い行は repo に落ちる
+    row(base, 'E', { repo: 'local-only', remote: undefined }),
+  ])
+  const by = Object.fromEntries(sessions.map((s) => [s.id, s.project]))
+  assert.equal(by['A@dev-min'], 'Naturalclar/sai')
+  assert.equal(by['B@dev-alqa'], 'Naturalclar/sai', '古い行でも remote から補う')
+  assert.equal(by['C@main'], 'Naturalclar/kanban')
+  assert.equal(by['D@main'], 'Naturalclar/sai', '同じ worktree 名でも別リポジトリ')
+  assert.equal(by['E@local-only'], '', 'remote も project も無ければ空（サーバが cwd から埋める。#182）')
+
+  const ids = (list: typeof sessions) => new Set(list.map((s) => s.id))
+  assert.deepEqual(ids(filterSessions(sessions, { project: 'Naturalclar/sai' })), new Set(['A@dev-min', 'B@dev-alqa', 'D@main']))
+  assert.deepEqual(ids(filterSessions(sessions, { project: 'Naturalclar/sai', repo: 'dev-min' })), new Set(['A@dev-min']), 'worktree でさらに絞れる')
+  assert.deepEqual(facets(sessions).projects, ['Naturalclar/kanban', 'Naturalclar/sai'], '分からないものは候補に出さない')
+  assert.deepEqual(facets(sessions).repos, ['dev-alqa', 'dev-min', 'local-only', 'main'])
+})
+
+test('session が空の行は unknown-<日付> にまとめる（リポジトリ別）', () => {
+  const s = aggregate([row(new Date('2026-09-02T01:00:00Z'), '', { repo: 'r' })])[0]!
+  assert.equal(s.id, 'unknown-2026-09-02@r')
+})
+
+test('待ちの行: 最後が待ちなら waiting にその text、ターン数と最後の発言には数えない', () => {
+  const t0 = new Date('2026-09-02T01:00:00Z')
+  const rows = [
+    row(t0, 's1', { text: '始めた' }),
+    row(new Date(t0.getTime() + min(1)), 's1', { event: 'PermissionRequest', text: '許可待ち: Bash: rm -rf node_modules', user_text: '' }),
+  ]
+  const [s] = aggregate(rows)
+  assert.equal(s!.waiting, '許可待ち: Bash: rm -rf node_modules')
+  assert.equal(s!.turns, 1)
+  assert.equal(s!.last_text, '始めた', '待ちの行の text は「最後の発言」にしない')
+  assert.equal(s!.end, rows[1]!.ts, '最終更新は待ち始めた時刻')
+})
+
+test('待ちの行: 後にターン完了か再開が来れば waiting は空', () => {
+  const t0 = new Date('2026-09-02T01:00:00Z')
+  const wait = row(new Date(t0.getTime() + min(1)), 's1', { event: 'PreToolUse', text: '質問: 赤か青か?', user_text: '' })
+  const byStop = aggregate([row(t0, 's1'), wait, row(new Date(t0.getTime() + min(2)), 's1', { text: '青にした', user_text: '青' })])
+  assert.equal(byStop[0]!.waiting, '')
+  assert.equal(byStop[0]!.turns, 2)
+  assert.equal(byStop[0]!.last_text, '青にした')
+  assert.equal(byStop[0]!.title, '青', 'タイトルは最新の user_text（待ちの行は空なので飛ばす）')
+
+  const byResume = aggregate([row(t0, 's1'), wait, row(new Date(t0.getTime() + min(2)), 's1', { event: 'UserPromptSubmit', text: '', user_text: '' })])
+  assert.equal(byResume[0]!.waiting, '', '再開の行で解消')
+  assert.equal(byResume[0]!.turns, 1, '再開の行はターンではない')
+  assert.equal(byResume[0]!.last_text, 'hi')
+})
+
+test('入力の行（UserPromptSubmit + user_text）はターンに数えないが、タイトルはすぐ追従する', () => {
+  const t0 = new Date('2026-09-02T01:00:00Z')
+  const [s] = aggregate([
+    row(t0, 's1', { user_text: '最初' }),
+    row(new Date(t0.getTime() + min(1)), 's1', { event: 'UserPromptSubmit', text: '', user_text: '次の指示' }),
+  ])
+  assert.equal(s!.turns, 1)
+  assert.equal(s!.title, '次の指示', '返答を待たずにタイトルが変わる')
+  assert.equal(s!.last_text, 'hi', '最後の発言はターン完了の行のまま')
+  assert.equal(s!.waiting, '')
+})
+
+test('待ちの行だけのセッションでも壊れない', () => {
+  const [s] = aggregate([row(new Date('2026-09-02T01:00:00Z'), 's1', { event: 'Notification', text: '入力待ち', user_text: '', first_user_text: '頼み' })])
+  assert.equal(s!.turns, 0)
+  assert.equal(s!.last_text, '')
+  assert.equal(s!.waiting, '入力待ち')
+  assert.equal(s!.title, '頼み')
+})
+
+test('知らない event の行は末尾にあっても turns / last_text / last_turn_ts を奪わない（#235）', () => {
+  const t0 = new Date('2026-09-02T01:00:00Z')
+  const stop = row(t0, 's1', { text: 'PR #35 をマージした' })
+  // record.py はフック名・notify の type をそのまま載せるので、こういう行が実際に書かれうる
+  for (const event of ['SubagentStop', 'session-configured', 'PreCompact']) {
+    const [s] = aggregate([stop, row(new Date(t0.getTime() + min(1)), 's1', { event, text: '', user_text: '' })])
+    assert.equal(s!.turns, 1, `${event}: ターンに数えない`)
+    assert.equal(s!.last_text, 'PR #35 をマージした', `${event}: 最後の発言を空にしない`)
+    assert.equal(s!.last_turn_ts, stop.ts, `${event}: last_turn_ts は最後の Stop のまま（ずれると一言が消える）`)
+  }
+})
+
+test('知らない event の行しか無いセッションは 0 ターン（待ちにも最後の発言にもしない。#235）', () => {
+  const [s] = aggregate([row(new Date('2026-09-02T01:00:00Z'), 's1', { event: 'SessionStart', text: '', user_text: '', first_user_text: '頼み' })])
+  assert.equal(s!.turns, 0)
+  assert.equal(s!.last_text, '')
+  assert.equal(s!.waiting, '', '待ちでもない')
+})
+
+test('recordVersionOf は一番新しい行の v。無い行は 1（試作か古い record.py）、行が無ければ 0', () => {
+  const t0 = new Date('2026-09-05T01:00:00Z')
+  assert.equal(recordVersionOf([]), 0)
+  assert.equal(recordVersionOf([row(t0, 's1')]), 1, 'fixture の行には v が無い = 旧形式')
+  assert.equal(recordVersionOf([row(t0, 's1'), row(new Date(t0.getTime() + min(1)), 's1', { v: 2 })]), 2)
+  assert.equal(recordVersionOf([row(t0, 's1', { v: 2 }), row(new Date(t0.getTime() + min(1)), 's2')]), 1, '新しい行が旧形式なら古い record.py が混ざっている')
+})
+
+test('model は一番新しいターン完了の行のもの、models は出てきた順の重複なし。無い行は数えない', () => {
+  const base = new Date('2026-09-02T01:00:00Z')
+  const [s] = aggregate([
+    row(base, 'M', { model: 'claude-fable-5' }),
+    row(new Date(base.getTime() + min(1)), 'M', { model: 'claude-opus-5' }),
+    row(new Date(base.getTime() + min(2)), 'M', { event: 'PermissionRequest', text: '許可待ち', model: 'ignored' }),
+    row(new Date(base.getTime() + min(3)), 'M'),
+    row(new Date(base.getTime() + min(4)), 'M', { model: 'claude-fable-5' }),
+  ])
+  assert.equal(s!.model, 'claude-fable-5')
+  assert.deepEqual(s!.models, ['claude-fable-5', 'claude-opus-5'], '待ちの行のモデルは見ない。同じモデルは1回')
+  const [none] = aggregate([row(base, 'N')])
+  assert.equal(none!.model, '')
+  assert.deepEqual(none!.models, [])
+})
+
+test('pane / pid / last_turn は一番新しい行から（待ちの行は last_turn に数えない）', () => {
+  const t0 = new Date('2026-09-06T01:00:00Z')
+  const rows = [
+    row(t0, 's1', { pane: '%1', pid: 100 }),
+    row(new Date(t0.getTime() + min(1)), 's1', { pane: '%2', pid: 200 }),
+    row(new Date(t0.getTime() + min(2)), 's1', { event: 'PermissionRequest', text: '許可待ち: Bash: ls', user_text: '', pane: '%2', pid: 200 }),
+  ]
+  const [s] = aggregate(rows)
+  assert.equal(s!.pane, '%2')
+  assert.equal(s!.pid, 200)
+  assert.equal(s!.last_turn, rows[1]!.ts)
+  const [old] = aggregate([row(t0, 's1')])
+  assert.deepEqual([old!.pane, old!.pid], ['', 0], '旧形式の行には無い')
+})

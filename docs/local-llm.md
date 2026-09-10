@@ -83,7 +83,7 @@ error: unexpected argument '--oss' found
 SAI_CODEX_APP_SERVER_ARGS='-c model_provider=ollama -c model=qwen3:8b' pnpm start
 ```
 
-`SAI_CODEX_APP_SERVER_ARGS` は `server/runner.ts` の `splitArgs()` がシェル風に割り、長寿命の `codex app-server --stdio` に渡す。この形で画面から返信するとローカルモデルで回る。従来の `exec resume` に戻す場合だけ `SAI_CODEX_ARGS` を使う。
+`SAI_CODEX_APP_SERVER_ARGS` は `server/reply/runner.ts` の `splitArgs()` がシェル風に割り、長寿命の `codex app-server --stdio` に渡す。この形で画面から返信するとローカルモデルで回る。従来の `exec resume` に戻す場合だけ `SAI_CODEX_ARGS` を使う。
 
 セッションごとのモデル（チャット見出しの `ModelPicker`）は `-m` として渡るので **`resume` でも効く**。`model_provider` だけ設定に置いて、モデルはセッションごとに選ぶ、という使い方ができる。モデル名の `:` は通る（`shared/meta.ts` の `META_MODEL_RE` が `.` `_` `:` `/` `-` `[` `]` を許す）。
 
@@ -95,7 +95,7 @@ SAI_CODEX_APP_SERVER_ARGS='-c model_provider=ollama -c model=qwen3:8b' pnpm star
 ANTHROPIC_BASE_URL=http://127.0.0.1:4000 pnpm start
 ```
 
-**`server/runner.ts` の spawn は `env` を渡していない**ので、子プロセスはサーバの環境をそのまま継ぐ。つまり `pnpm start` したシェルに置けば、画面からの返信（`claude -p --resume`）にも届く。
+**`server/reply/runner.ts` の spawn は `env` を渡していない**ので、子プロセスはサーバの環境をそのまま継ぐ。つまり `pnpm start` したシェルに置けば、画面からの返信（`claude -p --resume`）にも届く。
 
 `claude` が実際にこの変数を見ることは確認済み（偽の受け口を立てて `ANTHROPIC_BASE_URL` を向けると `POST /v1/messages` が届く）。
 

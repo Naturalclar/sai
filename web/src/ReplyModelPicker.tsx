@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Agent } from '../../shared/types.ts'
-import { modelChoices, shortModel } from './modelChoices'
+import { MODEL_CUSTOM_LABEL, MODEL_DEFAULT_LABEL, modelButtonLabel, modelChoices } from './modelChoices'
 import { api } from './api'
 import { ModelNameModal } from './ModelNameModal'
 
@@ -18,7 +18,8 @@ export interface ReplyModelProps {
  * 入力欄の、送信ボタンの左に出すモデル。押すとメニューが開き、選ぶとそのセッションの返信モデルが変わる
  * （`PUT /api/sessions/<id>/meta` の `model`。次の返信から効く）。
  * 閉じているときは短い名前（`claude-opus-5` → `opus`）で、メニューには正式名を出す（別名と見分けが付かなくなるため）。
- * 候補に無い名前は「その他…」からモーダルで入れる。Esc と外側クリックで閉じるのは UserMenu と同じ。
+ * 候補に無い名前は `Custom model…` からモーダルで入れる。Esc と外側クリックで閉じるのは UserMenu と同じ。
+ * **選択肢の名前は英語**（#282。隣の許可モードの #271 と揃える）で、何が起きるかは日本語の補足で出す。
  * 呼び出し側は key={id} を付けること（別のセッションに移ったら開閉ごと作り直す）
  */
 export function ReplyModelPicker({ id, agent, models, value }: ReplyModelProps) {
@@ -78,12 +79,13 @@ export function ReplyModelPicker({ id, agent, models, value }: ReplyModelProps) 
         aria-expanded={open}
         title={`返信で使うモデル${current ? `: ${current}` : '（いまは CLI の既定）'}。押すと変えられる。次の返信から効く`}
       >
-        {busy ? '…' : shortModel(current) || '既定'}
+        {busy ? '…' : modelButtonLabel(current)}
       </button>
       {open && (
         <div className="menu" role="menu">
           <button type="button" role="menuitem" className={current ? '' : 'picked'} onClick={() => void save('')}>
-            既定<span className="why">CLI に任せる</span>
+            {MODEL_DEFAULT_LABEL}
+            <span className="why">CLI に任せる</span>
           </button>
           {choices.map((m) => (
             <button type="button" role="menuitem" key={m} className={m === current ? 'picked' : ''} onClick={() => void save(m)}>
@@ -98,7 +100,7 @@ export function ReplyModelPicker({ id, agent, models, value }: ReplyModelProps) 
               setCustom(true)
             }}
           >
-            その他…
+            {MODEL_CUSTOM_LABEL}
           </button>
         </div>
       )}

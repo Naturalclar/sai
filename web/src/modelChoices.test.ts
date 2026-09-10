@@ -1,6 +1,15 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { CLAUDE_ALIASES, MODEL_LABEL_MAX, modelChoices, shortModel } from './modelChoices.ts'
+import {
+  CLAUDE_ALIASES,
+  MODEL_CUSTOM_LABEL,
+  MODEL_DEFAULT_LABEL,
+  MODEL_LABEL_MAX,
+  modelButtonLabel,
+  modelChoices,
+  shortModel,
+} from './modelChoices.ts'
+import { shortReplyMode } from '../../shared/permissions.ts'
 
 test('modelChoices: 出てきたモデルが先、Claude なら別名を足す、重複は除く', () => {
   assert.deepEqual(modelChoices('claude', ['claude-opus-5'], ''), ['claude-opus-5', ...CLAUDE_ALIASES])
@@ -33,4 +42,22 @@ test('shortModel: 一族が分からないものは長ければ切る', () => {
   assert.equal(shortModel('  opus  '), 'opus', '前後の空白は落とす')
   assert.equal(shortModel(''), '')
   assert.equal(shortModel('claude-nosuch-1'), 'claude-nosuch…', '知らない一族は切るだけ')
+})
+
+test('modelButtonLabel: 未設定なら Default、設定済みなら短い名前（#282）', () => {
+  assert.equal(modelButtonLabel(''), 'Default', '設定していない = CLI の既定')
+  assert.equal(modelButtonLabel('   '), 'Default', '空白だけも未設定')
+  assert.equal(modelButtonLabel('claude-opus-5'), 'opus')
+  assert.equal(modelButtonLabel('qwen3:8b'), 'qwen3:8b')
+  // 隣の許可モードのボタン（未設定）と同じ言葉で出す。どちらも「CLI に任せる」
+  assert.equal(modelButtonLabel(''), shortReplyMode(''))
+})
+
+test('選択肢の名前は Claude Code の言い回しの英語（#282。許可モードの #271 と揃える）', () => {
+  assert.equal(MODEL_DEFAULT_LABEL, 'Default')
+  assert.equal(MODEL_CUSTOM_LABEL, 'Custom model…')
+  // 名前に日本語を混ぜない（何が起きるかの説明は補足・title・モーダルに分けてある）
+  for (const name of [MODEL_DEFAULT_LABEL, MODEL_CUSTOM_LABEL, modelButtonLabel('')]) {
+    assert.doesNotMatch(name, /[぀-ヿ一-龯]/, name)
+  }
 })

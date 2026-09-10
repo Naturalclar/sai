@@ -9,7 +9,7 @@ const MAX_HOST = 64
  * ホスト名を短い形にする。`feed/record.py` の `host_name()` と同じ規則（前後の空白を落とし、
  * 最初の `.` から先（`.local` などのドメイン部分）を捨て、64 文字で切る）。
  *
- * サーバ側（`SAI_HOST` / `os.hostname()`）と記録側で規則が違うと、同じマシンが `mbp` と `mbp.local` の
+ * サーバ側（`server/host.ts` の `selfHost()`）と記録側で規則が違うと、同じマシンが `mbp` と `mbp.local` の
  * 2 台に見えて、自分のセッションが全部リモート扱いになる
  */
 export function shortHost(raw: string): string {
@@ -25,8 +25,8 @@ export function shortHost(raw: string): string {
  *   （判定の材料が無いのに返信を止めると、1 台で使っている人が返信できなくなる）
  */
 export function isRemoteHost(host: string | undefined, self: string): boolean {
-  // 大文字小文字は無視する。ホスト名はもともと区別しないうえ、記録側（AGENT_FEED_HOST / gethostname）と
-  // サーバ側（SAI_HOST / os.hostname）で違う綴りが入りうる。**表示は元のまま**なので shortHost では畳まない
+  // 大文字小文字は無視する。ホスト名はもともと区別しないうえ、`AGENT_FEED_HOST` と `gethostname()` /
+  // `os.hostname()` で違う綴りが入りうる。**表示は元のまま**なので shortHost では畳まない
   const h = shortHost(host ?? '').toLowerCase()
   const s = shortHost(self).toLowerCase()
   return h !== '' && s !== '' && h !== s

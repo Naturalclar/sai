@@ -47,7 +47,7 @@ Claude Code の transcript には assistant の `thinking` ブロックが書か
 
 - 再開は `claude -p --resume <id>` / `codex exec resume` を **`cwd` で起動する**ことなので、その CLI・その履歴・その worktree があるマシンでしか走らない。行に `session` と `cwd` が載っていても、こちらには同じパスも同じ会話も無い
 - 端末に打ち込む経路も同じで、tmux のペインはあちらのマシンにある
-- そこで、行の `host` がサーバ自身の名前（`SAI_HOST` か `os.hostname()`）と違えば **`replyBlockedReason()` が止める**。サーバの受付（`400`）・入力欄・フィードの `@` 候補・「要対応」の `replyable` が同じ判定を見る
+- そこで、行の `host` がサーバ自身の名前（記録側と同じ `AGENT_FEED_HOST` か `os.hostname()`。#288）と違えば **`replyBlockedReason()` が止める**。サーバの受付（`400`）・入力欄・フィードの `@` 候補・「要対応」の `replyable` が同じ判定を見る
 
 → **リモートは「眺める」だけ**。答えるならそのマシンの SAI（か端末）へ行く。「こちらの SAI からあちらの SAI へ転送する」は別の話で、SAI 同士が通信することになるので「SAI は外に出さない」との兼ね合いを先に決める必要がある。
 

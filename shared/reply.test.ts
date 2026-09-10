@@ -77,7 +77,7 @@ test('replyBlockedReason: 別のマシンのセッションは再開できない
   const blocked = replyBlockedReason(summary({ host: 'mini' }), SELF)
   assert.match(blocked, /別のマシン（mini）/)
 
-  // サーバが自分の名前を決められないとき（SAI_HOST も hostname も取れない）は、何も止めない
+  // サーバが自分の名前を決められないとき（AGENT_FEED_HOST も hostname も取れない）は、何も止めない
   assert.equal(replyBlockedReason(summary({ host: 'mini' }), ''), '')
 })
 

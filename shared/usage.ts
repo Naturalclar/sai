@@ -1,10 +1,11 @@
 // 使用量（usage limit）の読み方と言い換え。ファイルを触らない純粋関数だけを置き、
 // サーバ（server/usage.ts が JSONL の行を渡す）と画面（web/src/UsageChip.tsx が言い換えを使う）が同じものを見る。
 //
-// **エージェントで取れるものが違う**（#216 で手元のファイルを見て確かめた）:
-//   Codex … rollout の token_count の行に rate_limits が毎ターン載る。5 時間と週の割合が分かる
-//   Claude … transcript の quotaLimits は**弾かれたときだけ**空でない。割合はローカルに無い
-// なので Codex はゲージ、Claude は「当たったかどうかと戻る時刻」になる。API は叩かない。
+// **エージェントで取れるものが違う**（#216 / #250 で手元のファイルを見て確かめた）:
+//   Codex  … rollout の token_count の行に rate_limits が毎ターン載る。5 時間と週の割合が分かる
+//   Claude … 割合は**ステータスライン**（feed/statusline.py が書く usage-claude.json）から。
+//            transcript の quotaLimits は**弾かれたときだけ**載るので「上限中」の合図にしかならない
+// どちらも手元のファイルを読むだけで、API は叩かない。
 import type { ClaudeUsage, CodexUsage, UsageWindow } from './types.ts'
 
 /** primary の枠の長さ（分）。Codex の 5 時間 */
@@ -66,7 +67,7 @@ export function parseCodexUsage(line: unknown): CodexUsage | null {
 
 /**
  * Claude の transcript の 1 行 → 上限に当たった記録。`quotaLimits` が `status: "rejected"` のときだけ。
- * 空の `{}`（普段の行）と、既に戻っている（resetsAt が過ぎた）ものは null。
+ * 空の `{}`（普段の行）と、既に戻っている（resetsAt が過ぎた）ものは null。**割合はここには無い**
  */
 export function parseClaudeUsage(line: unknown, now: number): ClaudeUsage | null {
   if (!line || typeof line !== 'object') return null
@@ -78,10 +79,59 @@ export function parseClaudeUsage(line: unknown, now: number): ClaudeUsage | null
   // 戻る時刻が無い・もう過ぎている記録は、いまの状態ではないので出さない
   if (resets === null || resets * 1000 <= now) return null
   return {
-    resets_at: resets,
-    kind: typeof quota.rateLimitType === 'string' ? quota.rateLimitType : '',
+    limited: { resets_at: resets, kind: typeof quota.rateLimitType === 'string' ? quota.rateLimitType : '' },
     at: typeof row.timestamp === 'string' ? row.timestamp : '',
   }
+}
+
+/**
+ * ステータスラインの窓（`used_percentage` と epoch 秒の `resets_at`）→ `UsageWindow`。
+ * **戻る時刻を過ぎていたら null**（次に Claude が動くまでファイルは更新されないので、古い割合をそのまま出さない）
+ */
+function parseStatusWindow(value: unknown, minutes: number, now: number): UsageWindow | null {
+  if (!value || typeof value !== 'object') return null
+  const o = value as Record<string, unknown>
+  const percent = num(o.used_percentage)
+  if (percent === null) return null
+  const resets = num(o.resets_at)
+  if (resets !== null && resets * 1000 <= now) return null
+  const window: UsageWindow = { used_percent: Math.min(100, Math.max(0, percent)), window_minutes: minutes }
+  if (resets !== null && resets > 0) window.resets_at = resets
+  return window
+}
+
+/** `resets_at` の無い窓を信じる上限。ファイルが古いまま残っていても、いつまでも出さない */
+export const STATUS_MAX_AGE_MS = 8 * 24 * 60 * 60 * 1000
+
+/**
+ * `usage-claude[.<host>].json`（feed/statusline.py が書く）→ 使用量。
+ * `rate_limits` が空、窓が全部戻っている、`ts` が古すぎる（STATUS_MAX_AGE_MS）ものは null。
+ */
+export function parseStatusLineUsage(file: unknown, now: number): ClaudeUsage | null {
+  if (!file || typeof file !== 'object') return null
+  const row = file as Record<string, unknown>
+  const at = typeof row.ts === 'string' ? row.ts : ''
+  const written = Date.parse(at)
+  if (Number.isNaN(written) || now - written > STATUS_MAX_AGE_MS) return null
+  const limits = row.rate_limits
+  if (!limits || typeof limits !== 'object') return null
+  const l = limits as Record<string, unknown>
+  const usage: ClaudeUsage = { at }
+  const primary = parseStatusWindow(l.five_hour, FIVE_HOURS_MINUTES, now)
+  const secondary = parseStatusWindow(l.seven_day, WEEK_MINUTES, now)
+  if (primary) usage.primary = primary
+  if (secondary) usage.secondary = secondary
+  return primary || secondary ? usage : null
+}
+
+/**
+ * 出どころの違う 2 つを 1 つにする。割合はステータスライン、`limited` は transcript からしか来ないので、
+ * 取れた方をそのまま重ねる。`at`（いつ時点か）は**割合の時刻を優先**する（画面のゲージの脇に出るのがそれ）
+ */
+export function mergeClaudeUsage(fromStatusLine: ClaudeUsage | null, fromTranscript: ClaudeUsage | null): ClaudeUsage | null {
+  if (!fromStatusLine) return fromTranscript
+  if (!fromTranscript) return fromStatusLine
+  return { ...fromStatusLine, limited: fromTranscript.limited }
 }
 
 /** 枠の長さの言い換え。手元にある 300 / 10080 だけ名前を付け、他は分のまま */

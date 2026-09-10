@@ -7,7 +7,9 @@ import {
   CACHE_MS,
   claudeProjectsDir,
   codexSessionsDir,
+  isClaudeUsageFile,
   readClaudeUsage,
+  readStatusLineUsage,
   readCodexUsage,
   recentRollouts,
   recentTranscripts,
@@ -143,7 +145,7 @@ test('readClaudeUsage: 弾かれていて、まだ戻っていない記録だけ
   const resets = Math.floor(now / 1000) + 42 * 60
   await writeTranscript(root, '-w-a', 'x.jsonl', [chatter(1), rejected('2026-09-09T09:30:00.000Z', resets)], new Date(now))
   const usage = await readClaudeUsage(root, now)
-  assert.deepEqual(usage, { resets_at: resets, kind: 'five_hour', at: '2026-09-09T09:30:00.000Z' })
+  assert.deepEqual(usage, { limited: { resets_at: resets, kind: 'five_hour' }, at: '2026-09-09T09:30:00.000Z' })
 })
 
 test('readClaudeUsage: 空の quotaLimits しか無い（普段）／もう戻った記録だけ、は null', async () => {
@@ -159,7 +161,7 @@ test('UsageStore: 読めないときは空の {}。CACHE_MS の間は読み直�
   const codex = join(root, 'codex')
   const claude = join(root, 'claude')
   let now = 1_000_000
-  const store = new UsageStore(codex, claude, () => now)
+  const store = new UsageStore(codex, claude, join(root, 'feed'), () => now)
   assert.deepEqual(await store.get(), {}, 'どちらも無ければ空。画面は黙って出さない')
 
   // キャッシュが効いている間は、あとから置いたファイルを拾わない
@@ -176,4 +178,48 @@ test('UsageStore: 同時に呼ばれても読むのは 1 回（画面を開き�
   const [a, b] = await Promise.all([store.get(), store.get()])
   assert.equal(a, b, '同じ結果を返す（読み直していない）')
   assert.equal(a.codex?.primary.used_percent, 7)
+})
+
+// ---- ステータスライン経由の割合（#250）。feed/statusline.py が feed dir に置くファイル
+const usageJson = (percent: number, ts: string, resetsAt: number) =>
+  JSON.stringify({ v: 1, ts, host: 'mbp', session: 'S1', model: 'claude-opus-5', rate_limits: { five_hour: { used_percentage: percent, resets_at: resetsAt } } })
+
+test('isClaudeUsageFile: usage-claude.json とマシンごとに分けたものだけ', () => {
+  assert.equal(isClaudeUsageFile('usage-claude.json'), true)
+  assert.equal(isClaudeUsageFile('usage-claude.mbp.json'), true)
+  assert.equal(isClaudeUsageFile('2026-09-10.jsonl'), false)
+  assert.equal(isClaudeUsageFile('usage-claude.json.1234.tmp'), false, '書きかけの tmp は読まない')
+  assert.equal(isClaudeUsageFile('replying.json'), false)
+})
+
+test('readStatusLineUsage: マシンごとのファイルが複数あれば一番新しいものを採る', async () => {
+  const feed = await tmp()
+  const now = Date.parse('2026-09-10T01:00:00+09:00')
+  const resets = Math.floor(now / 1000) + 3600
+  await writeFile(join(feed, 'usage-claude.mbp.json'), usageJson(20, '2026-09-10T00:10:00+09:00', resets))
+  await writeFile(join(feed, 'usage-claude.mini.json'), usageJson(64, '2026-09-10T00:55:00+09:00', resets))
+  const usage = await readStatusLineUsage(feed, now)
+  assert.equal(usage?.primary?.used_percent, 64)
+  assert.equal(usage?.at, '2026-09-10T00:55:00+09:00')
+})
+
+test('readStatusLineUsage: 壊れたファイル・ディレクトリごと無いときは null（画面は黙って出さない）', async () => {
+  const feed = await tmp()
+  assert.equal(await readStatusLineUsage(join(feed, 'none'), Date.now()), null)
+  await writeFile(join(feed, 'usage-claude.json'), '{書きかけ')
+  assert.equal(await readStatusLineUsage(feed, Date.now()), null)
+})
+
+test('UsageStore: 割合（ステータスライン）と上限中（transcript）を重ねて返す', async () => {
+  const root = await tmp()
+  const feed = join(root, 'feed')
+  const claude = join(root, 'claude')
+  await mkdir(feed, { recursive: true })
+  const now = Date.parse('2026-09-10T01:00:00+09:00')
+  const resets = Math.floor(now / 1000) + 3600
+  await writeFile(join(feed, 'usage-claude.json'), usageJson(42, '2026-09-10T00:59:00+09:00', resets))
+  await writeTranscript(claude, '-w-a', 'x.jsonl', [rejected('2026-09-10T00:30:00.000Z', resets)], new Date(now))
+  const usage = await new UsageStore(join(root, 'codex'), claude, feed, () => now).get()
+  assert.equal(usage.claude?.primary?.used_percent, 42, 'ステータスラインから割合')
+  assert.equal(usage.claude?.limited?.resets_at, resets, 'transcript から「いま上限中」')
 })

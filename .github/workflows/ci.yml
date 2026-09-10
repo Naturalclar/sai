@@ -74,5 +74,5 @@ jobs:
           git config --global user.email ci@example.com
           git config --global user.name ci
 
-      - name: unittest（feed/test_record.py）
-        run: python3 -m unittest -v feed.test_record
+      - name: unittest（feed/test_record.py, feed/test_statusline.py）
+        run: python3 -m unittest -v feed.test_record feed.test_statusline

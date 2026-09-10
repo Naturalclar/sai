@@ -13,6 +13,14 @@ export interface RefContext {
   remote?: string
   /** Linear の workspace（URL の linear.app/<workspace>/ の部分）。空なら Linear の識別子はリンクにしない */
   linear?: string
+  /**
+   * 言い換える前の本文（#268）。**渡すと、ここに出てこない番号はリンクにしない**（文字のまま出す）。
+   *
+   * 一言を書くのは LLM なので、**本文に無い番号を書くことがある**（プロンプトの作例の `PR #12` を
+   * そのまま写す、など）。番号は実在するのでリンク切れにもならず、押すと無関係の issue に飛ぶ。
+   * 渡さなければ今までどおり全部リンクにする（後方互換）
+   */
+  source?: string
 }
 
 const GITHUB_REMOTE = /^https:\/\/github\.com\/[^/\s]+\/[^/\s]+$/
@@ -27,18 +35,48 @@ const NOT_LINEAR = new Set(['UTF', 'SHA', 'MD', 'RFC', 'ISO', 'ES', 'TLS', 'SSL'
 // `#` の直前が英数字や `&` `/` なら参照ではない（`&#123;`、`a#1`、URL の `/path#1`）。後ろに英数字や `-` が続くものも除く
 const REF = /(?<![\w&/.-])(?:([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+))?#(\d{1,9})(?![\w-])|(?<![A-Za-z0-9-])([A-Z][A-Z0-9]{1,5})-(\d{1,6})(?![A-Za-z0-9-])/g
 
+/**
+ * 本文に出てくる参照（#268 の突き合わせ用）。**同じ regex で拾う**ので、本文の `#1234` を
+ * 一言の `#123` の裏付けにしてしまう取りこぼしが無い（素朴な `includes('#123')` だと当たる）。
+ *
+ * `owner/repo#123` は**その owner/repo が remote と同じときだけ**裸の `#123` の裏付けにする。
+ * 別のリポジトリの番号を、このリポジトリの番号として飛ばさないため
+ */
+function refsIn(source: string, remote: string | undefined): Set<string> {
+  const found = new Set<string>()
+  const re = new RegExp(REF.source, 'g')
+  let m: RegExpExecArray | null
+  while ((m = re.exec(source))) {
+    if (m[2]) {
+      if (!m[1] || (remote && remote.endsWith(`/${m[1]}`))) found.add(`#${m[2]}`)
+    } else if (m[3] && m[4]) found.add(`${m[3]}-${m[4]}`)
+  }
+  // **本文が URL で番号を出していることの方が多い**（手元の実データでは、裸の `#N` が無い番号 68 件のうち
+  // 57 件が `…/issues/70` の形で本文に出ていた）。エージェントは URL を貼り、モデルがそれを `#70` と書く。
+  // ここを見ないと、正しい参照のリンクまで外れる
+  if (remote && GITHUB_REMOTE.test(remote)) {
+    const escaped = remote.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const url = new RegExp(`${escaped}/(?:issues|pull|discussions)/(\\d{1,9})`, 'g')
+    for (const u of source.matchAll(url)) found.add(`#${u[1]}`)
+  }
+  return found
+}
+
 /** 素の文字列の中の参照だけをリンクにする（URL や Markdown の記号は見ない） */
-function linkifyText(text: string, ctx: RefContext): Inline[] {
+function linkifyText(text: string, ctx: RefContext, known: Set<string> | null): Inline[] {
   const out: Inline[] = []
   const re = new RegExp(REF.source, 'g')
+  // 本文を渡されていなければ何も絞らない（後方互換）
+  const backed = (key: string) => known === null || known.has(key)
   let pos = 0
   let m: RegExpExecArray | null
   while ((m = re.exec(text))) {
     let href = ''
     if (m[2]) {
+      // owner/repo#123 は向き先が本文に依らない（自分で行き先を名乗っている）ので、そのまま通す
       if (m[1]) href = `https://github.com/${m[1]}/issues/${m[2]}`
-      else if (ctx.remote && GITHUB_REMOTE.test(ctx.remote)) href = `${ctx.remote}/issues/${m[2]}`
-    } else if (m[3] && m[4] && ctx.linear && !NOT_LINEAR.has(m[3])) {
+      else if (ctx.remote && GITHUB_REMOTE.test(ctx.remote) && backed(`#${m[2]}`)) href = `${ctx.remote}/issues/${m[2]}`
+    } else if (m[3] && m[4] && ctx.linear && !NOT_LINEAR.has(m[3]) && backed(`${m[3]}-${m[4]}`)) {
       href = `https://linear.app/${ctx.linear}/issue/${m[3]}-${m[4]}`
     }
     if (!href) continue
@@ -51,11 +89,11 @@ function linkifyText(text: string, ctx: RefContext): Inline[] {
 }
 
 /** Inline の木の text ノードだけを linkifyText に通す（code はそのまま、strong の中は再帰） */
-function walk(nodes: Inline[], ctx: RefContext): Inline[] {
+function walk(nodes: Inline[], ctx: RefContext, known: Set<string> | null): Inline[] {
   const out: Inline[] = []
   for (const n of nodes) {
-    if (n.kind === 'text') out.push(...linkifyText(n.text, ctx))
-    else if (n.kind === 'strong') out.push({ kind: 'strong', children: walk(n.children, ctx) })
+    if (n.kind === 'text') out.push(...linkifyText(n.text, ctx, known))
+    else if (n.kind === 'strong') out.push({ kind: 'strong', children: walk(n.children, ctx, known) })
     else out.push(n)
   }
   return out
@@ -64,10 +102,11 @@ function walk(nodes: Inline[], ctx: RefContext): Inline[] {
 /**
  * 一言の 1 行を、URL・番号・Linear の識別子がリンクになった Inline の木にする。
  * まず Markdown の行内（URL、`code`、**太字**、[ラベル](URL)）に割り、その text ノードの中の参照だけを差し替える。
- * だから URL の途中の `#`（`/pull/12#issuecomment-…`）や `code` の中の `#123` は触らない
+ * だから URL の途中の `#`（`/pull/12#issuecomment-…`）や `code` の中の `#123` は触らない。
+ * `ctx.source`（言い換える前の本文）を渡すと、そこに無い番号はリンクにせず**文字のまま**残す（#268）
  */
 export function linkifyRefs(text: string, ctx: RefContext = {}): Inline[] {
-  return walk(parseInline(text), ctx)
+  return walk(parseInline(text), ctx, ctx.source === undefined ? null : refsIn(ctx.source, ctx.remote))
 }
 
 /** Linear の workspace として受け付ける形（URL の linear.app/<workspace>/ の部分）。空は「設定なし」 */

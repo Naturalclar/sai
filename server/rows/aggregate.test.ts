@@ -307,3 +307,30 @@ test('pane / pid / last_turn は一番新しい行から（待ちの行は last_
   const [old] = aggregate([row(t0, 's1')])
   assert.deepEqual([old!.pane, old!.pid], ['', 0], '旧形式の行には無い')
 })
+
+test('last_user_text / last_user_ts: 一番新しい自分の入力。入力の行がターン完了より後ならその時刻（#300）', () => {
+  const t0 = new Date('2026-09-10T03:00:00Z')
+  const at = (m: number) => new Date(t0.getTime() + min(m))
+  const [s] = aggregate([
+    row(at(0), 's1', { user_text: '青にして', text: '青にした' }),
+    row(at(5), 's1', { event: 'UserPromptSubmit', user_text: '次は赤にして', text: '' }),
+  ])
+  assert.equal(s!.last_user_text, '次は赤にして')
+  assert.equal(s!.last_user_ts, row(at(5), 's1').ts)
+  assert.equal(s!.last_turn_ts, row(at(0), 's1').ts, 'last_text / last_turn_ts はターン完了のまま')
+})
+
+test('last_user_ts: ターン完了の行に載っている入力なら last_turn_ts と同じ。待ちの行と入力の無い行は見ない', () => {
+  const t0 = new Date('2026-09-10T03:00:00Z')
+  const at = (m: number) => new Date(t0.getTime() + min(m))
+  const [s] = aggregate([
+    row(at(0), 's1', { user_text: '1回目' }),
+    row(at(3), 's1', { user_text: '2回目', text: '終わった' }),
+    row(at(4), 's1', { event: 'PermissionRequest', user_text: '', text: '許可待ち: Bash: ls' }),
+  ])
+  assert.equal(s!.last_user_text, '2回目')
+  assert.equal(s!.last_user_ts, s!.last_turn_ts)
+  const [none] = aggregate([row(at(0), 's2', { user_text: '' })])
+  assert.equal(none!.last_user_text, '')
+  assert.equal(none!.last_user_ts, '')
+})

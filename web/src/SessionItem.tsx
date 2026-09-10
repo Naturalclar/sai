@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import type { MouseEvent } from 'react'
-import type { Approval, Replying, SessionSummary } from './api'
+import type { Approval, Profile, Replying, SessionSummary } from './api'
 import { hm, md } from './format'
 import { SynthTag } from './SynthTag'
 import { HostTag } from './HostTag'
@@ -14,13 +14,15 @@ import { SessionArchiveButton } from './SessionArchiveButton'
 import { ArchiveMark } from './ArchiveMark'
 import { useArchive } from './useArchive'
 import { useSwipe } from './useSwipe'
-import { stripMarkdown } from '../../shared/markdown.ts'
+import { sessionPreview } from './sessionPreview.ts'
 
 interface Props {
   s: SessionSummary
   active: boolean
-  /** 画面から送った返信を処理中なら、その中身。「返信中」を付ける */
+  /** 画面から送った返信を処理中なら、その中身。「返信中」を付け、2 行目にも送った文を出す（#300） */
   replying: Replying | null
+  /** 自分の表示名（2 行目の自分の返信に添える。無ければ「あなた」） */
+  profile?: Profile
   /** 返信中のエージェントが答えを待っていれば、その先頭。「待機中」を付ける */
   approval: Approval | null
   /** 経過の基準（ポーリングの updatedAt） */
@@ -41,7 +43,7 @@ interface Props {
  * （<a> の中に <button> は置けない。押してもページを動かさない）。
  * タッチ端末では <a> を左にずらして、下のレール（アーカイブ / 戻す）を見せる
  */
-export function SessionItem({ s, active, replying, approval, now, swipe, reduced, selfHost, open, onOpenChange }: Props) {
+export function SessionItem({ s, active, replying, profile, approval, now, swipe, reduced, selfHost, open, onOpenChange }: Props) {
   // 選ばれたら見えるところまでサイドバーをスクロールする（キーボードで移動したとき用。見えていれば動かない）
   const ref = useRef<HTMLAnchorElement>(null)
   useEffect(() => {
@@ -71,6 +73,8 @@ export function SessionItem({ s, active, replying, approval, now, swipe, reduced
   }
 
   const cls = ['item', active && 'active', s.archived && 'archived', sw.dragging && 'dragging', open && 'open'].filter(Boolean).join(' ')
+  // 2 行目は最後に誰が何を言ったか（#300）。自分が返信したら、次のターンを待たずに自分の返信になる
+  const preview = sessionPreview(s, replying, profile)
   return (
     <div
       className={cls}
@@ -125,7 +129,11 @@ export function SessionItem({ s, active, replying, approval, now, swipe, reduced
           {replying && <ReplyingTag since={replying.since} now={now} />}
           {s.archived && <ArchivedTag />}
         </span>
-        {s.turns > 1 && (s.last_summary || s.last_text) && <span className="last">{s.last_summary || stripMarkdown(s.last_text)}</span>}
+        {preview && (
+          <span className={`last${preview.from === 'me' ? ' mine' : ''}`}>
+            {preview.who && <span className="who">{preview.who}:</span>} {preview.text}
+          </span>
+        )}
       </a>
     </div>
   )

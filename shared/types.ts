@@ -622,14 +622,22 @@ export type PersonaId =
 
 /**
  * GET/PUT /api/settings。サーバ側の設定（~/.agent-feed/settings.json）。
- * 一言はサーバが作るので性格もサーバに持つ。digest / model は環境変数（SAI_DIGEST / SAI_DIGEST_MODEL）の状態で、PUT では変えられない
+ * 一言はサーバが作るので設定もサーバに持つ。一言の入切・口・モデルも PUT で変わる（#288。前は環境変数で、立て直すたびに打っていた）。
+ * **本文の送り先（`SAI_DIGEST_URL`）と鍵（`SAI_DIGEST_API_KEY`）は環境変数のままで、ここには載せない**（画面から外へ向けられないように）
  */
 export interface SettingsResponse {
   persona: PersonaId
-  /** 一言を作る配線が有効か（SAI_DIGEST=1） */
+  /** 一言をいま作っているか（入にしていて、口が組めた）。性格・Linear の欄はこれが true のときだけ出す */
   digest: boolean
-  /** 一言を作る口（SAI_DIGEST_PROVIDER）。claude は `claude -p`、openai は OpenAI 互換の HTTP（Ollama / LM Studio など） */
+  /** 一言を入にしているか（settings.json の `digest`）。入なのに `digest` が false なら `digest_error` に理由がある */
+  digest_on: boolean
+  /** 入なのに作れない理由（openai の口でモデルが空など）。無ければ空 */
+  digest_error: string
+  /** 一言を作る口。claude は `claude -p`、openai は OpenAI 互換の HTTP（Ollama / LM Studio など） */
   provider: DigestProvider
+  /** 保存しているモデル名。空は口の既定 */
+  digest_model: string
+  /** 実際に使うモデル（`digest_model` が空なら口の既定。openai には既定が無いので空） */
   model: string
   /** Linear の workspace（URL の linear.app/<workspace>/ の部分）。一言の中の PGR-123 のような識別子のリンク先。空なら組まない */
   linear_workspace: string
@@ -643,6 +651,12 @@ export interface SettingsRequest {
   persona?: PersonaId
   /** 空文字で「設定なし」に戻す */
   linear_workspace?: string
+  /** 一言を作るか */
+  digest?: boolean
+  /** 一言を作る口 */
+  digest_provider?: DigestProvider
+  /** 一言を作るモデル。空文字で「口の既定」 */
+  digest_model?: string
 }
 
 export interface SessionFilters {

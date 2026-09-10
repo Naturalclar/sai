@@ -24,7 +24,7 @@
   header .status { margin-left: auto; color: var(--muted); font-size: 12px; }
   header .status.error { color: var(--claude); }
   header .github { display: inline-flex; color: var(--muted); }
-  /* 一言コメント（digest）の性格と Linear のワークスペース。SAI_DIGEST=1 のときだけ出る */
+  /* 一言コメント（digest）の性格と Linear のワークスペース。一言を作っているときだけ出る（入切は自分のメニュー） */
   header .digest-ctl { display: flex; align-items: center; gap: 8px; margin-left: auto; font-size: 12px; color: var(--muted); min-width: 0; }
   header .digest-ctl + .status { margin-left: 0; }
   header .digest-ctl select { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; font: inherit; font-size: 12px; }
@@ -50,6 +50,13 @@
   header .user-menu .menu button:hover { background: var(--hover); }
   /* 押せないときの断り書き（通知がブラウザ側で拒否されている / 出せない環境。#231） */
   header .user-menu .menu .note { padding: 6px 12px; font-size: 11px; color: var(--muted); max-width: 18em; }
+  /* 一言の入切・口・モデル（DigestEngineControls。#288）。どの幅でもメニューの中 */
+  header .user-menu .menu .digest-engine { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--line); }
+  header .user-menu .menu .digest-engine .fields { display: flex; flex-direction: column; gap: 6px; padding: 2px 12px 8px; }
+  header .user-menu .menu .digest-engine select, header .user-menu .menu .digest-engine .digest-model { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; font: inherit; font-size: 12px; }
+  header .user-menu .menu .digest-engine .digest-model:focus { outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent); border-color: var(--accent); }
+  header .user-menu .menu .digest-engine .note { padding: 0; white-space: normal; }
+  header .user-menu .menu .digest-engine .note.error { color: var(--claude); }
   /* 使用量（#216）。取れたエージェントの分だけ出る。Codex は割合、Claude は上限に当たっているときだけ */
   header .usage { position: relative; display: inline-flex; }
   header .usage-chip { display: inline-flex; align-items: center; gap: 8px; padding: 3px 8px; font: inherit; font-size: 12px; color: var(--muted); background: var(--chip); border: 1px solid transparent; border-radius: 999px; cursor: pointer; white-space: nowrap; }
@@ -315,6 +322,8 @@
     /* iOS Safari は 16px 未満の入力欄にフォーカスすると画面を拡大するので、入力系は 16px にする */
     /* .reply .row textarea にしているのは、後ろにある基本の `.reply textarea { font: inherit }` に同じ詳細度で負けないため */
     .reply .row textarea, .reply .row .field .ghost, .filters select, .filters input, .sidebar .filters select, header .digest-ctl select, header .digest-ctl .linear-ws { font-size: 16px; }
+    /* 一言の口とモデルの欄（#288）。前の方にある基本の指定と同じ詳細度にして、後ろにあるこちらを勝たせる */
+    header .user-menu .menu .digest-engine select, header .user-menu .menu .digest-engine .digest-model { font-size: 16px; min-height: 36px; }
     /* 見出しの select と名前の入力欄は `.pane` を足して詳細度を上げる。この下（ファイルの後ろ）にある基本の
        `.chat-head .meta select { font-size: 12px }` / `.chat-head .session-name input { font: inherit }` と同じ詳細度だと
        後ろが勝ち、16px が効かずに iOS で押すと拡大していた（#274 で測って 12px / 14px だった） */

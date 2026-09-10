@@ -10,7 +10,7 @@ interface Props {
   viewer: Viewer | null
   /** 待ちの通知の入切（#231）。入にした時だけブラウザの許可を求める */
   notify: ReturnType<typeof useNotify>
-  /** メニューの末尾に足すもの。狭い画面では一言の全体の設定がここに入る（#274） */
+  /** メニューの末尾に足すもの。一言の入切・口・モデル（#288）と、狭い画面では一言の性格・Linear の設定もここに入る（#274） */
   children?: ReactNode
 }
 

@@ -975,7 +975,11 @@ test('GET/PUT /api/settings: 性格と Linear の workspace。知らない値は
   let res = await get('/api/settings')
   assert.equal(res.status, 200)
   let data = (await res.json()) as SettingsResponse
-  assert.deepEqual(data, { persona: 'ENFP', digest: true, provider: 'claude', model: 'fake', linear_workspace: '' }, '既定は ENFP。digest はテストでは有効（口は既定の claude）。Linear は未設定')
+  assert.deepEqual(
+    data,
+    { persona: 'ENFP', linear_workspace: '', digest: true, digest_on: false, digest_error: '', provider: 'claude', digest_model: '', model: 'fake' },
+    '既定は ENFP。digest はテストで差し替えた Digester の状態（有効、口は既定の claude）で、settings.json の入切（既定オフ）では組み直さない。Linear は未設定',
+  )
   const put = (body: unknown, headers: Record<string, string> = {}) =>
     fetch(`${base}/api/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) })
   res = await put({ persona: 'ISTJ' })
@@ -983,24 +987,54 @@ test('GET/PUT /api/settings: 性格と Linear の workspace。知らない値は
   data = (await res.json()) as SettingsResponse
   assert.equal(data.persona, 'ISTJ')
   assert.equal(((await (await get('/api/settings')).json()) as SettingsResponse).persona, 'ISTJ')
-  assert.deepEqual(JSON.parse(await readFile(join(feedDir, 'settings.json'), 'utf-8')), { persona: 'ISTJ', linear_workspace: '' })
+  const defaults = { digest: false, digest_provider: 'claude', digest_model: '' }
+  assert.deepEqual(JSON.parse(await readFile(join(feedDir, 'settings.json'), 'utf-8')), { persona: 'ISTJ', linear_workspace: '', ...defaults })
   // Linear の workspace。省略したキー（persona）は据え置き。大文字と前後の空白は正規化、形が違えば 400、空は「設定なし」
   res = await put({ linear_workspace: ' Acme ' })
   assert.equal(res.status, 200)
   data = (await res.json()) as SettingsResponse
   assert.equal(data.linear_workspace, 'acme')
   assert.equal(data.persona, 'ISTJ', 'persona は据え置き')
-  assert.deepEqual(JSON.parse(await readFile(join(feedDir, 'settings.json'), 'utf-8')), { persona: 'ISTJ', linear_workspace: 'acme' })
+  assert.deepEqual(JSON.parse(await readFile(join(feedDir, 'settings.json'), 'utf-8')), { persona: 'ISTJ', linear_workspace: 'acme', ...defaults })
   assert.equal((await put({ linear_workspace: 'a b' })).status, 400)
   assert.equal((await put({ linear_workspace: 1 })).status, 400)
-  assert.equal((await put({})).status, 400, 'どちらも無ければ 400')
+  assert.equal((await put({})).status, 400, 'どれも無ければ 400')
   assert.equal(((await (await put({ linear_workspace: '' })).json()) as SettingsResponse).linear_workspace, '', '空で設定なしに戻る')
   assert.equal((await put({ persona: 'XXXX' })).status, 400)
   assert.equal((await put({ persona: 1 })).status, 400)
   assert.equal((await put('nope')).status, 400)
   assert.equal((await put({ persona: 'ENFP' }, { Origin: 'http://evil.local' })).status, 403)
   assert.equal((await fetch(`${base}/api/settings`, { method: 'POST' })).status, 405)
-  await put({ persona: 'none' })
+
+  // 一言の入切・口・モデル（#288。前は環境変数）。保存して、その場で組み直す（立て直さない）
+  data = (await (await put({ digest: false })).json()) as SettingsResponse
+  assert.equal(data.digest, false, '切るとその場で止まる')
+  assert.equal(data.digest_on, false)
+  data = (await (await put({ digest: true, digest_provider: 'openai' })).json()) as SettingsResponse
+  assert.equal(data.digest_on, true)
+  assert.equal(data.digest, false, 'openai にはモデルが要る。保存はするが作らない')
+  assert.match(data.digest_error, /モデル名が要ります/)
+  assert.equal(data.provider, 'openai')
+  data = (await (await put({ digest_model: ' qwen3:8b ' })).json()) as SettingsResponse
+  assert.equal(data.digest, true)
+  assert.equal(data.digest_error, '')
+  assert.equal(data.digest_model, 'qwen3:8b', '前後の空白は落とす')
+  assert.equal(data.model, 'qwen3:8b')
+  assert.deepEqual(JSON.parse(await readFile(join(feedDir, 'settings.json'), 'utf-8')), { persona: 'ISTJ', linear_workspace: '', digest: true, digest_provider: 'openai', digest_model: 'qwen3:8b' })
+  data = (await (await put({ digest_provider: 'claude', digest_model: '' })).json()) as SettingsResponse
+  assert.equal(data.model, 'haiku', 'claude でモデルが空なら haiku')
+  assert.equal((await put({ digest: 'yes' })).status, 400)
+  assert.equal((await put({ digest: 1 })).status, 400)
+  assert.equal((await put({ digest_provider: 'gemini' })).status, 400)
+  assert.equal((await put({ digest_model: '--dangerously-skip-permissions' })).status, 400, 'CLI の引数に化ける名前は受けない')
+  assert.equal((await put({ digest_model: 'a b' })).status, 400)
+  assert.equal((await put({ digest: false }, { Origin: 'http://evil.local' })).status, 403, '入切も同一オリジンだけ')
+  // 本文の送り先は受けない（知らないキーとして何も変えない）
+  assert.equal((await put({ digest_url: 'https://evil.example/v1' })).status, 400)
+  assert.ok(!('digest_url' in JSON.parse(await readFile(join(feedDir, 'settings.json'), 'utf-8'))))
+
+  // 後のテストのために戻す（差し替えた偽物の口と、そのモデル名）
+  await put({ persona: 'none', digest: true, digest_provider: 'claude', digest_model: 'fake' })
 })
 
 test('digest: 起動後に増えた行に一言が付いて feed / 詳細 / 一覧に載り、rev が変わる', async () => {

@@ -132,6 +132,11 @@ export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggl
           <div className="notice">{blocked}</div>
         ) : (
           <ReplyBox
+            // 打ちかけは返信先ごとに残すので、セッションが変わったら必ず作り直す（#306）。
+            // 今も usePolling が id の変化で data を空にして一度外れるが、それは副作用で、id が変わった直後の
+            // 1 回の描画では A の data のまま id だけ B になっている。作り直さないと A の打ちかけを B に送れてしまう
+            key={`reply:${id}`}
+            draftKey={id}
             repo={s.repo}
             skillsId={id}
             history={history}

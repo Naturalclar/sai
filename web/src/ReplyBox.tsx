@@ -18,6 +18,7 @@ import { PhotoMark } from './PhotoMark'
 import { ATTACHMENT_MAX_COUNT } from '../../shared/attachments.ts'
 import { NOT_IN_HISTORY, canGoBack, canGoForward, stepHistory } from './replyHistory'
 import type { HistoryState } from './replyHistory'
+import { EMPTY_DRAFT, loadDraft, saveDraft } from './replyDrafts'
 
 /**
  * @ メンションで返信先を選ぶための道具（フィード用）。渡さなければ `@` はただの文字（セッション画面）。
@@ -75,6 +76,12 @@ interface Props {
   skillsId?: string
   /** 画像を預ける先（エンティティID）。渡さなければ画像は添えられない */
   attachId?: string
+  /**
+   * 打ちかけ（本文と画像）を残す鍵（エンティティID。#306）。画面を移って戻っても入力欄に戻る。
+   * 渡さなければ残さない（フィードは返信先が @ で動くので、本文だけ戻しても返信先が合わない）。
+   * 作ったときに 1 回だけ読むので、**呼び出し側は key を返信先ごとに変えること**（変えないと前の返信先の打ちかけが残る）
+   */
+  draftKey?: string
   /** ↑ で呼び戻せる、この返信先に前に送った内容（新しい順）。渡さなければ ↑ は普通のカーソル移動 */
   history?: readonly string[]
   /** 本文が空のときの `←`。サイドバーのいま開いている項目にフォーカスを戻す（#204）。渡さなければ ← はカーソル移動のまま */
@@ -88,9 +95,11 @@ const NO_HISTORY: readonly string[] = []
 const keyOf = (e: KeyboardEvent<HTMLTextAreaElement>) => ({ key: e.key, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, shiftKey: e.shiftKey })
 
 /** 入力欄。Enter で送信、Shift+Enter で改行。IME 変換中の Enter は送らない */
-export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onDraft, model, permission, diff, skillsId, attachId, history = NO_HISTORY, onLeaveToSidebar, mention }: Props) {
-  const [text, setText] = useState('')
-  const attach = useAttachments(attachId)
+export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onDraft, model, permission, diff, skillsId, attachId, draftKey, history = NO_HISTORY, onLeaveToSidebar, mention }: Props) {
+  // 前に打ちかけて離れた分（#306）。作ったときに 1 回だけ読む
+  const [initial] = useState(() => (draftKey ? loadDraft(draftKey) : EMPTY_DRAFT))
+  const [text, setText] = useState(initial.text)
+  const attach = useAttachments(attachId, initial.attachments)
   const fileRef = useRef<HTMLInputElement>(null)
   // 画像を落とせる場所だと分かるように、ドラッグ中は枠を光らせる
   const [dropping, setDropping] = useState(false)
@@ -140,6 +149,16 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
   useEffect(() => {
     onDraft?.(drafting)
   }, [drafting, onDraft])
+
+  // 打ちかけを残す（#306）。変わるたびに書くので、画面を移るときに書き忘れる経路が無い。
+  // 送ったら本文も画像も空になり、空を書く = 消す。送れずに本文を戻したときはまた残る。
+  // ↑ で履歴を見ている間は、呼び戻した過去の文ではなく、入る前に打っていた文を残す
+  const draftImages = attach.items
+  useEffect(() => {
+    if (!draftKey) return
+    const typed = hist.current.index === NOT_IN_HISTORY ? text : hist.current.draft
+    saveDraft(draftKey, { text: typed, attachments: draftImages })
+  }, [draftKey, text, draftImages])
 
   const labels = useMemo(() => mentionLabels(mention?.targets ?? []), [mention?.targets])
   const mentionHit = mention ? mentionQuery(text, caret) : null

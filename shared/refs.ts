@@ -40,9 +40,11 @@ const REF = /(?<![\w&/.-])(?:([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+))?#(\d{1,9})(?![\
  * 一言の `#123` の裏付けにしてしまう取りこぼしが無い（素朴な `includes('#123')` だと当たる）。
  *
  * `owner/repo#123` は**その owner/repo が remote と同じときだけ**裸の `#123` の裏付けにする。
- * 別のリポジトリの番号を、このリポジトリの番号として飛ばさないため
+ * 別のリポジトリの番号を、このリポジトリの番号として飛ばさないため。
+ *
+ * フィードのバブルに差分のボタンを出すか（#280。`web/src/feedDiff.ts`）も同じものを使う
  */
-function refsIn(source: string, remote: string | undefined): Set<string> {
+export function refsIn(source: string, remote: string | undefined): Set<string> {
   const found = new Set<string>()
   const re = new RegExp(REF.source, 'g')
   let m: RegExpExecArray | null

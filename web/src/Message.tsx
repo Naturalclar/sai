@@ -7,6 +7,7 @@ import { ThinkingBlock } from './ThinkingBlock'
 import { useReveal } from './useReveal'
 import { AttachedImages } from './AttachedImages'
 import { splitAttachments } from '../../shared/attachments.ts'
+import { DiffButton, type DiffButtonProps } from './DiffButton'
 
 // 折りたたむかは描画前の生の長さで見る（コードブロック1つで8行を超えても折りたたむ。今まで通り）
 const isLong = (text: string) => text.length > 600 || text.split('\n').length > 8
@@ -36,10 +37,12 @@ interface Props {
    * 行ごとに DOM の目印を置くのはここだけなので、3 つの分岐すべてに同じものを付ける
    */
   found?: boolean
+  /** 差分を開くボタン（#280。フィードで、いまのブランチの PR に触れているバブルだけ）。無ければ出さない */
+  diff?: DiffButtonProps
 }
 
 /** バブル1つ分の本文。長ければ折りたたんで「もっと見る」を付ける */
-export function Message({ ts, text: raw, markdown, waiting, resolved, thinking, thinkingOpen = false, summary, model, remote, linear, found = false }: Props) {
+export function Message({ ts, text: raw, markdown, waiting, resolved, thinking, thinkingOpen = false, summary, model, remote, linear, found = false, diff }: Props) {
   // 自分の入力に添えた画像は、パスの文字列ではなくサムネイルで出す（本文の末尾に足してある。shared/attachments.ts）
   const { body: text, urls } = markdown ? { body: raw, urls: [] as string[] } : splitAttachments(raw)
   const [open, setOpen] = useState(false)
@@ -85,6 +88,7 @@ export function Message({ ts, text: raw, markdown, waiting, resolved, thinking, 
             )}
           </div>
         )}
+        {diff && <div className="msg-diff"><DiffButton {...diff} /></div>}
       </div>
     )
   }
@@ -104,6 +108,7 @@ export function Message({ ts, text: raw, markdown, waiting, resolved, thinking, 
           {open ? '折りたたむ' : 'もっと見る'}
         </button>
       )}
+      {diff && <div className="msg-diff"><DiffButton {...diff} /></div>}
     </div>
   )
 }

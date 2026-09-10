@@ -17,6 +17,8 @@ import { BackLink } from './BackLink'
 import { useReply } from './useReply'
 import { historyFrom } from './replyHistory'
 import { ReplaceConfirm } from './ReplaceConfirm'
+import { prStamps } from './feedDiff.ts'
+import { useDiffSummaries } from './useDiffSummaries'
 import type { PaneProps } from './App'
 
 const NO_ROWS: never[] = []
@@ -38,15 +40,22 @@ interface Props extends PaneProps {
    * フィード自身の応答には載せていない（App が一覧をポーリングして両方に配る形に揃える）
    */
   selfHost: string
+  /** いま差分を出しているエンティティID（App が持つ。#280） */
+  openDiff: string | null
+  /** バブルの差分のボタン。フィードから開いたものとして App に覚えさせる */
+  onToggleDiff: (id: string) => void
 }
 
 /** 全チャンネルを時系列に流す。リポジトリと日数を見出しで選ぶ（リポジトリはサイドバーの絞り込みと同じ値） */
-export function FeedView({ project, projects, onProject, sessions = NO_SESSIONS, selfHost, onStatus, onOpenSidebar, onLeaveToSidebar, linear }: Props) {
+export function FeedView({ project, projects, onProject, sessions = NO_SESSIONS, selfHost, openDiff, onToggleDiff, onStatus, onOpenSidebar, onLeaveToSidebar, linear }: Props) {
   const [local, setLocal] = useLocalState<{ days: string }>('sai.feed', { days: '3' })
   const { data, error, updatedAt } = usePolling(() => api.feed({ project, days: local.days }), [project, local.days])
   useEffect(() => onStatus(updatedAt, error), [updatedAt, error, onStatus])
 
   const rows = data?.rows ?? NO_ROWS
+  // PR に触れているセッションだけ、行数と PR 番号を取る（#280。目印が変わったときだけで、3 秒ごとには投げない）
+  const prSessions = useMemo(() => prStamps(rows, selfHost), [rows, selfHost])
+  const diffSummaries = useDiffSummaries(prSessions)
   // 返信先の候補は、サイドバーの一覧（表示名・アイコン付き）を先に、フィードにしか無いセッションを後ろに。
   // 既定の返信先は「一番新しい行のセッション」なのでフィード側の先頭を覚えておく
   const feedTargets = useMemo(() => feedReplyTargets(rows, selfHost), [rows, selfHost])
@@ -137,6 +146,7 @@ export function FeedView({ project, projects, onProject, sessions = NO_SESSIONS,
           sessions={sessions}
           profile={data.profile}
           linear={linear}
+          diffs={{ summaries: diffSummaries, open: openDiff, onToggle: onToggleDiff }}
           trailer={
             (pending.length > 0 || approvals.length > 0) && (
               <>

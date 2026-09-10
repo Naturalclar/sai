@@ -270,7 +270,7 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 | 未コミット | まだコミットしていない書き換え | `git diff HEAD` |
 | 追跡外 | 新しく置かれたファイル（名前だけ） | `git ls-files --others --exclude-standard` |
 
-比べる相手（base）は `origin/HEAD` → `origin/main` → `origin/master` → `main` → `master` の順にローカルで探す（ネットワークは叩かない）。**`origin/HEAD` は bare clone だと未設定**なので、この順で落ちるようにしてある。`?base=` で他のブランチやタグに変えられる。
+比べる相手（base）は `origin/HEAD` → `origin/main` → `origin/master` → `main` → `master` の順にローカルで探す（ネットワークは叩かない）。**`origin/HEAD` は bare clone だと未設定**なので、この順で落ちるようにしてある。**`origin/main` と `main` のように同じ名前の組が両方あるときは、新しい方と比べる**（#289）。bare clone + worktree では `origin/main` が一度作られたまま進まないことがあり、古い方と比べると後から `main` に入った他の PR まで「このブランチの差分」に出ていた。普通の clone では逆にローカルの `main` が古いので、どちらが新しいかは毎回 git に聞く（同じコミットか分岐しているときは `origin/main`）。`?base=` で他のブランチやタグに変えられる。
 
 - **読むだけ。** `rev-parse` / `symbolic-ref` / `merge-base` / `diff` / `ls-files` しか呼ばない（`server/git/diff.ts` の `RealGit` が他を弾く）。`cwd` はセッションの行から取り、リクエストからは受けない
 - 3 秒のポーリングには乗せない。**本文（patch）はボタンを押したときに 1 回だけ**、**行数と PR 番号は `?summary=1` の軽い口**（`--numstat` だけで patch を作らない）から、セッションを開いたときと新しいターンが記録されたときだけ読む

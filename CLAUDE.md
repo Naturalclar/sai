@@ -23,6 +23,8 @@ pnpm test:feed              # python3 -m unittest feed.test_record
 
 コミット前の一式: `pnpm test && pnpm test:feed && pnpm lint && pnpm typecheck`
 
+clone した直後の配線（フック / `notify` / OpenCode のプラグイン → ビルド → 1 ターン届くかの確認）は `/setup-sai`（`.claude/skills/setup-sai/SKILL.md`）。**既存の設定を上書きしない**のが主眼で、まず `~/.agent-feed` の一番新しい行を見て「もう届いているか」から入る（設定を辿るのはその後）。書き込み無しの点検にも同じ手順を使う。
+
 main worktree を最新の `main` に進めてビルドし直すのは `/sync-main`（`.claude/skills/sync-main/SKILL.md`。別の worktree から呼んでも main worktree だけを触る。古いコードで動いているサーバは、そのペインで `SAI_DIGEST=1 SAI_DIGEST_PROVIDER=openai SAI_DIGEST_MODEL=qwen3:8b pnpm start` に立て直す）。
 
 CI（`.github/workflows/ci.yml`）も同じ一式＋ `pnpm build` を `main` への push と PR で回す。Node 22 系の最新、Python 3.9 と最新。スクリプトを足したら CI にも足す。

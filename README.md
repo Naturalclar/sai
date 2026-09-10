@@ -287,12 +287,12 @@ rsync -a --include='????-??-??.*.jsonl' --exclude='*' mini:~/.agent-feed/ ~/.age
 - **本物の Slack には投げない。** 投げ先が会社のワークスペースになるので、個人リポジトリのセッション記録がそこに流れるのは避ける
 - **SAI は外に出さない。** `127.0.0.1` 限定。デプロイもホスティングもしない。中身は作業内容そのもの。出してよいのは **tailnet まで**で、それも `tailscale serve`（前段のプロキシ）経由だけ。アプリ自身の bind は変えないし、`tailscale funnel` は使わない。Serve のヘッダは `whois` で突き合わせ、合わなければ `401`
 - **ブラウザからコマンドが走る。** 返信は `claude` / `codex` を任意の `cwd` で起動する。ローカルで開いている別サイトからの CSRF でエージェントを走らせないよう、`POST` は `Origin` / `Sec-Fetch-Site` が同一オリジンでなければ `403`（どちらも無い curl などブラウザ以外は通す）。この確認は外さない。**素通し（`bypassPermissions`）を選んだセッションでは、この検査が唯一の砦になる**（#253。それ以外のセッションでは「CLI が未許可のツールを拒否する」が二重目の歯止めとして残る）。SAI 自身が既定で権限のフラグを付けることはしない
-- **一言（digest）は本文を LLM に送る。** `SAI_DIGEST=1` のときだけで、既定はオフ。既定は返信と同じ `claude` CLI 経由で、仕事のリポジトリの返答をそのまま要約に出すことになるのは分かって使う。外に出したくなければ `SAI_DIGEST_PROVIDER=openai` でローカルの LLM に向ける（`SAI_DIGEST_URL` が `127.0.0.1` を指している限り本文は手元から出ない）
+- **一言（digest）は本文を LLM に送る。** 右上の自分のメニューで「一言コメントを作る」を入にしたときだけで、既定はオフ（`~/.agent-feed/settings.json` に残るので、立て直しても入のまま。#288）。口の既定は返信と同じ `claude` CLI 経由で、仕事のリポジトリの返答をそのまま要約に出すことになるのは分かって使う。外に出したくなければ口を「OpenAI 互換」にしてローカルの LLM に向ける（送り先の `SAI_DIGEST_URL` が `127.0.0.1` を指している限り本文は手元から出ない）。口とモデルは切のまま先に選べる。**送り先は環境変数でしか変えられない**（画面から変えられると、同一オリジンの `PUT` 1 つで本文を任意の URL に流せるため）
 - **一覧のタイトルに機密が乗りうる。** 仕事のリポジトリのセッションだと issue の内容がそのまま出る。スクリーンショットを撮るときは自分で気をつける
 
 ## 環境変数
 
-**どれも省略できる**（何も設定しなくても既定値で動く）。1 台で使うだけなら、設定するのは一言（digest）を使うときの `SAI_DIGEST` 系くらい。
+**どれも省略できる**（何も設定しなくても既定値で動く）。1 台で使うだけなら何も設定しなくてよい。一言（digest）の入切・口・モデルは環境変数ではなく画面（右上の自分のメニュー）で決め、`~/.agent-feed/settings.json` に残る（#288）。
 
 ### 設定することがあるもの
 
@@ -302,10 +302,7 @@ rsync -a --include='????-??-??.*.jsonl' --exclude='*' mini:~/.agent-feed/ ~/.age
 | `AGENT_FEED_DIR` | 出力先（既定 `~/.agent-feed`）。`record.py` とサーバの両方が見る |
 | `SAI_PORT` | サーバの既定ポート（既定 `8787`）。`pnpm dev` の `/api` の proxy 先もこれ（`--port` は見ない。#146） |
 | `AGENT_FEED_HOST` | このマシンの名前（既定は `gethostname()` の短い形）。複数のマシンの JSONL を 1 か所に集めるときに、行の出どころを分ける。**設定すると書き込み先も `YYYY-MM-DD.<host>.jsonl` に分かれる**（同期フォルダで同じファイルに追記して壊れるのを避けるため。サーバは両方の形を全部読む）。**サーバも自分の名前をこれで決め**、行の `host` と違うセッションは「別のマシン」として印を付け、返信の口を出さない（記録側とサーバを同じ環境から起動すれば揃う。前はサーバ側だけ `SAI_HOST` だった。#288） |
-| `SAI_DIGEST` | `1` で一言コメント（digest）を作る。既定はオフ |
-| `SAI_DIGEST_PROVIDER` | 一言を作る口。`claude`（既定。`claude -p`）か `openai`（OpenAI 互換の `/v1/chat/completions`。Ollama / LM Studio などローカルの LLM はこちら） |
-| `SAI_DIGEST_MODEL` | 一言を作るモデル。`claude` なら既定 `haiku`（`claude -p --model` にそのまま渡す）。`openai` なら必須（`qwen3:8b` のようなローカルのモデル名。無ければ一言を作らないでサーバは立つ） |
-| `SAI_DIGEST_URL` | `openai` のときの base URL（既定 `http://127.0.0.1:11434/v1` = Ollama。LM Studio は `http://127.0.0.1:1234/v1`）。末尾に `/chat/completions` を足して叩く |
+| `SAI_DIGEST_URL` | 一言の口を「OpenAI 互換」にしたときの base URL（既定 `http://127.0.0.1:11434/v1` = Ollama。LM Studio は `http://127.0.0.1:1234/v1`）。末尾に `/chat/completions` を足して叩く。入切・口・モデルと違って**画面からは変えられない**（本文の送り先なので） |
 | `SAI_DIGEST_API_KEY` | `openai` のときの鍵（任意。`Authorization: Bearer`）。Ollama / LM Studio は不要 |
 | `SAI_CLAUDE_ARGS` | 返信の `claude -p --resume` に足す引数。空白区切りで、空白を含む値は `"…"` か `'…'` で囲む。例: `--allowedTools "Bash(gh *)"`（許可モードとモデルは入力欄でセッションごとに選べる）。「返信と許可」の項を読んでから |
 | `SAI_CODEX_ARGS` | 開いている Codex の `codex queue` と、`SAI_CODEX_APP_SERVER=0` の `codex exec resume` に足す引数。例: `-s workspace-write` |

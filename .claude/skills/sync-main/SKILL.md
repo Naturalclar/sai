@@ -73,20 +73,22 @@ find "$main/server" "$main/shared" -name '*.ts' -newer "$ref"; rm -f "$ref"
 
 `pnpm start:watch`（`node --watch`）で動いていれば自分で再起動するので **C-c は送らない**。ただし**処理中の返信（`claude -p --resume`）があると `Waiting for graceful termination...` でその終了を待つ**ので、listen が無い時間が数十秒ある。
 
-### 一言（digest）の口を決める
+### 一言（digest）の口
 
-既定はローカルの Ollama（本文が手元から出ない。`claude` の usage も使わない）。**モデルがあるかを先に見る**。無い口を指定すると、サーバは立つが一言が 1 つも付かず、`~/.agent-feed/digest.log` にモデルのエラーが並ぶだけになる。
+一言の入切・口・モデルは `~/.agent-feed/settings.json` に残る（#288。前は起動コマンドの環境変数で、立て直すたびに打ち直していた）ので、**起動コマンドは `pnpm start` だけ**。立て直したあとの「確かめる」で `digest_on` を見て、**入になっていれば触らない**（人が画面で選んだ口を上書きしない）。切のとき（初回や settings.json を消したとき）だけ、下の PUT で決める。
+
+既定はローカルの Ollama（本文が手元から出ない。`claude` の usage も使わない）。**モデルがあるかを先に見る**。無いモデルを指定すると、一言が 1 つも付かず、`~/.agent-feed/digest.log` にモデルのエラーが並ぶだけになる。
 
 ```sh
 curl -sS -m 5 http://127.0.0.1:11434/v1/models    # qwen3:8b が居るか
 ```
 
-| 状況 | 起動コマンド |
+| 状況 | 設定（サーバが立ってから。`Origin` の無い curl は同一オリジンの検査を通る） |
 | --- | --- |
-| Ollama に `qwen3:8b` が居る（既定） | `SAI_DIGEST=1 SAI_DIGEST_PROVIDER=openai SAI_DIGEST_MODEL=qwen3:8b pnpm start` |
-| Ollama が居ない / モデルが無い | `SAI_DIGEST=1 pnpm start`（`claude -p --model haiku`。usage を使うことを報告に書く） |
+| Ollama に `qwen3:8b` が居る（既定） | `curl -sS -X PUT -H 'Content-Type: application/json' -d '{"digest":true,"digest_provider":"openai","digest_model":"qwen3:8b"}' http://127.0.0.1:8787/api/settings` |
+| Ollama が居ない / モデルが無い | 同じ PUT で `-d '{"digest":true,"digest_provider":"claude","digest_model":""}'`（`claude -p --model haiku`。usage を使うことを報告に書く） |
 
-`SAI_DIGEST_PROVIDER=claude` に `SAI_DIGEST_MODEL=qwen3:8b` を渡してはいけない。`claude` CLI は Anthropic のモデル名しか受けず、`There's an issue with the selected model` が並ぶだけになる。ローカルのモデルは `openai` の口とだけ組む。
+口を `claude` にしてモデルに `qwen3:8b` を残してはいけない。`claude` CLI は Anthropic のモデル名しか受けず、`There's an issue with the selected model` が並ぶだけになる。ローカルのモデルは `openai` の口とだけ組む（画面は口を変えるとモデルを空に戻す）。
 
 ### サーバが居るペインで立て直す
 
@@ -98,7 +100,7 @@ pane=$(tmux list-panes -a -F '#{pane_id} #{pane_tty}' | awk -v t="/dev/$tty" '$2
 tmux send-keys -t "$pane" C-c
 # 港が空くまで待つ。foreground の sleep は使えないので until で回す
 i=0; until [ -z "$(lsof -nP -iTCP:8787 -sTCP:LISTEN -t)" ] || [ $i -gt 3000000 ]; do i=$((i+1)); done
-tmux send-keys -t "$pane" 'SAI_DIGEST=1 SAI_DIGEST_PROVIDER=openai SAI_DIGEST_MODEL=qwen3:8b pnpm start' Enter
+tmux send-keys -t "$pane" 'pnpm start' Enter
 i=0; until [ -n "$(lsof -nP -iTCP:8787 -sTCP:LISTEN -t)" ] || [ $i -gt 3000000 ]; do i=$((i+1)); done
 tmux capture-pane -p -t "$pane" | grep -v '^\s*$' | tail -3
 ```
@@ -108,14 +110,14 @@ tmux capture-pane -p -t "$pane" | grep -v '^\s*$' | tail -3
 ### 確かめる
 
 ```sh
-curl -sS -m 10 http://127.0.0.1:8787/api/settings                  # digest / provider / model
+curl -sS -m 10 http://127.0.0.1:8787/api/settings                  # digest / digest_on / digest_error / provider / model
 curl -sS -m 10 -D - -o /dev/null 'http://127.0.0.1:8787/api/sessions?days=1' | grep -i x-sai-build
 stat -f '%m' "$main/web/dist/index.html"                            # 上の X-SAI-Build と一致すること
 ```
 
-起動時のログに `digest: openai http://127.0.0.1:11434/v1 model=qwen3:8b` が出る。`X-SAI-Build` が `dist/index.html` の更新時刻と一致していれば、開いているタブは `watchBuild` が自分で再読み込みする（#87 の「ビルドが古い」バナーもそれで消える）。
+`digest_on` が `false` なら「一言（digest）の口」の PUT で決める（`true` なら触らない）。`digest_on` が `true` なのに `digest` が `false` なら `digest_error` に理由がある（openai の口でモデルが空など）。入なら起動時のログに `digest: openai http://127.0.0.1:11434/v1 model=qwen3:8b` が出る。`X-SAI-Build` が `dist/index.html` の更新時刻と一致していれば、開いているタブは `watchBuild` が自分で再読み込みする（#87 の「ビルドが古い」バナーもそれで消える）。
 
-一言は**サーバの起動時刻より後の行**だけ作る（#164）。窓の広さで基準が変わることはもう無いので、`days` を先回りして叩くような小細工は要らない。
+一言は**サーバの起動時刻（あとから入にしたならその時刻）より後の行**だけ作る（#164 / #288）。窓の広さで基準が変わることはもう無いので、`days` を先回りして叩くような小細工は要らない。
 
 ## 5. 報告
 

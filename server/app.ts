@@ -53,7 +53,8 @@ import { approvalMapKey, CodexDialogs, mergeApprovalMaps } from './reply/codexDi
 import { clearSettled, settledKey, WaitingSettle } from './reply/waitingSettle.ts'
 import type { WaitingSettleSource } from './reply/waitingSettle.ts'
 import type { CodexDialogSource } from './reply/codexDialogs.ts'
-import { DIGEST_FILE, DigestStore, digesterFromEnv } from './digest/digest.ts'
+import { DIGEST_FILE, DigestStore, createDigester } from './digest/digest.ts'
+import { isDigestModel, isDigestProvider } from '../shared/digestSettings.ts'
 import type { Digester } from './digest/digest.ts'
 import { META_FILE, MetaStore } from './meta/meta.ts'
 import { collectPermissions } from './approvals/permissions.ts'
@@ -320,15 +321,15 @@ export function createApp(
   }
 
   const settingsStore = new SettingsStore(join(store.directory, SETTINGS_FILE))
-  // 一言コメント（digest）。テストは Summarizer を差し替えた Digester を渡す。既定は環境変数で組む（SAI_DIGEST=1 でなければ無効）
-  // 一言の性格は、セッションのメタに persona があればそれ、無ければ全体の既定（settings.json）
-  const digest: Digester = digester ?? digesterFromEnv(store.directory, new DigestStore(join(store.directory, DIGEST_FILE)), { settings: settingsStore, meta: metaStore })
-  const digestReady = digest.store.load()
+  // 一言コメント（digest）。テストは Summarizer を差し替えた Digester を渡す（その入切は渡した値のまま。settings.json では組み直さない）。
+  // 既定は settings.json の入切・口・モデルで組む（#288。前は環境変数）。一言の性格は、セッションのメタに persona があればそれ、無ければ全体の既定
+  const digest: Digester = digester ?? createDigester(store.directory, new DigestStore(join(store.directory, DIGEST_FILE)), { settings: settingsStore, meta: metaStore })
+  const digestReady = (digester ? Promise.resolve() : settingsStore.get().then((s) => digest.configure(s))).then(() => digest.store.load())
 
   /** 一言の対象を探して列に積む。3 秒ごとの応答のついでに呼ぶので軽い（無効なら何もしない） */
   const scanDigest = async (days: number): Promise<void> => {
-    if (!digest.enabled) return
     await digestReady
+    if (!digest.enabled) return
     digest.scan(await store.rows(days))
   }
 
@@ -378,8 +379,24 @@ export function createApp(
     return new Set(Object.entries(entries).filter(([, m]) => m.digest_off).map(([id]) => id))
   }
 
-  /** GET/PUT /api/settings。PUT は同一オリジンのみ。変えられるのは性格だけ（digest の有効/無効・口・モデルは環境変数） */
-  const settingsPayload = async (): Promise<SettingsResponse> => ({ ...(await settingsStore.get()), digest: digest.enabled, provider: digest.provider, model: digest.model })
+  /**
+   * GET/PUT /api/settings。PUT は同一オリジンのみ。一言の入切・口・モデルは、変えたらその場で組み直す（#288。前は環境変数）。
+   * 本文の送り先（SAI_DIGEST_URL）と鍵（SAI_DIGEST_API_KEY）は環境変数のままで、受けも返しもしない
+   */
+  const settingsPayload = async (): Promise<SettingsResponse> => {
+    await digestReady
+    const s = await settingsStore.get()
+    return {
+      persona: s.persona,
+      linear_workspace: s.linear_workspace,
+      digest: digest.enabled,
+      digest_on: s.digest,
+      digest_error: digest.error,
+      provider: digest.provider,
+      digest_model: s.digest_model,
+      model: digest.model,
+    }
+  }
   const putSettings = async (req: IncomingMessage, res: ServerResponse) => {
     if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
     let body: unknown
@@ -389,7 +406,7 @@ export function createApp(
       return error(res, 400, err instanceof Error ? err.message : 'bad body')
     }
     if (!body || typeof body !== 'object' || Array.isArray(body)) return error(res, 400, 'body はオブジェクトで送ってください')
-    // 省略したキーは据え置き。persona と linear_workspace のどちらか（か両方）
+    // 省略したキーは据え置き。どれか 1 つ以上
     const b = body as Partial<SettingsRequest>
     const patch: Partial<Settings> = {}
     if (b.persona !== undefined) {
@@ -401,8 +418,24 @@ export function createApp(
       if (!isLinearWorkspace(ws)) return error(res, 400, 'linear_workspace は URL の linear.app/<workspace>/ の部分（小文字の英数字と -）で送ってください')
       patch.linear_workspace = ws
     }
-    if (Object.keys(patch).length === 0) return error(res, 400, 'persona か linear_workspace を送ってください')
-    await settingsStore.set(patch)
+    if (b.digest !== undefined) {
+      if (typeof b.digest !== 'boolean') return error(res, 400, 'digest は true か false で送ってください')
+      patch.digest = b.digest
+    }
+    if (b.digest_provider !== undefined) {
+      if (!isDigestProvider(b.digest_provider)) return error(res, 400, 'digest_provider は claude か openai で送ってください')
+      patch.digest_provider = b.digest_provider
+    }
+    if (b.digest_model !== undefined) {
+      const model = typeof b.digest_model === 'string' ? b.digest_model.trim() : b.digest_model
+      if (!isDigestModel(model)) return error(res, 400, 'digest_model はモデル名（英数字で始まり、英数字と . _ : / - [ ] だけ、64 文字まで。空なら口の既定）で送ってください')
+      patch.digest_model = model
+    }
+    if (Object.keys(patch).length === 0) return error(res, 400, 'persona / linear_workspace / digest / digest_provider / digest_model のどれかを送ってください')
+    // 起動時の組み立て（settings.json の読み込み）が済んでから書く。後から古い値で組み直されないように
+    await digestReady
+    const saved = await settingsStore.set(patch)
+    if (patch.digest !== undefined || patch.digest_provider !== undefined || patch.digest_model !== undefined) digest.configure(saved)
     return json(res, await settingsPayload())
   }
 

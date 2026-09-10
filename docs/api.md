@@ -30,8 +30,8 @@
 | `GET /api/profile/icon?v=<mtime>` | 自分のアイコン画像そのもの。無ければ `404`。キャッシュの扱いはセッションのアイコンと同じ |
 | `PUT /api/profile/icon` / `DELETE /api/profile/icon` | 画像を置く / 消す（受け付ける種類・上限はセッションのアイコンと同じ）。`{ "profile": … }` を返す。別オリジンは `403` |
 | `GET /api/usage` | 各エージェントの使用量（usage limit）。`{ "codex"?: { "primary", "secondary"?, "plan"?, "at" }, "claude"?: { "resets_at", "kind", "at" } }`。**ローカルのファイルを読むだけ**で、Anthropic / OpenAI の API は叩かない。Codex は rollout の `token_count` の行から 5 時間（`window_minutes: 300`）と週（`10080`）の `used_percent`、Claude は transcript の `quotaLimits` が「弾かれた」かつ復帰前のときだけ。取れないエージェントはキーごと付かない。3 秒のポーリングには乗せず、サーバ側で 30 秒キャッシュする |
-| `GET /api/settings` | サーバ側の設定。`{ "persona", "digest", "provider", "model", "linear_workspace" }`。`digest` は一言の配線が有効か（`SAI_DIGEST=1`）、`provider` はその口（`claude` / `openai`） |
-| `PUT /api/settings` | body `{ "persona": "ENFP" }` / `{ "linear_workspace": "acme" }` をいまの値に重ねる（省略は据え置き）。`shared/persona.ts` に無い性格、`linear.app/<workspace>/` の形でない workspace は `400`（空文字は「設定なし」）。別オリジンは `403` |
+| `GET /api/settings` | サーバ側の設定。`{ "persona", "linear_workspace", "digest", "digest_on", "digest_error", "provider", "digest_model", "model" }`。`digest` は一言をいま作っているか、`digest_on` は入にしているか（入なのに作れなければ `digest_error` に理由。openai の口でモデルが空など）、`provider` はその口（`claude` / `openai`）、`digest_model` は保存しているモデル（空は口の既定）、`model` は実際に使うモデル |
+| `PUT /api/settings` | body `{ "persona": "ENFP" }` / `{ "linear_workspace": "acme" }` / `{ "digest": true, "digest_provider": "openai", "digest_model": "qwen3:8b" }` をいまの値に重ねる（省略は据え置き）。`shared/persona.ts` に無い性格、`linear.app/<workspace>/` の形でない workspace、`claude` / `openai` 以外の口、モデル名の形（`shared/digestSettings.ts` の `isDigestModel()`）でない値は `400`（空文字は「設定なし」「口の既定」）。一言の入切・口・モデルはその場で組み直す（立て直さない。#288）。**openai の送り先（`SAI_DIGEST_URL`）と鍵は受けない**（環境変数だけ）。別オリジンは `403` |
 | `GET /api/feed?days=3&project=` | 生の行と `replying`。アーカイブ済みセッションの行は除く |
 | `GET /api/search?q=&days=90` | 発言の本文で探す（#230）。`hits` は新しい順（上限 100 件、超えたら `truncated`）。1 件に `id` / `ts`（飛び先は `#/s/<id>?ts=<ts>`）、`who`（`me` / `agent`）、`excerpt` と強調の場所 `hits`。舐めるのは `text` と `user_text` だけで `thinking` と待ちの行は見ない。**アーカイブ済みも含む**。`q` が空（か空白だけ）なら行も読まず空で返す |
 

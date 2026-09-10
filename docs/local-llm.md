@@ -43,7 +43,7 @@ Claude / OpenAI のクラウドに出さず、手元のモデル（Ollama / LM S
 
 - 許可を SAI の画面から答える口は無い（`--permission-prompt-tool` に当たるものが無い）。`permission.asked` は待ちの行として出るだけで、答えるのは端末側
 - **`opencode run`（閉じたセッションへの返信）は許可を自動で拒否する**（`permission.replied` の `reply: "reject"` を実測）。拒否されたツールで終わったターンは本文が無いので、チャットには「何が拒否されたか」を出す（#273）。許可が要る作業は端末で開いてから返信する。`--auto` は SAI からは付けない（`SAI_OPENCODE_ARGS` で運用者が渡すのは可）
-- 一言コメント（digest）は SAI 側の設定（`SAI_DIGEST_PROVIDER=openai`）なので、エージェントが何であっても同じローカルのモデルで作れる
+- 一言コメント（digest）は SAI 側の設定（自分のメニューで口を「OpenAI 互換」にする）なので、エージェントが何であっても同じローカルのモデルで作れる
 
 ## Codex CLI
 
@@ -101,10 +101,10 @@ ANTHROPIC_BASE_URL=http://127.0.0.1:4000 pnpm start
 
 ## 一言コメント（digest）
 
-**実装済み。** `claude` バイナリを使わず、OpenAI 互換の `/chat/completions` を直接叩ける:
+**実装済み。** `claude` バイナリを使わず、OpenAI 互換の `/chat/completions` を直接叩ける。右上の自分のメニューで口を「OpenAI 互換」、モデルを `qwen3:8b` にして「一言コメントを作る」を入にする（`settings.json` に残る。#288）。送り先だけはサーバの環境変数で、既定の Ollama（`http://127.0.0.1:11434/v1`）以外なら起動時に渡す:
 
 ```
-SAI_DIGEST=1 SAI_DIGEST_PROVIDER=openai SAI_DIGEST_URL=http://127.0.0.1:11434/v1 SAI_DIGEST_MODEL=qwen3:8b pnpm start
+SAI_DIGEST_URL=http://127.0.0.1:1234/v1 pnpm start    # LM Studio
 ```
 
 詳しくは [docs/screen.md](screen.md) の「一言コメント」。`<think>…</think>` を返すモデル（qwen3 など）は落としてから使う。

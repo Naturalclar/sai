@@ -292,20 +292,16 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 
 ## 一言コメントと性格（digest）
 
-エージェントの返答は長い説明になりがちで、フィードを眺めるには重い。`SAI_DIGEST=1` でサーバを起動すると、**新しく届いたターン完了の行**ごとに本文を **1〜2 文の一言コメント**（「PR #35 マージ、返信の二重起動を直したやつ。次は #31 やる？」のような）に言い換えて、バブルの本文をそれにする。元の本文は消えず、一言の横の「詳細」で今までどおり Markdown で開ける。自分の入力と待ちバブルは変えない。一覧の「最後の発言」も一言があればそれになる。
+エージェントの返答は長い説明になりがちで、フィードを眺めるには重い。右上の自分のメニューで「一言コメントを作る」を入にすると（#288。前は `SAI_DIGEST=1` でサーバを起動していた）、**新しく届いたターン完了の行**ごとに本文を **1〜2 文の一言コメント**（「PR #35 マージ、返信の二重起動を直したやつ。次は #31 やる？」のような）に言い換えて、バブルの本文をそれにする。元の本文は消えず、一言の横の「詳細」で今までどおり Markdown で開ける。自分の入力と待ちバブルは変えない。一覧の「最後の発言」も一言があればそれになる。
 
 - **issue / PR は番号だけでなく「何をするものか」も残す。** 「#134 作成」だけでは何を作ったか思い出せないので、プロンプトで短い説明を添えさせる（元の本文から分かる範囲で。分からなければ番号だけ）。番号が複数並ぶときは主なものだけでよい。この分の余裕として一言の長さの目安は 80 文字（`DIGEST_MAX_CHARS`。目安を渡すだけで、超えても切らない）
-- **作るのは LLM**で、既定は返信と同じ `claude` CLI を `claude -p --model haiku --output-format json` で叩く（実行ファイルはサーバの `PATH` の `claude`。モデルは `SAI_DIGEST_MODEL` で変えられる）。ローカルの LLM で作る口もある（下）。結果は `~/.agent-feed/digest.jsonl` に追記する。JSONL（記録）は触らず、派生データなので消しても履歴は壊れない
-- **既定はオフ。** トークンと時間を使うのと、本文を LLM に送るので、黙って走らせない。オンにしても**サーバが起動したあとに増えた行**だけ作る（過去の行は作らない）
+- **作るのは LLM**で、既定は返信と同じ `claude` CLI を `claude -p --model haiku --output-format json` で叩く（実行ファイルはサーバの `PATH` の `claude`。モデルは自分のメニューの欄で変えられる。空なら `haiku`）。ローカルの LLM で作る口もある（下）。結果は `~/.agent-feed/digest.jsonl` に追記する。JSONL（記録）は触らず、派生データなので消しても履歴は壊れない
+- **既定はオフ。** トークンと時間を使うのと、本文を LLM に送るので、黙って走らせない。入にしても**入にしたあと（起動時に入なら起動したあと）に増えた行**だけ作る（過去の行は作らない。切っていた間に届いた行もさかのぼらない）
 - 1 行ずつ直列で回す。失敗した行（`claude` が無い、ログインしていない、90 秒で終わらない）は一言無しのままで、画面は本文を出す。理由は `~/.agent-feed/digest.log` に残る
 - 一言を作る `claude -p` が自分自身を記録しないよう、その子プロセスには `AGENT_FEED_SKIP=1` を渡す（`record.py` はこれが立っていると何も書かない）。`--bare` は OAuth を読まないので使えない。フックが指す `record.py` が古くてこれを知らない間は子のターンが JSONL に書かれてしまうが、子は `~/.agent-feed` を `cwd` にして起動するので、サーバは **`cwd` がそこの行を SAI 自身の雑音として読み飛ばす**（画面に出ず、要約もしない）。フックの checkout を最新にすれば書かれなくなる
-- **ローカルの LLM で作る**（Ollama / LM Studio / llama.cpp / vLLM）: `SAI_DIGEST_PROVIDER=openai` にすると、`claude` の代わりに OpenAI 互換の `POST <SAI_DIGEST_URL>/chat/completions` を Node の `fetch` で叩く（依存は足さない。`server/digest/digest.ts` の `OpenAISummarizer`）。`SAI_DIGEST_URL` の既定は Ollama の `http://127.0.0.1:11434/v1`、LM Studio なら `http://127.0.0.1:1234/v1`。**`SAI_DIGEST_MODEL` は必須**（`haiku` はローカルに無い。忘れると起動時に stderr に理由が出て一言が付かないだけで、サーバは立つ）。鍵が要る口には `SAI_DIGEST_API_KEY`（`Authorization: Bearer`）。思考つきのモデル（qwen3 など）が本文に混ぜる `<think>…</think>` は落とす。子プロセスを立てないので `AGENT_FEED_SKIP` の話は無く、`claude` が無い環境でも動く。口調（MBTI）の指示は同じプロンプトで出すので、小さいモデルだと崩れる。崩れるならモデルを上げる。例:
-
-  ```
-  ollama pull qwen3:8b
-  SAI_DIGEST=1 SAI_DIGEST_PROVIDER=openai SAI_DIGEST_MODEL=qwen3:8b pnpm start
-  ```
+- **ローカルの LLM で作る**（Ollama / LM Studio / llama.cpp / vLLM）: 口を「OpenAI 互換」にすると、`claude` の代わりに OpenAI 互換の `POST <SAI_DIGEST_URL>/chat/completions` を Node の `fetch` で叩く（依存は足さない。`server/digest/digest.ts` の `OpenAISummarizer`）。`SAI_DIGEST_URL` の既定は Ollama の `http://127.0.0.1:11434/v1`、LM Studio なら `http://127.0.0.1:1234/v1`。**モデル名は必須**（`haiku` はローカルに無い。空のまま入にするとメニューに理由が出て一言が付かないだけ）。鍵が要る口には `SAI_DIGEST_API_KEY`（`Authorization: Bearer`）。**送り先と鍵はサーバの環境変数だけ**で、画面からは変えられない（本文の送り先を同一オリジンの `PUT` 1 つで外に向けられないように。#288）。思考つきのモデル（qwen3 など）が本文に混ぜる `<think>…</think>` は落とす。子プロセスを立てないので `AGENT_FEED_SKIP` の話は無く、`claude` が無い環境でも動く。口調（MBTI）の指示は同じプロンプトで出すので、小さいモデルだと崩れる。崩れるならモデルを上げる。例: `ollama pull qwen3:8b` してから、メニューで口を「OpenAI 互換」、モデルを `qwen3:8b` にして入にする
+- **入切・口・モデルは立て直さずに切り替わる**（#288）。`~/.agent-feed/settings.json` の `digest` / `digest_provider` / `digest_model` に残るので、サーバを立て直しても入のまま。**口とモデルは切のまま先に選べる**（入にした瞬間に既定の `claude` へ本文が送られないように）。口を変えるとモデルは空（口の既定）に戻る（`claude` にローカルのモデル名を渡すと一言が 1 つも付かないため）
 
 - **一言の中の参照はリンクになる**（`shared/refs.ts`）。`#123` / `PR #123` は行の `remote`（GitHub のとき）の issue へ、`owner/repo#123` はそのリポジトリへ、`PGR-10891` のような Linear の識別子は `https://linear.app/<workspace>/issue/…` へ、URL はそのまま。Linear の workspace（URL の `linear.app/<workspace>/` の部分）は行からは分からないので、ヘッダの入力欄で設定する（`settings.json` の `linear_workspace`。空ならリンクにしない）。`remote` の無い古い行では番号は文字のまま。URL の途中の `#` や `` `code` `` の中、`SHA-256` のような語は触らない。サイドバーの「最後の発言」はリンクにしない（項目自体がリンクなので）
 - **性格は MBTI の 16 タイプから**選ぶ（性格なしも選べる）。口調の指示だけが変わり、中身（何をしたか）は変えない。**全体の既定**はヘッダの select（`~/.agent-feed/settings.json` の `persona`、`GET/PUT /api/settings`）、**セッションごと**はチャット見出しの select（セッションのメタ `session-meta.json` の `persona`、`PUT /api/sessions/<id>/meta`）。セッションに設定が無ければ既定に従い、「既定」を選び直せば消える。サーバが作るときに行のセッションのメタを引いて決めるので、変えると**以後の行から**効く。過去の一言は作ったときの性格のまま（作り直さない）。MBTI は口調の「型」として借りるだけで、診断や性格分析の話にはしない。口調の表は `shared/persona.ts`
-- **セッションごとに「作らない」にできる**（#263）。同じ select の一番下の「一言を作らない」で、そのセッションだけ止まる（`session-meta.json` の `digest_off`）。**「性格なし」はオフではない**（口調が中立になるだけで一言は作られる）ので別にしてある。切ると**以後は作られず、切る前に作ってあるぶんも一覧・チャット・フィードに出ない**。ただし `digest.jsonl` からは消さないので、戻せばまた出る。全体を止めるのは今までどおり `SAI_DIGEST`
+- **セッションごとに「作らない」にできる**（#263）。同じ select の一番下の「一言を作らない」で、そのセッションだけ止まる（`session-meta.json` の `digest_off`）。**「性格なし」はオフではない**（口調が中立になるだけで一言は作られる）ので別にしてある。切ると**以後は作られず、切る前に作ってあるぶんも一覧・チャット・フィードに出ない**。ただし `digest.jsonl` からは消さないので、戻せばまた出る。全体を止めるのは自分のメニューの「一言コメントを作る」

@@ -1,9 +1,10 @@
 // チャットの一言コメント（digest）。エージェントの返答（text）を、性格つきの 1〜2 文に言い換える。
 //
 // 作るのは LLM で、既定は返信と同じ `claude` CLI を `-p` で叩く（依存を足さない。実行ファイルはサーバの PATH の `claude`）。
-// SAI_DIGEST_PROVIDER=openai なら OpenAI 互換の HTTP（Ollama / LM Studio / llama.cpp / vLLM）を Node の fetch で叩く。
+// 口を openai にすると OpenAI 互換の HTTP（Ollama / LM Studio / llama.cpp / vLLM）を Node の fetch で叩く。
 // 結果は ~/.agent-feed/digest.jsonl に追記し、JSONL（記録）は触らない。派生データなので消しても履歴は壊れない。
-// 既定はオフ（SAI_DIGEST=1 で有効）。オンでも「サーバが起動したあとに増えた行」だけ作り、過去の行は作らない。
+// 既定はオフ。入切・口・モデルは settings.json（画面の自分のメニュー）で、サーバを立て直さずに切り替わる（#288。前は環境変数）。
+// 入でも「入にしたあと（起動時に入なら起動したあと）に増えた行」だけ作り、過去の行は作らない。
 // 1 行ずつ直列で回し、失敗した行は無いまま（画面は text を出す）。
 import { spawn } from 'node:child_process'
 import { appendFile, mkdir, readFile, stat } from 'node:fs/promises'
@@ -16,7 +17,7 @@ import type { DigestProvider, FeedRow, PersonaId } from '../../shared/types.ts'
 
 export const DIGEST_FILE = 'digest.jsonl'
 export const DEFAULT_DIGEST_MODEL = 'haiku'
-/** SAI_DIGEST_PROVIDER=openai のときの既定の base URL（Ollama。LM Studio は http://127.0.0.1:1234/v1） */
+/** 口が openai のときの既定の base URL（Ollama。LM Studio は http://127.0.0.1:1234/v1）。変えるのは SAI_DIGEST_URL だけ */
 export const DEFAULT_OPENAI_URL = 'http://127.0.0.1:11434/v1'
 /** 1 件あたりの上限。これを超えたら失敗扱い（次の行へ） */
 export const DIGEST_TIMEOUT_MS = 90_000
@@ -227,10 +228,22 @@ export class DigestStore {
   }
 }
 
+/** 口とモデルから Summarizer を作る。`Digester.configure()` が入にしたとき・口やモデルを変えたときに呼ぶ */
+export type SummarizerFactory = (provider: DigestProvider, model: string) => Summarizer
+
+/** 一言の入切・口・モデル（settings.json のうち、作る側が見るぶん。`Settings` をそのまま渡せる） */
+export interface DigestSettings {
+  digest: boolean
+  digest_provider: DigestProvider
+  /** 空なら口の既定（claude は haiku。openai は既定が無いので作らない） */
+  digest_model: string
+}
+
 export interface DigesterOptions {
+  /** 最初の入切。あとから `configure()` で変わる */
   enabled: boolean
   model: string
-  /** 一言を作る口。表示用（/api/settings の provider）。無ければ claude */
+  /** 一言を作る口。無ければ claude */
   provider?: DigestProvider
   /** 一言を作る子プロセスの cwd（フィードのディレクトリ）。ここを cwd にした行は自分の雑音なので作らない */
   ownDir?: string
@@ -250,33 +263,84 @@ export interface DigesterOptions {
 
 export class Digester {
   readonly store: DigestStore
-  readonly enabled: boolean
-  readonly model: string
-  readonly provider: DigestProvider
-  private readonly summarizer: Summarizer | null
+  private readonly make: SummarizerFactory | null
+  /** いまの口。null なら作らない（切っている・組めなかった） */
+  private summarizer: Summarizer | null
+  private modelValue: string
+  private providerValue: DigestProvider
+  private errorValue = ''
   private readonly persona: (row: FeedRow) => Promise<PersonaId | null>
   private readonly logPath: string | undefined
   private readonly ownDir: string | undefined
   /**
-   * この時刻より古い行は作らない（ミリ秒）。サーバが起動した時刻 - DIGEST_SINCE_SLACK_MS。
+   * この時刻より古い行は作らない（ミリ秒）。サーバが起動した時刻（あとから入にしたならその時刻）- DIGEST_SINCE_SLACK_MS。
    * 「起動時に見えていた行の集合」ではなく時刻で切るので、あとから `days` が広がって古い行が見えても積まれない（#159）
    */
-  private readonly sinceMs: number
+  private sinceMs: number
   private queue: { key: string; row: FeedRow }[] = []
   private queued = new Set<string>()
   private pumping = false
 
-  constructor(store: DigestStore, summarizer: Summarizer | null, opts: DigesterOptions) {
+  /**
+   * `summarizer` は固定の口（テストの偽物）か、口とモデルから作る関数（本物。`createDigester()`）。null なら入にできない。
+   * `opts` の enabled / model / provider は最初の状態で、`configure()` で変わる
+   */
+  constructor(store: DigestStore, summarizer: Summarizer | SummarizerFactory | null, opts: DigesterOptions) {
     this.store = store
-    this.summarizer = summarizer
-    this.enabled = opts.enabled && summarizer !== null
-    this.model = opts.model
-    this.provider = opts.provider ?? 'claude'
+    this.make = summarizer === null ? null : typeof summarizer === 'function' ? summarizer : () => summarizer
+    this.modelValue = opts.model
+    this.providerValue = opts.provider ?? 'claude'
+    this.summarizer = opts.enabled && this.make ? this.make(this.providerValue, this.modelValue) : null
     this.persona = opts.persona
     this.logPath = opts.logPath
     this.ownDir = opts.ownDir
     const since = opts.since === undefined ? Date.now() : Date.parse(opts.since)
     this.sinceMs = (Number.isNaN(since) ? Date.now() : since) - DIGEST_SINCE_SLACK_MS
+  }
+
+  /** いま作っているか（入にしていて、口が組めた） */
+  get enabled(): boolean {
+    return this.summarizer !== null
+  }
+
+  /** 実際に使うモデル（空の設定なら口の既定を入れたもの） */
+  get model(): string {
+    return this.modelValue
+  }
+
+  get provider(): DigestProvider {
+    return this.providerValue
+  }
+
+  /** 入にしたのに作れない理由。無ければ空 */
+  get error(): string {
+    return this.errorValue
+  }
+
+  /**
+   * 入切・口・モデルを変える。起動時（settings.json）と PUT /api/settings から呼び、サーバは立て直さない（#288）。
+   * - **切から入にしたら、境目を「いま」に進める**。切っていた間に届いた行はさかのぼって作らない（起動時に入にしたのと同じ扱い。
+   *   さかのぼると、入にした瞬間に何日ぶんもの行が列に積まれて口を占有する）
+   * - 切ったら列を捨てる（作りかけの 1 件だけは、その口で終わらせる）
+   * - openai の口でモデルが空なら作らず、理由を `error` に出す（サーバは落とさない）
+   */
+  configure(next: DigestSettings): void {
+    const was = this.enabled
+    this.providerValue = next.digest_provider
+    this.modelValue = next.digest_model || (next.digest_provider === 'claude' ? DEFAULT_DIGEST_MODEL : '')
+    this.errorValue = ''
+    this.summarizer = null
+    if (next.digest) {
+      if (!this.make) this.errorValue = '一言を作る口がありません'
+      else if (!this.modelValue) this.errorValue = 'openai の口にはモデル名が要ります（ローカルのモデル名。例 qwen3:8b）'
+      else this.summarizer = this.make(this.providerValue, this.modelValue)
+    }
+    if (!this.enabled) {
+      for (const q of this.queue) this.queued.delete(q.key)
+      this.queue = []
+    } else if (!was) {
+      this.sinceMs = Date.now() - DIGEST_SINCE_SLACK_MS
+    }
   }
 
   /**
@@ -355,13 +419,16 @@ export class Digester {
         const { key, row } = this.queue.shift()!
         // 性格を引くついでに「そもそも作るか」も分かる（メタの読み出しは非同期なので、同期の scan() では引けない。#263）
         const persona = await this.persona(row)
-        if (persona === null) {
+        // 口は 1 件ごとに取り直す（性格を引いている間にも、画面から切られたり口を変えられたりする。#288）
+        const summarizer = this.summarizer
+        const model = this.modelValue
+        if (persona === null || !summarizer) {
           this.queued.delete(key)
           continue
         }
         try {
-          const summary = await this.summarizer.summarize(digestPrompt(persona, row.text))
-          await this.store.append({ key, persona, summary, model: this.model, ts: new Date().toISOString() })
+          const summary = await summarizer.summarize(digestPrompt(persona, row.text))
+          await this.store.append({ key, persona, summary, model, ts: new Date().toISOString() })
         } catch (err) {
           await this.log(`${new Date().toISOString()} ${key} ${err instanceof Error ? err.message : String(err)}`)
         } finally {
@@ -405,37 +472,35 @@ export function personaResolver(sources: PersonaSources): (row: FeedRow) => Prom
 }
 
 /**
- * 環境変数から本物を組む。SAI_DIGEST=1 でなければ無効（summarizer は作らない）。
- * 口は SAI_DIGEST_PROVIDER: claude（既定。`claude -p`）か openai（SAI_DIGEST_URL の `/chat/completions`。SAI_DIGEST_MODEL は必須）。
- * 設定の間違いはサーバを落とさず、log（既定 stderr）に理由を出して一言を無効のまま立てる
+ * 本物の口を作る関数。口とモデルは settings.json（画面）から来て、openai の送り先と鍵だけは環境変数（SAI_DIGEST_URL / SAI_DIGEST_API_KEY）から取る。
+ * **送り先を settings.json に入れないのは意図的**（#288）: 入れると同一オリジンの PUT 1 つで、作業の本文を任意の URL に流せるようになる。
+ * 組んだら log（既定 stderr）に口とモデルを出す（サーバのペインから、いま何で作っているかが分かる）
  */
-export function digesterFromEnv(
+export function summarizerFactory(feedDir: string, env: NodeJS.ProcessEnv = process.env, log: (line: string) => void = (line) => console.error(line)): SummarizerFactory {
+  return (provider, model) => {
+    if (provider === 'openai') {
+      const url = env.SAI_DIGEST_URL || DEFAULT_OPENAI_URL
+      log(`digest: openai ${url} model=${model}`)
+      return new OpenAISummarizer(url, model, env.SAI_DIGEST_API_KEY || undefined)
+    }
+    log(`digest: claude model=${model}`)
+    return new ClaudeSummarizer(model, feedDir, env)
+  }
+}
+
+/** 本物を組む。最初は切で、入切・口・モデルは `configure()` で入る（createApp が起動時に settings.json を渡す） */
+export function createDigester(
   feedDir: string,
   store: DigestStore,
   sources: PersonaSources,
   env: NodeJS.ProcessEnv = process.env,
   log: (line: string) => void = (line) => console.error(line),
 ): Digester {
-  const enabled = env.SAI_DIGEST === '1'
-  const providerRaw = env.SAI_DIGEST_PROVIDER || 'claude'
-  const provider: DigestProvider = providerRaw === 'openai' ? 'openai' : 'claude'
-  const common = { enabled, ownDir: feedDir, persona: personaResolver(sources), logPath: `${feedDir}/digest.log` }
-
-  if (providerRaw !== 'claude' && providerRaw !== 'openai') {
-    if (enabled) log(`digest: SAI_DIGEST_PROVIDER=${providerRaw} は知らない口（claude / openai）。一言は作らない`)
-    return new Digester(store, null, { ...common, model: env.SAI_DIGEST_MODEL || '', provider })
-  }
-  if (provider === 'openai') {
-    const model = env.SAI_DIGEST_MODEL || ''
-    const url = env.SAI_DIGEST_URL || DEFAULT_OPENAI_URL
-    if (enabled && !model) {
-      log('digest: SAI_DIGEST_PROVIDER=openai には SAI_DIGEST_MODEL が要る（ローカルのモデル名。例 qwen3:8b）。一言は作らない')
-      return new Digester(store, null, { ...common, model, provider })
-    }
-    if (enabled) log(`digest: openai ${url} model=${model}`)
-    return new Digester(store, enabled ? new OpenAISummarizer(url, model, env.SAI_DIGEST_API_KEY || undefined) : null, { ...common, model, provider })
-  }
-  const model = env.SAI_DIGEST_MODEL || DEFAULT_DIGEST_MODEL
-  if (enabled) log(`digest: claude model=${model}`)
-  return new Digester(store, enabled ? new ClaudeSummarizer(model, feedDir, env) : null, { ...common, model, provider })
+  return new Digester(store, summarizerFactory(feedDir, env, log), {
+    enabled: false,
+    model: '',
+    ownDir: feedDir,
+    persona: personaResolver(sources),
+    logPath: `${feedDir}/digest.log`,
+  })
 }

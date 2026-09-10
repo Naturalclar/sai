@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
-import { DEFAULT_OPENAI_URL, DigestStore, Digester, OpenAISummarizer, digestKey, digestable, digesterFromEnv, personaResolver, stripThinking, summarizeCommand, summarizeRequest } from './digest.ts'
+import { ClaudeSummarizer, DEFAULT_OPENAI_URL, DigestStore, Digester, OpenAISummarizer, createDigester, digestKey, digestable, personaResolver, stripThinking, summarizeCommand, summarizeRequest, summarizerFactory } from './digest.ts'
 import type { Summarizer } from './digest.ts'
 import { row } from '../rows/aggregate.test.ts'
 import type { PersonaId } from '../../shared/types.ts'
@@ -318,51 +318,137 @@ test('OpenAISummarizer: 応答が無ければ timeoutMs で諦める', async () 
   }
 })
 
-test('digesterFromEnv: SAI_DIGEST_PROVIDER で口を選ぶ。openai は SAI_DIGEST_MODEL が無いと無効のまま立つ（落とさない）', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'sai-digest-env-'))
+test('createDigester: 最初は切。configure で口を組み、組んだら口とモデルを log に出す。環境変数の SAI_DIGEST は見ない（#288）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-digest-create-'))
   const sources = { settings: { get: async () => ({ persona: 'ENFP' as PersonaId }) } }
   const logs: string[] = []
   const log = (l: string) => logs.push(l)
   try {
     const store = new DigestStore(join(dir, 'digest.jsonl'))
-    // 既定は claude / haiku、SAI_DIGEST が無ければ無効で何も言わない
-    let d = digesterFromEnv(dir, store, sources, {}, log)
-    assert.equal(d.enabled, false)
-    assert.equal(d.provider, 'claude')
-    assert.equal(d.model, 'haiku')
+    const d = createDigester(dir, store, sources, { SAI_DIGEST: '1', SAI_DIGEST_PROVIDER: 'openai', SAI_DIGEST_MODEL: 'qwen3:8b' }, log)
+    assert.equal(d.enabled, false, '前の環境変数が残っていても入にならない（入切は settings.json だけ）')
     assert.deepEqual(logs, [])
-    // claude を有効に
-    d = digesterFromEnv(dir, store, sources, { SAI_DIGEST: '1' }, log)
+    d.configure({ digest: true, digest_provider: 'claude', digest_model: '' })
     assert.equal(d.enabled, true)
     assert.equal(d.provider, 'claude')
+    assert.equal(d.model, 'haiku', 'claude でモデルが空なら haiku')
     assert.deepEqual(logs, ['digest: claude model=haiku'])
-    // openai: モデル必須
     logs.length = 0
-    d = digesterFromEnv(dir, store, sources, { SAI_DIGEST: '1', SAI_DIGEST_PROVIDER: 'openai' }, log)
-    assert.equal(d.enabled, false, 'モデルが無ければ summarizer を作らない')
-    assert.equal(d.provider, 'openai')
-    assert.match(logs[0] ?? '', /SAI_DIGEST_MODEL が要る/)
-    // openai: URL は既定 Ollama
+    d.configure({ digest: false, digest_provider: 'claude', digest_model: '' })
+    assert.equal(d.enabled, false)
+    assert.deepEqual(logs, [], '切るときは口を組まない')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('summarizerFactory: 口で作り分ける。openai の送り先と鍵は環境変数からで、settings.json からは来ない（#288）', async () => {
+  const logs: string[] = []
+  const log = (l: string) => logs.push(l)
+  assert.ok(summarizerFactory('/feed', {}, log)('claude', 'haiku') instanceof ClaudeSummarizer)
+  assert.ok(summarizerFactory('/feed', {}, log)('openai', 'qwen3:8b') instanceof OpenAISummarizer)
+  assert.deepEqual(logs, ['digest: claude model=haiku', `digest: openai ${DEFAULT_OPENAI_URL} model=qwen3:8b`], 'URL は既定 Ollama')
+
+  const fake = await fakeOpenAI(() => completion('できた。'))
+  try {
     logs.length = 0
-    d = digesterFromEnv(dir, store, sources, { SAI_DIGEST: '1', SAI_DIGEST_PROVIDER: 'openai', SAI_DIGEST_MODEL: 'qwen3:8b' }, log)
+    const s = summarizerFactory('/feed', { SAI_DIGEST_URL: fake.url, SAI_DIGEST_API_KEY: 'sk-local' }, log)('openai', 'm')
+    assert.equal(await s.summarize('P'), 'できた。')
+    assert.deepEqual(logs, [`digest: openai ${fake.url} model=m`])
+    assert.equal(fake.seen[0]!.body.model, 'm')
+    assert.equal(fake.seen[0]!.headers.authorization, 'Bearer sk-local')
+  } finally {
+    await fake.close()
+  }
+})
+
+test('Digester.configure: 立て直さずに入切・口・モデルが変わる。入にした時刻より前の行はさかのぼって作らない。openai でモデルが空なら理由を出して作らない', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-digest-configure-'))
+  try {
+    const store = new DigestStore(join(dir, 'digest.jsonl'))
+    await store.load()
+    const fake = new FakeSummarizer()
+    const made: string[] = []
+    const d = new Digester(
+      store,
+      (provider, model) => {
+        made.push(`${provider}:${model}`)
+        return fake
+      },
+      { enabled: false, model: '', since: at(0).toISOString(), persona: async () => 'none' },
+    )
+    // 切の間は積まない
+    d.scan([row(at(1), 'S1', { repo: 'r', text: '切の間' })])
+    assert.equal(d.pending(), 0)
+    assert.deepEqual(made, [])
+
+    d.configure({ digest: true, digest_provider: 'claude', digest_model: '' })
     assert.equal(d.enabled, true)
+    assert.equal(d.model, 'haiku')
+    assert.equal(d.error, '')
+    assert.deepEqual(made, ['claude:haiku'])
+    // 境目は「入にした時刻」に進む。起動時の since（at(0)）より後でも、切の間に届いた行（at(1)）は作らない
+    const later = new Date(Date.now() + 1000)
+    d.scan([row(at(1), 'S1', { repo: 'r', text: '切の間' }), row(later, 'S2', { repo: 'r', text: '入にした後' })])
+    await d.drain()
+    assert.equal(fake.prompts.length, 1)
+    assert.match(fake.prompts[0] ?? '', /入にした後/)
+    assert.equal(store.get(digestKey(row(later, 'S2', { repo: 'r' })))?.model, 'haiku', '作ったときのモデルが残る')
+
+    // openai でモデルが空: 保存した口は反映するが、作らずに理由を出す
+    d.configure({ digest: true, digest_provider: 'openai', digest_model: '' })
+    assert.equal(d.enabled, false)
     assert.equal(d.provider, 'openai')
-    assert.equal(d.model, 'qwen3:8b')
-    assert.deepEqual(logs, [`digest: openai ${DEFAULT_OPENAI_URL} model=qwen3:8b`])
-    // openai: URL を変える
-    logs.length = 0
-    d = digesterFromEnv(dir, store, sources, { SAI_DIGEST: '1', SAI_DIGEST_PROVIDER: 'openai', SAI_DIGEST_MODEL: 'm', SAI_DIGEST_URL: 'http://127.0.0.1:1234/v1' }, log)
-    assert.deepEqual(logs, ['digest: openai http://127.0.0.1:1234/v1 model=m'])
-    // 知らない口は無効のまま
-    logs.length = 0
-    d = digesterFromEnv(dir, store, sources, { SAI_DIGEST: '1', SAI_DIGEST_PROVIDER: 'gemini' }, log)
+    assert.equal(d.model, '')
+    assert.match(d.error, /モデル名が要ります/)
+    assert.deepEqual(made, ['claude:haiku'], '組めないときは口を作らない')
+    d.configure({ digest: true, digest_provider: 'openai', digest_model: 'qwen3:8b' })
+    assert.equal(d.enabled, true)
+    assert.equal(d.error, '')
+    assert.deepEqual(made, ['claude:haiku', 'openai:qwen3:8b'])
+    // 切ったら理由も消える
+    d.configure({ digest: false, digest_provider: 'openai', digest_model: '' })
     assert.equal(d.enabled, false)
-    assert.match(logs[0] ?? '', /知らない口/)
-    // SAI_DIGEST が無ければ、口の設定が間違っていても黙っている
-    logs.length = 0
-    d = digesterFromEnv(dir, store, sources, { SAI_DIGEST_PROVIDER: 'openai' }, log)
-    assert.equal(d.enabled, false)
-    assert.deepEqual(logs, [])
+    assert.equal(d.error, '')
+
+    // 口を作れない Digester（null）は入にしても作らない
+    const none = new Digester(store, null, { enabled: false, model: '', persona: async () => 'none' })
+    none.configure({ digest: true, digest_provider: 'claude', digest_model: '' })
+    assert.equal(none.enabled, false)
+    assert.notEqual(none.error, '')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('Digester.configure: 切ると積んである列を捨てる。作りかけの 1 件だけはその口で終わらせる', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-digest-off-queue-'))
+  try {
+    const store = new DigestStore(join(dir, 'digest.jsonl'))
+    await store.load()
+    let release = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const prompts: string[] = []
+    const slow: Summarizer = {
+      summarize: async (prompt) => {
+        prompts.push(prompt)
+        await gate
+        return 'できた'
+      },
+    }
+    const d = new Digester(store, slow, { enabled: true, model: 'm', since: at(0).toISOString(), persona: async () => 'none' })
+    d.scan([row(at(1), 'S1', { repo: 'r', text: '一つ目' }), row(at(2), 'S2', { repo: 'r', text: '二つ目' }), row(at(3), 'S3', { repo: 'r', text: '三つ目' })])
+    while (prompts.length === 0) await new Promise((r) => setTimeout(r, 5))
+    assert.equal(d.pending(), 3, '1 件が作りかけ、2 件が列')
+
+    d.configure({ digest: false, digest_provider: 'claude', digest_model: '' })
+    assert.equal(d.pending(), 1, '列は捨て、作りかけだけ残る')
+    release()
+    await d.drain()
+    assert.equal(prompts.length, 1, '捨てた行は口に渡さない')
+    assert.equal(store.size, 1)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

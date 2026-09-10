@@ -68,7 +68,9 @@ export function Message({ ts, text: raw, markdown, waiting, resolved, thinking, 
         {thinking && <ThinkingBlock text={thinking} openAll={thinkingOpen} />}
         <div className="summary" ref={summaryRef}>
           {/* 一言の中の URL・#123・PGR-123 はリンクにする（shared/refs.ts）。HTML 文字列は作らない */}
-          <span className="line"><Inlines nodes={linkifyRefs(summary, { remote, linear })} /></span>
+          {/* source に元の本文を渡すと、そこに無い番号はリンクにならない（#268。一言は LLM が書くので、
+              本文に無い番号を書くことがある。押すと無関係の issue に飛ぶ） */}
+          <span className="line"><Inlines nodes={linkifyRefs(summary, { remote, linear, source: text })} /></span>
           <button type="button" className="linkish details-toggle" onClick={() => setDetails((v) => !v)} aria-expanded={details}>
             {details ? '詳細を閉じる' : '詳細'}
           </button>

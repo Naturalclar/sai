@@ -41,6 +41,20 @@ function orderedUnique<T>(values: Iterable<T>): T[] {
 }
 
 /**
+ * 値のある一番新しい行の値（#283）。値の無い行（古い record.py や試作の行はキーごと無い）では上書きしない。
+ * `orderedUnique(...)` の最後は「一番新しい行の値」ではなく「**最後に初めて出てきた値**」なので、そちらを使うと
+ * `payload` → 空 → `payload` で空に、ブランチ `A` → `B` → `A` で `B` になる（古い行が 1 本混ざっただけで
+ * 「IDの出どころが不明」になり、90 日の窓から落ちるまで返信できなかった）
+ */
+function latestValue(items: FeedRow[], pick: (row: FeedRow) => string | undefined): string {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const value = (pick(items[i]!) ?? '').trim()
+    if (value) return value
+  }
+  return ''
+}
+
+/**
  * セッションのタイトル。一番新しい user_text の1行目。返信や端末での続きの指示があるたびに、最後の入力に追従する。
  * user_text が1行も無ければ first_user_text（毎行に載っているので窓から1行目が落ちても残る）、それも無ければ最初の text の1行目
  */
@@ -80,7 +94,6 @@ export function aggregate(rows: FeedRow[]): SessionSummary[] {
     // どのリポジトリか。古い行には project が無いので remote から補う（shared/project.ts）
     // 分からない行は空なので混ぜない（worktree 名には落とさない。#182）。空のままならサーバが cwd から埋める
     const projects = orderedUnique(items.map(rowProject)).filter(Boolean)
-    const remotes = orderedUnique(items.map((r) => (r.remote ?? '').trim())).filter(Boolean)
     const branches = orderedUnique(items.map((r) => r.branch ?? ''))
     const agents = orderedUnique(items.map((r) => (r.agent ?? 'unknown') as Agent))
     const sources = orderedUnique(items.map((r) => (r.session_source ?? '') as SessionSource))
@@ -105,23 +118,25 @@ export function aggregate(rows: FeedRow[]): SessionSummary[] {
       end: last.ts,
       date: localDate(first.ts),
       dates: orderedUnique(items.map((r) => localDate(r.ts))),
-      agent: agents[agents.length - 1] ?? 'unknown',
+      // 1 つだけ出す値は「値のある一番新しい行」のもの（#283）。`agents` / `branches` などの一覧は出てきた順のまま
+      agent: (latestValue(items, (r) => r.agent) || 'unknown') as Agent,
       agents,
-      repo: repos[repos.length - 1] ?? '',
+      repo: latestValue(items, (r) => r.repo),
       repos: repos.filter(Boolean),
-      project: projects[projects.length - 1] ?? '',
+      project: latestValue(items, rowProject),
       projects,
-      remote: remotes[remotes.length - 1] ?? '',
-      branch: branches[branches.length - 1] ?? '',
+      remote: latestValue(items, (r) => r.remote),
+      branch: latestValue(items, (r) => r.branch),
       branches: branches.filter(Boolean),
-      host: hosts[hosts.length - 1] ?? '',
+      host: latestValue(items, (r) => r.host),
       hosts,
       cwd: last.cwd ?? '',
       turns: turnRows.length,
       waiting,
       title: clip(titleFull, TITLE_LEN),
       title_full: clip(titleFull, TITLE_FULL_LEN),
-      session_source: sources.includes('synth') ? 'synth' : (sources[sources.length - 1] ?? ''),
+      // 合成（synth）が 1 本でもあれば synth（返信できない方に倒す）。それ以外は値のある一番新しい行の出どころ
+      session_source: sources.includes('synth') ? 'synth' : (latestValue(items, (r) => r.session_source) as SessionSource),
       sources,
       last_text: clip(firstLine(lastTurn?.text ?? ''), 120),
       pane: typeof last.pane === 'string' ? last.pane : '',

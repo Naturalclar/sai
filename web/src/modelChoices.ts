@@ -8,6 +8,15 @@ export const CLAUDE_ALIASES = ['fable', 'opus', 'sonnet', 'haiku']
 /** 入力欄に出す名前の長さ。これを超えたら切る（送信ボタンの左に置くので長いと折り返す） */
 export const MODEL_LABEL_MAX = 14
 
+/**
+ * メニューの選択肢の名前（#282）。**名前は英語**で、隣の許可モード（`shared/permissions.ts` の `MODE_LABEL`。#271）と
+ * 揃える。言い回しは Claude Code 自身のモデル選択（`Default (recommended)` / `Custom model`。2.1.266 で確認）。
+ * 例外は名前だけで、何が起きるか（`CLI に任せる`）やモーダルの説明は日本語のまま。
+ * 未設定のボタンが許可モードと同じ `Default` になるのは意図的（どちらも「CLI に任せる」で同じ意味）
+ */
+export const MODEL_DEFAULT_LABEL = 'Default'
+export const MODEL_CUSTOM_LABEL = 'Custom model…'
+
 /** `claude-opus-5` のような正式名から一族の名前を取る。別名（`opus`）はそのまま通る */
 const CLAUDE_FAMILY = new RegExp(`^claude-(${CLAUDE_ALIASES.join('|')})(?:[-.].*)?$`)
 
@@ -31,4 +40,9 @@ export function shortModel(model: string): string {
   const m = CLAUDE_FAMILY.exec(name)
   if (m) return m[1]!
   return name.length <= MODEL_LABEL_MAX ? name : `${name.slice(0, MODEL_LABEL_MAX - 1)}…`
+}
+
+/** 入力欄のボタン（閉じているとき）に出す名前。未設定（CLI の既定）なら `Default` */
+export function modelButtonLabel(model: string): string {
+  return shortModel(model) || MODEL_DEFAULT_LABEL
 }

@@ -14,10 +14,11 @@ export interface Attached {
 /**
  * 返信に添える画像。選んだ（貼った・落とした）瞬間にサーバへ置いて、返ってきたパスを持つ。
  * 送信のときに `attachments` として渡し、送れたら clear する。
- * `id` は預け先のエンティティ。無ければ（返信先が決まっていないフィード）何も受け付けない
+ * `id` は預け先のエンティティ。無ければ（返信先が決まっていないフィード）何も受け付けない。
+ * `initial` は打ちかけの下書きから戻す画像（#306。作ったときに 1 回だけ読む）
  */
-export function useAttachments(id: string | undefined) {
-  const [items, setItems] = useState<Attached[]>([])
+export function useAttachments(id: string | undefined, initial: readonly Attached[] = []) {
+  const [items, setItems] = useState<Attached[]>(() => [...initial])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 

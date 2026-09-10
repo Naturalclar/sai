@@ -96,14 +96,20 @@ export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggl
             {/* 通常のモードは印を出さない（普段と違うときだけ目立たせる） */}
             {s.permission_mode && s.permission_mode !== 'default' && <PermissionModeTag mode={s.permission_mode} />}
           </span>
-          {/* 合成 ID（synth）でも出す（#248）。アーカイブは表示の都合なので、再開できるかとは別 */}
-          <ArchiveButton key={`${s.id}:${s.archived ? 1 : 0}`} id={s.id} archived={Boolean(s.archived)} />
-          <MetaEditor key={s.id} id={s.id} meta={s.meta} icon={s.icon} />
-          {s.agent === 'claude' && <PermissionsButton key={s.id} id={s.id} />}
+          {/*
+            key は「別のセッションに移ったら作り直す」ため（中に持っている編集中の状態を持ち越さない）。
+            **兄弟どうしで同じ key にしない**（#264）。同じ親の中で key が重なると React の再調整が
+            古い分を見つけられず、ポーリングのたびに増え続ける（手元では 3 秒ごとに +3 で、見出しが
+            「表示名なし」と許可モードの列で埋まった）。接頭辞を付けて 1 つずつ別の key にする。
+            合成 ID（synth）でも出す（#248）。アーカイブは表示の都合なので、再開できるかとは別
+          */}
+          <ArchiveButton key={`archive:${s.id}:${s.archived ? 1 : 0}`} id={s.id} archived={Boolean(s.archived)} />
+          <MetaEditor key={`meta:${s.id}`} id={s.id} meta={s.meta} icon={s.icon} />
+          {s.agent === 'claude' && <PermissionsButton key={`perm:${s.id}`} id={s.id} />}
           {/* SAI から返信するときの許可モード。端末に打ち込む経路では効かないので、そのときは薄く出す */}
-          {s.agent === 'claude' && <SessionPermissionModeSelect key={s.id} id={s.id} value={s.meta?.permission_mode} terminal={Boolean(s.terminal)} />}
+          {s.agent === 'claude' && <SessionPermissionModeSelect key={`mode:${s.id}`} id={s.id} value={s.meta?.permission_mode} terminal={Boolean(s.terminal)} />}
           {/* 一言が有効なときだけ。このセッションの性格（無ければヘッダの既定に従う） */}
-          {settings?.digest && <SessionPersonaSelect key={s.id} id={s.id} value={s.meta?.persona} defaultPersona={settings.persona} />}
+          {settings?.digest && <SessionPersonaSelect key={`persona:${s.id}`} id={s.id} value={s.meta?.persona} defaultPersona={settings.persona} />}
           {hasThinking && (
             <span className="meta">
               <button type="button" className="linkish" onClick={() => setThinkingUi({ open: !thinkingUi.open })} title="エージェントの思考（thinking）の折りたたみを全部開く／閉じる">

@@ -32,31 +32,48 @@ export const SOURCE_HINT: Record<PermissionSourceKind, string> = {
   sai_args: '環境変数 SAI_CLAUDE_ARGS。SAI から返信したターンにだけ効く（端末で打ったターンには効かない）',
 }
 
-/** 許可モードの言い換え。値は Claude Code のフックのペイロードの permission_mode そのまま */
+/**
+ * 許可モードの名前。値は Claude Code のフックのペイロードの permission_mode そのまま。
+ * **名前は英語**（#271）: Claude Code 自身が端末の Shift+Tab で出す言い回し（`accept edits on` /
+ * `bypass permissions on` / `plan mode on` など。2.1.266 のバイナリで確認）に揃え、端末と SAI で
+ * 同じモードが別の名前に見えないようにする。UI 文言を日本語で書く方針の例外で、**例外は名前だけ**。
+ * 何が起きるかの説明は `MODE_HINT`（日本語）に分けてある
+ */
 export const MODE_LABEL: Record<PermissionMode, string> = {
-  default: '通常（読み取り以外は聞く）',
+  default: 'Default',
+  acceptEdits: 'Accept edits',
+  plan: 'Plan mode',
+  auto: 'Auto mode',
+  dontAsk: "Don't ask",
+  bypassPermissions: 'Bypass permissions',
+}
+
+/** そのモードで何が起きるか（日本語）。メニューの補足と、見出しのタグ・モーダルの説明に使う */
+export const MODE_HINT: Record<PermissionMode, string> = {
+  default: '読み取り以外は聞く',
   acceptEdits: 'ファイル編集は聞かない',
-  plan: 'プラン（承認するまで書き換えない）',
-  auto: '自動（安全性の確認つきで何でも実行）',
-  dontAsk: '聞かない（許可済みだけ実行し、他は自動で拒否）',
-  bypassPermissions: '全部素通し（許可の確認をしない）',
+  plan: '承認するまで書き換えない',
+  auto: '安全性の確認つきで何でも実行',
+  dontAsk: '許可済みだけ実行し、他は自動で拒否',
+  bypassPermissions: '許可の確認をしない',
 }
 
 /**
- * SAI の画面（チャット見出しの select）から選べる許可モード。サーバの検査（shared/meta.ts の mergeMeta）と
- * 画面の select が同じ一覧を見るので、**ここに無い値は口としても受けない**（400）。
+ * SAI の画面（入力欄の許可モードのボタン）から選べる許可モード。サーバの検査（shared/meta.ts の mergeMeta）と
+ * 画面のメニューが同じ一覧を見るので、**ここに無い値は口としても受けない**（400）。
  * `bypassPermissions` は素通しなので、画面は modeSkipsRules() で目立たせる（#253）
  */
 export const REPLY_MODES: ReplyPermissionMode[] = ['acceptEdits', 'bypassPermissions']
 
 /**
  * 入力欄の許可モードのボタン（閉じているとき）に出す短い名前（#265）。
- * 送信ボタンの左にモデルと並ぶので幅が限られる。メニューの中は今までどおり `MODE_LABEL` の長い文
+ * 送信ボタンの左にモデルと並ぶので幅が限られる。メニューの中は `MODE_LABEL` の名前と `MODE_HINT` の説明。
+ * `MODE_LABEL` と同じく英語（#271）
  */
 export const MODE_SHORT: Record<'default' | ReplyPermissionMode, string> = {
-  default: '聞く',
-  acceptEdits: '編集は許可',
-  bypassPermissions: '素通し',
+  default: 'Default',
+  acceptEdits: 'Accept edits',
+  bypassPermissions: 'Bypass',
 }
 
 /** 空（CLI の既定）は `default` と同じ扱い。知らない値はそのまま出す */
@@ -75,7 +92,9 @@ export function modeSkipsRules(mode: string): boolean {
   return mode === 'auto' || mode === 'bypassPermissions'
 }
 
-/** 知らない値でも落とさずそのまま出す */
+/** 名前と説明（`Accept edits — ファイル編集は聞かない`）。知らない値でも落とさずそのまま出す */
 export function modeLabel(mode: string): string {
-  return MODE_LABEL[mode as PermissionMode] ?? mode
+  const name = MODE_LABEL[mode as PermissionMode]
+  if (!name) return mode
+  return `${name} — ${MODE_HINT[mode as PermissionMode]}`
 }

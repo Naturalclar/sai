@@ -1,7 +1,15 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { argsRules, collectPermissions, managedSettingsPath, orderRules, parseSettings, settingsPaths } from './permissions.ts'
-import { isReplyPermissionMode, MODE_LABEL, modeSkipsRules, REPLY_MODES, shortReplyMode } from '../shared/permissions.ts'
+import { isReplyPermissionMode, MODE_HINT, MODE_LABEL, modeLabel, modeSkipsRules, REPLY_MODES, shortReplyMode } from '../shared/permissions.ts'
+
+test('MODE_HINT / modeLabel: 何が起きるかは日本語で添え、タグ・モーダル用は「名前 — 説明」（#271）', () => {
+  // 名前を英語にしても、説明が消えてはいけない（メニューの補足と見出しのタグが空になる）
+  for (const m of Object.keys(MODE_LABEL) as (keyof typeof MODE_LABEL)[]) assert.notEqual(MODE_HINT[m] ?? '', '', m)
+  assert.equal(modeLabel('acceptEdits'), 'Accept edits — ファイル編集は聞かない')
+  assert.equal(modeLabel('bypassPermissions'), 'Bypass permissions — 許可の確認をしない')
+  assert.equal(modeLabel('しらない値'), 'しらない値', '知らない値はそのまま出す（説明を付けない）')
+})
 import type { PermissionRuleEntry } from '../shared/types.ts'
 
 test('settingsPaths: cwd と home から固定で組み立てる（強い順）', () => {
@@ -114,15 +122,24 @@ test('modeSkipsRules: 素通しだけ true。画面はこれで印を出す', ()
   assert.deepEqual(REPLY_MODES.filter(modeSkipsRules), ['bypassPermissions'])
 })
 
-test('MODE_LABEL: 選べるモードには必ず日本語のラベルがある（select が空欄にならない）', () => {
+test('MODE_LABEL: 選べるモードには必ずラベルがある（メニューが空欄にならない）', () => {
   for (const m of REPLY_MODES) assert.notEqual(MODE_LABEL[m] ?? '', '', m)
 })
 
-test('shortReplyMode: 入力欄のボタンに出す短い名前。空は「既定」と同じ扱い（#265）', () => {
-  assert.equal(shortReplyMode(''), '聞く', '設定していない = CLI の既定')
-  assert.equal(shortReplyMode('default'), '聞く')
-  assert.equal(shortReplyMode('acceptEdits'), '編集は許可')
-  assert.equal(shortReplyMode('bypassPermissions'), '素通し')
+test('MODE_LABEL: 名前は Claude Code の端末表示（Shift+Tab）と同じ言い回しの英語（#271）', () => {
+  assert.equal(MODE_LABEL.acceptEdits, 'Accept edits')
+  assert.equal(MODE_LABEL.bypassPermissions, 'Bypass permissions')
+  assert.equal(MODE_LABEL.plan, 'Plan mode')
+  assert.equal(MODE_LABEL.auto, 'Auto mode')
+  // 名前に日本語を混ぜない（何が起きるかの説明は MODE_HINT に分けてある）
+  for (const [m, name] of Object.entries(MODE_LABEL)) assert.doesNotMatch(name, /[぀-ヿ一-龯]/, m)
+})
+
+test('shortReplyMode: 入力欄のボタンに出す短い名前。空は「既定」と同じ扱い（#265 / #271）', () => {
+  assert.equal(shortReplyMode(''), 'Default', '設定していない = CLI の既定')
+  assert.equal(shortReplyMode('default'), 'Default')
+  assert.equal(shortReplyMode('acceptEdits'), 'Accept edits')
+  assert.equal(shortReplyMode('bypassPermissions'), 'Bypass')
   // 返信で選べる値には全部短い名前がある（増やしたらここで止まる）
   for (const m of REPLY_MODES) assert.notEqual(shortReplyMode(m), m, m)
   assert.equal(shortReplyMode('しらない値'), 'しらない値', '知らない値はそのまま出す')

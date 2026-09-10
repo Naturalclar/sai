@@ -27,6 +27,13 @@ import type {
 
 export type { Agent, FeedRow, SessionSource, SessionSummary, SessionMeta, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, Approval, ApprovalMap, ApprovalAnswer, Profile, PersonaId, SettingsResponse, SettingsRequest, Viewer, SessionPermissionsResponse, SessionDiffResponse, SessionDiffSummaryResponse, SearchResponse, SearchHit, DiffPr, DiffSection, DiffFileStat, AttachmentResponse, UsageResponse, UsageWindow, CodexUsage, ClaudeUsage } from '../../shared/types.ts'
 
+/**
+ * `PUT /api/sessions/<id>/meta` のボディ。`SessionMeta` の一部を重ねる。
+ * **消すときは `null`（か空文字）を送る**（サーバの `mergeMeta()` が「falsy なら消す」。省略は据え置き）ので、
+ * 値の型そのままだと消せない（`digest_off?: true` に `null` を入れられない）
+ */
+export type MetaPatch = { [K in keyof SessionMeta]?: SessionMeta[K] | null }
+
 /** サーバの失敗。`code` / `typed` は返信の 409（ReplyError）から。画面はこれで「消して送る」の確認を出し分ける */
 export class ApiError extends Error {
   readonly status: number
@@ -131,7 +138,7 @@ export const api = {
   answerApproval: (approvalId: string, answer: ApprovalAnswer) =>
     sendJSON<{ ok: true }>('POST', `/api/approvals/${encodeURIComponent(approvalId)}/answer`, answer),
   /** 表示名をいまの値に重ねる。空文字は「消す」 */
-  setMeta: (id: string, meta: SessionMeta, days = 90) =>
+  setMeta: (id: string, meta: MetaPatch, days = 90) =>
     sendJSON<SessionMetaResponse>('PUT', `/api/sessions/${encodeURIComponent(id)}/meta?days=${days}`, meta),
   /** アイコン画像を置く。返ってくる icon が新しい URL */
   /** 返信に添える画像を預ける。返った path を reply の attachments に入れる */

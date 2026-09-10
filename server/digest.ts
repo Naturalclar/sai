@@ -234,8 +234,11 @@ export interface DigesterOptions {
   provider?: DigestProvider
   /** 一言を作る子プロセスの cwd（フィードのディレクトリ）。ここを cwd にした行は自分の雑音なので作らない */
   ownDir?: string
-  /** その行の性格。作る直前に行ごとに引く（セッションのメタに persona があればそれ、無ければ全体の既定。変えたら以後の行から効く） */
-  persona: (row: FeedRow) => Promise<PersonaId>
+  /**
+   * その行の性格。作る直前に行ごとに引く（セッションのメタに persona があればそれ、無ければ全体の既定。変えたら以後の行から効く）。
+   * **`null` なら作らない**（そのセッションのメタで切られている。#263）
+   */
+  persona: (row: FeedRow) => Promise<PersonaId | null>
   /**
    * これより古い `ts` の行は作らない（= サーバが起動した時刻。ISO）。既定は「いま」＝ Digester を作った時刻。
    * テストから固定値を渡すためにある。読めない値なら「いま」に落とす
@@ -251,7 +254,7 @@ export class Digester {
   readonly model: string
   readonly provider: DigestProvider
   private readonly summarizer: Summarizer | null
-  private readonly persona: (row: FeedRow) => Promise<PersonaId>
+  private readonly persona: (row: FeedRow) => Promise<PersonaId | null>
   private readonly logPath: string | undefined
   private readonly ownDir: string | undefined
   /**
@@ -350,7 +353,12 @@ export class Digester {
     try {
       while (this.queue.length > 0) {
         const { key, row } = this.queue.shift()!
+        // 性格を引くついでに「そもそも作るか」も分かる（メタの読み出しは非同期なので、同期の scan() では引けない。#263）
         const persona = await this.persona(row)
+        if (persona === null) {
+          this.queued.delete(key)
+          continue
+        }
         try {
           const summary = await this.summarizer.summarize(digestPrompt(persona, row.text))
           await this.store.append({ key, persona, summary, model: this.model, ts: new Date().toISOString() })
@@ -376,18 +384,23 @@ export class Digester {
   }
 }
 
-/** 全体の既定（settings.json）とセッションのメタ（session-meta.json の persona）から、その行の性格を決める */
+/** 全体の既定（settings.json）とセッションのメタ（session-meta.json）から、その行の性格を決める */
 export interface PersonaSources {
   settings: { get(): Promise<{ persona: PersonaId }> }
   /** セッションのメタ。無ければ既定だけ */
-  meta?: { get(id: string): Promise<{ persona?: PersonaId } | undefined> }
+  meta?: { get(id: string): Promise<{ persona?: PersonaId; digest_off?: true } | undefined> }
 }
 
-/** 行 → 性格。セッション（エンティティ）のメタに persona があればそれ、無ければ全体の既定 */
-export function personaResolver(sources: PersonaSources): (row: FeedRow) => Promise<PersonaId> {
+/**
+ * 行 → 性格。セッション（エンティティ）のメタに persona があればそれ、無ければ全体の既定。
+ * **そのセッションが `digest_off` なら `null`**（作らない。#263）。
+ * メタは 1 行につき 1 回しか読まないので、「作るか」と「どの口調か」をここで一緒に決める
+ */
+export function personaResolver(sources: PersonaSources): (row: FeedRow) => Promise<PersonaId | null> {
   return async (row) => {
-    const own = sources.meta ? (await sources.meta.get(entityId(row.session, row.repo, row.ts)))?.persona : undefined
-    return own ?? (await sources.settings.get()).persona
+    const own = sources.meta ? await sources.meta.get(entityId(row.session, row.repo, row.ts)) : undefined
+    if (own?.digest_off) return null
+    return own?.persona ?? (await sources.settings.get()).persona
   }
 }
 

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
-import { DEFAULT_OPENAI_URL, DigestStore, Digester, OpenAISummarizer, digestKey, digestable, digesterFromEnv, stripThinking, summarizeCommand, summarizeRequest } from './digest.ts'
+import { DEFAULT_OPENAI_URL, DigestStore, Digester, OpenAISummarizer, digestKey, digestable, digesterFromEnv, personaResolver, stripThinking, summarizeCommand, summarizeRequest } from './digest.ts'
 import type { Summarizer } from './digest.ts'
 import { row } from './aggregate.test.ts'
 import type { PersonaId } from '../shared/types.ts'
@@ -367,4 +367,52 @@ test('digesterFromEnv: SAI_DIGEST_PROVIDER で口を選ぶ。openai は SAI_DIGE
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
+})
+
+test('Digester: persona が null の行は作らない（セッションで一言を切っている。#263）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-digest-off-'))
+  try {
+    const store = new DigestStore(join(dir, 'digest.jsonl'))
+    await store.load()
+    const fake = new FakeSummarizer()
+    // S1 だけ切っている（行ごとに引くので、同じ回の scan で混ざっていても分かれる）
+    const d = new Digester(store, fake, {
+      enabled: true,
+      model: 'haiku',
+      since: at(0).toISOString(),
+      persona: async (r) => (r.session === 'S1' ? null : 'none'),
+      logPath: join(dir, 'digest.log'),
+    })
+    d.scan([row(at(0), 'S1', { repo: 'r', text: '切っている' }), row(at(1), 'S2', { repo: 'r', text: '作る' })])
+    await d.drain()
+    assert.deepEqual(fake.prompts.length, 1, '切っている行は口にも渡さない')
+    assert.match(fake.prompts[0] ?? '', /作る/)
+    assert.equal(store.size, 1)
+
+    // 積み直しても増えない（毎回 null で落ちる）
+    d.scan([row(at(0), 'S1', { repo: 'r', text: '切っている' })])
+    await d.drain()
+    assert.equal(store.size, 1)
+    // 失敗ではないのでログにも出さない
+    assert.equal(await readFile(join(dir, 'digest.log'), 'utf-8').catch(() => ''), '')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('personaResolver: digest_off なら null。無ければセッションの persona → 全体の既定（#263）', async () => {
+  const meta = new Map<string, { persona?: PersonaId; digest_off?: true }>([
+    ['OFF@r', { digest_off: true }],
+    ['TONE@r', { persona: 'ISTJ' }],
+    // 切ってあれば persona があっても作らない
+    ['BOTH@r', { persona: 'ISTJ', digest_off: true }],
+  ])
+  const resolve = personaResolver({
+    settings: { get: async () => ({ persona: 'ENFP' as PersonaId }) },
+    meta: { get: async (id) => meta.get(id) },
+  })
+  assert.equal(await resolve(row(at(0), 'OFF', { repo: 'r' })), null)
+  assert.equal(await resolve(row(at(0), 'BOTH', { repo: 'r' })), null)
+  assert.equal(await resolve(row(at(0), 'TONE', { repo: 'r' })), 'ISTJ')
+  assert.equal(await resolve(row(at(0), 'NONE', { repo: 'r' })), 'ENFP', 'メタが無ければ全体の既定')
 })

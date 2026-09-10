@@ -109,7 +109,7 @@ export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggl
           {/* SAI から返信するときの許可モード。端末に打ち込む経路では効かないので、そのときは薄く出す */}
           {s.agent === 'claude' && <SessionPermissionModeSelect key={`mode:${s.id}`} id={s.id} value={s.meta?.permission_mode} terminal={Boolean(s.terminal)} />}
           {/* 一言が有効なときだけ。このセッションの性格（無ければヘッダの既定に従う） */}
-          {settings?.digest && <SessionPersonaSelect key={`persona:${s.id}`} id={s.id} value={s.meta?.persona} defaultPersona={settings.persona} />}
+          {settings?.digest && <SessionPersonaSelect key={`persona:${s.id}`} id={s.id} value={s.meta?.persona} off={Boolean(s.meta?.digest_off)} defaultPersona={settings.persona} />}
           {hasThinking && (
             <span className="meta">
               <button type="button" className="linkish" onClick={() => setThinkingUi({ open: !thinkingUi.open })} title="エージェントの思考（thinking）の折りたたみを全部開く／閉じる">

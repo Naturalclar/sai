@@ -74,6 +74,12 @@ export function mergeMeta(current: SessionMeta, input: unknown): { meta: Session
     }
   }
 
+  // 一言を作らない（#263）。**あることが「作らない」**なので、false / null / 空 はどれも「作る」に戻す
+  if (raw.digest_off !== undefined) {
+    if (raw.digest_off) meta.digest_off = true
+    else delete meta.digest_off
+  }
+
   return { meta, error: '' }
 }
 
@@ -84,5 +90,5 @@ export function normalizeMeta(input: unknown): { meta: SessionMeta; error: strin
 
 /** 何も付いていないか */
 export function isEmptyMeta(meta: SessionMeta | undefined): boolean {
-  return !meta || (!meta.name && !meta.archived_at && !meta.model && !meta.persona && !meta.permission_mode)
+  return !meta || (!meta.name && !meta.archived_at && !meta.model && !meta.persona && !meta.permission_mode && !meta.digest_off)
 }

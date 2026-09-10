@@ -359,13 +359,23 @@ export function createApp(
     }
   }
 
-  /** 一覧の「最後の発言」に一言を載せる。無い行はそのまま */
+  /**
+   * 一覧の「最後の発言」に一言を載せる。無い行はそのまま。
+   * **`digest_off` のセッションには載せない**（#263。切る前に作ってあるぶんも出さない。`digest.jsonl` は消さない）
+   */
   const withLastSummary = (sessions: SessionSummary[]): SessionSummary[] => {
     if (digest.store.size === 0) return sessions
     return sessions.map((s) => {
+      if (s.meta?.digest_off) return s
       const summary = digest.summaryFor(s.id, s.last_turn_ts ?? '')
       return summary ? { ...s, last_summary: summary } : s
     })
+  }
+
+  /** 一言を切っているエンティティ（#263）。行に載せるときに落とす */
+  const digestOffIds = async (): Promise<Set<string>> => {
+    const { entries } = await metaStore.all()
+    return new Set(Object.entries(entries).filter(([, m]) => m.digest_off).map(([id]) => id))
   }
 
   /** GET/PUT /api/settings。PUT は同一オリジンのみ。変えられるのは性格だけ（digest の有効/無効・口・モデルは環境変数） */
@@ -1059,7 +1069,9 @@ export function createApp(
         const session = sessions.find((s) => s.id === id)
         if (!session) return error(res, 404, 'session not found in window')
         await scanDigest(days)
-        const rows = digest.attach((await store.rows(days)).filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id))
+        // このセッションが一言を切っていれば載せない（#263）
+        const own = (await store.rows(days)).filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
+        const rows = session.meta?.digest_off ? own : digest.attach(own)
         const replying = replyingOf(sessions)
         const pendingApprovals = await approvalsNow(sessions)
         const body: SessionDetailResponse = {
@@ -1088,7 +1100,10 @@ export function createApp(
         if (archived.size) rows = rows.filter((r) => !archived.has(entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? ''))))
         // 思考はフィードには出さないので運ばない（3秒ごとに全行を返す。セッション画面だけが使う）
         await scanDigest(days)
+        // 一言を切っているセッションの行には載せない（#263）
+        const noDigest = await digestOffIds()
         rows = digest.attach(rows.map(stripThinking))
+        if (noDigest.size) rows = rows.map((r) => (r.summary && noDigest.has(entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? ''))) ? { ...r, summary: undefined } : r))
         const replying = replyingOf(sessions)
         const pendingApprovals = await approvalsNow(sessions)
         // rev はメタ（アーカイブ）と処理中の集合、答え待ちの承認、ビルドが古いか、一言の有無も混ぜる

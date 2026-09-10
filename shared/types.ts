@@ -167,6 +167,12 @@ export interface SessionMeta {
   /** このセッションの一言（digest）の性格。無ければ全体の既定（settings.json の persona）に従う。変えると以後の行から効く */
   persona?: PersonaId
   /**
+   * このセッションでは一言（digest）を作らない（#263）。**あることが「作らない」**で、無ければ作る
+   * （`archived_at` と同じ形。`boolean` にすると `mergeMeta()` の「falsy なら消す」に当たって
+   * `false` が保存されない）。作らないだけでなく、すでに作ってあるぶんも画面に出さない（`digest.jsonl` は消さない）
+   */
+  digest_off?: true
+  /**
    * SAI から返信するときの許可モード。無ければ CLI の既定（読み取り以外は聞く）。
    * `claude -p --resume` に `--permission-mode` として付く。**そのターン限り**で、セッションには残らない
    * （`--model` と違うところ。確かめた: フラグ付きで回したセッションをフラグ無しで再開すると元に戻る）。

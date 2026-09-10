@@ -81,10 +81,12 @@ SAIから開始したCodex turnの待機もJSONLにはせず、`CodexAppServer` 
 表示名は JSONL ではなく `~/.agent-feed/session-meta.json` に持つ。
 
 ```json
-{ "sess-abc@kanban": { "name": "背中メニュー", "persona": "ISTJ" } }
+{ "sess-abc@kanban": { "name": "背中メニュー", "persona": "ISTJ", "digest_off": true } }
 ```
 
 キーはエンティティID（`<セッション>@<リポジトリ>`）。記録側（`record.py`）はこのファイルを知らないし、集計（`aggregate()`）も触らない。サーバが応答を返すときに載せるだけなので、消しても履歴は壊れない。
+
+`digest_off` は「このセッションでは一言（digest）を作らない」（#263）。**あることが状態**で、`archived_at` と同じ形（`PUT` に `false` / `null` / 空 を送れば消えて、また作るようになる）。`boolean` にすると `mergeMeta()` の「falsy なら消す」に当たって `false` が保存できないので、この形にしてある。
 
 写真のボタン（「画像を選ぶ」）でファイルを選ぶと**加工のモーダル**が開き、正方形の枠に対してドラッグで位置、ホイールかスライダで大きさを決めて「これにする」を押すと、**256px 四方・角丸（一辺の 20%）の PNG** にしてから置く。元のファイルは送らない（ブラウザの Canvas で加工する。サーバ側に画像処理は無い）。選べるファイルは 20MB まで（`ICON_SOURCE_MAX_BYTES`）、置く加工後の PNG は 1MB まで（`ICON_MAX_BYTES`）。GIF はアニメーションが止まる（1 フレーム目）。画面の角丸 CSS も同じ 20% なので、加工前に置いた古い画像も同じ見た目で出る。
 

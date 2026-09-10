@@ -1067,10 +1067,40 @@ test('digest: 起動後に増えた行に一言が付いて feed / 詳細 / 一�
   assert.equal(((await meta3.json()) as SessionMetaResponse).meta.persona, undefined)
   assert.equal((await fetch(`${base}/api/sessions/D2%40r/meta`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ persona: 'XXXX' }) })).status, 400)
 
+  // 「作らない」にすると、以後は作らず、切る前に作ってあるぶんも出さない（#263）
+  {
+    const offRes = await fetch(`${base}/api/sessions/D2%40r/meta`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ digest_off: true }) })
+    assert.equal(((await offRes.json()) as SessionMetaResponse).meta.digest_off, true)
+    const offBefore = summarizer.prompts.length
+    await appendFile(path, JSON.stringify(row(new Date(now.getTime() + 6000), 'D2', { repo: 'r', text: '切ったあとの行', user_text: 'やって' })) + '\n')
+    await get('/api/feed?days=3')
+    await digester.drain()
+    assert.equal(summarizer.prompts.length, offBefore, '切ったセッションの行は口に渡さない')
+
+    // すでに作ってあるぶんも出さない（一覧・詳細・フィードの 3 か所）
+    const offList = (await (await get('/api/sessions?days=3')).json()) as SessionsResponse
+    assert.equal(offList.sessions.find((s) => s.id === 'D2@r')?.last_summary, undefined, '一覧に出さない')
+    const offDetail = (await (await get('/api/sessions/D2%40r?days=3')).json()) as SessionDetailResponse
+    assert.equal(offDetail.rows.filter((r) => r.summary).length, 0, '詳細の行にも載せない')
+    assert.equal(offDetail.session.last_summary, undefined)
+    const offFeed = (await (await get('/api/feed?days=3')).json()) as FeedResponse
+    assert.equal(offFeed.rows.filter((r) => r.session === 'D2' && r.summary).length, 0, 'フィードでも落とす')
+    assert.ok(offFeed.rows.some((r) => r.session === 'D1' && r.summary), '切っていないセッションはそのまま')
+    // 記録は消していない（digest.jsonl には D2 の分が残っている）
+    const kept = (await readFile(join(feedDir, 'digest.jsonl'), 'utf-8')).trim().split('\n').map((l) => JSON.parse(l) as { key: string })
+    assert.ok(kept.some((e) => e.key.startsWith('D2@r|')), 'digest.jsonl からは消さない')
+
+    // 戻すとまた出る
+    await fetch(`${base}/api/sessions/D2%40r/meta`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ digest_off: null }) })
+    const backFeed = (await (await get('/api/feed?days=3')).json()) as FeedResponse
+    assert.ok(backFeed.rows.some((r) => r.session === 'D2' && r.summary), '戻せば前の一言がまた出る')
+  }
+
   // 起動時にあった行には付かない（増えた分だけ）
   await digester.drain()
   const after = (await (await get('/api/feed?days=3')).json()) as FeedResponse
-  assert.equal(after.rows.filter((r) => r.summary).length, withBefore + 1 + 3, '前からあった分 + D1 + 性格の確認で足した 3 行')
+  // 「作らない」の確認で足した 1 行は、戻したあとのポーリングで作られるのでここにも入る
+  assert.equal(after.rows.filter((r) => r.summary).length, withBefore + 1 + 3 + 1, '前からあった分 + D1 + 性格の確認で足した 3 行 + #263 の確認で足した 1 行')
   assert.equal((await fetch(`${base}/api/digest/backfill`, { method: 'POST' })).status, 405, 'backfill の口は無い')
 
   // 失敗した行は無いまま（画面は本文を出す）

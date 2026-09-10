@@ -636,11 +636,15 @@
   .reply .target .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .reply .target .hint { color: var(--muted); opacity: .7; white-space: nowrap; }
   .reply .target .clear { background: none; border: 0; color: var(--muted); cursor: pointer; font: inherit; padding: 0 4px; line-height: 1; }
+  /* 返信先の名前の部分。押すとそのセッションの最後の発言へ飛ぶ（#297）。見た目はチップのまま、押せることだけ下線で分かるようにする */
+  .reply .target .to { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; background: none; border: 0; padding: 0; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+  .reply .target .to:hover b, .reply .target .to:focus-visible b { text-decoration: underline; }
+  .reply .target .to:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
   /* 文字だけのボタン・リンクは見た目を変えずに当たり判定だけ広げる（負のマージンで周りをずらさない）。
-     上の .linkish / .msg .more / .msg .think-toggle / .reply .target .clear が同じ詳細度で padding: 0 を書くので、
+     上の .linkish / .msg .more / .msg .think-toggle / .reply .target .clear / .to が同じ詳細度で padding: 0 を書くので、
      それより後ろに置く。前に置くと padding だけ負けて負のマージンだけが残り、文字が左上に 6〜8px ずれる */
   @media (pointer: coarse) {
-    .linkish, .msg .more, .msg .think-toggle, .reply .target .clear { padding: 8px 6px; margin: -8px -6px; }
+    .linkish, .msg .more, .msg .think-toggle, .reply .target .clear, .reply .target .to { padding: 8px 6px; margin: -8px -6px; }
   }
   .reply .target .clear:hover { color: var(--ink); }
   /* @ の候補。入力欄の上に開く（狭い画面でも隠れない） */

@@ -9,6 +9,7 @@ import { Message } from './Message'
 import { JumpToBottom } from './JumpToBottom'
 import { HostTag } from './HostTag'
 import { opensDiff, type ChatDiffs } from './feedDiff.ts'
+import { JUMP_FLASH_MS, type FeedJump } from './feedJump.ts'
 
 const NO_SESSIONS: never[] = []
 
@@ -42,9 +43,25 @@ interface Props {
    * ボタンを出す（`feedDiff.ts` の `opensDiff()`）。フィードだけが渡す（セッション画面は入力欄にある）
    */
   diffs?: ChatDiffs
+  /**
+   * フィードの返信先から、そのセッションの最後の発言へ飛ぶ（#297）。`seq` が変わったときだけ送って光らせる
+   * （同じバブルにもう一度飛べるように。`focusTs` は一度着地した ts には二度と送らない）。フィードだけが渡す
+   */
+  jumpTo?: FeedJump | null
 }
 
-export function Chat({ rows, showChannel, selfHost = '', sessions = NO_SESSIONS, trailer, showThinking = false, thinkingOpen = false, profile, linear = '', focusTs = '', diffs }: Props) {
+/**
+ * 飛んだバブルを光らせ直す。`.msg.found` はアニメーションで消えるので、class を付け直さないと 2 回目は光らない。
+ * React の className は触らない（`found` は検索の `focusTs` のためのもので、こちらは要素に直接付けて時間で外す）
+ */
+function flash(el: HTMLElement) {
+  el.classList.remove('found')
+  void el.offsetWidth // 付け直したことをブラウザに認識させ、アニメーションを最初から再生させる
+  el.classList.add('found')
+  window.setTimeout(() => el.classList.remove('found'), JUMP_FLASH_MS)
+}
+
+export function Chat({ rows, showChannel, selfHost = '', sessions = NO_SESSIONS, trailer, showThinking = false, thinkingOpen = false, profile, linear = '', focusTs = '', diffs, jumpTo = null }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
   // 最下部が見えているか（描画にも使うので state）。見えていないときは「一番下へ」を出す
@@ -68,6 +85,19 @@ export function Chat({ rows, showChannel, selfHost = '', sessions = NO_SESSIONS,
     landed.current = focusTs
     stickToBottom.current = false
     el.scrollIntoView({ block: 'center' })
+  })
+
+  // フィードの返信先から飛ぶ（#297）。押すたびに seq が変わるので、同じバブルでもまた送る。
+  // 着地したら最下部への追従を止める（検索と同じ。新しい行が届いても読んでいる場所から持っていかない）
+  const jumped = useRef(0)
+  useEffect(() => {
+    if (!jumpTo || jumped.current === jumpTo.seq) return
+    const el = ref.current?.querySelector<HTMLElement>(`.msg[data-key="${CSS.escape(jumpTo.key)}"]`)
+    if (!el) return // まだ描画されていない。次の描画で探し直す
+    jumped.current = jumpTo.seq
+    stickToBottom.current = false
+    el.scrollIntoView({ block: 'center' })
+    flash(el)
   })
 
   // 最下部を見ていたときだけ、更新後も最下部に追従する。当たりへ送る間は割り込まない
@@ -148,6 +178,7 @@ export function Chat({ rows, showChannel, selfHost = '', sessions = NO_SESSIONS,
                         remote={u.row.remote}
                         linear={linear}
                         found={focusTs !== '' && u.row.ts === focusTs}
+                        utteranceKey={u.key}
                       />
                       )
                     })}

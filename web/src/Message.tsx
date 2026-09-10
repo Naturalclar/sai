@@ -37,12 +37,17 @@ interface Props {
    * 行ごとに DOM の目印を置くのはここだけなので、3 つの分岐すべてに同じものを付ける
    */
   found?: boolean
+  /**
+   * バブル 1 つの識別子（`Utterance.key`）。フィードの返信先から飛ぶときに `Chat` がこれで探す（#297）。
+   * `ts` はフィードでは同じ秒の別のセッションや、同じ行の自分の入力と重なるので、それとは別に持つ
+   */
+  utteranceKey?: string
   /** 差分を開くボタン（#280。フィードで、いまのブランチの PR に触れているバブルだけ）。無ければ出さない */
   diff?: DiffButtonProps
 }
 
 /** バブル1つ分の本文。長ければ折りたたんで「もっと見る」を付ける */
-export function Message({ ts, text: raw, markdown, waiting, resolved, thinking, thinkingOpen = false, summary, model, remote, linear, found = false, diff }: Props) {
+export function Message({ ts, text: raw, markdown, waiting, resolved, thinking, thinkingOpen = false, summary, model, remote, linear, found = false, utteranceKey, diff }: Props) {
   // 自分の入力に添えた画像は、パスの文字列ではなくサムネイルで出す（本文の末尾に足してある。shared/attachments.ts）
   const { body: text, urls } = markdown ? { body: raw, urls: [] as string[] } : splitAttachments(raw)
   const [open, setOpen] = useState(false)
@@ -52,8 +57,8 @@ export function Message({ ts, text: raw, markdown, waiting, resolved, thinking, 
   // 開いたら中身が見えるところまでスクロールする（#119）。詳細は .details、「もっと見る」は本文そのもの
   const [detailsRef, summaryRef] = useReveal<HTMLDivElement, HTMLDivElement>(details)
   const [bodyRef, moreRef] = useReveal<HTMLDivElement, HTMLButtonElement>(open)
-  // 検索から飛ぶための目印。`Chat` が data-ts で引くので、どの分岐でも同じものを付ける
-  const anchor = { 'data-ts': ts }
+  // 飛ぶための目印。`Chat` が data-ts（検索。#230）と data-key（フィードの返信先。#297）で引くので、どの分岐でも同じものを付ける
+  const anchor = { 'data-ts': ts, ...(utteranceKey ? { 'data-key': utteranceKey } : {}) }
   const mark = found ? ' found' : ''
   if (waiting) {
     return (

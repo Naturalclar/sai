@@ -18,6 +18,7 @@ import { useReply } from './useReply'
 import { historyFrom } from './replyHistory'
 import { ReplaceConfirm } from './ReplaceConfirm'
 import { prStamps } from './feedDiff.ts'
+import { lastUtteranceKey, type FeedJump } from './feedJump.ts'
 import { useDiffSummaries } from './useDiffSummaries'
 import type { PaneProps } from './App'
 
@@ -99,6 +100,10 @@ export function FeedView({ project, projects, onProject, sessions = NO_SESSIONS,
   const targetId = target?.id ?? ''
   const targetPending = pending.find((p) => p.id === targetId)
   const history = useMemo(() => historyFrom(rows, targetId, targetPending ? [targetPending.text] : []), [rows, targetId, targetPending])
+  // 返信先を押したら、そのセッションの最後の発言へ飛ぶ（#297）。フィードに発言が無ければ押せない（黙って何も起きない、を作らない）
+  const jumpKey = useMemo(() => (targetId ? lastUtteranceKey(rows, targetId) : null), [rows, targetId])
+  const [jump, setJump] = useState<FeedJump | null>(null)
+  const onJump = jumpKey ? () => setJump((j) => ({ key: jumpKey, seq: (j?.seq ?? 0) + 1 })) : undefined
 
   const repoOf = (id: string) => targets.find((t) => t.id === id)?.repo
   /**
@@ -147,6 +152,7 @@ export function FeedView({ project, projects, onProject, sessions = NO_SESSIONS,
           profile={data.profile}
           linear={linear}
           diffs={{ summaries: diffSummaries, open: openDiff, onToggle: onToggleDiff }}
+          jumpTo={jump}
           trailer={
             (pending.length > 0 || approvals.length > 0) && (
               <>
@@ -178,7 +184,7 @@ export function FeedView({ project, projects, onProject, sessions = NO_SESSIONS,
             model={replyModel}
             permission={replyPermission}
             onDraft={setDrafting}
-            mention={{ targets, target, picked: pickedTarget ? picked : null, onPick: setPicked, busyIds }}
+            mention={{ targets, target, picked: pickedTarget ? picked : null, onPick: setPicked, busyIds, ...(onJump ? { onJump } : {}) }}
           />
         ) : (
           <div className="notice">返信できるセッションがありません</div>

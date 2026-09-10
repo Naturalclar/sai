@@ -62,6 +62,35 @@ test('(セッション, リポジトリ) 単位にまとめて新しい順', () 
   assert.equal(b.session_source, 'synth')
 })
 
+test('一番新しい、値のある行の値を使う（途中に古い行が混ざっても、前の値に戻っても。#283）', () => {
+  const base = new Date('2026-09-02T01:00:00Z')
+  const at = (n: number) => new Date(base.getTime() + min(n))
+  const remote = 'https://github.com/o/kanban'
+  const s = aggregate([
+    row(at(0), 'A', { branch: 'main', host: 'mini', remote, project: 'o/kanban' }),
+    // 試作の record.py が書いた、出どころもホストも無い行（#54 の残り。JSON にキーが無いのと同じく空で扱う）
+    row(at(1), 'A', { branch: 'feat', session_source: '' }),
+    row(at(2), 'A', { branch: 'main' }),
+    // ブランチもホストも取れなかった行は上書きしない
+    row(at(3), 'A', { branch: '', host: '' }),
+  ])[0]!
+  assert.equal(s.session_source, 'payload', '空の出どころが途中に 1 本あっても、一番新しい payload を使う（前は空になり返信を弾いていた）')
+  assert.deepEqual(s.sources, ['payload', ''], '出てきた順の一覧はそのまま')
+  assert.equal(s.branch, 'main', 'main → feat → main と戻れば main（前は feat のままだった）')
+  assert.deepEqual(s.branches, ['main', 'feat'])
+  assert.equal(s.host, 'mini')
+  assert.equal(s.remote, remote)
+  assert.equal(s.project, 'o/kanban')
+
+  // 合成（synth）が 1 本でもあれば synth（返信できない方に倒す。今までどおり）
+  const synth = aggregate([row(at(0), 'B', { session_source: 'synth' }), row(at(1), 'B', { session_source: 'payload' })])[0]!
+  assert.equal(synth.session_source, 'synth')
+
+  // 出どころが 1 本も無ければ空（「IDの出どころが不明」のまま）
+  const none = aggregate([row(at(0), 'C', { session_source: '' })])[0]!
+  assert.equal(none.session_source, '')
+})
+
 test('タイトルは一番新しい user_text に追従する（返信や端末での続きの指示で変わる）', () => {
   const base = new Date('2026-09-02T01:00:00Z')
   const first = [row(base, 'A', { user_text: '最初の指示', first_user_text: '最初の指示' })]

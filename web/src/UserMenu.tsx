@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import type { Profile, Viewer } from './api'
 import { ProfileEditor } from './ProfileEditor'
+import { useDismiss } from './useDismiss'
 import type { useNotify } from './useNotify'
 
 interface Props {
@@ -8,15 +10,17 @@ interface Props {
   viewer: Viewer | null
   /** 待ちの通知の入切（#231）。入にした時だけブラウザの許可を求める */
   notify: ReturnType<typeof useNotify>
+  /** メニューの末尾に足すもの。狭い画面では一言の全体の設定がここに入る（#274） */
+  children?: ReactNode
 }
 
 /**
  * ヘッダー右端の自分のアイコン。押すとメニュー（名前、「表示名とアイコン」、通知の入切）が開き、
  * そこからモーダルで編集する。
  * profile は一覧のポーリング（App）から。編集直後はモーダルが返した値を出し、ポーリングが追いついたら props に戻る。
- * Esc と外側クリックで閉じる。設定が増えたらここに項目を足す
+ * Esc と外側クリックで閉じる（useDismiss）。設定が増えたらここに項目を足す
  */
-export function UserMenu({ profile, viewer, notify }: Props) {
+export function UserMenu({ profile, viewer, notify, children }: Props) {
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState(false)
   const [saved, setSaved] = useState<Profile | null>(null)
@@ -24,21 +28,7 @@ export function UserMenu({ profile, viewer, notify }: Props) {
   const buttonRef = useRef<HTMLButtonElement>(null)
   const current = saved ?? profile ?? {}
 
-  useEffect(() => {
-    if (!open) return
-    const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false)
-    }
-    document.addEventListener('mousedown', onDown)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDown)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [open])
+  useDismiss(ref, open, setOpen)
 
   const edit = () => {
     setOpen(false)
@@ -84,6 +74,7 @@ export function UserMenu({ profile, viewer, notify }: Props) {
               {notify.on ? '✓ ' : ''}待っているときに通知する
             </button>
           )}
+          {children}
         </div>
       )}
       {editing && <ProfileEditor profile={current} onClose={closeEditor} />}

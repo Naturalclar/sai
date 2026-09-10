@@ -1,20 +1,10 @@
 import { useEffect, useMemo } from 'react'
 import { replyBlockedReason } from '../../shared/reply.ts'
-import { isRemoteHost } from '../../shared/host.ts'
-import { projectName } from '../../shared/project.ts'
 import { launchedModeNote } from '../../shared/permissions.ts'
 import { eventKind } from '../../shared/events.ts'
 import { promptArrived } from './chatGroups'
 import { api } from './api'
 import { useLocalState, usePolling } from './hooks'
-import { dayLabel, hm } from './format'
-import { AgentChip } from './AgentChip'
-import { RepoLink } from './RepoLink'
-import { SynthTag } from './SynthTag'
-import { HostTag } from './HostTag'
-import { ReplyingTag } from './ReplyingTag'
-import { WaitingTag } from './WaitingTag'
-import { TerminalTag } from './TerminalTag'
 import { Chat } from './Chat'
 import { PendingBubble } from './PendingBubble'
 import { ApprovalBubble } from './ApprovalBubble'
@@ -23,13 +13,13 @@ import { BackLink } from './BackLink'
 import { useReply } from './useReply'
 import { historyFrom } from './replyHistory'
 import { ReplaceConfirm } from './ReplaceConfirm'
-import { MetaEditor } from './MetaEditor'
-import { SessionPersonaSelect } from './SessionPersonaSelect'
-import { ModelTag } from './ModelTag'
-import { ArchiveButton } from './ArchiveButton'
-import { ArchivedTag } from './ArchivedTag'
-import { PermissionModeTag } from './PermissionModeTag'
-import { PermissionsButton } from './PermissionsButton'
+import { SessionStatusTags } from './SessionStatusTags'
+import { SessionHeadInfo } from './SessionHeadInfo'
+import { SessionHeadActions } from './SessionHeadActions'
+import { SessionHeadMenu } from './SessionHeadMenu'
+import { SessionTitle } from './SessionTitle'
+import { headName, headTags } from './headTags'
+import { useNarrow } from './useNarrow'
 import { useDiffSummary } from './useDiffSummary'
 import { hasDiff } from './diffCount'
 import type { PaneProps } from './App'
@@ -71,50 +61,46 @@ export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggl
   const blocked = s ? replyBlockedReason(s, data?.host ?? '') : ''
   // 差分ボタンに出す行数と PR 番号（#211）。ポーリングには載せず、開いたときと新しいターンが記録されたときだけ取る
   const summary = useDiffSummary(s?.id, s?.last_turn_ts)
+
+  // 狭い画面では見出しを「← 名前 状態の印 ⋯」と題名 1 行に畳み、詳しい情報と操作は ⋯ のパネルへ（#274。
+  // 見出しだけで 283px あり、スクロールしない場所なのでチャットが画面の 1/3 を切っていた）
+  const narrow = useNarrow()
+  const tagInput = { serverHost: data?.host ?? '', approval: approvals[0]?.text ?? '', replyingSince: mine?.since ?? '' }
+  const thinking = { has: hasThinking, open: thinkingUi.open, toggle: () => setThinkingUi({ open: !thinkingUi.open }) }
+  const label = s ? headName(s) : { name: '', project: '' }
   return (
     <section>
-      <BackLink onOpenSidebar={onOpenSidebar} />
-      {s && (
+      {/* 狭い画面では見出しの 1 行目に入る。読み込み中と取得に失敗したときは見出しが無いのでここに出す */}
+      {!(narrow && s) && <BackLink onOpenSidebar={onOpenSidebar} />}
+      {s && narrow && (
+        <div className="chat-head compact">
+          <div className="head-row">
+            <BackLink compact onOpenSidebar={onOpenSidebar} />
+            <span className="head-name">
+              {s.icon && <img className="icon" src={s.icon} alt="" />}
+              {label.name ? <b>{label.name}</b> : <b><span className="hash">#</span>{label.project}</b>}
+              {label.name && <span className="project">#{label.project}</span>}
+            </span>
+            <SessionStatusTags tags={headTags(s, { ...tagInput, compact: true })} now={now} title={s.id} />
+            <SessionHeadMenu key={`menu:${s.id}`}>
+              <SessionHeadInfo s={s} />
+              <span className="meta wide head-id">
+                <code>{s.id}</code>
+                {s.session_source && s.session_source !== 'synth' && <span className="tag">{s.session_source}</span>}
+              </span>
+              <SessionHeadActions s={s} settings={settings} thinking={thinking} />
+            </SessionHeadMenu>
+          </div>
+          {s.title_full && <SessionTitle key={`title:${s.id}`} text={s.title_full} />}
+        </div>
+      )}
+      {s && !narrow && (
         <div className="chat-head">
           {/* bare clone だと repo は worktree 名なので、リポジトリ名（project）。worktree は右の branch で分かる */}
-          <h1><span className="hash">#</span>{projectName(s.project) || s.repo}</h1>
-          <span className="meta"><AgentChip agent={s.agent} /></span>
-          {/* origin が分かるときだけ、そのリポジトリへのリンク（remote が無ければ何も出ない） */}
-          <RepoLink project={s.project} remote={s.remote} />
-          {/* 使ったモデルの表示だけ。返信で使うモデルを変えるのは入力欄（送信ボタンの左） */}
-          {s.model && <span className="meta"><ModelTag model={s.model} models={s.models} /></span>}
-          {s.branch && <span className="meta"><code>{s.branch}</code></span>}
-          <span className="meta">{dayLabel(s.start)} {hm(s.start)} – {hm(s.end)} · {s.turns} ターン</span>
-          <span className="meta" title={s.id}>
-            {isRemoteHost(s.host, data?.host ?? '') && <HostTag host={s.host} />}
-            {s.session_source === 'synth' ? <SynthTag /> : <span className="tag">{s.session_source}</span>}
-            {s.terminal && <TerminalTag terminal={s.terminal} />}
-            {s.waiting && <WaitingTag text={s.waiting} />}
-            {approvals.length > 0 && <WaitingTag text={approvals[0]!.text} />}
-            {mine && <ReplyingTag since={mine.since} now={now} />}
-            {s.archived && <ArchivedTag />}
-            {/* 通常のモードは印を出さない（普段と違うときだけ目立たせる） */}
-            {s.permission_mode && s.permission_mode !== 'default' && <PermissionModeTag mode={s.permission_mode} />}
-          </span>
-          {/*
-            key は「別のセッションに移ったら作り直す」ため（中に持っている編集中の状態を持ち越さない）。
-            **兄弟どうしで同じ key にしない**（#264）。同じ親の中で key が重なると React の再調整が
-            古い分を見つけられず、ポーリングのたびに増え続ける（手元では 3 秒ごとに +3 で、見出しが
-            「表示名なし」と許可モードの列で埋まった）。接頭辞を付けて 1 つずつ別の key にする。
-            合成 ID（synth）でも出す（#248）。アーカイブは表示の都合なので、再開できるかとは別
-          */}
-          <ArchiveButton key={`archive:${s.id}:${s.archived ? 1 : 0}`} id={s.id} archived={Boolean(s.archived)} />
-          <MetaEditor key={`meta:${s.id}`} id={s.id} meta={s.meta} icon={s.icon} />
-          {s.agent === 'claude' && <PermissionsButton key={`perm:${s.id}`} id={s.id} />}
-          {/* 一言が有効なときだけ。このセッションの性格（無ければヘッダの既定に従う） */}
-          {settings?.digest && <SessionPersonaSelect key={`persona:${s.id}`} id={s.id} value={s.meta?.persona} off={Boolean(s.meta?.digest_off)} defaultPersona={settings.persona} />}
-          {hasThinking && (
-            <span className="meta">
-              <button type="button" className="linkish" onClick={() => setThinkingUi({ open: !thinkingUi.open })} title="エージェントの思考（thinking）の折りたたみを全部開く／閉じる">
-                {thinkingUi.open ? '思考を全部閉じる' : '思考を全部開く'}
-              </button>
-            </span>
-          )}
+          <h1><span className="hash">#</span>{label.project}</h1>
+          <SessionHeadInfo s={s} />
+          <SessionStatusTags tags={headTags(s, { ...tagInput, compact: false })} now={now} title={s.id} />
+          <SessionHeadActions s={s} settings={settings} thinking={thinking} />
           {s.title_full && <div className="meta wide">{s.title_full}</div>}
         </div>
       )}

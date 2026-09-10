@@ -314,20 +314,16 @@ rsync -a --include='????-??-??.*.jsonl' --exclude='*' mini:~/.agent-feed/ ~/.age
 
 ### 切り分け・内部
 
-普段は設定しない。うまく動かないときに経路を切る・実行ファイルを差し替える・ログを残すためのもの。
+普段は設定しない。うまく動かないときに経路を切る・ログを残すためのもの。
+
+**実行ファイル（`claude` / `codex` / `opencode` / `tmux` / `git` / `gh` / `tailscale`）はサーバの `PATH` から探す。** launchd などで `PATH` が最小のまま起動するなら、サーバに `PATH` を渡す（`tailscale` は `PATH` に無ければ macOS の GUI 版も試す）。前は `SAI_CLAUDE_BIN` などで 1 つずつ差し替えていたが、`PATH` を 1 つ直せば全部に効くのでやめた（#288）。
 
 | | |
 | --- | --- |
 | `SAI_TERMINAL` | `0` で tmux への打ち込みを切る。Claude と閉じた Codex は別プロセス、開いている Codex は queue |
 | `SAI_APPROVE` | `0` で「返信中の許可・質問に画面から答える」配線（`--mcp-config` + `--permission-prompt-tool`）を付けない |
 | `SAI_CODEX_APP_SERVER` | `0` で閉じたCodexのapp-server管理を切り、従来の `codex exec resume` に戻す。既定は有効 |
-| `SAI_GH` / `SAI_GH_BIN` | `0` で差分ボタンの PR 番号を引かない（既定は引く。SAI で唯一外のネットワークに問い合わせる所）。実行ファイルは既定で PATH の `gh`。叩くのは `gh pr view` だけで、引けなければ番号が付かないだけ |
-| `SAI_CLAUDE_BIN` | 返信で起動する `claude` の実行ファイル（既定は PATH の `claude`）。launchd などで PATH が最小のときに |
-| `SAI_CODEX_BIN` | 同じく `codex` |
-| `SAI_OPENCODE_BIN` | 同じく `opencode` |
-| `SAI_TMUX_BIN` | ペインに打ち込むときの `tmux` の実行ファイル（既定は PATH の `tmux`） |
-| `SAI_GIT_BIN` | 差分を読むときの `git` の実行ファイル（既定は PATH の `git`）。読むだけのコマンドしか呼ばない |
-| `SAI_TAILSCALE_BIN` | tailnet 経由の認証で `whois` に使う `tailscale` の実行ファイル（既定は PATH、無ければ macOS の GUI 版） |
+| `SAI_GH` | `0` で差分ボタンの PR 番号を引かない（既定は引く。SAI で唯一外のネットワークに問い合わせる所）。叩くのは `PATH` の `gh` の `gh pr view` だけで、引けなければ番号が付かないだけ |
 | `CODEX_HOME` | Codex のホーム（既定 `~/.codex`）。Codex 自身の変数で、SAI はそれに従うだけ |
 | `AGENT_FEED_DEBUG` | `1` で `record.py` の例外をログに残す |
 

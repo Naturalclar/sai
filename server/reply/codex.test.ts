@@ -24,9 +24,10 @@ test('Codex の writer lock があるセッションだけ active とみなす�
 
 test('active Codex への返信は exec resume ではなく queue コマンドにする', () => {
   assert.deepEqual(
+    // SAI_CODEX_BIN はもう読まない。実行ファイルはサーバの PATH の codex（#288）
     codexQueueCommand(SESSION, '-から始まる\n本文', '/work', { SAI_CODEX_BIN: '/opt/codex', SAI_CODEX_ARGS: '-s workspace-write' }, 'gpt-5', ['/tmp/a.png']),
     {
-      bin: '/opt/codex',
+      bin: 'codex',
       args: ['queue', '-s', 'workspace-write', '-m', 'gpt-5', '-i', '/tmp/a.png', '--thread', SESSION, '--message', '-から始まる\n本文'],
       cwd: '/work',
       text: '-から始まる\n本文',

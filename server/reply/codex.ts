@@ -38,7 +38,7 @@ export function codexQueueCommand(
   const pick = model ? ['-m', model] : []
   const images = attachments.flatMap((path) => ['-i', path])
   return {
-    bin: env.SAI_CODEX_BIN || 'codex',
+    bin: 'codex',
     args: ['queue', ...splitArgs(env.SAI_CODEX_ARGS), ...pick, ...images, '--thread', session, '--message', text],
     cwd,
     text,

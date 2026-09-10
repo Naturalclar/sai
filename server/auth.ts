@@ -28,17 +28,19 @@ export function loginFromWhois(json: string): string | null {
   }
 }
 
-/** tailscale の実行ファイル。PATH の `tailscale`、無ければ macOS の GUI 版。`SAI_TAILSCALE_BIN` で差し替え */
-export function tailscaleBins(env: NodeJS.ProcessEnv = process.env): string[] {
-  if (env.SAI_TAILSCALE_BIN) return [env.SAI_TAILSCALE_BIN]
+/**
+ * tailscale の実行ファイル。サーバの PATH の `tailscale`、無ければ macOS の GUI 版（CLI を PATH に入れていないことが多い）。
+ * 前は `SAI_TAILSCALE_BIN` で差し替えられたが、PATH を渡せば同じなのでやめた（#288）
+ */
+export function tailscaleBins(platform: NodeJS.Platform = process.platform): string[] {
   const bins = ['tailscale']
-  if (process.platform === 'darwin') bins.push('/Applications/Tailscale.app/Contents/MacOS/Tailscale')
+  if (platform === 'darwin') bins.push('/Applications/Tailscale.app/Contents/MacOS/Tailscale')
   return bins
 }
 
 /** 実際に `tailscale whois --json <addr>` を叩く Whois。見つからなければ（peer not found、コマンドが無い）null */
-export function tailscaleWhois(env: NodeJS.ProcessEnv = process.env): Whois {
-  const bins = tailscaleBins(env)
+export function tailscaleWhois(): Whois {
+  const bins = tailscaleBins()
   const run = (bin: string, addr: string) =>
     new Promise<string | null>((resolve, reject) => {
       execFile(bin, ['whois', '--json', addr], { timeout: 5000, maxBuffer: 1024 * 1024 }, (err, stdout) => {

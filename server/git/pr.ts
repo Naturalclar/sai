@@ -5,7 +5,7 @@
 // - 叩くのは `gh pr view <branch> --json …` の 1 形だけ。他のサブコマンドは組み立てられない
 // - 認証は `gh` に任せる（SAI は鍵を持たない）。`gh` が無い・ログインしていない・PR が無い・
 //   ネットワークが死んでいる、のどれでも **null を返すだけ**で、差分そのものの表示は落とさない
-// - `SAI_GH=0` で丸ごと切れる。実行ファイルは `SAI_GH_BIN`
+// - `SAI_GH=0` で丸ごと切れる。実行ファイルはサーバの PATH の `gh`（#288）
 // - cwd はセッションの行から取り、ブランチ名は git から読む。どちらもリクエストからは受けない
 import { spawn } from 'node:child_process'
 import type { DiffPr } from '../../shared/types.ts'
@@ -67,7 +67,8 @@ export class GhPr implements PrLookup {
   private readonly ttl: number
   private readonly timeout: number
 
-  constructor(bin: string = process.env.SAI_GH_BIN || 'gh', ttl = PR_CACHE_MS, timeout = PR_TIMEOUT_MS) {
+  /** 実行ファイルは既定でサーバの PATH の `gh`（#288）。テストは偽物を渡す */
+  constructor(bin: string = 'gh', ttl = PR_CACHE_MS, timeout = PR_TIMEOUT_MS) {
     this.bin = bin
     this.ttl = ttl
     this.timeout = timeout

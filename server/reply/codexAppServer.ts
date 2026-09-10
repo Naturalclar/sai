@@ -92,7 +92,8 @@ function errorText(error: unknown): string {
 
 /** SAIサーバー配下に長寿命のstdio app-serverを1本だけ持つ。 */
 export function realCodexConnector(env: NodeJS.ProcessEnv = process.env): CodexConnector {
-  const bin = env.SAI_CODEX_BIN || 'codex'
+  // 実行ファイルはサーバの PATH の `codex`（#288）
+  const bin = 'codex'
   const extra = splitArgs(env.SAI_CODEX_APP_SERVER_ARGS)
   return async () => {
     // ここで回るターンも SAI が起動した子なので、サーバのペインを継がせない（#234）

@@ -192,7 +192,8 @@ export interface Tmux {
 
 export class RealTmux implements Tmux {
   readonly bin: string
-  constructor(bin: string = process.env.SAI_TMUX_BIN || 'tmux') {
+  /** 実行ファイルは既定でサーバの PATH の `tmux`（#288）。テストは偽物を渡す */
+  constructor(bin: string = 'tmux') {
     this.bin = bin
   }
   run(args: string[], input?: string): Promise<string> {

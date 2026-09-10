@@ -34,11 +34,10 @@ test('digestKey / digestable: ターン完了で本文がある行だけ', () =>
 })
 
 test('summarizeCommand: -p / --model / json 出力。--bare は使わない（OAuth を読まない）', () => {
-  const c = summarizeCommand('haiku', {})
-  assert.equal(c.bin, 'claude')
+  const c = summarizeCommand('haiku')
+  assert.equal(c.bin, 'claude', 'サーバの PATH の claude（SAI_CLAUDE_BIN は無い。#288）')
   assert.deepEqual(c.args, ['-p', '--model', 'haiku', '--output-format', 'json', '--no-session-persistence'])
   assert.ok(!c.args.includes('--bare'))
-  assert.equal(summarizeCommand('haiku', { SAI_CLAUDE_BIN: '/opt/claude' }).bin, '/opt/claude')
 })
 
 test('DigestStore: 無ければ空、append で残り、読み直せる。壊れた行は落とす', async () => {

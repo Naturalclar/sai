@@ -142,18 +142,14 @@ OpenCode (feed/opencode/sai.js) ─┘                           │
 
 ### 切り分け・内部
 
-普段は設定しない（経路を切る・実行ファイルを差し替える・ログを残す）。
+普段は設定しない（経路を切る・ログを残す）。**実行ファイル（`claude` / `codex` / `opencode` / `tmux` / `git` / `gh` / `tailscale`）はサーバの `PATH` から探す**（`replyCommand()` / `summarizeCommand()` / `codexQueueCommand()` / `realCodexConnector()` は名前を固定、`RealTmux` / `RealGit` / `GhPr` はコンストラクタの既定値。テストは偽物を引数で渡す。`tailscaleBins()` は PATH の後に macOS の GUI 版）。前は `SAI_*_BIN` で 7 つを 1 つずつ差し替えていたが、`PATH` を 1 つ直せば全部に効くのでやめた（#288）。
 
 | | |
 | --- | --- |
 | `SAI_TERMINAL` | `0` で「tmux のペインに打ち込む」を切る。Claude と閉じた Codex は別プロセス、開いている Codex は queue |
 | `SAI_APPROVE` | `0` で返信中の許可・質問を画面で答える配線（`--mcp-config` + `--permission-prompt-tool`）を付けない |
 | `SAI_CODEX_APP_SERVER` | `0` で閉じたCodexを従来の `exec resume` に戻す（既定はapp-server） |
-| `SAI_GH` / `SAI_GH_BIN` | `0` で差分ボタンの PR 番号を引かない（既定は引く）。実行ファイルは既定で PATH の `gh`。叩くのは `gh pr view` だけで、引けなければ番号が付かないだけ |
-| `SAI_CLAUDE_BIN` / `SAI_CODEX_BIN` / `SAI_OPENCODE_BIN` | 返信で起動する CLI の実行ファイル（既定は PATH の `claude` / `codex` / `opencode`） |
-| `SAI_TMUX_BIN` | ペインに打ち込むときの `tmux` の実行ファイル（既定は PATH の `tmux`） |
-| `SAI_GIT_BIN` | 差分を読むときの `git` の実行ファイル（既定は PATH の `git`）。読むだけのコマンドしか呼ばない |
-| `SAI_TAILSCALE_BIN` | tailnet 経由の認証の `whois` に使う `tailscale`（既定は PATH、無ければ macOS の GUI 版） |
+| `SAI_GH` | `0` で差分ボタンの PR 番号を引かない（既定は引く）。叩くのは PATH の `gh` の `gh pr view` だけで、引けなければ番号が付かないだけ |
 | `CODEX_HOME` | Codex のホーム（既定 `~/.codex`）。Codex 自身の変数に従うだけ |
 | `AGENT_FEED_DEBUG` | `1` で record.py の例外をログに残す |
 

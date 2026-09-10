@@ -32,7 +32,8 @@ export interface Git {
 
 export class RealGit implements Git {
   readonly bin: string
-  constructor(bin: string = process.env.SAI_GIT_BIN || 'git') {
+  /** 実行ファイルは既定でサーバの PATH の `git`（#288）。テストは偽物を渡す */
+  constructor(bin: string = 'git') {
     this.bin = bin
   }
   run(cwd: string, args: string[]): Promise<string> {

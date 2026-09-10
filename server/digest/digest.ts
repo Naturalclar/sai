@@ -1,6 +1,6 @@
 // チャットの一言コメント（digest）。エージェントの返答（text）を、性格つきの 1〜2 文に言い換える。
 //
-// 作るのは LLM で、既定は返信と同じ `claude` CLI を `-p` で叩く（依存を足さない。SAI_CLAUDE_BIN も効く）。
+// 作るのは LLM で、既定は返信と同じ `claude` CLI を `-p` で叩く（依存を足さない。実行ファイルはサーバの PATH の `claude`）。
 // SAI_DIGEST_PROVIDER=openai なら OpenAI 互換の HTTP（Ollama / LM Studio / llama.cpp / vLLM）を Node の fetch で叩く。
 // 結果は ~/.agent-feed/digest.jsonl に追記し、JSONL（記録）は触らない。派生データなので消しても履歴は壊れない。
 // 既定はオフ（SAI_DIGEST=1 で有効）。オンでも「サーバが起動したあとに増えた行」だけ作り、過去の行は作らない。
@@ -53,11 +53,11 @@ export interface Summarizer {
   summarize(prompt: string): Promise<string>
 }
 
-/** `claude -p` の起動引数。テストで並びを見る */
-export function summarizeCommand(model: string, env: NodeJS.ProcessEnv = process.env): { bin: string; args: string[] } {
+/** `claude -p` の起動引数。テストで並びを見る。実行ファイルはサーバの PATH の `claude`（#288） */
+export function summarizeCommand(model: string): { bin: string; args: string[] } {
   // --bare は OAuth を読まないので使えない（Not logged in になる）。フックは AGENT_FEED_SKIP=1 で黙らせる
   return {
-    bin: env.SAI_CLAUDE_BIN || 'claude',
+    bin: 'claude',
     args: ['-p', '--model', model, '--output-format', 'json', '--no-session-persistence'],
   }
 }
@@ -75,7 +75,7 @@ export class ClaudeSummarizer implements Summarizer {
   }
 
   summarize(prompt: string): Promise<string> {
-    const { bin, args } = summarizeCommand(this.model, this.env)
+    const { bin, args } = summarizeCommand(this.model)
     return new Promise<string>((resolve, reject) => {
       const child = spawn(bin, args, {
         cwd: this.cwd,

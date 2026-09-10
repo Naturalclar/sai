@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { MODE_LABEL, modeSkipsRules, REPLY_MODES, shortReplyMode } from '../../shared/permissions.ts'
+import { MODE_HINT, MODE_LABEL, modeLabel, modeSkipsRules, REPLY_MODES, shortReplyMode } from '../../shared/permissions.ts'
 import type { ReplyPermissionMode } from '../../shared/types.ts'
 import { api } from './api'
 
@@ -18,6 +18,7 @@ export interface ReplyPermissionProps {
  * 見出しにあった `<select>` から移したもので、**操作はここ 1 か所**（モデルと同じ形）。
  *
  * 並ぶのは `shared/permissions.ts` の `REPLY_MODES` で、サーバの検査と同じ一覧。
+ * **モードの名前は英語**（#271。Claude Code の Shift+Tab の表示と揃える）で、何が起きるかは日本語の補足で出す。
  * **素通し（bypassPermissions）を選んでいる間は赤くする**（#253。選んだまま忘れているのが一番まずい）。
  * 端末に打ち込む経路ではフラグを渡す先が無いので効かない（薄くして、その旨を title に出す）。
  * 呼び出し側は key={id} を付けること（別のセッションに移ったら開閉ごと作り直す）
@@ -79,17 +80,18 @@ export function ReplyPermissionPicker({ id, value, terminal }: ReplyPermissionPr
         aria-label="SAI から返信するときの許可モード"
         title={
           terminal
-            ? `SAI から返信するときの許可モード: ${MODE_LABEL[current || 'default']}。いまは端末（tmux）で開いているので返信は端末に打ち込まれ、この設定は効かない（端末側は Shift+Tab で切り替える）`
-            : `SAI から返信するときの許可モード: ${MODE_LABEL[current || 'default']}。押すと変えられる。そのターンだけに効き、セッションには残らない`
+            ? `SAI から返信するときの許可モード: ${modeLabel(current || 'default')}。いまは端末（tmux）で開いているので返信は端末に打ち込まれ、この設定は効かない（端末側は Shift+Tab で切り替える）`
+            : `SAI から返信するときの許可モード: ${modeLabel(current || 'default')}。押すと変えられる。そのターンだけに効き、セッションには残らない`
         }
       >
         {busy ? '…' : shortReplyMode(current)}
       </button>
       {open && (
         <div className="menu" role="menu">
-          {/* ボタンの短い名前（`聞く`）と違って、メニューでは何が起きるかを書く */}
+          {/* ボタンの短い名前と違って、メニューでは名前（英語）の横に何が起きるか（日本語）を添える */}
           <button type="button" role="menuitem" className={current ? '' : 'picked'} onClick={() => void save('')}>
-            許可は既定（聞く）<span className="why">CLI に任せる</span>
+            {MODE_LABEL.default}
+            <span className="why">CLI に任せる（{MODE_HINT.default}）</span>
           </button>
           {REPLY_MODES.map((m) => (
             <button
@@ -100,6 +102,7 @@ export function ReplyPermissionPicker({ id, value, terminal }: ReplyPermissionPr
               onClick={() => void save(m)}
             >
               {MODE_LABEL[m]}
+              <span className="why">{MODE_HINT[m]}</span>
             </button>
           ))}
         </div>

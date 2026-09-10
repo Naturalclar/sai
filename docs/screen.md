@@ -202,8 +202,10 @@ SAI_CODEX_APP_SERVER_ARGS='-c sandbox_mode="workspace-write"' pnpm start  # app-
 
 | | |
 | --- | --- |
-| **ファイル編集は聞かない**（`acceptEdits`） | 編集の許可を聞かれなくなる。コマンドは今までどおり聞く |
-| **全部素通し**（`bypassPermissions`。#253） | 許可を一切聞かない。issue に着手してから PR を出すまで押し続けなくて済むように |
+| **Accept edits**（`acceptEdits`） | 編集の許可を聞かれなくなる。コマンドは今までどおり聞く |
+| **Bypass permissions**（`bypassPermissions`。#253） | 許可を一切聞かない。issue に着手してから PR を出すまで押し続けなくて済むように |
+
+**モードの名前は英語で出す**（#271）。Claude Code 自身が端末の `Shift+Tab` で `accept edits on` / `bypass permissions on` と英語で出すので、同じモードが端末と SAI で別の名前に見えないように揃えてある。メニューでは名前の横に、何が起きるかを日本語で添える（`Accept edits` `ファイル編集は聞かない`）。見出しのタグと盾のモーダルも同じ名前を使う。
 
 - **そのターン限りで、セッションには残らない。** `--model` と違うところ（`--model` は `--resume` に付けるとセッションの設定そのものが変わる）。フラグ付きで回したセッションを端末やフラグ無しで再開すると、許可は元どおり聞かれる
 - **端末（tmux）に打ち込む返信には効かない。** その経路は CLI を起動せずペインに文字を送るだけなので、フラグを渡す先が無い（端末側は Shift+Tab で切り替える）。端末で開いている間は select を薄く出す

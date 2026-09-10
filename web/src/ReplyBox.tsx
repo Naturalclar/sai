@@ -57,6 +57,11 @@ interface Props {
   busy: boolean
   /** busy のとき、前の返信を起動した時刻。placeholder に「前の返信を処理中（3分）」と出す */
   busySince?: string
+  /**
+   * そのセッションに預かっている返信の数（#305）。処理中でなくても残っていれば、送った分はその後ろに並ぶので
+   * 送信ボタンを「あとで送る」にする
+   */
+  queued?: number
   /** 経過の基準（ポーリングの updatedAt）。busySince とセット */
   now?: number
   /** 送る。false を返したら（端末の打ちかけの確認待ちなど、送れなかった）本文を入力欄に戻す */
@@ -95,7 +100,7 @@ const NO_HISTORY: readonly string[] = []
 const keyOf = (e: KeyboardEvent<HTMLTextAreaElement>) => ({ key: e.key, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, shiftKey: e.shiftKey })
 
 /** 入力欄。Enter で送信、Shift+Enter で改行。IME 変換中の Enter は送らない */
-export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onDraft, model, permission, diff, skillsId, attachId, draftKey, history = NO_HISTORY, onLeaveToSidebar, mention }: Props) {
+export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, now = 0, onSend, onDraft, model, permission, diff, skillsId, attachId, draftKey, history = NO_HISTORY, onLeaveToSidebar, mention }: Props) {
   // 前に打ちかけて離れた分（#306）。作ったときに 1 回だけ読む
   const [initial] = useState(() => (draftKey ? loadDraft(draftKey) : EMPTY_DRAFT))
   const [text, setText] = useState(initial.text)
@@ -109,8 +114,6 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
   const [cursor, setCursor] = useState<{ query: string; index: number }>({ query: '', index: 0 })
   // Esc で閉じた検索語。続きを打って検索語が変われば開き直す
   const [dismissed, setDismissed] = useState<string | null>(null)
-  // 処理中で送れないときに Enter を押した。黙って無視すると「送信できない」に見えるので理由を出す（#170）
-  const [hitBusy, setHitBusy] = useState(false)
   const ref = useRef<HTMLTextAreaElement>(null)
   // ↑ で呼び戻す履歴の位置と、入る前の打ちかけ。描画には出ないので ref（履歴そのものは props をその場で見る）。
   // id を一緒に持ち、返信先が変わっていたら押された時に捨てる（別のセッションの履歴に入ったままにしない）
@@ -142,8 +145,9 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
   })
 
   // 端末（tmux）で開いていれば、前のターンが動いていても打ち込める（TUI が次のターンに回す）。
-  // 別プロセス（-p）の経路だけは二重起動になるので止める（#100, #170）
-  const blocked = busy && terminal !== true
+  // 別プロセス（-p）の経路は二重起動になるので、送った分はサーバが預かって前のターンが終わってから回す（#100, #170, #305）。
+  // 預かりが残っている間も同じ（先に預けたものを追い越さない）
+  const queueing = (busy && terminal !== true) || queued > 0
 
   const drafting = text.trim() !== ''
   useEffect(() => {
@@ -253,7 +257,6 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
   /** 本文が変わったとき。選んだ表記が本文から消えていたら返信先も既定に戻す */
   const change = (next: string) => {
     setText(next)
-    setHitBusy(false)
     // 手で書き換えたら履歴から抜ける（次の ↑ は一番新しいものから）
     hist.current = { ...hist.current, index: NOT_IN_HISTORY, draft: '' }
     if (mention?.picked && !next.includes(mention.picked.label)) mention.onPick(null)
@@ -272,10 +275,6 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
     // 画像だけでも送れる（本文が空でも添付があれば通す）
     if (!body && attach.items.length === 0) return
     if (attach.busy) return
-    if (blocked) {
-      setHitBusy(true)
-      return
-    }
     const sent = text
     const paths = attach.paths
     setText('')
@@ -411,11 +410,11 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
         </div>
       )}
       {/* どこで回すかの短い注意。入力欄の上に 1 行。詳しい説明（送った返信は対話側の画面には出ない、など）は README の「返信」の節 */}
-      <div className={`note${hitBusy && blocked ? ' blocked' : ''}`}>
-        {hitBusy && blocked
-          ? mention
-            ? `#${repo} は前の返信を処理中。終わるまで待つか、@ で別のセッションに送ってください`
-            : '前の返信を処理中。終わるまで待ってください'
+      <div className="note">
+        {queueing
+          ? busy
+            ? `${mention ? `#${repo} は` : ''}前の返信を処理中。送ると預かって、終わってから続けて回す`
+            : `預かっている返信が ${queued} 件ある。送るとその後ろに並ぶ`
           : terminal === true
             ? '端末（tmux）に打ち込む'
             : terminal === false
@@ -471,8 +470,8 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
           placeholder={
             busy
               ? mention
-                ? `#${repo} は前の返信を処理中${busySince && elapsedLabel(busySince, now) ? `（${elapsedLabel(busySince, now)}）` : ''}。@ で別のセッションに返信できます`
-                : `前の返信を処理中${busySince && elapsedLabel(busySince, now) ? `（${elapsedLabel(busySince, now)}）` : ''}。終わるまで待ってください`
+                ? `#${repo} は前の返信を処理中${busySince && elapsedLabel(busySince, now) ? `（${elapsedLabel(busySince, now)}）` : ''}。送ると終わってから回す（@ で別のセッションにも送れる）`
+                : `前の返信を処理中${busySince && elapsedLabel(busySince, now) ? `（${elapsedLabel(busySince, now)}）` : ''}。送ると終わってから続けて回す`
               : `#${repo} に返信（Enter で送信、Shift+Enter で改行）`
           }
           rows={1}
@@ -481,8 +480,6 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
           onScroll={() => {
             if (ghostRef.current && ref.current) ghostRef.current.scrollTop = ref.current.scrollTop
           }}
-          // フィードでは送信中でも別の返信先へ打てるよう入力欄は止めない（送信ボタンだけ止める）
-          disabled={blocked && !mention}
         />
         </div>
         {/* 送信ボタンの左。textarea が 1 行を占めるので、画像ボタンと並んで下の行に入る */}
@@ -493,9 +490,10 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
         {permission && <ReplyPermissionPicker key={`perm-${permission.id}`} {...permission} />}
         <button
           type="submit"
-          disabled={blocked || attach.busy || (!(mention?.picked ? stripMention(text, mention.picked.label) : text).trim() && attach.items.length === 0)}
+          disabled={attach.busy || (!(mention?.picked ? stripMention(text, mention.picked.label) : text).trim() && attach.items.length === 0)}
+          title={queueing ? '前の返信が終わってから続けて回す（預けた分は取り消せる）' : undefined}
         >
-          {blocked ? (mention ? `#${repo} は処理中` : '送信中…') : '送信'}
+          {queueing ? 'あとで送る' : '送信'}
         </button>
       </div>
       {skillOpen && (
@@ -573,7 +571,7 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
               {/* どのリポジトリか（#301）。@ の表記は worktree 名なので、それだけだと main がどこのものか分からない */}
               {targetProjectLabel(t) && <span className="project" title={t.project}>{targetProjectLabel(t)}</span>}
               <span className="title">{t.title || '(無題)'}</span>
-              {mention?.busyIds?.has(t.id) && <span className="tag replying" title="前の返信を処理中。選べるが、終わるまで送れない">処理中</span>}
+              {mention?.busyIds?.has(t.id) && <span className="tag replying" title="前の返信を処理中。選んで送ると、終わってから回す">処理中</span>}
               {t.blocked && <span className="why">{t.blocked}</span>}
             </li>
           ))}

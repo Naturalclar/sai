@@ -6,11 +6,13 @@
 | --- | --- |
 | `GET /` | ビューア（`web/dist/index.html`） |
 | `GET /assets/*` | ビルド成果物。`dist/` の外には出ない |
-| `GET /api/sessions?days=7&project=&repo=&agent=&date=&archived=` | セッション一覧（集計済み）。`record_version` は窓の中の一番新しい行の `v`（画面の「record.py が古い」の判定）。各セッションの `waiting` は人を待って止まっていれば「何を待っているか」、そうでなければ空。`filters` に絞り込み候補、`replying` に処理中の返信（ID → `{ since, text }`）、`approvals` に返信中のエージェントが待っている許可・質問（ID → 古い順の配列）、`profile` に自分の表示名とアイコンも返す。既定ではアーカイブ済みを除き、`archived=1` でアーカイブ済みだけ（`total` と `filters` もその集合から）。`viewer` は tailnet 経由ならログイン名、直アクセスなら `null` |
+| `GET /api/sessions?days=7&project=&repo=&agent=&date=&archived=` | セッション一覧（集計済み）。`record_version` は窓の中の一番新しい行の `v`（画面の「record.py が古い」の判定）。各セッションの `waiting` は人を待って止まっていれば「何を待っているか」、そうでなければ空。`filters` に絞り込み候補、`replying` に処理中の返信（ID → `{ since, text }`）、`queued` に処理中に送って預かっている返信（ID → `{ items: [{ queue_id, text, since }], paused? }`。#305）、`approvals` に返信中のエージェントが待っている許可・質問（ID → 古い順の配列）、`profile` に自分の表示名とアイコンも返す。既定ではアーカイブ済みを除き、`archived=1` でアーカイブ済みだけ（`total` と `filters` もその集合から）。`viewer` は tailnet 経由ならログイン名、直アクセスなら `null` |
 | `GET /api/health` | `{ ok: true, viewer }`。認証の確認にも使う（偽ヘッダで `401` になること） |
-| `GET /api/sessions/<id>?days=30` | そのエンティティの全行と `replying`。`<id>` は `<セッション>@<リポジトリ>` |
+| `GET /api/sessions/<id>?days=30` | そのエンティティの全行と `replying` / `queued`。`<id>` は `<セッション>@<リポジトリ>` |
 | （`replying` の中身） | `{ "<エンティティID>": { "since", "text", "via"?: "terminal", "permission_mode"?: "acceptEdits", "failed"?: { "code", "tail" } } }`。`via` は端末（tmux）に打ち込んだ返信のときだけ付く（省略なら別プロセス。要対応の出し分けが見る）。`permission_mode` は Claude の返信を**起動したときに**付けた許可モード（`""` はフラグ無し＝既定、省略は分からない。#272）。動いている CLI には後から当てられないので、画面はセッションのメタと違えば「次の返信から」と出す。`failed` は返信の子プロセスが 0 以外で終わったとき 2 分だけ付く（`tail` は `reply.log` のそのターンぶんの末尾）。付いている間は「処理中」ではない |
-| `POST /api/sessions/<id>/reply?days=90` | body `{ "text": "..." }`。そのセッションを `cwd` で再開して1ターン回すのを投げっぱなしにし、`202` を返す。閉じたCodexはapp-server管理で応答の `via` が `app-server`。合成 ID は `400`、進行中は `409`、別オリジンは `403` |
+| `POST /api/sessions/<id>/reply?days=90` | body `{ "text": "..." }`。そのセッションを `cwd` で再開して1ターン回すのを投げっぱなしにし、`202` を返す。閉じたCodexはapp-server管理で応答の `via` が `app-server`。合成 ID は `400`、進行中は `409`、別オリジンは `403`。**body に `"queue": true` を付けると、進行中は `409` にせず預かる**（`202` で `via: "queued"` と `queue_id`。#305）。前のターンが終わったら古い順に 1 件ずつ回す。預かりが残っていれば進行中でなくても後ろに並べる（追い越さない）。1 セッション 10 件までで、超えたら `409` |
+| `DELETE /api/sessions/<id>/queue/<queue_id>` | 預けた返信を取り消す（#305）。`{ "id", "queue": { "items", "paused"? } }`（いまの預かり）。無ければ `404`、いま起動している先頭は `409`、別オリジンは `403` |
+| `POST /api/sessions/<id>/queue/resume` | 止めた預かり（前の返信が失敗した・起動できなかった。理由は `paused`）を再開して先頭を回す。止めた理由の失敗ではもう止めない。応答は取り消しと同じ形。別オリジンは `403` |
 | `POST /api/approvals` | 返信中の CLI（`server/approvals/approve-mcp.ts`）が許可・質問を預ける。body `{ "id", "tool_name", "input", "tool_use_id"? }`。返信を処理中でないエンティティは `409`。`201` で `{ "approval_id" }` |
 | `GET /api/approvals/<approval_id>?wait=1` | 答えが付いていれば `200` で `{ "behavior": "allow" \| "deny", "updatedInput"?, "message"? }`（渡したら消える）。まだなら `wait=1` で最大 20 秒待って `202`。無ければ `404` |
 | `POST /api/approvals/<approval_id>/answer` | 画面から答える。Claudeはbody `{ "behavior": "allow" \| "deny", "updatedInput"?, "message"? }`。Codexの承認はAPIに載った `decisions[].id` を `{ "behavior", "decision" }` で返し、質問は `updatedInput.answers` を返す。未提示decisionは `400`、別thread/turnや切断済みは `409`、答え済みは `404` |
@@ -33,10 +35,10 @@
 | `GET /api/usage` | 各エージェントの使用量（usage limit）。`{ "codex"?: { "primary", "secondary"?, "plan"?, "at" }, "claude"?: { "resets_at", "kind", "at" } }`。**ローカルのファイルを読むだけ**で、Anthropic / OpenAI の API は叩かない。Codex は rollout の `token_count` の行から 5 時間（`window_minutes: 300`）と週（`10080`）の `used_percent`、Claude は transcript の `quotaLimits` が「弾かれた」かつ復帰前のときだけ。取れないエージェントはキーごと付かない。3 秒のポーリングには乗せず、サーバ側で 30 秒キャッシュする |
 | `GET /api/settings` | サーバ側の設定。`{ "persona", "linear_workspace", "digest", "digest_on", "digest_error", "provider", "digest_model", "model" }`。`digest` は一言をいま作っているか、`digest_on` は入にしているか（入なのに作れなければ `digest_error` に理由。openai の口でモデルが空など）、`provider` はその口（`claude` / `openai`）、`digest_model` は保存しているモデル（空は口の既定）、`model` は実際に使うモデル |
 | `PUT /api/settings` | body `{ "persona": "ENFP" }` / `{ "linear_workspace": "acme" }` / `{ "digest": true, "digest_provider": "openai", "digest_model": "qwen3:8b" }` をいまの値に重ねる（省略は据え置き）。`shared/persona.ts` に無い性格、`linear.app/<workspace>/` の形でない workspace、`claude` / `openai` 以外の口、モデル名の形（`shared/digestSettings.ts` の `isDigestModel()`）でない値は `400`（空文字は「設定なし」「口の既定」）。一言の入切・口・モデルはその場で組み直す（立て直さない。#288）。**openai の送り先（`SAI_DIGEST_URL`）と鍵は受けない**（環境変数だけ）。別オリジンは `403` |
-| `GET /api/feed?days=3&project=` | 生の行と `replying`。アーカイブ済みセッションの行は除く |
+| `GET /api/feed?days=3&project=` | 生の行と `replying` / `queued`。アーカイブ済みセッションの行は除く |
 | `GET /api/search?q=&days=90` | 発言の本文で探す（#230）。`hits` は新しい順（上限 100 件、超えたら `truncated`）。1 件に `id` / `ts`（飛び先は `#/s/<id>?ts=<ts>`）、`who`（`me` / `agent`）、`excerpt` と強調の場所 `hits`。舐めるのは `text` と `user_text` だけで `thinking` と待ちの行は見ない。**アーカイブ済みも含む**。`q` が空（か空白だけ）なら行も読まず空で返す |
 
-返信の実行は `server/reply/runner.ts`。`claude` / `codex` は `detached` で起動して待たず、stdout/stderr は `~/.agent-feed/reply.log` に追記する（うまく動かないときはここを見る）。同じエンティティに同時に2本は走らせない。
+返信の実行は `server/reply/runner.ts`。`claude` / `codex` は `detached` で起動して待たず、stdout/stderr は `~/.agent-feed/reply.log` に追記する（うまく動かないときはここを見る）。同じエンティティに同時に2本は走らせない。処理中に `queue: true` で送られた分は `server/reply/replyQueue.ts` が預かり（`~/.agent-feed/reply-queue.json` にも書くので再起動で消えない）、`-p` の exit・SAI 管理の Codex のターンの終わり・画面のポーリングのついでに `app.ts` の `drain()` が先頭を 1 件起動する。前の返信が失敗していたら回さずに止める。
 
 集計はサーバ側（`server/rows/aggregate.ts`）。エンティティのキー（`<セッション>@<リポジトリ>`、セッションが取れない行は `unknown-<日付>`）は `shared/entity.ts` にあり、サーバの集計と画面のリンクが同じ関数を使う。ファイルは `(mtime, size)` で覚えていて、変わっていなければ再パースしない（`server/rows/store.ts`）。1日開きっぱなしにしても重くならないのはこのため。
 

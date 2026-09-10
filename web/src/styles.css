@@ -564,6 +564,11 @@
   .avatar.me { background: var(--accent); }
   .group.pending { opacity: .65; }
   .group.pending .msg .body { font-style: italic; }
+  /* 預かっている返信（#305）。処理中の仮バブルと同じ薄さで、取り消しと「続けて送る」を押せるようにする */
+  .group.queued .queue-note { color: var(--claude); font-size: 12px; font-style: normal; margin-top: 4px; }
+  .group.queued .queue-actions { display: flex; gap: 8px; margin-top: 6px; }
+  .group.queued .queue-actions button { font: inherit; font-size: 12px; padding: 2px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; }
+  .group.queued .queue-actions button:disabled { opacity: .5; cursor: default; }
   /* 5分を超えて処理中。長引いていることが見えるように時刻の色を変える */
   .group.pending.long .gh .time { color: var(--synth); font-weight: 600; }
   .pending-line { display: flex; gap: 8px; align-items: baseline; padding: 2px 16px 10px 62px; color: var(--muted); font-size: 12px; }

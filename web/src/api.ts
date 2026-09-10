@@ -23,10 +23,11 @@ import type {
   SessionsResponse,
   SettingsRequest,
   SettingsResponse,
+  ReplyQueueResponse,
   UsageResponse,
 } from '../../shared/types.ts'
 
-export type { Agent, FeedRow, SessionSource, SessionSummary, SessionMeta, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, Approval, ApprovalMap, ApprovalAnswer, Profile, PersonaId, SettingsResponse, SettingsRequest, Viewer, SessionPermissionsResponse, SessionProgressResponse, ProgressStep, SessionDiffResponse, SessionDiffSummaryResponse, SearchResponse, SearchHit, DiffPr, DiffSection, DiffFileStat, AttachmentResponse, UsageResponse, UsageWindow, CodexUsage, ClaudeUsage } from '../../shared/types.ts'
+export type { Agent, FeedRow, SessionSource, SessionSummary, SessionMeta, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, QueuedReply, ReplyQueue, ReplyQueueMap, ReplyQueueResponse, Approval, ApprovalMap, ApprovalAnswer, Profile, PersonaId, SettingsResponse, SettingsRequest, Viewer, SessionPermissionsResponse, SessionProgressResponse, ProgressStep, SessionDiffResponse, SessionDiffSummaryResponse, SearchResponse, SearchHit, DiffPr, DiffSection, DiffFileStat, AttachmentResponse, UsageResponse, UsageWindow, CodexUsage, ClaudeUsage } from '../../shared/types.ts'
 
 /**
  * `PUT /api/sessions/<id>/meta` のボディ。`SessionMeta` の一部を重ねる。
@@ -111,7 +112,7 @@ export const api = {
     getJSON<SessionDetailResponse>(`/api/sessions/${encodeURIComponent(id)}?days=${days}`),
   feed: (f: FeedFilters) => getJSON<FeedResponse>(`/api/feed?${qs(f)}`),
   /** 返信。replaceTyped は端末の打ちかけを消して打ち込んでよい（409 の code: terminal_typed を人が確認したあと） */
-  reply: (id: string, text: string, options: { replaceTyped?: boolean; via?: 'process'; attachments?: string[] } = {}, days = 90) =>
+  reply: (id: string, text: string, options: { replaceTyped?: boolean; via?: 'process'; attachments?: string[]; queue?: boolean } = {}, days = 90) =>
     sendJSON<ReplyResponse>(
       'POST',
       `/api/sessions/${encodeURIComponent(id)}/reply?days=${days}`,
@@ -120,8 +121,15 @@ export const api = {
         ...(options.replaceTyped ? { replace_typed: true } : {}),
         ...(options.via ? { via: options.via } : {}),
         ...(options.attachments?.length ? { attachments: options.attachments } : {}),
+        // 処理中なら預かってもらう（#305。サーバは処理中でなければそのまま起動する）
+        ...(options.queue ? { queue: true } : {}),
       } satisfies ReplyRequest,
     ),
+  /** 預けた返信を取り消す（#305。まだ回していないものだけ） */
+  cancelQueued: (id: string, queueId: string) =>
+    sendRaw<ReplyQueueResponse>('DELETE', `/api/sessions/${encodeURIComponent(id)}/queue/${encodeURIComponent(queueId)}`),
+  /** 止めた預かり（前の返信が失敗した・起動できなかった）を再開する */
+  resumeQueue: (id: string) => sendJSON<ReplyQueueResponse>('POST', `/api/sessions/${encodeURIComponent(id)}/queue/resume`, {}),
   meta: (id: string) => getJSON<SessionMetaResponse>(`/api/sessions/${encodeURIComponent(id)}/meta`),
   /** `/` の候補になるスキル。入力欄で `/` を打った時に 1 回だけ取る */
   sessionSkills: (id: string) => getJSON<SessionSkillsResponse>(`/api/sessions/${encodeURIComponent(id)}/skills`),

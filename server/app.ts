@@ -22,6 +22,7 @@ import type {
   ProfileResponse,
   ReplyError,
   ReplyingMap,
+  ReplyQueueResponse,
   ReplyRequest,
   ReplyResponse,
   SessionDetailResponse,
@@ -71,6 +72,7 @@ import { SETTINGS_FILE, SettingsStore } from './meta/settings.ts'
 import type { Settings } from './meta/settings.ts'
 import { isLinearWorkspace } from '../shared/refs.ts'
 import { ProcessRunner, replyCommand } from './reply/runner.ts'
+import { QUEUE_FILE, QUEUE_MAX, ReplyQueueStore } from './reply/replyQueue.ts'
 import { SkillStore } from './local/skills.ts'
 import { claudeProjectsDir, codexSessionsDir, UsageStore } from './local/usage.ts'
 import { ProgressReader } from './local/progress.ts'
@@ -110,6 +112,11 @@ const PERMISSIONS_SUFFIX = '/permissions'
 const DIFF_SUFFIX = '/diff'
 const PROGRESS_SUFFIX = '/progress'
 const ATTACHMENTS_SUFFIX = '/attachments'
+/** 預かった返信（#305）。`DELETE /api/sessions/<id>/queue/<queue_id>` と `POST /api/sessions/<id>/queue/resume` */
+const QUEUE_SEGMENT = '/queue/'
+const QUEUE_RESUME = 'resume'
+/** 預かった返信を起動するときに見る窓（POST の reply の既定と同じ） */
+const QUEUE_DAYS = 90
 /** 配る側。GET /api/attachments/<dir>/<name> */
 const ATTACHMENTS_PREFIX = `/api/${ATTACHMENTS_DIR}/`
 const PROFILE_PATH = '/api/profile'
@@ -197,9 +204,9 @@ export function parseDays(raw: string | null, fallback: number): number {
  * 処理中の返信を rev に混ぜる。画面は rev が同じなら state を触らないので、JSONL が変わらないまま
  * 「処理中 → 終了」になっても再描画されない。since まで含めるので、同じ id の連続した返信も区別できる
  */
-export function revWith(rev: string, replying: ReplyingMap, approvalsKey = '', buildStale = false, digestKey = ''): string {
+export function revWith(rev: string, replying: ReplyingMap, approvalsKey = '', buildStale = false, digestKey = '', queueKey = ''): string {
   const ids = Object.keys(replying).sort()
-  if (ids.length === 0 && !approvalsKey && !buildStale && !digestKey) return rev
+  if (ids.length === 0 && !approvalsKey && !buildStale && !digestKey && !queueKey) return rev
   const h = createHash('sha1')
   // 失敗が付いたときも画面に伝えたい（since は変わらないので、そのままでは rev が動かない）
   for (const id of ids) h.update(`${id}\n${replying[id]!.since}\n${replying[id]!.failed?.code ?? ''}\n`)
@@ -208,6 +215,8 @@ export function revWith(rev: string, replying: ReplyingMap, approvalsKey = '', b
   h.update(`stale:${buildStale ? 1 : 0}`)
   // 一言（digest）ができたら、JSONL が変わらなくても差し替えたい
   h.update(`digest:${digestKey}`)
+  // 預けた・回した・取り消した・止めた、も画面に伝えたい（#305）
+  h.update(`queue:${queueKey}`)
   return `${rev}:${h.digest('hex').slice(0, 8)}`
 }
 
@@ -235,6 +244,23 @@ export function selfUrl(req: Pick<IncomingMessage, 'socket'>): string {
 }
 
 export type Handler = (req: IncomingMessage, res: ServerResponse) => Promise<void>
+
+/** 返信を 1 本起動するときの指定。`POST .../reply` と、預かった返信を回す drain の両方が作る（#305） */
+interface LaunchOptions {
+  days: number
+  replaceTyped: boolean
+  forceProcess: boolean
+  /** 許可・質問を画面で答える MCP の宛先（このサーバ自身。`selfUrl()`） */
+  url: string
+  /** 処理中なら預かる（`ReplyRequest.queue`） */
+  queue: boolean
+}
+
+/** 起動の結果。HTTP には書かずに返すので、POST はそのまま応答にし、drain は預かりを止める理由にする */
+interface Launched {
+  status: number
+  body: ReplyResponse | ReplyError
+}
 
 /** 端末（tmux）への打ち込みに使うもの。テストでは差し替える */
 export interface TerminalDeps {
@@ -298,6 +324,14 @@ export function createApp(
   const iconStore = new IconStore(join(store.directory, ICONS_DIR))
   const attachmentStore = new AttachmentStore(join(store.directory, ATTACHMENTS_DIR))
   const profileStore = new ProfileStore(join(store.directory, PROFILE_FILE))
+  // 処理中に送った返信の預かり（#305）。replying.json と同じくファイルにも持ち、再起動で消さない
+  const queue = new ReplyQueueStore(join(store.directory, QUEUE_FILE))
+  // 起動している最中のセッション。POST と drain が同じセッションを同時に起動しないように（spawn までの隙を塞ぐ）
+  const launching = new Set<string>()
+  // 預かりを回している最中のセッション（exit の知らせとポーリングが重なっても 1 本だけ）
+  const draining = new Set<string>()
+  // 失敗で止めたあと「続けて送る」を押したときの、その失敗（`Replying.since`）。同じ失敗でもう一度止めない
+  const resumedFailure = new Map<string, string>()
 
   /**
    * 端末で人が答えたぶんの待ちを畳む（#255。#232 の積み残し）。行（集計）は触らず、応答を組み立てる
@@ -500,29 +534,70 @@ export function createApp(
     if (!text) return error(res, 400, 'text is required')
     const replaceTyped = (body as ReplyRequest).replace_typed === true
     const forceProcess = (body as ReplyRequest).via === 'process'
+    const wantQueue = (body as ReplyRequest).queue === true
+    const out = await launch(id, text, attachments, { days, replaceTyped, forceProcess, url: selfUrl(req), queue: wantQueue })
+    return json(res, out.body, out.status)
+  }
 
-    const { sessions } = await store.sessions(days)
+  const refuse = (status: number, message: string): Launched => ({ status, body: { error: message } })
+
+  /**
+   * 返信を 1 本起動する（本文と添付は検査済み）。`POST .../reply` と、預かった返信を回す `drain()` の両方が通る（#305）。
+   * 応答は書かずに返す
+   */
+  const launch = async (id: string, text: string, attachments: string[], o: LaunchOptions): Promise<Launched> => {
+    const { sessions } = await store.sessions(o.days)
     const session = sessions.find((s) => s.id === id)
-    if (!session) return error(res, 404, 'session not found in window')
+    if (!session) return refuse(404, 'session not found in window')
     const blocked = replyBlockedReason(session, selfHost())
-    if (blocked) return error(res, 400, blocked)
+    if (blocked) return refuse(400, blocked)
 
     // CLI に渡す生のセッションIDは URL から切り出さず、行の session を使う（entity.ts に逆変換を足さない）
-    const rows = (await store.rows(days)).filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
+    const rows = (await store.rows(o.days)).filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
     const raw = rows[rows.length - 1]?.session ?? ''
-    if (!raw) return error(res, 400, 'session id missing in rows')
+    if (!raw) return refuse(400, 'session id missing in rows')
     const cwd = session.cwd
     try {
       if (!cwd || !(await stat(cwd)).isDirectory()) throw new Error('not a directory')
     } catch {
-      return error(res, 400, `cwd が見つかりません: ${cwd || '(空)'}`)
+      return refuse(400, `cwd が見つかりません: ${cwd || '(空)'}`)
+    }
+    const openTerminal = terminalOf(session)
+    // 別プロセス（-p / app-server）のターンが動いているか、いま起動している最中か
+    const busy = run.running(id) || codexApp.running(id) || launching.has(id)
+    // 処理中なら預かる（#305）。処理中でなくても預かりが残っていれば後ろに並べる（先に預けたものを追い越さない）
+    if (o.queue && (busy || queue.size(id) > 0)) {
+      const item = queue.add(id, text, attachments, o.url)
+      if (!item) return refuse(409, `預かれるのは ${QUEUE_MAX} 件までです。取り消すか、前の返信が終わるのを待ってください`)
+      await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} 処理中なので預かった（${queue.size(id)} 件目）\n`).catch(() => {})
+      const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd, via: 'queued', queue_id: item.queue_id }
+      return { status: 202, body: payload }
     }
     // 端末（tmux）で開いていれば、前のターンが動いていても打ち込んでよい。TUI が次のターンに回すので、
     // 端末で人が続けて打つのと同じになる。別プロセス（-p）の経路だけは二重起動になるので止める（#100, #170）
-    const openTerminal = terminalOf(session)
-    if (run.running(id) || codexApp.running(id) || (typed.running(id) && !openTerminal)) {
-      return error(res, 409, 'このセッションはまだ前の返信を処理中です')
+    if (busy || (typed.running(id) && !openTerminal)) {
+      return refuse(409, 'このセッションはまだ前の返信を処理中です')
     }
+    launching.add(id)
+    try {
+      return await startTurn(id, session, raw, cwd, openTerminal, text, attachments, o)
+    } finally {
+      launching.delete(id)
+    }
+  }
+
+  /** launch() の続き。端末 → 開いている Codex の queue → app-server → 別プロセス、の順に経路を選んで起動する */
+  const startTurn = async (
+    id: string,
+    session: SessionSummary,
+    raw: string,
+    cwd: string,
+    openTerminal: ReturnType<typeof terminalOf>,
+    text: string,
+    attachments: string[],
+    o: LaunchOptions,
+  ): Promise<Launched> => {
+    const { replaceTyped, forceProcess } = o
 
     // 端末（tmux）で開いていれば、そのペインに打ち込む。別プロセスを立てないので端末にも出て、トークンも少ない。
     // ペインが無い・別のプロセスなら -p にフォールバック。入力中・ダイアログ中なら 409（何も打ち込まない）
@@ -541,11 +616,11 @@ export function createApp(
       } catch (err) {
         const code = (err as NodeJS.ErrnoException).code
         const hint = code === 'ENOENT' ? `${cmd.bin} が見つかりません（サーバを起動した環境の PATH に ${cmd.bin} があるか確かめてください）` : ''
-        return error(res, 500, hint || `Codex へキュー送信できませんでした: ${err instanceof Error ? err.message : String(err)}`)
+        return refuse(500, hint || `Codex へキュー送信できませんでした: ${err instanceof Error ? err.message : String(err)}`)
       }
       typed.start(id, text)
       const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd, via: 'queue' }
-      return json(res, payload, 202)
+      return { status: 202, body: payload }
     }
     if (codexActive && (!term || forceProcess)) return sendQueue()
     if (term && forceProcess) {
@@ -561,17 +636,17 @@ export function createApp(
         }
         typed.start(id, text)
         const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd, via: 'terminal' }
-        return json(res, payload, 202)
+        return { status: 202, body: payload }
       } catch (err) {
         if (err instanceof TerminalBusy) {
           // 画面は code で出し分ける。typed のときだけ「消して送る」の確認を出せる
           // can_process: Claude は exec resume、active Codex は queue へ送り直せる。
           const payload: ReplyError = { error: `端末に打ち込めない: ${err.message}`, code: `terminal_${err.kind}`, can_process: true }
           if (err.kind === 'typed') payload.typed = err.typed
-          return json(res, payload, 409)
+          return { status: 409, body: payload }
         }
         if (!(err instanceof TerminalGone) && (err as NodeJS.ErrnoException).code !== 'ENOENT') {
-          return error(res, 500, `端末に打ち込めなかった: ${err instanceof Error ? err.message : String(err)}`)
+          return refuse(500, `端末に打ち込めなかった: ${err instanceof Error ? err.message : String(err)}`)
         }
         // ペインが消えた・tmux が無い → 別プロセスで回す
       }
@@ -586,28 +661,91 @@ export function createApp(
       } catch (err) {
         const code = (err as NodeJS.ErrnoException).code
         const hint = code === 'ENOENT' ? 'codex が見つかりません（サーバを起動した環境の PATH に codex があるか確かめてください）' : ''
-        return error(res, 500, hint || `Codex app-serverで再開できませんでした: ${err instanceof Error ? err.message : String(err)}`)
+        return refuse(500, hint || `Codex app-serverで再開できませんでした: ${err instanceof Error ? err.message : String(err)}`)
       }
       const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd, via: 'app-server' }
-      return json(res, payload, 202)
+      return { status: 202, body: payload }
     }
     // 許可・質問を画面で答える配線。MCP の子プロセスはこのサーバと同じマシンで動くので、宛先はブラウザが来た Host ではなく
     // このサーバ自身が待ち受けているアドレス（ループバック）。Host だと tailscale serve 経由（https://<host>.ts.net → 127.0.0.1:8787）で
     // 開いた画面からの返信が `http://<host>.ts.net`（80 番、誰も聞いていない）に投げて「SAI に届かない: fetch failed」になる
-    const via = { url: selfUrl(req), entity: id }
+    const via = { url: o.url, entity: id }
     // セッションに返信のモデルが設定されていれば（PUT /api/sessions/<id>/meta の model）それで回す
     const cmd = replyCommand(session.agent, raw, text, cwd, process.env, via, model, own?.permission_mode, attachments)
-    if (!cmd) return error(res, 400, replyBlockedReason(session, selfHost()) || 'unsupported agent')
+    if (!cmd) return refuse(400, replyBlockedReason(session, selfHost()) || 'unsupported agent')
     try {
-      // プロセスが終わったら、そのセッションの答え待ちは deny で片付ける（もう誰も答えを取りに来ない）
-      await run.start(id, cmd, () => approvals.drop(id))
+      // プロセスが終わったら、そのセッションの答え待ちは deny で片付ける（もう誰も答えを取りに来ない）。
+      // 預かっている返信があれば続けて回す（#305）
+      await run.start(id, cmd, () => {
+        approvals.drop(id)
+        void drain(id)
+      })
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code
       const hint = code === 'ENOENT' ? `${cmd.bin} が見つかりません（サーバを起動した環境の PATH に ${cmd.bin} があるか確かめてください）` : ''
-      return error(res, 500, hint || (err instanceof Error ? err.message : String(err)))
+      return refuse(500, hint || (err instanceof Error ? err.message : String(err)))
     }
     const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd, via: 'process' }
-    return json(res, payload, 202)
+    return { status: 202, body: payload }
+  }
+
+  /**
+   * 預かっている返信を 1 件回す（#305）。前のターンが終わっていて止めていなければ、先頭を起動して外す。
+   * - **前の返信が失敗していたら回さずに止める**（`Replying.failed`。失敗したターンの続きを黙って積み上げない）。
+   *   「続けて送る」（resume）を押したら、その失敗ではもう止めない
+   * - 起動できなければ（端末に打てない・cwd が消えた・CLI が無い）外さずに止め、理由を画面に出す
+   * - 呼ぶのは -p の exit、SAI 管理の Codex のターンの終わり、画面のポーリングのついで。
+   *   再起動で引き取った子（exit を受け取れない）はポーリングで拾う
+   */
+  const drain = async (id: string): Promise<void> => {
+    const head = queue.peek(id)
+    if (!head || queue.paused(id) || draining.has(id)) return
+    if (run.running(id) || codexApp.running(id) || launching.has(id)) return
+    draining.add(id)
+    try {
+      const last = run.snapshot()[id]
+      if (last?.failed && resumedFailure.get(id) !== last.since) {
+        queue.pause(id, `前の返信が失敗したので止めています（終了コード ${last.failed.code}）。続けるなら「続けて送る」`)
+        return
+      }
+      const out = await launch(id, head.text, head.attachments, { days: QUEUE_DAYS, replaceTyped: false, forceProcess: false, url: head.url, queue: false })
+      if (out.status === 202) queue.shift(id, head.queue_id)
+      else queue.pause(id, `預かった返信を送れませんでした: ${(out.body as ReplyError).error}`)
+    } finally {
+      draining.delete(id)
+    }
+  }
+
+  /** 預かりのあるセッションを全部見る。画面のポーリングのついでに呼ぶ */
+  const drainAll = async (): Promise<void> => {
+    for (const id of queue.ids()) await drain(id)
+  }
+
+  // SAI 管理の Codex のターンが終わったら、預かりを回す（-p の exit と同じ扱い）
+  codexApp.onTurnEnd?.((id) => void drain(id))
+
+  /**
+   * `DELETE /api/sessions/<id>/queue/<queue_id>`（預けた返信の取り消し）と `POST /api/sessions/<id>/queue/resume`
+   * （止めた預かりの再開）。どちらも同一オリジンのみ（再開は CLI を起動する）
+   */
+  const queueAction = async (req: IncomingMessage, res: ServerResponse, id: string, rest: string) => {
+    if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
+    const method = req.method ?? 'GET'
+    if (rest === QUEUE_RESUME) {
+      if (method !== 'POST') return error(res, 405, 'method not allowed')
+      // 止めた理由の失敗がまだ残っていても（2 分）、同じ失敗ではもう止めない
+      const last = run.snapshot()[id]
+      if (last?.failed) resumedFailure.set(id, last.since)
+      queue.resume(id)
+      await drain(id)
+    } else {
+      if (method !== 'DELETE') return error(res, 405, 'method not allowed')
+      // いま起動している先頭は取り消せない（取り消したつもりで回ってしまう）
+      if (draining.has(id) && queue.peek(id)?.queue_id === rest) return error(res, 409, 'この返信はもう起動しています')
+      if (!queue.remove(id, rest)) return error(res, 404, 'queued reply not found')
+    }
+    const payload: ReplyQueueResponse = { id, queue: queue.snapshot()[id] ?? { items: [] } }
+    return json(res, payload)
   }
 
   /**
@@ -941,6 +1079,9 @@ export function createApp(
     const isProgress = path.startsWith(SESSIONS_PREFIX) && path.endsWith(PROGRESS_SUFFIX)
     const isAttachUpload = path.startsWith(SESSIONS_PREFIX) && path.endsWith(ATTACHMENTS_SUFFIX)
     const isAttachFile = path.startsWith(ATTACHMENTS_PREFIX)
+    // `/api/sessions/<id>/queue/<queue_id | resume>`。id は `/` を含まないので、最初の `/queue/` が区切り（#305）
+    const queueAt = path.startsWith(SESSIONS_PREFIX) ? path.indexOf(QUEUE_SEGMENT, SESSIONS_PREFIX.length) : -1
+    const isQueue = queueAt > 0
     const isAsk = path === APPROVALS_PATH
     const isAnswer = path.startsWith(APPROVALS_PREFIX) && path.endsWith(ANSWER_SUFFIX)
     const isProfile = path === PROFILE_PATH
@@ -948,13 +1089,20 @@ export function createApp(
     const isSettings = path === SETTINGS_PATH
     const method = req.method ?? 'GET'
     // 書き込みは「返信は POST」「表示名は PUT」「アイコンは PUT / DELETE」「承認の預かりと答えは POST」「自分の表示名は PUT、アイコンは PUT / DELETE」
-    // 「設定は PUT」だけ。それ以外は GET / HEAD のみ
+    // 「設定は PUT」「預かった返信の再開は POST、取り消しは DELETE」だけ。それ以外は GET / HEAD のみ
     const writable =
-      (method === 'POST' && (isReply || isAsk || isAnswer || isAttachUpload)) ||
+      (method === 'POST' && (isReply || isAsk || isAnswer || isAttachUpload || isQueue)) ||
+      (method === 'DELETE' && isQueue) ||
       (method === 'PUT' && (isMeta || isProfile || isSettings)) ||
       ((method === 'PUT' || method === 'DELETE') && (isIcon || isProfileIcon))
     if (!writable && method !== 'GET' && method !== 'HEAD') return error(res, 405, 'method not allowed')
     try {
+      // 返信（`/reply`）などの判定より先に見る（queue_id が `reply` のような文字列でも取り違えない）
+      if (isQueue) {
+        const id = sessionIdFrom(path, path.slice(queueAt))
+        if (id === null) return error(res, 400, 'bad session id')
+        return await queueAction(req, res, id, path.slice(queueAt + QUEUE_SEGMENT.length))
+      }
       if (isReply) {
         if (method !== 'POST') return error(res, 405, 'method not allowed')
         const id = sessionIdFrom(path, REPLY_SUFFIX)
@@ -1086,6 +1234,8 @@ export function createApp(
         // 端末で答えたぶんの待ちは畳む（#255）。畳んだ集合を rev に混ぜないと画面が拾わない
         const { sessions, key: settled } = await settleWaiting(withWaiting)
         const rev = `${sessionsRev}~${me.rev}~${settled}`
+        // 前のターンが終わっていれば、預かっている返信を回してから載せる（#305。再起動で引き取った子はここで拾う）
+        await drainAll()
         const replying = replyingOf(sessions)
         const pendingApprovals = await approvalsNow(sessions)
         // 既定はアーカイブ済みを除く。archived=1 でアーカイブ済みだけ。total と filters はその集合の絞り込み前から作る
@@ -1097,7 +1247,7 @@ export function createApp(
         // 記録側の版は窓の中の一番新しい行から。行が変われば rev も変わるので、ここでは rev に混ぜない
         const record_version = recordVersionOf(await store.rows(days))
         const body: SessionsResponse = {
-          rev: revWith(rev, replying, approvalMapKey(pendingApprovals), build_stale, digest.revKey()),
+          rev: revWith(rev, replying, approvalMapKey(pendingApprovals), build_stale, digest.revKey(), queue.key()),
           days,
           total: pool.length,
           sessions: withLastSummary(
@@ -1111,6 +1261,7 @@ export function createApp(
           ),
           filters: facets(pool),
           replying,
+          queued: queue.snapshot(),
           approvals: pendingApprovals,
           build_stale,
           record_version,
@@ -1134,13 +1285,15 @@ export function createApp(
         // このセッションが一言を切っていれば載せない（#263）
         const own = (await store.rows(days)).filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
         const rows = session.meta?.digest_off ? own : digest.attach(own)
+        await drainAll()
         const replying = replyingOf(sessions)
         const pendingApprovals = await approvalsNow(sessions)
         const body: SessionDetailResponse = {
-          rev: revWith(`${sessionsRev}~${me.rev}~${settled}`, replying, approvalMapKey(pendingApprovals), false, digest.revKey()),
+          rev: revWith(`${sessionsRev}~${me.rev}~${settled}`, replying, approvalMapKey(pendingApprovals), false, digest.revKey(), queue.key()),
           session: withLastSummary([session])[0]!,
           rows,
           replying,
+          queued: queue.snapshot(),
           approvals: pendingApprovals,
           profile: me.profile,
           host: selfHost(),
@@ -1166,15 +1319,17 @@ export function createApp(
         const noDigest = await digestOffIds()
         rows = digest.attach(rows.map(stripThinking))
         if (noDigest.size) rows = rows.map((r) => (r.summary && noDigest.has(entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? ''))) ? { ...r, summary: undefined } : r))
+        await drainAll()
         const replying = replyingOf(sessions)
         const pendingApprovals = await approvalsNow(sessions)
         // rev はメタ（アーカイブ）と処理中の集合、答え待ちの承認、ビルドが古いか、一言の有無も混ぜる
         const build_stale = await freshness.stale()
         const body: FeedResponse = {
-          rev: revWith(rev, replying, approvalMapKey(pendingApprovals), build_stale, digest.revKey()),
+          rev: revWith(rev, replying, approvalMapKey(pendingApprovals), build_stale, digest.revKey(), queue.key()),
           days,
           rows,
           replying,
+          queued: queue.snapshot(),
           approvals: pendingApprovals,
           build_stale,
           profile: me.profile,

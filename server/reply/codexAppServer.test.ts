@@ -135,3 +135,23 @@ test('lifecycle: resolved・turn完了・切断で待機を消し、別threadへ
   assert.equal(app.running('thread-1@repo'), false)
   assert.deepEqual(app.snapshot(), {})
 })
+
+test('onTurnEnd: ターンが終わったら（完了・切断）片付けたあとに知らせる。預かった次の返信を回すのに使う（#305）', async () => {
+  const { app, connection } = await started()
+  const ended: { id: string; running: boolean }[] = []
+  app.onTurnEnd((id) => ended.push({ id, running: app.running(id) }))
+  app.onTurnEnd(() => {
+    throw new Error('知らせた先が投げても、片付けは止めない')
+  })
+  connection.emit({ method: 'turn/completed', params: { threadId: 'thread-1', turn: { id: 'turn-1' } } })
+  assert.deepEqual(ended, [{ id: 'thread-1@repo', running: false }], '知らせた時点ではもう処理中ではない（次をすぐ起動できる）')
+
+  // 片付け済みの thread にもう一度届いても、二重には知らせない
+  connection.emit({ method: 'turn/completed', params: { threadId: 'thread-1', turn: { id: 'turn-1' } } })
+  assert.equal(ended.length, 1)
+
+  await app.start({ id: 'thread-1@repo', threadId: 'thread-1', text: '再開', cwd: '/repo' })
+  connection.disconnect()
+  assert.equal(ended.length, 2)
+  assert.deepEqual(ended.at(-1), { id: 'thread-1@repo', running: false }, '切断で終わったターンも知らせる')
+})

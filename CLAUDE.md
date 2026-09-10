@@ -125,26 +125,39 @@ OpenCode (feed/opencode/sai.js) ─┘                           │
 
 ## 環境変数
 
+どれも省略できる（既定値で動く）。表は README と同じく 2 つに分ける（#288。区別の無い 1 枚の表だと、全部設定しないと動かないように見えていた）。
+
+### 設定することがあるもの
+
 | | |
 | --- | --- |
-| `SAI_HOME` | このリポジトリの場所。README のフック設定例（`settings.json` の `env`）が使うだけで、コードは読まない |
+| `SAI_HOME` | このリポジトリの場所。README のフック設定例（`settings.json` の `env`）と、OpenCode のプラグイン（`feed/opencode/sai.js` の `recordPath()`。無ければ置いたファイルの隣から辿る）が使う。`record.py` とサーバは読まない |
 | `AGENT_FEED_DIR` | JSONL の置き場（既定 `~/.agent-feed`）。record.py とサーバの両方が見る |
-| `AGENT_FEED_DEBUG` | `1` で record.py の例外をログに残す |
-| `SAI_HOST` | サーバ自身のマシン名（既定は `os.hostname()` の短い形）。応答の `host` に載り、行の `host` と違えば「別のマシン」= 返信不可（#114）。空なら何もリモートにしない |
-| `AGENT_FEED_HOST` | 行の `host`（既定は `gethostname()` の短い形）。複数マシンの JSONL を集めるとき用で、合成セッションもこれで割る。**設定したときだけ**書き込み先が `YYYY-MM-DD.<host>.jsonl` になる（#113） |
-| `CODEX_HOME` | Codex のホーム（既定 `~/.codex`） |
 | `SAI_PORT` | サーバの既定ポート（既定 `8787`）。`web/vite.config.ts` の `/api` の proxy 先もこれ（判定は `shared/port.ts`。`--port` は Vite から見えない） |
-| `SAI_TERMINAL` | `0` で「tmux のペインに打ち込む」を切る。Claude と閉じた Codex は別プロセス、開いている Codex は queue |
-| `SAI_TMUX_BIN` | ペインに打ち込むときの `tmux` の実行ファイル（既定は PATH の `tmux`） |
-| `SAI_GIT_BIN` | 差分を読むときの `git` の実行ファイル（既定は PATH の `git`）。読むだけのコマンドしか呼ばない |
-| `SAI_GH` / `SAI_GH_BIN` | `0` で差分ボタンの PR 番号を引かない（既定は引く）。実行ファイルは既定で PATH の `gh`。叩くのは `gh pr view` だけで、引けなければ番号が付かないだけ |
-| `SAI_CLAUDE_BIN` / `SAI_CODEX_BIN` / `SAI_OPENCODE_BIN` | 返信で起動する CLI の実行ファイル（既定は PATH の `claude` / `codex` / `opencode`） |
-| `SAI_TAILSCALE_BIN` | tailnet 経由の認証の `whois` に使う `tailscale`（既定は PATH、無ければ macOS の GUI 版） |
-| `SAI_CLAUDE_ARGS` / `SAI_CODEX_ARGS` / `SAI_OPENCODE_ARGS` | 返信のコマンドに足す引数（`--allowedTools "Bash(gh *)"` など。シェル風に割る。`server/reply/runner.ts` の `splitArgs()`）。Claude は先頭に置く（`--allowedTools` は可変長で、後ろだと本文を飲む） |
-| `SAI_CODEX_APP_SERVER` / `SAI_CODEX_APP_SERVER_ARGS` | `0` で閉じたCodexを従来の `exec resume` に戻す（既定はapp-server）。後者は `codex app-server --stdio` の引数 |
-| `AGENT_FEED_SKIP` | `1` で record.py は何も記録しない（一言を作る `claude -p` に付ける） |
+| `AGENT_FEED_HOST` | 行の `host`（既定は `gethostname()` の短い形）。複数マシンの JSONL を集めるとき用で、合成セッションもこれで割る。**設定したときだけ**書き込み先が `YYYY-MM-DD.<host>.jsonl` になる（#113） |
+| `SAI_HOST` | サーバ自身のマシン名（既定は `os.hostname()` の短い形）。応答の `host` に載り、行の `host` と違えば「別のマシン」= 返信不可（#114）。空なら何もリモートにしない。**`AGENT_FEED_HOST` だけ設定すると自分のセッションが「別のマシン」になる**（サーバは `AGENT_FEED_HOST` を見ない。#288 の A で揃える予定） |
 | `SAI_DIGEST` / `SAI_DIGEST_MODEL` | `1` で一言コメントを作る（既定オフ）。モデルは `claude` なら既定 `haiku`、`openai` なら必須 |
 | `SAI_DIGEST_PROVIDER` / `SAI_DIGEST_URL` / `SAI_DIGEST_API_KEY` | 一言を作る口（`claude` 既定 / `openai`）、`openai` の base URL（既定 Ollama の `http://127.0.0.1:11434/v1`）、任意の鍵 |
-| `SAI_APPROVE` | `0` で返信中の許可・質問を画面で答える配線（`--mcp-config` + `--permission-prompt-tool`）を付けない |
+| `SAI_CLAUDE_ARGS` / `SAI_CODEX_ARGS` / `SAI_OPENCODE_ARGS` | 返信のコマンドに足す引数（`--allowedTools "Bash(gh *)"` など。シェル風に割る。`server/reply/runner.ts` の `splitArgs()`）。Claude は先頭に置く（`--allowedTools` は可変長で、後ろだと本文を飲む） |
+| `SAI_CODEX_APP_SERVER_ARGS` | `codex app-server --stdio` の引数 |
 
-コードが読む環境変数がこの表と README の表の両方に載っていることは `server/docs.test.ts` が見る（変数を足したら両方の表に足す）。
+### 切り分け・内部
+
+普段は設定しない（経路を切る・実行ファイルを差し替える・ログを残す）。
+
+| | |
+| --- | --- |
+| `SAI_TERMINAL` | `0` で「tmux のペインに打ち込む」を切る。Claude と閉じた Codex は別プロセス、開いている Codex は queue |
+| `SAI_APPROVE` | `0` で返信中の許可・質問を画面で答える配線（`--mcp-config` + `--permission-prompt-tool`）を付けない |
+| `SAI_CODEX_APP_SERVER` | `0` で閉じたCodexを従来の `exec resume` に戻す（既定はapp-server） |
+| `SAI_GH` / `SAI_GH_BIN` | `0` で差分ボタンの PR 番号を引かない（既定は引く）。実行ファイルは既定で PATH の `gh`。叩くのは `gh pr view` だけで、引けなければ番号が付かないだけ |
+| `SAI_CLAUDE_BIN` / `SAI_CODEX_BIN` / `SAI_OPENCODE_BIN` | 返信で起動する CLI の実行ファイル（既定は PATH の `claude` / `codex` / `opencode`） |
+| `SAI_TMUX_BIN` | ペインに打ち込むときの `tmux` の実行ファイル（既定は PATH の `tmux`） |
+| `SAI_GIT_BIN` | 差分を読むときの `git` の実行ファイル（既定は PATH の `git`）。読むだけのコマンドしか呼ばない |
+| `SAI_TAILSCALE_BIN` | tailnet 経由の認証の `whois` に使う `tailscale`（既定は PATH、無ければ macOS の GUI 版） |
+| `CODEX_HOME` | Codex のホーム（既定 `~/.codex`）。Codex 自身の変数に従うだけ |
+| `AGENT_FEED_DEBUG` | `1` で record.py の例外をログに残す |
+
+表に載せないもの（`server/docs.test.ts` の `INTERNAL`）: `AGENT_FEED_SKIP`（SAI が一言を作る `claude -p` に自分で付ける合図。record.py / statusline.py / OpenCode のプラグインが見る）、`SAI_URL` / `SAI_ENTITY`（`server/reply/runner.ts` が `--mcp-config` の env で `server/approvals/approve-mcp.ts` に渡す）、`TMUX_PANE` / `CLAUDE_PID`（エージェントが record.py に渡してくる）、`REPO_URL` / `PROD`（Vite の `import.meta.env`）。
+
+コードが読む環境変数が README とこの表の両方に載っていること・表にあるものをコードが読むこと・2 つの小見出しに分かれていて同じ変数が 2 回出てこないことは `server/docs.test.ts` が見る（変数を足したら両方の表に足す）。**コードとして見るのは `.ts` / `.tsx` / `.js` / `.mjs` / `.py`**（`.js` を見ていなかった頃は、OpenCode のプラグインが読む `SAI_HOME` を「コードは読まない」と書いたままになっていた。#288）。

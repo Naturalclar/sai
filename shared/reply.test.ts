@@ -10,6 +10,7 @@ import {
   replyBlockedReason,
   sessionReplyTargets,
   stripMention,
+  targetProjectLabel,
   type ReplyTarget,
 } from './reply.ts'
 import type { FeedRow, SessionSummary } from './types.ts'
@@ -183,6 +184,54 @@ test('filterReplyTargets: リポジトリ / ブランチ / タイトルの部分
   assert.deepEqual(filterReplyTargets(targets, 'nothing'), [])
 })
 
+// ---- #301: どのリポジトリのセッションか
+
+test('sessionReplyTargets: 一覧のセッションのリポジトリ（project）を載せる', () => {
+  const [sai, kanban, unknown] = sessionReplyTargets([
+    summary({ id: 's1@main', repo: 'main', project: 'Naturalclar/sai' }),
+    summary({ id: 's2@main', repo: 'main', project: 'Naturalclar/kanban' }),
+    summary({ id: 's3@scratch', repo: 'scratch', project: '' }),
+  ], SELF)
+  assert.equal(sai!.project, 'Naturalclar/sai')
+  assert.equal(kanban!.project, 'Naturalclar/kanban', '同じ worktree 名（main）でもリポジトリで見分けられる')
+  assert.equal(unknown!.project, '', '分からなければ空')
+})
+
+test('feedReplyTargets: 行の project → remote の順で載せ、一番新しい行に無ければ古い行から補う', () => {
+  const targets = feedReplyTargets([
+    row({ session: 'a', repo: 'dev-lunasa', project: 'AnotherBall/persona-server', ts: '2026-09-02T10:00:00+09:00' }),
+    row({ session: 'b', repo: 'dev-min', remote: 'https://github.com/Naturalclar/sai', ts: '2026-09-02T10:01:00+09:00' }),
+    row({ session: 'c', repo: 'scratch', ts: '2026-09-02T10:02:00+09:00' }),
+    // a の一番新しい行は project も remote も載せていない（古い record.py など）。古い行の値を使う
+    row({ session: 'a', repo: 'dev-lunasa', ts: '2026-09-02T10:03:00+09:00' }),
+  ], SELF)
+  assert.deepEqual(
+    targets.map((t) => [t.id, t.project]),
+    [
+      ['a@dev-lunasa', 'AnotherBall/persona-server'],
+      ['c@scratch', ''],
+      ['b@dev-min', 'Naturalclar/sai'],
+    ],
+  )
+})
+
+test('filterReplyTargets: リポジトリ（owner/repo）でも当たる（#301）', () => {
+  const targets = feedReplyTargets([
+    row({ session: 'a', repo: 'dev-lunasa', project: 'AnotherBall/persona-server', first_user_text: 'ガチャ' }),
+    row({ session: 'b', repo: 'dev-min', project: 'Naturalclar/sai', first_user_text: 'マージして', ts: '2026-09-02T10:01:00+09:00' }),
+  ], SELF)
+  assert.deepEqual(filterReplyTargets(targets, 'persona').map((t) => t.id), ['a@dev-lunasa'], 'worktree 名にもタイトルにも無い語')
+  assert.deepEqual(filterReplyTargets(targets, 'ANOTHERBALL').map((t) => t.id), ['a@dev-lunasa'], 'owner でも、大文字小文字は無視')
+})
+
+test('targetProjectLabel: 短いリポジトリ名。分からない・worktree 名と同じなら空', () => {
+  assert.equal(targetProjectLabel({ repo: 'dev-alqa', project: 'Naturalclar/sai' }), 'sai')
+  assert.equal(targetProjectLabel({ repo: 'main', project: 'AnotherBall/persona-server' }), 'persona-server')
+  assert.equal(targetProjectLabel({ repo: 'dev-alqa', project: '' }), '', 'worktree 名には落とさない（隣の @repo がすでにそれ）')
+  assert.equal(targetProjectLabel({ repo: 'oc-trial', project: 'oc-trial' }), '', '同じ名前を 2 回並べない')
+  assert.equal(targetProjectLabel({ repo: 'SAI', project: 'Naturalclar/sai' }), '', '大文字小文字だけの違いも同じとみなす')
+})
+
 test('mentionQuery: 行頭か空白の直後の半角 @ だけ。caret までに空白があれば閉じる', () => {
   assert.deepEqual(mentionQuery('@', 1), { start: 0, query: '' })
   assert.deepEqual(mentionQuery('@sa', 3), { start: 0, query: 'sa' })
@@ -224,7 +273,7 @@ test('stripMention: 表記を外して空白を整える', () => {
 })
 
 test('defaultReplyTarget: 一番新しい行のセッションのうち処理中でないもの。全部処理中なら一番新しいもの', () => {
-  const t = (id: string, over: Partial<ReplyTarget> = {}): ReplyTarget => ({ id, repo: id, branch: '', title: '', blocked: '', ...over })
+  const t = (id: string, over: Partial<ReplyTarget> = {}): ReplyTarget => ({ id, repo: id, project: '', branch: '', title: '', blocked: '', ...over })
   const feed = [t('a'), t('b'), t('c')] // 新しい順
   const list = [t('b', { title: '一覧の b' }), t('a', { title: '一覧の a' })]
   const targets = mergeReplyTargets(list, feed)

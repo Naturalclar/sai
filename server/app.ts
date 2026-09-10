@@ -50,6 +50,8 @@ import type { CodexQueue } from './codex.ts'
 import { CodexAppServer } from './codexAppServer.ts'
 import type { CodexApp } from './codexAppServer.ts'
 import { approvalMapKey, CodexDialogs, mergeApprovalMaps } from './codexDialogs.ts'
+import { clearSettled, settledKey, WaitingSettle } from './waitingSettle.ts'
+import type { WaitingSettleSource } from './waitingSettle.ts'
 import type { CodexDialogSource } from './codexDialogs.ts'
 import { DIGEST_FILE, DigestStore, digesterFromEnv } from './digest.ts'
 import type { Digester } from './digest.ts'
@@ -244,6 +246,8 @@ export interface TerminalDeps {
   codexDialogs?: CodexDialogSource
   /** SAIから開始するCodex turnのapp-server client。テストでは差し替える */
   codexApp?: CodexApp
+  /** 端末で答えたぶんの待ちを畳む（#255）。テストでは差し替える */
+  waitingSettle?: WaitingSettleSource
 }
 
 export function createApp(
@@ -270,6 +274,7 @@ export function createApp(
   const queueCodex = terminal.codexQueue ?? runCodexQueue
   const codexDialogs = terminal.codexDialogs ?? new CodexDialogs(terminal.tmux, terminal.ps)
   const codexApp = terminal.codexApp ?? new CodexAppServer()
+  const waitingSettle = terminal.waitingSettle ?? new WaitingSettle(terminal.tmux, terminal.ps)
   const codexAppEnabled = process.env.SAI_CODEX_APP_SERVER !== '0'
   const terminalEnabled = process.env.SAI_TERMINAL !== '0'
   /** 一番新しい行に pane と pid があり、pid が生きていれば端末で開いている */
@@ -285,6 +290,17 @@ export function createApp(
   const iconStore = new IconStore(join(store.directory, ICONS_DIR))
   const attachmentStore = new AttachmentStore(join(store.directory, ATTACHMENTS_DIR))
   const profileStore = new ProfileStore(join(store.directory, PROFILE_FILE))
+
+  /**
+   * 端末で人が答えたぶんの待ちを畳む（#255。#232 の積み残し）。行（集計）は触らず、応答を組み立てる
+   * ときだけ空にするので、要対応・サイドバーの「待機中」・チャット見出しがまとめて正しくなる。
+   * `SAI_TERMINAL=0` なら見に行かない（`CodexDialogs` と同じ）
+   */
+  const settleWaiting = async (sessions: SessionSummary[]): Promise<{ sessions: SessionSummary[]; key: string }> => {
+    if (!terminalEnabled) return { sessions, key: '' }
+    const settled = await waitingSettle.scan(sessions)
+    return { sessions: clearSettled(sessions, settled), key: settledKey(settled) }
+  }
 
   /** Claude、SAI管理のCodex、通常Codex TUIの検出専用ダイアログを合わせる。 */
   const approvalsNow = async (sessions: SessionSummary[]) =>
@@ -993,8 +1009,10 @@ export function createApp(
 
       if (path === '/api/sessions') {
         const days = parseDays(q.get('days'), 7)
-        const [{ rev: sessionsRev, sessions }, me] = await Promise.all([sessionsWithMeta(days), profileNow()])
-        const rev = `${sessionsRev}~${me.rev}`
+        const [{ rev: sessionsRev, sessions: withWaiting }, me] = await Promise.all([sessionsWithMeta(days), profileNow()])
+        // 端末で答えたぶんの待ちは畳む（#255）。畳んだ集合を rev に混ぜないと画面が拾わない
+        const { sessions, key: settled } = await settleWaiting(withWaiting)
+        const rev = `${sessionsRev}~${me.rev}~${settled}`
         const replying = replyingOf(sessions)
         const pendingApprovals = await approvalsNow(sessions)
         // 既定はアーカイブ済みを除く。archived=1 でアーカイブ済みだけ。total と filters はその集合の絞り込み前から作る
@@ -1034,7 +1052,9 @@ export function createApp(
         const id = sessionIdFrom(path)
         if (id === null) return error(res, 400, 'bad session id')
         const days = parseDays(q.get('days'), 30)
-        const [{ rev: sessionsRev, sessions }, me] = await Promise.all([sessionsWithMeta(days), profileNow()])
+        const [{ rev: sessionsRev, sessions: withWaiting }, me] = await Promise.all([sessionsWithMeta(days), profileNow()])
+        // 一覧と同じく、端末で答えたぶんの待ちは畳む（#255。見出しの「待機中」も一緒に消える）
+        const { sessions, key: settled } = await settleWaiting(withWaiting)
         const session = sessions.find((s) => s.id === id)
         if (!session) return error(res, 404, 'session not found in window')
         await scanDigest(days)
@@ -1042,7 +1062,7 @@ export function createApp(
         const replying = replyingOf(sessions)
         const pendingApprovals = await approvalsNow(sessions)
         const body: SessionDetailResponse = {
-          rev: revWith(`${sessionsRev}~${me.rev}`, replying, approvalMapKey(pendingApprovals), false, digest.revKey()),
+          rev: revWith(`${sessionsRev}~${me.rev}~${settled}`, replying, approvalMapKey(pendingApprovals), false, digest.revKey()),
           session: withLastSummary([session])[0]!,
           rows,
           replying,

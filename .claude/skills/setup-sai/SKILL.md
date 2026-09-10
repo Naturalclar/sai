@@ -1,6 +1,6 @@
 ---
 name: setup-sai
-description: clone した SAI を使える状態にする。フック（Claude）/ notify（Codex）/ プラグイン（OpenCode）の向け先、ビルド、動作確認までを、既存の設定を壊さずに行う。点検だけもできる。ユーザーが「SAI をセットアップして」「フックを設定して」「記録が来ていないか見て」「set up sai」「sai doctor」と言ったときに使う。
+description: clone した SAI を使える状態にする。フック（Claude）/ notify（Codex）/ プラグイン（OpenCode）/ ステータスライン（使用率）の向け先、ビルド、動作確認までを、既存の設定を壊さずに行う。点検だけもできる。ユーザーが「SAI をセットアップして」「フックを設定して」「記録が来ていないか見て」「使用率が出ない」「statusLine を設定して」「set up sai」「sai doctor」と言ったときに使う。
 ---
 
 # setup-sai
@@ -33,6 +33,8 @@ ls -t ~/.agent-feed/20??-??-??*.jsonl 2>/dev/null | head -1 | xargs tail -1 |
 grep -o 'RECORD_VERSION = [0-9]*' feed/record.py shared/types.ts
 ```
 
+**Claude の使用率だけは行とは別の口**（ステータスライン）から来るので、ここでは分からない。「割合が出ない」は 3.3 を見る。
+
 ## 1. どの checkout を設定するか
 
 ```sh
@@ -51,7 +53,16 @@ worktree を複数持っているなら**どれを記録に使うかは人が決
 
 `tmux` と `gh` は無くてもよい（端末への打ち込みと、差分ボタンの PR 番号が出ないだけ）。
 
-## 3. Claude Code のフック（**上書きしない**）
+## 3. Claude Code の設定（**上書きしない**）
+
+`~/.claude/settings.json` の中に**別々の 2 つ**がある。どちらも SAI 以外の物が既に入っていることが多い。
+
+| | 何のため | 枠 |
+| --- | --- | --- |
+| `hooks`（3.1 / 3.2） | ターンを記録する（画面に出る） | イベントごとの**配列**。足せる |
+| `statusLine`（3.3） | Claude の使用率を出す（任意） | **1 つだけ**。取り合いになる |
+
+同じファイルなので、両方直すなら**控えは 1 回でよい**（3.2 の 1）。
 
 見るのは `~/.claude/settings.json`（全体）と、記録したいリポジトリの `.claude/settings.json`（そこだけ）。**両方に入っていると 1 ターンが 2 行になる**ので、必ず両方見る。
 
@@ -95,6 +106,67 @@ PY
 1. `cp ~/.claude/settings.json ~/.claude/settings.json.bak-$(date +%Y%m%d%H%M%S)` で控える
 2. **足したあとの JSON の差分を出して見せる**（既存のフックが全部残っていることを人が確認できる形で）
 3. 確認が取れてから書く。書いたあと `python3 -m json.tool` で読めることを確かめる
+
+### 3.3 使用率のステータスライン（任意。**1 つしか持てない**）
+
+Claude の 5 時間・週の使用率をヘッダに出すための口（#250）。**要らなければ飛ばしてよい**（設定しなければ、上限に当たったときだけ「上限中」と出る）。
+
+**割合はここからしか手元に来ない。** transcript の `quotaLimits` は弾かれたときにしか載らず、`claude` CLI に `usage` のサブコマンドも無い（TUI の `/usage` が叩く API は OAuth のトークンが要るので SAI は使わない）。
+
+まず**結果を見る**（フックと同じ順序）。判定はサーバと同じ規則にする（`server/usage.ts` の `isClaudeUsageFile`、`shared/usage.ts` の `STATUS_MAX_AGE_MS`）:
+
+```sh
+python3 - <<'PY'
+import json, os, re, time
+feed = os.environ.get('AGENT_FEED_DIR') or os.path.expanduser('~/.agent-feed')
+MAX_AGE = 8 * 86400  # shared/usage.ts の STATUS_MAX_AGE_MS。これより古いとサーバが捨てる
+try: names = sorted(n for n in os.listdir(feed) if re.fullmatch(r'usage-claude(\.[^/]+)?\.json', n))
+except OSError: names = []
+if not names: print(f'{feed}: usage-claude*.json が無い → statusLine 未設定か、まだ 1 回も描画されていない')
+now = time.time()
+for n in names:
+    try: d = json.load(open(os.path.join(feed, n)))
+    except Exception as e: print(f'{n}: 読めない ({e})'); continue
+    age = now - (time.mktime(time.strptime(d.get('ts','')[:19], '%Y-%m-%dT%H:%M:%S')) if d.get('ts') else 0)
+    limits = d.get('rate_limits') or {}
+    windows = {k: v.get('used_percentage') for k, v in limits.items() if isinstance(v, dict)}
+    print(f'{n}: ts={d.get("ts")} ({age/3600:.1f}h 前{"、古すぎる" if age > MAX_AGE else ""}) windows={windows or "空（subscription でない？）"}')
+PY
+```
+
+**ファイルがあって新しく、`windows` に数字が入っていれば、もう出ている。** `statusLine` は触らない。
+
+無ければ、いまの `statusLine` を読む（フックと同じで、**コマンド名だけで判断せず中身を読む**。ラッパー経由で届いていることがある）:
+
+```sh
+python3 - <<'PY'
+import json, os, shutil
+def reaches(cmd, needle):
+    if not cmd: return None
+    if needle in cmd: return cmd
+    exe = (cmd.split() or [''])[0]
+    p = shutil.which(exe)
+    if not p: return None
+    try: body = open(p, encoding='utf-8', errors='replace').read()
+    except Exception: return None
+    return f'{p} 経由' if needle in body else None
+path = os.path.expanduser('~/.claude/settings.json')
+try: sl = (json.load(open(path)) or {}).get('statusLine')
+except Exception as e: print(f'{path} は無い / 読めない ({e})'); raise SystemExit
+if not sl: print('statusLine: 未設定 → SAI の割合は永久に出ない'); raise SystemExit
+cmd = sl.get('command', '') if isinstance(sl, dict) else str(sl)
+print(f'statusLine: {cmd!r}')
+print('  statusline.py に届くか:', reaches(cmd, 'statusline.py') or '届かない → 別のものに取られている')
+PY
+```
+
+| いまの値 | どうするか |
+| --- | --- |
+| 未設定 | `{"type":"command","command":"python3 \"$SAI_HOME/feed/statusline.py\""}` を提案する。**stdout がそのままステータスラインになる**ことを伝える（`statusline.py` は `Opus 5 · 5時間 43% · 週 71%` のような 1 行を出す。何も出さないとステータスラインが空になる） |
+| 既に `statusline.py` に届いている | 向き先だけ確かめる（フックと同じで、古い checkout を指していることがある） |
+| **別のものが入っている** | **置き換えない。** いまの値を見せて、README「4. Claude の使用率を出す」の `sai-statusline` ラッパー（同じ JSON を SAI にも配り、**今までの表示をそのまま出す**）に畳む案を出す。ラッパーを置くかは人が決める |
+
+**取れないのが正しい場合がある。** `rate_limits` が載るのは **subscription のときだけ**で、API キー利用や gateway 経由では載らない（gateway は `spend_limit`）。上のコマンドで `windows` が空なら設定は合っていて、これ以上できることは無い。**壊れていると報告しない。**
 
 ## 4. Codex CLI の `notify`（**1 つしか持てない**）
 
@@ -143,6 +215,14 @@ echo 'not json at all' | python3 feed/record.py; echo $?   # 0 で、行は増�
 
 `v` が `RECORD_VERSION` と一致していること。画面（`http://127.0.0.1:8787/`）にそのセッションが出れば完了。
 
+**3.3 を設定したなら**、そちらも見る。ステータスラインは**ターンを回さなくても**、Claude Code を開いて描画されれば書かれる:
+
+```sh
+curl -sS -m 5 http://127.0.0.1:8787/api/usage    # claude.primary に割合が載る
+```
+
+ヘッダの使用量に `Claude NN%` が出れば完了。載らないときは 3.3 の表（未設定 / 取られている / 古い / subscription でない）に戻る。
+
 ## 点検だけ（doctor）
 
 「記録が来ていない」「設定が合っているか見て」と言われたときは、**0 → 3.1 → 4 → 5 を読むだけ**で回して報告する。書き込みはしない。よく出る答え:
@@ -152,17 +232,28 @@ echo 'not json at all' | python3 feed/record.py; echo $?   # 0 で、行は増�
 - `notify` が別の受け手に取られている（Codex の行だけ来ない）
 - `AGENT_FEED_HOST` を設定したので書き込み先が `YYYY-MM-DD.<host>.jsonl` に分かれただけ（壊れていない）
 
+**「Claude の使用率だけ出ない」は 3.3 を読むだけ**で、答えは 4 通り。**最後の 1 つは壊れていない**ので、そう報告する:
+
+| 見えること | 答え |
+| --- | --- |
+| `statusLine` が未設定 | 設定していないだけ。任意の機能 |
+| `statusLine` が別のものを指している | 取られている。ラッパーで共存できる |
+| ファイルはあるが 8 日より古い | Claude をしばらく動かしていない（`STATUS_MAX_AGE_MS`） |
+| ファイルはあるが `windows` が空 | **subscription ではない**（API キー / gateway）。設定は合っていて、これ以上できることは無い |
+
 ## 報告
 
 - いま届いているか（0 で見た一番新しい行）。エージェントごとに来ている / 来ていない
 - 触ったファイルと、**何を足して何を残したか**。控え（`.bak-*`）の場所
 - 触らなかったもの（既に入っていた、人の判断待ち）とその理由
-- 人がやること（1 ターン回す、`pnpm start` する、`notify` のラッパーを置くか決める）
+- 人がやること（1 ターン回す、`pnpm start` する、`notify` / `statusLine` のラッパーを置くか決める）
+- 使用率を設定したなら、出るようになったか（**subscription でなくて出ないなら、それは正常**と書く）
 
 ## やらないこと
 
-- 確認なしに `settings.json` / `config.toml` を書き換える。既存のフック・`notify` を消す
-- ラッパースクリプトを人の dotfiles に勝手に置く（**提案までにして、置くかは人が決める**）
+- 確認なしに `settings.json` / `config.toml` を書き換える。既存のフック・`notify`・**`statusLine`** を消す
+- ラッパースクリプトを人の dotfiles に勝手に置く（`sai-codex-notify` / `sai-statusline` とも。**提案までにして、置くかは人が決める**）
+- `context_window`（セッションごとの文脈の残り）を扱う。使用量（口座ごと）とは別の話で、#250 が範囲外にしたまま
 - サーバを勝手に常駐させる、`~/.agent-feed` の中身を触る
 - どの worktree を記録に使うかを勝手に決める
 - tailnet の設定（`tailscale-serve` が別にある）、`main` の更新（`sync-main` が別にある）

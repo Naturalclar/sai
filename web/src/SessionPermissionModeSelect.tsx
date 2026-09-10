@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { MODE_LABEL, REPLY_MODES } from '../../shared/permissions.ts'
+import { MODE_LABEL, modeSkipsRules, REPLY_MODES } from '../../shared/permissions.ts'
 import type { ReplyPermissionMode } from '../../shared/types.ts'
 import { api } from './api'
 
@@ -13,7 +13,9 @@ interface Props {
 
 /**
  * チャット見出しの、SAI から返信するときの許可モード。値はセッションのメタ（PUT /api/sessions/<id>/meta の permission_mode）。
- * 「既定」を選ぶと空を送って消す。素通し系（auto / bypassPermissions）は並べない（shared/types.ts の ReplyPermissionMode）。
+ * 「既定」を選ぶと空を送って消す。並ぶのは shared/permissions.ts の REPLY_MODES で、サーバの検査と同じ一覧。
+ * **素通し（bypassPermissions）を選んでいる間は印を出す**（#253）。許可を聞かなくなるので、
+ * 選んだまま忘れているのが一番まずい。判定は modeSkipsRules() で、見出しのタグやモーダルと同じもの。
  * 端末に打ち込む経路ではフラグを渡す先が無いので効かない（そのときは薄く出して、その旨を title に出す）。
  * 保存直後は返ってきた値を出し、ポーリングが追いついたら props に戻る。呼び出し側は key={id} を付けること
  */
@@ -55,6 +57,11 @@ export function SessionPermissionModeSelect({ id, value, terminal }: Props) {
           <option key={m} value={m}>{MODE_LABEL[m]}</option>
         ))}
       </select>
+      {modeSkipsRules(current) && (
+        <b className="loud" title="このセッションへの SAI からの返信は、許可を聞かずに何でも実行します（質問は今までどおり出ます）">
+          素通し
+        </b>
+      )}
       {error && <span className="err">{error}</span>}
     </span>
   )

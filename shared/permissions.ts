@@ -43,10 +43,11 @@ export const MODE_LABEL: Record<PermissionMode, string> = {
 }
 
 /**
- * SAI の画面（チャット見出しの select）から選べる許可モード。素通し系は並べない（ReplyPermissionMode の説明）。
- * サーバの検査（shared/meta.ts の mergeMeta）と画面の select が同じ一覧を見る
+ * SAI の画面（チャット見出しの select）から選べる許可モード。サーバの検査（shared/meta.ts の mergeMeta）と
+ * 画面の select が同じ一覧を見るので、**ここに無い値は口としても受けない**（400）。
+ * `bypassPermissions` は素通しなので、画面は modeSkipsRules() で目立たせる（#253）
  */
-export const REPLY_MODES: ReplyPermissionMode[] = ['acceptEdits']
+export const REPLY_MODES: ReplyPermissionMode[] = ['acceptEdits', 'bypassPermissions']
 
 /** 画面から選べる許可モードか。知らない値・素通し系は false */
 export function isReplyPermissionMode(value: unknown): value is ReplyPermissionMode {

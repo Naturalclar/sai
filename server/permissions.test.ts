@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { argsRules, collectPermissions, managedSettingsPath, orderRules, parseSettings, settingsPaths } from './permissions.ts'
+import { isReplyPermissionMode, MODE_LABEL, modeSkipsRules, REPLY_MODES } from '../shared/permissions.ts'
 import type { PermissionRuleEntry } from '../shared/types.ts'
 
 test('settingsPaths: cwd と home から固定で組み立てる（強い順）', () => {
@@ -89,4 +90,30 @@ test('collectPermissions: 設定が 1 つも無い cwd でも空で返る（落�
   const { sources, rules } = await collectPermissions('/nowhere', { home: '/home/me', platform: 'linux', env: {}, read: async () => null })
   assert.deepEqual(rules, [])
   assert.ok(sources.every((s) => s.missing))
+})
+
+// ---- #253: 素通し（bypassPermissions）を画面から選べるようにした
+
+test('REPLY_MODES: 画面の select とサーバの検査が同じ一覧を見る', () => {
+  // 並ぶ順がそのまま select の順。素通しは「聞かない方が強い」ので後ろ
+  assert.deepEqual(REPLY_MODES, ['acceptEdits', 'bypassPermissions'])
+  assert.equal(isReplyPermissionMode('acceptEdits'), true)
+  assert.equal(isReplyPermissionMode('bypassPermissions'), true)
+  // REPLY_MODES に無いものは通さない。`auto` は「安全性の確認つき」の中身が CLI 任せで説明できないので入れない
+  for (const bad of ['auto', 'plan', 'dontAsk', 'default', '', 'XXX']) {
+    assert.equal(isReplyPermissionMode(bad), false, `${bad} は選べない`)
+  }
+})
+
+test('modeSkipsRules: 素通しだけ true。画面はこれで印を出す', () => {
+  assert.equal(modeSkipsRules('bypassPermissions'), true)
+  assert.equal(modeSkipsRules('auto'), true)
+  assert.equal(modeSkipsRules('acceptEdits'), false, 'ファイル編集だけなら印は出さない')
+  assert.equal(modeSkipsRules(''), false)
+  // 選べるモードのうち印が要るものは bypassPermissions だけ、が画面の前提
+  assert.deepEqual(REPLY_MODES.filter(modeSkipsRules), ['bypassPermissions'])
+})
+
+test('MODE_LABEL: 選べるモードには必ず日本語のラベルがある（select が空欄にならない）', () => {
+  for (const m of REPLY_MODES) assert.notEqual(MODE_LABEL[m] ?? '', '', m)
 })

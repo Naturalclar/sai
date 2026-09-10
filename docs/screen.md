@@ -172,7 +172,7 @@ Claude の対話側にも出したいなら、SAI から送るのではなく端
 
 複数のマシンの JSONL を 1 か所に集めていると（[#24](https://github.com/Naturalclar/sai/issues/24)、`AGENT_FEED_HOST` と `YYYY-MM-DD.<host>.jsonl`）、**ここでは再開できないセッション**が一覧に混ざる。CLI もその履歴もあちらのマシンにあるので、`claude --resume` を回しても続きにならない。
 
-- サーバは自分のマシン名を `SAI_HOST`（無ければ `os.hostname()`）から決め、`GET /api/sessions` と `GET /api/sessions/<id>` の **`host`** に載せる。行の `host` と違えばリモート
+- サーバは自分のマシン名を**記録側と同じ `AGENT_FEED_HOST`**（無ければ `os.hostname()`）から決め、`GET /api/sessions` と `GET /api/sessions/<id>` の **`host`** に載せる。行の `host` と違えばリモート。前は別の `SAI_HOST` を見ていて、`AGENT_FEED_HOST` だけ設定すると自分のセッションまでリモートになっていた（#288）
 - 一覧の項目・チャット見出し・フィードのバブルの `#repo` の隣に **`@<host>`** の印
 - **返信の口を出さない。** 判定は `shared/reply.ts` の `replyBlockedReason()` の 1 か所にあり、サーバの受付（`POST …/reply` は `400`）・セッション画面の入力欄・フィードの `@` の候補が同じ答えを見る。理由は合成 ID より先に「別のマシン」を出す（ID が取れていても届かないので、そちらが根本の理由）
 - サイドバーの絞り込みに「マシン」が増える（**2 台以上あるときだけ**）

@@ -463,7 +463,7 @@ export interface SessionsResponse {
   /** 誰として見ているか。tailnet 経由（tailscale serve）ならログイン名、ローカルの直アクセスなら null */
   viewer: Viewer | null
   /**
-   * このサーバが動いているマシンの名前（`SAI_HOST` か `os.hostname()` の短い形。#114）。
+   * このサーバが動いているマシンの名前（`AGENT_FEED_HOST` か `os.hostname()` の短い形。記録側の `host` と同じ変数・同じ規則。#114 / #288）。
    * 画面はこれと `SessionSummary.host` を見て「別のマシンのセッション」の印を出し、返信の口を出さない。
    * 取れなければ空で、そのときは何もリモートにしない
    */

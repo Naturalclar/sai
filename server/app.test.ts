@@ -104,7 +104,7 @@ const min = (n: number) => n * 60_000
 
 before(async () => {
   // このサーバのマシン名（#114）。決め打ちしないと、この Mac の hostname 次第でリモート判定が変わる
-  process.env.SAI_HOST = 'testmac'
+  process.env.AGENT_FEED_HOST = 'testmac'
   dir = await mkdtemp(join(tmpdir(), 'sai-'))
   feedDir = join(dir, 'feed')
   distDir = join(dir, 'dist')

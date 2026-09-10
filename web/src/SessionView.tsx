@@ -2,6 +2,7 @@ import { useEffect, useMemo } from 'react'
 import { replyBlockedReason } from '../../shared/reply.ts'
 import { isRemoteHost } from '../../shared/host.ts'
 import { projectName } from '../../shared/project.ts'
+import { launchedModeNote } from '../../shared/permissions.ts'
 import { eventKind } from '../../shared/events.ts'
 import { promptArrived } from './chatGroups'
 import { api } from './api'
@@ -131,7 +132,9 @@ export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggl
           trailer={
             <>
               {mine && <PendingBubble text={mine.text} since={mine.since} now={now} quiet={promptArrived(data.rows, id, mine.text, mine.since)} profile={data.profile} />}
-              {approvals.map((a, i) => <ApprovalBubble key={a.approval_id} approval={a} now={now} hotkey={i === 0} />)}
+              {approvals.map((a, i) => (
+                <ApprovalBubble key={a.approval_id} approval={a} now={now} hotkey={i === 0} modeNote={launchedModeNote(data.replying[id], data.session.meta?.permission_mode)} />
+              ))}
             </>
           }
         />
@@ -154,7 +157,7 @@ export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggl
             now={now}
             model={{ id: s.id, agent: s.agent, models: s.models, value: s.meta?.model }}
             // 許可モードのフラグを渡せるのは Claude だけ（Codex / OpenCode には渡す先が無い）
-            permission={s.agent === 'claude' ? { id: s.id, value: s.meta?.permission_mode, terminal: Boolean(s.terminal) } : undefined}
+            permission={s.agent === 'claude' ? { id: s.id, value: s.meta?.permission_mode, terminal: Boolean(s.terminal), replying: data?.replying[id] } : undefined}
             {...(summary && hasDiff(summary) ? { diff: { summary, open: diffOpen, onToggle: () => onToggleDiff(s.id) } } : {})}
             onSend={async (text, attachments) => (await send(id, text, { attachments })) !== 'confirm'}
           />

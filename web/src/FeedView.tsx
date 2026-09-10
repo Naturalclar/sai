@@ -3,6 +3,8 @@ import { entityId } from '../../shared/entity.ts'
 import { eventKind } from '../../shared/events.ts'
 import { promptArrived } from './chatGroups'
 import { defaultReplyTarget, feedReplyTargets, mergeReplyTargets, sessionReplyTargets } from '../../shared/reply.ts'
+import { launchedModeNote } from '../../shared/permissions.ts'
+import type { ReplyingMap } from '../../shared/types.ts'
 import { api, type ApprovalMap, type SessionSummary } from './api'
 import { useLocalState, usePolling } from './hooks'
 import { Chat } from './Chat'
@@ -19,7 +21,7 @@ import type { PaneProps } from './App'
 
 const NO_ROWS: never[] = []
 const NO_SESSIONS: never[] = []
-const NO_REPLYING = {}
+const NO_REPLYING: ReplyingMap = {}
 const NO_APPROVALS: ApprovalMap = {}
 
 interface Props extends PaneProps {
@@ -99,13 +101,19 @@ export function FeedView({ project, projects, onProject, sessions = NO_SESSIONS,
     const s = targetId ? sessions.find((x) => x.id === targetId) : undefined
     return s ? { id: s.id, agent: s.agent, models: s.models, value: s.meta?.model } : undefined
   }, [sessions, targetId])
+  const replying = data?.replying ?? NO_REPLYING
   /** モデルの右に出す許可モード。同じく一覧に居る Claude のセッションだけ（#265） */
   const replyPermission = useMemo(() => {
     const s = targetId ? sessions.find((x) => x.id === targetId) : undefined
-    return s?.agent === 'claude' ? { id: s.id, value: s.meta?.permission_mode, terminal: Boolean(s.terminal) } : undefined
-  }, [sessions, targetId])
+    return s?.agent === 'claude' ? { id: s.id, value: s.meta?.permission_mode, terminal: Boolean(s.terminal), replying: replying[s.id] } : undefined
+  }, [sessions, targetId, replying])
   // 答え待ちの許可・質問も、処理中の返信と同じく、この画面に関係あるものだけ
   const approvals = Object.values(data?.approvals ?? NO_APPROVALS).flat().filter((a) => counts.has(a.id) || targets.some((t) => t.id === a.id))
+  /** 処理中のターンが今の設定と違う許可モードで動いていれば、聞かれている理由を添える（#272）。一覧に無いセッションは設定が分からないので出さない */
+  const modeNoteOf = (id: string) => {
+    const s = sessions.find((x) => x.id === id)
+    return s ? launchedModeNote(replying[id], s.meta?.permission_mode) : ''
+  }
 
   return (
     <section>
@@ -136,7 +144,9 @@ export function FeedView({ project, projects, onProject, sessions = NO_SESSIONS,
                   <PendingBubble key={p.id} text={p.text} since={p.since} now={now} repo={repoOf(p.id)} quiet={promptArrived(rows, p.id, p.text, p.since)} profile={data.profile} />
                 ))}
                 {/* ショートカット（⌘Enter）が効くのは一番上の 1 つだけ。複数出るので、どれに効いたか分からなくならないように */}
-                {approvals.map((a, i) => <ApprovalBubble key={a.approval_id} approval={a} now={now} repo={repoOf(a.id)} hotkey={i === 0} />)}
+                {approvals.map((a, i) => (
+                  <ApprovalBubble key={a.approval_id} approval={a} now={now} repo={repoOf(a.id)} hotkey={i === 0} modeNote={modeNoteOf(a.id)} />
+                ))}
               </>
             )
           }

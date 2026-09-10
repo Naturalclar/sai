@@ -82,6 +82,11 @@ export interface ReplyCommand {
   cwd: string
   /** 送った文。args の末尾と同じだが、処理中の表示に使うので別に持つ */
   text: string
+  /**
+   * セッションの設定から付けた許可モード（Claude だけ。`''` はフラグを付けていない＝CLI の既定）。
+   * args にも入っているが、処理中のターンがどのモードで動いているかを画面に出すので別に持つ（#272）
+   */
+  permissionMode?: string
 }
 
 /**
@@ -161,7 +166,7 @@ export function replyCommand(
     const wire = approve && env.SAI_APPROVE !== '0' && !extra.includes('--permission-prompt-tool')
       ? ['--mcp-config', approveMcpConfig(approve), '--permission-prompt-tool', APPROVE_TOOL]
       : []
-    return { bin: env.SAI_CLAUDE_BIN || 'claude', args: [...extra, ...wire, ...pick, ...mode, '-p', '--resume', session, '--', text], cwd, text }
+    return { bin: env.SAI_CLAUDE_BIN || 'claude', args: [...extra, ...wire, ...pick, ...mode, '-p', '--resume', session, '--', text], cwd, text, permissionMode: permissionMode || '' }
   }
   if (agent === 'codex') {
     // Codex は画像を受ける口がある（`-i, --image <FILE>  Optional image(s) to attach to the prompt sent after resuming`）
@@ -265,9 +270,10 @@ export class ProcessRunner implements Runner {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return
     for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
       if (!value || typeof value !== 'object') continue
-      const { pid, since, text } = value as Partial<Persisted>
+      const { pid, since, text, permission_mode } = value as Partial<Persisted>
       if (typeof pid !== 'number' || pid <= 0 || typeof since !== 'string' || typeof text !== 'string') continue
-      if (isAlive(pid)) this.active.set(id, { pid, since, text })
+      // 許可モードはこの項目より前のサーバが書いた分には無い。無ければ「分からない」のまま（画面は何も出さない。#272）
+      if (isAlive(pid)) this.active.set(id, { pid, since, text, ...(typeof permission_mode === 'string' ? { permission_mode } : {}) })
     }
     this.persist() // 死んでいた分を落とした形で書き直す
   }
@@ -314,7 +320,10 @@ export class ProcessRunner implements Runner {
     this.sweep()
     // pid と failedAt は画面に要らない
     return Object.fromEntries(
-      [...this.active].map(([id, { since, text, failed }]) => [id, failed ? { since, text, failed } : { since, text }]),
+      [...this.active].map(([id, { since, text, permission_mode, failed }]) => [
+        id,
+        { since, text, ...(permission_mode !== undefined ? { permission_mode } : {}), ...(failed ? { failed } : {}) },
+      ]),
     )
   }
 
@@ -340,7 +349,8 @@ export class ProcessRunner implements Runner {
       stdio: ['ignore', fd ?? 'ignore', fd ?? 'ignore'],
     })
     // spawn を待つ前から「処理中」にする（同じセッションへの2つ目をこの隙に通さない）。pid は spawn したら入れる
-    const entry: Persisted = { pid: 0, since: new Date().toISOString(), text: cmd.text }
+    // 起動したときの許可モードも覚える。動いている CLI には後から当てられないので、画面が今の設定と比べる（#272）
+    const entry: Persisted = { pid: 0, since: new Date().toISOString(), text: cmd.text, ...(cmd.permissionMode !== undefined ? { permission_mode: cmd.permissionMode } : {}) }
     this.active.set(id, entry)
     let released = false
     /**

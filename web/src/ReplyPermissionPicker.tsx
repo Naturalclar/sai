@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { MODE_HINT, MODE_LABEL, modeLabel, modeSkipsRules, REPLY_MODES, shortReplyMode } from '../../shared/permissions.ts'
-import type { ReplyPermissionMode } from '../../shared/types.ts'
+import { launchedModeNote, MODE_HINT, MODE_LABEL, modeLabel, modeSkipsRules, REPLY_MODES, shortReplyMode } from '../../shared/permissions.ts'
+import type { Replying, ReplyPermissionMode } from '../../shared/types.ts'
 import { api } from './api'
 
 export interface ReplyPermissionProps {
@@ -10,6 +10,11 @@ export interface ReplyPermissionProps {
   value: ReplyPermissionMode | undefined
   /** 端末（tmux）で開いているか。開いていると打ち込む経路になり、この設定は効かない */
   terminal: boolean
+  /**
+   * このセッションで処理中の返信（無ければ undefined）。起動したときの許可モードが今の設定と違えば
+   * 「次の返信から」と出す（#272。動いている CLI には後から当てられない）
+   */
+  replying?: Replying | undefined
 }
 
 /**
@@ -21,9 +26,10 @@ export interface ReplyPermissionProps {
  * **モードの名前は英語**（#271。Claude Code の Shift+Tab の表示と揃える）で、何が起きるかは日本語の補足で出す。
  * **素通し（bypassPermissions）を選んでいる間は赤くする**（#253。選んだまま忘れているのが一番まずい）。
  * 端末に打ち込む経路ではフラグを渡す先が無いので効かない（薄くして、その旨を title に出す）。
+ * **処理中のターンは起動したときのモードのまま**なので、選んだものと違えば横に「次の返信から」と出す（#272）。
  * 呼び出し側は key={id} を付けること（別のセッションに移ったら開閉ごと作り直す）
  */
-export function ReplyPermissionPicker({ id, value, terminal }: ReplyPermissionProps) {
+export function ReplyPermissionPicker({ id, value, terminal, replying }: ReplyPermissionProps) {
   const [open, setOpen] = useState(false)
   // 保存直後の値（ポーリングが追いつくまで）。null ならまだ触っていない（props を見る）
   const [saved, setSaved] = useState<ReplyPermissionMode | '' | null>(null)
@@ -34,6 +40,8 @@ export function ReplyPermissionPicker({ id, value, terminal }: ReplyPermissionPr
 
   const current = saved !== null ? saved : (value ?? '')
   const loud = modeSkipsRules(current)
+  // 保存した直後から出す（props の value を待たない）ので、比べる相手は current
+  const note = launchedModeNote(replying, current)
 
   useEffect(() => {
     if (!open) return
@@ -81,11 +89,17 @@ export function ReplyPermissionPicker({ id, value, terminal }: ReplyPermissionPr
         title={
           terminal
             ? `SAI から返信するときの許可モード: ${modeLabel(current || 'default')}。いまは端末（tmux）で開いているので返信は端末に打ち込まれ、この設定は効かない（端末側は Shift+Tab で切り替える）`
-            : `SAI から返信するときの許可モード: ${modeLabel(current || 'default')}。押すと変えられる。そのターンだけに効き、セッションには残らない`
+            : `SAI から返信するときの許可モード: ${modeLabel(current || 'default')}。押すと変えられる。次の返信から効き（処理中のターンは起動したときのモードのまま）、セッションには残らない`
         }
       >
         {busy ? '…' : shortReplyMode(current)}
       </button>
+      {/* 処理中のターンは起動したときのモードのまま（#272）。入力欄は幅が無いので短く出し、全文は title */}
+      {note && (
+        <span className="launched" title={note}>
+          次の返信から
+        </span>
+      )}
       {open && (
         <div className="menu" role="menu">
           {/* ボタンの短い名前と違って、メニューでは名前（英語）の横に何が起きるか（日本語）を添える */}

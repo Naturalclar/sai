@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { projectName } from '../../shared/project.ts'
+import { launchedModeNote } from '../../shared/permissions.ts'
 import type { SessionsResponse } from './api'
 import type { Polled } from './hooks'
 import { ApprovalBubble } from './ApprovalBubble'
@@ -60,7 +61,8 @@ export function TodoView({ list, onStatus, onOpenSidebar }: Props) {
               {t.kind === 'answer' && t.approval ? (
                 // 答えるとサーバの approvals から消え、次のポーリングでこの行ごと消える。
                 // ⌘Enter が効くのは一番上の 1 つだけ（フィードと同じ扱い）
-                <ApprovalBubble approval={t.approval} now={now} hotkey={i === 0} />
+                // 処理中のターンが今の設定と違う許可モードで動いていれば、聞かれている理由を添える（#272）
+                <ApprovalBubble approval={t.approval} now={now} hotkey={i === 0} modeNote={s ? launchedModeNote(data?.replying[t.id], s.meta?.permission_mode) : ''} />
               ) : (
                 <div className="why">
                   <WaitingTag text={t.text} />

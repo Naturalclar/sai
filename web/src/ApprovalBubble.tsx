@@ -16,6 +16,11 @@ interface Props {
    * 決めるのは親（FeedView / SessionView）で、描画順の先頭
    */
   hotkey?: boolean
+  /**
+   * 処理中のターンが今の設定と違う許可モードで動いているときの一言（`launchedModeNote()`。#272）。
+   * 「素通しにしたのに聞かれる」の理由がこれなので、バブルに添える。無ければ空
+   */
+  modeNote?: string
 }
 
 /**
@@ -24,7 +29,7 @@ interface Props {
  * 通常起動の Codex TUI は待機を検出できても安全な回答経路が無いので、端末で答える案内だけを出す。
  * 答えるとサーバの approvals から消え、次のポーリングでこのバブルも消える（送った直後は done で押せなくする）
  */
-export function ApprovalBubble({ approval, now, repo, hotkey = false }: Props) {
+export function ApprovalBubble({ approval, now, repo, hotkey = false, modeNote = '' }: Props) {
   const [busy, setBusy] = useState(false)
   const [done, setDone] = useState<'allow' | 'always' | 'deny' | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -84,6 +89,8 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false }: Props) {
         <div className="msg">
           <div className="body">⏳ {approval.text}</div>
           {detail && <pre className="detail">{detail}</pre>}
+          {/* 素通しに変えても、処理中のターンは起動したときのモードのまま聞いてくる（#272）。質問は素通しでも出るので付けない */}
+          {modeNote && questions.length === 0 && <div className="mode-note">{modeNote}</div>}
           {!answerable ? (
             <div className="notice">このCodexは端末で起動されているため、回答はtmuxの画面で行ってください。</div>
           ) : questions.length > 0 ? (

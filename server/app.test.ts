@@ -173,7 +173,8 @@ before(async () => {
     new SkillStore(join(dir, 'skills')),
     undefined,
     undefined,
-    new UsageStore(join(dir, 'codex-sessions'), join(dir, 'claude-projects')),
+    // feed dir は本番（createApp の既定）と同じく store の置き場。省くと本物の ~/.agent-feed を読む（#275）
+    new UsageStore(join(dir, 'codex-sessions'), join(dir, 'claude-projects'), store.directory),
   )
   server = createServer((req, res) => void app(req, res))
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))

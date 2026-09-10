@@ -174,7 +174,7 @@ test('UsageStore: 読めないときは空の {}。CACHE_MS の間は読み直�
 test('UsageStore: 同時に呼ばれても読むのは 1 回（画面を開き直すたびに漁らない）', async () => {
   const root = await tmp()
   await writeRollout(join(root, '2026', '09', '09'), 'rollout-a.jsonl', [tokenCount(7, '2026-09-09T08:39:28.618Z')])
-  const store = new UsageStore(root, join(root, 'none'))
+  const store = new UsageStore(root, join(root, 'none'), join(root, 'feed'))
   const [a, b] = await Promise.all([store.get(), store.get()])
   assert.equal(a, b, '同じ結果を返す（読み直していない）')
   assert.equal(a.codex?.primary.used_percent, 7)

@@ -248,6 +248,38 @@ export interface DiffPr {
   draft: boolean
 }
 
+/** 処理中のターンの 1 手順（#302）。サーバが transcript / rollout の末尾から読む（`shared/progress.ts`） */
+export interface ProgressStep {
+  /** tool = ツールを呼んだ、thinking = 考えた（中身は出さない）、text = 返答を書いた */
+  kind: 'tool' | 'thinking' | 'text'
+  /** ツール名（kind が tool のときだけ） */
+  tool?: string
+  /** 何をしているか（Bash の description かコマンド、読むファイルなど）。1 行に切ってある。無ければ空 */
+  summary: string
+  /** 始まった時刻（ISO） */
+  started: string
+  /** 終わった時刻。まだ走っているツールには無い */
+  ended?: string
+}
+
+/**
+ * GET /api/sessions/<id>/progress（#302）。処理中のターンが何をしているか。
+ * 3 秒のポーリング（一覧・詳細）には載せず、画面が処理中のセッションを出している間だけそのセッションの分を取る
+ */
+export interface SessionProgressResponse {
+  /** transcript / rollout の (mtime, size) と active。変わらなければ画面は描き直さない */
+  rev: string
+  id: string
+  /** ターンの途中か（ターンが閉じておらず、止まったまま古くなってもいない） */
+  active: boolean
+  /** 最後のターンの直近の手順（古い順、最大 `PROGRESS_STEPS` 件）。読めなければ空 */
+  steps: ProgressStep[]
+  /** 最後のターンの手順の数（steps は末尾だけなので、それより前にいくつあったか） */
+  total: number
+  /** transcript / rollout が最後に書かれた時刻（ISO）。読めなければ空 */
+  updated_at: string
+}
+
 /**
  * GET /api/sessions/<id>/diff?summary=1。本文（patch）を作らない軽い版（#211）。
  * 入力欄の差分ボタンが「開く前に」行数と PR 番号を出すために使う。

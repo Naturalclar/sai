@@ -42,6 +42,7 @@ Claude / OpenAI のクラウドに出さず、手元のモデル（Ollama / LM S
 ### 分かっていること
 
 - 許可を SAI の画面から答える口は無い（`--permission-prompt-tool` に当たるものが無い）。`permission.asked` は待ちの行として出るだけで、答えるのは端末側
+- **`opencode run`（閉じたセッションへの返信）は許可を自動で拒否する**（`permission.replied` の `reply: "reject"` を実測）。拒否されたツールで終わったターンは本文が無いので、チャットには「何が拒否されたか」を出す（#273）。許可が要る作業は端末で開いてから返信する。`--auto` は SAI からは付けない（`SAI_OPENCODE_ARGS` で運用者が渡すのは可）
 - 一言コメント（digest）は SAI 側の設定（`SAI_DIGEST_PROVIDER=openai`）なので、エージェントが何であっても同じローカルのモデルで作れる
 
 ## Codex CLI

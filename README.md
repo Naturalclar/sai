@@ -125,7 +125,9 @@ ln -s "$SAI_HOME/feed/opencode/sai.js" ~/.config/opencode/plugin/sai.js
 
 向け直したら OpenCode で 1 ターン回し、`~/.agent-feed/` に `"agent": "opencode"` の行が増えることを見る。`session_source` は `payload`（セッションIDがイベントに載っている）。
 
-許可を SAI の画面から答える口は無い（Claude の `--permission-prompt-tool` に当たるものが無い）ので、`permission.asked` は**待ちの行として出すだけ**で、答えるのは端末側。プロバイダを差し替えれば手元のモデルでも動く → [docs/local-llm.md](docs/local-llm.md)。
+許可を SAI の画面から答える口は無い（Claude の `--permission-prompt-tool` に当たるものが無い）ので、`permission.asked` は**待ちの行として出すだけ**で、答えるのは端末側。
+
+**閉じているセッションへの SAI からの返信（`opencode run -s`）は、許可が要るツールを自動で拒否する**（非対話なので聞けない）。ツールが失敗した時点でターンが終わり、アシスタントは本文を書かないので、チャットには `（本文なし）read の許可が拒否されて終わりました（…）` のように**何が起きたか**を出す（#273）。許可が要る作業を返信で頼むときは、**端末（tmux）で開いてから返信する**（TUI に打ち込むので、ダイアログで答えられる）。`opencode run` には `--auto`（許可を自動で通す。本人も dangerous と書いている）しか口が無く、**SAI からは付けない**。付けるなら運用者が `SAI_OPENCODE_ARGS` で明示的に渡す（そのセッションへの返信では「同一オリジンの検査」が唯一の砦になる。Claude の素通しと同じ）。プロバイダを差し替えれば手元のモデルでも動く → [docs/local-llm.md](docs/local-llm.md)。
 
 ### 2. 画面をビルドしてサーバを立てる
 

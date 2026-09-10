@@ -657,7 +657,7 @@ test('POST reply: 進行中なら 409、起動できなければ 500', async () 
   try {
     const res = await post('C1@r', { text: 'x' })
     assert.equal(res.status, 500)
-    assert.match(((await res.json()) as { error: string }).error, /SAI_CLAUDE_BIN/)
+    assert.match(((await res.json()) as { error: string }).error, /claude が見つかりません（サーバを起動した環境の PATH/, '見つからなければ PATH を案内する（SAI_*_BIN は無い。#288）')
   } finally {
     runner.fail = null
   }
@@ -1117,14 +1117,16 @@ test('digest: 起動後に増えた行に一言が付いて feed / 詳細 / 一�
   assert.equal(failed.rows.find((r) => r.text === '失敗する')!.summary, undefined)
 })
 
-test('replyCommand は SAI_*_BIN で実行ファイルを差し替えられる', () => {
+test('replyCommand はサーバの PATH の claude / codex / opencode を起動する（SAI_*_BIN は読まない。#288）', () => {
   // permissionMode は付けたモード（無ければ空）。処理中の表示に使う（#272）
   assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', {}), { bin: 'claude', args: ['-p', '--resume', 'S', '--', 'hi'], cwd: '/w', text: 'hi', permissionMode: '' })
   assert.deepEqual(replyCommand('codex', 'S', 'hi', '/w', {})!.args, ['exec', 'resume', 'S', '--', 'hi'])
-  assert.equal(replyCommand('claude', 'S', 'hi', '/w', { SAI_CLAUDE_BIN: '/opt/claude' })!.bin, '/opt/claude')
-  assert.equal(replyCommand('codex', 'S', 'hi', '/w', { SAI_CODEX_BIN: '/opt/codex' })!.bin, '/opt/codex')
   assert.deepEqual(replyCommand('opencode', 'S', 'hi', '/w', {})!.args, ['run', '-s', 'S', '--', 'hi'])
-  assert.equal(replyCommand('opencode', 'S', 'hi', '/w', { SAI_OPENCODE_BIN: '/opt/opencode' })!.bin, '/opt/opencode')
+  // 前は SAI_CLAUDE_BIN などで 1 つずつ差し替えていた。PATH を渡せば同じなのでやめた
+  const old = { SAI_CLAUDE_BIN: '/opt/claude', SAI_CODEX_BIN: '/opt/codex', SAI_OPENCODE_BIN: '/opt/opencode' }
+  assert.equal(replyCommand('claude', 'S', 'hi', '/w', old)!.bin, 'claude')
+  assert.equal(replyCommand('codex', 'S', 'hi', '/w', old)!.bin, 'codex')
+  assert.equal(replyCommand('opencode', 'S', 'hi', '/w', old)!.bin, 'opencode')
   assert.equal(replyCommand('unknown', 'S', 'hi', '/w', {}), null)
 })
 

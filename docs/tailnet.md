@@ -18,4 +18,4 @@ Serve 経由のリクエストには `Tailscale-User-Login`（誰か）と `X-Fo
 curl -H 'Tailscale-User-Login: someone@example.com' http://127.0.0.1:8787/api/health
 ```
 
-`whois` の結果はアドレスごとに 30 秒キャッシュする（3 秒ごとのポーリングで毎回デーモンに聞かない）。`tailscale` の実行ファイルは PATH、無ければ macOS の GUI 版（`/Applications/Tailscale.app/Contents/MacOS/Tailscale`）、`SAI_TAILSCALE_BIN` で差し替えられる。Serve 経由だとブラウザの `Origin` は `https://<MagicDNS 名>` になるので、書き込みの同一オリジン検査は Serve が付ける `X-Forwarded-Proto` でスキームを合わせる。
+`whois` の結果はアドレスごとに 30 秒キャッシュする（3 秒ごとのポーリングで毎回デーモンに聞かない）。`tailscale` の実行ファイルはサーバの PATH、無ければ macOS の GUI 版（`/Applications/Tailscale.app/Contents/MacOS/Tailscale`）。別の場所にあるならサーバの PATH に足す（前の `SAI_TAILSCALE_BIN` は #288 でやめた）。Serve 経由だとブラウザの `Origin` は `https://<MagicDNS 名>` になるので、書き込みの同一オリジン検査は Serve が付ける `X-Forwarded-Proto` でスキームを合わせる。

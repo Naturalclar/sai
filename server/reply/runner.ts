@@ -90,10 +90,6 @@ export interface ReplyCommand {
 }
 
 /**
- * エージェントごとの再開コマンド。`claude` / `codex` が PATH に無い環境（launchd など）向けに
- * SAI_CLAUDE_BIN / SAI_CODEX_BIN で実行ファイルを差し替えられる。
- */
-/**
  * 環境変数の文字列をシェル風に argv に割る。空白で区切り、'…' / "…" で囲めば空白を含められる。\ で次の1文字をそのまま。
  * `SAI_CLAUDE_ARGS='--allowedTools "Bash(gh *)"'` → ['--allowedTools', 'Bash(gh *)']
  */
@@ -166,19 +162,19 @@ export function replyCommand(
     const wire = approve && env.SAI_APPROVE !== '0' && !extra.includes('--permission-prompt-tool')
       ? ['--mcp-config', approveMcpConfig(approve), '--permission-prompt-tool', APPROVE_TOOL]
       : []
-    return { bin: env.SAI_CLAUDE_BIN || 'claude', args: [...extra, ...wire, ...pick, ...mode, '-p', '--resume', session, '--', text], cwd, text, permissionMode: permissionMode || '' }
+    return { bin: 'claude', args: [...extra, ...wire, ...pick, ...mode, '-p', '--resume', session, '--', text], cwd, text, permissionMode: permissionMode || '' }
   }
   if (agent === 'codex') {
     // Codex は画像を受ける口がある（`-i, --image <FILE>  Optional image(s) to attach to the prompt sent after resuming`）
     const images = attachments.flatMap((p) => ['-i', p])
-    return { bin: env.SAI_CODEX_BIN || 'codex', args: ['exec', 'resume', ...splitArgs(env.SAI_CODEX_ARGS), ...pick, ...images, session, '--', text], cwd, text }
+    return { bin: 'codex', args: ['exec', 'resume', ...splitArgs(env.SAI_CODEX_ARGS), ...pick, ...images, session, '--', text], cwd, text }
   }
   if (agent === 'opencode') {
     // `opencode run -s <session> -m <provider/model> -f <file> -- <text>`（1.18.30 で確認）。
     // 画像は `-f/--file`（添付するファイル）。許可・質問を画面で答える口は無いので approve の配線はしない。
     // 非対話でも本体の中でプラグインが動くので、この返信ぶんも普通のターンとして記録される（返信専用の記録経路は無い）
     const files = attachments.flatMap((p) => ['-f', p])
-    return { bin: env.SAI_OPENCODE_BIN || 'opencode', args: ['run', ...splitArgs(env.SAI_OPENCODE_ARGS), ...pick, ...files, '-s', session, '--', text], cwd, text }
+    return { bin: 'opencode', args: ['run', ...splitArgs(env.SAI_OPENCODE_ARGS), ...pick, ...files, '-s', session, '--', text], cwd, text }
   }
   return null
 }

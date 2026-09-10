@@ -501,7 +501,7 @@ export function createApp(
         await queueCodex(cmd)
       } catch (err) {
         const code = (err as NodeJS.ErrnoException).code
-        const hint = code === 'ENOENT' ? `${cmd.bin} が見つかりません（SAI_CODEX_BIN で指定できます）` : ''
+        const hint = code === 'ENOENT' ? `${cmd.bin} が見つかりません（サーバを起動した環境の PATH に ${cmd.bin} があるか確かめてください）` : ''
         return error(res, 500, hint || `Codex へキュー送信できませんでした: ${err instanceof Error ? err.message : String(err)}`)
       }
       typed.start(id, text)
@@ -546,7 +546,7 @@ export function createApp(
         await codexApp.start({ id, threadId: raw, text, cwd, model, attachments })
       } catch (err) {
         const code = (err as NodeJS.ErrnoException).code
-        const hint = code === 'ENOENT' ? `${process.env.SAI_CODEX_BIN || 'codex'} が見つかりません（SAI_CODEX_BIN で指定できます）` : ''
+        const hint = code === 'ENOENT' ? 'codex が見つかりません（サーバを起動した環境の PATH に codex があるか確かめてください）' : ''
         return error(res, 500, hint || `Codex app-serverで再開できませんでした: ${err instanceof Error ? err.message : String(err)}`)
       }
       const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd, via: 'app-server' }
@@ -564,7 +564,7 @@ export function createApp(
       await run.start(id, cmd, () => approvals.drop(id))
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code
-      const hint = code === 'ENOENT' ? `${cmd.bin} が見つかりません（SAI_CLAUDE_BIN / SAI_CODEX_BIN で指定できます）` : ''
+      const hint = code === 'ENOENT' ? `${cmd.bin} が見つかりません（サーバを起動した環境の PATH に ${cmd.bin} があるか確かめてください）` : ''
       return error(res, 500, hint || (err instanceof Error ? err.message : String(err)))
     }
     const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd, via: 'process' }

@@ -40,12 +40,12 @@ test('ProcessRunner は起動できなければ reject して何も残さない'
 })
 
 test('childEnv: TMUX_PANE だけ落とし、TMUX と他はそのまま。元の環境は触らない（#234）', () => {
-  const env = { PATH: '/usr/bin', TMUX_PANE: '%249', TMUX: '/tmp/tmux-501/default,2050,13', SAI_CLAUDE_BIN: 'claude' }
+  const env = { PATH: '/usr/bin', TMUX_PANE: '%249', TMUX: '/tmp/tmux-501/default,2050,13', AGENT_FEED_DIR: '/tmp/feed' }
   const next = childEnv(env)
   assert.equal(next.TMUX_PANE, undefined, 'サーバのペインを継がせない')
   assert.equal(next.TMUX, '/tmp/tmux-501/default,2050,13', 'ターンの中で tmux を使うことはあるので、tmux ごと隠さない')
-  assert.equal(next.PATH, '/usr/bin')
-  assert.equal(next.SAI_CLAUDE_BIN, 'claude')
+  assert.equal(next.PATH, '/usr/bin', '実行ファイルを探す PATH は子にもそのまま渡す')
+  assert.equal(next.AGENT_FEED_DIR, '/tmp/feed')
   assert.equal(env.TMUX_PANE, '%249', '渡された環境は書き換えない')
   assert.equal(childEnv({ PATH: '/usr/bin' }).TMUX_PANE, undefined, '元から無くても落ちない')
 })

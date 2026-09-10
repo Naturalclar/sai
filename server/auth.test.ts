@@ -16,11 +16,9 @@ test('loginFromWhois: UserProfile.LoginName を取る。形が違えば null', (
   assert.equal(loginFromWhois(''), null)
 })
 
-test('tailscaleBins: SAI_TAILSCALE_BIN があればそれだけ、無ければ PATH（macOS は GUI 版も）', () => {
-  assert.deepEqual(tailscaleBins({ SAI_TAILSCALE_BIN: '/opt/ts' }), ['/opt/ts'])
-  const bins = tailscaleBins({})
-  assert.equal(bins[0], 'tailscale')
-  if (process.platform === 'darwin') assert.equal(bins[1], '/Applications/Tailscale.app/Contents/MacOS/Tailscale')
+test('tailscaleBins: PATH の tailscale、macOS はその後に GUI 版（SAI_TAILSCALE_BIN は無い。#288）', () => {
+  assert.deepEqual(tailscaleBins('darwin'), ['tailscale', '/Applications/Tailscale.app/Contents/MacOS/Tailscale'])
+  assert.deepEqual(tailscaleBins('linux'), ['tailscale'])
 })
 
 test('identify: ヘッダ無しはループバックからだけ通す', async () => {

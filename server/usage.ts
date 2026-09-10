@@ -213,13 +213,10 @@ export class UsageStore {
   private pending: Promise<UsageResponse> | null = null
   private readonly now: () => number
 
-  // パラメータプロパティは server/tsconfig.json の erasableSyntaxOnly で使えないので、素直に代入する
-  constructor(
-    codexDir: string = codexSessionsDir(),
-    claudeDir: string = claudeProjectsDir(),
-    feedDir: string = join(homedir(), '.agent-feed'),
-    now: () => number = Date.now,
-  ) {
+  // パラメータプロパティは server/tsconfig.json の erasableSyntaxOnly で使えないので、素直に代入する。
+  // 置き場には既定値を持たせない（#275）。持たせるとテストが省略したときに本物のホームを黙って読み、
+  // そこにファイルがあるマシンでだけ落ちる。省略は pnpm typecheck で止まる（本番の組み立ては createApp の既定）
+  constructor(codexDir: string, claudeDir: string, feedDir: string, now: () => number = Date.now) {
     this.codexDir = codexDir
     this.claudeDir = claudeDir
     this.feedDir = feedDir

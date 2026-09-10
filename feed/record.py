@@ -47,7 +47,7 @@ MAX_MODE = 40
 # ホスト名。短い形なので十分
 MAX_HOST = 64
 # 日付ファイルに付ける host（#113）で、これ以外の文字は `-` にする。`.` を許さないのは、
-# 読む側（server/store.ts）が `YYYY-MM-DD.<host>.jsonl` として見るため。host_name() が
+# 読む側（server/rows/store.ts）が `YYYY-MM-DD.<host>.jsonl` として見るため。host_name() が
 # ドメイン部分を落としているので、そもそも `.` はここまで来ない
 _FILE_HOST_RE = re.compile(r"[^A-Za-z0-9_-]")
 MAX_FIRST_USER = 300

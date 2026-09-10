@@ -2,7 +2,7 @@
 // サーバ（受付・保存・返信コマンドの組み立て）と画面（選んだ瞬間の検査・自分バブルのサムネイル）が同じ値を見る。
 //
 // 画像そのものは ~/.agent-feed/attachments/<sha1(エンティティID) の先頭16桁>/<sha1(中身) の先頭16桁>.<ext> に置く
-// （server/attachments.ts）。JSONL には書かない。本文に絶対パスが載るので、記録にはパスだけが残る。
+// （server/reply/attachments.ts）。JSONL には書かない。本文に絶対パスが載るので、記録にはパスだけが残る。
 
 /** 1 枚の上限。スクリーンショットは数 MB になるのでアイコン（1MB）より大きく取る */
 export const ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024

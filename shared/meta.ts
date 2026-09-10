@@ -1,4 +1,4 @@
-// セッションのメタ（ブラウザから付ける表示名・アーカイブ・返信のモデル・一言の性格）の検査。アイコン画像は別（shared/icon.ts、server/icons.ts）。
+// セッションのメタ（ブラウザから付ける表示名・アーカイブ・返信のモデル・一言の性格）の検査。アイコン画像は別（shared/icon.ts、server/meta/icons.ts）。
 // サーバの PUT 受付（server/app.ts）と画面の入力欄（web/src/MetaEditor.tsx）が同じ関数を使い、ずれない。
 import { isPersonaId } from './persona.ts'
 import { REPLY_MODES, isReplyPermissionMode } from './permissions.ts'

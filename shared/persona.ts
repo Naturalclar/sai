@@ -1,6 +1,6 @@
 // チャットの一言コメント（digest）の性格と、LLM に渡すプロンプト。
 // MBTI の 16 タイプは口調の「型」として借りるだけで、診断や性格分析の話にはしない。
-// サーバ（server/digest.ts）が作るときと、画面（ヘッダの select）が並べるときに同じ表を見る。
+// サーバ（server/digest/digest.ts）が作るときと、画面（ヘッダの select）が並べるときに同じ表を見る。
 import type { PersonaId } from './types.ts'
 
 export interface Persona {

@@ -1,5 +1,5 @@
 // 使用量（usage limit）の読み方と言い換え。ファイルを触らない純粋関数だけを置き、
-// サーバ（server/usage.ts が JSONL の行を渡す）と画面（web/src/UsageChip.tsx が言い換えを使う）が同じものを見る。
+// サーバ（server/local/usage.ts が JSONL の行を渡す）と画面（web/src/UsageChip.tsx が言い換えを使う）が同じものを見る。
 //
 // **エージェントで取れるものが違う**（#216 / #250 で手元のファイルを見て確かめた）:
 //   Codex  … rollout の token_count の行に rate_limits が毎ターン載る。5 時間と週の割合が分かる

@@ -68,7 +68,7 @@ export interface FeedRow {
   first_user_text?: string
   /**
    * text をチャットの一言コメントに言い換えたもの（性格つき）。JSONL には無く、サーバが応答時に
-   * ~/.agent-feed/digest.jsonl から載せる（server/digest.ts）。無ければ省略で、画面は text を出す
+   * ~/.agent-feed/digest.jsonl から載せる（server/digest/digest.ts）。無ければ省略で、画面は text を出す
    */
   summary?: string
 }
@@ -309,7 +309,7 @@ export interface ProfileResponse {
 
 /**
  * 返信（POST /api/sessions/<id>/reply）で回したターンが、まだ終わっていない。
- * 正本はサーバのメモリ（server/runner.ts）で、子プロセスが exit するまで残る。画面はこれを「送信中」の正とする
+ * 正本はサーバのメモリ（server/reply/runner.ts）で、子プロセスが exit するまで残る。画面はこれを「送信中」の正とする
  */
 export interface Replying {
   /** 起動した時刻 */
@@ -354,9 +354,9 @@ export type ReplyingMap = Record<string, Replying>
 
 /**
  * 返信中のエージェントが人の答えを待っている（ツール実行の許可、AskUserQuestion）。
- * `claude -p` の `--permission-prompt-tool` が SAI の MCP ツール（server/approve-mcp.ts）を呼び、
+ * `claude -p` の `--permission-prompt-tool` が SAI の MCP ツール（server/approvals/approve-mcp.ts）を呼び、
  * それが SAI サーバに預けたもの。画面の [許可] [拒否] で答えるまでエージェントは止まっている。
- * 正本はサーバのメモリ（server/approvals.ts）で、返信のプロセスが exit したら消える
+ * 正本はサーバのメモリ（server/approvals/approvals.ts）で、返信のプロセスが exit したら消える
  */
 export interface Approval {
   approval_id: string
@@ -388,7 +388,7 @@ export interface ApprovalDecision {
 /** エンティティID → 答え待ちの承認（古い順）。無ければ空 */
 export type ApprovalMap = Record<string, Approval[]>
 
-/** POST /api/approvals の body。MCP ツール（server/approve-mcp.ts）が送る */
+/** POST /api/approvals の body。MCP ツール（server/approvals/approve-mcp.ts）が送る */
 export interface ApprovalRequest {
   id: string
   tool_name: string

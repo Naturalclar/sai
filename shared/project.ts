@@ -6,7 +6,7 @@
 //
 // 記録側（feed/record.py の git_project）が `project` を載せるが、それ以前の行には無い。
 // **分からないときは空を返す**（`repo` には落とさない）。worktree 名を混ぜると絞り込みの候補が
-// 汚れるため（#182）。空のセッションはサーバが cwd から git で引いて埋める（server/project.ts）。
+// 汚れるため（#182）。空のセッションはサーバが cwd から git で引いて埋める（server/git/project.ts）。
 import type { FeedRow } from './types.ts'
 
 /**

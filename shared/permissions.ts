@@ -1,4 +1,4 @@
-// 許可ルールの並びと言い換え。サーバ（server/permissions.ts の並べ替え）と画面（PermissionsModal）が同じ値を使う。
+// 許可ルールの並びと言い換え。サーバ（server/approvals/permissions.ts の並べ替え）と画面（PermissionsModal）が同じ値を使う。
 import type { PermissionKind, PermissionMode, PermissionSourceKind, Replying, ReplyPermissionMode } from './types.ts'
 
 /**

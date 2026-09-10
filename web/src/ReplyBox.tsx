@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent, SyntheticEvent } from 'react'
-import { filterReplyTargets, mentionLabels, mentionQuery, stripMention, type ReplyTarget } from '../../shared/reply.ts'
+import { filterReplyTargets, mentionLabels, mentionQuery, stripMention, targetProjectLabel, type ReplyTarget } from '../../shared/reply.ts'
 import { filterSkills, skillSummary, slashQuery, type Skill } from '../../shared/skills.ts'
 import { emojiQuery, filterEmoji, type EmojiHit } from '../../shared/emoji.ts'
 import { elapsedLabel } from './format'
@@ -551,6 +551,8 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
             >
               {t.icon && <img className="icon" src={t.icon} alt="" />}
               <b>{labels.get(t.id) ?? `@${t.repo}`}</b>
+              {/* どのリポジトリか（#301）。@ の表記は worktree 名なので、それだけだと main がどこのものか分からない */}
+              {targetProjectLabel(t) && <span className="project" title={t.project}>{targetProjectLabel(t)}</span>}
               <span className="title">{t.title || '(無題)'}</span>
               {mention?.busyIds?.has(t.id) && <span className="tag replying" title="前の返信を処理中。選べるが、終わるまで送れない">処理中</span>}
               {t.blocked && <span className="why">{t.blocked}</span>}

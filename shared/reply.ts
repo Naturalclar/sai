@@ -3,6 +3,7 @@
 // 同じ関数を使い、ずれない。
 import { entityId } from './entity.ts'
 import { isRemoteHost } from './host.ts'
+import { projectName, rowProject } from './project.ts'
 import type { FeedRow, SessionSummary } from './types.ts'
 
 /**
@@ -27,7 +28,14 @@ export function replyBlockedReason(s: Pick<SessionSummary, 'id' | 'agent' | 'ses
 /** 返信先の候補。エンティティごとに1件 */
 export interface ReplyTarget {
   id: string
+  /** worktree のディレクトリ名（`dev-alqa` / `main`）。GitHub のリポジトリではない（#151）。`@` の表記の元 */
   repo: string
+  /**
+   * どのリポジトリか（`Naturalclar/sai`）。分からなければ空（#301）。`repo` は worktree 名なので、
+   * `main` が 3 つのリポジトリにまたがったり、`dev-*` がどのリポジトリか見えなかったりする。
+   * **省略できない**（候補を組み立てる場所が増えたときに、載せ忘れを `pnpm typecheck` で止める）
+   */
+  project: string
   branch: string
   /** 表示名（付いていれば）、無ければ一番新しい入力の1行目。60文字 */
   title: string
@@ -59,6 +67,8 @@ export function sessionReplyTargets(sessions: SessionSummary[], selfHost: string
     const t: ReplyTarget = {
       id: s.id,
       repo: s.repo,
+      // 行に無くてもサーバが cwd の git から埋めている（server/git/project.ts の ProjectResolver）
+      project: s.project,
       branch: s.branch,
       title: clipTitle(s.meta?.name || s.title),
       blocked: replyBlockedReason(s, selfHost),
@@ -80,10 +90,16 @@ export function feedReplyTargets(rows: FeedRow[], selfHost: string): ReplyTarget
   for (let i = rows.length - 1; i >= 0; i--) {
     const r = rows[i]!
     const id = entityId(r.session, r.repo, r.ts)
-    if (seen.has(id)) continue
+    const found = seen.get(id)
+    if (found) {
+      // リポジトリは「値のある一番新しい行」のもの（#283 と同じ）。一番新しい行が載せていなければ古い行から補う
+      if (!found.project) found.project = rowProject(r)
+      continue
+    }
     seen.set(id, {
       id,
       repo: r.repo,
+      project: rowProject(r),
       branch: r.branch,
       title: clipTitle(r.user_text?.trim() || r.first_user_text?.trim() || r.text || ''),
       blocked: replyBlockedReason({ id, agent: r.agent, session_source: r.session_source, host: r.host ?? '' }, selfHost),
@@ -113,11 +129,24 @@ export function mergeReplyTargets(list: ReplyTarget[], feed: ReplyTarget[]): Rep
   return [...list, ...feed.filter((t) => !ids.has(t.id))]
 }
 
-/** 検索語でリポジトリ / ブランチ / タイトルを部分一致（大文字小文字は無視）。空なら全部 */
+/**
+ * 検索語で worktree 名 / リポジトリ / ブランチ / タイトルを部分一致（大文字小文字は無視）。空なら全部。
+ * リポジトリは `owner/repo` のまま見るので、`@persona` でも `@anotherball` でも当たる（#301）
+ */
 export function filterReplyTargets(targets: ReplyTarget[], query: string): ReplyTarget[] {
   const q = query.toLowerCase()
   if (!q) return targets
-  return targets.filter((t) => `${t.repo}\n${t.branch}\n${t.title}`.toLowerCase().includes(q))
+  return targets.filter((t) => `${t.repo}\n${t.project}\n${t.branch}\n${t.title}`.toLowerCase().includes(q))
+}
+
+/**
+ * 候補の行と返信先のチップに添えるリポジトリ名（`Naturalclar/sai` → `sai`。#301）。
+ * **分からなければ空**（worktree 名には落とさない。隣の `@repo` がすでに worktree 名）。
+ * worktree 名と同じなら空（`@oc-trial oc-trial` のように同じ名前を 2 回並べない）
+ */
+export function targetProjectLabel(t: Pick<ReplyTarget, 'repo' | 'project'>): string {
+  const name = projectName(t.project)
+  return name && name.toLowerCase() !== t.repo.toLowerCase() ? name : ''
 }
 
 /**

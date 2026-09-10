@@ -672,6 +672,8 @@
   .mention.emoji-list li .char { flex: none; font-size: 17px; line-height: 1.2; width: 1.4em; text-align: center; }
   .mention.skills li .tag { flex: none; margin-left: 0; }
   .mention li .icon, .reply .target .icon { flex: none; line-height: 1; }
+  /* どのリポジトリのセッションか（#301）。@ の表記は worktree 名なので、隣に小さく添える。縮めずタイトルの方を削る */
+  .mention li .project, .reply .target .project { flex: none; font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; white-space: nowrap; }
   /* どこで回すかの短い注意。入力欄（バブル）の上に 1 行 */
   .reply .note { color: var(--muted); font-size: 11px; padding: 0 2px; }
   .reply .note.blocked { color: var(--synth); }

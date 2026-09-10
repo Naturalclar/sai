@@ -48,7 +48,7 @@ test('mergeMeta: persona は shared/persona.ts の id。空 / null で消え（�
   assert.equal(isEmptyMeta({ persona: 'ISTJ' }), false)
 })
 
-test('mergeMeta: permission_mode は画面から選べるものだけ。素通し系は弾く。空 / null で消え、他のキーは触らない', () => {
+test('mergeMeta: permission_mode は画面から選べるものだけ。空 / null で消え、他のキーは触らない', () => {
   const cur = { name: 'A' }
   assert.deepEqual(mergeMeta(cur, { permission_mode: 'acceptEdits' }).meta, { name: 'A', permission_mode: 'acceptEdits' })
   assert.deepEqual(mergeMeta(cur, { permission_mode: ' acceptEdits ' }).meta, { name: 'A', permission_mode: 'acceptEdits' })
@@ -59,8 +59,10 @@ test('mergeMeta: permission_mode は画面から選べるものだけ。素通�
     { name: 'B', permission_mode: 'acceptEdits' },
     '名前だけ変えてもモードは残る',
   )
-  // 素通し系は口としても受けない（画面に並べないだけでなく）
-  for (const bad of ['bypassPermissions', 'auto', 'dontAsk', 'default', 'plan', 'XXX', 1]) {
+  // 素通し（bypassPermissions）は #253 で選べるようにした。受ける
+  assert.deepEqual(mergeMeta(cur, { permission_mode: 'bypassPermissions' }).meta, { name: 'A', permission_mode: 'bypassPermissions' })
+  // REPLY_MODES に無いものは今までどおり口としても受けない（画面に並べないだけでなく）
+  for (const bad of ['auto', 'dontAsk', 'default', 'plan', 'XXX', 1]) {
     assert.notEqual(mergeMeta(cur, { permission_mode: bad }).error, '', `${String(bad)} は弾く`)
   }
   assert.equal(isEmptyMeta({ permission_mode: 'acceptEdits' }), false, 'モードだけでも空ではない（エントリが消えない）')

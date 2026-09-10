@@ -439,6 +439,8 @@
   .modal.cropper .actions .primary { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 6px 14px; font: inherit; font-weight: 600; cursor: pointer; }
   .modal.cropper .actions button:disabled { opacity: .5; cursor: default; }
   .chat-head .session-permission-mode.inactive select { opacity: .55; }
+  /* 素通し（bypassPermissions）を選んでいる印（#253）。選んだまま忘れているのが一番まずいので、選択中は必ず出す */
+  .chat-head .session-permission-mode b.loud { color: var(--claude); font-size: 11px; margin-left: 4px; }
   .chat-head .archive .err { color: var(--claude); margin-left: 6px; }
   .linkish { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-size: 12px; cursor: pointer; }
   .linkish:hover { text-decoration: underline; }

@@ -735,7 +735,7 @@ test('PUT meta: model は次の返信の claude / codex に --model / -m とし�
   assert.equal((await putMeta('C1@r', { model: 'a'.repeat(65) })).status, 400)
 })
 
-test('PUT meta: permission_mode は次の返信の claude に --permission-mode として付き、消せば付かない。素通し系は 400', async () => {
+test('PUT meta: permission_mode は次の返信の claude に --permission-mode として付き、消せば付かない。REPLY_MODES に無い値は 400', async () => {
   runner.started.length = 0
   assert.equal((await putMeta('C1@r', { permission_mode: 'acceptEdits' })).status, 200)
   const detail = (await (await get('/api/sessions/C1%40r?days=7')).json()) as SessionDetailResponse
@@ -751,10 +751,21 @@ test('PUT meta: permission_mode は次の返信の claude に --permission-mode 
   assert.equal((await post('C1@r', { text: 'x' })).status, 202)
   assert.ok(!runner.started[1]!.cmd.args.includes('--permission-mode'), '既定に戻したら付かない')
 
-  // 素通し系は口としても受けない
-  assert.equal((await putMeta('C1@r', { permission_mode: 'bypassPermissions' })).status, 400)
+  // 素通し（bypassPermissions）も選べる（#253）。同じように次の返信に付く
+  assert.equal((await putMeta('C1@r', { permission_mode: 'bypassPermissions' })).status, 200)
+  assert.equal((await post('C1@r', { text: 'y' })).status, 202)
+  const bypass = runner.started[2]!.cmd.args
+  assert.deepEqual(
+    bypass.slice(bypass.indexOf('--permission-mode'), bypass.indexOf('--permission-mode') + 2),
+    ['--permission-mode', 'bypassPermissions'],
+  )
+
+  // REPLY_MODES に無いものは口としても受けない
   assert.equal((await putMeta('C1@r', { permission_mode: 'auto' })).status, 400)
   assert.equal((await putMeta('C1@r', { permission_mode: 'plan' })).status, 400)
+
+  // あとのテストに持ち越さない（この fixture のアプリは 1 つで、メタは残る）
+  assert.equal((await putMeta('C1@r', { permission_mode: '' })).status, 200)
 })
 
 test('PUT meta: 検査', async () => {

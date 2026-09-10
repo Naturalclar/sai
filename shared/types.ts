@@ -657,10 +657,15 @@ export type PermissionMode = 'default' | 'acceptEdits' | 'plan' | 'auto' | 'dont
 
 /**
  * SAI の画面から**選べる**許可モード（`SessionMeta.permission_mode`）。返信の `claude -p` に `--permission-mode` として付く。
- * 素通し系（`auto` / `bypassPermissions`）は入れない: 返信の POST はブラウザから飛ぶので、そこが通ると何でもできる
- * （README「返信と許可」の「許可はツール単位で最小にする」）。環境変数 `SAI_CLAUDE_ARGS` で明示的に渡す道は残っている
+ *
+ * `bypassPermissions` は**許可を一切聞かなくなる**（#253。issue から PR まで押し続けなくて済むように）。
+ * 返信の POST はブラウザから飛ぶので、**これを選んだセッションでは `isCrossOrigin()` が唯一の砦になる**
+ * （それまでは「CLI が未許可のツールを拒否する」が二重目の歯止めだった）。画面で目立たせて、選んだことが
+ * 分かるようにしてある。`auto` は入れない（「安全性の確認つき」の中身が CLI 任せで、説明できないため）。
+ * 実測（Claude Code 2.1.266）: **ツールの許可は `--permission-prompt-tool` を素通りするが、
+ * `AskUserQuestion` の質問は素通りしない**ので、質問のバブルは今までどおり出て答えられる
  */
-export type ReplyPermissionMode = 'acceptEdits'
+export type ReplyPermissionMode = 'acceptEdits' | 'bypassPermissions'
 
 /** ルールの種類。評価は deny → ask → allow の順で、最初に当たったものが決まる */
 export type PermissionKind = 'deny' | 'ask' | 'allow'

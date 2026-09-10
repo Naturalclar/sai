@@ -198,11 +198,18 @@ SAI_CODEX_APP_SERVER_ARGS='-c sandbox_mode="workspace-write"' pnpm start  # app-
 
 `claude` の `--allowedTools` は `~/.claude/settings.json` の `permissions.allow` と同じ書き方で、こちらは SAI からの返信にだけ効く（端末の許可設定はそのまま）。**SAI 自身は既定で何も付けない。** `--dangerously-skip-permissions` / `--permission-mode bypassPermissions` / Codex の `--dangerously-bypass-approvals-and-sandbox` も書けるが、返信の POST はブラウザから飛ぶので、その状態で別サイトからの CSRF が通ればエージェントが何でもできる（同一オリジンの検査で止めてはいる）。許可はツール単位で最小にする。
 
-**「ファイル編集は聞かない」はセッションごとに画面から切り替えられる。** チャット見出しの select（Claude のセッションだけ）で選ぶと、そのセッションへの SAI からの返信に `--permission-mode acceptEdits` が付き、編集の許可を聞かれなくなる（コマンドは今までどおり聞く）。値はセッションのメタ（`session-meta.json` の `permission_mode`、`PUT /api/sessions/<id>/meta`）。
+**許可モードはセッションごとに画面から切り替えられる。** チャット見出しの select（Claude のセッションだけ）で選ぶと、そのセッションへの SAI からの返信に `--permission-mode` が付く。値はセッションのメタ（`session-meta.json` の `permission_mode`、`PUT /api/sessions/<id>/meta`）。選べるのは 2 つ:
+
+| | |
+| --- | --- |
+| **ファイル編集は聞かない**（`acceptEdits`） | 編集の許可を聞かれなくなる。コマンドは今までどおり聞く |
+| **全部素通し**（`bypassPermissions`。#253） | 許可を一切聞かない。issue に着手してから PR を出すまで押し続けなくて済むように |
 
 - **そのターン限りで、セッションには残らない。** `--model` と違うところ（`--model` は `--resume` に付けるとセッションの設定そのものが変わる）。フラグ付きで回したセッションを端末やフラグ無しで再開すると、許可は元どおり聞かれる
 - **端末（tmux）に打ち込む返信には効かない。** その経路は CLI を起動せずペインに文字を送るだけなので、フラグを渡す先が無い（端末側は Shift+Tab で切り替える）。端末で開いている間は select を薄く出す
-- **select に並ぶのは「ファイル編集は聞かない」まで。** 素通し系（`auto` / `bypassPermissions`）は並べず、`PUT` の口でも `400` にする（上の CSRF の理由）。それでも使うなら `SAI_CLAUDE_ARGS` で明示的に渡す
+- **`bypassPermissions` を選ぶと歯止めが一重になる。** それまでは仮に同一オリジンの検査が抜けても「CLI が未許可のツールを拒否する」で止まっていたが、素通しではそれが無い。**選んでいる間は select の横に「素通し」の印が出る**（`modeSkipsRules()`。見出しのタグとモーダルの警告と同じ判定）ので、選んだまま忘れていないか見えるようにしてある
+- **`auto` は並べない。** 「安全性の確認つきで何でも実行」の中身が CLI 任せで説明できないため。`REPLY_MODES` に無い値は `PUT` の口でも `400`
+- **許可は素通しになるが、質問は素通しにならない。** 実測（Claude Code 2.1.266、`--permission-mode bypassPermissions` + `--permission-prompt-tool` を両方付けて 2 回）: ツールの許可は `--permission-prompt-tool` を**一度も通らず**素通りするのに対し、`AskUserQuestion` は**今までどおり通る**。つまり許可のバブルは出なくなるが、**質問のバブルは出て答えられる**
 
 ## 返信中の許可・質問に画面から答える
 

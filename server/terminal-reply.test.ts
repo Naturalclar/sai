@@ -295,3 +295,38 @@ test('返信: 端末で開いていないセッションは、処理中なら 40
   const list = await sessions()
   assert.equal(list.replying['D1@r'], undefined, 'FakeRunner は処理中を持たない')
 })
+
+// ---- #255: 端末で答えたら、次のターンを待たずに待ちを畳む（#232 の積み残し）
+
+test('待ちの畳み: 端末のダイアログが消えていれば waiting を空にする（要対応から消える）', async () => {
+  // T1 に待ちの行を足す。行はこのあと消えないので、畳むかはペインの見た目だけで決まる
+  await appendFile(
+    feedFile,
+    JSON.stringify(row(new Date(), 'T1', { repo: 'r', cwd: work, pane: '%9', pid: 200, event: 'PermissionRequest', text: '許可待ち: Bash: ls', user_text: '' })) + '\n',
+  )
+
+  // ダイアログが出ている間は残る
+  tmux.screen = IDLE + '\n  ❯ 1. Yes\n    2. No\n  Enter to confirm · Esc to cancel'
+  let list = await sessions()
+  assert.equal(list.sessions.find((s) => s.id === 'T1@r')?.waiting, '許可待ち: Bash: ls')
+
+  // 人が端末で答えてダイアログが消えた → 行はそのままでも待ちは畳む
+  tmux.screen = IDLE
+  list = await sessions()
+  assert.equal(list.sessions.find((s) => s.id === 'T1@r')?.waiting, '', '次のターンを待たずに消える')
+
+  // チャットの見出しも同じ（要対応・サイドバー・見出しの 3 か所が食い違わない）
+  const detail = (await (await fetch(`${base}/api/sessions/${encodeURIComponent('T1@r')}?days=30`)).json()) as { session: { waiting: string } }
+  assert.equal(detail.session.waiting, '')
+})
+
+test('待ちの畳み: 端末で開いていないセッションは触らない（見に行く材料が無い）', async () => {
+  // D1 は pid が死んでいるので terminal が付かない
+  await appendFile(
+    feedFile,
+    JSON.stringify(row(new Date(), 'D1', { repo: 'r', cwd: work, pane: '%8', pid: 300, event: 'PermissionRequest', text: '許可待ち: Edit: x.ts', user_text: '' })) + '\n',
+  )
+  tmux.screen = IDLE
+  const list = await sessions()
+  assert.equal(list.sessions.find((s) => s.id === 'D1@r')?.waiting, '許可待ち: Edit: x.ts', '端末が無ければ残す')
+})

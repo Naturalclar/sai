@@ -70,6 +70,111 @@ test('resolveBase: ?base= は形と存在を見てから使う', async () => {
   assert.equal(await resolveBase(missing, '/w', 'nope'), '', '無いものは使わない')
 })
 
+// ---- #289: origin/<x> と <x> が両方あれば新しい方
+
+/** origin/HEAD が未設定（bare clone）で、origin/main も main も有る */
+function bothExist(): FakeGit {
+  const g = new FakeGit()
+  g.fail.add('symbolic-ref -q --short refs/remotes/origin/HEAD')
+  return g
+}
+
+test('resolveBase: origin/main が置き去りで main の祖先なら main（bare clone + worktree の形。#289）', async () => {
+  const g = bothExist()
+  g.fail.add('merge-base --is-ancestor main origin/main')
+  assert.equal(await resolveBase(g, '/w'), 'main')
+})
+
+test('resolveBase: main が origin/main の祖先（普通の clone で main が古い）なら origin/main', async () => {
+  const g = bothExist()
+  g.fail.add('merge-base --is-ancestor origin/main main')
+  assert.equal(await resolveBase(g, '/w'), 'origin/main')
+})
+
+test('resolveBase: 同じコミット・分岐しているときは今までどおり origin/main', async () => {
+  assert.equal(await resolveBase(bothExist(), '/w'), 'origin/main', '同じコミット（どちら向きにも祖先）')
+  const diverged = bothExist()
+  diverged.fail.add('merge-base --is-ancestor main origin/main')
+  diverged.fail.add('merge-base --is-ancestor origin/main main')
+  assert.equal(await resolveBase(diverged, '/w'), 'origin/main', '分岐')
+})
+
+test('resolveBase: 片方しか無ければ比べない。origin/HEAD の先にも同じ規則、?base= には当てない', async () => {
+  const onlyRemote = bothExist()
+  onlyRemote.fail.add('rev-parse --verify --quiet main^{commit}')
+  assert.equal(await resolveBase(onlyRemote, '/w'), 'origin/main')
+  assert.equal(onlyRemote.calls.some((c) => c[0] === 'merge-base'), false, 'ローカルが無ければ merge-base も呼ばない')
+
+  const head = new FakeGit()
+  head.answers.set('symbolic-ref -q --short refs/remotes/origin/HEAD', 'origin/trunk\n')
+  head.fail.add('merge-base --is-ancestor trunk origin/trunk')
+  assert.equal(await resolveBase(head, '/w'), 'trunk', 'origin/HEAD が指す origin/trunk より trunk が新しい')
+
+  const pinned = bothExist()
+  pinned.fail.add('merge-base --is-ancestor main origin/main')
+  assert.equal(await resolveBase(pinned, '/w', 'origin/main'), 'origin/main', '明示された base はそのまま')
+})
+
+test('sessionDiff / sessionDiffSummary: 置き去りの origin/main ではなく main と比べ、他の PR を混ぜない（#289）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-stalebase-'))
+  const commit = async (file: string, body: string, message: string) => {
+    await writeFile(join(dir, file), body)
+    await git(dir, 'add', '.')
+    await git(dir, 'commit', '-q', '-m', message)
+  }
+  try {
+    await git(dir, 'init', '-q', '-b', 'main')
+    await commit('a.ts', 'one\n', 'first')
+    // ここで origin/main が一度作られ、そのまま進まない（refspec の無い bare clone と同じ）
+    await git(dir, 'update-ref', 'refs/remotes/origin/main', 'HEAD')
+    // その後に main へ入った他の PR が 2 本
+    await commit('other1.ts', 'x\n', 'pr 1')
+    await commit('other2.ts', 'y\n', 'pr 2')
+    const g = new RealGit()
+
+    const onMain = await sessionDiff(g, dir)
+    assert.equal(onMain.base, 'main')
+    assert.deepEqual(onMain.branch.files, [], 'main にいる worktree のブランチの差分は無い')
+
+    await git(dir, 'checkout', '-q', '-b', 'feat/x')
+    await commit('mine.ts', 'mine\n', 'work')
+    const d = await sessionDiff(g, dir)
+    assert.equal(d.base, 'main')
+    assert.deepEqual(d.branch.files.map((f) => f.path), ['mine.ts'], '後から main に入った other1 / other2 は混ざらない')
+    const s = await sessionDiffSummary(g, dir)
+    assert.equal(s.base, 'main', '要約（差分ボタンの行数）も同じ相手と比べる')
+    assert.deepEqual(s.branch, { files: 1, added: 1, removed: 0 })
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('sessionDiff: 普通の clone の形（origin/main が新しく main が古い）では origin/main と比べる', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-freshorigin-'))
+  const commit = async (file: string, body: string, message: string) => {
+    await writeFile(join(dir, file), body)
+    await git(dir, 'add', '.')
+    await git(dir, 'commit', '-q', '-m', message)
+  }
+  try {
+    await git(dir, 'init', '-q', '-b', 'main')
+    await commit('a.ts', 'one\n', 'first')
+    // origin では main が 1 本進んでいる（fetch 済み）。ローカルの main は pull していないので古いまま
+    await git(dir, 'checkout', '-q', '-b', 'upstream')
+    await commit('other.ts', 'x\n', 'pr on origin')
+    await git(dir, 'update-ref', 'refs/remotes/origin/main', 'HEAD')
+    // 作業ブランチは origin/main から切る
+    await git(dir, 'checkout', '-q', '-b', 'feat/y')
+    await commit('mine.ts', 'mine\n', 'work')
+
+    const d = await sessionDiff(new RealGit(), dir)
+    assert.equal(d.base, 'origin/main')
+    assert.deepEqual(d.branch.files.map((f) => f.path), ['mine.ts'], '古い main と比べると other.ts まで混ざる')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 test('parseStats: numstat と name-status を突き合わせる。バイナリとリネーム', () => {
   const numstat = ['3\t1\tserver/app.ts', '-\t-\tweb/logo.png', '0\t0\told.ts => new.ts', '5\t0\tnew-file.ts'].join('\n')
   const nameStatus = ['M\tserver/app.ts', 'M\tweb/logo.png', 'R100\told.ts\tnew.ts', 'A\tnew-file.ts'].join('\n')

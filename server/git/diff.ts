@@ -1,7 +1,7 @@
 // セッションの worktree の差分を git から読む（#171）。GitHub は見に行かない。
 //
 //   GET /api/sessions/<id>/diff
-//     → base を決める（origin/HEAD → origin/main → origin/master → main → master）
+//     → base を決める（origin/HEAD → origin/main → origin/master → main → master。origin/<x> と <x> が両方あれば新しい方）
 //     → ブランチの差分（base...HEAD）と未コミット（HEAD からの差分 + 追跡外のファイル名）
 //
 // **読むだけ**。checkout / stash / add のような書き込むコマンドは呼ばない（run() が弾く）。
@@ -70,7 +70,13 @@ export function validBase(base: string): boolean {
 
 /**
  * 比べる相手。origin/HEAD は **bare clone だと未設定で失敗する**ので、ローカルで順に探す（ネットワークは叩かない）。
- * 見つからなければ空（ブランチの差分は出せないが、未コミットは出せる）
+ * 見つからなければ空（ブランチの差分は出せないが、未コミットは出せる）。
+ *
+ * **`origin/<x>` と `<x>` が両方あれば、新しい方を使う**（#289）。有るかどうかだけで `origin/*` を先にしていたら、
+ * bare clone + worktree（fetch の refspec が無いので `origin/main` は一度作られたまま進まず、`/sync-main` が進めるのは
+ * ローカルの `main`）で 24 コミット前の `origin/main` が選ばれ、その後に入った PR が全部「このブランチの差分」に載っていた
+ * （`main` にいる worktree ですら 91 ファイル）。普通の clone では逆に `origin/main` が新しく、ローカルの `main` が古い。
+ * 同じコミットか分岐しているときは今までどおり `origin/<x>`
  */
 export async function resolveBase(git: Git, cwd: string, want = ''): Promise<string> {
   const exists = async (ref: string): Promise<boolean> => {
@@ -81,15 +87,32 @@ export async function resolveBase(git: Git, cwd: string, want = ''): Promise<str
       return false
     }
   }
+  // `merge-base --is-ancestor` は「祖先でない」を終了コード 1 で返し、run() はそれを reject にする
+  const isAncestor = async (a: string, b: string): Promise<boolean> => {
+    try {
+      await git.run(cwd, ['merge-base', '--is-ancestor', a, b])
+      return true
+    } catch {
+      return false
+    }
+  }
+  /** `origin/<x>` が見つかったとき、ローカルの `<x>` の方が新しければそちらにする */
+  const newerOf = async (remote: string): Promise<string> => {
+    const local = remote.slice('origin/'.length)
+    if (!remote.startsWith('origin/') || !local || !(await exists(local))) return remote
+    if (await isAncestor(local, remote)) return remote // 同じコミットか、origin の方が新しい（普通の clone）
+    if (await isAncestor(remote, local)) return local // ローカルの方が新しい（origin/* が置き去りの bare clone）
+    return remote // 分岐している
+  }
   if (want) return validBase(want) && (await exists(want)) ? want : ''
   try {
     const head = (await git.run(cwd, ['symbolic-ref', '-q', '--short', 'refs/remotes/origin/HEAD'])).trim()
-    if (head && (await exists(head))) return head
+    if (head && (await exists(head))) return await newerOf(head)
   } catch {
     // bare clone だと未設定で失敗する。下の候補に落ちる
   }
   for (const ref of ['origin/main', 'origin/master', 'main', 'master']) {
-    if (await exists(ref)) return ref
+    if (await exists(ref)) return await newerOf(ref)
   }
   return ''
 }

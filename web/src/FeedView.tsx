@@ -99,6 +99,11 @@ export function FeedView({ project, projects, onProject, sessions = NO_SESSIONS,
     const s = targetId ? sessions.find((x) => x.id === targetId) : undefined
     return s ? { id: s.id, agent: s.agent, models: s.models, value: s.meta?.model } : undefined
   }, [sessions, targetId])
+  /** モデルの右に出す許可モード。同じく一覧に居る Claude のセッションだけ（#265） */
+  const replyPermission = useMemo(() => {
+    const s = targetId ? sessions.find((x) => x.id === targetId) : undefined
+    return s?.agent === 'claude' ? { id: s.id, value: s.meta?.permission_mode, terminal: Boolean(s.terminal) } : undefined
+  }, [sessions, targetId])
   // 答え待ちの許可・質問も、処理中の返信と同じく、この画面に関係あるものだけ
   const approvals = Object.values(data?.approvals ?? NO_APPROVALS).flat().filter((a) => counts.has(a.id) || targets.some((t) => t.id === a.id))
 
@@ -151,6 +156,7 @@ export function FeedView({ project, projects, onProject, sessions = NO_SESSIONS,
             now={now}
             onSend={async (text, attachments) => (await send(target.id, text, { attachments })) !== 'confirm'}
             model={replyModel}
+            permission={replyPermission}
             onDraft={setDrafting}
             mention={{ targets, target, picked: pickedTarget ? picked : null, onPick: setPicked, busyIds }}
           />

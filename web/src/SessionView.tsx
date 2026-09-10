@@ -24,7 +24,6 @@ import { historyFrom } from './replyHistory'
 import { ReplaceConfirm } from './ReplaceConfirm'
 import { MetaEditor } from './MetaEditor'
 import { SessionPersonaSelect } from './SessionPersonaSelect'
-import { SessionPermissionModeSelect } from './SessionPermissionModeSelect'
 import { ModelTag } from './ModelTag'
 import { ArchiveButton } from './ArchiveButton'
 import { ArchivedTag } from './ArchivedTag'
@@ -106,8 +105,6 @@ export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggl
           <ArchiveButton key={`archive:${s.id}:${s.archived ? 1 : 0}`} id={s.id} archived={Boolean(s.archived)} />
           <MetaEditor key={`meta:${s.id}`} id={s.id} meta={s.meta} icon={s.icon} />
           {s.agent === 'claude' && <PermissionsButton key={`perm:${s.id}`} id={s.id} />}
-          {/* SAI から返信するときの許可モード。端末に打ち込む経路では効かないので、そのときは薄く出す */}
-          {s.agent === 'claude' && <SessionPermissionModeSelect key={`mode:${s.id}`} id={s.id} value={s.meta?.permission_mode} terminal={Boolean(s.terminal)} />}
           {/* 一言が有効なときだけ。このセッションの性格（無ければヘッダの既定に従う） */}
           {settings?.digest && <SessionPersonaSelect key={`persona:${s.id}`} id={s.id} value={s.meta?.persona} defaultPersona={settings.persona} />}
           {hasThinking && (
@@ -156,6 +153,8 @@ export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggl
             busySince={mine?.since}
             now={now}
             model={{ id: s.id, agent: s.agent, models: s.models, value: s.meta?.model }}
+            // 許可モードのフラグを渡せるのは Claude だけ（Codex / OpenCode には渡す先が無い）
+            permission={s.agent === 'claude' ? { id: s.id, value: s.meta?.permission_mode, terminal: Boolean(s.terminal) } : undefined}
             {...(summary && hasDiff(summary) ? { diff: { summary, open: diffOpen, onToggle: () => onToggleDiff(s.id) } } : {})}
             onSend={async (text, attachments) => (await send(id, text, { attachments })) !== 'confirm'}
           />

@@ -1,5 +1,5 @@
 // 許可ルールの並びと言い換え。サーバ（server/permissions.ts の並べ替え）と画面（PermissionsModal）が同じ値を使う。
-import type { PermissionKind, PermissionMode, PermissionSourceKind, ReplyPermissionMode } from './types.ts'
+import type { PermissionKind, PermissionMode, PermissionSourceKind, Replying, ReplyPermissionMode } from './types.ts'
 
 /**
  * ルールの評価順。deny → ask → allow の順に見て、最初に当たったものが決まる（ルールの細かさは順に関係しない）。
@@ -97,4 +97,27 @@ export function modeLabel(mode: string): string {
   const name = MODE_LABEL[mode as PermissionMode]
   if (!name) return mode
   return `${name} — ${MODE_HINT[mode as PermissionMode]}`
+}
+
+/**
+ * 処理中のターンが、いまの設定と**違う**許可モードで動いているときの一言（#272）。違わなければ空。
+ *
+ * 許可モードは `claude -p` を起動するときのフラグでしか渡せず、動いている CLI には後から当てられない。
+ * 処理中に「素通し」へ変えても、そのターンは起動したときのモードのまま許可を聞いてくるので、
+ * 何も出さないと「素通しにしたのに聞かれる」ように見える。
+ *
+ * `current` はセッションのメタの `permission_mode`（無ければ undefined = CLI の既定）。空と `default` は同じ扱い。
+ * 起動したときのモードが分からない返信（`permission_mode` が無い）、失敗して残っているだけの返信、
+ * 端末に打ち込んだ返信（そもそもフラグが効かない）には出さない。
+ *
+ * 名前は `MODE_LABEL` の英語（#271。端末の Shift+Tab と同じ言い回し）。ボタンの `shortReplyMode()` と違って
+ * バブルと title に出すので幅の制約が無く、`Bypass` ではなく `Bypass permissions` と書く
+ */
+export function launchedModeNote(replying: Replying | undefined, current: string | undefined): string {
+  if (!replying || replying.failed || replying.via === 'terminal' || replying.permission_mode === undefined) return ''
+  const launched = replying.permission_mode || 'default'
+  const now = current || 'default'
+  if (launched === now) return ''
+  const name = (mode: string) => MODE_LABEL[mode as PermissionMode] ?? mode
+  return `このターンは「${name(launched)}」で動いています。「${name(now)}」は次の返信から効きます`
 }

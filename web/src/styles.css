@@ -356,6 +356,8 @@
   .reply .row .perm-pick .menu button.loud { color: var(--claude); }
   .reply .row .model-pick .menu button .why, .reply .row .perm-pick .menu button .why { color: var(--muted); font-size: 11px; margin-left: 6px; }
   .reply .row .model-pick .err, .reply .row .perm-pick .err { color: var(--claude); font-size: 11px; }
+  /* 処理中のターンは起動したときのモードのまま（#272）。全文は title */
+  .reply .row .perm-pick .launched { color: var(--muted); font-size: 11px; white-space: nowrap; cursor: help; }
   .modal.model-name { max-width: 26em; display: flex; flex-direction: column; gap: 8px; }
   .modal.model-name input { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font: inherit; }
   .modal.model-name .note { color: var(--muted); font-size: 12px; }
@@ -530,6 +532,8 @@
   /* 返信中の許可・質問。答えるまでエージェントが止まっているので、待ちの色（synth）で目立たせる */
   .group.approval .msg .body { display: inline-block; padding: 4px 10px; border-radius: 6px; background: color-mix(in srgb, var(--synth) 12%, transparent); color: var(--synth); font-style: italic; }
   .group.approval .detail { font-family: var(--mono); font-size: 12px; background: var(--chip); padding: 8px 10px; border-radius: 6px; margin: 6px 0 0; white-space: pre-wrap; word-break: break-word; max-height: 12em; overflow: auto; }
+  /* 処理中のターンが起動したときの許可モードのまま聞いている、の注記（#272） */
+  .group.approval .mode-note { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
   .group.approval .actions { display: flex; gap: 8px; margin-top: 8px; }
   .group.approval .actions button { font: inherit; font-size: 13px; padding: 4px 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; }
   .group.approval .actions button.allow { background: var(--accent); border-color: var(--accent); color: #fff; }

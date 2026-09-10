@@ -746,11 +746,14 @@ test('PUT meta: permission_mode は次の返信の claude に --permission-mode 
   const args = runner.started[0]!.cmd.args
   assert.deepEqual(args.slice(args.indexOf('--permission-mode'), args.indexOf('--permission-mode') + 2), ['--permission-mode', 'acceptEdits'])
   assert.ok(args.indexOf('--permission-mode') < args.indexOf('-p'), '--permission-mode は -p より前')
+  // 処理中のターンがどのモードで動いているかを画面に出すので、付けたモードを別にも持つ（#272）
+  assert.equal(runner.started[0]!.cmd.permissionMode, 'acceptEdits')
 
   // 消すと付かない
   assert.equal((await putMeta('C1@r', { permission_mode: '' })).status, 200)
   assert.equal((await post('C1@r', { text: 'x' })).status, 202)
   assert.ok(!runner.started[1]!.cmd.args.includes('--permission-mode'), '既定に戻したら付かない')
+  assert.equal(runner.started[1]!.cmd.permissionMode, '', '付けていない = 既定で起動した')
 
   // 素通し（bypassPermissions）も選べる（#253）。同じように次の返信に付く
   assert.equal((await putMeta('C1@r', { permission_mode: 'bypassPermissions' })).status, 200)
@@ -1115,7 +1118,8 @@ test('digest: 起動後に増えた行に一言が付いて feed / 詳細 / 一�
 })
 
 test('replyCommand は SAI_*_BIN で実行ファイルを差し替えられる', () => {
-  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', {}), { bin: 'claude', args: ['-p', '--resume', 'S', '--', 'hi'], cwd: '/w', text: 'hi' })
+  // permissionMode は付けたモード（無ければ空）。処理中の表示に使う（#272）
+  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', {}), { bin: 'claude', args: ['-p', '--resume', 'S', '--', 'hi'], cwd: '/w', text: 'hi', permissionMode: '' })
   assert.deepEqual(replyCommand('codex', 'S', 'hi', '/w', {})!.args, ['exec', 'resume', 'S', '--', 'hi'])
   assert.equal(replyCommand('claude', 'S', 'hi', '/w', { SAI_CLAUDE_BIN: '/opt/claude' })!.bin, '/opt/claude')
   assert.equal(replyCommand('codex', 'S', 'hi', '/w', { SAI_CODEX_BIN: '/opt/codex' })!.bin, '/opt/codex')

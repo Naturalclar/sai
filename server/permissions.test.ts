@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { argsRules, collectPermissions, managedSettingsPath, orderRules, parseSettings, settingsPaths } from './permissions.ts'
-import { isReplyPermissionMode, MODE_HINT, MODE_LABEL, modeLabel, modeSkipsRules, REPLY_MODES, shortReplyMode } from '../shared/permissions.ts'
+import { isReplyPermissionMode, launchedModeNote, MODE_HINT, MODE_LABEL, modeLabel, modeSkipsRules, REPLY_MODES, shortReplyMode } from '../shared/permissions.ts'
 
 test('MODE_HINT / modeLabel: 何が起きるかは日本語で添え、タグ・モーダル用は「名前 — 説明」（#271）', () => {
   // 名前を英語にしても、説明が消えてはいけない（メニューの補足と見出しのタグが空になる）
@@ -143,4 +143,39 @@ test('shortReplyMode: 入力欄のボタンに出す短い名前。空は「既�
   // 返信で選べる値には全部短い名前がある（増やしたらここで止まる）
   for (const m of REPLY_MODES) assert.notEqual(shortReplyMode(m), m, m)
   assert.equal(shortReplyMode('しらない値'), 'しらない値', '知らない値はそのまま出す')
+})
+
+test('launchedModeNote: 処理中のターンが今の設定と違うモードで動いているときだけ出す（#272）', () => {
+  const running = { since: '2026-09-10T06:11:35.000Z', text: 'x' }
+  // 実際に起きた形: acceptEdits で起動したターンの途中で素通しに変えた。
+  // モードの名前は MODE_LABEL の英語（#271。端末の Shift+Tab と同じ言い回し。ボタンと違って幅の制約が無いので短くしない）
+  assert.equal(
+    launchedModeNote({ ...running, permission_mode: 'acceptEdits' }, 'bypassPermissions'),
+    'このターンは「Accept edits」で動いています。「Bypass permissions」は次の返信から効きます',
+  )
+  assert.equal(
+    launchedModeNote({ ...running, permission_mode: '' }, 'bypassPermissions'),
+    'このターンは「Default」で動いています。「Bypass permissions」は次の返信から効きます',
+    'フラグ無しで起動した = 既定',
+  )
+  assert.equal(
+    launchedModeNote({ ...running, permission_mode: 'bypassPermissions' }, undefined),
+    'このターンは「Bypass permissions」で動いています。「Default」は次の返信から効きます',
+    '素通しから戻したときも、戻ったのは次の返信から',
+  )
+
+  // 同じなら出さない。空と default は同じ扱い
+  assert.equal(launchedModeNote({ ...running, permission_mode: 'bypassPermissions' }, 'bypassPermissions'), '')
+  assert.equal(launchedModeNote({ ...running, permission_mode: '' }, undefined), '')
+  assert.equal(launchedModeNote({ ...running, permission_mode: 'default' }, ''), '')
+
+  // 材料が無い・もう動いていないときは出さない
+  assert.equal(launchedModeNote(undefined, 'bypassPermissions'), '', '処理中でない')
+  assert.equal(launchedModeNote(running, 'bypassPermissions'), '', '起動したときのモードが分からない（Codex・古い replying.json）')
+  assert.equal(launchedModeNote({ ...running, via: 'terminal', permission_mode: '' }, 'bypassPermissions'), '', '端末に打ち込んだ返信にはそもそもフラグが効かない')
+  assert.equal(
+    launchedModeNote({ ...running, permission_mode: 'acceptEdits', failed: { code: 1, tail: '' } }, 'bypassPermissions'),
+    '',
+    '失敗して残っているだけ（もう動いていない）',
+  )
 })

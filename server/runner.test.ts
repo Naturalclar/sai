@@ -4,12 +4,13 @@ import { spawn } from 'node:child_process'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { childEnv, failureOf, isAlive, ProcessRunner, tailFrom } from './runner.ts'
+import { childEnv, failureOf, isAlive, ProcessRunner, replyCommand, tailFrom } from './runner.ts'
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
 /** 300ms 生きて exit する子。node 自身を使う（PATH に依らず必ずある） */
 const shortLived = { bin: process.execPath, args: ['-e', 'setTimeout(() => {}, 300)'], cwd: process.cwd(), text: 'やって' }
-const readState = async (path: string) => JSON.parse(await readFile(path, 'utf-8')) as Record<string, { pid: number; since: string; text: string }>
+const readState = async (path: string) =>
+  JSON.parse(await readFile(path, 'utf-8')) as Record<string, { pid: number; since: string; text: string; permission_mode?: string }>
 
 test('ProcessRunner は起動から exit までを snapshot に出し、exit で消す', async () => {
   const runner = new ProcessRunner(null)
@@ -129,6 +130,35 @@ test('ProcessRunner は起動時に replying.json から生きている pid の�
     assert.deepEqual(await readState(state), {})
   } finally {
     if (!survivor.killed) survivor.kill('SIGKILL')
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('replyCommand: Claude は付けた許可モードを permissionMode に持つ（付けなければ空）。他のエージェントは持たない（#272）', () => {
+  assert.equal(replyCommand('claude', 'S', 'hi', '/w', {}, undefined, undefined, 'bypassPermissions')!.permissionMode, 'bypassPermissions')
+  assert.equal(replyCommand('claude', 'S', 'hi', '/w', {})!.permissionMode, '', 'フラグを付けていない = CLI の既定')
+  assert.equal(replyCommand('codex', 'S', 'hi', '/w', {}, undefined, undefined, 'bypassPermissions')!.permissionMode, undefined, 'Codex に渡す先は無い')
+  assert.equal(replyCommand('opencode', 'S', 'hi', '/w', {})!.permissionMode, undefined)
+})
+
+test('ProcessRunner は起動したときの許可モードを snapshot と replying.json に載せ、引き取っても残す（#272）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-runner-'))
+  try {
+    const state = join(dir, 'replying.json')
+    const runner = new ProcessRunner(null, state)
+    await runner.start('M@r', { ...shortLived, args: ['-e', 'setTimeout(() => {}, 2000)'], permissionMode: 'acceptEdits' })
+    assert.equal(runner.snapshot()['M@r']?.permission_mode, 'acceptEdits')
+    assert.equal((await readState(state))['M@r']?.permission_mode, 'acceptEdits')
+    // サーバを立て直した（同じ replying.json を別のインスタンスが読む）
+    const next = new ProcessRunner(null, state)
+    assert.equal(next.snapshot()['M@r']?.permission_mode, 'acceptEdits', '引き取った分も、起動したときのモードのまま')
+
+    // 付けなかった（空）は「既定で起動した」として残す。省略（分からない）とは別
+    await runner.start('D@r', { ...shortLived, permissionMode: '' })
+    assert.equal(runner.snapshot()['D@r']?.permission_mode, '')
+    await runner.start('U@r', shortLived)
+    assert.equal('permission_mode' in (runner.snapshot()['U@r'] ?? {}), false, '持っていないコマンド（Codex など）は載せない')
+  } finally {
     await rm(dir, { recursive: true, force: true })
   }
 })

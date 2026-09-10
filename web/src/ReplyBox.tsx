@@ -9,6 +9,7 @@ import { useAttachments } from './useAttachments'
 import { AttachmentStrip } from './AttachmentStrip'
 import { IconButton } from './IconButton'
 import { ReplyModelPicker, type ReplyModelProps } from './ReplyModelPicker'
+import { TargetLabel } from './TargetLabel'
 import { ReplyPermissionPicker, type ReplyPermissionProps } from './ReplyPermissionPicker'
 import { leavesToSidebar } from './replyFocus'
 import { DiffButton, type DiffButtonProps } from './DiffButton'
@@ -36,6 +37,11 @@ export interface MentionProps {
   onPick: (picked: Picked | null) => void
   /** 返信を処理中のセッション。候補に「処理中」を付ける（選べるが、選ぶと送信が止まる） */
   busyIds?: ReadonlySet<string>
+  /**
+   * 返信先（チップの名前の部分）を押したとき。そのセッションの最後の発言へ飛ぶ（#297）。
+   * フィードにそのセッションの発言が無ければ渡さない（そのときは押せない表示のまま）
+   */
+  onJump?: () => void
 }
 
 export interface Picked {
@@ -363,11 +369,21 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
     >
       {mention && (
         <div className="target" title={mention.target.id}>
-          <span className="arrow">→</span>
-          {mention.target.icon && <img className="icon" src={mention.target.icon} alt="" />}
-          <b>#{mention.target.repo}</b>
-          {mention.target.branch && <code>{mention.target.branch}</code>}
-          {mention.target.title && <span className="title">「{mention.target.title}」</span>}
+          {mention.onJump ? (
+            // 押しても入力欄のフォーカスは奪わない（mousedown を止める）。打ちかけのまま、そのセッションが最後に言ったことを確かめられる
+            <button
+              type="button"
+              className="to"
+              onClick={mention.onJump}
+              onMouseDown={(e) => e.preventDefault()}
+              title="このセッションの最後の発言へ"
+              aria-label={`#${mention.target.repo} の最後の発言へ`}
+            >
+              <TargetLabel target={mention.target} />
+            </button>
+          ) : (
+            <TargetLabel target={mention.target} />
+          )}
           {mention.picked ? (
             <button type="button" className="clear" onClick={clear} aria-label="返信先を既定に戻す" title="返信先を既定に戻す">✕</button>
           ) : (

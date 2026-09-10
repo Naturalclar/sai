@@ -5,7 +5,7 @@ import type { Server } from 'node:http'
 import { mkdtemp, rm, writeFile, appendFile, mkdir, stat, utimes, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ApprovalAnswer, ApprovalMap, Replying, ReplyResponse, SessionsResponse, SessionDetailResponse, SessionIconResponse, SessionMetaResponse, FeedResponse, SettingsResponse, HealthResponse, SessionSkillsResponse, SessionPermissionsResponse, SearchResponse, UsageResponse } from '../shared/types.ts'
+import type { ApprovalAnswer, ApprovalMap, Replying, ReplyQueueResponse, ReplyResponse,SessionsResponse, SessionDetailResponse, SessionIconResponse, SessionMetaResponse, FeedResponse, SettingsResponse, HealthResponse, SessionSkillsResponse, SessionPermissionsResponse, SearchResponse, UsageResponse } from '../shared/types.ts'
 import { createApp, parseDays, revWith, selfUrl, sessionIdFrom, stripThinking } from './app.ts'
 import { BuildFreshness } from './local/buildFreshness.ts'
 import { Authenticator } from './auth.ts'
@@ -41,7 +41,9 @@ class FakeRunner implements Runner {
   busy = new Map<string, Replying>()
   fail: Error | null = null
   running(id: string) {
-    return this.busy.has(id)
+    // 本物（ProcessRunner）と同じく、失敗して残っているだけの分は処理中ではない
+    const r = this.busy.get(id)
+    return r !== undefined && !r.failed
   }
   snapshot() {
     return Object.fromEntries(this.busy)
@@ -1347,6 +1349,116 @@ test('Codex app-serverの承認はAPIへ載り、decisionを同じ管理接続�
   assert.equal(res.status, 200)
   assert.deepEqual(codexApp.answered, [{ id: 'codex-rpc-1', answer: { behavior: 'allow', decision: 'd0' } }])
   assert.equal((await postJson('/api/approvals/codex-rpc-1/answer', { behavior: 'allow', decision: 'd0' }, { Origin: base })).status, 404)
+})
+
+// ---- #305: 処理中に送った返信を預かり、前のターンが終わったら続けて回す
+
+const del = (path: string, headers: Record<string, string> = {}) => fetch(base + path, { method: 'DELETE', headers })
+/** 一覧を 1 回ポーリングして、そのセッションの預かりを返す（サーバはポーリングのついでに預かりを回す） */
+const queuedOf = async (id: string) => ((await (await get('/api/sessions?days=30')).json()) as SessionsResponse).queued[id]
+
+test('POST reply queue: 処理中なら預かって 202（via: queued）。一覧・詳細・フィードに載り、終わったら古い順に 1 件ずつ回す（#305）', async () => {
+  runner.started.length = 0
+  runner.busy.set('C1@r', { since: new Date().toISOString(), text: '前の' })
+  try {
+    const prev = ((await (await get('/api/sessions?days=30')).json()) as SessionsResponse).rev
+    let res = await post('C1@r', { text: '次にこれ', queue: true })
+    assert.equal(res.status, 202)
+    const first = (await res.json()) as ReplyResponse
+    assert.equal(first.via, 'queued')
+    assert.match(first.queue_id ?? '', /^[0-9a-f]{16}$/)
+    res = await post('C1@r', { text: 'その次', queue: true })
+    assert.equal(res.status, 202)
+    assert.equal(runner.started.length, 0, '処理中は起動しない（-p を二重に走らせない）')
+    assert.equal((await post('C1@r', { text: 'x' })).status, 409, 'queue を付けなければ今までどおり 409')
+
+    const list = (await (await get('/api/sessions?days=30')).json()) as SessionsResponse
+    assert.deepEqual(list.queued['C1@r']?.items.map((q) => q.text), ['次にこれ', 'その次'], '古い順')
+    assert.notEqual(list.rev, prev, '預けたら rev が変わる（画面が拾う）')
+    const detail = (await (await get('/api/sessions/C1%40r?days=30')).json()) as SessionDetailResponse
+    assert.equal(detail.queued['C1@r']?.items.length, 2)
+    const feed = (await (await get('/api/feed?days=3')).json()) as FeedResponse
+    assert.equal(feed.queued['C1@r']?.items.length, 2)
+    assert.equal(runner.started.length, 0, '処理中の間はポーリングしても回さない')
+  } finally {
+    runner.busy.delete('C1@r')
+  }
+
+  // 前のターンが終わった。次のポーリングで先頭の 1 件だけを起動する
+  assert.deepEqual((await queuedOf('C1@r'))?.items.map((q) => q.text), ['その次'])
+  assert.equal(runner.started.length, 1)
+  assert.equal(runner.started[0]!.cmd.text, '次にこれ')
+
+  // 回したターンが動いている間は、次を回さない
+  runner.busy.set('C1@r', { since: new Date().toISOString(), text: '次にこれ' })
+  try {
+    await queuedOf('C1@r')
+    assert.equal(runner.started.length, 1)
+  } finally {
+    runner.busy.delete('C1@r')
+  }
+  assert.equal(await queuedOf('C1@r'), undefined, '最後の 1 件を回したら空')
+  assert.equal(runner.started[1]!.cmd.text, 'その次')
+
+  // 処理中でなく預かりも無ければ、queue を付けてもすぐ起動する
+  const now = (await (await post('C1@r', { text: 'すぐ', queue: true })).json()) as ReplyResponse
+  assert.equal(now.via, 'process')
+  assert.equal(runner.started.length, 3)
+})
+
+test('POST reply queue: 前の返信が失敗していたら回さずに止め、「続けて送る」で再開する。取り消しは DELETE（#305）', async () => {
+  runner.started.length = 0
+  runner.busy.set('C1@r', { since: '2026-09-10T07:00:00.000Z', text: '前の' })
+  try {
+    const a = ((await (await post('C1@r', { text: 'A', queue: true })).json()) as ReplyResponse).queue_id!
+    const b = ((await (await post('C1@r', { text: 'B', queue: true })).json()) as ReplyResponse).queue_id!
+    // 前のターンが非0で終わった。失敗は少しの間 replying に残るが、処理中ではない
+    runner.busy.set('C1@r', { since: '2026-09-10T07:00:00.000Z', text: '前の', failed: { code: 1, tail: 'boom' } })
+    const q = await queuedOf('C1@r')
+    assert.equal(runner.started.length, 0, '失敗したターンの続きを黙って回さない')
+    assert.match(q?.paused ?? '', /失敗/)
+
+    // 取り消し: 別オリジンは 403、知らない id は 404、GET では消せない、先頭でなくても取り消せる
+    assert.equal((await del(`/api/sessions/C1%40r/queue/${b}`, { Origin: 'http://evil.local:8787' })).status, 403)
+    assert.equal((await del('/api/sessions/C1%40r/queue/0000000000000000')).status, 404)
+    assert.equal((await get(`/api/sessions/C1%40r/queue/${b}`)).status, 405)
+    const cancelled = await del(`/api/sessions/C1%40r/queue/${b}`)
+    assert.equal(cancelled.status, 200)
+    assert.deepEqual(((await cancelled.json()) as ReplyQueueResponse).queue.items.map((x) => x.queue_id), [a])
+
+    // 再開。失敗はまだ残っているが、その失敗ではもう止めずに先頭を回す
+    assert.equal((await postJson('/api/sessions/C1%40r/queue/resume', {}, { Origin: 'http://evil.local:8787' })).status, 403)
+    const resumed = await postJson('/api/sessions/C1%40r/queue/resume', {})
+    assert.equal(resumed.status, 200)
+    assert.deepEqual(((await resumed.json()) as ReplyQueueResponse).queue, { items: [] })
+    assert.equal(runner.started.length, 1)
+    assert.equal(runner.started[0]!.cmd.text, 'A')
+  } finally {
+    runner.busy.delete('C1@r')
+  }
+})
+
+test('POST reply queue: 預かった返信を起動できなければ外さずに止め、理由を出す（#305）', async () => {
+  runner.started.length = 0
+  runner.busy.set('C1@r', { since: new Date().toISOString(), text: '前の' })
+  const id = ((await (await post('C1@r', { text: '起動できない', queue: true })).json()) as ReplyResponse).queue_id!
+  runner.busy.delete('C1@r')
+  runner.fail = Object.assign(new Error('spawn claude ENOENT'), { code: 'ENOENT' })
+  try {
+    const q = await queuedOf('C1@r')
+    assert.deepEqual(q?.items.map((x) => x.queue_id), [id], '起動できなかった分は残す（黙って捨てない）')
+    assert.match(q?.paused ?? '', /claude が見つかりません/)
+    // 止めている間は、預かりが残っているので queue 付きの送信も後ろに並ぶ（追い越さない）
+    const later = (await (await post('C1@r', { text: '後ろに並ぶ', queue: true })).json()) as ReplyResponse
+    assert.equal(later.via, 'queued')
+    assert.equal((await del(`/api/sessions/C1%40r/queue/${later.queue_id!}`)).status, 200)
+  } finally {
+    runner.fail = null
+  }
+  // 片付け（あとのテストに預かりを持ち越さない）
+  assert.equal((await del(`/api/sessions/C1%40r/queue/${id}`)).status, 200)
+  assert.equal(await queuedOf('C1@r'), undefined)
+  assert.equal(runner.started.length, 0)
 })
 
 test('approvals: 返信を処理中のセッションの分だけ預かり、一覧・詳細・フィードに載って rev が変わる', async () => {

@@ -10,6 +10,8 @@ import { PendingBubble } from './PendingBubble'
 import { ProgressSteps } from './ProgressSteps'
 import { useProgress } from './useProgress'
 import { openPromptSince } from './openPrompt'
+import { QueuedBubble } from './QueuedBubble'
+import { shouldQueue } from './replyQueue.ts'
 import { ApprovalBubble } from './ApprovalBubble'
 import { ReplyBox } from './ReplyBox'
 import { BackLink } from './BackLink'
@@ -52,6 +54,9 @@ export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggl
   const confirmHere = confirm && confirm.id === id ? confirm : null
 
   const approvals = data?.approvals[id] ?? NO_APPROVALS
+  // 処理中に送って預かっている返信（#305）
+  const queuedHere = data?.queued[id]
+  const queuedCount = queuedHere?.items.length ?? 0
 
   // 処理中のターンがいま何をしているか（#302）。SAI から送った返信を処理中か、端末で打った入力のあとターン完了がまだのときだけ取る。
   // 端末で打ったターンは SAI が起動していないので、transcript の上で本当に動いているか（active）で出す
@@ -139,6 +144,9 @@ export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggl
               {approvals.map((a, i) => (
                 <ApprovalBubble key={a.approval_id} approval={a} now={now} hotkey={i === 0} modeNote={launchedModeNote(data.replying[id], data.session.meta?.permission_mode)} />
               ))}
+              {queuedHere?.items.map((q, i) => (
+                <QueuedBubble key={q.queue_id} id={id} item={q} order={i + 1} paused={queuedHere.paused ?? ''} now={now} profile={data.profile} />
+              ))}
             </>
           }
         />
@@ -168,7 +176,9 @@ export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggl
             // 許可モードのフラグを渡せるのは Claude だけ（Codex / OpenCode には渡す先が無い）
             permission={s.agent === 'claude' ? { id: s.id, value: s.meta?.permission_mode, terminal: Boolean(s.terminal), replying: data?.replying[id] } : undefined}
             {...(summary && hasDiff(summary) ? { diff: { summary, open: diffOpen, onToggle: () => onToggleDiff(s.id) } } : {})}
-            onSend={async (text, attachments) => (await send(id, text, { attachments })) !== 'confirm'}
+            queued={queuedCount}
+            // 前の返信を処理中か、預かりが残っていれば預ける（#305。先に預けたものを追い越さない）
+            onSend={async (text, attachments) => (await send(id, text, { attachments, queue: shouldQueue(mine !== null, queuedCount) })) !== 'confirm'}
           />
         ))}
       {confirmHere && <ReplaceConfirm confirm={confirmHere} onReplace={() => void confirmReplace()} onProcess={() => void confirmProcess()} onCancel={cancelConfirm} />}

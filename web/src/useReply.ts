@@ -116,14 +116,17 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
     ...sent.filter((s) => !replying[s.id]).map((s) => ({ id: s.id, text: s.text, since: new Date(s.sentAt).toISOString() })),
   ]
 
-  const send = async (id: string, text: string, options: { replaceTyped?: boolean; via?: 'process'; attachments?: string[] } = {}): Promise<SendOutcome> => {
+  const send = async (id: string, text: string, options: { replaceTyped?: boolean; via?: 'process'; attachments?: string[]; queue?: boolean } = {}): Promise<SendOutcome> => {
     const entry: Sent = { id, text, rowsAtSend: countRows(id), sentAt: Date.now(), acceptedAt: null }
     setFailed(null)
     setConfirm(null)
-    setSent((list) => [...list.filter((s) => s.id !== id), entry])
+    // 預ける（処理中の返信がある）ときは繋ぎを作らない。前の返信の「処理中」を上書きしてしまう（#305）
+    if (!options.queue) setSent((list) => [...list.filter((s) => s.id !== id), entry])
     try {
-      await api.reply(id, text, options)
-      setSent((list) => list.map((s) => (s === entry ? { ...s, acceptedAt: Date.now() } : s)))
+      const accepted = await api.reply(id, text, options)
+      // 預かっただけ（まだ起動していない）。待機中のバブルはサーバの queued から次のポーリングで出る
+      if (accepted.via === 'queued') return 'sent'
+      setSent((list) => (list.includes(entry) ? list.map((s) => (s === entry ? { ...s, acceptedAt: Date.now() } : s)) : [...list.filter((s) => s.id !== id), { ...entry, acceptedAt: Date.now() }]))
       return 'sent'
     } catch (err) {
       // 409（前の返信を処理中）もここ。次のポーリングでサーバの replying が付いて入力欄は閉じる

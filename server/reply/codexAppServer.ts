@@ -47,6 +47,11 @@ export interface CodexApp {
   getApproval(approvalId: string): Approval | undefined
   start(input: CodexTurnInput): Promise<void>
   answer(approvalId: string, answer: ApprovalAnswer): CodexAnswerResult
+  /**
+   * SAI から起動したターンが終わった（完了・閉じた・idle・切断）ときに呼ばれる。預かっている次の返信を回すのに使う（#305）。
+   * 偽物は持たなくてよい（画面のポーリングのついでにも回すので、無くても止まりはしない）
+   */
+  onTurnEnd?(listener: (id: string) => void): void
 }
 
 interface ManagedTurn {
@@ -173,6 +178,7 @@ export class CodexAppServer implements CodexApp {
   private entityThreads = new Map<string, string>()
   private approvals = new Map<string, PendingApproval>()
   private items = new Map<string, JsonObject>()
+  private turnEndListeners: ((id: string) => void)[] = []
   private readonly connect: CodexConnector
   private readonly now: () => number
 
@@ -183,6 +189,21 @@ export class CodexAppServer implements CodexApp {
 
   running(id: string): boolean {
     return this.entityThreads.has(id)
+  }
+
+  onTurnEnd(listener: (id: string) => void): void {
+    this.turnEndListeners.push(listener)
+  }
+
+  /** ターンが終わったことを知らせる。知らせる側が投げても、ターンの片付けは止めない */
+  private turnEnded(entity: string): void {
+    for (const listener of this.turnEndListeners) {
+      try {
+        listener(entity)
+      } catch {
+        // 預かりを回す側の失敗で app-server の片付けを止めない
+      }
+    }
   }
 
   replying(): ReplyingMap {
@@ -478,10 +499,13 @@ export class CodexAppServer implements CodexApp {
       waiting.reject(failure)
     }
     this.pending.clear()
+    // 切断で終わったターンも「終わった」として知らせる（片付けてから。知らせた先が running() を見るので）
+    const ended = [...this.turns.values()].map((turn) => turn.entity)
     this.turns.clear()
     this.entityThreads.clear()
     this.approvals.clear()
     this.items.clear()
+    for (const entity of ended) this.turnEnded(entity)
   }
 
   private clearThread(threadId: string): void {
@@ -490,6 +514,8 @@ export class CodexAppServer implements CodexApp {
     this.turns.delete(threadId)
     for (const [approvalId, entry] of this.approvals) if (entry.threadId === threadId) this.approvals.delete(approvalId)
     for (const key of this.items.keys()) if (key.startsWith(`${threadId}\n`)) this.items.delete(key)
+    // 片付けてから知らせる（知らせた先が running() を見て次の返信を起動する）
+    if (turn) this.turnEnded(turn.entity)
   }
 }
 

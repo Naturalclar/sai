@@ -4,11 +4,13 @@ import { eventKind } from '../../shared/events.ts'
 import { promptArrived } from './chatGroups'
 import { defaultReplyTarget, feedReplyTargets, mergeReplyTargets, sessionReplyTargets } from '../../shared/reply.ts'
 import { launchedModeNote } from '../../shared/permissions.ts'
-import type { ReplyingMap } from '../../shared/types.ts'
+import type { ReplyingMap, ReplyQueueMap } from '../../shared/types.ts'
 import { api, type ApprovalMap, type SessionSummary } from './api'
 import { useLocalState, usePolling } from './hooks'
 import { Chat } from './Chat'
 import { FeedPendingBubble } from './FeedPendingBubble'
+import { QueuedBubble } from './QueuedBubble'
+import { shouldQueue } from './replyQueue.ts'
 import { ApprovalBubble } from './ApprovalBubble'
 import { ReplyBox, type Picked } from './ReplyBox'
 import { DaysSelect } from './DaysSelect'
@@ -26,6 +28,7 @@ const NO_ROWS: never[] = []
 const NO_SESSIONS: never[] = []
 const NO_REPLYING: ReplyingMap = {}
 const NO_APPROVALS: ApprovalMap = {}
+const NO_QUEUED: ReplyQueueMap = {}
 
 interface Props extends PaneProps {
   /** サイドバーで選んでいるリポジトリ（`Naturalclar/sai`）。空なら全部 */
@@ -123,6 +126,9 @@ export function FeedView({ project, projects, onProject, sessions = NO_SESSIONS,
   }, [sessions, targetId, replying])
   // 答え待ちの許可・質問も、処理中の返信と同じく、この画面に関係あるものだけ
   const approvals = Object.values(data?.approvals ?? NO_APPROVALS).flat().filter((a) => counts.has(a.id) || targets.some((t) => t.id === a.id))
+  // 預かっている返信も同じく、この画面に関係あるものだけ（#305）
+  const queued = data?.queued ?? NO_QUEUED
+  const queuedShown = Object.entries(queued).filter(([qid]) => counts.has(qid) || targets.some((t) => t.id === qid))
   /** 処理中のターンが今の設定と違う許可モードで動いていれば、聞かれている理由を添える（#272）。一覧に無いセッションは設定が分からないので出さない */
   const modeNoteOf = (id: string) => {
     const s = sessions.find((x) => x.id === id)
@@ -154,7 +160,7 @@ export function FeedView({ project, projects, onProject, sessions = NO_SESSIONS,
           diffs={{ summaries: diffSummaries, open: openDiff, onToggle: onToggleDiff }}
           jumpTo={jump}
           trailer={
-            (pending.length > 0 || approvals.length > 0) && (
+            (pending.length > 0 || approvals.length > 0 || queuedShown.length > 0) && (
               <>
                 {pending.map((p) => (
                   <FeedPendingBubble key={p.id} id={p.id} text={p.text} since={p.since} now={now} repo={repoOf(p.id)} quiet={promptArrived(rows, p.id, p.text, p.since)} profile={data.profile} />
@@ -163,6 +169,11 @@ export function FeedView({ project, projects, onProject, sessions = NO_SESSIONS,
                 {approvals.map((a, i) => (
                   <ApprovalBubble key={a.approval_id} approval={a} now={now} repo={repoOf(a.id)} hotkey={i === 0} modeNote={modeNoteOf(a.id)} />
                 ))}
+                {queuedShown.flatMap(([qid, q]) =>
+                  q.items.map((item, i) => (
+                    <QueuedBubble key={item.queue_id} id={qid} item={item} order={i + 1} paused={q.paused ?? ''} now={now} repo={repoOf(qid)} profile={data.profile} />
+                  )),
+                )}
               </>
             )
           }
@@ -180,7 +191,11 @@ export function FeedView({ project, projects, onProject, sessions = NO_SESSIONS,
             busy={pending.some((p) => p.id === target.id)}
             busySince={pending.find((p) => p.id === target.id)?.since}
             now={now}
-            onSend={async (text, attachments) => (await send(target.id, text, { attachments })) !== 'confirm'}
+            queued={queued[target.id]?.items.length ?? 0}
+            // 前の返信を処理中か、預かりが残っていれば預ける（#305。先に預けたものを追い越さない）
+            onSend={async (text, attachments) =>
+              (await send(target.id, text, { attachments, queue: shouldQueue(busyIds.has(target.id), queued[target.id]?.items.length ?? 0) })) !== 'confirm'
+            }
             model={replyModel}
             permission={replyPermission}
             onDraft={setDrafting}

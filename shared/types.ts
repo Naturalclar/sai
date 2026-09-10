@@ -392,6 +392,38 @@ export interface ReplyFailure {
 export type ReplyingMap = Record<string, Replying>
 
 /**
+ * 処理中に送って預かっている返信 1 件（#305）。前のターンが終わったらサーバが古い順に 1 件ずつ回す。
+ * 正本はサーバ（`server/reply/replyQueue.ts`。メモリと `~/.agent-feed/reply-queue.json`）
+ */
+export interface QueuedReply {
+  /** 取り消しに使う */
+  queue_id: string
+  /** 送る文。添えた画像のパスは末尾に足してある（画面は `splitAttachments()` で分ける） */
+  text: string
+  /** 預けた時刻 */
+  since: string
+}
+
+/** そのセッションの預かり（古い順） */
+export interface ReplyQueue {
+  items: QueuedReply[]
+  /**
+   * 自動では回さない理由（前の返信が失敗した・預かった返信を起動できなかった）。無ければ回す。
+   * 失敗したターンの続きを黙って積み上げないため。画面の「続けて送る」（`POST .../queue/resume`）で再開する
+   */
+  paused?: string
+}
+
+/** エンティティID → 預かっている返信。無ければ空 */
+export type ReplyQueueMap = Record<string, ReplyQueue>
+
+/** `DELETE /api/sessions/<id>/queue/<queue_id>` と `POST /api/sessions/<id>/queue/resume` の応答。いまの預かり */
+export interface ReplyQueueResponse {
+  id: string
+  queue: ReplyQueue
+}
+
+/**
  * 返信中のエージェントが人の答えを待っている（ツール実行の許可、AskUserQuestion）。
  * `claude -p` の `--permission-prompt-tool` が SAI の MCP ツール（server/approvals/approve-mcp.ts）を呼び、
  * それが SAI サーバに預けたもの。画面の [許可] [拒否] で答えるまでエージェントは止まっている。
@@ -491,6 +523,8 @@ export interface SessionsResponse {
   filters: Facets
   /** 処理中の返信（窓の外のセッションも含む全部）。これが変わると rev も変わる */
   replying: ReplyingMap
+  /** 処理中に送って預かっている返信（#305。窓の外のセッションも含む全部）。これが変わると rev も変わる */
+  queued: ReplyQueueMap
   /** 返信中のエージェントが待っている許可・質問（ID → 古い順）。これが変わると rev も変わる */
   approvals: ApprovalMap
   /** 配っている web/dist/ が web/src / shared より古い（git pull のあと pnpm build していない）。これが変わると rev も変わる */
@@ -526,6 +560,8 @@ export interface SessionDetailResponse {
   session: SessionSummary
   rows: FeedRow[]
   replying: ReplyingMap
+  /** 預かっている返信（#305。SessionsResponse と同じ） */
+  queued: ReplyQueueMap
   /** 返信中のエージェントが待っている許可・質問（ID → 古い順）。これが変わると rev も変わる */
   approvals: ApprovalMap
   /** 自分の表示名とアイコン。変わると rev も変わる */
@@ -539,6 +575,8 @@ export interface FeedResponse {
   days: number
   rows: FeedRow[]
   replying: ReplyingMap
+  /** 預かっている返信（#305。SessionsResponse と同じ） */
+  queued: ReplyQueueMap
   /** 返信中のエージェントが待っている許可・質問（ID → 古い順）。これが変わると rev も変わる */
   approvals: ApprovalMap
   /** 配っている web/dist/ が web/src / shared より古い。SessionsResponse と同じ */
@@ -605,6 +643,12 @@ export interface ReplyRequest {
    * 本文の末尾にパスを足して渡し、Codex にはさらに `-i` でも渡す
    */
   attachments?: string[]
+  /**
+   * 前の返信を処理中なら 409 にせず預かる（#305。応答は `202` で `via: 'queued'`）。前のターンが終わったら
+   * サーバが古い順に 1 件ずつ回す。処理中でなくても、そのセッションに預かりが残っていれば後ろに並べる
+   * （先に預けたものを追い越さない）。省略すれば今までどおり、処理中は `409`
+   */
+  queue?: boolean
 }
 
 /** POST /api/sessions/<id>/attachments。body は画像そのもの */
@@ -645,8 +689,13 @@ export interface ReplyResponse {
   accepted: true
   id: string
   agent: Agent
-  /** terminal: tmux。process: 非対話CLI。queue: 開いているCodex。app-server: SAI管理のCodex */
-  via: 'terminal' | 'process' | 'queue' | 'app-server'
+  /**
+   * terminal: tmux。process: 非対話CLI。queue: 開いているCodex。app-server: SAI管理のCodex。
+   * queued: 処理中だったので預かった（まだ起動していない。#305）
+   */
+  via: 'terminal' | 'process' | 'queue' | 'app-server' | 'queued'
+  /** via が queued のとき、預かった返信の id（取り消しに使う） */
+  queue_id?: string
   session: string
   cwd: string
 }

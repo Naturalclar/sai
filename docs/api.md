@@ -17,7 +17,7 @@
 | `GET /api/sessions/<id>/skills?days=90` | `/` の候補になるスキル。`{ "id", "skills": [{ "name", "description", "source": "user" \| "project" }] }`。`~/.claude/skills/` とセッションの `cwd` の `.claude/skills/` から集め、プロジェクト側を先に、同じ名前はプロジェクトが勝つ。Claude 以外は空。窓の中に無いセッションは `404` |
 | `GET /api/sessions/<id>/permissions?days=90` | そのセッションの `cwd` に効いている許可ルール。`{ "id", "cwd", "agent", "mode", "sources", "rules" }`。`rules` は評価順（`deny` → `ask` → `allow`）。**読むだけ**で、パスは `cwd` から固定で組み立てる。Codex は `sources` / `rules` とも空 |
 | `GET /api/sessions/<id>/diff?base=&days=90` | そのセッションの worktree の差分（`git` を読むだけ）。`branch` が `base...HEAD`、`working` が未コミット、`untracked` は追跡外のファイル名。大きすぎれば `truncated`。`cwd` が git のリポジトリでなければ `404` |
-| `GET /api/sessions/<id>/diff?summary=1` | 同じものの**大きさだけ**（`--numstat` のみで patch を作らない）。入力欄の差分ボタンが開く前に出す行数と、そのブランチの PR 番号（`pr`。`gh` が引ければ）。`untracked` は数 |
+| `GET /api/sessions/<id>/diff?summary=1` | 同じものの**大きさだけ**（`--numstat` のみで patch を作らない）。入力欄の差分ボタン（とフィードの PR に触れたバブルのボタン。#280）が開く前に出す行数と、そのブランチの PR 番号（`pr`。`gh` が引ければ）。`untracked` は数 |
 | `GET /api/sessions/<id>/meta` | 表示名・アーカイブ・返信のモデル・一言の性格。`{ "id", "meta": { "name"?, "archived_at"?, "model"?, "persona"? } }`。無ければ `meta` は `{}` |
 | `PUT /api/sessions/<id>/meta?days=90` | body `{ "name"?: "...", "archived_at"?: "<ISO>", "model"?: "opus", "persona"?: "ISTJ", "permission_mode"?: "acceptEdits" }` をいまの値に重ねる。省略したキーは据え置き、空文字や `null` は「消す」で、全部消えたらエントリごと消える。知らないキーは捨てる。名前は100文字まで、`archived_at` は読める時刻、`model` は英数字で始まる 64 文字までの名前、`persona` は `shared/persona.ts` にある id、`permission_mode` は `acceptEdits` だけ（違えば `400`）。窓の中に無いセッションは `404`、別オリジンは `403` |
 | `GET /api/sessions/<id>/icon?v=<mtime>` | アイコン画像そのもの（`image/png` など）。無ければ `404`。`v` がいまのファイルと同じなら `Cache-Control: immutable`、無ければ `no-store` |

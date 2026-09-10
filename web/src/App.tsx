@@ -8,6 +8,7 @@ import { SessionView } from './SessionView'
 import { DiffPane } from './DiffPane'
 import { DiffModal } from './DiffModal'
 import { useNarrow } from './useNarrow'
+import { nextDiff, visibleDiff, type DiffOrigin, type OpenDiff } from './feedDiff.ts'
 import { FeedView } from './FeedView'
 import { TodoView } from './TodoView'
 import { hm } from './format'
@@ -82,15 +83,17 @@ export function App() {
   const toggleSidebar = useCallback(() => setUi({ sidebar: sidebarOpen ? 'closed' : 'open' }), [setUi, sidebarOpen])
   const openSidebar = useCallback(() => setUi({ sidebar: 'open' }), [setUi])
 
-  // 差分を出しているセッション。広い画面はチャットの右にペイン、狭い画面はモーダル（useNarrow）
-  const [diffId, setDiffId] = useState<string | null>(null)
+  // 差分を出しているセッションと、どこから開いたか。広い画面はチャットの右にペイン、狭い画面はモーダル（useNarrow）
+  const [diff, setDiff] = useState<OpenDiff | null>(null)
   const narrow = useNarrow()
-  const closeDiff = useCallback(() => setDiffId(null), [])
-  // 入力欄のボタンはトグル（開いていれば閉じる。#211）
-  const toggleDiff = useCallback((id: string) => setDiffId((prev) => (prev === id ? null : id)), [])
-  // 出すのは、いま開いているセッションの分だけ。別のセッションやフィードへ移っている間は出さない
-  // （そのセッションに戻ってくれば、また出る。閉じるまでそのセッションのものとして覚えておく）
-  const diffOpen = diffId !== null && route.name === 'session' && route.id === diffId ? diffId : null
+  const closeDiff = useCallback(() => setDiff(null), [])
+  // 出すのは、いま開いているセッションの分と、フィードのバブルから開いたものはフィードにいる間（#280）。
+  // 別のセッションへ移っている間は出さない（戻ってくれば、また出る。閉じるまで覚えておく）。規則は feedDiff.ts
+  const diffOpen = visibleDiff(diff, route, narrow)
+  // ボタンはトグル（出ていれば閉じる。#211）。「いま出ているか」で決めるので、セッションで開いたまま
+  // フィードに来て同じセッションのバブルを押しても、閉じずに開く
+  const toggleDiff = useCallback((id: string, origin: DiffOrigin = 'session') => setDiff(nextDiff(diffOpen, id, origin)), [diffOpen])
+  const toggleFeedDiff = useCallback((id: string) => toggleDiff(id, 'feed'), [toggleDiff])
 
   // Cmd/Ctrl + \ で開閉（VS Code と同じ）。入力欄にフォーカスがあっても効く。IME 変換中は無視
   useEffect(() => {
@@ -156,7 +159,7 @@ export function App() {
       if (action === 'feed' && diffOpen !== null) {
         // 差分を出しているときの Esc は、まずそれを閉じる
         e.preventDefault()
-        setDiffId(null)
+        setDiff(null)
         return
       }
       if (action === 'feed') {
@@ -271,6 +274,8 @@ export function App() {
               onProject={(project) => setFilters({ project })}
               sessions={list.data?.sessions}
               selfHost={list.data?.host ?? ''}
+              openDiff={diffOpen}
+              onToggleDiff={toggleFeedDiff}
               onStatus={onStatus}
               onOpenSidebar={openSidebar}
               onLeaveToSidebar={focusSidebar}

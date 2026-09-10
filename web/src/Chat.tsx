@@ -8,6 +8,7 @@ import { groupRows, speakerLabel } from './chatGroups.ts'
 import { Message } from './Message'
 import { JumpToBottom } from './JumpToBottom'
 import { HostTag } from './HostTag'
+import { opensDiff, type ChatDiffs } from './feedDiff.ts'
 
 const NO_SESSIONS: never[] = []
 
@@ -36,9 +37,14 @@ interface Props {
    * その ts の行がまだ無ければ（窓の外、取得待ち）何もしない
    */
   focusTs?: string
+  /**
+   * バブルから差分を開く（#280）。そのセッションのいまのブランチの PR に触れているエージェントのバブルにだけ
+   * ボタンを出す（`feedDiff.ts` の `opensDiff()`）。フィードだけが渡す（セッション画面は入力欄にある）
+   */
+  diffs?: ChatDiffs
 }
 
-export function Chat({ rows, showChannel, selfHost = '', sessions = NO_SESSIONS, trailer, showThinking = false, thinkingOpen = false, profile, linear = '', focusTs = '' }: Props) {
+export function Chat({ rows, showChannel, selfHost = '', sessions = NO_SESSIONS, trailer, showThinking = false, thinkingOpen = false, profile, linear = '', focusTs = '', diffs }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
   // 最下部が見えているか（描画にも使うので state）。見えていないときは「一番下へ」を出す
@@ -119,10 +125,17 @@ export function Chat({ rows, showChannel, selfHost = '', sessions = NO_SESSIONS,
                       {g.branch && <span className="branch">{g.branch}</span>}
                       <span className="time">{hm(g.firstTs)}</span>
                     </div>
-                    {g.items.map((u) => (
+                    {g.items.map((u) => {
+                      // 差分のボタンは、いまのブランチの PR に触れているエージェントのバブルだけ（#280）
+                      const summary = diffs && u.speaker !== 'me' && !u.waiting ? diffs.summaries.get(id) : undefined
+                      const diff = diffs && summary && opensDiff(u.text, u.row.remote, summary)
+                        ? { summary, open: diffs.open === id, onToggle: () => diffs.onToggle(id) }
+                        : null
                       // 自分の入力は Markdown にしない（打ったままを出す）。エージェントの返答は Markdown
+                      return (
                       <Message
                         key={u.key}
+                        {...(diff ? { diff } : {})}
                         ts={u.row.ts}
                         text={u.text}
                         markdown={u.speaker !== 'me'}
@@ -136,7 +149,8 @@ export function Chat({ rows, showChannel, selfHost = '', sessions = NO_SESSIONS,
                         linear={linear}
                         found={focusTs !== '' && u.row.ts === focusTs}
                       />
-                    ))}
+                      )
+                    })}
                   </div>
                 </div>
               )

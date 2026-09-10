@@ -166,7 +166,40 @@ pnpm test && pnpm test:feed && pnpm lint && pnpm typecheck
 
 同じ一式（＋ `pnpm build`）を GitHub Actions でも回す（`.github/workflows/ci.yml`）。`main` への push と PR が対象で、Node は 22 系の最新、Python は 3.9 と最新の両方。
 
-### 4. 別のマシンの分も見る（任意）
+### 4. Claude の使用率を出す（任意）
+
+ヘッダの使用量に **Claude の 5 時間・週の使用率**を出すための設定（[#250](https://github.com/Naturalclar/sai/issues/250)）。要らなければ飛ばしてよい（設定しなければ、上限に当たったときだけ「上限中」と出る）。
+
+**割合はステータスライン経由でしか手元に来ない。** `claude` CLI に `usage` のサブコマンドは無く、TUI の `/usage` が叩いている API は OAuth のトークンが要るので SAI は使わない。一方、`statusLine` に指定したコマンドには**描画のたびに** `rate_limits`（5 時間・週の `used_percentage` と復帰時刻）を含む JSON が stdin で渡る。それを受け取って置いておくのが `feed/statusline.py`。
+
+`~/.claude/settings.json` に:
+
+```json
+{
+  "statusLine": { "type": "command", "command": "python3 \"$SAI_HOME/feed/statusline.py\"" }
+}
+```
+
+**stdout に出したものがそのままステータスラインになる。** `statusline.py` は `Opus 5 · 5時間 43% · 週 71%` のような1行を出す。
+
+**`statusLine` は 1 つしか持てない。** すでに自分のステータスラインを使っているなら、両方に同じ JSON を配る小さなラッパーを置いて、`statusLine` はそれだけを指す（Codex の `notify` と同じやり方）。SAI 側の出力は捨て、今までの表示をそのまま使う:
+
+```sh
+#!/usr/bin/env bash
+# sai-statusline - ステータスラインの JSON を SAI にも配る
+set -uo pipefail
+input=$(cat)
+printf '%s' "$input" | python3 "${SAI_HOME:-$HOME/src/sai}/feed/statusline.py" >/dev/null 2>&1 || true
+printf '%s' "$input" | 今までのコマンド      # ここの出力がステータスラインになる
+exit 0
+```
+
+設定したら Claude で1ターン回し、`~/.agent-feed/usage-claude.json` ができて `rate_limits` が入っていることを見る。**`rate_limits` は subscription のときだけ、かつ最初の API 応答の後に載る**（API キー利用では出ない）。
+
+- 割合は **Claude が動いている間しか更新されない**。枠の復帰時刻を過ぎたものは画面に出さない
+- `AGENT_FEED_HOST` を設定していればファイルもマシンごとに分かれる（`usage-claude.<host>.json`）。SAI は全部読んで一番新しいものを使う
+
+### 5. 別のマシンの分も見る（任意）
 
 1 台で使うなら要らない。**複数のマシンで回している分を 1 つの画面で眺めたい**ときだけ設定する（[#24](https://github.com/Naturalclar/sai/issues/24)）。SAI 自身は他のマシンに通信しない（「SAI は外に出さない」は変わらない）。集めるのは**外の道具（rsync / 同期フォルダ）の仕事**で、SAI は置き場にあるファイルを読むだけ。
 

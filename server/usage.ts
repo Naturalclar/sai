@@ -5,14 +5,16 @@
 //
 //   Codex … CODEX_HOME/sessions/YYYY/MM/DD/rollout-*.jsonl の `token_count` の行の rate_limits。
 //            手元の一番大きい rollout は 12MB あったので**末尾だけ**読む（TAIL_BYTES）。
-//   Claude … ~/.claude/projects/*/*.jsonl の `quotaLimits`。**弾かれたときにしか載らない**ので、
-//            戻る時刻がまだ先の記録だけを拾う（＝いま上限に当たっている、が分かるだけ）。
+//   Claude … 割合は feed dir の `usage-claude[.<host>].json`（feed/statusline.py が
+//            ステータスライン経由で書く。#250）。**これが平常時の割合を知る唯一の口**。
+//            加えて ~/.claude/projects/*/*.jsonl の `quotaLimits` を見る。こちらは
+//            **弾かれたときにしか載らない**ので、戻る時刻がまだ先の記録だけを拾う（＝いま上限中）。
 //
 // 3 秒のポーリングには乗せない。画面が開いたときに 1 回取り、CACHE_MS の間は使い回す。
-import { open, readdir, stat } from 'node:fs/promises'
+import { open, readdir, readFile, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { parseClaudeUsage, parseCodexUsage } from '../shared/usage.ts'
+import { mergeClaudeUsage, parseClaudeUsage, parseCodexUsage, parseStatusLineUsage } from '../shared/usage.ts'
 import type { ClaudeUsage, CodexUsage, UsageResponse } from '../shared/types.ts'
 
 /** ファイルの末尾から読む量。手元の rollout では 64KB で最後の token_count に届いた */
@@ -43,6 +45,9 @@ export function codexSessionsDir(env: NodeJS.ProcessEnv = process.env, home: str
 }
 
 export const claudeProjectsDir = (home: string = homedir()): string => join(home, '.claude', 'projects')
+
+/** feed dir に置かれる使用率のファイル。`usage-claude.json` と、マシンごとに分けた `usage-claude.<host>.json` */
+export const isClaudeUsageFile = (name: string): boolean => /^usage-claude(\.[^/]+)?\.json$/.test(name)
 
 /** ファイル 1 つ分。mtime で新しい順に並べるために持つ */
 interface Candidate {
@@ -169,6 +174,25 @@ export async function readCodexUsage(sessionsDir: string): Promise<CodexUsage | 
   return best
 }
 
+/**
+ * ステータスライン経由の割合。マシンごとに分かれていることがあるので全部読み、**一番新しいもの**を採る
+ * （口座ごとの値なので、どのマシンで測ったかは問わない）。ファイルは小さいので丸ごと読む
+ */
+export async function readStatusLineUsage(feedDir: string, now: number): Promise<ClaudeUsage | null> {
+  let best: ClaudeUsage | null = null
+  for (const name of await names(feedDir)) {
+    if (!isClaudeUsageFile(name)) continue
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(await readFile(join(feedDir, name), 'utf-8'))
+    } catch {
+      continue // 書きかけ・壊れている。読めるものだけ使う
+    }
+    best = newer(best, parseStatusLineUsage(parsed, now))
+  }
+  return best
+}
+
 export async function readClaudeUsage(projectsDir: string, now: number): Promise<ClaudeUsage | null> {
   let best: ClaudeUsage | null = null
   for (const path of await recentTranscripts(projectsDir, now - CLAUDE_WINDOW_MS)) {
@@ -184,14 +208,21 @@ export async function readClaudeUsage(projectsDir: string, now: number): Promise
 export class UsageStore {
   readonly codexDir: string
   readonly claudeDir: string
+  readonly feedDir: string
   private cached: { at: number; usage: UsageResponse } | null = null
   private pending: Promise<UsageResponse> | null = null
   private readonly now: () => number
 
   // パラメータプロパティは server/tsconfig.json の erasableSyntaxOnly で使えないので、素直に代入する
-  constructor(codexDir: string = codexSessionsDir(), claudeDir: string = claudeProjectsDir(), now: () => number = Date.now) {
+  constructor(
+    codexDir: string = codexSessionsDir(),
+    claudeDir: string = claudeProjectsDir(),
+    feedDir: string = join(homedir(), '.agent-feed'),
+    now: () => number = Date.now,
+  ) {
     this.codexDir = codexDir
     this.claudeDir = claudeDir
+    this.feedDir = feedDir
     this.now = now
   }
 
@@ -207,7 +238,13 @@ export class UsageStore {
   }
 
   private async read(at: number): Promise<UsageResponse> {
-    const [codex, claude] = await Promise.all([readCodexUsage(this.codexDir), readClaudeUsage(this.claudeDir, at)])
+    // 割合（ステータスライン）と「上限中」（transcript）は出どころが別なので、両方読んで重ねる
+    const [codex, windows, limited] = await Promise.all([
+      readCodexUsage(this.codexDir),
+      readStatusLineUsage(this.feedDir, at),
+      readClaudeUsage(this.claudeDir, at),
+    ])
+    const claude = mergeClaudeUsage(windows, limited)
     const usage: UsageResponse = {}
     if (codex) usage.codex = codex
     if (claude) usage.claude = claude

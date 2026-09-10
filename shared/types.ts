@@ -724,16 +724,28 @@ export interface CodexUsage {
   at: string
 }
 
-/**
- * Claude の使用量。ローカルには「上限に当たった」記録しか無いので、割合は出せない。
- * transcript の quotaLimits が `status: rejected` で、まだ戻っていないときだけ載る
- */
-export interface ClaudeUsage {
+/** いま上限に当たっている記録（transcript の quotaLimits が `status: rejected`） */
+export interface ClaudeLimited {
   /** 戻る時刻（epoch 秒） */
   resets_at: number
   /** rateLimitType（`five_hour` など）。無ければ空 */
   kind: string
-  /** 拾った行の時刻（ISO） */
+}
+
+/**
+ * Claude の使用量。**出どころが 2 つあり、片方しか無いことがある**（#250）:
+ *   - 割合（`primary` / `secondary`）… ステータスライン経由（`feed/statusline.py`）。
+ *     設定していない・subscription でない・Claude をまだ動かしていないときは付かない
+ *   - `limited` … transcript の `quotaLimits`。**上限に弾かれたときにしか載らない**
+ */
+export interface ClaudeUsage {
+  /** 5 時間の枠 */
+  primary?: UsageWindow
+  /** 週の枠 */
+  secondary?: UsageWindow
+  /** いま上限に当たっている */
+  limited?: ClaudeLimited
+  /** いつ時点の値か（ISO）。Claude が動いていない間は増えない */
   at: string
 }
 

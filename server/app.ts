@@ -70,7 +70,7 @@ import type { Settings } from './settings.ts'
 import { isLinearWorkspace } from '../shared/refs.ts'
 import { ProcessRunner, replyCommand } from './runner.ts'
 import { SkillStore } from './skills.ts'
-import { UsageStore } from './usage.ts'
+import { claudeProjectsDir, codexSessionsDir, UsageStore } from './usage.ts'
 import { searchRows } from './search.ts'
 import { searchWords } from '../shared/search.ts'
 import { alive, RealTmux, realPs, TerminalBusy, TerminalGone, TerminalReplies, typeInto } from './terminal.ts'
@@ -262,7 +262,8 @@ export function createApp(
   skillStore: SkillStore = new SkillStore(),
   git: Git = new RealGit(),
   pr: PrLookup = prLookupFromEnv(),
-  usageStore: UsageStore = new UsageStore(),
+  // 使用率のファイル（usage-claude.json）は feed dir に置かれるので、--feed-dir をそのまま渡す
+  usageStore: UsageStore = new UsageStore(codexSessionsDir(), claudeProjectsDir(), store.directory),
 ): Handler {
   const distRoot = resolve(distDir)
   // 端末に打ち込んだ返信の「処理中」。子プロセスの方（run）とは別に持ち、画面には合わせて出す

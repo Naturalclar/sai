@@ -292,32 +292,44 @@ rsync -a --include='????-??-??.*.jsonl' --exclude='*' mini:~/.agent-feed/ ~/.age
 
 ## 環境変数
 
+**どれも省略できる**（何も設定しなくても既定値で動く）。1 台で使うだけなら、設定するのは一言（digest）を使うときの `SAI_DIGEST` 系くらい。
+
+### 設定することがあるもの
+
 | | |
 | --- | --- |
-| `SAI_HOME` | このリポジトリの場所。上のフック設定例が `$SAI_HOME/feed/record.py` として使う（`record.py` やサーバ自身は読まない） |
+| `SAI_HOME` | このリポジトリの場所。上のフック設定例が `$SAI_HOME/feed/record.py` として使い、OpenCode のプラグイン（`feed/opencode/sai.js`）も `record.py` を探すのに読む（無ければ置いたファイルの隣から辿る）。`record.py` とサーバ自身は読まない |
 | `AGENT_FEED_DIR` | 出力先（既定 `~/.agent-feed`）。`record.py` とサーバの両方が見る |
-| `AGENT_FEED_DEBUG` | `1` で `record.py` の例外をログに残す |
-| `SAI_HOST` | このサーバが動いているマシンの名前（既定は `os.hostname()` の短い形）。行の `host` がこれと違うセッションは「別のマシン」として印を付け、返信の口を出さない。取れなければ何もリモートにしない |
-| `AGENT_FEED_HOST` | 行に載せるマシン名（既定は `gethostname()` の短い形）。複数のマシンの JSONL を 1 か所に集めるときに、行の出どころを分ける。**設定すると書き込み先も `YYYY-MM-DD.<host>.jsonl` に分かれる**（同期フォルダで同じファイルに追記して壊れるのを避けるため。サーバは両方の形を全部読む） |
-| `CODEX_HOME` | Codex のホーム（既定 `~/.codex`） |
 | `SAI_PORT` | サーバの既定ポート（既定 `8787`）。`pnpm dev` の `/api` の proxy 先もこれ（`--port` は見ない。#146） |
-| `SAI_TERMINAL` | `0` で tmux への打ち込みを切る。Claude と閉じた Codex は別プロセス、開いている Codex は queue |
-| `SAI_TMUX_BIN` | ペインに打ち込むときの `tmux` の実行ファイル（既定は PATH の `tmux`） |
-| `SAI_GIT_BIN` | 差分を読むときの `git` の実行ファイル（既定は PATH の `git`）。読むだけのコマンドしか呼ばない |
-| `SAI_GH` / `SAI_GH_BIN` | `0` で差分ボタンの PR 番号を引かない（既定は引く）。実行ファイルは既定で PATH の `gh`。叩くのは `gh pr view` だけで、引けなければ番号が付かないだけ |
-| `SAI_CLAUDE_BIN` | 返信で起動する `claude` の実行ファイル（既定は PATH の `claude`）。launchd などで PATH が最小のときに |
-| `SAI_CODEX_BIN` | 同じく `codex` |
-| `SAI_OPENCODE_BIN` | 同じく `opencode` |
-| `SAI_CLAUDE_ARGS` | 返信の `claude -p --resume` に足す引数。空白区切りで、空白を含む値は `"…"` か `'…'` で囲む。例: `--allowedTools "Bash(gh *)"`、`--permission-mode acceptEdits`。「返信と許可」の項を読んでから |
-| `SAI_TAILSCALE_BIN` | tailnet 経由の認証で `whois` に使う `tailscale` の実行ファイル（既定は PATH、無ければ macOS の GUI 版） |
-| `SAI_CODEX_ARGS` | 開いている Codex の `codex queue` と、`SAI_CODEX_APP_SERVER=0` の `codex exec resume` に足す引数。例: `-s workspace-write` |
-| `SAI_CODEX_APP_SERVER` | `0` で閉じたCodexのapp-server管理を切り、従来の `codex exec resume` に戻す。既定は有効 |
-| `SAI_CODEX_APP_SERVER_ARGS` | `codex app-server --stdio` に足す引数。空白を含む値は引用符で囲む。例: `-c sandbox_mode="workspace-write"` |
-| `SAI_OPENCODE_ARGS` | 同じく `opencode run` に足す引数。例: `--agent build` |
-| `AGENT_FEED_SKIP` | `1` なら `record.py` は何も記録しない。SAI が一言を作るために回す `claude -p` に付ける（自分自身を記録しない） |
+| `AGENT_FEED_HOST` | 行に載せるマシン名（既定は `gethostname()` の短い形）。複数のマシンの JSONL を 1 か所に集めるときに、行の出どころを分ける。**設定すると書き込み先も `YYYY-MM-DD.<host>.jsonl` に分かれる**（同期フォルダで同じファイルに追記して壊れるのを避けるため。サーバは両方の形を全部読む） |
+| `SAI_HOST` | このサーバが動いているマシンの名前（既定は `os.hostname()` の短い形）。行の `host` がこれと違うセッションは「別のマシン」として印を付け、返信の口を出さない。取れなければ何もリモートにしない。**`AGENT_FEED_HOST` を設定したら同じ名前にする**（片方だけだと自分のセッションが「別のマシン」になる） |
 | `SAI_DIGEST` | `1` で一言コメント（digest）を作る。既定はオフ |
 | `SAI_DIGEST_PROVIDER` | 一言を作る口。`claude`（既定。`claude -p`）か `openai`（OpenAI 互換の `/v1/chat/completions`。Ollama / LM Studio などローカルの LLM はこちら） |
 | `SAI_DIGEST_MODEL` | 一言を作るモデル。`claude` なら既定 `haiku`（`claude -p --model` にそのまま渡す）。`openai` なら必須（`qwen3:8b` のようなローカルのモデル名。無ければ一言を作らないでサーバは立つ） |
 | `SAI_DIGEST_URL` | `openai` のときの base URL（既定 `http://127.0.0.1:11434/v1` = Ollama。LM Studio は `http://127.0.0.1:1234/v1`）。末尾に `/chat/completions` を足して叩く |
 | `SAI_DIGEST_API_KEY` | `openai` のときの鍵（任意。`Authorization: Bearer`）。Ollama / LM Studio は不要 |
+| `SAI_CLAUDE_ARGS` | 返信の `claude -p --resume` に足す引数。空白区切りで、空白を含む値は `"…"` か `'…'` で囲む。例: `--allowedTools "Bash(gh *)"`（許可モードとモデルは入力欄でセッションごとに選べる）。「返信と許可」の項を読んでから |
+| `SAI_CODEX_ARGS` | 開いている Codex の `codex queue` と、`SAI_CODEX_APP_SERVER=0` の `codex exec resume` に足す引数。例: `-s workspace-write` |
+| `SAI_CODEX_APP_SERVER_ARGS` | `codex app-server --stdio` に足す引数。空白を含む値は引用符で囲む。例: `-c sandbox_mode="workspace-write"` |
+| `SAI_OPENCODE_ARGS` | 同じく `opencode run` に足す引数。例: `--agent build` |
+
+### 切り分け・内部
+
+普段は設定しない。うまく動かないときに経路を切る・実行ファイルを差し替える・ログを残すためのもの。
+
+| | |
+| --- | --- |
+| `SAI_TERMINAL` | `0` で tmux への打ち込みを切る。Claude と閉じた Codex は別プロセス、開いている Codex は queue |
 | `SAI_APPROVE` | `0` で「返信中の許可・質問に画面から答える」配線（`--mcp-config` + `--permission-prompt-tool`）を付けない |
+| `SAI_CODEX_APP_SERVER` | `0` で閉じたCodexのapp-server管理を切り、従来の `codex exec resume` に戻す。既定は有効 |
+| `SAI_GH` / `SAI_GH_BIN` | `0` で差分ボタンの PR 番号を引かない（既定は引く。SAI で唯一外のネットワークに問い合わせる所）。実行ファイルは既定で PATH の `gh`。叩くのは `gh pr view` だけで、引けなければ番号が付かないだけ |
+| `SAI_CLAUDE_BIN` | 返信で起動する `claude` の実行ファイル（既定は PATH の `claude`）。launchd などで PATH が最小のときに |
+| `SAI_CODEX_BIN` | 同じく `codex` |
+| `SAI_OPENCODE_BIN` | 同じく `opencode` |
+| `SAI_TMUX_BIN` | ペインに打ち込むときの `tmux` の実行ファイル（既定は PATH の `tmux`） |
+| `SAI_GIT_BIN` | 差分を読むときの `git` の実行ファイル（既定は PATH の `git`）。読むだけのコマンドしか呼ばない |
+| `SAI_TAILSCALE_BIN` | tailnet 経由の認証で `whois` に使う `tailscale` の実行ファイル（既定は PATH、無ければ macOS の GUI 版） |
+| `CODEX_HOME` | Codex のホーム（既定 `~/.codex`）。Codex 自身の変数で、SAI はそれに従うだけ |
+| `AGENT_FEED_DEBUG` | `1` で `record.py` の例外をログに残す |
+
+表に無いもの（SAI が自分で付ける・エージェントが渡してくる）: `AGENT_FEED_SKIP`（SAI が一言を作るために回す `claude -p` に付け、`record.py` に自分自身を記録させない）、`SAI_URL` / `SAI_ENTITY`（返信の `claude` に足す MCP サーバに渡す）、`TMUX_PANE` / `CLAUDE_PID`（エージェントが `record.py` に渡してくる）。

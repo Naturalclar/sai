@@ -122,6 +122,13 @@ export interface SessionSummary {
   last_turn_ts?: string
   /** last_text の一言版（digest）。無ければ省略で、画面は last_text を出す */
   last_summary?: string
+  /**
+   * 一番新しい自分の入力（ターン完了の行か入力の行の `user_text`）の 1 行目（#300）。
+   * 一覧の 2 行目で「最後に言ったのが自分か」を決めるのに使う（`web/src/sessionPreview.ts`）。集計が付けるので、手で組む fixture では省略可
+   */
+  last_user_text?: string
+  /** その行の ts。ターン完了の行に載っている入力なら `last_turn_ts` と同じになる */
+  last_user_ts?: string
   /** 一番新しいターン完了の行のモデル。無ければ空。途中で変わった全部は models に（出てきた順） */
   model: string
   models: string[]

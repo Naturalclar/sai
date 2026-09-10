@@ -93,6 +93,7 @@ export function SessionList({ list, filters, setFilters, active }: Props) {
             s={s}
             active={active.kind === 'session' && s.id === active.id}
             replying={data?.replying[s.id] ?? null}
+            {...(data?.profile ? { profile: data.profile } : {})}
             approval={data?.approvals[s.id]?.[0] ?? null}
             now={now}
             swipe={swipe}

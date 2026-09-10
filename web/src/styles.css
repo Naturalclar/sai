@@ -275,6 +275,8 @@
   .channels .when b { color: var(--ink); font-weight: 500; }
   .channels .t { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .channels .last { display: block; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* 2 行目が自分の返信のとき（#300）。誰の発言かの名前だけ少し濃くする */
+  .channels .last .who { font-weight: 600; margin-right: 2px; }
   .repo { font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .repo .dot { margin-right: 6px; vertical-align: -1px; }
   .repo .br { color: var(--muted); }

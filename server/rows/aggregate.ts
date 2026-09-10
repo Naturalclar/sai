@@ -102,6 +102,12 @@ export function aggregate(rows: FeedRow[]): SessionSummary[] {
     // ターンはターン完了の行だけ。待ち（PermissionRequest など）と再開（UserPromptSubmit）は数えないし、最後の発言にもしない
     const turnRows = items.filter((r) => eventKind(r.event) === 'turn')
     const lastTurn = turnRows[turnRows.length - 1]
+    // 一番新しい自分の入力（#300）。Claude は入力した瞬間の行（再開）に、どのエージェントもターン完了の行に載る。
+    // 一覧の 2 行目で、最後に言ったのが自分かを決めるのに使う（ターン完了より新しければ自分の返信）
+    const lastInput = [...items].reverse().find((r) => {
+      const kind = eventKind(r.event)
+      return (kind === 'turn' || kind === 'resume') && r.user_text?.trim()
+    })
     // 最後の行が待ちなら、まだ人を待っている。後にターン完了か再開が来ていれば解消
     const waiting = eventKind(last.event) === 'waiting' ? (last.text ?? '') : ''
     // モデルはターン完了の行だけが持つ。途中で変わっていれば全部（出てきた順）、表示は一番新しい行のもの
@@ -139,6 +145,8 @@ export function aggregate(rows: FeedRow[]): SessionSummary[] {
       session_source: sources.includes('synth') ? 'synth' : (latestValue(items, (r) => r.session_source) as SessionSource),
       sources,
       last_text: clip(firstLine(lastTurn?.text ?? ''), 120),
+      last_user_text: clip(firstLine(lastInput?.user_text ?? ''), 120),
+      last_user_ts: lastInput?.ts ?? '',
       pane: typeof last.pane === 'string' ? last.pane : '',
       pid: typeof last.pid === 'number' && last.pid > 0 ? last.pid : 0,
       last_turn: lastTurn?.ts ?? '',

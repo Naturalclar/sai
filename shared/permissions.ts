@@ -49,6 +49,22 @@ export const MODE_LABEL: Record<PermissionMode, string> = {
  */
 export const REPLY_MODES: ReplyPermissionMode[] = ['acceptEdits', 'bypassPermissions']
 
+/**
+ * 入力欄の許可モードのボタン（閉じているとき）に出す短い名前（#265）。
+ * 送信ボタンの左にモデルと並ぶので幅が限られる。メニューの中は今までどおり `MODE_LABEL` の長い文
+ */
+export const MODE_SHORT: Record<'default' | ReplyPermissionMode, string> = {
+  default: '聞く',
+  acceptEdits: '編集は許可',
+  bypassPermissions: '素通し',
+}
+
+/** 空（CLI の既定）は `default` と同じ扱い。知らない値はそのまま出す */
+export function shortReplyMode(mode: string): string {
+  const key = (mode || 'default') as keyof typeof MODE_SHORT
+  return MODE_SHORT[key] ?? mode
+}
+
 /** 画面から選べる許可モードか。知らない値・素通し系は false */
 export function isReplyPermissionMode(value: unknown): value is ReplyPermissionMode {
   return typeof value === 'string' && (REPLY_MODES as string[]).includes(value)

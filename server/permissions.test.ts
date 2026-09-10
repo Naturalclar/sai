@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { argsRules, collectPermissions, managedSettingsPath, orderRules, parseSettings, settingsPaths } from './permissions.ts'
-import { isReplyPermissionMode, MODE_LABEL, modeSkipsRules, REPLY_MODES } from '../shared/permissions.ts'
+import { isReplyPermissionMode, MODE_LABEL, modeSkipsRules, REPLY_MODES, shortReplyMode } from '../shared/permissions.ts'
 import type { PermissionRuleEntry } from '../shared/types.ts'
 
 test('settingsPaths: cwd と home から固定で組み立てる（強い順）', () => {
@@ -116,4 +116,14 @@ test('modeSkipsRules: 素通しだけ true。画面はこれで印を出す', ()
 
 test('MODE_LABEL: 選べるモードには必ず日本語のラベルがある（select が空欄にならない）', () => {
   for (const m of REPLY_MODES) assert.notEqual(MODE_LABEL[m] ?? '', '', m)
+})
+
+test('shortReplyMode: 入力欄のボタンに出す短い名前。空は「既定」と同じ扱い（#265）', () => {
+  assert.equal(shortReplyMode(''), '聞く', '設定していない = CLI の既定')
+  assert.equal(shortReplyMode('default'), '聞く')
+  assert.equal(shortReplyMode('acceptEdits'), '編集は許可')
+  assert.equal(shortReplyMode('bypassPermissions'), '素通し')
+  // 返信で選べる値には全部短い名前がある（増やしたらここで止まる）
+  for (const m of REPLY_MODES) assert.notEqual(shortReplyMode(m), m, m)
+  assert.equal(shortReplyMode('しらない値'), 'しらない値', '知らない値はそのまま出す')
 })

@@ -9,6 +9,7 @@ import { useAttachments } from './useAttachments'
 import { AttachmentStrip } from './AttachmentStrip'
 import { IconButton } from './IconButton'
 import { ReplyModelPicker, type ReplyModelProps } from './ReplyModelPicker'
+import { ReplyPermissionPicker, type ReplyPermissionProps } from './ReplyPermissionPicker'
 import { leavesToSidebar } from './replyFocus'
 import { DiffButton, type DiffButtonProps } from './DiffButton'
 import { acceptsSuggestion, suggestFrom } from './replySuggest'
@@ -55,6 +56,8 @@ interface Props {
   onSend: (text: string, attachments: string[]) => void | boolean | Promise<void | boolean>
   /** 本文が空でないかが変わったら知らせる。FeedView は入力中に既定の返信先を動かさないために使う */
   onDraft?: (drafting: boolean) => void
+  /** モデルの右に出す許可モードの選択。渡さなければ出さない（Claude 以外と、返信先が一覧に無いとき） */
+  permission?: ReplyPermissionProps
   /** 送信ボタンの左に出すモデルの選択。渡さなければ出さない（返信先が一覧に無いフィードの候補など） */
   model?: ReplyModelProps
   /**
@@ -79,7 +82,7 @@ const NO_HISTORY: readonly string[] = []
 const keyOf = (e: KeyboardEvent<HTMLTextAreaElement>) => ({ key: e.key, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, shiftKey: e.shiftKey })
 
 /** 入力欄。Enter で送信、Shift+Enter で改行。IME 変換中の Enter は送らない */
-export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onDraft, model, diff, skillsId, attachId, history = NO_HISTORY, onLeaveToSidebar, mention }: Props) {
+export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onDraft, model, permission, diff, skillsId, attachId, history = NO_HISTORY, onLeaveToSidebar, mention }: Props) {
   const [text, setText] = useState('')
   const attach = useAttachments(attachId)
   const fileRef = useRef<HTMLInputElement>(null)
@@ -449,7 +452,10 @@ export function ReplyBox({ repo, terminal, busy, busySince, now = 0, onSend, onD
         </div>
         {/* 送信ボタンの左。textarea が 1 行を占めるので、画像ボタンと並んで下の行に入る */}
         {diff && <DiffButton {...diff} />}
-        {model && <ReplyModelPicker key={model.id} {...model} />}
+        {/* key は「別のセッションに移ったら作り直す」ため。**兄弟で同じ key にしない**（React の照合が壊れて
+            片方が消えずに 2 つ並ぶ。#265 の実装中に踏んだ）ので、種類ごとに前置きを付ける */}
+        {model && <ReplyModelPicker key={`model-${model.id}`} {...model} />}
+        {permission && <ReplyPermissionPicker key={`perm-${permission.id}`} {...permission} />}
         <button
           type="submit"
           disabled={blocked || attach.busy || (!(mention?.picked ? stripMention(text, mention.picked.label) : text).trim() && attach.items.length === 0)}

@@ -198,7 +198,7 @@ SAI_CODEX_APP_SERVER_ARGS='-c sandbox_mode="workspace-write"' pnpm start  # app-
 
 `claude` の `--allowedTools` は `~/.claude/settings.json` の `permissions.allow` と同じ書き方で、こちらは SAI からの返信にだけ効く（端末の許可設定はそのまま）。**SAI 自身は既定で何も付けない。** `--dangerously-skip-permissions` / `--permission-mode bypassPermissions` / Codex の `--dangerously-bypass-approvals-and-sandbox` も書けるが、返信の POST はブラウザから飛ぶので、その状態で別サイトからの CSRF が通ればエージェントが何でもできる（同一オリジンの検査で止めてはいる）。許可はツール単位で最小にする。
 
-**許可モードはセッションごとに画面から切り替えられる。** チャット見出しの select（Claude のセッションだけ）で選ぶと、そのセッションへの SAI からの返信に `--permission-mode` が付く。値はセッションのメタ（`session-meta.json` の `permission_mode`、`PUT /api/sessions/<id>/meta`）。選べるのは 2 つ:
+**許可モードはセッションごとに画面から切り替えられる。** 入力欄の**モデルの右**のボタン（Claude のセッションだけ。#265）で選ぶと、そのセッションへの SAI からの返信に `--permission-mode` が付く。送る直前に目線を動かさずに変えられるよう、返信の設定は `[差分] [モデル] [許可]` と入力欄に並べてある。値はセッションのメタ（`session-meta.json` の `permission_mode`、`PUT /api/sessions/<id>/meta`）。選べるのは 2 つ:
 
 | | |
 | --- | --- |

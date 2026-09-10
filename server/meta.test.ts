@@ -117,3 +117,19 @@ test('MetaStore: 無ければ空、set で書け、空にすると消え、壊�
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+test('mergeMeta: digest_off は「あることが状態」。false / null / 空 はどれも消す（作るに戻る。#263）', () => {
+  const cur = { name: 'A', persona: 'ISTJ' as const }
+  // 立てる
+  assert.deepEqual(mergeMeta(cur, { digest_off: true }).meta, { ...cur, digest_off: true })
+  // 戻す。**boolean の false でも消える**のがこの形の要（`if (value)` の規則を崩さない）
+  const off = { ...cur, digest_off: true as const }
+  assert.deepEqual(mergeMeta(off, { digest_off: false }).meta, cur)
+  assert.deepEqual(mergeMeta(off, { digest_off: null }).meta, cur)
+  assert.deepEqual(mergeMeta(off, { digest_off: '' }).meta, cur)
+  // 省略は据え置き（persona だけ変えても切れたまま）
+  assert.deepEqual(mergeMeta(off, { persona: 'ENFP' }).meta, { ...off, persona: 'ENFP' })
+  // これだけでも「何か付いている」扱い（session-meta.json から捨てられない）
+  assert.equal(isEmptyMeta({ digest_off: true }), false)
+  assert.equal(isEmptyMeta({}), true)
+})

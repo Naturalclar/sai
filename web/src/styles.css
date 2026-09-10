@@ -293,10 +293,11 @@
     /* 使用量はエージェント名を落として色の点だけにする（「● 92% ● 上限中」。ヘッダの 1 行に収めるため） */
     header .usage-chip { gap: 6px; padding: 3px 6px; }
     header .usage-chip .usage-name { display: none; }
-    /* digest の操作（性格の select と Linear の入力）は 1 行に収まらないので 2 行目に落とし、入力を残りの幅に広げる */
-    header .digest-ctl { order: 10; flex-basis: 100%; margin-left: 0; }
-    header .digest-ctl .linear-ws { flex: 1; min-width: 6em; width: auto; }
-    header .digest-ctl .note { flex: 1; max-width: none; }
+    /* 一言の全体の設定（性格の select と Linear の入力）は、狭い画面ではヘッダに並べず自分のメニューの中に入る
+       （#274。前は 2 行目に落ちて、どの画面でも 32px を取り続けていた） */
+    header .user-menu .menu .digest-ctl { flex-direction: column; align-items: stretch; margin: 4px 0 0; padding: 8px 12px 4px; border-top: 1px solid var(--line); }
+    header .user-menu .menu .digest-ctl .linear-ws { width: auto; }
+    header .user-menu .menu .digest-ctl .note { max-width: 18em; white-space: normal; }
     .pane { padding: 8px 8px calc(10px + env(safe-area-inset-bottom)); }
     .group { grid-template-columns: 28px minmax(0, 1fr); padding: 8px 8px 4px; }
     .avatar { width: 28px; height: 28px; font-size: 12px; }
@@ -313,14 +314,21 @@
   @media (pointer: coarse) {
     /* iOS Safari は 16px 未満の入力欄にフォーカスすると画面を拡大するので、入力系は 16px にする */
     /* .reply .row textarea にしているのは、後ろにある基本の `.reply textarea { font: inherit }` に同じ詳細度で負けないため */
-    .reply .row textarea, .reply .row .field .ghost, .filters select, .filters input, .sidebar .filters select, .chat-head .meta select, .chat-head .session-name input { font-size: 16px; }
+    .reply .row textarea, .reply .row .field .ghost, .filters select, .filters input, .sidebar .filters select, header .digest-ctl select, header .digest-ctl .linear-ws { font-size: 16px; }
+    /* 見出しの select と名前の入力欄は `.pane` を足して詳細度を上げる。この下（ファイルの後ろ）にある基本の
+       `.chat-head .meta select { font-size: 12px }` / `.chat-head .session-name input { font: inherit }` と同じ詳細度だと
+       後ろが勝ち、16px が効かずに iOS で押すと拡大していた（#274 で測って 12px / 14px だった） */
+    .pane .chat-head .meta select, .pane .chat-head .session-name input { font-size: 16px; }
     .sidebar .filters select, .sidebar .filters button { min-height: 40px; }
-    .chat-head .meta select { min-height: 36px; }
+    .chat-head .meta select, header .digest-ctl select, header .digest-ctl .linear-ws { min-height: 36px; }
     /* リポジトリの切り替えは日数の select と同じ大きさに（携帯ではここが唯一の切り替え口。#215） */
     .chat-head .project-pick > button { min-height: 36px; border-color: var(--line); }
     .chat-head .project-pick .menu button { min-height: 40px; }
     .iconbtn { width: 36px; height: 36px; }
     .back { padding: 8px 6px; margin: -8px -6px 0; }
+    /* 狭い画面の見出しの 1 行目の ← と ⋯ は指で押せる大きさに（#274）。こちらも後ろの `.chat-head.compact .back` と
+       基本の `.iconbtn`（28px）に同じ詳細度で負けるので `.pane` を足す */
+    .pane .chat-head.compact .back, .pane .chat-head.compact .head-more .iconbtn { width: 36px; height: 36px; }
     .reply .row textarea { min-height: 44px; }
     .reply .thumb button { width: 22px; height: 22px; }
     .reply .row button { min-height: 44px; }
@@ -407,6 +415,25 @@
   .chat-head .session-name .name-input { flex: 1; min-width: 12em; max-width: 32em; }
   .chat-head .session-name button[type="submit"] { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 5px 12px; font: inherit; font-weight: 600; cursor: pointer; }
   .chat-head .session-name button:disabled { opacity: .5; cursor: default; }
+  /* -- 狭い画面のチャット見出し（#274）。1 行目 = ← + 名前 + 状態の印 + ⋯、2 行目 = 題名 1 行。詳しい情報と操作は ⋯ のパネル。
+     パネルも `.chat-head` の中に置く（pointer: coarse の 16px / 36px の指定が `.chat-head` に閉じている。外に出すと iOS で入力欄を押すと拡大する） */
+  .chat-head.compact { position: relative; display: block; margin-bottom: 8px; }
+  .chat-head.compact .head-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .chat-head.compact .back { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 28px; height: 28px; margin: 0; padding: 0; font-size: 18px; }
+  /* 縮むのは名前の側（状態の印は縮めない）。#project → 表示名の順に省略する */
+  .chat-head.compact .head-name { flex: 0 10 auto; min-width: 3em; margin-right: auto; display: flex; align-items: center; gap: 6px; overflow: hidden; white-space: nowrap; }
+  .chat-head.compact .head-name b { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-size: 16px; }
+  .chat-head.compact .head-name .hash { color: var(--muted); font-weight: 400; }
+  .chat-head.compact .head-name .project { flex: 0 100 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-size: 12px; }
+  .chat-head.compact .head-name img.icon { flex: none; width: 22px; height: 22px; vertical-align: middle; }
+  /* 印は縮めない（縮める側にすると、名前がまだ詰められるのに印が 2 行に折れる）。多すぎるときだけ幅の 6 割で折り返す */
+  .chat-head.compact .head-row > .head-tags { flex: 0 0 auto; max-width: 60%; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
+  .chat-head.compact .head-row > .head-tags .tag { margin-left: 0; }
+  .chat-head.compact .head-more { flex: none; }
+  .chat-head.compact .head-title { display: block; width: 100%; margin: 2px 0 0; padding: 2px 0; background: none; border: 0; color: var(--muted); font: inherit; font-size: 12px; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+  .chat-head.compact .head-title.open { white-space: normal; overflow-wrap: anywhere; }
+  .chat-head.compact .head-panel { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 10; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; max-height: 70vh; overflow-y: auto; padding: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, .18); }
+  .chat-head.compact .head-panel .head-id code { font-size: 11px; }
   /* -- アイコン加工のモーダル（IconCropper） */
   .modal-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, .45); display: flex; align-items: center; justify-content: center; z-index: 20; }
   .modal { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 10px; padding: 16px; box-shadow: 0 12px 40px rgba(0, 0, 0, .3); max-width: calc(100vw - 24px); outline: none; }

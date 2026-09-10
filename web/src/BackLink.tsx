@@ -7,15 +7,18 @@ export const NARROW_QUERY = '(max-width: 900px)'
  * チャット側の「← 一覧」。出るのは2つの場面で、押したときの意味が違う:
  * - 狭い画面（一覧かチャットのどちらかだけ）: `#/` へ移って一覧を出す
  * - 広い画面でサイドバーを閉じているとき: ページは変えず、サイドバーを開くだけ
- * どちらで出ているかは CSS が決めるので、ここでは押された瞬間の幅で判断する
+ * どちらで出ているかは CSS が決めるので、ここでは押された瞬間の幅で判断する。
+ * `compact` は狭い画面の見出しの 1 行目に入れる形（`←` だけ。#274）
  */
-export function BackLink({ onOpenSidebar }: { onOpenSidebar: () => void }) {
+export function BackLink({ onOpenSidebar, compact = false }: { onOpenSidebar: () => void; compact?: boolean }) {
   const onClick = (e: MouseEvent<HTMLAnchorElement>) => {
     if (window.matchMedia(NARROW_QUERY).matches) return
     e.preventDefault()
     onOpenSidebar()
   }
   return (
-    <a className="back" href="#/" onClick={onClick}>← 一覧</a>
+    <a className="back" href="#/" onClick={onClick} aria-label={compact ? '一覧へ' : undefined} title={compact ? '一覧へ' : undefined}>
+      {compact ? '←' : '← 一覧'}
+    </a>
   )
 }

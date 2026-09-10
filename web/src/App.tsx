@@ -17,8 +17,7 @@ import { UserMenu } from './UserMenu'
 import { UsageChip } from './UsageChip'
 import { api, type SessionFilters, type SettingsResponse } from './api'
 import { isTypingTarget, navAction, navTarget, type NavTarget } from './sessionNav'
-import { PersonaSelect } from './PersonaSelect'
-import { LinearWorkspaceInput } from './LinearWorkspaceInput'
+import { DigestControls } from './DigestControls'
 import { useSettings } from './useSettings'
 import { useCommandPalette } from './useCommandPalette'
 import { CommandPalette } from './CommandPalette'
@@ -221,12 +220,9 @@ export function App() {
         <div className="logo">
           SAI <small>agent-feed viewer</small>
         </div>
-        {settings?.digest && (
-          <div className="digest-ctl" title={settingsError || `一言コメント: ${settings.model}（${settings.provider}）`}>
-            <PersonaSelect value={settings.persona} busy={settingsBusy} onChange={(p) => void setPersona(p)} />
-            <LinearWorkspaceInput value={settings.linear_workspace} busy={settingsBusy} onChange={(ws) => void setLinearWorkspace(ws)} />
-            {settingsError && <span className="note">{settingsError}</span>}
-          </div>
+        {/* 狭い画面では 2 行目に落ちてどの画面でも場所を取るので、自分のメニューの中に入れる（#274） */}
+        {settings?.digest && !narrow && (
+          <DigestControls settings={settings} busy={settingsBusy} error={settingsError} onPersona={(p) => void setPersona(p)} onLinearWorkspace={(ws) => void setLinearWorkspace(ws)} />
         )}
         <div className={`status${status.error ? ' error' : ''}`}>
           {status.error ? `取得失敗: ${status.error}` : status.at ? `更新 ${hm(status.at.toISOString())}` : ''}
@@ -238,7 +234,11 @@ export function App() {
             <GitHubMark />
           </a>
         )}
-        <UserMenu profile={list.data?.profile} viewer={list.data?.viewer ?? null} notify={notify} />
+        <UserMenu profile={list.data?.profile} viewer={list.data?.viewer ?? null} notify={notify}>
+          {settings?.digest && narrow && (
+            <DigestControls settings={settings} busy={settingsBusy} error={settingsError} onPersona={(p) => void setPersona(p)} onLinearWorkspace={(ws) => void setLinearWorkspace(ws)} />
+          )}
+        </UserMenu>
       </header>
       {/* 記録側の record.py が古い（フックが古い checkout や試作を呼んでいる）。窓の中の一番新しい行の v で見る */}
       {list.data && list.data.record_version > 0 && list.data.record_version < RECORD_VERSION && (

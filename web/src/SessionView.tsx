@@ -7,6 +7,9 @@ import { api } from './api'
 import { useLocalState, usePolling } from './hooks'
 import { Chat } from './Chat'
 import { PendingBubble } from './PendingBubble'
+import { ProgressSteps } from './ProgressSteps'
+import { useProgress } from './useProgress'
+import { openPromptSince } from './openPrompt'
 import { ApprovalBubble } from './ApprovalBubble'
 import { ReplyBox } from './ReplyBox'
 import { BackLink } from './BackLink'
@@ -49,6 +52,11 @@ export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggl
   const confirmHere = confirm && confirm.id === id ? confirm : null
 
   const approvals = data?.approvals[id] ?? NO_APPROVALS
+
+  // 処理中のターンがいま何をしているか（#302）。SAI から送った返信を処理中か、端末で打った入力のあとターン完了がまだのときだけ取る。
+  // 端末で打ったターンは SAI が起動していないので、transcript の上で本当に動いているか（active）で出す
+  const promptSince = mine ? '' : openPromptSince(data?.rows ?? NO_ROWS)
+  const progress = useProgress(id, Boolean(mine) || Boolean(promptSince))
 
   // 思考の折りたたみを全部開いておくか。localStorage に残る。思考のある行が1つも無ければトグルは出さない
   const [thinkingUi, setThinkingUi] = useLocalState<{ open: boolean }>('sai.thinking', { open: false })
@@ -117,7 +125,17 @@ export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggl
           focusTs={focusTs}
           trailer={
             <>
-              {mine && <PendingBubble text={mine.text} since={mine.since} now={now} quiet={promptArrived(data.rows, id, mine.text, mine.since)} profile={data.profile} />}
+              {mine && (
+                <PendingBubble text={mine.text} since={mine.since} now={now} quiet={promptArrived(data.rows, id, mine.text, mine.since)} profile={data.profile}>
+                  <ProgressSteps progress={progress} since={mine.since} now={now} />
+                </PendingBubble>
+              )}
+              {/* 端末で打ったターン（#302）。SAI は起動していないので、transcript の上で動いているときだけ「処理中」を出す */}
+              {!mine && promptSince && progress?.active && (
+                <PendingBubble text="" since={promptSince} now={now} quiet typed>
+                  <ProgressSteps progress={progress} since={promptSince} now={now} />
+                </PendingBubble>
+              )}
               {approvals.map((a, i) => (
                 <ApprovalBubble key={a.approval_id} approval={a} now={now} hotkey={i === 0} modeNote={launchedModeNote(data.replying[id], data.session.meta?.permission_mode)} />
               ))}

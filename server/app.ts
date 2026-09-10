@@ -27,6 +27,7 @@ import type {
   SessionDetailResponse,
   SessionDiffResponse,
   SessionDiffSummaryResponse,
+  SessionProgressResponse,
   SessionIconResponse,
   SessionMetaResponse,
   SessionPermissionsResponse,
@@ -72,6 +73,8 @@ import { isLinearWorkspace } from '../shared/refs.ts'
 import { ProcessRunner, replyCommand } from './reply/runner.ts'
 import { SkillStore } from './local/skills.ts'
 import { claudeProjectsDir, codexSessionsDir, UsageStore } from './local/usage.ts'
+import { ProgressReader } from './local/progress.ts'
+import { isRemoteHost } from '../shared/host.ts'
 import { searchRows } from './rows/search.ts'
 import { searchWords } from '../shared/search.ts'
 import { alive, RealTmux, realPs, TerminalBusy, TerminalGone, TerminalReplies, typeInto } from './reply/terminal.ts'
@@ -105,6 +108,7 @@ const ICON_SUFFIX = '/icon'
 const SKILLS_SUFFIX = '/skills'
 const PERMISSIONS_SUFFIX = '/permissions'
 const DIFF_SUFFIX = '/diff'
+const PROGRESS_SUFFIX = '/progress'
 const ATTACHMENTS_SUFFIX = '/attachments'
 /** 配る側。GET /api/attachments/<dir>/<name> */
 const ATTACHMENTS_PREFIX = `/api/${ATTACHMENTS_DIR}/`
@@ -265,6 +269,8 @@ export function createApp(
   pr: PrLookup = prLookupFromEnv(),
   // 使用率のファイル（usage-claude.json）は feed dir に置かれるので、--feed-dir をそのまま渡す
   usageStore: UsageStore = new UsageStore(codexSessionsDir(), claudeProjectsDir(), store.directory),
+  // 処理中のターンの手順（#302）。読む先は使用量と同じ ~/.claude/projects と CODEX_HOME/sessions
+  progress: ProgressReader = new ProgressReader(claudeProjectsDir(), codexSessionsDir()),
 ): Handler {
   const distRoot = resolve(distDir)
   // 端末に打ち込んだ返信の「処理中」。子プロセスの方（run）とは別に持ち、画面には合わせて出す
@@ -752,6 +758,23 @@ export function createApp(
     return json(res, payload)
   }
 
+  /**
+   * GET /api/sessions/<id>/progress（#302）。処理中のターンがいま何をしているか。transcript / rollout の末尾を読むだけ。
+   * パスは行の cwd とセッション ID から組み立てる（リクエストからは受けない）。3 秒のポーリングには乗せない
+   * （画面が処理中のセッションを出している間だけ、そのセッションの分を取る）。
+   * 別のマシンのセッションは transcript がこちらに無いので読まない（同じ ID のファイルがあっても別物）
+   */
+  const getProgress = async (res: ServerResponse, id: string, days: number) => {
+    const { sessions } = await store.sessions(days)
+    const session = sessions.find((s) => s.id === id)
+    if (!session) return error(res, 404, 'session not found in window')
+    if (isRemoteHost(session.host, selfHost())) {
+      const payload: SessionProgressResponse = { rev: '', id, active: false, steps: [], total: 0, updated_at: '' }
+      return json(res, payload)
+    }
+    return json(res, await progress.read(session))
+  }
+
   const getDiff = async (res: ServerResponse, id: string, base: string, days: number) => {
     const { sessions } = await store.sessions(days)
     const session = sessions.find((s) => s.id === id)
@@ -915,6 +938,7 @@ export function createApp(
     const isSkills = path.startsWith(SESSIONS_PREFIX) && path.endsWith(SKILLS_SUFFIX)
     const isPermissions = path.startsWith(SESSIONS_PREFIX) && path.endsWith(PERMISSIONS_SUFFIX)
     const isDiff = path.startsWith(SESSIONS_PREFIX) && path.endsWith(DIFF_SUFFIX)
+    const isProgress = path.startsWith(SESSIONS_PREFIX) && path.endsWith(PROGRESS_SUFFIX)
     const isAttachUpload = path.startsWith(SESSIONS_PREFIX) && path.endsWith(ATTACHMENTS_SUFFIX)
     const isAttachFile = path.startsWith(ATTACHMENTS_PREFIX)
     const isAsk = path === APPROVALS_PATH
@@ -1004,6 +1028,11 @@ export function createApp(
         res.writeHead(200, { 'Content-Type': found.mime, 'Content-Length': body.length, 'Cache-Control': 'private, max-age=31536000, immutable' })
         res.end(req.method === 'HEAD' ? undefined : body)
         return
+      }
+      if (isProgress) {
+        const id = sessionIdFrom(path, PROGRESS_SUFFIX)
+        if (id === null) return error(res, 400, 'bad session id')
+        return await getProgress(res, id, parseDays(q.get('days'), 90))
       }
       if (isPermissions) {
         const id = sessionIdFrom(path, PERMISSIONS_SUFFIX)

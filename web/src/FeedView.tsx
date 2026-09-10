@@ -8,7 +8,7 @@ import type { ReplyingMap } from '../../shared/types.ts'
 import { api, type ApprovalMap, type SessionSummary } from './api'
 import { useLocalState, usePolling } from './hooks'
 import { Chat } from './Chat'
-import { PendingBubble } from './PendingBubble'
+import { FeedPendingBubble } from './FeedPendingBubble'
 import { ApprovalBubble } from './ApprovalBubble'
 import { ReplyBox, type Picked } from './ReplyBox'
 import { DaysSelect } from './DaysSelect'
@@ -157,7 +157,7 @@ export function FeedView({ project, projects, onProject, sessions = NO_SESSIONS,
             (pending.length > 0 || approvals.length > 0) && (
               <>
                 {pending.map((p) => (
-                  <PendingBubble key={p.id} text={p.text} since={p.since} now={now} repo={repoOf(p.id)} quiet={promptArrived(rows, p.id, p.text, p.since)} profile={data.profile} />
+                  <FeedPendingBubble key={p.id} id={p.id} text={p.text} since={p.since} now={now} repo={repoOf(p.id)} quiet={promptArrived(rows, p.id, p.text, p.since)} profile={data.profile} />
                 ))}
                 {/* ショートカット（⌘Enter）が効くのは一番上の 1 つだけ。複数出るので、どれに効いたか分からなくならないように */}
                 {approvals.map((a, i) => (

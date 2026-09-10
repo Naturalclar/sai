@@ -15,6 +15,9 @@ import type { Summarizer } from './digest/digest.ts'
 import { FeedStore } from './rows/store.ts'
 import { SkillStore } from './local/skills.ts'
 import { UsageStore } from './local/usage.ts'
+import { ProgressReader } from './local/progress.ts'
+import { claudeProjectName } from '../shared/progress.ts'
+import type { SessionProgressResponse } from '../shared/types.ts'
 import { localDate } from './rows/aggregate.ts'
 import { replyCommand, splitArgs } from './reply/runner.ts'
 import type { ReplyCommand, Runner } from './reply/runner.ts'
@@ -175,6 +178,8 @@ before(async () => {
     undefined,
     // feed dir は本番（createApp の既定）と同じく store の置き場。省くと本物の ~/.agent-feed を読む（#275）
     new UsageStore(join(dir, 'codex-sessions'), join(dir, 'claude-projects'), store.directory),
+    // 処理中の手順も、この Mac の ~/.claude / ~/.codex ではなく temp の置き場だけを読む（#302）
+    new ProgressReader(join(dir, 'claude-projects'), join(dir, 'codex-sessions')),
   )
   server = createServer((req, res) => void app(req, res))
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -389,6 +394,39 @@ test('thinking はセッション詳細の行には載り、フィードの行�
   const withThinking = row(new Date(), 'X', { thinking: 't' })
   assert.equal(stripThinking(withThinking).thinking, undefined)
   assert.equal(withThinking.thinking, 't', '元の行は変えない')
+})
+
+test('GET /api/sessions/<id>/progress: 行の cwd とセッション ID から transcript を引き、いまの手順を返す。別のマシン・無いセッションは空、窓に無ければ 404（#302）', async () => {
+  const projectDir = join(dir, 'claude-projects', claudeProjectName(dir))
+  await mkdir(projectDir, { recursive: true })
+  const ts = new Date().toISOString()
+  const transcript = [
+    JSON.stringify({ type: 'user', timestamp: ts, message: { role: 'user', content: 'テストを回して' } }),
+    JSON.stringify({ type: 'assistant', timestamp: ts, message: { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'pnpm test' } }], stop_reason: 'tool_use' } }),
+  ].join('\n')
+  await writeFile(join(projectDir, 'C1.jsonl'), transcript + '\n')
+  // 別のマシンのセッション（R1）にも同じ ID の置き場を作っておく。こちらのファイルでも、あちらのセッションとしては読まない
+  await writeFile(join(projectDir, 'R1.jsonl'), transcript + '\n')
+
+  let res = await get('/api/sessions/C1%40r/progress')
+  assert.equal(res.status, 200)
+  const data = (await res.json()) as SessionProgressResponse
+  assert.equal(data.id, 'C1@r')
+  assert.equal(data.active, true)
+  assert.deepEqual(
+    data.steps.map((s) => [s.kind, s.tool, s.summary]),
+    [['tool', 'Bash', 'pnpm test']],
+  )
+  assert.notEqual(data.rev, '')
+
+  const remote = (await (await get('/api/sessions/R1%40r/progress')).json()) as SessionProgressResponse
+  assert.deepEqual([remote.active, remote.steps.length, remote.rev], [false, 0, ''], '別のマシンのセッションは transcript がこちらに無いので読まない')
+  const codex = (await (await get('/api/sessions/X1%40r/progress')).json()) as SessionProgressResponse
+  assert.equal(codex.steps.length, 0, 'rollout が無ければ空')
+  res = await get('/api/sessions/nope%40r/progress')
+  assert.equal(res.status, 404)
+  assert.equal((await get('/api/sessions/%2Fetc%2Fpasswd/progress')).status, 400, 'パスは受け取らない')
+  assert.equal((await fetch(`${base}/api/sessions/C1%40r/progress`, { method: 'POST' })).status, 405)
 })
 
 test('GET /api/sessions/<id>/permissions: cwd の設定を読んで deny → allow の順に返す。Codex と不明なセッションは空（#162）', async () => {

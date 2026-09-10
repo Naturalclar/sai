@@ -591,6 +591,17 @@
   .group.approval .questions .other { margin-top: 6px; width: 100%; box-sizing: border-box; font: inherit; font-size: 16px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
   .group.approval.done { opacity: .6; }
   .pending-line.long .time { color: var(--synth); font-weight: 600; }
+  /* 処理中のターンがいま何をしているか（#302）。「処理中 N分」の横に 1 行、押すと直近の手順。長いコマンドは切って 1 行に収める */
+  .pending-line { flex-wrap: wrap; }
+  .progress { min-width: 0; flex: 1 1 12em; font-size: 12px; color: var(--muted); font-style: normal; }
+  .progress .current { display: inline-flex; gap: 6px; align-items: baseline; max-width: 100%; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+  .progress .current .label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); }
+  .progress .current:hover .label { color: var(--ink); }
+  .progress .dur { flex: none; margin-left: 6px; }
+  .progress.long .current .dur { color: var(--synth); font-weight: 600; }
+  .progress .steps { margin: 4px 0 0; padding: 0 0 0 1.4em; }
+  .progress .steps li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); }
+  .progress .steps li.more { list-style: none; margin-left: -1.4em; font-family: inherit; }
   .reply { position: relative; display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
   /* 返信欄は 1 つのバブル（Slack / Claude の返信欄と同じ）: 枠は .row に 1 つだけ。上の行が textarea（全幅、枠なし、
      入力に合わせて伸びる）、下の行が送信ボタン（右端）。注意文はバブルの上。フォーカスは枠の色で示す。

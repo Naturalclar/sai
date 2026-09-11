@@ -12,6 +12,10 @@ import { isPersonaId } from '../shared/persona.ts'
 import { replyBlockedReason } from '../shared/reply.ts'
 import { selfHost } from './host.ts'
 import type {
+  AgentSendRequest,
+  AgentSendResponse,
+  AgentSessionsResponse,
+  AgentWaitResponse,
   ApprovalAnswer,
   ApprovalRequest,
   AttachmentResponse,
@@ -73,6 +77,9 @@ import type { Settings } from './meta/settings.ts'
 import { isLinearWorkspace } from '../shared/refs.ts'
 import { ProcessRunner, replyCommand } from './reply/runner.ts'
 import { QUEUE_FILE, QUEUE_MAX, ReplyQueueStore } from './reply/replyQueue.ts'
+import { AGENT_TOKEN_FILE, AGENT_TOKEN_HEADER, AgentMessages, ensureAgentToken, tokenMatches } from './reply/agentMessages.ts'
+import type { AgentMessage } from './reply/agentMessages.ts'
+import { AGENT_SEND_MAX, AGENT_TEXT_MAX_CHARS, agentEntry, agentTargets, clipReply, deliveredText, isDeliveryOf, replyOf, sessionLabel } from '../shared/agentMessages.ts'
 import { SkillStore } from './local/skills.ts'
 import { claudeProjectsDir, codexSessionsDir, UsageStore } from './local/usage.ts'
 import { ProgressReader } from './local/progress.ts'
@@ -117,6 +124,13 @@ const QUEUE_SEGMENT = '/queue/'
 const QUEUE_RESUME = 'resume'
 /** 預かった返信を起動するときに見る窓（POST の reply の既定と同じ） */
 const QUEUE_DAYS = 90
+/** エージェント用の口（#310）。SAI の MCP サーバ（approve-mcp.ts）の sai_* のツールだけが叩く。トークンを要り、ブラウザからは通さない */
+const AGENT_PREFIX = '/api/agent/'
+const AGENT_SESSIONS_PATH = '/api/agent/sessions'
+const AGENT_SEND_PATH = '/api/agent/send'
+const AGENT_WAIT_PATH = '/api/agent/wait'
+/** sai_wait をサーバ側で待つ間、相手の返答の行が届いたかを見る間隔 */
+const AGENT_POLL_MS = 1000
 /** 配る側。GET /api/attachments/<dir>/<name> */
 const ATTACHMENTS_PREFIX = `/api/${ATTACHMENTS_DIR}/`
 const PROFILE_PATH = '/api/profile'
@@ -254,6 +268,8 @@ interface LaunchOptions {
   url: string
   /** 処理中なら預かる（`ReplyRequest.queue`） */
   queue: boolean
+  /** 別のセッションから送られたメッセージなら、その message_id（#310）。起動したターンから先へは送らせない（連鎖 1 段） */
+  origin?: string
 }
 
 /** 起動の結果。HTTP には書かずに返すので、POST はそのまま応答にし、drain は預かりを止める理由にする */
@@ -332,6 +348,10 @@ export function createApp(
   const draining = new Set<string>()
   // 失敗で止めたあと「続けて送る」を押したときの、その失敗（`Replying.since`）。同じ失敗でもう一度止めない
   const resumedFailure = new Map<string, string>()
+  // セッション同士のメッセージ（#310 / #311）。トークンは feed dir のファイルに 0600 で置き、MCP サーバはその場所だけ受け取って読む
+  const agentTokenPath = join(store.directory, AGENT_TOKEN_FILE)
+  const agentToken = ensureAgentToken(agentTokenPath)
+  const agents = new AgentMessages()
 
   /**
    * 端末で人が答えたぶんの待ちを畳む（#255。#232 の積み残し）。行（集計）は触らず、応答を組み立てる
@@ -567,7 +587,7 @@ export function createApp(
     const busy = run.running(id) || codexApp.running(id) || launching.has(id)
     // 処理中なら預かる（#305）。処理中でなくても預かりが残っていれば後ろに並べる（先に預けたものを追い越さない）
     if (o.queue && (busy || queue.size(id) > 0)) {
-      const item = queue.add(id, text, attachments, o.url)
+      const item = queue.add(id, text, attachments, o.url, new Date(), o.origin ?? '')
       if (!item) return refuse(409, `預かれるのは ${QUEUE_MAX} 件までです。取り消すか、前の返信が終わるのを待ってください`)
       await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} 処理中なので預かった（${queue.size(id)} 件目）\n`).catch(() => {})
       const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd, via: 'queued', queue_id: item.queue_id }
@@ -580,7 +600,10 @@ export function createApp(
     }
     launching.add(id)
     try {
-      return await startTurn(id, session, raw, cwd, openTerminal, text, attachments, o)
+      const out = await startTurn(id, session, raw, cwd, openTerminal, text, attachments, o)
+      // メッセージで起動したターンかを覚える（そのターンからは送らせない。連鎖 1 段。#311）。人の返信で起動したら忘れる
+      if (out.status === 202) agents.launched(id, o.origin)
+      return out
     } finally {
       launching.delete(id)
     }
@@ -669,7 +692,8 @@ export function createApp(
     // 許可・質問を画面で答える配線。MCP の子プロセスはこのサーバと同じマシンで動くので、宛先はブラウザが来た Host ではなく
     // このサーバ自身が待ち受けているアドレス（ループバック）。Host だと tailscale serve 経由（https://<host>.ts.net → 127.0.0.1:8787）で
     // 開いた画面からの返信が `http://<host>.ts.net`（80 番、誰も聞いていない）に投げて「SAI に届かない: fetch failed」になる
-    const via = { url: o.url, entity: id }
+    // トークンの置き場も渡すと、MCP サーバが別のセッションに話しかけるツール（sai_*）を出す（#310）
+    const via = { url: o.url, entity: id, tokenFile: agentTokenPath }
     // セッションに返信のモデルが設定されていれば（PUT /api/sessions/<id>/meta の model）それで回す
     const cmd = replyCommand(session.agent, raw, text, cwd, process.env, via, model, own?.permission_mode, attachments)
     if (!cmd) return refuse(400, replyBlockedReason(session, selfHost()) || 'unsupported agent')
@@ -708,7 +732,15 @@ export function createApp(
         queue.pause(id, `前の返信が失敗したので止めています（終了コード ${last.failed.code}）。続けるなら「続けて送る」`)
         return
       }
-      const out = await launch(id, head.text, head.attachments, { days: QUEUE_DAYS, replaceTyped: false, forceProcess: false, url: head.url, queue: false })
+      const out = await launch(id, head.text, head.attachments, {
+        days: QUEUE_DAYS,
+        replaceTyped: false,
+        forceProcess: false,
+        url: head.url,
+        queue: false,
+        // 別のセッションから預かったメッセージなら、回したターンから先へ送らせない（#311）
+        ...(head.origin ? { origin: head.origin } : {}),
+      })
       if (out.status === 202) queue.shift(id, head.queue_id)
       else queue.pause(id, `預かった返信を送れませんでした: ${(out.body as ReplyError).error}`)
     } finally {
@@ -746,6 +778,116 @@ export function createApp(
     }
     const payload: ReplyQueueResponse = { id, queue: queue.snapshot()[id] ?? { items: [] } }
     return json(res, payload)
+  }
+
+  // ---- セッション同士のメッセージ（#310 / #311）
+
+  /**
+   * エージェント用の口（`/api/agent/*`）に通してよいか。通さないなら理由。
+   * **ブラウザからは通さない**（`Origin` / `Sec-Fetch-Site` が付いていれば断る。画面の返信の口とは逆）うえで、
+   * `agent-token` のファイルの中身を要る。ブラウザはこのファイルを読めないので、同一オリジンの画面も tailnet 経由も叩けない
+   */
+  const agentRefusal = (req: IncomingMessage): string => {
+    if (req.headers.origin !== undefined || req.headers['sec-fetch-site'] !== undefined) return 'ブラウザからは使えません'
+    if (!tokenMatches(agentToken, req.headers[AGENT_TOKEN_HEADER])) return 'トークンが合いません'
+    return ''
+  }
+
+  /**
+   * 送り元を確かめる。**SAI が起動して、いまそのターンを回しているセッションだけ**（最初の PR は Claude の `-p` の返信。
+   * MCP サーバは SAI が `--mcp-config` で渡したときだけ動き、送り元はその `SAI_ENTITY`）。失敗して残っているだけのものは除く
+   */
+  const agentFrom = async (from: unknown): Promise<{ session: SessionSummary; sessions: SessionSummary[]; turn: string } | string> => {
+    if (typeof from !== 'string' || !from) return 'from が無い'
+    const turn = run.snapshot()[from]
+    if (!turn || turn.failed || !run.running(from)) return '送り元のセッションは、SAI から起動したターンを回していません'
+    const { sessions } = await sessionsWithMeta(QUEUE_DAYS)
+    const session = sessions.find((s) => s.id === from)
+    if (!session) return '送り元のセッションが見つかりません'
+    return { session, sessions, turn: turn.since }
+  }
+
+  /** GET /api/agent/sessions?from=。話しかけられる相手（同じ project の、返信できる別のセッション） */
+  const agentSessions = async (req: IncomingMessage, res: ServerResponse, q: URLSearchParams) => {
+    const refusal = agentRefusal(req)
+    if (refusal) return error(res, 403, refusal)
+    const found = await agentFrom(q.get('from'))
+    if (typeof found === 'string') return error(res, 409, found)
+    const busy = (id: string) => run.running(id) || codexApp.running(id) || typed.running(id)
+    const payload: AgentSessionsResponse = {
+      from: found.session.id,
+      sessions: agentTargets(found.sessions, found.session, selfHost()).map((s) => agentEntry(s, busy(s.id))),
+    }
+    return json(res, payload)
+  }
+
+  /**
+   * POST /api/agent/send。別のセッションに送る（#310）。相手が処理中なら預かり（#305）に並ぶ。
+   * 断るのは: トークン・送り元がターンを回していない・相手が同じ project の返信できるセッションでない（403）、
+   * 受け取ったメッセージで回っているターンから（連鎖）・1 ターンの回数を超えた（429。#311）
+   */
+  const agentSend = async (req: IncomingMessage, res: ServerResponse) => {
+    const refusal = agentRefusal(req)
+    if (refusal) return error(res, 403, refusal)
+    let body: unknown
+    try {
+      body = await readJson(req, MAX_REPLY_BYTES)
+    } catch (err) {
+      return error(res, 400, err instanceof Error ? err.message : 'bad body')
+    }
+    const b = (body ?? {}) as Partial<AgentSendRequest>
+    const text = typeof b.text === 'string' ? b.text.trim() : ''
+    if (!text) return error(res, 400, 'text が要ります')
+    if (text.length > AGENT_TEXT_MAX_CHARS) return error(res, 400, `送れるのは ${AGENT_TEXT_MAX_CHARS} 字までです。短くまとめてください`)
+    const found = await agentFrom(b.from)
+    if (typeof found === 'string') return error(res, 409, found)
+    const to = typeof b.to === 'string' ? b.to : ''
+    const target = agentTargets(found.sessions, found.session, selfHost()).find((s) => s.id === to)
+    if (!target) return error(res, 403, 'その相手には送れません（同じリポジトリの、SAI から返信できる別のセッションだけ。sai_sessions で確かめてください）')
+    const limit = agents.refusal(found.session.id, found.turn)
+    if (limit) return error(res, 429, limit)
+    const messageId = agents.newId()
+    const delivered = deliveredText({ label: sessionLabel(found.session), project: found.session.project }, messageId, text)
+    const out = await launch(to, delivered, [], { days: QUEUE_DAYS, replaceTyped: false, forceProcess: false, url: selfUrl(req), queue: true, origin: messageId })
+    if (out.status !== 202) return json(res, out.body, out.status)
+    const via = (out.body as ReplyResponse).via
+    agents.record({ message_id: messageId, from: found.session.id, to, text, since: new Date().toISOString() }, found.turn)
+    await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${found.session.id} → ${to} メッセージ ${messageId}（${via}）\n`).catch(() => {})
+    const payload: AgentSendResponse = { message_id: messageId, to, via, sent: agents.sentInTurn(found.session.id, found.turn), limit: AGENT_SEND_MAX }
+    return json(res, payload, 202)
+  }
+
+  /** 送ったメッセージの結果。相手のそのターンが終わっていれば返答、失敗・止まっていれば理由。まだなら null */
+  const agentResult = async (message: AgentMessage): Promise<AgentWaitResponse | null> => {
+    const base = { message_id: message.message_id, to: message.to }
+    const answered = replyOf(await store.rows(QUEUE_DAYS), message.to, message.message_id)
+    if (answered) return { ...base, status: 'done', text: clipReply(answered.text ?? '') }
+    const turn = run.snapshot()[message.to]
+    if (turn?.failed && isDeliveryOf(turn.text, message.message_id)) {
+      return { ...base, status: 'failed', error: `終了コード ${turn.failed.code}${turn.failed.tail ? `: ${turn.failed.tail}` : ''}` }
+    }
+    // 預かりの先頭のまま止まった（前の返信が失敗した・起動できなかった）
+    const paused = queue.paused(message.to)
+    if (paused && isDeliveryOf(queue.peek(message.to)?.text, message.message_id)) return { ...base, status: 'failed', error: paused }
+    return null
+  }
+
+  /**
+   * GET /api/agent/wait?from=&message_id=&wait=1。**送った本人だけ**が待てる。wait なら最大 WAIT_MS までサーバ側で待ち、
+   * まだなら 202（MCP サーバが繰り返す。エージェントに何度もツールを呼ばせない。#311）
+   */
+  const agentWait = async (req: IncomingMessage, res: ServerResponse, q: URLSearchParams) => {
+    const refusal = agentRefusal(req)
+    if (refusal) return error(res, 403, refusal)
+    const message = agents.get(q.get('message_id') ?? '')
+    if (!message || message.from !== q.get('from')) return error(res, 404, 'そのメッセージは見つかりません（送った本人だけが待てます。SAI を立て直すと見失います）')
+    const until = Date.now() + (q.get('wait') === '1' ? WAIT_MS : 0)
+    for (;;) {
+      const result = await agentResult(message)
+      if (result) return json(res, result)
+      if (Date.now() >= until) return json(res, { message_id: message.message_id, to: message.to, status: 'pending' } satisfies AgentWaitResponse, 202)
+      await new Promise((r) => setTimeout(r, AGENT_POLL_MS))
+    }
   }
 
   /**
@@ -1082,6 +1224,8 @@ export function createApp(
     // `/api/sessions/<id>/queue/<queue_id | resume>`。id は `/` を含まないので、最初の `/queue/` が区切り（#305）
     const queueAt = path.startsWith(SESSIONS_PREFIX) ? path.indexOf(QUEUE_SEGMENT, SESSIONS_PREFIX.length) : -1
     const isQueue = queueAt > 0
+    // エージェント用の口（#310）。トークンを要り、ブラウザからは通さない
+    const isAgent = path.startsWith(AGENT_PREFIX)
     const isAsk = path === APPROVALS_PATH
     const isAnswer = path.startsWith(APPROVALS_PREFIX) && path.endsWith(ANSWER_SUFFIX)
     const isProfile = path === PROFILE_PATH
@@ -1091,12 +1235,22 @@ export function createApp(
     // 書き込みは「返信は POST」「表示名は PUT」「アイコンは PUT / DELETE」「承認の預かりと答えは POST」「自分の表示名は PUT、アイコンは PUT / DELETE」
     // 「設定は PUT」「預かった返信の再開は POST、取り消しは DELETE」だけ。それ以外は GET / HEAD のみ
     const writable =
-      (method === 'POST' && (isReply || isAsk || isAnswer || isAttachUpload || isQueue)) ||
+      (method === 'POST' && (isReply || isAsk || isAnswer || isAttachUpload || isQueue || path === AGENT_SEND_PATH)) ||
       (method === 'DELETE' && isQueue) ||
       (method === 'PUT' && (isMeta || isProfile || isSettings)) ||
       ((method === 'PUT' || method === 'DELETE') && (isIcon || isProfileIcon))
     if (!writable && method !== 'GET' && method !== 'HEAD') return error(res, 405, 'method not allowed')
     try {
+      if (isAgent) {
+        if (path === AGENT_SEND_PATH) {
+          if (method !== 'POST') return error(res, 405, 'method not allowed')
+          return await agentSend(req, res)
+        }
+        if (method !== 'GET') return error(res, 405, 'method not allowed')
+        if (path === AGENT_SESSIONS_PATH) return await agentSessions(req, res, q)
+        if (path === AGENT_WAIT_PATH) return await agentWait(req, res, q)
+        return error(res, 404, 'not found')
+      }
       // 返信（`/reply`）などの判定より先に見る（queue_id が `reply` のような文字列でも取り違えない）
       if (isQueue) {
         const id = sessionIdFrom(path, path.slice(queueAt))

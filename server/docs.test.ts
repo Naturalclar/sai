@@ -9,12 +9,12 @@ const ROOT = resolve(import.meta.dirname, '..')
 
 /**
  * コードが読むけれど利用者が設定するものではない変数。表に載せない（README の表の下に一言で書く）
- * - SAI_URL / SAI_ENTITY: runner.ts が --mcp-config の env で approve-mcp.ts に渡す内部用
+ * - SAI_URL / SAI_ENTITY / SAI_TOKEN_FILE: runner.ts が --mcp-config の env で approve-mcp.ts に渡す内部用（SAI_TOKEN_FILE は #310）
  * - AGENT_FEED_SKIP: SAI が一言を作る `claude -p` に自分で付ける合図（record.py / statusline.py / OpenCode のプラグインが見る。#288）
  * - TMUX_PANE / CLAUDE_PID: エージェントが子（record.py）に渡してくる、居場所を知るための変数
  * - REPO_URL / PROD: Vite の import.meta.env（vite.config.ts の define と組み込み）
  */
-const INTERNAL = new Set(['SAI_URL', 'SAI_ENTITY', 'AGENT_FEED_SKIP', 'TMUX_PANE', 'CLAUDE_PID', 'REPO_URL', 'PROD'])
+const INTERNAL = new Set(['SAI_URL', 'SAI_ENTITY', 'SAI_TOKEN_FILE', 'AGENT_FEED_SKIP', 'TMUX_PANE', 'CLAUDE_PID', 'REPO_URL', 'PROD'])
 
 /** 「## 環境変数」の中の 2 つの表の見出し（#288）。区別の無い 1 枚の表だと、全部設定しないと動かないように見える */
 const SUBSECTIONS = ['### 設定することがあるもの', '### 切り分け・内部']

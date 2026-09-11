@@ -31,6 +31,15 @@ test('参照でないものは触らない: URL の途中の #、&#123;、a#1、
   assert.deepEqual(linkifyRefs('#12abc', GH), [t('#12abc')], '後ろに英数字が続く')
 })
 
+test('一言の中の画像への参照（#321）: [名前](パス) の Markdown を文字のまま出さず、画像のノードにする', () => {
+  const path = '/Users/me/sai.git/dev-codex/docs/assets/codex-agent-icon.png'
+  assert.deepEqual(linkifyRefs(`Codex用アイコン作成！[codex-agent-icon.png](${path}) 1254×1254px透過PNG。🎨`, GH), [
+    t('Codex用アイコン作成！'),
+    { kind: 'image', src: path, alt: 'codex-agent-icon.png' },
+    t(' 1254×1254px透過PNG。🎨'),
+  ])
+})
+
 test('太字の中の番号もリンクになる', () => {
   assert.deepEqual(linkifyRefs('**#5 完了**', GH), [{ kind: 'strong', children: [a('https://github.com/Naturalclar/sai/issues/5', '#5'), t(' 完了')] }])
 })

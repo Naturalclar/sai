@@ -1,6 +1,6 @@
 // チャットのバブルに出す `text` を Markdown として描くための最小パーサ。
 // 扱うのはエージェントの返答で頻出するものだけ:
-//   URL / [ラベル](URL) / **太字** / `コード` / :絵文字: / 箇条書き / 見出し / ```コードブロック / > 引用 / --- 罫線
+//   URL / [ラベル](URL) / 画像 / **太字** / `コード` / :絵文字: / 箇条書き / 見出し / ```コードブロック / > 引用 / --- 罫線
 // HTML 文字列は作らず木（Block / Inline）を返す。React 要素への組み立ては web/src/Markdown.tsx。
 // `text` にはリポジトリの中身（issue のタイトルや他人のコミットメッセージ）がそのまま入るので、
 // HTML として解釈させない（`<script>` はただの文字として text ノードになる）。
@@ -15,6 +15,11 @@ export type Inline =
   | { kind: 'link'; href: string; children: Inline[] }
   /** `:tada:` → 🎉。表（shared/emoji.ts）に載っている名前だけ。name は元の名前で、画面は title に出す */
   | { kind: 'emoji'; name: string; char: string }
+  /**
+   * 手元のファイルの画像への参照（#321）。`![alt](パス)` と、画像の拡張子の `[名前](パス)`（Codex はこの形で出す）。
+   * `src` は本文に書かれたパスそのもの（絶対パスか、セッションの cwd からの相対パス）。`alt` は `[]` の中（空のこともある）
+   */
+  | { kind: 'image'; src: string; alt: string }
 
 export interface ListItem {
   /** 字下げの深さ（0 が最上位）。描画側でインデント量にする */
@@ -35,11 +40,27 @@ export type Block =
 
 // 行内。左から一番早く始まるものを採る（同じ位置なら alternation の順）。
 //   1: `コード`    2: **太字**（中身は空白で始まらず終わらない）
-//   3: [ラベル](http(s) の URL)    4: :絵文字:    5: むき出しの URL
+//   3: ![alt](先)    4: [名前](画像のファイルのパス)
+//   5: [ラベル](http(s) の URL)    6: :絵文字:    7: むき出しの URL
 // リンク先は http(s) だけ。`[file](web/src/x.ts)` のような相対パスや javascript: はリンクにしない。
+// 画像は手元のパス（スキームの無いもの）で、拡張子が png / jpg / jpeg / gif / webp のものだけ（#321）。
+// **外の URL の画像は読み込まない**（画面が外のホストに取りに行くと、見ていることが外に出る）ので、`![alt](https://…)` はリンクにする。
 // むき出しの URL は空白・<> のほか全角の句読点・閉じ括弧（、。）」など）の手前で終わる。日本語の文中に URL が置かれるため。
 // 絵文字は形が当たっただけでは採らず、表に載っている名前だけ（`14:08:30` の `:08:` のような時刻を絵文字にしないため）
-const INLINE = /(`[^`\n]+`)|(\*\*\S(?:[^\n]*?\S)?\*\*)|(\[[^\]\n]*\]\(https?:\/\/[^\s)]*\))|(:[a-z0-9_+-]{2,}:)|(https?:\/\/[^\s<>、。，．）」』】〕》〉]+)/g
+const INLINE =
+  /(`[^`\n]+`)|(\*\*\S(?:[^\n]*?\S)?\*\*)|(!\[[^\]\n]*\]\([^\s()]+\))|(\[[^\]\n]*\]\([^\s():]+\.(?:png|jpe?g|gif|webp|PNG|JPE?G|GIF|WEBP)\))|(\[[^\]\n]*\]\(https?:\/\/[^\s)]*\))|(:[a-z0-9_+-]{2,}:)|(https?:\/\/[^\s<>、。，．）」』】〕》〉]+)/g
+
+/** 画像として扱う手元のパスか。スキーム（`:`）・空白・括弧を含まず、画像の拡張子で終わる */
+const LOCAL_IMAGE = /^[^\s():]+\.(?:png|jpe?g|gif|webp)$/i
+
+/** 画像のパスのファイル名（`alt` が空のときに出す名前） */
+export const imageName = (src: string): string => src.split(/[\\/]/).pop() || src
+
+/** `[ラベル](先)` の `[]` の中と `()` の中 */
+function splitLink(whole: string): { label: string; target: string } {
+  const close = whole.indexOf('](')
+  return { label: whole.slice(whole.indexOf('[') + 1, close), target: whole.slice(close + 2, -1) }
+}
 
 /** 1行分の行内要素。改行を含む文字列も受けるが、太字は行をまたがない */
 export function parseInline(src: string): Inline[] {
@@ -51,19 +72,32 @@ export function parseInline(src: string): Inline[] {
     const whole = m[0]
     // 表に無い名前はただの文字。開きの `:` の次から探し直す（`:foo::tada:` の後ろを拾うため）。
     // ここで抜けると pos を進めないので、この部分は後ろの text ノードに含まれる
-    if (m[4] && !lookupEmoji(whole.slice(1, -1))) {
+    if (m[6] && !lookupEmoji(whole.slice(1, -1))) {
       re.lastIndex = m.index + 1
       continue
+    }
+    // `![alt](先)` で、先が手元の画像でも http(s) でもない（`notes.txt`、`file:`、`javascript:`）ものも同じくただの文字
+    if (m[3]) {
+      const { target } = splitLink(whole)
+      if (!LOCAL_IMAGE.test(target) && !/^https?:\/\//.test(target)) {
+        re.lastIndex = m.index + 1
+        continue
+      }
     }
     if (m.index > pos) out.push({ kind: 'text', text: src.slice(pos, m.index) })
     if (m[1]) {
       out.push({ kind: 'code', text: whole.slice(1, -1) })
     } else if (m[2]) {
       out.push({ kind: 'strong', children: parseInline(whole.slice(2, -2)) })
-    } else if (m[3]) {
-      const close = whole.indexOf('](')
-      out.push({ kind: 'link', href: whole.slice(close + 2, -1), children: parseInline(whole.slice(1, close)) })
-    } else if (m[4]) {
+    } else if (m[3] || m[4]) {
+      const { label, target } = splitLink(whole)
+      if (LOCAL_IMAGE.test(target)) out.push({ kind: 'image', src: target, alt: label })
+      // 外の URL の画像は読み込まずリンクにする。alt が空なら URL を出す
+      else out.push({ kind: 'link', href: target, children: label ? parseInline(label) : [{ kind: 'text', text: target }] })
+    } else if (m[5]) {
+      const { label, target } = splitLink(whole)
+      out.push({ kind: 'link', href: target, children: parseInline(label) })
+    } else if (m[6]) {
       const name = whole.slice(1, -1)
       out.push({ kind: 'emoji', name, char: lookupEmoji(name)! })
     } else {
@@ -190,7 +224,7 @@ const LEADING_MARK = /^\s{0,3}(?:#{1,6}\s+|>\s?|(?:[-*+]|\d{1,3}[.)])\s+)/
 
 /**
  * 1行の文字列から Markdown の記号だけ落とす（一覧の last_text 用）。
- * `**太字**` → 太字、`` `code` `` → code、`[ラベル](URL)` → ラベル、行頭の `- ` / `# ` / `> ` を除く。
+ * `**太字**` → 太字、`` `code` `` → code、`[ラベル](URL)` → ラベル、画像 → 名前（無ければファイル名）、行頭の `- ` / `# ` / `> ` を除く。
  * むき出しの URL はそのまま残す。
  */
 export function stripMarkdown(line: string): string {
@@ -202,6 +236,7 @@ function plain(nodes: Inline[]): string {
     .map((n) => {
       if (n.kind === 'text' || n.kind === 'code') return n.text
       if (n.kind === 'emoji') return n.char
+      if (n.kind === 'image') return n.alt || imageName(n.src)
       return plain(n.children)
     })
     .join('')

@@ -45,7 +45,8 @@ export function sessionPreview(s: PreviewSource, replying: Replying | null, prof
     if (typed && at(s.last_user_ts) > lastTurn) return mine(typed)
   }
   if (s.turns > 1) {
-    const text = s.last_summary || stripMarkdown(s.last_text)
+    // 一言も LLM が本文から Markdown（`[名前](パス)` など）を写すので、同じく記号を落とす（#321）
+    const text = stripMarkdown(s.last_summary ?? '') || stripMarkdown(s.last_text)
     if (text) return { from: 'agent', text }
   }
   return null

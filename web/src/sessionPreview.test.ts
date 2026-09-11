@@ -55,3 +55,8 @@ test('sessionPreview: 画像を添えた返信は、本文の末尾に足した�
   const text = sessionPreview(base, replying)?.text ?? ''
   assert.equal(text.includes('.png'), false)
 })
+
+test('sessionPreview: 一言の中の Markdown も記号を落とす（LLM が本文の [名前](パス) を写す。#321）', () => {
+  const s = { ...base, last_summary: 'Codex用アイコン作成！[codex-agent-icon.png](/Users/me/docs/assets/codex-agent-icon.png) **完成**' }
+  assert.equal(sessionPreview(s, null)?.text, 'Codex用アイコン作成！codex-agent-icon.png 完成')
+})

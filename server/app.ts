@@ -79,7 +79,20 @@ import { ProcessRunner, replyCommand } from './reply/runner.ts'
 import { QUEUE_FILE, QUEUE_MAX, ReplyQueueStore } from './reply/replyQueue.ts'
 import { AGENT_TOKEN_FILE, AGENT_TOKEN_HEADER, AgentMessages, ensureAgentToken, tokenMatches } from './reply/agentMessages.ts'
 import type { AgentMessage } from './reply/agentMessages.ts'
-import { AGENT_SEND_MAX, AGENT_TEXT_MAX_CHARS, agentEntry, agentTargets, clipReply, deliveredText, isDeliveryOf, replyOf, sessionLabel } from '../shared/agentMessages.ts'
+import {
+  AGENT_SEND_MAX,
+  AGENT_TEXT_MAX_CHARS,
+  AGENT_TURN_READ_BUDGET,
+  agentEntry,
+  agentTargets,
+  budgetRefusal,
+  clipReply,
+  deliveredText,
+  isDeliveryOf,
+  replyOf,
+  sessionLabel,
+  usageRefusal,
+} from '../shared/agentMessages.ts'
 import { SkillStore } from './local/skills.ts'
 import { claudeProjectsDir, codexSessionsDir, UsageStore } from './local/usage.ts'
 import { ProgressReader } from './local/progress.ts'
@@ -814,9 +827,12 @@ export function createApp(
     const found = await agentFrom(q.get('from'))
     if (typeof found === 'string') return error(res, 409, found)
     const busy = (id: string) => run.running(id) || codexApp.running(id) || typed.running(id)
+    const targets = agentTargets(found.sessions, found.session, selfHost())
+    // 相手が読み直す量（直近の呼び出しの入力）。transcript の末尾を読むだけで、(mtime, size) が同じなら組み直さない（#311）
+    const sizes = await Promise.all(targets.map(async (s) => (await progress.read(s)).context_tokens))
     const payload: AgentSessionsResponse = {
       from: found.session.id,
-      sessions: agentTargets(found.sessions, found.session, selfHost()).map((s) => agentEntry(s, busy(s.id))),
+      sessions: targets.map((s, i) => agentEntry(s, busy(s.id), sizes[i] ?? 0)),
     }
     return json(res, payload)
   }
@@ -846,14 +862,30 @@ export function createApp(
     if (!target) return error(res, 403, 'その相手には送れません（同じリポジトリの、SAI から返信できる別のセッションだけ。sai_sessions で確かめてください）')
     const limit = agents.refusal(found.session.id, found.turn)
     if (limit) return error(res, 429, limit)
+    // 使用量の枠が残り少なければ送らない。見るのは相手のエージェントの枠（受け取って読み直すのは相手。#311）
+    const overUsage = usageRefusal(await usageStore.get(), target.agent)
+    if (overUsage) return error(res, 429, overUsage)
+    // 1 ターンで相手に読み直させる量の予算（#311）。相手の大きさは transcript / rollout の直近の呼び出しの入力
+    const context = (await progress.read(target)).context_tokens
+    const overBudget = budgetRefusal(agents.readInTurn(found.session.id, found.turn), context)
+    if (overBudget) return error(res, 429, overBudget)
     const messageId = agents.newId()
     const delivered = deliveredText({ label: sessionLabel(found.session), project: found.session.project }, messageId, text)
     const out = await launch(to, delivered, [], { days: QUEUE_DAYS, replaceTyped: false, forceProcess: false, url: selfUrl(req), queue: true, origin: messageId })
     if (out.status !== 202) return json(res, out.body, out.status)
     const via = (out.body as ReplyResponse).via
-    agents.record({ message_id: messageId, from: found.session.id, to, text, since: new Date().toISOString() }, found.turn)
+    agents.record({ message_id: messageId, from: found.session.id, to, text, since: new Date().toISOString() }, found.turn, context)
     await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${found.session.id} → ${to} メッセージ ${messageId}（${via}）\n`).catch(() => {})
-    const payload: AgentSendResponse = { message_id: messageId, to, via, sent: agents.sentInTurn(found.session.id, found.turn), limit: AGENT_SEND_MAX }
+    const payload: AgentSendResponse = {
+      message_id: messageId,
+      to,
+      via,
+      sent: agents.sentInTurn(found.session.id, found.turn),
+      limit: AGENT_SEND_MAX,
+      context_tokens: context,
+      read_tokens: agents.readInTurn(found.session.id, found.turn),
+      read_budget: AGENT_TURN_READ_BUDGET,
+    }
     return json(res, payload, 202)
   }
 
@@ -1049,7 +1081,7 @@ export function createApp(
     const session = sessions.find((s) => s.id === id)
     if (!session) return error(res, 404, 'session not found in window')
     if (isRemoteHost(session.host, selfHost())) {
-      const payload: SessionProgressResponse = { rev: '', id, active: false, steps: [], total: 0, updated_at: '' }
+      const payload: SessionProgressResponse = { rev: '', id, active: false, steps: [], total: 0, updated_at: '', context_tokens: 0 }
       return json(res, payload)
     }
     return json(res, await progress.read(session))

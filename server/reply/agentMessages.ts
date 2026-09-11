@@ -55,8 +55,8 @@ export function tokenMatches(expected: string, got: unknown): boolean {
 
 export class AgentMessages {
   private messages = new Map<string, AgentMessage>()
-  /** 送り元 → そのターン（`Replying.since`）と、そのターンで送った回数 */
-  private sends = new Map<string, { turn: string; count: number }>()
+  /** 送り元 → そのターン（`Replying.since`）と、そのターンで送った回数・相手に読み直させた量 */
+  private sends = new Map<string, { turn: string; count: number; read: number }>()
   /** メッセージで起動したターンを回しているセッション → そのメッセージの id */
   private origins = new Map<string, string>()
 
@@ -82,11 +82,21 @@ export class AgentMessages {
     return ''
   }
 
-  /** 送れた（相手のターンを起動した・預けた）ので記録し、そのターンの回数を 1 増やす */
-  record(message: AgentMessage, turn: string): void {
+  /** 送り元のこのターンで、相手に読み直させた量の合計（#311）。ターンが変われば 0 */
+  readInTurn(from: string, turn: string): number {
+    const s = this.sends.get(from)
+    return s && s.turn === turn ? s.read : 0
+  }
+
+  /**
+   * 送れた（相手のターンを起動した・預けた）ので記録し、そのターンの回数を 1 増やす。
+   * `read` はその相手が読み直す量（分からなければ 0）で、ターンの合計に足す
+   */
+  record(message: AgentMessage, turn: string, read = 0): void {
     this.messages.set(message.message_id, message)
     const count = this.sentInTurn(message.from, turn)
-    this.sends.set(message.from, { turn, count: count + 1 })
+    const total = this.readInTurn(message.from, turn)
+    this.sends.set(message.from, { turn, count: count + 1, read: total + read })
   }
 
   get(messageId: string): AgentMessage | undefined {

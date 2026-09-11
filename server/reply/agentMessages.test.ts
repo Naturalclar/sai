@@ -55,6 +55,20 @@ test('AgentMessages: 1 ターンに AGENT_SEND_MAX 回まで。ターンが変�
   assert.match(agents.newId(), /^[0-9a-f]{16}$/)
 })
 
+test('AgentMessages: 1 ターンで相手に読み直させた量を足していき、ターンが変われば 0 から（#311）', () => {
+  const agents = new AgentMessages()
+  const message = (from: string) => ({ message_id: agents.newId(), from, to: 'B1@r', text: 'x', since: '' })
+  agents.record(message('A1@r'), 't1', 900_000)
+  agents.record(message('A1@r'), 't1', 0)
+  agents.record(message('A1@r'), 't1', 1_100_000)
+  assert.equal(agents.readInTurn('A1@r', 't1'), 2_000_000, '分からない相手（0）は足さない')
+  assert.equal(agents.sentInTurn('A1@r', 't1'), 3)
+  assert.equal(agents.readInTurn('A1@r', 't2'), 0)
+  agents.record(message('A1@r'), 't2', 50_000)
+  assert.equal(agents.readInTurn('A1@r', 't2'), 50_000)
+  assert.equal(agents.readInTurn('C1@r', 't1'), 0, '送り元ごと')
+})
+
 test('AgentMessages: メッセージで回っているターンからは送れない（連鎖は 1 段）。人の返信で起動したら解ける', () => {
   const agents = new AgentMessages()
   agents.launched('B1@r', 'm1')

@@ -1,7 +1,21 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { agentEntry, agentTargets, clipReply, deliveredText, isDeliveryOf, replyOf, sessionLabel } from './agentMessages.ts'
-import type { FeedRow, SessionSummary } from './types.ts'
+import {
+  AGENT_TURN_READ_BUDGET,
+  AGENT_USAGE_STOP_PERCENT,
+  AGENT_WEEKLY_STOP_PERCENT,
+  agentEntry,
+  agentTargets,
+  budgetRefusal,
+  clipReply,
+  deliveredText,
+  isDeliveryOf,
+  replyOf,
+  sessionLabel,
+  tokensLabel,
+  usageRefusal,
+} from './agentMessages.ts'
+import type { FeedRow, SessionSummary, UsageResponse } from './types.ts'
 
 const session = (id: string, over: Partial<SessionSummary> = {}): SessionSummary =>
   ({
@@ -71,4 +85,42 @@ test('agentEntry / sessionLabel: 呼び名は表示名 → 題名 → ID。最�
   assert.equal(entry.busy, true)
   assert.equal(entry.last_text, `${'あ'.repeat(120)}…`)
   assert.equal(agentEntry(session('B1@r', { last_text: '一行目\n二行目' }), false).last_text, '一行目')
+  assert.equal(agentEntry(session('B1@r'), false, 123_456).context_tokens, 123_456, '相手が読み直す量（#311）')
+  assert.equal(agentEntry(session('B1@r'), false).context_tokens, 0, '分からなければ 0')
+})
+
+test('tokensLabel: 万トークンに丸める。1 万未満は千、0 は空', () => {
+  assert.equal(tokensLabel(123_456), '約 12 万トークン')
+  assert.equal(tokensLabel(9_261_892), '約 926 万トークン')
+  assert.equal(tokensLabel(4_200), '約 4 千トークン')
+  assert.equal(tokensLabel(300), '約 1 千トークン')
+  assert.equal(tokensLabel(0), '')
+})
+
+test('usageRefusal: 相手のエージェントの 5 時間の枠が 80%・週の枠が 95% を超えていたら送らない。戻った枠と取れない使用量では止めない（#311）', () => {
+  const now = Date.UTC(2026, 8, 11, 3, 0, 0)
+  const later = now / 1000 + 3600
+  const earlier = now / 1000 - 60
+  const claude = (primary: number, secondary = 10, resets = later): UsageResponse => ({
+    claude: { primary: { used_percent: primary, window_minutes: 300, resets_at: resets }, secondary: { used_percent: secondary, window_minutes: 10080, resets_at: later }, at: '' },
+  })
+  assert.equal(usageRefusal(claude(AGENT_USAGE_STOP_PERCENT - 1), 'claude', now), '')
+  assert.match(usageRefusal(claude(85.4), 'claude', now), /Claude の 5 時間の枠が 85% 使われているので送りません/)
+  assert.equal(usageRefusal(claude(85, 10, earlier), 'claude', now), '', '枠が戻っていれば、その割合は古い')
+  assert.match(usageRefusal(claude(10, AGENT_WEEKLY_STOP_PERCENT), 'claude', now), /週の枠が 95%/)
+  assert.match(usageRefusal({ claude: { limited: { resets_at: later, kind: 'five_hour' }, at: '' } } as UsageResponse, 'claude', now), /上限に当たっている/)
+  assert.equal(usageRefusal({ claude: { limited: { resets_at: earlier, kind: 'five_hour' }, at: '' } } as UsageResponse, 'claude', now), '', '上限から戻っていれば止めない')
+  assert.equal(usageRefusal(claude(99), 'codex', now), '', '見るのは相手のエージェントの枠')
+  assert.match(usageRefusal({ codex: { primary: { used_percent: 90, window_minutes: 300 }, at: '' } }, 'codex', now), /Codex の 5 時間の枠が 90%/)
+  assert.equal(usageRefusal({}, 'claude', now), '', 'ステータスラインを配線していなければ取れない。材料が無いのに止めない')
+  assert.equal(usageRefusal(claude(99), 'opencode', now), '')
+})
+
+test('budgetRefusal: このターンで読み直させた量に相手のぶんを足して、予算を超えるなら送らない（#311）', () => {
+  assert.equal(budgetRefusal(0, 2_000_000), '')
+  assert.equal(budgetRefusal(1_000_000, AGENT_TURN_READ_BUDGET - 1_000_000), '', 'ちょうど予算までは送れる')
+  const over = budgetRefusal(2_000_000, 1_500_000)
+  assert.match(over, /予算を超えます（これまで 約 200 万トークン、この相手は約 150 万トークン、予算は約 300 万トークン）/)
+  assert.equal(budgetRefusal(2_900_000, 0), '', '相手の大きさが分からなければ止めない')
+  assert.match(budgetRefusal(0, 5_000_000), /これまで 0、/, '1 回で予算を超える相手にも送らない')
 })

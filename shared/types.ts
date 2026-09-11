@@ -402,9 +402,12 @@ export interface Replying {
 }
 
 export interface ReplyFailure {
-  /** プロセスの終了コード。シグナルで死んだときは負の値（-15 なら SIGTERM） */
-  code: number
-  /** reply.log のそのターンぶんの末尾（数行、300文字まで） */
+  /**
+   * プロセスの終了コード。シグナルで死んだときは負の値（-15 なら SIGTERM）。
+   * **プロセスの無い経路（端末に打ち込んだ・開いている Codex の queue に渡した）で届かなかったときは無い**（#329）
+   */
+  code?: number
+  /** reply.log のそのターンぶんの末尾（数行、300文字まで）。届かなかったときはその理由 */
   tail: string
 }
 

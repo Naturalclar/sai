@@ -155,3 +155,20 @@ test('onTurnEnd: ターンが終わったら（完了・切断）片付けたあ
   assert.equal(ended.length, 2)
   assert.deepEqual(ended.at(-1), { id: 'thread-1@repo', running: false }, '切断で終わったターンも知らせる')
 })
+
+test('holds: thread/resume したスレッドは、ターンが終わっても thread/closed・切断まで持っている（#329）', async () => {
+  const { app, connection } = await started()
+  assert.equal(app.holds('thread-1'), true)
+  assert.equal(app.holds('other'), false)
+  // app-server はターンが終わってもスレッドを読み込んだまま（writer lock を開いたまま）
+  connection.emit({ method: 'turn/completed', params: { threadId: 'thread-1', turn: { id: 'turn-1' } } })
+  assert.equal(app.running('thread-1@repo'), false)
+  assert.equal(app.holds('thread-1'), true, 'ターンが終わっても持っている')
+  connection.emit({ method: 'thread/closed', params: { threadId: 'thread-1' } })
+  assert.equal(app.holds('thread-1'), false, '閉じたら持っていない')
+
+  await app.start({ id: 'thread-1@repo', threadId: 'thread-1', text: '再開', cwd: '/repo' })
+  assert.equal(app.holds('thread-1'), true)
+  connection.disconnect()
+  assert.equal(app.holds('thread-1'), false, '切断したら持っていない')
+})

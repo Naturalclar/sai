@@ -187,6 +187,16 @@ export function mentionLabels(targets: ReplyTarget[]): Map<string, string> {
   return out
 }
 
+/**
+ * 返信の失敗を 1 文にする（#172 / #329）。プロセスが非0で終わったときは終了コードと reply.log の末尾、
+ * 端末・queue に渡して届かなかったとき（終了コードが無い）は理由だけ
+ */
+export function replyFailureText(failed: { code?: number; tail: string }): string {
+  const why = failed.tail.trim()
+  if (failed.code === undefined) return why || '届いていません'
+  return why ? `終了コード ${failed.code}: ${why}` : `終了コード ${failed.code}`
+}
+
 /** 本文から表記を外す（送信するときと、✕ で返信先を戻すとき）。残った空白は1つにまとめる */
 export function stripMention(text: string, label: string): string {
   return text.split(label).join('').replace(/[ \t]{2,}/g, ' ').replace(/^[ \t]+|[ \t]+$/gm, '').trim()

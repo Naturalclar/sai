@@ -331,34 +331,91 @@ export async function typeInto(tmux: Tmux, ps: PsFn, terminal: Terminal, agent: 
 }
 
 /**
- * 端末に打ち込んだ返信の「処理中」。子プロセスが無いので、ターン完了の行が since より新しくなったら終わり。
- * サーバを再起動すると忘れるが、端末側のターンは止まらないので実害は「処理中」の表示が消えるだけ
+ * 端末に打ち込んだ・開いている Codex の queue に渡した返信が、これだけ経ってもターンを始めていなければ「届いていない」とする（#329）。
+ * Claude は入力の行（UserPromptSubmit）が数秒で届き、Codex はターンを始めるとすぐ rollout に書くので、2 分あれば足りる
+ */
+export const TERMINAL_DELIVERY_WAIT_MS = 2 * 60_000
+/** 届いていないと決めた返信を、失敗として画面に見せておく時間（別プロセスの返信の FAILED_TTL_MS と同じ） */
+export const TERMINAL_FAILED_TTL_MS = 2 * 60_000
+
+/** どの経路で渡したか。届いていないときの文言が変わる */
+export type TerminalReplyKind = 'terminal' | 'queue'
+
+const UNDELIVERED: Record<TerminalReplyKind, string> = {
+  terminal: '端末に打ち込みましたが、2 分たってもターンが始まっていません。端末の入力欄に残っていないか見てください',
+  queue:
+    '開いている Codex に渡しましたが、2 分たっても受け取られていません。Codex のキューに残っていて、次にそのスレッドを開いたときに流れることがあります。端末でそのセッションを開いて送るか、Codex を閉じてから送り直してください',
+}
+
+interface TerminalEntry {
+  replying: Replying
+  kind: TerminalReplyKind
+  /** ターンが始まったのを確かめた（以後は見に行かない） */
+  delivered: boolean
+  /** 届いていないと決めた時刻（ミリ秒） */
+  failedAt?: number
+}
+
+/**
+ * 端末に打ち込んだ返信（と、開いている Codex の queue に渡した返信）の「処理中」。子プロセスが無いので、ターン完了の行が since より新しくなったら終わり。
+ * サーバを再起動すると忘れるが、端末側のターンは止まらないので実害は「処理中」の表示が消えるだけ。
+ * **届いたかは別に確かめる**（#329）: `checkDelivery()` が、TERMINAL_DELIVERY_WAIT_MS 経ってもターンが始まっていないものを
+ * 黙って消さずに `failed` にする（前は 30 分の TTL で何も言わずに消え、受け取り手のいない queue に渡したことが分からなかった）
  */
 export class TerminalReplies {
-  private active = new Map<string, Replying>()
+  private active = new Map<string, TerminalEntry>()
   private readonly now: () => number
   constructor(now: () => number = Date.now) {
     this.now = now
   }
+  /** 失敗にしたものは処理中ではない（次の返信を止めない） */
   running(id: string): boolean {
-    return this.active.has(id)
+    const entry = this.active.get(id)
+    return !!entry && !entry.replying.failed
   }
   snapshot(): ReplyingMap {
-    return Object.fromEntries(this.active)
+    return Object.fromEntries([...this.active].map(([id, entry]) => [id, entry.replying]))
   }
-  start(id: string, text: string): Replying {
-    // via で「端末に打ち込んだ返信」だと分かるようにする（#232。要対応の出し分けが使う）
+  start(id: string, text: string, kind: TerminalReplyKind = 'terminal'): Replying {
+    // via で「端末に打ち込んだ返信」だと分かるようにする（#232。要対応の出し分けが使う）。queue も人を待つ手がかりは行の waiting だけなので同じ
     const entry: Replying = { since: new Date(this.now()).toISOString(), text, via: 'terminal' }
-    this.active.set(id, entry)
+    this.active.set(id, { replying: entry, kind, delivered: false })
     return entry
   }
-  /** lastTurn(id) がその返信より新しければ終わり。TTL を超えたものも消す */
+  /** lastTurn(id) がその返信より新しければ終わり。TTL を超えたものも消す。失敗にしたものは少しだけ見せてから消す */
   settle(lastTurn: (id: string) => string | undefined): void {
-    for (const [id, r] of this.active) {
+    for (const [id, entry] of this.active) {
       const turn = lastTurn(id)
       // 行の ts は秒までなので、since も秒に丸めて比べる（同じ秒に届いたターンも「後」とみなす）
-      const since = Math.floor(Date.parse(r.since) / 1000) * 1000
-      if ((turn && Date.parse(turn) >= since) || this.now() - since > TERMINAL_REPLY_TTL_MS) this.active.delete(id)
+      const since = Math.floor(Date.parse(entry.replying.since) / 1000) * 1000
+      if (turn && Date.parse(turn) >= since) this.active.delete(id)
+      else if (entry.failedAt !== undefined) {
+        if (this.now() - entry.failedAt > TERMINAL_FAILED_TTL_MS) this.active.delete(id)
+      } else if (this.now() - since > TERMINAL_REPLY_TTL_MS) this.active.delete(id)
+    }
+  }
+  /**
+   * 待ち（TERMINAL_DELIVERY_WAIT_MS）を過ぎてまだ確かめていない返信について、ターンが始まったかを `started` に聞く。
+   * 始まっていなければ失敗にする。`started` は材料が無ければ true を返す（届いていないと決めつけない）。投げたら届いた扱い
+   */
+  async checkDelivery(started: (id: string, since: string) => Promise<boolean>): Promise<void> {
+    for (const [id, entry] of [...this.active]) {
+      if (entry.delivered || entry.failedAt !== undefined) continue
+      if (this.now() - Date.parse(entry.replying.since) < TERMINAL_DELIVERY_WAIT_MS) continue
+      let ok: boolean
+      try {
+        ok = await started(id, entry.replying.since)
+      } catch {
+        ok = true
+      }
+      // 聞いている間に消えた・送り直したものは触らない
+      if (this.active.get(id) !== entry) continue
+      if (ok) {
+        entry.delivered = true
+        continue
+      }
+      entry.replying = { ...entry.replying, failed: { tail: UNDELIVERED[entry.kind] } }
+      entry.failedAt = this.now()
     }
   }
 }

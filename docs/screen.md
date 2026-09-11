@@ -160,10 +160,13 @@ Slack のチャット風。1ターンは「自分の入力（`user_text`）→ �
 
 **端末に打ち込めなくても送れる。** 打ちかけを消せなかった、許可・質問のダイアログ中、入力欄が読めない、のどれでも `409` の body に `can_process: true` が付き、画面の確認に「**端末を使わず送る**」が出る（打ちかけがあるだけなら「消して送る」と並ぶ）。押すと `via: "process"` で送り直す。Claude は下の `claude -p --resume`、開いている Codex は `codex queue` を使う。
 
-**開いている Codex は queue へ送る。** 同じスレッドを別プロセスから `codex exec resume` すると、`thread-store conflict: ... already has an active writer` で失敗する。`CODEX_HOME/thread-writer-locks/<session>.lock`（補欠で記録時の pid）があるときは `codex queue --thread <session> --message <text>` を実行し、active writerを奪わず開いている会話へ足す。queueコマンドの終了まで待つので、受付に失敗したのに `202` を返すことはない。応答の `via` は `queue`。
+**開いている Codex は queue へ送る。** 同じスレッドを別プロセスから `codex exec resume` すると、`thread-store conflict: ... already has an active writer` で失敗する。`CODEX_HOME/thread-writer-locks/<session>.lock` を**開いているプロセスがいる**とき（`lsof -t` で見る。補欠で記録時の pid）は `codex queue --thread <session> --message <text>` を実行し、active writerを奪わず開いている会話へ足す。queueコマンドの終了まで待つので、受付に失敗したのに `202` を返すことはない。応答の `via` は `queue`。
 
+- **lock のファイルがあるだけでは開いているとみなさない**（#329）。Codex が終わっても（`C-c`、サーバの立て直しで app-server ごと落ちた、など）ファイルは残る。前はそれを読んで、閉じたセッションへの返信を誰も受け取らない queue に渡していた。`lsof` が無い環境では今までどおり lock があれば開いている扱い
+- **SAI の app-server が読み込んでいるスレッドは queue に回さない**。app-server は `thread/resume` したスレッドの lock をターンが終わっても開いたままにするので、見分けないと SAI から始めたターンの次の返信が queue に行く
 - 打ち込んだ返信の許可ダイアログは**端末側に出る**（下の `--permission-prompt-tool` は使わない）。SAI には検出専用の「Codex の画面で回答待ち」が出るが、答えるのは端末
 - 「処理中」は、その後にターン完了の行が届いたら解消（30 分届かなければ諦める）
+- **2 分たってもターンが始まっていなければ、黙って消さずに失敗として出す**（#329）。始まったかは、Claude は入力の行（`UserPromptSubmit`）、Codex は rollout への書き込みで見る。端末の入力欄に残ったままになった、開いている Codex が queue を受け取らない、などを拾う。queue に渡したものは Codex のキューに残り、次にそのスレッドを開いたときに流れることがある（SAI からは消さない）
 - **処理中でも打ち込める。** 端末で開いている間は、前のターンが動いていても送れる（Claude Code の TUI が次のターンに回す。端末で人が続けて打つのと同じ）。別プロセス（`-p`）の経路は二重起動になるので、すぐには起動せず**預かって、前のターンが終わってから回す**（下の「処理中に送った返信」。#305）。長いターンの間フィードから何も送れないのを避けるため（#170）
 - `SAI_TERMINAL=0` で切る（Claude と閉じた Codex は別プロセス、開いている Codex は queue）。`tmux` はサーバの `PATH` から探す（#288）
 - tmux 以外の端末と Claude Desktop には届かない（下のとおり別プロセスで回る）

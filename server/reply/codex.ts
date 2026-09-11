@@ -15,14 +15,39 @@ export function codexWriterLockPath(session: string, env: NodeJS.ProcessEnv = pr
   return join(root, 'thread-writer-locks', `${session}.lock`)
 }
 
-/** lock は Codex が開いている間だけ存在し、別プロセスの resume は active writer で失敗する。 */
-export async function codexWriterActive(session: string, env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
+/** ファイルを開いているプロセスの pid。誰も開いていなければ空。確かめる手段が無ければ投げる */
+export type LockHolders = (path: string) => Promise<number[]>
+
+/** `lsof -t <path>`（macOS / Linux にある）。誰も開いていなければ何も出さずに 1 で終わる */
+export const lsofHolders: LockHolders = (path) =>
+  new Promise((resolve, reject) => {
+    execFile('lsof', ['-t', path], { timeout: 5_000 }, (err, stdout) => {
+      const pids = String(stdout).split('\n').map((line) => Number(line.trim())).filter((pid) => Number.isInteger(pid) && pid > 0)
+      if (!err || pids.length > 0) return resolve(pids)
+      // 終わり方のエラーの code は終了コード（数値）、起動できなかったときは 'ENOENT' などの文字列
+      if ((err as { code?: unknown }).code === 1) return resolve([])
+      reject(err)
+    })
+  })
+
+/**
+ * 開いている Codex が writer を持っているか。**lock のファイルがあるだけでは開いているとみなさない**（#329）。
+ * 生きている Codex は lock を開いたままにしているが、プロセスが終わっても（C-c・サーバの立て直しで app-server ごと落ちた、など）
+ * ファイルは消えずに残る。残骸を「開いている」と読むと、閉じたセッションへの返信を誰も受け取らない queue に渡してしまう。
+ * 開いているかを確かめられない（lsof が無い）ときは、今までどおり lock があれば開いている扱い（本当に開いていたら resume が writer と競合する）
+ */
+export async function codexWriterActive(session: string, env: NodeJS.ProcessEnv = process.env, holders: LockHolders = lsofHolders): Promise<boolean> {
   const path = codexWriterLockPath(session, env)
   if (!path) return false
   try {
-    return (await stat(path)).isFile()
+    if (!(await stat(path)).isFile()) return false
   } catch {
     return false
+  }
+  try {
+    return (await holders(path)).length > 0
+  } catch {
+    return true
   }
 }
 

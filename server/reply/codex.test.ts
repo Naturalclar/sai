@@ -1,22 +1,59 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, open, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { mkdtemp } from 'node:fs/promises'
-import { codexQueueCommand, codexWriterActive, codexWriterLockPath, runCodexQueue } from './codex.ts'
+import { codexQueueCommand, codexWriterActive, codexWriterLockPath, lsofHolders, runCodexQueue } from './codex.ts'
 
 const SESSION = '01a06b50-3e5e-77d3-9f93-6c61bbbc5467'
 
-test('Codex の writer lock があるセッションだけ active とみなす（#160）', async () => {
+test('Codex の writer lock は、開いているプロセスがいるときだけ active とみなす（#160 / #329）', async () => {
   const root = await mkdtemp(join(tmpdir(), 'sai-codex-'))
   try {
     const locks = join(root, 'thread-writer-locks')
     await mkdir(locks)
-    await writeFile(join(locks, `${SESSION}.lock`), '')
-    assert.equal(await codexWriterActive(SESSION, { CODEX_HOME: root }), true)
-    assert.equal(await codexWriterActive('01a06b50-3e5e-77d3-9f93-000000000000', { CODEX_HOME: root }), false)
+    const lock = join(locks, `${SESSION}.lock`)
+    await writeFile(lock, '')
+    const seen: string[] = []
+    const held = async (path: string) => {
+      seen.push(path)
+      return [4242]
+    }
+    assert.equal(await codexWriterActive(SESSION, { CODEX_HOME: root }, held), true)
+    assert.deepEqual(seen, [lock], '見るのは lock のファイルそのもの')
+    // Codex が終わっても lock のファイルは残る（C-c・サーバの立て直しで app-server ごと落ちたとき）。誰も開いていなければ閉じている
+    assert.equal(await codexWriterActive(SESSION, { CODEX_HOME: root }, async () => []), false)
+    // 確かめる手段が無い（lsof が無い）ときは、今までどおり lock があれば開いている扱い
+    const noLsof = async () => {
+      throw Object.assign(new Error('spawn lsof ENOENT'), { code: 'ENOENT' })
+    }
+    assert.equal(await codexWriterActive(SESSION, { CODEX_HOME: root }, noLsof), true)
+    assert.equal(await codexWriterActive('01a06b50-3e5e-77d3-9f93-000000000000', { CODEX_HOME: root }, held), false)
+    assert.equal(seen.length, 1, 'lock が無ければ lsof も叩かない')
     assert.equal(codexWriterLockPath('../../outside', { CODEX_HOME: root }), null, 'ID から CODEX_HOME の外を読ませない')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('lsofHolders: 本物の lsof で、開いているプロセスがいればその pid、いなければ空', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'sai-lsof-'))
+  const lock = join(root, 'x.lock')
+  await writeFile(lock, '')
+  try {
+    try {
+      assert.deepEqual(await lsofHolders(lock), [], '誰も開いていない（lsof は 1 で終わる）')
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return t.skip('lsof が無い')
+      throw err
+    }
+    const handle = await open(lock, 'r')
+    try {
+      assert.deepEqual(await lsofHolders(lock), [process.pid], 'このプロセスが開いている')
+    } finally {
+      await handle.close()
+    }
   } finally {
     await rm(root, { recursive: true, force: true })
   }

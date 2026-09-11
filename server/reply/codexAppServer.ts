@@ -52,6 +52,12 @@ export interface CodexApp {
    * 偽物は持たなくてよい（画面のポーリングのついでにも回すので、無くても止まりはしない）
    */
   onTurnEnd?(listener: (id: string) => void): void
+  /**
+   * SAI の app-server がこのスレッドを読み込んでいるか（`thread/resume` が通ってから、`thread/closed`・切断まで）。
+   * 読み込んでいる間は app-server 自身が writer lock を開いているので、lock を見て「開いている Codex」と決めると
+   * 自分が持っているスレッドへの次の返信を queue に回してしまう（#329）。偽物は持たなくてよい
+   */
+  holds?(threadId: string): boolean
 }
 
 interface ManagedTurn {
@@ -179,6 +185,8 @@ export class CodexAppServer implements CodexApp {
   private approvals = new Map<string, PendingApproval>()
   private items = new Map<string, JsonObject>()
   private turnEndListeners: ((id: string) => void)[] = []
+  /** この接続で thread/resume したスレッド。ターンが終わっても app-server は読み込んだまま（writer lock を開いたまま）なので、切断・thread/closed まで持つ */
+  private loaded = new Set<string>()
   private readonly connect: CodexConnector
   private readonly now: () => number
 
@@ -189,6 +197,10 @@ export class CodexAppServer implements CodexApp {
 
   running(id: string): boolean {
     return this.entityThreads.has(id)
+  }
+
+  holds(threadId: string): boolean {
+    return this.loaded.has(threadId)
   }
 
   onTurnEnd(listener: (id: string) => void): void {
@@ -241,6 +253,8 @@ export class CodexAppServer implements CodexApp {
         approvalsReviewer: 'user',
         excludeTurns: true,
       })
+      // ここから app-server が writer lock を開いている（ターンが終わっても閉じない。#329）
+      this.loaded.add(input.threadId)
       const message: JsonObject = { type: 'text', text: input.text, text_elements: [] }
       const images = (input.attachments ?? []).map((path) => ({ type: 'localImage', path }))
       const response = object(await this.request('turn/start', {
@@ -479,6 +493,8 @@ export class CodexAppServer implements CodexApp {
       return
     }
     if (method === 'turn/completed' || method === 'thread/closed') {
+      // 閉じたスレッドは app-server がもう lock を持っていない
+      if (method === 'thread/closed') this.loaded.delete(threadId)
       this.clearThread(threadId)
       return
     }
@@ -503,6 +519,8 @@ export class CodexAppServer implements CodexApp {
     const ended = [...this.turns.values()].map((turn) => turn.entity)
     this.turns.clear()
     this.entityThreads.clear()
+    // app-server ごと終わったので、どのスレッドも持っていない（lock のファイルは残ることがある。#329）
+    this.loaded.clear()
     this.approvals.clear()
     this.items.clear()
     for (const entity of ended) this.turnEnded(entity)

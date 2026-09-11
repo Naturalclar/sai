@@ -9,7 +9,7 @@ import { ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_COUNT, ATTACHMENTS_DIR, withAttach
 import { mergeMeta } from '../shared/meta.ts'
 import { mergeProfile, PROFILE_ICON_ID, profileIconUrl } from '../shared/profile.ts'
 import { isPersonaId } from '../shared/persona.ts'
-import { replyBlockedReason } from '../shared/reply.ts'
+import { replyBlockedReason, replyFailureText } from '../shared/reply.ts'
 import { selfHost } from './host.ts'
 import type {
   AgentActivity,
@@ -259,7 +259,11 @@ export function revWith(rev: string, replying: ReplyingMap, approvalsKey = '', b
   if (ids.length === 0 && !approvalsKey && !buildStale && !digestKey && !queueKey) return rev
   const h = createHash('sha1')
   // 失敗が付いたときも画面に伝えたい（since は変わらないので、そのままでは rev が動かない）
-  for (const id of ids) h.update(`${id}\n${replying[id]!.since}\n${replying[id]!.failed?.code ?? ''}\n`)
+  // 失敗には終了コードが無いこともある（端末・queue で届かなかった。#329）ので、有無そのものも混ぜる
+  for (const id of ids) {
+    const failed = replying[id]!.failed
+    h.update(`${id}\n${replying[id]!.since}\n${failed ? `failed:${failed.code ?? ''}` : ''}\n`)
+  }
   h.update(`approvals:${approvalsKey}`)
   // ビルドが古いかが変わったら画面に伝えたい（画面は rev が同じなら描き直さない）
   h.update(`stale:${buildStale ? 1 : 0}`)
@@ -365,9 +369,25 @@ export function createApp(
   const terminalEnabled = process.env.SAI_TERMINAL !== '0'
   /** 一番新しい行に pane と pid があり、pid が生きていれば端末で開いている */
   const terminalOf = (s: SessionSummary) => (terminalEnabled && s.pane && s.pid && isAlive(s.pid) ? { pane: s.pane, pid: s.pid } : null)
-  /** 処理中の返信（子プロセス + 端末）。端末の分は、ターン完了の行が届いていれば先に片付ける */
-  const replyingOf = (sessions: SessionSummary[]): ReplyingMap => {
+  /**
+   * 端末に打ち込んだ・queue に渡した返信のターンが、送った時刻より後に始まったか（#329。`TerminalReplies.checkDelivery()` が 2 分後に聞く）。
+   * Claude は入力の行（UserPromptSubmit → `last_user_ts`）か transcript、Codex は rollout が送ったあとに書かれたかで見る。
+   * **材料が無い（一覧に居ない・別のマシン・OpenCode・ファイルが見つからない）ときは届いた扱い**（届いていないと決めつけない）
+   */
+  const typedStarted = async (sessions: SessionSummary[], id: string, since: string): Promise<boolean> => {
+    const s = sessions.find((x) => x.id === id)
+    if (!s || isRemoteHost(s.host, selfHost()) || (s.agent !== 'claude' && s.agent !== 'codex')) return true
+    // 行の ts は秒までなので、秒に丸めて比べる
+    const at = Math.floor(Date.parse(since) / 1000) * 1000
+    if (s.agent === 'claude' && s.last_user_ts && Date.parse(s.last_user_ts) >= at) return true
+    const { updated_at } = await progress.read(s)
+    if (!updated_at) return s.agent === 'claude' ? !s.last_user_ts : true
+    return Date.parse(updated_at) >= at
+  }
+  /** 処理中の返信（子プロセス + 端末）。端末の分は、ターン完了の行が届いていれば先に片付け、届いたかを確かめる */
+  const replyingOf = async (sessions: SessionSummary[]): Promise<ReplyingMap> => {
     typed.settle((id) => sessions.find((s) => s.id === id)?.last_turn)
+    await typed.checkDelivery((id, since) => typedStarted(sessions, id, since))
     return { ...typed.snapshot(), ...run.snapshot(), ...codexApp.replying() }
   }
   // 処理中の返信は replying.json にも持ち、サーバを再起動しても生きている分を引き取る（#100）
@@ -733,7 +753,10 @@ export function createApp(
     const term = openTerminal
     // Codex は開いているスレッドを exec resume すると active writer と競合する。tmux に打てない場合は
     // app-server の queue へ渡す（別プロセスは短く起動するが、writer を奪わず開いている会話に届く）。
-    const codexActive = session.agent === 'codex' && ((await isCodexWriterActive(raw)) || (session.pid > 0 && isAlive(session.pid)))
+    // lock は開いているプロセスがいるときだけ数える（残骸は閉じたセッション。#329）。**SAI の app-server が読み込んでいるスレッドは除く**
+    // （app-server 自身が lock を開いているので、見分けないと自分が持っているスレッドへの次の返信を queue に回す）
+    const saiHolds = session.agent === 'codex' && codexAppEnabled && (codexApp.holds?.(raw) ?? false)
+    const codexActive = session.agent === 'codex' && !saiHolds && ((await isCodexWriterActive(raw)) || (session.pid > 0 && isAlive(session.pid)))
     // モデルと画像は queue / exec resume の両方で使う。
     const own = await metaStore.get(id)
     const model = own?.model
@@ -747,7 +770,8 @@ export function createApp(
         const hint = code === 'ENOENT' ? `${cmd.bin} が見つかりません（サーバを起動した環境の PATH に ${cmd.bin} があるか確かめてください）` : ''
         return refuse(500, hint || `Codex へキュー送信できませんでした: ${err instanceof Error ? err.message : String(err)}`)
       }
-      typed.start(id, text)
+      // 受け取られたかは、2 分後に typed.checkDelivery() が確かめる（#329。受け取り手のいない queue でも exit 0 で返ってくる）
+      typed.start(id, text, 'queue')
       const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd, via: 'queue' }
       return { status: 202, body: payload }
     }
@@ -785,12 +809,17 @@ export function createApp(
     // SAIから開始するCodex turnはapp-serverでresumeする。server requestとresponseを同じ接続で
     // 往復できるので、質問・承認をWeb UIで安全に答えられる。通常起動TUIは上の経路のまま。
     if (session.agent === 'codex' && codexAppEnabled) {
+      // この経路も reply.log に残す（#329。残していなかったので、lock を残したターンがどの経路で回ったか追えなかった）
+      const log = join(store.directory, 'reply.log')
+      await appendFile(log, `--- ${new Date().toISOString()} ${id} Codex app-server で再開（thread/resume → turn/start） (cwd ${cwd})\n`).catch(() => {})
       try {
         await codexApp.start({ id, threadId: raw, text, cwd, model, attachments })
       } catch (err) {
         const code = (err as NodeJS.ErrnoException).code
         const hint = code === 'ENOENT' ? 'codex が見つかりません（サーバを起動した環境の PATH に codex があるか確かめてください）' : ''
-        return refuse(500, hint || `Codex app-serverで再開できませんでした: ${err instanceof Error ? err.message : String(err)}`)
+        const message = hint || `Codex app-serverで再開できませんでした: ${err instanceof Error ? err.message : String(err)}`
+        await appendFile(log, `${message}\n`).catch(() => {})
+        return refuse(500, message)
       }
       const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd, via: 'app-server' }
       return { status: 202, body: payload }
@@ -835,7 +864,7 @@ export function createApp(
     try {
       const last = run.snapshot()[id]
       if (last?.failed && resumedFailure.get(id) !== last.since) {
-        queue.pause(id, `前の返信が失敗したので止めています（終了コード ${last.failed.code}）。続けるなら「続けて送る」`)
+        queue.pause(id, `前の返信が失敗したので止めています（${last.failed.code === undefined ? '届いていません' : `終了コード ${last.failed.code}`}）。続けるなら「続けて送る」`)
         return
       }
       const out = await launch(id, head.text, head.attachments, {
@@ -989,7 +1018,7 @@ export function createApp(
     if (answered) return { ...base, status: 'done', text: clipReply(answered.text ?? '') }
     const turn = run.snapshot()[message.to]
     if (turn?.failed && isDeliveryOf(turn.text, message.message_id)) {
-      return { ...base, status: 'failed', error: `終了コード ${turn.failed.code}${turn.failed.tail ? `: ${turn.failed.tail}` : ''}` }
+      return { ...base, status: 'failed', error: replyFailureText(turn.failed) }
     }
     // 預かりの先頭のまま止まった（前の返信が失敗した・起動できなかった）
     const paused = queue.paused(message.to)
@@ -1813,7 +1842,7 @@ export function createApp(
         const rev = `${sessionsRev}~${me.rev}~${settled}`
         // 前のターンが終わっていれば、預かっている返信を回してから載せる（#305。再起動で引き取った子はここで拾う）
         await drainAll()
-        const replying = replyingOf(sessions)
+        const replying = await replyingOf(sessions)
         const pendingApprovals = await approvalsNow(sessions)
         // 既定はアーカイブ済みを除く。archived=1 でアーカイブ済みだけ。total と filters はその集合の絞り込み前から作る
         const wantArchived = q.get('archived') === '1'
@@ -1863,7 +1892,7 @@ export function createApp(
         const own = (await store.rows(days)).filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
         const rows = session.meta?.digest_off ? own : digest.attach(own)
         await drainAll()
-        const replying = replyingOf(sessions)
+        const replying = await replyingOf(sessions)
         const pendingApprovals = await approvalsNow(sessions)
         // 別のセッションへのメッセージのようす（#311）。送った・止めた・再開したは agents.key() で rev に混ぜる
         const activity = await agentActivityOf(id, sessions)
@@ -1904,7 +1933,7 @@ export function createApp(
         rows = digest.attach(rows.map(stripThinking))
         if (noDigest.size) rows = rows.map((r) => (r.summary && noDigest.has(entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? ''))) ? { ...r, summary: undefined } : r))
         await drainAll()
-        const replying = replyingOf(sessions)
+        const replying = await replyingOf(sessions)
         const pendingApprovals = await approvalsNow(sessions)
         // rev はメタ（アーカイブ）と処理中の集合、答え待ちの承認、ビルドが古いか、一言の有無も混ぜる
         const build_stale = await freshness.stale()

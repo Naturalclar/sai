@@ -25,9 +25,13 @@ const GRACE_MS = 1000
 
 export const ENDED_WITHOUT_ROW = '返信は終わったが記録が増えなかった（~/.agent-feed/reply.log を見る）'
 
-/** サーバが「プロセスが非0で終わった」と言っているときの文（#172）。理由は reply.log の末尾から来る */
+/**
+ * サーバが「返信が失敗した」と言っているときの文（#172）。プロセスが非0で終わったときは理由が reply.log の末尾から来る。
+ * 端末・開いている Codex の queue に渡して届かなかったとき（#329）は終了コードが無く、理由だけ
+ */
 export function replyFailureMessage(failed: NonNullable<Replying['failed']>): string {
   const why = failed.tail.trim()
+  if (failed.code === undefined) return `返信が届いていません${why ? `: ${why}` : ''}`
   return `返信が失敗しました（終了コード ${failed.code}）${why ? `: ${why}` : '。~/.agent-feed/reply.log を見てください'}`
 }
 

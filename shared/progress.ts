@@ -31,11 +31,18 @@ export interface ParsedProgress {
   started: boolean
   /** ターンが閉じていない（最後の assistant の行が tool_use で止まっている、または入力のあと返答がまだ） */
   open: boolean
+  /**
+   * 最後にモデルを呼んだときに読んだ量（トークン）。そのセッションに送ると、少なくともこれだけ読み直す（#311）。
+   * Claude は assistant の `message.usage` の入力（`input_tokens` + `cache_read_input_tokens` + `cache_creation_input_tokens`）、
+   * Codex は `token_count` の `last_token_usage.input_tokens`（キャッシュぶんを含む）。読んだ範囲に無ければ 0
+   */
+  context?: number
 }
 
 type Obj = Record<string, unknown>
 const obj = (v: unknown): Obj | null => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Obj) : null)
 const str = (v: unknown): string => (typeof v === 'string' ? v : '')
+const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0)
 
 function parseLine(line: string): Obj | null {
   if (!line.trim()) return null
@@ -128,6 +135,7 @@ export function claudeProgress(lines: readonly string[]): ParsedProgress {
   let tools = new Map<string, ProgressStep>()
   let started = false
   let open = false
+  let context = 0
   for (const line of lines) {
     const o = parseLine(line)
     if (!o || o.isSidechain === true) continue
@@ -154,6 +162,12 @@ export function claudeProgress(lines: readonly string[]): ParsedProgress {
       }
       continue
     }
+    if (o.type === 'assistant') {
+      // 1 回の返答が塊ごとの行に分かれて書かれ、どれにも同じ usage が付く。一番新しいものを残す
+      const usage = obj(message?.usage)
+      const read = usage ? num(usage.input_tokens) + num(usage.cache_read_input_tokens) + num(usage.cache_creation_input_tokens) : 0
+      if (read > 0) context = read
+    }
     if (o.type !== 'assistant' || !Array.isArray(content)) continue
     for (const raw of content) {
       const b = obj(raw)
@@ -172,7 +186,7 @@ export function claudeProgress(lines: readonly string[]): ParsedProgress {
     if (stop === 'tool_use') open = true
     else if (stop === 'end_turn' || stop === 'stop_sequence') open = false
   }
-  return { steps, started, open }
+  return { steps, started, open, context }
 }
 
 /**
@@ -185,6 +199,7 @@ export function codexProgress(lines: readonly string[]): ParsedProgress {
   let tools = new Map<string, ProgressStep>()
   let started = false
   let open = false
+  let context = 0
   for (const line of lines) {
     const o = parseLine(line)
     const payload = obj(o?.payload)
@@ -199,6 +214,9 @@ export function codexProgress(lines: readonly string[]): ParsedProgress {
         open = true
       } else if (type === 'task_complete') {
         open = false
+      } else if (type === 'token_count') {
+        const read = num(obj(obj(payload.info)?.last_token_usage)?.input_tokens)
+        if (read > 0) context = read
       }
       continue
     }
@@ -217,7 +235,7 @@ export function codexProgress(lines: readonly string[]): ParsedProgress {
       if (text.trim()) pushStep(steps, { kind: 'text', summary: oneLine(text), started: ts, ended: ts })
     }
   }
-  return { steps, started, open }
+  return { steps, started, open, context }
 }
 
 /**

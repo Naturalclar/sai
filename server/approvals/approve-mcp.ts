@@ -18,7 +18,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { AGENT_SEND_MAX } from '../../shared/agentMessages.ts'
+import { AGENT_SEND_MAX, tokensLabel } from '../../shared/agentMessages.ts'
 import type { AgentSendResponse, AgentSessionsResponse, AgentWaitResponse, ApprovalAnswer, ApprovalRequest } from '../../shared/types.ts'
 
 export const TOOL_NAME = 'approve'
@@ -35,12 +35,12 @@ export const AGENT_TOOLS = [
   {
     name: 'sai_sessions',
     description:
-      'SAI に並んでいる、同じリポジトリの別のセッション（話しかけられる相手）の一覧。id・呼び名・エージェント・ブランチ・処理中か・最後の発言の 1 行だけで、本文は含まない。別のセッションに頼む・聞く前に使う',
+      'SAI に並んでいる、同じリポジトリの別のセッション（話しかけられる相手）の一覧。id・呼び名・エージェント・ブランチ・処理中か・読み直す量・最後の発言の 1 行だけで、本文は含まない。別のセッションに頼む・聞く前に使う。読み直す量が大きい相手ほど、送ったときにトークンを使う',
     inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'sai_send',
-    description: `SAI の別のセッションにメッセージを送る（to は sai_sessions の id）。相手が処理中なら、終わってから回る。返答は sai_wait で受け取る。1 ターンに ${AGENT_SEND_MAX} 回まで、別のセッションから受け取ったメッセージで回っているターンからは送れない。受け取った相手はそれまでの長い会話を読み直すのでトークンを大きく使う: 1 回で済むように、何をしてほしいか・何を返してほしいかを短く具体的に書く`,
+    description: `SAI の別のセッションにメッセージを送る（to は sai_sessions の id）。相手が処理中なら、終わってから回る。返答は sai_wait で受け取る。1 ターンに ${AGENT_SEND_MAX} 回まで、別のセッションから受け取ったメッセージで回っているターンからは送れない。相手の使用量の枠が残り少ないとき、1 ターンで相手に読み直させる量が予算を超えるときも送れない。受け取った相手はそれまでの長い会話を読み直すのでトークンを大きく使う: 1 回で済むように、何をしてほしいか・何を返してほしいかを短く具体的に書く`,
     inputSchema: {
       type: 'object',
       properties: { to: { type: 'string', description: '送り先のセッションの id' }, text: { type: 'string', description: '頼みたいこと・聞きたいこと' } },
@@ -103,7 +103,10 @@ export async function agentTool(
       if (body.sessions.length === 0) return textResult('話しかけられるセッションはありません（同じリポジトリの、SAI から返信できるセッションだけが相手になります）')
       return textResult(
         body.sessions
-          .map((s) => `- ${s.id}「${s.name}」${s.agent}${s.branch ? ` ${s.branch}` : ''}${s.busy ? '（処理中）' : ''}${s.last_text ? ` 最後の発言: ${s.last_text}` : ''}`)
+          .map(
+            (s) =>
+              `- ${s.id}「${s.name}」${s.agent}${s.branch ? ` ${s.branch}` : ''}${s.busy ? '（処理中）' : ''}${s.context_tokens ? ` 読み直す量: ${tokensLabel(s.context_tokens)}` : ''}${s.last_text ? ` 最後の発言: ${s.last_text}` : ''}`,
+          )
           .join('\n'),
       )
     }
@@ -115,7 +118,9 @@ export async function agentTool(
       if (!res.ok) return textResult(`送れませんでした: ${await errorOf(res)}`, true)
       const body = (await res.json()) as AgentSendResponse
       const how = body.via === 'queued' ? '相手は処理中なので、終わってから回ります' : '相手のターンを始めました'
-      return textResult(`送りました（message_id: ${body.message_id}。${how}）。このターンで送れるのはあと ${Math.max(0, body.limit - body.sent)} 回です。返答は sai_wait で受け取れます`)
+      // 読み直す量が分かっていれば、使ったぶんと予算の残りも伝える（次に送るかをエージェントが決められるように。#311）
+      const read = body.context_tokens > 0 ? `相手は${tokensLabel(body.context_tokens)}を読み直します（このターンの予算の残りは${tokensLabel(Math.max(0, body.read_budget - body.read_tokens)) || ' 0'}）。` : ''
+      return textResult(`送りました（message_id: ${body.message_id}。${how}）。${read}このターンで送れるのはあと ${Math.max(0, body.limit - body.sent)} 回です。返答は sai_wait で受け取れます`)
     }
     if (name === 'sai_wait') {
       const id = typeof args.message_id === 'string' ? args.message_id : ''

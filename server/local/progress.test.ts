@@ -64,6 +64,22 @@ test('ProgressReader(Claude): cwd から transcript を引き、走っている�
   })
 })
 
+test('ProgressReader: 最後にモデルを呼んだときに読んだ量を context_tokens に載せる。読めなければ 0（#311）', async () => {
+  await withDirs(async ({ projects, sessions }) => {
+    const cwd = '/Users/me/work/sai.git/dev-a'
+    const dir = join(projects, claudeProjectName(cwd))
+    await mkdir(dir, { recursive: true })
+    const usage = { input_tokens: 12, cache_read_input_tokens: 880_000, cache_creation_input_tokens: 4_000, output_tokens: 300 }
+    await writeFile(
+      join(dir, `${SID}.jsonl`),
+      [prompt(at(0), 'やって'), j({ type: 'assistant', timestamp: at(1), message: { role: 'assistant', content: [{ type: 'text', text: '見ました' }], stop_reason: 'end_turn', usage } })].join('\n') + '\n',
+    )
+    const reader = new ProgressReader(projects, sessions)
+    assert.equal((await reader.read({ id: `${SID}@sai`, repo: 'sai', agent: 'claude', cwd })).context_tokens, 884_012)
+    assert.equal((await reader.read({ id: 'nope@sai', repo: 'sai', agent: 'claude', cwd })).context_tokens, 0)
+  })
+})
+
 test('ProgressReader(Claude): 組み立てた名前に無ければ projects の中から探す。無いセッション・OpenCode・読めない ID は空', async () => {
   await withDirs(async ({ projects, sessions }) => {
     await mkdir(join(projects, 'renamed'), { recursive: true })
@@ -72,7 +88,7 @@ test('ProgressReader(Claude): 組み立てた名前に無ければ projects の�
     const found = await reader.read({ id: `${SID}@r`, repo: 'r', agent: 'claude', cwd: '/somewhere/else' })
     assert.equal(found.steps[0]?.summary, 'ls')
 
-    const none = { rev: '', active: false, steps: [], total: 0, updated_at: '' }
+    const none = { rev: '', active: false, steps: [], total: 0, updated_at: '', context_tokens: 0 }
     assert.deepEqual(await reader.read({ id: '99999999-0000-0000-0000-000000000000@r', repo: 'r', agent: 'claude', cwd: '/x' }), { ...none, id: '99999999-0000-0000-0000-000000000000@r' })
     assert.deepEqual(await reader.read({ id: `${SID}@r`, repo: 'r', agent: 'opencode', cwd: '/x' }), { ...none, id: `${SID}@r` })
     assert.deepEqual(await reader.read({ id: 'unknown-2026-09-10@r', repo: 'r', agent: 'claude', cwd: '/x' }), { ...none, id: 'unknown-2026-09-10@r' })

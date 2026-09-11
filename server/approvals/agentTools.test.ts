@@ -39,9 +39,11 @@ before(async () => {
         res.end(JSON.stringify(payload))
       }
       if (req.url?.startsWith('/api/agent/sessions')) {
-        return reply(200, { from: 'A1@r', sessions: [{ id: 'B1@r', name: 'レビュー', project: 'o/r', branch: 'main', agent: 'claude', busy: true, last_text: '見ました' }] })
+        return reply(200, { from: 'A1@r', sessions: [{ id: 'B1@r', name: 'レビュー', project: 'o/r', branch: 'main', agent: 'claude', busy: true, last_text: '見ました', context_tokens: 120_000 }] })
       }
-      if (req.url === '/api/agent/send') return reply(202, { message_id: 'm1', to: 'B1@r', via: 'queued', sent: 1, limit: 3 })
+      if (req.url === '/api/agent/send') {
+        return reply(202, { message_id: 'm1', to: 'B1@r', via: 'queued', sent: 1, limit: 3, context_tokens: 900_000, read_tokens: 900_000, read_budget: 3_000_000 })
+      }
       if (req.url?.startsWith('/api/agent/wait')) {
         const next = waits.shift() ?? { status: 404, body: { error: 'そのメッセージは見つかりません' } }
         return reply(next.status, next.body)
@@ -63,7 +65,7 @@ test('agentTool: トークンをファイルから読んでヘッダに載せ、
   seen.length = 0
   const result = await agentTool('sai_sessions', {}, base, 'A1@r', tokenFile)
   assert.equal(result.isError, undefined)
-  assert.equal(result.content[0]!.text, '- B1@r「レビュー」claude main（処理中） 最後の発言: 見ました')
+  assert.equal(result.content[0]!.text, '- B1@r「レビュー」claude main（処理中） 読み直す量: 約 12 万トークン 最後の発言: 見ました')
   assert.equal(seen[0]!.token, 'secret-token', 'トークンは env ではなくファイルから読む')
   assert.equal(seen[0]!.url, '/api/agent/sessions?from=A1%40r')
 })
@@ -73,6 +75,7 @@ test('agentTool: sai_send は送り元・送り先・本文を送り、預けた
   const result = await agentTool('sai_send', { to: 'B1@r', text: '見て' }, base, 'A1@r', tokenFile)
   assert.match(result.content[0]!.text, /message_id: m1。相手は処理中なので、終わってから回ります/)
   assert.match(result.content[0]!.text, /あと 2 回/)
+  assert.match(result.content[0]!.text, /相手は約 90 万トークンを読み直します（このターンの予算の残りは約 210 万トークン）/, '次に送るかを決められるよう、読み直す量と予算の残りも伝える（#311）')
   assert.deepEqual(JSON.parse(seen[0]!.body), { from: 'A1@r', to: 'B1@r', text: '見て' })
   const missing = await agentTool('sai_send', { to: 'B1@r' }, base, 'A1@r', tokenFile)
   assert.equal(missing.isError, true)

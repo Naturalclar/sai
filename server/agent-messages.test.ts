@@ -8,11 +8,13 @@ import { appendFile, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/prom
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AGENT_SEND_MAX } from '../shared/agentMessages.ts'
-import type { AgentSendResponse, AgentSessionsResponse, AgentWaitResponse, Replying, SessionsResponse } from '../shared/types.ts'
+import type { AgentSendResponse, AgentSessionsResponse, AgentWaitResponse, Replying, SessionProgressResponse, SessionsResponse, SessionSummary, UsageResponse } from '../shared/types.ts'
 import { createApp } from './app.ts'
 import { Approvals } from './approvals/approvals.ts'
 import { Authenticator } from './auth.ts'
 import { BuildFreshness } from './local/buildFreshness.ts'
+import type { ProgressReader } from './local/progress.ts'
+import type { UsageStore } from './local/usage.ts'
 import { AGENT_TOKEN_FILE } from './reply/agentMessages.ts'
 import type { CodexApp } from './reply/codexAppServer.ts'
 import type { ReplyCommand, Runner } from './reply/runner.ts'
@@ -51,6 +53,15 @@ const codexApp: CodexApp = {
   async start() {},
   answer: () => ({ ok: false, status: 404, error: 'approval not found' }),
 }
+/** 使用量の偽物（この Mac の ~/.claude / ~/.codex を読まない）。既定は「取れない」 */
+const usage = { value: {} as UsageResponse, async get() { return this.value } }
+/** 処理中の手順の偽物。相手が読み直す量だけを返す（既定は分からない = 0） */
+const contexts = new Map<string, number>()
+const progress = {
+  async read(s: Pick<SessionSummary, 'id'>): Promise<SessionProgressResponse> {
+    return { rev: '', id: s.id, active: false, steps: [], total: 0, updated_at: '', context_tokens: contexts.get(s.id) ?? 0 }
+  },
+}
 const now = new Date()
 const minutesAgo = (n: number) => new Date(now.getTime() - n * 60_000)
 
@@ -81,6 +92,11 @@ before(async () => {
     undefined,
     new Authenticator(async () => null),
     { tmux: { run: async () => { throw new Error('unused') } }, ps: async () => '', codexApp },
+    undefined,
+    undefined,
+    undefined,
+    usage as unknown as UsageStore,
+    progress as unknown as ProgressReader,
   )
   token = (await readFile(join(dir, AGENT_TOKEN_FILE), 'utf-8')).trim()
   server = createServer((req, res) => void app(req, res))
@@ -153,7 +169,11 @@ test('sai_sessions: 同じ project の、返信できる別のセッションだ
       ['B1@r'],
       '自分・別の project（C1）・別のマシン（R1）・合成 ID（S1）は出さない',
     )
-    assert.deepEqual(body.sessions[0], { id: 'B1@r', name: 'レビューして', project: 'o/r', branch: body.sessions[0]!.branch, agent: 'claude', busy: true, last_text: 'レビューしました' })
+    assert.deepEqual(body.sessions[0], { id: 'B1@r', name: 'レビューして', project: 'o/r', branch: body.sessions[0]!.branch, agent: 'claude', busy: true, last_text: 'レビューしました', context_tokens: 0 })
+    contexts.set('B1@r', 120_000)
+    const sized = (await (await agent('/api/agent/sessions?from=A1%40r')).json()) as AgentSessionsResponse
+    assert.equal(sized.sessions[0]!.context_tokens, 120_000, '相手が読み直す量（直近の呼び出しの入力。#311）')
+    contexts.delete('B1@r')
   } finally {
     idle('A1@r')
     idle('B1@r')
@@ -248,6 +268,49 @@ test('相手が処理中なら預かりに並び、回ったターンからも�
     assert.equal((await send('B1@r', 'A1@r', '頼み返す')).status, 429, '預かりから回ったターンも、メッセージで起動したターン')
   } finally {
     idle('B1@r')
+  }
+  await humanReply('B1@r')
+  idle('B1@r')
+})
+
+test('相手のエージェントの 5 時間の枠が 80% を超えていたら送らない（429）。取れなければ・戻っていれば止めない（#311）', async () => {
+  runner.started.length = 0
+  turn('A1@r')
+  try {
+    const later = Date.now() / 1000 + 3600
+    usage.value = { claude: { primary: { used_percent: 85, window_minutes: 300, resets_at: later }, at: '' } }
+    const res = await send('A1@r', 'B1@r', '見て')
+    assert.equal(res.status, 429)
+    assert.match(((await res.json()) as { error: string }).error, /5 時間の枠が 85%/)
+    assert.equal(runner.started.length, 0, '止めたら起動しない')
+    usage.value = { claude: { primary: { used_percent: 85, window_minutes: 300, resets_at: Date.now() / 1000 - 60 }, at: '' } }
+    assert.equal((await send('A1@r', 'B1@r', '枠が戻った')).status, 202)
+    usage.value = {}
+    assert.equal((await send('A1@r', 'B1@r', '取れない')).status, 202)
+  } finally {
+    usage.value = {}
+    idle('A1@r')
+  }
+  await humanReply('B1@r')
+  idle('B1@r')
+})
+
+test('1 ターンで相手に読み直させる量の予算を超える相手には送らない（429）。次のターンでは数え直す（#311）', async () => {
+  contexts.set('B1@r', 2_000_000)
+  turn('A1@r', 'budget-a')
+  try {
+    const first = await send('A1@r', 'B1@r', '一回目')
+    assert.equal(first.status, 202)
+    const body = (await first.json()) as AgentSendResponse
+    assert.deepEqual([body.context_tokens, body.read_tokens, body.read_budget], [2_000_000, 2_000_000, 3_000_000])
+    const second = await send('A1@r', 'B1@r', '二回目')
+    assert.equal(second.status, 429)
+    assert.match(((await second.json()) as { error: string }).error, /予算を超えます/)
+    turn('A1@r', 'budget-b')
+    assert.equal((await send('A1@r', 'B1@r', '次のターン')).status, 202)
+  } finally {
+    contexts.delete('B1@r')
+    idle('A1@r')
   }
   await humanReply('B1@r')
   idle('B1@r')

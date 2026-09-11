@@ -78,7 +78,28 @@ test('claudeProgress: 始まりが読んだ範囲に無くても、最後の ass
   assert.equal(mid.open, true)
   assert.equal(mid.steps.length, 1)
   assert.equal(claudeProgress([assistant(T(1), [{ type: 'text', text: 'done' }], 'end_turn')]).open, false)
-  assert.deepEqual(claudeProgress(['', '{ broken', 'null', '[]']), { steps: [], started: false, open: false })
+  assert.deepEqual(claudeProgress(['', '{ broken', 'null', '[]']), { steps: [], started: false, open: false, context: 0 })
+})
+
+test('claudeProgress / codexProgress: 最後にモデルを呼んだときに読んだ量（送ると相手が読み直す量。#311）', () => {
+  const withUsage = (ts: string, stop: string, usage: Record<string, number>) =>
+    j({ type: 'assistant', timestamp: ts, message: { role: 'assistant', content: [{ type: 'text', text: 'x' }], stop_reason: stop, usage } })
+  const claude = claudeProgress([
+    prompt(T(0), 'やって'),
+    withUsage(T(1), 'tool_use', { input_tokens: 10, cache_read_input_tokens: 500_000, cache_creation_input_tokens: 2_000, output_tokens: 99 }),
+    withUsage(T(2), 'end_turn', { input_tokens: 5, cache_read_input_tokens: 510_000, cache_creation_input_tokens: 1_000, output_tokens: 7 }),
+    j({ type: 'assistant', timestamp: T(3), isSidechain: true, message: { role: 'assistant', content: [], usage: { input_tokens: 9_999_999 } } }),
+  ])
+  assert.equal(claude.context, 511_005, '一番新しい呼び出しの入力。出力とサブエージェントは足さない')
+  assert.equal(claudeProgress([prompt(T(0), 'やって')]).context, 0, '読んだ範囲に無ければ 0')
+
+  const codex = codexProgress([
+    ev(T(0), { type: 'task_started', turn_id: 'a' }),
+    ev(T(1), { type: 'token_count', info: { last_token_usage: { input_tokens: 40_000, cached_input_tokens: 6_400, output_tokens: 10 }, total_token_usage: { input_tokens: 700_000 } } }),
+    ev(T(2), { type: 'token_count', info: { last_token_usage: { input_tokens: 53_807, cached_input_tokens: 6_400 } } }),
+    ev(T(3), { type: 'token_count', info: null }),
+  ])
+  assert.equal(codex.context, 53_807, 'last_token_usage（1 回ぶん。total は積算なので使わない）。info の無い行では上書きしない')
 })
 
 const ev = (ts: string, payload: Record<string, unknown>) => j({ timestamp: ts, type: 'event_msg', payload })

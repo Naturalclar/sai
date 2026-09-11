@@ -278,6 +278,11 @@ export interface SessionProgressResponse {
   total: number
   /** transcript / rollout が最後に書かれた時刻（ISO）。読めなければ空 */
   updated_at: string
+  /**
+   * 最後にモデルを呼んだときに読んだ量（トークン。#311）。そのセッションに送ると、少なくともこれだけ読み直す。
+   * セッション同士のメッセージの予算に使う。読めなければ 0
+   */
+  context_tokens: number
 }
 
 /**
@@ -435,6 +440,8 @@ export interface AgentSessionEntry {
   busy: boolean
   /** 最後の発言の 1 行目（長ければ切ってある） */
   last_text: string
+  /** 送ると相手が読み直す量（直近の呼び出しの入力トークン。#311）。分からなければ 0 */
+  context_tokens: number
 }
 
 /** `GET /api/agent/sessions?from=` の応答 */
@@ -461,6 +468,12 @@ export interface AgentSendResponse {
   sent: number
   /** 1 ターンに送れる回数 */
   limit: number
+  /** この相手が読み直す量（トークン。#311）。分からなければ 0 で、予算にも足していない */
+  context_tokens: number
+  /** 送り元のこのターンで、相手に読み直させた量の合計（この送信を含む） */
+  read_tokens: number
+  /** 1 ターンで相手に読み直させてよい量 */
+  read_budget: number
 }
 
 /** `GET /api/agent/wait?from=&message_id=` の応答（#310）。`done` なら `text` に相手の返答（長ければ切ってある） */

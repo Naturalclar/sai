@@ -113,6 +113,8 @@ export class ProgressReader {
         updated_at: new Date(st.mtimeMs).toISOString(),
         // セッション同士のメッセージで、送ると相手がどれだけ読み直すかに使う（#311）
         context_tokens: cached.value.context ?? 0,
+        // 答えを待っている質問（#333）。詳細の応答が、行の待ちと同じ文のときだけ使う
+        ...(cached.value.question ? { question: cached.value.question } : {}),
       }
     } catch {
       // 消えた・読めない。次は探し直す

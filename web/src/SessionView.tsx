@@ -129,6 +129,7 @@ export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggl
           showThinking
           thinkingOpen={thinkingUi.open}
           focusTs={focusTs}
+          {...(data.question ? { question: data.question } : {})}
           trailer={
             <>
               {mine && (

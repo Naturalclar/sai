@@ -12,6 +12,8 @@ import { JumpToBottom } from './JumpToBottom'
 import { HostTag } from './HostTag'
 import { opensDiff, type ChatDiffs } from './feedDiff.ts'
 import { JUMP_FLASH_MS, type FeedJump } from './feedJump.ts'
+import { questionsFor } from './terminalQuestion.ts'
+import type { PendingQuestion } from '../../shared/types.ts'
 
 const NO_SESSIONS: never[] = []
 
@@ -50,6 +52,11 @@ interface Props {
    * （同じバブルにもう一度飛べるように。`focusTs` は一度着地した ts には二度と送らない）。フィードだけが渡す
    */
   jumpTo?: FeedJump | null
+  /**
+   * 端末で開いた Claude が答えを待っている質問（#333。詳細の応答の `question`）。同じ文の、まだ解消していない待ちのバブルに
+   * 選択肢を読むだけで出す（`terminalQuestion.ts` の `questionsFor()`）。セッション画面だけが渡す
+   */
+  question?: PendingQuestion
 }
 
 /**
@@ -63,7 +70,7 @@ function flash(el: HTMLElement) {
   window.setTimeout(() => el.classList.remove('found'), JUMP_FLASH_MS)
 }
 
-export function Chat({ rows, showChannel, selfHost = '', sessions = NO_SESSIONS, trailer, showThinking = false, thinkingOpen = false, profile, linear = '', focusTs = '', diffs, jumpTo = null }: Props) {
+export function Chat({ rows, showChannel, selfHost = '', sessions = NO_SESSIONS, trailer, showThinking = false, thinkingOpen = false, profile, linear = '', focusTs = '', diffs, jumpTo = null, question }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
   // 最下部が見えているか（描画にも使うので state）。見えていないときは「一番下へ」を出す
@@ -174,6 +181,7 @@ export function Chat({ rows, showChannel, selfHost = '', sessions = NO_SESSIONS,
                         text={u.text}
                         markdown={u.speaker !== 'me'}
                         waiting={u.waiting}
+                        questions={questionsFor(u, question)}
                         resolved={u.resolved}
                         thinking={showThinking ? u.thinking : undefined}
                         thinkingOpen={thinkingOpen}

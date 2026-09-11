@@ -4,8 +4,8 @@
 //
 // 実測（#302）: transcript の tool_use は**実行前に**、tool_result は終わってから追記されるので、走っている間は
 // tool_use の行だけがある。thinking は 694 個のうち本文が入っていたのが 30 個で、中身は出さない（「考え中」だけ）
-import { toolSummary } from './approvals.ts'
-import type { ProgressStep } from './types.ts'
+import { approvalText, toolSummary } from './approvals.ts'
+import type { PendingQuestion, ProgressStep } from './types.ts'
 
 /** 画面に返す手順の数（ターンの末尾から） */
 export const PROGRESS_STEPS = 8
@@ -37,6 +37,11 @@ export interface ParsedProgress {
    * Codex は `token_count` の `last_token_usage.input_tokens`（キャッシュぶんを含む）。読んだ範囲に無ければ 0
    */
   context?: number
+  /**
+   * いま答えを待っている `AskUserQuestion`（#333。Claude だけ）。今のターンで返事（`tool_result`）がまだ付いていない、
+   * 一番新しいもの。フックの待ちの行には質問の文しか無いので、端末で開いたセッションの選択肢はここから出す
+   */
+  question?: PendingQuestion
 }
 
 type Obj = Record<string, unknown>
@@ -136,6 +141,9 @@ export function claudeProgress(lines: readonly string[]): ParsedProgress {
   let started = false
   let open = false
   let context = 0
+  // 答えを待っている AskUserQuestion と、その tool_use の id（#333）
+  let question: PendingQuestion | undefined
+  let questionId = ''
   for (const line of lines) {
     const o = parseLine(line)
     if (!o || o.isSidechain === true) continue
@@ -148,8 +156,14 @@ export function claudeProgress(lines: readonly string[]): ParsedProgress {
       const results = blocks.filter((b) => b?.type === 'tool_result')
       if (results.length > 0) {
         for (const b of results) {
-          const step = tools.get(str(b?.tool_use_id))
+          const id = str(b?.tool_use_id)
+          const step = tools.get(id)
           if (step && !step.ended) step.ended = ts
+          // 答えた（端末で選んだ・Esc で断った）
+          if (id && id === questionId) {
+            question = undefined
+            questionId = ''
+          }
         }
         continue
       }
@@ -159,6 +173,8 @@ export function claudeProgress(lines: readonly string[]): ParsedProgress {
         tools = new Map()
         started = true
         open = true
+        question = undefined
+        questionId = ''
       }
       continue
     }
@@ -176,6 +192,12 @@ export function claudeProgress(lines: readonly string[]): ParsedProgress {
         const step: ProgressStep = { kind: 'tool', tool: str(b.name), summary: claudeToolSummary(str(b.name), b.input), started: ts }
         steps.push(step)
         tools.set(str(b.id), step)
+        if (b.name === 'AskUserQuestion') {
+          const input = obj(b.input) ?? {}
+          // 文は待ちの行（record.py の waiting_text()）と同じ形。サーバはこれで行の待ちと同じ質問かを確かめる
+          question = { input, asked_at: ts, text: approvalText('AskUserQuestion', input) }
+          questionId = str(b.id)
+        }
       } else if (b.type === 'thinking') {
         pushStep(steps, { kind: 'thinking', summary: '', started: ts, ended: ts })
       } else if (b.type === 'text' && str(b.text).trim()) {
@@ -186,7 +208,7 @@ export function claudeProgress(lines: readonly string[]): ParsedProgress {
     if (stop === 'tool_use') open = true
     else if (stop === 'end_turn' || stop === 'stop_sequence') open = false
   }
-  return { steps, started, open, context }
+  return { steps, started, open, context, ...(question ? { question } : {}) }
 }
 
 /**

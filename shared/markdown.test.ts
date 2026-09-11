@@ -112,6 +112,44 @@ test('stripMarkdown: 一覧の1行表示から記号だけ落とす', () => {
   assert.equal(stripMarkdown('記号なし'), '記号なし')
 })
 
+const img = (src: string, alt: string): Inline => ({ kind: 'image', src, alt })
+
+test('画像（#321）: ![alt](パス) と、画像の拡張子の [名前](パス) は画像のノード。Codex は後者の形で出す', () => {
+  const path = '/Users/me/sai.git/dev-codex/docs/assets/codex-agent-icon.png'
+  assert.deepEqual(parseInline(`Codex用アイコン作成！[codex-agent-icon.png](${path}) 1254×1254px透過PNG。`), [
+    t('Codex用アイコン作成！'),
+    img(path, 'codex-agent-icon.png'),
+    t(' 1254×1254px透過PNG。'),
+  ])
+  assert.deepEqual(parseInline('![スクショ](./shots/a.PNG)'), [img('./shots/a.PNG', 'スクショ')], '拡張子の大文字小文字は問わない')
+  assert.deepEqual(parseInline('![](docs/x.webp)'), [img('docs/x.webp', '')])
+  assert.deepEqual(parseInline('[図](a/b.jpeg) と [図2](c.gif)'), [img('a/b.jpeg', '図'), t(' と '), img('c.gif', '図2')])
+  assert.deepEqual(parseInline('**[a](x.png)**'), [b(img('x.png', 'a'))])
+  assert.deepEqual(parseMarkdown(`- ${path}\n- [icon](${path})`), [
+    { kind: 'list', items: [
+      { depth: 0, marker: '-', lines: [[t(path)]] },
+      { depth: 0, marker: '-', lines: [[img(path, 'icon')]] },
+    ] },
+  ], 'むき出しのパスは今までどおり文字')
+})
+
+test('画像: 外の URL の画像は読み込まないのでリンク。画像でないパス・スキーム付き・コードの中は文字のまま', () => {
+  assert.deepEqual(parseInline('![図](https://x.test/a.png)'), [a('https://x.test/a.png', t('図'))])
+  assert.deepEqual(parseInline('![](https://x.test/a.png)'), [a('https://x.test/a.png')])
+  assert.deepEqual(parseInline('[a.png](https://x.test/a.png)'), [a('https://x.test/a.png', t('a.png'))])
+  assert.deepEqual(parseInline('[file](web/src/x.ts)'), [t('[file](web/src/x.ts)')])
+  assert.deepEqual(parseInline('前 ![x](notes.txt) 後'), [t('前 ![x](notes.txt) 後')])
+  assert.deepEqual(parseInline('[x](file:///a.png)'), [t('[x](file:///a.png)')])
+  assert.deepEqual(parseInline('![x](javascript:a.png)'), [t('![x](javascript:a.png)')])
+  assert.deepEqual(parseInline('[x](data:image/png;base64,AAAA.png)'), [t('[x](data:image/png;base64,AAAA.png)')])
+  assert.deepEqual(parseInline('`![x](a.png)`'), [c('![x](a.png)')])
+})
+
+test('stripMarkdown: 画像は名前（無ければファイル名）だけ残す', () => {
+  assert.equal(stripMarkdown('アイコン [icon.png](/a/b/icon.png) できた'), 'アイコン icon.png できた')
+  assert.equal(stripMarkdown('![](/a/b/shot.png)'), 'shot.png')
+})
+
 test('絵文字: 表にある `:name:` だけ絵文字にする', () => {
   assert.deepEqual(parseInline('やった:tada:'), [t('やった'), e('tada', '🎉')])
   assert.deepEqual(parseInline(':+1: と :100:'), [e('+1', '👍'), t(' と '), e('100', '💯')])

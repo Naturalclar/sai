@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { entityId } from '../../shared/entity.ts'
 import { isRemoteHost } from '../../shared/host.ts'
+import { sessionImageUrl } from '../../shared/images.ts'
+import { ImageSourceContext } from './imageContext'
 import type { FeedRow, Profile, SessionSummary } from './api'
 import { hm } from './format'
 import { groupRows, speakerLabel } from './chatGroups.ts'
@@ -161,10 +163,12 @@ export function Chat({ rows, showChannel, selfHost = '', sessions = NO_SESSIONS,
                       const diff = diffs && summary && opensDiff(u.text, u.row.remote, summary)
                         ? { summary, open: diffs.open === id, onToggle: () => diffs.onToggle(id) }
                         : null
+                      // 本文の画像はサーバが配る（#321）。別のマシンのセッションのファイルはこちらに無いので、印と名前だけ
+                      const imageUrl = u.speaker !== 'me' && !isRemoteHost(g.host, selfHost) ? (src: string) => sessionImageUrl(id, src) : null
                       // 自分の入力は Markdown にしない（打ったままを出す）。エージェントの返答は Markdown
                       return (
+                      <ImageSourceContext key={u.key} value={imageUrl}>
                       <Message
-                        key={u.key}
                         {...(diff ? { diff } : {})}
                         ts={u.row.ts}
                         text={u.text}
@@ -180,6 +184,7 @@ export function Chat({ rows, showChannel, selfHost = '', sessions = NO_SESSIONS,
                         found={focusTs !== '' && u.row.ts === focusTs}
                         utteranceKey={u.key}
                       />
+                      </ImageSourceContext>
                       )
                     })}
                   </div>

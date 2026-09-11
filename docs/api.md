@@ -34,6 +34,7 @@
 | `DELETE /api/sessions/<id>/icon` | 画像を消す。`{ "id", "icon": null }`。無くても `200`。別オリジンは `403` |
 | `POST /api/sessions/<id>/attachments` | 返信に添える画像を預ける。body は画像そのもの。`{ "id", "path", "url", "mime", "size" }`。10MB まで、種類は中身で見る。別オリジンは `403`、窓の中に無いセッションは `404` |
 | `GET /api/attachments/<dir>/<name>` | 預けた画像を配る。名前が中身のハッシュなので中身は変わらない（`immutable`）。形の合わないパスは `404` |
+| `GET /api/sessions/<id>/images/<key>?download=1&days=90` | 返答の本文に書かれた手元の画像を配る（#321）。`key` は本文に書かれたパスの鍵（`shared/images.ts` の `imageKey()`）で、サーバは**そのセッションのターン完了の行の本文から拾った参照の表**を引くだけ（パスはリクエストから受けない。表に無ければ `404`）。realpath が行の `cwd` の外なら `403`、中身が PNG / JPEG / GIF / WebP でなければ `415`、20MB を超えれば `413`、ファイルが無い・別のマシンのセッション・窓の中に無いセッションは `404`。`Content-Type` は中身から決め、`X-Content-Type-Options: nosniff`・`Content-Security-Policy: sandbox`・`ETag`（`If-None-Match` が合えば `304`）を付ける。`download=1` のときだけ `Content-Disposition: attachment` |
 | `GET /api/profile` | 自分の表示名とアイコン。`{ "profile": { "name"?, "icon"? } }`。`icon` は `/api/profile/icon?v=<mtime>` |
 | `PUT /api/profile` | body `{ "name"?: "..." }` をいまの値に重ねる。空文字や `null` は「消す」。100文字まで（超えたら `400`）。別オリジンは `403` |
 | `GET /api/profile/icon?v=<mtime>` | 自分のアイコン画像そのもの。無ければ `404`。キャッシュの扱いはセッションのアイコンと同じ |

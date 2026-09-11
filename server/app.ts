@@ -111,6 +111,8 @@ import { SkillStore } from './local/skills.ts'
 import { claudeProjectsDir, codexSessionsDir, UsageStore } from './local/usage.ts'
 import { ProgressReader } from './local/progress.ts'
 import { isRemoteHost } from '../shared/host.ts'
+import { IMAGES_SEGMENT } from '../shared/images.ts'
+import { imageHeaders, imageTable, readSessionImage } from './local/images.ts'
 import { searchRows } from './rows/search.ts'
 import { searchWords } from '../shared/search.ts'
 import { alive, RealTmux, realPs, TerminalBusy, TerminalGone, TerminalReplies, typeInto } from './reply/terminal.ts'
@@ -1707,6 +1709,31 @@ export function createApp(
         // 名前が中身のハッシュなので、同じ URL の中身は変わらない
         res.writeHead(200, { 'Content-Type': found.mime, 'Content-Length': body.length, 'Cache-Control': 'private, max-age=31536000, immutable' })
         res.end(req.method === 'HEAD' ? undefined : body)
+        return
+      }
+      // 本文の画像（#321）。`<key>` はそのセッションのターン完了の行の本文から拾った参照の鍵で、表に無ければ 404（パスはリクエストから受けない）
+      const imagesAt = path.startsWith(SESSIONS_PREFIX) ? path.indexOf(IMAGES_SEGMENT, SESSIONS_PREFIX.length) : -1
+      if (imagesAt > 0) {
+        const id = sessionIdFrom(path, path.slice(imagesAt))
+        if (id === null) return error(res, 400, 'bad session id')
+        const days = parseDays(q.get('days'), 90)
+        const { sessions } = await store.sessions(days)
+        const session = sessions.find((s) => s.id === id)
+        if (!session) return error(res, 404, 'session not found in window')
+        // 別のマシンのセッションのファイルはこちらに無い（同じパスのファイルがあっても別物）
+        if (isRemoteHost(session.host, selfHost())) return error(res, 404, `別のマシン（${session.host}）のファイルは配れません`)
+        const own = (await store.rows(days)).filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
+        const source = imageTable(own, session.cwd).get(path.slice(imagesAt + IMAGES_SEGMENT.length))
+        if (!source) return error(res, 404, 'このセッションの本文に無い画像です')
+        const img = await readSessionImage(source)
+        if (!img.ok) return error(res, img.status, img.reason)
+        if (req.headers['if-none-match'] === img.etag) {
+          res.writeHead(304, { ETag: img.etag, 'Cache-Control': 'private, no-cache' })
+          res.end()
+          return
+        }
+        res.writeHead(200, imageHeaders(img, q.get('download') === '1'))
+        res.end(method === 'HEAD' ? undefined : img.bytes)
         return
       }
       if (isProgress) {

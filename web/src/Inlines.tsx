@@ -1,7 +1,6 @@
 import { Fragment } from 'react'
-import { imageName } from '../../shared/markdown.ts'
 import type { Inline } from '../../shared/markdown.ts'
-import { ImageMark } from './ImageMark'
+import { MarkdownImage } from './MarkdownImage'
 
 /** 行の中身（文字・コード・絵文字・太字・リンク・画像）。太字とリンクは中に自分を含む */
 export function Inlines({ nodes }: { nodes: Inline[] }) {
@@ -23,14 +22,9 @@ export function Inlines({ nodes }: { nodes: Inline[] }) {
           </a>
         )
       case 'image':
-        // 手元のファイルの画像への参照（#321）。サーバが配る口はまだ無いので、名前だけを画像の印付きで出す（パスは title）。
-        // 今までは `[名前](/Users/…)` の Markdown がそのまま文字で出ていた
-        return (
-          <span key={i} className="md-image" title={node.src}>
-            <ImageMark />
-            {node.alt || imageName(node.src)}
-          </span>
-        )
+        // 手元のファイルの画像への参照（#321）。今までは `[名前](/Users/…)` の Markdown がそのまま文字で出ていた。
+        // key にパスを混ぜる（読めなかった印を、同じ位置に来た別の画像に持ち越さない）
+        return <MarkdownImage key={`${i}:${node.src}`} src={node.src} alt={node.alt} />
     }
   })
 }

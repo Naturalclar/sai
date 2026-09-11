@@ -134,6 +134,23 @@ export class ReplyQueueStore {
     return true
   }
 
+  /**
+   * 条件に合う預かりをまとめて取り消す。消した数を返す。
+   * 人がセッション同士のメッセージの送信を止めたとき、そのセッションから送られて並んでいた分を消すのに使う（#311）
+   */
+  removeWhere(match: (id: string, item: StoredReply) => boolean): number {
+    let removed = 0
+    for (const [id, q] of [...this.queues]) {
+      const keep = q.items.filter((item) => !match(id, item))
+      if (keep.length === q.items.length) continue
+      removed += q.items.length - keep.length
+      if (keep.length === 0) this.queues.delete(id)
+      else q.items = keep
+    }
+    if (removed > 0) this.persist()
+    return removed
+  }
+
   /** 自動で回すのを止める。預かりが無ければ何もしない（止める対象が無い） */
   pause(id: string, reason: string): void {
     const q = this.queues.get(id)

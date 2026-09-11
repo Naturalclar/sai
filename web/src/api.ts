@@ -24,10 +24,11 @@ import type {
   SettingsRequest,
   SettingsResponse,
   ReplyQueueResponse,
+  AgentStopResponse,
   UsageResponse,
 } from '../../shared/types.ts'
 
-export type { Agent, FeedRow, SessionSource, SessionSummary, SessionMeta, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, QueuedReply, ReplyQueue, ReplyQueueMap, ReplyQueueResponse, Approval, ApprovalMap, ApprovalAnswer, Profile, PersonaId, SettingsResponse, SettingsRequest, Viewer, SessionPermissionsResponse, SessionProgressResponse, ProgressStep, SessionDiffResponse, SessionDiffSummaryResponse, SearchResponse, SearchHit, DiffPr, DiffSection, DiffFileStat, AttachmentResponse, UsageResponse, UsageWindow, CodexUsage, ClaudeUsage } from '../../shared/types.ts'
+export type { Agent, FeedRow, SessionSource, SessionSummary, SessionMeta, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, QueuedReply, ReplyQueue, ReplyQueueMap, ReplyQueueResponse, AgentActivity, AgentActivityMessage, AgentStopResponse,Approval, ApprovalMap, ApprovalAnswer, Profile, PersonaId, SettingsResponse, SettingsRequest, Viewer, SessionPermissionsResponse, SessionProgressResponse, ProgressStep, SessionDiffResponse, SessionDiffSummaryResponse, SearchResponse, SearchHit, DiffPr, DiffSection, DiffFileStat, AttachmentResponse, UsageResponse, UsageWindow, CodexUsage, ClaudeUsage } from '../../shared/types.ts'
 
 /**
  * `PUT /api/sessions/<id>/meta` のボディ。`SessionMeta` の一部を重ねる。
@@ -130,6 +131,10 @@ export const api = {
     sendRaw<ReplyQueueResponse>('DELETE', `/api/sessions/${encodeURIComponent(id)}/queue/${encodeURIComponent(queueId)}`),
   /** 止めた預かり（前の返信が失敗した・起動できなかった）を再開する */
   resumeQueue: (id: string) => sendJSON<ReplyQueueResponse>('POST', `/api/sessions/${encodeURIComponent(id)}/queue/resume`, {}),
+  /** そのセッションが別のセッションへ送るのを止める（#311）。預かりに並んでいたそのセッションからの分も取り消す */
+  stopAgent: (id: string) => sendJSON<AgentStopResponse>('POST', `/api/sessions/${encodeURIComponent(id)}/agent/stop`, {}),
+  /** 止めた送信を再開する */
+  resumeAgent: (id: string) => sendJSON<AgentStopResponse>('POST', `/api/sessions/${encodeURIComponent(id)}/agent/resume`, {}),
   meta: (id: string) => getJSON<SessionMetaResponse>(`/api/sessions/${encodeURIComponent(id)}/meta`),
   /** `/` の候補になるスキル。入力欄で `/` を打った時に 1 回だけ取る */
   sessionSkills: (id: string) => getJSON<SessionSkillsResponse>(`/api/sessions/${encodeURIComponent(id)}/skills`),

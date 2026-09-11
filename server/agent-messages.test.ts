@@ -8,7 +8,18 @@ import { appendFile, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/prom
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AGENT_SEND_MAX } from '../shared/agentMessages.ts'
-import type { AgentSendResponse, AgentSessionsResponse, AgentWaitResponse, Replying, SessionProgressResponse, SessionsResponse, SessionSummary, UsageResponse } from '../shared/types.ts'
+import type {
+  AgentSendResponse,
+  AgentSessionsResponse,
+  AgentStopResponse,
+  AgentWaitResponse,
+  Replying,
+  SessionDetailResponse,
+  SessionProgressResponse,
+  SessionsResponse,
+  SessionSummary,
+  UsageResponse,
+} from '../shared/types.ts'
 import { createApp } from './app.ts'
 import { Approvals } from './approvals/approvals.ts'
 import { Authenticator } from './auth.ts'
@@ -310,6 +321,74 @@ test('1 ターンで相手に読み直させる量の予算を超える相手に
     assert.equal((await send('A1@r', 'B1@r', '次のターン')).status, 202)
   } finally {
     contexts.delete('B1@r')
+    idle('A1@r')
+  }
+  await humanReply('B1@r')
+  idle('B1@r')
+})
+
+test('詳細の応答に、そのセッションから別のセッションへのメッセージのようす（往復数・読み直させた量・直近の送り先）が載る（#311）', async () => {
+  const detailOf = async (id: string) => (await (await fetch(`${base}/api/sessions/${encodeURIComponent(id)}?days=7`)).json()) as SessionDetailResponse
+  assert.equal((await detailOf('C1@r')).agent, undefined, '送ったことが無ければ載らない')
+  contexts.set('B1@r', 400_000)
+  turn('A1@r', 'activity-turn')
+  let messageId = ''
+  try {
+    messageId = ((await (await send('A1@r', 'B1@r', '見て')).json()) as AgentSendResponse).message_id
+    const detail = await detailOf('A1@r')
+    assert.equal(detail.agent?.stopped, false)
+    assert.deepEqual([detail.agent?.sent, detail.agent?.limit, detail.agent?.read_tokens, detail.agent?.read_budget], [1, AGENT_SEND_MAX, 400_000, 3_000_000])
+    assert.deepEqual(detail.agent?.recent[0], { message_id: messageId, to: 'B1@r', to_name: 'レビューして', since: detail.agent!.recent[0]!.since, status: 'pending' })
+  } finally {
+    contexts.delete('B1@r')
+    idle('A1@r')
+  }
+  const settledDetail = await detailOf('A1@r')
+  assert.deepEqual([settledDetail.agent?.sent, settledDetail.agent?.read_tokens], [0, 0], 'ターンを回していなければ数は 0（直近の送り先は残る）')
+  assert.equal(settledDetail.agent?.recent[0]?.message_id, messageId)
+  await humanReply('B1@r')
+  idle('B1@r')
+})
+
+test('人が「送信を止める」を押したら送らない（429）。預かりに並んでいたそのセッションからの分も取り消す。「再開する」で戻る（#311）', async () => {
+  const post = (path: string, headers: Record<string, string> = {}) => fetch(base + path, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: '{}' })
+  turn('A1@r', 'stop-turn')
+  turn('B1@r')
+  try {
+    const queued = await send('A1@r', 'B1@r', '終わったら見て')
+    assert.equal(((await queued.json()) as AgentSendResponse).via, 'queued')
+    assert.equal((await post('/api/sessions/A1%40r/agent/stop', { Origin: 'http://evil.local:8787' })).status, 403, '画面からの口なので同一オリジンのみ')
+    const revBefore = ((await (await fetch(`${base}/api/sessions/A1%40r?days=7`)).json()) as SessionDetailResponse).rev
+
+    const stopped = await post('/api/sessions/A1%40r/agent/stop')
+    assert.equal(stopped.status, 200)
+    const body = (await stopped.json()) as AgentStopResponse
+    assert.equal(body.agent.stopped, true)
+    assert.equal(body.cancelled, 1, '預かりに並んでいた、このセッションからのメッセージを取り消す')
+    const list = (await (await fetch(`${base}/api/sessions?days=7`)).json()) as SessionsResponse
+    assert.equal(list.queued['B1@r'], undefined)
+    const detail = (await (await fetch(`${base}/api/sessions/A1%40r?days=7`)).json()) as SessionDetailResponse
+    assert.notEqual(detail.rev, revBefore, '止めたら rev が変わる（画面が拾う）')
+    assert.equal(detail.agent?.stopped, true)
+
+    const refused = await send('A1@r', 'B1@r', 'もう一回')
+    assert.equal(refused.status, 429)
+    assert.match(((await refused.json()) as { error: string }).error, /止めています/)
+    assert.equal((await fetch(`${base}/api/sessions/A1%40r/agent/stop`)).status, 405, 'GET では止められない')
+
+    const resumed = await post('/api/sessions/A1%40r/agent/resume')
+    assert.equal(resumed.status, 200)
+    assert.equal(((await resumed.json()) as AgentStopResponse).agent.stopped, false)
+    const resumedDetail = (await (await fetch(`${base}/api/sessions/A1%40r?days=7`)).json()) as SessionDetailResponse
+    assert.notEqual(resumedDetail.rev, detail.rev, '再開も rev を変える（預かりは動かないので、止めた・再開したそのものを rev に混ぜていないと画面が拾わない）')
+  } finally {
+    idle('A1@r')
+    idle('B1@r')
+  }
+  turn('A1@r', 'stop-turn-2')
+  try {
+    assert.equal((await send('A1@r', 'B1@r', '再開した')).status, 202)
+  } finally {
     idle('A1@r')
   }
   await humanReply('B1@r')

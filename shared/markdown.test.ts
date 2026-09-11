@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { parseInline, parseMarkdown, stripMarkdown } from './markdown.ts'
-import type { Block, Inline } from './markdown.ts'
+import type { Block, Inline, TableAlign } from './markdown.ts'
 
 // 木を短く書くための道具
 const t = (text: string): Inline => ({ kind: 'text', text })
@@ -38,6 +38,58 @@ test('太字とコード。コードの中の ** は太字にしない', () => {
 
 test('HTML はただの文字', () => {
   assert.deepEqual(parseMarkdown('<script>alert(1)</script>'), [p([t('<script>alert(1)</script>')])])
+})
+
+const table = (align: TableAlign[], head: Inline[][], rows: Inline[][][]): Block => ({ kind: 'table', align, head, rows })
+
+test('表（#328）: 見出し + 区切り + 本文。セルの中も行内の解析が効き、前後の段落はそのまま', () => {
+  const src = ['変えたファイル:', '', '| ファイル | 何を変えたか |', '| --- | --- |', '| `shared/markdown.ts` | 表を **table** にする |', '| `web/src/BlockView.tsx` | — |', '', '以上。'].join('\n')
+  assert.deepEqual(parseMarkdown(src), [
+    p([t('変えたファイル:')]),
+    table(
+      [null, null],
+      [[t('ファイル')], [t('何を変えたか')]],
+      [
+        [[c('shared/markdown.ts')], [t('表を '), b(t('table')), t(' にする')]],
+        [[c('web/src/BlockView.tsx')], [t('—')]],
+      ],
+    ),
+    p([t('以上。')]),
+  ])
+})
+
+test('表: 揃えは区切りの行の : の位置。外側の | が無くても読む', () => {
+  const [tb] = parseMarkdown(['a | b | c | d', ':--- | :---: | ---: | ---', '1 | 2 | 3 | 4'].join('\n'))
+  assert.deepEqual(tb, table(['left', 'center', 'right', null], [[t('a')], [t('b')], [t('c')], [t('d')]], [[[t('1')], [t('2')], [t('3')], [t('4')]]]))
+})
+
+test('表: \\| はセルを分けずに | に戻る（コードの中も）', () => {
+  const [tb] = parseMarkdown(['| 式 | 意味 |', '| --- | --- |', '| `a \\| b` | a または b |'].join('\n'))
+  assert.deepEqual(tb, table([null, null], [[t('式')], [t('意味')]], [[[c('a | b')], [t('a または b')]]]))
+})
+
+test('表: 列の足りない行は空のセルで埋め、多い行は切る', () => {
+  const [tb] = parseMarkdown(['| a | b |', '| --- | --- |', '| 1 |', '| 1 | 2 | 3 |'].join('\n'))
+  assert.deepEqual(tb, table([null, null], [[t('a')], [t('b')]], [[[t('1')], []], [[t('1')], [t('2')]]]))
+})
+
+test('表にならないもの: 区切りの列数が違う・区切りが無い・コードブロックの中・| の無い ---', () => {
+  assert.deepEqual(parseMarkdown(['| a | b |', '| --- |', '| 1 | 2 |'].join('\n')), [p([t('| a | b |')], [t('| --- |')], [t('| 1 | 2 |')])])
+  assert.deepEqual(parseMarkdown('A か B | C のどちらか\n次の行'), [p([t('A か B | C のどちらか')], [t('次の行')])])
+  assert.deepEqual(parseMarkdown(['```', '| a | b |', '| --- | --- |', '```'].join('\n')), [{ kind: 'code', lang: '', text: '| a | b |\n| --- | --- |' }])
+  // | の無い --- は罫線（表の区切りにしない）
+  assert.deepEqual(parseMarkdown('a | b\n\n---'), [p([t('a | b')]), { kind: 'rule' }])
+})
+
+test('表: 段落の直後の行からでも始まり、| の無い行・空行・見出しで終わる', () => {
+  const src = ['まとめ:', '| a | b |', '| --- | --- |', '| 1 | 2 |', 'おわり', '', '| x |', '| --- |', '| 9 |', '## 次'].join('\n')
+  assert.deepEqual(parseMarkdown(src), [
+    p([t('まとめ:')]),
+    table([null, null], [[t('a')], [t('b')]], [[[t('1')], [t('2')]]]),
+    p([t('おわり')]),
+    table([null], [[t('x')]], [[[t('9')]]]),
+    { kind: 'heading', level: 2, children: [t('次')] },
+  ])
 })
 
 test('箇条書き: 記号と深さ、記号なしの続き行は前の項目に付く', () => {

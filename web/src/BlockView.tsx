@@ -2,8 +2,9 @@ import type { Block } from '../../shared/markdown.ts'
 import { Inlines } from './Inlines'
 import { Lines } from './Lines'
 import { MarkdownListItem } from './MarkdownListItem'
+import { MarkdownTable } from './MarkdownTable'
 
-/** Markdown のブロック1つ（段落・見出し・箇条書き・コード・引用・罫線） */
+/** Markdown のブロック1つ（段落・見出し・箇条書き・コード・引用・罫線・表） */
 export function BlockView({ block }: { block: Block }) {
   switch (block.kind) {
     case 'paragraph':
@@ -18,5 +19,7 @@ export function BlockView({ block }: { block: Block }) {
       return <blockquote><Lines lines={block.lines} /></blockquote>
     case 'rule':
       return <hr />
+    case 'table':
+      return <MarkdownTable table={block} />
   }
 }

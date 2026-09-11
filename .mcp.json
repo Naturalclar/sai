@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "sai-read": {
+      "type": "http",
+      "url": "http://127.0.0.1:${SAI_PORT:-8787}/mcp"
+    }
+  }
+}

@@ -1087,19 +1087,24 @@ export function createApp(
     {
       name: 'sai_sessions',
       scope: 'read',
-      description: `SAI に並んでいるセッションの一覧（直近 ${MCP_LIST_DAYS} 日、アーカイブ済みを除く）。id・呼び名・リポジトリ・エージェント・ブランチ・処理中か・送れない理由・最後の発言の 1 行目`,
+      description: `SAI に並んでいるセッションの一覧（直近 ${MCP_LIST_DAYS} 日、アーカイブ済みを除く）。id・呼び名・リポジトリ・エージェント・ブランチ・処理中か・待ち（許可・質問）・送れない理由・最後の記録の時刻・最後の発言の 1 行目`,
       inputSchema: { type: 'object', properties: { project: { type: 'string', description: 'リポジトリ（owner/repo）で絞る' } } },
       run: async (args) => {
         const project = mcpStr(args.project)
-        const { sessions } = await sessionsWithMeta(MCP_LIST_DAYS)
-        const list = sessions.filter((s) => !s.archived && (!project || s.project === project))
+        const { sessions: all } = await sessionsWithMeta(MCP_LIST_DAYS)
+        const list = all.filter((s) => !s.archived && (!project || s.project === project))
         if (list.length === 0) return textResult('セッションはありません')
+        // 待ちは画面と同じもの（#323。Manager が本文を読まずに急ぐものを選ぶ）: 端末で人が答えたぶんは畳み（#255）、
+        // 返信中の答え待ち（承認のバブル）も足す
+        const { sessions } = await settleWaiting(list)
+        const pending = await approvalsNow(sessions)
         return textResult(
-          list
+          sessions
             .map((s) => {
               const e = agentEntry(s, mcpBusy(s.id))
               const why = mcpSendRefusal(s)
-              return `- ${e.id}「${e.name}」${e.project} ${e.agent}${e.branch ? ` ${e.branch}` : ''}${e.busy ? '（処理中）' : ''}${why ? `（送れない: ${why}）` : ''}${e.last_text ? ` 最後の発言: ${e.last_text}` : ''}`
+              const waiting = clipReply((s.waiting || pending[s.id]?.[0]?.text || '').split('\n')[0] ?? '', 120)
+              return `- ${e.id}「${e.name}」${e.project} ${e.agent}${e.branch ? ` ${e.branch}` : ''}${e.busy ? '（処理中）' : ''}${waiting ? `（待ち: ${waiting}）` : ''}${why ? `（送れない: ${why}）` : ''} 最後の記録: ${s.end}${e.last_text ? ` 最後の発言: ${e.last_text}` : ''}`
             })
             .join('\n'),
         )

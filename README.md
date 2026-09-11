@@ -159,6 +159,8 @@ pnpm は 12 系（設定は `pnpm-workspace.yaml`）、Node は 22.18 以上が�
 
 `main` を取り込んだときは、サーバを止めずに別のターミナルで `git pull && pnpm build` するだけでいい。 Claude Code からなら `/sync-main`（`.claude/skills/sync-main/SKILL.md`）が、main worktree の fetch → ff-only merge → `pnpm install` → `pnpm build` → サーバが追従したかの確認までをやる（別の worktree から呼んでも main worktree だけを触る）。サーバが古いコードのままなら、動いているペインで一言つき（既定はローカルの `qwen3:8b`）に立て直すところまでやる。止まっているサーバは起動しない。`pnpm build` を忘れて `web/dist/` が `web/src` / `shared` より古いままだと、画面のヘッダの下に「画面のビルドが古い」と出る（サーバが mtime を比べて `build_stale` で伝える。`pnpm dev` では出ない）。サーバは `web/dist/` を毎回ディスクから読み、`/api/*` の応答に `X-SAI-Build`（`dist/index.html` の更新時刻）を付けるので、開いているブラウザは 3 秒以内に自分でリロードする。`server/` や `shared/` が変わったときの再起動まで任せたければ `pnpm start:watch`（`node --watch`）で立てる。
 
+別のリポジトリのセッションとの橋渡しをさせたいときは、このリポジトリで開いた Claude Code で **`/manager`**（`.claude/skills/manager/SKILL.md`。#323）。SAI に並んでいる全セッションの記録を読み、どのセッションに何を送るとよいかを、そのまま貼れる本文つきで提案する（自分からは送らない。送るのはフィードの `@` から）。読むのはリポジトリの `.mcp.json` が足す `sai-read`（手元の SAI の `/mcp`。読むだけ）なので、SAI のサーバが立っている必要がある。端末で開いたセッションでは最初に `.mcp.json` の承認を聞かれる。SAI から返信して回すターンでは承認なしで付く。
+
 ```
 pnpm lint        # oxlint（web/src, server, shared）
 pnpm typecheck   # tsc（web と server の両方）

@@ -1,0 +1,5 @@
+{
+  "permissions": {
+    "allow": ["mcp__sai-read__sai_sessions", "mcp__sai-read__sai_session", "mcp__sai-read__sai_progress"]
+  }
+}

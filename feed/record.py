@@ -965,10 +965,47 @@ _GROK_EVENTS = ("Stop", "UserPromptSubmit", "Notification")
 
 # ---------------------------------------------------------------- 行の組み立て
 
+#: Codex の本体を探して親を辿る段数の上限。notify をラッパー越しに呼ぶと
+#: codex → SkyComputerUseClient → bash → python3 のように間に 2〜3 段挟まる（#332）
+CODEX_ANCESTOR_DEPTH = 8
+
+
+def process_table() -> dict[int, tuple[int, str]]:
+    """pid → (親の pid, 実行ファイル)。`ps` が無い・失敗したら空。実行ファイルはフルパスのことも空白を含むこともある"""
+    try:
+        out = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,comm="], capture_output=True, text=True, timeout=3)
+    except Exception:
+        return {}
+    table: dict[int, tuple[int, str]] = {}
+    for line in out.stdout.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) < 3 or not parts[0].isdigit() or not parts[1].isdigit():
+            continue
+        table[int(parts[0])] = (int(parts[1]), parts[2].strip())
+    return table
+
+
+def codex_ancestor(start: int, table: dict[int, tuple[int, str]], depth: int = CODEX_ANCESTOR_DEPTH) -> int:
+    """start（自分も含む）から親を辿って、実行ファイルの名前がちょうど `codex` の最初のプロセス。無ければ 0。
+    `codex-code-mode-host` や `Codex (Service)` のような名前の近い別物は本体ではない"""
+    pid = start
+    for _ in range(depth):
+        if pid not in table:
+            return 0
+        parent, command = table[pid]
+        if os.path.basename(command) == "codex":
+            return pid
+        pid = parent
+    return 0
+
+
 def session_pid(agent: str, payload: dict | None = None) -> int:
     """セッション本体（claude / codex / opencode）の pid。画面が「端末で開いているか」を見るのに使う。
 
-    Claude は CLAUDE_PID を渡してくる。Codex の notify は codex 自身が直接 spawn するので親が本体。
+    Claude は CLAUDE_PID を渡してくる。**Codex は親から辿った codex 本体**（`codex_ancestor()`）: notify を
+    直接向けていれば親が本体だが、受け手を順に呼ぶラッパー（README の sai-codex-notify、Codex Computer Use の
+    クライアント）越しだと親はすぐ終わるラッパーになり、SAI が「端末で開いていない」と見て、許可・質問の
+    ダイアログを見に行かず、返信もペインに打ち込めない（#332）。辿って見つからなければ今までどおり親。
     **OpenCode はプラグインが payload に載せてくる**（`pid`）: プラグインは本体の中で動くので
     本体の pid を知っているが、record.py を `detached` で切り離して呼ぶため（そうしないと
     `opencode run` の終了に巻き込まれて行が消える）、こちらから見た親は init（1）になってしまう。
@@ -985,9 +1022,11 @@ def session_pid(agent: str, payload: dict | None = None) -> int:
         return 0
     if agent == "codex":
         try:
-            return os.getppid()
+            parent = os.getppid()
         except Exception:
             return 0
+        # 名前の違う codex（ラッパー無しで直接呼ばれている）を 0 にしないよう、見つからなければ親のまま
+        return codex_ancestor(parent, process_table()) or parent
     return 0
 
 

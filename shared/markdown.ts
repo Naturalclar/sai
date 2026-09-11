@@ -30,6 +30,9 @@ export interface ListItem {
   lines: Inline[][]
 }
 
+/** 表の列の揃え（区切りの行の `:` の位置）。指定が無ければ null */
+export type TableAlign = 'left' | 'center' | 'right' | null
+
 export type Block =
   | { kind: 'paragraph'; lines: Inline[][] }
   | { kind: 'heading'; level: number; children: Inline[] }
@@ -37,6 +40,8 @@ export type Block =
   | { kind: 'code'; lang: string; text: string }
   | { kind: 'quote'; lines: Inline[][] }
   | { kind: 'rule' }
+  /** 表（#328）。`head` と `rows` の各行は列の数が `align` と同じ（足りないセルは空の配列） */
+  | { kind: 'table'; align: TableAlign[]; head: Inline[][]; rows: Inline[][][] }
 
 // 行内。左から一番早く始まるものを採る（同じ位置なら alternation の順）。
 //   1: `コード`    2: **太字**（中身は空白で始まらず終わらない）
@@ -153,6 +158,63 @@ function closesFence(line: string, fence: string): boolean {
  */
 const depthOf = (indent: string) => Math.min(Math.floor(indent.replace(/\t/g, '  ').length / 2), 5)
 
+/**
+ * 表の 1 行をセルに分ける（GFM）。外側の `|` を落とし、エスケープされていない `|` で分けて前後の空白を落とす。
+ * `\|` は `|` に戻す（`` `…` `` の中でも同じ。エージェントは GitHub での見え方に合わせて書くので GitHub に揃える）
+ */
+function splitRow(line: string): string[] {
+  let s = line.trim()
+  if (s.startsWith('|')) s = s.slice(1)
+  if (s.endsWith('|') && !s.endsWith('\\|')) s = s.slice(0, -1)
+  const cells: string[] = []
+  let cell = ''
+  for (let i = 0; i < s.length; i++) {
+    const ch = s.charAt(i)
+    if (ch === '\\' && s.charAt(i + 1) === '|') {
+      cell += '|'
+      i++
+    } else if (ch === '|') {
+      cells.push(cell.trim())
+      cell = ''
+    } else {
+      cell += ch
+    }
+  }
+  cells.push(cell.trim())
+  return cells
+}
+
+const DELIMITER_CELL = /^:?-+:?$/
+
+/** 区切りの行（`| --- | :---: |`）ならその揃え。`|` の無い `---` は罫線なので表の区切りにしない */
+function delimiterAlign(line: string | undefined): TableAlign[] | null {
+  if (!line || !line.includes('|')) return null
+  const cells = splitRow(line)
+  if (!cells.every((cell) => DELIMITER_CELL.test(cell))) return null
+  return cells.map((cell) => {
+    const left = cell.startsWith(':')
+    const right = cell.endsWith(':')
+    return left && right ? 'center' : right ? 'right' : left ? 'left' : null
+  })
+}
+
+/** 表の本文の続きになる行か。空行・`|` の無い行・別のブロック（コードブロック・見出し・引用・箇条書き）の始まりで終わる */
+function isTableRow(line: string): boolean {
+  return line.includes('|') && !BLANK.test(line) && !FENCE.test(line) && !HEADING.test(line) && !QUOTE.test(line) && !ITEM.test(line)
+}
+
+/** 表の見出しか。次の行が区切りの行で、**列の数が同じときだけ**（違えば今までどおり段落） */
+function tableHead(line: string, next: string | undefined): { cells: string[]; align: TableAlign[] } | null {
+  if (!isTableRow(line)) return null
+  const align = delimiterAlign(next)
+  if (!align) return null
+  const cells = splitRow(line)
+  return cells.length === align.length ? { cells, align } : null
+}
+
+/** 列の数を見出しに合わせる。足りなければ空のセルで埋め、多ければ切る（GFM と同じ） */
+const fitCells = (cells: string[], n: number): string[] => Array.from({ length: n }, (_, i) => cells[i] ?? '')
+
 export function parseMarkdown(text: string): Block[] {
   const lines = text.replace(/\r\n?/g, '\n').split('\n')
   const blocks: Block[] = []
@@ -179,6 +241,19 @@ export function parseMarkdown(text: string): Block[] {
     if (BLANK.test(line)) {
       open = null
       i++
+      continue
+    }
+    // 表（#328）。`|` を含む行の次が区切りの行で、列の数が同じとき。開いている段落の途中でも始める（GitHub と同じ）
+    const head = tableHead(line, lines[i + 1])
+    if (head) {
+      const rows: Inline[][][] = []
+      i += 2
+      while (i < lines.length && isTableRow(lines[i] ?? '')) {
+        rows.push(fitCells(splitRow(lines[i] ?? ''), head.cells.length).map(parseInline))
+        i++
+      }
+      blocks.push({ kind: 'table', align: head.align, head: head.cells.map(parseInline), rows })
+      open = null
       continue
     }
     if (RULE.test(line)) {

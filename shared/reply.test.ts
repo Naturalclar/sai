@@ -82,6 +82,11 @@ test('replyBlockedReason: 別のマシンのセッションは再開できない
   assert.equal(replyBlockedReason(summary({ host: 'mini' }), ''), '')
 })
 
+test('replyBlockedReason: Grok のセッションにはまだ返信しない（#325。返信の口は実機で確かめてから）', () => {
+  assert.match(replyBlockedReason(summary({ agent: 'grok', agents: ['grok'] }), SELF), /Grok のセッションにはまだ/)
+  assert.equal(replyBlockedReason(summary({}), SELF), '', 'Claude は今までどおり通る')
+})
+
 test('replyBlockedReason: 別のマシンなら、合成 ID より先にそちらを理由にする', () => {
   // どちらも本当だが、「別のマシン」の方が根本の理由。ID が取れていても、あちらの CLI と履歴には手が届かない。
   // 「IDが合成」だけ出すと「ID さえ取れれば返信できる」と読めてしまう

@@ -61,12 +61,14 @@ class RecordTest(unittest.TestCase):
         root = Path(self.tmp.name)
         self.feed_dir = root / "feed"
         self.codex_home = root / "codex"
+        self.grok_home = root / "grok"
         self.cwd = root / "work" / "myrepo"
         self.cwd.mkdir(parents=True)
         subprocess.run(["git", "init", "-q", "-b", "feature/x", str(self.cwd)], check=True)
         self.env = {
             "AGENT_FEED_DIR": str(self.feed_dir),
             "CODEX_HOME": str(self.codex_home),
+            "GROK_HOME": str(self.grok_home),
             "AGENT_FEED_DEBUG": "1",
         }
 
@@ -991,6 +993,114 @@ class RecordTest(unittest.TestCase):
         # 名乗り無しの既存の設定はそのまま動く
         self.assertEqual(run(stdin=json.dumps({"type": "agent-turn-complete", "last-assistant-message": "x", "cwd": str(self.cwd)}), env=self.env).returncode, 0)
         self.assertEqual(read_rows(self.feed_dir)[-1]["agent"], "codex")
+
+    # ---- Grok Build（#325）。~/.claude/settings.json のフックも読むので、Claude の設定のまま呼ばれる。
+    # payload の形は xai-org/grok-build の xai-grok-hooks/src/event.rs（to_hook_json の別名を含む）に合わせる
+
+    GROK_SESSION = "019e8700-aaaa-7bbb-8ccc-0123456789ab"
+    _GROK_NAMES = {"Stop": "stop", "UserPromptSubmit": "user_prompt_submit", "Notification": "notification", "PreToolUse": "pre_tool_use", "StopCancelled": "stop_cancelled"}
+
+    def _grok_history(self, group: str | None = None, entries: list[dict] | None = None) -> Path:
+        from urllib.parse import quote
+
+        name = group or quote(str(self.cwd), safe="-_.!~*'()")
+        path = self.grok_home / "sessions" / name / self.GROK_SESSION / "chat_history.jsonl"
+        write_jsonl(path, entries if entries is not None else [
+            {"type": "system", "content": "You are Grok"},
+            {"type": "user", "content": [{"type": "text", "text": "最初の指示"}]},
+            {"type": "assistant", "content": "はい", "model_id": "grok-code-1"},
+            {"type": "user", "content": [{"type": "text", "text": "<system-reminder>x</system-reminder>"}], "synthetic_reason": "system_reminder"},
+            {"type": "user", "content": [{"type": "text", "text": "テストを直して"}]},
+            {"type": "reasoning", "summary": "考え中"},
+            {"type": "assistant", "content": "", "tool_calls": [{"id": "t1"}], "model_id": "grok-code-2"},
+            {"type": "tool_result", "content": "ok"},
+            # 人の入力の後ろに差し込まれた行（バックグラウンドのタスク完了）。これを最後の入力にしない
+            {"type": "user", "content": [{"type": "text", "text": "<task_completed>t1</task_completed>"}], "synthetic_reason": "task_completed"},
+        ])
+        return path
+
+    def _grok(self, event: str = "Stop", argv: list[str] | None = None, **over):
+        # Grok の to_hook_json は camelCase のキーに snake_case の別名を足し、hook_event_name だけは Claude の PascalCase にする
+        payload = {
+            "hookEventName": self._GROK_NAMES.get(event, event.lower()),
+            "hook_event_name": event,
+            "sessionId": self.GROK_SESSION,
+            "session_id": self.GROK_SESSION,
+            "cwd": str(self.cwd),
+            "workspaceRoot": str(self.cwd),
+            "timestamp": "2026-09-11T03:00:00Z",
+            "permissionMode": "default",
+            "permission_mode": "default",
+        }
+        payload.update(over)
+        return run(stdin=json.dumps(payload), argv=argv, env=self.env)
+
+    def test_grok_stop_is_recorded_as_grok_not_claude(self):
+        self._grok_history()
+        result = self._grok("Stop", reason="end_turn", stopHookActive=False, lastAssistantMessage="直しました")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        row = read_rows(self.feed_dir)[-1]
+        self.assertEqual(row["agent"], "grok", "hook_event_name の別名があっても Claude にしない")
+        self.assertEqual(row["event"], "Stop")
+        self.assertEqual(row["session"], self.GROK_SESSION)
+        self.assertEqual(row["session_source"], "payload")
+        self.assertEqual(row["text"], "直しました", "本文は payload の lastAssistantMessage")
+        self.assertEqual(row["user_text"], "テストを直して", "差し込み（synthetic_reason）は人の入力ではない")
+        self.assertEqual(row["first_user_text"], "最初の指示")
+        self.assertEqual(row["model"], "grok-code-2", "最後の assistant の行の model_id")
+        self.assertEqual(row["permission_mode"], "default")
+        self.assertEqual(row["pid"], 0, "端末で開いているかはまだ判定しない")
+
+    def test_grok_stop_without_history_still_records_the_payload_text(self):
+        self.assertEqual(self._grok("Stop", lastAssistantMessage="終わりました").returncode, 0)
+        row = read_rows(self.feed_dir)[-1]
+        self.assertEqual((row["agent"], row["text"], row["user_text"], row["model"]), ("grok", "終わりました", "", ""))
+
+    def test_grok_stop_text_falls_back_to_the_history(self):
+        self._grok_history(entries=[{"type": "user", "content": [{"type": "text", "text": "見て"}]}, {"type": "assistant", "content": "見ました", "model_id": "grok-4"}])
+        self.assertEqual(self._grok("Stop").returncode, 0)
+        self.assertEqual(read_rows(self.feed_dir)[-1]["text"], "見ました")
+
+    def test_grok_user_prompt_submit_records_the_prompt(self):
+        self.assertEqual(self._grok("UserPromptSubmit", prompt="  次はこれ  ").returncode, 0)
+        row = read_rows(self.feed_dir)[-1]
+        self.assertEqual((row["agent"], row["event"], row["user_text"], row["text"]), ("grok", "UserPromptSubmit", "次はこれ", ""))
+        self.assertEqual(row["first_user_text"], "次はこれ")
+
+    def test_grok_permission_notification_is_a_waiting_row_once(self):
+        for _ in range(2):
+            self.assertEqual(self._grok("Notification", notificationType="permission_prompt", message="Run npm test?").returncode, 0)
+        rows = read_rows(self.feed_dir)
+        self.assertEqual([r["text"] for r in rows], ["許可待ち: Run npm test?"], "同じ待ちは重ねない")
+        self.assertEqual(self._grok("Notification", notificationType="task_complete", message="done").returncode, 0)
+        self.assertEqual(len(read_rows(self.feed_dir)), 1, "待ちでない通知は書かない")
+
+    def test_grok_ignores_other_events_and_subagents(self):
+        self.assertEqual(self._grok("PreToolUse", toolName="run_terminal_cmd", tool_name="run_terminal_cmd", toolInput={"command": "ls"}).returncode, 0)
+        self.assertEqual(self._grok("StopCancelled", reason="user_interrupt", cancelledBy="user").returncode, 0)
+        self.assertEqual(self._grok("UserPromptSubmit", prompt="調べて", subagentType="explore").returncode, 0)
+        self.assertEqual(read_rows(self.feed_dir), [])
+
+    def test_grok_history_is_found_when_the_cwd_group_is_a_slug(self):
+        # 255 バイトを超える cwd は slug + ハッシュになり、組み立てた名前では引けない
+        self._grok_history(group="very-long-path-3f2a9c")
+        self.assertEqual(self._grok("Stop", lastAssistantMessage="x").returncode, 0)
+        self.assertEqual(read_rows(self.feed_dir)[-1]["user_text"], "テストを直して")
+
+    def test_grok_session_id_with_path_characters_is_not_used_as_a_path(self):
+        # `../outside` をそのままつなぐと sessions/<cwd>/../outside/chat_history.jsonl = sessions/outside/… が読めてしまう
+        write_jsonl(self.grok_home / "sessions" / "outside" / "chat_history.jsonl", [{"type": "user", "content": [{"type": "text", "text": "外のファイル"}]}, {"type": "assistant", "content": "z", "model_id": "leak"}])
+        self._grok_history()
+        self.assertEqual(self._grok("Stop", sessionId="../outside", session_id="../outside", lastAssistantMessage="x").returncode, 0)
+        row = read_rows(self.feed_dir)[-1]
+        self.assertEqual((row["user_text"], row["model"]), ("", ""), "パスに入れられない ID ではファイルを探さない")
+
+    def test_grok_agent_flag_is_accepted(self):
+        # ~/.grok/hooks/ に置いた設定から `--agent grok` と名乗る
+        payload = {"hook_event_name": "Stop", "session_id": self.GROK_SESSION, "lastAssistantMessage": "y", "cwd": str(self.cwd)}
+        self.assertEqual(run(stdin=json.dumps(payload), argv=["--agent", "grok"], env=self.env).returncode, 0)
+        row = read_rows(self.feed_dir)[-1]
+        self.assertEqual((row["agent"], row["session"], row["text"]), ("grok", self.GROK_SESSION, "y"))
 
 
 if __name__ == "__main__":

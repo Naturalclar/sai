@@ -3,7 +3,7 @@
 
 import type { Skill } from './skills.ts'
 
-export type Agent = 'claude' | 'codex' | 'opencode' | 'unknown'
+export type Agent = 'claude' | 'codex' | 'opencode' | 'grok' | 'unknown'
 export type SessionSource = 'payload' | 'rollout' | 'synth' | ''
 
 /**

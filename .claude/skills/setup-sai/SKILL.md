@@ -186,6 +186,10 @@ grep -n '^notify' ~/.codex/config.toml
 
 フックの仕組みが無いので、`feed/opencode/sai.js` を置き場に symlink する（全体は `~/.config/opencode/plugin/`、そのプロジェクトだけなら `.opencode/plugin/`）。**symlink なら `SAI_HOME` が無くても隣から `record.py` を辿る**（コピーしたなら `SAI_HOME` が要る）。既に同名のファイルがあれば上書きせず報告する。
 
+## 5.5 Grok Build
+
+`~/.claude/settings.json` のフックも読むので、Claude Code のフックを配線していれば**何も置かない**（`~/.grok/hooks/` にも置くと 1 ターンが 2 行になる）。Claude Code を使っていない人だけ、README の `~/.grok/hooks/sai.json` を置く。既に同名のファイルがあれば上書きせず報告する。いまは記録と表示だけで、SAI から返信はできない（#325）。
+
 ## 6. ビルドして立てる
 
 ```sh
@@ -212,6 +216,7 @@ echo 'not json at all' | python3 feed/record.py; echo $?   # 0 で、行は増�
 | Claude Code | `claude` | `payload` |
 | Codex CLI | `codex` | `rollout`（`synth` なら `docs/design-notes.md` を疑う） |
 | OpenCode | `opencode` | `payload` |
+| Grok Build | `grok` | `payload` |
 
 `v` が `RECORD_VERSION` と一致していること。画面（`http://127.0.0.1:8787/`）にそのセッションが出れば完了。
 

@@ -1,7 +1,7 @@
 :root {
     --bg: #f6f6f4; --panel: #ffffff; --ink: #1f1f1f; --muted: #6b6b6b; --line: #e3e3df;
     --accent: #3b5bdb; --hover: #f0f0ec; --chip: #ecece8;
-    --claude: #d97757; --codex: #10a37f; --opencode: #7c5cff; --unknown: #8a8a8a; --synth: #b8860b;
+    --claude: #d97757; --codex: #10a37f; --opencode: #7c5cff; --grok: #2b2b2b; --unknown: #8a8a8a; --synth: #b8860b;
     --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
   @media (prefers-color-scheme: dark) {
@@ -370,6 +370,7 @@
   .dot.claude { background: var(--claude); }
   .dot.codex { background: var(--codex); }
   .dot.opencode { background: var(--opencode); }
+  .dot.grok { background: var(--grok); }
   .tag { display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 4px; background: var(--chip); color: var(--muted); margin-left: 6px; vertical-align: middle; }
   .tag.synth { background: color-mix(in srgb, var(--synth) 18%, transparent); color: var(--synth); font-weight: 600; }
   .tag.replying { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); font-weight: 600; }
@@ -530,6 +531,7 @@
   .avatar.claude { background: var(--claude); }
   .avatar.codex { background: var(--codex); }
   .avatar.opencode { background: var(--opencode); }
+  .avatar.grok { background: var(--grok); }
   .gh { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
   .gh .name { font-weight: 700; }
   .gh .ch { font-family: var(--mono); font-size: 12px; color: var(--accent); }

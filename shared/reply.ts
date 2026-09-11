@@ -14,6 +14,8 @@ import type { FeedRow, SessionSummary } from './types.ts'
  * セッションに向けて `claude --resume` を回してしまう（そのセッションの記録はここには無い）
  */
 export function replyBlockedReason(s: Pick<SessionSummary, 'id' | 'agent' | 'session_source'> & { host?: string }, selfHost: string): string {
+  // Grok Build（#325）はまだ記録と表示だけ。返信の口（grok -p --resume）は実機で確かめてから足す
+  if (s.agent === 'grok') return 'Grok のセッションにはまだ SAI から返信できません'
   if (s.agent !== 'claude' && s.agent !== 'codex' && s.agent !== 'opencode') return 'エージェントが不明なので再開できません'
   // 別のマシンのセッションは、ここで再開しても続きにならない（CLI もその履歴もあちら側にある）
   if (isRemoteHost(s.host, selfHost)) return `別のマシン（${s.host}）のセッションなので、ここからは再開できません`

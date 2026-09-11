@@ -8,6 +8,8 @@ export type Route =
   | { name: 'session'; id: string; ts?: string }
   | { name: 'feed' }
   | { name: 'todo' }
+  /** 新しいセッションを始める（#314） */
+  | { name: 'new' }
 
 export function parseRoute(hash: string): Route {
   // id は encodeURIComponent 済みなので `?` は含まれない（%3F になる）。後ろが検索から来た ts
@@ -25,6 +27,7 @@ export function parseRoute(hash: string): Route {
   if (hash === '#/feed') return { name: 'feed' }
   // 要対応（#224）。いま自分を待っているものだけ
   if (hash === '#/todo') return { name: 'todo' }
+  if (hash === '#/new') return { name: 'new' }
   return { name: 'list' }
 }
 

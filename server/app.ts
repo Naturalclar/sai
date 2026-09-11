@@ -1,5 +1,5 @@
 // ルーティング。main.ts が node:http に載せ、テストは createApp() を直接叩く。
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { appendFile, readFile, stat } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
@@ -25,6 +25,8 @@ import type {
   FeedResponse,
   FeedRow,
   HealthResponse,
+  NewSessionRequest,
+  NewSessionResponse,
   Profile,
   ProfileResponse,
   ReplyError,
@@ -78,7 +80,7 @@ import { PROFILE_FILE, ProfileStore } from './meta/profile.ts'
 import { SETTINGS_FILE, SettingsStore } from './meta/settings.ts'
 import type { Settings } from './meta/settings.ts'
 import { isLinearWorkspace } from '../shared/refs.ts'
-import { ProcessRunner, replyCommand } from './reply/runner.ts'
+import { newSessionCommand, ProcessRunner, replyCommand } from './reply/runner.ts'
 import { QUEUE_FILE, QUEUE_MAX, ReplyQueueStore } from './reply/replyQueue.ts'
 import { AGENT_TOKEN_FILE, AGENT_TOKEN_HEADER, AgentMessages, ensureAgentToken, tokenMatches } from './reply/agentMessages.ts'
 import type { AgentMessage } from './reply/agentMessages.ts'
@@ -126,6 +128,8 @@ export const MAX_REPLY_BYTES = 64 * 1024
 export const MAX_META_BYTES = 4 * 1024
 
 const SESSIONS_PREFIX = '/api/sessions/'
+/** 新しいセッションを始める（#314）。エンティティID は必ず `@` を含むので、`/api/sessions/<id>` と取り違えない */
+const NEW_SESSION_PATH = '/api/sessions/new'
 const APPROVALS_PATH = '/api/approvals'
 const APPROVALS_PREFIX = '/api/approvals/'
 const ANSWER_SUFFIX = '/answer'
@@ -589,7 +593,64 @@ export function createApp(
     return json(res, out.body, out.status)
   }
 
-  const refuse = (status: number, message: string): Launched => ({ status, body: { error: message } })
+  /**
+   * POST /api/sessions/new（#314）。SAI の画面から Claude の新しいセッションを始めるのを投げっぱなしにし、202 を返す。
+   * **パスは受け取らない**: `from`（既存のセッション）の `cwd` を使う。返信と同じく、同一オリジンの検査が破られても
+   * 走る場所を記録にある worktree に閉じる。ID は `--session-id` でサーバが決めるので、最初の行が届く前から
+   * エンティティID が分かり、処理中（`replying`）・許可の配線（`SAI_ENTITY`）・メタを返信と同じ鍵で扱える。
+   * 行が 1 本も届かないうちに落ちても、`replying` は一覧に居ないセッションの分も載せるので画面に理由が出る
+   */
+  const startSession = async (req: IncomingMessage, res: ServerResponse, days: number) => {
+    if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
+    let body: unknown
+    try {
+      body = await readJson(req, MAX_REPLY_BYTES)
+    } catch (err) {
+      return error(res, 400, err instanceof Error ? err.message : 'bad body')
+    }
+    const asked = (body && typeof body === 'object' ? body : {}) as Partial<NewSessionRequest>
+    const text = typeof asked.text === 'string' ? asked.text.trim() : ''
+    if (!text) return error(res, 400, 'text is required')
+    if (typeof asked.from !== 'string' || !asked.from) return error(res, 400, 'from（どの worktree で始めるか）が要ります')
+    // モデルと許可モードは PUT .../meta と同じ検査（mergeMeta）を通してから、新しいセッションのメタに書く
+    const { meta, error: reason } = mergeMeta({}, { model: asked.model ?? '', permission_mode: asked.permission_mode ?? '' })
+    if (reason) return error(res, 400, reason)
+
+    const { sessions } = await store.sessions(days)
+    const from = sessions.find((s) => s.id === asked.from)
+    if (!from) return error(res, 404, 'session not found in window')
+    // 別のマシンの worktree はこのマシンに無い（#114）
+    if (isRemoteHost(from.host, selfHost())) return error(res, 400, `別のマシン（${from.host}）の worktree なので、ここでは始められません`)
+    const cwd = from.cwd
+    try {
+      if (!cwd || !(await stat(cwd)).isDirectory()) throw new Error('not a directory')
+    } catch {
+      return error(res, 400, `cwd が見つかりません: ${cwd || '(空)'}`)
+    }
+
+    const session = randomUUID()
+    // record.py が行に書く repo は同じ cwd から取るので、from のものと同じになる
+    const id = entityId(session, from.repo, '')
+    if (Object.keys(meta).length > 0) await metaStore.set(id, meta)
+    const via = { url: selfUrl(req), entity: id, tokenFile: agentTokenPath }
+    const cmd = newSessionCommand(session, text, cwd, process.env, via, meta.model, meta.permission_mode)
+    try {
+      await run.start(id, cmd, () => {
+        approvals.drop(id)
+        void drain(id)
+      })
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      const hint = code === 'ENOENT' ? `${cmd.bin} が見つかりません（サーバを起動した環境の PATH に ${cmd.bin} があるか確かめてください）` : ''
+      return error(res, 500, hint || (err instanceof Error ? err.message : String(err)))
+    }
+    // 人が始めたターン（メッセージの連鎖ではない。#311）
+    agents.launched(id, undefined)
+    const payload: NewSessionResponse = { accepted: true, id, agent: 'claude', session, cwd, via: 'process' }
+    return json(res, payload, 202)
+  }
+
+  const refuse =(status: number, message: string): Launched => ({ status, body: { error: message } })
 
   /**
    * 返信を 1 本起動する（本文と添付は検査済み）。`POST .../reply` と、預かった返信を回す `drain()` の両方が通る（#305）。
@@ -1525,6 +1586,7 @@ export function createApp(
     const isProfile = path === PROFILE_PATH
     const isProfileIcon = path === PROFILE_ICON_PATH
     const isSettings = path === SETTINGS_PATH
+    const isNewSession = path === NEW_SESSION_PATH
     const method = req.method ?? 'GET'
     // tailnet から MCP で呼ぶ口（#312）。POST / OPTIONS（CORS）を受けるので、下の書き込みの判定より先に分ける
     if (path === MCP_PATH) {
@@ -1536,10 +1598,10 @@ export function createApp(
     }
     // タグ付きの端末（ユーザーがいない）は画面・REST を使えない。capability を与えた /mcp だけ
     if (who.kind === 'tagged') return error(res, 401, 'unauthorized: タグ付きの端末から使えるのは /mcp だけです')
-    // 書き込みは「返信は POST」「表示名は PUT」「アイコンは PUT / DELETE」「承認の預かりと答えは POST」「自分の表示名は PUT、アイコンは PUT / DELETE」
+    // 書き込みは「返信と新しいセッションは POST」「表示名は PUT」「アイコンは PUT / DELETE」「承認の預かりと答えは POST」「自分の表示名は PUT、アイコンは PUT / DELETE」
     // 「設定は PUT」「預かった返信の再開は POST、取り消しは DELETE」だけ。それ以外は GET / HEAD のみ
     const writable =
-      (method === 'POST' && (isReply || isAsk || isAnswer || isAttachUpload || isQueue || path === AGENT_SEND_PATH || isAgentStop)) ||
+      (method === 'POST' && (isNewSession || isReply || isAsk || isAnswer || isAttachUpload || isQueue || path === AGENT_SEND_PATH || isAgentStop)) ||
       (method === 'DELETE' && isQueue) ||
       (method === 'PUT' && (isMeta || isProfile || isSettings)) ||
       ((method === 'PUT' || method === 'DELETE') && (isIcon || isProfileIcon))
@@ -1567,6 +1629,11 @@ export function createApp(
         const id = sessionIdFrom(path, path.slice(queueAt))
         if (id === null) return error(res, 400, 'bad session id')
         return await queueAction(req, res, id, path.slice(queueAt + QUEUE_SEGMENT.length))
+      }
+      // `/api/sessions/<id>`（詳細）より先に見る
+      if (isNewSession) {
+        if (method !== 'POST') return error(res, 405, 'method not allowed')
+        return await startSession(req, res, parseDays(q.get('days'), 90))
       }
       if (isReply) {
         if (method !== 'POST') return error(res, 405, 'method not allowed')

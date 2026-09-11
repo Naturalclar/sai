@@ -5,6 +5,7 @@ import { parseRoute, sessionHash } from './hooks.ts'
 test('parseRoute: 画面の振り分け', () => {
   assert.deepEqual(parseRoute('#/feed'), { name: 'feed' })
   assert.deepEqual(parseRoute('#/todo'), { name: 'todo' })
+  assert.deepEqual(parseRoute('#/new'), { name: 'new' }, '新しいセッション（#314）')
   assert.deepEqual(parseRoute('#/'), { name: 'list' })
   assert.deepEqual(parseRoute(''), { name: 'list' })
   assert.deepEqual(parseRoute('#/s/S1%40sai'), { name: 'session', id: 'S1@sai' })

@@ -4,10 +4,11 @@ import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
-import { appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AGENT_TEXT_MAX_CHARS, deliveredFromTailnet } from '../../shared/agentMessages.ts'
+import { DEFAULT_PORT } from '../../shared/port.ts'
 import type { Replying } from '../../shared/types.ts'
 import { createApp } from '../app.ts'
 import { Approvals } from '../approvals/approvals.ts'
@@ -84,6 +85,8 @@ before(async () => {
       row(minutesAgo(7), 'C1', { repo: 'r', cwd: work, project: 'o/other' }),
       row(minutesAgo(6), 'P1', { repo: 'r', cwd: work, project: 'o/r' }),
       row(minutesAgo(5), 'R1', { repo: 'r', cwd: work, project: 'o/r', host: 'mini' }),
+      // C1 は許可を待って止まっている（#323。一覧の 1 行に待ちを出す）
+      row(minutesAgo(4), 'C1', { repo: 'r', cwd: work, project: 'o/other', event: 'PermissionRequest', text: '許可待ち: Bash: ls\n2 行目', user_text: '' }),
     ]
       .map((r) => JSON.stringify(r))
       .join('\n') + '\n',
@@ -221,6 +224,11 @@ test('/mcp: sai_sessions / sai_session / sai_progress', async () => {
   assert.ok(r.text.includes('A1@r'))
   assert.match(r.text, /R1@r.*送れない/, '別のマシンのセッションは送れない印付き')
   assert.match(r.text, /P1@r.*送れない: 素通し/)
+  // 待ちと最後の記録の時刻（#323。Manager が本文を読まずに急ぐものを選ぶ）
+  assert.match(r.text, /C1@r.*（待ち: 許可待ち: Bash: ls） 最後の記録: \d{4}-\d{2}-\d{2}T/, '待ちは 1 行目だけ')
+  assert.ok(!r.text.includes('2 行目'))
+  assert.match(r.text, /A1@r.* 最後の記録: \S+ 最後の発言: 実装しました/)
+  assert.doesNotMatch(r.text.split('\n').find((l) => l.includes('A1@r')) ?? '', /待ち:/, '待っていないセッションには付けない')
   r = await call('sai_sessions', { project: 'o/other' })
   assert.ok(r.text.includes('C1@r'))
   assert.ok(!r.text.includes('A1@r'))
@@ -233,6 +241,25 @@ test('/mcp: sai_sessions / sai_session / sai_progress', async () => {
   r = await call('sai_progress', { id: 'A1@r' })
   assert.equal(r.isError, undefined)
   assert.match(r.text, /手順はありません/)
+})
+
+test('/manager（#323）: .mcp.json の sai-read はループバックの /mcp を既定のポートで指し、スキルと許可に書いたツールはループバックで見える読むツールだけ', async () => {
+  const root = join(import.meta.dirname, '..', '..')
+  const config = JSON.parse(await readFile(join(root, '.mcp.json'), 'utf-8')) as { mcpServers: Record<string, { type?: string; url?: string }> }
+  const entry = config.mcpServers['sai-read']
+  assert.equal(entry?.type, 'http')
+  assert.equal(entry?.url, `http://127.0.0.1:\${SAI_PORT:-${DEFAULT_PORT}}/mcp`)
+  assert.equal(config.mcpServers.sai, undefined, 'SAI が --mcp-config で渡す sai（同じ project だけ・送れる）と名前を重ねない')
+
+  // ループバックからヘッダ無しで見えるのは読むツールだけ（Manager の会話から送れない）
+  assert.deepEqual(await toolNames(), READ_TOOLS)
+  const skill = await readFile(join(root, '.claude', 'skills', 'manager', 'SKILL.md'), 'utf-8')
+  const named = [...new Set([...skill.matchAll(/mcp__sai-read__(\w+)/g)].map((m) => m[1]!))].sort()
+  assert.deepEqual(named, READ_TOOLS, 'スキルが名指しするツールは、ループバックの /mcp にある（名前を変えたらスキルも直す）')
+
+  const settings = JSON.parse(await readFile(join(root, '.claude', 'settings.json'), 'utf-8')) as { permissions?: { allow?: string[] } }
+  const allowed = (settings.permissions?.allow ?? []).filter((rule) => rule.startsWith('mcp__sai')).sort()
+  assert.deepEqual(allowed, READ_TOOLS.map((t) => `mcp__sai-read__${t}`).sort(), '許可を聞かずに通すのは sai-read の読むツールだけ（mcp__sai__ の送る・待つ・承認は入れない）')
 })
 
 test('/mcp: sai_send は見出し付きで相手のターンを起動し、sai_wait で返答を受け取る。素通し・別のマシン・長すぎる本文・回数の上限は断る', async () => {

@@ -11,6 +11,7 @@ import { ProgressSteps } from './ProgressSteps'
 import { useProgress } from './useProgress'
 import { openPromptSince } from './openPrompt'
 import { QueuedBubble } from './QueuedBubble'
+import { AgentActivityBar } from './AgentActivityBar'
 import { shouldQueue } from './replyQueue.ts'
 import { ApprovalBubble } from './ApprovalBubble'
 import { ReplyBox } from './ReplyBox'
@@ -147,6 +148,8 @@ export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggl
               {queuedHere?.items.map((q, i) => (
                 <QueuedBubble key={q.queue_id} id={id} item={q} order={i + 1} paused={queuedHere.paused ?? ''} now={now} profile={data.profile} />
               ))}
+              {/* このセッションから別のセッションへのメッセージ（#311）。送ったことがあるか止めているときだけ */}
+              {data.agent && <AgentActivityBar id={id} activity={data.agent} now={now} />}
             </>
           }
         />

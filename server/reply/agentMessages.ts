@@ -10,6 +10,8 @@ import { AGENT_SEND_MAX } from '../../shared/agentMessages.ts'
 export const AGENT_TOKEN_FILE = 'agent-token'
 /** トークンを載せるヘッダ（Node の req.headers は小文字） */
 export const AGENT_TOKEN_HEADER = 'x-sai-agent-token'
+/** 画面に出す直近の送り先の数（#311） */
+export const AGENT_RECENT = 5
 
 /** 送った記録 1 件 */
 export interface AgentMessage {
@@ -59,6 +61,10 @@ export class AgentMessages {
   private sends = new Map<string, { turn: string; count: number; read: number }>()
   /** メッセージで起動したターンを回しているセッション → そのメッセージの id */
   private origins = new Map<string, string>()
+  /** 人が画面で「送信を止める」を押したセッション（送り元）。「再開する」を押すまで送らせない（#311） */
+  private stopped = new Set<string>()
+  /** 送った・止めた・再開したで進める（詳細の rev に混ぜる） */
+  private version = 0
 
   /** 見出しに入れるので、送る前に作る */
   newId(): string {
@@ -77,6 +83,7 @@ export class AgentMessages {
    * - 1 ターンに `max` 回まで
    */
   refusal(from: string, turn: string, max: number = AGENT_SEND_MAX): string {
+    if (this.stopped.has(from)) return '人がこのセッションからの送信を止めています。続けるなら人に確かめてください'
     if (this.origins.has(from)) return '別のセッションから受け取ったメッセージで回っているターンからは送れません（連鎖は 1 段まで）'
     if (this.sentInTurn(from, turn) >= max) return `このターンで送れるのは ${max} 回までです。続けるなら人に確かめてください`
     return ''
@@ -97,6 +104,41 @@ export class AgentMessages {
     const count = this.sentInTurn(message.from, turn)
     const total = this.readInTurn(message.from, turn)
     this.sends.set(message.from, { turn, count: count + 1, read: total + read })
+    this.version++
+  }
+
+  /** 人が送信を止めた（#311）。もう止まっていれば false */
+  stop(from: string): boolean {
+    if (this.stopped.has(from)) return false
+    this.stopped.add(from)
+    this.version++
+    return true
+  }
+
+  /** 人が再開した。止まっていなければ false */
+  resume(from: string): boolean {
+    if (!this.stopped.delete(from)) return false
+    this.version++
+    return true
+  }
+
+  isStopped(from: string): boolean {
+    return this.stopped.has(from)
+  }
+
+  /** そのセッションが送った記録（新しい順、最大 n 件）。送った順に覚えているので、同じ時刻でも順が崩れない */
+  sentBy(from: string, n: number = AGENT_RECENT): AgentMessage[] {
+    return [...this.messages.values()].filter((m) => m.from === from).reverse().slice(0, n)
+  }
+
+  /** 画面に出すか（一度でも送ったか、止めている） */
+  hasActivity(from: string): boolean {
+    return this.stopped.has(from) || [...this.messages.values()].some((m) => m.from === from)
+  }
+
+  /** rev に混ぜる。送った・止めた・再開したで変わる */
+  key(): string {
+    return String(this.version)
   }
 
   get(messageId: string): AgentMessage | undefined {

@@ -485,6 +485,42 @@ export interface AgentWaitResponse {
   error?: string
 }
 
+/** セッションが別のセッションに送ったメッセージ 1 件（画面に出す形。#311） */
+export interface AgentActivityMessage {
+  message_id: string
+  to: string
+  /** 相手の呼び名（表示名 → 題名 → ID） */
+  to_name: string
+  since: string
+  /** 相手のそのターンが終わったか。`failed` は相手のターンが失敗した・預かりのまま止まった */
+  status: 'pending' | 'done' | 'failed'
+}
+
+/**
+ * そのセッション（送り元）の、別のセッションへのメッセージのようす（#311）。詳細の応答に、送ったことがあるか止めているときだけ載る。
+ * 画面はこれで往復数・読み直させた量・直近の送り先を出し、「送信を止める」を押せる
+ */
+export interface AgentActivity {
+  /** 人が止めている（「再開する」を押すまで送れない） */
+  stopped: boolean
+  /** いま回しているターンで送った回数（ターンを回していなければ 0） */
+  sent: number
+  limit: number
+  /** いま回しているターンで相手に読み直させた量 */
+  read_tokens: number
+  read_budget: number
+  /** 直近に送ったもの（新しい順、最大 5 件） */
+  recent: AgentActivityMessage[]
+}
+
+/** `POST /api/sessions/<id>/agent/stop` と `.../agent/resume` の応答 */
+export interface AgentStopResponse {
+  id: string
+  agent: AgentActivity
+  /** 止めたときに取り消した、預かりに並んでいたメッセージの数 */
+  cancelled: number
+}
+
 /**
  * 返信中のエージェントが人の答えを待っている（ツール実行の許可、AskUserQuestion）。
  * `claude -p` の `--permission-prompt-tool` が SAI の MCP ツール（server/approvals/approve-mcp.ts）を呼び、
@@ -624,6 +660,8 @@ export interface SessionDetailResponse {
   replying: ReplyingMap
   /** 預かっている返信（#305。SessionsResponse と同じ） */
   queued: ReplyQueueMap
+  /** そのセッションから別のセッションへのメッセージのようす（#311）。送ったことがあるか止めているときだけ */
+  agent?: AgentActivity
   /** 返信中のエージェントが待っている許可・質問（ID → 古い順）。これが変わると rev も変わる */
   approvals: ApprovalMap
   /** 自分の表示名とアイコン。変わると rev も変わる */

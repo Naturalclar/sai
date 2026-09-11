@@ -65,6 +65,23 @@ test('ReplyQueueStore: 取り消し・止める・再開。止めている間は
   assert.deepEqual(q.snapshot()['C@r'], undefined, '預かりの無いセッションは止めようがない')
 })
 
+test('ReplyQueueStore: removeWhere は条件に合う預かりだけをまとめて取り消す。空になったセッションは消える（#311）', () => {
+  const q = new ReplyQueueStore(null)
+  q.add('B@r', '人から', [], URL)
+  q.add('B@r', 'A から', [], URL, new Date(), 'm1')
+  q.add('C@r', 'A から', [], URL, new Date(), 'm2')
+  q.add('C@r', 'Z から', [], URL, new Date(), 'm3')
+  q.add('D@r', 'A から', [], URL, new Date(), 'm4')
+  const fromA = new Set(['m1', 'm2', 'm4'])
+  assert.equal(q.removeWhere((_id, item) => item.origin !== undefined && fromA.has(item.origin)), 3)
+  assert.deepEqual(
+    Object.fromEntries(Object.entries(q.snapshot()).map(([id, v]) => [id, v.items.map((i) => i.text)])),
+    { 'B@r': ['人から'], 'C@r': ['Z から'] },
+    '人の返信と別の送り元の分は残す。空になったセッションは消える',
+  )
+  assert.equal(q.removeWhere(() => false), 0)
+})
+
 test('ReplyQueueStore: 1 セッションに QUEUE_MAX 件まで。超えたら預からない', () => {
   const q = new ReplyQueueStore(null)
   for (let i = 0; i < QUEUE_MAX; i++) assert.ok(q.add('A@r', `${i}`, [], URL))

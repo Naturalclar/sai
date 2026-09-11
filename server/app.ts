@@ -12,6 +12,9 @@ import { isPersonaId } from '../shared/persona.ts'
 import { replyBlockedReason } from '../shared/reply.ts'
 import { selfHost } from './host.ts'
 import type {
+  AgentActivity,
+  AgentActivityMessage,
+  AgentStopResponse,
   AgentSendRequest,
   AgentSendResponse,
   AgentSessionsResponse,
@@ -155,6 +158,9 @@ const AGENT_SEND_PATH = '/api/agent/send'
 const AGENT_WAIT_PATH = '/api/agent/wait'
 /** sai_wait をサーバ側で待つ間、相手の返答の行が届いたかを見る間隔 */
 const AGENT_POLL_MS = 1000
+/** 人が画面から送信を止める・再開する口（#311）。`POST /api/sessions/<id>/agent/stop`・`.../agent/resume`。同一オリジンのみ */
+const AGENT_STOP_SUFFIX = '/agent/stop'
+const AGENT_RESUME_SUFFIX = '/agent/resume'
 /** 配る側。GET /api/attachments/<dir>/<name> */
 const ATTACHMENTS_PREFIX = `/api/${ATTACHMENTS_DIR}/`
 const PROFILE_PATH = '/api/profile'
@@ -933,6 +939,52 @@ export function createApp(
     }
   }
 
+  /**
+   * そのセッション（送り元）から別のセッションへのメッセージのようす（#311）。送ったことが無く止めてもいなければ undefined。
+   * 往復数と読み直させた量は**いま回しているターン**のもの（回していなければ 0）。直近の送り先は状態も付ける
+   */
+  const agentActivityOf = async (id: string, sessions: SessionSummary[]): Promise<AgentActivity | undefined> => {
+    if (!agents.hasActivity(id)) return undefined
+    const current = run.snapshot()[id]
+    const turn = current && !current.failed && run.running(id) ? current.since : ''
+    const recent = await Promise.all(
+      agents.sentBy(id).map(async (m): Promise<AgentActivityMessage> => {
+        const result = await agentResult(m)
+        const target = sessions.find((s) => s.id === m.to)
+        return { message_id: m.message_id, to: m.to, to_name: target ? sessionLabel(target) : m.to, since: m.since, status: result ? result.status : 'pending' }
+      }),
+    )
+    return {
+      stopped: agents.isStopped(id),
+      sent: turn ? agents.sentInTurn(id, turn) : 0,
+      limit: AGENT_SEND_MAX,
+      read_tokens: turn ? agents.readInTurn(id, turn) : 0,
+      read_budget: AGENT_TURN_READ_BUDGET,
+      recent,
+    }
+  }
+
+  /**
+   * `POST /api/sessions/<id>/agent/stop` と `.../agent/resume`（#311）。人が画面から、そのセッションが別のセッションへ送るのを
+   * 止める・再開する。同一オリジンのみ。止めたら、そのセッションから送られて預かりに並んでいる分も取り消す
+   * （相手でもう回っているターンは止めない。動いている CLI を殺すと、相手の会話が途中で切れる）
+   */
+  const agentStop = async (req: IncomingMessage, res: ServerResponse, id: string, stop: boolean) => {
+    if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
+    let cancelled = 0
+    if (stop) {
+      agents.stop(id)
+      cancelled = queue.removeWhere((_to, item) => item.origin !== undefined && agents.get(item.origin)?.from === id)
+      await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} 人がメッセージの送信を止めた（預かりから ${cancelled} 件取り消した）\n`).catch(() => {})
+    } else {
+      agents.resume(id)
+    }
+    const { sessions } = await sessionsWithMeta(QUEUE_DAYS)
+    const idle: AgentActivity = { stopped: false, sent: 0, limit: AGENT_SEND_MAX, read_tokens: 0, read_budget: AGENT_TURN_READ_BUDGET, recent: [] }
+    const payload: AgentStopResponse = { id, agent: (await agentActivityOf(id, sessions)) ?? idle, cancelled }
+    return json(res, payload)
+  }
+
   // ---- tailnet から MCP で呼ぶ口（#312）
 
   /** tailnet から送った回数（呼んだ人ごと） */
@@ -1466,6 +1518,8 @@ export function createApp(
     const isQueue = queueAt > 0
     // エージェント用の口（#310）。トークンを要り、ブラウザからは通さない
     const isAgent = path.startsWith(AGENT_PREFIX)
+    // 人が画面から送信を止める・再開する口（#311）。画面から叩くので、エージェント用の口とは別に同一オリジンで受ける
+    const isAgentStop = path.startsWith(SESSIONS_PREFIX) && (path.endsWith(AGENT_STOP_SUFFIX) || path.endsWith(AGENT_RESUME_SUFFIX))
     const isAsk = path === APPROVALS_PATH
     const isAnswer = path.startsWith(APPROVALS_PREFIX) && path.endsWith(ANSWER_SUFFIX)
     const isProfile = path === PROFILE_PATH
@@ -1485,12 +1539,19 @@ export function createApp(
     // 書き込みは「返信は POST」「表示名は PUT」「アイコンは PUT / DELETE」「承認の預かりと答えは POST」「自分の表示名は PUT、アイコンは PUT / DELETE」
     // 「設定は PUT」「預かった返信の再開は POST、取り消しは DELETE」だけ。それ以外は GET / HEAD のみ
     const writable =
-      (method === 'POST' && (isReply || isAsk || isAnswer || isAttachUpload || isQueue || path === AGENT_SEND_PATH)) ||
+      (method === 'POST' && (isReply || isAsk || isAnswer || isAttachUpload || isQueue || path === AGENT_SEND_PATH || isAgentStop)) ||
       (method === 'DELETE' && isQueue) ||
       (method === 'PUT' && (isMeta || isProfile || isSettings)) ||
       ((method === 'PUT' || method === 'DELETE') && (isIcon || isProfileIcon))
     if (!writable && method !== 'GET' && method !== 'HEAD') return error(res, 405, 'method not allowed')
     try {
+      if (isAgentStop) {
+        if (method !== 'POST') return error(res, 405, 'method not allowed')
+        const stop = path.endsWith(AGENT_STOP_SUFFIX)
+        const id = sessionIdFrom(path, stop ? AGENT_STOP_SUFFIX : AGENT_RESUME_SUFFIX)
+        if (id === null) return error(res, 400, 'bad session id')
+        return await agentStop(req, res, id, stop)
+      }
       if (isAgent) {
         if (path === AGENT_SEND_PATH) {
           if (method !== 'POST') return error(res, 405, 'method not allowed')
@@ -1692,12 +1753,15 @@ export function createApp(
         await drainAll()
         const replying = replyingOf(sessions)
         const pendingApprovals = await approvalsNow(sessions)
+        // 別のセッションへのメッセージのようす（#311）。送った・止めた・再開したは agents.key() で rev に混ぜる
+        const activity = await agentActivityOf(id, sessions)
         const body: SessionDetailResponse = {
-          rev: revWith(`${sessionsRev}~${me.rev}~${settled}`, replying, approvalMapKey(pendingApprovals), false, digest.revKey(), queue.key()),
+          rev: revWith(`${sessionsRev}~${me.rev}~${settled}`, replying, approvalMapKey(pendingApprovals), false, digest.revKey(), `${queue.key()}|${agents.key()}`),
           session: withLastSummary([session])[0]!,
           rows,
           replying,
           queued: queue.snapshot(),
+          ...(activity ? { agent: activity } : {}),
           approvals: pendingApprovals,
           profile: me.profile,
           host: selfHost(),

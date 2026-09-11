@@ -69,6 +69,26 @@ test('AgentMessages: 1 ターンで相手に読み直させた量を足してい
   assert.equal(agents.readInTurn('C1@r', 't1'), 0, '送り元ごと')
 })
 
+test('AgentMessages: 人が止めたら送らせず、再開したら送れる。送った記録は新しい順に出す（#311）', () => {
+  const agents = new AgentMessages()
+  const k0 = agents.key()
+  assert.equal(agents.hasActivity('A1@r'), false)
+  assert.equal(agents.stop('A1@r'), true)
+  assert.equal(agents.stop('A1@r'), false, '止まっていれば何もしない')
+  assert.notEqual(agents.key(), k0, '止めたら rev が変わる（画面が拾う）')
+  assert.match(agents.refusal('A1@r', 't1'), /止めています/)
+  assert.equal(agents.hasActivity('A1@r'), true, '止めているだけでも画面に出す（再開を押せるように）')
+  assert.equal(agents.resume('A1@r'), true)
+  assert.equal(agents.resume('A1@r'), false)
+  assert.equal(agents.refusal('A1@r', 't1'), '')
+
+  for (const to of ['B1@r', 'C1@r', 'D1@r']) agents.record({ message_id: agents.newId(), from: 'A1@r', to, text: 'x', since: '2026-09-11T05:00:00.000Z' }, 't1')
+  agents.record({ message_id: agents.newId(), from: 'Z1@r', to: 'B1@r', text: 'x', since: '2026-09-11T05:00:00.000Z' }, 't9')
+  assert.deepEqual(agents.sentBy('A1@r').map((m) => m.to), ['D1@r', 'C1@r', 'B1@r'], '同じ時刻でも送った順の逆')
+  assert.deepEqual(agents.sentBy('A1@r', 2).map((m) => m.to), ['D1@r', 'C1@r'])
+  assert.equal(agents.hasActivity('Z1@r'), true)
+})
+
 test('AgentMessages: メッセージで回っているターンからは送れない（連鎖は 1 段）。人の返信で起動したら解ける', () => {
   const agents = new AgentMessages()
   agents.launched('B1@r', 'm1')

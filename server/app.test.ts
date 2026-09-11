@@ -141,7 +141,7 @@ before(async () => {
     persona: personaResolver({ settings: { get: async () => ({ persona: 'none' }) }, meta: new MetaStore(join(feedDir, META_FILE)) }),
   })
   // 認証は whois を差し替える: 100.64.0.1 の持ち主は me@example.com、それ以外は引けない
-  auth = new Authenticator(async (addr) => (addr === '100.64.0.1' ? 'me@example.com' : null), 30_000)
+  auth = new Authenticator(async (addr) => (addr === '100.64.0.1' ? { login: 'me@example.com', tagged: false, node: 'laptop', caps: {} } : null), 30_000)
   // `/` の候補になるスキル。ユーザー側は temp に作った分だけを見せる（この Mac の ~/.claude/skills に依存させない）
   await mkdir(join(dir, 'skills', 'issue-triage'), { recursive: true })
   await writeFile(join(dir, 'skills', 'issue-triage', 'SKILL.md'), '---\nname: issue-triage\ndescription: issueの優先度をつけて\n---\n')

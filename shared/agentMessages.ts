@@ -40,6 +40,14 @@ export function deliveredText(from: { label: string; project: string }, messageI
   return `${AGENT_HEADER_MARK}#${from.project} の「${from.label}」からのメッセージです（id: ${messageId}）。このターンの最後の発言が送り元に返ります。\n\n${text.trim()}`
 }
 
+/**
+ * tailnet の MCP（`/mcp`。#312）から送るときの見出し。送り元はセッションではなく、呼んだ人（ログイン名）かタグ付きの端末。
+ * 印と id の形は `deliveredText()` と同じにして、`isDeliveryOf()` / `replyOf()` がそのまま返答を探せるようにする
+ */
+export function deliveredFromTailnet(caller: string, messageId: string, text: string): string {
+  return `${AGENT_HEADER_MARK}tailnet の「${caller}」からのメッセージです（id: ${messageId}）。このターンの最後の発言が送り元に返ります。\n\n${text.trim()}`
+}
+
 /** 行の入力が、そのメッセージで回ったターンのものか（見出しの id で見る） */
 export function isDeliveryOf(userText: string | undefined, messageId: string): boolean {
   const head = (userText ?? '').trimStart().slice(0, 400)

@@ -423,6 +423,55 @@ export interface ReplyQueueResponse {
   queue: ReplyQueue
 }
 
+/** `GET /api/agent/sessions` の 1 件（#310）。エージェントが話しかけられる相手。本文は載せない */
+export interface AgentSessionEntry {
+  id: string
+  /** 表示名 → 題名 → ID */
+  name: string
+  project: string
+  branch: string
+  agent: Agent
+  /** 処理中か（送ると預かりに並び、終わってから回る） */
+  busy: boolean
+  /** 最後の発言の 1 行目（長ければ切ってある） */
+  last_text: string
+}
+
+/** `GET /api/agent/sessions?from=` の応答 */
+export interface AgentSessionsResponse {
+  from: string
+  sessions: AgentSessionEntry[]
+}
+
+/** `POST /api/agent/send` の body（#310） */
+export interface AgentSendRequest {
+  /** 送り元のエンティティID（MCP サーバの `SAI_ENTITY`）。SAI から起動して、いまターンを回しているセッションだけ */
+  from: string
+  to: string
+  text: string
+}
+
+/** `POST /api/agent/send` の応答 */
+export interface AgentSendResponse {
+  message_id: string
+  to: string
+  /** 相手のターンをどう回したか。`queued` なら相手は処理中で、終わってから回る */
+  via: ReplyResponse['via']
+  /** 送り元のこのターンで送った回数（#311） */
+  sent: number
+  /** 1 ターンに送れる回数 */
+  limit: number
+}
+
+/** `GET /api/agent/wait?from=&message_id=` の応答（#310）。`done` なら `text` に相手の返答（長ければ切ってある） */
+export interface AgentWaitResponse {
+  message_id: string
+  to: string
+  status: 'done' | 'pending' | 'failed'
+  text?: string
+  error?: string
+}
+
 /**
  * 返信中のエージェントが人の答えを待っている（ツール実行の許可、AskUserQuestion）。
  * `claude -p` の `--permission-prompt-tool` が SAI の MCP ツール（server/approvals/approve-mcp.ts）を呼び、

@@ -21,6 +21,8 @@ export interface StoredReply extends QueuedReply {
    * 起動するときには手元にリクエストが無いので、預かるときに覚えておく
    */
   url: string
+  /** 別のセッションから送られたメッセージなら、その message_id（#310）。起動したターンから先へ送らせない（連鎖 1 段） */
+  origin?: string
 }
 
 interface Queue {
@@ -42,6 +44,7 @@ function storedFrom(v: unknown): StoredReply | null {
     since: r.since,
     attachments: isStrings(r.attachments) ? r.attachments : [],
     url: typeof r.url === 'string' ? r.url : '',
+    ...(typeof r.origin === 'string' && r.origin ? { origin: r.origin } : {}),
   }
 }
 
@@ -87,10 +90,17 @@ export class ReplyQueueStore {
   }
 
   /** 後ろに預ける。`QUEUE_MAX` を超えるなら預からずに null */
-  add(id: string, text: string, attachments: readonly string[], url: string, now: Date = new Date()): StoredReply | null {
+  add(id: string, text: string, attachments: readonly string[], url: string, now: Date = new Date(), origin: string = ''): StoredReply | null {
     const q = this.queues.get(id) ?? { items: [] }
     if (q.items.length >= QUEUE_MAX) return null
-    const item: StoredReply = { queue_id: randomBytes(8).toString('hex'), text, since: now.toISOString(), attachments: [...attachments], url }
+    const item: StoredReply = {
+      queue_id: randomBytes(8).toString('hex'),
+      text,
+      since: now.toISOString(),
+      attachments: [...attachments],
+      url,
+      ...(origin ? { origin } : {}),
+    }
     q.items.push(item)
     this.queues.set(id, q)
     this.persist()

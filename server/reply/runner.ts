@@ -60,6 +60,11 @@ export interface ApproveVia {
   url: string
   /** 返信先のエンティティID */
   entity: string
+  /**
+   * エージェント用の口のトークンを置いたファイル（#310）。渡せば MCP サーバが sai_* のツール（別のセッションに話しかける）を出す。
+   * **中身ではなく場所を渡す**（`--mcp-config` は引数なので ps で見える）
+   */
+  tokenFile?: string
 }
 
 /** `--mcp-config` に渡す JSON 文字列。子は node で approve-mcp.ts を直接実行する（サーバ本体と同じ型剥がし） */
@@ -70,7 +75,7 @@ export function approveMcpConfig(via: ApproveVia, execPath: string = process.exe
         type: 'stdio',
         command: execPath,
         args: ['--disable-warning=ExperimentalWarning', mcpPath],
-        env: { SAI_URL: via.url, SAI_ENTITY: via.entity },
+        env: { SAI_URL: via.url, SAI_ENTITY: via.entity, ...(via.tokenFile ? { SAI_TOKEN_FILE: via.tokenFile } : {}) },
       },
     },
   })

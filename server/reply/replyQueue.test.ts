@@ -77,7 +77,7 @@ test('ReplyQueueStore: ファイルに書き、別のインスタンスが読み
   withDir(async (dir) => {
     const path = join(dir, 'sub', 'reply-queue.json')
     const q = new ReplyQueueStore(path)
-    const a = q.add('A@r', '再起動をまたぐ', ['/p.png'], URL)!
+    const a = q.add('A@r', '再起動をまたぐ', ['/p.png'], URL, new Date(), 'm1')!
     q.pause('A@r', '止めた')
     const written = JSON.parse(await readFile(path, 'utf-8')) as Record<string, { items: { queue_id: string }[] }>
     assert.equal(written['A@r']?.items[0]?.queue_id, a.queue_id)
@@ -86,6 +86,8 @@ test('ReplyQueueStore: ファイルに書き、別のインスタンスが読み
     assert.equal(next.peek('A@r')?.text, '再起動をまたぐ')
     assert.deepEqual(next.peek('A@r')?.attachments, ['/p.png'])
     assert.equal(next.peek('A@r')?.url, URL, '起動するときの宛先も持ち越す')
+    assert.equal(next.peek('A@r')?.origin, 'm1', '別のセッションからのメッセージだった印も持ち越す（回したターンから先へ送らせない。#311）')
+    assert.equal('origin' in (next.snapshot()['A@r']?.items[0] ?? {}), false, '画面には出さない')
     assert.equal(next.paused('A@r'), '止めた', '止めていたことも持ち越す（再起動で勝手に回し始めない）')
   }))
 

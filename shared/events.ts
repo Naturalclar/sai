@@ -21,6 +21,9 @@ export type EventKind = 'turn' | 'waiting' | 'resume' | 'other'
  * 対して今も返す値**なので（古い行だけの話ではない）、turn として名指しで残す。
  *
  * OpenCode の名前は SAI のプラグイン（feed/opencode/）が載せる。名前は OpenCode のイベント名そのまま（#209）
+ *
+ * Grok Build（#325）は Claude と同じ名前（`Stop` / `UserPromptSubmit` / `Notification`）で載る
+ * （フックの payload の `hook_event_name` が Claude 向けの PascalCase の名前。record.py がそれを使う）
  */
 export function eventKind(event: string | undefined): EventKind {
   switch (event) {

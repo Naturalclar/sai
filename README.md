@@ -129,6 +129,20 @@ ln -s "$SAI_HOME/feed/opencode/sai.js" ~/.config/opencode/plugin/sai.js
 
 **閉じているセッションへの SAI からの返信（`opencode run -s`）は、許可が要るツールを自動で拒否する**（非対話なので聞けない）。ツールが失敗した時点でターンが終わり、アシスタントは本文を書かないので、チャットには `（本文なし）read の許可が拒否されて終わりました（…）` のように**何が起きたか**を出す（#273）。許可が要る作業を返信で頼むときは、**端末（tmux）で開いてから返信する**（TUI に打ち込むので、ダイアログで答えられる）。`opencode run` には `--auto`（許可を自動で通す。本人も dangerous と書いている）しか口が無く、**SAI からは付けない**。付けるなら運用者が `SAI_OPENCODE_ARGS` で明示的に渡す（そのセッションへの返信では「同一オリジンの検査」が唯一の砦になる。Claude の素通しと同じ）。プロバイダを差し替えれば手元のモデルでも動く → [docs/local-llm.md](docs/local-llm.md)。
 
+**Grok Build**（xAI の `grok`。#325）— **`~/.claude/settings.json` のフックも読む**（Claude Code との互換）ので、上の Claude Code の設定があれば何も足さなくてよい。`record.py` は payload の形（camelCase の `hookEventName`）で Grok と見分ける。Claude Code を使っていないか、Grok 側で Claude の設定を読まないようにしているときだけ、`~/.grok/hooks/sai.json` に置く（**両方にあると 1 ターンが 2 行になる**。`SAI_HOME` は Grok を起動するシェルの環境に置く）:
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "python3 ${SAI_HOME}/feed/record.py --agent grok" }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "python3 ${SAI_HOME}/feed/record.py --agent grok" }] }],
+    "Notification": [{ "hooks": [{ "type": "command", "command": "python3 ${SAI_HOME}/feed/record.py --agent grok" }] }]
+  }
+}
+```
+
+いまは**記録と画面の表示だけ**で、SAI から Grok のセッションへの返信はまだできない。本文は `Stop` の `lastAssistantMessage`、入力とモデルは `~/.grok/sessions/<cwd>/<session>/chat_history.jsonl`（`GROK_HOME` で場所が変わる）から取る。
+
 ### 2. 画面をビルドしてサーバを立てる
 
 ```
@@ -322,6 +336,7 @@ rsync -a --include='????-??-??.*.jsonl' --exclude='*' mini:~/.agent-feed/ ~/.age
 | `SAI_CODEX_APP_SERVER` | `0` で閉じたCodexのapp-server管理を切り、従来の `codex exec resume` に戻す。既定は有効 |
 | `SAI_GH` | `0` で差分ボタンの PR 番号を引かない（既定は引く。SAI で唯一外のネットワークに問い合わせる所）。叩くのは `PATH` の `gh` の `gh pr view` だけで、引けなければ番号が付かないだけ |
 | `CODEX_HOME` | Codex のホーム（既定 `~/.codex`）。Codex 自身の変数で、SAI はそれに従うだけ |
+| `GROK_HOME` | Grok Build のホーム（既定 `~/.grok`）。Grok 自身の変数で、`record.py` が `sessions/` から入力とモデルを読むときにそれに従うだけ |
 | `AGENT_FEED_DEBUG` | `1` で `record.py` の例外をログに残す |
 
 表に無いもの（SAI が自分で付ける・エージェントが渡してくる）: `AGENT_FEED_SKIP`（SAI が一言を作るために回す `claude -p` に付け、`record.py` に自分自身を記録させない）、`SAI_URL` / `SAI_ENTITY`（返信の `claude` に足す MCP サーバに渡す）、`TMUX_PANE` / `CLAUDE_PID`（エージェントが `record.py` に渡してくる）。

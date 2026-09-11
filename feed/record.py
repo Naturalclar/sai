@@ -160,7 +160,7 @@ def _read_stdin_obj(timeout: float = 5.0) -> dict | None:
 
 #: 名乗り（--agent）で受け付ける名前。ここに無いものは名乗っていないものとして扱う
 #: （知らない値をそのまま行に載せると、画面の Agent 型と絞り込みの候補が壊れる）
-KNOWN_AGENTS = ("claude", "codex", "opencode")
+KNOWN_AGENTS = ("claude", "codex", "opencode", "grok")
 
 
 def agent_from_argv(argv: list[str]) -> str:
@@ -184,6 +184,11 @@ def agent_from_argv(argv: list[str]) -> str:
 
 
 def detect_agent(payload: dict) -> str:
+    # Grok Build（#325）は ~/.claude/settings.json のフックも読み、Claude 向けの snake_case の別名
+    # （hook_event_name / session_id / transcript_path）も載せてくる。Claude Code は camelCase のキーを
+    # 送らないので、先に hookEventName で見分ける（見ないと Claude として記録され、返信が claude --resume に向く）
+    if "hookEventName" in payload:
+        return "grok"
     if payload.get("hook_event_name") or ("transcript_path" in payload and "session_id" in payload):
         return "claude"
     if payload.get("type") == "agent-turn-complete" or "last-assistant-message" in payload:
@@ -859,6 +864,105 @@ def synth_session(directory: Path, now: datetime, repo: str, cwd: str, agent: st
     return f"synth-{repo}-{now.strftime('%Y%m%dT%H%M%S')}"
 
 
+# ---------------------------------------------------------------- Grok Build（#325）
+
+#: Grok がセッションをまとめる作業ディレクトリの名前の上限。超えると slug + ハッシュになる（再現しないので探す）
+GROK_CWD_DIR_MAX_BYTES = 255
+_GROK_SESSION_RE = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def grok_home() -> Path:
+    raw = os.environ.get("GROK_HOME", "")
+    return Path(raw).expanduser() if raw else Path.home() / ".grok"
+
+
+def _grok_cwd_dir(cwd: str) -> str:
+    """作業ディレクトリのまとまりの名前。Grok は JavaScript の encodeURIComponent と同じ形で符号化する"""
+    from urllib.parse import quote
+
+    return quote(cwd, safe="-_.!~*'()")
+
+
+def find_grok_chat_history(session: str, cwds: list[str]) -> Path | None:
+    """`GROK_HOME/sessions/<符号化した cwd>/<session>/chat_history.jsonl`。
+    cwd から組み立てて無ければ（長い cwd の slug、途中で cwd が変わった）まとまりを 1 段探す。
+    セッションIDはパスに入るので、英数字と - _ だけのものしか使わない"""
+    if not session or not _GROK_SESSION_RE.fullmatch(session):
+        return None
+    sessions = grok_home() / "sessions"
+    for cwd in cwds:
+        if not cwd:
+            continue
+        name = _grok_cwd_dir(cwd)
+        if len(name.encode("utf-8")) > GROK_CWD_DIR_MAX_BYTES:
+            continue
+        path = sessions / name / session / "chat_history.jsonl"
+        if path.is_file():
+            return path
+    try:
+        for group in sessions.iterdir():
+            path = group / session / "chat_history.jsonl"
+            if path.is_file():
+                return path
+    except OSError:
+        pass
+    return None
+
+
+def _grok_user_text(entry: dict) -> str:
+    """人の入力の行の本文。synthetic_reason のある行（リマインダーやタスク完了の差し込み）は人の入力ではない"""
+    if entry.get("type") != "user" or entry.get("synthetic_reason"):
+        return ""
+    content = entry.get("content")
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = [b.get("text") for b in content if isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str)]
+        return "\n".join(p for p in parts if p.strip()).strip()
+    return ""
+
+
+def grok_history_facts(path: Path) -> tuple[str, str, str, str]:
+    """chat_history.jsonl から (最初の入力, 最後の入力, 最後の返答, 最後の返答のモデル)。
+
+    1 行 1 メッセージで、`type` が system / user / assistant / reasoning / tool_result / backend_tool_call。
+    user の content は text ブロックの配列、assistant の content は文字列（空はツールだけの行）で `model_id` が載る。
+    行に時刻は無い。入力はモデルに送る前に書かれるので、Stop の時点で今回の入力は載っている"""
+    first = last_user = last_text = model = ""
+    try:
+        with path.open(encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(entry, dict):
+                    continue
+                if entry.get("type") == "user":
+                    text = _grok_user_text(entry)
+                    if text:
+                        first = first or text
+                        last_user = text
+                elif entry.get("type") == "assistant":
+                    content = entry.get("content")
+                    if isinstance(content, str) and content.strip():
+                        last_text = content.strip()
+                    value = entry.get("model_id")
+                    if isinstance(value, str) and value.strip():
+                        model = value.strip()
+    except OSError:
+        pass
+    return first, last_user, last_text, model
+
+
+#: Grok のイベントのうち書くもの（event は Claude 向けの PascalCase の名前）。StopFailure / StopCancelled /
+#: PreToolUse などは書かない（Claude の設定を読むので、広い matcher のフックがツールごとに呼ばれても行を増やさない）
+_GROK_EVENTS = ("Stop", "UserPromptSubmit", "Notification")
+
+
 # ---------------------------------------------------------------- 行の組み立て
 
 def session_pid(agent: str, payload: dict | None = None) -> int:
@@ -993,16 +1097,50 @@ def build_row(payload: dict, now: datetime, directory: Path, declared: str = "")
                 return None
         first_user = user_text
 
+    elif agent == "grok":
+        # Grok Build（#325）。stdin は camelCase（hookEventName = grok の snake_case の名前、sessionId、
+        # lastAssistantMessage …）に Claude 向けの snake_case の別名（hook_event_name = Claude の PascalCase の名前、
+        # session_id、permission_mode …）が足されて届く。event は Claude の名前をそのまま使う（eventKind() が読める）
+        if payload.get("subagentType"):
+            # サブエージェントの中のイベントは親のターンではない
+            return None
+        if event not in _GROK_EVENTS:
+            return None
+        session_id = payload.get("sessionId") or payload.get("session_id")
+        if isinstance(session_id, str) and session_id:
+            session, source = session_id, "payload"
+        if event == "Notification":
+            # 待ちの型の表は Claude と同じ（permission_prompt / idle_prompt …）。grok は notificationType で載せる
+            kind = payload.get("notificationType") or payload.get("notification_type")
+            waiting = waiting_text({"hook_event_name": "Notification", "notification_type": kind, "message": payload.get("message")})
+            if waiting is None:
+                return None
+            text = waiting
+        last_user = last_text = ""
+        history = find_grok_chat_history(session, [cwd, str(payload.get("workspaceRoot") or "")]) if session else None
+        if history is not None:
+            first_user, last_user, last_text, model = grok_history_facts(history)
+        if event == "Stop":
+            value = payload.get("lastAssistantMessage") or payload.get("last_assistant_message")
+            text = value if isinstance(value, str) and value.strip() else last_text
+            user_text = last_user
+        elif event == "UserPromptSubmit":
+            prompt = payload.get("prompt")
+            if isinstance(prompt, str):
+                user_text = prompt.strip()
+        if not first_user:
+            first_user = user_text
+
     if not session:
         session = synth_session(directory, now, repo, cwd, agent, host_name())
         source = "synth"
 
-    if agent == "claude" and event == "UserPromptSubmit" and not user_text:
+    if agent in ("claude", "grok") and event == "UserPromptSubmit" and not user_text:
         # 入力が取れなかった行は、直前の待ちを解消する合図としてだけ書く。それ以外は書くものが無い
         previous = last_session_row(directory, now, session, repo)
         if not (previous and is_waiting_event(str(previous.get("event") or ""))):
             return None
-    if agent == "claude" and waiting is not None:
+    if agent in ("claude", "grok") and waiting is not None:
         previous = last_session_row(directory, now, session, repo)
         if skip_waiting(previous, event, payload, waiting):
             return None

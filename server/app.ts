@@ -405,6 +405,19 @@ export function createApp(
     mergeApprovalMaps(mergeApprovalMaps(approvals.snapshot(), codexApp.snapshot()), terminalEnabled ? await codexDialogs.scan(sessions) : {})
 
   /**
+   * 質問（AskUserQuestion）で止まっているセッションの、選択肢まで入った質問（#333）。フックの待ちの行には質問の文しか無いので、
+   * transcript の返事の付いていない tool_use から読む（`progress.read()` は (mtime, size) でキャッシュする）。
+   * 載せるのは Claude で、このマシンのセッションで、**行の待ちがその質問と同じ文のとき**だけ（別の呼び出しの古い質問を出さない）。
+   * SAI が回している `claude -p` の質問は答えられるバブル（approvals）が出るので、二重に出さない
+   */
+  const pendingQuestion = async (s: SessionSummary, pending: Record<string, readonly unknown[]>) => {
+    if (s.agent !== 'claude' || !s.waiting.startsWith('質問') || isRemoteHost(s.host, selfHost())) return undefined
+    if (run.running(s.id) || (pending[s.id]?.length ?? 0) > 0) return undefined
+    const { question } = await progress.read(s)
+    return question && question.text === s.waiting ? question : undefined
+  }
+
+  /**
    * 自分の表示名とアイコン。rev は profile.json とアイコンの状態で、名前や画像を変えたら応答の rev も変わる
    * （アイコンは session-icons/ に置くので iconStore の rev にも入るが、名前の分はここでしか変わらない）
    */
@@ -1854,8 +1867,11 @@ export function createApp(
         const pendingApprovals = await approvalsNow(sessions)
         // 別のセッションへのメッセージのようす（#311）。送った・止めた・再開したは agents.key() で rev に混ぜる
         const activity = await agentActivityOf(id, sessions)
+        // 端末で開いた Claude が質問で止まっていれば、選択肢を transcript から（#333）。transcript に書かれる時刻は
+        // 待ちの行と前後するので、rev に混ぜて後から届いたぶんも画面が拾う
+        const question = await pendingQuestion(session, pendingApprovals)
         const body: SessionDetailResponse = {
-          rev: revWith(`${sessionsRev}~${me.rev}~${settled}`, replying, approvalMapKey(pendingApprovals), false, digest.revKey(), `${queue.key()}|${agents.key()}`),
+          rev: revWith(`${sessionsRev}~${me.rev}~${settled}~${question?.asked_at ?? ''}`, replying, approvalMapKey(pendingApprovals), false, digest.revKey(), `${queue.key()}|${agents.key()}`),
           session: withLastSummary([session])[0]!,
           rows,
           replying,
@@ -1864,6 +1880,7 @@ export function createApp(
           approvals: pendingApprovals,
           profile: me.profile,
           host: selfHost(),
+          ...(question ? { question } : {}),
         }
         return json(res, body)
       }

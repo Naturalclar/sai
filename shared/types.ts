@@ -283,6 +283,21 @@ export interface SessionProgressResponse {
    * セッション同士のメッセージの予算に使う。読めなければ 0
    */
   context_tokens: number
+  /** いま答えを待っている `AskUserQuestion`（#333。Claude だけ）。無ければ省く */
+  question?: PendingQuestion
+}
+
+/**
+ * 端末で開いた Claude のセッションが答えを待っている `AskUserQuestion`（#333）。フックの待ちの行には質問の文しか無いので、
+ * transcript の、返事（`tool_result`）がまだ付いていない `tool_use` から取る
+ */
+export interface PendingQuestion {
+  /** `tool_use` の `input` そのまま（`questions`）。画面は `shared/approvals.ts` の `askQuestions()` で質問にする */
+  input: Record<string, unknown>
+  /** `tool_use` が書かれた時刻（ISO） */
+  asked_at: string
+  /** 待ちの行と同じ 1 行（`質問: …`。`approvalText()`）。サーバはこの文が行の待ちと同じときだけ詳細に載せ、画面はこの文のバブルに出す */
+  text: string
 }
 
 /**
@@ -668,6 +683,11 @@ export interface SessionDetailResponse {
   profile: Profile
   /** このサーバのマシン名（SessionsResponse と同じ。#114）。セッション画面は一覧を持たないのでここにも載せる */
   host: string
+  /**
+   * 端末で開いた Claude が答えを待っている質問の中身（#333）。行の待ち（`session.waiting`）が質問で、transcript の返事の付いていない
+   * `AskUserQuestion` が同じ文のときだけ。SAI が回している `claude -p` の質問は `approvals` に出るので載せない
+   */
+  question?: PendingQuestion
 }
 
 export interface FeedResponse {

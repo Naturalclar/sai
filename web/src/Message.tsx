@@ -10,6 +10,8 @@ import { splitAttachments } from '../../shared/attachments.ts'
 import { DiffButton, type DiffButtonProps } from './DiffButton'
 import { SourceImages } from './SourceImages'
 import { ImageSourceContext } from './imageContext'
+import { QuestionPreview } from './QuestionPreview'
+import type { AskQuestion } from '../../shared/approvals.ts'
 
 // 折りたたむかは描画前の生の長さで見る（コードブロック1つで8行を超えても折りたたむ。今まで通り）
 const isLong = (text: string) => text.length > 600 || text.split('\n').length > 8
@@ -20,6 +22,8 @@ interface Props {
   markdown: boolean
   /** 待ちの行（許可待ち・質問待ち）。⏳ を付けて Markdown にせず出す */
   waiting?: boolean
+  /** 待ちの行が答えを待っている質問の中身（#333。端末で開いた Claude の transcript から）。読むだけで下に並べる */
+  questions?: AskQuestion[] | null
   /** 待ちがもう解消している（後に行が来た）。薄く出す */
   resolved?: boolean
   /** そのターンの思考。渡されれば本文の上に折りたたんで出す（セッション画面だけ渡す） */
@@ -49,7 +53,7 @@ interface Props {
 }
 
 /** バブル1つ分の本文。長ければ折りたたんで「もっと見る」を付ける */
-export function Message({ ts, text: raw, markdown, waiting, resolved, thinking, thinkingOpen = false, summary, model, remote, linear, found = false, utteranceKey, diff }: Props) {
+export function Message({ ts, text: raw, markdown, waiting, questions, resolved, thinking, thinkingOpen = false, summary, model, remote, linear, found = false, utteranceKey, diff }: Props) {
   // 自分の入力に添えた画像は、パスの文字列ではなくサムネイルで出す（本文の末尾に足してある。shared/attachments.ts）
   const { body: text, urls } = markdown ? { body: raw, urls: [] as string[] } : splitAttachments(raw)
   const [open, setOpen] = useState(false)
@@ -67,6 +71,7 @@ export function Message({ ts, text: raw, markdown, waiting, resolved, thinking, 
       <div className={`msg waiting${resolved ? ' resolved' : ''}${mark}`} {...anchor}>
         <span className="time">{hm(ts)}</span>
         <div className="body" title={resolved ? 'この待ちはもう解消している' : '人の答えを待って止まっている'}>⏳ {text || '人を待って止まっている'}</div>
+        {questions && !resolved && <QuestionPreview questions={questions} />}
       </div>
     )
   }

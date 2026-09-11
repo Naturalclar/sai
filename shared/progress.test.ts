@@ -181,3 +181,19 @@ test('stepLabel / progressDuration / stepsSince / claudeProjectName / oneLine', 
   assert.equal(Array.from(long).length, PROGRESS_SUMMARY_MAX)
   assert.ok(long.endsWith('…'))
 })
+
+test('claudeProgress: 返事の付いていない AskUserQuestion を question に持つ。答え・新しい入力で消え、サブエージェントの中は見ない（#333）', () => {
+  const input = { questions: [{ question: '赤か青か?', header: '色', options: [{ label: '赤' }, { label: '青' }] }] }
+  const ask = (ts: string, id: string, given: unknown = input, extra: Record<string, unknown> = {}) =>
+    j({ type: 'assistant', timestamp: ts, message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'AskUserQuestion', input: given }], stop_reason: 'tool_use' }, ...extra })
+  const lines = [prompt(T(0), '色を決めて'), ask(T(1), 'q1')]
+
+  assert.deepEqual(claudeProgress(lines).question, { input, asked_at: T(1), text: '質問: 赤か青か?' }, '文は待ちの行（record.py）と同じ形')
+  assert.equal(claudeProgress([...lines, result(T(5), 'q1')]).question, undefined, '答えた')
+  assert.equal(claudeProgress([...lines, result(T(5), 'other')]).question?.asked_at, T(1), '別のツールの結果では消えない')
+  assert.equal(claudeProgress([...lines, prompt(T(6), '別の話')]).question, undefined, '新しいターン')
+  assert.equal(claudeProgress([prompt(T(0), 'やって'), ask(T(1), 'q9', input, { isSidechain: true })]).question, undefined, 'サブエージェントの中')
+  const two = { questions: [{ question: 'A?' }, { question: 'B?' }] }
+  assert.equal(claudeProgress([...lines, result(T(2), 'q1'), ask(T(3), 'q2', two)]).question?.text, '質問: A? / B?', '一番新しいもの')
+  assert.equal(codexProgress([j({ type: 'event_msg', payload: { type: 'task_started' } })]).question, undefined, 'Codex には無い')
+})

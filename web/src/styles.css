@@ -596,6 +596,15 @@
   /* 待ちの行（許可待ち・質問待ち）。普通のバブルと見た目を変え、解消したら薄くする */
   .msg.waiting .body { display: inline-block; padding: 4px 10px; border-radius: 6px; background: color-mix(in srgb, var(--synth) 12%, transparent); color: var(--synth); font-style: italic; }
   .msg.waiting.resolved .body { background: var(--chip); color: var(--muted); opacity: .7; }
+  /* 端末で開いた Claude の質問の選択肢（#333）。読むだけ。見た目は答えられる質問（.group.approval .questions）に揃える */
+  .msg.waiting .questions.preview { margin-top: 6px; display: flex; flex-direction: column; gap: 10px; max-width: 640px; }
+  .msg.waiting .questions.preview .q { margin-bottom: 4px; }
+  .msg.waiting .questions.preview .q .multi { margin-left: 6px; color: var(--muted); font-size: 11px; }
+  .msg.waiting .questions.preview .options { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 4px; }
+  .msg.waiting .questions.preview .options .label { font-weight: 600; }
+  .msg.waiting .questions.preview .options .rec { margin-left: 6px; padding: 1px 6px; border-radius: 8px; background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); font-size: 11px; font-weight: 600; }
+  .msg.waiting .questions.preview .options .desc { display: block; margin-top: 1px; color: var(--muted); font-size: 12px; }
+  .msg.waiting .questions.preview .hint { color: var(--muted); font-size: 12px; }
   .msg .branch { font-family: var(--mono); font-size: 11px; color: var(--muted); }
 
   /* -- reply */

@@ -431,6 +431,50 @@ test('GET /api/sessions/<id>/progress: 行の cwd とセッション ID から t
   assert.equal((await fetch(`${base}/api/sessions/C1%40r/progress`, { method: 'POST' })).status, 405)
 })
 
+test('GET /api/sessions/<id>: 端末で開いた Claude が質問で止まっていれば、transcript の返事の付いていない AskUserQuestion を question に載せる。行の待ちと同じ文のときだけ（#333）', async () => {
+  const projectDir = join(dir, 'claude-projects', claudeProjectName(dir))
+  await mkdir(projectDir, { recursive: true })
+  const transcript = join(projectDir, 'Q1.jsonl')
+  const feed = join(feedDir, `${localDate(new Date().toISOString())}.jsonl`)
+  const t0 = Date.now()
+  const at = (sec: number) => new Date(t0 + sec * 1000)
+  const first = { questions: [{ question: 'どう進めますか？', header: 'PR 1', options: [{ label: 'コミットしてPR作成 (Recommended)', description: 'push して PR を作る' }, { label: 'まだコミットしない' }] }] }
+  const second = { questions: [{ question: 'web-admin 側はどうしますか？', options: [{ label: '続けて着手' }] }] }
+  const ask = (sec: number, id: string, input: unknown) =>
+    JSON.stringify({ type: 'assistant', timestamp: at(sec).toISOString(), message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'AskUserQuestion', input }], stop_reason: 'tool_use' } })
+  const answer = (sec: number, id: string) =>
+    JSON.stringify({ type: 'user', timestamp: at(sec).toISOString(), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'User has answered' }] } })
+  const waitingRow = (sec: number, text: string) => JSON.stringify(row(at(sec), 'Q1', { repo: 'r', cwd: dir, event: 'PreToolUse', text, user_text: '' })) + '\n'
+  const detail = async () => (await (await get('/api/sessions/Q1%40r')).json()) as SessionDetailResponse
+  // 記録のファイルはほかのテストと共有しているので、足した行は最後に消す（セッションや行の数を数えるテストがある）
+  const original = await readFile(feed, 'utf-8')
+
+  try {
+    await writeFile(transcript, [JSON.stringify({ type: 'user', timestamp: at(0).toISOString(), message: { role: 'user', content: '進めて' } }), ask(1, 'q1', first)].join('\n') + '\n')
+    await appendFile(feed, JSON.stringify(row(at(0), 'Q1', { repo: 'r', cwd: dir, text: '了解' })) + '\n')
+    await appendFile(feed, waitingRow(1, '質問: どう進めますか？'))
+    let data = await detail()
+    assert.equal(data.session.waiting, '質問: どう進めますか？')
+    assert.deepEqual(data.question, { input: first, asked_at: at(1).toISOString(), text: '質問: どう進めますか？' })
+    const rev = data.rev
+
+    // 次の質問が transcript に書かれたが、待ちの行はまだ前の質問 → 文が違うので載せない（古い質問の選択肢を出さない）
+    await appendFile(transcript, answer(2, 'q1') + '\n' + ask(3, 'q2', second) + '\n')
+    data = await detail()
+    assert.equal(data.question, undefined)
+    assert.notEqual(data.rev, rev, '質問が消えたら画面が拾う')
+    await appendFile(feed, waitingRow(3, '質問: web-admin 側はどうしますか？'))
+    assert.equal((await detail()).question?.text, '質問: web-admin 側はどうしますか？')
+
+    // 端末で答えた（tool_result が書かれた）→ 行の待ちが残っていても載せない
+    await appendFile(transcript, answer(4, 'q2') + '\n')
+    assert.equal((await detail()).question, undefined)
+    assert.equal((await detail()).session.waiting, '質問: web-admin 側はどうしますか？', '行の待ちは次の行が来るまで残る（#255 の畳み方とは別）')
+  } finally {
+    await writeFile(feed, original)
+  }
+})
+
 test('GET /api/sessions/<id>/permissions: cwd の設定を読んで deny → allow の順に返す。Codex と不明なセッションは空（#162）', async () => {
   // C1@r の cwd は dir。そこに「常に許可」が書く先を置く
   await mkdir(join(dir, '.claude'), { recursive: true })

@@ -8,6 +8,7 @@ import {
   agentTargets,
   budgetRefusal,
   clipReply,
+  deliveredFromTailnet,
   deliveredText,
   isDeliveryOf,
   replyOf,
@@ -123,4 +124,12 @@ test('budgetRefusal: このターンで読み直させた量に相手のぶん�
   assert.match(over, /予算を超えます（これまで 約 200 万トークン、この相手は約 150 万トークン、予算は約 300 万トークン）/)
   assert.equal(budgetRefusal(2_900_000, 0), '', '相手の大きさが分からなければ止めない')
   assert.match(budgetRefusal(0, 5_000_000), /これまで 0、/, '1 回で予算を超える相手にも送らない')
+})
+
+test('deliveredFromTailnet: tailnet の MCP から来たメッセージも、同じ印と id で返答のターンを見つけられる（#312）', () => {
+  const text = deliveredFromTailnet('me@example.com', 'abc123', '  見て  ')
+  assert.ok(text.startsWith('【SAI】tailnet の「me@example.com」からのメッセージです（id: abc123）'))
+  assert.ok(text.endsWith('\n\n見て'))
+  assert.equal(isDeliveryOf(text, 'abc123'), true)
+  assert.equal(isDeliveryOf(text, 'abc12'), false)
 })

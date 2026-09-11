@@ -87,12 +87,21 @@ import {
   agentTargets,
   budgetRefusal,
   clipReply,
+  deliveredFromTailnet,
   deliveredText,
   isDeliveryOf,
   replyOf,
   sessionLabel,
+  tokensLabel,
   usageRefusal,
 } from '../shared/agentMessages.ts'
+import { eventKind } from '../shared/events.ts'
+import { stepLabel } from '../shared/progress.ts'
+import { mcpAccess, normalizeOrigin } from './mcp/access.ts'
+import type { McpAccess } from './mcp/access.ts'
+import { handleRpc, protocolVersionOk, textResult } from './mcp/protocol.ts'
+import type { McpTool } from './mcp/protocol.ts'
+import { McpSendLimiter } from './mcp/sendLimit.ts'
 import { SkillStore } from './local/skills.ts'
 import { claudeProjectsDir, codexSessionsDir, UsageStore } from './local/usage.ts'
 import { ProgressReader } from './local/progress.ts'
@@ -139,6 +148,8 @@ const QUEUE_RESUME = 'resume'
 const QUEUE_DAYS = 90
 /** エージェント用の口（#310）。SAI の MCP サーバ（approve-mcp.ts）の sai_* のツールだけが叩く。トークンを要り、ブラウザからは通さない */
 const AGENT_PREFIX = '/api/agent/'
+/** tailnet から MCP で呼ぶ口（#312。Streamable HTTP） */
+const MCP_PATH = '/mcp'
 const AGENT_SESSIONS_PATH = '/api/agent/sessions'
 const AGENT_SEND_PATH = '/api/agent/send'
 const AGENT_WAIT_PATH = '/api/agent/wait'
@@ -922,6 +933,203 @@ export function createApp(
     }
   }
 
+  // ---- tailnet から MCP で呼ぶ口（#312）
+
+  /** tailnet から送った回数（呼んだ人ごと） */
+  const mcpLimiter = new McpSendLimiter()
+  /** sai_sessions が見る日数 */
+  const MCP_LIST_DAYS = 7
+  /**
+   * sai_wait がサーバ側で待つ既定と上限（秒）。Serve を通る 1 本の HTTP を長く握らないように短めにし、
+   * まだならエージェントにもう一度呼ばせる（stdio の sai_wait は最長 30 分繰り返すが、HTTP は間に Serve がいる）
+   */
+  const MCP_WAIT_DEFAULT_S = 60
+  const MCP_WAIT_MAX_S = 120
+  const MAX_MCP_BYTES = 256 * 1024
+  /** tailnet の MCP から来たメッセージの送り元（sai_wait で本人を確かめる鍵）。セッションの id と混ざらない形 */
+  const mcpFrom = (access: McpAccess) => `mcp:${access.caller}`
+  const mcpBusy = (id: string) => run.running(id) || codexApp.running(id) || typed.running(id)
+  const mcpStr = (v: unknown) => (typeof v === 'string' ? v : '')
+  const mcpNum = (v: unknown, fallback: number, min: number, max: number) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(max, Math.max(min, Math.floor(v))) : fallback)
+
+  /**
+   * tailnet から送れない相手なら理由。アーカイブ済み・返信できない（別のマシン・合成 ID など）に加えて、
+   * **素通し（bypassPermissions）を選んだセッションには送らない**（tailnet の呼び出し元の LLM が、許可を聞かないエージェントを動かせてしまう。#253）
+   */
+  const mcpSendRefusal = (s: SessionSummary): string => {
+    if (s.archived) return 'アーカイブ済み'
+    const blocked = replyBlockedReason(s, selfHost())
+    if (blocked) return blocked
+    if (s.meta?.permission_mode === 'bypassPermissions') return '素通し（bypassPermissions）のセッションには tailnet から送れません'
+    return ''
+  }
+
+  /**
+   * MCP のツール。読むもの（read）は画面・REST と同じ範囲。送る・待つ（send）はエージェント用の口（#310）と同じ規則
+   * （見出しで人の入力と見分ける・相手が処理中なら預かり・返答は見出しの id で探して切る・受け取ったターンからは先へ送らせない）
+   */
+  const mcpTools = (req: IncomingMessage, access: McpAccess): McpTool[] => [
+    {
+      name: 'sai_sessions',
+      scope: 'read',
+      description: `SAI に並んでいるセッションの一覧（直近 ${MCP_LIST_DAYS} 日、アーカイブ済みを除く）。id・呼び名・リポジトリ・エージェント・ブランチ・処理中か・送れない理由・最後の発言の 1 行目`,
+      inputSchema: { type: 'object', properties: { project: { type: 'string', description: 'リポジトリ（owner/repo）で絞る' } } },
+      run: async (args) => {
+        const project = mcpStr(args.project)
+        const { sessions } = await sessionsWithMeta(MCP_LIST_DAYS)
+        const list = sessions.filter((s) => !s.archived && (!project || s.project === project))
+        if (list.length === 0) return textResult('セッションはありません')
+        return textResult(
+          list
+            .map((s) => {
+              const e = agentEntry(s, mcpBusy(s.id))
+              const why = mcpSendRefusal(s)
+              return `- ${e.id}「${e.name}」${e.project} ${e.agent}${e.branch ? ` ${e.branch}` : ''}${e.busy ? '（処理中）' : ''}${why ? `（送れない: ${why}）` : ''}${e.last_text ? ` 最後の発言: ${e.last_text}` : ''}`
+            })
+            .join('\n'),
+        )
+      },
+    },
+    {
+      name: 'sai_session',
+      scope: 'read',
+      description: 'セッションの直近のやりとり（人の入力とエージェントの返答）。長いものは切る',
+      inputSchema: {
+        type: 'object',
+        properties: { id: { type: 'string', description: 'sai_sessions の id' }, turns: { type: 'number', description: '何ターンぶん（既定 3、最大 10）' } },
+        required: ['id'],
+      },
+      run: async (args) => {
+        const id = mcpStr(args.id)
+        const turns = (await store.rows(QUEUE_DAYS)).filter((r) => eventKind(r.event) === 'turn' && entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
+        if (turns.length === 0) return textResult('そのセッションのターンは見つかりません（sai_sessions の id を渡してください）', true)
+        return textResult(
+          turns
+            .slice(-mcpNum(args.turns, 3, 1, 10))
+            .map((r) => `## ${r.ts}\n${r.user_text ? `人: ${clipReply(r.user_text, 500)}\n` : ''}エージェント: ${clipReply(r.text ?? '', 2000)}`)
+            .join('\n\n'),
+        )
+      },
+    },
+    {
+      name: 'sai_progress',
+      scope: 'read',
+      description: '処理中のセッションが、いま何をしているか（走っているツール・直近の手順）',
+      inputSchema: { type: 'object', properties: { id: { type: 'string', description: 'sai_sessions の id' } }, required: ['id'] },
+      run: async (args) => {
+        const { sessions } = await store.sessions(QUEUE_DAYS)
+        const session = sessions.find((s) => s.id === mcpStr(args.id))
+        if (!session) return textResult('そのセッションは見つかりません', true)
+        if (isRemoteHost(session.host, selfHost())) return textResult('別のマシンのセッションの手順は読めません', true)
+        const p = await progress.read(session)
+        if (p.steps.length === 0) return textResult('いまの手順はありません（処理中でないか、読めるファイルがありません）')
+        return textResult([p.active ? '処理中:' : '動いていません（最後のターンの手順）:', ...p.steps.map((s) => `- ${stepLabel(s)}${s.kind === 'tool' && !s.ended ? '（実行中）' : ''}`)].join('\n'))
+      },
+    },
+    {
+      name: 'sai_send',
+      scope: 'send',
+      description: `別のセッションに頼む・聞く。相手が処理中なら終わってから回る。返答は sai_wait で受け取る。本文は ${AGENT_TEXT_MAX_CHARS} 字まで`,
+      inputSchema: { type: 'object', properties: { to: { type: 'string', description: 'sai_sessions の id' }, text: { type: 'string' } }, required: ['to', 'text'] },
+      run: async (args) => {
+        const to = mcpStr(args.to)
+        const text = mcpStr(args.text).trim()
+        if (!to || !text) return textResult('to と text が要ります', true)
+        if (text.length > AGENT_TEXT_MAX_CHARS) return textResult(`送れるのは ${AGENT_TEXT_MAX_CHARS} 字までです。短くまとめてください`, true)
+        const { sessions } = await sessionsWithMeta(QUEUE_DAYS)
+        const target = sessions.find((s) => s.id === to)
+        if (!target) return textResult('そのセッションは見つかりません（sai_sessions で確かめてください）', true)
+        const why = mcpSendRefusal(target)
+        if (why) return textResult(`送れません: ${why}`, true)
+        const limit = mcpLimiter.refusal(access.caller)
+        if (limit) return textResult(limit, true)
+        // 相手のエージェントの使用量の枠と、相手に読み直させる量の予算（#311 と同じ規則）。
+        // tailnet から呼ぶ側には SAI が起動したターンが無いので、予算は呼んだ人ごとに回数と同じ区切り（10 分）で数える
+        const overUsage = usageRefusal(await usageStore.get(), target.agent)
+        if (overUsage) return textResult(overUsage, true)
+        const context = (await progress.read(target)).context_tokens
+        const window = mcpLimiter.windowKey()
+        const overBudget = budgetRefusal(agents.readInTurn(mcpFrom(access), window), context)
+        if (overBudget) return textResult(overBudget, true)
+        const messageId = agents.newId()
+        const out = await launch(to, deliveredFromTailnet(access.caller, messageId, text), [], { days: QUEUE_DAYS, replaceTyped: false, forceProcess: false, url: selfUrl(req), queue: true, origin: messageId })
+        if (out.status !== 202) return textResult(`送れませんでした: ${(out.body as ReplyError).error}`, true)
+        const via = (out.body as ReplyResponse).via
+        mcpLimiter.record(access.caller)
+        agents.record({ message_id: messageId, from: mcpFrom(access), to, text, since: new Date().toISOString() }, window, context)
+        await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${mcpFrom(access)} → ${to} メッセージ ${messageId}（${via}）\n`).catch(() => {})
+        const size = tokensLabel(context)
+        return textResult(
+          `送りました（message_id: ${messageId}。${via === 'queued' ? '相手は処理中なので、終わってから回ります' : '相手のターンを始めました'}）。` +
+            `${size ? `相手が読み直す量は${size}（予算の残り ${tokensLabel(Math.max(0, AGENT_TURN_READ_BUDGET - agents.readInTurn(mcpFrom(access), window))) || '0'}）。` : ''}返答は sai_wait で受け取れます`,
+        )
+      },
+    },
+    {
+      name: 'sai_wait',
+      scope: 'send',
+      description: `sai_send で送ったメッセージへの返答を待って受け取る（最大 ${MCP_WAIT_MAX_S} 秒。まだならもう一度呼ぶ）`,
+      inputSchema: {
+        type: 'object',
+        properties: { message_id: { type: 'string' }, wait_seconds: { type: 'number', description: `待つ秒数（既定 ${MCP_WAIT_DEFAULT_S}、最大 ${MCP_WAIT_MAX_S}）` } },
+        required: ['message_id'],
+      },
+      run: async (args) => {
+        const message = agents.get(mcpStr(args.message_id))
+        if (!message || message.from !== mcpFrom(access)) return textResult('そのメッセージは見つかりません（送った本人だけが待てます。SAI を立て直すと見失います）', true)
+        const until = Date.now() + mcpNum(args.wait_seconds, MCP_WAIT_DEFAULT_S, 0, MCP_WAIT_MAX_S) * 1000
+        for (;;) {
+          const result = await agentResult(message)
+          if (result?.status === 'done') return textResult(result.text ?? '')
+          if (result?.status === 'failed') return textResult(`相手のターンが失敗しました: ${result.error ?? ''}`, true)
+          if (Date.now() >= until) return textResult('まだ返答がありません。あとでもう一度 sai_wait を呼んでください')
+          await new Promise((r) => setTimeout(r, AGENT_POLL_MS))
+        }
+      },
+    },
+  ]
+
+  /**
+   * `/mcp`（Streamable HTTP の最小。#312）。POST で 1 通受けて JSON で 1 回返す（SSE・セッションは出さない）。
+   * - 使えるツールは身元と tailnet の ACL の capability で決める（`server/mcp/access.ts`）。何も使えなければ 403
+   * - **Origin は必ず検査する**（MCP の仕様。DNS rebinding）: 無ければ（CLI・サーバ間）通し、あれば capability の origins に書いたものだけ。CORS もそれにだけ返す
+   * - 同一オリジンの検査（`isCrossOrigin()`）は使わない。CLI は Origin を付けないので歯止めにならず、代わりが capability
+   */
+  const mcpHttp = async (req: IncomingMessage, res: ServerResponse, who: Identity, method: string) => {
+    const respond = (status: number, body: unknown, headers: Record<string, string> = {}) => {
+      const text = body === undefined ? '' : JSON.stringify(body)
+      res.writeHead(status, { ...(text ? { 'Content-Type': 'application/json' } : {}), 'Cache-Control': 'no-store', ...headers })
+      res.end(text)
+    }
+    const access = mcpAccess(who)
+    if (access.scopes.size === 0) return respond(403, { error: 'MCP を使う許可がありません（タグ付きの端末は、tailnet の ACL の grants で capability を与えてください）' })
+    const originHeader = req.headers.origin
+    const origin = typeof originHeader === 'string' ? normalizeOrigin(originHeader) : ''
+    if (originHeader !== undefined && (!origin || !access.origins.has(origin))) {
+      return respond(403, { error: 'この Origin からは呼べません（tailnet の ACL の grants で origins に書いたページだけ）' })
+    }
+    const cors: Record<string, string> = origin ? { 'Access-Control-Allow-Origin': origin, Vary: 'Origin' } : {}
+    if (method === 'OPTIONS') {
+      return respond(204, undefined, {
+        ...cors,
+        'Access-Control-Allow-Methods': 'POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Accept, MCP-Protocol-Version, Mcp-Session-Id',
+        'Access-Control-Max-Age': '600',
+      })
+    }
+    if (method !== 'POST') return respond(405, { error: 'POST だけです（SSE の GET とセッションの DELETE は出していません）' }, { ...cors, Allow: 'POST, OPTIONS' })
+    if (!protocolVersionOk(req.headers['mcp-protocol-version'])) return respond(400, { error: 'MCP-Protocol-Version が対応していない版です' }, cors)
+    let message: unknown
+    try {
+      message = await readJson(req, MAX_MCP_BYTES)
+    } catch (err) {
+      return respond(400, { jsonrpc: '2.0', id: null, error: { code: -32700, message: err instanceof Error ? err.message : 'parse error' } }, cors)
+    }
+    if (Array.isArray(message)) return respond(400, { jsonrpc: '2.0', id: null, error: { code: -32600, message: 'バッチは受けません' } }, cors)
+    const response = await handleRpc(message, mcpTools(req, access), access.scopes)
+    return response ? respond(200, response, cors) : respond(202, undefined, cors)
+  }
+
   /**
    * POST /api/approvals。返信中の CLI から（server/approvals/approve-mcp.ts 経由で）許可・質問を預かる。
    * 返信を回していないエンティティの分は受けない（誰が投げたか分からないものを画面に出さない）
@@ -1264,6 +1472,16 @@ export function createApp(
     const isProfileIcon = path === PROFILE_ICON_PATH
     const isSettings = path === SETTINGS_PATH
     const method = req.method ?? 'GET'
+    // tailnet から MCP で呼ぶ口（#312）。POST / OPTIONS（CORS）を受けるので、下の書き込みの判定より先に分ける
+    if (path === MCP_PATH) {
+      try {
+        return await mcpHttp(req, res, who, method)
+      } catch (err) {
+        return error(res, 500, err instanceof Error ? `${err.name}: ${err.message}` : String(err))
+      }
+    }
+    // タグ付きの端末（ユーザーがいない）は画面・REST を使えない。capability を与えた /mcp だけ
+    if (who.kind === 'tagged') return error(res, 401, 'unauthorized: タグ付きの端末から使えるのは /mcp だけです')
     // 書き込みは「返信は POST」「表示名は PUT」「アイコンは PUT / DELETE」「承認の預かりと答えは POST」「自分の表示名は PUT、アイコンは PUT / DELETE」
     // 「設定は PUT」「預かった返信の再開は POST、取り消しは DELETE」だけ。それ以外は GET / HEAD のみ
     const writable =

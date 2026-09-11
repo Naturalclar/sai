@@ -5,7 +5,7 @@ import type { Server } from 'node:http'
 import { mkdtemp, rm, writeFile, appendFile, mkdir, stat, utimes, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ApprovalAnswer, ApprovalMap, Replying, ReplyQueueResponse, ReplyResponse,SessionsResponse, SessionDetailResponse, SessionIconResponse, SessionMetaResponse, FeedResponse, SettingsResponse, HealthResponse, SessionSkillsResponse, SessionPermissionsResponse, SearchResponse, UsageResponse } from '../shared/types.ts'
+import type { ApprovalAnswer, ApprovalMap, NewSessionResponse, Replying, ReplyQueueResponse, ReplyResponse,SessionsResponse, SessionDetailResponse, SessionIconResponse, SessionMetaResponse, FeedResponse, SettingsResponse, HealthResponse, SessionSkillsResponse, SessionPermissionsResponse, SearchResponse, UsageResponse } from '../shared/types.ts'
 import { createApp, parseDays, revWith, selfUrl, sessionIdFrom, stripThinking } from './app.ts'
 import { BuildFreshness } from './local/buildFreshness.ts'
 import { Authenticator } from './auth.ts'
@@ -643,6 +643,90 @@ test('POST reply: 別オリジンは 403、同一オリジンとブラウザ以�
   assert.equal(runner.started.length, 0)
   assert.equal((await post('C1@r', { text: 'x' }, { Origin: `http://${host}`, 'Sec-Fetch-Site': 'same-origin' })).status, 202)
   assert.equal(runner.started.length, 1)
+})
+
+const postNew = (body: unknown, headers: Record<string, string> = {}) =>
+  fetch(`${base}/api/sessions/new`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...headers },
+    body: typeof body === 'string' ? body : JSON.stringify(body),
+  })
+
+test('POST /api/sessions/new: from のセッションの cwd で、ID を決めて Claude を始める（#314）', async () => {
+  runner.started.length = 0
+  // from は Codex のセッション（X1）でもよい。見るのはその cwd だけで、始めるのは Claude
+  const res = await postNew({ from: 'X1@r', text: '  新しくやって  ', cwd: '/etc' })
+  assert.equal(res.status, 202)
+  const data = (await res.json()) as NewSessionResponse
+  assert.equal(data.accepted, true)
+  assert.match(data.session, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, 'サーバが UUID を決める')
+  assert.equal(data.id, `${data.session}@r`, '行の repo は同じ cwd から取るので from と同じ')
+  assert.equal(data.cwd, dir, 'body の cwd は見ない（パスは受け取らない）')
+  assert.equal(data.agent, 'claude')
+  assert.equal(runner.started.length, 1)
+  const { id, cmd } = runner.started[0]!
+  assert.equal(id, data.id, '処理中は新しいセッションの ID で持つ')
+  assert.equal(cmd.bin, 'claude')
+  assert.equal(cmd.cwd, dir)
+  assert.deepEqual(cmd.args.slice(2), ['--permission-prompt-tool', 'mcp__sai__approve', '-p', '--session-id', data.session, '--', '新しくやって'])
+  assert.equal(cmd.args.includes('--resume'), false)
+  const mcp = JSON.parse(cmd.args[1]!) as { mcpServers: { sai: { env: Record<string, string> } } }
+  assert.equal(mcp.mcpServers.sai.env.SAI_ENTITY, data.id, '許可・質問は新しいセッションの ID で預ける')
+  assert.equal(mcp.mcpServers.sai.env.SAI_URL, base)
+
+  // 2 回始めれば別のセッション（ID は毎回新しい）
+  const again = (await (await postNew({ from: 'X1@r', text: 'もう 1 つ' })).json()) as NewSessionResponse
+  assert.notEqual(again.session, data.session)
+})
+
+test('POST /api/sessions/new: モデルと許可モードは検査してから、新しいセッションのメタとコマンドに入れる（#314）', async () => {
+  runner.started.length = 0
+  const res = await postNew({ from: 'C1@r', text: 'go', model: 'sonnet', permission_mode: 'acceptEdits' })
+  assert.equal(res.status, 202)
+  const data = (await res.json()) as NewSessionResponse
+  const { cmd } = runner.started[0]!
+  assert.deepEqual(cmd.args.slice(4), ['--model', 'sonnet', '--permission-mode', 'acceptEdits', '-p', '--session-id', data.session, '--', 'go'])
+  assert.equal(cmd.permissionMode, 'acceptEdits')
+  const metaFile = new MetaStore(join(feedDir, META_FILE))
+  assert.deepEqual(await metaFile.get(data.id), { model: 'sonnet', permission_mode: 'acceptEdits' }, '次の返信にも効くようにメタに残す')
+  // 後のテストが session-meta.json の中身を丸ごと比べるので、書いた分は片付ける（空を set すると消える）
+  await metaFile.set(data.id, {})
+
+  runner.started.length = 0
+  assert.equal((await postNew({ from: 'C1@r', text: 'go', permission_mode: 'auto' })).status, 400, '画面から選べない許可モード')
+  assert.equal(runner.started.length, 0)
+})
+
+test('POST /api/sessions/new: 受け付けないもの（#314）', async () => {
+  runner.started.length = 0
+  const host = base.replace('http://', '')
+  assert.equal((await postNew({ from: 'C1@r', text: 'x' }, { Origin: 'http://evil.local:8787' })).status, 403)
+  assert.equal((await postNew({ from: 'C1@r', text: 'x' }, { Origin: `http://${host}`, 'Sec-Fetch-Site': 'cross-site' })).status, 403)
+  assert.equal((await postNew({ from: 'C1@r', text: '   ' })).status, 400)
+  assert.equal((await postNew({ text: 'x' })).status, 400, 'from が無い')
+  assert.equal((await postNew({ from: 'C1@r', text: 'x'.repeat(70 * 1024) })).status, 400)
+  assert.equal((await postNew('not json')).status, 400)
+  assert.equal((await postNew({ from: 'nope@r', text: 'x' })).status, 404)
+  let res = await postNew({ from: 'R1@r', text: 'x' })
+  assert.equal(res.status, 400)
+  assert.match(((await res.json()) as { error: string }).error, /別のマシン（mini）/)
+  res = await postNew({ from: 'S1@kanban', text: 'x' })
+  assert.equal(res.status, 400, 'cwd /home/u/kanban は無い')
+  assert.match(((await res.json()) as { error: string }).error, /cwd/)
+  assert.equal((await fetch(`${base}/api/sessions/new`, { method: 'PUT' })).status, 405)
+  assert.equal(runner.started.length, 0)
+  assert.equal((await postNew({ from: 'C1@r', text: 'x' }, { Origin: `http://${host}`, 'Sec-Fetch-Site': 'same-origin' })).status, 202)
+})
+
+test('POST /api/sessions/new: 起動できなければ 500 で理由を返す（#314）', async () => {
+  runner.fail = Object.assign(new Error('spawn claude ENOENT'), { code: 'ENOENT' })
+  try {
+    const res = await postNew({ from: 'C1@r', text: 'x' })
+    assert.equal(res.status, 500)
+    assert.match(((await res.json()) as { error: string }).error, /claude が見つかりません/)
+  } finally {
+    runner.fail = null
+  }
 })
 
 test('処理中の返信は一覧・詳細・フィードの replying に載り、rev も変わる', async () => {

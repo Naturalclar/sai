@@ -130,6 +130,40 @@ export function splitArgs(raw: string | undefined): string[] {
 }
 
 /**
+ * Claude の起動引数のうち、返信と新しいセッション（#314）で共通の前半。運用者の `SAI_CLAUDE_ARGS` を先頭に、
+ * 許可・質問を画面で答える配線、モデル、許可モードの順（後ろほど勝つ）。2 つの経路でずれないように 1 か所で組む
+ */
+function claudeHead(env: NodeJS.ProcessEnv, approve: ApproveVia | undefined, model: string | undefined, permissionMode: string | undefined): string[] {
+  const extra = splitArgs(env.SAI_CLAUDE_ARGS)
+  // 許可・質問を画面で答える配線（Claude だけ。Codex に同等の口は無い）。
+  // SAI_APPROVE=0 で外せる。運用者が自分の --permission-prompt-tool を足していればそちらを尊重する。
+  // `--mcp-config` は可変長なので、直後に別のフラグ（--permission-prompt-tool）が来る並びにしておく
+  const wire = approve && env.SAI_APPROVE !== '0' && !extra.includes('--permission-prompt-tool')
+    ? ['--mcp-config', approveMcpConfig(approve), '--permission-prompt-tool', APPROVE_TOOL]
+    : []
+  // 運用者の SAI_CLAUDE_ARGS に --model / --permission-mode があっても、セッションの設定を後ろに置いてそちらを勝たせる（後勝ち）
+  return [...extra, ...wire, ...(model ? ['--model', model] : []), ...(permissionMode ? ['--permission-mode', permissionMode] : [])]
+}
+
+/**
+ * SAI の画面から新しいセッションを始めるコマンド（#314。Claude だけ）。前半は返信と同じで、`--resume <session>` の
+ * 代わりに `--session-id <uuid>`。**ID をサーバが決める**ので、最初の行が届く前からエンティティID が分かり、
+ * 処理中・許可の配線・メタを返信と同じ鍵で扱える（2.1.266 で実測: フックの `session_id` が渡した UUID になる。
+ * 同じ UUID で二度起動すると CLI が `Session ID … is already in use.` で断る）
+ */
+export function newSessionCommand(
+  sessionId: string,
+  text: string,
+  cwd: string,
+  env: NodeJS.ProcessEnv = process.env,
+  approve?: ApproveVia,
+  model?: string,
+  permissionMode?: string,
+): ReplyCommand {
+  return { bin: 'claude', args: [...claudeHead(env, approve, model, permissionMode), '-p', '--session-id', sessionId, '--', text], cwd, text, permissionMode: permissionMode || '' }
+}
+
+/**
  * 返信で起動するコマンド。非対話モードなので許可ダイアログは出せず、未許可のツールはそのまま拒否される。
  * 運用者が SAI_CLAUDE_ARGS / SAI_CODEX_ARGS で追加の引数（`--allowedTools "Bash(gh *)"` など）を渡せる。
  * SAI 自身は何も付けない（既定は素の `claude -p --resume` / `codex exec resume`）。
@@ -153,21 +187,13 @@ export function replyCommand(
   /** 添える画像の絶対パス。本文には呼び出し側が足しておく（ここでは Codex の -i だけ組む） */
   attachments: readonly string[] = [],
 ): ReplyCommand | null {
-  // 運用者の SAI_*_ARGS に --model / --permission-mode があっても、セッションの設定を後ろに置いてそちらを勝たせる（後勝ち）
-  const pick = model ? (agent === 'claude' ? ['--model', model] : ['-m', model]) : []
-  // 許可モードは Claude だけ（codex exec resume に同等のフラグは無い）
-  const mode = permissionMode && agent === 'claude' ? ['--permission-mode', permissionMode] : []
+  // 運用者の SAI_*_ARGS に -m があっても、セッションの設定を後ろに置いてそちらを勝たせる（後勝ち。Claude は claudeHead() の中）
+  const pick = model ? ['-m', model] : []
   // 本文の前に `--` を置く。本文が `-` で始まると（`-v` や `--help`）CLI がフラグとして解釈して
   // ターンが回らない（`--dangerously-skip-permissions` ならフラグとして効いてしまう）。両 CLI とも `--` を受け付ける
   if (agent === 'claude') {
-    const extra = splitArgs(env.SAI_CLAUDE_ARGS)
-    // 許可・質問を画面で答える配線（Claude だけ。Codex に同等の口は無い）。
-    // SAI_APPROVE=0 で外せる。運用者が自分の --permission-prompt-tool を足していればそちらを尊重する。
-    // `--mcp-config` は可変長なので、直後に別のフラグ（--permission-prompt-tool）が来る並びにしておく
-    const wire = approve && env.SAI_APPROVE !== '0' && !extra.includes('--permission-prompt-tool')
-      ? ['--mcp-config', approveMcpConfig(approve), '--permission-prompt-tool', APPROVE_TOOL]
-      : []
-    return { bin: 'claude', args: [...extra, ...wire, ...pick, ...mode, '-p', '--resume', session, '--', text], cwd, text, permissionMode: permissionMode || '' }
+    // 許可モードは Claude だけ（codex exec resume に同等のフラグは無い）
+    return { bin: 'claude', args: [...claudeHead(env, approve, model, permissionMode), '-p', '--resume', session, '--', text], cwd, text, permissionMode: permissionMode || '' }
   }
   if (agent === 'codex') {
     // Codex は画像を受ける口がある（`-i, --image <FILE>  Optional image(s) to attach to the prompt sent after resuming`）

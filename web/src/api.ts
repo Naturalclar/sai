@@ -4,6 +4,8 @@ import type {
   AttachmentResponse,
   FeedFilters,
   FeedResponse,
+  NewSessionRequest,
+  NewSessionResponse,
   Profile,
   ProfileResponse,
   ReplyError,
@@ -126,6 +128,8 @@ export const api = {
         ...(options.queue ? { queue: true } : {}),
       } satisfies ReplyRequest,
     ),
+  /** 新しいセッションを始める（#314）。worktree は既存のセッション（from）で指し、パスは送らない */
+  startSession: (body: NewSessionRequest, days = 90) => sendJSON<NewSessionResponse>('POST', `/api/sessions/new?days=${days}`, body),
   /** 預けた返信を取り消す（#305。まだ回していないものだけ） */
   cancelQueued: (id: string, queueId: string) =>
     sendRaw<ReplyQueueResponse>('DELETE', `/api/sessions/${encodeURIComponent(id)}/queue/${encodeURIComponent(queueId)}`),

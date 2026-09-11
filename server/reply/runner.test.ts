@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { childEnv, failureOf, isAlive, ProcessRunner, replyCommand, tailFrom } from './runner.ts'
+import { childEnv, failureOf, isAlive, newSessionCommand, ProcessRunner, replyCommand, tailFrom } from './runner.ts'
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
 /** 300ms 生きて exit する子。node 自身を使う（PATH に依らず必ずある） */
@@ -139,6 +139,23 @@ test('replyCommand: Claude は付けた許可モードを permissionMode に持�
   assert.equal(replyCommand('claude', 'S', 'hi', '/w', {})!.permissionMode, '', 'フラグを付けていない = CLI の既定')
   assert.equal(replyCommand('codex', 'S', 'hi', '/w', {}, undefined, undefined, 'bypassPermissions')!.permissionMode, undefined, 'Codex に渡す先は無い')
   assert.equal(replyCommand('opencode', 'S', 'hi', '/w', {})!.permissionMode, undefined)
+})
+
+test('newSessionCommand: 前半は返信と同じ（SAI_CLAUDE_ARGS が先頭・許可の配線・モデルと許可モードが後勝ち）で、--resume の代わりに --session-id（#314）', () => {
+  const env = { SAI_CLAUDE_ARGS: '--allowedTools "Bash(gh *)" --model haiku' }
+  const via = { url: 'http://127.0.0.1:8787', entity: 'U@r' }
+  const started = newSessionCommand('U', '-v で始まる本文', '/w', env, via, 'opus', 'acceptEdits')
+  const resumed = replyCommand('claude', 'U', '-v で始まる本文', '/w', env, via, 'opus', 'acceptEdits')!
+  const tail = ['-p', '--session-id', 'U', '--', '-v で始まる本文']
+  assert.deepEqual(started.args.slice(-tail.length), tail, '本文の前に -- を置く（- で始まる本文をフラグにしない）')
+  assert.deepEqual(started.args.slice(0, -tail.length), resumed.args.slice(0, -5), '前半は返信と同じ組み立て')
+  assert.deepEqual(started.args.slice(0, 3), ['--allowedTools', 'Bash(gh *)', '--model'], '運用者の引数が先頭')
+  assert.equal(started.args.indexOf('opus') > started.args.indexOf('haiku'), true, 'セッションのモデルが後ろ（後勝ち）')
+  assert.equal(started.args.includes('--resume'), false)
+  assert.equal(started.bin, 'claude')
+  assert.equal(started.cwd, '/w')
+  assert.equal(started.permissionMode, 'acceptEdits')
+  assert.equal(newSessionCommand('U', 'hi', '/w', {}).permissionMode, '', 'フラグを付けていない = CLI の既定')
 })
 
 test('ProcessRunner は起動したときの許可モードを snapshot と replying.json に載せ、引き取っても残す（#272）', async () => {

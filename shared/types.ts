@@ -800,6 +800,32 @@ export interface ReplyResponse {
   cwd: string
 }
 
+/**
+ * POST /api/sessions/new。SAI の画面から新しいセッションを始める（#314。まず Claude だけ）。
+ * **作業ディレクトリは受け取らない**: `from`（既存のセッションのエンティティID）の `cwd` をサーバが使う
+ * （返信と同じく、ブラウザから任意の場所でコマンドを走らせない）。`cwd` を送っても見ない
+ */
+export interface NewSessionRequest {
+  /** どの worktree で始めるか。そこで記録されたことのあるセッションの ID */
+  from: string
+  text: string
+  /** 返信のモデル（省略・空は CLI の既定）。検査して新しいセッションのメタに書く */
+  model?: string
+  /** 返信の許可モード（`REPLY_MODES` のどれか。省略・空は CLI の既定）。検査して新しいセッションのメタに書く */
+  permission_mode?: string
+}
+
+export interface NewSessionResponse {
+  accepted: true
+  /** 新しいセッションのエンティティID（`<uuid>@<repo>`）。最初の行が届けば一覧に出る */
+  id: string
+  agent: Agent
+  /** CLI に渡した `--session-id` */
+  session: string
+  cwd: string
+  via: 'process'
+}
+
 /** 一言コメントの性格。'none' は性格なし。表と口調は shared/persona.ts */
 export type PersonaId =
   | 'none'

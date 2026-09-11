@@ -16,10 +16,12 @@ interface Props {
   setFilters: (next: Partial<SessionFilters>) => void
   /** サイドバーで選ばれている項目（固定の「フィード」「要対応」もここに入る） */
   active: NavTarget
+  /** 新しいセッションの画面（`#/new`。#314）を開いている。キーボードの移動先ではないので active とは別に持つ */
+  creating?: boolean
 }
 
 /** 左サイドバー。絞り込み、固定の「フィード」、その下にセッション一覧（新しい順） */
-export function SessionList({ list, filters, setFilters, active }: Props) {
+export function SessionList({ list, filters, setFilters, active, creating = false }: Props) {
   // キーボードで固定項目に移ったとき、サイドバーの一番上まで見えるようにする（SessionItem と同じ扱い）
   const pinnedRef = useRef<HTMLAnchorElement>(null)
   const pinned = active.kind === 'feed' || active.kind === 'todo'
@@ -77,7 +79,7 @@ export function SessionList({ list, filters, setFilters, active }: Props) {
       </div>
       {error && <div className="side-error">取得失敗: {error}</div>}
       <nav className="channels" onPointerDownCapture={onPointerDownCapture}>
-        <a ref={pinnedRef} className={`item feed${active.kind === 'feed' ? ' active' : ''}`} href="#/feed">
+        <a ref={pinnedRef} className={`item feed${active.kind === 'feed' && !creating ? ' active' : ''}`} href="#/feed">
           <span className="t">フィード</span>
           <span className="last">{filters.repo ? `#${filters.repo}` : '全セッション'}を時系列に</span>
         </a>
@@ -85,6 +87,11 @@ export function SessionList({ list, filters, setFilters, active }: Props) {
         <a className={`item todo${active.kind === 'todo' ? ' active' : ''}`} href="#/todo">
           <span className="t">要対応{todo > 0 && <span className="n">{todo}</span>}</span>
           <span className="last">{todo > 0 ? 'あなたを待っています' : '待っているものはありません'}</span>
+        </a>
+        {/* 新しいセッション（#314）。worktree は記録にあるものから選ぶ */}
+        <a className={`item new${creating ? ' active' : ''}`} href="#/new">
+          <span className="t">＋ 新しいセッション</span>
+          <span className="last">記録にある worktree で Claude を始める</span>
         </a>
         {archived && <div className="head">アーカイブ済み（薄く出る。開いて「戻す」か、新しい行が届けば自動で戻る）</div>}
         {sessions.map((s) => (

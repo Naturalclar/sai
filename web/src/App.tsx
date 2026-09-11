@@ -11,6 +11,7 @@ import { useNarrow } from './useNarrow'
 import { nextDiff, visibleDiff, type DiffOrigin, type OpenDiff } from './feedDiff.ts'
 import { FeedView } from './FeedView'
 import { TodoView } from './TodoView'
+import { NewSessionView } from './NewSessionView'
 import { hm } from './format'
 import { MenuMark } from './MenuMark'
 import { GitHubMark } from './GitHubMark'
@@ -165,7 +166,7 @@ export function App() {
       }
       if (action === 'feed') {
         const name = parseRoute(location.hash).name
-        if (name !== 'session' && name !== 'todo') return
+        if (name !== 'session' && name !== 'todo' && name !== 'new') return
         e.preventDefault()
         location.hash = '#/feed'
         return
@@ -263,11 +264,13 @@ export function App() {
         <aside className="sidebar">
           {/* 幅を固定した箱に入れる。開閉の遷移中に列だけが縮み、中身は折り返さない */}
           <div className="side-inner">
-            <SessionList list={list} filters={filters} setFilters={setFilters} active={active} />
+            <SessionList list={list} filters={filters} setFilters={setFilters} active={active} creating={route.name === 'new'} />
           </div>
         </aside>
         <div className="pane">
-          {route.name === 'todo' ? (
+          {route.name === 'new' ? (
+            <NewSessionView replying={list.data?.replying} now={list.updatedAt?.getTime() ?? 0} onOpenSidebar={openSidebar} />
+          ) : route.name === 'todo' ? (
             <TodoView list={list} onStatus={onStatus} onOpenSidebar={openSidebar} onLeaveToSidebar={focusSidebar} linear={linear} settings={settings} />
           ) : route.name === 'session' ? (
             <SessionView id={route.id} focusTs={route.ts ?? ''} onStatus={onStatus} onOpenSidebar={openSidebar} onLeaveToSidebar={focusSidebar} onToggleDiff={toggleDiff} diffOpen={diffOpen !== null} linear={linear} settings={settings} />

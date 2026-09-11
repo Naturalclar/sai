@@ -564,9 +564,16 @@
   .body blockquote { border-left: 3px solid var(--line); padding-left: 10px; color: var(--muted); }
   .body hr { border: 0; border-top: 1px solid var(--line); margin: 8px 0; }
   .body a { text-decoration: underline; text-underline-offset: 2px; }
-  /* 手元のファイルの画像への参照（#321）。配る口がまだ無いので、画像の印と名前だけ（パスは title）。本文と一言の両方で使う */
+  /* 手元のファイルの画像への参照（#321）。サーバが配ればサムネイル + ダウンロード（.md-img）。
+     配る口が無い（一言の中・別のマシン）か読めなければ、画像の印と名前だけ（.md-image。パスは title） */
   .md-image { display: inline-flex; align-items: center; gap: 4px; padding: 0 6px; border-radius: 4px; background: var(--chip); color: var(--ink); font-size: 0.95em; vertical-align: baseline; overflow-wrap: anywhere; }
   .md-image svg { flex: none; width: 13px; height: 13px; color: var(--muted); }
+  .md-img { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 2px; margin: 4px 0; vertical-align: top; max-width: 100%; white-space: normal; }
+  .md-img img { display: block; max-width: min(320px, 100%); max-height: 320px; border-radius: 8px; border: 1px solid var(--line); background: var(--chip); }
+  .md-img-dl { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--accent); overflow-wrap: anywhere; }
+  .body a.md-img-dl { text-decoration: none; }
+  .md-img-dl svg { flex: none; width: 13px; height: 13px; }
+  .msg .md-images { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
   .msg .body.clamped { max-height: 9.5em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent); }
   .msg .more { font-size: 12px; color: var(--accent); cursor: pointer; background: none; border: 0; padding: 0; font-family: inherit; }
   .msg .empty-text { color: var(--muted); font-style: italic; }

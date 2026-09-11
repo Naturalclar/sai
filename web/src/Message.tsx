@@ -8,6 +8,8 @@ import { useReveal } from './useReveal'
 import { AttachedImages } from './AttachedImages'
 import { splitAttachments } from '../../shared/attachments.ts'
 import { DiffButton, type DiffButtonProps } from './DiffButton'
+import { SourceImages } from './SourceImages'
+import { ImageSourceContext } from './imageContext'
 
 // 折りたたむかは描画前の生の長さで見る（コードブロック1つで8行を超えても折りたたむ。今まで通り）
 const isLong = (text: string) => text.length > 600 || text.split('\n').length > 8
@@ -78,11 +80,14 @@ export function Message({ ts, text: raw, markdown, waiting, resolved, thinking, 
           {/* 一言の中の URL・#123・PGR-123 はリンクにする（shared/refs.ts）。HTML 文字列は作らない */}
           {/* source に元の本文を渡すと、そこに無い番号はリンクにならない（#268。一言は LLM が書くので、
               本文に無い番号を書くことがある。押すと無関係の issue に飛ぶ） */}
-          <span className="line"><Inlines nodes={linkifyRefs(summary, { remote, linear, source: text })} /></span>
+          {/* 一言の中の画像は名前だけ（LLM が本文から写したもの）。画像そのものは下に元の本文から並べる（#321） */}
+          <span className="line"><ImageSourceContext value={null}><Inlines nodes={linkifyRefs(summary, { remote, linear, source: text })} /></ImageSourceContext></span>
           <button type="button" className="linkish details-toggle" onClick={() => setDetails((v) => !v)} aria-expanded={details}>
             {details ? '詳細を閉じる' : '詳細'}
           </button>
         </div>
+        {/* 詳細を開いたら本文の中に出るので、ここでは二重に出さない */}
+        {!details && <SourceImages text={text} />}
         {details && (
           <div className="details" ref={detailsRef}>
             <div className={`body${long && !open ? ' clamped' : ''}`} ref={bodyRef}>{markdown ? <Markdown text={text} /> : text}</div>

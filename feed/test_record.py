@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -424,13 +425,16 @@ class RecordTest(unittest.TestCase):
         row = read_rows(self.feed_dir)[-1]
         self.assertEqual(row["pane"], "%42")
         self.assertEqual(row["pid"], 12345)
-        # Codex の notify は codex 自身が spawn するので、親 = 本体。テストでは親はこのプロセス
+        # Codex は親から辿った codex 本体、無ければ親（#332）。テストでは親はこのプロセスで、
+        # テスト自体を Codex の端末で回していればその codex が見つかるので、同じ辿り方で期待値を作る
+        from feed.record import codex_ancestor, process_table
+
         result = run(argv=[json.dumps({"type": "agent-turn-complete", "last-assistant-message": "yo", "cwd": str(self.cwd)})], env=env)
         self.assertEqual(result.returncode, 0, result.stderr)
         row = read_rows(self.feed_dir)[-1]
         self.assertEqual(row["agent"], "codex")
         self.assertEqual(row["pane"], "%42")
-        self.assertEqual(row["pid"], os.getpid())
+        self.assertEqual(row["pid"], codex_ancestor(os.getpid(), process_table()) or os.getpid())
         # tmux の外・CLAUDE_PID が無い
         env = {k: v for k, v in self.env.items()}
         env.update(TMUX_PANE="", CLAUDE_PID="")
@@ -438,6 +442,63 @@ class RecordTest(unittest.TestCase):
         row = read_rows(self.feed_dir)[-1]
         self.assertEqual(row["pane"], "")
         self.assertEqual(row["pid"], 0)
+
+    def test_codex_ancestor_walks_past_notify_wrappers(self):
+        """notify をラッパー越しに呼ぶと親はすぐ終わるラッパーになる。辿って codex 本体を取る（#332）"""
+        from feed.record import codex_ancestor
+
+        # 手元の実際の並び: tmux → zsh → codex → SkyComputerUseClient → bash（sai-codex-notify）→ python3
+        table = {
+            600: (500, "/usr/bin/python3"),
+            500: (400, "/bin/bash"),
+            400: (300, "/Users/me/.codex/computer-use/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient"),
+            300: (200, "codex"),
+            200: (100, "-zsh"),
+            100: (1, "tmux"),
+        }
+        self.assertEqual(codex_ancestor(500, table), 300, "ラッパーを 2 段越えて本体に届く")
+        self.assertEqual(codex_ancestor(300, table), 300, "notify を直接向けていれば親がそのまま本体")
+        self.assertEqual(codex_ancestor(200, table), 0, "本体より上からは見つからない")
+        self.assertEqual(codex_ancestor(999, table), 0, "表に無い pid")
+        self.assertEqual(codex_ancestor(500, table, depth=2), 0, "段数の上限を越えては辿らない")
+        full = {20: (10, "/Users/me/.codex/packages/standalone/current/codex"), 10: (1, "zsh")}
+        self.assertEqual(codex_ancestor(20, full), 20, "フルパスでも実行ファイルの名前で見る")
+        near = {
+            30: (20, "/Users/me/.codex/packages/standalone/releases/0.153.2/bin/codex-code-mode-host"),
+            20: (10, "/Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Helpers/Codex (Service).app/Contents/MacOS/Codex (Service)"),
+            10: (1, "zsh"),
+        }
+        self.assertEqual(codex_ancestor(30, near), 0, "名前の近い別物は本体ではない")
+
+    def test_process_table_reads_this_process(self):
+        from feed.record import process_table
+
+        if shutil.which("ps") is None:
+            self.skipTest("ps が無い")
+        table = process_table()
+        self.assertEqual(table[os.getpid()][0], os.getppid(), "pid → 親の pid の形で読めている")
+
+    def test_codex_pid_is_found_through_a_notify_wrapper(self):
+        """codex → bash（ラッパー）→ python3 record.py で呼んでも、行の pid は codex 本体（#332）"""
+        bash = shutil.which("bash")
+        if bash is None or shutil.which("ps") is None:
+            self.skipTest("bash か ps が無い")
+        bindir = Path(self.tmp.name) / "bin"
+        bindir.mkdir()
+        # 実行ファイルの名前が codex のプロセスを作る（中身は bash）
+        codex = bindir / "codex"
+        codex.symlink_to(bash)
+        pidfile = Path(self.tmp.name) / "codex.pid"
+        payload = json.dumps({"type": "agent-turn-complete", "last-assistant-message": "yo", "cwd": str(self.cwd)})
+        # 後ろに `; true` を置くのは、bash が最後のコマンドを exec で置き換えて段が消えないようにするため。
+        # 中の bash には一重引用符で渡し、変数（本文の JSON）は中の bash が展開する（外で展開すると引用符が壊れる）
+        script = 'echo $$ > "$PIDFILE"; bash -c \'"$PY" "$RECORD" "$PAYLOAD"; true\'; true'
+        env = dict(os.environ, **self.env, PY=sys.executable, RECORD=str(RECORD), PAYLOAD=payload, PIDFILE=str(pidfile))
+        result = subprocess.run([str(codex), "-c", script], capture_output=True, text=True, env=env, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        row = read_rows(self.feed_dir)[-1]
+        self.assertEqual(row["agent"], "codex")
+        self.assertEqual(row["pid"], int(pidfile.read_text().strip()), "ラッパーの bash ではなく codex の pid")
 
     # -- Claude の待ち（許可待ち・質問待ち）と再開
 

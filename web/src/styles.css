@@ -733,7 +733,12 @@
      浮かせた先はチャットの一番下に重なるので、背景を塗って影を付ける（下の発言に重なっても読める）。
      重なった発言を押せなくしないよう、**枠はボタンの大きさだけ**にする（行いっぱいに広げない） */
   /* 左端はヘルプ（`.note` の padding: 0 2px）と揃える。0 にするとチャットの枠の角に重なる */
-  .reply .diff-float { position: absolute; left: 2px; bottom: calc(100% + 6px); width: max-content; max-width: 100%; z-index: 5; }
+  .reply .diff-float { position: absolute; left: 2px; bottom: calc(100% + var(--diff-float-gap)); width: max-content; max-width: 100%; z-index: 5; }
+  /* **ボタンがある間だけ、その高さぶんチャットを縮める**（#351 の続き）。浮かせたままだとチャットの一番下の発言に重なって読めない。
+     入力欄は一番下に貼り付いたままなので、上に空く分だけチャット（`.chat` は flex: 1）が縮む。
+     `:has()` でボタンの有無を見るので、差分が無いセッションでは今までどおり余白も空かない */
+  .reply { --diff-float-gap: 6px; --diff-float-height: 26px; }
+  .reply:has(.diff-float) { margin-top: calc(10px + var(--diff-float-gap) + var(--diff-float-height)); }
   .reply .diff-float button.diff-btn { background: var(--panel); box-shadow: 0 2px 8px rgba(0, 0, 0, .12); }
   .reply .diff-float button.diff-btn.on { background: var(--hover); }
   .msg .msg-diff { margin: 4px 0 0; }

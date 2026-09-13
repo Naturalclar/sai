@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_COUNT } from '../../shared/attachments.ts'
 import { sniffImageType } from '../../shared/icon.ts'
 import { api } from './api'
+import { restoresImages } from './replyRestore.ts'
 
 /** 入力欄に付けた画像 1 枚 */
 export interface Attached {
@@ -55,10 +56,18 @@ export function useAttachments(id: string | undefined, initial: readonly Attache
   }
 
   const remove = (path: string) => setItems((list) => list.filter((x) => x.path !== path))
+  /**
+   * 送れなかったぶんを戻す（#350）。サーバには置いたままなので預け直さない（パスはそのまま使える）。
+   * 失敗のあとに別の画像を足していれば触らない
+   */
+  const restore = (kept: readonly Attached[]) => {
+    if (kept.length === 0) return
+    setItems((list) => (restoresImages(list.length) ? [...kept] : list))
+  }
   const clear = () => {
     setItems([])
     setError('')
   }
 
-  return { items, busy, error, add, remove, clear, paths: items.map((x) => x.path) }
+  return { items, busy, error, add, remove, restore, clear, paths: items.map((x) => x.path) }
 }

@@ -171,7 +171,7 @@ export function Chat({ rows, showChannel, selfHost = '', sessions = NO_SESSIONS,
                         <a className="ch" href={`#/s/${encodeURIComponent(id)}`} title={g.session}>#{g.repo}</a>
                       )}
                       {showChannel && isRemoteHost(g.host, selfHost) && <HostTag host={g.host} />}
-                      {g.branch && <span className="branch">{g.branch}</span>}
+                      {g.branch && <code className="branch" title={g.branch}>{g.branch}</code>}
                       <span className="time">{hm(g.firstTs)}</span>
                     </div>
                     {g.items.map((u) => {

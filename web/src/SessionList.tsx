@@ -7,7 +7,7 @@ import { DaysSelect } from './DaysSelect'
 import { FacetSelect } from './FacetSelect'
 import { SessionItem } from './SessionItem'
 import type { NavTarget } from './sessionNav'
-import { todoItems } from './todoItems'
+import { todoItems } from '../../shared/todoItems.ts'
 
 interface Props {
   /** 一覧の取得結果。ポーリングは App が持つ（フィードの @ の候補にも使う） */

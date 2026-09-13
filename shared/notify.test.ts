@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { appeared, notifyKey, notifyPlan, titleWith } from './notify.ts'
 import type { TodoItem } from './todoItems.ts'
-import type { SessionSummary } from '../../shared/types.ts'
+import type { SessionSummary } from './types.ts'
 
 function item(over: Partial<TodoItem> = {}): TodoItem {
   return {

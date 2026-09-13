@@ -381,7 +381,7 @@ export interface Replying {
    * **この 2 つは「人を待っているか」の分かり方が違う。** 別プロセスの返信は許可も質問も
    * `--permission-prompt-tool` を通るので、答え待ちがあれば必ず `approvals` に載る（載っていなければ
    * 待っていない）。端末に打ち込んだ返信は SAI に口が無いので、行の `waiting` しか手がかりが無い。
-   * 「要対応」（`web/src/todoItems.ts`）がこの違いで出し分ける
+   * 「要対応」（`shared/todoItems.ts`）がこの違いで出し分ける
    */
   via?: 'terminal'
   /**

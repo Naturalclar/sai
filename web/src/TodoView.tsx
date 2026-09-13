@@ -7,7 +7,7 @@ import { ApprovalBubble } from './ApprovalBubble'
 import { WaitingTag } from './WaitingTag'
 import { BackLink } from './BackLink'
 import { elapsedLabel } from './format'
-import { todoItems } from './todoItems'
+import { todoItems } from '../../shared/todoItems.ts'
 import type { PaneProps } from './App'
 
 interface Props extends PaneProps {

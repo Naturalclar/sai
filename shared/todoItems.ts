@@ -1,6 +1,6 @@
 // 「要対応」（#224）に並べるものを組み立てる。DOM に依存しないので todoItems.test.ts を node:test で回す。
-import { replyBlockedReason } from '../../shared/reply.ts'
-import type { Approval, ApprovalMap, ReplyingMap, SessionSummary } from '../../shared/types.ts'
+import { replyBlockedReason } from './reply.ts'
+import type { Approval, ApprovalMap, ReplyingMap, SessionSummary } from './types.ts'
 
 /**
  * - `answer`: エージェントが答えを待っていて、SAI がその口を持っている。**この画面から答えられる**

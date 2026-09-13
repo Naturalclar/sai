@@ -13,7 +13,9 @@ import { TargetLabel } from './TargetLabel'
 import { ReplyPermissionPicker, type ReplyPermissionProps } from './ReplyPermissionPicker'
 import { leavesToSidebar } from './replyFocus'
 import { DiffButton, type DiffButtonProps } from './DiffButton'
-import { acceptsSuggestion, suggestFrom } from './replySuggest'
+import { acceptsSuggestion, suggestFrom, suggestionLabel } from './replySuggest'
+import { SuggestionChip } from './SuggestionChip'
+import { useMediaQuery } from './hooks'
 import { PhotoMark } from './PhotoMark'
 import { ATTACHMENT_MAX_COUNT } from '../../shared/attachments.ts'
 import { NOT_IN_HISTORY, canGoBack, canGoForward, stepHistory } from './replyHistory'
@@ -348,6 +350,13 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, now = 0,
    */
   const suggestion = imeOn || open ? '' : suggestFrom(history, text)
 
+  /**
+   * タッチ端末（矢印キーの無いソフトキーボード）では `→` を押せないので、続きはボタンで受け取る（#349）。
+   * 出すのはタッチ端末のときだけで、キーボードの `→` は今までどおり
+   */
+  const touch = useMediaQuery('(hover: none) and (pointer: coarse)')
+  const suggestLabel = touch ? suggestionLabel(suggestion) : ''
+
   /** 続きを本文に入れてカーソルを末尾へ */
   const acceptSuggestion = () => {
     const at = text.length + suggestion.length
@@ -469,6 +478,8 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, now = 0,
       </div>
       <AttachmentStrip items={attach.items} onRemove={attach.remove} disabled={attach.busy} />
       {attach.error && <div className="note err">{attach.error}</div>}
+      {/* 打ちかけの続きをタップで受け取る（#349）。入力欄のすぐ上に置くので、ソフトキーボードが出ていても隠れない */}
+      {suggestLabel && <SuggestionChip label={suggestLabel} onAccept={acceptSuggestion} />}
       <div className="row">
         {attachId && (
           <>

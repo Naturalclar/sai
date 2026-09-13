@@ -11,11 +11,14 @@ export function digestKey(row: { session?: string; repo?: string; ts: string }):
   return `${entityId(row.session ?? '', row.repo ?? '', row.ts)}|${row.ts}`
 }
 
-export type DigestFeedbackReason = 'meaning' | 'wrong' | 'long' | 'prefix' | 'tone' | 'other'
+export type DigestFeedbackReason = 'meaning' | 'why' | 'next' | 'wrong' | 'long' | 'prefix' | 'tone' | 'other'
 
 /** 画面のメニューの並び。文言は日本語（UI 文言の方針どおり） */
 export const DIGEST_FEEDBACK_REASONS: readonly { id: DigestFeedbackReason; label: string }[] = [
   { id: 'meaning', label: '意味が変わった' },
+  // 話の筋が落ちた（#359）。溜まったものが、直しが効いたかの物差しになる
+  { id: 'why', label: 'なぜそうしたか分からない' },
+  { id: 'next', label: '次にすることが分からない' },
   { id: 'wrong', label: '事実が違う' },
   { id: 'long', label: '長い・読みにくい' },
   { id: 'prefix', label: '前置きや引用符が付いた' },

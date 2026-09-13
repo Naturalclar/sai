@@ -38,7 +38,8 @@ export function UsagePanel({ usage, now }: { usage: UsageResponse; now: number }
           )}
         </section>
       )}
-      {!usage.claude?.primary && (
+      {/* 割合が 1 つも取れないときだけ案内する（#347。週だけ取れている人に「設定すると出ます」は嘘になる） */}
+      {!usage.claude?.primary && !usage.claude?.secondary && (
         <p className="usage-note">
           Claude の使用率は、ステータスライン（<code>feed/statusline.py</code>）を設定すると出ます。API は叩きません。
         </p>

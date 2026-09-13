@@ -68,6 +68,8 @@
   header .usage-chip.high b { color: var(--claude); }
   header .usage-chip .usage-part { display: inline-flex; align-items: center; gap: 4px; }
   header .usage-chip .usage-part.hit { color: var(--claude); font-weight: 700; }
+  /* 週の枠を出しているときの印（#347。5 時間と混ざって見えないように。狭い画面でも落とさない） */
+  header .usage-chip .usage-window { font-size: 11px; color: var(--muted); }
   header .usage-chip .dot { width: 8px; height: 8px; }
   .usage-panel { position: absolute; top: calc(100% + 6px); right: 0; width: 16em; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, .18); padding: 10px 12px; z-index: 15; font-size: 12px; }
   .usage-panel section + section { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }

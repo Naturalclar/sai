@@ -1,14 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { limitKindLabel, resetLabel, usageLevel, windowLabel } from '../../shared/usage.ts'
+import { limitKindLabel, resetLabel, windowLabel } from '../../shared/usage.ts'
 import type { UsageWindow } from './api'
 import { UsagePanel } from './UsagePanel'
+import { chipsLevel, usageChips } from './usageChips'
 import { useUsage } from './useUsage'
 
-/** 色の強さの順。複数の枠のうち一番きついものを採る */
-const RANK = { ok: 0, warn: 1, high: 2 } as const
-
 /**
- * ヘッダの使用量（#216 / #250）。どちらのエージェントも 5 時間の枠の割合を出す。
+ * ヘッダの使用量（#216 / #250）。5 時間の枠の割合を出し、**Claude は 5 時間が無ければ週に落とす**（#347）。
  * Claude の割合はステータスラインを設定している人だけ取れるので、無ければ「上限中」のときだけ出す。
  * 何も取れなければ何も出さない（使っていない人のヘッダに「不明」を並べない）。
  * 押すと詳細のパネルが開き、そのときに取り直す。Esc と外側クリックで閉じる
@@ -38,10 +36,9 @@ export function UsageChip() {
 
   const codex = usage.codex
   const claude = usage.claude
-  // 色は「一番きつい枠」に合わせる（片方が 95% ならヘッダは赤くする）
-  const level = [codex?.primary.used_percent, claude?.primary?.used_percent]
-    .filter((p): p is number => typeof p === 'number')
-    .reduce<'ok' | 'warn' | 'high'>((worst, p) => (RANK[usageLevel(p)] > RANK[worst] ? usageLevel(p) : worst), 'ok')
+  // 何をどの順で出すか（Claude が先、5 時間が無ければ週）と色は usageChips.ts に 1 つだけ置く（#347）
+  const chips = usageChips(usage)
+  const level = chipsLevel(chips)
   const line = (name: string, w: UsageWindow) =>
     `${name} ${Math.round(w.used_percent)}%（${windowLabel(w.window_minutes)}）${w.resets_at ? ` · ${resetLabel(w.resets_at, at)}` : ''}`
   const title = [
@@ -62,25 +59,15 @@ export function UsageChip() {
   return (
     <div className="usage" ref={ref}>
       <button type="button" className={`usage-chip ${level}`} onClick={toggle} aria-expanded={open} aria-label="使用量" title={title}>
-        {/* 狭い画面ではエージェント名を落として色の点だけにする（ヘッダの 1 行に収める） */}
-        {codex && (
-          <span className="usage-part">
-            <span className="dot codex" />
-            <span className="usage-name">Codex</span> <b>{Math.round(codex.primary.used_percent)}%</b>
+        {/* 狭い画面ではエージェント名を落として色の点だけにする（ヘッダの 1 行に収める）。週の印は狭くても残す */}
+        {chips.map((c) => (
+          <span key={c.agent} className={`usage-part${c.limited ? ' hit' : ''}`}>
+            <span className={`dot ${c.agent}`} />
+            <span className="usage-name">{c.name}</span>{' '}
+            {c.percent === null ? '上限中' : <b>{Math.round(c.percent)}%</b>}
+            {c.week && <span className="usage-window">週</span>}
           </span>
-        )}
-        {claude?.primary && (
-          <span className={`usage-part${claude.limited ? ' hit' : ''}`}>
-            <span className="dot claude" />
-            <span className="usage-name">Claude</span> <b>{Math.round(claude.primary.used_percent)}%</b>
-          </span>
-        )}
-        {claude && !claude.primary && claude.limited && (
-          <span className="usage-part hit">
-            <span className="dot claude" />
-            <span className="usage-name">Claude</span> 上限中
-          </span>
-        )}
+        ))}
       </button>
       {open && <UsagePanel usage={usage} now={at} />}
     </div>

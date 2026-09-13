@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import type { Approval, ApprovalMap, ReplyingMap, SessionSummary } from '../../shared/types.ts'
+import type { Approval, ApprovalMap, ReplyingMap, SessionSummary } from './types.ts'
 import { todoItems } from './todoItems.ts'
 
 /** このサーバが動いているマシン（#114）。行の host が違えば「別のマシン」 */

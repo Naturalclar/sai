@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocalState } from './hooks'
-import { appeared, notifyKey, notifyPlan } from './notify.ts'
-import type { TodoItem } from './todoItems.ts'
+import { appeared, notifyKey, notifyPlan } from '../../shared/notify.ts'
+import type { TodoItem } from '../../shared/todoItems.ts'
 
 /** 通知を出せるか。`Notification` が無い（古い環境、保護されていない文脈）なら unsupported */
 export type NotifyState = 'unsupported' | 'default' | 'granted' | 'denied'

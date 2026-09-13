@@ -12,6 +12,9 @@ import { dirname } from 'node:path'
 import { entityId } from '../../shared/entity.ts'
 import { eventKind } from '../../shared/events.ts'
 import { digestPrompt } from '../../shared/persona.ts'
+import { digestIssues } from '../../shared/digestCheck.ts'
+import { digestKey } from '../../shared/digestFeedback.ts'
+import type { DigestIssueCode } from '../../shared/digestCheck.ts'
 import { childEnv } from '../reply/runner.ts'
 import type { DigestProvider, FeedRow, PersonaId } from '../../shared/types.ts'
 
@@ -37,12 +40,14 @@ export interface DigestEntry {
   model: string
   /** 作った時刻 */
   ts: string
+  /** 1 回目が機械の判定に引っかかって作り直した（#346）。引っかからなければ付けない */
+  retried?: true
+  /** 作り直しても残った点（`digestIssues()` の code）。無ければ付けない */
+  issues?: DigestIssueCode[]
 }
 
-/** 行のキー。行は (エンティティ, ts) で一意 */
-export function digestKey(row: Pick<FeedRow, 'session' | 'repo' | 'ts'>): string {
-  return `${entityId(row.session, row.repo, row.ts)}|${row.ts}`
-}
+/** 行のキー。行は (エンティティ, ts) で一意。**画面と同じものを使う**（shared/digestFeedback.ts。#346） */
+export { digestKey }
 
 /** 一言を作る対象か。ターン完了で本文がある行だけ（待ちの行・入力の行・本文なしは作らない） */
 export function digestable(row: FeedRow): boolean {
@@ -428,7 +433,35 @@ export class Digester {
         }
         try {
           const summary = await summarizer.summarize(digestPrompt(persona, row.text))
-          await this.store.append({ key, persona, summary, model, ts: new Date().toISOString() })
+          // 出来上がりを機械で確かめ、駄目なら **1 回だけ** 作り直す（#346。LLM は呼ばない判定）。
+          // 2 回目でも残ったら、そのまま出して digest.log に残す（一言が消えるより、残って数えられる方がよい）
+          const first = digestIssues(row.text, summary)
+          let best = summary
+          let issues = first
+          if (first.length > 0) {
+            try {
+              const again = await summarizer.summarize(digestPrompt(persona, row.text, { summary, issues: first }))
+              const left = digestIssues(row.text, again)
+              // 減ったときだけ採る（作り直しで別の問題が増えることがある）
+              if (left.length < first.length) {
+                best = again
+                issues = left
+              }
+            } catch (err) {
+              await this.log(`${new Date().toISOString()} ${key} 作り直しに失敗: ${err instanceof Error ? err.message : String(err)}`)
+            }
+            const before = first.map((i) => i.code).join(',')
+            await this.log(`${new Date().toISOString()} ${key} 作り直し ${before} → ${issues.map((i) => i.code).join(',') || 'ok'}`)
+          }
+          await this.store.append({
+            key,
+            persona,
+            summary: best,
+            model,
+            ts: new Date().toISOString(),
+            ...(first.length > 0 ? { retried: true } : {}),
+            ...(issues.length > 0 ? { issues: issues.map((i) => i.code) } : {}),
+          })
         } catch (err) {
           await this.log(`${new Date().toISOString()} ${key} ${err instanceof Error ? err.message : String(err)}`)
         } finally {

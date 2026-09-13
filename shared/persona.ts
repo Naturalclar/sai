@@ -2,6 +2,8 @@
 // MBTI の 16 タイプは口調の「型」として借りるだけで、診断や性格分析の話にはしない。
 // サーバ（server/digest/digest.ts）が作るときと、画面（ヘッダの select）が並べるときに同じ表を見る。
 import type { PersonaId } from './types.ts'
+// 型だけ（実体を import すると digestCheck.ts → persona.ts と輪になる）
+import type { DigestIssue } from './digestCheck.ts'
 
 export interface Persona {
   id: PersonaId
@@ -46,12 +48,23 @@ export function personaOf(id: PersonaId | string | undefined): Persona {
   return PERSONAS.find((p) => p.id === id) ?? PERSONAS.find((p) => p.id === DEFAULT_PERSONA)!
 }
 
+/** 作り直しの材料（#346）。`digestIssues()` が見つけた点を、そのまま LLM に伝える */
+export interface DigestRetry {
+  /** 前に作った一言 */
+  summary: string
+  issues: readonly DigestIssue[]
+}
+
 /**
  * LLM に渡すプロンプト。骨格は共通で、性格は口調の指示として最後に足す。
  * 出力は一言だけにさせる（引用符や前置きが付くと、そのまま画面に出てしまう）
  */
-export function digestPrompt(persona: PersonaId | string | undefined, text: string): string {
+export function digestPrompt(persona: PersonaId | string | undefined, text: string, retry?: DigestRetry): string {
   const p = personaOf(persona)
+  // 作り直し（#346）。1 回目の一言と、機械で見つけた直してほしい点を足す。規則は同じものをもう一度渡す
+  const fix = retry
+    ? ['', `前に作った一言: ${retry.summary}`, 'この一言には次の点がありました。直して作り直してください:', ...retry.issues.map((i) => `- ${i.hint}`)]
+    : []
   return [
     '以下はコーディングエージェントがユーザーに返した文です。これを、チャットの一言コメントに言い換えてください。',
     `- 日本語で 1〜2 文、${DIGEST_MAX_CHARS} 文字以内`,
@@ -64,8 +77,12 @@ export function digestPrompt(persona: PersonaId | string | undefined, text: stri
     '- issue / PR の番号には「何をするものか」を短く添える（例:「PR 〈番号〉作成、ログイン失敗時のリトライを追加」）。本文から分からなければ番号だけでよい。番号が複数あるときは主なものだけでよい',
     '- **本文に出てこない番号は書かない。** 番号が本文に無ければ、番号に触れずに何をしたかだけ書く',
     '- 質問や指示（「〜していい？」「〜を選んで」）が含まれていれば、それを優先して残す',
+    // 実データで一番多かった意味の変わり方（#346）。本文の「『マージして』と言ってください」が
+    // 一言で「マージして？」になると、人が言う言葉がエージェントからの問いかけに化ける
+    '- **人に言ってほしい言葉として引用された依頼（「〜して」と言ってください）は、引用のまま残す。** 「〜して？」のような問いかけに変えない',
     '- 出力は一言だけ。引用符、「一言:」などの前置き、説明は付けない',
     `- 口調: ${p.tone}`,
+    ...fix,
     '',
     '---',
     text,

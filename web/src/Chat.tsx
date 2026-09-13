@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 import { entityId } from '../../shared/entity.ts'
 import { isRemoteHost } from '../../shared/host.ts'
 import { sessionImageUrl } from '../../shared/images.ts'
+import { digestKey } from '../../shared/digestFeedback.ts'
 import { ImageSourceContext } from './imageContext'
 import type { FeedRow, Profile, SessionSummary } from './api'
 import { hm } from './format'
@@ -182,7 +183,8 @@ export function Chat({ rows, showChannel, selfHost = '', sessions = NO_SESSIONS,
                         : null
                       // 本文の画像はサーバが配る（#321）。別のマシンのセッションのファイルはこちらに無いので、印と名前だけ
                       const imageUrl = u.speaker !== 'me' && !isRemoteHost(g.host, selfHost) ? (src: string) => sessionImageUrl(id, src) : null
-                      // 自分の入力は Markdown にしない（打ったままを出す）。エージェントの返答は Markdown
+                      // 自分の入力は Markdown にしない（打ったままを出す）。エージェントの返答は Markdown。
+                      // 一言があるバブルには「変？」を出す（#346）。鍵はサーバ（作る側）と同じ関数で作る
                       return (
                       <ImageSourceContext key={u.key} value={imageUrl}>
                       <Message
@@ -196,6 +198,7 @@ export function Chat({ rows, showChannel, selfHost = '', sessions = NO_SESSIONS,
                         thinking={showThinking ? u.thinking : undefined}
                         thinkingOpen={thinkingOpen}
                         summary={u.summary}
+                        digestKey={u.summary ? digestKey(u.row) : undefined}
                         model={u.model}
                         remote={u.row.remote}
                         linear={linear}

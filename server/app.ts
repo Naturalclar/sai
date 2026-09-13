@@ -65,6 +65,9 @@ import { clearSettled, settledKey, WaitingSettle } from './reply/waitingSettle.t
 import type { WaitingSettleSource } from './reply/waitingSettle.ts'
 import type { CodexDialogSource } from './reply/codexDialogs.ts'
 import { DIGEST_FILE, DigestStore, createDigester } from './digest/digest.ts'
+import { FEEDBACK_FILE, FeedbackStore } from './digest/feedback.ts'
+import { DIGEST_NOTE_MAX, isDigestFeedbackReason } from '../shared/digestFeedback.ts'
+import type { DigestFeedbackRequest, DigestFeedbackResponse } from '../shared/digestFeedback.ts'
 import { isDigestModel, isDigestProvider } from '../shared/digestSettings.ts'
 import type { Digester } from './digest/digest.ts'
 import { META_FILE, MetaStore } from './meta/meta.ts'
@@ -138,6 +141,8 @@ const ANSWER_SUFFIX = '/answer'
 /** 承認 body の上限。ツールの入力そのもの（Edit の new_string など）が入るので返信より大きめ */
 export const MAX_APPROVAL_BYTES = 1024 * 1024
 const SETTINGS_PATH = '/api/settings'
+/** 一言が変だと言われたのを残す口（#346）。同一オリジンのみ */
+const DIGEST_FEEDBACK_PATH = '/api/digest/feedback'
 const USAGE_PATH = '/api/usage'
 const SEARCH_PATH = '/api/search'
 /** 設定 body の上限 */
@@ -454,6 +459,8 @@ export function createApp(
   // 既定は settings.json の入切・口・モデルで組む（#288。前は環境変数）。一言の性格は、セッションのメタに persona があればそれ、無ければ全体の既定
   const digest: Digester = digester ?? createDigester(store.directory, new DigestStore(join(store.directory, DIGEST_FILE)), { settings: settingsStore, meta: metaStore })
   const digestReady = (digester ? Promise.resolve() : settingsStore.get().then((s) => digest.configure(s))).then(() => digest.store.load())
+  // 一言への「これは変」（#346）。溜めるだけで、読むのは人と手で走らせる物差しのスクリプト
+  const feedback = new FeedbackStore(join(store.directory, FEEDBACK_FILE))
 
   /** 一言の対象を探して列に積む。3 秒ごとの応答のついでに呼ぶので軽い（無効なら何もしない） */
   const scanDigest = async (days: number): Promise<void> => {
@@ -526,6 +533,42 @@ export function createApp(
       model: digest.model,
     }
   }
+  /**
+   * POST /api/digest/feedback（#346）。一言が変だと言われたら、そのときの一言・口・性格と一緒に
+   * `~/.agent-feed/digest-feedback.jsonl` に残す。溜めたものは規則を直すときの材料と回帰テストの素材にする。
+   * **一言そのものは鍵から引く**（画面から来た文字列は信じない）。**同一オリジンのみ**（画面から叩くので、返信と同じ）
+   */
+  const postDigestFeedback = async (req: IncomingMessage, res: ServerResponse) => {
+    if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
+    let body: unknown
+    try {
+      body = await readJson(req, MAX_SETTINGS_BYTES)
+    } catch (err) {
+      return error(res, 400, err instanceof Error ? err.message : 'bad body')
+    }
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return error(res, 400, 'body はオブジェクトで送ってください')
+    const b = body as Partial<DigestFeedbackRequest>
+    if (typeof b.key !== 'string' || !b.key) return error(res, 400, 'key（一言の鍵）を送ってください')
+    if (!isDigestFeedbackReason(b.reason)) return error(res, 400, 'reason が不明です（shared/digestFeedback.ts にある id を送ってください）')
+    const note = typeof b.note === 'string' ? b.note.trim() : ''
+    if ([...note].length > DIGEST_NOTE_MAX) return error(res, 400, `note は ${DIGEST_NOTE_MAX} 文字までです`)
+    await digestReady
+    const entry = digest.store.get(b.key)
+    if (!entry) return error(res, 404, 'その一言が見つかりません（作り直されたか、まだ届いていません）')
+    await feedback.load()
+    await feedback.append({
+      key: b.key,
+      summary: entry.summary,
+      model: entry.model,
+      persona: entry.persona,
+      reason: b.reason,
+      ...(note ? { note } : {}),
+      ts: new Date().toISOString(),
+    })
+    const payload: DigestFeedbackResponse = { ok: true, count: feedback.size }
+    return json(res, payload)
+  }
+
   const putSettings = async (req: IncomingMessage, res: ServerResponse) => {
     if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
     let body: unknown
@@ -1635,6 +1678,7 @@ export function createApp(
     const isProfile = path === PROFILE_PATH
     const isProfileIcon = path === PROFILE_ICON_PATH
     const isSettings = path === SETTINGS_PATH
+    const isDigestFeedback = path === DIGEST_FEEDBACK_PATH
     const isNewSession = path === NEW_SESSION_PATH
     const method = req.method ?? 'GET'
     // tailnet から MCP で呼ぶ口（#312）。POST / OPTIONS（CORS）を受けるので、下の書き込みの判定より先に分ける
@@ -1650,7 +1694,7 @@ export function createApp(
     // 書き込みは「返信と新しいセッションは POST」「表示名は PUT」「アイコンは PUT / DELETE」「承認の預かりと答えは POST」「自分の表示名は PUT、アイコンは PUT / DELETE」
     // 「設定は PUT」「預かった返信の再開は POST、取り消しは DELETE」だけ。それ以外は GET / HEAD のみ
     const writable =
-      (method === 'POST' && (isNewSession || isReply || isAsk || isAnswer || isAttachUpload || isQueue || path === AGENT_SEND_PATH || isAgentStop)) ||
+      (method === 'POST' && (isNewSession || isReply || isAsk || isAnswer || isAttachUpload || isQueue || isDigestFeedback || path === AGENT_SEND_PATH || isAgentStop)) ||
       (method === 'DELETE' && isQueue) ||
       (method === 'PUT' && (isMeta || isProfile || isSettings)) ||
       ((method === 'PUT' || method === 'DELETE') && (isIcon || isProfileIcon))
@@ -1809,6 +1853,10 @@ export function createApp(
       if (path === '/api/health') {
         const payload: HealthResponse = { ok: true, viewer }
         return json(res, payload)
+      }
+      if (isDigestFeedback) {
+        if (method !== 'POST') return error(res, 405, 'method not allowed')
+        return await postDigestFeedback(req, res)
       }
       if (isSettings) {
         if (method === 'PUT') return await putSettings(req, res)

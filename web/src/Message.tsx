@@ -8,6 +8,7 @@ import { useReveal } from './useReveal'
 import { AttachedImages } from './AttachedImages'
 import { splitAttachments } from '../../shared/attachments.ts'
 import { DiffButton, type DiffButtonProps } from './DiffButton'
+import { DigestFeedback } from './DigestFeedback'
 import { SourceImages } from './SourceImages'
 import { ImageSourceContext } from './imageContext'
 import { QuestionPreview } from './QuestionPreview'
@@ -32,6 +33,11 @@ interface Props {
   thinkingOpen?: boolean
   /** 一言版（digest）。あればこれを本文にして、元の text は「詳細」で開く */
   summary?: string
+  /**
+   * その一言の鍵（`shared/digestFeedback.ts` の `digestKey()`）。渡されたら一言の横に「変？」を出す（#346）。
+   * 押すと理由が `~/.agent-feed/digest-feedback.jsonl` に溜まる（その場の一言は変わらない）
+   */
+  digestKey?: string
   /** 一言の中の #123 の向き先（行の remote）。無ければ番号はリンクにしない */
   remote?: string
   /** 一言の中の PGR-123 の向き先（設定の Linear の workspace）。空ならリンクにしない */
@@ -53,7 +59,7 @@ interface Props {
 }
 
 /** バブル1つ分の本文。長ければ折りたたんで「もっと見る」を付ける */
-export function Message({ ts, text: raw, markdown, waiting, questions, resolved, thinking, thinkingOpen = false, summary, model, remote, linear, found = false, utteranceKey, diff }: Props) {
+export function Message({ ts, text: raw, markdown, waiting, questions, resolved, thinking, thinkingOpen = false, summary, digestKey, model, remote, linear, found = false, utteranceKey, diff }: Props) {
   // 自分の入力に添えた画像は、パスの文字列ではなくサムネイルで出す（本文の末尾に足してある。shared/attachments.ts）
   const { body: text, urls } = markdown ? { body: raw, urls: [] as string[] } : splitAttachments(raw)
   const [open, setOpen] = useState(false)
@@ -90,6 +96,7 @@ export function Message({ ts, text: raw, markdown, waiting, questions, resolved,
           <button type="button" className="linkish details-toggle" onClick={() => setDetails((v) => !v)} aria-expanded={details}>
             {details ? '詳細を閉じる' : '詳細'}
           </button>
+          {digestKey && <DigestFeedback digestKey={digestKey} />}
         </div>
         {/* 詳細を開いたら本文の中に出るので、ここでは二重に出さない */}
         {!details && <SourceImages text={text} />}

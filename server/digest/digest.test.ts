@@ -18,7 +18,7 @@ export class FakeSummarizer implements Summarizer {
     this.prompts.push(prompt)
     for (const needle of this.failOn) if (prompt.includes(needle)) throw new Error(`fail: ${needle}`)
     const body = prompt.split('\n---\n')[1] ?? ''
-    return `一言: ${body.slice(0, 10)}`
+    return `${body.slice(0, 10)}（まとめ）`
   }
 }
 
@@ -88,17 +88,17 @@ test('Digester: 起動より前の行は作らず、あとに現れた行だけ�
     d.scan([old1, old2, n1, n2, bad, skip]) // 同じ行を二度積まない
     await d.drain()
     assert.deepEqual(fake.prompts.map((p) => p.split('\n---\n')[1]), ['失敗する行', '新しい2', '新しい1'], '新しい順に 1 回ずつ')
-    assert.equal(store.get(digestKey(n1))?.summary, '一言: 新しい1')
-    assert.equal(store.get(digestKey(n2))?.summary, '一言: 新しい2')
+    assert.equal(store.get(digestKey(n1))?.summary, '新しい1（まとめ）')
+    assert.equal(store.get(digestKey(n2))?.summary, '新しい2（まとめ）')
     assert.equal(store.get(digestKey(n1))?.persona, 'ISTJ')
     assert.equal(store.get(digestKey(bad)), undefined, '失敗した行は無いまま')
     assert.match(await readFile(join(dir, 'digest.log'), 'utf-8'), /失敗する行/)
 
     const rows = d.attach([old1, n1, bad])
     assert.equal(rows[0], old1, '無い行は同じオブジェクト')
-    assert.equal(rows[1]!.summary, '一言: 新しい1')
+    assert.equal(rows[1]!.summary, '新しい1（まとめ）')
     assert.equal(rows[2], bad)
-    assert.equal(d.summaryFor('S1@r', n1.ts), '一言: 新しい1')
+    assert.equal(d.summaryFor('S1@r', n1.ts), '新しい1（まとめ）')
     assert.equal(d.summaryFor('S1@r', ''), undefined)
 
     persona = 'ENFP'
@@ -500,4 +500,84 @@ test('personaResolver: digest_off なら null。無ければセッションの p
   assert.equal(await resolve(row(at(0), 'BOTH', { repo: 'r' })), null)
   assert.equal(await resolve(row(at(0), 'TONE', { repo: 'r' })), 'ISTJ')
   assert.equal(await resolve(row(at(0), 'NONE', { repo: 'r' })), 'ENFP', 'メタが無ければ全体の既定')
+})
+
+/** 1 回目と 2 回目で違う文を返す口（#346 の作り直しを見るため） */
+class RetrySummarizer implements Summarizer {
+  prompts: string[] = []
+  private readonly answers: string[]
+  constructor(answers: string[]) {
+    this.answers = answers
+  }
+  async summarize(prompt: string): Promise<string> {
+    this.prompts.push(prompt)
+    return this.answers[Math.min(this.prompts.length - 1, this.answers.length - 1)]!
+  }
+}
+
+const SOURCE = 'PR #284 を出しました。CI は通っています。マージはまだしていないので、よければ「マージして」と言ってください。'
+
+test('Digester: 機械の判定に引っかかったら 1 回だけ作り直す。直ったものを残す（#346）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-digest-'))
+  try {
+    const store = new DigestStore(join(dir, 'digest.jsonl'))
+    await store.load()
+    // 1 回目は引用された依頼を問いかけに変えてしまう。2 回目は引用のまま
+    const fake = new RetrySummarizer(['PR #284 出したよ、マージして？', 'PR #284 出したよ。よければ「マージして」と言ってね'])
+    const d = new Digester(store, fake, { enabled: true, model: 'qwen3:8b', since: at(0).toISOString(), persona: async () => 'ESFP', logPath: join(dir, 'digest.log') })
+    const r = row(at(1), 'S1', { repo: 'r', text: SOURCE })
+    d.scan([r])
+    await d.drain()
+
+    assert.equal(fake.prompts.length, 2, '1 回だけ作り直す')
+    assert.match(fake.prompts[1]!, /前に作った一言: PR #284 出したよ、マージして？/)
+    assert.match(fake.prompts[1]!, /引用のまま残してください/, '直してほしい点を伝える')
+    const entry = store.get(digestKey(r))
+    assert.equal(entry?.summary, 'PR #284 出したよ。よければ「マージして」と言ってね', '直ったものを残す')
+    assert.equal(entry?.retried, true)
+    assert.equal(entry?.issues, undefined, '残った点が無ければ付けない')
+    assert.match(await readFile(join(dir, 'digest.log'), 'utf-8'), /作り直し quoted_request → ok/)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('Digester: 作り直しても直らなければ 1 回目を残し、残った点を書いておく（#346）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-digest-'))
+  try {
+    const store = new DigestStore(join(dir, 'digest.jsonl'))
+    await store.load()
+    // 2 回目も問いかけのまま。しかも本文に無い番号が増えている（減っていないので 1 回目を残す）
+    const fake = new RetrySummarizer(['PR #284 出したよ、マージして？', 'PR #999 出したよ、マージして？'])
+    const d = new Digester(store, fake, { enabled: true, model: 'qwen3:8b', since: at(0).toISOString(), persona: async () => 'ESFP', logPath: join(dir, 'digest.log') })
+    const r = row(at(1), 'S1', { repo: 'r', text: SOURCE })
+    d.scan([r])
+    await d.drain()
+
+    assert.equal(fake.prompts.length, 2)
+    const entry = store.get(digestKey(r))
+    assert.equal(entry?.summary, 'PR #284 出したよ、マージして？', '減らなかったので 1 回目のまま')
+    assert.deepEqual(entry?.issues, ['quoted_request'], '残った点を書いておく（数えられるように）')
+    assert.equal(entry?.retried, true)
+    assert.match(await readFile(join(dir, 'digest.log'), 'utf-8'), /作り直し quoted_request → quoted_request/)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('Digester: 文句の無い一言は作り直さない（口を 2 回叩かない）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-digest-'))
+  try {
+    const store = new DigestStore(join(dir, 'digest.jsonl'))
+    await store.load()
+    const fake = new RetrySummarizer(['PR #284 出したよ。よければ「マージして」と言ってね'])
+    const d = new Digester(store, fake, { enabled: true, model: 'qwen3:8b', since: at(0).toISOString(), persona: async () => 'ESFP', logPath: join(dir, 'digest.log') })
+    const r = row(at(1), 'S1', { repo: 'r', text: SOURCE })
+    d.scan([r])
+    await d.drain()
+    assert.equal(fake.prompts.length, 1)
+    assert.equal(store.get(digestKey(r))?.retried, undefined)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
 })

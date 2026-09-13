@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { DEFAULT_PERSONA, PERSONAS, digestPrompt, isPersonaId, personaOf } from './persona.ts'
+import { digestIssues } from './digestCheck.ts'
 
 test('PERSONAS: 性格なし + MBTI 16 で、id は重複しない', () => {
   assert.equal(PERSONAS.length, 17)
@@ -49,4 +50,24 @@ test('digestPrompt: 指示の部分に書き写せる番号（#<数字>）が無
 
 test('digestPrompt: 「本文に無い番号は書かない」が入っている', () => {
   assert.match(digestPrompt('none', 'x'), /本文に出てこない番号は書かない/)
+})
+
+// ---- #346: 引用された依頼を守る規則と、作り直しのプロンプト
+test('digestPrompt: 引用された依頼を引用のまま残す規則が入っている（#346）', () => {
+  const p = digestPrompt('ESFP', 'よければ「マージして」と言ってください。')
+  assert.match(p, /引用された依頼/)
+  assert.match(p, /引用のまま残す/)
+  assert.match(p, /問いかけに変えない/)
+})
+
+test('digestPrompt: 作り直しは前の一言と直してほしい点を足す。本文は末尾のまま（#346）', () => {
+  const text = 'PR #284 を出しました。よければ「マージして」と言ってください。'
+  const issues = digestIssues(text, 'PR #284 出したよ、マージして？')
+  const p = digestPrompt('ESFP', text, { summary: 'PR #284 出したよ、マージして？', issues })
+  assert.match(p, /前に作った一言: PR #284 出したよ、マージして？/)
+  assert.match(p, /直して作り直してください/)
+  assert.ok(issues.every((i) => p.includes(i.hint)), '見つけた点をそのまま伝える')
+  assert.ok(p.endsWith(`---\n${text}`), '本文は末尾のまま')
+  // 作り直しでない普通のプロンプトには足さない
+  assert.doesNotMatch(digestPrompt('ESFP', text), /前に作った一言/)
 })

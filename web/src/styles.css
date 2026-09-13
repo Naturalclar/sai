@@ -597,6 +597,17 @@
   .msg .summary .line { white-space: pre-wrap; overflow-wrap: anywhere; }
   .msg .summary .details-toggle { flex: none; font-size: 11px; color: var(--muted); }
   .msg .summary .details-toggle:hover { color: var(--accent); }
+  /* 一言が変だと残す口（#346）。普段は目立たせず、開いたときだけ理由を並べる */
+  .msg .summary .digest-fb { flex: none; display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11px; color: var(--muted); }
+  .msg .summary .digest-fb > button { font-size: 11px; color: var(--muted); }
+  .msg .summary .digest-fb > button:hover { color: var(--accent); }
+  .msg .summary .digest-fb.done { color: var(--muted); font-style: italic; }
+  .msg .summary .digest-fb .panel { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .msg .summary .digest-fb .panel input { font: inherit; font-size: 11px; padding: 2px 6px; min-width: 160px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); }
+  .msg .summary .digest-fb .reasons { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+  .msg .summary .digest-fb .reasons button { font: inherit; font-size: 11px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--chip); color: var(--ink); cursor: pointer; }
+  .msg .summary .digest-fb .reasons button:hover { border-color: var(--accent); color: var(--accent); }
+  .msg .summary .digest-fb .err { color: var(--claude); }
   .msg .details { margin-top: 6px; padding: 6px 10px; border-left: 3px solid var(--line); color: var(--muted); }
   .msg .details .body { color: var(--ink); }
   /* 待ちの行（許可待ち・質問待ち）。普通のバブルと見た目を変え、解消したら薄くする */

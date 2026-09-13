@@ -99,7 +99,7 @@ class FakeSummarizer implements Summarizer {
   async summarize(prompt: string): Promise<string> {
     this.prompts.push(prompt)
     if (this.fail) throw new Error('fake failure')
-    return `一言: ${(prompt.split('\n---\n')[1] ?? '').slice(0, 8)}`
+    return `${(prompt.split('\n---\n')[1] ?? '').slice(0, 8)}（まとめ）`
   }
 }
 const summarizer = new FakeSummarizer()
@@ -1227,15 +1227,15 @@ test('digest: 起動後に増えた行に一言が付いて feed / 詳細 / 一�
 
   const feedAfter = (await (await get('/api/feed?days=3')).json()) as FeedResponse
   const d1 = feedAfter.rows.find((r) => r.session === 'D1')!
-  assert.equal(d1.summary, '一言: PR #35 を')
+  assert.equal(d1.summary, 'PR #35 を（まとめ）')
   assert.notEqual(feedAfter.rev, feedBefore.rev)
   assert.equal(feedAfter.rows.find((r) => r.session === 'S1' && r.text === 'hi')!.summary, undefined)
 
   const detail = (await (await get('/api/sessions/D1%40r')).json()) as SessionDetailResponse
-  assert.equal(detail.rows[0]!.summary, '一言: PR #35 を')
-  assert.equal(detail.session.last_summary, '一言: PR #35 を')
+  assert.equal(detail.rows[0]!.summary, 'PR #35 を（まとめ）')
+  assert.equal(detail.session.last_summary, 'PR #35 を（まとめ）')
   const list = (await (await get('/api/sessions?days=7')).json()) as SessionsResponse
-  assert.equal(list.sessions.find((s) => s.id === 'D1@r')!.last_summary, '一言: PR #35 を')
+  assert.equal(list.sessions.find((s) => s.id === 'D1@r')!.last_summary, 'PR #35 を（まとめ）')
   assert.equal(list.sessions.find((s) => s.id === 'S1@kanban')!.last_summary, undefined, '起動時にあった行しか無いセッションには付かない')
 
   // ファイルに残っている（作ったときの性格つき）
@@ -1243,7 +1243,7 @@ test('digest: 起動後に増えた行に一言が付いて feed / 詳細 / 一�
   const mine = saved.find((e) => e.key.startsWith('D1@r|'))!
   assert.ok(mine)
   assert.equal(mine.persona, 'none')
-  assert.equal(mine.summary, '一言: PR #35 を')
+  assert.equal(mine.summary, 'PR #35 を（まとめ）')
 
   // セッションに性格を付けると、そのセッションの行だけその口調で作られる（他は既定のまま）。作った一言にはその性格が残る
   const meta = await fetch(`${base}/api/sessions/D2%40r/meta`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ persona: 'ISTJ' }) })

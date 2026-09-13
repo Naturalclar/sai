@@ -35,7 +35,7 @@ const NO_ROWS: never[] = []
 const NO_REPLYING = {}
 const NO_APPROVALS: never[] = []
 
-/** 差分のペインの開閉（#211）。ボタンは入力欄の中なので、セッション画面だけが受け取る */
+/** 差分のペインの開閉（#211）。ボタンは入力欄の上に浮かせるので、セッション画面だけが受け取る（#351） */
 export interface DiffProps {
   /** そのセッションの差分を開く／閉じる。出し方（右のペイン / モーダル）は App が幅で決める */
   onToggleDiff: (id: string) => void

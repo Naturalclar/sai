@@ -80,7 +80,7 @@ interface Props {
   /** 送信ボタンの左に出すモデルの選択。渡さなければ出さない（返信先が一覧に無いフィードの候補など） */
   model?: ReplyModelProps
   /**
-   * モデルの左に出す差分のボタン（#211）。渡さなければ出さない。
+   * 入力欄の上に浮かせて出す差分のボタン（#211 / #351）。渡さなければ出さない。
    * フィードには渡さない（差分のペインは開いているセッションの分だけなので、押しても何も起きない）
    */
   diff?: DiffButtonProps
@@ -440,6 +440,13 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, now = 0,
         takeFiles(e.dataTransfer.files)
       }}
     >
+      {/* 差分のボタンは入力欄の**外に浮かせる**（#351）。行として積まないので、差分があってもなくても
+          入力欄の高さと位置が変わらない。ヘルプ（`.note`）より上で、チャットの一番下に重なる */}
+      {diff && (
+        <div className="diff-float">
+          <DiffButton {...diff} />
+        </div>
+      )}
       {mention && (
         <div className="target" title={mention.target.id}>
           {mention.onJump ? (
@@ -539,8 +546,6 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, now = 0,
           }}
         />
         </div>
-        {/* 送信ボタンの左。textarea が 1 行を占めるので、画像ボタンと並んで下の行に入る */}
-        {diff && <DiffButton {...diff} />}
         {/* key は「別のセッションに移ったら作り直す」ため。**兄弟で同じ key にしない**（React の照合が壊れて
             片方が消えずに 2 つ並ぶ。#265 の実装中に踏んだ）ので、種類ごとに前置きを付ける */}
         {model && <ReplyModelPicker key={`model-${model.id}`} {...model} />}

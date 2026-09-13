@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { acceptsSuggestion, suggestFrom } from './replySuggest.ts'
+import { acceptsSuggestion, suggestFrom, SUGGEST_LABEL_MAX, suggestionLabel } from './replySuggest.ts'
 
 const history = ['マージして', 'マージしてリリースして', 'テストを足して']
 
@@ -49,4 +49,15 @@ test('acceptsSuggestion: → 以外・修飾キー付き・IME 変換中は何�
   assert.equal(acceptsSuggestion(key({ altKey: true }), state()), false)
   assert.equal(acceptsSuggestion(key({ ctrlKey: true }), state()), false)
   assert.equal(acceptsSuggestion(key({ isComposing: true }), state()), false)
+})
+
+test('suggestionLabel: タッチ端末のボタンに出す続き。1 行にして長ければ切る（#349）', () => {
+  assert.equal(suggestionLabel('ージして'), 'ージして')
+  assert.equal(suggestionLabel(' を作って'), 'を作って', '頭の空白は落とす（ボタンの中なので字下げに見える）')
+  assert.equal(suggestionLabel('あ\nい  う'), 'あ い う', '改行と連なる空白は 1 つの空白に')
+  const long = suggestionLabel('あ'.repeat(SUGGEST_LABEL_MAX + 10))
+  assert.equal(Array.from(long).length, SUGGEST_LABEL_MAX + 1)
+  assert.ok(long.endsWith('…'))
+  assert.equal(suggestionLabel('\n  '), '', '続きが空白だけならボタンを出さない')
+  assert.equal(suggestionLabel(''), '')
 })

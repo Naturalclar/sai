@@ -45,3 +45,16 @@ export function acceptsSuggestion(e: KeyLike, state: AcceptState): boolean {
   if (e.isComposing || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return false
   return !state.menuOpen && state.suggestion !== '' && state.caret === state.length
 }
+
+/** チップに出す続きの長さ（コードポイント）。全文はゴーストで見えているので、頭だけ分かれば足りる */
+export const SUGGEST_LABEL_MAX = 24
+
+/**
+ * タッチ端末のボタン（#349）に出す続き。改行と連なる空白を 1 つの空白にして、長ければ切る。
+ * 空白だけ（続きが改行だけのとき）は空を返す = ボタンを出さない
+ */
+export function suggestionLabel(suggestion: string, max = SUGGEST_LABEL_MAX): string {
+  const line = suggestion.replace(/\s+/g, ' ').trim()
+  const chars = Array.from(line)
+  return chars.length <= max ? line : `${chars.slice(0, max).join('')}…`
+}

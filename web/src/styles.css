@@ -741,6 +741,13 @@
     .linkish, .msg .more, .msg .think-toggle, .reply .target .clear, .reply .target .to { padding: 8px 6px; margin: -8px -6px; }
   }
   .reply .target .clear:hover { color: var(--ink); }
+  /* 打ちかけの続きをタップで受け取るボタン（#349）。タッチ端末のときだけ出す（ソフトキーボードに矢印キーが無い）。
+     入力欄のすぐ上に置くので、キーボードが出ていても隠れない */
+  .reply .suggest { display: flex; min-width: 0; margin-bottom: 4px; }
+  .reply .suggest .accept { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; min-height: 36px; padding: 6px 12px; background: var(--chip); color: var(--muted); border: 1px solid var(--line); border-radius: 999px; font: inherit; font-size: 13px; cursor: pointer; }
+  .reply .suggest .accept .mark { color: var(--accent); font-weight: 700; }
+  .reply .suggest .accept .rest { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .reply .suggest .accept:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   /* @ の候補。入力欄の上に開く（狭い画面でも隠れない） */
   .mention { position: absolute; left: 0; right: 0; bottom: 100%; margin: 0 0 6px; padding: 4px 0; list-style: none; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 24px rgba(0, 0, 0, .12); max-height: 40vh; overflow-y: auto; z-index: 3; }
   .mention li { display: flex; align-items: baseline; gap: 8px; padding: 6px 12px; cursor: pointer; min-width: 0; font-size: 13px; }

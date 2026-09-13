@@ -546,6 +546,9 @@
   .msg .time { position: absolute; left: -46px; top: 4px; width: 40px; text-align: right; opacity: 0; }
   .msg:hover .time { opacity: 1; }
   .msg .body { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }
+  /* 本文が記録のときに切られている印（#358）。折りたたみを開いても続きが無いことを出す */
+  .msg .clipped-note { color: var(--muted); font-size: 11px; margin-top: 4px; }
+  .msg .clipped-note::before { content: '✂ '; }
   /* 検索から飛んできた発言（#230）。どこに着いたか分かるように囲って、しばらくしたら地の色に戻す。
      「視差効果を減らす」なら色を変えたまま置く（動かさない） */
   .msg.found { background: color-mix(in srgb, var(--accent) 14%, transparent); border-radius: 6px; box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent); animation: found-fade 4s ease-out 1s forwards; }

@@ -1,18 +1,21 @@
 import { useState } from 'react'
 import { useReveal } from './useReveal'
+import { ClippedNote } from './ClippedNote'
 
 interface Props {
   /** そのターンの思考。空なら何も出さない */
   text: string
   /** ページ全体の「思考を全部開く」。変わったらこのバブルの個別の開閉は忘れる */
   openAll: boolean
+  /** 思考が record.py に切られている（#358） */
+  clipped?: boolean
 }
 
 /**
  * エージェントのバブルの本文の上に出す、思考の折りたたみ。「▸ 思考（N 文字）」を押すと開く。
  * 思考は箇条書きや `**` が多く Markdown にすると崩れるので、打たれたまま（pre-wrap）で薄く出す
  */
-export function ThinkingBlock({ text, openAll }: Props) {
+export function ThinkingBlock({ text, openAll, clipped = false }: Props) {
   // 個別に押した開閉。null なら「全部開く」に従う。全部開くが切り替わったら個別の分は捨てる
   const [override, setOverride] = useState<boolean | null>(null)
   const [seenOpenAll, setSeenOpenAll] = useState(openAll)
@@ -30,7 +33,12 @@ export function ThinkingBlock({ text, openAll }: Props) {
       <button type="button" className="think-toggle" onClick={() => setOverride(!open)} aria-expanded={open} ref={toggleRef}>
         {open ? '▾' : '▸'} 思考（{text.length} 文字）
       </button>
-      {open && <div className="think-body" ref={bodyRef}>{text}</div>}
+      {open && (
+        <div className="think-body" ref={bodyRef}>
+          {text}
+          {clipped && <ClippedNote />}
+        </div>
+      )}
     </div>
   )
 }

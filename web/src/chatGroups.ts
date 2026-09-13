@@ -1,5 +1,6 @@
 // チャットの行をバブルの塊にまとめる。DOM に依存しないので node:test で回す（chatGroups.test.ts）
 import type { FeedRow, Profile, SessionSummary } from '../../shared/types.ts'
+import { wasClipped } from '../../shared/clipped.ts'
 import { entityId } from '../../shared/entity.ts'
 import { eventKind } from '../../shared/events.ts'
 import { dayLabel, minutesBetween, parseTs, ymd } from './format.ts'
@@ -28,6 +29,8 @@ export interface Utterance {
   summary?: string
   /** エージェントの発言で、そのターンからモデルが変わったならそのモデル名（毎回は出さない。変わったときだけ） */
   model?: string
+  /** この発言の本文が record.py に切られている（#358）。バブルの末尾に印を出す */
+  clipped?: boolean
 }
 
 export interface Group {
@@ -68,7 +71,7 @@ export function toUtterances(rows: FeedRow[]): Utterance[] {
     if (kind === 'resume') {
       // 入力した瞬間の行。user_text があれば自分の発言。無い（合図だけの古い形）ならバブルにしない
       if (mine) {
-        out.push({ speaker: 'me', row, text: row.user_text ?? '', key: `${row.ts}:${index}:me` })
+        out.push({ speaker: 'me', row, text: row.user_text ?? '', key: `${row.ts}:${index}:me`, ...(wasClipped(row, 'user_text') ? { clipped: true } : {}) })
         prompted.set(id, mine)
       }
       return
@@ -81,9 +84,9 @@ export function toUtterances(rows: FeedRow[]): Utterance[] {
     // 知らない event（#235）。ここまでで返さないと下のターン完了の経路に落ちてバブルになる。
     // 集計側が数えていないものを出すと「N ターン」と見えているバブルの数が合わなくなる
     if (kind === 'other') return
-    if (mine && prompted.get(id) !== mine) out.push({ speaker: 'me', row, text: row.user_text ?? '', key: `${row.ts}:${index}:me` })
+    if (mine && prompted.get(id) !== mine) out.push({ speaker: 'me', row, text: row.user_text ?? '', key: `${row.ts}:${index}:me`, ...(wasClipped(row, 'user_text') ? { clipped: true } : {}) })
     prompted.delete(id)
-    const theirs: Utterance = { speaker: row.agent, row, text: row.text ?? '', key: `${row.ts}:${index}` }
+    const theirs: Utterance = { speaker: row.agent, row, text: row.text ?? '', key: `${row.ts}:${index}`, ...(wasClipped(row, 'text') ? { clipped: true } : {}) }
     if (row.thinking?.trim()) theirs.thinking = row.thinking
     if (row.summary?.trim()) theirs.summary = row.summary
     const model = (row.model ?? '').trim()

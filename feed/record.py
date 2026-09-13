@@ -38,10 +38,13 @@ from pathlib import Path
 
 # 行の形の版。行に `v` として載せる。行の形（キー）を変えるたびに上げ、shared/types.ts の RECORD_VERSION と揃える
 # （ずれると feed/test_record.py が止まる）。画面は窓の中の一番新しい行の v が古いと「record.py が古い」と出す
-RECORD_VERSION = 7
-MAX_TEXT = 2000
-MAX_USER_TEXT = 2000
-MAX_THINKING = 4000
+RECORD_VERSION = 8
+# 本文の上限（#358）。超えたぶんは記録の時点で落ちて後から復元できないので、実際の長さから余裕を見て取る
+# （実測: 返答の 99% が 2000 字以下、5000 字超えは 0.1%、10000 字超えは 0 件）。上限そのものは残す
+# （壊れた payload で JSONL を膨らませないため）。切ったときは行の `clipped` に項目名を載せる
+MAX_TEXT = 20000
+MAX_USER_TEXT = 20000
+MAX_THINKING = 20000
 MAX_MODEL = 100
 MAX_MODE = 40
 # ホスト名。短い形なので十分
@@ -639,6 +642,15 @@ def clip(text: str, size: int) -> str:
     return text if len(text) <= size else text[:size]
 
 
+def clipped_fields(fields) -> list:
+    """`clip()` で切られる項目の名前（#358）。
+
+    切ったことが分からないと「そこで終わった」のか「切られた」のかが読めないので、
+    行に載せて画面が末尾に印を出せるようにする。切っていなければ空（行にはキーごと載せない）。
+    """
+    return [name for name, value, size in fields if len((value or "").strip()) > size]
+
+
 # ---------------------------------------------------------------- 待ち（人を待って止まった）
 
 MAX_WAITING_TEXT = 300
@@ -1184,7 +1196,7 @@ def build_row(payload: dict, now: datetime, directory: Path, declared: str = "")
         if skip_waiting(previous, event, payload, waiting):
             return None
 
-    return {
+    row = {
         "ts": now.isoformat(timespec="seconds"),
         # 記録側の版。無い行は試作か古い record.py が書いたもの（= 1）
         "v": RECORD_VERSION,
@@ -1220,6 +1232,17 @@ def build_row(payload: dict, now: datetime, directory: Path, declared: str = "")
         # セッションの1行目が落ちたときにタイトルが消える。
         "first_user_text": clip(first_user, MAX_FIRST_USER),
     }
+    # 本文を切ったならどれを切ったかを載せる（#358）。題名に落とす first_user_text は本文ではないので数えない
+    clipped = clipped_fields(
+        (
+            ("text", text, MAX_TEXT),
+            ("user_text", user_text, MAX_USER_TEXT),
+            ("thinking", thinking, MAX_THINKING),
+        )
+    )
+    if clipped:
+        row["clipped"] = clipped
+    return row
 
 
 def append_row(directory: Path, row: dict, now: datetime) -> Path:

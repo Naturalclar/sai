@@ -15,6 +15,7 @@ import { opensDiff, type ChatDiffs } from './feedDiff.ts'
 import { JUMP_FLASH_MS, type FeedJump } from './feedJump.ts'
 import { followsBottom, nearBottom } from './chatScroll.ts'
 import { questionsFor } from './terminalQuestion.ts'
+import { wasClipped } from '../../shared/clipped.ts'
 import type { PendingQuestion } from '../../shared/types.ts'
 
 const NO_SESSIONS: never[] = []
@@ -204,6 +205,8 @@ export function Chat({ rows, showChannel, selfHost = '', sessions = NO_SESSIONS,
                         linear={linear}
                         found={focusTs !== '' && u.row.ts === focusTs}
                         utteranceKey={u.key}
+                        clipped={u.clipped}
+                        thinkingClipped={showThinking && wasClipped(u.row, 'thinking')}
                       />
                       </ImageSourceContext>
                       )

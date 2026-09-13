@@ -764,6 +764,8 @@
   .reply .note.blocked { color: var(--synth); }
   .notice { color: var(--muted); font-size: 12px; margin-top: 10px; }
   .notice.error { color: var(--claude); }
+  /* 失敗の理由と「入力欄に戻す」を並べる（#350）。一言の .msg .summary と同じ形 */
+  .notice.reply-failed { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
   /* 端末の打ちかけを消して送るかの確認（#117） */
   .notice.confirm { color: var(--ink); background: color-mix(in srgb, var(--synth) 12%, transparent); border: 1px solid color-mix(in srgb, var(--synth) 40%, transparent); border-radius: 8px; padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; }
   .notice.confirm code { font-family: var(--mono); background: var(--chip); padding: 1px 6px; border-radius: 4px; overflow-wrap: anywhere; }

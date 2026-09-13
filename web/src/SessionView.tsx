@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { replyBlockedReason } from '../../shared/reply.ts'
 import { launchedModeNote } from '../../shared/permissions.ts'
 import { eventKind } from '../../shared/events.ts'
@@ -15,6 +15,7 @@ import { AgentActivityBar } from './AgentActivityBar'
 import { shouldQueue } from './replyQueue.ts'
 import { ApprovalBubble } from './ApprovalBubble'
 import { ReplyBox } from './ReplyBox'
+import type { RestoreRequest } from './replyRestore'
 import { BackLink } from './BackLink'
 import { useReply } from './useReply'
 import { historyFrom } from './replyHistory'
@@ -51,7 +52,9 @@ export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggl
   const { pending, failed, send, confirm, confirmedSent, confirmReplace, confirmProcess, cancelConfirm } = useReply((target) => (target === id ? turns : 0), data?.replying ?? NO_REPLYING, updatedAt)
   const mine = pending.find((p) => p.id === id) ?? null
   const now = updatedAt?.getTime() ?? 0
-  const failedHere = failed && failed.id === id ? failed.message : null
+  const failedHere = failed && failed.id === id ? failed : null
+  // 非同期に失敗した返信を入力欄に戻す（#350）。押したときだけ流し込む
+  const [restore, setRestore] = useState<RestoreRequest | null>(null)
   const confirmHere = confirm && confirm.id === id ? confirm : null
 
   const approvals = data?.approvals[id] ?? NO_APPROVALS
@@ -183,11 +186,22 @@ export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggl
             {...(summary && hasDiff(summary) ? { diff: { summary, open: diffOpen, onToggle: () => onToggleDiff(s.id) } } : {})}
             queued={queuedCount}
             // 前の返信を処理中か、預かりが残っていれば預ける（#305。先に預けたものを追い越さない）
-            onSend={async (text, attachments) => (await send(id, text, { attachments, queue: shouldQueue(mine !== null, queuedCount) })) !== 'confirm'}
+            {...(restore ? { restore } : {})}
+            // 送れなかった（確認待ち・送信失敗）ら ReplyBox が本文・画像・返信先を戻す（#350）
+            onSend={async (text, attachments) => (await send(id, text, { attachments, queue: shouldQueue(mine !== null, queuedCount) })) === 'sent'}
           />
         ))}
       {confirmHere && <ReplaceConfirm confirm={confirmHere} onReplace={() => void confirmReplace()} onProcess={() => void confirmProcess()} onCancel={cancelConfirm} />}
-      {failedHere && <div className="notice error">送信失敗: {failedHere}</div>}
+      {failedHere && (
+        <div className="notice error reply-failed">
+          <span>送信失敗: {failedHere.message}</span>
+          {failedHere.text && (
+            <button type="button" className="linkish" onClick={() => setRestore((r) => ({ text: failedHere.text, seq: (r?.seq ?? 0) + 1 }))}>
+              入力欄に戻す
+            </button>
+          )}
+        </div>
+      )}
     </section>
   )
 }

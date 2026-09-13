@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { splitAttachments } from '../../shared/attachments.ts'
 import { api, ApiError, type Replying, type ReplyingMap } from './api'
 
 /** 画面に出す「処理中の返信」。サーバが伝えてきたものと、送った直後のローカルのものを同じ形にする */
@@ -35,6 +36,9 @@ export function replyFailureMessage(failed: NonNullable<Replying['failed']>): st
   return `返信が失敗しました（終了コード ${failed.code}）${why ? `: ${why}` : '。~/.agent-feed/reply.log を見てください'}`
 }
 
+/** 送った本文から、添えた画像のパスの塊を外す（打ったままの本文に戻す。#350） */
+const typedText = (text: string): string => splitAttachments(text).body
+
 /**
  * 端末に打ち込めなくて送れなかった。人にどうするかを聞く（#117、#157）。
  * typed: 打ちかけがある（「消して送る」か「端末を使わず送る」）。process: 消せなかった・ダイアログ中・入力欄が読めない（後者だけ）
@@ -56,6 +60,17 @@ export interface ReplaceConfirm {
 export type SendOutcome = 'sent' | 'confirm' | 'failed'
 
 /**
+ * 送れなかった返信（#172 / #350）。`text` は打った本文で、画面が「入力欄に戻す」に使う。
+ * 添えた画像のパスは本文の末尾に足されているので `splitAttachments()` で外す（画像そのものは戻せない）
+ */
+export interface ReplyFailed {
+  id: string
+  message: string
+  /** 打った本文。分からなければ空（そのときは戻すボタンを出さない） */
+  text: string
+}
+
+/**
  * 返信の送信と「処理中」の判定。SessionView と FeedView で共用。
  *
  * 「処理中」の正はサーバの `replying`（子プロセスが exit するまで残る）。リロードしても別タブでも同じものが
@@ -70,12 +85,13 @@ export type SendOutcome = 'sent' | 'confirm' | 'failed'
  */
 export function useReply(countRows: (id: string) => number, replying: ReplyingMap, updatedAt: Date | null) {
   const [sent, setSent] = useState<Sent[]>([])
-  const [failed, setFailed] = useState<{ id: string; message: string } | null>(null)
+  const [failed, setFailed] = useState<ReplyFailed | null>(null)
   const [confirm, setConfirm] = useState<ReplaceConfirm | null>(null)
   // 確認から送り直して受け付けられた回数（#338）。ReplyBox がこれを見て入力欄を空にする
   const [confirmedSent, setConfirmedSent] = useState(0)
-  // サーバが「処理中」と言った id と、最初にそう見えたときの行数。消えたときに行が増えていなければ失敗
-  const seen = useRef(new Map<string, number>())
+  // サーバが「処理中」と言った id と、最初にそう見えたときの行数・本文。消えたときに行が増えていなければ失敗
+  // （本文は「入力欄に戻す」に使う。#350）
+  const seen = useRef(new Map<string, { rows: number; text: string }>())
   // 失敗を出した id。サーバは少しの間その分を返し続けるので、毎回のポーリングで出し直さない
   const reportedFailure = useRef(new Set<string>())
 
@@ -88,25 +104,25 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
       if (!r.failed || reportedFailure.current.has(id)) continue
       reportedFailure.current.add(id)
       seen.current.delete(id) // 消えたときに「記録が増えなかった」を重ねて出さない
-      setFailed({ id, message: replyFailureMessage(r.failed) })
+      setFailed({ id, message: replyFailureMessage(r.failed), text: typedText(r.text) })
     }
     for (const id of reportedFailure.current) if (!replying[id]?.failed) reportedFailure.current.delete(id)
 
     // サーバが処理中と言っていたものが消えた
-    for (const [id, rowsAtSeen] of seen.current) {
+    for (const [id, at] of seen.current) {
       if (replying[id]) continue
       seen.current.delete(id)
-      if (countRows(id) <= rowsAtSeen) setFailed({ id, message: ENDED_WITHOUT_ROW })
+      if (countRows(id) <= at.rows) setFailed({ id, message: ENDED_WITHOUT_ROW, text: at.text })
     }
-    for (const id of Object.keys(replying)) {
-      if (!seen.current.has(id)) seen.current.set(id, countRows(id))
+    for (const [id, r] of Object.entries(replying)) {
+      if (!seen.current.has(id)) seen.current.set(id, { rows: countRows(id), text: typedText(r.text) })
     }
 
     // ローカルの繋ぎ。サーバが引き継いだら捨てる。202 から少し待っても載らなければ、もう終わっている
     const keep = sent.filter((s) => {
       if (replying[s.id]) return false
       if (s.acceptedAt === null || now < s.acceptedAt + GRACE_MS) return true
-      if (countRows(s.id) <= s.rowsAtSend) setFailed({ id: s.id, message: ENDED_WITHOUT_ROW })
+      if (countRows(s.id) <= s.rowsAtSend) setFailed({ id: s.id, message: ENDED_WITHOUT_ROW, text: s.text })
       return false
     })
     if (keep.length !== sent.length) setSent(keep)
@@ -155,7 +171,7 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
           return 'confirm'
         }
       }
-      setFailed({ id, message: err instanceof Error ? err.message : String(err) })
+      setFailed({ id, message: err instanceof Error ? err.message : String(err), text })
       return 'failed'
     }
   }

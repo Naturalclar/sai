@@ -13,6 +13,7 @@ import { QueuedBubble } from './QueuedBubble'
 import { shouldQueue } from './replyQueue.ts'
 import { ApprovalBubble } from './ApprovalBubble'
 import { ReplyBox, type Picked } from './ReplyBox'
+import type { RestoreRequest } from './replyRestore'
 import { DaysSelect } from './DaysSelect'
 import { FeedProjectPicker } from './FeedProjectPicker'
 import { BackLink } from './BackLink'
@@ -89,6 +90,8 @@ export function FeedView({ project, projects, onProject, sessions = NO_SESSIONS,
 
   // 手で選んだ返信先（id と、本文に入れた表記）。候補から消えたら（days やリポジトリの変更）既定に戻る
   const [picked, setPicked] = useState<Picked | null>(null)
+  // 非同期に失敗した返信を入力欄に戻す（#350）。押したときだけ流し込む
+  const [restore, setRestore] = useState<RestoreRequest | null>(null)
   const pickedTarget = picked ? (targets.find((t) => t.id === picked.id && !t.blocked) ?? null) : null
   // 既定は一番新しい行のセッション（再開できて、処理中でないもの）。A に返信しても次の B にそのまま打てる
   const computedDefault = defaultReplyTarget(feedTargets, targets, busyIds)
@@ -194,8 +197,10 @@ export function FeedView({ project, projects, onProject, sessions = NO_SESSIONS,
             now={now}
             queued={queued[target.id]?.items.length ?? 0}
             // 前の返信を処理中か、預かりが残っていれば預ける（#305。先に預けたものを追い越さない）
+            {...(restore ? { restore } : {})}
+            // 送れなかった（確認待ち・送信失敗）ら ReplyBox が本文・画像・返信先を戻す（#350）
             onSend={async (text, attachments) =>
-              (await send(target.id, text, { attachments, queue: shouldQueue(busyIds.has(target.id), queued[target.id]?.items.length ?? 0) })) !== 'confirm'
+              (await send(target.id, text, { attachments, queue: shouldQueue(busyIds.has(target.id), queued[target.id]?.items.length ?? 0) })) === 'sent'
             }
             model={replyModel}
             permission={replyPermission}
@@ -206,7 +211,16 @@ export function FeedView({ project, projects, onProject, sessions = NO_SESSIONS,
           <div className="notice">返信できるセッションがありません</div>
         ))}
       {confirm && <ReplaceConfirm confirm={confirm} repo={repoOf(confirm.id)} onReplace={() => void confirmReplace()} onProcess={() => void confirmProcess()} onCancel={cancelConfirm} />}
-      {failed && <div className="notice error">送信失敗（{repoOf(failed.id) ? `#${repoOf(failed.id)}` : failed.id}）: {failed.message}</div>}
+      {failed && (
+        <div className="notice error reply-failed">
+          <span>送信失敗（{repoOf(failed.id) ? `#${repoOf(failed.id)}` : failed.id}）: {failed.message}</span>
+          {failed.text && (
+            <button type="button" className="linkish" onClick={() => setRestore((r) => ({ text: failed.text, seq: (r?.seq ?? 0) + 1 }))}>
+              入力欄に戻す
+            </button>
+          )}
+        </div>
+      )}
     </section>
   )
 }

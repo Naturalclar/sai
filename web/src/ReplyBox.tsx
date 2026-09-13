@@ -20,6 +20,7 @@ import { NOT_IN_HISTORY, canGoBack, canGoForward, stepHistory } from './replyHis
 import type { HistoryState } from './replyHistory'
 import { EMPTY_DRAFT, loadDraft, saveDraft } from './replyDrafts'
 import { clearsOnSent } from './replySent'
+import { restoresOnRequest, restoresText, type RestoreRequest } from './replyRestore'
 
 /**
  * @ メンションで返信先を選ぶための道具（フィード用）。渡さなければ `@` はただの文字（セッション画面）。
@@ -65,7 +66,10 @@ interface Props {
   queued?: number
   /** 経過の基準（ポーリングの updatedAt）。busySince とセット */
   now?: number
-  /** 送る。false を返したら（端末の打ちかけの確認待ちなど、送れなかった）本文を入力欄に戻す */
+  /**
+   * 送る。**false を返したら送れなかった**（端末の打ちかけの確認待ち・送信失敗）ことにして、
+   * 本文・添えた画像・`@` の返信先を入力欄に戻す（#350）
+   */
   onSend: (text: string, attachments: string[]) => void | boolean | Promise<void | boolean>
   /** 本文が空でないかが変わったら知らせる。FeedView は入力中に既定の返信先を動かさないために使う */
   onDraft?: (drafting: boolean) => void
@@ -95,6 +99,11 @@ interface Props {
    * 送り直しはここを通らないので、この数が増えたら入力欄と添えた画像を空にする（渡さなければ何もしない）
    */
   sentFromConfirm?: number
+  /**
+   * 非同期に失敗した返信を入力欄に戻す頼み（#350。失敗の理由に添えた「入力欄に戻す」を押したとき）。
+   * `seq` が増えたときだけ当てる。入力欄に何か打たれていれば無視する
+   */
+  restore?: RestoreRequest
   /** 本文が空のときの `←`。サイドバーのいま開いている項目にフォーカスを戻す（#204）。渡さなければ ← はカーソル移動のまま */
   onLeaveToSidebar?: () => void
   mention?: MentionProps
@@ -106,7 +115,7 @@ const NO_HISTORY: readonly string[] = []
 const keyOf = (e: KeyboardEvent<HTMLTextAreaElement>) => ({ key: e.key, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, shiftKey: e.shiftKey })
 
 /** 入力欄。Enter で送信、Shift+Enter で改行。IME 変換中の Enter は送らない */
-export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, now = 0, onSend, onDraft, model, permission, diff, skillsId, attachId, draftKey, sentFromConfirm = 0, history = NO_HISTORY, onLeaveToSidebar, mention }: Props) {
+export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, now = 0, onSend, onDraft, model, permission, diff, skillsId, attachId, draftKey, sentFromConfirm = 0, restore, history = NO_HISTORY, onLeaveToSidebar, mention }: Props) {
   // 前に打ちかけて離れた分（#306）。作ったときに 1 回だけ読む
   const [initial] = useState(() => (draftKey ? loadDraft(draftKey) : EMPTY_DRAFT))
   const [text, setText] = useState(initial.text)
@@ -169,6 +178,17 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, now = 0,
     setText('')
     setCaret(0)
     attach.clear()
+  }
+
+  // 非同期に失敗した返信を戻す（#350）。押したときだけで、勝手には流し込まない。
+  // #338 と同じく描画中に state を合わせる（effect の中で setState しない）
+  const [restoredSeq, setRestoredSeq] = useState(restore?.seq ?? 0)
+  if (restore && restoresOnRequest(restoredSeq, restore.seq)) {
+    setRestoredSeq(restore.seq)
+    if (restoresText(text)) {
+      setText(restore.text)
+      setCaret(restore.text.length)
+    }
   }
 
   // 打ちかけを残す（#306）。変わるたびに書くので、画面を移るときに書き忘れる経路が無い。
@@ -293,6 +313,8 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, now = 0,
     if (!body && attach.items.length === 0) return
     if (attach.busy) return
     const sent = text
+    const keptImages = attach.items
+    const keptPick = mention?.picked ?? null
     const paths = attach.paths
     setText('')
     setCaret(0)
@@ -301,8 +323,15 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, now = 0,
     // 表記ごと本文が消えるので返信先も既定に戻す。送信中でも別の返信先へ続けて打てる
     if (mention?.picked) mention.onPick(null)
     void Promise.resolve(onSend(body, paths)).then((ok) => {
-      // 送れなかった（端末の打ちかけの確認待ちなど）ら、まだ何も打っていなければ本文を戻す
-      if (ok === false) setText((t) => (t ? t : sent))
+      // 送れなかった（確認待ち・送信失敗）。まだ何も打っていなければ、本文・画像・返信先を戻す（#350）。
+      // いまの中身は textarea から見る（この then は submit した時点の text を閉じ込めているため）
+      if (ok !== false || !restoresText(ref.current?.value ?? '')) return
+      setText(sent)
+      setCaret(sent.length)
+      wantCaret.current = sent.length
+      attach.restore(keptImages)
+      // 本文に `@名前` が残るので返信先も戻す（戻さないと、そのまま送ると表記ごと本文として飛ぶ）
+      if (keptPick) mention?.onPick(keptPick)
     })
   }
 

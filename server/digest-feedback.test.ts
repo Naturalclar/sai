@@ -105,12 +105,21 @@ test('別オリジンは 403、GET は 405（画面から叩く口。返信と�
   assert.equal((await lines()).length, 1)
 })
 
+test('#359 で足した理由（why / next）も受け付ける', async () => {
+  const res = await post({ key, reason: 'next', note: '通ったら何と言えばいいか書いてほしい' })
+  assert.equal(res.status, 200)
+  const got = await lines()
+  assert.equal(got.at(-1)!.reason, 'next')
+  assert.equal((await post({ key, reason: 'why' })).status, 200)
+  assert.equal((await lines()).at(-1)!.reason, 'why')
+})
+
 test('note は省ける。2 件目も後ろに足される', async () => {
   const res = await post({ key, reason: 'long' })
   assert.equal(res.status, 200)
-  assert.equal(((await res.json()) as DigestFeedbackResponse).count, 2)
+  assert.equal(((await res.json()) as DigestFeedbackResponse).count, 4)
   const got = await lines()
-  assert.equal(got.length, 2)
-  assert.equal(got[1]!.note, undefined)
-  assert.equal(got[1]!.reason, 'long')
+  assert.equal(got.length, 4)
+  assert.equal(got.at(-1)!.note, undefined)
+  assert.equal(got.at(-1)!.reason, 'long')
 })

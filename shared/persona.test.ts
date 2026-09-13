@@ -71,3 +71,15 @@ test('digestPrompt: 作り直しは前の一言と直してほしい点を足す
   // 作り直しでない普通のプロンプトには足さない
   assert.doesNotMatch(digestPrompt('ESFP', text), /前に作った一言/)
 })
+
+test('digestPrompt: 話の筋（意図・理由・いまの状態・人がすること）を求める（#359）', () => {
+  const p = digestPrompt('ESFP', 'PR を出しました。CI を待っています。')
+  assert.match(p, /話の筋を残す/)
+  assert.match(p, /何をしようとしたか/)
+  assert.match(p, /人が次にすること/)
+  assert.match(p, /本文に書かれていない理由・次の一手は書かない/, '推測で補わせない（#268 と同じ）')
+  assert.match(p, /人がすること（「〜と言ってください」「〜してください」、質問）は必ず残す/)
+  assert.match(p, /何を待っていて、終わったらどうなるか/)
+  // 前の「何をしたかだけ」は消えている（意図と理由まで落ちていた）
+  assert.doesNotMatch(p, /何をしたか（と、あれば次の一手や確認したいこと）だけ/)
+})

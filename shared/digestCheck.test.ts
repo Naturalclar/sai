@@ -39,7 +39,7 @@ test('本文に無い番号を書いたら見つける（#268 の裏返し）', 
   const source = 'README を書き換えて PR を出しました。CI は pass です。'
   assert.deepEqual(codes(source, 'PR #12 を出したよ、CI も通った'), ['invented_number'])
   assert.deepEqual(codes('PR 64 を出しました（https://github.com/o/r/pull/64）', 'PR #64 出した、CI pass'), [], '本文にある番号はよい')
-  assert.deepEqual(codes('issue 168 を作りました', 'PR 〈168〉作成、着手待ち'), [], '〈〉付きでも本文にあればよい')
+  assert.deepEqual(codes('issue 168 を作りました', 'PR 〈168〉作成、中身は入力欄の直し'), [], '〈〉付きでも本文にあればよい')
 })
 
 test('要約せずプロンプトに答えた、前置き、引用符で囲んだ、は見つける', () => {
@@ -63,4 +63,47 @@ test('複数あれば、意味が変わるものが先に並ぶ', () => {
   const got = digestIssues(source, `一言: マージして？ ${'あ'.repeat(DIGEST_MAX_CHARS)}`)
   assert.deepEqual(got.map((i) => i.code), ['quoted_request', 'prefix', 'too_long'])
   assert.ok(got.every((i) => i.hint.length > 0), '理由は全部埋める（作り直しのプロンプトに入る）')
+})
+
+// ---- #359: 落ちているものを見つける（意味は変わっていないが、次に何をすればよいか分からなくなる）
+test('本文の「人にしてほしいこと」が一言から落ちたら見つける', () => {
+  const source = 'PR #66 の CI は 3 ジョブとも通り、マージ可能な状態です。マージするなら言ってください。'
+  assert.deepEqual(codes(source, 'PR #66 通ったよ、CI は 3 本とも green！'), ['dropped_request'])
+  assert.match(digestIssues(source, 'PR #66 通ったよ')[0]!.hint, /本文の言葉のまま/)
+})
+
+test('頼みが残っていれば咎めない（「〜てね」「〜しましょう」「〜して」で終わる形も）', () => {
+  const source = 'PR #66 の CI は通りました。マージするなら言ってください。'
+  assert.deepEqual(codes(source, 'PR #66 通ったよ。よければ「マージして」と言ってね'), [])
+  assert.deepEqual(codes(source, 'PR #66 通った！マージするか教えてください'), [])
+  assert.deepEqual(codes('手元で見てください', '画面で見た目を確認して 🚀'), [], '絵文字の前が「〜して」なら頼んでいる')
+  assert.deepEqual(codes('checkout を最新にしてください', 'record.py を git pull で更新しましょう'), [])
+  assert.deepEqual(codes('次のどちらかをお願いします', 'Bash の承認か別の端末で進めよう！'), [])
+  assert.deepEqual(codes('ブラウザで確認してください', '見た目どうかな？'), [], '問いかけも次の一手')
+})
+
+test('コードブロックの中の「〜してください」は本文の依頼として数えない', () => {
+  const source = ['直し方はこうです。', '```sh', 'echo "これを実行してください"', '```', '以上です。'].join('\n')
+  assert.deepEqual(codes(source, '直し方を書いたよ'), [], '貼られたコマンドの中は見ない')
+  const outside = ['次を実行してください。', '```sh', 'git pull', '```'].join('\n')
+  assert.deepEqual(codes(outside, '直し方を書いたよ'), ['dropped_request'], 'ブロックの外の依頼は数える')
+})
+
+test('「待っている」だけで終わったら見つける。終わったらどうなるかがあれば咎めない', () => {
+  assert.deepEqual(codes('CI を待っています。通ったらマージします。', 'CI 待ちです ⏳'), ['waiting_without_next'])
+  assert.deepEqual(codes('CI を待っています。', 'PR #66 を出した！CI 待ちです'), ['invented_number', 'waiting_without_next'])
+  // 本文に「人がすること」が書かれていない回もある（「通ったら私がマージします」だけ）。
+  // そこは本文に無いことを書かせるわけにいかないので、**終わったらどうなるか**があれば通す（#359）
+  assert.deepEqual(codes('CI を待っています。通ったらマージします。', 'CI 待ち。通ったらマージしてブランチも消すよ'), [])
+  assert.deepEqual(codes('CI を待っています。', 'CI 完了待ちです、終わったら報告します！'), [])
+  assert.deepEqual(codes('CI を待っています。通ったら「マージして」と言ってください。', 'CI が通ったら「マージして」と言ってね'), [])
+  assert.deepEqual(codes('CI を待っています。', 'CI 待ち。マージしていい？'), [], '問いかけでもよい')
+})
+
+test('意味が変わるものが先、落ちているものが次、形の問題は最後', () => {
+  const source = 'PR #284 を出しました。よければ「マージして」と言ってください。'
+  const got = digestIssues(source, `一言: PR #284 出したよ、マージして？ ${'あ'.repeat(DIGEST_MAX_CHARS)}`)
+  assert.deepEqual(got.map((i) => i.code), ['quoted_request', 'prefix', 'too_long'])
+  const dropped = digestIssues('CI を待っています。確認してください。', 'CI 待ちです')
+  assert.deepEqual(dropped.map((i) => i.code), ['dropped_request', 'waiting_without_next'])
 })

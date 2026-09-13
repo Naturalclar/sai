@@ -5,7 +5,16 @@
 // 手元の実データ（一言 667 件）では 13.8% が引っかかった（口が qwen3:8b なら 17.6%、haiku なら 6.2%）。
 import { DIGEST_MAX_CHARS } from './persona.ts'
 
-export type DigestIssueCode = 'empty' | 'too_long' | 'quoted_request' | 'prefix' | 'meta_reply' | 'invented_number'
+export type DigestIssueCode =
+  | 'empty'
+  | 'too_long'
+  | 'quoted_request'
+  | 'prefix'
+  | 'meta_reply'
+  | 'invented_number'
+  // 落ちているもの（#359）。意味は変わっていないが、読んだ人が次に何をすればよいか分からなくなる
+  | 'dropped_request'
+  | 'waiting_without_next'
 
 export interface DigestIssue {
   code: DigestIssueCode
@@ -27,6 +36,44 @@ const META_REPLY = /(いただけますか|いただけると|提示してくだ
 
 /** `一言:` のような前置き */
 const PREFIX = /^\s*(?:一言|要約|出力|回答|結果)\s*[:：]/
+
+/**
+ * 本文の中の「人にしてほしいこと」（#359）。エージェントが人に頼んでいる形だけを見る。
+ * ` ``` ` の中（貼られたコマンドや設定）は見ない（本文としての依頼ではないため）
+ */
+const REQUEST = /(?:て(?:ください|下さい)|てもらえ(?:ますか|れば)|お願いします|お願いできますか|していただけ)/
+
+/** 一言が「人が次にすること」に触れているか（頼み・問いかけ・誘いの言葉） */
+const NEXT_WORDS = /(ください|下さい|てね|でね|お願い|よろしく|言って|てみて|どう(?:です)?か|[?？])/
+
+/**
+ * 末尾が依頼・誘いの形か（`…確認して 🚀`、`…更新しましょう`、`…進めよう！`）。
+ * 口語の一言は「〜して」で終わって頼むことが多いので、末尾の記号と絵文字を落としてから見る
+ */
+function endsWithRequest(summary: string): boolean {
+  const tail = summary.replace(/[\s\p{P}\p{S}]+$/u, '')
+  return /(?:[てで]|よう|ましょう)$/u.test(tail)
+}
+
+/** 一言が「人が次にすること」に触れているか */
+function hasNextAction(summary: string): boolean {
+  return NEXT_WORDS.test(summary) || endsWithRequest(summary)
+}
+
+/** 一言が「待っている」と言っているか */
+const WAITING = /(待って|待ち|待機)/
+
+/**
+ * 待ちが終わったらどうなるかに触れているか（`通ったら…`、`終わったら…`、`次は…`）。
+ * **本文に「人がすること」が書かれていない回もある**（「通ったら私がマージします」だけ、など）。
+ * そこで人への頼みが無くても、**終わったらどうなるか**が書いてあれば咎めない（本文に無いことは書かせない。#268 / #359）
+ */
+const AFTER_WAIT = /(たら|れば|次は|そのあと|あとで)/
+
+/** ` ``` ` で囲まれた塊を外す（依頼の判定に、貼られたコマンドを混ぜない） */
+function withoutCode(text: string): string {
+  return text.replace(/```[\s\S]*?(?:```|$)/g, ' ')
+}
 
 /** 一言の中の issue / PR の番号（`#123`、`PR 123`、`PR 〈123〉`） */
 const SUMMARY_NUMBER = /#(\d{1,6})|(?:PR|Issue|issue|pull)\s*[#〈]?(\d{1,6})[〉]?/g
@@ -96,6 +143,20 @@ export function digestIssues(source: string, summary: string): DigestIssue[] {
   const invented = inventedNumbers(source, text)
   if (invented.length > 0) {
     out.push({ code: 'invented_number', hint: `本文に出てこない番号（${invented.map((n) => `#${n}`).join(', ')}）を書かないでください` })
+  }
+  // 本文が人に何かを頼んでいるのに、一言がそれを落とした（#359。実測 203 件中 45 件）
+  if (REQUEST.test(withoutCode(source)) && !hasNextAction(text)) {
+    out.push({
+      code: 'dropped_request',
+      hint: '本文には**人にしてほしいこと**（「〜してください」「〜と言ってください」など）が書かれています。本文の言葉のまま一言にも残してください',
+    })
+  }
+  // 「待っている」で終わっていて、人が次に何をすればよいか分からない（#359。実測 42 件中 38 件）
+  if (WAITING.test(text) && !hasNextAction(text) && !AFTER_WAIT.test(text)) {
+    out.push({
+      code: 'waiting_without_next',
+      hint: '「待っている」だけで終わっています。**何を待っていて、終わったらどうなるか**（本文に人がすることが書いてあれば、その言葉のまま）まで書いてください',
+    })
   }
   if (META_REPLY.test(text)) {
     out.push({ code: 'meta_reply', hint: '本文を言い換えた一言だけを書いてください（本文を要求したり、やり方を説明したりしない）' })

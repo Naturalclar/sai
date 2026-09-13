@@ -12,6 +12,7 @@ import { JumpToBottom } from './JumpToBottom'
 import { HostTag } from './HostTag'
 import { opensDiff, type ChatDiffs } from './feedDiff.ts'
 import { JUMP_FLASH_MS, type FeedJump } from './feedJump.ts'
+import { followsBottom, nearBottom } from './chatScroll.ts'
 import { questionsFor } from './terminalQuestion.ts'
 import type { PendingQuestion } from '../../shared/types.ts'
 
@@ -73,6 +74,8 @@ function flash(el: HTMLElement) {
 export function Chat({ rows, showChannel, selfHost = '', sessions = NO_SESSIONS, trailer, showThinking = false, thinkingOpen = false, profile, linear = '', focusTs = '', diffs, jumpTo = null, question }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
+  // 最後に最下部へ送ったときの scrollHeight。中身の高さが変わったときだけ送るため（#344）
+  const appliedHeight = useRef(0)
   // 最下部が見えているか（描画にも使うので state）。見えていないときは「一番下へ」を出す
   const [atBottom, setAtBottom] = useState(true)
   // 最下部から離れた時点の行数。離れている間に増えた行の数をボタンに添える。最下部なら null
@@ -109,17 +112,22 @@ export function Chat({ rows, showChannel, selfHost = '', sessions = NO_SESSIONS,
     flash(el)
   })
 
-  // 最下部を見ていたときだけ、更新後も最下部に追従する。当たりへ送る間は割り込まない
+  // 最下部を見ていたときだけ、更新後も最下部に追従する。当たりへ送る間は割り込まない。
+  // `trailer` は毎描画で新しい要素なので、この effect は 3 秒ごとの描き直しでも走る。中身の高さが
+  // 変わったときだけ送らないと、最下部の近くにいる間ずっと引き戻される（#344）
   useEffect(() => {
     if (focusTs && landed.current !== focusTs) return
     const el = ref.current
-    if (el && stickToBottom.current && (rows.length > 0 || trailer)) el.scrollTop = el.scrollHeight
+    if (!el || (rows.length === 0 && !trailer)) return
+    if (!followsBottom(stickToBottom.current, appliedHeight.current, el.scrollHeight)) return
+    appliedHeight.current = el.scrollHeight
+    el.scrollTop = el.scrollHeight
   }, [rows, trailer, focusTs])
 
   const onScroll = () => {
     const el = ref.current
     if (!el) return
-    const near = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+    const near = nearBottom(el.scrollHeight, el.scrollTop, el.clientHeight)
     stickToBottom.current = near
     // onScroll は連続して鳴るので、値が変わったときだけ state を触る
     if (near !== atBottom) {
@@ -133,6 +141,8 @@ export function Chat({ rows, showChannel, selfHost = '', sessions = NO_SESSIONS,
     const el = ref.current
     if (!el) return
     stickToBottom.current = true
+    // 押した時点の高さを覚えておく（動き終わったあと、中身が変わっていないのにもう一度送らない）
+    appliedHeight.current = el.scrollHeight
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
     el.scrollTo({ top: el.scrollHeight, behavior: reduced ? 'auto' : 'smooth' })
   }

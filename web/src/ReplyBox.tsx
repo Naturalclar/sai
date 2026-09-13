@@ -19,6 +19,7 @@ import { ATTACHMENT_MAX_COUNT } from '../../shared/attachments.ts'
 import { NOT_IN_HISTORY, canGoBack, canGoForward, stepHistory } from './replyHistory'
 import type { HistoryState } from './replyHistory'
 import { EMPTY_DRAFT, loadDraft, saveDraft } from './replyDrafts'
+import { clearsOnSent } from './replySent'
 
 /**
  * @ メンションで返信先を選ぶための道具（フィード用）。渡さなければ `@` はただの文字（セッション画面）。
@@ -89,6 +90,11 @@ interface Props {
   draftKey?: string
   /** ↑ で呼び戻せる、この返信先に前に送った内容（新しい順）。渡さなければ ↑ は普通のカーソル移動 */
   history?: readonly string[]
+  /**
+   * 確認（「消して送る」／「端末を使わず送る」）から送り直して受け付けられた回数（#338。`useReply` の `confirmedSent`）。
+   * 送り直しはここを通らないので、この数が増えたら入力欄と添えた画像を空にする（渡さなければ何もしない）
+   */
+  sentFromConfirm?: number
   /** 本文が空のときの `←`。サイドバーのいま開いている項目にフォーカスを戻す（#204）。渡さなければ ← はカーソル移動のまま */
   onLeaveToSidebar?: () => void
   mention?: MentionProps
@@ -100,7 +106,7 @@ const NO_HISTORY: readonly string[] = []
 const keyOf = (e: KeyboardEvent<HTMLTextAreaElement>) => ({ key: e.key, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, shiftKey: e.shiftKey })
 
 /** 入力欄。Enter で送信、Shift+Enter で改行。IME 変換中の Enter は送らない */
-export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, now = 0, onSend, onDraft, model, permission, diff, skillsId, attachId, draftKey, history = NO_HISTORY, onLeaveToSidebar, mention }: Props) {
+export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, now = 0, onSend, onDraft, model, permission, diff, skillsId, attachId, draftKey, sentFromConfirm = 0, history = NO_HISTORY, onLeaveToSidebar, mention }: Props) {
   // 前に打ちかけて離れた分（#306）。作ったときに 1 回だけ読む
   const [initial] = useState(() => (draftKey ? loadDraft(draftKey) : EMPTY_DRAFT))
   const [text, setText] = useState(initial.text)
@@ -153,6 +159,17 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, now = 0,
   useEffect(() => {
     onDraft?.(drafting)
   }, [drafting, onDraft])
+
+  // 確認から送り直して受け付けられたら、入力欄を空にする（#338）。送り直すのは useReply で、ここ（submit）を通らないため。
+  // **描画中に state を合わせる**（effect の中で setState しない。FeedView の heldId と同じ形）。
+  // 数が増えたときだけなので、送り直したあとに打ち始めた本文は消さない
+  const [clearedSent, setClearedSent] = useState(sentFromConfirm)
+  if (clearsOnSent(clearedSent, sentFromConfirm)) {
+    setClearedSent(sentFromConfirm)
+    setText('')
+    setCaret(0)
+    attach.clear()
+  }
 
   // 打ちかけを残す（#306）。変わるたびに書くので、画面を移るときに書き忘れる経路が無い。
   // 送ったら本文も画像も空になり、空を書く = 消す。送れずに本文を戻したときはまた残る。

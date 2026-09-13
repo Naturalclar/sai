@@ -72,6 +72,8 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
   const [sent, setSent] = useState<Sent[]>([])
   const [failed, setFailed] = useState<{ id: string; message: string } | null>(null)
   const [confirm, setConfirm] = useState<ReplaceConfirm | null>(null)
+  // 確認から送り直して受け付けられた回数（#338）。ReplyBox がこれを見て入力欄を空にする
+  const [confirmedSent, setConfirmedSent] = useState(0)
   // サーバが「処理中」と言った id と、最初にそう見えたときの行数。消えたときに行が増えていなければ失敗
   const seen = useRef(new Map<string, number>())
   // 失敗を出した id。サーバは少しの間その分を返し続けるので、毎回のポーリングで出し直さない
@@ -158,19 +160,22 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
     }
   }
 
+  /**
+   * 確認から同じ本文を送り直す。**受け付けられたら数を増やす**（#338）。
+   * ここは `ReplyBox` を通らないので、入力欄を空にするのは数を見た `ReplyBox` に任せる
+   */
+  const sendFromConfirm = async (options: { replaceTyped?: boolean; via?: 'process' }): Promise<SendOutcome> => {
+    if (!confirm) return 'failed'
+    const { id, text } = confirm
+    const outcome = await send(id, text, options)
+    if (outcome === 'sent') setConfirmedSent((n) => n + 1)
+    return outcome
+  }
   /** 確認に「消して送る」と答えた。打ちかけを消して同じ本文を送り直す */
-  const confirmReplace = async (): Promise<SendOutcome> => {
-    if (!confirm) return 'failed'
-    const { id, text } = confirm
-    return send(id, text, { replaceTyped: true })
-  }
+  const confirmReplace = (): Promise<SendOutcome> => sendFromConfirm({ replaceTyped: true })
   /** 確認に「端末を使わず送る」と答えた。サーバが resume / queue を選んで同じ本文を送る */
-  const confirmProcess = async (): Promise<SendOutcome> => {
-    if (!confirm) return 'failed'
-    const { id, text } = confirm
-    return send(id, text, { via: 'process' })
-  }
+  const confirmProcess = (): Promise<SendOutcome> => sendFromConfirm({ via: 'process' })
   const cancelConfirm = () => setConfirm(null)
 
-  return { pending, failed, send, confirm, confirmReplace, confirmProcess, cancelConfirm }
+  return { pending, failed, send, confirm, confirmedSent, confirmReplace, confirmProcess, cancelConfirm }
 }

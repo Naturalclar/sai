@@ -158,6 +158,8 @@ Slack のチャット風。1ターンは「自分の入力（`user_text`）→ �
 
 打ちかけの文字があるときだけ（`409` の `code: terminal_typed`、`typed` にその文）、画面が「端末の入力欄に打ちかけの文字があります。これを消して送りますか？」と確認する。「消して送る」は `replace_typed: true` で送り直し、サーバは `C-u` で入力欄を空にし、**もう一度 `capture-pane` して本当に空になったときだけ**貼る（キーが効かない端末で文を混ぜない）。Claude Code は `C-u` で 1 回で空になり「Ctrl+Y to paste deleted text」と出るので端末側で戻せる。消した文は `reply.log` にも残す。許可・質問のダイアログ中（`code: terminal_dialog`）と入力欄が見つからないとき（`terminal_unknown`）は確認を出さず、消させない。 `C-u` は Claude Code も Codex も**いまの行しか消さない**ので、複数行の打ちかけは空になるまで繰り返す（上限 20 回。画面が変わらなくなったら止めて `409`）。消した全文は `reply.log` に残す（`Ctrl+Y` で戻せるのは最後の 1 行だけ）。空の入力欄に出る placeholder（Claude Code の `Try "…"`、Codex の `Ask Codex to do anything`）は打ちかけではないので、そのまま打ち込む。入力欄は区切り線（`──`）の直上の `❯` の行で見る。`/` で始めると出るスラッシュコマンドの候補メニューは選択行にも `❯` が付くが、区切り線の下なので入力欄とは読まない。メニューが開いていれば `Escape` で閉じてから `C-u` を送り、`C-u` のあと画面が変わらないときは描き直しの遅れを疑って何回か見直してから「消せない」と決める。
 
+**確認から送り直して受け付けられたら、入力欄は空になる**（#338）。「消して送る」「端末を使わず送る」のどちらでも、送れた本文は入力欄からも打ちかけ（#306）からも消える（前は残ったままで、そのまま Enter を押すと二重に送っていた）。「やめる」を押したときは、打ち直さずに済むように本文を残す。
+
 **端末に打ち込めなくても送れる。** 打ちかけを消せなかった、許可・質問のダイアログ中、入力欄が読めない、のどれでも `409` の body に `can_process: true` が付き、画面の確認に「**端末を使わず送る**」が出る（打ちかけがあるだけなら「消して送る」と並ぶ）。押すと `via: "process"` で送り直す。Claude は下の `claude -p --resume`、開いている Codex は `codex queue` を使う。
 
 **開いている Codex は queue へ送る。** 同じスレッドを別プロセスから `codex exec resume` すると、`thread-store conflict: ... already has an active writer` で失敗する。`CODEX_HOME/thread-writer-locks/<session>.lock` を**開いているプロセスがいる**とき（`lsof -t` で見る。補欠で記録時の pid）は `codex queue --thread <session> --message <text>` を実行し、active writerを奪わず開いている会話へ足す。queueコマンドの終了まで待つので、受付に失敗したのに `202` を返すことはない。応答の `via` は `queue`。

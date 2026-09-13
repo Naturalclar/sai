@@ -327,12 +327,21 @@ class RecordTest(unittest.TestCase):
         ])
         self.assertEqual(row["user_text"], "")
 
-    def test_user_text_is_clipped_to_2000(self):
+    def test_user_text_is_clipped_at_the_limit_and_marked(self):
+        row = self._claude_row([
+            {"type": "user", "message": {"role": "user", "content": "い" * 30000}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "ok"}]}},
+        ])
+        self.assertEqual(len(row["user_text"]), 20000)
+        self.assertEqual(row["clipped"], ["user_text"], "切った項目を行に載せる（#358）")
+
+    def test_long_user_text_under_the_limit_is_kept_whole(self):
         row = self._claude_row([
             {"type": "user", "message": {"role": "user", "content": "い" * 5000}},
             {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "ok"}]}},
         ])
-        self.assertEqual(len(row["user_text"]), 2000)
+        self.assertEqual(len(row["user_text"]), 5000, "前は 2000 字で切っていた（#358）")
+        self.assertNotIn("clipped", row, "切っていない行にはキーごと載せない")
 
     def test_task_notification_turn_has_no_user_text(self):
         notice = "<task-notification>\n<task-id>a7e44ec6</task-id>\n<output-file>/tmp/x</output-file>\n</task-notification>"
@@ -403,17 +412,38 @@ class RecordTest(unittest.TestCase):
             {"type": "user", "message": {"role": "user", "content": "やって"}},
             {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "thinking", "thinking": "頭" + "あ" * 5000 + "尾"}, {"type": "text", "text": "ok"}]}},
         ])
-        self.assertEqual(len(row["thinking"]), 4000)
+        self.assertEqual(len(row["thinking"]), 5002, "5000 字程度なら切らない（#358）")
+        self.assertNotIn("clipped", row)
+        row = self._claude_row([
+            {"type": "user", "message": {"role": "user", "content": "やって"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "thinking", "thinking": "頭" + "あ" * 30000 + "尾"}, {"type": "text", "text": "ok"}]}},
+        ])
+        self.assertEqual(len(row["thinking"]), 20000)
         self.assertTrue(row["thinking"].startswith("頭"), "切るときは先頭側を残す")
+        self.assertEqual(row["clipped"], ["thinking"])
 
-    def test_text_is_clipped_to_2000(self):
+    def test_text_is_clipped_at_the_limit_and_marked(self):
         transcript = Path(self.tmp.name) / "transcript.jsonl"
         write_jsonl(transcript, [
-            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "あ" * 5000}]}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "あ" * 30000}]}},
         ])
         payload = {"session_id": "s", "transcript_path": str(transcript), "cwd": str(self.cwd), "hook_event_name": "Stop"}
         run(stdin=json.dumps(payload), env=self.env)
-        self.assertEqual(len(read_rows(self.feed_dir)[0]["text"]), 2000)
+        row = read_rows(self.feed_dir)[0]
+        self.assertEqual(len(row["text"]), 20000)
+        self.assertEqual(row["clipped"], ["text"], "切った項目を行に載せる（#358）")
+
+    def test_long_text_under_the_limit_is_kept_whole(self):
+        """2000 字で切っていたので「もっと見る」を押しても続きが読めなかった（#358）"""
+        transcript = Path(self.tmp.name) / "transcript.jsonl"
+        write_jsonl(transcript, [
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "あ" * 5000 + "おわり"}]}},
+        ])
+        payload = {"session_id": "s", "transcript_path": str(transcript), "cwd": str(self.cwd), "hook_event_name": "Stop"}
+        run(stdin=json.dumps(payload), env=self.env)
+        row = read_rows(self.feed_dir)[0]
+        self.assertTrue(row["text"].endswith("おわり"), "末尾まで残る")
+        self.assertNotIn("clipped", row)
 
     # -- 端末の居場所（pane / pid）
 

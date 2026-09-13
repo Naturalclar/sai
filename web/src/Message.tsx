@@ -12,6 +12,7 @@ import { DigestFeedback } from './DigestFeedback'
 import { SourceImages } from './SourceImages'
 import { ImageSourceContext } from './imageContext'
 import { QuestionPreview } from './QuestionPreview'
+import { ClippedNote } from './ClippedNote'
 import type { AskQuestion } from '../../shared/approvals.ts'
 
 // 折りたたむかは描画前の生の長さで見る（コードブロック1つで8行を超えても折りたたむ。今まで通り）
@@ -56,10 +57,14 @@ interface Props {
   utteranceKey?: string
   /** 差分を開くボタン（#280。フィードで、いまのブランチの PR に触れているバブルだけ）。無ければ出さない */
   diff?: DiffButtonProps
+  /** 本文が record.py に切られている（#358）。末尾に「ここで切れています」を出す */
+  clipped?: boolean
+  /** 思考が切られている（#358）。折りたたみの中の末尾に出す */
+  thinkingClipped?: boolean
 }
 
 /** バブル1つ分の本文。長ければ折りたたんで「もっと見る」を付ける */
-export function Message({ ts, text: raw, markdown, waiting, questions, resolved, thinking, thinkingOpen = false, summary, digestKey, model, remote, linear, found = false, utteranceKey, diff }: Props) {
+export function Message({ ts, text: raw, markdown, waiting, questions, resolved, thinking, thinkingOpen = false, summary, digestKey, model, remote, linear, found = false, utteranceKey, diff, clipped = false, thinkingClipped = false }: Props) {
   // 自分の入力に添えた画像は、パスの文字列ではなくサムネイルで出す（本文の末尾に足してある。shared/attachments.ts）
   const { body: text, urls } = markdown ? { body: raw, urls: [] as string[] } : splitAttachments(raw)
   const [open, setOpen] = useState(false)
@@ -77,6 +82,7 @@ export function Message({ ts, text: raw, markdown, waiting, questions, resolved,
       <div className={`msg waiting${resolved ? ' resolved' : ''}${mark}`} {...anchor}>
         <span className="time">{hm(ts)}</span>
         <div className="body" title={resolved ? 'この待ちはもう解消している' : '人の答えを待って止まっている'}>⏳ {text || '人を待って止まっている'}</div>
+        {clipped && <ClippedNote />}
         {questions && !resolved && <QuestionPreview questions={questions} />}
       </div>
     )
@@ -86,7 +92,7 @@ export function Message({ ts, text: raw, markdown, waiting, questions, resolved,
     return (
       <div className={`msg${mark}`} {...anchor}>
         <span className="time">{hm(ts)}</span>
-        {thinking && <ThinkingBlock text={thinking} openAll={thinkingOpen} />}
+        {thinking && <ThinkingBlock text={thinking} openAll={thinkingOpen} clipped={thinkingClipped} />}
         <div className="summary" ref={summaryRef}>
           {/* 一言の中の URL・#123・PGR-123 はリンクにする（shared/refs.ts）。HTML 文字列は作らない */}
           {/* source に元の本文を渡すと、そこに無い番号はリンクにならない（#268。一言は LLM が書くので、
@@ -103,6 +109,7 @@ export function Message({ ts, text: raw, markdown, waiting, questions, resolved,
         {details && (
           <div className="details" ref={detailsRef}>
             <div className={`body${long && !open ? ' clamped' : ''}`} ref={bodyRef}>{markdown ? <Markdown text={text} /> : text}</div>
+            {clipped && <ClippedNote />}
             {long && (
               <button type="button" className="more" onClick={() => setOpen((v) => !v)} ref={moreRef}>
                 {open ? '折りたたむ' : 'もっと見る'}
@@ -118,13 +125,14 @@ export function Message({ ts, text: raw, markdown, waiting, questions, resolved,
     <div className={`msg${mark}`} {...anchor}>
       <span className="time">{hm(ts)}</span>
       {model && <span className="tag model" title="このターンからモデルが変わった">{model}</span>}
-      {thinking && <ThinkingBlock text={thinking} openAll={thinkingOpen} />}
+      {thinking && <ThinkingBlock text={thinking} openAll={thinkingOpen} clipped={thinkingClipped} />}
       {text ? (
         <div className={`body${long && !open ? ' clamped' : ''}`} ref={bodyRef}>{markdown ? <Markdown text={text} /> : text}</div>
       ) : (
         urls.length === 0 && <div className="empty-text">(本文なし)</div>
       )}
       <AttachedImages urls={urls} />
+      {clipped && <ClippedNote />}
       {long && (
         <button type="button" className="more" onClick={() => setOpen((v) => !v)} ref={moreRef}>
           {open ? '折りたたむ' : 'もっと見る'}

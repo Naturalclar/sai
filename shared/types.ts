@@ -10,7 +10,10 @@ export type SessionSource = 'payload' | 'rollout' | 'synth' | ''
  * 行の形の版。feed/record.py の RECORD_VERSION と同じ値（ずれると pnpm test:feed が止まる）。
  * 行の形を変えるたびに上げる。画面は窓の中の一番新しい行の v がこれより古いと「record.py が古い」と出す
  */
-export const RECORD_VERSION = 7
+export const RECORD_VERSION = 8
+
+/** record.py が切った本文の項目（#358。FeedRow.clipped） */
+export type ClippedField = 'text' | 'user_text' | 'thinking'
 
 /** ~/.agent-feed/YYYY-MM-DD.jsonl の1行 = 1ターン */
 export interface FeedRow {
@@ -65,6 +68,12 @@ export interface FeedRow {
   pane?: string
   /** セッション本体（claude / codex）の pid。生きていれば端末で開いている */
   pid?: number
+  /**
+   * 本文が長すぎて record.py が切った項目（#358）。切ったものだけが入り、切っていなければキーごと無い。
+   * 画面はその本文の末尾に「ここで切れています」を出す（切ったことが分からないと、そこで終わったのか
+   * 切られたのかが読めない）。上限は record.py の MAX_TEXT / MAX_USER_TEXT / MAX_THINKING
+   */
+  clipped?: ClippedField[]
   first_user_text?: string
   /**
    * text をチャットの一言コメントに言い換えたもの（性格つき）。JSONL には無く、サーバが応答時に

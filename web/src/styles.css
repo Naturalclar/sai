@@ -537,6 +537,10 @@
   .gh { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
   .gh .name { font-weight: 700; }
   .gh .ch { font-family: var(--mono); font-size: 12px; color: var(--accent); }
+  /* ブランチ名は識別子なので code のチップにする（#356。前は .msg .branch に書いていて、見出し（.gh）の中には当たっていなかった）。
+     見た目は返信先のチップ（.reply .target code）と揃え、長い名前は幅で切る（狭い画面でチップの中で 2 行に割れて時刻が落ちる。全文は title に持たせる） */
+  .gh .branch { font-family: var(--mono); font-size: 11px; color: var(--muted); background: var(--chip); padding: 1px 5px; border-radius: 4px;
+    max-width: 14em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .gh .time, .msg .time { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
   .msg { position: relative; padding: 2px 0 6px; }
   .msg .time { position: absolute; left: -46px; top: 4px; width: 40px; text-align: right; opacity: 0; }
@@ -607,7 +611,6 @@
   .msg.waiting .questions.preview .options .rec { margin-left: 6px; padding: 1px 6px; border-radius: 8px; background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); font-size: 11px; font-weight: 600; }
   .msg.waiting .questions.preview .options .desc { display: block; margin-top: 1px; color: var(--muted); font-size: 12px; }
   .msg.waiting .questions.preview .hint { color: var(--muted); font-size: 12px; }
-  .msg .branch { font-family: var(--mono); font-size: 11px; color: var(--muted); }
 
   /* -- reply */
   .avatar.me { background: var(--accent); }

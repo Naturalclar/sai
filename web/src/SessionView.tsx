@@ -48,7 +48,7 @@ export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggl
 
   // 返信先はこのセッションだけなので、行数はこの画面のターン完了の行数（入力の行は返信の終わりではない）
   const turns = data?.rows.reduce((n, r) => n + (eventKind(r.event) === 'turn' ? 1 : 0), 0) ?? 0
-  const { pending, failed, send, confirm, confirmReplace, confirmProcess, cancelConfirm } = useReply((target) => (target === id ? turns : 0), data?.replying ?? NO_REPLYING, updatedAt)
+  const { pending, failed, send, confirm, confirmedSent, confirmReplace, confirmProcess, cancelConfirm } = useReply((target) => (target === id ? turns : 0), data?.replying ?? NO_REPLYING, updatedAt)
   const mine = pending.find((p) => p.id === id) ?? null
   const now = updatedAt?.getTime() ?? 0
   const failedHere = failed && failed.id === id ? failed.message : null
@@ -167,6 +167,7 @@ export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggl
             // 1 回の描画では A の data のまま id だけ B になっている。作り直さないと A の打ちかけを B に送れてしまう
             key={`reply:${id}`}
             draftKey={id}
+            sentFromConfirm={confirmedSent}
             repo={s.repo}
             skillsId={id}
             history={history}

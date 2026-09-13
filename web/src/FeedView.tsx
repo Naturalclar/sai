@@ -80,7 +80,7 @@ export function FeedView({ project, projects, onProject, sessions = NO_SESSIONS,
     return m
   }, [rows])
 
-  const { pending: allPending, failed, send, confirm, confirmReplace, confirmProcess, cancelConfirm } = useReply((id) => counts.get(id) ?? 0, data?.replying ?? NO_REPLYING, updatedAt)
+  const { pending: allPending, failed, send, confirm, confirmedSent, confirmReplace, confirmProcess, cancelConfirm } = useReply((id) => counts.get(id) ?? 0, data?.replying ?? NO_REPLYING, updatedAt)
   // サーバの replying にはこの画面の外のセッションも入る。フィードに行があるか、候補に出ているものだけ
   // （一覧にだけあるセッションへ送った直後は、まだフィードに行が無い）
   const pending = allPending.filter((p) => counts.has(p.id) || targets.some((t) => t.id === p.id))
@@ -184,6 +184,7 @@ export function FeedView({ project, projects, onProject, sessions = NO_SESSIONS,
           <ReplyBox
             repo={target.repo}
             skillsId={target.id}
+            sentFromConfirm={confirmedSent}
             history={history}
             onLeaveToSidebar={onLeaveToSidebar}
             terminal={target.terminal}

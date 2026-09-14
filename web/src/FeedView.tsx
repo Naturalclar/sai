@@ -161,6 +161,7 @@ export function FeedView({ project, projects, onProject, sessions = NO_SESSIONS,
           profile={data.profile}
           linear={linear}
           diffs={{ summaries: diffSummaries, open: openDiff, onToggle: onToggleDiff }}
+          longOpen
           jumpTo={jump}
           trailer={
             (pending.length > 0 || approvals.length > 0 || queuedShown.length > 0) && (

@@ -61,13 +61,20 @@ interface Props {
   clipped?: boolean
   /** 思考が切られている（#358）。折りたたみの中の末尾に出す */
   thinkingClipped?: boolean
+  /**
+   * 長い本文を最初から開いた状態で出す（#365。フィードだけ）。ボタンは今までどおり両方向のトグルなので、
+   * 畳みたいものだけ「折りたたむ」で畳める
+   */
+  defaultOpen?: boolean
 }
 
 /** バブル1つ分の本文。長ければ折りたたんで「もっと見る」を付ける */
-export function Message({ ts, text: raw, markdown, waiting, questions, resolved, thinking, thinkingOpen = false, summary, digestKey, model, remote, linear, found = false, utteranceKey, diff, clipped = false, thinkingClipped = false }: Props) {
+export function Message({ ts, text: raw, markdown, waiting, questions, resolved, thinking, thinkingOpen = false, summary, digestKey, model, remote, linear, found = false, utteranceKey, diff, clipped = false, thinkingClipped = false, defaultOpen = false }: Props) {
   // 自分の入力に添えた画像は、パスの文字列ではなくサムネイルで出す（本文の末尾に足してある。shared/attachments.ts）
   const { body: text, urls } = markdown ? { body: raw, urls: [] as string[] } : splitAttachments(raw)
-  const [open, setOpen] = useState(false)
+  // 長い本文を開いているか。#365 の画面（フィード）では最初から開いた状態で始める。
+  // `useReveal` は初期値を覚えてから比べるので、開いた状態で始めても mount では動かない
+  const [open, setOpen] = useState(defaultOpen)
   // 一言があるとき、元の本文（詳細）を開いているか
   const [details, setDetails] = useState(false)
   const long = isLong(text)

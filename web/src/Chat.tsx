@@ -36,6 +36,11 @@ interface Props {
   showThinking?: boolean
   /** 思考を最初から開いておく（ヘッダの「思考を全部開く」） */
   thinkingOpen?: boolean
+  /**
+   * 長い本文（`isLong`）を最初から開いた状態で出す（#365）。フィードだけが渡す。
+   * 流し読みのたびに「もっと見る」を押さずに済む。畳みたいものは今までどおりボタンで畳める
+   */
+  longOpen?: boolean
   /** 自分の表示名とアイコン（自分側のバブル） */
   profile?: Profile
   /** Linear の workspace（設定）。一言の中の PGR-123 のリンク先。空ならリンクにしない */
@@ -73,7 +78,7 @@ function flash(el: HTMLElement) {
   window.setTimeout(() => el.classList.remove('found'), JUMP_FLASH_MS)
 }
 
-export function Chat({ rows, showChannel, selfHost = '', sessions = NO_SESSIONS, trailer, showThinking = false, thinkingOpen = false, profile, linear = '', focusTs = '', diffs, jumpTo = null, question }: Props) {
+export function Chat({ rows, showChannel, selfHost = '', sessions = NO_SESSIONS, trailer, showThinking = false, thinkingOpen = false, longOpen = false, profile, linear = '', focusTs = '', diffs, jumpTo = null, question }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
   // 最後に最下部へ送ったときの scrollHeight。中身の高さが変わったときだけ送るため（#344）
@@ -207,6 +212,7 @@ export function Chat({ rows, showChannel, selfHost = '', sessions = NO_SESSIONS,
                         utteranceKey={u.key}
                         clipped={u.clipped}
                         thinkingClipped={showThinking && wasClipped(u.row, 'thinking')}
+                        defaultOpen={longOpen}
                       />
                       </ImageSourceContext>
                       )

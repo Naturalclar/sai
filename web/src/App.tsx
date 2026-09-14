@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { HIDDEN_POLL_MS, parseRoute, useHashRoute, useLocalState, usePolling } from './hooks'
 import { todoItems } from '../../shared/todoItems.ts'
+import { sessionGroups, toggleCollapsed, visibleIds } from './sessionGroups'
 import { titleWith } from '../../shared/notify.ts'
 import { useNotify } from './useNotify'
 import { SessionList } from './SessionList'
@@ -51,6 +52,14 @@ interface UiState {
   sidebar: 'open' | 'closed'
 }
 const DEFAULT_UI: UiState = { sidebar: 'open' }
+/**
+ * サイドバーで畳んでいるリポジトリの塊（#364）。**覚えるのは畳んだものだけ**で、既定は全部開いた状態
+ * （新しいリポジトリのセッションが増えても勝手に畳まれない）
+ */
+interface GroupState {
+  collapsed: string[]
+}
+const DEFAULT_GROUPS: GroupState = { collapsed: [] }
 /** ⌘K の候補がまだ何も無いとき（一覧の取得前）。毎回作り直すと再描画が増える */
 const EMPTY_SESSIONS: never[] = []
 const EMPTY_PROJECTS: never[] = []
@@ -80,6 +89,7 @@ export function App() {
   const notify = useNotify(todo)
 
   // サイドバーの開閉。レイアウトは main の class で CSS が切り替える。狭い画面では CSS 側が無視する
+  const [groupUi, setGroupUi] = useLocalState<GroupState>('sai.groups', DEFAULT_GROUPS)
   const [ui, setUi] = useLocalState<UiState>('sai.ui', DEFAULT_UI)
   const sidebarOpen = ui.sidebar !== 'closed'
   const toggleSidebar = useCallback(() => setUi({ sidebar: sidebarOpen ? 'closed' : 'open' }), [setUi, sidebarOpen])
@@ -145,7 +155,12 @@ export function App() {
   // 入力欄にフォーカスがあるときはそちらの操作（caret の移動、@ の候補）なので触らない。サイドバーを閉じていても効く
   // サイドバーで選ばれている項目。固定の「フィード」「要対応」もセッションと同じ 1 項目として扱う（#224）
   const active: NavTarget = route.name === 'session' ? { kind: 'session', id: route.id } : route.name === 'todo' ? { kind: 'todo' } : { kind: 'feed' }
-  const sessionIds = useMemo(() => list.data?.sessions.map((s) => s.id) ?? [], [list.data])
+  // リポジトリごとの塊（#364）。**画面の並びとキーボードの ↑↓ の並びは同じ関数から作る**ので、
+  // 畳んだ塊の中のセッション（見えていない）には移らない
+  const waitingIds = useMemo(() => new Set((todo ?? []).map((t) => t.id)), [todo])
+  const groups = useMemo(() => sessionGroups(list.data?.sessions ?? [], waitingIds), [list.data, waitingIds])
+  const toggleGroup = useCallback((key: string) => setGroupUi({ collapsed: toggleCollapsed(groupUi.collapsed, key) }), [setGroupUi, groupUi.collapsed])
+  const sessionIds = useMemo(() => visibleIds(groups, groupUi.collapsed), [groups, groupUi.collapsed])
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const action = navAction(e)
@@ -264,7 +279,7 @@ export function App() {
         <aside className="sidebar">
           {/* 幅を固定した箱に入れる。開閉の遷移中に列だけが縮み、中身は折り返さない */}
           <div className="side-inner">
-            <SessionList list={list} filters={filters} setFilters={setFilters} active={active} creating={route.name === 'new'} />
+            <SessionList list={list} filters={filters} setFilters={setFilters} active={active} creating={route.name === 'new'} groups={groups} collapsed={groupUi.collapsed} onToggleGroup={toggleGroup} />
           </div>
         </aside>
         <div className="pane">

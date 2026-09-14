@@ -7,6 +7,7 @@ import { DaysSelect } from './DaysSelect'
 import { FacetSelect } from './FacetSelect'
 import { SessionItem } from './SessionItem'
 import type { NavTarget } from './sessionNav'
+import { isCollapsed, type SessionGroup } from './sessionGroups'
 import { todoItems } from '../../shared/todoItems.ts'
 
 interface Props {
@@ -18,10 +19,18 @@ interface Props {
   active: NavTarget
   /** 新しいセッションの画面（`#/new`。#314）を開いている。キーボードの移動先ではないので active とは別に持つ */
   creating?: boolean
+  /**
+   * リポジトリごとの塊（#364）。**App が `sessionGroups()` で作って渡す**（キーボードの `↑↓` の並びも
+   * 同じものから作るので、ここで別に組み立てない）
+   */
+  groups: readonly SessionGroup[]
+  /** 畳んでいる塊の key。**覚えるのは畳んだものだけ**（既定は全部開いている） */
+  collapsed: readonly string[]
+  onToggleGroup: (key: string) => void
 }
 
 /** 左サイドバー。絞り込み、固定の「＋ 新しいセッション」「フィード」「要対応」、その下にセッション一覧（新しい順） */
-export function SessionList({ list, filters, setFilters, active, creating = false }: Props) {
+export function SessionList({ list, filters, setFilters, active, creating = false, groups, collapsed, onToggleGroup }: Props) {
   // キーボードで固定項目に移ったとき、サイドバーの一番上まで見えるようにする（SessionItem と同じ扱い）
   const pinnedRef = useRef<HTMLAnchorElement>(null)
   const pinned = active.kind === 'feed' || active.kind === 'todo'
@@ -95,22 +104,44 @@ export function SessionList({ list, filters, setFilters, active, creating = fals
           <span className="last">{todo > 0 ? 'あなたを待っています' : '待っているものはありません'}</span>
         </a>
         {archived && <div className="head">アーカイブ済み（薄く出る。開いて「戻す」か、新しい行が届けば自動で戻る）</div>}
-        {sessions.map((s) => (
-          <SessionItem
-            key={s.id}
-            s={s}
-            active={active.kind === 'session' && s.id === active.id}
-            replying={data?.replying[s.id] ?? null}
-            {...(data?.profile ? { profile: data.profile } : {})}
-            approval={data?.approvals[s.id]?.[0] ?? null}
-            now={now}
-            swipe={swipe}
-            selfHost={data?.host ?? ''}
-            reduced={reduced}
-            open={openId === s.id}
-            onOpenChange={(open) => setOpenId(open ? s.id : openId === s.id ? null : openId)}
-          />
-        ))}
+        {/* リポジトリごとの塊（#364）。**塊が 1 つでも見出しを出す**（並びが場合によって変わらない方が読みやすく、
+            畳む場所もいつも同じになる）。畳んでいても中の「要対応」の数は見出しに残す（畳んで見落とさないため） */}
+        {groups.map((g) => {
+          const closed = isCollapsed(collapsed, g.key)
+          return (
+            <div className="side-group" key={`group:${g.key}`}>
+              <button
+                type="button"
+                className="side-group-head"
+                aria-expanded={!closed}
+                onClick={() => onToggleGroup(g.key)}
+                title={`${g.label}（${g.sessions.length} 件）を${closed ? '開く' : '畳む'}`}
+              >
+                <span className="caret" aria-hidden="true">{closed ? '▸' : '▾'}</span>
+                <span className="name">{g.label}</span>
+                {g.todo > 0 && <span className="todo-n" title={`${g.todo} 件があなたを待っています`}>{g.todo}</span>}
+                <span className="n">{g.sessions.length}</span>
+              </button>
+              {!closed &&
+                g.sessions.map((s) => (
+                  <SessionItem
+                    key={s.id}
+                    s={s}
+                    active={active.kind === 'session' && s.id === active.id}
+                    replying={data?.replying[s.id] ?? null}
+                    {...(data?.profile ? { profile: data.profile } : {})}
+                    approval={data?.approvals[s.id]?.[0] ?? null}
+                    now={now}
+                    swipe={swipe}
+                    selfHost={data?.host ?? ''}
+                    reduced={reduced}
+                    open={openId === s.id}
+                    onOpenChange={(open) => setOpenId(open ? s.id : openId === s.id ? null : openId)}
+                  />
+                ))}
+            </div>
+          )
+        })}
       </nav>
       {data && sessions.length === 0 && <div className="empty">{archived ? 'アーカイブ済みのセッションはありません' : 'この条件のセッションはありません'}</div>}
     </>

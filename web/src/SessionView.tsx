@@ -131,6 +131,8 @@ export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggl
           linear={linear}
           showThinking
           thinkingOpen={thinkingUi.open}
+          // 長い本文は最初から開いた状態で出す（#369。フィードと揃える。畳むのはボタン 1 つ）
+          longOpen
           focusTs={focusTs}
           {...(data.question ? { question: data.question } : {})}
           trailer={

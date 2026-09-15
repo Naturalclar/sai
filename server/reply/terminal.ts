@@ -6,6 +6,7 @@
 // 別プロセスを立てないので、返答は端末に出て、フックが普通のターンとして JSONL に足す。
 // 「処理中」は子プロセスが無いので、since より新しいターン完了の行が届いたら解消（settle）。
 import { spawn } from 'node:child_process'
+import { settledByRow } from '../../shared/turnSettled.ts'
 import type { Agent, Replying, ReplyingMap, Terminal } from '../../shared/types.ts'
 
 /** ターン完了の行が届かないまま、これだけ経ったら諦めて「処理中」を消す */
@@ -385,10 +386,9 @@ export class TerminalReplies {
   /** lastTurn(id) がその返信より新しければ終わり。TTL を超えたものも消す。失敗にしたものは少しだけ見せてから消す */
   settle(lastTurn: (id: string) => string | undefined): void {
     for (const [id, entry] of this.active) {
-      const turn = lastTurn(id)
-      // 行の ts は秒までなので、since も秒に丸めて比べる（同じ秒に届いたターンも「後」とみなす）
       const since = Math.floor(Date.parse(entry.replying.since) / 1000) * 1000
-      if (turn && Date.parse(turn) >= since) this.active.delete(id)
+      // 行で終わったかの判定は shared/turnSettled.ts に 1 つだけ（ProcessRunner.settle() と共用。#375）
+      if (settledByRow(entry.replying.since, lastTurn(id))) this.active.delete(id)
       else if (entry.failedAt !== undefined) {
         if (this.now() - entry.failedAt > TERMINAL_FAILED_TTL_MS) this.active.delete(id)
       } else if (this.now() - since > TERMINAL_REPLY_TTL_MS) this.active.delete(id)

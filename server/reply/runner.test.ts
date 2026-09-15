@@ -254,3 +254,37 @@ test('失敗した分は replying.json に書かない（引き取ると死ん�
   assert.deepEqual(await readState(state), {}, '失敗の分は書かない')
   await rm(dir, { recursive: true, force: true })
 })
+
+test('settle: 行が届いたら「処理中」を終わりにして、残った子を始末する（#375）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-settle-'))
+  const state = join(dir, 'replying.json')
+  const runner = new ProcessRunner(join(dir, 'reply.log'), state)
+  // 答えたあとも終わらない子（`opencode run` の実測の形）
+  await runner.start('S@r', { bin: process.execPath, args: ['-e', 'setTimeout(() => {}, 60000)'], cwd: process.cwd(), text: 'やって' })
+  const since = runner.snapshot()['S@r']?.since ?? ''
+  const pid = (await readState(state))['S@r']?.pid ?? 0
+  assert.ok(pid > 0, 'pid が replying.json に載っている')
+  assert.equal(runner.running('S@r'), true, 'プロセスが生きている間は処理中')
+
+  assert.deepEqual(runner.settle(() => undefined), [], '行が無ければ何もしない')
+  assert.deepEqual(runner.settle(() => '2000-01-01T00:00:00Z'), [], '送る前の行では終わりにしない')
+  assert.equal(runner.running('S@r'), true)
+
+  const after = new Date(Date.parse(since) + 1000).toISOString()
+  assert.deepEqual(runner.settle((id) => (id === 'S@r' ? after : undefined)), ['S@r'], '後に届いた行で終わり')
+  assert.deepEqual(runner.snapshot(), {}, '処理中から消える')
+  assert.deepEqual(await readState(state), {}, 'replying.json からも消える')
+
+  // 残っていた子は kill されている
+  let alive = true
+  for (let i = 0; i < 60 && alive; i++) {
+    await wait(50)
+    try {
+      process.kill(pid, 0)
+    } catch {
+      alive = false
+    }
+  }
+  assert.equal(alive, false, '終わらない子を始末する')
+  await rm(dir, { recursive: true, force: true })
+})

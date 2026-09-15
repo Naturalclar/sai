@@ -24,6 +24,27 @@ export function suggestFrom(history: readonly string[], text: string): string {
   return ''
 }
 
+/** 続きの出どころ。`history` = 前に送った文（#219）、`next` = 一言と同じ口で作った案（#371） */
+export type SuggestionSource = 'history' | 'next'
+
+export interface Suggestion {
+  text: string
+  from: SuggestionSource
+}
+
+/**
+ * 入力欄の背面に薄く出す続き（#373）。**打ちかけがあれば履歴の続き、空なら次に送る文面の案**。
+ * 2 つが同時に出ることは無い（履歴の続きは本文が空では出さないので、条件が重ならない）。
+ * 受け取り方も同じ（`→`。本文が空なので `text + suggestion` がそのまま案になる）
+ */
+export function suggestionFor(history: readonly string[], text: string, nextAsk?: string): Suggestion | null {
+  const cont = suggestFrom(history, text)
+  if (cont) return { text: cont, from: 'history' }
+  // 空**のとき**だけ（空白だけの本文に足すと頭に空白が残る）
+  const ask = text === '' ? (nextAsk ?? '').trim() : ''
+  return ask ? { text: ask, from: 'next' } : null
+}
+
 export interface AcceptState {
   /** カーソルの位置。**末尾のときだけ**受け入れる（文の途中の `→` はカーソル移動のまま） */
   caret: number

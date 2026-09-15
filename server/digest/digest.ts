@@ -14,6 +14,7 @@ import { eventKind } from '../../shared/events.ts'
 import { digestPrompt } from '../../shared/persona.ts'
 import { digestIssues } from '../../shared/digestCheck.ts'
 import { digestKey } from '../../shared/digestFeedback.ts'
+import { cleanNextAsk, nextAskPrompt } from '../../shared/nextAsk.ts'
 import type { DigestIssueCode } from '../../shared/digestCheck.ts'
 import { childEnv } from '../reply/runner.ts'
 import type { DigestProvider, FeedRow, PersonaId } from '../../shared/types.ts'
@@ -44,6 +45,11 @@ export interface DigestEntry {
   retried?: true
   /** 作り直しても残った点（`digestIssues()` の code）。無ければ付けない */
   issues?: DigestIssueCode[]
+  /**
+   * 次に送る文面の案（#371）。一言と同じ口でもう 1 回呼んで作る。
+   * **そのセッションの一番新しい行の分だけ**で、作れなければ付けない
+   */
+  next_ask?: string
 }
 
 /** 行のキー。行は (エンティティ, ts) で一意。**画面と同じものを使う**（shared/digestFeedback.ts。#346） */
@@ -282,6 +288,8 @@ export class Digester {
    * 「起動時に見えていた行の集合」ではなく時刻で切るので、あとから `days` が広がって古い行が見えても積まれない（#159）
    */
   private sinceMs: number
+  /** エンティティごとに、いま見えている中で一番新しい対象の行の ts（#371。案を作る行を絞る） */
+  private latest = new Map<string, string>()
   private queue: { key: string; row: FeedRow }[] = []
   private queued = new Set<string>()
   private pumping = false
@@ -382,6 +390,37 @@ export class Digester {
     return ts ? this.store.get(`${entity}|${ts}`)?.summary : undefined
   }
 
+  /** 次に送る文面の案（#371）。一言と同じ行に入っている */
+  nextAskFor(entity: string, ts: string): string | undefined {
+    return ts ? this.store.get(`${entity}|${ts}`)?.next_ask : undefined
+  }
+
+  private entityOf(row: FeedRow): string {
+    return entityId(row.session ?? '', row.repo ?? '', row.ts)
+  }
+
+  private noteLatest(row: FeedRow): void {
+    const entity = this.entityOf(row)
+    const seen = this.latest.get(entity)
+    if (!seen || seen < row.ts) this.latest.set(entity, row.ts)
+  }
+
+  /** その行が、そのセッションで一番新しい対象の行か。覚えていなければ（scan を通っていない）作る側に倒す */
+  private isLatest(row: FeedRow): boolean {
+    const seen = this.latest.get(this.entityOf(row))
+    return !seen || seen <= row.ts
+  }
+
+  /** 案を 1 つ。作れなければ空（失敗は digest.log に残し、一言はそのまま出す） */
+  private async makeNextAsk(row: FeedRow, summarizer: Summarizer, key: string): Promise<string> {
+    try {
+      return cleanNextAsk(await summarizer.summarize(nextAskPrompt(row.user_text ?? '', row.text ?? '')))
+    } catch (err) {
+      await this.log(`${new Date().toISOString()} ${key} 次の案に失敗: ${err instanceof Error ? err.message : String(err)}`)
+      return ''
+    }
+  }
+
   /**
    * いま見えている行を渡す。サーバが起動したあとの `ts` を持つ対象の行だけを、新しい順に列に積む。
    * 3 秒ごとの応答のついでに呼ばれる前提で、軽い。
@@ -392,7 +431,10 @@ export class Digester {
     if (!this.enabled) return
     const fresh: { key: string; row: FeedRow }[] = []
     for (const row of rows) {
-      if (!this.wants(row) || this.isPast(row)) continue
+      if (!this.wants(row)) continue
+      // 古い行でも「一番新しいのはどれか」は覚える（案を作る行を決めるのに使う。#371）
+      this.noteLatest(row)
+      if (this.isPast(row)) continue
       const key = digestKey(row)
       if (this.queued.has(key) || this.store.get(key)) continue
       fresh.push({ key, row })
@@ -453,6 +495,11 @@ export class Digester {
             const before = first.map((i) => i.code).join(',')
             await this.log(`${new Date().toISOString()} ${key} 作り直し ${before} → ${issues.map((i) => i.code).join(',') || 'ok'}`)
           }
+          // 次に送る文面の案（#371）。**そのセッションの一番新しい行のときだけ**作る
+          // （pump は増えた行を全部処理するが、古い行の案は作った瞬間に捨てられる）。
+          // 一言とは別の呼び出しにしてあるので、ここで失敗しても一言は残る
+          // 作っている間に画面から切られたら、案の口は叩かない（作りかけの一言だけ終わらせる。#288 と同じ扱い）
+          const nextAsk = this.enabled && this.isLatest(row) ? await this.makeNextAsk(row, summarizer, key) : ''
           await this.store.append({
             key,
             persona,
@@ -461,6 +508,7 @@ export class Digester {
             ts: new Date().toISOString(),
             ...(first.length > 0 ? { retried: true } : {}),
             ...(issues.length > 0 ? { issues: issues.map((i) => i.code) } : {}),
+            ...(nextAsk ? { next_ask: nextAsk } : {}),
           })
         } catch (err) {
           await this.log(`${new Date().toISOString()} ${key} ${err instanceof Error ? err.message : String(err)}`)

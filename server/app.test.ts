@@ -92,11 +92,20 @@ class FakeCodexApp implements CodexApp {
 }
 const codexApp = new FakeCodexApp()
 
-/** 一言（digest）の偽物。プロンプトの本文の先頭を返す。null を返す設定なら失敗 */
+/**
+ * 一言（digest）の偽物。プロンプトの本文の先頭を返す。null を返す設定なら失敗。
+ * 次に送る文面の案（#371）は同じ口を使うので**別に数える**（一言の回数を見る側が混ざらないように）
+ */
 class FakeSummarizer implements Summarizer {
   prompts: string[] = []
+  nextAsks: string[] = []
   fail = false
   async summarize(prompt: string): Promise<string> {
+    if (prompt.includes('あなたが次に送る文')) {
+      this.nextAsks.push(prompt)
+      if (this.fail) throw new Error('fake failure')
+      return '次はどうする？'
+    }
     this.prompts.push(prompt)
     if (this.fail) throw new Error('fake failure')
     return `${(prompt.split('\n---\n')[1] ?? '').slice(0, 8)}（まとめ）`
@@ -1236,6 +1245,9 @@ test('digest: 起動後に増えた行に一言が付いて feed / 詳細 / 一�
   assert.equal(detail.session.last_summary, 'PR #35 を（まとめ）')
   const list = (await (await get('/api/sessions?days=7')).json()) as SessionsResponse
   assert.equal(list.sessions.find((s) => s.id === 'D1@r')!.last_summary, 'PR #35 を（まとめ）')
+  // 次に送る文面の案（#371）も一言と同じ行から載る（一番新しいターン完了の行の分だけ）
+  assert.equal(list.sessions.find((s) => s.id === 'D1@r')!.next_ask, '次はどうする？')
+  assert.equal(list.sessions.find((s) => s.id === 'S1@kanban')!.next_ask, undefined)
   assert.equal(list.sessions.find((s) => s.id === 'S1@kanban')!.last_summary, undefined, '起動時にあった行しか無いセッションには付かない')
 
   // ファイルに残っている（作ったときの性格つき）

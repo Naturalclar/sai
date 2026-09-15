@@ -504,8 +504,12 @@ export function createApp(
     if (digest.store.size === 0) return sessions
     return sessions.map((s) => {
       if (s.meta?.digest_off) return s
-      const summary = digest.summaryFor(s.id, s.last_turn_ts ?? '')
-      return summary ? { ...s, last_summary: summary } : s
+      const ts = s.last_turn_ts ?? ''
+      const summary = digest.summaryFor(s.id, ts)
+      // 次に送る文面の案（#371）。一言と同じ行に入っているので、同じところで載せる
+      const nextAsk = digest.nextAskFor(s.id, ts)
+      if (!summary && !nextAsk) return s
+      return { ...s, ...(summary ? { last_summary: summary } : {}), ...(nextAsk ? { next_ask: nextAsk } : {}) }
     })
   }
 

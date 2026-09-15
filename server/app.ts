@@ -390,8 +390,17 @@ export function createApp(
     return Date.parse(updated_at) >= at
   }
   /** 処理中の返信（子プロセス + 端末）。端末の分は、ターン完了の行が届いていれば先に片付け、届いたかを確かめる */
+  /** そのセッションの一番新しいターン完了の行の `ts`。**OpenCode の分だけ**返す（#375 の settle の当て先） */
+  const opencodeTurnOf = (sessions: SessionSummary[], id: string): string | undefined => {
+    const session = sessions.find((s) => s.id === id)
+    return session?.agent === 'opencode' ? session.last_turn : undefined
+  }
+
   const replyingOf = async (sessions: SessionSummary[]): Promise<ReplyingMap> => {
     typed.settle((id) => sessions.find((s) => s.id === id)?.last_turn)
+    // 答えを返したのにプロセスが終わらない CLI（実測: `opencode run -s`）は、行が届いた時点で終わりにする（#375）。
+    // 当てるのは OpenCode だけ（Claude の `-p` と SAI 管理の Codex は普通に終わるので、挙動を変えない）
+    for (const id of run.settle?.((rid) => opencodeTurnOf(sessions, rid)) ?? []) await drain(id)
     await typed.checkDelivery((id, since) => typedStarted(sessions, id, since))
     return { ...typed.snapshot(), ...run.snapshot(), ...codexApp.replying() }
   }

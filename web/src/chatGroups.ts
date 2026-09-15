@@ -110,13 +110,18 @@ const PROMPT_SLACK_MS = 60_000
 export function promptArrived(rows: FeedRow[], id: string, text: string, since: string): boolean {
   const want = text.trim()
   const from = (parseTs(since)?.getTime() ?? 0) - PROMPT_SLACK_MS
-  return rows.some(
-    (r) =>
-      eventKind(r.event) === 'resume' &&
+  return rows.some((r) => {
+    const kind = eventKind(r.event)
+    // 入力の行（Claude）だけでなく、**入力を載せたターン完了の行**でも届いたとみなす（#375）。
+    // Codex と OpenCode は入力の行を書かず、`user_text` はターン完了の行に載るので、
+    // これを見ないと本物の自分バブルと仮バブルで同じ文が 2 つ並ぶ（OpenCode はプロセスが終わらないので残り続けた）
+    if (kind !== 'resume' && kind !== 'turn') return false
+    return (
       (r.user_text ?? '').trim() === want &&
       entityId(r.session, r.repo, r.ts) === id &&
-      (parseTs(r.ts)?.getTime() ?? 0) >= from,
-  )
+      (parseTs(r.ts)?.getTime() ?? 0) >= from
+    )
+  })
 }
 
 /** Slack と同じ: 同じ発言者（speaker+session）が10分以内に続けば1つにまとめる */

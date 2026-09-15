@@ -126,7 +126,23 @@ test('promptArrived: 送った返信と同じ入力の行が、送信時刻よ�
   const prompt = row(10, { event: 'UserPromptSubmit', text: '', user_text: ' 続きを ' })
   assert.equal(promptArrived([row(0), prompt], 's1@sai', '続きを', since), true)
   assert.equal(promptArrived([row(0), row(10, { event: 'UserPromptSubmit', text: '', user_text: '続きを', session: 's2' })], 's1@sai', '続きを', since), false, '別エンティティ')
-  assert.equal(promptArrived([row(0), row(10, { user_text: '続きを' })], 's1@sai', '続きを', since), false, 'ターン完了の行では判定しない')
+  // 入力の行を書かないエージェント（Codex / OpenCode）は `user_text` がターン完了の行に載るので、そちらでも届いたとみなす（#375）
+  assert.equal(promptArrived([row(0), row(10, { user_text: '続きを' })], 's1@sai', '続きを', since), true, 'ターン完了の行に載っていても届いた扱い')
+  assert.equal(
+    promptArrived([row(0), row(10, { event: 'agent-turn-complete', user_text: '続きを' })], 's1@sai', '続きを', since),
+    true,
+    'Codex のターン完了の行',
+  )
+  assert.equal(
+    promptArrived([row(0), row(10, { event: 'session.idle', user_text: '続きを' })], 's1@sai', '続きを', since),
+    true,
+    'OpenCode のターン完了の行',
+  )
+  assert.equal(
+    promptArrived([row(0), row(10, { event: 'PreToolUse', text: '許可待ち: Bash', user_text: '続きを' })], 's1@sai', '続きを', since),
+    false,
+    '待ちの行では判定しない',
+  )
   assert.equal(promptArrived([row(0), prompt], 's1@sai', '違う文', since), false)
   assert.equal(promptArrived([row(0), row(5, { event: 'UserPromptSubmit', text: '', user_text: '続きを' })], 's1@sai', '続きを', since), false, '送信より前（許容を超える）')
   assert.equal(promptArrived([row(0), row(9.5, { event: 'UserPromptSubmit', text: '', user_text: '続きを' })], 's1@sai', '続きを', since), true, '30秒前は許容')

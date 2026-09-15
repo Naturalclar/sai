@@ -8,6 +8,7 @@ import { closeSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, rena
 import { dirname, resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Agent, Replying, ReplyFailure, ReplyingMap } from '../../shared/types.ts'
+import { settledByRow } from '../../shared/turnSettled.ts'
 
 /** 失敗した返信を画面に見せておく時間。ポーリングは3秒なので、これだけあれば拾える */
 export const FAILED_TTL_MS = 2 * 60_000
@@ -217,6 +218,12 @@ export interface Runner {
   snapshot(): ReplyingMap
   /** 起動する。プロセスが立ち上がらなければ（ENOENT など）reject。onExit はプロセスが終わったとき（答え待ちの片付けに使う） */
   start(id: string, cmd: ReplyCommand, onExit?: () => void): Promise<void>
+  /**
+   * 答え終わってもプロセスが終わらない CLI のために、**行が届いたら終わりにする**（#375）。
+   * `lastTurn` はそのセッションの一番新しいターン完了の行の `ts`（**当てたいエージェントの分だけ**返す）。
+   * 終わりにした id を返す（呼び出し側が預かりを回す）
+   */
+  settle?(lastTurn: (id: string) => string | undefined): string[]
 }
 
 /** replying.json の1件。画面に出す Replying に、生存確認用の pid を足したもの。pid 0 は spawn 待ち（自分の子で、まだ pid が無い） */
@@ -335,6 +342,34 @@ export class ProcessRunner implements Runner {
       }
     }
     if (changed) this.persist()
+  }
+
+  /**
+   * 行が届いた返信を終わりにする（#375）。**答えを返したのにプロセスが終わらない CLI**のためのもので、
+   * 実測では `opencode run -s` が該当した（本文つきの行を書いた 37 秒後から 15 分以上、CPU 0.1% で生き残る。
+   * 9/10 には 1 時間 23 分残って手で kill した）。子の `exit` だけを見ていると「処理中」が永久に消えず、
+   * 以後の返信が全部預かりに回り、いつかプロセスが死んだときに `drain()` でまとめて走る（= 二重に送られる）。
+   *
+   * **残った子は始末する**（放っておいても何もしないまま溜まるだけ）。失敗として残している分は触らない。
+   * 当てる相手は呼び出し側が `lastTurn` で決める（普通に終わる Claude / Codex の分は `undefined` を返す）
+   */
+  settle(lastTurn: (id: string) => string | undefined): string[] {
+    const done: string[] = []
+    for (const [id, entry] of [...this.active]) {
+      if (entry.failedAt !== undefined) continue
+      if (!settledByRow(entry.since, lastTurn(id))) continue
+      this.active.delete(id)
+      done.push(id)
+      if (entry.pid > 0 && isAlive(entry.pid)) {
+        try {
+          process.kill(entry.pid)
+        } catch {
+          // もう居ない・権限が無い、のどちらでも実害なし
+        }
+      }
+    }
+    if (done.length > 0) this.persist()
+    return done
   }
 
   /** 処理中か。失敗して残しているだけの分は「処理中ではない」（次の返信を止めない） */

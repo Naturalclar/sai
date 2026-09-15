@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { acceptsSuggestion, suggestFrom, SUGGEST_LABEL_MAX, suggestionLabel } from './replySuggest.ts'
+import { acceptsSuggestion, suggestFrom, suggestionFor, SUGGEST_LABEL_MAX, suggestionLabel } from './replySuggest.ts'
 
 const history = ['マージして', 'マージしてリリースして', 'テストを足して']
 
@@ -60,4 +60,18 @@ test('suggestionLabel: タッチ端末のボタンに出す続き。1 行にし�
   assert.ok(long.endsWith('…'))
   assert.equal(suggestionLabel('\n  '), '', '続きが空白だけならボタンを出さない')
   assert.equal(suggestionLabel(''), '')
+})
+
+test('suggestionFor: 打ちかけがあれば履歴の続き、空なら次に送る文面の案（#373）', () => {
+  assert.deepEqual(suggestionFor(history, 'マー', 'PR を作って'), { text: 'ジして', from: 'history' })
+  assert.deepEqual(suggestionFor(history, '', 'PR を作って'), { text: 'PR を作って', from: 'next' })
+  // 履歴に当たらない打ちかけでも、案には落ちない（打ち始めたら案は引っ込む）
+  assert.equal(suggestionFor(history, 'ぜんぜん違う文', 'PR を作って'), null)
+})
+
+test('suggestionFor: 案が無ければ null。空白だけの本文には足さない', () => {
+  assert.equal(suggestionFor([], '', undefined), null)
+  assert.equal(suggestionFor([], '', '   '), null)
+  assert.equal(suggestionFor([], ' ', 'PR を作って'), null, '頭に空白が残るので出さない')
+  assert.deepEqual(suggestionFor([], '', '  PR を作って  '), { text: 'PR を作って', from: 'next' }, '前後の空白は落とす')
 })

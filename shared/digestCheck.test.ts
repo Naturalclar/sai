@@ -147,3 +147,19 @@ test('本文に題名が無ければ、番号だけでよい', () => {
   assert.deepEqual(codes('PR #79 を squash でマージしました。衝突なしで一発です。', 'PR #79 マージ完了！'), [], '地の文は題名と数えない')
   assert.deepEqual(codes('issue #232 はこれで完了です。', '#232 完了！'), [])
 })
+
+// ---- #376: 人が頼んだことは、番号の裏付けにだけ使う
+test('頼んだことにある番号は作り話と数えない（#376）', () => {
+  const source = '着手しました。ブランチを切って 🚧 のコメントを付けています。'
+  assert.deepEqual(codes(source, '#371 に着手したよ、ブランチも切った'), ['invented_number'], '渡さなければ今までどおり')
+  assert.deepEqual(digestIssues(source, '#371 に着手したよ、ブランチも切った', '#371 に着手して').map((i) => i.code), [])
+  assert.deepEqual(digestIssues(source, '#999 に着手したよ', '#371 に着手して').map((i) => i.code), ['invented_number'], '頼んだことにも無い番号は今までどおり')
+})
+
+test('頼んだことは依頼・題名の判定には混ぜない（#376）', () => {
+  // 頼みごとは必ず「〜して」の形なので、混ぜると invented_request がほぼ鳴らなくなる
+  const source = 'PR を作成しました。CI は 3 ジョブとも pass です。'
+  assert.deepEqual(digestIssues(source, 'PR 作成、CI 全 pass！マージしていい？', 'PR を出しておいてください').map((i) => i.code), ['invented_request'])
+  // 本文に題名が無ければ、頼んだことに題名があっても番号だけでよい
+  assert.deepEqual(digestIssues('立てました。', '#76 作成！', '#76 サイドバーの矢印移動を入れる、を立てて').map((i) => i.code), [])
+})

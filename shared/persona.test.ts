@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { DEFAULT_PERSONA, PERSONAS, digestPrompt, isPersonaId, personaOf } from './persona.ts'
+import { DEFAULT_PERSONA, DIGEST_ASK_MAX_CHARS, PERSONAS, digestPrompt, isPersonaId, personaOf } from './persona.ts'
 import { digestIssues } from './digestCheck.ts'
 
 test('PERSONAS: 性格なし + MBTI 16 で、id は重複しない', () => {
@@ -31,6 +31,8 @@ test('digestPrompt: 共通の骨格 + 口調 + 本文。本文は末尾にその
   assert.match(p, /本文から分からなければ番号だけでよい/)
   // 例に実在の番号を使うと、関係ない行でもモデルがそれを書き写す
   assert.doesNotMatch(p, /#163|worktree 名でなく/, '例は無関係な題材にする')
+  // 作例の「中身」も書き写される（#376。本文が `12` だけの回が「リトライロジックを…」になっていた）
+  assert.doesNotMatch(p, /リトライ|ログイン失敗/, '作例は型だけにする（中身を置くと、材料の無い回でそれを書き写す）')
   assert.ok(p.includes(personaOf('ISTJ').tone))
   assert.ok(p.endsWith(`---\n${text}`))
   const q = digestPrompt('ENFP', text)
@@ -48,8 +50,8 @@ test('digestPrompt: 指示の部分に書き写せる番号（#<数字>）が無
   assert.match(digestPrompt('none', '#12345 を見た'), /#12345/)
 })
 
-test('digestPrompt: 「本文に無い番号は書かない」が入っている', () => {
-  assert.match(digestPrompt('none', 'x'), /本文に出てこない番号は書かない/)
+test('digestPrompt: 「渡された文に無い番号は書かない」が入っている', () => {
+  assert.match(digestPrompt('none', 'x'), /渡された文に出てこない番号は書かない/)
 })
 
 // ---- #346: 引用された依頼を守る規則と、作り直しのプロンプト
@@ -63,7 +65,7 @@ test('digestPrompt: 引用された依頼を引用のまま残す規則が入っ
 test('digestPrompt: 作り直しは前の一言と直してほしい点を足す。本文は末尾のまま（#346）', () => {
   const text = 'PR #284 を出しました。よければ「マージして」と言ってください。'
   const issues = digestIssues(text, 'PR #284 出したよ、マージして？')
-  const p = digestPrompt('ESFP', text, { summary: 'PR #284 出したよ、マージして？', issues })
+  const p = digestPrompt('ESFP', text, { retry: { summary: 'PR #284 出したよ、マージして？', issues } })
   assert.match(p, /前に作った一言: PR #284 出したよ、マージして？/)
   assert.match(p, /直して作り直してください/)
   assert.ok(issues.every((i) => p.includes(i.hint)), '見つけた点をそのまま伝える')
@@ -88,4 +90,26 @@ test('digestPrompt: 本文に無ければ、頼みも番号の説明も作らせ
   const p = digestPrompt('ESFP', 'PR を出しました。CI は 3 ジョブとも pass です。')
   assert.match(p, /本文に人への頼みも質問も無ければ、一言も頼み・問いかけにしない/)
   assert.match(p, /本文にその番号の題名や説明があれば必ず添える/)
+})
+
+// ---- #376: 人が頼んだことを渡す（返答だけだと、短い返答で作例を書き写す）
+test('digestPrompt: 頼んだことがあれば、返答と分けて渡す', () => {
+  const p = digestPrompt('ESFP', '12', { ask: 'I: 6+6 は？ 数字だけ答えて' })
+  assert.ok(p.endsWith('---\n人が頼んだこと:\nI: 6+6 は？ 数字だけ答えて\n\nエージェントの返答:\n12'))
+  assert.match(p, /一言にするのは「エージェントの返答」の方/, '頼んだことの方を言い換えさせない')
+})
+
+test('digestPrompt: 頼んだことが無ければ、今までどおり本文だけ', () => {
+  const p = digestPrompt('ESFP', '12')
+  assert.ok(p.endsWith('---\n12'))
+  assert.doesNotMatch(p, /人が頼んだこと/, '空の見出しを足さない')
+  assert.doesNotMatch(p, /一言にするのは/, '渡していない回に、返答の方を選ぶ規則は要らない')
+  assert.ok(digestPrompt('ESFP', '12', { ask: '   ' }).endsWith('---\n12'), '空白だけも無い扱い')
+})
+
+test('digestPrompt: 頼んだことは頭だけ渡す（DIGEST_ASK_MAX_CHARS）', () => {
+  const long = 'あ'.repeat(DIGEST_ASK_MAX_CHARS + 50)
+  const p = digestPrompt('ESFP', 'やった', { ask: long })
+  assert.ok(p.includes(`${'あ'.repeat(DIGEST_ASK_MAX_CHARS)}…`))
+  assert.ok(!p.includes('あ'.repeat(DIGEST_ASK_MAX_CHARS + 1)), '上限を超えたぶんは渡さない')
 })

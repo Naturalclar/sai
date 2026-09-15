@@ -41,6 +41,11 @@ interface Props {
   digestKey?: string
   /** 一言の中の #123 の向き先（行の remote）。無ければ番号はリンクにしない */
   remote?: string
+  /**
+   * そのターンで人が頼んだこと（行の `user_text`）。一言はこれも材料に作られるので（#376）、
+   * **番号の裏付けとして本文と一緒に見る**（`#371 に着手して` と頼まれた回の `#371` をリンクにする）
+   */
+  sourceAsk?: string
   /** 一言の中の PGR-123 の向き先（設定の Linear の workspace）。空ならリンクにしない */
   linear?: string
   /** このターンからモデルが変わった。そのモデル名を小さく出す */
@@ -69,7 +74,7 @@ interface Props {
 }
 
 /** バブル1つ分の本文。長ければ折りたたんで「もっと見る」を付ける */
-export function Message({ ts, text: raw, markdown, waiting, questions, resolved, thinking, thinkingOpen = false, summary, digestKey, model, remote, linear, found = false, utteranceKey, diff, clipped = false, thinkingClipped = false, defaultOpen = false }: Props) {
+export function Message({ ts, text: raw, markdown, waiting, questions, resolved, thinking, thinkingOpen = false, summary, digestKey, model, remote, sourceAsk = '', linear, found = false, utteranceKey, diff, clipped = false, thinkingClipped = false, defaultOpen = false }: Props) {
   // 自分の入力に添えた画像は、パスの文字列ではなくサムネイルで出す（本文の末尾に足してある。shared/attachments.ts）
   const { body: text, urls } = markdown ? { body: raw, urls: [] as string[] } : splitAttachments(raw)
   // 長い本文を開いているか。#365 の画面（フィード）では最初から開いた状態で始める。
@@ -105,7 +110,7 @@ export function Message({ ts, text: raw, markdown, waiting, questions, resolved,
           {/* source に元の本文を渡すと、そこに無い番号はリンクにならない（#268。一言は LLM が書くので、
               本文に無い番号を書くことがある。押すと無関係の issue に飛ぶ） */}
           {/* 一言の中の画像は名前だけ（LLM が本文から写したもの）。画像そのものは下に元の本文から並べる（#321） */}
-          <span className="line"><ImageSourceContext value={null}><Inlines nodes={linkifyRefs(summary, { remote, linear, source: text })} /></ImageSourceContext></span>
+          <span className="line"><ImageSourceContext value={null}><Inlines nodes={linkifyRefs(summary, { remote, linear, source: sourceAsk ? `${text}\n${sourceAsk}` : text })} /></ImageSourceContext></span>
           <button type="button" className="linkish details-toggle" onClick={() => setDetails((v) => !v)} aria-expanded={details}>
             {details ? '詳細を閉じる' : '詳細'}
           </button>

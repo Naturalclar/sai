@@ -147,3 +147,37 @@ test('本文に題名が無ければ、番号だけでよい', () => {
   assert.deepEqual(codes('PR #79 を squash でマージしました。衝突なしで一発です。', 'PR #79 マージ完了！'), [], '地の文は題名と数えない')
   assert.deepEqual(codes('issue #232 はこれで完了です。', '#232 完了！'), [])
 })
+
+// #378。実データ（753 件）で 1 件だけ出た型だが、出したのか入ったのかで人の次の一手が変わる
+test('本文は「マージした」なのに一言が「作成」なら見つける', () => {
+  const source = 'PR #377 をマージしました。\n- CI は 3 つとも success\n- squash マージ: `62fde61`'
+  assert.ok(codes(source, 'PR #377 作成、返信プロセス改善完了！').includes('action_swap'))
+  assert.match(digestIssues(source, 'PR #377 作成、完了！')[0]!.hint, /#377 は本文では「マージ」です/)
+  // 本文の言葉のままなら文句を言わない
+  assert.ok(!codes(source, 'PR #377 マージしたよ。CI も通ってる').includes('action_swap'))
+})
+
+test('逆に、本文は作っただけなのに一言が「マージ済み」でも見つける', () => {
+  const source = 'Issue #12 を立てました: https://github.com/o/r/issues/12'
+  assert.ok(codes(source, 'Issue #12 マージ完了！').includes('action_swap'))
+  assert.ok(!codes(source, 'Issue #12 作成、原因の切り分けを書いた').includes('action_swap'))
+})
+
+test('本文に両方あれば言わない（作ってマージした回は、どちらを書いても嘘ではない）', () => {
+  const source = 'PR #380 を作ってマージしました。'
+  assert.ok(!codes(source, 'PR #380 作成、テストも足した').includes('action_swap'))
+  assert.ok(!codes(source, 'PR #380 マージ完了').includes('action_swap'))
+})
+
+test('まだ済んでいない本文（「マージします」）では言わない。番号より前の動作も見ない', () => {
+  // 済んだ形だけを見るので、「これからマージする」本文では作り直させない
+  assert.ok(!codes('PR #357 の CI を確認してからマージします。', 'PR #357 作成、CI確認後マージ').includes('action_swap'))
+  // 「ブランチ作成」はその番号のことではない（番号の直後だけを見る）
+  assert.ok(!codes('その場合は PR #356 のマージまで進みます。', 'ブランチ作成。PR #356 マージ後確認').includes('action_swap'))
+})
+
+test('本文に無い番号は invented_number が見る（action_swap は言わない）', () => {
+  const c = codes('PR #377 をマージしました。', 'PR #999 作成')
+  assert.ok(c.includes('invented_number'))
+  assert.ok(!c.includes('action_swap'))
+})

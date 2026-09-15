@@ -12,6 +12,8 @@ export type DigestIssueCode =
   | 'prefix'
   | 'meta_reply'
   | 'invented_number'
+  // 番号に添えた動作の取り違え（#378）。本文は「マージした」なのに一言が「作成」になる形
+  | 'action_swap'
   // 本文に無いことを足したもの（#363）。#268 / #346 と同じ「本文に書いてあることだけ」の系列
   | 'invented_request'
   // 落ちているもの（#359）。意味は変わっていないが、読んだ人が次に何をすればよいか分からなくなる
@@ -167,6 +169,56 @@ function bareNumbers(source: string, summary: string): string[] {
   return bare
 }
 
+/**
+ * 番号の**直後**に続く「やったこと」。番号より前の動作は別の話のことが多いので後ろだけ見る
+ * （`ブランチ作成。PR 〈番号〉マージ後確認` の `作成` は、その番号のことではない）
+ */
+const AFTER_CREATE = /^[\s　をはもがのとで、]*(?:新規)?(?:作成|作りまし|作った|立てまし|立てた|起票)/
+const AFTER_MERGE = /^[\s　をはもがのとで、]*(?:squash\s*)?(?:マージ(?:しまし|した|済み|完了|されまし)|merged)/i
+
+/**
+ * 本文の側。**済んだ形だけ**を見る（`マージします` / `マージ可能` / `マージしていない` はまだ済んでいない）。
+ * 作った側は言い回しが多いので広く取る（取りこぼすと、正しい一言を咎めて作り直させてしまう）
+ */
+const SRC_MERGED = /(マージ(?:しまし|した|済み|されまし|完了)|squash\s*マージ|merged)/i
+const SRC_CREATED = /(作成|作りまし|作った|作って|立てまし|立てた|起票|オープン|opened|created|filed|新規|にしました|出しました|出した|出してあ|上げまし|提出|is up|\/pull\/\d|\/issues\/\d)/i
+
+/** 本文の中で、その番号に触れている行（前後の区切りまで）。同じ番号に何度も触れていれば全部返す */
+function sentencesWith(source: string, n: string): string[] {
+  const re = new RegExp(`(?:^|[^\\d])(?:#|PR\\s*#?|Issue\\s*#?|issue\\s*#?|pull\\/|issues\\/)${n}(?!\\d)`, 'gi')
+  const out: string[] = []
+  for (const m of source.matchAll(re)) {
+    const at = m.index ?? 0
+    const start = Math.max(source.lastIndexOf('。', at), source.lastIndexOf('\n', at)) + 1
+    const ends = [source.indexOf('。', at + m[0].length), source.indexOf('\n', at + m[0].length)].filter((i) => i !== -1)
+    out.push(source.slice(start, ends.length > 0 ? Math.min(...ends) : source.length))
+  }
+  return out
+}
+
+/**
+ * 番号に添えた動作が本文と食い違っているもの（#378）。実データで `PR 〈番号〉 をマージしました` が
+ * `PR 〈番号〉 作成` になっていた（753 件中 1 件。誤検出 0）。数は少ないが、**読んだ人の次の一手が変わる**
+ * （出したから見てほしいのか、もう入ったのか）ので、意味の変わり方としては重い。
+ * **本文にもう片方の動作も書いてあれば言わない**（作ってマージした回は、どちらを書いても嘘ではない）
+ */
+function swappedActions(source: string, summary: string): string[] {
+  const out: string[] = []
+  for (const m of summary.matchAll(SUMMARY_NUMBER)) {
+    const n = m[1] ?? m[2]
+    if (!n) continue
+    const after = summary.slice((m.index ?? 0) + m[0].length)
+    const said = AFTER_CREATE.test(after) ? 'create' : AFTER_MERGE.test(after) ? 'merge' : ''
+    if (!said) continue
+    const lines = sentencesWith(source, n)
+    if (lines.length === 0) continue // 本文に無い番号は invented_number が見る
+    const has = (re: RegExp) => lines.some((line) => re.test(line))
+    if (said === 'create' && has(SRC_MERGED) && !has(SRC_CREATED)) out.push(`#${n} は本文では「マージ」です`)
+    if (said === 'merge' && has(SRC_CREATED) && !has(SRC_MERGED)) out.push(`#${n} は本文では「作成」です`)
+  }
+  return out
+}
+
 /** 本文の中の引用された依頼を、出てきた順に返す（同じものは 1 つ） */
 export function quotedRequests(source: string): string[] {
   const out = new Set<string>()
@@ -236,6 +288,14 @@ export function digestIssues(rawSource: string, rawSummary: string): DigestIssue
   const invented = inventedNumbers(source, text)
   if (invented.length > 0) {
     out.push({ code: 'invented_number', hint: `本文に出てこない番号（${invented.map((n) => `#${n}`).join(', ')}）を書かないでください` })
+  }
+  // 番号に添えた動作の取り違え（#378）
+  const swapped = swappedActions(source, text)
+  if (swapped.length > 0) {
+    out.push({
+      code: 'action_swap',
+      hint: `番号に添えた動作が本文と違います（${swapped.join(', ')}）。**本文の言葉のまま**書いてください（作成とマージを取り違えると、読んだ人の次の一手が変わります）`,
+    })
   }
   // 本文は報告だけなのに、一言が人に何かを求めている（#363。実測 735 件中 40 件）。
   // 「特に取るべきことが無いのに『〜して？』と書く」を止める。無ければ無いままでよい

@@ -14,6 +14,7 @@ import { ReplyPermissionPicker, type ReplyPermissionProps } from './ReplyPermiss
 import { leavesToSidebar } from './replyFocus'
 import { DiffButton, type DiffButtonProps } from './DiffButton'
 import { acceptsSuggestion, suggestFrom, suggestionLabel } from './replySuggest'
+import { nextAskChip } from './nextAskChip'
 import { SuggestionChip } from './SuggestionChip'
 import { useMediaQuery } from './hooks'
 import { PhotoMark } from './PhotoMark'
@@ -97,6 +98,12 @@ interface Props {
   /** ↑ で呼び戻せる、この返信先に前に送った内容（新しい順）。渡さなければ ↑ は普通のカーソル移動 */
   history?: readonly string[]
   /**
+   * 次に送る文面の案（#371。一言と同じ口で作った `SessionSummary.next_ask`）。渡さなければ出さない。
+   * **入力欄が空のときだけ**チップに出し、押すと本文に入るだけで送らない。
+   * フィードには渡さない（返信先が `@` で動くので、別のセッションの案が入る）
+   */
+  nextAsk?: string
+  /**
    * 確認（「消して送る」／「端末を使わず送る」）から送り直して受け付けられた回数（#338。`useReply` の `confirmedSent`）。
    * 送り直しはここを通らないので、この数が増えたら入力欄と添えた画像を空にする（渡さなければ何もしない）
    */
@@ -117,7 +124,7 @@ const NO_HISTORY: readonly string[] = []
 const keyOf = (e: KeyboardEvent<HTMLTextAreaElement>) => ({ key: e.key, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, shiftKey: e.shiftKey })
 
 /** 入力欄。Enter で送信、Shift+Enter で改行。IME 変換中の Enter は送らない */
-export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, now = 0, onSend, onDraft, model, permission, diff, skillsId, attachId, draftKey, sentFromConfirm = 0, restore, history = NO_HISTORY, onLeaveToSidebar, mention }: Props) {
+export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, now = 0, onSend, onDraft, model, permission, diff, skillsId, attachId, draftKey, sentFromConfirm = 0, restore, history = NO_HISTORY, nextAsk, onLeaveToSidebar, mention }: Props) {
   // 前に打ちかけて離れた分（#306）。作ったときに 1 回だけ読む
   const [initial] = useState(() => (draftKey ? loadDraft(draftKey) : EMPTY_DRAFT))
   const [text, setText] = useState(initial.text)
@@ -365,6 +372,20 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, now = 0,
     wantCaret.current = at
   }
 
+  /**
+   * 次に送る文面の案（#371）。入力欄が空のときだけ出すので、続きのチップとは同時に出ない
+   * （`suggestFrom()` は本文が空では続きを出さない）
+   */
+  const nextAskLabel = imeOn || open ? '' : nextAskChip(nextAsk, text)
+
+  /** 案を本文に入れてカーソルを末尾へ。**送らない**（人が直してから送る） */
+  const acceptNextAsk = () => {
+    const value = (nextAsk ?? '').trim()
+    setText(value)
+    setCaret(value.length)
+    wantCaret.current = value.length
+  }
+
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     // 日本語入力の確定 Enter で送らない・選ばない（isComposing が立つ。古い実装は keyCode 229）
     const composing = e.nativeEvent.isComposing || e.keyCode === 229
@@ -486,7 +507,12 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, now = 0,
       <AttachmentStrip items={attach.items} onRemove={attach.remove} disabled={attach.busy} />
       {attach.error && <div className="note err">{attach.error}</div>}
       {/* 打ちかけの続きをタップで受け取る（#349）。入力欄のすぐ上に置くので、ソフトキーボードが出ていても隠れない */}
-      {suggestLabel && <SuggestionChip label={suggestLabel} onAccept={acceptSuggestion} />}
+      {suggestLabel ? (
+        <SuggestionChip label={suggestLabel} onAccept={acceptSuggestion} />
+      ) : (
+        /* 次に送る文面の案（#371）。入力欄が空のときだけ。タッチ端末に限らず出す（受け取るキーが無いので） */
+        nextAskLabel && <SuggestionChip label={nextAskLabel} onAccept={acceptNextAsk} title="次に送る文の案を入れる" ariaLabel={`案を入れる: ${nextAskLabel}`} />
+      )}
       <div className="row">
         {attachId && (
           <>

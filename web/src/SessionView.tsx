@@ -176,6 +176,8 @@ export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggl
             repo={s.repo}
             skillsId={id}
             history={history}
+            // 次に送る文面の案（#371）。入力欄が空のときだけチップに出る
+            {...(s.next_ask ? { nextAsk: s.next_ask } : {})}
             onLeaveToSidebar={onLeaveToSidebar}
             attachId={id}
             terminal={Boolean(s.terminal)}

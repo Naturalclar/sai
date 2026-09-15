@@ -25,10 +25,15 @@ export class FakeSummarizer implements Summarizer {
     ;(next ? this.nextAsks : this.prompts).push(prompt)
     for (const needle of this.failOn) if (prompt.includes(needle)) throw new Error(`fail: ${needle}`)
     if (next) return `${(prompt.split('エージェントの返答:\n')[1] ?? '').slice(0, 10)}（案）`
-    const body = prompt.split('\n---\n')[1] ?? ''
-    return `${body.slice(0, 10)}（まとめ）`
+    return `${promptBody(prompt).slice(0, 10)}（まとめ）`
   }
 }
+
+/**
+ * プロンプトの末尾に入る本文。人が頼んだことを渡した回は「エージェントの返答:」の後ろ（#376）、
+ * 渡していない回は `---` の後ろがそのまま本文
+ */
+const promptBody = (prompt: string) => prompt.split('エージェントの返答:\n')[1] ?? prompt.split('\n---\n')[1] ?? ''
 
 const at = (n: number) => new Date(Date.UTC(2026, 8, 4, 0, n))
 
@@ -95,7 +100,7 @@ test('Digester: 起動より前の行は作らず、あとに現れた行だけ�
     d.scan([old1, old2, n1, n2, bad, skip])
     d.scan([old1, old2, n1, n2, bad, skip]) // 同じ行を二度積まない
     await d.drain()
-    assert.deepEqual(fake.prompts.map((p) => p.split('\n---\n')[1]), ['失敗する行', '新しい2', '新しい1'], '新しい順に 1 回ずつ')
+    assert.deepEqual(fake.prompts.map(promptBody), ['失敗する行', '新しい2', '新しい1'], '新しい順に 1 回ずつ')
     assert.equal(store.get(digestKey(n1))?.summary, '新しい1（まとめ）')
     assert.equal(store.get(digestKey(n2))?.summary, '新しい2（まとめ）')
     assert.equal(store.get(digestKey(n1))?.persona, 'ISTJ')
@@ -161,7 +166,7 @@ test('Digester: 基準は起動時刻。あとから days が広がって古い�
 
     // pump は性格を引くところで一度 await するので、1 tick 待ってから何を渡したか見る
     await new Promise((r) => setTimeout(r, 5))
-    assert.deepEqual(fake.prompts.map((p) => p.split('\n---\n')[1]), ['起動後1'], '1 件目（一番新しい起動後の行）から作る')
+    assert.deepEqual(fake.prompts.map(promptBody), ['起動後1'], '1 件目（一番新しい起動後の行）から作る')
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -178,7 +183,7 @@ test('Digester: since を渡さなければ「いま」が基準。過去の行�
     // 数秒の緩み（DIGEST_SINCE_SLACK_MS）の内側なので、いま書かれた行は拾う
     d.scan([row(new Date(), 'S2', { repo: 'r', text: 'いまの行' })])
     await d.drain()
-    assert.deepEqual(fake.prompts.map((p) => p.split('\n---\n')[1]), ['いまの行'])
+    assert.deepEqual(fake.prompts.map(promptBody), ['いまの行'])
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -195,7 +200,7 @@ test('Digester: 自分が回した子（cwd がフィードのディレクトリ
     const real = row(at(2), 'S1', { cwd: '/home/u/.agent-feed-other', text: '本物' })
     d.scan([own, under, real])
     await d.drain()
-    assert.deepEqual(fake.prompts.map((p) => p.split('\n---\n')[1]), ['本物'])
+    assert.deepEqual(fake.prompts.map(promptBody), ['本物'])
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -629,6 +634,37 @@ test('Digester: 文句の無い一言は作り直さない（一言のために�
     assert.equal(fake.prompts.length, 1)
     assert.equal(fake.nextAsks.length, 1, '案（#371）はそれとは別に 1 回。一言の作り直しではない')
     assert.equal(store.get(digestKey(r))?.retried, undefined)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('Digester: 人が頼んだことも一言の材料に渡す。頼んだことにある番号は作り直さない（#376）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-digest-ask-'))
+  try {
+    const store = new DigestStore(join(dir, 'digest.jsonl'))
+    await store.load()
+    // 本文に無い番号を書く偽物。頼んだことに同じ番号があれば、作り話ではないので作り直さない
+    const fake = new (class extends FakeSummarizer {
+      async summarize(prompt: string): Promise<string> {
+        await super.summarize(prompt)
+        return prompt.includes('あなたが次に送る文') ? '案' : '#371 に着手したよ'
+      }
+    })()
+    const d = new Digester(store, fake, { enabled: true, model: 'haiku', since: at(0).toISOString(), persona: async () => 'none', logPath: join(dir, 'digest.log') })
+    const asked = row(at(1), 'S1', { repo: 'r', text: '着手しました。', user_text: '#371 に着手して' })
+    d.scan([asked])
+    await d.drain()
+    assert.match(fake.prompts[0]!, /人が頼んだこと:\n#371 に着手して/, '頼んだことを本文と分けて渡す')
+    assert.equal(store.get(digestKey(asked))?.retried, undefined, '頼んだことにある番号は作り話と数えない')
+    assert.equal(store.get(digestKey(asked))?.issues, undefined)
+
+    // 頼んだことにも無い番号は、今までどおり作り直す
+    const other = row(at(2), 'S1', { repo: 'r', text: '直しました。', user_text: '直して' })
+    d.scan([asked, other])
+    await d.drain()
+    assert.equal(store.get(digestKey(other))?.retried, true)
+    assert.deepEqual(store.get(digestKey(other))?.issues, ['invented_number'])
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

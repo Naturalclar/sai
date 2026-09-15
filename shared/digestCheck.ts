@@ -203,12 +203,16 @@ function questionedRequest(source: string, summary: string): string | null {
   return null
 }
 
-/** 本文に出てこない番号（#268 の裏返し。あちらは表示でリンクにしない、こちらは文そのものを直させる） */
-function inventedNumbers(source: string, summary: string): string[] {
+/**
+ * 本文に出てこない番号（#268 の裏返し。あちらは表示でリンクにしない、こちらは文そのものを直させる）。
+ * **人が頼んだこと（`ask`）にある番号も裏付けと数える**（#376。`#371 に着手して` と頼まれた回で
+ * 一言が `#371` を書くのは作り話ではない）
+ */
+function inventedNumbers(source: string, summary: string, ask: string): string[] {
   const out = new Set<string>()
   for (const m of summary.matchAll(SUMMARY_NUMBER)) {
     const n = m[1] ?? m[2]
-    if (n && !source.includes(n)) out.add(n)
+    if (n && !source.includes(n) && !ask.includes(n)) out.add(n)
   }
   return [...out]
 }
@@ -217,12 +221,16 @@ function inventedNumbers(source: string, summary: string): string[] {
  * 一言と元の本文を突き合わせて、直すべき点を返す。空なら文句なし。
  * 並びは直してほしい順（意味が変わるもの → 形の問題）
  */
-export function digestIssues(rawSource: string, rawSummary: string): DigestIssue[] {
+export function digestIssues(rawSource: string, rawSummary: string, rawAsk = ''): DigestIssue[] {
   const out: DigestIssue[] = []
   // 実データには NFD（`く`+濁点 で `ぐ`）の本文が混じっていて、そのままだと「ください」が
   // どの正規表現にも当たらず、判定が丸ごと素通りする（手元の 735 件中 7 件）
   const source = rawSource.normalize('NFC')
   const text = rawSummary.normalize('NFC').trim()
+  // 人が頼んだことは**番号の裏付けにだけ**使う（#376）。依頼・題名の判定には混ぜない:
+  // 頼みごとは必ず「〜して」の形なので、混ぜると `invented_request` がほぼ鳴らなくなり、
+  // 本文に無い説明を頼んだことから写させることにもなる
+  const ask = rawAsk.normalize('NFC')
   if (!text) return [{ code: 'empty', hint: '一言が空です' }]
   const body = plain(source)
 
@@ -233,7 +241,7 @@ export function digestIssues(rawSource: string, rawSummary: string): DigestIssue
       hint: `本文では「${phrase}」は**人に言ってほしい言葉として引用**されています。問いかけ（「${phrase}？」）に変えず、引用のまま残してください`,
     })
   }
-  const invented = inventedNumbers(source, text)
+  const invented = inventedNumbers(source, text, ask)
   if (invented.length > 0) {
     out.push({ code: 'invented_number', hint: `本文に出てこない番号（${invented.map((n) => `#${n}`).join(', ')}）を書かないでください` })
   }

@@ -108,7 +108,9 @@ class FakeSummarizer implements Summarizer {
     }
     this.prompts.push(prompt)
     if (this.fail) throw new Error('fake failure')
-    return `${(prompt.split('\n---\n')[1] ?? '').slice(0, 8)}（まとめ）`
+    // 人が頼んだことを渡した回は「エージェントの返答:」の後ろが本文（#376）
+    const body = prompt.split('エージェントの返答:\n')[1] ?? prompt.split('\n---\n')[1] ?? ''
+    return `${body.slice(0, 8)}（まとめ）`
   }
 }
 const summarizer = new FakeSummarizer()

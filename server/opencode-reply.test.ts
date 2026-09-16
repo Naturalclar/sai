@@ -33,6 +33,8 @@ const modelCalls: string[] = []
 const started: { id: string; cmd: ReplyCommand }[] = []
 /** いま `opencode serve` が答えを待っている許可（#421）。テストごとに差し替える */
 let pending: OpencodePermission[] = []
+/** 保留を引けたか（#422。false は「サーバが立っていない・読めない」） */
+let pendingOk = true
 let answerOk = true
 const answered: { sessionId: string; permissionId: string; response: string }[] = []
 /** `GET /permission` に渡した `directory`（#421。渡さないと空が返るので、渡していることをテストで留める） */
@@ -52,7 +54,7 @@ const opencodeApp: OpencodeApp = {
   settle: () => [],
   async permissions(dirs: readonly string[]) {
     permissionDirs.push([...dirs])
-    return pending
+    return { ok: pendingOk, list: pending }
   },
   async answerPermission(sessionId: string, permissionId: string, response: 'once' | 'reject') {
     answered.push({ sessionId, permissionId, response })
@@ -101,6 +103,8 @@ before(async () => {
       JSON.stringify(row(new Date(now.getTime() - 30_000), 'ses_ng', { agent: 'opencode', repo: 'r', cwd: work, host: 'testmac' })),
       // 許可で止まっている（プラグインが書く待ちの行。#421。これがあるセッションの cwd に保留を聞きに行く）
       JSON.stringify(row(new Date(now.getTime() - 10_000), 'ses_1', { agent: 'opencode', repo: 'r', cwd: work, host: 'testmac', event: 'permission.asked', text: '許可待ち: external_directory: /etc/hosts', user_text: '' })),
+      // 聞いてきたプロセスがもう居ない待ち（#422。SAI を立て直したあとの取り残し）。pid は存在しえない値
+      JSON.stringify(row(new Date(now.getTime() - 20_000), 'ses_dead', { agent: 'opencode', repo: 'r', cwd: work, host: 'testmac', event: 'permission.asked', text: '許可待ち: external_directory: /etc/hosts', user_text: '', pid: 999_999 })),
     ].join('\n') + '\n',
   )
   const handler = app()
@@ -269,6 +273,30 @@ test('記録に無いセッションの保留は出さない。届かなけれ�
     assert.equal((await post(`/api/approvals/${permissionApprovalId('per_gone')}/answer`, { behavior: 'allow', decision: 'once' })).status, 409)
   } finally {
     answerOk = true
+    pending = []
+  }
+})
+
+test('答える相手が消えた待ちは畳む。記録は触らない（#422）', async () => {
+  const list = (await (await fetch(`${base}/api/sessions`)).json()) as SessionsResponse
+  const dead = list.sessions.find((s) => s.id === 'ses_dead@r')
+  assert.ok(dead, '一覧には出る（消すのは待ちの印だけ）')
+  assert.equal(dead.waiting, '', '聞いてきたプロセスが消えているので、待ちは畳む')
+  // 詳細でも同じ（要対応・サイドバー・見出しがまとめて正しくなる）
+  const detail = (await (await fetch(`${base}/api/sessions/ses_dead%40r`)).json()) as SessionDetailResponse
+  assert.equal(detail.session.waiting, '')
+  // 記録（JSONL）は触らない
+  assert.equal(detail.rows.at(-1)?.event, 'permission.asked')
+  assert.equal(detail.rows.at(-1)?.text, '許可待ち: external_directory: /etc/hosts')
+})
+
+test('保留が残っていれば、pid が死んでいても畳まない（#422）', async () => {
+  pending = parsePermissions([{ ...REAL_PERMISSION, id: 'per_alive', sessionID: 'ses_dead' }])
+  try {
+    const list = (await (await fetch(`${base}/api/sessions`)).json()) as SessionsResponse
+    assert.equal(list.sessions.find((s) => s.id === 'ses_dead@r')?.waiting, '許可待ち: external_directory: /etc/hosts', 'いま答えられるものは残す')
+    assert.ok(list.approvals['ses_dead@r']?.[0], '答えられるバブルも出る')
+  } finally {
     pending = []
   }
 })

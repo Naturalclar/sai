@@ -527,8 +527,14 @@ export function createApp(
    * `SAI_TERMINAL=0` なら見に行かない（`CodexDialogs` と同じ）
    */
   const settleWaiting = async (sessions: SessionSummary[]): Promise<{ sessions: SessionSummary[]; key: string }> => {
-    if (!terminalEnabled) return { sessions, key: '' }
-    const settled = await waitingSettle.scan(sessions)
+    // OpenCode は tmux を見ないので `SAI_TERMINAL` とは別（#422。答える相手のプロセスが消えた待ちを畳む）。
+    // **畳む前の一覧で保留を引く**（畳んだあとの `waiting` を見ると、そのセッションを聞きに行かなくなる）。
+    // 引いた分は `PENDING_TTL_MS` の間キャッシュされるので、このあとの `approvalsNow()` は投げ直さない
+    if (opencodeServerEnabled) await opencodePerms.scan(sessions)
+    const opencode = opencodeServerEnabled ? opencodePerms.settle(sessions, selfHost()) : new Set<string>()
+    const terminal = terminalEnabled ? await waitingSettle.scan(sessions) : new Set<string>()
+    if (opencode.size === 0 && terminal.size === 0) return { sessions, key: '' }
+    const settled = new Set([...terminal, ...opencode])
     return { sessions: clearSettled(sessions, settled), key: settledKey(settled) }
   }
 

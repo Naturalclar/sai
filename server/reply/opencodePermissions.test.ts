@@ -17,7 +17,7 @@ const session = (over: Partial<SessionSummary>): SessionSummary =>
   }) as SessionSummary
 
 /** 聞かれた directory を覚え、渡された保留を返すだけの偽物 */
-function fake(pending: OpencodePermission[], running = false) {
+function fake(pending: OpencodePermission[], running = false, ok = true) {
   const dirs: string[][] = []
   const answered: string[] = []
   const app: OpencodeApp = {
@@ -30,7 +30,7 @@ function fake(pending: OpencodePermission[], running = false) {
     stop: () => {},
     async permissions(d: readonly string[]) {
       dirs.push([...d])
-      return pending
+      return { ok, list: pending }
     },
     async answerPermission(sessionId: string, permissionId: string, response: string) {
       answered.push(`${sessionId}/${permissionId}/${response}`)
@@ -88,4 +88,56 @@ test('同じ保留の since は動かない（並べ替えが毎回変わらな�
   now += 60_000
   const second = await perms.scan([session({ waiting: 'w' })])
   assert.equal(second['ses_1@r']![0]!.since, first['ses_1@r']![0]!.since)
+})
+
+// ---- settle（#422。どのセッションの待ちを畳めるか） ----
+
+const DEAD = 999_999
+
+test('settle: 待ちの行を書いたプロセスが消えた OpenCode の待ちを畳む', async () => {
+  const f = fake([])
+  const perms = new OpencodePermissions(f.app, Date.now, (pid) => pid !== DEAD)
+  const waiting = session({ waiting: '許可待ち: external_directory', pid: DEAD })
+  // まだ 1 回も引いていなくても、pid が死んでいれば畳める（SAI を立て直したあとの取り残しがこれ）
+  assert.deepEqual([...perms.settle([waiting], 'mac')], ['ses_1@r'])
+  // 生きていれば残す
+  assert.deepEqual([...perms.settle([session({ waiting: 'w', pid: 4242 })], 'mac')], [])
+  // pid が載っていない古い行は「分からない」ので残す（**どんな `alive` を渡しても**畳まない）
+  assert.deepEqual([...perms.settle([session({ waiting: 'w', pid: 0 })], 'mac')], [])
+  const dead = new OpencodePermissions(f.app, Date.now, () => false)
+  assert.deepEqual([...dead.settle([session({ waiting: 'w', pid: 0 })], 'mac')], [], 'pid が無ければ生死を聞きに行かない')
+})
+
+test('settle: 保留を引いたあとは、そこに居ないセッションを畳む', async () => {
+  const f = fake([])
+  const perms = new OpencodePermissions(f.app, Date.now, () => true)
+  const waiting = session({ waiting: '許可待ち: external_directory', pid: 4242 })
+  assert.deepEqual([...perms.settle([waiting], 'mac')], [], '引く前は残す')
+  await perms.scan([waiting])
+  assert.deepEqual([...perms.settle([waiting], 'mac')], ['ses_1@r'], '引けて、保留に居なければ畳む')
+})
+
+test('settle: 引けなかったとき（サーバが立っていない）は畳まない', async () => {
+  const f = fake([], false, false)
+  const perms = new OpencodePermissions(f.app, Date.now, () => true)
+  const waiting = session({ waiting: 'w', pid: 4242 })
+  await perms.scan([waiting])
+  assert.deepEqual([...perms.settle([waiting], 'mac')], [])
+})
+
+test('settle: 保留が残っているセッションは畳まない（pid が死んでいても）', async () => {
+  const f = fake(pending)
+  const perms = new OpencodePermissions(f.app, Date.now, () => false)
+  const waiting = session({ waiting: '許可待ち: external_directory', pid: DEAD })
+  await perms.scan([waiting])
+  assert.deepEqual([...perms.settle([waiting], 'mac')], [], 'いま答えられるものは残す')
+})
+
+test('settle: 見るのは OpenCode・待っている・このマシンのものだけ', async () => {
+  const f = fake([])
+  const perms = new OpencodePermissions(f.app, Date.now, () => false)
+  assert.deepEqual([...perms.settle([session({ waiting: '', pid: DEAD })], 'mac')], [], '待っていない')
+  assert.deepEqual([...perms.settle([session({ waiting: 'w', pid: DEAD, agent: 'claude', agents: ['claude'] })], 'mac')], [], 'Claude は対象外')
+  assert.deepEqual([...perms.settle([session({ waiting: 'w', pid: DEAD, host: 'mini', hosts: ['mini'] })], 'mac')], [], '別のマシンの pid は見ても意味が無い')
+  assert.deepEqual([...perms.settle([session({ waiting: 'w', pid: DEAD })], 'mac')], ['ses_1@r'], 'このマシンのぶんは畳む')
 })

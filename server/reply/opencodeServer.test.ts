@@ -136,3 +136,47 @@ test('models: /config/providers に cwd を渡して聞く。断られたら投�
     await new Promise<void>((r) => server.close(() => r()))
   }
 })
+
+test('permissions: directory を付けて引き、引けたかも返す（#421 / #422）', async () => {
+  const seen: string[] = []
+  /** `/w` には保留があり、`/ng` はエラーを返す */
+  const server: Server = createServer((req, res) => {
+    seen.push(req.url ?? '')
+    if ((req.url ?? '').includes('%2Fng')) {
+      res.writeHead(500, { 'content-type': 'text/plain' })
+      res.end('boom')
+      return
+    }
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify([{ id: 'per_1', sessionID: 'ses_1', permission: 'external_directory', patterns: ['/etc/*'], metadata: { filepath: '/etc/hosts' } }]))
+  })
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+  const addr = server.address()
+  const base = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`
+  try {
+    const app = new OpencodeServer(fetch, Date.now, async () => ({ url: base, auth: 'Basic dGVzdA==' }))
+    const got = await app.permissions(['/w'])
+    assert.deepEqual(seen, ['/permission?directory=%2Fw'], 'directory を渡す（渡さないと保留があっても空が返る）')
+    assert.equal(got.ok, true)
+    assert.equal(got.list.length, 1)
+    assert.equal(got.list[0]?.id, 'per_1')
+
+    // 1 つでも引けなければ ok: false（「保留が無い」と混ぜない。#422 で待ちを畳む材料になる）
+    const partial = await app.permissions(['/w', '/ng'])
+    assert.equal(partial.ok, false)
+    assert.equal(partial.list.length, 1, '引けた分は返す')
+
+    // 答えは v1 の口へ（`{"response":"once"}`）
+    assert.equal(await app.answerPermission('ses_1', 'per_1', 'once'), true)
+    assert.equal(seen.at(-1), '/session/ses_1/permissions/per_1')
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()))
+  }
+})
+
+test('permissions / answerPermission: サーバが立っていなければ起こさずに諦める（#421）', async () => {
+  // `serveFn` を渡さない = 本物の spawn を通る実装。`live()` は立っているものだけを見るので、ここでは何も起こさない
+  const app = new OpencodeServer()
+  assert.deepEqual(await app.permissions(['/w']), { ok: false, list: [] }, '引けていない（保留が無い、ではない）')
+  assert.equal(await app.answerPermission('ses_1', 'per_1', 'once'), false)
+})

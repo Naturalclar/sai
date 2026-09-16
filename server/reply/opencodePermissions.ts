@@ -5,10 +5,12 @@
 // （`POST /session/<id>/permissions/<permissionId>` があり、実機で 1 往復して確かめた）。
 //
 // 答える口は画面の既存の `POST /api/approvals/<id>/answer`（同一オリジンのみ）に相乗りする。新しい API は作らない。
-import { permissionApprovalId, permissionApprovals, permissionResponse } from '../../shared/opencodePermissions.ts'
-import type { OpencodePermission } from '../../shared/opencodePermissions.ts'
+import { NO_PENDING, permissionApprovalId, permissionApprovals, permissionResponse, settlesWaiting } from '../../shared/opencodePermissions.ts'
+import type { OpencodePermission, PendingSnapshot } from '../../shared/opencodePermissions.ts'
+import { isRemoteHost } from '../../shared/host.ts'
 import type { ApprovalAnswer, ApprovalMap, SessionSummary } from '../../shared/types.ts'
 import type { OpencodeApp } from './opencodeServer.ts'
+import { isAlive } from './runner.ts'
 import { sessionOf } from '../local/progress.ts'
 
 /** 答えた結果。`codexAppServer.ts` の `CodexAnswerResult` と同じ形にして、app.ts の分岐を揃える */
@@ -22,15 +24,22 @@ export class OpencodePermissions {
   /** 許可の id → 最初に見かけた時刻。保留そのものに時刻が載っていないので、こちらで覚える */
   private seen = new Map<string, string>()
   private scanning: Promise<ApprovalMap> | null = null
+  /** 最後に引けた保留のようす（#422。待ちを畳んでよいかの材料。まだ引いていなければ `ok: false`） */
+  private last: PendingSnapshot = NO_PENDING
+  private readonly alive: (pid: number) => boolean
 
-  constructor(app: OpencodeApp, now: () => number = Date.now) {
+  constructor(app: OpencodeApp, now: () => number = Date.now, alive: (pid: number) => boolean = isAlive) {
     this.app = app
     this.now = now
+    this.alive = alive
   }
 
   /**
    * いま答えを待っている許可を、エンティティごとの `Approval` にする。
-   * **同時に何本も引かない**（3 つの応答（一覧・詳細・フィード）が同じ瞬間に来るので、1 本にまとめる）
+   * **同時に何本も引かない**（3 つの応答（一覧・詳細・フィード）が同じ瞬間に来るので、1 本にまとめる）。
+   *
+   * 1 回の応答の中で 2 回呼ばれる（待ちを畳む前に 1 回（#422）、承認を載せるときに 1 回）が、
+   * **聞く相手がいなければ HTTP は 1 本も投げない**（`dirs` が空）ので、普段は 2 回とも空回りで終わる
    */
   async scan(sessions: readonly SessionSummary[]): Promise<ApprovalMap> {
     if (!this.app.permissions) return {}
@@ -53,7 +62,10 @@ export class OpencodePermissions {
       if (session) bySession.set(session, s.id)
       if (s.cwd && (this.app.running(s.id) || s.waiting)) dirs.add(s.cwd)
     }
-    const pending = dirs.size === 0 ? [] : await this.app.permissions!([...dirs]).catch(() => [])
+    const got = dirs.size === 0 ? { ok: false, list: [] } : await this.app.permissions!([...dirs]).catch(() => ({ ok: false, list: [] }))
+    const pending = got.list
+    // 待ちを畳んでよいかの材料として覚える（#422）。**聞けなかったときは ok: false のまま**
+    this.last = { ok: got.ok, asked: dirs, sessions: new Set(pending.map((p) => p.sessionID)) }
     const map = permissionApprovals(
       pending,
       (sessionID) => bySession.get(sessionID),
@@ -72,6 +84,29 @@ export class OpencodePermissions {
     const alive = new Set(pending.map((p) => p.id))
     for (const id of [...this.seen.keys()]) if (!alive.has(id)) this.seen.delete(id)
     return map
+  }
+
+  /**
+   * **答える相手が消えた待ちを畳む**（#422。返すのは畳んでよいエンティティ ID）。
+   *
+   * 材料は**最後の `scan()` で引いた保留**（新しく HTTP は投げない。`approvalsNow()` が 3 秒ごとに引いているので、
+   * 遅れても 1 回ぶん）と、**待ちの行を書いたプロセスの pid**（`SessionSummary.pid` は一番新しい行のもので、
+   * 待っているセッションでは待ちの行そのもの）。判定は `shared/opencodePermissions.ts` の `settlesWaiting()`。
+   *
+   * 見るのは **OpenCode で、行の上で待っていて、このマシンのセッションだけ**（別のマシンの pid は見ても意味が無い）。
+   * **サーバは起こさない**（待ちを畳むためだけに `opencode serve` を立てない）
+   */
+  settle(sessions: readonly SessionSummary[], selfHost: string): ReadonlySet<string> {
+    const out = new Set<string>()
+    for (const s of sessions) {
+      if (s.agent !== 'opencode' || !s.waiting || isRemoteHost(s.host, selfHost)) continue
+      const session = sessionOf(s)
+      if (!session) continue
+      // pid が載っていない古い行は「分からない」（`isAlive()` は 0 以下を生きている扱いにするので、ここで分ける）
+      const pidAlive = s.pid > 0 ? this.alive(s.pid) : undefined
+      if (settlesWaiting({ session, cwd: s.cwd }, this.last, pidAlive)) out.add(s.id)
+    }
+    return out
   }
 
   /** その approval_id が OpenCode の許可か（app.ts の分岐用） */

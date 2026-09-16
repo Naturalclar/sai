@@ -27,6 +27,12 @@ import type { Replying, ReplyingMap } from '../../shared/types.ts'
 /** サーバが立ち上がるのを待つ上限 */
 export const OPENCODE_SERVE_WAIT_MS = 20_000
 
+/** 保留を 1 回引いた結果。**引けたか（`ok`）も返す**（#422。引けないことと「保留が無い」を混ぜない） */
+export interface OpencodePendingResult {
+  ok: boolean
+  list: OpencodePermission[]
+}
+
 /** 送るぶん。`model` は SAI のメタと同じ `provider/model` の形 */
 export interface OpencodeTurnInput {
   /** エンティティID（`<session>@<repo>`）。処理中の見出しに使う */
@@ -60,7 +66,7 @@ export interface OpencodeApp {
    * 立っていなければ空で、画面は今までどおり記録の待ちの行だけを出す）。
    * 偽物は持たなくてよい（持たなければ許可のバブルが出ないだけ）
    */
-  permissions?(dirs: readonly string[]): Promise<OpencodePermission[]>
+  permissions?(dirs: readonly string[]): Promise<OpencodePendingResult>
   /**
    * その許可に答える（#421。`POST /session/<id>/permissions/<permissionId>`）。答えられたら true。
    * **答えられるのは SAI が起こしたサーバが持っている保留だけ**（端末の TUI や人が立てた別のサーバは
@@ -172,26 +178,32 @@ export class OpencodeServer implements OpencodeApp {
    * いま答えを待っている許可（#421）。**立っているサーバにしか聞かない**ので、返信を 1 度も回していなければ
    * ここでサーバが起きることはない（3 秒のポーリングのついでに呼ばれる）。読めなければ空
    */
-  async permissions(dirs: readonly string[]): Promise<OpencodePermission[]> {
+  async permissions(dirs: readonly string[]): Promise<OpencodePendingResult> {
     const live = await this.live()
-    if (!live || dirs.length === 0) return []
+    // **立っていなければ `ok: false`**（「保留が無い」と区別が付かないと、待ちを畳んでよいか決められない。#422）
+    if (!live) return { ok: false, list: [] }
     const out: OpencodePermission[] = []
     const seen = new Set<string>()
+    let ok = true
     // ディレクトリごとに 1 本。普段は 0〜1 件（SAI が回している OpenCode のターンの分だけ）
     for (const dir of dirs) {
       try {
         const res = await this.fetchFn(`${live.url}/permission?directory=${encodeURIComponent(dir)}`, { headers: { authorization: live.auth } })
-        if (!res.ok) continue
+        if (!res.ok) {
+          ok = false
+          continue
+        }
         for (const p of parsePermissions(await res.json())) {
           if (seen.has(p.id)) continue
           seen.add(p.id)
           out.push(p)
         }
       } catch {
-        // 読めなければその分は諦める（画面は記録の待ちの行だけになる）
+        // 読めなければその分は諦める（画面は記録の待ちの行だけになり、待ちも畳まない）
+        ok = false
       }
     }
-    return out
+    return { ok, list: out }
   }
 
   /** その許可に答える（#421）。`once` で許可、`reject` で拒否。答えられたら true */

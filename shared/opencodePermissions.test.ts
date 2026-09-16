@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { OPENCODE_DECISIONS, opencodePermissionText, parsePermissions, permissionApprovalId, permissionApprovals, permissionDetail, permissionResponse } from './opencodePermissions.ts'
+import { NO_PENDING, OPENCODE_DECISIONS, opencodePermissionText, parsePermissions, permissionApprovalId, permissionApprovals, permissionDetail, permissionResponse, settlesWaiting } from './opencodePermissions.ts'
+import type { PendingSnapshot } from './opencodePermissions.ts'
 
 /**
  * 実機（opencode 1.18.30）の `GET /permission` の 1 件。ollama/qwen3:8b のターンに `/etc/hosts` を読ませて出したもの。
@@ -74,4 +75,28 @@ test('permissionResponse: 提示した選択だけを本体に渡す', () => {
   assert.equal(permissionResponse(undefined, 'allow'), 'once', '選択を送らない画面でも allow / deny で決まる')
   assert.equal(permissionResponse(undefined, 'deny'), 'reject')
   assert.deepEqual(OPENCODE_DECISIONS.map((d) => d.behavior), ['allow', 'deny'])
+})
+
+// ---- settlesWaiting（#422。答える相手が消えた待ちを畳む） ----
+
+const snap = (over: Partial<PendingSnapshot> = {}): PendingSnapshot => ({ ok: true, asked: new Set(['/w']), sessions: new Set(), ...over })
+const target = { session: 'ses_1', cwd: '/w' }
+
+test('settlesWaiting: 待ちの行を書いたプロセスが消えていれば畳む', () => {
+  assert.equal(settlesWaiting(target, NO_PENDING, false), true, '保留を引けなくても、聞いてきた相手が居なければ畳める')
+  assert.equal(settlesWaiting(target, NO_PENDING, true), false, '生きていれば残す（まだ答えられる）')
+  assert.equal(settlesWaiting(target, NO_PENDING, undefined), false, 'pid が分からなければ残す')
+})
+
+test('settlesWaiting: 保留を引けて、そのセッションが居なければ畳む', () => {
+  assert.equal(settlesWaiting(target, snap(), undefined), true)
+  assert.equal(settlesWaiting(target, snap({ ok: false }), undefined), false, '引けていなければ（サーバが立っていない）残す')
+  assert.equal(settlesWaiting(target, snap({ asked: new Set(['/other']) }), undefined), false, '聞いていない cwd は残す')
+  assert.equal(settlesWaiting({ session: 'ses_1', cwd: '' }, snap(), undefined), false, 'cwd が無ければ残す')
+})
+
+test('settlesWaiting: いま保留があれば、pid が死んでいても残す', () => {
+  const live = snap({ sessions: new Set(['ses_1']) })
+  assert.equal(settlesWaiting(target, live, false), false, '古い行の死んだ pid より、いまの保留が正しい')
+  assert.equal(settlesWaiting(target, live, true), false)
 })

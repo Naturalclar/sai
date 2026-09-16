@@ -135,3 +135,43 @@ export function permissionApprovals(
   }
   return out
 }
+
+// ---- 答える相手が消えた待ちを畳む（#422） ----
+
+/** 保留を 1 回引いた結果。**引けなかったこと（`ok: false`）が分かる形にする**（材料が無いのに待ちを畳まないため） */
+export interface PendingSnapshot {
+  /** 聞けたか（サーバが立っていて、頼んだ `directory` を全部引けた） */
+  ok: boolean
+  /** 実際に聞いた `directory`（= セッションの cwd） */
+  asked: ReadonlySet<string>
+  /** いま保留を持っているセッション（`ses_…`） */
+  sessions: ReadonlySet<string>
+}
+
+/** 空（まだ 1 回も引いていない）。`ok: false` なので、これだけでは何も畳まない */
+export const NO_PENDING: PendingSnapshot = { ok: false, asked: new Set(), sessions: new Set() }
+
+/**
+ * その待ちを畳んでよいか（#422）。**呼ぶ側が「OpenCode・行の上で待っている・このマシン」に絞ってから渡す。**
+ *
+ * | 材料 | どうするか |
+ * | --- | --- |
+ * | いま保留がある | **残す**（この瞬間に答えられる。下の 2 つより先に見る） |
+ * | 待ちの行を書いたプロセスが**もう居ない** | **畳む**（保留はそのプロセスのメモリにあるので、誰も答えられない） |
+ * | 保留を引けて、その cwd も聞いていて、そのセッションの保留が**無い** | **畳む**（答えられる状態なら保留に必ず居る） |
+ * | pid が分からない・引けなかった・聞いていない cwd | **残す**（#255 と同じで「分からないなら残す」） |
+ *
+ * **時間では畳まない**（「N 時間たったら」はただの当て推量で、端末で開いたまま人が席を外しているだけの
+ * 待ちまで消してしまう）。`pidAlive` は `undefined` が「分からない」で、**その場合も残す**
+ */
+export function settlesWaiting(
+  session: { session: string; cwd: string },
+  pending: PendingSnapshot,
+  pidAlive: boolean | undefined,
+): boolean {
+  // いま保留がある＝この瞬間に答えられるので、ほかに何があっても残す（古い行の死んだ pid より、いまの保留が正しい）
+  if (pending.ok && pending.sessions.has(session.session)) return false
+  if (pidAlive === false) return true
+  if (pending.ok && session.cwd && pending.asked.has(session.cwd)) return true
+  return false
+}

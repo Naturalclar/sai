@@ -4,21 +4,25 @@
 // セッション**（最初のターンの許可で止まった、など）は SAI から存在が見えない。行がある場合でも、
 // 記録した pid が死んでいると端末と結びつかない。
 //
-// **セッション ID は cwd から rollout を引いて取る**（`record.py` の `resolve_codex_session()` と同じ）。
+// **セッション ID は、そのペインの codex が「いま開いている rollout」から取る**（#429）。
 // writer lock から引く手（#332 の案 2）は **codex 0.153.2 でしか当たらない**: 実測で 0.154.0 の TUI は
 // lock を開いておらず、そのスレッドの lock は ChatGPT アプリの `codex app-server --listen`（tmux の外）が
-// 握っていた。cwd → rollout は record.py が行を書くときに使っているのと同じ引き方なので、版に依らず
-// 記録と同じセッションに繋がる。
+// 握っていた。
+//
+// **cwd から引いてはいけない**（#429）: 前は `record.py` の `resolve_codex_session()` と同じく
+// 「その cwd の一番新しい rollout」を引いていたが、あちらは**その codex 自身が書いた行**を処理するので
+// 当たる一方、こちらは**ペイン → セッション**を当てる向きで、同じ worktree に会話が 2 本あると崩れる。
+// 端末で 1 本開いたまま SAI から新しいセッションを起こす（#401）と、新しい方の rollout が一番新しくなり、
+// **ペインの導出セッションが別の会話に化けて、返信がそのペインに打ち込まれた**。開いているファイルなら
+// 取り違えようがない。**引けなければ当てない**（`session` は空。材料が無いのに決めつけない）。
 import { execFile } from 'node:child_process'
-import { open, readdir } from 'node:fs/promises'
+import { open } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join, sep } from 'node:path'
 import { isDescendant, type PsFn, type Tmux } from './terminal.ts'
 
 /** 見つけた結果を覚えておく長さ。3 秒のポーリングのたびに `ps` / `lsof` / rollout の走査を起こさない */
 export const CODEX_PANES_TTL_MS = 30_000
-/** rollout を探す日数（`progress.ts` の CODEX_DAYS と同じ考え方。古い日に始めて開きっぱなしのものは引かない） */
-const ROLLOUT_DAYS = 7
 /**
  * rollout の頭から読むバイト数。**1 行目（`session_meta`）だけで実測 18.5KB ある**（環境や指示が入っている）ので、
  * 8KB では切れて JSON として読めない。切れた最後の行は `parseRolloutHead()` が捨てる
@@ -31,7 +35,7 @@ export interface PaneCodex {
   /** codex 本体の pid（そのペインの子孫） */
   pid: number
   cwd: string
-  /** cwd から引いたセッション ID。引けなければ空（まだスレッドが無い Codex） */
+  /** 開いている rollout から引いたセッション ID。引けなければ空（まだスレッドが無い・rollout を開かない版） */
   session: string
 }
 
@@ -39,14 +43,19 @@ export interface CodexPaneSource {
   scan(): Promise<PaneCodex[]>
 }
 
+/** その pid が開いているもののうち、知りたい 2 つ */
+export interface PaneFiles {
+  cwd: string
+  /** 開いている rollout のパス（CODEX_HOME の下のものだけ） */
+  rollouts: string[]
+}
+
 export interface CodexPaneDeps {
   tmux: Tmux
   /** `ps -axo pid=,ppid=,comm=`。コマンド名が要るので `PsFn`（pid と ppid だけ）とは別 */
   ps?: PsFn
-  /** その pid の cwd（既定は `lsof`） */
-  cwdOf?: (pid: number) => Promise<string>
-  /** その cwd の Codex セッション（既定は CODEX_HOME の rollout を新しい順に見る） */
-  sessionOf?: (cwd: string) => Promise<string>
+  /** その pid が開いているファイル（既定は `lsof`）。cwd と rollout を 1 回で取る */
+  openOf?: (pid: number) => Promise<PaneFiles>
   now?: () => number
   env?: NodeJS.ProcessEnv
 }
@@ -74,28 +83,47 @@ export function parsePsCommands(output: string): PsRow[] {
   return rows
 }
 
-/** `lsof -a -p <pid> -d cwd -Fn` の `n` の行。読めなければ空 */
-const lsofCwd = (pid: number): Promise<string> =>
-  new Promise((resolve) => {
-    execFile('lsof', ['-a', '-p', String(pid), '-d', 'cwd', '-Fn'], { timeout: 5_000 }, (err, stdout) => {
-      if (err && !stdout) return resolve('')
-      const line = String(stdout).split('\n').find((l) => l.startsWith('n'))
-      resolve(line ? line.slice(1).trim() : '')
+/**
+ * `lsof -a -p <pid> -Ffn` から cwd と開いている rollout を**1 回で**取る。読めなければ空。
+ * 出力は `f<fd>` の次の行が `n<パス>` という形で、cwd は `fcwd`
+ */
+export function lsofPaneFiles(env: NodeJS.ProcessEnv = process.env): (pid: number) => Promise<PaneFiles> {
+  const root = codexSessionsDir(env) + sep
+  return (pid: number): Promise<PaneFiles> =>
+    new Promise((resolve) => {
+      execFile('lsof', ['-a', '-p', String(pid), '-Ffn'], { timeout: 5_000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
+        if (err && !stdout) return resolve({ cwd: '', rollouts: [] })
+        resolve(parsePaneFiles(String(stdout), root))
+      })
     })
-  })
+}
+
+/** `lsof -Ffn` の出力を読む。`root` は CODEX_HOME の `sessions/`（末尾に区切り付き） */
+export function parsePaneFiles(output: string, root: string): PaneFiles {
+  let cwd = ''
+  const rollouts: string[] = []
+  let fd = ''
+  for (const line of output.split('\n')) {
+    if (line.startsWith('f')) {
+      fd = line.slice(1).trim()
+      continue
+    }
+    if (!line.startsWith('n')) continue
+    const path = line.slice(1).trim()
+    if (fd === 'cwd') {
+      if (!cwd) cwd = path
+      continue
+    }
+    // CODEX_HOME の下の rollout だけ（別のプロセスが開いた同名のファイルを拾わない）
+    if (path.startsWith(root) && basename(path).startsWith('rollout-') && path.endsWith('.jsonl')) rollouts.push(path)
+  }
+  return { cwd, rollouts }
+}
 
 function codexSessionsDir(env: NodeJS.ProcessEnv): string {
   const raw = env.CODEX_HOME?.trim()
   const home = raw ? (raw === '~' ? homedir() : raw.startsWith('~/') ? join(homedir(), raw.slice(2)) : raw) : join(homedir(), '.codex')
   return join(home, 'sessions')
-}
-
-async function names(dir: string): Promise<string[]> {
-  try {
-    return await readdir(dir)
-  } catch {
-    return []
-  }
 }
 
 /** ファイルの頭だけを読む（rollout は手元で 12MB ある。`session_meta` は 1 行目） */
@@ -159,35 +187,16 @@ export function parseRolloutHead(text: string, fallbackSession: string): Rollout
 const UUID = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i
 
 /**
- * その cwd で動いている Codex のセッション ID を、**新しい rollout から順に**引く（`record.py` と同じ）。
- * 見つからなければ空。`sessions/YYYY/MM/DD` を新しい日から `ROLLOUT_DAYS` 日ぶんだけ降りる
+ * **開いている rollout** からセッション ID を引く（#429）。新しいファイル名の順に見て最初に取れたものを返す。
+ * レビューの子スレッド（#403）も同時に開いていることがあるが、`parseRolloutHead()` が `session_meta` を
+ * 先に見るのでどちらからでも親のセッションに落ちる。1 つも開いていなければ空（**当てない**）
  */
-export function rolloutSessionByCwd(env: NodeJS.ProcessEnv = process.env): (cwd: string) => Promise<string> {
-  const root = codexSessionsDir(env)
-  return async (cwd: string): Promise<string> => {
-    if (!cwd) return ''
-    const desc = (list: string[]) => list.filter((n) => /^\d+$/.test(n)).sort((a, b) => b.localeCompare(a))
-    let days = 0
-    const found: { mtime: number; path: string }[] = []
-    for (const year of desc(await names(root))) {
-      for (const month of desc(await names(join(root, year)))) {
-        for (const day of desc(await names(join(root, year, month)))) {
-          if (days++ >= ROLLOUT_DAYS) break
-          const dir = join(root, year, month, day)
-          for (const name of await names(dir)) {
-            if (name.startsWith('rollout-') && name.endsWith('.jsonl')) found.push({ mtime: 0, path: join(dir, name) })
-          }
-        }
-      }
-    }
-    // 同じ日の中では名前（時刻が入っている）の新しい順
-    found.sort((a, b) => b.path.localeCompare(a.path))
-    for (const { path } of found) {
-      const parsed = parseRolloutHead(await head(path), UUID.exec(path)?.[1] ?? '')
-      if (parsed.cwd && parsed.cwd === cwd && parsed.session) return parsed.session
-    }
-    return ''
+export async function rolloutSession(paths: readonly string[]): Promise<string> {
+  for (const path of [...paths].sort((a, b) => b.localeCompare(a))) {
+    const parsed = parseRolloutHead(await head(path), UUID.exec(path)?.[1] ?? '')
+    if (parsed.session) return parsed.session
   }
+  return ''
 }
 
 /**
@@ -201,15 +210,13 @@ export class CodexPanes implements CodexPaneSource {
   private scanning: Promise<PaneCodex[]> | null = null
   private readonly tmux: Tmux
   private readonly ps: PsFn
-  private readonly cwdOf: (pid: number) => Promise<string>
-  private readonly sessionOf: (cwd: string) => Promise<string>
+  private readonly openOf: (pid: number) => Promise<PaneFiles>
   private readonly now: () => number
 
   constructor(deps: CodexPaneDeps) {
     this.tmux = deps.tmux
     this.ps = deps.ps ?? realPsCommands
-    this.cwdOf = deps.cwdOf ?? lsofCwd
-    this.sessionOf = deps.sessionOf ?? rolloutSessionByCwd(deps.env ?? process.env)
+    this.openOf = deps.openOf ?? lsofPaneFiles(deps.env ?? process.env)
     this.now = deps.now ?? Date.now
   }
 
@@ -241,9 +248,8 @@ export class CodexPanes implements CodexPaneSource {
           if (row.comm !== 'codex') continue
           const shell = shells.find((s) => isDescendant(row.pid, s.pid, parents))
           if (!shell) continue // tmux の外（ChatGPT アプリの app-server など）
-          const cwd = await this.cwdOf(row.pid)
-          const session = cwd ? await this.sessionOf(cwd) : ''
-          panes.push({ pane: shell.pane, pid: row.pid, cwd, session })
+          const { cwd, rollouts } = await this.openOf(row.pid)
+          panes.push({ pane: shell.pane, pid: row.pid, cwd, session: await rolloutSession(rollouts) })
         }
       }
     } catch {

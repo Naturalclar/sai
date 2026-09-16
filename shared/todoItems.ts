@@ -61,9 +61,23 @@ export function todoItems(sessions: readonly SessionSummary[], approvals: Approv
     // 答え待ちが出ているセッションは上で入れてある（そちらの方が新しくて具体的）
     if (!s.waiting || answering.has(s.id) || s.archived) continue
     if (processReplying(replying[s.id])) continue
-    out.push({ id: s.id, kind: 'watch', text: s.waiting, since: s.end, session: s, approval: null, replyable: replyBlockedReason(s, selfHost) === '' })
+    out.push({ id: s.id, kind: 'watch', text: s.waiting, since: s.end, session: s, approval: null, replyable: watchReplyable(s, selfHost) })
   }
   return out.sort((a, b) => (a.since === b.since ? a.id.localeCompare(b.id) : a.since < b.since ? -1 : 1))
+}
+
+/**
+ * その待ちに、SAI の返信欄から**答えられる**か。
+ *
+ * **OpenCode の待ちは必ず許可待ち**（プラグインが書く待ちの行は `permission.asked` だけ）で、
+ * **返信を送っても保留中の許可は解けない**（止まっているのは許可の待ちなので、次のターンの入力にしかならない）。
+ * SAI が起こしたサーバが持っている分は `answer` として上に出ているので、ここに残っているのは
+ * **端末の TUI か、人が立てた別のサーバの分＝ SAI からは触れないもの**（#421）。だから「端末で答えて」に倒す。
+ * Claude / Codex は今までどおり、返信欄から打ち込めるかだけで決める（#232）
+ */
+function watchReplyable(s: SessionSummary, selfHost: string): boolean {
+  if (s.agent === 'opencode') return false
+  return replyBlockedReason(s, selfHost) === ''
 }
 
 /** 別プロセス（`-p` / `exec resume`）の返信が動いている。失敗して残っている分は「動いている」ではない */

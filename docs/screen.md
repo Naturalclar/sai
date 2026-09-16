@@ -266,6 +266,13 @@ SAI_CODEX_APP_SERVER_ARGS='-c sandbox_mode="workspace-write"' pnpm start  # app-
 
 端末と同じく、返信で回したエージェントが **許可（ツール実行の確認）や質問で止まったら、SAI のチャットに ⏳ のバブルと、実際に選べる決定（質問なら選択肢）が出て、そこから答えられる**。答えるまでエージェントは待っていて、一覧には「待機中」が付く。Claudeだけは [常に許可] も持つ。
 
+**OpenCode も答えられる**（#421）。SAI が起こした `opencode serve` が許可で止まったら、画面の 3 秒のポーリングのついでに `GET /permission`（そのセッションの `directory` を渡す。渡さないと空が返る）を引いて同じ ⏳ のバブル（[許可] [拒否]）にし、押した答えを `POST /session/<セッション>/permissions/<per_…>` で返す。実機（1.18.30）で、`/etc/hosts` を読もうとして止まったターンが [許可] で再開して最後まで走るところまで確かめてある。
+
+- **「常に許可」は出さない。** OpenCode の `always` は `patterns`（`/etc/*` のような glob）に効くので、押した範囲が本人に見えない
+- **答えられるのは SAI が起こしたサーバの分だけ。** 端末で開いた OpenCode（TUI）や、自分で立てた `opencode serve` の許可は URL も鍵も知らないので触れない。その分は今までどおり記録の待ちの行として「要対応」に出て、**案内は「端末で答えてください」**になる（返信欄から送っても、止まっているのは許可の待ちなので解けない）
+- **保留を見るためだけにサーバは起こさない。** 返信を 1 度も回していないうちは何も聞きに行かない
+- 行に残る待ちの文言も **何を聞かれているかまで出す**（`許可待ち: external_directory: /etc/hosts`）。プラグインが `metadata` から拾うキーは**大文字小文字を見ない**（実物は `filepath`）
+
 Codexは `server/reply/codexAppServer.ts` がSAIサーバー配下に長寿命の `codex app-server --stdio` を持ち、`experimentalApi: true`、`approvalsReviewer: user` で `thread/resume` / `turn/start` する。`item/tool/requestUserInput`、`item/commandExecution/requestApproval`、`item/fileChange/requestApproval`、`item/permissions/requestApproval` を受け、同じJSON-RPC request idへ応答する。コマンドは `availableDecisions` の実値をサーバ内に置き、画面へは不透明なidしか出さない。別thread/turn、未提示decision、二重回答は拒否し、request解消・turn完了・切断で待機を消す。
 
 仕組みは `claude -p` の `--permission-prompt-tool`。SAI は返信の `claude` に自分の MCP サーバ（`server/approvals/approve-mcp.ts`。stdio、依存ゼロ）を `--mcp-config` で足し、許可が要るたびにそのツールが呼ばれる。ツールは SAI サーバに預けて（`POST /api/approvals`）答えが付くまで待ち（`GET /api/approvals/<id>?wait=1`）、画面の答え（`POST /api/approvals/<id>/answer`）をそのまま CLI に返す。

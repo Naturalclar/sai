@@ -18,6 +18,10 @@ import { Authenticator } from './auth.ts'
 import { TerminalReplies } from './reply/terminal.ts'
 import type { ReplyCommand, Runner } from './reply/runner.ts'
 import type { OpencodeApp, OpencodeTurnInput } from './reply/opencodeServer.ts'
+import { parsePermissions, permissionApprovalId } from '../shared/opencodePermissions.ts'
+import type { OpencodePermission } from '../shared/opencodePermissions.ts'
+import { REAL_PERMISSION, REAL_PERMISSION_TEXT } from '../shared/opencodePermissions.test.ts'
+import type { SessionsResponse } from '../shared/types.ts'
 
 let dir: string
 let work: string
@@ -27,6 +31,12 @@ const sent: OpencodeTurnInput[] = []
 const skillCalls: string[] = []
 const modelCalls: string[] = []
 const started: { id: string; cmd: ReplyCommand }[] = []
+/** いま `opencode serve` が答えを待っている許可（#421）。テストごとに差し替える */
+let pending: OpencodePermission[] = []
+let answerOk = true
+const answered: { sessionId: string; permissionId: string; response: string }[] = []
+/** `GET /permission` に渡した `directory`（#421。渡さないと空が返るので、渡していることをテストで留める） */
+const permissionDirs: string[][] = []
 const runner: Runner = { running: () => false, snapshot: () => ({}), async start(id, cmd) { started.push({ id, cmd }) } }
 /** 送ったぶんを覚え、`busy` で「処理中」を作れる偽の serve */
 const opencodeApp: OpencodeApp = {
@@ -40,6 +50,14 @@ const opencodeApp: OpencodeApp = {
     sent.push(input)
   },
   settle: () => [],
+  async permissions(dirs: readonly string[]) {
+    permissionDirs.push([...dirs])
+    return pending
+  },
+  async answerPermission(sessionId: string, permissionId: string, response: 'once' | 'reject') {
+    answered.push({ sessionId, permissionId, response })
+    return answerOk
+  },
   async skills(cwd: string) {
     skillCalls.push(cwd)
     return [
@@ -81,6 +99,8 @@ before(async () => {
     [
       JSON.stringify(row(new Date(now.getTime() - 60_000), 'ses_1', { agent: 'opencode', repo: 'r', cwd: work, host: 'testmac', model: 'ollama/qwen3:8b' })),
       JSON.stringify(row(new Date(now.getTime() - 30_000), 'ses_ng', { agent: 'opencode', repo: 'r', cwd: work, host: 'testmac' })),
+      // 許可で止まっている（プラグインが書く待ちの行。#421。これがあるセッションの cwd に保留を聞きに行く）
+      JSON.stringify(row(new Date(now.getTime() - 10_000), 'ses_1', { agent: 'opencode', repo: 'r', cwd: work, host: 'testmac', event: 'permission.asked', text: '許可待ち: external_directory: /etc/hosts', user_text: '' })),
     ].join('\n') + '\n',
   )
   const handler = app()
@@ -168,4 +188,87 @@ test('返信のモデル候補は OpenCode の本体に聞く（#394。セッシ
   const body = (await res.json()) as SessionModelsResponse
   assert.deepEqual(body.models, ['openai/gpt-6-astra', 'ollama/qwen3:8b'])
   assert.deepEqual(modelCalls, [work], 'worktree ごとに設定が違うので cwd を渡す')
+})
+
+/** #421。実物の保留を `ses_1@r` のものとして流し込む */
+const asPending = (over: Partial<OpencodePermission> = {}) =>
+  parsePermissions([{ ...REAL_PERMISSION, sessionID: 'ses_1', ...over }])
+
+test('OpenCode の許可待ちが、答えられるバブルとして出る（#421）', async () => {
+  pending = asPending()
+  try {
+    const list = (await (await fetch(`${base}/api/sessions`)).json()) as SessionsResponse
+    const approval = list.approvals['ses_1@r']?.[0]
+    assert.ok(approval, '一覧の approvals に載る')
+    assert.equal(approval.text, REAL_PERMISSION_TEXT, '何を聞かれているかまで出る')
+    assert.equal(approval.agent, 'opencode')
+    assert.equal(approval.answerable, true)
+    assert.deepEqual(approval.decisions?.map((d) => d.id), ['once', 'reject'])
+    const detail = (await (await fetch(`${base}/api/sessions/ses_1%40r`)).json()) as SessionDetailResponse
+    assert.equal(detail.approvals['ses_1@r']?.[0]?.approval_id, permissionApprovalId(REAL_PERMISSION.id), '詳細にも同じものが載る')
+  } finally {
+    pending = []
+  }
+})
+
+test('保留は「そのセッションの cwd」を渡して引く（#421。directory が無いと空が返る）', async () => {
+  permissionDirs.length = 0
+  await fetch(`${base}/api/sessions`)
+  assert.deepEqual(permissionDirs.at(-1), [work], '待っているセッションの cwd を渡す')
+})
+
+test('許可・拒否を押すと、そのまま OpenCode に返る（#421）', async () => {
+  pending = asPending()
+  answered.length = 0
+  try {
+    await fetch(`${base}/api/sessions`) // バブルを出す（出したものだけ答えられる）
+    const id = permissionApprovalId(REAL_PERMISSION.id)
+    const res = await post(`/api/approvals/${id}/answer`, { behavior: 'allow', decision: 'once' })
+    assert.equal(res.status, 200)
+    assert.deepEqual(answered, [{ sessionId: 'ses_1', permissionId: REAL_PERMISSION.id, response: 'once' }])
+    // 答えたものは消える（二度は押せない）
+    assert.equal((await post(`/api/approvals/${id}/answer`, { behavior: 'deny', decision: 'reject' })).status, 404)
+  } finally {
+    pending = []
+  }
+})
+
+test('出していない選択（常に許可）と別オリジンは断る（#421）', async () => {
+  pending = asPending({ id: 'per_deny' })
+  answered.length = 0
+  try {
+    await fetch(`${base}/api/sessions`)
+    const id = permissionApprovalId('per_deny')
+    assert.equal((await post(`/api/approvals/${id}/answer`, { behavior: 'allow', decision: 'always' })).status, 400, '「常に許可」は出していない')
+    assert.equal((await post(`/api/approvals/${id}/answer`, { behavior: 'allow', remember: 'local' })).status, 400, 'ルールの記憶も受けない')
+    const cross = await fetch(`${base}/api/approvals/${id}/answer`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'https://evil.example' },
+      body: JSON.stringify({ behavior: 'allow', decision: 'once' }),
+    })
+    assert.equal(cross.status, 403, '同一オリジンのみ')
+    assert.deepEqual(answered, [], 'どれも本体には届かない')
+    // 拒否は届く
+    assert.equal((await post(`/api/approvals/${id}/answer`, { behavior: 'deny', decision: 'reject' })).status, 200)
+    assert.deepEqual(answered, [{ sessionId: 'ses_1', permissionId: 'per_deny', response: 'reject' }])
+  } finally {
+    pending = []
+  }
+})
+
+test('記録に無いセッションの保留は出さない。届かなければ 409（#421）', async () => {
+  pending = asPending({ id: 'per_other', sessionID: 'ses_知らない' })
+  try {
+    const list = (await (await fetch(`${base}/api/sessions`)).json()) as SessionsResponse
+    assert.equal(Object.keys(list.approvals).length, 0, '行にないセッションの保留は載せない')
+    assert.equal((await post(`/api/approvals/${permissionApprovalId('per_other')}/answer`, { behavior: 'allow', decision: 'once' })).status, 404)
+    // 本体が受け取らなかった（サーバが落ちた・保留がもう無い）ときは 409 にして、次のポーリングで消す
+    pending = asPending({ id: 'per_gone' })
+    answerOk = false
+    await fetch(`${base}/api/sessions`)
+    assert.equal((await post(`/api/approvals/${permissionApprovalId('per_gone')}/answer`, { behavior: 'allow', decision: 'once' })).status, 409)
+  } finally {
+    answerOk = true
+    pending = []
+  }
 })

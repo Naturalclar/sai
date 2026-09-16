@@ -156,6 +156,16 @@ test('todoItems: watch の replyable は、その会話に返信欄から打て�
   assert.equal(codexTui[0]!.replyable, false, 'エージェントが分からなければ再開できない')
 })
 
+test('todoItems: OpenCode の待ちは「端末で答えて」に倒す（#421。返信欄からは許可を解けない）', () => {
+  // OpenCode の待ちは必ず許可待ちで、返信を送っても保留は解けない。SAI が起こしたサーバの分は
+  // approvals（answer）として上に出るので、watch に残るのは端末の TUI か別のサーバの分＝触れないもの
+  const oc = todoItems([summary({ id: 'ses_1@r', waiting: '許可待ち: external_directory: /etc/hosts', agent: 'opencode', agents: ['opencode'] })], {}, SELF)
+  assert.equal(oc.length, 1, '待っていることは出す')
+  assert.equal(oc[0]!.replyable, false)
+  // Claude / Codex は今までどおり（返信欄から打てるなら true）
+  assert.equal(todoItems([summary({ id: 's1@sai', waiting: 'w', agent: 'codex', agents: ['codex'] })], {}, SELF)[0]!.replyable, true)
+})
+
 test('todoItems: 別のマシンのセッションは出すが、ここからは答えられない（#114）', () => {
   // 待っていることに変わりはないので項目としては出す（あちらのマシンへ行けば答えられる）
   const remote = todoItems([summary({ id: 's1@sai', waiting: '許可待ち: Bash: ls', host: 'mini', hosts: ['mini'] })], {}, SELF)

@@ -9,7 +9,7 @@ import { ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_COUNT, ATTACHMENTS_DIR, withAttach
 import { mergeMeta } from '../shared/meta.ts'
 import { mergeProfile, PROFILE_ICON_ID, profileIconUrl } from '../shared/profile.ts'
 import { isPersonaId } from '../shared/persona.ts'
-import { replyBlockedReason, replyFailureText } from '../shared/reply.ts'
+import { canSteer, replyBlockedReason, replyFailureText } from '../shared/reply.ts'
 import { selfHost } from './host.ts'
 import type {
   AgentActivity,
@@ -334,6 +334,8 @@ interface LaunchOptions {
   queue: boolean
   /** 別のセッションから送られたメッセージなら、その message_id（#310）。起動したターンから先へは送らせない（連鎖 1 段） */
   origin?: string
+  /** 走っている Codex のターンに足す（#404。`ReplyRequest.steer`）。足せなければ今までどおり預かりか 409 */
+  steer?: boolean
 }
 
 /** 起動の結果。HTTP には書かずに返すので、POST はそのまま応答にし、drain は預かりを止める理由にする */
@@ -811,7 +813,8 @@ export function createApp(
     const replaceTyped = (body as ReplyRequest).replace_typed === true
     const forceProcess = (body as ReplyRequest).via === 'process'
     const wantQueue = (body as ReplyRequest).queue === true
-    const out = await launch(id, text, attachments, { days, replaceTyped, forceProcess, url: selfUrl(req), queue: wantQueue })
+    const wantSteer = (body as ReplyRequest).steer === true
+    const out = await launch(id, text, attachments, { days, replaceTyped, forceProcess, url: selfUrl(req), queue: wantQueue, steer: wantSteer })
     return json(res, out.body, out.status)
   }
 
@@ -1008,6 +1011,17 @@ export function createApp(
       return refuse(400, `cwd が見つかりません: ${cwd || '(空)'}`)
     }
     const openTerminal = await terminalOf(session)
+    // **走っているターンに足す**（#404）。画面が選んだときだけで、既定は今までどおり預かり。
+    // 足せなければ（ターンが終わっていた・別のターンになった）そのまま下に落ちて預かるので、本文は落ちない
+    if (o.steer && codexAppEnabled && codexApp.steer && canSteer(session.agent, codexApp.replying()[id])) {
+      const log = join(store.directory, 'reply.log')
+      await appendFile(log, `--- ${new Date().toISOString()} ${id} 走っているターンに足す（turn/steer）\n`).catch(() => {})
+      if (await codexApp.steer(id, text, attachments)) {
+        const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd, via: 'steer' }
+        return { status: 202, body: payload }
+      }
+      await appendFile(log, '足せなかった（ターンが終わったか、別のターンになった）。今までどおりの経路へ\n').catch(() => {})
+    }
     // 別プロセス（-p / app-server）のターンが動いているか、いま起動している最中か
     const busy = run.running(id) || codexApp.running(id) || opencodeApp.running(id) || launching.has(id)
     // 処理中なら預かる（#305）。処理中でなくても預かりが残っていれば後ろに並べる（先に預けたものを追い越さない）

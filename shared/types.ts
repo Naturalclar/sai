@@ -809,6 +809,12 @@ export interface ReplyRequest {
    * （先に預けたものを追い越さない）。省略すれば今までどおり、処理中は `409`
    */
   queue?: boolean
+  /**
+   * **走っているターンに足す**（#404。Codex の `turn/steer`）。付いていなければ今までどおり預かり（`queue`）か `409` で、
+   * 付いていても足せなければ（ターンが終わっていた・別のターンになった）そちらに落ちる。
+   * 預かりと違って**取り消せない**（走っているターンの筋がその場で変わる）ので、画面は選んだときだけ付ける
+   */
+  steer?: boolean
 }
 
 /** POST /api/sessions/<id>/attachments。body は画像そのもの */
@@ -873,7 +879,7 @@ export interface ReplyResponse {
    * terminal: tmux。process: 非対話CLI。queue: 開いているCodex。app-server: SAI管理のCodex。
    * queued: 処理中だったので預かった（まだ起動していない。#305）
    */
-  via: 'terminal' | 'process' | 'queue' | 'app-server' | 'queued'
+  via: 'terminal' | 'process' | 'queue' | 'app-server' | 'queued' | 'steer'
   /** via が queued のとき、預かった返信の id（取り消しに使う） */
   queue_id?: string
   session: string
@@ -881,7 +887,7 @@ export interface ReplyResponse {
 }
 
 /**
- * POST /api/sessions/new。SAI の画面から新しいセッションを始める（#314。まず Claude だけ）。
+ * POST /api/sessions/new。SAI の画面から新しいセッションを始める（#314。Codex は #401）。
  * **作業ディレクトリは受け取らない**: `from`（既存のセッションのエンティティID）の `cwd` をサーバが使う
  * （返信と同じく、ブラウザから任意の場所でコマンドを走らせない）。`cwd` を送っても見ない
  */

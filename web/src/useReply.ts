@@ -92,6 +92,8 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
   const [sent, setSent] = useState<Sent[]>([])
   const [failed, setFailed] = useState<ReplyFailed | null>(null)
   const [confirm, setConfirm] = useState<ReplaceConfirm | null>(null)
+  // 走っているターンに足したこと（#404）。次に送るまで入力欄の下に出す（仮バブルは作らない）
+  const [steered, setSteered] = useState<{ id: string; text: string } | null>(null)
   // 確認から送り直して受け付けられた回数（#338）。ReplyBox がこれを見て入力欄を空にする
   const [confirmedSent, setConfirmedSent] = useState(0)
   // サーバが「処理中」と言った id と、最初にそう見えたときの行数・本文。消えたときに行が増えていなければ失敗
@@ -143,14 +145,21 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
     ...sent.filter((s) => !replying[s.id]).map((s) => ({ id: s.id, text: s.text, since: new Date(s.sentAt).toISOString() })),
   ]
 
-  const send = async (id: string, text: string, options: { replaceTyped?: boolean; via?: 'process'; attachments?: string[]; queue?: boolean } = {}): Promise<SendOutcome> => {
+  const send = async (id: string, text: string, options: { replaceTyped?: boolean; via?: 'process'; attachments?: string[]; queue?: boolean; steer?: boolean } = {}): Promise<SendOutcome> => {
     const entry: Sent = { id, text, rowsAtSend: countRows(id), sentAt: Date.now(), acceptedAt: null }
     setFailed(null)
     setConfirm(null)
+    setSteered(null)
     // 預ける（処理中の返信がある）ときは繋ぎを作らない。前の返信の「処理中」を上書きしてしまう（#305）
     if (!options.queue) setSent((list) => [...list.filter((s) => s.id !== id), entry])
     try {
       const accepted = await api.reply(id, text, options)
+      // 走っているターンに足した（#404）。新しいターンではないので仮バブルは作らず、入力欄の下に出すだけ
+      // （足した文はそのターンの記録に載るので、ターンが終われば普通のバブルとして出る）
+      if (accepted.via === 'steer') {
+        setSteered({ id, text })
+        return 'sent'
+      }
       // 預かっただけ（まだ起動していない）。待機中のバブルはサーバの queued から次のポーリングで出る
       if (accepted.via === 'queued') return 'sent'
       setSent((list) => (list.includes(entry) ? list.map((s) => (s === entry ? { ...s, acceptedAt: Date.now() } : s)) : [...list.filter((s) => s.id !== id), { ...entry, acceptedAt: Date.now() }]))
@@ -198,5 +207,5 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
   const confirmProcess = (): Promise<SendOutcome> => sendFromConfirm({ via: 'process' })
   const cancelConfirm = () => setConfirm(null)
 
-  return { pending, failed, send, confirm, confirmedSent, confirmReplace, confirmProcess, cancelConfirm }
+  return { pending, failed, steered, send, confirm, confirmedSent, confirmReplace, confirmProcess, cancelConfirm }
 }

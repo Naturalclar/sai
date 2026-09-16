@@ -4,7 +4,7 @@
 import { entityId } from './entity.ts'
 import { isRemoteHost } from './host.ts'
 import { projectName, rowProject } from './project.ts'
-import type { FeedRow, SessionSummary } from './types.ts'
+import type { FeedRow, Replying, SessionSummary } from './types.ts'
 
 /**
  * 返信できない理由。空文字なら返信できる。
@@ -200,4 +200,16 @@ export function replyFailureText(failed: { code?: number; tail: string }): strin
 /** 本文から表記を外す（送信するときと、✕ で返信先を戻すとき）。残った空白は1つにまとめる */
 export function stripMention(text: string, label: string): string {
   return text.split(label).join('').replace(/[ \t]{2,}/g, ' ').replace(/^[ \t]+|[ \t]+$/gm, '').trim()
+}
+
+/**
+ * いま走っているターンに**あとから指示を足せる**か（#404。Codex の `turn/steer`）。
+ *
+ * 足せるのは **SAI の app-server が回している Codex のターンだけ**で、条件は「止められる」（#384）と同じ:
+ * どちらも `thread/resume` したスレッドの、`turnId` が分かっているターンにしか当たらない（`Replying.interruptible`）。
+ * 端末に打ち込んだターン・`claude -p`・OpenCode には口が無い。
+ * **画面とサーバがこの 1 つを見る**ので、出しているのに 400 になることがない
+ */
+export function canSteer(agent: string, replying: Pick<Replying, 'interruptible' | 'failed'> | undefined): boolean {
+  return agent === 'codex' && Boolean(replying?.interruptible) && !replying?.failed
 }

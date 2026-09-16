@@ -180,3 +180,60 @@ test('permissions / answerPermission: サーバが立っていなければ起こ
   assert.deepEqual(await app.permissions(['/w']), { ok: false, list: [] }, '引けていない（保留が無い、ではない）')
   assert.equal(await app.answerPermission('ses_1', 'per_1', 'once'), false)
 })
+
+test('todos: 段取りとサブセッションの数を引く（#397）', async () => {
+  const seen: string[] = []
+  const server: Server = createServer((req, res) => {
+    seen.push(req.url ?? '')
+    res.writeHead(200, { 'content-type': 'application/json' })
+    if ((req.url ?? '').endsWith('/todo')) {
+      // 実機（1.18.30）の形。**`id` は無い**
+      res.end(JSON.stringify([
+        { content: '調べる', status: 'completed', priority: 'medium' },
+        { content: '直す', status: 'in_progress', priority: 'medium' },
+      ]))
+    } else {
+      res.end(JSON.stringify([{ id: 'ses_child', parentID: 'ses_abc', title: 'math calculation (@general subagent)' }]))
+    }
+  })
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+  const addr = server.address()
+  const base = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`
+  try {
+    const app = new OpencodeServer(fetch, Date.now, async () => ({ url: base, auth: 'Basic dGVzdA==' }))
+    const got = await app.todos('ses_abc')
+    assert.deepEqual(got.todos, [
+      { content: '調べる', status: 'completed', priority: 'medium' },
+      { content: '直す', status: 'in_progress', priority: 'medium' },
+    ])
+    assert.equal(got.children, 1, 'サブセッションはまず数だけ')
+    assert.deepEqual(seen, ['/session/ses_abc/todo', '/session/ses_abc/children'])
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()))
+  }
+})
+
+test('todos: サーバが立っていなければ起こさない。片方が落ちてももう片方は返す（#397）', async () => {
+  // `serveFn` を渡さない = 本物の spawn を通る実装。`live()` は立っているものだけを見るので何も起こさない（#421 と同じ）
+  assert.deepEqual(await new OpencodeServer().todos('ses_abc'), { todos: [], children: 0 })
+
+  const server: Server = createServer((req, res) => {
+    if ((req.url ?? '').endsWith('/children')) {
+      res.writeHead(500, { 'content-type': 'text/plain' })
+      return res.end('boom')
+    }
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify([{ content: '直す', status: 'pending', priority: 'low' }]))
+  })
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+  const addr = server.address()
+  const base = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`
+  try {
+    const app = new OpencodeServer(fetch, Date.now, async () => ({ url: base, auth: 'Basic dGVzdA==' }))
+    const got = await app.todos('ses_abc')
+    assert.equal(got.todos.length, 1, '引けた方は出す')
+    assert.equal(got.children, 0, '落ちた方は 0')
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()))
+  }
+})

@@ -287,6 +287,18 @@ export interface ProgressStep {
  * GET /api/sessions/<id>/progress（#302）。処理中のターンが何をしているか。
  * 3 秒のポーリング（一覧・詳細）には載せず、画面が処理中のセッションを出している間だけそのセッションの分を取る
  */
+/**
+ * エージェント自身の段取りの 1 件（#397。OpenCode の `GET /session/<id>/todo`）。
+ * **`id` は無い**（並びがそのまま順番）。読み方は `shared/todos.ts`
+ */
+export interface SessionTodo {
+  content: string
+  /** `pending` / `in_progress` / `completed` / `cancelled` */
+  status: string
+  /** `high` / `medium` / `low` */
+  priority: string
+}
+
 export interface SessionProgressResponse {
   /** transcript / rollout の (mtime, size) と active。変わらなければ画面は描き直さない */
   rev: string
@@ -306,6 +318,13 @@ export interface SessionProgressResponse {
   context_tokens: number
   /** いま答えを待っている `AskUserQuestion`（#333。Claude だけ）。無ければ省く */
   question?: PendingQuestion
+  /**
+   * エージェント自身の段取り（#397。**OpenCode だけ**）。空なら省く。
+   * 手順（`steps`）は「いま何をしているか」で、こちらは「全体のどこまで来たか」
+   */
+  todos?: SessionTodo[]
+  /** そのターンが起こしたサブセッションの数（#397。OpenCode だけ）。0 なら省く */
+  children?: number
 }
 
 /**

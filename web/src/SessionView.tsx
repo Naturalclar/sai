@@ -9,6 +9,7 @@ import { Chat } from './Chat'
 import { PendingBubble } from './PendingBubble'
 import { InterruptButton } from './InterruptButton'
 import { ProgressSteps } from './ProgressSteps'
+import { ProgressTodos } from './ProgressTodos'
 import { useProgress } from './useProgress'
 import { openPromptSince } from './openPrompt'
 import { QueuedBubble } from './QueuedBubble'
@@ -141,6 +142,8 @@ export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggl
               {mine && (
                 <PendingBubble text={mine.text} since={mine.since} now={now} quiet={promptArrived(data.rows, id, mine.text, mine.since)} profile={data.profile}>
                   <ProgressSteps progress={progress} since={mine.since} now={now} />
+                  {/* エージェント自身の段取り（#397。OpenCode だけ。無ければ出ない） */}
+                  <ProgressTodos progress={progress} />
                   {/* 止められるのは SAI の app-server が回している Codex のターンだけ（#384） */}
                   {mine.interruptible && <InterruptButton id={id} />}
                 </PendingBubble>
@@ -149,6 +152,7 @@ export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggl
               {!mine && promptSince && progress?.active && (
                 <PendingBubble text="" since={promptSince} now={now} quiet typed>
                   <ProgressSteps progress={progress} since={promptSince} now={now} />
+                  <ProgressTodos progress={progress} />
                 </PendingBubble>
               )}
               {approvals.map((a, i) => (

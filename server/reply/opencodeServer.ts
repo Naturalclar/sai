@@ -16,6 +16,8 @@ import { randomUUID } from 'node:crypto'
 import { basename, extname } from 'node:path'
 import { homedir } from 'node:os'
 import { opencodeModels } from '../../shared/models.ts'
+import { parsePermissions } from '../../shared/opencodePermissions.ts'
+import type { OpencodePermission } from '../../shared/opencodePermissions.ts'
 import { opencodeSkills } from '../../shared/skills.ts'
 import { settledByRow } from '../../shared/turnSettled.ts'
 import { childEnv } from './runner.ts'
@@ -49,6 +51,22 @@ export interface OpencodeApp {
   models(cwd: string): Promise<string[]>
   /** 行が届いたターンを終わりにする（#375 と同じ判定）。終わった id を返す（預かりを回すのに使う） */
   settle(lastTurn: (id: string) => string | undefined): string[]
+  /**
+   * いま答えを待っている許可（#421。`GET /permission?directory=<セッションの cwd>`）。
+   *
+   * **`directory` が要る**（`/command`・`/config/providers` と同じ。#393 / #394）。サーバは homedir で動いているので、
+   * 渡さないと**空が返る**（実機で確認: 保留が 1 件あるのに `directory` 無しでは `[]`）。渡すディレクトリは呼ぶ側が決める。
+   * **立っているサーバにしか聞かない**（保留を見るためだけに `opencode serve` を起こさない。
+   * 立っていなければ空で、画面は今までどおり記録の待ちの行だけを出す）。
+   * 偽物は持たなくてよい（持たなければ許可のバブルが出ないだけ）
+   */
+  permissions?(dirs: readonly string[]): Promise<OpencodePermission[]>
+  /**
+   * その許可に答える（#421。`POST /session/<id>/permissions/<permissionId>`）。答えられたら true。
+   * **答えられるのは SAI が起こしたサーバが持っている保留だけ**（端末の TUI や人が立てた別のサーバは
+   * URL も鍵も知らないので触れない。Codex の `turn/interrupt` と同じ線引き）
+   */
+  answerPermission?(sessionId: string, permissionId: string, response: 'once' | 'reject'): Promise<boolean>
   stop(): void
 }
 
@@ -148,6 +166,58 @@ export class OpencodeServer implements OpencodeApp {
     const res = await this.fetchFn(`${url}/config/providers?directory=${encodeURIComponent(cwd)}`, { headers: { authorization: auth } })
     if (!res.ok) throw new Error(`opencode serve が ${res.status} を返しました`)
     return opencodeModels(await res.json())
+  }
+
+  /**
+   * いま答えを待っている許可（#421）。**立っているサーバにしか聞かない**ので、返信を 1 度も回していなければ
+   * ここでサーバが起きることはない（3 秒のポーリングのついでに呼ばれる）。読めなければ空
+   */
+  async permissions(dirs: readonly string[]): Promise<OpencodePermission[]> {
+    const live = await this.live()
+    if (!live || dirs.length === 0) return []
+    const out: OpencodePermission[] = []
+    const seen = new Set<string>()
+    // ディレクトリごとに 1 本。普段は 0〜1 件（SAI が回している OpenCode のターンの分だけ）
+    for (const dir of dirs) {
+      try {
+        const res = await this.fetchFn(`${live.url}/permission?directory=${encodeURIComponent(dir)}`, { headers: { authorization: live.auth } })
+        if (!res.ok) continue
+        for (const p of parsePermissions(await res.json())) {
+          if (seen.has(p.id)) continue
+          seen.add(p.id)
+          out.push(p)
+        }
+      } catch {
+        // 読めなければその分は諦める（画面は記録の待ちの行だけになる）
+      }
+    }
+    return out
+  }
+
+  /** その許可に答える（#421）。`once` で許可、`reject` で拒否。答えられたら true */
+  async answerPermission(sessionId: string, permissionId: string, response: 'once' | 'reject'): Promise<boolean> {
+    const live = await this.live()
+    if (!live) return false
+    try {
+      const res = await this.fetchFn(`${live.url}/session/${encodeURIComponent(sessionId)}/permissions/${encodeURIComponent(permissionId)}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: live.auth },
+        body: JSON.stringify({ response }),
+      })
+      return res.ok
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * **立っているサーバ。無ければ null で、起こさない**（`serve()` との違いはここだけ）。
+   * 許可を見るためだけに `opencode serve` を立てるのは本末転倒なので、返信を 1 度も回していないうちは何もしない。
+   * 差し替え（`serveFn`）はテストが本物の HTTP サーバを指しているので、そのまま引く
+   */
+  private async live(): Promise<{ url: string; auth: string } | null> {
+    if (this.serveFn) return this.serveFn()
+    return this.ready && this.child && this.child.exitCode === null ? this.ready : null
   }
 
   stop(): void {

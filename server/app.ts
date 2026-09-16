@@ -20,6 +20,7 @@ import type {
   AgentSessionsResponse,
   AgentWaitResponse,
   ApprovalAnswer,
+  ApprovalMap,
   ApprovalRequest,
   AttachmentResponse,
   FeedResponse,
@@ -66,6 +67,7 @@ import { CodexAppServer } from './reply/codexAppServer.ts'
 import type { CodexApp } from './reply/codexAppServer.ts'
 import { OpencodeServer } from './reply/opencodeServer.ts'
 import type { OpencodeApp } from './reply/opencodeServer.ts'
+import { OpencodePermissions } from './reply/opencodePermissions.ts'
 import { approvalMapKey, CodexDialogs, mergeApprovalMaps } from './reply/codexDialogs.ts'
 import { CodexTerminals, type CodexTerminalSource } from './reply/codexTerminal.ts'
 import { CodexPanes, type CodexPaneSource } from './reply/codexPanes.ts'
@@ -396,6 +398,8 @@ export function createApp(
   const codexDialogs = terminal.codexDialogs ?? new CodexDialogs(terminal.tmux, terminal.ps)
   const codexApp = terminal.codexApp ?? new CodexAppServer()
   const opencodeApp = terminal.opencodeApp ?? new OpencodeServer()
+  // OpenCode の許可待ち（#421）。立っているサーバにだけ聞くので、返信を回していなければ何もしない
+  const opencodePerms = new OpencodePermissions(opencodeApp)
   const waitingSettle = terminal.waitingSettle ?? new WaitingSettle(terminal.tmux, terminal.ps)
   const codexAppEnabled = process.env.SAI_CODEX_APP_SERVER !== '0'
   // OpenCode は `opencode serve` の HTTP に送る（#382）。`0` で今までどおり `opencode run -s` に戻す
@@ -556,12 +560,14 @@ export function createApp(
     return out
   }
 
-  /** Claude、SAI管理のCodex、通常Codex TUIの検出専用ダイアログを合わせる。 */
-  const approvalsNow = async (sessions: SessionSummary[]) =>
-    mergeApprovalMaps(
-      mergeApprovalMaps(approvals.snapshot(), codexApp.snapshot()),
-      terminalEnabled ? await codexDialogs.scan(sessions, await paneOnlyTargets(sessions)) : {},
-    )
+  /** Claude、SAI管理のCodex、通常Codex TUIの検出専用ダイアログ、SAI が起こした OpenCode の許可（#421）を合わせる。 */
+  const approvalsNow = async (sessions: SessionSummary[]) => {
+    const [dialogs, opencode] = await Promise.all([
+      terminalEnabled ? codexDialogs.scan(sessions, await paneOnlyTargets(sessions)) : Promise.resolve({} as ApprovalMap),
+      opencodeServerEnabled ? opencodePerms.scan(sessions) : Promise.resolve({} as ApprovalMap),
+    ])
+    return mergeApprovalMaps(mergeApprovalMaps(mergeApprovalMaps(approvals.snapshot(), codexApp.snapshot()), dialogs), opencode)
+  }
 
   /**
    * 質問（AskUserQuestion）で止まっているセッションの、選択肢まで入った質問（#333）。フックの待ちの行には質問の文しか無いので、
@@ -1685,6 +1691,13 @@ export function createApp(
     const b = (body ?? {}) as Partial<ApprovalAnswer>
     if (b.behavior !== 'allow' && b.behavior !== 'deny') return error(res, 400, 'behavior は allow か deny')
     if (b.remember !== undefined && b.remember !== 'local') return error(res, 400, 'remember は local だけ')
+    // OpenCode の許可（#421）。提示した選択肢（許可 / 拒否）だけを本体に返す
+    if (opencodePerms.has(approvalId)) {
+      if (b.remember !== undefined) return error(res, 400, 'OpenCode では提示された選択だけ選べます')
+      const result = await opencodePerms.answer(approvalId, { behavior: b.behavior, ...(typeof b.decision === 'string' ? { decision: b.decision } : {}) })
+      if (!result.ok) return error(res, result.status, result.error)
+      return json(res, { ok: true, approval_id: approvalId, behavior: b.behavior })
+    }
     const codexCurrent = codexApp.getApproval(approvalId)
     if (codexCurrent) {
       if (b.remember !== undefined) return error(res, 400, 'Codexでは提示されたdecisionだけ選べます')

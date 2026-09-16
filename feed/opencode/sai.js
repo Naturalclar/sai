@@ -96,19 +96,30 @@ function failedText(failed) {
   return line.slice(0, FAILED_MAX)
 }
 
-/** 許可待ちの1行に出す要約。`許可待ち: bash: ls -la` の形（record.py / shared/approvals.ts と揃える） */
+/**
+ * 許可待ちの1行に出す要約。`許可待ち: external_directory: /etc/hosts` の形
+ * （record.py / shared/approvals.ts と揃える。中身の規則は **`shared/opencodePermissions.ts` の
+ * `opencodePermissionText()` と同じ**で、同じ入力と同じ期待文字列を両方のテストに置いてある）。
+ *
+ * **キーの大文字小文字は無視する**（実物は `metadata.filepath` で、`filePath` だけを見ていたころは
+ * `許可待ち: external_directory` としか書けず、どのパスを聞かれているのか行に残らなかった。#421）。
+ * metadata から拾えなければ `patterns`（`/etc/*` のような範囲）の1つめ
+ */
 function permissionText(props) {
   const p = props ?? {}
-  const kind = String(p.type || p.permission || p.title || "許可").trim()
+  const kind = String(p.permission || p.type || p.title || "許可").trim()
   const meta = p.metadata ?? p.args ?? p.input ?? {}
+  const lower = {}
+  for (const [k, v] of Object.entries(meta || {})) lower[k.toLowerCase()] = v
   let detail = ""
-  for (const key of ["command", "filePath", "file_path", "path", "pattern", "url", "description"]) {
-    const v = meta?.[key]
+  for (const key of ["command", "filepath", "file_path", "path", "url", "pattern", "description", "parentdir"]) {
+    const v = lower[key]
     if (typeof v === "string" && v.trim()) {
       detail = v.trim()
       break
     }
   }
+  if (!detail && Array.isArray(p.patterns) && typeof p.patterns[0] === "string") detail = p.patterns[0].trim()
   const line = detail ? `${kind}: ${detail}` : kind
   return `許可待ち: ${line}`.slice(0, 300)
 }

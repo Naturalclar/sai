@@ -7,6 +7,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { REAL_PERMISSION, REAL_PERMISSION_TEXT } from '../shared/opencodePermissions.test.ts'
 
 const PLUGIN = pathToFileURL(resolve(import.meta.dirname, '..', 'feed', 'opencode', 'sai.js')).href
 
@@ -122,4 +123,28 @@ test('何も増えていない session.idle は流さない（1 ターンに複�
   await hooks.event(ev('session.idle', { sessionID: 'S4' }))
   const idles = (await payloads()).filter((p) => p.session_id === 'S4' && p.type === 'session.idle')
   assert.equal(idles.length, 1)
+})
+
+test('許可待ちの行に、何を聞かれているかまで出す（#421。実物の payload と shared 側の期待文字列が同じ）', async () => {
+  const hooks = await plugin()
+  // 実機（1.18.30）の permission.asked の properties そのまま（shared/opencodePermissions.test.ts と同じもの）
+  await hooks.event(ev('permission.asked', { ...REAL_PERMISSION, sessionID: 'S5' }))
+  const asked = (await payloads()).find((p) => p.session_id === 'S5' && p.type === 'permission.asked')
+  assert.ok(asked, 'permission.asked の payload が渡る')
+  assert.equal(asked.text, REAL_PERMISSION_TEXT)
+})
+
+test('許可待ち: キーの大文字小文字は見ない（実物は filepath、以前の想定は filePath。#421）', async () => {
+  const hooks = await plugin()
+  await hooks.event(ev('permission.asked', { id: 'per_4', sessionID: 'S8', permission: 'edit', patterns: [], metadata: { filePath: '/w/calc.py' } }))
+  assert.equal((await payloads()).find((p) => p.session_id === 'S8')?.text, '許可待ち: edit: /w/calc.py')
+})
+
+test('許可待ち: metadata から拾えなければ patterns、それも無ければ種類だけ（#421）', async () => {
+  const hooks = await plugin()
+  await hooks.event(ev('permission.asked', { id: 'per_2', sessionID: 'S6', permission: 'external_directory', patterns: ['/etc/*'], metadata: {} }))
+  await hooks.event(ev('permission.asked', { id: 'per_3', sessionID: 'S7', permission: 'bash', patterns: [], metadata: {} }))
+  const rows = await payloads()
+  assert.equal(rows.find((p) => p.session_id === 'S6')?.text, '許可待ち: external_directory: /etc/*')
+  assert.equal(rows.find((p) => p.session_id === 'S7')?.text, '許可待ち: bash')
 })

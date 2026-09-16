@@ -4,6 +4,7 @@ import { approvalAction } from './approvalKeys'
 import { api, type Approval } from './api'
 import { AskQuestions } from './AskQuestions'
 import { elapsedLabel, hm } from './format'
+import { AGENT_INITIAL, AGENT_LABEL } from './chatGroups.ts'
 
 interface Props {
   approval: Approval
@@ -79,10 +80,10 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false, modeNote =
   const detail = detailOf(approval)
   return (
     <div className={`group approval${done ? ' done' : ''}`}>
-      <div className={`avatar ${agent}`}>{agent === 'codex' ? 'X' : 'C'}</div>
+      <div className={`avatar ${agent}`}>{AGENT_INITIAL[agent] ?? 'C'}</div>
       <div>
         <div className="gh">
-          <span className="name">{agent === 'codex' ? 'Codex CLI' : 'Claude Code'}</span>
+          <span className="name">{AGENT_LABEL[agent] ?? 'Claude Code'}</span>
           {repo && <span className="ch">#{repo}</span>}
           <span className="time" title={`${hm(approval.since)} から待っている`}>{elapsed ? `待っている ${elapsed}` : '答えを待っている'}</span>
         </div>

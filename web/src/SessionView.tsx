@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { replyBlockedReason } from '../../shared/reply.ts'
+import { canSteer, replyBlockedReason } from '../../shared/reply.ts'
 import { launchedModeNote } from '../../shared/permissions.ts'
 import { eventKind } from '../../shared/events.ts'
 import { promptArrived } from './chatGroups'
@@ -50,7 +50,7 @@ export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggl
 
   // 返信先はこのセッションだけなので、行数はこの画面のターン完了の行数（入力の行は返信の終わりではない）
   const turns = data?.rows.reduce((n, r) => n + (eventKind(r.event) === 'turn' ? 1 : 0), 0) ?? 0
-  const { pending, failed, send, confirm, confirmedSent, confirmReplace, confirmProcess, cancelConfirm } = useReply((target) => (target === id ? turns : 0), data?.replying ?? NO_REPLYING, updatedAt)
+  const { pending, failed, steered, send, confirm, confirmedSent, confirmReplace, confirmProcess, cancelConfirm } = useReply((target) => (target === id ? turns : 0), data?.replying ?? NO_REPLYING, updatedAt)
   const mine = pending.find((p) => p.id === id) ?? null
   const now = updatedAt?.getTime() ?? 0
   const failedHere = failed && failed.id === id ? failed : null
@@ -192,13 +192,20 @@ export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggl
             permission={s.agent === 'claude' ? { id: s.id, value: s.meta?.permission_mode, terminal: Boolean(s.terminal), replying: data?.replying[id] } : undefined}
             {...(summary && hasDiff(summary) ? { diff: { summary, open: diffOpen, onToggle: () => onToggleDiff(s.id) } } : {})}
             queued={queuedCount}
+            // 走っている Codex のターンに足せるか（#404。判定はサーバと同じ `canSteer()`）
+            steerable={canSteer(s.agent, mine ?? undefined)}
             // 前の返信を処理中か、預かりが残っていれば預ける（#305。先に預けたものを追い越さない）
             {...(restore ? { restore } : {})}
             // 送れなかった（確認待ち・送信失敗）ら ReplyBox が本文・画像・返信先を戻す（#350）
-            onSend={async (text, attachments) => (await send(id, text, { attachments, queue: shouldQueue(mine !== null, queuedCount) })) === 'sent'}
+            onSend={async (text, attachments, { steer }) => (await send(id, text, { attachments, queue: shouldQueue(mine !== null, queuedCount), ...(steer ? { steer: true } : {}) })) === 'sent'}
           />
         ))}
       {confirmHere && <ReplaceConfirm confirm={confirmHere} onReplace={() => void confirmReplace()} onProcess={() => void confirmProcess()} onCancel={cancelConfirm} />}
+      {/* 走っているターンに足した（#404）。新しいターンではないので仮バブルは作らず、ここに出す。
+          ターンが終われば足した文も記録に載るので、この案内は次に送るかターンが終わると消える */}
+      {steered?.id === id && mine !== null && (
+        <div className="notice steered">走っているターンに足しました: {steered.text}</div>
+      )}
       {failedHere && (
         <div className="notice error reply-failed">
           <span>送信失敗: {failedHere.message}</span>

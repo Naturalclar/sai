@@ -82,6 +82,14 @@ class FakeCodexApp implements CodexApp {
     if (this.fail) throw this.fail
     this.started.push(input)
   }
+  /** 走っているターンに足した分（#404）。`steers` が false なら足せなかったことにする */
+  steered: { id: string; text: string; attachments: readonly string[] }[] = []
+  steers = true
+  async steer(id: string, text: string, attachments: readonly string[] = []) {
+    if (!this.steers) return false
+    this.steered.push({ id, text, attachments })
+    return true
+  }
   /** `thread/start` で作ったスレッド（#401）。作った順に id を配る */
   threads: string[] = []
   nextThread = 'T1'
@@ -814,6 +822,62 @@ test('POST /api/sessions/new: from のセッションの cwd で、ID を決め�
   // 2 回始めれば別のセッション（ID は毎回新しい）
   const again = (await (await postNew({ from: 'X1@r', text: 'もう 1 つ' })).json()) as NewSessionResponse
   assert.notEqual(again.session, data.session)
+})
+
+test('POST reply: steer が付いていれば、走っている Codex のターンに足す（#404）', async () => {
+  runner.started.length = 0
+  codexApp.steered.length = 0
+  codexApp.busy.set('X1@r', { since: '2026-09-10T07:00:00.000Z', text: '長いターン', interruptible: true })
+  try {
+    // 付けなければ今までどおり預かり（既定は変えない）
+    const queued = await post('X1@r', { text: 'あとで', queue: true })
+    assert.equal(((await queued.json()) as ReplyResponse).via, 'queued')
+    assert.equal(codexApp.steered.length, 0)
+
+    const res = await post('X1@r', { text: 'テストも直して', queue: true, steer: true })
+    assert.equal(res.status, 202)
+    assert.equal(((await res.json()) as ReplyResponse).via, 'steer')
+    assert.deepEqual(codexApp.steered.map((x) => [x.id, x.text]), [['X1@r', 'テストも直して']], '走っているターンに足す')
+    assert.equal(runner.started.length, 0, '新しいターンは起こさない')
+    assert.match(await readFile(join(feedDir, 'reply.log'), 'utf-8'), /turn\/steer/)
+
+    // 足せなかった（ターンが終わった・別のターンになった）ら、今までどおり預かりに落ちる
+    codexApp.steers = false
+    const fell = await post('X1@r', { text: '間に合わなかった分', queue: true, steer: true })
+    assert.equal(((await fell.json()) as ReplyResponse).via, 'queued', '本文を落とさず預かる')
+  } finally {
+    codexApp.steers = true
+    codexApp.busy.delete('X1@r')
+    // 預かった分は後のテストに残さない
+    for (const item of (await queuedOf('X1@r'))?.items ?? []) {
+      await fetch(`${base}/api/sessions/X1%40r/queue/${item.queue_id}`, { method: 'DELETE', headers: { Origin: base } })
+    }
+  }
+})
+
+test('POST reply: 止められないターン・Codex 以外には steer を回さない（#404）', async () => {
+  runner.started.length = 0
+  codexApp.steered.length = 0
+  // turnId がまだ無い（turn/start の応答待ち）＝足す先が無いので、今までどおり預かり
+  codexApp.busy.set('X1@r', { since: '2026-09-10T07:00:00.000Z', text: '起動中' })
+  try {
+    assert.equal(((await (await post('X1@r', { text: 'x', queue: true, steer: true })).json()) as ReplyResponse).via, 'queued')
+  } finally {
+    codexApp.busy.delete('X1@r')
+  }
+  // Claude の -p が回っているセッションには口が無い
+  runner.busy.set('C1@r', { since: '2026-09-10T07:00:00.000Z', text: '前の' })
+  try {
+    assert.equal(((await (await post('C1@r', { text: 'x', queue: true, steer: true })).json()) as ReplyResponse).via, 'queued')
+  } finally {
+    runner.busy.delete('C1@r')
+  }
+  assert.equal(codexApp.steered.length, 0, 'どちらも app-server には回さない')
+  for (const id of ['X1@r', 'C1@r']) {
+    for (const item of (await queuedOf(id))?.items ?? []) {
+      await fetch(`${base}/api/sessions/${encodeURIComponent(id)}/queue/${item.queue_id}`, { method: 'DELETE', headers: { Origin: base } })
+    }
+  }
 })
 
 test('POST /api/sessions/new: Codex は thread/start の id で始める（#401）', async () => {

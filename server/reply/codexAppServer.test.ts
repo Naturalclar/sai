@@ -11,6 +11,8 @@ class FakeConnection implements CodexConnection {
   skillsResult: unknown = { data: [] }
   /** `thread/start` の応答（#401）。null なら thread を返さない */
   newThread: string | null = 'thread-new'
+  /** true なら `turn/steer` を断る（#404。実測のエラーは `no active turn to steer`） */
+  failSteer = false
   private messages: ((message: Message) => void)[] = []
   private closes: ((error?: Error) => void)[] = []
 
@@ -36,6 +38,12 @@ class FakeConnection implements CodexConnection {
       const id = message.id
       const result = this.skillsResult
       queueMicrotask(() => this.emit(result === null ? { id, error: { message: '読めない' } } : { id, result }))
+      return
+    }
+    if (message.method === 'turn/steer') {
+      const id = message.id
+      const fail = this.failSteer
+      queueMicrotask(() => this.emit(fail ? { id, error: { message: 'no active turn to steer' } } : { id, result: { turnId: 'turn-1' } }))
       return
     }
     if (message.method === 'thread/start') {
@@ -321,4 +329,28 @@ test('startThread: 応答に id が無ければ投げる（#401）', async () =>
   connection.newThread = null
   const app = new CodexAppServer(async () => connection, () => Date.parse('2026-09-09T12:00:00Z'))
   await assert.rejects(() => app.startThread('/repo'), /thread id/)
+})
+
+test('steer: expectedTurnId を付けて投げ、足せなければ false（#404）', async () => {
+  const { app, connection } = await started()
+  // turn/start の応答で turnId が入っている
+  assert.equal(await app.steer('thread-1@repo', 'テストも直して', ['/tmp/a.png']), true)
+  const sent = connection.sent.find((m) => m.method === 'turn/steer')?.params as Record<string, unknown>
+  assert.equal(sent.threadId, 'thread-1')
+  assert.equal(sent.expectedTurnId, 'turn-1', '別のターンに変わっていれば app-server が断る（実測）')
+  assert.deepEqual(sent.input, [
+    { type: 'text', text: 'テストも直して', text_elements: [] },
+    { type: 'localImage', path: '/tmp/a.png' },
+  ])
+
+  assert.equal(await app.steer('よその@repo', 'x'), false, '処理中でないセッションには足さない')
+
+  // app-server が断ったら false（呼び出し側が預かりに落とす）
+  connection.failSteer = true
+  assert.equal(await app.steer('thread-1@repo', 'もう終わってた'), false)
+
+  // ターンが終わったら足す先が無い
+  connection.failSteer = false
+  connection.emit({ method: 'turn/completed', params: { threadId: 'thread-1', turn: { id: 'turn-1' } } })
+  assert.equal(await app.steer('thread-1@repo', 'あとから'), false)
 })

@@ -97,6 +97,12 @@ export interface CodexApp {
    * 偽物は持たなくてよい
    */
   startThread?(cwd: string): Promise<string>
+  /**
+   * 走っているターンに指示を足す（#404。`turn/steer`）。足せたら true。
+   * 回っているターンが無い・別のターンになっていたら false を返すので、呼び出し側は今までどおりの経路に落とせる。
+   * 偽物は持たなくてよい
+   */
+  steer?(id: string, text: string, attachments?: readonly string[]): Promise<boolean>
 }
 
 interface ManagedTurn {
@@ -329,6 +335,28 @@ export class CodexAppServer implements CodexApp {
         approvalsReviewer: 'user',
       })
     })
+  }
+
+  /**
+   * 走っているターンに指示を足す（#404）。`turn/steer` は **`expectedTurnId` が要る**（v0.154.0 で実測）ので、
+   * SAI が持っているターンの id をそのまま渡す: 別のターンに変わっていれば app-server が
+   * `expected active turn id X but found Y` で断り、**そのターンは変わらない**（実測）。
+   * 終わっていれば `no active turn to steer`。どちらも false にして、呼び出し側が預かり（#305）に落とす。
+   * **足した文はそのターンの `input-messages` の末尾に載る**ので、記録の `user_text` は steer した文になる
+   */
+  async steer(id: string, text: string, attachments: readonly string[] = []): Promise<boolean> {
+    const threadId = this.entityThreads.get(id)
+    const turn = threadId ? this.turns.get(threadId) : undefined
+    if (!threadId || !turn?.turnId) return false
+    const message: JsonObject = { type: 'text', text, text_elements: [] }
+    const images = attachments.map((path) => ({ type: 'localImage', path }))
+    try {
+      await this.request('turn/steer', { threadId, expectedTurnId: turn.turnId, input: [message, ...images] })
+    } catch {
+      // 足せなかった（ターンが終わった・別のターンになった・接続が落ちた）。本文を落とさないよう、呼び出し側に任せる
+      return false
+    }
+    return true
   }
 
   /**

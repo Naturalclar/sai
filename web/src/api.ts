@@ -120,7 +120,7 @@ export const api = {
     getJSON<SessionDetailResponse>(`/api/sessions/${encodeURIComponent(id)}?days=${days}`),
   feed: (f: FeedFilters) => getJSON<FeedResponse>(`/api/feed?${qs(f)}`),
   /** 返信。replaceTyped は端末の打ちかけを消して打ち込んでよい（409 の code: terminal_typed を人が確認したあと） */
-  reply: (id: string, text: string, options: { replaceTyped?: boolean; via?: 'process'; attachments?: string[]; queue?: boolean } = {}, days = 90) =>
+  reply: (id: string, text: string, options: { replaceTyped?: boolean; via?: 'process'; attachments?: string[]; queue?: boolean; steer?: boolean } = {}, days = 90) =>
     sendJSON<ReplyResponse>(
       'POST',
       `/api/sessions/${encodeURIComponent(id)}/reply?days=${days}`,
@@ -131,6 +131,8 @@ export const api = {
         ...(options.attachments?.length ? { attachments: options.attachments } : {}),
         // 処理中なら預かってもらう（#305。サーバは処理中でなければそのまま起動する）
         ...(options.queue ? { queue: true } : {}),
+        // 走っているターンに足す（#404。足せなければサーバが預かりに落とす）
+        ...(options.steer ? { steer: true } : {}),
       } satisfies ReplyRequest,
     ),
   /** 新しいセッションを始める（#314）。worktree は既存のセッション（from）で指し、パスは送らない */

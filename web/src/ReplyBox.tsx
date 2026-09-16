@@ -67,13 +67,18 @@ interface Props {
    * 送信ボタンを「あとで送る」にする
    */
   queued?: number
+  /**
+   * 走っている Codex のターンに**あとから足せる**か（#404。`shared/reply.ts` の `canSteer()`）。
+   * 足せるときだけ、送信ボタンの横に「今のターンに足す」を出す（**既定は今までどおり預かり**）
+   */
+  steerable?: boolean
   /** 経過の基準（ポーリングの updatedAt）。busySince とセット */
   now?: number
   /**
    * 送る。**false を返したら送れなかった**（端末の打ちかけの確認待ち・送信失敗）ことにして、
    * 本文・添えた画像・`@` の返信先を入力欄に戻す（#350）
    */
-  onSend: (text: string, attachments: string[]) => void | boolean | Promise<void | boolean>
+  onSend: (text: string, attachments: string[], options: { steer: boolean }) => void | boolean | Promise<void | boolean>
   /** 本文が空でないかが変わったら知らせる。FeedView は入力中に既定の返信先を動かさないために使う */
   onDraft?: (drafting: boolean) => void
   /** モデルの右に出す許可モードの選択。渡さなければ出さない（Claude 以外と、返信先が一覧に無いとき） */
@@ -125,7 +130,7 @@ const NO_HISTORY: readonly string[] = []
 const keyOf = (e: KeyboardEvent<HTMLTextAreaElement>) => ({ key: e.key, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, shiftKey: e.shiftKey })
 
 /** 入力欄。Enter で送信、Shift+Enter で改行。IME 変換中の Enter は送らない */
-export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, now = 0, onSend, onDraft, model, permission, diff, skillsId, attachId, draftKey, sentFromConfirm = 0, restore, history = NO_HISTORY, nextAsk, onLeaveToSidebar, mention }: Props) {
+export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerable = false, now = 0, onSend, onDraft, model, permission, diff, skillsId, attachId, draftKey, sentFromConfirm = 0, restore, history = NO_HISTORY, nextAsk, onLeaveToSidebar, mention }: Props) {
   // 前に打ちかけて離れた分（#306）。作ったときに 1 回だけ読む
   const [initial] = useState(() => (draftKey ? loadDraft(draftKey) : EMPTY_DRAFT))
   const [text, setText] = useState(initial.text)
@@ -173,6 +178,10 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, now = 0,
   // 別プロセス（-p）の経路は二重起動になるので、送った分はサーバが預かって前のターンが終わってから回す（#100, #170, #305）。
   // 預かりが残っている間も同じ（先に預けたものを追い越さない）
   const queueing = (busy && terminal !== true) || queued > 0
+  // 「今のターンに足す」を選んでいるか（#404）。**既定は off**（預かりと違って取り消せないので、選んだときだけ）。
+  // 足せる場面でなくなったら（ターンが終わった）自然に消えるよう、出すかどうかは毎描画で見る
+  const [steerWanted, setSteerWanted] = useState(false)
+  const steering = steerWanted && queueing && steerable
 
   const drafting = text.trim() !== ''
   useEffect(() => {
@@ -332,7 +341,8 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, now = 0,
     hist.current = { ...hist.current, index: NOT_IN_HISTORY, draft: '' }
     // 表記ごと本文が消えるので返信先も既定に戻す。送信中でも別の返信先へ続けて打てる
     if (mention?.picked) mention.onPick(null)
-    void Promise.resolve(onSend(body, paths)).then((ok) => {
+    setSteerWanted(false)
+    void Promise.resolve(onSend(body, paths, { steer: steering })).then((ok) => {
       // 送れなかった（確認待ち・送信失敗）。まだ何も打っていなければ、本文・画像・返信先を戻す（#350）。
       // いまの中身は textarea から見る（この then は submit した時点の text を閉じ込めているため）
       if (ok !== false || !restoresText(ref.current?.value ?? '')) return
@@ -572,12 +582,18 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, now = 0,
             片方が消えずに 2 つ並ぶ。#265 の実装中に踏んだ）ので、種類ごとに前置きを付ける */}
         {model && <ReplyModelPicker key={`model-${model.id}`} {...model} />}
         {permission && <ReplyPermissionPicker key={`perm-${permission.id}`} {...permission} />}
+        {queueing && steerable && (
+          <label className="steer" title="いま走っているターンに足す（取り消せない。終わっていれば預かりに回る）">
+            <input type="checkbox" checked={steerWanted} onChange={(e) => setSteerWanted(e.target.checked)} />
+            今のターンに足す
+          </label>
+        )}
         <button
           type="submit"
           disabled={attach.busy || (!(mention?.picked ? stripMention(text, mention.picked.label) : text).trim() && attach.items.length === 0)}
-          title={queueing ? '前の返信が終わってから続けて回す（預けた分は取り消せる）' : undefined}
+          title={steering ? '走っているターンに足す（取り消せない）' : queueing ? '前の返信が終わってから続けて回す（預けた分は取り消せる）' : undefined}
         >
-          {queueing ? 'あとで送る' : '送信'}
+          {steering ? '足す' : queueing ? 'あとで送る' : '送信'}
         </button>
       </div>
       {skillOpen && (

@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  canSteer,
   defaultReplyTarget,
   feedReplyTargets,
   filterReplyTargets,
@@ -304,4 +305,14 @@ test('sessionReplyTargets: 端末で開いていれば terminal が付く（フ�
   assert.equal(a?.terminal, true)
   assert.equal(b?.terminal, undefined, '端末で開いていなければ付けない')
   assert.equal(feedReplyTargets([row({ session: 'T1' })], SELF)[0]?.terminal, undefined, '行だけからは分からない')
+})
+
+test('canSteer: 足せるのは SAI が回している Codex のターンだけ（#404）', () => {
+  const running = { interruptible: true as const }
+  assert.equal(canSteer('codex', running), true)
+  assert.equal(canSteer('codex', { interruptible: true, failed: { tail: '落ちた' } }), false, '失敗した分は処理中ではない')
+  assert.equal(canSteer('codex', {}), false, 'turn/start の応答待ち（turnId がまだ無い）は足す先が無い')
+  assert.equal(canSteer('codex', undefined), false, '処理中でなければ足さない')
+  assert.equal(canSteer('claude', running), false, 'Claude の -p には口が無い')
+  assert.equal(canSteer('opencode', running), false)
 })

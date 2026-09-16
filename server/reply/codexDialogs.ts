@@ -2,12 +2,21 @@
 // server request を SAI から購読できない。tmux の画面を低頻度で確認し、少なくとも
 // 「人を待って止まっている」ことを見えるようにする。回答は誤承認を避けるため端末に任せる。
 import { createHash } from 'node:crypto'
-import type { Approval, ApprovalMap, SessionSummary } from '../../shared/types.ts'
+import type { Approval, ApprovalMap, SessionSummary, Terminal } from '../../shared/types.ts'
 import { inspectPrompt } from './terminal.ts'
 import type { PsFn, Tmux } from './terminal.ts'
 
+/**
+ * 見に行く先。ふだんは行から作った一覧（`SessionSummary`）だが、**行がまだ 1 本も無いセッション**も
+ * ペインから見つけて足せるようにしてある（#417。`app.ts` が組み立てる）
+ */
+export interface DialogTarget {
+  id: string
+  terminal: Terminal
+}
+
 export interface CodexDialogSource {
-  scan(sessions: SessionSummary[]): Promise<ApprovalMap>
+  scan(sessions: SessionSummary[], extra?: readonly DialogTarget[]): Promise<ApprovalMap>
 }
 
 export class CodexDialogs implements CodexDialogSource {
@@ -23,9 +32,9 @@ export class CodexDialogs implements CodexDialogSource {
     this.now = now
   }
 
-  async scan(sessions: SessionSummary[]): Promise<ApprovalMap> {
+  async scan(sessions: SessionSummary[], extra: readonly DialogTarget[] = []): Promise<ApprovalMap> {
     if (!this.scanning) {
-      this.scanning = this.scanNow(sessions).finally(() => {
+      this.scanning = this.scanNow(sessions, extra).finally(() => {
         this.scanning = null
       })
     }
@@ -33,12 +42,15 @@ export class CodexDialogs implements CodexDialogSource {
     return this.snapshot()
   }
 
-  private async scanNow(sessions: SessionSummary[]): Promise<void> {
-    const targets = sessions.filter((s) => s.agent === 'codex' && s.terminal)
+  private async scanNow(sessions: SessionSummary[], extra: readonly DialogTarget[]): Promise<void> {
+    const targets: DialogTarget[] = [
+      ...sessions.filter((s) => s.agent === 'codex' && s.terminal).map((s) => ({ id: s.id, terminal: s.terminal! })),
+      ...extra,
+    ]
     const found = await Promise.all(
       targets.map(async (session): Promise<[string, Approval] | null> => {
         try {
-          const state = await inspectPrompt(this.tmux, this.ps, session.terminal!, 'codex')
+          const state = await inspectPrompt(this.tmux, this.ps, session.terminal, 'codex')
           if (state.kind !== 'dialog') return null
           const previous = this.active.get(session.id)
           return [

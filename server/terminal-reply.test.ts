@@ -28,6 +28,17 @@ const started: { id: string; cmd: ReplyCommand }[] = []
 const queued: ReplyCommand[] = []
 const codexStarted: CodexTurnInput[] = []
 const runner: Runner = { running: () => false, snapshot: () => ({}), async start(id, cmd) { started.push({ id, cmd }) } }
+/** tmux のペインで動いている Codex（#417）。X5 は行があり、NOROWS は行が 1 本も無い */
+const codexPanes = {
+  panes: [
+    { pane: '%13', pid: 205, cwd: '/work/x5', session: 'X5' },
+    { pane: '%14', pid: 206, cwd: '/work/norows', session: 'NOROWS' },
+  ],
+  async scan() {
+    return codexPanes.panes
+  },
+}
+
 /** lock を握っている生きたプロセス（#332 の案 2）。X4 だけ見つかる */
 const codexTerminals = {
   asked: [] as string[],
@@ -64,7 +75,7 @@ class FakeTmux implements Tmux {
   }
 }
 const tmux = new FakeTmux()
-const alivePids = new Set([200, 201, 204])
+const alivePids = new Set([200, 201, 204, 205, 206])
 const now = new Date()
 const min = (n: number) => n * 60_000
 
@@ -89,6 +100,8 @@ before(async () => {
       JSON.stringify(row(new Date(now.getTime() - min(1)), 'X3', { agent: 'codex', repo: 'r', cwd: work, pane: '', pid: 301, session_source: 'rollout' })),
       // ラッパー経由の notify で記録された古い行（#332）。pid 303 は死んでいるが、ペイン %11 では Codex が生きている
       JSON.stringify(row(new Date(now.getTime() - min(1)), 'X4', { agent: 'codex', repo: 'r', cwd: work, pane: '%11', pid: 303, session_source: 'rollout' })),
+      // lock を開かない Codex（実測: 0.154.0。lock は共有の app-server が握る）。ペインも移っている（#417）
+      JSON.stringify(row(new Date(now.getTime() - min(1)), 'X5', { agent: 'codex', repo: 'r', cwd: work, pane: '%12', pid: 304, session_source: 'rollout' })),
     ].join('\n') + '\n',
   )
   const app = createApp(
@@ -101,11 +114,12 @@ before(async () => {
     new Authenticator(async () => null),
     {
       tmux,
-      ps: async () => ' 100     1\n 200   100\n 201   100\n 204   100\n',
+      ps: async () => ' 100     1\n 200   100\n 201   100\n 204   100\n 205   100\n 206   100\n',
       replies: new TerminalReplies(),
       alive: (pid) => alivePids.has(pid),
       codexWriterActive: async (session) => session === 'X1' || session === 'X2',
       codexTerminals,
+      codexPanes,
       codexQueue: async (cmd) => {
         if (cmd.text === '失敗') throw new Error('queue rejected')
         queued.push(cmd)
@@ -150,6 +164,39 @@ test('一覧: 記録した pid が死んでいる Codex は、lock を握って�
   assert.equal(by['D1@r'], null, 'Claude には補欠を当てない（lock が無い）')
   assert.ok(!codexTerminals.asked.includes('D1'), 'Claude や pid が生きている Codex では lsof を起こさない')
   assert.ok(!codexTerminals.asked.includes('X1'), 'pid が生きていれば引き直さない')
+})
+
+test('一覧: lock で引けない Codex は、ペインで動いているものと cwd → rollout で突き合わせる（#417）', async () => {
+  const data = await sessions()
+  const by = Object.fromEntries(data.sessions.map((s) => [s.id, s.terminal]))
+  // 行の pane は %12 だが、いま動いているのは %13。**いまのペイン**を使う（ペインを移していても当たる）
+  assert.deepEqual(by['X5@r'], { pane: '%13', pid: 205 })
+})
+
+test('要対応: 行が 1 本も無い Codex でも、ペインで止まっていれば出す（#417）', async () => {
+  tmux.screen = '質問\n› 1. はい\n  2. いいえ\nEnter to select · Esc to cancel'
+  try {
+    const data = await sessions()
+    assert.ok(!data.sessions.some((s) => s.id.startsWith('NOROWS')), '一覧（行から作る）には出さない')
+    const stuck = Object.entries(data.approvals).find(([id]) => id.startsWith('NOROWS'))
+    assert.ok(stuck, `記録に無いセッションの待ちが出る: ${JSON.stringify(Object.keys(data.approvals))}`)
+    assert.equal(stuck![1][0]?.agent, 'codex')
+    assert.equal(stuck![1][0]?.answerable, false, '端末で答えるので、画面からは答えられない')
+  } finally {
+    tmux.screen = IDLE
+  }
+})
+
+test('要対応: 行のあるセッションはペイン側から二重に足さない（#417）', async () => {
+  // 行から来た id は `X5@r`、ペインの cwd から組むと `X5`（repo が引けない）。両方足すと同じ待ちが 2 回出る
+  tmux.screen = '質問\n› 1. はい\n  2. いいえ\nEnter to select · Esc to cancel'
+  try {
+    const data = await sessions()
+    const x5 = Object.keys(data.approvals).filter((id) => id.startsWith('X5'))
+    assert.deepEqual(x5, ['X5@r'], `行から来た id だけ: ${JSON.stringify(Object.keys(data.approvals))}`)
+  } finally {
+    tmux.screen = IDLE
+  }
 })
 
 test('返信: 補欠で見つけた Codex にも端末へ打ち込む（#332）', async () => {

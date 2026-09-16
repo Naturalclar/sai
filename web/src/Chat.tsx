@@ -207,6 +207,7 @@ export function Chat({ rows, showChannel, selfHost = '', sessions = NO_SESSIONS,
                         digestKey={u.summary ? digestKey(u.row) : undefined}
                         model={u.model}
                         remote={u.row.remote}
+                        sourceAsk={u.row.user_text}
                         linear={linear}
                         found={focusTs !== '' && u.row.ts === focusTs}
                         utteranceKey={u.key}

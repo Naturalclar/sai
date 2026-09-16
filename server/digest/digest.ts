@@ -474,16 +474,18 @@ export class Digester {
           continue
         }
         try {
-          const summary = await summarizer.summarize(digestPrompt(persona, row.text))
+          // 人が頼んだこと（#376）。返答だけを渡すと、`12` のような短い返答で作例を書き写していた
+          const ask = row.user_text ?? ''
+          const summary = await summarizer.summarize(digestPrompt(persona, row.text, { ask }))
           // 出来上がりを機械で確かめ、駄目なら **1 回だけ** 作り直す（#346。LLM は呼ばない判定）。
           // 2 回目でも残ったら、そのまま出して digest.log に残す（一言が消えるより、残って数えられる方がよい）
-          const first = digestIssues(row.text, summary)
+          const first = digestIssues(row.text, summary, ask)
           let best = summary
           let issues = first
           if (first.length > 0) {
             try {
-              const again = await summarizer.summarize(digestPrompt(persona, row.text, { summary, issues: first }))
-              const left = digestIssues(row.text, again)
+              const again = await summarizer.summarize(digestPrompt(persona, row.text, { ask, retry: { summary, issues: first } }))
+              const left = digestIssues(row.text, again, ask)
               // 減ったときだけ採る（作り直しで別の問題が増えることがある）
               if (left.length < first.length) {
                 best = again

@@ -21,6 +21,7 @@ import type {
   SessionMetaResponse,
   SessionPermissionsResponse,
   SessionProgressResponse,
+  SessionModelsResponse,
   SessionSkillsResponse,
   SessionsResponse,
   SettingsRequest,
@@ -148,6 +149,7 @@ export const api = {
   meta: (id: string) => getJSON<SessionMetaResponse>(`/api/sessions/${encodeURIComponent(id)}/meta`),
   /** `/` の候補になるスキル。入力欄で `/` を打った時に 1 回だけ取る */
   sessionSkills: (id: string) => getJSON<SessionSkillsResponse>(`/api/sessions/${encodeURIComponent(id)}/skills`),
+  sessionModels: (id: string) => getJSON<SessionModelsResponse>(`/api/sessions/${encodeURIComponent(id)}/models`),
   /**
    * 一言が変だと伝える（#346）。~/.agent-feed/digest-feedback.jsonl に溜めるだけで、その場の一言は変わらない。
    * 一言そのものはサーバが鍵から引くので送らない

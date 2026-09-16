@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useModels } from './useModels'
 import type { Agent } from '../../shared/types.ts'
 import { MODEL_CUSTOM_LABEL, MODEL_DEFAULT_LABEL, modelButtonLabel, modelChoices } from './modelChoices'
 import { api } from './api'
@@ -33,7 +34,9 @@ export function ReplyModelPicker({ id, agent, models, value }: ReplyModelProps) 
   const buttonRef = useRef<HTMLButtonElement>(null)
 
   const current = saved !== null ? saved : (value ?? '')
-  const choices = modelChoices(agent, models, current)
+  // 本体に聞いた候補（#394。いまは OpenCode だけ）。**メニューを開いたときだけ**取りに行く
+  const fetched = useModels(id, open)
+  const choices = modelChoices(agent, [...models, ...fetched], current)
 
   useEffect(() => {
     if (!open) return

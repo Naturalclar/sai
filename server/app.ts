@@ -41,6 +41,7 @@ import type {
   SessionIconResponse,
   SessionMetaResponse,
   SessionPermissionsResponse,
+  SessionModelsResponse,
   SessionSkillsResponse,
   SearchResponse,
   SessionsResponse,
@@ -155,6 +156,7 @@ const REPLY_SUFFIX = '/reply'
 const META_SUFFIX = '/meta'
 const ICON_SUFFIX = '/icon'
 const SKILLS_SUFFIX = '/skills'
+const MODELS_SUFFIX = '/models'
 const PERMISSIONS_SUFFIX = '/permissions'
 const DIFF_SUFFIX = '/diff'
 const PROGRESS_SUFFIX = '/progress'
@@ -1766,6 +1768,7 @@ export function createApp(
     const isMeta = path.startsWith(SESSIONS_PREFIX) && path.endsWith(META_SUFFIX)
     const isIcon = path.startsWith(SESSIONS_PREFIX) && path.endsWith(ICON_SUFFIX)
     const isSkills = path.startsWith(SESSIONS_PREFIX) && path.endsWith(SKILLS_SUFFIX)
+    const isModels = path.startsWith(SESSIONS_PREFIX) && path.endsWith(MODELS_SUFFIX)
     const isPermissions = path.startsWith(SESSIONS_PREFIX) && path.endsWith(PERMISSIONS_SUFFIX)
     const isDiff = path.startsWith(SESSIONS_PREFIX) && path.endsWith(DIFF_SUFFIX)
     const isProgress = path.startsWith(SESSIONS_PREFIX) && path.endsWith(PROGRESS_SUFFIX)
@@ -1878,6 +1881,18 @@ export function createApp(
         const session = sessions.find((s) => s.id === id)
         if (!session) return error(res, 404, 'session not found in window')
         const payload: SessionSkillsResponse = { id, skills: await sessionSkills(session) }
+        return json(res, payload)
+      }
+      // 返信で選べるモデル（#394）。いまは OpenCode だけ本体に聞く（Claude / Codex は記録から組み立てるまま）。
+      // メニューを開いたときだけ取りに来るので、3 秒のポーリングには乗らない
+      if (isModels) {
+        const id = sessionIdFrom(path, MODELS_SUFFIX)
+        if (id === null) return error(res, 400, 'bad session id')
+        const { sessions } = await store.sessions(parseDays(q.get('days'), 90))
+        const session = sessions.find((s) => s.id === id)
+        if (!session) return error(res, 404, 'session not found in window')
+        const models = session.agent === 'opencode' && opencodeServerEnabled ? await opencodeApp.models(session.cwd).catch(() => []) : []
+        const payload: SessionModelsResponse = { id, models }
         return json(res, payload)
       }
       if (isIcon) {

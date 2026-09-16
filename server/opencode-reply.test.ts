@@ -7,7 +7,7 @@ import type { Server } from 'node:http'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ReplyResponse, SessionDetailResponse, SessionModelsResponse, SessionSkillsResponse } from '../shared/types.ts'
+import type { ReplyResponse, SessionDetailResponse, SessionModelsResponse, SessionProgressResponse, SessionSkillsResponse } from '../shared/types.ts'
 import { createApp } from './app.ts'
 import { Approvals } from './approvals/approvals.ts'
 import { localDate } from './rows/aggregate.ts'
@@ -30,6 +30,7 @@ let base: string
 const sent: OpencodeTurnInput[] = []
 const skillCalls: string[] = []
 const modelCalls: string[] = []
+const todoCalls: string[] = []
 const started: { id: string; cmd: ReplyCommand }[] = []
 /** いま `opencode serve` が答えを待っている許可（#421）。テストごとに差し替える */
 let pending: OpencodePermission[] = []
@@ -70,6 +71,17 @@ const opencodeApp: OpencodeApp = {
   async models(cwd: string) {
     modelCalls.push(cwd)
     return ['openai/gpt-6-astra', 'ollama/qwen3:8b']
+  },
+  async todos(session: string) {
+    todoCalls.push(session)
+    return {
+      todos: [
+        { content: '調べる', status: 'completed', priority: 'medium' },
+        { content: '直す', status: 'in_progress', priority: 'medium' },
+        { content: '確かめる', status: 'pending', priority: 'medium' },
+      ],
+      children: 1,
+    }
   },
   stop: () => {},
 } as OpencodeApp & { busy: boolean }
@@ -299,4 +311,19 @@ test('保留が残っていれば、pid が死んでいても畳まない（#422
   } finally {
     pending = []
   }
+})
+
+test('処理中の手順に、エージェント自身の段取りとサブセッションの数を足す（#397）', async () => {
+  const res = await fetch(`${base}/api/sessions/ses_1%40r/progress`)
+  assert.equal(res.status, 200)
+  const body = (await res.json()) as SessionProgressResponse
+  // OpenCode は transcript を読めないので手順は空のまま。段取りは本体から取る
+  assert.deepEqual(body.steps, [])
+  assert.deepEqual(body.todos?.map((t) => `${t.status}:${t.content}`), ['completed:調べる', 'in_progress:直す', 'pending:確かめる'])
+  assert.equal(body.children, 1, 'サブセッションはまず数だけ')
+  assert.ok(todoCalls.includes('ses_1'), 'エンティティ ID ではなく OpenCode のセッション ID で聞く')
+  // 中身が同じなら rev も同じ。進んだら変わるように、状態を混ぜてある
+  const again = (await (await fetch(`${base}/api/sessions/ses_1%40r/progress`)).json()) as SessionProgressResponse
+  assert.equal(again.rev, body.rev)
+  assert.match(body.rev, /completedin_progresspending/)
 })

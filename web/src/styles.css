@@ -737,6 +737,16 @@
   .progress .steps { margin: 4px 0 0; padding: 0 0 0 1.4em; }
   .progress .steps li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); }
   .progress .steps li.more { list-style: none; margin-left: -1.4em; font-family: inherit; }
+  /* エージェント自身の段取り（#397）。手順（.progress）と同じ形だが、番号ではなく状態の印を出す */
+  .progress.todos .current .label { font-variant-numeric: tabular-nums; }
+  .progress.todos .todo-now { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .progress.todos .todo-children { margin-left: 8px; }
+  .progress.todos .steps { list-style: none; padding-left: 0; }
+  .progress.todos .steps li.todo { display: flex; gap: 6px; font-family: inherit; }
+  .progress.todos .steps li .mark { flex: none; width: 1em; text-align: center; }
+  .progress.todos .steps li.completed { text-decoration: line-through; opacity: 0.7; }
+  .progress.todos .steps li.in_progress { color: var(--ink); font-weight: 600; }
+  .progress.todos .steps li.cancelled { opacity: 0.5; text-decoration: line-through; }
   .reply { position: relative; display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
   /* 返信欄は 1 つのバブル（Slack / Claude の返信欄と同じ）: 枠は .row に 1 つだけ。上の行が textarea（全幅、枠なし、
      入力に合わせて伸びる）、下の行が送信ボタン（右端）。注意文はバブルの上。フォーカスは枠の色で示す。

@@ -19,10 +19,11 @@ import { opencodeModels } from '../../shared/models.ts'
 import { parsePermissions } from '../../shared/opencodePermissions.ts'
 import type { OpencodePermission } from '../../shared/opencodePermissions.ts'
 import { opencodeSkills } from '../../shared/skills.ts'
+import { opencodeTodos } from '../../shared/todos.ts'
 import { settledByRow } from '../../shared/turnSettled.ts'
 import { childEnv } from './runner.ts'
 import type { Skill } from '../../shared/skills.ts'
-import type { Replying, ReplyingMap } from '../../shared/types.ts'
+import type { Replying, ReplyingMap, SessionTodo } from '../../shared/types.ts'
 
 /** サーバが立ち上がるのを待つ上限 */
 export const OPENCODE_SERVE_WAIT_MS = 20_000
@@ -55,6 +56,11 @@ export interface OpencodeApp {
   skills(cwd: string): Promise<Skill[]>
   /** 返信で選べるモデル（#394。`provider/model`）。`cwd` ごとに設定が違うので渡す */
   models(cwd: string): Promise<string[]>
+  /**
+   * そのセッションの段取りとサブセッションの数（#397）。**すでにサーバが立っているときだけ**聞く
+   * （段取りを見るために `opencode serve` を起こさない）。立っていなければ空
+   */
+  todos(session: string): Promise<{ todos: SessionTodo[]; children: number }>
   /** 行が届いたターンを終わりにする（#375 と同じ判定）。終わった id を返す（預かりを回すのに使う） */
   settle(lastTurn: (id: string) => string | undefined): string[]
   /**
@@ -230,6 +236,28 @@ export class OpencodeServer implements OpencodeApp {
   private async live(): Promise<{ url: string; auth: string } | null> {
     if (this.serveFn) return this.serveFn()
     return this.ready && this.child && this.child.exitCode === null ? this.ready : null
+  }
+
+  /**
+   * 段取り（`GET /session/<id>/todo`）とサブセッションの数（`GET /session/<id>/children`）。#397。
+   *
+   * **立っているサーバにだけ聞く。** ここは処理中の 3 秒ごとのポーリングから呼ばれるので、
+   * 段取りを見るためだけに `opencode serve` を起こさない（`/` の候補と同じ考え方。#393）。
+   * 片方が落ちてももう片方は返す（どちらも「無い」で困らない）
+   */
+  async todos(session: string): Promise<{ todos: SessionTodo[]; children: number }> {
+    const up = await this.live()
+    if (!up) return { todos: [], children: 0 }
+    const get = async (path: string): Promise<unknown> => {
+      const res = await this.fetchFn(`${up.url}/session/${encodeURIComponent(session)}/${path}`, { headers: { authorization: up.auth } })
+      if (!res.ok) throw new Error(`opencode serve が ${res.status} を返しました`)
+      return res.json()
+    }
+    const [todos, children] = await Promise.all([
+      get('todo').then(opencodeTodos).catch(() => [] as SessionTodo[]),
+      get('children').then((d) => (Array.isArray(d) ? d.length : 0)).catch(() => 0),
+    ])
+    return { todos, children }
   }
 
   stop(): void {

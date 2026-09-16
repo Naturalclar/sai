@@ -39,6 +39,7 @@ import type {
   SessionDiffResponse,
   SessionDiffSummaryResponse,
   SessionProgressResponse,
+  SessionTodo,
   SessionIconResponse,
   SessionMetaResponse,
   SessionPermissionsResponse,
@@ -1841,6 +1842,9 @@ export function createApp(
       return json(res, payload)
     }
     const parsed = await progress.read(session)
+    // エージェント自身の段取り（#397。OpenCode だけ）。transcript は読めないが、本体が持っている
+    // （**すでに立っているサーバにだけ聞く**ので、段取りのために `opencode serve` は起こさない）
+    if (session.agent === 'opencode') return json(res, await withTodos(parsed, session))
     // transcript は**端末で Esc を押して止めたターンを閉じないまま残す**（#302 の実測で 536 件中 13 件）ので、
     // CLI 側の実測で打ち消す（#418）。**`busy` が false と分かったときだけ**落とし、
     // 聞けなかった（`undefined`）ときは今までどおり transcript の判定を使う
@@ -1850,6 +1854,29 @@ export function createApp(
     // rev も変えておく（画面は rev が同じなら描き直さない）
     const stopped: SessionProgressResponse = { ...parsed, active: false, rev: `${parsed.rev}|idle` }
     return json(res, stopped)
+  }
+
+  /**
+   * OpenCode の段取りとサブセッションの数を足す（#397）。**空なら何も足さない**（キーごと省く）。
+   * 中身は `rev` にも混ぜる（同じ rev だと画面が描き直さないので、段取りが進んでも出ない）。
+   * 聞けなければ（サーバが立っていない・落ちた）今までどおりそのまま返す
+   */
+  const withTodos = async (parsed: SessionProgressResponse, session: SessionSummary): Promise<SessionProgressResponse> => {
+    const raw = sessionOf(session)
+    if (!raw) return parsed
+    let got: { todos: SessionTodo[]; children: number }
+    try {
+      got = await opencodeApp.todos(raw)
+    } catch {
+      return parsed
+    }
+    if (got.todos.length === 0 && got.children === 0) return parsed
+    return {
+      ...parsed,
+      rev: `${parsed.rev}|${got.todos.map((t) => t.status).join('')}:${got.todos.length}:${got.children}`,
+      ...(got.todos.length > 0 ? { todos: got.todos } : {}),
+      ...(got.children > 0 ? { children: got.children } : {}),
+    }
   }
 
   const getDiff = async (res: ServerResponse, id: string, base: string, days: number) => {

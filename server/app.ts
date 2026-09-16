@@ -475,8 +475,11 @@ export function createApp(
     for (const id of opencodeApp.settle((rid) => opencodeTurnOf(sessions, rid))) await drain(id)
     return { ...typed.snapshot(), ...run.snapshot(), ...codexApp.replying(), ...opencodeApp.replying() }
   }
+  // ターンごとのトークン・費用（#387 / #411）。書く側（ProcessRunner）と読む側（応答に載せる）で同じ 1 つを使う
+  const usage = new TurnUsageLog(join(store.directory, TURN_USAGE_FILE))
+  const usageReady = usage.load()
   // 処理中の返信は replying.json にも持ち、サーバを再起動しても生きている分を引き取る（#100）
-  const run: Runner = runner ?? new ProcessRunner(join(store.directory, 'reply.log'), join(store.directory, 'replying.json'), new TurnUsageLog(join(store.directory, TURN_USAGE_FILE)))
+  const run: Runner = runner ?? new ProcessRunner(join(store.directory, 'reply.log'), join(store.directory, 'replying.json'), usage)
   const metaStore = new MetaStore(join(store.directory, META_FILE))
   const iconStore = new IconStore(join(store.directory, ICONS_DIR))
   const attachmentStore = new AttachmentStore(join(store.directory, ATTACHMENTS_DIR))
@@ -2174,7 +2177,8 @@ export function createApp(
         await scanDigest(days)
         // このセッションが一言を切っていれば載せない（#263）
         const own = (await store.rows(days)).filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
-        const rows = session.meta?.digest_off ? own : digest.attach(own)
+        await usageReady
+        const rows = usage.attach(session.meta?.digest_off ? own : digest.attach(own))
         await drainAll()
         const replying = await replyingOf(sessions)
         const pendingApprovals = await approvalsNow(sessions)
@@ -2184,7 +2188,7 @@ export function createApp(
         // 待ちの行と前後するので、rev に混ぜて後から届いたぶんも画面が拾う
         const question = await pendingQuestion(session, pendingApprovals)
         const body: SessionDetailResponse = {
-          rev: revWith(`${sessionsRev}~${me.rev}~${settled}~${question?.asked_at ?? ''}`, replying, approvalMapKey(pendingApprovals), false, digest.revKey(), `${queue.key()}|${agents.key()}`),
+          rev: revWith(`${sessionsRev}~${me.rev}~${settled}~${question?.asked_at ?? ''}`, replying, approvalMapKey(pendingApprovals), false, `${digest.revKey()}|${usage.rev()}`, `${queue.key()}|${agents.key()}`),
           session: withLastSummary([session])[0]!,
           rows,
           replying,
@@ -2214,7 +2218,8 @@ export function createApp(
         await scanDigest(days)
         // 一言を切っているセッションの行には載せない（#263）
         const noDigest = await digestOffIds()
-        rows = digest.attach(rows.map(stripThinking))
+        await usageReady
+        rows = usage.attach(digest.attach(rows.map(stripThinking)))
         if (noDigest.size) rows = rows.map((r) => (r.summary && noDigest.has(entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? ''))) ? { ...r, summary: undefined } : r))
         await drainAll()
         const replying = await replyingOf(sessions)
@@ -2222,7 +2227,7 @@ export function createApp(
         // rev はメタ（アーカイブ）と処理中の集合、答え待ちの承認、ビルドが古いか、一言の有無も混ぜる
         const build_stale = await freshness.stale()
         const body: FeedResponse = {
-          rev: revWith(rev, replying, approvalMapKey(pendingApprovals), build_stale, digest.revKey(), queue.key()),
+          rev: revWith(rev, replying, approvalMapKey(pendingApprovals), build_stale, `${digest.revKey()}|${usage.rev()}`, queue.key()),
           days,
           rows,
           replying,

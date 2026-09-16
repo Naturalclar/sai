@@ -157,6 +157,25 @@ before(async () => {
     JSON.stringify(row(new Date(now.getTime() - min(2)), 'R1', { repo: 'r', cwd: dir, host: 'mini' })),
   ]
   await writeFile(join(feedDir, `${localDate(now.toISOString())}.jsonl`), lines.join('\n') + '\n')
+  // ターンごとのトークン（#411）。行の 1.5 秒あとにできたものとして置く（CLI は Stop フックのあとに終わる）。
+  // createApp が起動時に 1 回読むので、ここで置いておく
+  await writeFile(
+    join(feedDir, 'turn-usage.jsonl'),
+    `${JSON.stringify({
+      ts: new Date(now.getTime() - min(5) + 1500).toISOString(),
+      id: 'S1@kanban',
+      model: 'claude-opus-5',
+      input_tokens: 10,
+      output_tokens: 94,
+      cache_read_input_tokens: 17582,
+      cache_creation_input_tokens: 8431,
+      cost_usd: 0.019,
+      duration_ms: 1297,
+      num_turns: 1,
+      denials: 2,
+      is_error: false,
+    })}\n`,
+  )
   store = new FeedStore(feedDir)
   // アプリは 1 つ（答え待ちの承認はメモリに持つので、リクエストごとに作り直すと消える）
   // ビルドが古いかは、この dist と temp の src ディレクトリの mtime で判定させる（ttl 0 で毎回見る）
@@ -586,6 +605,17 @@ test('/api/feed は壊れた行を落とす', async () => {
   assert.equal(data.rows.length, 8)
   const only = (await (await get('/api/feed?days=3&repo=sai')).json()) as FeedResponse
   assert.equal(only.rows.length, 1)
+})
+
+test('フィードと詳細の行に、そのターンのトークンが載る（#411）', async () => {
+  const feed = (await (await get('/api/feed?days=3')).json()) as FeedResponse
+  const two = feed.rows.find((r) => r.text === 'two')
+  assert.equal(two?.usage?.output_tokens, 94, '行の 1.5 秒あとにできた分が、その行に載る')
+  assert.equal(two?.usage?.denials, 2)
+  // 同じセッションの前のターンには載らない（使用量は 1 つしか無い）
+  assert.equal(feed.rows.find((r) => r.first_user_text === '題名')?.usage, undefined)
+  const detail = (await (await get(`/api/sessions/${encodeURIComponent('S1@kanban')}?days=3`)).json()) as SessionDetailResponse
+  assert.equal(detail.rows.find((r) => r.text === 'two')?.usage?.output_tokens, 94)
 })
 
 test('その他', async () => {

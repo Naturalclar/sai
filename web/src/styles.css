@@ -399,6 +399,10 @@
   .tag.host { font-family: var(--mono); }
   /* バブルの中の「ここからモデルが変わった」。等幅で、本文の上に 1 行 */
   .msg .tag.model { display: inline-block; margin: 0 0 4px; font-family: var(--mono); }
+  /* そのターンが使ったトークン（#411）。読むだけの数字なので薄く、時刻の隣に置く。内訳と費用は title */
+  .msg .tag.usage { font-family: var(--mono); cursor: help; }
+  /* 未許可で断られた・エラーで終わった（#387 の狙い。返信が空振りした理由がここで分かる） */
+  .msg .tag.usage.loud { background: color-mix(in srgb, var(--claude) 18%, transparent); color: var(--claude); font-weight: 600; }
   /* 見出しのモデル。使ったモデル（code）と、返信で使うモデルの選択 */
   .chat-head .model-tag .more { color: var(--muted); margin-left: 4px; font-size: 11px; }
   /* 入力欄の、送信ボタンの左のモデルと許可モード（#193 / #265）。押すとメニュー（UserMenu と同じ作り）。名前は短くして幅も切る */

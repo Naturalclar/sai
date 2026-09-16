@@ -123,6 +123,7 @@ import { SkillStore } from './local/skills.ts'
 import type { Skill } from '../shared/skills.ts'
 import { claudeProjectsDir, codexSessionsDir, UsageStore } from './local/usage.ts'
 import { ProgressReader, sessionOf } from './local/progress.ts'
+import { agentListFromEnv, type AgentList } from './local/claudeAgents.ts'
 import { isRemoteHost } from '../shared/host.ts'
 import { IMAGES_SEGMENT } from '../shared/images.ts'
 import { imageHeaders, imageTable, readSessionImage } from './local/images.ts'
@@ -380,6 +381,9 @@ export function createApp(
   usageStore: UsageStore = new UsageStore(codexSessionsDir(), claudeProjectsDir(), store.directory),
   // 処理中のターンの手順（#302）。読む先は使用量と同じ ~/.claude/projects と CODEX_HOME/sessions
   progress: ProgressReader = new ProgressReader(claudeProjectsDir(), codexSessionsDir()),
+  // 生きている Claude のセッション（#418）。`claude agents --json` を叩くだけで、聞けなければ何も変えない
+  // （名前は `agents`（#310 のセッション同士のメッセージ）と紛れるので `claudeAgents`）
+  claudeAgents: AgentList = agentListFromEnv(),
 ): Handler {
   const distRoot = resolve(distDir)
   // 端末に打ち込んだ返信の「処理中」。子プロセスの方（run）とは別に持ち、画面には合わせて出す
@@ -1802,7 +1806,16 @@ export function createApp(
       const payload: SessionProgressResponse = { rev: '', id, active: false, steps: [], total: 0, updated_at: '', context_tokens: 0 }
       return json(res, payload)
     }
-    return json(res, await progress.read(session))
+    const parsed = await progress.read(session)
+    // transcript は**端末で Esc を押して止めたターンを閉じないまま残す**（#302 の実測で 536 件中 13 件）ので、
+    // CLI 側の実測で打ち消す（#418）。**`busy` が false と分かったときだけ**落とし、
+    // 聞けなかった（`undefined`）ときは今までどおり transcript の判定を使う
+    if (!parsed.active || session.agent !== 'claude') return json(res, parsed)
+    const busy = await claudeAgents.busy(sessionOf(session))
+    if (busy !== false) return json(res, parsed)
+    // rev も変えておく（画面は rev が同じなら描き直さない）
+    const stopped: SessionProgressResponse = { ...parsed, active: false, rev: `${parsed.rev}|idle` }
+    return json(res, stopped)
   }
 
   const getDiff = async (res: ServerResponse, id: string, base: string, days: number) => {

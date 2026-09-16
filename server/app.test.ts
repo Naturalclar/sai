@@ -239,6 +239,9 @@ before(async () => {
     new UsageStore(join(dir, 'codex-sessions'), join(dir, 'claude-projects'), store.directory),
     // 処理中の手順も、この Mac の ~/.claude / ~/.codex ではなく temp の置き場だけを読む（#302）
     new ProgressReader(join(dir, 'claude-projects'), join(dir, 'codex-sessions')),
+    // 生きている Claude のセッション（#418）。本物の `claude agents --json` を叩くと、
+    // この Mac でいま動いているセッションで結果が変わる。既定は undefined（聞けなかった扱い）
+    claudeAgents,
   )
   server = createServer((req, res) => void app(req, res))
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -455,6 +458,9 @@ test('thinking はセッション詳細の行には載り、フィードの行�
   assert.equal(withThinking.thinking, 't', '元の行は変えない')
 })
 
+/** #418。`claude agents --json` の代わり。`value` を差し替えて busy の有無を作る */
+const claudeAgents = { value: undefined as boolean | undefined, busy: () => Promise.resolve(claudeAgents.value) }
+
 test('GET /api/sessions/<id>/progress: 行の cwd とセッション ID から transcript を引き、いまの手順を返す。別のマシン・無いセッションは空、窓に無ければ 404（#302）', async () => {
   const projectDir = join(dir, 'claude-projects', claudeProjectName(dir))
   await mkdir(projectDir, { recursive: true })
@@ -486,6 +492,25 @@ test('GET /api/sessions/<id>/progress: 行の cwd とセッション ID から t
   assert.equal(res.status, 404)
   assert.equal((await get('/api/sessions/%2Fetc%2Fpasswd/progress')).status, 400, 'パスは受け取らない')
   assert.equal((await fetch(`${base}/api/sessions/C1%40r/progress`, { method: 'POST' })).status, 405)
+
+  // #418: CLI 側が「回っていない」と言ったときだけ打ち消す（端末で Esc を押して止めたターン）
+  try {
+    claudeAgents.value = true
+    const busy = (await (await get('/api/sessions/C1%40r/progress')).json()) as SessionProgressResponse
+    assert.equal(busy.active, true, 'busy ならそのまま')
+    assert.equal(busy.rev, data.rev)
+    claudeAgents.value = false
+    const idle = (await (await get('/api/sessions/C1%40r/progress')).json()) as SessionProgressResponse
+    assert.equal(idle.active, false, '聞けて、回っていなければ落とす')
+    assert.notEqual(idle.rev, data.rev, 'rev も変える（同じだと画面が描き直さない）')
+    assert.deepEqual(idle.steps, data.steps, '手順はそのまま出す（何をしていたかは見たい）')
+    // Codex には `claude agents` が無いので聞きに行かない（聞いても false が返って誤って落ちる）
+    claudeAgents.value = false
+    const codexIdle = (await (await get('/api/sessions/X1%40r/progress')).json()) as SessionProgressResponse
+    assert.equal(codexIdle.active, false, 'rollout が無いので元から false')
+  } finally {
+    claudeAgents.value = undefined
+  }
 })
 
 test('GET /api/sessions/<id>: 端末で開いた Claude が質問で止まっていれば、transcript の返事の付いていない AskUserQuestion を question に載せる。行の待ちと同じ文のときだけ（#333）', async () => {

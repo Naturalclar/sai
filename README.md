@@ -341,6 +341,7 @@ rsync -a --include='????-??-??.*.jsonl' --exclude='*' mini:~/.agent-feed/ ~/.age
 | `SAI_APPROVE` | `0` で「返信中の許可・質問に画面から答える」配線（`--mcp-config` + `--permission-prompt-tool`）を付けない |
 | `SAI_CODEX_APP_SERVER` | `0` で閉じたCodexのapp-server管理を切り、従来の `codex exec resume` に戻す。既定は有効 |
 | `SAI_OPENCODE_SERVER` | `0` で OpenCode への返信を従来の `opencode run -s` に戻す。既定は長寿命の `opencode serve` に HTTP で送る |
+| `SAI_CLAUDE_AGENTS` | `0` で `claude agents --json` を聞きに行かない（既定は聞く）。**このマシンで生きている Claude のセッション**の一覧で、「端末で止めたターンがまだ処理中に見える」のを打ち消すのに使う。聞けなければ今までどおり transcript の判定のまま |
 | `SAI_GH` | `0` で差分ボタンの PR 番号を引かない（既定は引く。SAI で唯一外のネットワークに問い合わせる所）。叩くのは `PATH` の `gh` の `gh pr view` だけで、引けなければ番号が付かないだけ |
 | `CODEX_HOME` | Codex のホーム（既定 `~/.codex`）。Codex 自身の変数で、SAI はそれに従うだけ |
 | `GROK_HOME` | Grok Build のホーム（既定 `~/.grok`）。Grok 自身の変数で、`record.py` が `sessions/` から入力とモデルを読むときにそれに従うだけ |

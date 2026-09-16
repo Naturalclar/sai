@@ -757,7 +757,7 @@ export function createApp(
     const id = entityId(session, from.repo, '')
     if (Object.keys(meta).length > 0) await metaStore.set(id, meta)
     const via = { url: selfUrl(req), entity: id, tokenFile: agentTokenPath }
-    const cmd = newSessionCommand(session, text, cwd, process.env, via, meta.model, meta.permission_mode)
+    const cmd = newSessionCommand(session, text, cwd, process.env, via, meta.model, meta.permission_mode, meta.name)
     try {
       await run.start(id, cmd, () => {
         approvals.drop(id)
@@ -937,7 +937,8 @@ export function createApp(
     // トークンの置き場も渡すと、MCP サーバが別のセッションに話しかけるツール（sai_*）を出す（#310）
     const via = { url: o.url, entity: id, tokenFile: agentTokenPath }
     // セッションに返信のモデルが設定されていれば（PUT /api/sessions/<id>/meta の model）それで回す
-    const cmd = replyCommand(session.agent, raw, text, cwd, process.env, via, model, own?.permission_mode, attachments)
+    // 表示名も渡すと、端末のタイトルと `/resume` のピッカーに SAI と同じ名前が出る（#391）
+    const cmd = replyCommand(session.agent, raw, text, cwd, process.env, via, model, own?.permission_mode, attachments, own?.name)
     if (!cmd) return refuse(400, replyBlockedReason(session, selfHost()) || 'unsupported agent')
     try {
       // プロセスが終わったら、そのセッションの答え待ちは deny で片付ける（もう誰も答えを取りに来ない）。

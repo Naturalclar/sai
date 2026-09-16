@@ -146,7 +146,7 @@ export function splitArgs(raw: string | undefined): string[] {
  * Claude の起動引数のうち、返信と新しいセッション（#314）で共通の前半。運用者の `SAI_CLAUDE_ARGS` を先頭に、
  * 許可・質問を画面で答える配線、モデル、許可モードの順（後ろほど勝つ）。2 つの経路でずれないように 1 か所で組む
  */
-function claudeHead(env: NodeJS.ProcessEnv, approve: ApproveVia | undefined, model: string | undefined, permissionMode: string | undefined): string[] {
+function claudeHead(env: NodeJS.ProcessEnv, approve: ApproveVia | undefined, model: string | undefined, permissionMode: string | undefined, name?: string): string[] {
   const extra = splitArgs(env.SAI_CLAUDE_ARGS)
   // 許可・質問を画面で答える配線（Claude だけ。Codex に同等の口は無い）。
   // SAI_APPROVE=0 で外せる。運用者が自分の --permission-prompt-tool を足していればそちらを尊重する。
@@ -158,7 +158,12 @@ function claudeHead(env: NodeJS.ProcessEnv, approve: ApproveVia | undefined, mod
   // 使ったトークンと費用を CLI に返させる（#387）。reply.log の末尾に result の 1 行として残り、ProcessRunner が拾う。
   // 運用者が自分の --output-format を指定していればそちらを尊重する（stream-json でも最後の result の行から読める）
   const format = extra.includes('--output-format') ? [] : ['--output-format', 'json']
-  return [...extra, ...wire, ...(model ? ['--model', model] : []), ...(permissionMode ? ['--permission-mode', permissionMode] : []), ...format]
+  // セッションの表示名（session-meta.json の name）を CLI にも渡す（#391）。端末のタイトルと `/resume` の
+  // ピッカーに同じ名前が出る。**名前はセッションに残る**（実測: 付けて回すと transcript の先頭に
+  // `{"type":"custom-title",…}` が入り、次に `-n` 無しで resume しても消えない）ので、
+  // 付いていないセッションには渡さない（端末で付けた名前を空で上書きしない）
+  const named = (name ?? '').trim() ? ['-n', (name ?? '').trim()] : []
+  return [...extra, ...wire, ...(model ? ['--model', model] : []), ...(permissionMode ? ['--permission-mode', permissionMode] : []), ...named, ...format]
 }
 
 /**
@@ -175,8 +180,10 @@ export function newSessionCommand(
   approve?: ApproveVia,
   model?: string,
   permissionMode?: string,
+  /** そのセッションの表示名（session-meta.json の name）。あれば `-n` で CLI にも渡す（#391） */
+  name?: string,
 ): ReplyCommand {
-  return { bin: 'claude', args: [...claudeHead(env, approve, model, permissionMode), '-p', '--session-id', sessionId, '--', text], cwd, text, permissionMode: permissionMode || '' }
+  return { bin: 'claude', args: [...claudeHead(env, approve, model, permissionMode, name), '-p', '--session-id', sessionId, '--', text], cwd, text, permissionMode: permissionMode || '' }
 }
 
 /**
@@ -202,6 +209,11 @@ export function replyCommand(
   permissionMode?: string,
   /** 添える画像の絶対パス。本文には呼び出し側が足しておく（ここでは Codex の -i だけ組む） */
   attachments: readonly string[] = [],
+  /**
+   * そのセッションの表示名（session-meta.json の name）。あれば Claude に `-n` で渡す（#391）。
+   * 名前はセッションに残るので、SAI で付け替えると次の返信から端末側の名前も変わる
+   */
+  name?: string,
 ): ReplyCommand | null {
   // 運用者の SAI_*_ARGS に -m があっても、セッションの設定を後ろに置いてそちらを勝たせる（後勝ち。Claude は claudeHead() の中）
   const pick = model ? ['-m', model] : []
@@ -209,7 +221,7 @@ export function replyCommand(
   // ターンが回らない（`--dangerously-skip-permissions` ならフラグとして効いてしまう）。両 CLI とも `--` を受け付ける
   if (agent === 'claude') {
     // 許可モードは Claude だけ（codex exec resume に同等のフラグは無い）
-    return { bin: 'claude', args: [...claudeHead(env, approve, model, permissionMode), '-p', '--resume', session, '--', text], cwd, text, permissionMode: permissionMode || '' }
+    return { bin: 'claude', args: [...claudeHead(env, approve, model, permissionMode, name), '-p', '--resume', session, '--', text], cwd, text, permissionMode: permissionMode || '' }
   }
   if (agent === 'codex') {
     // Codex は画像を受ける口がある（`-i, --image <FILE>  Optional image(s) to attach to the prompt sent after resuming`）

@@ -909,6 +909,19 @@ test('PUT meta: 表示名が一覧と詳細に載り、rev が変わり、ファ
   assert.deepEqual(await (await get('/api/sessions/C1%40r/meta')).json(), { id: 'C1@r', meta: {} }, '無ければ空')
 })
 
+test('PUT meta: 表示名は次の返信の claude に -n として付き、消せば付かない（#391）', async () => {
+  runner.started.length = 0
+  assert.equal((await putMeta('C1@r', { name: 'かなで' })).status, 200)
+  assert.equal((await post('C1@r', { text: 'つづき' })).status, 202)
+  const args = runner.started[0]!.cmd.args
+  assert.deepEqual(args.slice(args.indexOf('-n'), args.indexOf('-n') + 2), ['-n', 'かなで'])
+  assert.ok(args.indexOf('-n') < args.indexOf('-p'), '-n は -p より前（本文は -- の後ろ）')
+  // 消したら渡さない（端末で付けた名前を空で上書きしない）
+  assert.equal((await putMeta('C1@r', { name: '' })).status, 200)
+  assert.equal((await post('C1@r', { text: 'x' })).status, 202)
+  assert.ok(!runner.started[1]!.cmd.args.includes('-n'), '表示名が無ければ付かない')
+})
+
 test('PUT meta: model は次の返信の claude / codex に --model / -m として付き、消せば付かない', async () => {
   runner.started.length = 0
   codexApp.started.length = 0

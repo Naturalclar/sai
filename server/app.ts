@@ -63,6 +63,7 @@ import type { CodexApp } from './reply/codexAppServer.ts'
 import { OpencodeServer } from './reply/opencodeServer.ts'
 import type { OpencodeApp } from './reply/opencodeServer.ts'
 import { approvalMapKey, CodexDialogs, mergeApprovalMaps } from './reply/codexDialogs.ts'
+import { CodexTerminals, type CodexTerminalSource } from './reply/codexTerminal.ts'
 import { clearSettled, settledKey, WaitingSettle } from './reply/waitingSettle.ts'
 import type { WaitingSettleSource } from './reply/waitingSettle.ts'
 import type { CodexDialogSource } from './reply/codexDialogs.ts'
@@ -116,13 +117,13 @@ import { McpSendLimiter } from './mcp/sendLimit.ts'
 import { SkillStore } from './local/skills.ts'
 import type { Skill } from '../shared/skills.ts'
 import { claudeProjectsDir, codexSessionsDir, UsageStore } from './local/usage.ts'
-import { ProgressReader } from './local/progress.ts'
+import { ProgressReader, sessionOf } from './local/progress.ts'
 import { isRemoteHost } from '../shared/host.ts'
 import { IMAGES_SEGMENT } from '../shared/images.ts'
 import { imageHeaders, imageTable, readSessionImage } from './local/images.ts'
 import { searchRows } from './rows/search.ts'
 import { searchWords } from '../shared/search.ts'
-import { alive, RealTmux, realPs, TerminalBusy, TerminalGone, TerminalReplies, typeInto } from './reply/terminal.ts'
+import { alive, isDescendant, parsePs, RealTmux, realPs, TerminalBusy, TerminalGone, TerminalReplies, typeInto } from './reply/terminal.ts'
 import type { PsFn, Tmux } from './reply/terminal.ts'
 import type { Runner } from './reply/runner.ts'
 import { Authenticator, tailscaleWhois } from './auth.ts'
@@ -342,6 +343,8 @@ export interface TerminalDeps {
   codexWriterActive?: (session: string) => Promise<boolean>
   /** 開いている Codex への queue。テストでは差し替える */
   codexQueue?: CodexQueue
+  /** 記録した pid が死んでいる Codex を lock から引き直す（#332）。テストでは差し替える */
+  codexTerminals?: CodexTerminalSource
   /** 開いている Codex TUI の質問・許可ダイアログ監視。テストでは差し替える */
   codexDialogs?: CodexDialogSource
   /** SAIから開始するCodex turnのapp-server client。テストでは差し替える */
@@ -404,7 +407,37 @@ export function createApp(
     return [...repo, ...(await codexApp.skills?.() ?? []).filter((skill) => !seen.has(skill.name))]
   }
 
-  const terminalOf = (s: SessionSummary) => (terminalEnabled && s.pane && s.pid && isAlive(s.pid) ? { pane: s.pane, pid: s.pid } : null)
+  const codexTerminals =
+    terminal.codexTerminals ??
+    new CodexTerminals({
+      alive: isAlive,
+      // lock を握っているのが tmux の外のプロセスのことがある（実測: ChatGPT アプリの codex app-server）ので、
+      // そのペインの子孫かまで確かめる。打ち込む前の検査（inspectPrompt）と同じ見方
+      inPane: async (pane, pid) => {
+        try {
+          const panePid = Number((await terminal.tmux.run(['display-message', '-p', '-t', pane, '#{pane_pid}'])).trim())
+          return Boolean(panePid) && isDescendant(pid, panePid, parsePs(await terminal.ps()))
+        } catch {
+          return false
+        }
+      },
+    })
+  /**
+   * 端末（tmux のペイン）で開いているか。記録した pid が生きていればそれ。
+   *
+   * **Codex だけ補欠がある**（#332 の案 2）: pid が死んでいても、そのセッションの thread writer lock を
+   * 握っている生きたプロセスがいればそれを本体とみなす。`record.py` が Codex の pid を親から辿るようになる
+   * 前（#335 以前）の行は notify のラッパー（すぐ終わるシェル）の pid を持っていて、ペインでは Codex が
+   * 動いているのに「端末で開いていない」ままだった（許可待ちの検出にも端末への打ち込みにも回らない）。
+   * lock はセッション ID ごとのファイルなので、同じペインで別の Codex を起動し直していても取り違えない。
+   */
+  const terminalOf = async (s: SessionSummary) => {
+    if (!terminalEnabled || !s.pane) return null
+    if (s.pid && isAlive(s.pid)) return { pane: s.pane, pid: s.pid }
+    if (s.agent !== 'codex') return null
+    const pid = await codexTerminals.pid(sessionOf(s), s.pane)
+    return pid ? { pane: s.pane, pid } : null
+  }
   /**
    * 端末に打ち込んだ・queue に渡した返信のターンが、送った時刻より後に始まったか（#329。`TerminalReplies.checkDelivery()` が 2 分後に聞く）。
    * Claude は入力の行（UserPromptSubmit → `last_user_ts`）か transcript、Codex は rollout が送ったあとに書かれたかで見る。
@@ -523,18 +556,18 @@ export function createApp(
     const sessions = await fillRepo(projects, raw)
     return {
       rev: `${rev}-${meta.rev}-${icons.rev}`,
-      sessions: sessions.map((s) => {
+      sessions: await Promise.all(sessions.map(async (s) => {
         const m = meta.entries[s.id]
         const icon = icons.entries.get(iconKey(s.id))
         // 端末で開いているか（pid の生存）は毎回見る。rev には混ぜない（端末を閉じても次の行で rev が変わる）
-        const out: SessionSummary = { ...s, terminal: terminalOf(s) }
+        const out: SessionSummary = { ...s, terminal: await terminalOf(s) }
         if (m) {
           out.meta = m
           if (!!m.archived_at && Date.parse(m.archived_at) >= Date.parse(s.end)) out.archived = true
         }
         if (icon) out.icon = iconUrl(s.id, icon.version)
         return out
-      }),
+      })),
     }
   }
 
@@ -797,7 +830,7 @@ export function createApp(
     } catch {
       return refuse(400, `cwd が見つかりません: ${cwd || '(空)'}`)
     }
-    const openTerminal = terminalOf(session)
+    const openTerminal = await terminalOf(session)
     // 別プロセス（-p / app-server）のターンが動いているか、いま起動している最中か
     const busy = run.running(id) || codexApp.running(id) || opencodeApp.running(id) || launching.has(id)
     // 処理中なら預かる（#305）。処理中でなくても預かりが残っていれば後ろに並べる（先に預けたものを追い越さない）
@@ -830,7 +863,7 @@ export function createApp(
     session: SessionSummary,
     raw: string,
     cwd: string,
-    openTerminal: ReturnType<typeof terminalOf>,
+    openTerminal: Awaited<ReturnType<typeof terminalOf>>,
     text: string,
     attachments: string[],
     o: LaunchOptions,

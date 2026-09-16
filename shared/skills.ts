@@ -1,13 +1,19 @@
 // 返信の入力欄で `/` を打った時に出すスキルの候補。
-// 置き場は `~/.claude/skills/<name>/SKILL.md`（ユーザー）と `<セッションの cwd>/.claude/skills/`（プロジェクト）で、
-// 読み取りは `server/local/skills.ts`。ここは SKILL.md の頭の読み方と、`/` の検出・絞り込みだけ（fs も DOM も触らない）。
-// 候補を選んでも SAI は本文を `/<name> ` にするだけで、展開は CLI に任せる（端末でも `-p` でも同じ）。
+// Claude の置き場は `~/.claude/skills/<name>/SKILL.md`（ユーザー）と `<セッションの cwd>/.claude/skills/`（プロジェクト）、
+// Codex は `<cwd>/.codex/skills/` と `<cwd>/.agents/skills/`（リポジトリ）＋ app-server の `skills/list`（ユーザー・プラグイン・組み込み）。
+// 読み取りは `server/local/skills.ts` と `server/reply/codexAppServer.ts`。
+// ここは SKILL.md の頭の読み方と、app-server の応答の読み方、`/` の検出・絞り込みだけ（fs も DOM も触らない）。
+// 候補を選んでも SAI は本文を `/<name> ` にするだけで、展開は CLI に任せる（端末でも `-p` でも同じ。Codex の app-server でも
+// `input: [{ type: 'text', text: '/<name>' }]` で実際にスキルが動くことを v0.154.0 で確かめた）。
 
 /** SKILL.md 1つ分。中身は読まない（一覧に出すのは名前と説明だけ） */
 export interface Skill {
   name: string
   description: string
-  /** project: セッションの cwd の `.claude/skills/`。user: `~/.claude/skills/` */
+  /**
+   * project: セッションの cwd の置き場（Claude は `.claude/skills/`、Codex は `.codex/skills/` と `.agents/skills/`）。
+   * user: cwd に依らないもの（Claude は `~/.claude/skills/`、Codex は app-server の `scope` が `user` / `system` のもの）
+   */
   source: 'user' | 'project'
 }
 
@@ -52,6 +58,36 @@ export function parseSkill(text: string, fallbackName: string, source: Skill['so
   const name = fm.name || fallbackName
   if (!name) return null
   return { name, description: fm.description ?? '', source }
+}
+
+/**
+ * Codex の app-server の `skills/list` の応答（`{ data: [{ cwd, skills: [...] }] }`）を候補にする。
+ *
+ * **`scope` が `repo` のものは落とす**。SAI の app-server は**サーバの cwd**で長く生きている 1 本なので、
+ * そこから返るリポジトリのスキルは「そのセッションの cwd」のものではない（セッション側の分は
+ * `server/local/skills.ts` が cwd から直接読む）。`user`（`$CODEX_HOME/skills/` とプラグイン）と
+ * `system`（組み込み）は cwd に依らないので、どのセッションにもそのまま出してよい。
+ * 切ってあるもの（`enabled: false`）も出さない。名前が重なったら先に出てきた方を採る。
+ */
+export function parseCodexSkills(result: unknown): Skill[] {
+  const data = (result as { data?: unknown } | null)?.data
+  if (!Array.isArray(data)) return []
+  const out: Skill[] = []
+  const seen = new Set<string>()
+  for (const group of data) {
+    const skills = (group as { skills?: unknown } | null)?.skills
+    if (!Array.isArray(skills)) continue
+    for (const raw of skills) {
+      const skill = raw as { name?: unknown; description?: unknown; scope?: unknown; enabled?: unknown } | null
+      const name = typeof skill?.name === 'string' ? skill.name : ''
+      if (!name || seen.has(name)) continue
+      if (skill?.scope === 'repo') continue
+      if (skill?.enabled === false) continue
+      seen.add(name)
+      out.push({ name, description: typeof skill?.description === 'string' ? skill.description : '', source: 'user' })
+    }
+  }
+  return out
 }
 
 /**

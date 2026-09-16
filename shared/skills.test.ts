@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { filterSkills, parseSkill, skillSummary, slashQuery, SKILL_DESC_MAX } from './skills.ts'
+import { filterSkills, parseCodexSkills, parseSkill, skillSummary, slashQuery, SKILL_DESC_MAX } from './skills.ts'
 
 const SKILL = `---
 name: issue-triage
@@ -60,4 +60,44 @@ test('skillSummary は1行目を SKILL_DESC_MAX で切る', () => {
   assert.equal(skillSummary(''), '')
   const long = 'あ'.repeat(SKILL_DESC_MAX + 10)
   assert.equal(skillSummary(long), 'あ'.repeat(SKILL_DESC_MAX) + '…')
+})
+
+// Codex の app-server（v0.154.0）の `skills/list` の応答そのままの形
+const CODEX_LIST = {
+  data: [
+    {
+      cwd: '/Users/me/work/sai',
+      skills: [
+        { name: 'probe-codex', description: 'cwd の .codex/skills', path: '/Users/me/work/sai/.codex/skills/probe-codex/SKILL.md', scope: 'repo', enabled: true, pluginId: null },
+        { name: 'browser:control-in-app-browser', description: 'Control the in-app Browser', path: '/Users/me/.codex/plugins/cache/openai-bundled/browser/1/skills/control/SKILL.md', scope: 'user', enabled: true, pluginId: 'browser' },
+        { name: 'imagegen', description: '画像を作る', path: '/imagegen/SKILL.md', scope: 'system', enabled: true, pluginId: null },
+        { name: 'off-one', description: '切ってある', path: '/off/SKILL.md', scope: 'user', enabled: false, pluginId: null },
+      ],
+    },
+  ],
+}
+
+test('parseCodexSkills は cwd に依らない分だけを候補にする', () => {
+  assert.deepEqual(
+    parseCodexSkills(CODEX_LIST).map((s) => [s.name, s.source]),
+    [
+      ['browser:control-in-app-browser', 'user'],
+      ['imagegen', 'user'],
+    ],
+    'scope が repo のもの（app-server を起こした場所のリポジトリのスキル）と、切ってあるものは出さない',
+  )
+  assert.equal(parseCodexSkills(CODEX_LIST)[0]?.description, 'Control the in-app Browser')
+})
+
+test('parseCodexSkills は知らない形でも落ちない', () => {
+  assert.deepEqual(parseCodexSkills(null), [])
+  assert.deepEqual(parseCodexSkills({}), [])
+  assert.deepEqual(parseCodexSkills({ data: {} }), [])
+  assert.deepEqual(parseCodexSkills({ data: [null, 1, { skills: 'x' }] }), [])
+  assert.deepEqual(parseCodexSkills({ data: [{ skills: [{ scope: 'user' }] }] }), [], '名前が無ければ出さない')
+  assert.deepEqual(
+    parseCodexSkills({ data: [{ skills: [{ name: 'a' }, { name: 'a', description: 'あとの方' }] }] }).map((s) => [s.name, s.description]),
+    [['a', '']],
+    '説明が無ければ空。同じ名前は先に出てきた方',
+  )
 })

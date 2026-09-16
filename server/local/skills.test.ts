@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { PROJECT_SKILLS_DIR, SkillStore, userSkillsDir } from './skills.ts'
+import { CODEX_PROJECT_SKILLS_DIRS, PROJECT_SKILLS_DIR, SkillStore, userSkillsDir } from './skills.ts'
 
 let dir: string
 let userDir: string
@@ -22,6 +22,11 @@ before(async () => {
   await put(userDir, 'start-issue', '着手する前に確かめる')
   await put(userDir, 'sync-main', 'ユーザー側の同名')
   await put(join(cwd, PROJECT_SKILLS_DIR), 'sync-main', 'main worktree を最新にする')
+  // Codex の置き場（#402）。`.codex/skills/` と `.agents/skills/` の両方
+  await put(join(cwd, CODEX_PROJECT_SKILLS_DIRS[0]!), 'codex-only', '.codex/skills の分')
+  await put(join(cwd, CODEX_PROJECT_SKILLS_DIRS[0]!), 'both', '.codex/skills の同名')
+  await put(join(cwd, CODEX_PROJECT_SKILLS_DIRS[1]!), 'both', '.agents/skills の同名')
+  await put(join(cwd, CODEX_PROJECT_SKILLS_DIRS[1]!), 'agents-only', '.agents/skills の分')
   // SKILL.md が無いディレクトリと隠しディレクトリは飛ばす
   await mkdir(join(userDir, 'not-a-skill'), { recursive: true })
   await mkdir(join(userDir, '.hidden'), { recursive: true })
@@ -62,4 +67,23 @@ test('ユーザーのディレクトリが無ければ空。スキルを足す�
   assert.equal((await store.forCwd('')).length, 3)
   await put(userDir, 'pr-status', 'PR の状態')
   assert.equal((await store.forCwd('')).length, 4, 'ディレクトリの mtime が変わるので読み直す')
+})
+
+test('Codex は .codex/skills と .agents/skills だけを読む（.claude/skills もユーザー側も見ない）', async () => {
+  const store = new SkillStore(userDir)
+  const skills = await store.forCwd(cwd, 'codex')
+  assert.deepEqual(
+    skills.map((s) => [s.name, s.source]),
+    [
+      ['both', 'project'],
+      ['codex-only', 'project'],
+      ['agents-only', 'project'],
+    ],
+    '.codex/skills が先で、同じ名前はそちらが勝つ',
+  )
+  assert.equal(skills.find((s) => s.name === 'both')?.description, '.codex/skills の同名')
+  assert.equal(skills.some((s) => s.name === 'sync-main'), false, 'Codex は .claude/skills を読まない')
+  assert.equal(skills.some((s) => s.name === 'issue-triage'), false, 'cwd に依らない分は app-server から取るのでここでは出さない')
+  assert.deepEqual(await store.forCwd('', 'codex'), [], 'cwd が空なら空')
+  assert.deepEqual(await store.forCwd(join(dir, 'nowhere'), 'codex'), [], '置き場が無ければ空')
 })

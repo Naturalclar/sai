@@ -14,6 +14,7 @@ import { META_FILE, MetaStore } from './meta/meta.ts'
 import type { Summarizer } from './digest/digest.ts'
 import { FeedStore } from './rows/store.ts'
 import { SkillStore } from './local/skills.ts'
+import type { Skill } from '../shared/skills.ts'
 import { UsageStore } from './local/usage.ts'
 import { ProgressReader } from './local/progress.ts'
 import { claudeProjectName } from '../shared/progress.ts'
@@ -78,6 +79,12 @@ class FakeCodexApp implements CodexApp {
     if (this.fail) throw this.fail
     this.started.push(input)
   }
+  /** app-server の `skills/list` から来る分（cwd に依らないもの）。#402 */
+  skillList: Skill[] = [
+    { name: 'browser:control-in-app-browser', description: 'ブラウザを操作する', source: 'user' },
+    { name: 'codex-only', description: 'app-server 側の同名', source: 'user' },
+  ]
+  async skills() { return this.skillList }
   answer(approvalId: string, answer: ApprovalAnswer) {
     const approval = this.getApproval(approvalId)
     if (!approval) return { ok: false as const, status: 404 as const, error: 'approval not found' }
@@ -158,6 +165,9 @@ before(async () => {
   await writeFile(join(dir, 'skills', 'issue-triage', 'SKILL.md'), '---\nname: issue-triage\ndescription: issueの優先度をつけて\n---\n')
   await mkdir(join(dir, '.claude', 'skills', 'sync-main'), { recursive: true })
   await writeFile(join(dir, '.claude', 'skills', 'sync-main', 'SKILL.md'), '---\nname: sync-main\ndescription: main を最新にする\n---\n')
+  // Codex は置き場が違う（#402）。`.claude/skills` は読まず、`.codex/skills` と `.agents/skills` を読む
+  await mkdir(join(dir, '.codex', 'skills', 'codex-only'), { recursive: true })
+  await writeFile(join(dir, '.codex', 'skills', 'codex-only', 'SKILL.md'), '---\nname: codex-only\ndescription: このリポジトリの分\n---\n')
   const terminal = {
     tmux: { run: async () => { throw new Error('unused') } },
     ps: async () => '',
@@ -1791,7 +1801,7 @@ test('GET /api/sessions は record_version を返す（fixture は v 無し = 1�
   assert.equal(data.record_version, 1)
 })
 
-test('GET /api/sessions/<id>/skills: プロジェクトを先に、Codex には出さない', async () => {
+test('GET /api/sessions/<id>/skills: プロジェクトを先に、Codex は置き場 + app-server', async () => {
   const res = await get('/api/sessions/C1%40r/skills')
   assert.equal(res.status, 200)
   const data = (await res.json()) as SessionSkillsResponse
@@ -1804,8 +1814,16 @@ test('GET /api/sessions/<id>/skills: プロジェクトを先に、Codex には�
     ],
     'cwd の .claude/skills が先、同じ名前はプロジェクトが勝つ',
   )
-  // Codex にスキルの仕組みは無い
-  assert.deepEqual(((await (await get('/api/sessions/X1%40r/skills')).json()) as SessionSkillsResponse).skills, [])
+  // Codex（#402）: cwd の `.codex/skills` を先に、app-server の `skills/list` の分を後ろに。同じ名前はリポジトリ側が勝つ
+  const codex = (await (await get('/api/sessions/X1%40r/skills')).json()) as SessionSkillsResponse
+  assert.deepEqual(
+    codex.skills.map((s) => [s.name, s.source, s.description]),
+    [
+      ['codex-only', 'project', 'このリポジトリの分'],
+      ['browser:control-in-app-browser', 'user', 'ブラウザを操作する'],
+    ],
+  )
+  assert.equal(codex.skills.some((s) => s.name === 'sync-main'), false, 'Codex に Claude の置き場は出さない')
   assert.equal((await get('/api/sessions/nope%40x/skills')).status, 404)
   assert.equal((await fetch(base + '/api/sessions/C1%40r/skills', { method: 'POST' })).status, 405)
 })

@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import type { Approval, ApprovalAnswer, ApprovalMap, ReplyingMap } from '../../shared/types.ts'
+import { parseCodexSkills, type Skill } from '../../shared/skills.ts'
 import { childEnv, splitArgs } from './runner.ts'
 
 type RpcId = string | number
@@ -58,6 +59,12 @@ export interface CodexApp {
    * 自分が持っているスレッドへの次の返信を queue に回してしまう（#329）。偽物は持たなくてよい
    */
   holds?(threadId: string): boolean
+  /**
+   * `/` の候補にする Codex のスキル（#402）。**cwd に依らない分だけ**（`skills/list` は app-server を起こした場所の
+   * リポジトリのスキルも返すが、それはこのセッションのものではないので `parseCodexSkills()` が落とす）。
+   * 偽物は持たなくてよい（持たなければ Codex の候補はリポジトリ側だけになる）
+   */
+  skills?(): Promise<Skill[]>
 }
 
 interface ManagedTurn {
@@ -92,6 +99,8 @@ interface WaitingRpc {
 }
 
 const REQUEST_TIMEOUT_MS = 30_000
+/** スキルの一覧を覚えておく長さ。`/` を打つたびに app-server へ聞きに行かないため（増減は次に打った時に拾う） */
+const SKILLS_TTL_MS = 60_000
 const keyOf = (id: RpcId) => `${typeof id}:${String(id)}`
 const object = (value: unknown): JsonObject | null =>
   value !== null && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : null
@@ -187,6 +196,7 @@ export class CodexAppServer implements CodexApp {
   private turnEndListeners: ((id: string) => void)[] = []
   /** この接続で thread/resume したスレッド。ターンが終わっても app-server は読み込んだまま（writer lock を開いたまま）なので、切断・thread/closed まで持つ */
   private loaded = new Set<string>()
+  private skillsCache: { at: number; skills: Skill[] } | null = null
   private readonly connect: CodexConnector
   private readonly now: () => number
 
@@ -201,6 +211,23 @@ export class CodexAppServer implements CodexApp {
 
   holds(threadId: string): boolean {
     return this.loaded.has(threadId)
+  }
+
+  /**
+   * Codex のスキルの一覧。`skills/list` にパラメータは要らない（v0.154.0 で実測）。
+   * 取れなければ空を返す（`/` の候補が出ないだけで、返信は止めない）。
+   */
+  async skills(): Promise<Skill[]> {
+    const hit = this.skillsCache
+    if (hit && this.now() - hit.at < SKILLS_TTL_MS) return hit.skills
+    let skills: Skill[] = []
+    try {
+      skills = parseCodexSkills(await this.request('skills/list', {}))
+    } catch {
+      return hit?.skills ?? []
+    }
+    this.skillsCache = { at: this.now(), skills }
+    return skills
   }
 
   onTurnEnd(listener: (id: string) => void): void {

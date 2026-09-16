@@ -113,6 +113,7 @@ import { handleRpc, protocolVersionOk, textResult } from './mcp/protocol.ts'
 import type { McpTool } from './mcp/protocol.ts'
 import { McpSendLimiter } from './mcp/sendLimit.ts'
 import { SkillStore } from './local/skills.ts'
+import type { Skill } from '../shared/skills.ts'
 import { claudeProjectsDir, codexSessionsDir, UsageStore } from './local/usage.ts'
 import { ProgressReader } from './local/progress.ts'
 import { isRemoteHost } from '../shared/host.ts'
@@ -380,6 +381,21 @@ export function createApp(
   const opencodeServerEnabled = process.env.SAI_OPENCODE_SERVER !== '0'
   const terminalEnabled = process.env.SAI_TERMINAL !== '0'
   /** 一番新しい行に pane と pid があり、pid が生きていれば端末で開いている */
+  /**
+   * `/` の候補になるスキル（#402）。Claude は今までどおり置き場から。
+   * Codex は**リポジトリ側を cwd から読み**（`.codex/skills/` と `.agents/skills/`）、
+   * cwd に依らない分（`$CODEX_HOME/skills/`・プラグイン・組み込み）を app-server の `skills/list` から足す。
+   * 同じ名前ならリポジトリ側が勝つ。OpenCode と Grok にはスキルの仕組みが無いので空
+   */
+  const sessionSkills = async (s: SessionSummary): Promise<Skill[]> => {
+    if (s.agent === 'claude') return await skillStore.forCwd(s.cwd)
+    if (s.agent !== 'codex') return []
+    const repo = await skillStore.forCwd(s.cwd, 'codex')
+    if (!codexAppEnabled) return repo
+    const seen = new Set(repo.map((skill) => skill.name))
+    return [...repo, ...(await codexApp.skills?.() ?? []).filter((skill) => !seen.has(skill.name))]
+  }
+
   const terminalOf = (s: SessionSummary) => (terminalEnabled && s.pane && s.pid && isAlive(s.pid) ? { pane: s.pane, pid: s.pid } : null)
   /**
    * 端末に打ち込んだ・queue に渡した返信のターンが、送った時刻より後に始まったか（#329。`TerminalReplies.checkDelivery()` が 2 分後に聞く）。
@@ -1803,8 +1819,7 @@ export function createApp(
         const { sessions } = await store.sessions(parseDays(q.get('days'), 90))
         const session = sessions.find((s) => s.id === id)
         if (!session) return error(res, 404, 'session not found in window')
-        // スキルは Claude Code の仕組み。Codex には無いので空で返す
-        const payload: SessionSkillsResponse = { id, skills: session.agent === 'claude' ? await skillStore.forCwd(session.cwd) : [] }
+        const payload: SessionSkillsResponse = { id, skills: await sessionSkills(session) }
         return json(res, payload)
       }
       if (isIcon) {

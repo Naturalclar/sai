@@ -7,12 +7,20 @@ type Message = Record<string, unknown> & { id?: string | number; method?: string
 
 class FakeConnection implements CodexConnection {
   sent: Message[] = []
+  /** `skills/list` の応答（#402）。null ならエラーを返す */
+  skillsResult: unknown = { data: [] }
   private messages: ((message: Message) => void)[] = []
   private closes: ((error?: Error) => void)[] = []
 
   send(message: Message): void {
     this.sent.push(message)
     if (message.id === undefined || !message.method) return
+    if (message.method === 'skills/list') {
+      const id = message.id
+      const result = this.skillsResult
+      queueMicrotask(() => this.emit(result === null ? { id, error: { message: '読めない' } } : { id, result }))
+      return
+    }
     const result = message.method === 'turn/start'
       ? { turn: { id: 'turn-1' } }
       : message.method === 'thread/resume'
@@ -171,4 +179,34 @@ test('holds: thread/resume したスレッドは、ターンが終わっても t
   assert.equal(app.holds('thread-1'), true)
   connection.disconnect()
   assert.equal(app.holds('thread-1'), false, '切断したら持っていない')
+})
+
+test('skills: skills/list を 60 秒覚える。取れなければ空で返す（#402）', async () => {
+  const connection = new FakeConnection()
+  let now = Date.parse('2026-09-09T12:00:00Z')
+  const app = new CodexAppServer(async () => connection, () => now)
+  connection.skillsResult = {
+    data: [{
+      cwd: '/srv',
+      skills: [
+        { name: 'imagegen', description: '画像を作る', scope: 'system', enabled: true },
+        { name: 'repo-one', description: 'サーバの cwd の分', scope: 'repo', enabled: true },
+      ],
+    }],
+  }
+  assert.deepEqual((await app.skills()).map((s) => s.name), ['imagegen'], 'scope が repo の分は落とす')
+  const asked = () => connection.sent.filter((m) => m.method === 'skills/list').length
+  assert.equal(asked(), 1)
+  assert.deepEqual((await app.skills()).map((s) => s.name), ['imagegen'])
+  assert.equal(asked(), 1, '60 秒のうちは聞き直さない')
+  now += 61_000
+  connection.skillsResult = { data: [{ cwd: '/srv', skills: [{ name: 'imagegen', description: '画像を作る', scope: 'system', enabled: true }, { name: 'pdf:fill', description: '増えた分', scope: 'user', enabled: true }] }] }
+  assert.deepEqual((await app.skills()).map((s) => s.name), ['imagegen', 'pdf:fill'], '過ぎたら聞き直す')
+  assert.equal(asked(), 2)
+
+  now += 61_000
+  connection.skillsResult = null
+  assert.deepEqual((await app.skills()).map((s) => s.name), ['imagegen', 'pdf:fill'], '取れなければ覚えている分を返す')
+  const fresh = new CodexAppServer(async () => { const c = new FakeConnection(); c.skillsResult = null; return c }, () => now)
+  assert.deepEqual(await fresh.skills(), [], '一度も取れていなければ空（返信は止めない）')
 })

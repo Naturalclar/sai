@@ -60,6 +60,8 @@ import { codexQueueCommand, codexWriterActive, runCodexQueue } from './reply/cod
 import type { CodexQueue } from './reply/codex.ts'
 import { CodexAppServer } from './reply/codexAppServer.ts'
 import type { CodexApp } from './reply/codexAppServer.ts'
+import { OpencodeServer } from './reply/opencodeServer.ts'
+import type { OpencodeApp } from './reply/opencodeServer.ts'
 import { approvalMapKey, CodexDialogs, mergeApprovalMaps } from './reply/codexDialogs.ts'
 import { clearSettled, settledKey, WaitingSettle } from './reply/waitingSettle.ts'
 import type { WaitingSettleSource } from './reply/waitingSettle.ts'
@@ -338,6 +340,8 @@ export interface TerminalDeps {
   codexDialogs?: CodexDialogSource
   /** SAIから開始するCodex turnのapp-server client。テストでは差し替える */
   codexApp?: CodexApp
+  /** OpenCode への返信を送る `opencode serve` の client（#382）。テストでは差し替える */
+  opencodeApp?: OpencodeApp
   /** 端末で答えたぶんの待ちを畳む（#255）。テストでは差し替える */
   waitingSettle?: WaitingSettleSource
 }
@@ -369,8 +373,11 @@ export function createApp(
   const queueCodex = terminal.codexQueue ?? runCodexQueue
   const codexDialogs = terminal.codexDialogs ?? new CodexDialogs(terminal.tmux, terminal.ps)
   const codexApp = terminal.codexApp ?? new CodexAppServer()
+  const opencodeApp = terminal.opencodeApp ?? new OpencodeServer()
   const waitingSettle = terminal.waitingSettle ?? new WaitingSettle(terminal.tmux, terminal.ps)
   const codexAppEnabled = process.env.SAI_CODEX_APP_SERVER !== '0'
+  // OpenCode は `opencode serve` の HTTP に送る（#382）。`0` で今までどおり `opencode run -s` に戻す
+  const opencodeServerEnabled = process.env.SAI_OPENCODE_SERVER !== '0'
   const terminalEnabled = process.env.SAI_TERMINAL !== '0'
   /** 一番新しい行に pane と pid があり、pid が生きていれば端末で開いている */
   const terminalOf = (s: SessionSummary) => (terminalEnabled && s.pane && s.pid && isAlive(s.pid) ? { pane: s.pane, pid: s.pid } : null)
@@ -402,7 +409,9 @@ export function createApp(
     // 当てるのは OpenCode だけ（Claude の `-p` と SAI 管理の Codex は普通に終わるので、挙動を変えない）
     for (const id of run.settle?.((rid) => opencodeTurnOf(sessions, rid)) ?? []) await drain(id)
     await typed.checkDelivery((id, since) => typedStarted(sessions, id, since))
-    return { ...typed.snapshot(), ...run.snapshot(), ...codexApp.replying() }
+    // OpenCode のサーバ経路も、行が届いた時点で終わりにする（子プロセスが無いので exit は来ない。#382）
+    for (const id of opencodeApp.settle((rid) => opencodeTurnOf(sessions, rid))) await drain(id)
+    return { ...typed.snapshot(), ...run.snapshot(), ...codexApp.replying(), ...opencodeApp.replying() }
   }
   // 処理中の返信は replying.json にも持ち、サーバを再起動しても生きている分を引き取る（#100）
   const run: Runner = runner ?? new ProcessRunner(join(store.directory, 'reply.log'), join(store.directory, 'replying.json'))
@@ -766,7 +775,7 @@ export function createApp(
     }
     const openTerminal = terminalOf(session)
     // 別プロセス（-p / app-server）のターンが動いているか、いま起動している最中か
-    const busy = run.running(id) || codexApp.running(id) || launching.has(id)
+    const busy = run.running(id) || codexApp.running(id) || opencodeApp.running(id) || launching.has(id)
     // 処理中なら預かる（#305）。処理中でなくても預かりが残っていれば後ろに並べる（先に預けたものを追い越さない）
     if (o.queue && (busy || queue.size(id) > 0)) {
       const item = queue.add(id, text, attachments, o.url, new Date(), o.origin ?? '')
@@ -880,6 +889,24 @@ export function createApp(
       const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd, via: 'app-server' }
       return { status: 202, body: payload }
     }
+    // OpenCode は長寿命の `opencode serve` へ HTTP で送る（#382）。`opencode run -s` と違って、ワンショットの
+    // プロセスを起こさないので **答えを返しても終わらない子**（#375）が出ず、許可も自動 reject されない（#273）。
+    // セッションは ID だけで引け、**そのセッションの cwd で走る**ので、worktree ごとにサーバを起こさなくてよい
+    if (session.agent === 'opencode' && opencodeServerEnabled) {
+      const log = join(store.directory, 'reply.log')
+      await appendFile(log, `--- ${new Date().toISOString()} ${id} opencode serve へ送る（prompt_async） (cwd ${cwd})\n`).catch(() => {})
+      try {
+        await opencodeApp.start({ id, session: raw, text, model, attachments })
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code
+        const hint = code === 'ENOENT' ? 'opencode が見つかりません（サーバを起動した環境の PATH に opencode があるか確かめてください）' : ''
+        const message = hint || `opencode serve に送れませんでした: ${err instanceof Error ? err.message : String(err)}`
+        await appendFile(log, `${message}\n`).catch(() => {})
+        return refuse(500, message)
+      }
+      const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd, via: 'app-server' }
+      return { status: 202, body: payload }
+    }
     // 許可・質問を画面で答える配線。MCP の子プロセスはこのサーバと同じマシンで動くので、宛先はブラウザが来た Host ではなく
     // このサーバ自身が待ち受けているアドレス（ループバック）。Host だと tailscale serve 経由（https://<host>.ts.net → 127.0.0.1:8787）で
     // 開いた画面からの返信が `http://<host>.ts.net`（80 番、誰も聞いていない）に投げて「SAI に届かない: fetch failed」になる
@@ -915,7 +942,7 @@ export function createApp(
   const drain = async (id: string): Promise<void> => {
     const head = queue.peek(id)
     if (!head || queue.paused(id) || draining.has(id)) return
-    if (run.running(id) || codexApp.running(id) || launching.has(id)) return
+    if (run.running(id) || codexApp.running(id) || opencodeApp.running(id) || launching.has(id)) return
     draining.add(id)
     try {
       const last = run.snapshot()[id]
@@ -1004,7 +1031,7 @@ export function createApp(
     if (refusal) return error(res, 403, refusal)
     const found = await agentFrom(q.get('from'))
     if (typeof found === 'string') return error(res, 409, found)
-    const busy = (id: string) => run.running(id) || codexApp.running(id) || typed.running(id)
+    const busy = (id: string) => run.running(id) || codexApp.running(id) || opencodeApp.running(id) || typed.running(id)
     const targets = agentTargets(found.sessions, found.session, selfHost())
     // 相手が読み直す量（直近の呼び出しの入力）。transcript の末尾を読むだけで、(mtime, size) が同じなら組み直さない（#311）
     const sizes = await Promise.all(targets.map(async (s) => (await progress.read(s)).context_tokens))
@@ -1161,7 +1188,7 @@ export function createApp(
   const MAX_MCP_BYTES = 256 * 1024
   /** tailnet の MCP から来たメッセージの送り元（sai_wait で本人を確かめる鍵）。セッションの id と混ざらない形 */
   const mcpFrom = (access: McpAccess) => `mcp:${access.caller}`
-  const mcpBusy = (id: string) => run.running(id) || codexApp.running(id) || typed.running(id)
+  const mcpBusy = (id: string) => run.running(id) || codexApp.running(id) || opencodeApp.running(id) || typed.running(id)
   const mcpStr = (v: unknown) => (typeof v === 'string' ? v : '')
   const mcpNum = (v: unknown, fallback: number, min: number, max: number) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(max, Math.max(min, Math.floor(v))) : fallback)
 

@@ -60,6 +60,9 @@ clone したところで Claude Code を開いているなら、**`/setup-sai`**
     ],
     "UserPromptSubmit": [
       { "hooks": [ { "type": "command", "command": "python3 \"$SAI_HOME/feed/record.py\" || true" } ] }
+    ],
+    "SessionEnd": [
+      { "hooks": [ { "type": "command", "command": "python3 \"$SAI_HOME/feed/record.py\" || true" } ] }
     ]
   }
 }
@@ -68,13 +71,14 @@ clone したところで Claude Code を開いているなら、**`/setup-sai`**
 - `env` の値はセッションとそのサブプロセスに渡るので、フックのコマンドからも `$SAI_HOME` で見える。フックのコマンドはシェル（`sh -c`）で動くので変数はそのまま展開される。シェルの rc で `export SAI_HOME=...` しておいても同じ
 - `|| true` は保険。`SAI_HOME` が未設定・間違いだと `python3` がファイルを見つけられず exit 2 になり、`Stop` フックの exit 2 は「Claude を止めない」の意味なので、付けないとターンが終われなくなる。`record.py` 自身は常に exit 0 なので、これで潰れるのはパスの間違いだけ
 
-`Stop` だけでもターンは記録される。`UserPromptSubmit` は入力した瞬間に自分の入力をチャットに出すためのもの。残りは**人を待って止まったとき**に「何を待っているか」を出すためのもの:
+`Stop` だけでもターンは記録される。`UserPromptSubmit` は入力した瞬間に自分の入力をチャットに出すためのもの、`SessionEnd` は会話の切れ目を出すためのもの。残りは**人を待って止まったとき**に「何を待っているか」を出すためのもの:
 
 | フック | いつ鳴るか | 行にするもの |
 | --- | --- | --- |
 | `PermissionRequest` | ツール実行の許可ダイアログが出た瞬間 | `許可待ち: Bash: rm -rf node_modules` のように、ツール名と入力の要約 |
 | `PreToolUse`（`AskUserQuestion` / `ExitPlanMode` だけ） | 質問・プランの承認を求めた | `質問: どのフレームワーク?` / `プランの承認待ち: <先頭3行>`。他のツールで鳴っても何も書かない |
 | `Notification` | 入力待ちなどが 6〜60 秒続いた | `入力待ち` など型ごとの日本語。`permission_prompt` は直前が許可待ちの行なら重ねない。`auth_success` や `agent_completed` のような待ちでない型は書かない |
+| `SessionEnd` | セッションが終わった | `セッション終了: 会話をリセット（/clear）` のように、なぜ終わったか。チャットには日付と同じ**区切り線**で出る。**`/clear` はここより前をエージェントが覚えていない**という印（会話は新しいセッション ID で続く）。`claude -p` が 1 回終わっただけのときとペインごと消したときは、どちらも区別の付かない `reason` で来るので書かない |
 | `UserPromptSubmit` | 人が入力した | `user_text` に打った文をそのまま載せた行（本文 `text` は無い）。ターン完了を待たずに自分側のバブルが出る。直前が待ちの行なら、その解消の合図にもなる。入力が取れなかったときは待ちの直後だけ合図として書く。バックグラウンドのタスク完了で Claude Code が差し込む `<task-notification>` でも鳴るが、人の入力ではないので載せない（同じく待ちの直後だけ合図） |
 
 `record.py` は待ちのフックで **stdout に何も出さない**（`decision` を出すと許可の判断そのものに触ってしまう）。許可するかどうかはいつも通り端末で答える。

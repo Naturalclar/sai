@@ -578,6 +578,43 @@ class RecordTest(unittest.TestCase):
             "プランの承認待ち: ## 認証を直す\n1. トークンの検証を足す\n2. テスト",
         ])
 
+    # -- 終了（#385。実機で確かめた reason: /clear → clear、/exit → prompt_input_exit、-p の 1 回とペインの kill → other）
+
+    def test_session_end_records_reason_and_not_the_last_answer(self):
+        result = self._hook(
+            {"hook_event_name": "SessionEnd", "reason": "clear"},
+            transcript=[
+                {"type": "user", "message": {"role": "user", "content": "最初の依頼"}},
+                {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "直前の返答"}]}},
+            ],
+        )
+        self.assertEqual(result.stdout, "")
+        rows = read_rows(self.feed_dir)
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["event"], "SessionEnd")
+        self.assertEqual(row["text"], "セッション終了: 会話をリセット（/clear）")
+        # transcript を読むと直前の返答がもう 1 行ぶん増えて、同じ発言が 2 回出る
+        self.assertNotIn("直前の返答", row["text"])
+        self.assertEqual(row["user_text"], "")
+        self.assertEqual(row["thinking"], "")
+        self.assertEqual(row["first_user_text"], "最初の依頼", "タイトル用の first_user_text は載せる")
+
+    def test_session_end_exit_and_logout(self):
+        self._hook({"hook_event_name": "SessionEnd", "reason": "prompt_input_exit"})
+        self._hook({"hook_event_name": "SessionEnd", "reason": "logout"})
+        self.assertEqual(
+            [r["text"] for r in read_rows(self.feed_dir)],
+            ["セッション終了: 終了（/exit）", "セッション終了: ログアウト"],
+        )
+
+    def test_session_end_other_records_nothing(self):
+        # `claude -p` が 1 回終わったときと、ペインごと殺したときの両方が other で来るので区別が付かない。
+        # SAI 自身の返信はすべて -p なので、書くと返信のたびに終了の行が増える
+        self._hook({"hook_event_name": "SessionEnd", "reason": "other"})
+        self._hook({"hook_event_name": "SessionEnd"})
+        self.assertEqual(read_rows(self.feed_dir), [])
+
     def test_pretooluse_for_other_tools_records_nothing(self):
         self._hook({"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "ls"}})
         self.assertEqual(read_rows(self.feed_dir), [])

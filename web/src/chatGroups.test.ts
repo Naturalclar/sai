@@ -165,3 +165,32 @@ test('speakerLabel: 自分は profile があればその名前とアイコン、
   // エージェント側は profile を見ない
   assert.equal(speakerLabel('claude', undefined, { name: 'Jesse' }).name, 'Claude Code')
 })
+
+// ---- #385: セッションが終わった行は、発言ではなく区切り線
+test('SessionEnd は ended の発言 1 つになり、本文は「なぜ終わったか」', () => {
+  const [u] = toUtterances([row(0, { event: 'SessionEnd', text: 'セッション終了: 会話をリセット（/clear）' })])
+  assert.equal(u?.ended, true)
+  assert.equal(u?.text, 'セッション終了: 会話をリセット（/clear）')
+  assert.equal(u?.waiting, undefined, '待ちバブルではない')
+})
+
+test('SessionEnd は自分の塊を作り、前後の発言と混ざらない', () => {
+  const groups = groupRows([
+    row(0, { text: '前の返答' }),
+    row(1, { event: 'SessionEnd', text: 'セッション終了: 会話をリセット（/clear）' }),
+    row(2, { text: '後の返答' }),
+  ])
+  const [day] = groups
+  assert.equal(day?.groups.length, 3, '同じ発言者・10 分以内でも、区切りを挟んだら別の塊')
+  assert.equal(day?.groups[0]?.divider, undefined)
+  assert.equal(day?.groups[1]?.divider, true)
+  assert.equal(day?.groups[1]?.items.length, 1)
+  assert.equal(day?.groups[2]?.divider, undefined)
+  assert.equal(day?.groups[2]?.items[0]?.text, '後の返答')
+})
+
+test('SessionEnd の行に user_text が載っていても、自分の発言は作らない', () => {
+  const out = toUtterances([row(0, { event: 'SessionEnd', text: 'セッション終了: 終了（/exit）', user_text: '前の指示' })])
+  assert.equal(out.length, 1)
+  assert.equal(out[0]?.ended, true)
+})

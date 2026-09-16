@@ -136,7 +136,7 @@ export function usageByRow(rows: FeedRow[], entries: TurnUsageEntry[], windowMs 
   // エンティティごとに、ターン完了の行だけを古い順に
   const byEntity = new Map<string, { at: number; row: FeedRow }[]>()
   for (const row of rows) {
-    if (eventKind(row.event) !== 'turn') continue
+    if (eventKind(row.event, row.text) !== 'turn') continue
     const at = ms(row.ts)
     if (Number.isNaN(at)) continue
     const id = entityId(row.session ?? '', row.repo ?? '', row.ts)

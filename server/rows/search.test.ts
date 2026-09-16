@@ -28,6 +28,7 @@ function summary(over: Partial<SessionSummary>): SessionSummary {
     cwd: '',
     turns: 0,
     waiting: '',
+    idle: '',
     title: 'タイトル',
     title_full: '',
     session_source: 'payload',

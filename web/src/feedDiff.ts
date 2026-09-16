@@ -27,7 +27,7 @@ export function prStamps(rows: readonly FeedRow[], selfHost: string): Map<string
   const last = new Map<string, string>()
   const mentioned = new Set<string>()
   for (const r of rows) {
-    if (eventKind(r.event) !== 'turn' || !r.session || isRemoteHost(r.host, selfHost)) continue
+    if (eventKind(r.event, r.text) !== 'turn' || !r.session || isRemoteHost(r.host, selfHost)) continue
     const id = entityId(r.session, r.repo, r.ts)
     if ((last.get(id) ?? '') < r.ts) last.set(id, r.ts)
     if (!mentioned.has(id) && [...refsIn(r.text ?? '', r.remote)].some((key) => key.startsWith('#'))) mentioned.add(id)

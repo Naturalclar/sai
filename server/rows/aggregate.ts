@@ -100,16 +100,20 @@ export function aggregate(rows: FeedRow[]): SessionSummary[] {
 
     const titleFull = sessionTitle(items)
     // ターンはターン完了の行だけ。待ち（PermissionRequest など）と再開（UserPromptSubmit）は数えないし、最後の発言にもしない
-    const turnRows = items.filter((r) => eventKind(r.event) === 'turn')
+    const turnRows = items.filter((r) => eventKind(r.event, r.text) === 'turn')
     const lastTurn = turnRows[turnRows.length - 1]
     // 一番新しい自分の入力（#300）。Claude は入力した瞬間の行（再開）に、どのエージェントもターン完了の行に載る。
     // 一覧の 2 行目で、最後に言ったのが自分かを決めるのに使う（ターン完了より新しければ自分の返信）
     const lastInput = [...items].reverse().find((r) => {
-      const kind = eventKind(r.event)
+      const kind = eventKind(r.event, r.text)
       return (kind === 'turn' || kind === 'resume') && r.user_text?.trim()
     })
     // 最後の行が待ちなら、まだ人を待っている。後にターン完了か再開が来ていれば解消
-    const waiting = eventKind(last.event) === 'waiting' ? (last.text ?? '') : ''
+    const lastKind = eventKind(last.event, last.text)
+    const waiting = lastKind === 'waiting' ? (last.text ?? '') : ''
+    // 終わって放置されているだけ（#438）。**`waiting` には入れない**——詰まっているのと同じ重さで
+    // 「要対応」に出すと、本当に答えを待っているものが埋もれる
+    const idle = lastKind === 'idle' ? (last.text ?? '') : ''
     // モデルはターン完了の行だけが持つ。途中で変わっていれば全部（出てきた順）、表示は一番新しい行のもの
     // どのマシンで記録されたか（#114）。載せない古い行は空のまま数えない（自分のマシン扱い）
     const hosts = orderedUnique(items.map((r) => (r.host ?? '').trim()).filter(Boolean))
@@ -139,6 +143,7 @@ export function aggregate(rows: FeedRow[]): SessionSummary[] {
       cwd: last.cwd ?? '',
       turns: turnRows.length,
       waiting,
+      idle,
       title: clip(titleFull, TITLE_LEN),
       title_full: clip(titleFull, TITLE_FULL_LEN),
       // 合成（synth）が 1 本でもあれば synth（返信できない方に倒す）。それ以外は値のある一番新しい行の出どころ

@@ -57,7 +57,7 @@ export function isDeliveryOf(userText: string | undefined, messageId: string): b
 /** 相手の返答になる行（そのメッセージで回った、相手のターン完了の行）。まだ無ければ null */
 export function replyOf(rows: readonly FeedRow[], to: string, messageId: string): FeedRow | null {
   for (const r of rows) {
-    if (eventKind(r.event) !== 'turn') continue
+    if (eventKind(r.event, r.text) !== 'turn') continue
     if (entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) !== to) continue
     if (isDeliveryOf(r.user_text, messageId)) return r
   }

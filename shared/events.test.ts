@@ -3,40 +3,62 @@ import assert from 'node:assert/strict'
 import { eventKind } from './events.ts'
 
 test('eventKind: ターン完了は名指し（Claude の Stop、Codex の agent-turn-complete）', () => {
-  assert.equal(eventKind('Stop'), 'turn')
-  assert.equal(eventKind('agent-turn-complete'), 'turn')
+  assert.equal(eventKind('Stop', ''), 'turn')
+  assert.equal(eventKind('agent-turn-complete', ''), 'turn')
 })
 
 test('eventKind: OpenCode のイベント名（プラグインが載せる。#209）', () => {
-  assert.equal(eventKind('session.idle'), 'turn')
-  assert.equal(eventKind('permission.asked'), 'waiting')
-  assert.equal(eventKind('permission.replied'), 'resume')
+  assert.equal(eventKind('session.idle', ''), 'turn')
+  assert.equal(eventKind('permission.asked', ''), 'waiting')
+  assert.equal(eventKind('permission.replied', ''), 'resume')
   // 名前は OpenCode のイベント名そのままなので、渡していないものは other のまま
-  assert.equal(eventKind('session.updated'), 'other')
-  assert.equal(eventKind('message.part.updated'), 'other')
+  assert.equal(eventKind('session.updated', ''), 'other')
+  assert.equal(eventKind('message.part.updated', ''), 'other')
 })
 
 test('eventKind: unknown と空も turn（record.py の detect_event が今も返す）', () => {
   // hook_event_name も type も無いペイロードで detect_event() が返す値。古い行だけの話ではない
-  assert.equal(eventKind('unknown'), 'turn')
-  assert.equal(eventKind(''), 'turn')
-  assert.equal(eventKind(undefined), 'turn')
+  assert.equal(eventKind('unknown', ''), 'turn')
+  assert.equal(eventKind('', ''), 'turn')
+  assert.equal(eventKind(undefined, ''), 'turn')
 })
 
 test('eventKind: 人を待って止まった行', () => {
-  assert.equal(eventKind('PermissionRequest'), 'waiting')
-  assert.equal(eventKind('PreToolUse'), 'waiting')
-  assert.equal(eventKind('Notification'), 'waiting')
+  assert.equal(eventKind('PermissionRequest', ''), 'waiting')
+  assert.equal(eventKind('PreToolUse', ''), 'waiting')
+  assert.equal(eventKind('Notification', ''), 'waiting')
+  assert.equal(eventKind('Notification', '許可待ち: Bash: ls'), 'waiting')
+  assert.equal(eventKind('PreToolUse', '質問: どっちにする'), 'waiting')
+  assert.equal(eventKind('permission.asked', '許可待ち: edit'), 'waiting')
+})
+
+test('eventKind: 終わって放置されているだけの Notification は idle（#438）', () => {
+  assert.equal(eventKind('Notification', '入力待ち'), 'idle')
+  assert.equal(eventKind('Notification', '入力待ち（バックグラウンドのセッション）'), 'idle', 'agent_needs_input')
+})
+
+test('eventKind: 「入力待ち」で始まらない Notification は今までどおり waiting（#438）', () => {
+  // record.py の _WAITING_NOTIFICATIONS。答えないと進まないものを idle に落とさない
+  assert.equal(eventKind('Notification', 'MCP サーバーの入力待ち'), 'waiting', '「入力待ち」を含むが始まらない')
+  assert.equal(eventKind('Notification', 'ブラウザで開くのを待っている'), 'waiting')
+})
+
+test('eventKind: 入力待ちの text でも、Notification 以外は種類を変えない（#438）', () => {
+  // 判定は event と text の両方を見る。text だけで決めると、別のフックの行まで idle に落ちる
+  assert.equal(eventKind('Stop', '入力待ち'), 'turn')
+  assert.equal(eventKind('PermissionRequest', '入力待ち'), 'waiting')
+  assert.equal(eventKind('UserPromptSubmit', '入力待ち'), 'resume')
+  assert.equal(eventKind('SubagentStop', '入力待ち'), 'other')
 })
 
 test('eventKind: 人が入力した行', () => {
-  assert.equal(eventKind('UserPromptSubmit'), 'resume')
+  assert.equal(eventKind('UserPromptSubmit', ''), 'resume')
 })
 
 test('eventKind: セッションが終わった行（#385）', () => {
-  assert.equal(eventKind('SessionEnd'), 'end')
+  assert.equal(eventKind('SessionEnd', ''), 'end')
   // 始まりは書いていないので今までどおり other（#385 で書くのは終わりだけ）
-  assert.equal(eventKind('SessionStart'), 'other')
+  assert.equal(eventKind('SessionStart', ''), 'other')
 })
 
 /**
@@ -46,14 +68,14 @@ test('eventKind: セッションが終わった行（#385）', () => {
 test('eventKind: 知らない event は other（turn に落とさない。#235）', () => {
   // Claude のフック名。record.py を向ければそのまま行になる
   for (const e of ['SubagentStop', 'PreCompact', 'SessionStart', 'PostToolUse']) {
-    assert.equal(eventKind(e), 'other', e)
+    assert.equal(eventKind(e, ''), 'other', e)
   }
   // Codex の notify の type。README のラッパーは "$@" をそのまま渡す
   for (const e of ['session-configured', 'task-started', 'task-complete']) {
-    assert.equal(eventKind(e), 'other', e)
+    assert.equal(eventKind(e, ''), 'other', e)
   }
   // 将来のエージェント（#192）で増える分もここに落ちる
-  assert.equal(eventKind('gemini-turn-done'), 'other')
-  assert.equal(eventKind('  Stop  '), 'other', '前後の空白は詰めない（record.py は詰めて書く）')
-  assert.equal(eventKind('stop'), 'other', '大文字小文字は区別する')
+  assert.equal(eventKind('gemini-turn-done', ''), 'other')
+  assert.equal(eventKind('  Stop  ', ''), 'other', '前後の空白は詰めない（record.py は詰めて書く）')
+  assert.equal(eventKind('stop', ''), 'other', '大文字小文字は区別する')
 })

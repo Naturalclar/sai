@@ -91,6 +91,12 @@ export interface CodexApp {
    * 処理中・許可・ターンの終わりは普通のターンと同じ扱いになる。偽物は持たなくてよい
    */
   review?(input: CodexReviewInput): Promise<void>
+  /**
+   * 新しいスレッドを作って id を返す（#401。`thread/start`）。SAI の画面から Codex のセッションを始めるのに使う。
+   * **返る id がそのまま記録の `session` になる**ので、最初の行が届く前からエンティティ ID が決まる（実測）。
+   * 偽物は持たなくてよい
+   */
+  startThread?(cwd: string): Promise<string>
 }
 
 interface ManagedTurn {
@@ -222,6 +228,11 @@ export class CodexAppServer implements CodexApp {
   private turnEndListeners: ((id: string) => void)[] = []
   /** この接続で thread/resume したスレッド。ターンが終わっても app-server は読み込んだまま（writer lock を開いたまま）なので、切断・thread/closed まで持つ */
   private loaded = new Set<string>()
+  /**
+   * `thread/start` で作ったばかりで、まだ rollout の無いスレッド（#401）。
+   * この状態で `thread/resume` を投げると `no rollout found` で落ちる（実測）ので、最初のターンだけ飛ばす
+   */
+  private fresh = new Set<string>()
   private skillsCache: { at: number; skills: Skill[] } | null = null
   private readonly connect: CodexConnector
   private readonly now: () => number
@@ -321,6 +332,18 @@ export class CodexAppServer implements CodexApp {
   }
 
   /**
+   * 新しいスレッドを作る（#401）。`thread/start` に必須のパラメータは無く、`cwd` を渡すとその場所のスレッドになる。
+   * **ターンを 1 本回すまで rollout は書かれない**ので、ここで止めても記録には何も残らない
+   */
+  async startThread(cwd: string): Promise<string> {
+    const thread = object(object(await this.request('thread/start', { cwd }))?.thread)
+    const id = typeof thread?.id === 'string' ? thread.id : ''
+    if (!id) throw new Error('Codex app-serverのthread/start応答にthread idがありません')
+    this.fresh.add(id)
+    return id
+  }
+
+  /**
    * 差分のレビュー（#403）。`turn/start` の代わりに `review/start` を投げるだけで、あとは返信と同じ。
    * **レビューは Codex が子スレッドを作って走らせる**が、`turn/started` / `turn/completed` は
    * こちらのスレッドに届くので、処理中の扱いも終わりの片付けも普通のターンのままでよい（実測）
@@ -354,13 +377,16 @@ export class CodexAppServer implements CodexApp {
     this.turns.set(threadId, turn)
     this.entityThreads.set(entity, threadId)
     try {
-      await this.request('thread/resume', {
-        threadId,
-        cwd,
-        model: model ?? null,
-        approvalsReviewer: 'user',
-        excludeTurns: true,
-      })
+      // 作ったばかりのスレッド（#401）は rollout がまだ無く `thread/resume` が落ちるが、この接続がもう持っているので飛ばす
+      if (!this.fresh.delete(threadId)) {
+        await this.request('thread/resume', {
+          threadId,
+          cwd,
+          model: model ?? null,
+          approvalsReviewer: 'user',
+          excludeTurns: true,
+        })
+      }
       // ここから app-server が writer lock を開いている（ターンが終わっても閉じない。#329）
       this.loaded.add(threadId)
       const started = object(object(await send())?.turn)
@@ -620,6 +646,8 @@ export class CodexAppServer implements CodexApp {
     this.entityThreads.clear()
     // app-server ごと終わったので、どのスレッドも持っていない（lock のファイルは残ることがある。#329）
     this.loaded.clear()
+    // 作りかけのスレッドも消える（次の接続では `thread not found`）
+    this.fresh.clear()
     this.approvals.clear()
     this.items.clear()
     for (const entity of ended) this.turnEnded(entity)

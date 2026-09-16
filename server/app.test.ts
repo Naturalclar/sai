@@ -82,6 +82,13 @@ class FakeCodexApp implements CodexApp {
     if (this.fail) throw this.fail
     this.started.push(input)
   }
+  /** `thread/start` で作ったスレッド（#401）。作った順に id を配る */
+  threads: string[] = []
+  nextThread = 'T1'
+  async startThread(cwd: string) {
+    this.threads.push(cwd)
+    return this.nextThread
+  }
   /** app-server の `skills/list` から来る分（cwd に依らないもの）。#402 */
   skillList: Skill[] = [
     { name: 'browser:control-in-app-browser', description: 'ブラウザを操作する', source: 'user' },
@@ -782,6 +789,33 @@ test('POST /api/sessions/new: from のセッションの cwd で、ID を決め�
   // 2 回始めれば別のセッション（ID は毎回新しい）
   const again = (await (await postNew({ from: 'X1@r', text: 'もう 1 つ' })).json()) as NewSessionResponse
   assert.notEqual(again.session, data.session)
+})
+
+test('POST /api/sessions/new: Codex は thread/start の id で始める（#401）', async () => {
+  runner.started.length = 0
+  codexApp.threads.length = 0
+  codexApp.started.length = 0
+  codexApp.nextThread = '01a0a8a6-d487-73f2-a109-c9871018093a'
+  const res = await postNew({ from: 'X1@r', text: '  Codex で始めて  ', agent: 'codex', cwd: '/etc' })
+  assert.equal(res.status, 202)
+  const data = (await res.json()) as NewSessionResponse
+  assert.equal(data.agent, 'codex')
+  assert.equal(data.via, 'app-server')
+  assert.equal(data.session, codexApp.nextThread, 'thread/start が返した id がそのまま記録の session になる')
+  assert.equal(data.id, `${codexApp.nextThread}@r`)
+  assert.equal(data.cwd, dir)
+  assert.deepEqual(codexApp.threads, [dir], 'スレッドは from の cwd で作る（body の cwd は見ない）')
+  assert.deepEqual(codexApp.started.map((t) => [t.id, t.threadId, t.text, t.cwd]), [[data.id, codexApp.nextThread, 'Codex で始めて', dir]])
+  assert.equal(runner.started.length, 0, 'Claude は起動しない')
+})
+
+test('POST /api/sessions/new: 始められるのは claude か codex だけ（#401）', async () => {
+  runner.started.length = 0
+  codexApp.threads.length = 0
+  assert.equal((await postNew({ from: 'X1@r', text: 'x', agent: 'opencode' })).status, 400)
+  assert.equal((await postNew({ from: 'X1@r', text: 'x', agent: '' })).status, 400)
+  assert.deepEqual(codexApp.threads, [])
+  assert.equal(runner.started.length, 0)
 })
 
 test('POST /api/sessions/new: モデルと許可モードは検査してから、新しいセッションのメタとコマンドに入れる（#314）', async () => {

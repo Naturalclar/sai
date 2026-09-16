@@ -92,7 +92,7 @@ export function SessionList({ list, filters, setFilters, active, creating = fals
             キーボードで固定項目に移ったときは一番上まで見せたいので、pinnedRef はここ（一番上の項目）に付ける */}
         <a ref={pinnedRef} className={`item new${creating ? ' active' : ''}`} href="#/new">
           <span className="t">＋ 新しいセッション</span>
-          <span className="last">記録にある worktree で Claude を始める</span>
+          <span className="last">記録にある worktree で Claude / Codex を始める</span>
         </a>
         <a className={`item feed${active.kind === 'feed' && !creating ? ' active' : ''}`} href="#/feed">
           <span className="t">フィード</span>

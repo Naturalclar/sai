@@ -399,6 +399,12 @@ export interface Replying {
    */
   via?: 'terminal'
   /**
+   * いまこのターンを SAI から止められる（#384）。**SAI の app-server が回している Codex のターンだけ**に付く
+   * （`turn/interrupt` は自分が `thread/resume` したスレッドしか止められない）。画面はこれを見て
+   * 仮バブルに「止める」を出す。`claude -p` と OpenCode、端末に打ち込んだターンには付かない
+   */
+  interruptible?: true
+  /**
    * このターンを**起動したときに** SAI の設定から付けた許可モード（#272）。`''` はフラグを付けなかった（CLI の既定）。
    * 省略は「分からない」（端末に打ち込んだ返信・Codex / OpenCode・この項目より前のサーバが書いた replying.json）。
    *

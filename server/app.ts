@@ -172,6 +172,10 @@ const AGENT_SEND_PATH = '/api/agent/send'
 const AGENT_WAIT_PATH = '/api/agent/wait'
 /** sai_wait をサーバ側で待つ間、相手の返答の行が届いたかを見る間隔 */
 const AGENT_POLL_MS = 1000
+/** 処理中のターンを止める口（#384）。`POST /api/sessions/<id>/interrupt`。同一オリジンのみ */
+const INTERRUPT_SUFFIX = '/interrupt'
+/** 止めたあと、預かりを自動で回さないでおく理由（画面の `QueuedBubble` に出て、「続けて送る」で人が回す） */
+const INTERRUPT_PAUSE = '前のターンを止めたので、預かった返信は止めています。続けるなら「続けて送る」'
 /** 人が画面から送信を止める・再開する口（#311）。`POST /api/sessions/<id>/agent/stop`・`.../agent/resume`。同一オリジンのみ */
 const AGENT_STOP_SUFFIX = '/agent/stop'
 const AGENT_RESUME_SUFFIX = '/agent/resume'
@@ -1014,6 +1018,46 @@ export function createApp(
     return json(res, payload)
   }
 
+  /**
+   * `POST /api/sessions/<id>/interrupt`（#384）。処理中のターンを止める。同一オリジンのみ（返信と同じ理由）。
+   *
+   * 止められるのは **SAI の app-server が回している Codex のターンだけ**（`turn/interrupt` は自分が
+   * `thread/resume` したスレッドしか止められない。端末で人が回している Codex には手が出ない）。
+   * `claude -p` と OpenCode には当たる口が無いので 400。
+   *
+   * **投げる前に預かりを止める**（#305 の「前の返信が失敗したら回さない」と同じ形）。止めると app-server から
+   * `turn/completed` が届き、それが `onTurnEnd` → `drain()` に繋がっているので、止めた直後に次の預かりが走ってしまう。
+   * 人が「続けて送る」を押したときだけ回す
+   */
+  const interrupt = async (req: IncomingMessage, res: ServerResponse, id: string) => {
+    if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
+    if (!codexApp.interrupt) return error(res, 400, '止められるのは SAI が起こした Codex のターンだけです')
+    if (!codexApp.running(id)) {
+      const busy = run.running(id) || opencodeApp.running(id) || typed.running(id)
+      if (busy) return error(res, 400, '止められるのは SAI が起こした Codex のターンだけです')
+      return error(res, 409, 'このセッションは処理中ではありません')
+    }
+    // 先に止める（await のあとに止めると、その間に届いた turn/completed が預かりを回しうる）
+    const wasPaused = queue.paused(id)
+    queue.pause(id, INTERRUPT_PAUSE)
+    let stopped = false
+    try {
+      stopped = await codexApp.interrupt(id)
+    } catch (err) {
+      if (wasPaused) queue.pause(id, wasPaused)
+      else queue.resume(id)
+      return error(res, 502, err instanceof Error ? err.message : String(err))
+    }
+    if (!stopped) {
+      if (wasPaused) queue.pause(id, wasPaused)
+      else queue.resume(id)
+      return error(res, 409, 'このターンはまだ止められません（起動した直後です）')
+    }
+    await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} 人が処理中のターンを止めた（#384）\n`).catch(() => {})
+    const payload: ReplyQueueResponse = { id, queue: queue.snapshot()[id] ?? { items: [] } }
+    return json(res, payload)
+  }
+
   // ---- セッション同士のメッセージ（#310 / #311）
 
   /**
@@ -1729,6 +1773,8 @@ export function createApp(
     const isAgent = path.startsWith(AGENT_PREFIX)
     // 人が画面から送信を止める・再開する口（#311）。画面から叩くので、エージェント用の口とは別に同一オリジンで受ける
     const isAgentStop = path.startsWith(SESSIONS_PREFIX) && (path.endsWith(AGENT_STOP_SUFFIX) || path.endsWith(AGENT_RESUME_SUFFIX))
+    // 処理中のターンを止める（#384）。画面から叩くので同一オリジンで受ける
+    const isInterrupt = path.startsWith(SESSIONS_PREFIX) && path.endsWith(INTERRUPT_SUFFIX)
     const isAsk = path === APPROVALS_PATH
     const isAnswer = path.startsWith(APPROVALS_PREFIX) && path.endsWith(ANSWER_SUFFIX)
     const isProfile = path === PROFILE_PATH
@@ -1750,12 +1796,19 @@ export function createApp(
     // 書き込みは「返信と新しいセッションは POST」「表示名は PUT」「アイコンは PUT / DELETE」「承認の預かりと答えは POST」「自分の表示名は PUT、アイコンは PUT / DELETE」
     // 「設定は PUT」「預かった返信の再開は POST、取り消しは DELETE」だけ。それ以外は GET / HEAD のみ
     const writable =
-      (method === 'POST' && (isNewSession || isReply || isAsk || isAnswer || isAttachUpload || isQueue || isDigestFeedback || path === AGENT_SEND_PATH || isAgentStop)) ||
+      (method === 'POST' &&
+        (isNewSession || isReply || isAsk || isAnswer || isAttachUpload || isQueue || isDigestFeedback || path === AGENT_SEND_PATH || isAgentStop || isInterrupt)) ||
       (method === 'DELETE' && isQueue) ||
       (method === 'PUT' && (isMeta || isProfile || isSettings)) ||
       ((method === 'PUT' || method === 'DELETE') && (isIcon || isProfileIcon))
     if (!writable && method !== 'GET' && method !== 'HEAD') return error(res, 405, 'method not allowed')
     try {
+      if (isInterrupt) {
+        if (method !== 'POST') return error(res, 405, 'method not allowed')
+        const id = sessionIdFrom(path, INTERRUPT_SUFFIX)
+        if (id === null) return error(res, 400, 'bad session id')
+        return await interrupt(req, res, id)
+      }
       if (isAgentStop) {
         if (method !== 'POST') return error(res, 405, 'method not allowed')
         const stop = path.endsWith(AGENT_STOP_SUFFIX)

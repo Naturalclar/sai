@@ -75,6 +75,9 @@ class FakeCodexApp implements CodexApp {
   replying() { return Object.fromEntries(this.busy) }
   snapshot() { return this.active }
   getApproval(approvalId: string) { return Object.values(this.active).flat().find((approval) => approval.approval_id === approvalId) }
+  interrupted: string[] = []
+  /** 止められたか（false なら turn/start の応答待ち。#384） */
+  stops = true
   async start(input: CodexTurnInput) {
     if (this.fail) throw this.fail
     this.started.push(input)
@@ -85,6 +88,13 @@ class FakeCodexApp implements CodexApp {
     { name: 'codex-only', description: 'app-server 側の同名', source: 'user' },
   ]
   async skills() { return this.skillList }
+  async interrupt(id: string) {
+    this.interrupted.push(id)
+    if (!this.stops) return false
+    // 本物は turn/interrupt のあと自分で片付ける（clearThread）
+    this.busy.delete(id)
+    return true
+  }
   answer(approvalId: string, answer: ApprovalAnswer) {
     const approval = this.getApproval(approvalId)
     if (!approval) return { ok: false as const, status: 404 as const, error: 'approval not found' }
@@ -1826,4 +1836,56 @@ test('GET /api/sessions/<id>/skills: プロジェクトを先に、Codex は置�
   assert.equal(codex.skills.some((s) => s.name === 'sync-main'), false, 'Codex に Claude の置き場は出さない')
   assert.equal((await get('/api/sessions/nope%40x/skills')).status, 404)
   assert.equal((await fetch(base + '/api/sessions/C1%40r/skills', { method: 'POST' })).status, 405)
+})
+
+// ---- #384: 処理中のターンを SAI から止める
+
+test('POST interrupt: SAI が回している Codex のターンだけ止め、預かりは勝手に回さない（#384）', async () => {
+  runner.started.length = 0
+  codexApp.interrupted.length = 0
+  assert.equal((await postJson('/api/sessions/C1%40r/interrupt', {})).status, 409, '処理中でなければ 409')
+
+  // Claude の -p が回っているセッションには止める口が無い
+  runner.busy.set('C1@r', { since: '2026-09-10T07:00:00.000Z', text: '前の' })
+  try {
+    assert.equal((await postJson('/api/sessions/C1%40r/interrupt', {})).status, 400, 'Codex 以外は 400')
+  } finally {
+    runner.busy.delete('C1@r')
+  }
+
+  codexApp.busy.set('C1@r', { since: '2026-09-10T07:00:00.000Z', text: '長いターン', interruptible: true })
+  try {
+    assert.equal((await postJson('/api/sessions/C1%40r/interrupt', {}, { Origin: 'http://evil.local:8787' })).status, 403, '別オリジンからは止めさせない')
+    assert.equal((await get('/api/sessions/C1%40r/interrupt')).status, 405)
+    // 処理中なので預かりに 1 件並べておく
+    const queueId = ((await (await post('C1@r', { text: 'あとで', queue: true })).json()) as ReplyResponse).queue_id!
+
+    // 止められない間（turn/start の応答待ち）は 409 で、預かりは止めたままにしない
+    codexApp.stops = false
+    assert.equal((await postJson('/api/sessions/C1%40r/interrupt', {})).status, 409)
+    assert.equal((await queuedOf('C1@r'))?.paused, undefined, '止められなかったので預かりはそのまま')
+    assert.equal(runner.started.length, 0, 'まだ処理中なので回らない')
+
+    codexApp.stops = true
+    const res = await postJson('/api/sessions/C1%40r/interrupt', {})
+    assert.equal(res.status, 200)
+    const body = (await res.json()) as ReplyQueueResponse
+    assert.deepEqual(codexApp.interrupted, ['C1@r', 'C1@r'])
+    assert.deepEqual(body.queue.items.map((q) => q.queue_id), [queueId], '預かりは消さない（取り消しは人が決める）')
+    assert.match(body.queue.paused ?? '', /止めた/)
+
+    // 止めたターンは処理中から消え、ポーリングしても預かりは回らない
+    const list = (await (await get('/api/sessions?days=30')).json()) as SessionsResponse
+    assert.equal(list.replying['C1@r'], undefined)
+    assert.match(list.queued['C1@r']?.paused ?? '', /止めた/)
+    assert.equal(runner.started.length, 0, '止めた直後に次の預かりを走らせない')
+
+    // 「続けて送る」で人が回す
+    assert.equal((await postJson('/api/sessions/C1%40r/queue/resume', {})).status, 200)
+    assert.equal(runner.started.length, 1)
+    assert.equal(runner.started[0]!.cmd.text, 'あとで')
+  } finally {
+    codexApp.busy.delete('C1@r')
+    codexApp.stops = true
+  }
 })

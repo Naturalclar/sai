@@ -667,6 +667,11 @@
   /* 5分を超えて処理中。長引いていることが見えるように時刻の色を変える */
   .group.pending.long .gh .time { color: var(--synth); font-weight: 600; }
   .pending-line { display: flex; gap: 8px; align-items: baseline; padding: 2px 16px 10px 62px; color: var(--muted); font-size: 12px; }
+  /* 処理中のターンを止める（#384）。仮バブルの「処理中 N 分」の横。出るのは SAI が回している Codex のターンだけ */
+  .interrupt { flex: none; font: inherit; font-size: 11px; padding: 1px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); cursor: pointer; }
+  .interrupt:hover:not(:disabled) { color: var(--synth); border-color: var(--synth); }
+  .interrupt:disabled { cursor: default; opacity: 0.6; }
+  .interrupt-error { color: var(--synth); font-size: 11px; }
   /* 返信中の許可・質問。答えるまでエージェントが止まっているので、待ちの色（synth）で目立たせる */
   .group.approval .msg .body { display: inline-block; padding: 4px 10px; border-radius: 6px; background: color-mix(in srgb, var(--synth) 12%, transparent); color: var(--synth); font-style: italic; }
   .group.approval .detail { font-family: var(--mono); font-size: 12px; background: var(--chip); padding: 8px 10px; border-radius: 6px; margin: 6px 0 0; white-space: pre-wrap; word-break: break-word; max-height: 12em; overflow: auto; }

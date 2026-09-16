@@ -65,7 +65,17 @@ git log --oneline HEAD..FETCH_HEAD
 
 入っていれば、直すのではなく **PR を閉じる**。
 
-**既知の flake（`pnpm test` がミリ秒の境目で落ちる #424 など）で赤いときだけ**、`gh run rerun --repo "$repo" <run-id> --failed` で 1 回だけ回し直してよい。**回し直しても赤ければ止める**。回し直したことと、どの issue の flake かは 4 のコメントに書く。**flake だと思った、で通さない**（同じ落ち方が既に issue になっていることを確かめる）。
+**既知の flake（`pnpm test` がミリ秒の境目で落ちる #424 など）で赤いときだけ**、1 回だけ回し直してよい。**回し直しても赤ければ止める**。回し直したことと、どの issue の flake かは 4 のコメントに書く。**flake だと思った、で通さない**（同じ落ち方が既に issue になっていることを確かめる）。
+
+**回し直すのは「いまの HEAD の run」だけ。** `.github/workflows/ci.yml` は `concurrency: cancel-in-progress` を ref ごとに掛けているので、**古いコミットの run を rerun すると、同じブランチのいまの run が cancel される**（実測: 直したものを push したあと、前の run を `--failed` で回し直したら、新しい方の 3 ジョブが全部 `cancelled` になり、`gh pr checks` にはただ `fail` と出た）。番号は SHA で選ぶ:
+
+```sh
+run=$(gh run list --repo "$repo" --branch "$head" --limit 10 \
+      --json databaseId,headSha -q "[.[] | select(.headSha == \"$(git rev-parse HEAD)\")][0].databaseId")
+gh run rerun --repo "$repo" "$run" --failed
+```
+
+**`cancelled` を `fail` と読み違えない**（`gh pr checks` はどちらも `fail` に見せる）。`gh run list` の `conclusion` で確かめる。
 
 ## 2. 別の目でレビューする
 

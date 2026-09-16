@@ -71,7 +71,7 @@ find "$main/server" "$main/shared" -name '*.ts' -newer "$ref"; rm -f "$ref"
 
 何も出なければサーバは最新のコード。立て直さず 5 に進む。
 
-`pnpm start:watch`（`node --watch`）で動いていれば自分で再起動するので **C-c は送らない**。ただし**処理中の返信（`claude -p --resume`）があると `Waiting for graceful termination...` でその終了を待つ**ので、listen が無い時間が数十秒ある。
+`pnpm start:watch`（`node --watch`）で動いていれば自分で再起動するので **C-c は送らない**。`Waiting for graceful termination...` は出るが、**接続を握ったまま試して 1 秒で戻った**（#296 で SIGTERM でも数秒以内に終わるようにした。前の「処理中の返信を待って数十秒」という注記は取り違えで、待っていたのは返信の子ではなく**閉じない接続**。返信の子は detached なので待たれない）。
 
 ### 一言（digest）の口
 
@@ -97,13 +97,39 @@ curl -sS -m 5 http://127.0.0.1:11434/v1/models    # qwen3:8b が居るか
 ```sh
 tty=$(ps -o tty= -p "$pid" | tr -d ' ')
 pane=$(tmux list-panes -a -F '#{pane_id} #{pane_tty}' | awk -v t="/dev/$tty" '$2==t{print $1}')
+shell=$(tmux display -p -t "$pane" '#{pane_pid}')      # そのペインのシェル
 tmux send-keys -t "$pane" C-c
-# 港が空くまで待つ。foreground の sleep は使えないので until で回す
-i=0; until [ -z "$(lsof -nP -iTCP:8787 -sTCP:LISTEN -t)" ] || [ $i -gt 3000000 ]; do i=$((i+1)); done
+```
+
+**待つのは「港が空くまで」ではなく「ペインのシェルに子が居なくなるまで」**（#296）。`server.close()` は listen を先に落とすので、**港が空いた時点ではまだ node が生きていることがある**。そこへ打ち込むと、キーは foreground の pnpm に飲まれて**シェルに届かない**（新しいサーバは立たず、古いサーバは listen していないので画面も携帯も繋がらないまま）。
+
+```sh
+kids() { ps -A -o pid=,ppid=,command= | awk -v p="$shell" '$2==p{print}'; }
+i=0; until [ -z "$(kids)" ] || [ $i -gt 3000000 ]; do i=$((i+1)); done
+kids                                   # 空になったか。`pgrep -f server/main.ts` は拾わないので使わない
+```
+
+**子が残ったまま抜けたら、打ち込まずに止める。** 残っている `kids` の出力と `ps -t "/dev/$tty"` を添えて報告し、**自分では `kill -9` しない**（処理中の返信を巻き込まないかは人が決める）。
+
+子が居なくなったら、プロンプトが戻っていることを見て、飲まれて残っている入力を消してから打つ:
+
+```sh
+tmux capture-pane -p -t "$pane" | grep -v '^\s*$' | tail -2   # プロンプトが戻っているか
+tmux send-keys -t "$pane" C-u                                  # 打ちかけ・飲まれた分を消す
 tmux send-keys -t "$pane" 'pnpm start' Enter
 i=0; until [ -n "$(lsof -nP -iTCP:8787 -sTCP:LISTEN -t)" ] || [ $i -gt 3000000 ]; do i=$((i+1)); done
+```
+
+**立ったら、それがこのペインの子か**を確かめる（飲まれていたキーがあとからシェルに渡って、打ち直した分と 2 つ起動しかけたことがある）。`pnpm start` は node ← pnpm ← シェルなので、親を 1 段見るのではなく遡る:
+
+```sh
+new=$(lsof -nP -iTCP:8787 -sTCP:LISTEN -t)
+up=$new; while [ -n "$up" ] && [ "$up" != 1 ] && [ "$up" != "$shell" ]; do up=$(ps -o ppid= -p "$up" | tr -d ' '); done
+[ "$up" = "$shell" ] && echo 'このペインの子' || echo '別のところで立っている（二重起動を疑う）'
 tmux capture-pane -p -t "$pane" | grep -v '^\s*$' | tail -3
 ```
+
+このペインの子でなければ、**それ以上打ち込まずに** `kids` と `ps -t "/dev/$tty"` を添えて報告する。
 
 ペインが引けなければ（tmux の外で動いている）立て直さず、「このコマンドで立て直してください」と報告する。
 
@@ -130,6 +156,7 @@ stat -f '%m' "$main/web/dist/index.html"                            # 上の X-S
 
 - `git reset` / `git checkout` / `git stash`。stash は他のセッションと共有なので特に触らない
 - 止まっているサーバを起動すること（立て直すのは、動いていて古いコードのときだけ）
+- `kill` / `kill -9`。C-c で終わらなければ、残っている pid を添えて報告するところまで（処理中の返信を巻き込むかは人が決める）
 - Ollama の起動・モデルの pull（無ければ `claude` の口に落として報告する）
 - 他の worktree（`dev-*`）の更新。それは各セッションが自分でやる
 - tailscale serve の操作（`tailscale-serve` スキルが別にある）

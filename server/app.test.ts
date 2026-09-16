@@ -909,10 +909,11 @@ test('POST /api/sessions/new: Codex は thread/start の id で始める（#401�
   assert.equal(runner.started.length, 0, 'Claude は起動しない')
 })
 
-test('POST /api/sessions/new: 始められるのは claude か codex だけ（#401）', async () => {
+test('POST /api/sessions/new: 始められるのは claude / codex / opencode だけ（#401 / #452）', async () => {
   runner.started.length = 0
   codexApp.threads.length = 0
-  assert.equal((await postNew({ from: 'X1@r', text: 'x', agent: 'opencode' })).status, 400)
+  // Grok は ID を先に決める口が無いので選べない（OpenCode は #452 で選べるようになった）
+  assert.equal((await postNew({ from: 'X1@r', text: 'x', agent: 'grok' })).status, 400)
   assert.equal((await postNew({ from: 'X1@r', text: 'x', agent: '' })).status, 400)
   assert.deepEqual(codexApp.threads, [])
   assert.equal(runner.started.length, 0)

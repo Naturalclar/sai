@@ -237,3 +237,35 @@ test('todos: サーバが立っていなければ起こさない。片方が落�
     await new Promise<void>((r) => server.close(() => r()))
   }
 })
+
+test('startSession: POST /session に directory を付けて作り、返る id を使う（#452）', async () => {
+  const seen: { url: string; auth: string; body: unknown }[] = []
+  let reply: { status: number; body: string } = { status: 200, body: JSON.stringify({ id: 'ses_new1', directory: '/work', title: 'x' }) }
+  const server: Server = createServer((req, res) => {
+    let raw = ''
+    req.on('data', (c) => (raw += c))
+    req.on('end', () => {
+      seen.push({ url: req.url ?? '', auth: req.headers.authorization ?? '', body: raw ? JSON.parse(raw) : null })
+      res.writeHead(reply.status, { 'content-type': 'application/json' })
+      res.end(reply.body)
+    })
+  })
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+  const addr = server.address()
+  const base = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`
+  try {
+    const app = new OpencodeServer(fetch, Date.now, async () => ({ url: base, auth: 'Basic dGVzdA==' }))
+    assert.equal(await app.startSession('/work/dir one'), 'ses_new1')
+    assert.equal(seen[0]!.url, '/session?directory=%2Fwork%2Fdir%20one', 'directory を付ける（渡さないとサーバの cwd で作られる）')
+    assert.equal(seen[0]!.auth, 'Basic dGVzdA==')
+
+    // 断られたら投げる（呼び出し側が 500 で理由を出す）
+    reply = { status: 500, body: 'boom' }
+    await assert.rejects(app.startSession('/work'), /500.*boom/)
+    // id を返さない応答も投げる（空の id でエンティティIDを作らない）
+    reply = { status: 200, body: JSON.stringify({ title: 'no id' }) }
+    await assert.rejects(app.startSession('/work'), /セッションID/)
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()))
+  }
+})

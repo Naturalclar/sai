@@ -25,11 +25,14 @@ interface Started {
 /** 候補を作る一覧。絞り込み無しで取るので、アーカイブ済みも別に取って足す */
 const ALL = { project: '', repo: '', agent: '', date: '', host: '', days: '90' }
 
-/** 始められるエージェント（#401）。OpenCode と Grok は ID を先に決める口が無いので出さない */
+/** 始められるエージェント（#401。OpenCode は #452）。Grok だけは ID を先に決める口が無いので出さない */
 const AGENTS = [
   { id: 'claude' as const, label: 'Claude Code', note: '別プロセス（claude -p）で回す。端末には出ない' },
   { id: 'codex' as const, label: 'Codex CLI', note: 'app-server で回す。端末には出ない' },
+  { id: 'opencode' as const, label: 'OpenCode', note: 'serve で回す。端末には出ない。許可は画面から答えられる' },
 ]
+type NewAgent = (typeof AGENTS)[number]['id']
+const isNewAgent = (value: string): value is NewAgent => AGENTS.some((a) => a.id === value)
 
 /**
  * SAI の画面から新しいセッションを始める（#314。Codex は #401）。worktree は**記録にあるものから選ぶ**:
@@ -40,7 +43,7 @@ export function NewSessionView({ replying, now, onOpenSidebar }: Props) {
   const [all, setAll] = useState<{ sessions: SessionSummary[]; host: string } | null>(null)
   const [loadError, setLoadError] = useState('')
   const [from, setFrom] = useState('')
-  const [agent, setAgent] = useState<'claude' | 'codex'>('claude')
+  const [agent, setAgent] = useState<NewAgent>('claude')
   const [model, setModel] = useState('')
   const [mode, setMode] = useState('')
   const [text, setText] = useState('')
@@ -145,8 +148,8 @@ export function NewSessionView({ replying, now, onOpenSidebar }: Props) {
               <select
                 value={agent}
                 onChange={(e) => {
-                  setAgent(e.target.value === 'codex' ? 'codex' : 'claude')
-                  // 候補が入れ替わるので、選んでいたモデルは外す（Claude の別名は Codex に渡せない）
+                  setAgent(isNewAgent(e.target.value) ? e.target.value : 'claude')
+                  // 候補が入れ替わるので、選んでいたモデルは外す（Claude の別名は Codex にも OpenCode にも渡せない）
                   setModel('')
                 }}
               >
@@ -168,7 +171,7 @@ export function NewSessionView({ replying, now, onOpenSidebar }: Props) {
                 ))}
               </select>
             </label>
-            {/* 許可モードは Claude だけ（Codex は app-server の承認で答える） */}
+            {/* 許可モードは Claude だけ（Codex は app-server の承認、OpenCode は serve の保留で答える。#421） */}
             {agent === 'claude' && (
               <label>
                 許可モード

@@ -938,8 +938,11 @@ export interface NewSessionRequest {
   /** どの worktree で始めるか。そこで記録されたことのあるセッションの ID */
   from: string
   text: string
-  /** どのエージェントで始めるか（#401）。省略は `claude`。OpenCode と Grok は ID を先に決める口が無いので選べない */
-  agent?: 'claude' | 'codex'
+  /**
+   * どのエージェントで始めるか（#401。OpenCode は #452）。省略は `claude`。
+   * **Grok だけは ID を先に決める口が無いので選べない**
+   */
+  agent?: 'claude' | 'codex' | 'opencode'
   /** 返信のモデル（省略・空は CLI の既定）。検査して新しいセッションのメタに書く */
   model?: string
   /** 返信の許可モード（`REPLY_MODES` のどれか。省略・空は CLI の既定）。検査して新しいセッションのメタに書く */
@@ -951,7 +954,10 @@ export interface NewSessionResponse {
   /** 新しいセッションのエンティティID（`<uuid>@<repo>`）。最初の行が届けば一覧に出る */
   id: string
   agent: Agent
-  /** Claude は CLI に渡した `--session-id`、Codex は `thread/start` が返した thread id（#401） */
+  /**
+   * Claude は CLI に渡した `--session-id`、Codex は `thread/start` が返した thread id（#401）、
+   * OpenCode は `POST /session` が返した `ses_…`（#452）
+   */
   session: string
   cwd: string
   via: 'process' | 'app-server'

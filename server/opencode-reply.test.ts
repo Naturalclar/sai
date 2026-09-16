@@ -21,7 +21,7 @@ import type { OpencodeApp, OpencodeTurnInput } from './reply/opencodeServer.ts'
 import { parsePermissions, permissionApprovalId } from '../shared/opencodePermissions.ts'
 import type { OpencodePermission } from '../shared/opencodePermissions.ts'
 import { REAL_PERMISSION, REAL_PERMISSION_TEXT } from '../shared/opencodePermissions.test.ts'
-import type { SessionsResponse } from '../shared/types.ts'
+import type { NewSessionResponse, SessionsResponse } from '../shared/types.ts'
 
 let dir: string
 let work: string
@@ -31,6 +31,8 @@ const sent: OpencodeTurnInput[] = []
 const skillCalls: string[] = []
 const modelCalls: string[] = []
 const todoCalls: string[] = []
+/** `POST /session` で作ったセッションの cwd（#452） */
+const startedSessions: string[] = []
 const started: { id: string; cmd: ReplyCommand }[] = []
 /** いま `opencode serve` が答えを待っている許可（#421）。テストごとに差し替える */
 let pending: OpencodePermission[] = []
@@ -71,6 +73,11 @@ const opencodeApp: OpencodeApp = {
   async models(cwd: string) {
     modelCalls.push(cwd)
     return ['openai/gpt-6-astra', 'ollama/qwen3:8b']
+  },
+  async startSession(cwd: string) {
+    startedSessions.push(cwd)
+    if (cwd === '/bad') throw new Error('opencode serve が 500 を返しました')
+    return 'ses_new'
   },
   async todos(session: string) {
     todoCalls.push(session)
@@ -326,4 +333,49 @@ test('処理中の手順に、エージェント自身の段取りとサブセ�
   const again = (await (await fetch(`${base}/api/sessions/ses_1%40r/progress`)).json()) as SessionProgressResponse
   assert.equal(again.rev, body.rev)
   assert.match(body.rev, /completedin_progresspending/)
+})
+
+test('POST /api/sessions/new: OpenCode は serve に作らせた id で始める（#452）', async () => {
+  const before = sent.length
+  const ranBefore = started.length
+  const res = await post('/api/sessions/new', { from: 'ses_1@r', agent: 'opencode', text: '#400 に着手して' })
+  assert.equal(res.status, 202)
+  const body = (await res.json()) as NewSessionResponse
+  assert.deepEqual({ id: body.id, agent: body.agent, session: body.session, via: body.via }, {
+    id: 'ses_new@r',
+    agent: 'opencode',
+    session: 'ses_new',
+    via: 'app-server',
+  })
+  assert.equal(body.cwd, work, 'cwd はリクエストからではなく from の行から取る')
+  assert.deepEqual(startedSessions, [work], 'POST /session はその worktree で作る')
+  // 作っただけでは記録に行が無いので、1 ターン目をそのまま回す
+  assert.deepEqual(sent.slice(before).map((s) => ({ id: s.id, session: s.session, text: s.text })), [
+    { id: 'ses_new@r', session: 'ses_new', text: '#400 に着手して' },
+  ])
+  assert.equal(started.length, ranBefore, '`opencode run` は起こさない')
+})
+
+test('POST /api/sessions/new: SAI_OPENCODE_SERVER=0 では OpenCode を始めない（run に落とさない。#452）', async () => {
+  // run は許可を人に聞かず自動 reject するので、始めた 1 ターンが許可ひとつで無駄になる
+  const saved = process.env.SAI_OPENCODE_SERVER
+  process.env.SAI_OPENCODE_SERVER = '0'
+  const handler = app()
+  const off = createServer((req, res) => void handler(req, res))
+  await new Promise<void>((r) => off.listen(0, '127.0.0.1', r))
+  const addr = off.address()
+  const offBase = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`
+  try {
+    const res = await fetch(`${offBase}/api/sessions/new`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: offBase },
+      body: JSON.stringify({ from: 'ses_1@r', agent: 'opencode', text: 'x' }),
+    })
+    assert.equal(res.status, 400)
+    assert.match(await res.text(), /SAI_OPENCODE_SERVER=0/)
+  } finally {
+    if (saved === undefined) delete process.env.SAI_OPENCODE_SERVER
+    else process.env.SAI_OPENCODE_SERVER = saved
+    await new Promise<void>((r) => off.close(() => r()))
+  }
 })

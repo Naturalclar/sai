@@ -61,6 +61,15 @@ export interface OpencodeApp {
    * （段取りを見るために `opencode serve` を起こさない）。立っていなければ空
    */
   todos(session: string): Promise<{ todos: SessionTodo[]; children: number }>
+  /**
+   * 新しいセッションを作って、その id（`ses_…`）を返す（#452。`POST /session?directory=<cwd>`）。
+   *
+   * **ターンを回す前に id が決まる**ので、Codex の `thread/start`（#401）・Claude の `--session-id` と同じく、
+   * 最初の行が届く前にエンティティID が決まる。**一発の `opencode run` では始めない**:
+   * run は許可を人に聞かずその場で自動 reject するので（実測: `permission.asked` と `permission.replied` が同じ秒）、
+   * 外を触ろうとしただけでターンが丸ごと無駄になり、#421 の「画面から答える」も当たらない
+   */
+  startSession?(cwd: string): Promise<string>
   /** 行が届いたターンを終わりにする（#375 と同じ判定）。終わった id を返す（預かりを回すのに使う） */
   settle(lastTurn: (id: string) => string | undefined): string[]
   /**
@@ -142,6 +151,25 @@ export class OpencodeServer implements OpencodeApp {
       }
     }
     return done
+  }
+
+  /**
+   * 新しいセッションを作る（#452）。`POST /session?directory=<cwd>` が **id を持った JSON を返す**
+   * （実測 1.18.30: `{"id":"ses_…","directory":"…","title":"…"}`）。ここで作るだけでは行は 1 本も書かれない
+   * （記録はプラグインの `session.idle` 起点なので、ターンを回して初めて一覧に出る）
+   */
+  async startSession(cwd: string): Promise<string> {
+    const { url, auth } = await this.serve()
+    const res = await this.fetchFn(`${url}/session?directory=${encodeURIComponent(cwd)}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: auth },
+      body: '{}',
+    })
+    if (!res.ok) throw new Error(`opencode serve が ${res.status} を返しました: ${(await res.text().catch(() => '')).slice(0, 200)}`)
+    const body = (await res.json().catch(() => null)) as { id?: unknown } | null
+    const session = typeof body?.id === 'string' ? body.id : ''
+    if (!session) throw new Error('opencode serve がセッションIDを返しませんでした')
+    return session
   }
 
   async start(input: OpencodeTurnInput): Promise<void> {

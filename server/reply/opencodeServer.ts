@@ -15,8 +15,10 @@ import type { ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { basename, extname } from 'node:path'
 import { homedir } from 'node:os'
+import { opencodeSkills } from '../../shared/skills.ts'
 import { settledByRow } from '../../shared/turnSettled.ts'
 import { childEnv } from './runner.ts'
+import type { Skill } from '../../shared/skills.ts'
 import type { Replying, ReplyingMap } from '../../shared/types.ts'
 
 /** サーバが立ち上がるのを待つ上限 */
@@ -37,6 +39,11 @@ export interface OpencodeApp {
   running(id: string): boolean
   replying(): ReplyingMap
   start(input: OpencodeTurnInput): Promise<void>
+  /**
+   * そのセッションの `/` の候補（#393）。`cwd` を渡すので、**そのリポジトリのスキル**まで出る
+   * （サーバ自身は homedir で動いているため、渡さないとサーバ側の顔ぶれになる）
+   */
+  skills(cwd: string): Promise<Skill[]>
   /** 行が届いたターンを終わりにする（#375 と同じ判定）。終わった id を返す（預かりを回すのに使う） */
   settle(lastTurn: (id: string) => string | undefined): string[]
   stop(): void
@@ -114,6 +121,18 @@ export class OpencodeServer implements OpencodeApp {
     // 204 が正。404 は「そのセッションをサーバが知らない」なので、取り違えないよう本文を添えて投げる
     if (!res.ok) throw new Error(`opencode serve が ${res.status} を返しました: ${(await res.text().catch(() => '')).slice(0, 200)}`)
     this.active.set(input.id, { since: new Date(this.now()).toISOString(), text: input.text })
+  }
+
+  /**
+   * `/` の候補。`GET /command?directory=<cwd>` **1 本だけ**で、スキルもスラッシュコマンドも返る（#393）。
+   * サーバが立っていなければここで起こす（`/` を打った最初の 1 回だけ待たされる）。
+   * 取れなければ throw して、呼び出し側（`app.ts`）が今までどおり空にする
+   */
+  async skills(cwd: string): Promise<Skill[]> {
+    const { url, auth } = await this.serve()
+    const res = await this.fetchFn(`${url}/command?directory=${encodeURIComponent(cwd)}`, { headers: { authorization: auth } })
+    if (!res.ok) throw new Error(`opencode serve が ${res.status} を返しました`)
+    return opencodeSkills(await res.json())
   }
 
   stop(): void {

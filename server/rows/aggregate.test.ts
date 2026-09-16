@@ -243,11 +243,40 @@ test('入力の行（UserPromptSubmit + user_text）はターンに数えない�
 })
 
 test('待ちの行だけのセッションでも壊れない', () => {
-  const [s] = aggregate([row(new Date('2026-09-02T01:00:00Z'), 's1', { event: 'Notification', text: '入力待ち', user_text: '', first_user_text: '頼み' })])
+  const [s] = aggregate([row(new Date('2026-09-02T01:00:00Z'), 's1', { event: 'Notification', text: '許可待ち: Bash: ls', user_text: '', first_user_text: '頼み' })])
   assert.equal(s!.turns, 0)
   assert.equal(s!.last_text, '')
-  assert.equal(s!.waiting, '入力待ち')
+  assert.equal(s!.waiting, '許可待ち: Bash: ls')
   assert.equal(s!.title, '頼み')
+})
+
+test('「終わって次を待っている」（入力待ち）は waiting ではなく idle に載る（#438）', () => {
+  const t0 = new Date('2026-09-02T01:00:00Z')
+  const [s] = aggregate([row(t0, 's1', { text: 'できた' }), row(new Date(t0.getTime() + min(1)), 's1', { event: 'Notification', text: '入力待ち', user_text: '' })])
+  assert.equal(s!.waiting, '', '詰まっているのと同じ重さで「要対応」に出さない')
+  assert.equal(s!.idle, '入力待ち')
+  assert.equal(s!.turns, 1, 'ターンには数えない（今までどおり）')
+  assert.equal(s!.last_text, 'できた', '最後の発言はターン完了の行のまま')
+})
+
+test('バックグラウンドのセッションの入力待ちも idle（#438）', () => {
+  const [s] = aggregate([row(new Date('2026-09-02T01:00:00Z'), 's1', { event: 'Notification', text: '入力待ち（バックグラウンドのセッション）', user_text: '' })])
+  assert.equal(s!.waiting, '')
+  assert.equal(s!.idle, '入力待ち（バックグラウンドのセッション）')
+})
+
+test('MCP の入力待ちは idle ではなく waiting（答えないと進まない。#438）', () => {
+  const [s] = aggregate([row(new Date('2026-09-02T01:00:00Z'), 's1', { event: 'Notification', text: 'MCP サーバーの入力待ち', user_text: '' })])
+  assert.equal(s!.waiting, 'MCP サーバーの入力待ち')
+  assert.equal(s!.idle, '')
+})
+
+test('入力待ちのあとにターン完了か再開が来れば idle も消える（#438）', () => {
+  const t0 = new Date('2026-09-02T01:00:00Z')
+  const idle = row(new Date(t0.getTime() + min(1)), 's1', { event: 'Notification', text: '入力待ち', user_text: '' })
+  const [s] = aggregate([row(t0, 's1', { text: 'できた' }), idle, row(new Date(t0.getTime() + min(2)), 's1', { event: 'UserPromptSubmit', text: '', user_text: '次' })])
+  assert.equal(s!.idle, '')
+  assert.equal(s!.waiting, '')
 })
 
 test('知らない event の行は末尾にあっても turns / last_text / last_turn_ts を奪わない（#235）', () => {

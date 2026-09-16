@@ -20,7 +20,7 @@ function bodiesOf(row: FeedRow): { who: 'me' | 'agent'; body: string }[] {
   const user = row.user_text?.trim()
   if (user) out.push({ who: 'me', body: user })
   const text = row.text?.trim()
-  if (text && eventKind(row.event) === 'turn') out.push({ who: 'agent', body: text })
+  if (text && eventKind(row.event, row.text) === 'turn') out.push({ who: 'agent', body: text })
   return out
 }
 

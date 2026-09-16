@@ -57,7 +57,7 @@ export { digestKey }
 
 /** 一言を作る対象か。ターン完了で本文がある行だけ（待ちの行・入力の行・本文なしは作らない） */
 export function digestable(row: FeedRow): boolean {
-  return eventKind(row.event) === 'turn' && Boolean(row.text?.trim())
+  return eventKind(row.event, row.text) === 'turn' && Boolean(row.text?.trim())
 }
 
 export interface Summarizer {

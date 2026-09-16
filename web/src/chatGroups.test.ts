@@ -194,3 +194,13 @@ test('SessionEnd の行に user_text が載っていても、自分の発言は�
   assert.equal(out.length, 1)
   assert.equal(out[0]?.ended, true)
 })
+
+test('終わって放置されているだけの行（入力待ち）はバブルにしない（#438）', () => {
+  // 「ターンが終わった」のは直前の返答のバブルで分かるので、間に「待っています」を挟まない
+  const us = toUtterances([row(0, { text: 'できた' }), row(1, { event: 'Notification', text: '入力待ち' })])
+  assert.deepEqual(us.map((u) => u.text), ['できた'])
+
+  // 許可待ちは今までどおり待ちバブル
+  const waiting = toUtterances([row(0, { text: 'できた' }), row(1, { event: 'Notification', text: '許可待ち: Bash: ls' })])
+  assert.deepEqual(waiting.map((u) => [u.text, u.waiting ?? false]), [['できた', false], ['許可待ち: Bash: ls', true]])
+})

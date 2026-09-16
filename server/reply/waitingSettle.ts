@@ -9,6 +9,11 @@
 //
 // **材料が無いのに待ちを消さない。** 畳むのは「ダイアログが消えている」とはっきり分かったときだけで、
 // 読めない・ペインが無い・別のプロセスになった、は全部「残す」側に倒す（下の表）。
+//
+// 見るのは `waiting` だけなので、**「終わって次を待っている」（`入力待ち`）はここには来ない**（#438。
+// `eventKind()` が `idle` に分けて `SessionSummary.idle` に載せる）。以前はそれもここに流れてきて、
+// 入力欄が空なのを「人が答えた」と読んで畳んでいた——結果は正しかったが、理由が違っていた
+// （答えてはいない。ただ放置されているだけ）。ペインの無い端末では畳めず、要対応に残り続けていた。
 import { inspectPrompt } from './terminal.ts'
 import type { PsFn, Tmux } from './terminal.ts'
 import type { SessionSummary } from '../../shared/types.ts'

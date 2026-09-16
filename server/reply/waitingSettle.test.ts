@@ -32,6 +32,7 @@ function summary(over: Partial<SessionSummary>): SessionSummary {
     cwd: '/tmp/r',
     turns: 1,
     waiting: '許可待ち: Bash: ls',
+    idle: '',
     title: 't',
     title_full: 't',
     session_source: 'payload',

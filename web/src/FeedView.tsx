@@ -74,7 +74,7 @@ export function FeedView({ project, projects, onProject, sessions = NO_SESSIONS,
     const m = new Map<string, number>()
     for (const r of rows) {
       // ターン完了の行だけ数える。入力の行（UserPromptSubmit）が増えても返信は終わっていない
-      if (eventKind(r.event) !== 'turn') continue
+      if (eventKind(r.event, r.text) !== 'turn') continue
       const id = entityId(r.session, r.repo, r.ts)
       m.set(id, (m.get(id) ?? 0) + 1)
     }

@@ -258,6 +258,10 @@
   .todo { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--panel); }
   .todo.answer { border-left: 3px solid var(--accent); }
   .todo.watch { border-left: 3px solid var(--synth); }
+  /* 下段（#438）。答えを待っている上段より控えめに出す */
+  .todo.done { border-left: 3px solid var(--line); opacity: 0.75; }
+  .todo.done:hover { opacity: 1; }
+  .todo-section { margin: 6px 0 0; font-size: 12px; font-weight: 700; color: var(--muted); }
   /* 1 行に収める（折り返すと「N 待っている」だけが次の行の右端に飛ぶ）。溢れる名前は … で切る */
   .todo .who { display: flex; align-items: center; gap: 6px; color: inherit; font-size: 13px; min-width: 0; }
   .todo .who:hover { text-decoration: none; }
@@ -432,6 +436,8 @@
   .tag.mode.loud { background: color-mix(in srgb, var(--claude) 18%, transparent); color: var(--claude); }
   .tag.archived { background: color-mix(in srgb, var(--muted) 18%, transparent); color: var(--muted); font-weight: 600; }
   .tag.waiting { background: color-mix(in srgb, var(--synth) 18%, transparent); color: var(--synth); font-weight: 600; }
+  /* 「終わって次を待っている」（#438）。詰まっていないので待機中より目立たせない */
+  .tag.done { background: color-mix(in srgb, var(--muted) 16%, transparent); color: var(--muted); font-weight: 600; }
   .tag.terminal { background: color-mix(in srgb, var(--codex) 16%, transparent); color: var(--codex); font-weight: 600; }
 
   /* -- chat */

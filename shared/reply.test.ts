@@ -64,6 +64,7 @@ function summary(over: Partial<SessionSummary>): SessionSummary {
     models: [],
     permission_mode: '',
     waiting: '',
+    idle: '',
     pane: '',
     pid: 0,
     last_turn: '',

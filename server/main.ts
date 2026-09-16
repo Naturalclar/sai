@@ -29,6 +29,11 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 export const DIST_DIR = resolve(HERE, '..', 'web', 'dist')
 const LOCAL_HOSTS = new Set(['127.0.0.1', 'localhost', '::1'])
 
+/** C-c のあと、アイドルでない接続（長く待たせている返事）も切るまでの猶予 */
+export const CLOSE_ALL_MS = 1_000
+/** それでも抜けられないときに諦めて終わるまで */
+export const FORCE_EXIT_MS = 3_000
+
 export function expandHome(p: string): string {
   return p.startsWith('~/') || p === '~' ? join(homedir(), p.slice(1)) : p
 }
@@ -73,6 +78,50 @@ export function parseOptions(argv: string[], env: NodeJS.ProcessEnv = process.en
   return { ok: true, options: { port, host: values.host, feedDir: resolve(expandHome(values['feed-dir'])) } }
 }
 
+/** `shutdown()` が要る口だけ（テストから偽物を渡せるように、`http.Server` そのものは要求しない） */
+export interface Closable {
+  close(cb?: () => void): unknown
+  closeIdleConnections(): void
+  closeAllConnections(): void
+}
+
+export interface ShutdownOptions {
+  exit?: (code: number) => void
+  closeAllMs?: number
+  forceExitMs?: number
+}
+
+/**
+ * C-c / SIGTERM で必ず終わるようにする（#296）。
+ *
+ * `server.close()` は**新しい接続の受け付けをやめるだけ**で、コールバックは全部の接続が閉じてから呼ばれる。
+ * SAI は開きっぱなしのタブ（PC・携帯）が 3 秒ごとにポーリングするので、**タブが 1 枚あるだけで抜けられない**
+ * （listen だけ消えるので、外からは「止まった」ように見えるのに node は生きている。`/sync-main` が打った
+ * 起動コマンドはそのまま foreground の pnpm に飲まれ、SAI が止まったままになっていた）。
+ *
+ * そこで 3 段にする: アイドルな接続はすぐ閉じ（`closeIdleConnections`）、残るものは `CLOSE_ALL_MS` 後に切り
+ * （`closeAllConnections`）、それでも抜けなければ `FORCE_EXIT_MS` で諦めて終わる。**タイマーは `unref()` する**
+ * ので、先に抜けられればこれが終了を遅らせることはない。
+ *
+ * **2 回目の C-c はすぐ終わる**（前は同じ `close` を呼ぶだけで、連打しても何も起きなかった）。
+ * 返信の子（`claude -p --resume` など）は別の pgid で detached なので巻き込まない。次のサーバが
+ * `replying.json` から引き取る。
+ */
+export function shutdown(server: Closable, opts: ShutdownOptions = {}): () => void {
+  const exit = opts.exit ?? ((code: number) => process.exit(code))
+  const closeAllMs = opts.closeAllMs ?? CLOSE_ALL_MS
+  const forceExitMs = opts.forceExitMs ?? FORCE_EXIT_MS
+  let stopping = false
+  return () => {
+    if (stopping) return exit(0)
+    stopping = true
+    server.close(() => exit(0))
+    server.closeIdleConnections()
+    setTimeout(() => server.closeAllConnections(), closeAllMs).unref()
+    setTimeout(() => exit(0), forceExitMs).unref()
+  }
+}
+
 export function main(argv: string[]): void {
   const parsed = parseOptions(argv)
   if (!parsed.ok) {
@@ -87,7 +136,7 @@ export function main(argv: string[]): void {
   server.listen(port, host, () => {
     console.error(`SAI  http://${host}:${port}/   feed=${feedDir}`)
   })
-  const stop = () => server.close(() => process.exit(0))
+  const stop = shutdown(server)
   process.on('SIGINT', stop)
   process.on('SIGTERM', stop)
 }

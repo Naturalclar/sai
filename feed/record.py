@@ -850,11 +850,10 @@ def is_waiting_event(event: str) -> bool:
 
 def last_session_row(directory: Path, now: datetime, session: str, repo: str) -> dict | None:
     """同じ (セッション, リポジトリ) の直前の行。待ちの重複と、再開の行を書くかの判断に使う。"""
-    previous = None
-    for row in _recent_rows(directory, now):
-        if row.get("session") == session and row.get("repo") == repo:
-            previous = row
-    return previous
+    return _latest_row([
+        row for row in _recent_rows(directory, now)
+        if row.get("session") == session and row.get("repo") == repo
+    ])
 
 
 def skip_waiting(previous: dict | None, event: str, payload: dict, text: str) -> bool:
@@ -975,13 +974,40 @@ def _recent_rows(directory: Path, now: datetime, days: int = 2) -> list[dict]:
 
     合成セッションも待ちの重複判定も自分のマシンの続きを見るものなので、集めてきた
     別マシンのファイル（`YYYY-MM-DD.<別のhost>.jsonl`）は読まなくてよい。`day_file()` を通すので、
-    `AGENT_FEED_HOST` を設定していれば自分のファイル、設定していなければ今までのファイルを見る"""
+    `AGENT_FEED_HOST` を設定していれば自分のファイル、設定していなければ今までのファイルを見る。
+
+    **古い日から今日の順**に積む（#439）。呼ぶ側は「最後が直前の行」として舐めるので、新しい日から
+    積むと、日をまたいだセッションでは前日の最後の行が「直前」になり、今日の行が全部飛ばされる
+    （待ちが二重に書かれ、再開の行の判断がずれ、合成セッションが日をまたぐたびに切れる）。
+    **選ぶ側も `ts` で決める**（`_latest_row()`）ので、同じ日の中で行が前後しても当たる"""
     rows: list[dict] = []
-    for offset in range(days):
+    for offset in reversed(range(days)):
         path = directory / day_file(now - timedelta(days=offset))
         if path.exists():
             rows.extend(_iter_jsonl(path))
     return rows
+
+
+def _row_time(row: dict) -> float | None:
+    """行の `ts` を比べられる形に。読めなければ None（並びで決める）"""
+    try:
+        return datetime.fromisoformat(str(row.get("ts"))).timestamp()
+    except Exception:
+        return None
+
+
+def _latest_row(rows: list[dict]) -> dict | None:
+    """一番新しい行（#439）。**並びではなく `ts`** で選び、読めない・同じ `ts` なら後に来た方を採る。
+
+    同じ秒の行は実際に起きる（許可の `asked` と `replied` が競走して逆順に書かれる。#209 の
+    OpenCode のプラグイン）ので、そこはファイルの順のまま「あとに書かれた方が直前」にする"""
+    best: dict | None = None
+    best_at: float | None = None
+    for row in rows:
+        at = _row_time(row)
+        if best is None or at is None or best_at is None or at >= best_at:
+            best, best_at = row, at
+    return best
 
 
 def synth_session(directory: Path, now: datetime, repo: str, cwd: str, agent: str, host: str) -> str:
@@ -989,15 +1015,13 @@ def synth_session(directory: Path, now: datetime, repo: str, cwd: str, agent: st
 
     host も見るのは、複数マシンの JSONL を 1 か所に集めたとき（#24）に、別のマシンで同じ repo / cwd の
     行が 30 分以内に来ても同じセッションに寄せないため（#112）。host の無い古い行は空として比べる"""
-    previous = None
-    for row in _recent_rows(directory, now):
-        if (
-            row.get("repo") == repo
-            and row.get("cwd") == cwd
-            and row.get("agent") == agent
-            and (row.get("host") or "") == host
-        ):
-            previous = row
+    previous = _latest_row([
+        row for row in _recent_rows(directory, now)
+        if row.get("repo") == repo
+        and row.get("cwd") == cwd
+        and row.get("agent") == agent
+        and (row.get("host") or "") == host
+    ])
     if previous:
         try:
             last = datetime.fromisoformat(str(previous.get("ts")))

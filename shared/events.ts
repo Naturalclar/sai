@@ -2,13 +2,16 @@
 // 出どころは feed/record.py（Claude Code のフック名がそのまま `event` に載る）。
 // サーバの集計（turns / waiting）と画面の描き分け（待ちバブル）が同じ判定を使う。
 
-export type EventKind = 'turn' | 'waiting' | 'resume' | 'other'
+export type EventKind = 'turn' | 'waiting' | 'resume' | 'end' | 'other'
 
 /**
  * - `turn`: ターン完了。`Stop`（Claude）/ `agent-turn-complete`（Codex）/ `session.idle`（OpenCode）。`unknown` と空もここ
  * - `waiting`: 人を待って止まった。`PermissionRequest`（許可）/ `PreToolUse`（AskUserQuestion / ExitPlanMode）/ `Notification`（入力待ちなど）/ `permission.asked`（OpenCode）
  * - `resume`: 人が入力した。`UserPromptSubmit` / `permission.replied`（OpenCode。答えて動き出した）。`user_text` にその入力が載り（本文 `text` は無い）、直前が待ちならその解消の合図でもある。
  *   古い行は `user_text` も無い（合図だけ）
+ * - `end`: セッションが終わった（`SessionEnd`。Claude だけ。#385）。`text` は「なぜ終わったか」で、
+ *   **`/clear` はここより前をエージェントが覚えていない**という区切りでもある（`record.py` は人が意図して
+ *   終えたものだけ書く。`-p` の 1 回とペインごとの kill はどちらも `reason: other` で区別が付かないので書かない）
  * - `other`: 知らない event。**数えないし出さない**
  *
  * **turn は名指しで、知らない値は `other` に落とす**（#235）。以前は既定が `turn` だったので、
@@ -42,6 +45,8 @@ export function eventKind(event: string | undefined): EventKind {
     case 'UserPromptSubmit':
     case 'permission.replied':
       return 'resume'
+    case 'SessionEnd':
+      return 'end'
     default:
       return 'other'
   }

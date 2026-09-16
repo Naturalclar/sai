@@ -31,6 +31,11 @@ export interface Utterance {
   model?: string
   /** この発言の本文が record.py に切られている（#358）。バブルの末尾に印を出す */
   clipped?: boolean
+  /**
+   * セッションが終わった行（#385。`SessionEnd`）。発言ではないので、バブルではなく日付と同じ**区切り線**にする。
+   * `text` は「なぜ終わったか」（`セッション終了: 会話をリセット（/clear）`）
+   */
+  ended?: boolean
 }
 
 export interface Group {
@@ -43,6 +48,11 @@ export interface Group {
   firstTs: string
   lastTs: string
   items: Utterance[]
+  /**
+   * 発言の塊ではなく区切り線（#385）。`items` は終了の行 1 つだけで、アバターも名前も出さない
+   * （エージェントが言ったことではないため）
+   */
+  divider?: boolean
 }
 
 export interface DayGroups {
@@ -74,6 +84,11 @@ export function toUtterances(rows: FeedRow[]): Utterance[] {
         out.push({ speaker: 'me', row, text: row.user_text ?? '', key: `${row.ts}:${index}:me`, ...(wasClipped(row, 'user_text') ? { clipped: true } : {}) })
         prompted.set(id, mine)
       }
+      return
+    }
+    if (kind === 'end') {
+      // 終了の行（#385）。誰の発言でもないので speaker はエージェントのまま置き、描くのは区切り線
+      out.push({ speaker: row.agent, row, text: row.text ?? '', key: `${row.ts}:${index}:end`, ended: true })
       return
     }
     if (kind === 'waiting') {
@@ -139,6 +154,8 @@ export function groupRows(rows: FeedRow[]): DayGroups[] {
     }
     const same =
       current &&
+      !current.divider &&
+      !u.ended &&
       current.speaker === u.speaker &&
       current.repo === row.repo &&
       current.session === row.session &&
@@ -147,7 +164,7 @@ export function groupRows(rows: FeedRow[]): DayGroups[] {
       current.items.push(u)
       current.lastTs = row.ts
     } else {
-      current = { speaker: u.speaker, repo: row.repo, branch: row.branch, host: row.host ?? '', session: row.session, firstTs: row.ts, lastTs: row.ts, items: [u] }
+      current = { speaker: u.speaker, repo: row.repo, branch: row.branch, host: row.host ?? '', session: row.session, firstTs: row.ts, lastTs: row.ts, items: [u], ...(u.ended ? { divider: true } : {}) }
       bucket.groups.push(current)
     }
   }

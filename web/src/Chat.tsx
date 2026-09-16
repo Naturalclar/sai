@@ -9,6 +9,7 @@ import type { FeedRow, Profile, SessionSummary } from './api'
 import { hm } from './format'
 import { groupRows, speakerLabel } from './chatGroups.ts'
 import { Message } from './Message'
+import { SessionEndLine } from './SessionEndLine'
 import { JumpToBottom } from './JumpToBottom'
 import { HostTag } from './HostTag'
 import { opensDiff, type ChatDiffs } from './feedDiff.ts'
@@ -167,6 +168,11 @@ export function Chat({ rows, showChannel, selfHost = '', sessions = NO_SESSIONS,
             <div className="day"><span>{day.label}</span></div>
             {day.groups.map((g) => {
               const id = entityId(g.session, g.repo, g.firstTs)
+              // セッションが終わった区切り（#385）。発言ではないので、アバターも名前も出さない
+              if (g.divider) {
+                const end = g.items[0]!
+                return <SessionEndLine key={`end:${end.key}`} text={end.text} ts={end.row.ts} />
+              }
               const who = speakerLabel(g.speaker, byId.get(id), profile)
               return (
                 <div className="group" key={`${g.speaker}:${g.session}:${g.firstTs}`}>

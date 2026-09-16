@@ -33,13 +33,19 @@ test('eventKind: 人が入力した行', () => {
   assert.equal(eventKind('UserPromptSubmit'), 'resume')
 })
 
+test('eventKind: セッションが終わった行（#385）', () => {
+  assert.equal(eventKind('SessionEnd'), 'end')
+  // 始まりは書いていないので今までどおり other（#385 で書くのは終わりだけ）
+  assert.equal(eventKind('SessionStart'), 'other')
+})
+
 /**
  * この 1 件が #235 の本体。以前は既定が turn だったので、ここに挙げた値が全部 turn になり、
  * 本文の無い行が「一番新しいターン完了」を奪っていた
  */
 test('eventKind: 知らない event は other（turn に落とさない。#235）', () => {
   // Claude のフック名。record.py を向ければそのまま行になる
-  for (const e of ['SubagentStop', 'PreCompact', 'SessionStart', 'SessionEnd', 'PostToolUse']) {
+  for (const e of ['SubagentStop', 'PreCompact', 'SessionStart', 'PostToolUse']) {
     assert.equal(eventKind(e), 'other', e)
   }
   // Codex の notify の type。README のラッパーは "$@" をそのまま渡す

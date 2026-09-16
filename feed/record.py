@@ -728,6 +728,34 @@ def waiting_text(payload: dict) -> str | None:
     return None
 
 
+# ---------------------------------------------------------------- 終了（セッションが終わった）
+
+# SessionEnd の `reason` → 行の text（#385）。**人が意図して終えたものだけ**を書く。
+# `other` は「`claude -p` が 1 回終わった」「ペインごと殺した」の両方で来て区別が付かないので書かない
+# （SAI 自身の返信はすべて `-p` なので、書くと返信のたびに終了の行が増える）。
+# 値は実機で確かめたもの: /clear → clear、/exit → prompt_input_exit、-p の 1 回とペインの kill → other
+_END_REASONS = {
+    "clear": "会話をリセット（/clear）",
+    "prompt_input_exit": "終了（/exit）",
+    "logout": "ログアウト",
+}
+
+
+def end_text(payload: dict) -> str | None:
+    """終了の行の text。書かない `reason` なら None。
+
+    `/clear` は**古いセッションの終わり**として鳴り、直後に新しいセッション ID で始まる
+    （SessionStart の source も clear）。つまりこの行より前は、エージェントがもう覚えていない。
+    """
+    reason = payload.get("reason")
+    label = _END_REASONS.get(reason) if isinstance(reason, str) else None
+    return f"セッション終了: {label}" if label else None
+
+
+def is_end_event(event: str) -> bool:
+    return event == "SessionEnd"
+
+
 def is_waiting_event(event: str) -> bool:
     # OpenCode の permission.asked も待ち（shared/events.ts の eventKind() と同じ並び）
     return event in ("PermissionRequest", "PreToolUse", "Notification", "permission.asked")
@@ -1062,6 +1090,8 @@ def build_row(payload: dict, now: datetime, directory: Path, declared: str = "")
 
     event = detect_event(payload)
     waiting = None
+    # 終了の行（#385）。本文の代わりに「なぜ終わったか」を入れる
+    ended = None
     # Claude のフックはどのイベントでも permission_mode を載せてくる（イベントによっては無い）。Codex には無い
     raw_mode = payload.get("permission_mode")
     permission_mode = raw_mode.strip() if isinstance(raw_mode, str) else ""
@@ -1075,12 +1105,18 @@ def build_row(payload: dict, now: datetime, directory: Path, declared: str = "")
             waiting = waiting_text(payload)
             if waiting is None:
                 return None
+        if is_end_event(event):
+            # 終了の行（#385）。本文は「なぜ終わったか」だけで、transcript は読まない
+            # （読むと最後のターンの返答がもう 1 行ぶん増えて、同じ発言が 2 回出る）
+            ended = end_text(payload)
+            if ended is None:
+                return None
         transcript = payload.get("transcript_path")
         if isinstance(transcript, str) and transcript:
             path = Path(transcript).expanduser()
             # タイトル用の first_user_text はどの行にも載せる。本文と入力はターン完了の行だけ
             first_user = first_user_text(path)
-            if event not in ("UserPromptSubmit",) and waiting is None:
+            if event not in ("UserPromptSubmit",) and waiting is None and ended is None:
                 text = last_assistant_text(path)
                 user_text = last_user_text(path)
                 thinking = last_turn_thinking(path)
@@ -1097,6 +1133,8 @@ def build_row(payload: dict, now: datetime, directory: Path, declared: str = "")
                 first_user = user_text
         if waiting is not None:
             text = waiting
+        if ended is not None:
+            text = ended
 
     elif agent == "codex":
         value = payload.get("last-assistant-message") or payload.get("last_assistant_message")

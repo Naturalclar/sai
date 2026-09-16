@@ -341,6 +341,7 @@
     .msg .time { left: -38px; width: 34px; }
     .pending-line { padding-left: 46px; }
     .day::before { left: 8px; right: 8px; }
+    .chat-end::before { left: 8px; right: 8px; }
     .reply .target { flex-wrap: wrap; }
     /* 16px は幅の条件でも当てる（pointer: coarse にならない iPad + トラックパッドなどの取りこぼし。#122）。
        入力欄が全幅なのは幅に関係なく（下の .reply の定義） */
@@ -536,6 +537,12 @@
   .day { text-align: center; color: var(--muted); font-size: 11px; padding: 10px 0 2px; position: relative; }
   .day span { background: var(--panel); padding: 0 8px; position: relative; }
   .day::before { content: ""; position: absolute; left: 16px; right: 16px; top: 18px; border-top: 1px solid var(--line); }
+  /* セッションが終わった区切り（#385）。日付と同じ形にして、発言の塊（.group）とは別ものだと分かるようにする。
+     /clear の回は、この線より前をエージェントが覚えていない */
+  .chat-end { text-align: center; color: var(--muted); font-size: 11px; padding: 12px 0 6px; position: relative; }
+  .chat-end span { background: var(--panel); padding: 0 8px; position: relative; }
+  .chat-end time { font-variant-numeric: tabular-nums; opacity: 0.8; }
+  .chat-end::before { content: ""; position: absolute; left: 16px; right: 16px; top: 20px; border-top: 1px dashed var(--line); }
   .group { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 10px; padding: 10px 16px 4px; }
   .group + .group { border-top: 0; }
   .avatar { width: 36px; height: 36px; border-radius: 6px; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; font-size: 13px; background: var(--unknown); }

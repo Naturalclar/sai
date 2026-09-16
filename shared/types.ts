@@ -2,6 +2,7 @@
 // フィールドを足すときはここに足す。JSONL の形は feed/record.py が正本。
 
 import type { Skill } from './skills.ts'
+import type { TurnUsage } from './turnUsage.ts'
 
 export type Agent = 'claude' | 'codex' | 'opencode' | 'grok' | 'unknown'
 export type SessionSource = 'payload' | 'rollout' | 'synth' | ''
@@ -80,6 +81,12 @@ export interface FeedRow {
    * ~/.agent-feed/digest.jsonl から載せる（server/digest/digest.ts）。無ければ省略で、画面は text を出す
    */
   summary?: string
+  /**
+   * そのターンが使ったトークンと費用（#411）。JSONL には無く、サーバが応答時に
+   * ~/.agent-feed/turn-usage.jsonl から載せる（server/reply/turnUsage.ts）。
+   * **SAI が起こした Claude のターンだけ**に付く（端末で打ったターン・Codex / OpenCode・別のマシンには付かない）
+   */
+  usage?: TurnUsage
 }
 
 /** 行をセッション単位にまとめたもの。GET /api/sessions の1件 */

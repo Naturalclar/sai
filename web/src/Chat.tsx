@@ -212,6 +212,7 @@ export function Chat({ rows, showChannel, selfHost = '', sessions = NO_SESSIONS,
                         summary={u.summary}
                         digestKey={u.summary ? digestKey(u.row) : undefined}
                         model={u.model}
+                        usage={u.speaker !== 'me' && !u.waiting ? u.row.usage : undefined}
                         remote={u.row.remote}
                         sourceAsk={u.row.user_text}
                         linear={linear}

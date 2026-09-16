@@ -13,7 +13,9 @@ import { SourceImages } from './SourceImages'
 import { ImageSourceContext } from './imageContext'
 import { QuestionPreview } from './QuestionPreview'
 import { ClippedNote } from './ClippedNote'
+import { TurnUsageTag } from './TurnUsageTag'
 import type { AskQuestion } from '../../shared/approvals.ts'
+import type { TurnUsage } from '../../shared/turnUsage.ts'
 
 // 折りたたむかは描画前の生の長さで見る（コードブロック1つで8行を超えても折りたたむ。今まで通り）
 const isLong = (text: string) => text.length > 600 || text.split('\n').length > 8
@@ -51,6 +53,11 @@ interface Props {
   /** このターンからモデルが変わった。そのモデル名を小さく出す */
   model?: string
   /**
+   * そのターンが使ったトークン・費用（#411。行の `usage`）。SAI が起こした Claude のターンにだけ付く。
+   * 隅に合計を出し、内訳と費用は title の中（`usageLabel.ts`）
+   */
+  usage?: TurnUsage
+  /**
    * 検索から飛んできた当たり（#230）。`Chat` がこの印で場所を探して、そこまでスクロールして光らせる。
    * 行ごとに DOM の目印を置くのはここだけなので、3 つの分岐すべてに同じものを付ける
    */
@@ -74,7 +81,7 @@ interface Props {
 }
 
 /** バブル1つ分の本文。長ければ折りたたんで「もっと見る」を付ける */
-export function Message({ ts, text: raw, markdown, waiting, questions, resolved, thinking, thinkingOpen = false, summary, digestKey, model, remote, sourceAsk = '', linear, found = false, utteranceKey, diff, clipped = false, thinkingClipped = false, defaultOpen = false }: Props) {
+export function Message({ ts, text: raw, markdown, waiting, questions, resolved, thinking, thinkingOpen = false, summary, digestKey, model, usage, remote, sourceAsk = '', linear, found = false, utteranceKey, diff, clipped = false, thinkingClipped = false, defaultOpen = false }: Props) {
   // 自分の入力に添えた画像は、パスの文字列ではなくサムネイルで出す（本文の末尾に足してある。shared/attachments.ts）
   const { body: text, urls } = markdown ? { body: raw, urls: [] as string[] } : splitAttachments(raw)
   // 長い本文を開いているか。#365 の画面（フィード）では最初から開いた状態で始める。
@@ -104,6 +111,7 @@ export function Message({ ts, text: raw, markdown, waiting, questions, resolved,
     return (
       <div className={`msg${mark}`} {...anchor}>
         <span className="time">{hm(ts)}</span>
+        {usage && <TurnUsageTag usage={usage} />}
         {thinking && <ThinkingBlock text={thinking} openAll={thinkingOpen} clipped={thinkingClipped} />}
         <div className="summary" ref={summaryRef}>
           {/* 一言の中の URL・#123・PGR-123 はリンクにする（shared/refs.ts）。HTML 文字列は作らない */}
@@ -137,6 +145,7 @@ export function Message({ ts, text: raw, markdown, waiting, questions, resolved,
     <div className={`msg${mark}`} {...anchor}>
       <span className="time">{hm(ts)}</span>
       {model && <span className="tag model" title="このターンからモデルが変わった">{model}</span>}
+      {usage && <TurnUsageTag usage={usage} />}
       {thinking && <ThinkingBlock text={thinking} openAll={thinkingOpen} clipped={thinkingClipped} />}
       {text ? (
         <div className={`body${long && !open ? ' clamped' : ''}`} ref={bodyRef}>{markdown ? <Markdown text={text} /> : text}</div>

@@ -15,6 +15,7 @@ import type { ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { basename, extname } from 'node:path'
 import { homedir } from 'node:os'
+import { opencodeModels } from '../../shared/models.ts'
 import { opencodeSkills } from '../../shared/skills.ts'
 import { settledByRow } from '../../shared/turnSettled.ts'
 import { childEnv } from './runner.ts'
@@ -44,6 +45,8 @@ export interface OpencodeApp {
    * （サーバ自身は homedir で動いているため、渡さないとサーバ側の顔ぶれになる）
    */
   skills(cwd: string): Promise<Skill[]>
+  /** 返信で選べるモデル（#394。`provider/model`）。`cwd` ごとに設定が違うので渡す */
+  models(cwd: string): Promise<string[]>
   /** 行が届いたターンを終わりにする（#375 と同じ判定）。終わった id を返す（預かりを回すのに使う） */
   settle(lastTurn: (id: string) => string | undefined): string[]
   stop(): void
@@ -133,6 +136,18 @@ export class OpencodeServer implements OpencodeApp {
     const res = await this.fetchFn(`${url}/command?directory=${encodeURIComponent(cwd)}`, { headers: { authorization: auth } })
     if (!res.ok) throw new Error(`opencode serve が ${res.status} を返しました`)
     return opencodeSkills(await res.json())
+  }
+
+  /**
+   * 返信のモデル候補（#394）。`GET /config/providers?directory=<cwd>` の**設定済みの provider**から作る。
+   * `/api/model` の 93 件ではなく**その人が実際に使えるもの**にする（数の多さより当たりやすさ）。
+   * `directory` を渡すと、その worktree の `opencode.json` で足した provider まで出る（実機で確認）
+   */
+  async models(cwd: string): Promise<string[]> {
+    const { url, auth } = await this.serve()
+    const res = await this.fetchFn(`${url}/config/providers?directory=${encodeURIComponent(cwd)}`, { headers: { authorization: auth } })
+    if (!res.ok) throw new Error(`opencode serve が ${res.status} を返しました`)
+    return opencodeModels(await res.json())
   }
 
   stop(): void {

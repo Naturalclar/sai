@@ -350,6 +350,16 @@ export interface SessionSkillsResponse {
   skills: Skill[]
 }
 
+/**
+ * GET /api/sessions/<id>/models。返信で選べるモデルの候補（#394。`provider/model`）。
+ * **記録に出てきたモデル（`SessionSummary.models`）とは別**で、本体に聞いたもの。
+ * いまは OpenCode だけで、ほかは空（Claude / Codex は今までどおり記録から組み立てる）
+ */
+export interface SessionModelsResponse {
+  id: string
+  models: string[]
+}
+
 export interface SessionMetaResponse {
   id: string
   meta: SessionMeta

@@ -104,3 +104,35 @@ test('skills: /command に cwd を渡して聞く。断られたら投げる（�
     await new Promise<void>((r) => server.close(() => r()))
   }
 })
+
+test('models: /config/providers に cwd を渡して聞く。断られたら投げる', async () => {
+  const seen: { url: string; auth: string }[] = []
+  let status = 200
+  const server: Server = createServer((req, res) => {
+    seen.push({ url: req.url ?? '', auth: req.headers.authorization ?? '' })
+    res.writeHead(status, { 'content-type': 'application/json' })
+    res.end(
+      status === 200
+        ? JSON.stringify({
+            providers: [
+              { id: 'openai', models: { 'gpt-6-astra': {} } },
+              { id: 'ollama', models: { 'qwen3:8b': {} } },
+            ],
+          })
+        : '{}',
+    )
+  })
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+  const addr = server.address()
+  const base = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`
+  try {
+    const app = new OpencodeServer(fetch, Date.now, async () => ({ url: base, auth: 'Basic dGVzdA==' }))
+    assert.deepEqual(await app.models('/w/some repo'), ['openai/gpt-6-astra', 'ollama/qwen3:8b'])
+    assert.equal(seen[0]!.url, '/config/providers?directory=%2Fw%2Fsome%20repo')
+    assert.equal(seen[0]!.auth, 'Basic dGVzdA==')
+    status = 500
+    await assert.rejects(app.models('/w'), /500/)
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()))
+  }
+})

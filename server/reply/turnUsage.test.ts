@@ -64,10 +64,14 @@ test('TurnUsageLog: 起動時に読み返し、行に載せる（記録した分
     assert.equal(attached[0]?.usage?.output_tokens, 94)
     // 古い行（窓の外）は読み返さないので、2 つめには何も付かない
     assert.equal(attached[1]?.usage, undefined)
-    // 記録すると rev が変わる（行より 1〜2 秒遅れて届くので、変わらないと画面が拾わない）
+    // 記録すると rev が変わる（行より 1〜2 秒遅れて届くので、変わらないと画面が拾わない）。
+    // 行の ts は record() の**前**に採る: usageByRow() は使用量より後の行を見ないので、record() のあとに
+    // new Date() を取ると、別のミリ秒に入った瞬間に当たらなくなる（CI で 1 回だけ落ちた。#424）。
+    // 実物と同じ向き（Stop フックの行が先、使用量が後）はこのまま
+    const rowTs = new Date().toISOString()
     log.record('S@r', { ...usage, output_tokens: 7 })
     assert.notEqual(log.rev(), before)
-    const now = log.attach([{ ...rows[1]!, ts: new Date().toISOString() }])
+    const now = log.attach([{ ...rows[1]!, ts: rowTs }])
     assert.equal(now[0]?.usage?.output_tokens, 7)
   } finally {
     await rm(dir, { recursive: true, force: true })

@@ -3,7 +3,7 @@
 import { randomBytes } from 'node:crypto'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createInterface } from 'node:readline'
-import type { Approval, ApprovalAnswer, ApprovalMap, ReplyingMap } from '../../shared/types.ts'
+import type { Approval, ApprovalAnswer, ApprovalMap, ReplyingMap, ReviewTarget } from '../../shared/types.ts'
 import { parseCodexSkills, type Skill } from '../../shared/skills.ts'
 import { childEnv, splitArgs } from './runner.ts'
 
@@ -34,6 +34,18 @@ export interface CodexTurnInput {
   cwd: string
   model?: string
   attachments?: readonly string[]
+}
+
+export interface CodexReviewInput {
+  id: string
+  threadId: string
+  cwd: string
+  model?: string
+  /** 画面に出す文（処理中の仮バブル）。Codex に送る指示は `review/start` が組み立てる */
+  text: string
+  target: ReviewTarget
+  /** `baseBranch` のときに比べる相手。差分ビューアと同じものを `app.ts` が決める */
+  base?: string
 }
 
 export type CodexAnswerResult =
@@ -74,6 +86,11 @@ export interface CodexApp {
    * 偽物は持たなくてよい（持たなければ Codex の候補はリポジトリ側だけになる）
    */
   skills?(): Promise<Skill[]>
+  /**
+   * 差分のレビューを 1 本走らせる（#403。`review/start`）。返信と同じく `thread/resume` してから投げるので、
+   * 処理中・許可・ターンの終わりは普通のターンと同じ扱いになる。偽物は持たなくてよい
+   */
+  review?(input: CodexReviewInput): Promise<void>
 }
 
 interface ManagedTurn {
@@ -290,41 +307,67 @@ export class CodexAppServer implements CodexApp {
   }
 
   async start(input: CodexTurnInput): Promise<void> {
-    if (this.running(input.id)) throw new Error('このセッションはまだ前の返信を処理中です')
-    const occupied = this.turns.get(input.threadId)
-    if (occupied && occupied.entity !== input.id) throw new Error('このCodex threadは別のセッションとして処理中です')
-    const turn: ManagedTurn = {
-      entity: input.id,
-      threadId: input.threadId,
-      since: new Date(this.now()).toISOString(),
-      text: input.text,
-    }
-    this.turns.set(input.threadId, turn)
-    this.entityThreads.set(input.id, input.threadId)
-    try {
-      await this.request('thread/resume', {
-        threadId: input.threadId,
-        cwd: input.cwd,
-        model: input.model ?? null,
-        approvalsReviewer: 'user',
-        excludeTurns: true,
-      })
-      // ここから app-server が writer lock を開いている（ターンが終わっても閉じない。#329）
-      this.loaded.add(input.threadId)
+    await this.begin(input.id, input.threadId, input.cwd, input.model, input.text, async () => {
       const message: JsonObject = { type: 'text', text: input.text, text_elements: [] }
       const images = (input.attachments ?? []).map((path) => ({ type: 'localImage', path }))
-      const response = object(await this.request('turn/start', {
+      return await this.request('turn/start', {
         threadId: input.threadId,
         input: [message, ...images],
         cwd: input.cwd,
         model: input.model ?? null,
         approvalsReviewer: 'user',
-      }))
-      const started = object(response?.turn)
-      if (typeof started?.id !== 'string' || !started.id) throw new Error('Codex app-serverのturn/start応答にturn idがありません')
+      })
+    })
+  }
+
+  /**
+   * 差分のレビュー（#403）。`turn/start` の代わりに `review/start` を投げるだけで、あとは返信と同じ。
+   * **レビューは Codex が子スレッドを作って走らせる**が、`turn/started` / `turn/completed` は
+   * こちらのスレッドに届くので、処理中の扱いも終わりの片付けも普通のターンのままでよい（実測）
+   */
+  async review(input: CodexReviewInput): Promise<void> {
+    const target: JsonObject = input.target === 'baseBranch'
+      ? { type: 'baseBranch', branch: input.base ?? '' }
+      : { type: 'uncommittedChanges' }
+    await this.begin(input.id, input.threadId, input.cwd, input.model, input.text, async () =>
+      await this.request('review/start', { threadId: input.threadId, target }))
+  }
+
+  /** ターンを 1 本始める（返信もレビューも同じ）。thread/resume してから `send` を投げ、turn id を覚える */
+  private async begin(
+    entity: string,
+    threadId: string,
+    cwd: string,
+    model: string | undefined,
+    text: string,
+    send: () => Promise<unknown>,
+  ): Promise<void> {
+    if (this.running(entity)) throw new Error('このセッションはまだ前の返信を処理中です')
+    const occupied = this.turns.get(threadId)
+    if (occupied && occupied.entity !== entity) throw new Error('このCodex threadは別のセッションとして処理中です')
+    const turn: ManagedTurn = {
+      entity,
+      threadId,
+      since: new Date(this.now()).toISOString(),
+      text,
+    }
+    this.turns.set(threadId, turn)
+    this.entityThreads.set(entity, threadId)
+    try {
+      await this.request('thread/resume', {
+        threadId,
+        cwd,
+        model: model ?? null,
+        approvalsReviewer: 'user',
+        excludeTurns: true,
+      })
+      // ここから app-server が writer lock を開いている（ターンが終わっても閉じない。#329）
+      this.loaded.add(threadId)
+      const started = object(object(await send())?.turn)
+      if (typeof started?.id !== 'string' || !started.id) throw new Error('Codex app-serverの応答にturn idがありません')
       turn.turnId = started.id
     } catch (error) {
-      this.clearThread(input.threadId)
+      this.clearThread(threadId)
       throw error
     }
   }

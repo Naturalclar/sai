@@ -1,13 +1,15 @@
 import { useEffect, useState } from 'react'
 import { api, type SessionDiffResponse } from './api'
 import { DiffView } from './DiffView'
+import { ReviewButton } from './ReviewButton'
 
 /**
  * そのセッションの worktree の差分の中身（#171）。開いたときに 1 回だけ取る（3 秒のポーリングには乗せない）。
  * 上が「ブランチの差分」（GitHub の PR で見るのと同じ base...HEAD）、下が「未コミット」。読むだけ。
- * 広い画面はペイン（`DiffPane`）、狭い画面はモーダル（`DiffModal`）が、これを包んで出す
+ * 広い画面はペイン（`DiffPane`）、狭い画面はモーダル（`DiffModal`）が、これを包んで出す。
+ * **Codex のセッションで、いま返信できるときだけ**、区切りごとに「レビューさせる」を出す（#403。`canReview`）
  */
-export function DiffBody({ id }: { id: string }) {
+export function DiffBody({ id, canReview = false }: { id: string; canReview?: boolean }) {
   const [data, setData] = useState<SessionDiffResponse | null>(null)
   const [error, setError] = useState('')
 
@@ -37,8 +39,20 @@ export function DiffBody({ id }: { id: string }) {
               <div className="warn">このセッションが動いていたのは {data.session_branch} で、いまの worktree は {data.head} にいます</div>
             )}
           </div>
-          {data.base && <DiffView section={data.branch} title="ブランチの差分" empty={`${data.base} との差はありません`} />}
-          <DiffView section={data.working} title="未コミット" empty="コミットしていない変更はありません" />
+          {data.base && (
+            <DiffView
+              section={data.branch}
+              title="ブランチの差分"
+              empty={`${data.base} との差はありません`}
+              action={canReview && data.branch.files.length > 0 ? <ReviewButton id={id} target="baseBranch" /> : undefined}
+            />
+          )}
+          <DiffView
+            section={data.working}
+            title="未コミット"
+            empty="コミットしていない変更はありません"
+            action={canReview && data.working.files.length > 0 ? <ReviewButton id={id} target="uncommittedChanges" /> : undefined}
+          />
           {data.untracked.length > 0 && (
             <div className="diff-section">
               <div className="head">

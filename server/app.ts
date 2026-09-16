@@ -44,6 +44,8 @@ import type {
   SessionSkillsResponse,
   SearchResponse,
   SessionsResponse,
+  ReviewRequest,
+  ReviewResponse,
   SessionSummary,
   SettingsRequest,
   SettingsResponse,
@@ -75,7 +77,7 @@ import type { Digester } from './digest/digest.ts'
 import { META_FILE, MetaStore } from './meta/meta.ts'
 import { collectPermissions } from './approvals/permissions.ts'
 import { compareUrl } from '../shared/diff.ts'
-import { NotAGitRepo, RealGit, sessionDiff, sessionDiffSummary } from './git/diff.ts'
+import { NotAGitRepo, RealGit, resolveBase, sessionDiff, sessionDiffSummary } from './git/diff.ts'
 import { fillRepo, ProjectResolver } from './git/project.ts'
 import type { Git } from './git/diff.ts'
 import { prLookupFromEnv } from './git/pr.ts'
@@ -152,6 +154,7 @@ const SEARCH_PATH = '/api/search'
 /** 設定 body の上限 */
 export const MAX_SETTINGS_BYTES = 4 * 1024
 const REPLY_SUFFIX = '/reply'
+const REVIEW_SUFFIX = '/review'
 const META_SUFFIX = '/meta'
 const ICON_SUFFIX = '/icon'
 const SKILLS_SUFFIX = '/skills'
@@ -715,6 +718,71 @@ export function createApp(
     const wantQueue = (body as ReplyRequest).queue === true
     const out = await launch(id, text, attachments, { days, replaceTyped, forceProcess, url: selfUrl(req), queue: wantQueue })
     return json(res, out.body, out.status)
+  }
+
+  /**
+   * 差分のレビューを Codex に頼む（#403。`POST /api/sessions/<id>/review`）。**同一オリジンのみ**（返信と同じ扱い）。
+   * 受け取るのは対象の種類だけで、**`cwd` もブランチ名もリクエストからは受けない**（cwd は行から、
+   * 比べる相手は差分ビューアと同じ `resolveBase()` で決める）。結果は普通のターン完了の行として届く
+   */
+  const review = async (req: IncomingMessage, res: ServerResponse, id: string, days: number) => {
+    if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
+    let body: unknown
+    try {
+      body = await readJson(req, MAX_REPLY_BYTES)
+    } catch (err) {
+      return error(res, 400, err instanceof Error ? err.message : 'bad body')
+    }
+    const target = (body as ReviewRequest | null)?.target
+    if (target !== 'uncommittedChanges' && target !== 'baseBranch') {
+      return error(res, 400, 'target は uncommittedChanges か baseBranch です')
+    }
+    const { sessions } = await store.sessions(days)
+    const session = sessions.find((s) => s.id === id)
+    if (!session) return error(res, 404, 'session not found in window')
+    // レビューの口があるのは Codex の app-server だけ（Claude は本文に `/review` を送る別の話）
+    if (session.agent !== 'codex') return error(res, 400, 'レビューを頼めるのは Codex のセッションだけです')
+    if (!codexAppEnabled) return error(res, 400, 'SAI_CODEX_APP_SERVER=0 のときはレビューを頼めません')
+    if (!codexApp.review) return error(res, 400, 'この SAI ではレビューを頼めません')
+    const blocked = replyBlockedReason(session, selfHost())
+    if (blocked) return error(res, 400, blocked)
+    const rows = (await store.rows(days)).filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
+    const raw = rows[rows.length - 1]?.session ?? ''
+    if (!raw) return error(res, 400, 'session id missing in rows')
+    const cwd = session.cwd
+    try {
+      if (!cwd || !(await stat(cwd)).isDirectory()) throw new Error('not a directory')
+    } catch {
+      return error(res, 400, `cwd が見つかりません: ${cwd || '(空)'}`)
+    }
+    // レビューも 1 本のターンなので、返信と同じ歯止めに乗せる。**預かりには回さない**
+    // （預かり（#305）が持てるのは本文だけで、レビューの対象を持ち越せない。押し直せばよい）
+    if (run.running(id) || codexApp.running(id) || opencodeApp.running(id) || launching.has(id) || queue.size(id) > 0) {
+      return error(res, 409, 'このセッションはまだ前の返信を処理中です')
+    }
+    // 比べる相手は差分ビューアと同じ選び方（#289）。見つからないブランチを渡すとターンを 1 本無駄にする
+    let base = ''
+    if (target === 'baseBranch') {
+      base = await resolveBase(git, cwd).catch(() => '')
+      if (!base) return error(res, 400, '比べる相手のブランチが見つかりません')
+    }
+    const text = target === 'baseBranch' ? `差分のレビュー（${base} との差分）` : '差分のレビュー（未コミットの変更）'
+    const log = join(store.directory, 'reply.log')
+    await appendFile(log, `--- ${new Date().toISOString()} ${id} Codex にレビューを頼む（review/start ${target}${base ? ` ${base}` : ''}) (cwd ${cwd})\n`).catch(() => {})
+    launching.add(id)
+    try {
+      await codexApp.review({ id, threadId: raw, cwd, model: (await metaStore.get(id))?.model, text, target, base })
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      const hint = code === 'ENOENT' ? 'codex が見つかりません（サーバを起動した環境の PATH に codex があるか確かめてください）' : ''
+      const message = hint || `Codex にレビューを頼めませんでした: ${err instanceof Error ? err.message : String(err)}`
+      await appendFile(log, `${message}\n`).catch(() => {})
+      return error(res, 500, message)
+    } finally {
+      launching.delete(id)
+    }
+    const payload: ReviewResponse = { accepted: true, id, session: raw, cwd, target, ...(base ? { base } : {}) }
+    return json(res, payload, 202)
   }
 
   /**
@@ -1762,6 +1830,7 @@ export function createApp(
     const q = url.searchParams
     const path = url.pathname
     const isReply = path.startsWith(SESSIONS_PREFIX) && path.endsWith(REPLY_SUFFIX)
+    const isReview = path.startsWith(SESSIONS_PREFIX) && path.endsWith(REVIEW_SUFFIX)
     const isMeta = path.startsWith(SESSIONS_PREFIX) && path.endsWith(META_SUFFIX)
     const isIcon = path.startsWith(SESSIONS_PREFIX) && path.endsWith(ICON_SUFFIX)
     const isSkills = path.startsWith(SESSIONS_PREFIX) && path.endsWith(SKILLS_SUFFIX)
@@ -1801,7 +1870,7 @@ export function createApp(
     // 「設定は PUT」「預かった返信の再開は POST、取り消しは DELETE」だけ。それ以外は GET / HEAD のみ
     const writable =
       (method === 'POST' &&
-        (isNewSession || isReply || isAsk || isAnswer || isAttachUpload || isQueue || isDigestFeedback || path === AGENT_SEND_PATH || isAgentStop || isInterrupt)) ||
+        (isNewSession || isReply || isReview || isAsk || isAnswer || isAttachUpload || isQueue || isDigestFeedback || path === AGENT_SEND_PATH || isAgentStop || isInterrupt)) ||
       (method === 'DELETE' && isQueue) ||
       (method === 'PUT' && (isMeta || isProfile || isSettings)) ||
       ((method === 'PUT' || method === 'DELETE') && (isIcon || isProfileIcon))
@@ -1846,6 +1915,12 @@ export function createApp(
         const id = sessionIdFrom(path, REPLY_SUFFIX)
         if (id === null) return error(res, 400, 'bad session id')
         return await reply(req, res, id, parseDays(q.get('days'), 90))
+      }
+      if (isReview) {
+        if (method !== 'POST') return error(res, 405, 'method not allowed')
+        const id = sessionIdFrom(path, REVIEW_SUFFIX)
+        if (id === null) return error(res, 400, 'bad session id')
+        return await review(req, res, id, parseDays(q.get('days'), 90))
       }
       if (isAsk) {
         if (method !== 'POST') return error(res, 405, 'method not allowed')

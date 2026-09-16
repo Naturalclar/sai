@@ -718,11 +718,11 @@ class RecordTest(unittest.TestCase):
 
     # -- Codex
 
-    def _rollout(self, session_id: str, cwd: str, day: datetime | None = None, first_user: str = "最初の依頼", tail: list[dict] | None = None) -> Path:
+    def _rollout(self, session_id: str, cwd: str, day: datetime | None = None, first_user: str = "最初の依頼", tail: list[dict] | None = None, meta: dict | None = None) -> Path:
         day = day or datetime.now(JST)
         path = self.codex_home / "sessions" / day.strftime("%Y/%m/%d") / f"rollout-{day.strftime('%Y-%m-%dT%H-%M-%S')}-{session_id}.jsonl"
         write_jsonl(path, [
-            {"timestamp": day.isoformat(), "type": "session_meta", "payload": {"id": session_id, "cwd": cwd, "originator": "codex_cli_rs"}},
+            {"timestamp": day.isoformat(), "type": "session_meta", "payload": {"id": session_id, "cwd": cwd, "originator": "codex_cli_rs", **(meta or {})}},
             {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "<environment_context>\n</environment_context>"}]}},
             {"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": first_user}]}},
         ] + (tail or []))
@@ -855,6 +855,80 @@ class RecordTest(unittest.TestCase):
         self.assertEqual(row["first_user_text"], "README を直して")
         self.assertEqual(row["user_text"], "README を直して")
         self.assertEqual(row["repo"], "myrepo")
+
+    # Codex の `review/start`（v0.154.0 で実測した形）
+    REVIEW_PROMPT = "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings."
+    REVIEW_REPLY = json.dumps({
+        "findings": [{
+            "title": "[P1] Return the actual product from `mul`",
+            "body": "For any nonzero operands, `mul` always returns `0`.",
+            "confidence_score": 1.0,
+            "priority": 1,
+            "code_location": {"absolute_file_path": "CWD/calc.py", "line_range": {"start": 8, "end": 8}},
+        }],
+        "overall_correctness": "patch is incorrect",
+        "overall_explanation": "The new multiplication function returns zero.",
+        "overall_confidence_score": 1.0,
+    }, indent=2)
+
+    def test_codex_review_row_belongs_to_the_parent_session(self):
+        """レビューは子スレッドで走るが、行は頼んだセッションに付く（#403）。
+
+        `review/start` は親の下に子スレッドを作り、rollout も別ファイルとして書く。notify には
+        セッションIDが無いので cwd で引くことになり、**どちらのファイルが当たるかは mtime の差**
+        （実測 5ms）で決まる。子が当たっても `session_meta.session_id` は親を指す。
+        """
+        parent = "0c6bd4c9-3333-4a2b-9c3d-aaaaaaaaaaaa"
+        child = "0c6bd4c9-4444-4a2b-9c3d-bbbbbbbbbbbb"
+        self._rollout(parent, str(self.cwd), first_user="README を直して", meta={"session_id": parent})
+        # 子のほうが新しい = cwd で引くとこちらが当たる
+        newer = self._rollout(child, str(self.cwd), meta={"session_id": parent, "parent_thread_id": parent})
+        os.utime(newer, None)
+        payload = {
+            "type": "agent-turn-complete",
+            "thread-id": child,
+            "turn-id": "t1",
+            "input-messages": [self.REVIEW_PROMPT],
+            "last-assistant-message": self.REVIEW_REPLY.replace("CWD", str(self.cwd)),
+        }
+        result = subprocess.run(
+            [sys.executable, str(RECORD), json.dumps(payload)],
+            cwd=str(self.cwd), capture_output=True, text=True,
+            env=dict(os.environ, **self.env), timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rows = read_rows(self.feed_dir)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["session"], parent, "子スレッドの rollout が当たっても親に付く")
+        self.assertEqual(rows[0]["session_source"], "rollout")
+        self.assertEqual(rows[0]["user_text"], "差分のレビュー（未コミットの変更）", "英語の指示文をタイトルにしない")
+        self.assertIn("**レビュー結果: patch is incorrect**", rows[0]["text"])
+        self.assertIn("`calc.py:8`", rows[0]["text"], "cwd の中なら相対パスで出す")
+        self.assertNotIn("confidence_score", rows[0]["text"], "生の JSON は残さない")
+
+    def test_codex_review_text_and_label(self):
+        from feed.record import codex_review_label, codex_review_text
+
+        self.assertEqual(
+            codex_review_label("Review the code changes against the base branch 'origin/main'. The merge base commit is abc."),
+            "差分のレビュー（origin/main との差分）",
+        )
+        self.assertEqual(codex_review_label(self.REVIEW_PROMPT), "差分のレビュー（未コミットの変更）")
+        self.assertEqual(codex_review_label("差分を見て"), "", "人が自分で打った指示はそのまま残す")
+
+        text = codex_review_text(self.REVIEW_REPLY.replace("CWD", "/repo"), "/repo")
+        self.assertIn("**レビュー結果: patch is incorrect**", text)
+        self.assertIn("The new multiplication function returns zero.", text)
+        self.assertIn("- **[P1] Return the actual product from `mul`** — `calc.py:8`", text)
+        self.assertIn("  For any nonzero operands", text, "本文は字下げして同じ項目に入れる")
+        self.assertIn("calc.py:8", codex_review_text(self.REVIEW_REPLY.replace("CWD", "/repo"), "/repo"))
+        self.assertIn("/other/calc.py:8", codex_review_text(self.REVIEW_REPLY.replace("CWD", "/other"), "/repo"), "cwd の外は絶対パスのまま")
+
+        empty = json.dumps({"findings": [], "overall_correctness": "patch is correct", "overall_explanation": "問題なし"})
+        self.assertIn("指摘はありません。", codex_review_text(empty))
+        self.assertEqual(codex_review_text('{"a": 1}'), "", "レビューでない JSON は触らない")
+        self.assertEqual(codex_review_text("ふつうの返答"), "")
+        self.assertEqual(codex_review_text("{壊れた"), "")
 
     TITLE_PROMPT = (
         "Generate a concise, single-line task title of at most 36 characters and under five words where possible. "

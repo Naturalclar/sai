@@ -3,6 +3,7 @@ import { HIDDEN_POLL_MS, parseRoute, useHashRoute, useLocalState, usePolling } f
 import { todoItems } from '../../shared/todoItems.ts'
 import { sessionGroups, toggleCollapsed, visibleIds } from './sessionGroups'
 import { titleWith } from '../../shared/notify.ts'
+import { replyBlockedReason } from '../../shared/reply.ts'
 import { useNotify } from './useNotify'
 import { SessionList } from './SessionList'
 import { SessionView } from './SessionView'
@@ -106,6 +107,9 @@ export function App() {
   // フィードに来て同じセッションのバブルを押しても、閉じずに開く
   const toggleDiff = useCallback((id: string, origin: DiffOrigin = 'session') => setDiff(nextDiff(diffOpen, id, origin)), [diffOpen])
   const toggleFeedDiff = useCallback((id: string) => toggleDiff(id, 'feed'), [toggleDiff])
+  // 差分ビューアの「レビューさせる」は Codex だけ（#403）。返信できないセッション（別のマシン・合成 ID）にも出さない
+  const diffSession = diffOpen === null ? undefined : list.data?.sessions.find((s) => s.id === diffOpen)
+  const canReview = Boolean(diffSession?.agent === 'codex' && !replyBlockedReason(diffSession, list.data?.host ?? ''))
 
   // Cmd/Ctrl + \ で開閉（VS Code と同じ）。入力欄にフォーカスがあっても効く。IME 変換中は無視
   useEffect(() => {
@@ -307,9 +311,9 @@ export function App() {
           )}
         </div>
         {/* 広い画面はチャットの右にもう1枚。狭い画面は今までどおりモーダルで重ねる */}
-        {diffOpen !== null && !narrow && <DiffPane id={diffOpen} onClose={closeDiff} />}
+        {diffOpen !== null && !narrow && <DiffPane id={diffOpen} onClose={closeDiff} canReview={canReview} />}
       </main>
-      {diffOpen !== null && narrow && <DiffModal id={diffOpen} onClose={closeDiff} />}
+      {diffOpen !== null && narrow && <DiffModal id={diffOpen} onClose={closeDiff} canReview={canReview} />}
     </>
   )
 }

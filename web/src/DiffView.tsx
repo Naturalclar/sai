@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
 import { parseUnifiedDiff } from '../../shared/diff.ts'
 import { autoOpenPaths } from './diffOpen.ts'
 import type { DiffFileStat, DiffSection } from './api'
@@ -23,7 +24,7 @@ function lineCount(files: ReturnType<typeof parseUnifiedDiff>, path: string): nu
  * **最初は上から順に開いた状態**で出る（#221。予算を超えたぶんだけ閉じたまま）。
  * 本文の木は shared/diff.ts が作る（HTML 文字列は作らない）
  */
-export function DiffView({ section, title, empty }: { section: DiffSection; title: string; empty: string }) {
+export function DiffView({ section, title, empty, action }: { section: DiffSection; title: string; empty: string; action?: ReactNode }) {
   // patch のパースは重いので、同じ本文なら作り直さない（全部開くようになって行数が増えたぶん効く）
   const files = useMemo(() => parseUnifiedDiff(section.patch), [section.patch])
   const patchOf = (path: string) => files.find((f) => f.path === path || f.oldPath === path)
@@ -45,6 +46,7 @@ export function DiffView({ section, title, empty }: { section: DiffSection; titl
         <span className="n">
           {section.files.length ? `${section.files.length} ファイル · +${section.files.reduce((n, f) => n + f.added, 0)} −${section.files.reduce((n, f) => n + f.removed, 0)}` : ''}
         </span>
+        {action}
       </div>
       {section.files.length === 0 ? (
         <div className="none">{empty}</div>

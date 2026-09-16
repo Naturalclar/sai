@@ -37,7 +37,7 @@ Claude / OpenAI のクラウドに出さず、手元のモデル（Ollama / LM S
 
 ### SAI からの返信
 
-**Codex と違って、返信でモデルを指定し直す必要が無い**。端末（tmux）で開いていればその TUI に打ち込むだけだし、閉じていれば `opencode run -s <session>` で再開し、どちらも `opencode.json` の設定をそのまま使う。`SAI_OPENCODE_ARGS` で `--agent build` のような引数を足せる。
+**Codex と違って、返信でモデルを指定し直す必要が無い**。端末（tmux）で開いていればその TUI に打ち込むだけだし、閉じていれば `opencode serve` に HTTP で送って再開し（#382。`SAI_OPENCODE_SERVER=0` なら従来の `opencode run -s`）、どちらも `opencode.json` の設定をそのまま使う。`SAI_OPENCODE_ARGS` で `--agent build` のような引数を足せる。
 
 ### 分かっていること
 

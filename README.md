@@ -127,7 +127,7 @@ ln -s "$SAI_HOME/feed/opencode/sai.js" ~/.config/opencode/plugin/sai.js
 
 許可を SAI の画面から答える口は無い（Claude の `--permission-prompt-tool` に当たるものが無い）ので、`permission.asked` は**待ちの行として出すだけ**で、答えるのは端末側。
 
-**閉じているセッションへの SAI からの返信（`opencode run -s`）は、許可が要るツールを自動で拒否する**（非対話なので聞けない）。ツールが失敗した時点でターンが終わり、アシスタントは本文を書かないので、チャットには `（本文なし）read の許可が拒否されて終わりました（…）` のように**何が起きたか**を出す（#273）。許可が要る作業を返信で頼むときは、**端末（tmux）で開いてから返信する**（TUI に打ち込むので、ダイアログで答えられる）。`opencode run` には `--auto`（許可を自動で通す。本人も dangerous と書いている）しか口が無く、**SAI からは付けない**。付けるなら運用者が `SAI_OPENCODE_ARGS` で明示的に渡す（そのセッションへの返信では「同一オリジンの検査」が唯一の砦になる。Claude の素通しと同じ）。プロバイダを差し替えれば手元のモデルでも動く → [docs/local-llm.md](docs/local-llm.md)。
+**SAI からの返信は、長寿命の `opencode serve` に HTTP で送る**（#382）。SAI が `127.0.0.1` に 1 つだけ起こし、毎回の起動用の鍵（`OPENCODE_SERVER_PASSWORD`）を付ける。セッションは ID だけで引けて**そのセッションの作業ディレクトリで走る**ので、worktree ごとにサーバは要らない。返信ぶんも今までどおりプラグインが記録する。`SAI_OPENCODE_SERVER=0` で従来の `opencode run -s` に戻せる。**従来の `opencode run -s` は、許可が要るツールを自動で拒否していた**（非対話なので聞けない）。ツールが失敗した時点でターンが終わり、アシスタントは本文を書かないので、チャットには `（本文なし）read の許可が拒否されて終わりました（…）` のように**何が起きたか**を出す（#273）。サーバ経由ではこれに当たらない（手元では read も bash も聞かれずに通った）。ただし `permission` を `ask` にしている設定では答え待ちで止まり、**SAI からはまだ答えられない**（#382 の 2 段目）ので、そのときは端末（tmux）で開いて答える。`opencode run` の `--auto`（許可を自動で通す。本人も dangerous と書いている）は **SAI からは付けない**。付けるなら運用者が `SAI_OPENCODE_ARGS` で明示的に渡す（そのセッションへの返信では「同一オリジンの検査」が唯一の砦になる。Claude の素通しと同じ）。プロバイダを差し替えれば手元のモデルでも動く → [docs/local-llm.md](docs/local-llm.md)。
 
 **Grok Build**（xAI の `grok`。#325）— **`~/.claude/settings.json` のフックも読む**（Claude Code との互換）ので、上の Claude Code の設定があれば何も足さなくてよい。`record.py` は payload の形（camelCase の `hookEventName`）で Grok と見分ける。Claude Code を使っていないか、Grok 側で Claude の設定を読まないようにしているときだけ、`~/.grok/hooks/sai.json` に置く（**両方にあると 1 ターンが 2 行になる**。`SAI_HOME` は Grok を起動するシェルの環境に置く）:
 
@@ -336,6 +336,7 @@ rsync -a --include='????-??-??.*.jsonl' --exclude='*' mini:~/.agent-feed/ ~/.age
 | `SAI_TERMINAL` | `0` で tmux への打ち込みを切る。Claude と閉じた Codex は別プロセス、開いている Codex は queue |
 | `SAI_APPROVE` | `0` で「返信中の許可・質問に画面から答える」配線（`--mcp-config` + `--permission-prompt-tool`）を付けない |
 | `SAI_CODEX_APP_SERVER` | `0` で閉じたCodexのapp-server管理を切り、従来の `codex exec resume` に戻す。既定は有効 |
+| `SAI_OPENCODE_SERVER` | `0` で OpenCode への返信を従来の `opencode run -s` に戻す。既定は長寿命の `opencode serve` に HTTP で送る |
 | `SAI_GH` | `0` で差分ボタンの PR 番号を引かない（既定は引く。SAI で唯一外のネットワークに問い合わせる所）。叩くのは `PATH` の `gh` の `gh pr view` だけで、引けなければ番号が付かないだけ |
 | `CODEX_HOME` | Codex のホーム（既定 `~/.codex`）。Codex 自身の変数で、SAI はそれに従うだけ |
 | `GROK_HOME` | Grok Build のホーム（既定 `~/.grok`）。Grok 自身の変数で、`record.py` が `sessions/` から入力とモデルを読むときにそれに従うだけ |

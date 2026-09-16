@@ -1,6 +1,6 @@
 ---
 name: merge
-description: PR をマージする前に、書いた本人とは別の目で 1 回レビューし、結果を PR のコメントに残してから squash マージする。ユーザーが「マージして」「マージしてよい」「PR をマージして」「merge the PR」「merge it」と言ったときに使う。このリポジトリの PR だけに使う。
+description: PR をマージする前に、書いた本人とは別の目で 1 回レビューし、直したうえで結果を PR のコメントに残してから squash マージする。ユーザーが「マージして」「マージしてよい」「PR をマージして」「merge the PR」「merge it」と言ったときに使う。このリポジトリの PR だけに使う。
 ---
 
 # merge
@@ -9,7 +9,7 @@ description: PR をマージする前に、書いた本人とは別の目で 1 �
 
 実測（2026-09-02〜09-16 の 15 日）でマージした PR は 210 本、直近 60 本の**レビューもコメントも 0 件**、PR を開いてからマージまでの中央値は 8 分だった。門は「CI が緑」と人の「マージして」だけで、**何を見て通したか**は記録に残っていない。題名に「直す」が付く PR が 8.5%、revert が 1 本。
 
-やるのは 対象を決める → 状態を見る → **別の文脈でレビュー** → **PR にコメント** → 指摘を直す → squash マージ → 後始末。
+やるのは 対象を決める → 状態を見る → **別の文脈でレビュー** → 直す → **PR にコメント** → squash マージ → 後始末。
 
 ## 0. リポジトリと PR を決める
 
@@ -20,27 +20,52 @@ repo=$(git remote get-url origin | sed -E 's#^[^@]*@[^:/]+[:/]##; s#^[a-z]+://[^
 echo "$repo"
 ```
 
-番号を言われていればそれ。言われていなければ**いまのブランチの PR**:
+番号を言われていればそれを `pr` に入れる。言われていなければ**いまのブランチの PR**を引く。**`--repo` を付けたら位置引数が要る**（`gh pr view --repo … --json …` だけだと `argument required when using the --repo flag` で必ず落ちる）:
 
 ```sh
-gh pr view --repo "$repo" --json number,title,baseRefName,headRefName,url
+pr=$(gh pr view "$(git branch --show-current)" --repo "$repo" --json number -q .number)
 ```
 
-引けなければ `gh pr list --repo "$repo" --state open` を見せて、**どれかを人に選ばせる**（勝手に 1 本目を選ばない）。
+引けなければ `gh pr list --repo "$repo" --state open` を見せて、**どれかを人に選ばせる**（勝手に 1 本目を選ばない）。以降で使う値をここで揃えておく:
+
+```sh
+head=$(gh api "repos/$repo/pulls/$pr" -q .head.ref)
+echo "pr=$pr head=$head"
+```
 
 ## 1. マージしてよい状態か
 
 ```sh
-gh pr checks "$pr" --repo "$repo"
-gh api "repos/$repo/pulls/$pr" -q '.state + " / " + .base.ref + " / " + (.mergeable|tostring) + " / " + .mergeable_state + " / draft=" + (.draft|tostring)'
+gh pr checks "$pr" --repo "$repo" --watch --fail-fast   # 終わるまで待つ。赤ければすぐ返る
+gh api "repos/$repo/pulls/$pr" -q '.state + " / base=" + .base.ref + " / mergeable=" + (.mergeable|tostring) + " / " + .mergeable_state + " / draft=" + (.draft|tostring)'
+```
+
+- **`until gh pr checks …; do …; done` のような回し方はしない。** `gh pr checks` は **pending でも fail でも非 0** を返すので、赤いまま永久に回る。待つのは `--watch`（`--fail-fast` で赤ければ即終了）
+- **`mergeable` が `null`（`mergeable_state: unknown`）は「まだ計算していない」**で、「コンフリクトしていない」ではない。PR を作った直後は必ずこれになるので、**`null` でなくなるまで読み直す**:
+
+```sh
+for _ in 1 2 3 4 5; do
+  m=$(gh api "repos/$repo/pulls/$pr" -q '(.mergeable|tostring) + " " + .mergeable_state')
+  case "$m" in null*) sleep 2;; *) break;; esac
+done
+echo "$m"
 ```
 
 止める条件（理由を添えて報告し、マージしない）:
 
-- CI が 1 つでも `fail`。`pending` なら**待つ**（`until` で回す。CI を待たずに通さない）
-- `base.ref` が `main` でない（#6 がこれでマージ済みの作業ブランチに入り、`main` に届かなかった）。付け替えは `gh api -X PATCH repos/$repo/pulls/$pr -f base=main`
+- CI が 1 つでも `fail`
+- `base.ref` が `main` でない（#6 がこれでマージ済みの作業ブランチに入り、`main` に届かなかった）。付け替えは `gh api -X PATCH "repos/$repo/pulls/$pr" -f base=main`
 - `draft: true`
-- `mergeable_state` が `dirty`（コンフリクト）。**先に `git log HEAD..FETCH_HEAD` を見る**——そこに自分の issue を閉じたコミットが既にあれば、直すのではなく PR を閉じる
+- `mergeable: false`（`mergeable_state: dirty` = コンフリクト）。**直しにかかる前に**、その issue を閉じたコミットが既に `main` に入っていないかを見る（**`FETCH_HEAD` は bare clone の全 worktree で共有される古い値なので、必ず自分で fetch してから**）:
+
+```sh
+git fetch origin main
+git log --oneline HEAD..FETCH_HEAD
+```
+
+入っていれば、直すのではなく **PR を閉じる**。
+
+**既知の flake（`pnpm test` がミリ秒の境目で落ちる #424 など）で赤いときだけ**、`gh run rerun --repo "$repo" <run-id> --failed` で 1 回だけ回し直してよい。**回し直しても赤ければ止める**。回し直したことと、どの issue の flake かは 4 のコメントに書く。**flake だと思った、で通さない**（同じ落ち方が既に issue になっていることを確かめる）。
 
 ## 2. 別の目でレビューする
 
@@ -55,28 +80,34 @@ gh api "repos/$repo/pulls/$pr" -q '.state + " / " + .base.ref + " / " + (.mergea
 - スキルが使えない環境では、代わりに**サブエージェント**に「この差分を読んで、壊れるところだけ挙げて」と投げる（Task / Agent。**自分で読み直すのは代わりにならない**）
 - #403 の Codex `review/start`（差分ビューアの「レビューさせる」）でもよいが、**まず Claude 側で回す**（「マージして」の 1 ターンに収まり、人の手順が増えない）
 
-## 3. 結果を PR のコメントに残す
+## 3. 指摘を直す
 
-**指摘が 0 件でも必ず 1 行残す。** 残さないと「レビューしたが何も無かった」と「レビューしていない」が後から区別できない。
+**コメントより先に直す**（コメントには「何を言われて、どうしたか」を一緒に書くので、直す前に書くと嘘になる）。
+
+- **正しい指摘は直してからマージする。** 直したら `pnpm test && pnpm test:feed && pnpm lint && pnpm typecheck` を回し、push して**CI をもう一度待つ**（1 に戻る）
+- 直さないと決めたものは**理由を控えておく**（範囲外・別 issue に分けた・誤検出、など）。別 issue に分けたなら番号も
+- 直しが大きい（別の設計になる・他のファイルに波及する）ときは、**マージせずに人に戻す**。指摘とそのまま貼れる選択肢を出して止まる
+
+## 4. 結果を PR のコメントに残す
+
+**指摘が 0 件でも必ず 1 行残す。** 残さないと「レビューしたが何も無かった」と「レビューしていない」が後から区別できない。**日付は打たずに `date` から取る**（手で書くと古い日付のまま残る）。
 
 ```sh
-gh pr comment "$pr" --repo "$repo" --body 'レビュー: 指摘なし（claude-opus-5 / medium、2026-09-16）'
+gh pr comment "$pr" --repo "$repo" --body "レビュー: 指摘なし（claude-opus-5 / medium、$(date +%F)）"
 ```
 
-指摘があったときは、1 件ごとに **`file:line` / 何が壊れるか / 直したか** を書く:
+指摘があったときは、1 件ごとに **`file:line` / 何が壊れるか / どうしたか** を書く:
 
+```sh
+gh pr comment "$pr" --repo "$repo" --body-file - <<EOF
+## レビュー（claude-opus-5 / medium、$(date +%F)）
+
+7 件の指摘、6 件を直して 1 件を見送り。
+
+- \`server/app.ts:461\` — 同じ cwd に会話が 2 本あると別のペインに打ち込む → **直した**（$(git rev-parse --short HEAD)）
+- \`web/src/usageLabel.ts:26\` — \`1 分 60 秒\` になる → **見送り**: この PR の範囲外。#436 に分けた
+EOF
 ```
-## レビュー（claude-opus-5 / medium）
-
-- `server/app.ts:461` — 同じ cwd に会話が 2 本あると別のペインに打ち込む → **直した**（031a9ef）
-- `web/src/usageLabel.ts:26` — `1 分 60 秒` になる → **直さない**: この PR の範囲外。#436 に分けた
-```
-
-## 4. 指摘を直す
-
-- **正しい指摘は直してからマージする。** 直したら `pnpm test && pnpm test:feed && pnpm lint && pnpm typecheck` を回し、push して**CI をもう一度待つ**
-- 直さないと決めたものは**理由をコメントに書く**（範囲外・別 issue に分けた・誤検出、など）
-- 直しが大きい（別の設計になる・他のファイルに波及する）ときは、**マージせずに人に戻す**。指摘とそのまま貼れる選択肢を出して止まる
 
 ## 5. マージする
 
@@ -109,7 +140,7 @@ git push origin --delete "$head"
 ## やらないこと
 
 - **レビューを飛ばしてマージする。** 人が「マージして」としか言っていなくても、間に 2〜4 を挟む（それがこのスキルの全部）
-- CI の `pending` を「たぶん通る」で通すこと
+- CI の `pending` を「たぶん通る」で通すこと。既知の flake の回し直しは 1 回まで
 - squash 以外のマージ、`--admin` での強制マージ
 - `merged: true` を確かめる前にブランチを消すこと
 - 自分のレビューを自分で「指摘なし」と書くこと（**別の文脈で読ませた結果**だけをコメントにする）

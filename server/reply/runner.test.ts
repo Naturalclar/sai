@@ -159,6 +159,27 @@ test('newSessionCommand: 前半は返信と同じ（SAI_CLAUDE_ARGS が先頭・
   assert.equal(newSessionCommand('U', 'hi', '/w', {}).permissionMode, '', 'フラグを付けていない = CLI の既定')
 })
 
+// ---- #391: セッションの表示名を CLI にも渡す（端末のタイトルと /resume のピッカー）
+
+test('replyCommand / newSessionCommand: 表示名があれば -n で渡す。無ければ渡さない', () => {
+  const named = replyCommand('claude', 'S', 'hi', '/w', {}, undefined, undefined, undefined, [], 'かなで')!.args
+  assert.deepEqual(named.slice(0, 2), ['-n', 'かなで'])
+  // 名前はセッションに残るので、付いていないセッションでは渡さない（端末で付けた名前を空で上書きしない）
+  assert.equal(replyCommand('claude', 'S', 'hi', '/w', {})!.args.includes('-n'), false)
+  assert.equal(replyCommand('claude', 'S', 'hi', '/w', {}, undefined, undefined, undefined, [], '   ')!.args.includes('-n'), false, '空白だけは無い扱い')
+  assert.equal(newSessionCommand('U', 'hi', '/w', {}, undefined, undefined, undefined, 'かなで').args.includes('-n'), true)
+  // 渡す先は Claude だけ（Codex / OpenCode に同じ口は無い）
+  assert.equal(replyCommand('codex', 'S', 'hi', '/w', {}, undefined, undefined, undefined, [], 'かなで')!.args.includes('-n'), false)
+  assert.equal(replyCommand('opencode', 'S', 'hi', '/w', {}, undefined, undefined, undefined, [], 'かなで')!.args.includes('-n'), false)
+})
+
+test('表示名は運用者の引数より後ろ（後勝ち）で、本文の前に入る', () => {
+  const env = { SAI_CLAUDE_ARGS: '-n 運用者の名前' }
+  const args = replyCommand('claude', 'S', 'hi', '/w', env, undefined, undefined, undefined, [], 'セッションの名前')!.args
+  assert.equal(args.lastIndexOf('セッションの名前') > args.indexOf('運用者の名前'), true, 'モデル・許可モードと同じ扱い')
+  assert.equal(args.indexOf('-n') < args.indexOf('-p'), true, 'フラグは -p より前（本文は -- の後ろ）')
+})
+
 test('ProcessRunner は起動したときの許可モードを snapshot と replying.json に載せ、引き取っても残す（#272）', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'sai-runner-'))
   try {

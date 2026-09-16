@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
+import { mkdtemp, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import test from 'node:test'
-import { CODEX_PANES_TTL_MS, CodexPanes, parsePsCommands, parseRolloutHead } from './codexPanes.ts'
+import { CODEX_PANES_TTL_MS, CodexPanes, parsePaneFiles, parsePsCommands, parseRolloutHead, rolloutSession } from './codexPanes.ts'
 import type { CodexPaneDeps } from './codexPanes.ts'
 import type { Tmux } from './terminal.ts'
 
@@ -26,31 +29,81 @@ function fakeTmux(listed = PANES): Tmux & { calls: string[][] } {
   }
 }
 
+const SESSION = '01a06af3-618b-7eb3-bb03-a52279ff2235'
+const OTHER = '01a06b05-0201-7d81-b47d-7466519583ff'
+
+/** 本物の rollout（`session_meta` の 1 行だけ）を書く。返すのはそのパス */
+async function writeRollout(dir: string, name: string, session: string, cwd: string): Promise<string> {
+  const path = join(dir, name)
+  await writeFile(path, `${JSON.stringify({ type: 'session_meta', payload: { session_id: session, cwd } })}\n`)
+  return path
+}
+
 const deps = (over: Partial<CodexPaneDeps> = {}): CodexPaneDeps => ({
   tmux: fakeTmux(),
   ps: async () => PS,
-  cwdOf: async (pid: number) => (pid === 101 ? '/repo/one' : ''),
-  sessionOf: async (cwd: string) => (cwd === '/repo/one' ? '01a06af3-618b-7eb3-bb03-a52279ff2235' : ''),
+  openOf: async () => ({ cwd: '/repo/one', rollouts: [] }),
   ...over,
 })
 
 test('ペインで動いている codex を、行を見ずに見つける（#417）', async () => {
-  const panes = new CodexPanes(deps())
-  assert.deepEqual(await panes.scan(), [
-    { pane: '%1', pid: 101, cwd: '/repo/one', session: '01a06af3-618b-7eb3-bb03-a52279ff2235' },
-  ])
+  const dir = await mkdtemp(join(tmpdir(), 'sai-panes-'))
+  const rollout = await writeRollout(dir, `rollout-2026-09-04T14-40-23-${SESSION}.jsonl`, SESSION, '/repo/one')
+  const panes = new CodexPanes(deps({ openOf: async () => ({ cwd: '/repo/one', rollouts: [rollout] }) }))
+  assert.deepEqual(await panes.scan(), [{ pane: '%1', pid: 101, cwd: '/repo/one', session: SESSION }])
+})
+
+test('同じ cwd にもう 1 本セッションがあっても、ペインが開いている方を返す（#429）', async () => {
+  // 端末で SESSION を開いたまま、SAI が同じ worktree に OTHER を起こした（#401）。
+  // cwd から「一番新しい rollout」を引くと OTHER になり、SESSION 宛ての返信がこのペインに打ち込まれていた
+  const dir = await mkdtemp(join(tmpdir(), 'sai-panes-'))
+  const mine = await writeRollout(dir, `rollout-2026-09-04T14-40-23-${SESSION}.jsonl`, SESSION, '/repo/one')
+  await writeRollout(dir, `rollout-2026-09-04T18-00-00-${OTHER}.jsonl`, OTHER, '/repo/one')
+  const panes = new CodexPanes(deps({ openOf: async () => ({ cwd: '/repo/one', rollouts: [mine] }) }))
+  assert.equal((await panes.scan())[0]?.session, SESSION)
 })
 
 test('tmux の外の codex は数えない（ChatGPT アプリの app-server など）', async () => {
   // 300 はどのペインの子孫でもない。ペインの中の node（201）も codex ではないので入らない
-  const panes = new CodexPanes(deps({ cwdOf: async () => '/repo/one' }))
+  const panes = new CodexPanes(deps())
   const found = await panes.scan()
   assert.deepEqual(found.map((p) => p.pid), [101])
 })
 
-test('セッションが引けない codex も返す（まだスレッドが無い）。呼ぶ側が捨てる', async () => {
-  const panes = new CodexPanes(deps({ sessionOf: async () => '' }))
+test('rollout を 1 つも開いていない codex は、当てずに空で返す（呼ぶ側が捨てる）', async () => {
+  const panes = new CodexPanes(deps({ openOf: async () => ({ cwd: '/repo/one', rollouts: [] }) }))
   assert.deepEqual((await panes.scan())[0]?.session, '')
+})
+
+test('rolloutSession: 開いているものの新しい順。読めないファイルは飛ばす', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-panes-'))
+  const older = await writeRollout(dir, `rollout-2026-09-04T10-00-00-${SESSION}.jsonl`, SESSION, '/repo/one')
+  const newer = await writeRollout(dir, `rollout-2026-09-04T20-00-00-${OTHER}.jsonl`, OTHER, '/repo/one')
+  assert.equal(await rolloutSession([older, newer]), OTHER)
+  assert.equal(await rolloutSession([join(dir, 'rollout-2026-09-04T21-00-00-nope.jsonl'), older]), SESSION)
+  assert.equal(await rolloutSession([]), '')
+})
+
+test('parsePaneFiles: fcwd と、CODEX_HOME の下の rollout だけ', () => {
+  const root = '/home/.codex/sessions/'
+  const out = parsePaneFiles(
+    [
+      'p101',
+      'fcwd',
+      'n/repo/one',
+      'ftxt',
+      'n/usr/bin/codex',
+      'f58',
+      `n${root}2026/09/04/rollout-2026-09-04T14-40-23-${SESSION}.jsonl`,
+      'f59',
+      'n/tmp/rollout-2026-09-04T14-40-23-fake.jsonl', // 置き場の外は拾わない
+      'f60',
+      `n${root}2026/09/04/notes.jsonl`,
+      '',
+    ].join('\n'),
+    root,
+  )
+  assert.deepEqual(out, { cwd: '/repo/one', rollouts: [`${root}2026/09/04/rollout-2026-09-04T14-40-23-${SESSION}.jsonl`] })
 })
 
 test('結果は TTL の間覚える（3 秒のポーリングで ps も lsof も起こさない）', async () => {

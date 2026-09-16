@@ -462,8 +462,9 @@ export function createApp(
       if (pid) return { pane: s.pane, pid }
     }
     // lock で引けない Codex（実測: 0.154.0 の TUI は lock を開かず、共有の app-server が握っている）は、
-    // ペインで動いている codex の cwd から rollout を引いて突き合わせる（#417）。**行の pane ではなく
-    // いまのペイン**を使うので、ペインを移した・行がまだ 1 本も無いセッションでも当たる
+    // ペインで動いている codex が**いま開いている rollout**と突き合わせる（#417 / #429）。**行の pane ではなく
+    // いまのペイン**を使うので、ペインを移した・行がまだ 1 本も無いセッションでも当たる。
+    // **cwd では突き合わせない**（同じ worktree に会話が 2 本あると別の会話のペインに打ち込む。#429）
     const pane = (await codexPanes.scan()).find((p) => p.session === session)
     return pane ? { pane: pane.pane, pid: pane.pid } : null
   }

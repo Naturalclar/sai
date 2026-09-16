@@ -12,9 +12,10 @@ export interface Skill {
   description: string
   /**
    * project: セッションの cwd の置き場（Claude は `.claude/skills/`、Codex は `.codex/skills/` と `.agents/skills/`）。
-   * user: cwd に依らないもの（Claude は `~/.claude/skills/`、Codex は app-server の `scope` が `user` / `system` のもの）
+   * user: cwd に依らないもの（Claude は `~/.claude/skills/`、Codex は app-server の `scope` が `user` / `system` のもの、OpenCode は本体が返すスキル）。
+   * command: OpenCode のスラッシュコマンド（#393。スキルと同じ `/` のメニューに並ぶので印で見分ける）
    */
-  source: 'user' | 'project'
+  source: 'user' | 'project' | 'command'
 }
 
 /** 候補に出す説明の長さ。これを超えたら切る */
@@ -109,6 +110,31 @@ export function filterSkills(skills: Skill[], query: string): Skill[] {
 }
 
 /** 候補に出す1行。説明の1行目を SKILL_DESC_MAX で切る */
+/**
+ * OpenCode の `GET /command?directory=<cwd>` の応答を `/` の候補にする（#393）。
+ *
+ * **この 1 本だけで足りる**（1.18.30 で確認）: 返ってくるのは「`/` のあとに打てるもの」全部で、
+ * スキル（`source: "skill"`）とスラッシュコマンド（`source: "command"`）が同じ一覧に入っている。
+ * `/skill` と混ぜると同じものが 2 回出る（手元では 15 件 = スキル 13 + コマンド 2 で、13 は `/skill` と同じ顔ぶれ）。
+ *
+ * **プロジェクト側かどうかは応答から分からない**ので、スキルは `user` に寄せて印を付けない
+ * （Claude 側の `project` の印は「このリポジトリのもの」という意味なので、嘘をつくより出さない）
+ */
+export function opencodeSkills(data: unknown): Skill[] {
+  const items = Array.isArray(data) ? data : Array.isArray((data as { data?: unknown })?.data) ? (data as { data: unknown[] }).data : []
+  const out: Skill[] = []
+  for (const raw of items) {
+    const item = raw as { name?: unknown; description?: unknown; source?: unknown }
+    if (typeof item.name !== 'string' || !item.name.trim()) continue
+    out.push({
+      name: item.name.trim(),
+      description: typeof item.description === 'string' ? item.description : '',
+      source: item.source === 'command' ? 'command' : 'user',
+    })
+  }
+  return out
+}
+
 export function skillSummary(description: string): string {
   const line = description.split('\n').map((l) => l.trim()).find(Boolean) ?? ''
   return line.length <= SKILL_DESC_MAX ? line : `${line.slice(0, SKILL_DESC_MAX)}…`

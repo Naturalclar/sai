@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { filterSkills, parseCodexSkills, parseSkill, skillSummary, slashQuery, SKILL_DESC_MAX } from './skills.ts'
+import { filterSkills, opencodeSkills, parseCodexSkills, parseSkill, skillSummary, slashQuery, SKILL_DESC_MAX } from './skills.ts'
 
 const SKILL = `---
 name: issue-triage
@@ -100,4 +100,26 @@ test('parseCodexSkills は知らない形でも落ちない', () => {
     [['a', '']],
     '説明が無ければ空。同じ名前は先に出てきた方',
   )
+})
+
+// #393。OpenCode の `/command` は「`/` のあとに打てるもの」を 1 本で返す（スキルもコマンドも入っている）
+test('opencodeSkills: スキルとコマンドを `/` の候補にする。コマンドだけ印を付ける', () => {
+  const body = {
+    data: [
+      { name: 'demo-skill', description: 'プロジェクト側のスキル', source: 'skill', template: '本文', hints: [] },
+      { name: 'init', description: 'guided AGENTS.md setup', source: 'command', hints: ['$ARGUMENTS'] },
+    ],
+  }
+  assert.deepEqual(opencodeSkills(body), [
+    { name: 'demo-skill', description: 'プロジェクト側のスキル', source: 'user' },
+    { name: 'init', description: 'guided AGENTS.md setup', source: 'command' },
+  ])
+  // 素の配列でも読む（版で包みが変わっても落ちないように）
+  assert.deepEqual(opencodeSkills([{ name: 'x', source: 'skill' }]), [{ name: 'x', description: '', source: 'user' }])
+})
+
+test('opencodeSkills: 名前の無いもの・形の違う応答は落とす', () => {
+  assert.deepEqual(opencodeSkills({ data: [{ description: '名前が無い' }, { name: '  ' }] }), [])
+  assert.deepEqual(opencodeSkills(null), [])
+  assert.deepEqual(opencodeSkills({ error: 'unauthorized' }), [])
 })

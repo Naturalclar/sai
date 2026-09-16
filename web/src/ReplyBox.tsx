@@ -601,6 +601,8 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, now = 0,
               <b>/{s.name}</b>
               <span className="title">{skillSummary(s.description)}</span>
               {s.source === 'project' && <span className="tag">プロジェクト</span>}
+              {/* OpenCode はスキルとスラッシュコマンドが同じ一覧に来る（#393）。コマンドだけ印を付けて見分ける */}
+              {s.source === 'command' && <span className="tag">コマンド</span>}
             </li>
           ))}
         </ul>

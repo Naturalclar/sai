@@ -7,7 +7,7 @@ import type { Server } from 'node:http'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ReplyResponse, SessionDetailResponse } from '../shared/types.ts'
+import type { ReplyResponse, SessionDetailResponse, SessionSkillsResponse } from '../shared/types.ts'
 import { createApp } from './app.ts'
 import { Approvals } from './approvals/approvals.ts'
 import { localDate } from './rows/aggregate.ts'
@@ -24,6 +24,7 @@ let work: string
 let server: Server
 let base: string
 const sent: OpencodeTurnInput[] = []
+const skillCalls: string[] = []
 const started: { id: string; cmd: ReplyCommand }[] = []
 const runner: Runner = { running: () => false, snapshot: () => ({}), async start(id, cmd) { started.push({ id, cmd }) } }
 /** 送ったぶんを覚え、`busy` で「処理中」を作れる偽の serve */
@@ -38,6 +39,13 @@ const opencodeApp: OpencodeApp = {
     sent.push(input)
   },
   settle: () => [],
+  async skills(cwd: string) {
+    skillCalls.push(cwd)
+    return [
+      { name: 'demo-skill', description: 'プロジェクトのスキル', source: 'user' as const },
+      { name: 'init', description: 'guided AGENTS.md setup', source: 'command' as const },
+    ]
+  },
   stop: () => {},
 } as OpencodeApp & { busy: boolean }
 
@@ -139,4 +147,12 @@ test('SAI_OPENCODE_SERVER=0 なら今までどおり `opencode run -s` に戻す
     else process.env.SAI_OPENCODE_SERVER = before
     await new Promise<void>((r) => s2.close(() => r()))
   }
+})
+
+test('`/` の候補は OpenCode の本体に聞く（#393。セッションの cwd を渡す）', async () => {
+  const res = await fetch(`${base}/api/sessions/ses_1%40r/skills`)
+  assert.equal(res.status, 200)
+  const body = (await res.json()) as SessionSkillsResponse
+  assert.deepEqual(body.skills.map((s) => `${s.source}:${s.name}`), ['user:demo-skill', 'command:init'])
+  assert.deepEqual(skillCalls, [work], 'サーバの cwd ではなく、そのセッションの cwd で引く')
 })

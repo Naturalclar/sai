@@ -73,3 +73,34 @@ test('start: prompt_async に鍵つきで POST し、行が届くまで「処理
     await new Promise<void>((r) => server.close(() => r()))
   }
 })
+
+test('skills: /command に cwd を渡して聞く。断られたら投げる（呼び出し側が空にする）', async () => {
+  const seen: { url: string; auth: string }[] = []
+  let status = 200
+  const server: Server = createServer((req, res) => {
+    seen.push({ url: req.url ?? '', auth: req.headers.authorization ?? '' })
+    res.writeHead(status, { 'content-type': 'application/json' })
+    res.end(
+      status === 200
+        ? JSON.stringify({ data: [{ name: 'demo-skill', description: 'プロジェクトのスキル', source: 'skill' }, { name: 'init', description: 'guided AGENTS.md setup', source: 'command' }] })
+        : '{}',
+    )
+  })
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+  const addr = server.address()
+  const base = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`
+  try {
+    const app = new OpencodeServer(fetch, Date.now, async () => ({ url: base, auth: 'Basic dGVzdA==' }))
+    const skills = await app.skills('/w/some repo')
+    assert.equal(seen[0]!.url, '/command?directory=%2Fw%2Fsome%20repo', 'cwd は escape して渡す（空白の入ったパスがある）')
+    assert.equal(seen[0]!.auth, 'Basic dGVzdA==')
+    assert.deepEqual(skills, [
+      { name: 'demo-skill', description: 'プロジェクトのスキル', source: 'user' },
+      { name: 'init', description: 'guided AGENTS.md setup', source: 'command' },
+    ])
+    status = 401
+    await assert.rejects(app.skills('/w'), /401/)
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()))
+  }
+})

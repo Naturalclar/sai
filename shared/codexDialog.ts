@@ -4,7 +4,8 @@
 // **何を聞かれているかは画面にしか無い**。`promptState()` はその画面を `kind: 'dialog'` の判定にだけ使って
 // 捨てていたので、SAI 側には「待っている」の 1 行しか出ていなかった。
 //
-// **読むだけ**で、答えるのは今までどおり端末（キーを送ると誤って選びうる。#208）。
+// **読んだ中身は、画面から答えるのにも使う**（#450）。押された選択肢まで印（`›`）を動かして `Enter` を送るが、
+// **送る前と後に画面を読み直して、同じダイアログのままか・消えたかを確かめる**（誤って別の許可を押さないため。#208）。
 //
 // 画面の形（codex 0.154.0 で実測。要素の間に空行が入るので、空行を落としてから読む）:
 //
@@ -20,7 +21,7 @@
 //
 // 会話の側は字下げが無いので、**選択肢から上へ「2 文字下げの行」を辿る**だけで塊が切り出せる。
 // 人の入力欄（`› マージして`）も `›` で始まるが、番号付きの選択肢ではないので境目になる。
-import type { TerminalDialog, TerminalDialogOption } from './types.ts'
+import type { ApprovalDecision, TerminalDialog, TerminalDialogOption } from './types.ts'
 
 /** ダイアログの終わりの行。`server/reply/terminal.ts` の DIALOG（検出）と同じ言い回し */
 const FOOTER = /Enter to (?:confirm|select|submit)|Esc to cancel|Press enter to continue|Waiting for user input/i
@@ -145,4 +146,60 @@ export function codexDialogKey(dialog: TerminalDialog | null): string {
 function lastIndex(lines: readonly string[], test: (line: string) => boolean): number {
   for (let i = lines.length - 1; i >= 0; i--) if (test(lines[i]!)) return i
   return -1
+}
+
+// ---- 画面から答える（#450） ----
+
+/**
+ * **押せるようにしない選択肢**（`2. Yes, and don't ask again for commands that start with …`）。
+ * 効く範囲（どこまでの `git` を今後も通すのか）がボタンの文字からは読み切れないので、
+ * #421 で OpenCode の `always` を出さないことにしたのと同じ理由で落とす。端末でなら今までどおり押せる
+ */
+const ALWAYS_OPTION = /don'?t ask again|always (?:allow|approve)/i
+/** 「はい」ではない選択肢（ボタンの色と `behavior` を決めるだけ） */
+const DENY_OPTION = /^(?:no\b|don'?t\b|reject|cancel|いいえ)/i
+
+/** 決定の id（`opt-3`）。画面へ渡すのはこれで、**サーバは提示したものだけを受け付ける** */
+export const dialogDecisionId = (option: Pick<TerminalDialogOption, 'number'>): string => `opt-${option.number}`
+
+/**
+ * 画面に出す選択肢（#450）。**「今後も確認しない」は落とす**ので、ダイアログに 3 つあっても 2 つになる。
+ * ラベルは画面に出ている英語のまま（Codex 自身の言い回し。許可モードの名前を英語のままにしているのと同じ）
+ */
+export function dialogDecisions(dialog: TerminalDialog | null): ApprovalDecision[] {
+  if (!dialog) return []
+  return dialog.options
+    .filter((o) => !ALWAYS_OPTION.test(o.label))
+    .map((o) => ({ id: dialogDecisionId(o), label: o.label, behavior: DENY_OPTION.test(o.label) ? ('deny' as const) : ('allow' as const) }))
+}
+
+/**
+ * 押された決定が**いまのダイアログの選択肢か**。`behavior` も突き合わせる
+ * （画面のボタンと中身が食い違っていれば受けない）。返すのは並びの位置（0 始まり）
+ */
+export function dialogDecisionIndex(dialog: TerminalDialog | null, decision: string | undefined, behavior: 'allow' | 'deny'): number | null {
+  if (!dialog || !decision) return null
+  const allowed = dialogDecisions(dialog)
+  const hit = allowed.find((d) => d.id === decision)
+  if (!hit || hit.behavior !== behavior) return null
+  const index = dialog.options.findIndex((o) => dialogDecisionId(o) === decision)
+  return index >= 0 ? index : null
+}
+
+/** いま印（`›`）が付いている選択肢の位置。1 つも付いていなければ null（読めていない＝動かさない） */
+export function selectedIndex(dialog: TerminalDialog | null): number | null {
+  if (!dialog) return null
+  const index = dialog.options.findIndex((o) => o.selected)
+  return index >= 0 ? index : null
+}
+
+/**
+ * 狙った選択肢まで印を動かすキー（#450）。**番号キーは使わない**（実機で `1` を送っても確定も移動もしなかった。
+ * 効いたのは矢印で動かして `Enter`）。同じ位置なら何も送らない
+ */
+export function dialogSteps(dialog: TerminalDialog | null, targetIndex: number): { key: 'Down' | 'Up'; count: number } | null {
+  const from = selectedIndex(dialog)
+  if (from === null || targetIndex < 0 || targetIndex >= (dialog?.options.length ?? 0)) return null
+  const diff = targetIndex - from
+  return { key: diff >= 0 ? 'Down' : 'Up', count: Math.abs(diff) }
 }

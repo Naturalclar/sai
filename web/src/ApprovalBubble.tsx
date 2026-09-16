@@ -91,12 +91,12 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false, modeNote =
         <div className="msg">
           <div className="body">⏳ {approval.text}</div>
           {detail && <pre className="detail">{detail}</pre>}
-          {/* 端末の画面から読んだ選択肢（#425）。読むだけで、答えるのは端末 */}
+          {/* 端末の画面から読んだ選択肢（#425）。下のボタンで答えられる（#450） */}
           {approval.dialog && <DialogPreview dialog={approval.dialog} />}
           {/* 素通しに変えても、処理中のターンは起動したときのモードのまま聞いてくる（#272）。質問は素通しでも出るので付けない */}
           {modeNote && questions.length === 0 && <div className="mode-note">{modeNote}</div>}
           {!answerable ? (
-            <div className="notice">このCodexは端末で起動されているため、回答はtmuxの画面で行ってください。</div>
+            <div className="notice">このCodexのダイアログは画面から読めませんでした。回答はtmuxの画面で行ってください。</div>
           ) : questions.length > 0 ? (
             <AskQuestions
               questions={questions}
@@ -146,6 +146,8 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false, modeNote =
               </button>
             </div>
           )}
+          {/* 拒否すると Codex は「どうしてほしいか」を聞いてくるので、そのまま入力欄へ（#450） */}
+          {done === 'deny' && approval.dialog && <div className="notice">拒否しました。どうしてほしいかは、下の返信欄から送れます。</div>}
           {error && <div className="empty-text">送れなかった: {error}</div>}
         </div>
       </div>

@@ -1713,6 +1713,13 @@ export function createApp(
     const b = (body ?? {}) as Partial<ApprovalAnswer>
     if (b.behavior !== 'allow' && b.behavior !== 'deny') return error(res, 400, 'behavior は allow か deny')
     if (b.remember !== undefined && b.remember !== 'local') return error(res, 400, 'remember は local だけ')
+    // 端末で開いている Codex のダイアログ（#450）。押された選択肢まで印を動かして Enter を送る
+    if (terminalEnabled && codexDialogs.has?.(approvalId)) {
+      if (b.remember !== undefined) return error(res, 400, '端末の Codex では提示された選択だけ選べます')
+      const result = await codexDialogs.answer!(approvalId, { behavior: b.behavior, ...(typeof b.decision === 'string' ? { decision: b.decision } : {}) })
+      if (!result.ok) return error(res, result.status, result.error)
+      return json(res, { ok: true, approval_id: approvalId, behavior: b.behavior })
+    }
     // OpenCode の許可（#421）。提示した選択肢（許可 / 拒否）だけを本体に返す
     if (opencodePerms.has(approvalId)) {
       if (b.remember !== undefined) return error(res, 400, 'OpenCode では提示された選択だけ選べます')

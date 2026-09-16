@@ -86,6 +86,7 @@ import { SETTINGS_FILE, SettingsStore } from './meta/settings.ts'
 import type { Settings } from './meta/settings.ts'
 import { isLinearWorkspace } from '../shared/refs.ts'
 import { newSessionCommand, ProcessRunner, replyCommand } from './reply/runner.ts'
+import { TURN_USAGE_FILE, TurnUsageLog } from './reply/turnUsage.ts'
 import { QUEUE_FILE, QUEUE_MAX, ReplyQueueStore } from './reply/replyQueue.ts'
 import { AGENT_TOKEN_FILE, AGENT_TOKEN_HEADER, AgentMessages, ensureAgentToken, tokenMatches } from './reply/agentMessages.ts'
 import type { AgentMessage } from './reply/agentMessages.ts'
@@ -414,7 +415,7 @@ export function createApp(
     return { ...typed.snapshot(), ...run.snapshot(), ...codexApp.replying(), ...opencodeApp.replying() }
   }
   // 処理中の返信は replying.json にも持ち、サーバを再起動しても生きている分を引き取る（#100）
-  const run: Runner = runner ?? new ProcessRunner(join(store.directory, 'reply.log'), join(store.directory, 'replying.json'))
+  const run: Runner = runner ?? new ProcessRunner(join(store.directory, 'reply.log'), join(store.directory, 'replying.json'), new TurnUsageLog(join(store.directory, TURN_USAGE_FILE)))
   const metaStore = new MetaStore(join(store.directory, META_FILE))
   const iconStore = new IconStore(join(store.directory, ICONS_DIR))
   const attachmentStore = new AttachmentStore(join(store.directory, ATTACHMENTS_DIR))

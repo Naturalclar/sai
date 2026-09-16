@@ -599,7 +599,7 @@ test('POST reply: Claude のセッションを cwd で再開する', async () =>
   assert.equal(cmd.cwd, dir)
   // 許可・質問を画面で答える配線（--mcp-config は SAI 自身の MCP サーバ、宛先はこのサーバ自身のループバック）
   assert.deepEqual(cmd.args.slice(0, 1), ['--mcp-config'])
-  assert.deepEqual(cmd.args.slice(2), ['--permission-prompt-tool', 'mcp__sai__approve', '-p', '--resume', 'C1', '--', '続きをやって'])
+  assert.deepEqual(cmd.args.slice(2), ['--permission-prompt-tool', 'mcp__sai__approve', '--output-format', 'json', '-p', '--resume', 'C1', '--', '続きをやって'])
   const mcp = JSON.parse(cmd.args[1]!) as { mcpServers: { sai: { type: string; command: string; args: string[]; env: Record<string, string> } } }
   assert.equal(mcp.mcpServers.sai.type, 'stdio')
   assert.equal(mcp.mcpServers.sai.env.SAI_URL, base)
@@ -723,7 +723,7 @@ test('POST /api/sessions/new: from のセッションの cwd で、ID を決め�
   assert.equal(id, data.id, '処理中は新しいセッションの ID で持つ')
   assert.equal(cmd.bin, 'claude')
   assert.equal(cmd.cwd, dir)
-  assert.deepEqual(cmd.args.slice(2), ['--permission-prompt-tool', 'mcp__sai__approve', '-p', '--session-id', data.session, '--', '新しくやって'])
+  assert.deepEqual(cmd.args.slice(2), ['--permission-prompt-tool', 'mcp__sai__approve', '--output-format', 'json', '-p', '--session-id', data.session, '--', '新しくやって'])
   assert.equal(cmd.args.includes('--resume'), false)
   const mcp = JSON.parse(cmd.args[1]!) as { mcpServers: { sai: { env: Record<string, string> } } }
   assert.equal(mcp.mcpServers.sai.env.SAI_ENTITY, data.id, '許可・質問は新しいセッションの ID で預ける')
@@ -740,7 +740,7 @@ test('POST /api/sessions/new: モデルと許可モードは検査してから�
   assert.equal(res.status, 202)
   const data = (await res.json()) as NewSessionResponse
   const { cmd } = runner.started[0]!
-  assert.deepEqual(cmd.args.slice(4), ['--model', 'sonnet', '--permission-mode', 'acceptEdits', '-p', '--session-id', data.session, '--', 'go'])
+  assert.deepEqual(cmd.args.slice(4), ['--model', 'sonnet', '--permission-mode', 'acceptEdits', '--output-format', 'json', '-p', '--session-id', data.session, '--', 'go'])
   assert.equal(cmd.permissionMode, 'acceptEdits')
   const metaFile = new MetaStore(join(feedDir, META_FILE))
   assert.deepEqual(await metaFile.get(data.id), { model: 'sonnet', permission_mode: 'acceptEdits' }, '次の返信にも効くようにメタに残す')
@@ -1335,7 +1335,7 @@ test('digest: 起動後に増えた行に一言が付いて feed / 詳細 / 一�
 
 test('replyCommand はサーバの PATH の claude / codex / opencode を起動する（SAI_*_BIN は読まない。#288）', () => {
   // permissionMode は付けたモード（無ければ空）。処理中の表示に使う（#272）
-  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', {}), { bin: 'claude', args: ['-p', '--resume', 'S', '--', 'hi'], cwd: '/w', text: 'hi', permissionMode: '' })
+  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', {}), { bin: 'claude', args: ['--output-format', 'json', '-p', '--resume', 'S', '--', 'hi'], cwd: '/w', text: 'hi', permissionMode: '' })
   assert.deepEqual(replyCommand('codex', 'S', 'hi', '/w', {})!.args, ['exec', 'resume', 'S', '--', 'hi'])
   assert.deepEqual(replyCommand('opencode', 'S', 'hi', '/w', {})!.args, ['run', '-s', 'S', '--', 'hi'])
   // 前は SAI_CLAUDE_BIN などで 1 つずつ差し替えていた。PATH を渡せば同じなのでやめた
@@ -1360,36 +1360,36 @@ test('replyCommand は本文が - で始まってもフラグにならない（-
 test('replyCommand: SAI_*_ARGS の追加引数。Claude は先頭（--allowedTools が本文を飲まないように）、Codex は resume の直後', () => {
   assert.deepEqual(
     replyCommand('claude', 'S', 'gh pr create', '/w', { SAI_CLAUDE_ARGS: '--allowedTools "Bash(gh *)" --permission-mode acceptEdits' })!.args,
-    ['--allowedTools', 'Bash(gh *)', '--permission-mode', 'acceptEdits', '-p', '--resume', 'S', '--', 'gh pr create'],
+    ['--allowedTools', 'Bash(gh *)', '--permission-mode', 'acceptEdits', '--output-format', 'json', '-p', '--resume', 'S', '--', 'gh pr create'],
   )
   assert.deepEqual(replyCommand('codex', 'S', 'hi', '/w', { SAI_CODEX_ARGS: '-s workspace-write' })!.args, ['exec', 'resume', '-s', 'workspace-write', 'S', '--', 'hi'])
-  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', { SAI_CLAUDE_ARGS: '   ' })!.args, ['-p', '--resume', 'S', '--', 'hi'], '空白だけなら何も足さない')
+  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', { SAI_CLAUDE_ARGS: '   ' })!.args, ['--output-format', 'json', '-p', '--resume', 'S', '--', 'hi'], '空白だけなら何も足さない')
   // セッションの返信モデル。運用者の --model より後ろに置いて勝たせる
-  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', {}, undefined, 'opus')!.args, ['--model', 'opus', '-p', '--resume', 'S', '--', 'hi'])
+  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', {}, undefined, 'opus')!.args, ['--model', 'opus', '--output-format', 'json', '-p', '--resume', 'S', '--', 'hi'])
   assert.deepEqual(
     replyCommand('claude', 'S', 'hi', '/w', { SAI_CLAUDE_ARGS: '--model sonnet' }, undefined, 'opus')!.args,
-    ['--model', 'sonnet', '--model', 'opus', '-p', '--resume', 'S', '--', 'hi'],
+    ['--model', 'sonnet', '--model', 'opus', '--output-format', 'json', '-p', '--resume', 'S', '--', 'hi'],
   )
   assert.deepEqual(replyCommand('codex', 'S', 'hi', '/w', {}, undefined, 'gpt-5')!.args, ['exec', 'resume', '-m', 'gpt-5', 'S', '--', 'hi'])
-  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', {}, undefined, '')!.args, ['-p', '--resume', 'S', '--', 'hi'], '空なら付けない')
+  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', {}, undefined, '')!.args, ['--output-format', 'json', '-p', '--resume', 'S', '--', 'hi'], '空なら付けない')
 })
 
 test('replyCommand: セッションの許可モードは Claude だけに --permission-mode として付く（運用者の指定より後ろ）', () => {
   assert.deepEqual(
     replyCommand('claude', 'S', 'hi', '/w', {}, undefined, undefined, 'acceptEdits')!.args,
-    ['--permission-mode', 'acceptEdits', '-p', '--resume', 'S', '--', 'hi'],
+    ['--permission-mode', 'acceptEdits', '--output-format', 'json', '-p', '--resume', 'S', '--', 'hi'],
   )
   assert.deepEqual(
     replyCommand('claude', 'S', 'hi', '/w', {}, undefined, 'opus', 'acceptEdits')!.args,
-    ['--model', 'opus', '--permission-mode', 'acceptEdits', '-p', '--resume', 'S', '--', 'hi'],
+    ['--model', 'opus', '--permission-mode', 'acceptEdits', '--output-format', 'json', '-p', '--resume', 'S', '--', 'hi'],
     'モードと一緒でも並ぶ',
   )
   assert.deepEqual(
     replyCommand('claude', 'S', 'hi', '/w', { SAI_CLAUDE_ARGS: '--permission-mode plan' }, undefined, undefined, 'acceptEdits')!.args,
-    ['--permission-mode', 'plan', '--permission-mode', 'acceptEdits', '-p', '--resume', 'S', '--', 'hi'],
+    ['--permission-mode', 'plan', '--permission-mode', 'acceptEdits', '--output-format', 'json', '-p', '--resume', 'S', '--', 'hi'],
     '運用者の指定より後ろ（後勝ち）',
   )
-  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', {}, undefined, undefined, '')!.args, ['-p', '--resume', 'S', '--', 'hi'], '空なら付けない')
+  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', {}, undefined, undefined, '')!.args, ['--output-format', 'json', '-p', '--resume', 'S', '--', 'hi'], '空なら付けない')
   assert.deepEqual(
     replyCommand('codex', 'S', 'hi', '/w', {}, undefined, undefined, 'acceptEdits')!.args,
     ['exec', 'resume', 'S', '--', 'hi'],
@@ -1705,19 +1705,19 @@ test('approvals: 不正な body と無い id', async () => {
 test('replyCommand: approve を渡すと Claude だけに --mcp-config と --permission-prompt-tool が付く', () => {
   const via = { url: 'http://127.0.0.1:8787', entity: 'S@r' }
   const c = replyCommand('claude', 'S', 'hi', '/w', {}, via)!
-  assert.deepEqual(c.args.slice(2), ['--permission-prompt-tool', 'mcp__sai__approve', '-p', '--resume', 'S', '--', 'hi'])
+  assert.deepEqual(c.args.slice(2), ['--permission-prompt-tool', 'mcp__sai__approve', '--output-format', 'json', '-p', '--resume', 'S', '--', 'hi'])
   assert.equal(c.args[0], '--mcp-config')
   assert.deepEqual(JSON.parse(c.args[1]!).mcpServers.sai.env, { SAI_URL: 'http://127.0.0.1:8787', SAI_ENTITY: 'S@r' })
   // 運用者の引数は先頭のまま。--mcp-config は可変長なので、直後がフラグ（--permission-prompt-tool）である並び
   const withExtra = replyCommand('claude', 'S', 'hi', '/w', { SAI_CLAUDE_ARGS: '--allowedTools "Bash(gh *)"' }, via)!
   assert.deepEqual(withExtra.args.slice(0, 3), ['--allowedTools', 'Bash(gh *)', '--mcp-config'])
   // 外す: SAI_APPROVE=0、または運用者が自前の --permission-prompt-tool を持っている
-  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', { SAI_APPROVE: '0' }, via)!.args, ['-p', '--resume', 'S', '--', 'hi'])
+  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', { SAI_APPROVE: '0' }, via)!.args, ['--output-format', 'json', '-p', '--resume', 'S', '--', 'hi'])
   const own = replyCommand('claude', 'S', 'hi', '/w', { SAI_CLAUDE_ARGS: '--permission-prompt-tool mcp__x__y' }, via)!
   assert.equal(own.args.filter((a) => a === '--permission-prompt-tool').length, 1)
   assert.equal(own.args.includes('--mcp-config'), false)
   // approve 無し・Codex には何も付かない
-  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', {})!.args, ['-p', '--resume', 'S', '--', 'hi'])
+  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', {})!.args, ['--output-format', 'json', '-p', '--resume', 'S', '--', 'hi'])
   assert.deepEqual(replyCommand('codex', 'S', 'hi', '/w', {}, via)!.args, ['exec', 'resume', 'S', '--', 'hi'])
 })
 

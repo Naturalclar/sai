@@ -9,6 +9,8 @@ import { dirname, resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Agent, Replying, ReplyFailure, ReplyingMap } from '../../shared/types.ts'
 import { settledByRow } from '../../shared/turnSettled.ts'
+import { failureTail, parseTurnUsage } from '../../shared/turnUsage.ts'
+import type { TurnUsageSink } from './turnUsage.ts'
 
 /** 失敗した返信を画面に見せておく時間。ポーリングは3秒なので、これだけあれば拾える */
 export const FAILED_TTL_MS = 2 * 60_000
@@ -16,28 +18,24 @@ export const FAILED_TTL_MS = 2 * 60_000
 const TAIL_BYTES = 4096
 const TAIL_CHARS = 300
 const TAIL_LINES = 3
+/** 1 ターンぶんとして読む上限。`--output-format json` の result は実測 1.8KB だが、本文が長ければ育つ */
+const MAX_SLICE_BYTES = 1024 * 1024
 
 /**
  * reply.log の offset 以降（= このターンの子プロセスが書いた分）の末尾を数行。
  * 大きく育つファイルなので末尾だけ読む。読めなければ空
  */
-export function tailFrom(path: string, offset: number): string {
+export function readFrom(path: string, offset: number, maxBytes = MAX_SLICE_BYTES): string {
   let fd: number | null = null
   try {
     fd = openSync(path, 'r')
     const { size } = fstatSync(fd)
-    const start = Math.max(offset, size - TAIL_BYTES)
+    const start = Math.max(offset, size - maxBytes)
     const len = size - start
     if (len <= 0) return ''
     const buf = Buffer.alloc(len)
     readSync(fd, buf, 0, len, start)
-    const lines = buf
-      .toString('utf-8')
-      .split('\n')
-      .map((l) => l.trim())
-      .filter(Boolean)
-    const text = lines.slice(-TAIL_LINES).join(' / ')
-    return text.length <= TAIL_CHARS ? text : `${text.slice(0, TAIL_CHARS)}…`
+    return buf.toString('utf-8')
   } catch {
     return ''
   } finally {
@@ -49,6 +47,20 @@ export function tailFrom(path: string, offset: number): string {
       }
     }
   }
+}
+
+/** 読んだ分の末尾を数行だけ、1 行にまとめて切る（画面に出す用） */
+export function tailText(raw: string): string {
+  const lines = raw
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+  const text = lines.slice(-TAIL_LINES).join(' / ')
+  return text.length <= TAIL_CHARS ? text : `${text.slice(0, TAIL_CHARS)}…`
+}
+
+export function tailFrom(path: string, offset: number): string {
+  return tailText(readFrom(path, offset, TAIL_BYTES))
 }
 
 /** `--permission-prompt-tool` に渡す名前。`mcp__<サーバ名>__<ツール名>` で、サーバ名は --mcp-config のキー */
@@ -143,7 +155,10 @@ function claudeHead(env: NodeJS.ProcessEnv, approve: ApproveVia | undefined, mod
     ? ['--mcp-config', approveMcpConfig(approve), '--permission-prompt-tool', APPROVE_TOOL]
     : []
   // 運用者の SAI_CLAUDE_ARGS に --model / --permission-mode があっても、セッションの設定を後ろに置いてそちらを勝たせる（後勝ち）
-  return [...extra, ...wire, ...(model ? ['--model', model] : []), ...(permissionMode ? ['--permission-mode', permissionMode] : [])]
+  // 使ったトークンと費用を CLI に返させる（#387）。reply.log の末尾に result の 1 行として残り、ProcessRunner が拾う。
+  // 運用者が自分の --output-format を指定していればそちらを尊重する（stream-json でも最後の result の行から読める）
+  const format = extra.includes('--output-format') ? [] : ['--output-format', 'json']
+  return [...extra, ...wire, ...(model ? ['--model', model] : []), ...(permissionMode ? ['--permission-mode', permissionMode] : []), ...format]
 }
 
 /**
@@ -231,10 +246,25 @@ export interface Runner {
  * 終了の仕方から「失敗」を作る。0 で終わったなら null（失敗ではない）。
  * シグナルで死んだときはコードが無いので負の値（-15 = SIGTERM）にして区別できるようにする
  */
-export function failureOf(code: number | null | undefined, signal: NodeJS.Signals | null | undefined, logPath: string | null, offset: number): ReplyFailure | null {
-  if (signal) return { code: -1, tail: `シグナル ${signal} で終了${logPath ? `。${tailFrom(logPath, offset)}` : ''}`.trim() }
+export function failureOf(
+  code: number | null | undefined,
+  signal: NodeJS.Signals | null | undefined,
+  logPath: string | null,
+  offset: number,
+  /** このターンぶんの出力（もう読んであれば渡す。#387。読み直さずに済む） */
+  slice?: string,
+): ReplyFailure | null {
+  // `--output-format json` を付けたので、そのままだと JSON の切れ端が画面に出る（#387）。
+  // result が読めたら CLI の本文にし、読めなければ今までどおり末尾の数行
+  const tail = () => {
+    const raw = slice ?? (logPath ? readFrom(logPath, offset, TAIL_BYTES) : '')
+    if (!raw) return ''
+    const body = failureTail(raw)
+    return body === raw ? tailText(raw) : body
+  }
+  if (signal) return { code: -1, tail: `シグナル ${signal} で終了${logPath ? `。${tail()}` : ''}`.trim() }
   if (code === 0 || code === null || code === undefined) return null
-  return { code, tail: logPath ? tailFrom(logPath, offset) : '' }
+  return { code, tail: logPath ? tail() : '' }
 }
 
 interface Persisted extends Replying {
@@ -284,11 +314,17 @@ export class ProcessRunner implements Runner {
   private active = new Map<string, Persisted>()
   readonly logPath: string | null
   readonly statePath: string | null
+  /** ターンが終わったときに使用量を渡す先（#387）。無ければ何もしない */
+  private readonly usage: TurnUsageSink | null
 
-  /** logPath があれば子プロセスの stdout/stderr を追記する（うまく動かないときの手がかり）。statePath があれば処理中をそこにも持つ */
-  constructor(logPath: string | null, statePath: string | null = null) {
+  /**
+   * logPath があれば子プロセスの stdout/stderr を追記する（うまく動かないときの手がかり）。
+   * statePath があれば処理中をそこにも持つ。usage があれば、終わったターンの使用量を渡す
+   */
+  constructor(logPath: string | null, statePath: string | null = null, usage: TurnUsageSink | null = null) {
     this.logPath = logPath
     this.statePath = statePath
+    this.usage = usage
     this.adopt()
   }
 
@@ -422,7 +458,14 @@ export class ProcessRunner implements Runner {
     const release = (code?: number | null, signal?: NodeJS.Signals | null) => {
       if (released) return
       released = true
-      const failure = failureOf(code, signal, this.logPath, logOffset)
+      // このターンぶんの出力を 1 回だけ読む。失敗の理由も使用量もここから出る（#387）
+      const slice = this.logPath ? readFrom(this.logPath, logOffset) : ''
+      if (this.usage) {
+        const used = parseTurnUsage(slice)
+        // result が無いのは普通のこと（Codex / OpenCode、--output-format を外した運用）。そのときは何も書かない
+        if (used) this.usage.record(id, used)
+      }
+      const failure = failureOf(code, signal, this.logPath, logOffset, slice)
       if (failure) {
         this.active.set(id, { ...entry, failed: failure, failedAt: Date.now() })
       } else {

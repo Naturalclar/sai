@@ -5,6 +5,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { childEnv, failureOf, isAlive, newSessionCommand, ProcessRunner, replyCommand, tailFrom } from './runner.ts'
+import type { TurnUsage } from '../../shared/turnUsage.ts'
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
 /** 300ms 生きて exit する子。node 自身を使う（PATH に依らず必ずある） */
@@ -146,9 +147,9 @@ test('newSessionCommand: 前半は返信と同じ（SAI_CLAUDE_ARGS が先頭・
   const via = { url: 'http://127.0.0.1:8787', entity: 'U@r' }
   const started = newSessionCommand('U', '-v で始まる本文', '/w', env, via, 'opus', 'acceptEdits')
   const resumed = replyCommand('claude', 'U', '-v で始まる本文', '/w', env, via, 'opus', 'acceptEdits')!
-  const tail = ['-p', '--session-id', 'U', '--', '-v で始まる本文']
+  const tail = ['--output-format', 'json', '-p', '--session-id', 'U', '--', '-v で始まる本文']
   assert.deepEqual(started.args.slice(-tail.length), tail, '本文の前に -- を置く（- で始まる本文をフラグにしない）')
-  assert.deepEqual(started.args.slice(0, -tail.length), resumed.args.slice(0, -5), '前半は返信と同じ組み立て')
+  assert.deepEqual(started.args.slice(0, -tail.length), resumed.args.slice(0, -tail.length), '前半は返信と同じ組み立て（--resume と --session-id の違いだけ）')
   assert.deepEqual(started.args.slice(0, 3), ['--allowedTools', 'Bash(gh *)', '--model'], '運用者の引数が先頭')
   assert.equal(started.args.indexOf('opus') > started.args.indexOf('haiku'), true, 'セッションのモデルが後ろ（後勝ち）')
   assert.equal(started.args.includes('--resume'), false)
@@ -287,4 +288,80 @@ test('settle: 行が届いたら「処理中」を終わりにして、残った
   }
   assert.equal(alive, false, '終わらない子を始末する')
   await rm(dir, { recursive: true, force: true })
+})
+
+// ---- #387: 終わったターンの使用量（claude -p --output-format json の result）
+
+/** 実測に近い result の 1 行 */
+const resultLine = (over: Record<string, unknown> = {}) =>
+  JSON.stringify({
+    type: 'result',
+    is_error: false,
+    result: 'できました',
+    num_turns: 2,
+    duration_ms: 1297,
+    total_cost_usd: 0.0197672,
+    permission_denials: [],
+    usage: { input_tokens: 10, output_tokens: 39, cache_read_input_tokens: 17582, cache_creation_input_tokens: 8431 },
+    modelUsage: { 'claude-opus-5': { costUSD: 0.0197672 } },
+    ...over,
+  })
+
+/** 子の出力を reply.log に書かせて終わらせ、記録された使用量を待つ */
+async function runWithOutput(dir: string, out: string, exitCode = 0) {
+  const got: { id: string; usage: TurnUsage }[] = []
+  const runner = new ProcessRunner(join(dir, 'reply.log'), join(dir, 'replying.json'), { record: (id, usage) => got.push({ id, usage }) })
+  const code = `process.stdout.write(${JSON.stringify(out)}); process.exit(${exitCode})`
+  await runner.start('A@r', { bin: process.execPath, args: ['-e', code], cwd: dir, text: 'やって' })
+  for (let i = 0; i < 100 && runner.running('A@r'); i++) await wait(10)
+  return { got, runner }
+}
+
+test('ProcessRunner: ターンが終わったら result から使用量を拾って渡す（#387）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-usage-'))
+  try {
+    const { got } = await runWithOutput(dir, resultLine() + '\n')
+    assert.equal(got.length, 1, '1 ターンにつき 1 回')
+    assert.equal(got[0]!.id, 'A@r')
+    assert.equal(got[0]!.usage.output_tokens, 39)
+    assert.equal(got[0]!.usage.cache_read_input_tokens, 17582)
+    assert.equal(got[0]!.usage.cost_usd, 0.0197672)
+    assert.equal(got[0]!.usage.model, 'claude-opus-5')
+    assert.equal(got[0]!.usage.num_turns, 2)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('ProcessRunner: result が無ければ何も渡さない（Codex / OpenCode、--output-format を外した運用）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-usage-'))
+  try {
+    const { got } = await runWithOutput(dir, 'そのままのテキスト\n')
+    assert.deepEqual(got, [])
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('ProcessRunner: 失敗の理由に JSON の切れ端を出さず、CLI の本文を出す（#387）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-usage-'))
+  try {
+    const out = resultLine({ is_error: true, result: '許可されていないため実行できませんでした', permission_denials: [{ tool_name: 'Bash' }] })
+    const { got, runner } = await runWithOutput(dir, out + '\n', 3)
+    const failed = runner.snapshot()['A@r']?.failed
+    assert.equal(failed?.code, 3)
+    assert.equal(failed?.tail, '許可されていないため実行できませんでした（未許可で断られたツール 1 件）')
+    assert.equal(got.length, 1, '失敗したターンの使用量も残す（そのぶんも使っている）')
+    assert.equal(got[0]!.usage.denials, 1)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('claudeHead: 運用者が --output-format を指定していればそちらを尊重する（#387）', () => {
+  const mine = replyCommand('claude', 'S', 'hi', '/w', {})!.args
+  assert.deepEqual(mine.slice(-6), ['--output-format', 'json', '-p', '--resume', 'S', '--', 'hi'].slice(-6))
+  const theirs = replyCommand('claude', 'S', 'hi', '/w', { SAI_CLAUDE_ARGS: '--output-format stream-json --verbose' })!.args
+  assert.equal(theirs.filter((a) => a === '--output-format').length, 1, '二重に付けない')
+  assert.deepEqual(theirs.slice(0, 3), ['--output-format', 'stream-json', '--verbose'])
 })

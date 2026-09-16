@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { appendFile, readFile, stat } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { extname, join, resolve, sep } from 'node:path'
+import { basename, extname, join, resolve, sep } from 'node:path'
 import { ICON_MAX_BYTES, iconUrl } from '../shared/icon.ts'
 import { ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_COUNT, ATTACHMENTS_DIR, withAttachments } from '../shared/attachments.ts'
 import { mergeMeta } from '../shared/meta.ts'
@@ -68,9 +68,10 @@ import { OpencodeServer } from './reply/opencodeServer.ts'
 import type { OpencodeApp } from './reply/opencodeServer.ts'
 import { approvalMapKey, CodexDialogs, mergeApprovalMaps } from './reply/codexDialogs.ts'
 import { CodexTerminals, type CodexTerminalSource } from './reply/codexTerminal.ts'
+import { CodexPanes, type CodexPaneSource } from './reply/codexPanes.ts'
 import { clearSettled, settledKey, WaitingSettle } from './reply/waitingSettle.ts'
 import type { WaitingSettleSource } from './reply/waitingSettle.ts'
-import type { CodexDialogSource } from './reply/codexDialogs.ts'
+import type { CodexDialogSource, DialogTarget } from './reply/codexDialogs.ts'
 import { DIGEST_FILE, DigestStore, createDigester } from './digest/digest.ts'
 import { FEEDBACK_FILE, FeedbackStore } from './digest/feedback.ts'
 import { DIGEST_NOTE_MAX, isDigestFeedbackReason } from '../shared/digestFeedback.ts'
@@ -351,6 +352,8 @@ export interface TerminalDeps {
   codexQueue?: CodexQueue
   /** 記録した pid が死んでいる Codex を lock から引き直す（#332）。テストでは差し替える */
   codexTerminals?: CodexTerminalSource
+  /** tmux のペインで動いている Codex（行を見ずに見つける。#417）。テストでは差し替える */
+  codexPanes?: CodexPaneSource
   /** 開いている Codex TUI の質問・許可ダイアログ監視。テストでは差し替える */
   codexDialogs?: CodexDialogSource
   /** SAIから開始するCodex turnのapp-server client。テストでは差し替える */
@@ -437,12 +440,22 @@ export function createApp(
    * 動いているのに「端末で開いていない」ままだった（許可待ちの検出にも端末への打ち込みにも回らない）。
    * lock はセッション ID ごとのファイルなので、同じペインで別の Codex を起動し直していても取り違えない。
    */
+  const codexPanes = terminal.codexPanes ?? new CodexPanes({ tmux: terminal.tmux })
   const terminalOf = async (s: SessionSummary) => {
-    if (!terminalEnabled || !s.pane) return null
-    if (s.pid && isAlive(s.pid)) return { pane: s.pane, pid: s.pid }
+    if (!terminalEnabled) return null
+    if (s.pane && s.pid && isAlive(s.pid)) return { pane: s.pane, pid: s.pid }
     if (s.agent !== 'codex') return null
-    const pid = await codexTerminals.pid(sessionOf(s), s.pane)
-    return pid ? { pane: s.pane, pid } : null
+    const session = sessionOf(s)
+    if (!session) return null
+    if (s.pane) {
+      const pid = await codexTerminals.pid(session, s.pane)
+      if (pid) return { pane: s.pane, pid }
+    }
+    // lock で引けない Codex（実測: 0.154.0 の TUI は lock を開かず、共有の app-server が握っている）は、
+    // ペインで動いている codex の cwd から rollout を引いて突き合わせる（#417）。**行の pane ではなく
+    // いまのペイン**を使うので、ペインを移した・行がまだ 1 本も無いセッションでも当たる
+    const pane = (await codexPanes.scan()).find((p) => p.session === session)
+    return pane ? { pane: pane.pane, pid: pane.pid } : null
   }
   /**
    * 端末に打ち込んだ・queue に渡した返信のターンが、送った時刻より後に始まったか（#329。`TerminalReplies.checkDelivery()` が 2 分後に聞く）。
@@ -509,9 +522,42 @@ export function createApp(
     return { sessions: clearSettled(sessions, settled), key: settledKey(settled) }
   }
 
+  /** cwd の git のトップの名前（`record.py` の `repo` と同じ決め方）。引けなければ空。cwd ごとに 1 回だけ叩く */
+  const repoNames = new Map<string, string>()
+  const repoOf = async (cwd: string): Promise<string> => {
+    const hit = repoNames.get(cwd)
+    if (hit !== undefined) return hit
+    let name = ''
+    try {
+      name = basename((await git.run(cwd, ['rev-parse', '--show-toplevel'])).trim())
+    } catch {
+      name = ''
+    }
+    repoNames.set(cwd, name)
+    return name
+  }
+
+  /**
+   * **行がまだ 1 本も無い**、ペインで動いている Codex（#417）。`notify` はターン完了でしか鳴らないので、
+   * 最初のターンの許可で止まったセッションは記録に 1 行も無く、SAI からは存在が見えなかった。
+   * **足すのはダイアログの監視（= 要対応）にだけ**で、一覧と集計（行から作る）は触らない
+   */
+  const paneOnlyTargets = async (sessions: SessionSummary[]): Promise<DialogTarget[]> => {
+    const known = new Set(sessions.map((s) => sessionOf(s)).filter(Boolean))
+    const out: DialogTarget[] = []
+    for (const pane of await codexPanes.scan()) {
+      if (!pane.session || known.has(pane.session)) continue
+      out.push({ id: entityId(pane.session, await repoOf(pane.cwd), ''), terminal: { pane: pane.pane, pid: pane.pid } })
+    }
+    return out
+  }
+
   /** Claude、SAI管理のCodex、通常Codex TUIの検出専用ダイアログを合わせる。 */
   const approvalsNow = async (sessions: SessionSummary[]) =>
-    mergeApprovalMaps(mergeApprovalMaps(approvals.snapshot(), codexApp.snapshot()), terminalEnabled ? await codexDialogs.scan(sessions) : {})
+    mergeApprovalMaps(
+      mergeApprovalMaps(approvals.snapshot(), codexApp.snapshot()),
+      terminalEnabled ? await codexDialogs.scan(sessions, await paneOnlyTargets(sessions)) : {},
+    )
 
   /**
    * 質問（AskUserQuestion）で止まっているセッションの、選択肢まで入った質問（#333）。フックの待ちの行には質問の文しか無いので、

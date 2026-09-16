@@ -181,7 +181,9 @@ test('要対応: 行が 1 本も無い Codex でも、ペインで止まって�
     const stuck = Object.entries(data.approvals).find(([id]) => id.startsWith('NOROWS'))
     assert.ok(stuck, `記録に無いセッションの待ちが出る: ${JSON.stringify(Object.keys(data.approvals))}`)
     assert.equal(stuck![1][0]?.agent, 'codex')
-    assert.equal(stuck![1][0]?.answerable, false, '端末で答えるので、画面からは答えられない')
+    // 行が無くてもペインは分かっているので、画面から答えられる（#450。選択肢が読めているときだけ）
+    assert.equal(stuck![1][0]?.answerable, true)
+    assert.deepEqual(stuck![1][0]?.decisions?.map((d) => d.id), ['opt-1', 'opt-2'])
   } finally {
     tmux.screen = IDLE
   }

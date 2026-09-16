@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { CODEX_DIALOG_TEXT, codexDialogKey, codexDialogText, parseCodexDialog } from './codexDialog.ts'
+import { CODEX_DIALOG_TEXT, codexDialogKey, codexDialogText, dialogDecisionIndex, dialogDecisions, dialogSteps, parseCodexDialog, selectedIndex } from './codexDialog.ts'
 
 /** 実機の画面（codex 0.154.0。tmux capture-pane -p。要素の間に空行が入る） */
 const COMMAND_SCREEN = [
@@ -144,4 +144,41 @@ test('会話の引用の枠（`│` / `└`）で遡るのを止める（字下�
   assert.equal(dialog.title, 'Would you like to run the following command?')
   assert.equal(dialog.detail, 'Environment: local\nReason: Allow GitHub CLI network access to create the requested pull request?')
   assert.ok(!dialog.detail.includes('+8 lines'), '会話の引用が入っている')
+})
+
+// ---- 画面から答える（#450） ----
+
+test('dialogDecisions: 「今後も確認しない」はボタンにしない。はい／いいえは色を分ける', () => {
+  const dialog = parseCodexDialog(COMMAND_SCREEN)!
+  assert.deepEqual(dialogDecisions(dialog), [
+    { id: 'opt-1', label: 'Yes, proceed (y)', behavior: 'allow' },
+    { id: 'opt-3', label: 'No, and tell Codex what to do differently (esc)', behavior: 'deny' },
+  ])
+  assert.deepEqual(dialogDecisions(null), [])
+})
+
+test('dialogDecisionIndex: 出していない選択肢と、食い違う behavior は受けない', () => {
+  const dialog = parseCodexDialog(COMMAND_SCREEN)!
+  assert.equal(dialogDecisionIndex(dialog, 'opt-1', 'allow'), 0)
+  assert.equal(dialogDecisionIndex(dialog, 'opt-3', 'deny'), 2, '画面の並びの位置（落とした 2 つめを飛ばさない）')
+  assert.equal(dialogDecisionIndex(dialog, 'opt-2', 'allow'), null, '「今後も確認しない」は出していない')
+  assert.equal(dialogDecisionIndex(dialog, 'opt-1', 'deny'), null, 'ボタンと食い違う behavior は受けない')
+  assert.equal(dialogDecisionIndex(dialog, 'opt-9', 'allow'), null)
+  assert.equal(dialogDecisionIndex(dialog, undefined, 'allow'), null, '選択を送らない画面からは受けない')
+  assert.equal(dialogDecisionIndex(null, 'opt-1', 'allow'), null)
+})
+
+test('dialogSteps: いまの印から狙った選択肢までの矢印（番号キーは効かないので使わない）', () => {
+  const dialog = parseCodexDialog(COMMAND_SCREEN)!
+  assert.equal(selectedIndex(dialog), 0)
+  assert.deepEqual(dialogSteps(dialog, 2), { key: 'Down', count: 2 })
+  assert.deepEqual(dialogSteps(dialog, 0), { key: 'Down', count: 0 }, '同じ位置なら 0 回（何も送らない）')
+  const onThird = parseCodexDialog(COMMAND_SCREEN.replace('› 1. Yes, proceed (y)', '  1. Yes, proceed (y)').replace('  3. No, and', '› 3. No, and'))!
+  assert.equal(selectedIndex(onThird), 2)
+  assert.deepEqual(dialogSteps(onThird, 0), { key: 'Up', count: 2 })
+  // 印が 1 つも読めなければ動かさない（どこから動かすか分からない）
+  const noMark = parseCodexDialog(COMMAND_SCREEN.replace('› 1. Yes, proceed (y)', '  1. Yes, proceed (y)'))!
+  assert.equal(selectedIndex(noMark), null)
+  assert.equal(dialogSteps(noMark, 0), null)
+  assert.equal(dialogSteps(dialog, 9), null, '並びの外は動かさない')
 })

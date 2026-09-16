@@ -58,9 +58,20 @@ const runner = new FakeRunner()
 
 class FakeCodexDialogs implements CodexDialogSource {
   active: ApprovalMap = {}
+  /** 画面から答えたぶん（#450）。`fail` を入れておくと、そのまま 409 を返す */
+  answered: { approvalId: string; answer: ApprovalAnswer }[] = []
+  fail: { status: number; error: string } | null = null
   async scan(sessions: { id: string }[]) {
     const ids = new Set(sessions.map((s) => s.id))
     return Object.fromEntries(Object.entries(this.active).filter(([id]) => ids.has(id)))
+  }
+  has(approvalId: string) {
+    return Object.values(this.active).flat().some((a) => a.approval_id === approvalId)
+  }
+  async answer(approvalId: string, answer: ApprovalAnswer) {
+    if (this.fail) return { ok: false as const, ...this.fail }
+    this.answered.push({ approvalId, answer })
+    return { ok: true as const }
   }
 }
 const codexDialogs = new FakeCodexDialogs()
@@ -2074,5 +2085,57 @@ test('POST interrupt: SAI が回している Codex のターンだけ止め、�
   } finally {
     codexApp.busy.delete('C1@r')
     codexApp.stops = true
+  }
+})
+
+test('端末の Codex のダイアログに画面から答える（#450。同一オリジンのみ）', async () => {
+  codexDialogs.active = {
+    'S1@kanban': [
+      {
+        approval_id: 'codex-dialog-e2e',
+        id: 'S1@kanban',
+        since: new Date().toISOString(),
+        tool_name: 'CodexDialog',
+        input: {},
+        tool_use_id: '',
+        text: 'Codex の許可待ち: git add -A',
+        agent: 'codex',
+        answerable: true,
+        decisions: [
+          { id: 'opt-1', label: 'Yes, proceed (y)', behavior: 'allow' },
+          { id: 'opt-3', label: 'No, and tell Codex what to do differently (esc)', behavior: 'deny' },
+        ],
+        dialog: { title: 'Would you like to run the following command?', detail: '', command: 'git add -A', options: [{ number: 1, label: 'Yes, proceed (y)', selected: true }] },
+      },
+    ],
+  }
+  codexDialogs.answered.length = 0
+  try {
+    const list = (await (await get('/api/sessions')).json()) as SessionsResponse
+    assert.equal(list.approvals['S1@kanban']?.[0]?.answerable, true, '答えられるバブルとして出る')
+
+    // 別オリジンは断る（ここが通ると別サイトから「許可」が押せる）
+    const cross = await fetch(`${base}/api/approvals/codex-dialog-e2e/answer`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', origin: 'https://evil.example' },
+      body: JSON.stringify({ behavior: 'allow', decision: 'opt-1' }),
+    })
+    assert.equal(cross.status, 403)
+    // ルールの記憶（常に許可）は端末のダイアログには無い
+    assert.equal((await postJson('/api/approvals/codex-dialog-e2e/answer', { behavior: 'allow', remember: 'local' })).status, 400)
+    assert.deepEqual(codexDialogs.answered, [], 'どちらもペインに届かない')
+
+    const ok = await postJson('/api/approvals/codex-dialog-e2e/answer', { behavior: 'deny', decision: 'opt-3' })
+    assert.equal(ok.status, 200)
+    assert.deepEqual(codexDialogs.answered, [{ approvalId: 'codex-dialog-e2e', answer: { behavior: 'deny', decision: 'opt-3' } }])
+
+    // 送れなかったとき（画面が変わった）は理由をそのまま画面へ
+    codexDialogs.fail = { status: 409, error: '画面が変わりました（もう一度確かめてください）' }
+    const stale = await postJson('/api/approvals/codex-dialog-e2e/answer', { behavior: 'allow', decision: 'opt-1' })
+    assert.equal(stale.status, 409)
+    assert.match(await stale.text(), /画面が変わりました/)
+  } finally {
+    codexDialogs.fail = null
+    codexDialogs.active = {}
   }
 })

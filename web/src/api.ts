@@ -11,6 +11,9 @@ import type {
   ReplyError,
   ReplyRequest,
   ReplyResponse,
+  ReviewRequest,
+  ReviewResponse,
+  ReviewTarget,
   SessionDetailResponse,
   SessionDiffResponse,
   SearchResponse,
@@ -159,6 +162,10 @@ export const api = {
   /** 発言の本文を検索する（#230）。⌘K で打ち終わったときだけ叩く（ポーリングには乗せない） */
   search: (q: string, days = 90) => getJSON<SearchResponse>(`/api/search?q=${encodeURIComponent(q)}&days=${days}`),
   /** そのセッションの worktree の差分（開いたときだけ。ポーリングには乗せない） */
+  /** 差分のレビューを Codex に頼む（#403）。対象の種類だけ送る（cwd もブランチ名もサーバが決める） */
+  review: (id: string, target: ReviewTarget, days = 90) =>
+    sendJSON<ReviewResponse>('POST', `/api/sessions/${encodeURIComponent(id)}/review?days=${days}`, { target } satisfies ReviewRequest),
+
   diff: (id: string, base = '') =>
     getJSON<SessionDiffResponse>(`/api/sessions/${encodeURIComponent(id)}/diff${base ? `?base=${encodeURIComponent(base)}` : ''}`),
   /** 差分の大きさと PR 番号だけ（本文は作らない）。入力欄のボタンが開く前に出す（#211） */

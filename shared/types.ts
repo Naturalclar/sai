@@ -838,6 +838,26 @@ export interface Terminal {
   pid: number
 }
 
+/**
+ * 差分のレビューを頼むときの対象（#403）。Codex の app-server の `review/start` の `target` に対応する。
+ * 画面の差分ビューアが出している 2 つの区切りと同じで、`commit` / `custom` は画面から選ぶ材料が無いので出さない
+ */
+export type ReviewTarget = 'uncommittedChanges' | 'baseBranch'
+
+export interface ReviewRequest {
+  target: ReviewTarget
+}
+
+export interface ReviewResponse {
+  accepted: true
+  id: string
+  session: string
+  cwd: string
+  target: ReviewTarget
+  /** `baseBranch` のときに比べた相手（差分ビューアと同じ選び方） */
+  base?: string
+}
+
 export interface ReplyResponse {
   accepted: true
   id: string

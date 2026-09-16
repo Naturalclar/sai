@@ -629,6 +629,93 @@ def is_codex_internal_turn(user_text: str, text: str) -> bool:
     return False
 
 
+# ---------------------------------------------------------------- Codex のレビュー（#403）
+
+# `review/start` が組み立てて投げるプロンプト（v0.154.0 で実測）。人が打った文ではないので、
+# そのままだとセッションのタイトル（一番新しい user_text）が英語の指示文に置き換わる
+_CODEX_REVIEW_UNCOMMITTED = "Review the current code changes"
+_CODEX_REVIEW_BASE_RE = re.compile(r"^Review the code changes against the base branch '([^']+)'")
+
+
+def codex_review_label(user_text: str) -> str:
+    """`review/start` のプロンプトなら、画面に出す日本語の一行。人が自分で打った指示なら空（そのまま残す）"""
+    prompt = (user_text or "").lstrip()
+    match = _CODEX_REVIEW_BASE_RE.match(prompt)
+    if match:
+        return f"差分のレビュー（{match.group(1)} との差分）"
+    if prompt.startswith(_CODEX_REVIEW_UNCOMMITTED):
+        return "差分のレビュー（未コミットの変更）"
+    return ""
+
+
+def _review_location(finding: dict, cwd: str) -> str:
+    """`code_location` を `calc.py:8` / `calc.py:8-12` にする。cwd の外なら絶対パスのまま"""
+    location = finding.get("code_location")
+    if not isinstance(location, dict):
+        return ""
+    path = location.get("absolute_file_path")
+    if not isinstance(path, str) or not path:
+        return ""
+    shown = path
+    if cwd:
+        try:
+            relative = os.path.relpath(os.path.realpath(path), os.path.realpath(cwd))
+            if not relative.startswith(".."):
+                shown = relative
+        except Exception:
+            pass
+    lines = location.get("line_range")
+    if isinstance(lines, dict):
+        start, end = lines.get("start"), lines.get("end")
+        if isinstance(start, int):
+            shown = f"{shown}:{start}" + (f"-{end}" if isinstance(end, int) and end != start else "")
+    return shown
+
+
+def codex_review_text(text: str, cwd: str = "") -> str:
+    """レビューの返答（findings の JSON）を読める Markdown にする。レビューでなければ空。
+
+    `review/start` の返答は JSON だけで届くので（notify の `last-assistant-message`）、そのまま行にすると
+    チャットにも一言にも検索にも生の JSON が並ぶ。行の形は変えないので RECORD_VERSION は上げない（#273 と同じ）。
+    """
+    body = (text or "").strip()
+    if not body.startswith("{") or not body.endswith("}"):
+        return ""
+    try:
+        data = json.loads(body)
+    except Exception:
+        return ""
+    if not isinstance(data, dict) or not isinstance(data.get("findings"), list):
+        return ""
+    if not isinstance(data.get("overall_explanation"), str) and not isinstance(data.get("overall_correctness"), str):
+        return ""
+    out = []
+    correctness = data.get("overall_correctness")
+    # 判定と説明は Codex の言葉のまま載せる（機械の出した文言を訳し直さない）
+    out.append(f"**レビュー結果: {correctness}**" if isinstance(correctness, str) and correctness else "**レビュー結果**")
+    explanation = data.get("overall_explanation")
+    if isinstance(explanation, str) and explanation.strip():
+        out.append(explanation.strip())
+    items = []
+    for finding in data["findings"]:
+        if not isinstance(finding, dict):
+            continue
+        title = finding.get("title")
+        title = title.strip() if isinstance(title, str) else ""
+        where = _review_location(finding, cwd)
+        head = f"- **{title or '(題名なし)'}**" + (f" — `{where}`" if where else "")
+        items.append(head)
+        detail = finding.get("body")
+        if isinstance(detail, str) and detail.strip():
+            # 続きの行は字下げして、同じ項目の中に入れる
+            items.append("\n".join(f"  {line}" for line in detail.strip().splitlines()))
+    if items:
+        out.append("\n".join(items))
+    else:
+        out.append("指摘はありません。")
+    return "\n\n".join(out)
+
+
 def first_user_text(path: Path, limit: int = 400) -> str:
     for entry in _iter_jsonl(path, limit=limit):
         role, text = _role_and_text(entry)
@@ -814,6 +901,25 @@ def _rollout_cwd(path: Path) -> str:
     return ""
 
 
+def _rollout_session_id(path: Path) -> str:
+    """rollout の指すセッションID。`session_meta` の `session_id` があればそれ、無ければファイル名の UUID。
+
+    Codex のレビュー（`review/start`。#403）は**子スレッド**で走り、そのぶんの rollout も別ファイルとして
+    書かれる（`id` は子、`session_id` と `parent_thread_id` は親を指す）。ファイル名の UUID だけを見ていると、
+    cwd で引いたときにどちらのファイルが当たるかが mtime の差（実測 5ms）で決まり、レビューの行が
+    別のセッションとして現れることがある。`session_meta.session_id` はどちらのファイルでも親なので先に見る。
+    """
+    for entry in _iter_jsonl(path, limit=8):
+        if entry.get("type") != "session_meta":
+            continue
+        payload = entry.get("payload")
+        node = payload if isinstance(payload, dict) else entry
+        value = node.get("session_id")
+        if isinstance(value, str) and value:
+            return value
+    return _rollout_id(path)
+
+
 def resolve_codex_session(cwd: str) -> str:
     """cwd が一致する直近の rollout ファイルからセッションIDを引く。
 
@@ -844,7 +950,7 @@ def resolve_codex_session(cwd: str) -> str:
     for _, path in candidates[:ROLLOUT_SCAN_LIMIT]:
         found = _rollout_cwd(path)
         if found and os.path.realpath(found) == wanted:
-            return _rollout_id(path)
+            return _rollout_session_id(path)
     return ""
 
 
@@ -1154,6 +1260,14 @@ def build_row(payload: dict, now: datetime, directory: Path, declared: str = "")
         # JSON だけの返答が混ざる（issue #102）
         if is_codex_internal_turn(user_text, text):
             return None
+        # レビュー（`review/start`）は JSON だけを返し、指示文も Codex が組み立てた英文なので、
+        # 読める形に直してから載せる（#403）
+        review = codex_review_text(text, cwd)
+        if review:
+            text = review
+            label = codex_review_label(user_text)
+            if label:
+                user_text = label
         rollout = find_codex_rollout(session) if source == "rollout" else None
         if rollout is not None:
             first_user = first_user_text(rollout)

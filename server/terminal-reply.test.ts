@@ -28,6 +28,15 @@ const started: { id: string; cmd: ReplyCommand }[] = []
 const queued: ReplyCommand[] = []
 const codexStarted: CodexTurnInput[] = []
 const runner: Runner = { running: () => false, snapshot: () => ({}), async start(id, cmd) { started.push({ id, cmd }) } }
+/** lock を握っている生きたプロセス（#332 の案 2）。X4 だけ見つかる */
+const codexTerminals = {
+  asked: [] as string[],
+  async pid(session: string, pane: string) {
+    codexTerminals.asked.push(session)
+    return session === 'X4' && pane === '%11' ? 204 : 0
+  },
+}
+
 const codexApp: CodexApp = {
   running: () => false,
   replying: () => ({}),
@@ -55,7 +64,7 @@ class FakeTmux implements Tmux {
   }
 }
 const tmux = new FakeTmux()
-const alivePids = new Set([200, 201])
+const alivePids = new Set([200, 201, 204])
 const now = new Date()
 const min = (n: number) => n * 60_000
 
@@ -78,6 +87,8 @@ before(async () => {
       JSON.stringify(row(new Date(now.getTime() - min(1)), 'X2', { agent: 'codex', repo: 'r', cwd: work, pane: '', pid: 302, session_source: 'rollout' })),
       // 閉じた Codex（pid 301 は死んでいる）
       JSON.stringify(row(new Date(now.getTime() - min(1)), 'X3', { agent: 'codex', repo: 'r', cwd: work, pane: '', pid: 301, session_source: 'rollout' })),
+      // ラッパー経由の notify で記録された古い行（#332）。pid 303 は死んでいるが、ペイン %11 では Codex が生きている
+      JSON.stringify(row(new Date(now.getTime() - min(1)), 'X4', { agent: 'codex', repo: 'r', cwd: work, pane: '%11', pid: 303, session_source: 'rollout' })),
     ].join('\n') + '\n',
   )
   const app = createApp(
@@ -90,10 +101,11 @@ before(async () => {
     new Authenticator(async () => null),
     {
       tmux,
-      ps: async () => ' 100     1\n 200   100\n 201   100\n',
+      ps: async () => ' 100     1\n 200   100\n 201   100\n 204   100\n',
       replies: new TerminalReplies(),
       alive: (pid) => alivePids.has(pid),
       codexWriterActive: async (session) => session === 'X1' || session === 'X2',
+      codexTerminals,
       codexQueue: async (cmd) => {
         if (cmd.text === '失敗') throw new Error('queue rejected')
         queued.push(cmd)
@@ -127,6 +139,28 @@ test('一覧: pid が生きていて pane があるセッションだけ termina
   assert.deepEqual(by['T1@r'], { pane: '%9', pid: 200 })
   assert.equal(by['D1@r'], null, 'pid が死んでいる')
   assert.equal(by['P1@r'], null, 'pane が無い')
+})
+
+test('一覧: 記録した pid が死んでいる Codex は、lock を握っている生きたプロセスを本体にする（#332）', async () => {
+  codexTerminals.asked.length = 0
+  const data = await sessions()
+  const by = Object.fromEntries(data.sessions.map((s) => [s.id, s.terminal]))
+  assert.deepEqual(by['X4@r'], { pane: '%11', pid: 204 }, 'ラッパーの pid で記録された古い行でも端末として見つかる')
+  assert.equal(by['X3@r'], null, 'lock を握っているプロセスがいなければ今までどおり付かない')
+  assert.equal(by['D1@r'], null, 'Claude には補欠を当てない（lock が無い）')
+  assert.ok(!codexTerminals.asked.includes('D1'), 'Claude や pid が生きている Codex では lsof を起こさない')
+  assert.ok(!codexTerminals.asked.includes('X1'), 'pid が生きていれば引き直さない')
+})
+
+test('返信: 補欠で見つけた Codex にも端末へ打ち込む（#332）', async () => {
+  // Codex の入力欄（`›` の後ろが空）
+  tmux.screen = 'some output\n› '
+  tmux.calls.length = 0
+  const res = await post('X4@r', 'こんにちは')
+  assert.equal(res.status, 202)
+  assert.equal(((await res.json()) as ReplyResponse).via, 'terminal')
+  assert.ok(tmux.calls.some((c) => c[0] === 'paste-buffer' && c.includes('%11')), `ペイン %11 に貼る: ${JSON.stringify(tmux.calls)}`)
+  tmux.screen = IDLE
 })
 
 test('返信: 端末で開いていればペインに打ち込み（via terminal）、ターン完了の行が届くまで処理中', async () => {

@@ -1494,6 +1494,27 @@ test('Codex TUIのダイアログは一覧・詳細・フィードへ検出専�
   assert.equal(afterDialogs.approvals['X1@r'], undefined)
 })
 
+test('Codex TUI のダイアログは、アーカイブ済みのセッションでも出す（#332 の原因 3）', async () => {
+  // ターンの途中の質問では新しい行が届かないので、アーカイブしたまま止まったセッションは自動では戻らない。
+  // 一覧から消えても「人を待っている」ことは見えないと気づけないので、ダイアログの監視には渡す
+  const at = new Date().toISOString()
+  assert.equal((await putMeta('X1@r', { archived_at: at })).status, 200)
+  try {
+    codexDialogs.active = {
+      'X1@r': [{
+        approval_id: 'codex-dialog-archived', id: 'X1@r', since: at, tool_name: 'CodexDialog', input: {}, tool_use_id: '',
+        text: 'Codex の画面で質問または許可への回答を待っている', agent: 'codex', answerable: false,
+      }],
+    }
+    const list = (await (await get('/api/sessions?days=30')).json()) as SessionsResponse
+    assert.ok(!list.sessions.some((s) => s.id === 'X1@r'), '一覧そのものからは消える（アーカイブ済み）')
+    assert.equal(list.approvals['X1@r']?.[0]?.approval_id, 'codex-dialog-archived', '待っていることは出す')
+  } finally {
+    codexDialogs.active = {}
+    await putMeta('X1@r', { archived_at: '' })
+  }
+})
+
 test('Codex app-serverの承認はAPIへ載り、decisionを同じ管理接続へ1回だけ返す', async () => {
   codexApp.active = {
     'X1@r': [{

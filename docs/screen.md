@@ -249,6 +249,16 @@ SAI_CLAUDE_ARGS='--permission-mode acceptEdits' pnpm start       # ファイル�
 SAI_CODEX_APP_SERVER_ARGS='-c sandbox_mode="workspace-write"' pnpm start  # app-serverのCodex設定
 ```
 
+**OpenCode の口のうち、開かないと決めたもの**（#400）。`opencode serve` の API は 162 あるので、使うものだけ足していくと「開かないと決めたもの」が忘れられて後から足されてしまう。理由ごと残しておく:
+
+| 口 | なぜ開かないか |
+| --- | --- |
+| `POST /session/<id>/share`（共有リンク） | 「SAI は外に出さない」と正面からぶつかる。中身は作業内容そのもので、デプロイ・ホスティング・Slack への送信をしないのと同じ |
+| `POST /session/<id>/shell`、`/pty`（`/pty/<id>/connect` の一式） | サーバ越しに任意のシェルが動く。返信の POST を同一オリジンに閉じて守っているので、ここを開くと守る対象が増える。端末は tmux で足りている |
+| `opencode serve` の `--mdns` / `--cors` | 外から見つけられるようにする口。同じ理由で渡さない |
+
+**`delivery: "steer"`（動いているターンに割り込む）は「開かない」ではなく「まだ繋いでいない」。** 同じ考え方の `turn/steer` は Codex に入れた（#404。既定は今までどおり預かりで、画面で選んだときだけ足す。足した分は取り消せない）。ただし OpenCode で `delivery` を持つのは **v2 の `POST /api/session/<id>/prompt`** だけで、SAI が使っているのは v1 の `prompt_async`（1.18.30 の `/doc` で確認）。繋ぐなら v2 へ移る話とセットになる。
+
 `claude` の `--allowedTools` は `~/.claude/settings.json` の `permissions.allow` と同じ書き方で、こちらは SAI からの返信にだけ効く（端末の許可設定はそのまま）。**SAI 自身は既定で何も付けない。** `--dangerously-skip-permissions` / `--permission-mode bypassPermissions` / Codex の `--dangerously-bypass-approvals-and-sandbox` も書けるが、返信の POST はブラウザから飛ぶので、その状態で別サイトからの CSRF が通ればエージェントが何でもできる（同一オリジンの検査で止めてはいる）。許可はツール単位で最小にする。
 
 **許可モードはセッションごとに画面から切り替えられる。** 入力欄の**モデルの右**のボタン（Claude のセッションだけ。#265）で選ぶと、そのセッションへの SAI からの返信に `--permission-mode` が付く。送る直前に目線を動かさずに変えられるよう、返信の設定は入力欄に並べてある（`[モデル] [許可]`。差分のボタンだけは入力欄の上に浮かせる。#351）。値はセッションのメタ（`session-meta.json` の `permission_mode`、`PUT /api/sessions/<id>/meta`）。選べるのは 2 つ:

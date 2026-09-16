@@ -708,6 +708,103 @@ class RecordTest(unittest.TestCase):
         self.assertEqual(rows[1]["user_text"], "", "合図だけの行")
         self._hook({"hook_event_name": "UserPromptSubmit"})
         self.assertEqual(len(read_rows(self.feed_dir)), 2, "直前が再開の行なら、もう待っていない")
+    # -- 日をまたいだセッション（#439）
+
+    def _yesterday_row(self, **over) -> None:
+        """昨日のファイルに、同じセッションの行を 1 本置く。
+
+        `_recent_rows()` が新しい日から積んでいたころは、これがあるだけで「直前の行」が
+        前日の最後の行になり、今日の行が全部飛ばされていた（待ちの二重・再開の行・合成セッション）"""
+        day = datetime.now(JST) - timedelta(days=1)
+        self.feed_dir.mkdir(parents=True, exist_ok=True)
+        row = {
+            "ts": day.isoformat(timespec="seconds"), "agent": "claude", "repo": "myrepo", "branch": "feature/x",
+            "session": "sess-w", "session_source": "payload", "cwd": str(self.cwd),
+            "event": "Stop", "text": "昨日の返答", "first_user_text": "昨日の依頼",
+        }
+        row.update(over)
+        write_jsonl(self.feed_dir / f"{day.strftime('%Y-%m-%d')}.jsonl", [row])
+
+    def _today_rows(self) -> list[dict]:
+        today = datetime.now(JST).strftime("%Y-%m-%d")
+        path = self.feed_dir / f"{today}.jsonl"
+        if not path.exists():
+            return []
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+    def test_waiting_is_not_duplicated_when_the_session_crosses_midnight(self):
+        """前日の行があっても、6 秒後の補欠は重ねない（#439）"""
+        self._yesterday_row()
+        self._hook({"hook_event_name": "PermissionRequest", "tool_name": "Edit", "tool_input": {"file_path": "/x/a.ts"}})
+        self._hook({"hook_event_name": "Notification", "notification_type": "permission_prompt", "message": "Claude needs your permission"})
+        self.assertEqual([r["text"] for r in self._today_rows()], ["許可待ち: Edit: /x/a.ts"], "直前は前日の Stop ではなく 6 秒前の許可待ち")
+
+    def test_resume_row_is_written_when_the_session_crosses_midnight(self):
+        """前日の行があっても、待ちの直後の空の UserPromptSubmit は再開の合図として書く（#439）"""
+        self._yesterday_row()
+        self._hook({"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": {"command": "ls"}})
+        self._hook({"hook_event_name": "UserPromptSubmit"})
+        self.assertEqual([r["event"] for r in self._today_rows()], ["PermissionRequest", "UserPromptSubmit"])
+
+    def test_yesterdays_wait_is_still_the_previous_row(self):
+        """**前日の待ちも「直前」**（#439）。夜に許可待ちで止まって、日付が変わってから答える回。
+
+        直すときに「今日のファイルだけ見る」と、この回の再開の行が書かれなくなり、待ちのバブルが
+        解消しないまま残る。2 日ぶん見るのは今までどおりで、変えたのは**その中のどれを採るか**だけ"""
+        self._yesterday_row(event="PermissionRequest", text="許可待ち: Bash: ls")
+        self._hook({"hook_event_name": "UserPromptSubmit"})
+        self.assertEqual([r["event"] for r in self._today_rows()], ["UserPromptSubmit"], "日をまたいで答えても再開の合図は書く")
+        # 同じ待ちが前日にあるなら、今日もう一度鳴っても重ねない
+        self._yesterday_row(event="PermissionRequest", text="許可待ち: Bash: ls")
+        self._hook({"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": {"command": "ls"}})
+        self.assertEqual([r["event"] for r in self._today_rows()], ["UserPromptSubmit", "PermissionRequest"], "直前は今日の再開なので、これは新しい待ち")
+
+    def test_synth_session_survives_midnight(self):
+        """合成セッション（rollout で引けない Codex）が日をまたいでも切れない（#439）"""
+        self.feed_dir.mkdir(parents=True, exist_ok=True)
+        day = datetime.now(JST) - timedelta(days=1)
+        # 合成セッションは host も見る（#112）ので、記録側と同じ名前にしておく
+        codex = {
+            "agent": "codex", "repo": "myrepo", "branch": "feature/x", "cwd": str(self.cwd), "host": "mac",
+            "session_source": "synth", "event": "agent-turn-complete", "first_user_text": "",
+        }
+        env = {**self.env, "AGENT_FEED_HOST": "mac"}
+        write_jsonl(self.feed_dir / f"{day.strftime('%Y-%m-%d')}.mac.jsonl", [
+            dict(codex, ts=day.isoformat(timespec="seconds"), session="synth-myrepo-yesterday", text="昨日"),
+        ])
+        recent = (datetime.now(JST) - timedelta(minutes=5)).isoformat(timespec="seconds")
+        today = datetime.now(JST).strftime("%Y-%m-%d")
+        write_jsonl(self.feed_dir / f"{today}.mac.jsonl", [
+            dict(codex, ts=recent, session="synth-myrepo-today", text="5 分前"),
+        ])
+        run(stdin=json.dumps({"type": "agent-turn-complete", "last-assistant-message": "いま", "cwd": str(self.cwd)}), env=env)
+        rows = [json.loads(line) for line in (self.feed_dir / f"{today}.mac.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+        self.assertEqual(rows[-1]["session"], "synth-myrepo-today", "前日の行ではなく 5 分前の行と比べる")
+
+    def test_recent_rows_are_oldest_first(self):
+        """`_recent_rows()` は古い日から今日の順（#439）。「最後が直前」で舐める呼び出し側のため"""
+        from feed.record import _recent_rows
+
+        now = datetime.now(JST)
+        self._yesterday_row(text="昨日")
+        write_jsonl(self.feed_dir / f"{now.strftime('%Y-%m-%d')}.jsonl", [{
+            "ts": now.isoformat(timespec="seconds"), "agent": "claude", "repo": "myrepo",
+            "session": "sess-w", "event": "Stop", "text": "今日",
+        }])
+        self.assertEqual([r["text"] for r in _recent_rows(self.feed_dir, now)], ["昨日", "今日"])
+
+    def test_latest_row_uses_ts_not_order(self):
+        """同じ日の中で行が前後しても当たる（#439。許可の asked / replied は競走して逆順に書かれる）"""
+        from feed.record import _latest_row
+
+        old = {"ts": "2026-09-16T13:00:00+09:00", "event": "A"}
+        new = {"ts": "2026-09-16T13:00:09+09:00", "event": "B"}
+        self.assertEqual(_latest_row([new, old])["event"], "B", "並びが逆でも ts で選ぶ")
+        same = [{"ts": "2026-09-16T13:00:00+09:00", "event": "asked"}, {"ts": "2026-09-16T13:00:00+09:00", "event": "replied"}]
+        self.assertEqual(_latest_row(same)["event"], "replied", "同じ秒なら後に書かれた方")
+        self.assertEqual(_latest_row([{"ts": "壊れている", "event": "A"}, {"event": "B"}])["event"], "B", "読めなければ並びで")
+        self.assertIsNone(_latest_row([]))
+
     def test_stop_after_waiting_still_records_a_normal_turn(self):
         self._hook({"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": {"command": "ls"}})
         self._stop()

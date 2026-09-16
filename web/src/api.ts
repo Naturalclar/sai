@@ -136,6 +136,11 @@ export const api = {
     sendRaw<ReplyQueueResponse>('DELETE', `/api/sessions/${encodeURIComponent(id)}/queue/${encodeURIComponent(queueId)}`),
   /** 止めた預かり（前の返信が失敗した・起動できなかった）を再開する */
   resumeQueue: (id: string) => sendJSON<ReplyQueueResponse>('POST', `/api/sessions/${encodeURIComponent(id)}/queue/resume`, {}),
+  /**
+   * 処理中のターンを止める（#384）。止められるのは SAI が起こした Codex のターンだけ（`Replying.interruptible`）。
+   * 返るのは止めたあとの預かり（勝手に回さないよう止めてあるので、`paused` が入っている）
+   */
+  interrupt: (id: string) => sendJSON<ReplyQueueResponse>('POST', `/api/sessions/${encodeURIComponent(id)}/interrupt`, {}),
   /** そのセッションが別のセッションへ送るのを止める（#311）。預かりに並んでいたそのセッションからの分も取り消す */
   stopAgent: (id: string) => sendJSON<AgentStopResponse>('POST', `/api/sessions/${encodeURIComponent(id)}/agent/stop`, {}),
   /** 止めた送信を再開する */

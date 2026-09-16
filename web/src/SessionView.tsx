@@ -7,6 +7,7 @@ import { api } from './api'
 import { useLocalState, usePolling } from './hooks'
 import { Chat } from './Chat'
 import { PendingBubble } from './PendingBubble'
+import { InterruptButton } from './InterruptButton'
 import { ProgressSteps } from './ProgressSteps'
 import { useProgress } from './useProgress'
 import { openPromptSince } from './openPrompt'
@@ -140,6 +141,8 @@ export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggl
               {mine && (
                 <PendingBubble text={mine.text} since={mine.since} now={now} quiet={promptArrived(data.rows, id, mine.text, mine.since)} profile={data.profile}>
                   <ProgressSteps progress={progress} since={mine.since} now={now} />
+                  {/* 止められるのは SAI の app-server が回している Codex のターンだけ（#384） */}
+                  {mine.interruptible && <InterruptButton id={id} />}
                 </PendingBubble>
               )}
               {/* 端末で打ったターン（#302）。SAI は起動していないので、transcript の上で動いているときだけ「処理中」を出す */}

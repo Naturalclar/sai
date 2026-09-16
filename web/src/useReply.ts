@@ -8,6 +8,11 @@ export interface Pending {
   text: string
   /** 起動（送信）した時刻 */
   since: string
+  /**
+   * いまこのターンを SAI から止められる（#384）。サーバの `Replying.interruptible` をそのまま運ぶ。
+   * 送った直後のローカルの分には付かない（サーバがまだ起動していないので止める先が無い）
+   */
+  interruptible?: true
 }
 
 /** 送った直後の返信。サーバの replying に載るまでの繋ぎ */
@@ -134,7 +139,7 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
     // 失敗した分は「処理中」ではない（入力欄を開けて、理由は failed に出す）
     ...Object.entries(replying)
       .filter(([, r]) => !r.failed)
-      .map(([id, r]) => ({ id, text: r.text, since: r.since })),
+      .map(([id, r]) => ({ id, text: r.text, since: r.since, ...(r.interruptible ? { interruptible: r.interruptible } : {}) })),
     ...sent.filter((s) => !replying[s.id]).map((s) => ({ id: s.id, text: s.text, since: new Date(s.sentAt).toISOString() })),
   ]
 

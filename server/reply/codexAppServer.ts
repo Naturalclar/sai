@@ -54,6 +54,15 @@ export interface CodexApp {
    */
   onTurnEnd?(listener: (id: string) => void): void
   /**
+   * 処理中のターンを止める（#384。`turn/interrupt`）。止められたら true。
+   *
+   * **止められるのは SAI が `thread/resume` したスレッドだけ**（別の接続のスレッドは app-server が
+   * `thread not found` で断る）。端末で人が回している Codex には手が出ないので、画面から人の端末のターンを
+   * 殺すことはない。`turn/start` の応答がまだで `turnId` が無い間は false（止める先が決まっていない）。
+   * 偽物は持たなくてよい（持っていなければ画面にボタンを出さない）
+   */
+  interrupt?(id: string): Promise<boolean>
+  /**
    * SAI の app-server がこのスレッドを読み込んでいるか（`thread/resume` が通ってから、`thread/closed`・切断まで）。
    * 読み込んでいる間は app-server 自身が writer lock を開いているので、lock を見て「開いている Codex」と決めると
    * 自分が持っているスレッドへの次の返信を queue に回してしまう（#329）。偽物は持たなくてよい
@@ -246,7 +255,27 @@ export class CodexAppServer implements CodexApp {
   }
 
   replying(): ReplyingMap {
-    return Object.fromEntries([...this.turns.values()].map((turn) => [turn.entity, { since: turn.since, text: turn.text }]))
+    // interruptible は「いま止められる」の印（#384）。turnId が入るまで（turn/start の応答待ち）は止める先が無い
+    return Object.fromEntries(
+      [...this.turns.values()].map((turn) => [turn.entity, { since: turn.since, text: turn.text, ...(turn.turnId ? { interruptible: true as const } : {}) }]),
+    )
+  }
+
+  /**
+   * 処理中のターンを止める（#384）。`turn/interrupt` を投げ、**応答が返ったらこちらでも片付ける**。
+   *
+   * 実測（codex 0.154.0）では `{}` がすぐ返り、そのあと `thread/status/changed: idle` と
+   * `turn/completed`（`status: "interrupted"`）が届く。片付けは届いたイベントでも走るが、**先にここで片付ける**
+   * （イベントが来ないまま接続が黙ったときに「処理中」が残り続けないように）。`clearThread()` は 2 回呼ばれても
+   * 2 回目は何もしない
+   */
+  async interrupt(id: string): Promise<boolean> {
+    const threadId = this.entityThreads.get(id)
+    const turn = threadId ? this.turns.get(threadId) : undefined
+    if (!turn?.turnId) return false
+    await this.request('turn/interrupt', { threadId: turn.threadId, turnId: turn.turnId })
+    this.clearThread(turn.threadId)
+    return true
   }
 
   snapshot(): ApprovalMap {

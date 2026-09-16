@@ -12,6 +12,21 @@ class FakeConnection implements CodexConnection {
   private messages: ((message: Message) => void)[] = []
   private closes: ((error?: Error) => void)[] = []
 
+  /** 応答を保留する method（#384 の「turn/start の応答前」を作る）。release() で返す */
+  private held = ''
+  private holding: (() => void)[] = []
+
+  hold(method: string): void {
+    this.held = method
+  }
+
+  release(): void {
+    this.held = ''
+    const waiting = this.holding
+    this.holding = []
+    for (const send of waiting) send()
+  }
+
   send(message: Message): void {
     this.sent.push(message)
     if (message.id === undefined || !message.method) return
@@ -26,7 +41,9 @@ class FakeConnection implements CodexConnection {
       : message.method === 'thread/resume'
         ? { thread: { id: 'thread-1', status: { type: 'idle' } } }
         : {}
-    queueMicrotask(() => this.emit({ id: message.id, result }))
+    const reply = () => this.emit({ id: message.id, result })
+    if (message.method === this.held) this.holding.push(reply)
+    else queueMicrotask(reply)
   }
 
   onMessage(listener: (message: Message) => void): void {
@@ -69,7 +86,7 @@ test('start: initializeしてthreadをresumeし、app-serverでturnを開始す�
     { type: 'localImage', path: '/tmp/a.png' },
   ])
   assert.equal(app.running('thread-1@repo'), true)
-  assert.deepEqual(app.replying()['thread-1@repo'], { since: '2026-09-09T12:00:00.000Z', text: '続けて' })
+  assert.deepEqual(app.replying()['thread-1@repo'], { since: '2026-09-09T12:00:00.000Z', text: '続けて', interruptible: true }, 'turnId が入っていれば止められる（#384）')
 })
 
 test('requestUserInput: 質問を表示し、question idへ安全に回答して二重回答を拒否する', async () => {
@@ -209,4 +226,57 @@ test('skills: skills/list を 60 秒覚える。取れなければ空で返す�
   assert.deepEqual((await app.skills()).map((s) => s.name), ['imagegen', 'pdf:fill'], '取れなければ覚えている分を返す')
   const fresh = new CodexAppServer(async () => { const c = new FakeConnection(); c.skillsResult = null; return c }, () => now)
   assert.deepEqual(await fresh.skills(), [], '一度も取れていなければ空（返信は止めない）')
+})
+
+// ---- #384: 処理中のターンを止める（turn/interrupt）
+
+test('interrupt: 走っているターンに turn/interrupt を投げ、処理中から外す（#384）', async () => {
+  const { app, connection } = await started()
+  const ended: string[] = []
+  app.onTurnEnd((id) => ended.push(id))
+  connection.sent.length = 0
+
+  assert.equal(await app.interrupt('thread-1@repo'), true)
+  const sent = connection.sent.find((message) => message.method === 'turn/interrupt')
+  assert.deepEqual(sent?.params, { threadId: 'thread-1', turnId: 'turn-1' })
+  assert.equal(app.running('thread-1@repo'), false, '止めたら処理中ではない')
+  assert.deepEqual(ended, ['thread-1@repo'], '預かりを回す側に「終わった」を知らせる')
+
+  // 実測では turn/completed が少し遅れて届く。2 回片付けても壊れない
+  connection.emit({ method: 'turn/completed', params: { threadId: 'thread-1', turn: { id: 'turn-1', status: 'interrupted' } } })
+  assert.deepEqual(ended, ['thread-1@repo'], '同じターンで 2 回知らせない')
+})
+
+test('interrupt: 知らない id と、turn/start の応答前（turnId なし）は止めない（#384）', async () => {
+  const { app, connection } = await started()
+  connection.sent.length = 0
+  assert.equal(await app.interrupt('ほかの@repo'), false, '走っていないセッション')
+  assert.equal(connection.sent.length, 0, '走っていないなら投げない')
+
+  // turn/start の応答を保留したまま start を回す（turnId がまだ決まっていない）
+  const slow = new FakeConnection()
+  slow.hold('turn/start')
+  const app2 = new CodexAppServer(async () => slow, () => Date.parse('2026-09-09T12:00:00Z'))
+  const starting = app2.start({ id: 'thread-2@repo', threadId: 'thread-2', text: 'go', cwd: '/repo' })
+  await new Promise((resolve) => setTimeout(resolve, 0))
+  assert.equal(await app2.interrupt('thread-2@repo'), false, '止める先（turnId）がまだ無い')
+  assert.equal(app2.replying()['thread-2@repo']?.interruptible, undefined, '画面にもボタンを出さない')
+  assert.equal(slow.sent.some((message) => message.method === 'turn/interrupt'), false)
+  slow.release()
+  await starting
+  assert.equal(await app2.interrupt('thread-2@repo'), true, 'turnId が入れば止められる')
+})
+
+test('interrupt: 別のスレッドのターンは触らない（#384）', async () => {
+  const connection = new FakeConnection()
+  const app = new CodexAppServer(async () => connection, () => Date.parse('2026-09-09T12:00:00Z'))
+  await app.start({ id: 'A@repo', threadId: 'thread-A', text: 'a', cwd: '/repo' })
+  await app.start({ id: 'B@repo', threadId: 'thread-B', text: 'b', cwd: '/repo' })
+  connection.sent.length = 0
+
+  assert.equal(await app.interrupt('A@repo'), true)
+  const sent = connection.sent.filter((message) => message.method === 'turn/interrupt')
+  assert.equal(sent.length, 1)
+  assert.equal((sent[0]!.params as { threadId: string }).threadId, 'thread-A')
+  assert.equal(app.running('B@repo'), true, 'もう一方は走ったまま')
 })

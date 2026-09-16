@@ -47,6 +47,7 @@ import type {
   SessionsResponse,
   ReviewRequest,
   ReviewResponse,
+  SessionMeta,
   SessionSummary,
   SettingsRequest,
   SettingsResponse,
@@ -824,11 +825,14 @@ export function createApp(
   }
 
   /**
-   * POST /api/sessions/new（#314）。SAI の画面から Claude の新しいセッションを始めるのを投げっぱなしにし、202 を返す。
+   * POST /api/sessions/new（#314）。SAI の画面から新しいセッションを始めるのを投げっぱなしにし、202 を返す。
    * **パスは受け取らない**: `from`（既存のセッション）の `cwd` を使う。返信と同じく、同一オリジンの検査が破られても
    * 走る場所を記録にある worktree に閉じる。ID は `--session-id` でサーバが決めるので、最初の行が届く前から
    * エンティティID が分かり、処理中（`replying`）・許可の配線（`SAI_ENTITY`）・メタを返信と同じ鍵で扱える。
-   * 行が 1 本も届かないうちに落ちても、`replying` は一覧に居ないセッションの分も載せるので画面に理由が出る
+   * 行が 1 本も届かないうちに落ちても、`replying` は一覧に居ないセッションの分も載せるので画面に理由が出る。
+   * **Codex は `thread/start` で同じことができる**（#401）: 返る thread id がそのまま記録の `session` になるので、
+   * Claude の `--session-id` と同じく最初の行より前に鍵が決まる（実測）。作ったスレッドは rollout がまだ無いので、
+   * 最初のターンだけ `thread/resume` を飛ばす（`CodexAppServer` 側でやる）
    */
   const startSession = async (req: IncomingMessage, res: ServerResponse, days: number) => {
     if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
@@ -842,6 +846,11 @@ export function createApp(
     const text = typeof asked.text === 'string' ? asked.text.trim() : ''
     if (!text) return error(res, 400, 'text is required')
     if (typeof asked.from !== 'string' || !asked.from) return error(res, 400, 'from（どの worktree で始めるか）が要ります')
+    const agent = asked.agent ?? 'claude'
+    if (agent !== 'claude' && agent !== 'codex') return error(res, 400, '始められるのは claude か codex です')
+    if (agent === 'codex' && !(codexAppEnabled && codexApp.startThread)) {
+      return error(res, 400, 'Codex のセッションを始めるには app-server が要ります（SAI_CODEX_APP_SERVER=0 では始められません）')
+    }
     // モデルと許可モードは PUT .../meta と同じ検査（mergeMeta）を通してから、新しいセッションのメタに書く
     const { meta, error: reason } = mergeMeta({}, { model: asked.model ?? '', permission_mode: asked.permission_mode ?? '' })
     if (reason) return error(res, 400, reason)
@@ -857,6 +866,8 @@ export function createApp(
     } catch {
       return error(res, 400, `cwd が見つかりません: ${cwd || '(空)'}`)
     }
+
+    if (agent === 'codex') return await startCodexSession(res, from, cwd, text, meta)
 
     const session = randomUUID()
     // record.py が行に書く repo は同じ cwd から取るので、from のものと同じになる
@@ -877,6 +888,43 @@ export function createApp(
     // 人が始めたターン（メッセージの連鎖ではない。#311）
     agents.launched(id, undefined)
     const payload: NewSessionResponse = { accepted: true, id, agent: 'claude', session, cwd, via: 'process' }
+    return json(res, payload, 202)
+  }
+
+  /**
+   * `POST /api/sessions/new` の Codex（#401）。`thread/start` で id を決めてから 1 ターン回す。
+   * **`thread/start` だけでは rollout が書かれない**ので、起動に失敗すれば記録には何も残らない
+   */
+  const startCodexSession = async (
+    res: ServerResponse,
+    from: SessionSummary,
+    cwd: string,
+    text: string,
+    meta: SessionMeta,
+  ) => {
+    const log = join(store.directory, 'reply.log')
+    let session: string
+    try {
+      session = await codexApp.startThread!(cwd)
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      const hint = code === 'ENOENT' ? 'codex が見つかりません（サーバを起動した環境の PATH に codex があるか確かめてください）' : ''
+      return error(res, 500, hint || `Codex の新しいスレッドを作れませんでした: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    // 記録の `session` は rollout から引かれるが、それは thread/start が返した id と同じになる（#401 で実測）
+    const id = entityId(session, from.repo, '')
+    if (Object.keys(meta).length > 0) await metaStore.set(id, meta)
+    await appendFile(log, `--- ${new Date().toISOString()} ${id} Codex の新しいセッション（thread/start → turn/start） (cwd ${cwd})\n`).catch(() => {})
+    try {
+      await codexApp.start({ id, threadId: session, text, cwd, model: meta.model })
+    } catch (err) {
+      const message = `Codex のセッションを始められませんでした: ${err instanceof Error ? err.message : String(err)}`
+      await appendFile(log, `${message}\n`).catch(() => {})
+      return error(res, 500, message)
+    }
+    // 人が始めたターン（メッセージの連鎖ではない。#311）
+    agents.launched(id, undefined)
+    const payload: NewSessionResponse = { accepted: true, id, agent: 'codex', session, cwd, via: 'app-server' }
     return json(res, payload, 202)
   }
 

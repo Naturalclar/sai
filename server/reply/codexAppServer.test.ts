@@ -9,6 +9,8 @@ class FakeConnection implements CodexConnection {
   sent: Message[] = []
   /** `skills/list` の応答（#402）。null ならエラーを返す */
   skillsResult: unknown = { data: [] }
+  /** `thread/start` の応答（#401）。null なら thread を返さない */
+  newThread: string | null = 'thread-new'
   private messages: ((message: Message) => void)[] = []
   private closes: ((error?: Error) => void)[] = []
 
@@ -34,6 +36,12 @@ class FakeConnection implements CodexConnection {
       const id = message.id
       const result = this.skillsResult
       queueMicrotask(() => this.emit(result === null ? { id, error: { message: '読めない' } } : { id, result }))
+      return
+    }
+    if (message.method === 'thread/start') {
+      const id = message.id
+      const made = this.newThread
+      queueMicrotask(() => this.emit({ id, result: made ? { thread: { id: made } } : {} }))
       return
     }
     const result = message.method === 'turn/start'
@@ -279,4 +287,38 @@ test('interrupt: 別のスレッドのターンは触らない（#384）', async
   assert.equal(sent.length, 1)
   assert.equal((sent[0]!.params as { threadId: string }).threadId, 'thread-A')
   assert.equal(app.running('B@repo'), true, 'もう一方は走ったまま')
+})
+
+test('startThread: thread/start で作ったスレッドは、最初のターンで resume しない（#401）', async () => {
+  const connection = new FakeConnection()
+  const app = new CodexAppServer(async () => connection, () => Date.parse('2026-09-09T12:00:00Z'))
+  const threadId = await app.startThread('/repo')
+  assert.equal(threadId, 'thread-new')
+  const start = connection.sent.find((m) => m.method === 'thread/start')
+  assert.deepEqual(start?.params, { cwd: '/repo' }, 'cwd だけ渡す')
+
+  await app.start({ id: 'thread-new@repo', threadId, text: 'はじめまして', cwd: '/repo', model: 'gpt-test' })
+  assert.deepEqual(
+    connection.sent.map((m) => m.method),
+    ['initialize', 'initialized', 'thread/start', 'turn/start'],
+    '作りたてのスレッドは rollout がまだ無いので thread/resume を投げない',
+  )
+  const turn = connection.sent.find((m) => m.method === 'turn/start')?.params as Record<string, unknown>
+  assert.equal(turn.threadId, threadId)
+  assert.equal(turn.model, 'gpt-test', 'resume を飛ばしてもモデルは turn/start で渡る')
+  assert.equal(turn.approvalsReviewer, 'user', '許可も今までどおり SAI が答える')
+  assert.equal(app.running('thread-new@repo'), true)
+  assert.equal(app.holds(threadId), true, 'この接続が持っている（queue に回さない）')
+
+  // 2 回目は普通のスレッドとして resume する
+  connection.emit({ method: 'turn/completed', params: { threadId, turn: { id: 'turn-1' } } })
+  await app.start({ id: 'thread-new@repo', threadId, text: '続けて', cwd: '/repo' })
+  assert.deepEqual(connection.sent.map((m) => m.method).slice(4), ['thread/resume', 'turn/start'])
+})
+
+test('startThread: 応答に id が無ければ投げる（#401）', async () => {
+  const connection = new FakeConnection()
+  connection.newThread = null
+  const app = new CodexAppServer(async () => connection, () => Date.parse('2026-09-09T12:00:00Z'))
+  await assert.rejects(() => app.startThread('/repo'), /thread id/)
 })

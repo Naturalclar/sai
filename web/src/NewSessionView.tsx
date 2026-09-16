@@ -4,7 +4,7 @@ import { MODE_LABEL, REPLY_MODES } from '../../shared/permissions.ts'
 import type { ReplyingMap, SessionSummary } from '../../shared/types.ts'
 import { api } from './api'
 import { BackLink } from './BackLink'
-import { CLAUDE_ALIASES, MODEL_DEFAULT_LABEL } from './modelChoices'
+import { modelChoices, MODEL_DEFAULT_LABEL } from './modelChoices'
 import { NewSessionStarting } from './NewSessionStarting'
 import { workspaceChoices, workspaceLabel } from './newSession'
 
@@ -25,8 +25,14 @@ interface Started {
 /** 候補を作る一覧。絞り込み無しで取るので、アーカイブ済みも別に取って足す */
 const ALL = { project: '', repo: '', agent: '', date: '', host: '', days: '90' }
 
+/** 始められるエージェント（#401）。OpenCode と Grok は ID を先に決める口が無いので出さない */
+const AGENTS = [
+  { id: 'claude' as const, label: 'Claude Code', note: '別プロセス（claude -p）で回す。端末には出ない' },
+  { id: 'codex' as const, label: 'Codex CLI', note: 'app-server で回す。端末には出ない' },
+]
+
 /**
- * SAI の画面から新しいセッションを始める（#314。まず Claude だけ）。worktree は**記録にあるものから選ぶ**:
+ * SAI の画面から新しいセッションを始める（#314。Codex は #401）。worktree は**記録にあるものから選ぶ**:
  * サーバには選んだ worktree の一番新しいセッション（`from`）を渡し、サーバがその `cwd` を使う（パスは送らない）。
  * 送ったら `NewSessionStarting` が最初の行を待って、そのセッションの画面へ移る
  */
@@ -34,6 +40,7 @@ export function NewSessionView({ replying, now, onOpenSidebar }: Props) {
   const [all, setAll] = useState<{ sessions: SessionSummary[]; host: string } | null>(null)
   const [loadError, setLoadError] = useState('')
   const [from, setFrom] = useState('')
+  const [agent, setAgent] = useState<'claude' | 'codex'>('claude')
   const [model, setModel] = useState('')
   const [mode, setMode] = useState('')
   const [text, setText] = useState('')
@@ -57,6 +64,11 @@ export function NewSessionView({ replying, now, onOpenSidebar }: Props) {
   }, [])
 
   const choices = useMemo(() => (all ? workspaceChoices(all.sessions, all.host) : []), [all])
+  // モデルの候補は、そのエージェントで記録に出てきたもの（Claude は別名も。`modelChoices()` と同じ規則）
+  const models = useMemo(
+    () => modelChoices(agent, [...new Set((all?.sessions ?? []).filter((s) => s.agent === agent).flatMap((s) => s.models))], ''),
+    [all, agent],
+  )
   // 選んでいなければ一番新しい worktree
   const chosen = choices.find((w) => w.from === from) ?? choices[0] ?? null
 
@@ -66,7 +78,14 @@ export function NewSessionView({ replying, now, onOpenSidebar }: Props) {
     setBusy(true)
     setError('')
     try {
-      const res = await api.startSession({ from: chosen.from, text: body, ...(model ? { model } : {}), ...(mode ? { permission_mode: mode } : {}) })
+      const res = await api.startSession({
+        from: chosen.from,
+        text: body,
+        ...(agent === 'claude' ? {} : { agent }),
+        ...(model ? { model } : {}),
+        // 許可モードは Claude にしか渡らない（`replyCommand()` が `--permission-mode` を付けるのは Claude だけ）
+        ...(mode && agent === 'claude' ? { permission_mode: mode } : {}),
+      })
       setStarted({ id: res.id, text: body, since: Date.now() })
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -87,7 +106,7 @@ export function NewSessionView({ replying, now, onOpenSidebar }: Props) {
       <BackLink onOpenSidebar={onOpenSidebar} />
       <div className="chat-head">
         <h1>新しいセッション</h1>
-        <span className="meta">Claude Code を、記録にある worktree で始める</span>
+        <span className="meta">記録にある worktree で、新しいセッションを始める</span>
       </div>
       {started ? (
         <NewSessionStarting
@@ -122,27 +141,47 @@ export function NewSessionView({ replying, now, onOpenSidebar }: Props) {
           {loadError && <div className="notice error">一覧を取れませんでした: {loadError}</div>}
           <div className="opts">
             <label>
+              エージェント
+              <select
+                value={agent}
+                onChange={(e) => {
+                  setAgent(e.target.value === 'codex' ? 'codex' : 'claude')
+                  // 候補が入れ替わるので、選んでいたモデルは外す（Claude の別名は Codex に渡せない）
+                  setModel('')
+                }}
+              >
+                {AGENTS.map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
               モデル
               <select value={model} onChange={(e) => setModel(e.target.value)}>
                 <option value="">{MODEL_DEFAULT_LABEL}</option>
-                {CLAUDE_ALIASES.map((m) => (
+                {models.map((m) => (
                   <option key={m} value={m}>
                     {m}
                   </option>
                 ))}
               </select>
             </label>
-            <label>
-              許可モード
-              <select value={mode} onChange={(e) => setMode(e.target.value)}>
-                <option value="">{MODE_LABEL.default}</option>
-                {REPLY_MODES.map((m) => (
-                  <option key={m} value={m}>
-                    {MODE_LABEL[m]}
-                  </option>
-                ))}
-              </select>
-            </label>
+            {/* 許可モードは Claude だけ（Codex は app-server の承認で答える） */}
+            {agent === 'claude' && (
+              <label>
+                許可モード
+                <select value={mode} onChange={(e) => setMode(e.target.value)}>
+                  <option value="">{MODE_LABEL.default}</option>
+                  {REPLY_MODES.map((m) => (
+                    <option key={m} value={m}>
+                      {MODE_LABEL[m]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
           </div>
           <textarea
             value={text}
@@ -156,7 +195,7 @@ export function NewSessionView({ replying, now, onOpenSidebar }: Props) {
             <button type="submit" disabled={busy || !text.trim() || !chosen}>
               {busy ? '始めています…' : '始める'}
             </button>
-            <span className="note">別プロセス（claude -p）で回す。端末には出ない</span>
+            <span className="note">{AGENTS.find((a) => a.id === agent)?.note}</span>
           </div>
           {error && <div className="notice error">始められませんでした: {error}</div>}
         </form>

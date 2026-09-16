@@ -188,6 +188,7 @@ export function FeedView({ project, projects, onProject, sessions = NO_SESSIONS,
           <ReplyBox
             repo={target.repo}
             skillsId={target.id}
+            skillsAgent={target.agent}
             sentFromConfirm={confirmedSent}
             history={history}
             onLeaveToSidebar={onLeaveToSidebar}

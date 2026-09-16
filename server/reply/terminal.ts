@@ -6,8 +6,9 @@
 // 別プロセスを立てないので、返答は端末に出て、フックが普通のターンとして JSONL に足す。
 // 「処理中」は子プロセスが無いので、since より新しいターン完了の行が届いたら解消（settle）。
 import { spawn } from 'node:child_process'
+import { parseCodexDialog } from '../../shared/codexDialog.ts'
 import { settledByRow } from '../../shared/turnSettled.ts'
-import type { Agent, Replying, ReplyingMap, Terminal } from '../../shared/types.ts'
+import type { Agent, Replying, ReplyingMap, Terminal, TerminalDialog } from '../../shared/types.ts'
 
 /** ターン完了の行が届かないまま、これだけ経ったら諦めて「処理中」を消す */
 export const TERMINAL_REPLY_TTL_MS = 30 * 60_000
@@ -56,6 +57,11 @@ export interface PromptState {
   typed: string
   /** スラッシュコマンドの候補メニューが開いている（`/` で始めると入力欄の下に並ぶ）。消す前に Escape で閉じる */
   menu?: boolean
+  /**
+   * kind が dialog のとき、画面から読んだダイアログの中身（#425。Codex だけ。読めなければ省略）。
+   * **打ち込んでよいかの判定には使わない**（出すためだけ。`codexDialogs.ts` が `Approval` に載せる）
+   */
+  dialog?: TerminalDialog
 }
 
 const DIALOG = /Enter to (?:confirm|select|submit)|Esc to cancel|Press enter to continue|Waiting for user input/i
@@ -100,7 +106,13 @@ export function promptState(screen: string, agent: Agent): PromptState {
     .filter((l) => l.trim())
   const tail = lines.slice(-25).join('\n')
   const dialog: PromptState = { idle: false, kind: 'dialog', reason: '端末が許可や質問のダイアログを出している', typed: '' }
-  if (DIALOG.test(tail)) return dialog
+  // ダイアログの中身は、出すためだけに読む（読めなくても検出は今までどおり。#425）
+  const asDialog = (): PromptState => {
+    if (agent !== 'codex') return dialog
+    const parsed = parseCodexDialog(screen)
+    return parsed ? { ...dialog, dialog: parsed } : dialog
+  }
+  if (DIALOG.test(tail)) return asDialog()
   // OpenCode は箱の形が違い、空行も箱の一部なので、空行を落とす前の画面から読む
   if (agent === 'opencode') return opencodePrompt(screen.split('\n').map((l) => l.replace(/[\s\u00a0]+$/, '')))
   // 入力欄の行。Claude Code は `❯` の後ろが NBSP（\u00a0）。ダイアログの選択肢（`  ❯ 1. Yes`）は上の検査で先に弾いている
@@ -131,7 +143,7 @@ export function promptState(screen: string, agent: Agent): PromptState {
     const m = lines[at]!.match(markers)!
     const first = (m[1] ?? '').trim()
     if (!first || placeholder.test(first)) return { idle: true, kind: 'idle', reason: '', typed: '' }
-    if (/^\d+\.\s/.test(first)) return dialog
+    if (/^\d+\.\s/.test(first)) return asDialog()
     // 複数行の打ちかけは、続きの行が 2 文字下げで並ぶ（Claude Code も Codex も同じ）。区切り線や状態行の手前まで
     const rest: string[] = []
     let j = at + 1

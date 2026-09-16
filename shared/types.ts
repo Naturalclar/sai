@@ -582,6 +582,28 @@ export interface AgentStopResponse {
  * それが SAI サーバに預けたもの。画面の [許可] [拒否] で答えるまでエージェントは止まっている。
  * 正本はサーバのメモリ（server/approvals/approvals.ts）で、返信のプロセスが exit したら消える
  */
+/**
+ * 端末で開いている Codex が出しているダイアログの中身（#425）。`capture-pane` した画面から
+ * `shared/codexDialog.ts` の `parseCodexDialog()` が組み立てる。**画面は読むだけで出す**
+ * （通常起動の TUI にキーを送るのは誤承認になりうるので、答えるのは端末。#208）
+ */
+export interface TerminalDialog {
+  /** 見出しの 1 行（`Would you like to run the following command?`）。画面の上で切れていれば空 */
+  title: string
+  /** 見出しと選択肢の間の説明（`Environment: local` / `Reason: …`）。無ければ空 */
+  detail: string
+  /** `$ …` のコマンド全文（複数行のまま）。質問のダイアログでは空 */
+  command: string
+  /** 番号付きの選択肢。1 つも読めなければダイアログとして扱わない（今までどおりの 1 行に落ちる） */
+  options: TerminalDialogOption[]
+}
+export interface TerminalDialogOption {
+  /** 画面に出ている番号（`1.`） */
+  number: number
+  label: string
+  /** いまカーソルが当たっている行（`›` が付いている）。押すとこれが選ばれる */
+  selected: boolean
+}
 export interface Approval {
   approval_id: string
   /** どのエンティティ（返信先）か */
@@ -597,6 +619,8 @@ export interface Approval {
   agent?: Agent
   /** false は検出専用。SAI から答えを返す安全な経路が無いので、端末で回答する案内だけを出す */
   answerable?: boolean
+  /** 端末の画面から読んだダイアログの中身（#425。`answerable: false` のときだけ。読めなければ省略） */
+  dialog?: TerminalDialog
   /** Codex app-server がこのrequestで提示した決定だけ。idから実際のdecisionを引くのはサーバ */
   decisions?: ApprovalDecision[]
 }

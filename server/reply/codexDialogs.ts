@@ -1,7 +1,9 @@
 // 通常起動された Codex TUI は app-server の JSON-RPC client ではないため、質問・許可の
-// server request を SAI から購読できない。tmux の画面を低頻度で確認し、少なくとも
-// 「人を待って止まっている」ことを見えるようにする。回答は誤承認を避けるため端末に任せる。
+// server request を SAI から購読できない。tmux の画面を低頻度で確認し、「人を待って止まっている」ことと、
+// **何を聞かれているか**（#425。`parseCodexDialog()` が画面から読む選択肢）を見えるようにする。
+// 回答は誤承認を避けるため端末に任せる（`answerable: false` のまま）。
 import { createHash } from 'node:crypto'
+import { codexDialogKey, codexDialogText } from '../../shared/codexDialog.ts'
 import type { Approval, ApprovalMap, SessionSummary, Terminal } from '../../shared/types.ts'
 import { inspectPrompt } from './terminal.ts'
 import type { PsFn, Tmux } from './terminal.ts'
@@ -52,21 +54,25 @@ export class CodexDialogs implements CodexDialogSource {
         try {
           const state = await inspectPrompt(this.tmux, this.ps, session.terminal, 'codex')
           if (state.kind !== 'dialog') return null
+          const dialog = state.dialog ?? null
+          // **中身も id に混ぜる**（`approvalMapKey()` は approval_id しか見ないので、混ぜないと
+          // 同じセッションで次の許可に変わったときに画面のポーリングが拾わない）。
+          // 鍵にカーソルの位置は入らないので、矢印で選び直しただけでは待ち始めた時刻は戻らない
+          const approvalId = `codex-dialog-${hash(session.id)}${dialog ? `-${hash(codexDialogKey(dialog))}` : ''}`
           const previous = this.active.get(session.id)
-          return [
-            session.id,
-            previous ?? {
-              approval_id: `codex-dialog-${createHash('sha256').update(session.id).digest('hex').slice(0, 16)}`,
-              id: session.id,
-              since: new Date(this.now()).toISOString(),
-              tool_name: 'CodexDialog',
-              input: {},
-              tool_use_id: '',
-              text: 'Codex の画面で質問または許可への回答を待っている',
-              agent: 'codex',
-              answerable: false,
-            },
-          ]
+          const approval: Approval = {
+            approval_id: approvalId,
+            id: session.id,
+            since: previous?.approval_id === approvalId ? previous.since : new Date(this.now()).toISOString(),
+            tool_name: 'CodexDialog',
+            input: {},
+            tool_use_id: '',
+            text: codexDialogText(dialog),
+            agent: 'codex',
+            answerable: false,
+          }
+          if (dialog) approval.dialog = dialog
+          return [session.id, approval]
         } catch {
           // ペイン消滅、pid 不一致、capture 失敗は「待機している」と断定しない。
           return null
@@ -80,6 +86,8 @@ export class CodexDialogs implements CodexDialogSource {
     return Object.fromEntries(Array.from(this.active, ([id, approval]) => [id, [approval]]))
   }
 }
+
+const hash = (text: string): string => createHash('sha256').update(text).digest('hex').slice(0, 16)
 
 /** Claude の構造化 Approval と Codex TUI の検出専用表示を同じ API の形へ重ねる。 */
 export function mergeApprovalMaps(...maps: ApprovalMap[]): ApprovalMap {

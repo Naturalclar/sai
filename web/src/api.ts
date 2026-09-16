@@ -35,7 +35,7 @@ import type {
 } from '../../shared/types.ts'
 import type { DigestFeedbackReason, DigestFeedbackRequest, DigestFeedbackResponse } from '../../shared/digestFeedback.ts'
 
-export type { Agent, FeedRow, SessionSource, SessionSummary, SessionMeta, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, QueuedReply, ReplyQueue, ReplyQueueMap, ReplyQueueResponse, AgentActivity, AgentActivityMessage, AgentStopResponse,Approval, ApprovalMap, ApprovalAnswer, Profile, PersonaId, SettingsResponse, SettingsRequest, Viewer, SessionPermissionsResponse, SessionProgressResponse, ProgressStep, SessionDiffResponse, SessionDiffSummaryResponse, SearchResponse, SearchHit, DiffPr, DiffSection, DiffFileStat, AttachmentResponse, UsageResponse, UsageWindow, CodexUsage, ClaudeUsage } from '../../shared/types.ts'
+export type { Agent, FeedRow, SessionSource, SessionSummary, SessionMeta, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, QueuedReply, ReplyQueue, ReplyQueueMap, ReplyQueueResponse, AgentActivity, AgentActivityMessage, AgentStopResponse,Approval, ApprovalMap, ApprovalAnswer, TerminalDialog, Profile, PersonaId, SettingsResponse, SettingsRequest, Viewer, SessionPermissionsResponse, SessionProgressResponse, ProgressStep, SessionDiffResponse, SessionDiffSummaryResponse, SearchResponse, SearchHit, DiffPr, DiffSection, DiffFileStat, AttachmentResponse, UsageResponse, UsageWindow, CodexUsage, ClaudeUsage } from '../../shared/types.ts'
 
 /**
  * `PUT /api/sessions/<id>/meta` のボディ。`SessionMeta` の一部を重ねる。

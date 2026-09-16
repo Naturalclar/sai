@@ -30,6 +30,8 @@ export function replyBlockedReason(s: Pick<SessionSummary, 'id' | 'agent' | 'ses
 /** 返信先の候補。エンティティごとに1件 */
 export interface ReplyTarget {
   id: string
+  /** 返信先のエージェント。入力欄でスキルを名指しする記法（Codex は `$`）にも使う */
+  agent: string
   /** worktree のディレクトリ名（`dev-alqa` / `main`）。GitHub のリポジトリではない（#151）。`@` の表記の元 */
   repo: string
   /**
@@ -68,6 +70,7 @@ export function sessionReplyTargets(sessions: SessionSummary[], selfHost: string
   return sessions.map((s) => {
     const t: ReplyTarget = {
       id: s.id,
+      agent: s.agent,
       repo: s.repo,
       // 行に無くてもサーバが cwd の git から埋めている（server/git/project.ts の ProjectResolver）
       project: s.project,
@@ -100,6 +103,7 @@ export function feedReplyTargets(rows: FeedRow[], selfHost: string): ReplyTarget
     }
     seen.set(id, {
       id,
+      agent: r.agent,
       repo: r.repo,
       project: rowProject(r),
       branch: r.branch,

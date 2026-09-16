@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent, SyntheticEvent } from 'react'
 import { filterReplyTargets, mentionLabels, mentionQuery, stripMention, targetProjectLabel, type ReplyTarget } from '../../shared/reply.ts'
-import { filterSkills, skillSummary, slashQuery, type Skill } from '../../shared/skills.ts'
+import { filterSkills, skillInvocation, skillSummary, slashQuery, type Skill } from '../../shared/skills.ts'
 import { emojiQuery, filterEmoji, type EmojiHit } from '../../shared/emoji.ts'
 import { elapsedLabel } from './format'
 import { useSkills } from './useSkills'
@@ -92,6 +92,8 @@ interface Props {
   diff?: DiffButtonProps
   /** `/` でスキルの候補を出す返信先（エンティティID）。渡さなければ `/` はただの文字 */
   skillsId?: string
+  /** 候補を本文に入れる記法を決めるエージェント。Codex は `$name`、それ以外は `/name` */
+  skillsAgent?: string
   /** 画像を預ける先（エンティティID）。渡さなければ画像は添えられない */
   attachId?: string
   /**
@@ -130,7 +132,7 @@ const NO_HISTORY: readonly string[] = []
 const keyOf = (e: KeyboardEvent<HTMLTextAreaElement>) => ({ key: e.key, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, shiftKey: e.shiftKey })
 
 /** 入力欄。Enter で送信、Shift+Enter で改行。IME 変換中の Enter は送らない */
-export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerable = false, now = 0, onSend, onDraft, model, permission, diff, skillsId, attachId, draftKey, sentFromConfirm = 0, restore, history = NO_HISTORY, nextAsk, onLeaveToSidebar, mention }: Props) {
+export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerable = false, now = 0, onSend, onDraft, model, permission, diff, skillsId, skillsAgent, attachId, draftKey, sentFromConfirm = 0, restore, history = NO_HISTORY, nextAsk, onLeaveToSidebar, mention }: Props) {
   // 前に打ちかけて離れた分（#306）。作ったときに 1 回だけ読む
   const [initial] = useState(() => (draftKey ? loadDraft(draftKey) : EMPTY_DRAFT))
   const [text, setText] = useState(initial.text)
@@ -266,11 +268,12 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
     ref.current?.focus()
   }
 
-  /** スキルの候補を確定する。本文の先頭を `/<name> ` にして、続けて引数を打てるようにする。展開は CLI に任せる */
+  /** スキルの候補を確定する。Codex は `$<name> `、それ以外は `/<name> ` にして、続けて引数を打てるようにする */
   const pickSkill = (s: Skill) => {
     if (!slashHit) return
-    const at = s.name.length + 2
-    setText(`/${s.name} ${text.slice(caret)}`)
+    const invocation = skillInvocation(s.name, skillsAgent)
+    const at = invocation.length + 1
+    setText(`${invocation} ${text.slice(caret)}`)
     setCaret(at)
     setDismissed(null)
     wantCaret.current = at

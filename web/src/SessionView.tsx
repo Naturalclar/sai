@@ -182,6 +182,7 @@ export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggl
             sentFromConfirm={confirmedSent}
             repo={s.repo}
             skillsId={id}
+            skillsAgent={s.agent}
             history={history}
             // 次に送る文面の案（#371）。入力欄が空のときだけチップに出る
             {...(s.next_ask ? { nextAsk: s.next_ask } : {})}

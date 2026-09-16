@@ -3,8 +3,9 @@
 // Codex は `<cwd>/.codex/skills/` と `<cwd>/.agents/skills/`（リポジトリ）＋ app-server の `skills/list`（ユーザー・プラグイン・組み込み）。
 // 読み取りは `server/local/skills.ts` と `server/reply/codexAppServer.ts`。
 // ここは SKILL.md の頭の読み方と、app-server の応答の読み方、`/` の検出・絞り込みだけ（fs も DOM も触らない）。
-// 候補を選んでも SAI は本文を `/<name> ` にするだけで、展開は CLI に任せる（端末でも `-p` でも同じ。Codex の app-server でも
-// `input: [{ type: 'text', text: '/<name>' }]` で実際にスキルが動くことを v0.154.0 で確かめた）。
+// 候補を選ぶと Claude / OpenCode は `/<name> `、Codex は `$<name> ` にするだけで、展開は CLI に任せる。
+// Codex の `/` は TUI のスラッシュコマンドとして先に解釈され、端末に打ち込む経路ではスキル名が
+// 「存在しないコマンド」になるため、スキルを名指しする `$` を使う。
 
 /** SKILL.md 1つ分。中身は読まない（一覧に出すのは名前と説明だけ） */
 export interface Skill {
@@ -107,6 +108,15 @@ export function filterSkills(skills: Skill[], query: string): Skill[] {
   const q = query.toLowerCase()
   if (!q) return skills
   return skills.filter((s) => `${s.name}\n${s.description}`.toLowerCase().includes(q))
+}
+
+/**
+ * 候補から選んだスキルを本文で名指しする形。
+ * Codex の TUI では `/name` がスラッシュコマンドとして消費されるので `$name`、
+ * Claude / OpenCode はそれぞれの CLI が展開する従来の `/name` のままにする。
+ */
+export function skillInvocation(name: string, agent: string | undefined): string {
+  return `${agent === 'codex' ? '$' : '/'}${name}`
 }
 
 /** 候補に出す1行。説明の1行目を SKILL_DESC_MAX で切る */

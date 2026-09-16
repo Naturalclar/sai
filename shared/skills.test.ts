@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { filterSkills, opencodeSkills, parseCodexSkills, parseSkill, skillSummary, slashQuery, SKILL_DESC_MAX } from './skills.ts'
+import { filterSkills, opencodeSkills, parseCodexSkills, parseSkill, skillInvocation, skillSummary, slashQuery, SKILL_DESC_MAX } from './skills.ts'
 
 const SKILL = `---
 name: issue-triage
@@ -53,6 +53,14 @@ test('filterSkills は名前でも説明でも当たる', () => {
   assert.deepEqual(filterSkills(skills, 'ISSUE').map((s) => s.name), ['issue-triage'], '大文字小文字は無視')
   assert.deepEqual(filterSkills(skills, '優先度').map((s) => s.name), ['issue-triage'], '説明の中の呼び出し文句で引ける')
   assert.deepEqual(filterSkills(skills, 'zzz'), [])
+})
+
+test('skillInvocation: Codex はスキル名を $ で名指しし、ほかは / のコマンドにする', () => {
+  assert.equal(skillInvocation('imagegen', 'codex'), '$imagegen')
+  assert.equal(skillInvocation('browser:control-in-app-browser', 'codex'), '$browser:control-in-app-browser')
+  assert.equal(skillInvocation('sync-main', 'claude'), '/sync-main')
+  assert.equal(skillInvocation('init', 'opencode'), '/init')
+  assert.equal(skillInvocation('sync-main', undefined), '/sync-main')
 })
 
 test('skillSummary は1行目を SKILL_DESC_MAX で切る', () => {

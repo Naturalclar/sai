@@ -107,19 +107,19 @@ test('sessionReplyTargets / feedReplyTargets: 別のマシンのものは blocke
 test('sessionReplyTargets: 一覧の順のまま。表示名・アイコン画像があればそれ、無ければ一覧のタイトル', () => {
   const targets = sessionReplyTargets([
     summary({ id: 's1@sai', meta: { name: 'CI 整備' }, icon: '/api/sessions/s1%40sai/icon?v=1' }),
-    summary({ id: 's2@other', repo: 'other', branch: 'feat', title: 'other の指示' }),
+    summary({ id: 's2@other', agent: 'codex', repo: 'other', branch: 'feat', title: 'other の指示' }),
     summary({ id: 's3@sai', icon: '/api/sessions/s3%40sai/icon?v=2' }),
     summary({ id: 'synth-x@sai', session_source: 'synth' }),
     summary({ id: 's4@sai', meta: { name: 'あ'.repeat(70) } }),
   ], SELF)
   assert.deepEqual(
-    targets.map((t) => [t.id, t.repo, t.branch, t.title, t.icon, t.blocked !== '']),
+    targets.map((t) => [t.id, t.agent, t.repo, t.branch, t.title, t.icon, t.blocked !== '']),
     [
-      ['s1@sai', 'sai', 'main', 'CI 整備', '/api/sessions/s1%40sai/icon?v=1', false],
-      ['s2@other', 'other', 'feat', 'other の指示', undefined, false],
-      ['s3@sai', 'sai', 'main', '一覧のタイトル', '/api/sessions/s3%40sai/icon?v=2', false],
-      ['synth-x@sai', 'sai', 'main', '一覧のタイトル', undefined, true],
-      ['s4@sai', 'sai', 'main', `${'あ'.repeat(60)}…`, undefined, false],
+      ['s1@sai', 'claude', 'sai', 'main', 'CI 整備', '/api/sessions/s1%40sai/icon?v=1', false],
+      ['s2@other', 'codex', 'other', 'feat', 'other の指示', undefined, false],
+      ['s3@sai', 'claude', 'sai', 'main', '一覧のタイトル', '/api/sessions/s3%40sai/icon?v=2', false],
+      ['synth-x@sai', 'claude', 'sai', 'main', '一覧のタイトル', undefined, true],
+      ['s4@sai', 'claude', 'sai', 'main', `${'あ'.repeat(60)}…`, undefined, false],
     ],
   )
   assert.equal('icon' in targets[1]!, false, 'アイコンが無ければキーごと無い')
@@ -147,15 +147,15 @@ test('mergeReplyTargets: 一覧が先、フィードにしか無いものが後�
 test('feedReplyTargets: エンティティごとに1件、新しい順、ラベルは一番新しい行のもの', () => {
   const rows = [
     row({ ts: '2026-09-02T10:00:00+09:00', session: 's1', branch: 'main', user_text: '最初の指示' }),
-    row({ ts: '2026-09-02T10:05:00+09:00', session: 's2', repo: 'other', first_user_text: 'other の指示' }),
+    row({ ts: '2026-09-02T10:05:00+09:00', session: 's2', agent: 'codex', repo: 'other', first_user_text: 'other の指示' }),
     row({ ts: '2026-09-02T10:10:00+09:00', session: 's1', branch: 'feat/x', user_text: '続きの指示\n2行目' }),
   ]
   const targets = feedReplyTargets(rows, SELF)
   assert.deepEqual(
-    targets.map((t) => [t.id, t.repo, t.branch, t.title, t.blocked]),
+    targets.map((t) => [t.id, t.agent, t.repo, t.branch, t.title, t.blocked]),
     [
-      ['s1@sai', 'sai', 'feat/x', '続きの指示', ''],
-      ['s2@other', 'other', 'main', 'other の指示', ''],
+      ['s1@sai', 'claude', 'sai', 'feat/x', '続きの指示', ''],
+      ['s2@other', 'codex', 'other', 'main', 'other の指示', ''],
     ],
   )
 })
@@ -279,7 +279,7 @@ test('stripMention: 表記を外して空白を整える', () => {
 })
 
 test('defaultReplyTarget: 一番新しい行のセッションのうち処理中でないもの。全部処理中なら一番新しいもの', () => {
-  const t = (id: string, over: Partial<ReplyTarget> = {}): ReplyTarget => ({ id, repo: id, project: '', branch: '', title: '', blocked: '', ...over })
+  const t = (id: string, over: Partial<ReplyTarget> = {}): ReplyTarget => ({ id, agent: 'claude', repo: id, project: '', branch: '', title: '', blocked: '', ...over })
   const feed = [t('a'), t('b'), t('c')] // 新しい順
   const list = [t('b', { title: '一覧の b' }), t('a', { title: '一覧の a' })]
   const targets = mergeReplyTargets(list, feed)

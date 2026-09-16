@@ -3,6 +3,7 @@ import { alwaysAllowRule, answerAsk, askQuestions, ruleLabel } from '../../share
 import { approvalAction } from './approvalKeys'
 import { api, type Approval } from './api'
 import { AskQuestions } from './AskQuestions'
+import { DialogPreview } from './DialogPreview'
 import { elapsedLabel, hm } from './format'
 import { AGENT_INITIAL, AGENT_LABEL } from './chatGroups.ts'
 
@@ -90,6 +91,8 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false, modeNote =
         <div className="msg">
           <div className="body">⏳ {approval.text}</div>
           {detail && <pre className="detail">{detail}</pre>}
+          {/* 端末の画面から読んだ選択肢（#425）。読むだけで、答えるのは端末 */}
+          {approval.dialog && <DialogPreview dialog={approval.dialog} />}
           {/* 素通しに変えても、処理中のターンは起動したときのモードのまま聞いてくる（#272）。質問は素通しでも出るので付けない */}
           {modeNote && questions.length === 0 && <div className="mode-note">{modeNote}</div>}
           {!answerable ? (

@@ -712,6 +712,18 @@
   .group.approval .options .rec { margin-left: 6px; padding: 1px 6px; border-radius: 8px; background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); font-size: 11px; font-weight: 600; }
   .group.approval .options .desc { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; font-weight: 400; }
   .group.approval .questions .other { margin-top: 6px; width: 100%; box-sizing: border-box; font: inherit; font-size: 16px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
+  /* 端末の Codex が出しているダイアログ（#425）。読むだけなのでボタンにはしない（押せるように見せない） */
+  .group.approval .dialog-preview { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; max-width: 640px; }
+  .group.approval .dialog-preview .q { font-weight: 600; }
+  .group.approval .dialog-preview .desc { color: var(--muted); font-size: 12px; white-space: pre-wrap; }
+  .group.approval .dialog-preview .choices { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+  .group.approval .dialog-preview .choices li { display: flex; gap: 6px; align-items: baseline; font-size: 13px; }
+  /* 折り返すのは本文だけ。番号（`2.`）まで折り返すと `.` だけが次の行の頭に落ちる */
+  .group.approval .dialog-preview .choices .label { overflow-wrap: anywhere; }
+  .group.approval .dialog-preview .choices li.selected { color: var(--accent); font-weight: 600; }
+  .group.approval .dialog-preview .choices .num { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .group.approval .dialog-preview .choices li.selected .num { color: inherit; }
+  .group.approval .dialog-preview .choices .rec { padding: 1px 6px; border-radius: 8px; background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); font-size: 11px; font-weight: 600; white-space: nowrap; }
   .group.approval.done { opacity: .6; }
   .pending-line.long .time { color: var(--synth); font-weight: 600; }
   /* 処理中のターンがいま何をしているか（#302）。「処理中 N分」の横に 1 行、押すと直近の手順。長いコマンドは切って 1 行に収める */

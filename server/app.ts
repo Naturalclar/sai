@@ -914,9 +914,14 @@ export function createApp(
     if (!text) return error(res, 400, 'text is required')
     if (typeof asked.from !== 'string' || !asked.from) return error(res, 400, 'from（どの worktree で始めるか）が要ります')
     const agent = asked.agent ?? 'claude'
-    if (agent !== 'claude' && agent !== 'codex') return error(res, 400, '始められるのは claude か codex です')
+    if (agent !== 'claude' && agent !== 'codex' && agent !== 'opencode') return error(res, 400, '始められるのは claude か codex か opencode です')
     if (agent === 'codex' && !(codexAppEnabled && codexApp.startThread)) {
       return error(res, 400, 'Codex のセッションを始めるには app-server が要ります（SAI_CODEX_APP_SERVER=0 では始められません）')
+    }
+    // **`opencode run` には落とさない**（#452）。run は許可を人に聞かずその場で自動 reject するので、
+    // 始めたターンが許可ひとつで無駄になり、#421 の「画面から答える」も当たらない
+    if (agent === 'opencode' && !(opencodeServerEnabled && opencodeApp.startSession)) {
+      return error(res, 400, 'OpenCode のセッションを始めるには serve が要ります（SAI_OPENCODE_SERVER=0 では始められません）')
     }
     // モデルと許可モードは PUT .../meta と同じ検査（mergeMeta）を通してから、新しいセッションのメタに書く
     const { meta, error: reason } = mergeMeta({}, { model: asked.model ?? '', permission_mode: asked.permission_mode ?? '' })
@@ -935,6 +940,7 @@ export function createApp(
     }
 
     if (agent === 'codex') return await startCodexSession(res, from, cwd, text, meta)
+    if (agent === 'opencode') return await startOpencodeSession(res, from, cwd, text, meta)
 
     const session = randomUUID()
     // record.py が行に書く repo は同じ cwd から取るので、from のものと同じになる
@@ -992,6 +998,44 @@ export function createApp(
     // 人が始めたターン（メッセージの連鎖ではない。#311）
     agents.launched(id, undefined)
     const payload: NewSessionResponse = { accepted: true, id, agent: 'codex', session, cwd, via: 'app-server' }
+    return json(res, payload, 202)
+  }
+
+  /**
+   * `POST /api/sessions/new` の OpenCode（#452）。`POST /session` で id を決めてから 1 ターン回す。
+   * **作るのは長寿命の `opencode serve` の中**なので、許可を聞かれたらターンは待ち、画面から答えられる（#421）。
+   * **セッションを作っただけでは記録に行が 1 本も書かれない**（プラグインは `session.idle` 起点）ので、
+   * 1 ターン目を起こせなければ一覧には何も出ない（`replying` の `failed` だけが画面に出る）
+   */
+  const startOpencodeSession = async (
+    res: ServerResponse,
+    from: SessionSummary,
+    cwd: string,
+    text: string,
+    meta: SessionMeta,
+  ) => {
+    const log = join(store.directory, 'reply.log')
+    let session: string
+    try {
+      session = await opencodeApp.startSession!(cwd)
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      const hint = code === 'ENOENT' ? 'opencode が見つかりません（サーバを起動した環境の PATH に opencode があるか確かめてください）' : ''
+      return error(res, 500, hint || `OpenCode の新しいセッションを作れませんでした: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    const id = entityId(session, from.repo, '')
+    if (Object.keys(meta).length > 0) await metaStore.set(id, meta)
+    await appendFile(log, `--- ${new Date().toISOString()} ${id} OpenCode の新しいセッション（POST /session → prompt_async） (cwd ${cwd})\n`).catch(() => {})
+    try {
+      await opencodeApp.start({ id, session, text, model: meta.model })
+    } catch (err) {
+      const message = `OpenCode のセッションを始められませんでした: ${err instanceof Error ? err.message : String(err)}`
+      await appendFile(log, `${message}\n`).catch(() => {})
+      return error(res, 500, message)
+    }
+    // 人が始めたターン（メッセージの連鎖ではない。#311）
+    agents.launched(id, undefined)
+    const payload: NewSessionResponse = { accepted: true, id, agent: 'opencode', session, cwd, via: 'app-server' }
     return json(res, payload, 202)
   }
 

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import { chmod, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ClaudeBackground, parseBackgrounded } from './claudeBackground.ts'
+import { BackgroundLookupError, ClaudeBackground, parseBackgrounded } from './claudeBackground.ts'
 
 test('parseBackgrounded: 実測の出力から短い ID を取る。読めなければ空', () => {
   const out = 'backgrounded · 5738db0d\n  claude agents             list sessions\n  claude attach 5738db0d    open in this terminal\n'
@@ -48,4 +48,12 @@ test('ClaudeBackground: claude が無い・出力が読めなければ投げる'
   await writeFile(bin, '#!/bin/sh\necho "Error: unknown option"\n')
   await chmod(bin, 0o755)
   await assert.rejects(new ClaudeBackground(bin).start({ bin: 'claude', args: ['--bg'], cwd: dir, text: '' }), /ID を読めませんでした/)
+})
+
+test('ClaudeBackground: 始まったが claude agents に出てこなければ、短い ID を添えて投げる（二重に始めさせない）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-bg-'))
+  const bin = join(dir, 'claude')
+  await writeFile(bin, '#!/bin/sh\ncase "$1" in agents) echo "[]" ;; *) echo "backgrounded · 5738db0d" ;; esac\n')
+  await chmod(bin, 0o755)
+  await assert.rejects(new ClaudeBackground(bin).start({ bin: 'claude', args: ['--bg'], cwd: dir, text: '' }), (err: Error) => err instanceof BackgroundLookupError && /claude attach 5738db0d/.test(err.message))
 })

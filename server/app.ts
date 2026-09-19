@@ -96,7 +96,7 @@ import { SETTINGS_FILE, SettingsStore } from './meta/settings.ts'
 import type { Settings } from './meta/settings.ts'
 import { isLinearWorkspace } from '../shared/refs.ts'
 import { backgroundSessionCommand, newSessionCommand, ProcessRunner, replyCommand } from './reply/runner.ts'
-import { ClaudeBackground, type BackgroundSessions } from './reply/claudeBackground.ts'
+import { BackgroundLookupError, ClaudeBackground, type BackgroundSessions } from './reply/claudeBackground.ts'
 import { TURN_USAGE_FILE, TurnUsageLog } from './reply/turnUsage.ts'
 import { QUEUE_FILE, QUEUE_MAX, ReplyQueueStore } from './reply/replyQueue.ts'
 import { AGENT_TOKEN_FILE, AGENT_TOKEN_HEADER, AgentMessages, ensureAgentToken, tokenMatches } from './reply/agentMessages.ts'
@@ -178,6 +178,8 @@ const QUEUE_SEGMENT = '/queue/'
 const QUEUE_RESUME = 'resume'
 /** 預かった返信を起動するときに見る窓（POST の reply の既定と同じ） */
 const QUEUE_DAYS = 90
+/** `claude --bg` のターンを待っている預かりを、次に見に行くまで（#462。画面のポーリングは 3 秒で、画面が複数あれば何倍にもなる） */
+const BG_RETRY_MS = 10_000
 /** エージェント用の口（#310）。SAI の MCP サーバ（approve-mcp.ts）の sai_* のツールだけが叩く。トークンを要り、ブラウザからは通さない */
 const AGENT_PREFIX = '/api/agent/'
 /** tailnet から MCP で呼ぶ口（#312。Streamable HTTP） */
@@ -377,6 +379,8 @@ export interface TerminalDeps {
   waitingSettle?: WaitingSettleSource
   /** `claude --bg` で始める・止める（#462）。テストでは差し替える */
   claudeBackground?: BackgroundSessions
+  /** `claude --bg` のターンを待つ預かりを見に行く間隔（#462）。テストでは 0 にする */
+  bgRetryMs?: number
 }
 
 export function createApp(
@@ -1000,7 +1004,8 @@ export function createApp(
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code
       const hint = code === 'ENOENT' ? 'claude が見つかりません（サーバを起動した環境の PATH に claude があるか確かめてください）' : ''
-      const message = hint || `バックグラウンドで始められませんでした: ${err instanceof Error ? err.message : String(err)}`
+      // 始まったが ID を引けなかったときは、そのまま（短い ID と「二重になる」を伝える文）
+      const message = hint || (err instanceof BackgroundLookupError ? err.message : `バックグラウンドで始められませんでした: ${err instanceof Error ? err.message : String(err)}`)
       await appendFile(log, `${message}\n`).catch(() => {})
       return error(res, 500, message)
     }
@@ -1309,9 +1314,13 @@ export function createApp(
    * - 呼ぶのは -p の exit、SAI 管理の Codex のターンの終わり、画面のポーリングのついで。
    *   再起動で引き取った子（exit を受け取れない）はポーリングで拾う
    */
+  /** `claude --bg` のターンが終わるのを待っている預かり（#462）。次に見に行く時刻 */
+  const bgRetryAt = new Map<string, number>()
   const drain = async (id: string): Promise<void> => {
     const head = queue.peek(id)
     if (!head || queue.paused(id) || draining.has(id)) return
+    // `claude --bg` のターンを待っている間は、ポーリングのたびに起動の経路（と `claude agents`）を回さない（#462）
+    if ((bgRetryAt.get(id) ?? 0) > Date.now()) return
     if (run.running(id) || codexApp.running(id) || opencodeApp.running(id) || launching.has(id)) return
     draining.add(id)
     try {
@@ -1329,9 +1338,12 @@ export function createApp(
         // 別のセッションから預かったメッセージなら、回したターンから先へ送らせない（#311）
         ...(head.origin ? { origin: head.origin } : {}),
       })
-      if (out.status === 202) queue.shift(id, head.queue_id)
+      if (out.status === 202) {
+        queue.shift(id, head.queue_id)
+        bgRetryAt.delete(id)
+      }
       // `claude --bg` のターンが終わるのを待つ（#462）。止めずに、次のポーリングでもう一度
-      else if (out.retry) return
+      else if (out.retry) bgRetryAt.set(id, Date.now() + (terminal.bgRetryMs ?? BG_RETRY_MS))
       else queue.pause(id, `預かった返信を送れませんでした: ${(out.body as ReplyError).error}`)
     } finally {
       draining.delete(id)

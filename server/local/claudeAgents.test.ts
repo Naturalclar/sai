@@ -90,3 +90,11 @@ test('ClaudeAgents.background: 引ける・無い・分からない', async () =
   assert.equal(await agents.background(''), undefined)
   assert.equal(await new ClaudeAgents('/nonexistent/claude').background('S1', true), undefined)
 })
+
+test('ClaudeAgents: --all を知らない版では付けずに引き直す（#462）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-agents-'))
+  const bin = join(dir, 'claude')
+  await writeFile(bin, `#!/bin/sh\n[ "$3" = --all ] && exit 1\n[ "$1" = agents ] && [ "$2" = --json ] || exit 9\necho '${one({ status: 'busy' })}'\n`)
+  await chmod(bin, 0o755)
+  assert.equal(await new ClaudeAgents(bin).busy('S1'), true)
+})

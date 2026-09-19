@@ -230,6 +230,8 @@ before(async () => {
     codexDialogs,
     codexApp,
     claudeBackground,
+    // ポーリングのたびに回すと重いので間を空けるが、テストは待たずに次を見る（#462）
+    bgRetryMs: 0,
   }
   // 使用量も、この Mac の ~/.codex / ~/.claude ではなく temp に作った偽の置き場だけを見せる
   await mkdir(join(dir, 'codex-sessions', '2026', '09', '09'), { recursive: true })

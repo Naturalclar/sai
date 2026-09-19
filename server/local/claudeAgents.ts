@@ -137,7 +137,12 @@ export class ClaudeAgents implements AgentList {
   /** 生きているセッションの一覧。**セッションごとではなく全体で 1 回**叩いて、少しのあいだ覚える */
   private async list(fresh = false): Promise<ClaudeAgent[] | null> {
     if (!fresh && this.agents !== null && Date.now() - this.at < this.ttl) return this.agents
-    const parsed = parseAgents(await this.run())
+    // `--all` で止めた `claude --bg` のセッションも出す（#462。`claude attach` で起こし直せるので、画面に出す）。
+    // 止めたものは `status` が空なので、`busyIn()` の判定は変わらない。**`--all` を知らない版は非 0 で断る**ので、
+    // そのときだけ付けずに引き直す（時間切れでは引き直さない。待つ時間が倍になる）
+    let got = await this.run(['agents', '--json', '--all'])
+    if (got.rejected) got = await this.run(['agents', '--json'])
+    const parsed = parseAgents(got.out)
     // 聞けなかったときは覚えない（次のポーリングでまた試す）
     if (parsed !== null) {
       this.agents = parsed
@@ -146,24 +151,25 @@ export class ClaudeAgents implements AgentList {
     return parsed
   }
 
-  /** 失敗（claude が無い、古い、時間切れ）は空文字。例外は投げない */
-  private run(): Promise<string> {
+  /**
+   * 失敗（claude が無い、古い、時間切れ）は空文字。例外は投げない。
+   * `rejected` は「起動できて、非 0 で終わった」（引数を知らない版）
+   */
+  private run(args: string[]): Promise<{ out: string; rejected: boolean }> {
     return new Promise((resolve) => {
       let child
       try {
-        // `--all` で止めた `claude --bg` のセッションも出す（#462。`claude attach` で起こし直せるので、画面に出す）。
-        // 止めたものは `status` が空なので、`busyIn()` の判定は変わらない
-        child = spawn(this.bin, ['agents', '--json', '--all'], { stdio: ['ignore', 'pipe', 'ignore'] })
+        child = spawn(this.bin, args, { stdio: ['ignore', 'pipe', 'ignore'] })
       } catch {
-        return resolve('')
+        return resolve({ out: '', rejected: false })
       }
       let out = ''
       let done = false
-      const finish = (value: string) => {
+      const finish = (value: string, rejected = false) => {
         if (done) return
         done = true
         clearTimeout(timer)
-        resolve(value)
+        resolve({ out: value, rejected })
       }
       const timer = setTimeout(() => {
         child.kill('SIGKILL')
@@ -172,7 +178,7 @@ export class ClaudeAgents implements AgentList {
       // 実測で 5KB ほど。増えても頭だけ見る
       child.stdout.on('data', (c: Buffer) => (out.length < 256 * 1024 ? (out += c.toString()) : undefined))
       child.once('error', () => finish(''))
-      child.once('close', (code) => finish(code === 0 ? out : ''))
+      child.once('close', (code) => (code === 0 ? finish(out) : finish('', code !== null)))
     })
   }
 }

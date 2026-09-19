@@ -15,6 +15,15 @@ export const BACKGROUND_START_TIMEOUT_MS = 30_000
 const LOOKUP_TRIES = 10
 const LOOKUP_INTERVAL_MS = 300
 
+/** `claude --bg` は始まったが、UUID を引けなかった。セッションは動いているので、短い ID を持って返す */
+export class BackgroundLookupError extends Error {
+  readonly short: string
+  constructor(short: string) {
+    super(`バックグラウンドでは始まりましたが、ID を引けませんでした。端末で claude attach ${short} して開けます（もう一度始めると二重になります）`)
+    this.short = short
+  }
+}
+
 export interface BackgroundStarted {
   /** `claude attach` / `stop` に渡す短い ID */
   short: string
@@ -68,7 +77,8 @@ export class ClaudeBackground implements BackgroundSessions {
       if (hit) return { short, sessionId: hit.sessionId }
       await new Promise((r) => setTimeout(r, LOOKUP_INTERVAL_MS))
     }
-    throw new Error(`始めたセッション ${short} が claude agents に見つかりません`)
+    // **セッションはもう動いている**ので、短い ID を添える（無いと「始められなかった」と読んで同じ指示で二重に始める）
+    throw new BackgroundLookupError(short)
   }
 
   async stop(short: string, cwd: string): Promise<void> {

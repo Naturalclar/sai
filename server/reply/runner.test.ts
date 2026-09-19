@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { childEnv, failureOf, isAlive, newSessionCommand, ProcessRunner, replyCommand, tailFrom } from './runner.ts'
+import { backgroundSessionCommand, childEnv, failureOf, isAlive, newSessionCommand, ProcessRunner, replyCommand, tailFrom } from './runner.ts'
 import type { TurnUsage } from '../../shared/turnUsage.ts'
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -385,4 +385,20 @@ test('claudeHead: 運用者が --output-format を指定していればそちら
   const theirs = replyCommand('claude', 'S', 'hi', '/w', { SAI_CLAUDE_ARGS: '--output-format stream-json --verbose' })!.args
   assert.equal(theirs.filter((a) => a === '--output-format').length, 1, '二重に付けない')
   assert.deepEqual(theirs.slice(0, 3), ['--output-format', 'stream-json', '--verbose'])
+})
+
+test('backgroundSessionCommand: 置き場は --settings の env で渡し、許可の配線も --session-id も付けない（#462）', () => {
+  const env = { SAI_CLAUDE_ARGS: '--allowedTools "Bash(gh *)"', AGENT_FEED_HOST: 'mini' }
+  const cmd = backgroundSessionCommand('-v で始まる本文', '/w', '/feed', env, 'opus', 'acceptEdits', ' 名前 ')
+  assert.deepEqual(cmd.args, [
+    '--allowedTools', 'Bash(gh *)',
+    '--settings', JSON.stringify({ env: { AGENT_FEED_DIR: '/feed', AGENT_FEED_HOST: 'mini' } }),
+    '--model', 'opus', '--permission-mode', 'acceptEdits', '-n', '名前',
+    '--bg', '--', '-v で始まる本文',
+  ])
+  assert.equal(cmd.cwd, '/w')
+  assert.equal(cmd.permissionMode, 'acceptEdits')
+  // 設定していなければマシン名は渡さない（デーモンの側の既定に任せる）
+  const bare = backgroundSessionCommand('x', '/w', '/feed', {})
+  assert.deepEqual(bare.args, ['--settings', '{"env":{"AGENT_FEED_DIR":"/feed"}}', '--bg', '--', 'x'])
 })

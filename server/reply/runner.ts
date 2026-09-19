@@ -187,6 +187,46 @@ export function newSessionCommand(
 }
 
 /**
+ * 新しいセッションを `claude --bg` で始めるコマンド（#462）。Claude Code のデーモンの中で動くので、
+ * あとから端末で `claude attach <短い ID>` すると TUI としてそのまま開ける。実測（2.1.276〜278）で分かったことが 4 つあり、
+ * どれもこの形に効いている:
+ *
+ * - **デーモンは起動した側の環境を継がない**。`AGENT_FEED_DIR` を環境で渡しても record.py に届かず、
+ *   既定の `~/.agent-feed` に書かれた。`--settings` の `env` なら届くので、置き場（と設定していればマシン名）をそこで渡す
+ * - **`--permission-prompt-tool` は使われない**（MCP サーバは起動するが `approve` は呼ばれず、TUI のダイアログで止まる。
+ *   `claude agents` では `status: waiting`）。なので**許可・質問の配線は付けない**。答えるのは端末で attach して
+ * - **`--session-id` は効かない**（デーモンが自分で決める）。ID は出力の `backgrounded · <短い ID>` と `claude agents` から引く
+ * - `--output-format` も付けない（出力はデーモンが持つ）
+ *
+ * モデル・許可モード・表示名は起動したときのものが**セッションに残る**（起こし直すときに同じ設定で起きる）
+ */
+export function backgroundSessionCommand(
+  text: string,
+  cwd: string,
+  feedDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+  model?: string,
+  permissionMode?: string,
+  name?: string,
+): ReplyCommand {
+  const extra = splitArgs(env.SAI_CLAUDE_ARGS)
+  const vars: Record<string, string> = { AGENT_FEED_DIR: feedDir }
+  if (env.AGENT_FEED_HOST) vars.AGENT_FEED_HOST = env.AGENT_FEED_HOST
+  const named = (name ?? '').trim() ? ['-n', (name ?? '').trim()] : []
+  const args = [
+    ...extra,
+    '--settings', JSON.stringify({ env: vars }),
+    ...(model ? ['--model', model] : []),
+    ...(permissionMode ? ['--permission-mode', permissionMode] : []),
+    ...named,
+    '--bg',
+    '--',
+    text,
+  ]
+  return { bin: 'claude', args, cwd, text, permissionMode: permissionMode || '' }
+}
+
+/**
  * 返信で起動するコマンド。非対話モードなので許可ダイアログは出せず、未許可のツールはそのまま拒否される。
  * 運用者が SAI_CLAUDE_ARGS / SAI_CODEX_ARGS で追加の引数（`--allowedTools "Bash(gh *)"` など）を渡せる。
  * SAI 自身は何も付けない（既定は素の `claude -p --resume` / `codex exec resume`）。

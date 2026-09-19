@@ -17,13 +17,15 @@ interface Props {
   now: number
   /** 失敗したとき、書き直しに戻る */
   onRetry: () => void
+  /** `claude --bg` で始めたときの短い ID（#462） */
+  attach?: string
 }
 
 /**
  * 始めたセッションの最初の行を待ち、届いたらそのセッションの画面へ移る（#314）。
  * 詳細（`GET /api/sessions/<id>`）は行が届くまで 404 なので、**ここで待ってから移る**（先に移ると SessionView がエラーを出すだけ）
  */
-export function NewSessionStarting({ id, text, since, replying, now, onRetry }: Props) {
+export function NewSessionStarting({ id, text, since, replying, now, onRetry, attach }: Props) {
   const { data } = usePolling(() => api.session(id), [id])
   const status = startStatus(data !== null, replying, since, now)
   const arrived = status.kind === 'arrived'
@@ -36,6 +38,11 @@ export function NewSessionStarting({ id, text, since, replying, now, onRetry }: 
       <p className="quoted">{text}</p>
       {status.kind === 'running' && <div className="note">開始中… 最初の記録が届いたら、このセッションの画面に移ります</div>}
       {status.kind === 'arrived' && <div className="note">移動しています…</div>}
+      {attach && (
+        <div className="note">
+          バックグラウンドで始めました。端末で開くなら <code>claude attach {attach}</code>
+        </div>
+      )}
       {status.kind === 'failed' && (
         <>
           <div className="notice error">始められませんでした: {status.message}</div>

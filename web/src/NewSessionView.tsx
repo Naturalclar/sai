@@ -20,6 +20,8 @@ interface Started {
   id: string
   text: string
   since: number
+  /** `claude --bg` で始めたときの短い ID（#462） */
+  attach?: string
 }
 
 /** 候補を作る一覧。絞り込み無しで取るので、アーカイブ済みも別に取って足す */
@@ -31,6 +33,10 @@ const AGENTS = [
   { id: 'codex' as const, label: 'Codex CLI', note: 'app-server で回す。端末には出ない' },
   { id: 'opencode' as const, label: 'OpenCode', note: 'serve で回す。端末には出ない。許可は画面から答えられる' },
 ]
+/**
+ * `claude --bg` で始めるとき（#462）。**許可・質問は画面から答えられない**（`--permission-prompt-tool` が使われない）ことを先に書く
+ */
+const BACKGROUND_NOTE = 'claude --bg で回す。あとから端末で claude attach して開ける。許可・質問は端末で開いて答える（画面からは答えられない）'
 type NewAgent = (typeof AGENTS)[number]['id']
 const isNewAgent = (value: string): value is NewAgent => AGENTS.some((a) => a.id === value)
 
@@ -46,6 +52,8 @@ export function NewSessionView({ replying, now, onOpenSidebar }: Props) {
   const [agent, setAgent] = useState<NewAgent>('claude')
   const [model, setModel] = useState('')
   const [mode, setMode] = useState('')
+  // `claude --bg` で始める（#462。Claude だけ）
+  const [background, setBackground] = useState(false)
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -88,8 +96,9 @@ export function NewSessionView({ replying, now, onOpenSidebar }: Props) {
         ...(model ? { model } : {}),
         // 許可モードは Claude にしか渡らない（`replyCommand()` が `--permission-mode` を付けるのは Claude だけ）
         ...(mode && agent === 'claude' ? { permission_mode: mode } : {}),
+        ...(background && agent === 'claude' ? { background: true } : {}),
       })
-      setStarted({ id: res.id, text: body, since: Date.now() })
+      setStarted({ id: res.id, text: body, since: Date.now(), ...(res.attach ? { attach: res.attach } : {}) })
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -119,6 +128,7 @@ export function NewSessionView({ replying, now, onOpenSidebar }: Props) {
           since={started.since}
           replying={replying?.[started.id]}
           now={now}
+          {...(started.attach ? { attach: started.attach } : {})}
           onRetry={() => setStarted(null)}
         />
       ) : (
@@ -185,6 +195,12 @@ export function NewSessionView({ replying, now, onOpenSidebar }: Props) {
                 </select>
               </label>
             )}
+            {agent === 'claude' && (
+              <label className="check">
+                <input type="checkbox" checked={background} onChange={(e) => setBackground(e.target.checked)} />
+                バックグラウンドで始める
+              </label>
+            )}
           </div>
           <textarea
             value={text}
@@ -198,7 +214,7 @@ export function NewSessionView({ replying, now, onOpenSidebar }: Props) {
             <button type="submit" disabled={busy || !text.trim() || !chosen}>
               {busy ? '始めています…' : '始める'}
             </button>
-            <span className="note">{AGENTS.find((a) => a.id === agent)?.note}</span>
+            <span className="note">{agent === 'claude' && background ? BACKGROUND_NOTE : AGENTS.find((a) => a.id === agent)?.note}</span>
           </div>
           {error && <div className="notice error">始められませんでした: {error}</div>}
         </form>

@@ -14,6 +14,7 @@ import { useProgress } from './useProgress'
 import { openPromptSince } from './openPrompt'
 import { QueuedBubble } from './QueuedBubble'
 import { AgentActivityBar } from './AgentActivityBar'
+import { BackgroundAttachBar } from './BackgroundAttachBar'
 import { shouldQueue } from './replyQueue.ts'
 import { ApprovalBubble } from './ApprovalBubble'
 import { ReplyBox } from './ReplyBox'
@@ -63,6 +64,8 @@ export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggl
   // 処理中に送って預かっている返信（#305）
   const queuedHere = data?.queued[id]
   const queuedCount = queuedHere?.items.length ?? 0
+  // `claude --bg` で回っている・許可を待っているあいだは預ける（#462。サーバは預かったぶんを入力待ちになってから回す）
+  const bgBusy = !!data?.background?.live && data.background.status !== 'idle'
 
   // 処理中のターンがいま何をしているか（#302）。SAI から送った返信を処理中か、端末で打った入力のあとターン完了がまだのときだけ取る。
   // 端末で打ったターンは SAI が起動していないので、transcript の上で本当に動いているか（active）で出す
@@ -163,6 +166,7 @@ export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggl
               ))}
               {/* このセッションから別のセッションへのメッセージ（#311）。送ったことがあるか止めているときだけ */}
               {data.agent && <AgentActivityBar id={id} activity={data.agent} now={now} />}
+              {data.background && <BackgroundAttachBar background={data.background} />}
             </>
           }
         />
@@ -202,7 +206,7 @@ export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggl
             // 前の返信を処理中か、預かりが残っていれば預ける（#305。先に預けたものを追い越さない）
             {...(restore ? { restore } : {})}
             // 送れなかった（確認待ち・送信失敗）ら ReplyBox が本文・画像・返信先を戻す（#350）
-            onSend={async (text, attachments, { steer }) => (await send(id, text, { attachments, queue: shouldQueue(mine !== null, queuedCount), ...(steer ? { steer: true } : {}) })) === 'sent'}
+            onSend={async (text, attachments, { steer }) => (await send(id, text, { attachments, queue: shouldQueue(mine !== null || bgBusy, queuedCount), ...(steer ? { steer: true } : {}) })) === 'sent'}
           />
         ))}
       {confirmHere && <ReplaceConfirm confirm={confirmHere} onReplace={() => void confirmReplace()} onProcess={() => void confirmProcess()} onCancel={cancelConfirm} />}

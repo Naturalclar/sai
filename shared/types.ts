@@ -771,6 +771,8 @@ export interface SessionDetailResponse {
    * `AskUserQuestion` が同じ文のときだけ。SAI が回している `claude -p` の質問は `approvals` に出るので載せない
    */
   question?: PendingQuestion
+  /** `claude --bg` のセッションなら、端末で開くための短い ID と状態（#462） */
+  background?: BackgroundSession
 }
 
 export interface FeedResponse {
@@ -947,6 +949,11 @@ export interface NewSessionRequest {
   model?: string
   /** 返信の許可モード（`REPLY_MODES` のどれか。省略・空は CLI の既定）。検査して新しいセッションのメタに書く */
   permission_mode?: string
+  /**
+   * `claude --bg` で始める（#462。Claude だけ）。あとから端末で `claude attach <短い ID>` して開ける。
+   * **許可・質問は画面では答えられない**（`--permission-prompt-tool` が使われない）ので、端末で attach して答える
+   */
+  background?: boolean
 }
 
 export interface NewSessionResponse {
@@ -960,7 +967,22 @@ export interface NewSessionResponse {
    */
   session: string
   cwd: string
-  via: 'process' | 'app-server'
+  via: 'process' | 'app-server' | 'background'
+  /** `claude --bg` で始めたとき（#462）の短い ID。`claude attach <これ>` で端末に開ける */
+  attach?: string
+}
+
+/**
+ * `claude --bg` で動いている（動いていた）セッション（#462）。`claude agents --json --all` の行から。
+ * 止めたもの（`live: false`）も `claude attach` で起こし直せるので出す
+ */
+export interface BackgroundSession {
+  /** `claude attach` に渡す短い ID */
+  attach: string
+  /** デーモンの中でいま生きているか */
+  live: boolean
+  /** `busy` / `idle` / `waiting`（許可・質問で止まっている）。止めたものは空 */
+  status: string
 }
 
 /** 一言コメントの性格。'none' は性格なし。表と口調は shared/persona.ts */

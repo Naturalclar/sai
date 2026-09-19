@@ -11,6 +11,8 @@
 //   **`undefined`（分からない）を返すだけ**で、今までの判定をそのまま使う（材料が無いのに止めない）
 // - `SAI_CLAUDE_AGENTS=0` で丸ごと切れる
 // - **`--json` を必ず付ける**（付けないと `claude agents` は TTY を要求して断る）
+//
+// `claude --bg` で始めたセッション（#462）の行もここから引く（`background()`）
 import { spawn } from 'node:child_process'
 
 /** 諦めるまで。画面のポーリングを待たせるので短く */
@@ -21,9 +23,14 @@ export const AGENTS_CACHE_MS = 3000
 /** 生きている Claude のセッション 1 つ。`claude agents --json` の 1 要素（見るキーだけ） */
 export interface ClaudeAgent {
   sessionId: string
+  /** `claude attach` / `stop` に渡す短い ID（`claude --bg` が出す 8 桁。#462）。無い版もある */
+  id: string
   /** `interactive`（端末・`-p` の子）か `background`（`claude --bg`） */
   kind: string
-  /** `busy` = いまターンが回っている。`idle` = 入力待ち */
+  /**
+   * `busy` = いまターンが回っている。`idle` = 入力待ち。`waiting` = 許可・質問で止まっている（#462 で実測）。
+   * **止めた（`claude stop`）バックグラウンドのセッションは空**（`--all` でだけ出る）
+   */
   status: string
   cwd: string
   pid: number
@@ -35,6 +42,11 @@ export interface ClaudeAgent {
 export interface AgentList {
   /** そのセッションでターンが回っているか。**分からなければ `undefined`**（false と区別する） */
   busy(sessionId: string): Promise<boolean | undefined>
+  /**
+   * そのセッションの `claude --bg` の行（#462）。止めたものも返す（`status` が空）。
+   * 無ければ `null`、**分からなければ `undefined`**。`fresh` なら覚えている一覧を使わずに引き直す（返信の直前）
+   */
+  background?(sessionId: string, fresh?: boolean): Promise<ClaudeAgent | null | undefined>
 }
 
 /** 引かない実装（`SAI_CLAUDE_AGENTS=0`、テストの既定） */
@@ -66,6 +78,7 @@ export function parseAgents(stdout: string): ClaudeAgent[] | null {
     if (!sessionId) continue
     out.push({
       sessionId,
+      id: typeof o.id === 'string' ? o.id : '',
       kind: typeof o.kind === 'string' ? o.kind : '',
       status: typeof o.status === 'string' ? o.status : '',
       cwd: typeof o.cwd === 'string' ? o.cwd : '',
@@ -83,6 +96,16 @@ export function parseAgents(stdout: string): ClaudeAgent[] | null {
  */
 export function busyIn(agents: readonly ClaudeAgent[], sessionId: string): boolean {
   return agents.some((a) => a.sessionId === sessionId && a.status === 'busy')
+}
+
+/** そのセッションの `claude --bg` の行（#462）。同じ ID の端末の TUI や `-p` の子（`interactive`）とは分ける */
+export function backgroundIn(agents: readonly ClaudeAgent[], sessionId: string): ClaudeAgent | null {
+  return agents.find((a) => a.sessionId === sessionId && a.kind === 'background') ?? null
+}
+
+/** `claude --bg` のセッションが生きているか（止めたものは `status` が空。#462 で実測） */
+export function backgroundLive(agent: ClaudeAgent): boolean {
+  return agent.status !== ''
 }
 
 export class ClaudeAgents implements AgentList {
@@ -105,10 +128,21 @@ export class ClaudeAgents implements AgentList {
     return agents === null ? undefined : busyIn(agents, sessionId)
   }
 
+  async background(sessionId: string, fresh = false): Promise<ClaudeAgent | null | undefined> {
+    if (!sessionId) return undefined
+    const agents = await this.list(fresh)
+    return agents === null ? undefined : backgroundIn(agents, sessionId)
+  }
+
   /** 生きているセッションの一覧。**セッションごとではなく全体で 1 回**叩いて、少しのあいだ覚える */
-  private async list(): Promise<ClaudeAgent[] | null> {
-    if (this.agents !== null && Date.now() - this.at < this.ttl) return this.agents
-    const parsed = parseAgents(await this.run())
+  private async list(fresh = false): Promise<ClaudeAgent[] | null> {
+    if (!fresh && this.agents !== null && Date.now() - this.at < this.ttl) return this.agents
+    // `--all` で止めた `claude --bg` のセッションも出す（#462。`claude attach` で起こし直せるので、画面に出す）。
+    // 止めたものは `status` が空なので、`busyIn()` の判定は変わらない。**`--all` を知らない版は非 0 で断る**ので、
+    // そのときだけ付けずに引き直す（時間切れでは引き直さない。待つ時間が倍になる）
+    let got = await this.run(['agents', '--json', '--all'])
+    if (got.rejected) got = await this.run(['agents', '--json'])
+    const parsed = parseAgents(got.out)
     // 聞けなかったときは覚えない（次のポーリングでまた試す）
     if (parsed !== null) {
       this.agents = parsed
@@ -117,22 +151,25 @@ export class ClaudeAgents implements AgentList {
     return parsed
   }
 
-  /** 失敗（claude が無い、古い、時間切れ）は空文字。例外は投げない */
-  private run(): Promise<string> {
+  /**
+   * 失敗（claude が無い、古い、時間切れ）は空文字。例外は投げない。
+   * `rejected` は「起動できて、非 0 で終わった」（引数を知らない版）
+   */
+  private run(args: string[]): Promise<{ out: string; rejected: boolean }> {
     return new Promise((resolve) => {
       let child
       try {
-        child = spawn(this.bin, ['agents', '--json'], { stdio: ['ignore', 'pipe', 'ignore'] })
+        child = spawn(this.bin, args, { stdio: ['ignore', 'pipe', 'ignore'] })
       } catch {
-        return resolve('')
+        return resolve({ out: '', rejected: false })
       }
       let out = ''
       let done = false
-      const finish = (value: string) => {
+      const finish = (value: string, rejected = false) => {
         if (done) return
         done = true
         clearTimeout(timer)
-        resolve(value)
+        resolve({ out: value, rejected })
       }
       const timer = setTimeout(() => {
         child.kill('SIGKILL')
@@ -141,7 +178,7 @@ export class ClaudeAgents implements AgentList {
       // 実測で 5KB ほど。増えても頭だけ見る
       child.stdout.on('data', (c: Buffer) => (out.length < 256 * 1024 ? (out += c.toString()) : undefined))
       child.once('error', () => finish(''))
-      child.once('close', (code) => finish(code === 0 ? out : ''))
+      child.once('close', (code) => (code === 0 ? finish(out) : finish('', code !== null)))
     })
   }
 }

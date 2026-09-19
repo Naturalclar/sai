@@ -22,6 +22,7 @@ import type { SessionProgressResponse } from '../shared/types.ts'
 import { localDate } from './rows/aggregate.ts'
 import { replyCommand, splitArgs } from './reply/runner.ts'
 import type { ReplyCommand, Runner } from './reply/runner.ts'
+import type { ClaudeAgent } from './local/claudeAgents.ts'
 import { row } from './rows/aggregate.test.ts'
 import { JPEG, PNG } from './meta/icons.test.ts'
 import type { CodexDialogSource } from './reply/codexDialogs.ts'
@@ -228,6 +229,7 @@ before(async () => {
     ps: async () => '',
     codexDialogs,
     codexApp,
+    claudeBackground,
   }
   // 使用量も、この Mac の ~/.codex / ~/.claude ではなく temp に作った偽の置き場だけを見せる
   await mkdir(join(dir, 'codex-sessions', '2026', '09', '09'), { recursive: true })
@@ -477,8 +479,27 @@ test('thinking はセッション詳細の行には載り、フィードの行�
   assert.equal(withThinking.thinking, 't', '元の行は変えない')
 })
 
-/** #418。`claude agents --json` の代わり。`value` を差し替えて busy の有無を作る */
-const claudeAgents = { value: undefined as boolean | undefined, busy: () => Promise.resolve(claudeAgents.value) }
+/** #418。`claude agents --json` の代わり。`value` を差し替えて busy の有無を作る。`bg` は `claude --bg` の行（#462） */
+const claudeAgents = {
+  value: undefined as boolean | undefined,
+  bg: null as ClaudeAgent | null,
+  busy: () => Promise.resolve(claudeAgents.value),
+  background: (sessionId: string) => Promise.resolve(claudeAgents.bg?.sessionId === sessionId ? claudeAgents.bg : null),
+}
+
+/** #462。`claude --bg` / `claude stop` の代わり */
+const claudeBackground = {
+  started: [] as ReplyCommand[],
+  stopped: [] as string[],
+  start: async (cmd: ReplyCommand) => {
+    claudeBackground.started.push(cmd)
+    return { short: '5738db0d', sessionId: '5738db0d-b4e1-4396-a5b5-6220d4530861' }
+  },
+  stop: async (short: string) => {
+    claudeBackground.stopped.push(short)
+  },
+}
+const bgAgent = (status: string): ClaudeAgent => ({ sessionId: 'C1', id: '5738db0d', kind: 'background', status, cwd: '', pid: 1, name: '' })
 
 test('GET /api/sessions/<id>/progress: 行の cwd とセッション ID から transcript を引き、いまの手順を返す。別のマシン・無いセッションは空、窓に無ければ 404（#302）', async () => {
   const projectDir = join(dir, 'claude-projects', claudeProjectName(dir))
@@ -2138,5 +2159,87 @@ test('端末の Codex のダイアログに画面から答える（#450。同一
   } finally {
     codexDialogs.fail = null
     codexDialogs.active = {}
+  }
+})
+
+test('POST /api/sessions/new: background なら claude --bg で始め、短い ID を返す（#462）', async () => {
+  runner.started.length = 0
+  claudeBackground.started.length = 0
+  const res = await postNew({ from: 'X1@r', text: '  裏でやって  ', background: true, model: 'sonnet' })
+  assert.equal(res.status, 202)
+  const data = (await res.json()) as NewSessionResponse
+  assert.equal(data.via, 'background')
+  assert.equal(data.attach, '5738db0d', 'claude attach に渡す短い ID')
+  assert.equal(data.session, '5738db0d-b4e1-4396-a5b5-6220d4530861', 'ID はデーモンが決めたもの')
+  assert.equal(data.id, `${data.session}@r`)
+  assert.equal(runner.started.length, 0, 'SAI の子プロセスは起こさない')
+  const cmd = claudeBackground.started[0]!
+  assert.equal(cmd.cwd, dir, 'from の cwd で始める')
+  assert.deepEqual(cmd.args.slice(-5), ['--model', 'sonnet', '--bg', '--', '裏でやって'])
+  // デーモンは環境を継がないので、記録の置き場は --settings の env で渡す
+  const settings = JSON.parse(cmd.args[cmd.args.indexOf('--settings') + 1]!) as { env: Record<string, string> }
+  assert.equal(settings.env.AGENT_FEED_DIR, feedDir)
+  assert.equal(cmd.args.includes('--permission-prompt-tool'), false, '使われないので許可の配線は付けない')
+  assert.equal(cmd.args.includes('--session-id'), false, '効かないので付けない')
+  const metaFile = new MetaStore(join(feedDir, META_FILE))
+  await metaFile.set(data.id, {})
+
+  assert.equal((await postNew({ from: 'X1@r', text: 'x', background: true, agent: 'codex' })).status, 400, 'Claude だけ')
+  assert.equal(claudeBackground.started.length, 1)
+})
+
+test('POST reply: claude --bg で回っている・許可を待っているセッションには送らず、止まっていれば止めてから -p で続ける（#462）', async () => {
+  runner.started.length = 0
+  claudeBackground.stopped.length = 0
+  try {
+    claudeAgents.bg = bgAgent('waiting')
+    const waiting = await post('C1@r', { text: 'x' })
+    assert.equal(waiting.status, 409)
+    assert.match(((await waiting.json()) as { error: string }).error, /許可・質問を待っています。端末で claude attach 5738db0d/)
+    claudeAgents.bg = bgAgent('busy')
+    assert.equal((await post('C1@r', { text: 'x' })).status, 409)
+
+    // 預かったぶんは、回っている間は止めずに待つ（drain は理由を付けて止めない）
+    const queued = await post('C1@r', { text: 'あとで', queue: true })
+    assert.equal(((await queued.json()) as ReplyResponse).via, 'queued')
+    const held = await queuedOf('C1@r')
+    assert.equal(held?.items.length, 1)
+    assert.equal(held?.paused ?? '', '', '止めない')
+    assert.equal(runner.started.length, 0)
+    assert.equal(claudeBackground.stopped.length, 0)
+
+    // 入力待ちになったら、止めてから -p --resume で回す（同じ ID の -p は、生きている --bg があると断られる）
+    claudeAgents.bg = bgAgent('idle')
+    await queuedOf('C1@r')
+    assert.deepEqual(claudeBackground.stopped, ['5738db0d'])
+    assert.equal(runner.started.length, 1)
+    assert.ok(runner.started[0]!.cmd.args.includes('--resume'))
+    assert.equal((await queuedOf('C1@r'))?.items.length ?? 0, 0)
+    // 止めたもの（status が空）には何もしない
+    claudeBackground.stopped.length = 0
+    runner.started.length = 0
+    runner.busy.delete('C1@r')
+    claudeAgents.bg = bgAgent('')
+    assert.equal((await post('C1@r', { text: 'y' })).status, 202)
+    assert.equal(claudeBackground.stopped.length, 0)
+  } finally {
+    claudeAgents.bg = null
+    runner.busy.delete('C1@r')
+  }
+})
+
+test('GET /api/sessions/<id>: claude --bg のセッションなら attach の短い ID と状態を載せる（#462）', async () => {
+  try {
+    const plain = (await (await get('/api/sessions/C1%40r')).json()) as SessionDetailResponse
+    assert.equal(plain.background, undefined)
+    claudeAgents.bg = bgAgent('busy')
+    const bg = (await (await get('/api/sessions/C1%40r')).json()) as SessionDetailResponse
+    assert.deepEqual(bg.background, { attach: '5738db0d', live: true, status: 'busy' })
+    assert.notEqual(bg.rev, plain.rev)
+    claudeAgents.bg = bgAgent('')
+    const stopped = (await (await get('/api/sessions/C1%40r')).json()) as SessionDetailResponse
+    assert.deepEqual(stopped.background, { attach: '5738db0d', live: false, status: '' }, '止めたものも attach で起こし直せるので出す')
+  } finally {
+    claudeAgents.bg = null
   }
 })

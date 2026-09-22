@@ -1,9 +1,17 @@
 import assert from 'node:assert/strict'
-import test from 'node:test'
+import test, { after } from 'node:test'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { CODEX_PID_TTL_MS, CodexTerminals } from './codexTerminal.ts'
 
 const SESSION = '01a06af3-618b-7eb3-bb03-a52279ff2235'
-const env = { CODEX_HOME: '/codex-home' }
+const root = await mkdtemp(join(tmpdir(), 'sai-codex-terminal-'))
+const locks = join(root, 'thread-writer-locks')
+await mkdir(locks)
+await writeFile(join(locks, `${SESSION}.lock`), '')
+after(() => rm(root, { recursive: true, force: true }))
+const env = { CODEX_HOME: root }
 const PANE = '%262'
 /** 既定では、どの pid もそのペインの中にいる扱い（ペインの検査そのものは inspectPrompt と同じ isDescendant） */
 const inPane = async () => true
@@ -25,7 +33,7 @@ test('lock を握っている生きたプロセスを本体として返す（#33
   const fake = fakeHolders([83438])
   const codex = new CodexTerminals({ holders: fake.holders, alive: (pid) => pid === 83438, inPane, env })
   assert.equal(await codex.pid(SESSION, PANE), 83438)
-  assert.deepEqual(fake.paths, [`/codex-home/thread-writer-locks/${SESSION}.lock`], 'lock は CODEX_HOME の中だけ')
+  assert.deepEqual(fake.paths, [join(locks, `${SESSION}.lock`)], 'lock は CODEX_HOME の中だけ')
 })
 
 test('死んでいる holder（lock の残骸）は本体にしない', async () => {
@@ -39,6 +47,14 @@ test('合成 ID は lock を引かない（置き場を組み立てられない�
   const codex = new CodexTerminals({ holders: fake.holders, alive: () => true, inPane, env })
   assert.equal(await codex.pid('synth-tmp-20260910T000726', PANE), 0)
   assert.deepEqual(fake.paths, [], 'lsof も起こさない')
+})
+
+test('lock ファイルが無いセッションは lsof を起こさない（#432）', async () => {
+  const fake = fakeHolders([83438])
+  const missing = '01a06af3-618b-7eb3-bb03-a52279ff9999'
+  const codex = new CodexTerminals({ holders: fake.holders, alive: () => true, inPane, env })
+  assert.equal(await codex.pid(missing, PANE), 0)
+  assert.deepEqual(fake.paths, [])
 })
 
 test('lsof が使えなければ 0（端末扱いにしない）', async () => {

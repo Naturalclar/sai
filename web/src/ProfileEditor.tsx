@@ -5,6 +5,7 @@ import { META_NAME_MAX } from '../../shared/meta.ts'
 import { mergeProfile } from '../../shared/profile.ts'
 import { api, type Profile } from './api'
 import { IconCropper } from './IconCropper'
+import { IconHistoryPicker } from './IconHistoryPicker'
 
 const ICON_TYPES = new Set<string>(Object.values(ICON_MIME))
 
@@ -18,6 +19,8 @@ export function ProfileEditor({ profile, onClose }: { profile: Profile; onClose:
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [cropping, setCropping] = useState<File | null>(null)
+  // 今まで使った画像から選ぶモーダル（#465）。セッションのアイコンと同じ履歴
+  const [picking, setPicking] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const dialogRef = useRef<HTMLDivElement>(null)
   const savedRef = useRef<Profile | undefined>(undefined)
@@ -68,6 +71,18 @@ export function ProfileEditor({ profile, onClose }: { profile: Profile; onClose:
       setBusy(false)
     }
   }
+  const pickHistory = async (key: string) => {
+    setBusy(true)
+    setError('')
+    try {
+      remember((await api.setProfileIconFromHistory(key)).profile)
+      setPicking(false)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
   const clearIcon = async () => {
     setBusy(true)
     setError('')
@@ -90,7 +105,7 @@ export function ProfileEditor({ profile, onClose }: { profile: Profile; onClose:
   // 加工中は IconCropper が前面（自分のモーダルは後ろに残す）
   return (
     <>
-      <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && !cropping && close()}>
+      <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && !cropping && !picking && close()}>
         <div
           className="modal profile"
           role="dialog"
@@ -98,7 +113,7 @@ export function ProfileEditor({ profile, onClose }: { profile: Profile; onClose:
           aria-label="表示名とアイコン"
           tabIndex={-1}
           ref={dialogRef}
-          onKeyDown={(e) => e.key === 'Escape' && !cropping && close()}
+          onKeyDown={(e) => e.key === 'Escape' && !cropping && !picking && close()}
         >
           <div className="title">表示名とアイコン</div>
           <div className="row">
@@ -107,6 +122,9 @@ export function ProfileEditor({ profile, onClose }: { profile: Profile; onClose:
               <input ref={fileRef} className="file" type="file" accept={ICON_ACCEPT} onChange={pickIcon} disabled={busy} aria-label="アイコン画像" />
               <button type="button" className="linkish" onClick={() => fileRef.current?.click()} disabled={busy}>
                 {current.icon ? '画像を変える' : '画像を選ぶ'}
+              </button>
+              <button type="button" className="linkish" onClick={() => setPicking(true)} disabled={busy}>
+                今まで使った画像から選ぶ
               </button>
               {current.icon && (
                 <button type="button" className="linkish" onClick={() => void clearIcon()} disabled={busy}>
@@ -140,6 +158,7 @@ export function ProfileEditor({ profile, onClose }: { profile: Profile; onClose:
         </div>
       </div>
       {cropping && <IconCropper key={`${cropping.name}:${cropping.lastModified}`} file={cropping} onDone={(blob) => void putIcon(blob)} onCancel={() => setCropping(null)} />}
+      {picking && <IconHistoryPicker target={{ kind: 'profile' }} onPick={(key) => void pickHistory(key)} onClose={() => setPicking(false)} busy={busy} />}
     </>
   )
 }

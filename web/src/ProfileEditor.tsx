@@ -71,12 +71,18 @@ export function ProfileEditor({ profile, onClose }: { profile: Profile; onClose:
       setBusy(false)
     }
   }
+  // 履歴のモーダルを閉じたら、こちらのモーダルにフォーカスを戻す（body に落ちたままだと、次の Esc が
+  // このモーダルに届かず App の「Esc でフィードへ」まで動く）
+  const closeHistory = () => {
+    setPicking(false)
+    dialogRef.current?.focus()
+  }
   const pickHistory = async (key: string) => {
     setBusy(true)
     setError('')
     try {
       remember((await api.setProfileIconFromHistory(key)).profile)
-      setPicking(false)
+      closeHistory()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -113,7 +119,14 @@ export function ProfileEditor({ profile, onClose }: { profile: Profile; onClose:
           aria-label="表示名とアイコン"
           tabIndex={-1}
           ref={dialogRef}
-          onKeyDown={(e) => e.key === 'Escape' && !cropping && !picking && close()}
+          onKeyDown={(e) => {
+            if (e.key !== 'Escape' || cropping || picking) return
+            // App の「Esc でフィードへ」まで動かさない（閉じるのはこのモーダルだけ）。
+            // 名前の欄にフォーカスがある間は App 側が入力欄として無視するが、履歴のモーダルを閉じた直後は
+            // フォーカスがこのモーダル自身にあるので、ここで止めないとセッションから飛ぶ
+            e.stopPropagation()
+            close()
+          }}
         >
           <div className="title">表示名とアイコン</div>
           <div className="row">
@@ -158,7 +171,7 @@ export function ProfileEditor({ profile, onClose }: { profile: Profile; onClose:
         </div>
       </div>
       {cropping && <IconCropper key={`${cropping.name}:${cropping.lastModified}`} file={cropping} onDone={(blob) => void putIcon(blob)} onCancel={() => setCropping(null)} />}
-      {picking && <IconHistoryPicker target={{ kind: 'profile' }} onPick={(key) => void pickHistory(key)} onClose={() => setPicking(false)} busy={busy} />}
+      {picking && <IconHistoryPicker target={{ kind: 'profile' }} onPick={(key) => void pickHistory(key)} onClose={closeHistory} busy={busy} error={error} />}
     </>
   )
 }

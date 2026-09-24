@@ -142,7 +142,7 @@ export function MetaEditor({ id, meta, icon }: { id: string; meta: SessionMeta |
       <IconButton ref={historyRef} label="今まで使った画像から選ぶ" onClick={() => setPicking(true)} disabled={busy}>
         <HistoryMark />
       </IconButton>
-      {picking && <IconHistoryPicker target={{ kind: 'session', id }} onPick={(key) => void pickHistory(key)} onClose={closeHistory} busy={busy} />}
+      {picking && <IconHistoryPicker target={{ kind: 'session', id }} onPick={(key) => void pickHistory(key)} onClose={closeHistory} busy={busy} error={error} />}
       {cropping && <IconCropper key={`${cropping.name}:${cropping.lastModified}`} file={cropping} onDone={(blob) => void putIcon(blob)} onCancel={closeCropper} />}
       {currentIcon && (
         <IconButton label="画像を消す" onClick={() => void clearIcon()} disabled={busy}>

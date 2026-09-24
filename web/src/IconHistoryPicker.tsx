@@ -11,6 +11,11 @@ interface Props {
   onClose: () => void
   /** 付けている最中（呼び出し側の busy）。その間は押せない */
   busy: boolean
+  /**
+   * 付けるのに失敗した理由（呼び出し側の error）。**このモーダルの中に出す**（後ろの編集欄に書いても
+   * 背景に隠れて読めない。別のタブで消された画像を押したときに「押しても何も起きない」に見えた）
+   */
+  error?: string
 }
 
 /**
@@ -18,7 +23,7 @@ interface Props {
  * 押したらその画像をそのまま付ける（加工済みなので IconCropper は通さない）。いまのアイコンと同じ画像には印を付ける。
  * それぞれの隅のゴミ箱で履歴から消せる（2 回押しで消す。いま使っているアイコンは消えない）
  */
-export function IconHistoryPicker({ target, onPick, onClose, busy }: Props) {
+export function IconHistoryPicker({ target, onPick, onClose, busy, error: pickError }: Props) {
   const [items, setItems] = useState<IconHistoryItem[] | null>(null)
   const [current, setCurrent] = useState<string | undefined>(undefined)
   const [error, setError] = useState('')
@@ -113,7 +118,7 @@ export function IconHistoryPicker({ target, onPick, onClose, busy }: Props) {
           </ul>
         )}
         <div className="hint">押すとその画像にします。消しても、いまその画像を使っているアイコンはそのまま残ります</div>
-        {error && <div className="err">{error}</div>}
+        {(pickError || error) && <div className="err">{pickError || error}</div>}
         <div className="actions">
           <button type="button" className="linkish" onClick={onClose}>
             閉じる

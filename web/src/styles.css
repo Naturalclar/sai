@@ -499,7 +499,9 @@
   /* 今まで使ったアイコン画像（#465）。格子に並べ、隅にゴミ箱。いまのアイコンは枠で示す */
   .modal.icon-history { width: 420px; display: flex; flex-direction: column; gap: 10px; }
   .modal.icon-history .title { font-weight: 600; }
-  .modal.icon-history .grid { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: 10px; max-height: 50vh; overflow-y: auto; }
+  /* 隅のゴミ箱が -6px はみ出すので余白を取る（overflow-y: auto は overflow-x も auto にするため、
+     余白が無いと上の段で切れ、右の端に横スクロールが出る） */
+  .modal.icon-history .grid { list-style: none; margin: 0; padding: 8px; display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: 10px; max-height: 50vh; overflow-y: auto; }
   .modal.icon-history .grid li { position: relative; }
   .modal.icon-history .pick { display: block; width: 100%; aspect-ratio: 1; padding: 0; border: 2px solid transparent; border-radius: 22%; background: none; cursor: pointer; }
   .modal.icon-history .pick img { width: 100%; height: 100%; border-radius: 20%; display: block; }

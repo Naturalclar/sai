@@ -1099,6 +1099,24 @@ export function createApp(
    * 返信を 1 本起動する（本文と添付は検査済み）。`POST .../reply` と、預かった返信を回す `drain()` の両方が通る（#305）。
    * 応答は書かずに返す
    */
+  /**
+   * 生きている `claude --bg` のセッションを、いま止めてはいけない理由（#462）。止めてよければ空。
+   * **attach している端末がある**か、**ターンが回っている**なら止めない（`launch()` のコメント）
+   */
+  const backgroundHold = async (bg: ClaudeAgent, session: SessionSummary): Promise<string> => {
+    if (await background.attached(bg.id, bg.sessionId)) {
+      return `端末で claude attach ${bg.id} して開いています。そちらで打ってください（SAI から送ると、止めるときにその端末を閉じてしまいます）`
+    }
+    // 2.1.276 の形（`status`）が来ていればそれで、2.1.278 は transcript で見る
+    const legacy = bg.status === 'busy' || bg.status === 'waiting'
+    if (legacy || (await progress.read(session)).active) {
+      return bg.status === 'waiting'
+        ? `バックグラウンドのセッションが許可・質問を待っています。端末で claude attach ${bg.id} して答えてください`
+        : `バックグラウンドでターンが回っています。終わってから送ります（端末で見るなら claude attach ${bg.id}）`
+    }
+    return ''
+  }
+
   const launch = async (id: string, text: string, attachments: string[], o: LaunchOptions): Promise<Launched> => {
     const { sessions } = await store.sessions(o.days)
     const session = sessions.find((s) => s.id === id)
@@ -1129,13 +1147,15 @@ export function createApp(
       await appendFile(log, '足せなかった（ターンが終わったか、別のターンになった）。今までどおりの経路へ\n').catch(() => {})
     }
     // `claude --bg` で動いているセッション（#462）。**同じ ID を `-p --resume` すると CLI が断り、
-    // `--bg --resume` は別のセッションに写してしまう**（実測）ので、生きている間は送らずに端末へ回す。
+    // `--bg --resume` は別のセッションに写してしまう**（実測）ので、止めてから `-p` で続けるしかない。
     //
-    // **SAI からは止めない**（レビューの指摘。2026-09-24 に実測）: `claude stop` は **attach している端末を
-    // その場で閉じる**（`Session … has exited.` が出て TUI が終わる。打ちかけがあれば消える）。しかも
-    // 2.1.278 の `claude agents` はバックグラウンドの行に `state`（`working` / `stopped` / `done`）しか
-    // 持たず、**いまターンが回っているかは分からない**ので、「入力待ちだから止めてよい」も決められない。
-    // 人のターンを画面から殺さない（#384 と同じ線引き）方に倒す。
+    // **止めてよいのは「誰も開いていない」かつ「ターンが回っていない」ときだけ**（2026-09-24 に実測）:
+    // - `claude stop` は **attach している端末をその場で閉じる**（`Session … has exited.`。打ちかけも消える）ので、
+    //   `ps` で `claude attach <ID>` を探し、居れば止めない（`BackgroundSessions.attached()`。分からなければ居る扱い）
+    // - 2.1.278 の `claude agents` はバックグラウンドの行に `state`（`working` / `stopped` / `done`）しか持たず、
+    //   **いまターンが回っているかは分からない**。そこは transcript で見る（#302 の `progress.read().active`）。
+    //   2.1.276 の `status`（`busy` / `waiting`）が来ていればそれも使う
+    // どちらかに当たれば預かって待つ（人のターンを画面から殺さない。#384 と同じ線引き）。
     //
     // **一覧はまず覚えているものを見る**（返信のたびに `claude agents` を起こさない。実測 0.15〜0.20 秒で、
     // ここは端末に打ち込む経路より手前なので普通の返信まで遅くなる）。バックグラウンドの行があるときだけ、
@@ -1147,8 +1167,10 @@ export function createApp(
     }
     const bg = await bgOf()
     const bgLive = bg && backgroundLive(bg) ? bg : null
+    // 止められない理由（無ければ止めてから `-p` で続ける）
+    const bgHold = bgLive ? await backgroundHold(bgLive, session) : ''
     // 別プロセス（-p / app-server）のターンが動いているか、いま起動している最中か
-    const busy = run.running(id) || codexApp.running(id) || opencodeApp.running(id) || launching.has(id) || bgLive !== null
+    const busy = run.running(id) || codexApp.running(id) || opencodeApp.running(id) || launching.has(id) || bgHold !== ''
     // 処理中なら預かる（#305）。処理中でなくても預かりが残っていれば後ろに並べる（先に預けたものを追い越さない）
     if (o.queue && (busy || queue.size(id) > 0)) {
       const item = queue.add(id, text, attachments, o.url, new Date(), o.origin ?? '')
@@ -1159,17 +1181,19 @@ export function createApp(
     }
     // 端末（tmux）で開いていれば、前のターンが動いていても打ち込んでよい。TUI が次のターンに回すので、
     // 端末で人が続けて打つのと同じになる。別プロセス（-p）の経路だけは二重起動になるので止める（#100, #170）
-    if (bgLive) {
-      return {
-        ...refuse(
-          409,
-          `バックグラウンドで動いています（claude --bg）。端末で claude attach ${bgLive.id} して打つか、claude stop ${bgLive.id} してから送ってください`,
-        ),
-        retry: true,
-      }
-    }
+    if (bgHold) return { ...refuse(409, bgHold), retry: true }
     if (busy || (typed.running(id) && !openTerminal)) {
       return refuse(409, 'このセッションはまだ前の返信を処理中です')
+    }
+    if (bgLive) {
+      const log = join(store.directory, 'reply.log')
+      await appendFile(log, `--- ${new Date().toISOString()} ${id} 誰も開いていないバックグラウンドのセッションを止めてから続ける（claude stop ${bgLive.id}）\n`).catch(() => {})
+      try {
+        await background.stop(bgLive.id, cwd)
+      } catch (err) {
+        await appendFile(log, `止められなかった: ${err instanceof Error ? err.message : String(err)}\n`).catch(() => {})
+        return refuse(409, `バックグラウンドのセッションを止められませんでした。端末で claude attach ${bgLive.id} して打ってください`)
+      }
     }
     launching.add(id)
     try {

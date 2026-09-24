@@ -8,6 +8,6 @@ test('attachCommand / backgroundNote: 状態ごとの説明（#462）', () => {
   assert.match(backgroundNote(bg), /許可・質問を待っています/)
   assert.match(backgroundNote({ ...bg, status: 'busy' }), /回っています/)
   // 2.1.278 の `working`（生きているだけ。ターンが回っているかは分からない）
-  assert.match(backgroundNote({ ...bg, status: 'working' }), /端末で開いて打ってください/)
+  assert.match(backgroundNote({ ...bg, status: 'working' }), /誰も端末で開いていなくてターンも終わっていれば、止めてから続けます/)
   assert.match(backgroundNote({ ...bg, live: false, status: '' }), /起こし直せます/)
 })

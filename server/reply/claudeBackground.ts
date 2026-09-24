@@ -3,7 +3,8 @@
 // 始めたセッションは Claude Code のデーモンの中で動くので、端末で `claude attach <短い ID>` すれば TUI として開ける
 // （SAI の `-p` で始めたセッションは、終わったあとに `claude --resume` で開き直すしかなかった）。
 //
-// 叩くのは `claude --bg …`（`backgroundSessionCommand()`）と `claude agents --json --all --cwd <cwd>` の 2 形だけ（止めるのは端末で）。
+// 叩くのは `claude --bg …`（`backgroundSessionCommand()`）・`claude agents --json --all --cwd <cwd>`・`claude stop <短い ID>` の 3 形と、
+// attach している端末を探す `ps -axo command=` だけ。
 // 実行ファイルはサーバの PATH の `claude`（#288）。テストは偽物を渡す
 import { execFile } from 'node:child_process'
 import { parseAgents } from '../local/claudeAgents.ts'
@@ -31,15 +32,44 @@ export interface BackgroundStarted {
   sessionId: string
 }
 
-/**
- * 始める口。テストでは差し替える。
- *
- * **止める口は持たない**（#462 のレビュー。2026-09-24 に実測）: `claude stop` は **attach している端末を
- * その場で閉じる**（`Session … has exited.`）ので、SAI から黙って撃つと人の画面を落とす。止めるのは端末で
- */
+/** 始める・止める口。テストでは差し替える */
 export interface BackgroundSessions {
   start(cmd: ReplyCommand): Promise<BackgroundStarted>
+  /**
+   * 生きている `claude --bg` のセッションを止める（会話は残るので `claude attach` や `--resume` で続けられる）。
+   * **attach している端末をその場で閉じる**（2026-09-24 に実測: `Session … has exited.`）ので、
+   * 呼ぶ前に必ず `attached()` で誰も開いていないことを確かめる
+   */
+  stop(short: string, cwd: string): Promise<void>
+  /**
+   * そのセッションを `claude attach` で開いている端末があるか（#462）。
+   * **分からないとき（`ps` が読めない）は true**——止めない側に倒す（人の画面を落とすよりは、預かって待つ方がよい）
+   */
+  attached(short: string, sessionId: string): Promise<boolean>
 }
+
+/**
+ * `ps -axo command=` の出力から、そのセッションに attach している端末を探す（純粋関数）。
+ *
+ * **argv の並びで厳密に見る**: `claude` の後ろに `attach` と ID が**続けて**並ぶ行だけを数える。
+ * 素朴に「`attach` を含む」で探すと、SAI 自身の `claude -p`（`--mcp-config` の中に `attachments` がある）に当たる（実測）。
+ * ID は `claude --bg` が出す短い ID のほかに、UUID 全体やその頭（6 文字以上）でも attach できるので、それも数える
+ */
+export function attachedIn(psOutput: string, short: string, sessionId: string): boolean {
+  const matches = (id: string) => id === short || id === sessionId || (id.length >= 6 && sessionId.startsWith(id))
+  for (const line of psOutput.split('\n')) {
+    const argv = line.trim().split(/\s+/)
+    const at = argv.findIndex((word) => word === 'claude' || word.endsWith('/claude'))
+    if (at < 0) continue
+    if (argv[at + 1] === 'attach' && argv[at + 2] !== undefined && matches(argv[at + 2]!)) return true
+  }
+  return false
+}
+
+const realPs = (): Promise<string> =>
+  new Promise((resolve, reject) => {
+    execFile('ps', ['-axo', 'command='], { maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => (err ? reject(err) : resolve(`${stdout}`)))
+  })
 
 /**
  * `claude --bg` の出力から短い ID を取る。`backgrounded · 5738db0d` の形（2.1.276 で実測）。
@@ -65,8 +95,10 @@ function run(bin: string, args: string[], cwd: string, timeout: number): Promise
 
 export class ClaudeBackground implements BackgroundSessions {
   readonly bin: string
-  constructor(bin: string = 'claude') {
+  private readonly ps: () => Promise<string>
+  constructor(bin: string = 'claude', ps: () => Promise<string> = realPs) {
     this.bin = bin
+    this.ps = ps
   }
 
   async start(cmd: ReplyCommand): Promise<BackgroundStarted> {
@@ -82,5 +114,17 @@ export class ClaudeBackground implements BackgroundSessions {
     }
     // **セッションはもう動いている**ので、短い ID を添える（無いと「始められなかった」と読んで同じ指示で二重に始める）
     throw new BackgroundLookupError(short)
+  }
+
+  async stop(short: string, cwd: string): Promise<void> {
+    await run(this.bin, ['stop', short], cwd, 10_000)
+  }
+
+  async attached(short: string, sessionId: string): Promise<boolean> {
+    try {
+      return attachedIn(await this.ps(), short, sessionId)
+    } catch {
+      return true // 分からないときは止めない
+    }
   }
 }

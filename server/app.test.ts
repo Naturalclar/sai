@@ -497,10 +497,17 @@ const claudeAgents = {
 /** #462。`claude --bg` / `claude stop` の代わり */
 const claudeBackground = {
   started: [] as ReplyCommand[],
+  stopped: [] as string[],
+  /** `ps` に `claude attach <ID>` が居るか。`Error` なら `ps` が読めない（分からない = 居る扱いになるのは本物の側） */
+  attachedNow: false,
   start: async (cmd: ReplyCommand) => {
     claudeBackground.started.push(cmd)
     return { short: '5738db0d', sessionId: '5738db0d-b4e1-4396-a5b5-6220d4530861' }
   },
+  stop: async (short: string) => {
+    claudeBackground.stopped.push(short)
+  },
+  attached: async () => claudeBackground.attachedNow,
 }
 /** `claude agents --json` のバックグラウンドの行（2.1.278 は `state`、2.1.276 は `status`。#462） */
 const bgAgent = (state: string): ClaudeAgent => ({ sessionId: 'C1', id: '5738db0d', kind: 'background', status: '', state, cwd: '', pid: 0, name: '' })
@@ -2192,42 +2199,71 @@ test('POST /api/sessions/new: background なら claude --bg で始め、短い I
   assert.equal(claudeBackground.started.length, 1)
 })
 
-test('POST reply: 生きている claude --bg のセッションには送らない（SAI からは止めない。#462）', async () => {
+test('POST reply: claude --bg は、誰も開いていなくてターンも回っていないときだけ止めて -p で続ける（#462）', async () => {
   runner.started.length = 0
+  claudeBackground.stopped.length = 0
+  const projectDir = join(dir, 'claude-projects', claudeProjectName(dir))
+  await mkdir(projectDir, { recursive: true })
+  const transcript = join(projectDir, 'C1.jsonl')
+  const ts = new Date().toISOString()
+  const user = JSON.stringify({ type: 'user', timestamp: ts, message: { role: 'user', content: '続けて' } })
+  // ターンが回っている（閉じていない・書き込みが新しい）/ 閉じている
+  const running = [user, JSON.stringify({ type: 'assistant', timestamp: ts, message: { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'sleep 60' } }], stop_reason: 'tool_use' } })].join('\n') + '\n'
+  const closed = [user, JSON.stringify({ type: 'assistant', timestamp: ts, message: { role: 'assistant', content: [{ type: 'text', text: 'できた' }], stop_reason: 'end_turn' } })].join('\n') + '\n'
   try {
-    // 2.1.278 のバックグラウンドの行は `state`（`working` / `stopped` / `done`）で、
-    // **いまターンが回っているかは分からない**。生きている間は端末へ回す
     claudeAgents.bg = bgAgent('working')
-    const live = await post('C1@r', { text: 'x' })
-    assert.equal(live.status, 409)
-    assert.match(((await live.json()) as { error: string }).error, /端末で claude attach 5738db0d して打つか、claude stop 5738db0d/)
-    assert.equal(runner.started.length, 0, '`-p --resume` は起こさない（生きている --bg があると CLI が断る）')
 
-    // 預かったぶんは止めずに待つ（終わりを知らせる口が無いので、次のポーリングでもう一度見る）
-    const queued = await post('C1@r', { text: 'あとで', queue: true })
-    assert.equal(((await queued.json()) as ReplyResponse).via, 'queued')
-    const held = await queuedOf('C1@r')
-    assert.equal(held?.items.length, 1)
-    assert.equal(held?.paused ?? '', '', '止めない')
+    // 1) attach している端末がある → 止めない（`claude stop` はその端末をその場で閉じる。実測）
+    await writeFile(transcript, closed)
+    claudeBackground.attachedNow = true
+    const attached = await post('C1@r', { text: 'x' })
+    assert.equal(attached.status, 409)
+    assert.match(((await attached.json()) as { error: string }).error, /端末で claude attach 5738db0d して開いています/)
+    assert.deepEqual(claudeBackground.stopped, [], '開いている端末を閉じない')
     assert.equal(runner.started.length, 0)
 
-    // 止めた・終わったものは普通に `-p --resume` で続ける（会話は残っている）
-    claudeAgents.bg = bgAgent('stopped')
+    // 2) 誰も開いていないが、ターンが回っている → 止めない（止めると回っているターンを殺す）
+    claudeBackground.attachedNow = false
+    await writeFile(transcript, running)
+    const busy = await post('C1@r', { text: 'x' })
+    assert.equal(busy.status, 409)
+    assert.match(((await busy.json()) as { error: string }).error, /ターンが回っています/)
+    assert.deepEqual(claudeBackground.stopped, [])
+
+    // 預かったぶんは、止めずに待つ（drain は止めない）
+    const queued = await post('C1@r', { text: 'あとで', queue: true })
+    assert.equal(((await queued.json()) as ReplyResponse).via, 'queued')
+    assert.equal((await queuedOf('C1@r'))?.paused ?? '', '', '止めない')
+    assert.equal(runner.started.length, 0)
+
+    // 3) 誰も開いていなくて、ターンも閉じた → 止めてから -p --resume で続ける
+    await writeFile(transcript, closed)
     await queuedOf('C1@r')
+    assert.deepEqual(claudeBackground.stopped, ['5738db0d'])
     assert.equal(runner.started.length, 1)
     assert.ok(runner.started[0]!.cmd.args.includes('--resume'))
     assert.equal((await queuedOf('C1@r'))?.items.length ?? 0, 0)
 
-    // 2.1.276 の形（`status` だけ）でも同じ（生きていれば送らない、空なら送る）
+    // 4) 止めた・終わったもの（state: stopped / done）には何もしない
+    claudeBackground.stopped.length = 0
     runner.started.length = 0
     runner.busy.delete('C1@r')
-    claudeAgents.bg = { ...bgAgent(''), status: 'idle' }
-    assert.equal((await post('C1@r', { text: 'y' })).status, 409)
-    claudeAgents.bg = bgAgent('')
+    claudeAgents.bg = bgAgent('stopped')
     assert.equal((await post('C1@r', { text: 'y' })).status, 202)
+    assert.deepEqual(claudeBackground.stopped, [])
+
+    // 5) 2.1.276 の形（`status`）で許可を待っていれば、transcript に依らず止めない
+    runner.busy.delete('C1@r')
+    claudeAgents.bg = { ...bgAgent(''), status: 'waiting' }
+    const waiting = await post('C1@r', { text: 'z' })
+    assert.equal(waiting.status, 409)
+    assert.match(((await waiting.json()) as { error: string }).error, /許可・質問を待っています/)
+    assert.deepEqual(claudeBackground.stopped, [])
   } finally {
     claudeAgents.bg = null
+    claudeBackground.attachedNow = false
     runner.busy.delete('C1@r')
+    await rm(transcript, { force: true })
   }
 })
 

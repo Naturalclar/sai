@@ -400,6 +400,24 @@ export interface SessionIconResponse {
   icon: string | null
 }
 
+/** 今まで使ったアイコン画像の 1 つ（#465）。`key` は中身の sha1 の先頭 16 桁 */
+export interface IconHistoryItem {
+  key: string
+  /** `<img src>` に使う URL（`/api/icon-history/<key>?v=…`） */
+  url: string
+  /** 最後に使った時刻（ISO）。並びはこれの新しい順 */
+  used_at: string
+}
+
+/**
+ * GET /api/icon-history（#465）。`?id=<セッション>` か `?profile=1` を付けると、
+ * いまそのアイコンになっている画像の鍵を `current` に載せる（無ければ省く）
+ */
+export interface IconHistoryResponse {
+  items: IconHistoryItem[]
+  current?: string
+}
+
 /**
  * 自分（人）の表示名とアイコン。SAI は1人のローカルの道具なので1つだけ。
  * 表示名は ~/.agent-feed/profile.json、アイコンは session-icons/ に固定の鍵（shared/profile.ts の PROFILE_ICON_ID）で置く。

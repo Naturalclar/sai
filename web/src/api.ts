@@ -20,6 +20,7 @@ import type {
   SessionDiffSummaryResponse,
   SessionFilters,
   SessionIconResponse,
+  IconHistoryResponse,
   SessionMeta,
   SessionMetaResponse,
   SessionPermissionsResponse,
@@ -112,6 +113,9 @@ async function sendRaw<T>(method: 'POST' | 'PUT' | 'DELETE', url: string, body?:
   return (await res.json()) as T
 }
 
+/** アイコンの履歴（#465）を誰のために開くか。セッションか自分か */
+export type IconTarget = { kind: 'session'; id: string } | { kind: 'profile' }
+
 const qs = (params: object) => new URLSearchParams(Object.entries(params)).toString()
 
 export const api = {
@@ -190,6 +194,18 @@ export const api = {
   setIcon: (id: string, file: Blob, days = 90) =>
     sendRaw<SessionIconResponse>('PUT', `/api/sessions/${encodeURIComponent(id)}/icon?days=${days}`, file),
   clearIcon: (id: string) => sendRaw<SessionIconResponse>('DELETE', `/api/sessions/${encodeURIComponent(id)}/icon`),
+  /**
+   * 今まで使ったアイコン画像（#465）。`id` / `profile` を渡すと、いまのアイコンと同じ画像の鍵が `current` に載る。
+   * 開いたときだけ取る（ポーリングには乗せない）
+   */
+  iconHistory: (target: IconTarget) =>
+    getJSON<IconHistoryResponse>(`/api/icon-history?${target.kind === 'profile' ? 'profile=1' : `id=${encodeURIComponent(target.id)}`}`),
+  /** 履歴の画像をそのまま付ける。body は送らない（サーバが自分の置き場から読む） */
+  setIconFromHistory: (id: string, key: string, days = 90) =>
+    sendRaw<SessionIconResponse>('PUT', `/api/sessions/${encodeURIComponent(id)}/icon?days=${days}&history=${encodeURIComponent(key)}`),
+  setProfileIconFromHistory: (key: string) => sendRaw<ProfileResponse>('PUT', `/api/profile/icon?history=${encodeURIComponent(key)}`),
+  /** 履歴から消す。いま使っているアイコンは消えない */
+  removeIconHistory: (key: string) => sendRaw<IconHistoryResponse>('DELETE', `/api/icon-history/${encodeURIComponent(key)}`),
   /** 自分の表示名とアイコン。一覧・詳細・フィードにも profile として載るので、普段はそちらを見る */
   profile: () => getJSON<ProfileResponse>('/api/profile'),
   /** 表示名を置く。空文字は「消す」 */

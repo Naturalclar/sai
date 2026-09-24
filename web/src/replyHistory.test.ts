@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { NOT_IN_HISTORY, canGoBack, canGoForward, historyFrom, stepHistory } from './replyHistory.ts'
+import { NOT_IN_HISTORY, canGoBack, canGoForward, historyFrom, stepHistory, withOlder } from './replyHistory.ts'
 import type { HistoryState } from './replyHistory.ts'
 import type { FeedRow } from '../../shared/types.ts'
 
@@ -87,4 +87,9 @@ test('stepHistory: 履歴が空なら何もしない', () => {
   const empty = { items: [], index: NOT_IN_HISTORY, draft: '' }
   assert.equal(stepHistory(empty, 'back', 'x'), null)
   assert.equal(stepHistory(empty, 'forward', 'x'), null)
+})
+
+test('withOlder: 描いていない前の行の入力を後ろに足し、継ぎ目の重複は畳む', () => {
+  assert.deepEqual(withOlder(['新', '中'], ['中', '古']), ['新', '中', '古'])
+  assert.deepEqual(withOlder([], ['古']), ['古'])
 })

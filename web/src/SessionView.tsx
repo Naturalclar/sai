@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import { canSteer, replyBlockedReason } from '../../shared/reply.ts'
 import { launchedModeNote } from '../../shared/permissions.ts'
-import { eventKind } from '../../shared/events.ts'
+import { RECENT_DAYS } from '../../shared/recentRows.ts'
 import { promptArrived } from './chatGroups'
 import { api } from './api'
 import { useLocalState, usePolling } from './hooks'
 import { Chat } from './Chat'
+import { OlderRowsButton } from './OlderRowsButton'
 import { PendingBubble } from './PendingBubble'
 import { InterruptButton } from './InterruptButton'
 import { ProgressSteps } from './ProgressSteps'
@@ -20,7 +21,7 @@ import { ReplyBox } from './ReplyBox'
 import type { RestoreRequest } from './replyRestore'
 import { BackLink } from './BackLink'
 import { useReply } from './useReply'
-import { historyFrom } from './replyHistory'
+import { historyFrom, withOlder } from './replyHistory'
 import { ReplaceConfirm } from './ReplaceConfirm'
 import { SessionStatusTags } from './SessionStatusTags'
 import { SessionHeadInfo } from './SessionHeadInfo'
@@ -34,6 +35,7 @@ import { hasDiff } from './diffCount'
 import type { PaneProps } from './App'
 
 const NO_ROWS: never[] = []
+const NO_PROMPTS: string[] = []
 const NO_REPLYING = {}
 const NO_APPROVALS: never[] = []
 
@@ -46,11 +48,15 @@ export interface DiffProps {
 }
 
 export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggleDiff, diffOpen, onLeaveToSidebar, linear, settings }: { id: string; focusTs?: string } & PaneProps & DiffProps) {
-  const { data, error, updatedAt } = usePolling(() => api.session(id), [id])
+  // 描く行は直近 RECENT_DAYS 日から（#477）。「前の 7 日を表示」で広げ、別のセッションに移ったら戻す（描画中に導く）
+  const [wide, setWide] = useState({ id, days: RECENT_DAYS })
+  const recent = wide.id === id ? wide.days : RECENT_DAYS
+  const { data, error, updatedAt } = usePolling(() => api.session(id, { recent, focus: focusTs }), [id, recent, focusTs], { resetKey: id })
   useEffect(() => onStatus(updatedAt, error), [updatedAt, error, onStatus])
 
-  // 返信先はこのセッションだけなので、行数はこの画面のターン完了の行数（入力の行は返信の終わりではない）
-  const turns = data?.rows.reduce((n, r) => n + (eventKind(r.event, r.text) === 'turn' ? 1 : 0), 0) ?? 0
+  // 返信先はこのセッションだけなので、行数はこの画面のターン完了の行数（入力の行は返信の終わりではない）。
+  // 描いている行ではなく集計から数える（「前の 7 日を表示」で行が増えたのを返信の終わりと取り違えない）
+  const turns = data?.session.turns ?? 0
   const { pending, failed, steered, send, confirm, confirmedSent, confirmReplace, confirmProcess, cancelConfirm } = useReply((target) => (target === id ? turns : 0), data?.replying ?? NO_REPLYING, updatedAt)
   const mine = pending.find((p) => p.id === id) ?? null
   const now = updatedAt?.getTime() ?? 0
@@ -74,7 +80,11 @@ export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggl
   const hasThinking = data?.rows.some((r) => Boolean(r.thinking?.trim())) ?? false
 
   // ↑ で呼び戻す履歴。行の user_text から作り、送った直後のまだ届いていない分を先頭に足す
-  const history = useMemo(() => historyFrom(data?.rows ?? NO_ROWS, id, mine ? [mine.text] : []), [data?.rows, id, mine])
+  // 描いていない前の行の入力（older_prompts）も後ろに足す（#477。無いと 7 日より前の入力が ↑ で出ない）
+  const history = useMemo(
+    () => withOlder(historyFrom(data?.rows ?? NO_ROWS, id, mine ? [mine.text] : []), data?.older_prompts ?? NO_PROMPTS),
+    [data?.rows, data?.older_prompts, id, mine],
+  )
 
   const s = data?.session
   const blocked = s ? replyBlockedReason(s, data?.host ?? '') : ''
@@ -127,6 +137,7 @@ export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggl
       {data && (
         <Chat
           rows={data.rows}
+          leader={data.older > 0 ? <OlderRowsButton count={data.older} days={RECENT_DAYS} onMore={() => setWide({ id, days: recent + RECENT_DAYS })} /> : undefined}
           showChannel={false}
           sessions={[data.session]}
           profile={data.profile}

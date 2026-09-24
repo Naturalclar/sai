@@ -26,7 +26,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 RECORD = HERE / "record.py"
 sys.path.insert(0, str(HERE.parent))
-from feed.record import ASSISTANT_WAIT_S  # noqa: E402
+from feed.record import ASSISTANT_IDLE_S, ASSISTANT_WAIT_S  # noqa: E402
 JST = timezone(timedelta(hours=9))
 
 
@@ -546,7 +546,9 @@ class RecordTest(unittest.TestCase):
         ])
 
         def append_later():
-            time.sleep(0.4)
+            # 実データで測った遅れの最大（0.89 秒）に合わせる。ここが ASSISTANT_IDLE_S
+            # （追記が止まったら諦める）より遅いと、切り上げが速すぎて本文を取りこぼす
+            time.sleep(0.9)
             with transcript.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps({
                     "type": "assistant",
@@ -561,6 +563,7 @@ class RecordTest(unittest.TestCase):
         writer.join()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(read_rows(self.feed_dir)[-1]["text"], "遅れて書かれた返答")
+        self.assertGreater(ASSISTANT_IDLE_S, 0.9, "実測の遅れより早く諦めない")
 
     def test_mid_turn_hooks_do_not_wait(self):
         """待つのはターン完了（`Stop`）の行のときだけ。ターンの途中で鳴るフックまで
@@ -577,6 +580,20 @@ class RecordTest(unittest.TestCase):
         elapsed = time.monotonic() - started
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertLess(elapsed, ASSISTANT_WAIT_S, "ターンの途中のフックは待たない")
+
+    def test_gives_up_once_the_transcript_stops_growing(self):
+        """閉じた行が来ないターン（実データで 6.9%）で上限いっぱい待たない。
+        **揃っているファイルは 1 行も増えない**ので、追記が止まったら切り上げる。"""
+        row_start = time.monotonic()
+        row = self._claude_row([
+            {"type": "user", "message": {"role": "user", "content": "いまの依頼"}},
+            {"type": "assistant", "message": {"role": "assistant", "stop_reason": "tool_use",
+                                              "content": [{"type": "text", "text": "調べてみる"}]}},
+        ])
+        elapsed = time.monotonic() - row_start
+        self.assertEqual(row["text"], "調べてみる", "待っても来ないので途中の地の文を載せる")
+        self.assertLess(elapsed, ASSISTANT_WAIT_S, "上限（2 秒）まで待たない")
+        self.assertGreater(ASSISTANT_WAIT_S, ASSISTANT_IDLE_S, "諦めるのは上限より早い")
 
     # -- 端末の居場所（pane / pid）
 

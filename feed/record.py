@@ -430,6 +430,10 @@ def _role_and_text(entry: dict) -> tuple[str, str]:
 ASSISTANT_WAIT_S = 2.0
 #: 待つ間に transcript が増えたかを見に行く間隔
 ASSISTANT_POLL_S = 0.05
+#: 追記が止まってから諦めるまで（実測の遅れの最大 0.89 秒に余裕を持たせる）。
+#: **揃っているファイルでは 1 行も増えない**ので、閉じた行が来ないターン
+#: （実データで 6.9%）を上限いっぱい待たずに切り上げる
+ASSISTANT_IDLE_S = 1.2
 #: ターンが閉じた印（`shared/progress.ts` の `claudeProgress()` と同じ 2 つ）
 _TURN_CLOSED = ("end_turn", "stop_sequence")
 
@@ -438,8 +442,10 @@ def _turn_assistant_text(entries: list[dict]) -> tuple[str, bool]:
     """**そのターンの** assistant の本文と、それが閉じた行（`end_turn` / `stop_sequence`）のものか。
 
     末尾から遡って人の入力の行（`_is_prompt_row()`）で止まるので、**前のターンまでは遡らない**。
-    閉じた行が見つかればそれを、無ければターンの途中の地の文（`stop_reason: tool_use` に
-    付いた 1〜2 文）を返す。そのターンに本文が 1 つも無ければ `("", False)`。
+    返すのは**そのターンのいちばん新しい本文**で、2 つ目はそれが閉じた行のものか
+    （閉じていなければ、呼ぶ側は続きが書かれるのを待つ）。ターンの途中の地の文
+    （`stop_reason: tool_use` に付いた 1〜2 文）しか無ければそれを返し、本文が 1 つも
+    無ければ `("", False)`。
     """
     for entry in reversed(entries):
         if _is_prompt_row(entry):
@@ -482,7 +488,8 @@ def last_assistant_text(path: Path, wait: bool = False) -> str:
     if closed or not wait:
         return text
     deadline = time.monotonic() + ASSISTANT_WAIT_S
-    while time.monotonic() < deadline:
+    idle_until = time.monotonic() + ASSISTANT_IDLE_S
+    while time.monotonic() < min(deadline, idle_until):
         time.sleep(ASSISTANT_POLL_S)
         current = _file_signature(path)
         if current == signature:
@@ -490,6 +497,7 @@ def last_assistant_text(path: Path, wait: bool = False) -> str:
         # **印は読む前のものを持ち越す**。読み終わってから stat すると、読んでいる最中に
         # 着いた行がその印に含まれてしまい、次の比較で「増えていない」になって永久に拾えない
         signature = current
+        idle_until = time.monotonic() + ASSISTANT_IDLE_S
         text, closed = _turn_assistant_text(list(_iter_jsonl(path)))
         if closed:
             break

@@ -121,11 +121,16 @@ EOF
 
 ## 5. マージする
 
+**レビューした SHA を指定してマージする。**
+
 ```sh
-gh pr merge "$pr" --repo "$repo" --squash
+sha=$(gh api "repos/$repo/pulls/$pr" -q .head.sha)   # 2 で読んだ HEAD と同じか確かめる
+gh api -X PUT "repos/$repo/pulls/$pr/merge" -f merge_method=squash -f sha="$sha"
 ```
 
 `main` は PR 1 本 = コミット 1 つにする（squash 以外は使わない）。
+
+**`gh pr merge` の素の形は使わない**（`-f sha=` を渡せない）。2〜4 の間に**別のセッションが同じブランチへ push する**と、読んでいないコミットがそのまま `main` に入る——このリポジトリは worktree ごとに並行してセッションが動いているので、実際に起こりうる。`sha` を渡しておけば HEAD が動いていた場合は GitHub が `405`（`Head branch was modified`）で弾くので、**「レビュー後に動いていたら止まる」が手順ではなく仕組みで担保される**。弾かれたら 1 に戻る（増えた分も読む）。
 
 ## 6. 後始末
 

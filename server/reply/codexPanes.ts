@@ -87,18 +87,28 @@ export function parsePsCommands(output: string): PsRow[] {
  * `lsof -a -p <pid> -Ffn` から cwd と開いている rollout を**1 回で**取る。読めなければ空。
  * 出力は `f<fd>` の次の行が `n<パス>` という形で、cwd は `fcwd`
  */
-export function lsofPaneFiles(env: NodeJS.ProcessEnv = process.env): (pid: number) => Promise<PaneFiles> {
+export function lsofPaneFiles(env: NodeJS.ProcessEnv = process.env, run: LsofRun = runLsof): (pid: number) => Promise<PaneFiles> {
   const dir = codexSessionsDir(env)
   return async (pid: number): Promise<PaneFiles> => {
-    const roots = await sessionRoots(dir)
-    const output = await new Promise<string>((resolve) => {
-      execFile('lsof', ['-a', '-p', String(pid), '-Ffn'], { timeout: 5_000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
-        resolve(err && !stdout ? '' : String(stdout))
-      })
-    })
-    return output ? parsePaneFiles(output, roots) : { cwd: '', rollouts: [] }
+    const output = await run(pid)
+    if (!output) return { cwd: '', rollouts: [] }
+    // **root を realpath にも揃えるのはここ**（#434）。`sessionRoots()` と `parsePaneFiles()` が
+    // 別々に正しくても、この 1 行を書き戻せば元の壊れ方に戻るので、テストは `run` を差し替えて
+    // **この組み立てごと**通す（`lsof` を実際に起こさない）
+    return parsePaneFiles(output, await sessionRoots(dir))
   }
 }
+
+/** `lsof` を起こして出力を返す口。テストが差し替える（本物は `runLsof`） */
+export type LsofRun = (pid: number) => Promise<string>
+
+/** 読めなければ空文字（`lsof` が無い・そのプロセスがもう居ない） */
+const runLsof: LsofRun = (pid: number) =>
+  new Promise((resolve) => {
+    execFile('lsof', ['-a', '-p', String(pid), '-Ffn'], { timeout: 5_000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
+      resolve(err && !stdout ? '' : String(stdout))
+    })
+  })
 
 /**
  * 前方一致に使う置き場。**書いたとおりの形と realpath の両方**を返す（#434）。

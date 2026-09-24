@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, sep } from 'node:path'
 import test from 'node:test'
-import { CODEX_PANES_TTL_MS, CodexPanes, parsePaneFiles, parsePsCommands, parseRolloutHead, rolloutSession, sessionRoots } from './codexPanes.ts'
+import { CODEX_PANES_TTL_MS, CodexPanes, parsePaneFiles, parsePsCommands, parseRolloutHead, rolloutSession, sessionRoots, lsofPaneFiles } from './codexPanes.ts'
 import type { CodexPaneDeps } from './codexPanes.ts'
 import type { Tmux } from './terminal.ts'
 
@@ -184,4 +184,23 @@ test('sessionRoots: リンクを挟まなければ 1 つだけ（同じ形を 2 
   const tmp = await realpath(await mkdtemp(join(tmpdir(), 'sai-roots-')))
   await mkdir(join(tmp, 'sessions'), { recursive: true })
   assert.deepEqual(await sessionRoots(join(tmp, 'sessions')), [join(tmp, 'sessions') + sep])
+})
+
+test('lsofPaneFiles: CODEX_HOME がリンク越しでも、lsof が返す実パスの rollout を拾う（#434）', async () => {
+  // sessionRoots() と parsePaneFiles() の繋ぎ方まで含めて通す（`lsof` は起こさない）
+  const tmp = await mkdtemp(join(tmpdir(), 'sai-lsof-'))
+  await mkdir(join(tmp, 'real', 'sessions', '2026', '09', '24'), { recursive: true })
+  await symlink(join(tmp, 'real'), join(tmp, 'link'))
+  const real = await realpath(join(tmp, 'link', 'sessions'))
+  const path = join(real, '2026/09/24', `rollout-2026-09-24T14-40-23-${SESSION}.jsonl`)
+  // 実測の形（lsof はリンクを解いた実パスを返す）
+  const output = ['p101', 'fcwd', 'n/repo/one', 'f58', `n${path}`, ''].join('\n')
+
+  const open = lsofPaneFiles({ CODEX_HOME: join(tmp, 'link') }, async () => output)
+  assert.deepEqual(await open(101), { cwd: '/repo/one', rollouts: [path] })
+})
+
+test('lsofPaneFiles: lsof が読めなければ空（今までどおり当てない）', async () => {
+  const open = lsofPaneFiles({ CODEX_HOME: '/nope/.codex' }, async () => '')
+  assert.deepEqual(await open(101), { cwd: '', rollouts: [] })
 })

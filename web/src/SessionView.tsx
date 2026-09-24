@@ -21,7 +21,7 @@ import { ReplyBox } from './ReplyBox'
 import type { RestoreRequest } from './replyRestore'
 import { BackLink } from './BackLink'
 import { useReply } from './useReply'
-import { historyFrom } from './replyHistory'
+import { historyFrom, withOlder } from './replyHistory'
 import { ReplaceConfirm } from './ReplaceConfirm'
 import { SessionStatusTags } from './SessionStatusTags'
 import { SessionHeadInfo } from './SessionHeadInfo'
@@ -35,6 +35,7 @@ import { hasDiff } from './diffCount'
 import type { PaneProps } from './App'
 
 const NO_ROWS: never[] = []
+const NO_PROMPTS: string[] = []
 const NO_REPLYING = {}
 const NO_APPROVALS: never[] = []
 
@@ -79,7 +80,11 @@ export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggl
   const hasThinking = data?.rows.some((r) => Boolean(r.thinking?.trim())) ?? false
 
   // ↑ で呼び戻す履歴。行の user_text から作り、送った直後のまだ届いていない分を先頭に足す
-  const history = useMemo(() => historyFrom(data?.rows ?? NO_ROWS, id, mine ? [mine.text] : []), [data?.rows, id, mine])
+  // 描いていない前の行の入力（older_prompts）も後ろに足す（#477。無いと 7 日より前の入力が ↑ で出ない）
+  const history = useMemo(
+    () => withOlder(historyFrom(data?.rows ?? NO_ROWS, id, mine ? [mine.text] : []), data?.older_prompts ?? NO_PROMPTS),
+    [data?.rows, data?.older_prompts, id, mine],
+  )
 
   const s = data?.session
   const blocked = s ? replyBlockedReason(s, data?.host ?? '') : ''

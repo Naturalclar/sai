@@ -134,7 +134,7 @@ import { IMAGES_SEGMENT } from '../shared/images.ts'
 import { imageHeaders, imageTable, readSessionImage } from './local/images.ts'
 import { searchRows } from './rows/search.ts'
 import { searchWords } from '../shared/search.ts'
-import { parseRecent, recentRows } from '../shared/recentRows.ts'
+import { olderPrompts, parseRecent, recentRows } from '../shared/recentRows.ts'
 import { alive, isDescendant, parsePs, RealTmux, realPs, TerminalBusy, TerminalGone, TerminalReplies, typeInto } from './reply/terminal.ts'
 import type { PsFn, Tmux } from './reply/terminal.ts'
 import type { Runner } from './reply/runner.ts'
@@ -2469,7 +2469,7 @@ export function createApp(
         await usageReady
         // 画面は直近のぶんだけ取る（#477。行の多いセッションで描き直しが重く、打鍵が止まる）。一言・使用量を付ける前に絞る
         const recent = parseRecent(q.get('recent'))
-        const { rows: shown, older } = recent === null ? { rows: own, older: 0 } : recentRows(own, recent, Date.now(), q.get('focus') ?? '')
+        const { rows: shown, older, dropped } = recent === null ? { rows: own, older: 0, dropped: [] } : recentRows(own, recent, q.get('focus') ?? '')
         const rows = usage.attach(session.meta?.digest_off ? shown : digest.attach(shown))
         await drainAll()
         const replying = await replyingOf(sessions)
@@ -2484,6 +2484,7 @@ export function createApp(
           session: withLastSummary([session])[0]!,
           rows,
           older,
+          older_prompts: olderPrompts(dropped),
           replying,
           queued: queue.snapshot(),
           ...(activity ? { agent: activity } : {}),

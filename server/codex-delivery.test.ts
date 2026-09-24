@@ -19,7 +19,7 @@ import { row } from './rows/aggregate.test.ts'
 import { FeedStore } from './rows/store.ts'
 import { BuildFreshness } from './local/buildFreshness.ts'
 import { Authenticator } from './auth.ts'
-import { TERMINAL_DELIVERY_WAIT_MS, TerminalReplies } from './reply/terminal.ts'
+import { QUEUE_DELIVERY_WAIT_MS, TERMINAL_DELIVERY_WAIT_MS, TerminalReplies } from './reply/terminal.ts'
 import type { Tmux } from './reply/terminal.ts'
 import type { ReplyCommand, Runner } from './reply/runner.ts'
 import type { CodexApp, CodexTurnInput } from './reply/codexAppServer.ts'
@@ -36,6 +36,8 @@ const queued: ReplyCommand[] = []
 const codexStarted: CodexTurnInput[] = []
 /** rollout が最後に書かれた時刻（ProgressReader の updated_at）。無ければ空 */
 const updatedAt = new Map<string, string>()
+/** セッションごとの rollout のパス（#474。本文で届いたかを見る）。無ければ今までどおり mtime で見る */
+const rollouts = new Map<string, string>()
 /** SAI の app-server が読み込んでいるスレッド */
 const held = new Set<string>(['H1'])
 
@@ -56,14 +58,20 @@ const progress = {
   async read(s: SessionSummary): Promise<SessionProgressResponse> {
     return { rev: '', id: s.id, active: false, steps: [], total: 0, updated_at: updatedAt.get(s.id) ?? '', context_tokens: 0 }
   },
+  async codexRollout(session: string): Promise<string> {
+    return rollouts.get(session) ?? ''
+  },
 }
+/** 届いたときに rollout に載る形（response_item の role: user） */
+const userLine = (at: number, text: string) =>
+  JSON.stringify({ timestamp: new Date(at).toISOString(), type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text }] } })
 
 before(async () => {
   dir = await mkdtemp(join(tmpdir(), 'sai-cdel-'))
   work = await mkdtemp(join(tmpdir(), 'sai-cdel-work-'))
   const now = new Date(Date.now() - 10 * 60_000)
   const codex = (session: string) => JSON.stringify(row(now, session, { agent: 'codex', repo: 'r', cwd: work, pane: '', pid: 0, session_source: 'rollout' }))
-  await writeFile(join(dir, `${localDate(now.toISOString())}.jsonl`), ['Q1', 'Q2', 'H1', 'L1'].map(codex).join('\n') + '\n')
+  await writeFile(join(dir, `${localDate(now.toISOString())}.jsonl`), ['Q1', 'Q2', 'Q3', 'Q4', 'H1', 'L1'].map(codex).join('\n') + '\n')
   // 起動時の rollout（送る前に書かれたもの）
   for (const id of ['Q1@r', 'Q2@r']) updatedAt.set(id, now.toISOString())
   const app = createApp(
@@ -124,7 +132,7 @@ test('queue に渡して 2 分たってもターンが始まらなければ、�
   const failed = (await sessions()).replying['Q1@r']?.failed
   assert.ok(failed, '届いていないので失敗として出す')
   assert.equal(failed.code, undefined)
-  assert.match(failed.tail, /受け取られていません/)
+  assert.match(failed.tail, /届いていません/)
 
   res = await post('Q1@r', 'もう一度')
   assert.equal(res.status, 202, '失敗にしたら次の返信を 409 にしない')
@@ -138,6 +146,35 @@ test('送ったあとに rollout が書かれていれば届いた扱いで、�
   const replying = (await sessions()).replying['Q2@r']
   assert.equal(replying?.text, 'やって')
   assert.equal(replying?.failed, undefined)
+})
+
+test('rollout が読めるときは、送った本文が現れたかで見る。現れていれば mtime が古くても届いた扱い（#474）', async () => {
+  offset = 0
+  assert.equal((await post('Q3@r', '432を対応して')).status, 202)
+  const path = join(work, 'rollout-Q3.jsonl')
+  await writeFile(path, userLine(clock() + 500, '432を対応して') + '\n')
+  rollouts.set('Q3', path)
+  offset = QUEUE_DELIVERY_WAIT_MS + 1_000
+  const replying = (await sessions()).replying['Q3@r']
+  assert.equal(replying?.failed, undefined, '本文が載っていれば届いた')
+})
+
+test('mtime が進んでも、送った本文が rollout に現れていなければ届いていない（#474）。30 秒で分かり、reply.log にも残る', async () => {
+  offset = 0
+  assert.equal((await post('Q4@r', 'このリポジトリを表すアイコン画像を作成して欲しい')).status, 202)
+  const path = join(work, 'rollout-Q4.jsonl')
+  // 送ったあとに何かは書かれた（mtime で見ていたころは、これで「届いた」になっていた）が、人の入力は前のターンのもの
+  await writeFile(path, [userLine(clock() - 60_000, '前の依頼'), JSON.stringify({ timestamp: new Date(clock() + 2_000).toISOString(), type: 'event_msg', payload: { type: 'token_count' } })].join('\n') + '\n')
+  rollouts.set('Q4', path)
+  updatedAt.set('Q4@r', new Date(clock() + 2_000).toISOString())
+  offset = QUEUE_DELIVERY_WAIT_MS - 1_000
+  assert.equal((await sessions()).replying['Q4@r']?.failed, undefined, '30 秒たつまでは処理中のまま')
+  offset = QUEUE_DELIVERY_WAIT_MS + 1_000
+  const failed = (await sessions()).replying['Q4@r']?.failed
+  assert.ok(failed, '端末の 2 分を待たずに失敗として出す')
+  assert.match(failed.tail, /開いている画面が無い/)
+  const log = await readFile(join(dir, 'reply.log'), 'utf-8')
+  assert.match(log, /Q4@r queue に渡した返信が届いていない: /, '画面から消えたあとも辿れる')
 })
 
 test('SAI の app-server が読み込んでいるスレッドは、lock が開いていても queue に回さない', async () => {

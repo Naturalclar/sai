@@ -154,6 +154,14 @@ export class ProgressReader {
   }
 
   /**
+   * そのセッションの Codex の rollout のパス。無ければ空（#474。queue に渡した本文が届いたかを、本文で見るため）。
+   * `session` はエンティティ ID から取った素の ID（`sessionOf()`）を渡す
+   */
+  codexRollout(session: string): Promise<string> {
+    return session ? this.findCodex(session) : Promise.resolve('')
+  }
+
+  /**
    * `<sessions>/YYYY/MM/DD/rollout-…-<session>.jsonl`。新しい日付から CODEX_DAYS 日ぶんだけ降りる
    * （使用量の `recentRollouts()` と同じ範囲。それより古い日に始めて開きっぱなしのセッションは引かない）
    */

@@ -344,20 +344,51 @@ export async function typeInto(tmux: Tmux, ps: PsFn, terminal: Terminal, agent: 
 }
 
 /**
- * 端末に打ち込んだ・開いている Codex の queue に渡した返信が、これだけ経ってもターンを始めていなければ「届いていない」とする（#329）。
+ * 端末に打ち込んだ返信が、これだけ経ってもターンを始めていなければ「届いていない」とする（#329）。
  * Claude は入力の行（UserPromptSubmit）が数秒で届き、Codex はターンを始めるとすぐ rollout に書くので、2 分あれば足りる
  */
 export const TERMINAL_DELIVERY_WAIT_MS = 2 * 60_000
+/**
+ * queue に渡した返信を確かめるまでの時間（#474）。届いたときは本文が rollout に 0.5 秒以内に載り、ターンの始まりまでの
+ * 遅れも実データで 0〜10 秒だったので、2 分も待たずに分かる。**待つほど「送ったのに何も起きない」時間が長くなる**
+ */
+export const QUEUE_DELIVERY_WAIT_MS = 30_000
 /** 届いていないと決めた返信を、失敗として画面に見せておく時間（別プロセスの返信の FAILED_TTL_MS と同じ） */
 export const TERMINAL_FAILED_TTL_MS = 2 * 60_000
+/**
+ * queue の失敗を見せておく時間（#474）。**2 分で消していたので、送って 2〜4 分の間に画面を見ていないと失敗は一度も目に入らず**、
+ * 仮バブルも行も残らない「送ったのに静かに終わった」になっていた。失敗にしたものは処理中ではない（`running()` が false）ので、
+ * 長く残しても次の返信は止めない。次に同じセッションへ送れば `start()` が置き換える
+ */
+export const QUEUE_FAILED_TTL_MS = 30 * 60_000
 
-/** どの経路で渡したか。届いていないときの文言が変わる */
+/** どの経路で渡したか。届いていないときの文言・確かめるまでの時間・失敗を見せる長さが変わる */
 export type TerminalReplyKind = 'terminal' | 'queue'
+
+const DELIVERY_WAIT: Record<TerminalReplyKind, number> = { terminal: TERMINAL_DELIVERY_WAIT_MS, queue: QUEUE_DELIVERY_WAIT_MS }
+const FAILED_TTL: Record<TerminalReplyKind, number> = { terminal: TERMINAL_FAILED_TTL_MS, queue: QUEUE_FAILED_TTL_MS }
 
 const UNDELIVERED: Record<TerminalReplyKind, string> = {
   terminal: '端末に打ち込みましたが、2 分たってもターンが始まっていません。端末の入力欄に残っていないか見てください',
   queue:
-    '開いている Codex に渡しましたが、2 分たっても受け取られていません。Codex のキューに残っていて、次にそのスレッドを開いたときに流れることがあります。端末でそのセッションを開いて送るか、Codex を閉じてから送り直してください',
+    '開いている Codex に渡しましたが、そのスレッドに届いていません。スレッドを握っている Codex（VS Code 拡張・ChatGPT アプリの裏で動く共有の app-server など）で、いまそのスレッドを開いている画面が無いと、キューに渡しても流れません。そのアプリか端末でスレッドを開いてから送り直してください（開いたときに遅れて流れることもあります）',
+}
+
+/** `checkDelivery()` に渡すもの。どの返信について聞いているか */
+export interface DeliveryQuery {
+  since: string
+  kind: TerminalReplyKind
+  text: string
+}
+
+/** `checkDelivery()` の聞き先の答え。true = 届いた、false = 届いていない、文字列 = 届いていない（理由つき） */
+export type DeliveryAnswer = boolean | string
+
+/** 届いていないと決めたもの（呼ぶ側が reply.log に残すため） */
+export interface Undelivered {
+  id: string
+  kind: TerminalReplyKind
+  reason: string
 }
 
 interface TerminalEntry {
@@ -402,32 +433,38 @@ export class TerminalReplies {
       // 行で終わったかの判定は shared/turnSettled.ts に 1 つだけ（ProcessRunner.settle() と共用。#375）
       if (settledByRow(entry.replying.since, lastTurn(id))) this.active.delete(id)
       else if (entry.failedAt !== undefined) {
-        if (this.now() - entry.failedAt > TERMINAL_FAILED_TTL_MS) this.active.delete(id)
+        if (this.now() - entry.failedAt > FAILED_TTL[entry.kind]) this.active.delete(id)
       } else if (this.now() - since > TERMINAL_REPLY_TTL_MS) this.active.delete(id)
     }
   }
   /**
-   * 待ち（TERMINAL_DELIVERY_WAIT_MS）を過ぎてまだ確かめていない返信について、ターンが始まったかを `started` に聞く。
-   * 始まっていなければ失敗にする。`started` は材料が無ければ true を返す（届いていないと決めつけない）。投げたら届いた扱い
+   * 待ち（経路ごと。端末は TERMINAL_DELIVERY_WAIT_MS、queue は QUEUE_DELIVERY_WAIT_MS）を過ぎてまだ確かめていない返信について、
+   * 届いたかを `started` に聞く。届いていなければ失敗にし、**新しく失敗にしたものを返す**（呼ぶ側が reply.log に残す。
+   * 画面から消えたあとも辿れるように）。`started` は材料が無ければ true を返す（届いていないと決めつけない）。投げたら届いた扱い。
+   * 文字列を返したら、それを理由として経路の文言の前に付ける
    */
-  async checkDelivery(started: (id: string, since: string) => Promise<boolean>): Promise<void> {
+  async checkDelivery(started: (id: string, query: DeliveryQuery) => Promise<DeliveryAnswer>): Promise<Undelivered[]> {
+    const failed: Undelivered[] = []
     for (const [id, entry] of [...this.active]) {
       if (entry.delivered || entry.failedAt !== undefined) continue
-      if (this.now() - Date.parse(entry.replying.since) < TERMINAL_DELIVERY_WAIT_MS) continue
-      let ok: boolean
+      if (this.now() - Date.parse(entry.replying.since) < DELIVERY_WAIT[entry.kind]) continue
+      let answer: DeliveryAnswer
       try {
-        ok = await started(id, entry.replying.since)
+        answer = await started(id, { since: entry.replying.since, kind: entry.kind, text: entry.replying.text })
       } catch {
-        ok = true
+        answer = true
       }
       // 聞いている間に消えた・送り直したものは触らない
       if (this.active.get(id) !== entry) continue
-      if (ok) {
+      if (answer === true) {
         entry.delivered = true
         continue
       }
-      entry.replying = { ...entry.replying, failed: { tail: UNDELIVERED[entry.kind] } }
+      const reason = typeof answer === 'string' && answer ? `${answer} ${UNDELIVERED[entry.kind]}` : UNDELIVERED[entry.kind]
+      entry.replying = { ...entry.replying, failed: { tail: reason } }
       entry.failedAt = this.now()
+      failed.push({ id, kind: entry.kind, reason })
     }
+    return failed
   }
 }

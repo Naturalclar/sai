@@ -64,7 +64,7 @@ import { historyKey, ICON_HISTORY_DIR, ICON_HISTORY_FILE, IconHistory, isHistory
 import { alwaysAllowRule, ruleLabel } from '../shared/approvals.ts'
 import { Approvals, WAIT_MS } from './approvals/approvals.ts'
 import { BuildFreshness } from './local/buildFreshness.ts'
-import { codexQueueCommand, codexWriterActive, runCodexQueue } from './reply/codex.ts'
+import { codexLockHolders, codexQueueCommand, codexWriterActive, isAppServer, runCodexQueue } from './reply/codex.ts'
 import type { CodexQueue } from './reply/codex.ts'
 import { CodexAppServer } from './reply/codexAppServer.ts'
 import type { CodexApp } from './reply/codexAppServer.ts'
@@ -126,7 +126,8 @@ import type { McpTool } from './mcp/protocol.ts'
 import { McpSendLimiter } from './mcp/sendLimit.ts'
 import { SkillStore } from './local/skills.ts'
 import type { Skill } from '../shared/skills.ts'
-import { claudeProjectsDir, codexSessionsDir, UsageStore } from './local/usage.ts'
+import { claudeProjectsDir, codexSessionsDir, tailLines, UsageStore } from './local/usage.ts'
+import { QUEUE_ROLLOUT_TAIL_BYTES, queuedTextArrived } from '../shared/codexQueue.ts'
 import { ProgressReader, sessionOf } from './local/progress.ts'
 import { agentListFromEnv, type AgentList } from './local/claudeAgents.ts'
 import { isRemoteHost } from '../shared/host.ts'
@@ -135,7 +136,7 @@ import { imageHeaders, imageTable, readSessionImage } from './local/images.ts'
 import { searchRows } from './rows/search.ts'
 import { searchWords } from '../shared/search.ts'
 import { alive, isDescendant, parsePs, RealTmux, realPs, TerminalBusy, TerminalGone, TerminalReplies, typeInto } from './reply/terminal.ts'
-import type { PsFn, Tmux } from './reply/terminal.ts'
+import type { DeliveryAnswer, DeliveryQuery, PsFn, Tmux } from './reply/terminal.ts'
 import type { Runner } from './reply/runner.ts'
 import { Authenticator, tailscaleWhois } from './auth.ts'
 import type { Identity } from './auth.ts'
@@ -478,9 +479,22 @@ export function createApp(
    * Claude は入力の行（UserPromptSubmit → `last_user_ts`）か transcript、Codex は rollout が送ったあとに書かれたかで見る。
    * **材料が無い（一覧に居ない・別のマシン・OpenCode・ファイルが見つからない）ときは届いた扱い**（届いていないと決めつけない）
    */
-  const typedStarted = async (sessions: SessionSummary[], id: string, since: string): Promise<boolean> => {
+  const typedStarted = async (sessions: SessionSummary[], id: string, query: DeliveryQuery): Promise<DeliveryAnswer> => {
+    const { since } = query
     const s = sessions.find((x) => x.id === id)
     if (!s || isRemoteHost(s.host, selfHost()) || (s.agent !== 'claude' && s.agent !== 'codex')) return true
+    // queue に渡した Codex への返信は、**送った本文そのものが rollout に現れたか**で見る（#474）。mtime は「何か書かれた」で
+    // しかなく、受け取り手のいない queue でも別の書き込みで進みうる。rollout が見つからなければ下の mtime の判定に落ちる
+    if (s.agent === 'codex' && query.kind === 'queue') {
+      const raw = sessionOf(s)
+      const rollout = raw ? await progress.codexRollout?.(raw) : ''
+      if (rollout) {
+        if (queuedTextArrived(await tailLines(rollout, QUEUE_ROLLOUT_TAIL_BYTES), query.text, Date.parse(since))) return true
+        const holders = await codexLockHolders(raw)
+        const shared = holders.find((h) => isAppServer(h.command))
+        return shared ? `このスレッドはいま tmux の外の共有の Codex app-server（pid ${shared.pid}）が握っています。` : false
+      }
+    }
     // 行の ts は秒までなので、秒に丸めて比べる
     const at = Math.floor(Date.parse(since) / 1000) * 1000
     if (s.agent === 'claude' && s.last_user_ts && Date.parse(s.last_user_ts) >= at) return true
@@ -500,7 +514,10 @@ export function createApp(
     // 答えを返したのにプロセスが終わらない CLI（実測: `opencode run -s`）は、行が届いた時点で終わりにする（#375）。
     // 当てるのは OpenCode だけ（Claude の `-p` と SAI 管理の Codex は普通に終わるので、挙動を変えない）
     for (const id of run.settle?.((rid) => opencodeTurnOf(sessions, rid)) ?? []) await drain(id)
-    await typed.checkDelivery((id, since) => typedStarted(sessions, id, since))
+    for (const miss of await typed.checkDelivery((id, query) => typedStarted(sessions, id, query))) {
+      // 画面の失敗は時間で消えるので、届かなかったことは reply.log にも残す（#474。あとから辿れるように）
+      await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${miss.id} ${miss.kind === 'queue' ? 'queue に渡した返信が届いていない' : '端末に打ち込んだ返信でターンが始まっていない'}: ${miss.reason}\n`).catch(() => {})
+    }
     // OpenCode のサーバ経路も、行が届いた時点で終わりにする（子プロセスが無いので exit は来ない。#382）
     for (const id of opencodeApp.settle((rid) => opencodeTurnOf(sessions, rid))) await drain(id)
     return { ...typed.snapshot(), ...run.snapshot(), ...codexApp.replying(), ...opencodeApp.replying() }

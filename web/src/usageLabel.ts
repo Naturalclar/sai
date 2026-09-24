@@ -17,13 +17,19 @@ export function shortTokens(n: number): string {
 
 const withCommas = (n: number): string => n.toLocaleString('en-US')
 
-/** 秒。1 分を超えたら `1 分 5 秒` */
+/**
+ * 秒。1 分を超えたら `1 分 5 秒`。**先に秒を丸めてから分と秒に割る**（#436）。
+ * 分を切り捨て・秒を四捨五入と別々に丸めていたころは、繰り上がりが片方にしか効かず
+ * 59.5 秒〜60 秒の境目で `1 分 60 秒`（119,600ms）や `60 秒`（59,600ms）になっていた
+ */
 function duration(ms: number): string {
   if (ms <= 0) return '0 秒'
   const sec = ms / 1000
-  if (sec < 60) return `${sec < 10 ? (Math.round(sec * 10) / 10).toFixed(1) : String(Math.round(sec))} 秒`
-  const m = Math.floor(sec / 60)
-  return `${m} 分 ${Math.round(sec - m * 60)} 秒`
+  // 10 秒未満だけ 0.1 秒まで出す（短いターンは秒だけだと 0 秒に見える）
+  if (sec < 10) return `${(Math.round(sec * 10) / 10).toFixed(1)} 秒`
+  const whole = Math.round(sec)
+  if (whole < 60) return `${whole} 秒`
+  return `${Math.floor(whole / 60)} 分 ${whole % 60} 秒`
 }
 
 /** タグに出す 1 行。断られたツールがあれば添える（#387 の狙いのひとつ。返信が空振りした理由になる） */

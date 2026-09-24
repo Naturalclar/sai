@@ -127,7 +127,7 @@ import { McpSendLimiter } from './mcp/sendLimit.ts'
 import { SkillStore } from './local/skills.ts'
 import type { Skill } from '../shared/skills.ts'
 import { claudeProjectsDir, codexSessionsDir, tailLines, UsageStore } from './local/usage.ts'
-import { QUEUE_ROLLOUT_TAIL_BYTES, queuedTextArrived } from '../shared/codexQueue.ts'
+import { QUEUE_ROLLOUT_TAIL_BYTES, queuedTextArrived, turnInProgress } from '../shared/codexQueue.ts'
 import { ProgressReader, sessionOf } from './local/progress.ts'
 import { agentListFromEnv, type AgentList } from './local/claudeAgents.ts'
 import { isRemoteHost } from '../shared/host.ts'
@@ -489,7 +489,10 @@ export function createApp(
       const raw = sessionOf(s)
       const rollout = raw ? await progress.codexRollout?.(raw) : ''
       if (rollout) {
-        if (queuedTextArrived(await tailLines(rollout, QUEUE_ROLLOUT_TAIL_BYTES), query.text, Date.parse(since))) return true
+        const lines = await tailLines(rollout, QUEUE_ROLLOUT_TAIL_BYTES)
+        if (queuedTextArrived(lines, query.text, Date.parse(since))) return true
+        // 宛先がターンの途中なら、本文はそのターンが終わってから流れるかもしれない。決めずに次で聞き直す（#474 のレビュー）
+        if (turnInProgress(lines, Date.now())) return null
         const holders = await codexLockHolders(raw)
         const shared = holders.find((h) => isAppServer(h.command))
         return shared ? `このスレッドはいま tmux の外の共有の Codex app-server（pid ${shared.pid}）が握っています。` : false

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { QUEUED_KEY_CHARS, queuedKey, queuedTextArrived } from './codexQueue.ts'
+import { QUEUE_BUSY_STALE_MS, QUEUED_KEY_CHARS, queuedKey, queuedTextArrived, turnInProgress } from './codexQueue.ts'
 
 const SINCE = Date.parse('2026-09-22T04:37:17.000Z')
 const line = (timestamp: string, type: string, payload: unknown) => JSON.stringify({ timestamp, type, payload })
@@ -47,4 +47,29 @@ test('queuedTextArrived: 壊れた行・時刻の無い行は飛ばす。空の�
   assert.equal(queuedTextArrived(lines, 'x', SINCE), false)
   assert.equal(queuedKey('   '), '')
   assert.equal(queuedTextArrived([userItem('2026-09-22T04:37:18.000Z', 'なんでも')], '  ', SINCE), false)
+})
+
+const event = (timestamp: string, type: string) => line(timestamp, 'event_msg', { type })
+const NOW = Date.parse('2026-09-24T04:40:00.000Z')
+
+test('turnInProgress: 最後の印が task_started で書き込みが新しければ、ターンの途中', () => {
+  const lines = [event('2026-09-24T04:30:00.000Z', 'task_complete'), event('2026-09-24T04:39:00.000Z', 'task_started')]
+  assert.equal(turnInProgress(lines, NOW), true)
+})
+
+test('turnInProgress: task_complete / turn_aborted で閉じていれば途中ではない', () => {
+  assert.equal(turnInProgress([event('2026-09-24T04:38:00.000Z', 'task_started'), event('2026-09-24T04:39:00.000Z', 'task_complete')], NOW), false)
+  // 人が止めたターンは task_complete を書かない（今日の 01a0a999 の最後の行がこれ）
+  assert.equal(turnInProgress([event('2026-09-24T04:38:00.000Z', 'task_started'), event('2026-09-24T04:39:00.000Z', 'turn_aborted')], NOW), false)
+})
+
+test('turnInProgress: 閉じる印を書かずに止まったターンでも、書き込みが古ければ途中とみなさない', () => {
+  const at = new Date(NOW - QUEUE_BUSY_STALE_MS - 1_000).toISOString()
+  assert.equal(turnInProgress([event(at, 'task_started')], NOW), false)
+})
+
+test('turnInProgress: 印が読んだ範囲に無くても、書き込みが続いていれば途中（長いターンで始まりが外に出た）', () => {
+  const lines = [line('2026-09-24T04:39:50.000Z', 'response_item', { type: 'function_call_output' })]
+  assert.equal(turnInProgress(lines, NOW), true)
+  assert.equal(turnInProgress([], NOW), false, '何も読めなければ途中ではない')
 })

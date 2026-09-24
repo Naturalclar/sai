@@ -67,3 +67,45 @@ export function queuedTextArrived(lines: readonly string[], text: string, sinceM
   }
   return false
 }
+
+/**
+ * ターンが途中だと見なすのをやめるまでの、最後の書き込みからの時間。閉じる印を書かずに止まったターン（端末の Esc など）を
+ * いつまでも「回っている」と読まないため（`shared/progress.ts` の `progressActive()` の 10 分と同じ考え方）
+ */
+export const QUEUE_BUSY_STALE_MS = 10 * 60_000
+
+/** ターンを閉じる印。`turn_aborted` も閉じる（人が止めたターンは `task_complete` を書かない。実データで 8 件） */
+const TURN_CLOSED = new Set(['task_complete', 'turn_aborted'])
+
+/**
+ * そのスレッドがいまターンの途中か（#474 のレビュー）。**途中なら queue に渡した本文はまだ載っていなくてよい**:
+ * 回っているターンが終わってから流れるなら、30 秒で「届いていない」と決めると誤りで、言われたとおり送り直すと
+ * 同じ指示が 2 回走る。**実データには「ターン中に queue で送った」回が 1 件も無く、待たされるかは確かめていない**ので、
+ * 途中なら判定を保留する側に倒す（すぐ載るならこの保留はほとんど効かない）。
+ *
+ * 途中とみなすのは、末尾で**最後のターンの印が `task_started`**のとき。末尾に印が 1 つも無い（長いターンで始まりが
+ * 読んだ範囲の外に出た）ときも、書き込みが続いていれば途中とみなす。どちらも最後の書き込みが `QUEUE_BUSY_STALE_MS`
+ * より古ければ途中とみなさない
+ */
+export function turnInProgress(lines: readonly string[], nowMs: number): boolean {
+  let last: 'open' | 'closed' | null = null
+  let latest = Number.NaN
+  for (const line of lines) {
+    if (!line.trim()) continue
+    let entry: Record<string, unknown> | null
+    try {
+      entry = record(JSON.parse(line))
+    } catch {
+      continue
+    }
+    if (!entry) continue
+    const at = typeof entry.timestamp === 'string' ? Date.parse(entry.timestamp) : Number.NaN
+    if (!Number.isNaN(at)) latest = at
+    if (entry.type !== 'event_msg') continue
+    const kind = record(entry.payload)?.type
+    if (kind === 'task_started') last = 'open'
+    else if (typeof kind === 'string' && TURN_CLOSED.has(kind)) last = 'closed'
+  }
+  if (Number.isNaN(latest) || nowMs - latest > QUEUE_BUSY_STALE_MS) return false
+  return last !== 'closed'
+}

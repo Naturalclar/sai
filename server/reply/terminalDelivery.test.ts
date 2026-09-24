@@ -72,6 +72,20 @@ test('queue の失敗は 2 分では消さない（#474。消えると「送っ�
   assert.equal(r.snapshot()['Y@r'], undefined, 'いつまでも残しはしない')
 })
 
+test('聞き先が null（まだ決められない）なら、届いたとも失敗ともせず次に聞き直す', async () => {
+  let now = T0
+  const r = new TerminalReplies(() => now)
+  r.start('W@r', 'やって', 'queue')
+  now += QUEUE_DELIVERY_WAIT_MS
+  let asked = 0
+  assert.deepEqual(await r.checkDelivery(async () => (asked++, null)), [])
+  assert.equal(r.snapshot()['W@r']?.failed, undefined, '失敗にしない（宛先がターンの途中なら、そのあと流れるかもしれない）')
+  assert.equal(r.running('W@r'), true, '処理中のまま')
+  const missed = await r.checkDelivery(async () => (asked++, false))
+  assert.equal(asked, 2, '届いたと決めていないので、次のポーリングでまた聞く')
+  assert.equal(missed.length, 1, 'ターンが閉じて届いていなければ、そこで失敗にする')
+})
+
 test('聞き先が理由を返したら、経路の文言の前に付ける', async () => {
   let now = T0
   const r = new TerminalReplies(() => now)

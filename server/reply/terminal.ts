@@ -381,8 +381,11 @@ export interface DeliveryQuery {
   text: string
 }
 
-/** `checkDelivery()` の聞き先の答え。true = 届いた、false = 届いていない、文字列 = 届いていない（理由つき） */
-export type DeliveryAnswer = boolean | string
+/**
+ * `checkDelivery()` の聞き先の答え。true = 届いた、false = 届いていない、文字列 = 届いていない（理由つき）、
+ * null = **まだ決められない**（次のポーリングで聞き直す。queue の宛先がターンの途中など。#474）
+ */
+export type DeliveryAnswer = boolean | string | null
 
 /** 届いていないと決めたもの（呼ぶ側が reply.log に残すため） */
 export interface Undelivered {
@@ -456,6 +459,8 @@ export class TerminalReplies {
       }
       // 聞いている間に消えた・送り直したものは触らない
       if (this.active.get(id) !== entry) continue
+      // まだ決められない: 届いたとも届いていないともせず、次に聞き直す（処理中のまま。TTL は settle() が見る）
+      if (answer === null) continue
       if (answer === true) {
         entry.delivered = true
         continue

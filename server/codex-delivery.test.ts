@@ -71,7 +71,7 @@ before(async () => {
   work = await mkdtemp(join(tmpdir(), 'sai-cdel-work-'))
   const now = new Date(Date.now() - 10 * 60_000)
   const codex = (session: string) => JSON.stringify(row(now, session, { agent: 'codex', repo: 'r', cwd: work, pane: '', pid: 0, session_source: 'rollout' }))
-  await writeFile(join(dir, `${localDate(now.toISOString())}.jsonl`), ['Q1', 'Q2', 'Q3', 'Q4', 'H1', 'L1'].map(codex).join('\n') + '\n')
+  await writeFile(join(dir, `${localDate(now.toISOString())}.jsonl`), ['Q1', 'Q2', 'Q3', 'Q4', 'Q5', 'H1', 'L1'].map(codex).join('\n') + '\n')
   // 起動時の rollout（送る前に書かれたもの）
   for (const id of ['Q1@r', 'Q2@r']) updatedAt.set(id, now.toISOString())
   const app = createApp(
@@ -163,8 +163,10 @@ test('mtime が進んでも、送った本文が rollout に現れていなけ�
   offset = 0
   assert.equal((await post('Q4@r', 'このリポジトリを表すアイコン画像を作成して欲しい')).status, 202)
   const path = join(work, 'rollout-Q4.jsonl')
-  // 送ったあとに何かは書かれた（mtime で見ていたころは、これで「届いた」になっていた）が、人の入力は前のターンのもの
-  await writeFile(path, [userLine(clock() - 60_000, '前の依頼'), JSON.stringify({ timestamp: new Date(clock() + 2_000).toISOString(), type: 'event_msg', payload: { type: 'token_count' } })].join('\n') + '\n')
+  // 送ったあとに何かは書かれた（mtime で見ていたころは、これで「届いた」になっていた）が、人の入力は前のターンのもので、
+  // そのターンは閉じている（手の空いたスレッド。本物は前のターンの task_complete が末尾に残る）
+  const ev = (at: number, type: string) => JSON.stringify({ timestamp: new Date(at).toISOString(), type: 'event_msg', payload: { type } })
+  await writeFile(path, [ev(clock() - 61_000, 'task_started'), userLine(clock() - 60_000, '前の依頼'), ev(clock() - 50_000, 'task_complete'), ev(clock() + 2_000, 'token_count')].join('\n') + '\n')
   rollouts.set('Q4', path)
   updatedAt.set('Q4@r', new Date(clock() + 2_000).toISOString())
   offset = QUEUE_DELIVERY_WAIT_MS - 1_000
@@ -175,6 +177,21 @@ test('mtime が進んでも、送った本文が rollout に現れていなけ�
   assert.match(failed.tail, /開いている画面が無い/)
   const log = await readFile(join(dir, 'reply.log'), 'utf-8')
   assert.match(log, /Q4@r queue に渡した返信が届いていない: /, '画面から消えたあとも辿れる')
+})
+
+test('宛先がターンの途中なら、30 秒たっても失敗にしない。ターンが閉じて本文が無ければそこで失敗（#474 のレビュー）', async () => {
+  offset = 0
+  assert.equal((await post('Q5@r', 'ついでにこれも')).status, 202)
+  const path = join(work, 'rollout-Q5.jsonl')
+  const ev = (at: number, type: string) => JSON.stringify({ timestamp: new Date(at).toISOString(), type: 'event_msg', payload: { type } })
+  // 送る前から長いターンが回っている（queue の本文は、そのターンが終わってから流れるかもしれない）
+  await writeFile(path, [ev(Date.now() - 60_000, 'task_started'), ev(Date.now(), 'token_count')].join('\n') + '\n')
+  rollouts.set('Q5', path)
+  offset = QUEUE_DELIVERY_WAIT_MS + 1_000
+  assert.equal((await sessions()).replying['Q5@r']?.failed, undefined, 'ターンの途中は決めない（送り直させると同じ指示が 2 回走る）')
+  // ターンが閉じたのに本文が載っていない → ここで届いていないと分かる
+  await writeFile(path, [ev(Date.now() - 60_000, 'task_started'), ev(Date.now(), 'task_complete')].join('\n') + '\n')
+  assert.ok((await sessions()).replying['Q5@r']?.failed, 'ターンが閉じても載っていなければ失敗')
 })
 
 test('SAI の app-server が読み込んでいるスレッドは、lock が開いていても queue に回さない', async () => {

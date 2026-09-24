@@ -1,7 +1,7 @@
 // #418。`claude agents --json` を読むところと、聞けなかったときに黙る形
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { chmod, mkdtemp, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ClaudeAgents, NoAgents, agentListFromEnv, busyIn, parseAgents } from './claudeAgents.ts'
@@ -49,6 +49,31 @@ test('ClaudeAgents: busy を引く。同じ答えは少しのあいだ覚える'
   assert.equal(await agents.busy('S1'), true)
   assert.equal(await agents.busy('S9'), false, '一覧に無ければ false（「聞けたが回っていない」）')
   assert.equal(await agents.busy(''), undefined, 'セッション ID が無ければ聞きに行かない')
+})
+
+test('ClaudeAgents: 1 本目が返る前の呼び出しは、同じ 1 本を待つ（#433）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-agents-'))
+  const bin = join(dir, 'claude')
+  const count = join(dir, 'count')
+  // 呼ばれるたびに 1 行足し、すぐには返らない（`claude agents --json` は即答ではない）
+  await writeFile(bin, `#!/bin/sh\necho x >> '${count}'\nsleep 0.3\necho '${one({ status: 'busy' })}'\n`)
+  await chmod(bin, 0o755)
+  const agents = new ClaudeAgents(bin)
+  const got = await Promise.all(['S1', 'S1', 'S9', 'S1', 'S9'].map((id) => agents.busy(id)))
+  assert.deepEqual(got, [true, true, false, true, false])
+  assert.equal((await readFile(count, 'utf8')).trim().split('\n').length, 1, '5 本同時でも claude は 1 回')
+})
+
+test('ClaudeAgents: 聞けなかった 1 本は覚えず、次の呼び出しでまた試す', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-agents-'))
+  const bin = join(dir, 'claude')
+  const count = join(dir, 'count')
+  await writeFile(bin, `#!/bin/sh\necho x >> '${count}'\nexit 1\n`)
+  await chmod(bin, 0o755)
+  const agents = new ClaudeAgents(bin)
+  assert.equal(await agents.busy('S1'), undefined)
+  assert.equal(await agents.busy('S1'), undefined)
+  assert.equal((await readFile(count, 'utf8')).trim().split('\n').length, 2, '失敗は TTL で覚えない')
 })
 
 test('ClaudeAgents: 聞けなければ undefined（false にしない）', async () => {

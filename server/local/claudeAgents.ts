@@ -91,6 +91,11 @@ export class ClaudeAgents implements AgentList {
   private readonly timeout: number
   private at = 0
   private agents: ClaudeAgent[] | null = null
+  /**
+   * 走っている 1 本（#433）。TTL が効くのは 1 本目が返ってからなので、それまでに来た呼び出しは
+   * **これを待つ**（無いと、処理中のバブルが N 個あれば 3 秒ごとに `claude` が N プロセス起きる）。`CodexPanes.scanning` と同じ形
+   */
+  private listing: Promise<ClaudeAgent[] | null> | null = null
 
   /** 実行ファイルは既定でサーバの PATH の `claude`（#288）。テストは偽物を渡す */
   constructor(bin: string = 'claude', ttl = AGENTS_CACHE_MS, timeout = AGENTS_TIMEOUT_MS) {
@@ -106,8 +111,15 @@ export class ClaudeAgents implements AgentList {
   }
 
   /** 生きているセッションの一覧。**セッションごとではなく全体で 1 回**叩いて、少しのあいだ覚える */
-  private async list(): Promise<ClaudeAgent[] | null> {
-    if (this.agents !== null && Date.now() - this.at < this.ttl) return this.agents
+  private list(): Promise<ClaudeAgent[] | null> {
+    if (this.agents !== null && Date.now() - this.at < this.ttl) return Promise.resolve(this.agents)
+    this.listing ??= this.listNow().finally(() => {
+      this.listing = null
+    })
+    return this.listing
+  }
+
+  private async listNow(): Promise<ClaudeAgent[] | null> {
     const parsed = parseAgents(await this.run())
     // 聞けなかったときは覚えない（次のポーリングでまた試す）
     if (parsed !== null) {

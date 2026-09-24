@@ -22,7 +22,7 @@ const one = (over: Record<string, unknown> = {}) =>
 test('parseAgents: 読めた分だけ返す。読めなければ null（空の配列とは別）', () => {
   const got = parseAgents(one({ status: 'busy' }))
   assert.equal(got?.length, 1)
-  assert.deepEqual(got?.[0], { sessionId: 'S1', id: '', kind: 'interactive', status: 'busy', cwd: '/w', pid: 1, name: 'かなで' })
+  assert.deepEqual(got?.[0], { sessionId: 'S1', id: '', kind: 'interactive', status: 'busy', state: '', cwd: '/w', pid: 1, name: 'かなで' })
   assert.deepEqual(parseAgents('[]'), [], '生きているセッションが 0 件（聞けている）')
   assert.equal(parseAgents(''), null, '空は「聞けなかった」')
   assert.equal(parseAgents('not json'), null)
@@ -97,4 +97,16 @@ test('ClaudeAgents: --all を知らない版では付けずに引き直す（#46
   await writeFile(bin, `#!/bin/sh\n[ "$3" = --all ] && exit 1\n[ "$1" = agents ] && [ "$2" = --json ] || exit 9\necho '${one({ status: 'busy' })}'\n`)
   await chmod(bin, 0o755)
   assert.equal(await new ClaudeAgents(bin).busy('S1'), true)
+})
+
+test('backgroundLive: 版で持つキーが違うので両方見る（#462。2.1.278 は state、2.1.276 は status）', () => {
+  const bg = (o: Record<string, unknown>) => parseAgents(JSON.stringify([{ sessionId: 'S1', kind: 'background', id: '5738db0d', ...o }]))![0]!
+  // 2.1.278（実測）: バックグラウンドの行は state だけを持ち、status も pid も無い
+  assert.equal(backgroundLive(bg({ state: 'working' })), true)
+  assert.equal(backgroundLive(bg({ state: 'stopped' })), false, '止めたばかり')
+  assert.equal(backgroundLive(bg({ state: 'done' })), false, '終わっている')
+  // 2.1.276: status（busy / idle / waiting）で、止めたものは空
+  assert.equal(backgroundLive(bg({ status: 'idle' })), true)
+  assert.equal(backgroundLive(bg({ status: 'waiting' })), true)
+  assert.equal(backgroundLive(bg({ status: '' })), false)
 })

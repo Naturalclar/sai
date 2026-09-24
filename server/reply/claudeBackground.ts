@@ -3,7 +3,7 @@
 // 始めたセッションは Claude Code のデーモンの中で動くので、端末で `claude attach <短い ID>` すれば TUI として開ける
 // （SAI の `-p` で始めたセッションは、終わったあとに `claude --resume` で開き直すしかなかった）。
 //
-// 叩くのは `claude --bg …`（`backgroundSessionCommand()`）・`claude agents --json --all --cwd <cwd>`・`claude stop <短い ID>` の 3 形だけ。
+// 叩くのは `claude --bg …`（`backgroundSessionCommand()`）と `claude agents --json --all --cwd <cwd>` の 2 形だけ（止めるのは端末で）。
 // 実行ファイルはサーバの PATH の `claude`（#288）。テストは偽物を渡す
 import { execFile } from 'node:child_process'
 import { parseAgents } from '../local/claudeAgents.ts'
@@ -31,11 +31,14 @@ export interface BackgroundStarted {
   sessionId: string
 }
 
-/** 始める・止める口。テストでは差し替える */
+/**
+ * 始める口。テストでは差し替える。
+ *
+ * **止める口は持たない**（#462 のレビュー。2026-09-24 に実測）: `claude stop` は **attach している端末を
+ * その場で閉じる**（`Session … has exited.`）ので、SAI から黙って撃つと人の画面を落とす。止めるのは端末で
+ */
 export interface BackgroundSessions {
   start(cmd: ReplyCommand): Promise<BackgroundStarted>
-  /** 生きている `claude --bg` のセッションを止める（会話は残るので `claude attach` や `--resume` で続けられる） */
-  stop(short: string, cwd: string): Promise<void>
 }
 
 /**
@@ -79,9 +82,5 @@ export class ClaudeBackground implements BackgroundSessions {
     }
     // **セッションはもう動いている**ので、短い ID を添える（無いと「始められなかった」と読んで同じ指示で二重に始める）
     throw new BackgroundLookupError(short)
-  }
-
-  async stop(short: string, cwd: string): Promise<void> {
-    await run(this.bin, ['stop', short], cwd, 10_000)
   }
 }

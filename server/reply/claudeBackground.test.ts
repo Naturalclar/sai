@@ -31,14 +31,14 @@ async function fakeClaude(): Promise<{ bin: string; dir: string }> {
   return { bin, dir }
 }
 
-test('ClaudeBackground: 始めて、短い ID から UUID を引く。止めるのは短い ID で', async () => {
+test('ClaudeBackground: 始めて、短い ID から UUID を引く（止める口は持たない。#462）', async () => {
   const { bin, dir } = await fakeClaude()
   const bg = new ClaudeBackground(bin)
   const got = await bg.start({ bin: 'claude', args: ['--bg', '--', 'やって'], cwd: dir, text: 'やって' })
   assert.deepEqual(got, { short: '5738db0d', sessionId: '5738db0d-b4e1-4396-a5b5-6220d4530861' })
-  await bg.stop('5738db0d', dir)
   const calls = (await readFile(join(dir, 'calls'), 'utf-8')).trim().split('\n')
-  assert.deepEqual(calls, ['--bg -- やって', `agents --json --all --cwd ${dir}`, 'stop 5738db0d'])
+  // **`stop` は呼べない**（attach している端末をその場で閉じるので、SAI からは撃たない）
+  assert.deepEqual(calls, ['--bg -- やって', `agents --json --all --cwd ${dir}`])
 })
 
 test('ClaudeBackground: claude が無い・出力が読めなければ投げる', async () => {

@@ -981,7 +981,11 @@ export interface BackgroundSession {
   attach: string
   /** デーモンの中でいま生きているか */
   live: boolean
-  /** `busy` / `idle` / `waiting`（許可・質問で止まっている）。止めたものは空 */
+  /**
+   * CLI が返す状態をそのまま（版で語が違う。#462）。2.1.278 は `working` / `stopped` / `done`、
+   * 2.1.276 は `busy` / `idle` / `waiting` で、止めたものは空。
+   * **`live` と違って、いまターンが回っているかは分からない**（2.1.278 の `working` は「生きている」だけ）
+   */
   status: string
 }
 

@@ -128,7 +128,7 @@ import { SkillStore } from './local/skills.ts'
 import type { Skill } from '../shared/skills.ts'
 import { claudeProjectsDir, codexSessionsDir, UsageStore } from './local/usage.ts'
 import { ProgressReader, sessionOf } from './local/progress.ts'
-import { agentListFromEnv, backgroundLive, type AgentList } from './local/claudeAgents.ts'
+import { agentListFromEnv, backgroundLive, type AgentList, type ClaudeAgent } from './local/claudeAgents.ts'
 import { isRemoteHost } from '../shared/host.ts'
 import { IMAGES_SEGMENT } from '../shared/images.ts'
 import { imageHeaders, imageTable, readSessionImage } from './local/images.ts'
@@ -1129,13 +1129,26 @@ export function createApp(
       await appendFile(log, '足せなかった（ターンが終わったか、別のターンになった）。今までどおりの経路へ\n').catch(() => {})
     }
     // `claude --bg` で動いているセッション（#462）。**同じ ID を `-p --resume` すると CLI が断り、
-    // `--bg --resume` は別のセッションに写してしまう**（実測）ので、回っていれば待ち、止まっていれば止めてから `-p` で続ける。
-    // 止めても会話は残り、`claude attach` で起こし直せる。返信の直前なので覚えている一覧は使わない
-    const bg = session.agent === 'claude' && claudeAgents.background ? await claudeAgents.background(raw, true) : null
+    // `--bg --resume` は別のセッションに写してしまう**（実測）ので、生きている間は送らずに端末へ回す。
+    //
+    // **SAI からは止めない**（レビューの指摘。2026-09-24 に実測）: `claude stop` は **attach している端末を
+    // その場で閉じる**（`Session … has exited.` が出て TUI が終わる。打ちかけがあれば消える）。しかも
+    // 2.1.278 の `claude agents` はバックグラウンドの行に `state`（`working` / `stopped` / `done`）しか
+    // 持たず、**いまターンが回っているかは分からない**ので、「入力待ちだから止めてよい」も決められない。
+    // 人のターンを画面から殺さない（#384 と同じ線引き）方に倒す。
+    //
+    // **一覧はまず覚えているものを見る**（返信のたびに `claude agents` を起こさない。実測 0.15〜0.20 秒で、
+    // ここは端末に打ち込む経路より手前なので普通の返信まで遅くなる）。バックグラウンドの行があるときだけ、
+    // 状態が古いと困るので引き直す
+    const bgOf = async (): Promise<ClaudeAgent | null | undefined> => {
+      if (session.agent !== 'claude' || !claudeAgents.background) return null
+      const cached = await claudeAgents.background(raw)
+      return cached ? await claudeAgents.background(raw, true) : cached
+    }
+    const bg = await bgOf()
     const bgLive = bg && backgroundLive(bg) ? bg : null
-    const bgBusy = bgLive !== null && bgLive.status !== 'idle'
     // 別プロセス（-p / app-server）のターンが動いているか、いま起動している最中か
-    const busy = run.running(id) || codexApp.running(id) || opencodeApp.running(id) || launching.has(id) || bgBusy
+    const busy = run.running(id) || codexApp.running(id) || opencodeApp.running(id) || launching.has(id) || bgLive !== null
     // 処理中なら預かる（#305）。処理中でなくても預かりが残っていれば後ろに並べる（先に預けたものを追い越さない）
     if (o.queue && (busy || queue.size(id) > 0)) {
       const item = queue.add(id, text, attachments, o.url, new Date(), o.origin ?? '')
@@ -1146,22 +1159,17 @@ export function createApp(
     }
     // 端末（tmux）で開いていれば、前のターンが動いていても打ち込んでよい。TUI が次のターンに回すので、
     // 端末で人が続けて打つのと同じになる。別プロセス（-p）の経路だけは二重起動になるので止める（#100, #170）
-    if (bgLive && bgBusy) {
-      const why = bgLive.status === 'waiting' ? '許可・質問を待っています' : 'ターンを回しています'
-      return { ...refuse(409, `バックグラウンドのセッションが${why}。端末で claude attach ${bgLive.id} して答えるか、終わってから送ってください`), retry: true }
+    if (bgLive) {
+      return {
+        ...refuse(
+          409,
+          `バックグラウンドで動いています（claude --bg）。端末で claude attach ${bgLive.id} して打つか、claude stop ${bgLive.id} してから送ってください`,
+        ),
+        retry: true,
+      }
     }
     if (busy || (typed.running(id) && !openTerminal)) {
       return refuse(409, 'このセッションはまだ前の返信を処理中です')
-    }
-    if (bgLive) {
-      const log = join(store.directory, 'reply.log')
-      await appendFile(log, `--- ${new Date().toISOString()} ${id} バックグラウンドのセッションを止めてから続ける（claude stop ${bgLive.id}）\n`).catch(() => {})
-      try {
-        await background.stop(bgLive.id, cwd)
-      } catch (err) {
-        await appendFile(log, `止められなかった: ${err instanceof Error ? err.message : String(err)}\n`).catch(() => {})
-        return refuse(409, `バックグラウンドのセッションを止められませんでした。端末で claude attach ${bgLive.id} して打ってください`)
-      }
     }
     launching.add(id)
     try {
@@ -1999,7 +2007,7 @@ export function createApp(
     if (!raw) return undefined
     const bg = await claudeAgents.background(raw)
     if (!bg || !bg.id) return undefined
-    return { attach: bg.id, live: backgroundLive(bg), status: bg.status }
+    return { attach: bg.id, live: backgroundLive(bg), status: bg.state || bg.status }
   }
 
   /**

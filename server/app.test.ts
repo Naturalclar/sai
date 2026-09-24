@@ -486,22 +486,24 @@ const claudeAgents = {
   value: undefined as boolean | undefined,
   bg: null as ClaudeAgent | null,
   busy: () => Promise.resolve(claudeAgents.value),
-  background: (sessionId: string) => Promise.resolve(claudeAgents.bg?.sessionId === sessionId ? claudeAgents.bg : null),
+  /** `background()` の呼ばれ方（#462。`fresh` を毎回付けると返信のたびに `claude agents` が起きる） */
+  calls: [] as boolean[],
+  background: (sessionId: string, fresh = false) => {
+    claudeAgents.calls.push(fresh)
+    return Promise.resolve(claudeAgents.bg?.sessionId === sessionId ? claudeAgents.bg : null)
+  },
 }
 
 /** #462。`claude --bg` / `claude stop` の代わり */
 const claudeBackground = {
   started: [] as ReplyCommand[],
-  stopped: [] as string[],
   start: async (cmd: ReplyCommand) => {
     claudeBackground.started.push(cmd)
     return { short: '5738db0d', sessionId: '5738db0d-b4e1-4396-a5b5-6220d4530861' }
   },
-  stop: async (short: string) => {
-    claudeBackground.stopped.push(short)
-  },
 }
-const bgAgent = (status: string): ClaudeAgent => ({ sessionId: 'C1', id: '5738db0d', kind: 'background', status, cwd: '', pid: 1, name: '' })
+/** `claude agents --json` のバックグラウンドの行（2.1.278 は `state`、2.1.276 は `status`。#462） */
+const bgAgent = (state: string): ClaudeAgent => ({ sessionId: 'C1', id: '5738db0d', kind: 'background', status: '', state, cwd: '', pid: 0, name: '' })
 
 test('GET /api/sessions/<id>/progress: 行の cwd とセッション ID から transcript を引き、いまの手順を返す。別のマシン・無いセッションは空、窓に無ければ 404（#302）', async () => {
   const projectDir = join(dir, 'claude-projects', claudeProjectName(dir))
@@ -2190,43 +2192,60 @@ test('POST /api/sessions/new: background なら claude --bg で始め、短い I
   assert.equal(claudeBackground.started.length, 1)
 })
 
-test('POST reply: claude --bg で回っている・許可を待っているセッションには送らず、止まっていれば止めてから -p で続ける（#462）', async () => {
+test('POST reply: 生きている claude --bg のセッションには送らない（SAI からは止めない。#462）', async () => {
   runner.started.length = 0
-  claudeBackground.stopped.length = 0
   try {
-    claudeAgents.bg = bgAgent('waiting')
-    const waiting = await post('C1@r', { text: 'x' })
-    assert.equal(waiting.status, 409)
-    assert.match(((await waiting.json()) as { error: string }).error, /許可・質問を待っています。端末で claude attach 5738db0d/)
-    claudeAgents.bg = bgAgent('busy')
-    assert.equal((await post('C1@r', { text: 'x' })).status, 409)
+    // 2.1.278 のバックグラウンドの行は `state`（`working` / `stopped` / `done`）で、
+    // **いまターンが回っているかは分からない**。生きている間は端末へ回す
+    claudeAgents.bg = bgAgent('working')
+    const live = await post('C1@r', { text: 'x' })
+    assert.equal(live.status, 409)
+    assert.match(((await live.json()) as { error: string }).error, /端末で claude attach 5738db0d して打つか、claude stop 5738db0d/)
+    assert.equal(runner.started.length, 0, '`-p --resume` は起こさない（生きている --bg があると CLI が断る）')
 
-    // 預かったぶんは、回っている間は止めずに待つ（drain は理由を付けて止めない）
+    // 預かったぶんは止めずに待つ（終わりを知らせる口が無いので、次のポーリングでもう一度見る）
     const queued = await post('C1@r', { text: 'あとで', queue: true })
     assert.equal(((await queued.json()) as ReplyResponse).via, 'queued')
     const held = await queuedOf('C1@r')
     assert.equal(held?.items.length, 1)
     assert.equal(held?.paused ?? '', '', '止めない')
     assert.equal(runner.started.length, 0)
-    assert.equal(claudeBackground.stopped.length, 0)
 
-    // 入力待ちになったら、止めてから -p --resume で回す（同じ ID の -p は、生きている --bg があると断られる）
-    claudeAgents.bg = bgAgent('idle')
+    // 止めた・終わったものは普通に `-p --resume` で続ける（会話は残っている）
+    claudeAgents.bg = bgAgent('stopped')
     await queuedOf('C1@r')
-    assert.deepEqual(claudeBackground.stopped, ['5738db0d'])
     assert.equal(runner.started.length, 1)
     assert.ok(runner.started[0]!.cmd.args.includes('--resume'))
     assert.equal((await queuedOf('C1@r'))?.items.length ?? 0, 0)
-    // 止めたもの（status が空）には何もしない
-    claudeBackground.stopped.length = 0
+
+    // 2.1.276 の形（`status` だけ）でも同じ（生きていれば送らない、空なら送る）
     runner.started.length = 0
     runner.busy.delete('C1@r')
+    claudeAgents.bg = { ...bgAgent(''), status: 'idle' }
+    assert.equal((await post('C1@r', { text: 'y' })).status, 409)
     claudeAgents.bg = bgAgent('')
     assert.equal((await post('C1@r', { text: 'y' })).status, 202)
-    assert.equal(claudeBackground.stopped.length, 0)
   } finally {
     claudeAgents.bg = null
     runner.busy.delete('C1@r')
+  }
+})
+
+test('POST reply: バックグラウンドの行が無いセッションでは claude agents を引き直さない（#462）', async () => {
+  // 返信のたびに `fresh` で起こすと、端末に打ち込む経路より手前で 0.15〜0.20 秒増える（実測）
+  claudeAgents.calls.length = 0
+  claudeAgents.bg = null
+  assert.equal((await post('C1@r', { text: 'x' })).status, 202)
+  assert.deepEqual(claudeAgents.calls, [false], '覚えている一覧を 1 回見るだけ')
+
+  // バックグラウンドの行があるときだけ、状態が古いと困るので引き直す
+  claudeAgents.calls.length = 0
+  claudeAgents.bg = bgAgent('stopped')
+  try {
+    assert.equal((await post('C1@r', { text: 'y' })).status, 202)
+    assert.deepEqual(claudeAgents.calls, [false, true], '覚えている分 → 引き直し')
+  } finally {
+    claudeAgents.bg = null
   }
 })
 

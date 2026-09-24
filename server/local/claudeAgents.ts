@@ -28,10 +28,15 @@ export interface ClaudeAgent {
   /** `interactive`（端末・`-p` の子）か `background`（`claude --bg`） */
   kind: string
   /**
-   * `busy` = いまターンが回っている。`idle` = 入力待ち。`waiting` = 許可・質問で止まっている（#462 で実測）。
-   * **止めた（`claude stop`）バックグラウンドのセッションは空**（`--all` でだけ出る）
+   * **`interactive` の行だけが持つ**（2.1.278 で実測）。`busy` = いまターンが回っている / `idle` = 入力待ち
    */
   status: string
+  /**
+   * **`background` の行が持つ**（#462。2.1.278 で実測: `working` / `stopped` / `done` の 3 値で、
+   * `status` も `pid` も無い）。2.1.276 では代わりに `status`（`busy` / `idle` / `waiting`、止めたものは空）
+   * だったので、**どちらの版でも読めるように両方持つ**（`backgroundLive()` が吸収する）
+   */
+  state: string
   cwd: string
   pid: number
   /** 自動で付く名前か、`-n` で渡した表示名（#391 / #413） */
@@ -81,6 +86,7 @@ export function parseAgents(stdout: string): ClaudeAgent[] | null {
       id: typeof o.id === 'string' ? o.id : '',
       kind: typeof o.kind === 'string' ? o.kind : '',
       status: typeof o.status === 'string' ? o.status : '',
+      state: typeof o.state === 'string' ? o.state : '',
       cwd: typeof o.cwd === 'string' ? o.cwd : '',
       pid: typeof o.pid === 'number' ? o.pid : 0,
       name: typeof o.name === 'string' ? o.name : '',
@@ -103,9 +109,19 @@ export function backgroundIn(agents: readonly ClaudeAgent[], sessionId: string):
   return agents.find((a) => a.sessionId === sessionId && a.kind === 'background') ?? null
 }
 
-/** `claude --bg` のセッションが生きているか（止めたものは `status` が空。#462 で実測） */
+/** 終わった・止めた `claude --bg` のセッション（2.1.278 の `state`。2.1.276 は `status` が空） */
+const BACKGROUND_DEAD = new Set(['', 'stopped', 'done', 'exited'])
+
+/**
+ * `claude --bg` のセッションがデーモンの中で生きているか（#462）。
+ *
+ * **版で持つキーが違う**ので両方見る（実測）: 2.1.278 は `state`（`working` / `stopped` / `done`）、
+ * 2.1.276 は `status`（`busy` / `idle` / `waiting`、止めたものは空）。
+ * **`working` からは「いまターンが回っているか」までは分からない**（2.1.278 では turn が終わって
+ * 入力待ちのセッションも `working`）ので、生きているかどうかだけに使う
+ */
 export function backgroundLive(agent: ClaudeAgent): boolean {
-  return agent.status !== ''
+  return !BACKGROUND_DEAD.has(agent.state || agent.status)
 }
 
 export class ClaudeAgents implements AgentList {

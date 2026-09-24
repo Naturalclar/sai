@@ -16,7 +16,7 @@
 // **ペインの導出セッションが別の会話に化けて、返信がそのペインに打ち込まれた**。開いているファイルなら
 // 取り違えようがない。**引けなければ当てない**（`session` は空。材料が無いのに決めつけない）。
 import { execFile } from 'node:child_process'
-import { open } from 'node:fs/promises'
+import { open, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join, sep } from 'node:path'
 import { isDescendant, type PsFn, type Tmux } from './terminal.ts'
@@ -88,18 +88,48 @@ export function parsePsCommands(output: string): PsRow[] {
  * 出力は `f<fd>` の次の行が `n<パス>` という形で、cwd は `fcwd`
  */
 export function lsofPaneFiles(env: NodeJS.ProcessEnv = process.env): (pid: number) => Promise<PaneFiles> {
-  const root = codexSessionsDir(env) + sep
-  return (pid: number): Promise<PaneFiles> =>
-    new Promise((resolve) => {
+  const dir = codexSessionsDir(env)
+  return async (pid: number): Promise<PaneFiles> => {
+    const roots = await sessionRoots(dir)
+    const output = await new Promise<string>((resolve) => {
       execFile('lsof', ['-a', '-p', String(pid), '-Ffn'], { timeout: 5_000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
-        if (err && !stdout) return resolve({ cwd: '', rollouts: [] })
-        resolve(parsePaneFiles(String(stdout), root))
+        resolve(err && !stdout ? '' : String(stdout))
       })
     })
+    return output ? parsePaneFiles(output, roots) : { cwd: '', rollouts: [] }
+  }
 }
 
-/** `lsof -Ffn` の出力を読む。`root` は CODEX_HOME の `sessions/`（末尾に区切り付き） */
-export function parsePaneFiles(output: string, root: string): PaneFiles {
+/**
+ * 前方一致に使う置き場。**書いたとおりの形と realpath の両方**を返す（#434）。
+ *
+ * `lsof` が返すのは**シンボリックリンクを解いた実パス**で（実測: macOS では `/tmp/…` が `/private/tmp/…`、
+ * 途中のリンクも解ける）、こちらの `root` は `CODEX_HOME` か `homedir()` を**書いたとおり**に繋いだもの。
+ * 表記が違うと前方一致が 1 本も当たらず、**例外も出ないまま開いている rollout が全部落ちて、
+ * ペインの Codex の検出（#417）が黙って何も返さない**（`CODEX_HOME` を `/tmp` の下に置く・
+ * `~/.codex` を別のボリュームへリンクする、で起きる）。
+ *
+ * `record.py` の `resolve_codex_session()` が「**比較のときだけ** realpath に揃える」のと同じ考え方で、
+ * **返す値（`PaneFiles.rollouts` のパス）は lsof が返したまま**にする（そのまま開くので解いた形の方が正しい）。
+ * 両方返すのは、リンクを解かない `lsof` に当たっても今までどおり当たるようにするため。
+ * 解けなければ（まだ無いディレクトリ）書いたとおりの形だけ
+ */
+export async function sessionRoots(dir: string): Promise<string[]> {
+  const written = dir + sep
+  try {
+    const real = (await realpath(dir)) + sep
+    return real === written ? [written] : [written, real]
+  } catch {
+    // まだ Codex を一度も動かしていない（sessions/ が無い）。書いたとおりの形だけで比べる
+    return [written]
+  }
+}
+
+/**
+ * `lsof -Ffn` の出力を読む。`roots` は CODEX_HOME の `sessions/`（末尾に区切り付き）で、
+ * **書いたとおりの形と realpath の両方**が入りうる（`sessionRoots()`。#434）
+ */
+export function parsePaneFiles(output: string, roots: readonly string[]): PaneFiles {
   let cwd = ''
   const rollouts: string[] = []
   let fd = ''
@@ -115,7 +145,7 @@ export function parsePaneFiles(output: string, root: string): PaneFiles {
       continue
     }
     // CODEX_HOME の下の rollout だけ（別のプロセスが開いた同名のファイルを拾わない）
-    if (path.startsWith(root) && basename(path).startsWith('rollout-') && path.endsWith('.jsonl')) rollouts.push(path)
+    if (roots.some((root) => path.startsWith(root)) && basename(path).startsWith('rollout-') && path.endsWith('.jsonl')) rollouts.push(path)
   }
   return { cwd, rollouts }
 }

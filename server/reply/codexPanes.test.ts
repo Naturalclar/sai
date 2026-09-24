@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import test from 'node:test'
-import { CODEX_PANES_TTL_MS, CodexPanes, parsePaneFiles, parsePsCommands, parseRolloutHead, rolloutSession } from './codexPanes.ts'
+import { CODEX_PANES_TTL_MS, CodexPanes, parsePaneFiles, parsePsCommands, parseRolloutHead, rolloutSession, sessionRoots, lsofPaneFiles } from './codexPanes.ts'
 import type { CodexPaneDeps } from './codexPanes.ts'
 import type { Tmux } from './terminal.ts'
 
@@ -101,7 +101,7 @@ test('parsePaneFiles: fcwd と、CODEX_HOME の下の rollout だけ', () => {
       `n${root}2026/09/04/notes.jsonl`,
       '',
     ].join('\n'),
-    root,
+    [root],
   )
   assert.deepEqual(out, { cwd: '/repo/one', rollouts: [`${root}2026/09/04/rollout-2026-09-04T14-40-23-${SESSION}.jsonl`] })
 })
@@ -151,4 +151,56 @@ test('parseRolloutHead: session_meta の session_id と cwd（切れた行は捨
   })
   // git.repository_path しか無い形
   assert.deepEqual(parseRolloutHead(JSON.stringify({ payload: { git: { repository_path: '/repo/three' } } }), 'x').cwd, '/repo/three')
+})
+
+test('sessionRoots: シンボリックリンク越しの CODEX_HOME は、書いたとおりの形と realpath の両方を返す（#434）', async () => {
+  // lsof が返すのは実パス（実測: `/tmp/…` は `/private/tmp/…`）。書いたとおりの形だけで前方一致を取ると、
+  // 開いている rollout が 1 本も当たらず、例外も出ないままペインの Codex の検出が黙って何も返さない
+  const tmp = await mkdtemp(join(tmpdir(), 'sai-roots-'))
+  await mkdir(join(tmp, 'real', 'sessions'), { recursive: true })
+  await symlink(join(tmp, 'real'), join(tmp, 'link'))
+  const written = join(tmp, 'link', 'sessions')
+  const real = await realpath(written)
+  assert.notEqual(real, written, 'この一時ディレクトリではリンクが解ける（前提）')
+
+  const roots = await sessionRoots(written)
+  assert.deepEqual(roots, [written + sep, real + sep])
+
+  // lsof が返す形（実パス）の rollout が拾える
+  const path = join(real, '2026/09/24', `rollout-2026-09-24T14-40-23-${SESSION}.jsonl`)
+  const out = parsePaneFiles(['p101', 'fcwd', 'n/repo/one', 'f58', `n${path}`, ''].join('\n'), roots)
+  assert.deepEqual(out.rollouts, [path])
+  // 書いたとおりの形だけで比べると落ちる（これが #434）
+  assert.deepEqual(parsePaneFiles(['f58', `n${path}`, ''].join('\n'), [written + sep]).rollouts, [])
+})
+
+test('sessionRoots: 解けないディレクトリ（まだ Codex を動かしていない）は書いたとおりの形だけ（#434）', async () => {
+  const tmp = await mkdtemp(join(tmpdir(), 'sai-roots-'))
+  const missing = join(tmp, 'nope', 'sessions')
+  assert.deepEqual(await sessionRoots(missing), [missing + sep])
+})
+
+test('sessionRoots: リンクを挟まなければ 1 つだけ（同じ形を 2 回比べない）', async () => {
+  const tmp = await realpath(await mkdtemp(join(tmpdir(), 'sai-roots-')))
+  await mkdir(join(tmp, 'sessions'), { recursive: true })
+  assert.deepEqual(await sessionRoots(join(tmp, 'sessions')), [join(tmp, 'sessions') + sep])
+})
+
+test('lsofPaneFiles: CODEX_HOME がリンク越しでも、lsof が返す実パスの rollout を拾う（#434）', async () => {
+  // sessionRoots() と parsePaneFiles() の繋ぎ方まで含めて通す（`lsof` は起こさない）
+  const tmp = await mkdtemp(join(tmpdir(), 'sai-lsof-'))
+  await mkdir(join(tmp, 'real', 'sessions', '2026', '09', '24'), { recursive: true })
+  await symlink(join(tmp, 'real'), join(tmp, 'link'))
+  const real = await realpath(join(tmp, 'link', 'sessions'))
+  const path = join(real, '2026/09/24', `rollout-2026-09-24T14-40-23-${SESSION}.jsonl`)
+  // 実測の形（lsof はリンクを解いた実パスを返す）
+  const output = ['p101', 'fcwd', 'n/repo/one', 'f58', `n${path}`, ''].join('\n')
+
+  const open = lsofPaneFiles({ CODEX_HOME: join(tmp, 'link') }, async () => output)
+  assert.deepEqual(await open(101), { cwd: '/repo/one', rollouts: [path] })
+})
+
+test('lsofPaneFiles: lsof が読めなければ空（今までどおり当てない）', async () => {
+  const open = lsofPaneFiles({ CODEX_HOME: '/nope/.codex' }, async () => '')
+  assert.deepEqual(await open(101), { cwd: '', rollouts: [] })
 })

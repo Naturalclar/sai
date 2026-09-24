@@ -120,9 +120,15 @@ export interface SessionSummary {
   turns: number
   /**
    * 人を待って止まっている。最後の行が待ちの行ならその text、ターン完了か再開が後に来ていれば空。
-   * 一覧の「待機中」の印と、チャット見出しに出す
+   * 一覧の「待機中」の印と、チャット見出しに出す。
+   * **「終わって次を待っている」（`入力待ち`）はここには入らない**（下の `idle`。#438）
    */
   waiting: string
+  /**
+   * ターンが終わって放置されている（`入力待ち`。#438）。最後の行が `idle` の行ならその text。
+   * 詰まっているわけではないので、要対応では下段（`done`）に置き、バッジにも通知にも数えない
+   */
+  idle: string
   /**
    * 一番新しい user_text の1行目（画面からの返信でも端末で打った指示でも、最後の入力に追従する）。
    * 無ければ first_user_text、それも無ければ最初の text の1行目。60文字で切る
@@ -398,6 +404,24 @@ export interface SessionMetaResponse {
 export interface SessionIconResponse {
   id: string
   icon: string | null
+}
+
+/** 今まで使ったアイコン画像の 1 つ（#465）。`key` は中身の sha1 の先頭 16 桁 */
+export interface IconHistoryItem {
+  key: string
+  /** `<img src>` に使う URL（`/api/icon-history/<key>?v=…`） */
+  url: string
+  /** 最後に使った時刻（ISO）。並びはこれの新しい順 */
+  used_at: string
+}
+
+/**
+ * GET /api/icon-history（#465）。`?id=<セッション>` か `?profile=1` を付けると、
+ * いまそのアイコンになっている画像の鍵を `current` に載せる（無ければ省く）
+ */
+export interface IconHistoryResponse {
+  items: IconHistoryItem[]
+  current?: string
 }
 
 /**

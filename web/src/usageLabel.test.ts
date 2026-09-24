@@ -47,6 +47,13 @@ test('usageTitle: 内訳・ターン数・時間・モデルを出し、費用�
   assert.doesNotMatch(usageLabel(usage()), /\$/)
   // 分をまたぐ長いターン
   assert.match(usageTitle(usage({ duration_ms: 125_000 })), /2 分 5 秒/)
+  // 繰り上がりの境目（#436）。別々に丸めていたころは `1 分 60 秒` / `60 秒` になっていた
+  assert.match(usageTitle(usage({ duration_ms: 119_600 })), /2 分 0 秒/)
+  assert.match(usageTitle(usage({ duration_ms: 59_600 })), /1 分 0 秒/)
+  assert.match(usageTitle(usage({ duration_ms: 59_400 })), /・59 秒/)
+  assert.match(usageTitle(usage({ duration_ms: 9_960 })), /10\.0 秒/, '10 秒未満は 0.1 秒まで')
+  assert.match(usageTitle(usage({ duration_ms: 60_000 })), /1 分 0 秒/)
+  assert.match(usageTitle(usage({ duration_ms: 0 })), /・0 秒/)
   // 断られた・エラーは文で出す
   assert.match(usageTitle(usage({ denials: 2, is_error: true })), /未許可で断られたツール 2 件/)
   assert.match(usageTitle(usage({ is_error: true })), /エラーで終わった/)

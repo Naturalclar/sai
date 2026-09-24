@@ -18,12 +18,15 @@ import socket
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 RECORD = HERE / "record.py"
+sys.path.insert(0, str(HERE.parent))
+from feed.record import ASSISTANT_IDLE_S, ASSISTANT_WAIT_S  # noqa: E402
 JST = timezone(timedelta(hours=9))
 
 
@@ -47,6 +50,26 @@ def read_rows(feed_dir: Path) -> list[dict]:
             if line.strip():
                 rows.append(json.loads(line))
     return rows
+
+
+def claude_entries(entries: list[dict]) -> list[dict]:
+    """Claude の transcript の作りものを実データに寄せる。
+
+    **実データの assistant の行には必ず `stop_reason` がある**（`tool_use` なら続き、
+    `end_turn` なら閉じた）。#467 で `last_assistant_text()` が「閉じた行が見えるまで
+    2 秒待つ」ようになったので、付け忘れた作りものは毎回その 2 秒を丸ごと待つ
+    （結果は同じでもテストが遅くなる）。明示してあるものは触らない。
+    """
+    out: list[dict] = []
+    for entry in entries:
+        message = entry.get("message")
+        if entry.get("type") == "assistant" and isinstance(message, dict) and "stop_reason" not in message:
+            content = message.get("content")
+            blocks = content if isinstance(content, list) else []
+            tool = any(isinstance(b, dict) and b.get("type") == "tool_use" for b in blocks)
+            entry = {**entry, "message": {**message, "stop_reason": "tool_use" if tool else "end_turn"}}
+        out.append(entry)
+    return out
 
 
 def write_jsonl(path: Path, entries: list[dict]) -> None:
@@ -236,14 +259,14 @@ class RecordTest(unittest.TestCase):
 
     def test_claude_stop_records_payload_session(self):
         transcript = Path(self.tmp.name) / "transcript.jsonl"
-        write_jsonl(transcript, [
+        write_jsonl(transcript, claude_entries([
             {"type": "user", "isMeta": True, "message": {"role": "user", "content": "<command-name>/clear</command-name>"}},
             {"type": "user", "message": {"role": "user", "content": "背中のメニューを出して"}},
             {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "tool_use", "name": "Read", "input": {}}]}},
             {"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "content": "..."}]}},
             {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "途中の発話"}]}},
             {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "背中のメニューを出した。\nワンハンドロウ 10kg×10×3。"}]}},
-        ])
+        ]))
         payload = {
             "session_id": "sess-abc",
             "transcript_path": str(transcript),
@@ -273,7 +296,7 @@ class RecordTest(unittest.TestCase):
 
     def _claude_row(self, entries: list[dict]) -> dict:
         transcript = Path(self.tmp.name) / "transcript.jsonl"
-        write_jsonl(transcript, entries)
+        write_jsonl(transcript, claude_entries(entries))
         payload = {"session_id": "s", "transcript_path": str(transcript), "cwd": str(self.cwd), "hook_event_name": "Stop"}
         result = run(stdin=json.dumps(payload), env=self.env)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -424,9 +447,9 @@ class RecordTest(unittest.TestCase):
 
     def test_text_is_clipped_at_the_limit_and_marked(self):
         transcript = Path(self.tmp.name) / "transcript.jsonl"
-        write_jsonl(transcript, [
+        write_jsonl(transcript, claude_entries([
             {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "あ" * 30000}]}},
-        ])
+        ]))
         payload = {"session_id": "s", "transcript_path": str(transcript), "cwd": str(self.cwd), "hook_event_name": "Stop"}
         run(stdin=json.dumps(payload), env=self.env)
         row = read_rows(self.feed_dir)[0]
@@ -436,14 +459,141 @@ class RecordTest(unittest.TestCase):
     def test_long_text_under_the_limit_is_kept_whole(self):
         """2000 字で切っていたので「もっと見る」を押しても続きが読めなかった（#358）"""
         transcript = Path(self.tmp.name) / "transcript.jsonl"
-        write_jsonl(transcript, [
+        write_jsonl(transcript, claude_entries([
             {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "あ" * 5000 + "おわり"}]}},
-        ])
+        ]))
         payload = {"session_id": "s", "transcript_path": str(transcript), "cwd": str(self.cwd), "hook_event_name": "Stop"}
         run(stdin=json.dumps(payload), env=self.env)
         row = read_rows(self.feed_dir)[0]
         self.assertTrue(row["text"].endswith("おわり"), "末尾まで残る")
         self.assertNotIn("clipped", row)
+
+    # -- そのターンの返答を取る（#467）
+
+    def test_turn_assistant_text_stops_at_the_turn_boundary(self):
+        """前は「末尾から最初の assistant の本文」で、ターンの境目で止まらなかった。
+        Stop フックはそのターンの最後の行が書かれる前に走るので、遡った先が
+        **前のターンの返答**になっていた（実データで 1397 本中 22 本）。"""
+        from feed.record import _turn_assistant_text
+
+        prev_turn = [
+            {"type": "user", "message": {"role": "user", "content": "前の依頼"}},
+            {"type": "assistant", "message": {"role": "assistant", "stop_reason": "end_turn",
+                                              "content": [{"type": "text", "text": "前のターンの返答"}]}},
+        ]
+        # いまのターンにはまだ本文が無い（ツールを呼んだだけ）
+        text, closed = _turn_assistant_text(prev_turn + [
+            {"type": "user", "message": {"role": "user", "content": "いまの依頼"}},
+            {"type": "assistant", "message": {"role": "assistant", "stop_reason": "tool_use",
+                                              "content": [{"type": "tool_use", "name": "Bash", "input": {}}]}},
+        ])
+        self.assertEqual((text, closed), ("", False), "前のターンまで遡らない")
+
+        # 途中の地の文しか無ければ、それを返す（閉じてはいない）
+        text, closed = _turn_assistant_text(prev_turn + [
+            {"type": "user", "message": {"role": "user", "content": "いまの依頼"}},
+            {"type": "assistant", "message": {"role": "assistant", "stop_reason": "tool_use",
+                                              "content": [{"type": "text", "text": "調べてみる"}]}},
+        ])
+        self.assertEqual((text, closed), ("調べてみる", False))
+
+        # 閉じた行があればそれ。`stop_sequence` も閉じた扱い（shared/progress.ts と同じ）
+        text, closed = _turn_assistant_text(prev_turn + [
+            {"type": "user", "message": {"role": "user", "content": "いまの依頼"}},
+            {"type": "assistant", "message": {"role": "assistant", "stop_reason": "tool_use",
+                                              "content": [{"type": "text", "text": "調べてみる"}]}},
+            {"type": "assistant", "message": {"role": "assistant", "stop_reason": "stop_sequence",
+                                              "content": [{"type": "text", "text": "いまのターンの返答"}]}},
+        ])
+        self.assertEqual((text, closed), ("いまのターンの返答", True))
+
+        # 古い閉じた行が、そのあとに続いた本物の返答を押しのけない。実データの
+        # `stop_sequence` は 30 件すべて Claude Code の合成通知で、そのあともターンが続く
+        text, closed = _turn_assistant_text(prev_turn + [
+            {"type": "user", "message": {"role": "user", "content": "いまの依頼"}},
+            {"type": "assistant", "message": {"role": "assistant", "stop_reason": "stop_sequence", "model": "<synthetic>",
+                                              "content": [{"type": "text", "text": "You've reached your limit"}]}},
+            {"type": "assistant", "message": {"role": "assistant", "stop_reason": "tool_use",
+                                              "content": [{"type": "text", "text": "続きをやる"}]}},
+        ])
+        self.assertEqual((text, closed), ("続きをやる", False), "いちばん新しい本文が勝つ")
+
+    def test_stop_does_not_record_the_previous_turn_reply(self):
+        """#467 の本体。いまのターンに本文が無いまま Stop が走っても、
+        **前のターンの返答は載せない**（空の行は正直だが、前回の返答は嘘になる）。"""
+        row = self._claude_row([
+            {"type": "user", "message": {"role": "user", "content": "前の依頼"}},
+            {"type": "assistant", "message": {"role": "assistant", "stop_reason": "end_turn",
+                                              "content": [{"type": "text", "text": "前のターンの返答"}]}},
+            {"type": "user", "message": {"role": "user", "content": "いまの依頼"}},
+            {"type": "assistant", "message": {"role": "assistant", "stop_reason": "tool_use",
+                                              "content": [{"type": "tool_use", "name": "Bash", "input": {}}]}},
+        ])
+        self.assertNotEqual(row.get("text", ""), "前のターンの返答")
+        self.assertEqual(row.get("text", ""), "")
+        self.assertEqual(row["user_text"], "いまの依頼", "入力の方は今までどおり取れる")
+
+    def test_stop_waits_for_the_final_assistant_line(self):
+        """Stop はそのターンの最後の行が書かれる前に走る（実測で 0.1〜0.89 秒早い）。
+        閉じた行が現れるまで待つので、本文が入る。"""
+        import threading
+
+        transcript = Path(self.tmp.name) / "transcript.jsonl"
+        write_jsonl(transcript, [
+            {"type": "user", "message": {"role": "user", "content": "いまの依頼"}},
+            {"type": "assistant", "message": {"role": "assistant", "stop_reason": "tool_use",
+                                              "content": [{"type": "tool_use", "name": "Bash", "input": {}}]}},
+        ])
+
+        def append_later():
+            # 実データで測った遅れの最大（0.89 秒）に合わせる。ここが ASSISTANT_IDLE_S
+            # （追記が止まったら諦める）より遅いと、切り上げが速すぎて本文を取りこぼす
+            time.sleep(0.9)
+            with transcript.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps({
+                    "type": "assistant",
+                    "message": {"role": "assistant", "stop_reason": "end_turn",
+                                "content": [{"type": "text", "text": "遅れて書かれた返答"}]},
+                }, ensure_ascii=False) + "\n")
+
+        writer = threading.Thread(target=append_later)
+        writer.start()
+        payload = {"session_id": "s", "transcript_path": str(transcript), "cwd": str(self.cwd), "hook_event_name": "Stop"}
+        result = run(stdin=json.dumps(payload), env=self.env)
+        writer.join()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(read_rows(self.feed_dir)[-1]["text"], "遅れて書かれた返答")
+        self.assertGreater(ASSISTANT_IDLE_S, 0.9, "実測の遅れより早く諦めない")
+
+    def test_mid_turn_hooks_do_not_wait(self):
+        """待つのはターン完了（`Stop`）の行のときだけ。ターンの途中で鳴るフックまで
+        待たせると、エージェント本体をそのぶん止めてしまう。"""
+        transcript = Path(self.tmp.name) / "transcript.jsonl"
+        write_jsonl(transcript, claude_entries([
+            {"type": "user", "message": {"role": "user", "content": "いまの依頼"}},
+            {"type": "assistant", "message": {"role": "assistant", "stop_reason": "tool_use",
+                                              "content": [{"type": "tool_use", "name": "Task", "input": {}}]}},
+        ]))
+        payload = {"session_id": "s", "transcript_path": str(transcript), "cwd": str(self.cwd), "hook_event_name": "SubagentStop"}
+        started = time.monotonic()
+        result = run(stdin=json.dumps(payload), env=self.env)
+        elapsed = time.monotonic() - started
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertLess(elapsed, ASSISTANT_WAIT_S, "ターンの途中のフックは待たない")
+
+    def test_gives_up_once_the_transcript_stops_growing(self):
+        """閉じた行が来ないターン（実データで 6.9%）で上限いっぱい待たない。
+        **揃っているファイルは 1 行も増えない**ので、追記が止まったら切り上げる。"""
+        row_start = time.monotonic()
+        row = self._claude_row([
+            {"type": "user", "message": {"role": "user", "content": "いまの依頼"}},
+            {"type": "assistant", "message": {"role": "assistant", "stop_reason": "tool_use",
+                                              "content": [{"type": "text", "text": "調べてみる"}]}},
+        ])
+        elapsed = time.monotonic() - row_start
+        self.assertEqual(row["text"], "調べてみる", "待っても来ないので途中の地の文を載せる")
+        self.assertLess(elapsed, ASSISTANT_WAIT_S, "上限（2 秒）まで待たない")
+        self.assertGreater(ASSISTANT_WAIT_S, ASSISTANT_IDLE_S, "諦めるのは上限より早い")
 
     # -- 端末の居場所（pane / pid）
 
@@ -536,7 +686,7 @@ class RecordTest(unittest.TestCase):
         base = {"session_id": "sess-w", "cwd": str(self.cwd), "permission_mode": "default"}
         if transcript is not None:
             path = Path(self.tmp.name) / "transcript.jsonl"
-            write_jsonl(path, transcript)
+            write_jsonl(path, claude_entries(transcript))
             base["transcript_path"] = str(path)
         base.update(payload)
         result = run(stdin=json.dumps(base), env=self.env)

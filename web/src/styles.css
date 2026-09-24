@@ -259,6 +259,10 @@
   .todo { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--panel); }
   .todo.answer { border-left: 3px solid var(--accent); }
   .todo.watch { border-left: 3px solid var(--synth); }
+  /* 下段（#438）。答えを待っている上段より控えめに出す */
+  .todo.done { border-left: 3px solid var(--line); opacity: 0.75; }
+  .todo.done:hover { opacity: 1; }
+  .todo-section { margin: 6px 0 0; font-size: 12px; font-weight: 700; color: var(--muted); }
   /* 1 行に収める（折り返すと「N 待っている」だけが次の行の右端に飛ぶ）。溢れる名前は … で切る */
   .todo .who { display: flex; align-items: center; gap: 6px; color: inherit; font-size: 13px; min-width: 0; }
   .todo .who:hover { text-decoration: none; }
@@ -433,6 +437,8 @@
   .tag.mode.loud { background: color-mix(in srgb, var(--claude) 18%, transparent); color: var(--claude); }
   .tag.archived { background: color-mix(in srgb, var(--muted) 18%, transparent); color: var(--muted); font-weight: 600; }
   .tag.waiting { background: color-mix(in srgb, var(--synth) 18%, transparent); color: var(--synth); font-weight: 600; }
+  /* 「終わって次を待っている」（#438）。詰まっていないので待機中より目立たせない */
+  .tag.done { background: color-mix(in srgb, var(--muted) 16%, transparent); color: var(--muted); font-weight: 600; }
   .tag.terminal { background: color-mix(in srgb, var(--codex) 16%, transparent); color: var(--codex); font-weight: 600; }
 
   /* -- chat */
@@ -497,6 +503,22 @@
   .modal .title { font-weight: 700; margin-bottom: 10px; }
   /* -- ⌘K の移動用モーダル（#197）。画面の上の方に出す（一覧が下に伸びるので中央だと落ち着かない） */
   .modal-backdrop:has(.modal.palette) { align-items: flex-start; padding-top: 12vh; }
+  /* 今まで使ったアイコン画像（#465）。格子に並べ、隅にゴミ箱。いまのアイコンは枠で示す */
+  .modal.icon-history { width: 420px; display: flex; flex-direction: column; gap: 10px; }
+  .modal.icon-history .title { font-weight: 600; }
+  /* 隅のゴミ箱が -6px はみ出すので余白を取る（overflow-y: auto は overflow-x も auto にするため、
+     余白が無いと上の段で切れ、右の端に横スクロールが出る） */
+  .modal.icon-history .grid { list-style: none; margin: 0; padding: 8px; display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: 10px; max-height: 50vh; overflow-y: auto; }
+  .modal.icon-history .grid li { position: relative; }
+  .modal.icon-history .pick { display: block; width: 100%; aspect-ratio: 1; padding: 0; border: 2px solid transparent; border-radius: 22%; background: none; cursor: pointer; }
+  .modal.icon-history .pick img { width: 100%; height: 100%; border-radius: 20%; display: block; }
+  .modal.icon-history .pick:hover:not(:disabled) { border-color: var(--line); }
+  .modal.icon-history li.current .pick { border-color: var(--accent); }
+  .modal.icon-history .remove { position: absolute; top: -6px; right: -6px; min-width: 24px; height: 24px; padding: 0 4px; display: flex; align-items: center; justify-content: center; border-radius: 12px; border: 1px solid var(--line); background: var(--panel); color: var(--muted); font: inherit; font-size: 11px; cursor: pointer; }
+  .modal.icon-history .remove.confirming { background: var(--claude); border-color: var(--claude); color: #fff; }
+  .modal.icon-history .hint { font-size: 12px; color: var(--muted); }
+  .modal.icon-history .err { color: var(--claude); font-size: 12px; }
+  .modal.icon-history .actions { display: flex; justify-content: flex-end; }
   .modal.palette { width: 520px; padding: 12px; }
   .modal.palette input { width: 100%; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font: inherit; }
   .modal.palette input:focus { outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent); border-color: var(--accent); }

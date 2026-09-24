@@ -66,3 +66,16 @@ test('notifyPlan: 表示名があれば優先し、無ければタイトル', ()
   const named = notifyPlan([item({ session: { title: 'CI の整備', meta: { name: '画像を添える' } } as SessionSummary })])
   assert.equal(named?.title, '待機中: 画像を添える')
 })
+
+test('appeared: 終わって次を待っているだけ（done）では鳴らさない（#438）', () => {
+  // ターンが終われば必ず 60 秒後に `入力待ち` の行が来るので、落とさないと返信のたびに通知が鳴る
+  const done = item({ id: 'A@dev', kind: 'done', text: '入力待ち' })
+  const real = item({ id: 'B@dev' })
+  assert.deepEqual(appeared(new Set(), [done]), [])
+  assert.deepEqual(appeared(new Set(), [done, real]).map((t) => t.id), ['B@dev'])
+})
+
+test('notifyPlan: done しか無ければ通知は組み立たない（#438）', () => {
+  const done = item({ id: 'A@dev', kind: 'done', text: '入力待ち' })
+  assert.equal(notifyPlan(appeared(new Set(), [done])), null)
+})

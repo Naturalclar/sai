@@ -6,8 +6,11 @@ import type { Approval, ApprovalMap, ReplyingMap, SessionSummary } from './types
  * - `answer`: エージェントが答えを待っていて、SAI がその口を持っている。**この画面から答えられる**
  * - `watch`: 記録の行から見た待ち（`SessionSummary.waiting`）。SAI に選択肢が届いていないので
  *   ボタンは出せないが、**返信欄からは打てることが多い**（`replyable`）
+ * - `done`: **詰まってはいない。ターンが終わって次の指示を待っているだけ**（`SessionSummary.idle`。#438）。
+ *   `answer` / `watch` と同じ重さで出すと、本当に答えを待っているものが埋もれるので、
+ *   画面では下段に置き、**バッジ・タブの題名・通知には数えない**（`pendingItems()`）
  */
-export type TodoKind = 'answer' | 'watch'
+export type TodoKind = 'answer' | 'watch' | 'done'
 
 export interface TodoItem {
   /** エンティティID */
@@ -22,7 +25,7 @@ export interface TodoItem {
   /** kind === 'answer' のときだけ。そのまま ApprovalBubble に渡す */
   approval: Approval | null
   /**
-   * `watch` のとき、SAI の返信欄からその会話に打ち込めるか（#232）。
+   * `watch` / `done` のとき、SAI の返信欄からその会話に打ち込めるか（#232）。
    * 打てるなら「開いて返信欄から答えられます」、打てないなら「端末で答えてください」を出す。
    * **「SAI からは答えられない」と決めつけない**（端末で開いていれば打ち込めるし、再開もできる）
    */
@@ -36,7 +39,7 @@ export interface TodoItem {
  * `Approvals.snapshot()` そのもので、リポジトリや日数の絞り込みを通っていない（サーバ側で確認）。
  * ここはエージェントを止めている＝取りこぼすと困るものなので、一覧から消えていても出す
  * （その場合 `session` が null になり、画面は ID を出すだけになる）。
- * 逆に `watch` は `SessionSummary.waiting` からしか作れないので、**絞り込みには従う**。
+ * 逆に `watch` / `done` は `SessionSummary` からしか作れないので、**絞り込みには従う**。
  *
  * **別プロセスの返信を処理中のセッションは `watch` を出さない**（#232）。`claude -p` の許可・質問は
  * 必ず `--permission-prompt-tool` を通るので、答え待ちがあれば上の `answer` に載っている。
@@ -44,6 +47,9 @@ export interface TodoItem {
  * **待ちの行より後にターン完了の行が届くまで消えない**ので、答えたあとも残ってしまう
  * （許可や質問への回答は `UserPromptSubmit` ではないため `record.py` は再開の行を書かない）。
  * 端末に打ち込んだ返信（`via: 'terminal'`）は SAI に口が無く、行の `waiting` だけが手がかりなので**残す**。
+ *
+ * **`done`（終わって次を待っているだけ）も同じ条件で落とす**（#438）: 答え待ちが出ていれば `answer` が勝ち、
+ * アーカイブ済みは出さず、別プロセスの返信を処理中なら「動いている」。数えないだけで、拾い方は `watch` と同じ。
  *
  * `selfHost` はこのサーバのマシン名（応答の `host`。#114）。別のマシンのセッションは項目としては出すが
  * （待っていることに変わりはない）、ここからは答えられないので `replyable` は false になる。
@@ -59,9 +65,12 @@ export function todoItems(sessions: readonly SessionSummary[], approvals: Approv
   const answering = new Set(out.map((t) => t.id))
   for (const s of sessions) {
     // 答え待ちが出ているセッションは上で入れてある（そちらの方が新しくて具体的）
-    if (!s.waiting || answering.has(s.id) || s.archived) continue
+    if (answering.has(s.id) || s.archived) continue
+    if (!s.waiting && !s.idle) continue
     if (processReplying(replying[s.id])) continue
-    out.push({ id: s.id, kind: 'watch', text: s.waiting, since: s.end, session: s, approval: null, replyable: watchReplyable(s, selfHost) })
+    // 行の上で待っている方が具体的。両方あることは無い（集計はどちらも「最後の行」から作る）
+    const kind = s.waiting ? 'watch' : 'done'
+    out.push({ id: s.id, kind, text: s.waiting || s.idle, since: s.end, session: s, approval: null, replyable: watchReplyable(s, selfHost) })
   }
   return out.sort((a, b) => (a.since === b.since ? a.id.localeCompare(b.id) : a.since < b.since ? -1 : 1))
 }
@@ -83,4 +92,19 @@ function watchReplyable(s: SessionSummary, selfHost: string): boolean {
 /** 別プロセス（`-p` / `exec resume`）の返信が動いている。失敗して残っている分は「動いている」ではない */
 function processReplying(r: ReplyingMap[string] | undefined): boolean {
   return Boolean(r) && r!.via !== 'terminal' && !r!.failed
+}
+
+/**
+ * **数えるぶん**（バッジ・タブの題名・通知）。`done` は「終わって次を待っている」だけなので数えない（#438）。
+ *
+ * 数え方を呼び出し側ごとに書くと、サイドバーのバッジが 3 でタブの題名が 1 のような食い違いが出るので、
+ * `todoItems()` と同じくここに 1 つだけ置く（#231 / #340 と同じ考え方）
+ */
+export function pendingItems(items: readonly TodoItem[]): TodoItem[] {
+  return items.filter((t) => t.kind !== 'done')
+}
+
+/** 「終わって次を待っている」ぶん（要対応の下段）。`pendingItems()` の裏返し */
+export function doneItems(items: readonly TodoItem[]): TodoItem[] {
+  return items.filter((t) => t.kind === 'done')
 }

@@ -29,7 +29,7 @@ export interface ImageSource {
 export function imageTable(rows: FeedRow[], fallbackCwd = ''): Map<string, ImageSource> {
   const table = new Map<string, ImageSource>()
   for (const r of rows) {
-    if (eventKind(r.event) !== 'turn' || !r.text) continue
+    if (eventKind(r.event, r.text) !== 'turn' || !r.text) continue
     for (const { src } of imageRefs(r.text)) table.set(imageKey(src), { src, cwd: r.cwd || fallbackCwd })
   }
   return table

@@ -8,7 +8,7 @@ import { FacetSelect } from './FacetSelect'
 import { SessionItem } from './SessionItem'
 import type { NavTarget } from './sessionNav'
 import { isCollapsed, type SessionGroup } from './sessionGroups'
-import { todoItems } from '../../shared/todoItems.ts'
+import { pendingItems, todoItems } from '../../shared/todoItems.ts'
 
 interface Props {
   /** 一覧の取得結果。ポーリングは App が持つ（フィードの @ の候補にも使う） */
@@ -44,8 +44,9 @@ export function SessionList({ list, filters, setFilters, active, creating = fals
 
   const facets = data?.filters ?? { projects: [], repos: [], agents: [], dates: [], hosts: [] }
   const sessions = data?.sessions ?? []
-  // バッジの数は要対応の画面と必ず同じ引数で数える（replying を渡し忘れると件数だけずれる。#232）
-  const todo = data ? todoItems(data.sessions, data.approvals, data.host, data.replying).length : 0
+  // バッジの数は要対応の画面と必ず同じ引数で数える（replying を渡し忘れると件数だけずれる。#232）。
+  // **`done`（終わって次を待っているだけ）は数えない**（#438。要対応の下段には出る）
+  const todo = data ? pendingItems(todoItems(data.sessions, data.approvals, data.host, data.replying)).length : 0
 
   // タッチ端末では項目を左にスワイプしてアーカイブを出す。開いている項目は 1 つだけ
   const swipe = useMediaQuery('(hover: none) and (pointer: coarse)')

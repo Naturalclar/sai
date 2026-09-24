@@ -51,7 +51,7 @@ export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggl
   useEffect(() => onStatus(updatedAt, error), [updatedAt, error, onStatus])
 
   // 返信先はこのセッションだけなので、行数はこの画面のターン完了の行数（入力の行は返信の終わりではない）
-  const turns = data?.rows.reduce((n, r) => n + (eventKind(r.event) === 'turn' ? 1 : 0), 0) ?? 0
+  const turns = data?.rows.reduce((n, r) => n + (eventKind(r.event, r.text) === 'turn' ? 1 : 0), 0) ?? 0
   const { pending, failed, steered, send, confirm, confirmedSent, confirmReplace, confirmProcess, cancelConfirm } = useReply((target) => (target === id ? turns : 0), data?.replying ?? NO_REPLYING, updatedAt)
   const mine = pending.find((p) => p.id === id) ?? null
   const now = updatedAt?.getTime() ?? 0

@@ -31,21 +31,34 @@ export const lsofHolders: LockHolders = (path) =>
   })
 
 /**
+ * 実在する Codex writer lock を開いているプロセスの pid。
+ * lock が無い・通常ファイルでないときは `lsof` を起こさず null を返す。
+ */
+export async function codexWriterLockHolders(
+  session: string,
+  env: NodeJS.ProcessEnv = process.env,
+  holders: LockHolders = lsofHolders,
+): Promise<number[] | null> {
+  const path = codexWriterLockPath(session, env)
+  if (!path) return null
+  try {
+    if (!(await stat(path)).isFile()) return null
+  } catch {
+    return null
+  }
+  return holders(path)
+}
+
+/**
  * 開いている Codex が writer を持っているか。**lock のファイルがあるだけでは開いているとみなさない**（#329）。
  * 生きている Codex は lock を開いたままにしているが、プロセスが終わっても（C-c・サーバの立て直しで app-server ごと落ちた、など）
  * ファイルは消えずに残る。残骸を「開いている」と読むと、閉じたセッションへの返信を誰も受け取らない queue に渡してしまう。
  * 開いているかを確かめられない（lsof が無い）ときは、今までどおり lock があれば開いている扱い（本当に開いていたら resume が writer と競合する）
  */
 export async function codexWriterActive(session: string, env: NodeJS.ProcessEnv = process.env, holders: LockHolders = lsofHolders): Promise<boolean> {
-  const path = codexWriterLockPath(session, env)
-  if (!path) return false
   try {
-    if (!(await stat(path)).isFile()) return false
-  } catch {
-    return false
-  }
-  try {
-    return (await holders(path)).length > 0
+    const pids = await codexWriterLockHolders(session, env, holders)
+    return pids !== null && pids.length > 0
   } catch {
     return true
   }

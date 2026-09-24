@@ -1,7 +1,7 @@
 // #418。`claude agents --json` を読むところと、聞けなかったときに黙る形
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { chmod, mkdtemp, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ClaudeAgents, NoAgents, agentListFromEnv, backgroundIn, backgroundLive, busyIn, parseAgents } from './claudeAgents.ts'
@@ -51,6 +51,31 @@ test('ClaudeAgents: busy を引く。同じ答えは少しのあいだ覚える'
   assert.equal(await agents.busy(''), undefined, 'セッション ID が無ければ聞きに行かない')
 })
 
+test('ClaudeAgents: 1 本目が返る前の呼び出しは、同じ 1 本を待つ（#433）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-agents-'))
+  const bin = join(dir, 'claude')
+  const count = join(dir, 'count')
+  // 呼ばれるたびに 1 行足し、すぐには返らない（`claude agents --json` は即答ではない）
+  await writeFile(bin, `#!/bin/sh\necho x >> '${count}'\nsleep 0.3\necho '${one({ status: 'busy' })}'\n`)
+  await chmod(bin, 0o755)
+  const agents = new ClaudeAgents(bin)
+  const got = await Promise.all(['S1', 'S1', 'S9', 'S1', 'S9'].map((id) => agents.busy(id)))
+  assert.deepEqual(got, [true, true, false, true, false])
+  assert.equal((await readFile(count, 'utf8')).trim().split('\n').length, 1, '5 本同時でも claude は 1 回')
+})
+
+test('ClaudeAgents: 聞けなかった 1 本は覚えず、次の呼び出しでまた試す', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-agents-'))
+  const bin = join(dir, 'claude')
+  const count = join(dir, 'count')
+  await writeFile(bin, `#!/bin/sh\necho x >> '${count}'\nexit 1\n`)
+  await chmod(bin, 0o755)
+  const agents = new ClaudeAgents(bin)
+  assert.equal(await agents.busy('S1'), undefined)
+  assert.equal(await agents.busy('S1'), undefined)
+  assert.equal((await readFile(count, 'utf8')).trim().split('\n').length, 2, '失敗は TTL で覚えない')
+})
+
 test('ClaudeAgents: 聞けなければ undefined（false にしない）', async () => {
   assert.equal(await new ClaudeAgents('/nonexistent/claude').busy('S1'), undefined, 'claude が無い')
   assert.equal(await new ClaudeAgents(await fakeClaude('', 1)).busy('S1'), undefined, '非 0 で終わった（古い CLI）')
@@ -91,12 +116,28 @@ test('ClaudeAgents.background: 引ける・無い・分からない', async () =
   assert.equal(await new ClaudeAgents('/nonexistent/claude').background('S1', true), undefined)
 })
 
-test('ClaudeAgents: --all を知らない版では付けずに引き直す（#462）', async () => {
+test('ClaudeAgents: --all を知らない版では付けずに引き直し、以後は付けない（#462）', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'sai-agents-'))
   const bin = join(dir, 'claude')
-  await writeFile(bin, `#!/bin/sh\n[ "$3" = --all ] && exit 1\n[ "$1" = agents ] && [ "$2" = --json ] || exit 9\necho '${one({ status: 'busy' })}'\n`)
+  const calls = join(dir, 'calls')
+  // 古い CLI の断り方（commander の文言。本物は `error: unknown option '<flag>'` と言う）
+  await writeFile(bin, `#!/bin/sh\necho "$*" >> '${calls}'\n[ "$3" = --all ] && { echo "error: unknown option '--all'" >&2; exit 1; }\n[ "$1" = agents ] && [ "$2" = --json ] || exit 9\necho '${one({ status: 'busy' })}'\n`)
   await chmod(bin, 0o755)
-  assert.equal(await new ClaudeAgents(bin).busy('S1'), true)
+  const agents = new ClaudeAgents(bin, 0)
+  assert.equal(await agents.busy('S1'), true)
+  assert.equal(await agents.busy('S1'), true)
+  // 1 回目は `--all` で断られて引き直し（2 本）、2 回目からは最初から付けない（1 本）
+  assert.deepEqual((await readFile(calls, 'utf8')).trim().split('\n'), ['agents --json --all', 'agents --json', 'agents --json'])
+})
+
+test('ClaudeAgents: --all と関係ない失敗では引き直さない（壊れた CLI で毎回 2 本起こさない。#433 / #462）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-agents-'))
+  const bin = join(dir, 'claude')
+  const calls = join(dir, 'calls')
+  await writeFile(bin, `#!/bin/sh\necho "$*" >> '${calls}'\necho "error: not logged in" >&2\nexit 1\n`)
+  await chmod(bin, 0o755)
+  assert.equal(await new ClaudeAgents(bin, 0).busy('S1'), undefined)
+  assert.deepEqual((await readFile(calls, 'utf8')).trim().split('\n'), ['agents --json --all'])
 })
 
 test('backgroundLive: 版で持つキーが違うので両方見る（#462。2.1.278 は state、2.1.276 は status）', () => {

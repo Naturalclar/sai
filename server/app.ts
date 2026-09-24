@@ -4,7 +4,7 @@ import { homedir } from 'node:os'
 import { appendFile, readFile, stat } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { basename, extname, join, resolve, sep } from 'node:path'
-import { ICON_MAX_BYTES, iconUrl } from '../shared/icon.ts'
+import { historyIconUrl, ICON_MAX_BYTES, iconUrl } from '../shared/icon.ts'
 import { ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_COUNT, ATTACHMENTS_DIR, withAttachments } from '../shared/attachments.ts'
 import { mergeMeta } from '../shared/meta.ts'
 import { mergeProfile, PROFILE_ICON_ID, profileIconUrl } from '../shared/profile.ts'
@@ -42,6 +42,7 @@ import type {
   SessionProgressResponse,
   SessionTodo,
   SessionIconResponse,
+  IconHistoryResponse,
   SessionMetaResponse,
   SessionPermissionsResponse,
   SessionModelsResponse,
@@ -60,6 +61,7 @@ import type {
 import { entityId, facets, filterSessions, recordVersionOf } from './rows/aggregate.ts'
 import { rowProject } from '../shared/project.ts'
 import { ICONS_DIR, IconStore, iconKey } from './meta/icons.ts'
+import { historyKey, ICON_HISTORY_DIR, ICON_HISTORY_FILE, IconHistory, isHistoryKey } from './meta/iconHistory.ts'
 import { alwaysAllowRule, ruleLabel } from '../shared/approvals.ts'
 import { Approvals, WAIT_MS } from './approvals/approvals.ts'
 import { BuildFreshness } from './local/buildFreshness.ts'
@@ -200,6 +202,8 @@ const AGENT_RESUME_SUFFIX = '/agent/resume'
 const ATTACHMENTS_PREFIX = `/api/${ATTACHMENTS_DIR}/`
 const PROFILE_PATH = '/api/profile'
 const PROFILE_ICON_PATH = '/api/profile/icon'
+/** 今まで使ったアイコン画像（#465）。一覧は GET、1 枚は `/<key>` の GET / DELETE */
+const ICON_HISTORY_PATH = '/api/icon-history'
 
 /**
  * `/api/sessions/<id>[<suffix>]` から id を取り出す。空、`/` を含む、%-エンコードが壊れている
@@ -522,6 +526,7 @@ export function createApp(
   const run: Runner = runner ?? new ProcessRunner(join(store.directory, 'reply.log'), join(store.directory, 'replying.json'), usage)
   const metaStore = new MetaStore(join(store.directory, META_FILE))
   const iconStore = new IconStore(join(store.directory, ICONS_DIR))
+  const iconHistory = new IconHistory(join(store.directory, ICON_HISTORY_DIR), join(store.directory, ICON_HISTORY_FILE), iconStore)
   const attachmentStore = new AttachmentStore(join(store.directory, ATTACHMENTS_DIR))
   const profileStore = new ProfileStore(join(store.directory, PROFILE_FILE))
   // 処理中に送った返信の預かり（#305）。replying.json と同じくファイルにも持ち、再起動で消さない
@@ -1702,7 +1707,7 @@ export function createApp(
       },
       run: async (args) => {
         const id = mcpStr(args.id)
-        const turns = (await store.rows(QUEUE_DAYS)).filter((r) => eventKind(r.event) === 'turn' && entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
+        const turns = (await store.rows(QUEUE_DAYS)).filter((r) => eventKind(r.event, r.text) === 'turn' && entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
         if (turns.length === 0) return textResult('そのセッションのターンは見つかりません（sai_sessions の id を渡してください）', true)
         return textResult(
           turns
@@ -2139,14 +2144,30 @@ export function createApp(
     }
     return bytes
   }
-  const putIcon = async (req: IncomingMessage, res: ServerResponse, id: string, days: number) => {
+  /**
+   * 置く画像。`?history=<key>` なら履歴の画像（#465。**サーバが自分の置き場から読む**。パスは受けない）、無ければ body。
+   * 失敗したら応答を書いて null
+   */
+  const iconBytes = async (req: IncomingMessage, res: ServerResponse, history: string | null): Promise<Uint8Array | null> => {
+    if (history === null) return await readIconBody(req, res)
+    const bytes = isHistoryKey(history) ? await iconHistory.read(history) : null
+    if (!bytes) {
+      error(res, 404, '履歴にその画像がありません')
+      return null
+    }
+    return bytes
+  }
+  /** 置けた画像を履歴にも入れる（#465）。入れられなくてもアイコンは置けているので、失敗は黙る */
+  const rememberIcon = (bytes: Uint8Array) => iconHistory.add(bytes).catch(() => '')
+  const putIcon = async (req: IncomingMessage, res: ServerResponse, id: string, days: number, history: string | null) => {
     if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
-    const bytes = await readIconBody(req, res)
+    const bytes = await iconBytes(req, res, history)
     if (!bytes) return
     const { sessions } = await store.sessions(days)
     if (!sessions.some((s) => s.id === id)) return error(res, 404, 'session not found in window')
     const { icon, error: reason } = await iconStore.put(id, bytes)
     if (reason || !icon) return error(res, 400, reason || '保存できませんでした')
+    await rememberIcon(bytes)
     const payload: SessionIconResponse = { id, icon: iconUrl(id, icon.version) }
     return json(res, payload)
   }
@@ -2166,12 +2187,13 @@ export function createApp(
     return json(res, payload)
   }
   /** PUT / DELETE /api/profile/icon。セッションのアイコンと同じ IconStore に固定の鍵で置く（窓の検査は無い） */
-  const putProfileIcon = async (req: IncomingMessage, res: ServerResponse) => {
+  const putProfileIcon = async (req: IncomingMessage, res: ServerResponse, history: string | null) => {
     if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
-    const bytes = await readIconBody(req, res)
+    const bytes = await iconBytes(req, res, history)
     if (!bytes) return
     const { icon, error: reason } = await iconStore.put(PROFILE_ICON_ID, bytes)
     if (reason || !icon) return error(res, 400, reason || '保存できませんでした')
+    await rememberIcon(bytes)
     const payload: ProfileResponse = { profile: (await profileNow()).profile }
     return json(res, payload)
   }
@@ -2179,6 +2201,45 @@ export function createApp(
     if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
     await iconStore.remove(PROFILE_ICON_ID)
     const payload: ProfileResponse = { profile: (await profileNow()).profile }
+    return json(res, payload)
+  }
+  /**
+   * GET /api/icon-history（#465）。新しく使った順。`?id=` / `?profile=1` なら、いまのアイコンと同じ画像の鍵を `current` に。
+   * 中身の sha1 で比べる（いまのアイコンは session-icons/ に別のコピーとして置いてあるので、ファイル名では分からない）
+   */
+  const getIconHistory = async (res: ServerResponse, q: URLSearchParams) => {
+    const entries = await iconHistory.list()
+    const payload: IconHistoryResponse = { items: entries.map((e) => ({ key: e.key, url: historyIconUrl(e.key, e.version), used_at: e.used_at })) }
+    const target = q.get('profile') === '1' ? PROFILE_ICON_ID : q.get('id')
+    const icon = target ? await iconStore.get(target) : undefined
+    if (icon) {
+      try {
+        const key = historyKey(await readFile(icon.path))
+        if (entries.some((e) => e.key === key)) payload.current = key
+      } catch {
+        // 読めなければ印を付けないだけ
+      }
+    }
+    return json(res, payload)
+  }
+  /** GET /api/icon-history/<key>。中身で名前が決まるので、?v= が合っていれば長くキャッシュさせる */
+  const getHistoryIcon = async (req: IncomingMessage, res: ServerResponse, key: string, version: string | null) => {
+    const entry = await iconHistory.get(key)
+    const body = entry ? await iconHistory.read(key) : null
+    if (!entry || !body) return error(res, 404, 'icon not found')
+    res.writeHead(200, {
+      'Content-Type': entry.mime,
+      'Content-Length': body.length,
+      'X-Content-Type-Options': 'nosniff',
+      'Cache-Control': version === entry.version ? 'private, max-age=31536000, immutable' : 'no-store',
+    })
+    res.end(req.method === 'HEAD' ? undefined : Buffer.from(body))
+  }
+  /** DELETE /api/icon-history/<key>。履歴から消すだけで、いま使っているセッションのアイコンは残る */
+  const deleteHistoryIcon = async (req: IncomingMessage, res: ServerResponse, key: string) => {
+    if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
+    if (!(await iconHistory.remove(key))) return error(res, 404, 'icon not found')
+    const payload: IconHistoryResponse = { items: (await iconHistory.list()).map((e) => ({ key: e.key, url: historyIconUrl(e.key, e.version), used_at: e.used_at })) }
     return json(res, payload)
   }
   const deleteIcon = async (req: IncomingMessage, res: ServerResponse, id: string) => {
@@ -2238,6 +2299,7 @@ export function createApp(
     const isAnswer = path.startsWith(APPROVALS_PREFIX) && path.endsWith(ANSWER_SUFFIX)
     const isProfile = path === PROFILE_PATH
     const isProfileIcon = path === PROFILE_ICON_PATH
+    const isHistoryIcon = path.startsWith(`${ICON_HISTORY_PATH}/`)
     const isSettings = path === SETTINGS_PATH
     const isDigestFeedback = path === DIGEST_FEEDBACK_PATH
     const isNewSession = path === NEW_SESSION_PATH
@@ -2257,7 +2319,7 @@ export function createApp(
     const writable =
       (method === 'POST' &&
         (isNewSession || isReply || isReview || isAsk || isAnswer || isAttachUpload || isQueue || isDigestFeedback || path === AGENT_SEND_PATH || isAgentStop || isInterrupt)) ||
-      (method === 'DELETE' && isQueue) ||
+      (method === 'DELETE' && (isQueue || isHistoryIcon)) ||
       (method === 'PUT' && (isMeta || isProfile || isSettings)) ||
       ((method === 'PUT' || method === 'DELETE') && (isIcon || isProfileIcon))
     if (!writable && method !== 'GET' && method !== 'HEAD') return error(res, 405, 'method not allowed')
@@ -2355,7 +2417,7 @@ export function createApp(
       if (isIcon) {
         const id = sessionIdFrom(path, ICON_SUFFIX)
         if (id === null) return error(res, 400, 'bad session id')
-        if (method === 'PUT') return await putIcon(req, res, id, parseDays(q.get('days'), 90))
+        if (method === 'PUT') return await putIcon(req, res, id, parseDays(q.get('days'), 90), q.get('history'))
         if (method === 'DELETE') return await deleteIcon(req, res, id)
         return await getIcon(req, res, id, q.get('v'))
       }
@@ -2428,9 +2490,16 @@ export function createApp(
         return json(res, payload)
       }
       if (isProfileIcon) {
-        if (method === 'PUT') return await putProfileIcon(req, res)
+        if (method === 'PUT') return await putProfileIcon(req, res, q.get('history'))
         if (method === 'DELETE') return await deleteProfileIcon(req, res)
         return await getIcon(req, res, PROFILE_ICON_ID, q.get('v'))
+      }
+      if (path === ICON_HISTORY_PATH) return await getIconHistory(res, q)
+      if (isHistoryIcon) {
+        const key = path.slice(ICON_HISTORY_PATH.length + 1)
+        if (!isHistoryKey(key)) return error(res, 404, 'icon not found')
+        if (method === 'DELETE') return await deleteHistoryIcon(req, res, key)
+        return await getHistoryIcon(req, res, key, q.get('v'))
       }
       if (path === '/' || path === '/index.html') return await sendStatic(res, 'index.html')
       if (path.startsWith('/assets/')) return await sendStatic(res, path.slice(1))

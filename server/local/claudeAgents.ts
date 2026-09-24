@@ -130,6 +130,13 @@ export class ClaudeAgents implements AgentList {
   private readonly timeout: number
   private at = 0
   private agents: ClaudeAgent[] | null = null
+  /**
+   * 走っている 1 本（#433）。TTL が効くのは 1 本目が返ってからなので、それまでに来た呼び出しは
+   * **これを待つ**（無いと、処理中のバブルが N 個あれば 3 秒ごとに `claude` が N プロセス起きる）。`CodexPanes.scanning` と同じ形
+   */
+  private listing: Promise<ClaudeAgent[] | null> | null = null
+  /** `--all` を知らない版だと分かった（一度言われたら以後は付けない。毎回 2 本起こさない） */
+  private noAll = false
 
   /** 実行ファイルは既定でサーバの PATH の `claude`（#288）。テストは偽物を渡す */
   constructor(bin: string = 'claude', ttl = AGENTS_CACHE_MS, timeout = AGENTS_TIMEOUT_MS) {
@@ -151,13 +158,27 @@ export class ClaudeAgents implements AgentList {
   }
 
   /** 生きているセッションの一覧。**セッションごとではなく全体で 1 回**叩いて、少しのあいだ覚える */
-  private async list(fresh = false): Promise<ClaudeAgent[] | null> {
-    if (!fresh && this.agents !== null && Date.now() - this.at < this.ttl) return this.agents
+  private list(fresh = false): Promise<ClaudeAgent[] | null> {
+    if (!fresh && this.agents !== null && Date.now() - this.at < this.ttl) return Promise.resolve(this.agents)
+    // 同時に何本も起こさない（画面のポーリングが重なる）。`fresh` でも、いま走っているものがあればそれに乗る
+    // （走り出したのはたかだか数百ミリ秒前なので、それより新しい結果は無い）
+    this.listing ??= this.listNow().finally(() => {
+      this.listing = null
+    })
+    return this.listing
+  }
+
+  private async listNow(): Promise<ClaudeAgent[] | null> {
     // `--all` で止めた `claude --bg` のセッションも出す（#462。`claude attach` で起こし直せるので、画面に出す）。
-    // 止めたものは `status` が空なので、`busyIn()` の判定は変わらない。**`--all` を知らない版は非 0 で断る**ので、
-    // そのときだけ付けずに引き直す（時間切れでは引き直さない。待つ時間が倍になる）
-    let got = await this.run(['agents', '--json', '--all'])
-    if (got.rejected) got = await this.run(['agents', '--json'])
+    // 止めたものは `busyIn()` の判定に関わらない（`busy` にならない）。
+    // **`--all` を知らない版は `error: unknown option '--all'` で断る**（commander の文言。実測は別のフラグで確認）ので、
+    // **その文言のときだけ**付けずに引き直し、以後は付けない。**ほかの失敗では引き直さない**——`claude agents` が
+    // 壊れているだけなのに毎回 2 本起こすと、#433 で減らした分がポーリングごとに倍に戻る
+    let got = await this.run(this.noAll ? ['agents', '--json'] : ['agents', '--json', '--all'])
+    if (!this.noAll && got.rejected && /unknown option '--all'/.test(got.err)) {
+      this.noAll = true
+      got = await this.run(['agents', '--json'])
+    }
     const parsed = parseAgents(got.out)
     // 聞けなかったときは覚えない（次のポーリングでまた試す）
     if (parsed !== null) {
@@ -171,21 +192,22 @@ export class ClaudeAgents implements AgentList {
    * 失敗（claude が無い、古い、時間切れ）は空文字。例外は投げない。
    * `rejected` は「起動できて、非 0 で終わった」（引数を知らない版）
    */
-  private run(args: string[]): Promise<{ out: string; rejected: boolean }> {
+  private run(args: string[]): Promise<{ out: string; rejected: boolean; err: string }> {
     return new Promise((resolve) => {
       let child
       try {
-        child = spawn(this.bin, args, { stdio: ['ignore', 'pipe', 'ignore'] })
+        child = spawn(this.bin, args, { stdio: ['ignore', 'pipe', 'pipe'] })
       } catch {
-        return resolve({ out: '', rejected: false })
+        return resolve({ out: '', rejected: false, err: '' })
       }
       let out = ''
+      let err = ''
       let done = false
       const finish = (value: string, rejected = false) => {
         if (done) return
         done = true
         clearTimeout(timer)
-        resolve({ out: value, rejected })
+        resolve({ out: value, rejected, err })
       }
       const timer = setTimeout(() => {
         child.kill('SIGKILL')
@@ -193,6 +215,8 @@ export class ClaudeAgents implements AgentList {
       }, this.timeout)
       // 実測で 5KB ほど。増えても頭だけ見る
       child.stdout.on('data', (c: Buffer) => (out.length < 256 * 1024 ? (out += c.toString()) : undefined))
+      // 断られた理由（`--all` を知らないか）を見るだけなので頭だけ
+      child.stderr.on('data', (c: Buffer) => (err.length < 4096 ? (err += c.toString()) : undefined))
       child.once('error', () => finish(''))
       child.once('close', (code) => (code === 0 ? finish(out) : finish('', code !== null)))
     })

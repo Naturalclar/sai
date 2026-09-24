@@ -43,3 +43,8 @@ export function sniffImageType(bytes: Uint8Array): IconType | null {
 export function iconUrl(id: string, version: string): string {
   return `/api/sessions/${encodeURIComponent(id)}/icon?v=${encodeURIComponent(version)}`
 }
+
+/** 今まで使ったアイコン画像（#465）の URL。中身で名前が決まるので、version は置いた時刻（キャッシュを引かせるため） */
+export function historyIconUrl(key: string, version: string): string {
+  return `/api/icon-history/${encodeURIComponent(key)}?v=${encodeURIComponent(version)}`
+}

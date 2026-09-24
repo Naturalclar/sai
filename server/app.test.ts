@@ -5,6 +5,7 @@ import type { Server } from 'node:http'
 import { mkdtemp, rm, writeFile, appendFile, mkdir, stat, utimes, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { IconHistoryResponse } from '../shared/types.ts'
 import type { ApprovalAnswer, ApprovalMap, NewSessionResponse, Replying, ReplyQueueResponse, ReplyResponse,SessionsResponse, SessionDetailResponse, SessionIconResponse, SessionMetaResponse, FeedResponse, SettingsResponse, HealthResponse, SessionSkillsResponse, SessionPermissionsResponse, SearchResponse, UsageResponse } from '../shared/types.ts'
 import { createApp, parseDays, revWith, selfUrl, sessionIdFrom, stripThinking } from './app.ts'
 import { BuildFreshness } from './local/buildFreshness.ts'
@@ -1325,6 +1326,53 @@ test('PUT/DELETE icon: 別オリジンは 403、メソッド違いは 405', asyn
   await deleteIcon('C1@r')
   assert.equal((await fetch(`${base}/api/sessions/C1%40r/icon`, { method: 'POST' })).status, 405)
   assert.equal((await fetch(`${base}/api/sessions/C1%40r/meta`, { method: 'DELETE' })).status, 405, 'DELETE はアイコンだけ')
+})
+
+test('icon-history: 置いた画像が履歴に残り、履歴から付け直せ、履歴から消してもいまのアイコンは残る（#465）', async () => {
+  const listOf = async (q = '') => (await (await get(`/api/icon-history${q}`)).json()) as IconHistoryResponse
+  // 前のテストで置いた PNG / JPEG は、アイコンを消したあとも履歴に残っている
+  await putIcon('C1@r', PNG)
+  const list = await listOf('?id=C1%40r')
+  const png = list.items.find((i) => i.key === list.current)
+  assert.ok(png, 'いまのアイコンと同じ画像に印が付く')
+  assert.equal(list.items[0]!.key, png.key, '最後に使ったものが先頭')
+  assert.ok(list.items.length >= 2, 'JPEG も残っている')
+  assert.equal((await listOf('?id=X1%40r')).current, undefined, 'アイコンの無いセッションには印が無い')
+
+  // 画像そのもの
+  let res = await get(png.url)
+  assert.equal(res.status, 200)
+  assert.equal(res.headers.get('content-type'), 'image/png')
+  assert.equal(res.headers.get('x-content-type-options'), 'nosniff')
+  assert.deepEqual(new Uint8Array(await res.arrayBuffer()), PNG)
+
+  // 履歴から付ける: body は要らない。サーバが自分の置き場から読む
+  res = await fetch(`${base}/api/sessions/X1%40r/icon?history=${png.key}`, { method: 'PUT' })
+  assert.equal(res.status, 200)
+  assert.deepEqual(new Uint8Array(await (await get(((await res.json()) as SessionIconResponse).icon!)).arrayBuffer()), PNG)
+  assert.equal((await listOf('?id=X1%40r')).current, png.key)
+  res = await fetch(`${base}/api/profile/icon?history=${png.key}`, { method: 'PUT' })
+  assert.equal(res.status, 200)
+  assert.equal((await listOf('?profile=1')).current, png.key)
+  // 無い鍵・パスは 404（読まない）
+  assert.equal((await fetch(`${base}/api/sessions/X1%40r/icon?history=0000000000000000`, { method: 'PUT' })).status, 404)
+  assert.equal((await fetch(`${base}/api/sessions/X1%40r/icon?history=..%2F..%2Fetc%2Fpasswd`, { method: 'PUT' })).status, 404)
+  assert.equal((await get('/api/icon-history/..%2Fsession-meta.json')).status, 404)
+  assert.equal((await get('/api/icon-history/0000000000000000')).status, 404)
+
+  // 消す: 別オリジンは 403。消したあとも、それを使っているアイコンは残る
+  assert.equal((await fetch(`${base}/api/icon-history/${png.key}`, { method: 'DELETE', headers: { Origin: 'http://evil.local:8787' } })).status, 403)
+  res = await fetch(`${base}/api/icon-history/${png.key}`, { method: 'DELETE' })
+  assert.equal(res.status, 200)
+  assert.equal(((await res.json()) as IconHistoryResponse).items.some((i) => i.key === png.key), false)
+  assert.equal((await get(png.url)).status, 404)
+  assert.equal((await get('/api/sessions/X1%40r/icon')).status, 200, 'いま使っているアイコンは消えない')
+  assert.equal((await fetch(`${base}/api/icon-history/${png.key}`, { method: 'DELETE' })).status, 404, '2 回目は無い')
+  assert.equal((await fetch(`${base}/api/icon-history`, { method: 'DELETE' })).status, 405)
+
+  await deleteIcon('C1@r')
+  await deleteIcon('X1@r')
+  await fetch(`${base}/api/profile/icon`, { method: 'DELETE' })
 })
 
 test('PUT meta: archived_at でアーカイブ。一覧とフィードから消え、archived=1 で出て、新しい行が届くと自動で戻る', async () => {

@@ -4,7 +4,7 @@
 // ラッパー（すぐ終わるシェル）の pid**を持っている。pid が死んでいると `terminalOf()` が null を返すので、
 // ペインでは Codex が動いているのに SAI からは「端末で開いていない」ままになり、
 // 画面の許可待ち（`CodexDialogs`）にも端末への打ち込みにも回らない。
-import { codexWriterLockPath, lsofHolders, type LockHolders } from './codex.ts'
+import { codexWriterLockHolders, lsofHolders, type LockHolders } from './codex.ts'
 
 /** 引き直した結果を覚えておく長さ。3 秒のポーリングのたびに `lsof` を起こさないため（見つからなかったことも覚える） */
 export const CODEX_PID_TTL_MS = 30_000
@@ -63,12 +63,11 @@ export class CodexTerminals implements CodexTerminalSource {
     const hit = this.cache.get(key)
     // 覚えている pid が死んでいたら、TTL の中でも引き直す（端末を閉じたのに「開いている」と言い続けない）
     if (hit && this.now() - hit.at < CODEX_PID_TTL_MS && (hit.pid === 0 || this.alive(hit.pid))) return hit.pid
-    // 合成 ID（`synth-…`）と壊れた ID は lock の置き場を組み立てられない（`codexWriterLockPath()` が弾く）
-    const path = codexWriterLockPath(session, this.env)
     let pid = 0
-    if (path && pane) {
+    if (pane) {
       try {
-        for (const candidate of await this.holders(path)) {
+        // 合成 ID・壊れた ID・lock が無いセッションは null。存在しない lock に lsof を起こさない（#432）。
+        for (const candidate of (await codexWriterLockHolders(session, this.env, this.holders)) ?? []) {
           if (this.alive(candidate) && (await this.inPane(pane, candidate))) {
             pid = candidate
             break

@@ -293,8 +293,12 @@ export class CodexPanes implements CodexPaneSource {
         }
       }
     } catch {
-      // tmux が無い・ps が読めないときは「1 つも開いていない」ではなく**前の結果を捨てない**
-      return this.cache?.panes ?? []
+      // tmux が無い・ps が読めないときは「1 つも開いていない」ではなく**前の結果を捨てない**。
+      // **失敗も TTL ぶん覚える**（#435。覚えないと、tmux の無いマシンでは cache が一度も埋まらず、
+      // 3 秒のポーリングで応答を組むたびに `tmux list-panes` を起こし直していた）
+      const kept = this.cache?.panes ?? []
+      this.cache = { at: this.now(), panes: kept }
+      return kept
     }
     this.cache = { at: this.now(), panes }
     return panes

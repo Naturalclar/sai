@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { Approval, ApprovalMap, ReplyingMap, SessionSummary } from './types.ts'
-import { todoItems } from './todoItems.ts'
+import { doneItems, pendingItems, todoItems } from './todoItems.ts'
 
 /** このサーバが動いているマシン（#114）。行の host が違えば「別のマシン」 */
 const SELF = 'mac'
@@ -35,6 +35,7 @@ function summary(over: Partial<SessionSummary>): SessionSummary {
     models: [],
     permission_mode: '',
     waiting: '',
+    idle: '',
     pane: '',
     pid: 0,
     last_turn: '',
@@ -179,4 +180,50 @@ test('todoItems: 別のマシンのセッションは出すが、ここからは
 test('todoItems: answer の replyable は使わないので false のまま', () => {
   const items = todoItems([summary({ id: 's1@sai' })], { 's1@sai': [approval({})] }, SELF)
   assert.equal(items[0]!.replyable, false)
+})
+
+test('todoItems: 終わって次を待っているだけのセッションは done。watch には出ない（#438）', () => {
+  const items = todoItems([summary({ id: 's1@sai', idle: '入力待ち' })], {}, SELF)
+  assert.deepEqual(
+    items.map((t) => [t.kind, t.text]),
+    [['done', '入力待ち']],
+  )
+  assert.equal(pendingItems(items).length, 0, 'バッジ・タブの題名・通知には数えない')
+  assert.deepEqual(doneItems(items).map((t) => t.id), ['s1@sai'])
+})
+
+test('todoItems: 本当の待ちと「終わって次を待っている」が混ざっても、数えるのは待ちだけ（#438）', () => {
+  const sessions = [
+    summary({ id: 'a@sai', end: '2026-09-02T10:10:00+09:00', idle: '入力待ち' }),
+    summary({ id: 'b@sai', end: '2026-09-02T10:20:00+09:00', waiting: '許可待ち: Bash: ls' }),
+  ]
+  const items = todoItems(sessions, {}, SELF)
+  assert.deepEqual(
+    items.map((t) => t.kind),
+    ['done', 'watch'],
+    '並びは待たせている順のまま（画面が上下の段に分ける）',
+  )
+  assert.deepEqual(pendingItems(items).map((t) => t.id), ['b@sai'])
+})
+
+test('todoItems: 答え待ちが出ているセッションでは done を出さない（#438）', () => {
+  const items = todoItems([summary({ id: 's1@sai', idle: '入力待ち' })], { 's1@sai': [approval({})] }, SELF)
+  assert.deepEqual(
+    items.map((t) => t.kind),
+    ['answer'],
+  )
+})
+
+test('todoItems: アーカイブ済みと、別プロセスの返信を処理中は done にも出さない（#438）', () => {
+  assert.deepEqual(todoItems([summary({ id: 's1@sai', idle: '入力待ち', archived: true })], {}, SELF), [])
+  // via 省略 = 別プロセス（`-p`）。端末に打ち込んだ返信（`via: 'terminal'`）は今までどおり残す
+  const running: ReplyingMap = { 's1@sai': { text: '次', since: '2026-09-02T10:11:00+09:00' } }
+  assert.deepEqual(todoItems([summary({ id: 's1@sai', idle: '入力待ち' })], {}, SELF, running), [])
+})
+
+test('todoItems: done でも返信欄から次を送れるかは watch と同じ判定（#438）', () => {
+  const [mine] = todoItems([summary({ id: 's1@sai', idle: '入力待ち', host: SELF })], {}, SELF)
+  assert.equal(mine!.replyable, true)
+  const [remote] = todoItems([summary({ id: 's1@sai', idle: '入力待ち', host: 'other' })], {}, SELF)
+  assert.equal(remote!.replyable, false, '別のマシンのセッションには送れない（#114）')
 })

@@ -1592,7 +1592,7 @@ export function createApp(
       },
       run: async (args) => {
         const id = mcpStr(args.id)
-        const turns = (await store.rows(QUEUE_DAYS)).filter((r) => eventKind(r.event) === 'turn' && entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
+        const turns = (await store.rows(QUEUE_DAYS)).filter((r) => eventKind(r.event, r.text) === 'turn' && entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
         if (turns.length === 0) return textResult('そのセッションのターンは見つかりません（sai_sessions の id を渡してください）', true)
         return textResult(
           turns

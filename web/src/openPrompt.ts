@@ -12,8 +12,8 @@ import type { FeedRow } from './api'
 export function openPromptSince(rows: readonly FeedRow[]): string {
   let latest: FeedRow | null = null
   for (const row of rows) {
-    if (eventKind(row.event) === 'other') continue
+    if (eventKind(row.event, row.text) === 'other') continue
     if (!latest || row.ts > latest.ts) latest = row
   }
-  return latest && eventKind(latest.event) === 'resume' ? latest.ts : ''
+  return latest && eventKind(latest.event, latest.text) === 'resume' ? latest.ts : ''
 }

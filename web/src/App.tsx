@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { HIDDEN_POLL_MS, parseRoute, useHashRoute, useLocalState, usePolling } from './hooks'
-import { todoItems } from '../../shared/todoItems.ts'
+import { pendingItems, todoItems } from '../../shared/todoItems.ts'
 import { sessionGroups, toggleCollapsed, visibleIds } from './sessionGroups'
 import { titleWith } from '../../shared/notify.ts'
 import { replyBlockedReason } from '../../shared/reply.ts'
@@ -161,7 +161,9 @@ export function App() {
   const active: NavTarget = route.name === 'session' ? { kind: 'session', id: route.id } : route.name === 'todo' ? { kind: 'todo' } : { kind: 'feed' }
   // リポジトリごとの塊（#364）。**画面の並びとキーボードの ↑↓ の並びは同じ関数から作る**ので、
   // 畳んだ塊の中のセッション（見えていない）には移らない
-  const waitingIds = useMemo(() => new Set((todo ?? []).map((t) => t.id)), [todo])
+  // サイドバーの塊の見出しに出す「要対応」の数。**`done`（終わって次を待っているだけ）は数えない**（#438）。
+  // バッジ・タブの題名と同じ `pendingItems()` を通すので、3 か所が食い違わない
+  const waitingIds = useMemo(() => new Set(pendingItems(todo ?? []).map((t) => t.id)), [todo])
   const groups = useMemo(() => sessionGroups(list.data?.sessions ?? [], waitingIds), [list.data, waitingIds])
   const toggleGroup = useCallback((key: string) => setGroupUi({ collapsed: toggleCollapsed(groupUi.collapsed, key) }), [setGroupUi, groupUi.collapsed])
   const sessionIds = useMemo(() => visibleIds(groups, groupUi.collapsed), [groups, groupUi.collapsed])
@@ -207,7 +209,7 @@ export function App() {
 
   // 待っている件数をタブの題名に出す（#231）。通知と違って許可が要らないので、切っていても出る
   useEffect(() => {
-    document.title = titleWith(todo?.length ?? 0, route.name === 'session' ? route.id.slice(0, 12) : '')
+    document.title = titleWith(pendingItems(todo ?? []).length, route.name === 'session' ? route.id.slice(0, 12) : '')
   }, [route, todo])
 
   /** 入力欄で `←` を押されたとき。見えていない所には当てないので、閉じたサイドバーは開き、狭い画面は一覧側へ移る */

@@ -76,7 +76,7 @@ export function toUtterances(rows: FeedRow[]): Utterance[] {
   const out: Utterance[] = []
   rows.forEach((row, index) => {
     const id = entityId(row.session, row.repo, row.ts)
-    const kind = eventKind(row.event)
+    const kind = eventKind(row.event, row.text)
     const mine = (row.user_text ?? '').trim()
     if (kind === 'resume') {
       // 入力した瞬間の行。user_text があれば自分の発言。無い（合図だけの古い形）ならバブルにしない
@@ -91,6 +91,9 @@ export function toUtterances(rows: FeedRow[]): Utterance[] {
       out.push({ speaker: row.agent, row, text: row.text ?? '', key: `${row.ts}:${index}:end`, ended: true })
       return
     }
+    // 終わって放置されているだけの行（`入力待ち`。#438）はバブルにしない。
+    // 「ターンが終わった」のは直前の返答のバブルで分かるので、間に「待っています」を挟むと読み筋が切れる
+    if (kind === 'idle') return
     if (kind === 'waiting') {
       const resolved = (lastIndex.get(id) ?? index) > index
       out.push({ speaker: row.agent, row, text: row.text ?? '', key: `${row.ts}:${index}`, waiting: true, resolved })
@@ -126,7 +129,7 @@ export function promptArrived(rows: FeedRow[], id: string, text: string, since: 
   const want = text.trim()
   const from = (parseTs(since)?.getTime() ?? 0) - PROMPT_SLACK_MS
   return rows.some((r) => {
-    const kind = eventKind(r.event)
+    const kind = eventKind(r.event, r.text)
     // 入力の行（Claude）だけでなく、**入力を載せたターン完了の行**でも届いたとみなす（#375）。
     // Codex と OpenCode は入力の行を書かず、`user_text` はターン完了の行に載るので、
     // これを見ないと本物の自分バブルと仮バブルで同じ文が 2 つ並ぶ（OpenCode はプロセスが終わらないので残り続けた）

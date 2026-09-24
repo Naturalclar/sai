@@ -2,9 +2,10 @@
 //
 // **何が待っているかは自分で決めない。** `todoItems()`（要対応の画面とサイドバーのバッジが使っているもの）を
 // そのまま受け取る。判定が 2 か所に分かれると、バッジは 2 なのに通知は 1 のような食い違いが出る。
+import { pendingItems } from './todoItems.ts'
 import type { TodoItem } from './todoItems.ts'
 
-/** タブの題名の元。件数はこの前に付ける */
+/** タブの題名の元。件数はこの前に付ける（数えるのは `pendingItems()` のぶんだけ。#438） */
 export const TITLE_BASE = 'SAI'
 
 /**
@@ -24,9 +25,15 @@ export function notifyKey(item: TodoItem): string {
   return `${item.kind}:${item.id}:${item.since}`
 }
 
-/** まだ知らせていない待ち。`seen` に無いものだけ */
+/**
+ * まだ知らせていない待ち。`seen` に無いものだけ。
+ *
+ * **`done`（終わって次を待っているだけ）では鳴らさない**（#438）。ターンが終われば必ず 60 秒後に
+ * `入力待ち` の行が来るので、落とさないと**返信が 1 回終わるたびに通知が鳴る**。
+ * 落とすのはここ 1 か所で、バッジ・タブの題名と同じ `pendingItems()` を通す
+ */
 export function appeared(seen: ReadonlySet<string>, items: readonly TodoItem[]): TodoItem[] {
-  return items.filter((t) => !seen.has(notifyKey(t)))
+  return pendingItems(items).filter((t) => !seen.has(notifyKey(t)))
 }
 
 /** 出す通知の中身 */

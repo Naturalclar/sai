@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { NEAR_BOTTOM_PX, followsBottom, nearBottom } from './chatScroll.ts'
+import { NEAR_BOTTOM_PX, followsBottom, nearBottom, prepended } from './chatScroll.ts'
 
 test('nearBottom は最下部までの距離が NEAR_BOTTOM_PX 未満のときだけ真', () => {
   // scrollHeight 1000, clientHeight 500 → 最下部は scrollTop 500
@@ -20,4 +20,12 @@ test('followsBottom は追従中で高さが変わったときだけ真', () => 
   assert.equal(followsBottom(true, 1000, 1000), false) // 中身が変わっていない（3 秒ごとの描き直し）
   assert.equal(followsBottom(false, 1000, 1200), false) // 上に遡っている間は追従しない
   assert.equal(followsBottom(false, 1000, 1000), false)
+})
+
+test('prepended: 先頭の行がさかのぼったときだけ', () => {
+  assert.equal(prepended('2026-09-18T12:00:00+09:00', '2026-09-11T09:00:00+09:00'), true)
+  assert.equal(prepended('', '2026-09-11T09:00:00+09:00'), false, '最初の描画')
+  assert.equal(prepended('2026-09-18T12:00:00+09:00', '2026-09-18T12:00:00+09:00'), false)
+  assert.equal(prepended('2026-09-18T12:00:00+09:00', '2026-09-19T12:00:00+09:00'), false, '先頭が窓から落ちた')
+  assert.equal(prepended('2026-09-18T12:00:00+09:00', ''), false)
 })

@@ -120,8 +120,11 @@ const qs = (params: object) => new URLSearchParams(Object.entries(params)).toStr
 
 export const api = {
   sessions: (f: SessionFilters) => getJSON<SessionsResponse>(`/api/sessions?${qs(f)}`),
-  session: (id: string, days = 90) =>
-    getJSON<SessionDetailResponse>(`/api/sessions/${encodeURIComponent(id)}?days=${days}`),
+  /** `recent` を付けると直近その日数の行だけ（#477）。`focus`（検索の飛び先）はそこまで必ず含める */
+  session: (id: string, { recent, focus = '' }: { recent?: number; focus?: string } = {}, days = 90) =>
+    getJSON<SessionDetailResponse>(
+      `/api/sessions/${encodeURIComponent(id)}?days=${days}${recent ? `&recent=${recent}` : ''}${focus ? `&focus=${encodeURIComponent(focus)}` : ''}`,
+    ),
   feed: (f: FeedFilters) => getJSON<FeedResponse>(`/api/feed?${qs(f)}`),
   /** 返信。replaceTyped は端末の打ちかけを消して打ち込んでよい（409 の code: terminal_typed を人が確認したあと） */
   reply: (id: string, text: string, options: { replaceTyped?: boolean; via?: 'process'; attachments?: string[]; queue?: boolean; steer?: boolean } = {}, days = 90) =>

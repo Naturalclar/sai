@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { entityId } from '../../shared/entity.ts'
 import { isRemoteHost } from '../../shared/host.ts'
@@ -14,7 +14,7 @@ import { JumpToBottom } from './JumpToBottom'
 import { HostTag } from './HostTag'
 import { opensDiff, type ChatDiffs } from './feedDiff.ts'
 import { JUMP_FLASH_MS, type FeedJump } from './feedJump.ts'
-import { followsBottom, nearBottom } from './chatScroll.ts'
+import { followsBottom, nearBottom, prepended } from './chatScroll.ts'
 import { questionsFor } from './terminalQuestion.ts'
 import { wasClipped } from '../../shared/clipped.ts'
 import type { PendingQuestion } from '../../shared/types.ts'
@@ -31,6 +31,11 @@ interface Props {
   selfHost?: string
   /** 発言者の表示名・アイコンを引く元（SessionSummary.meta）。セッション画面はその1件、フィードはサイドバーの一覧 */
   sessions?: SessionSummary[]
+  /**
+   * 先頭に置く要素（#477。セッション画面の「前の 7 日を表示」）。前の行が足されたら、読んでいた場所がずれないよう
+   * 足された高さぶん送り直す
+   */
+  leader?: ReactNode
   /** 末尾に足す仮の要素（送信中の返信など）。行と同じく最下部追従の対象 */
   trailer?: ReactNode
   /** エージェントのバブルに思考の折りたたみを出す（セッション画面だけ。フィードは出さない） */
@@ -79,7 +84,7 @@ function flash(el: HTMLElement) {
   window.setTimeout(() => el.classList.remove('found'), JUMP_FLASH_MS)
 }
 
-export function Chat({ rows, showChannel, selfHost = '', sessions = NO_SESSIONS, trailer, showThinking = false, thinkingOpen = false, longOpen = false, profile, linear = '', focusTs = '', diffs, jumpTo = null, question }: Props) {
+export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_SESSIONS, trailer, showThinking = false, thinkingOpen = false, longOpen = false, profile, linear = '', focusTs = '', diffs, jumpTo = null, question }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
   // 最後に最下部へ送ったときの scrollHeight。中身の高さが変わったときだけ送るため（#344）
@@ -132,6 +137,19 @@ export function Chat({ rows, showChannel, selfHost = '', sessions = NO_SESSIONS,
     el.scrollTop = el.scrollHeight
   }, [rows, trailer, focusTs])
 
+  // 先頭に前の行が足されたら、足された高さぶん送り直して読んでいた場所に留まる（#477）。
+  // ブラウザのスクロールアンカーは Safari に無く、先頭（scrollTop 0）で押したときは Chrome でも効かないので自分で合わせる
+  const topTs = useRef('')
+  const lastHeight = useRef(0)
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el) return
+    const first = rows[0]?.ts ?? ''
+    if (prepended(topTs.current, first) && !stickToBottom.current) el.scrollTop += el.scrollHeight - lastHeight.current
+    topTs.current = first
+    lastHeight.current = el.scrollHeight
+  })
+
   const onScroll = () => {
     const el = ref.current
     if (!el) return
@@ -163,6 +181,7 @@ export function Chat({ rows, showChannel, selfHost = '', sessions = NO_SESSIONS,
   return (
     <div className="chat-wrap">
       <div className="chat" ref={ref} onScroll={onScroll}>
+        {leader}
         {groupRows(rows).map((day) => (
           <div key={day.day}>
             <div className="day"><span>{day.label}</span></div>

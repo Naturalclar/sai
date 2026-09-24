@@ -22,3 +22,13 @@ export function nearBottom(scrollHeight: number, scrollTop: number, clientHeight
 export function followsBottom(stick: boolean, applied: number, height: number): boolean {
   return stick && height !== applied
 }
+
+/**
+ * 先頭に前の行が足されたか（#477。「前の 7 日を表示」）。先頭の行の時刻がさかのぼったときだけ。
+ * 最初の描画（前が空）と、先頭が消えた・同じときは足されていない
+ */
+export function prepended(prevFirstTs: string, firstTs: string): boolean {
+  const prev = Date.parse(prevFirstTs)
+  const next = Date.parse(firstTs)
+  return !Number.isNaN(prev) && !Number.isNaN(next) && next < prev
+}

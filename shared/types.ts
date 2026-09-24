@@ -778,7 +778,10 @@ export interface HealthResponse {
 export interface SessionDetailResponse {
   rev: string
   session: SessionSummary
+  /** そのセッションの行。`recent=<日数>` を付けると直近のぶんだけ（#477。`shared/recentRows.ts`） */
   rows: FeedRow[]
+  /** `recent` で落とした、それより前の行の数（窓の中）。付けていなければ 0 */
+  older: number
   replying: ReplyingMap
   /** 預かっている返信（#305。SessionsResponse と同じ） */
   queued: ReplyQueueMap

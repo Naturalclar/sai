@@ -25,6 +25,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 RECORD = HERE / "record.py"
+sys.path.insert(0, str(HERE.parent))
+from feed.record import ASSISTANT_WAIT_S  # noqa: E402
 JST = timezone(timedelta(hours=9))
 
 
@@ -505,6 +507,17 @@ class RecordTest(unittest.TestCase):
         ])
         self.assertEqual((text, closed), ("いまのターンの返答", True))
 
+        # 古い閉じた行が、そのあとに続いた本物の返答を押しのけない。実データの
+        # `stop_sequence` は 30 件すべて Claude Code の合成通知で、そのあともターンが続く
+        text, closed = _turn_assistant_text(prev_turn + [
+            {"type": "user", "message": {"role": "user", "content": "いまの依頼"}},
+            {"type": "assistant", "message": {"role": "assistant", "stop_reason": "stop_sequence", "model": "<synthetic>",
+                                              "content": [{"type": "text", "text": "You've reached your limit"}]}},
+            {"type": "assistant", "message": {"role": "assistant", "stop_reason": "tool_use",
+                                              "content": [{"type": "text", "text": "続きをやる"}]}},
+        ])
+        self.assertEqual((text, closed), ("続きをやる", False), "いちばん新しい本文が勝つ")
+
     def test_stop_does_not_record_the_previous_turn_reply(self):
         """#467 の本体。いまのターンに本文が無いまま Stop が走っても、
         **前のターンの返答は載せない**（空の行は正直だが、前回の返答は嘘になる）。"""
@@ -548,6 +561,22 @@ class RecordTest(unittest.TestCase):
         writer.join()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(read_rows(self.feed_dir)[-1]["text"], "遅れて書かれた返答")
+
+    def test_mid_turn_hooks_do_not_wait(self):
+        """待つのはターン完了（`Stop`）の行のときだけ。ターンの途中で鳴るフックまで
+        待たせると、エージェント本体をそのぶん止めてしまう。"""
+        transcript = Path(self.tmp.name) / "transcript.jsonl"
+        write_jsonl(transcript, claude_entries([
+            {"type": "user", "message": {"role": "user", "content": "いまの依頼"}},
+            {"type": "assistant", "message": {"role": "assistant", "stop_reason": "tool_use",
+                                              "content": [{"type": "tool_use", "name": "Task", "input": {}}]}},
+        ]))
+        payload = {"session_id": "s", "transcript_path": str(transcript), "cwd": str(self.cwd), "hook_event_name": "SubagentStop"}
+        started = time.monotonic()
+        result = run(stdin=json.dumps(payload), env=self.env)
+        elapsed = time.monotonic() - started
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertLess(elapsed, ASSISTANT_WAIT_S, "ターンの途中のフックは待たない")
 
     # -- 端末の居場所（pane / pid）
 

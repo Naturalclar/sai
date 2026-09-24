@@ -441,7 +441,6 @@ def _turn_assistant_text(entries: list[dict]) -> tuple[str, bool]:
     閉じた行が見つかればそれを、無ければターンの途中の地の文（`stop_reason: tool_use` に
     付いた 1〜2 文）を返す。そのターンに本文が 1 つも無ければ `("", False)`。
     """
-    interim = ""
     for entry in reversed(entries):
         if _is_prompt_row(entry):
             break
@@ -453,14 +452,14 @@ def _turn_assistant_text(entries: list[dict]) -> tuple[str, bool]:
         text = _blocks_to_text(message.get("content")).strip()
         if not text:
             continue
-        if message.get("stop_reason") in _TURN_CLOSED:
-            return text, True
-        if not interim:
-            interim = text
-    return interim, False
+        # **いちばん新しい本文が勝つ**。古い閉じた行を先に返すと、そのあとに続いた本物の返答を
+        # 押しのける（実データの `stop_sequence` は 30 件すべて Claude Code の合成通知
+        # 「You've reached your … limit」で、そのあとターンが続いていることがある）
+        return text, message.get("stop_reason") in _TURN_CLOSED
+    return "", False
 
 
-def last_assistant_text(path: Path) -> str:
+def last_assistant_text(path: Path, wait: bool = False) -> str:
     """Claude の transcript から、**そのターンの**返答を取る（#467）。
 
     前は「ファイルの末尾から最初に見つかった assistant の本文」を返していて、ターンの
@@ -469,7 +468,9 @@ def last_assistant_text(path: Path) -> str:
     人が頼んだことと無関係な「前回と同じ返事」が記録されていた（1397 本中 39 本。
     うち 22 本が前のターンの返答そのもの）。
 
-    そこで **`_is_prompt_row()` で止まり**、閉じた行が見えるまで `ASSISTANT_WAIT_S` だけ待つ。
+    そこで **`_is_prompt_row()` で止まり**、閉じた行が見えるまで `ASSISTANT_WAIT_S` だけ待つ
+    （`wait` のときだけ。**待つのはターン完了の行を書くときだけ**で、ターンの途中で鳴る
+    フック（`SubagentStop` など）まで待たせるとエージェント本体を 2 秒止めてしまう）。
     待っても現れなければ、そのターンの途中の地の文か空を返す——**前のターンには落ちない**
     （空の行は正直だが、前回の返答は嘘になる）。`record.py` は必ず exit 0 で、SIGALRM の
     15 秒の自殺タイマーがあるので、この待ちはその予算の中に収まる。
@@ -477,15 +478,21 @@ def last_assistant_text(path: Path) -> str:
     signature = _file_signature(path)
     if signature == (0, 0):
         return ""  # 読めない transcript を待っても増えない
-    deadline = time.monotonic() + ASSISTANT_WAIT_S
     text, closed = _turn_assistant_text(list(_iter_jsonl(path)))
-    while not closed and time.monotonic() < deadline:
-        # transcript が増えるまでは読み直さない（大きいファイルを何度も舐めない）
-        before = _file_signature(path)
+    if closed or not wait:
+        return text
+    deadline = time.monotonic() + ASSISTANT_WAIT_S
+    while time.monotonic() < deadline:
         time.sleep(ASSISTANT_POLL_S)
-        if _file_signature(path) == before:
-            continue
+        current = _file_signature(path)
+        if current == signature:
+            continue  # 増えていないなら読み直さない（大きいファイルを何度も舐めない）
+        # **印は読む前のものを持ち越す**。読み終わってから stat すると、読んでいる最中に
+        # 着いた行がその印に含まれてしまい、次の比較で「増えていない」になって永久に拾えない
+        signature = current
         text, closed = _turn_assistant_text(list(_iter_jsonl(path)))
+        if closed:
+            break
     return text
 
 
@@ -1311,7 +1318,8 @@ def build_row(payload: dict, now: datetime, directory: Path, declared: str = "")
             # タイトル用の first_user_text はどの行にも載せる。本文と入力はターン完了の行だけ
             first_user = first_user_text(path)
             if event not in ("UserPromptSubmit",) and waiting is None and ended is None:
-                text = last_assistant_text(path)
+                # 待つのはターン完了の行のときだけ（途中で鳴るフックで本体を止めない。#467）
+                text = last_assistant_text(path, wait=event == "Stop")
                 user_text = last_user_text(path)
                 thinking = last_turn_thinking(path)
                 model = last_assistant_model(path)

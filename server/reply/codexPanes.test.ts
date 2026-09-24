@@ -130,6 +130,19 @@ test('tmux が無ければ前の結果を捨てない（「1 つも開いてい�
   assert.equal((await panes.scan()).length, 1, '前に見つけた分を残す')
 })
 
+test('tmux が無いマシンでも TTL ぶんは起こし直さない（#435）', async () => {
+  let runs = 0
+  const tmux: Tmux = { async run() { runs++; throw new Error('tmux: command not found') } }
+  let now = 1_000_000
+  const panes = new CodexPanes({ ...deps({ tmux }), now: () => now })
+  assert.deepEqual(await panes.scan(), [])
+  assert.deepEqual(await panes.scan(), [])
+  assert.equal(runs, 1, '失敗も覚えるので、TTL の中は tmux を起こし直さない')
+  now += CODEX_PANES_TTL_MS + 1
+  await panes.scan()
+  assert.equal(runs, 2, '過ぎたらもう一度試す（tmux が戻っていれば拾える）')
+})
+
 test('parsePsCommands: pid / ppid / コマンド名（パスは落とす）', () => {
   assert.deepEqual(parsePsCommands('  101   100 /usr/local/bin/codex\n  bad line\n  102   100 node\n'), [
     { pid: 101, ppid: 100, comm: 'codex' },

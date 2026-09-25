@@ -80,7 +80,7 @@ export function jevState(approval: Approval): string {
   return clip(lines.join('\n'), JEV_STATE_MAX)
 }
 
-/** 画面の色分け。**判断はしない**（押すのは人）。どこで区切るかだけをここに 1 つ置く */
+/** 画面の色分け。どこで区切るかだけをここに 1 つ置く（自動で答えるかは別の閾値 `jev_auto`。#499） */
 export type JevLevel = 'safe' | 'unsure' | 'risky'
 
 /** これ以上なら「問題なさそう」 */
@@ -127,10 +127,36 @@ export function isJevAuto(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && (value === 0 || (value >= JEV_AUTO_MIN && value <= 1))
 }
 
-/**
- * 自動で常に許可してよいか。閾値が 0（しない）・確率が届いていない・閾値未満なら false。
- * 対象を絞るのは呼び出し側（SAI から「常に許可」を返せる Claude の `-p` の許可だけ。Codex / OpenCode には「常に許可」が無い）
- */
+/** 確率が閾値以上か。閾値が 0（しない）・確率が届いていない・閾値未満なら false */
 export function jevAutoAllows(safe: number | undefined, threshold: number): boolean {
   return threshold > 0 && safe !== undefined && safe >= threshold
+}
+
+/** 表示・ログに出す百分率。`jevLabel()` と同じ丸め（ログとタグとメニューで食い違わない） */
+export function jevPercent(safe: number): number {
+  return Math.round(safe * 100)
+}
+
+/**
+ * 自動で「常に許可」してよい種類の許可か。**Bash だけ**。
+ * - Bash は `jevState()` がコマンドそのものを送るので、Jev が見たものと許可するものが同じ
+ * - MCP ツール（`mcp__…`）は `alwaysAllowRule()` が名前だけのルールを組めるが、`jevState()` は引数を送らない（本文が混ざるため）ので、
+ *   Jev が見ていないものを永久に許すことになる。人が [常に許可] を押すのは今までどおりできる
+ * - Edit / Write などはそもそもルールが無い（`alwaysAllowRule()` が null）
+ * Codex / OpenCode の許可には「常に許可」が無い
+ */
+export function jevAutoEligible(approval: Pick<Approval, 'tool_name' | 'agent' | 'answerable'>): boolean {
+  return (approval.agent ?? 'claude') === 'claude' && approval.answerable !== false && approval.tool_name === 'Bash'
+}
+
+/**
+ * ルールそのものを Jev に聞く文（#499 のレビュー）。`JEV_SAFE_STATEMENT` はこの 1 回のコマンドについての主張で、
+ * 「常に許可」で書かれるルール（`Bash(rm:*)` のような前方一致）はそれより広い。この回が問題なさそうでも、
+ * ルールが広すぎれば自動では許さない。両方が閾値以上のときだけ答える
+ */
+export const JEV_RULE_STATEMENT = 'Permanently allowing every future command matching this rule in this repository, without asking again, is safe: none of them can destroy data, leak secrets, or make irreversible changes'
+
+/** ルールを聞くときの「状態」の文。この回の状態に、これから書かれるルールを添える */
+export function jevRuleState(approval: Approval, ruleLabel: string): string {
+  return clip(`${jevState(approval)}\nThe user is about to allow, in this repository and without asking again, every future command matching the rule: ${clip(ruleLabel, FIELD_MAX)}`, JEV_STATE_MAX)
 }

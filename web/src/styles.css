@@ -53,7 +53,7 @@
   /* 一言の入切・口・モデル（DigestEngineControls。#288）。どの幅でもメニューの中 */
   header .user-menu .menu .digest-engine { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--line); }
   header .user-menu .menu .digest-engine .fields { display: flex; flex-direction: column; gap: 6px; padding: 2px 12px 8px; }
-  header .user-menu .menu .digest-engine select, header .user-menu .menu .digest-engine .digest-model { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; font: inherit; font-size: 12px; }
+  header .user-menu .menu .digest-engine select, header .user-menu .menu .digest-engine .digest-model, header .user-menu .menu .jev-controls .jev-auto select { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; font: inherit; font-size: 12px; }
   header .user-menu .menu .digest-engine .digest-model:focus { outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent); border-color: var(--accent); }
   header .user-menu .menu .digest-engine .note { padding: 0; white-space: normal; }
   header .user-menu .menu .digest-engine .note.error { color: var(--claude); }
@@ -61,7 +61,6 @@
   header .user-menu .menu .jev-controls { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--line); }
   header .user-menu .menu .jev-controls .note { padding: 0 12px 6px; white-space: normal; }
   header .user-menu .menu .jev-controls .jev-auto { display: flex; align-items: center; gap: 6px; padding: 2px 12px 6px; font-size: 12px; color: var(--muted); }
-  header .user-menu .menu .jev-controls .jev-auto select { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; font: inherit; }
   /* 使用量（#216）。取れたエージェントの分だけ出る。Codex は割合、Claude は上限に当たっているときだけ */
   header .usage { position: relative; display: inline-flex; }
   header .usage-chip { display: inline-flex; align-items: center; gap: 8px; padding: 3px 8px; font: inherit; font-size: 12px; color: var(--muted); background: var(--chip); border: 1px solid transparent; border-radius: 999px; cursor: pointer; white-space: nowrap; }
@@ -388,7 +387,7 @@
     /* 新しいセッションの画面（#314）。基本の指定（前の方）と同じ詳細度なので、後ろにあるこちらが勝つ */
     .new-session select, .new-session textarea, .new-session .workspace-picker input { font-size: 16px; min-height: 36px; }
     /* 一言の口とモデルの欄（#288）。前の方にある基本の指定と同じ詳細度にして、後ろにあるこちらを勝たせる */
-    header .user-menu .menu .digest-engine select, header .user-menu .menu .digest-engine .digest-model { font-size: 16px; min-height: 36px; }
+    header .user-menu .menu .digest-engine select, header .user-menu .menu .digest-engine .digest-model, header .user-menu .menu .jev-controls .jev-auto select { font-size: 16px; min-height: 36px; }
     /* 見出しの select と名前の入力欄は `.pane` を足して詳細度を上げる。この下（ファイルの後ろ）にある基本の
        `.chat-head .meta select { font-size: 12px }` / `.chat-head .session-name input { font: inherit }` と同じ詳細度だと
        後ろが勝ち、16px が効かずに iOS で押すと拡大していた（#274 で測って 12px / 14px だった） */
@@ -747,7 +746,7 @@
   .group.approval .detail { font-family: var(--mono); font-size: 12px; background: var(--chip); padding: 8px 10px; border-radius: 6px; margin: 6px 0 0; white-space: pre-wrap; word-break: break-word; max-height: 12em; overflow: auto; }
   /* 処理中のターンが起動したときの許可モードのまま聞いている、の注記（#272） */
   .group.approval .mode-note { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
-  /* 許可して問題なさそうかの予想（#491）。色で読めるが、判断はしない（押すのは人） */
+  /* 許可して問題なさそうかの予想（#491）。色で読める。自動で答えるかは設定の閾値（#499） */
   .group.approval .jev-tag { display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 10px; font-size: 11px; vertical-align: middle; border: 1px solid currentColor; }
   .group.approval .jev-tag.safe { color: var(--accent); }
   .group.approval .jev-tag.unsure { color: var(--muted); }

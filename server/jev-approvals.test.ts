@@ -18,8 +18,10 @@ import type { Runner } from './reply/runner.ts'
 
 const runner: Runner = { running: () => false, snapshot: (): ReplyingMap => ({}), start: async () => {} }
 const judged: string[] = []
-const judge: JevJudge = async (state) => {
+const judge: JevJudge = async (state, statement) => {
   judged.push(state)
+  // ルールを聞かれたら（#499）: git のルールは問題なさそう、それ以外のルールは広すぎる
+  if (statement?.startsWith('Permanently allowing')) return /rule: Bash\(git /.test(state) ? 0.96 : 0.2
   return state.includes('rm -rf') ? 0.01 : 0.97
 }
 
@@ -29,8 +31,8 @@ const servers: Server[] = []
 const saved: Record<string, string | undefined> = {}
 
 /** createApp を立てて base URL を返す。`jev` を省略すると「送らない」既定のまま */
-async function start(approvals: Approvals, jev?: JevJudge | null): Promise<string> {
-  const app = createApp(new FeedStore(feedDir), join(dir, 'dist'), runner, approvals, undefined, undefined, undefined, {
+async function start(approvals: Approvals, jev?: JevJudge | null, run: Runner = runner): Promise<string> {
+  const app = createApp(new FeedStore(feedDir), join(dir, 'dist'), run, approvals, undefined, undefined, undefined, {
     tmux: { run: async () => '' },
     ps: async () => '',
     ...(jev === undefined ? {} : { jev }),
@@ -44,6 +46,7 @@ async function start(approvals: Approvals, jev?: JevJudge | null): Promise<strin
 
 const sessions = async (base: string): Promise<SessionsResponse> => (await fetch(`${base}/api/sessions`)).json() as Promise<SessionsResponse>
 const settle = () => new Promise((r) => setTimeout(r, 20))
+const put = (base: string, body: unknown) => fetch(`${base}/api/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify(body) })
 
 before(async () => {
   // 端末・app-server・opencode serve を見に行かない（許可は Approvals に預けた分だけにする）
@@ -90,13 +93,9 @@ test('設定で切ると聞かず、付けない。設定の応答に入切と�
   const approvals = new Approvals()
   approvals.ask('S1@r', 'Bash', { command: 'git log' }, 't1')
   const base = await start(approvals, judge)
-  const put = await fetch(`${base}/api/settings`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json', Origin: base },
-    body: JSON.stringify({ jev: false }),
-  })
-  assert.equal(put.status, 200)
-  const s = (await put.json()) as SettingsResponse
+  const off = await put(base, { jev: false })
+  assert.equal(off.status, 200)
+  const s = (await off.json()) as SettingsResponse
   assert.equal(s.jev_on, false)
   assert.equal(s.jev_ready, true)
   await sessions(base)
@@ -104,9 +103,9 @@ test('設定で切ると聞かず、付けない。設定の応答に入切と�
   assert.equal((await sessions(base)).approvals['S1@r']![0]!.jev, undefined)
   assert.equal(judged.length, 0)
   // 入に戻す（ほかのテストのために settings.json を戻す）。型の違う値は 400
-  const bad = await fetch(`${base}/api/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ jev: 'yes' }) })
+  const bad = await put(base, { jev: 'yes' })
   assert.equal(bad.status, 400)
-  await fetch(`${base}/api/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ jev: true }) })
+  await put(base, { jev: true })
 })
 
 test('createApp の既定は「送らない」（鍵のあるマシンでテストを回しても本物の Jev に送らない）', async () => {
@@ -128,43 +127,62 @@ test('createApp の既定は「送らない」（鍵のあるマシンでテス�
   }
 })
 
-test('自動で常に許可（#499）: 閾値以上の Claude の許可は次の応答で答え済みになり、MCP の待ち手に updatedPermissions 付きの allow が返る。閾値未満・質問・閾値 0 は残る', async () => {
+
+test('自動で常に許可（#499）: 預かった時に Jev に聞き、この回とルールの両方が閾値以上なら画面のポーリング無しで答える。閾値未満・広いルール・MCP・質問・閾値 0 は残る', async () => {
   judged.length = 0
   const approvals = new Approvals()
-  const safe = approvals.ask('S1@r', 'Bash', { command: 'git status' }, 't1')
-  const risky = approvals.ask('S1@r', 'Bash', { command: 'rm -rf ~/' }, 't2')
-  approvals.ask('S1@r', 'AskUserQuestion', { questions: [{ question: 'どれにする?', options: [] }] }, 't3')
-  const base = await start(approvals, judge)
-  const put = async (body: unknown) => fetch(`${base}/api/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify(body) })
+  // POST /api/approvals は返信を処理中のセッションだけ受ける
+  const busy: Runner = { ...runner, running: (id) => id === 'S1@r' }
+  const base = await start(approvals, judge, busy)
+  const post = async (tool_name: string, input: Record<string, unknown>) => {
+    const res = await fetch(`${base}/api/approvals`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: 'S1@r', tool_name, input, tool_use_id: 't' }) })
+    assert.equal(res.status, 201)
+    return ((await res.json()) as { approval_id: string }).approval_id
+  }
+  const drain = async () => {
+    for (let i = 0; i < 6; i++) await settle()
+  }
 
-  // 閾値 0（既定）: 0.97 でも残る
-  await sessions(base)
-  await settle()
-  assert.equal((await sessions(base)).approvals['S1@r']!.length, 3, '既定では自動で答えない')
+  // 閾値 0（既定）: 0.97 でも残る（Jev には聞かない）
+  const early = await post('Bash', { command: 'git status' })
+  await drain()
+  assert.equal(await approvals.wait(early, 10), null, '既定では自動で答えない')
+  assert.equal(judged.length, 0, '自動が切なら預かっただけでは聞かない')
 
   // 検査: 0.5 未満・1 超・文字列は 400
-  for (const bad of [0.3, 1.5, '0.9']) assert.equal((await put({ jev_auto: bad })).status, 400, JSON.stringify(bad))
-  const ok = await put({ jev_auto: 0.9 })
+  for (const bad of [0.3, 1.5, '0.9']) assert.equal((await put(base, { jev_auto: bad })).status, 400, JSON.stringify(bad))
+  const ok = await put(base, { jev_auto: 0.9 })
   assert.equal(ok.status, 200)
   assert.equal(((await ok.json()) as SettingsResponse).jev_auto, 0.9)
   assert.equal(JSON.parse(await readFile(join(feedDir, 'settings.json'), 'utf-8')).jev_auto, 0.9, 'settings.json に残る')
 
-  const after = await sessions(base)
-  const left = Object.fromEntries(after.approvals['S1@r']!.map((a) => [a.input.command ?? a.tool_name, a.jev]))
-  assert.deepEqual(left, { 'rm -rf ~/': 0.01, AskUserQuestion: undefined }, '0.97 の git status だけ答え済みで消える。0.01 と質問は残る')
-  const answer = await approvals.wait(safe.approval_id, 10)
+  // 設定を変えた時にも動く: 預かっていた git status に聞き → ルールも聞き → 答える。一覧の GET は一度も叩いていない
+  await drain()
+  const answer = await approvals.wait(early, 10)
   assert.equal(answer?.behavior, 'allow')
   assert.deepEqual(answer?.updatedPermissions, [{ type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'git status:*' }], behavior: 'allow', destination: 'localSettings' }], '画面の [常に許可] と同じ答え')
-  assert.equal(await approvals.wait(risky.approval_id, 10), null, '危なそうな方はまだ待っている')
+  assert.ok(judged.some((st) => /rule: Bash\(git status:\*\)/.test(st)), 'ルールそのものも聞く')
   const log = await readFile(join(feedDir, 'reply.log'), 'utf-8')
-  assert.match(log, /S1@r Jev が 97% で自動で常に許可（閾値 90%）: /)
+  assert.match(log, /S1@r Jev が自動で常に許可（この回 97%、ルール 96%、閾値 90%）: Bash\(git status:\*\)/)
 
-  // 閾値ちょうど未満に上げると答えない
-  const strict = approvals.ask('S1@r', 'Bash', { command: 'git log' }, 't4')
-  await put({ jev_auto: 0.99 })
-  await sessions(base)
-  await settle()
-  await sessions(base)
-  assert.equal(await approvals.wait(strict.approval_id, 10), null, '0.97 < 0.99 なので待つ')
-  await put({ jev_auto: 0 })
+  // 預かった時にも動く（画面のポーリング無し）。危ないコマンド・広いルール・MCP ツール・質問は残る
+  const risky = await post('Bash', { command: 'rm -rf ~/' })
+  const wide = await post('Bash', { command: 'pnpm test' }) // この回は 0.97 だが、ルール Bash(pnpm test:*) は 0.2
+  const mcp = await post('mcp__github__push_files', { owner: 'o', repo: 'r' })
+  const question = await post('AskUserQuestion', { questions: [{ question: 'どれにする?', options: [] }] })
+  const fine = await post('Bash', { command: 'git log --oneline' })
+  await drain()
+  assert.equal((await approvals.wait(fine, 10))?.behavior, 'allow', 'git log は答え済み')
+  assert.equal(await approvals.wait(risky, 10), null, '0.01 は待つ')
+  assert.equal(await approvals.wait(wide, 10), null, 'この回は通ってもルールが広ければ待つ')
+  assert.equal(await approvals.wait(mcp, 10), null, 'MCP ツールは対象外（Jev に引数を送らない）')
+  assert.equal(await approvals.wait(question, 10), null, '質問は対象外')
+  const left = (await sessions(base)).approvals['S1@r']!.map((a) => a.input.command ?? a.tool_name)
+  assert.deepEqual(left, ['rm -rf ~/', 'pnpm test', 'mcp__github__push_files', 'AskUserQuestion'], '一覧にも残っているものだけ出る')
+
+  // Jev を切ると閾値も 0 に戻る
+  const off = (await (await put(base, { jev: false })).json()) as SettingsResponse
+  assert.equal(off.jev_auto, 0)
+  await put(base, { jev: true })
+  assert.equal(((await (await fetch(`${base}/api/settings`)).json()) as SettingsResponse).jev_auto, 0, '入に戻しても自動は切のまま')
 })

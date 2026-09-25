@@ -34,6 +34,9 @@ export interface Settings {
   jev_auto: number
 }
 
+/** 既定。テストもこれを使う（キーを足したらここ 1 か所） */
+export const DEFAULT_SETTINGS: Settings = { persona: DEFAULT_PERSONA, linear_workspace: '', digest: false, digest_provider: 'claude', digest_model: '', jev: true, jev_auto: 0 }
+
 export class SettingsStore {
   readonly path: string
   private cache: Settings | null = null
@@ -45,7 +48,7 @@ export class SettingsStore {
   /** 無ければ既定。壊れていても既定（次の set で書き直される）。読めないキーはそのキーだけ既定に落とす */
   async get(): Promise<Settings> {
     if (this.cache) return this.cache
-    const settings: Settings = { persona: DEFAULT_PERSONA, linear_workspace: '', digest: false, digest_provider: 'claude', digest_model: '', jev: true, jev_auto: 0 }
+    const settings: Settings = { ...DEFAULT_SETTINGS }
     try {
       const raw = JSON.parse(await readFile(this.path, 'utf-8')) as Record<string, unknown>
       if (isPersonaId(raw?.persona)) settings.persona = raw.persona
@@ -55,6 +58,8 @@ export class SettingsStore {
       if (isDigestModel(raw?.digest_model)) settings.digest_model = raw.digest_model
       if (raw?.jev === false) settings.jev = false
       if (isJevAuto(raw?.jev_auto)) settings.jev_auto = raw.jev_auto
+      // Jev を切っていれば自動も切（切っている間に隠れて残った閾値で、入に戻した瞬間に自動で答えない。#499 のレビュー）
+      if (!settings.jev) settings.jev_auto = 0
     } catch {
       // 無い・壊れている
     }

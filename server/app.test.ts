@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { IconHistoryResponse } from '../shared/types.ts'
 import type { ApprovalAnswer, ApprovalMap, NewSessionResponse, Replying, ReplyQueueResponse, ReplyResponse,SessionsResponse, SessionDetailResponse, SessionIconResponse, SessionMetaResponse, FeedResponse, SettingsResponse, HealthResponse, SessionSkillsResponse, SessionPermissionsResponse, SearchResponse, UsageResponse } from '../shared/types.ts'
+import { DEFAULT_SETTINGS } from './meta/settings.ts'
 import { createApp, parseDays, revWith, selfUrl, sessionIdFrom, stripThinking } from './app.ts'
 import { BuildFreshness } from './local/buildFreshness.ts'
 import { Authenticator } from './auth.ts'
@@ -1476,7 +1477,7 @@ test('GET/PUT /api/settings: 性格と Linear の workspace。知らない値は
   data = (await res.json()) as SettingsResponse
   assert.equal(data.persona, 'ISTJ')
   assert.equal(((await (await get('/api/settings')).json()) as SettingsResponse).persona, 'ISTJ')
-  const defaults = { digest: false, digest_provider: 'claude', digest_model: '', jev: true, jev_auto: 0 }
+  const { persona: _p, linear_workspace: _l, ...defaults } = DEFAULT_SETTINGS
   assert.deepEqual(JSON.parse(await readFile(join(feedDir, 'settings.json'), 'utf-8')), { persona: 'ISTJ', linear_workspace: '', ...defaults })
   // Linear の workspace。省略したキー（persona）は据え置き。大文字と前後の空白は正規化、形が違えば 400、空は「設定なし」
   res = await put({ linear_workspace: ' Acme ' })

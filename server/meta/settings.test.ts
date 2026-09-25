@@ -3,10 +3,9 @@ import assert from 'node:assert/strict'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { DEFAULT_PERSONA } from '../../shared/persona.ts'
-import { SettingsStore } from './settings.ts'
+import { DEFAULT_SETTINGS, SettingsStore } from './settings.ts'
 
-const DEFAULTS = { persona: DEFAULT_PERSONA, linear_workspace: '', digest: false, digest_provider: 'claude', digest_model: '', jev: true, jev_auto: 0 }
+const DEFAULTS = { ...DEFAULT_SETTINGS }
 
 test('SettingsStore: 無ければ既定（一言は切、口は claude、モデルは空）。set で重ねてファイルに残る', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'sai-settings-'))
@@ -44,6 +43,8 @@ test('SettingsStore: jev_auto は 0 か 0.5〜1 だけ読む（#499）。それ�
       await writeFile(path, JSON.stringify({ jev_auto: bad }))
       assert.equal((await new SettingsStore(path).get()).jev_auto, 0, JSON.stringify(bad))
     }
+    await writeFile(path, JSON.stringify({ jev: false, jev_auto: 0.9 }))
+    assert.equal((await new SettingsStore(path).get()).jev_auto, 0, 'Jev を切っていれば自動も切')
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

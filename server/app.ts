@@ -19,9 +19,10 @@ import type {
   AgentSendResponse,
   AgentSessionsResponse,
   AgentWaitResponse,
-  Approval,
   ApprovalAnswer,
   ApprovalMap,
+  PermissionRule,
+  PermissionUpdate,
   ApprovalRequest,
   AttachmentResponse,
   FeedResponse,
@@ -76,7 +77,7 @@ import type { OpencodeApp } from './reply/opencodeServer.ts'
 import { OpencodePermissions } from './reply/opencodePermissions.ts'
 import { approvalMapKey, CodexDialogs, mergeApprovalMaps } from './reply/codexDialogs.ts'
 import { JevRisk } from './approvals/jev.ts'
-import { isJevAuto, jevAutoAllows } from '../shared/jev.ts'
+import { isJevAuto, jevAutoAllows, jevAutoEligible, jevPercent, jevRuleState } from '../shared/jev.ts'
 import type { JevJudge } from './approvals/jev.ts'
 import { CodexTerminals, type CodexTerminalSource } from './reply/codexTerminal.ts'
 import { CodexPanes, type CodexPaneSource } from './reply/codexPanes.ts'
@@ -678,43 +679,62 @@ export function createApp(
     ])
     const merged = mergeApprovalMaps(mergeApprovalMaps(mergeApprovalMaps(approvals.snapshot(), codexApp.snapshot()), dialogs), opencode)
     // 問題なさそうかの確率（#491）。聞いていないものは投げるだけで、届いたら次の応答に載る（rev は approvalMapKey が拾う）
-    const s = await settingsStore.get()
-    return await jevAutoAllow(jevRisk.annotate(merged, s.jev), s.jev_auto)
+    // 読む経路（一覧・詳細・フィード・MCP の sai_sessions）は写しに確率を付けるだけで、預かりの本物は触らない。
+    // 自動の「常に許可」（#499）は jevAutoTick が別に動く（読んだだけで許可が書かれない）
+    return jevRisk.annotate(merged, (await settingsStore.get()).jev)
   }
 
-  /** 画面の [常に許可] が返すもの（#96）。ルールは画面から受け取らず、預かっているツール名と入力からサーバが組み立てる。組めないツールは null */
-  const alwaysAllowPermissions = (current: Approval): NonNullable<ApprovalAnswer['updatedPermissions']> | null => {
-    const rule = alwaysAllowRule(current.tool_name, current.input)
-    return rule ? [{ type: 'addRules', rules: [rule], behavior: 'allow', destination: 'localSettings' }] : null
-  }
+  /** 「常に許可」の答えに付けるもの（#96）。CLI が cwd の .claude/settings.local.json に書く（端末の「今後も許可」と同じ） */
+  const permissionsFor = (rule: PermissionRule): PermissionUpdate[] => [{ type: 'addRules', rules: [rule], behavior: 'allow', destination: 'localSettings' }]
 
   /**
    * Jev の確率が閾値以上の許可を、人を待たずに [常に許可] と同じ答えで返す（#499）。
-   * 対象は **SAI から「常に許可」を返せる許可だけ** = Claude の `-p` の MCP 経路（`approvals` に預かっているもの）で、
-   * `alwaysAllowRule()` が組めるツール。Codex / OpenCode の許可には「常に許可」が無いので触らない。
-   * 答えた分は写しから外す（`approvals.answer()` は 2 回目に false を返すので二重に答えない）。reply.log に残す
+   * **読む経路からは呼ばない**（一覧のポーリングや MCP の `sai_sessions` が許可を書いてはいけない。タブが無くても動く）。
+   * 動くのは 3 つの時: 許可を預かった時（POST /api/approvals）、Jev の答えが届いた時（`jevRisk.onArrive`）、設定を変えた時。
+   * 対象は `jevAutoEligible()`（Claude の `-p` の **Bash** だけ。Jev が見たコマンドと許可するものが同じ）。
+   * **この回のコマンドとルールの両方**が閾値以上のときだけ答える: ルール（`Bash(rm:*)` のような前方一致）は Jev が見た 1 回より
+   * 広いので、`ruleSafe()` で別の文を立てて聞く（届くまでは待つ。届いたら `onArrive` でもう一度ここに来る）。
+   * 答えは画面の [常に許可] とまったく同じ（`permissionsFor()`）。`approvals.answer()` は 2 回目に false を返すので二重に答えない。
+   * 同時に走らせない（届くたびに呼ばれるので、走っている間の分は終わってからもう 1 回）
    */
-  const jevAutoAllow = async (map: ApprovalMap, threshold: number): Promise<ApprovalMap> => {
-    if (threshold <= 0) return map
-    let changed = false
-    const out: ApprovalMap = {}
-    for (const [id, list] of Object.entries(map)) {
-      const kept: Approval[] = []
-      for (const a of list) {
-        const current = jevAutoAllows(a.jev, threshold) ? approvals.get(a.approval_id) : undefined
-        const permissions = current ? alwaysAllowPermissions(current) : null
-        if (!current || !permissions || !approvals.answer(a.approval_id, { behavior: 'allow', updatedInput: current.input, updatedPermissions: permissions })) {
-          kept.push(a)
-          continue
-        }
-        changed = true
-        const line = `--- ${new Date().toISOString()} ${id} Jev が ${Math.round(a.jev! * 100)}% で自動で常に許可（閾値 ${Math.round(threshold * 100)}%）: ${ruleLabel(permissions[0]!.rules[0]!)}\n`
-        await appendFile(join(store.directory, 'reply.log'), line).catch(() => {})
-      }
-      if (kept.length > 0) out[id] = kept
+  let jevAutoRunning: Promise<void> | null = null
+  let jevAutoAgain = false
+  const jevAutoTick = (): Promise<void> => {
+    if (jevAutoRunning) {
+      jevAutoAgain = true
+      return jevAutoRunning
     }
-    return changed ? out : map
+    jevAutoRunning = jevAutoOnce()
+      .catch(() => {})
+      .finally(() => {
+        jevAutoRunning = null
+        if (jevAutoAgain) {
+          jevAutoAgain = false
+          void jevAutoTick()
+        }
+      })
+    return jevAutoRunning
   }
+  const jevAutoOnce = async (): Promise<void> => {
+    const s = await settingsStore.get()
+    if (!s.jev || s.jev_auto <= 0 || !jevRisk.ready) return
+    // 預かっている Claude の許可だけ（Codex / OpenCode には「常に許可」が無い）。聞いていないものはここで投げる
+    const lines: string[] = []
+    for (const list of Object.values(jevRisk.annotate(approvals.snapshot(), true))) {
+      for (const a of list) {
+        if (!jevAutoEligible(a) || !jevAutoAllows(a.jev, s.jev_auto)) continue
+        const rule = alwaysAllowRule(a.tool_name, a.input)
+        if (!rule) continue
+        const label = ruleLabel(rule)
+        const ruleSafe = jevRisk.ruleSafe(label, jevRuleState(a, label))
+        if (!jevAutoAllows(ruleSafe, s.jev_auto)) continue
+        if (!approvals.answer(a.approval_id, { behavior: 'allow', updatedInput: a.input, updatedPermissions: permissionsFor(rule) })) continue
+        lines.push(`--- ${new Date().toISOString()} ${a.id} Jev が自動で常に許可（この回 ${jevPercent(a.jev!)}%、ルール ${jevPercent(ruleSafe!)}%、閾値 ${jevPercent(s.jev_auto)}%）: ${label}\n`)
+      }
+    }
+    if (lines.length > 0) void appendFile(join(store.directory, 'reply.log'), lines.join('')).catch(() => {})
+  }
+  jevRisk.onArrive = () => void jevAutoTick()
 
   /**
    * 質問（AskUserQuestion）で止まっているセッションの、選択肢まで入った質問（#333）。フックの待ちの行には質問の文しか無いので、
@@ -900,6 +920,8 @@ export function createApp(
     if (b.jev !== undefined) {
       if (typeof b.jev !== 'boolean') return error(res, 400, 'jev は true か false で送ってください')
       patch.jev = b.jev
+      // Jev を切ったら自動も切（隠れて残った閾値で、入に戻した瞬間に自動で答えない）
+      if (!b.jev) patch.jev_auto = 0
     }
     if (b.jev_auto !== undefined) {
       if (!isJevAuto(b.jev_auto)) return error(res, 400, 'jev_auto は 0（しない）か 0.5〜1 の数で送ってください')
@@ -910,6 +932,8 @@ export function createApp(
     await digestReady
     const saved = await settingsStore.set(patch)
     if (patch.digest !== undefined || patch.digest_provider !== undefined || patch.digest_model !== undefined) digest.configure(saved)
+    // 閾値を入れた・下げたら、預かっている分にすぐ効かせる
+    if (patch.jev_auto !== undefined || patch.jev !== undefined) void jevAutoTick()
     return json(res, await settingsPayload())
   }
 
@@ -1998,6 +2022,8 @@ export function createApp(
     if (!b.input || typeof b.input !== 'object' || Array.isArray(b.input)) return error(res, 400, 'input must be an object')
     if (!run.running(b.id)) return error(res, 409, 'このセッションは返信を処理中ではありません')
     const approval = approvals.ask(b.id, b.tool_name, b.input, typeof b.tool_use_id === 'string' ? b.tool_use_id : '')
+    // 自動の「常に許可」（#499）はここから動き出す（Jev に聞く → 届いたら答える）。画面のポーリングを待たない
+    void jevAutoTick()
     return json(res, { approval_id: approval.approval_id }, 201)
   }
 
@@ -2053,10 +2079,10 @@ export function createApp(
       ? { behavior: 'allow', updatedInput: b.updatedInput && typeof b.updatedInput === 'object' && !Array.isArray(b.updatedInput) ? b.updatedInput : current.input }
       : { behavior: 'deny', message: typeof b.message === 'string' && b.message.trim() ? b.message.trim() : 'SAI の画面で拒否された' }
     if (answer.behavior === 'allow' && b.remember === 'local') {
-      // 「常に許可」。CLI がルールを cwd の .claude/settings.local.json に書く（端末の「今後も許可」と同じ）
-      const permissions = alwaysAllowPermissions(current)
-      if (!permissions) return error(res, 400, 'このツールには「常に許可」は無い')
-      answer.updatedPermissions = permissions
+      // 「常に許可」。ルールは画面から受け取らず、預かっているツール名と入力からサーバが組み立てる
+      const rule = alwaysAllowRule(current.tool_name, current.input)
+      if (!rule) return error(res, 400, 'このツールには「常に許可」は無い')
+      answer.updatedPermissions = permissionsFor(rule)
     }
     if (!approvals.answer(approvalId, answer)) return error(res, 409, 'already answered')
     return json(res, { ok: true, approval_id: approvalId, behavior: answer.behavior, remembered: answer.updatedPermissions ? ruleLabel(answer.updatedPermissions[0]!.rules[0]!) : undefined })

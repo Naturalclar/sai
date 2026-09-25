@@ -36,6 +36,7 @@ import type {
   ReplyRequest,
   ReplyResponse,
   SessionDetailResponse,
+  BackgroundSession,
   SessionDiffResponse,
   SessionDiffSummaryResponse,
   SessionProgressResponse,
@@ -96,7 +97,8 @@ import { PROFILE_FILE, ProfileStore } from './meta/profile.ts'
 import { SETTINGS_FILE, SettingsStore } from './meta/settings.ts'
 import type { Settings } from './meta/settings.ts'
 import { isLinearWorkspace } from '../shared/refs.ts'
-import { newSessionCommand, ProcessRunner, replyCommand } from './reply/runner.ts'
+import { backgroundSessionCommand, newSessionCommand, ProcessRunner, replyCommand } from './reply/runner.ts'
+import { BackgroundLookupError, ClaudeBackground, type BackgroundSessions } from './reply/claudeBackground.ts'
 import { TURN_USAGE_FILE, TurnUsageLog } from './reply/turnUsage.ts'
 import { QUEUE_FILE, QUEUE_MAX, ReplyQueueStore } from './reply/replyQueue.ts'
 import { AGENT_TOKEN_FILE, AGENT_TOKEN_HEADER, AgentMessages, ensureAgentToken, tokenMatches } from './reply/agentMessages.ts'
@@ -129,7 +131,7 @@ import type { Skill } from '../shared/skills.ts'
 import { claudeProjectsDir, codexSessionsDir, tailLines, UsageStore } from './local/usage.ts'
 import { QUEUE_ROLLOUT_TAIL_BYTES, queuedTextArrived, turnInProgress } from '../shared/codexQueue.ts'
 import { ProgressReader, sessionOf } from './local/progress.ts'
-import { agentListFromEnv, type AgentList } from './local/claudeAgents.ts'
+import { agentListFromEnv, backgroundLive, type AgentList, type ClaudeAgent } from './local/claudeAgents.ts'
 import { isRemoteHost } from '../shared/host.ts'
 import { IMAGES_SEGMENT } from '../shared/images.ts'
 import { imageHeaders, imageTable, readSessionImage } from './local/images.ts'
@@ -180,6 +182,8 @@ const QUEUE_SEGMENT = '/queue/'
 const QUEUE_RESUME = 'resume'
 /** 預かった返信を起動するときに見る窓（POST の reply の既定と同じ） */
 const QUEUE_DAYS = 90
+/** `claude --bg` のターンを待っている預かりを、次に見に行くまで（#462。画面のポーリングは 3 秒で、画面が複数あれば何倍にもなる） */
+const BG_RETRY_MS = 10_000
 /** エージェント用の口（#310）。SAI の MCP サーバ（approve-mcp.ts）の sai_* のツールだけが叩く。トークンを要り、ブラウザからは通さない */
 const AGENT_PREFIX = '/api/agent/'
 /** tailnet から MCP で呼ぶ口（#312。Streamable HTTP） */
@@ -349,6 +353,11 @@ interface LaunchOptions {
 interface Launched {
   status: number
   body: ReplyResponse | ReplyError
+  /**
+   * `claude --bg` のセッションがターンを回している・許可を待っているので送らなかった（#462）。
+   * 預かりを回す `drain()` は**止めずに次の機会を待つ**（SAI の外で動いているので、終わりを知らせる口が無い）
+   */
+  retry?: boolean
 }
 
 /** 端末（tmux）への打ち込みに使うもの。テストでは差し替える */
@@ -374,6 +383,10 @@ export interface TerminalDeps {
   opencodeApp?: OpencodeApp
   /** 端末で答えたぶんの待ちを畳む（#255）。テストでは差し替える */
   waitingSettle?: WaitingSettleSource
+  /** `claude --bg` で始める・止める（#462）。テストでは差し替える */
+  claudeBackground?: BackgroundSessions
+  /** `claude --bg` のターンを待つ預かりを見に行く間隔（#462）。テストでは 0 にする */
+  bgRetryMs?: number
 }
 
 export function createApp(
@@ -404,6 +417,7 @@ export function createApp(
   const projects = new ProjectResolver(git)
   const isCodexWriterActive = terminal.codexWriterActive ?? codexWriterActive
   const queueCodex = terminal.codexQueue ?? runCodexQueue
+  const background = terminal.claudeBackground ?? new ClaudeBackground()
   const codexDialogs = terminal.codexDialogs ?? new CodexDialogs(terminal.tmux, terminal.ps)
   const codexApp = terminal.codexApp ?? new CodexAppServer()
   const opencodeApp = terminal.opencodeApp ?? new OpencodeServer()
@@ -952,6 +966,9 @@ export function createApp(
     // モデルと許可モードは PUT .../meta と同じ検査（mergeMeta）を通してから、新しいセッションのメタに書く
     const { meta, error: reason } = mergeMeta({}, { model: asked.model ?? '', permission_mode: asked.permission_mode ?? '' })
     if (reason) return error(res, 400, reason)
+    // `claude --bg` で始める（#462）。デーモンの口は Claude にしか無い
+    const inBackground = asked.background === true
+    if (inBackground && agent !== 'claude') return error(res, 400, 'バックグラウンドで始められるのは Claude だけです')
 
     const { sessions } = await store.sessions(days)
     const from = sessions.find((s) => s.id === asked.from)
@@ -967,6 +984,7 @@ export function createApp(
 
     if (agent === 'codex') return await startCodexSession(res, from, cwd, text, meta)
     if (agent === 'opencode') return await startOpencodeSession(res, from, cwd, text, meta)
+    if (inBackground) return await startBackgroundSession(res, from, cwd, text, meta)
 
     const session = randomUUID()
     // record.py が行に書く repo は同じ cwd から取るので、from のものと同じになる
@@ -987,6 +1005,42 @@ export function createApp(
     // 人が始めたターン（メッセージの連鎖ではない。#311）
     agents.launched(id, undefined)
     const payload: NewSessionResponse = { accepted: true, id, agent: 'claude', session, cwd, via: 'process' }
+    return json(res, payload, 202)
+  }
+
+  /**
+   * `POST /api/sessions/new` の `claude --bg`（#462）。**ID はデーモンが決める**（`--session-id` は効かない）ので、
+   * 返ってきた短い ID から `claude agents` で UUID を引いてからエンティティ ID を作る。
+   * SAI の子プロセスではないので `run.start` には載せない（処理中は `claude agents` の `status` で見る）。
+   * **許可・質問の配線は付けない**（`--permission-prompt-tool` が使われず、TUI のダイアログで止まる。実測）
+   */
+  const startBackgroundSession = async (
+    res: ServerResponse,
+    from: SessionSummary,
+    cwd: string,
+    text: string,
+    meta: SessionMeta,
+  ) => {
+    const log = join(store.directory, 'reply.log')
+    const cmd = backgroundSessionCommand(text, cwd, store.directory, process.env, meta.model, meta.permission_mode, meta.name)
+    await appendFile(log, `--- ${new Date().toISOString()} バックグラウンドで新しいセッション（claude --bg） (cwd ${cwd})\n`).catch(() => {})
+    let started
+    try {
+      started = await background.start(cmd)
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      const hint = code === 'ENOENT' ? 'claude が見つかりません（サーバを起動した環境の PATH に claude があるか確かめてください）' : ''
+      // 始まったが ID を引けなかったときは、そのまま（短い ID と「二重になる」を伝える文）
+      const message = hint || (err instanceof BackgroundLookupError ? err.message : `バックグラウンドで始められませんでした: ${err instanceof Error ? err.message : String(err)}`)
+      await appendFile(log, `${message}\n`).catch(() => {})
+      return error(res, 500, message)
+    }
+    const id = entityId(started.sessionId, from.repo, '')
+    if (Object.keys(meta).length > 0) await metaStore.set(id, meta)
+    await appendFile(log, `${id} を始めた（claude attach ${started.short}）\n`).catch(() => {})
+    // 人が始めたターン（メッセージの連鎖ではない。#311）
+    agents.launched(id, undefined)
+    const payload: NewSessionResponse = { accepted: true, id, agent: 'claude', session: started.sessionId, cwd, via: 'background', attach: started.short }
     return json(res, payload, 202)
   }
 
@@ -1071,6 +1125,24 @@ export function createApp(
    * 返信を 1 本起動する（本文と添付は検査済み）。`POST .../reply` と、預かった返信を回す `drain()` の両方が通る（#305）。
    * 応答は書かずに返す
    */
+  /**
+   * 生きている `claude --bg` のセッションを、いま止めてはいけない理由（#462）。止めてよければ空。
+   * **attach している端末がある**か、**ターンが回っている**なら止めない（`launch()` のコメント）
+   */
+  const backgroundHold = async (bg: ClaudeAgent, session: SessionSummary): Promise<string> => {
+    if (await background.attached(bg.id, bg.sessionId)) {
+      return `端末で claude attach ${bg.id} して開いています。そちらで打ってください（SAI から送ると、止めるときにその端末を閉じてしまいます）`
+    }
+    // 2.1.276 の形（`status`）が来ていればそれで、2.1.278 は transcript で見る
+    const legacy = bg.status === 'busy' || bg.status === 'waiting'
+    if (legacy || (await progress.read(session)).active) {
+      return bg.status === 'waiting'
+        ? `バックグラウンドのセッションが許可・質問を待っています。端末で claude attach ${bg.id} して答えてください`
+        : `バックグラウンドでターンが回っています。終わってから送ります（端末で見るなら claude attach ${bg.id}）`
+    }
+    return ''
+  }
+
   const launch = async (id: string, text: string, attachments: string[], o: LaunchOptions): Promise<Launched> => {
     const { sessions } = await store.sessions(o.days)
     const session = sessions.find((s) => s.id === id)
@@ -1100,8 +1172,31 @@ export function createApp(
       }
       await appendFile(log, '足せなかった（ターンが終わったか、別のターンになった）。今までどおりの経路へ\n').catch(() => {})
     }
+    // `claude --bg` で動いているセッション（#462）。**同じ ID を `-p --resume` すると CLI が断り、
+    // `--bg --resume` は別のセッションに写してしまう**（実測）ので、止めてから `-p` で続けるしかない。
+    //
+    // **止めてよいのは「誰も開いていない」かつ「ターンが回っていない」ときだけ**（2026-09-24 に実測）:
+    // - `claude stop` は **attach している端末をその場で閉じる**（`Session … has exited.`。打ちかけも消える）ので、
+    //   `ps` で `claude attach <ID>` を探し、居れば止めない（`BackgroundSessions.attached()`。分からなければ居る扱い）
+    // - 2.1.278 の `claude agents` はバックグラウンドの行に `state`（`working` / `stopped` / `done`）しか持たず、
+    //   **いまターンが回っているかは分からない**。そこは transcript で見る（#302 の `progress.read().active`）。
+    //   2.1.276 の `status`（`busy` / `waiting`）が来ていればそれも使う
+    // どちらかに当たれば預かって待つ（人のターンを画面から殺さない。#384 と同じ線引き）。
+    //
+    // **一覧はまず覚えているものを見る**（返信のたびに `claude agents` を起こさない。実測 0.15〜0.20 秒で、
+    // ここは端末に打ち込む経路より手前なので普通の返信まで遅くなる）。バックグラウンドの行があるときだけ、
+    // 状態が古いと困るので引き直す
+    const bgOf = async (): Promise<ClaudeAgent | null | undefined> => {
+      if (session.agent !== 'claude' || !claudeAgents.background) return null
+      const cached = await claudeAgents.background(raw)
+      return cached ? await claudeAgents.background(raw, true) : cached
+    }
+    const bg = await bgOf()
+    const bgLive = bg && backgroundLive(bg) ? bg : null
+    // 止められない理由（無ければ止めてから `-p` で続ける）
+    const bgHold = bgLive ? await backgroundHold(bgLive, session) : ''
     // 別プロセス（-p / app-server）のターンが動いているか、いま起動している最中か
-    const busy = run.running(id) || codexApp.running(id) || opencodeApp.running(id) || launching.has(id)
+    const busy = run.running(id) || codexApp.running(id) || opencodeApp.running(id) || launching.has(id) || bgHold !== ''
     // 処理中なら預かる（#305）。処理中でなくても預かりが残っていれば後ろに並べる（先に預けたものを追い越さない）
     if (o.queue && (busy || queue.size(id) > 0)) {
       const item = queue.add(id, text, attachments, o.url, new Date(), o.origin ?? '')
@@ -1112,8 +1207,19 @@ export function createApp(
     }
     // 端末（tmux）で開いていれば、前のターンが動いていても打ち込んでよい。TUI が次のターンに回すので、
     // 端末で人が続けて打つのと同じになる。別プロセス（-p）の経路だけは二重起動になるので止める（#100, #170）
+    if (bgHold) return { ...refuse(409, bgHold), retry: true }
     if (busy || (typed.running(id) && !openTerminal)) {
       return refuse(409, 'このセッションはまだ前の返信を処理中です')
+    }
+    if (bgLive) {
+      const log = join(store.directory, 'reply.log')
+      await appendFile(log, `--- ${new Date().toISOString()} ${id} 誰も開いていないバックグラウンドのセッションを止めてから続ける（claude stop ${bgLive.id}）\n`).catch(() => {})
+      try {
+        await background.stop(bgLive.id, cwd)
+      } catch (err) {
+        await appendFile(log, `止められなかった: ${err instanceof Error ? err.message : String(err)}\n`).catch(() => {})
+        return refuse(409, `バックグラウンドのセッションを止められませんでした。端末で claude attach ${bgLive.id} して打ってください`)
+      }
     }
     launching.add(id)
     try {
@@ -1266,9 +1372,13 @@ export function createApp(
    * - 呼ぶのは -p の exit、SAI 管理の Codex のターンの終わり、画面のポーリングのついで。
    *   再起動で引き取った子（exit を受け取れない）はポーリングで拾う
    */
+  /** `claude --bg` のターンが終わるのを待っている預かり（#462）。次に見に行く時刻 */
+  const bgRetryAt = new Map<string, number>()
   const drain = async (id: string): Promise<void> => {
     const head = queue.peek(id)
     if (!head || queue.paused(id) || draining.has(id)) return
+    // `claude --bg` のターンを待っている間は、ポーリングのたびに起動の経路（と `claude agents`）を回さない（#462）
+    if ((bgRetryAt.get(id) ?? 0) > Date.now()) return
     if (run.running(id) || codexApp.running(id) || opencodeApp.running(id) || launching.has(id)) return
     draining.add(id)
     try {
@@ -1286,7 +1396,12 @@ export function createApp(
         // 別のセッションから預かったメッセージなら、回したターンから先へ送らせない（#311）
         ...(head.origin ? { origin: head.origin } : {}),
       })
-      if (out.status === 202) queue.shift(id, head.queue_id)
+      if (out.status === 202) {
+        queue.shift(id, head.queue_id)
+        bgRetryAt.delete(id)
+      }
+      // `claude --bg` のターンが終わるのを待つ（#462）。止めずに、次のポーリングでもう一度
+      else if (out.retry) bgRetryAt.set(id, Date.now() + (terminal.bgRetryMs ?? BG_RETRY_MS))
       else queue.pause(id, `預かった返信を送れませんでした: ${(out.body as ReplyError).error}`)
     } finally {
       draining.delete(id)
@@ -1934,6 +2049,18 @@ export function createApp(
   }
 
   /**
+   * `claude --bg` のセッションの短い ID と状態（#462）。このマシンの Claude だけ。聞けなければ（`claude` が無い・古い）出さない
+   */
+  const backgroundOf = async (session: SessionSummary): Promise<BackgroundSession | undefined> => {
+    if (session.agent !== 'claude' || !claudeAgents.background || isRemoteHost(session.host, selfHost())) return undefined
+    const raw = sessionOf(session)
+    if (!raw) return undefined
+    const bg = await claudeAgents.background(raw)
+    if (!bg || !bg.id) return undefined
+    return { attach: bg.id, live: backgroundLive(bg), status: bg.state || bg.status }
+  }
+
+  /**
    * OpenCode の段取りとサブセッションの数を足す（#397）。**空なら何も足さない**（キーごと省く）。
    * 中身は `rev` にも混ぜる（同じ rev だと画面が描き直さないので、段取りが進んでも出ない）。
    * 聞けなければ（サーバが立っていない・落ちた）今までどおりそのまま返す
@@ -2499,8 +2626,10 @@ export function createApp(
         // 端末で開いた Claude が質問で止まっていれば、選択肢を transcript から（#333）。transcript に書かれる時刻は
         // 待ちの行と前後するので、rev に混ぜて後から届いたぶんも画面が拾う
         const question = await pendingQuestion(session, pendingApprovals)
+        // `claude --bg` のセッションなら、端末で開くための短い ID（#462）。状態は rev に混ぜる
+        const bg = await backgroundOf(session)
         const body: SessionDetailResponse = {
-          rev: revWith(`${sessionsRev}~${me.rev}~${settled}~${question?.asked_at ?? ''}`, replying, approvalMapKey(pendingApprovals), false, `${digest.revKey()}|${usage.rev()}`, `${queue.key()}|${agents.key()}`),
+          rev: revWith(`${sessionsRev}~${me.rev}~${settled}~${question?.asked_at ?? ''}~${bg ? `${bg.attach}:${bg.status}` : ''}`, replying, approvalMapKey(pendingApprovals), false, `${digest.revKey()}|${usage.rev()}`, `${queue.key()}|${agents.key()}`),
           session: withLastSummary([session])[0]!,
           rows,
           older,
@@ -2512,6 +2641,7 @@ export function createApp(
           profile: me.profile,
           host: selfHost(),
           ...(question ? { question } : {}),
+          ...(bg ? { background: bg } : {}),
         }
         return json(res, body)
       }

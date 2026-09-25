@@ -4,14 +4,14 @@ import assert from 'node:assert/strict'
 import { chmod, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ClaudeAgents, NoAgents, agentListFromEnv, busyIn, parseAgents } from './claudeAgents.ts'
+import { ClaudeAgents, NoAgents, agentListFromEnv, backgroundIn, backgroundLive, busyIn, parseAgents } from './claudeAgents.ts'
 
 /** `claude agents --json` の代わりに、決まった中身を吐く実行ファイルを置く */
 async function fakeClaude(stdout: string, code = 0): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'sai-agents-'))
   const bin = join(dir, 'claude')
-  // 引数が `agents --json` のときだけ返す（他の形で呼んでいたら空になり、テストが落ちる）
-  await writeFile(bin, `#!/bin/sh\n[ "$1" = agents ] && [ "$2" = --json ] || exit 9\ncat <<'JSON'\n${stdout}\nJSON\nexit ${code}\n`)
+  // 引数が `agents --json --all` のときだけ返す（他の形で呼んでいたら空になり、テストが落ちる）
+  await writeFile(bin, `#!/bin/sh\n[ "$1" = agents ] && [ "$2" = --json ] && [ "$3" = --all ] || exit 9\ncat <<'JSON'\n${stdout}\nJSON\nexit ${code}\n`)
   await chmod(bin, 0o755)
   return bin
 }
@@ -22,7 +22,7 @@ const one = (over: Record<string, unknown> = {}) =>
 test('parseAgents: 読めた分だけ返す。読めなければ null（空の配列とは別）', () => {
   const got = parseAgents(one({ status: 'busy' }))
   assert.equal(got?.length, 1)
-  assert.deepEqual(got?.[0], { sessionId: 'S1', kind: 'interactive', status: 'busy', cwd: '/w', pid: 1, name: 'かなで' })
+  assert.deepEqual(got?.[0], { sessionId: 'S1', id: '', kind: 'interactive', status: 'busy', state: '', cwd: '/w', pid: 1, name: 'かなで' })
   assert.deepEqual(parseAgents('[]'), [], '生きているセッションが 0 件（聞けている）')
   assert.equal(parseAgents(''), null, '空は「聞けなかった」')
   assert.equal(parseAgents('not json'), null)
@@ -89,4 +89,65 @@ test('agentListFromEnv: SAI_CLAUDE_AGENTS=0 なら聞きに行かない', async 
   assert.equal(agentListFromEnv({ SAI_CLAUDE_AGENTS: '0' }) instanceof NoAgents, true)
   assert.equal(agentListFromEnv({}) instanceof ClaudeAgents, true)
   assert.equal(await new NoAgents().busy('S1'), undefined)
+})
+
+// #462。`claude --bg` の行。実測の形（2.1.278）: 生きているものは status が idle / busy / waiting、止めたものは status が無い
+const bgRows = JSON.stringify([
+  { pid: 1, cwd: '/w', kind: 'interactive', status: 'idle', sessionId: 'S1', id: 'aaaaaaaa' },
+  { pid: 2, cwd: '/w', kind: 'background', status: 'waiting', state: 'blocked', sessionId: 'S1', id: '5738db0d' },
+  { pid: 0, cwd: '/w', kind: 'background', state: 'done', sessionId: 'S2', id: '4a4a3485' },
+])
+
+test('backgroundIn: 同じ ID の端末の TUI とは分けて、--bg の行だけ返す', () => {
+  const agents = parseAgents(bgRows)!
+  assert.equal(backgroundIn(agents, 'S1')?.id, '5738db0d')
+  assert.equal(backgroundIn(agents, 'S1')?.status, 'waiting')
+  assert.equal(backgroundIn(agents, 'S9'), null)
+  assert.equal(backgroundLive(backgroundIn(agents, 'S1')!), true)
+  assert.equal(backgroundLive(backgroundIn(agents, 'S2')!), false, '止めたものは status が空')
+  assert.equal(busyIn(agents, 'S2'), false, '止めたものは回っていない')
+})
+
+test('ClaudeAgents.background: 引ける・無い・分からない', async () => {
+  const agents = new ClaudeAgents(await fakeClaude(bgRows))
+  assert.equal((await agents.background('S2'))?.id, '4a4a3485')
+  assert.equal(await agents.background('S9'), null)
+  assert.equal(await agents.background(''), undefined)
+  assert.equal(await new ClaudeAgents('/nonexistent/claude').background('S1', true), undefined)
+})
+
+test('ClaudeAgents: --all を知らない版では付けずに引き直し、以後は付けない（#462）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-agents-'))
+  const bin = join(dir, 'claude')
+  const calls = join(dir, 'calls')
+  // 古い CLI の断り方（commander の文言。本物は `error: unknown option '<flag>'` と言う）
+  await writeFile(bin, `#!/bin/sh\necho "$*" >> '${calls}'\n[ "$3" = --all ] && { echo "error: unknown option '--all'" >&2; exit 1; }\n[ "$1" = agents ] && [ "$2" = --json ] || exit 9\necho '${one({ status: 'busy' })}'\n`)
+  await chmod(bin, 0o755)
+  const agents = new ClaudeAgents(bin, 0)
+  assert.equal(await agents.busy('S1'), true)
+  assert.equal(await agents.busy('S1'), true)
+  // 1 回目は `--all` で断られて引き直し（2 本）、2 回目からは最初から付けない（1 本）
+  assert.deepEqual((await readFile(calls, 'utf8')).trim().split('\n'), ['agents --json --all', 'agents --json', 'agents --json'])
+})
+
+test('ClaudeAgents: --all と関係ない失敗では引き直さない（壊れた CLI で毎回 2 本起こさない。#433 / #462）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-agents-'))
+  const bin = join(dir, 'claude')
+  const calls = join(dir, 'calls')
+  await writeFile(bin, `#!/bin/sh\necho "$*" >> '${calls}'\necho "error: not logged in" >&2\nexit 1\n`)
+  await chmod(bin, 0o755)
+  assert.equal(await new ClaudeAgents(bin, 0).busy('S1'), undefined)
+  assert.deepEqual((await readFile(calls, 'utf8')).trim().split('\n'), ['agents --json --all'])
+})
+
+test('backgroundLive: 版で持つキーが違うので両方見る（#462。2.1.278 は state、2.1.276 は status）', () => {
+  const bg = (o: Record<string, unknown>) => parseAgents(JSON.stringify([{ sessionId: 'S1', kind: 'background', id: '5738db0d', ...o }]))![0]!
+  // 2.1.278（実測）: バックグラウンドの行は state だけを持ち、status も pid も無い
+  assert.equal(backgroundLive(bg({ state: 'working' })), true)
+  assert.equal(backgroundLive(bg({ state: 'stopped' })), false, '止めたばかり')
+  assert.equal(backgroundLive(bg({ state: 'done' })), false, '終わっている')
+  // 2.1.276: status（busy / idle / waiting）で、止めたものは空
+  assert.equal(backgroundLive(bg({ status: 'idle' })), true)
+  assert.equal(backgroundLive(bg({ status: 'waiting' })), true)
+  assert.equal(backgroundLive(bg({ status: '' })), false)
 })

@@ -131,6 +131,29 @@ test('shutdown: 2 回目の C-c はすぐ終わる', () => {
   assert.deepEqual(server.calls, ['close', 'closeIdle'], '2 回目に close をもう一度呼んでも意味が無い')
 })
 
+test('shutdown: SAI が起こした子を、1 回目の C-c の頭で 1 度だけ落とす（#457）', () => {
+  const server = fakeServer()
+  const exits: number[] = []
+  let disposed = 0
+  const stop = shutdown(server, { exit: (c) => void exits.push(c), closeAllMs: 10_000, forceExitMs: 10_000, onStop: () => void disposed++ })
+  stop()
+  assert.equal(disposed, 1, '接続が閉じるのを待つ前に落とす（`FORCE_EXIT_MS` で諦める筋でも通るように）')
+  assert.deepEqual(server.calls, ['close', 'closeIdle'])
+  stop()
+  assert.equal(disposed, 1, '2 回目の C-c では呼ばない')
+  assert.deepEqual(exits, [0])
+})
+
+test('shutdown: 子を落とせなくても SAI 自身は終わる（#457）', () => {
+  const server = fakeServer()
+  const exits: number[] = []
+  const stop = shutdown(server, { exit: (c) => void exits.push(c), closeAllMs: 10_000, forceExitMs: 10_000, onStop: () => { throw new Error('kill EPERM') } })
+  stop()
+  assert.deepEqual(server.calls, ['close', 'closeIdle'], '投げても受け付けは止める')
+  server.drained()
+  assert.deepEqual(exits, [0])
+})
+
 const MAIN = fileURLToPath(new URL('./main.ts', import.meta.url))
 /** C-c を送ってから終わるまでに待つ上限。直す前のコードはここを超える（接続が閉じるまで抜けない） */
 const EXIT_WAIT_MS = 6_000

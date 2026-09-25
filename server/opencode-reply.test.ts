@@ -7,7 +7,7 @@ import type { Server } from 'node:http'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ReplyResponse, SessionDetailResponse, SessionModelsResponse, SessionProgressResponse, SessionSkillsResponse } from '../shared/types.ts'
+import type { ReplyQueueResponse, ReplyResponse, SessionDetailResponse, SessionModelsResponse, SessionProgressResponse, SessionSkillsResponse } from '../shared/types.ts'
 import { createApp } from './app.ts'
 import { Approvals } from './approvals/approvals.ts'
 import { localDate } from './rows/aggregate.ts'
@@ -40,6 +40,10 @@ let pending: OpencodePermission[] = []
 let pendingOk = true
 let answerOk = true
 const answered: { sessionId: string; permissionId: string; response: string }[] = []
+/** 「止める」で呼ばれたエンティティ（#392） */
+const aborted: string[] = []
+/** 止められるか（false は「止められなかった」） */
+let abortOk = true
 /** `GET /permission` に渡した `directory`（#421。渡さないと空が返るので、渡していることをテストで留める） */
 const permissionDirs: string[][] = []
 const runner: Runner = { running: () => false, snapshot: () => ({}), async start(id, cmd) { started.push({ id, cmd }) } }
@@ -55,6 +59,13 @@ const opencodeApp: OpencodeApp = {
     sent.push(input)
   },
   settle: () => [],
+  async abort(this: OpencodeApp & { busy: boolean }, id: string) {
+    aborted.push(id)
+    if (!abortOk) return false
+    // 本物も止めたら処理中から外す
+    this.busy = false
+    return true
+  },
   async permissions(dirs: readonly string[]) {
     permissionDirs.push([...dirs])
     return { ok: pendingOk, list: pending }
@@ -394,4 +405,39 @@ test('dispose: SAI が起こした opencode serve を落とす（#457。main.ts 
   )
   handler.dispose()
   assert.equal(stopped, 1)
+})
+
+test('処理中の OpenCode のターンを止める。預かりは勝手に回さない（#392。口は Codex と同じ interrupt）', async () => {
+  const oc = opencodeApp as OpencodeApp & { busy: boolean }
+  aborted.length = 0
+  assert.equal((await post('/api/sessions/ses_1%40r/interrupt', {})).status, 409, '処理中でなければ 409（止める先が無い）')
+  assert.deepEqual(aborted, [], '回していないものには投げない')
+
+  oc.busy = true
+  try {
+    // 止めたあとに勝手に回らないことを見るため、預かりに 1 件並べておく
+    const queueId = ((await (await post('/api/sessions/ses_1%40r/reply', { text: '止めたあとに送る', queue: true })).json()) as ReplyResponse).queue_id!
+    const cross = await fetch(`${base}/api/sessions/ses_1%40r/interrupt`, { method: 'POST', headers: { 'content-type': 'application/json', origin: 'http://evil.local:8787' }, body: '{}' })
+    assert.equal(cross.status, 403, '別オリジンからは止めさせない')
+
+    // 止められなかったら 409 で、預かりは止めたままにしない
+    abortOk = false
+    assert.equal((await post('/api/sessions/ses_1%40r/interrupt', {})).status, 409)
+    const kept = (await (await fetch(`${base}/api/sessions/ses_1%40r`)).json()) as SessionDetailResponse
+    assert.equal(kept.queued['ses_1@r']?.paused, undefined, '止められなかったので預かりはそのまま')
+
+    abortOk = true
+    const res = await post('/api/sessions/ses_1%40r/interrupt', {})
+    assert.equal(res.status, 200)
+    assert.deepEqual(aborted, ['ses_1@r', 'ses_1@r'])
+    const body = (await res.json()) as ReplyQueueResponse
+    assert.match(body.queue.paused ?? '', /止めた/, '止めた直後に次の預かりを走らせない（人が「続けて送る」を押したときだけ）')
+    assert.equal(oc.busy, false)
+
+    // 片付け（ほかのテストに預かりを残さない）
+    assert.equal((await fetch(`${base}/api/sessions/ses_1%40r/queue/${queueId}`, { method: 'DELETE', headers: { origin: base } })).status, 200)
+  } finally {
+    oc.busy = false
+    abortOk = true
+  }
 })

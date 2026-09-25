@@ -73,6 +73,17 @@ export interface OpencodeApp {
   /** 行が届いたターンを終わりにする（#375 と同じ判定）。終わった id を返す（預かりを回すのに使う） */
   settle(lastTurn: (id: string) => string | undefined): string[]
   /**
+   * SAI が回しているターンを止める（#392。`POST /session/<id>/abort`）。止めたら true で、こちらの「処理中」からも外す。
+   *
+   * **`abort` の返り値は当てにしない**（1.18.30 で実測: 回っていないセッションにも、知らないセッションにも `true` が返る）ので、
+   * **止めてよいかは SAI が回しているか（`running()`）で決める**。回していなければ投げずに false。
+   * 止めると 0.2 秒ほどで返り、`/session/status` から消え、最後のメッセージに `MessageAbortedError` が付き、
+   * プラグインの `session.idle` で**本文の空の行が 1 本**書かれる（実測）。**止められるのは SAI が起こしたサーバが
+   * 回しているターンだけ**（端末の TUI や人が立てた別のサーバは URL も鍵も知らないので触れない。#421 / Codex の #384 と同じ線引き）。
+   * 偽物は持たなくてよい（持たなければ OpenCode には止めるボタンが出ない）
+   */
+  abort?(id: string): Promise<boolean>
+  /**
    * いま答えを待っている許可（#421。`GET /permission?directory=<セッションの cwd>`）。
    *
    * **`directory` が要る**（`/command`・`/config/providers` と同じ。#393 / #394）。サーバは homedir で動いているので、
@@ -125,6 +136,8 @@ export class OpencodeServer implements OpencodeApp {
   /** `stop()` を呼んだ（SAI が終わるところ）。以後は `serve()` が起こさない */
   private disposed = false
   private readonly active = new Map<string, Replying>()
+  /** 回しているターンの OpenCode のセッションID（`ses_…`）。止めるとき（#392）に要る */
+  private readonly sessions = new Map<string, string>()
   private readonly fetchFn: typeof fetch
   private readonly now: () => number
   /** サーバの起こし方。テストでは**本物の HTTP サーバ**を指す関数を渡す（`opencode` のバイナリに触らない） */
@@ -149,6 +162,7 @@ export class OpencodeServer implements OpencodeApp {
     for (const [id, entry] of this.active) {
       if (settledByRow(entry.since, lastTurn(id))) {
         this.active.delete(id)
+        this.sessions.delete(id)
         done.push(id)
       }
     }
@@ -183,7 +197,26 @@ export class OpencodeServer implements OpencodeApp {
     })
     // 204 が正。404 は「そのセッションをサーバが知らない」なので、取り違えないよう本文を添えて投げる
     if (!res.ok) throw new Error(`opencode serve が ${res.status} を返しました: ${(await res.text().catch(() => '')).slice(0, 200)}`)
-    this.active.set(input.id, { since: new Date(this.now()).toISOString(), text: input.text })
+    // `prompt_async` が 204 を返した時点でターンは回っているので、すぐ止められる（#392。Codex と違って turnId を待たない）
+    this.active.set(input.id, { since: new Date(this.now()).toISOString(), text: input.text, interruptible: true })
+    this.sessions.set(input.id, input.session)
+  }
+
+  async abort(id: string): Promise<boolean> {
+    const session = this.sessions.get(id)
+    if (!session || !this.active.has(id)) return false
+    // 止めるためだけにサーバは起こさない（立っていないなら、回しているターンももう無い）
+    const live = await this.live()
+    if (!live) return false
+    const res = await this.fetchFn(`${live.url}/session/${encodeURIComponent(session)}/abort`, {
+      method: 'POST',
+      headers: { authorization: live.auth },
+    })
+    if (!res.ok) throw new Error(`opencode serve が ${res.status} を返しました: ${(await res.text().catch(() => '')).slice(0, 200)}`)
+    // 行（本文の空の session.idle）が届くのを待たずに片付ける（Codex の clearThread() と同じ。届かなくても「処理中」を残さない）
+    this.active.delete(id)
+    this.sessions.delete(id)
+    return true
   }
 
   /**

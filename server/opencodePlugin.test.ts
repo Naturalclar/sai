@@ -125,6 +125,60 @@ test('何も増えていない session.idle は流さない（1 ターンに複�
   assert.equal(idles.length, 1)
 })
 
+test('送っている最中に次の idle が届いても、行は 1 本（止めたときは同じ秒に 2 回鳴る。#392）', async () => {
+  const hooks = await plugin()
+  await userSays(hooks, 'AB1', '数えて')
+  // 1 本目の送信（record.py の終了待ち）が終わる前に 2 本目が届く。前は `dirty` を送ったあとで下ろしていたので、
+  // 2 本目も同じ行（自分の入力つき）を書き、画面に自分のバブルと「(本文なし)」が 2 つずつ並んだ
+  await Promise.all([hooks.event(ev('session.idle', { sessionID: 'AB1' })), hooks.event(ev('session.idle', { sessionID: 'AB1' }))])
+  const idles = (await payloads()).filter((p) => p.session_id === 'AB1' && p.type === 'session.idle')
+  assert.equal(idles.length, 1)
+  assert.equal(idles[0]!.user_text, '数えて')
+})
+
+test('本文が出る前に止めたターンは「途中で止めました」。止めた印は次のターンに持ち越さない（#392）', async () => {
+  const hooks = await plugin()
+  await userSays(hooks, 'AB2', '1 から 300 まで数えて')
+  // 実機（1.18.30）で止めたときの順: session.error → session.idle → …（MessageAbortedError の更新）… → session.idle
+  await hooks.event(ev('session.error', { sessionID: 'AB2', error: { name: 'MessageAbortedError', data: { message: 'Aborted' } } }))
+  await Promise.all([
+    hooks.event(ev('session.idle', { sessionID: 'AB2' })),
+    hooks
+      .event(ev('message.updated', { info: { id: 'a-AB2', sessionID: 'AB2', role: 'assistant', error: { name: 'MessageAbortedError' } } }))
+      .then(() => hooks.event(ev('session.idle', { sessionID: 'AB2' }))),
+  ])
+  // 次のターンは普通に本文なしで終わる
+  await userSays(hooks, 'AB2', '次', 2)
+  await hooks.event(ev('session.idle', { sessionID: 'AB2' }))
+  const idles = (await payloads()).filter((p) => p.session_id === 'AB2' && p.type === 'session.idle')
+  assert.deepEqual(
+    idles.map((p) => [p.user_text, p.text]),
+    [
+      ['1 から 300 まで数えて', '（本文なし）途中で止めました'],
+      ['次', ''],
+    ],
+  )
+})
+
+test('途中まで本文が出ていれば、止めても本文のまま（#392）', async () => {
+  const hooks = await plugin()
+  await userSays(hooks, 'AB3', '数えて')
+  await hooks.event(ev('message.part.updated', { part: { type: 'text', sessionID: 'AB3', messageID: 'a-AB3', text: '1\n2\n3' } }))
+  await hooks.event(ev('session.error', { sessionID: 'AB3', error: { name: 'MessageAbortedError' } }))
+  await hooks.event(ev('session.idle', { sessionID: 'AB3' }))
+  const idle = (await payloads()).find((p) => p.session_id === 'AB3' && p.type === 'session.idle')
+  assert.equal(idle?.text, '1\n2\n3')
+})
+
+test('止めた以外の session.error では「止めました」にしない（#392）', async () => {
+  const hooks = await plugin()
+  await userSays(hooks, 'AB4', 'やって')
+  await hooks.event(ev('session.error', { sessionID: 'AB4', error: { name: 'ProviderAuthError' } }))
+  await hooks.event(ev('session.idle', { sessionID: 'AB4' }))
+  const idle = (await payloads()).find((p) => p.session_id === 'AB4' && p.type === 'session.idle')
+  assert.equal(idle?.text, '')
+})
+
 test('許可待ちの行に、何を聞かれているかまで出す（#421。実物の payload と shared 側の期待文字列が同じ）', async () => {
   const hooks = await plugin()
   // 実機（1.18.30）の permission.asked の properties そのまま（shared/opencodePermissions.test.ts と同じもの）

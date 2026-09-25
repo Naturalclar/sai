@@ -12,6 +12,8 @@ interface Props {
   notify: ReturnType<typeof useNotify>
   /** メニューの末尾に足すもの。一言の入切・口・モデル（#288）と、狭い画面では一言の性格・Linear の設定もここに入る（#274） */
   children?: ReactNode
+  /** 開いたときに呼ぶ。一言の口の不調（#443）はあとから起きるので、開くたびに設定を取り直すのに使う */
+  onOpen?: () => void
 }
 
 /**
@@ -20,7 +22,7 @@ interface Props {
  * profile は一覧のポーリング（App）から。編集直後はモーダルが返した値を出し、ポーリングが追いついたら props に戻る。
  * Esc と外側クリックで閉じる（useDismiss）。設定が増えたらここに項目を足す
  */
-export function UserMenu({ profile, viewer, notify, children }: Props) {
+export function UserMenu({ profile, viewer, notify, children, onOpen }: Props) {
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState(false)
   const [saved, setSaved] = useState<Profile | null>(null)
@@ -46,7 +48,10 @@ export function UserMenu({ profile, viewer, notify, children }: Props) {
         ref={buttonRef}
         type="button"
         className="user"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {
+          if (!open) onOpen?.()
+          setOpen(!open)
+        }}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label="自分のメニュー"

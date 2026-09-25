@@ -1040,7 +1040,7 @@ export interface SettingsResponse {
   persona: PersonaId
   /** 一言をいま作っているか（入にしていて、口が組めた）。性格・Linear の欄はこれが true のときだけ出す */
   digest: boolean
-  /** 一言を入にしているか（settings.json の `digest`）。入なのに `digest` が false なら `digest_error` に理由がある */
+  /** 一言を入にしているか（settings.json の `digest`）。入なのに `digest` が false なら `digest_error` に理由がある。`digest` が true でも、口が続けて失敗していれば `digest_error` に出る（#443） */
   digest_on: boolean
   /** 入なのに作れない理由（openai の口でモデルが空など）。無ければ空 */
   digest_error: string

@@ -4,7 +4,7 @@ import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ReplyingMap, SessionsResponse, SettingsResponse } from '../shared/types.ts'
@@ -126,4 +126,45 @@ test('createApp の既定は「送らない」（鍵のあるマシンでテス�
     if (prev === undefined) delete process.env.JEV_API_KEY
     else process.env.JEV_API_KEY = prev
   }
+})
+
+test('自動で常に許可（#499）: 閾値以上の Claude の許可は次の応答で答え済みになり、MCP の待ち手に updatedPermissions 付きの allow が返る。閾値未満・質問・閾値 0 は残る', async () => {
+  judged.length = 0
+  const approvals = new Approvals()
+  const safe = approvals.ask('S1@r', 'Bash', { command: 'git status' }, 't1')
+  const risky = approvals.ask('S1@r', 'Bash', { command: 'rm -rf ~/' }, 't2')
+  approvals.ask('S1@r', 'AskUserQuestion', { questions: [{ question: 'どれにする?', options: [] }] }, 't3')
+  const base = await start(approvals, judge)
+  const put = async (body: unknown) => fetch(`${base}/api/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify(body) })
+
+  // 閾値 0（既定）: 0.97 でも残る
+  await sessions(base)
+  await settle()
+  assert.equal((await sessions(base)).approvals['S1@r']!.length, 3, '既定では自動で答えない')
+
+  // 検査: 0.5 未満・1 超・文字列は 400
+  for (const bad of [0.3, 1.5, '0.9']) assert.equal((await put({ jev_auto: bad })).status, 400, JSON.stringify(bad))
+  const ok = await put({ jev_auto: 0.9 })
+  assert.equal(ok.status, 200)
+  assert.equal(((await ok.json()) as SettingsResponse).jev_auto, 0.9)
+  assert.equal(JSON.parse(await readFile(join(feedDir, 'settings.json'), 'utf-8')).jev_auto, 0.9, 'settings.json に残る')
+
+  const after = await sessions(base)
+  const left = Object.fromEntries(after.approvals['S1@r']!.map((a) => [a.input.command ?? a.tool_name, a.jev]))
+  assert.deepEqual(left, { 'rm -rf ~/': 0.01, AskUserQuestion: undefined }, '0.97 の git status だけ答え済みで消える。0.01 と質問は残る')
+  const answer = await approvals.wait(safe.approval_id, 10)
+  assert.equal(answer?.behavior, 'allow')
+  assert.deepEqual(answer?.updatedPermissions, [{ type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'git status:*' }], behavior: 'allow', destination: 'localSettings' }], '画面の [常に許可] と同じ答え')
+  assert.equal(await approvals.wait(risky.approval_id, 10), null, '危なそうな方はまだ待っている')
+  const log = await readFile(join(feedDir, 'reply.log'), 'utf-8')
+  assert.match(log, /S1@r Jev が 97% で自動で常に許可（閾値 90%）: /)
+
+  // 閾値ちょうど未満に上げると答えない
+  const strict = approvals.ask('S1@r', 'Bash', { command: 'git log' }, 't4')
+  await put({ jev_auto: 0.99 })
+  await sessions(base)
+  await settle()
+  await sessions(base)
+  assert.equal(await approvals.wait(strict.approval_id, 10), null, '0.97 < 0.99 なので待つ')
+  await put({ jev_auto: 0 })
 })

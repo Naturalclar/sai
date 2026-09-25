@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { jevAsks, jevLabel, jevLevel, jevSafeOf, jevState, JEV_STATE_MAX } from './jev.ts'
+import { isJevAuto, jevAsks, jevAutoAllows, jevLabel, jevLevel, jevSafeOf, jevState, JEV_AUTO_MIN, JEV_STATE_MAX } from './jev.ts'
 import type { Approval } from './types.ts'
 
 const a = (over: Partial<Approval> = {}): Approval => ({
@@ -84,4 +84,14 @@ test('jevSafeOf: noul の数だけ取る。形が違えば null（0 や 1 にし
   for (const bad of [null, {}, { answers: {} }, { answers: { safe: {} } }, { answers: { safe: { noul: '0.9' } } }, { answers: { safe: { noul: 1.5 } } }, { answers: { safe: { noul: NaN } } }]) {
     assert.equal(jevSafeOf(bad, 'safe'), null, JSON.stringify(bad))
   }
+})
+
+test('isJevAuto / jevAutoAllows: 0（しない）か 0.5〜1 だけ受け、閾値以上のときだけ自動で常に許可（#499）', () => {
+  for (const ok of [0, JEV_AUTO_MIN, 0.8, 0.9, 1]) assert.equal(isJevAuto(ok), true, String(ok))
+  for (const bad of [0.49, -0.1, 1.01, Number.NaN, '0.9', null, undefined, true]) assert.equal(isJevAuto(bad), false, String(bad))
+  assert.equal(jevAutoAllows(0.97, 0.9), true)
+  assert.equal(jevAutoAllows(0.9, 0.9), true, '閾値ちょうどは許可')
+  assert.equal(jevAutoAllows(0.89, 0.9), false)
+  assert.equal(jevAutoAllows(undefined, 0.9), false, 'まだ届いていない')
+  assert.equal(jevAutoAllows(0.99, 0), false, '0 は「しない」')
 })

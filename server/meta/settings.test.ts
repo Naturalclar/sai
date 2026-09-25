@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { DEFAULT_PERSONA } from '../../shared/persona.ts'
 import { SettingsStore } from './settings.ts'
 
-const DEFAULTS = { persona: DEFAULT_PERSONA, linear_workspace: '', digest: false, digest_provider: 'claude', digest_model: '', jev: true }
+const DEFAULTS = { persona: DEFAULT_PERSONA, linear_workspace: '', digest: false, digest_provider: 'claude', digest_model: '', jev: true, jev_auto: 0 }
 
 test('SettingsStore: 無ければ既定（一言は切、口は claude、モデルは空）。set で重ねてファイルに残る', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'sai-settings-'))
@@ -29,6 +29,21 @@ test('SettingsStore: 読めないキーはそのキーだけ既定に落とす�
     assert.deepEqual(await new SettingsStore(path).get(), { ...DEFAULTS, persona: 'ISTJ', linear_workspace: 'acme' })
     await writeFile(path, '{ broken')
     assert.deepEqual(await new SettingsStore(path).get(), DEFAULTS)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('SettingsStore: jev_auto は 0 か 0.5〜1 だけ読む（#499）。それ以外は既定の 0', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-settings-jev-'))
+  try {
+    const path = join(dir, 'settings.json')
+    await writeFile(path, JSON.stringify({ jev_auto: 0.9 }))
+    assert.equal((await new SettingsStore(path).get()).jev_auto, 0.9)
+    for (const bad of [0.3, 2, '0.9', true]) {
+      await writeFile(path, JSON.stringify({ jev_auto: bad }))
+      assert.equal((await new SettingsStore(path).get()).jev_auto, 0, JSON.stringify(bad))
+    }
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

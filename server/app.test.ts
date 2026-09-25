@@ -1466,7 +1466,7 @@ test('GET/PUT /api/settings: 性格と Linear の workspace。知らない値は
   let data = (await res.json()) as SettingsResponse
   assert.deepEqual(
     data,
-    { persona: 'ENFP', linear_workspace: '', digest: true, digest_on: false, digest_error: '', provider: 'claude', digest_model: '', model: 'fake', jev_on: true, jev_ready: false },
+    { persona: 'ENFP', linear_workspace: '', digest: true, digest_on: false, digest_error: '', provider: 'claude', digest_model: '', model: 'fake', jev_on: true, jev_ready: false, jev_auto: 0 },
     '既定は ENFP。digest はテストで差し替えた Digester の状態（有効、口は既定の claude）で、settings.json の入切（既定オフ）では組み直さない。Linear は未設定',
   )
   const put = (body: unknown, headers: Record<string, string> = {}) =>
@@ -1476,7 +1476,7 @@ test('GET/PUT /api/settings: 性格と Linear の workspace。知らない値は
   data = (await res.json()) as SettingsResponse
   assert.equal(data.persona, 'ISTJ')
   assert.equal(((await (await get('/api/settings')).json()) as SettingsResponse).persona, 'ISTJ')
-  const defaults = { digest: false, digest_provider: 'claude', digest_model: '', jev: true }
+  const defaults = { digest: false, digest_provider: 'claude', digest_model: '', jev: true, jev_auto: 0 }
   assert.deepEqual(JSON.parse(await readFile(join(feedDir, 'settings.json'), 'utf-8')), { persona: 'ISTJ', linear_workspace: '', ...defaults })
   // Linear の workspace。省略したキー（persona）は据え置き。大文字と前後の空白は正規化、形が違えば 400、空は「設定なし」
   res = await put({ linear_workspace: ' Acme ' })
@@ -1509,7 +1509,7 @@ test('GET/PUT /api/settings: 性格と Linear の workspace。知らない値は
   assert.equal(data.digest_error, '')
   assert.equal(data.digest_model, 'qwen3:8b', '前後の空白は落とす')
   assert.equal(data.model, 'qwen3:8b')
-  assert.deepEqual(JSON.parse(await readFile(join(feedDir, 'settings.json'), 'utf-8')), { persona: 'ISTJ', linear_workspace: '', digest: true, digest_provider: 'openai', digest_model: 'qwen3:8b', jev: true })
+  assert.deepEqual(JSON.parse(await readFile(join(feedDir, 'settings.json'), 'utf-8')), { persona: 'ISTJ', linear_workspace: '', digest: true, digest_provider: 'openai', digest_model: 'qwen3:8b', jev: true, jev_auto: 0 })
   data = (await (await put({ digest_provider: 'claude', digest_model: '' })).json()) as SettingsResponse
   assert.equal(data.model, 'haiku', 'claude でモデルが空なら haiku')
   assert.equal((await put({ digest: 'yes' })).status, 400)

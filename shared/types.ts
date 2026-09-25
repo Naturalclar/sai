@@ -673,7 +673,7 @@ export interface Approval {
   decisions?: ApprovalDecision[]
   /**
    * 許可して問題なさそうかを Jev で予想した確率（#491。0..1）。**聞いていない・まだ届いていない・聞けなかったときは省略**
-   * （`shared/jev.ts`。自動で答えには使わない）
+   * （`shared/jev.ts`）。設定の `jev_auto`（#499）が入で閾値以上なら、Claude の `-p` の許可はサーバが自動で「常に許可」を返す
    */
   jev?: number
 }
@@ -1061,6 +1061,8 @@ export interface SettingsResponse {
   jev_on: boolean
   /** Jev に送れるか（サーバの環境に `JEV_API_KEY` があるか）。無ければ入でも何も送らない */
   jev_ready: boolean
+  /** Jev の確率がこれ以上なら自動で「常に許可」する閾値（#499。0 = しない。既定 0）。Claude の `-p` の許可だけ */
+  jev_auto: number
 }
 
 /** 一言を作る口。`claude`（`claude -p`。既定）か `openai`（OpenAI 互換の `/v1/chat/completions`。ローカルの LLM はこちら） */
@@ -1079,6 +1081,8 @@ export interface SettingsRequest {
   digest_model?: string
   /** 許可を Jev で予想するか（#491） */
   jev?: boolean
+  /** 自動で常に許可する閾値（#499）。0 で「しない」、それ以外は 0.5〜1 */
+  jev_auto?: number
 }
 
 export interface SessionFilters {

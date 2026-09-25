@@ -60,6 +60,8 @@
   /* 許可を Jev で予想するかの入切（#491） */
   header .user-menu .menu .jev-controls { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--line); }
   header .user-menu .menu .jev-controls .note { padding: 0 12px 6px; white-space: normal; }
+  header .user-menu .menu .jev-controls .jev-auto { display: flex; align-items: center; gap: 6px; padding: 2px 12px 6px; font-size: 12px; color: var(--muted); }
+  header .user-menu .menu .jev-controls .jev-auto select { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; font: inherit; }
   /* 使用量（#216）。取れたエージェントの分だけ出る。Codex は割合、Claude は上限に当たっているときだけ */
   header .usage { position: relative; display: inline-flex; }
   header .usage-chip { display: inline-flex; align-items: center; gap: 8px; padding: 3px 8px; font: inherit; font-size: 12px; color: var(--muted); background: var(--chip); border: 1px solid transparent; border-radius: 999px; cursor: pointer; white-space: nowrap; }

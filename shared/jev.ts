@@ -114,3 +114,23 @@ export function jevSafeOf(body: unknown, name: string): number | null {
   const noul = (answer as { noul?: unknown }).noul
   return typeof noul === 'number' && Number.isFinite(noul) && noul >= 0 && noul <= 1 ? noul : null
 }
+
+// ---- 自動で「常に許可」（#499）
+
+/** 自動で常に許可する閾値の下限。これより低い値は受けない（半々で自動に許可しない） */
+export const JEV_AUTO_MIN = 0.5
+/** 画面の選択肢（0 = しない は別） */
+export const JEV_AUTO_CHOICES = [0.8, 0.9, 0.95, 0.99] as const
+
+/** settings の `jev_auto` として受ける値か: 0（しない）か JEV_AUTO_MIN〜1 の数 */
+export function isJevAuto(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && (value === 0 || (value >= JEV_AUTO_MIN && value <= 1))
+}
+
+/**
+ * 自動で常に許可してよいか。閾値が 0（しない）・確率が届いていない・閾値未満なら false。
+ * 対象を絞るのは呼び出し側（SAI から「常に許可」を返せる Claude の `-p` の許可だけ。Codex / OpenCode には「常に許可」が無い）
+ */
+export function jevAutoAllows(safe: number | undefined, threshold: number): boolean {
+  return threshold > 0 && safe !== undefined && safe >= threshold
+}

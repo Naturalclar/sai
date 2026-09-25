@@ -19,6 +19,7 @@ import type {
   AgentSendResponse,
   AgentSessionsResponse,
   AgentWaitResponse,
+  Approval,
   ApprovalAnswer,
   ApprovalMap,
   ApprovalRequest,
@@ -75,6 +76,7 @@ import type { OpencodeApp } from './reply/opencodeServer.ts'
 import { OpencodePermissions } from './reply/opencodePermissions.ts'
 import { approvalMapKey, CodexDialogs, mergeApprovalMaps } from './reply/codexDialogs.ts'
 import { JevRisk } from './approvals/jev.ts'
+import { isJevAuto, jevAutoAllows } from '../shared/jev.ts'
 import type { JevJudge } from './approvals/jev.ts'
 import { CodexTerminals, type CodexTerminalSource } from './reply/codexTerminal.ts'
 import { CodexPanes, type CodexPaneSource } from './reply/codexPanes.ts'
@@ -676,7 +678,42 @@ export function createApp(
     ])
     const merged = mergeApprovalMaps(mergeApprovalMaps(mergeApprovalMaps(approvals.snapshot(), codexApp.snapshot()), dialogs), opencode)
     // 問題なさそうかの確率（#491）。聞いていないものは投げるだけで、届いたら次の応答に載る（rev は approvalMapKey が拾う）
-    return jevRisk.annotate(merged, (await settingsStore.get()).jev)
+    const s = await settingsStore.get()
+    return await jevAutoAllow(jevRisk.annotate(merged, s.jev), s.jev_auto)
+  }
+
+  /** 画面の [常に許可] が返すもの（#96）。ルールは画面から受け取らず、預かっているツール名と入力からサーバが組み立てる。組めないツールは null */
+  const alwaysAllowPermissions = (current: Approval): NonNullable<ApprovalAnswer['updatedPermissions']> | null => {
+    const rule = alwaysAllowRule(current.tool_name, current.input)
+    return rule ? [{ type: 'addRules', rules: [rule], behavior: 'allow', destination: 'localSettings' }] : null
+  }
+
+  /**
+   * Jev の確率が閾値以上の許可を、人を待たずに [常に許可] と同じ答えで返す（#499）。
+   * 対象は **SAI から「常に許可」を返せる許可だけ** = Claude の `-p` の MCP 経路（`approvals` に預かっているもの）で、
+   * `alwaysAllowRule()` が組めるツール。Codex / OpenCode の許可には「常に許可」が無いので触らない。
+   * 答えた分は写しから外す（`approvals.answer()` は 2 回目に false を返すので二重に答えない）。reply.log に残す
+   */
+  const jevAutoAllow = async (map: ApprovalMap, threshold: number): Promise<ApprovalMap> => {
+    if (threshold <= 0) return map
+    let changed = false
+    const out: ApprovalMap = {}
+    for (const [id, list] of Object.entries(map)) {
+      const kept: Approval[] = []
+      for (const a of list) {
+        const current = jevAutoAllows(a.jev, threshold) ? approvals.get(a.approval_id) : undefined
+        const permissions = current ? alwaysAllowPermissions(current) : null
+        if (!current || !permissions || !approvals.answer(a.approval_id, { behavior: 'allow', updatedInput: current.input, updatedPermissions: permissions })) {
+          kept.push(a)
+          continue
+        }
+        changed = true
+        const line = `--- ${new Date().toISOString()} ${id} Jev が ${Math.round(a.jev! * 100)}% で自動で常に許可（閾値 ${Math.round(threshold * 100)}%）: ${ruleLabel(permissions[0]!.rules[0]!)}\n`
+        await appendFile(join(store.directory, 'reply.log'), line).catch(() => {})
+      }
+      if (kept.length > 0) out[id] = kept
+    }
+    return changed ? out : map
   }
 
   /**
@@ -787,6 +824,7 @@ export function createApp(
       model: digest.model,
       jev_on: s.jev,
       jev_ready: jevRisk.ready,
+      jev_auto: s.jev_auto,
     }
   }
   /**
@@ -863,7 +901,11 @@ export function createApp(
       if (typeof b.jev !== 'boolean') return error(res, 400, 'jev は true か false で送ってください')
       patch.jev = b.jev
     }
-    if (Object.keys(patch).length === 0) return error(res, 400, 'persona / linear_workspace / digest / digest_provider / digest_model / jev のどれかを送ってください')
+    if (b.jev_auto !== undefined) {
+      if (!isJevAuto(b.jev_auto)) return error(res, 400, 'jev_auto は 0（しない）か 0.5〜1 の数で送ってください')
+      patch.jev_auto = b.jev_auto
+    }
+    if (Object.keys(patch).length === 0) return error(res, 400, 'persona / linear_workspace / digest / digest_provider / digest_model / jev / jev_auto のどれかを送ってください')
     // 起動時の組み立て（settings.json の読み込み）が済んでから書く。後から古い値で組み直されないように
     await digestReady
     const saved = await settingsStore.set(patch)
@@ -2011,11 +2053,10 @@ export function createApp(
       ? { behavior: 'allow', updatedInput: b.updatedInput && typeof b.updatedInput === 'object' && !Array.isArray(b.updatedInput) ? b.updatedInput : current.input }
       : { behavior: 'deny', message: typeof b.message === 'string' && b.message.trim() ? b.message.trim() : 'SAI の画面で拒否された' }
     if (answer.behavior === 'allow' && b.remember === 'local') {
-      // 「常に許可」。ルールは画面から受け取らず、預かっているツール名と入力からサーバが組み立てる。
-      // CLI がそれを cwd の .claude/settings.local.json に書く（端末の「今後も許可」と同じ）
-      const rule = alwaysAllowRule(current.tool_name, current.input)
-      if (!rule) return error(res, 400, 'このツールには「常に許可」は無い')
-      answer.updatedPermissions = [{ type: 'addRules', rules: [rule], behavior: 'allow', destination: 'localSettings' }]
+      // 「常に許可」。CLI がルールを cwd の .claude/settings.local.json に書く（端末の「今後も許可」と同じ）
+      const permissions = alwaysAllowPermissions(current)
+      if (!permissions) return error(res, 400, 'このツールには「常に許可」は無い')
+      answer.updatedPermissions = permissions
     }
     if (!approvals.answer(approvalId, answer)) return error(res, 409, 'already answered')
     return json(res, { ok: true, approval_id: approvalId, behavior: answer.behavior, remembered: answer.updatedPermissions ? ruleLabel(answer.updatedPermissions[0]!.rules[0]!) : undefined })

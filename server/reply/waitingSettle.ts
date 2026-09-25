@@ -21,6 +21,8 @@ import type { SessionSummary } from '../../shared/types.ts'
 export interface WaitingSettleSource {
   /** 待ちを畳んでよいエンティティIDの集合。見に行けなければ空 */
   scan(sessions: readonly SessionSummary[]): Promise<ReadonlySet<string>>
+  /** 前回の結果（ペインを見に行かない。#495 の締切で使う）。偽物は持たなくてよい */
+  last?(): ReadonlySet<string>
 }
 
 /** 何もしない実装（`SAI_TERMINAL=0` と、端末を見ないテスト） */
@@ -46,6 +48,7 @@ export class NoWaitingSettle implements WaitingSettleSource {
  */
 export class WaitingSettle implements WaitingSettleSource {
   private scanning: Promise<ReadonlySet<string>> | null = null
+  private lastResult: ReadonlySet<string> = new Set()
   private readonly tmux: Tmux
   private readonly ps: PsFn
 
@@ -57,11 +60,21 @@ export class WaitingSettle implements WaitingSettleSource {
   /** 3 秒のポーリングが重なっても、走っているスキャンは 1 本だけ（CodexDialogs と同じ） */
   scan(sessions: readonly SessionSummary[]): Promise<ReadonlySet<string>> {
     if (!this.scanning) {
-      this.scanning = this.scanNow(sessions).finally(() => {
-        this.scanning = null
-      })
+      this.scanning = this.scanNow(sessions)
+        .then((result) => {
+          this.lastResult = result
+          return result
+        })
+        .finally(() => {
+          this.scanning = null
+        })
     }
     return this.scanning
+  }
+
+  /** 前回の結果（ペインを見に行かない） */
+  last(): ReadonlySet<string> {
+    return this.lastResult
   }
 
   private async scanNow(sessions: readonly SessionSummary[]): Promise<ReadonlySet<string>> {

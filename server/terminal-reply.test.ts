@@ -34,8 +34,14 @@ const codexPanes = {
     { pane: '%13', pid: 205, cwd: '/work/x5', session: 'X5' },
     { pane: '%14', pid: 206, cwd: '/work/norows', session: 'NOROWS' },
   ],
+  /** 走査が終わらないふり（#495。要求の締切の確認用）。null なら即答 */
+  hold: null as Promise<void> | null,
   async scan() {
+    if (codexPanes.hold) await codexPanes.hold
     return codexPanes.panes
+  },
+  last() {
+    return [] as typeof codexPanes.panes
   },
 }
 
@@ -171,6 +177,26 @@ test('一覧: lock で引けない Codex は、ペインで動いているもの
   const by = Object.fromEntries(data.sessions.map((s) => [s.id, s.terminal]))
   // 行の pane は %12 だが、いま動いているのは %13。**いまのペイン**を使う（ペインを移していても当たる）
   assert.deepEqual(by['X5@r'], { pane: '%13', pid: 205 })
+})
+
+test('一覧: ペインの走査が締切までに終わらなければ前回の結果で返し、終わったら次の一覧で terminal が付いて rev が変わる（#495）', async () => {
+  let release!: () => void
+  codexPanes.hold = new Promise<void>((resolve) => (release = resolve))
+  try {
+    const t = Date.now()
+    const held = await sessions()
+    assert.ok(Date.now() - t < 3_000, `締切で返る（走査を待たない）: ${Date.now() - t}ms`)
+    const by = Object.fromEntries(held.sessions.map((s) => [s.id, s.terminal]))
+    assert.equal(by['X5@r'], null, '前回の結果（無し）で返す。lock で引ける X4 は走査に依らない')
+    assert.deepEqual(by['X4@r'], { pane: '%11', pid: 204 })
+    release()
+    codexPanes.hold = null
+    const fresh = await sessions()
+    assert.deepEqual(Object.fromEntries(fresh.sessions.map((s) => [s.id, s.terminal]))['X5@r'], { pane: '%13', pid: 205 }, '走査が終われば次の一覧で付く')
+    assert.notEqual(fresh.rev, held.rev, 'terminal が付いたら rev が変わる（画面が描き直す）')
+  } finally {
+    codexPanes.hold = null
+  }
 })
 
 test('要対応: 行が 1 本も無い Codex でも、ペインで止まっていれば出す（#417）', async () => {

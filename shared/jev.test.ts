@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { jevAsks, jevLabel, jevLevel, jevSafeOf, jevState, JEV_STATE_MAX } from './jev.ts'
+import { isJevAuto, jevAsks, jevAutoAllows, jevAutoEligible, jevLabel, jevLevel, jevPercent, jevRuleState, jevSafeOf, jevState, JEV_AUTO_MIN, JEV_STATE_MAX } from './jev.ts'
 import type { Approval } from './types.ts'
 
 const a = (over: Partial<Approval> = {}): Approval => ({
@@ -84,4 +84,28 @@ test('jevSafeOf: noul の数だけ取る。形が違えば null（0 や 1 にし
   for (const bad of [null, {}, { answers: {} }, { answers: { safe: {} } }, { answers: { safe: { noul: '0.9' } } }, { answers: { safe: { noul: 1.5 } } }, { answers: { safe: { noul: NaN } } }]) {
     assert.equal(jevSafeOf(bad, 'safe'), null, JSON.stringify(bad))
   }
+})
+
+test('isJevAuto / jevAutoAllows: 0（しない）か 0.5〜1 だけ受け、閾値以上のときだけ自動で常に許可（#499）', () => {
+  for (const ok of [0, JEV_AUTO_MIN, 0.8, 0.9, 1]) assert.equal(isJevAuto(ok), true, String(ok))
+  for (const bad of [0.49, -0.1, 1.01, Number.NaN, '0.9', null, undefined, true]) assert.equal(isJevAuto(bad), false, String(bad))
+  assert.equal(jevAutoAllows(0.97, 0.9), true)
+  assert.equal(jevAutoAllows(0.9, 0.9), true, '閾値ちょうどは許可')
+  assert.equal(jevAutoAllows(0.89, 0.9), false)
+  assert.equal(jevAutoAllows(undefined, 0.9), false, 'まだ届いていない')
+  assert.equal(jevAutoAllows(0.99, 0), false, '0 は「しない」')
+})
+
+test('jevAutoEligible / jevRuleState: 自動で常に許可するのは Claude の Bash だけ。ルールの文にはこの回の状態とルールが入る（#499）', () => {
+  assert.equal(jevAutoEligible({ tool_name: 'Bash', agent: 'claude' }), true)
+  assert.equal(jevAutoEligible({ tool_name: 'Bash' }), true, 'agent 省略は claude')
+  assert.equal(jevAutoEligible({ tool_name: 'mcp__github__push_files' }), false, 'MCP ツールは引数を Jev に送らないので対象外')
+  assert.equal(jevAutoEligible({ tool_name: 'Write' }), false)
+  assert.equal(jevAutoEligible({ tool_name: 'Bash', agent: 'codex' }), false)
+  assert.equal(jevAutoEligible({ tool_name: 'Bash', answerable: false }), false)
+  assert.equal(jevPercent(0.974), 97)
+  const approval: Approval = { approval_id: 'a', id: 'S@r', since: '', tool_name: 'Bash', input: { command: 'rm -rf build' }, tool_use_id: '', text: '' }
+  const state = jevRuleState(approval, 'Bash(rm:*)')
+  assert.match(state, /Command: rm -rf build/)
+  assert.match(state, /every future command matching the rule: Bash\(rm:\*\)$/)
 })

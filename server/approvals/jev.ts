@@ -7,11 +7,11 @@
 //
 // 画面の 3 秒のポーリングを待たせない: 聞いていない許可を見つけたら投げるだけで、答えは届いたときに覚え、次の応答に載せる。
 // **同じ許可（approval_id）には 1 回だけ**聞く（失敗も覚えて聞き直さない。口が落ちているときに叩き続けない）。
-import { JEV_SAFE_STATEMENT, jevAsks, jevSafeOf, jevState } from '../../shared/jev.ts'
+import { JEV_RULE_STATEMENT, JEV_SAFE_STATEMENT, jevAsks, jevSafeOf, jevState } from '../../shared/jev.ts'
 import type { Approval, ApprovalMap } from '../../shared/types.ts'
 
-/** 許可の状態の文を渡すと、問題なさそうな確率（0..1）を返す。聞けなければ投げる */
-export type JevJudge = (state: string) => Promise<number>
+/** 許可の状態の文（と、どの主張を確かめるか。省略は JEV_SAFE_STATEMENT）を渡すと、その主張が本当らしい確率（0..1）を返す。聞けなければ投げる */
+export type JevJudge = (state: string, statement?: string) => Promise<number>
 
 export const JEV_ENDPOINT = 'https://api.typesafe.ai/v1/systemone'
 export const JEV_MODEL = 'jev-latest'
@@ -28,11 +28,11 @@ const QUESTION = 'safe'
 export function jevFromEnv(env: NodeJS.ProcessEnv = process.env, doFetch: typeof fetch = fetch): JevJudge | null {
   const key = env.JEV_API_KEY?.trim()
   if (!key) return null
-  return async (state) => {
+  return async (state, statement = JEV_SAFE_STATEMENT) => {
     const res = await doFetch(JEV_ENDPOINT, {
       method: 'POST',
       headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ state, model: JEV_MODEL, questions: { [QUESTION]: { type: 'noul', instructions: JEV_SAFE_STATEMENT } } }),
+      body: JSON.stringify({ state, model: JEV_MODEL, questions: { [QUESTION]: { type: 'noul', instructions: statement } } }),
       // 鍵を付けたまま別の場所へ送らない
       redirect: 'error',
       signal: AbortSignal.timeout(JEV_TIMEOUT_MS),
@@ -55,7 +55,9 @@ export class JevRisk {
   private readonly judge: JevJudge | null
   private readonly now: () => number
   private readonly entries = new Map<string, Entry>()
-  private readonly waiting: { id: string; state: string }[] = []
+  private readonly waiting: { id: string; state: string; statement: string }[] = []
+  /** 答えが届く（失敗も）たびに呼ぶ。自動の「常に許可」（#499）がここで動く。画面のポーリングに依らない */
+  onArrive: (() => void) | null = null
   private running = 0
   private version = 0
   /** 失敗の理由（最後の 1 つ）。reply.log などに残す人向け */
@@ -102,8 +104,26 @@ export class JevRisk {
 
   private ask(approval: Approval) {
     this.entries.set(approval.approval_id, { at: this.now() })
-    this.waiting.push({ id: approval.approval_id, state: jevState(approval) })
+    this.waiting.push({ id: approval.approval_id, state: jevState(approval), statement: JEV_SAFE_STATEMENT })
     this.pump()
+  }
+
+  /**
+   * ルールそのもの（`Bash(rm:*)` など）が問題なさそうな確率（#499）。ルールごとに 1 回だけ聞き、届くまでは undefined。
+   * 鍵は `rule:<表記>`（許可の id とは別の空間）。`enabled` は呼び出し側が見る（切っていれば呼ばない）
+   */
+  ruleSafe(label: string, state: string): number | undefined {
+    if (!this.judge) return undefined
+    const key = `rule:${label}`
+    const entry = this.entries.get(key)
+    if (entry) {
+      entry.at = this.now()
+      return entry.safe
+    }
+    this.entries.set(key, { at: this.now() })
+    this.waiting.push({ id: key, state, statement: JEV_RULE_STATEMENT })
+    this.pump()
+    return undefined
   }
 
   private pump() {
@@ -111,7 +131,7 @@ export class JevRisk {
       const next = this.waiting.shift()!
       this.running++
       const judge = this.judge
-      void judge(next.state)
+      void judge(next.state, next.statement)
         .then(
           (safe) => {
             this.entries.set(next.id, { safe, at: this.now() })
@@ -125,6 +145,7 @@ export class JevRisk {
           this.running--
           this.version++
           this.pump()
+          this.onArrive?.()
         })
     }
   }

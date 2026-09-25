@@ -138,6 +138,7 @@ import { imageHeaders, imageTable, readSessionImage } from './local/images.ts'
 import { searchRows } from './rows/search.ts'
 import { searchWords } from '../shared/search.ts'
 import { olderPrompts, parseRecent, recentRows } from '../shared/recentRows.ts'
+import { codexTurnErrorReason, queuedTurnError } from '../shared/codexTurnError.ts'
 import { alive, isDescendant, parsePs, RealTmux, realPs, TerminalBusy, TerminalGone, TerminalReplies, typeInto } from './reply/terminal.ts'
 import type { DeliveryAnswer, DeliveryQuery, PsFn, Tmux } from './reply/terminal.ts'
 import type { Runner } from './reply/runner.ts'
@@ -520,6 +521,25 @@ export function createApp(
     if (!updated_at) return s.agent === 'claude' ? !s.last_user_ts : true
     return Date.parse(updated_at) >= at
   }
+  /**
+   * 届いた Codex への返信（端末に打ち込んだ・queue に渡した）のターンが、エラーで終わっていればその理由（#475）。
+   * エラーで終わったターンでは Codex が notify を鳴らさず行が残らないので、rollout の `task_complete.error` で見る。
+   * 3 秒のポーリングのたびに末尾 4MB を読み直さないよう、rollout の (size, mtime) が変わったときだけ読む
+   */
+  const turnEndSeen = new Map<string, string>()
+  const typedTurnError = async (sessions: SessionSummary[], id: string, query: DeliveryQuery): Promise<string | null> => {
+    const s = sessions.find((x) => x.id === id)
+    if (!s || s.agent !== 'codex' || isRemoteHost(s.host, selfHost())) return null
+    const raw = sessionOf(s)
+    const rollout = raw ? await progress.codexRollout?.(raw) : ''
+    if (!rollout) return null
+    const info = await stat(rollout).catch(() => null)
+    const sig = info ? `${query.since}|${info.size}|${info.mtimeMs}` : ''
+    if (!sig || turnEndSeen.get(id) === sig) return null
+    turnEndSeen.set(id, sig)
+    const message = queuedTurnError(await tailLines(rollout, QUEUE_ROLLOUT_TAIL_BYTES), query.text, Date.parse(query.since))
+    return message ? codexTurnErrorReason(message) : null
+  }
   /** 処理中の返信（子プロセス + 端末）。端末の分は、ターン完了の行が届いていれば先に片付け、届いたかを確かめる */
   /** そのセッションの一番新しいターン完了の行の `ts`。**OpenCode の分だけ**返す（#375 の settle の当て先） */
   const opencodeTurnOf = (sessions: SessionSummary[], id: string): string | undefined => {
@@ -535,6 +555,10 @@ export function createApp(
     for (const miss of await typed.checkDelivery((id, query) => typedStarted(sessions, id, query))) {
       // 画面の失敗は時間で消えるので、届かなかったことは reply.log にも残す（#474。あとから辿れるように）
       await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${miss.id} ${miss.kind === 'queue' ? 'queue に渡した返信が届いていない' : '端末に打ち込んだ返信でターンが始まっていない'}: ${miss.reason}\n`).catch(() => {})
+    }
+    // 届いたが、ターンがエラーで終わった（#475。行が残らないので、ここで拾わないと黙って消える）
+    for (const miss of await typed.checkTurnEnd((id, query) => typedTurnError(sessions, id, query))) {
+      await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${miss.id} ${miss.kind === 'queue' ? 'queue に渡した' : '端末に打ち込んだ'}返信のターンがエラーで終わった: ${miss.reason}\n`).catch(() => {})
     }
     // OpenCode のサーバ経路も、行が届いた時点で終わりにする（子プロセスが無いので exit は来ない。#382）
     for (const id of opencodeApp.settle((rid) => opencodeTurnOf(sessions, rid))) await drain(id)

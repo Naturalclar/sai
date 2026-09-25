@@ -134,3 +134,44 @@ test('届いたあとは今までどおり、ターン完了が来なくても T
   r.settle(() => undefined)
   assert.equal(r.snapshot()['L@r'], undefined)
 })
+
+test('checkTurnEnd: 届いた返信のターンがエラーで終わったら failed にし、30 分見せる（#475。行が残らないので黙って消えていた）', async () => {
+  let now = T0
+  const r = new TerminalReplies(() => now)
+  r.start('Q@r', 'PR作成して', 'terminal')
+  const ended = async () => "Codex のターンがエラーで終わりました: You've hit your usage limit."
+  assert.deepEqual(await r.checkTurnEnd(ended), [], '届いたと確かめる前は聞かない')
+  now += TERMINAL_DELIVERY_WAIT_MS
+  await r.checkDelivery(async () => true)
+  const asked: string[] = []
+  const missed = await r.checkTurnEnd(async (id, query) => {
+    asked.push(`${id} ${query.kind} ${query.text}`)
+    return ended()
+  })
+  assert.deepEqual(asked, ['Q@r terminal PR作成して'])
+  assert.deepEqual(missed.map((m) => m.id), ['Q@r'], '新しく失敗にしたものを返す（呼ぶ側が reply.log に残す）')
+  assert.match(r.snapshot()['Q@r']?.failed?.tail ?? '', /usage limit/)
+  assert.equal(r.running('Q@r'), false, '失敗にしたものは次の返信を止めない')
+  assert.deepEqual(await r.checkTurnEnd(ended), [], '一度失敗にしたら聞き直さない')
+  // 端末の「届いていない」は 2 分で消えるが、ターンのエラーは行が残らないので長く見せる
+  now += TERMINAL_FAILED_TTL_MS + 1
+  r.settle(() => undefined)
+  assert.ok(r.snapshot()['Q@r'], '2 分では消さない')
+  now += QUEUE_FAILED_TTL_MS
+  r.settle(() => undefined)
+  assert.equal(r.snapshot()['Q@r'], undefined, '30 分を過ぎたら消す')
+})
+
+test('checkTurnEnd: まだ分からない（null）・聞き先が投げたときは処理中のまま', async () => {
+  let now = T0
+  const r = new TerminalReplies(() => now)
+  r.start('Q@r', 'やって', 'queue')
+  now += QUEUE_DELIVERY_WAIT_MS
+  await r.checkDelivery(async () => true)
+  await r.checkTurnEnd(async () => null)
+  await r.checkTurnEnd(async () => {
+    throw new Error('読めない')
+  })
+  assert.equal(r.running('Q@r'), true)
+  assert.equal(r.snapshot()['Q@r']?.failed, undefined)
+})

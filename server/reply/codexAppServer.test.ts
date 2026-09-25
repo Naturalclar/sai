@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { ApprovalAnswer } from '../../shared/types.ts'
-import { CodexAppServer, type CodexConnection } from './codexAppServer.ts'
+import { CODEX_TURN_FAILED_TTL_MS, CodexAppServer, type CodexConnection } from './codexAppServer.ts'
 
 type Message = Record<string, unknown> & { id?: string | number; method?: string; params?: unknown }
 
@@ -353,4 +353,35 @@ test('steer: expectedTurnId を付けて投げ、足せなければ false（#404
   connection.failSteer = false
   connection.emit({ method: 'turn/completed', params: { threadId: 'thread-1', turn: { id: 'turn-1' } } })
   assert.equal(await app.steer('thread-1@repo', 'あとから'), false)
+})
+
+test('turn/completed が failed なら、エラーの文を失敗として残す（#475。エラーのターンは notify が鳴らず行が残らない）', async () => {
+  let now = Date.parse('2026-09-09T12:00:00Z')
+  const connection = new FakeConnection()
+  const app = new CodexAppServer(async () => connection, () => now)
+  await app.start({ id: 'thread-1@repo', threadId: 'thread-1', text: '続けて', cwd: '/repo' })
+  // 実測（codex 0.154.0）の形: error.message は API の応答を JSON にした文字列のこともある
+  const error = { message: '{"type":"error","status":400,"error":{"message":"The \'x\' model is not supported when using Codex with a ChatGPT account."}}', codexErrorInfo: 'other' }
+  connection.emit({ method: 'turn/completed', params: { threadId: 'thread-1', turn: { id: 'turn-1', status: 'failed', error } } })
+  assert.equal(app.running('thread-1@repo'), false, '処理中ではない（次の返信を止めない）')
+  const failed = app.replying()['thread-1@repo']
+  assert.equal(failed?.text, '続けて')
+  assert.match(failed?.failed?.tail ?? '', /model is not supported/)
+  assert.match(failed?.failed?.tail ?? '', /記録の行は残りません/)
+
+  // 次のターンを始めたら消え、回っているターンとして出る
+  await app.start({ id: 'thread-1@repo', threadId: 'thread-1', text: '再開', cwd: '/repo' })
+  assert.equal(app.replying()['thread-1@repo']?.failed, undefined)
+  assert.equal(app.replying()['thread-1@repo']?.text, '再開')
+
+  // 成功したターンは失敗を残さない
+  connection.emit({ method: 'turn/completed', params: { threadId: 'thread-1', turn: { id: 'turn-2', status: 'completed', error: null } } })
+  assert.equal(app.replying()['thread-1@repo'], undefined)
+
+  // 失敗は 30 分で消える
+  await app.start({ id: 'thread-1@repo', threadId: 'thread-1', text: 'もう一度', cwd: '/repo' })
+  connection.emit({ method: 'turn/completed', params: { threadId: 'thread-1', turn: { id: 'turn-3', status: 'failed', error: { message: "You've hit your usage limit." } } } })
+  assert.ok(app.replying()['thread-1@repo']?.failed)
+  now += CODEX_TURN_FAILED_TTL_MS + 1
+  assert.equal(app.replying()['thread-1@repo'], undefined)
 })

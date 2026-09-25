@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
-import { ClaudeSummarizer, DEFAULT_OPENAI_URL, DIGEST_ALERT_FAILS, DIGEST_MAX_TRIES, DIGEST_RETRY_DELAYS_MS, DigestStore, Digester, OpenAISummarizer, createDigester, digestKey, digestable, personaResolver, stripThinking, summarizeCommand, summarizeRequest, summarizerFactory, rejectsReasoningEffort } from './digest.ts'
+import { ClaudeSummarizer, DEFAULT_OPENAI_URL, DIGEST_ALERT_FAILS, DIGEST_MAX_TRIES, DIGEST_RETRY_DELAYS_MS, DigestStore, Digester, OpenAISummarizer, createDigester, digestKey, digestable, personaResolver, stripThinking, summarizeCommand, summarizeRequest, summarizerFactory, mayRetryWithoutReasoning } from './digest.ts'
 import type { Summarizer } from './digest.ts'
 import { row } from '../rows/aggregate.test.ts'
 import type { PersonaId } from '../../shared/types.ts'
@@ -232,13 +232,15 @@ test('summarizeRequest: <base>/chat/completions に user 1 通、stream なし�
   assert.deepEqual(r.init.headers, { 'content-type': 'application/json' })
   assert.deepEqual(JSON.parse(String(r.init.body)), { model: 'qwen3:8b', messages: [{ role: 'user', content: 'プロンプト' }], stream: false, reasoning_effort: 'none' })
   assert.deepEqual(
-    JSON.parse(String(summarizeRequest('http://x/v1', 'm', 'p', undefined, { reasoning: false }).init.body)),
+    JSON.parse(String(summarizeRequest('http://x/v1', 'm', 'p', undefined, { reasoningOff: false }).init.body)),
     { model: 'm', messages: [{ role: 'user', content: 'p' }], stream: false },
-    'reasoning: false なら付けない',
+    'reasoningOff: false なら付けない',
   )
-  assert.equal(rejectsReasoningEffort(400, '{"error":{"message":"Unsupported parameter: reasoning_effort"}}'), true)
-  assert.equal(rejectsReasoningEffort(400, '{"error":{"message":"model not found"}}'), false, '同じ 400 でも別の理由なら外さない')
-  assert.equal(rejectsReasoningEffort(500, 'reasoning_effort'), false)
+  assert.equal(mayRetryWithoutReasoning(400), true)
+  assert.equal(mayRetryWithoutReasoning(422), true, '知らないキーを 422 で弾く厳格なサーバ')
+  for (const status of [401, 403, 404, 413]) assert.equal(mayRetryWithoutReasoning(status), false, `${status}: 鍵・モデル名・大きさの間違いは指定のせいではない（2 回送らない）`)
+  for (const status of [408, 409, 425, 429]) assert.equal(mayRetryWithoutReasoning(status), false, `${status}: 一時的。外して通っても覚えてはいけない`)
+  assert.equal(mayRetryWithoutReasoning(500), false)
   assert.equal(summarizeRequest('http://127.0.0.1:1234/v1/', 'm', 'p').url, 'http://127.0.0.1:1234/v1/chat/completions')
   assert.deepEqual(summarizeRequest('http://x/v1', 'm', 'p', 'sk-1').init.headers, { 'content-type': 'application/json', authorization: 'Bearer sk-1' })
 })
@@ -296,20 +298,59 @@ test('OpenAISummarizer: 普通の返答は content をそのまま。model と p
   }
 })
 
-test('OpenAISummarizer: reasoning_effort を 400 で断る口には、外して送り直し、以後は付けない', async () => {
-  const fake = await fakeOpenAI((body) => {
-    if ('reasoning_effort' in body) return { status: 400, body: JSON.stringify({ error: { message: "Unsupported parameter: 'reasoning_effort' is not supported with this model." } }) }
-    return completion('外して通った。')
-  })
+test('OpenAISummarizer: reasoning_effort を 400 / 422 で断る口には、外して送り直し、通ったら以後は付けない（ログに残す）', async () => {
+  let status = 400
+  const fake = await fakeOpenAI((body) => ('reasoning_effort' in body ? { status, body: 'Extra inputs are not permitted: reasoning_effort' } : completion('外して通った。')))
   try {
-    const s = new OpenAISummarizer(fake.url, 'gpt-4o-mini', 'sk-1')
-    assert.equal(await s.summarize('P1'), '外して通った。')
-    assert.equal(fake.seen.length, 2, '1 回目は付けて 400、2 回目は外して通る')
-    assert.equal(fake.seen[0]!.body.reasoning_effort, 'none')
-    assert.equal('reasoning_effort' in fake.seen[1]!.body, false)
-    assert.equal(await s.summarize('P2'), '外して通った。')
-    assert.equal(fake.seen.length, 3, '覚えているので次からは 1 往復')
-    assert.equal('reasoning_effort' in fake.seen[2]!.body, false)
+    for (status of [400, 422]) {
+      fake.seen.length = 0
+      const lines: string[] = []
+      const s = new OpenAISummarizer(fake.url, 'gpt-4o-mini', { apiKey: 'sk-1', log: (l) => lines.push(l) })
+      assert.equal(await s.summarize('P1'), '外して通った。')
+      assert.equal(fake.seen.length, 2, `${status}: 1 回目は付けて断られ、2 回目は外して通る`)
+      assert.equal(fake.seen[0]!.body.reasoning_effort, 'none')
+      assert.equal('reasoning_effort' in fake.seen[1]!.body, false)
+      assert.equal(lines.length, 1, '外したことをログに残す（黙って思考が戻らない）')
+      assert.match(lines[0]!, new RegExp(`reasoning_effort を受けない（HTTP ${status}: `))
+      assert.equal(await s.summarize('P2'), '外して通った。')
+      assert.equal(fake.seen.length, 3, '覚えているので次からは 1 往復')
+      assert.equal('reasoning_effort' in fake.seen[2]!.body, false)
+    }
+  } finally {
+    await fake.close()
+  }
+})
+
+test('OpenAISummarizer: 外しても通らない 400 はそのまま失敗で、指定は外さない。401 / 404 / 408 / 429 は送り直さない（ログも出ない）', async () => {
+  let status = 400
+  const fake = await fakeOpenAI(() => ({ status, body: JSON.stringify({ error: { message: 'context length exceeded; request: {"reasoning_effort":"none"}' } }) }))
+  const lines: string[] = []
+  try {
+    const s = new OpenAISummarizer(fake.url, 'm', { log: (l) => lines.push(l) })
+    await assert.rejects(s.summarize('P1'), /HTTP 400/)
+    assert.equal(fake.seen.length, 2, '外して 1 回だけ送り直す')
+    await assert.rejects(s.summarize('P2'), /HTTP 400/)
+    assert.equal(fake.seen[2]!.body.reasoning_effort, 'none', '通らなかったので覚えず、次も付けて送る')
+    for (status of [401, 404, 408, 429]) {
+      fake.seen.length = 0
+      await assert.rejects(s.summarize('P3'), new RegExp(`HTTP ${status}`))
+      assert.equal(fake.seen.length, 1, `${status} は送り直さない（1 往復）`)
+      assert.equal(fake.seen[0]!.body.reasoning_effort, 'none', '指定は付けたまま')
+    }
+    assert.equal(lines.length, 0, '外して通っていないので「受けない」の知らせは出ない')
+  } finally {
+    await fake.close()
+  }
+})
+
+test('OpenAISummarizer: 送り直しが timeout で落ちたら、最初の 4xx の理由を添えて投げる（timeout の文だけで原因を隠さない）', async () => {
+  const fake = await fakeOpenAI((body) => ('reasoning_effort' in body ? { status: 422, body: 'Extra inputs are not permitted' } : null))
+  try {
+    const s = new OpenAISummarizer(fake.url, 'm', { timeoutMs: 150 })
+    const t = Date.now()
+    await assert.rejects(s.summarize('P'), /HTTP 422: Extra inputs are not permitted; reasoning_effort なしで送り直し: .*(timeout|abort)/i)
+    assert.ok(Date.now() - t < 1_000, '1 件の上限は送り直しを含めて timeoutMs（signal は 1 つ）')
+    assert.equal(fake.seen.length, 2)
   } finally {
     await fake.close()
   }
@@ -318,7 +359,7 @@ test('OpenAISummarizer: reasoning_effort を 400 で断る口には、外して�
 test('OpenAISummarizer: <think> 付きの返答から思考が落ちる。鍵は Bearer で届く', async () => {
   const fake = await fakeOpenAI(() => completion('<think>\nどう言い換えるか\n</think>\n\nテストも足した。'))
   try {
-    const s = new OpenAISummarizer(fake.url, 'qwen3:8b', 'sk-local')
+    const s = new OpenAISummarizer(fake.url, 'qwen3:8b', { apiKey: 'sk-local' })
     assert.equal(await s.summarize('P'), 'テストも足した。')
     assert.equal(fake.seen[0]!.headers.authorization, 'Bearer sk-local')
   } finally {
@@ -351,7 +392,7 @@ test('OpenAISummarizer: HTTP エラー、content が空、思考だけ、JSON �
 test('OpenAISummarizer: 応答が無ければ timeoutMs で諦める', async () => {
   const fake = await fakeOpenAI(() => null)
   try {
-    const s = new OpenAISummarizer(fake.url, 'm', undefined, 100)
+    const s = new OpenAISummarizer(fake.url, 'm', { timeoutMs: 100 })
     await assert.rejects(s.summarize('P'), (err: unknown) => err instanceof Error && err.name === 'TimeoutError')
   } finally {
     await fake.close()

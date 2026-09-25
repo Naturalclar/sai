@@ -37,20 +37,24 @@ test('Codex の writer lock は、開いているプロセスがいるときだ�
   }
 })
 
+// 一式を並列で回すと本物の lsof が本番の 5 秒を超えることがある（#484。落ちた回は 5.7 秒で、殺されて投げていた）。
+// ここで見たいのは出力の読み方で速さではないので、上限だけ延ばす
+const SLOW_LSOF_MS = 60_000
+
 test('lsofHolders: 本物の lsof で、開いているプロセスがいればその pid、いなければ空', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'sai-lsof-'))
   const lock = join(root, 'x.lock')
   await writeFile(lock, '')
   try {
     try {
-      assert.deepEqual(await lsofHolders(lock), [], '誰も開いていない（lsof は 1 で終わる）')
+      assert.deepEqual(await lsofHolders(lock, SLOW_LSOF_MS), [], '誰も開いていない（lsof は 1 で終わる）')
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return t.skip('lsof が無い')
       throw err
     }
     const handle = await open(lock, 'r')
     try {
-      assert.deepEqual(await lsofHolders(lock), [process.pid], 'このプロセスが開いている')
+      assert.deepEqual(await lsofHolders(lock, SLOW_LSOF_MS), [process.pid], 'このプロセスが開いている')
     } finally {
       await handle.close()
     }

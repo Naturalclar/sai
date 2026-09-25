@@ -35,8 +35,10 @@ export function TodoRow({ item, now, hotkey, modeNote }: Props) {
         {waited && <span className="waited">{done ? `終わってから ${waited}` : `${waited} 待っている`}</span>}
       </a>
       {item.kind === 'answer' && item.approval ? (
-        // 答えるとサーバの approvals から消え、次のポーリングでこの行ごと消える
-        <ApprovalBubble approval={item.approval} now={now} hotkey={hotkey} modeNote={modeNote} />
+        // 答えるとサーバの approvals から消え、次のポーリングでこの行ごと消える。
+        // **同じセッションに次の許可が並んでいれば、この行は消えずに中身だけ次の許可に替わる**（行の key は
+        // セッション ID）ので、許可ごとに作り直す。付けないと押した直後の「拒否した」が次の許可に残って押せない（#492）
+        <ApprovalBubble key={item.approval.approval_id} approval={item.approval} now={now} hotkey={hotkey} modeNote={modeNote} />
       ) : (
         <div className="why">
           {done ? (

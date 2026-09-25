@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
-import { ClaudeSummarizer, DEFAULT_OPENAI_URL, DIGEST_ALERT_FAILS, DIGEST_MAX_TRIES, DIGEST_RETRY_DELAYS_MS, DigestStore, Digester, OpenAISummarizer, createDigester, digestKey, digestable, personaResolver, stripThinking, summarizeCommand, summarizeRequest, summarizerFactory } from './digest.ts'
+import { ClaudeSummarizer, DEFAULT_OPENAI_URL, DIGEST_ALERT_FAILS, DIGEST_MAX_TRIES, DIGEST_RETRY_DELAYS_MS, DigestStore, Digester, OpenAISummarizer, createDigester, digestKey, digestable, personaResolver, stripThinking, summarizeCommand, summarizeRequest, summarizerFactory, rejectsReasoningEffort } from './digest.ts'
 import type { Summarizer } from './digest.ts'
 import { row } from '../rows/aggregate.test.ts'
 import type { PersonaId } from '../../shared/types.ts'
@@ -225,12 +225,20 @@ test('Digester: 無効なら何もしない', async () => {
 
 // ---------------------------------------------------------------- OpenAI 互換の口（ローカル LLM）
 
-test('summarizeRequest: <base>/chat/completions に user 1 通、stream なし。末尾の / は無視。鍵があれば Bearer', () => {
+test('summarizeRequest: <base>/chat/completions に user 1 通、stream なし、思考を切る指定つき。末尾の / は無視。鍵があれば Bearer', () => {
   const r = summarizeRequest('http://127.0.0.1:11434/v1', 'qwen3:8b', 'プロンプト')
   assert.equal(r.url, 'http://127.0.0.1:11434/v1/chat/completions')
   assert.equal(r.init.method, 'POST')
   assert.deepEqual(r.init.headers, { 'content-type': 'application/json' })
-  assert.deepEqual(JSON.parse(String(r.init.body)), { model: 'qwen3:8b', messages: [{ role: 'user', content: 'プロンプト' }], stream: false })
+  assert.deepEqual(JSON.parse(String(r.init.body)), { model: 'qwen3:8b', messages: [{ role: 'user', content: 'プロンプト' }], stream: false, reasoning_effort: 'none' })
+  assert.deepEqual(
+    JSON.parse(String(summarizeRequest('http://x/v1', 'm', 'p', undefined, { reasoning: false }).init.body)),
+    { model: 'm', messages: [{ role: 'user', content: 'p' }], stream: false },
+    'reasoning: false なら付けない',
+  )
+  assert.equal(rejectsReasoningEffort(400, '{"error":{"message":"Unsupported parameter: reasoning_effort"}}'), true)
+  assert.equal(rejectsReasoningEffort(400, '{"error":{"message":"model not found"}}'), false, '同じ 400 でも別の理由なら外さない')
+  assert.equal(rejectsReasoningEffort(500, 'reasoning_effort'), false)
   assert.equal(summarizeRequest('http://127.0.0.1:1234/v1/', 'm', 'p').url, 'http://127.0.0.1:1234/v1/chat/completions')
   assert.deepEqual(summarizeRequest('http://x/v1', 'm', 'p', 'sk-1').init.headers, { 'content-type': 'application/json', authorization: 'Bearer sk-1' })
 })
@@ -283,6 +291,25 @@ test('OpenAISummarizer: 普通の返答は content をそのまま。model と p
     assert.equal(fake.seen[0]!.body.model, 'qwen3:8b')
     assert.deepEqual(fake.seen[0]!.body.messages, [{ role: 'user', content: 'P1' }])
     assert.equal(fake.seen[0]!.headers.authorization, undefined, '鍵が無ければ Authorization を付けない')
+  } finally {
+    await fake.close()
+  }
+})
+
+test('OpenAISummarizer: reasoning_effort を 400 で断る口には、外して送り直し、以後は付けない', async () => {
+  const fake = await fakeOpenAI((body) => {
+    if ('reasoning_effort' in body) return { status: 400, body: JSON.stringify({ error: { message: "Unsupported parameter: 'reasoning_effort' is not supported with this model." } }) }
+    return completion('外して通った。')
+  })
+  try {
+    const s = new OpenAISummarizer(fake.url, 'gpt-4o-mini', 'sk-1')
+    assert.equal(await s.summarize('P1'), '外して通った。')
+    assert.equal(fake.seen.length, 2, '1 回目は付けて 400、2 回目は外して通る')
+    assert.equal(fake.seen[0]!.body.reasoning_effort, 'none')
+    assert.equal('reasoning_effort' in fake.seen[1]!.body, false)
+    assert.equal(await s.summarize('P2'), '外して通った。')
+    assert.equal(fake.seen.length, 3, '覚えているので次からは 1 往復')
+    assert.equal('reasoning_effort' in fake.seen[2]!.body, false)
   } finally {
     await fake.close()
   }

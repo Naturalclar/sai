@@ -144,8 +144,17 @@ export class ClaudeSummarizer implements Summarizer {
   }
 }
 
-/** `POST <base>/chat/completions` の組み立て。テストで形を見る。末尾の `/` は有っても無くてもよい */
-export function summarizeRequest(baseUrl: string, model: string, prompt: string, apiKey?: string): { url: string; init: RequestInit } {
+/**
+ * 思考つきのモデル（qwen3 など）の思考を切る指定。一言は 40 文字なので思考は要らないのに、既定のままだと
+ * 本文の何倍もの思考を先に生成して 90 秒の timeout に掛かり、1 → 5 → 30 分後に作り直すあいだ GPU を占有し続ける
+ * （実測: 同じ依頼が思考あり 11 秒・416 トークン、無し 0.9 秒・30 トークン。Mac 全体が重くなって一覧が 38 秒になった）。
+ * Ollama の OpenAI 互換の口で効くのはこれだけ（`think: false` と `/no_think` は無視され、`max_tokens` は思考に食われて本文が空になる）。
+ * 受けない口（OpenAI 本家の推論でないモデルなど）は 400 を返すので、そのときは外して送り直す（OpenAISummarizer）
+ */
+export const REASONING_OFF = { reasoning_effort: 'none' } as const
+
+/** `POST <base>/chat/completions` の組み立て。テストで形を見る。末尾の `/` は有っても無くてもよい。`reasoning: false` で思考を切る指定を付けない */
+export function summarizeRequest(baseUrl: string, model: string, prompt: string, apiKey?: string, opts: { reasoning?: boolean } = {}): { url: string; init: RequestInit } {
   const headers: Record<string, string> = { 'content-type': 'application/json' }
   if (apiKey) headers.authorization = `Bearer ${apiKey}`
   return {
@@ -153,9 +162,14 @@ export function summarizeRequest(baseUrl: string, model: string, prompt: string,
     init: {
       method: 'POST',
       headers,
-      body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], stream: false }),
+      body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], stream: false, ...(opts.reasoning === false ? {} : REASONING_OFF) }),
     },
   }
+}
+
+/** 400 の本文が「reasoning_effort を受けない」と言っているか。口ごとに文言が違うので、引数名が出ていればそう見る */
+export function rejectsReasoningEffort(status: number, body: string): boolean {
+  return status === 400 && /reasoning_effort/i.test(body)
 }
 
 /** 思考つきのモデル（qwen3 など）が OpenAI 互換の口でも本文の先頭に混ぜる `<think>…</think>` を落とす。閉じていなければそこから後ろを全部落とす */
@@ -176,6 +190,8 @@ export class OpenAISummarizer implements Summarizer {
   private readonly apiKey: string | undefined
   private readonly timeoutMs: number
   private readonly fetchFn: typeof fetch
+  /** この口が `reasoning_effort` を 400 で断った。以後は付けずに送る（毎回 2 往復しない） */
+  private reasoningRejected = false
 
   get where(): string {
     return this.baseUrl
@@ -190,9 +206,16 @@ export class OpenAISummarizer implements Summarizer {
   }
 
   async summarize(prompt: string): Promise<string> {
-    const { url, init } = summarizeRequest(this.baseUrl, this.model, prompt, this.apiKey)
-    const res = await this.fetchFn(url, { ...init, signal: AbortSignal.timeout(this.timeoutMs) })
-    const body = await res.text()
+    let { url, init } = summarizeRequest(this.baseUrl, this.model, prompt, this.apiKey, { reasoning: !this.reasoningRejected })
+    let res = await this.fetchFn(url, { ...init, signal: AbortSignal.timeout(this.timeoutMs) })
+    let body = await res.text()
+    if (!res.ok && !this.reasoningRejected && rejectsReasoningEffort(res.status, body)) {
+      // 思考を切る指定を受けない口。外して送り直し、この口には二度と付けない
+      this.reasoningRejected = true
+      ;({ url, init } = summarizeRequest(this.baseUrl, this.model, prompt, this.apiKey, { reasoning: false }))
+      res = await this.fetchFn(url, { ...init, signal: AbortSignal.timeout(this.timeoutMs) })
+      body = await res.text()
+    }
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${body.trim().slice(0, 200)}`)
     let parsed: { choices?: { message?: { content?: unknown } }[] }
     try {

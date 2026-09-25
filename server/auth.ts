@@ -92,19 +92,22 @@ export function tailscaleBins(platform: NodeJS.Platform = process.platform): str
   return bins
 }
 
-/** 実際に `tailscale whois --json <addr>` を叩く Whois。見つからなければ（peer not found、コマンドが無い）null */
+/** 実際に `tailscale whois --json <addr>` を叩く Whois。「居ない」（peer not found）は null、聞けなかった（時間切れ・デーモンの失敗・コマンドが無い）は WhoisUnavailable */
 export function tailscaleWhois(): Whois {
   const bins = tailscaleBins()
   const run = (bin: string, addr: string) =>
     new Promise<WhoisInfo | null>((resolve, reject) => {
-      execFile(bin, ['whois', '--json', addr], { timeout: 5000, maxBuffer: 1024 * 1024 }, (err, stdout) => {
+      execFile(bin, ['whois', '--json', addr], { timeout: 5000, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
         if (err) {
           if ((err as NodeJS.ErrnoException).code === 'ENOENT') return reject(err)
-          // 時間切れ（killed）と非 0 は「聞けなかった」。**「居ない」と決めつけない**
+          // デーモンが「居ない」と答えた（peer not found は stderr に出して **exit 1**。1.85 / 1.102 で実測）。
+          // これを「聞けなかった」に混ぜると、tailnet から外した端末が直前の本人のまま最大 WHOIS_STALE_MS 通ってしまう
+          if (!err.killed && /peer not found/i.test(String(stderr))) return resolve(null)
+          // 時間切れ（killed）とそれ以外の非 0 は「聞けなかった」。**「居ない」と決めつけない**
           // （前はどちらも null にしていて、時間切れがそのまま「whois と一致しない」の 401 になっていた）
           return reject(new WhoisUnavailable(err.killed ? 'tailscale whois が時間切れ' : `tailscale whois が失敗: ${err.message}`))
         }
-        // exit 0 で読めない（peer not found は stderr に出して exit 0）なら「居ない」
+        // exit 0 で読めない（形が違う）なら「居ない」
         resolve(whoisFromJson(stdout))
       })
     })

@@ -173,7 +173,7 @@ test('identify: whois が「別人」「居ない」と答えたら、前の本�
   }
 })
 
-test('tailscaleWhois: 時間切れ・非 0 は「聞けなかった」、exit 0 で読めないのは「居ない」', async () => {
+test('tailscaleWhois: 時間切れ・デーモンの失敗は「聞けなかった」、peer not found は「居ない」', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'sai-whois-'))
   const bin = join(dir, 'tailscale')
   const realPath = process.env.PATH
@@ -183,7 +183,11 @@ test('tailscaleWhois: 時間切れ・非 0 は「聞けなかった」、exit 0 
     await writeFile(bin, '#!/bin/sh\necho "failed to connect to local tailscaled" >&2\nexit 1\n')
     await chmod(bin, 0o755)
     await assert.rejects(tailscaleWhois()('100.64.0.1'), WhoisUnavailable)
-    // exit 0 で peer not found（stderr だけ）→「居ない」
+    // 本物の CLI は peer not found を stderr に出して exit 1（1.85 / 1.102 で実測）→「居ない」。
+    // 聞けなかったに混ぜると、tailnet から外した端末が直前の本人のまま通り続ける
+    await writeFile(bin, '#!/bin/sh\necho "2026/09/25 13:25:50 peer not found" >&2\nexit 1\n')
+    assert.equal(await tailscaleWhois()('100.64.0.1'), null)
+    // exit 0 で読めない出力も「居ない」
     await writeFile(bin, '#!/bin/sh\necho "peer not found" >&2\nexit 0\n')
     assert.equal(await tailscaleWhois()('100.64.0.1'), null)
     // 答えられた

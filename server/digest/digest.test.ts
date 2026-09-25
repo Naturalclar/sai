@@ -723,10 +723,51 @@ test('口が続けて DIGEST_ALERT_FAILS 回失敗したら error に出し、�
   assert.equal(d.error, '', 'まだ出さない（たまの timeout は実データでもある）')
   d.scan(rows)
   await d.drain()
-  assert.match(d.error, new RegExp(`直近 ${DIGEST_ALERT_FAILS} 回失敗`))
+  assert.match(d.error, new RegExp(`直近 ${DIGEST_ALERT_FAILS} 件続けて失敗`))
   assert.match(d.error, /11434/, 'どこに投げているかを添える')
   d.scan([row(at(20), 'S9', { repo: 'r', text: '通る' })])
   await d.drain()
   assert.equal(d.error, '', '1 回でも通ったら消える')
   await rm(dir, { recursive: true, force: true })
+})
+
+test('1 行だけ作り直しで何度失敗しても、口の不調は出さない（行で数える。#487 のレビュー）', async () => {
+  let now = at(10).getTime()
+  const fake = new FakeSummarizer()
+  fake.failOn.add('断られる行')
+  const dir = await mkdtemp(join(tmpdir(), 'sai-digest-'))
+  try {
+    const d = new Digester(new DigestStore(join(dir, 'digest.jsonl')), fake, { enabled: true, model: 'm', since: at(0).toISOString(), persona: async () => 'none', now: () => now })
+    const bad = row(at(5), 'S1', { repo: 'r', text: '断られる行' })
+    for (const delay of [0, ...DIGEST_RETRY_DELAYS_MS]) {
+      now += delay
+      d.scan([bad])
+      await d.drain()
+    }
+    assert.equal(fake.prompts.length, DIGEST_MAX_TRIES)
+    assert.equal(d.error, '', '同じ行の作り直しは数えない（口はほかの行では通っている）')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('作っている間に口を変えたら、前の口の失敗は数えない（#487 のレビュー）', async () => {
+  let release: (err: Error) => void = () => {}
+  const slow: Summarizer = { summarize: () => new Promise((_, reject) => (release = reject)) }
+  const dir = await mkdtemp(join(tmpdir(), 'sai-digest-'))
+  try {
+    const now = at(10).getTime()
+    const d = new Digester(new DigestStore(join(dir, 'digest.jsonl')), slow, { enabled: true, model: 'm', since: at(0).toISOString(), persona: async () => 'none', now: () => now })
+    const r = row(at(5), 'S1', { repo: 'r', text: '口を変える間の行' })
+    d.scan([r])
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    d.configure({ digest: true, digest_provider: 'claude', digest_model: 'haiku' })
+    release(new Error('前の口の timeout'))
+    await d.drain()
+    // 新しい口では、間を置かずにすぐ作る（前の口の失敗が 1 回目として数えられていない）
+    d.scan([r])
+    assert.equal(d.pending(), 1)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
 })

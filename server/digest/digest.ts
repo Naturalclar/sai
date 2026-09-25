@@ -319,9 +319,14 @@ export class Digester {
   private readonly now: () => number
   /** 失敗した行（鍵 → 失敗した回数と、次に作り直してよい時刻）。scan() はそれより前には積まない（#443） */
   private failed = new Map<string, { count: number; next: number }>()
-  /** 続けて失敗した回数と、最後の失敗の理由。成功したら 0 に戻す */
-  private failStreak = 0
+  /**
+   * 続けて失敗した**行**（鍵）と、最後の失敗の理由。成功したら空に戻す。回数ではなく行で数えるのは、
+   * 1 行だけ毎回断られる（口は元気）ときに、その行の作り直しで「口が応答していません」を出さないため（#487 のレビュー）
+   */
+  private failStreak = new Set<string>()
   private lastFailure = ''
+  /** configure() のたびに進める。前の口で走っていた 1 件の結果を、新しい口の数えに混ぜない（#487 のレビュー） */
+  private generation = 0
 
   /**
    * `summarizer` は固定の口（テストの偽物）か、口とモデルから作る関数（本物。`createDigester()`）。null なら入にできない。
@@ -361,9 +366,9 @@ export class Digester {
    */
   get error(): string {
     if (this.errorValue) return this.errorValue
-    if (!this.summarizer || this.failStreak < DIGEST_ALERT_FAILS) return ''
+    if (!this.summarizer || this.failStreak.size < DIGEST_ALERT_FAILS) return ''
     const where = this.summarizer.where ? `。${this.summarizer.where}` : ''
-    return `一言の口が応答していません（直近 ${this.failStreak} 回失敗: ${this.lastFailure}${where}）`
+    return `一言の口が応答していません（直近 ${this.failStreak.size} 件続けて失敗: ${this.lastFailure}${where}）`
   }
 
   /**
@@ -381,8 +386,9 @@ export class Digester {
     this.summarizer = null
     // 口やモデルを変えたら（入れ直しも）、失敗の数え直し。新しい口で、諦めた行にももう一度だけ機会をやる
     this.failed.clear()
-    this.failStreak = 0
+    this.failStreak.clear()
     this.lastFailure = ''
+    this.generation += 1
     if (next.digest) {
       if (!this.make) this.errorValue = '一言を作る口がありません'
       else if (!this.modelValue) this.errorValue = 'openai の口にはモデル名が要ります（ローカルのモデル名。例 qwen3:8b）'
@@ -512,6 +518,7 @@ export class Digester {
         // 口は 1 件ごとに取り直す（性格を引いている間にも、画面から切られたり口を変えられたりする。#288）
         const summarizer = this.summarizer
         const model = this.modelValue
+        const generation = this.generation
         if (persona === null || !summarizer) {
           this.queued.delete(key)
           continue
@@ -555,18 +562,22 @@ export class Digester {
             ...(issues.length > 0 ? { issues: issues.map((i) => i.code) } : {}),
             ...(nextAsk ? { next_ask: nextAsk } : {}),
           })
-          this.failed.delete(key)
-          this.failStreak = 0
-          this.lastFailure = ''
+          if (generation === this.generation) {
+            this.failed.delete(key)
+            this.failStreak.clear()
+            this.lastFailure = ''
+          }
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err)
           await this.log(`${new Date().toISOString()} ${key} ${message}`)
+          // 作っている間に口を変えられたら、前の口の失敗は数えない（新しい口がいきなり 1 回失敗した扱いになる）
+          if (generation !== this.generation) continue
           // 間を置いて作り直す。DIGEST_MAX_TRIES 回で諦める（#443）
           const count = (this.failed.get(key)?.count ?? 0) + 1
           const delay = DIGEST_RETRY_DELAYS_MS[count - 1]
           this.failed.set(key, { count, next: this.now() + (delay ?? 0) })
           if (count >= DIGEST_MAX_TRIES) await this.log(`${new Date().toISOString()} ${key} ${count} 回失敗したので諦めた`)
-          this.failStreak += 1
+          this.failStreak.add(key)
           this.lastFailure = message.slice(0, 120)
         } finally {
           this.queued.delete(key)

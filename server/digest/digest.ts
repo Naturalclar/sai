@@ -149,27 +149,34 @@ export class ClaudeSummarizer implements Summarizer {
  * 本文の何倍もの思考を先に生成して 90 秒の timeout に掛かり、1 → 5 → 30 分後に作り直すあいだ GPU を占有し続ける
  * （実測: 同じ依頼が思考あり 11 秒・416 トークン、無し 0.9 秒・30 トークン。Mac 全体が重くなって一覧が 38 秒になった）。
  * Ollama の OpenAI 互換の口で効くのはこれだけ（`think: false` と `/no_think` は無視され、`max_tokens` は思考に食われて本文が空になる）。
- * 受けない口（OpenAI 本家の推論でないモデルなど）は 400 を返すので、そのときは外して送り直す（OpenAISummarizer）
+ * 受けない口（OpenAI 本家の推論でないモデル、知らないキーを 422 で弾く厳格なサーバ、`none` という値を受けない o 系など）は
+ * 4xx を返すので、そのときは外して送り直す（OpenAISummarizer）
  */
 export const REASONING_OFF = { reasoning_effort: 'none' } as const
 
-/** `POST <base>/chat/completions` の組み立て。テストで形を見る。末尾の `/` は有っても無くてもよい。`reasoning: false` で思考を切る指定を付けない */
-export function summarizeRequest(baseUrl: string, model: string, prompt: string, apiKey?: string, opts: { reasoning?: boolean } = {}): { url: string; init: RequestInit } {
+/** `POST <base>/chat/completions` の組み立て。テストで形を見る。末尾の `/` は有っても無くてもよい。`reasoningOff: false` で思考を切る指定を付けない */
+export function summarizeRequest(baseUrl: string, model: string, prompt: string, apiKey?: string, opts: { reasoningOff?: boolean } = {}): { url: string; init: RequestInit } {
   const headers: Record<string, string> = { 'content-type': 'application/json' }
   if (apiKey) headers.authorization = `Bearer ${apiKey}`
+  const reasoningOff = opts.reasoningOff ?? true
   return {
     url: `${baseUrl.replace(/\/+$/, '')}/chat/completions`,
     init: {
       method: 'POST',
       headers,
-      body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], stream: false, ...(opts.reasoning === false ? {} : REASONING_OFF) }),
+      body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], stream: false, ...(reasoningOff ? REASONING_OFF : {}) }),
     },
   }
 }
 
-/** 400 の本文が「reasoning_effort を受けない」と言っているか。口ごとに文言が違うので、引数名が出ていればそう見る */
-export function rejectsReasoningEffort(status: number, body: string): boolean {
-  return status === 400 && /reasoning_effort/i.test(body)
+/**
+ * 思考を切る指定を外して送り直してみる 4xx か。口ごとに文言も番号も違う（OpenAI 本家は 400 で引数名を挙げる、
+ * 厳格なサーバは 422 `Extra inputs are not permitted`、素っ気ないものは `invalid request`）ので本文は見ず、
+ * **指定を付けたまま 4xx なら 1 回だけ外して送り直す**（別の理由の 4xx なら外しても同じ答えが返るだけ）。
+ * 429 だけは違う（混んでいるだけで、すぐ送り直すのは逆効果）
+ */
+export function mayRetryWithoutReasoning(status: number): boolean {
+  return status >= 400 && status < 500 && status !== 429
 }
 
 /** 思考つきのモデル（qwen3 など）が OpenAI 互換の口でも本文の先頭に混ぜる `<think>…</think>` を落とす。閉じていなければそこから後ろを全部落とす */
@@ -190,31 +197,51 @@ export class OpenAISummarizer implements Summarizer {
   private readonly apiKey: string | undefined
   private readonly timeoutMs: number
   private readonly fetchFn: typeof fetch
-  /** この口が `reasoning_effort` を 400 で断った。以後は付けずに送る（毎回 2 往復しない） */
+  private readonly log: (line: string) => void
+  /**
+   * この口が `reasoning_effort` を 4xx で断り、外したら通った。以後は付けずに送る（毎回 2 往復しない）。
+   * **外して通ったときだけ**立てる（付けたままの 4xx が別の理由なら、外しても通らないので立てない）。
+   * この口（インスタンス）だけの覚えで、`Digester.configure()` が口を作り直したら（設定を変えた・立て直した）もう一度確かめる
+   */
   private reasoningRejected = false
 
   get where(): string {
     return this.baseUrl
   }
 
-  constructor(baseUrl: string, model: string, apiKey?: string, timeoutMs = DIGEST_TIMEOUT_MS, fetchFn: typeof fetch = fetch) {
+  constructor(
+    baseUrl: string,
+    model: string,
+    apiKey?: string,
+    timeoutMs = DIGEST_TIMEOUT_MS,
+    fetchFn: typeof fetch = fetch,
+    log: (line: string) => void = () => {},
+  ) {
     this.baseUrl = baseUrl
     this.model = model
     this.apiKey = apiKey
     this.timeoutMs = timeoutMs
     this.fetchFn = fetchFn
+    this.log = log
   }
 
   async summarize(prompt: string): Promise<string> {
-    let { url, init } = summarizeRequest(this.baseUrl, this.model, prompt, this.apiKey, { reasoning: !this.reasoningRejected })
-    let res = await this.fetchFn(url, { ...init, signal: AbortSignal.timeout(this.timeoutMs) })
-    let body = await res.text()
-    if (!res.ok && !this.reasoningRejected && rejectsReasoningEffort(res.status, body)) {
-      // 思考を切る指定を受けない口。外して送り直し、この口には二度と付けない
-      this.reasoningRejected = true
-      ;({ url, init } = summarizeRequest(this.baseUrl, this.model, prompt, this.apiKey, { reasoning: false }))
-      res = await this.fetchFn(url, { ...init, signal: AbortSignal.timeout(this.timeoutMs) })
-      body = await res.text()
+    // 1 件あたりの上限は送り直しを含めて DIGEST_TIMEOUT_MS（signal は 1 つ。2 回目に新しく作ると 2 倍まで待ってしまう）
+    const signal = AbortSignal.timeout(this.timeoutMs)
+    const send = async (reasoningOff: boolean) => {
+      const { url, init } = summarizeRequest(this.baseUrl, this.model, prompt, this.apiKey, { reasoningOff })
+      const res = await this.fetchFn(url, { ...init, signal })
+      return { res, body: await res.text() }
+    }
+    let { res, body } = await send(!this.reasoningRejected)
+    if (!res.ok && !this.reasoningRejected && mayRetryWithoutReasoning(res.status)) {
+      // 思考を切る指定を受けない口かもしれない。外して 1 回だけ送り直し、通ったらこの口には以後付けない
+      const first = `HTTP ${res.status}: ${body.trim().slice(0, 200)}`
+      ;({ res, body } = await send(false))
+      if (res.ok) {
+        this.reasoningRejected = true
+        this.log(`digest: ${this.baseUrl} は reasoning_effort を受けない（${first}）。以後この口には付けずに送る（思考つきのモデルなら思考が入る）`)
+      }
     }
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${body.trim().slice(0, 200)}`)
     let parsed: { choices?: { message?: { content?: unknown } }[] }
@@ -652,7 +679,7 @@ export function summarizerFactory(feedDir: string, env: NodeJS.ProcessEnv = proc
     if (provider === 'openai') {
       const url = env.SAI_DIGEST_URL || DEFAULT_OPENAI_URL
       log(`digest: openai ${url} model=${model}`)
-      return new OpenAISummarizer(url, model, env.SAI_DIGEST_API_KEY || undefined)
+      return new OpenAISummarizer(url, model, env.SAI_DIGEST_API_KEY || undefined, DIGEST_TIMEOUT_MS, fetch, log)
     }
     log(`digest: claude model=${model}`)
     return new ClaudeSummarizer(model, feedDir, env)

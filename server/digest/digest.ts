@@ -170,13 +170,25 @@ export function summarizeRequest(baseUrl: string, model: string, prompt: string,
 }
 
 /**
- * 思考を切る指定を外して送り直してみる 4xx か。口ごとに文言も番号も違う（OpenAI 本家は 400 で引数名を挙げる、
+ * 思考を切る指定を外して送り直してみる 4xx か。口ごとに文言が違う（OpenAI 本家は 400 で引数名を挙げる、
  * 厳格なサーバは 422 `Extra inputs are not permitted`、素っ気ないものは `invalid request`）ので本文は見ず、
- * **指定を付けたまま 4xx なら 1 回だけ外して送り直す**（別の理由の 4xx なら外しても同じ答えが返るだけ）。
- * 429 だけは違う（混んでいるだけで、すぐ送り直すのは逆効果）
+ * **「要求の形が悪い」を意味する 400 / 422 のときだけ** 1 回外して送り直す。
+ * 401 / 403 / 404 / 413（鍵・モデル名・大きさの間違い）は指定のせいではないので送り直さない（大きなプロンプトを 2 回送らない）。
+ * 408 / 409 / 425 / 429（混んでいる・一時的）も送り直さない（外して通っても指定のせいではなく、覚えると思考が永久に戻る。#500 のレビュー）
  */
 export function mayRetryWithoutReasoning(status: number): boolean {
-  return status >= 400 && status < 500 && status !== 429
+  return status === 400 || status === 422
+}
+
+/** 失敗の本文の切り出し。投げる文とログの文で同じ形 */
+const httpError = (r: { res: Response; body: string }): string => `HTTP ${r.res.status}: ${r.body.trim().slice(0, 200)}`
+
+export interface OpenAISummarizerOptions {
+  apiKey?: string
+  timeoutMs?: number
+  fetchFn?: typeof fetch
+  /** `reasoning_effort` を外したときの知らせ。既定は捨てる（本物は `summarizerFactory` がサーバの stderr に出す） */
+  log?: (line: string) => void
 }
 
 /** 思考つきのモデル（qwen3 など）が OpenAI 互換の口でも本文の先頭に混ぜる `<think>…</think>` を落とす。閉じていなければそこから後ろを全部落とす */
@@ -209,20 +221,13 @@ export class OpenAISummarizer implements Summarizer {
     return this.baseUrl
   }
 
-  constructor(
-    baseUrl: string,
-    model: string,
-    apiKey?: string,
-    timeoutMs = DIGEST_TIMEOUT_MS,
-    fetchFn: typeof fetch = fetch,
-    log: (line: string) => void = () => {},
-  ) {
+  constructor(baseUrl: string, model: string, opts: OpenAISummarizerOptions = {}) {
     this.baseUrl = baseUrl
     this.model = model
-    this.apiKey = apiKey
-    this.timeoutMs = timeoutMs
-    this.fetchFn = fetchFn
-    this.log = log
+    this.apiKey = opts.apiKey
+    this.timeoutMs = opts.timeoutMs ?? DIGEST_TIMEOUT_MS
+    this.fetchFn = opts.fetchFn ?? fetch
+    this.log = opts.log ?? (() => {})
   }
 
   async summarize(prompt: string): Promise<string> {
@@ -233,17 +238,23 @@ export class OpenAISummarizer implements Summarizer {
       const res = await this.fetchFn(url, { ...init, signal })
       return { res, body: await res.text() }
     }
-    let { res, body } = await send(!this.reasoningRejected)
-    if (!res.ok && !this.reasoningRejected && mayRetryWithoutReasoning(res.status)) {
-      // 思考を切る指定を受けない口かもしれない。外して 1 回だけ送り直し、通ったらこの口には以後付けない
-      const first = `HTTP ${res.status}: ${body.trim().slice(0, 200)}`
-      ;({ res, body } = await send(false))
-      if (res.ok) {
+    const first = await send(!this.reasoningRejected)
+    let last = first
+    if (!first.res.ok && !this.reasoningRejected && mayRetryWithoutReasoning(first.res.status)) {
+      // 思考を切る指定を受けない口かもしれない。外して 1 回だけ送り直し、通ったらこの口には以後付けない。
+      // 送り直しが timeout や通信で落ちたら、最初の 4xx の理由を添えて投げる（timeout の文だけでは原因が見えない）
+      try {
+        last = await send(false)
+      } catch (err) {
+        throw new Error(`${httpError(first)}; reasoning_effort なしで送り直し: ${err instanceof Error ? err.message : String(err)}`, { cause: err })
+      }
+      if (last.res.ok) {
         this.reasoningRejected = true
-        this.log(`digest: ${this.baseUrl} は reasoning_effort を受けない（${first}）。以後この口には付けずに送る（思考つきのモデルなら思考が入る）`)
+        this.log(`digest: ${this.baseUrl} は reasoning_effort を受けない（${httpError(first)}）。以後この口には付けずに送る（思考つきのモデルなら思考が入る）`)
       }
     }
-    if (!res.ok) throw new Error(`HTTP ${res.status}: ${body.trim().slice(0, 200)}`)
+    if (!last.res.ok) throw new Error(httpError(last))
+    const body = last.body
     let parsed: { choices?: { message?: { content?: unknown } }[] }
     try {
       parsed = JSON.parse(body) as { choices?: { message?: { content?: unknown } }[] }
@@ -679,7 +690,7 @@ export function summarizerFactory(feedDir: string, env: NodeJS.ProcessEnv = proc
     if (provider === 'openai') {
       const url = env.SAI_DIGEST_URL || DEFAULT_OPENAI_URL
       log(`digest: openai ${url} model=${model}`)
-      return new OpenAISummarizer(url, model, env.SAI_DIGEST_API_KEY || undefined, DIGEST_TIMEOUT_MS, fetch, log)
+      return new OpenAISummarizer(url, model, { apiKey: env.SAI_DIGEST_API_KEY || undefined, log })
     }
     log(`digest: claude model=${model}`)
     return new ClaudeSummarizer(model, feedDir, env)

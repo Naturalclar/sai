@@ -78,6 +78,7 @@ import { JevRisk } from './approvals/jev.ts'
 import type { JevJudge } from './approvals/jev.ts'
 import { CodexTerminals, type CodexTerminalSource } from './reply/codexTerminal.ts'
 import { CodexPanes, type CodexPaneSource } from './reply/codexPanes.ts'
+import { softWait } from './reply/softWait.ts'
 import { clearSettled, settledKey, WaitingSettle } from './reply/waitingSettle.ts'
 import type { WaitingSettleSource } from './reply/waitingSettle.ts'
 import type { CodexDialogSource, DialogTarget } from './reply/codexDialogs.ts'
@@ -293,6 +294,16 @@ export function parseDays(raw: string | null, fallback: number): number {
  * 処理中の返信を rev に混ぜる。画面は rev が同じなら state を触らないので、JSONL が変わらないまま
  * 「処理中 → 終了」になっても再描画されない。since まで含めるので、同じ id の連続した返信も区別できる
  */
+/**
+ * 端末で開いているセッションの集合の鍵（#495）。走査は要求の締切のあとも裏で続くので、次の要求で `terminal` が
+ * 付いた・消えたら rev が変わるようにする（画面は rev が同じなら描き直さない）。1 つも無ければ空
+ */
+export function terminalKey(sessions: readonly Pick<SessionSummary, 'id' | 'terminal'>[]): string {
+  const parts = sessions.filter((s) => s.terminal).map((s) => `${s.id}:${s.terminal!.pane}:${s.terminal!.pid}`).sort()
+  if (parts.length === 0) return ''
+  return createHash('sha1').update(parts.join('\n')).digest('hex').slice(0, 8)
+}
+
 export function revWith(rev: string, replying: ReplyingMap, approvalsKey = '', buildStale = false, digestKey = '', queueKey = ''): string {
   const ids = Object.keys(replying).sort()
   if (ids.length === 0 && !approvalsKey && !buildStale && !digestKey && !queueKey) return rev
@@ -496,14 +507,15 @@ export function createApp(
     const session = sessionOf(s)
     if (!session) return null
     if (s.pane) {
-      const pid = await codexTerminals.pid(session, s.pane)
+      // 締切までに引けなければ前回の結果（#495。lsof が重いときに一覧を止めない）
+      const pid = await softWait(codexTerminals.pid(session, s.pane), () => codexTerminals.last?.(session, s.pane!) ?? 0)
       if (pid) return { pane: s.pane, pid }
     }
     // lock で引けない Codex（実測: 0.154.0 の TUI は lock を開かず、共有の app-server が握っている）は、
     // ペインで動いている codex が**いま開いている rollout**と突き合わせる（#417 / #429）。**行の pane ではなく
     // いまのペイン**を使うので、ペインを移した・行がまだ 1 本も無いセッションでも当たる。
     // **cwd では突き合わせない**（同じ worktree に会話が 2 本あると別の会話のペインに打ち込む。#429）
-    const pane = (await codexPanes.scan()).find((p) => p.session === session)
+    const pane = (await softWait(codexPanes.scan(), () => codexPanes.last?.() ?? [])).find((p) => p.session === session)
     return pane ? { pane: pane.pane, pid: pane.pid } : null
   }
   /**
@@ -632,7 +644,8 @@ export function createApp(
     // 引いた分は `PENDING_TTL_MS` の間キャッシュされるので、このあとの `approvalsNow()` は投げ直さない
     if (opencodeServerEnabled) await opencodePerms.scan(sessions)
     const opencode = opencodeServerEnabled ? opencodePerms.settle(sessions, selfHost()) : new Set<string>()
-    const terminal = terminalEnabled ? await waitingSettle.scan(sessions) : new Set<string>()
+    // 締切までに見終わらなければ前回の結果（#495）
+    const terminal = terminalEnabled ? await softWait(waitingSettle.scan(sessions), () => waitingSettle.last?.() ?? new Set<string>()) : new Set<string>()
     if (opencode.size === 0 && terminal.size === 0) return { sessions, key: '' }
     const settled = new Set([...terminal, ...opencode])
     return { sessions: clearSettled(sessions, settled), key: settledKey(settled) }
@@ -661,7 +674,7 @@ export function createApp(
   const paneOnlyTargets = async (sessions: SessionSummary[]): Promise<DialogTarget[]> => {
     const known = new Set(sessions.map((s) => sessionOf(s)).filter(Boolean))
     const out: DialogTarget[] = []
-    for (const pane of await codexPanes.scan()) {
+    for (const pane of await softWait(codexPanes.scan(), () => codexPanes.last?.() ?? [])) {
       if (!pane.session || known.has(pane.session)) continue
       out.push({ id: entityId(pane.session, await repoOf(pane.cwd), ''), terminal: { pane: pane.pane, pid: pane.pid } })
     }
@@ -671,7 +684,8 @@ export function createApp(
   /** Claude、SAI管理のCodex、通常Codex TUIの検出専用ダイアログ、SAI が起こした OpenCode の許可（#421）を合わせる。 */
   const approvalsNow = async (sessions: SessionSummary[]) => {
     const [dialogs, opencode] = await Promise.all([
-      terminalEnabled ? codexDialogs.scan(sessions, await paneOnlyTargets(sessions)) : Promise.resolve({} as ApprovalMap),
+      // 締切までに見終わらなければ前回の走査で見えていたダイアログ（#495）
+      terminalEnabled ? softWait(codexDialogs.scan(sessions, await paneOnlyTargets(sessions)), () => codexDialogs.snapshot?.() ?? {}) : Promise.resolve({} as ApprovalMap),
       opencodeServerEnabled ? opencodePerms.scan(sessions) : Promise.resolve({} as ApprovalMap),
     ])
     const merged = mergeApprovalMaps(mergeApprovalMaps(mergeApprovalMaps(approvals.snapshot(), codexApp.snapshot()), dialogs), opencode)
@@ -2655,7 +2669,7 @@ export function createApp(
         const [{ rev: sessionsRev, sessions: withWaiting }, me] = await Promise.all([sessionsWithMeta(days), profileNow()])
         // 端末で答えたぶんの待ちは畳む（#255）。畳んだ集合を rev に混ぜないと画面が拾わない
         const { sessions, key: settled } = await settleWaiting(withWaiting)
-        const rev = `${sessionsRev}~${me.rev}~${settled}`
+        const rev = `${sessionsRev}~${me.rev}~${settled}~${terminalKey(sessions)}`
         // 前のターンが終わっていれば、預かっている返信を回してから載せる（#305。再起動で引き取った子はここで拾う）
         await drainAll()
         const replying = await replyingOf(sessions)
@@ -2722,7 +2736,7 @@ export function createApp(
         // `claude --bg` のセッションなら、端末で開くための短い ID（#462）。状態は rev に混ぜる
         const bg = await backgroundOf(session)
         const body: SessionDetailResponse = {
-          rev: revWith(`${sessionsRev}~${me.rev}~${settled}~${question?.asked_at ?? ''}~${bg ? `${bg.attach}:${bg.status}` : ''}`, replying, approvalMapKey(pendingApprovals), false, `${digest.revKey()}|${usage.rev()}`, `${queue.key()}|${agents.key()}`),
+          rev: revWith(`${sessionsRev}~${me.rev}~${settled}~${terminalKey(sessions)}~${question?.asked_at ?? ''}~${bg ? `${bg.attach}:${bg.status}` : ''}`, replying, approvalMapKey(pendingApprovals), false, `${digest.revKey()}|${usage.rev()}`, `${queue.key()}|${agents.key()}`),
           session: withLastSummary([session])[0]!,
           rows,
           older,
@@ -2745,7 +2759,7 @@ export function createApp(
         const project = q.get('project') ?? ''
         // アーカイブ済みセッションの行は流さない（一覧から消えてもフィードに流れていたら隠した意味が無い）
         const [{ rev: sessionsRev, sessions }, me] = await Promise.all([sessionsWithMeta(days), profileNow()])
-        const rev = `${sessionsRev}~${me.rev}`
+        const rev = `${sessionsRev}~${me.rev}~${terminalKey(sessions)}`
         const archived = new Set(sessions.filter((s) => s.archived).map((s) => s.id))
         let rows = await store.rows(days)
         if (project) rows = rows.filter((r) => rowProject(r) === project)

@@ -9,6 +9,7 @@ import {
   mentionQuery,
   mergeReplyTargets,
   replyBlockedReason,
+  replyFailureText,
   sessionReplyTargets,
   stripMention,
   targetProjectLabel,
@@ -316,4 +317,11 @@ test('canSteer: 足せるのは SAI が回している Codex のターンだけ�
   assert.equal(canSteer('codex', undefined), false, '処理中でなければ足さない')
   assert.equal(canSteer('claude', running), false, 'Claude の -p には口が無い')
   assert.equal(canSteer('opencode', running), false)
+})
+
+test('replyFailureText: 届いたがターンがエラーで終わったものは「届いていません」にしない（#475）', () => {
+  const tail = "Codex のターンがエラーで終わりました: You've hit your usage limit."
+  assert.equal(replyFailureText({ tail, turn_error: true }), tail)
+  assert.equal(replyFailureText({ tail: '', turn_error: true }), 'ターンがエラーで終わりました')
+  assert.equal(replyFailureText({ tail: '' }), '届いていません', '印が無ければ今までどおり')
 })

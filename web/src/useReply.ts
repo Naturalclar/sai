@@ -37,6 +37,8 @@ export const ENDED_WITHOUT_ROW = '返信は終わったが記録が増えなか�
  */
 export function replyFailureMessage(failed: NonNullable<Replying['failed']>): string {
   const why = failed.tail.trim()
+  // 届いたが、ターンがエラーで終わった（#475）。「届いていません」と出すと、届いた指示を送り直させてしまう
+  if (failed.turn_error) return `返信は届きましたが、${why || 'ターンがエラーで終わりました'}`
   if (failed.code === undefined) return `返信が届いていません${why ? `: ${why}` : ''}`
   return `返信が失敗しました（終了コード ${failed.code}）${why ? `: ${why}` : '。~/.agent-feed/reply.log を見てください'}`
 }

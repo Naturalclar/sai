@@ -31,6 +31,7 @@ import type {
   Profile,
   ProfileResponse,
   ReplyError,
+  Replying,
   ReplyingMap,
   ReplyQueueResponse,
   ReplyRequest,
@@ -562,7 +563,11 @@ export function createApp(
     }
     // OpenCode のサーバ経路も、行が届いた時点で終わりにする（子プロセスが無いので exit は来ない。#382）
     for (const id of opencodeApp.settle((rid) => opencodeTurnOf(sessions, rid))) await drain(id)
-    return { ...typed.snapshot(), ...run.snapshot(), ...codexApp.replying(), ...opencodeApp.replying() }
+    // app-server のエラーで終わったターン（#475）は 30 分残るので、ほかの経路のいま回っている返信を上書きしないよう先に置く
+    const app = Object.entries(codexApp.replying())
+    const appFailed = Object.fromEntries(app.filter(([, r]) => r.failed))
+    const appActive = Object.fromEntries(app.filter(([, r]) => !r.failed))
+    return { ...appFailed, ...typed.snapshot(), ...run.snapshot(), ...appActive, ...opencodeApp.replying() }
   }
   // ターンごとのトークン・費用（#387 / #411）。書く側（ProcessRunner）と読む側（応答に載せる）で同じ 1 つを使う
   const usage = new TurnUsageLog(join(store.directory, TURN_USAGE_FILE))
@@ -1268,6 +1273,8 @@ export function createApp(
     o: LaunchOptions,
   ): Promise<Launched> => {
     const { replaceTyped, forceProcess } = o
+    // 新しい返信を送るので、前のターンのエラー（#475）は片付ける（どの経路で送っても）
+    codexApp.clearFailure?.(id)
 
     // 端末（tmux）で開いていれば、そのペインに打ち込む。別プロセスを立てないので端末にも出て、トークンも少ない。
     // ペインが無い・別のプロセスなら -p にフォールバック。入力中・ダイアログ中なら 409（何も打ち込まない）
@@ -1398,6 +1405,12 @@ export function createApp(
    */
   /** `claude --bg` のターンが終わるのを待っている預かり（#462）。次に見に行く時刻 */
   const bgRetryAt = new Map<string, number>()
+  /**
+   * 預かりを止める理由になる、前の返信の失敗。-p の失敗に加えて、SAI の app-server で回した Codex のターンが
+   * エラーで終わったものも見る（#475 のレビュー。見ないと上限に当たったターンの直後に次の預かりを起動し、
+   * 同じ上限でもう 1 本無駄にする）。止めるとき（drain）と「続けて送る」で覚えるときに同じものを見る
+   */
+  const failedReply = (id: string): Replying | undefined => [run.snapshot()[id], codexApp.replying()[id]].find((r) => r?.failed)
   const drain = async (id: string): Promise<void> => {
     const head = queue.peek(id)
     if (!head || queue.paused(id) || draining.has(id)) return
@@ -1406,9 +1419,9 @@ export function createApp(
     if (run.running(id) || codexApp.running(id) || opencodeApp.running(id) || launching.has(id)) return
     draining.add(id)
     try {
-      const last = run.snapshot()[id]
+      const last = failedReply(id)
       if (last?.failed && resumedFailure.get(id) !== last.since) {
-        queue.pause(id, `前の返信が失敗したので止めています（${last.failed.code === undefined ? '届いていません' : `終了コード ${last.failed.code}`}）。続けるなら「続けて送る」`)
+        queue.pause(id, `前の返信が失敗したので止めています（${replyFailureText(last.failed)}）。続けるなら「続けて送る」`)
         return
       }
       const out = await launch(id, head.text, head.attachments, {
@@ -1450,7 +1463,8 @@ export function createApp(
     if (rest === QUEUE_RESUME) {
       if (method !== 'POST') return error(res, 405, 'method not allowed')
       // 止めた理由の失敗がまだ残っていても（2 分）、同じ失敗ではもう止めない
-      const last = run.snapshot()[id]
+      // drain() と同じく、app-server のエラーで終わったターン（#475）も「覚えた失敗」にする
+      const last = failedReply(id)
       if (last?.failed) resumedFailure.set(id, last.since)
       queue.resume(id)
       await drain(id)

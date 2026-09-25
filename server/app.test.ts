@@ -84,8 +84,15 @@ class FakeCodexApp implements CodexApp {
   active: ApprovalMap = {}
   answered: { id: string; answer: ApprovalAnswer }[] = []
   fail: Error | null = null
+  /** エラーで終わったターン（#475）。処理中ではないが replying には載る */
+  failures = new Map<string, Replying>()
+  cleared: string[] = []
   running(id: string) { return this.busy.has(id) }
-  replying() { return Object.fromEntries(this.busy) }
+  replying() { return { ...Object.fromEntries(this.failures), ...Object.fromEntries(this.busy) } }
+  clearFailure(id: string) {
+    this.cleared.push(id)
+    this.failures.delete(id)
+  }
   snapshot() { return this.active }
   getApproval(approvalId: string) { return Object.values(this.active).flat().find((approval) => approval.approval_id === approvalId) }
   interrupted: string[] = []
@@ -1901,6 +1908,30 @@ test('POST reply queue: 前の返信が失敗していたら回さずに止め�
     assert.equal(runner.started[0]!.cmd.text, 'A')
   } finally {
     runner.busy.delete('C1@r')
+  }
+})
+
+test('POST reply queue: SAI の app-server で回した Codex のターンがエラーで終わったら、預かりを回さずに止める（#475 のレビュー）', async () => {
+  codexApp.started.length = 0
+  codexApp.cleared.length = 0
+  codexApp.busy.set('X1@r', { since: '2026-09-10T07:00:00.000Z', text: '前の' })
+  try {
+    assert.equal((await post('X1@r', { text: '次の', queue: true })).status, 202)
+    // 前のターンが上限で終わった。処理中ではなくなり、失敗として残る
+    codexApp.busy.delete('X1@r')
+    codexApp.failures.set('X1@r', { since: '2026-09-10T07:00:00.000Z', text: '前の', failed: { tail: "Codex のターンがエラーで終わりました: You've hit your usage limit.", turn_error: true } })
+    const q = await queuedOf('X1@r')
+    assert.equal(codexApp.started.length, 0, '同じ上限で次の 1 本を無駄にしない')
+    assert.match(q?.paused ?? '', /usage limit/)
+    assert.doesNotMatch(q?.paused ?? '', /届いていません/, '届いたターンを「届いていない」と言わない')
+
+    // 再開したら回し、新しい返信を送ったので前のエラーは片付ける
+    assert.equal((await postJson('/api/sessions/X1%40r/queue/resume', {})).status, 200)
+    assert.deepEqual(codexApp.started.map((x) => x.text), ['次の'])
+    assert.ok(codexApp.cleared.includes('X1@r'))
+  } finally {
+    codexApp.busy.delete('X1@r')
+    codexApp.failures.delete('X1@r')
   }
 })
 

@@ -67,6 +67,11 @@ export interface CodexApp {
    */
   onTurnEnd?(listener: (id: string) => void): void
   /**
+   * エラーで終わったターンの失敗（#475）を消す。**別の経路（端末・queue・-p）で次の返信を送ったとき**に呼ぶ
+   * （そうしないと 30 分のあいだ古い失敗が残り、新しい返信の「処理中」が終わったあとにまた出てくる）。偽物は持たなくてよい
+   */
+  clearFailure?(id: string): void
+  /**
    * 処理中のターンを止める（#384。`turn/interrupt`）。止められたら true。
    *
    * **止められるのは SAI が `thread/resume` したスレッドだけ**（別の接続のスレッドは app-server が
@@ -295,6 +300,10 @@ export class CodexAppServer implements CodexApp {
         // 預かりを回す側の失敗で app-server の片付けを止めない
       }
     }
+  }
+
+  clearFailure(id: string): void {
+    this.failures.delete(id)
   }
 
   replying(): ReplyingMap {
@@ -667,7 +676,7 @@ export class CodexAppServer implements CodexApp {
       const turn = this.turns.get(threadId)
       if (turn && done?.status === 'failed') {
         const message = codexErrorText(done.error) || 'エラーの中身は返ってきませんでした'
-        this.failures.set(turn.entity, { replying: { since: turn.since, text: turn.text, failed: { tail: codexTurnErrorReason(message) } }, at: this.now() })
+        this.failures.set(turn.entity, { replying: { since: turn.since, text: turn.text, failed: { tail: codexTurnErrorReason(message), turn_error: true } }, at: this.now() })
       }
     }
     if (method === 'turn/completed' || method === 'thread/closed') {

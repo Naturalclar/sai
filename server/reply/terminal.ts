@@ -494,7 +494,7 @@ export class TerminalReplies {
         reason = null
       }
       if (!reason || this.active.get(id) !== entry) continue
-      entry.replying = { ...entry.replying, failed: { tail: reason } }
+      entry.replying = { ...entry.replying, failed: { tail: reason, turn_error: true } }
       entry.failedAt = this.now()
       entry.failedTtl = TURN_ERROR_TTL_MS
       failed.push({ id, kind: entry.kind, reason })

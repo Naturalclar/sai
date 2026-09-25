@@ -22,14 +22,22 @@ test('jevAsks: SAI が答えられる許可だけ。検出専用と質問は聞�
   assert.equal(jevAsks(a({ tool_name: 'ExitPlanMode' })), false)
 })
 
-test('jevState: 要約・コマンド・説明を送る。要約に収まっているコマンドは重ねない', () => {
+test('jevState: Claude はツール名と名指しした項目（コマンド・説明）を送る。要約（text）は送らない', () => {
   const state = jevState(a())
-  assert.match(state, /Request: 許可待ち: Bash: git status/)
-  assert.doesNotMatch(state, /^Command:/m, '要約にコマンドがそのまま入っていれば足さない')
+  assert.match(state, /Tool: Bash/)
+  assert.match(state, /Command: git status/)
   assert.match(state, /Description: 状態を見る/)
-  // 要約が切ったコマンドは全部を足す
+  assert.doesNotMatch(state, /許可待ち/, '要約は送らない')
+  // 長いコマンドも全部（上限まで）
   const long = `echo ${'x'.repeat(300)}`
   assert.match(jevState(a({ input: { command: long }, text: `許可待ち: Bash: ${long.slice(0, 100)}…` })), new RegExp(`Command: ${long}`))
+})
+
+test('jevState: MCP のツールは要約が input の JSON なので、要約も input も送らない（ファイル・メッセージの本文が混ざる。#493 のレビュー）', () => {
+  const input = { owner: 'me', repo: 'r', path: 'secret.ts', content: 'SECRET_FILE_BODY', message: 'SECRET_MESSAGE' }
+  const state = jevState(a({ tool_name: 'mcp__github__create_or_update_file', input, text: `許可待ち: mcp__github__create_or_update_file: ${JSON.stringify(input)}` }))
+  assert.match(state, /Tool: mcp__github__create_or_update_file/)
+  assert.doesNotMatch(state, /SECRET_FILE_BODY|SECRET_MESSAGE/)
 })
 
 test('jevState: ファイルの中身（Write の content / Edit の old_string・new_string）と cwd は送らない', () => {

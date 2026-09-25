@@ -2,8 +2,8 @@
 // ここは純粋関数だけ（何を聞くか・何を送るか・答えをどう読むか）。送るのは server/approvals/jev.ts。
 //
 // **Jev は外部 API なので、ここで組み立てた文が外に出る**（「SAI は外に出さない」の例外。入切できて既定は入、
-// 鍵 JEV_API_KEY が無ければ何も送らない）。そのため送るものを絞る: 許可の要約・コマンド・理由・Codex のダイアログの中身まで。
-// **ファイルの中身（Write / Edit の本文）と cwd は送らない**（要約の `text` には入っていない。input は拾う項目を名指しする）
+// 鍵 JEV_API_KEY が無ければ何も送らない）。そのため送るものを絞る: ツール名・コマンド・パス・理由・Codex のダイアログの中身まで。
+// **ファイルの中身（Write / Edit の本文）・メッセージの本文と cwd は送らない**（input は丸ごと送らず、拾う項目を名指しする）
 import type { Approval } from './types.ts'
 
 /**
@@ -36,18 +36,39 @@ const field = (input: Record<string, unknown>, key: string): string => {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+/** Claude の許可から拾う項目（送る名前 → input のキー）。**本文になりうるもの（`content` / `old_string` / `prompt` / メッセージ）は入れない** */
+const CLAUDE_FIELDS: readonly [label: string, key: string][] = [
+  ['Command', 'command'],
+  ['File', 'file_path'],
+  ['Notebook', 'notebook_path'],
+  ['URL', 'url'],
+  ['Pattern', 'pattern'],
+  ['Query', 'query'],
+  ['Description', 'description'],
+]
+
 /**
- * Jev に送る「状態」の文。拾うのは要約（`text`）と、名指しした項目（コマンド・説明・理由）とダイアログの中身だけ。
- * **input を丸ごとは送らない**（Write の `content` や Edit の `old_string` / `new_string` はファイルの中身そのもの）
+ * Jev に送る「状態」の文。拾うのは名指しした項目（ツール名・コマンド・パス・説明・理由）とダイアログの中身だけ。
+ * **input を丸ごとは送らない**（Write の `content` や Edit の `old_string` / `new_string` はファイルの中身そのもの）。
+ * **Claude の要約（`text`）も送らない**: `approvalText()` は項目の無いツール（MCP のツールなど）で input を JSON にして
+ * 要約にするので、ファイルやメッセージの本文が混ざる（#493 のレビュー）。Codex / OpenCode の要約は名指しの項目だけから組んでいるので送る
  */
 export function jevState(approval: Approval): string {
   const input = approval.input ?? {}
-  const lines = [`A coding agent (${approval.agent ?? 'claude'}) is asking the user for permission.`, `Request: ${clip(approval.text, FIELD_MAX)}`]
-  const command = field(input, 'command')
-  // 要約に収まっていなければ全部を足す（要約は長いコマンドを切っていることがある）
-  if (command && !approval.text.includes(command)) lines.push(`Command: ${clip(command, FIELD_MAX)}`)
-  const description = field(input, 'description')
-  if (description) lines.push(`Description: ${clip(description, FIELD_MAX)}`)
+  const agent = approval.agent ?? 'claude'
+  const lines = [`A coding agent (${agent}) is asking the user for permission.`]
+  if (agent === 'claude') {
+    lines.push(`Tool: ${clip(approval.tool_name, FIELD_MAX)}`)
+    for (const [label, key] of CLAUDE_FIELDS) {
+      const value = field(input, key)
+      if (value) lines.push(`${label}: ${clip(value, FIELD_MAX)}`)
+    }
+  } else {
+    lines.push(`Request: ${clip(approval.text, FIELD_MAX)}`)
+    const command = field(input, 'command')
+    // 要約に収まっていなければ全部を足す（要約は長いコマンドを切っていることがある）
+    if (command && !approval.text.includes(command)) lines.push(`Command: ${clip(command, FIELD_MAX)}`)
+  }
   const reason = field(input, 'reason')
   if (reason) lines.push(`Reason: ${clip(reason, FIELD_MAX)}`)
   const dialog = approval.dialog

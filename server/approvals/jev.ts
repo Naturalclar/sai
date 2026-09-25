@@ -17,7 +17,7 @@ export const JEV_ENDPOINT = 'https://api.typesafe.ai/v1/systemone'
 export const JEV_MODEL = 'jev-latest'
 /** 1 回を諦めるまで（実測で 1 回 1〜2 秒） */
 export const JEV_TIMEOUT_MS = 20_000
-/** 答えを覚えておく長さ（許可が消えてからも、しばらく同じ id が来れば聞き直さない） */
+/** 答えを覚えておく長さ（**最後に見かけてから**。許可が消えてからも、しばらく同じ id が来れば聞き直さない） */
 export const JEV_KEEP_MS = 30 * 60_000
 /** 同時に投げる上限（許可が一度にたくさん出ても、まとめて叩かない） */
 export const JEV_CONCURRENCY = 2
@@ -87,6 +87,8 @@ export class JevRisk {
           this.ask(approval)
           return approval
         }
+        // 見かけるたびに時刻を進める（忘れるのは「見なくなってから」30 分。長く待っている許可を聞き直さない。#493 のレビュー）
+        entry.at = this.now()
         return entry.safe === undefined ? approval : { ...approval, jev: entry.safe }
       })
     }

@@ -137,3 +137,16 @@ test('annotate: 覚えた答えは時間が経ったら忘れる（投げてい�
   await settle()
   assert.equal(risk.annotate(mapOf(approval('slow')), true)['S@sai']![0]!.jev, 0.1)
 })
+
+test('annotate: 長く待っている許可は、見かけている間は忘れず聞き直さない（忘れるのは見なくなってから。#493 のレビュー）', async () => {
+  let now = 0
+  const { judge, calls } = fakeJudge(() => 0.8)
+  const risk = new JevRisk(judge, () => now)
+  risk.annotate(mapOf(approval('long')), true)
+  await settle()
+  // 3 秒のポーリングで見かけ続けたまま、覚えておく長さを越える
+  for (now = 0; now <= JEV_KEEP_MS * 2; now += JEV_KEEP_MS / 4) risk.annotate(mapOf(approval('long')), true)
+  await settle()
+  assert.equal(calls.length, 1, '聞き直さない')
+  assert.equal(risk.annotate(mapOf(approval('long')), true)['S@sai']![0]!.jev, 0.8, '確率も付いたまま')
+})

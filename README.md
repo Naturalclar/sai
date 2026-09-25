@@ -324,7 +324,7 @@ rsync -a --include='????-??-??.*.jsonl' --exclude='*' mini:~/.agent-feed/ ~/.age
 | `AGENT_FEED_HOST` | このマシンの名前（既定は `gethostname()` の短い形）。複数のマシンの JSONL を 1 か所に集めるときに、行の出どころを分ける。**設定すると書き込み先も `YYYY-MM-DD.<host>.jsonl` に分かれる**（同期フォルダで同じファイルに追記して壊れるのを避けるため。サーバは両方の形を全部読む）。**サーバも自分の名前をこれで決め**、行の `host` と違うセッションは「別のマシン」として印を付け、返信の口を出さない（記録側とサーバを同じ環境から起動すれば揃う。前はサーバ側だけ `SAI_HOST` だった。#288） |
 | `SAI_DIGEST_URL` | 一言の口を「OpenAI 互換」にしたときの base URL（既定 `http://127.0.0.1:11434/v1` = Ollama。LM Studio は `http://127.0.0.1:1234/v1`）。末尾に `/chat/completions` を足して叩く。入切・口・モデルと違って**画面からは変えられない**（本文の送り先なので） |
 | `SAI_DIGEST_API_KEY` | `openai` のときの鍵（任意。`Authorization: Bearer`）。Ollama / LM Studio は不要 |
-| `JEV_API_KEY` | 許可のバブルに「許可して問題なさそうか」の確率を出すときの、Jev（TypeSafe AI）の鍵（#491）。**あるときだけ、許可の要約・コマンド・理由を TypeSafe AI に送る**（ファイルの中身と cwd は送らない）。自分のメニューの「許可を Jev で予想する」で切れる（既定は入）。画面からは変えられない |
+| `JEV_API_KEY` | 許可のバブルに「許可して問題なさそうか」の確率を出すときの、Jev（TypeSafe AI）の鍵（#491）。**あるときだけ、許可のツール名・コマンド・パス・理由を TypeSafe AI に送る**（ファイルやメッセージの本文と cwd は送らない）。自分のメニューの「許可を Jev で予想する」で切れる（既定は入）。画面からは変えられない |
 | `SAI_CLAUDE_ARGS` | 返信の `claude -p --resume` に足す引数。空白区切りで、空白を含む値は `"…"` か `'…'` で囲む。例: `--allowedTools "Bash(gh *)"`（許可モードとモデルは入力欄でセッションごとに選べる）。「返信と許可」の項を読んでから |
 | `SAI_CODEX_ARGS` | 開いている Codex の `codex queue` と、`SAI_CODEX_APP_SERVER=0` の `codex exec resume` に足す引数。例: `-s workspace-write` |
 | `SAI_CODEX_APP_SERVER_ARGS` | `codex app-server --stdio` に足す引数。空白を含む値は引用符で囲む。例: `-c sandbox_mode="workspace-write"` |

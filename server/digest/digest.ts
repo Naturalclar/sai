@@ -5,7 +5,9 @@
 // 結果は ~/.agent-feed/digest.jsonl に追記し、JSONL（記録）は触らない。派生データなので消しても履歴は壊れない。
 // 既定はオフ。入切・口・モデルは settings.json（画面の自分のメニュー）で、サーバを立て直さずに切り替わる（#288。前は環境変数）。
 // 入でも「入にしたあと（起動時に入なら起動したあと）に増えた行」だけ作り、過去の行は作らない。
-// 1 行ずつ直列で回し、失敗した行は無いまま（画面は text を出す）。
+// 1 行ずつ直列で回す。失敗した行は間を置いて作り直し（1 → 5 → 30 分）、DIGEST_MAX_TRIES 回で諦めて無いままにする
+// （画面は text を出す）。前は失敗した行を次の scan() がすぐ積み直し、口が落ちている間ずっと同じ行を 90 秒ごとに叩いていた（#443）。
+// 続けて DIGEST_ALERT_FAILS 回失敗したら、口の不調を `error`（画面の digest_error）に出す。
 import { spawn } from 'node:child_process'
 import { appendFile, mkdir, readFile, stat } from 'node:fs/promises'
 import { dirname } from 'node:path'
@@ -32,6 +34,15 @@ export const DIGEST_TIMEOUT_MS = 90_000
  * 取りこぼすより 1 件多く作る方が害が小さいので、この幅だけ遡って対象にする
  */
 export const DIGEST_SINCE_SLACK_MS = 5_000
+/**
+ * 失敗した行を作り直すまでの間隔（#443）。n 回目の失敗のあと `DIGEST_RETRY_DELAYS_MS[n - 1]` 待つ。
+ * 口が落ちている間に同じ行を 90 秒ごとに叩き続けない（そのあいだ新しい順の列の先頭を占めて、ほかの行の一言も作られない）
+ */
+export const DIGEST_RETRY_DELAYS_MS = [60_000, 5 * 60_000, 30 * 60_000]
+/** この回数失敗した行は諦める（作らないまま。digest.log に「諦めた」と残す） */
+export const DIGEST_MAX_TRIES = DIGEST_RETRY_DELAYS_MS.length + 1
+/** 続けてこの回数失敗したら、口の不調を `error` に出す（成功したら消える） */
+export const DIGEST_ALERT_FAILS = 3
 
 export interface DigestEntry {
   /** 行を一意に指す。`<entityId>|<ts>` */
@@ -63,6 +74,8 @@ export function digestable(row: FeedRow): boolean {
 export interface Summarizer {
   /** prompt を渡して一言を返す。空文字や失敗は throw（呼び出し側が「無いまま」にする） */
   summarize(prompt: string): Promise<string>
+  /** どこに投げているか（口の不調を画面に出すときに添える。例 `http://127.0.0.1:11434/v1`）。無くてよい */
+  readonly where?: string
 }
 
 /** `claude -p` の起動引数。テストで並びを見る。実行ファイルはサーバの PATH の `claude`（#288） */
@@ -79,6 +92,10 @@ export class ClaudeSummarizer implements Summarizer {
   private readonly model: string
   private readonly cwd: string
   private readonly env: NodeJS.ProcessEnv
+
+  get where(): string {
+    return `claude -p --model ${this.model}`
+  }
 
   constructor(model: string, cwd: string, env: NodeJS.ProcessEnv = process.env) {
     this.model = model
@@ -159,6 +176,10 @@ export class OpenAISummarizer implements Summarizer {
   private readonly apiKey: string | undefined
   private readonly timeoutMs: number
   private readonly fetchFn: typeof fetch
+
+  get where(): string {
+    return this.baseUrl
+  }
 
   constructor(baseUrl: string, model: string, apiKey?: string, timeoutMs = DIGEST_TIMEOUT_MS, fetchFn: typeof fetch = fetch) {
     this.baseUrl = baseUrl
@@ -270,6 +291,8 @@ export interface DigesterOptions {
   since?: string
   /** 失敗の記録先（無ければ捨てる） */
   logPath?: string
+  /** 時計（テストが再試行の間隔を進める。#443） */
+  now?: () => number
 }
 
 export class Digester {
@@ -293,6 +316,12 @@ export class Digester {
   private queue: { key: string; row: FeedRow }[] = []
   private queued = new Set<string>()
   private pumping = false
+  private readonly now: () => number
+  /** 失敗した行（鍵 → 失敗した回数と、次に作り直してよい時刻）。scan() はそれより前には積まない（#443） */
+  private failed = new Map<string, { count: number; next: number }>()
+  /** 続けて失敗した回数と、最後の失敗の理由。成功したら 0 に戻す */
+  private failStreak = 0
+  private lastFailure = ''
 
   /**
    * `summarizer` は固定の口（テストの偽物）か、口とモデルから作る関数（本物。`createDigester()`）。null なら入にできない。
@@ -307,8 +336,9 @@ export class Digester {
     this.persona = opts.persona
     this.logPath = opts.logPath
     this.ownDir = opts.ownDir
-    const since = opts.since === undefined ? Date.now() : Date.parse(opts.since)
-    this.sinceMs = (Number.isNaN(since) ? Date.now() : since) - DIGEST_SINCE_SLACK_MS
+    this.now = opts.now ?? Date.now
+    const since = opts.since === undefined ? this.now() : Date.parse(opts.since)
+    this.sinceMs = (Number.isNaN(since) ? this.now() : since) - DIGEST_SINCE_SLACK_MS
   }
 
   /** いま作っているか（入にしていて、口が組めた） */
@@ -325,9 +355,15 @@ export class Digester {
     return this.providerValue
   }
 
-  /** 入にしたのに作れない理由。無ければ空 */
+  /**
+   * 入にしたのに作れない理由。無ければ空。設定の誤り（openai でモデルが空など）に加えて、
+   * **口が続けて DIGEST_ALERT_FAILS 回失敗したら**その様子も出す（#443。Ollama が止まっていても「入」のまま気づけなかった）
+   */
   get error(): string {
-    return this.errorValue
+    if (this.errorValue) return this.errorValue
+    if (!this.summarizer || this.failStreak < DIGEST_ALERT_FAILS) return ''
+    const where = this.summarizer.where ? `。${this.summarizer.where}` : ''
+    return `一言の口が応答していません（直近 ${this.failStreak} 回失敗: ${this.lastFailure}${where}）`
   }
 
   /**
@@ -343,6 +379,10 @@ export class Digester {
     this.modelValue = next.digest_model || (next.digest_provider === 'claude' ? DEFAULT_DIGEST_MODEL : '')
     this.errorValue = ''
     this.summarizer = null
+    // 口やモデルを変えたら（入れ直しも）、失敗の数え直し。新しい口で、諦めた行にももう一度だけ機会をやる
+    this.failed.clear()
+    this.failStreak = 0
+    this.lastFailure = ''
     if (next.digest) {
       if (!this.make) this.errorValue = '一言を作る口がありません'
       else if (!this.modelValue) this.errorValue = 'openai の口にはモデル名が要ります（ローカルのモデル名。例 qwen3:8b）'
@@ -352,7 +392,7 @@ export class Digester {
       for (const q of this.queue) this.queued.delete(q.key)
       this.queue = []
     } else if (!was) {
-      this.sinceMs = Date.now() - DIGEST_SINCE_SLACK_MS
+      this.sinceMs = this.now() - DIGEST_SINCE_SLACK_MS
     }
   }
 
@@ -437,6 +477,9 @@ export class Digester {
       if (this.isPast(row)) continue
       const key = digestKey(row)
       if (this.queued.has(key) || this.store.get(key)) continue
+      // 失敗した行は、間隔が来るまで・諦めたら積まない（#443）
+      const failure = this.failed.get(key)
+      if (failure && (failure.count >= DIGEST_MAX_TRIES || this.now() < failure.next)) continue
       fresh.push({ key, row })
     }
     if (fresh.length === 0) return
@@ -512,8 +555,19 @@ export class Digester {
             ...(issues.length > 0 ? { issues: issues.map((i) => i.code) } : {}),
             ...(nextAsk ? { next_ask: nextAsk } : {}),
           })
+          this.failed.delete(key)
+          this.failStreak = 0
+          this.lastFailure = ''
         } catch (err) {
-          await this.log(`${new Date().toISOString()} ${key} ${err instanceof Error ? err.message : String(err)}`)
+          const message = err instanceof Error ? err.message : String(err)
+          await this.log(`${new Date().toISOString()} ${key} ${message}`)
+          // 間を置いて作り直す。DIGEST_MAX_TRIES 回で諦める（#443）
+          const count = (this.failed.get(key)?.count ?? 0) + 1
+          const delay = DIGEST_RETRY_DELAYS_MS[count - 1]
+          this.failed.set(key, { count, next: this.now() + (delay ?? 0) })
+          if (count >= DIGEST_MAX_TRIES) await this.log(`${new Date().toISOString()} ${key} ${count} 回失敗したので諦めた`)
+          this.failStreak += 1
+          this.lastFailure = message.slice(0, 120)
         } finally {
           this.queued.delete(key)
         }

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
-import { ClaudeSummarizer, DEFAULT_OPENAI_URL, DigestStore, Digester, OpenAISummarizer, createDigester, digestKey, digestable, personaResolver, stripThinking, summarizeCommand, summarizeRequest, summarizerFactory } from './digest.ts'
+import { ClaudeSummarizer, DEFAULT_OPENAI_URL, DIGEST_ALERT_FAILS, DIGEST_MAX_TRIES, DIGEST_RETRY_DELAYS_MS, DigestStore, Digester, OpenAISummarizer, createDigester, digestKey, digestable, personaResolver, stripThinking, summarizeCommand, summarizeRequest, summarizerFactory } from './digest.ts'
 import type { Summarizer } from './digest.ts'
 import { row } from '../rows/aggregate.test.ts'
 import type { PersonaId } from '../../shared/types.ts'
@@ -668,4 +668,65 @@ test('Digester: 人が頼んだことも一言の材料に渡す。頼んだこ�
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
+})
+
+test('失敗した行は間を置いて作り直し、DIGEST_MAX_TRIES 回で諦める（#443。口が落ちている間に同じ行を叩き続けない）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-digest-'))
+  try {
+    let now = at(10).getTime()
+    const fake = new FakeSummarizer()
+    fake.failOn.add('落ちる行')
+    const d = new Digester(new DigestStore(join(dir, 'digest.jsonl')), fake, { enabled: true, model: 'm', since: at(0).toISOString(), persona: async () => 'none', logPath: join(dir, 'digest.log'), now: () => now })
+    const bad = row(at(5), 'S1', { repo: 'r', text: '落ちる行' })
+    d.scan([bad])
+    await d.drain()
+    assert.equal(fake.prompts.length, 1)
+    // 3 秒ごとの scan() でも、間隔が来るまでは積まない
+    for (let i = 0; i < 5; i++) d.scan([bad])
+    assert.equal(d.pending(), 0, '間隔が来るまで積まれない')
+    assert.equal(fake.prompts.length, 1)
+    // 間隔が来たら 1 回だけ作り直す。回を重ねるごとに間隔は伸びる
+    for (const [n, delay] of DIGEST_RETRY_DELAYS_MS.entries()) {
+      now += delay - 1
+      d.scan([bad])
+      assert.equal(d.pending(), 0, `${n + 1} 回目の間隔の手前では積まない`)
+      now += 1
+      d.scan([bad])
+      await d.drain()
+      assert.equal(fake.prompts.length, n + 2)
+    }
+    assert.equal(fake.prompts.length, DIGEST_MAX_TRIES)
+    // 諦めたら、どれだけ待っても積まない
+    now += 24 * 60 * 60_000
+    d.scan([bad])
+    assert.equal(d.pending(), 0)
+    assert.match(await readFile(join(dir, 'digest.log'), 'utf-8'), new RegExp(`${DIGEST_MAX_TRIES} 回失敗したので諦めた`))
+    // 口を変えたら数え直す（新しい口で、もう一度だけ機会をやる）
+    d.configure({ digest: true, digest_provider: 'claude', digest_model: 'haiku' })
+    d.scan([bad])
+    await d.drain()
+    assert.equal(fake.prompts.length, DIGEST_MAX_TRIES + 1)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('口が続けて DIGEST_ALERT_FAILS 回失敗したら error に出し、成功したら消える（#443）', async () => {
+  const fake = new FakeSummarizer() as FakeSummarizer & { where?: string }
+  fake.where = 'http://127.0.0.1:11434/v1'
+  fake.failOn.add('落ちる')
+  const dir = await mkdtemp(join(tmpdir(), 'sai-digest-'))
+  const d = new Digester(new DigestStore(join(dir, 'digest.jsonl')), fake, { enabled: true, model: 'm', since: at(0).toISOString(), persona: async () => 'none' })
+  const rows = Array.from({ length: DIGEST_ALERT_FAILS }, (_, i) => row(at(i + 1), `S${i}`, { repo: 'r', text: `落ちる ${i}` }))
+  d.scan(rows.slice(0, DIGEST_ALERT_FAILS - 1))
+  await d.drain()
+  assert.equal(d.error, '', 'まだ出さない（たまの timeout は実データでもある）')
+  d.scan(rows)
+  await d.drain()
+  assert.match(d.error, new RegExp(`直近 ${DIGEST_ALERT_FAILS} 回失敗`))
+  assert.match(d.error, /11434/, 'どこに投げているかを添える')
+  d.scan([row(at(20), 'S9', { repo: 'r', text: '通る' })])
+  await d.drain()
+  assert.equal(d.error, '', '1 回でも通ったら消える')
+  await rm(dir, { recursive: true, force: true })
 })

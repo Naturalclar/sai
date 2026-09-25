@@ -22,7 +22,8 @@ interface Props {
  * openai 互換の送り先（SAI_DIGEST_URL）はここでは変えられない（画面から本文を外へ向けられないように）
  */
 export function DigestEngineControls({ settings, busy, error, onChange }: Props) {
-  const status = !settings.digest_on ? '' : settings.digest ? `${settings.model} で作成中` : settings.digest_error
+  // 作っている最中でも、口が続けて失敗していれば digest_error に出る（#443）。そのときは「作成中」ではなくそちらを出す
+  const status = !settings.digest_on ? '' : settings.digest && !settings.digest_error ? `${settings.model} で作成中` : settings.digest_error
   return (
     <div className="digest-engine">
       <button type="button" role="menuitemcheckbox" aria-checked={settings.digest_on} disabled={busy} onClick={() => onChange({ digest: !settings.digest_on })}>

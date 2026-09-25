@@ -3,7 +3,8 @@ import { api, type PersonaId, type SettingsRequest, type SettingsResponse } from
 
 /**
  * サーバ側の設定（一言の入切・口・モデル・性格、Linear の workspace）。起動時に 1 回取り、変えたら PUT して返ってきた値で置き換える。
- * ポーリングはしない（自分しか変えない）
+ * ポーリングはしない（自分しか変えない）。ただし一言の口の不調（`digest_error`。#443）はあとから起きるので、
+ * 自分のメニューを開いたときに `refresh()` で取り直す
  */
 export function useSettings() {
   const [settings, setSettings] = useState<SettingsResponse | null>(null)
@@ -34,8 +35,16 @@ export function useSettings() {
     }
   }, [])
 
+  /** 取り直す。失敗しても今の値のまま（メニューを開いたついでなので、エラーは出さない） */
+  const refresh = useCallback(() => {
+    api
+      .settings()
+      .then(setSettings)
+      .catch(() => {})
+  }, [])
+
   const setPersona = useCallback((persona: PersonaId) => update({ persona }), [update])
   const setLinearWorkspace = useCallback((linear_workspace: string) => update({ linear_workspace }), [update])
 
-  return { settings, busy, error, update, setPersona, setLinearWorkspace }
+  return { settings, busy, error, update, refresh, setPersona, setLinearWorkspace }
 }

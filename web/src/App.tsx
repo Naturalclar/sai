@@ -221,7 +221,7 @@ export function App() {
 
   // 一言コメント（digest）の設定。サーバ側の設定なので取って来て、変えたら PUT。入切・口・モデルは自分のメニューにいつも出し（#288）、
   // 性格と Linear の workspace は一言を作っているときだけ出す
-  const { settings, busy: settingsBusy, error: settingsError, update: updateSettings, setPersona, setLinearWorkspace } = useSettings()
+  const { settings, busy: settingsBusy, error: settingsError, update: updateSettings, refresh: refreshSettings, setPersona, setLinearWorkspace } = useSettings()
   const linear = settings?.linear_workspace ?? ''
 
   // ⌘K でフィードとセッションを名前で探して移動する（#197）。開いたときに絞り込み無しで取り直す
@@ -261,7 +261,7 @@ export function App() {
             <GitHubMark />
           </a>
         )}
-        <UserMenu profile={list.data?.profile} viewer={list.data?.viewer ?? null} notify={notify}>
+        <UserMenu profile={list.data?.profile} viewer={list.data?.viewer ?? null} notify={notify} onOpen={refreshSettings}>
           {/* 一言の入切・口・モデルはどの幅でもここ（#288。前は環境変数）。PUT の失敗もここに出す */}
           {settings && <DigestEngineControls settings={settings} busy={settingsBusy} error={settingsError} onChange={(p) => void updateSettings(p)} />}
           {settings?.digest && narrow && (

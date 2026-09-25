@@ -19,7 +19,12 @@ test('<ApprovalBubble> には必ず approval_id の key を付ける（#492）',
   const missing: string[] = []
   for (const name of readdirSync(SRC).filter((f) => f.endsWith('.tsx'))) {
     const source = readFileSync(join(SRC, name), 'utf8')
-    for (const m of source.matchAll(/<ApprovalBubble\b[^>]*?\/>/gs)) {
+    const read = [...source.matchAll(/<ApprovalBubble\b[^>]*?\/>/gs)]
+    // 属性に `>` を含む書き方（`onX={() => …}` など）は上の正規表現が読めずに黙って飛ばすので、
+    // 書かれている数と読めた数が違えば落とす（#498 のレビュー）
+    const written = source.match(/<ApprovalBubble\b/g)?.length ?? 0
+    if (written !== read.length) missing.push(`${name}: <ApprovalBubble が ${written} か所あるのに ${read.length} か所しか読めない`)
+    for (const m of read) {
       uses.push(name)
       if (!/\bkey=\{[^}]*\.approval_id\}/.test(m[0])) missing.push(`${name}: ${m[0].slice(0, 80)}`)
     }

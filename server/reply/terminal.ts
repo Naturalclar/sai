@@ -401,7 +401,12 @@ interface TerminalEntry {
   delivered: boolean
   /** 届いていないと決めた時刻（ミリ秒） */
   failedAt?: number
+  /** 失敗を見せておく時間。無ければ経路ごとの FAILED_TTL（ターンがエラーで終わったものは長く見せる。#475） */
+  failedTtl?: number
 }
+
+/** ターンがエラーで終わった返信（#475）を見せておく時間。行が残らないので、queue の失敗（#474）と同じだけ見せる */
+export const TURN_ERROR_TTL_MS = QUEUE_FAILED_TTL_MS
 
 /**
  * 端末に打ち込んだ返信（と、開いている Codex の queue に渡した返信）の「処理中」。子プロセスが無いので、ターン完了の行が since より新しくなったら終わり。
@@ -436,7 +441,7 @@ export class TerminalReplies {
       // 行で終わったかの判定は shared/turnSettled.ts に 1 つだけ（ProcessRunner.settle() と共用。#375）
       if (settledByRow(entry.replying.since, lastTurn(id))) this.active.delete(id)
       else if (entry.failedAt !== undefined) {
-        if (this.now() - entry.failedAt > FAILED_TTL[entry.kind]) this.active.delete(id)
+        if (this.now() - entry.failedAt > (entry.failedTtl ?? FAILED_TTL[entry.kind])) this.active.delete(id)
       } else if (this.now() - since > TERMINAL_REPLY_TTL_MS) this.active.delete(id)
     }
   }
@@ -468,6 +473,30 @@ export class TerminalReplies {
       const reason = typeof answer === 'string' && answer ? `${answer} ${UNDELIVERED[entry.kind]}` : UNDELIVERED[entry.kind]
       entry.replying = { ...entry.replying, failed: { tail: reason } }
       entry.failedAt = this.now()
+      failed.push({ id, kind: entry.kind, reason })
+    }
+    return failed
+  }
+  /**
+   * 届いたと確かめた返信について、**そのターンがエラーで終わっていないか**を `ended` に聞く（#475）。
+   * エラーで終わったターンでは Codex が notify を鳴らさず、行が 1 本も届かないので、`settle()` の「行が届いたら終わり」に
+   * 当たらないまま TTL で黙って消えていた。`ended` が文字列を返したらそれを理由に失敗にし、**新しく失敗にしたものを返す**
+   * （呼ぶ側が reply.log に残す）。null はまだ分からない（終わっていない・エラーでない・材料が無い）。投げたら null 扱い
+   */
+  async checkTurnEnd(ended: (id: string, query: DeliveryQuery) => Promise<string | null>): Promise<Undelivered[]> {
+    const failed: Undelivered[] = []
+    for (const [id, entry] of [...this.active]) {
+      if (!entry.delivered || entry.failedAt !== undefined) continue
+      let reason: string | null
+      try {
+        reason = await ended(id, { since: entry.replying.since, kind: entry.kind, text: entry.replying.text })
+      } catch {
+        reason = null
+      }
+      if (!reason || this.active.get(id) !== entry) continue
+      entry.replying = { ...entry.replying, failed: { tail: reason, turn_error: true } }
+      entry.failedAt = this.now()
+      entry.failedTtl = TURN_ERROR_TTL_MS
       failed.push({ id, kind: entry.kind, reason })
     }
     return failed

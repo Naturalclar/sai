@@ -31,6 +31,7 @@ import type {
   Profile,
   ProfileResponse,
   ReplyError,
+  Replying,
   ReplyingMap,
   ReplyQueueResponse,
   ReplyRequest,
@@ -138,6 +139,7 @@ import { imageHeaders, imageTable, readSessionImage } from './local/images.ts'
 import { searchRows } from './rows/search.ts'
 import { searchWords } from '../shared/search.ts'
 import { olderPrompts, parseRecent, recentRows } from '../shared/recentRows.ts'
+import { codexTurnErrorReason, queuedTurnError } from '../shared/codexTurnError.ts'
 import { alive, isDescendant, parsePs, RealTmux, realPs, TerminalBusy, TerminalGone, TerminalReplies, typeInto } from './reply/terminal.ts'
 import type { DeliveryAnswer, DeliveryQuery, PsFn, Tmux } from './reply/terminal.ts'
 import type { Runner } from './reply/runner.ts'
@@ -540,6 +542,25 @@ export function createApp(
     if (!updated_at) return s.agent === 'claude' ? !s.last_user_ts : true
     return Date.parse(updated_at) >= at
   }
+  /**
+   * 届いた Codex への返信（端末に打ち込んだ・queue に渡した）のターンが、エラーで終わっていればその理由（#475）。
+   * エラーで終わったターンでは Codex が notify を鳴らさず行が残らないので、rollout の `task_complete.error` で見る。
+   * 3 秒のポーリングのたびに末尾 4MB を読み直さないよう、rollout の (size, mtime) が変わったときだけ読む
+   */
+  const turnEndSeen = new Map<string, string>()
+  const typedTurnError = async (sessions: SessionSummary[], id: string, query: DeliveryQuery): Promise<string | null> => {
+    const s = sessions.find((x) => x.id === id)
+    if (!s || s.agent !== 'codex' || isRemoteHost(s.host, selfHost())) return null
+    const raw = sessionOf(s)
+    const rollout = raw ? await progress.codexRollout?.(raw) : ''
+    if (!rollout) return null
+    const info = await stat(rollout).catch(() => null)
+    const sig = info ? `${query.since}|${info.size}|${info.mtimeMs}` : ''
+    if (!sig || turnEndSeen.get(id) === sig) return null
+    turnEndSeen.set(id, sig)
+    const message = queuedTurnError(await tailLines(rollout, QUEUE_ROLLOUT_TAIL_BYTES), query.text, Date.parse(query.since))
+    return message ? codexTurnErrorReason(message) : null
+  }
   /** 処理中の返信（子プロセス + 端末）。端末の分は、ターン完了の行が届いていれば先に片付け、届いたかを確かめる */
   /** そのセッションの一番新しいターン完了の行の `ts`。**OpenCode の分だけ**返す（#375 の settle の当て先） */
   const opencodeTurnOf = (sessions: SessionSummary[], id: string): string | undefined => {
@@ -556,9 +577,17 @@ export function createApp(
       // 画面の失敗は時間で消えるので、届かなかったことは reply.log にも残す（#474。あとから辿れるように）
       await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${miss.id} ${miss.kind === 'queue' ? 'queue に渡した返信が届いていない' : '端末に打ち込んだ返信でターンが始まっていない'}: ${miss.reason}\n`).catch(() => {})
     }
+    // 届いたが、ターンがエラーで終わった（#475。行が残らないので、ここで拾わないと黙って消える）
+    for (const miss of await typed.checkTurnEnd((id, query) => typedTurnError(sessions, id, query))) {
+      await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${miss.id} ${miss.kind === 'queue' ? 'queue に渡した' : '端末に打ち込んだ'}返信のターンがエラーで終わった: ${miss.reason}\n`).catch(() => {})
+    }
     // OpenCode のサーバ経路も、行が届いた時点で終わりにする（子プロセスが無いので exit は来ない。#382）
     for (const id of opencodeApp.settle((rid) => opencodeTurnOf(sessions, rid))) await drain(id)
-    return { ...typed.snapshot(), ...run.snapshot(), ...codexApp.replying(), ...opencodeApp.replying() }
+    // app-server のエラーで終わったターン（#475）は 30 分残るので、ほかの経路のいま回っている返信を上書きしないよう先に置く
+    const app = Object.entries(codexApp.replying())
+    const appFailed = Object.fromEntries(app.filter(([, r]) => r.failed))
+    const appActive = Object.fromEntries(app.filter(([, r]) => !r.failed))
+    return { ...appFailed, ...typed.snapshot(), ...run.snapshot(), ...appActive, ...opencodeApp.replying() }
   }
   // ターンごとのトークン・費用（#387 / #411）。書く側（ProcessRunner）と読む側（応答に載せる）で同じ 1 つを使う
   const usage = new TurnUsageLog(join(store.directory, TURN_USAGE_FILE))
@@ -1270,6 +1299,8 @@ export function createApp(
     o: LaunchOptions,
   ): Promise<Launched> => {
     const { replaceTyped, forceProcess } = o
+    // 新しい返信を送るので、前のターンのエラー（#475）は片付ける（どの経路で送っても）
+    codexApp.clearFailure?.(id)
 
     // 端末（tmux）で開いていれば、そのペインに打ち込む。別プロセスを立てないので端末にも出て、トークンも少ない。
     // ペインが無い・別のプロセスなら -p にフォールバック。入力中・ダイアログ中なら 409（何も打ち込まない）
@@ -1398,6 +1429,12 @@ export function createApp(
    */
   /** `claude --bg` のターンが終わるのを待っている預かり（#462）。次に見に行く時刻 */
   const bgRetryAt = new Map<string, number>()
+  /**
+   * 預かりを止める理由になる、前の返信の失敗。-p の失敗に加えて、SAI の app-server で回した Codex のターンが
+   * エラーで終わったものも見る（#475 のレビュー。見ないと上限に当たったターンの直後に次の預かりを起動し、
+   * 同じ上限でもう 1 本無駄にする）。止めるとき（drain）と「続けて送る」で覚えるときに同じものを見る
+   */
+  const failedReply = (id: string): Replying | undefined => [run.snapshot()[id], codexApp.replying()[id]].find((r) => r?.failed)
   const drain = async (id: string): Promise<void> => {
     const head = queue.peek(id)
     if (!head || queue.paused(id) || draining.has(id)) return
@@ -1406,9 +1443,9 @@ export function createApp(
     if (run.running(id) || codexApp.running(id) || opencodeApp.running(id) || launching.has(id)) return
     draining.add(id)
     try {
-      const last = run.snapshot()[id]
+      const last = failedReply(id)
       if (last?.failed && resumedFailure.get(id) !== last.since) {
-        queue.pause(id, `前の返信が失敗したので止めています（${last.failed.code === undefined ? '届いていません' : `終了コード ${last.failed.code}`}）。続けるなら「続けて送る」`)
+        queue.pause(id, `前の返信が失敗したので止めています（${replyFailureText(last.failed)}）。続けるなら「続けて送る」`)
         return
       }
       const out = await launch(id, head.text, head.attachments, {
@@ -1450,7 +1487,8 @@ export function createApp(
     if (rest === QUEUE_RESUME) {
       if (method !== 'POST') return error(res, 405, 'method not allowed')
       // 止めた理由の失敗がまだ残っていても（2 分）、同じ失敗ではもう止めない
-      const last = run.snapshot()[id]
+      // drain() と同じく、app-server のエラーで終わったターン（#475）も「覚えた失敗」にする
+      const last = failedReply(id)
       if (last?.failed) resumedFailure.set(id, last.since)
       queue.resume(id)
       await drain(id)

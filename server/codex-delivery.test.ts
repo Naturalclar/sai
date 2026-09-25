@@ -8,10 +8,10 @@ import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ReplyResponse, SessionProgressResponse, SessionsResponse, SessionSummary } from '../shared/types.ts'
+import type { Replying, ReplyResponse, SessionProgressResponse, SessionsResponse, SessionSummary } from '../shared/types.ts'
 import { createApp } from './app.ts'
 import { Approvals } from './approvals/approvals.ts'
 import { localDate } from './rows/aggregate.ts'
@@ -42,9 +42,12 @@ const rollouts = new Map<string, string>()
 const held = new Set<string>(['H1'])
 
 const runner: Runner = { running: () => false, snapshot: () => ({}), async start() {} }
+/** SAI の app-server でエラーで終わったターン（#475）。別の経路で次を送ったら clearFailure で消える */
+const appFailures = new Map<string, Replying>()
 const codexApp: CodexApp = {
   running: () => false,
-  replying: () => ({}),
+  replying: () => Object.fromEntries(appFailures),
+  clearFailure: (id) => void appFailures.delete(id),
   snapshot: () => ({}),
   getApproval: () => undefined,
   async start(input) {
@@ -71,7 +74,7 @@ before(async () => {
   work = await mkdtemp(join(tmpdir(), 'sai-cdel-work-'))
   const now = new Date(Date.now() - 10 * 60_000)
   const codex = (session: string) => JSON.stringify(row(now, session, { agent: 'codex', repo: 'r', cwd: work, pane: '', pid: 0, session_source: 'rollout' }))
-  await writeFile(join(dir, `${localDate(now.toISOString())}.jsonl`), ['Q1', 'Q2', 'Q3', 'Q4', 'Q5', 'H1', 'L1'].map(codex).join('\n') + '\n')
+  await writeFile(join(dir, `${localDate(now.toISOString())}.jsonl`), ['Q1', 'Q2', 'Q3', 'Q4', 'Q5', 'Q6', 'Q7', 'H1', 'L1'].map(codex).join('\n') + '\n')
   // 起動時の rollout（送る前に書かれたもの）
   for (const id of ['Q1@r', 'Q2@r']) updatedAt.set(id, now.toISOString())
   const app = createApp(
@@ -192,6 +195,36 @@ test('宛先がターンの途中なら、30 秒たっても失敗にしない�
   // ターンが閉じたのに本文が載っていない → ここで届いていないと分かる
   await writeFile(path, [ev(Date.now() - 60_000, 'task_started'), ev(Date.now(), 'task_complete')].join('\n') + '\n')
   assert.ok((await sessions()).replying['Q5@r']?.failed, 'ターンが閉じても載っていなければ失敗')
+})
+
+test('届いたあとターンがエラーで終わったら、失敗として出して reply.log にも残す（#475。notify が鳴らず行が残らない）', async () => {
+  offset = 0
+  assert.equal((await post('Q6@r', 'PR作成して')).status, 202)
+  const path = join(work, 'rollout-Q6.jsonl')
+  const ev = (at: number, payload: Record<string, unknown>) => JSON.stringify({ timestamp: new Date(at).toISOString(), type: 'event_msg', payload })
+  await writeFile(path, [userLine(clock() + 500, 'PR作成して'), ev(clock() + 600, { type: 'task_started' })].join('\n') + '\n')
+  rollouts.set('Q6', path)
+  offset = QUEUE_DELIVERY_WAIT_MS + 1_000
+  assert.equal((await sessions()).replying['Q6@r']?.failed, undefined, '届いた。ターンはまだ回っている')
+  assert.equal((await sessions()).replying['Q6@r']?.failed, undefined, '変わっていない rollout は読み直さない（同じ答え）')
+  // 実データ（2026-09-16）と同じ終わり方: 返答が無く、上限のエラーが付いている
+  await appendFile(path, ev(clock() + 60_000, { type: 'task_complete', last_agent_message: null, error: { message: "You've hit your usage limit. Upgrade to Pro, or try again later.", codexErrorInfo: 'usageLimitExceeded' } }) + '\n')
+  const failed = (await sessions()).replying['Q6@r']?.failed
+  assert.ok(failed, 'エラーで終わったターンは失敗として出す')
+  assert.match(failed.tail, /usage limit/)
+  const log = await readFile(join(dir, 'reply.log'), 'utf-8')
+  assert.match(log, /Q6@r queue に渡した返信のターンがエラーで終わった: /)
+})
+
+test('app-server のエラーで終わったターンが残っていても、別の経路で送った新しい返信の「処理中」を隠さない（#475 のレビュー）', async () => {
+  offset = 0
+  appFailures.set('Q7@r', { since: new Date(clock() - 60_000).toISOString(), text: '前の', failed: { tail: 'Codex のターンがエラーで終わりました: x', turn_error: true } })
+  assert.ok((await sessions()).replying['Q7@r']?.failed, '失敗は見える')
+  assert.equal((await post('Q7@r', '次の')).status, 202)
+  const replying = (await sessions()).replying['Q7@r']
+  assert.equal(replying?.text, '次の', 'queue に渡した新しい返信が出る')
+  assert.equal(replying?.failed, undefined)
+  assert.equal(appFailures.has('Q7@r'), false, '新しい返信を送ったら前のエラーは片付ける（処理中が終わったあとにまた出てこない）')
 })
 
 test('SAI の app-server が読み込んでいるスレッドは、lock が開いていても queue に回さない', async () => {

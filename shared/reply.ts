@@ -195,8 +195,10 @@ export function mentionLabels(targets: ReplyTarget[]): Map<string, string> {
  * 返信の失敗を 1 文にする（#172 / #329）。プロセスが非0で終わったときは終了コードと reply.log の末尾、
  * 端末・queue に渡して届かなかったとき（終了コードが無い）は理由だけ
  */
-export function replyFailureText(failed: { code?: number; tail: string }): string {
+export function replyFailureText(failed: { code?: number; tail: string; turn_error?: true }): string {
   const why = failed.tail.trim()
+  // 届いたがターンがエラーで終わった（#475）。理由の文がそのまま「エラーで終わりました: …」になっている
+  if (failed.turn_error) return why || 'ターンがエラーで終わりました'
   if (failed.code === undefined) return why || '届いていません'
   return why ? `終了コード ${failed.code}: ${why}` : `終了コード ${failed.code}`
 }

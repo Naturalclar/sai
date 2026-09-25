@@ -3,7 +3,8 @@
 import { randomBytes } from 'node:crypto'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createInterface } from 'node:readline'
-import type { Approval, ApprovalAnswer, ApprovalMap, ReplyingMap, ReviewTarget } from '../../shared/types.ts'
+import type { Approval, ApprovalAnswer, ApprovalMap, Replying, ReplyingMap, ReviewTarget } from '../../shared/types.ts'
+import { codexErrorText, codexTurnErrorReason } from '../../shared/codexTurnError.ts'
 import { parseCodexSkills, type Skill } from '../../shared/skills.ts'
 import { childEnv, splitArgs } from './runner.ts'
 
@@ -66,6 +67,11 @@ export interface CodexApp {
    */
   onTurnEnd?(listener: (id: string) => void): void
   /**
+   * エラーで終わったターンの失敗（#475）を消す。**別の経路（端末・queue・-p）で次の返信を送ったとき**に呼ぶ
+   * （そうしないと 30 分のあいだ古い失敗が残り、新しい返信の「処理中」が終わったあとにまた出てくる）。偽物は持たなくてよい
+   */
+  clearFailure?(id: string): void
+  /**
    * 処理中のターンを止める（#384。`turn/interrupt`）。止められたら true。
    *
    * **止められるのは SAI が `thread/resume` したスレッドだけ**（別の接続のスレッドは app-server が
@@ -104,6 +110,12 @@ export interface CodexApp {
    */
   steer?(id: string, text: string, attachments?: readonly string[]): Promise<boolean>
 }
+
+/**
+ * エラーで終わったターンを、失敗として画面に見せておく時間（#475）。エラーで終わったターンでは Codex が notify を
+ * 鳴らさず行が残らないので、ここで見せないと「返信が終わった」だけで何が起きたか分からない（queue の失敗と同じ 30 分）
+ */
+export const CODEX_TURN_FAILED_TTL_MS = 30 * 60_000
 
 interface ManagedTurn {
   entity: string
@@ -232,6 +244,8 @@ export class CodexAppServer implements CodexApp {
   private approvals = new Map<string, PendingApproval>()
   private items = new Map<string, JsonObject>()
   private turnEndListeners: ((id: string) => void)[] = []
+  /** エラーで終わったターン（エンティティ → 失敗の付いた Replying と、終わった時刻）。次のターンを始めたら消す（#475） */
+  private failures = new Map<string, { replying: Replying; at: number }>()
   /** この接続で thread/resume したスレッド。ターンが終わっても app-server は読み込んだまま（writer lock を開いたまま）なので、切断・thread/closed まで持つ */
   private loaded = new Set<string>()
   /**
@@ -288,11 +302,21 @@ export class CodexAppServer implements CodexApp {
     }
   }
 
+  clearFailure(id: string): void {
+    this.failures.delete(id)
+  }
+
   replying(): ReplyingMap {
+    for (const [entity, failure] of this.failures) if (this.now() - failure.at > CODEX_TURN_FAILED_TTL_MS) this.failures.delete(entity)
+    // エラーで終わったターンは失敗として見せる（#475）。回っているターンがあればそちらが勝つ
+    const failed = Object.fromEntries([...this.failures].map(([entity, failure]) => [entity, failure.replying]))
     // interruptible は「いま止められる」の印（#384）。turnId が入るまで（turn/start の応答待ち）は止める先が無い
-    return Object.fromEntries(
-      [...this.turns.values()].map((turn) => [turn.entity, { since: turn.since, text: turn.text, ...(turn.turnId ? { interruptible: true as const } : {}) }]),
-    )
+    return {
+      ...failed,
+      ...Object.fromEntries(
+        [...this.turns.values()].map((turn) => [turn.entity, { since: turn.since, text: turn.text, ...(turn.turnId ? { interruptible: true as const } : {}) }]),
+      ),
+    }
   }
 
   /**
@@ -404,6 +428,7 @@ export class CodexAppServer implements CodexApp {
     }
     this.turns.set(threadId, turn)
     this.entityThreads.set(entity, threadId)
+    this.failures.delete(entity)
     try {
       // 作ったばかりのスレッド（#401）は rollout がまだ無く `thread/resume` が落ちるが、この接続がもう持っているので飛ばす
       if (!this.fresh.delete(threadId)) {
@@ -644,6 +669,15 @@ export class CodexAppServer implements CodexApp {
       const started = object(params.turn)
       if (turn && typeof started?.id === 'string') turn.turnId = started.id
       return
+    }
+    if (method === 'turn/completed') {
+      // エラーで終わったターン（`status: "failed"`。上限に当たった・モデルが無い など）は、行が残らないので失敗として残す（#475）
+      const done = object(params.turn)
+      const turn = this.turns.get(threadId)
+      if (turn && done?.status === 'failed') {
+        const message = codexErrorText(done.error) || 'エラーの中身は返ってきませんでした'
+        this.failures.set(turn.entity, { replying: { since: turn.since, text: turn.text, failed: { tail: codexTurnErrorReason(message), turn_error: true } }, at: this.now() })
+      }
     }
     if (method === 'turn/completed' || method === 'thread/closed') {
       // 閉じたスレッドは app-server がもう lock を持っていない

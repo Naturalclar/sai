@@ -18,10 +18,16 @@ export function codexWriterLockPath(session: string, env: NodeJS.ProcessEnv = pr
 /** ファイルを開いているプロセスの pid。誰も開いていなければ空。確かめる手段が無ければ投げる */
 export type LockHolders = (path: string) => Promise<number[]>
 
-/** `lsof -t <path>`（macOS / Linux にある）。誰も開いていなければ何も出さずに 1 で終わる */
-export const lsofHolders: LockHolders = (path) =>
+/** `lsof` を待つ上限。返信・3 秒のポーリングの途中で呼ぶので長くは待たない（超えたら投げる＝分からない） */
+export const LSOF_TIMEOUT_MS = 5_000
+
+/**
+ * `lsof -t <path>`（macOS / Linux にある）。誰も開いていなければ何も出さずに 1 で終わる。
+ * `timeoutMs` はテストだけが延ばす（#484。一式を並列で回すと本物の `lsof` が 5 秒を超えて殺されることがある）
+ */
+export const lsofHolders = (path: string, timeoutMs: number = LSOF_TIMEOUT_MS): Promise<number[]> =>
   new Promise((resolve, reject) => {
-    execFile('lsof', ['-t', path], { timeout: 5_000 }, (err, stdout) => {
+    execFile('lsof', ['-t', path], { timeout: timeoutMs }, (err, stdout) => {
       const pids = String(stdout).split('\n').map((line) => Number(line.trim())).filter((pid) => Number.isInteger(pid) && pid > 0)
       if (!err || pids.length > 0) return resolve(pids)
       // 終わり方のエラーの code は終了コード（数値）、起動できなかったときは 'ENOENT' などの文字列

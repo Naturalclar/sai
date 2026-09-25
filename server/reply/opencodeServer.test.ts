@@ -269,3 +269,18 @@ test('startSession: POST /session に directory を付けて作り、返る id �
     await new Promise<void>((r) => server.close(() => r()))
   }
 })
+
+test('stop: 止めたあとは serve を起こさない（C-c のあとに来たリクエストで孤児を作らない。#457）', async () => {
+  let spawned = 0
+  const app = new OpencodeServer(fetch, Date.now, async () => {
+    spawned++
+    return { url: 'http://127.0.0.1:1', auth: 'Basic dGVzdA==' }
+  })
+  app.stop()
+  await assert.rejects(app.start({ id: 'S1@r', session: 'ses_abc', text: 'x' }), /opencode serve は起こしません/)
+  await assert.rejects(app.skills('/work'), /起こしません/)
+  await assert.rejects(app.models('/work'), /起こしません/)
+  await assert.rejects(app.startSession('/work'), /起こしません/)
+  assert.equal(spawned, 0, 'serve を起こしていない')
+  assert.equal(app.running('S1@r'), false)
+})

@@ -16,6 +16,7 @@
 //   - 役割とモデルは `message.updated` の `properties.info`（`role` / `providerID` / `modelID` / `path.cwd`）
 //   - タイトル生成の裏の呼び出しでは `session.idle` は鳴らない（人のターンの分だけ届く）
 //   - `session.idle` は 1 ターンに複数回鳴ることがある（中断・再試行の後）。本文が増えていなければ流さない
+//     （止めたときは同じ秒に 2 回鳴るので、状態は**送る前に**空にする。#392）
 //   - **`opencode run`（非対話）は許可を聞けないので自動で reject する**（`permission.replied` の `reply: "reject"`）。
 //     ツールが `state.status: "error"` で終わった時点でターンが終わり、アシスタントは本文（text パーツ）を書かない。
 //     SAI の返信経路（閉じたセッションへの `opencode run -s`）はこれに当たる（#273）
@@ -86,6 +87,9 @@ const FAILED_MAX = 300
  * 許可の拒否（`opencode run` が自動で reject したときなど）はそう書き、それ以外は失敗のメッセージをそのまま添える。
  * 失敗したツールも無ければ空（本当に何も書かなかったターン。画面は今までどおり「(本文なし)」）
  */
+/** 本文が書かれる前に人が止めたターン（#392）。#273 の「失敗して終わりました」と同じ形にそろえる */
+const ABORTED_TEXT = "（本文なし）途中で止めました"
+
 function failedText(failed) {
   if (!failed) return ""
   const tool = String(failed.tool || "ツール").trim()
@@ -132,7 +136,8 @@ export const SaiPlugin = async ({ directory, worktree }) => {
     let s = state.get(id)
     if (!s) {
       // failed: そのターンで最後に失敗したツール（{ tool, error }）。本文が無いときの代わりに使う
-      s = { roles: new Map(), text: "", userText: "", model: "", cwd: "", dirty: false, failed: null }
+      // aborted: そのターンを人が止めた（`session.error` の `MessageAbortedError`。#392）
+      s = { roles: new Map(), text: "", userText: "", model: "", cwd: "", dirty: false, failed: null, aborted: false }
       state.set(id, s)
     }
     return s
@@ -176,27 +181,42 @@ export const SaiPlugin = async ({ directory, worktree }) => {
           return
         }
 
+        // 人がターンを止めた（SAI の「止める」= `POST /session/<id>/abort`、#392。TUI の Esc も同じ）。
+        // 1.18.30 で実測: `session.error`（`MessageAbortedError`）→ `session.idle` → … → `session.idle` の順に届く
+        if (type === "session.error") {
+          if (!id || props.error?.name !== "MessageAbortedError") return
+          const s = of(id)
+          s.aborted = true
+          s.dirty = true
+          return
+        }
+
         if (type === "session.idle") {
           if (!id) return
           const s = of(id)
           // idle は 1 ターンに複数回鳴ることがある（中断や再試行の後など。実測）。
           // 前に流してから何も増えていなければ流さない（同じ行が二重に載る）
           if (!s.dirty) return
-          await send({
+          const row = {
             type: "session.idle",
             session_id: id,
             pid: process.pid,
             cwd: s.cwd || directory || worktree || "",
-            // 本文が無ければ、失敗したツールから「何が起きたか」を出す（空のままだと画面は「(本文なし)」しか出せない）
-            text: s.text || failedText(s.failed),
+            // 本文が無ければ「何が起きたか」を出す（空のままだと画面は「(本文なし)」しか出せない）:
+            // 止めたなら止めたこと（#392）、でなければ失敗したツール（#273）
+            text: s.text || (s.aborted ? ABORTED_TEXT : failedText(s.failed)),
             user_text: s.userText,
             model: s.model,
-          })
-          // 次のターンに前の本文を持ち越さない（役割の対応表は同じセッションで使い続ける）
+          }
+          // **送る前に**空にする（#392）。`send()` は record.py の終了を待つので、そのあとで空にすると、
+          // その間に届いた次の idle（止めたときは同じ秒に 2 回鳴る。実測）が `dirty` の立ったままの状態を見て、
+          // 同じ行（自分の入力つき）をもう 1 本書いていた。送信は今までどおり並べない（直列にすると行が消える。上の注意）
           s.text = ""
           s.userText = ""
           s.failed = null
+          s.aborted = false
           s.dirty = false
+          await send(row)
           return
         }
 

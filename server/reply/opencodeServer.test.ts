@@ -284,3 +284,85 @@ test('stop: 止めたあとは serve を起こさない（C-c のあとに来た
   assert.equal(spawned, 0, 'serve を起こしていない')
   assert.equal(app.running('S1@r'), false)
 })
+
+test('abort: 回しているターンだけ /session/<id>/abort で止め、処理中から外す（#392）', async () => {
+  const seen: { method: string; url: string; auth: string }[] = []
+  let abortStatus = 200
+  const server: Server = createServer((req, res) => {
+    req.resume()
+    req.on('end', () => {
+      seen.push({ method: req.method ?? '', url: req.url ?? '', auth: req.headers.authorization ?? '' })
+      if (req.url?.endsWith('/prompt_async')) {
+        res.writeHead(204)
+        return res.end()
+      }
+      // 本物（1.18.30）は回っていないセッションにも知らないセッションにも true を返す。返り値は当てにしない
+      res.writeHead(abortStatus, { 'content-type': 'application/json' })
+      res.end(abortStatus === 200 ? 'true' : 'boom')
+    })
+  })
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+  const addr = server.address()
+  const base = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`
+  try {
+    const app = new OpencodeServer(fetch, Date.now, async () => ({ url: base, auth: 'Basic dGVzdA==' }))
+
+    // 回していないものは投げずに false（abort が true を返しても「止めた」にしない）
+    assert.equal(await app.abort('S1@r'), false)
+    assert.equal(seen.length, 0, '回していないセッションには投げない')
+
+    await app.start({ id: 'S1@r', session: 'ses_abc', text: '長いターン' })
+    assert.equal(app.replying()['S1@r']?.interruptible, true, 'prompt_async が通った時点で止められる（画面のボタンが出る）')
+
+    // サーバが断ったら投げ、処理中のまま（止まったとは言わない）
+    abortStatus = 500
+    await assert.rejects(app.abort('S1@r'), /500/)
+    assert.equal(app.running('S1@r'), true)
+
+    abortStatus = 200
+    assert.equal(await app.abort('S1@r'), true)
+    const last = seen.at(-1)!
+    assert.deepEqual([last.method, last.url, last.auth], ['POST', '/session/ses_abc/abort', 'Basic dGVzdA=='], 'エンティティIDではなく OpenCode のセッションIDで、鍵つきで止める')
+    assert.equal(app.running('S1@r'), false, '行（本文の空の session.idle）を待たずに処理中から外す')
+    assert.equal(app.replying()['S1@r'], undefined)
+
+    // 2 回目は投げない（もう回していない）
+    const before = seen.length
+    assert.equal(await app.abort('S1@r'), false)
+    assert.equal(seen.length, before)
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()))
+  }
+})
+
+test('abort: サーバが立っていなければ起こさずに false（#392）', async () => {
+  // `serveFn` を渡さない = 本物の spawn を通る実装。`live()` は立っているものだけを見るので何も起こさない
+  assert.equal(await new OpencodeServer().abort('S1@r'), false)
+})
+
+test('abort: 回していたのにサーバがもう居なければ、処理中から外して止まった扱いにする（#488 のレビュー）', async () => {
+  const server: Server = createServer((req, res) => {
+    req.resume()
+    req.on('end', () => {
+      res.writeHead(204)
+      res.end()
+    })
+  })
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+  const addr = server.address()
+  const base = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`
+  let alive = true
+  try {
+    const app = new OpencodeServer(fetch, Date.now, async () => {
+      if (!alive) throw new Error('opencode serve がもう居ない')
+      return { url: base, auth: 'Basic dGVzdA==' }
+    })
+    await app.start({ id: 'S1@r', session: 'ses_abc', text: '長いターン' })
+    alive = false
+    // false を返すと画面は「起動した直後なので止められない」の 409 になり、効かない「止める」と「処理中」が残り続けた
+    assert.equal(await app.abort('S1@r'), true)
+    assert.equal(app.running('S1@r'), false)
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()))
+  }
+})

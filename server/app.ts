@@ -1505,9 +1505,10 @@ export function createApp(
   /**
    * `POST /api/sessions/<id>/interrupt`（#384）。処理中のターンを止める。同一オリジンのみ（返信と同じ理由）。
    *
-   * 止められるのは **SAI の app-server が回している Codex のターンだけ**（`turn/interrupt` は自分が
-   * `thread/resume` したスレッドしか止められない。端末で人が回している Codex には手が出ない）。
-   * `claude -p` と OpenCode には当たる口が無いので 400。
+   * 止められるのは **SAI が回している Codex と OpenCode のターンだけ**: Codex は app-server の `turn/interrupt`
+   * （自分が `thread/resume` したスレッドしか止められない）、OpenCode は SAI が起こした `opencode serve` の
+   * `POST /session/<id>/abort`（#392）。どちらも端末で人が回しているターンには手が出ない。
+   * `claude -p` には当たる口が無いので 400。
    *
    * **投げる前に預かりを止める**（#305 の「前の返信が失敗したら回さない」と同じ形）。止めると app-server から
    * `turn/completed` が届き、それが `onTurnEnd` → `drain()` に繋がっているので、止めた直後に次の預かりが走ってしまう。
@@ -1515,10 +1516,11 @@ export function createApp(
    */
   const interrupt = async (req: IncomingMessage, res: ServerResponse, id: string) => {
     if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
-    if (!codexApp.interrupt) return error(res, 400, '止められるのは SAI が起こした Codex のターンだけです')
-    if (!codexApp.running(id)) {
-      const busy = run.running(id) || opencodeApp.running(id) || typed.running(id)
-      if (busy) return error(res, 400, '止められるのは SAI が起こした Codex のターンだけです')
+    // どちらのターンが回っているかで止める口を選ぶ（同じセッションで両方が回ることは無い）
+    const stopper = codexApp.running(id) ? codexApp.interrupt?.bind(codexApp) : opencodeApp.running(id) ? opencodeApp.abort?.bind(opencodeApp) : undefined
+    if (!stopper) {
+      const busy = codexApp.running(id) || opencodeApp.running(id) || run.running(id) || typed.running(id)
+      if (busy) return error(res, 400, '止められるのは SAI が起こした Codex / OpenCode のターンだけです')
       return error(res, 409, 'このセッションは処理中ではありません')
     }
     // 先に止める（await のあとに止めると、その間に届いた turn/completed が預かりを回しうる）
@@ -1526,7 +1528,7 @@ export function createApp(
     queue.pause(id, INTERRUPT_PAUSE)
     let stopped = false
     try {
-      stopped = await codexApp.interrupt(id)
+      stopped = await stopper(id)
     } catch (err) {
       if (wasPaused) queue.pause(id, wasPaused)
       else queue.resume(id)
@@ -1537,7 +1539,7 @@ export function createApp(
       else queue.resume(id)
       return error(res, 409, 'このターンはまだ止められません（起動した直後です）')
     }
-    await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} 人が処理中のターンを止めた（#384）\n`).catch(() => {})
+    await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} 人が処理中のターンを止めた（#384 / #392）\n`).catch(() => {})
     const payload: ReplyQueueResponse = { id, queue: queue.snapshot()[id] ?? { items: [] } }
     return json(res, payload)
   }

@@ -74,6 +74,8 @@ import { OpencodeServer } from './reply/opencodeServer.ts'
 import type { OpencodeApp } from './reply/opencodeServer.ts'
 import { OpencodePermissions } from './reply/opencodePermissions.ts'
 import { approvalMapKey, CodexDialogs, mergeApprovalMaps } from './reply/codexDialogs.ts'
+import { JevRisk } from './approvals/jev.ts'
+import type { JevJudge } from './approvals/jev.ts'
 import { CodexTerminals, type CodexTerminalSource } from './reply/codexTerminal.ts'
 import { CodexPanes, type CodexPaneSource } from './reply/codexPanes.ts'
 import { clearSettled, settledKey, WaitingSettle } from './reply/waitingSettle.ts'
@@ -395,6 +397,11 @@ export interface TerminalDeps {
   claudeBackground?: BackgroundSessions
   /** `claude --bg` のターンを待つ預かりを見に行く間隔（#462）。テストでは 0 にする */
   bgRetryMs?: number
+  /**
+   * 許可が問題なさそうかを予想する Jev の口（#491）。**省略は「送らない」**。環境の `JEV_API_KEY` から組むのは main.ts だけ
+   * （`jevFromEnv()`）。既定で環境から組むと、鍵のあるマシンでテストを回したときに本物の Jev へ送ってしまう
+   */
+  jev?: JevJudge | null
 }
 
 export function createApp(
@@ -431,6 +438,8 @@ export function createApp(
   const opencodeApp = terminal.opencodeApp ?? new OpencodeServer()
   // OpenCode の許可待ち（#421）。立っているサーバにだけ聞くので、返信を回していなければ何もしない
   const opencodePerms = new OpencodePermissions(opencodeApp)
+  // 許可の確率（#491）。鍵が無ければ judge が null で、何も送らない
+  const jevRisk = new JevRisk(terminal.jev ?? null)
   const waitingSettle = terminal.waitingSettle ?? new WaitingSettle(terminal.tmux, terminal.ps)
   const codexAppEnabled = process.env.SAI_CODEX_APP_SERVER !== '0'
   // OpenCode は `opencode serve` の HTTP に送る（#382）。`0` で今までどおり `opencode run -s` に戻す
@@ -665,7 +674,9 @@ export function createApp(
       terminalEnabled ? codexDialogs.scan(sessions, await paneOnlyTargets(sessions)) : Promise.resolve({} as ApprovalMap),
       opencodeServerEnabled ? opencodePerms.scan(sessions) : Promise.resolve({} as ApprovalMap),
     ])
-    return mergeApprovalMaps(mergeApprovalMaps(mergeApprovalMaps(approvals.snapshot(), codexApp.snapshot()), dialogs), opencode)
+    const merged = mergeApprovalMaps(mergeApprovalMaps(mergeApprovalMaps(approvals.snapshot(), codexApp.snapshot()), dialogs), opencode)
+    // 問題なさそうかの確率（#491）。聞いていないものは投げるだけで、届いたら次の応答に載る（rev は approvalMapKey が拾う）
+    return jevRisk.annotate(merged, (await settingsStore.get()).jev)
   }
 
   /**
@@ -774,6 +785,8 @@ export function createApp(
       provider: digest.provider,
       digest_model: s.digest_model,
       model: digest.model,
+      jev_on: s.jev,
+      jev_ready: jevRisk.ready,
     }
   }
   /**
@@ -846,7 +859,11 @@ export function createApp(
       if (!isDigestModel(model)) return error(res, 400, 'digest_model はモデル名（英数字で始まり、英数字と . _ : / - [ ] だけ、64 文字まで。空なら口の既定）で送ってください')
       patch.digest_model = model
     }
-    if (Object.keys(patch).length === 0) return error(res, 400, 'persona / linear_workspace / digest / digest_provider / digest_model のどれかを送ってください')
+    if (b.jev !== undefined) {
+      if (typeof b.jev !== 'boolean') return error(res, 400, 'jev は true か false で送ってください')
+      patch.jev = b.jev
+    }
+    if (Object.keys(patch).length === 0) return error(res, 400, 'persona / linear_workspace / digest / digest_provider / digest_model / jev のどれかを送ってください')
     // 起動時の組み立て（settings.json の読み込み）が済んでから書く。後から古い値で組み直されないように
     await digestReady
     const saved = await settingsStore.set(patch)

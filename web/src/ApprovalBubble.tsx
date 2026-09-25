@@ -4,6 +4,7 @@ import { approvalAction } from './approvalKeys'
 import { api, type Approval } from './api'
 import { AskQuestions } from './AskQuestions'
 import { DialogPreview } from './DialogPreview'
+import { JevTag } from './JevTag'
 import { elapsedLabel, hm } from './format'
 import { AGENT_INITIAL, AGENT_LABEL } from './chatGroups.ts'
 
@@ -90,6 +91,8 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false, modeNote =
         </div>
         <div className="msg">
           <div className="body">⏳ {approval.text}</div>
+          {/* 許可して問題なさそうかの予想（#491）。押すのは人（判断には使わない） */}
+          {approval.jev !== undefined && <JevTag safe={approval.jev} />}
           {detail && <pre className="detail">{detail}</pre>}
           {/* 端末の画面から読んだ選択肢（#425）。下のボタンで答えられる（#450） */}
           {approval.dialog && <DialogPreview dialog={approval.dialog} />}

@@ -190,11 +190,11 @@ export function mergeApprovalMaps(...maps: ApprovalMap[]): ApprovalMap {
   return out
 }
 
-/** rev に混ぜる安定した鍵。検出・解消のどちらでも画面のポーリングが更新される。 */
+/** rev に混ぜる安定した鍵。検出・解消のどちらでも、Jev の確率が届いたときも（#491）画面のポーリングが更新される。 */
 export function approvalMapKey(map: ApprovalMap): string {
   return Object.values(map)
     .flat()
-    .map((approval) => approval.approval_id)
+    .map((approval) => (approval.jev === undefined ? approval.approval_id : `${approval.approval_id}:${approval.jev}`))
     .sort()
     .join(',')
 }

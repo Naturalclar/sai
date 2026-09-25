@@ -57,6 +57,9 @@
   header .user-menu .menu .digest-engine .digest-model:focus { outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent); border-color: var(--accent); }
   header .user-menu .menu .digest-engine .note { padding: 0; white-space: normal; }
   header .user-menu .menu .digest-engine .note.error { color: var(--claude); }
+  /* 許可を Jev で予想するかの入切（#491） */
+  header .user-menu .menu .jev-controls { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--line); }
+  header .user-menu .menu .jev-controls .note { padding: 0 12px 6px; white-space: normal; }
   /* 使用量（#216）。取れたエージェントの分だけ出る。Codex は割合、Claude は上限に当たっているときだけ */
   header .usage { position: relative; display: inline-flex; }
   header .usage-chip { display: inline-flex; align-items: center; gap: 8px; padding: 3px 8px; font: inherit; font-size: 12px; color: var(--muted); background: var(--chip); border: 1px solid transparent; border-radius: 999px; cursor: pointer; white-space: nowrap; }
@@ -742,6 +745,11 @@
   .group.approval .detail { font-family: var(--mono); font-size: 12px; background: var(--chip); padding: 8px 10px; border-radius: 6px; margin: 6px 0 0; white-space: pre-wrap; word-break: break-word; max-height: 12em; overflow: auto; }
   /* 処理中のターンが起動したときの許可モードのまま聞いている、の注記（#272） */
   .group.approval .mode-note { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+  /* 許可して問題なさそうかの予想（#491）。色で読めるが、判断はしない（押すのは人） */
+  .group.approval .jev-tag { display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 10px; font-size: 11px; vertical-align: middle; border: 1px solid currentColor; }
+  .group.approval .jev-tag.safe { color: var(--accent); }
+  .group.approval .jev-tag.unsure { color: var(--muted); }
+  .group.approval .jev-tag.risky { color: var(--claude); }
   .group.approval .actions { display: flex; gap: 8px; margin-top: 8px; }
   .group.approval .actions button { font: inherit; font-size: 13px; padding: 4px 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; }
   .group.approval .actions button.allow { background: var(--accent); border-color: var(--accent); color: #fff; }

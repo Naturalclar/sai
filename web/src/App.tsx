@@ -23,6 +23,7 @@ import { api, type SessionFilters, type SettingsResponse } from './api'
 import { isTypingTarget, navAction, navTarget, type NavTarget } from './sessionNav'
 import { DigestControls } from './DigestControls'
 import { DigestEngineControls } from './DigestEngineControls'
+import { JevControls } from './JevControls'
 import { useSettings } from './useSettings'
 import { useCommandPalette } from './useCommandPalette'
 import { CommandPalette } from './CommandPalette'
@@ -264,6 +265,8 @@ export function App() {
         <UserMenu profile={list.data?.profile} viewer={list.data?.viewer ?? null} notify={notify} onOpen={refreshSettings}>
           {/* 一言の入切・口・モデルはどの幅でもここ（#288。前は環境変数）。PUT の失敗もここに出す */}
           {settings && <DigestEngineControls settings={settings} busy={settingsBusy} error={settingsError} onChange={(p) => void updateSettings(p)} />}
+          {/* 許可の確率を Jev に聞くか（#491。既定は入。鍵が無ければ送らない） */}
+          {settings && <JevControls settings={settings} busy={settingsBusy} onChange={(p) => void updateSettings(p)} />}
           {settings?.digest && narrow && (
             <DigestControls settings={settings} busy={settingsBusy} error="" onPersona={(p) => void setPersona(p)} onLinearWorkspace={(ws) => void setLinearWorkspace(ws)} />
           )}

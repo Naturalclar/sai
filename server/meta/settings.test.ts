@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { DEFAULT_PERSONA } from '../../shared/persona.ts'
 import { SettingsStore } from './settings.ts'
 
-const DEFAULTS = { persona: DEFAULT_PERSONA, linear_workspace: '', digest: false, digest_provider: 'claude', digest_model: '' }
+const DEFAULTS = { persona: DEFAULT_PERSONA, linear_workspace: '', digest: false, digest_provider: 'claude', digest_model: '', jev: true }
 
 test('SettingsStore: 無ければ既定（一言は切、口は claude、モデルは空）。set で重ねてファイルに残る', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'sai-settings-'))

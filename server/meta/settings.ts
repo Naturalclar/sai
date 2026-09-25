@@ -21,6 +21,11 @@ export interface Settings {
   digest_provider: DigestProvider
   /** 一言を作るモデル。空なら口の既定（claude は haiku、openai は既定が無いので作らない） */
   digest_model: string
+  /**
+   * 許可を Jev で予想するか（#491）。**既定は入**（鍵 JEV_API_KEY が無ければ入でも何も送らないので、鍵を置いた人だけに効く）。
+   * 切ったことだけを覚える（`false` を書く）
+   */
+  jev: boolean
 }
 
 export class SettingsStore {
@@ -34,7 +39,7 @@ export class SettingsStore {
   /** 無ければ既定。壊れていても既定（次の set で書き直される）。読めないキーはそのキーだけ既定に落とす */
   async get(): Promise<Settings> {
     if (this.cache) return this.cache
-    const settings: Settings = { persona: DEFAULT_PERSONA, linear_workspace: '', digest: false, digest_provider: 'claude', digest_model: '' }
+    const settings: Settings = { persona: DEFAULT_PERSONA, linear_workspace: '', digest: false, digest_provider: 'claude', digest_model: '', jev: true }
     try {
       const raw = JSON.parse(await readFile(this.path, 'utf-8')) as Record<string, unknown>
       if (isPersonaId(raw?.persona)) settings.persona = raw.persona
@@ -42,6 +47,7 @@ export class SettingsStore {
       if (raw?.digest === true) settings.digest = true
       if (isDigestProvider(raw?.digest_provider)) settings.digest_provider = raw.digest_provider
       if (isDigestModel(raw?.digest_model)) settings.digest_model = raw.digest_model
+      if (raw?.jev === false) settings.jev = false
     } catch {
       // 無い・壊れている
     }

@@ -490,6 +490,20 @@ export function createApp(
     return pane ? { pane: pane.pane, pid: pane.pid } : null
   }
   /**
+   * この Codex のスレッドを、**SAI の app-server 以外**（端末の TUI・VS Code 拡張や ChatGPT アプリの裏の
+   * `codex app-server --listen`）が握っているか（#329 / #430）。lock は開いているプロセスがいるときだけ数え、
+   * 補欠で記録時の pid も見る。**SAI の app-server が `thread/resume` 済みのもの（`codexApp.holds()`）は自分の持ち物なので false**
+   * （app-server は resume したスレッドの lock をターンが終わっても開いたままにするので、見分けないと自分を「ほか」と数える）。
+   *
+   * **返信の振り分けとレビューの断りが同じ 1 つを見る**（#430）。別々に書いていたので、返信は queue に回すのに
+   * レビューはそのまま `thread/resume` して、生きている TUI が握っている会話を奪っていた
+   */
+  const codexHeldElsewhere = async (session: SessionSummary, raw: string): Promise<boolean> => {
+    if (session.agent !== 'codex') return false
+    if (codexAppEnabled && (codexApp.holds?.(raw) ?? false)) return false
+    return (await isCodexWriterActive(raw)) || (session.pid > 0 && isAlive(session.pid))
+  }
+  /**
    * 端末に打ち込んだ・queue に渡した返信のターンが、送った時刻より後に始まったか（#329。`TerminalReplies.checkDelivery()` が 2 分後に聞く）。
    * Claude は入力の行（UserPromptSubmit → `last_user_ts`）か transcript、Codex は rollout が送ったあとに書かれたかで見る。
    * **材料が無い（一覧に居ない・別のマシン・OpenCode・ファイルが見つからない）ときは届いた扱い**（届いていないと決めつけない）
@@ -906,6 +920,12 @@ export function createApp(
     if (run.running(id) || codexApp.running(id) || opencodeApp.running(id) || launching.has(id) || queue.size(id) > 0) {
       return error(res, 409, 'このセッションはまだ前の返信を処理中です')
     }
+    // **ほかで開いているスレッドは resume しない**（#430）。`review/start` の前に `thread/resume` するので、
+    // 生きている TUI や別の app-server が握っている会話を SAI の app-server が奪ってしまう。返信なら同じ判定で
+    // 端末に打ち込むか queue に回せる（#329）が、レビューは対象（未コミット / ブランチ）を持ち越す口が無いので断る。
+    // 端末のペインは先に見る（0.154.0 の TUI は lock を開かないので、lock だけでは取りこぼす。#417）
+    if (await terminalOf(session)) return error(res, 400, '端末で開いているセッションにはレビューを頼めません（端末の方で頼んでください）')
+    if (await codexHeldElsewhere(session, raw)) return error(res, 400, 'ほかのところ（端末・ほかのアプリ）で開いているセッションにはレビューを頼めません')
     // 比べる相手は差分ビューアと同じ選び方（#289）。見つからないブランチを渡すとターンを 1 本無駄にする
     let base = ''
     if (target === 'baseBranch') {
@@ -1250,10 +1270,8 @@ export function createApp(
     const term = openTerminal
     // Codex は開いているスレッドを exec resume すると active writer と競合する。tmux に打てない場合は
     // app-server の queue へ渡す（別プロセスは短く起動するが、writer を奪わず開いている会話に届く）。
-    // lock は開いているプロセスがいるときだけ数える（残骸は閉じたセッション。#329）。**SAI の app-server が読み込んでいるスレッドは除く**
-    // （app-server 自身が lock を開いているので、見分けないと自分が持っているスレッドへの次の返信を queue に回す）
-    const saiHolds = session.agent === 'codex' && codexAppEnabled && (codexApp.holds?.(raw) ?? false)
-    const codexActive = session.agent === 'codex' && !saiHolds && ((await isCodexWriterActive(raw)) || (session.pid > 0 && isAlive(session.pid)))
+    // 「ほかが握っているか」はレビューと同じ `codexHeldElsewhere()`（SAI の app-server が読み込んでいるスレッドは除く）
+    const codexActive = await codexHeldElsewhere(session, raw)
     // モデルと画像は queue / exec resume の両方で使う。
     const own = await metaStore.get(id)
     const model = own?.model

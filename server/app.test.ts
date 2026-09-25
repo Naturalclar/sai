@@ -413,6 +413,31 @@ test('/api/sessions/<id>', async () => {
   assert.equal((await get('/api/sessions/')).status, 400)
 })
 
+test('/api/sessions/<id>?recent=: 直近の行だけ返し、前の行の数を older に出す。focus はそこまで含める（#477）', async () => {
+  const old = new Date(Date.now() - 10 * 24 * 60 * 60_000)
+  const file = join(feedDir, `${localDate(old.toISOString())}.jsonl`)
+  await writeFile(file, JSON.stringify(row(old, 'S1', { text: '10 日前', user_text: '10 日前の指示' })) + '\n')
+  try {
+    const detail = async (query: string) => (await (await get(`/api/sessions/${encodeURIComponent('S1@kanban')}?days=30${query}`)).json()) as SessionDetailResponse
+    const all = await detail('')
+    assert.deepEqual(all.rows.map((r) => r.text), ['10 日前', 'hi', 'two'], '付けなければ今までどおり全部')
+    assert.equal(all.older, 0)
+    assert.deepEqual(all.older_prompts, [])
+    const recent = await detail('&recent=7')
+    assert.deepEqual(recent.rows.map((r) => r.text), ['hi', 'two'])
+    assert.equal(recent.older, 1)
+    assert.deepEqual(recent.older_prompts, ['10 日前の指示'], '描かない行の入力も ↑ の履歴のために運ぶ')
+    assert.equal(recent.session.turns, all.session.turns, '集計は窓の全部から（絞るのは描く行だけ）')
+    const wider = await detail('&recent=14')
+    assert.equal(wider.older, 0)
+    assert.equal(wider.rows.length, 3)
+    const focused = await detail(`&recent=7&focus=${encodeURIComponent(all.rows[0]!.ts!)}`)
+    assert.equal(focused.rows[0]!.text, '10 日前', '検索の飛び先は落とさない')
+  } finally {
+    await rm(file)
+  }
+})
+
 test('build_stale: dist がソースより古ければ true になり rev も変わる。ビルドし直せば false', async () => {
   const index = join(distDir, 'index.html')
   const src = join(srcDir, 'App.tsx')

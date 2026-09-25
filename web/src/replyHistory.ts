@@ -69,3 +69,13 @@ export function stepHistory(state: HistoryState, dir: 'back' | 'forward', text: 
   if (next === NOT_IN_HISTORY) return { text: state.draft, state: { items, index: NOT_IN_HISTORY, draft: '' } }
   return { text: items[next]!, state: { items, index: next, draft: state.draft } }
 }
+
+/**
+ * 描いている行から作った履歴の後ろに、描いていない前の行の入力（詳細の応答の `older_prompts`。新しい順）を足す（#477）。
+ * 継ぎ目で同じ文が続けば畳む
+ */
+export function withOlder(items: readonly string[], older: readonly string[]): string[] {
+  const out = [...items]
+  for (const text of older) if (text !== out[out.length - 1]) out.push(text)
+  return out
+}

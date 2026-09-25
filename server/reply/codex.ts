@@ -64,6 +64,36 @@ export async function codexWriterActive(session: string, env: NodeJS.ProcessEnv 
   }
 }
 
+/** pid のコマンド行。読めなければ空（`ps` が無い・もう居ない） */
+export type ProcessCommand = (pid: number) => Promise<string>
+
+export const psCommand: ProcessCommand = (pid) =>
+  new Promise((resolve) => {
+    execFile('ps', ['-o', 'command=', '-p', String(pid)], { timeout: 5_000 }, (err, stdout) => resolve(err ? '' : String(stdout).trim()))
+  })
+
+/**
+ * writer lock を握っているプロセス（pid とコマンド行）。queue に渡した返信が届かなかったときの手がかり（#474）。
+ * **握っているのが `codex app-server` なら、tmux の外の共有 app-server**で、どの画面もそのスレッドを開いていなければ
+ * queue に渡した本文はターンにならない。調べられなければ空
+ */
+export async function codexLockHolders(
+  session: string,
+  env: NodeJS.ProcessEnv = process.env,
+  holders: LockHolders = lsofHolders,
+  command: ProcessCommand = psCommand,
+): Promise<{ pid: number; command: string }[]> {
+  try {
+    const pids = (await codexWriterLockHolders(session, env, holders)) ?? []
+    return await Promise.all(pids.map(async (pid) => ({ pid, command: await command(pid) })))
+  } catch {
+    return []
+  }
+}
+
+/** 握っているのが app-server か（TUI ではない）。画面の文言を分ける */
+export const isAppServer = (command: string): boolean => /\bcodex\b.*\bapp-server\b/.test(command)
+
 /** active writer を持つ Codex へ、resume せず app-server 経由でメッセージを足すコマンド。 */
 export function codexQueueCommand(
   session: string,

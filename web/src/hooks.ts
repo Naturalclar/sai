@@ -89,6 +89,11 @@ export interface PollOptions {
    * タブの題名と通知で伝えるため（#231）。チャットやフィードは見ていないので止めたままでよい
    */
   hiddenMs?: number
+  /**
+   * これが変わったときだけ、取り直す前に data を空にする（省略すると deps が変わるたびに空にする）。
+   * セッション画面は「前の 7 日を表示」（#477）で取り直すが、そこで空にするとチャットが作り直されて読んでいた場所を失う
+   */
+  resetKey?: string
 }
 
 /**
@@ -99,7 +104,8 @@ export interface PollOptions {
 export function usePolling<T extends { rev: string }>(fetcher: () => Promise<T>, deps: unknown[], options: PollOptions = {}): Polled<T> {
   const [state, setState] = useState<Polled<T>>({ data: null, error: null, updatedAt: null })
   const lastRev = useRef<string | null>(null)
-  const { hiddenMs } = options
+  const { hiddenMs, resetKey } = options
+  const lastReset = useRef<string | undefined>(undefined)
 
   // deps は呼び出し側が「この値が変わったら取り直す」と決めたもの
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -108,7 +114,8 @@ export function usePolling<T extends { rev: string }>(fetcher: () => Promise<T>,
   useEffect(() => {
     let alive = true
     lastRev.current = null
-    setState({ data: null, error: null, updatedAt: null })
+    if (resetKey === undefined || resetKey !== lastReset.current) setState({ data: null, error: null, updatedAt: null })
+    lastReset.current = resetKey
 
     const tick = async () => {
       if (document.hidden && !hiddenMs) return
@@ -147,7 +154,7 @@ export function usePolling<T extends { rev: string }>(fetcher: () => Promise<T>,
       clearInterval(timer)
       document.removeEventListener('visibilitychange', onVisible)
     }
-  }, [load, hiddenMs])
+  }, [load, hiddenMs, resetKey])
 
   return state
 }

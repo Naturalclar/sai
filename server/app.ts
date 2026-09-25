@@ -65,7 +65,7 @@ import { historyKey, ICON_HISTORY_DIR, ICON_HISTORY_FILE, IconHistory, isHistory
 import { alwaysAllowRule, ruleLabel } from '../shared/approvals.ts'
 import { Approvals, WAIT_MS } from './approvals/approvals.ts'
 import { BuildFreshness } from './local/buildFreshness.ts'
-import { codexQueueCommand, codexWriterActive, runCodexQueue } from './reply/codex.ts'
+import { codexLockHolders, codexQueueCommand, codexWriterActive, isAppServer, runCodexQueue } from './reply/codex.ts'
 import type { CodexQueue } from './reply/codex.ts'
 import { CodexAppServer } from './reply/codexAppServer.ts'
 import type { CodexApp } from './reply/codexAppServer.ts'
@@ -128,7 +128,8 @@ import type { McpTool } from './mcp/protocol.ts'
 import { McpSendLimiter } from './mcp/sendLimit.ts'
 import { SkillStore } from './local/skills.ts'
 import type { Skill } from '../shared/skills.ts'
-import { claudeProjectsDir, codexSessionsDir, UsageStore } from './local/usage.ts'
+import { claudeProjectsDir, codexSessionsDir, tailLines, UsageStore } from './local/usage.ts'
+import { QUEUE_ROLLOUT_TAIL_BYTES, queuedTextArrived, turnInProgress } from '../shared/codexQueue.ts'
 import { ProgressReader, sessionOf } from './local/progress.ts'
 import { agentListFromEnv, backgroundLive, type AgentList, type ClaudeAgent } from './local/claudeAgents.ts'
 import { isRemoteHost } from '../shared/host.ts'
@@ -136,8 +137,9 @@ import { IMAGES_SEGMENT } from '../shared/images.ts'
 import { imageHeaders, imageTable, readSessionImage } from './local/images.ts'
 import { searchRows } from './rows/search.ts'
 import { searchWords } from '../shared/search.ts'
+import { olderPrompts, parseRecent, recentRows } from '../shared/recentRows.ts'
 import { alive, isDescendant, parsePs, RealTmux, realPs, TerminalBusy, TerminalGone, TerminalReplies, typeInto } from './reply/terminal.ts'
-import type { PsFn, Tmux } from './reply/terminal.ts'
+import type { DeliveryAnswer, DeliveryQuery, PsFn, Tmux } from './reply/terminal.ts'
 import type { Runner } from './reply/runner.ts'
 import { Authenticator, tailscaleWhois } from './auth.ts'
 import type { Identity } from './auth.ts'
@@ -492,9 +494,25 @@ export function createApp(
    * Claude は入力の行（UserPromptSubmit → `last_user_ts`）か transcript、Codex は rollout が送ったあとに書かれたかで見る。
    * **材料が無い（一覧に居ない・別のマシン・OpenCode・ファイルが見つからない）ときは届いた扱い**（届いていないと決めつけない）
    */
-  const typedStarted = async (sessions: SessionSummary[], id: string, since: string): Promise<boolean> => {
+  const typedStarted = async (sessions: SessionSummary[], id: string, query: DeliveryQuery): Promise<DeliveryAnswer> => {
+    const { since } = query
     const s = sessions.find((x) => x.id === id)
     if (!s || isRemoteHost(s.host, selfHost()) || (s.agent !== 'claude' && s.agent !== 'codex')) return true
+    // queue に渡した Codex への返信は、**送った本文そのものが rollout に現れたか**で見る（#474）。mtime は「何か書かれた」で
+    // しかなく、受け取り手のいない queue でも別の書き込みで進みうる。rollout が見つからなければ下の mtime の判定に落ちる
+    if (s.agent === 'codex' && query.kind === 'queue') {
+      const raw = sessionOf(s)
+      const rollout = raw ? await progress.codexRollout?.(raw) : ''
+      if (rollout) {
+        const lines = await tailLines(rollout, QUEUE_ROLLOUT_TAIL_BYTES)
+        if (queuedTextArrived(lines, query.text, Date.parse(since))) return true
+        // 宛先がターンの途中なら、本文はそのターンが終わってから流れるかもしれない。決めずに次で聞き直す（#474 のレビュー）
+        if (turnInProgress(lines, Date.now())) return null
+        const holders = await codexLockHolders(raw)
+        const shared = holders.find((h) => isAppServer(h.command))
+        return shared ? `このスレッドはいま tmux の外の共有の Codex app-server（pid ${shared.pid}）が握っています。` : false
+      }
+    }
     // 行の ts は秒までなので、秒に丸めて比べる
     const at = Math.floor(Date.parse(since) / 1000) * 1000
     if (s.agent === 'claude' && s.last_user_ts && Date.parse(s.last_user_ts) >= at) return true
@@ -514,7 +532,10 @@ export function createApp(
     // 答えを返したのにプロセスが終わらない CLI（実測: `opencode run -s`）は、行が届いた時点で終わりにする（#375）。
     // 当てるのは OpenCode だけ（Claude の `-p` と SAI 管理の Codex は普通に終わるので、挙動を変えない）
     for (const id of run.settle?.((rid) => opencodeTurnOf(sessions, rid)) ?? []) await drain(id)
-    await typed.checkDelivery((id, since) => typedStarted(sessions, id, since))
+    for (const miss of await typed.checkDelivery((id, query) => typedStarted(sessions, id, query))) {
+      // 画面の失敗は時間で消えるので、届かなかったことは reply.log にも残す（#474。あとから辿れるように）
+      await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${miss.id} ${miss.kind === 'queue' ? 'queue に渡した返信が届いていない' : '端末に打ち込んだ返信でターンが始まっていない'}: ${miss.reason}\n`).catch(() => {})
+    }
     // OpenCode のサーバ経路も、行が届いた時点で終わりにする（子プロセスが無いので exit は来ない。#382）
     for (const id of opencodeApp.settle((rid) => opencodeTurnOf(sessions, rid))) await drain(id)
     return { ...typed.snapshot(), ...run.snapshot(), ...codexApp.replying(), ...opencodeApp.replying() }
@@ -2593,7 +2614,10 @@ export function createApp(
         // このセッションが一言を切っていれば載せない（#263）
         const own = (await store.rows(days)).filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
         await usageReady
-        const rows = usage.attach(session.meta?.digest_off ? own : digest.attach(own))
+        // 画面は直近のぶんだけ取る（#477。行の多いセッションで描き直しが重く、打鍵が止まる）。一言・使用量を付ける前に絞る
+        const recent = parseRecent(q.get('recent'))
+        const { rows: shown, older, dropped } = recent === null ? { rows: own, older: 0, dropped: [] } : recentRows(own, recent, q.get('focus') ?? '')
+        const rows = usage.attach(session.meta?.digest_off ? shown : digest.attach(shown))
         await drainAll()
         const replying = await replyingOf(sessions)
         const pendingApprovals = await approvalsNow(sessions)
@@ -2608,6 +2632,8 @@ export function createApp(
           rev: revWith(`${sessionsRev}~${me.rev}~${settled}~${question?.asked_at ?? ''}~${bg ? `${bg.attach}:${bg.status}` : ''}`, replying, approvalMapKey(pendingApprovals), false, `${digest.revKey()}|${usage.rev()}`, `${queue.key()}|${agents.key()}`),
           session: withLastSummary([session])[0]!,
           rows,
+          older,
+          older_prompts: olderPrompts(dropped),
           replying,
           queued: queue.snapshot(),
           ...(activity ? { agent: activity } : {}),

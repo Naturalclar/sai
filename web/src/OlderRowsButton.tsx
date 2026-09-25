@@ -5,7 +5,7 @@
 export function OlderRowsButton({ count, days, onMore }: { count: number; days: number; onMore: () => void }) {
   return (
     <div className="older-rows">
-      <button type="button" onClick={onMore}>前の {days} 日を表示（まだ {count} 件）</button>
+      <button type="button" onClick={onMore}>前の {days} 日を表示（残り {count} 件）</button>
     </div>
   )
 }

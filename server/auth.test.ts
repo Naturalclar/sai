@@ -1,6 +1,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { Authenticator, loginFromWhois, tailscaleBins, whoisFromJson } from './auth.ts'
+import { Authenticator, WHOIS_RETRY_MS, WHOIS_STALE_MS, WhoisUnavailable, loginFromWhois, tailscaleBins, tailscaleWhois, whoisFromJson } from './auth.ts'
+import { chmod, mkdtemp, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { WhoisInfo } from './auth.ts'
 import type { IncomingMessage } from 'node:http'
 
@@ -93,5 +96,100 @@ test('identify: whois の結果はアドレスごとにキャッシュする。�
     assert.equal(auth.calls, 4, 'ただし 5 秒だけ')
   } finally {
     Date.now = realNow
+  }
+})
+
+test('identify: 同じアドレスの whois は同時に 1 本だけ（画面を開いた瞬間の同時リクエストで CLI を何本も起こさない）', async () => {
+  let release!: () => void
+  const gate = new Promise<void>((r) => (release = r))
+  const auth = new Authenticator(async () => {
+    await gate
+    return user('me@example.com')
+  })
+  const ok = { 'tailscale-user-login': 'me@example.com', 'x-forwarded-for': '100.64.0.1' }
+  // 一覧・フィード・詳細・手順・アイコン…が一度に来る
+  const pending = Array.from({ length: 12 }, () => auth.identify(req(ok)))
+  release()
+  const got = await Promise.all(pending)
+  assert.equal(auth.calls, 1, '12 本のリクエストで whois は 1 回')
+  assert.ok(got.every((g) => g?.kind === 'tailnet'), '全部同じ答えで通る')
+})
+
+test('identify: whois を聞けなかった（時間切れ）だけなら、直前に確かめた本人をしばらく使い続ける', async () => {
+  let now = 1_000_000
+  const realNow = Date.now
+  Date.now = () => now
+  try {
+    let mode: 'ok' | 'down' | 'other' = 'ok'
+    const auth = new Authenticator(async () => {
+      if (mode === 'down') throw new WhoisUnavailable('時間切れ')
+      return mode === 'ok' ? user('me@example.com') : user('someone@example.com')
+    }, 30_000)
+    const ok = { 'tailscale-user-login': 'me@example.com', 'x-forwarded-for': '100.64.0.1' }
+    assert.equal((await auth.identify(req(ok)))?.kind, 'tailnet')
+
+    // キャッシュが切れたところで whois が時間切れ。前は null を 5 秒覚えて、その間ずっと 401 だった
+    now += 31_000
+    mode = 'down'
+    assert.equal((await auth.identify(req(ok)))?.kind, 'tailnet', '聞けなかっただけなので、さっきの本人のまま通す')
+    const callsAfterFailure = auth.calls
+    assert.equal((await auth.identify(req(ok)))?.kind, 'tailnet')
+    assert.equal(auth.calls, callsAfterFailure, '失敗も短く覚える（毎リクエスト叩き直さない）')
+    now += WHOIS_RETRY_MS + 1
+    await auth.identify(req(ok))
+    assert.equal(auth.calls, callsAfterFailure + 1, '短く後で聞き直す')
+
+    // ずっと聞けないまま WHOIS_STALE_MS を過ぎたら、もう信用しない
+    now = 1_000_000 + WHOIS_STALE_MS + 1
+    assert.equal(await auth.identify(req(ok)), null, '確かめてから時間が経ちすぎたら 401')
+  } finally {
+    Date.now = realNow
+  }
+})
+
+test('identify: whois が「別人」「居ない」と答えたら、前の本人は捨ててすぐ 401（聞けなかったときとは分ける）', async () => {
+  let now = 1_000_000
+  const realNow = Date.now
+  Date.now = () => now
+  try {
+    let answer: WhoisInfo | null = user('me@example.com')
+    const auth = new Authenticator(async () => answer, 30_000)
+    const ok = { 'tailscale-user-login': 'me@example.com', 'x-forwarded-for': '100.64.0.1' }
+    assert.equal((await auth.identify(req(ok)))?.kind, 'tailnet')
+    now += 31_000
+    answer = user('someone@example.com')
+    assert.equal(await auth.identify(req(ok)), null, '別人と答えたら通さない')
+    now += 31_000
+    answer = null
+    assert.equal(await auth.identify(req(ok)), null, '居ないと答えたら通さない')
+    // 一度「居ない」と答えたあとで聞けなくなっても、前の本人には戻らない
+    now += WHOIS_RETRY_MS + 1
+    const auth2 = new Authenticator(async () => {
+      throw new WhoisUnavailable('時間切れ')
+    }, 30_000)
+    assert.equal(await auth2.identify(req(ok)), null, '一度も確かめていなければ、聞けないときは 401')
+  } finally {
+    Date.now = realNow
+  }
+})
+
+test('tailscaleWhois: 時間切れ・非 0 は「聞けなかった」、exit 0 で読めないのは「居ない」', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-whois-'))
+  const bin = join(dir, 'tailscale')
+  const realPath = process.env.PATH
+  process.env.PATH = `${dir}:${realPath ?? ''}`
+  try {
+    // 非 0（デーモンが答えない）
+    await writeFile(bin, '#!/bin/sh\necho "failed to connect to local tailscaled" >&2\nexit 1\n')
+    await chmod(bin, 0o755)
+    await assert.rejects(tailscaleWhois()('100.64.0.1'), WhoisUnavailable)
+    // exit 0 で peer not found（stderr だけ）→「居ない」
+    await writeFile(bin, '#!/bin/sh\necho "peer not found" >&2\nexit 0\n')
+    assert.equal(await tailscaleWhois()('100.64.0.1'), null)
+    // 答えられた
+    await writeFile(bin, `#!/bin/sh\necho '${JSON.stringify({ UserProfile: { LoginName: 'me@example.com' }, Node: { Name: 'pad.tailnet.ts.net.' } })}'\n`)
+    assert.equal((await tailscaleWhois()('100.64.0.1'))?.login, 'me@example.com')
+  } finally {
+    process.env.PATH = realPath
   }
 })

@@ -36,8 +36,24 @@ export interface WhoisInfo {
   caps: CapMap
 }
 
-/** tailnet 側のアドレスから、そのノードの持ち主と capability を引く。引けなければ null */
+/**
+ * tailnet 側のアドレスから、そのノードの持ち主と capability を引く。
+ * **答えが「居ない」なら null、聞けなかった（時間切れ・デーモンが答えない・CLI が無い）なら `WhoisUnavailable` を投げる**。
+ * 2 つを分けるのは、聞けなかっただけのときに「さっき確かめた本人」を捨てないため（下の `Authenticator`）
+ */
 export type Whois = (addr: string) => Promise<WhoisInfo | null>
+
+/** whois を聞けなかった（答えが「居ない」だったのではない） */
+export class WhoisUnavailable extends Error {}
+
+/**
+ * 聞けなかったとき、直前に確かめた本人をどこまで使い続けるか。
+ * **聞けなかっただけで、別人だと分かったわけではない**ので、短い間は同じ本人として通す
+ * （`tailscale whois` は asdf の shim 越しだと 1 回 2 秒かかり、同時に 12 本走ると全部 5 秒の時間切れになった。実測）
+ */
+export const WHOIS_STALE_MS = 5 * 60_000
+/** 引けなかった・聞けなかった結果を覚える時間（デーモンが落ちている間に毎リクエスト叩かない） */
+export const WHOIS_RETRY_MS = 5_000
 
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1'])
 
@@ -84,8 +100,11 @@ export function tailscaleWhois(): Whois {
       execFile(bin, ['whois', '--json', addr], { timeout: 5000, maxBuffer: 1024 * 1024 }, (err, stdout) => {
         if (err) {
           if ((err as NodeJS.ErrnoException).code === 'ENOENT') return reject(err)
-          return resolve(null) // peer not found などは exit 0 で stderr に出るが、非 0 でも「引けない」として扱う
+          // 時間切れ（killed）と非 0 は「聞けなかった」。**「居ない」と決めつけない**
+          // （前はどちらも null にしていて、時間切れがそのまま「whois と一致しない」の 401 になっていた）
+          return reject(new WhoisUnavailable(err.killed ? 'tailscale whois が時間切れ' : `tailscale whois が失敗: ${err.message}`))
         }
+        // exit 0 で読めない（peer not found は stderr に出して exit 0）なら「居ない」
         resolve(whoisFromJson(stdout))
       })
     })
@@ -93,27 +112,36 @@ export function tailscaleWhois(): Whois {
     for (const bin of bins) {
       try {
         return await run(bin, addr)
-      } catch {
+      } catch (err) {
+        if (err instanceof WhoisUnavailable) throw err
         // その実行ファイルが無い。次を試す
       }
     }
-    return null
+    throw new WhoisUnavailable('tailscale の CLI が見つからない')
   }
 }
 
 interface Cached {
   info: WhoisInfo | null
   until: number
+  /** `info` を whois で実際に確かめた時刻（聞けなかったときに使い続けてよいかを決める）。null なら 0 */
+  confirmedAt: number
 }
 
 /**
  * リクエストごとに identify() を呼ぶ。whois の結果はアドレスごとに短くキャッシュする
- * （画面は 3 秒ごとにポーリングするので、毎回デーモンに聞きに行かない）
+ * （画面は 3 秒ごとにポーリングするので、毎回デーモンに聞きに行かない）。
+ *
+ * **同じアドレスの whois は同時に 1 本だけ**（走っている最中に来たリクエストはその答えを待つ）。
+ * 画面を開くと一覧・フィード・詳細・手順・アイコンの画像が一度に来るので、キャッシュが切れた瞬間に
+ * 本数ぶんの `tailscale whois` が同時に走り、遅い CLI では全部時間切れになって 401 が続いていた
  */
 export class Authenticator {
   private readonly whois: Whois
   private readonly ttlMs: number
   private readonly cache = new Map<string, Cached>()
+  /** いま走っている whois（アドレスごとに 1 本） */
+  private readonly inflight = new Map<string, Promise<WhoisInfo | null>>()
   /** テスト用: whois を実際に呼んだ回数 */
   calls = 0
 
@@ -122,15 +150,36 @@ export class Authenticator {
     this.ttlMs = ttlMs
   }
 
-  private async lookup(addr: string): Promise<WhoisInfo | null> {
-    const now = Date.now()
+  private lookup(addr: string): Promise<WhoisInfo | null> {
     const hit = this.cache.get(addr)
-    if (hit && hit.until > now) return hit.info
+    if (hit && hit.until > Date.now()) return Promise.resolve(hit.info)
+    const running = this.inflight.get(addr)
+    if (running) return running
+    const next = this.ask(addr, hit).finally(() => this.inflight.delete(addr))
+    this.inflight.set(addr, next)
+    return next
+  }
+
+  private async ask(addr: string, prev: Cached | undefined): Promise<WhoisInfo | null> {
     this.calls++
-    const info = await this.whois(addr)
-    // 引けなかったときは短く覚える（デーモンが落ちている間に毎リクエスト叩かない）
-    this.cache.set(addr, { info, until: now + (info ? this.ttlMs : Math.min(this.ttlMs, 5_000)) })
-    return info
+    const retry = Math.min(this.ttlMs, WHOIS_RETRY_MS)
+    try {
+      const info = await this.whois(addr)
+      const now = Date.now()
+      // 答えが「居ない」なら短く覚える（それは本当の答えなので、前の本人は捨てる）
+      this.cache.set(addr, { info, until: now + (info ? this.ttlMs : retry), confirmedAt: info ? now : 0 })
+      return info
+    } catch {
+      const now = Date.now()
+      // **聞けなかっただけ**なら、直前に確かめた本人を WHOIS_STALE_MS まで使い続ける（別人だと分かったわけではない）。
+      // 次に聞き直すのは短く後で（デーモンが戻ればすぐ確かめ直す）
+      if (prev?.info && now - prev.confirmedAt < WHOIS_STALE_MS) {
+        this.cache.set(addr, { info: prev.info, until: now + retry, confirmedAt: prev.confirmedAt })
+        return prev.info
+      }
+      this.cache.set(addr, { info: null, until: now + retry, confirmedAt: 0 })
+      return null
+    }
   }
 
   /** 誰か。null なら 401 にする */

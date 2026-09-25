@@ -249,7 +249,20 @@
   .new-session select, .new-session textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: 14px; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; }
   .new-session textarea { min-height: 7em; resize: vertical; }
   .new-session .note { font-size: 12px; color: var(--muted); }
-  .new-session .note.cwd { margin-top: -6px; font-family: var(--mono); overflow-wrap: anywhere; }
+  /* worktree を打って絞る（#489）。選んでいる 1 つは返信の候補メニュー（.mention li.active）と同じ印 */
+  .new-session .field-label { font-size: 12px; color: var(--muted); margin-bottom: -6px; }
+  .new-session .workspace-picker { display: flex; flex-direction: column; gap: 6px; }
+  .new-session .workspace-picker input { width: 100%; box-sizing: border-box; font: inherit; font-size: 14px; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; }
+  .new-session .workspace-picker input:focus { outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent); border-color: var(--accent); }
+  .new-session .workspace-list { list-style: none; margin: 0; padding: 4px 0; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; max-height: 14em; overflow-y: auto; }
+  .new-session .workspace-list:empty { display: none; }
+  .new-session .workspace-list li { display: flex; flex-direction: column; gap: 1px; padding: 5px 12px; cursor: pointer; min-width: 0; font-size: 13px; }
+  .new-session .workspace-list li:hover { background: color-mix(in srgb, var(--accent) 5%, transparent); }
+  .new-session .workspace-list li.active { background: color-mix(in srgb, var(--accent) 10%, transparent); box-shadow: inset 3px 0 var(--accent); }
+  .new-session .workspace-list li.none { color: var(--muted); cursor: default; }
+  .new-session .workspace-list .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .new-session .workspace-list .cwd { font-family: var(--mono); font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .new-session .workspace-list mark { background: color-mix(in srgb, var(--accent) 28%, transparent); color: var(--ink); border-radius: 3px; padding: 0 1px; }
   .new-session .actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
   .new-session .actions button { font: inherit; font-weight: 600; padding: 6px 16px; border: 0; border-radius: 8px; background: var(--accent); color: #fff; cursor: pointer; }
   .new-session .actions button:disabled { opacity: .5; cursor: default; }
@@ -359,7 +372,7 @@
        入力欄が全幅なのは幅に関係なく（下の .reply の定義） */
     .reply .row textarea { font-size: 16px; }
     /* 新しいセッションの画面（#314）も同じ理由で幅の条件でも 16px にする */
-    .new-session select, .new-session textarea { font-size: 16px; }
+    .new-session select, .new-session textarea, .new-session .workspace-picker input { font-size: 16px; }
   }
 
   /* -- タッチ端末: 指で押せる大きさにする。幅ではなく pointer で当てる（タブレットも対象） */
@@ -368,7 +381,7 @@
     /* .reply .row textarea にしているのは、後ろにある基本の `.reply textarea { font: inherit }` に同じ詳細度で負けないため */
     .reply .row textarea, .reply .row .field .ghost, .filters select, .filters input, .sidebar .filters select, header .digest-ctl select, header .digest-ctl .linear-ws { font-size: 16px; }
     /* 新しいセッションの画面（#314）。基本の指定（前の方）と同じ詳細度なので、後ろにあるこちらが勝つ */
-    .new-session select, .new-session textarea { font-size: 16px; min-height: 36px; }
+    .new-session select, .new-session textarea, .new-session .workspace-picker input { font-size: 16px; min-height: 36px; }
     /* 一言の口とモデルの欄（#288）。前の方にある基本の指定と同じ詳細度にして、後ろにあるこちらを勝たせる */
     header .user-menu .menu .digest-engine select, header .user-menu .menu .digest-engine .digest-model { font-size: 16px; min-height: 36px; }
     /* 見出しの select と名前の入力欄は `.pane` を足して詳細度を上げる。この下（ファイルの後ろ）にある基本の

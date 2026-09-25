@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { MODE_LABEL, REPLY_MODES } from '../../shared/permissions.ts'
 import type { ReplyingMap, SessionSummary } from '../../shared/types.ts'
@@ -6,7 +6,9 @@ import { api } from './api'
 import { BackLink } from './BackLink'
 import { modelChoices, MODEL_DEFAULT_LABEL } from './modelChoices'
 import { NewSessionStarting } from './NewSessionStarting'
-import { workspaceChoices, workspaceLabel } from './newSession'
+import { workspaceChoices } from './newSession'
+import { filterWorkspaces } from './workspaceFilter'
+import { WorkspacePicker } from './WorkspacePicker'
 
 interface Props {
   /** 一覧（App のポーリング）の処理中の返信。始めたセッションが最初の行を書く前に落ちたら、ここに failed が載る */
@@ -49,6 +51,9 @@ export function NewSessionView({ replying, now, onOpenSidebar }: Props) {
   const [all, setAll] = useState<{ sessions: SessionSummary[]; host: string } | null>(null)
   const [loadError, setLoadError] = useState('')
   const [from, setFrom] = useState('')
+  // worktree の絞り込み（#489）
+  const [query, setQuery] = useState('')
+  const textRef = useRef<HTMLTextAreaElement>(null)
   const [agent, setAgent] = useState<NewAgent>('claude')
   const [model, setModel] = useState('')
   const [mode, setMode] = useState('')
@@ -80,8 +85,9 @@ export function NewSessionView({ replying, now, onOpenSidebar }: Props) {
     () => modelChoices(agent, [...new Set((all?.sessions ?? []).filter((s) => s.agent === agent).flatMap((s) => s.models))], ''),
     [all, agent],
   )
-  // 選んでいなければ一番新しい worktree
-  const chosen = choices.find((w) => w.from === from) ?? choices[0] ?? null
+  const matches = useMemo(() => filterWorkspaces(choices, query), [choices, query])
+  // 絞った候補の中で選んだもの。選んでいない（か絞って見えなくなった）なら一番上（打っていなければ一番新しい worktree）
+  const chosen = (matches.find((m) => m.workspace.from === from) ?? matches[0])?.workspace ?? null
 
   const start = async () => {
     const body = text.trim()
@@ -139,17 +145,20 @@ export function NewSessionView({ replying, now, onOpenSidebar }: Props) {
             void start()
           }}
         >
-          <label>
-            worktree
-            <select value={chosen?.from ?? ''} onChange={(e) => setFrom(e.target.value)} disabled={choices.length === 0}>
-              {choices.map((w) => (
-                <option key={w.from} value={w.from} title={w.cwd}>
-                  {workspaceLabel(w)}
-                </option>
-              ))}
-            </select>
-          </label>
-          {chosen && <div className="note cwd">{chosen.cwd}</div>}
+          <div className="field-label">worktree</div>
+          <WorkspacePicker
+            query={query}
+            onQuery={(q) => {
+              setQuery(q)
+              // 打ち直したら、選び直しは一番上の当たりから（前に選んだものが下に残っていても引きずらない）
+              setFrom('')
+            }}
+            matches={matches}
+            chosen={chosen?.from ?? null}
+            onSelect={setFrom}
+            onPick={() => textRef.current?.focus()}
+            disabled={choices.length === 0}
+          />
           {all && choices.length === 0 && <div className="notice">始められる worktree がありません。端末でエージェントを 1 ターン回すと、その worktree がここに出ます</div>}
           {loadError && <div className="notice error">一覧を取れませんでした: {loadError}</div>}
           <div className="opts">
@@ -203,6 +212,7 @@ export function NewSessionView({ replying, now, onOpenSidebar }: Props) {
             )}
           </div>
           <textarea
+            ref={textRef}
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={onKeyDown}

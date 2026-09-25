@@ -122,6 +122,8 @@ export class OpencodeServer implements OpencodeApp {
   private child: ChildProcess | null = null
   private starting: Promise<{ url: string; auth: string }> | null = null
   private ready: { url: string; auth: string } | null = null
+  /** `stop()` を呼んだ（SAI が終わるところ）。以後は `serve()` が起こさない */
+  private disposed = false
   private readonly active = new Map<string, Replying>()
   private readonly fetchFn: typeof fetch
   private readonly now: () => number
@@ -288,7 +290,14 @@ export class OpencodeServer implements OpencodeApp {
     return { todos, children }
   }
 
+  /**
+   * 落として、**以後は起こさない**（#457）。SAI が終わるときに `createApp()` の `dispose()` から呼ばれる。
+   * C-c のあとも接続が閉じるまで（最大 `FORCE_EXIT_MS`）サーバは動いていて、その間に処理中のリクエスト
+   * （`/skills` / `/models`）や返信の子の終わり（`drain()` → `start()`）が `serve()` を呼ぶと、
+   * 新しい `opencode serve` が起きて、SAI が終わった直後に ppid 1 の孤児になる（レビューの指摘）
+   */
   stop(): void {
+    this.disposed = true
     this.child?.kill()
     this.child = null
     this.ready = null
@@ -297,6 +306,8 @@ export class OpencodeServer implements OpencodeApp {
 
   /** 立っていれば使い回す。落ちていたら起こし直す */
   private async serve(): Promise<{ url: string; auth: string }> {
+    // 止めたあとは起こさない（起こすと、終わりかけの SAI の子として孤児になる。#457）
+    if (this.disposed) throw new Error('SAI を止めているところなので、opencode serve は起こしません')
     if (this.serveFn) return this.serveFn()
     if (this.ready && this.child && this.child.exitCode === null) return this.ready
     this.ready = null

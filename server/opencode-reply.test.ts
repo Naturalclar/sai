@@ -379,3 +379,19 @@ test('POST /api/sessions/new: SAI_OPENCODE_SERVER=0 では OpenCode を始めな
     await new Promise<void>((r) => off.close(() => r()))
   }
 })
+
+test('dispose: SAI が起こした opencode serve を落とす（#457。main.ts の shutdown が呼ぶ）', () => {
+  let stopped = 0
+  const handler = createApp(
+    new FeedStore(dir),
+    join(dir, 'dist'),
+    runner,
+    new Approvals(),
+    new BuildFreshness(join(dir, 'dist'), [], 0),
+    undefined,
+    new Authenticator(async () => null),
+    { tmux: { run: async () => { throw new Error('no tmux') } }, ps: async () => '', replies: new TerminalReplies(), opencodeApp: { ...opencodeApp, stop: () => void stopped++ } },
+  )
+  handler.dispose()
+  assert.equal(stopped, 1)
+})

@@ -334,6 +334,12 @@ export function selfUrl(req: Pick<IncomingMessage, 'socket'>): string {
 
 export type Handler = (req: IncomingMessage, res: ServerResponse) => Promise<void>
 
+/** `createApp()` の戻り。リクエストを捌く関数に、終わるときの後始末（#457）が付いている */
+export type App = Handler & {
+  /** SAI が起こした長寿命の子（`opencode serve`）を落とす。`main.ts` の `shutdown()` が 1 度だけ呼ぶ */
+  dispose(): void
+}
+
 /** 返信を 1 本起動するときの指定。`POST .../reply` と、預かった返信を回す drain の両方が作る（#305） */
 interface LaunchOptions {
   days: number
@@ -408,7 +414,7 @@ export function createApp(
   // 生きている Claude のセッション（#418）。`claude agents --json` を叩くだけで、聞けなければ何も変えない
   // （名前は `agents`（#310 のセッション同士のメッセージ）と紛れるので `claudeAgents`）
   claudeAgents: AgentList = agentListFromEnv(),
-): Handler {
+): App {
   const distRoot = resolve(distDir)
   // 端末に打ち込んだ返信の「処理中」。子プロセスの方（run）とは別に持ち、画面には合わせて出す
   const typed = terminal.replies ?? new TerminalReplies()
@@ -2300,7 +2306,19 @@ export function createApp(
     }
   }
 
-  return async (req, res) => {
+  /**
+   * SAI が起こした長寿命の子を終わらせる（#457）。`main.ts` の `shutdown()` が呼ぶ。
+   *
+   * 落とすのは **`opencode serve`** だけ。実測（2026-09-25）: SAI に SIGTERM を送ると、`opencode serve` は
+   * **ppid 1 の孤児になって走り続ける**（保留中の許可もその中に残り、#422 の「答える相手が消えた待ち」を作る）。
+   * **`codex app-server --stdio` は自分で終わる**（親が死ぬと stdin のパイプが閉じるため。同じ実測で消えていた）ので触らない。
+   * **返信の子（`claude -p` など）は巻き込まない**（別の pgid で detached。次のサーバが `replying.json` から引き取る。#296）
+   */
+  const dispose = (): void => {
+    opencodeApp.stop()
+  }
+
+  const handler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     // 全リクエストに先に掛ける。tailnet 経由（Serve のヘッダ付き）は whois で本人を確かめ、合わなければ 401。
     // ヘッダ無しはループバックからの直アクセスだけ通す
     let who: Identity | null
@@ -2708,4 +2726,5 @@ export function createApp(
       return error(res, 500, err instanceof Error ? `${err.name}: ${err.message}` : String(err))
     }
   }
+  return Object.assign(handler, { dispose })
 }

@@ -87,6 +87,11 @@ export interface Closable {
 
 export interface ShutdownOptions {
   exit?: (code: number) => void
+  /**
+   * 終わる前に、SAI が起こした長寿命の子を落とす（#457。`createApp()` の `dispose`）。
+   * **1 回目の C-c の頭で 1 度だけ**呼ぶ（接続が閉じるのを待つ前。`FORCE_EXIT_MS` で諦めて終わる筋でも必ず通るように）
+   */
+  onStop?: () => void
   closeAllMs?: number
   forceExitMs?: number
 }
@@ -115,6 +120,11 @@ export function shutdown(server: Closable, opts: ShutdownOptions = {}): () => vo
   return () => {
     if (stopping) return exit(0)
     stopping = true
+    try {
+      opts.onStop?.()
+    } catch {
+      // 子を落とせなくても SAI 自身は必ず終わる（#296）
+    }
     server.close(() => exit(0))
     server.closeIdleConnections()
     setTimeout(() => server.closeAllConnections(), closeAllMs).unref()
@@ -136,7 +146,7 @@ export function main(argv: string[]): void {
   server.listen(port, host, () => {
     console.error(`SAI  http://${host}:${port}/   feed=${feedDir}`)
   })
-  const stop = shutdown(server)
+  const stop = shutdown(server, { onStop: app.dispose })
   process.on('SIGINT', stop)
   process.on('SIGTERM', stop)
 }

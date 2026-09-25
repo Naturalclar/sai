@@ -23,6 +23,8 @@ import { parseArgs } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { DEFAULT_PORT, parsePort } from '../shared/port.ts'
 import { createApp } from './app.ts'
+import { jevFromEnv } from './approvals/jev.ts'
+import { RealTmux, realPs } from './reply/terminal.ts'
 import { FeedStore } from './rows/store.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -139,7 +141,13 @@ export function main(argv: string[]): void {
     process.exit(2)
   }
   const { port, host, feedDir } = parsed.options
-  const app = createApp(new FeedStore(feedDir), DIST_DIR)
+  // 端末の口（8 つ目）だけ既定を上書きして、許可の確率を聞く Jev の口を渡す（#491）。**環境の JEV_API_KEY から組むのはここだけ**
+  // （createApp の既定は「送らない」。テストが本物の Jev に送らないように）。間の引数は undefined で既定のまま
+  const app = createApp(new FeedStore(feedDir), DIST_DIR, undefined, undefined, undefined, undefined, undefined, {
+    tmux: new RealTmux(),
+    ps: realPs,
+    jev: jevFromEnv(),
+  })
   const server = createServer((req, res) => {
     void app(req, res)
   })

@@ -671,6 +671,11 @@ export interface Approval {
   dialog?: TerminalDialog
   /** Codex app-server がこのrequestで提示した決定だけ。idから実際のdecisionを引くのはサーバ */
   decisions?: ApprovalDecision[]
+  /**
+   * 許可して問題なさそうかを Jev で予想した確率（#491。0..1）。**聞いていない・まだ届いていない・聞けなかったときは省略**
+   * （`shared/jev.ts`。自動で答えには使わない）
+   */
+  jev?: number
 }
 
 export interface ApprovalDecision {
@@ -1052,6 +1057,10 @@ export interface SettingsResponse {
   model: string
   /** Linear の workspace（URL の linear.app/<workspace>/ の部分）。一言の中の PGR-123 のような識別子のリンク先。空なら組まない */
   linear_workspace: string
+  /** 許可を Jev で予想するか（#491。settings.json の `jev`。既定は入） */
+  jev_on: boolean
+  /** Jev に送れるか（サーバの環境に `JEV_API_KEY` があるか）。無ければ入でも何も送らない */
+  jev_ready: boolean
 }
 
 /** 一言を作る口。`claude`（`claude -p`。既定）か `openai`（OpenAI 互換の `/v1/chat/completions`。ローカルの LLM はこちら） */
@@ -1068,6 +1077,8 @@ export interface SettingsRequest {
   digest_provider?: DigestProvider
   /** 一言を作るモデル。空文字で「口の既定」 */
   digest_model?: string
+  /** 許可を Jev で予想するか（#491） */
+  jev?: boolean
 }
 
 export interface SessionFilters {

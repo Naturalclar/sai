@@ -339,3 +339,30 @@ test('abort: サーバが立っていなければ起こさずに false（#392）
   // `serveFn` を渡さない = 本物の spawn を通る実装。`live()` は立っているものだけを見るので何も起こさない
   assert.equal(await new OpencodeServer().abort('S1@r'), false)
 })
+
+test('abort: 回していたのにサーバがもう居なければ、処理中から外して止まった扱いにする（#488 のレビュー）', async () => {
+  const server: Server = createServer((req, res) => {
+    req.resume()
+    req.on('end', () => {
+      res.writeHead(204)
+      res.end()
+    })
+  })
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+  const addr = server.address()
+  const base = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`
+  let alive = true
+  try {
+    const app = new OpencodeServer(fetch, Date.now, async () => {
+      if (!alive) throw new Error('opencode serve がもう居ない')
+      return { url: base, auth: 'Basic dGVzdA==' }
+    })
+    await app.start({ id: 'S1@r', session: 'ses_abc', text: '長いターン' })
+    alive = false
+    // false を返すと画面は「起動した直後なので止められない」の 409 になり、効かない「止める」と「処理中」が残り続けた
+    assert.equal(await app.abort('S1@r'), true)
+    assert.equal(app.running('S1@r'), false)
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()))
+  }
+})

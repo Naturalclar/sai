@@ -205,9 +205,15 @@ export class OpencodeServer implements OpencodeApp {
   async abort(id: string): Promise<boolean> {
     const session = this.sessions.get(id)
     if (!session || !this.active.has(id)) return false
-    // 止めるためだけにサーバは起こさない（立っていないなら、回しているターンももう無い）
-    const live = await this.live()
-    if (!live) return false
+    // 止めるためだけにサーバは起こさない。**立っていない（死んだ・落とした）なら、そのターンももう回っていない**ので、
+    // 処理中から外して止まった扱いにする（false を返すと「起動した直後なので止められない」の 409 になり、
+    // 効かない「止める」と「処理中」が残り続ける。#488 のレビュー）
+    const live = await this.live().catch(() => null)
+    if (!live) {
+      this.active.delete(id)
+      this.sessions.delete(id)
+      return true
+    }
     const res = await this.fetchFn(`${live.url}/session/${encodeURIComponent(session)}/abort`, {
       method: 'POST',
       headers: { authorization: live.auth },

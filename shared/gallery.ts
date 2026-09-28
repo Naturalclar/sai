@@ -17,8 +17,8 @@ import type { FeedRow, GalleryItem } from './types.ts'
 export type { GalleryItem }
 
 
-/** 一覧に並べる上限（新しい順。画像の多いセッションで画面を埋めない） */
-export const GALLERY_MAX = 60
+/** 返す上限（新しい順）。発言ごとの下に出すので、古い発言の画像を落とさない程度に大きく（#507） */
+export const GALLERY_MAX = 500
 
 const IMAGE_EXT = /\.(?:png|jpe?g|gif|webp)$/i
 /** 地の文の絶対パス（空白・引用符・括弧・バッククォート・和文の句読点で切れる）。末尾の英字の句読点は落とす */
@@ -79,23 +79,26 @@ export function mergeGallery(items: readonly GalleryItem[]): GalleryItem[] {
   return [...first.values()].sort((a, b) => ms(b.at) - ms(a.at)).slice(0, GALLERY_MAX)
 }
 
-/** チャットに発言として出る行の種類（飛び先にしてよい行） */
-const ON_SCREEN = new Set(['turn', 'resume', 'waiting'])
+/**
+ * その側のバブルが出る行か。自分の入力は再開の行とターン完了の行の `user_text`、エージェントはターン完了の行の返答と待ちの行。
+ * `SubagentStop` などの other・`入力待ち` の idle・終わりの行は描かないので、そこに付けても出ない（#505 のレビュー）
+ */
+function hasBubble(r: FeedRow, from: GalleryItem['from']): boolean {
+  const kind = eventKind(r.event, r.text)
+  if (from === 'user') return (kind === 'resume' || kind === 'turn') && !!r.user_text
+  return kind === 'turn' || kind === 'waiting'
+}
 
 /**
- * transcript の画像の時刻 → 飛び先の行の `ts`。**その秒以降で一番古い行**（端末で貼った画像は入力の行と同じ秒、
+ * transcript の画像の時刻 → 付ける行の `ts`。**その秒以降で一番古い、その側のバブルが出る行**（端末で貼った画像は入力の行と同じ秒、
  * Read で開いた画像はそのターンの完了の行が後に来る）。行の `ts` は秒までなので、画像の時刻を秒に丸めてから比べる
  */
-export function rowTsAtOrAfter(rows: readonly FeedRow[], at: string): string {
+export function rowTsAtOrAfter(rows: readonly FeedRow[], at: string, from: GalleryItem['from'] = 'agent'): string {
   const floor = Math.floor(ms(at) / 1000) * 1000
   let best = ''
   let bestMs = Infinity
   for (const r of rows) {
-    // チャットに発言として出る行だけ（`SubagentStop` などの other・`入力待ち` の idle・終わりの行は描かないので、飛んでも着かない。#505 のレビュー）
-    const kind = eventKind(r.event, r.text)
-    if (!ON_SCREEN.has(kind)) continue
-    // 入力の文が無い再開の行（古い形）はバブルにならない
-    if (kind === 'resume' && !r.user_text) continue
+    if (!hasBubble(r, from)) continue
     const t = ms(String(r.ts ?? ''))
     if (t >= floor && t < bestMs) {
       best = String(r.ts)
@@ -103,4 +106,24 @@ export function rowTsAtOrAfter(rows: readonly FeedRow[], at: string): string {
     }
   }
   return best
+}
+
+/** 発言のバブルの鍵（#507）。行の `ts` と側で 1 つのバブルが決まる（`Chat` の `data-ts` / `data-side` と同じ組） */
+export const bubbleKey = (ts: string, from: GalleryItem['from']): string => `${ts}|${from}`
+
+/**
+ * 発言のバブルの下に足す画像（#507）。**バブルの中にもう出ているものは除く**: 返答の本文の画像（#321。`MarkdownImage`）と
+ * SAI から添えた画像（`AttachedImages`）。残るのは、自分の入力に書いた画像のパスと、transcript の画像（端末で貼ったもの・Read で開いたもの）。
+ * 並びは古い順（バブルの中で読む順）
+ */
+export function imagesByBubble(items: readonly GalleryItem[]): Map<string, GalleryItem[]> {
+  const out = new Map<string, GalleryItem[]>()
+  for (const item of [...items].sort((a, b) => ms(a.at) - ms(b.at))) {
+    if (!item.ts || item.source === 'attachment' || (item.source === 'text' && item.from === 'agent')) continue
+    const key = bubbleKey(item.ts, item.from)
+    const list = out.get(key)
+    if (list) list.push(item)
+    else out.set(key, [item])
+  }
+  return out
 }

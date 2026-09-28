@@ -34,7 +34,7 @@ import { headName, headTags } from './headTags'
 import { useNarrow } from './useNarrow'
 import { useDiffSummary } from './useDiffSummary'
 import { useGallery } from './useGallery'
-import { SessionGallery } from './SessionGallery'
+import { imagesByBubble } from '../../shared/gallery.ts'
 import { hasDiff } from './diffCount'
 import type { PaneProps } from './App'
 
@@ -96,8 +96,9 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
   const blocked = s ? replyBlockedReason(s, data?.host ?? '') : ''
   // 差分ボタンに出す行数と PR 番号（#211）。ポーリングには載せず、開いたときと新しいターンが記録されたときだけ取る
   const summary = useDiffSummary(s?.id, s?.last_turn_ts)
-  // 会話に出てきた画像（#504）。差分と同じく、開いたときと新しい発言が記録されたときだけ取る
+  // 会話に出てきた画像（#504）。差分と同じく、開いたときと新しい発言が記録されたときだけ取り、出てきた発言のバブルの下に出す（#507）
   const gallery = useGallery(s?.id, `${s?.last_turn_ts ?? ''}|${s?.last_user_ts ?? ''}`)
+  const bubbleImages = useMemo(() => imagesByBubble(gallery), [gallery])
 
   // 狭い画面では見出しを「← 名前 状態の印 ⋯」と題名 1 行に畳み、詳しい情報と操作は ⋯ のパネルへ（#274。
   // 見出しだけで 283px あり、スクロールしない場所なのでチャットが画面の 1/3 を切っていた）
@@ -155,6 +156,7 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
           // 長い本文は最初から開いた状態で出す（#369。フィードと揃える。畳むのはボタン 1 つ）
           longOpen
           focusTs={focusTs}
+          images={bubbleImages}
           {...(focusSide ? { focusSide } : {})}
           {...(data.question ? { question: data.question } : {})}
           trailer={
@@ -184,7 +186,6 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
               {/* このセッションから別のセッションへのメッセージ（#311）。送ったことがあるか止めているときだけ */}
               {data.agent && <AgentActivityBar id={id} activity={data.agent} now={now} />}
               {data.background && <BackgroundAttachBar background={data.background} />}
-              <SessionGallery id={id} items={gallery} />
             </>
           }
         />

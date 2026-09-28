@@ -684,16 +684,25 @@
   .body a.md-img-dl { text-decoration: none; }
   .md-img-dl svg { flex: none; width: 13px; height: 13px; }
   .msg .md-images { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
-  /* セッションに出てきた画像の一覧（#504）。会話の下に新しい順のサムネイル */
-  .session-gallery { margin: 12px 0 4px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
-  .session-gallery .gallery-head { background: none; border: 0; padding: 0; color: var(--muted); font: inherit; font-size: 12px; cursor: pointer; }
-  /* 1 行で横に流す（画像の多いセッションで会話を押し流さない） */
-  .session-gallery .gallery-grid { display: flex; gap: 8px; margin-top: 8px; overflow-x: auto; padding-bottom: 4px; }
-  .gallery-item { margin: 0; display: flex; flex-direction: column; gap: 2px; flex: none; width: 88px; }
-  .gallery-item img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 6px; border: 1px solid var(--line); background: var(--chip); }
-  .gallery-item figcaption { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .gallery-item figcaption a { color: var(--accent); text-decoration: none; }
-  .gallery-missing { aspect-ratio: 1; display: flex; flex-direction: column; justify-content: center; font-size: 11px; overflow: hidden; }
+  /* 発言のバブルの下に足す画像（#507。端末で貼った画像・Read で開いた画像など）。押すとライトボックス */
+  .msg .msg-images { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .msg .msg-images img { display: block; width: 96px; height: 96px; object-fit: cover; border-radius: 6px; border: 1px solid var(--line); background: var(--chip); cursor: zoom-in; }
+  /* ページの中で画像を大きく 1 枚（#507） */
+  .lightbox-backdrop { background: rgba(0, 0, 0, 0.82); }
+  .lightbox { display: flex; flex-direction: column; width: min(96vw, 1400px); max-height: 94vh; color: #fff; }
+  .lightbox-head { display: flex; align-items: center; gap: 10px; padding: 6px 4px; font-size: 13px; }
+  .lightbox-head .lightbox-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lightbox-head .lightbox-count { color: #bbb; }
+  .lightbox-head .lightbox-dl { color: #fff; display: inline-flex; }
+  .lightbox-head .lightbox-dl svg { width: 18px; height: 18px; }
+  .lightbox-head .iconbtn { color: #fff; }
+  .lightbox-stage { position: relative; display: flex; align-items: center; justify-content: center; min-height: 0; flex: 1; }
+  .lightbox-stage img { max-width: 100%; max-height: calc(94vh - 48px); object-fit: contain; border-radius: 6px; background: #111; }
+  .lightbox-nav { position: absolute; top: 50%; transform: translateY(-50%); width: 44px; height: 64px; border: 0; border-radius: 8px; background: rgba(0, 0, 0, 0.45); color: #fff; font-size: 32px; cursor: pointer; }
+  .lightbox-nav.prev { left: 4px; }
+  .lightbox-nav.next { right: 4px; }
+  .lightbox-nav:disabled { opacity: 0.25; cursor: default; }
+  .md-img img, .attached img { cursor: zoom-in; }
   .msg .body.clamped { max-height: 9.5em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent); }
   .msg .more { font-size: 12px; color: var(--accent); cursor: pointer; background: none; border: 0; padding: 0; font-family: inherit; }
   .msg .empty-text { color: var(--muted); font-style: italic; }

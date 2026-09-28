@@ -18,6 +18,7 @@ import type {
   SessionDiffResponse,
   SearchResponse,
   SessionDiffSummaryResponse,
+  GalleryResponse,
   SessionFilters,
   SessionIconResponse,
   IconHistoryResponse,
@@ -36,7 +37,7 @@ import type {
 } from '../../shared/types.ts'
 import type { DigestFeedbackReason, DigestFeedbackRequest, DigestFeedbackResponse } from '../../shared/digestFeedback.ts'
 
-export type { Agent, FeedRow, SessionSource, SessionSummary, SessionMeta, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, QueuedReply, ReplyQueue, ReplyQueueMap, ReplyQueueResponse, AgentActivity, AgentActivityMessage, AgentStopResponse,Approval, ApprovalMap, ApprovalAnswer, TerminalDialog, Profile, PersonaId, SettingsResponse, SettingsRequest, Viewer, SessionPermissionsResponse, SessionProgressResponse, ProgressStep, SessionDiffResponse, SessionDiffSummaryResponse, SearchResponse, SearchHit, DiffPr, DiffSection, DiffFileStat, AttachmentResponse, UsageResponse, UsageWindow, CodexUsage, ClaudeUsage } from '../../shared/types.ts'
+export type { Agent, FeedRow, SessionSource, SessionSummary, SessionMeta, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, QueuedReply, ReplyQueue, ReplyQueueMap, ReplyQueueResponse, AgentActivity, AgentActivityMessage, AgentStopResponse,Approval, ApprovalMap, ApprovalAnswer, TerminalDialog, Profile, PersonaId, SettingsResponse, SettingsRequest, Viewer, SessionPermissionsResponse, SessionProgressResponse, ProgressStep, SessionDiffResponse, SessionDiffSummaryResponse, GalleryResponse, GalleryItem, SearchResponse, SearchHit, DiffPr, DiffSection, DiffFileStat, AttachmentResponse, UsageResponse, UsageWindow, CodexUsage, ClaudeUsage } from '../../shared/types.ts'
 
 /**
  * `PUT /api/sessions/<id>/meta` のボディ。`SessionMeta` の一部を重ねる。
@@ -179,6 +180,8 @@ export const api = {
     getJSON<SessionDiffResponse>(`/api/sessions/${encodeURIComponent(id)}/diff${base ? `?base=${encodeURIComponent(base)}` : ''}`),
   /** 差分の大きさと PR 番号だけ（本文は作らない）。入力欄のボタンが開く前に出す（#211） */
   diffSummary: (id: string) => getJSON<SessionDiffSummaryResponse>(`/api/sessions/${encodeURIComponent(id)}/diff?summary=1`),
+  /** そのセッションに出てきた画像（#504）。開いたときと新しいターンが記録されたときだけ取る */
+  gallery: (id: string) => getJSON<GalleryResponse>(`/api/sessions/${encodeURIComponent(id)}/gallery`),
   /** 処理中のターンがいま何をしているか（#302）。処理中のセッションを出している間だけ取る（一覧のポーリングには乗せない） */
   progress: (id: string) => getJSON<SessionProgressResponse>(`/api/sessions/${encodeURIComponent(id)}/progress`),
   /** そのセッションの cwd に効いている許可ルール。画面が開いたときだけ取る（ポーリングには乗せない） */

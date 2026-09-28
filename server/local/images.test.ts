@@ -31,13 +31,14 @@ after(async () => {
   await rm(dir, { recursive: true, force: true })
 })
 
-test('imageTable: ターン完了の行の本文だけから拾い、鍵で引ける。同じパスは新しい行の cwd を使う', () => {
+test('imageTable: ターン完了の行の本文と自分の入力（#504）から拾い、鍵で引ける。待ちの行は見ない。同じパスは新しい行の cwd を使う', () => {
   const t = new Date()
   const table = imageTable(
     [
       row(t, 'S', { cwd: '/old', text: '[a.png](docs/a.png)' }),
       row(t, 'S', { event: 'PermissionRequest', text: '許可待ち: Read: ![w](waiting.png)' }),
       row(t, 'S', { text: 'hi', user_text: '![u](typed.png)' }),
+      row(t, 'S', { event: 'UserPromptSubmit', text: '', user_text: 'この画像を見て: /abs/shot.png' }),
       row(t, 'S', { cwd: '/new', text: 'また [a.png](docs/a.png)' }),
       row(t, 'S', { cwd: '', text: '![b](b.png)' }),
     ],
@@ -46,8 +47,9 @@ test('imageTable: ターン完了の行の本文だけから拾い、鍵で引�
   assert.deepEqual(table.get(imageKey('docs/a.png')), { src: 'docs/a.png', cwd: '/new' })
   assert.deepEqual(table.get(imageKey('b.png')), { src: 'b.png', cwd: '/session' }, '行に cwd が無ければセッションの cwd')
   assert.equal(table.get(imageKey('waiting.png')), undefined, '待ちの行の要約は見ない')
-  assert.equal(table.get(imageKey('typed.png')), undefined, '自分の入力は見ない')
-  assert.equal(table.size, 2)
+  assert.equal(table.get(imageKey('typed.png'))?.src, 'typed.png', '自分の入力の画像の参照も配る表に入る（#504）')
+  assert.equal(table.get(imageKey('/abs/shot.png'))?.src, '/abs/shot.png', '入力の行の地の文のパスも入る')
+  assert.equal(table.size, 4)
 })
 
 const status = async (src: string, max?: number) => {

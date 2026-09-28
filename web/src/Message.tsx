@@ -15,6 +15,8 @@ import { QuestionPreview } from './QuestionPreview'
 import { ClippedNote } from './ClippedNote'
 import { TurnUsageTag } from './TurnUsageTag'
 import { MessageMenu, type MessageMenuProps } from './MessageMenu'
+import { MessageImages } from './MessageImages'
+import type { GalleryItem } from './api'
 import type { MessageSide } from './hooks.ts'
 import type { AskQuestion } from '../../shared/approvals.ts'
 import type { TurnUsage } from '../../shared/turnUsage.ts'
@@ -76,6 +78,8 @@ interface Props {
   side?: MessageSide
   /** 発言ごとの「⋯」（#503。リンクと本文をコピー）。待ちのバブルには出さない */
   menu?: MessageMenuProps
+  /** バブルの中に出ていない、この発言の画像（#507。端末で貼った画像・Read で開いた画像など）。セッション画面だけ */
+  images?: GalleryItem[]
   /** 差分を開くボタン（#280。フィードで、いまのブランチの PR に触れているバブルだけ）。無ければ出さない */
   diff?: DiffButtonProps
   /** 本文が record.py に切られている（#358）。末尾に「ここで切れています」を出す */
@@ -90,7 +94,7 @@ interface Props {
 }
 
 /** バブル1つ分の本文。長ければ折りたたんで「もっと見る」を付ける */
-export function Message({ ts, text: raw, markdown, waiting, questions, resolved, thinking, thinkingOpen = false, summary, digestKey, model, usage, remote, sourceAsk = '', linear, found = false, utteranceKey, side, menu, diff, clipped = false, thinkingClipped = false, defaultOpen = false }: Props) {
+export function Message({ ts, text: raw, markdown, waiting, questions, resolved, thinking, thinkingOpen = false, summary, digestKey, model, usage, remote, sourceAsk = '', linear, found = false, utteranceKey, side, menu, images, diff, clipped = false, thinkingClipped = false, defaultOpen = false }: Props) {
   // 自分の入力に添えた画像は、パスの文字列ではなくサムネイルで出す（本文の末尾に足してある。shared/attachments.ts）
   const { body: text, urls } = markdown ? { body: raw, urls: [] as string[] } : splitAttachments(raw)
   // 長い本文を開いているか。#365 の画面（フィード）では最初から開いた状態で始める。
@@ -137,6 +141,7 @@ export function Message({ ts, text: raw, markdown, waiting, questions, resolved,
         </div>
         {/* 詳細を開いたら本文の中に出るので、ここでは二重に出さない */}
         {!details && <SourceImages text={text} />}
+        {images && <MessageImages items={images} />}
         {details && (
           <div className="details" ref={detailsRef}>
             <div className={`body${long && !open ? ' clamped' : ''}`} ref={bodyRef}>{markdown ? <Markdown text={text} /> : text}</div>
@@ -165,6 +170,7 @@ export function Message({ ts, text: raw, markdown, waiting, questions, resolved,
         urls.length === 0 && <div className="empty-text">(本文なし)</div>
       )}
       <AttachedImages urls={urls} />
+      {images && <MessageImages items={images} />}
       {clipped && <ClippedNote />}
       {long && (
         <button type="button" className="more" onClick={() => setOpen((v) => !v)} ref={moreRef}>

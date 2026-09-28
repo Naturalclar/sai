@@ -74,7 +74,7 @@ test('一覧に返答の画像・自分の入力の画像・端末で貼った�
     assert.ok(Buffer.from(await res.arrayBuffer()).equals(PNG))
   }
   const pasted = items.find((i) => i.source === 'transcript')!
-  assert.ok(pasted.ts, '貼った画像も発言へ飛べる')
+  assert.ok(pasted.ts, '貼った画像も付ける行がある（自分の入力のバブル）')
   assert.equal(pasted.name, '貼った画像')
 })
 

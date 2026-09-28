@@ -5,6 +5,9 @@ import { isRemoteHost } from '../../shared/host.ts'
 import { sessionImageUrl } from '../../shared/images.ts'
 import { digestKey } from '../../shared/digestFeedback.ts'
 import { ImageSourceContext } from './imageContext'
+import { LightboxProvider } from './LightboxProvider'
+import { bubbleKey } from '../../shared/gallery.ts'
+import type { GalleryItem } from './api'
 import type { FeedRow, Profile, SessionSummary } from './api'
 import { hm } from './format'
 import { groupRows, speakerLabel } from './chatGroups.ts'
@@ -78,6 +81,11 @@ interface Props {
    * 選択肢を読むだけで出す（`terminalQuestion.ts` の `questionsFor()`）。セッション画面だけが渡す
    */
   question?: PendingQuestion
+  /**
+   * バブルの下に足す画像（#507。`shared/gallery.ts` の `imagesByBubble()`。鍵は `bubbleKey(ts, 自分 = user / 返答 = agent)`）。
+   * セッション画面だけが渡す
+   */
+  images?: ReadonlyMap<string, GalleryItem[]>
 }
 
 /**
@@ -91,7 +99,7 @@ function flash(el: HTMLElement) {
   window.setTimeout(() => el.classList.remove('found'), JUMP_FLASH_MS)
 }
 
-export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_SESSIONS, trailer, showThinking = false, thinkingOpen = false, longOpen = false, profile, linear = '', focusTs = '', focusSide: askedSide, diffs, jumpTo = null, question }: Props) {
+export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_SESSIONS, trailer, showThinking = false, thinkingOpen = false, longOpen = false, profile, linear = '', focusTs = '', focusSide: askedSide, diffs, jumpTo = null, question, images }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
   // 最後に最下部へ送ったときの scrollHeight。中身の高さが変わったときだけ送るため（#344）
@@ -192,7 +200,9 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
   // 離れている間に増えた行。フィルタが変わって行が減ることもあるので 0 で止める。trailer（仮バブル）は数えない
   const arrived = atBottom || awayAt === null ? 0 : Math.max(0, rows.length - awayAt)
 
+  // 画像はページの中のライトボックスで開く（#507）。バブルの中の画像・添付・バブルの下の画像のどれも
   return (
+    <LightboxProvider>
     <div className="chat-wrap">
       <div className="chat" ref={ref} onScroll={onScroll}>
         {leader}
@@ -229,6 +239,8 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
                       // 本文の画像はサーバが配る（#321）。別のマシンのセッションのファイルはこちらに無いので、印と名前だけ
                       const imageUrl = u.speaker !== 'me' && !isRemoteHost(g.host, selfHost) ? (src: string) => sessionImageUrl(id, src) : null
                       const side: MessageSide = u.speaker === 'me' ? 'me' : 'agent'
+                      // バブルの中に出ていない、この発言の画像（#507）。待ちのバブルには付けない
+                      const extra = u.waiting ? undefined : images?.get(bubbleKey(u.row.ts, side === 'me' ? 'user' : 'agent'))
                       // 発言ごとの「⋯」（#503）。待ちのバブルは発言ではないので出さない。リンクはフィードからでもセッション画面へ向ける
                       const menu = u.waiting
                         ? undefined
@@ -258,6 +270,7 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
                         utteranceKey={u.key}
                         side={side}
                         {...(menu ? { menu } : {})}
+                        {...(extra ? { images: extra } : {})}
                         clipped={u.clipped}
                         thinkingClipped={showThinking && wasClipped(u.row, 'thinking')}
                         defaultOpen={longOpen}
@@ -275,5 +288,6 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
       </div>
       {!atBottom && <JumpToBottom count={arrived} onClick={jump} />}
     </div>
+    </LightboxProvider>
   )
 }

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { bareImagePaths, galleryFromRows, GALLERY_MAX, mergeGallery, rowTsAtOrAfter, userImageSrcs } from './gallery.ts'
+import { bareImagePaths, bubbleKey, galleryFromRows, GALLERY_MAX, imagesByBubble, mergeGallery, rowTsAtOrAfter, userImageSrcs } from './gallery.ts'
 import { sessionImageUrl } from './images.ts'
 import type { FeedRow, GalleryItem } from './types.ts'
 
@@ -51,5 +51,32 @@ test('rowTsAtOrAfter: 画像の時刻の秒以降で一番古い行（貼った�
   assert.equal(rowTsAtOrAfter(rows, '2026-09-28T01:00:30.000Z'), '2026-09-28T10:02:00+09:00')
   assert.equal(rowTsAtOrAfter(rows, '2026-09-28T02:00:00.000Z'), '', 'あとに行が無ければ空')
   const withOther = [row('2026-09-28T10:00:04+09:00', { event: 'UserPromptSubmit', user_text: '' }), row('2026-09-28T10:00:05+09:00', { event: 'SubagentStop' }), row('2026-09-28T10:00:06+09:00', { event: 'Notification', text: '入力待ち' }), row('2026-09-28T10:00:09+09:00', {})]
-  assert.equal(rowTsAtOrAfter(withOther, '2026-09-28T01:00:04.000Z'), '2026-09-28T10:00:09+09:00', '発言として出ない行（入力の無い再開・SubagentStop・入力待ち）には飛ばさない')
+  assert.equal(rowTsAtOrAfter(withOther, '2026-09-28T01:00:04.000Z'), '2026-09-28T10:00:09+09:00', '発言として出ない行（入力の無い再開・SubagentStop・入力待ち）には付けない')
+})
+
+test('rowTsAtOrAfter: 側ごとに、そのバブルが出る行へ付ける（#507）。貼った画像は入力の行、Read の画像は返答の行', () => {
+  const rows = [
+    row('2026-09-28T10:00:00+09:00', { event: 'UserPromptSubmit', text: '', user_text: '[Image #1] これ見て' }),
+    row('2026-09-28T10:00:03+09:00', { event: 'PermissionRequest', text: '許可待ち: Read: /x.png' }),
+    row('2026-09-28T10:00:09+09:00', { text: '見ました', user_text: '[Image #1] これ見て' }),
+  ]
+  assert.equal(rowTsAtOrAfter(rows, '2026-09-28T01:00:00.300Z', 'user'), '2026-09-28T10:00:00+09:00')
+  assert.equal(rowTsAtOrAfter(rows, '2026-09-28T01:00:00.300Z', 'agent'), '2026-09-28T10:00:09+09:00', '入力の行と待ちの行（画像を出さない）を飛ばして返答の行')
+  assert.equal(rowTsAtOrAfter(rows, '2026-09-28T01:00:05.000Z', 'user'), '2026-09-28T10:00:09+09:00', 'ターン完了の行の自分の入力')
+})
+
+test('imagesByBubble: バブルの中に出ていないものだけを、発言のバブルごとに古い順で（#507）', () => {
+  const item = (url: string, at: string, ts: string, from: 'user' | 'agent', source: GalleryItem['source']): GalleryItem => ({ url, name: url, at, ts, from, source })
+  const map = imagesByBubble([
+    item('/t2', '2026-09-28T01:00:05Z', 'T', 'agent', 'transcript'),
+    item('/t1', '2026-09-28T01:00:04Z', 'T', 'agent', 'transcript'),
+    item('/p', '2026-09-28T01:00:00Z', 'P', 'user', 'transcript'),
+    item('/typed', '2026-09-28T01:00:00Z', 'P', 'user', 'text'),
+    item('/inline', '2026-09-28T01:00:05Z', 'T', 'agent', 'text'),
+    item('/att', '2026-09-28T01:00:00Z', 'P', 'user', 'attachment'),
+    item('/nowhere', '2026-09-28T01:00:00Z', '', 'agent', 'transcript'),
+  ])
+  assert.deepEqual(map.get(bubbleKey('T', 'agent'))?.map((i) => i.url), ['/t1', '/t2'], '返答の本文の画像は中に出ているので除く')
+  assert.deepEqual(map.get(bubbleKey('P', 'user'))?.map((i) => i.url), ['/p', '/typed'], '添付は中に出ているので除く')
+  assert.equal(map.size, 2, '付ける行の無いものは出さない')
 })

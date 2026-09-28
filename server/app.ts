@@ -2671,7 +2671,7 @@ export function createApp(
               url: `${SESSIONS_PREFIX}${encodeURIComponent(id)}${TRANSCRIPT_IMAGES_SEGMENT}${t.key}`,
               name: t.from === 'user' ? '貼った画像' : 'ツールが開いた画像',
               at: t.at,
-              ts: rowTsAtOrAfter(own, t.at),
+              ts: rowTsAtOrAfter(own, t.at, t.from),
               from: t.from,
               source: 'transcript' as const,
             }))

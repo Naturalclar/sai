@@ -50,6 +50,6 @@ test('rowTsAtOrAfter: 画像の時刻の秒以降で一番古い行（貼った�
   assert.equal(rowTsAtOrAfter(rows, '2026-09-28T01:00:05.400Z'), '2026-09-28T10:00:05+09:00', '同じ秒の行（ミリ秒は落として比べる）')
   assert.equal(rowTsAtOrAfter(rows, '2026-09-28T01:00:30.000Z'), '2026-09-28T10:02:00+09:00')
   assert.equal(rowTsAtOrAfter(rows, '2026-09-28T02:00:00.000Z'), '', 'あとに行が無ければ空')
-  const withOther = [row('2026-09-28T10:00:05+09:00', { event: 'SubagentStop' }), row('2026-09-28T10:00:06+09:00', { event: 'Notification', text: '入力待ち' }), row('2026-09-28T10:00:09+09:00', {})]
-  assert.equal(rowTsAtOrAfter(withOther, '2026-09-28T01:00:05.000Z'), '2026-09-28T10:00:09+09:00', '発言として出ない行（SubagentStop・入力待ち）には飛ばさない')
+  const withOther = [row('2026-09-28T10:00:04+09:00', { event: 'UserPromptSubmit', user_text: '' }), row('2026-09-28T10:00:05+09:00', { event: 'SubagentStop' }), row('2026-09-28T10:00:06+09:00', { event: 'Notification', text: '入力待ち' }), row('2026-09-28T10:00:09+09:00', {})]
+  assert.equal(rowTsAtOrAfter(withOther, '2026-09-28T01:00:04.000Z'), '2026-09-28T10:00:09+09:00', '発言として出ない行（入力の無い再開・SubagentStop・入力待ち）には飛ばさない')
 })

@@ -92,7 +92,10 @@ export function rowTsAtOrAfter(rows: readonly FeedRow[], at: string): string {
   let bestMs = Infinity
   for (const r of rows) {
     // チャットに発言として出る行だけ（`SubagentStop` などの other・`入力待ち` の idle・終わりの行は描かないので、飛んでも着かない。#505 のレビュー）
-    if (!ON_SCREEN.has(eventKind(r.event, r.text))) continue
+    const kind = eventKind(r.event, r.text)
+    if (!ON_SCREEN.has(kind)) continue
+    // 入力の文が無い再開の行（古い形）はバブルにならない
+    if (kind === 'resume' && !r.user_text) continue
     const t = ms(String(r.ts ?? ''))
     if (t >= floor && t < bestMs) {
       best = String(r.ts)

@@ -23,7 +23,7 @@ export function GalleryThumb({ id, item }: { id: string; item: GalleryItem }) {
         </a>
       )}
       <figcaption>
-        {item.ts ? <a href={sessionHash(id, item.ts)} title={`この画像が出てきた${who}の発言へ`}>{who === 'あなた' ? 'あなた' : 'エージェント'} ↑</a> : <span>{who}</span>}
+        {item.ts ? <a href={sessionHash(id, item.ts, item.from === 'user' ? 'me' : 'agent')} title={`この画像が出てきた${who}の発言へ`}>{who === 'あなた' ? 'あなた' : 'エージェント'} ↑</a> : <span>{who}</span>}
       </figcaption>
     </figure>
   )

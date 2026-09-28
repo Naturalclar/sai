@@ -11,6 +11,7 @@ test('bareImagePaths: 地の文の画像の絶対パスだけ。末尾の句読�
   assert.deepEqual(bareImagePaths('見て /Users/me/shot.JPG。それと「/Users/me/b.webp」'), ['/Users/me/shot.JPG', '/Users/me/b.webp'])
   assert.deepEqual(bareImagePaths('/Users/me/notes.md と docs/a.png と /Users/me/c.svg'), [], 'md・相対・svg は拾わない')
   assert.deepEqual(bareImagePaths('/a/x.png /a/x.png'), ['/a/x.png'], '同じものは 1 つ')
+  assert.deepEqual(bareImagePaths('参考: https://example.com/a/b.png と //host/c.png'), [], 'URL の // 以降をパスと取り違えない')
 })
 
 test('userImageSrcs: Markdown の画像と地の文のパス。SAI の添付（見出しの下）は別口なので入れない', () => {
@@ -49,4 +50,6 @@ test('rowTsAtOrAfter: 画像の時刻の秒以降で一番古い行（貼った�
   assert.equal(rowTsAtOrAfter(rows, '2026-09-28T01:00:05.400Z'), '2026-09-28T10:00:05+09:00', '同じ秒の行（ミリ秒は落として比べる）')
   assert.equal(rowTsAtOrAfter(rows, '2026-09-28T01:00:30.000Z'), '2026-09-28T10:02:00+09:00')
   assert.equal(rowTsAtOrAfter(rows, '2026-09-28T02:00:00.000Z'), '', 'あとに行が無ければ空')
+  const withOther = [row('2026-09-28T10:00:05+09:00', { event: 'SubagentStop' }), row('2026-09-28T10:00:06+09:00', { event: 'Notification', text: '入力待ち' }), row('2026-09-28T10:00:09+09:00', {})]
+  assert.equal(rowTsAtOrAfter(withOther, '2026-09-28T01:00:05.000Z'), '2026-09-28T10:00:09+09:00', '発言として出ない行（SubagentStop・入力待ち）には飛ばさない')
 })

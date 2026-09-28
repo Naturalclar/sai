@@ -22,7 +22,8 @@ export const GALLERY_MAX = 60
 
 const IMAGE_EXT = /\.(?:png|jpe?g|gif|webp)$/i
 /** 地の文の絶対パス（空白・引用符・括弧・バッククォート・和文の句読点で切れる）。末尾の英字の句読点は落とす */
-const BARE_PATH = /(?:^|[\s:：「(（])(\/[^\s'"`<>()（）「」、。，]+)/g
+// `/` の直後が `/` のものは取らない（`https://host/a.png` の `//host/…` をパスと取り違えない。#505 のレビュー）
+const BARE_PATH = /(?:^|[\s:：「(（])(\/[^\s'"`<>()（）「」、。，/][^\s'"`<>()（）「」、。，]*)/g
 
 /**
  * 地の文に書かれた画像の絶対パス。Markdown の画像の書き方（`![](…)` / `[名前](…)`）は `imageRefs()` が拾うのでここでは見ない。
@@ -78,6 +79,9 @@ export function mergeGallery(items: readonly GalleryItem[]): GalleryItem[] {
   return [...first.values()].sort((a, b) => ms(b.at) - ms(a.at)).slice(0, GALLERY_MAX)
 }
 
+/** チャットに発言として出る行の種類（飛び先にしてよい行） */
+const ON_SCREEN = new Set(['turn', 'resume', 'waiting'])
+
 /**
  * transcript の画像の時刻 → 飛び先の行の `ts`。**その秒以降で一番古い行**（端末で貼った画像は入力の行と同じ秒、
  * Read で開いた画像はそのターンの完了の行が後に来る）。行の `ts` は秒までなので、画像の時刻を秒に丸めてから比べる
@@ -87,6 +91,8 @@ export function rowTsAtOrAfter(rows: readonly FeedRow[], at: string): string {
   let best = ''
   let bestMs = Infinity
   for (const r of rows) {
+    // チャットに発言として出る行だけ（`SubagentStop` などの other・`入力待ち` の idle・終わりの行は描かないので、飛んでも着かない。#505 のレビュー）
+    if (!ON_SCREEN.has(eventKind(r.event, r.text))) continue
     const t = ms(String(r.ts ?? ''))
     if (t >= floor && t < bestMs) {
       best = String(r.ts)

@@ -19,7 +19,7 @@ import { questionsFor } from './terminalQuestion.ts'
 import { wasClipped } from '../../shared/clipped.ts'
 import type { PendingQuestion } from '../../shared/types.ts'
 import type { MessageSide } from './hooks.ts'
-import { isFocused, messageCopyText, messageUrl } from './messageLink.ts'
+import { drawnKey, focusSideIn, isFocused, messageCopyText, messageUrl } from './messageLink.ts'
 
 const NO_SESSIONS: never[] = []
 
@@ -91,7 +91,7 @@ function flash(el: HTMLElement) {
   window.setTimeout(() => el.classList.remove('found'), JUMP_FLASH_MS)
 }
 
-export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_SESSIONS, trailer, showThinking = false, thinkingOpen = false, longOpen = false, profile, linear = '', focusTs = '', focusSide, diffs, jumpTo = null, question }: Props) {
+export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_SESSIONS, trailer, showThinking = false, thinkingOpen = false, longOpen = false, profile, linear = '', focusTs = '', focusSide: askedSide, diffs, jumpTo = null, question }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
   // 最後に最下部へ送ったときの scrollHeight。中身の高さが変わったときだけ送るため（#344）
@@ -105,6 +105,10 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
 
   // 検索から飛んできたら、その発言まで送る（#230）。当てるまでは最下部に追従しない
   // （追従すると、行が届くたびに下へ持っていかれて読めない）
+  const days = groupRows(rows)
+  // 名指しした側のバブルが描かれていなければ、側を問わずその ts に着く（`focusSideIn()` の説明）
+  const drawn = new Set(days.flatMap((d) => d.groups.flatMap((g) => g.items.map((u) => drawnKey(u.row.ts, u.speaker === 'me' ? 'me' : 'agent')))))
+  const focusSide = focusSideIn(drawn, focusTs, askedSide)
   const landed = useRef('')
   // 着地したかは ts と側の組で覚える（同じ行の入力と返答へのリンクを続けて開いても、2 つ目にも送る）
   const focusKey = focusTs ? `${focusTs}|${focusSide ?? ''}` : ''
@@ -192,7 +196,7 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
     <div className="chat-wrap">
       <div className="chat" ref={ref} onScroll={onScroll}>
         {leader}
-        {groupRows(rows).map((day) => (
+        {days.map((day) => (
           <div key={day.day}>
             <div className="day"><span>{day.label}</span></div>
             {day.groups.map((g) => {

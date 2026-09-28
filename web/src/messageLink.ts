@@ -33,6 +33,22 @@ export function isFocused(ts: string, side: MessageSide, focusTs: string, focusS
 }
 
 /**
+ * 飛び先の側を、**その側のバブルが描かれているときだけ**使う。無ければ側を問わない（`ts` だけで探す）。
+ * 名指しした側のバブルが無いことがある: 検索は行を全部舐めるので、Claude の自分の入力は入力の行とターン完了の行の
+ * 2 回当たる（`user_text` が両方に載る）が、画面はターン完了の方の自分のバブルを出さない（`chatGroups.ts` の
+ * `toUtterances()` が直前の入力と同じ文なら落とす）。側を守ったまま探すとどこにも着かず、着地を待つ間は
+ * 最下部への追従も止まったままになる（#506 のレビュー）。行がまだ届いていないときはどちらでも見つからないので、同じこと
+ */
+export function focusSideIn(drawn: ReadonlySet<string>, focusTs: string, focusSide?: MessageSide): MessageSide | undefined {
+  return focusSide && drawn.has(drawnKey(focusTs, focusSide)) ? focusSide : undefined
+}
+
+/** 描いているバブルの (ts, 側) の鍵。`focusSideIn()` の `drawn` を作るのに使う */
+export function drawnKey(ts: string, side: MessageSide): string {
+  return `${ts}|${side}`
+}
+
+/**
  * クリップボードに書く。書けなければ false（`navigator.clipboard` は安全なコンテキストでしか無い。
  * ループバックと Serve の `https://` は当てはまるが、tailnet の素の IP の `http://` では使えない）
  */

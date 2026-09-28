@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { isFocused, messageCopyText, messageUrl } from './messageLink.ts'
+import { drawnKey, focusSideIn, isFocused, messageCopyText, messageUrl } from './messageLink.ts'
 import { parseRoute } from './hooks.ts'
 import { withAttachments } from '../../shared/attachments.ts'
 
@@ -31,4 +31,15 @@ test('isFocused: 名指しした側だけ、side の無い飛び先はどちら�
   assert.equal(isFocused(TS, 'agent', TS), true)
   assert.equal(isFocused(TS, 'me', ''), false, '飛び先が無ければ何も光らない')
   assert.equal(isFocused('2026-09-09T23:14:43+09:00', 'me', TS, 'me'), false)
+})
+
+test('focusSideIn: 名指しした側のバブルが描かれていなければ、側を問わない（#506 のレビュー）', () => {
+  // 検索は Claude の自分の入力にターン完了の行でも当たるが、そちらの自分のバブルは描かれない
+  const onlyAgent = new Set([drawnKey(TS, 'agent')])
+  assert.equal(focusSideIn(onlyAgent, TS, 'me'), undefined, '無い側を守ると、どこにも着かず追従も止まったままになる')
+  assert.equal(focusSideIn(onlyAgent, TS, 'agent'), 'agent')
+  const both = new Set([drawnKey(TS, 'me'), drawnKey(TS, 'agent')])
+  assert.equal(focusSideIn(both, TS, 'me'), 'me', '両方あれば名指しした方')
+  assert.equal(focusSideIn(both, TS), undefined, '名指しが無ければそのまま')
+  assert.equal(focusSideIn(new Set(), TS, 'me'), undefined, '行がまだ届いていないときも同じ（どちらでも見つからない）')
 })

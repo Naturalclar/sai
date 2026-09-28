@@ -27,3 +27,26 @@ export function stepIndex(index: number, count: number, delta: number): number {
 export function opensInPage(e: { button: number; metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean }): boolean {
   return e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey
 }
+
+/** スライドで送るのに要る横の距離（px。#509） */
+export const SWIPE_MIN_PX = 50
+/** これより動かなければ「押しただけ」（画像の外なら閉じる） */
+export const TAP_MAX_PX = 10
+
+/**
+ * スライドの量 → 送る向き（#509）。横に `SWIPE_MIN_PX` 以上、かつ縦より横に大きく動いたときだけ。
+ * 左へ払う（dx < 0）と次、右へ払うと前（写真アプリと同じ）。縦のスクロールのつもりの動きでは送らない
+ */
+export function swipeStep(dx: number, dy: number): -1 | 0 | 1 {
+  if (Math.abs(dx) < SWIPE_MIN_PX || Math.abs(dx) <= Math.abs(dy)) return 0
+  return dx < 0 ? 1 : -1
+}
+
+/**
+ * スライドで送ってよいか（#510 のレビュー）。ページをピンチで拡大している間（`visualViewport.scale > 1`）は送らず、
+ * 横の動きはブラウザの横スクロールに任せる（拡大した広いスクリーンショットの右側を読もうとして、次の画像に飛ばない）。
+ * `visualViewport` の無いブラウザ（`undefined`）は拡大していない扱い
+ */
+export function swipeAllowed(scale: number | undefined): boolean {
+  return scale === undefined || scale <= 1.01
+}

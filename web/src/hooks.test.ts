@@ -42,3 +42,17 @@ test('sessionHash: parseRoute と往復する', () => {
   // `+` や `:` を含む ts が生で入らない（`+` は空白に化ける）
   assert.ok(!sessionHash(id, ts).includes('+'))
 })
+
+test('parseRoute / sessionHash: 発言へのリンクはどちら側かも持つ（#503）', () => {
+  const id = 'S1@sai'
+  const ts = '2026-09-09T23:14:42+09:00'
+  // 1 本の行から自分の入力と返答が同じ ts で出るので、side で名指しする
+  assert.deepEqual(parseRoute(sessionHash(id, ts, 'me')), { name: 'session', id, ts, side: 'me' })
+  assert.deepEqual(parseRoute(sessionHash(id, ts, 'agent')), { name: 'session', id, ts, side: 'agent' })
+  // 検索の飛び先（side 無し）は今までどおりの形
+  assert.equal(sessionHash(id, ts), `#/s/S1%40sai?ts=${encodeURIComponent(ts)}`)
+  // 知らない side は付けない（どちらでも先に見つかった方に着く）
+  assert.deepEqual(parseRoute(`#/s/S1%40sai?ts=${encodeURIComponent(ts)}&side=x`), { name: 'session', id, ts })
+  // ts が無ければ side だけあっても普通のセッション
+  assert.deepEqual(parseRoute('#/s/S1%40sai?side=me'), { name: 'session', id })
+})

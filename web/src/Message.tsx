@@ -14,6 +14,8 @@ import { ImageSourceContext } from './imageContext'
 import { QuestionPreview } from './QuestionPreview'
 import { ClippedNote } from './ClippedNote'
 import { TurnUsageTag } from './TurnUsageTag'
+import { MessageMenu, type MessageMenuProps } from './MessageMenu'
+import type { MessageSide } from './hooks.ts'
 import type { AskQuestion } from '../../shared/approvals.ts'
 import type { TurnUsage } from '../../shared/turnUsage.ts'
 
@@ -67,6 +69,13 @@ interface Props {
    * `ts` はフィードでは同じ秒の別のセッションや、同じ行の自分の入力と重なるので、それとは別に持つ
    */
   utteranceKey?: string
+  /**
+   * どちら側の発言か（#503）。`data-side` に載せ、発言へのリンク（`?ts=…&side=…`）が同じ `ts` の自分の入力と返答を
+   * 取り違えないようにする
+   */
+  side?: MessageSide
+  /** 発言ごとの「⋯」（#503。リンクと本文をコピー）。待ちのバブルには出さない */
+  menu?: MessageMenuProps
   /** 差分を開くボタン（#280。フィードで、いまのブランチの PR に触れているバブルだけ）。無ければ出さない */
   diff?: DiffButtonProps
   /** 本文が record.py に切られている（#358）。末尾に「ここで切れています」を出す */
@@ -81,7 +90,7 @@ interface Props {
 }
 
 /** バブル1つ分の本文。長ければ折りたたんで「もっと見る」を付ける */
-export function Message({ ts, text: raw, markdown, waiting, questions, resolved, thinking, thinkingOpen = false, summary, digestKey, model, usage, remote, sourceAsk = '', linear, found = false, utteranceKey, diff, clipped = false, thinkingClipped = false, defaultOpen = false }: Props) {
+export function Message({ ts, text: raw, markdown, waiting, questions, resolved, thinking, thinkingOpen = false, summary, digestKey, model, usage, remote, sourceAsk = '', linear, found = false, utteranceKey, side, menu, diff, clipped = false, thinkingClipped = false, defaultOpen = false }: Props) {
   // 自分の入力に添えた画像は、パスの文字列ではなくサムネイルで出す（本文の末尾に足してある。shared/attachments.ts）
   const { body: text, urls } = markdown ? { body: raw, urls: [] as string[] } : splitAttachments(raw)
   // 長い本文を開いているか。#365 の画面（フィード）では最初から開いた状態で始める。
@@ -94,7 +103,8 @@ export function Message({ ts, text: raw, markdown, waiting, questions, resolved,
   const [detailsRef, summaryRef] = useReveal<HTMLDivElement, HTMLDivElement>(details)
   const [bodyRef, moreRef] = useReveal<HTMLDivElement, HTMLButtonElement>(open)
   // 飛ぶための目印。`Chat` が data-ts（検索。#230）と data-key（フィードの返信先。#297）で引くので、どの分岐でも同じものを付ける
-  const anchor = { 'data-ts': ts, ...(utteranceKey ? { 'data-key': utteranceKey } : {}) }
+  // 発言へのリンク（#503）は data-ts と data-side の組で引く
+  const anchor = { 'data-ts': ts, ...(utteranceKey ? { 'data-key': utteranceKey } : {}), ...(side ? { 'data-side': side } : {}) }
   const mark = found ? ' found' : ''
   if (waiting) {
     return (
@@ -111,6 +121,7 @@ export function Message({ ts, text: raw, markdown, waiting, questions, resolved,
     return (
       <div className={`msg${mark}`} {...anchor}>
         <span className="time">{hm(ts)}</span>
+        {menu && <MessageMenu {...menu} />}
         {usage && <TurnUsageTag usage={usage} />}
         {thinking && <ThinkingBlock text={thinking} openAll={thinkingOpen} clipped={thinkingClipped} />}
         <div className="summary" ref={summaryRef}>
@@ -144,6 +155,7 @@ export function Message({ ts, text: raw, markdown, waiting, questions, resolved,
   return (
     <div className={`msg${mark}`} {...anchor}>
       <span className="time">{hm(ts)}</span>
+      {menu && <MessageMenu {...menu} />}
       {model && <span className="tag model" title="このターンからモデルが変わった">{model}</span>}
       {usage && <TurnUsageTag usage={usage} />}
       {thinking && <ThinkingBlock text={thinking} openAll={thinkingOpen} clipped={thinkingClipped} />}

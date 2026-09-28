@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { opensInPage, stepIndex, swipeStep, SWIPE_MIN_PX } from './lightbox.ts'
+import { opensInPage, stepIndex, swipeAllowed, swipeStep, SWIPE_MIN_PX } from './lightbox.ts'
 
 const click = { button: 0, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false }
 
@@ -23,4 +23,10 @@ test('swipeStep: 左へ払うと次・右へ払うと前。短い動きと縦寄
   assert.equal(swipeStep(-(SWIPE_MIN_PX - 1), 0), 0, '足りない')
   assert.equal(swipeStep(-60, 70), 0, '縦のスクロールのつもり')
   assert.equal(swipeStep(0, 0), 0)
+})
+
+test('swipeAllowed: ピンチで拡大している間は送らない（横スクロールに任せる）', () => {
+  assert.equal(swipeAllowed(1), true)
+  assert.equal(swipeAllowed(undefined), true, 'visualViewport が無いブラウザ')
+  assert.equal(swipeAllowed(1.5), false)
 })

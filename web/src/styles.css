@@ -698,6 +698,8 @@
   .lightbox-head .iconbtn { color: #fff; }
   /* 横のスライドは画面で受ける（#509）。縦のスクロールとピンチはブラウザに任せる */
   .lightbox-stage { position: relative; display: flex; align-items: center; justify-content: center; min-height: 0; flex: 1; touch-action: pan-y pinch-zoom; user-select: none; }
+  /* ピンチで拡大している間は横にも動かせるように（スライドで送るのはやめている。#510 のレビュー） */
+  .lightbox-stage.zoomed { touch-action: auto; }
   .lightbox-stage img { max-width: 100%; max-height: calc(94vh - 48px); object-fit: contain; border-radius: 6px; background: #111; transition: transform 0.15s ease-out; }
   .lightbox-nav { position: absolute; top: 50%; transform: translateY(-50%); width: 44px; height: 64px; border: 0; border-radius: 8px; background: rgba(0, 0, 0, 0.45); color: #fff; font-size: 32px; cursor: pointer; }
   .lightbox-nav.prev { left: 4px; }

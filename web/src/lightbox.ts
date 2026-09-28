@@ -41,3 +41,12 @@ export function swipeStep(dx: number, dy: number): -1 | 0 | 1 {
   if (Math.abs(dx) < SWIPE_MIN_PX || Math.abs(dx) <= Math.abs(dy)) return 0
   return dx < 0 ? 1 : -1
 }
+
+/**
+ * スライドで送ってよいか（#510 のレビュー）。ページをピンチで拡大している間（`visualViewport.scale > 1`）は送らず、
+ * 横の動きはブラウザの横スクロールに任せる（拡大した広いスクリーンショットの右側を読もうとして、次の画像に飛ばない）。
+ * `visualViewport` の無いブラウザ（`undefined`）は拡大していない扱い
+ */
+export function swipeAllowed(scale: number | undefined): boolean {
+  return scale === undefined || scale <= 1.01
+}

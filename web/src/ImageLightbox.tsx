@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { LightboxImage } from './lightbox'
-import { stepIndex, swipeStep, TAP_MAX_PX } from './lightbox'
+import { stepIndex, swipeAllowed, swipeStep, TAP_MAX_PX } from './lightbox'
 import { IconButton } from './IconButton'
 import { CloseMark } from './CloseMark'
 import { DownloadMark } from './DownloadMark'
@@ -23,6 +23,18 @@ export function ImageLightbox({ images, index, onIndex, onClose }: Props) {
   // スライドの始まりと、いま動かしている横の量（#509）
   const start = useRef<{ x: number; y: number; id: number; backdrop: boolean } | null>(null)
   const [dragX, setDragX] = useState(0)
+  // 画像の外を「押しただけ」だったか。閉じるのは pointerup ではなく click で（#510 のレビュー。pointerup で消すと、
+  // タッチ端末があとから送る click が下の要素＝リンクや別のサムネイルに落ちる）。捕まえたあとの click の target は枠なので、ここで覚える
+  const tapOutside = useRef(false)
+  // ページをピンチで拡大している間はスライドで送らず、横の動きは横スクロールに任せる（#510 のレビュー）
+  const [zoomed, setZoomed] = useState(() => !swipeAllowed(window.visualViewport?.scale))
+  useEffect(() => {
+    const vv = window.visualViewport
+    if (!vv) return
+    const onResize = () => setZoomed(!swipeAllowed(vv.scale))
+    vv.addEventListener('resize', onResize)
+    return () => vv.removeEventListener('resize', onResize)
+  }, [])
   const image = images[index]
   const count = images.length
 
@@ -60,7 +72,7 @@ export function ImageLightbox({ images, index, onIndex, onClose }: Props) {
           </IconButton>
         </div>
         <div
-          className="lightbox-stage"
+          className={`lightbox-stage${zoomed ? ' zoomed' : ''}`}
           onPointerDown={(e) => {
             // ‹ › のボタンは普通に押させる（捕まえると click がボタンに届かない）
             if (e.button !== 0 || (e.target as HTMLElement).closest('button')) return
@@ -70,7 +82,7 @@ export function ImageLightbox({ images, index, onIndex, onClose }: Props) {
           }}
           onPointerMove={(e) => {
             const s = start.current
-            if (!s || s.id !== e.pointerId || count < 2) return
+            if (!s || s.id !== e.pointerId || count < 2 || zoomed) return
             setDragX(e.clientX - s.x)
           }}
           onPointerUp={(e) => {
@@ -80,13 +92,19 @@ export function ImageLightbox({ images, index, onIndex, onClose }: Props) {
             if (!s || s.id !== e.pointerId) return
             const dx = e.clientX - s.x
             const dy = e.clientY - s.y
-            // 押しただけ: 画像の外で押し始めていたら閉じる（画像を押しただけでは閉じない）
+            // 押しただけ: 画像の外で押し始めていたら、続く click で閉じる（画像を押しただけでは閉じない）
             if (Math.abs(dx) < TAP_MAX_PX && Math.abs(dy) < TAP_MAX_PX) {
-              if (s.backdrop) onClose()
+              tapOutside.current = s.backdrop
               return
             }
+            if (zoomed) return
             const step = swipeStep(dx, dy)
             if (step !== 0) onIndex(stepIndex(index, count, step))
+          }}
+          onClick={() => {
+            if (!tapOutside.current) return
+            tapOutside.current = false
+            onClose()
           }}
           onPointerCancel={() => {
             start.current = null

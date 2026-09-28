@@ -115,7 +115,7 @@ export function CommandPalette({ sessions, loading, onClose }: Props) {
                 aria-selected={n === at}
                 onMouseEnter={() => setIndex(n)}
               >
-                <a href={sessionHash(hit.id, hit.ts)} title={hit.id} onClick={onClose} tabIndex={-1}>
+                <a href={sessionHash(hit.id, hit.ts, hit.who)} title={hit.id} onClick={onClose} tabIndex={-1}>
                   <span className="said-head">
                     {hit.icon && <img className="icon" src={hit.icon} alt="" width={16} height={16} />}
                     <b>{hit.label}</b>

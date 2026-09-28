@@ -618,6 +618,25 @@
   .msg { position: relative; padding: 2px 0 6px; }
   .msg .time { position: absolute; left: -46px; top: 4px; width: 40px; text-align: right; opacity: 0; }
   .msg:hover .time { opacity: 1; }
+  /* 発言ごとの「⋯」（#503。リンクと本文をコピー）。右上に重ね、時刻と同じくホバーで出す。開いている間とキーボードで
+     フォーカスしている間も出す。パネルは発言の下に重ねる（次のバブルより手前に出すので z-index を持つ） */
+  .msg-menu { position: absolute; top: 0; right: 0; z-index: 3; opacity: 0; }
+  .msg:hover > .msg-menu, .msg-menu.open, .msg-menu:focus-within { opacity: 1; }
+  .msg-menu > .iconbtn { width: 24px; height: 24px; padding: 0; display: inline-flex; align-items: center; justify-content: center; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; color: var(--muted); cursor: pointer; }
+  .msg-menu > .iconbtn:hover, .msg-menu.open > .iconbtn { color: var(--ink); }
+  .msg-menu .menu { position: absolute; top: calc(100% + 4px); right: 0; min-width: 14em; max-width: min(22em, 80vw); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, .18); padding: 6px 0; }
+  .msg-menu .menu button { display: block; width: 100%; text-align: left; padding: 6px 12px; background: transparent; border: 0; color: var(--ink); font: inherit; font-size: 13px; cursor: pointer; white-space: nowrap; }
+  .msg-menu .menu button:hover { background: var(--hover); }
+  .msg-menu .menu .note { padding: 6px 12px; font-size: 11px; color: var(--muted); }
+  .msg-menu .menu .note input { display: block; width: 100%; margin-top: 4px; font: inherit; font-family: var(--mono); font-size: 11px; }
+  /* ホバーの無い端末では常に出す（押す手段が無くなる）。本文の右端と重ならないよう、その分だけ空ける */
+  @media (hover: none) {
+    .msg-menu { opacity: 1; }
+    /* 常に出ていて本文とも重ならない（右を空けてある）ので、枠と地は付けずに薄く置く */
+    .msg-menu > .iconbtn { width: 32px; height: 32px; background: transparent; border-color: transparent; }
+    .msg-menu .menu button { min-height: 40px; }
+    .msg:has(> .msg-menu) { padding-right: 36px; }
+  }
   .msg .body { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }
   /* 本文が記録のときに切られている印（#358）。折りたたみを開いても続きが無いことを出す */
   .msg .clipped-note { color: var(--muted); font-size: 11px; margin-top: 4px; }

@@ -18,6 +18,8 @@ import { followsBottom, nearBottom, prepended } from './chatScroll.ts'
 import { questionsFor } from './terminalQuestion.ts'
 import { wasClipped } from '../../shared/clipped.ts'
 import type { PendingQuestion } from '../../shared/types.ts'
+import type { MessageSide } from './hooks.ts'
+import { drawnKey, focusSideIn, isFocused, messageCopyText, messageUrl } from './messageLink.ts'
 
 const NO_SESSIONS: never[] = []
 
@@ -57,6 +59,11 @@ interface Props {
    */
   focusTs?: string
   /**
+   * 飛び先がどちら側か（#503。発言へのリンクと検索の当たり）。同じ `ts` の自分の入力と返答のうち、名指しした方にだけ着く。
+   * 無ければ（side の無い前の形のリンク）今までどおりその `ts` の先に見つかった方
+   */
+  focusSide?: MessageSide
+  /**
    * バブルから差分を開く（#280）。そのセッションのいまのブランチの PR に触れているエージェントのバブルにだけ
    * ボタンを出す（`feedDiff.ts` の `opensDiff()`）。フィードだけが渡す（セッション画面は入力欄にある）
    */
@@ -84,7 +91,7 @@ function flash(el: HTMLElement) {
   window.setTimeout(() => el.classList.remove('found'), JUMP_FLASH_MS)
 }
 
-export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_SESSIONS, trailer, showThinking = false, thinkingOpen = false, longOpen = false, profile, linear = '', focusTs = '', diffs, jumpTo = null, question }: Props) {
+export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_SESSIONS, trailer, showThinking = false, thinkingOpen = false, longOpen = false, profile, linear = '', focusTs = '', focusSide: askedSide, diffs, jumpTo = null, question }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
   // 最後に最下部へ送ったときの scrollHeight。中身の高さが変わったときだけ送るため（#344）
@@ -98,16 +105,23 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
 
   // 検索から飛んできたら、その発言まで送る（#230）。当てるまでは最下部に追従しない
   // （追従すると、行が届くたびに下へ持っていかれて読めない）
+  const days = groupRows(rows)
+  // 名指しした側のバブルが描かれていなければ、側を問わずその ts に着く（`focusSideIn()` の説明）
+  const drawn = new Set(days.flatMap((d) => d.groups.flatMap((g) => g.items.map((u) => drawnKey(u.row.ts, u.speaker === 'me' ? 'me' : 'agent')))))
+  const focusSide = focusSideIn(drawn, focusTs, askedSide)
   const landed = useRef('')
+  // 着地したかは ts と側の組で覚える（同じ行の入力と返答へのリンクを続けて開いても、2 つ目にも送る）
+  const focusKey = focusTs ? `${focusTs}|${focusSide ?? ''}` : ''
   useEffect(() => {
-    if (!focusTs) {
+    if (!focusKey) {
       landed.current = ''
       return
     }
-    if (landed.current === focusTs) return
-    const el = ref.current?.querySelector<HTMLElement>(`.msg[data-ts="${CSS.escape(focusTs)}"]`)
+    if (landed.current === focusKey) return
+    const side = focusSide ? `[data-side="${focusSide}"]` : ''
+    const el = ref.current?.querySelector<HTMLElement>(`.msg[data-ts="${CSS.escape(focusTs)}"]${side}`)
     if (!el) return // まだ描画されていない（取得待ち）。次の描画で探し直す
-    landed.current = focusTs
+    landed.current = focusKey
     stickToBottom.current = false
     el.scrollIntoView({ block: 'center' })
   })
@@ -129,13 +143,13 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
   // `trailer` は毎描画で新しい要素なので、この effect は 3 秒ごとの描き直しでも走る。中身の高さが
   // 変わったときだけ送らないと、最下部の近くにいる間ずっと引き戻される（#344）
   useEffect(() => {
-    if (focusTs && landed.current !== focusTs) return
+    if (focusKey && landed.current !== focusKey) return
     const el = ref.current
     if (!el || (rows.length === 0 && !trailer)) return
     if (!followsBottom(stickToBottom.current, appliedHeight.current, el.scrollHeight)) return
     appliedHeight.current = el.scrollHeight
     el.scrollTop = el.scrollHeight
-  }, [rows, trailer, focusTs])
+  }, [rows, trailer, focusKey])
 
   // 先頭に前の行が足されたら、足された高さぶん送り直して読んでいた場所に留まる（#477）。
   // ブラウザのスクロールアンカーは Safari に無く、先頭（scrollTop 0）で押したときは Chrome でも効かないので自分で合わせる
@@ -182,7 +196,7 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
     <div className="chat-wrap">
       <div className="chat" ref={ref} onScroll={onScroll}>
         {leader}
-        {groupRows(rows).map((day) => (
+        {days.map((day) => (
           <div key={day.day}>
             <div className="day"><span>{day.label}</span></div>
             {day.groups.map((g) => {
@@ -214,6 +228,11 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
                         : null
                       // 本文の画像はサーバが配る（#321）。別のマシンのセッションのファイルはこちらに無いので、印と名前だけ
                       const imageUrl = u.speaker !== 'me' && !isRemoteHost(g.host, selfHost) ? (src: string) => sessionImageUrl(id, src) : null
+                      const side: MessageSide = u.speaker === 'me' ? 'me' : 'agent'
+                      // 発言ごとの「⋯」（#503）。待ちのバブルは発言ではないので出さない。リンクはフィードからでもセッション画面へ向ける
+                      const menu = u.waiting
+                        ? undefined
+                        : { link: messageUrl(location, id, u.row.ts, side), text: messageCopyText(u.text, side), clipped: u.clipped }
                       // 自分の入力は Markdown にしない（打ったままを出す）。エージェントの返答は Markdown。
                       // 一言があるバブルには「変？」を出す（#346）。鍵はサーバ（作る側）と同じ関数で作る
                       return (
@@ -235,8 +254,10 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
                         remote={u.row.remote}
                         sourceAsk={u.row.user_text}
                         linear={linear}
-                        found={focusTs !== '' && u.row.ts === focusTs}
+                        found={isFocused(u.row.ts, side, focusTs, focusSide)}
                         utteranceKey={u.key}
+                        side={side}
+                        {...(menu ? { menu } : {})}
                         clipped={u.clipped}
                         thinkingClipped={showThinking && wasClipped(u.row, 'thinking')}
                         defaultOpen={longOpen}

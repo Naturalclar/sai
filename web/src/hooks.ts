@@ -4,12 +4,18 @@ export const POLL_MS = 3000
 
 export type Route =
   | { name: 'list' }
-  /** `ts` は検索から飛んできたとき（#230）。その発言まで送って光らせる */
-  | { name: 'session'; id: string; ts?: string }
+  /**
+   * `ts` は検索から飛んできたとき（#230）と、発言へのリンク（#503）。その発言まで送って光らせる。
+   * `side` はどちら側か（1 本の行から自分の入力と返答が**同じ ts** で 2 つ出るので、どちらかを名指しする）。無ければどちらでも
+   */
+  | { name: 'session'; id: string; ts?: string; side?: MessageSide }
   | { name: 'feed' }
   | { name: 'todo' }
   /** 新しいセッションを始める（#314） */
   | { name: 'new' }
+
+/** 発言のどちら側か（#503）。`me` = 自分の入力、`agent` = エージェントの発言 */
+export type MessageSide = 'me' | 'agent'
 
 export function parseRoute(hash: string): Route {
   // id は encodeURIComponent 済みなので `?` は含まれない（%3F になる）。後ろが検索から来た ts
@@ -21,8 +27,12 @@ export function parseRoute(hash: string): Route {
     } catch {
       id = m[1] // 壊れた %-エンコードでも「そのセッションが無い」に落とす（画面を白くしない）
     }
-    const ts = new URLSearchParams(m[2] ?? '').get('ts')
-    return ts ? { name: 'session', id, ts } : { name: 'session', id }
+    const q = new URLSearchParams(m[2] ?? '')
+    const ts = q.get('ts')
+    if (!ts) return { name: 'session', id }
+    // 知らない値は付けない（検索の飛び先と同じ「どちらでも最初に見つかった方」に落ちる）
+    const side = q.get('side')
+    return side === 'me' || side === 'agent' ? { name: 'session', id, ts, side } : { name: 'session', id, ts }
   }
   if (hash === '#/feed') return { name: 'feed' }
   // 要対応（#224）。いま自分を待っているものだけ
@@ -31,10 +41,15 @@ export function parseRoute(hash: string): Route {
   return { name: 'list' }
 }
 
-/** 検索の当たりへ飛ぶ hash（#230）。`ts` が無ければ普通のセッションの hash */
-export function sessionHash(id: string, ts = ''): string {
+/**
+ * 検索の当たり（#230）・発言へのリンク（#503）へ飛ぶ hash。`ts` が無ければ普通のセッションの hash。
+ * `side` を省くと、その ts のどちらでも先に見つかった方に着く（`side` を持たない古いリンクの形。検索の当たりは
+ * 本文と入力のどちらで当たったか（`who`）を持っているので、#503 からは渡している）
+ */
+export function sessionHash(id: string, ts = '', side?: MessageSide): string {
   const base = `#/s/${encodeURIComponent(id)}`
-  return ts ? `${base}?ts=${encodeURIComponent(ts)}` : base
+  if (!ts) return base
+  return `${base}?ts=${encodeURIComponent(ts)}${side ? `&side=${side}` : ''}`
 }
 
 export function useHashRoute(): Route {

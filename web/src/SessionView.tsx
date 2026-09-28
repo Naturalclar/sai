@@ -5,6 +5,7 @@ import { RECENT_DAYS } from '../../shared/recentRows.ts'
 import { promptArrived } from './chatGroups'
 import { api } from './api'
 import { useLocalState, usePolling } from './hooks'
+import type { MessageSide } from './hooks'
 import { Chat } from './Chat'
 import { OlderRowsButton } from './OlderRowsButton'
 import { PendingBubble } from './PendingBubble'
@@ -48,7 +49,7 @@ export interface DiffProps {
   diffOpen: boolean
 }
 
-export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggleDiff, diffOpen, onLeaveToSidebar, linear, settings }: { id: string; focusTs?: string } & PaneProps & DiffProps) {
+export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSidebar, onToggleDiff, diffOpen, onLeaveToSidebar, linear, settings }: { id: string; focusTs?: string; focusSide?: MessageSide } & PaneProps & DiffProps) {
   // 描く行は直近 RECENT_DAYS 日から（#477）。「前の 7 日を表示」で広げ、別のセッションに移ったら戻す（描画中に導く）
   const [wide, setWide] = useState({ id, days: RECENT_DAYS })
   const recent = wide.id === id ? wide.days : RECENT_DAYS
@@ -150,6 +151,7 @@ export function SessionView({ id, focusTs = '', onStatus, onOpenSidebar, onToggl
           // 長い本文は最初から開いた状態で出す（#369。フィードと揃える。畳むのはボタン 1 つ）
           longOpen
           focusTs={focusTs}
+          {...(focusSide ? { focusSide } : {})}
           {...(data.question ? { question: data.question } : {})}
           trailer={
             <>

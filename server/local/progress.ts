@@ -157,6 +157,13 @@ export class ProgressReader {
    * そのセッションの Codex の rollout のパス。無ければ空（#474。queue に渡した本文が届いたかを、本文で見るため）。
    * `session` はエンティティ ID から取った素の ID（`sessionOf()`）を渡す
    */
+  /** そのセッションの Claude の transcript のパス（#504。画像の一覧に使う）。Claude でなければ・見つからなければ空 */
+  claudeTranscript(s: Target): Promise<string> {
+    const session = sessionOf(s)
+    if (!session || s.agent !== 'claude') return Promise.resolve('')
+    return this.locate(`claude:${session}`, 'claude', session, s.cwd)
+  }
+
   codexRollout(session: string): Promise<string> {
     return session ? this.findCodex(session) : Promise.resolve('')
   }

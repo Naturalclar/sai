@@ -12,6 +12,7 @@ import type { FeedRow } from '../../shared/types.ts'
 import { eventKind } from '../../shared/events.ts'
 import { imageName } from '../../shared/markdown.ts'
 import { IMAGE_MAX_BYTES, imageKey, imageRefs } from '../../shared/images.ts'
+import { userImageSrcs } from '../../shared/gallery.ts'
 import { ICON_MIME, sniffImageType } from '../../shared/icon.ts'
 import type { IconType } from '../../shared/icon.ts'
 
@@ -23,14 +24,17 @@ export interface ImageSource {
 }
 
 /**
- * そのセッションの行から「鍵 → 画像の参照」の表を作る。見るのは**ターン完了の行の本文（`text`）だけ**
- * （待ちの行の要約や自分の入力に書いたパスは配らない）。同じパスが何度も出てきたら新しい行の cwd を使う
+ * そのセッションの行から「鍵 → 画像の参照」の表を作る。見るのは**ターン完了の行の本文（`text`）**と、
+ * **自分の入力（`user_text`）の画像の参照・地の文の画像のパス**（#504。`shared/gallery.ts` の `userImageSrcs()` を一覧と共用する）。
+ * 待ちの行の要約は見ない。同じパスが何度も出てきたら新しい行の cwd を使う。どれも配る条件（cwd の中など）は `readSessionImage()` が見る
  */
 export function imageTable(rows: FeedRow[], fallbackCwd = ''): Map<string, ImageSource> {
   const table = new Map<string, ImageSource>()
   for (const r of rows) {
-    if (eventKind(r.event, r.text) !== 'turn' || !r.text) continue
-    for (const { src } of imageRefs(r.text)) table.set(imageKey(src), { src, cwd: r.cwd || fallbackCwd })
+    const kind = eventKind(r.event, r.text)
+    const cwd = r.cwd || fallbackCwd
+    if (kind === 'turn' && r.text) for (const { src } of imageRefs(r.text)) table.set(imageKey(src), { src, cwd })
+    if ((kind === 'turn' || kind === 'resume') && r.user_text) for (const src of userImageSrcs(r.user_text)) table.set(imageKey(src), { src, cwd })
   }
   return table
 }

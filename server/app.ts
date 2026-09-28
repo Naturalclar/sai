@@ -20,6 +20,8 @@ import type {
   AgentSessionsResponse,
   AgentWaitResponse,
   ApprovalAnswer,
+  GalleryItem,
+  GalleryResponse,
   ApprovalMap,
   PermissionRule,
   PermissionUpdate,
@@ -141,6 +143,8 @@ import { agentListFromEnv, backgroundLive, type AgentList, type ClaudeAgent } fr
 import { isRemoteHost } from '../shared/host.ts'
 import { IMAGES_SEGMENT } from '../shared/images.ts'
 import { imageHeaders, imageTable, readSessionImage } from './local/images.ts'
+import { TranscriptImages } from './local/transcriptImages.ts'
+import { galleryFromRows, mergeGallery, rowTsAtOrAfter } from '../shared/gallery.ts'
 import { searchRows } from './rows/search.ts'
 import { searchWords } from '../shared/search.ts'
 import { olderPrompts, parseRecent, recentRows } from '../shared/recentRows.ts'
@@ -183,6 +187,9 @@ const MODELS_SUFFIX = '/models'
 const PERMISSIONS_SUFFIX = '/permissions'
 const DIFF_SUFFIX = '/diff'
 const PROGRESS_SUFFIX = '/progress'
+const GALLERY_SUFFIX = '/gallery'
+/** `GET /api/sessions/<id>/transcript-images/<key>`（#504）。id は `/` を含まないので、最初のこれが区切り */
+const TRANSCRIPT_IMAGES_SEGMENT = '/transcript-images/'
 const ATTACHMENTS_SUFFIX = '/attachments'
 /** 預かった返信（#305）。`DELETE /api/sessions/<id>/queue/<queue_id>` と `POST /api/sessions/<id>/queue/resume` */
 const QUEUE_SEGMENT = '/queue/'
@@ -428,6 +435,8 @@ export function createApp(
   claudeAgents: AgentList = agentListFromEnv(),
 ): App {
   const distRoot = resolve(distDir)
+  // Claude の transcript の画像（#504）。transcript ごとに読んだところを覚えて、増えた分だけ読み足す
+  const transcriptImages = new TranscriptImages()
   // 端末に打ち込んだ返信の「処理中」。子プロセスの方（run）とは別に持ち、画面には合わせて出す
   const typed = terminal.replies ?? new TerminalReplies()
   const isAlive = terminal.alive ?? alive
@@ -2629,6 +2638,45 @@ export function createApp(
         res.writeHead(200, { 'Content-Type': found.mime, 'Content-Length': body.length, 'Cache-Control': 'private, max-age=31536000, immutable' })
         res.end(req.method === 'HEAD' ? undefined : body)
         return
+      }
+      // セッションに出てきた画像の一覧と、Claude の transcript の画像（#504）。どちらもパスはリクエストから受けない
+      const transcriptAt = path.startsWith(SESSIONS_PREFIX) ? path.indexOf(TRANSCRIPT_IMAGES_SEGMENT, SESSIONS_PREFIX.length) : -1
+      if (path.startsWith(SESSIONS_PREFIX) && (path.endsWith(GALLERY_SUFFIX) || transcriptAt > 0)) {
+        const id = transcriptAt > 0 ? sessionIdFrom(path, path.slice(transcriptAt)) : sessionIdFrom(path, GALLERY_SUFFIX)
+        if (id === null) return error(res, 400, 'bad session id')
+        const days = parseDays(q.get('days'), 90)
+        const { sessions } = await store.sessions(days)
+        const session = sessions.find((s) => s.id === id)
+        if (!session) return error(res, 404, 'session not found in window')
+        // 別のマシンのセッションの画像はこちらに無い
+        const remote = isRemoteHost(session.host, selfHost())
+        const transcript = remote ? '' : await progress.claudeTranscript(session)
+        if (transcriptAt > 0) {
+          if (!transcript) return error(res, 404, 'transcript がありません')
+          const img = await transcriptImages.read(transcript, path.slice(transcriptAt + TRANSCRIPT_IMAGES_SEGMENT.length))
+          if (!img.ok) return error(res, img.status, img.reason)
+          if (req.headers['if-none-match'] === img.etag) {
+            res.writeHead(304, { ETag: img.etag, 'Cache-Control': 'private, no-cache' })
+            res.end()
+            return
+          }
+          res.writeHead(200, imageHeaders({ ...img, name: `image.${img.type === 'jpeg' ? 'jpg' : img.type}` }, q.get('download') === '1'))
+          res.end(method === 'HEAD' ? undefined : img.bytes)
+          return
+        }
+        if (remote) return json(res, { id, items: [] } satisfies GalleryResponse)
+        const own = (await store.rows(days)).filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
+        const fromTranscript: GalleryItem[] = transcript
+          ? (await transcriptImages.list(transcript)).map((t) => ({
+              url: `${SESSIONS_PREFIX}${encodeURIComponent(id)}${TRANSCRIPT_IMAGES_SEGMENT}${t.key}`,
+              name: t.from === 'user' ? '貼った画像' : 'ツールが開いた画像',
+              at: t.at,
+              ts: rowTsAtOrAfter(own, t.at),
+              from: t.from,
+              source: 'transcript' as const,
+            }))
+          : []
+        return json(res, { id, items: mergeGallery([...galleryFromRows(id, own), ...fromTranscript]) } satisfies GalleryResponse)
       }
       // 本文の画像（#321）。`<key>` はそのセッションのターン完了の行の本文から拾った参照の鍵で、表に無ければ 404（パスはリクエストから受けない）
       const imagesAt = path.startsWith(SESSIONS_PREFIX) ? path.indexOf(IMAGES_SEGMENT, SESSIONS_PREFIX.length) : -1

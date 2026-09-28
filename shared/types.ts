@@ -1217,3 +1217,25 @@ export interface UsageResponse {
   codex?: CodexUsage
   claude?: ClaudeUsage
 }
+
+/** セッションに出てきた画像の 1 枚（#504。`shared/gallery.ts`） */
+export interface GalleryItem {
+  /** `<img src>` に使う URL（サーバが配る口） */
+  url: string
+  /** 画像の名前（ファイル名か、transcript の画像なら `貼った画像` など） */
+  name: string
+  /** 出てきた時刻（ISO）。並べる順に使う */
+  at: string
+  /** 飛び先の行の `ts`（`#/s/<id>?ts=`）。当てられなければ空 */
+  ts: string
+  /** 誰の発言に出てきたか */
+  from: 'user' | 'agent'
+  /** どこから拾ったか */
+  source: 'text' | 'attachment' | 'transcript'
+}
+
+/** GET /api/sessions/<id>/gallery。そのセッションに出てきた画像（新しい順）。開いたときと新しいターンが記録されたときだけ取る */
+export interface GalleryResponse {
+  id: string
+  items: GalleryItem[]
+}

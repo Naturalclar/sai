@@ -78,10 +78,10 @@ test('?download=1 は名前を付けて添付にする', async () => {
   assert.match(res.headers.get('content-disposition') ?? '', /^attachment; filename="codex-agent-icon\.png"/)
 })
 
-test('表に無い鍵・自分の入力に書いたパスは 404、本文に書かれていても作業ディレクトリの外は 403', async () => {
+test('表に無い鍵は 404、自分の入力に書いた作業ディレクトリの中の画像は配る（#504）、本文に書かれていても作業ディレクトリの外は 403', async () => {
   assert.equal((await fetch(`${base}/api/sessions/S1%40repo/images/0123456789abcdef`)).status, 404)
   assert.equal((await fetch(`${base}/api/sessions/S1%40repo/images/..%2F..%2Fetc%2Fpasswd`)).status, 404)
-  assert.equal((await get('S1@repo', 'docs/typed.png')).status, 404, 'ファイルはあるが、返答の本文には書かれていない')
+  assert.equal((await get('S1@repo', 'docs/typed.png')).status, 200, '自分の入力に書いた画像も配る（配る条件は同じ）')
   assert.equal((await get('S1@repo', secret)).status, 403)
 })
 

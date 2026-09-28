@@ -80,18 +80,19 @@ export function mergeGallery(items: readonly GalleryItem[]): GalleryItem[] {
 }
 
 /**
- * その側のバブルが出る行か。自分の入力は再開の行とターン完了の行の `user_text`、エージェントはターン完了の行の返答と待ちの行。
- * `SubagentStop` などの other・`入力待ち` の idle・終わりの行は描かないので、そこに付けても出ない（#505 のレビュー）
+ * 画像を付けてよいバブルが出る行か。自分の入力は再開の行とターン完了の行の `user_text`、エージェントは**ターン完了の行の返答だけ**。
+ * 待ちのバブルには画像を出さない（`Chat` が渡さない）ので、そこに付けると消える（#508 のレビュー。Read のあとに許可を聞いたターン）。
+ * `SubagentStop` などの other・`入力待ち` の idle・終わりの行も描かないので付けない（#505 のレビュー）
  */
 function hasBubble(r: FeedRow, from: GalleryItem['from']): boolean {
   const kind = eventKind(r.event, r.text)
   if (from === 'user') return (kind === 'resume' || kind === 'turn') && !!r.user_text
-  return kind === 'turn' || kind === 'waiting'
+  return kind === 'turn'
 }
 
 /**
  * transcript の画像の時刻 → 付ける行の `ts`。**その秒以降で一番古い、その側のバブルが出る行**（端末で貼った画像は入力の行と同じ秒、
- * Read で開いた画像はそのターンの完了の行が後に来る）。行の `ts` は秒までなので、画像の時刻を秒に丸めてから比べる
+ * Read で開いた画像はそのターンの完了の行＝返答のバブルに付く）。行の `ts` は秒までなので、画像の時刻を秒に丸めてから比べる
  */
 export function rowTsAtOrAfter(rows: readonly FeedRow[], at: string, from: GalleryItem['from'] = 'agent'): string {
   const floor = Math.floor(ms(at) / 1000) * 1000

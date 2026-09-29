@@ -133,6 +133,27 @@
   .diff-section .ln .no { flex: none; width: 3.5em; text-align: right; padding-right: 8px; color: var(--muted); opacity: .7; user-select: none; }
   .diff-section .ln .sign { flex: none; width: 1.2em; user-select: none; }
   .diff-section .ln .src { flex: 1; padding-right: 10px; }
+  /* -- 行へのコメント（#511）。行番号がそのままボタン。押すとその行の下に欄が開く */
+  .diff-section .ln .nos { display: flex; flex: none; padding: 0; border: 0; background: none; font: inherit; color: inherit; cursor: pointer; }
+  .diff-section .ln .nos:hover .no, .diff-section .ln .nos:focus-visible .no { color: var(--accent); opacity: 1; }
+  .diff-section .ln .nos:hover .no.new::after { content: " +"; }
+  .diff-section .ln.commented .no { color: var(--accent); opacity: 1; font-weight: 600; }
+  .diff-section .diff-comment, .diff-section .diff-comment-editor { position: sticky; left: 0; box-sizing: border-box; width: 100%; max-width: 44rem; margin: 4px 0 6px; padding: 6px 10px; border-left: 3px solid var(--accent); background: var(--bg); font-size: 13px; white-space: normal; }
+  .diff-comment .body { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .diff-comment .moved { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .diff-comment .linkish { font-size: 12px; margin-top: 2px; }
+  .diff-comment-editor textarea { box-sizing: border-box; width: 100%; min-height: 4.5em; font: inherit; font-size: 13px; padding: 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); resize: vertical; }
+  .diff-comment-editor .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+  .diff-comment-editor button, .diff-comment-bar button:not(.linkish) { font: inherit; font-size: 12px; padding: 3px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); cursor: pointer; }
+  .diff-comment-editor button.primary, .diff-comment-bar button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .diff-comment-editor button:disabled { opacity: .5; cursor: default; }
+  .diff-comment-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 8px; font-size: 13px; }
+  .diff-comment-bar.hint { color: var(--muted); font-size: 12px; }
+  .diff-comment-bar .n { font-weight: 600; }
+  .diff-orphan { margin: 0 0 8px; font-size: 12px; }
+  .diff-orphan .diff-comment { margin-top: 2px; border-left: 3px solid var(--accent); background: var(--bg); padding: 6px 10px; font-size: 13px; }
+  /* タッチでは行番号の幅が指に足りないので広げる */
+  @media (hover: none) and (pointer: coarse) { .diff-section .ln .nos .no { width: 4em; padding-top: 4px; padding-bottom: 4px; } }
   .diff-section .ln.add { background: color-mix(in srgb, var(--codex) 14%, transparent); }
   .diff-section .ln.del { background: color-mix(in srgb, var(--claude) 14%, transparent); }
   .modal.permissions .mode { font-size: 13px; margin-bottom: 10px; }

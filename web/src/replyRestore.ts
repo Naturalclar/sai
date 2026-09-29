@@ -30,3 +30,12 @@ export function restoresImages(current: number): boolean {
 export function restoresOnRequest(applied: number, seq: number): boolean {
   return seq > applied
 }
+
+/**
+ * 差分へのコメント（#511）を入力欄に入れたあとの本文。**打ちかけがあれば消さずに後ろへ足す**
+ * （戻しと違い、人が頼んで入れるものなので空でなくても入れる）
+ */
+export function appendInsert(current: string, text: string): string {
+  const kept = current.replace(/\s+$/, '')
+  return kept ? `${kept}\n\n${text}` : text
+}

@@ -49,9 +49,11 @@ export interface DiffProps {
   onToggleDiff: (id: string) => void
   /** いま差分を出しているか */
   diffOpen: boolean
+  /** 差分へのコメント（#511）を返信欄に入れる頼み。`seq` が増えたときだけ入る */
+  insert?: RestoreRequest
 }
 
-export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSidebar, onToggleDiff, diffOpen, onLeaveToSidebar, linear, settings }: { id: string; focusTs?: string; focusSide?: MessageSide } & PaneProps & DiffProps) {
+export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSidebar, onToggleDiff, diffOpen, insert, onLeaveToSidebar, linear, settings }: { id: string; focusTs?: string; focusSide?: MessageSide } & PaneProps & DiffProps) {
   // 描く行は直近 RECENT_DAYS 日から（#477）。「前の 7 日を表示」で広げ、別のセッションに移ったら戻す（描画中に導く）
   const [wide, setWide] = useState({ id, days: RECENT_DAYS })
   const recent = wide.id === id ? wide.days : RECENT_DAYS
@@ -224,6 +226,7 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
             steerable={canSteer(s.agent, mine ?? undefined)}
             // 前の返信を処理中か、預かりが残っていれば預ける（#305。先に預けたものを追い越さない）
             {...(restore ? { restore } : {})}
+            {...(insert ? { insert } : {})}
             // 送れなかった（確認待ち・送信失敗）ら ReplyBox が本文・画像・返信先を戻す（#350）
             onSend={async (text, attachments, { steer }) => (await send(id, text, { attachments, queue: shouldQueue(mine !== null || bgBusy, queuedCount), ...(steer ? { steer: true } : {}) })) === 'sent'}
           />

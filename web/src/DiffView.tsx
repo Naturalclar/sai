@@ -2,7 +2,18 @@ import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { parseUnifiedDiff } from '../../shared/diff.ts'
 import { autoOpenPaths } from './diffOpen.ts'
+import { commentMoved, lineAnchor, sameLine, type DiffComment, type DiffCommentSection } from './diffComments'
+import { DiffCommentEditor } from './DiffCommentEditor'
+import { DiffCommentNote } from './DiffCommentNote'
 import type { DiffFileStat, DiffSection } from './api'
+
+/** 行にコメントを付ける口（#511）。渡されたときだけ行番号が押せるようになる */
+export interface DiffViewComments {
+  section: DiffCommentSection
+  list: readonly DiffComment[]
+  onAdd: (comment: Omit<DiffComment, 'id'>) => void
+  onRemove: (id: string) => void
+}
 
 const STATUS_LABEL: Record<DiffFileStat['status'], string> = {
   added: '追加',
@@ -24,11 +35,13 @@ function lineCount(files: ReturnType<typeof parseUnifiedDiff>, path: string): nu
  * **最初は上から順に開いた状態**で出る（#221。予算を超えたぶんだけ閉じたまま）。
  * 本文の木は shared/diff.ts が作る（HTML 文字列は作らない）
  */
-export function DiffView({ section, title, empty, action }: { section: DiffSection; title: string; empty: string; action?: ReactNode }) {
+export function DiffView({ section, title, empty, action, comments }: { section: DiffSection; title: string; empty: string; action?: ReactNode; comments?: DiffViewComments }) {
   // patch のパースは重いので、同じ本文なら作り直さない（全部開くようになって行数が増えたぶん効く）
   const files = useMemo(() => parseUnifiedDiff(section.patch), [section.patch])
   const patchOf = (path: string) => files.find((f) => f.path === path || f.oldPath === path)
   const [open, setOpen] = useState<Record<string, boolean>>({})
+  // コメント欄を開いている行（#511）。1 つだけ
+  const [editing, setEditing] = useState<{ path: string; side: 'old' | 'new'; line: number } | null>(null)
   const total = section.files.reduce((n, f) => n + f.added + f.removed, 0)
 
   // 最初から開いておくファイル（#221）。上から順に、描画する行数が予算に収まるぶんだけ開く。
@@ -75,14 +88,56 @@ export function DiffView({ section, title, empty, action }: { section: DiffSecti
                     {file.hunks.map((h, i) => (
                       <div className="hunk" key={i}>
                         <div className="hh">{h.header}</div>
-                        {h.lines.map((l, j) => (
-                          <div className={`ln ${l.kind}`} key={j}>
-                            <span className="no old">{l.oldNo || ''}</span>
-                            <span className="no new">{l.newNo || ''}</span>
-                            <span className="sign">{l.kind === 'add' ? '+' : l.kind === 'del' ? '−' : ' '}</span>
-                            <span className="src">{l.text || ' '}</span>
-                          </div>
-                        ))}
+                        {h.lines.map((l, j) => {
+                          const numbers = (
+                            <>
+                              <span className="no old">{l.oldNo || ''}</span>
+                              <span className="no new">{l.newNo || ''}</span>
+                            </>
+                          )
+                          if (!comments) {
+                            return (
+                              <div className={`ln ${l.kind}`} key={j}>
+                                {numbers}
+                                <span className="sign">{l.kind === 'add' ? '+' : l.kind === 'del' ? '−' : ' '}</span>
+                                <span className="src">{l.text || ' '}</span>
+                              </div>
+                            )
+                          }
+                          // 行番号を押すとその行にコメントを書ける（#511。GitHub の「+」と同じ場所。狭い画面でも押せる大きさ）
+                          const at = { section: comments.section, path: f.path, ...lineAnchor(l) }
+                          const here = comments.list.filter((c) => sameLine(c, at))
+                          const isEditing = editing !== null && editing.path === at.path && editing.side === at.side && editing.line === at.line
+                          return (
+                            <div key={j}>
+                              <div className={`ln ${l.kind}${here.length ? ' commented' : ''}`}>
+                                <button
+                                  type="button"
+                                  className="nos"
+                                  aria-label={`${f.path}:${at.line} にコメント`}
+                                  title="この行にコメントを書く"
+                                  onClick={() => setEditing(isEditing ? null : { path: at.path, side: at.side, line: at.line })}
+                                >
+                                  {numbers}
+                                </button>
+                                <span className="sign">{l.kind === 'add' ? '+' : l.kind === 'del' ? '−' : ' '}</span>
+                                <span className="src">{l.text || ' '}</span>
+                              </div>
+                              {here.map((c) => (
+                                <DiffCommentNote key={c.id} comment={c} moved={commentMoved(c, files)} onRemove={() => comments.onRemove(c.id)} />
+                              ))}
+                              {isEditing && (
+                                <DiffCommentEditor
+                                  onCancel={() => setEditing(null)}
+                                  onSave={(body) => {
+                                    comments.onAdd({ ...at, kind: l.kind, code: l.text, body: body.trim() })
+                                    setEditing(null)
+                                  }}
+                                />
+                              )}
+                            </div>
+                          )
+                        })}
                       </div>
                     ))}
                   </div>

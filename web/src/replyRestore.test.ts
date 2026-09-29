@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { restoresImages, restoresOnRequest, restoresText } from './replyRestore.ts'
+import { appendInsert, restoresImages, restoresOnRequest, restoresText } from './replyRestore.ts'
 
 test('restoresText は入力欄が空のときだけ戻す', () => {
   assert.equal(restoresText(''), true)
@@ -21,4 +21,10 @@ test('restoresOnRequest は seq が増えたときだけ', () => {
   assert.equal(restoresOnRequest(0, 0), false)
   assert.equal(restoresOnRequest(2, 2), false)
   assert.equal(restoresOnRequest(2, 1), false)
+})
+
+test('appendInsert: 空ならそのまま、打ちかけがあれば 1 行空けて後ろへ足す（#511）', () => {
+  assert.equal(appendInsert('', 'コメント'), 'コメント')
+  assert.equal(appendInsert('  \n', 'コメント'), 'コメント')
+  assert.equal(appendInsert('先に書いた\n\n', 'コメント'), '先に書いた\n\nコメント')
 })

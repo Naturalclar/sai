@@ -142,6 +142,8 @@ import {
   agentEntry,
   agentOverlap,
   agentReplyRows,
+  HANDED_KEEP_DAYS,
+  withHandedReplies,
   replierName,
   agentTargets,
   budgetRefusal,
@@ -154,6 +156,7 @@ import {
   tokensLabel,
   usageRefusal,
 } from '../shared/agentMessages.ts'
+import type { PendingReply } from '../shared/agentMessages.ts'
 import { eventKind } from '../shared/events.ts'
 import { stepLabel } from '../shared/progress.ts'
 import { contextRevKey } from '../shared/contextSize.ts'
@@ -1779,7 +1782,13 @@ export function createApp(
     }
     launching.add(id)
     try {
-      const out = await startTurn(id, session, raw, cwd, openTerminal, text, attachments, o)
+      // 送り元にまだ渡していない返答を、このターンの本文の頭に足す（#594）。起動できたときだけ「渡した」にする
+      const handed = await pendingRepliesOf(id)
+      const out = await startTurn(id, session, raw, cwd, openTerminal, withHandedReplies(text, handed.replies), attachments, o)
+      if (out.status === 202 && handed.ids.length > 0) {
+        agents.handed(handed.ids)
+        await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} 待っていなかった返答 ${handed.ids.length} 件を本文の頭に足した（${handed.ids.join(', ')}）\n`).catch(() => {})
+      }
       // メッセージで起動したターンかを覚える（そのターンからは送らせない。連鎖 1 段。#311）。人の返信で起動したら忘れる
       if (out.status === 202) agents.launched(id, o.origin)
       return out
@@ -2165,6 +2174,27 @@ export function createApp(
     return json(res, payload, 202)
   }
 
+  /**
+   * 送り元（`from`）にまだ渡していない返答（#594）。送ってから `HANDED_KEEP_DAYS` 以内で、相手のターンが終わった・失敗したものだけ（古い順）。
+   * まだ返っていない依頼は足さない
+   */
+  const pendingRepliesOf = async (from: string): Promise<{ replies: PendingReply[]; ids: string[] }> => {
+    const waiting = agents.unhanded(from, Date.now() - HANDED_KEEP_DAYS * 86_400_000)
+    if (waiting.length === 0) return { replies: [], ids: [] }
+    const { sessions } = await store.sessions(QUEUE_DAYS)
+    const nameOf = (to: string) => {
+      const target = sessions.find((s) => s.id === to)
+      return target ? replierName(target) : to
+    }
+    const replies: PendingReply[] = []
+    for (const m of waiting) {
+      const r = await agentResult(m)
+      if (!r || r.status === 'pending') continue
+      replies.push({ message_id: m.message_id, to_name: nameOf(m.to), status: r.status, ...(r.text !== undefined ? { text: r.text } : {}), ...(r.error !== undefined ? { error: r.error } : {}) })
+    }
+    return { replies, ids: replies.map((r) => r.message_id) }
+  }
+
   /** 送ったメッセージの結果。相手のそのターンが終わっていれば返答、失敗・止まっていれば理由。まだなら null */
   const agentResult = async (message: AgentMessage): Promise<AgentWaitResponse | null> => {
     const base = { message_id: message.message_id, to: message.to }
@@ -2192,7 +2222,11 @@ export function createApp(
     const until = Date.now() + (q.get('wait') === '1' ? WAIT_MS : 0)
     for (;;) {
       const result = await agentResult(message)
-      if (result) return json(res, result)
+      // sai_wait で受け取ったものは送り元の会話に入った（#594）。次のターンの頭に重ねて足さない
+      if (result) {
+        agents.handed([message.message_id])
+        return json(res, result)
+      }
       if (Date.now() >= until) return json(res, { message_id: message.message_id, to: message.to, status: 'pending' } satisfies AgentWaitResponse, 202)
       await new Promise((r) => setTimeout(r, AGENT_POLL_MS))
     }
@@ -2422,6 +2456,7 @@ export function createApp(
         const until = Date.now() + mcpNum(args.wait_seconds, MCP_WAIT_DEFAULT_S, 0, MCP_WAIT_MAX_S) * 1000
         for (;;) {
           const result = await agentResult(message)
+          if (result) agents.handed([message.message_id])
           if (result?.status === 'done') return textResult(result.text ?? '')
           if (result?.status === 'failed') return textResult(`相手のターンが失敗しました: ${result.error ?? ''}`, true)
           if (Date.now() >= until) return textResult('まだ返答がありません。あとでもう一度 sai_wait を呼んでください')

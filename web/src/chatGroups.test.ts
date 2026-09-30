@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { FeedRow } from '../../shared/types.ts'
 import { groupRows, promptArrived, speakerLabel, toUtterances } from './chatGroups.ts'
+import { withHandedReplies } from '../../shared/agentMessages.ts'
 
 // 時刻は Asia/Tokyo 固定のプロセスに依存しないよう、同じ日の中で分だけ動かす
 const base = new Date('2026-09-02T03:00:00Z')
@@ -215,4 +216,13 @@ test('送ったメッセージへの返答（#588）は相手のバブル 1 つ�
   ])
   const groups = groupRows([row(0), reply])[0]!.groups
   assert.deepEqual(groups.map((g) => g.session), ['s1', 's2'], '同じエージェントでも別のセッションなので塊を分ける')
+})
+
+test('toUtterances: SAI が頭に足した返答の塊（#594）は自分のバブルから外し、足した数を添える', () => {
+  const user_text = withHandedReplies('人から', [{ message_id: 'ab', to_name: 'かなで', status: 'done', text: 'PR #9' }])
+  const [mine] = toUtterances([row(0, { user_text })])
+  assert.equal(mine!.text, '人から')
+  assert.equal(mine!.handedReplies, 1)
+  const [plain] = toUtterances([row(0, { user_text: '人から' })])
+  assert.equal(plain!.handedReplies, undefined)
 })

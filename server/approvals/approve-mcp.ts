@@ -42,7 +42,7 @@ export const AGENT_TOOLS = [
   },
   {
     name: 'sai_send',
-    description: `SAI の別のセッションにメッセージを送る（to は sai_sessions の id）。**使う場面**: sai_sessions の「同じファイル」に、あなたが変える関数・箇所を相手も変えていそうなとき（着手の前かマージの前に 1 回、どこをどう変えるか・変えたかを聞く）／相手が入れた機能の上に乗せるとき、壊してはいけない前提を聞く。**使わない場面**: リポジトリと docs/ を読めば分かること／同じファイルでも別の場所に足すだけで箇所が重ならない変更。相手が処理中なら、終わってから回る。返答は sai_wait で受け取る（待たずにターンを終えてもよい。そのときの返答は人が見る画面にだけ出て、あなたの会話には入らない）。受け取った相手はそれまでの長い会話を読み直すのでトークンを大きく使う: 1 回で済むように、何をしてほしいか・何を返してほしいかを短く具体的に書く。1 ターンに ${AGENT_SEND_MAX} 回まで。別のセッションから受け取ったメッセージで回っているターンからは送れない。相手の使用量の枠が残り少ないとき、1 ターンで相手に読み直させる量が予算を超えるときも送れない`,
+    description: `SAI の別のセッションにメッセージを送る（to は sai_sessions の id）。**使う場面**: sai_sessions の「同じファイル」に、あなたが変える関数・箇所を相手も変えていそうなとき（着手の前かマージの前に 1 回、どこをどう変えるか・変えたかを聞く）／相手が入れた機能の上に乗せるとき、壊してはいけない前提を聞く。**使わない場面**: リポジトリと docs/ を読めば分かること／同じファイルでも別の場所に足すだけで箇所が重ならない変更。相手が処理中なら、終わってから回る。**待たずにターンを終えてよい**: 返答は人が見る画面に出て、あなたの次のターン（SAI から回るもの）の頭にも届く。その場で答えが要る短い質問だけ sai_wait で待つ。受け取った相手はそれまでの長い会話を読み直すのでトークンを大きく使う: 1 回で済むように、何をしてほしいか・何を返してほしいかを短く具体的に書く。1 ターンに ${AGENT_SEND_MAX} 回まで。別のセッションから受け取ったメッセージで回っているターンからは送れない。相手の使用量の枠が残り少ないとき、1 ターンで相手に読み直させる量が予算を超えるときも送れない`,
     inputSchema: {
       type: 'object',
       properties: { to: { type: 'string', description: '送り先のセッションの id' }, text: { type: 'string', description: '頼みたいこと・聞きたいこと' } },
@@ -51,7 +51,7 @@ export const AGENT_TOOLS = [
   },
   {
     name: 'sai_wait',
-    description: 'sai_send で送ったメッセージへの返答（相手のそのターンの最後の発言）を、相手のターンが終わるまで待って受け取る。長い返答は途中で切られる',
+    description: 'sai_send で送ったメッセージへの返答（相手のそのターンの最後の発言）を、相手のターンが終わるまで待って受け取る。**その場で答えが要る短い質問のときだけ**使う（着手のような長い依頼は待たずにターンを終える。返答は次のターンの頭に届く）。ここで受け取った返答は次のターンの頭には重ねない。長い返答は途中で切られる',
     inputSchema: { type: 'object', properties: { message_id: { type: 'string', description: 'sai_send が返した message_id' } }, required: ['message_id'] },
   },
 ]
@@ -129,7 +129,7 @@ export async function agentTool(
       const how = body.via === 'queued' ? '相手は処理中なので、終わってから回ります' : '相手のターンを始めました'
       // 読み直す量が分かっていれば、使ったぶんと予算の残りも伝える（次に送るかをエージェントが決められるように。#311）
       const read = body.context_tokens > 0 ? `相手は${tokensLabel(body.context_tokens)}を読み直します（このターンの予算の残りは${tokensLabel(Math.max(0, body.read_budget - body.read_tokens)) || ' 0'}）。` : ''
-      return textResult(`送りました（message_id: ${body.message_id}。${how}）。${read}このターンで送れるのはあと ${Math.max(0, body.limit - body.sent)} 回です。返答は sai_wait で受け取れます`)
+      return textResult(`送りました（message_id: ${body.message_id}。${how}）。${read}このターンで送れるのはあと ${Math.max(0, body.limit - body.sent)} 回です。待たずにターンを終えれば、返答は次のターンの頭に届きます（その場で要るなら sai_wait）`)
     }
     if (name === 'sai_wait') {
       const id = typeof args.message_id === 'string' ? args.message_id : ''

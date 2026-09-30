@@ -1,4 +1,5 @@
 // チャットの行をバブルの塊にまとめる。DOM に依存しないので node:test で回す（chatGroups.test.ts）
+import { splitHandedReplies } from '../../shared/agentMessages.ts'
 import type { AgentReplyTag, FeedRow, Profile, SessionSummary } from '../../shared/types.ts'
 import { wasClipped } from '../../shared/clipped.ts'
 import { entityId } from '../../shared/entity.ts'
@@ -42,6 +43,14 @@ export interface Utterance {
    * 相手に届いた文（見出し付きの入力）は自分のバブルにしない
    */
   reply?: AgentReplyTag
+  /** 自分の発言の頭に SAI が足した、待っていなかった返答の数（#594）。塊は text から外してあり、印だけ出す */
+  handedReplies?: number
+}
+
+/** 自分の発言の本文。SAI が頭に足した返答の塊（#594）は外し、足した数を添える（記録の `user_text` には残っている） */
+function mineOf(userText: string | undefined): { text: string; handedReplies?: number } {
+  const { text, handed } = splitHandedReplies(userText ?? '')
+  return handed > 0 ? { text, handedReplies: handed } : { text }
 }
 
 export interface Group {
@@ -92,7 +101,7 @@ export function toUtterances(rows: FeedRow[]): Utterance[] {
     if (kind === 'resume') {
       // 入力した瞬間の行。user_text があれば自分の発言。無い（合図だけの古い形）ならバブルにしない
       if (mine) {
-        out.push({ speaker: 'me', row, text: row.user_text ?? '', key: `${row.ts}:${index}:me`, ...(wasClipped(row, 'user_text') ? { clipped: true } : {}) })
+        out.push({ speaker: 'me', row, ...mineOf(row.user_text), key: `${row.ts}:${index}:me`, ...(wasClipped(row, 'user_text') ? { clipped: true } : {}) })
         prompted.set(id, mine)
       }
       return
@@ -113,7 +122,7 @@ export function toUtterances(rows: FeedRow[]): Utterance[] {
     // 知らない event（#235）。ここまでで返さないと下のターン完了の経路に落ちてバブルになる。
     // 集計側が数えていないものを出すと「N ターン」と見えているバブルの数が合わなくなる
     if (kind === 'other') return
-    if (mine && prompted.get(id) !== mine) out.push({ speaker: 'me', row, text: row.user_text ?? '', key: `${row.ts}:${index}:me`, ...(wasClipped(row, 'user_text') ? { clipped: true } : {}) })
+    if (mine && prompted.get(id) !== mine) out.push({ speaker: 'me', row, ...mineOf(row.user_text), key: `${row.ts}:${index}:me`, ...(wasClipped(row, 'user_text') ? { clipped: true } : {}) })
     prompted.delete(id)
     const theirs: Utterance = { speaker: row.agent, row, text: row.text ?? '', key: `${row.ts}:${index}`, ...(wasClipped(row, 'text') ? { clipped: true } : {}) }
     if (row.thinking?.trim()) theirs.thinking = row.thinking

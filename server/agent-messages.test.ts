@@ -7,7 +7,7 @@ import type { Server } from 'node:http'
 import { appendFile, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { AGENT_SEND_MAX } from '../shared/agentMessages.ts'
+import { AGENT_SEND_MAX, HANDED_MARK, splitHandedReplies } from '../shared/agentMessages.ts'
 import type {
   AgentSendResponse,
   AgentSessionsResponse,
@@ -474,7 +474,7 @@ test('送り元が待たずにターンを終えても、相手の返答が送�
     // 送り元は待たない（sai_wait を呼ばずにターンを終える）
     idle('A1@r')
   }
-  assert.match(delivered, /返答として送り元の画面に出ます/, '見出しは「送り元に返ります」と言い切らない')
+  assert.match(delivered, /返答として送り元の画面に出て、送り元の次のターンの頭にも届きます/, '見出しは返答がどこへ行くかを書く（#594）')
   const detail = async () => (await (await fetch(`${base}/api/sessions/A1%40r`)).json()) as SessionDetailResponse
   const before = await detail()
   assert.equal(before.agent_replies?.some((r) => r.agent_reply?.message_id === messageId) ?? false, false, 'まだ返っていない')
@@ -489,4 +489,89 @@ test('送り元が待たずにターンを終えても、相手の返答が送�
   assert.equal(((await (await fetch(`${base}/api/sessions/B1%40r`)).json()) as SessionDetailResponse).agent_replies?.some((r) => r.agent_reply?.message_id === messageId) ?? false, false)
   await humanReply('B1@r')
   idle('B1@r')
+})
+
+test('待たずに終えた送り元の次のターンの頭に、まだ渡していない返答を足す。2 回目には足さない。渡したことは画面と立て直しに残る（#594）', async () => {
+  turn('A1@r')
+  let messageId = ''
+  let delivered = ''
+  let failedId = ''
+  try {
+    messageId = ((await (await send('A1@r', 'B1@r', '調べて')).json()) as AgentSendResponse).message_id
+    delivered = runner.started.at(-1)!.cmd.text
+    // もう 1 通は返答がまだ無い（足さない）
+  } finally {
+    idle('A1@r')
+  }
+  await humanReply('B1@r')
+  idle('B1@r')
+  turn('A1@r')
+  try {
+    failedId = ((await (await send('A1@r', 'B1@r', 'まだ返らない')).json()) as AgentSendResponse).message_id
+  } finally {
+    idle('A1@r')
+  }
+  idle('B1@r')
+  await appendFile(feedFile, JSON.stringify(row(new Date(), 'B1', { repo: 'r', cwd: work2, project: 'o/r', user_text: delivered, text: 'PR #9 を出しました' })) + '\n')
+
+  // 人が送り元に次を送る → 本文の頭に返答が 1 件足される
+  runner.started.length = 0
+  await humanReply('A1@r')
+  const first = runner.started.at(-1)!.cmd.text
+  assert.ok(first.startsWith(HANDED_MARK), '本文の頭に足す')
+  assert.match(first, new RegExp(`message_id: ${messageId}`))
+  assert.match(first, /PR #9 を出しました/)
+  assert.doesNotMatch(first, new RegExp(failedId), '返答がまだ無い依頼は足さない')
+  assert.ok(first.endsWith('人から'), '人が打った文はそのまま最後に')
+  // 前のテスト（#588）で待たずに終えた返答も、まだ渡していないので一緒に足される
+  assert.equal(splitHandedReplies(first).text, '人から', '画面は塊を外して見せる')
+  assert.equal(splitHandedReplies(first).handed, 2)
+
+  // 画面の返答のバブルに「渡した」が出る
+  const detail = (await (await fetch(`${base}/api/sessions/A1%40r`)).json()) as SessionDetailResponse
+  assert.ok(detail.agent_replies?.find((r) => r.agent_reply?.message_id === messageId)?.agent_reply?.handed_at, '渡した時刻が載る')
+
+  // 2 回目には足さない。渡したことはファイルに残る（立て直しても残る）
+  await humanReply('A1@r')
+  assert.equal(runner.started.at(-1)!.cmd.text, '人から')
+  const saved = JSON.parse(await readFile(join(dir, 'agent-messages.json'), 'utf-8')) as { messages: { message_id: string; handed_at?: string }[] }
+  assert.ok(saved.messages.find((m) => m.message_id === messageId)?.handed_at)
+  assert.equal(saved.messages.find((m) => m.message_id === failedId)?.handed_at, undefined, 'まだ返っていないものは渡していない')
+  idle('A1@r')
+})
+
+test('sai_wait で受け取った返答は、次のターンの頭に重ねて足さない（#594）', async () => {
+  turn('A1@r')
+  let messageId = ''
+  let delivered = ''
+  try {
+    messageId = ((await (await send('A1@r', 'B1@r', '短い質問')).json()) as AgentSendResponse).message_id
+    delivered = runner.started.at(-1)!.cmd.text
+  } finally {
+    idle('A1@r')
+  }
+  idle('B1@r')
+  await appendFile(feedFile, JSON.stringify(row(new Date(), 'B1', { repo: 'r', cwd: work2, project: 'o/r', user_text: delivered, text: 'はい' })) + '\n')
+  assert.equal((await agent(`/api/agent/wait?from=A1%40r&message_id=${messageId}`)).status, 200)
+  await humanReply('A1@r')
+  assert.doesNotMatch(runner.started.at(-1)!.cmd.text, new RegExp(messageId))
+  idle('A1@r')
+})
+
+test('相手のターンが失敗した依頼は、次のターンの頭に 1 行で知らせる（#594）', async () => {
+  turn('A1@r')
+  let body: AgentSendResponse
+  try {
+    body = (await (await send('A1@r', 'B1@r', '落ちる依頼')).json()) as AgentSendResponse
+  } finally {
+    idle('A1@r')
+  }
+  turn('B1@r', 'failed-594', { text: runner.started.at(-1)!.cmd.text, failed: { code: 2, tail: 'だめ' } })
+  try {
+    await humanReply('A1@r')
+    assert.match(runner.started.at(-1)!.cmd.text, new RegExp(`message_id: ${body.message_id}）への依頼は失敗しました: 終了コード 2: だめ`))
+  } finally {
+    idle('A1@r')
+    idle('B1@r')
+  }
 })

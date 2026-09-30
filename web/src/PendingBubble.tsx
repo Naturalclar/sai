@@ -3,6 +3,7 @@ import type { Profile } from './api'
 import { elapsedLabel, hm, LONG_REPLY_MS, parseTs } from './format'
 import { AttachedImages } from './AttachedImages'
 import { splitAttachments } from '../../shared/attachments.ts'
+import { splitHandedReplies } from '../../shared/agentMessages.ts'
 
 /**
  * 処理中の返信の仮バブル。サーバの replying（か送った直後のローカル）から出し、フックで行が届いたら
@@ -39,8 +40,8 @@ export function PendingBubble({ text, since, now, repo, quiet, profile, typed, l
           {children}
         </div>
         <div className="msg">
-          <div className="body">{splitAttachments(text).body}</div>
-          <AttachedImages urls={splitAttachments(text).urls} />
+          <div className="body">{splitAttachments(splitHandedReplies(text).text).body}</div>
+          <AttachedImages urls={splitAttachments(splitHandedReplies(text).text).urls} />
         </div>
       </div>
     </div>

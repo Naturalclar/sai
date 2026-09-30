@@ -1414,8 +1414,8 @@ export interface GalleryItem {
   ts: string
   /** 誰の発言に出てきたか */
   from: 'user' | 'agent'
-  /** どこから拾ったか */
-  source: 'text' | 'attachment' | 'transcript'
+  /** どこから拾ったか（`generated` は Codex の画像生成で作った画像。#575） */
+  source: 'text' | 'attachment' | 'transcript' | 'generated'
 }
 
 /**

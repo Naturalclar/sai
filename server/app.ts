@@ -160,6 +160,7 @@ import { isRemoteHost } from '../shared/host.ts'
 import { IMAGES_SEGMENT } from '../shared/images.ts'
 import { imageHeaders, imageTable, readSessionImage } from './local/images.ts'
 import { TranscriptImages } from './local/transcriptImages.ts'
+import { CodexImages } from './local/codexImages.ts'
 import { galleryFromRows, mergeGallery, rowTsAtOrAfter } from '../shared/gallery.ts'
 import { searchRows } from './rows/search.ts'
 import { searchWords } from '../shared/search.ts'
@@ -218,6 +219,8 @@ const GALLERY_SUFFIX = '/gallery'
 const TURN_SUFFIX = '/turn'
 /** `GET /api/sessions/<id>/transcript-images/<key>`（#504）。id は `/` を含まないので、最初のこれが区切り */
 const TRANSCRIPT_IMAGES_SEGMENT = '/transcript-images/'
+/** `GET /api/sessions/<id>/codex-images/<key>`（#575）。Codex の画像生成で作った画像。鍵は一覧で見つけたファイル名だけ */
+const CODEX_IMAGES_SEGMENT = '/codex-images/'
 const ATTACHMENTS_SUFFIX = '/attachments'
 /** 預かった返信（#305）。`DELETE /api/sessions/<id>/queue/<queue_id>` と `POST /api/sessions/<id>/queue/resume` */
 const QUEUE_SEGMENT = '/queue/'
@@ -455,6 +458,8 @@ export interface TerminalDeps {
    * 既定で読むと、テストの結果が回したマシンの設定で変わる）
    */
   claudeHooks?: ClaudeHooksReader
+  /** Codex の画像生成で作った画像の置き場（#575）。テストでは一時ディレクトリを指す */
+  codexImages?: CodexImages
 }
 
 export function createApp(
@@ -482,6 +487,8 @@ export function createApp(
   const distRoot = resolve(distDir)
   // Claude の transcript の画像（#504）。transcript ごとに読んだところを覚えて、増えた分だけ読み足す
   const transcriptImages = new TranscriptImages()
+  // Codex の画像生成で作った画像（#575）。rollout の item_completed から拾い、CODEX_HOME/generated_images/<スレッド>/ の中だけ配る
+  const codexImages = terminal.codexImages ?? new CodexImages()
   // 端末に打ち込んだ返信の「処理中」。子プロセスの方（run）とは別に持ち、画面には合わせて出す
   const typed = terminal.replies ?? new TerminalReplies()
   const isAlive = terminal.alive ?? alive
@@ -2879,8 +2886,9 @@ export function createApp(
       }
       // セッションに出てきた画像の一覧と、Claude の transcript の画像（#504）。どちらもパスはリクエストから受けない
       const transcriptAt = path.startsWith(SESSIONS_PREFIX) ? path.indexOf(TRANSCRIPT_IMAGES_SEGMENT, SESSIONS_PREFIX.length) : -1
-      if (path.startsWith(SESSIONS_PREFIX) && (path.endsWith(GALLERY_SUFFIX) || transcriptAt > 0)) {
-        const id = transcriptAt > 0 ? sessionIdFrom(path, path.slice(transcriptAt)) : sessionIdFrom(path, GALLERY_SUFFIX)
+      const codexImagesAt = path.startsWith(SESSIONS_PREFIX) ? path.indexOf(CODEX_IMAGES_SEGMENT, SESSIONS_PREFIX.length) : -1
+      if (path.startsWith(SESSIONS_PREFIX) && (path.endsWith(GALLERY_SUFFIX) || transcriptAt > 0 || codexImagesAt > 0)) {
+        const id = transcriptAt > 0 ? sessionIdFrom(path, path.slice(transcriptAt)) : codexImagesAt > 0 ? sessionIdFrom(path, path.slice(codexImagesAt)) : sessionIdFrom(path, GALLERY_SUFFIX)
         if (id === null) return error(res, 400, 'bad session id')
         const days = parseDays(q.get('days'), 90)
         const { sessions } = await store.sessions(days)
@@ -2889,6 +2897,22 @@ export function createApp(
         // 別のマシンのセッションの画像はこちらに無い
         const remote = isRemoteHost(session.host, selfHost())
         const transcript = remote ? '' : await progress.claudeTranscript(session)
+        // Codex の画像生成（#575）。rollout は行のセッション ID から引く（リクエストからは受けない）
+        const thread = !remote && session.agent === 'codex' ? sessionOf(session) : ''
+        const rollout = thread ? ((await progress.codexRollout?.(thread)) ?? '') : ''
+        if (codexImagesAt > 0) {
+          if (!rollout) return error(res, 404, 'rollout がありません')
+          const img = await codexImages.read(rollout, thread, path.slice(codexImagesAt + CODEX_IMAGES_SEGMENT.length))
+          if (!img.ok) return error(res, img.status, img.reason)
+          if (req.headers['if-none-match'] === img.etag) {
+            res.writeHead(304, { ETag: img.etag, 'Cache-Control': 'private, no-cache' })
+            res.end()
+            return
+          }
+          res.writeHead(200, imageHeaders(img, q.get('download') === '1'))
+          res.end(method === 'HEAD' ? undefined : img.bytes)
+          return
+        }
         if (transcriptAt > 0) {
           if (!transcript) return error(res, 404, 'transcript がありません')
           const img = await transcriptImages.read(transcript, path.slice(transcriptAt + TRANSCRIPT_IMAGES_SEGMENT.length))
@@ -2914,7 +2938,18 @@ export function createApp(
               source: 'transcript' as const,
             }))
           : []
-        return json(res, { id, items: mergeGallery([...galleryFromRows(id, own), ...fromTranscript]) } satisfies GalleryResponse)
+        // 画像を作ったターンの返答のバブルの下に出す（作った時刻以降で一番古い返答の行）
+        const generated: GalleryItem[] = rollout
+          ? (await codexImages.list(rollout, thread)).map((g) => ({
+              url: `${SESSIONS_PREFIX}${encodeURIComponent(id)}${CODEX_IMAGES_SEGMENT}${encodeURIComponent(g.key)}`,
+              name: '生成した画像',
+              at: g.at,
+              ts: rowTsAtOrAfter(own, g.at, 'agent'),
+              from: 'agent' as const,
+              source: 'generated' as const,
+            }))
+          : []
+        return json(res, { id, items: mergeGallery([...galleryFromRows(id, own), ...fromTranscript, ...generated]) } satisfies GalleryResponse)
       }
       // 本文の画像（#321）。`<key>` はそのセッションのターン完了の行の本文から拾った参照の鍵で、表に無ければ 404（パスはリクエストから受けない）
       const imagesAt = path.startsWith(SESSIONS_PREFIX) ? path.indexOf(IMAGES_SEGMENT, SESSIONS_PREFIX.length) : -1

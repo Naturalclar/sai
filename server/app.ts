@@ -573,7 +573,24 @@ export function createApp(
   const codexHeldElsewhere = async (session: SessionSummary, raw: string): Promise<boolean> => {
     if (session.agent !== 'codex') return false
     if (codexAppEnabled && (codexApp.holds?.(raw) ?? false)) return false
-    return (await isCodexWriterActive(raw)) || (session.pid > 0 && isAlive(session.pid))
+    if (await isCodexWriterActive(raw)) return true
+    return session.pid > 0 && isAlive(session.pid) && !(await ownAppServer(session.pid))
+  }
+  /**
+   * 行の `pid` が SAI 自身の app-server（かその子孫）か（#482）。SAI の app-server が回したターンでも `notify` は鳴り、
+   * record.py は行の `pid` にその app-server を載せる（0.154.0 で実測）ので、`thread/closed` で `holds()` が偽になった
+   * あとに自分を「ほか」と数えて、レビューを断り・返信を queue に回していた。`codex` が node の包みで起動されると
+   * 行の `pid` は包みの子（本体）になるので、子孫まで見る
+   */
+  const ownAppServer = async (pid: number): Promise<boolean> => {
+    const own = codexAppEnabled ? (codexApp.ownPid?.() ?? 0) : 0
+    if (!own) return false
+    if (pid === own) return true
+    try {
+      return isDescendant(pid, own, parsePs(await terminal.ps()))
+    } catch {
+      return false
+    }
   }
   /**
    * 端末に打ち込んだ・queue に渡した返信のターンが、送った時刻より後に始まったか（#329。`TerminalReplies.checkDelivery()` が 2 分後に聞く）。

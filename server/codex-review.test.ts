@@ -36,6 +36,11 @@ const locked = new Set<string>()
 const held = new Set<string>()
 /** 端末で開いている Codex の pid（行の pane と組で `terminalOf()` が当たる） */
 const TUI_PID = 4242
+/** SAI 自身の app-server（#482）と、その子（node の包みで起こしたときの本体）・ほかの生きている codex */
+const OWN_PID = 5151
+const OWN_CHILD_PID = 6161
+const OTHER_PID = 7171
+const ALIVE = new Set([TUI_PID, OWN_PID, OWN_CHILD_PID, OTHER_PID])
 
 const codexApp: CodexApp = {
   running: (id) => busy.has(id),
@@ -48,6 +53,7 @@ const codexApp: CodexApp = {
     reviewed.push(input)
   },
   holds: (threadId) => held.has(threadId),
+  ownPid: () => OWN_PID,
 }
 
 // origin/main だけがあるリポジトリ（ローカルの main は無い）
@@ -72,6 +78,12 @@ before(async () => {
     JSON.stringify(row(now, 'L1', { agent: 'codex', repo: 'r', cwd: work, pane: '', pid: 0, session_source: 'rollout' })),
     // SAI の app-server が resume 済み（lock を開いているのは SAI 自身）
     JSON.stringify(row(now, 'H1', { agent: 'codex', repo: 'r', cwd: work, pane: '', pid: 0, session_source: 'rollout' })),
+    // SAI の app-server が回したターンの行（notify が鳴り、行の pid が SAI 自身の app-server になる。#482）。
+    // thread/closed のあとなので holds() は偽
+    JSON.stringify(row(now, 'S1', { agent: 'codex', repo: 'r', cwd: work, pane: '', pid: OWN_PID, session_source: 'rollout' })),
+    JSON.stringify(row(now, 'S2', { agent: 'codex', repo: 'r', cwd: work, pane: '', pid: OWN_CHILD_PID, session_source: 'rollout' })),
+    // 行の pid がほかの生きている codex（共有の app-server --listen など）
+    JSON.stringify(row(now, 'O1', { agent: 'codex', repo: 'r', cwd: work, pane: '', pid: OTHER_PID, session_source: 'rollout' })),
   ]
   await writeFile(join(dir, `${localDate(now.toISOString())}.jsonl`), rows.join('\n') + '\n')
   const app = createApp(
@@ -82,7 +94,7 @@ before(async () => {
     new BuildFreshness(join(dir, 'dist'), [], 0),
     undefined,
     new Authenticator(async () => null),
-    { tmux: { run: async () => '' }, ps: async () => '', alive: (pid) => pid === TUI_PID, codexWriterActive: async (session) => locked.has(session), codexApp },
+    { tmux: { run: async () => '' }, ps: async () => `${OWN_CHILD_PID} ${OWN_PID}\n${OTHER_PID} 1\n`, alive: (pid) => ALIVE.has(pid), codexWriterActive: async (session) => locked.has(session), codexApp },
     undefined,
     git,
   )
@@ -210,4 +222,18 @@ test('SAI の app-server が握っているスレッドは今までどおり通�
     locked.delete('H1')
     held.delete('H1')
   }
+})
+
+test('行の pid が SAI 自身の app-server（かその子）なら「ほか」と数えない。ほかの生きている pid は今までどおり断る（#482）', async () => {
+  reviewed.length = 0
+  for (const id of ['S1', 'S2']) {
+    const res = await post(`${id}@r`, { target: 'uncommittedChanges' })
+    assert.equal(res.status, 202, `${id}: SAI の app-server が回したターンの行を、自分以外が握っていると読まない`)
+  }
+  assert.deepEqual(reviewed.map((r) => r.threadId), ['S1', 'S2'])
+  reviewed.length = 0
+  const other = await post('O1@r', { target: 'uncommittedChanges' })
+  assert.equal(other.status, 400)
+  assert.match(((await other.json()) as { error: string }).error, /ほかのところ/)
+  assert.deepEqual(reviewed, [])
 })

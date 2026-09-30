@@ -1,6 +1,13 @@
-import { useCallback, useEffect, useState } from 'react'
-import { api, type PrDetailResponse } from './api'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { parseUnifiedDiff } from '../../shared/diff.ts'
+import { replyBlockedReason } from '../../shared/reply.ts'
+import { api, type PrDetailResponse, type SessionsResponse } from './api'
 import { DiffView } from './DiffView'
+import { DiffCommentBar } from './DiffCommentBar'
+import { DiffCommentNote } from './DiffCommentNote'
+import { commentLine, formatDiffComments } from './diffComments'
+import { useDiffComments } from './useDiffComments'
+import { prAuthorSession, prCommentKey } from './prSession'
 import { Markdown } from './Markdown'
 import { agoLabel, checkLabel, reviewLabel } from './prLabels'
 import type { PaneProps } from './App'
@@ -14,9 +21,13 @@ const STATE_LABEL: Record<string, string> = { OPEN: 'open', MERGED: 'マージ�
 
 /**
  * PR 1 本（#524）。題名・出した人・ブランチ・チェック・本文と、差分を**セッションの差分と同じビューア**（`DiffView`）で出す。
- * **読むだけ**（行へのコメントと GitHub への投稿は #525 / #526）。開いたときに 1 回と「読み直す」のときだけ取る
+ * 開いたときに 1 回と「読み直す」のときだけ取る。**GitHub には書かない**（投稿は #526）。
+ *
+ * **その PR を書いたセッションが見つかれば、差分の行にコメントを書いてそのセッションの入力欄に入れられる**（#525）。
+ * 書いたセッションは `prAuthorSession()`（同じリポジトリで、いまのブランチが head と同じ一番新しいもの）。
+ * 直接は送らない（#511 と同じく、入れたらそのセッションへ移って人が送る）。書いたセッションが返信できなければ口は出さず理由を出す
  */
-export function PrView({ repo, number, onStatus }: { repo: string; number: number } & Pick<PaneProps, 'onStatus'>) {
+export function PrView({ repo, number, onStatus, onInsertToSession }: { repo: string; number: number; onInsertToSession?: (id: string, text: string) => void } & Pick<PaneProps, 'onStatus'>) {
   const [loaded, setLoaded] = useState<Loaded | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(true)
@@ -50,7 +61,29 @@ export function PrView({ repo, number, onStatus }: { repo: string; number: numbe
 
   useEffect(() => onStatus(loaded?.at ?? null, error || null), [loaded, error, onStatus])
 
+  // 書いたセッションを探すための一覧。**サイドバーの絞り込みに依らず**そのリポジトリの分を 1 回だけ取る（3 秒のポーリングには乗せない）
+  const [sessions, setSessions] = useState<SessionsResponse | null>(null)
+  useEffect(() => {
+    let alive = true
+    void api
+      .sessions({ projects: [repo], repo: '', agent: '', date: '', host: '', days: '30', archived: '' })
+      .then((d) => alive && setSessions(d))
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [repo])
+
   const pr = loaded?.data.pr
+  const author = pr && sessions ? prAuthorSession(sessions.sessions, repo, pr.head) : null
+  const authorName = author ? author.meta?.name || author.title || author.id : ''
+  const blocked = author ? (author.archived ? 'アーカイブ済み' : replyBlockedReason(author, sessions?.host ?? '')) : ''
+  const canComment = Boolean(author && !blocked && onInsertToSession)
+  // 行へのコメント（#525）。置き場は PR ごと
+  const comments = useDiffComments(prCommentKey(repo, number))
+  const files = useMemo(() => (loaded ? parseUnifiedDiff(loaded.data.diff.patch) : null), [loaded])
+  // PR が更新されて行が見当たらなくなったコメントは、差分の上にまとめて出す（DiffBody と同じ）
+  const orphans = canComment && files ? comments.list.filter((c) => !commentLine(c, files)) : []
   const check = pr ? checkLabel(pr.checks) : null
   const review = pr ? reviewLabel(pr.review_decision) : ''
 
@@ -95,8 +128,35 @@ export function PrView({ repo, number, onStatus }: { repo: string; number: numbe
           </div>
           <div className="pr-description body">{pr.body.trim() ? <Markdown text={pr.body} /> : <span className="none">本文はありません</span>}</div>
           {loaded.data.diff_error && <div className="warn">{loaded.data.diff_error}</div>}
+          {author && blocked && (
+            <div className="note pr-author">この PR を書いたセッション「{authorName}」には返信できないので、行へのコメントは書けません（{blocked}）</div>
+          )}
+          {canComment && author && (
+            <DiffCommentBar
+              count={comments.list.length}
+              target={authorName}
+              onInsert={() => {
+                onInsertToSession?.(author.id, formatDiffComments(comments.list, `PR #${number}「${pr.title}」の差分へのコメントです（${pr.url}）。`))
+                comments.clear()
+              }}
+              onClear={comments.clear}
+            />
+          )}
+          {orphans.map((c) => (
+            <div className="diff-orphan" key={c.id}>
+              <code>{c.path}:{c.line}</code>
+              <DiffCommentNote comment={c} moved onRemove={() => comments.remove(c.id)} />
+            </div>
+          ))}
           {!loaded.data.diff_error && (
-            <DiffView section={loaded.data.diff} title="変更" empty="差分はありません" />
+            <DiffView
+              section={loaded.data.diff}
+              title="変更"
+              empty="差分はありません"
+              {...(canComment
+                ? { comments: { section: 'branch' as const, list: comments.list, onAdd: comments.add, onRemove: comments.remove } }
+                : {})}
+            />
           )}
           {loaded.data.diff.truncated && (
             <div className="warn">

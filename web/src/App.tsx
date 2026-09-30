@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { HIDDEN_POLL_MS, parseRoute, useHashRoute, useLocalState, usePolling, type Route } from './hooks'
+import { HIDDEN_POLL_MS, parseRoute, sessionHash, useHashRoute, useLocalState, usePolling, type Route } from './hooks'
 import { pendingItems, todoItems } from '../../shared/todoItems.ts'
 import { sessionGroups, toggleCollapsed, visibleIds } from './sessionGroups'
 import { titleWith } from '../../shared/notify.ts'
@@ -141,6 +141,11 @@ export function App() {
   // 条件は SessionView が返信欄を出す条件と同じ（アーカイブ済みは返信欄の代わりに案内が出る。#512 のレビュー）
   const canComment =
     diffOpen !== null && route.name === 'session' && route.id === diffOpen && diffSession !== undefined && !diffSession.archived && !replyBlockedReason(diffSession, list.data?.host ?? '')
+  // PR の差分へのコメント（#525）を、その PR を書いたセッションの入力欄に入れてそのセッションへ移る（送るのは人）
+  const insertToSession = useCallback((id: string, text: string) => {
+    setCommentInsert((prev) => ({ id, text, seq: (prev?.seq ?? 0) + 1 }))
+    location.hash = sessionHash(id)
+  }, [])
   const insertComments = useCallback(
     (text: string) => {
       if (diffOpen === null) return
@@ -333,7 +338,7 @@ export function App() {
           {route.name === 'prs' ? (
             <PrListView onStatus={onStatus} onOpenSidebar={openSidebar} />
           ) : route.name === 'pr' ? (
-            <PrView key={`${route.repo}#${route.number}`} repo={route.repo} number={route.number} onStatus={onStatus} />
+            <PrView key={`${route.repo}#${route.number}`} repo={route.repo} number={route.number} onStatus={onStatus} onInsertToSession={insertToSession} />
           ) : route.name === 'new' ? (
             <NewSessionView replying={list.data?.replying} now={list.updatedAt?.getTime() ?? 0} onOpenSidebar={openSidebar} />
           ) : route.name === 'todo' ? (

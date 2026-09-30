@@ -87,7 +87,7 @@ Codex の `notify` はターン完了時にしか来ない。Codex が tmux で�
 
 SAI から閉じた Codex セッションへ返信するときは、SAIサーバー配下で長寿命の `codex app-server --stdio` を保持し、`thread/resume` → `turn/start` を行う。コマンド・ファイル変更・追加権限の承認と `request_user_input` は同じJSON-RPC接続で受け、提示された選択肢だけをSAIに表示して回答を返す。通常起動のTUIは所有しないので、上記のtmux表示または `codex queue` のまま。Codex CLI 0.153.2以降を想定し、問題があれば `SAI_CODEX_APP_SERVER=0` で従来の `codex exec resume` に戻せる（この場合、SAIからCodexの質問・許可には答えられない）。
 
-**フックは足し算で鳴る。** リポジトリ側の `.claude/settings.json` にも `Stop` フックがあると、ユーザー設定の分と両方が動いて 1 ターンが 2 行になる（試作を置いていたリポジトリで実際に起きた）。SAI を更新したら `record.py` の向け先も同じ checkout を指しているか確かめる。**記録側が古いと画面が知らせる**: 行には `v`（`record.py` の `RECORD_VERSION`）が載り、窓の中の一番新しい行の `v` が最新より小さいとヘッダの下に「記録側の `record.py` が古い」と出る。`v` の無い行は試作か古い `record.py` のもの。
+**フックは足し算で鳴る。** リポジトリ側の `.claude/settings.json` にも `Stop` フックがあると、ユーザー設定の分と両方が動いて 1 ターンが 2 行になる（試作を置いていたリポジトリで実際に起きた）。SAI を更新したら `record.py` の向け先も同じ checkout を指しているか確かめる。**記録側が古いと画面が知らせる**: 行には `v`（`record.py` の `RECORD_VERSION`）が載り、窓の中の一番新しい行の `v` が最新より小さいとヘッダの下に「記録側の `record.py` が古い」と出る。`v` の無い行は試作か古い `record.py` のもの。**フックが 1 つ足りないことも画面が知らせる**（#567）: サーバが `~/.claude/settings.json` を読み（読むだけ）、上の例のフックのうち `record.py` に届いていないものがあれば「フックが繋がっていません: `SessionEnd`」のように出す。`SessionEnd` は `/clear`・`/exit` でしか書かれないので、行からは欠けていることに気づけないため。コマンドがラッパー（`sai-record` など）なら、サーバの `PATH` で引いた中身が `record.py` を呼ぶかで見る。届くフックが 1 つも見えないとき・このマシンの Claude の行が無いときは何も出さない。`/setup-sai` の点検でも同じものを `node server/hooksCheck.ts` で出す。
 
 **Codex CLI** — `~/.codex/config.toml` に:
 
@@ -348,4 +348,4 @@ rsync -a --include='????-??-??.*.jsonl' --exclude='*' mini:~/.agent-feed/ ~/.age
 | `GROK_HOME` | Grok Build のホーム（既定 `~/.grok`）。Grok 自身の変数で、`record.py` が `sessions/` から入力とモデルを読むときにそれに従うだけ |
 | `AGENT_FEED_DEBUG` | `1` で `record.py` の例外をログに残す |
 
-表に無いもの（SAI が自分で付ける・エージェントが渡してくる）: `AGENT_FEED_SKIP`（SAI が一言を作るために回す `claude -p` に付け、`record.py` に自分自身を記録させない）、`SAI_URL` / `SAI_ENTITY`（返信の `claude` に足す MCP サーバに渡す）、`TMUX_PANE` / `CLAUDE_PID`（エージェントが `record.py` に渡してくる）。
+表に無いもの（SAI が自分で付ける・エージェントが渡してくる）: `AGENT_FEED_SKIP`（SAI が一言を作るために回す `claude -p` に付け、`record.py` に自分自身を記録させない）、`SAI_URL` / `SAI_ENTITY`（返信の `claude` に足す MCP サーバに渡す）、`TMUX_PANE` / `CLAUDE_PID`（エージェントが `record.py` に渡してくる）、`PATH`（フックのラッパーを引くのにサーバの PATH を見る。#567）。

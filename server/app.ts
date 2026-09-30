@@ -77,6 +77,7 @@ import { historyKey, ICON_HISTORY_DIR, ICON_HISTORY_FILE, IconHistory, isHistory
 import { alwaysAllowRule, ruleLabel } from '../shared/approvals.ts'
 import { APPROVALS_FILE, Approvals, WAIT_MS } from './approvals/approvals.ts'
 import { BuildFreshness } from './local/buildFreshness.ts'
+import { NoClaudeHooks, type ClaudeHooksReader } from './local/claudeHooks.ts'
 import { codexLockHolders, codexQueueCommand, codexWriterActive, isAppServer, runCodexQueue } from './reply/codex.ts'
 import type { CodexQueue } from './reply/codex.ts'
 import { CodexAppServer } from './reply/codexAppServer.ts'
@@ -449,6 +450,11 @@ export interface TerminalDeps {
    * （`jevFromEnv()`）。既定で環境から組むと、鍵のあるマシンでテストを回したときに本物の Jev へ送ってしまう
    */
   jev?: JevJudge | null
+  /**
+   * Claude Code のフックの配線のずれ（#567）。**省略は「読まない」**（本物の `~/.claude/settings.json` を読むのは main.ts だけ。
+   * 既定で読むと、テストの結果が回したマシンの設定で変わる）
+   */
+  claudeHooks?: ClaudeHooksReader
 }
 
 export function createApp(
@@ -495,6 +501,8 @@ export function createApp(
   const opencodePerms = new OpencodePermissions(opencodeApp)
   // 許可の確率（#491）。鍵が無ければ judge が null で、何も送らない
   const jevRisk = new JevRisk(terminal.jev ?? null)
+  // フックの配線のずれ（#567）。読むのは ttl に 1 回、設定の mtime が変わったときだけ
+  const claudeHooks = terminal.claudeHooks ?? new NoClaudeHooks()
   const waitingSettle = terminal.waitingSettle ?? new WaitingSettle(terminal.tmux, terminal.ps)
   const codexAppEnabled = process.env.SAI_CODEX_APP_SERVER !== '0'
   // OpenCode は `opencode serve` の HTTP に送る（#382）。`0` で今までどおり `opencode run -s` に戻す
@@ -3043,9 +3051,15 @@ export function createApp(
         const build_stale = await freshness.stale()
         await scanDigest(days)
         // 記録側の版は窓の中の一番新しい行から。行が変われば rev も変わるので、ここでは rev に混ぜない
-        const record_version = recordVersionOf(await store.rows(days))
+        const windowRows = await store.rows(days)
+        const record_version = recordVersionOf(windowRows)
+        // 足りないフック（#567）。**このマシンの Claude の行が窓の中に無ければ言わない**（使っていない人・別のマシンの行だけの人に出さない）。
+        // 設定が読めない・record.py に届くフックが 1 つも見えないときも言わない（null）
+        const localClaude = windowRows.some((r) => r.agent === 'claude' && !isRemoteHost(r.host ?? '', selfHost()))
+        const hooks_missing = (localClaude && claudeHooks.missing()) || []
         const body: SessionsResponse = {
-          rev: revWith(rev, replying, approvalMapKey(pendingApprovals), build_stale, digest.revKey(), queue.key()),
+          // 足りないフックは rev に混ぜる（設定を直したら、次の行を待たずにバナーが消える）
+          rev: revWith(rev, replying, approvalMapKey(pendingApprovals), build_stale, digest.revKey(), queue.key()) + (hooks_missing.length ? `~hooks:${hooks_missing.join(',')}` : ''),
           days,
           total: pool.length,
           sessions: withLastSummary(
@@ -3064,6 +3078,7 @@ export function createApp(
           approvals: pendingApprovals,
           build_stale,
           record_version,
+          hooks_missing,
           profile: me.profile,
           viewer,
           host: selfHost(),

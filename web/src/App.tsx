@@ -350,7 +350,7 @@ export function App() {
           ) : route.name === 'new' ? (
             <NewSessionView replying={list.data?.replying} now={list.updatedAt?.getTime() ?? 0} onOpenSidebar={openSidebar} />
           ) : route.name === 'todo' ? (
-            <TodoView list={list} onStatus={onStatus} onOpenSidebar={openSidebar} onLeaveToSidebar={focusSidebar} linear={linear} settings={settings} />
+            <TodoView list={list} onStatus={onStatus} onOpenSidebar={openSidebar} onLeaveToSidebar={focusSidebar} linear={linear} settings={settings} prs={sessionPrs} />
           ) : route.name === 'session' ? (
             <SessionView id={route.id} focusTs={route.ts ?? ''} {...(route.side ? { focusSide: route.side } : {})} onStatus={onStatus} onOpenSidebar={openSidebar} onLeaveToSidebar={focusSidebar} onToggleDiff={toggleDiff} diffOpen={diffOpen !== null} {...(commentInsert && commentInsert.id === route.id ? { insert: commentInsert } : {})} linear={linear} settings={settings} />
           ) : (
@@ -367,6 +367,7 @@ export function App() {
               onLeaveToSidebar={focusSidebar}
               linear={linear}
               settings={settings}
+              prs={sessionPrs}
             />
           )}
         </div>

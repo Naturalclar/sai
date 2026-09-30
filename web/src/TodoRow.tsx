@@ -9,6 +9,9 @@ import { UnreadTag } from './UnreadTag'
 import { TodoSource } from './TodoSource'
 import { sourceTs } from './todoRowSource.ts'
 import { elapsedLabel } from './format'
+import { SessionPrLink } from './SessionPrLink'
+import type { PrRepo } from '../../shared/types.ts'
+import { prForSession } from '../../shared/prs.ts'
 
 interface Props {
   item: TodoItem
@@ -25,6 +28,8 @@ interface Props {
   reply?: { inline: boolean; open: boolean; onToggle: () => void }
   /** 行の下に出すもの（開いた返信欄・その行の送信失敗）。TodoView が組み立てる */
   children?: ReactNode
+  /** GitHub の open な PR（#554。App の `useSessionPrs()`）。このセッションに紐づくものがあれば名前の横にリンクを出す */
+  prs?: readonly PrRepo[]
 }
 
 /**
@@ -33,7 +38,7 @@ interface Props {
  * 違うのは**印と添え書き**だけ: `done` は詰まっていないので「待っている」ではなく「終わっている」と言い、
  * できることも「答える」ではなく「次を送る」になる。
  */
-export function TodoRow({ item, now, hotkey, modeNote, reply, children }: Props) {
+export function TodoRow({ item, now, hotkey, modeNote, reply, children, prs = [] }: Props) {
   const s = item.session
   const label = s ? s.meta?.name || s.title || s.id : item.id
   const where = s ? projectName(s.project) || s.repo : ''
@@ -44,8 +49,11 @@ export function TodoRow({ item, now, hotkey, modeNote, reply, children }: Props)
   // 一言（要約）が出ている「終了」の行は、もとの本文を行の下に開ける（#537）。取るのは開いたときだけ
   const source = sourceTs(item)
   const [sourceOpen, setSourceOpen] = useState(false)
+  // このセッションの PR（#554）。名前はセッションへのリンクなので、その外に並べる
+  const pr = s ? prForSession(s, prs) : null
   return (
     <div className={`todo ${item.kind}`}>
+      <div className="who-row">
       <a className="who" href={`#/s/${encodeURIComponent(item.id)}`} title={item.id}>
         {s?.icon && <img className="icon" src={s.icon} alt="" />}
         <span className="name">{label}</span>
@@ -55,6 +63,8 @@ export function TodoRow({ item, now, hotkey, modeNote, reply, children }: Props)
         {s && item.kind !== 'answer' && !!s.unread && <UnreadTag n={s.unread} />}
         {waited && <span className="waited">{done ? `終わってから ${waited}` : `${waited} 待っている`}</span>}
       </a>
+      {pr && <SessionPrLink repo={pr.repo} pr={pr.pr} />}
+      </div>
       {item.kind === 'answer' && item.approval ? (
         // 答えるとサーバの approvals から消え、次のポーリングでこの行ごと消える。
         // **同じセッションに次の許可が並んでいれば、この行は消えずに中身だけ次の許可に替わる**（行の key は

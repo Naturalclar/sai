@@ -363,3 +363,14 @@ test('last_user_ts: ターン完了の行に載っている入力なら last_tur
   assert.equal(none!.last_user_text, '')
   assert.equal(none!.last_user_ts, '')
 })
+
+test('last_kind: 最後の行の読み方。ターン完了と同じ秒に届いた入力・終了の行も見分ける（#513 / #517 のレビュー）', () => {
+  const t = new Date('2026-09-30T02:00:00Z')
+  const turn = row(t, 'S1')
+  assert.equal(aggregate([turn])[0]!.last_kind, 'turn')
+  // 同じ秒に次の入力（ts が同じなので時刻では比べられない）
+  const input = row(t, 'S1', { event: 'UserPromptSubmit', text: '', user_text: '次' })
+  assert.equal(aggregate([turn, input])[0]!.last_kind, 'resume')
+  const end = row(t, 'S1', { event: 'SessionEnd', text: 'セッション終了: 会話をリセット（/clear）' })
+  assert.equal(aggregate([turn, end])[0]!.last_kind, 'end')
+})

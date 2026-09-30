@@ -1,4 +1,5 @@
 // 「要対応」（#224）に並べるものを組み立てる。DOM に依存しないので todoItems.test.ts を node:test で回す。
+import { stripMarkdown } from './markdown.ts'
 import { replyBlockedReason } from './reply.ts'
 import type { Approval, ApprovalMap, ReplyingMap, SessionSummary } from './types.ts'
 
@@ -6,7 +7,7 @@ import type { Approval, ApprovalMap, ReplyingMap, SessionSummary } from './types
  * - `answer`: エージェントが答えを待っていて、SAI がその口を持っている。**この画面から答えられる**
  * - `watch`: 記録の行から見た待ち（`SessionSummary.waiting`）。SAI に選択肢が届いていないので
  *   ボタンは出せないが、**返信欄からは打てることが多い**（`replyable`）
- * - `done`: **詰まってはいない。ターンが終わって次の指示を待っているだけ**（`SessionSummary.idle`。#438）。
+ * - `done`: **詰まってはいない。ターンが終わって次の指示を待っているだけ**（#438 / #513。判定は `awaitsNext()`）。
  *   `answer` / `watch` と同じ重さで出すと、本当に答えを待っているものが埋もれるので、
  *   画面では下段に置き、**バッジ・タブの題名・通知には数えない**（`pendingItems()`）
  */
@@ -49,7 +50,7 @@ export interface TodoItem {
  * 端末に打ち込んだ返信（`via: 'terminal'`）は SAI に口が無く、行の `waiting` だけが手がかりなので**残す**。
  *
  * **`done`（終わって次を待っているだけ）も同じ条件で落とす**（#438）: 答え待ちが出ていれば `answer` が勝ち、
- * アーカイブ済みは出さず、別プロセスの返信を処理中なら「動いている」。数えないだけで、拾い方は `watch` と同じ。
+ * アーカイブ済みは出さない。**返信が処理中なら経路を問わず落とす**（端末に打ち込んだ返信も、ターンが回っている）。
  *
  * `selfHost` はこのサーバのマシン名（応答の `host`。#114）。別のマシンのセッションは項目としては出すが
  * （待っていることに変わりはない）、ここからは答えられないので `replyable` は false になる。
@@ -66,13 +67,36 @@ export function todoItems(sessions: readonly SessionSummary[], approvals: Approv
   for (const s of sessions) {
     // 答え待ちが出ているセッションは上で入れてある（そちらの方が新しくて具体的）
     if (answering.has(s.id) || s.archived) continue
-    if (!s.waiting && !s.idle) continue
-    if (processReplying(replying[s.id])) continue
-    // 行の上で待っている方が具体的。両方あることは無い（集計はどちらも「最後の行」から作る）
-    const kind = s.waiting ? 'watch' : 'done'
-    out.push({ id: s.id, kind, text: s.waiting || s.idle, since: s.end, session: s, approval: null, replyable: watchReplyable(s, selfHost) })
+    if (s.waiting) {
+      if (processReplying(replying[s.id])) continue
+      out.push({ id: s.id, kind: 'watch', text: s.waiting, since: s.end, session: s, approval: null, replyable: watchReplyable(s, selfHost) })
+      continue
+    }
+    if (!awaitsNext(s)) continue
+    const r = replying[s.id]
+    if (r && !r.failed) continue
+    // `入力待ち`（端末で放置）はその文言のまま、ターンが終わっただけのものは最後の発言（一言があればそれ）
+    // 本文は Markdown のままなので、一覧の 2 行目と同じく記号を落とす（`[#374](https://…)` がそのまま出ていた）
+    const text = s.idle || stripMarkdown(s.last_summary || s.last_text || '') || '（本文なし）'
+    out.push({ id: s.id, kind: 'done', text, since: s.idle ? s.end : s.last_turn_ts || s.end, session: s, approval: null, replyable: watchReplyable(s, selfHost) })
   }
   return out.sort((a, b) => (a.since === b.since ? a.id.localeCompare(b.id) : a.since < b.since ? -1 : 1))
+}
+
+/**
+ * **ターンが終わって、次の指示を待っているか**（#513）。
+ *
+ * 前は `SessionSummary.idle`（Claude の `idle_prompt`。`入力待ち`…）だけを見ていたが、これは**端末の TUI で開いた Claude が
+ * 60 秒放置されたとき**にしか鳴らない（SAI から返信した `claude -p`・Codex・OpenCode は鳴らさない）。実測（直近 7 日）で
+ * ターン完了の行 360 本に対して `入力待ち` は 17 本で、終わっているセッションのほとんどが下段に出ていなかった。
+ *
+ * そこで**最後の行がターン完了**（`last_kind === 'turn'`）も数える。後ろに何か来ていれば最後の行が変わるので自然に外れる:
+ * 次の入力（`UserPromptSubmit`＝ターンが回っている）、`SessionEnd`（`/clear` で会話は別のセッションに移った）、
+ * 待ちの行（`watch` の方）。**時刻（`end === last_turn_ts`）では比べない**——行の `ts` は秒までなので、
+ * ターン完了と同じ秒に届いた次の入力や `/clear` を見分けられない（#517 のレビュー）
+ */
+export function awaitsNext(s: Pick<SessionSummary, 'idle' | 'last_kind'>): boolean {
+  return Boolean(s.idle) || s.last_kind === 'turn'
 }
 
 /**

@@ -180,9 +180,17 @@ test('セッションに紐づく PR は、リポジトリと head のブラン�
   assert.equal(prForSession({ remote, branch: 'feat-b' }, repos)?.pr.number, 3)
   // 既定のブランチ（PR の base と同じ）にいるセッションは結ばない
   assert.equal(prForSession({ remote, branch: 'main' }, repos), null)
+  // fork の同じ名前のブランチから出た PR は結ばない（#550 のレビュー）
+  const forked: PrRepo[] = [{ repo: 'Naturalclar/sai', prs: [pr(5, 'fix-typo', { cross: true })] }]
+  assert.equal(prForSession({ remote, branch: 'fix-typo' }, forked), null)
   // ブランチが無い・PR が無い・GitHub 以外・知らないリポジトリ
   assert.equal(prForSession({ remote, branch: '' }, repos), null)
   assert.equal(prForSession({ remote, branch: 'nope' }, repos), null)
   assert.equal(prForSession({ remote: 'https://gitlab.com/Naturalclar/sai', branch: 'feat-a' }, repos), null)
   assert.equal(prForSession({ remote: 'https://github.com/x/y', branch: 'feat-a' }, repos), null)
+})
+
+test('prFromGh: fork のブランチから出た PR（isCrossRepository）に cross を付ける（#550 のレビュー）', () => {
+  assert.equal(prFromGh({ number: 1, isCrossRepository: true })?.cross, true)
+  assert.equal(prFromGh({ number: 1, isCrossRepository: false })?.cross, undefined)
 })

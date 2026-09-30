@@ -330,6 +330,11 @@ export interface PrSummary {
   checks: PrCheckState
   /** 自分（`gh` でログインしている人）にレビューが頼まれている */
   requested: boolean
+  /**
+   * 別のリポジトリ（fork）のブランチから出た PR（`isCrossRepository`）。**サイドバーのセッションには結ばない**（#548 のレビュー。
+   * `head` はブランチ名だけなので、fork の同じ名前のブランチから出た他人の PR が手元のセッションに付いてしまう）
+   */
+  cross?: boolean
 }
 
 /** 1 つのリポジトリの open な PR。`error` があれば引けなかった（prs は空） */

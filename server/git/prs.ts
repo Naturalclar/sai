@@ -22,8 +22,8 @@ export const PRS_LIMIT = 50
 /** `gh pr diff` の出力をどこまで受けるか。差分の上限（2MB）より大きく取り、切るのは diff.ts の clampPatch() */
 export const PR_DIFF_MAX_BYTES = 16 * 1024 * 1024
 
-const LIST_FIELDS = 'number,title,author,headRefName,baseRefName,isDraft,updatedAt,url,additions,deletions,changedFiles,reviewDecision,statusCheckRollup'
-const VIEW_FIELDS = `${LIST_FIELDS},body,state,headRefOid,isCrossRepository`
+const LIST_FIELDS = 'number,title,author,headRefName,baseRefName,isDraft,updatedAt,url,additions,deletions,changedFiles,reviewDecision,statusCheckRollup,isCrossRepository'
+const VIEW_FIELDS = `${LIST_FIELDS},body,state,headRefOid`
 
 export interface PrView {
   pr: PrSummary & { body: string; state: string; head_sha: string; cross_repo: boolean }

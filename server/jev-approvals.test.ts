@@ -15,13 +15,14 @@ import { FeedStore } from './rows/store.ts'
 import { localDate } from './rows/aggregate.ts'
 import { row } from './rows/aggregate.test.ts'
 import type { Runner } from './reply/runner.ts'
+import { JEV_RULE_STATEMENT } from '../shared/jev.ts'
 
 const runner: Runner = { running: () => false, snapshot: (): ReplyingMap => ({}), start: async () => {} }
 const judged: string[] = []
 const judge: JevJudge = async (state, statement) => {
   judged.push(state)
   // ルールを聞かれたら（#499）: git のルールは問題なさそう、それ以外のルールは広すぎる
-  if (statement?.startsWith('Permanently allowing')) return /rule: Bash\(git /.test(state) ? 0.96 : 0.2
+  if (statement === JEV_RULE_STATEMENT) return /rule: Bash\(git /.test(state) ? 0.96 : 0.2
   return state.includes('rm -rf') ? 0.01 : 0.97
 }
 
@@ -179,6 +180,22 @@ test('自動で常に許可（#499）: 預かった時に Jev に聞き、この
   assert.equal(await approvals.wait(question, 10), null, '質問は対象外')
   const left = (await sessions(base)).approvals['S1@r']!.map((a) => a.input.command ?? a.tool_name)
   assert.deepEqual(left, ['rm -rf ~/', 'pnpm test', 'mcp__github__push_files', 'AskUserQuestion'], '一覧にも残っているものだけ出る')
+
+  // 答えない理由を reply.log に 1 回だけ残し、ルールの確率を一覧に載せる（#553）
+  const listed = (await sessions(base)).approvals['S1@r']!
+  assert.deepEqual(listed.find((a) => a.input.command === 'pnpm test')?.jev_rule, { label: 'Bash(pnpm test:*)', safe: 0.2 }, 'この回は 97% でもルールは 20% と見える')
+  assert.equal(listed.find((a) => a.input.command === 'rm -rf ~/')?.jev_rule, undefined, 'この回が閾値未満ならルールは聞かない')
+  for (let i = 0; i < 3; i++) await put(base, { jev_auto: 0.9 }) // 設定を変えるたびに jevAutoTick が回る
+  await drain()
+  const skipped = (await readFile(join(feedDir, 'reply.log'), 'utf-8')).split('\n').filter((l) => l.includes('見送り'))
+  assert.deepEqual(
+    skipped.map((l) => l.replace(/^--- \S+ /, '')),
+    [
+      'S1@r Jev の自動の常に許可を見送り（この回 97%）: ルール Bash(pnpm test:*) が 20%（閾値 90%）',
+      'S1@r Jev の自動の常に許可を見送り（この回 97%）: Bash 以外（mcp__github__push_files）は自動で答えない',
+    ],
+    '閾値以上なのに答えないものだけ・同じ許可には 1 行だけ（rm -rf は閾値未満なので書かない）',
+  )
 
   // Jev を切ると閾値も 0 に戻る
   const off = (await (await put(base, { jev: false })).json()) as SettingsResponse

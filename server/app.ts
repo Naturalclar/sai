@@ -85,7 +85,7 @@ import type { OpencodeApp } from './reply/opencodeServer.ts'
 import { OpencodePermissions } from './reply/opencodePermissions.ts'
 import { approvalMapKey, CodexDialogs, mergeApprovalMaps } from './reply/codexDialogs.ts'
 import { JevRisk } from './approvals/jev.ts'
-import { isJevAuto, jevAutoAllows, jevAutoEligible, jevPercent, jevRuleState } from '../shared/jev.ts'
+import { isJevAuto, jevAutoAllows, jevAutoDecision, jevAutoEligible, jevPercent, jevRuleState } from '../shared/jev.ts'
 import type { JevJudge } from './approvals/jev.ts'
 import { CodexTerminals, type CodexTerminalSource } from './reply/codexTerminal.ts'
 import { CodexPanes, type CodexPaneSource } from './reply/codexPanes.ts'
@@ -758,7 +758,22 @@ export function createApp(
     // 問題なさそうかの確率（#491）。聞いていないものは投げるだけで、届いたら次の応答に載る（rev は approvalMapKey が拾う）
     // 読む経路（一覧・詳細・フィード・MCP の sai_sessions）は写しに確率を付けるだけで、預かりの本物は触らない。
     // 自動の「常に許可」（#499）は jevAutoTick が別に動く（読んだだけで許可が書かれない）
-    return jevRisk.annotate(merged, (await settingsStore.get()).jev)
+    const s = await settingsStore.get()
+    const annotated = jevRisk.annotate(merged, s.jev)
+    if (!s.jev || s.jev_auto <= 0) return annotated
+    // 自動の「常に許可」で書かれるルールの確率も添える（#553）。**聞くのは jevAutoOnce だけ**で、ここは覚えているものを見るだけ
+    // （読む経路から外へ送らない）。この回が 90% でもルールは低く出ることが多く、出さないと答えない理由が見えなかった
+    const out: ApprovalMap = {}
+    for (const [id, list] of Object.entries(annotated)) {
+      out[id] = list.map((a) => {
+        if (!jevAutoEligible(a)) return a
+        const rule = alwaysAllowRule(a.tool_name, a.input)
+        const label = rule ? ruleLabel(rule) : ''
+        const safe = label ? jevRisk.peekRule(label) : undefined
+        return label && safe !== undefined ? { ...a, jev_rule: { label, safe } } : a
+      })
+    }
+    return out
   }
 
   /** 「常に許可」の答えに付けるもの（#96）。CLI が cwd の .claude/settings.local.json に書く（端末の「今後も許可」と同じ） */
@@ -775,6 +790,8 @@ export function createApp(
    * 同時に走らせない（届くたびに呼ばれるので、走っている間の分は終わってからもう 1 回）
    */
   let jevAutoRunning: Promise<void> | null = null
+  /** 見送りの理由を reply.log に書いた許可（#553。1 つの許可に 1 行だけ）。許可の id は使い回されないので消さない分は小さい */
+  const jevSkipLogged = new Set<string>()
   let jevAutoAgain = false
   const jevAutoTick = (): Promise<void> => {
     if (jevAutoRunning) {
@@ -799,12 +816,21 @@ export function createApp(
     const lines: string[] = []
     for (const list of Object.values(jevRisk.annotate(approvals.snapshot(), true))) {
       for (const a of list) {
-        if (!jevAutoEligible(a) || !jevAutoAllows(a.jev, s.jev_auto)) continue
-        const rule = alwaysAllowRule(a.tool_name, a.input)
-        if (!rule) continue
-        const label = ruleLabel(rule)
-        const ruleSafe = jevRisk.ruleSafe(label, jevRuleState(a, label))
-        if (!jevAutoAllows(ruleSafe, s.jev_auto)) continue
+        const rule = jevAutoEligible(a) ? alwaysAllowRule(a.tool_name, a.input) : null
+        const label = rule ? ruleLabel(rule) : null
+        // ルールはこの回が閾値以上のときだけ聞く（聞くだけで外に出るので、自動を期待しない回には送らない）
+        const ruleSafe = label && jevAutoAllows(a.jev, s.jev_auto) ? jevRisk.ruleSafe(label, jevRuleState(a, label)) : undefined
+        const decision = jevAutoDecision(a, s.jev_auto, label, ruleSafe === undefined && label && jevRisk.ruleFailed(label) ? 'failed' : ruleSafe)
+        if (decision.kind === 'skip') {
+          // 答えない理由（#553）。同じ許可には 1 回だけ（届くたびに呼ばれるので、覚えないと同じ行が何本も並ぶ）
+          if (!jevSkipLogged.has(a.approval_id)) {
+            if (jevSkipLogged.size >= 1000) jevSkipLogged.clear()
+            jevSkipLogged.add(a.approval_id)
+            lines.push(`--- ${new Date().toISOString()} ${a.id} Jev の自動の常に許可を見送り（この回 ${jevPercent(a.jev!)}%）: ${decision.reason}\n`)
+          }
+          continue
+        }
+        if (decision.kind !== 'allow' || !rule || !label) continue
         if (!approvals.answer(a.approval_id, { behavior: 'allow', updatedInput: a.input, updatedPermissions: permissionsFor(rule) })) continue
         lines.push(`--- ${new Date().toISOString()} ${a.id} Jev が自動で常に許可（この回 ${jevPercent(a.jev!)}%、ルール ${jevPercent(ruleSafe!)}%、閾値 ${jevPercent(s.jev_auto)}%）: ${label}\n`)
       }

@@ -95,7 +95,7 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false, modeNote =
         <div className="msg">
           <div className="body">⏳ {approval.text}</div>
           {/* 許可して問題なさそうかの予想（#491）。押すのは人。自動で答えるかは設定の閾値（#499。答えたバブルはここに出ない） */}
-          {approval.jev !== undefined && <JevTag safe={approval.jev} />}
+          {approval.jev !== undefined && <JevTag safe={approval.jev} rule={approval.jev_rule} />}
           {detail && <pre className="detail">{detail}</pre>}
           {/* 端末の画面から読んだ選択肢（#425）。下のボタンで答えられる（#450） */}
           {approval.dialog && <DialogPreview dialog={approval.dialog} />}

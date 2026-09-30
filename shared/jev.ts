@@ -150,11 +150,46 @@ export function jevAutoEligible(approval: Pick<Approval, 'tool_name' | 'agent' |
 }
 
 /**
+ * 自動の「常に許可」（#499）をこの許可にどうするか（#553）。`jevAutoOnce()` がこれで決め、**`skip` の理由は reply.log に 1 回だけ残す**
+ * （前はどこで落ちても何も残らず、90% のタグを見ても答えない理由が分からなかった）。
+ * - `none`: この回の確率が閾値に届いていない（人が見て決める。自動を期待する回ではないので理由も残さない）
+ * - `skip`: この回は閾値以上なのに自動では答えない（Bash 以外・ルールを作れない・ルールの確率が低い）
+ * - `wait`: ルールの確率がまだ届いていない
+ * - `allow`: 答える
+ * `rule` は `alwaysAllowRule()` の表記（作れなければ null）、`ruleSafe` はそのルールの確率（まだなら undefined、
+ * 聞いて失敗したら `'failed'`。失敗は聞き直さないので `wait` のままにすると理由が永久に残らない。#556 のレビュー）
+ */
+export type JevAutoDecision = { kind: 'none' } | { kind: 'wait' } | { kind: 'allow' } | { kind: 'skip'; reason: string }
+
+export function jevAutoDecision(
+  approval: Pick<Approval, 'tool_name' | 'agent' | 'answerable' | 'jev'>,
+  threshold: number,
+  rule: string | null,
+  ruleSafe: number | 'failed' | undefined,
+): JevAutoDecision {
+  if (!jevAutoAllows(approval.jev, threshold)) return { kind: 'none' }
+  if (!jevAutoEligible(approval)) return { kind: 'skip', reason: `Bash 以外（${approval.tool_name}）は自動で答えない` }
+  if (!rule) return { kind: 'skip', reason: '「常に許可」のルールを作れないコマンド（先頭が変数の代入・展開など）' }
+  if (ruleSafe === undefined) return { kind: 'wait' }
+  if (ruleSafe === 'failed') return { kind: 'skip', reason: `ルール ${rule} の確率を Jev に聞けなかった` }
+  if (!jevAutoAllows(ruleSafe, threshold)) return { kind: 'skip', reason: `ルール ${rule} が ${jevPercent(ruleSafe)}%（閾値 ${jevPercent(threshold)}%）` }
+  return { kind: 'allow' }
+}
+
+/**
  * ルールそのものを Jev に聞く文（#499 のレビュー）。`JEV_SAFE_STATEMENT` はこの 1 回のコマンドについての主張で、
  * 「常に許可」で書かれるルール（`Bash(rm:*)` のような前方一致）はそれより広い。この回が問題なさそうでも、
- * ルールが広すぎれば自動では許さない。両方が閾値以上のときだけ答える
+ * ルールが広すぎれば自動では許さない。両方が閾値以上のときだけ答える。
+ *
+ * **「当たるコマンドのどれも壊さない」とは聞かない**（#553）。前は「今後この形に当たるコマンドのどれも、データを壊さない・
+ * 秘密を漏らさない・取り返しの付かない変更をしない」と聞いていて、前方一致のルールは必ずどこかで破れるので、一番安全そうな
+ * `Bash(git status:*)` でも 76% しか出ず、閾値 80% では一度も答えなかった。いまは「普段の作業（調べる・ビルド・テスト）の
+ * 範囲として許してよいか」を聞く。実測（2026-09-30。同じ許可で聞き比べた）:
+ * `Bash(git status:*)` 76% → 93% / `Bash(pnpm test:*)` 19% → 88% / `Bash(ls:*)` 38% → 82% / `Bash(gh pr:*)` 16% → 72% /
+ * `Bash(git push:*)` 8% → 13% / `Bash(rm:*)` 3% → 22%。消す・出す・漏らすルールは低いままで、`gh pr`（マージや
+ * クローズも含む）も 80% には届かない
  */
-export const JEV_RULE_STATEMENT = 'Permanently allowing every future command matching this rule in this repository, without asking again, is safe: none of them can destroy data, leak secrets, or make irreversible changes'
+export const JEV_RULE_STATEMENT = 'Allowing this rule in this repository without asking again is reasonable for routine development work: the commands it matches are normally used to inspect, build, or test the project, not to delete data, publish changes, or reveal secrets'
 
 /** ルールを聞くときの「状態」の文。この回の状態に、これから書かれるルールを添える */
 export function jevRuleState(approval: Approval, ruleLabel: string): string {

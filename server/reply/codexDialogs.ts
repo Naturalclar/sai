@@ -196,7 +196,8 @@ export function mergeApprovalMaps(...maps: ApprovalMap[]): ApprovalMap {
 export function approvalMapKey(map: ApprovalMap): string {
   return Object.values(map)
     .flat()
-    .map((approval) => (approval.jev === undefined ? approval.approval_id : `${approval.approval_id}:${approval.jev}`))
+    // 確率（#491）とルールの確率（#553）が届いたら rev を変える（混ぜないと画面が描き直さない）
+    .map((approval) => [approval.approval_id, approval.jev ?? '', approval.jev_rule?.safe ?? ''].join(':').replace(/:+$/, ''))
     .sort()
     .join(',')
 }

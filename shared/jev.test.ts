@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { isJevAuto, jevAsks, jevAutoAllows, jevAutoEligible, jevLabel, jevLevel, jevPercent, jevRuleState, jevSafeOf, jevState, JEV_AUTO_MIN, JEV_STATE_MAX } from './jev.ts'
+import { isJevAuto, jevAsks, jevAutoAllows, jevAutoDecision, jevAutoEligible, jevLabel, jevLevel, jevPercent, jevRuleState, jevSafeOf, jevState, JEV_AUTO_MIN, JEV_STATE_MAX } from './jev.ts'
 import type { Approval } from './types.ts'
 
 const a = (over: Partial<Approval> = {}): Approval => ({
@@ -108,4 +108,18 @@ test('jevAutoEligible / jevRuleState: 自動で常に許可するのは Claude �
   const state = jevRuleState(approval, 'Bash(rm:*)')
   assert.match(state, /Command: rm -rf build/)
   assert.match(state, /every future command matching the rule: Bash\(rm:\*\)$/)
+})
+
+test('jevAutoDecision（#553）: この回が閾値未満は none、Bash 以外・ルールを作れない・ルールが低いは skip（理由つき）、ルール待ちは wait', () => {
+  const bash = { tool_name: 'Bash', jev: 0.97 }
+  assert.deepEqual(jevAutoDecision({ ...bash, jev: 0.5 }, 0.8, 'Bash(git status:*)', 0.9), { kind: 'none' }, '自動を期待する回ではない')
+  assert.deepEqual(jevAutoDecision({ tool_name: 'Bash' }, 0.8, 'Bash(git status:*)', 0.9), { kind: 'none' }, '確率がまだ無い')
+  assert.deepEqual(jevAutoDecision(bash, 0, 'Bash(git status:*)', 0.9), { kind: 'none' }, '自動が切')
+  assert.deepEqual(jevAutoDecision({ tool_name: 'Edit', jev: 0.97 }, 0.8, null, undefined), { kind: 'skip', reason: 'Bash 以外（Edit）は自動で答えない' })
+  assert.equal(jevAutoDecision({ ...bash, agent: 'codex' as const }, 0.8, null, undefined).kind, 'skip', 'Codex の許可には「常に許可」が無い')
+  assert.equal(jevAutoDecision(bash, 0.8, null, undefined).kind, 'skip', 'ルールを作れない')
+  assert.deepEqual(jevAutoDecision(bash, 0.8, 'Bash(git status:*)', undefined), { kind: 'wait' })
+  assert.deepEqual(jevAutoDecision(bash, 0.8, 'Bash(git status:*)', 'failed'), { kind: 'skip', reason: 'ルール Bash(git status:*) の確率を Jev に聞けなかった' }, '失敗は聞き直さないので待ちのままにしない（#556 のレビュー）')
+  assert.deepEqual(jevAutoDecision(bash, 0.8, 'Bash(git status:*)', 0.76), { kind: 'skip', reason: 'ルール Bash(git status:*) が 76%（閾値 80%）' })
+  assert.deepEqual(jevAutoDecision(bash, 0.8, 'Bash(git status:*)', 0.8), { kind: 'allow' }, '閾値ちょうどは通す')
 })

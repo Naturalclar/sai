@@ -126,6 +126,22 @@ export class JevRisk {
     return undefined
   }
 
+  /**
+   * 覚えているルールの確率を見るだけ（#553。聞かない。読む経路から外へ送らないため）。無い・まだなら undefined。
+   * **見かけた時刻は進める**（`annotate()` と同じ。進めないと、ポーリングが `prune()` を回すうちに 30 分で忘れ、
+   * 待っている許可のルールの印が消え、次に自動の判定が動いたときに同じルールをもう一度聞く。#556 のレビュー）
+   */
+  peekRule(label: string): number | undefined {
+    const entry = this.entries.get(`rule:${label}`)
+    if (entry) entry.at = this.now()
+    return entry?.safe
+  }
+
+  /** ルールを聞いて失敗したか（#556 のレビュー。失敗は聞き直さないので、待ちのままにせず見送りの理由にする） */
+  ruleFailed(label: string): boolean {
+    return this.entries.get(`rule:${label}`)?.failed === true
+  }
+
   private pump() {
     while (this.judge && this.running < JEV_CONCURRENCY && this.waiting.length > 0) {
       const next = this.waiting.shift()!

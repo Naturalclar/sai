@@ -75,3 +75,11 @@ test('suggestionFor: 案が無ければ null。空白だけの本文には足さ
   assert.equal(suggestionFor([], ' ', 'PR を作って'), null, '頭に空白が残るので出さない')
   assert.deepEqual(suggestionFor([], '', '  PR を作って  '), { text: 'PR を作って', from: 'next' }, '前後の空白は落とす')
 })
+
+test('suggestionFor: 打ちかけ > Manager の案 > 一言の口の案（#565）', () => {
+  assert.deepEqual(suggestionFor(history, '', 'PR を作って', 'CI を見て'), { text: 'CI を見て', from: 'manager' }, '空なら Manager の案が一言の口の案より先')
+  assert.deepEqual(suggestionFor(history, '', undefined, '  CI を見て\n2 行目 '), { text: 'CI を見て\n2 行目', from: 'manager' })
+  assert.deepEqual(suggestionFor(history, '', 'PR を作って', '   '), { text: 'PR を作って', from: 'next' }, '空白だけの案は無いのと同じ')
+  assert.deepEqual(suggestionFor(history, 'マー', 'PR を作って', 'CI を見て'), { text: 'ジして', from: 'history' }, '打ちかけがあれば履歴の続き')
+  assert.equal(suggestionFor(history, 'ぜんぜん違う文', 'PR を作って', 'CI を見て'), null, '打ちかけを案で上書きしない')
+})

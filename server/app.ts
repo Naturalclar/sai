@@ -54,6 +54,9 @@ import type { SessionTurnResponse,
   SessionMetaResponse,
   ReadRequest,
   ReadResponse,
+  ManagerDraft,
+  SuggestionActionRequest,
+  SuggestionActionResponse,
   SessionPermissionsResponse,
   SessionModelsResponse,
   SessionSkillsResponse,
@@ -119,6 +122,8 @@ import type { PrLookup } from './git/pr.ts'
 import { AttachmentStore } from './reply/attachments.ts'
 import { PROFILE_FILE, ProfileStore } from './meta/profile.ts'
 import { READ_MARKS_FILE, ReadStore } from './meta/reads.ts'
+import { SUGGESTIONS_FILE, SuggestionStore } from './mcp/suggestions.ts'
+import { liveManagerDraft } from '../shared/managerDraft.ts'
 import { readMarkOf, rowMs, unreadCounts, unreadFromMark } from '../shared/unread.ts'
 import { SETTINGS_FILE, SettingsStore, nextAskOn } from './meta/settings.ts'
 import type { Settings } from './meta/settings.ts'
@@ -218,6 +223,8 @@ const REVIEW_SUFFIX = '/review'
 const META_SUFFIX = '/meta'
 /** 未読の印を置く（#502）。`PUT /api/sessions/<id>/read`。同一オリジンのみ */
 const READ_SUFFIX = '/read'
+/** Manager が置いた案を捨てる・入れた（#565）。`POST /api/sessions/<id>/suggestion`。同一オリジンのみ */
+const SUGGESTION_SUFFIX = '/suggestion'
 const ICON_SUFFIX = '/icon'
 const SKILLS_SUFFIX = '/skills'
 const MODELS_SUFFIX = '/models'
@@ -734,6 +741,8 @@ export function createApp(
   const metaStore = new MetaStore(join(store.directory, META_FILE))
   // 未読の印（#502）。立て直しても消えないようにファイルに持つ
   const readStore = new ReadStore(join(store.directory, READ_MARKS_FILE))
+  // Manager が入力欄に置いた案（#565）。1 セッションに 1 つ
+  const suggestionStore = new SuggestionStore(join(store.directory, SUGGESTIONS_FILE))
   const iconStore = new IconStore(join(store.directory, ICONS_DIR))
   const iconHistory = new IconHistory(join(store.directory, ICON_HISTORY_DIR), join(store.directory, ICON_HISTORY_FILE), iconStore)
   const attachmentStore = new AttachmentStore(join(store.directory, ATTACHMENTS_DIR))
@@ -955,11 +964,19 @@ export function createApp(
   }
 
   const sessionsWithMeta = async (days: number): Promise<{ rev: string; sessions: SessionSummary[] }> => {
-    const [{ rev, sessions: raw }, meta, icons, reads, rows] = await Promise.all([store.sessions(days), metaStore.all(), iconStore.all(), readStore.get(), store.rows(days)])
+    const [{ rev, sessions: raw }, meta, icons, reads, rows, drafts] = await Promise.all([store.sessions(days), metaStore.all(), iconStore.all(), readStore.get(), store.rows(days), suggestionStore.all()])
     // project / remote の無い古い行のセッションは cwd から git で引いて埋める（cwd ごとに 1 回だけ。#182、#212）
     const sessions = await fillRepo(projects, raw)
     // 未読の数（#502）。印は read-marks.json、数えるのは窓の中のターン完了の行
     const unread = unreadCounts(rows, reads.marks)
+    // Manager の案（#565）。出すのは 24 時間以内で、置いたあとに人の入力が来ていないものだけ。
+    // rev には「いま出している案」を混ぜる（ファイルの (mtime, size) だと 24 時間が過ぎて消えたときに変わらない）
+    const nowMs = Date.now()
+    const live = new Map<string, ManagerDraft>()
+    for (const s of sessions) {
+      const d = liveManagerDraft(drafts[s.id], s.last_user_ts, nowMs)
+      if (d) live.set(s.id, d)
+    }
     const built = await Promise.all(sessions.map(async (s) => {
         const m = meta.entries[s.id]
         const icon = icons.entries.get(iconKey(s.id))
@@ -973,6 +990,8 @@ export function createApp(
         if (icon) out.icon = iconUrl(s.id, icon.version)
         const n = unread.get(s.id)
         if (n) out.unread = n
+        const draft = live.get(s.id)
+        if (draft) out.manager_draft = draft
         out.read_at = readMarkOf(reads.marks, s.id)
         return out
       }))
@@ -984,7 +1003,7 @@ export function createApp(
       const suffix = suffixes.get(s.id)
       if (suffix) s.label_suffix = suffix
     }
-    return { rev: `${rev}-${meta.rev}-${icons.rev}-${reads.rev}`, sessions: built }
+    return { rev: `${rev}-${meta.rev}-${icons.rev}-${reads.rev}-${[...live].map(([id, d]) => `${id}:${d.at}`).join(',')}`, sessions: built }
   }
 
   /**
@@ -2213,7 +2232,8 @@ export function createApp(
   }
 
   /**
-   * MCP のツール。読むもの（read）は画面・REST と同じ範囲。送る・待つ（send）はエージェント用の口（#310）と同じ規則
+   * MCP のツール。読むもの（read）は画面・REST と同じ範囲。案を置く（draft。#565）は入力欄に置くだけでターンを起こさない。
+   * 送る・待つ（send）はエージェント用の口（#310）と同じ規則
    * （見出しで人の入力と見分ける・相手が処理中なら預かり・返答は見出しの id で探して切る・受け取ったターンからは先へ送らせない）
    */
   const mcpTools = (req: IncomingMessage, access: McpAccess): McpTool[] => [
@@ -2237,7 +2257,7 @@ export function createApp(
               const e = agentEntry(s, mcpBusy(s.id))
               const why = mcpSendRefusal(s)
               const waiting = clipReply((s.waiting || pending[s.id]?.[0]?.text || '').split('\n')[0] ?? '', 120)
-              return `- ${e.id}「${e.name}」${e.project} ${e.agent}${e.branch ? ` ${e.branch}` : ''}${e.busy ? '（処理中）' : ''}${waiting ? `（待ち: ${waiting}）` : ''}${why ? `（送れない: ${why}）` : ''} 最後の記録: ${s.end}${e.last_text ? ` 最後の発言: ${e.last_text}` : ''}`
+              return `- ${e.id}「${e.name}」${e.project} ${e.agent}${e.branch ? ` ${e.branch}` : ''}${e.busy ? '（処理中）' : ''}${waiting ? `（待ち: ${waiting}）` : ''}${why ? `（送れない: ${why}）` : ''}${s.manager_draft ? '（案を置いてある）' : ''} 最後の記録: ${s.end}${e.last_text ? ` 最後の発言: ${e.last_text}` : ''}`
             })
             .join('\n'),
         )
@@ -2277,6 +2297,28 @@ export function createApp(
         const p = await progress.read(session)
         if (p.steps.length === 0) return textResult('いまの手順はありません（処理中でないか、読めるファイルがありません）')
         return textResult([p.active ? '処理中:' : '動いていません（最後のターンの手順）:', ...p.steps.map((s) => `- ${stepLabel(s)}${s.kind === 'tool' && !s.ended ? '（実行中）' : ''}`)].join('\n'))
+      },
+    },
+    {
+      name: 'sai_suggest',
+      scope: 'draft',
+      description: `宛先のセッションの入力欄に「案」を置く（送らない・ターンを起こさない）。人が画面で見て、入れて送るか捨てるかを決める。1 セッションに 1 つで、置き直すと前の案は消える。24 時間か、人がそのセッションに何か送ると消える。本文は ${AGENT_TEXT_MAX_CHARS} 字まで`,
+      inputSchema: { type: 'object', properties: { to: { type: 'string', description: 'sai_sessions の id' }, text: { type: 'string', description: '入力欄に置く本文（そのまま送れる形で）' } }, required: ['to', 'text'] },
+      run: async (args) => {
+        const to = mcpStr(args.to)
+        const text = mcpStr(args.text).trim()
+        if (!to || !text) return textResult('to と text が要ります', true)
+        if (text.length > AGENT_TEXT_MAX_CHARS) return textResult(`置けるのは ${AGENT_TEXT_MAX_CHARS} 字までです。短くまとめてください`, true)
+        const { sessions } = await sessionsWithMeta(QUEUE_DAYS)
+        const target = sessions.find((s) => s.id === to)
+        if (!target) return textResult('そのセッションは見つかりません（sai_sessions で確かめてください）', true)
+        // 別のリポジトリ・素通しのセッションにも置ける（送るのは人なので）。画面に入力欄が出ないものにだけは置かない
+        if (target.archived) return textResult('置けません: アーカイブ済み', true)
+        const blocked = replyBlockedReason(target, selfHost())
+        if (blocked) return textResult(`置けません: ${blocked}`, true)
+        await suggestionStore.put(to, text, access.caller)
+        await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${mcpFrom(access)} → ${to} 案を置いた（${text.length} 字）\n`).catch(() => {})
+        return textResult('入力欄に案を置きました（送ってはいません。人が SAI の画面で見て、入れて送るか捨てるかを決めます）')
       },
     },
     {
@@ -2690,6 +2732,29 @@ export function createApp(
     return json(res, payload)
   }
 
+  /**
+   * POST /api/sessions/<id>/suggestion（#565）。Manager が置いた案を捨てる（`discard`）・入力欄に入れた（`accept`）。
+   * どちらも案を取り除き、reply.log に 1 行残す。**送りはしない**（入れた本文を送るのは今までどおり人の返信）。同一オリジンのみ
+   */
+  const postSuggestion = async (req: IncomingMessage, res: ServerResponse, id: string) => {
+    if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
+    let body: unknown
+    try {
+      body = await readJson(req, MAX_META_BYTES)
+    } catch (err) {
+      return error(res, 400, err instanceof Error ? err.message : 'bad body')
+    }
+    const { action, at } = (body ?? {}) as Partial<SuggestionActionRequest>
+    if (action !== 'accept' && action !== 'discard') return error(res, 400, 'action は accept か discard です')
+    if (typeof at !== 'number' || !Number.isFinite(at)) return error(res, 400, 'at が要ります')
+    const taken = await suggestionStore.take(id, at)
+    if (taken) {
+      await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} Manager の案（mcp:${taken.from}）を${action === 'accept' ? '入力欄に入れた' : '捨てた'}\n`).catch(() => {})
+    }
+    const payload: SuggestionActionResponse = { id, taken: Boolean(taken) }
+    return json(res, payload)
+  }
+
   /** GET /api/sessions/<id>/icon。?v= がいまのファイルと同じなら長くキャッシュさせる（差し替えれば URL が変わる） */
   const getIcon = async (req: IncomingMessage, res: ServerResponse, id: string, version: string | null) => {
     const icon = await iconStore.get(id)
@@ -2875,6 +2940,7 @@ export function createApp(
     const isReview = path.startsWith(SESSIONS_PREFIX) && path.endsWith(REVIEW_SUFFIX)
     const isMeta = path.startsWith(SESSIONS_PREFIX) && path.endsWith(META_SUFFIX)
     const isRead = path.startsWith(SESSIONS_PREFIX) && path.endsWith(READ_SUFFIX)
+    const isSuggestion = path.startsWith(SESSIONS_PREFIX) && path.endsWith(SUGGESTION_SUFFIX)
     const isIcon = path.startsWith(SESSIONS_PREFIX) && path.endsWith(ICON_SUFFIX)
     const isSkills = path.startsWith(SESSIONS_PREFIX) && path.endsWith(SKILLS_SUFFIX)
     const isModels = path.startsWith(SESSIONS_PREFIX) && path.endsWith(MODELS_SUFFIX)
@@ -2913,11 +2979,11 @@ export function createApp(
     }
     // タグ付きの端末（ユーザーがいない）は画面・REST を使えない。capability を与えた /mcp だけ
     if (who.kind === 'tagged') return error(res, 401, 'unauthorized: タグ付きの端末から使えるのは /mcp だけです')
-    // 書き込みは「返信と新しいセッションと PR のレビューの投稿（#526）は POST」「表示名は PUT」「アイコンは PUT / DELETE」「承認の預かりと答えは POST」「自分の表示名は PUT、アイコンは PUT / DELETE」
+    // 書き込みは「返信と新しいセッションと PR のレビューの投稿（#526）は POST」「表示名は PUT」「アイコンは PUT / DELETE」「承認の預かりと答えは POST」「Manager の案を捨てる・入れた（#565）は POST」「自分の表示名は PUT、アイコンは PUT / DELETE」
     // 「設定は PUT」「預かった返信の再開は POST、取り消しは DELETE」だけ。それ以外は GET / HEAD のみ
     const writable =
       (method === 'POST' &&
-        (isNewSession || isReply || isReview || isPrReview || isAsk || isAnswer || isAttachUpload || isQueue || isDigestFeedback || path === AGENT_SEND_PATH || isAgentStop || isInterrupt)) ||
+        (isNewSession || isReply || isReview || isPrReview || isAsk || isAnswer || isAttachUpload || isQueue || isDigestFeedback || isSuggestion || path === AGENT_SEND_PATH || isAgentStop || isInterrupt)) ||
       (method === 'DELETE' && (isQueue || isHistoryIcon)) ||
       (method === 'PUT' && (isMeta || isRead || isProfile || isSettings)) ||
       ((method === 'PUT' || method === 'DELETE') && (isIcon || isProfileIcon))
@@ -2984,6 +3050,12 @@ export function createApp(
         // 画面はポーリングのついでにこれを見て、別ターミナルで pnpm build されたらリロードする
         const build = await buildId()
         if (build) res.setHeader('X-SAI-Build', build)
+      }
+      if (isSuggestion && !isQueue) {
+        if (method !== 'POST') return error(res, 405, 'method not allowed')
+        const id = sessionIdFrom(path, SUGGESTION_SUFFIX)
+        if (id === null) return error(res, 400, 'bad session id')
+        return await postSuggestion(req, res, id)
       }
       if (isRead && !isQueue) {
         if (method !== 'PUT') return error(res, 405, 'method not allowed')

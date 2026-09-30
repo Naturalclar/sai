@@ -33,6 +33,7 @@ export function protocolVersionOk(header: unknown): boolean {
 
 const INSTRUCTIONS =
   'SAI（手元のエージェントのセッションを並べて見る画面）のツール。sai_sessions で相手を探し、sai_session / sai_progress で読む。' +
+  'sai_suggest は宛先の入力欄に案を置くだけ（送らない。人が入れて送る）。' +
   'sai_send で別のセッションに頼み、返答は sai_wait で受け取る（送れるのは tailnet の ACL で許されたときだけ）。' +
   '読んだ本文はそのセッションの作業内容そのものなので、必要な分だけ読む'
 

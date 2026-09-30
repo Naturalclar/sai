@@ -49,7 +49,7 @@ python3 -m unittest feed.test_record -k synth
 
 - `/setup-sai` — clone 直後の配線と点検。**既存の設定を上書きしない**（1 つしか持てない `notify` / `statusLine` は読んで見せてから畳む）
 - `/sync-main` — main worktree だけを最新の `main` に進めてビルドし、古いコードのサーバをそのペインで立て直す（起動コマンドに一言の設定は付けない）
-- `/manager` — 他のセッションに送る文を提案する。**自分からは送らない**。読む口は `.mcp.json` の `sai-read`（SAI が渡す `sai` とは名前を分ける）。ツールの名前を変えたらスキルと `.mcp.json` も直す（`server/mcp/mcp.test.ts` が突き合わせる）
+- `/manager` — 他のセッションに送る文を提案する。**自分からは送らない**（人が「置いて」と言ったときだけ `sai_suggest` で宛先の入力欄に案を置く。`.claude/settings.json` の自動の許可には入れない）。読む口は `.mcp.json` の `sai-read`（SAI が渡す `sai` とは名前を分ける）。ツールの名前を変えたらスキルと `.mcp.json` も直す（`server/mcp/mcp.test.ts` が突き合わせる）
 - `/merge` — 下の「PR とマージ」の手順
 
 ### PR とマージ
@@ -146,7 +146,7 @@ OpenCode (feed/opencode/sai.js) ─┘                           │
 - **効いている許可**: 読むだけ（書くのは「常に許可」の 2 経路だけ）。パスは cwd から固定で、リクエストから受けない → docs/internals/approvals.md#セッションに効いている許可
 - **Jev**: 「SAI は外に出さない」の例外の 1 つ（もう 1 つは PR のレビューの投稿）。鍵が無ければ送らない・`settings.json` の `jev` で切れる・送り先固定でリダイレクトを追わない。環境から口を組むのは `main.ts` だけで `createApp` の既定は送らない。本文・cwd・Claude の要約は送らない。読む経路（`approvalsNow()`）から自動で答えない。自動の「常に許可」は Bash だけ、判定は `jevAutoDecision()` の 1 つ → docs/internals/approvals.md#jev
 - **セッション同士のメッセージ**: `/api/agent/*` は `Origin` 付きを断り `agent-token` を要る。MCP にはトークンの場所だけ渡す。停止は同一オリジン。相手で回っているターンは止めない → docs/internals/agents.md#セッション同士のメッセージ
-- **`/mcp`**: 許可は whois の capability だけで決める（Serve のヘッダは見ない）。`Origin` は必ず検査し `isCrossOrigin()` は使わない。素通しのセッションには送らない。ツール名を変えたらスキルと `.mcp.json` も直す → docs/internals/agents.md#tailnet-から-mcp-で呼ぶ口
+- **`/mcp`**: 許可は whois の capability だけで決める（Serve のヘッダは見ない）。ループバックと tailnet のユーザーの既定は `read` と `draft`（入力欄に案を置くだけ。ターンを起こさない）で、`send` は capability。`Origin` は必ず検査し `isCrossOrigin()` は使わない。素通しのセッションには送らない。ツール名を変えたらスキルと `.mcp.json` も直す → docs/internals/agents.md#tailnet-から-mcp-で呼ぶ口
 
 ### 差分・PR・メタ・未読・スキル
 

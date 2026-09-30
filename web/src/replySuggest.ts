@@ -24,8 +24,11 @@ export function suggestFrom(history: readonly string[], text: string): string {
   return ''
 }
 
-/** 続きの出どころ。`history` = 前に送った文（#219）、`next` = 一言と同じ口で作った案（#371） */
-export type SuggestionSource = 'history' | 'next'
+/**
+ * 続きの出どころ。`history` = 前に送った文（#219）、`manager` = Manager が `sai_suggest` で置いた案（#565）、
+ * `next` = 一言と同じ口で作った案（#371）
+ */
+export type SuggestionSource = 'history' | 'manager' | 'next'
 
 export interface Suggestion {
   text: string
@@ -33,15 +36,18 @@ export interface Suggestion {
 }
 
 /**
- * 入力欄の背面に薄く出す続き（#373）。**打ちかけがあれば履歴の続き、空なら次に送る文面の案**。
- * 2 つが同時に出ることは無い（履歴の続きは本文が空では出さないので、条件が重ならない）。
- * 受け取り方も同じ（`→`。本文が空なので `text + suggestion` がそのまま案になる）
+ * 入力欄の背面に薄く出す続き（#373 / #565）。**打ちかけがあれば履歴の続き、空なら Manager の案、それも無ければ次に送る文面の案**
+ * （打ちかけ > Manager の案 > 一言の口の案）。打ちかけがあるときは案を出さない（人が打っているものを上書きしない）。
+ * 受け取り方はどれも同じ（`→`。本文が空なので `text + suggestion` がそのまま案になる）で、入るだけで送らない
  */
-export function suggestionFor(history: readonly string[], text: string, nextAsk?: string): Suggestion | null {
+export function suggestionFor(history: readonly string[], text: string, nextAsk?: string, managerDraft?: string): Suggestion | null {
   const cont = suggestFrom(history, text)
   if (cont) return { text: cont, from: 'history' }
   // 空**のとき**だけ（空白だけの本文に足すと頭に空白が残る）
-  const ask = text === '' ? (nextAsk ?? '').trim() : ''
+  if (text !== '') return null
+  const manager = (managerDraft ?? '').trim()
+  if (manager) return { text: manager, from: 'manager' }
+  const ask = (nextAsk ?? '').trim()
   return ask ? { text: ask, from: 'next' } : null
 }
 

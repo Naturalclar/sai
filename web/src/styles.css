@@ -1083,6 +1083,17 @@
   .reply .suggest .accept .mark { color: var(--accent); font-weight: 700; }
   .reply .suggest .accept .rest { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .reply .suggest .accept:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* Manager が置いた案（#565）。出どころと全文を入力欄のすぐ上に。長ければ頭だけ出して「全部見る」 */
+  .reply .manager-draft { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 8px 10px; background: var(--chip); border: 1px dashed var(--accent); border-radius: 10px; font-size: 13px; }
+  .reply .manager-draft .head { display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: baseline; }
+  .reply .manager-draft .from { color: var(--accent); font-weight: 700; }
+  .reply .manager-draft .hint { color: var(--muted); font-size: 12px; }
+  .reply .manager-draft .body { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink); max-height: 40vh; overflow-y: auto; }
+  .reply .manager-draft .body.folded { max-height: 7.5em; overflow: hidden; -webkit-mask-image: linear-gradient(to bottom, #000 70%, transparent); mask-image: linear-gradient(to bottom, #000 70%, transparent); }
+  .reply .manager-draft .actions { display: flex; gap: 6px; justify-content: flex-end; }
+  .reply .manager-draft .actions button { min-height: 32px; padding: 4px 12px; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 999px; font: inherit; font-size: 13px; cursor: pointer; }
+  .reply .manager-draft .actions .accept { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .reply .manager-draft .actions button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   /* @ の候補。入力欄の上に開く（狭い画面でも隠れない） */
   /* 入力欄の上に開くメニュー（候補・モデル・許可モード）は、同じ場所に浮かせた差分ボタン（.diff-float の 5）より手前（#530） */
   .mention { position: absolute; left: 0; right: 0; bottom: 100%; margin: 0 0 6px; padding: 4px 0; list-style: none; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 24px rgba(0, 0, 0, .12); max-height: 40vh; overflow-y: auto; z-index: 6; }

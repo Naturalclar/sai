@@ -28,6 +28,8 @@ import type {
   SessionMetaResponse,
   ReadRequest,
   ReadResponse,
+  SuggestionActionRequest,
+  SuggestionActionResponse,
   SessionPermissionsResponse,
   SessionProgressResponse,
   SessionModelsResponse,
@@ -45,7 +47,7 @@ import type {
 } from '../../shared/types.ts'
 import type { DigestFeedbackReason, DigestFeedbackRequest, DigestFeedbackResponse } from '../../shared/digestFeedback.ts'
 
-export type { Agent, FeedRow, SessionSource, SessionSummary, SessionMeta, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, QueuedReply, ReplyQueue, ReplyQueueMap, ReplyQueueResponse, AgentActivity, AgentActivityMessage, AgentStopResponse,Approval, ApprovalMap, ApprovalAnswer, TerminalDialog, Profile, PersonaId, SettingsResponse, SettingsRequest, Viewer, SessionPermissionsResponse, SessionProgressResponse, ProgressStep, SessionDiffResponse, SessionDiffSummaryResponse, GalleryResponse, GalleryItem, SearchResponse, SearchHit, DiffPr, DiffSection, DiffFileStat, PrSummary, PrRepo, PrsResponse, PrDetailResponse, PrReviewRequest, PrReviewResponse, PrReviewEvent, AttachmentResponse, UsageResponse, UsageWindow, CodexUsage, ClaudeUsage } from '../../shared/types.ts'
+export type { Agent, FeedRow, SessionSource, SessionSummary, SessionMeta, ManagerDraft, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, QueuedReply, ReplyQueue, ReplyQueueMap, ReplyQueueResponse, AgentActivity, AgentActivityMessage, AgentStopResponse,Approval, ApprovalMap, ApprovalAnswer, TerminalDialog, Profile, PersonaId, SettingsResponse, SettingsRequest, Viewer, SessionPermissionsResponse, SessionProgressResponse, ProgressStep, SessionDiffResponse, SessionDiffSummaryResponse, GalleryResponse, GalleryItem, SearchResponse, SearchHit, DiffPr, DiffSection, DiffFileStat, PrSummary, PrRepo, PrsResponse, PrDetailResponse, PrReviewRequest, PrReviewResponse, PrReviewEvent, AttachmentResponse, UsageResponse, UsageWindow, CodexUsage, ClaudeUsage } from '../../shared/types.ts'
 
 /**
  * `PUT /api/sessions/<id>/meta` のボディ。`SessionMeta` の一部を重ねる。
@@ -220,6 +222,9 @@ export const api = {
   /** 未読の印を置く（#502）。`back` は「ここから未読にする」 */
   markRead: (id: string, body: ReadRequest) =>
     sendJSON<ReadResponse>('PUT', `/api/sessions/${encodeURIComponent(id)}/read`, body),
+  /** Manager が置いた案（#565）を捨てる・入力欄に入れた。どちらも案を取り除くだけで送らない */
+  suggestionAction: (id: string, body: SuggestionActionRequest) =>
+    sendJSON<SuggestionActionResponse>('POST', `/api/sessions/${encodeURIComponent(id)}/suggestion`, body),
   setMeta: (id: string, meta: MetaPatch, days = 90) =>
     sendJSON<SessionMetaResponse>('PUT', `/api/sessions/${encodeURIComponent(id)}/meta?days=${days}`, meta),
   /** アイコン画像を置く。返ってくる icon が新しい URL */

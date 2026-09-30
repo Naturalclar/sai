@@ -1,6 +1,7 @@
 import { projectName } from '../../shared/project.ts'
 import type { TodoItem } from '../../shared/todoItems.ts'
 import { ApprovalBubble } from './ApprovalBubble'
+import { AgentChip } from './AgentChip'
 import { WaitingTag } from './WaitingTag'
 import { elapsedLabel } from './format'
 
@@ -26,12 +27,15 @@ export function TodoRow({ item, now, hotkey, modeNote }: Props) {
   const where = s ? projectName(s.project) || s.repo : ''
   const waited = elapsedLabel(item.since, now)
   const done = item.kind === 'done'
+  // どのエージェントか（#520）。答え待ち（answer）は ApprovalBubble のアバターで分かるので重ねない
+  const agent = s && item.kind !== 'answer' ? s.agent || 'unknown' : ''
   return (
     <div className={`todo ${item.kind}`}>
       <a className="who" href={`#/s/${encodeURIComponent(item.id)}`} title={item.id}>
         {s?.icon && <img className="icon" src={s.icon} alt="" />}
         <span className="name">{label}</span>
         {where && <span className="where">#{where}</span>}
+        {agent && <AgentChip agent={agent} />}
         {waited && <span className="waited">{done ? `終わってから ${waited}` : `${waited} 待っている`}</span>}
       </a>
       {item.kind === 'answer' && item.approval ? (

@@ -35,14 +35,24 @@ export function startLabel(ts: string): string {
   return m ? `${Number(m[1])}/${Number(m[2])}〜` : ''
 }
 
-/** ID の頭（セッションの部分）。組の中で重ならない長さまで伸ばす（4〜12 文字） */
+/**
+ * ID の頭（セッションの部分）。組の中で重ならない長さまで伸ばす（4〜12 文字）。
+ * **セッションの部分が同じもの**（同じ Claude のセッションが同じリポジトリの別の worktree に移った `<sid>@main` / `<sid>@feat`）は
+ * 頭をいくら伸ばしても分けられないので、worktree の名前を足す（`a3d0@feat`。エンティティ ID は一意なので必ず分かれる。#578 のレビュー）
+ */
 function idHeads(ids: readonly string[]): Map<string, string> {
   const raw = ids.map((id) => id.split('@')[0] || id)
   for (let n = 4; n <= 12; n++) {
     const heads = raw.map((r) => r.slice(0, n))
     if (new Set(heads).size === heads.length) return new Map(ids.map((id, i) => [id, heads[i]!]))
   }
-  return new Map(ids.map((id, i) => [id, raw[i]!]))
+  return new Map(
+    ids.map((id, i) => {
+      const shared = raw.filter((r) => r === raw[i]).length > 1
+      const at = id.indexOf('@')
+      return [id, shared && at >= 0 ? `${raw[i]!.slice(0, 4)}${id.slice(at)}` : raw[i]!.slice(0, 12)]
+    }),
+  )
 }
 
 /**

@@ -160,7 +160,7 @@ import { isRemoteHost } from '../shared/host.ts'
 import { IMAGES_SEGMENT } from '../shared/images.ts'
 import { imageHeaders, imageTable, readSessionImage } from './local/images.ts'
 import { TranscriptImages } from './local/transcriptImages.ts'
-import { labelCollisions, labelSuffixes } from '../shared/sessionLabels.ts'
+import { labelSuffixes } from '../shared/sessionLabels.ts'
 import { CodexImages } from './local/codexImages.ts'
 import { galleryFromRows, mergeGallery, rowTsAtOrAfter } from '../shared/gallery.ts'
 import { searchRows } from './rows/search.ts'
@@ -924,6 +924,21 @@ export function createApp(
    * アーカイブ済みかは `archived_at >= end` で決める（集計 aggregate.ts は JSONL だけから作る、を守る）。
    * アーカイブ後に行が増えると end が archived_at を追い越すので、メタを書き換えずに自動で戻る
    */
+  /**
+   * 同じ名前のセッションの添え字（#572）。LABEL_START_DAYS の窓の集計（行が変わったときだけ組み直される）と表示名から決め、
+   * 両方の rev が同じなら覚えたものを返す（3 秒のポーリングで組み直さない。実データの 90 日ぶんで 1 回 40ms ほど）
+   */
+  let labelMemo: { key: string; suffixes: Map<string, string> } | null = null
+  const labelSuffixesNow = async (meta: { rev: string; entries: Record<string, SessionMeta> }): Promise<Map<string, string>> => {
+    const wide = await store.sessions(LABEL_START_DAYS)
+    const key = `${wide.rev}-${meta.rev}`
+    if (labelMemo?.key === key) return labelMemo.suffixes
+    const named = wide.sessions.map((s) => (meta.entries[s.id] ? { ...s, meta: meta.entries[s.id] } : s))
+    const suffixes = labelSuffixes(named)
+    labelMemo = { key, suffixes }
+    return suffixes
+  }
+
   const sessionsWithMeta = async (days: number): Promise<{ rev: string; sessions: SessionSummary[] }> => {
     const [{ rev, sessions: raw }, meta, icons, reads, rows] = await Promise.all([store.sessions(days), metaStore.all(), iconStore.all(), readStore.get(), store.rows(days)])
     // project / remote の無い古い行のセッションは cwd から git で引いて埋める（cwd ごとに 1 回だけ。#182、#212）
@@ -946,16 +961,13 @@ export function createApp(
         out.read_at = readMarkOf(reads.marks, s.id)
         return out
       }))
-    // 同じ名前のセッションを見分ける添え字（#572）。重なりがあるときだけ、本当の始まりを広い窓で引く
-    // （一覧の start は窓の中の最初の行なので、7 日の窓では 9/2 に始まったセッションが 9/24 に見える）。重なりはまれなので、普段は何もしない
-    if (labelCollisions(built).length > 0) {
-      const wide = days >= LABEL_START_DAYS ? built : (await store.sessions(LABEL_START_DAYS)).sessions
-      const starts = new Map(wide.map((s) => [s.id, s.start]))
-      const suffixes = labelSuffixes(built, (id) => starts.get(id) ?? '')
-      for (const s of built) {
-        const suffix = suffixes.get(s.id)
-        if (suffix) s.label_suffix = suffix
-      }
+    // 同じ名前のセッションを見分ける添え字（#572）。**どの口でも同じ添え字にするため、呼び出しの窓ではなく LABEL_START_DAYS の
+    // 決まった窓で決める**（#578 のレビュー。一覧は 7 日・詳細は 30 日・フィードは 3 日なので、窓ごとに決めると同じセッションが
+    // 見出しでは ID の頭、サイドバーでは日付になった）。start も窓の中の最初の行なので、広い窓で引くと本当の始まりになる
+    const suffixes = await labelSuffixesNow(meta)
+    for (const s of built) {
+      const suffix = suffixes.get(s.id)
+      if (suffix) s.label_suffix = suffix
     }
     return { rev: `${rev}-${meta.rev}-${icons.rev}-${reads.rev}`, sessions: built }
   }

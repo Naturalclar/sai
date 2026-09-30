@@ -59,3 +59,10 @@ test('sameNamed: 同じ project のアーカイブ済みでないほかのセッ
   assert.equal(sameNamed(list, me, ''), null)
   assert.equal(sameNameNote(twin), '同じ名前のセッションがあります（9/2〜、285 ターン）。一覧・要対応では添え字で見分けます')
 })
+
+test('labelSuffixes: 同じセッションの別の worktree（`<sid>@main` / `<sid>@feat`）は ID の頭では分けられないので worktree を足す（#578 のレビュー）', () => {
+  const list = [s('a3d02362-aaaa@main', { meta: { name: 'N' } }), s('a3d02362-aaaa@feat', { meta: { name: 'N' } })]
+  const suffixes = labelSuffixes(list)
+  assert.equal(suffixes.get('a3d02362-aaaa@main'), 'a3d0@main')
+  assert.equal(suffixes.get('a3d02362-aaaa@feat'), 'a3d0@feat')
+})

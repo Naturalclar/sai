@@ -8,6 +8,7 @@ import { isRemoteHost } from '../../shared/host.ts'
 import { ReplyingTag } from './ReplyingTag'
 import { ArchivedTag } from './ArchivedTag'
 import { WaitingTag } from './WaitingTag'
+import { UnreadTag } from './UnreadTag'
 import { More } from './More'
 import { projectName } from '../../shared/project.ts'
 import { SessionArchiveButton } from './SessionArchiveButton'
@@ -127,6 +128,7 @@ export function SessionItem({ s, active, replying, profile, approval, now, swipe
           {s.waiting && <WaitingTag text={s.waiting} />}
           {!s.waiting && approval && <WaitingTag text={approval.text} />}
           {replying && <ReplyingTag since={replying.since} now={now} />}
+          {!!s.unread && <UnreadTag n={s.unread} />}
           {s.archived && <ArchivedTag />}
         </span>
         {preview && (

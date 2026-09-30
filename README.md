@@ -264,7 +264,7 @@ rsync -a --include='????-??-??.*.jsonl' --exclude='*' mini:~/.agent-feed/ ~/.age
 
 - 相手の `digest.jsonl`（一言のキャッシュ）で**自分のを上書きしない**
 - 相手が `AGENT_FEED_HOST` を設定し忘れて `YYYY-MM-DD.jsonl` に書いていても、**自分の同名のファイルを潰さない**（代わりに何も来ないので、行が増えなければまずここを疑う）
-- `session-meta.json`・`session-icons/`・`attachments/` も持ってこない（表示名やアイコンは見る側のものが正）
+- `session-meta.json`・`session-icons/`・`attachments/`・`read-marks.json` も持ってこない（表示名やアイコン・未読の印は見る側のものが正）
 
 `--delete` は付けない（相手で消えても手元には残る）。rsync は既定でテンポラリに書いてから rename するので、転送中の半端なファイルが SAI に見えることはない。
 
@@ -280,7 +280,7 @@ rsync -a --include='????-??-??.*.jsonl' --exclude='*' mini:~/.agent-feed/ ~/.age
 
 両方のマシンの `AGENT_FEED_DIR` を同じ同期フォルダに向ける。日付ファイルがマシンごとに分かれているので、追記がぶつかって競合コピーができることはない。
 
-ただし **`session-meta.json` / `session-icons/` / `digest.jsonl` も同じフォルダに入る**（表示名・アイコン・一言はマシンごとではない）。これらは同時に書くと競合するので、**画面を開くのが 1 台のときだけ**にする。同期の途中で末尾が切れた行は SAI が落とすので、次のポーリングで揃う。
+ただし **`session-meta.json` / `session-icons/` / `digest.jsonl` / `read-marks.json` も同じフォルダに入る**（表示名・アイコン・一言・未読の印はマシンごとではない）。これらは同時に書くと競合するので、**画面を開くのが 1 台のときだけ**にする。同期の途中で末尾が切れた行は SAI が落とすので、次のポーリングで揃う。
 
 #### そのあと
 

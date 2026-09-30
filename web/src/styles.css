@@ -494,6 +494,8 @@
   .tag.mode.loud { background: color-mix(in srgb, var(--claude) 18%, transparent); color: var(--claude); }
   .tag.archived { background: color-mix(in srgb, var(--muted) 18%, transparent); color: var(--muted); font-weight: 600; }
   .tag.waiting { background: color-mix(in srgb, var(--synth) 18%, transparent); color: var(--synth); font-weight: 600; }
+  /* 未読の返答の数（#502） */
+  .tag.unread { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
   /* 「終わって次を待っている」（#438）。詰まっていないので待機中より目立たせない */
   .tag.done { background: color-mix(in srgb, var(--muted) 16%, transparent); color: var(--muted); font-weight: 600; }
   .tag.terminal { background: color-mix(in srgb, var(--codex) 16%, transparent); color: var(--codex); font-weight: 600; }
@@ -638,6 +640,9 @@
   .day { text-align: center; color: var(--muted); font-size: 11px; padding: 10px 0 2px; position: relative; }
   .day span { background: var(--panel); padding: 0 8px; position: relative; }
   .day::before { content: ""; position: absolute; left: 16px; right: 16px; top: 18px; border-top: 1px solid var(--line); }
+  /* 「ここから未読」（#502）。日付の区切りと同じ形で、色だけ変える */
+  .day.unread-line { color: var(--accent); font-weight: 600; }
+  .day.unread-line::before { border-top-color: var(--accent); }
   /* セッションが終わった区切り（#385）。日付と同じ形にして、発言の塊（.group）とは別ものだと分かるようにする。
      /clear の回は、この線より前をエージェントが覚えていない */
   .chat-end { text-align: center; color: var(--muted); font-size: 11px; padding: 12px 0 6px; position: relative; }

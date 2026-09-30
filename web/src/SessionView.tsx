@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { answerableIds } from './terminalQuestion.ts'
 import { canSteer, replyBlockedReason } from '../../shared/reply.ts'
 import { launchedModeNote } from '../../shared/permissions.ts'
@@ -37,6 +37,8 @@ import { useDiffSummary } from './useDiffSummary'
 import { useGallery } from './useGallery'
 import { imagesByBubble } from '../../shared/gallery.ts'
 import { hasDiff } from './diffCount'
+import { latestTurnMs, unreadFromMark } from '../../shared/unread.ts'
+import { readToSend } from './unreadMarks.ts'
 import type { PaneProps } from './App'
 
 const NO_ROWS: never[] = []
@@ -105,6 +107,31 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
   const gallery = useGallery(s?.id, `${s?.last_turn_ts ?? ''}|${s?.last_user_ts ?? ''}`)
   const bubbleImages = useMemo(() => imagesByBubble(gallery), [gallery])
 
+  // 未読（#502）。線は**開いたときの印**に引く（読んだそばから印が進むので、今の印に引くとすぐ消える）。
+  // 別のセッションに移ったら覚え直す（描画中に合わせる。effect の中で setState しない）
+  const [opened, setOpened] = useState<{ id: string; at: number | undefined; held: boolean } | null>(null)
+  if (s && s.id === id && opened?.id !== id) setOpened({ id, at: s.read_at, held: false })
+  const openedHere = opened?.id === id ? opened : null
+  // 送った既読の時刻。同じ時刻を 3 秒ごとに送り直さない
+  const sentRead = useRef({ id: '', ms: 0 })
+  const rows = data?.rows
+  const readAt = s?.read_at
+  const held = openedHere?.held ?? false
+  const onSeenBottom = useCallback(() => {
+    if (!rows) return
+    const want = readToSend(latestTurnMs(rows), readAt, sentRead.current.id === id ? sentRead.current.ms : 0, held)
+    if (want === null) return
+    sentRead.current = { id, ms: want }
+    api.markRead(id, { ts: new Date(want).toISOString() }).catch(() => {
+      sentRead.current = { id, ms: 0 } // 次の描き直しでもう一度
+    })
+  }, [rows, readAt, held, id])
+  // 「ここから未読にする」。線もそこへ動かし、このセッションを離れるまで自動の既読を止める
+  const onMarkUnread = useCallback((ts: string) => {
+    setOpened({ id, at: unreadFromMark(ts), held: true })
+    void api.markRead(id, { ts, back: true }).catch(() => undefined)
+  }, [id])
+
   // 狭い画面では見出しを「← 名前 状態の印 ⋯」と題名 1 行に畳み、詳しい情報と操作は ⋯ のパネルへ（#274。
   // 見出しだけで 283px あり、スクロールしない場所なのでチャットが画面の 1/3 を切っていた）
   const narrow = useNarrow()
@@ -163,6 +190,9 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
           longOpen
           focusTs={focusTs}
           images={bubbleImages}
+          {...(openedHere ? { unreadAfter: openedHere.at } : {})}
+          onSeenBottom={onSeenBottom}
+          onMarkUnread={onMarkUnread}
           {...(focusSide ? { focusSide } : {})}
           {...(data.question ? { question: data.question } : {})}
           trailer={

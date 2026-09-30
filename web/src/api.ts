@@ -24,6 +24,8 @@ import type {
   IconHistoryResponse,
   SessionMeta,
   SessionMetaResponse,
+  ReadRequest,
+  ReadResponse,
   SessionPermissionsResponse,
   SessionProgressResponse,
   SessionModelsResponse,
@@ -203,6 +205,9 @@ export const api = {
   answerApproval: (approvalId: string, answer: ApprovalAnswer) =>
     sendJSON<{ ok: true }>('POST', `/api/approvals/${encodeURIComponent(approvalId)}/answer`, answer),
   /** 表示名をいまの値に重ねる。空文字は「消す」 */
+  /** 未読の印を置く（#502）。`back` は「ここから未読にする」 */
+  markRead: (id: string, body: ReadRequest) =>
+    sendJSON<ReadResponse>('PUT', `/api/sessions/${encodeURIComponent(id)}/read`, body),
   setMeta: (id: string, meta: MetaPatch, days = 90) =>
     sendJSON<SessionMetaResponse>('PUT', `/api/sessions/${encodeURIComponent(id)}/meta?days=${days}`, meta),
   /** アイコン画像を置く。返ってくる icon が新しい URL */

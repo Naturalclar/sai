@@ -1,5 +1,6 @@
 import type { SessionDiffSummaryResponse } from './api'
 import { DiffMark } from './DiffMark'
+import { PrLink } from './PrLink'
 import { diffTitle, shortCount } from './diffCount'
 
 export interface DiffButtonProps {
@@ -8,6 +9,8 @@ export interface DiffButtonProps {
   /** いま差分を出しているか。押すと閉じる */
   open: boolean
   onToggle: () => void
+  /** PR の番号をボタンの中ではなく、横のリンク（`PrLink`）として出す（#536。入力欄の上の差分ボタンだけ） */
+  prLink?: boolean
 }
 
 /**
@@ -15,17 +18,24 @@ export interface DiffButtonProps {
  * ここに出す行数と PR 番号だけを軽い口（`?summary=1`）から先に取ってある。
  * 押すとトグル（出し方 — 広い画面は右のペイン、狭い画面はモーダル — は App が幅で決める）
  */
-export function DiffButton({ summary, open, onToggle }: DiffButtonProps) {
-  return (
+export function DiffButton({ summary, open, onToggle, prLink }: DiffButtonProps) {
+  const button = (
     <button type="button" className={`diff-btn${open ? ' on' : ''}`} onClick={onToggle} aria-pressed={open} title={diffTitle(summary, open)}>
       <DiffMark />
       {summary && (
         <>
           <span className="add">+{shortCount(summary.added)}</span>
           <span className="del">-{shortCount(summary.removed)}</span>
-          {summary.pr && <span className="pr">#{summary.pr.number}</span>}
+          {summary.pr && !prLink && <span className="pr">#{summary.pr.number}</span>}
         </>
       )}
     </button>
+  )
+  if (!prLink) return button
+  return (
+    <>
+      {button}
+      <PrLink pr={summary?.pr} />
+    </>
   )
 }

@@ -943,6 +943,13 @@
   .reply { --diff-float-gap: 6px; --diff-float-height: 26px; }
   .reply:has(.diff-float) { margin-top: calc(10px + var(--diff-float-gap) + var(--diff-float-height)); }
   .reply .diff-float button.diff-btn { background: var(--panel); box-shadow: 0 2px 8px rgba(0, 0, 0, .12); }
+  /* 差分ボタンの横の PR へのリンク（#536）。ボタンと同じ高さ・同じ浮かせ方で、状態は色だけで分ける */
+  .reply .diff-float { display: flex; align-items: center; gap: 6px; }
+  .reply .diff-float a.pr-link { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px; background: var(--panel); box-shadow: 0 2px 8px rgba(0, 0, 0, .12); color: var(--accent); font-family: var(--mono); font-size: 12px; text-decoration: none; white-space: nowrap; }
+  .reply .diff-float a.pr-link:hover { background: var(--hover); text-decoration: underline; }
+  .reply .diff-float a.pr-link svg { flex: none; color: var(--ink); }
+  .reply .diff-float a.pr-link.draft, .reply .diff-float a.pr-link.closed { color: var(--muted); }
+  .reply .diff-float a.pr-link.merged { color: #8957e5; }
   .reply .diff-float button.diff-btn.on { background: var(--hover); }
   .msg .msg-diff { margin: 4px 0 0; }
   .reply .attachments { display: flex; flex-wrap: wrap; gap: 8px; }

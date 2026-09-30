@@ -16,7 +16,7 @@ export function hasDiff(s: SessionDiffSummaryResponse): boolean {
 }
 
 /** `gh pr view` の state を日本語に。open は「PR」とだけ出す（普段はこれ） */
-function prState(pr: NonNullable<SessionDiffSummaryResponse['pr']>): string {
+export function prState(pr: NonNullable<SessionDiffSummaryResponse['pr']>): string {
   if (pr.state === 'MERGED') return 'マージ済み'
   if (pr.state === 'CLOSED') return 'クローズ済み'
   return pr.draft ? '下書き' : 'オープン'
@@ -36,4 +36,24 @@ export function diffTitle(s: SessionDiffSummaryResponse | null, open: boolean): 
   if (s.untracked > 0) lines.push(`追跡外: ${s.untracked} ファイル`)
   if (s.pr) lines.push(`PR #${s.pr.number}（${prState(s.pr)}）`)
   return lines.join('\n')
+}
+
+/** PR のリンクの見た目の区別（#536）。色だけ変える。開いているものが普段の形 */
+export type PrLinkState = 'open' | 'draft' | 'merged' | 'closed'
+
+export interface PrLinkInfo {
+  url: string
+  label: string
+  state: PrLinkState
+  title: string
+}
+
+/**
+ * 差分ボタンの横に出す PR へのリンク（#536）。`gh pr view` の `url` をそのまま飛び先にするので、
+ * **`https://` で始まるものだけ**通す（`javascript:` などを href に入れない）。番号か url が無ければ null（出さない）
+ */
+export function prLink(pr: SessionDiffSummaryResponse['pr']): PrLinkInfo | null {
+  if (!pr || pr.number <= 0 || !/^https:\/\//i.test(pr.url)) return null
+  const state: PrLinkState = pr.state === 'MERGED' ? 'merged' : pr.state === 'CLOSED' ? 'closed' : pr.draft ? 'draft' : 'open'
+  return { url: pr.url, label: `#${pr.number}`, state, title: `PR #${pr.number}（${prState(pr)}）を GitHub で開く` }
 }

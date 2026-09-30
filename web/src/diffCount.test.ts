@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { SessionDiffSummaryResponse } from '../../shared/types.ts'
-import { diffTitle, hasDiff, shortCount } from './diffCount.ts'
+import { diffTitle, hasDiff, prLink, shortCount } from './diffCount.ts'
 
 const base: SessionDiffSummaryResponse = {
   id: 'x@sai',
@@ -68,4 +68,21 @@ test('diffTitle: base が無ければその旨を出し、PR の状態も言い�
   assert.match(closed, /PR #9（クローズ済み）/)
   const draft = diffTitle({ ...base, pr: { number: 9, url: '', state: 'OPEN', draft: true } }, false)
   assert.match(draft, /PR #9（下書き）/)
+})
+
+test('prLink: PR の url へ GitHub の印 + #番号で飛ぶ。状態は色の区別に、言葉は title に（#536）', () => {
+  const pr = { number: 531, url: 'https://github.com/Naturalclar/sai/pull/531', state: 'OPEN', draft: false }
+  assert.deepEqual(prLink(pr), { url: pr.url, label: '#531', state: 'open', title: 'PR #531（オープン）を GitHub で開く' })
+  assert.equal(prLink({ ...pr, draft: true })?.state, 'draft')
+  assert.equal(prLink({ ...pr, state: 'MERGED' })?.state, 'merged')
+  assert.equal(prLink({ ...pr, state: 'CLOSED' })?.title, 'PR #531（クローズ済み）を GitHub で開く')
+})
+
+test('prLink: PR が無い・url が空・https でない url は出さない（href に javascript: などを入れない）', () => {
+  const pr = { number: 531, url: 'https://github.com/o/r/pull/531', state: 'OPEN', draft: false }
+  assert.equal(prLink(undefined), null)
+  assert.equal(prLink({ ...pr, url: '' }), null)
+  assert.equal(prLink({ ...pr, url: 'javascript:alert(1)' }), null)
+  assert.equal(prLink({ ...pr, url: 'http://github.com/o/r/pull/531' }), null)
+  assert.equal(prLink({ ...pr, number: 0 }), null)
 })

@@ -487,7 +487,8 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
           入力欄の高さと位置が変わらない。ヘルプ（`.note`）より上で、チャットの一番下に重なる */}
       {diff && (
         <div className="diff-float">
-          <DiffButton {...diff} />
+          {/* PR があればボタンの横にリンクを出す（#536） */}
+          <DiffButton {...diff} prLink />
         </div>
       )}
       {mention && (

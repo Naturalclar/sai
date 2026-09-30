@@ -29,3 +29,10 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 ## CI（`.github/workflows/ci.yml`）
 
 - コミット前の一式（`pnpm test && pnpm test:feed && pnpm lint && pnpm typecheck`）＋ `pnpm build` を `main` への push と PR で回す。Node 22 系の最新、Python 3.9 と最新。
+
+## 子プロセスを数える（`scripts/count-spawns.mjs`。#592）
+
+- 応答の道で起こしている子プロセス（`ps` / `tmux` / `lsof` / `claude agents` / `gh` / `git`）を、口ごと・コマンドごとに数える preload。サーバのコードは触らず `node --import ./scripts/count-spawns.mjs server/main.ts --port <8787 以外>` で起こす。
+- 数えるのは回数・起こす呼び出しそのものの時間（`posix_spawn` はイベントループの上で同期に走るので、その間サーバは全部止まる）・子が終わるまでの時間、それと口ごとの応答の時間。0.5 秒ごとに `SPAWN_COUNT_OUT`（既定 `/tmp/spawn-count.json`）に書き、`kill -USR2 <pid>` で数え直す。
+- **本物の `~/.agent-feed` では回さない**。`AGENT_FEED_DIR` を一時ディレクトリにして日付の `*.jsonl` だけを写す（`replying.json`・預かり・`settings.json` は写さない。返信が二重に走る・本物の子を終わらせる・一言の `claude -p` が走るため）。`JEV_API_KEY` も渡さない。
+

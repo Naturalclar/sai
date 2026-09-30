@@ -27,6 +27,7 @@ import { BackLink } from './BackLink'
 import { useReply } from './useReply'
 import { historyFrom, withOlder } from './replyHistory'
 import { ReplaceConfirm } from './ReplaceConfirm'
+import { NewSessionStarting } from './NewSessionStarting'
 import { SessionStatusTags } from './SessionStatusTags'
 import { SessionHeadInfo } from './SessionHeadInfo'
 import { SessionHeadActions } from './SessionHeadActions'
@@ -137,6 +138,21 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
   // 見出しだけで 283px あり、スクロールしない場所なのでチャットが画面の 1/3 を切っていた）
   const narrow = useNarrow()
   const contextTokens = data?.context_tokens ?? 0
+  // 「新しいセッションで送る」（#579）。表示名・アイコン・一言の性格を引き継いで始め、最初の記録が届いたらそちらへ移る。
+  // 前のセッションは消さない・アーカイブしない
+  const [fresh, setFresh] = useState<{ from: string; id: string; text: string; since: number } | null>(null)
+  const [freshError, setFreshError] = useState('')
+  const startFresh = async (text: string): Promise<boolean> => {
+    setFreshError('')
+    try {
+      const res = await api.startSession({ from: id, text, inherit: true, ...(s?.meta?.model ? { model: s.meta.model } : {}) })
+      setFresh({ from: id, id: res.id, text, since: Date.now() })
+      return true
+    } catch (err) {
+      setFreshError(err instanceof Error ? err.message : String(err))
+      return false
+    }
+  }
   const tagInput = { serverHost: data?.host ?? '', approval: approvals[0]?.text ?? '', replyingSince: mine?.since ?? '', contextTokens }
   const thinking = { has: hasThinking, open: thinkingUi.open, toggle: () => setThinkingUi({ open: !thinkingUi.open }) }
   const label = s ? headName(s) : { name: '', project: '' }
@@ -200,7 +216,15 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
           trailer={
             <>
               {mine && (
-                <PendingBubble text={mine.text} since={mine.since} now={now} quiet={promptArrived(data.rows, id, mine.text, mine.since)} profile={data.profile}>
+                <PendingBubble
+                  text={mine.text}
+                  since={mine.since}
+                  now={now}
+                  // 要約だけのターン（#579）は本文（/compact …）を出さず「要約中」の 1 行。本文は預かりのバブルに出る
+                  quiet={Boolean(mine.compact) || promptArrived(data.rows, id, mine.text, mine.since)}
+                  {...(mine.compact ? { label: '要約中' } : {})}
+                  profile={data.profile}
+                >
                   <ProgressSteps progress={progress} since={mine.since} now={now} />
                   {/* エージェント自身の段取り（#397。OpenCode だけ。無ければ出ない） */}
                   <ProgressTodos progress={progress} />
@@ -264,9 +288,18 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
             {...(restore ? { restore } : {})}
             {...(insert ? { insert } : {})}
             // 送れなかった（確認待ち・送信失敗）ら ReplyBox が本文・画像・返信先を戻す（#350）
-            onSend={async (text, attachments, { steer }) => (await send(id, text, { attachments, queue: shouldQueue(mine !== null || bgBusy, queuedCount), ...(steer ? { steer: true } : {}) })) === 'sent'}
+            // 送り方（#579）。着手の指示なら「要約してから送る」が既定。量は詳細の context_tokens（#441）
+            sendMode={{ agent: s.agent, contextTokens, terminal: Boolean(s.terminal) }}
+            onSend={async (text, attachments, { steer, mode }) => {
+              if (mode === 'new') return await startFresh(text)
+              return (await send(id, text, { attachments, queue: shouldQueue(mine !== null || bgBusy, queuedCount), ...(steer ? { steer: true } : {}), ...(mode === 'compact' ? { compact: true } : {}) })) === 'sent'
+            }}
           />
         ))}
+      {fresh?.from === id && (
+        <NewSessionStarting key={`starting:${fresh.id}`} id={fresh.id} text={fresh.text} since={fresh.since} replying={data?.replying[fresh.id]} now={now} onRetry={() => setFresh(null)} />
+      )}
+      {freshError && <div className="notice error">新しいセッションを始められませんでした: {freshError}</div>}
       {confirmHere && <ReplaceConfirm confirm={confirmHere} onReplace={() => void confirmReplace()} onProcess={() => void confirmProcess()} onCancel={cancelConfirm} />}
       {/* 走っているターンに足した（#404）。新しいターンではないので仮バブルは作らず、ここに出す。
           ターンが終われば足した文も記録に載るので、この案内は次に送るかターンが終わると消える */}

@@ -556,3 +556,19 @@ test('入力の口: 運用者が --input-format / --output-format を書いて�
     assert.equal(c.args.filter((a) => a === '--input-format').length, extra.includes('--input-format') ? 1 : 0, '二重に付けない')
   }
 })
+
+test('要約だけのターン: snapshot に compact を載せ、使用量には印を付ける（バブルに付けない。#579）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-compact-'))
+  try {
+    const usage: { id: string; usage: TurnUsage }[] = []
+    const runner = new ProcessRunner(join(dir, 'reply.log'), join(dir, 'replying.json'), { record: (id, u) => usage.push({ id, usage: u }) })
+    await runner.start('A@r', { bin: process.execPath, args: ['-e', FAKE_STREAM, join(dir, 'seen.jsonl'), 'S', '50'], cwd: dir, text: '/compact 次は…', input: claudeUserLine('/compact 次は…'), session: 'S', compact: true })
+    assert.equal(runner.snapshot()['A@r']?.compact, true)
+    assert.equal((await readState(join(dir, 'replying.json')))['A@r'] !== undefined, true)
+    assert.ok(await until(() => !runner.running('A@r')))
+    assert.equal(usage.length, 1)
+    assert.equal(usage[0]!.usage.compact, true)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})

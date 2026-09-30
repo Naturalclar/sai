@@ -628,6 +628,11 @@ export interface Replying {
    */
   interruptible?: true
   /**
+   * 要約（`/compact`）だけのターン（#579）。画面は仮バブルに「要約中」と出し、本文は預かりのバブルで見せる。
+   * 記録に行は書かれない（2.1.285 で実測）ので、終わりはプロセスの終了で分かる
+   */
+  compact?: true
+  /**
    * このターンを**起動したときに** SAI の設定から付けた許可モード（#272）。`''` はフラグを付けなかった（CLI の既定）。
    * 省略は「分からない」（端末に打ち込んだ返信・Codex / OpenCode・この項目より前のサーバが書いた replying.json）。
    *
@@ -1086,6 +1091,12 @@ export interface ReplyRequest {
    * 預かりと違って**取り消せない**（走っているターンの筋がその場で変わる）ので、画面は選んだときだけ付ける
    */
   steer?: boolean
+  /**
+   * **要約（`/compact`）してから送る**（#579）。サーバは本文を預かり（#305）の先頭に置き、`/compact <残すものの指示>` の
+   * ターンを起こす。要約が終わったら預かりが本文を回し、要約が失敗したら預かりは止まる（「続けて送る」で要約せずに送る）。
+   * 効くのは Claude で、端末で開いておらず、処理中でも預かりが残ってもいないときだけ。それ以外は付いていないのと同じ
+   */
+  compact?: boolean
 }
 
 /** POST /api/sessions/<id>/attachments。body は画像そのもの */
@@ -1150,8 +1161,8 @@ export interface ReplyResponse {
    * terminal: tmux。process: 非対話CLI。queue: 開いているCodex。app-server: SAI管理のCodex。
    * queued: 処理中だったので預かった（まだ起動していない。#305）
    */
-  via: 'terminal' | 'process' | 'queue' | 'app-server' | 'queued' | 'steer'
-  /** via が queued のとき、預かった返信の id（取り消しに使う） */
+  via: 'terminal' | 'process' | 'queue' | 'app-server' | 'queued' | 'steer' | 'compact'
+  /** via が queued / compact のとき、預かった返信の id（取り消しに使う。compact は要約のあとに回る本文） */
   queue_id?: string
   session: string
   cwd: string
@@ -1186,6 +1197,11 @@ export interface NewSessionRequest {
    * **許可・質問は画面では答えられない**（`--permission-prompt-tool` が使われない）ので、端末で attach して答える
    */
   background?: boolean
+  /**
+   * `from` のセッションの**表示名・アイコン・一言の性格を引き継ぐ**（#579 の「新しいセッションで送る」）。
+   * 前のセッションは消さず、アーカイブもしない
+   */
+  inherit?: boolean
 }
 
 /** 記録の無い兄弟 worktree 1 つ（#319）。`from` は同じリポジトリの、記録のある一番新しいセッション */

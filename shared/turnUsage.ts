@@ -25,6 +25,11 @@ export interface TurnUsage {
   /** 未許可で断られたツールの数。0 より大きければ、返信が空振りした理由になりうる */
   denials: number
   is_error: boolean
+  /**
+   * 要約（`/compact`）だけのターン（#579）。記録に行を書かないので、**どのバブルにも付けない**（`usageByRow()` が飛ばす）。
+   * 費用の集計には残す
+   */
+  compact?: true
 }
 
 const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
@@ -49,6 +54,21 @@ function parseLine(line: string): Record<string, unknown> | null {
  * どちらの形でも「最後にある、`usage` か `total_cost_usd` を持つ JSON の行」が result なので、それだけを見る。
  * 見つからなければ null（`--output-format` を付けていない古い返信・素のテキスト・空）
  */
+/** `modelUsage` の各モデルの量の合計（`usage` が 0 で返るときの補欠） */
+function modelTotals(value: unknown): { input: number; output: number; cacheRead: number; cacheCreation: number } {
+  const out = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return out
+  for (const m of Object.values(value as Record<string, unknown>)) {
+    if (!m || typeof m !== 'object') continue
+    const o = m as Record<string, unknown>
+    out.input += num(o.inputTokens)
+    out.output += num(o.outputTokens)
+    out.cacheRead += num(o.cacheReadInputTokens)
+    out.cacheCreation += num(o.cacheCreationInputTokens)
+  }
+  return out
+}
+
 export function parseTurnUsage(text: string): TurnUsage | null {
   const lines = text.split('\n')
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -57,12 +77,15 @@ export function parseTurnUsage(text: string): TurnUsage | null {
     const usage = o.usage && typeof o.usage === 'object' && !Array.isArray(o.usage) ? (o.usage as Record<string, unknown>) : null
     if (!usage && typeof o.total_cost_usd !== 'number') continue
     const models = o.modelUsage && typeof o.modelUsage === 'object' && !Array.isArray(o.modelUsage) ? Object.keys(o.modelUsage as object) : []
+    // 要約だけのターン（#579）は `usage` が全部 0 で返り、実際の量は `modelUsage` にだけ載る（2.1.285 で実測）
+    const byModel = modelTotals(o.modelUsage)
+    const zero = !usage || (num(usage.input_tokens) + num(usage.output_tokens) + num(usage.cache_read_input_tokens) + num(usage.cache_creation_input_tokens) === 0)
     return {
       model: models[0] ?? '',
-      input_tokens: num(usage?.input_tokens),
-      output_tokens: num(usage?.output_tokens),
-      cache_read_input_tokens: num(usage?.cache_read_input_tokens),
-      cache_creation_input_tokens: num(usage?.cache_creation_input_tokens),
+      input_tokens: zero ? byModel.input : num(usage?.input_tokens),
+      output_tokens: zero ? byModel.output : num(usage?.output_tokens),
+      cache_read_input_tokens: zero ? byModel.cacheRead : num(usage?.cache_read_input_tokens),
+      cache_creation_input_tokens: zero ? byModel.cacheCreation : num(usage?.cache_creation_input_tokens),
       cost_usd: num(o.total_cost_usd),
       duration_ms: num(o.duration_ms),
       num_turns: num(o.num_turns),
@@ -146,6 +169,8 @@ export function usageByRow(rows: FeedRow[], entries: TurnUsageEntry[], windowMs 
   }
   for (const list of byEntity.values()) list.sort((a, b) => a.at - b.at)
   for (const e of [...entries].sort((a, b) => ms(a.ts) - ms(b.ts))) {
+    // 要約だけのターン（#579）は行を書かないので、前のターンのバブルに付けない
+    if (e.compact) continue
     const at = ms(e.ts)
     if (Number.isNaN(at)) continue
     const list = byEntity.get(e.id)

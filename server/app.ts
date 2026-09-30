@@ -10,6 +10,7 @@ import { mergeMeta } from '../shared/meta.ts'
 import { mergeProfile, PROFILE_ICON_ID, profileIconUrl } from '../shared/profile.ts'
 import { isPersonaId } from '../shared/persona.ts'
 import { canSteer, replyBlockedReason, replyFailureText } from '../shared/reply.ts'
+import { compactPrompt } from '../shared/compact.ts'
 import { selfHost } from './host.ts'
 import type { SessionTurnResponse,
   AgentActivity,
@@ -424,6 +425,8 @@ interface LaunchOptions {
   origin?: string
   /** 走っている Codex のターンに足す（#404。`ReplyRequest.steer`）。足せなければ今までどおり預かりか 409 */
   steer?: boolean
+  /** 要約してから送る（#579。`ReplyRequest.compact`）。startTurn では「このターンは要約だけ」の印 */
+  compact?: boolean
 }
 
 /** 起動の結果。HTTP には書かずに返すので、POST はそのまま応答にし、drain は預かりを止める理由にする */
@@ -1227,7 +1230,8 @@ export function createApp(
     const forceProcess = (body as ReplyRequest).via === 'process'
     const wantQueue = (body as ReplyRequest).queue === true
     const wantSteer = (body as ReplyRequest).steer === true
-    const out = await launch(id, text, attachments, { days, replaceTyped, forceProcess, url: selfUrl(req), queue: wantQueue, steer: wantSteer })
+    const wantCompact = (body as ReplyRequest).compact === true
+    const out = await launch(id, text, attachments, { days, replaceTyped, forceProcess, url: selfUrl(req), queue: wantQueue, steer: wantSteer, ...(wantCompact ? { compact: true } : {}) })
     return json(res, out.body, out.status)
   }
 
@@ -1424,6 +1428,17 @@ export function createApp(
 
     const session = randomUUID()
     const id = entityId(session, target.repo, '')
+    // 「新しいセッションで送る」（#579）: 表示名・アイコン・一言の性格を引き継ぐ。前のセッションは触らない（消さない・アーカイブしない）
+    if (asked.inherit === true) {
+      const old = await metaStore.get(from.id)
+      if (old?.name) meta.name = old.name
+      if (old?.persona) meta.persona = old.persona
+      const icon = await iconStore.get(from.id)
+      if (icon) {
+        const bytes = await readFile(icon.path).catch(() => null)
+        if (bytes) await iconStore.put(id, bytes)
+      }
+    }
     if (Object.keys(meta).length > 0) await metaStore.set(id, meta)
     const via = { url: selfUrl(req), entity: id, tokenFile: agentTokenPath }
     const cmd = newSessionCommand(session, text, cwd, process.env, via, meta.model, meta.permission_mode, meta.name)
@@ -1644,6 +1659,34 @@ export function createApp(
     const bgHold = bgLive ? await backgroundHold(bgLive, session) : ''
     // 別プロセス（-p / app-server）のターンが動いているか、いま起動している最中か
     const busy = run.running(id) || codexApp.running(id) || opencodeApp.running(id) || launching.has(id) || bgHold !== ''
+    // **要約してから送る**（#579）。本文を預かりの先頭に置いてから `/compact` のターンを起こす。要約のプロセスが終わると
+    // `drain()` が本文を回し、要約が失敗すれば預かりは止まる（新しい順番の仕組みは作らない）。
+    // 効くのは Claude で、端末で開いておらず（TUI に打ち込む経路では要約中の入力の扱いを確かめていない）、処理中でも
+    // 預かりが残ってもいないときだけ。当たらなければ付いていないのと同じ（下の今までの経路）
+    // 端末に打ち込んだ返信がまだ回っているのにペインが見つからないときも回さない（下の経路が 409 にするのと同じ。#590 のレビュー）
+    if (o.compact && session.agent === 'claude' && !openTerminal && !busy && !typed.running(id) && !bgLive && queue.size(id) === 0) {
+      const log = join(store.directory, 'reply.log')
+      launching.add(id)
+      try {
+        const item = queue.add(id, text, attachments, o.url, new Date(), o.origin ?? '')
+        if (!item) return refuse(409, `預かれるのは ${QUEUE_MAX} 件までです`)
+        await appendFile(log, `--- ${new Date().toISOString()} ${id} 要約（/compact）してから送る。本文は預かりの先頭に置いた\n`).catch(() => {})
+        const out = await startTurn(id, session, raw, cwd, null, compactPrompt(text), [], { ...o, forceProcess: true, compact: true })
+        if (out.status !== 202) {
+          // 要約を起こせなければ本文も預からない（画面が入力欄に戻す）
+          queue.remove(id, item.queue_id)
+          return out
+        }
+        agents.launched(id, o.origin)
+        const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd, via: 'compact', queue_id: item.queue_id }
+        return { status: 202, body: payload }
+      } finally {
+        launching.delete(id)
+      }
+    }
+    if (o.compact) {
+      await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} 要約してから送るは当たらない（端末で開いている・処理中・預かりがある・Claude でない）。そのまま送る\n`).catch(() => {})
+    }
     // 処理中なら預かる（#305）。処理中でなくても預かりが残っていれば後ろに並べる（先に預けたものを追い越さない）
     if (o.queue && (busy || queue.size(id) > 0)) {
       const item = queue.add(id, text, attachments, o.url, new Date(), o.origin ?? '')
@@ -1795,6 +1838,7 @@ export function createApp(
     // 表示名も渡すと、端末のタイトルと `/resume` のピッカーに SAI と同じ名前が出る（#391）
     const cmd = replyCommand(session.agent, raw, text, cwd, process.env, via, model, own?.permission_mode, attachments, own?.name)
     if (!cmd) return refuse(400, replyBlockedReason(session, selfHost()) || 'unsupported agent')
+    if (o.compact) cmd.compact = true
     try {
       // プロセスが終わったら、そのセッションの答え待ちは deny で片付ける（もう誰も答えを取りに来ない）。
       // 預かっている返信があれば続けて回す（#305）

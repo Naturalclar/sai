@@ -175,7 +175,7 @@ export function FeedView({ selected, projects, onProjects, sessions = NO_SESSION
             (pending.length > 0 || approvals.length > 0 || queuedShown.length > 0) && (
               <>
                 {pending.map((p) => (
-                  <FeedPendingBubble key={p.id} id={p.id} text={p.text} since={p.since} now={now} repo={repoOf(p.id)} quiet={promptArrived(rows, p.id, p.text, p.since)} profile={data.profile} />
+                  <FeedPendingBubble key={p.id} id={p.id} text={p.text} since={p.since} now={now} repo={repoOf(p.id)} quiet={promptArrived(rows, p.id, p.text, p.since)} profile={data.profile} compact={Boolean(p.compact)} />
                 ))}
                 {/* ショートカット（⌘Enter）が効くのは一番上の 1 つだけ。複数出るので、どれに効いたか分からなくならないように */}
                 {approvals.map((a, i) => (

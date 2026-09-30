@@ -115,6 +115,8 @@ export interface ReplyCommand {
   input?: string
   /** `result` を見分けるためのセッション ID（reply.log は並行する返信の出力が混ざるので、`session_id` で自分の分だけ拾う） */
   session?: string
+  /** 要約（`/compact`）だけのターン（#579）。画面に「要約中」と出し、使用量はバブルに付けない */
+  compact?: true
 }
 
 /**
@@ -469,10 +471,10 @@ export class ProcessRunner implements Runner {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return
     for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
       if (!value || typeof value !== 'object') continue
-      const { pid, since, text, permission_mode } = value as Partial<Persisted>
+      const { pid, since, text, permission_mode, compact } = value as Partial<Persisted>
       if (typeof pid !== 'number' || pid <= 0 || typeof since !== 'string' || typeof text !== 'string') continue
       // 許可モードはこの項目より前のサーバが書いた分には無い。無ければ「分からない」のまま（画面は何も出さない。#272）
-      if (isAlive(pid)) this.active.set(id, { pid, since, text, ...(typeof permission_mode === 'string' ? { permission_mode } : {}) })
+      if (isAlive(pid)) this.active.set(id, { pid, since, text, ...(typeof permission_mode === 'string' ? { permission_mode } : {}), ...(compact === true ? { compact: true as const } : {}) })
     }
     this.persist() // 死んでいた分を落とした形で書き直す
   }
@@ -547,13 +549,14 @@ export class ProcessRunner implements Runner {
     this.sweep()
     // pid と failedAt は画面に要らない
     return Object.fromEntries(
-      [...this.active].map(([id, { since, text, permission_mode, failed }]) => [
+      [...this.active].map(([id, { since, text, permission_mode, failed, compact }]) => [
         id,
         {
           since,
           text,
           ...(permission_mode !== undefined ? { permission_mode } : {}),
           ...(failed ? { failed } : {}),
+          ...(compact ? { compact } : {}),
           // 入力の口が開いている間だけ「止められる・足せる」（#386。Codex の #384 / #404 と同じ印）
           ...(!failed && this.inputs.has(id) ? { interruptible: true as const } : {}),
         },
@@ -632,7 +635,13 @@ export class ProcessRunner implements Runner {
     })
     // spawn を待つ前から「処理中」にする（同じセッションへの2つ目をこの隙に通さない）。pid は spawn したら入れる
     // 起動したときの許可モードも覚える。動いている CLI には後から当てられないので、画面が今の設定と比べる（#272）
-    const entry: Persisted = { pid: 0, since: new Date().toISOString(), text: cmd.text, ...(cmd.permissionMode !== undefined ? { permission_mode: cmd.permissionMode } : {}) }
+    const entry: Persisted = {
+      pid: 0,
+      since: new Date().toISOString(),
+      text: cmd.text,
+      ...(cmd.permissionMode !== undefined ? { permission_mode: cmd.permissionMode } : {}),
+      ...(cmd.compact ? { compact: true as const } : {}),
+    }
     this.active.set(id, entry)
     let released = false
     let watch: ReturnType<typeof setInterval> | null = null
@@ -667,7 +676,7 @@ export class ProcessRunner implements Runner {
       if (this.usage) {
         const used = parseTurnUsage(slice)
         // result が無いのは普通のこと（Codex / OpenCode、--output-format を外した運用）。そのときは何も書かない
-        if (used) this.usage.record(id, used)
+        if (used) this.usage.record(id, entry.compact ? { ...used, compact: true } : used)
       }
       const failure = failureOf(code, signal, this.logPath, logOffset, slice)
       if (failure) {

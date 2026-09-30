@@ -197,3 +197,40 @@ test('本文に無い番号は invented_number が見る（action_swap は言わ
   assert.ok(c.includes('invented_number'))
   assert.ok(!c.includes('action_swap'))
 })
+
+// ---- #540: 番号の種類（PR / issue）の取り違え
+test('kind_swap: 本文が Issue と呼んでいる番号を、一言が PR と呼んだ（実データの形）', () => {
+  const source = 'Issue #536 を作りました: https://github.com/Naturalclar/sai/issues/536'
+  assert.ok(codes(source, 'PR #536 作成、diff に PR リンク追加します').includes('kind_swap'))
+  // 本文が URL でしか出していなくても（実データでは番号が URL だけの回が多い）
+  assert.ok(codes('作りました: https://github.com/Naturalclar/sai/issues/536', 'PR #536 を作成').includes('kind_swap'))
+  assert.ok(codes(source, 'プルリク #536 を出した').includes('kind_swap'))
+  assert.ok(!codes(source, 'Issue #536 作成、diff の横に PR のリンクを出す話').includes('kind_swap'))
+  const hint = digestIssues(source, 'PR #536 作成').find((i) => i.code === 'kind_swap')?.hint ?? ''
+  assert.match(hint, /#536 は Issue/)
+})
+
+test('kind_swap: 逆向き（本文は PR、一言は Issue）も見る', () => {
+  assert.ok(codes('https://github.com/Naturalclar/sai/pull/468 をマージしました', 'Issue #468 マージ完了').includes('kind_swap'))
+})
+
+test('kind_swap: 本文が両方で呼んでいる・どちらとも呼んでいない・番号の直前の語でないときは言わない', () => {
+  // Issue #467 を直す PR #468。#467 の種類は一言が言っていない
+  assert.ok(!codes('Issue #467 を直す PR #468 を作りました', 'PR #468 作成、#467 を直す').includes('kind_swap'))
+  // 同じ番号を本文が両方で呼ぶ書き方
+  assert.ok(!codes('Issue #467 は PR #467 で閉じます', 'PR #467 作成').includes('kind_swap'))
+  // 本文は裸の #N だけ（どちらかは本文から分からないので、ここでは言わない）
+  assert.ok(!codes('#518 をマージしました', 'PR #518 マージ').includes('kind_swap'))
+  // 本文も PR と呼んでいる
+  assert.ok(!codes('PR #518 をマージしました', 'PR #518 マージ').includes('kind_swap'))
+  // 一言の PR は #536 のことではない（番号の直前の語だけ見る）
+  assert.ok(!codes('Issue #536 を作りました', 'PR を作る前に #536 を整理した').includes('kind_swap'))
+  // 英字の語の途中の pr には当てない
+  assert.ok(!codes('Issue #5 を作りました', 'sprint #5 の準備').includes('kind_swap'))
+})
+
+test('kind_swap: 頼んだこと（ask）が PR と呼んでいれば裏付けになる', () => {
+  const source = 'https://github.com/o/r/issues/468 の件を直しました'
+  assert.ok(codes(source, 'PR #468 マージ').includes('kind_swap'))
+  assert.ok(!digestIssues(source, 'PR #468 マージ', 'PR #468 をマージして').some((i) => i.code === 'kind_swap'))
+})

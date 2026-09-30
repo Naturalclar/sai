@@ -14,6 +14,8 @@ export type DigestIssueCode =
   | 'invented_number'
   // 番号に添えた動作の取り違え（#378）。本文は「マージした」なのに一言が「作成」になる形
   | 'action_swap'
+  // 番号の種類（PR / issue）の取り違え（#540）。本文は `Issue #536` なのに一言が `PR #536` になる形
+  | 'kind_swap'
   // 本文に無いことを足したもの（#363）。#268 / #346 と同じ「本文に書いてあることだけ」の系列
   | 'invented_request'
   // 落ちているもの（#359）。意味は変わっていないが、読んだ人が次に何をすればよいか分からなくなる
@@ -219,6 +221,42 @@ function swappedActions(source: string, summary: string): string[] {
   return out
 }
 
+/** PR を指す語・issue を指す語（番号の直前に来るもの）。英字の語の途中（`sprint 5` の `pr` など）には当てない */
+const PR_WORD = String.raw`(?:(?<![A-Za-z])PRs?|プルリク(?:エスト)?|pull\s+request)`
+const ISSUE_WORD = String.raw`(?:(?<![A-Za-z])issues?|イシュー)`
+/** 一言の中の「種類の語 + 番号」。**番号の直前の語だけ**見る（`PR を作成。#536 は…` の PR は #536 のことではない） */
+const SUMMARY_KIND = new RegExp(String.raw`(${PR_WORD}|${ISSUE_WORD})\s*#?(\d+)(?!\d)`, 'giu')
+
+/** 本文（と頼んだこと）が番号 n を PR / issue と呼んでいるか。語（`Issue #536`）と URL（`/issues/536`）の両方で見る */
+function kindsOf(text: string, n: string): { pr: boolean; issue: boolean } {
+  const num = String.raw`#?${n}(?!\d)`
+  return {
+    pr: new RegExp(String.raw`(?:${PR_WORD}\s*${num}|/pull/${n}(?!\d))`, 'iu').test(text),
+    issue: new RegExp(String.raw`(?:${ISSUE_WORD}\s*${num}|/issues/${n}(?!\d))`, 'iu').test(text),
+  }
+}
+
+/**
+ * 番号の種類の取り違え（#540）。一言が `PR #N` と書いているのに、本文は N を issue と呼んでいて PR とは
+ * 一度も呼んでいない（逆向きも同じ）。PR か issue かで人の次の一手（レビューしてマージ / 着手の判断）が変わる。
+ * 実データ 1,313 件で 11 件（すべて qwen3:8b）。プロンプトの作例が `PR 〈番号〉作成` の形だったのを写していた。
+ * **本文が両方で呼んでいれば言わない**（`Issue #467 を直す PR #468` のような書き方）。どちらとも呼んでいない
+ * （裸の `#N`）ときも言わない（本当はどちらか本文からは分からない）。頼んだこと（`ask`）も種類の裏付けに数える
+ */
+function swappedKinds(source: string, summary: string, ask: string): string[] {
+  const out = new Set<string>()
+  for (const m of summary.matchAll(SUMMARY_KIND)) {
+    const word = m[1] ?? ''
+    const n = m[2]
+    if (!n) continue
+    const said = new RegExp(`^${PR_WORD}$`, 'iu').test(word) ? 'pr' : 'issue'
+    const src = kindsOf(`${source}\n${ask}`, n)
+    if (said === 'pr' && src.issue && !src.pr) out.add(`本文では #${n} は Issue です`)
+    if (said === 'issue' && src.pr && !src.issue) out.add(`本文では #${n} は PR です`)
+  }
+  return [...out]
+}
+
 /** 本文の中の引用された依頼を、出てきた順に返す（同じものは 1 つ） */
 export function quotedRequests(source: string): string[] {
   const out = new Set<string>()
@@ -303,6 +341,14 @@ export function digestIssues(rawSource: string, rawSummary: string, rawAsk = '')
     out.push({
       code: 'action_swap',
       hint: `番号に添えた動作が本文と違います（${swapped.join(', ')}）。**本文の言葉のまま**書いてください（作成とマージを取り違えると、読んだ人の次の一手が変わります）`,
+    })
+  }
+  // 番号の種類の取り違え（#540）
+  const kinds = swappedKinds(source, text, ask)
+  if (kinds.length > 0) {
+    out.push({
+      code: 'kind_swap',
+      hint: `番号の種類が本文と違います（${kinds.join(', ')}）。**本文の呼び方のまま**書いてください（PR と Issue を取り違えると、読んだ人の次の一手が変わります）`,
     })
   }
   // 本文は報告だけなのに、一言が人に何かを求めている（#363。実測 735 件中 40 件）。

@@ -24,6 +24,18 @@ export function followsBottom(stick: boolean, applied: number, height: number): 
 }
 
 /**
+ * 見えている高さ（チャットの箱の `clientHeight`）が変わったので最下部へ送り直すか（#544）。追従中で、前の高さが分かっていて、変わったときだけ。
+ *
+ * `followsBottom()` は中身の高さしか見ないので、**箱の方が縮んだ**ときには送らない。差分ボタンは差分の有無を取ってから
+ * 出て、そのぶん入力欄の上に余白を取る（#351）ので、最下部まで送ったあとで箱の下端がせり上がり、最後の発言の下が
+ * ボタンの陰に隠れたまま止まっていた。入力欄が複数行に伸びたとき・狭い画面でソフトキーボードが出たときも同じ。
+ * **読み返している（追従していない）間は送らない**（#344 の意図のまま）
+ */
+export function followsResize(stick: boolean, prevClient: number, client: number): boolean {
+  return stick && prevClient > 0 && client !== prevClient
+}
+
+/**
  * 先頭に前の行が足されたか（#477。「前の 7 日を表示」）。先頭の行の時刻がさかのぼったときだけ。
  * 最初の描画（前が空）と、先頭が消えた・同じときは足されていない
  */

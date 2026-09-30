@@ -19,7 +19,7 @@ import { JumpToBottom } from './JumpToBottom'
 import { HostTag } from './HostTag'
 import { opensDiff, type ChatDiffs } from './feedDiff.ts'
 import { JUMP_FLASH_MS, type FeedJump } from './feedJump.ts'
-import { followsBottom, nearBottom, prepended } from './chatScroll.ts'
+import { followsBottom, followsResize, nearBottom, prepended } from './chatScroll.ts'
 import { questionsFor, rowQuestions } from './terminalQuestion.ts'
 import { wasClipped } from '../../shared/clipped.ts'
 import type { PendingQuestion } from '../../shared/types.ts'
@@ -177,6 +177,30 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
     appliedHeight.current = el.scrollHeight
     el.scrollTop = el.scrollHeight
   }, [rows, trailer, focusKey])
+
+  // 箱の見えている高さが変わったとき（差分ボタンが出て入力欄の上に余白を取った・入力欄が伸びた・キーボードが出た）も、
+  // 追従中なら最下部へ送り直す（#544）。上の effect は中身の高さしか見ないので、箱だけが縮むと最後の発言の下が隠れたまま止まる。
+  // 飛び先へまだ着いていない間は割り込まない（上と同じ）。箱が無い（空の表示）間は見張らない
+  const shown = rows.length > 0 || !!trailer
+  const pendingFocus = useRef(false)
+  useEffect(() => {
+    pendingFocus.current = !!focusKey && landed.current !== focusKey
+  })
+  useEffect(() => {
+    const el = ref.current
+    if (!shown || !el || typeof ResizeObserver === 'undefined') return
+    let prev = el.clientHeight
+    const observer = new ResizeObserver(() => {
+      const height = el.clientHeight
+      if (followsResize(stickToBottom.current, prev, height) && !pendingFocus.current) {
+        appliedHeight.current = el.scrollHeight
+        el.scrollTop = el.scrollHeight
+      }
+      prev = height
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [shown])
 
   // 先頭に前の行が足されたら、足された高さぶん送り直して読んでいた場所に留まる（#477）。
   // ブラウザのスクロールアンカーは Safari に無く、先頭（scrollTop 0）で押したときは Chrome でも効かないので自分で合わせる

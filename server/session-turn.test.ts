@@ -17,7 +17,9 @@ import type { SessionTurnResponse } from '../shared/types.ts'
 let dir: string
 let server: Server
 let base: string
-const at = (sec: number) => new Date(Date.now() - 60_000 + sec * 1000)
+// 基準の時刻は 1 回だけ取る（呼ぶたびに取ると、書いた行と後で名指しする ts が秒の境目をまたいでずれる。CI で落ちた）
+const BASE = Date.now() - 60_000
+const at = (sec: number) => new Date(BASE + sec * 1000)
 const iso = (d: Date) => row(d, 'x').ts
 const turn = async (id: string, ts?: string) => {
   const res = await fetch(`${base}/api/sessions/${encodeURIComponent(id)}/turn${ts === undefined ? '' : `?ts=${encodeURIComponent(ts)}`}`)

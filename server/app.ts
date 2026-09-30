@@ -141,6 +141,7 @@ import {
 } from '../shared/agentMessages.ts'
 import { eventKind } from '../shared/events.ts'
 import { stepLabel } from '../shared/progress.ts'
+import { contextRevKey } from '../shared/contextSize.ts'
 import { mcpAccess, normalizeOrigin } from './mcp/access.ts'
 import type { McpAccess } from './mcp/access.ts'
 import { handleRpc, protocolVersionOk, textResult } from './mcp/protocol.ts'
@@ -2994,8 +2995,10 @@ export function createApp(
         const question = await pendingQuestion(session, pendingApprovals)
         // `claude --bg` のセッションなら、端末で開くための短い ID（#462）。状態は rev に混ぜる
         const bg = await backgroundOf(session)
+        // いまのコンテキスト量（#441）。(mtime, size) で覚えているので読み直しは軽い。rev には丸めた値だけ混ぜる
+        const context = isRemoteHost(session.host, selfHost()) ? 0 : (await progress.read(session)).context_tokens
         const body: SessionDetailResponse = {
-          rev: revWith(`${sessionsRev}~${me.rev}~${settled}~${terminalKey(sessions)}~${question?.asked_at ?? ''}~${bg ? `${bg.attach}:${bg.status}` : ''}`, replying, approvalMapKey(pendingApprovals), false, `${digest.revKey()}|${usage.rev()}`, `${queue.key()}|${agents.key()}`),
+          rev: revWith(`${sessionsRev}~${me.rev}~${settled}~${terminalKey(sessions)}~${question?.asked_at ?? ''}~${bg ? `${bg.attach}:${bg.status}` : ''}~${contextRevKey(context)}`, replying, approvalMapKey(pendingApprovals), false, `${digest.revKey()}|${usage.rev()}`, `${queue.key()}|${agents.key()}`),
           session: withLastSummary([session])[0]!,
           rows,
           older,
@@ -3008,6 +3011,7 @@ export function createApp(
           host: selfHost(),
           ...(question ? { question } : {}),
           ...(bg ? { background: bg } : {}),
+          ...(context > 0 ? { context_tokens: context } : {}),
         }
         return json(res, body)
       }

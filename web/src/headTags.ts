@@ -1,5 +1,6 @@
 // チャット見出しの「いまの状態」の印と、狭い画面の 1 行目に出す名前（#274）。
 // 広い画面の見出し・狭い画面の 1 行目・「⋯」のパネルが同じものを使うので、出すかどうかの判定はここに 1 つだけ置く
+import { contextWarns } from '../../shared/contextSize.ts'
 import { isRemoteHost } from '../../shared/host.ts'
 import { projectName } from '../../shared/project.ts'
 import type { SessionSummary, Terminal } from '../../shared/types.ts'
@@ -15,6 +16,7 @@ export type HeadTag =
   | { kind: 'replying'; since: string }
   | { kind: 'archived' }
   | { kind: 'mode'; mode: string }
+  | { kind: 'context'; tokens: number }
 
 export type HeadTagSession = Pick<SessionSummary, 'host' | 'session_source' | 'terminal' | 'waiting' | 'archived' | 'permission_mode'>
 
@@ -30,6 +32,8 @@ export interface HeadTagInput {
    * 合成（synth）は返信できない理由なので落とさない。許可モードも落とさない（素通しを選んだまま忘れるのが一番まずい。#253）
    */
   compact: boolean
+  /** いまのコンテキスト量（#441。詳細の応答の `context_tokens`）。分からなければ 0 */
+  contextTokens: number
 }
 
 export function headTags(s: HeadTagSession, input: HeadTagInput): HeadTag[] {
@@ -44,6 +48,8 @@ export function headTags(s: HeadTagSession, input: HeadTagInput): HeadTag[] {
   if (s.archived) tags.push({ kind: 'archived' })
   // 通常のモードは印を出さない（普段と違うときだけ目立たせる）
   if (s.permission_mode && s.permission_mode !== 'default') tags.push({ kind: 'mode', mode: s.permission_mode })
+  // 大きくなりすぎたコンテキスト（#441）。狭い画面の 1 行目にも残す（返信のたびに読み直す量なので、気づかないまま続けるのが一番高くつく）
+  if (contextWarns(input.contextTokens)) tags.push({ kind: 'context', tokens: input.contextTokens })
   return tags
 }
 

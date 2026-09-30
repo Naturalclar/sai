@@ -135,7 +135,8 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
   // 狭い画面では見出しを「← 名前 状態の印 ⋯」と題名 1 行に畳み、詳しい情報と操作は ⋯ のパネルへ（#274。
   // 見出しだけで 283px あり、スクロールしない場所なのでチャットが画面の 1/3 を切っていた）
   const narrow = useNarrow()
-  const tagInput = { serverHost: data?.host ?? '', approval: approvals[0]?.text ?? '', replyingSince: mine?.since ?? '' }
+  const contextTokens = data?.context_tokens ?? 0
+  const tagInput = { serverHost: data?.host ?? '', approval: approvals[0]?.text ?? '', replyingSince: mine?.since ?? '', contextTokens }
   const thinking = { has: hasThinking, open: thinkingUi.open, toggle: () => setThinkingUi({ open: !thinkingUi.open }) }
   const label = s ? headName(s) : { name: '', project: '' }
   return (
@@ -153,7 +154,7 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
             </span>
             <SessionStatusTags tags={headTags(s, { ...tagInput, compact: true })} now={now} title={s.id} />
             <SessionHeadMenu key={`menu:${s.id}`}>
-              <SessionHeadInfo s={s} />
+              <SessionHeadInfo s={s} contextTokens={contextTokens} />
               <span className="meta wide head-id">
                 <code>{s.id}</code>
                 {s.session_source && s.session_source !== 'synth' && <span className="tag">{s.session_source}</span>}
@@ -168,7 +169,7 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
         <div className="chat-head">
           {/* bare clone だと repo は worktree 名なので、リポジトリ名（project）。worktree は右の branch で分かる */}
           <h1><span className="hash">#</span>{label.project}</h1>
-          <SessionHeadInfo s={s} />
+          <SessionHeadInfo s={s} contextTokens={contextTokens} />
           <SessionStatusTags tags={headTags(s, { ...tagInput, compact: false })} now={now} title={s.id} />
           <SessionHeadActions s={s} settings={settings} thinking={thinking} />
           {s.title_full && <div className="meta wide">{s.title_full}</div>}

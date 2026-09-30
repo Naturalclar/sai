@@ -178,6 +178,12 @@ export function claudeProgress(lines: readonly string[]): ParsedProgress {
       }
       continue
     }
+    // `/compact`・自動の要約で縮んだ（#441 のレビュー）。次にモデルを呼ぶまで usage は来ないので、縮んだあとの量で置き換える
+    // （置き換えないと、縮めたあとも見出しに「大きすぎる」が残り、エージェント同士の予算にも古い量が乗る）
+    if (o.type === 'system' && o.subtype === 'compact_boundary') {
+      context = num(obj(o.compactMetadata)?.postTokens)
+      continue
+    }
     if (o.type === 'assistant') {
       // 1 回の返答が塊ごとの行に分かれて書かれ、どれにも同じ usage が付く。一番新しいものを残す
       const usage = obj(message?.usage)
@@ -228,6 +234,11 @@ export function codexProgress(lines: readonly string[]): ParsedProgress {
     if (!o || !payload) continue
     const ts = str(o.timestamp)
     const type = payload.type
+    // 要約で縮んだ（#441 のレビュー）。縮んだあとの量は次の `token_count` まで分からないので、古い量を残さず「分からない」にする
+    if (o.type === 'compacted') {
+      context = 0
+      continue
+    }
     if (o.type === 'event_msg') {
       if (type === 'task_started') {
         steps = []

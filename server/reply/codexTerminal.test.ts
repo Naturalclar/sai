@@ -116,3 +116,30 @@ test('lock を握っているのがそのペインの外のプロセスなら本
   const outside = new CodexTerminals({ holders: fakeHolders([46927]).holders, alive: () => true, inPane: async () => false, env })
   assert.equal(await outside.pid(SESSION, PANE), 0, 'ペインの外だけなら端末扱いにしない')
 })
+
+// ---------------------------------------------------------------- 行の pid がペインの外（#562）
+
+test('owner: 行の pid がペインの中ならその pid、外（共有の app-server）なら 0（#562）', async () => {
+  const t = new CodexTerminals({ env, alive: () => true, inPane: async (_pane, pid) => pid === 200 })
+  assert.equal(await t.owner(PANE, 200), 200)
+  assert.equal(await t.owner(PANE, 46927), 0, 'ペインの外の app-server を端末にしない（その app-server が回すどのスレッドの行も同じペインを指す）')
+})
+
+test('owner: TTL の間は覚えていて、lastOwner は前回の結果を返す', async () => {
+  let now = 0
+  let asked = 0
+  const t = new CodexTerminals({ env, alive: () => true, inPane: async () => (asked++, false), now: () => now })
+  assert.equal(t.lastOwner(PANE, 46927), undefined, 'まだ引いていなければ知らない')
+  assert.equal(await t.owner(PANE, 46927), 0)
+  assert.equal(await t.owner(PANE, 46927), 0)
+  assert.equal(asked, 1, '見つからなかったことも覚える')
+  assert.equal(t.lastOwner(PANE, 46927), 0)
+  now += CODEX_PID_TTL_MS
+  await t.owner(PANE, 46927)
+  assert.equal(asked, 2)
+})
+
+test('owner: ペインの検査が失敗したら 0（端末扱いにしない）', async () => {
+  const t = new CodexTerminals({ env, alive: () => true, inPane: async () => { throw new Error('tmux gone') } })
+  assert.equal(await t.owner(PANE, 200), 0)
+})

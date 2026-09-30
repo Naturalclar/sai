@@ -52,6 +52,10 @@ const codexTerminals = {
     codexTerminals.asked.push(session)
     return session === 'X4' && pane === '%11' ? 204 : 0
   },
+  /** 行の pid（生きている）がペインの中か（#562）。207 は共有の app-server（ペインの外） */
+  async owner(_pane: string, pid: number) {
+    return pid === 207 ? 0 : pid
+  },
 }
 
 const codexApp: CodexApp = {
@@ -81,7 +85,7 @@ class FakeTmux implements Tmux {
   }
 }
 const tmux = new FakeTmux()
-const alivePids = new Set([200, 201, 204, 205, 206])
+const alivePids = new Set([200, 201, 204, 205, 206, 207])
 const now = new Date()
 const min = (n: number) => n * 60_000
 
@@ -108,6 +112,8 @@ before(async () => {
       JSON.stringify(row(new Date(now.getTime() - min(1)), 'X4', { agent: 'codex', repo: 'r', cwd: work, pane: '%11', pid: 303, session_source: 'rollout' })),
       // lock を開かない Codex（実測: 0.154.0。lock は共有の app-server が握る）。ペインも移っている（#417）
       JSON.stringify(row(new Date(now.getTime() - min(1)), 'X5', { agent: 'codex', repo: 'r', cwd: work, pane: '%12', pid: 304, session_source: 'rollout' })),
+      // 行の pid が共有の `codex app-server --listen`（生きているがペインの外。#562）
+      JSON.stringify(row(new Date(now.getTime() - min(1)), 'X6', { agent: 'codex', repo: 'r', cwd: work, pane: '%15', pid: 207, session_source: 'rollout' })),
     ].join('\n') + '\n',
   )
   const app = createApp(
@@ -170,6 +176,14 @@ test('一覧: 記録した pid が死んでいる Codex は、lock を握って�
   assert.equal(by['D1@r'], null, 'Claude には補欠を当てない（lock が無い）')
   assert.ok(!codexTerminals.asked.includes('D1'), 'Claude や pid が生きている Codex では lsof を起こさない')
   assert.ok(!codexTerminals.asked.includes('X1'), 'pid が生きていれば引き直さない')
+})
+
+test('一覧: Codex の行の pid がペインの外（共有の app-server）なら、生きていても端末にしない（#562）', async () => {
+  const data = await sessions()
+  const by = Object.fromEntries(data.sessions.map((s) => [s.id, s.terminal]))
+  assert.equal(by['X6@r'], null, '生きているだけの app-server の pid を端末にしない（下の補欠でも見つからない）')
+  assert.deepEqual(by['X1@r'], { pane: '%10', pid: 201 }, 'ペインの中の pid は今までどおり')
+  assert.deepEqual(by['T1@r'], { pane: '%9', pid: 200 }, 'Claude は今までどおり')
 })
 
 test('一覧: lock で引けない Codex は、ペインで動いているものと cwd → rollout で突き合わせる（#417）', async () => {

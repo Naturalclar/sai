@@ -14,6 +14,13 @@ export interface CodexTerminalSource {
   pid(session: string, pane: string): Promise<number>
   /** 前回の結果（`lsof` を起こさない。#495 の締切で使う）。知らなければ 0。偽物は持たなくてよい */
   last?(session: string, pane: string): number
+  /**
+   * 行の pid（生きている）がそのペインの中で動いているか（#562）。中ならその pid、外なら 0。
+   * 無ければ（テストの偽物）今までどおり行の pid をそのまま使う
+   */
+  owner?(pane: string, pid: number): Promise<number>
+  /** `owner()` の前回の結果。知らなければ undefined（#495 の締切で使う） */
+  lastOwner?(pane: string, pid: number): number | undefined
 }
 
 export interface CodexTerminalDeps {
@@ -80,6 +87,39 @@ export class CodexTerminals implements CodexTerminalSource {
     })
     this.inflight.set(key, work)
     return work
+  }
+
+  /** `owner()` の前回の結果。TTL が切れていてもそのまま。知らなければ undefined */
+  lastOwner(pane: string, pid: number): number | undefined {
+    const hit = this.cache.get(`owner\n${pane}\n${pid}`)
+    if (!hit) return undefined
+    return hit.pid === 0 || this.alive(hit.pid) ? hit.pid : 0
+  }
+
+  async owner(pane: string, pid: number): Promise<number> {
+    const key = `owner\n${pane}\n${pid}`
+    const hit = this.cache.get(key)
+    if (hit && this.now() - hit.at < CODEX_PID_TTL_MS && (hit.pid === 0 || this.alive(hit.pid))) return hit.pid
+    const running = this.inflight.get(key)
+    if (running) return running
+    const work = this.lookupOwner(pane, pid)
+      .then((found) => {
+        this.cache.set(key, { at: this.now(), pid: found })
+        return found
+      })
+      .finally(() => {
+        this.inflight.delete(key)
+      })
+    this.inflight.set(key, work)
+    return work
+  }
+
+  private async lookupOwner(pane: string, pid: number): Promise<number> {
+    try {
+      return (await this.inPane(pane, pid)) ? pid : 0
+    } catch {
+      return 0
+    }
   }
 
   private async lookup(session: string, pane: string): Promise<number> {

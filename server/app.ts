@@ -552,7 +552,15 @@ export function createApp(
   const terminalOf = async (s: SessionSummary, { soft = false }: { soft?: boolean } = {}) => {
     const wait = <T,>(work: Promise<T>, last: () => T): Promise<T> => (soft ? softWait(work, last) : work)
     if (!terminalEnabled) return null
-    if (s.pane && s.pid && isAlive(s.pid)) return { pane: s.pane, pid: s.pid }
+    if (s.pane && s.pid && isAlive(s.pid)) {
+      if (s.agent !== 'codex' || !codexTerminals.owner) return { pane: s.pane, pid: s.pid }
+      // **Codex の行の pid はペインの外のことがある**（#562。0.153 の TUI は共有の `codex app-server --listen` の客で、
+      // notify を鳴らすのは app-server。行の pane は app-server を起こしたペインなので、その app-server が回す**どのスレッドの行も**
+      // 同じペインを指す）。生きているだけで端末とみなすと、別の会話の TUI を端末と取り違える。ペインの中のときだけ採り、
+      // 外なら下の補欠に落とす。一覧は締切までに引けなければ前回の結果（初回は今までどおり）
+      const owner = await wait(codexTerminals.owner(s.pane, s.pid), () => codexTerminals.lastOwner?.(s.pane!, s.pid!) ?? s.pid!)
+      if (owner) return { pane: s.pane, pid: owner }
+    }
     if (s.agent !== 'codex') return null
     const session = sessionOf(s)
     if (!session) return null

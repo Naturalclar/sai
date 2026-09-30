@@ -36,6 +36,8 @@ const locked = new Set<string>()
 const held = new Set<string>()
 /** 端末で開いている Codex の pid（行の pane と組で `terminalOf()` が当たる） */
 const TUI_PID = 4242
+/** T1 のペイン（%7）のシェル。TUI はその子（#562。行の pid がペインの中かを確かめるようになった） */
+const PANE_PID = 4000
 /** SAI 自身の app-server（#482）と、その子（node の包みで起こしたときの本体）・ほかの生きている codex */
 const OWN_PID = 5151
 const OWN_CHILD_PID = 6161
@@ -94,7 +96,7 @@ before(async () => {
     new BuildFreshness(join(dir, 'dist'), [], 0),
     undefined,
     new Authenticator(async () => null),
-    { tmux: { run: async () => '' }, ps: async () => `${OWN_CHILD_PID} ${OWN_PID}\n${OTHER_PID} 1\n`, alive: (pid) => ALIVE.has(pid), codexWriterActive: async (session) => locked.has(session), codexApp },
+    { tmux: { run: async (args) => (args[0] === 'display-message' ? `${PANE_PID}\n` : '') }, ps: async () => `${OWN_CHILD_PID} ${OWN_PID}\n${OTHER_PID} 1\n${TUI_PID} ${PANE_PID}\n`, alive: (pid) => ALIVE.has(pid), codexWriterActive: async (session) => locked.has(session), codexApp },
     undefined,
     git,
   )

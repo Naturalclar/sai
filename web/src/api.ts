@@ -170,7 +170,7 @@ export const api = {
   /** 止めた預かり（前の返信が失敗した・起動できなかった）を再開する */
   resumeQueue: (id: string) => sendJSON<ReplyQueueResponse>('POST', `/api/sessions/${encodeURIComponent(id)}/queue/resume`, {}),
   /**
-   * 処理中のターンを止める（#384）。止められるのは SAI が起こした Codex のターンだけ（`Replying.interruptible`）。
+   * 処理中のターンを止める（#384）。止められるのは SAI が起こした Codex / OpenCode / Claude のターンだけ（`Replying.interruptible`）。
    * 返るのは止めたあとの預かり（勝手に回さないよう止めてあるので、`paused` が入っている）
    */
   interrupt: (id: string) => sendJSON<ReplyQueueResponse>('POST', `/api/sessions/${encodeURIComponent(id)}/interrupt`, {}),

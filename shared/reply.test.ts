@@ -309,13 +309,14 @@ test('sessionReplyTargets: 端末で開いていれば terminal が付く（フ�
   assert.equal(feedReplyTargets([row({ session: 'T1' })], SELF)[0]?.terminal, undefined, '行だけからは分からない')
 })
 
-test('canSteer: 足せるのは SAI が回している Codex のターンだけ（#404）', () => {
+test('canSteer: 足せるのは SAI が回している Codex のターンと、入力の口を開けている Claude のターン（#404 / #386）', () => {
   const running = { interruptible: true as const }
   assert.equal(canSteer('codex', running), true)
   assert.equal(canSteer('codex', { interruptible: true, failed: { tail: '落ちた' } }), false, '失敗した分は処理中ではない')
   assert.equal(canSteer('codex', {}), false, 'turn/start の応答待ち（turnId がまだ無い）は足す先が無い')
   assert.equal(canSteer('codex', undefined), false, '処理中でなければ足さない')
-  assert.equal(canSteer('claude', running), false, 'Claude の -p には口が無い')
+  assert.equal(canSteer('claude', running), true, 'SAI が起こした claude -p は stream-json の入力の口がある（#386）')
+  assert.equal(canSteer('claude', {}), false, '立て直しで引き取った claude -p には口が無い')
   assert.equal(canSteer('opencode', running), false)
 })
 

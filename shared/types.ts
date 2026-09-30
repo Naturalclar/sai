@@ -616,9 +616,10 @@ export interface Replying {
    */
   via?: 'terminal'
   /**
-   * いまこのターンを SAI から止められる（#384）。**SAI の app-server が回している Codex のターンだけ**に付く
-   * （`turn/interrupt` は自分が `thread/resume` したスレッドしか止められない）。画面はこれを見て
-   * 仮バブルに「止める」を出す。`claude -p` と OpenCode、端末に打ち込んだターンには付かない
+   * いまこのターンを SAI から止められる（#384）。**SAI の app-server が回している Codex のターン**
+   * （`turn/interrupt` は自分が `thread/resume` したスレッドしか止められない）、SAI が起こした OpenCode のターン（#392）、
+   * **入力の口（stream-json）を開けている `claude -p` のターン**（#386。`result` が出るまで）に付く。画面はこれを見て
+   * 仮バブルに「止める」を出す。端末に打ち込んだターンと、立て直しで引き取った `claude -p` には付かない
    */
   interruptible?: true
   /**

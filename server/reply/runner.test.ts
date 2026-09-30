@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { backgroundSessionCommand, childEnv, failureOf, isAlive, newSessionCommand, ProcessRunner, replyCommand, tailFrom } from './runner.ts'
+import { backgroundSessionCommand, childEnv, claudeUserLine, failureOf, hasResultFor, isAlive, newSessionCommand, ProcessRunner, replyCommand, tailFrom } from './runner.ts'
 import type { TurnUsage } from '../../shared/turnUsage.ts'
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -147,7 +147,7 @@ test('newSessionCommand: 前半は返信と同じ（SAI_CLAUDE_ARGS が先頭・
   const via = { url: 'http://127.0.0.1:8787', entity: 'U@r' }
   const started = newSessionCommand('U', '-v で始まる本文', '/w', env, via, 'opus', 'acceptEdits')
   const resumed = replyCommand('claude', 'U', '-v で始まる本文', '/w', env, via, 'opus', 'acceptEdits')!
-  const tail = ['--output-format', 'json', '-p', '--session-id', 'U', '--', '-v で始まる本文']
+  const tail = ['--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '-p', '--session-id', 'U']
   assert.deepEqual(started.args.slice(-tail.length), tail, '本文の前に -- を置く（- で始まる本文をフラグにしない）')
   assert.deepEqual(started.args.slice(0, -tail.length), resumed.args.slice(0, -tail.length), '前半は返信と同じ組み立て（--resume と --session-id の違いだけ）')
   assert.deepEqual(started.args.slice(0, 3), ['--allowedTools', 'Bash(gh *)', '--model'], '運用者の引数が先頭')
@@ -381,7 +381,7 @@ test('ProcessRunner: 失敗の理由に JSON の切れ端を出さず、CLI の�
 
 test('claudeHead: 運用者が --output-format を指定していればそちらを尊重する（#387）', () => {
   const mine = replyCommand('claude', 'S', 'hi', '/w', {})!.args
-  assert.deepEqual(mine.slice(-6), ['--output-format', 'json', '-p', '--resume', 'S', '--', 'hi'].slice(-6))
+  assert.deepEqual(mine.slice(-6), ['--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '-p', '--resume', 'S'].slice(-6))
   const theirs = replyCommand('claude', 'S', 'hi', '/w', { SAI_CLAUDE_ARGS: '--output-format stream-json --verbose' })!.args
   assert.equal(theirs.filter((a) => a === '--output-format').length, 1, '二重に付けない')
   assert.deepEqual(theirs.slice(0, 3), ['--output-format', 'stream-json', '--verbose'])
@@ -401,4 +401,119 @@ test('backgroundSessionCommand: 置き場は --settings の env で渡し、許�
   // 設定していなければマシン名は渡さない（デーモンの側の既定に任せる）
   const bare = backgroundSessionCommand('x', '/w', '/feed', {})
   assert.deepEqual(bare.args, ['--settings', '{"env":{"AGENT_FEED_DIR":"/feed"}}', '--bg', '--', 'x'])
+})
+
+// ---- 入力の口を開けておく返信（#386）
+
+/**
+ * `claude -p --input-format stream-json` の偽物。stdin の行を `seen` に書き、最初の user から HOLD ms は「ターン中」。
+ * その間の user は同じターンに足し、`control_request` の interrupt は即座に止める。ターンが終わると result を出し、
+ * stdin が閉じたら終わる（止めたターンは 2.1.285 の実測どおり exit 1）
+ */
+const FAKE_STREAM = `
+const fs = require('node:fs')
+const [seen, session, hold] = process.argv.slice(1)
+let buf = '', started = false, done = false, interrupted = false, timer
+const result = (isError) => {
+  done = true
+  clearTimeout(timer)
+  console.log(JSON.stringify({ type: 'result', subtype: isError ? 'error_during_execution' : 'success', is_error: isError, session_id: session, num_turns: 1, total_cost_usd: 0.01, usage: { input_tokens: 1, output_tokens: 2 } }))
+}
+process.stdin.on('data', (c) => {
+  buf += c
+  let i
+  while ((i = buf.indexOf('\\n')) >= 0) {
+    const line = buf.slice(0, i); buf = buf.slice(i + 1)
+    fs.appendFileSync(seen, line + '\\n')
+    const o = JSON.parse(line)
+    if (o.type === 'user' && !started) { started = true; timer = setTimeout(() => result(false), Number(hold)) }
+    if (o.type === 'control_request' && !done) {
+      interrupted = true
+      console.log(JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: o.request_id } }))
+      result(true)
+    }
+  }
+})
+process.stdin.on('end', () => process.exit(interrupted ? 1 : 0))
+`
+
+async function streamRun(dir: string, hold: number, session = 'S', usage?: { id: string; usage: TurnUsage }[]) {
+  const seen = join(dir, 'seen.jsonl')
+  const runner = new ProcessRunner(join(dir, 'reply.log'), null, usage ? { record: (id, u) => usage.push({ id, usage: u }) } : null)
+  await runner.start('A@r', { bin: process.execPath, args: ['-e', FAKE_STREAM, seen, session, String(hold)], cwd: dir, text: 'やって', input: claudeUserLine('やって'), session })
+  return { runner, seen }
+}
+
+const until = async (ok: () => boolean, ms = 5000) => {
+  for (let t = 0; t < ms && !ok(); t += 50) await wait(50)
+  return ok()
+}
+
+test('入力の口: ターンの間は止められる・足せる印を出し、足した指示は同じプロセスに届く。result で口を閉じてプロセスは終わる（#386）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-stream-'))
+  try {
+    const { runner, seen } = await streamRun(dir, 1500)
+    assert.equal(runner.snapshot()['A@r']?.interruptible, true)
+    assert.equal(runner.steer('A@r', 'ついでにこれも'), true)
+    assert.ok(await until(() => !runner.running('A@r')), 'result が出たら口を閉じ、プロセスが終わる')
+    const lines = (await readFile(seen, 'utf-8')).trim().split('\n').map((l) => JSON.parse(l) as { message?: { content?: string } })
+    assert.deepEqual(lines.map((l) => l.message?.content), ['やって', 'ついでにこれも'])
+    assert.equal(runner.steer('A@r', 'もう遅い'), false, '終わったターンには足さない（呼び出し側が預かりに落とす）')
+    assert.equal(runner.interrupt('A@r'), false)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('入力の口: 止めたターンは非 0 で終わっても失敗にせず、使用量も残さない（#386。結ぶ Stop の行が無い）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-stream-'))
+  try {
+    const usage: { id: string; usage: TurnUsage }[] = []
+    const { runner, seen } = await streamRun(dir, 60_000, 'S', usage)
+    await wait(200)
+    assert.ok(await until(() => runner.interrupt('A@r')), '止められる')
+    assert.ok(await until(() => !runner.running('A@r')), 'すぐ終わる')
+    assert.equal(runner.snapshot()['A@r'], undefined, '失敗として残さない')
+    assert.deepEqual(usage, [])
+    assert.match(await readFile(seen, 'utf-8'), /"subtype":"interrupt"/)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('入力の口: 止めずに終わったターンは今までどおり使用量を残す', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-stream-'))
+  try {
+    const usage: { id: string; usage: TurnUsage }[] = []
+    const { runner } = await streamRun(dir, 100, 'S', usage)
+    assert.ok(await until(() => !runner.running('A@r')))
+    assert.equal(usage.length, 1)
+    assert.equal(usage[0]!.usage.output_tokens, 2)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('入力の口: 別のセッションの result では閉じない（reply.log は並行する返信が混ざる）', () => {
+  const other = JSON.stringify({ type: 'result', session_id: 'OTHER' })
+  const mine = JSON.stringify({ type: 'result', session_id: 'S' })
+  assert.equal(hasResultFor(`${other}\n`, 'S'), false)
+  assert.equal(hasResultFor(`${other}\n${mine}\n`, 'S'), true)
+  assert.equal(hasResultFor('{"type":"result","session_id":"S"', 'S'), false, '書きかけの行は数えない')
+  assert.equal(hasResultFor('{"type":"assistant","message":{"content":"\\"type\\":\\"result\\""}}\n', 'S'), false)
+})
+
+test('入力の口: result を読めない（ログが無い）ときは口を開けておかない（止める・足すの印を出さない）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-stream-'))
+  try {
+    const seen = join(dir, 'seen.jsonl')
+    const runner = new ProcessRunner(null)
+    await runner.start('A@r', { bin: process.execPath, args: ['-e', FAKE_STREAM, seen, 'S', '100'], cwd: dir, text: 'やって', input: claudeUserLine('やって'), session: 'S' })
+    assert.equal(runner.snapshot()['A@r']?.interruptible, undefined)
+    assert.equal(runner.steer('A@r', 'x'), false)
+    assert.ok(await until(() => !runner.running('A@r')), '最初の指示のターンは最後まで走って終わる')
+    assert.match(await readFile(seen, 'utf-8'), /やって/)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
 })

@@ -116,7 +116,7 @@ import { AttachmentStore } from './reply/attachments.ts'
 import { PROFILE_FILE, ProfileStore } from './meta/profile.ts'
 import { READ_MARKS_FILE, ReadStore } from './meta/reads.ts'
 import { readMarkOf, rowMs, unreadCounts, unreadFromMark } from '../shared/unread.ts'
-import { SETTINGS_FILE, SettingsStore } from './meta/settings.ts'
+import { SETTINGS_FILE, SettingsStore, nextAskOn } from './meta/settings.ts'
 import type { Settings } from './meta/settings.ts'
 import { isLinearWorkspace } from '../shared/refs.ts'
 import { backgroundSessionCommand, newSessionCommand, ProcessRunner, replyCommand } from './reply/runner.ts'
@@ -957,7 +957,7 @@ export function createApp(
       digest_on: s.digest,
       digest_error: digest.error,
       next_ask: digest.nextAskEnabled,
-      next_ask_on: s.next_ask,
+      next_ask_on: nextAskOn(s),
       provider: digest.provider,
       digest_model: s.digest_model,
       model: digest.model,

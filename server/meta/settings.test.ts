@@ -1,9 +1,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { DEFAULT_SETTINGS, SettingsStore } from './settings.ts'
+import { DEFAULT_SETTINGS, SettingsStore, nextAskOn } from './settings.ts'
 
 const DEFAULTS = { ...DEFAULT_SETTINGS }
 
@@ -55,13 +55,21 @@ test('SettingsStore: next_ask が無い settings.json は一言の入切に従�
   try {
     const path = join(dir, 'settings.json')
     await writeFile(path, JSON.stringify({ digest: true }))
-    assert.equal((await new SettingsStore(path).get()).next_ask, true, '一言を入にしていた人の案は止めない')
+    assert.equal(nextAskOn(await new SettingsStore(path).get()), true, '一言を入にしていた人の案は止めない')
     await writeFile(path, JSON.stringify({ digest: false }))
-    assert.equal((await new SettingsStore(path).get()).next_ask, false, '入にしていなかった人の本文を黙って送り始めない')
+    assert.equal(nextAskOn(await new SettingsStore(path).get()), false, '入にしていなかった人の本文を黙って送り始めない')
     await writeFile(path, JSON.stringify({ digest: false, next_ask: true }))
-    assert.equal((await new SettingsStore(path).get()).next_ask, true, 'あればそちら')
+    assert.equal(nextAskOn(await new SettingsStore(path).get()), true, 'あればそちら')
     await writeFile(path, JSON.stringify({ digest: true, next_ask: 'yes' }))
-    assert.equal((await new SettingsStore(path).get()).next_ask, true, '読めなければ一言に従う')
+    assert.equal(nextAskOn(await new SettingsStore(path).get()), true, '読めなければ一言に従う')
+
+    // 読んだときに埋めない（#561 のレビュー）。ほかの設定を保存しても next_ask は書かれず、一言の入切に付いてくる
+    await writeFile(path, JSON.stringify({ digest: true }))
+    const store = new SettingsStore(path)
+    await store.set({ persona: 'ISTJ' })
+    assert.ok(!('next_ask' in JSON.parse(await readFile(path, 'utf-8'))), 'ファイルに固まらない')
+    assert.equal(nextAskOn(await store.set({ digest: false })), false)
+    assert.equal(nextAskOn(await store.set({ digest: true })), true)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

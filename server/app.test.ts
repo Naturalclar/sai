@@ -1520,7 +1520,7 @@ test('GET/PUT /api/settings: 性格と Linear の workspace。知らない値は
   assert.equal(data.digest_error, '')
   assert.equal(data.digest_model, 'qwen3:8b', '前後の空白は落とす')
   assert.equal(data.model, 'qwen3:8b')
-  assert.deepEqual(JSON.parse(await readFile(join(feedDir, 'settings.json'), 'utf-8')), { persona: 'ISTJ', linear_workspace: '', digest: true, next_ask: false, digest_provider: 'openai', digest_model: 'qwen3:8b', jev: true, jev_auto: 0 })
+  assert.deepEqual(JSON.parse(await readFile(join(feedDir, 'settings.json'), 'utf-8')), { persona: 'ISTJ', linear_workspace: '', digest: true, digest_provider: 'openai', digest_model: 'qwen3:8b', jev: true, jev_auto: 0 }, '案の入切は押すまで書かない（#561 のレビュー）')
   data = (await (await put({ digest_provider: 'claude', digest_model: '' })).json()) as SettingsResponse
   assert.equal(data.model, 'haiku', 'claude でモデルが空なら haiku')
   assert.equal((await put({ digest: 'yes' })).status, 400)
@@ -1533,7 +1533,12 @@ test('GET/PUT /api/settings: 性格と Linear の workspace。知らない値は
   assert.equal((await put({ digest_url: 'https://evil.example/v1' })).status, 400)
   assert.ok(!('digest_url' in JSON.parse(await readFile(join(feedDir, 'settings.json'), 'utf-8'))))
 
-  // 次に送る文面の案は一言とは別に入切する（#560）。一言を切っても案は作り続ける（口は一言と同じ）
+  // 次に送る文面の案は一言とは別に入切する（#560）。書いていなければ一言に付いてくる
+  data = (await (await put({ digest: false })).json()) as SettingsResponse
+  assert.equal(data.next_ask_on, false, '書いていなければ一言と一緒に切れる（#560 より前と同じ）')
+  data = (await (await put({ digest: true })).json()) as SettingsResponse
+  assert.equal(data.next_ask_on, true, '入にしても付いてくる（ほかの設定を保存した時点の値で固まらない）')
+  // 押したら一言とは別になる。一言を切っても案は作り続ける（口は一言と同じ）
   data = (await (await put({ next_ask: true })).json()) as SettingsResponse
   assert.equal(data.next_ask_on, true)
   assert.equal(data.next_ask, true)

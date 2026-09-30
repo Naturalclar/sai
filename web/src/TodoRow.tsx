@@ -3,6 +3,7 @@ import { projectName } from '../../shared/project.ts'
 import type { TodoItem } from '../../shared/todoItems.ts'
 import { ApprovalBubble } from './ApprovalBubble'
 import { AgentChip } from './AgentChip'
+import { TodoArchiveButton } from './TodoArchiveButton'
 import { WaitingTag } from './WaitingTag'
 import { elapsedLabel } from './format'
 
@@ -52,31 +53,35 @@ export function TodoRow({ item, now, hotkey, modeNote, reply, children }: Props)
         // セッション ID）ので、許可ごとに作り直す。付けないと押した直後の「拒否した」が次の許可に残って押せない（#492）
         <ApprovalBubble key={item.approval.approval_id} approval={item.approval} now={now} hotkey={hotkey} modeNote={modeNote} />
       ) : (
-        <div className="why">
-          {done ? (
-            <span className="tag done" title={item.text}>
-              終了
-            </span>
-          ) : (
-            <WaitingTag text={item.text} />
-          )}
-          {/* 文言は行の text のまま（`入力待ち（バックグラウンドのセッション）` の区別を捨てない） */}
-          <span className="text">{item.text}</span>
-          {/* 選択肢は SAI に届いていないのでボタンは出せないが、返信欄からは打てる（#232）。
-              ここから送れるなら、セッション画面に移らずに行の下で打てる（#522） */}
-          {reply && item.replyable ? (
-            reply.inline ? (
-              <button type="button" className={`linkish todo-reply-open${reply.open ? ' open' : ''}`} aria-expanded={reply.open} onClick={reply.onToggle}>
-                {reply.open ? '返信を閉じる' : done ? '次の指示を送る' : '返信する'}
-              </button>
+        <div className="why-row">
+          <div className="why">
+            {done ? (
+              <span className="tag done" title={item.text}>
+                終了
+              </span>
             ) : (
-              <a className="todo-reply-open" href={`#/s/${encodeURIComponent(item.id)}`}>
-                {done ? '開いて次の指示を送る' : '開いて返信する'}
-              </a>
-            )
-          ) : (
-            <span className="note">{noteFor(done, item.replyable)}</span>
-          )}
+              <WaitingTag text={item.text} />
+            )}
+            {/* 文言は行の text のまま（`入力待ち（バックグラウンドのセッション）` の区別を捨てない） */}
+            <span className="text">{item.text}</span>
+            {/* 選択肢は SAI に届いていないのでボタンは出せないが、返信欄からは打てる（#232）。
+                ここから送れるなら、セッション画面に移らずに行の下で打てる（#522） */}
+            {reply && item.replyable ? (
+              reply.inline ? (
+                <button type="button" className={`linkish todo-reply-open${reply.open ? ' open' : ''}`} aria-expanded={reply.open} onClick={reply.onToggle}>
+                  {reply.open ? '返信を閉じる' : done ? '次の指示を送る' : '返信する'}
+                </button>
+              ) : (
+                <a className="todo-reply-open" href={`#/s/${encodeURIComponent(item.id)}`}>
+                  {done ? '開いて次の指示を送る' : '開いて返信する'}
+                </a>
+              )
+            ) : (
+              <span className="note">{noteFor(done, item.replyable)}</span>
+            )}
+          </div>
+          {/* 終わったものだけ片付けられる（#527）。待っているものを片付けると、止まったまま見えなくなる */}
+          {done && s && <TodoArchiveButton id={item.id} />}
         </div>
       )}
       {children}

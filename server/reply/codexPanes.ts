@@ -327,8 +327,14 @@ export function rolloutSessionAtStart(
       if (parsed.session !== session && (!parsed.cwd || parsed.cwd === cwd)) return ''
     }
 
-    // 4. そのスレッドから離れた印がスクロールバックに無いか
-    if ((await scrollback(pane)).includes(`codex resume ${session}`)) return ''
+    // 4. そのスレッドから離れた印がスクロールバックに無いか（読めなければ当てない）
+    let screen: string
+    try {
+      screen = await scrollback(pane)
+    } catch {
+      return ''
+    }
+    if (screen.includes(`codex resume ${session}`)) return ''
     return session
   }
 }
@@ -430,7 +436,7 @@ export class CodexPanes implements CodexPaneSource {
       rolloutSessionAtStart(deps.env ?? process.env, {
         openRollouts: async (pid) => (await this.openOf(pid)).rollouts,
         // 離れた印（`codex resume <id>`）を探すだけ。history-limit を超えた分は流れているので 3 の補い
-        scrollback: (pane) => this.tmux.run(['capture-pane', '-p', '-J', '-S', '-3000', '-t', pane]).catch(() => ''),
+        scrollback: (pane) => this.tmux.run(['capture-pane', '-p', '-J', '-S', '-3000', '-t', pane]),
       })
     this.now = deps.now ?? Date.now
   }

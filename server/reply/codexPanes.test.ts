@@ -317,6 +317,8 @@ test('rolloutSessionAtStart: スクロールバックに `codex resume <id>` が
   })
   assert.equal(await rolloutSessionAtStart({ CODEX_HOME: home }, left)(TUI, '/repo/one', '%7'), '')
   assert.deepEqual(panes, ['%7'], 'そのペインのスクロールバックを読む')
+  const unreadable = probe({ scrollback: async () => { throw new Error('no pane') } })
+  assert.equal(await rolloutSessionAtStart({ CODEX_HOME: home }, unreadable)(TUI, '/repo/one', '%7'), '', 'スクロールバックを読めなければ当てない')
 })
 
 test('parseRolloutHead: session_meta の session_id と cwd（切れた行は捨てる）', () => {

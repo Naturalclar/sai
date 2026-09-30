@@ -18,6 +18,8 @@ export const PROGRESS_TAIL_START = 64 * 1024
 export const PROGRESS_TAIL_MAX = 4 * 1024 * 1024
 /** 見つからなかったセッションを探し直すまでの間（画面は 3 秒おきに聞いてくる） */
 export const PROGRESS_MISS_MS = 60_000
+/** OpenCode の読んだ量を覚えておく長さ（#396）。`sai_sessions` は相手の数だけ一度に聞くので、そのたびに本体を叩かない */
+export const OPENCODE_CONTEXT_TTL_MS = 10_000
 /** セッション ID として受ける形。パスに混ぜるので `/` や `.` を通さない */
 const SESSION_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/
 
@@ -81,15 +83,29 @@ export class ProgressReader {
   /** ファイル → (mtime, size) が同じ間は組み直さない */
   private readonly parsed = new Map<string, { sig: string; value: ParsedProgress }>()
 
+  /** OpenCode の読んだ量を聞く先（#396。`createApp` が `OpencodeServer.context()` を渡す） */
+  private opencode: ((session: string) => Promise<number>) | null = null
+  /** セッション → 聞いた量と時刻（聞いている最中は同じ 1 本を待つ） */
+  private readonly opencodeSizes = new Map<string, { at: number; value: Promise<number> }>()
+
   constructor(claudeProjects: string, codexSessions: string, now: () => number = Date.now) {
     this.claudeProjects = claudeProjects
     this.codexSessions = codexSessions
     this.now = now
   }
 
-  /** そのセッションの最後のターンの手順。Claude と Codex だけ（OpenCode は手元にファイルが無い）。読めなければ空 */
+  /** OpenCode の読んだ量の聞き先を渡す（#396）。渡さなければ今までどおり OpenCode は空 */
+  useOpencode(context: (session: string) => Promise<number>): void {
+    this.opencode = context
+  }
+
+  /**
+   * そのセッションの最後のターンの手順。Claude と Codex だけ（OpenCode は手元にファイルが無い）。読めなければ空。
+   * OpenCode は手順は空のまま、**読んだ量（`context_tokens`）だけ**本体に聞いて埋める（#396。#311 の予算がそのまま効く）
+   */
   async read(s: Target): Promise<SessionProgressResponse> {
     const session = sessionOf(s)
+    if (session && s.agent === 'opencode') return this.readOpencode(s.id, session)
     if (!session || (s.agent !== 'claude' && s.agent !== 'codex')) return empty(s.id)
     const key = `${s.agent}:${session}`
     const path = await this.locate(key, s.agent, session, s.cwd)
@@ -122,6 +138,17 @@ export class ProgressReader {
       this.parsed.delete(path)
       return empty(s.id)
     }
+  }
+
+  private async readOpencode(id: string, session: string): Promise<SessionProgressResponse> {
+    if (!this.opencode) return empty(id)
+    let got = this.opencodeSizes.get(session)
+    if (!got || this.now() - got.at >= OPENCODE_CONTEXT_TTL_MS) {
+      got = { at: this.now(), value: this.opencode(session).catch(() => 0) }
+      this.opencodeSizes.set(session, got)
+    }
+    const context = await got.value
+    return context > 0 ? { ...empty(id), rev: `ctx:${context}`, context_tokens: context } : empty(id)
   }
 
   private async locate(key: string, agent: 'claude' | 'codex', session: string, cwd: string): Promise<string> {

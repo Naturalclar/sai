@@ -21,6 +21,7 @@ import { parsePermissions } from '../../shared/opencodePermissions.ts'
 import type { OpencodePermission } from '../../shared/opencodePermissions.ts'
 import { opencodeSkills } from '../../shared/skills.ts'
 import { opencodeTodos } from '../../shared/todos.ts'
+import { opencodeContext } from '../../shared/progress.ts'
 import { settledByRow } from '../../shared/turnSettled.ts'
 import { childEnv } from './runner.ts'
 import type { Skill } from '../../shared/skills.ts'
@@ -32,6 +33,8 @@ export const OPENCODE_SERVE_WAIT_MS = 20_000
 export const OPENCODE_SERVE_FILE = 'opencode-serve.json'
 /** `opencode serve` の出力の置き場（feed dir の中。pipe にしない理由は `spawnServe()`） */
 export const OPENCODE_SERVE_LOG = 'opencode-serve.log'
+/** 読んだ量を探すのに引く末尾のメッセージの数（書いている最中の 0 の assistant と、人の入力を飛ばして 1 つ前の返答まで届けばよい。#396） */
+export const OPENCODE_CONTEXT_MESSAGES = 10
 
 /** `OpencodeServer` を立て直しをまたいで使うための置き場（#440）。渡さなければ今までどおり SAI と一緒に落ちる */
 export interface OpencodeServeState {
@@ -104,6 +107,8 @@ export interface OpencodeApp {
    * （段取りを見るために `opencode serve` を起こさない）。立っていなければ空
    */
   todos(session: string): Promise<{ todos: SessionTodo[]; children: number }>
+  /** 最後にモデルを呼んだときに読んだ量（#396）。立っているサーバにだけ聞く。分からなければ 0 */
+  context(session: string): Promise<number>
   /**
    * 新しいセッションを作って、その id（`ses_…`）を返す（#452。`POST /session?directory=<cwd>`）。
    *
@@ -504,6 +509,24 @@ export class OpencodeServer implements OpencodeApp {
       get('children').then((d) => (Array.isArray(d) ? d.length : 0)).catch(() => 0),
     ])
     return { todos, children }
+  }
+
+  /**
+   * そのセッションが最後にモデルを呼んだときに読んだ量（トークン。#396）。送ると相手がこれだけ読み直す（#311 の予算）。
+   * `GET /session/<id>/message?limit=` で**末尾の数件だけ**引き、`opencodeContext()` で読む（ID だけで引けるので `directory` は要らない）。
+   * **立っているサーバにだけ聞く**（`todos()` と同じ。大きさを見るためだけに `opencode serve` を起こさない）。
+   * 聞けなければ 0（= 分からない。予算の判定は「分からない相手は足さない」のまま）
+   */
+  async context(session: string): Promise<number> {
+    const up = await this.live().catch(() => null)
+    if (!up) return 0
+    try {
+      const res = await this.fetchFn(`${up.url}/session/${encodeURIComponent(session)}/message?limit=${OPENCODE_CONTEXT_MESSAGES}`, { headers: { authorization: up.auth } })
+      if (!res.ok) return 0
+      return opencodeContext(await res.json())
+    } catch {
+      return 0
+    }
   }
 
   /**

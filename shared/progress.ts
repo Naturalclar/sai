@@ -306,3 +306,22 @@ export function stepsSince(steps: readonly ProgressStep[], since: string): Progr
     return Number.isNaN(started) || started >= t - PROGRESS_SINCE_SLACK_MS
   })
 }
+
+/**
+ * OpenCode のセッションの、最後にモデルを呼んだときに読んだ量（#396）。`GET /session/<id>/message?limit=N` の応答（古い順）から、
+ * 一番新しい**入力の量が 0 でない** assistant の `info.tokens` の `input + cache.read + cache.write`（Claude と同じ 3 つの和）。
+ * 返答を書いている最中の assistant は全部 0 で届くので飛ばす（1.18.30 で実測）。見つからなければ 0（= 分からない。予算に足さない）。
+ * v2 の `GET /api/session/<id>/context` は v1 の口で作ったセッションには `{"data":[]}` を返す（許可の v1 / v2 と同じ分かれ方）ので使わない
+ */
+export function opencodeContext(messages: unknown): number {
+  if (!Array.isArray(messages)) return 0
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const info = obj(obj(messages[i])?.info)
+    if (!info || info.role !== 'assistant') continue
+    const tokens = obj(info.tokens)
+    const cache = obj(tokens?.cache)
+    const read = num(tokens?.input) + num(cache?.read) + num(cache?.write)
+    if (read > 0) return read
+  }
+  return 0
+}

@@ -6,6 +6,7 @@ import {
   codexProgress,
   codexToolSummary,
   oneLine,
+  opencodeContext,
   progressActive,
   progressDuration,
   PROGRESS_IDLE_MS,
@@ -196,4 +197,13 @@ test('claudeProgress: 返事の付いていない AskUserQuestion を question �
   const two = { questions: [{ question: 'A?' }, { question: 'B?' }] }
   assert.equal(claudeProgress([...lines, result(T(2), 'q1'), ask(T(3), 'q2', two)]).question?.text, '質問: A? / B?', '一番新しいもの')
   assert.equal(codexProgress([j({ type: 'event_msg', payload: { type: 'task_started' } })]).question, undefined, 'Codex には無い')
+})
+
+test('opencodeContext: 一番新しい、入力の量が 0 でない返答の入力 3 つの和（#396）', () => {
+  const reply = (input: number, read = 0, write = 0) => ({ info: { role: 'assistant', tokens: { input, output: 9, reasoning: 0, cache: { read, write } } }, parts: [] })
+  assert.equal(opencodeContext([reply(100), { info: { role: 'user' } }, reply(12749, 5, 3)]), 12757)
+  assert.equal(opencodeContext([reply(100), { info: { role: 'user' } }, reply(0)]), 100, '書いている最中（全部 0）の返答は飛ばす')
+  assert.equal(opencodeContext([{ info: { role: 'user' } }]), 0, '返答がまだ無ければ 0')
+  assert.equal(opencodeContext({ data: [] }), 0, '形が違えば 0（v2 の /context の形）')
+  assert.equal(opencodeContext([{ info: { role: 'assistant', tokens: { input: 'x' } } }]), 0)
 })

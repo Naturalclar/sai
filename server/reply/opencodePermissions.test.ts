@@ -27,6 +27,7 @@ function fake(pending: OpencodePermission[], running = false, ok = true) {
     skills: async () => [],
     models: async () => [],
     todos: async () => ({ todos: [], children: 0 }),
+    context: async () => 0,
     settle: () => [],
     stop: () => {},
     async permissions(d: readonly string[]) {

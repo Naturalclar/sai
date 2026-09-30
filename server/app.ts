@@ -461,6 +461,9 @@ export function createApp(
   const codexApp = terminal.codexApp ?? new CodexAppServer()
   // 立て直しをまたいで同じ `opencode serve` を使う（#440）。ターンを回している間の C-c では落とさず、次の SAI が引き取る
   const opencodeApp = terminal.opencodeApp ?? new OpencodeServer(fetch, Date.now, undefined, { statePath: join(store.directory, OPENCODE_SERVE_FILE), logPath: join(store.directory, OPENCODE_SERVE_LOG) })
+  // OpenCode の相手の大きさ（#396）。transcript が無いので本体に聞く（立っているサーバにだけ。#311 の予算がそのまま効く）。
+  // テストが `read()` だけの偽物を渡すことがあるので、口が無ければ繋がない（その偽物は OpenCode を読まない）
+  if (typeof progress.useOpencode === 'function') progress.useOpencode((session) => opencodeApp.context(session))
   // OpenCode の許可待ち（#421）。立っているサーバにだけ聞くので、返信を回していなければ何もしない
   const opencodePerms = new OpencodePermissions(opencodeApp)
   // 許可の確率（#491）。鍵が無ければ judge が null で、何も送らない

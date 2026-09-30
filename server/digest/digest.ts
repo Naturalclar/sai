@@ -7,7 +7,7 @@
 // 入でも「入にしたあと（起動時に入なら起動したあと）に増えた行」だけ作り、過去の行は作らない。
 // 1 行ずつ直列で回す。失敗した行は間を置いて作り直し（1 → 5 → 30 分）、DIGEST_MAX_TRIES 回で諦めて無いままにする
 // （画面は text を出す）。前は失敗した行を次の scan() がすぐ積み直し、口が落ちている間ずっと同じ行を 90 秒ごとに叩いていた（#443）。
-// 続けて DIGEST_ALERT_FAILS 回失敗したら、口の不調を `error`（画面の digest_error）に出す。
+// 続けて DIGEST_ALERT_FAILS 回失敗したら、口の不調を `error`（画面の digest_error）に出し、列を進めずに DIGEST_BREAK_MS 休む（#497）。
 import { spawn } from 'node:child_process'
 import { appendFile, mkdir, readFile, stat } from 'node:fs/promises'
 import { dirname } from 'node:path'
@@ -43,6 +43,13 @@ export const DIGEST_RETRY_DELAYS_MS = [60_000, 5 * 60_000, 30 * 60_000]
 export const DIGEST_MAX_TRIES = DIGEST_RETRY_DELAYS_MS.length + 1
 /** 続けてこの回数失敗したら、口の不調を `error` に出す（成功したら消える） */
 export const DIGEST_ALERT_FAILS = 3
+/**
+ * 続けて DIGEST_ALERT_FAILS 回失敗したら、**列を進めずに**この間だけ口を休ませる（#497。遮断器）。
+ * 作り直しの間隔（DIGEST_RETRY_DELAYS_MS）は**行ごと**なので、思考を切る指定を無視する口（LM Studio など）では
+ * 新しい行が来るたびに 90 秒の timeout まで GPU を占有し続けた（#494 の前に Mac 全体を重くしていた形）。
+ * 休み明けは 1 件だけ試し、通れば平常に戻り、また落ちればもう一度休む
+ */
+export const DIGEST_BREAK_MS = 5 * 60_000
 
 export interface DigestEntry {
   /** 行を一意に指す。`<entityId>|<ts>` */
@@ -386,6 +393,8 @@ export class Digester {
    */
   private failStreak = new Set<string>()
   private lastFailure = ''
+  /** この時刻までは列を進めない（#497。0 なら休んでいない） */
+  private breakUntil = 0
   /** configure() のたびに進める。前の口で走っていた 1 件の結果を、新しい口の数えに混ぜない（#487 のレビュー） */
   private generation = 0
 
@@ -429,7 +438,9 @@ export class Digester {
     if (this.errorValue) return this.errorValue
     if (!this.summarizer || this.failStreak.size < DIGEST_ALERT_FAILS) return ''
     const where = this.summarizer.where ? `。${this.summarizer.where}` : ''
-    return `一言の口が応答していません（直近 ${this.failStreak.size} 件続けて失敗: ${this.lastFailure}${where}）`
+    const rest = this.breakUntil - this.now()
+    const resume = rest > 0 ? `。${Math.ceil(rest / 60_000)} 分後に再開` : ''
+    return `一言の口が応答していません（直近 ${this.failStreak.size} 件続けて失敗: ${this.lastFailure}${where}）${resume}`
   }
 
   /**
@@ -449,6 +460,7 @@ export class Digester {
     this.failed.clear()
     this.failStreak.clear()
     this.lastFailure = ''
+    this.breakUntil = 0
     this.generation += 1
     if (next.digest) {
       if (!this.make) this.errorValue = '一言を作る口がありません'
@@ -549,7 +561,11 @@ export class Digester {
       if (failure && (failure.count >= DIGEST_MAX_TRIES || this.now() < failure.next)) continue
       fresh.push({ key, row })
     }
-    if (fresh.length === 0) return
+    // 休み明けは新しい行が無くても列を進める（休んでいる間に積んだ分が残っている。#497）
+    if (fresh.length === 0) {
+      if (this.queue.length > 0) void this.pump()
+      return
+    }
     fresh.sort((a, b) => (a.row.ts < b.row.ts ? 1 : a.row.ts > b.row.ts ? -1 : 0))
     for (const f of fresh) {
       this.queued.add(f.key)
@@ -563,16 +579,22 @@ export class Digester {
     return this.queue.length + (this.pumping ? 1 : 0)
   }
 
-  /** 列が空になるまで待つ（テスト用） */
+  /** 列が空になるか、口を休ませて止まるまで待つ（テスト用） */
   async drain(): Promise<void> {
-    while (this.pumping || this.queue.length > 0) await new Promise((r) => setTimeout(r, 5))
+    while (this.pumping || (this.queue.length > 0 && !this.resting())) await new Promise((r) => setTimeout(r, 5))
+  }
+
+  /** 口を休ませている間か（#497） */
+  private resting(): boolean {
+    return this.now() < this.breakUntil
   }
 
   private async pump(): Promise<void> {
     if (this.pumping || !this.summarizer) return
     this.pumping = true
     try {
-      while (this.queue.length > 0) {
+      // 休んでいる間は列を進めない（積んだ行は列に残り、休み明けの scan() が続きを回す。#497）
+      while (this.queue.length > 0 && !this.resting()) {
         const { key, row } = this.queue.shift()!
         // 性格を引くついでに「そもそも作るか」も分かる（メタの読み出しは非同期なので、同期の scan() では引けない。#263）
         const persona = await this.persona(row)
@@ -640,6 +662,11 @@ export class Digester {
           if (count >= DIGEST_MAX_TRIES) await this.log(`${new Date().toISOString()} ${key} ${count} 回失敗したので諦めた`)
           this.failStreak.add(key)
           this.lastFailure = message.slice(0, 120)
+          // 続けて落ちたら口ごと休ませる（#497）。休み明けの 1 件も落ちれば、数えはそのままなのでまた休む
+          if (this.failStreak.size >= DIGEST_ALERT_FAILS) {
+            this.breakUntil = this.now() + DIGEST_BREAK_MS
+            await this.log(`${new Date().toISOString()} 続けて ${this.failStreak.size} 件失敗したので ${DIGEST_BREAK_MS / 60_000} 分休む`)
+          }
         } finally {
           this.queued.delete(key)
         }

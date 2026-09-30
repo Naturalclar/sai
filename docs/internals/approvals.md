@@ -1,0 +1,73 @@
+# 許可と Jevの仕組み
+
+CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、経緯は [history/approvals.md](../history/approvals.md)。
+
+画面から見た動き（許可・質問のバブル、キーボード、[常に許可]、盾のアイコン、Jev の表示と「自動で常に許可」）は [screen.md](../screen.md) の「返信と許可」と「許可して問題なさそうかの予想（Jev。#491）」、口の形は [api.md](../api.md)。ここにはコードの側の話を置く。
+
+## 返信中の許可・質問
+
+### MCP サーバと預かり
+
+- 返信の `claude` に `--mcp-config` で足す SAI の MCP サーバは `server/approvals/approve-mcp.ts`（stdio、依存ゼロ、`initialize` / `tools/list` / `tools/call` だけ）。`--permission-prompt-tool mcp__sai__approve` で許可が要るたびに呼ばれる。
+- 預かりは `server/approvals/approvals.ts`（メモリと `approvals.json`）。プロセスが exit したら `drop`、90 秒取りに来なければ捨てる。
+- `rev` に答え待ちの集合を混ぜるので画面のポーリングが拾う。
+- Claude だけ（Codex に口が無い）。
+- テストは `server/approvals/approve-mcp.test.ts` が実際に子プロセスを立てる。
+
+### 待ちの文言と `dumpsLikePython()`
+
+- 文言（`許可待ち: Bash: …`）は `shared/approvals.ts` で作り、`record.py` の待ちの行と揃える。
+- 専用の要約が無いツール（MCP のツール、未知のツール）は `tool_input` をそのまま JSON にする。そのときは `JSON.stringify` ではなく `shared/pyjson.ts` の `dumpsLikePython()` を通す（#147）。Python の `json.dumps(..., ensure_ascii=False, sort_keys=True)` と同じ文字列になる: 区切りは `, ` / `: `、キーは入れ子の中までコードポイント順にソート。
+- 揃っていることは `shared/approvals.test.ts` と `feed/test_record.py` に同じ入力と同じ期待文字列を置いて留める（片方だけ変えるともう片方が落ちる）。
+
+### キーボード
+
+- 判定は `web/src/approvalKeys.ts` の `approvalAction()`。
+- 受けるのは描画順の先頭のバブルだけで、親（`FeedView` / `SessionView`）が `hotkey` を渡して決める。
+- window の keydown を capture で張り、拾ったときだけ `stopPropagation()` する。
+
+### 質問（`AskUserQuestion`）
+
+- 画面は `web/src/AskQuestions.tsx`。組み立てと答えの組み方は `shared/approvals.ts` の `askQuestions` / `joinAnswer` / `answersReady`（全問そろってから 1 回で送る）。
+
+### 「常に許可」
+
+- 画面は `remember: 'local'` だけを送り、サーバが `shared/approvals.ts` の `alwaysAllowRule()` でルール（`Bash(gh pr:*)` など）を組み立てて、`updatedPermissions`（`destination: localSettings`。`permissionsFor()`）として CLI に返す。CLI が cwd の `.claude/settings.local.json` に書く。
+- 入口は 2 つ: 人が押す [常に許可] と、Jev の自動の「常に許可」（#499。下の「自動で常に許可」）。
+
+## セッションに効いている許可
+
+- `server/approvals/permissions.ts` が cwd から読むだけ。書き換えは「常に許可」の経路だけ（人が押す `remember: 'local'` と、Jev の自動の `jevAutoTick()`）。
+- 読む先と評価の順は screen.md。パスは cwd から固定で組み立て、リクエストからは受け取らない。
+- 並びと言い換えは `shared/permissions.ts`（評価は deny → ask → allow で、deny はどのスコープでも allow に勝つ）。
+- 行の `permission_mode`（Claude のフックのペイロード）を `aggregate.ts` が `SessionSummary.permission_mode` に出す。
+- 3 秒のポーリングには乗せない（見出しの盾を押したときだけ取る）。
+
+## Jev
+
+### 表示
+
+- 確率は `Approval.jev`、画面は `web/src/JevTag.tsx`。色分けの区切り（0.8 / 0.3）は `jevLevel()` の 1 つだけ。
+- 何を聞くか・何を送るかは `shared/jev.ts`:
+  - `jevAsks()` = SAI が答えられる許可だけ。質問は聞かない。
+  - `jevState()` = Claude はツール名と名指しの項目（コマンド・パス・URL・説明・理由）、Codex / OpenCode は名指しの項目から組んだ要約、Codex のダイアログの中身まで。input は丸ごと送らず項目を名指しする。ファイルの中身・メッセージの本文・cwd・Claude の要約（`approvalText()`）は送らない。
+- 送るのは `server/approvals/jev.ts` の `JevRisk`:
+  - `approvalsNow()` の最後で `annotate()` が写しに確率を付ける（承認の預かりの本物は触らない）。
+  - 聞いていないものは投げるだけで答えを待たない。届いたら `approvalMapKey()` が確率も混ぜるので rev が変わる。
+  - 同じ `approval_id` には 1 回だけ（失敗も覚えて聞き直さない）、同時に 2 本まで、見なくなってから 30 分で忘れる（見かけるたびに時刻を進める）。
+- 聞く文は英語の 1 文（`JEV_SAFE_STATEMENT`）。
+
+### 口の組み立て
+
+- 環境から口を組むのは `server/main.ts`（`jevFromEnv()`）だけ。`createApp` の既定（`TerminalDeps.jev` を省略）は「送らない」。
+- 入切は `settings.json` の `jev`（既定は入。自分のメニューの `JevControls`）。送り先は固定で `redirect: 'error'`。
+
+### 自動で「常に許可」（#499）
+
+- 閾値は `settings.json` の `jev_auto`（0 = しない が既定、それ以外は 0.5〜1）。判定は `shared/jev.ts` の `isJevAuto()` / `jevAutoAllows()`。画面は自分のメニューの `JevControls` の select。`jev` を切ると 0 に戻る。
+- 動かすのは `jevAutoTick()`。呼ばれるのは 3 か所: 許可を預かった時（`POST /api/approvals`）・Jev の答えが届いた時（`JevRisk.onArrive`）・設定を変えた時。同時に 1 本（届くたびに呼ばれる）。
+- 流れ: `approvals.snapshot()`（Claude の `-p` の許可だけ）を `annotate()` し、`jevAutoEligible()`（Bash だけ）で絞り、この回のコマンドとルールの両方が閾値以上のものだけを画面の [常に許可] と同じ答え（`permissionsFor()`）で `approvals.answer()` し、`reply.log` に残す。
+- ルールは `JevRisk.ruleSafe()` が `JEV_RULE_STATEMENT`（`jevRuleState()`）で別に聞く（`Bash(rm:*)` のような前方一致は Jev が見た 1 回より広い）。`JEV_RULE_STATEMENT` は「普段の作業（調べる・ビルド・テスト）の範囲として許してよいか」を聞く文。
+- 答えるか・なぜ答えないかは `shared/jev.ts` の `jevAutoDecision()` の 1 つで決める（#553）。この回が閾値以上なのに答えないもの（Bash 以外・ルールを作れない・ルールの確率が閾値未満）は、理由を `reply.log` に同じ許可に 1 行だけ残す。
+- ルールの確率は `Approval.jev_rule` として許可のバブルにも出す。`approvalsNow()` は `JevRisk.peekRule()` で覚えているものを見るだけで、読む経路から外へは送らない。
+- Codex / OpenCode の許可には「常に許可」が無いので触らない。

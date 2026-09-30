@@ -129,9 +129,9 @@ ln -s "$SAI_HOME/feed/opencode/sai.js" ~/.config/opencode/plugin/sai.js
 
 向け直したら OpenCode で 1 ターン回し、`~/.agent-feed/` に `"agent": "opencode"` の行が増えることを見る。`session_source` は `payload`（セッションIDがイベントに載っている）。
 
-許可を SAI の画面から答える口は無い（Claude の `--permission-prompt-tool` に当たるものが無い）ので、`permission.asked` は**待ちの行として出すだけ**で、答えるのは端末側。
+`permission.asked` は待ちの行として出る。**SAI が起こした `opencode serve` が持っている許可は、SAI の画面から答えられる**（#421。許可 / 拒否。「常に許可」は出さない）。端末の TUI や人が立てた別のサーバの許可は、端末側で答える。
 
-**SAI からの返信は、長寿命の `opencode serve` に HTTP で送る**（#382）。SAI が `127.0.0.1` に 1 つだけ起こし、毎回の起動用の鍵（`OPENCODE_SERVER_PASSWORD`）を付ける。セッションは ID だけで引けて**そのセッションの作業ディレクトリで走る**ので、worktree ごとにサーバは要らない。返信ぶんも今までどおりプラグインが記録する。`SAI_OPENCODE_SERVER=0` で従来の `opencode run -s` に戻せる。**従来の `opencode run -s` は、許可が要るツールを自動で拒否していた**（非対話なので聞けない）。ツールが失敗した時点でターンが終わり、アシスタントは本文を書かないので、チャットには `（本文なし）read の許可が拒否されて終わりました（…）` のように**何が起きたか**を出す（#273）。サーバ経由ではこれに当たらない（手元では read も bash も聞かれずに通った）。ただし `permission` を `ask` にしている設定では答え待ちで止まり、**SAI からはまだ答えられない**（#382 の 2 段目）ので、そのときは端末（tmux）で開いて答える。`opencode run` の `--auto`（許可を自動で通す。本人も dangerous と書いている）は **SAI からは付けない**。付けるなら運用者が `SAI_OPENCODE_ARGS` で明示的に渡す（そのセッションへの返信では「同一オリジンの検査」が唯一の砦になる。Claude の素通しと同じ）。プロバイダを差し替えれば手元のモデルでも動く → [docs/local-llm.md](docs/local-llm.md)。
+**SAI からの返信は、長寿命の `opencode serve` に HTTP で送る**（#382）。SAI が `127.0.0.1` に 1 つだけ起こし、毎回の起動用の鍵（`OPENCODE_SERVER_PASSWORD`）を付ける。セッションは ID だけで引けて**そのセッションの作業ディレクトリで走る**ので、worktree ごとにサーバは要らない。返信ぶんも今までどおりプラグインが記録する。`SAI_OPENCODE_SERVER=0` で従来の `opencode run -s` に戻せる。**従来の `opencode run -s` は、許可が要るツールを自動で拒否していた**（非対話なので聞けない）。ツールが失敗した時点でターンが終わり、アシスタントは本文を書かないので、チャットには `（本文なし）read の許可が拒否されて終わりました（…）` のように**何が起きたか**を出す（#273）。サーバ経由ではこれに当たらない（手元では read も bash も聞かれずに通った）。`permission` を `ask` にしている設定では答え待ちで止まるが、その許可は SAI の画面から答えられる（#421）。`opencode run` の `--auto`（許可を自動で通す。本人も dangerous と書いている）は **SAI からは付けない**。付けるなら運用者が `SAI_OPENCODE_ARGS` で明示的に渡す（そのセッションへの返信では「同一オリジンの検査」が唯一の砦になる。Claude の素通しと同じ）。プロバイダを差し替えれば手元のモデルでも動く → [docs/local-llm.md](docs/local-llm.md)。
 
 **Grok Build**（xAI の `grok`。#325）— **`~/.claude/settings.json` のフックも読む**（Claude Code との互換）ので、上の Claude Code の設定があれば何も足さなくてよい。`record.py` は payload の形（camelCase の `hookEventName`）で Grok と見分ける。Claude Code を使っていないか、Grok 側で Claude の設定を読まないようにしているときだけ、`~/.grok/hooks/sai.json` に置く（**両方にあると 1 ターンが 2 行になる**。`SAI_HOME` は Grok を起動するシェルの環境に置く）:
 

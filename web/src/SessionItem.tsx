@@ -9,6 +9,8 @@ import { ReplyingTag } from './ReplyingTag'
 import { ArchivedTag } from './ArchivedTag'
 import { WaitingTag } from './WaitingTag'
 import { UnreadTag } from './UnreadTag'
+import { SessionPrTag } from './SessionPrTag'
+import type { PrSummary } from '../../shared/types.ts'
 import { More } from './More'
 import { projectName } from '../../shared/project.ts'
 import { SessionArchiveButton } from './SessionArchiveButton'
@@ -37,6 +39,8 @@ interface Props {
   /** レールが開いているか（一覧で 1 つだけ。SessionList が持つ） */
   open: boolean
   onOpenChange: (open: boolean) => void
+  /** このセッションのブランチから出ている open な PR（#548。`prForSession()`）。無ければ印を出さない */
+  pr?: PrSummary | null
 }
 
 /**
@@ -44,7 +48,7 @@ interface Props {
  * （<a> の中に <button> は置けない。押してもページを動かさない）。
  * タッチ端末では <a> を左にずらして、下のレール（アーカイブ / 戻す）を見せる
  */
-export function SessionItem({ s, active, replying, profile, approval, now, swipe, reduced, selfHost, open, onOpenChange }: Props) {
+export function SessionItem({ s, active, replying, profile, approval, now, swipe, reduced, selfHost, open, onOpenChange, pr = null }: Props) {
   // 選ばれたら見えるところまでサイドバーをスクロールする（キーボードで移動したとき用。見えていれば動かない）
   const ref = useRef<HTMLAnchorElement>(null)
   useEffect(() => {
@@ -129,6 +133,7 @@ export function SessionItem({ s, active, replying, profile, approval, now, swipe
           {!s.waiting && approval && <WaitingTag text={approval.text} />}
           {replying && <ReplyingTag since={replying.since} now={now} />}
           {!!s.unread && <UnreadTag n={s.unread} />}
+          {pr && <SessionPrTag pr={pr} />}
           {s.archived && <ArchivedTag />}
         </span>
         {preview && (

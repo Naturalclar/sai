@@ -7,6 +7,8 @@ import { DaysSelect } from './DaysSelect'
 import { FacetSelect } from './FacetSelect'
 import { ProjectPicker } from './ProjectPicker'
 import { SessionItem } from './SessionItem'
+import { prForSession } from '../../shared/prs.ts'
+import type { PrRepo } from '../../shared/types.ts'
 import type { NavTarget } from './sessionNav'
 import { isCollapsed, type SessionGroup } from './sessionGroups'
 import { pendingItems, todoItems } from '../../shared/todoItems.ts'
@@ -28,10 +30,12 @@ interface Props {
   /** 畳んでいる塊の key。**覚えるのは畳んだものだけ**（既定は全部開いている） */
   collapsed: readonly string[]
   onToggleGroup: (key: string) => void
+  /** GitHub の open な PR（#548。`useSessionPrs()`）。各セッションに紐づくものを印にする */
+  prs?: readonly PrRepo[]
 }
 
 /** 左サイドバー。絞り込み、固定の「＋ 新しいセッション」「フィード」「要対応」、その下にセッション一覧（新しい順） */
-export function SessionList({ list, filters, setFilters, active, creating = false, groups, collapsed, onToggleGroup }: Props) {
+export function SessionList({ list, filters, setFilters, active, creating = false, groups, collapsed, onToggleGroup, prs = [] }: Props) {
   // キーボードで固定項目に移ったとき、サイドバーの一番上まで見えるようにする（SessionItem と同じ扱い）
   const pinnedRef = useRef<HTMLAnchorElement>(null)
   const pinned = active.kind === 'feed' || active.kind === 'todo' || active.kind === 'prs'
@@ -145,6 +149,7 @@ export function SessionList({ list, filters, setFilters, active, creating = fals
                     reduced={reduced}
                     open={openId === s.id}
                     onOpenChange={(open) => setOpenId(open ? s.id : openId === s.id ? null : openId)}
+                    pr={prForSession(s, prs)?.pr ?? null}
                   />
                 ))}
             </div>

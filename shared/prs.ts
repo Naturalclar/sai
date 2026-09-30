@@ -4,7 +4,7 @@
 // **読むだけ**で、GitHub には何も書かない（書く口は #526 で、別に縛る）。
 import { parseUnifiedDiff } from './diff.ts'
 import { normalizeRemote, projectFromRemote, remoteHost } from './project.ts'
-import type { DiffFileStat, PrCheckState, PrSummary } from './types.ts'
+import type { DiffFileStat, PrCheckState, PrRepo, PrSummary } from './types.ts'
 
 /** `owner/repo` の形か。`gh --repo` に渡すので、フラグに化けるもの（先頭の `-`）や空白・`..` は通さない */
 export function isRepoName(repo: string): boolean {
@@ -89,6 +89,7 @@ export function prFromGh(obj: unknown): PrSummary | null {
     review_decision: str(o.reviewDecision),
     checks: checkState(o.statusCheckRollup),
     requested: false,
+    ...(o.isCrossRepository === true ? { cross: true } : {}),
   }
 }
 
@@ -147,4 +148,23 @@ export function diffStats(patch: string): DiffFileStat[] {
 /** PR 1 本の画面の hash（`#/pr/<owner>/<repo>/<番号>`） */
 export function prHash(repo: string, number: number): string {
   return `#/pr/${repo}/${number}`
+}
+
+/**
+ * セッションに紐づく PR（#548）。**セッションの remote の `owner/repo` とブランチが、PR のリポジトリと head のブランチに
+ * 一致するもの**。一覧（`GET /api/prs`）の open な PR から引くので、セッションごとに `gh` を叩かない。
+ * **fork のブランチから出た PR（`cross`）は結ばない**（`head` はブランチ名だけなので、同じ名前の他人のブランチを拾う）。
+ * 既定のブランチ（PR の base と同じ名前。`main` など）にいるセッションも結ばない。
+ * 同じブランチに 2 本あれば新しく動いた方。リポジトリ名は大文字小文字を見ない（`knownRepos()` と同じ）
+ */
+export function prForSession(session: { remote?: string; branch?: string }, repos: readonly PrRepo[]): { repo: string; pr: PrSummary } | null {
+  const repo = githubRepoOf(session.remote)
+  const branch = session.branch ?? ''
+  if (!repo || !branch) return null
+  const found = repos.find((r) => r.repo.toLowerCase() === repo.toLowerCase())
+  if (!found) return null
+  const hits = found.prs.filter((p) => p.head === branch && p.base !== branch && !p.cross)
+  if (hits.length === 0) return null
+  const pr = hits.reduce((a, b) => (b.updated_at > a.updated_at ? b : a))
+  return { repo: found.repo, pr }
 }

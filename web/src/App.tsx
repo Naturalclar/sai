@@ -33,6 +33,7 @@ import { useCommandPalette } from './useCommandPalette'
 import { CommandPalette } from './CommandPalette'
 import { RECORD_VERSION } from '../../shared/types.ts'
 import { storedProjects } from '../../shared/projectFilter.ts'
+import { useSessionPrs } from './useSessionPrs'
 
 export interface StatusProps {
   onStatus: (updatedAt: Date | null, error: string | null) => void
@@ -110,6 +111,8 @@ export function App() {
   // タブが裏にある間も間隔を空けて叩き続ける（#231）。待ちが増えたことを題名と通知で伝えるため。
   // チャットとフィードは見ていないので今までどおり止まる
   const list = usePolling(() => api.sessions(filters), [projectsKey, filters.repo, filters.agent, filters.date, filters.host, filters.days, filters.archived], { hiddenMs: HIDDEN_POLL_MS })
+  // サイドバーのセッションに付ける PR（#548）。一覧のポーリングとは別に 60 秒おき
+  const sessionPrs = useSessionPrs()
 
   // いま自分を待っているもの。サイドバーのバッジ・要対応の画面と同じ組み立てを使う（食い違わせない）。
   // replying も必ず渡す（渡し忘れると、題名と通知だけが処理中のセッションを数えてしまう。#232）
@@ -336,7 +339,7 @@ export function App() {
         <aside className="sidebar">
           {/* 幅を固定した箱に入れる。開閉の遷移中に列だけが縮み、中身は折り返さない */}
           <div className="side-inner">
-            <SessionList list={list} filters={filters} setFilters={setFilters} active={active} creating={route.name === 'new'} groups={groups} collapsed={groupUi.collapsed} onToggleGroup={toggleGroup} />
+            <SessionList list={list} filters={filters} setFilters={setFilters} active={active} creating={route.name === 'new'} groups={groups} collapsed={groupUi.collapsed} onToggleGroup={toggleGroup} prs={sessionPrs} />
           </div>
         </aside>
         <div className="pane">

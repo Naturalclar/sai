@@ -5,16 +5,19 @@
 // grants の書き方（tailnet の ACL）:
 //   "grants": [{
 //     "src": ["autogroup:member"], "dst": ["<SAI のマシン>"],
-//     "app": { "github.com/naturalclar/sai/cap/mcp": [{ "tools": ["read", "send"], "origins": ["https://dash.<tailnet>.ts.net"] }] }
+//     "app": { "github.com/naturalclar/sai/cap/mcp": [{ "tools": ["read", "draft", "send"], "origins": ["https://dash.<tailnet>.ts.net"] }] }
 //   }]
 import type { CapMap, Identity } from '../auth.ts'
 
 /** grants の `app` に書く capability の名前 */
 export const MCP_CAP = 'github.com/naturalclar/sai/cap/mcp'
 
-/** ツールのまとまり。`read` = 一覧・本文・手順を読む、`send` = 別のセッションに送る・返答を待つ */
-export type McpScope = 'read' | 'send'
-const SCOPES: readonly McpScope[] = ['read', 'send']
+/**
+ * ツールのまとまり。`read` = 一覧・本文・手順を読む、`draft` = 宛先の入力欄に案を置く（#565。ターンは起こさず、送るのは人）、
+ * `send` = 別のセッションに送る・返答を待つ
+ */
+export type McpScope = 'read' | 'draft' | 'send'
+const SCOPES: readonly McpScope[] = ['read', 'draft', 'send']
 
 export interface McpAccess {
   scopes: ReadonlySet<McpScope>
@@ -51,13 +54,17 @@ export function parseMcpCaps(caps: CapMap): { scopes: Set<McpScope>; origins: Se
 }
 
 /**
- * - ループバックからの直アクセス: `read` だけ（このマシンのエージェントが送るのは #310 のエージェント用の口）
- * - tailnet のユーザー: `read` は capability が無くても使える（今の画面・REST と同じ範囲）。`send` は capability があるときだけ
+ * - ループバックからの直アクセス: `read` と `draft`（#565。置くだけで送らない。このマシンのエージェントが送るのは #310 のエージェント用の口）
+ * - tailnet のユーザー: `read` と `draft` は capability が無くても使える（今の画面・REST と同じ範囲。案は人が画面で入れて送るまで何も起きない）。
+ *   `send` は capability があるときだけ
  * - タグ付きの端末: capability に書いたものだけ（無ければ何も使えない）
  */
 export function mcpAccess(who: Identity): McpAccess {
-  if (who.kind === 'local') return { scopes: new Set(['read']), origins: new Set(), caller: 'このマシン' }
+  if (who.kind === 'local') return { scopes: new Set(['read', 'draft']), origins: new Set(), caller: 'このマシン' }
   const granted = parseMcpCaps(who.caps)
-  if (who.kind === 'tailnet') granted.scopes.add('read')
+  if (who.kind === 'tailnet') {
+    granted.scopes.add('read')
+    granted.scopes.add('draft')
+  }
   return { scopes: granted.scopes, origins: granted.origins, caller: who.kind === 'tailnet' ? who.login : `タグ付きの端末 ${who.node || '(名前なし)'}` }
 }

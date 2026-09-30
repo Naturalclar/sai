@@ -105,6 +105,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 打ちかけの続き（#219）は `web/src/replySuggest.ts` の `suggestFrom()`（履歴の前方一致）と `acceptsSuggestion()`（カーソルが末尾のときの `→`）を `ReplyBox` が呼ぶ。
 - タッチ端末では `→` を押せない（ソフトキーボードに矢印キーが無い）ので、`useMediaQuery('(hover: none) and (pointer: coarse)')` のときだけ入力欄のすぐ上に `SuggestionChip` を出し、押したら同じ受け取りの処理を呼ぶ（#349）。ボタンに出す文字は `suggestionLabel()` が 1 行にして切る。押しても入力欄のフォーカスは奪わない。
 - 次に送る文面の案（#371）も同じゴースト・同じ `→`・同じチップに乗る（#373。`suggestionFor()` が出どころを決める）。
+- Manager が置いた案（#565。`SessionSummary.manager_draft`）は、打ちかけが無いとき次に送る文面の案より先に出る。ゴーストと `→` は同じで、チップの代わりに `ManagerDraftCard`（出どころ・全文・長ければ畳む・入れる・捨てる。畳むかは `managerDraftFold.ts`）を入力欄の上に出す。入れた・捨てたら `api.suggestionAction()` でサーバから取り除き、届くまでは `ReplyBox` の中で伏せる。フィードには渡さない。
 - ゴーストは textarea（`background: transparent`）の背面に `.field > .ghost` を敷いて描くので、字送りに関わる CSS（`font` / `padding` / `white-space` / 折り返し、狭い画面の `font-size` の上書き）は必ず両方に当てる（ずれると 2 行目以降で本文と重なる）。
 
 ### 打ちかけ（#306）

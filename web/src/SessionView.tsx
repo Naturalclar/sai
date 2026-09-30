@@ -274,6 +274,9 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
             history={history}
             // 次に送る文面の案（#371）。入力欄が空のときだけチップに出る
             {...(s.next_ask ? { nextAsk: s.next_ask } : {})}
+            // Manager が置いた案（#565）。空のときは一言の口の案より先。入れる・捨てるはサーバから取り除くだけ
+            {...(s.manager_draft ? { managerDraft: s.manager_draft } : {})}
+            onManagerDraft={(action, at) => void api.suggestionAction(id, { action, at }).catch(() => {})}
             onLeaveToSidebar={onLeaveToSidebar}
             attachId={id}
             terminal={Boolean(s.terminal)}

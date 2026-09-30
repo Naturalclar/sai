@@ -69,13 +69,13 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 ### 口とツール
 
 - `POST /mcp`。Streamable HTTP の最小で JSON を 1 回返すだけ。
-- JSON-RPC は `server/mcp/protocol.ts` の `handleRpc()`（`initialize` / `ping` / `tools/list` / `tools/call`）、ツールの中身は `app.ts` の `mcpTools()`（`sai_sessions` / `sai_session` / `sai_progress` が読む、`sai_send` / `sai_wait` が送る・待つ）。
+- JSON-RPC は `server/mcp/protocol.ts` の `handleRpc()`（`initialize` / `ping` / `tools/list` / `tools/call`）、ツールの中身は `app.ts` の `mcpTools()`（`sai_sessions` / `sai_session` / `sai_progress` が読む、`sai_suggest` が案を置く、`sai_send` / `sai_wait` が送る・待つ）。
 - `sai_sessions` の 1 行には、待ちと最後の記録の時刻も載せる（#323）。待ちは画面と同じく、端末で人が答えたぶんは `settleWaiting()` で畳み、返信中の答え待ちの承認 `approvalsNow()` も足す（1 行目だけ）。
 
 ### 誰に何を許すか
 
 - tailnet の ACL（grants）で決める。`server/mcp/access.ts` の `mcpAccess()` が `tailscale whois` の最上段の `CapMap` にある `MCP_CAP`（`github.com/naturalclar/sai/cap/mcp`）の `tools` / `origins` を読む。Serve の `Tailscale-App-Capabilities` ヘッダは見ない（identity と同じく whois で引き直した値だけ）。
-- ループバックと tailnet のユーザーは `read` が既定、`send` は capability、タグ付きの端末は capability だけ（無ければ 403）。
+- ループバックと tailnet のユーザーは `read` と `draft` が既定、`send` は capability、タグ付きの端末は capability だけ（無ければ 403）。
 - `Origin` は無ければ（CLI）通し、あれば capability の `origins` に書いたものだけ。CORS もそれにだけ返す。
 
 ### 送る
@@ -86,6 +86,15 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 素通し（`bypassPermissions`）のセッションには送らない（`mcpSendRefusal()`）。
 - `sai_wait` は最大 120 秒で返し、まだならもう一度呼ばせる。
 - 送り元は `mcp:<ログイン名>` として記録し、本人だけが待てる。
+
+### 案を置く（`sai_suggest`。#565）
+
+- 範囲は `draft`。**`launch()` も預かりも通らない**（ターンを起こさない）。`server/mcp/suggestions.ts` の `SuggestionStore` が `<feed dir>/suggestions.json` に宛先ごとに 1 つ置き（上書き）、`reply.log` に 1 行残す。
+- 断るのはアーカイブ済みと `replyBlockedReason()` が理由を返すもの（入力欄が出ない）だけ。**別のリポジトリ・素通しのセッションにも置ける**（`mcpSendRefusal()` は使わない。送るのは人）。本文は `AGENT_TEXT_MAX_CHARS` まで。
+- 出すかどうかは `shared/managerDraft.ts` の `liveManagerDraft()`: 置いてから `MANAGER_DRAFT_TTL_MS`（24 時間）以内で、置いた時刻より後のそのセッションの行に、人の入力が無いもの（`inputSinceDraft()`: 入力の行＝`resume` で `user_text` のあるものが 1 本でも来たら、ターン完了の行は `user_text` のあるものだけ数え、1 本・置いたときにターンが回っていたら＝`busy` 2 本で「来た」。自分で起きたターン（`<task-notification>`）は `record.py` の `last_user_text()` が空にするので数えない）。行は `sessionsWithMeta()` の窓のものを使い、窓が 1 日なら 2 日ぶん読み直す（24 時間は日付を 2 つまたぐ）。`sessionsWithMeta()` が `manager_draft` に載せ、**いま出している案の (id, at) を rev に混ぜる**（ファイルの (mtime, size) だと 24 時間が過ぎて消えたときに rev が変わらない）。ファイルから物理的に消すのは、捨てる・入れた（`take()`）と、次に置いたとき（`put()` が 24 時間を過ぎたものと 500 件を超えたものを捨てる）。
+- 捨てる・入れたは `POST /api/sessions/<id>/suggestion`（同一オリジンのみ）。`at` が今のものと同じときだけ取り除く（画面が古い案を見ている間に置き直された新しい案を消さない）。
+- 画面は `web/src/replySuggest.ts` の `suggestionFor()` が出どころを決め（打ちかけ > `manager` > `next`）、`ReplyBox` が `ManagerDraftCard` を入力欄の上に出す。入れた・捨てたものは次のポーリングで消えるまで `ReplyBox` の中で伏せる。
+- `sai_sessions` の 1 行には `（案を置いてある）` を付ける（Manager が置き直すかを人に聞けるように）。
 
 ### 中継（`feed/mcp/sai-mcp.mjs`）
 

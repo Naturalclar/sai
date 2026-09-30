@@ -55,10 +55,11 @@ codex mcp add sai -- node /path/to/sai-mcp.mjs https://<SAI のマシン>.<tailn
 | `sai_sessions` | `read` | 直近 7 日のセッションの一覧（id・呼び名・リポジトリ・処理中か・待ち（許可・質問）・送れない理由・最後の記録の時刻・最後の発言の 1 行目） |
 | `sai_session` | `read` | そのセッションの直近のやりとり（既定 3 ターン、長いものは切る） |
 | `sai_progress` | `read` | 処理中のターンがいま何をしているか（#302） |
+| `sai_suggest` | `draft` | 宛先のセッションの入力欄に「案」を置く（#565。送らない・ターンを起こさない。人が画面で入れて送るか捨てる） |
 | `sai_send` | `send` | 別のセッションに頼む・聞く（相手が処理中なら終わってから回る） |
 | `sai_wait` | `send` | `sai_send` の返答を待つ（最大 120 秒。まだならもう一度呼ぶ） |
 
-- **ループバックからの直アクセスと tailnet のユーザーは `read` だけ**（画面で見られる範囲と同じ）
+- **ループバックからの直アクセスと tailnet のユーザーは `read` と `draft` だけ**（画面で見られる範囲と同じ。`draft` は入力欄に置くだけで、送るのは画面の人）
 - **`send` と、タグ付きの端末からの呼び出しは、tailnet の ACL（grants）で capability を与えたときだけ**。SAI は `tailscale whois` の `CapMap` を読む（Serve の `Tailscale-App-Capabilities` ヘッダは見ない）ので、`tailscale serve --accept-app-caps` は要らない
 - ブラウザ（tailnet 内の別サイトのページ）から呼ぶときは、**そのページの Origin を capability の `origins` に書く**。書いていない Origin は `403` で、CORS もそれにだけ返す（ループバックからでも、Origin 付きは通さない）
 
@@ -70,7 +71,7 @@ grants の例（tailnet の管理画面の Access controls）:
     "src": ["autogroup:member"],
     "dst": ["<SAI のマシン>"],
     "app": {
-      "github.com/naturalclar/sai/cap/mcp": [{ "tools": ["read", "send"], "origins": ["https://dash.<tailnet>.ts.net"] }]
+      "github.com/naturalclar/sai/cap/mcp": [{ "tools": ["read", "draft", "send"], "origins": ["https://dash.<tailnet>.ts.net"] }]
     }
   },
   {

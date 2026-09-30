@@ -187,6 +187,11 @@ export interface SessionSummary {
    */
   next_ask?: string
   /**
+   * Manager が置いた案（#565。`sai_suggest`）。**置いてから 24 時間以内で、そのあと人の入力が来ていない**（置いた時刻より後の行で決める）ときだけ
+   * サーバが `suggestions.json` から載せる（`shared/managerDraft.ts`）。入力欄が空のとき、`next_ask` より先に出す
+   */
+  manager_draft?: ManagerDraft
+  /**
    * 一番新しい自分の入力（ターン完了の行か入力の行の `user_text`）の 1 行目（#300）。
    * 一覧の 2 行目で「最後に言ったのが自分か」を決めるのに使う（`web/src/sessionPreview.ts`）。集計が付けるので、手で組む fixture では省略可
    */
@@ -232,6 +237,17 @@ export interface SessionSummary {
   label_suffix?: string
   /** どこまで読んだか（#502。ミリ秒）。セッション画面の「ここから未読」の線はこれより新しい最初の返答の前に引く */
   read_at?: number
+}
+
+/** Manager が宛先の入力欄に置いた案（#565）。~/.agent-feed/suggestions.json に宛先のエンティティ ID ごとに 1 つ */
+export interface ManagerDraft {
+  text: string
+  /** 置いた呼び出し元（`このマシン` か tailnet のログイン名）。reply.log に残すためで、画面には出さない */
+  from: string
+  /** 置いた時刻（ミリ秒）。捨てる・入れるときに「同じ案か」の鍵にもする */
+  at: number
+  /** 置いたときに宛先のターンが回っていたか。回っていたターンが終わっただけでは消さない（`shared/managerDraft.ts`） */
+  busy: boolean
 }
 
 /** セッションに人が付けるもの。~/.agent-feed/session-meta.json に JSONL とは別で持つ（アイコン画像はファイルで別、SessionSummary.icon） */
@@ -571,6 +587,21 @@ export interface ReadResponse {
   id: string
   /** 置いたあとの印（ミリ秒） */
   read_at: number
+}
+
+/**
+ * POST /api/sessions/<id>/suggestion（#565。同一オリジンのみ）。Manager が置いた案を捨てる・入力欄に入れた。
+ * どちらも案を取り除いて reply.log に 1 行残す。`at` は画面が見ている案の `ManagerDraft.at`（間に置き直された新しい案は消さない）
+ */
+export interface SuggestionActionRequest {
+  action: 'accept' | 'discard'
+  at: number
+}
+
+export interface SuggestionActionResponse {
+  id: string
+  /** 取り除いたか（もう無い・置き直されていたら false） */
+  taken: boolean
 }
 
 /**

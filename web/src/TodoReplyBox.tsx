@@ -1,3 +1,4 @@
+import { api } from './api'
 import type { Replying, SessionSummary } from './api'
 import { REPLY_FOR_ATTR } from './approvalKeys'
 import { ReplyBox } from './ReplyBox'
@@ -37,6 +38,8 @@ export function TodoReplyBox({ session: s, replying, queued, onSend, sentFromCon
         skillsId={s.id}
         skillsAgent={s.agent}
         {...(s.next_ask ? { nextAsk: s.next_ask } : {})}
+        {...(s.manager_draft ? { managerDraft: s.manager_draft } : {})}
+        onManagerDraft={(action, at) => void api.suggestionAction(s.id, { action, at }).catch(() => {})}
         {...(onLeaveToSidebar ? { onLeaveToSidebar } : {})}
         attachId={s.id}
         terminal={Boolean(s.terminal)}

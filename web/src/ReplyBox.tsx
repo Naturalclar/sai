@@ -18,6 +18,7 @@ import { NEXT_ASK_MAX_CHARS } from '../../shared/nextAsk.ts'
 import { SEND_MODE_LABEL, sendModes, type SendMode } from '../../shared/compact.ts'
 import { CONTEXT_WARN_TOKENS } from '../../shared/contextSize.ts'
 import { SuggestionChip } from './SuggestionChip'
+import { ManagerDraftCard } from './ManagerDraftCard'
 import { useMediaQuery } from './hooks'
 import { PhotoMark } from './PhotoMark'
 import { ATTACHMENT_MAX_COUNT } from '../../shared/attachments.ts'
@@ -119,6 +120,14 @@ interface Props {
    */
   nextAsk?: string
   /**
+   * Manager が置いた案（#565。`SessionSummary.manager_draft`）。**入力欄が空で、処理中でないときだけ**、`nextAsk` より先に
+   * ゴーストと札（出どころ・全文・捨てる）で出す。受け取りは `→` か札の「入れる」で、入るだけで送らない。
+   * フィードには渡さない（`nextAsk` と同じ理由）
+   */
+  managerDraft?: { text: string; at: number }
+  /** 案を入れた・捨てたときに呼ぶ（サーバから取り除いて reply.log に残す）。`at` はその案の `at` */
+  onManagerDraft?: (action: 'accept' | 'discard', at: number) => void
+  /**
    * 確認（「消して送る」／「端末を使わず送る」）から送り直して受け付けられた回数（#338。`useReply` の `confirmedSent`）。
    * 送り直しはここを通らないので、この数が増えたら入力欄と添えた画像を空にする（渡さなければ何もしない）
    */
@@ -141,7 +150,7 @@ const NO_HISTORY: readonly string[] = []
 const keyOf = (e: KeyboardEvent<HTMLTextAreaElement>) => ({ key: e.key, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, shiftKey: e.shiftKey })
 
 /** 入力欄。Enter で送信、Shift+Enter で改行。IME 変換中の Enter は送らない */
-export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerable = false, now = 0, onSend, sendMode, onDraft, model, permission, diff, skillsId, skillsAgent, attachId, draftKey, sentFromConfirm = 0, restore, insert, history = NO_HISTORY, nextAsk, onLeaveToSidebar, mention }: Props) {
+export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerable = false, now = 0, onSend, sendMode, onDraft, model, permission, diff, skillsId, skillsAgent, attachId, draftKey, sentFromConfirm = 0, restore, insert, history = NO_HISTORY, nextAsk, managerDraft, onManagerDraft, onLeaveToSidebar, mention }: Props) {
   // 前に打ちかけて離れた分（#306）。作ったときに 1 回だけ読む
   const [initial] = useState(() => (draftKey ? loadDraft(draftKey) : EMPTY_DRAFT))
   const [text, setText] = useState(initial.text)
@@ -396,8 +405,12 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
    * 打ちかけがあれば履歴の続き（サーバは要らない）、**空なら次に送る文面の案**（#371）。
    * **処理中は案を出さない**（placeholder の「前の返信を処理中」の方が先に要る）
    */
-  const suggest = imeOn || open ? null : suggestionFor(history, text, busy ? '' : nextAsk)
+  // 入れた・捨てた案は、サーバから消えたのが次のポーリングで届くまでここで伏せる（空に戻したときにまた出さない）
+  const [settledDraft, setSettledDraft] = useState(0)
+  const draftShown = managerDraft && managerDraft.at !== settledDraft ? managerDraft : undefined
+  const suggest = imeOn || open ? null : suggestionFor(history, text, busy ? '' : nextAsk, busy ? '' : draftShown?.text)
   const suggestion = suggest?.text ?? ''
+  const fromManager = suggest?.from === 'manager' && draftShown !== undefined
 
   /**
    * タッチ端末（矢印キーの無いソフトキーボード）では `→` を押せないので、続きはボタンで受け取る（#349）。
@@ -406,7 +419,8 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
   const touch = useMediaQuery('(hover: none) and (pointer: coarse)')
   const fromNext = suggest?.from === 'next'
   // 案は全体を読んでから受け取るものなので、履歴の続き（24 字）より長く出す
-  const suggestLabel = touch ? suggestionLabel(suggestion, fromNext ? NEXT_ASK_MAX_CHARS : undefined) : ''
+  // Manager の案は札（ManagerDraftCard）の「入れる」で受け取るので、チップは出さない
+  const suggestLabel = touch && !fromManager ? suggestionLabel(suggestion, fromNext ? NEXT_ASK_MAX_CHARS : undefined) : ''
 
   /** 続きを本文に入れてカーソルを末尾へ */
   const acceptSuggestion = () => {
@@ -414,6 +428,13 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
     setText(text + suggestion)
     setCaret(at)
     wantCaret.current = at
+    if (fromManager) settleDraft('accept', draftShown.at)
+  }
+
+  /** Manager の案を入れた・捨てた（#565）。ここで伏せて、サーバには取り除くよう頼む */
+  const settleDraft = (action: 'accept' | 'discard', at: number) => {
+    setSettledDraft(at)
+    onManagerDraft?.(action, at)
   }
 
   /** 入力欄の案内（placeholder）。案を出している間は空にするので、そのときは aria-label に回す */
@@ -545,6 +566,7 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
       <AttachmentStrip items={attach.items} onRemove={attach.remove} disabled={attach.busy} />
       {attach.error && <div className="note err">{attach.error}</div>}
       {/* 続き（#349）と案（#373）をタップで受け取る。入力欄のすぐ上に置くので、ソフトキーボードが出ていても隠れない */}
+      {fromManager && <ManagerDraftCard text={suggestion} onAccept={acceptSuggestion} onDiscard={() => settleDraft('discard', draftShown.at)} />}
       {suggestLabel && (
         <SuggestionChip
           label={suggestLabel}
@@ -598,8 +620,8 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
             if (attachId && takeFiles(e.clipboardData.files)) e.preventDefault()
           }}
           // 案を出している間は空にする（ゴーストと同じ場所に重なるため）。消える分は aria-label で補う
-          placeholder={fromNext ? '' : hint}
-          {...(fromNext ? { 'aria-label': hint } : {})}
+          placeholder={fromNext || fromManager ? '' : hint}
+          {...(fromNext || fromManager ? { 'aria-label': hint } : {})}
           rows={1}
           onCompositionStart={() => setImeOn(true)}
           onCompositionEnd={() => setImeOn(false)}

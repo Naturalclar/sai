@@ -15,19 +15,20 @@ test('parseMcpCaps: tools と origins を集める。知らないツール名・
   assert.equal(parseMcpCaps({ 'other.example/cap': [{ tools: ['send'] }] }).scopes.size, 0, '別の capability は見ない')
 })
 
-test('mcpAccess: ローカルは read だけ。tailnet のユーザーは read が既定で send は capability。タグ付きの端末は capability だけ（#312）', () => {
-  assert.deepEqual(sorted(mcpAccess({ kind: 'local' }).scopes), ['read'])
+test('mcpAccess: ローカルは read と draft。tailnet のユーザーは read と draft が既定で send は capability。タグ付きの端末は capability だけ（#312 / #565）', () => {
+  assert.deepEqual(sorted(mcpAccess({ kind: 'local' }).scopes), ['draft', 'read'])
 
   const user = mcpAccess({ kind: 'tailnet', login: 'me@example.com', caps: {} })
-  assert.deepEqual(sorted(user.scopes), ['read'])
+  assert.deepEqual(sorted(user.scopes), ['draft', 'read'])
   assert.equal(user.caller, 'me@example.com')
   const sender = mcpAccess({ kind: 'tailnet', login: 'me@example.com', caps: { [MCP_CAP]: [{ tools: ['send'], origins: ['https://dash.example.ts.net'] }] } })
-  assert.deepEqual(sorted(sender.scopes), ['read', 'send'])
+  assert.deepEqual(sorted(sender.scopes), ['draft', 'read', 'send'])
   assert.deepEqual(sorted(sender.origins), ['https://dash.example.ts.net'])
 
   assert.equal(mcpAccess({ kind: 'tagged', node: 'ci', caps: {} }).scopes.size, 0, 'capability が無ければ何も使えない')
   const ci = mcpAccess({ kind: 'tagged', node: 'ci', caps: { [MCP_CAP]: [{ tools: ['read'] }] } })
-  assert.deepEqual(sorted(ci.scopes), ['read'])
+  assert.deepEqual(sorted(ci.scopes), ['read'], 'タグ付きの端末には draft も既定では与えない')
+  assert.deepEqual(sorted(mcpAccess({ kind: 'tagged', node: 'ci', caps: { [MCP_CAP]: [{ tools: ['draft'] }] } }).scopes), ['draft'])
   assert.equal(ci.caller, 'タグ付きの端末 ci')
 })
 

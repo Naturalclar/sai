@@ -297,7 +297,7 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
           />
         ))}
       {fresh?.from === id && (
-        <NewSessionStarting key={`starting:${fresh.id}`} id={fresh.id} text={fresh.text} since={fresh.since} replying={undefined} now={now} onRetry={() => setFresh(null)} />
+        <NewSessionStarting key={`starting:${fresh.id}`} id={fresh.id} text={fresh.text} since={fresh.since} replying={data?.replying[fresh.id]} now={now} onRetry={() => setFresh(null)} />
       )}
       {freshError && <div className="notice error">新しいセッションを始められませんでした: {freshError}</div>}
       {confirmHere && <ReplaceConfirm confirm={confirmHere} onReplace={() => void confirmReplace()} onProcess={() => void confirmProcess()} onCancel={cancelConfirm} />}

@@ -1663,7 +1663,8 @@ export function createApp(
     // `drain()` が本文を回し、要約が失敗すれば預かりは止まる（新しい順番の仕組みは作らない）。
     // 効くのは Claude で、端末で開いておらず（TUI に打ち込む経路では要約中の入力の扱いを確かめていない）、処理中でも
     // 預かりが残ってもいないときだけ。当たらなければ付いていないのと同じ（下の今までの経路）
-    if (o.compact && session.agent === 'claude' && !openTerminal && !busy && !bgLive && queue.size(id) === 0) {
+    // 端末に打ち込んだ返信がまだ回っているのにペインが見つからないときも回さない（下の経路が 409 にするのと同じ。#590 のレビュー）
+    if (o.compact && session.agent === 'claude' && !openTerminal && !busy && !typed.running(id) && !bgLive && queue.size(id) === 0) {
       const log = join(store.directory, 'reply.log')
       launching.add(id)
       try {

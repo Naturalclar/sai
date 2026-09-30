@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { MODE_LABEL, REPLY_MODES } from '../../shared/permissions.ts'
-import type { ReplyingMap, SessionSummary } from '../../shared/types.ts'
+import type { ReplyingMap, SessionSummary, WorkspacesResponse } from '../../shared/types.ts'
 import { api } from './api'
 import { BackLink } from './BackLink'
 import { modelChoices, MODEL_DEFAULT_LABEL } from './modelChoices'
@@ -43,14 +43,15 @@ type NewAgent = (typeof AGENTS)[number]['id']
 const isNewAgent = (value: string): value is NewAgent => AGENTS.some((a) => a.id === value)
 
 /**
- * SAI の画面から新しいセッションを始める（#314。Codex は #401）。worktree は**記録にあるものから選ぶ**:
+ * SAI の画面から新しいセッションを始める（#314。Codex は #401）。worktree は**記録にあるリポジトリのものから選ぶ**（#319）:
  * サーバには選んだ worktree の一番新しいセッション（`from`）を渡し、サーバがその `cwd` を使う（パスは送らない）。
  * 送ったら `NewSessionStarting` が最初の行を待って、そのセッションの画面へ移る
  */
 export function NewSessionView({ replying, now, onOpenSidebar }: Props) {
-  const [all, setAll] = useState<{ sessions: SessionSummary[]; host: string } | null>(null)
+  const [all, setAll] = useState<{ sessions: SessionSummary[]; host: string; places: WorkspacesResponse | null } | null>(null)
   const [loadError, setLoadError] = useState('')
-  const [from, setFrom] = useState('')
+  // 選んでいる worktree の `key`（記録にあるものは `from`、兄弟 worktree は `from#worktree`）
+  const [picked, setPicked] = useState('')
   // worktree の絞り込み（#489）
   const [query, setQuery] = useState('')
   const textRef = useRef<HTMLTextAreaElement>(null)
@@ -67,9 +68,11 @@ export function NewSessionView({ replying, now, onOpenSidebar }: Props) {
   // 候補は絞り込み無しの一覧から 1 回だけ（⌘K と同じ。サイドバーの絞り込みで worktree が隠れないように。3 秒のポーリングには乗せない）
   useEffect(() => {
     let alive = true
-    Promise.all([api.sessions({ ...ALL, archived: '' }), api.sessions({ ...ALL, archived: '1' })])
-      .then(([live, archived]) => {
-        if (alive) setAll({ sessions: [...live.sessions, ...archived.sessions], host: live.host })
+    // 始められる場所（#319）。取れなければ絞らずに出す（git の作業ツリーでない場所はサーバが始めるときに断る）
+    const places = api.workspaces().catch(() => null)
+    Promise.all([api.sessions({ ...ALL, archived: '' }), api.sessions({ ...ALL, archived: '1' }), places])
+      .then(([live, archived, where]) => {
+        if (alive) setAll({ sessions: [...live.sessions, ...archived.sessions], host: live.host, places: where })
       })
       .catch((err: unknown) => {
         if (alive) setLoadError(err instanceof Error ? err.message : String(err))
@@ -79,7 +82,7 @@ export function NewSessionView({ replying, now, onOpenSidebar }: Props) {
     }
   }, [])
 
-  const choices = useMemo(() => (all ? workspaceChoices(all.sessions, all.host) : []), [all])
+  const choices = useMemo(() => (all ? workspaceChoices(all.sessions, all.host, all.places) : []), [all])
   // モデルの候補は、そのエージェントで記録に出てきたもの（Claude は別名も。`modelChoices()` と同じ規則）
   const models = useMemo(
     () => modelChoices(agent, [...new Set((all?.sessions ?? []).filter((s) => s.agent === agent).flatMap((s) => s.models))], ''),
@@ -87,7 +90,7 @@ export function NewSessionView({ replying, now, onOpenSidebar }: Props) {
   )
   const matches = useMemo(() => filterWorkspaces(choices, query), [choices, query])
   // 絞った候補の中で選んだもの。選んでいない（か絞って見えなくなった）なら一番上（打っていなければ一番新しい worktree）
-  const chosen = (matches.find((m) => m.workspace.from === from) ?? matches[0])?.workspace ?? null
+  const chosen = (matches.find((m) => m.workspace.key === picked) ?? matches[0])?.workspace ?? null
 
   const start = async () => {
     const body = text.trim()
@@ -97,6 +100,8 @@ export function NewSessionView({ replying, now, onOpenSidebar }: Props) {
     try {
       const res = await api.startSession({
         from: chosen.from,
+        // 記録の無い兄弟 worktree（#319）。パスではなく一覧で付いた鍵を送る
+        ...(chosen.worktree ? { worktree: chosen.worktree } : {}),
         text: body,
         ...(agent === 'claude' ? {} : { agent }),
         ...(model ? { model } : {}),
@@ -124,7 +129,7 @@ export function NewSessionView({ replying, now, onOpenSidebar }: Props) {
       <BackLink onOpenSidebar={onOpenSidebar} />
       <div className="chat-head">
         <h1>新しいセッション</h1>
-        <span className="meta">記録にある worktree で、新しいセッションを始める</span>
+        <span className="meta">記録にあるリポジトリの worktree で、新しいセッションを始める</span>
       </div>
       {started ? (
         <NewSessionStarting
@@ -151,15 +156,15 @@ export function NewSessionView({ replying, now, onOpenSidebar }: Props) {
             onQuery={(q) => {
               setQuery(q)
               // 打ち直したら、選び直しは一番上の当たりから（前に選んだものが下に残っていても引きずらない）
-              setFrom('')
+              setPicked('')
             }}
             matches={matches}
-            chosen={chosen?.from ?? null}
-            onSelect={setFrom}
+            chosen={chosen?.key ?? null}
+            onSelect={setPicked}
             onPick={() => textRef.current?.focus()}
             disabled={choices.length === 0}
           />
-          {all && choices.length === 0 && <div className="notice">始められる worktree がありません。端末でエージェントを 1 ターン回すと、その worktree がここに出ます</div>}
+          {all && choices.length === 0 && <div className="notice">始められる worktree がありません。git のリポジトリで端末からエージェントを 1 ターン回すと、そのリポジトリの worktree がここに出ます</div>}
           {loadError && <div className="notice error">一覧を取れませんでした: {loadError}</div>}
           <div className="opts">
             <label>

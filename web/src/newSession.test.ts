@@ -50,3 +50,22 @@ test('startStatus: 最初の行が届いたら移る。届く前に落ちたら�
   assert.deepEqual(startStatus(false, undefined, since, since + START_SILENT_MS + 1), { kind: 'silent' })
   assert.deepEqual(startStatus(false, running, since, since + START_SILENT_MS + 1), { kind: 'running' }, '動いている間は待つ（長いターン）')
 })
+
+test('workspaceChoices: 始められる場所（#319）があれば git の作業ツリーの中だけに絞り、記録の無い兄弟 worktree を後ろに足す', () => {
+  const sessions = [
+    s({ id: 'a@dev-a', cwd: '/w/app.git/dev-a', repo: 'dev-a', end: '2026-09-11T09:00:00+09:00' }),
+    s({ id: 'tmp@tmp', cwd: '/tmp', repo: 'tmp', end: '2026-09-11T10:00:00+09:00' }),
+  ]
+  const places = {
+    recorded: ['a@dev-a'],
+    siblings: [{ from: 'a@dev-a', worktree: 'k1', cwd: '/w/app.git/dev-b', repo: 'dev-b', branch: 'dev-b', project: 'me/app' }],
+  }
+  const choices = workspaceChoices(sessions, '', places)
+  assert.deepEqual(choices.map((w) => [w.key, w.from, w.worktree]), [
+    ['a@dev-a', 'a@dev-a', undefined],
+    ['a@dev-a#k1', 'a@dev-a', 'k1'],
+  ], '/tmp は落ち、兄弟は同じ from でも別の鍵で並ぶ')
+  assert.equal(workspaceLabel(choices[1]!), 'me/app · dev-b（dev-b） · 記録なし')
+  // 取れなかった（null）ときは今までどおり絞らない（サーバが始めるときに断る）
+  assert.deepEqual(workspaceChoices(sessions, '', null).map((w) => w.key), ['tmp@tmp', 'a@dev-a'])
+})

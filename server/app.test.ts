@@ -2,7 +2,7 @@ import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer, request as httpRequest } from 'node:http'
 import type { Server } from 'node:http'
-import { mkdtemp, rm, writeFile, appendFile, mkdir, stat, utimes, readFile } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile, appendFile, mkdir, stat, utimes, readFile, realpath } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { IconHistoryResponse } from '../shared/types.ts'
@@ -27,6 +27,7 @@ import { claudeUserLine, replyCommand, splitArgs } from './reply/runner.ts'
 import type { ReplyCommand, Runner } from './reply/runner.ts'
 import type { ClaudeAgent } from './local/claudeAgents.ts'
 import { row } from './rows/aggregate.test.ts'
+import type { Git } from './git/diff.ts'
 import { JPEG, PNG } from './meta/icons.test.ts'
 import type { CodexDialogSource } from './reply/codexDialogs.ts'
 import type { CodexApp, CodexTurnInput } from './reply/codexAppServer.ts'
@@ -186,6 +187,15 @@ let digester: Digester
 
 const min = (n: number) => n * 60_000
 
+/** `dir` を 1 つの worktree として見せるだけの git（#319）。`worktree list` 以外は「git のリポジトリでない」 */
+const worktreeOnlyGit = (): Git => ({
+  run: async (cwd, args) => {
+    const root = await realpath(dir)
+    if (args[0] === 'worktree' && args[1] === 'list' && (await realpath(cwd)).startsWith(root)) return `worktree ${root}\nHEAD 0000000\nbranch refs/heads/main\n`
+    throw new Error('fatal: not a git repository')
+  },
+})
+
 before(async () => {
   // このサーバのマシン名（#114）。決め打ちしないと、この Mac の hostname 次第でリモート判定が変わる
   process.env.AGENT_FEED_HOST = 'testmac'
@@ -280,7 +290,9 @@ before(async () => {
     auth,
     terminal,
     new SkillStore(join(dir, 'skills')),
-    undefined,
+    // 新しいセッションを始められるのは git の作業ツリーの中だけ（#319）。temp の dir を 1 つの worktree として
+    // 見せる（`git worktree list` だけ答える）。ほかは今までどおり「git のリポジトリでない」（差分は 404 のまま）
+    worktreeOnlyGit(),
     undefined,
     // feed dir は本番（createApp の既定）と同じく store の置き場。省くと本物の ~/.agent-feed を読む（#275）
     new UsageStore(join(dir, 'codex-sessions'), join(dir, 'claude-projects'), store.directory),

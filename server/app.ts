@@ -1,7 +1,7 @@
 // ルーティング。main.ts が node:http に載せ、テストは createApp() を直接叩く。
 import { createHash, randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
-import { appendFile, readFile, stat } from 'node:fs/promises'
+import { appendFile, readFile, realpath, stat } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { basename, extname, join, resolve, sep } from 'node:path'
 import { historyIconUrl, ICON_MAX_BYTES, iconUrl } from '../shared/icon.ts'
@@ -31,6 +31,8 @@ import type { SessionTurnResponse,
   FeedRow,
   HealthResponse,
   NewSessionRequest,
+  SiblingWorktree,
+  WorkspacesResponse,
   NewSessionResponse,
   Profile,
   ProfileResponse,
@@ -145,6 +147,7 @@ import {
 import { eventKind } from '../shared/events.ts'
 import { stepLabel } from '../shared/progress.ts'
 import { contextRevKey } from '../shared/contextSize.ts'
+import { treeOf, Worktrees } from './git/worktrees.ts'
 import { mcpAccess, normalizeOrigin } from './mcp/access.ts'
 import type { McpAccess } from './mcp/access.ts'
 import { handleRpc, protocolVersionOk, textResult } from './mcp/protocol.ts'
@@ -183,6 +186,8 @@ export const MAX_META_BYTES = 4 * 1024
 const SESSIONS_PREFIX = '/api/sessions/'
 /** 新しいセッションを始める（#314）。エンティティID は必ず `@` を含むので、`/api/sessions/<id>` と取り違えない */
 const NEW_SESSION_PATH = '/api/sessions/new'
+/** 新しいセッションを始められる場所（#319） */
+const WORKSPACES_PATH = '/api/workspaces'
 const APPROVALS_PATH = '/api/approvals'
 const APPROVALS_PREFIX = '/api/approvals/'
 const ANSWER_SUFFIX = '/answer'
@@ -490,6 +495,8 @@ export function createApp(
   prs: PrBrowser = prBrowserFromEnv(),
 ): App {
   const distRoot = resolve(distDir)
+  // 新しいセッションを始められる場所（#319）。`git worktree list` を読むだけ
+  const worktrees = new Worktrees(git)
   // Claude の transcript の画像（#504）。transcript ごとに読んだところを覚えて、増えた分だけ読み足す
   const transcriptImages = new TranscriptImages()
   // Codex の画像生成で作った画像（#575）。rollout の item_completed から拾い、CODEX_HOME/generated_images/<スレッド>/ の中だけ配る
@@ -1269,6 +1276,68 @@ export function createApp(
   }
 
   /**
+   * 新しいセッションを始める場所（#319）。`worktree` が空なら `from` の cwd（git の作業ツリーの中のときだけ）、
+   * あれば `from` と同じリポジトリの worktree のうち、その鍵のもの。`git worktree list` は覚えたものを使わず読み直す
+   */
+  const startPlace = async (from: SessionSummary, worktree: string): Promise<{ cwd: string; repo: string } | { reason: string }> => {
+    if (!from.cwd) return { reason: 'cwd が見つかりません: (空)' }
+    let cwd: string
+    try {
+      cwd = await realpath(from.cwd)
+      if (!(await stat(cwd)).isDirectory()) throw new Error('not a directory')
+    } catch {
+      return { reason: `cwd が見つかりません: ${from.cwd}` }
+    }
+    const trees = await worktrees.usable(cwd, true)
+    const own = trees ? treeOf(cwd, trees) : null
+    if (!trees || !own) return { reason: `git の作業ツリーではないので、ここでは始められません: ${from.cwd}` }
+    if (!worktree) return { cwd: from.cwd, repo: from.repo }
+    const sibling = trees.find((t) => t.key === worktree)
+    if (!sibling) return { reason: 'その worktree はもうありません（一覧を開き直してください）' }
+    return { cwd: sibling.path, repo: basename(sibling.path) }
+  }
+
+  /**
+   * `GET /api/workspaces`（#319）。記録にある cwd（このマシンのもの）ごとに一番新しいセッションを取り、
+   * **git の作業ツリーの中にあるものだけ**を `recorded` に、同じリポジトリの記録の無い worktree を `siblings` に並べる。
+   * 兄弟の `from` は、そのリポジトリで一番新しいセッション（新しい順に見るので最初に当たったもの）
+   */
+  const workspacesOf = async (sessions: readonly SessionSummary[]): Promise<WorkspacesResponse> => {
+    const newest = new Map<string, SessionSummary>()
+    for (const s of sessions) {
+      if (!s.cwd || isRemoteHost(s.host, selfHost())) continue
+      const seen = newest.get(s.cwd)
+      if (!seen || Date.parse(s.end) > Date.parse(seen.end)) newest.set(s.cwd, s)
+    }
+    const ordered = [...newest.values()].sort((a, b) => Date.parse(b.end) - Date.parse(a.end))
+    const read = await Promise.all(
+      ordered.map(async (s) => {
+        const real = await realpath(s.cwd).catch(() => '')
+        const trees = real ? await worktrees.usable(real) : null
+        return { s, real, trees, own: real && trees ? treeOf(real, trees) : null }
+      }),
+    )
+    const recorded: string[] = []
+    const covered = new Set<string>()
+    for (const r of read) {
+      if (!r.own) continue
+      recorded.push(r.s.id)
+      covered.add(r.real)
+    }
+    const siblings: SiblingWorktree[] = []
+    const offered = new Set<string>()
+    for (const r of read) {
+      if (!r.own || !r.trees) continue
+      for (const t of r.trees) {
+        if (covered.has(t.path) || offered.has(t.path)) continue
+        offered.add(t.path)
+        siblings.push({ from: r.s.id, worktree: t.key, cwd: t.path, repo: basename(t.path), branch: t.branch, project: r.s.project })
+      }
+    }
+    return { recorded, siblings }
+  }
+
+  /**
    * POST /api/sessions/new（#314）。SAI の画面から新しいセッションを始めるのを投げっぱなしにし、202 を返す。
    * **パスは受け取らない**: `from`（既存のセッション）の `cwd` を使う。返信と同じく、同一オリジンの検査が破られても
    * 走る場所を記録にある worktree に閉じる。ID は `--session-id` でサーバが決めるので、最初の行が届く前から
@@ -1312,20 +1381,20 @@ export function createApp(
     if (!from) return error(res, 404, 'session not found in window')
     // 別のマシンの worktree はこのマシンに無い（#114）
     if (isRemoteHost(from.host, selfHost())) return error(res, 400, `別のマシン（${from.host}）の worktree なので、ここでは始められません`)
-    const cwd = from.cwd
-    try {
-      if (!cwd || !(await stat(cwd)).isDirectory()) throw new Error('not a directory')
-    } catch {
-      return error(res, 400, `cwd が見つかりません: ${cwd || '(空)'}`)
-    }
+    // 始める場所を決める（#319）。**git の作業ツリーの中だけ**（`/`・`/tmp`・scratchpad は断る）。兄弟 worktree は
+    // 鍵で選ばせ、`from` の cwd で `git worktree list` を読み直して、その中に同じ鍵があるときだけ通す（パスは受けない）
+    const place = await startPlace(from, typeof asked.worktree === 'string' ? asked.worktree : '')
+    if ('reason' in place) return error(res, 400, place.reason)
+    const { cwd } = place
+    // エンティティ ID の repo は record.py が行に書くもの（cwd の toplevel の basename）に揃える。兄弟 worktree では from と違う
+    const target: SessionSummary = { ...from, cwd, repo: place.repo }
 
-    if (agent === 'codex') return await startCodexSession(res, from, cwd, text, meta)
-    if (agent === 'opencode') return await startOpencodeSession(res, from, cwd, text, meta)
-    if (inBackground) return await startBackgroundSession(res, from, cwd, text, meta)
+    if (agent === 'codex') return await startCodexSession(res, target, cwd, text, meta)
+    if (agent === 'opencode') return await startOpencodeSession(res, target, cwd, text, meta)
+    if (inBackground) return await startBackgroundSession(res, target, cwd, text, meta)
 
     const session = randomUUID()
-    // record.py が行に書く repo は同じ cwd から取るので、from のものと同じになる
-    const id = entityId(session, from.repo, '')
+    const id = entityId(session, target.repo, '')
     if (Object.keys(meta).length > 0) await metaStore.set(id, meta)
     const via = { url: selfUrl(req), entity: id, tokenFile: agentTokenPath }
     const cmd = newSessionCommand(session, text, cwd, process.env, via, meta.model, meta.permission_mode, meta.name)
@@ -3038,6 +3107,14 @@ export function createApp(
       }
       // 発言の本文の検索（#230）。索引は持たず、store が持っている行を舐めるだけ。
       // 3 秒のポーリングには乗せない（⌘K で打ち終わったときだけ叩く）
+      // 新しいセッションを始められる場所（#319）。記録にある cwd のうち git の作業ツリーの中のものと、
+      // 同じリポジトリの記録の無い兄弟 worktree。画面が新しいセッションの画面を開いたときだけ取る（ポーリングには乗せない）
+      if (path === WORKSPACES_PATH) {
+        const days = parseDays(q.get('days'), 90)
+        const { sessions } = await sessionsWithMeta(days)
+        return json(res, await workspacesOf(sessions))
+      }
+
       if (path === SEARCH_PATH) {
         const days = parseDays(q.get('days'), 90)
         const rawQuery = q.get('q') ?? ''

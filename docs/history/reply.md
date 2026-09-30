@@ -69,6 +69,13 @@
 - Codex（#401）: 返る thread id がそのまま rollout のファイル名・`session_meta.session_id` になることは v0.154.0 で実測。
 - OpenCode（#452）: `POST /session` の `ses_…` がそのまま記録の `session` になることは 1.18.30 で実測。`opencode run` で始めない理由も実測: `permission.asked` と `permission.replied` が同じ秒に並び、行に残るのは `（本文なし）edit の許可が拒否されて終わりました（…）` だけ（#273 の形）。始めた 1 ターンが許可ひとつで無駄になり、#421 の「画面から答える」も当たらない。run に落とすくらいなら始めない。
 
+## 始める場所を兄弟 worktree に広げる（#319）
+
+- 2026-09-11 の手元: `ghq list` 47 リポジトリの worktree 77 のうち、90 日の記録にあるのは 15（リポジトリでは 6）。記録のあるリポジトリの記録の無い兄弟 worktree が 11。記録にある `cwd` 26 件には `/`・`/tmp`・scratchpad が混ざっていて、そこでも始められていた。
+- 決めたこと（2026-09-30）: 広げるのは**記録のあるリポジトリの worktree**（`git worktree list`）まで。**ghq の下の全リポジトリ（案 B）はやらない**——同一オリジンの守りが破られたときに走りうる場所が数倍に広がる。一度も記録の無いリポジトリは、端末で 1 ターン回せば候補に出る。**画面から worktree を作る口（案 C。#389 の `claude -w` も）もやらない**——SAI から始めた 59 回を数え直すと、記録の無い worktree はエージェントが PR の作業用に自分で切ったものだった。git に書く口は増やさない。
+- 実測（2026-10-01）: bare clone の中の worktree から `git worktree list --porcelain` を呼ぶと、先頭に bare 本体（`bare`）、消えたもの（`prunable gitdir file points to non-existent location`）、`/private/tmp` の下の worktree まで兄弟が全部出た。`locked` は中身があるので候補に残す。手元の記録で候補を作ると、git の外の 22 か所（`/`・`/tmp`・scratchpad など）が落ち、兄弟 worktree が 16 足された（最初の 1 回は 26 か所の `git worktree list` で約 4 秒。30 秒は覚える）。
+- 記録の無い worktree で record.py が書く行: `repo` はその worktree のディレクトリ名（`sai-issue-448` / `dev-lyrica`）、`project` は記録のある worktree と同じ（`Naturalclar/sai` / `AnotherBall/persona-server`）。そのためエンティティ ID の `repo` を `from` から借りず、その worktree の名前で組み立てる。
+
 ## claude --bg（#462）
 
 実測（2.1.276〜278）で分かった 4 つがこの形を決めている。

@@ -1153,6 +1153,12 @@ export interface ReplyResponse {
 export interface NewSessionRequest {
   /** どの worktree で始めるか。そこで記録されたことのあるセッションの ID */
   from: string
+  /**
+   * `from` と同じリポジトリの、記録の無い兄弟 worktree で始めるとき（#319）の鍵（`GET /api/workspaces` の `worktree`）。
+   * **パスではない**: サーバが `from` の cwd で `git worktree list` を読み直し、その中に同じ鍵があるときだけ通す。
+   * 省略は `from` の cwd で始める
+   */
+  worktree?: string
   text: string
   /**
    * どのエージェントで始めるか（#401。OpenCode は #452）。省略は `claude`。
@@ -1168,6 +1174,27 @@ export interface NewSessionRequest {
    * **許可・質問は画面では答えられない**（`--permission-prompt-tool` が使われない）ので、端末で attach して答える
    */
   background?: boolean
+}
+
+/** 記録の無い兄弟 worktree 1 つ（#319）。`from` は同じリポジトリの、記録のある一番新しいセッション */
+export interface SiblingWorktree {
+  from: string
+  /** `NewSessionRequest.worktree` に入れる鍵 */
+  worktree: string
+  cwd: string
+  /** worktree 名（toplevel の basename。record.py の `repo` と同じ） */
+  repo: string
+  branch: string
+  project: string
+}
+
+/**
+ * `GET /api/workspaces`（#319）。新しいセッションを始められる場所。`recorded` は記録にある cwd のうち
+ * **git の作業ツリーの中にあるもの**の、その cwd で一番新しいセッションの ID（`/`・`/tmp`・scratchpad は入らない）
+ */
+export interface WorkspacesResponse {
+  recorded: string[]
+  siblings: SiblingWorktree[]
 }
 
 export interface NewSessionResponse {

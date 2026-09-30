@@ -9,9 +9,9 @@ interface Props {
   onQuery: (query: string) => void
   /** 絞ったあとの候補（当たりの良い順。`filterWorkspaces()`） */
   matches: readonly WorkspaceMatch[]
-  /** いま選んでいる worktree の `from`（無ければ null） */
+  /** いま選んでいる worktree の `key`（無ければ null） */
   chosen: string | null
-  onSelect: (from: string) => void
+  onSelect: (key: string) => void
   /** 絞り込み欄で Enter を押した（最初の指示の欄へ移る） */
   onPick: () => void
   disabled: boolean
@@ -20,18 +20,18 @@ interface Props {
 /**
  * 新しいセッションの worktree を、打った文字で絞って選ぶ（#489）。`<select>` は打って絞れないので置き換えた。
  * **選んでいるのはハイライトしている 1 つ**（決定のボタンは無い）で、↑↓ で動かし、Enter で最初の指示の欄へ移る。
- * サーバに送るのは今までどおり `from` だけ（パスは送らない。#314）
+ * サーバに送るのは今までどおり `from`（と兄弟 worktree の鍵。#319）だけ（パスは送らない。#314）
  */
 export function WorkspacePicker({ query, onQuery, matches, chosen, onSelect, onPick, disabled }: Props) {
   const listRef = useRef<HTMLUListElement>(null)
   // 親は「絞った候補の中の選んだもの、無ければ先頭」を chosen にするので、見つからなければ先頭
-  const at = Math.max(0, matches.findIndex((m) => m.workspace.from === chosen))
+  const at = Math.max(0, matches.findIndex((m) => m.workspace.key === chosen))
 
   const move = (direction: 'prev' | 'next') => {
     const to = moveIndex(at, matches.length, direction)
     const next = matches[to]
     if (!next) return
-    onSelect(next.workspace.from)
+    onSelect(next.workspace.key)
     listRef.current?.querySelectorAll('li.pick')[to]?.scrollIntoView({ block: 'nearest' })
   }
 
@@ -74,7 +74,7 @@ export function WorkspacePicker({ query, onQuery, matches, chosen, onSelect, onP
         {matches.length === 0 && query && <li className="none">当たる worktree がありません</li>}
         {matches.map((m, i) => (
           <li
-            key={m.workspace.from}
+            key={m.workspace.key}
             id={`workspace-${i}`}
             className={`pick${i === at ? ' active' : ''}`}
             role="option"
@@ -82,7 +82,7 @@ export function WorkspacePicker({ query, onQuery, matches, chosen, onSelect, onP
             title={m.workspace.cwd}
             // 押しても絞り込み欄のフォーカスを奪わない（続けて打てるように）
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => onSelect(m.workspace.from)}
+            onClick={() => onSelect(m.workspace.key)}
           >
             <span className="label">
               <Highlight text={m.label} hits={m.labelHits} />

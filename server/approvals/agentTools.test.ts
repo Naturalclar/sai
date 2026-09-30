@@ -10,7 +10,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { APPROVE_MCP_PATH } from '../reply/runner.ts'
-import { agentTool } from './approve-mcp.ts'
+import { AGENT_TOOLS, agentTool, overlapLabel } from './approve-mcp.ts'
 
 let dir: string
 let server: Server
@@ -155,4 +155,24 @@ test('approve-mcp.ts: トークンの置き場を渡されたときだけ sai_* 
   assert.deepEqual(withToken.tools, ['approve', 'sai_sessions', 'sai_send', 'sai_wait'])
   const text = ((withToken.call!.result as { content: { text: string }[] }).content[0]!.text)
   assert.match(text, /B1@r「レビュー」/)
+})
+
+test('overlapLabel: 同じファイルを 1 行に出す。無ければ空・古いサーバの応答（overlap が無い）でも落ちない（#564）', () => {
+  assert.equal(overlapLabel({ overlap: ['server/app.ts', 'shared/types.ts'], overlap_more: 0 }), ' 同じファイル: server/app.ts, shared/types.ts')
+  assert.equal(overlapLabel({ overlap: ['a.ts'], overlap_more: 3 }), ' 同じファイル: a.ts ほか 3 件')
+  assert.equal(overlapLabel({ overlap: [], overlap_more: 0 }), '')
+  assert.equal(overlapLabel({} as never), '', '上の sai_sessions の偽物は overlap を返さない（古いサーバ）')
+})
+
+test('AGENT_TOOLS: 説明を書き直しても、ツールの名前と引数は変わらない（#564）', () => {
+  assert.deepEqual(
+    AGENT_TOOLS.map((t) => [t.name, Object.keys(t.inputSchema.properties), 'required' in t.inputSchema ? t.inputSchema.required : []]),
+    [
+      ['sai_sessions', [], []],
+      ['sai_send', ['to', 'text'], ['to', 'text']],
+      ['sai_wait', ['message_id'], ['message_id']],
+    ],
+  )
+  const send = AGENT_TOOLS.find((t) => t.name === 'sai_send')!.description
+  assert.ok(send.indexOf('使う場面') < send.indexOf('1 ターンに'), '使う場面を先に、制限は後ろに書く')
 })

@@ -106,7 +106,7 @@ import type { Digester } from './digest/digest.ts'
 import { META_FILE, MetaStore } from './meta/meta.ts'
 import { collectPermissions } from './approvals/permissions.ts'
 import { compareUrl, parseUnifiedDiff } from '../shared/diff.ts'
-import { clampPatch, NotAGitRepo, RealGit, resolveBase, sessionDiff, sessionDiffSummary } from './git/diff.ts'
+import { changedPaths, clampPatch, NotAGitRepo, RealGit, resolveBase, sessionDiff, sessionDiffSummary } from './git/diff.ts'
 import { prBrowserFromEnv } from './git/prs.ts'
 import type { PrBrowser } from './git/prs.ts'
 import { diffStats, isPrNumber, knownRepos, pickKnownRepo } from '../shared/prs.ts'
@@ -133,6 +133,7 @@ import {
   AGENT_TEXT_MAX_CHARS,
   AGENT_TURN_READ_BUDGET,
   agentEntry,
+  agentOverlap,
   agentTargets,
   budgetRefusal,
   clipReply,
@@ -244,6 +245,8 @@ const AGENT_PREFIX = '/api/agent/'
 /** tailnet から MCP で呼ぶ口（#312。Streamable HTTP） */
 const MCP_PATH = '/mcp'
 const AGENT_SESSIONS_PATH = '/api/agent/sessions'
+/** `overlap`（#564）の材料を覚える時間 */
+export const CHANGED_PATHS_TTL_MS = 30_000
 const AGENT_SEND_PATH = '/api/agent/send'
 const AGENT_WAIT_PATH = '/api/agent/wait'
 /** sai_wait をサーバ側で待つ間、相手の返答の行が届いたかを見る間隔 */
@@ -1938,6 +1941,23 @@ export function createApp(
     return { session, sessions, turn: turn.since }
   }
 
+  /**
+   * worktree で変わっているファイル（#564 の `overlap`）。**ツールが呼ばれたときだけ**読み（ポーリングには乗せない）、
+   * `(cwd, last_turn_ts)` で `CHANGED_PATHS_TTL_MS` だけ覚える。時間でも切るのは、呼んだ側はターンの途中で編集していて
+   * `last_turn_ts` が変わらないため。cwd は行から取り、リクエストからは受けない
+   */
+  const changedCache = new Map<string, { at: number; paths: Promise<{ root: string; paths: string[] }> }>()
+  const changedOf = (s: SessionSummary): Promise<{ root: string; paths: string[] }> => {
+    if (!s.cwd || isRemoteHost(s.host, selfHost())) return Promise.resolve({ root: '', paths: [] })
+    const key = `${s.cwd}\0${s.last_turn_ts ?? ''}`
+    const hit = changedCache.get(key)
+    if (hit && Date.now() - hit.at < CHANGED_PATHS_TTL_MS) return hit.paths
+    const paths = changedPaths(git, s.cwd).catch(() => ({ root: '', paths: [] as string[] }))
+    for (const [k, v] of changedCache) if (Date.now() - v.at >= CHANGED_PATHS_TTL_MS) changedCache.delete(k)
+    changedCache.set(key, { at: Date.now(), paths })
+    return paths
+  }
+
   /** GET /api/agent/sessions?from=。話しかけられる相手（同じ project の、返信できる別のセッション） */
   const agentSessions = async (req: IncomingMessage, res: ServerResponse, q: URLSearchParams) => {
     const refusal = agentRefusal(req)
@@ -1948,9 +1968,13 @@ export function createApp(
     const targets = agentTargets(found.sessions, found.session, selfHost())
     // 相手が読み直す量（直近の呼び出しの入力）。transcript の末尾を読むだけで、(mtime, size) が同じなら組み直さない（#311）
     const sizes = await Promise.all(targets.map(async (s) => (await progress.read(s)).context_tokens))
+    // 同じファイルを触っているか（#564）。知らせるだけで、送るかはエージェントが決める
+    const [mine, ...theirs] = await Promise.all([changedOf(found.session), ...targets.map(changedOf)])
     const payload: AgentSessionsResponse = {
       from: found.session.id,
-      sessions: targets.map((s, i) => agentEntry(s, busy(s.id), sizes[i] ?? 0)),
+      sessions: targets.map((s, i) =>
+        agentEntry(s, busy(s.id), sizes[i] ?? 0, agentOverlap(mine ?? { root: '', paths: [] }, theirs[i] ?? { root: '', paths: [] })),
+      ),
     }
     return json(res, payload)
   }

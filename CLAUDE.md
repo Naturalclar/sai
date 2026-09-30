@@ -54,6 +54,7 @@ python3 -m unittest feed.test_record -k synth
 
 ### PR とマージ
 
+- **着手の前に、並行しているセッションと同じファイルを触っていないかを見る**（#564）。SAI から回っているターンなら `sai_sessions` の「同じファイル」で分かる。同じ関数・同じ箇所を変えていそうなら `sai_send` で 1 回だけ聞く（別の場所に足すだけなら聞かない）
 - PR のベースは **必ず `main`**。積み重ねた PR は下が入ってからリベースしてベースを `main` に付け替える（`gh pr edit --base` が GraphQL の非推奨エラーで落ちたら `gh api -X PATCH repos/<owner>/<repo>/pulls/<番号> -f base=main`）
 - マージは **squash マージ**。`main` は PR 1 つ = コミット 1 つ
 - **マージの前に、書いた本人とは別の目で 1 回レビューする**（#449。手順は `/merge`）。自分で読み直すのは代わりにならないので、`/code-review <番号>`（別プロセス）かサブエージェントに読ませる

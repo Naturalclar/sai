@@ -19,7 +19,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { AGENT_SEND_MAX, tokensLabel } from '../../shared/agentMessages.ts'
-import type { AgentSendResponse, AgentSessionsResponse, AgentWaitResponse, ApprovalAnswer, ApprovalRequest } from '../../shared/types.ts'
+import type { AgentSendResponse, AgentSessionEntry, AgentSessionsResponse, AgentWaitResponse, ApprovalAnswer, ApprovalRequest } from '../../shared/types.ts'
 
 export const TOOL_NAME = 'approve'
 
@@ -37,12 +37,12 @@ export const AGENT_TOOLS = [
   {
     name: 'sai_sessions',
     description:
-      'SAI に並んでいる、同じリポジトリの別のセッション（話しかけられる相手）の一覧。id・呼び名・エージェント・ブランチ・処理中か・読み直す量・最後の発言の 1 行だけで、本文は含まない。別のセッションに頼む・聞く前に使う。読み直す量が大きい相手ほど、送ったときにトークンを使う',
+      '同じリポジトリで並行している別のセッションの一覧。着手の前と、PR を出す・マージする前に 1 回見る。「同じファイル」は、あなたの worktree と相手の worktree のどちらでも変わっているファイル（CLAUDE.md・README.md・docs/ は数えない）。そこに同じ関数・同じ箇所を変えていそうなファイルがあれば sai_send で 1 回だけ聞く（別の場所に足すだけなら聞かなくてよい）。ほかに id・呼び名・エージェント・ブランチ・処理中か・読み直す量・最後の発言の 1 行が出る（本文は含まない）',
     inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'sai_send',
-    description: `SAI の別のセッションにメッセージを送る（to は sai_sessions の id）。相手が処理中なら、終わってから回る。返答は sai_wait で受け取る。1 ターンに ${AGENT_SEND_MAX} 回まで、別のセッションから受け取ったメッセージで回っているターンからは送れない。相手の使用量の枠が残り少ないとき、1 ターンで相手に読み直させる量が予算を超えるときも送れない。受け取った相手はそれまでの長い会話を読み直すのでトークンを大きく使う: 1 回で済むように、何をしてほしいか・何を返してほしいかを短く具体的に書く`,
+    description: `SAI の別のセッションにメッセージを送る（to は sai_sessions の id）。**使う場面**: sai_sessions の「同じファイル」に、あなたが変える関数・箇所を相手も変えていそうなとき（着手の前かマージの前に 1 回、どこをどう変えるか・変えたかを聞く）／相手が入れた機能の上に乗せるとき、壊してはいけない前提を聞く。**使わない場面**: リポジトリと docs/ を読めば分かること／同じファイルでも別の場所に足すだけで箇所が重ならない変更。相手が処理中なら、終わってから回る。返答は sai_wait で受け取る。受け取った相手はそれまでの長い会話を読み直すのでトークンを大きく使う: 1 回で済むように、何をしてほしいか・何を返してほしいかを短く具体的に書く。1 ターンに ${AGENT_SEND_MAX} 回まで。別のセッションから受け取ったメッセージで回っているターンからは送れない。相手の使用量の枠が残り少ないとき、1 ターンで相手に読み直させる量が予算を超えるときも送れない`,
     inputSchema: {
       type: 'object',
       properties: { to: { type: 'string', description: '送り先のセッションの id' }, text: { type: 'string', description: '頼みたいこと・聞きたいこと' } },
@@ -55,6 +55,13 @@ export const AGENT_TOOLS = [
     inputSchema: { type: 'object', properties: { message_id: { type: 'string', description: 'sai_send が返した message_id' } }, required: ['message_id'] },
   },
 ]
+
+/** sai_sessions の 1 行に出す「同じファイル」（#564）。無ければ空。古いサーバの応答（overlap が無い）でも落ちない */
+export function overlapLabel(s: Pick<AgentSessionEntry, 'overlap' | 'overlap_more'>): string {
+  const files = s.overlap ?? []
+  if (files.length === 0) return ''
+  return ` 同じファイル: ${files.join(', ')}${s.overlap_more ? ` ほか ${s.overlap_more} 件` : ''}`
+}
 
 export interface ToolResult {
   content: { type: 'text'; text: string }[]
@@ -107,7 +114,7 @@ export async function agentTool(
         body.sessions
           .map(
             (s) =>
-              `- ${s.id}「${s.name}」${s.agent}${s.branch ? ` ${s.branch}` : ''}${s.busy ? '（処理中）' : ''}${s.context_tokens ? ` 読み直す量: ${tokensLabel(s.context_tokens)}` : ''}${s.last_text ? ` 最後の発言: ${s.last_text}` : ''}`,
+              `- ${s.id}「${s.name}」${s.agent}${s.branch ? ` ${s.branch}` : ''}${s.busy ? '（処理中）' : ''}${s.context_tokens ? ` 読み直す量: ${tokensLabel(s.context_tokens)}` : ''}${overlapLabel(s)}${s.last_text ? ` 最後の発言: ${s.last_text}` : ''}`,
           )
           .join('\n'),
       )

@@ -4,7 +4,9 @@ import {
   AGENT_TURN_READ_BUDGET,
   AGENT_USAGE_STOP_PERCENT,
   AGENT_WEEKLY_STOP_PERCENT,
+  AGENT_OVERLAP_SHOW,
   agentEntry,
+  agentOverlap,
   agentTargets,
   budgetRefusal,
   clipReply,
@@ -132,4 +134,22 @@ test('deliveredFromTailnet: tailnet の MCP から来たメッセージも、同
   assert.ok(text.endsWith('\n\n見て'))
   assert.equal(isDeliveryOf(text, 'abc123'), true)
   assert.equal(isDeliveryOf(text, 'abc12'), false)
+})
+
+test('agentOverlap: どちらの worktree でも変わっているファイル。CLAUDE.md・README.md・docs/ は数えず、多ければ先頭と残りの数（#564）', () => {
+  const mine = { root: '/w/a', paths: ['server/app.ts', 'shared/types.ts', 'CLAUDE.md', 'web/CLAUDE.md', 'README.md', 'docs/internals/agents.md'] }
+  const theirs = { root: '/w/b', paths: ['shared/types.ts', 'server/app.ts', 'CLAUDE.md', 'web/CLAUDE.md', 'README.md', 'docs/internals/agents.md', 'web/src/App.tsx'] }
+  assert.deepEqual(agentOverlap(mine, theirs), { overlap: ['server/app.ts', 'shared/types.ts'], overlap_more: 0 })
+  assert.deepEqual(agentOverlap(mine, { ...theirs, root: '/w/a' }), { overlap: [], overlap_more: 0 }, '同じ worktree（トップが同じ）は差分が同じなので重なりではない')
+  assert.deepEqual(agentOverlap({ root: '', paths: mine.paths }, theirs), { overlap: [], overlap_more: 0 }, 'トップが分からなければ出さない')
+  const many = Array.from({ length: AGENT_OVERLAP_SHOW + 3 }, (_, i) => `src/f${i}.ts`)
+  const got = agentOverlap({ root: '/w/a', paths: many }, { root: '/w/b', paths: [...many].reverse() })
+  assert.equal(got.overlap.length, AGENT_OVERLAP_SHOW)
+  assert.equal(got.overlap_more, 3)
+  assert.deepEqual(got.overlap, [...many].sort().slice(0, AGENT_OVERLAP_SHOW), 'パスの順')
+})
+
+test('agentEntry: overlap を渡さなければ空（#564）', () => {
+  const e = agentEntry({ id: 'B1@r', title: 't', project: 'o/r', branch: 'x', agent: 'claude', last_text: '' } as unknown as SessionSummary, false)
+  assert.deepEqual([e.overlap, e.overlap_more], [[], 0])
 })

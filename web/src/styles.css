@@ -320,6 +320,13 @@
   .todo .why .note { color: var(--muted); font-size: 11px; }
   /* 行から次の指示を送る（#522）。開いている間は下段の行も薄くしない */
   .todo .why .todo-reply-open { font-size: 12px; }
+  /* 一言のもとの本文（#537）。バブルの「詳細」と同じ見た目（左の罫線・本文は ink） */
+  .todo .why .todo-source-toggle { font-size: 11px; color: var(--muted); }
+  .todo .why .todo-source-toggle:hover { color: var(--accent); }
+  .todo .todo-source { margin-top: 6px; padding: 6px 10px; border-left: 3px solid var(--line); font-size: 13px; overflow-wrap: anywhere; }
+  .todo .todo-source.note { color: var(--muted); font-size: 12px; }
+  .todo .todo-source .body.clamped { max-height: 9.5em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent); }
+  .todo .todo-source .more { font-size: 12px; color: var(--accent); }
   .todo.done:has(.todo-reply) { opacity: 1; }
   .todo-reply { margin-top: 8px; }
   .todo-reply .reply { margin-top: 0; }

@@ -1260,6 +1260,15 @@ export interface GalleryItem {
   source: 'text' | 'attachment' | 'transcript'
 }
 
+/**
+ * `GET /api/sessions/<id>/turn?ts=` の応答（#537）。そのセッションの、`ts` のターン完了の行（無ければ null）。
+ * 要対応の「終了」の行で、一言（要約）のもとになった本文を開くときに使う（一覧の `last_text` は 1 行目の 120 字だけ）
+ */
+export interface SessionTurnResponse {
+  id: string
+  row: FeedRow | null
+}
+
 /** GET /api/sessions/<id>/gallery。そのセッションに出てきた画像（新しい順）。開いたときと新しいターンが記録されたときだけ取る */
 export interface GalleryResponse {
   id: string

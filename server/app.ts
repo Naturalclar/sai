@@ -11,7 +11,7 @@ import { mergeProfile, PROFILE_ICON_ID, profileIconUrl } from '../shared/profile
 import { isPersonaId } from '../shared/persona.ts'
 import { canSteer, replyBlockedReason, replyFailureText } from '../shared/reply.ts'
 import { selfHost } from './host.ts'
-import type {
+import type { SessionTurnResponse,
   AgentActivity,
   AgentActivityMessage,
   AgentStopResponse,
@@ -190,6 +190,8 @@ const PERMISSIONS_SUFFIX = '/permissions'
 const DIFF_SUFFIX = '/diff'
 const PROGRESS_SUFFIX = '/progress'
 const GALLERY_SUFFIX = '/gallery'
+/** 一言のもとになったターン完了の行（#537） */
+const TURN_SUFFIX = '/turn'
 /** `GET /api/sessions/<id>/transcript-images/<key>`（#504）。id は `/` を含まないので、最初のこれが区切り */
 const TRANSCRIPT_IMAGES_SEGMENT = '/transcript-images/'
 const ATTACHMENTS_SUFFIX = '/attachments'
@@ -2207,6 +2209,21 @@ export function createApp(
   }
 
   /**
+   * GET /api/sessions/<id>/turn?ts=（#537）。そのセッションの、`ts` のターン完了の行。`ts` が無ければ一番新しいもの。
+   * 要対応の「終了」の行で一言（要約）のもとの本文を開くためで、**押したときに 1 回だけ**取る（一覧のポーリングには載せない）。
+   * 一言は `(id, last_turn_ts)` で引いているので、同じ `ts` を渡せば同じ行が返る（新しいターンが届いていても取り違えない）。
+   * 同じ秒に 2 本あれば、あとに書かれた方（`aggregate.ts` の `last_turn_ts` と同じ）
+   */
+  const getTurn = async (res: ServerResponse, id: string, ts: string, days: number) => {
+    const { sessions } = await store.sessions(days)
+    if (!sessions.some((s) => s.id === id)) return error(res, 404, 'session not found in window')
+    const turns = (await store.rows(days)).filter((r) => eventKind(r.event, r.text) === 'turn' && entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
+    const hits = ts ? turns.filter((r) => r.ts === ts) : turns
+    const payload: SessionTurnResponse = { id, row: hits.at(-1) ?? null }
+    return json(res, payload)
+  }
+
+  /**
    * GET /api/sessions/<id>/progress（#302）。処理中のターンがいま何をしているか。transcript / rollout の末尾を読むだけ。
    * パスは行の cwd とセッション ID から組み立てる（リクエストからは受けない）。3 秒のポーリングには乗せない
    * （画面が処理中のセッションを出している間だけ、そのセッションの分を取る）。
@@ -2732,6 +2749,11 @@ export function createApp(
         res.writeHead(200, imageHeaders(img, q.get('download') === '1'))
         res.end(method === 'HEAD' ? undefined : img.bytes)
         return
+      }
+      if (path.startsWith(SESSIONS_PREFIX) && path.endsWith(TURN_SUFFIX) && method === 'GET') {
+        const id = sessionIdFrom(path, TURN_SUFFIX)
+        if (id === null) return error(res, 400, 'bad session id')
+        return await getTurn(res, id, q.get('ts') ?? '', parseDays(q.get('days'), 90))
       }
       if (isProgress) {
         const id = sessionIdFrom(path, PROGRESS_SUFFIX)

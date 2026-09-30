@@ -10,10 +10,11 @@
 //   `model`（`{providerID, modelID}`）と `parts`（text / file）を**ターンごとに**渡せるので、今までの `-m` / `-f` と同じ
 // - 許可（read / bash）は**聞かれずに通った**。`opencode run` が許可を自動 reject して本文なしで終わる（#273）のに当たらない。
 //   ただし設定で `ask` にしている人は答え待ちで止まる（答える口は #382 の 2 段目）
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { basename, extname } from 'node:path'
+import { closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { basename, dirname, extname } from 'node:path'
 import { homedir } from 'node:os'
 import { opencodeModels } from '../../shared/models.ts'
 import { parsePermissions } from '../../shared/opencodePermissions.ts'
@@ -27,6 +28,48 @@ import type { Replying, ReplyingMap, SessionTodo } from '../../shared/types.ts'
 
 /** サーバが立ち上がるのを待つ上限 */
 export const OPENCODE_SERVE_WAIT_MS = 20_000
+/** SAI が起こした `opencode serve` の居場所・鍵・回しているターンを残すファイル（feed dir の中。#440） */
+export const OPENCODE_SERVE_FILE = 'opencode-serve.json'
+/** `opencode serve` の出力の置き場（feed dir の中。pipe にしない理由は `spawnServe()`） */
+export const OPENCODE_SERVE_LOG = 'opencode-serve.log'
+
+/** `OpencodeServer` を立て直しをまたいで使うための置き場（#440）。渡さなければ今までどおり SAI と一緒に落ちる */
+export interface OpencodeServeState {
+  /** 居場所・鍵・回しているターン（`OPENCODE_SERVE_FILE`） */
+  statePath: string
+  /** 出力の置き場（`OPENCODE_SERVE_LOG`） */
+  logPath: string
+  /** 生きていて `opencode serve` か（テストが差し替える。既定は `isServeProcess()`） */
+  alive?: (pid: number) => boolean
+  /** 落とす（テストが差し替える。自分のプロセスを落とさないように） */
+  kill?: (pid: number) => void
+}
+
+interface PersistedServe {
+  pid: number
+  url: string
+  password: string
+  /** 回しているターン（エンティティID → 画面に出す処理中と、OpenCode のセッションID） */
+  turns: Record<string, { since: string; text: string; session: string }>
+}
+
+/**
+ * その pid が生きていて、**いまも `opencode serve` か**（#519 のレビュー）。残したファイルの pid は、serve が落ちたあと
+ * OS に使い回されることがあるので、生きているだけで引き取る・落とすと、無関係のプロセスを落としてしまう
+ */
+export const isServeProcess = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0)
+  } catch {
+    return false
+  }
+  try {
+    const command = execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf-8', timeout: 2_000 })
+    return /\bopencode\b/.test(command) && /\bserve\b/.test(command)
+  } catch {
+    return false
+  }
+}
 
 /** 保留を 1 回引いた結果。**引けたか（`ok`）も返す**（#422。引けないことと「保留が無い」を混ぜない） */
 export interface OpencodePendingResult {
@@ -124,6 +167,11 @@ export function promptBody(input: OpencodeTurnInput): Record<string, unknown> {
   return { ...(model ? { model } : {}), parts }
 }
 
+/** `opencode serve` の鍵（`OPENCODE_SERVER_PASSWORD`）から Basic 認証のヘッダを作る */
+function basicAuth(password: string): string {
+  return `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}`
+}
+
 /** 起動したサーバが stdout に出す行から待ち受け先を取る（`opencode server listening on http://127.0.0.1:52341`） */
 export function listeningUrl(line: string): string {
   return /listening on (http:\/\/\S+)/.exec(line)?.[1] ?? ''
@@ -142,11 +190,136 @@ export class OpencodeServer implements OpencodeApp {
   private readonly now: () => number
   /** サーバの起こし方。テストでは**本物の HTTP サーバ**を指す関数を渡す（`opencode` のバイナリに触らない） */
   private readonly serveFn: (() => Promise<{ url: string; auth: string }>) | undefined
+  /** 立て直しをまたぐための置き場（#440）。無ければ SAI と一緒に落ちる（#457 のまま） */
+  private readonly state: OpencodeServeState | undefined
+  /** 前のサーバが残した `opencode serve` を引き取ったときの pid（自分の子ではないので `child` は無い） */
+  private adoptedPid = 0
+  /** いまの `opencode serve` の鍵（残すファイルに書く。`ready.auth` からは戻せないので別に持つ） */
+  private password = ''
 
-  constructor(fetchFn: typeof fetch = fetch, now: () => number = Date.now, serveFn?: () => Promise<{ url: string; auth: string }>) {
+  constructor(fetchFn: typeof fetch = fetch, now: () => number = Date.now, serveFn?: () => Promise<{ url: string; auth: string }>, state?: OpencodeServeState) {
     this.fetchFn = fetchFn
     this.now = now
     this.serveFn = serveFn
+    this.state = state
+    this.adopt()
+  }
+
+  private alive(pid: number): boolean {
+    return (this.state?.alive ?? isServeProcess)(pid)
+  }
+
+  /** 引き取った serve の確かめが終わったら解ける（テストが待つ）。引き取っていなければ最初から解けている */
+  adopted: Promise<void> = Promise.resolve()
+
+  /** 立っているか。自分の子なら exit していないか、引き取ったものなら pid が生きているか */
+  private up(): boolean {
+    if (this.child) return this.child.exitCode === null
+    return this.adoptedPid > 0 && this.alive(this.adoptedPid)
+  }
+
+  /**
+   * 前のサーバが残した `opencode serve` を引き取る（#440）。pid が生きていれば、居場所と鍵をそのまま使い、
+   * 回していたターンも処理中として戻す（行が届けば `settle()` が片付ける）。死んでいればファイルを消す
+   */
+  private adopt(): void {
+    if (!this.state) return
+    let raw: Partial<PersistedServe> | null = null
+    try {
+      raw = JSON.parse(readFileSync(this.state.statePath, 'utf-8')) as Partial<PersistedServe>
+    } catch {
+      return
+    }
+    const ok = raw && typeof raw.pid === 'number' && raw.pid > 0 && typeof raw.url === 'string' && typeof raw.password === 'string'
+    if (!ok || !this.alive(raw!.pid!)) {
+      this.forget()
+      return
+    }
+    this.adoptedPid = raw!.pid!
+    this.password = raw!.password!
+    this.ready = { url: raw!.url!, auth: basicAuth(this.password) }
+    for (const [id, t] of Object.entries(raw!.turns ?? {})) {
+      if (typeof t?.since !== 'string' || typeof t.text !== 'string' || typeof t.session !== 'string') continue
+      this.active.set(id, { since: t.since, text: t.text, interruptible: true })
+      this.sessions.set(id, t.session)
+    }
+    this.adopted = this.verifyAdopted()
+  }
+
+  /**
+   * 引き取った serve と、戻したターンを本体に確かめる（#519 のレビュー）。
+   * - **残した鍵で答えなければ使わない**（落とさない。別物かもしれないので触らず、次の返信で起こし直す）
+   * - **戻したターンは、本体がいまも回していると言うものだけ残す**。行が届かないまま残った「処理中」が、立て直しのたびに
+   *   持ち越されて永久に消えない（前は立て直せば消えた）・ずっと「回している」ので C-c で serve が落ちない、を防ぐ。
+   *   `GET /session/status` は `directory` ごとなので、セッションの `directory` を引いてから聞く（1.18.30 で実測）
+   */
+  private async verifyAdopted(): Promise<void> {
+    const ready = this.ready
+    if (!ready) return
+    const get = async (path: string): Promise<unknown> => {
+      const res = await this.fetchFn(`${ready.url}${path}`, { headers: { authorization: ready.auth } })
+      if (!res.ok) throw new Error(String(res.status))
+      return res.json()
+    }
+    try {
+      await get('/session/status')
+    } catch {
+      if (this.ready === ready) {
+        this.ready = null
+        this.adoptedPid = 0
+        this.active.clear()
+        this.sessions.clear()
+        this.forget()
+      }
+      return
+    }
+    for (const [id, session] of [...this.sessions]) {
+      let busy = false
+      try {
+        const info = (await get(`/session/${encodeURIComponent(session)}`)) as { directory?: unknown }
+        const dir = typeof info?.directory === 'string' ? `?directory=${encodeURIComponent(info.directory)}` : ''
+        const status = (await get(`/session/status${dir}`)) as Record<string, unknown>
+        busy = Boolean(status && typeof status === 'object' && session in status)
+      } catch {
+        busy = false
+      }
+      if (!busy && this.sessions.get(id) === session) {
+        this.active.delete(id)
+        this.sessions.delete(id)
+      }
+    }
+    this.persist()
+  }
+
+  /** いまの居場所・鍵・回しているターンを書く（tmp → rename。鍵が入るので 0600）。立っていなければ何もしない */
+  private persist(): void {
+    if (!this.state || !this.ready || !this.up()) return
+    const pid = this.child?.pid ?? this.adoptedPid
+    if (!pid) return
+    const turns: PersistedServe['turns'] = {}
+    for (const [id, r] of this.active) {
+      const session = this.sessions.get(id)
+      if (session) turns[id] = { since: r.since, text: r.text, session }
+    }
+    const body: PersistedServe = { pid, url: this.ready.url, password: this.password, turns }
+    try {
+      mkdirSync(dirname(this.state.statePath), { recursive: true })
+      const tmp = `${this.state.statePath}.${process.pid}.tmp`
+      writeFileSync(tmp, JSON.stringify(body, null, 2) + '\n', { mode: 0o600 })
+      renameSync(tmp, this.state.statePath)
+    } catch {
+      // 書けなければ立て直しで引き取れないだけ（#440 より前と同じ）
+    }
+  }
+
+  /** 残したファイルを消す（落とした・落ちた） */
+  private forget(): void {
+    if (!this.state) return
+    try {
+      rmSync(this.state.statePath, { force: true })
+    } catch {
+      // 次の起動で pid が死んでいれば消える
+    }
   }
 
   running(id: string): boolean {
@@ -166,6 +339,7 @@ export class OpencodeServer implements OpencodeApp {
         done.push(id)
       }
     }
+    if (done.length > 0) this.persist()
     return done
   }
 
@@ -200,6 +374,7 @@ export class OpencodeServer implements OpencodeApp {
     // `prompt_async` が 204 を返した時点でターンは回っているので、すぐ止められる（#392。Codex と違って turnId を待たない）
     this.active.set(input.id, { since: new Date(this.now()).toISOString(), text: input.text, interruptible: true })
     this.sessions.set(input.id, input.session)
+    this.persist()
   }
 
   async abort(id: string): Promise<boolean> {
@@ -212,6 +387,7 @@ export class OpencodeServer implements OpencodeApp {
     if (!live) {
       this.active.delete(id)
       this.sessions.delete(id)
+      this.persist()
       return true
     }
     const res = await this.fetchFn(`${live.url}/session/${encodeURIComponent(session)}/abort`, {
@@ -222,6 +398,7 @@ export class OpencodeServer implements OpencodeApp {
     // 行（本文の空の session.idle）が届くのを待たずに片付ける（Codex の clearThread() と同じ。届かなくても「処理中」を残さない）
     this.active.delete(id)
     this.sessions.delete(id)
+    this.persist()
     return true
   }
 
@@ -304,7 +481,7 @@ export class OpencodeServer implements OpencodeApp {
    */
   private async live(): Promise<{ url: string; auth: string } | null> {
     if (this.serveFn) return this.serveFn()
-    return this.ready && this.child && this.child.exitCode === null ? this.ready : null
+    return this.ready && this.up() ? this.ready : null
   }
 
   /**
@@ -337,8 +514,19 @@ export class OpencodeServer implements OpencodeApp {
    */
   stop(): void {
     this.disposed = true
-    this.child?.kill()
+    // **ターンを回している間は落とさずに渡す**（#440）。次の SAI が `opencode-serve.json` から引き取り、ターンはそのまま続く
+    // （前は立て直すたびにターンが途中で切れた）。回していなければ今までどおり落とす（#457。落とさないと立て直すたびに
+    // 孤児が 1 本ずつ増える）。渡したものも、次の SAI が引き取ったあとで回していないときに止めれば落ちるので、溜まらない
+    if (this.state && this.active.size > 0 && this.up()) {
+      this.persist()
+      this.child?.unref()
+    } else {
+      if (this.child) this.child.kill()
+      else if (this.adoptedPid > 0 && this.alive(this.adoptedPid)) (this.state?.kill ?? ((pid: number) => process.kill(pid)))(this.adoptedPid)
+      this.forget()
+    }
     this.child = null
+    this.adoptedPid = 0
     this.ready = null
     this.starting = null
   }
@@ -348,8 +536,9 @@ export class OpencodeServer implements OpencodeApp {
     // 止めたあとは起こさない（起こすと、終わりかけの SAI の子として孤児になる。#457）
     if (this.disposed) throw new Error('SAI を止めているところなので、opencode serve は起こしません')
     if (this.serveFn) return this.serveFn()
-    if (this.ready && this.child && this.child.exitCode === null) return this.ready
+    if (this.ready && this.up()) return this.ready
     this.ready = null
+    this.adoptedPid = 0
     this.starting ??= this.spawnServe().finally(() => {
       this.starting = null
     })
@@ -360,14 +549,32 @@ export class OpencodeServer implements OpencodeApp {
     // **鍵を付ける**（ループバックでも、鍵が無いと同じマシンの別のプロセスがエージェントを動かせてしまう）。
     // mDNS（`--mdns`）と `--cors` は使わない（「SAI は外に出さない」）
     const password = randomUUID()
-    const auth = `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}`
+    const auth = basicAuth(password)
+    // 立て直しをまたぐときは（#440）、**別の pgid で起こし（C-c の SIGINT を受けない）、出力はファイルに書かせる**。
+    // pipe のままだと、SAI が落ちたあとに書いた瞬間に EPIPE で死ぬ（返信の子の stdout を reply.log の fd にしているのと同じ理由）。
+    // 待ち受け先はそのファイルの、起こしたあとに書かれた分から読む
+    const logPath = this.state?.logPath ?? ''
+    let logStart = 0
+    let logFd: number | null = null
+    if (logPath) {
+      try {
+        mkdirSync(dirname(logPath), { recursive: true })
+        logFd = openSync(logPath, 'a', 0o600)
+        logStart = statSync(logPath).size
+      } catch {
+        logFd = null
+      }
+    }
     // cwd は worktree に縛らない（セッションの cwd はセッション側で決まる）
     const child = spawn('opencode', ['serve', '--port', '0', '--hostname', '127.0.0.1'], {
       cwd: homedir(),
       env: { ...childEnv(process.env), OPENCODE_SERVER_PASSWORD: password },
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: logFd !== null ? ['ignore', logFd, logFd] : ['ignore', 'pipe', 'pipe'],
+      detached: logFd !== null,
     })
+    if (logFd !== null) closeSync(logFd) // 子が持っているので、こちらは閉じる
     this.child = child
+    this.password = password
     return new Promise((resolve, reject) => {
       // 立ち上がる前に落ちた / 出力が来ないときだけ投げる。立ち上がったあとの exit は次の返信で起こし直す
       let settled = false
@@ -375,13 +582,16 @@ export class OpencodeServer implements OpencodeApp {
         child.kill()
         done(new Error(`opencode serve が ${OPENCODE_SERVE_WAIT_MS / 1000} 秒で立ち上がりませんでした`))
       }, OPENCODE_SERVE_WAIT_MS)
+      let poll: ReturnType<typeof setInterval> | null = null
       const done = (err: Error | null, url = '') => {
         if (settled) return
         settled = true
         clearTimeout(timer)
+        if (poll) clearInterval(poll)
         if (err) reject(err)
         else {
           this.ready = { url, auth }
+          this.persist() // 立った時点で書く（SAI が落ちても、次の SAI が引き取れる）
           resolve(this.ready)
         }
       }
@@ -389,10 +599,27 @@ export class OpencodeServer implements OpencodeApp {
         const url = listeningUrl(chunk.toString())
         if (url) done(null, url)
       })
+      if (logPath && !child.stdout) {
+        poll = setInterval(() => {
+          let text = ''
+          try {
+            // 起こしたあとに書かれた分だけ。位置はバイトで測ったので、バイトで切ってから文字にする（#519 のレビュー。
+            // 先に文字にしてから文字数で切ると、ログに ASCII でない文字があると切り所が後ろにずれて待ち受けの行を読み飛ばす）
+            text = readFileSync(logPath).subarray(logStart).toString('utf-8')
+          } catch {
+            return
+          }
+          const url = listeningUrl(text)
+          if (url) done(null, url)
+        }, 100)
+      }
       child.on('error', (err) => done(err))
       child.on('exit', (code) => {
+        // 渡したあと（`stop()` で `child` を外した）の exit は、次の SAI の持ち物なので触らない
+        if (this.child !== child) return
         this.child = null
         this.ready = null
+        this.forget()
         done(new Error(`opencode serve が終了しました（終了コード ${code}）`))
       })
     })

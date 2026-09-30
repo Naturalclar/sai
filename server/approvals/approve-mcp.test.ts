@@ -113,7 +113,8 @@ test('approve-mcp.ts: tools/call が SAI に預けられ、画面の答えがそ
 
 test('approve-mcp.ts: SAI に届かなければ deny（勝手に許可しない）', async () => {
   const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', APPROVE_MCP_PATH], {
-    env: { ...process.env, SAI_URL: 'http://127.0.0.1:9', SAI_ENTITY: 'S@r' },
+    // 届かなければ繋ぎ直すが（#440）、いつまでも届かなければ拒否に落ちる。待つ長さはテスト用に短くする
+    env: { ...process.env, SAI_URL: 'http://127.0.0.1:9', SAI_ENTITY: 'S@r', SAI_APPROVE_RECONNECT_MS: '1500' },
     stdio: ['pipe', 'pipe', 'pipe'],
   })
   const lines: string[] = []
@@ -124,5 +125,52 @@ test('approve-mcp.ts: SAI に届かなければ deny（勝手に許可しない�
     assert.match(decision.message, /SAI に届かない/)
   } finally {
     child.kill()
+  }
+})
+
+test('approve-mcp.ts: 答えを待っている間に SAI を立て直しても、繋ぎ直して同じ許可の答えを受け取る（#440）', async () => {
+  // 1 台目の SAI（預かりを approvals.json に書く）。返信の子は生きている扱い（replying.json から引き取った形）
+  const stateDir = await mkdtemp(join(tmpdir(), 'sai-mcp-restart-'))
+  await writeFile(join(stateDir, 'x.jsonl'), '')
+  const first = new Approvals()
+  // createApp は 1 回だけ作る（作るときに approvals.json を読むので、立て直しと同じ形になる）
+  const app1 = createApp(new FeedStore(stateDir), join(stateDir, 'dist'), runner, first)
+  let one: Server = createServer((req, res) => void app1(req, res))
+  await new Promise<void>((resolve) => one.listen(0, '127.0.0.1', resolve))
+  const addr = one.address()
+  const port = typeof addr === 'object' && addr ? addr.port : 0
+  const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', APPROVE_MCP_PATH], {
+    env: { ...process.env, SAI_URL: `http://127.0.0.1:${port}`, SAI_ENTITY: 'R@r', SAI_APPROVE_RECONNECT_MS: '20000' },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
+  const lines: string[] = []
+  let two: Server | null = null
+  try {
+    const pending = rpc(child, lines, { jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'approve', arguments: { tool_name: 'Bash', input: { command: 'git status' } } } })
+    // 預けられるまで待つ
+    for (let i = 0; i < 100 && (first.snapshot()['R@r'] ?? []).length === 0; i++) await new Promise((r) => setTimeout(r, 50))
+    const asked = first.snapshot()['R@r']?.[0]
+    assert.ok(asked, '1 台目に預けられた')
+    // 立て直す: 1 台目を落とし（待っている GET も切れる）、同じ港で 2 台目を立てる（別の Approvals。ファイルから引き取る）
+    one.closeAllConnections()
+    await new Promise<void>((resolve) => one.close(() => resolve()))
+    await new Promise((r) => setTimeout(r, 1_500)) // 落ちている間に MCP が 1 回は届かない
+    const second = new Approvals()
+    const app2 = createApp(new FeedStore(stateDir), join(stateDir, 'dist'), runner, second)
+    two = createServer((req, res) => void app2(req, res))
+    await new Promise<void>((resolve) => two!.listen(port, '127.0.0.1', resolve))
+    assert.equal(second.snapshot()['R@r']?.[0]?.approval_id, asked.approval_id, '2 台目が同じ預かりを引き取った')
+    assert.equal(second.answer(asked.approval_id, { behavior: 'allow', updatedInput: { command: 'git status' } }), true)
+    const call = await pending
+    const decision = JSON.parse((call.result as { content: { text: string }[] }).content[0]!.text) as { behavior: string }
+    assert.equal(decision.behavior, 'allow', '拒否に落ちず、2 台目で押した答えが CLI に届く')
+  } finally {
+    child.kill()
+    if (two) {
+      two.closeAllConnections()
+      await new Promise<void>((resolve) => two!.close(() => resolve()))
+    }
+    one = null as unknown as Server
+    await rm(stateDir, { recursive: true, force: true })
   }
 })

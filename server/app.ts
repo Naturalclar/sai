@@ -88,8 +88,8 @@ import { approvalMapKey, CodexDialogs, mergeApprovalMaps } from './reply/codexDi
 import { JevRisk } from './approvals/jev.ts'
 import { isJevAuto, jevAutoAllows, jevAutoDecision, jevAutoEligible, jevPercent, jevRuleState } from '../shared/jev.ts'
 import type { JevJudge } from './approvals/jev.ts'
-import { CodexTerminals, type CodexTerminalSource } from './reply/codexTerminal.ts'
-import { CodexPanes, type CodexPaneSource } from './reply/codexPanes.ts'
+import { CodexTerminals, paneClientOf, runUnixSockets, type CodexTerminalSource } from './reply/codexTerminal.ts'
+import { CodexPanes, parsePsCommands, realPsCommands, type CodexPaneSource } from './reply/codexPanes.ts'
 import { softWait } from './reply/softWait.ts'
 import { clearSettled, settledKey, WaitingSettle } from './reply/waitingSettle.ts'
 import type { WaitingSettleSource } from './reply/waitingSettle.ts'
@@ -533,6 +533,12 @@ export function createApp(
           return false
         }
       },
+      // 行の pid が共有の `codex app-server --listen`（ペインの外）のとき、そのペインの TUI がその客か（#562）
+      paneClient: async (pane, server) => {
+        const panePid = Number((await terminal.tmux.run(['display-message', '-p', '-t', pane, '#{pane_pid}'])).trim())
+        if (!panePid) return 0
+        return paneClientOf(server, panePid, parsePsCommands(await realPsCommands()), runUnixSockets)
+      },
     })
   /**
    * 端末（tmux のペイン）で開いているか。記録した pid が生きていればそれ。
@@ -552,7 +558,15 @@ export function createApp(
   const terminalOf = async (s: SessionSummary, { soft = false }: { soft?: boolean } = {}) => {
     const wait = <T,>(work: Promise<T>, last: () => T): Promise<T> => (soft ? softWait(work, last) : work)
     if (!terminalEnabled) return null
-    if (s.pane && s.pid && isAlive(s.pid)) return { pane: s.pane, pid: s.pid }
+    if (s.pane && s.pid && isAlive(s.pid)) {
+      if (s.agent !== 'codex' || !codexTerminals.owner) return { pane: s.pane, pid: s.pid }
+      // **Codex の行の pid はペインの外のことがある**（#562。0.153 の TUI は共有の `codex app-server --listen` の客で、
+      // notify を鳴らすのは app-server）。生きているだけで端末とみなすと、許可待ちの検出（inspectPrompt）も打ち込みも
+      // 「ペインで動いているのは別のプロセス」で諦め、ダイアログが SAI に出ない。ペインの中か、ペインの TUI が
+      // その客のときだけ採り、どちらでもなければ下の補欠に落とす。一覧は締切までに引けなければ前回の結果（初回は今までどおり）
+      const owner = await wait(codexTerminals.owner(s.pane, s.pid), () => codexTerminals.lastOwner?.(s.pane!, s.pid!) ?? s.pid!)
+      if (owner) return { pane: s.pane, pid: owner }
+    }
     if (s.agent !== 'codex') return null
     const session = sessionOf(s)
     if (!session) return null

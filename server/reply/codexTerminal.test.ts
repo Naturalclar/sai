@@ -3,7 +3,7 @@ import test, { after } from 'node:test'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { CODEX_PID_TTL_MS, CodexTerminals } from './codexTerminal.ts'
+import { CODEX_PID_TTL_MS, CodexTerminals, isClientOf, paneClientOf, parseUnixSockets } from './codexTerminal.ts'
 
 const SESSION = '01a06af3-618b-7eb3-bb03-a52279ff2235'
 const root = await mkdtemp(join(tmpdir(), 'sai-codex-terminal-'))
@@ -115,4 +115,80 @@ test('lock を握っているのがそのペインの外のプロセスなら本
 
   const outside = new CodexTerminals({ holders: fakeHolders([46927]).holders, alive: () => true, inPane: async () => false, env })
   assert.equal(await outside.pid(SESSION, PANE), 0, 'ペインの外だけなら端末扱いにしない')
+})
+
+// ---------------------------------------------------------------- 行の pid がペインの外（#562）
+
+/** 実機（2026-09-30）の `lsof -a -U -p <pid> -F dn` の形。app-server（46927）の制御ソケットに TUI（30068）が繋いでいる */
+const SERVER_SOCKETS = 'p46927\nf7\nd0x63126b0e80b27db5\nn->0x0e41e2cf05b1bb1a\nf10\nd0x790df1f8a636a54a\nn/Users/me/.codex/app-server-control/app-server-control.sock\n'
+const TUI_SOCKETS = 'p30068\nf7\nd0x225d86c96d365a1\nn->0x14fc9d3cdbe7babc\nf36\nd0x5507d69c003bc8b7\nn->0x790df1f8a636a54a\n'
+const OTHER_SOCKETS = 'p30099\nf7\nd0xaaaa\nn->0xbbbb\n'
+
+test('parseUnixSockets: 自分の番地と相手の番地を分けて読む', () => {
+  const { addrs, peers } = parseUnixSockets(TUI_SOCKETS)
+  assert.deepEqual([...addrs], ['0x225d86c96d365a1', '0x5507d69c003bc8b7'])
+  assert.deepEqual([...peers], ['0x14fc9d3cdbe7babc', '0x790df1f8a636a54a'])
+})
+
+test('isClientOf: 相手の番地がサーバの番地にあれば客', () => {
+  assert.equal(isClientOf(TUI_SOCKETS, SERVER_SOCKETS), true)
+  assert.equal(isClientOf(OTHER_SOCKETS, SERVER_SOCKETS), false)
+  assert.equal(isClientOf(TUI_SOCKETS, ''), false, 'サーバのソケットが読めなければ客とはみなさない')
+})
+
+test('paneClientOf: そのペインの中の codex のうち、app-server に繋いでいるものを返す', async () => {
+  const rows = [
+    { pid: 10771, ppid: 1, comm: 'zsh' },
+    { pid: 30068, ppid: 10771, comm: 'codex' },
+    { pid: 30099, ppid: 1, comm: 'codex' }, // ペインの外
+    { pid: 46927, ppid: 1, comm: 'codex' }, // app-server
+  ]
+  const out: Record<number, string> = { 46927: SERVER_SOCKETS, 30068: TUI_SOCKETS, 30099: TUI_SOCKETS }
+  const sockets = async (pid: number) => out[pid] ?? ''
+  assert.equal(await paneClientOf(46927, 10771, rows, sockets), 30068)
+  // 同じペインにいても app-server に繋いでいなければ当てない
+  assert.equal(await paneClientOf(46927, 10771, rows, async (pid) => (pid === 30068 ? OTHER_SOCKETS : out[pid] ?? '')), 0)
+  // ペインに codex がいなければ lsof を起こさない
+  const asked: number[] = []
+  assert.equal(await paneClientOf(46927, 555, rows, async (pid) => (asked.push(pid), out[pid] ?? '')), 0)
+  assert.deepEqual(asked, [])
+})
+
+test('owner: 行の pid がペインの中ならそのまま、外ならペインの客、どちらでもなければ 0（#562）', async () => {
+  const clients: [string, number][] = []
+  const make = (client: number) =>
+    new CodexTerminals({
+      env,
+      alive: () => true,
+      inPane: async (_pane, pid) => pid === 200,
+      paneClient: async (pane, server) => {
+        clients.push([pane, server])
+        return client
+      },
+    })
+  assert.equal(await make(30068).owner(PANE, 200), 200, 'ペインの中の pid はそのまま（客を探さない）')
+  assert.deepEqual(clients, [])
+  assert.equal(await make(30068).owner(PANE, 46927), 30068, 'app-server の客の TUI を端末にする')
+  assert.equal(await make(0).owner(PANE, 46927), 0, 'ペインの外で客もいなければ端末にしない')
+  assert.deepEqual(clients, [[PANE, 46927], [PANE, 46927]])
+})
+
+test('owner: TTL の間は覚えていて、lastOwner は前回の結果を返す', async () => {
+  let now = 0
+  let asked = 0
+  const t = new CodexTerminals({
+    env,
+    alive: () => true,
+    inPane: async () => false,
+    paneClient: async () => (asked++, 30068),
+    now: () => now,
+  })
+  assert.equal(t.lastOwner(PANE, 46927), undefined, 'まだ引いていなければ知らない')
+  assert.equal(await t.owner(PANE, 46927), 30068)
+  assert.equal(await t.owner(PANE, 46927), 30068)
+  assert.equal(asked, 1)
+  assert.equal(t.lastOwner(PANE, 46927), 30068)
+  now += CODEX_PID_TTL_MS
+  await t.owner(PANE, 46927)
+  assert.equal(asked, 2)
 })

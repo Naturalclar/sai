@@ -324,6 +324,11 @@
   .todo-reply { margin-top: 8px; }
   .todo-reply .reply { margin-top: 0; }
   .todo .reply-failed { margin-top: 8px; }
+  /* 片付ける（#527）。本文が折り返しても下に落ちないよう、本文の右に列として置く */
+  .todo .why-row { display: flex; align-items: flex-start; gap: 6px; }
+  .todo .why-row .why { flex: 1; min-width: 0; }
+  .todo .why-row .archive-btn { margin-top: 2px; }
+  .todo .why-row .archive-btn.error { color: var(--claude); }
   /* カードの中のバブルはチャットの 2 列（アバター + 本文）ではなく 1 列にする。
      アバターを display:none にすると grid のアイテムから外れ、残った本文が 1 列目（36px、狭い画面は 28px）に
      潰れる（#227）。列を 1 つにしてから消すこと。見出し（.gh）も上の行と重複するので出さない */

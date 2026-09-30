@@ -28,6 +28,7 @@ import { useSettings } from './useSettings'
 import { useCommandPalette } from './useCommandPalette'
 import { CommandPalette } from './CommandPalette'
 import { RECORD_VERSION } from '../../shared/types.ts'
+import { storedProjects } from '../../shared/projectFilter.ts'
 
 export interface StatusProps {
   onStatus: (updatedAt: Date | null, error: string | null) => void
@@ -47,7 +48,13 @@ export interface PaneProps extends StatusProps {
 /** `→` / `←` の当て先が描画されるのを待つ上限。過ぎたら諦める */
 const FOCUS_WAIT_MS = 2000
 
-const DEFAULT_FILTERS: SessionFilters = { project: '', repo: '', agent: '', date: '', host: '', days: '7', archived: '' }
+/**
+ * localStorage（`sai.filters`）に置く形。リポジトリは `projects`（#529）だが、それより前は `project`（1 つの文字列）で
+ * 持っていたので両方を読む（`storedProjects()`）。既定に `projects` を入れないのは、入れると古い `project` より
+ * 空の配列が先に見つかって、選んでいたリポジトリが「すべて」に戻るため
+ */
+type StoredFilters = Omit<SessionFilters, 'projects'> & { projects?: string[]; project?: string }
+const DEFAULT_FILTERS: StoredFilters = { repo: '', agent: '', date: '', host: '', days: '7', archived: '' }
 
 /** 画面の見た目の状態。フィルタと同じく localStorage に残す */
 interface UiState {
@@ -79,11 +86,18 @@ export function App() {
   const onStatus = useCallback<StatusProps['onStatus']>((at, error) => setStatus({ at, error }), [])
 
   // 絞り込みはサイドバーのもの。フィードのリポジトリはこれに従う（同じ画面に「リポジトリ」を2つ出さない）
-  const [filters, setFilters] = useLocalState<SessionFilters>('sai.filters', DEFAULT_FILTERS)
+  const [stored, setStored] = useLocalState<StoredFilters>('sai.filters', DEFAULT_FILTERS)
+  const filters: SessionFilters = useMemo(() => {
+    const { project: _old, ...rest } = stored
+    return { ...rest, projects: storedProjects(stored) }
+  }, [stored])
+  // 書くときは新しい形だけにする（古い `project` は undefined にして JSON から落とす）
+  const setFilters = useCallback((next: Partial<SessionFilters>) => setStored({ ...next, ...(next.projects ? { project: undefined } : {}) }), [setStored])
+  const projectsKey = filters.projects.join('\n')
   // 一覧はここで1回だけ取り、サイドバー（表示）とフィード（@ の候補）の両方に渡す。同じ URL を2回叩かない
   // タブが裏にある間も間隔を空けて叩き続ける（#231）。待ちが増えたことを題名と通知で伝えるため。
   // チャットとフィードは見ていないので今までどおり止まる
-  const list = usePolling(() => api.sessions(filters), [filters.project, filters.repo, filters.agent, filters.date, filters.days, filters.archived], { hiddenMs: HIDDEN_POLL_MS })
+  const list = usePolling(() => api.sessions(filters), [projectsKey, filters.repo, filters.agent, filters.date, filters.host, filters.days, filters.archived], { hiddenMs: HIDDEN_POLL_MS })
 
   // いま自分を待っているもの。サイドバーのバッジ・要対応の画面と同じ組み立てを使う（食い違わせない）。
   // replying も必ず渡す（渡し忘れると、題名と通知だけが処理中のセッションを数えてしまう。#232）
@@ -315,9 +329,9 @@ export function App() {
             <SessionView id={route.id} focusTs={route.ts ?? ''} {...(route.side ? { focusSide: route.side } : {})} onStatus={onStatus} onOpenSidebar={openSidebar} onLeaveToSidebar={focusSidebar} onToggleDiff={toggleDiff} diffOpen={diffOpen !== null} {...(commentInsert && commentInsert.id === route.id ? { insert: commentInsert } : {})} linear={linear} settings={settings} />
           ) : (
             <FeedView
-              project={filters.project}
+              selected={filters.projects}
               projects={list.data?.filters.projects ?? EMPTY_PROJECTS}
-              onProject={(project) => setFilters({ project })}
+              onProjects={(projects) => setFilters({ projects })}
               sessions={list.data?.sessions}
               selfHost={list.data?.host ?? ''}
               openDiff={diffOpen}

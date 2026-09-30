@@ -16,7 +16,7 @@ import { ApprovalBubble } from './ApprovalBubble'
 import { ReplyBox, type Picked } from './ReplyBox'
 import type { RestoreRequest } from './replyRestore'
 import { DaysSelect } from './DaysSelect'
-import { FeedProjectPicker } from './FeedProjectPicker'
+import { ProjectPicker } from './ProjectPicker'
 import { BackLink } from './BackLink'
 import { useReply } from './useReply'
 import { historyFrom } from './replyHistory'
@@ -33,12 +33,12 @@ const NO_APPROVALS: ApprovalMap = {}
 const NO_QUEUED: ReplyQueueMap = {}
 
 interface Props extends PaneProps {
-  /** サイドバーで選んでいるリポジトリ（`Naturalclar/sai`）。空なら全部 */
-  project: string
+  /** 選んでいるリポジトリ（サイドバーと同じ `filters.projects`。空ならすべて。#529） */
+  selected: readonly string[]
   /** リポジトリの候補（App が取った `filters.projects`）。見出しの切り替えに使う */
   projects: readonly string[]
-  /** リポジトリを変える。サイドバーと同じ `filters.project` を触る（#215） */
-  onProject: (project: string) => void
+  /** リポジトリを変える。サイドバーと同じ `filters.projects` を触る（#215 / #529） */
+  onProjects: (projects: string[]) => void
   /** サイドバーの一覧（App が取ったもの）。@ の候補はこれを主にする。まだ無ければ undefined */
   sessions: SessionSummary[] | undefined
   /**
@@ -53,9 +53,9 @@ interface Props extends PaneProps {
 }
 
 /** 全チャンネルを時系列に流す。リポジトリと日数を見出しで選ぶ（リポジトリはサイドバーの絞り込みと同じ値） */
-export function FeedView({ project, projects, onProject, sessions = NO_SESSIONS, selfHost, openDiff, onToggleDiff, onStatus, onOpenSidebar, onLeaveToSidebar, linear }: Props) {
+export function FeedView({ selected, projects, onProjects, sessions = NO_SESSIONS, selfHost, openDiff, onToggleDiff, onStatus, onOpenSidebar, onLeaveToSidebar, linear }: Props) {
   const [local, setLocal] = useLocalState<{ days: string }>('sai.feed', { days: '3' })
-  const { data, error, updatedAt } = usePolling(() => api.feed({ project, days: local.days }), [project, local.days])
+  const { data, error, updatedAt } = usePolling(() => api.feed({ projects: [...selected], days: local.days }), [selected.join('\n'), local.days])
   useEffect(() => onStatus(updatedAt, error), [updatedAt, error, onStatus])
 
   const rows = data?.rows ?? NO_ROWS
@@ -147,7 +147,7 @@ export function FeedView({ project, projects, onProject, sessions = NO_SESSIONS,
       <div className="chat-head">
         <h1>フィード</h1>
         <span className="meta">
-          <FeedProjectPicker value={project} projects={projects} onChange={onProject} />
+          <ProjectPicker place="feed" selected={selected} projects={projects} onChange={onProjects} />
           {data && ` · ${data.rows.length} ターン · 直近${data.days}日`}
         </span>
         <span className="meta pull">

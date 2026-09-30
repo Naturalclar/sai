@@ -65,6 +65,7 @@ import type {
 } from '../shared/types.ts'
 import { entityId, facets, filterSessions, recordVersionOf } from './rows/aggregate.ts'
 import { rowProject } from '../shared/project.ts'
+import { cleanProjects, matchesProjects } from '../shared/projectFilter.ts'
 import { ICONS_DIR, IconStore, iconKey } from './meta/icons.ts'
 import { historyKey, ICON_HISTORY_DIR, ICON_HISTORY_FILE, IconHistory, isHistoryKey } from './meta/iconHistory.ts'
 import { alwaysAllowRule, ruleLabel } from '../shared/approvals.ts'
@@ -2815,7 +2816,8 @@ export function createApp(
           total: pool.length,
           sessions: withLastSummary(
             filterSessions(pool, {
-              project: q.get('project') ?? '',
+              // 複数選べる（#529。`?project=a&project=b`）
+              projects: cleanProjects(q.getAll('project')),
               repo: q.get('repo') ?? '',
               agent: q.get('agent') ?? '',
               date: q.get('date') ?? '',
@@ -2883,13 +2885,14 @@ export function createApp(
       if (path === '/api/feed') {
         const days = parseDays(q.get('days'), 3)
         const repo = q.get('repo') ?? ''
-        const project = q.get('project') ?? ''
+        // 複数選べる（#529。`?project=a&project=b`。どれか 1 つに当たる行を流す）
+        const projects = cleanProjects(q.getAll('project'))
         // アーカイブ済みセッションの行は流さない（一覧から消えてもフィードに流れていたら隠した意味が無い）
         const [{ rev: sessionsRev, sessions }, me] = await Promise.all([sessionsWithMeta(days), profileNow()])
         const rev = `${sessionsRev}~${me.rev}~${terminalKey(sessions)}`
         const archived = new Set(sessions.filter((s) => s.archived).map((s) => s.id))
         let rows = await store.rows(days)
-        if (project) rows = rows.filter((r) => rowProject(r) === project)
+        if (projects.length > 0) rows = rows.filter((r) => matchesProjects(projects, [rowProject(r)]))
         if (repo) rows = rows.filter((r) => r.repo === repo)
         if (archived.size) rows = rows.filter((r) => !archived.has(entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? ''))))
         // 思考はフィードには出さないので運ばない（3秒ごとに全行を返す。セッション画面だけが使う）

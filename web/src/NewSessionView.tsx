@@ -27,7 +27,7 @@ interface Started {
 }
 
 /** 候補を作る一覧。絞り込み無しで取るので、アーカイブ済みも別に取って足す */
-const ALL = { project: '', repo: '', agent: '', date: '', host: '', days: '90' }
+const ALL = { projects: [], repo: '', agent: '', date: '', host: '', days: '90' }
 
 /** 始められるエージェント（#401。OpenCode は #452）。Grok だけは ID を先に決める口が無いので出さない */
 const AGENTS = [

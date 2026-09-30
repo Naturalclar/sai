@@ -191,8 +191,10 @@ test('project: bare clone の worktree でもリポジトリでまとまる（re
   assert.equal(by['E@local-only'], '', 'remote も project も無ければ空（サーバが cwd から埋める。#182）')
 
   const ids = (list: typeof sessions) => new Set(list.map((s) => s.id))
-  assert.deepEqual(ids(filterSessions(sessions, { project: 'Naturalclar/sai' })), new Set(['A@dev-min', 'B@dev-alqa', 'D@main']))
-  assert.deepEqual(ids(filterSessions(sessions, { project: 'Naturalclar/sai', repo: 'dev-min' })), new Set(['A@dev-min']), 'worktree でさらに絞れる')
+  assert.deepEqual(ids(filterSessions(sessions, { projects: ['Naturalclar/sai'] })), new Set(['A@dev-min', 'B@dev-alqa', 'D@main']))
+  // 複数選べる（#529）。どれか 1 つに当たれば出し、リポジトリの分からないもの（E）は出さない
+  assert.deepEqual(ids(filterSessions(sessions, { projects: ['Naturalclar/sai', 'Naturalclar/kanban'] })), new Set(['A@dev-min', 'B@dev-alqa', 'C@main', 'D@main']))
+  assert.deepEqual(ids(filterSessions(sessions, { projects: ['Naturalclar/sai'], repo: 'dev-min' })), new Set(['A@dev-min']), 'worktree でさらに絞れる')
   assert.deepEqual(facets(sessions).projects, ['Naturalclar/kanban', 'Naturalclar/sai'], '分からないものは候補に出さない')
   assert.deepEqual(facets(sessions).repos, ['dev-alqa', 'dev-min', 'local-only', 'main'])
 })

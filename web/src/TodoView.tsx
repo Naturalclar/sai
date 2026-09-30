@@ -12,7 +12,7 @@ import { shouldQueue } from './replyQueue.ts'
 import { loadDraft, saveDraft } from './replyDrafts'
 import { restoresText, type RestoreRequest } from './replyRestore'
 import { ownReplying, pruneToggled, rowOpen, rowReplyable, toggleKey } from './todoReply'
-import { doneItems, pendingItems, todoItems, type TodoItem } from '../../shared/todoItems.ts'
+import { pendingItems, todoItems, todoSections, type TodoItem } from '../../shared/todoItems.ts'
 import type { PaneProps } from './App'
 
 const NO_REPLYING: ReplyingMap = {}
@@ -46,9 +46,9 @@ export function TodoView({ list, onStatus, onOpenSidebar, onLeaveToSidebar }: Pr
 
   // replying を渡すのは、別プロセスの返信を処理中なら「待っている」ではなく「動いている」ため（#232）
   const items = data ? todoItems(data.sessions, data.approvals, data.host, data.replying) : []
-  // 上段＝答えを待っているもの、下段＝終わって次を待っているだけのもの（#438）
+  // 数えるのは答えを待っているものだけ（#438）。並びは 答え待ち → 未読 → 待機中 → 終わっているもの（#551）
   const pending = pendingItems(items)
-  const done = doneItems(items)
+  const sections = todoSections(items)
   const now = updatedAt?.getTime() ?? 0
 
   // 行から送る返信（#522）。行数はその返信先のターン完了の数（集計の turns。セッション画面と同じ数え方）
@@ -161,6 +161,9 @@ export function TodoView({ list, onStatus, onOpenSidebar, onLeaveToSidebar }: Pr
       </TodoRow>
     )
   }
+  const modeNoteOf = (t: TodoItem) =>
+    t.kind !== 'done' && t.session ? launchedModeNote(data?.replying[t.id], t.session.meta?.permission_mode) : ''
+  const keyOf = (t: TodoItem) => (t.kind === 'done' ? `done:${t.id}` : t.id)
   const sentHere = sentTo && sending.some((p) => p.id === sentTo.id) ? sentTo : null
 
   return (
@@ -177,13 +180,22 @@ export function TodoView({ list, onStatus, onOpenSidebar, onLeaveToSidebar }: Pr
       {failed && !items.some((t) => t.id === failed.id) && failedNotice(failed)}
       {data && items.length === 0 && <div className="empty">エージェントはどれも動いているか、終わっています</div>}
       <div className="todo-list">
-        {/* ⌘Enter が効くのは一番上の 1 つだけ（フィードと同じ扱い） */}
-        {pending.map((t, i) => rowOf(t, t.id, i === 0, t.session ? launchedModeNote(data?.replying[t.id], t.session.meta?.permission_mode) : ''))}
-        {done.length > 0 && (
+        {/* ⌘Enter が効くのは一番上の答え待ちだけ（フィードと同じ扱い） */}
+        {sections.answer.map((t, i) => rowOf(t, t.id, i === 0, modeNoteOf(t)))}
+        {sections.unread.length > 0 && (
+          <>
+            {/* 読んでいない返答があるもの（#551）。終わっているものも、下段の奥に埋もれないようにここへ上げる */}
+            <h2 className="todo-section">未読（{sections.unread.length}）</h2>
+            {sections.unread.map((t) => rowOf(t, keyOf(t), false, modeNoteOf(t)))}
+          </>
+        )}
+        {sections.watch.length > 0 && sections.unread.length > 0 && <h2 className="todo-section">待機中（{sections.watch.length}）</h2>}
+        {sections.watch.map((t) => rowOf(t, t.id, false, modeNoteOf(t)))}
+        {sections.done.length > 0 && (
           <>
             {/* 下段。詰まってはいないので、上段と混ぜない（#438） */}
-            <h2 className="todo-section">終わって次を待っている（{done.length}）</h2>
-            {done.map((t) => rowOf(t, `done:${t.id}`, false, ''))}
+            <h2 className="todo-section">終わって次を待っている（{sections.done.length}）</h2>
+            {sections.done.map((t) => rowOf(t, keyOf(t), false, ''))}
           </>
         )}
       </div>

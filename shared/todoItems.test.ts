@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { Approval, ApprovalMap, ReplyingMap, SessionSummary } from './types.ts'
-import { awaitsNext, doneItems, pendingItems, todoItems } from './todoItems.ts'
+import { awaitsNext, doneItems, pendingItems, todoItems, todoSections } from './todoItems.ts'
 
 /** このサーバが動いているマシン（#114）。行の host が違えば「別のマシン」 */
 const SELF = 'mac'
@@ -293,4 +293,39 @@ test('awaitsNext: 入力待ちか、最後の行がターン完了', () => {
   assert.equal(awaitsNext({ idle: '', last_kind: 'turn' }), true)
   for (const k of ['resume', 'end', 'waiting', 'other'] as const) assert.equal(awaitsNext({ idle: '', last_kind: k }), false, k)
   assert.equal(awaitsNext({ idle: '' }), false, '分からなければ出さない')
+})
+
+// ---- #551: 未読のあるセッションを答え待ちの次に
+
+test('todoSections: 答え待ち → 未読（待機中も終了も）→ 待機中 → 終了。段の中は待たせている順のまま', () => {
+  const sessions = [
+    summary({ id: 'w-old@sai', end: '2026-09-02T10:01:00+09:00', waiting: '許可待ち: Bash: ls' }),
+    summary({ id: 'w-unread@sai', end: '2026-09-02T10:05:00+09:00', waiting: '許可待ち: Bash: ls', unread: 1 }),
+    summary({ id: 'd-old@sai', last_kind: 'turn', last_turn_ts: '2026-09-02T10:00:00+09:00' }),
+    summary({ id: 'd-unread@sai', last_kind: 'turn', last_turn_ts: '2026-09-02T10:02:00+09:00', unread: 3 }),
+    // 答え待ちは未読があっても一番上（未読の段には入れない）
+    summary({ id: 'a@sai', end: '2026-09-02T10:09:00+09:00', unread: 2 }),
+  ]
+  const approvals: ApprovalMap = { 'a@sai': [approval({ id: 'a@sai', since: '2026-09-02T10:09:00+09:00' })] }
+  const items = todoItems(sessions, approvals, SELF)
+  const s = todoSections(items)
+  assert.deepEqual(s.answer.map((t) => t.id), ['a@sai'])
+  assert.deepEqual(s.unread.map((t) => [t.id, t.kind]), [
+    ['d-unread@sai', 'done'],
+    ['w-unread@sai', 'watch'],
+  ])
+  assert.deepEqual(s.watch.map((t) => t.id), ['w-old@sai'])
+  assert.deepEqual(s.done.map((t) => t.id), ['d-old@sai'])
+  // 並びを変えるだけで、数えるぶんは変えない（未読の終了をバッジ・通知に数えない）
+  assert.deepEqual(pendingItems(items).map((t) => t.id), ['w-old@sai', 'w-unread@sai', 'a@sai'])
+})
+
+test('todoSections: 未読が 0 なら今までの段のまま', () => {
+  const items = todoItems(
+    [summary({ id: 'w@sai', waiting: '許可待ち', unread: 0 }), summary({ id: 'd@sai', last_kind: 'turn', last_turn_ts: END })],
+    {},
+    SELF,
+  )
+  const s = todoSections(items)
+  assert.deepEqual([s.unread.length, s.watch.length, s.done.length], [0, 1, 1])
 })

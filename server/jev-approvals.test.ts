@@ -15,13 +15,14 @@ import { FeedStore } from './rows/store.ts'
 import { localDate } from './rows/aggregate.ts'
 import { row } from './rows/aggregate.test.ts'
 import type { Runner } from './reply/runner.ts'
+import { JEV_RULE_STATEMENT } from '../shared/jev.ts'
 
 const runner: Runner = { running: () => false, snapshot: (): ReplyingMap => ({}), start: async () => {} }
 const judged: string[] = []
 const judge: JevJudge = async (state, statement) => {
   judged.push(state)
   // ルールを聞かれたら（#499）: git のルールは問題なさそう、それ以外のルールは広すぎる
-  if (statement?.startsWith('Permanently allowing')) return /rule: Bash\(git /.test(state) ? 0.96 : 0.2
+  if (statement === JEV_RULE_STATEMENT) return /rule: Bash\(git /.test(state) ? 0.96 : 0.2
   return state.includes('rm -rf') ? 0.01 : 0.97
 }
 

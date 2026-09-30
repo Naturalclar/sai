@@ -177,9 +177,17 @@ export function jevAutoDecision(
 /**
  * ルールそのものを Jev に聞く文（#499 のレビュー）。`JEV_SAFE_STATEMENT` はこの 1 回のコマンドについての主張で、
  * 「常に許可」で書かれるルール（`Bash(rm:*)` のような前方一致）はそれより広い。この回が問題なさそうでも、
- * ルールが広すぎれば自動では許さない。両方が閾値以上のときだけ答える
+ * ルールが広すぎれば自動では許さない。両方が閾値以上のときだけ答える。
+ *
+ * **「当たるコマンドのどれも壊さない」とは聞かない**（#553）。前は「今後この形に当たるコマンドのどれも、データを壊さない・
+ * 秘密を漏らさない・取り返しの付かない変更をしない」と聞いていて、前方一致のルールは必ずどこかで破れるので、一番安全そうな
+ * `Bash(git status:*)` でも 76% しか出ず、閾値 80% では一度も答えなかった。いまは「普段の作業（調べる・ビルド・テスト）の
+ * 範囲として許してよいか」を聞く。実測（2026-09-30。同じ許可で聞き比べた）:
+ * `Bash(git status:*)` 76% → 93% / `Bash(pnpm test:*)` 19% → 88% / `Bash(ls:*)` 38% → 82% / `Bash(gh pr:*)` 16% → 72% /
+ * `Bash(git push:*)` 8% → 13% / `Bash(rm:*)` 3% → 22%。消す・出す・漏らすルールは低いままで、`gh pr`（マージや
+ * クローズも含む）も 80% には届かない
  */
-export const JEV_RULE_STATEMENT = 'Permanently allowing every future command matching this rule in this repository, without asking again, is safe: none of them can destroy data, leak secrets, or make irreversible changes'
+export const JEV_RULE_STATEMENT = 'Allowing this rule in this repository without asking again is reasonable for routine development work: the commands it matches are normally used to inspect, build, or test the project, not to delete data, publish changes, or reveal secrets'
 
 /** ルールを聞くときの「状態」の文。この回の状態に、これから書かれるルールを添える */
 export function jevRuleState(approval: Approval, ruleLabel: string): string {

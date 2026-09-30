@@ -150,3 +150,29 @@ test('annotate: 長く待っている許可は、見かけている間は忘れ�
   assert.equal(calls.length, 1, '聞き直さない')
   assert.equal(risk.annotate(mapOf(approval('long')), true)['S@sai']![0]!.jev, 0.8, '確率も付いたまま')
 })
+
+test('peekRule（#556 のレビュー）: 聞かずに覚えている確率を返し、見かけた時刻を進める（ポーリングの prune で忘れない）。失敗は ruleFailed で分かる', async () => {
+  let now = 0
+  const asked: string[] = []
+  const judge: JevJudge = async (state) => {
+    asked.push(state)
+    if (state.includes('boom')) throw new Error('HTTP 500')
+    return 0.93
+  }
+  const risk = new JevRisk(judge, () => now)
+  assert.equal(risk.peekRule('Bash(git status:*)'), undefined, '聞いていなければ無い')
+  assert.equal(asked.length, 0, 'peekRule は聞かない')
+  risk.ruleSafe('Bash(git status:*)', 'ok')
+  risk.ruleSafe('Bash(boom:*)', 'boom')
+  await new Promise((r) => setTimeout(r, 10))
+  assert.equal(risk.peekRule('Bash(git status:*)'), 0.93)
+  assert.equal(risk.ruleFailed('Bash(boom:*)'), true)
+  assert.equal(risk.ruleFailed('Bash(git status:*)'), false)
+  // ポーリングだけが続く（annotate が prune を回し、peekRule が見る）あいだは忘れない
+  for (let i = 0; i < 5; i++) {
+    now += JEV_KEEP_MS / 2
+    risk.annotate({}, true)
+    assert.equal(risk.peekRule('Bash(git status:*)'), 0.93, `${i + 1} 回目`)
+  }
+  assert.equal(asked.length, 2, '聞き直していない')
+})

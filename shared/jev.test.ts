@@ -119,6 +119,7 @@ test('jevAutoDecision（#553）: この回が閾値未満は none、Bash 以外�
   assert.equal(jevAutoDecision({ ...bash, agent: 'codex' as const }, 0.8, null, undefined).kind, 'skip', 'Codex の許可には「常に許可」が無い')
   assert.equal(jevAutoDecision(bash, 0.8, null, undefined).kind, 'skip', 'ルールを作れない')
   assert.deepEqual(jevAutoDecision(bash, 0.8, 'Bash(git status:*)', undefined), { kind: 'wait' })
+  assert.deepEqual(jevAutoDecision(bash, 0.8, 'Bash(git status:*)', 'failed'), { kind: 'skip', reason: 'ルール Bash(git status:*) の確率を Jev に聞けなかった' }, '失敗は聞き直さないので待ちのままにしない（#556 のレビュー）')
   assert.deepEqual(jevAutoDecision(bash, 0.8, 'Bash(git status:*)', 0.76), { kind: 'skip', reason: 'ルール Bash(git status:*) が 76%（閾値 80%）' })
   assert.deepEqual(jevAutoDecision(bash, 0.8, 'Bash(git status:*)', 0.8), { kind: 'allow' }, '閾値ちょうどは通す')
 })

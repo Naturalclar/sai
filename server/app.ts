@@ -820,7 +820,7 @@ export function createApp(
         const label = rule ? ruleLabel(rule) : null
         // ルールはこの回が閾値以上のときだけ聞く（聞くだけで外に出るので、自動を期待しない回には送らない）
         const ruleSafe = label && jevAutoAllows(a.jev, s.jev_auto) ? jevRisk.ruleSafe(label, jevRuleState(a, label)) : undefined
-        const decision = jevAutoDecision(a, s.jev_auto, label, ruleSafe)
+        const decision = jevAutoDecision(a, s.jev_auto, label, ruleSafe === undefined && label && jevRisk.ruleFailed(label) ? 'failed' : ruleSafe)
         if (decision.kind === 'skip') {
           // 答えない理由（#553）。同じ許可には 1 回だけ（届くたびに呼ばれるので、覚えないと同じ行が何本も並ぶ）
           if (!jevSkipLogged.has(a.approval_id)) {

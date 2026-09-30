@@ -156,7 +156,8 @@ export function jevAutoEligible(approval: Pick<Approval, 'tool_name' | 'agent' |
  * - `skip`: この回は閾値以上なのに自動では答えない（Bash 以外・ルールを作れない・ルールの確率が低い）
  * - `wait`: ルールの確率がまだ届いていない
  * - `allow`: 答える
- * `rule` は `alwaysAllowRule()` の表記（作れなければ null）、`ruleSafe` はそのルールの確率（まだなら undefined）
+ * `rule` は `alwaysAllowRule()` の表記（作れなければ null）、`ruleSafe` はそのルールの確率（まだなら undefined、
+ * 聞いて失敗したら `'failed'`。失敗は聞き直さないので `wait` のままにすると理由が永久に残らない。#556 のレビュー）
  */
 export type JevAutoDecision = { kind: 'none' } | { kind: 'wait' } | { kind: 'allow' } | { kind: 'skip'; reason: string }
 
@@ -164,12 +165,13 @@ export function jevAutoDecision(
   approval: Pick<Approval, 'tool_name' | 'agent' | 'answerable' | 'jev'>,
   threshold: number,
   rule: string | null,
-  ruleSafe: number | undefined,
+  ruleSafe: number | 'failed' | undefined,
 ): JevAutoDecision {
   if (!jevAutoAllows(approval.jev, threshold)) return { kind: 'none' }
   if (!jevAutoEligible(approval)) return { kind: 'skip', reason: `Bash 以外（${approval.tool_name}）は自動で答えない` }
   if (!rule) return { kind: 'skip', reason: '「常に許可」のルールを作れないコマンド（先頭が変数の代入・展開など）' }
   if (ruleSafe === undefined) return { kind: 'wait' }
+  if (ruleSafe === 'failed') return { kind: 'skip', reason: `ルール ${rule} の確率を Jev に聞けなかった` }
   if (!jevAutoAllows(ruleSafe, threshold)) return { kind: 'skip', reason: `ルール ${rule} が ${jevPercent(ruleSafe)}%（閾値 ${jevPercent(threshold)}%）` }
   return { kind: 'allow' }
 }

@@ -337,6 +337,16 @@ test('/mcp: Manager の案は人の入力が後に来たら消え、24 時間で
   await appendFile(feedFile, JSON.stringify(row(new Date(), 'A1', { repo: 'r', cwd: work, project: 'o/r', event: 'UserPromptSubmit', user_text: '自分で打った', text: '' })) + '\n')
   assert.equal(await draftOf('A1@r'), undefined, '人が何か送ったら、その前の文脈の案は出さない')
 
+  // 処理中に置いた案は、回っていたターンが終わっただけでは消さない（#586 のレビュー。Codex は入力の行を書かず、入力はターン完了の行で届く）
+  runner.busy.set('C1@r', {} as unknown as Replying)
+  assert.equal((await call('sai_suggest', { to: 'C1@r', text: '終わったら見て' })).isError, undefined)
+  runner.busy.delete('C1@r')
+  await new Promise((r) => setTimeout(r, 1100))
+  await appendFile(feedFile, JSON.stringify(row(new Date(), 'C1', { repo: 'r', cwd: work, project: 'o/other', user_text: '回っていたターンの入力', text: '終わりました' })) + '\n')
+  assert.equal((await draftOf('C1@r'))?.text, '終わったら見て', '回っていたターンの終わりでは消さない')
+  await appendFile(feedFile, JSON.stringify(row(new Date(), 'C1', { repo: 'r', cwd: work, project: 'o/other', user_text: '次の指示', text: 'やりました' })) + '\n')
+  assert.equal(await draftOf('C1@r'), undefined, 'その次のターンが来たら、人が送ったので消す')
+
   // 24 時間を過ぎた案はファイルにあっても出さない
   const file = join(dir, 'suggestions.json')
   const saved = JSON.parse(await readFile(file, 'utf-8')) as Record<string, { text: string; from: string; at: number }>

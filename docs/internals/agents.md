@@ -91,7 +91,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 
 - 範囲は `draft`。**`launch()` も預かりも通らない**（ターンを起こさない）。`server/mcp/suggestions.ts` の `SuggestionStore` が `<feed dir>/suggestions.json` に宛先ごとに 1 つ置き（上書き）、`reply.log` に 1 行残す。
 - 断るのはアーカイブ済みと `replyBlockedReason()` が理由を返すもの（入力欄が出ない）だけ。**別のリポジトリ・素通しのセッションにも置ける**（`mcpSendRefusal()` は使わない。送るのは人）。本文は `AGENT_TEXT_MAX_CHARS` まで。
-- 出すかどうかは `shared/managerDraft.ts` の `liveManagerDraft()`: 置いてから `MANAGER_DRAFT_TTL_MS`（24 時間）以内で、`last_user_ts` が置いた時刻より後でないもの。`sessionsWithMeta()` が `manager_draft` に載せ、**いま出している案の (id, at) を rev に混ぜる**（ファイルの (mtime, size) だと 24 時間が過ぎて消えたときに rev が変わらない）。ファイルから物理的に消すのは、捨てる・入れた（`take()`）と、次に置いたとき（`put()` が 24 時間を過ぎたものと 500 件を超えたものを捨てる）。
+- 出すかどうかは `shared/managerDraft.ts` の `liveManagerDraft()`: 置いてから `MANAGER_DRAFT_TTL_MS`（24 時間）以内で、置いたときに覚えた宛先の `last_user_text`（`base_text`）から入力が変わっていないもの（`inputSinceDraft()`。置いたときにターンが回っていたら＝`busy`、そのターンが 1 つ終わっただけでは消さない）。`sessionsWithMeta()` が `manager_draft` に載せ、**いま出している案の (id, at) を rev に混ぜる**（ファイルの (mtime, size) だと 24 時間が過ぎて消えたときに rev が変わらない）。ファイルから物理的に消すのは、捨てる・入れた（`take()`）と、次に置いたとき（`put()` が 24 時間を過ぎたものと 500 件を超えたものを捨てる）。
 - 捨てる・入れたは `POST /api/sessions/<id>/suggestion`（同一オリジンのみ）。`at` が今のものと同じときだけ取り除く（画面が古い案を見ている間に置き直された新しい案を消さない）。
 - 画面は `web/src/replySuggest.ts` の `suggestionFor()` が出どころを決め（打ちかけ > `manager` > `next`）、`ReplyBox` が `ManagerDraftCard` を入力欄の上に出す。入れた・捨てたものは次のポーリングで消えるまで `ReplyBox` の中で伏せる。
 - `sai_sessions` の 1 行には `（案を置いてある）` を付ける（Manager が置き直すかを人に聞けるように）。

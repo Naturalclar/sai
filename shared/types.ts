@@ -187,7 +187,7 @@ export interface SessionSummary {
    */
   next_ask?: string
   /**
-   * Manager が置いた案（#565。`sai_suggest`）。**置いてから 24 時間以内で、そのあと人の入力が来ていない**ときだけ
+   * Manager が置いた案（#565。`sai_suggest`）。**置いてから 24 時間以内で、そのあと人の入力が来ていない**（置いたときの入力と比べる）ときだけ
    * サーバが `suggestions.json` から載せる（`shared/managerDraft.ts`）。入力欄が空のとき、`next_ask` より先に出す
    */
   manager_draft?: ManagerDraft
@@ -246,6 +246,12 @@ export interface ManagerDraft {
   from: string
   /** 置いた時刻（ミリ秒）。捨てる・入れるときに「同じ案か」の鍵にもする */
   at: number
+  /** 置いたときの宛先の `last_user_text`。これが変わったら人の入力が来たとみなして出さない（`shared/managerDraft.ts`） */
+  base_text: string
+  /** 置いたときの宛先の `turns` */
+  base_turns: number
+  /** 置いたときに宛先のターンが回っていたか。回っていたターンが終わっただけでは消さない */
+  busy: boolean
 }
 
 /** セッションに人が付けるもの。~/.agent-feed/session-meta.json に JSONL とは別で持つ（アイコン画像はファイルで別、SessionSummary.icon） */

@@ -974,7 +974,7 @@ export function createApp(
     const nowMs = Date.now()
     const live = new Map<string, ManagerDraft>()
     for (const s of sessions) {
-      const d = liveManagerDraft(drafts[s.id], s.last_user_ts, nowMs)
+      const d = liveManagerDraft(drafts[s.id], s, nowMs)
       if (d) live.set(s.id, d)
     }
     const built = await Promise.all(sessions.map(async (s) => {
@@ -2316,7 +2316,9 @@ export function createApp(
         if (target.archived) return textResult('置けません: アーカイブ済み', true)
         const blocked = replyBlockedReason(target, selfHost())
         if (blocked) return textResult(`置けません: ${blocked}`, true)
-        await suggestionStore.put(to, text, access.caller)
+        // 置いたときの入力を覚えておき、これが変わったら（人が何か送ったら）出さない。回っているターンの終わりでは消さない
+        const busy = mcpBusy(to) || (await progress.read(target)).active
+        await suggestionStore.put(to, text, access.caller, { base_text: target.last_user_text ?? '', base_turns: target.turns, busy })
         await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${mcpFrom(access)} → ${to} 案を置いた（${text.length} 字）\n`).catch(() => {})
         return textResult('入力欄に案を置きました（送ってはいません。人が SAI の画面で見て、入れて送るか捨てるかを決めます）')
       },

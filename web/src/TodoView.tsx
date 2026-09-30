@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { launchedModeNote } from '../../shared/permissions.ts'
 import type { ReplyingMap, SessionsResponse } from './api'
 import type { Polled } from './hooks'
@@ -164,6 +164,24 @@ export function TodoView({ list, onStatus, onOpenSidebar, onLeaveToSidebar }: Pr
   const modeNoteOf = (t: TodoItem) =>
     t.kind !== 'done' && t.session ? launchedModeNote(data?.replying[t.id], t.session.meta?.permission_mode) : ''
   const keyOf = (t: TodoItem) => (t.kind === 'done' ? `done:${t.id}` : t.id)
+  // 段の見出しも行も、1 本の平らな並びにして出す（#551 のレビュー）。段ごとに Fragment で包むと、別の端末で読んで
+  // 未読の段から外れた行が別の親に移ったことになり、作り直されて開いていた返信欄のフォーカスと変換中の文字を失う
+  const rowsInOrder = (): ReactNode[] => {
+    const out: ReactNode[] = []
+    const heading = (id: string, label: string) => out.push(<h2 key={id} className="todo-section">{label}</h2>)
+    // ⌘Enter が効くのは一番上の答え待ちだけ（フィードと同じ扱い）
+    sections.answer.forEach((t, i) => out.push(rowOf(t, t.id, i === 0, modeNoteOf(t))))
+    // 読んでいない返答があるもの（#551）。終わっているものも、下段の奥に埋もれないようにここへ上げる
+    if (sections.unread.length > 0) heading('section:unread', `未読（${sections.unread.length}）`)
+    for (const t of sections.unread) out.push(rowOf(t, keyOf(t), false, modeNoteOf(t)))
+    // 未読の段があるときだけ見出しを付ける（無いと未読の段の続きに見える）
+    if (sections.watch.length > 0 && sections.unread.length > 0) heading('section:watch', `待機中（${sections.watch.length}）`)
+    for (const t of sections.watch) out.push(rowOf(t, keyOf(t), false, modeNoteOf(t)))
+    // 下段。詰まってはいないので、上段と混ぜない（#438）
+    if (sections.done.length > 0) heading('section:done', `終わって次を待っている（${sections.done.length}）`)
+    for (const t of sections.done) out.push(rowOf(t, keyOf(t), false, ''))
+    return out
+  }
   const sentHere = sentTo && sending.some((p) => p.id === sentTo.id) ? sentTo : null
 
   return (
@@ -180,24 +198,7 @@ export function TodoView({ list, onStatus, onOpenSidebar, onLeaveToSidebar }: Pr
       {failed && !items.some((t) => t.id === failed.id) && failedNotice(failed)}
       {data && items.length === 0 && <div className="empty">エージェントはどれも動いているか、終わっています</div>}
       <div className="todo-list">
-        {/* ⌘Enter が効くのは一番上の答え待ちだけ（フィードと同じ扱い） */}
-        {sections.answer.map((t, i) => rowOf(t, t.id, i === 0, modeNoteOf(t)))}
-        {sections.unread.length > 0 && (
-          <>
-            {/* 読んでいない返答があるもの（#551）。終わっているものも、下段の奥に埋もれないようにここへ上げる */}
-            <h2 className="todo-section">未読（{sections.unread.length}）</h2>
-            {sections.unread.map((t) => rowOf(t, keyOf(t), false, modeNoteOf(t)))}
-          </>
-        )}
-        {sections.watch.length > 0 && sections.unread.length > 0 && <h2 className="todo-section">待機中（{sections.watch.length}）</h2>}
-        {sections.watch.map((t) => rowOf(t, t.id, false, modeNoteOf(t)))}
-        {sections.done.length > 0 && (
-          <>
-            {/* 下段。詰まってはいないので、上段と混ぜない（#438） */}
-            <h2 className="todo-section">終わって次を待っている（{sections.done.length}）</h2>
-            {sections.done.map((t) => rowOf(t, keyOf(t), false, ''))}
-          </>
-        )}
+        {rowsInOrder()}
       </div>
       {confirm && <ReplaceConfirm confirm={confirm} onReplace={() => void fromConfirm(confirmReplace)} onProcess={() => void fromConfirm(confirmProcess)} onCancel={cancelConfirm} />}
     </section>

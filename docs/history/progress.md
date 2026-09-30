@@ -1,0 +1,37 @@
+# 処理中の手順の経緯
+
+なぜ今の形になったか（前はどうだったか・実測・レビューの指摘）。仕組みは [internals/progress.md](../internals/progress.md)。新しい経緯はこのファイルの該当する節に足す。
+
+## transcript / rollout を読む（#302）
+
+- 末尾だけ・倍々に読むのは、transcript が大きいため（手元で 29.7MB、1 行最大 1MB）
+- `thinking` の中身を出さないのは、694 個のうち本文があったのが 30 個だったため
+
+## active
+
+- 書き込みの古さで落とすのは、端末で Esc を押して止めたターンが transcript では閉じないまま残るため（#302 の実測で 536 件中 13 件）
+
+## claude agents --json で打ち消す（#418 / #433）
+
+- 打ち消しが無かったころは、端末で Esc を押して止めたターンが最大 10 分「処理中」のまま残っていた（#418）
+- `claude agents --json` には、このマシンで生きている Claude のセッションが全部出る。実測で 0.15〜0.20 秒・5.3KB
+- 1 本にまとめたのは #433。処理中のバブルが N 個あると `/progress` が同時に N 本来て、`claude` が N プロセス起きていた
+- `--json` を付けないと `claude agents` は TTY を要求して断る
+- Codex / OpenCode に同じものは無い
+
+## OpenCode の読んだ量（#396）
+
+- issue の書いた v2 の `GET /api/session/<id>/context` は、v1 の口で作ったセッションに `{"data":[]}` を返す（許可の v1 / v2 と同じ分かれ方。1.18.30 で実測）ので使わない
+
+## OpenCode の段取り（#397）
+
+- transcript が無いので手順は空のままだが、全体のどこまで来たかは本体が持っている
+- 応答の形（`id` が無い・`status` の 4 つ）は実機 1.18.30 で確かめた。`children` の `title` に `math calculation (@general subagent)` のような名前が入っていることも確かめてある
+- 段取りのために `opencode serve` を起こさない
+
+## 端末の Claude の質問の選択肢（#333）
+
+- フックの待ちの行（`record.py` の `tool_summary()`）には質問の文しか載らないため、transcript から読むことにした
+- `session.waiting` と同じ文のときだけ載せるのは、次の質問が transcript に先に書かれても前の質問の選択肢を出さないため
+- SAI が回している `claude -p` の質問は `approvals` の答えられるバブルが出るので除く
+- 選択の画面にキーは送らない（Codex の TUI の質問と同じ）

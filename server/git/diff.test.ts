@@ -343,29 +343,38 @@ test('sessionDiff: git のリポジトリでなければ NotAGitRepo', async () 
   }
 })
 
-test('changedPaths: ブランチの差分・未コミット・追跡外のパスを重複なしで返す。git でなければ空（#564）', async () => {
+test('changedPaths: ブランチの差分・未コミット・追跡外のパスを、リポジトリのトップからの形で重複なしに返す。リネームは 2 つのパス。git でなければ空（#564）', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'sai-changed-'))
   try {
     await git(dir, 'init', '-q', '-b', 'main')
+    await run('mkdir', ['-p', join(dir, 'web', 'src')])
     await writeFile(join(dir, 'a.ts'), 'a\n')
     await writeFile(join(dir, 'b.ts'), 'b\n')
+    await writeFile(join(dir, 'web', 'src', 'old.ts'), 'o\n'.repeat(20))
     await git(dir, 'add', '.')
     await git(dir, 'commit', '-q', '-m', 'init')
     await git(dir, 'switch', '-q', '-c', 'feat')
     await writeFile(join(dir, 'a.ts'), 'a2\n')
-    await git(dir, 'commit', '-q', '-am', 'change a')
+    await git(dir, 'mv', 'web/src/old.ts', 'web/src/new.ts')
+    await git(dir, 'commit', '-q', '-am', 'change a, rename old')
     await writeFile(join(dir, 'a.ts'), 'a3\n') // ブランチの差分にも未コミットにも出る
     await writeFile(join(dir, 'b.ts'), 'b2\n')
-    await writeFile(join(dir, 'new.ts'), 'n\n')
-    const paths = await changedPaths(new RealGit(), dir)
-    assert.deepEqual([...paths].sort(), ['a.ts', 'b.ts', 'new.ts'])
+    await writeFile(join(dir, 'web', 'src', 'fresh.ts'), 'n\n')
+    const want = ['a.ts', 'b.ts', 'web/src/fresh.ts', 'web/src/new.ts', 'web/src/old.ts']
+    const got = await changedPaths(new RealGit(), dir)
+    assert.deepEqual([...got.paths].sort(), want, 'リネームは `{old => new}` の形にせず、2 つのパスにする')
+    // サブディレクトリで開いたセッションでも、パスもトップも同じ（追跡外は --full-name）
+    const sub = await changedPaths(new RealGit(), join(dir, 'web'))
+    assert.deepEqual([...sub.paths].sort(), want)
+    assert.equal(sub.root, got.root)
+    assert.ok(got.root)
     const plain = await mkdtemp(join(tmpdir(), 'sai-changed-plain-'))
     try {
-      assert.deepEqual(await changedPaths(new RealGit(), plain), [])
+      assert.deepEqual(await changedPaths(new RealGit(), plain), { root: '', paths: [] })
     } finally {
       await rm(plain, { recursive: true, force: true })
     }
-    assert.deepEqual(await changedPaths(new RealGit(), ''), [])
+    assert.deepEqual(await changedPaths(new RealGit(), ''), { root: '', paths: [] })
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

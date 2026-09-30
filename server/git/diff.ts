@@ -293,28 +293,43 @@ export async function sessionDiffSummary(git: Git, cwd: string, want = ''): Prom
   }
 }
 
+/** その worktree の `--numstat` のパスだけ。**リネームは付けない**（`dir/{a => b}` の形を返さず、消した・足した 2 つのパスにする） */
+async function numstatPaths(git: Git, cwd: string, args: string[]): Promise<string[]> {
+  const out = await git.run(cwd, ['diff', '--numstat', '--no-renames', ...args])
+  return out
+    .split('\n')
+    .map((line) => line.split('\t'))
+    .filter((parts) => parts.length >= 3)
+    .map((parts) => parts[2]!)
+}
+
 /**
- * その worktree で変わっているファイルのパス（#564。エージェント用の `sai_sessions` の `overlap` の材料）。
+ * その worktree で変わっているファイル（#564。エージェント用の `sai_sessions` の `overlap` の材料）と、worktree のトップ。
  * 範囲は差分ビューアと同じ（`base...HEAD` + 未コミット + 追跡外）で、`--numstat` だけを読む（本文は作らない）。
+ * **パスはどれもリポジトリのトップからの形**（追跡外は `--full-name`。cwd がサブディレクトリでも `diff` と揃える）。
+ * **トップも返す**（同じ worktree かは cwd ではなくトップで比べる。サブディレクトリで開いたセッションと取り違えない）。
  * git でない・読めなければ空（重なりを知らせないだけで、一覧は落とさない）
  */
-export async function changedPaths(git: Git, cwd: string): Promise<string[]> {
-  if (!cwd) return []
+export async function changedPaths(git: Git, cwd: string): Promise<{ root: string; paths: string[] }> {
+  const none = { root: '', paths: [] as string[] }
+  if (!cwd) return none
+  let root = ''
   try {
-    await git.run(cwd, ['rev-parse', '--git-dir'])
+    root = (await git.run(cwd, ['rev-parse', '--show-toplevel'])).trim()
   } catch {
-    return []
+    return none
   }
+  if (!root) return none
   const base = await resolveBase(git, cwd, '').catch(() => '')
   const [branch, working, untracked] = await Promise.all([
-    base ? counts(git, cwd, [`${base}...HEAD`]).catch(() => ({ paths: [] as string[] })) : Promise.resolve({ paths: [] as string[] }),
-    counts(git, cwd, ['HEAD']).catch(() => ({ paths: [] as string[] })),
+    base ? numstatPaths(git, cwd, [`${base}...HEAD`]).catch(() => [] as string[]) : Promise.resolve([] as string[]),
+    numstatPaths(git, cwd, ['HEAD']).catch(() => [] as string[]),
     git
-      .run(cwd, ['ls-files', '--others', '--exclude-standard'])
+      .run(cwd, ['ls-files', '--others', '--exclude-standard', '--full-name'])
       .then((out) => out.split('\n').filter(Boolean))
       .catch(() => [] as string[]),
   ])
-  return [...new Set([...branch.paths, ...working.paths, ...untracked])]
+  return { root, paths: [...new Set([...branch, ...working, ...untracked])] }
 }
 
 async function section(git: Git, cwd: string, args: string[]): Promise<DiffSection> {

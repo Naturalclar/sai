@@ -97,14 +97,14 @@ export function overlapIgnored(path: string): boolean {
 }
 
 /**
- * 呼んだセッションと相手の worktree の重なり（#564）。**同じ worktree（cwd が同じ）なら空**（差分が同じなので、重なりではない）。
- * パスの順に並べ、先頭 `AGENT_OVERLAP_SHOW` 件と残りの数
+ * 呼んだセッションと相手の worktree の重なり（#564）。**同じ worktree（トップが同じ）なら空**（差分が同じなので、重なりではない。
+ * cwd で比べるとサブディレクトリで開いたセッションを別の worktree と取り違える）。パスの順に並べ、先頭 `AGENT_OVERLAP_SHOW` 件と残りの数
  */
 export function agentOverlap(
-  mine: { cwd: string; paths: readonly string[] },
-  theirs: { cwd: string; paths: readonly string[] },
+  mine: { root: string; paths: readonly string[] },
+  theirs: { root: string; paths: readonly string[] },
 ): { overlap: string[]; overlap_more: number } {
-  if (!mine.cwd || !theirs.cwd || mine.cwd === theirs.cwd) return { overlap: [], overlap_more: 0 }
+  if (!mine.root || !theirs.root || mine.root === theirs.root) return { overlap: [], overlap_more: 0 }
   const own = new Set(mine.paths.filter((p) => !overlapIgnored(p)))
   const both = [...new Set(theirs.paths)].filter((p) => own.has(p)).sort()
   return { overlap: both.slice(0, AGENT_OVERLAP_SHOW), overlap_more: Math.max(0, both.length - AGENT_OVERLAP_SHOW) }

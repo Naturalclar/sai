@@ -1875,13 +1875,13 @@ export function createApp(
    * `(cwd, last_turn_ts)` で `CHANGED_PATHS_TTL_MS` だけ覚える。時間でも切るのは、呼んだ側はターンの途中で編集していて
    * `last_turn_ts` が変わらないため。cwd は行から取り、リクエストからは受けない
    */
-  const changedCache = new Map<string, { at: number; paths: Promise<string[]> }>()
-  const changedOf = (s: SessionSummary): Promise<string[]> => {
-    if (!s.cwd || isRemoteHost(s.host, selfHost())) return Promise.resolve([])
+  const changedCache = new Map<string, { at: number; paths: Promise<{ root: string; paths: string[] }> }>()
+  const changedOf = (s: SessionSummary): Promise<{ root: string; paths: string[] }> => {
+    if (!s.cwd || isRemoteHost(s.host, selfHost())) return Promise.resolve({ root: '', paths: [] })
     const key = `${s.cwd}\0${s.last_turn_ts ?? ''}`
     const hit = changedCache.get(key)
     if (hit && Date.now() - hit.at < CHANGED_PATHS_TTL_MS) return hit.paths
-    const paths = changedPaths(git, s.cwd).catch(() => [] as string[])
+    const paths = changedPaths(git, s.cwd).catch(() => ({ root: '', paths: [] as string[] }))
     for (const [k, v] of changedCache) if (Date.now() - v.at >= CHANGED_PATHS_TTL_MS) changedCache.delete(k)
     changedCache.set(key, { at: Date.now(), paths })
     return paths
@@ -1902,7 +1902,7 @@ export function createApp(
     const payload: AgentSessionsResponse = {
       from: found.session.id,
       sessions: targets.map((s, i) =>
-        agentEntry(s, busy(s.id), sizes[i] ?? 0, agentOverlap({ cwd: found.session.cwd, paths: mine ?? [] }, { cwd: s.cwd, paths: theirs[i] ?? [] })),
+        agentEntry(s, busy(s.id), sizes[i] ?? 0, agentOverlap(mine ?? { root: '', paths: [] }, theirs[i] ?? { root: '', paths: [] })),
       ),
     }
     return json(res, payload)

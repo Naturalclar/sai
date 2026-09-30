@@ -81,7 +81,7 @@ const progress = {
 const changedFiles = new Map<string, string[]>()
 const changed = {
   async run(cwd: string, args: string[]) {
-    if (args[0] === 'rev-parse' && args[1] === '--git-dir') return '.git\n'
+    if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') return `${cwd}\n`
     if (args[0] === 'diff' && args[1] === '--numstat') return (changedFiles.get(cwd) ?? []).map((p) => `1\t0\t${p}`).join('\n')
     if (args[0] === 'ls-files') return ''
     throw new Error(`unused: ${args.join(' ')}`)

@@ -27,7 +27,7 @@ test('digestPrompt: 共通の骨格 + 口調 + 本文。本文は末尾にその
   assert.match(p, /1〜2 文、80 文字以内/)
   assert.match(p, /番号（`#` に続く数字や PR の番号）/)
   // 番号だけでなく「何をするものか」も残させる（#165）
-  assert.match(p, /issue \/ PR の番号には「何をするものか」を短く添える/)
+  assert.match(p, /番号には「何をするものか」を短く添える/)
   assert.match(p, /本文から分からなければ番号だけでよい/)
   // 例に実在の番号を使うと、関係ない行でもモデルがそれを書き写す
   assert.doesNotMatch(p, /#163|worktree 名でなく/, '例は無関係な題材にする')
@@ -38,6 +38,16 @@ test('digestPrompt: 共通の骨格 + 口調 + 本文。本文は末尾にその
   const q = digestPrompt('ENFP', text)
   assert.notEqual(p, q)
   assert.ok(q.includes(personaOf('ENFP').tone))
+})
+
+// ---- #540: 作例の `PR 〈番号〉作成` の型を写して、Issue を PR と呼んでいた
+
+test('digestPrompt: 作例に番号の種類（PR / Issue）と動作の語を直書きしない。種類は本文にあるときだけと言う', () => {
+  const head = digestPrompt('none', 'Issue #536 を作りました').split('\n---\n')[0]!
+  const examples = [...head.matchAll(/例:「([^」]*)」/g)].map((m) => m[1] ?? '')
+  assert.ok(examples.length > 0, '作例を見つけられていない（見つけられないとこのテストは何も確かめない）')
+  for (const ex of examples) assert.doesNotMatch(ex, /PR|issue|Issue|作成|マージ/, `作例「${ex}」に種類・動作の語がある（書き写される）`)
+  assert.match(head, /PR か Issue かは、渡された文に書いてあるときだけ/)
 })
 
 // ---- #268: 作例の数字をそのまま書き写すので、プロンプトに具体的な番号を置かない

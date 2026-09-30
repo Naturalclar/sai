@@ -90,3 +90,9 @@ test('formatDiffComments: 区切りが混ざったら、どちらの差分かを
   assert.match(text, /z\.ts:2（ブランチの差分・追加した行）\n>\n/, '空の行は引用だけ')
   assert.ok(text.indexOf('z.ts') < text.indexOf('server/app.ts'), 'ブランチの差分が先')
 })
+
+test('formatDiffComments: heading を渡すと 1 行目をそれにする（PR の差分へのコメント。#525）', () => {
+  const text = formatDiffComments([comment({ id: 'p', section: 'branch' })], 'PR #525「x」の差分へのコメントです（https://github.com/o/r/pull/525）。')
+  assert.match(text, /^PR #525「x」の差分へのコメントです（https:\/\/github\.com\/o\/r\/pull\/525）。\n\n/)
+  assert.doesNotMatch(text, /^差分へのコメントです/)
+})

@@ -113,16 +113,17 @@ export function commentMoved(comment: DiffComment, files: readonly DiffFile[] | 
 
 /**
  * 返信の本文にする。ファイル・行・その行の中身（引用）・コメントの順で、並びは書いた順ではなく
- * 区切り → パス → 行番号（読む側が上から追えるように）
+ * 区切り → パス → 行番号（読む側が上から追えるように）。`heading` を渡せば 1 行目をそれにする
+ * （PR の差分へのコメント。#525。どの PR の話かを先に書かないと、エージェントは自分の worktree の差分と取り違える）
  */
-export function formatDiffComments(list: readonly DiffComment[]): string {
+export function formatDiffComments(list: readonly DiffComment[], heading?: string): string {
   if (list.length === 0) return ''
   const sections = new Set(list.map((c) => c.section))
   const sorted = [...list].sort(
     (a, b) => (a.section === b.section ? 0 : a.section === 'branch' ? -1 : 1) || a.path.localeCompare(b.path) || a.line - b.line,
   )
   const order: DiffCommentSection[] = ['branch', 'working']
-  const head = `差分へのコメントです（${order.filter((s) => sections.has(s)).map((s) => SECTION_LABEL[s]).join(' / ')}）。`
+  const head = heading ?? `差分へのコメントです（${order.filter((s) => sections.has(s)).map((s) => SECTION_LABEL[s]).join(' / ')}）。`
   const blocks = sorted.map((c) => {
     const where = sections.size > 1 ? `${SECTION_LABEL[c.section]}・${KIND_LABEL[c.kind]}` : KIND_LABEL[c.kind]
     const quote = c.code.trim() === '' ? '>' : `> ${c.code}`

@@ -4,7 +4,7 @@
 // セッション**（最初のターンの許可で止まった、など）は SAI から存在が見えない。行がある場合でも、
 // 記録した pid が死んでいると端末と結びつかない。
 //
-// **セッション ID は、そのペインの codex が「いま開いている rollout」から取る**（#429）。
+// **セッション ID は、まずそのペインの codex が「いま開いている rollout」から取る**（#429）。
 // writer lock から引く手（#332 の案 2）は **codex 0.153.2 でしか当たらない**: 実測で 0.154.0 の TUI は
 // lock を開いておらず、そのスレッドの lock は ChatGPT アプリの `codex app-server --listen`（tmux の外）が
 // 握っていた。
@@ -14,9 +14,11 @@
 // 当たる一方、こちらは**ペイン → セッション**を当てる向きで、同じ worktree に会話が 2 本あると崩れる。
 // 端末で 1 本開いたまま SAI から新しいセッションを起こす（#401）と、新しい方の rollout が一番新しくなり、
 // **ペインの導出セッションが別の会話に化けて、返信がそのペインに打ち込まれた**。開いているファイルなら
-// 取り違えようがない。**引けなければ当てない**（`session` は空。材料が無いのに決めつけない）。
+// 取り違えようがない。0.154.0 の TUI は放置すると fd を閉じるため、開いていないときだけプロセスの
+// **開始秒と rollout 名が一致**し、さらに cwd も一致する一意のものへ落とす（#448）。
+// **それでも引けなければ当てない**（`session` は空。材料が無いのに決めつけない）。
 import { execFile } from 'node:child_process'
-import { open, realpath } from 'node:fs/promises'
+import { open, readdir, realpath } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join, sep } from 'node:path'
 import { isDescendant, type PsFn, type Tmux } from './terminal.ts'
@@ -35,7 +37,7 @@ export interface PaneCodex {
   /** codex 本体の pid（そのペインの子孫） */
   pid: number
   cwd: string
-  /** 開いている rollout から引いたセッション ID。引けなければ空（まだスレッドが無い・rollout を開かない版） */
+  /** 開いている rollout、または開始秒で裏を取った rollout のセッション ID。引けなければ空 */
   session: string
 }
 
@@ -58,6 +60,8 @@ export interface CodexPaneDeps {
   ps?: PsFn
   /** その pid が開いているファイル（既定は `lsof`）。cwd と rollout を 1 回で取る */
   openOf?: (pid: number) => Promise<PaneFiles>
+  /** rollout を閉じた TUI のセッション（既定はプロセス開始秒と rollout 名を突き合わせる。#448） */
+  sessionAtStart?: (pid: number, cwd: string) => Promise<string>
   now?: () => number
   env?: NodeJS.ProcessEnv
 }
@@ -168,6 +172,68 @@ function codexSessionsDir(env: NodeJS.ProcessEnv): string {
   return join(home, 'sessions')
 }
 
+export interface CodexStart {
+  startedAt: Date
+  /** `ps` の command。引数なしの対話 TUI かを見分けるために使う */
+  command: string
+}
+
+/** `ps -p <pid> -o lstart= -o command=` の 1 行。読めない形なら null */
+export function parseCodexStart(output: string): CodexStart | null {
+  const m = output
+    .trim()
+    .match(/^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2})\s+(\d{2}):(\d{2}):(\d{2})\s+(\d{4})\s+(.+)$/)
+  if (!m) return null
+  const month = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].indexOf(m[1]!)
+  const startedAt = new Date(Number(m[6]), month, Number(m[2]), Number(m[3]), Number(m[4]), Number(m[5]))
+  return Number.isNaN(startedAt.getTime()) ? null : { startedAt, command: m[7]!.trim() }
+}
+
+type PsStartRun = (pid: number) => Promise<string>
+
+const runPsStart: PsStartRun = (pid: number) =>
+  new Promise((resolve) => {
+    execFile('ps', ['-p', String(pid), '-o', 'lstart=', '-o', 'command='], { timeout: 5_000 }, (err, stdout) => {
+      resolve(err && !stdout ? '' : String(stdout))
+    })
+  })
+
+const two = (n: number): string => String(n).padStart(2, '0')
+
+/**
+ * rollout を閉じた Codex TUI だけの補欠（#448）。プロセス開始時刻と同じ秒に作られた rollout のうち、
+ * cwd まで一致するセッションが一意のときだけ返す。cwd の新しい順には戻さないので #429 を再発させない。
+ * 引数付きの `codex "…"` や subcommand は対話 TUI ではないため除く。
+ */
+export function rolloutSessionAtStart(env: NodeJS.ProcessEnv = process.env, run: PsStartRun = runPsStart): (pid: number, cwd: string) => Promise<string> {
+  const root = codexSessionsDir(env)
+  return async (pid: number, cwd: string): Promise<string> => {
+    if (!cwd) return ''
+    const info = parseCodexStart(await run(pid))
+    if (!info) return ''
+    const executable = info.command.split(/\s+/, 1)[0] ?? ''
+    if (basename(executable) !== 'codex' || info.command !== executable) return ''
+
+    const at = info.startedAt
+    const date = `${at.getFullYear()}/${two(at.getMonth() + 1)}/${two(at.getDate())}`
+    const stamp = `${at.getFullYear()}-${two(at.getMonth() + 1)}-${two(at.getDate())}T${two(at.getHours())}-${two(at.getMinutes())}-${two(at.getSeconds())}`
+    const dir = join(root, date)
+    let names: string[]
+    try {
+      names = await readdir(dir)
+    } catch {
+      return ''
+    }
+    const sessions = new Set<string>()
+    for (const name of names) {
+      if (!name.startsWith(`rollout-${stamp}-`) || !name.endsWith('.jsonl')) continue
+      const parsed = parseRolloutHead(await head(join(dir, name)), UUID.exec(name)?.[1] ?? '')
+      if (parsed.cwd === cwd && parsed.session) sessions.add(parsed.session)
+    }
+    return sessions.size === 1 ? [...sessions][0]! : ''
+  }
+}
+
 /** ファイルの頭だけを読む（rollout は手元で 12MB ある。`session_meta` は 1 行目） */
 async function head(path: string): Promise<string> {
   let file
@@ -244,7 +310,7 @@ export async function rolloutSession(paths: readonly string[]): Promise<string> 
 /**
  * tmux のペインで動いている Codex を数える。**行は見ない**ので、記録が 1 本も無いセッションも拾える。
  *
- * ペインの子孫に `codex` がいるかは `ps` のコマンド名で見て、セッション ID は cwd → rollout で引く。
+ * ペインの子孫に `codex` がいるかは `ps` のコマンド名で見て、セッション ID は open fd → 開始秒で引く。
  * 結果は `CODEX_PANES_TTL_MS` 覚える（3 秒のポーリングで `ps` / `lsof` / rollout の走査を起こさない）
  */
 export class CodexPanes implements CodexPaneSource {
@@ -253,12 +319,14 @@ export class CodexPanes implements CodexPaneSource {
   private readonly tmux: Tmux
   private readonly ps: PsFn
   private readonly openOf: (pid: number) => Promise<PaneFiles>
+  private readonly sessionAtStart: (pid: number, cwd: string) => Promise<string>
   private readonly now: () => number
 
   constructor(deps: CodexPaneDeps) {
     this.tmux = deps.tmux
     this.ps = deps.ps ?? realPsCommands
     this.openOf = deps.openOf ?? lsofPaneFiles(deps.env ?? process.env)
+    this.sessionAtStart = deps.sessionAtStart ?? rolloutSessionAtStart(deps.env ?? process.env)
     this.now = deps.now ?? Date.now
   }
 
@@ -296,7 +364,9 @@ export class CodexPanes implements CodexPaneSource {
           const shell = shells.find((s) => isDescendant(row.pid, s.pid, parents))
           if (!shell) continue // tmux の外（ChatGPT アプリの app-server など）
           const { cwd, rollouts } = await this.openOf(row.pid)
-          panes.push({ pane: shell.pane, pid: row.pid, cwd, session: await rolloutSession(rollouts) })
+          const opened = await rolloutSession(rollouts)
+          const session = opened || (await this.sessionAtStart(row.pid, cwd))
+          panes.push({ pane: shell.pane, pid: row.pid, cwd, session })
         }
       }
     } catch {

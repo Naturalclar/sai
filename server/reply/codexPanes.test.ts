@@ -3,7 +3,18 @@ import { mkdir, mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, sep } from 'node:path'
 import test from 'node:test'
-import { CODEX_PANES_TTL_MS, CodexPanes, parsePaneFiles, parsePsCommands, parseRolloutHead, rolloutSession, sessionRoots, lsofPaneFiles } from './codexPanes.ts'
+import {
+  CODEX_PANES_TTL_MS,
+  CodexPanes,
+  lsofPaneFiles,
+  parseCodexStart,
+  parsePaneFiles,
+  parsePsCommands,
+  parseRolloutHead,
+  rolloutSession,
+  rolloutSessionAtStart,
+  sessionRoots,
+} from './codexPanes.ts'
 import type { CodexPaneDeps } from './codexPanes.ts'
 import type { Tmux } from './terminal.ts'
 
@@ -43,6 +54,7 @@ const deps = (over: Partial<CodexPaneDeps> = {}): CodexPaneDeps => ({
   tmux: fakeTmux(),
   ps: async () => PS,
   openOf: async () => ({ cwd: '/repo/one', rollouts: [] }),
+  sessionAtStart: async () => '',
   ...over,
 })
 
@@ -73,6 +85,38 @@ test('tmux の外の codex は数えない（ChatGPT アプリの app-server な
 test('rollout を 1 つも開いていない codex は、当てずに空で返す（呼ぶ側が捨てる）', async () => {
   const panes = new CodexPanes(deps({ openOf: async () => ({ cwd: '/repo/one', rollouts: [] }) }))
   assert.deepEqual((await panes.scan())[0]?.session, '')
+})
+
+test('rollout を閉じた TUI は、起動時刻で裏を取れたセッションを返す（#448）', async () => {
+  const calls: [number, string][] = []
+  const panes = new CodexPanes(
+    deps({
+      openOf: async () => ({ cwd: '/repo/one', rollouts: [] }),
+      sessionAtStart: async (pid, cwd) => {
+        calls.push([pid, cwd])
+        return SESSION
+      },
+    }),
+  )
+  assert.equal((await panes.scan())[0]?.session, SESSION)
+  assert.deepEqual(calls, [[101, '/repo/one']])
+})
+
+test('開いている rollout があれば起動時刻の補欠は呼ばない（#429 を優先）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-panes-'))
+  const rollout = await writeRollout(dir, `rollout-2026-09-04T14-40-23-${SESSION}.jsonl`, SESSION, '/repo/one')
+  let fallbacks = 0
+  const panes = new CodexPanes(
+    deps({
+      openOf: async () => ({ cwd: '/repo/one', rollouts: [rollout] }),
+      sessionAtStart: async () => {
+        fallbacks++
+        return OTHER
+      },
+    }),
+  )
+  assert.equal((await panes.scan())[0]?.session, SESSION)
+  assert.equal(fallbacks, 0)
 })
 
 test('rolloutSession: 開いているものの新しい順。読めないファイルは飛ばす', async () => {
@@ -148,6 +192,44 @@ test('parsePsCommands: pid / ppid / コマンド名（パスは落とす）', ()
     { pid: 101, ppid: 100, comm: 'codex' },
     { pid: 102, ppid: 100, comm: 'node' },
   ])
+})
+
+test('parseCodexStart: ps の開始時刻と command を読む', () => {
+  const parsed = parseCodexStart('Fri Sep 11 15:28:51 2026 codex\n')
+  assert.equal(parsed?.startedAt.getFullYear(), 2026)
+  assert.equal(parsed?.startedAt.getMonth(), 8)
+  assert.equal(parsed?.startedAt.getDate(), 11)
+  assert.equal(parsed?.startedAt.getHours(), 15)
+  assert.equal(parsed?.startedAt.getMinutes(), 28)
+  assert.equal(parsed?.startedAt.getSeconds(), 51)
+  assert.equal(parsed?.command, 'codex')
+  assert.equal(parseCodexStart('not ps'), null)
+})
+
+test('rolloutSessionAtStart: TUI の起動秒・cwd と一致する一意の rollout だけを返す（#448）', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'sai-start-'))
+  const dir = join(home, 'sessions', '2026', '09', '11')
+  await mkdir(dir, { recursive: true })
+  await writeRollout(dir, `rollout-2026-09-11T15-28-50-${OTHER}.jsonl`, OTHER, '/repo/one')
+  await writeRollout(dir, `rollout-2026-09-11T15-28-51-${SESSION}.jsonl`, SESSION, '/repo/one')
+  const find = rolloutSessionAtStart({ CODEX_HOME: home }, async () => 'Fri Sep 11 15:28:51 2026 codex\n')
+  assert.equal(await find(101, '/repo/one'), SESSION)
+  assert.equal(await find(101, '/repo/other'), '', '開始秒が同じでも cwd が違えば当てない')
+})
+
+test('rolloutSessionAtStart: 単発実行・subcommand と曖昧な候補は当てない', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'sai-start-'))
+  const dir = join(home, 'sessions', '2026', '09', '11')
+  await mkdir(dir, { recursive: true })
+  await writeRollout(dir, `rollout-2026-09-11T15-28-51-${SESSION}.jsonl`, SESSION, '/repo/one')
+  const oneShot = rolloutSessionAtStart({ CODEX_HOME: home }, async () => 'Fri Sep 11 15:28:51 2026 codex note.txtを読んで\n')
+  assert.equal(await oneShot(101, '/repo/one'), '')
+  const subcommand = rolloutSessionAtStart({ CODEX_HOME: home }, async () => 'Fri Sep 11 15:28:51 2026 /usr/bin/codex app-server --stdio\n')
+  assert.equal(await subcommand(101, '/repo/one'), '')
+
+  await writeRollout(dir, `rollout-2026-09-11T15-28-51-${OTHER}.jsonl`, OTHER, '/repo/one')
+  const ambiguous = rolloutSessionAtStart({ CODEX_HOME: home }, async () => 'Fri Sep 11 15:28:51 2026 /usr/bin/codex\n')
+  assert.equal(await ambiguous(101, '/repo/one'), '')
 })
 
 test('parseRolloutHead: session_meta の session_id と cwd（切れた行は捨てる）', () => {

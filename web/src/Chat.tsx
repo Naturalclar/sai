@@ -13,6 +13,8 @@ import { hm } from './format'
 import { groupRows, speakerLabel } from './chatGroups.ts'
 import { Message } from './Message'
 import { SessionEndLine } from './SessionEndLine'
+import { UnreadLine } from './UnreadLine'
+import { firstUnreadKey } from './unreadMarks.ts'
 import { JumpToBottom } from './JumpToBottom'
 import { HostTag } from './HostTag'
 import { opensDiff, type ChatDiffs } from './feedDiff.ts'
@@ -92,6 +94,15 @@ interface Props {
    * セッション画面だけが渡す
    */
   images?: ReadonlyMap<string, GalleryItem[]>
+  /**
+   * 未読の線（#502）。このミリ秒より新しい最初の返答の前に「ここから未読」を引く。セッション画面だけが渡す
+   * （開いたときの印を覚えて渡すので、読んだそばから線が消えることはない）
+   */
+  unreadAfter?: number
+  /** 最下部が見えているあいだ、描き直すたびに呼ぶ（#502。既読の印を進める）。検索の飛び先へ送っている間は呼ばない */
+  onSeenBottom?: () => void
+  /** 返答のバブルの「⋯」に「ここから未読にする」を出す（#502）。押されたらその発言の ts を渡す */
+  onMarkUnread?: (ts: string) => void
 }
 
 /**
@@ -105,7 +116,7 @@ function flash(el: HTMLElement) {
   window.setTimeout(() => el.classList.remove('found'), JUMP_FLASH_MS)
 }
 
-export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_SESSIONS, trailer, showThinking = false, thinkingOpen = false, longOpen = false, profile, linear = '', focusTs = '', focusSide: askedSide, diffs, jumpTo = null, question, answerable = NO_IDS, images }: Props) {
+export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_SESSIONS, trailer, showThinking = false, thinkingOpen = false, longOpen = false, profile, linear = '', focusTs = '', focusSide: askedSide, diffs, jumpTo = null, question, answerable = NO_IDS, images, unreadAfter, onSeenBottom, onMarkUnread }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
   // 最後に最下部へ送ったときの scrollHeight。中身の高さが変わったときだけ送るため（#344）
@@ -123,6 +134,8 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
   // 名指しした側のバブルが描かれていなければ、側を問わずその ts に着く（`focusSideIn()` の説明）
   const drawn = new Set(days.flatMap((d) => d.groups.flatMap((g) => g.items.map((u) => drawnKey(u.row.ts, u.speaker === 'me' ? 'me' : 'agent')))))
   const focusSide = focusSideIn(drawn, focusTs, askedSide)
+  // 「ここから未読」の線を引く発言（#502）
+  const unreadKey = firstUnreadKey(days.flatMap((d) => d.groups.flatMap((g) => g.items)), unreadAfter)
   const landed = useRef('')
   // 着地したかは ts と側の組で覚える（同じ行の入力と返答へのリンクを続けて開いても、2 つ目にも送る）
   const focusKey = focusTs ? `${focusTs}|${focusSide ?? ''}` : ''
@@ -177,6 +190,14 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
     topTs.current = first
     lastHeight.current = el.scrollHeight
   })
+
+  // 最下部まで見えていれば既読にする（#502）。飛び先へまだ着いていない間と、タブが隠れている間は数えない
+  // （着いたあとは数える。URL の ts は残るので、focusKey があるだけで止めるとリンクから開いたセッションが既読にならない）。
+  // 新しい行が届いたときも呼び直すのは、呼び出し側の onSeenBottom が行を依存に持って作り直されるから
+  useEffect(() => {
+    if (!onSeenBottom || !atBottom || (focusKey && landed.current !== focusKey) || document.visibilityState !== 'visible') return
+    onSeenBottom()
+  }, [atBottom, focusKey, onSeenBottom])
 
   const onScroll = () => {
     const el = ref.current
@@ -250,11 +271,18 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
                       // 発言ごとの「⋯」（#503）。待ちのバブルは発言ではないので出さない。リンクはフィードからでもセッション画面へ向ける
                       const menu = u.waiting
                         ? undefined
-                        : { link: messageUrl(location, id, u.row.ts, side), text: messageCopyText(u.text, side), clipped: u.clipped }
+                        : {
+                            link: messageUrl(location, id, u.row.ts, side),
+                            text: messageCopyText(u.text, side),
+                            clipped: u.clipped,
+                            // 未読に戻せるのは返答だけ（#502。未読に数えるのは返答なので）
+                            ...(onMarkUnread && side === 'agent' ? { onMarkUnread: () => onMarkUnread(u.row.ts) } : {}),
+                          }
                       // 自分の入力は Markdown にしない（打ったままを出す）。エージェントの返答は Markdown。
                       // 一言があるバブルには「変？」を出す（#346）。鍵はサーバ（作る側）と同じ関数で作る
                       return (
                       <ImageSourceContext key={u.key} value={imageUrl}>
+                      {u.key === unreadKey && <UnreadLine />}
                       <Message
                         {...(diff ? { diff } : {})}
                         ts={u.row.ts}

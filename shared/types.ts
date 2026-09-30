@@ -206,6 +206,13 @@ export interface SessionSummary {
    * end が追い越すので、メタを書き換えずに自動で戻る）。一覧・フィードの既定では出ない。false なら省略
    */
   archived?: boolean
+  /**
+   * まだ読んでいないターン完了の数（#502。`shared/unread.ts` の `unreadCounts()`）。サーバが `read-marks.json` の印と
+   * 窓の中の行から応答時に数える。0 なら省略
+   */
+  unread?: number
+  /** どこまで読んだか（#502。ミリ秒）。セッション画面の「ここから未読」の線はこれより新しい最初の返答の前に引く */
+  read_at?: number
 }
 
 /** セッションに人が付けるもの。~/.agent-feed/session-meta.json に JSONL とは別で持つ（アイコン画像はファイルで別、SessionSummary.icon） */
@@ -418,6 +425,22 @@ export interface SessionModelsResponse {
 export interface SessionMetaResponse {
   id: string
   meta: SessionMeta
+}
+
+/**
+ * PUT /api/sessions/<id>/read（#502。同一オリジンのみ）。`ts` のターン完了まで読んだ印を置く。
+ * **既読は前にしか進めない**（別の端末で先まで読んだのを古い画面で戻さない）。`back: true` は「ここから未読にする」で、
+ * `ts` の発言の直前まで印を戻す
+ */
+export interface ReadRequest {
+  ts: string
+  back?: boolean
+}
+
+export interface ReadResponse {
+  id: string
+  /** 置いたあとの印（ミリ秒） */
+  read_at: number
 }
 
 /**

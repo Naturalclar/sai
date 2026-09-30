@@ -49,6 +49,8 @@ import type { SessionTurnResponse,
   SessionIconResponse,
   IconHistoryResponse,
   SessionMetaResponse,
+  ReadRequest,
+  ReadResponse,
   SessionPermissionsResponse,
   SessionModelsResponse,
   SessionSkillsResponse,
@@ -104,6 +106,8 @@ import { prLookupFromEnv } from './git/pr.ts'
 import type { PrLookup } from './git/pr.ts'
 import { AttachmentStore } from './reply/attachments.ts'
 import { PROFILE_FILE, ProfileStore } from './meta/profile.ts'
+import { READ_MARKS_FILE, ReadStore } from './meta/reads.ts'
+import { readMarkOf, rowMs, unreadCounts, unreadFromMark } from '../shared/unread.ts'
 import { SETTINGS_FILE, SettingsStore } from './meta/settings.ts'
 import type { Settings } from './meta/settings.ts'
 import { isLinearWorkspace } from '../shared/refs.ts'
@@ -183,6 +187,8 @@ export const MAX_SETTINGS_BYTES = 4 * 1024
 const REPLY_SUFFIX = '/reply'
 const REVIEW_SUFFIX = '/review'
 const META_SUFFIX = '/meta'
+/** 未読の印を置く（#502）。`PUT /api/sessions/<id>/read`。同一オリジンのみ */
+const READ_SUFFIX = '/read'
 const ICON_SUFFIX = '/icon'
 const SKILLS_SUFFIX = '/skills'
 const MODELS_SUFFIX = '/models'
@@ -643,6 +649,8 @@ export function createApp(
   // 返信中の許可・質問の預かりも立て直しをまたぐ（#440）。引き取るのは、いま回っている返信の子（`replying.json` から引き取った分）のものだけ
   approvals.persistTo(join(store.directory, APPROVALS_FILE), (id) => run.running(id))
   const metaStore = new MetaStore(join(store.directory, META_FILE))
+  // 未読の印（#502）。立て直しても消えないようにファイルに持つ
+  const readStore = new ReadStore(join(store.directory, READ_MARKS_FILE))
   const iconStore = new IconStore(join(store.directory, ICONS_DIR))
   const iconHistory = new IconHistory(join(store.directory, ICON_HISTORY_DIR), join(store.directory, ICON_HISTORY_FILE), iconStore)
   const attachmentStore = new AttachmentStore(join(store.directory, ATTACHMENTS_DIR))
@@ -822,11 +830,13 @@ export function createApp(
    * アーカイブ後に行が増えると end が archived_at を追い越すので、メタを書き換えずに自動で戻る
    */
   const sessionsWithMeta = async (days: number): Promise<{ rev: string; sessions: SessionSummary[] }> => {
-    const [{ rev, sessions: raw }, meta, icons] = await Promise.all([store.sessions(days), metaStore.all(), iconStore.all()])
+    const [{ rev, sessions: raw }, meta, icons, reads, rows] = await Promise.all([store.sessions(days), metaStore.all(), iconStore.all(), readStore.get(), store.rows(days)])
     // project / remote の無い古い行のセッションは cwd から git で引いて埋める（cwd ごとに 1 回だけ。#182、#212）
     const sessions = await fillRepo(projects, raw)
+    // 未読の数（#502）。印は read-marks.json、数えるのは窓の中のターン完了の行
+    const unread = unreadCounts(rows, reads.marks)
     return {
-      rev: `${rev}-${meta.rev}-${icons.rev}`,
+      rev: `${rev}-${meta.rev}-${icons.rev}-${reads.rev}`,
       sessions: await Promise.all(sessions.map(async (s) => {
         const m = meta.entries[s.id]
         const icon = icons.entries.get(iconKey(s.id))
@@ -838,6 +848,9 @@ export function createApp(
           if (!!m.archived_at && Date.parse(m.archived_at) >= Date.parse(s.end)) out.archived = true
         }
         if (icon) out.icon = iconUrl(s.id, icon.version)
+        const n = unread.get(s.id)
+        if (n) out.unread = n
+        out.read_at = readMarkOf(reads.marks, s.id)
         return out
       })),
     }
@@ -2331,6 +2344,27 @@ export function createApp(
     return json(res, payload)
   }
 
+  /**
+   * PUT /api/sessions/<id>/read（#502）。そのターン完了まで読んだ印を置く。前にしか進めず、`back` のときだけ
+   * その発言の直前まで戻す（「ここから未読にする」）。同一オリジンのみ（別サイトから未読を消させない）
+   */
+  const putRead = async (req: IncomingMessage, res: ServerResponse, id: string, days: number) => {
+    if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
+    let body: unknown
+    try {
+      body = await readJson(req, MAX_META_BYTES)
+    } catch (err) {
+      return error(res, 400, err instanceof Error ? err.message : 'bad body')
+    }
+    const { ts, back } = (body ?? {}) as Partial<ReadRequest>
+    if (typeof ts !== 'string' || !Number.isFinite(rowMs(ts))) return error(res, 400, 'ts が要ります')
+    const { sessions } = await store.sessions(days)
+    if (!sessions.some((s) => s.id === id)) return error(res, 404, 'session not found in window')
+    const readAt = await readStore.mark(id, back === true ? unreadFromMark(ts) : rowMs(ts), back === true)
+    const payload: ReadResponse = { id, read_at: readAt }
+    return json(res, payload)
+  }
+
   /** GET /api/sessions/<id>/icon。?v= がいまのファイルと同じなら長くキャッシュさせる（差し替えれば URL が変わる） */
   const getIcon = async (req: IncomingMessage, res: ServerResponse, id: string, version: string | null) => {
     const icon = await iconStore.get(id)
@@ -2515,6 +2549,7 @@ export function createApp(
     const isReply = path.startsWith(SESSIONS_PREFIX) && path.endsWith(REPLY_SUFFIX)
     const isReview = path.startsWith(SESSIONS_PREFIX) && path.endsWith(REVIEW_SUFFIX)
     const isMeta = path.startsWith(SESSIONS_PREFIX) && path.endsWith(META_SUFFIX)
+    const isRead = path.startsWith(SESSIONS_PREFIX) && path.endsWith(READ_SUFFIX)
     const isIcon = path.startsWith(SESSIONS_PREFIX) && path.endsWith(ICON_SUFFIX)
     const isSkills = path.startsWith(SESSIONS_PREFIX) && path.endsWith(SKILLS_SUFFIX)
     const isModels = path.startsWith(SESSIONS_PREFIX) && path.endsWith(MODELS_SUFFIX)
@@ -2557,7 +2592,7 @@ export function createApp(
       (method === 'POST' &&
         (isNewSession || isReply || isReview || isAsk || isAnswer || isAttachUpload || isQueue || isDigestFeedback || path === AGENT_SEND_PATH || isAgentStop || isInterrupt)) ||
       (method === 'DELETE' && (isQueue || isHistoryIcon)) ||
-      (method === 'PUT' && (isMeta || isProfile || isSettings)) ||
+      (method === 'PUT' && (isMeta || isRead || isProfile || isSettings)) ||
       ((method === 'PUT' || method === 'DELETE') && (isIcon || isProfileIcon))
     if (!writable && method !== 'GET' && method !== 'HEAD') return error(res, 405, 'method not allowed')
     try {
@@ -2622,6 +2657,12 @@ export function createApp(
         // 画面はポーリングのついでにこれを見て、別ターミナルで pnpm build されたらリロードする
         const build = await buildId()
         if (build) res.setHeader('X-SAI-Build', build)
+      }
+      if (isRead && !isQueue) {
+        if (method !== 'PUT') return error(res, 405, 'method not allowed')
+        const id = sessionIdFrom(path, READ_SUFFIX)
+        if (id === null) return error(res, 400, 'bad session id')
+        return await putRead(req, res, id, parseDays(q.get('days'), 90))
       }
       if (isMeta) {
         const id = sessionIdFrom(path, META_SUFFIX)

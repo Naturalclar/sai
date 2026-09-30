@@ -11,6 +11,8 @@ export interface MessageMenuProps {
   text: string
   /** 本文が記録の時点で切れている（#358）。コピーしても続きは無いことを書き添える */
   clipped?: boolean
+  /** 「ここから未読にする」（#502）。返答のバブルでセッション画面のときだけ */
+  onMarkUnread?: () => void
 }
 
 type Done = { what: 'link' | 'text'; ok: boolean } | null
@@ -21,7 +23,7 @@ type Done = { what: 'link' | 'text'; ok: boolean } | null
  * **コピーできなかったときはリンクを選べる欄で出す**（クリップボードは安全なコンテキストでしか使えない。tailnet の素の IP の
  * `http://` など。本文は長いので欄には出さず、画面の本文を選んでもらう）
  */
-export function MessageMenu({ link, text, clipped = false }: MessageMenuProps) {
+export function MessageMenu({ link, text, clipped = false, onMarkUnread }: MessageMenuProps) {
   const [open, setOpen] = useState(false)
   const [done, setDone] = useState<Done>(null)
   const ref = useRef<HTMLDivElement>(null)
@@ -60,6 +62,18 @@ export function MessageMenu({ link, text, clipped = false }: MessageMenuProps) {
           {text && (
             <button type="button" role="menuitem" onClick={() => void copy('text')}>
               {done?.what === 'text' && done.ok ? '本文をコピーしました' : '本文をコピー'}
+            </button>
+          )}
+          {onMarkUnread && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                close(false)
+                onMarkUnread()
+              }}
+            >
+              ここから未読にする
             </button>
           )}
           {clipped && text && <div className="note">本文は記録の時点で切れています（コピーしても続きはありません）</div>}

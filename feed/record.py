@@ -39,7 +39,7 @@ from pathlib import Path
 
 # 行の形の版。行に `v` として載せる。行の形（キー）を変えるたびに上げ、shared/types.ts の RECORD_VERSION と揃える
 # （ずれると feed/test_record.py が止まる）。画面は窓の中の一番新しい行の v が古いと「record.py が古い」と出す
-RECORD_VERSION = 8
+RECORD_VERSION = 9
 # 本文の上限（#358）。超えたぶんは記録の時点で落ちて後から復元できないので、実際の長さから余裕を見て取る
 # （実測: 返答の 99% が 2000 字以下、5000 字超えは 0.1%、10000 字超えは 0 件）。上限そのものは残す
 # （壊れた payload で JSONL を膨らませないため）。切ったときは行の `clipped` に項目名を載せる
@@ -867,6 +867,58 @@ def tool_summary(tool_name: str, tool_input) -> str:
         return ""
 
 
+# 質問の待ちの行に載せる、質問の形（#334）。フックの payload にはあるのに、前は文だけを text に残して捨てていた。
+# 行が膨らみすぎないように、問の数・選択肢の数・文の長さに上限を置く（実データの AskUserQuestion は問 1〜4、選択肢 2〜4）
+MAX_QUESTIONS = 8
+MAX_QUESTION_OPTIONS = 10
+MAX_QUESTION_TEXT = 500
+MAX_QUESTION_HEADER = 100
+MAX_OPTION_LABEL = 200
+MAX_OPTION_DESCRIPTION = 500
+
+
+def question_structure(tool_input) -> tuple[list, bool]:
+    """AskUserQuestion の tool_input から `[{question, header, multiSelect, options: [{label, description}]}]` を作る（#334）。
+
+    形の違うものは飛ばす（必ず exit 0 の record.py の中なので、例外にしない）。返すのは（質問、どこかを切ったか）。
+    画面は `shared/approvals.ts` の `askQuestions()` にそのまま渡すので、キーの名前は tool_input と同じにする。
+    """
+    if not isinstance(tool_input, dict):
+        return [], False
+    raw = tool_input.get("questions")
+    if not isinstance(raw, list):
+        return [], False
+    cut = len(raw) > MAX_QUESTIONS
+    out = []
+    for q in raw[:MAX_QUESTIONS]:
+        if not isinstance(q, dict):
+            continue
+        question = q.get("question")
+        if not isinstance(question, str) or not question.strip():
+            continue
+        header = q.get("header") if isinstance(q.get("header"), str) else ""
+        options = []
+        raw_options = q.get("options") if isinstance(q.get("options"), list) else []
+        cut = cut or len(raw_options) > MAX_QUESTION_OPTIONS
+        for o in raw_options[:MAX_QUESTION_OPTIONS]:
+            if not isinstance(o, dict) or not isinstance(o.get("label"), str):
+                continue
+            label = o["label"]
+            description = o.get("description") if isinstance(o.get("description"), str) else ""
+            cut = cut or bool(clipped_fields((("", label, MAX_OPTION_LABEL), ("", description, MAX_OPTION_DESCRIPTION))))
+            options.append({"label": clip(label, MAX_OPTION_LABEL), "description": clip(description, MAX_OPTION_DESCRIPTION)})
+        cut = cut or bool(clipped_fields((("", question, MAX_QUESTION_TEXT), ("", header, MAX_QUESTION_HEADER))))
+        out.append(
+            {
+                "question": clip(question, MAX_QUESTION_TEXT),
+                "header": clip(header, MAX_QUESTION_HEADER),
+                "multiSelect": q.get("multiSelect") is True,
+                "options": options,
+            }
+        )
+    return out, cut
+
+
 def waiting_text(payload: dict) -> str | None:
     """待ちの行の text。「何を待っているか」を日本語の接頭辞付きで返す。待ちでなければ None（行を書かない）。"""
     event = detect_event(payload)
@@ -1301,6 +1353,9 @@ def build_row(payload: dict, now: datetime, directory: Path, declared: str = "")
     waiting = None
     # 終了の行（#385）。本文の代わりに「なぜ終わったか」を入れる
     ended = None
+    # 質問の待ちの行に載せる質問の形（#334）。無ければ行にキーごと載せない
+    questions: list = []
+    questions_cut = False
     # Claude のフックはどのイベントでも permission_mode を載せてくる（イベントによっては無い）。Codex には無い
     raw_mode = payload.get("permission_mode")
     permission_mode = raw_mode.strip() if isinstance(raw_mode, str) else ""
@@ -1314,6 +1369,8 @@ def build_row(payload: dict, now: datetime, directory: Path, declared: str = "")
             waiting = waiting_text(payload)
             if waiting is None:
                 return None
+            if event in ("PreToolUse", "PermissionRequest") and payload.get("tool_name") == "AskUserQuestion":
+                questions, questions_cut = question_structure(payload.get("tool_input"))
         if is_end_event(event):
             # 終了の行（#385）。本文は「なぜ終わったか」だけで、transcript は読まない
             # （読むと最後のターンの返答がもう 1 行ぶん増えて、同じ発言が 2 回出る）
@@ -1496,6 +1553,11 @@ def build_row(payload: dict, now: datetime, directory: Path, declared: str = "")
             ("thinking", thinking, MAX_THINKING),
         )
     )
+    # 質問の形（#334）。文（text）だけでは選択肢が分からないので、行に持たせる（別のマシンのセッションやフィードでも出せる）
+    if questions:
+        row["questions"] = questions
+        if questions_cut:
+            clipped.append("questions")
     if clipped:
         row["clipped"] = clipped
     return row

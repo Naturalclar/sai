@@ -18,7 +18,7 @@ import { HostTag } from './HostTag'
 import { opensDiff, type ChatDiffs } from './feedDiff.ts'
 import { JUMP_FLASH_MS, type FeedJump } from './feedJump.ts'
 import { followsBottom, nearBottom, prepended } from './chatScroll.ts'
-import { questionsFor } from './terminalQuestion.ts'
+import { questionsFor, rowQuestions } from './terminalQuestion.ts'
 import { wasClipped } from '../../shared/clipped.ts'
 import type { PendingQuestion } from '../../shared/types.ts'
 import type { MessageSide } from './hooks.ts'
@@ -255,7 +255,7 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
                         text={u.text}
                         markdown={u.speaker !== 'me'}
                         waiting={u.waiting}
-                        questions={questionsFor(u, question)}
+                        questions={rowQuestions(u) ?? questionsFor(u, question)}
                         resolved={u.resolved}
                         thinking={showThinking ? u.thinking : undefined}
                         thinkingOpen={thinkingOpen}

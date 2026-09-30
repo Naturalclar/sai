@@ -11,10 +11,21 @@ export type SessionSource = 'payload' | 'rollout' | 'synth' | ''
  * 行の形の版。feed/record.py の RECORD_VERSION と同じ値（ずれると pnpm test:feed が止まる）。
  * 行の形を変えるたびに上げる。画面は窓の中の一番新しい行の v がこれより古いと「record.py が古い」と出す
  */
-export const RECORD_VERSION = 8
+export const RECORD_VERSION = 9
 
 /** record.py が切った本文の項目（#358。FeedRow.clipped） */
-export type ClippedField = 'text' | 'user_text' | 'thinking'
+export type ClippedField = 'text' | 'user_text' | 'thinking' | 'questions'
+
+/**
+ * 質問の待ちの行に載る、質問の形（#334。record.py の `question_structure()`）。キーの名前は `AskUserQuestion` の
+ * `tool_input.questions` と同じなので、画面は `shared/approvals.ts` の `askQuestions({ questions })` にそのまま渡せる
+ */
+export interface RowQuestion {
+  question: string
+  header: string
+  multiSelect: boolean
+  options: { label: string; description: string }[]
+}
 
 /** ~/.agent-feed/YYYY-MM-DD.jsonl の1行 = 1ターン */
 export interface FeedRow {
@@ -75,6 +86,11 @@ export interface FeedRow {
    * 切られたのかが読めない）。上限は record.py の MAX_TEXT / MAX_USER_TEXT / MAX_THINKING
    */
   clipped?: ClippedField[]
+  /**
+   * `AskUserQuestion` の待ちの行（`PreToolUse` / `PermissionRequest`）の質問と選択肢（#334。v9 から）。
+   * text は文だけなので、選択肢はここから出す。無い古い行は #333 の transcript から読む方に落ちる
+   */
+  questions?: RowQuestion[]
   first_user_text?: string
   /**
    * text をチャットの一言コメントに言い換えたもの（性格つき）。JSONL には無く、サーバが応答時に

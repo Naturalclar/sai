@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { PendingQuestion } from '../../shared/types.ts'
-import { questionsFor } from './terminalQuestion.ts'
+import { questionsFor, rowQuestions } from './terminalQuestion.ts'
 
 const pending: PendingQuestion = {
   input: { questions: [{ question: 'どう進めますか？', header: 'PR 1', options: [{ label: 'コミットしてPR作成 (Recommended)', description: 'push して PR を作る' }, { label: 'まだコミットしない' }] }] },
@@ -29,4 +29,17 @@ test('questionsFor: 質問が無い・待ちでない・解消した・文が違
   assert.equal(questionsFor({ ...waiting, resolved: true }, pending), null, '前に聞いた同じ文の質問（後に行が来た）')
   assert.equal(questionsFor({ ...waiting, text: '質問: 別の質問？' }, pending), null)
   assert.equal(questionsFor(waiting, { ...pending, input: { questions: 'broken' } }), null)
+})
+
+test('rowQuestions: 行に載った質問（#334）を、まだ解消していない待ちのバブルに出す。推奨の印も同じく読む', () => {
+  const row = {
+    questions: [{ question: 'どう進めますか？', header: 'PR 1', multiSelect: false, options: [{ label: 'コミットしてPR作成 (Recommended)', description: 'push して PR を作る' }, { label: 'まだコミットしない', description: '' }] }],
+  }
+  const qs = rowQuestions({ waiting: true, resolved: false, row })
+  assert.equal(qs?.[0]?.header, 'PR 1')
+  assert.deepEqual(qs?.[0]?.options.map((o) => [o.label, o.recommended]), [['コミットしてPR作成', true], ['まだコミットしない', false]])
+  assert.equal(rowQuestions({ waiting: true, resolved: true, row }), null, '解消した待ちには出さない')
+  assert.equal(rowQuestions({ waiting: false, row }), null)
+  assert.equal(rowQuestions({ waiting: true, row: {} }), null, '載っていない古い行は null（#333 に落とす）')
+  assert.equal(rowQuestions({ waiting: true, row: { questions: [] } }), null)
 })

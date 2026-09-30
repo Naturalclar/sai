@@ -2,6 +2,7 @@ import { useContext, useState } from 'react'
 import type { GalleryItem } from './api'
 import { ImageMark } from './ImageMark'
 import { LightboxContext, opensInPage } from './lightbox'
+import { ThumbImage } from './ThumbImage'
 
 /**
  * 発言のバブルの下に足す画像（#507）。バブルの中に出ていないもの（端末で貼った画像・Read で開いた画像・自分の入力に書いたパス）。
@@ -33,7 +34,7 @@ export function MessageImages({ items }: { items: GalleryItem[] }) {
               openLightbox(shown, shown.indexOf(item))
             }}
           >
-            <img src={item.url} alt={item.name} loading="lazy" onError={() => setFailed((s) => new Set(s).add(item.url))} />
+            <ThumbImage url={item.url} alt={item.name} onBroken={() => setFailed((s) => new Set(s).add(item.url))} />
           </a>
         ),
       )}

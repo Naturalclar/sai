@@ -334,7 +334,7 @@ rsync -a --include='????-??-??.*.jsonl' --exclude='*' mini:~/.agent-feed/ ~/.age
 
 普段は設定しない。うまく動かないときに経路を切る・ログを残すためのもの。
 
-**実行ファイル（`claude` / `codex` / `opencode` / `tmux` / `git` / `gh` / `tailscale`）はサーバの `PATH` から探す。** launchd などで `PATH` が最小のまま起動するなら、サーバに `PATH` を渡す（`tailscale` は `PATH` に無ければ macOS の GUI 版も試す）。前は `SAI_CLAUDE_BIN` などで 1 つずつ差し替えていたが、`PATH` を 1 つ直せば全部に効くのでやめた（#288）。
+**実行ファイル（`claude` / `codex` / `opencode` / `tmux` / `git` / `gh` / `tailscale` / `sips`）はサーバの `PATH` から探す。** launchd などで `PATH` が最小のまま起動するなら、サーバに `PATH` を渡す（`tailscale` は `PATH` に無ければ macOS の GUI 版も試す。`sips` は macOS 付属で、画像の枠に出す軽い版を作るのに使う。無ければ重い画像は押すまで読まない）。前は `SAI_CLAUDE_BIN` などで 1 つずつ差し替えていたが、`PATH` を 1 つ直せば全部に効くのでやめた（#288）。
 
 | | |
 | --- | --- |

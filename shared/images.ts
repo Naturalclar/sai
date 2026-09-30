@@ -57,3 +57,17 @@ export function imageRefs(text: string): ImageRef[] {
 export function sessionImageUrl(id: string, src: string): string {
   return `/api/sessions/${encodeURIComponent(id)}${IMAGES_SEGMENT}${imageKey(src)}`
 }
+
+/**
+ * 枠に出す軽い版の URL（#589。`?thumb=1`）。ライトボックスとダウンロードは元の URL のまま。
+ * 本文のパス・transcript・Codex の生成画像・添付の 4 つの口が同じ `?thumb=1` を受ける
+ */
+export function thumbUrl(url: string): string {
+  return `${url}${url.includes('?') ? '&' : '?'}thumb=1`
+}
+
+/** 押すまで読まない画像の大きさ（`2.3MB` / `480KB`） */
+export function formatImageBytes(n: number): string {
+  if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)}MB`
+  return `${Math.max(1, Math.round(n / 1024))}KB`
+}

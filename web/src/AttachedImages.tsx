@@ -1,5 +1,6 @@
 import { useContext } from 'react'
 import { LightboxContext, opensInPage } from './lightbox'
+import { ThumbImage } from './ThumbImage'
 
 /** バブルに出す添付のサムネイル。押すとページの中のライトボックスで開く（#507。⌘ クリックなどは新しいタブ） */
 export function AttachedImages({ urls }: { urls: string[] }) {
@@ -21,7 +22,7 @@ export function AttachedImages({ urls }: { urls: string[] }) {
             openLightbox(images, i)
           }}
         >
-          <img src={url} alt="添付した画像" loading="lazy" />
+          <ThumbImage url={url} alt="添付した画像" />
         </a>
       ))}
     </div>

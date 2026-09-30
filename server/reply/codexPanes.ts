@@ -20,7 +20,7 @@
 import { execFile } from 'node:child_process'
 import { open, readdir, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, join, sep } from 'node:path'
+import { basename, dirname, join, sep } from 'node:path'
 import { isDescendant, type PsFn, type Tmux } from './terminal.ts'
 
 /** 見つけた結果を覚えておく長さ。3 秒のポーリングのたびに `ps` / `lsof` / rollout の走査を起こさない */
@@ -60,8 +60,8 @@ export interface CodexPaneDeps {
   ps?: PsFn
   /** その pid が開いているファイル（既定は `lsof`）。cwd と rollout を 1 回で取る */
   openOf?: (pid: number) => Promise<PaneFiles>
-  /** rollout を閉じた TUI のセッション（既定はプロセス開始秒と rollout 名を突き合わせる。#448） */
-  sessionAtStart?: (pid: number, cwd: string) => Promise<string>
+  /** rollout を開かない TUI のセッション（既定は起動時刻・目印・読み込み中のスレッドで推定する。#448 / #568） */
+  sessionAtStart?: (pid: number, cwd: string, pane: string) => Promise<string>
   now?: () => number
   env?: NodeJS.ProcessEnv
 }
@@ -200,64 +200,143 @@ const runPsStart: PsStartRun = (pid: number) =>
 
 const two = (n: number): string => String(n).padStart(2, '0')
 
+/** `lsof -a -U -p <pid> -F dn` の出力。自分の unix ソケットの番地（`d`）と、繋がっている相手の番地（`n->`） */
+export function parseUnixSockets(output: string): { addrs: Set<string>; peers: Set<string> } {
+  const addrs = new Set<string>()
+  const peers = new Set<string>()
+  for (const line of output.split('\n')) {
+    if (/^d0x[0-9a-f]+$/i.test(line)) addrs.add(line.slice(1).toLowerCase())
+    const peer = line.match(/^n->(0x[0-9a-f]+)$/i)
+    if (peer) peers.add(peer[1]!.toLowerCase())
+  }
+  return { addrs, peers }
+}
+
+/** `client` のソケットのどれかが `server` のソケットに繋がっているか（どちらも `lsof -U -F dn` の出力） */
+export function isClientOf(client: string, server: string): boolean {
+  const { addrs } = parseUnixSockets(server)
+  for (const peer of parseUnixSockets(client).peers) if (addrs.has(peer)) return true
+  return false
+}
+
+const runUnixSockets = (pid: number): Promise<string> =>
+  new Promise((resolve) => {
+    execFile('lsof', ['-a', '-U', '-p', String(pid), '-F', 'dn'], { timeout: 5_000 }, (_err, stdout) => resolve(String(stdout ?? '')))
+  })
+
+const runHolders = (path: string): Promise<number[]> =>
+  new Promise((resolve) => {
+    execFile('lsof', ['-t', path], { timeout: 5_000 }, (_err, stdout) =>
+      resolve(String(stdout ?? '').split('\n').map(Number).filter((n) => Number.isInteger(n) && n > 0)),
+    )
+  })
+
+/** 起動時刻で当てるときに外を読む口（#568）。テストが差し替える */
+export interface StartProbe {
+  /** `ps -p <pid> -o lstart= -o command=` */
+  ps: PsStartRun
+  /** そのファイルを開いているプロセス（`lsof -t`） */
+  holders: (path: string) => Promise<number[]>
+  /** そのプロセスの unix ソケット（`lsof -a -U -p <pid> -F dn`） */
+  sockets: (pid: number) => Promise<string>
+  /** そのプロセスが開いている rollout のパス */
+  openRollouts: (pid: number) => Promise<string[]>
+  /** そのペインのスクロールバック（`tmux capture-pane`） */
+  scrollback: (pane: string) => Promise<string>
+}
+
+/** 起動秒から何秒あとまでを「起動したときに作ったスレッド」とみなすか（実測で同じ秒か 1 秒後） */
+export const START_SLACK_S = 2
+
 /**
- * rollout を閉じた Codex TUI だけの補欠（#448）。プロセス開始時刻と同じ秒に作られた rollout のうち、
- * cwd まで一致するセッションが一意のときだけ返す。cwd の新しい順には戻さないので #429 を再発させない。
- * 引数付きの `codex "…"` や subcommand は対話 TUI ではないため除く。
+ * rollout を開かない Codex TUI（共有の `codex app-server --listen` の客）が**起動したときに作った会話**（#448 / #568）。
+ * TUI はいま映しているスレッド ID をどこにも書かず、app-server にも客ごとのスレッドを聞く口が無い（調査済み）ので、
+ * 確実ではない材料を重ね、**どれか 1 つでも合わなければ当てない**:
+ *
+ * 1. 起動秒〜 `START_SLACK_S` 秒後の名前で、cwd が同じで、TUI が作った目印（`tui-thread-reference-capabilities/<id>`）の
+ *    ある rollout がちょうど 1 つ
+ * 2. その rollout を開いている app-server に、この TUI が unix ソケットで繋いでいる（客である）
+ * 3. その app-server が**同じ cwd の別のスレッド**を読み込んでいない（`/new`・`/resume` したスレッドは読み込まれたまま残る。
+ *    同じ worktree の別の TUI のスレッドでも曖昧になるので当てない）
+ * 4. ペインのスクロールバックに `codex resume <その id>`（`/new`・`/resume` で離れたときに出る）が無い
+ *
+ * 引数付きの `codex "…"` や subcommand は対話 TUI ではないので除く。`/resume` で映している会話は取りこぼす。
  */
-export function rolloutSessionAtStart(env: NodeJS.ProcessEnv = process.env, run: PsStartRun = runPsStart): (pid: number, cwd: string) => Promise<string> {
+export function rolloutSessionAtStart(
+  env: NodeJS.ProcessEnv = process.env,
+  probe: Partial<StartProbe> = {},
+): (pid: number, cwd: string, pane: string) => Promise<string> {
   const root = codexSessionsDir(env)
-  return async (pid: number, cwd: string): Promise<string> => {
+  const markers = join(dirname(root), 'tui-thread-reference-capabilities')
+  const ps = probe.ps ?? runPsStart
+  const holders = probe.holders ?? runHolders
+  const sockets = probe.sockets ?? runUnixSockets
+  const openRollouts = probe.openRollouts ?? (async (pid: number) => (await lsofPaneFiles(env)(pid)).rollouts)
+  const scrollback = probe.scrollback ?? (async () => '')
+  return async (pid: number, cwd: string, pane: string): Promise<string> => {
     if (!cwd) return ''
-    const info = parseCodexStart(await run(pid))
+    const info = parseCodexStart(await ps(pid))
     if (!info) return ''
     const executable = info.command.split(/\s+/, 1)[0] ?? ''
     if (basename(executable) !== 'codex' || info.command !== executable) return ''
 
-    const at = info.startedAt
-    const date = `${at.getFullYear()}/${two(at.getMonth() + 1)}/${two(at.getDate())}`
-    const stamp = `${at.getFullYear()}-${two(at.getMonth() + 1)}-${two(at.getDate())}T${two(at.getHours())}-${two(at.getMinutes())}-${two(at.getSeconds())}`
-    const dir = join(root, date)
-    let names: string[]
+    // 1. 起動時刻と cwd と目印
+    const found = new Map<string, string>()
+    for (let offset = 0; offset <= START_SLACK_S; offset++) {
+      const at = new Date(info.startedAt.getTime() + offset * 1000)
+      const dir = join(root, `${at.getFullYear()}/${two(at.getMonth() + 1)}/${two(at.getDate())}`)
+      const stamp = `${at.getFullYear()}-${two(at.getMonth() + 1)}-${two(at.getDate())}T${two(at.getHours())}-${two(at.getMinutes())}-${two(at.getSeconds())}`
+      let names: string[]
+      try {
+        names = await readdir(dir)
+      } catch {
+        continue
+      }
+      for (const name of names) {
+        if (!name.startsWith(`rollout-${stamp}-`) || !name.endsWith('.jsonl')) continue
+        const path = join(dir, name)
+        const parsed = parseRolloutHead(await head(path), UUID.exec(name)?.[1] ?? '')
+        if (parsed.cwd !== cwd || !parsed.session) continue
+        try {
+          await stat(join(markers, parsed.session))
+        } catch {
+          continue // TUI が作ったスレッドではない（exec・app-server から始めたものなど）
+        }
+        found.set(parsed.session, path)
+      }
+    }
+    if (found.size !== 1) return ''
+    const [session, path] = [...found][0]!
+
+    // 2. その rollout を開いている app-server の客か
+    const mine = await sockets(pid)
+    if (!mine) return ''
+    let server = 0
+    for (const holder of await holders(path)) {
+      if (holder !== pid && isClientOf(mine, await sockets(holder))) {
+        server = holder
+        break
+      }
+    }
+    if (!server) return ''
+
+    // 3. その app-server が同じ cwd の別のスレッドを読み込んでいないか
+    for (const other of await openRollouts(server)) {
+      if (other === path) continue
+      const parsed = parseRolloutHead(await head(other), UUID.exec(basename(other))?.[1] ?? '')
+      if (parsed.session !== session && (!parsed.cwd || parsed.cwd === cwd)) return ''
+    }
+
+    // 4. そのスレッドから離れた印がスクロールバックに無いか（読めなければ当てない）
+    let screen: string
     try {
-      names = await readdir(dir)
+      screen = await scrollback(pane)
     } catch {
       return ''
     }
-    const sessions = new Set<string>()
-    for (const name of names) {
-      if (!name.startsWith(`rollout-${stamp}-`) || !name.endsWith('.jsonl')) continue
-      const parsed = parseRolloutHead(await head(join(dir, name)), UUID.exec(name)?.[1] ?? '')
-      if (parsed.cwd === cwd && parsed.session) sessions.add(parsed.session)
-    }
-    if (sessions.size !== 1) return ''
-    const [session] = [...sessions]
-    // 起動したあとに TUI の中で `/new`・`/resume` すると、開始秒の rollout は最初の会話のまま（いま映っているのは別の会話）。
-    // 起動より後に書かれた同じ cwd の rollout がほかに 1 本でもあれば当てない（#557 のレビュー）
-    return (await touchedSince(root, at, cwd, session!)) ? '' : session!
+    if (screen.includes(`codex resume ${session}`)) return ''
+    return session
   }
-}
-
-/** `root` の下に、`since` より後に書かれた `cwd` の rollout が `except` のほかにあるか。読めなければ「ある」 */
-async function touchedSince(root: string, since: Date, cwd: string, except: string): Promise<boolean> {
-  let names: string[]
-  try {
-    names = await readdir(root, { recursive: true })
-  } catch {
-    return true
-  }
-  for (const name of names) {
-    if (!basename(name).startsWith('rollout-') || !name.endsWith('.jsonl')) continue
-    const path = join(root, name)
-    try {
-      if ((await stat(path)).mtimeMs < since.getTime()) continue
-    } catch {
-      continue
-    }
-    const parsed = parseRolloutHead(await head(path), UUID.exec(basename(name))?.[1] ?? '')
-    if (parsed.cwd === cwd && parsed.session && parsed.session !== except) return true
-  }
-  return false
 }
 
 /** ファイルの頭だけを読む（rollout は手元で 12MB ある。`session_meta` は 1 行目） */
@@ -345,14 +424,20 @@ export class CodexPanes implements CodexPaneSource {
   private readonly tmux: Tmux
   private readonly ps: PsFn
   private readonly openOf: (pid: number) => Promise<PaneFiles>
-  private readonly sessionAtStart: (pid: number, cwd: string) => Promise<string>
+  private readonly sessionAtStart: (pid: number, cwd: string, pane: string) => Promise<string>
   private readonly now: () => number
 
   constructor(deps: CodexPaneDeps) {
     this.tmux = deps.tmux
     this.ps = deps.ps ?? realPsCommands
     this.openOf = deps.openOf ?? lsofPaneFiles(deps.env ?? process.env)
-    this.sessionAtStart = deps.sessionAtStart ?? rolloutSessionAtStart(deps.env ?? process.env)
+    this.sessionAtStart =
+      deps.sessionAtStart ??
+      rolloutSessionAtStart(deps.env ?? process.env, {
+        openRollouts: async (pid) => (await this.openOf(pid)).rollouts,
+        // 離れた印（`codex resume <id>`）を探すだけ。history-limit を超えた分は流れているので 3 の補い
+        scrollback: (pane) => this.tmux.run(['capture-pane', '-p', '-J', '-S', '-3000', '-t', pane]),
+      })
     this.now = deps.now ?? Date.now
   }
 
@@ -391,7 +476,7 @@ export class CodexPanes implements CodexPaneSource {
           if (!shell) continue // tmux の外（ChatGPT アプリの app-server など）
           const { cwd, rollouts } = await this.openOf(row.pid)
           const opened = await rolloutSession(rollouts)
-          const session = opened || (await this.sessionAtStart(row.pid, cwd))
+          const session = opened || (await this.sessionAtStart(row.pid, cwd, shell.pane))
           panes.push({ pane: shell.pane, pid: row.pid, cwd, session })
         }
       }

@@ -920,6 +920,11 @@ export interface SessionDetailResponse {
   question?: PendingQuestion
   /** `claude --bg` のセッションなら、端末で開くための短い ID と状態（#462） */
   background?: BackgroundSession
+  /**
+   * いまのコンテキスト量（#441。返信 1 回で読み直す量）。`ProgressReader.read()` の `context_tokens` で、分からない
+   * （別のマシン・読めない・サーバの立っていない OpenCode）ときは載せない
+   */
+  context_tokens?: number
 }
 
 export interface FeedResponse {

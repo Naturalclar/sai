@@ -534,6 +534,8 @@
   .modal.model-name .actions button[type="submit"] { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 5px 12px; font: inherit; font-weight: 600; cursor: pointer; }
   .tag.mode { background: color-mix(in srgb, var(--muted) 18%, transparent); color: var(--muted); font-family: var(--mono); font-weight: 600; }
   .tag.mode.loud { background: color-mix(in srgb, var(--claude) 18%, transparent); color: var(--claude); }
+  /* コンテキストが大きすぎる（#441）。素通しの印と同じ目立たせ方は強すぎるので、待機中と同じ注意の色 */
+  .tag.context-warn { background: color-mix(in srgb, var(--synth) 18%, transparent); color: var(--synth); font-weight: 600; white-space: nowrap; }
   .tag.archived { background: color-mix(in srgb, var(--muted) 18%, transparent); color: var(--muted); font-weight: 600; }
   .tag.waiting { background: color-mix(in srgb, var(--synth) 18%, transparent); color: var(--synth); font-weight: 600; }
   /* 未読の返答の数（#502） */

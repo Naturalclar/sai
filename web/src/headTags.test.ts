@@ -1,10 +1,11 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { CONTEXT_WARN_TOKENS } from '../../shared/contextSize.ts'
 import { headName, headTags } from './headTags.ts'
 import type { HeadTag, HeadTagInput, HeadTagSession } from './headTags.ts'
 
 const base: HeadTagSession = { host: 'mini', session_source: 'payload', terminal: null, waiting: '', archived: false, permission_mode: '' }
-const wide: HeadTagInput = { serverHost: 'mini', approval: '', replyingSince: '', compact: false }
+const wide: HeadTagInput = { serverHost: 'mini', approval: '', replyingSince: '', compact: false, contextTokens: 0 }
 const compact: HeadTagInput = { ...wide, compact: true }
 const kinds = (tags: HeadTag[]) => tags.map((t) => t.kind)
 
@@ -40,9 +41,9 @@ test('状態の印は 1 行目にも全部出し、並びは広い画面の見�
     archived: true,
     permission_mode: 'bypassPermissions',
   }
-  const input = { serverHost: 'mini', approval: '許可待ち: Edit', replyingSince: '2026-09-10T00:00:00Z' }
-  assert.deepEqual(kinds(headTags(all, { ...input, compact: false })), ['host', 'source', 'terminal', 'waiting', 'approval', 'replying', 'archived', 'mode'])
-  assert.deepEqual(kinds(headTags(all, { ...input, compact: true })), ['host', 'terminal', 'waiting', 'approval', 'replying', 'archived', 'mode'], '1 行目で落ちるのは出どころだけ')
+  const input = { serverHost: 'mini', approval: '許可待ち: Edit', replyingSince: '2026-09-10T00:00:00Z', contextTokens: CONTEXT_WARN_TOKENS }
+  assert.deepEqual(kinds(headTags(all, { ...input, compact: false })), ['host', 'source', 'terminal', 'waiting', 'approval', 'replying', 'archived', 'mode', 'context'])
+  assert.deepEqual(kinds(headTags(all, { ...input, compact: true })), ['host', 'terminal', 'waiting', 'approval', 'replying', 'archived', 'mode', 'context'], '1 行目で落ちるのは出どころだけ')
 })
 
 test('別のマシンの印はサーバと違うときだけ（サーバの名前が取れないときは出さない）', () => {
@@ -54,4 +55,11 @@ test('headName: 表示名があればそれと #project、無ければ project �
   assert.deepEqual(headName({ project: 'Naturalclar/sai', repo: 'dev-kanade', meta: { name: 'かなで' } }), { name: 'かなで', project: 'sai' })
   assert.deepEqual(headName({ project: 'Naturalclar/sai', repo: 'dev-kanade', meta: undefined }), { name: '', project: 'sai' })
   assert.deepEqual(headName({ project: '', repo: 'dev-kanade', meta: {} }), { name: '', project: 'dev-kanade' })
+})
+
+test('コンテキスト: 閾値を超えたときだけ印を出し、狭い画面の 1 行目にも残す（#441）', () => {
+  assert.deepEqual(kinds(headTags(base, { ...compact, contextTokens: CONTEXT_WARN_TOKENS - 1 })), [])
+  assert.deepEqual(kinds(headTags(base, { ...compact, contextTokens: 0 })), [], '分からないときは出さない')
+  assert.deepEqual(headTags(base, { ...compact, contextTokens: 830_000 }), [{ kind: 'context', tokens: 830_000 }])
+  assert.deepEqual(kinds(headTags({ ...base, permission_mode: 'bypassPermissions' }, { ...compact, contextTokens: CONTEXT_WARN_TOKENS })), ['mode', 'context'])
 })

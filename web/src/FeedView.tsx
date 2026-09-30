@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { answerableIds } from './terminalQuestion.ts'
 import { entityId } from '../../shared/entity.ts'
 import { eventKind } from '../../shared/events.ts'
 import { promptArrived } from './chatGroups'
@@ -128,6 +129,8 @@ export function FeedView({ project, projects, onProject, sessions = NO_SESSIONS,
     return s?.agent === 'claude' ? { id: s.id, value: s.meta?.permission_mode, terminal: Boolean(s.terminal), replying: replying[s.id] } : undefined
   }, [sessions, targetId, replying])
   // 答え待ちの許可・質問も、処理中の返信と同じく、この画面に関係あるものだけ
+  // SAI で答えられる質問のあるセッション。行に載った選択肢を読むだけで重ねて出さない（#334）
+  const answerable = useMemo(() => answerableIds(data?.approvals ?? NO_APPROVALS, replying), [data?.approvals, replying])
   const approvals = Object.values(data?.approvals ?? NO_APPROVALS).flat().filter((a) => counts.has(a.id) || targets.some((t) => t.id === a.id))
   // 預かっている返信も同じく、この画面に関係あるものだけ（#305）
   const queued = data?.queued ?? NO_QUEUED
@@ -158,6 +161,7 @@ export function FeedView({ project, projects, onProject, sessions = NO_SESSIONS,
           showChannel
           selfHost={selfHost}
           sessions={sessions}
+          answerable={answerable}
           profile={data.profile}
           linear={linear}
           diffs={{ summaries: diffSummaries, open: openDiff, onToggle: onToggleDiff }}

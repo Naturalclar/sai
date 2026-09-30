@@ -1,4 +1,6 @@
-// 返信中の許可・質問の預かり所。正本はメモリ。
+// 返信中の許可・質問の預かり所。正本はメモリで、**立て直しをまたぐために `approvals.json` にも書く**（#440）。
+// `claude -p` の子は別 pgid で生き残るので、前はサーバを立て直すと預かりだけ消えて、その許可には答えられなかった。
+// 起動時に読み、**まだ生きている返信の子（`replying.json` から引き取った分）のものだけ**引き取る（`persistTo()`）。
 //
 //   claude -p --permission-prompt-tool mcp__sai__approve
 //     → server/approvals/approve-mcp.ts（子プロセス）が POST /api/approvals で預けて、GET /api/approvals/<id>?wait=1 で答えを待つ
@@ -7,6 +9,8 @@
 // 返信のプロセスが exit したら（runner の release）そのエンティティの分は deny で片付ける。
 // MCP 側が取りに来なくなったもの（CLI が落ちた）は STALE_MS で捨てる
 import { randomBytes } from 'node:crypto'
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { dirname } from 'node:path'
 import { approvalText } from '../../shared/approvals.ts'
 import type { Approval, ApprovalAnswer, ApprovalMap } from '../../shared/types.ts'
 
@@ -14,6 +18,8 @@ import type { Approval, ApprovalAnswer, ApprovalMap } from '../../shared/types.t
 export const WAIT_MS = 20_000
 /** これだけ取りに来なければ CLI はもういない */
 export const STALE_MS = 90_000
+/** 預かりを残すファイル（feed dir の中。#440） */
+export const APPROVALS_FILE = 'approvals.json'
 
 interface Entry {
   approval: Approval
@@ -25,9 +31,48 @@ interface Entry {
 export class Approvals {
   private entries = new Map<string, Entry>()
   private readonly now: () => number
+  private statePath = ''
 
   constructor(now: () => number = Date.now) {
     this.now = now
+  }
+
+  /**
+   * 以後の変化を `path` に書き、前のサーバが残した預かりのうち `keep(エンティティID)` が真のもの
+   * （= まだ生きている返信の子のもの）だけ引き取る（#440）。答えが付いていて CLI にまだ渡していないものも残す
+   * （MCP サーバは繋ぎ直して取りに来る）。引き取ったものは「いま取りに来た」ことにする（すぐ `sweep()` で捨てない）
+   */
+  persistTo(path: string, keep: (id: string) => boolean): void {
+    this.statePath = path
+    let raw: unknown
+    try {
+      raw = JSON.parse(readFileSync(path, 'utf-8'))
+    } catch {
+      raw = null
+    }
+    if (Array.isArray(raw)) {
+      for (const item of raw) {
+        const { approval, answer } = (item ?? {}) as { approval?: Approval; answer?: ApprovalAnswer | null }
+        if (!approval || typeof approval.approval_id !== 'string' || typeof approval.id !== 'string' || this.entries.has(approval.approval_id)) continue
+        if (!keep(approval.id)) continue
+        this.entries.set(approval.approval_id, { approval, answer: answer ?? null, lastPolled: this.now(), waiters: [] })
+      }
+    }
+    this.persist() // 引き取らなかった分を落とした形で書き直す
+  }
+
+  /** tmp → rename（`replying.json` と同じ。中身にコマンドが入るので 0600）。書けなくても預かりはメモリで続く */
+  private persist(): void {
+    if (!this.statePath) return
+    try {
+      mkdirSync(dirname(this.statePath), { recursive: true })
+      const tmp = `${this.statePath}.${process.pid}.tmp`
+      const body = [...this.entries.values()].map((e) => ({ approval: e.approval, answer: e.answer }))
+      writeFileSync(tmp, JSON.stringify(body, null, 2) + '\n', { mode: 0o600 })
+      renameSync(tmp, this.statePath)
+    } catch {
+      // 書けなければ立て直すと消えるだけ（#440 より前と同じ）
+    }
   }
 
   /** 預ける。approval_id を返す */
@@ -42,6 +87,7 @@ export class Approvals {
       text: approvalText(toolName, input),
     }
     this.entries.set(approval.approval_id, { approval, answer: null, lastPolled: this.now(), waiters: [] })
+    this.persist()
     return approval
   }
 
@@ -56,6 +102,7 @@ export class Approvals {
     e.answer = answer
     for (const w of e.waiters) w(answer)
     e.waiters = []
+    this.persist()
     return true
   }
 
@@ -80,8 +127,9 @@ export class Approvals {
         }
         e.waiters.push(done)
       }))
-    if (answer) this.entries.delete(approvalId)
-    else if (this.entries.get(approvalId) === e) e.lastPolled = this.now()
+    if (answer) {
+      if (this.entries.delete(approvalId)) this.persist()
+    } else if (this.entries.get(approvalId) === e) e.lastPolled = this.now()
     return answer
   }
 
@@ -115,14 +163,17 @@ export class Approvals {
       this.entries.delete(key)
       n++
     }
+    if (n > 0) this.persist()
     return n
   }
 
   /** 取りに来なくなったものを捨てる */
   sweep(staleMs: number = STALE_MS): void {
     const cutoff = this.now() - staleMs
+    let dropped = false
     for (const [key, e] of this.entries) {
-      if (e.lastPolled < cutoff && e.waiters.length === 0) this.entries.delete(key)
+      if (e.lastPolled < cutoff && e.waiters.length === 0) dropped = this.entries.delete(key) || dropped
     }
+    if (dropped) this.persist()
   }
 }

@@ -26,6 +26,8 @@ export const TOOL_NAME = 'approve'
 const url = process.env.SAI_URL ?? ''
 const entity = process.env.SAI_ENTITY ?? ''
 const tokenFile = process.env.SAI_TOKEN_FILE ?? ''
+/** 繋ぎ直しを続ける長さ（ミリ秒）。テストが短くするためだけの口で、SAI は渡さない（既定は `RECONNECT_MS`） */
+const envReconnectMs = Number(process.env.SAI_APPROVE_RECONNECT_MS) || undefined
 
 /** sai_wait を諦めるまで。サーバは 1 回 20 秒で返すので、その間はここで繰り返す（エージェントに何度も呼ばせない。#311） */
 export const AGENT_WAIT_DEADLINE_MS = 30 * 60_000
@@ -159,12 +161,44 @@ function send(msg: object): void {
 
 const deny = (message: string): ApprovalAnswer => ({ behavior: 'deny', message })
 
-/** SAI に預けて、答えが付くまで待つ。SAI に届かなければ deny（許可を勝手に通さない） */
-export async function decide(req: ApprovalRequest, base: string = url): Promise<ApprovalAnswer> {
+/**
+ * SAI に届かないとき、繋ぎ直しを続ける長さ（#440）。サーバを立て直している間（C-c から `pnpm start` が listen するまで）は
+ * 繋がらないが、預かりは `approvals.json` から引き取られるので、繋ぎ直せば同じ許可に答えられる。
+ * 前は 1 回届かなかっただけで拒否に落ち、立て直すたびに答え待ちの許可が「拒否」になっていた
+ */
+export const RECONNECT_MS = 120_000
+/** 繋ぎ直す間隔 */
+export const RECONNECT_INTERVAL_MS = 1_000
+
+export interface DecideOptions {
+  reconnectMs?: number
+  intervalMs?: number
+}
+
+/**
+ * 届かなければ繋ぎ直す fetch。**最後に届いてから** `reconnectMs` 経っても届かなければ投げる（その時点で拒否に落とす）。
+ * 届いた応答はステータスに関わらずそのまま返す（404 などはサーバが答えたので、繋ぎ直しでは直らない）
+ */
+async function reachable(target: string, init: RequestInit, reconnectMs: number, intervalMs: number): Promise<Response> {
+  const give = Date.now() + reconnectMs
+  for (;;) {
+    try {
+      return await fetch(target, init)
+    } catch (err) {
+      if (Date.now() + intervalMs > give) throw err
+      await new Promise((wake) => setTimeout(wake, intervalMs))
+    }
+  }
+}
+
+/** SAI に預けて、答えが付くまで待つ。SAI に届かなければ繋ぎ直し、それでも届かなければ deny（許可を勝手に通さない） */
+export async function decide(req: ApprovalRequest, base: string = url, opts: DecideOptions = {}): Promise<ApprovalAnswer> {
   if (!base) return deny('SAI_URL が無い')
+  const reconnectMs = opts.reconnectMs ?? RECONNECT_MS
+  const intervalMs = opts.intervalMs ?? RECONNECT_INTERVAL_MS
   let approvalId = ''
   try {
-    const res = await fetch(`${base}/api/approvals`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req) })
+    const res = await reachable(`${base}/api/approvals`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req) }, reconnectMs, intervalMs)
     if (!res.ok) return deny(`SAI が受け付けなかった: ${res.status} ${await res.text()}`)
     approvalId = ((await res.json()) as { approval_id: string }).approval_id
   } catch (err) {
@@ -173,7 +207,7 @@ export async function decide(req: ApprovalRequest, base: string = url): Promise<
   for (;;) {
     let res: Response
     try {
-      res = await fetch(`${base}/api/approvals/${encodeURIComponent(approvalId)}?wait=1`)
+      res = await reachable(`${base}/api/approvals/${encodeURIComponent(approvalId)}?wait=1`, {}, reconnectMs, intervalMs)
     } catch (err) {
       return deny(`SAI に届かない: ${err instanceof Error ? err.message : String(err)}`)
     }
@@ -220,7 +254,7 @@ async function handle(msg: Rpc): Promise<void> {
       const toolName = typeof args.tool_name === 'string' ? args.tool_name : ''
       const input = args.input && typeof args.input === 'object' && !Array.isArray(args.input) ? (args.input as Record<string, unknown>) : {}
       const toolUseId = typeof args.tool_use_id === 'string' ? args.tool_use_id : ''
-      const answer = toolName ? await decide({ id: entity, tool_name: toolName, input, tool_use_id: toolUseId }) : deny('tool_name が無い')
+      const answer = toolName ? await decide({ id: entity, tool_name: toolName, input, tool_use_id: toolUseId }, url, envReconnectMs ? { reconnectMs: envReconnectMs } : {}) : deny('tool_name が無い')
       log(`${toolName}: ${answer.behavior}`)
       return reply({ content: [{ type: 'text', text: JSON.stringify(answer) }] })
     }

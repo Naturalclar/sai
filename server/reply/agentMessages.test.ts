@@ -98,3 +98,43 @@ test('AgentMessages: メッセージで回っているターンからは送れ�
   assert.equal(agents.origin('B1@r'), undefined)
   assert.equal(agents.refusal('B1@r', 't1'), '')
 })
+
+test('AgentMessages: サーバを立て直しても、送った記録・止めたこと・1 ターンの回数と量・連鎖の印が残る（#440）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-agents-'))
+  const path = join(dir, 'agent-messages.json')
+  try {
+    const before = new AgentMessages(path)
+    before.record({ message_id: 'm1', from: 'A@r', to: 'B@r', text: 'よろしく', since: '2026-09-30T10:00:00Z' }, 'turn-1', 1200)
+    before.record({ message_id: 'm2', from: 'A@r', to: 'C@r', text: 'こちらも', since: '2026-09-30T10:01:00Z' }, 'turn-1', 300)
+    before.stop('X@r')
+    before.launched('B@r', 'm1')
+
+    const after = new AgentMessages(path)
+    assert.deepEqual(after.sentBy('A@r').map((m) => m.message_id), ['m2', 'm1'], '送った記録（新しい順）')
+    assert.equal(after.get('m1')?.to, 'B@r', 'sai_wait が探せる')
+    assert.equal(after.isStopped('X@r'), true, '「送信を止める」が立て直しで外れない')
+    assert.match(after.refusal('X@r', 'turn-9'), /止めています/)
+    assert.equal(after.sentInTurn('A@r', 'turn-1'), 2, '1 ターンの回数を数え直さない')
+    assert.equal(after.readInTurn('A@r', 'turn-1'), 1500, '読み直させた量も')
+    assert.equal(after.origin('B@r'), 'm1', 'メッセージで回っているターンの印（連鎖は 1 段まで）も残る')
+    // 再開も書く
+    after.resume('X@r')
+    assert.equal(new AgentMessages(path).isStopped('X@r'), false)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('AgentMessages: 残すファイルが壊れていても起きる（無かったことにする）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-agents-'))
+  const path = join(dir, 'agent-messages.json')
+  try {
+    await writeFile(path, '{壊れている')
+    const a = new AgentMessages(path)
+    assert.deepEqual(a.sentBy('A@r'), [])
+    a.stop('A@r')
+    assert.equal(new AgentMessages(path).isStopped('A@r'), true, '書き直して以後は残る')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})

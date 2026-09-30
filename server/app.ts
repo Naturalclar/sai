@@ -68,7 +68,7 @@ import { rowProject } from '../shared/project.ts'
 import { ICONS_DIR, IconStore, iconKey } from './meta/icons.ts'
 import { historyKey, ICON_HISTORY_DIR, ICON_HISTORY_FILE, IconHistory, isHistoryKey } from './meta/iconHistory.ts'
 import { alwaysAllowRule, ruleLabel } from '../shared/approvals.ts'
-import { Approvals, WAIT_MS } from './approvals/approvals.ts'
+import { APPROVALS_FILE, Approvals, WAIT_MS } from './approvals/approvals.ts'
 import { BuildFreshness } from './local/buildFreshness.ts'
 import { codexLockHolders, codexQueueCommand, codexWriterActive, isAppServer, runCodexQueue } from './reply/codex.ts'
 import type { CodexQueue } from './reply/codex.ts'
@@ -110,7 +110,7 @@ import { backgroundSessionCommand, newSessionCommand, ProcessRunner, replyComman
 import { BackgroundLookupError, ClaudeBackground, type BackgroundSessions } from './reply/claudeBackground.ts'
 import { TURN_USAGE_FILE, TurnUsageLog } from './reply/turnUsage.ts'
 import { QUEUE_FILE, QUEUE_MAX, ReplyQueueStore } from './reply/replyQueue.ts'
-import { AGENT_TOKEN_FILE, AGENT_TOKEN_HEADER, AgentMessages, ensureAgentToken, tokenMatches } from './reply/agentMessages.ts'
+import { AGENT_MESSAGES_FILE, AGENT_TOKEN_FILE, AGENT_TOKEN_HEADER, AgentMessages, ensureAgentToken, tokenMatches } from './reply/agentMessages.ts'
 import type { AgentMessage } from './reply/agentMessages.ts'
 import {
   AGENT_SEND_MAX,
@@ -134,7 +134,7 @@ import { mcpAccess, normalizeOrigin } from './mcp/access.ts'
 import type { McpAccess } from './mcp/access.ts'
 import { handleRpc, protocolVersionOk, textResult } from './mcp/protocol.ts'
 import type { McpTool } from './mcp/protocol.ts'
-import { McpSendLimiter } from './mcp/sendLimit.ts'
+import { MCP_SENDS_FILE, McpSendLimiter } from './mcp/sendLimit.ts'
 import { SkillStore } from './local/skills.ts'
 import type { Skill } from '../shared/skills.ts'
 import { claudeProjectsDir, codexSessionsDir, tailLines, UsageStore } from './local/usage.ts'
@@ -633,6 +633,8 @@ export function createApp(
   const usageReady = usage.load()
   // 処理中の返信は replying.json にも持ち、サーバを再起動しても生きている分を引き取る（#100）
   const run: Runner = runner ?? new ProcessRunner(join(store.directory, 'reply.log'), join(store.directory, 'replying.json'), usage)
+  // 返信中の許可・質問の預かりも立て直しをまたぐ（#440）。引き取るのは、いま回っている返信の子（`replying.json` から引き取った分）のものだけ
+  approvals.persistTo(join(store.directory, APPROVALS_FILE), (id) => run.running(id))
   const metaStore = new MetaStore(join(store.directory, META_FILE))
   const iconStore = new IconStore(join(store.directory, ICONS_DIR))
   const iconHistory = new IconHistory(join(store.directory, ICON_HISTORY_DIR), join(store.directory, ICON_HISTORY_FILE), iconStore)
@@ -649,7 +651,8 @@ export function createApp(
   // セッション同士のメッセージ（#310 / #311）。トークンは feed dir のファイルに 0600 で置き、MCP サーバはその場所だけ受け取って読む
   const agentTokenPath = join(store.directory, AGENT_TOKEN_FILE)
   const agentToken = ensureAgentToken(agentTokenPath)
-  const agents = new AgentMessages()
+  // 送った記録・止めたセッション・1 ターンの回数と量は、立て直しても残す（#440）
+  const agents = new AgentMessages(join(store.directory, AGENT_MESSAGES_FILE))
 
   /**
    * 端末で人が答えたぶんの待ちを畳む（#255。#232 の積み残し）。行（集計）は触らず、応答を組み立てる
@@ -1835,7 +1838,8 @@ export function createApp(
   // ---- tailnet から MCP で呼ぶ口（#312）
 
   /** tailnet から送った回数（呼んだ人ごと） */
-  const mcpLimiter = new McpSendLimiter()
+  // 立て直しても 10 分 5 回の枠を数え直さない（#440）
+  const mcpLimiter = new McpSendLimiter(Date.now, join(store.directory, MCP_SENDS_FILE))
   /** sai_sessions が見る日数 */
   const MCP_LIST_DAYS = 7
   /**

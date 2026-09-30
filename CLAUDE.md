@@ -168,6 +168,6 @@ OpenCode (feed/opencode/sai.js) ─┘                           │
 | `GROK_HOME` | Grok Build のホーム（既定 `~/.grok`）。Grok 自身の変数に従うだけ（`record.py` が `sessions/` を読む） |
 | `AGENT_FEED_DEBUG` | `1` で record.py の例外をログに残す |
 
-表に載せないもの（`server/docs.test.ts` の `INTERNAL`）: `AGENT_FEED_SKIP`（SAI が一言を作る `claude -p` に自分で付ける合図。record.py / statusline.py / OpenCode のプラグインが見る）、`SAI_URL` / `SAI_ENTITY`（`server/reply/runner.ts` が `--mcp-config` の env で `server/approvals/approve-mcp.ts` に渡す）、`TMUX_PANE` / `CLAUDE_PID`（エージェントが record.py に渡してくる）、`REPO_URL` / `PROD`（Vite の `import.meta.env`）。
+表に載せないもの（`server/docs.test.ts` の `INTERNAL`）: `AGENT_FEED_SKIP`（SAI が一言を作る `claude -p` に自分で付ける合図。record.py / statusline.py / OpenCode のプラグインが見る）、`SAI_URL` / `SAI_ENTITY`（`server/reply/runner.ts` が `--mcp-config` の env で `server/approvals/approve-mcp.ts` に渡す）、`SAI_APPROVE_RECONNECT_MS`（`approve-mcp.ts` が SAI に届かないとき繋ぎ直しを続ける長さ。テストが短くするためだけで、SAI は渡さない。#440）、`TMUX_PANE` / `CLAUDE_PID`（エージェントが record.py に渡してくる）、`REPO_URL` / `PROD`（Vite の `import.meta.env`）。
 
 コードが読む環境変数が README とこの表の両方に載っていること・表にあるものをコードが読むこと・2 つの小見出しに分かれていて同じ変数が 2 回出てこないことは `server/docs.test.ts` が見る（変数を足したら両方の表に足す）。**コードとして見るのは `.ts` / `.tsx` / `.js` / `.mjs` / `.py`**（`.js` を見ていなかった頃は、OpenCode のプラグインが読む `SAI_HOME` を「コードは読まない」と書いたままになっていた。#288）。

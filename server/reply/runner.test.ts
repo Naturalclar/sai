@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -515,5 +516,43 @@ test('入力の口: result を読めない（ログが無い）ときは口を�
     assert.match(await readFile(seen, 'utf-8'), /やって/)
   } finally {
     await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('入力の口: ターンが終わった直後（見張りが読む前）に足す・止めるを受けない（#574 のレビュー）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-stream-'))
+  try {
+    const usage: { id: string; usage: TurnUsage }[] = []
+    const { runner } = await streamRun(dir, 50, 'S', usage)
+    // result が reply.log に書かれるまで待つ（見張りの 0.5 秒より前に届く）
+    assert.ok(await until(() => { try { return readFileSync(join(dir, 'reply.log'), 'utf-8').includes('"type":"result"') } catch { return false } }))
+    assert.equal(runner.steer('A@r', '遅れて足す'), false, '新しいターンを起こさない')
+    assert.equal(runner.interrupt('A@r'), false, '普通に終わったターンを「止めた」ことにしない')
+    assert.ok(await until(() => !runner.running('A@r')))
+    assert.equal(usage.length, 1, '使用量は残る')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('入力の口: reply.log を開けなかったときは口を開けておかない（閉じる時が来ず処理中が残る。#574 のレビュー）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-stream-'))
+  try {
+    const seen = join(dir, 'seen.jsonl')
+    const runner = new ProcessRunner(join(dir, 'no-such-dir', 'reply.log'))
+    await runner.start('A@r', { bin: process.execPath, args: ['-e', FAKE_STREAM, seen, 'S', '100'], cwd: dir, text: 'やって', input: claudeUserLine('やって'), session: 'S' })
+    assert.equal(runner.snapshot()['A@r']?.interruptible, undefined)
+    assert.ok(await until(() => !runner.running('A@r')), '最初の指示のターンは走って終わる')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('入力の口: 運用者が --input-format / --output-format を書いていれば開けず、本文は -- の後ろ（#574 のレビュー）', () => {
+  for (const extra of ['--input-format text', '--input-format stream-json --output-format json', '--output-format json']) {
+    const c = replyCommand('claude', 'S', 'hi', '/w', { SAI_CLAUDE_ARGS: extra })!
+    assert.deepEqual(c.args.slice(-2), ['--', 'hi'], extra)
+    assert.equal(c.input, undefined, extra)
+    assert.equal(c.args.filter((a) => a === '--input-format').length, extra.includes('--input-format') ? 1 : 0, '二重に付けない')
   }
 })

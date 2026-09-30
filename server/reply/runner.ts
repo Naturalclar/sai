@@ -187,9 +187,18 @@ const CLAUDE_STREAM_ARGS = ['--input-format', 'stream-json', '--output-format', 
 /**
  * 前半（`claudeHead()`）のあとに本文をどう渡すか。入力の口を開けているなら stdin の 1 行で、そうでなければ今までどおり `--` の後ろ
  */
-function claudeTail(head: string[], text: string, session: string): Pick<ReplyCommand, 'args' | 'input' | 'session'> & { args: string[] } {
-  if (head.includes('--input-format')) return { args: head, input: claudeUserLine(text), session }
+function claudeTail(env: NodeJS.ProcessEnv, head: string[], text: string, session: string): Pick<ReplyCommand, 'args' | 'input' | 'session'> & { args: string[] } {
+  if (claudeStreams(env)) return { args: head, input: claudeUserLine(text), session }
   return { args: [...head, '--', text] }
+}
+
+/**
+ * 入力の口を SAI が開けるか（#386）。**運用者が `--output-format` / `--input-format` を自分で書いていれば開けない**
+ * （そちらを尊重し、本文は今までどおり `--` の後ろ。`--input-format text` なのに stdin に JSON を送ると、本文として JSON がそのまま届く）
+ */
+function claudeStreams(env: NodeJS.ProcessEnv): boolean {
+  const extra = splitArgs(env.SAI_CLAUDE_ARGS)
+  return !extra.includes('--output-format') && !extra.includes('--input-format')
 }
 
 /**
@@ -209,7 +218,7 @@ function claudeHead(env: NodeJS.ProcessEnv, approve: ApproveVia | undefined, mod
   // （入力を stream-json にするには出力も stream-json が要り、`-p` で stream-json を出すには `--verbose` が要る）。
   // 使ったトークンと費用（#387）は最後の result の行から読める。運用者が自分の --output-format を指定していれば
   // そちらを尊重し、入力の口は開けない（今までどおり本文を引数で渡す）
-  const format = extra.includes('--output-format') ? [] : CLAUDE_STREAM_ARGS
+  const format = claudeStreams(env) ? CLAUDE_STREAM_ARGS : []
   // セッションの表示名（session-meta.json の name）を CLI にも渡す（#391）。端末のタイトルと `/resume` の
   // ピッカーに同じ名前が出る。**名前はセッションに残る**（実測: 付けて回すと transcript の先頭に
   // `{"type":"custom-title",…}` が入り、次に `-n` 無しで resume しても消えない）ので、
@@ -235,7 +244,7 @@ export function newSessionCommand(
   /** そのセッションの表示名（session-meta.json の name）。あれば `-n` で CLI にも渡す（#391） */
   name?: string,
 ): ReplyCommand {
-  return { bin: 'claude', ...claudeTail([...claudeHead(env, approve, model, permissionMode, name), '-p', '--session-id', sessionId], text, sessionId), cwd, text, permissionMode: permissionMode || '' }
+  return { bin: 'claude', ...claudeTail(env, [...claudeHead(env, approve, model, permissionMode, name), '-p', '--session-id', sessionId], text, sessionId), cwd, text, permissionMode: permissionMode || '' }
 }
 
 /**
@@ -313,7 +322,7 @@ export function replyCommand(
   // ターンが回らない（`--dangerously-skip-permissions` ならフラグとして効いてしまう）。両 CLI とも `--` を受け付ける
   if (agent === 'claude') {
     // 許可モードは Claude だけ（codex exec resume に同等のフラグは無い）
-    return { bin: 'claude', ...claudeTail([...claudeHead(env, approve, model, permissionMode, name), '-p', '--resume', session], text, session), cwd, text, permissionMode: permissionMode || '' }
+    return { bin: 'claude', ...claudeTail(env, [...claudeHead(env, approve, model, permissionMode, name), '-p', '--resume', session], text, session), cwd, text, permissionMode: permissionMode || '' }
   }
   if (agent === 'codex') {
     // Codex は画像を受ける口がある（`-i, --image <FILE>  Optional image(s) to attach to the prompt sent after resuming`）
@@ -432,6 +441,8 @@ export class ProcessRunner implements Runner {
    * 立て直しで引き取った子は stdin を持っていないので、ここには居ない（止める・足すのボタンも出さない）
    */
   private inputs = new Map<string, Writable>()
+  /** 入力の口を開けている返信の、result を読み直す関数（見張りと、足す・止めるの直前に呼ぶ） */
+  private polls = new Map<string, () => void>()
   /** ターンが終わったときに使用量を渡す先（#387）。無ければ何もしない */
   private readonly usage: TurnUsageSink | null
 
@@ -551,6 +562,7 @@ export class ProcessRunner implements Runner {
   }
 
   interrupt(id: string): boolean {
+    this.pollResult(id)
     const entry = this.active.get(id)
     if (!entry || entry.failedAt !== undefined || !this.write(id, claudeInterruptLine(`sai-${Date.now().toString(36)}`))) return false
     entry.interrupted = true
@@ -558,9 +570,18 @@ export class ProcessRunner implements Runner {
   }
 
   steer(id: string, text: string): boolean {
+    this.pollResult(id)
     const entry = this.active.get(id)
     if (!entry || entry.failedAt !== undefined) return false
     return this.write(id, claudeUserLine(text))
+  }
+
+  /**
+   * そのターンの result がもう出ていないか、その場で読み直す（#574 のレビュー）。見張りは 0.5 秒おきなので、
+   * 終わった直後に足す・止めるを受けると、新しいターンを起こしたり、普通に終わったターンを「止めた」ことにしてしまう
+   */
+  private pollResult(id: string): void {
+    this.polls.get(id)?.()
   }
 
   /** 開いている入力の口に 1 行書く。閉じていれば false */
@@ -623,6 +644,7 @@ export class ProcessRunner implements Runner {
       if (released) return
       released = true
       if (watch) clearInterval(watch)
+      this.polls.delete(id)
       if (this.inputs.get(id) === child.stdin) this.closeInput(id)
       // このターンぶんの出力を 1 回だけ読む。失敗の理由も使用量もここから出る（#387）
       const slice = this.logPath ? readFrom(this.logPath, logOffset) : ''
@@ -680,14 +702,15 @@ export class ProcessRunner implements Runner {
       stdin.on('error', () => {}) // 閉じたあとに書いた（EPIPE）。write() が false を返すので、ここでは何もしない
       this.inputs.set(id, stdin)
       this.write(id, cmd.input)
-      if (!this.logPath) {
-        // result を読めないので口は開けておけない。閉じても最初の指示のターンは最後まで走る
+      if (!this.logPath || fd === null) {
+        // result を読めない（ログが無い・開けなかった）ので口は開けておけない。開けたままだと閉じる時が来ず、
+        // プロセスが次の指示を待ち続けて「処理中」が消えない（#574 のレビュー）。閉じても最初の指示のターンは最後まで走る
         this.closeInput(id)
       } else {
         // そのセッションの result が出たら閉じる（閉じるまでは次の指示を待ってプロセスが終わらない）
         const logPath = this.logPath
         let pos = logOffset
-        watch = setInterval(() => {
+        const poll = () => {
           const chunk = readFrom(logPath, pos)
           const end = chunk.lastIndexOf('\n')
           if (end < 0) return
@@ -695,9 +718,12 @@ export class ProcessRunner implements Runner {
           if (hasResultFor(chunk.slice(0, end + 1), cmd.session ?? '')) {
             if (watch) clearInterval(watch)
             watch = null
+            this.polls.delete(id)
             if (this.inputs.get(id) === stdin) this.closeInput(id)
           }
-        }, RESULT_POLL_MS)
+        }
+        this.polls.set(id, poll)
+        watch = setInterval(poll, RESULT_POLL_MS)
         watch.unref()
       }
     }

@@ -6,7 +6,7 @@ import { CloseMark } from './CloseMark'
  * 広い画面の差分。チャットの右にもう1枚のペインとして出す（`main.layout.diff-open` の3列目）。
  * チャットを見ながら差分を読めるので、モーダルのように会話を隠さない。狭い画面は `DiffModal`
  */
-export function DiffPane({ id, onClose, canReview }: { id: string; onClose: () => void; canReview?: boolean }) {
+export function DiffPane({ id, onClose, canReview, onInsertComments }: { id: string; onClose: () => void; canReview?: boolean; onInsertComments?: (text: string) => void }) {
   return (
     <aside className="diff-pane" aria-label="このセッションの差分">
       <div className="diff-head">
@@ -16,7 +16,7 @@ export function DiffPane({ id, onClose, canReview }: { id: string; onClose: () =
         </IconButton>
       </div>
       <div className="diff-scroll">
-        <DiffBody id={id} canReview={canReview} />
+        <DiffBody key={`diff:${id}`} id={id} canReview={canReview} {...(onInsertComments ? { onInsertComments } : {})} />
       </div>
     </aside>
   )

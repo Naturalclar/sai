@@ -1,7 +1,12 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { parseUnifiedDiff } from '../../shared/diff.ts'
 import { api, type SessionDiffResponse } from './api'
 import { DiffView } from './DiffView'
 import { ReviewButton } from './ReviewButton'
+import { DiffCommentBar } from './DiffCommentBar'
+import { DiffCommentNote } from './DiffCommentNote'
+import { commentLine, formatDiffComments, type DiffComment, type DiffCommentSection } from './diffComments'
+import { useDiffComments } from './useDiffComments'
 
 /**
  * そのセッションの worktree の差分の中身（#171）。開いたときに 1 回だけ取る（3 秒のポーリングには乗せない）。
@@ -9,9 +14,19 @@ import { ReviewButton } from './ReviewButton'
  * 広い画面はペイン（`DiffPane`）、狭い画面はモーダル（`DiffModal`）が、これを包んで出す。
  * **Codex のセッションで、いま返信できるときだけ**、区切りごとに「レビューさせる」を出す（#403。`canReview`）
  */
-export function DiffBody({ id, canReview = false }: { id: string; canReview?: boolean }) {
+export function DiffBody({ id, canReview = false, onInsertComments }: { id: string; canReview?: boolean; onInsertComments?: (text: string) => void }) {
   const [data, setData] = useState<SessionDiffResponse | null>(null)
   const [error, setError] = useState('')
+  // 行へのコメント（#511）。入れる先（そのセッションの返信欄）があるときだけ書ける
+  const comments = useDiffComments(id)
+  const commentsOf = (section: DiffCommentSection) =>
+    onInsertComments ? { section, list: comments.list.filter((c) => c.section === section), onAdd: comments.add, onRemove: comments.remove } : undefined
+  // いまの差分に行が見当たらないコメント（エージェントが編集して消えた・区切りが変わった）。行の下に出せないので上にまとめる
+  const parsed = useMemo(
+    () => (data ? { branch: parseUnifiedDiff(data.branch.patch), working: parseUnifiedDiff(data.working.patch) } : null),
+    [data],
+  )
+  const orphans: DiffComment[] = parsed ? comments.list.filter((c) => !commentLine(c, parsed[c.section])) : []
 
   // id は開いている間は変わらない（別のセッションへ移ると App が閉じる）ので、取り直しのリセットは要らない
   useEffect(() => {
@@ -32,6 +47,22 @@ export function DiffBody({ id, canReview = false }: { id: string; canReview?: bo
       {!data && !error && <div className="none">読んでいます…</div>}
       {data && (
         <>
+          {onInsertComments && (
+            <DiffCommentBar
+              count={comments.list.length}
+              onInsert={() => {
+                onInsertComments(formatDiffComments(comments.list))
+                comments.clear()
+              }}
+              onClear={comments.clear}
+            />
+          )}
+          {orphans.map((c) => (
+            <div className="diff-orphan" key={c.id}>
+              <code>{c.path}:{c.line}</code>
+              <DiffCommentNote comment={c} moved onRemove={() => comments.remove(c.id)} />
+            </div>
+          ))}
           <div className="where">
             <code>{data.head || '(不明)'}</code>
             {data.base ? <> ← <code>{data.base}</code> からの差分</> : ' （比べる相手のブランチが見つかりません）'}
@@ -45,6 +76,7 @@ export function DiffBody({ id, canReview = false }: { id: string; canReview?: bo
               title="ブランチの差分"
               empty={`${data.base} との差はありません`}
               action={canReview && data.branch.files.length > 0 ? <ReviewButton id={id} target="baseBranch" /> : undefined}
+              comments={commentsOf('branch')}
             />
           )}
           <DiffView
@@ -52,6 +84,7 @@ export function DiffBody({ id, canReview = false }: { id: string; canReview?: bo
             title="未コミット"
             empty="コミットしていない変更はありません"
             action={canReview && data.working.files.length > 0 ? <ReviewButton id={id} target="uncommittedChanges" /> : undefined}
+            comments={commentsOf('working')}
           />
           {data.untracked.length > 0 && (
             <div className="diff-section">

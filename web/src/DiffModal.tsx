@@ -8,7 +8,7 @@ import { CloseMark } from './CloseMark'
  * 中身（`.diff-scroll`）だけがスクロールし、**閉じるボタンは右上に出たまま**になる（#221。
  * 前はモーダル全体が流れたので、閉じるは差分の一番下にあって最後まで送らないと押せなかった）
  */
-export function DiffModal({ id, onClose, canReview }: { id: string; onClose: () => void; canReview?: boolean }) {
+export function DiffModal({ id, onClose, canReview, onInsertComments }: { id: string; onClose: () => void; canReview?: boolean; onInsertComments?: (text: string) => void }) {
   const dialogRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     dialogRef.current?.focus()
@@ -32,7 +32,7 @@ export function DiffModal({ id, onClose, canReview }: { id: string; onClose: () 
           </IconButton>
         </div>
         <div className="diff-scroll">
-          <DiffBody id={id} canReview={canReview} />
+          <DiffBody key={`diff:${id}`} id={id} canReview={canReview} {...(onInsertComments ? { onInsertComments } : {})} />
         </div>
       </div>
     </div>

@@ -23,7 +23,7 @@ import { NOT_IN_HISTORY, canGoBack, canGoForward, stepHistory } from './replyHis
 import type { HistoryState } from './replyHistory'
 import { EMPTY_DRAFT, loadDraft, saveDraft } from './replyDrafts'
 import { clearsOnSent } from './replySent'
-import { restoresOnRequest, restoresText, type RestoreRequest } from './replyRestore'
+import { appendInsert, restoresOnRequest, restoresText, type RestoreRequest } from './replyRestore'
 
 /**
  * @ メンションで返信先を選ぶための道具（フィード用）。渡さなければ `@` はただの文字（セッション画面）。
@@ -121,6 +121,8 @@ interface Props {
    * `seq` が増えたときだけ当てる。入力欄に何か打たれていれば無視する
    */
   restore?: RestoreRequest
+  /** 差分へのコメントを入力欄に入れる頼み（#511）。`seq` が増えたときだけ、打ちかけの後ろへ足す（送らない） */
+  insert?: RestoreRequest
   /** 本文が空のときの `←`。サイドバーのいま開いている項目にフォーカスを戻す（#204）。渡さなければ ← はカーソル移動のまま */
   onLeaveToSidebar?: () => void
   mention?: MentionProps
@@ -132,7 +134,7 @@ const NO_HISTORY: readonly string[] = []
 const keyOf = (e: KeyboardEvent<HTMLTextAreaElement>) => ({ key: e.key, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, shiftKey: e.shiftKey })
 
 /** 入力欄。Enter で送信、Shift+Enter で改行。IME 変換中の Enter は送らない */
-export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerable = false, now = 0, onSend, onDraft, model, permission, diff, skillsId, skillsAgent, attachId, draftKey, sentFromConfirm = 0, restore, history = NO_HISTORY, nextAsk, onLeaveToSidebar, mention }: Props) {
+export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerable = false, now = 0, onSend, onDraft, model, permission, diff, skillsId, skillsAgent, attachId, draftKey, sentFromConfirm = 0, restore, insert, history = NO_HISTORY, nextAsk, onLeaveToSidebar, mention }: Props) {
   // 前に打ちかけて離れた分（#306）。作ったときに 1 回だけ読む
   const [initial] = useState(() => (draftKey ? loadDraft(draftKey) : EMPTY_DRAFT))
   const [text, setText] = useState(initial.text)
@@ -210,6 +212,15 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
       setText(restore.text)
       setCaret(restore.text.length)
     }
+  }
+
+  // 差分へのコメント（#511）。人が「入力欄に入れる」を押したときだけで、打ちかけがあれば後ろへ足す
+  const [insertedSeq, setInsertedSeq] = useState(insert?.seq ?? 0)
+  if (insert && restoresOnRequest(insertedSeq, insert.seq)) {
+    setInsertedSeq(insert.seq)
+    const next = appendInsert(text, insert.text)
+    setText(next)
+    setCaret(next.length)
   }
 
   // 打ちかけを残す（#306）。変わるたびに書くので、画面を移るときに書き忘れる経路が無い。

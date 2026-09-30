@@ -101,6 +101,8 @@ export function App() {
   const [diff, setDiff] = useState<OpenDiff | null>(null)
   const narrow = useNarrow()
   const closeDiff = useCallback(() => setDiff(null), [])
+  // 差分へのコメント（#511）を返信欄に入れる頼み。入れる先はそのセッションの画面の返信欄だけ（フィードは返信先が @ で動く）
+  const [commentInsert, setCommentInsert] = useState<{ id: string; text: string; seq: number } | null>(null)
   // 出すのは、いま開いているセッションの分と、フィードのバブルから開いたものはフィードにいる間（#280）。
   // 別のセッションへ移っている間は出さない（戻ってくれば、また出る。閉じるまで覚えておく）。規則は feedDiff.ts
   const diffOpen = visibleDiff(diff, route, narrow)
@@ -111,6 +113,19 @@ export function App() {
   // 差分ビューアの「レビューさせる」は Codex だけ（#403）。返信できないセッション（別のマシン・合成 ID）にも出さない
   const diffSession = diffOpen === null ? undefined : list.data?.sessions.find((s) => s.id === diffOpen)
   const canReview = Boolean(diffSession?.agent === 'codex' && !replyBlockedReason(diffSession, list.data?.host ?? ''))
+  // 行へのコメントは、そのセッションを開いていて返信欄が出ているときだけ（入れる先がある）。
+  // 条件は SessionView が返信欄を出す条件と同じ（アーカイブ済みは返信欄の代わりに案内が出る。#512 のレビュー）
+  const canComment =
+    diffOpen !== null && route.name === 'session' && route.id === diffOpen && diffSession !== undefined && !diffSession.archived && !replyBlockedReason(diffSession, list.data?.host ?? '')
+  const insertComments = useCallback(
+    (text: string) => {
+      if (diffOpen === null) return
+      setCommentInsert((prev) => ({ id: diffOpen, text, seq: (prev?.seq ?? 0) + 1 }))
+      // 狭い画面はモーダルが返信欄を隠しているので閉じる（広い画面はペインを残したまま、横の返信欄に入る）
+      if (narrow) setDiff(null)
+    },
+    [diffOpen, narrow],
+  )
 
   // Cmd/Ctrl + \ で開閉（VS Code と同じ）。入力欄にフォーカスがあっても効く。IME 変換中は無視
   useEffect(() => {
@@ -297,7 +312,7 @@ export function App() {
           ) : route.name === 'todo' ? (
             <TodoView list={list} onStatus={onStatus} onOpenSidebar={openSidebar} onLeaveToSidebar={focusSidebar} linear={linear} settings={settings} />
           ) : route.name === 'session' ? (
-            <SessionView id={route.id} focusTs={route.ts ?? ''} {...(route.side ? { focusSide: route.side } : {})} onStatus={onStatus} onOpenSidebar={openSidebar} onLeaveToSidebar={focusSidebar} onToggleDiff={toggleDiff} diffOpen={diffOpen !== null} linear={linear} settings={settings} />
+            <SessionView id={route.id} focusTs={route.ts ?? ''} {...(route.side ? { focusSide: route.side } : {})} onStatus={onStatus} onOpenSidebar={openSidebar} onLeaveToSidebar={focusSidebar} onToggleDiff={toggleDiff} diffOpen={diffOpen !== null} {...(commentInsert && commentInsert.id === route.id ? { insert: commentInsert } : {})} linear={linear} settings={settings} />
           ) : (
             <FeedView
               project={filters.project}
@@ -316,9 +331,9 @@ export function App() {
           )}
         </div>
         {/* 広い画面はチャットの右にもう1枚。狭い画面は今までどおりモーダルで重ねる */}
-        {diffOpen !== null && !narrow && <DiffPane id={diffOpen} onClose={closeDiff} canReview={canReview} />}
+        {diffOpen !== null && !narrow && <DiffPane id={diffOpen} onClose={closeDiff} canReview={canReview} {...(canComment ? { onInsertComments: insertComments } : {})} />}
       </main>
-      {diffOpen !== null && narrow && <DiffModal id={diffOpen} onClose={closeDiff} canReview={canReview} />}
+      {diffOpen !== null && narrow && <DiffModal id={diffOpen} onClose={closeDiff} canReview={canReview} {...(canComment ? { onInsertComments: insertComments } : {})} />}
     </>
   )
 }

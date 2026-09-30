@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { answerableIds } from './terminalQuestion.ts'
+import type { PrRepo } from '../../shared/types.ts'
 import { entityId } from '../../shared/entity.ts'
 import { eventKind } from '../../shared/events.ts'
 import { promptArrived } from './chatGroups'
@@ -50,10 +51,12 @@ interface Props extends PaneProps {
   openDiff: string | null
   /** バブルの差分のボタン。フィードから開いたものとして App に覚えさせる */
   onToggleDiff: (id: string) => void
+  /** GitHub の open な PR（#554。App の `useSessionPrs()`）。見出しのセッションに紐づくものにリンクを出す */
+  prs?: readonly PrRepo[]
 }
 
 /** 全チャンネルを時系列に流す。リポジトリと日数を見出しで選ぶ（リポジトリはサイドバーの絞り込みと同じ値） */
-export function FeedView({ selected, projects, onProjects, sessions = NO_SESSIONS, selfHost, openDiff, onToggleDiff, onStatus, onOpenSidebar, onLeaveToSidebar, linear }: Props) {
+export function FeedView({ selected, projects, onProjects, sessions = NO_SESSIONS, selfHost, openDiff, onToggleDiff, onStatus, onOpenSidebar, onLeaveToSidebar, linear, prs }: Props) {
   const [local, setLocal] = useLocalState<{ days: string }>('sai.feed', { days: '3' })
   const { data, error, updatedAt } = usePolling(() => api.feed({ projects: [...selected], days: local.days }), [selected.join('\n'), local.days])
   useEffect(() => onStatus(updatedAt, error), [updatedAt, error, onStatus])
@@ -167,6 +170,7 @@ export function FeedView({ selected, projects, onProjects, sessions = NO_SESSION
           diffs={{ summaries: diffSummaries, open: openDiff, onToggle: onToggleDiff }}
           longOpen
           jumpTo={jump}
+          {...(prs ? { prs } : {})}
           trailer={
             (pending.length > 0 || approvals.length > 0 || queuedShown.length > 0) && (
               <>

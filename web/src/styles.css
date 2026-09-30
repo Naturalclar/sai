@@ -340,6 +340,10 @@
   .pr-description .none, .pr-view .warn { color: var(--muted); font-size: 12px; }
   .pr-view .warn { color: var(--synth); }
   /* 1 行に収める（折り返すと「N 待っている」だけが次の行の右端に飛ぶ）。溢れる名前は … で切る */
+  /* 名前（セッションへのリンク）の外に PR へのリンク（#554）を並べる。リンクの中にリンクは置けない */
+  .todo .who-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .todo .who-row > .who { flex: 1 1 auto; }
+  .todo .who-row > .session-pr { flex: none; margin-left: 0; }
   .todo .who { display: flex; align-items: center; gap: 6px; color: inherit; font-size: 13px; min-width: 0; }
   .todo .who:hover { text-decoration: none; }
   .todo .who .name { font-weight: 700; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -541,6 +545,8 @@
   /* そのセッションの PR（#548）。色は下書き・チェックが落ちている・承認済み・それ以外 */
   .tag.session-pr { display: inline-flex; align-items: center; gap: 3px; font-family: var(--mono); font-weight: 600; color: var(--ink); }
   .tag.session-pr svg { flex: none; }
+  a.tag.session-pr { text-decoration: none; }
+  a.tag.session-pr:hover { text-decoration: underline; }
   .tag.session-pr.draft { color: var(--muted); }
   .tag.session-pr.failing { background: color-mix(in srgb, var(--claude) 16%, transparent); color: var(--claude); }
   .tag.session-pr.approved { background: color-mix(in srgb, var(--codex) 16%, transparent); color: var(--codex); }

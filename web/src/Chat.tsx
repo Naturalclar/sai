@@ -14,6 +14,9 @@ import { groupRows, speakerLabel } from './chatGroups.ts'
 import { Message } from './Message'
 import { SessionEndLine } from './SessionEndLine'
 import { UnreadLine } from './UnreadLine'
+import { SessionPrLink } from './SessionPrLink'
+import { prForSession } from '../../shared/prs.ts'
+import type { PrRepo } from '../../shared/types.ts'
 import { firstUnreadKey } from './unreadMarks.ts'
 import { JumpToBottom } from './JumpToBottom'
 import { HostTag } from './HostTag'
@@ -103,6 +106,17 @@ interface Props {
   onSeenBottom?: () => void
   /** 返答のバブルの「⋯」に「ここから未読にする」を出す（#502）。押されたらその発言の ts を渡す */
   onMarkUnread?: (ts: string) => void
+  /**
+   * GitHub の open な PR（#554）。`showChannel`（フィード）のときだけ、見出しのセッションに紐づく PR へのリンクを
+   * ブランチの横に出す（セッション画面は見出しと差分ボタンの横にある）
+   */
+  prs?: readonly PrRepo[]
+}
+
+/** 見出しのセッションの PR へのリンク（#554）。一覧に居ない・PR が無ければ何も出さない */
+function prLinkOf(session: SessionSummary | undefined, prs: readonly PrRepo[]) {
+  const hit = session ? prForSession(session, prs) : null
+  return hit ? <SessionPrLink repo={hit.repo} pr={hit.pr} /> : null
 }
 
 /**
@@ -116,7 +130,7 @@ function flash(el: HTMLElement) {
   window.setTimeout(() => el.classList.remove('found'), JUMP_FLASH_MS)
 }
 
-export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_SESSIONS, trailer, showThinking = false, thinkingOpen = false, longOpen = false, profile, linear = '', focusTs = '', focusSide: askedSide, diffs, jumpTo = null, question, answerable = NO_IDS, images, unreadAfter, onSeenBottom, onMarkUnread }: Props) {
+export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_SESSIONS, trailer, showThinking = false, thinkingOpen = false, longOpen = false, profile, linear = '', focusTs = '', focusSide: askedSide, diffs, jumpTo = null, question, answerable = NO_IDS, images, unreadAfter, onSeenBottom, onMarkUnread, prs }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
   // 最後に最下部へ送ったときの scrollHeight。中身の高さが変わったときだけ送るため（#344）
@@ -279,6 +293,7 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
                       )}
                       {showChannel && isRemoteHost(g.host, selfHost) && <HostTag host={g.host} />}
                       {g.branch && <code className="branch" title={g.branch}>{g.branch}</code>}
+                      {showChannel && prs && prLinkOf(byId.get(id), prs)}
                       <span className="time">{hm(g.firstTs)}</span>
                     </div>
                     {g.items.map((u) => {

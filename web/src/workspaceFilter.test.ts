@@ -5,6 +5,7 @@ import type { Workspace } from './newSession.ts'
 import { filterWorkspaces } from './workspaceFilter.ts'
 
 const w = (repo: string, over: Partial<Workspace> = {}): Workspace => ({
+  key: `S@${repo}`,
   from: `S@${repo}`,
   cwd: `/Users/me/.ghq/github.com/Naturalclar/sai.git/${repo}`,
   project: 'Naturalclar/sai',

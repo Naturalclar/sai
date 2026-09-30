@@ -20,9 +20,13 @@ export const MAX_GIT_OUTPUT_BYTES = 16 * 1024 * 1024
 const READ_ONLY = new Set(['rev-parse', 'symbolic-ref', 'merge-base', 'diff', 'ls-files', 'status'])
 /**
  * サブコマンド自体は書き込めるが、この動詞なら読むだけ、というもの。
- * `remote get-url` は origin の URL を読むだけ（`remote add` などは弾く）
+ * `remote get-url` は origin の URL を読むだけ（`remote add` などは弾く）。`worktree list` は worktree の一覧を読むだけ
  */
-const READ_ONLY_VERBS: Record<string, Set<string>> = { remote: new Set(['get-url']) }
+const READ_ONLY_VERBS: Record<string, Set<string>> = {
+  remote: new Set(['get-url']),
+  // 新しいセッションの候補に同じリポジトリの worktree を足す（#319）。`add` / `remove` / `prune` などは弾く
+  worktree: new Set(['list']),
+}
 
 /** git を叩く口。テストでは差し替える */
 export interface Git {

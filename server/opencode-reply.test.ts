@@ -4,6 +4,7 @@ import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
+import { execFileSync } from 'node:child_process'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -132,6 +133,8 @@ before(async () => {
   process.env.AGENT_FEED_HOST = 'testmac'
   dir = await mkdtemp(join(tmpdir(), 'sai-oc-'))
   work = await mkdtemp(join(tmpdir(), 'sai-oc-work-'))
+  // 新しいセッションを始められるのは git の作業ツリーの中だけ（#319）
+  execFileSync('git', ['init', '-q', work])
   await writeFile(
     join(dir, `${localDate(now.toISOString())}.jsonl`),
     [

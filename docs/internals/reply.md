@@ -116,10 +116,19 @@ SAI が起こした Claude のターンは、使ったトークンと費用も�
 
 `POST /api/sessions/new`（#314）。
 
+### 始める場所（#319）
+
+- **git の作業ツリーの中だけ**で始める。記録にある `cwd` でも、`/`・`/tmp`・Claude Code の scratchpad のような git の外は `400`（前は「ディレクトリか」しか見ていなかった）。判定は `server/git/worktrees.ts` の `Worktrees.usable()`（`git worktree list --porcelain` から bare 本体・`prunable`・ディレクトリの無いものを除いたもの）と `treeOf()`（cwd を realpath に揃えて、どれかの worktree の中か。名前の前方一致では当てない）。
+- **記録のあるリポジトリの、記録の無い兄弟 worktree でも始められる**。候補は `GET /api/workspaces`（`workspacesOf()`）: 記録にある cwd ごとに一番新しいセッションを取り、git の作業ツリーの中のものを `recorded`、同じリポジトリの記録の無い worktree を `siblings`（`from` はそのリポジトリで一番新しいセッション）に並べる。一覧は cwd ごとに `WORKTREES_TTL_MS`（30 秒）覚える。画面が新しいセッションの画面を開いたときだけ取り、ポーリングには乗せない。
+- **パスは受けない**: 兄弟 worktree は `worktreeKey()`（realpath の sha1 の頭 16 桁）で選ばせ、POST の `worktree` に入れる。サーバは `from` の cwd で `git worktree list` を**覚えたものを使わずに読み直し**（`startPlace()`）、その中に同じ鍵があるときだけ通す。無ければ `400`（消された・別のリポジトリの鍵・パスそのもの）。
+- 兄弟 worktree で始めたときのエンティティ ID の `repo` は `from.repo` ではなく**その worktree のディレクトリ名**（record.py が行に書く `repo`＝toplevel の basename と同じ）。`project` は record.py が同じリポジトリから同じ値を出す。
+- `RealGit` の読むだけの allowlist（`server/git/diff.ts` の `READ_ONLY_VERBS`）に `worktree: ['list']` を足した（`add` / `remove` / `prune` は弾く）。
+- 広げるのは「記録のあるリポジトリ」まで。記録の無いリポジトリ（ghq の下の全部）と、画面から worktree を作る口は作らない（経緯は history/reply.md）。
+
 ### Claude
 
 - 返信と同じ `ProcessRunner` で回す。`runner.ts` の `newSessionCommand()` が `claudeHead()`（返信と共通の前半。`SAI_CLAUDE_ARGS` → 許可の配線 → `--model` → `--permission-mode`）に `-p --session-id <uuid>` を付ける。
-- ID はサーバが `randomUUID()` で決めるので、最初の行が届く前からエンティティ ID（`<uuid>@<from の repo>`）が分かり、処理中・許可の配線（`SAI_ENTITY`）・メタが返信と同じ鍵になる。
+- ID はサーバが `randomUUID()` で決めるので、最初の行が届く前からエンティティ ID（`<uuid>@<始める worktree の repo>`）が分かり、処理中・許可の配線（`SAI_ENTITY`）・メタが返信と同じ鍵になる。
 - `replyingOf()` は一覧に居ないセッションの分も返すので、行を書く前の失敗も `replying[id].failed` で画面に出る。
 - 画面は `NewSessionView`（候補は `web/src/newSession.ts` の `workspaceChoices()`。`newSession.test.ts`）→ `NewSessionStarting`（`startStatus()`。詳細の GET が 404 の間はここで待ち、届いたら `#/s/<id>` へ移る）。
 

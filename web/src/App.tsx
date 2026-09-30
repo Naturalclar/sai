@@ -329,6 +329,13 @@ export function App() {
           記録側の <code>record.py</code> が古い（v{list.data.record_version}、最新は v{RECORD_VERSION}）。フックの向け先を確かめてください（README「1. フックを向ける」）
         </div>
       )}
+      {/* 記録に届いていないフック（#567）。行からは分からない（SessionEnd は /clear・/exit でしか書かれない）ので設定を読んで出す。
+          古いサーバ（立て直す前）は載せてこないので無い扱い */}
+      {list.data && (list.data.hooks_missing ?? []).length > 0 && (
+        <div className="banner" role="status">
+          フックが繋がっていません: <code>{list.data.hooks_missing.join('、')}</code>（README「1. フックを向ける」。<code>/setup-sai</code> で足せます）
+        </div>
+      )}
       {/* 配っている web/dist/ がソースより古い（git pull のあと pnpm build していない）。pnpm dev は HMR で常に最新なので出さない */}
       {import.meta.env.PROD && list.data?.build_stale && (
         <div className="banner" role="status">

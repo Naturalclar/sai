@@ -924,6 +924,12 @@ export interface SessionsResponse {
   build_stale: boolean
   /** 窓の中の一番新しい行の v（無い行は 1、行が無ければ 0）。RECORD_VERSION より小さければ記録側の record.py が古い */
   record_version: number
+  /**
+   * 記録に届いていない Claude Code のフック（#567。`shared/hooks.ts` の `hookGapLabel()` の 1 行ずつ）。空なら出さない。
+   * `~/.claude/settings.json` を README のあるべき一覧と突き合わせたもので、分からない（設定が読めない・届くフックが 1 つも
+   * 見えない・このマシンの Claude の行が窓に無い）ときも空。rev にも混ぜる（設定を直したら次の行を待たずに消える）
+   */
+  hooks_missing: string[]
   /** 自分の表示名とアイコン。変わると rev も変わる */
   profile: Profile
   /** 誰として見ているか。tailnet 経由（tailscale serve）ならログイン名、ローカルの直アクセスなら null */

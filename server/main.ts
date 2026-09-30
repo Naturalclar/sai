@@ -23,6 +23,7 @@ import { parseArgs } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { DEFAULT_PORT, parsePort } from '../shared/port.ts'
 import { createApp } from './app.ts'
+import { ClaudeHooks } from './local/claudeHooks.ts'
 import { jevFromEnv } from './approvals/jev.ts'
 import { RealTmux, realPs } from './reply/terminal.ts'
 import { FeedStore } from './rows/store.ts'
@@ -147,6 +148,8 @@ export function main(argv: string[]): void {
     tmux: new RealTmux(),
     ps: realPs,
     jev: jevFromEnv(),
+    // フックの配線のずれ（#567）。~/.claude/settings.json を読むだけ（書き換えない）
+    claudeHooks: new ClaudeHooks(),
   })
   const server = createServer((req, res) => {
     void app(req, res)

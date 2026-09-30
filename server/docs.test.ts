@@ -4,6 +4,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import { EXPECTED_CLAUDE_HOOKS } from '../shared/hooks.ts'
 
 const ROOT = resolve(import.meta.dirname, '..')
 
@@ -13,8 +14,9 @@ const ROOT = resolve(import.meta.dirname, '..')
  * - AGENT_FEED_SKIP: SAI が一言を作る `claude -p` に自分で付ける合図（record.py / statusline.py / OpenCode のプラグインが見る。#288）
  * - TMUX_PANE / CLAUDE_PID: エージェントが子（record.py）に渡してくる、居場所を知るための変数
  * - REPO_URL / PROD: Vite の import.meta.env（vite.config.ts の define と組み込み）
+ * - PATH: フックのラッパー（`sai-record` など）を引くのにサーバの PATH を見る（#567）。SAI の設定ではない
  */
-const INTERNAL = new Set(['SAI_URL', 'SAI_ENTITY', 'SAI_TOKEN_FILE', 'SAI_APPROVE_RECONNECT_MS', 'AGENT_FEED_SKIP', 'TMUX_PANE', 'CLAUDE_PID', 'REPO_URL', 'PROD'])
+const INTERNAL = new Set(['SAI_URL', 'SAI_ENTITY', 'SAI_TOKEN_FILE', 'SAI_APPROVE_RECONNECT_MS', 'AGENT_FEED_SKIP', 'TMUX_PANE', 'CLAUDE_PID', 'REPO_URL', 'PROD', 'PATH'])
 
 /** 「## 環境変数」の中の 2 つの表の見出し（#288）。区別の無い 1 枚の表だと、全部設定しないと動かないように見える */
 const SUBSECTIONS = ['### 設定することがあるもの', '### 切り分け・内部']
@@ -96,4 +98,23 @@ test('環境変数: 表は「設定することがあるもの」と「切り分
     const twice = [...seen].filter(([, n]) => n > 1).map(([name]) => name)
     assert.deepEqual(twice, [], `${file} の表に 2 回ある: ${twice.join(', ')}`)
   }
+})
+
+/**
+ * README「1. フックを向ける」の Claude Code の JSON の例（#567）。あるべきフックの一覧（`EXPECTED_CLAUDE_HOOKS`）と
+ * 揃っていないと、画面と `/setup-sai` が README に無いフックを求めたり、README のフックを見落としたりする
+ */
+function readmeClaudeHooks(): { event: string; matcher: string }[] {
+  const text = readFileSync(join(ROOT, 'README.md'), 'utf-8')
+  const start = text.indexOf('### 1. フックを向ける')
+  assert.ok(start >= 0, 'README に「### 1. フックを向ける」が無い')
+  const block = text.slice(start).match(/```json\n([\s\S]*?)\n```/)
+  assert.ok(block, 'README の「1. フックを向ける」に JSON の例が無い')
+  const hooks = (JSON.parse(block[1]!) as { hooks: Record<string, { matcher?: string }[]> }).hooks
+  return Object.entries(hooks).flatMap(([event, groups]) => groups.map((g) => ({ event, matcher: g.matcher ?? '' })))
+}
+
+test('フック: README の Claude Code の例と EXPECTED_CLAUDE_HOOKS が揃っている（#567）', () => {
+  const key = (h: { event: string; matcher: string }) => `${h.event}|${h.matcher}`
+  assert.deepEqual(readmeClaudeHooks().map(key).sort(), EXPECTED_CLAUDE_HOOKS.map(key).sort())
 })

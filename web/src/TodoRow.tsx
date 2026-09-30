@@ -1,10 +1,12 @@
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { projectName } from '../../shared/project.ts'
 import type { TodoItem } from '../../shared/todoItems.ts'
 import { ApprovalBubble } from './ApprovalBubble'
 import { AgentChip } from './AgentChip'
 import { TodoArchiveButton } from './TodoArchiveButton'
 import { WaitingTag } from './WaitingTag'
+import { TodoSource } from './TodoSource'
+import { sourceTs } from './todoRowSource.ts'
 import { elapsedLabel } from './format'
 
 interface Props {
@@ -38,6 +40,9 @@ export function TodoRow({ item, now, hotkey, modeNote, reply, children }: Props)
   const done = item.kind === 'done'
   // どのエージェントか（#520）。答え待ち（answer）は ApprovalBubble のアバターで分かるので重ねない
   const agent = s && item.kind !== 'answer' ? s.agent || 'unknown' : ''
+  // 一言（要約）が出ている「終了」の行は、もとの本文を行の下に開ける（#537）。取るのは開いたときだけ
+  const source = sourceTs(item)
+  const [sourceOpen, setSourceOpen] = useState(false)
   return (
     <div className={`todo ${item.kind}`}>
       <a className="who" href={`#/s/${encodeURIComponent(item.id)}`} title={item.id}>
@@ -64,6 +69,11 @@ export function TodoRow({ item, now, hotkey, modeNote, reply, children }: Props)
             )}
             {/* 文言は行の text のまま（`入力待ち（バックグラウンドのセッション）` の区別を捨てない） */}
             <span className="text">{item.text}</span>
+            {source && (
+              <button type="button" className="linkish todo-source-toggle" aria-expanded={sourceOpen} onClick={() => setSourceOpen((v) => !v)}>
+                {sourceOpen ? '元の文を閉じる' : '元の文'}
+              </button>
+            )}
             {/* 選択肢は SAI に届いていないのでボタンは出せないが、返信欄からは打てる（#232）。
                 ここから送れるなら、セッション画面に移らずに行の下で打てる（#522） */}
             {reply && item.replyable ? (
@@ -85,6 +95,7 @@ export function TodoRow({ item, now, hotkey, modeNote, reply, children }: Props)
           {done && s && <TodoArchiveButton key={`archive:${s.end}`} id={item.id} />}
         </div>
       )}
+      {source && sourceOpen && <TodoSource key={`source:${source}`} id={item.id} ts={source} />}
       {children}
     </div>
   )

@@ -19,6 +19,7 @@ import type {
   SearchResponse,
   SessionDiffSummaryResponse,
   GalleryResponse,
+  SessionTurnResponse,
   SessionFilters,
   SessionIconResponse,
   IconHistoryResponse,
@@ -194,6 +195,8 @@ export const api = {
   diffSummary: (id: string) => getJSON<SessionDiffSummaryResponse>(`/api/sessions/${encodeURIComponent(id)}/diff?summary=1`),
   /** そのセッションに出てきた画像（#504）。開いたときと新しいターンが記録されたときだけ取る */
   gallery: (id: string) => getJSON<GalleryResponse>(`/api/sessions/${encodeURIComponent(id)}/gallery`),
+  /** 一言のもとになったターン完了の行（#537）。要対応の「終了」の行で「元の文」を押したときだけ */
+  turn: (id: string, ts: string) => getJSON<SessionTurnResponse>(`/api/sessions/${encodeURIComponent(id)}/turn?ts=${encodeURIComponent(ts)}`),
   /** 処理中のターンがいま何をしているか（#302）。処理中のセッションを出している間だけ取る（一覧のポーリングには乗せない） */
   progress: (id: string) => getJSON<SessionProgressResponse>(`/api/sessions/${encodeURIComponent(id)}/progress`),
   /** そのセッションの cwd に効いている許可ルール。画面が開いたときだけ取る（ポーリングには乗せない） */

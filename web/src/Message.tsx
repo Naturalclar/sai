@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { hm } from './format'
 import { Markdown } from './Markdown'
+import { isLong } from './longText.ts'
 import { Inlines } from './Inlines'
 import { linkifyRefs } from '../../shared/refs.ts'
 import { ThinkingBlock } from './ThinkingBlock'
@@ -21,8 +22,6 @@ import type { MessageSide } from './hooks.ts'
 import type { AskQuestion } from '../../shared/approvals.ts'
 import type { TurnUsage } from '../../shared/turnUsage.ts'
 
-// 折りたたむかは描画前の生の長さで見る（コードブロック1つで8行を超えても折りたたむ。今まで通り）
-const isLong = (text: string) => text.length > 600 || text.split('\n').length > 8
 
 interface Props {
   ts: string

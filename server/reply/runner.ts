@@ -6,6 +6,7 @@
 import { spawn } from 'node:child_process'
 import { closeSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, writeFileSync, writeSync } from 'node:fs'
 import { dirname, resolve as resolvePath } from 'node:path'
+import type { Writable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import type { Agent, Replying, ReplyFailure, ReplyingMap } from '../../shared/types.ts'
 import { settledByRow } from '../../shared/turnSettled.ts'
@@ -20,6 +21,8 @@ const TAIL_CHARS = 300
 const TAIL_LINES = 3
 /** 1 ターンぶんとして読む上限。`--output-format json` の result は実測 1.8KB だが、本文が長ければ育つ */
 const MAX_SLICE_BYTES = 1024 * 1024
+/** 入力の口を開けている返信（#386）の result を reply.log に探す間隔 */
+export const RESULT_POLL_MS = 500
 
 /**
  * reply.log の offset 以降（= このターンの子プロセスが書いた分）の末尾を数行。
@@ -105,6 +108,42 @@ export interface ReplyCommand {
    * args にも入っているが、処理中のターンがどのモードで動いているかを画面に出すので別に持つ（#272）
    */
   permissionMode?: string
+  /**
+   * stdin に最初に書く 1 行（#386。`--input-format stream-json` の `user` メッセージ）。あれば stdin をパイプにして、
+   * そのターンの `result` が出るまで開けておく（その間は止める・足すができる）。無ければ今までどおり stdin を閉じて起こす
+   */
+  input?: string
+  /** `result` を見分けるためのセッション ID（reply.log は並行する返信の出力が混ざるので、`session_id` で自分の分だけ拾う） */
+  session?: string
+}
+
+/**
+ * `--input-format stream-json` で送る `user` の 1 行（#386）。最初の指示も、途中で足す指示もこの形
+ */
+export function claudeUserLine(text: string): string {
+  return JSON.stringify({ type: 'user', message: { role: 'user', content: text } })
+}
+
+/** 走っているターンを止める `control_request`（#386。2.1.285 で実測: `control_response` が即 `success`、`result` は `error_during_execution`） */
+export function claudeInterruptLine(requestId: string): string {
+  return JSON.stringify({ type: 'control_request', request_id: requestId, request: { subtype: 'interrupt' } })
+}
+
+/**
+ * その出力の中に、そのセッションの `result` の行があるか（#386）。reply.log は並行する返信の出力が混ざるので、
+ * `session_id` まで見る。行の途中で切れているもの（書きかけ）は数えない
+ */
+export function hasResultFor(text: string, session: string): boolean {
+  for (const line of text.split('\n')) {
+    if (!line.includes('"type":"result"')) continue
+    try {
+      const o = JSON.parse(line) as { type?: unknown; session_id?: unknown }
+      if (o.type === 'result' && (!session || o.session_id === session)) return true
+    } catch {
+      // 書きかけ・別の出力
+    }
+  }
+  return false
 }
 
 /**
@@ -142,6 +181,26 @@ export function splitArgs(raw: string | undefined): string[] {
   return out
 }
 
+/** 入力の口を開けておく引数（#386） */
+const CLAUDE_STREAM_ARGS = ['--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose']
+
+/**
+ * 前半（`claudeHead()`）のあとに本文をどう渡すか。入力の口を開けているなら stdin の 1 行で、そうでなければ今までどおり `--` の後ろ
+ */
+function claudeTail(env: NodeJS.ProcessEnv, head: string[], text: string, session: string): Pick<ReplyCommand, 'args' | 'input' | 'session'> & { args: string[] } {
+  if (claudeStreams(env)) return { args: head, input: claudeUserLine(text), session }
+  return { args: [...head, '--', text] }
+}
+
+/**
+ * 入力の口を SAI が開けるか（#386）。**運用者が `--output-format` / `--input-format` を自分で書いていれば開けない**
+ * （そちらを尊重し、本文は今までどおり `--` の後ろ。`--input-format text` なのに stdin に JSON を送ると、本文として JSON がそのまま届く）
+ */
+function claudeStreams(env: NodeJS.ProcessEnv): boolean {
+  const extra = splitArgs(env.SAI_CLAUDE_ARGS)
+  return !extra.includes('--output-format') && !extra.includes('--input-format')
+}
+
 /**
  * Claude の起動引数のうち、返信と新しいセッション（#314）で共通の前半。運用者の `SAI_CLAUDE_ARGS` を先頭に、
  * 許可・質問を画面で答える配線、モデル、許可モードの順（後ろほど勝つ）。2 つの経路でずれないように 1 か所で組む
@@ -155,9 +214,11 @@ function claudeHead(env: NodeJS.ProcessEnv, approve: ApproveVia | undefined, mod
     ? ['--mcp-config', approveMcpConfig(approve), '--permission-prompt-tool', APPROVE_TOOL]
     : []
   // 運用者の SAI_CLAUDE_ARGS に --model / --permission-mode があっても、セッションの設定を後ろに置いてそちらを勝たせる（後勝ち）
-  // 使ったトークンと費用を CLI に返させる（#387）。reply.log の末尾に result の 1 行として残り、ProcessRunner が拾う。
-  // 運用者が自分の --output-format を指定していればそちらを尊重する（stream-json でも最後の result の行から読める）
-  const format = extra.includes('--output-format') ? [] : ['--output-format', 'json']
+  // 出力は stream-json（#386）。**入力の口（`--input-format stream-json`）を開けておき、走っているターンを止める・足す**ため
+  // （入力を stream-json にするには出力も stream-json が要り、`-p` で stream-json を出すには `--verbose` が要る）。
+  // 使ったトークンと費用（#387）は最後の result の行から読める。運用者が自分の --output-format を指定していれば
+  // そちらを尊重し、入力の口は開けない（今までどおり本文を引数で渡す）
+  const format = claudeStreams(env) ? CLAUDE_STREAM_ARGS : []
   // セッションの表示名（session-meta.json の name）を CLI にも渡す（#391）。端末のタイトルと `/resume` の
   // ピッカーに同じ名前が出る。**名前はセッションに残る**（実測: 付けて回すと transcript の先頭に
   // `{"type":"custom-title",…}` が入り、次に `-n` 無しで resume しても消えない）ので、
@@ -183,7 +244,7 @@ export function newSessionCommand(
   /** そのセッションの表示名（session-meta.json の name）。あれば `-n` で CLI にも渡す（#391） */
   name?: string,
 ): ReplyCommand {
-  return { bin: 'claude', args: [...claudeHead(env, approve, model, permissionMode, name), '-p', '--session-id', sessionId, '--', text], cwd, text, permissionMode: permissionMode || '' }
+  return { bin: 'claude', ...claudeTail(env, [...claudeHead(env, approve, model, permissionMode, name), '-p', '--session-id', sessionId], text, sessionId), cwd, text, permissionMode: permissionMode || '' }
 }
 
 /**
@@ -261,7 +322,7 @@ export function replyCommand(
   // ターンが回らない（`--dangerously-skip-permissions` ならフラグとして効いてしまう）。両 CLI とも `--` を受け付ける
   if (agent === 'claude') {
     // 許可モードは Claude だけ（codex exec resume に同等のフラグは無い）
-    return { bin: 'claude', args: [...claudeHead(env, approve, model, permissionMode, name), '-p', '--resume', session, '--', text], cwd, text, permissionMode: permissionMode || '' }
+    return { bin: 'claude', ...claudeTail(env, [...claudeHead(env, approve, model, permissionMode, name), '-p', '--resume', session], text, session), cwd, text, permissionMode: permissionMode || '' }
   }
   if (agent === 'codex') {
     // Codex は画像を受ける口がある（`-i, --image <FILE>  Optional image(s) to attach to the prompt sent after resuming`）
@@ -291,6 +352,13 @@ export interface Runner {
    * 終わりにした id を返す（呼び出し側が預かりを回す）
    */
   settle?(lastTurn: (id: string) => string | undefined): string[]
+  /**
+   * 走っているターンを止める（#386。Claude の `control_request` の `interrupt`）。入力の口が開いていなければ false。
+   * 止めたターンでは `Stop` フックが鳴らず（2.1.285 で実測）、プロセスは非 0 で終わるが、失敗としては出さない
+   */
+  interrupt?(id: string): boolean
+  /** 走っているターンに指示を足す（#386。2 通目の `user`）。入力の口が開いていなければ false（呼び出し側が預かりに落とす） */
+  steer?(id: string, text: string): boolean
 }
 
 /** replying.json の1件。画面に出す Replying に、生存確認用の pid を足したもの。pid 0 は spawn 待ち（自分の子で、まだ pid が無い） */
@@ -321,6 +389,8 @@ export function failureOf(
 
 interface Persisted extends Replying {
   pid: number
+  /** 人が止めた（#386）。非 0 で終わっても失敗にしない。使用量も残さない（結ぶ行が無い） */
+  interrupted?: boolean
   /** 非0で終わった時刻（ミリ秒）。FAILED_TTL_MS を過ぎたら捨てる。失敗の分は replying.json に書かない */
   failedAt?: number
 }
@@ -366,6 +436,13 @@ export class ProcessRunner implements Runner {
   private active = new Map<string, Persisted>()
   readonly logPath: string | null
   readonly statePath: string | null
+  /**
+   * 入力の口（stdin）を開けている返信（#386）。そのターンの `result` が出たら閉じる（閉じるとプロセスは終わる）。
+   * 立て直しで引き取った子は stdin を持っていないので、ここには居ない（止める・足すのボタンも出さない）
+   */
+  private inputs = new Map<string, Writable>()
+  /** 入力の口を開けている返信の、result を読み直す関数（見張りと、足す・止めるの直前に呼ぶ） */
+  private polls = new Map<string, () => void>()
   /** ターンが終わったときに使用量を渡す先（#387）。無ければ何もしない */
   private readonly usage: TurnUsageSink | null
 
@@ -472,9 +549,62 @@ export class ProcessRunner implements Runner {
     return Object.fromEntries(
       [...this.active].map(([id, { since, text, permission_mode, failed }]) => [
         id,
-        { since, text, ...(permission_mode !== undefined ? { permission_mode } : {}), ...(failed ? { failed } : {}) },
+        {
+          since,
+          text,
+          ...(permission_mode !== undefined ? { permission_mode } : {}),
+          ...(failed ? { failed } : {}),
+          // 入力の口が開いている間だけ「止められる・足せる」（#386。Codex の #384 / #404 と同じ印）
+          ...(!failed && this.inputs.has(id) ? { interruptible: true as const } : {}),
+        },
       ]),
     )
+  }
+
+  interrupt(id: string): boolean {
+    this.pollResult(id)
+    const entry = this.active.get(id)
+    if (!entry || entry.failedAt !== undefined || !this.write(id, claudeInterruptLine(`sai-${Date.now().toString(36)}`))) return false
+    entry.interrupted = true
+    return true
+  }
+
+  steer(id: string, text: string): boolean {
+    this.pollResult(id)
+    const entry = this.active.get(id)
+    if (!entry || entry.failedAt !== undefined) return false
+    return this.write(id, claudeUserLine(text))
+  }
+
+  /**
+   * そのターンの result がもう出ていないか、その場で読み直す（#574 のレビュー）。見張りは 0.5 秒おきなので、
+   * 終わった直後に足す・止めるを受けると、新しいターンを起こしたり、普通に終わったターンを「止めた」ことにしてしまう
+   */
+  private pollResult(id: string): void {
+    this.polls.get(id)?.()
+  }
+
+  /** 開いている入力の口に 1 行書く。閉じていれば false */
+  private write(id: string, line: string): boolean {
+    const stdin = this.inputs.get(id)
+    if (!stdin || stdin.destroyed || stdin.writableEnded) return false
+    try {
+      stdin.write(`${line}\n`)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  /** 入力の口を閉じる（プロセスは今のターンを終えて終わる。#386 の実測: 途中で閉じてもターンは最後まで走る） */
+  private closeInput(id: string): void {
+    const stdin = this.inputs.get(id)
+    this.inputs.delete(id)
+    try {
+      stdin?.end()
+    } catch {
+      // もう閉じている
+    }
   }
 
   async start(id: string, cmd: ReplyCommand, onExit?: () => void): Promise<void> {
@@ -495,14 +625,17 @@ export class ProcessRunner implements Runner {
       detached: true,
       // SAI が起動した子は「端末で開いている」ではない。サーバのペインを継がせない（#234）
       env: childEnv(),
-      // stdin は閉じておく。`claude -p` はパイプが繋がっていると stdin も読みに行く
-      stdio: ['ignore', fd ?? 'ignore', fd ?? 'ignore'],
+      // stdin は閉じておく。`claude -p` はパイプが繋がっていると stdin も読みに行く。
+      // 入力の口を開けておく返信（#386）だけパイプにする。stdout は今までどおりログの fd に直接書かせる
+      // （pipe にすると、立て直したあとに引き取った子が書き込みで死ぬ）
+      stdio: [cmd.input !== undefined ? 'pipe' : 'ignore', fd ?? 'ignore', fd ?? 'ignore'],
     })
     // spawn を待つ前から「処理中」にする（同じセッションへの2つ目をこの隙に通さない）。pid は spawn したら入れる
     // 起動したときの許可モードも覚える。動いている CLI には後から当てられないので、画面が今の設定と比べる（#272）
     const entry: Persisted = { pid: 0, since: new Date().toISOString(), text: cmd.text, ...(cmd.permissionMode !== undefined ? { permission_mode: cmd.permissionMode } : {}) }
     this.active.set(id, entry)
     let released = false
+    let watch: ReturnType<typeof setInterval> | null = null
     /**
      * プロセスが終わった。非0（かシグナル）なら、画面が理由を出せるように少し残す。
      * 0 なら今までどおり消す（記録が増えたかは画面が行数で見る）
@@ -510,8 +643,27 @@ export class ProcessRunner implements Runner {
     const release = (code?: number | null, signal?: NodeJS.Signals | null) => {
       if (released) return
       released = true
+      if (watch) clearInterval(watch)
+      this.polls.delete(id)
+      if (this.inputs.get(id) === child.stdin) this.closeInput(id)
       // このターンぶんの出力を 1 回だけ読む。失敗の理由も使用量もここから出る（#387）
       const slice = this.logPath ? readFrom(this.logPath, logOffset) : ''
+      if (entry.interrupted) {
+        // 人が止めたターン（#386）。非 0 で終わるのは止めたからで、失敗ではない。
+        // `Stop` フックが鳴らず結ぶ行が無いので、使用量も残さない（前のターンのバブルに付いてしまう）
+        this.active.delete(id)
+        this.persist()
+        onExit?.()
+        if (fd !== null) {
+          try {
+            closeSync(fd)
+          } catch {
+            // 閉じ損ねても実害なし
+          }
+          fd = null
+        }
+        return
+      }
       if (this.usage) {
         const used = parseTurnUsage(slice)
         // result が無いのは普通のこと（Codex / OpenCode、--output-format を外した運用）。そのときは何も書かない
@@ -545,6 +697,36 @@ export class ProcessRunner implements Runner {
     }
     entry.pid = child.pid ?? 0
     this.persist()
+    const stdin = child.stdin
+    if (cmd.input !== undefined && stdin) {
+      stdin.on('error', () => {}) // 閉じたあとに書いた（EPIPE）。write() が false を返すので、ここでは何もしない
+      this.inputs.set(id, stdin)
+      this.write(id, cmd.input)
+      if (!this.logPath || fd === null) {
+        // result を読めない（ログが無い・開けなかった）ので口は開けておけない。開けたままだと閉じる時が来ず、
+        // プロセスが次の指示を待ち続けて「処理中」が消えない（#574 のレビュー）。閉じても最初の指示のターンは最後まで走る
+        this.closeInput(id)
+      } else {
+        // そのセッションの result が出たら閉じる（閉じるまでは次の指示を待ってプロセスが終わらない）
+        const logPath = this.logPath
+        let pos = logOffset
+        const poll = () => {
+          const chunk = readFrom(logPath, pos)
+          const end = chunk.lastIndexOf('\n')
+          if (end < 0) return
+          pos += Buffer.byteLength(chunk.slice(0, end + 1))
+          if (hasResultFor(chunk.slice(0, end + 1), cmd.session ?? '')) {
+            if (watch) clearInterval(watch)
+            watch = null
+            this.polls.delete(id)
+            if (this.inputs.get(id) === stdin) this.closeInput(id)
+          }
+        }
+        this.polls.set(id, poll)
+        watch = setInterval(poll, RESULT_POLL_MS)
+        watch.unref()
+      }
+    }
     child.once('exit', (code, signal) => release(code, signal))
     // spawn した後の error（EPIPE など）。終了コードは分からないので失敗としては残さない
     child.once('error', () => release())

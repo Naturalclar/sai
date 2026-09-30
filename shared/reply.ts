@@ -211,11 +211,12 @@ export function stripMention(text: string, label: string): string {
 /**
  * いま走っているターンに**あとから指示を足せる**か（#404。Codex の `turn/steer`）。
  *
- * 足せるのは **SAI の app-server が回している Codex のターンだけ**で、条件は「止められる」（#384）と同じ:
- * どちらも `thread/resume` したスレッドの、`turnId` が分かっているターンにしか当たらない（`Replying.interruptible`）。
- * 端末に打ち込んだターン・`claude -p`・OpenCode には口が無い。
+ * 足せるのは **SAI の app-server が回している Codex のターン**と、**SAI が起こして入力の口（stream-json）を開けている
+ * `claude -p` のターン**（#386）で、条件は「止められる」（#384）と同じ `Replying.interruptible`。
+ * Codex は `thread/resume` したスレッドの `turnId` が分かっているターン、Claude はそのターンの `result` が出るまで。
+ * 端末に打ち込んだターン・立て直しで引き取った `claude -p`・OpenCode には口が無い。
  * **画面とサーバがこの 1 つを見る**ので、出しているのに 400 になることがない
  */
 export function canSteer(agent: string, replying: Pick<Replying, 'interruptible' | 'failed'> | undefined): boolean {
-  return agent === 'codex' && Boolean(replying?.interruptible) && !replying?.failed
+  return (agent === 'codex' || agent === 'claude') && Boolean(replying?.interruptible) && !replying?.failed
 }

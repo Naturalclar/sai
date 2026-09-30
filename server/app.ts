@@ -1497,6 +1497,18 @@ export function createApp(
       }
       await appendFile(log, '足せなかった（ターンが終わったか、別のターンになった）。今までどおりの経路へ\n').catch(() => {})
     }
+    // Claude も同じ（#386）。SAI が起こした `claude -p` の入力の口（stream-json）に 2 通目の `user` を書く。
+    // 実測（2.1.285）で、走っているツールが終わった直後に**同じターンの中で**取り込まれた。
+    // 口が閉じていれば（result が出た・引き取った子）下に落ちて預かる
+    if (o.steer && session.agent === 'claude' && run.steer && canSteer(session.agent, run.snapshot()[id])) {
+      const log = join(store.directory, 'reply.log')
+      if (run.steer(id, text)) {
+        await appendFile(log, `--- ${new Date().toISOString()} ${id} 走っているターンに足す（stream-json の user）\n`).catch(() => {})
+        const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd, via: 'steer' }
+        return { status: 202, body: payload }
+      }
+      await appendFile(log, `--- ${new Date().toISOString()} ${id} 足せなかった（ターンが終わった）。今までどおりの経路へ\n`).catch(() => {})
+    }
     // `claude --bg` で動いているセッション（#462）。**同じ ID を `-p --resume` すると CLI が断り、
     // `--bg --resume` は別のセッションに写してしまう**（実測）ので、止めてから `-p` で続けるしかない。
     //
@@ -1787,10 +1799,12 @@ export function createApp(
   const interrupt = async (req: IncomingMessage, res: ServerResponse, id: string) => {
     if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
     // どちらのターンが回っているかで止める口を選ぶ（同じセッションで両方が回ることは無い）
-    const stopper = codexApp.running(id) ? codexApp.interrupt?.bind(codexApp) : opencodeApp.running(id) ? opencodeApp.abort?.bind(opencodeApp) : undefined
+    // Claude の `-p` は入力の口が開いているときだけ（#386。`control_request` の `interrupt`）
+    const claudeStop = run.interrupt && run.snapshot()[id]?.interruptible ? async (target: string) => run.interrupt?.(target) ?? false : undefined
+    const stopper = codexApp.running(id) ? codexApp.interrupt?.bind(codexApp) : opencodeApp.running(id) ? opencodeApp.abort?.bind(opencodeApp) : claudeStop
     if (!stopper) {
       const busy = codexApp.running(id) || opencodeApp.running(id) || run.running(id) || typed.running(id)
-      if (busy) return error(res, 400, '止められるのは SAI が起こした Codex / OpenCode のターンだけです')
+      if (busy) return error(res, 400, '止められるのは SAI が起こしたターンだけです（端末に打ち込んだターン・立て直す前から回っているターンは止められません）')
       return error(res, 409, 'このセッションは処理中ではありません')
     }
     // 先に止める（await のあとに止めると、その間に届いた turn/completed が預かりを回しうる）
@@ -1809,7 +1823,7 @@ export function createApp(
       else queue.resume(id)
       return error(res, 409, 'このターンはまだ止められません（起動した直後です）')
     }
-    await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} 人が処理中のターンを止めた（#384 / #392）\n`).catch(() => {})
+    await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} 人が処理中のターンを止めた（#384 / #392 / #386）\n`).catch(() => {})
     const payload: ReplyQueueResponse = { id, queue: queue.snapshot()[id] ?? { items: [] } }
     return json(res, payload)
   }

@@ -68,7 +68,7 @@ interface Props {
    */
   queued?: number
   /**
-   * 走っている Codex のターンに**あとから足せる**か（#404。`shared/reply.ts` の `canSteer()`）。
+   * 走っている Codex / Claude のターンに**あとから足せる**か（#404。`shared/reply.ts` の `canSteer()`）。
    * 足せるときだけ、送信ボタンの横に「今のターンに足す」を出す（**既定は今までどおり預かり**）
    */
   steerable?: boolean

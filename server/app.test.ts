@@ -23,7 +23,7 @@ import { claudeProjectName } from '../shared/progress.ts'
 import { rowProject } from '../shared/project.ts'
 import type { SessionProgressResponse } from '../shared/types.ts'
 import { localDate } from './rows/aggregate.ts'
-import { replyCommand, splitArgs } from './reply/runner.ts'
+import { claudeUserLine, replyCommand, splitArgs } from './reply/runner.ts'
 import type { ReplyCommand, Runner } from './reply/runner.ts'
 import type { ClaudeAgent } from './local/claudeAgents.ts'
 import { row } from './rows/aggregate.test.ts'
@@ -56,6 +56,20 @@ class FakeRunner implements Runner {
   async start(id: string, cmd: ReplyCommand) {
     if (this.fail) throw this.fail
     this.started.push({ id, cmd })
+  }
+  /** 入力の口に足した・止めた分（#386）。本物と同じく `interruptible` が付いているときだけ受ける */
+  steered: { id: string; text: string }[] = []
+  interrupted: string[] = []
+  steer(id: string, text: string) {
+    if (!this.busy.get(id)?.interruptible) return false
+    this.steered.push({ id, text })
+    return true
+  }
+  interrupt(id: string) {
+    if (!this.busy.get(id)?.interruptible) return false
+    this.interrupted.push(id)
+    this.busy.delete(id) // 本物は止めたターンの result で口を閉じ、プロセスが終わると消える
+    return true
   }
 }
 const runner = new FakeRunner()
@@ -776,7 +790,7 @@ test('POST reply: Claude のセッションを cwd で再開する', async () =>
   assert.equal(cmd.cwd, dir)
   // 許可・質問を画面で答える配線（--mcp-config は SAI 自身の MCP サーバ、宛先はこのサーバ自身のループバック）
   assert.deepEqual(cmd.args.slice(0, 1), ['--mcp-config'])
-  assert.deepEqual(cmd.args.slice(2), ['--permission-prompt-tool', 'mcp__sai__approve', '--output-format', 'json', '-p', '--resume', 'C1', '--', '続きをやって'])
+  assert.deepEqual(cmd.args.slice(2), ['--permission-prompt-tool', 'mcp__sai__approve', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '-p', '--resume', 'C1'])
   const mcp = JSON.parse(cmd.args[1]!) as { mcpServers: { sai: { type: string; command: string; args: string[]; env: Record<string, string> } } }
   assert.equal(mcp.mcpServers.sai.type, 'stdio')
   assert.equal(mcp.mcpServers.sai.env.SAI_URL, base)
@@ -900,7 +914,7 @@ test('POST /api/sessions/new: from のセッションの cwd で、ID を決め�
   assert.equal(id, data.id, '処理中は新しいセッションの ID で持つ')
   assert.equal(cmd.bin, 'claude')
   assert.equal(cmd.cwd, dir)
-  assert.deepEqual(cmd.args.slice(2), ['--permission-prompt-tool', 'mcp__sai__approve', '--output-format', 'json', '-p', '--session-id', data.session, '--', '新しくやって'])
+  assert.deepEqual(cmd.args.slice(2), ['--permission-prompt-tool', 'mcp__sai__approve', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '-p', '--session-id', data.session])
   assert.equal(cmd.args.includes('--resume'), false)
   const mcp = JSON.parse(cmd.args[1]!) as { mcpServers: { sai: { env: Record<string, string> } } }
   assert.equal(mcp.mcpServers.sai.env.SAI_ENTITY, data.id, '許可・質問は新しいセッションの ID で預ける')
@@ -942,8 +956,31 @@ test('POST reply: steer が付いていれば、走っている Codex のター�
   }
 })
 
+test('POST reply: steer が付いていれば、入力の口を開けている Claude のターンに足す（#386）', async () => {
+  runner.started.length = 0
+  runner.steered.length = 0
+  runner.busy.set('C1@r', { since: '2026-09-10T07:00:00.000Z', text: '長いターン', interruptible: true })
+  try {
+    const res = await post('C1@r', { text: 'テストも直して', queue: true, steer: true })
+    assert.equal(res.status, 202)
+    assert.equal(((await res.json()) as ReplyResponse).via, 'steer')
+    assert.deepEqual(runner.steered, [{ id: 'C1@r', text: 'テストも直して' }])
+    assert.equal(runner.started.length, 0, '新しいプロセスは起こさない')
+    assert.match(await readFile(join(feedDir, 'reply.log'), 'utf-8'), /stream-json の user/)
+    // 付けなければ今までどおり預かり
+    assert.equal(((await (await post('C1@r', { text: 'あとで', queue: true })).json()) as ReplyResponse).via, 'queued')
+    assert.equal(runner.steered.length, 1)
+  } finally {
+    runner.busy.delete('C1@r')
+    for (const item of (await queuedOf('C1@r'))?.items ?? []) {
+      await fetch(`${base}/api/sessions/C1%40r/queue/${item.queue_id}`, { method: 'DELETE', headers: { Origin: base } })
+    }
+  }
+})
+
 test('POST reply: 止められないターン・Codex 以外には steer を回さない（#404）', async () => {
   runner.started.length = 0
+  runner.steered.length = 0
   codexApp.steered.length = 0
   // turnId がまだ無い（turn/start の応答待ち）＝足す先が無いので、今までどおり預かり
   codexApp.busy.set('X1@r', { since: '2026-09-10T07:00:00.000Z', text: '起動中' })
@@ -952,7 +989,7 @@ test('POST reply: 止められないターン・Codex 以外には steer を回�
   } finally {
     codexApp.busy.delete('X1@r')
   }
-  // Claude の -p が回っているセッションには口が無い
+  // 入力の口の無い Claude の -p（立て直しで引き取った子）には足さない（#386）
   runner.busy.set('C1@r', { since: '2026-09-10T07:00:00.000Z', text: '前の' })
   try {
     assert.equal(((await (await post('C1@r', { text: 'x', queue: true, steer: true })).json()) as ReplyResponse).via, 'queued')
@@ -960,6 +997,7 @@ test('POST reply: 止められないターン・Codex 以外には steer を回�
     runner.busy.delete('C1@r')
   }
   assert.equal(codexApp.steered.length, 0, 'どちらも app-server には回さない')
+  assert.equal(runner.steered.length, 0)
   for (const id of ['X1@r', 'C1@r']) {
     for (const item of (await queuedOf(id))?.items ?? []) {
       await fetch(`${base}/api/sessions/${encodeURIComponent(id)}/queue/${item.queue_id}`, { method: 'DELETE', headers: { Origin: base } })
@@ -1001,7 +1039,7 @@ test('POST /api/sessions/new: モデルと許可モードは検査してから�
   assert.equal(res.status, 202)
   const data = (await res.json()) as NewSessionResponse
   const { cmd } = runner.started[0]!
-  assert.deepEqual(cmd.args.slice(4), ['--model', 'sonnet', '--permission-mode', 'acceptEdits', '--output-format', 'json', '-p', '--session-id', data.session, '--', 'go'])
+  assert.deepEqual(cmd.args.slice(4), ['--model', 'sonnet', '--permission-mode', 'acceptEdits', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '-p', '--session-id', data.session])
   assert.equal(cmd.permissionMode, 'acceptEdits')
   const metaFile = new MetaStore(join(feedDir, META_FILE))
   assert.deepEqual(await metaFile.get(data.id), { model: 'sonnet', permission_mode: 'acceptEdits' }, '次の返信にも効くようにメタに残す')
@@ -1676,7 +1714,7 @@ test('digest: 起動後に増えた行に一言が付いて feed / 詳細 / 一�
 
 test('replyCommand はサーバの PATH の claude / codex / opencode を起動する（SAI_*_BIN は読まない。#288）', () => {
   // permissionMode は付けたモード（無ければ空）。処理中の表示に使う（#272）
-  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', {}), { bin: 'claude', args: ['--output-format', 'json', '-p', '--resume', 'S', '--', 'hi'], cwd: '/w', text: 'hi', permissionMode: '' })
+  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', {}), { bin: 'claude', args: ['--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '-p', '--resume', 'S'], cwd: '/w', text: 'hi', permissionMode: '', input: claudeUserLine('hi'), session: 'S' })
   assert.deepEqual(replyCommand('codex', 'S', 'hi', '/w', {})!.args, ['exec', 'resume', 'S', '--', 'hi'])
   assert.deepEqual(replyCommand('opencode', 'S', 'hi', '/w', {})!.args, ['run', '-s', 'S', '--', 'hi'])
   // 前は SAI_CLAUDE_BIN などで 1 つずつ差し替えていた。PATH を渡せば同じなのでやめた
@@ -1687,12 +1725,17 @@ test('replyCommand はサーバの PATH の claude / codex / opencode を起動�
   assert.equal(replyCommand('unknown', 'S', 'hi', '/w', {}), null)
 })
 
-test('replyCommand は本文が - で始まってもフラグにならない（-- の後ろに置く）', () => {
+test('replyCommand は本文が - で始まってもフラグにならない（-- の後ろに置く。Claude は stdin に渡す）', () => {
   // `claude -p --resume S "--version"` は版を出して終わり、`codex exec resume S "--help"` はヘルプを出す。`--` で区切ると本文になる
   for (const text of ['--version', '-h', '--dangerously-skip-permissions']) {
+    // Claude は入力の口（#386）に user の 1 行として渡すので、argv には出てこない
     const c = replyCommand('claude', 'S', text, '/w', {})!
-    assert.equal(c.args[c.args.length - 1], text)
-    assert.equal(c.args[c.args.length - 2], '--')
+    assert.equal(c.args.includes(text), false)
+    assert.equal(c.input, claudeUserLine(text))
+    // 運用者が --output-format を指定していれば今までどおり -- の後ろ
+    const own = replyCommand('claude', 'S', text, '/w', { SAI_CLAUDE_ARGS: '--output-format json' })!
+    assert.deepEqual(own.args.slice(-2), ['--', text])
+    assert.equal(own.input, undefined)
     const x = replyCommand('codex', 'S', text, '/w', {})!
     assert.deepEqual(x.args.slice(-2), ['--', text])
   }
@@ -1701,36 +1744,36 @@ test('replyCommand は本文が - で始まってもフラグにならない（-
 test('replyCommand: SAI_*_ARGS の追加引数。Claude は先頭（--allowedTools が本文を飲まないように）、Codex は resume の直後', () => {
   assert.deepEqual(
     replyCommand('claude', 'S', 'gh pr create', '/w', { SAI_CLAUDE_ARGS: '--allowedTools "Bash(gh *)" --permission-mode acceptEdits' })!.args,
-    ['--allowedTools', 'Bash(gh *)', '--permission-mode', 'acceptEdits', '--output-format', 'json', '-p', '--resume', 'S', '--', 'gh pr create'],
+    ['--allowedTools', 'Bash(gh *)', '--permission-mode', 'acceptEdits', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '-p', '--resume', 'S'],
   )
   assert.deepEqual(replyCommand('codex', 'S', 'hi', '/w', { SAI_CODEX_ARGS: '-s workspace-write' })!.args, ['exec', 'resume', '-s', 'workspace-write', 'S', '--', 'hi'])
-  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', { SAI_CLAUDE_ARGS: '   ' })!.args, ['--output-format', 'json', '-p', '--resume', 'S', '--', 'hi'], '空白だけなら何も足さない')
+  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', { SAI_CLAUDE_ARGS: '   ' })!.args, ['--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '-p', '--resume', 'S'], '空白だけなら何も足さない')
   // セッションの返信モデル。運用者の --model より後ろに置いて勝たせる
-  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', {}, undefined, 'opus')!.args, ['--model', 'opus', '--output-format', 'json', '-p', '--resume', 'S', '--', 'hi'])
+  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', {}, undefined, 'opus')!.args, ['--model', 'opus', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '-p', '--resume', 'S'])
   assert.deepEqual(
     replyCommand('claude', 'S', 'hi', '/w', { SAI_CLAUDE_ARGS: '--model sonnet' }, undefined, 'opus')!.args,
-    ['--model', 'sonnet', '--model', 'opus', '--output-format', 'json', '-p', '--resume', 'S', '--', 'hi'],
+    ['--model', 'sonnet', '--model', 'opus', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '-p', '--resume', 'S'],
   )
   assert.deepEqual(replyCommand('codex', 'S', 'hi', '/w', {}, undefined, 'gpt-5')!.args, ['exec', 'resume', '-m', 'gpt-5', 'S', '--', 'hi'])
-  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', {}, undefined, '')!.args, ['--output-format', 'json', '-p', '--resume', 'S', '--', 'hi'], '空なら付けない')
+  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', {}, undefined, '')!.args, ['--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '-p', '--resume', 'S'], '空なら付けない')
 })
 
 test('replyCommand: セッションの許可モードは Claude だけに --permission-mode として付く（運用者の指定より後ろ）', () => {
   assert.deepEqual(
     replyCommand('claude', 'S', 'hi', '/w', {}, undefined, undefined, 'acceptEdits')!.args,
-    ['--permission-mode', 'acceptEdits', '--output-format', 'json', '-p', '--resume', 'S', '--', 'hi'],
+    ['--permission-mode', 'acceptEdits', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '-p', '--resume', 'S'],
   )
   assert.deepEqual(
     replyCommand('claude', 'S', 'hi', '/w', {}, undefined, 'opus', 'acceptEdits')!.args,
-    ['--model', 'opus', '--permission-mode', 'acceptEdits', '--output-format', 'json', '-p', '--resume', 'S', '--', 'hi'],
+    ['--model', 'opus', '--permission-mode', 'acceptEdits', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '-p', '--resume', 'S'],
     'モードと一緒でも並ぶ',
   )
   assert.deepEqual(
     replyCommand('claude', 'S', 'hi', '/w', { SAI_CLAUDE_ARGS: '--permission-mode plan' }, undefined, undefined, 'acceptEdits')!.args,
-    ['--permission-mode', 'plan', '--permission-mode', 'acceptEdits', '--output-format', 'json', '-p', '--resume', 'S', '--', 'hi'],
+    ['--permission-mode', 'plan', '--permission-mode', 'acceptEdits', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '-p', '--resume', 'S'],
     '運用者の指定より後ろ（後勝ち）',
   )
-  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', {}, undefined, undefined, '')!.args, ['--output-format', 'json', '-p', '--resume', 'S', '--', 'hi'], '空なら付けない')
+  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', {}, undefined, undefined, '')!.args, ['--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '-p', '--resume', 'S'], '空なら付けない')
   assert.deepEqual(
     replyCommand('codex', 'S', 'hi', '/w', {}, undefined, undefined, 'acceptEdits')!.args,
     ['exec', 'resume', 'S', '--', 'hi'],
@@ -2091,19 +2134,19 @@ test('approvals: 不正な body と無い id', async () => {
 test('replyCommand: approve を渡すと Claude だけに --mcp-config と --permission-prompt-tool が付く', () => {
   const via = { url: 'http://127.0.0.1:8787', entity: 'S@r' }
   const c = replyCommand('claude', 'S', 'hi', '/w', {}, via)!
-  assert.deepEqual(c.args.slice(2), ['--permission-prompt-tool', 'mcp__sai__approve', '--output-format', 'json', '-p', '--resume', 'S', '--', 'hi'])
+  assert.deepEqual(c.args.slice(2), ['--permission-prompt-tool', 'mcp__sai__approve', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '-p', '--resume', 'S'])
   assert.equal(c.args[0], '--mcp-config')
   assert.deepEqual(JSON.parse(c.args[1]!).mcpServers.sai.env, { SAI_URL: 'http://127.0.0.1:8787', SAI_ENTITY: 'S@r' })
   // 運用者の引数は先頭のまま。--mcp-config は可変長なので、直後がフラグ（--permission-prompt-tool）である並び
   const withExtra = replyCommand('claude', 'S', 'hi', '/w', { SAI_CLAUDE_ARGS: '--allowedTools "Bash(gh *)"' }, via)!
   assert.deepEqual(withExtra.args.slice(0, 3), ['--allowedTools', 'Bash(gh *)', '--mcp-config'])
   // 外す: SAI_APPROVE=0、または運用者が自前の --permission-prompt-tool を持っている
-  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', { SAI_APPROVE: '0' }, via)!.args, ['--output-format', 'json', '-p', '--resume', 'S', '--', 'hi'])
+  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', { SAI_APPROVE: '0' }, via)!.args, ['--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '-p', '--resume', 'S'])
   const own = replyCommand('claude', 'S', 'hi', '/w', { SAI_CLAUDE_ARGS: '--permission-prompt-tool mcp__x__y' }, via)!
   assert.equal(own.args.filter((a) => a === '--permission-prompt-tool').length, 1)
   assert.equal(own.args.includes('--mcp-config'), false)
   // approve 無し・Codex には何も付かない
-  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', {})!.args, ['--output-format', 'json', '-p', '--resume', 'S', '--', 'hi'])
+  assert.deepEqual(replyCommand('claude', 'S', 'hi', '/w', {})!.args, ['--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '-p', '--resume', 'S'])
   assert.deepEqual(replyCommand('codex', 'S', 'hi', '/w', {}, via)!.args, ['exec', 'resume', 'S', '--', 'hi'])
 })
 
@@ -2211,10 +2254,10 @@ test('POST interrupt: SAI が回している Codex のターンだけ止め、�
   codexApp.interrupted.length = 0
   assert.equal((await postJson('/api/sessions/C1%40r/interrupt', {})).status, 409, '処理中でなければ 409')
 
-  // Claude の -p が回っているセッションには止める口が無い
+  // 入力の口の無い Claude の -p（立て直しで引き取った子）には止める口が無い
   runner.busy.set('C1@r', { since: '2026-09-10T07:00:00.000Z', text: '前の' })
   try {
-    assert.equal((await postJson('/api/sessions/C1%40r/interrupt', {})).status, 400, 'Codex 以外は 400')
+    assert.equal((await postJson('/api/sessions/C1%40r/interrupt', {})).status, 400, '口が無ければ 400')
   } finally {
     runner.busy.delete('C1@r')
   }
@@ -2253,6 +2296,31 @@ test('POST interrupt: SAI が回している Codex のターンだけ止め、�
   } finally {
     codexApp.busy.delete('C1@r')
     codexApp.stops = true
+  }
+})
+
+test('POST interrupt: 入力の口を開けている Claude のターンを止め、預かりは勝手に回さない（#386）', async () => {
+  runner.started.length = 0
+  runner.interrupted.length = 0
+  runner.busy.set('C1@r', { since: '2026-09-10T07:00:00.000Z', text: '長いターン', interruptible: true })
+  try {
+    assert.equal((await postJson('/api/sessions/C1%40r/interrupt', {}, { Origin: 'http://evil.local:8787' })).status, 403)
+    assert.deepEqual(runner.interrupted, [])
+    const queueId = ((await (await post('C1@r', { text: 'あとで', queue: true })).json()) as ReplyResponse).queue_id!
+    const res = await postJson('/api/sessions/C1%40r/interrupt', {})
+    assert.equal(res.status, 200)
+    assert.deepEqual(runner.interrupted, ['C1@r'])
+    const body = (await res.json()) as ReplyQueueResponse
+    assert.deepEqual(body.queue.items.map((q) => q.queue_id), [queueId])
+    assert.match(body.queue.paused ?? '', /止めた/)
+    await get('/api/sessions?days=30')
+    assert.equal(runner.started.length, 0, '止めた直後に次の預かりを走らせない')
+  } finally {
+    runner.busy.delete('C1@r')
+    for (const item of (await queuedOf('C1@r'))?.items ?? []) {
+      await fetch(`${base}/api/sessions/C1%40r/queue/${item.queue_id}`, { method: 'DELETE', headers: { Origin: base } })
+    }
+    await postJson('/api/sessions/C1%40r/queue/resume', {})
   }
 })
 

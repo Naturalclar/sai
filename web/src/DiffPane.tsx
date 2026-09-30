@@ -16,7 +16,7 @@ export function DiffPane({ id, onClose, canReview, onInsertComments }: { id: str
         </IconButton>
       </div>
       <div className="diff-scroll">
-        <DiffBody id={id} canReview={canReview} {...(onInsertComments ? { onInsertComments } : {})} />
+        <DiffBody key={`diff:${id}`} id={id} canReview={canReview} {...(onInsertComments ? { onInsertComments } : {})} />
       </div>
     </aside>
   )

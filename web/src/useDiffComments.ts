@@ -23,13 +23,20 @@ function save(all: Record<string, DiffComment[]>): void {
 
 /**
  * そのセッションの差分へのコメント（#511）。書いたらすぐ localStorage に残す（差分ビューアを閉じても、再読み込みしても消えない）。
- * 読むのは作ったときの 1 回だけ（差分ビューアはセッションごとに作り直される）
+ * **id が変わったら読み直す**（#512 のレビュー。フィードから開いた差分ビューアは別のセッションのボタンを押しても作り直されず、
+ * 前のセッションのコメントを持ったまま次のセッションに書いていた。呼ぶ側も `key` で作り直すが、ここでも持ち越さない）。
+ * 描画中に合わせる（effect の中で setState しない）
  */
 export function useDiffComments(id: string) {
-  const [list, setList] = useState<DiffComment[]>(() => load()[id] ?? [])
+  const [state, setState] = useState<{ id: string; list: DiffComment[] }>(() => ({ id, list: load()[id] ?? [] }))
+  let list = state.list
+  if (state.id !== id) {
+    list = load()[id] ?? []
+    setState({ id, list })
+  }
   const put = useCallback(
     (next: DiffComment[]) => {
-      setList(next)
+      setState({ id, list: next })
       save(withDiffComments(load(), id, next))
     },
     [id],

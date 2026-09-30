@@ -113,8 +113,10 @@ export function App() {
   // 差分ビューアの「レビューさせる」は Codex だけ（#403）。返信できないセッション（別のマシン・合成 ID）にも出さない
   const diffSession = diffOpen === null ? undefined : list.data?.sessions.find((s) => s.id === diffOpen)
   const canReview = Boolean(diffSession?.agent === 'codex' && !replyBlockedReason(diffSession, list.data?.host ?? ''))
-  // 行へのコメントは、そのセッションを開いていて返信できるときだけ（入れる先の返信欄がある）
-  const canComment = diffOpen !== null && route.name === 'session' && route.id === diffOpen && diffSession !== undefined && !replyBlockedReason(diffSession, list.data?.host ?? '')
+  // 行へのコメントは、そのセッションを開いていて返信欄が出ているときだけ（入れる先がある）。
+  // 条件は SessionView が返信欄を出す条件と同じ（アーカイブ済みは返信欄の代わりに案内が出る。#512 のレビュー）
+  const canComment =
+    diffOpen !== null && route.name === 'session' && route.id === diffOpen && diffSession !== undefined && !diffSession.archived && !replyBlockedReason(diffSession, list.data?.host ?? '')
   const insertComments = useCallback(
     (text: string) => {
       if (diffOpen === null) return

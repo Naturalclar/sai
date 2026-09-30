@@ -32,7 +32,7 @@ export function DiffModal({ id, onClose, canReview, onInsertComments }: { id: st
           </IconButton>
         </div>
         <div className="diff-scroll">
-          <DiffBody id={id} canReview={canReview} {...(onInsertComments ? { onInsertComments } : {})} />
+          <DiffBody key={`diff:${id}`} id={id} canReview={canReview} {...(onInsertComments ? { onInsertComments } : {})} />
         </div>
       </div>
     </div>

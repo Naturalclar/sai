@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { openRow, ownReplying, rowReplyable } from './todoReply.ts'
+import { opensByDefault, ownReplying, pruneToggled, rowOpen, rowReplyable, toggleKey } from './todoReply.ts'
 import type { TodoItem } from '../../shared/todoItems.ts'
 
 const session = {} as NonNullable<TodoItem['session']>
@@ -16,14 +16,29 @@ test('rowReplyable: 終わった行と返信欄から打てる待ちには出し
   assert.equal(rowReplyable({ ...item('a', 'done'), session: null }), false)
 })
 
-test('openRow: 開いていた行が並びから消えたら閉じる（戻ってきても勝手に開かない）', () => {
+test('rowOpen: 終わった行は最初から開き、待機中は押したときだけ。切り替えた行は逆になる', () => {
+  const none = new Set<string>()
+  assert.equal(opensByDefault({ kind: 'done' }), true)
+  assert.equal(rowOpen(item('a', 'done'), none), true)
+  assert.equal(rowOpen(item('a', 'watch'), none), false)
+  // 閉じた終わった行・開いた待機中
+  assert.equal(rowOpen(item('a', 'done'), new Set([toggleKey(item('a', 'done'))])), false)
+  assert.equal(rowOpen(item('a', 'watch'), new Set([toggleKey(item('a', 'watch'))])), true)
+  // 打てない行は既定でも開かない
+  assert.equal(rowOpen(item('a', 'done', false), none), false)
+  assert.equal(rowOpen(item('a', 'answer'), none), false)
+})
+
+test('pruneToggled: 並びから消えた行・区分が変わった行の切り替えを忘れ、変わらなければ同じ Set を返す', () => {
   const items = [item('a', 'done'), item('b', 'watch')]
-  assert.equal(openRow('a', items), 'a')
-  assert.equal(openRow(null, items), null)
-  // 送って処理中になった → 並びから消える
-  assert.equal(openRow('c', items), null)
-  // 行は残っているが、もう打てない（別のマシンの行に変わった等）
-  assert.equal(openRow('a', [item('a', 'done', false)]), null)
+  const toggled = new Set(['done:a', 'watch:b'])
+  assert.equal(pruneToggled(toggled, items), toggled)
+  const empty = new Set<string>()
+  assert.equal(pruneToggled(empty, items), empty)
+  // b は送って処理中になり、並びから消えた
+  assert.deepEqual([...pruneToggled(toggled, [item('a', 'done')])], ['done:a'])
+  // a は待機中に変わった（閉じた印を持ち越さない）
+  assert.deepEqual([...pruneToggled(new Set(['done:a']), [item('a', 'watch')])], [])
 })
 
 test('ownReplying: この画面から送ったセッションの返信だけを残す（ほかから送った失敗を拾わない）', () => {

@@ -16,6 +16,7 @@ import { newestFirst, prAuthorSession, prCommentKey } from './prSession'
 import { Markdown } from './Markdown'
 import { agoLabel, checkLabel, reviewLabel } from './prLabels'
 import type { PaneProps } from './App'
+import { withSuffix } from '../../shared/sessionLabels.ts'
 
 interface Loaded {
   data: PrDetailResponse
@@ -87,7 +88,7 @@ export function PrView({ repo, number, onStatus, onInsertToSession }: { repo: st
   }, [knownRepo])
   const pr = loaded?.data.pr
   const author = pr && sessions && sessions.repo === knownRepo ? prAuthorSession(sessions.list, knownRepo, pr.head, pr.cross_repo) : null
-  const authorName = author ? author.meta?.name || author.title || author.id : ''
+  const authorName = author ? withSuffix(author.meta?.name || author.title || author.id, author) : ''
   const blocked = author ? (author.archived ? 'アーカイブ済み。続けるならセッション画面で「戻す」を押してください' : replyBlockedReason(author, sessions?.host ?? '')) : ''
   const canComment = Boolean(author && !blocked && onInsertToSession)
   // GitHub への投稿（#526）。`gh` でログインしている人が引けていて、PR が open のときだけ

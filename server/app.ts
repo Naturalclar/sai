@@ -164,6 +164,7 @@ import { isRemoteHost } from '../shared/host.ts'
 import { IMAGES_SEGMENT } from '../shared/images.ts'
 import { imageHeaders, imageTable, readSessionImage } from './local/images.ts'
 import { TranscriptImages } from './local/transcriptImages.ts'
+import { labelSuffixes } from '../shared/sessionLabels.ts'
 import { CodexImages } from './local/codexImages.ts'
 import { galleryFromRows, mergeGallery, rowTsAtOrAfter } from '../shared/gallery.ts'
 import { searchRows } from './rows/search.ts'
@@ -227,6 +228,8 @@ const TURN_SUFFIX = '/turn'
 const TRANSCRIPT_IMAGES_SEGMENT = '/transcript-images/'
 /** `GET /api/sessions/<id>/codex-images/<key>`（#575）。Codex の画像生成で作った画像。鍵は一覧で見つけたファイル名だけ */
 const CODEX_IMAGES_SEGMENT = '/codex-images/'
+/** 同じ名前のセッションの本当の始まりを引く窓（#572）。重なりがあるときだけ使う */
+const LABEL_START_DAYS = 90
 /**
  * Codex のターンが閉じてから notify の行が書かれるまでの遅れ（#576 のレビュー）。行の `ts` は秒までで、record.py は
  * notify で起きてから rollout を読むので、実データでは同じ秒だった。余裕を見て数秒
@@ -931,15 +934,28 @@ export function createApp(
    * アーカイブ済みかは `archived_at >= end` で決める（集計 aggregate.ts は JSONL だけから作る、を守る）。
    * アーカイブ後に行が増えると end が archived_at を追い越すので、メタを書き換えずに自動で戻る
    */
+  /**
+   * 同じ名前のセッションの添え字（#572）。LABEL_START_DAYS の窓の集計（行が変わったときだけ組み直される）と表示名から決め、
+   * 両方の rev が同じなら覚えたものを返す（3 秒のポーリングで組み直さない。実データの 90 日ぶんで 1 回 40ms ほど）
+   */
+  let labelMemo: { key: string; suffixes: Map<string, string> } | null = null
+  const labelSuffixesNow = async (meta: { rev: string; entries: Record<string, SessionMeta> }): Promise<Map<string, string>> => {
+    const wide = await store.sessions(LABEL_START_DAYS)
+    const key = `${wide.rev}-${meta.rev}`
+    if (labelMemo?.key === key) return labelMemo.suffixes
+    const named = wide.sessions.map((s) => (meta.entries[s.id] ? { ...s, meta: meta.entries[s.id] } : s))
+    const suffixes = labelSuffixes(named)
+    labelMemo = { key, suffixes }
+    return suffixes
+  }
+
   const sessionsWithMeta = async (days: number): Promise<{ rev: string; sessions: SessionSummary[] }> => {
     const [{ rev, sessions: raw }, meta, icons, reads, rows] = await Promise.all([store.sessions(days), metaStore.all(), iconStore.all(), readStore.get(), store.rows(days)])
     // project / remote の無い古い行のセッションは cwd から git で引いて埋める（cwd ごとに 1 回だけ。#182、#212）
     const sessions = await fillRepo(projects, raw)
     // 未読の数（#502）。印は read-marks.json、数えるのは窓の中のターン完了の行
     const unread = unreadCounts(rows, reads.marks)
-    return {
-      rev: `${rev}-${meta.rev}-${icons.rev}-${reads.rev}`,
-      sessions: await Promise.all(sessions.map(async (s) => {
+    const built = await Promise.all(sessions.map(async (s) => {
         const m = meta.entries[s.id]
         const icon = icons.entries.get(iconKey(s.id))
         // 端末で開いているか（pid の生存）は毎回見る。rev には混ぜない（端末を閉じても次の行で rev が変わる）
@@ -954,8 +970,16 @@ export function createApp(
         if (n) out.unread = n
         out.read_at = readMarkOf(reads.marks, s.id)
         return out
-      })),
+      }))
+    // 同じ名前のセッションを見分ける添え字（#572）。**どの口でも同じ添え字にするため、呼び出しの窓ではなく LABEL_START_DAYS の
+    // 決まった窓で決める**（#578 のレビュー。一覧は 7 日・詳細は 30 日・フィードは 3 日なので、窓ごとに決めると同じセッションが
+    // 見出しでは ID の頭、サイドバーでは日付になった）。start も窓の中の最初の行なので、広い窓で引くと本当の始まりになる
+    const suffixes = await labelSuffixesNow(meta)
+    for (const s of built) {
+      const suffix = suffixes.get(s.id)
+      if (suffix) s.label_suffix = suffix
     }
+    return { rev: `${rev}-${meta.rev}-${icons.rev}-${reads.rev}`, sessions: built }
   }
 
   /**

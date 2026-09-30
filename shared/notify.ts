@@ -4,6 +4,7 @@
 // そのまま受け取る。判定が 2 か所に分かれると、バッジは 2 なのに通知は 1 のような食い違いが出る。
 import { pendingItems } from './todoItems.ts'
 import type { TodoItem } from './todoItems.ts'
+import { withSuffix } from './sessionLabels.ts'
 
 /** タブの題名の元。件数はこの前に付ける（数えるのは `pendingItems()` のぶんだけ。#438） */
 export const TITLE_BASE = 'SAI'
@@ -49,7 +50,7 @@ export interface NotifyPlan {
 /** セッションの呼び名。一覧から消えていれば ID（TodoView と同じ順） */
 function labelOf(item: TodoItem): string {
   const s = item.session
-  return s ? s.meta?.name || s.title || s.id : item.id
+  return s ? withSuffix(s.meta?.name || s.title || s.id, s) : item.id
 }
 
 /**

@@ -5,6 +5,7 @@ import { launchedModeNote } from '../../shared/permissions.ts'
 import { RECENT_DAYS } from '../../shared/recentRows.ts'
 import { promptArrived } from './chatGroups'
 import { api } from './api'
+import type { SessionSummary } from './api'
 import { useLocalState, usePolling } from './hooks'
 import type { MessageSide } from './hooks'
 import { Chat } from './Chat'
@@ -56,7 +57,7 @@ export interface DiffProps {
   insert?: RestoreRequest
 }
 
-export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSidebar, onToggleDiff, diffOpen, insert, onLeaveToSidebar, linear, settings }: { id: string; focusTs?: string; focusSide?: MessageSide } & PaneProps & DiffProps) {
+export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSidebar, onToggleDiff, diffOpen, insert, onLeaveToSidebar, linear, settings, peers }: { id: string; focusTs?: string; focusSide?: MessageSide; peers?: readonly SessionSummary[] | undefined } & PaneProps & DiffProps) {
   // 描く行は直近 RECENT_DAYS 日から（#477）。「前の 7 日を表示」で広げ、別のセッションに移ったら戻す（描画中に導く）
   const [wide, setWide] = useState({ id, days: RECENT_DAYS })
   const recent = wide.id === id ? wide.days : RECENT_DAYS
@@ -159,7 +160,7 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
                 <code>{s.id}</code>
                 {s.session_source && s.session_source !== 'synth' && <span className="tag">{s.session_source}</span>}
               </span>
-              <SessionHeadActions s={s} settings={settings} thinking={thinking} />
+              <SessionHeadActions s={s} settings={settings} thinking={thinking} peers={peers} />
             </SessionHeadMenu>
           </div>
           {s.title_full && <SessionTitle key={`title:${s.id}`} text={s.title_full} />}
@@ -171,7 +172,7 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
           <h1><span className="hash">#</span>{label.project}</h1>
           <SessionHeadInfo s={s} contextTokens={contextTokens} />
           <SessionStatusTags tags={headTags(s, { ...tagInput, compact: false })} now={now} title={s.id} />
-          <SessionHeadActions s={s} settings={settings} thinking={thinking} />
+          <SessionHeadActions s={s} settings={settings} thinking={thinking} peers={peers} />
           {s.title_full && <div className="meta wide">{s.title_full}</div>}
         </div>
       )}

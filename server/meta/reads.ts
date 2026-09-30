@@ -2,6 +2,7 @@
 // **サーバを立て直しても消えない**（#440 と同じ轍を踏まない）。画面の localStorage に置かないのは、Mac と携帯で揃えるため。
 // ProfileStore と同じく (mtime, size) で覚えて変わらなければ読み直さず、tmp に書いて rename する
 import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
 import { dirname } from 'node:path'
 import { nextMark, readMarkOf, type ReadMarks } from '../../shared/unread.ts'
 
@@ -30,6 +31,8 @@ export class ReadStore {
   private cache: { mtimeMs: number; size: number; marks: ReadMarks } | null = null
   // 書き込みを 1 本ずつにする（読んだ・未読に戻したが続けて来ても、片方が消えないように）
   private chain: Promise<unknown> = Promise.resolve()
+  // 無い・壊れたファイルを作り直す 1 本（最初の起動で一覧・フィード・詳細が同時に来ても、作るのは 1 回だけ）
+  private resetting: Promise<void> | null = null
 
   constructor(path: string, now: () => number = Date.now) {
     this.path = path
@@ -45,7 +48,7 @@ export class ReadStore {
     try {
       st = await stat(this.path)
     } catch {
-      await this.write({ since: this.now(), sessions: {} })
+      await this.reset()
       st = await stat(this.path)
     }
     const rev = `${st.mtimeMs}:${st.size}`
@@ -57,8 +60,7 @@ export class ReadStore {
       marks = null
     }
     if (!marks) {
-      marks = { since: this.now(), sessions: {} }
-      await this.write(marks)
+      await this.reset()
       return this.get()
     }
     this.cache = { mtimeMs: st.mtimeMs, size: st.size, marks }
@@ -86,9 +88,18 @@ export class ReadStore {
     return run
   }
 
+  /** 「いま」を起点に作り直す。同時に来たら同じ 1 本を待つ */
+  private reset(): Promise<void> {
+    this.resetting ??= this.write({ since: this.now(), sessions: {} }).finally(() => {
+      this.resetting = null
+    })
+    return this.resetting
+  }
+
   private async write(marks: ReadMarks): Promise<void> {
     await mkdir(dirname(this.path), { recursive: true })
-    const tmp = `${this.path}.${process.pid}.tmp`
+    // tmp は書くたびに別の名前にする（同じ名前だと、重なった書き込みの片方の rename が ENOENT で落ちる）
+    const tmp = `${this.path}.${process.pid}.${randomUUID()}.tmp`
     await writeFile(tmp, JSON.stringify(marks) + '\n', 'utf-8')
     await rename(tmp, this.path)
     this.cache = null

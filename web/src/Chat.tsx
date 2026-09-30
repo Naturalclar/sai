@@ -191,10 +191,11 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
     lastHeight.current = el.scrollHeight
   })
 
-  // 最下部まで見えていれば既読にする（#502）。飛び先へ送っている間と、タブが隠れている間は数えない
+  // 最下部まで見えていれば既読にする（#502）。飛び先へまだ着いていない間と、タブが隠れている間は数えない
+  // （着いたあとは数える。URL の ts は残るので、focusKey があるだけで止めるとリンクから開いたセッションが既読にならない）。
   // 新しい行が届いたときも呼び直すのは、呼び出し側の onSeenBottom が行を依存に持って作り直されるから
   useEffect(() => {
-    if (!onSeenBottom || !atBottom || focusKey || document.visibilityState !== 'visible') return
+    if (!onSeenBottom || !atBottom || (focusKey && landed.current !== focusKey) || document.visibilityState !== 'visible') return
     onSeenBottom()
   }, [atBottom, focusKey, onSeenBottom])
 

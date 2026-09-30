@@ -95,3 +95,15 @@ test('印のファイルが無ければ「いま」を起点に作る（過去�
   assert.deepEqual(marks, { since: 1234, sessions: {} })
   assert.equal(JSON.parse(await readFile(path, 'utf-8')).since, 1234)
 })
+
+test('無いファイルに同時に来ても、作るのは 1 回で どれも落ちない', async () => {
+  const path = join(dir, 'race', READ_MARKS_FILE)
+  let made = 0
+  const store = new ReadStore(path, () => {
+    made += 1
+    return 99
+  })
+  const all = await Promise.all(Array.from({ length: 8 }, () => store.get()))
+  assert.equal(made, 1)
+  for (const { marks } of all) assert.equal(marks.since, 99)
+})

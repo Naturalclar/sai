@@ -7,6 +7,8 @@ test('contextLabel: 1000 未満はそのまま、千は k、百万は小数 1 �
   assert.equal(contextLabel(undefined), '')
   assert.equal(contextLabel(812), '812')
   assert.equal(contextLabel(830_400), '830k')
+  assert.equal(contextLabel(999_499), '999k')
+  assert.equal(contextLabel(999_700), '1.0M', '1000k にはしない（#441 のレビュー）')
   assert.equal(contextLabel(1_249_999), '1.2M')
   assert.equal(contextLabel(4_157_178), '4.1M')
 })

@@ -15,8 +15,10 @@ export function contextLabel(tokens: number | undefined): string {
   const t = tokens ?? 0
   if (!(t > 0)) return ''
   if (t < 1000) return String(Math.round(t))
-  if (t < 1_000_000) return `${Math.round(t / 1000)}k`
-  return `${(Math.floor(t / 100_000) / 10).toFixed(1)}M`
+  // 999,500 以上は k に丸めると `1000k` になるので M に回す（#441 のレビュー）
+  if (Math.round(t / 1000) < 1000) return `${Math.round(t / 1000)}k`
+  // 切り上げない（実際より大きく見せない）。k から回ってきた 999,500〜999,999 は 1.0M から始める
+  return `${(Math.max(10, Math.floor(t / 100_000)) / 10).toFixed(1)}M`
 }
 
 /** 見出しの title。返信のたびに読み直す量だと分かるように */

@@ -104,6 +104,20 @@ test('claudeProgress / codexProgress: 最後にモデルを呼んだときに読
 })
 
 const ev = (ts: string, payload: Record<string, unknown>) => j({ timestamp: ts, type: 'event_msg', payload })
+
+test('claudeProgress / codexProgress: 要約で縮んだら古い量を残さない（#441 のレビュー。縮めたあとも「大きすぎる」が出続けた）', () => {
+  const usage = (ts: string, n: number) => j({ type: 'assistant', timestamp: ts, message: { role: 'assistant', content: [{ type: 'text', text: 'x' }], stop_reason: 'end_turn', usage: { input_tokens: 0, cache_read_input_tokens: n } } })
+  const boundary = (ts: string, post?: number) => j({ type: 'system', subtype: 'compact_boundary', timestamp: ts, content: 'Conversation compacted', compactMetadata: { trigger: 'manual', preTokens: 966_519, ...(post === undefined ? {} : { postTokens: post }) } })
+  assert.equal(claudeProgress([prompt(T(0), 'やって'), usage(T(1), 966_519), boundary(T(2), 23_981)]).context, 23_981, '縮んだあとの量')
+  assert.equal(claudeProgress([prompt(T(0), 'やって'), usage(T(1), 966_519), boundary(T(2))]).context, 0, '量が書かれていなければ「分からない」')
+  assert.equal(claudeProgress([prompt(T(0), 'やって'), usage(T(1), 966_519), boundary(T(2), 23_981), usage(T(3), 30_000)]).context, 30_000, '次に呼んだらその量')
+
+  const tokens = (ts: string, n: number) => ev(ts, { type: 'token_count', info: { last_token_usage: { input_tokens: n } } })
+  const compacted = (ts: string) => j({ timestamp: ts, type: 'compacted', payload: { message: '', replacement_history: [] } })
+  assert.equal(codexProgress([tokens(T(0), 231_121), compacted(T(1)), tokens(T(2), 0)]).context, 0, '縮んだあとは次の量が来るまで「分からない」')
+  assert.equal(codexProgress([tokens(T(0), 231_121), compacted(T(1)), tokens(T(2), 25_382)]).context, 25_382)
+})
+
 const item = (ts: string, payload: Record<string, unknown>) => j({ timestamp: ts, type: 'response_item', payload })
 
 test('codexProgress: task_started でターンが始まり、exec の cmd / function_call の command を拾い、task_complete で閉じる', () => {

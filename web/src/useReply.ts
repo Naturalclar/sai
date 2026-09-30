@@ -13,6 +13,8 @@ export interface Pending {
    * 送った直後のローカルの分には付かない（サーバがまだ起動していないので止める先が無い）
    */
   interruptible?: true
+  /** 要約（`/compact`）だけのターン（#579）。仮バブルは本文を出さず「要約中」の 1 行にする（本文は預かりのバブルに出る） */
+  compact?: true
 }
 
 /** 送った直後の返信。サーバの replying に載るまでの繋ぎ */
@@ -143,17 +145,18 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
     // 失敗した分は「処理中」ではない（入力欄を開けて、理由は failed に出す）
     ...Object.entries(replying)
       .filter(([, r]) => !r.failed)
-      .map(([id, r]) => ({ id, text: r.text, since: r.since, ...(r.interruptible ? { interruptible: r.interruptible } : {}) })),
+      .map(([id, r]) => ({ id, text: r.text, since: r.since, ...(r.interruptible ? { interruptible: r.interruptible } : {}), ...(r.compact ? { compact: r.compact } : {}) })),
     ...sent.filter((s) => !replying[s.id]).map((s) => ({ id: s.id, text: s.text, since: new Date(s.sentAt).toISOString() })),
   ]
 
-  const send = async (id: string, text: string, options: { replaceTyped?: boolean; via?: 'process'; attachments?: string[]; queue?: boolean; steer?: boolean } = {}): Promise<SendOutcome> => {
+  const send = async (id: string, text: string, options: { replaceTyped?: boolean; via?: 'process'; attachments?: string[]; queue?: boolean; steer?: boolean; compact?: boolean } = {}): Promise<SendOutcome> => {
     const entry: Sent = { id, text, rowsAtSend: countRows(id), sentAt: Date.now(), acceptedAt: null }
     setFailed(null)
     setConfirm(null)
     setSteered(null)
     // 預ける（処理中の返信がある）ときは繋ぎを作らない。前の返信の「処理中」を上書きしてしまう（#305）
-    if (!options.queue) setSent((list) => [...list.filter((s) => s.id !== id), entry])
+    // 要約してから送る（#579）ときも作らない（仮バブルはサーバの replying の「要約中」、本文は預かりのバブルに出る）
+    if (!options.queue && !options.compact) setSent((list) => [...list.filter((s) => s.id !== id), entry])
     try {
       const accepted = await api.reply(id, text, options)
       // 走っているターンに足した（#404）。新しいターンではないので仮バブルは作らず、入力欄の下に出すだけ
@@ -163,7 +166,7 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
         return 'sent'
       }
       // 預かっただけ（まだ起動していない）。待機中のバブルはサーバの queued から次のポーリングで出る
-      if (accepted.via === 'queued') return 'sent'
+      if (accepted.via === 'queued' || accepted.via === 'compact') return 'sent'
       setSent((list) => (list.includes(entry) ? list.map((s) => (s === entry ? { ...s, acceptedAt: Date.now() } : s)) : [...list.filter((s) => s.id !== id), { ...entry, acceptedAt: Date.now() }]))
       return 'sent'
     } catch (err) {

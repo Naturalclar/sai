@@ -15,6 +15,8 @@ import { leavesToSidebar } from './replyFocus'
 import { DiffButton, type DiffButtonProps } from './DiffButton'
 import { acceptsSuggestion, suggestionFor, suggestionLabel } from './replySuggest'
 import { NEXT_ASK_MAX_CHARS } from '../../shared/nextAsk.ts'
+import { SEND_MODE_LABEL, sendModes, type SendMode } from '../../shared/compact.ts'
+import { CONTEXT_WARN_TOKENS } from '../../shared/contextSize.ts'
 import { SuggestionChip } from './SuggestionChip'
 import { useMediaQuery } from './hooks'
 import { PhotoMark } from './PhotoMark'
@@ -78,7 +80,12 @@ interface Props {
    * 送る。**false を返したら送れなかった**（端末の打ちかけの確認待ち・送信失敗）ことにして、
    * 本文・添えた画像・`@` の返信先を入力欄に戻す（#350）
    */
-  onSend: (text: string, attachments: string[], options: { steer: boolean }) => void | boolean | Promise<void | boolean>
+  onSend: (text: string, attachments: string[], options: { steer: boolean; mode: SendMode }) => void | boolean | Promise<void | boolean>
+  /**
+   * 送り方を選ぶ材料（#579）。渡したときだけ、着手の指示なら「要約してから送る」を既定にして、そのまま・新しいセッションも選べる。
+   * フィードには渡さない（返信先が `@` で動く）。判定は `shared/compact.ts` の `sendModes()`
+   */
+  sendMode?: { agent: string; contextTokens: number; terminal: boolean }
   /** 本文が空でないかが変わったら知らせる。FeedView は入力中に既定の返信先を動かさないために使う */
   onDraft?: (drafting: boolean) => void
   /** モデルの右に出す許可モードの選択。渡さなければ出さない（Claude 以外と、返信先が一覧に無いとき） */
@@ -134,7 +141,7 @@ const NO_HISTORY: readonly string[] = []
 const keyOf = (e: KeyboardEvent<HTMLTextAreaElement>) => ({ key: e.key, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, shiftKey: e.shiftKey })
 
 /** 入力欄。Enter で送信、Shift+Enter で改行。IME 変換中の Enter は送らない */
-export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerable = false, now = 0, onSend, onDraft, model, permission, diff, skillsId, skillsAgent, attachId, draftKey, sentFromConfirm = 0, restore, insert, history = NO_HISTORY, nextAsk, onLeaveToSidebar, mention }: Props) {
+export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerable = false, now = 0, onSend, sendMode, onDraft, model, permission, diff, skillsId, skillsAgent, attachId, draftKey, sentFromConfirm = 0, restore, insert, history = NO_HISTORY, nextAsk, onLeaveToSidebar, mention }: Props) {
   // 前に打ちかけて離れた分（#306）。作ったときに 1 回だけ読む
   const [initial] = useState(() => (draftKey ? loadDraft(draftKey) : EMPTY_DRAFT))
   const [text, setText] = useState(initial.text)
@@ -186,6 +193,13 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
   // 足せる場面でなくなったら（ターンが終わった）自然に消えるよう、出すかどうかは毎描画で見る
   const [steerWanted, setSteerWanted] = useState(false)
   const steering = steerWanted && queueing && steerable
+  // 送り方（#579）。既定は本文から毎描画で決め直す（着手の形なら要約してから）。人が切り替えたら送るまでそれに従い、
+  // **切り替えたことは覚えない**（送ったら戻す）。処理中・預かりがあるときは出さない（サーバも要約を回さない）。
+  // 画像を添えているときは新しいセッションを出さない（新しいセッションの口は画像を受けない）
+  const [modePicked, setModePicked] = useState<SendMode | null>(null)
+  const offered = sendMode && !queueing ? sendModes({ ...sendMode, text }, CONTEXT_WARN_TOKENS) : null
+  const choices = (offered?.choices ?? []).filter((m) => m !== 'new' || attach.items.length === 0)
+  const sendModeNow: SendMode = modePicked && choices.includes(modePicked) ? modePicked : choices.includes(offered?.mode ?? 'plain') ? (offered?.mode ?? 'plain') : 'plain'
 
   const drafting = text.trim() !== ''
   useEffect(() => {
@@ -356,7 +370,8 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
     // 表記ごと本文が消えるので返信先も既定に戻す。送信中でも別の返信先へ続けて打てる
     if (mention?.picked) mention.onPick(null)
     setSteerWanted(false)
-    void Promise.resolve(onSend(body, paths, { steer: steering })).then((ok) => {
+    setModePicked(null)
+    void Promise.resolve(onSend(body, paths, { steer: steering, mode: sendModeNow })).then((ok) => {
       // 送れなかった（確認待ち・送信失敗）。まだ何も打っていなければ、本文・画像・返信先を戻す（#350）。
       // いまの中身は textarea から見る（この then は submit した時点の text を閉じ込めているため）
       if (ok !== false || !restoresText(ref.current?.value ?? '')) return
@@ -597,6 +612,19 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
             片方が消えずに 2 つ並ぶ。#265 の実装中に踏んだ）ので、種類ごとに前置きを付ける */}
         {model && <ReplyModelPicker key={`model-${model.id}`} {...model} />}
         {permission && <ReplyPermissionPicker key={`perm-${permission.id}`} {...permission} />}
+        {choices.length > 1 && (
+          <select
+            className="send-mode"
+            value={sendModeNow}
+            aria-label="送り方"
+            title="要約してから送ると、新しい作業の前に会話を要約して読み直す量を減らす（#579）"
+            onChange={(e) => setModePicked(e.target.value as SendMode)}
+          >
+            {choices.map((m) => (
+              <option key={m} value={m}>{SEND_MODE_LABEL[m]}</option>
+            ))}
+          </select>
+        )}
         {queueing && steerable && (
           <label className="steer" title="いま走っているターンに足す（取り消せない。終わっていれば預かりに回る）">
             <input type="checkbox" checked={steerWanted} onChange={(e) => setSteerWanted(e.target.checked)} />
@@ -608,7 +636,7 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
           disabled={attach.busy || (!(mention?.picked ? stripMention(text, mention.picked.label) : text).trim() && attach.items.length === 0)}
           title={steering ? '走っているターンに足す（取り消せない）' : queueing ? '前の返信が終わってから続けて回す（預けた分は取り消せる）' : undefined}
         >
-          {steering ? '足す' : queueing ? 'あとで送る' : '送信'}
+          {steering ? '足す' : queueing ? 'あとで送る' : sendModeNow === 'compact' ? '要約して送る' : sendModeNow === 'new' ? '新しく始める' : '送信'}
         </button>
       </div>
       {skillOpen && (

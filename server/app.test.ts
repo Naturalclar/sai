@@ -968,6 +968,68 @@ test('POST reply: steer が付いていれば、走っている Codex のター�
   }
 })
 
+test('POST reply: compact が付いていれば、本文を預かりの先頭に置いて /compact のターンを先に回す（#579）', async () => {
+  runner.started.length = 0
+  const res = await post('C1@r', { text: '579着手して', compact: true })
+  assert.equal(res.status, 202)
+  const body = (await res.json()) as ReplyResponse
+  assert.equal(body.via, 'compact')
+  assert.equal(runner.started.length, 1, '起こしたのは要約のターンだけ')
+  const first = runner.started[0]!.cmd
+  assert.equal(first.compact, true)
+  assert.match(first.text, /^\/compact .*「579着手して」/)
+  // 要約が回っている間（本物の ProcessRunner は start した時点で処理中にする）は本文を回さない
+  runner.busy.set('C1@r', { since: new Date().toISOString(), text: first.text, compact: true })
+  assert.deepEqual((await queuedOf('C1@r'))?.items.map((q) => [q.queue_id, q.text]), [[body.queue_id, '579着手して']], '本文は預かりの先頭')
+  const list = (await (await get('/api/sessions?days=30')).json()) as SessionsResponse
+  assert.equal(list.replying['C1@r']?.compact, true, '画面は「要約中」と出せる')
+  assert.equal(runner.started.length, 1)
+  // 要約が終わったら、預かりが本文をそのまま（要約せずに）回す
+  runner.busy.delete('C1@r')
+  await get('/api/sessions?days=30')
+  assert.equal(runner.started.length, 2)
+  assert.equal(runner.started[1]!.cmd.text, '579着手して')
+  assert.equal(runner.started[1]!.cmd.compact, undefined)
+  assert.equal((await queuedOf('C1@r'))?.items.length ?? 0, 0)
+})
+
+test('POST reply: 要約が失敗したら、預かった本文は回さずに止める（#579）', async () => {
+  runner.started.length = 0
+  const res = await post('C1@r', { text: '580着手して', compact: true })
+  assert.equal(((await res.json()) as ReplyResponse).via, 'compact')
+  runner.busy.set('C1@r', { since: new Date().toISOString(), text: '/compact …', compact: true, failed: { code: 1, tail: '要約できなかった' } })
+  try {
+    const list = (await (await get('/api/sessions?days=30')).json()) as SessionsResponse
+    assert.equal(runner.started.length, 1, '本文は回さない')
+    assert.match(list.queued['C1@r']?.paused ?? '', /失敗/)
+  } finally {
+    runner.busy.delete('C1@r')
+    for (const item of (await queuedOf('C1@r'))?.items ?? []) {
+      await fetch(`${base}/api/sessions/C1%40r/queue/${item.queue_id}`, { method: 'DELETE', headers: { Origin: base } })
+    }
+    await postJson('/api/sessions/C1%40r/queue/resume', {})
+  }
+})
+
+test('POST reply: 処理中・Claude でないときは compact を付けても今までどおり送る（#579）', async () => {
+  runner.started.length = 0
+  codexApp.busy.clear?.()
+  const res = await post('X1@r', { text: '579着手して', compact: true })
+  assert.notEqual(((await res.json()) as ReplyResponse).via, 'compact', 'Codex は要約しない')
+  runner.busy.set('C1@r', { since: new Date().toISOString(), text: '前の' })
+  try {
+    const queued = (await (await post('C1@r', { text: '581着手して', compact: true, queue: true })).json()) as ReplyResponse
+    assert.equal(queued.via, 'queued', '処理中なら要約せずに今までどおり預かる')
+  } finally {
+    runner.busy.delete('C1@r')
+    for (const id of ['C1@r', 'X1@r']) {
+      for (const item of (await queuedOf(id))?.items ?? []) {
+        await fetch(`${base}/api/sessions/${encodeURIComponent(id)}/queue/${item.queue_id}`, { method: 'DELETE', headers: { Origin: base } })
+      }
+    }
+  }
+})
+
 test('POST reply: steer が付いていれば、入力の口を開けている Claude のターンに足す（#386）', async () => {
   runner.started.length = 0
   runner.steered.length = 0
@@ -2513,5 +2575,30 @@ test('GET /api/sessions/<id>: claude --bg のセッションなら attach の短
     assert.deepEqual(stopped.background, { attach: '5738db0d', live: false, status: '' }, '止めたものも attach で起こし直せるので出す')
   } finally {
     claudeAgents.bg = null
+  }
+})
+
+test('POST /api/sessions/new: inherit なら表示名・アイコン・一言の性格を引き継ぐ。前のセッションは触らない（#579）', async () => {
+  runner.started.length = 0
+  const putMeta = (id: string, body: unknown) =>
+    fetch(`${base}/api/sessions/${encodeURIComponent(id)}/meta`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  assert.equal((await putMeta('X1@r', { name: 'くらら', persona: 'ISTJ' })).status, 200)
+  assert.equal((await putIcon('X1@r', PNG)).status, 200)
+  try {
+    const fresh = (await (await postNew({ from: 'X1@r', text: '579着手して', inherit: true })).json()) as NewSessionResponse
+    const meta = (await (await get(`/api/sessions/${encodeURIComponent(fresh.id)}/meta`)).json()) as { meta: { name?: string; persona?: string } }
+    assert.equal(meta.meta.name, 'くらら')
+    assert.equal(meta.meta.persona, 'ISTJ')
+    assert.equal((await get(`/api/sessions/${encodeURIComponent(fresh.id)}/icon`)).status, 200, 'アイコンも写す')
+    assert.ok(runner.started[0]!.cmd.args.includes('くらら'), '表示名は CLI にも -n で渡る（#391）')
+    const old = (await (await get('/api/sessions/X1%40r/meta')).json()) as { meta: { name?: string; archived_at?: string } }
+    assert.equal(old.meta.name, 'くらら', '前のセッションはそのまま')
+    assert.equal(old.meta.archived_at, undefined, 'アーカイブしない')
+    // 付けなければ引き継がない
+    const plain = (await (await postNew({ from: 'X1@r', text: 'ふつうに' })).json()) as NewSessionResponse
+    assert.deepEqual(((await (await get(`/api/sessions/${encodeURIComponent(plain.id)}/meta`)).json()) as { meta: object }).meta, {})
+  } finally {
+    await putMeta('X1@r', { name: '', persona: '' })
+    await fetch(`${base}/api/sessions/X1%40r/icon`, { method: 'DELETE', headers: { Origin: base } })
   }
 })

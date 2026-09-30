@@ -198,6 +198,20 @@ SAI が起こした Claude のターンは、使ったトークンと費用も�
 - 足した指示では `UserPromptSubmit` が鳴り（自分のバブルとして出る）、走っているツールが終わった直後に同じターンの中で取り込まれる。**`Stop` の行の `user_text` は元の指示のまま**（Codex は足した方になる）。
 - 許可・質問の配線（`--permission-prompt-tool` + `approve-mcp`）はこの入力の形でも動き、使用量も stream-json の最後の `result` から読める（`parseTurnUsage()` はそのまま）。
 
+## 要約してから送る（#579）
+
+- 判定は `shared/compact.ts` の純粋関数（画面とサーバが同じものを見る。`compact.test.ts`）:
+  - `startsNewWork(text)`: 1 行目が着手の形か（`着手して` / `N着手して` / `Nに着手して` / `N対応して` / `Nを着手して`。**狭い方に倒す**）
+  - `canCompact()`: Claude で、端末で開いておらず、`context_tokens` が `COMPACT_MIN_TOKENS`（15 万）以上
+  - `sendModes()`: 既定の送り方と出す選択肢。着手 × 要約できる → **要約してから送る**が既定。着手でなくても `CONTEXT_WARN_TOKENS`（#441）以上なら要約を横に出す（既定はそのまま）。新しいセッションは Claude で選べるが既定にはしない
+  - `compactPrompt(text)`: `/compact` に添える指示（次に取りかかることは本文の 1 行目）
+- 画面は `ReplyBox` の `sendMode`（`SessionView` だけが渡す。フィードと要対応の行は詳細の `context_tokens` を持たないので出さない）で、送信ボタンの左に「送り方」の select を出す。**選んだものは送るまでで覚えない**。処理中・預かりがあるときと、画像を添えているときの「新しいセッション」は出さない
+- **順番は預かり（#305）に任せる**（新しい順番の仕組みは作らない）: `ReplyRequest.compact` を受けた `launch()` が、本文を預かりの先頭に置いてから `/compact …` のターンを起こす（`startTurn(…, { forceProcess, compact })`。`ReplyCommand.compact` → `Replying.compact`）。要約のプロセスが終わると `drain()` が本文を**そのまま**回し、要約が失敗すれば今までどおり預かりが止まる（「続けて送る」で要約せずに送る）。応答は `via: "compact"` と本文の `queue_id`
+- **効くのは Claude で、端末で開いておらず、処理中でも預かりが残ってもいないときだけ**。当たらなければ付いていないのと同じで、reply.log に 1 行残して今までの経路で送る
+- 要約だけのターンは**記録に行が 1 本も無い**（`UserPromptSubmit` も `Stop` も鳴らない）ので、「本文なし」のバブルは出ず、処理中はプロセスの終了で外れる。仮バブルは `Replying.compact` を見て本文を出さず「要約中」の 1 行（`PendingBubble` の `label`）、本文は預かりのバブル（`QueuedBubble`）に出る
+- 使用量: 要約のターンの `result.usage` は全部 0 で、量は `modelUsage` にだけ載る。`parseTurnUsage()` は `usage` が 0 なら `modelUsage` の合計を採り、`TurnUsage.compact` の印を付けて `turn-usage.jsonl` に残す。**`usageByRow()` は印の付いたものをどのバブルにも付けない**（結ぶ行が無く、前のターンのバブルに付いてしまう）
+- **新しいセッションで送る**: `NewSessionRequest.inherit` で `from` の表示名・一言の性格（`session-meta.json`）とアイコン（`IconStore` のファイルを写す）を引き継ぐ（Claude の経路だけ。表示名は `-n` で CLI にも渡る。#391）。前のセッションは消さず、アーカイブもしない。画面は `NewSessionStarting` で最初の記録を待ってから移る
+
 ## 打ちかけと失敗の戻し
 
 ### 端末の打ちかけ

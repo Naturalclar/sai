@@ -144,3 +144,25 @@ test('usageByRow: 読めない ts は落とす（空のときは何もしない�
   assert.equal(usageByRow([row('ぐちゃぐちゃ')], [entry('2026-09-16T04:57:12.500Z')]).size, 0)
   assert.equal(usageByRow([row('2026-09-16T13:57:11+09:00')], [entry('ぐちゃぐちゃ')]).size, 0)
 })
+
+test('parseTurnUsage: 要約だけのターンは usage が 0 なので modelUsage の量を採る（#579。2.1.285 で実測の形）', () => {
+  const compact = JSON.stringify({
+    type: 'result',
+    subtype: 'success',
+    is_error: false,
+    num_turns: 0,
+    result: '',
+    total_cost_usd: 0.06247175,
+    usage: { input_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 0 },
+    modelUsage: { 'claude-haiku-4-5-20251001': { inputTokens: 1747, outputTokens: 2322, cacheReadInputTokens: 176675, cacheCreationInputTokens: 15781, costUSD: 0.06247175 } },
+  })
+  const u = parseTurnUsage(compact)
+  assert.ok(u)
+  assert.deepEqual([u.input_tokens, u.output_tokens, u.cache_read_input_tokens, u.cache_creation_input_tokens, u.cost_usd], [1747, 2322, 176675, 15781, 0.06247175])
+  assert.equal(parseTurnUsage(RESULT)?.input_tokens, 10, 'usage が 0 でなければ今までどおり usage')
+})
+
+test('usageByRow: 要約だけのターンの使用量は、前のターンのバブルに付けない（#579。行を書かない）', () => {
+  const rows = [row('2026-09-16T13:57:11+09:00')]
+  assert.equal(usageByRow(rows, [entry('2026-09-16T04:57:40.000Z', 'S@r', { compact: true })]).size, 0)
+})

@@ -12,7 +12,7 @@ import { splitAttachments } from '../../shared/attachments.ts'
  * children は「処理中」の横に並べるもの（いま何をしているか。`ProgressSteps`。#302）。
  * typed は端末で打ったターン（SAI が送った返信ではない。#302）で、title の言い回しだけ変える
  */
-export function PendingBubble({ text, since, now, repo, quiet, profile, typed, children }: { text: string; since: string; now: number; repo?: string; quiet?: boolean; profile?: Profile; typed?: boolean; children?: ReactNode }) {
+export function PendingBubble({ text, since, now, repo, quiet, profile, typed, label = '処理中', children }: { text: string; since: string; now: number; repo?: string; quiet?: boolean; profile?: Profile; typed?: boolean; /** quiet の 1 行の見出し（要約だけのターンは「要約中」。#579） */ label?: string; children?: ReactNode }) {
   const started = parseTs(since)?.getTime() ?? now
   const long = now - started > LONG_REPLY_MS
   const elapsed = elapsedLabel(since, now)
@@ -23,7 +23,7 @@ export function PendingBubble({ text, since, now, repo, quiet, profile, typed, c
       <div className={`pending-line${long ? ' long' : ''}`} title={sent}>
         <span>⏳</span>
         {repo && <span className="ch">#{repo}</span>}
-        <span className="time">{elapsed ? `処理中 ${elapsed}` : '処理中…'}</span>
+        <span className="time">{elapsed ? `${label} ${elapsed}` : `${label}…`}</span>
         {children}
       </div>
     )

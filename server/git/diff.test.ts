@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { SKIPPED_MARK } from '../../shared/diff.ts'
-import { clampPatch, NotAGitRepo, parseStats, RealGit, resolveBase, sessionDiff, sessionDiffSummary, validBase } from './diff.ts'
+import { changedPaths, clampPatch, NotAGitRepo, parseStats, RealGit, resolveBase, sessionDiff, sessionDiffSummary, validBase } from './diff.ts'
 import type { Git } from './diff.ts'
 
 const run = promisify(execFile)
@@ -338,6 +338,34 @@ test('sessionDiff: git のリポジトリでなければ NotAGitRepo', async () 
     // 要約の側も同じ扱い（画面は 404 を見てボタンを出さない）
     await assert.rejects(sessionDiffSummary(new RealGit(), dir), NotAGitRepo)
     await assert.rejects(sessionDiffSummary(new RealGit(), ''), NotAGitRepo)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('changedPaths: ブランチの差分・未コミット・追跡外のパスを重複なしで返す。git でなければ空（#564）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-changed-'))
+  try {
+    await git(dir, 'init', '-q', '-b', 'main')
+    await writeFile(join(dir, 'a.ts'), 'a\n')
+    await writeFile(join(dir, 'b.ts'), 'b\n')
+    await git(dir, 'add', '.')
+    await git(dir, 'commit', '-q', '-m', 'init')
+    await git(dir, 'switch', '-q', '-c', 'feat')
+    await writeFile(join(dir, 'a.ts'), 'a2\n')
+    await git(dir, 'commit', '-q', '-am', 'change a')
+    await writeFile(join(dir, 'a.ts'), 'a3\n') // ブランチの差分にも未コミットにも出る
+    await writeFile(join(dir, 'b.ts'), 'b2\n')
+    await writeFile(join(dir, 'new.ts'), 'n\n')
+    const paths = await changedPaths(new RealGit(), dir)
+    assert.deepEqual([...paths].sort(), ['a.ts', 'b.ts', 'new.ts'])
+    const plain = await mkdtemp(join(tmpdir(), 'sai-changed-plain-'))
+    try {
+      assert.deepEqual(await changedPaths(new RealGit(), plain), [])
+    } finally {
+      await rm(plain, { recursive: true, force: true })
+    }
+    assert.deepEqual(await changedPaths(new RealGit(), ''), [])
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

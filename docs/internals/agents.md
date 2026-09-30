@@ -17,6 +17,14 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 送り元は、SAI が起動していまターンを回しているセッションだけ（`run.snapshot()` にあって `failed` でない。MCP の `SAI_ENTITY`）。
 - 送り先は `shared/agentMessages.ts` の `agentTargets()`（同じ `project`・自分以外・アーカイブ済みでない・`replyBlockedReason()` が空）。
 
+### 同じファイルを触っているか（#564）
+
+- エージェント用の `sai_sessions`（`GET /api/agent/sessions`）の 1 件（`AgentSessionEntry`）に `overlap` / `overlap_more` を載せる。**呼んだセッションの worktree と相手の worktree のどちらでも変わっているファイル**で、組み立ては `shared/agentMessages.ts` の `agentOverlap()`（パスの順に先頭 `AGENT_OVERLAP_SHOW`＝5 件と残りの数）。
+- 「変わっているファイル」は差分ビューアと同じ範囲（`base...HEAD` + 未コミット + 追跡外）で、`server/git/diff.ts` の `changedPaths()` が `--numstat` だけを読む（本文は作らない。`RealGit` の読むだけの allowlist の中）。**cwd は行から取り**、リクエストからは受けない。別のマシンのセッションは空。**`gh` で PR の files は引かない**（外へ問い合わせる場所を増やさない）。
+- 数えないもの: `CLAUDE.md` / `README.md`（どの階層でも）/ `docs/`（`overlapIgnored()`。ほぼ全部の PR が触る）、同じ worktree（cwd が同じ）の相手。`main` にいる worktree は差分が無いので自然に空になる。
+- **ツールが呼ばれたときだけ**計算し（ポーリングには乗せない）、`app.ts` の `changedOf()` が `(cwd, last_turn_ts)` で `CHANGED_PATHS_TTL_MS`（30 秒）覚える。時間でも切るのは、呼んだ側はターンの途中で編集していて `last_turn_ts` が変わらないため。
+- **知らせるだけで、自動では送らない**。送るかはエージェントが決める（ツールの説明に「使う場面・使わない場面」を先に書いてある。`approve-mcp.ts` の `AGENT_TOOLS`）。MCP の `sai_sessions`（`/mcp`。Manager・tailnet 用）には出さない（呼び出し元に「自分の worktree」が無い）。
+
 ### 送る・待つ
 
 - 送るときは `deliveredText()` の見出し（`【SAI】#<project> の「<呼び名>」からのメッセージです（id: <message_id>）…`）を付けて、`launch()` に `queue: true` と `origin: message_id` で渡す。処理中なら #305 の預かりに並び、`StoredReply.origin` として持ち越す。

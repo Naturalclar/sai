@@ -35,6 +35,8 @@ import { FeedStore } from './rows/store.ts'
 
 let dir: string
 let work: string
+/** B1 の worktree（#564 の重なりを見るため、A1 と別にする） */
+let work2: string
 let server: Server
 let base: string
 let feedFile: string
@@ -73,6 +75,18 @@ const progress = {
     return { rev: '', id: s.id, active: false, steps: [], total: 0, updated_at: '', context_tokens: contexts.get(s.id) ?? 0 }
   },
 }
+/**
+ * git の偽物（#564）。worktree ごとに変わっているファイルを返す。base は見つからない扱いで、未コミットの差分だけで答える
+ */
+const changedFiles = new Map<string, string[]>()
+const changed = {
+  async run(cwd: string, args: string[]) {
+    if (args[0] === 'rev-parse' && args[1] === '--git-dir') return '.git\n'
+    if (args[0] === 'diff' && args[1] === '--numstat') return (changedFiles.get(cwd) ?? []).map((p) => `1\t0\t${p}`).join('\n')
+    if (args[0] === 'ls-files') return ''
+    throw new Error(`unused: ${args.join(' ')}`)
+  },
+}
 const now = new Date()
 const minutesAgo = (n: number) => new Date(now.getTime() - n * 60_000)
 
@@ -81,12 +95,16 @@ before(async () => {
   process.env.AGENT_FEED_HOST = 'testmac'
   dir = await mkdtemp(join(tmpdir(), 'sai-agent-'))
   work = await mkdtemp(join(tmpdir(), 'sai-agent-work-'))
+  work2 = await mkdtemp(join(tmpdir(), 'sai-agent-work2-'))
+  // 変わっているファイル（#564）。結果は (cwd, last_turn_ts) で 30 秒覚えられるので、最初から決めておく
+  changedFiles.set(work, ['server/app.ts', 'shared/types.ts', 'CLAUDE.md', 'docs/internals/agents.md'])
+  changedFiles.set(work2, ['server/app.ts', 'web/src/App.tsx', 'CLAUDE.md', 'docs/internals/agents.md', 'shared/types.ts'])
   feedFile = join(dir, `${localDate(now.toISOString())}.jsonl`)
   await writeFile(
     feedFile,
     [
       row(minutesAgo(9), 'A1', { repo: 'r', cwd: work, project: 'o/r', user_text: '実装して' }),
-      row(minutesAgo(8), 'B1', { repo: 'r', cwd: work, project: 'o/r', user_text: 'レビューして', text: 'レビューしました' }),
+      row(minutesAgo(8), 'B1', { repo: 'r', cwd: work2, project: 'o/r', user_text: 'レビューして', text: 'レビューしました' }),
       row(minutesAgo(7), 'C1', { repo: 'r', cwd: work, project: 'o/other' }),
       row(minutesAgo(6), 'R1', { repo: 'r', cwd: work, project: 'o/r', host: 'mini' }),
       row(minutesAgo(5), 'S1', { repo: 'r', cwd: work, project: 'o/r', session_source: 'synth' }),
@@ -104,7 +122,7 @@ before(async () => {
     new Authenticator(async () => null),
     { tmux: { run: async () => { throw new Error('unused') } }, ps: async () => '', codexApp },
     undefined,
-    undefined,
+    changed,
     undefined,
     usage as unknown as UsageStore,
     progress as unknown as ProgressReader,
@@ -120,6 +138,7 @@ after(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()))
   await rm(dir, { recursive: true, force: true })
   await rm(work, { recursive: true, force: true })
+  await rm(work2, { recursive: true, force: true })
 })
 
 /** エージェント用の口を叩く。token: null でヘッダを付けない */
@@ -180,7 +199,7 @@ test('sai_sessions: 同じ project の、返信できる別のセッションだ
       ['B1@r'],
       '自分・別の project（C1）・別のマシン（R1）・合成 ID（S1）は出さない',
     )
-    assert.deepEqual(body.sessions[0], { id: 'B1@r', name: 'レビューして', project: 'o/r', branch: body.sessions[0]!.branch, agent: 'claude', busy: true, last_text: 'レビューしました', context_tokens: 0 })
+    assert.deepEqual(body.sessions[0], { id: 'B1@r', name: 'レビューして', project: 'o/r', branch: body.sessions[0]!.branch, agent: 'claude', busy: true, last_text: 'レビューしました', context_tokens: 0, overlap: ['server/app.ts', 'shared/types.ts'], overlap_more: 0 }, 'どちらの worktree でも変わっているファイル。CLAUDE.md と docs/ は数えない（#564）')
     contexts.set('B1@r', 120_000)
     const sized = (await (await agent('/api/agent/sessions?from=A1%40r')).json()) as AgentSessionsResponse
     assert.equal(sized.sessions[0]!.context_tokens, 120_000, '相手が読み直す量（直近の呼び出しの入力。#311）')
@@ -412,7 +431,7 @@ test('sai_wait: 相手のそのターンの完了の行が届いたら返答を�
   assert.equal(((await pending.json()) as AgentWaitResponse).status, 'pending')
   assert.equal((await wait('B1@r')).status, 404, '送った本人だけが待てる')
 
-  await appendFile(feedFile, JSON.stringify(row(new Date(), 'B1', { repo: 'r', cwd: work, project: 'o/r', user_text: delivered, text: 'あ'.repeat(5000) })) + '\n')
+  await appendFile(feedFile, JSON.stringify(row(new Date(), 'B1', { repo: 'r', cwd: work2, project: 'o/r', user_text: delivered, text: 'あ'.repeat(5000) })) + '\n')
   const done = await wait('A1@r')
   assert.equal(done.status, 200)
   const result = (await done.json()) as AgentWaitResponse

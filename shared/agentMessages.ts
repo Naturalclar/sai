@@ -85,11 +85,41 @@ export function agentTargets(sessions: readonly SessionSummary[], from: SessionS
   return sessions.filter((s) => s.id !== from.id && s.project === from.project && !s.archived && !replyBlockedReason(s, serverHost))
 }
 
+/** `overlap` に並べる数（多ければ残りは数だけ） */
+export const AGENT_OVERLAP_SHOW = 5
+
+/**
+ * 重なりに数えないファイル（#564）。ほぼ全部の PR が触るので、数えると「全員と重なっている」になって役に立たない
+ */
+export function overlapIgnored(path: string): boolean {
+  const name = path.split('/').pop() ?? path
+  return name === 'CLAUDE.md' || name === 'README.md' || path.startsWith('docs/')
+}
+
+/**
+ * 呼んだセッションと相手の worktree の重なり（#564）。**同じ worktree（cwd が同じ）なら空**（差分が同じなので、重なりではない）。
+ * パスの順に並べ、先頭 `AGENT_OVERLAP_SHOW` 件と残りの数
+ */
+export function agentOverlap(
+  mine: { cwd: string; paths: readonly string[] },
+  theirs: { cwd: string; paths: readonly string[] },
+): { overlap: string[]; overlap_more: number } {
+  if (!mine.cwd || !theirs.cwd || mine.cwd === theirs.cwd) return { overlap: [], overlap_more: 0 }
+  const own = new Set(mine.paths.filter((p) => !overlapIgnored(p)))
+  const both = [...new Set(theirs.paths)].filter((p) => own.has(p)).sort()
+  return { overlap: both.slice(0, AGENT_OVERLAP_SHOW), overlap_more: Math.max(0, both.length - AGENT_OVERLAP_SHOW) }
+}
+
 /**
  * sai_sessions が返す 1 件。本文は載せず、最後の発言の 1 行目だけ。
- * `contextTokens` は相手が読み直す量（直近の呼び出しの入力。分からなければ 0）
+ * `contextTokens` は相手が読み直す量（直近の呼び出しの入力。分からなければ 0）、`overlap` は同じファイルを触っているか（#564）
  */
-export function agentEntry(s: SessionSummary, busy: boolean, contextTokens = 0): AgentSessionEntry {
+export function agentEntry(
+  s: SessionSummary,
+  busy: boolean,
+  contextTokens = 0,
+  overlap: { overlap: string[]; overlap_more: number } = { overlap: [], overlap_more: 0 },
+): AgentSessionEntry {
   const last = (s.last_text ?? '').split('\n')[0] ?? ''
   return {
     id: s.id,
@@ -100,6 +130,8 @@ export function agentEntry(s: SessionSummary, busy: boolean, contextTokens = 0):
     busy,
     last_text: last.length > LAST_TEXT_CHARS ? `${last.slice(0, LAST_TEXT_CHARS)}…` : last,
     context_tokens: contextTokens,
+    overlap: overlap.overlap,
+    overlap_more: overlap.overlap_more,
   }
 }
 

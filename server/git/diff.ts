@@ -293,6 +293,30 @@ export async function sessionDiffSummary(git: Git, cwd: string, want = ''): Prom
   }
 }
 
+/**
+ * その worktree で変わっているファイルのパス（#564。エージェント用の `sai_sessions` の `overlap` の材料）。
+ * 範囲は差分ビューアと同じ（`base...HEAD` + 未コミット + 追跡外）で、`--numstat` だけを読む（本文は作らない）。
+ * git でない・読めなければ空（重なりを知らせないだけで、一覧は落とさない）
+ */
+export async function changedPaths(git: Git, cwd: string): Promise<string[]> {
+  if (!cwd) return []
+  try {
+    await git.run(cwd, ['rev-parse', '--git-dir'])
+  } catch {
+    return []
+  }
+  const base = await resolveBase(git, cwd, '').catch(() => '')
+  const [branch, working, untracked] = await Promise.all([
+    base ? counts(git, cwd, [`${base}...HEAD`]).catch(() => ({ paths: [] as string[] })) : Promise.resolve({ paths: [] as string[] }),
+    counts(git, cwd, ['HEAD']).catch(() => ({ paths: [] as string[] })),
+    git
+      .run(cwd, ['ls-files', '--others', '--exclude-standard'])
+      .then((out) => out.split('\n').filter(Boolean))
+      .catch(() => [] as string[]),
+  ])
+  return [...new Set([...branch.paths, ...working.paths, ...untracked])]
+}
+
 async function section(git: Git, cwd: string, args: string[]): Promise<DiffSection> {
   const [numstat, nameStatus, raw] = await Promise.all([
     git.run(cwd, ['diff', '--numstat', ...args]),

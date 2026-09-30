@@ -703,6 +703,13 @@ export interface AgentSessionEntry {
   last_text: string
   /** 送ると相手が読み直す量（直近の呼び出しの入力トークン。#311）。分からなければ 0 */
   context_tokens: number
+  /**
+   * 呼んだセッションの worktree と相手の worktree の**どちらでも変わっているファイル**（#564。先頭 `AGENT_OVERLAP_SHOW` 件）。
+   * 同じ箇所を触っていそうなら、着手・マージの前に聞く材料。知らせるだけで、自動では送らない
+   */
+  overlap: string[]
+  /** `overlap` に載せきれなかった数（無ければ 0） */
+  overlap_more: number
 }
 
 /** `GET /api/agent/sessions?from=` の応答 */

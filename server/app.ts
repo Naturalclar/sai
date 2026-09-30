@@ -727,7 +727,6 @@ export function createApp(
   /** 返答を頭に足して起こしたターン（#594）。失敗したら「渡した」を取り消すために、終わるまで覚える（メモリだけ） */
   const handedTurns = new Map<string, { ids: string[]; at: number }>()
   const replyingOf = async (sessions: SessionSummary[]): Promise<ReplyingMap> => {
-    typed.settle((id) => sessions.find((s) => s.id === id)?.last_turn)
     // 答えを返したのにプロセスが終わらない CLI（実測: `opencode run -s`）は、行が届いた時点で終わりにする（#375）。
     // 当てるのは OpenCode だけ（Claude の `-p` と SAI 管理の Codex は普通に終わるので、挙動を変えない）
     for (const id of run.settle?.((rid) => opencodeTurnOf(sessions, rid)) ?? []) await drain(id)
@@ -735,6 +734,8 @@ export function createApp(
       // 画面の失敗は時間で消えるので、届かなかったことは reply.log にも残す（#474。あとから辿れるように）
       await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${miss.id} ${miss.kind === 'queue' ? 'queue に渡した返信が届いていない' : '端末に打ち込んだ返信でターンが始まっていない'}: ${miss.reason}\n`).catch(() => {})
     }
+    // 配送確認を TTL の整理より先にする（#559）。30 分以上ポーリングが空いても、届いていた長いターンの仮バブルを消さない
+    typed.settle((id) => sessions.find((s) => s.id === id)?.last_turn)
     // 届いたが、ターンがエラーで終わった（#475。行が残らないので、ここで拾わないと黙って消える）
     for (const miss of await typed.checkTurnEnd((id, query) => typedTurnError(sessions, id, query))) {
       await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${miss.id} ${miss.kind === 'queue' ? 'queue に渡した' : '端末に打ち込んだ'}返信のターンがエラーで終わった: ${miss.reason}\n`).catch(() => {})

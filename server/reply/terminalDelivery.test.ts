@@ -123,7 +123,7 @@ test('checkDelivery: 聞いた先が投げたら届いた扱い。聞いてい�
   assert.equal(r.snapshot()['B@r']?.text, 'b2')
 })
 
-test('届いたあとは今までどおり、ターン完了が来なくても TTL で黙って消す（長いターンを失敗と言わない）', async () => {
+test('届いた返信は TTL を超えても、ターン完了かエラーまで消さない（#559）', async () => {
   let now = T0
   const r = new TerminalReplies(() => now)
   r.start('L@r', '長い作業', 'queue')
@@ -132,7 +132,9 @@ test('届いたあとは今までどおり、ターン完了が来なくても T
   now = T0 + TERMINAL_REPLY_TTL_MS + 1
   await r.checkDelivery(async () => false)
   r.settle(() => undefined)
-  assert.equal(r.snapshot()['L@r'], undefined)
+  assert.equal(r.snapshot()['L@r']?.text, '長い作業', '配送済みなら30分を超えた正常なターンも処理中のまま')
+  r.settle(() => new Date(T0 + 1_000).toISOString())
+  assert.equal(r.snapshot()['L@r'], undefined, 'ターン完了の行が届いたら通常のバブルに任せる')
 })
 
 test('checkTurnEnd: 届いた返信のターンがエラーで終わったら failed にし、30 分見せる（#475。行が残らないので黙って消えていた）', async () => {

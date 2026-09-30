@@ -10,7 +10,7 @@ import { parseCodexDialog } from '../../shared/codexDialog.ts'
 import { settledByRow } from '../../shared/turnSettled.ts'
 import type { Agent, Replying, ReplyingMap, Terminal, TerminalDialog } from '../../shared/types.ts'
 
-/** ターン完了の行が届かないまま、これだけ経ったら諦めて「処理中」を消す */
+/** 配送を確認できないまま、これだけ経ったら諦めて「処理中」を消す。配送済みならターン完了かエラーまで残す（#559） */
 export const TERMINAL_REPLY_TTL_MS = 30 * 60_000
 
 /** pid が生きているか。EPERM は「いるが自分のものではない」なので生きている扱い */
@@ -445,7 +445,7 @@ export class TerminalReplies {
     this.active.set(id, { replying: entry, kind, delivered: false })
     return entry
   }
-  /** lastTurn(id) がその返信より新しければ終わり。TTL を超えたものも消す。失敗にしたものは少しだけ見せてから消す */
+  /** lastTurn(id) がその返信より新しければ終わり。未配送のTTL超過も消す。配送済みはターン完了かエラーまで残す（#559） */
   settle(lastTurn: (id: string) => string | undefined): void {
     for (const [id, entry] of this.active) {
       const since = Math.floor(Date.parse(entry.replying.since) / 1000) * 1000
@@ -453,7 +453,7 @@ export class TerminalReplies {
       if (settledByRow(entry.replying.since, lastTurn(id))) this.active.delete(id)
       else if (entry.failedAt !== undefined) {
         if (this.now() - entry.failedAt > (entry.failedTtl ?? FAILED_TTL[entry.kind])) this.active.delete(id)
-      } else if (this.now() - since > TERMINAL_REPLY_TTL_MS) this.active.delete(id)
+      } else if (!entry.delivered && this.now() - since > TERMINAL_REPLY_TTL_MS) this.active.delete(id)
     }
   }
   /**

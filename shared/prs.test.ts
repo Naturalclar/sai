@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { checkState, diffStats, githubRepoOf, isPrNumber, isRepoName, knownRepos, parsePrList, parseRequested, pickKnownRepo, prFromGh, prHash, sortPrs } from './prs.ts'
-import type { PrSummary } from './types.ts'
+import { checkState, diffStats, githubRepoOf, isPrNumber, isRepoName, knownRepos, parsePrList, parseRequested, pickKnownRepo, prForSession, prFromGh, prHash, sortPrs } from './prs.ts'
+import type { PrRepo, PrSummary } from './types.ts'
 
 test('isRepoName: owner/repo だけを通し、フラグや .. や空白は断る', () => {
   assert.equal(isRepoName('Naturalclar/sai'), true)
@@ -163,4 +163,26 @@ test('diffStats: 本文から追加・削除を数え、新しいファイル・
 
 test('prHash: 1 本の画面の hash', () => {
   assert.equal(prHash('a/b', 7), '#/pr/a/b/7')
+})
+
+test('セッションに紐づく PR は、リポジトリと head のブランチが一致する open な PR（#548）', () => {
+  const pr = (number: number, head: string, over: Partial<PrSummary> = {}): PrSummary => ({
+    number, title: `t${number}`, author: 'me', head, base: 'main', draft: false, updated_at: '2026-09-30T00:00:00Z', url: '', additions: 0,
+    deletions: 0, changed_files: 0, review_decision: '', checks: '', requested: false, ...over,
+  })
+  const repos: PrRepo[] = [
+    { repo: 'Naturalclar/sai', prs: [pr(1, 'feat-a'), pr(2, 'feat-b'), pr(3, 'feat-b', { updated_at: '2026-09-30T01:00:00Z' }), pr(4, 'main', { base: 'main' })] },
+    { repo: 'other/repo', prs: [pr(9, 'feat-a')] },
+  ]
+  const remote = 'https://github.com/naturalclar/SAI'
+  assert.deepEqual(prForSession({ remote, branch: 'feat-a' }, repos), { repo: 'Naturalclar/sai', pr: repos[0]!.prs[0] })
+  // 同じブランチに 2 本なら新しく動いた方
+  assert.equal(prForSession({ remote, branch: 'feat-b' }, repos)?.pr.number, 3)
+  // 既定のブランチ（PR の base と同じ）にいるセッションは結ばない
+  assert.equal(prForSession({ remote, branch: 'main' }, repos), null)
+  // ブランチが無い・PR が無い・GitHub 以外・知らないリポジトリ
+  assert.equal(prForSession({ remote, branch: '' }, repos), null)
+  assert.equal(prForSession({ remote, branch: 'nope' }, repos), null)
+  assert.equal(prForSession({ remote: 'https://gitlab.com/Naturalclar/sai', branch: 'feat-a' }, repos), null)
+  assert.equal(prForSession({ remote: 'https://github.com/x/y', branch: 'feat-a' }, repos), null)
 })

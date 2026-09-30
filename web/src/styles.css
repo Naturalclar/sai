@@ -318,6 +318,12 @@
   .todo .why { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; margin-top: 6px; font-size: 13px; }
   .todo .why .text { overflow-wrap: anywhere; }
   .todo .why .note { color: var(--muted); font-size: 11px; }
+  /* 行から次の指示を送る（#522）。開いている間は下段の行も薄くしない */
+  .todo .why .todo-reply-open { font-size: 12px; }
+  .todo.done:has(.todo-reply) { opacity: 1; }
+  .todo-reply { margin-top: 8px; }
+  .todo-reply .reply { margin-top: 0; }
+  .todo .reply-failed { margin-top: 8px; }
   /* カードの中のバブルはチャットの 2 列（アバター + 本文）ではなく 1 列にする。
      アバターを display:none にすると grid のアイテムから外れ、残った本文が 1 列目（36px、狭い画面は 28px）に
      潰れる（#227）。列を 1 つにしてから消すこと。見出し（.gh）も上の行と重複するので出さない */

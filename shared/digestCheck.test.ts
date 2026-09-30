@@ -225,6 +225,10 @@ test('kind_swap: 本文が両方で呼んでいる・どちらとも呼んでい
   assert.ok(!codes('PR #518 をマージしました', 'PR #518 マージ').includes('kind_swap'))
   // 一言の PR は #536 のことではない（番号の直前の語だけ見る）
   assert.ok(!codes('Issue #536 を作りました', 'PR を作る前に #536 を整理した').includes('kind_swap'))
+  // 数（`PR 2 件` / `PR 3 本`）を番号と読まない（#542 のレビュー）
+  assert.ok(!codes('Issue #2 と #5 を直す PR を 2 件作りました', 'PR 2 件作成、#2 と #5 を修正').includes('kind_swap'))
+  assert.ok(!codes('Issue #3 を閉じました。関連する PR は 3 本あります', 'Issue #3 クローズ、PR 3 本').includes('kind_swap'))
+  assert.ok(!codes('Issue 3 件を片付けました。PR #3 を出しました', 'PR #3 作成').includes('kind_swap'), '本文の数も番号と読まない')
   // 英字の語の途中の pr には当てない
   assert.ok(!codes('Issue #5 を作りました', 'sprint #5 の準備').includes('kind_swap'))
 })

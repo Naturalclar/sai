@@ -224,12 +224,16 @@ function swappedActions(source: string, summary: string): string[] {
 /** PR を指す語・issue を指す語（番号の直前に来るもの）。英字の語の途中（`sprint 5` の `pr` など）には当てない */
 const PR_WORD = String.raw`(?:(?<![A-Za-z])PRs?|プルリク(?:エスト)?|pull\s+request)`
 const ISSUE_WORD = String.raw`(?:(?<![A-Za-z])issues?|イシュー)`
-/** 一言の中の「種類の語 + 番号」。**番号の直前の語だけ**見る（`PR を作成。#536 は…` の PR は #536 のことではない） */
-const SUMMARY_KIND = new RegExp(String.raw`(${PR_WORD}|${ISSUE_WORD})\s*#?(\d+)(?!\d)`, 'giu')
+/**
+ * 一言の中の「種類の語 + `#` + 番号」。**番号の直前の語だけ**見る（`PR を作成。#536 は…` の PR は #536 のことではない）。
+ * **`#` は必須**（無いと `PR 2 件` の数を #2 と読む。#542 のレビュー）
+ */
+const SUMMARY_KIND = new RegExp(String.raw`(${PR_WORD}|${ISSUE_WORD})\s*#(\d+)(?!\d)`, 'giu')
 
 /** 本文（と頼んだこと）が番号 n を PR / issue と呼んでいるか。語（`Issue #536`）と URL（`/issues/536`）の両方で見る */
 function kindsOf(text: string, n: string): { pr: boolean; issue: boolean } {
-  const num = String.raw`#?${n}(?!\d)`
+  // 語のあとは `#` 付きだけ（`Issue 3 件` の数を #3 と読まない）。URL はそのまま番号
+  const num = String.raw`#${n}(?!\d)`
   return {
     pr: new RegExp(String.raw`(?:${PR_WORD}\s*${num}|/pull/${n}(?!\d))`, 'iu').test(text),
     issue: new RegExp(String.raw`(?:${ISSUE_WORD}\s*${num}|/issues/${n}(?!\d))`, 'iu').test(text),

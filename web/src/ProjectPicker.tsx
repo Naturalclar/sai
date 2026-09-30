@@ -33,6 +33,8 @@ export function ProjectPicker({ selected, projects, onChange, place }: Props) {
   const items = ['', ...projectChoices(projects, selected)]
 
   const pick = (project: string) => onChange(project ? toggleProject(selected, project) : [])
+  // 候補から外れていた選択を外すと並びが短くなる。印を末尾に寄せる（はみ出したまま Enter で「すべて」に落ちないように。#532 のレビュー）
+  const at = Math.min(index, items.length - 1)
 
   useEffect(() => {
     if (!open) return
@@ -43,6 +45,12 @@ export function ProjectPicker({ selected, projects, onChange, place }: Props) {
     // メニューを開けている間の ↑↓ / Esc が裏の一覧を動かさない
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey || e.isComposing) return
+      // 選んでもメニューは開いたままなので、フォーカスが外へ出たら（→ や Tab で入力欄へ）閉じてキーは通す。
+      // 閉じないと入力欄で打った Enter / Space をここが食べて、リポジトリの入れ外しになる（#532 のレビュー）
+      if (!ref.current?.contains(document.activeElement)) {
+        setOpen(false)
+        return
+      }
       if (e.key === 'Escape') {
         e.preventDefault()
         e.stopPropagation()
@@ -53,13 +61,13 @@ export function ProjectPicker({ selected, projects, onChange, place }: Props) {
       if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
         e.preventDefault()
         e.stopPropagation()
-        setIndex((i) => moveIndex(i, items.length, e.key === 'ArrowDown' ? 'next' : 'prev'))
+        setIndex((i) => moveIndex(Math.min(i, items.length - 1), items.length, e.key === 'ArrowDown' ? 'next' : 'prev'))
         return
       }
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault()
         e.stopPropagation()
-        pick(items[index] ?? '')
+        pick(items[at] ?? '')
       }
     }
     document.addEventListener('mousedown', onDown)
@@ -96,7 +104,7 @@ export function ProjectPicker({ selected, projects, onChange, place }: Props) {
                 role="menuitemcheckbox"
                 aria-checked={on}
                 key={p || '(all)'}
-                className={`${on ? 'picked' : ''}${i === index ? ' at' : ''}`}
+                className={`${on ? 'picked' : ''}${i === at ? ' at' : ''}`}
                 onMouseEnter={() => setIndex(i)}
                 onClick={() => pick(p)}
               >

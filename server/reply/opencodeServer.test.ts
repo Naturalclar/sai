@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process'
 import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { OpencodeServer, isServeProcess, listeningUrl, promptBody } from './opencodeServer.ts'
+import { OPENCODE_CONTEXT_MESSAGES, OpencodeServer, isServeProcess, listeningUrl, promptBody } from './opencodeServer.ts'
 
 test('promptBody: 本文は text のパーツ。モデルは最初の / で割る（モデル名に / が入ることがある）', () => {
   assert.deepEqual(promptBody({ id: 'E', session: 'ses_1', text: 'やって' }), { parts: [{ type: 'text', text: 'やって' }] })
@@ -237,6 +237,46 @@ test('todos: サーバが立っていなければ起こさない。片方が落�
     const got = await app.todos('ses_abc')
     assert.equal(got.todos.length, 1, '引けた方は出す')
     assert.equal(got.children, 0, '落ちた方は 0')
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()))
+  }
+})
+
+test('context: 末尾のメッセージだけ引き、入力の量が 0 でない一番新しい返答の入力 3 つの和を返す（#396）', async () => {
+  const seen: string[] = []
+  const server: Server = createServer((req, res) => {
+    seen.push(req.url ?? '')
+    res.writeHead(200, { 'content-type': 'application/json' })
+    // 実機（1.18.30）の形。書いている最中の assistant は全部 0 で届く
+    res.end(JSON.stringify([
+      { info: { role: 'assistant', tokens: { total: 12847, input: 12749, output: 93, reasoning: 0, cache: { read: 5, write: 3 } } }, parts: [] },
+      { info: { role: 'user' }, parts: [] },
+      { info: { role: 'assistant', tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }, parts: [] },
+    ]))
+  })
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+  const addr = server.address()
+  const base = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`
+  try {
+    const app = new OpencodeServer(fetch, Date.now, async () => ({ url: base, auth: 'Basic dGVzdA==' }))
+    assert.equal(await app.context('ses_abc'), 12749 + 5 + 3)
+    assert.deepEqual(seen, [`/session/ses_abc/message?limit=${OPENCODE_CONTEXT_MESSAGES}`])
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()))
+  }
+})
+
+test('context: サーバが立っていなければ起こさずに 0。断られても 0（#396）', async () => {
+  assert.equal(await new OpencodeServer().context('ses_abc'), 0)
+  const server: Server = createServer((_req, res) => {
+    res.writeHead(404, { 'content-type': 'application/json' })
+    res.end('{}')
+  })
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+  const addr = server.address()
+  const base = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`
+  try {
+    assert.equal(await new OpencodeServer(fetch, Date.now, async () => ({ url: base, auth: 'Basic dGVzdA==' })).context('ses_nope'), 0)
   } finally {
     await new Promise<void>((r) => server.close(() => r()))
   }

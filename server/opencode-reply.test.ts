@@ -31,6 +31,8 @@ const sent: OpencodeTurnInput[] = []
 const skillCalls: string[] = []
 const modelCalls: string[] = []
 const todoCalls: string[] = []
+/** 読んだ量を聞かれたセッション（#396） */
+const contextCalls: string[] = []
 /** `POST /session` で作ったセッションの cwd（#452） */
 const startedSessions: string[] = []
 const started: { id: string; cmd: ReplyCommand }[] = []
@@ -100,6 +102,10 @@ const opencodeApp: OpencodeApp = {
       ],
       children: 1,
     }
+  },
+  async context(session: string) {
+    contextCalls.push(session)
+    return session === 'ses_1' ? 250_000 : 0
   },
   stop: () => {},
 } as OpencodeApp & { busy: boolean }
@@ -329,6 +335,15 @@ test('保留が残っていれば、pid が死んでいても畳まない（#422
   } finally {
     pending = []
   }
+})
+
+test('OpenCode の相手の大きさ（読み直す量）を本体に聞いて埋める（#396。#311 の予算がそのまま効く）', async () => {
+  const body = (await (await fetch(`${base}/api/sessions/ses_1%40r/progress`)).json()) as SessionProgressResponse
+  assert.equal(body.context_tokens, 250_000)
+  assert.ok(contextCalls.includes('ses_1'), 'エンティティ ID ではなく OpenCode のセッション ID で聞く')
+  const asked = contextCalls.length
+  await fetch(`${base}/api/sessions/ses_1%40r/progress`)
+  assert.equal(contextCalls.length, asked, '続けて聞かれても、しばらくは覚えた値を使う（sai_sessions は相手の数だけ一度に聞く）')
 })
 
 test('処理中の手順に、エージェント自身の段取りとサブセッションの数を足す（#397）', async () => {

@@ -4,7 +4,7 @@ import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { claudeProjectName, PROGRESS_IDLE_MS } from '../../shared/progress.ts'
-import { PROGRESS_TAIL_START, ProgressReader, sessionOf } from './progress.ts'
+import { OPENCODE_CONTEXT_TTL_MS, PROGRESS_TAIL_START, ProgressReader, sessionOf } from './progress.ts'
 
 const SID = '11111111-2222-3333-4444-555555555555'
 const j = (o: unknown) => JSON.stringify(o)
@@ -159,4 +159,36 @@ test('ProgressReader(Codex): sessions/YYYY/MM/DD の rollout をセッション 
       [['exec', 'cargo build']],
     )
   })
+})
+
+test('ProgressReader: OpenCode は読んだ量だけ本体に聞いて埋め、しばらく覚える（#396）', async () => {
+  let now = 1_000_000
+  const reader = new ProgressReader('/nonexistent', '/nonexistent', () => now)
+  const target = { id: 'ses_abc@r', repo: 'r', agent: 'opencode' as const, cwd: '/w' }
+  const none = { rev: '', id: 'ses_abc@r', active: false, steps: [], total: 0, updated_at: '', context_tokens: 0 }
+  assert.deepEqual(await reader.read(target), none, '聞き先を渡していなければ今までどおり空')
+
+  const asked: string[] = []
+  let size = 42_000
+  reader.useOpencode(async (session) => {
+    asked.push(session)
+    return size
+  })
+  const got = await reader.read(target)
+  assert.equal(got.context_tokens, 42_000)
+  assert.deepEqual(got.steps, [], '手順は空のまま（transcript は無い）')
+  assert.deepEqual(asked, ['ses_abc'], 'エンティティ ID ではなくセッション ID で聞く')
+  size = 90_000
+  assert.equal((await reader.read(target)).context_tokens, 42_000, '覚えている間は聞き直さない')
+  assert.equal(asked.length, 1)
+  now += OPENCODE_CONTEXT_TTL_MS
+  const later = await reader.read(target)
+  assert.equal(later.context_tokens, 90_000, '時間が経てば聞き直す')
+  assert.notEqual(later.rev, got.rev, '大きさが変われば rev も変わる')
+
+  reader.useOpencode(async () => {
+    throw new Error('opencode serve が落ちた')
+  })
+  now += OPENCODE_CONTEXT_TTL_MS
+  assert.deepEqual(await reader.read(target), none, '聞けなければ空（予算の判定は「分からない相手は足さない」のまま）')
 })

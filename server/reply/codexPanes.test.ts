@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, symlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, sep } from 'node:path'
 import test from 'node:test'
@@ -42,6 +42,7 @@ function fakeTmux(listed = PANES): Tmux & { calls: string[][] } {
 
 const SESSION = '01a06af3-618b-7eb3-bb03-a52279ff2235'
 const OTHER = '01a06b05-0201-7d81-b47d-7466519583ff'
+const THIRD = '01a06c00-0000-7000-8000-000000000003'
 
 /** 本物の rollout（`session_meta` の 1 行だけ）を書く。返すのはそのパス */
 async function writeRollout(dir: string, name: string, session: string, cwd: string): Promise<string> {
@@ -210,11 +211,29 @@ test('rolloutSessionAtStart: TUI の起動秒・cwd と一致する一意の rol
   const home = await mkdtemp(join(tmpdir(), 'sai-start-'))
   const dir = join(home, 'sessions', '2026', '09', '11')
   await mkdir(dir, { recursive: true })
-  await writeRollout(dir, `rollout-2026-09-11T15-28-50-${OTHER}.jsonl`, OTHER, '/repo/one')
+  // 1 秒前の会話は、起動より前に書き終わっている（起動後も書かれていれば当てない。下のテスト）
+  const before = await writeRollout(dir, `rollout-2026-09-11T15-28-50-${OTHER}.jsonl`, OTHER, '/repo/one')
+  await utimes(before, new Date(2026, 8, 11, 15, 28, 50), new Date(2026, 8, 11, 15, 28, 50))
   await writeRollout(dir, `rollout-2026-09-11T15-28-51-${SESSION}.jsonl`, SESSION, '/repo/one')
   const find = rolloutSessionAtStart({ CODEX_HOME: home }, async () => 'Fri Sep 11 15:28:51 2026 codex\n')
   assert.equal(await find(101, '/repo/one'), SESSION)
   assert.equal(await find(101, '/repo/other'), '', '開始秒が同じでも cwd が違えば当てない')
+})
+
+test('rolloutSessionAtStart: 起動後に同じ cwd の別の rollout が書かれていれば当てない（/new・/resume。#557 のレビュー）', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'sai-start-'))
+  const dir = join(home, 'sessions', '2026', '09', '11')
+  await mkdir(dir, { recursive: true })
+  await writeRollout(dir, `rollout-2026-09-11T15-28-51-${SESSION}.jsonl`, SESSION, '/repo/one')
+  const find = rolloutSessionAtStart({ CODEX_HOME: home }, async () => 'Fri Sep 11 15:28:51 2026 codex\n')
+  // 別の cwd の会話が書かれても当てたまま
+  const other = join(home, 'sessions', '2026', '09', '12')
+  await mkdir(other, { recursive: true })
+  await writeRollout(other, `rollout-2026-09-12T09-00-00-${OTHER}.jsonl`, OTHER, '/repo/other')
+  assert.equal(await find(101, '/repo/one'), SESSION)
+  // 同じ cwd の会話（TUI の中で /new した先）が書かれたら、どちらが映っているか分からないので当てない
+  await writeRollout(other, `rollout-2026-09-12T09-00-01-${THIRD}.jsonl`, THIRD, '/repo/one')
+  assert.equal(await find(101, '/repo/one'), '')
 })
 
 test('rolloutSessionAtStart: 単発実行・subcommand と曖昧な候補は当てない', async () => {

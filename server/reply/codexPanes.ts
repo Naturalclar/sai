@@ -18,7 +18,7 @@
 // **開始秒と rollout 名が一致**し、さらに cwd も一致する一意のものへ落とす（#448）。
 // **それでも引けなければ当てない**（`session` は空。材料が無いのに決めつけない）。
 import { execFile } from 'node:child_process'
-import { open, readdir, realpath } from 'node:fs/promises'
+import { open, readdir, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join, sep } from 'node:path'
 import { isDescendant, type PsFn, type Tmux } from './terminal.ts'
@@ -230,8 +230,34 @@ export function rolloutSessionAtStart(env: NodeJS.ProcessEnv = process.env, run:
       const parsed = parseRolloutHead(await head(join(dir, name)), UUID.exec(name)?.[1] ?? '')
       if (parsed.cwd === cwd && parsed.session) sessions.add(parsed.session)
     }
-    return sessions.size === 1 ? [...sessions][0]! : ''
+    if (sessions.size !== 1) return ''
+    const [session] = [...sessions]
+    // 起動したあとに TUI の中で `/new`・`/resume` すると、開始秒の rollout は最初の会話のまま（いま映っているのは別の会話）。
+    // 起動より後に書かれた同じ cwd の rollout がほかに 1 本でもあれば当てない（#557 のレビュー）
+    return (await touchedSince(root, at, cwd, session!)) ? '' : session!
   }
+}
+
+/** `root` の下に、`since` より後に書かれた `cwd` の rollout が `except` のほかにあるか。読めなければ「ある」 */
+async function touchedSince(root: string, since: Date, cwd: string, except: string): Promise<boolean> {
+  let names: string[]
+  try {
+    names = await readdir(root, { recursive: true })
+  } catch {
+    return true
+  }
+  for (const name of names) {
+    if (!basename(name).startsWith('rollout-') || !name.endsWith('.jsonl')) continue
+    const path = join(root, name)
+    try {
+      if ((await stat(path)).mtimeMs < since.getTime()) continue
+    } catch {
+      continue
+    }
+    const parsed = parseRolloutHead(await head(path), UUID.exec(basename(name))?.[1] ?? '')
+    if (parsed.cwd === cwd && parsed.session && parsed.session !== except) return true
+  }
+  return false
 }
 
 /** ファイルの頭だけを読む（rollout は手元で 12MB ある。`session_meta` は 1 行目） */

@@ -304,6 +304,41 @@
   .todo.done { border-left: 3px solid var(--line); opacity: 0.75; }
   .todo.done:hover { opacity: 1; }
   .todo-section { margin: 6px 0 0; font-size: 12px; font-weight: 700; color: var(--muted); }
+  /* GitHub に出ている PR（#524）。一覧はリポジトリごとの塊、1 本の画面は本文と差分を縦に並べて全体を流す */
+  .pr-list, .pr-body { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding-bottom: 8px; }
+  .pr-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+  .pr-actions button { font: inherit; font-size: 12px; padding: 3px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); cursor: pointer; }
+  .pr-actions button.on { border-color: var(--accent); color: var(--accent); }
+  .pr-actions button:disabled { opacity: .6; cursor: default; }
+  .pr-repo h2 { display: flex; align-items: baseline; gap: 8px; margin: 0 0 6px; font-size: 13px; color: var(--muted); }
+  .pr-repo h2 a { color: inherit; }
+  .pr-repo h2 .n { font-weight: 400; }
+  .pr-repo .none { color: var(--muted); font-size: 12px; padding: 2px 0 6px; }
+  .pr-row { display: flex; flex-direction: column; gap: 3px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: inherit; margin-bottom: 6px; }
+  .pr-row:hover { text-decoration: none; border-color: var(--accent); }
+  .pr-row.requested { border-left: 3px solid var(--accent); }
+  .pr-row.draft .pr-title { color: var(--muted); }
+  .pr-row .pr-title { font-weight: 600; overflow-wrap: anywhere; }
+  .pr-title .num, .pr-view h1 .num { color: var(--muted); font-weight: 400; }
+  .pr-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 12px; color: var(--muted); }
+  .pr-meta .tag { margin-left: 0; }
+  .pr-meta .branch { font-family: var(--mono); font-size: 11px; max-width: 16em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pr-meta .counts .add { color: var(--codex); font-family: var(--mono); }
+  .pr-meta .counts .del { color: var(--claude); font-family: var(--mono); }
+  .pr-meta .ago { margin-left: auto; }
+  .pr-view .pr-meta .ago { margin-left: 0; }
+  .pr-meta .check.success { color: var(--codex); }
+  .pr-meta .check.failure { color: var(--claude); font-weight: 600; }
+  .pr-meta .check.pending { color: var(--synth); }
+  .pr-meta .review.changes_requested { color: var(--claude); }
+  .pr-meta .review.approved { color: var(--codex); }
+  .tag.requested { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); font-weight: 600; }
+  .tag.state.open { background: color-mix(in srgb, var(--codex) 16%, transparent); color: var(--codex); font-weight: 600; }
+  .tag.state.merged { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); font-weight: 600; }
+  .pr-view .pr-back { display: inline-block; margin-bottom: 6px; }
+  .pr-description { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--panel); overflow-wrap: anywhere; }
+  .pr-description .none, .pr-view .warn { color: var(--muted); font-size: 12px; }
+  .pr-view .warn { color: var(--synth); }
   /* 1 行に収める（折り返すと「N 待っている」だけが次の行の右端に飛ぶ）。溢れる名前は … で切る */
   .todo .who { display: flex; align-items: center; gap: 6px; color: inherit; font-size: 13px; min-width: 0; }
   .todo .who:hover { text-decoration: none; }
@@ -392,7 +427,7 @@
     header .sidebar-toggle { display: none; }
     main.layout, main.layout.sidebar-closed, main.layout.diff-open, main.layout.sidebar-closed.diff-open { grid-template-columns: minmax(0, 1fr); transition: none; }
     .diff-pane { display: none; }
-    main.route-feed .sidebar, main.route-session .sidebar, main.route-todo .sidebar, main.route-new .sidebar { display: none; }
+    main.route-feed .sidebar, main.route-session .sidebar, main.route-todo .sidebar, main.route-new .sidebar, main.route-prs .sidebar, main.route-pr .sidebar { display: none; }
     /* 「閉じた」を無視して、#/ では一覧を必ず出す */
     main.layout.route-list .sidebar { display: block; visibility: visible; }
     main.route-list .pane { display: none; }

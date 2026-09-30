@@ -13,6 +13,10 @@ export type Route =
   | { name: 'todo' }
   /** 新しいセッションを始める（#314） */
   | { name: 'new' }
+  /** GitHub に出ている PR の一覧（#524） */
+  | { name: 'prs' }
+  /** PR 1 本（#524）。`repo` は `owner/repo` */
+  | { name: 'pr'; repo: string; number: number }
 
 /** 発言のどちら側か（#503）。`me` = 自分の入力、`agent` = エージェントの発言 */
 export type MessageSide = 'me' | 'agent'
@@ -38,6 +42,17 @@ export function parseRoute(hash: string): Route {
   // 要対応（#224）。いま自分を待っているものだけ
   if (hash === '#/todo') return { name: 'todo' }
   if (hash === '#/new') return { name: 'new' }
+  // GitHub の PR（#524）。1 本は `#/pr/<owner>/<repo>/<番号>`（番号は数字だけ。壊れていれば一覧へ）
+  if (hash === '#/prs') return { name: 'prs' }
+  const pr = hash.match(/^#\/pr\/([^/?#]+)\/([^/?#]+)\/([1-9][0-9]{0,8})$/)
+  if (pr) {
+    try {
+      return { name: 'pr', repo: `${decodeURIComponent(pr[1]!)}/${decodeURIComponent(pr[2]!)}`, number: Number(pr[3]) }
+    } catch {
+      return { name: 'prs' }
+    }
+  }
+  if (hash.startsWith('#/pr/')) return { name: 'prs' }
   return { name: 'list' }
 }
 

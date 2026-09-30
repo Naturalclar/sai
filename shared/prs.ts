@@ -29,15 +29,17 @@ export function githubRepoOf(remote: string | undefined): string {
 
 /**
  * 並べるリポジトリ。**SAI が記録で知っているもの**（セッションの remote が GitHub のもの）だけで、
- * 画面から任意のリポジトリ名を受けて `gh` に渡すことはしない。出てきた順（= 新しいセッションの順）のまま重複を落とす
+ * 画面から任意のリポジトリ名を受けて `gh` に渡すことはしない。出てきた順（= 新しいセッションの順）のまま重複を落とす。
+ * **重複は大文字小文字を見ずに落とし、最初に出てきた書き方を残す**（GitHub の名前は大文字小文字を区別しないので、
+ * origin の書き方が違うだけの worktree があると、同じリポジトリの PR が 2 回並び `gh` も 2 倍叩いていた。#533 のレビュー）
  */
 export function knownRepos(sessions: readonly { remote?: string }[]): string[] {
-  const seen = new Set<string>()
+  const seen = new Map<string, string>()
   for (const s of sessions) {
     const repo = githubRepoOf(s.remote)
-    if (repo) seen.add(repo)
+    if (repo && !seen.has(repo.toLowerCase())) seen.set(repo.toLowerCase(), repo)
   }
-  return [...seen]
+  return [...seen.values()]
 }
 
 /** 大文字小文字を見ずに、知っているリポジトリの中から名前を引く（URL に書かれた形の揺れを吸う）。無ければ空 */

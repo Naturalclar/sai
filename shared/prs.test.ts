@@ -40,6 +40,16 @@ test('knownRepos: 出てきた順のまま重複を落とす。GitHub 以外と 
   assert.deepEqual(repos, ['a/one', 'b/three'])
 })
 
+test('knownRepos: 大文字小文字だけが違う書き方は 1 つにまとめ、最初の書き方を残す（#533 のレビュー）', () => {
+  const repos = knownRepos([
+    { remote: 'https://github.com/Naturalclar/sai' },
+    { remote: 'git@github.com:naturalclar/sai.git' },
+    { remote: 'https://github.com/NATURALCLAR/SAI' },
+  ])
+  assert.deepEqual(repos, ['Naturalclar/sai'], '同じリポジトリの PR を 2 回並べない・gh を 2 倍叩かない')
+  assert.equal(pickKnownRepo(repos, 'naturalclar/sai'), 'Naturalclar/sai', 'URL に書かれた形からも同じ 1 つを引ける')
+})
+
 test('pickKnownRepo: 知っているものだけを、知っている形で返す（大文字小文字は見ない）', () => {
   assert.equal(pickKnownRepo(['Naturalclar/sai'], 'naturalclar/SAI'), 'Naturalclar/sai')
   assert.equal(pickKnownRepo(['Naturalclar/sai'], 'someone/else'), '')

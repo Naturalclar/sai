@@ -974,7 +974,7 @@ export function createApp(
     // 人の入力が来たかは、置いた時刻より後のそのセッションの行で見る。24 時間は日付を 2 つまたぐので、窓が 1 日でも 2 日ぶん読む
     const nowMs = Date.now()
     const live = new Map<string, ManagerDraft>()
-    const placed = new Map(sessions.filter((s) => drafts[s.id]).map((s) => [s.id, s.agent]))
+    const placed = new Set(sessions.map((s) => s.id).filter((id) => drafts[id]))
     if (placed.size > 0) {
       const rowsOf = new Map<string, FeedRow[]>()
       for (const r of days >= 2 ? rows : await store.rows(2)) {
@@ -984,8 +984,8 @@ export function createApp(
         if (list) list.push(r)
         else rowsOf.set(id, [r])
       }
-      for (const [id, agent] of placed) {
-        const d = liveManagerDraft(drafts[id], rowsOf.get(id) ?? [], agent, nowMs)
+      for (const id of placed) {
+        const d = liveManagerDraft(drafts[id], rowsOf.get(id) ?? [], nowMs)
         if (d) live.set(id, d)
       }
     }

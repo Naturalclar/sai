@@ -33,8 +33,10 @@ const gallery = async (id = ID) => (await (await fetch(`${base}/api/sessions/${e
 const image = (key: string, id = ID) => fetch(`${base}/api/sessions/${encodeURIComponent(id)}/codex-images/${encodeURIComponent(key)}`)
 
 /** rollout の item_completed の 1 行 */
-const completed = (at: Date, item: Record<string, unknown>) =>
-  JSON.stringify({ timestamp: at.toISOString(), type: 'event_msg', payload: { type: 'item_completed', thread_id: THREAD, item } }) + '\n'
+const completed = (at: Date, item: Record<string, unknown>, turn = 'T1') =>
+  JSON.stringify({ timestamp: at.toISOString(), type: 'event_msg', payload: { type: 'item_completed', thread_id: THREAD, turn_id: turn, item } }) + '\n'
+/** ターンが閉じた印 */
+const turnEnd = (at: Date, turn: string, type = 'task_complete') => JSON.stringify({ timestamp: at.toISOString(), type: 'event_msg', payload: { type, turn_id: turn } }) + '\n'
 
 before(async () => {
   dir = await mkdtemp(join(tmpdir(), 'sai-codex-images-'))
@@ -71,7 +73,8 @@ before(async () => {
       completed(at, { type: 'Extension', kind: 'image_gen.generation', id: 'exec-svg', status: 'completed' }) +
       completed(at, { type: 'Extension', kind: 'image_gen.generation', id: 'exec-link', status: 'completed' }) +
       // 失敗した生成は数えない
-      completed(at, { type: 'Extension', kind: 'image_gen.generation', id: 'exec-other', status: 'failed' }),
+      completed(at, { type: 'Extension', kind: 'image_gen.generation', id: 'exec-other', status: 'failed' }) +
+      turnEnd(now, 'T1'),
   )
   const lines = [
     row(now, THREAD, { repo: 'repo', cwd, agent: 'codex', text: '生成しました。', user_text: 'キャラクターを描いて' }),
@@ -137,4 +140,24 @@ test('imageMention: 生成は item id、見せた画像はそのスレッドの�
   assert.equal(imageMention(ev({ type: 'ImageView', path: 'file:///h/.codex/generated_images/T2/a.png' }), threadDir), null, '別のスレッド')
   assert.equal(imageMention(ev({ type: 'ImageView', path: 'file:///h/.codex/generated_images/T1/sub/a.png' }), threadDir), null, '直下だけ')
   assert.equal(imageMention({ type: 'response_item', payload: {} }, threadDir), null)
+})
+
+test('gallery: 行を書かずに終わったターン（エラー・止めた）の画像は、次のターンの返答に付けない。閉じていないターンの画像も付けない（#576 のレビュー）', async () => {
+  const t0 = new Date(Date.now() + 60_000)
+  await writeFile(join(gen, THREAD, 'exec-lost.png'), PNG)
+  await writeFile(join(gen, THREAD, 'exec-open.png'), PNG)
+  // T2 は画像を作ってから止めて閉じた（行は書かれない）。そのあと別のターンの行が届く。T4 はまだ回っている
+  await appendFile(
+    rollout,
+    completed(t0, { type: 'Extension', kind: 'image_gen.generation', id: 'exec-lost', status: 'completed' }, 'T2') +
+      turnEnd(t0, 'T2', 'turn_aborted') +
+      completed(new Date(t0.getTime() + 60_000), { type: 'Extension', kind: 'image_gen.generation', id: 'exec-open', status: 'completed' }, 'T4'),
+  )
+  await appendFile(join(dir, 'feed', `${localDate(t0.toISOString())}.jsonl`), JSON.stringify(row(new Date(t0.getTime() + 30_000), THREAD, { repo: 'repo', cwd: join(dir, 'work'), agent: 'codex', text: '次のターン' })) + '\n')
+  const items = (await gallery()).items
+  const lost = items.find((i) => i.url.endsWith('exec-lost.png'))
+  assert.ok(lost, '一覧には出る（配れる）')
+  assert.equal(lost.ts, '', '次のターンの返答には付けない')
+  assert.equal(items.find((i) => i.url.endsWith('exec-open.png'))?.ts, '', 'まだ閉じていないターンの画像は付けない')
+  assert.notEqual(items.find((i) => i.url.endsWith('exec-gen1.png'))?.ts, '', '閉じたターンの画像は今までどおり付く')
 })

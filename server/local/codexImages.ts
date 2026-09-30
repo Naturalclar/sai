@@ -27,6 +27,12 @@ export interface CodexImage {
   key: string
   /** rollout のその行の `timestamp`（ISO） */
   at: string
+  /**
+   * 作ったターンが閉じた時刻（`task_complete` / `turn_aborted` の `timestamp`）。まだ閉じていなければ空。
+   * 付ける返答の行はこの時刻まで（#576 のレビュー。行を書かずに終わったターン——エラーで終わると Codex は notify を
+   * 鳴らさない（#475）・止めた——の画像が、次のターンの返答に付かないように）
+   */
+  until: string
 }
 
 /** スレッドの ID と鍵。どちらも名前 1 つぶんだけ（`/` や `..` を含まない） */
@@ -38,19 +44,23 @@ interface Mention {
   id: string
   exact: boolean
   at: string
+  /** どのターンで作ったか（`item_completed` の `turn_id`） */
+  turn: string
 }
 
 interface Scan {
   mtimeMs: number
   scanned: number
   mentions: Mention[]
+  /** ターン → 閉じた時刻 */
+  ends: Map<string, string>
 }
 
 /**
  * rollout の 1 行から、そのスレッドの置き場の画像への言及を取る。生成（`image_gen.generation`）は item id、
  * 見せた画像（`ImageView`）はパスがそのスレッドの置き場の直下のときだけファイル名
  */
-export function imageMention(line: unknown, threadDir: string): Omit<Mention, 'at'> | null {
+export function imageMention(line: unknown, threadDir: string): Omit<Mention, 'at' | 'turn'> | null {
   const row = line as { type?: unknown; payload?: { type?: unknown; item?: Record<string, unknown> } } | null
   if (!row || row.type !== 'event_msg' || row.payload?.type !== 'item_completed') return null
   const item = row.payload.item
@@ -91,9 +101,10 @@ export class CodexImages {
     const dir = this.threadDir(thread)
     if (!rollout || !dir) return []
     let mentions: Mention[]
+    let ends: Map<string, string>
     let files: string[]
     try {
-      mentions = await this.scan(rollout, dir)
+      ;({ mentions, ends } = await this.scan(rollout, dir))
       if (mentions.length === 0) return []
       files = (await readdir(dir)).filter((n) => NAME_RE.test(n))
     } catch {
@@ -105,7 +116,7 @@ export class CodexImages {
       const key = m.exact ? (files.includes(m.id) ? m.id : '') : (files.find((n) => n.startsWith(`${m.id}.`)) ?? '')
       if (!key || seen.has(key)) continue
       seen.add(key)
-      out.push({ key, at: m.at })
+      out.push({ key, at: m.at, until: ends.get(m.turn) ?? '' })
     }
     return out
   }
@@ -132,14 +143,15 @@ export class CodexImages {
     }
   }
 
-  private async scan(path: string, threadDir: string): Promise<Mention[]> {
+  private async scan(path: string, threadDir: string): Promise<{ mentions: Mention[]; ends: Map<string, string> }> {
     const st = await stat(path)
     let prev = this.scans.get(path)
     // 縮んだ（作り直された）ら最初から
     if (prev && st.size < prev.scanned) prev = undefined
-    if (prev && st.size === prev.scanned && st.mtimeMs === prev.mtimeMs) return prev.mentions
+    if (prev && st.size === prev.scanned && st.mtimeMs === prev.mtimeMs) return prev
     const from = prev?.scanned ?? 0
     const mentions = prev ? [...prev.mentions] : []
+    const ends = new Map(prev?.ends ?? [])
     let scanned = from
     if (st.size > from) {
       const fh = await open(path, 'r')
@@ -149,16 +161,22 @@ export class CodexImages {
         const chunk = buf.subarray(0, bytesRead)
         // 書きかけの最後の行は次に回す
         const end = chunk.lastIndexOf(0x0a) + 1
-        const markers = [Buffer.from('image_gen.generation'), Buffer.from('"ImageView"')]
+        const markers = [Buffer.from('image_gen.generation'), Buffer.from('"ImageView"'), Buffer.from('"task_complete"'), Buffer.from('"turn_aborted"')]
         let start = 0
         while (start < end) {
           const nl = chunk.indexOf(0x0a, start)
           const line = chunk.subarray(start, nl)
           if (markers.some((m) => line.includes(m))) {
             try {
-              const row = JSON.parse(line.toString('utf-8')) as { timestamp?: unknown }
-              const hit = imageMention(row, threadDir)
-              if (hit) mentions.push({ ...hit, at: typeof row.timestamp === 'string' ? row.timestamp : '' })
+              const row = JSON.parse(line.toString('utf-8')) as { timestamp?: unknown; type?: unknown; payload?: { type?: unknown; turn_id?: unknown } }
+              const at = typeof row.timestamp === 'string' ? row.timestamp : ''
+              const turn = typeof row.payload?.turn_id === 'string' ? row.payload.turn_id : ''
+              if (row.type === 'event_msg' && (row.payload?.type === 'task_complete' || row.payload?.type === 'turn_aborted')) {
+                if (turn && at) ends.set(turn, at)
+              } else {
+                const hit = imageMention(row, threadDir)
+                if (hit) mentions.push({ ...hit, at, turn })
+              }
             } catch {
               // 壊れた行は飛ばす
             }
@@ -170,7 +188,8 @@ export class CodexImages {
         await fh.close()
       }
     }
-    this.scans.set(path, { mtimeMs: st.mtimeMs, scanned, mentions })
-    return mentions
+    const next = { mtimeMs: st.mtimeMs, scanned, mentions, ends }
+    this.scans.set(path, next)
+    return next
   }
 }

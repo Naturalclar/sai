@@ -221,6 +221,11 @@ const TURN_SUFFIX = '/turn'
 const TRANSCRIPT_IMAGES_SEGMENT = '/transcript-images/'
 /** `GET /api/sessions/<id>/codex-images/<key>`（#575）。Codex の画像生成で作った画像。鍵は一覧で見つけたファイル名だけ */
 const CODEX_IMAGES_SEGMENT = '/codex-images/'
+/**
+ * Codex のターンが閉じてから notify の行が書かれるまでの遅れ（#576 のレビュー）。行の `ts` は秒までで、record.py は
+ * notify で起きてから rollout を読むので、実データでは同じ秒だった。余裕を見て数秒
+ */
+const CODEX_ROW_SLACK_MS = 5_000
 const ATTACHMENTS_SUFFIX = '/attachments'
 /** 預かった返信（#305）。`DELETE /api/sessions/<id>/queue/<queue_id>` と `POST /api/sessions/<id>/queue/resume` */
 const QUEUE_SEGMENT = '/queue/'
@@ -2938,13 +2943,15 @@ export function createApp(
               source: 'transcript' as const,
             }))
           : []
-        // 画像を作ったターンの返答のバブルの下に出す（作った時刻以降で一番古い返答の行）
+        // 画像を作ったターンの返答のバブルの下に出す（作った時刻以降で一番古い返答の行）。**そのターンが閉じた時刻まで**の行だけ
+        // （#576 のレビュー）: エラーで終わった・止めたターンは行を書かないので、上限が無いと次のターンの返答に付く。
+        // まだ閉じていないターンの画像は付けない（行が来ていない）
         const generated: GalleryItem[] = rollout
           ? (await codexImages.list(rollout, thread)).map((g) => ({
               url: `${SESSIONS_PREFIX}${encodeURIComponent(id)}${CODEX_IMAGES_SEGMENT}${encodeURIComponent(g.key)}`,
               name: '生成した画像',
               at: g.at,
-              ts: rowTsAtOrAfter(own, g.at, 'agent'),
+              ts: g.until ? rowTsAtOrAfter(own.filter((r) => Date.parse(String(r.ts ?? '')) <= Date.parse(g.until) + CODEX_ROW_SLACK_MS), g.at, 'agent') : '',
               from: 'agent' as const,
               source: 'generated' as const,
             }))

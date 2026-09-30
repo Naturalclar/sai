@@ -2209,12 +2209,6 @@ export function createApp(
   }
 
   /**
-   * GET /api/sessions/<id>/progress（#302）。処理中のターンがいま何をしているか。transcript / rollout の末尾を読むだけ。
-   * パスは行の cwd とセッション ID から組み立てる（リクエストからは受けない）。3 秒のポーリングには乗せない
-   * （画面が処理中のセッションを出している間だけ、そのセッションの分を取る）。
-   * 別のマシンのセッションは transcript がこちらに無いので読まない（同じ ID のファイルがあっても別物）
-   */
-  /**
    * GET /api/sessions/<id>/turn?ts=（#537）。そのセッションの、`ts` のターン完了の行。`ts` が無ければ一番新しいもの。
    * 要対応の「終了」の行で一言（要約）のもとの本文を開くためで、**押したときに 1 回だけ**取る（一覧のポーリングには載せない）。
    * 一言は `(id, last_turn_ts)` で引いているので、同じ `ts` を渡せば同じ行が返る（新しいターンが届いていても取り違えない）。
@@ -2229,6 +2223,12 @@ export function createApp(
     return json(res, payload)
   }
 
+  /**
+   * GET /api/sessions/<id>/progress（#302）。処理中のターンがいま何をしているか。transcript / rollout の末尾を読むだけ。
+   * パスは行の cwd とセッション ID から組み立てる（リクエストからは受けない）。3 秒のポーリングには乗せない
+   * （画面が処理中のセッションを出している間だけ、そのセッションの分を取る）。
+   * 別のマシンのセッションは transcript がこちらに無いので読まない（同じ ID のファイルがあっても別物）
+   */
   const getProgress = async (res: ServerResponse, id: string, days: number) => {
     const { sessions } = await store.sessions(days)
     const session = sessions.find((s) => s.id === id)

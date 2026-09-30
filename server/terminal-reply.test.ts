@@ -52,11 +52,9 @@ const codexTerminals = {
     codexTerminals.asked.push(session)
     return session === 'X4' && pane === '%11' ? 204 : 0
   },
-  /** 行の pid（生きている）がペインの端末として使えるか（#562）。207 は共有の app-server（ペインの外）で、%15 の TUI 208 がその客 */
-  async owner(pane: string, pid: number) {
-    if (pid === 207) return pane === '%15' ? 208 : 0
-    if (pid === 209) return 0
-    return pid
+  /** 行の pid（生きている）がペインの中か（#562）。207 は共有の app-server（ペインの外） */
+  async owner(_pane: string, pid: number) {
+    return pid === 207 ? 0 : pid
   },
 }
 
@@ -87,7 +85,7 @@ class FakeTmux implements Tmux {
   }
 }
 const tmux = new FakeTmux()
-const alivePids = new Set([200, 201, 204, 205, 206, 207, 208, 209])
+const alivePids = new Set([200, 201, 204, 205, 206, 207])
 const now = new Date()
 const min = (n: number) => n * 60_000
 
@@ -114,10 +112,8 @@ before(async () => {
       JSON.stringify(row(new Date(now.getTime() - min(1)), 'X4', { agent: 'codex', repo: 'r', cwd: work, pane: '%11', pid: 303, session_source: 'rollout' })),
       // lock を開かない Codex（実測: 0.154.0。lock は共有の app-server が握る）。ペインも移っている（#417）
       JSON.stringify(row(new Date(now.getTime() - min(1)), 'X5', { agent: 'codex', repo: 'r', cwd: work, pane: '%12', pid: 304, session_source: 'rollout' })),
-      // 行の pid が共有の `codex app-server --listen`（生きているがペインの外）。%15 の TUI がその客（#562）
+      // 行の pid が共有の `codex app-server --listen`（生きているがペインの外。#562）
       JSON.stringify(row(new Date(now.getTime() - min(1)), 'X6', { agent: 'codex', repo: 'r', cwd: work, pane: '%15', pid: 207, session_source: 'rollout' })),
-      // 同じくペインの外だが、ペインに客の TUI がいない
-      JSON.stringify(row(new Date(now.getTime() - min(1)), 'X7', { agent: 'codex', repo: 'r', cwd: work, pane: '%16', pid: 209, session_source: 'rollout' })),
     ].join('\n') + '\n',
   )
   const app = createApp(
@@ -182,11 +178,10 @@ test('一覧: 記録した pid が死んでいる Codex は、lock を握って�
   assert.ok(!codexTerminals.asked.includes('X1'), 'pid が生きていれば引き直さない')
 })
 
-test('一覧: Codex の行の pid がペインの外（共有の app-server）なら、そのペインの客の TUI を端末にする（#562）', async () => {
+test('一覧: Codex の行の pid がペインの外（共有の app-server）なら、生きていても端末にしない（#562）', async () => {
   const data = await sessions()
   const by = Object.fromEntries(data.sessions.map((s) => [s.id, s.terminal]))
-  assert.deepEqual(by['X6@r'], { pane: '%15', pid: 208 }, '生きているだけの app-server の pid を端末にしない')
-  assert.equal(by['X7@r'], null, 'ペインに客がいなければ端末にしない（下の補欠でも見つからない）')
+  assert.equal(by['X6@r'], null, '生きているだけの app-server の pid を端末にしない（下の補欠でも見つからない）')
   assert.deepEqual(by['X1@r'], { pane: '%10', pid: 201 }, 'ペインの中の pid は今までどおり')
   assert.deepEqual(by['T1@r'], { pane: '%9', pid: 200 }, 'Claude は今までどおり')
 })

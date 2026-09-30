@@ -286,12 +286,19 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
                 return <SessionEndLine key={`end:${end.key}`} text={end.text} ts={end.row.ts} />
               }
               const who = speakerLabel(g.speaker, byId.get(id), profile)
+              // 送ったメッセージへの返答（#588）。名前は相手の呼び名にし、相手のセッションへのリンクを添える
+              const reply = g.items[0]?.reply
               return (
-                <div className="group" key={`${g.speaker}:${g.session}:${g.firstTs}`}>
+                <div className={`group${reply ? ' agent-reply' : ''}`} key={`${g.speaker}:${g.session}:${g.firstTs}`}>
                   <div className={`avatar ${g.speaker}`}>{who.icon ? <img src={who.icon} alt="" /> : who.mark}</div>
                   <div>
                     <div className="gh">
-                      <span className="name">{who.name}</span>
+                      <span className="name">{reply ? reply.to_name : who.name}</span>
+                      {reply && (
+                        <a className="reply-of" href={`#/s/${encodeURIComponent(id)}`} title={`送ったメッセージ（id: ${reply.message_id}）への返答。押すと相手のセッションを開く`}>
+                          送ったメッセージへの返答
+                        </a>
+                      )}
                       {showChannel && (
                         <a className="ch" href={`#/s/${encodeURIComponent(id)}`} title={g.session}>#{g.repo}</a>
                       )}
@@ -319,7 +326,8 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
                             text: messageCopyText(u.text, side),
                             clipped: u.clipped,
                             // 未読に戻せるのは返答だけ（#502。未読に数えるのは返答なので）
-                            ...(onMarkUnread && side === 'agent' ? { onMarkUnread: () => onMarkUnread(u.row.ts) } : {}),
+                            // 返答（#588）は相手のセッションの行なので、このセッションの未読には戻せない
+                            ...(onMarkUnread && side === 'agent' && !u.reply ? { onMarkUnread: () => onMarkUnread(u.row.ts) } : {}),
                           }
                       // 自分の入力は Markdown にしない（打ったままを出す）。エージェントの返答は Markdown。
                       // 一言があるバブルには「変？」を出す（#346）。鍵はサーバ（作る側）と同じ関数で作る

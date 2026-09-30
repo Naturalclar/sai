@@ -7,10 +7,13 @@ import {
   AGENT_OVERLAP_SHOW,
   agentEntry,
   agentOverlap,
+  agentReplyRows,
+  replierName,
   agentTargets,
   budgetRefusal,
   clipReply,
   deliveredFromTailnet,
+  deliveredId,
   deliveredText,
   isDeliveryOf,
   replyOf,
@@ -57,6 +60,39 @@ test('replyOf: 相手のターン完了の行のうち、そのメッセージ�
   ] as FeedRow[]
   assert.equal(replyOf(rows, 'B1@r', 'm1')?.text, '見ました', '入力の行・待ちの行・別の相手・別の id は見ない')
   assert.equal(replyOf(rows, 'B1@r', 'm3'), null, 'まだ終わっていない')
+})
+
+test('deliveredId / agentReplyRows: 送ったメッセージへの返答（相手のターン完了の行）に印を付け、古い順に返す（#588）', () => {
+  const m1 = deliveredText({ label: '実装', project: 'o/r' }, 'a1b2', '見て')
+  const m2 = deliveredText({ label: '実装', project: 'o/r' }, 'c3d4', '別件')
+  assert.equal(deliveredId(m1), 'a1b2')
+  assert.equal(deliveredId('（id: a1b2）人が打った'), '', '見出しの書き出しが無ければ届けた文ではない')
+  const rows = [
+    { ts: '2026-10-01T01:30:00+09:00', session: 'B1', repo: 'r', event: 'Stop', user_text: m2, text: '別件の返答' },
+    { ts: '2026-10-01T01:22:00+09:00', session: 'B1', repo: 'r', event: 'UserPromptSubmit', user_text: m1, text: '' },
+    { ts: '2026-10-01T01:25:00+09:00', session: 'C1', repo: 'r', event: 'Stop', user_text: m1, text: '見出しを写しただけの別の相手' },
+    { ts: '2026-10-01T01:40:00+09:00', session: 'B1', repo: 'r', event: 'Stop', user_text: m1, text: '着手しました' },
+    { ts: '2026-10-01T01:45:00+09:00', session: 'B1', repo: 'r', event: 'Stop', user_text: m1, text: '2 本目（同じメッセージ）' },
+  ] as FeedRow[]
+  const sent = [
+    { message_id: 'a1b2', to: 'B1@r', since: '2026-09-30T16:21:56Z' },
+    { message_id: 'c3d4', to: 'B1@r', since: '2026-09-30T16:25:00Z' },
+    { message_id: 'ffff', to: 'B1@r', since: '2026-09-30T16:26:00Z' },
+  ]
+  const out = agentReplyRows(sent, rows, (id) => (id === 'B1@r' ? '明.' : id))
+  assert.deepEqual(out.map((r) => [r.text, r.agent_reply?.message_id, r.agent_reply?.to_name]), [
+    ['別件の返答', 'c3d4', '明.'],
+    ['着手しました', 'a1b2', '明.'],
+  ], '入力の行・別の相手・2 本目・まだ返っていないものは入れない。古い順')
+  assert.equal(out[1]?.agent_reply?.sent_at, '2026-09-30T16:21:56Z')
+  assert.deepEqual(agentReplyRows([], rows, (id) => id), [])
+})
+
+test('replierName: 表示名があればそれ。題名が届けた見出しなら worktree 名（#588）', () => {
+  const s = (over: Partial<SessionSummary>) => ({ id: 'B1@dev-min', title: '', repo: 'dev-min', ...over }) as SessionSummary
+  assert.equal(replierName(s({ meta: { name: '明.' }, title: '【SAI】#o/r の「x」からのメッセージです' })), '明.')
+  assert.equal(replierName(s({ title: '【SAI】#o/r の「x」からのメッセージです' })), '#dev-min')
+  assert.equal(replierName(s({ title: 'PR を出して' })), 'PR を出して')
 })
 
 test('clipReply: 長ければ切って、切ったことを書く（#311）', () => {

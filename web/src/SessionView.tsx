@@ -18,6 +18,7 @@ import { useProgress } from './useProgress'
 import { openPromptSince } from './openPrompt'
 import { QueuedBubble } from './QueuedBubble'
 import { AgentActivityBar } from './AgentActivityBar'
+import { withAgentReplies } from './agentReplies'
 import { BackgroundAttachBar } from './BackgroundAttachBar'
 import { shouldQueue } from './replyQueue.ts'
 import { ApprovalBubble } from './ApprovalBubble'
@@ -108,6 +109,8 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
   // 会話に出てきた画像（#504）。差分と同じく、開いたときと新しい発言が記録されたときだけ取り、出てきた発言のバブルの下に出す（#507）
   const gallery = useGallery(s?.id, `${s?.last_turn_ts ?? ''}|${s?.last_user_ts ?? ''}`)
   const bubbleImages = useMemo(() => imagesByBubble(gallery), [gallery])
+  // 送ったメッセージへの返答（#588）。送り元が待たずにターンを終えても、この画面に並ぶ
+  const chatRows = useMemo(() => (data ? withAgentReplies(data.rows, data.agent_replies) : []), [data])
 
   // 未読（#502）。線は**開いたときの印**に引く（読んだそばから印が進むので、今の印に引くとすぐ消える）。
   // 別のセッションに移ったら覚え直す（描画中に合わせる。effect の中で setState しない）
@@ -195,7 +198,7 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
       {error && !data && <div className="empty">{error}</div>}
       {data && (
         <Chat
-          rows={data.rows}
+          rows={chatRows}
           leader={data.older > 0 ? <OlderRowsButton count={data.older} days={RECENT_DAYS} onMore={() => setWide({ id, days: recent + RECENT_DAYS })} /> : undefined}
           showChannel={false}
           sessions={[data.session]}

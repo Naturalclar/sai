@@ -32,12 +32,18 @@ export const AGENT_TURN_READ_BUDGET = 3_000_000
 export const AGENT_HEADER_MARK = '【SAI】'
 
 /**
+ * 見出しの「返答はどこへ行くか」（#588）。**送り元が待っていないこともある**ので「送り元に返ります」とは言い切らない
+ * （待たずにターンを終えた送り元には、返答は画面にしか出ない）
+ */
+export const REPLY_NOTE = 'このターンの最後の発言が返答として送り元の画面に出ます（送り元が sai_wait で待っていれば、そのまま受け取ります）。'
+
+/**
  * 相手に届ける文。見出しの 1 行で「人ではなく別のセッションから」「返答はこのターンの最後の発言」を伝える。
  * 画面では受け取った側の自分バブルにそのまま出るので、誰から来たかも見える。
  * **見出しに message_id を入れる**: record.py は `user_text` を 2000 字で切るので、本文の一致ではどのターンか決められない
  */
 export function deliveredText(from: { label: string; project: string }, messageId: string, text: string): string {
-  return `${AGENT_HEADER_MARK}#${from.project} の「${from.label}」からのメッセージです（id: ${messageId}）。このターンの最後の発言が送り元に返ります。\n\n${text.trim()}`
+  return `${AGENT_HEADER_MARK}#${from.project} の「${from.label}」からのメッセージです（id: ${messageId}）。${REPLY_NOTE}\n\n${text.trim()}`
 }
 
 /**
@@ -45,7 +51,41 @@ export function deliveredText(from: { label: string; project: string }, messageI
  * 印と id の形は `deliveredText()` と同じにして、`isDeliveryOf()` / `replyOf()` がそのまま返答を探せるようにする
  */
 export function deliveredFromTailnet(caller: string, messageId: string, text: string): string {
-  return `${AGENT_HEADER_MARK}tailnet の「${caller}」からのメッセージです（id: ${messageId}）。このターンの最後の発言が送り元に返ります。\n\n${text.trim()}`
+  return `${AGENT_HEADER_MARK}tailnet の「${caller}」からのメッセージです（id: ${messageId}）。このターンの最後の発言が送り元に返ります（送り元が sai_wait で待っているとき）。\n\n${text.trim()}`
+}
+
+/** 見出しの id を取り出す。届けた文でなければ空（#588） */
+export function deliveredId(userText: string | undefined): string {
+  const head = (userText ?? '').trimStart().slice(0, 400)
+  if (!head.startsWith(AGENT_HEADER_MARK)) return ''
+  return /（id: ([0-9a-f]+)）/.exec(head)?.[1] ?? ''
+}
+
+/**
+ * 送ったメッセージへの返答の行（#588）。送り元が `sai_wait` せずにターンを終えると、返答は相手のセッションにしか無く、
+ * 送り元の会話は「頼みました」で止まって見える。そこで**送り元の画面に並べる**ために、相手のターン完了の行に印を付けて返す。
+ * 行は 1 回だけ舐める（メッセージごとに `replyOf()` を呼ぶと、3 秒のポーリングのたびに 送った数 × 行 になる）。
+ * 相手が違う行（見出しを写しただけの行）は数えない。古い順
+ */
+export function agentReplyRows(
+  sent: readonly { message_id: string; to: string; since: string }[],
+  rows: readonly FeedRow[],
+  toName: (id: string) => string,
+): FeedRow[] {
+  const want = new Map(sent.map((m) => [m.message_id, m]))
+  if (want.size === 0) return []
+  const out: FeedRow[] = []
+  const seen = new Set<string>()
+  for (const r of rows) {
+    if (eventKind(r.event, r.text) !== 'turn') continue
+    const id = deliveredId(r.user_text)
+    const m = id ? want.get(id) : undefined
+    if (!m || seen.has(id)) continue
+    if (entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) !== m.to) continue
+    seen.add(id)
+    out.push({ ...r, agent_reply: { message_id: id, to_name: toName(m.to), sent_at: m.since } })
+  }
+  return out.sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts))
 }
 
 /** 行の入力が、そのメッセージで回ったターンのものか（見出しの id で見る） */
@@ -68,6 +108,15 @@ export function replyOf(rows: readonly FeedRow[], to: string, messageId: string)
 export function clipReply(text: string, max: number = AGENT_REPLY_MAX_CHARS): string {
   const t = text.trim()
   return t.length <= max ? t : `${t.slice(0, max)}\n…（あと ${t.length - max} 字を省略。続きは相手のセッションで）`
+}
+
+/**
+ * 返答を出すときの相手の呼び名（#588）。表示名が無ければ題名に落ちるが、受け取ったセッションの題名は**届けた見出しそのもの**
+ * （一番新しい入力が「【SAI】…からのメッセージです」になる）ので、そのときは worktree 名にする
+ */
+export function replierName(s: Pick<SessionSummary, 'id' | 'title' | 'meta' | 'repo'>): string {
+  const label = sessionLabel(s)
+  return label.startsWith(AGENT_HEADER_MARK) ? `#${s.repo}` : label
 }
 
 /** セッションの呼び名。表示名 → 題名 → ID */

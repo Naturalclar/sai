@@ -135,6 +135,8 @@ import {
   AGENT_TURN_READ_BUDGET,
   agentEntry,
   agentOverlap,
+  agentReplyRows,
+  replierName,
   agentTargets,
   budgetRefusal,
   clipReply,
@@ -3324,7 +3326,8 @@ export function createApp(
         if (!session) return error(res, 404, 'session not found in window')
         await scanDigest(days)
         // このセッションが一言を切っていれば載せない（#263）
-        const own = (await store.rows(days)).filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
+        const every = await store.rows(days)
+        const own = every.filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
         await usageReady
         // 画面は直近のぶんだけ取る（#477。行の多いセッションで描き直しが重く、打鍵が止まる）。一言・使用量を付ける前に絞る
         const recent = parseRecent(q.get('recent'))
@@ -3340,10 +3343,17 @@ export function createApp(
         const question = await pendingQuestion(session, pendingApprovals)
         // `claude --bg` のセッションなら、端末で開くための短い ID（#462）。状態は rev に混ぜる
         const bg = await backgroundOf(session)
+        // 別のセッションへ送ったメッセージへの返答（#588）。送り元が待たずにターンを終えても、この画面に並べる。
+        // 描いている窓より前の返答は載せない（窓を広げれば出る）
+        const shownFrom = older > 0 && shown[0] ? Date.parse(shown[0].ts) : -Infinity
+        const replies = agentReplyRows(agents.sentBy(id, Infinity), every, (to) => {
+          const target = sessions.find((s) => s.id === to)
+          return target ? replierName(target) : to
+        }).filter((r) => Date.parse(r.ts) >= shownFrom)
         // いまのコンテキスト量（#441）。(mtime, size) で覚えているので読み直しは軽い。rev には丸めた値だけ混ぜる
         const context = isRemoteHost(session.host, selfHost()) ? 0 : (await progress.read(session)).context_tokens
         const body: SessionDetailResponse = {
-          rev: revWith(`${sessionsRev}~${me.rev}~${settled}~${terminalKey(sessions)}~${question?.asked_at ?? ''}~${bg ? `${bg.attach}:${bg.status}` : ''}~${contextRevKey(context)}`, replying, approvalMapKey(pendingApprovals), false, `${digest.revKey()}|${usage.rev()}`, `${queue.key()}|${agents.key()}`),
+          rev: revWith(`${sessionsRev}~${me.rev}~${settled}~${terminalKey(sessions)}~${question?.asked_at ?? ''}~${bg ? `${bg.attach}:${bg.status}` : ''}~${contextRevKey(context)}~${replies.map((r) => r.agent_reply?.message_id).join(',')}`, replying, approvalMapKey(pendingApprovals), false, `${digest.revKey()}|${usage.rev()}`, `${queue.key()}|${agents.key()}`),
           session: withLastSummary([session])[0]!,
           rows,
           older,
@@ -3357,6 +3367,7 @@ export function createApp(
           ...(question ? { question } : {}),
           ...(bg ? { background: bg } : {}),
           ...(context > 0 ? { context_tokens: context } : {}),
+          ...(replies.length > 0 ? { agent_replies: replies } : {}),
         }
         return json(res, body)
       }

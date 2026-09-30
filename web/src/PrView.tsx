@@ -7,6 +7,11 @@ import { DiffCommentBar } from './DiffCommentBar'
 import { DiffCommentNote } from './DiffCommentNote'
 import { commentLine, formatDiffComments } from './diffComments'
 import { useDiffComments } from './useDiffComments'
+import { usePrReviewBody } from './usePrReviewBody'
+import { PrReviewBar } from './PrReviewBar'
+import { PrReviewModal } from './PrReviewModal'
+import { REVIEW_EVENT_LABEL } from '../../shared/prReview.ts'
+import type { PrReviewEvent } from './api'
 import { newestFirst, prAuthorSession, prCommentKey } from './prSession'
 import { Markdown } from './Markdown'
 import { agoLabel, checkLabel, reviewLabel } from './prLabels'
@@ -21,11 +26,14 @@ const STATE_LABEL: Record<string, string> = { OPEN: 'open', MERGED: 'マージ�
 
 /**
  * PR 1 本（#524）。題名・出した人・ブランチ・チェック・本文と、差分を**セッションの差分と同じビューア**（`DiffView`）で出す。
- * 開いたときに 1 回と「読み直す」のときだけ取る。**GitHub には書かない**（投稿は #526）。
+ * 開いたときに 1 回と「読み直す」のときだけ取る。
  *
  * **その PR を書いたセッションが見つかれば、差分の行にコメントを書いてそのセッションの入力欄に入れられる**（#525）。
  * 書いたセッションは `prAuthorSession()`（同じリポジトリで、いまのブランチが head と同じ一番新しいもの）。
- * 直接は送らない（#511 と同じく、入れたらそのセッションへ移って人が送る）。書いたセッションが返信できなければ口は出さず理由を出す
+ * 直接は送らない（#511 と同じく、入れたらそのセッションへ移って人が送る）。書いたセッションが返信できなければ口は出さず理由を出す。
+ *
+ * **同じ下書きを GitHub にレビューとして投稿もできる**（#526。`gh` でログインしていて PR が open のとき）。確認の画面（`PrReviewModal`）で
+ * GitHub に載る形を見せ、押したときだけ送る。書いたセッションが見つかる PR では入力欄に入れる方が既定で、投稿は控えめに並べる
  */
 export function PrView({ repo, number, onStatus, onInsertToSession }: { repo: string; number: number; onInsertToSession?: (id: string, text: string) => void } & Pick<PaneProps, 'onStatus'>) {
   const [loaded, setLoaded] = useState<Loaded | null>(null)
@@ -82,11 +90,18 @@ export function PrView({ repo, number, onStatus, onInsertToSession }: { repo: st
   const authorName = author ? author.meta?.name || author.title || author.id : ''
   const blocked = author ? (author.archived ? 'アーカイブ済み。続けるならセッション画面で「戻す」を押してください' : replyBlockedReason(author, sessions?.host ?? '')) : ''
   const canComment = Boolean(author && !blocked && onInsertToSession)
+  // GitHub への投稿（#526）。`gh` でログインしている人が引けていて、PR が open のときだけ
+  const canPost = Boolean(loaded?.data.review && pr?.state === 'OPEN')
+  const canWrite = canComment || canPost
   // 行へのコメント（#525）。置き場は PR ごと
-  const comments = useDiffComments(prCommentKey(knownRepo || repo, number))
+  const draftKey = prCommentKey(knownRepo || repo, number)
+  const comments = useDiffComments(draftKey)
+  const [reviewBody, setReviewBody] = usePrReviewBody(draftKey)
+  const [reviewing, setReviewing] = useState(false)
+  const [posted, setPosted] = useState<{ url: string; event: PrReviewEvent } | null>(null)
   const files = useMemo(() => (loaded ? parseUnifiedDiff(loaded.data.diff.patch) : null), [loaded])
   // PR が更新されて行が見当たらなくなったコメントは、差分の上にまとめて出す（DiffBody と同じ）
-  const orphans = canComment && files ? comments.list.filter((c) => !commentLine(c, files)) : []
+  const orphans = canWrite && files ? comments.list.filter((c) => !commentLine(c, files)) : []
   const check = pr ? checkLabel(pr.checks) : null
   const review = pr ? reviewLabel(pr.review_decision) : ''
 
@@ -145,6 +160,45 @@ export function PrView({ repo, number, onStatus, onInsertToSession }: { repo: st
               onClear={comments.clear}
             />
           )}
+          {canPost && (
+            <PrReviewBar
+              count={comments.list.length}
+              hasBody={reviewBody.trim() !== ''}
+              secondary={canComment}
+              onOpen={() => {
+                setPosted(null)
+                setReviewing(true)
+              }}
+              onClear={() => {
+                comments.clear()
+                setReviewBody('')
+              }}
+            />
+          )}
+          {posted && (
+            <div className="note pr-posted">
+              GitHub にレビューを載せました（{REVIEW_EVENT_LABEL[posted.event]}）。{' '}
+              <a href={posted.url || pr.url} target="_blank" rel="noopener noreferrer">GitHub で見る</a>
+            </div>
+          )}
+          {reviewing && (
+            <PrReviewModal
+              data={loaded.data}
+              comments={comments.list}
+              onRemoveComment={comments.remove}
+              body={reviewBody}
+              onBody={setReviewBody}
+              onReload={load}
+              onPosted={(url, event) => {
+                comments.clear()
+                setReviewBody('')
+                setReviewing(false)
+                setPosted({ url, event })
+                void load()
+              }}
+              onClose={() => setReviewing(false)}
+            />
+          )}
           {orphans.map((c) => (
             <div className="diff-orphan" key={c.id}>
               <code>{c.path}:{c.line}</code>
@@ -156,7 +210,7 @@ export function PrView({ repo, number, onStatus, onInsertToSession }: { repo: st
               section={loaded.data.diff}
               title="変更"
               empty="差分はありません"
-              {...(canComment
+              {...(canWrite
                 ? { comments: { section: 'branch' as const, list: comments.list, onAdd: comments.add, onRemove: comments.remove } }
                 : {})}
             />

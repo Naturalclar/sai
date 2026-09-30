@@ -1,8 +1,10 @@
-// GitHub に出ている PR を読む（#524）。一覧・1 本の中身・差分。**読むだけで、GitHub には何も書かない。**
+// GitHub に出ている PR を読む（#524）。一覧・1 本の中身・差分。**書くのはレビューの投稿（#526）の 1 形だけ。**
 //
 // 差分ボタンの PR 番号（pr.ts。#211）と同じ作法で閉じてある:
 //
-// - 叩くのは下の 4 形だけ（`gh pr list` / `gh pr list --search review-requested:@me` / `gh pr view` / `gh pr diff`）。
+// - 読むのは下の 5 形だけ（`gh pr list` / `gh pr list --search review-requested:@me` / `gh pr view` / `gh pr diff` / `gh api user`）。
+//   書くのは `gh api -X POST repos/<owner>/<repo>/pulls/<番号>/reviews --input -` の 1 形だけ（中身は shared/prReview.ts の
+//   githubReview() が組み立てたもの。呼ぶ側が同一オリジン・head の SHA・行の位置を確かめてから呼ぶ）。
 //   引数はここで組み立て、任意のサブコマンドは作れない。シェルは通さない
 // - リポジトリはサーバが**記録で知っているもの**だけ（shared/prs.ts の knownRepos()。呼び出し側が確かめる）、
 //   番号は数字だけ（isPrNumber()）。ここでも形をもう一度確かめる
@@ -11,6 +13,8 @@
 // - チェックアウトも fetch もしない（`RealGit` の「読むだけ」の外に出ない）
 import { spawn } from 'node:child_process'
 import { isPrNumber, isRepoName, parsePrList, parseRequested, prFromGh, sortPrs } from '../../shared/prs.ts'
+import type { GithubReview } from '../../shared/prReview.ts'
+import { githubErrorText } from '../../shared/prReview.ts'
 import type { PrSummary } from '../../shared/types.ts'
 
 /** 1 回の `gh` を諦めるまで。一覧はリポジトリの数だけ並べて走らせる */
@@ -21,6 +25,11 @@ export const PRS_CACHE_MS = 60_000
 export const PRS_LIMIT = 50
 /** `gh pr diff` の出力をどこまで受けるか。差分の上限（2MB）より大きく取り、切るのは diff.ts の clampPatch() */
 export const PR_DIFF_MAX_BYTES = 16 * 1024 * 1024
+/** `gh` でログインしている人を覚える時間。引けなかったこと（未ログイン）は短く覚える */
+export const VIEWER_CACHE_MS = 10 * 60_000
+export const VIEWER_MISS_CACHE_MS = 60_000
+/** レビューの投稿を諦めるまで。読むより長く取る（投稿は 1 回きりなので、時間切れで結果が分からなくなるのを避けたい） */
+export const REVIEW_POST_TIMEOUT_MS = 30_000
 
 const LIST_FIELDS = 'number,title,author,headRefName,baseRefName,isDraft,updatedAt,url,additions,deletions,changedFiles,reviewDecision,statusCheckRollup,isCrossRepository'
 const VIEW_FIELDS = `${LIST_FIELDS},body,state,headRefOid`
@@ -37,6 +46,10 @@ export interface PrBrowser {
   readonly available: boolean
   list(repo: string, fresh?: boolean): Promise<PrSummary[] | null>
   view(repo: string, number: number): Promise<PrView | null>
+  /** `gh` でログインしている人（#526。投稿の口を出すか・自分の PR か）。未ログイン・引けなければ null */
+  viewer(): Promise<string | null>
+  /** レビューを投稿する（#526）。投稿できたらそのレビューの URL、できなければ理由 */
+  postReview(repo: string, number: number, review: GithubReview): Promise<{ ok: true; url: string } | { ok: false; error: string }>
 }
 
 /** 引かない実装（`SAI_GH=0`、テストの既定） */
@@ -47,6 +60,12 @@ export class NoPrs implements PrBrowser {
   }
   view(): Promise<PrView | null> {
     return Promise.resolve(null)
+  }
+  viewer(): Promise<string | null> {
+    return Promise.resolve(null)
+  }
+  postReview(): Promise<{ ok: false; error: string }> {
+    return Promise.resolve({ ok: false, error: 'gh を使わない設定です（SAI_GH=0）' })
   }
 }
 
@@ -91,6 +110,40 @@ export function spawnGh(bin: string, timeout = PRS_TIMEOUT_MS): GhRun {
     })
 }
 
+/** `gh` を 1 回走らせ、stdin に `input` を渡して終了コード・stdout・stderr を返す（投稿用。失敗の理由を画面に出すため stderr も取る） */
+export type GhSend = (args: string[], input: string) => Promise<{ code: number | null; stdout: string; stderr: string }>
+
+export function spawnGhSend(bin: string, timeout = REVIEW_POST_TIMEOUT_MS): GhSend {
+  return (args, input) =>
+    new Promise((resolve) => {
+      let child
+      try {
+        child = spawn(bin, args, { stdio: ['pipe', 'pipe', 'pipe'] })
+      } catch (err) {
+        return resolve({ code: null, stdout: '', stderr: err instanceof Error ? err.message : String(err) })
+      }
+      const out: Buffer[] = []
+      const err: Buffer[] = []
+      let done = false
+      const finish = (code: number | null, extra = '') => {
+        if (done) return
+        done = true
+        clearTimeout(timer)
+        resolve({ code, stdout: Buffer.concat(out).toString('utf8'), stderr: Buffer.concat(err).toString('utf8') + extra })
+      }
+      const timer = setTimeout(() => {
+        child.kill('SIGKILL')
+        finish(null, '\n時間切れ（GitHub に載ったかは GitHub で確かめてください）')
+      }, timeout)
+      child.stdout.on('data', (c: Buffer) => out.length < 1024 && out.push(c))
+      child.stderr.on('data', (c: Buffer) => err.length < 256 && err.push(c))
+      child.stdin.on('error', () => {})
+      child.once('error', (e) => finish(null, e.message))
+      child.once('close', (code) => finish(code))
+      child.stdin.end(input)
+    })
+}
+
 interface ListEntry {
   at: number
   prs: PrSummary[] | null
@@ -103,11 +156,49 @@ export class GhPrs implements PrBrowser {
   private readonly lists = new Map<string, ListEntry>()
   /** 同じリポジトリの一覧を同時に 2 本引かない（開いた直後の二重の要求など） */
   private readonly inflight = new Map<string, Promise<PrSummary[] | null>>()
+  private readonly send: GhSend
+  private login: { at: number; value: string | null } | null = null
+  private loginJob: Promise<string | null> | null = null
 
-  /** 実行ファイルは既定でサーバの PATH の `gh`（#288）。テストは偽物の run を渡す */
-  constructor(run: GhRun = spawnGh('gh'), ttl = PRS_CACHE_MS) {
+  /** 実行ファイルは既定でサーバの PATH の `gh`（#288）。テストは偽物の run / send を渡す */
+  constructor(run: GhRun = spawnGh('gh'), ttl = PRS_CACHE_MS, send: GhSend = spawnGhSend('gh')) {
     this.run = run
     this.ttl = ttl
+    this.send = send
+  }
+
+  async viewer(): Promise<string | null> {
+    const hit = this.login
+    if (hit && Date.now() - hit.at < (hit.value ? VIEWER_CACHE_MS : VIEWER_MISS_CACHE_MS)) return hit.value
+    if (this.loginJob) return this.loginJob
+    this.loginJob = this.run(['api', 'user', '--jq', '.login'], 4096)
+      .then((out) => {
+        const value = out?.trim() ?? ''
+        // ログイン名の形（英数字と -）でなければ引けなかった扱い
+        const login = /^[A-Za-z0-9-]{1,39}$/.test(value) ? value : null
+        this.login = { at: Date.now(), value: login }
+        return login
+      })
+      .finally(() => {
+        this.loginJob = null
+      })
+    return this.loginJob
+  }
+
+  async postReview(repo: string, number: number, review: GithubReview): Promise<{ ok: true; url: string } | { ok: false; error: string }> {
+    if (!isRepoName(repo) || !isPrNumber(String(number))) return { ok: false, error: '宛先の形が違います' }
+    const r = await this.send(['api', '-X', 'POST', `repos/${repo}/pulls/${number}/reviews`, '--input', '-'], JSON.stringify(review))
+    if (r.code !== 0) return { ok: false, error: githubErrorText(r.stdout, r.stderr) }
+    let url = ''
+    try {
+      const o = JSON.parse(r.stdout) as { html_url?: unknown }
+      if (typeof o.html_url === 'string') url = o.html_url
+    } catch {
+      // 載ったが応答が読めない。URL 無しで成功として返す
+    }
+    // レビューの状態（review_decision）が変わるので、一覧は次に引き直す
+    this.lists.delete(repo)
+    return { ok: true, url }
   }
 
   async list(repo: string, fresh = false): Promise<PrSummary[] | null> {

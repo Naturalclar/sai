@@ -5,16 +5,17 @@ import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { PrDetailResponse, PrSummary, PrsResponse } from '../shared/types.ts'
+import type { PrDetailResponse, PrReviewRequest, PrReviewResponse, PrSummary, PrsResponse, ReplyError } from '../shared/types.ts'
+import type { GithubReview } from '../shared/prReview.ts'
 import { createApp } from './app.ts'
 import { FeedStore } from './rows/store.ts'
 import { localDate } from './rows/aggregate.ts'
 import { row } from './rows/aggregate.test.ts'
 import { GhPrs } from './git/prs.ts'
-import type { GhRun, PrBrowser, PrView } from './git/prs.ts'
+import type { GhRun, GhSend, PrBrowser, PrView } from './git/prs.ts'
 
 const summary = (number: number, extra: Partial<PrSummary> = {}): PrSummary => ({
   number,
@@ -34,6 +35,7 @@ const summary = (number: number, extra: Partial<PrSummary> = {}): PrSummary => (
   ...extra,
 })
 
+const SHA = 'a'.repeat(40)
 const PATCH = ['diff --git a/a.ts b/a.ts', '--- a/a.ts', '+++ b/a.ts', '@@ -1 +1,2 @@', '-old', '+new', '+more', ''].join('\n')
 
 /** 呼ばれたリポジトリを覚え、決めた答えを返す */
@@ -42,13 +44,25 @@ class FakePrs implements PrBrowser {
   listed: string[] = []
   viewed: [string, number][] = []
   patch: string | null = PATCH
+  headSha = SHA
+  author = 'someone'
+  login: string | null = 'me'
+  posted: [string, number, GithubReview][] = []
+  postResult: { ok: true; url: string } | { ok: false; error: string } = { ok: true, url: 'https://github.com/o/known/pull/7#pullrequestreview-1' }
+  async viewer() {
+    return this.login
+  }
+  async postReview(repo: string, number: number, review: GithubReview) {
+    this.posted.push([repo, number, review])
+    return this.postResult
+  }
   async list(repo: string) {
     this.listed.push(repo)
     return repo === 'o/broken' ? null : [summary(1)]
   }
   async view(repo: string, number: number): Promise<PrView | null> {
     this.viewed.push([repo, number])
-    return { pr: { ...summary(number), body: '本文', state: 'OPEN', head_sha: 'abc', cross_repo: false }, patch: this.patch }
+    return { pr: { ...summary(number, { author: this.author }), body: '本文', state: 'OPEN', head_sha: this.headSha, cross_repo: false }, patch: this.patch }
   }
 }
 
@@ -136,9 +150,164 @@ test('1 本: 知らないリポジトリ・GitHub 以外・番号でないもの
   assert.deepEqual(prs.viewed, [])
 })
 
-test('書き込みは受けない', async () => {
-  const res = await fetch(`${base}/api/prs`, { method: 'POST' })
-  assert.equal(res.status, 405)
+test('書き込みはレビューの口だけ。ほかの POST・レビューの口の GET は受けない', async () => {
+  assert.equal((await fetch(`${base}/api/prs`, { method: 'POST' })).status, 405)
+  assert.equal((await fetch(`${base}/api/prs/o/known/7`, { method: 'POST' })).status, 405)
+  assert.equal((await fetch(`${base}/api/prs/o/known/7/review`)).status, 405)
+})
+
+// --- GitHub へのレビューの投稿（#526） ---
+
+const review = (extra: Partial<PrReviewRequest> = {}): PrReviewRequest => ({
+  event: 'COMMENT',
+  body: '全体',
+  commit_id: SHA,
+  comments: [
+    { path: 'a.ts', side: 'new', line: 2, code: 'more', body: 'ここ' },
+    { path: 'a.ts', side: 'old', line: 1, code: 'old', body: '消した理由は？' },
+  ],
+  ...extra,
+})
+
+const post = (path: string, body: unknown, headers: Record<string, string> = {}) =>
+  fetch(`${base}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) })
+
+test('投稿: 1 本の中身に投稿の材料（ログインしている人・自分の PR か）が載る。引けなければ載らない', async () => {
+  prs.author = 'Me'
+  let body = (await (await fetch(`${base}/api/prs/o/known/7`)).json()) as PrDetailResponse
+  assert.deepEqual(body.review, { viewer: 'me', own: true })
+  prs.author = 'someone'
+  body = (await (await fetch(`${base}/api/prs/o/known/7`)).json()) as PrDetailResponse
+  assert.deepEqual(body.review, { viewer: 'me', own: false })
+  prs.login = null
+  body = (await (await fetch(`${base}/api/prs/o/known/7`)).json()) as PrDetailResponse
+  assert.equal(body.review, undefined)
+  prs.login = 'me'
+})
+
+test('投稿: 行の位置はサーバがいまの差分から組み立て、GitHub の形にして 1 回だけ送る。reply.log に 1 行残す', async () => {
+  prs.posted = []
+  const res = await post('/api/prs/O/Known/7/review', review())
+  assert.equal(res.status, 200)
+  const body = (await res.json()) as PrReviewResponse
+  assert.equal(body.url, 'https://github.com/o/known/pull/7#pullrequestreview-1')
+  assert.deepEqual(prs.posted, [
+    [
+      'o/known',
+      7,
+      {
+        commit_id: SHA,
+        event: 'COMMENT',
+        body: '全体',
+        comments: [
+          { path: 'a.ts', line: 2, side: 'RIGHT', body: 'ここ' },
+          { path: 'a.ts', line: 1, side: 'LEFT', body: '消した理由は？' },
+        ],
+      },
+    ],
+  ])
+  const log = await readFile(join(dir, 'feed', 'reply.log'), 'utf8')
+  assert.match(log, /GitHub へレビュー o\/known#7 COMMENT 行コメント 2 件 commit a{12} \(me\) → https:\/\/github\.com/)
+})
+
+test('投稿: 別オリジン・知らないリポジトリは送らない', async () => {
+  prs.posted = []
+  assert.equal((await post('/api/prs/o/known/7/review', review(), { Origin: 'http://evil.example' })).status, 403)
+  assert.equal((await post('/api/prs/o/known/7/review', review(), { 'Sec-Fetch-Site': 'cross-site' })).status, 403)
+  assert.equal((await post('/api/prs/someone/else/7/review', review())).status, 404)
+  assert.equal((await post('/api/prs/g/lab/7/review', review())).status, 404)
+  assert.deepEqual(prs.posted, [])
+})
+
+test('投稿: head が進んでいれば 409（head_moved）で送らない', async () => {
+  prs.posted = []
+  prs.headSha = 'b'.repeat(40)
+  const res = await post('/api/prs/o/known/7/review', review())
+  assert.equal(res.status, 409)
+  assert.equal(((await res.json()) as ReplyError).code, 'head_moved')
+  prs.headSha = SHA
+  assert.deepEqual(prs.posted, [])
+})
+
+test('投稿: 行が変わった・見当たらないコメントがあれば 409（lines_moved）で、ほかのコメントも送らない', async () => {
+  prs.posted = []
+  for (const bad of [
+    { path: 'a.ts', side: 'new' as const, line: 2, code: 'changed', body: 'x' },
+    { path: 'a.ts', side: 'new' as const, line: 9, code: 'more', body: 'x' },
+    { path: 'b.ts', side: 'new' as const, line: 2, code: 'more', body: 'x' },
+  ]) {
+    const res = await post('/api/prs/o/known/7/review', review({ comments: [review().comments[0]!, bad] }))
+    assert.equal(res.status, 409)
+    const body = (await res.json()) as ReplyError
+    assert.equal(body.code, 'lines_moved')
+    assert.match(body.error, new RegExp(`${bad.path}:${bad.line}`))
+  }
+  assert.deepEqual(prs.posted, [])
+})
+
+test('投稿: 自分の PR には Comment だけ。ログインしていない・形の悪い要求は送らない', async () => {
+  prs.posted = []
+  prs.author = 'ME'
+  assert.equal((await post('/api/prs/o/known/7/review', review({ event: 'APPROVE' }))).status, 400)
+  assert.equal((await post('/api/prs/o/known/7/review', review({ event: 'REQUEST_CHANGES' }))).status, 400)
+  prs.author = 'someone'
+  prs.login = null
+  assert.equal((await post('/api/prs/o/known/7/review', review())).status, 503)
+  prs.login = 'me'
+  for (const bad of [
+    review({ event: 'MERGE' as never }),
+    review({ commit_id: 'abc' }),
+    review({ event: 'REQUEST_CHANGES', body: ' ' }),
+    review({ body: '', comments: [] }),
+    review({ comments: [{ path: 'a.ts', side: 'new', line: 2, code: 'more', body: ' ' }] }),
+  ]) {
+    assert.equal((await post('/api/prs/o/known/7/review', bad)).status, 400, JSON.stringify(bad))
+  }
+  assert.deepEqual(prs.posted, [])
+})
+
+test('投稿: GitHub が断ったら 502 で理由を返し、reply.log にも残す', async () => {
+  prs.postResult = { ok: false, error: 'Validation Failed: pull_request_review_thread.line must be part of the diff' }
+  const res = await post('/api/prs/o/known/7/review', review())
+  assert.equal(res.status, 502)
+  assert.match(((await res.json()) as ReplyError).error, /must be part of the diff/)
+  const log = await readFile(join(dir, 'feed', 'reply.log'), 'utf8')
+  assert.match(log, /失敗: Validation Failed/)
+  prs.postResult = { ok: true, url: '' }
+})
+
+test('GhPrs: 投稿は gh api -X POST repos/<repo>/pulls/<番号>/reviews --input - の 1 形で、中身は stdin に渡す', async () => {
+  const sent: [string[], string][] = []
+  const send: GhSend = async (args, input) => {
+    sent.push([args, input])
+    return { code: 0, stdout: '{"html_url":"https://github.com/o/r/pull/2#pullrequestreview-9"}', stderr: '' }
+  }
+  const gh = new GhPrs(async () => null, 60_000, send)
+  const r: GithubReview = { commit_id: SHA, event: 'COMMENT', comments: [{ path: 'a.ts', line: 2, side: 'RIGHT', body: 'x' }] }
+  assert.deepEqual(await gh.postReview('o/r', 2, r), { ok: true, url: 'https://github.com/o/r/pull/2#pullrequestreview-9' })
+  assert.deepEqual(sent, [[['api', '-X', 'POST', 'repos/o/r/pulls/2/reviews', '--input', '-'], JSON.stringify(r)]])
+  // 形の悪い宛先は gh を起こさない
+  assert.equal((await gh.postReview('-x/y', 2, r)).ok, false)
+  assert.equal((await gh.postReview('o/r', 0, r)).ok, false)
+  assert.equal(sent.length, 1)
+  // 失敗は GitHub の応答から理由を読む
+  const failing = new GhPrs(async () => null, 60_000, async () => ({ code: 1, stdout: '{"message":"Unprocessable Entity","errors":["Review Can not approve your own pull request"]}', stderr: 'gh: Unprocessable Entity (HTTP 422)' }))
+  assert.deepEqual(await failing.postReview('o/r', 2, r), { ok: false, error: 'Unprocessable Entity: Review Can not approve your own pull request' })
+})
+
+test('GhPrs: ログインしている人は gh api user で引いて覚える。引けなければ null', async () => {
+  const calls: string[][] = []
+  const gh = new GhPrs(async (args) => {
+    calls.push(args)
+    return 'someone\n'
+  })
+  assert.equal(await gh.viewer(), 'someone')
+  assert.equal(await gh.viewer(), 'someone')
+  assert.deepEqual(calls, [['api', 'user', '--jq', '.login']])
+  const out = new GhPrs(async () => null)
+  assert.equal(await out.viewer(), null)
+  const odd = new GhPrs(async () => 'not a login')
+  assert.equal(await odd.viewer(), null)
 })
 
 test('GhPrs: 組み立てる gh の引数は読むサブコマンドだけ。頼まれているものを先に並べる', async () => {

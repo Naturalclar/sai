@@ -375,6 +375,45 @@ export interface PrDetailResponse {
   diff: DiffSection
   /** 差分そのものを引けなかった理由（大きすぎる・時間切れ）。引けたら省略 */
   diff_error?: string
+  /**
+   * GitHub にレビューとして投稿できるとき（#526）の材料。`gh` が無い・未ログイン・`SAI_GH=0` なら省略（口を出さない）。
+   * `viewer` は `gh` でログインしている人、`own` はその人が出した PR か（GitHub が自分の PR への Approve / Request changes を受けないので、種類を Comment に絞る）
+   */
+  review?: { viewer: string; own: boolean }
+}
+
+/** GitHub のレビューの種類（#526）。既定は COMMENT で、ほかは人が明示的に選んだときだけ */
+export type PrReviewEvent = 'COMMENT' | 'APPROVE' | 'REQUEST_CHANGES'
+
+/**
+ * レビューに載せる行コメント 1 件（#526）。**位置はそのまま GitHub に渡さない**: サーバがいまの PR の差分でその行を探し、
+ * 中身（`code`）が書いたときと同じときだけ GitHub の `path` / `line` / `side` に組み立てる。合わなければ 409 で送らない
+ */
+export interface PrReviewLineComment {
+  path: string
+  /** `old` は消した行（旧い側の行番号）、`new` は足した行と文脈の行（新しい側） */
+  side: 'old' | 'new'
+  line: number
+  /** コメントを書いたときのその行の中身 */
+  code: string
+  body: string
+}
+
+/** POST /api/prs/<owner>/<repo>/<番号>/review（#526）。**同一オリジンのみ** */
+export interface PrReviewRequest {
+  event: PrReviewEvent
+  /** 全体のコメント。空でもよい（REQUEST_CHANGES と、行コメントの無い COMMENT は要る） */
+  body: string
+  /** 画面が読んだときの head の SHA。いまの head と違えば 409（`head_moved`）で送らない */
+  commit_id: string
+  comments: PrReviewLineComment[]
+}
+
+/** 投稿できたときの応答（#526）。`url` は GitHub のそのレビュー */
+export interface PrReviewResponse {
+  ok: true
+  url: string
+  event: PrReviewEvent
 }
 
 /** 処理中のターンの 1 手順（#302）。サーバが transcript / rollout の末尾から読む（`shared/progress.ts`） */
@@ -1049,7 +1088,7 @@ export interface AttachmentResponse {
  */
 export interface ReplyError {
   error: string
-  code?: 'terminal_typed' | 'terminal_dialog' | 'terminal_unknown'
+  code?: 'terminal_typed' | 'terminal_dialog' | 'terminal_unknown' | 'head_moved' | 'lines_moved'
   typed?: string
   /** true なら `via: 'process'` で送り直せば端末を見ずに別プロセスで回せる（端末に打てない 409 に付く） */
   can_process?: boolean

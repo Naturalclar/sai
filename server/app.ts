@@ -56,6 +56,7 @@ import type { SessionTurnResponse,
   SessionSkillsResponse,
   SearchResponse,
   PrDetailResponse,
+  PrReviewResponse,
   PrRepo,
   PrsResponse,
   SessionsResponse,
@@ -101,11 +102,12 @@ import { isDigestModel, isDigestProvider } from '../shared/digestSettings.ts'
 import type { Digester } from './digest/digest.ts'
 import { META_FILE, MetaStore } from './meta/meta.ts'
 import { collectPermissions } from './approvals/permissions.ts'
-import { compareUrl } from '../shared/diff.ts'
+import { compareUrl, parseUnifiedDiff } from '../shared/diff.ts'
 import { clampPatch, NotAGitRepo, RealGit, resolveBase, sessionDiff, sessionDiffSummary } from './git/diff.ts'
 import { prBrowserFromEnv } from './git/prs.ts'
 import type { PrBrowser } from './git/prs.ts'
 import { diffStats, isPrNumber, knownRepos, pickKnownRepo } from '../shared/prs.ts'
+import { githubReview, parseReviewRequest } from '../shared/prReview.ts'
 import { fillRepo, ProjectResolver } from './git/project.ts'
 import type { Git } from './git/diff.ts'
 import { prLookupFromEnv } from './git/pr.ts'
@@ -193,8 +195,12 @@ const SEARCH_PATH = '/api/search'
 const PRS_PATH = '/api/prs'
 /** 並べるリポジトリを拾うセッションの窓。アーカイブ済みのセッションのリポジトリも入る */
 const PRS_REPO_DAYS = 30
+/** `/api/prs/<owner>/<repo>/<番号>/review`（#526）。GitHub にレビューを投稿する */
+const PR_REVIEW_SUFFIX = '/review'
 /** 設定 body の上限 */
 export const MAX_SETTINGS_BYTES = 4 * 1024
+/** レビューの投稿（#526）の body の上限。文字数の上限（shared/prReview.ts）は parseReviewRequest() が見る */
+export const MAX_PR_REVIEW_BYTES = 8 * 1024 * 1024
 const REPLY_SUFFIX = '/reply'
 const REVIEW_SUFFIX = '/review'
 const META_SUFFIX = '/meta'
@@ -956,6 +962,53 @@ export function createApp(
       jev_auto: s.jev_auto,
     }
   }
+  /**
+   * POST /api/prs/<owner>/<repo>/<番号>/review（#526）。**SAI が GitHub に書く唯一の口**。同一オリジンは呼ぶ側で確かめてある。
+   * 宛先は記録で知っているリポジトリから引き、**いまの PR を読み直して** head が画面の読んだ SHA と同じか・行コメントの行が
+   * いまの差分に同じ中身であるかを確かめてから、GitHub に渡す形をサーバで組み立てる（画面の位置をそのまま渡さない）。
+   * 送った・送れなかったことは reply.log に 1 行
+   */
+  const postPrReview = async (req: IncomingMessage, res: ServerResponse, known: string[], rest: string) => {
+    const parts = rest.split('/')
+    const [owner = '', name = '', n = ''] = parts
+    const repo = parts.length === 3 ? pickKnownRepo(known, `${owner}/${name}`) : ''
+    if (!repo || !isPrNumber(n)) return error(res, 404, 'not found')
+    if (!prs.available) return error(res, 404, 'gh を使わない設定です（SAI_GH=0）')
+    let raw: unknown
+    try {
+      raw = await readJson(req, MAX_PR_REVIEW_BYTES)
+    } catch (err) {
+      return error(res, 400, err instanceof Error ? err.message : 'bad body')
+    }
+    const parsed = parseReviewRequest(raw)
+    if (!parsed.ok) return error(res, 400, parsed.error)
+    const r = parsed.req
+    const [login, view] = await Promise.all([prs.viewer(), prs.view(repo, Number(n))])
+    if (!login) return error(res, 503, 'gh にログインしていないので投稿できません（gh auth login）')
+    if (!view) return error(res, 502, 'gh で PR を読めませんでした')
+    if (view.pr.state !== 'OPEN') return error(res, 409, 'この PR はもう開いていません')
+    if (view.pr.head_sha !== r.commit_id) {
+      const payload: ReplyError = { error: 'PR が読んだあとに進みました。読み直してから送ってください', code: 'head_moved' }
+      return json(res, payload, 409)
+    }
+    if (r.event !== 'COMMENT' && login.toLowerCase() === view.pr.author.toLowerCase()) {
+      return error(res, 400, '自分の PR には Comment しか送れません')
+    }
+    if (r.comments.length > 0 && view.patch === null) return error(res, 502, '差分を読めないので行コメントを確かめられません')
+    const built = githubReview(r, view.patch === null ? [] : parseUnifiedDiff(view.patch))
+    if (!built.ok) {
+      const where = built.stale.map((i) => `${r.comments[i]?.path}:${r.comments[i]?.line}`).join('、')
+      const payload: ReplyError = { error: `行が変わった・見当たらないコメントがあります（${where}）。外すか全体のコメントに移してください`, code: 'lines_moved' }
+      return json(res, payload, 409)
+    }
+    const result = await prs.postReview(repo, Number(n), built.review)
+    const log = `--- ${new Date().toISOString()} GitHub へレビュー ${repo}#${n} ${r.event} 行コメント ${built.review.comments.length} 件 commit ${r.commit_id.slice(0, 12)} (${login})`
+    await appendFile(join(store.directory, 'reply.log'), result.ok ? `${log} → ${result.url || '(URL 不明)'}\n` : `${log} 失敗: ${result.error}\n`).catch(() => {})
+    if (!result.ok) return error(res, 502, `GitHub に投稿できませんでした: ${result.error}`)
+    const payload: PrReviewResponse = { ok: true, url: result.url, event: r.event }
+    return json(res, payload)
+  }
+
   /**
    * POST /api/digest/feedback（#346）。一言が変だと言われたら、そのときの一言・口・性格と一緒に
    * `~/.agent-feed/digest-feedback.jsonl` に残す。溜めたものは規則を直すときの材料と回帰テストの素材にする。
@@ -2631,6 +2684,8 @@ export function createApp(
     const isSettings = path === SETTINGS_PATH
     const isDigestFeedback = path === DIGEST_FEEDBACK_PATH
     const isNewSession = path === NEW_SESSION_PATH
+    // GitHub へのレビューの投稿（#526）。SAI が GitHub に書く唯一の口
+    const isPrReview = path.startsWith(`${PRS_PATH}/`) && path.endsWith(PR_REVIEW_SUFFIX)
     const method = req.method ?? 'GET'
     // tailnet から MCP で呼ぶ口（#312）。POST / OPTIONS（CORS）を受けるので、下の書き込みの判定より先に分ける
     if (path === MCP_PATH) {
@@ -2642,11 +2697,11 @@ export function createApp(
     }
     // タグ付きの端末（ユーザーがいない）は画面・REST を使えない。capability を与えた /mcp だけ
     if (who.kind === 'tagged') return error(res, 401, 'unauthorized: タグ付きの端末から使えるのは /mcp だけです')
-    // 書き込みは「返信と新しいセッションは POST」「表示名は PUT」「アイコンは PUT / DELETE」「承認の預かりと答えは POST」「自分の表示名は PUT、アイコンは PUT / DELETE」
+    // 書き込みは「返信と新しいセッションと PR のレビューの投稿（#526）は POST」「表示名は PUT」「アイコンは PUT / DELETE」「承認の預かりと答えは POST」「自分の表示名は PUT、アイコンは PUT / DELETE」
     // 「設定は PUT」「預かった返信の再開は POST、取り消しは DELETE」だけ。それ以外は GET / HEAD のみ
     const writable =
       (method === 'POST' &&
-        (isNewSession || isReply || isReview || isAsk || isAnswer || isAttachUpload || isQueue || isDigestFeedback || path === AGENT_SEND_PATH || isAgentStop || isInterrupt)) ||
+        (isNewSession || isReply || isReview || isPrReview || isAsk || isAnswer || isAttachUpload || isQueue || isDigestFeedback || path === AGENT_SEND_PATH || isAgentStop || isInterrupt)) ||
       (method === 'DELETE' && (isQueue || isHistoryIcon)) ||
       (method === 'PUT' && (isMeta || isRead || isProfile || isSettings)) ||
       ((method === 'PUT' || method === 'DELETE') && (isIcon || isProfileIcon))
@@ -2917,9 +2972,12 @@ export function createApp(
       // GitHub に出ている PR（#524）。**読むだけ**で、並べるのは記録で知っているリポジトリ（セッションの remote）だけ。
       // 3 秒のポーリングには乗せない（開いたとき・「読み直す」のときだけ）
       if (path === PRS_PATH || path.startsWith(`${PRS_PATH}/`)) {
-        if (method !== 'GET') return error(res, 405, 'method not allowed')
+        if (isPrReview ? method !== 'POST' : method !== 'GET') return error(res, 405, 'method not allowed')
+        // GitHub に書く唯一の口（#526）。ほかの検査より先に、同一オリジンだけに絞る
+        if (isPrReview && isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
         const { sessions: raw } = await store.sessions(PRS_REPO_DAYS)
         const known = knownRepos(await fillRepo(projects, raw))
+        if (isPrReview) return await postPrReview(req, res, known, path.slice(PRS_PATH.length + 1, -PR_REVIEW_SUFFIX.length))
         if (path === PRS_PATH) {
           const fresh = q.get('fresh') === '1'
           const repos: PrRepo[] = await Promise.all(
@@ -2936,9 +2994,11 @@ export function createApp(
         const [owner = '', name = '', n = ''] = parts
         const repo = parts.length === 3 ? pickKnownRepo(known, `${owner}/${name}`) : ''
         if (!repo || !isPrNumber(n)) return error(res, 404, 'not found')
-        const view = await prs.view(repo, Number(n))
+        const [view, login] = await Promise.all([prs.view(repo, Number(n)), prs.available ? prs.viewer() : Promise.resolve(null)])
         if (!view) return error(res, 502, 'gh で PR を読めませんでした')
         const out: PrDetailResponse = { repo, pr: view.pr, diff: { files: [], patch: '', truncated: false } }
+        // 投稿の口（#526）は `gh` でログインしている人が引けたときだけ出す
+        if (login) out.review = { viewer: login, own: login.toLowerCase() === view.pr.author.toLowerCase() }
         if (view.patch === null) {
           out.diff_error = '差分を読めませんでした（大きすぎるか、時間切れ）'
         } else {

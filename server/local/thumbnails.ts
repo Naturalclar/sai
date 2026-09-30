@@ -27,18 +27,20 @@ export const THUMB_EDGE_ALPHA = 384
 export const THUMB_TIMEOUT_MS = 15_000
 /** 同時に回す `sips` の数 */
 export const THUMB_CONCURRENCY = 2
+/** 縮められなかった中身を覚えておく長さ。画面の見分けの HEAD や開き直しのたびに `sips` を回し直さない（#593 のレビュー） */
+export const THUMB_FAILED_TTL_MS = 10 * 60_000
 /** 置き場に残す軽い版の数。超えたら古いものから捨てる（1 枚 30〜80KB なので 1000 枚で 50MB 前後） */
 export const THUMB_KEEP = 1000
 
 export type ThumbFormat = 'jpeg' | 'png'
 
-/** 縮める口。`input` の長辺を縮めて `format` で `output` に書く。テストは偽物を渡す */
-export type Shrinker = (input: string, output: string, format: ThumbFormat) => Promise<void>
+/** 縮める口。`input` を長辺 `edge` にして `format` で `output` に書く。テストは偽物を渡す */
+export type Shrinker = (input: string, output: string, format: ThumbFormat, edge: number) => Promise<void>
 
 /** 本物の縮める口。`sips` の形は決め打ち（渡すのはここで書いたファイルのパスだけ） */
-export const sipsShrink: Shrinker = (input, output, format) =>
+export const sipsShrink: Shrinker = (input, output, format, edge) =>
   new Promise((resolve, reject) => {
-    const args = ['-s', 'format', format, ...(format === 'jpeg' ? ['-s', 'formatOptions', String(THUMB_QUALITY)] : []), '-Z', String(format === 'jpeg' ? THUMB_EDGE : THUMB_EDGE_ALPHA), input, '--out', output]
+    const args = ['-s', 'format', format, ...(format === 'jpeg' ? ['-s', 'formatOptions', String(THUMB_QUALITY)] : []), '-Z', String(Math.max(1, Math.floor(edge))), input, '--out', output]
     execFile('sips', args, { timeout: THUMB_TIMEOUT_MS, windowsHide: true }, (err) => (err ? reject(err) : resolve()))
   })
 
@@ -67,6 +69,43 @@ export function hasAlpha(bytes: Buffer, type: IconType): boolean {
   return trns >= 0 && (idat < 0 || trns < idat)
 }
 
+/**
+ * 画素の縦横（見出しから読むだけ。デコードはしない）。読めなければ null。
+ * `sips -Z` は小さい画像を**引き伸ばす**ので、長辺が目標以下なら縮めない（#593 のレビュー）
+ */
+export function imageSize(b: Buffer, type: IconType): { width: number; height: number } | null {
+  try {
+    if (type === 'png') return b.length >= 24 ? { width: b.readUInt32BE(16), height: b.readUInt32BE(20) } : null
+    if (type === 'gif') return b.length >= 10 ? { width: b.readUInt16LE(6), height: b.readUInt16LE(8) } : null
+    if (type === 'webp') {
+      const kind = b.toString('ascii', 12, 16)
+      if (kind === 'VP8X') return { width: b.readUIntLE(24, 3) + 1, height: b.readUIntLE(27, 3) + 1 }
+      if (kind === 'VP8L') {
+        const v = b.readUInt32LE(21)
+        return { width: (v & 0x3fff) + 1, height: ((v >> 14) & 0x3fff) + 1 }
+      }
+      if (kind === 'VP8 ') return { width: b.readUInt16LE(26) & 0x3fff, height: b.readUInt16LE(28) & 0x3fff }
+      return null
+    }
+    // JPEG: SOF0〜SOF15（DHT・JPG・DAC を除く）の縦横
+    let i = 2
+    while (i + 9 < b.length) {
+      if (b[i] !== 0xff) return null
+      const marker = b[i + 1]!
+      if (marker === 0xff) {
+        i++
+        continue
+      }
+      const len = b.readUInt16BE(i + 2)
+      if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) return { width: b.readUInt16BE(i + 7), height: b.readUInt16BE(i + 5) }
+      i += 2 + len
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
 export class Thumbnails implements ThumbMaker {
   private readonly dir: string
   private readonly shrink: Shrinker
@@ -77,15 +116,25 @@ export class Thumbnails implements ThumbMaker {
   /** `sips` が見つからなかった（Linux など）。以後は呼ばない */
   private missing = false
   private made = 0
+  /** 縮められなかった中身 → 覚えた時刻 */
+  private readonly failed = new Map<string, number>()
+  private readonly now: () => number
 
-  constructor(dir: string, shrink: Shrinker = sipsShrink) {
+  constructor(dir: string, shrink: Shrinker = sipsShrink, now: () => number = Date.now) {
     this.dir = dir
     this.shrink = shrink
+    this.now = now
   }
 
   async thumb(img: { bytes: Buffer; type: IconType }): Promise<ThumbResult> {
     if (img.bytes.length < THUMB_MIN_BYTES) return { kind: 'original' }
     const format: ThumbFormat = hasAlpha(img.bytes, img.type) ? 'png' : 'jpeg'
+    const target = format === 'jpeg' ? THUMB_EDGE : THUMB_EDGE_ALPHA
+    const size = imageSize(img.bytes, img.type)
+    const longest = size ? Math.max(size.width, size.height) : 0
+    // 目標より小さい画像は引き伸ばさない。PNG は縮めずに作り直しても軽くならないので元のまま、JPEG は大きさを変えずに作り直す
+    if (longest > 0 && longest <= target && format === 'png') return { kind: 'original' }
+    const edge = longest > 0 ? Math.min(target, longest) : target
     const hash = createHash('sha256').update(img.bytes).digest('hex').slice(0, 32)
     const out = join(this.dir, `${hash}.${format === 'jpeg' ? 'jpg' : 'png'}`)
     try {
@@ -94,9 +143,11 @@ export class Thumbnails implements ThumbMaker {
       // まだ無い
     }
     if (this.missing) return { kind: 'unavailable' }
+    const failedAt = this.failed.get(hash)
+    if (failedAt !== undefined && this.now() - failedAt < THUMB_FAILED_TTL_MS) return { kind: 'unavailable' }
     const pending = this.inflight.get(out)
     if (pending) return pending
-    const job = this.make(img.bytes, hash, out, format).finally(() => this.inflight.delete(out))
+    const job = this.make(img.bytes, hash, out, format, edge).finally(() => this.inflight.delete(out))
     this.inflight.set(out, job)
     return job
   }
@@ -106,20 +157,22 @@ export class Thumbnails implements ThumbMaker {
     return bytes.length > 0 && bytes.length < original ? { kind: 'thumb', bytes, type: format } : { kind: 'original' }
   }
 
-  private async make(bytes: Buffer, hash: string, out: string, format: ThumbFormat): Promise<ThumbResult> {
+  private async make(bytes: Buffer, hash: string, out: string, format: ThumbFormat, edge: number): Promise<ThumbResult> {
     await this.acquire()
     const src = join(this.dir, `${hash}.src`)
     const tmp = join(this.dir, `${hash}.tmp.${format === 'jpeg' ? 'jpg' : 'png'}`)
     try {
       await mkdir(this.dir, { recursive: true })
       await writeFile(src, bytes)
-      await this.shrink(src, tmp, format)
+      await this.shrink(src, tmp, format, edge)
       const made = await readFile(tmp)
       await rename(tmp, out)
       if (++this.made % 50 === 1) void this.trim()
       return this.result(made, format, bytes.length)
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT' && (err as { path?: string }).path === 'sips') this.missing = true
+      if (this.failed.size > 1000) this.failed.clear()
+      this.failed.set(hash, this.now())
       return { kind: 'unavailable' }
     } finally {
       await Promise.all([rm(src, { force: true }), rm(tmp, { force: true })])

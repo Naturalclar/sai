@@ -10,7 +10,9 @@ import { probeThumb } from './thumb'
  */
 export function ThumbImage({ url, alt, onBroken }: { url: string; alt: string; onBroken?: () => void }) {
   const [heavy, setHeavy] = useState<number | null>(null)
-  const src = thumbUrl(url)
+  // HEAD が 200 を返したら 1 回だけ読み直す（URL を変えてブラウザの失敗を引かない）
+  const [retried, setRetried] = useState(false)
+  const src = thumbUrl(url) + (retried ? '&retry=1' : '')
   if (heavy !== null) {
     return (
       <span className="md-image thumb-heavy" title={`${alt}\n軽い版を作れないので、押したときに元の画像を読みます`}>
@@ -27,7 +29,11 @@ export function ThumbImage({ url, alt, onBroken }: { url: string; alt: string; o
       loading="lazy"
       decoding="async"
       onError={() => {
-        void probeThumb(src).then((f) => (f.kind === 'heavy' ? setHeavy(f.bytes) : onBroken?.()))
+        void probeThumb(src).then((f) => {
+          if (f.kind === 'heavy') setHeavy(f.bytes)
+          else if (f.kind === 'retry' && !retried) setRetried(true)
+          else onBroken?.()
+        })
       }}
     />
   )

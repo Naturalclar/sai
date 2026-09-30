@@ -12,6 +12,7 @@ test('thumbFailure: 503 + X-SAI-Thumb: unavailable だけが「押すまで読�
   assert.deepEqual(thumbFailure(503, headers({ 'X-SAI-Thumb': 'unavailable' })), { kind: 'heavy', bytes: 0 })
   assert.deepEqual(thumbFailure(503, headers({})), { kind: 'broken' })
   assert.deepEqual(thumbFailure(404, headers({ 'X-SAI-Thumb': 'unavailable' })), { kind: 'broken' })
+  assert.deepEqual(thumbFailure(200, headers({})), { kind: 'retry' }, '見分けている間に出来たなら読み直す（#593 のレビュー）')
 })
 
 test('thumbUrl / formatImageBytes', () => {

@@ -96,8 +96,8 @@ C-c / SIGTERM では必ず終わる（#296。`main.ts` の `shutdown()`）。
 
 - 口は 4 つ（`/images/<key>`・`/transcript-images/<key>`・`/codex-images/<key>`・`/api/attachments/…`）。前の 3 つは `app.ts` の `sendImage()`、添付は同じ形をその場で書く。**どれも今の読み方で読み終えたバイト列**（realpath が置き場の中・中身で種類を判定・上限以下）を `ThumbMaker.thumb()` に渡すだけで、`?thumb=1` で読む条件は変わらない。
 - `Thumbnails.thumb()` は、`THUMB_MIN_BYTES`（200KB）未満なら `original`（元のまま）。それ以上はバイト列を置き場（feed dir の `thumbs/`）に `<sha256 の頭 32 桁>.src` として書き、**そのパスだけ**を `sips` に渡す（`sipsShrink()`。形は決め打ち・`execFile`・15 秒の締切）。出来たものは `<ハッシュ>.jpg|png` に置き、次からはそれを読む（鍵が中身なので古くならない）。
-- 形式は `hasAlpha()` で決める: JPEG と透過の無い PNG は長辺 512px の JPEG（品質 75）、透過のある PNG（IHDR の色の種類 4 / 6、IDAT より前の `tRNS`）・GIF・WebP は長辺 384px の PNG。縮めても元より重ければ `original`。
+- 形式は `hasAlpha()` で決める: JPEG と透過の無い PNG は長辺 512px の JPEG（品質 75）、透過のある PNG（IHDR の色の種類 4 / 6、IDAT より前の `tRNS`）・GIF・WebP は長辺 384px の PNG。縮めても元より重ければ `original`。**`sips -Z` は小さい画像を引き伸ばす**ので、`imageSize()`（PNG / GIF / WebP / JPEG の見出しから縦横を読むだけ）で長辺が目標以下なら、PNG にするものは `original`、JPEG にするものは大きさを変えずに作り直す。
 - 同じ中身を同時に頼まれたら 1 回だけ縮め、同時に回す `sips` は 2 つまで。置き場は 1000 枚を超えたら古いもの（mtime）から捨てる（50 枚作るごとに見る）。
-- `sips` が無い（`ENOENT`）・失敗・締切は `unavailable` で、`sendImage()` は `503` + `X-SAI-Thumb: unavailable` + `X-SAI-Image-Bytes` を返す。`sips` が無いと分かったら以後は呼ばない。
+- `sips` が無い（`ENOENT`）・失敗・締切は `unavailable` で、`sendImage()` は `503` + `X-SAI-Thumb: unavailable` + `X-SAI-Image-Bytes` を返す。`sips` が無いと分かったら以後は呼ばない。縮められなかった中身は 10 分覚えて回し直さない（`THUMB_FAILED_TTL_MS`。画面の見分けの HEAD がすぐ返る）。
 - 軽い版の `ETag` は元の `ETag` に `t-` を付けたもの。`download=1` のときは `thumb=1` を見ない。
 - `createApp` の既定は `new Thumbnails(join(store.directory, 'thumbs'))`（テストの feed dir は一時ディレクトリ）。テストは `TerminalDeps.thumbs` に偽の縮める口を渡した `Thumbnails` か `noThumbs`（縮めない）を渡す。

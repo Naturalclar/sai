@@ -206,7 +206,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 ### 枠の軽い版（#589）
 
 - `MessageImages` / `MarkdownImage` / `AttachedImages` の枠の `<img>` は `ThumbImage`（`src` は `shared/images.ts` の `thumbUrl()` = `?thumb=1`、`loading="lazy"`・`decoding="async"`）。**ライトボックスとダウンロードに渡すのは元の URL のまま**（`thumb.test.ts` がソースで見る）。
-- `<img>` の `onError` からは状態が見えないので、同じ URL に HEAD を投げて `thumbFailure()`（`web/src/thumb.ts`）で見分ける: `503` + `X-SAI-Thumb: unavailable` なら画像の印・名前・大きさ（`formatImageBytes()`）だけを出し（包んでいる `<a>` を押せば元を開く）、それ以外は親の `onBroken` で今までどおり「表示できません」。
+- `<img>` の `onError` からは状態が見えないので、同じ URL に HEAD を投げて `thumbFailure()`（`web/src/thumb.ts`）で見分ける: `503` + `X-SAI-Thumb: unavailable` なら画像の印・名前・大きさ（`formatImageBytes()`）だけを出し（包んでいる `<a>` を押せば元を開く）、`200` なら（見分けている間に出来た）1 回だけ URL を変えて読み直し、それ以外は親の `onBroken` で今までどおり「表示できません」。
 - 送る前の入力欄の画像（`AttachmentStrip`）は手元で選んだばかりなので、軽い版にしない。
 
 ### ライトボックス（#507 / #509）

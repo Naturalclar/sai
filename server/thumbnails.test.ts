@@ -12,7 +12,7 @@ import { createApp } from './app.ts'
 import { FeedStore } from './rows/store.ts'
 import { localDate } from './rows/aggregate.ts'
 import { row } from './rows/aggregate.test.ts'
-import { hasAlpha, noThumbs, THUMB_MIN_BYTES, Thumbnails } from './local/thumbnails.ts'
+import { hasAlpha, imageSize, noThumbs, THUMB_FAILED_TTL_MS, THUMB_MIN_BYTES, Thumbnails } from './local/thumbnails.ts'
 import type { Shrinker, ThumbFormat } from './local/thumbnails.ts'
 import { IMAGE_MAX_BYTES, sessionImageUrl, thumbUrl } from '../shared/images.ts'
 
@@ -163,6 +163,63 @@ test('Thumbnails: 失敗・締切は unavailable。sips が無ければ以後は
   } finally {
     await rm(d, { recursive: true, force: true })
   }
+})
+
+test('Thumbnails: 縮められなかった中身は覚えて、しばらく sips を回し直さない（#593 のレビュー）', async () => {
+  const d = await mkdtemp(join(tmpdir(), 'sai-thumbs-failed-'))
+  try {
+    let t = 0
+    let n = 0
+    const th = new Thumbnails(d, async () => {
+      n++
+      throw new Error('timeout')
+    }, () => t)
+    const big = { bytes: png(THUMB_MIN_BYTES + 50), type: 'png' as const }
+    assert.deepEqual(await th.thumb(big), { kind: 'unavailable' })
+    assert.deepEqual(await th.thumb(big), { kind: 'unavailable' })
+    assert.equal(n, 1, '画面の見分けの HEAD では回し直さない')
+    t = THUMB_FAILED_TTL_MS
+    await th.thumb(big)
+    assert.equal(n, 2, '時間が経てばまた試す')
+  } finally {
+    await rm(d, { recursive: true, force: true })
+  }
+})
+
+test('Thumbnails: 目標より小さい画像は引き伸ばさない（PNG は元のまま、JPEG は大きさを変えずに作り直す。#593 のレビュー）', async () => {
+  const d = await mkdtemp(join(tmpdir(), 'sai-thumbs-small-'))
+  try {
+    const edges: number[] = []
+    const th = new Thumbnails(d, async (_i, o, _f, edge) => {
+      edges.push(edge)
+      await writeFile(o, JPEG_THUMB)
+    })
+    const sized = (w: number, h: number, colorType: number) => {
+      const b = png(THUMB_MIN_BYTES + w + colorType, colorType)
+      b.writeUInt32BE(w, 16)
+      b.writeUInt32BE(h, 20)
+      return { bytes: b, type: 'png' as const }
+    }
+    assert.deepEqual(await th.thumb(sized(300, 200, 6)), { kind: 'original' }, '透過のある 300px は縮めない')
+    assert.equal((await th.thumb(sized(300, 200, 2))).kind, 'thumb')
+    assert.equal((await th.thumb(sized(2000, 1000, 2))).kind, 'thumb')
+    assert.deepEqual(edges, [300, 512])
+  } finally {
+    await rm(d, { recursive: true, force: true })
+  }
+})
+
+test('imageSize: 見出しから縦横を読む（PNG / GIF / JPEG）', () => {
+  const p = png(64)
+  p.writeUInt32BE(1024, 16)
+  p.writeUInt32BE(1536, 20)
+  assert.deepEqual(imageSize(p, 'png'), { width: 1024, height: 1536 })
+  const g = Buffer.from('GIF89a\x40\x01\xc8\x00', 'latin1')
+  assert.deepEqual(imageSize(g, 'gif'), { width: 320, height: 200 })
+  // SOI → APP0（長さ 4）→ SOF0（高さ 480・幅 640）
+  const j = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 4, 0, 0, 0xff, 0xc0, 0, 11, 8, 0x01, 0xe0, 0x02, 0x80, 3, 0, 0, 0])
+  assert.deepEqual(imageSize(j, 'jpeg'), { width: 640, height: 480 })
+  assert.equal(imageSize(Buffer.from([0xff, 0xd8]), 'jpeg'), null)
 })
 
 test('hasAlpha: PNG は IHDR の色の種類か IDAT より前の tRNS、JPEG は無し', () => {

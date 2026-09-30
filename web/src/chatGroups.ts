@@ -4,6 +4,7 @@ import { wasClipped } from '../../shared/clipped.ts'
 import { entityId } from '../../shared/entity.ts'
 import { eventKind } from '../../shared/events.ts'
 import { dayLabel, minutesBetween, parseTs, ymd } from './format.ts'
+import { withSuffix } from '../../shared/sessionLabels.ts'
 
 /** 発言者。自分（ターンの入力）か、エージェント */
 export type Speaker = 'me' | FeedRow['agent']
@@ -190,14 +191,14 @@ export interface SpeakerLabel {
  * session はセッション一覧（SessionSummary）から引く。一覧の窓に無いセッションの行がフィードに出ることがあるので、
  * 引けなければ固定値に落ちる
  */
-export function speakerLabel(speaker: Speaker, session: Pick<SessionSummary, 'meta' | 'icon'> | undefined, profile?: Profile): SpeakerLabel {
+export function speakerLabel(speaker: Speaker, session: Pick<SessionSummary, 'meta' | 'icon' | 'label_suffix'> | undefined, profile?: Profile): SpeakerLabel {
   if (speaker === 'me') {
     const me: SpeakerLabel = { name: profile?.name || 'あなた', mark: '私' }
     if (profile?.icon) me.icon = profile.icon
     return me
   }
   const out: SpeakerLabel = {
-    name: session?.meta?.name || AGENT_LABEL[speaker] || speaker,
+    name: (session?.meta?.name && withSuffix(session.meta.name, session)) || AGENT_LABEL[speaker] || speaker,
     mark: AGENT_INITIAL[speaker] || '?',
   }
   if (session?.icon) out.icon = session.icon

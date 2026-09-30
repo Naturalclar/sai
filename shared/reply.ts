@@ -5,6 +5,7 @@ import { entityId } from './entity.ts'
 import { isRemoteHost } from './host.ts'
 import { projectName, rowProject } from './project.ts'
 import type { FeedRow, Replying, SessionSummary } from './types.ts'
+import { withSuffix } from './sessionLabels.ts'
 
 /**
  * 返信できない理由。空文字なら返信できる。
@@ -75,7 +76,8 @@ export function sessionReplyTargets(sessions: SessionSummary[], selfHost: string
       // 行に無くてもサーバが cwd の git から埋めている（server/git/project.ts の ProjectResolver）
       project: s.project,
       branch: s.branch,
-      title: clipTitle(s.meta?.name || s.title),
+      // 同じ名前のセッションが並んでも選び間違えないよう添え字を足す（#572。選んだ先は ID で持つ）
+      title: clipTitle(withSuffix(s.meta?.name || s.title, s)),
       blocked: replyBlockedReason(s, selfHost),
     }
     if (s.icon) t.icon = s.icon

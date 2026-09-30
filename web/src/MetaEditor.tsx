@@ -2,7 +2,8 @@ import { useRef, useState } from 'react'
 import type { ChangeEvent, KeyboardEvent } from 'react'
 import { ICON_ACCEPT, ICON_MIME, ICON_SOURCE_MAX_BYTES } from '../../shared/icon.ts'
 import { META_NAME_MAX, normalizeMeta } from '../../shared/meta.ts'
-import type { SessionMeta } from '../../shared/types.ts'
+import type { SessionMeta, SessionSummary } from '../../shared/types.ts'
+import { sameNameNote, sameNamed } from '../../shared/sessionLabels.ts'
 import { api } from './api'
 import { IconCropper } from './IconCropper'
 import { IconHistoryPicker } from './IconHistoryPicker'
@@ -23,7 +24,21 @@ const ICON_TYPES = new Set<string>(Object.values(ICON_MIME))
  * 3秒ポーリングが追いついたら props の meta / icon に戻る。
  * 呼び出し側は key={id} を付けること（別のセッションに移ったら編集状態ごと作り直す）。
  */
-export function MetaEditor({ id, meta, icon }: { id: string; meta: SessionMeta | undefined; icon: string | undefined }) {
+export function MetaEditor({
+  id,
+  meta,
+  icon,
+  self,
+  peers,
+}: {
+  id: string
+  meta: SessionMeta | undefined
+  icon: string | undefined
+  /** 同じ名前の知らせ（#572）に使う、このセッションの project / repo */
+  self?: Pick<SessionSummary, 'id' | 'meta' | 'project' | 'repo' | 'archived'>
+  /** 一覧のセッション（#572）。同じ project に同じ表示名があれば知らせる（止めはしない） */
+  peers?: readonly SessionSummary[]
+}) {
   const [editing, setEditing] = useState(false)
   const [name, setName] = useState('')
   const [busy, setBusy] = useState(false)
@@ -40,6 +55,8 @@ export function MetaEditor({ id, meta, icon }: { id: string; meta: SessionMeta |
   const pickRef = useRef<HTMLButtonElement>(null)
 
   const current = saved ?? meta ?? {}
+  // 同じ project に同じ表示名のセッションがあれば知らせる（#572。止めはしない。同じ名前にしたいこともある）
+  const twin = editing && self && peers ? sameNamed(peers, self, name) : null
   const currentIcon = savedIcon === undefined ? icon : (savedIcon ?? undefined)
 
   const start = () => {
@@ -193,6 +210,7 @@ export function MetaEditor({ id, meta, icon }: { id: string; meta: SessionMeta |
       </button>
       {iconControls}
       {error && <span className="err">{error}</span>}
+      {twin && <span className="note">{sameNameNote(twin)}</span>}
     </form>
   )
 }

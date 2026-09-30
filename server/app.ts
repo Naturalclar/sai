@@ -160,6 +160,7 @@ import { isRemoteHost } from '../shared/host.ts'
 import { IMAGES_SEGMENT } from '../shared/images.ts'
 import { imageHeaders, imageTable, readSessionImage } from './local/images.ts'
 import { TranscriptImages } from './local/transcriptImages.ts'
+import { labelCollisions, labelSuffixes } from '../shared/sessionLabels.ts'
 import { CodexImages } from './local/codexImages.ts'
 import { galleryFromRows, mergeGallery, rowTsAtOrAfter } from '../shared/gallery.ts'
 import { searchRows } from './rows/search.ts'
@@ -221,6 +222,8 @@ const TURN_SUFFIX = '/turn'
 const TRANSCRIPT_IMAGES_SEGMENT = '/transcript-images/'
 /** `GET /api/sessions/<id>/codex-images/<key>`（#575）。Codex の画像生成で作った画像。鍵は一覧で見つけたファイル名だけ */
 const CODEX_IMAGES_SEGMENT = '/codex-images/'
+/** 同じ名前のセッションの本当の始まりを引く窓（#572）。重なりがあるときだけ使う */
+const LABEL_START_DAYS = 90
 /**
  * Codex のターンが閉じてから notify の行が書かれるまでの遅れ（#576 のレビュー）。行の `ts` は秒までで、record.py は
  * notify で起きてから rollout を読むので、実データでは同じ秒だった。余裕を見て数秒
@@ -927,9 +930,7 @@ export function createApp(
     const sessions = await fillRepo(projects, raw)
     // 未読の数（#502）。印は read-marks.json、数えるのは窓の中のターン完了の行
     const unread = unreadCounts(rows, reads.marks)
-    return {
-      rev: `${rev}-${meta.rev}-${icons.rev}-${reads.rev}`,
-      sessions: await Promise.all(sessions.map(async (s) => {
+    const built = await Promise.all(sessions.map(async (s) => {
         const m = meta.entries[s.id]
         const icon = icons.entries.get(iconKey(s.id))
         // 端末で開いているか（pid の生存）は毎回見る。rev には混ぜない（端末を閉じても次の行で rev が変わる）
@@ -944,8 +945,19 @@ export function createApp(
         if (n) out.unread = n
         out.read_at = readMarkOf(reads.marks, s.id)
         return out
-      })),
+      }))
+    // 同じ名前のセッションを見分ける添え字（#572）。重なりがあるときだけ、本当の始まりを広い窓で引く
+    // （一覧の start は窓の中の最初の行なので、7 日の窓では 9/2 に始まったセッションが 9/24 に見える）。重なりはまれなので、普段は何もしない
+    if (labelCollisions(built).length > 0) {
+      const wide = days >= LABEL_START_DAYS ? built : (await store.sessions(LABEL_START_DAYS)).sessions
+      const starts = new Map(wide.map((s) => [s.id, s.start]))
+      const suffixes = labelSuffixes(built, (id) => starts.get(id) ?? '')
+      for (const s of built) {
+        const suffix = suffixes.get(s.id)
+        if (suffix) s.label_suffix = suffix
+      }
     }
+    return { rev: `${rev}-${meta.rev}-${icons.rev}-${reads.rev}`, sessions: built }
   }
 
   /**

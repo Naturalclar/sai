@@ -12,6 +12,7 @@ import { elapsedLabel } from './format'
 import { SessionPrLink } from './SessionPrLink'
 import type { PrRepo } from '../../shared/types.ts'
 import { prForSession } from '../../shared/prs.ts'
+import { withSuffix } from '../../shared/sessionLabels.ts'
 
 interface Props {
   item: TodoItem
@@ -40,7 +41,8 @@ interface Props {
  */
 export function TodoRow({ item, now, hotkey, modeNote, reply, children, prs = [] }: Props) {
   const s = item.session
-  const label = s ? s.meta?.name || s.title || s.id : item.id
+  // 同じ名前のセッションがあれば添え字で見分ける（#572。リンクは今までどおり ID）
+  const label = s ? withSuffix(s.meta?.name || s.title || s.id, s) : item.id
   const where = s ? projectName(s.project) || s.repo : ''
   const waited = elapsedLabel(item.since, now)
   const done = item.kind === 'done'

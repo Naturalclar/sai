@@ -7,6 +7,7 @@ import { projectName } from '../../shared/project.ts'
 import { eventKind } from '../../shared/events.ts'
 import { excerptOf, matchesAll, SEARCH_LIMIT } from '../../shared/search.ts'
 import type { FeedRow, SearchHit, SessionSummary } from '../../shared/types.ts'
+import { withSuffix } from '../../shared/sessionLabels.ts'
 
 /**
  * 舐めるのは `text`（エージェントの返答）と `user_text`（自分の入力）だけ。
@@ -54,7 +55,7 @@ export function searchRows(
         id,
         ts: row.ts,
         who,
-        label: s?.meta?.name || s?.title || id,
+        label: withSuffix(s?.meta?.name || s?.title || id, s),
         hint: [projectName(s?.project ?? row.project ?? '') || row.repo, row.branch].filter(Boolean).join(' / '),
         excerpt: text,
         hits: marks,

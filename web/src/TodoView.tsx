@@ -15,6 +15,7 @@ import { restoresText, type RestoreRequest } from './replyRestore'
 import { ownReplying, pruneToggled, rowOpen, rowReplyable, toggleKey } from './todoReply'
 import { pendingItems, todoItems, todoSections, type TodoItem } from '../../shared/todoItems.ts'
 import type { PaneProps } from './App'
+import { withSuffix } from '../../shared/sessionLabels.ts'
 
 const NO_REPLYING: ReplyingMap = {}
 
@@ -87,7 +88,7 @@ export function TodoView({ list, onStatus, onOpenSidebar, onLeaveToSidebar, prs 
 
   const labelOf = (id: string) => {
     const s = data?.sessions.find((x) => x.id === id)
-    return s ? s.meta?.name || s.title || s.id : id
+    return s ? withSuffix(s.meta?.name || s.title || s.id, s) : id
   }
   const sendFrom = async (t: TodoItem, text: string, attachments: string[]) => {
     const queued = data?.queued[t.id]?.items.length ?? 0

@@ -359,7 +359,7 @@ export function App() {
           ) : route.name === 'todo' ? (
             <TodoView list={list} onStatus={onStatus} onOpenSidebar={openSidebar} onLeaveToSidebar={focusSidebar} linear={linear} settings={settings} prs={sessionPrs} />
           ) : route.name === 'session' ? (
-            <SessionView id={route.id} focusTs={route.ts ?? ''} {...(route.side ? { focusSide: route.side } : {})} onStatus={onStatus} onOpenSidebar={openSidebar} onLeaveToSidebar={focusSidebar} onToggleDiff={toggleDiff} diffOpen={diffOpen !== null} {...(commentInsert && commentInsert.id === route.id ? { insert: commentInsert } : {})} linear={linear} settings={settings} />
+            <SessionView id={route.id} focusTs={route.ts ?? ''} {...(route.side ? { focusSide: route.side } : {})} onStatus={onStatus} onOpenSidebar={openSidebar} onLeaveToSidebar={focusSidebar} onToggleDiff={toggleDiff} diffOpen={diffOpen !== null} {...(commentInsert && commentInsert.id === route.id ? { insert: commentInsert } : {})} linear={linear} settings={settings} peers={list.data?.sessions} />
           ) : (
             <FeedView
               selected={filters.projects}

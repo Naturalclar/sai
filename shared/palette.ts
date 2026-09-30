@@ -2,6 +2,7 @@
 // node:test で回す。キーを受けて出すのは web/src/CommandPalette.tsx。
 import { projectName } from './project.ts'
 import type { SessionSummary } from './types.ts'
+import { withSuffix } from './sessionLabels.ts'
 
 /** 候補 1 つ。先頭は必ずフィード */
 export type PaletteItem =
@@ -38,7 +39,7 @@ export function paletteItems(sessions: readonly SessionSummary[]): PaletteItem[]
     const item: Extract<PaletteItem, { kind: 'session' }> = {
       kind: 'session',
       id: s.id,
-      label: s.meta?.name || s.title || '(無題)',
+      label: withSuffix(s.meta?.name || s.title || '(無題)', s),
       hint: [project, s.branch].filter(Boolean).join(' / '),
       }
     if (s.icon) item.icon = s.icon

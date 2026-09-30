@@ -18,6 +18,7 @@ import { ArchiveMark } from './ArchiveMark'
 import { useArchive } from './useArchive'
 import { useSwipe } from './useSwipe'
 import { sessionPreview } from './sessionPreview.ts'
+import { withSuffix } from '../../shared/sessionLabels.ts'
 
 interface Props {
   s: SessionSummary
@@ -126,7 +127,7 @@ export function SessionItem({ s, active, replying, profile, approval, now, swipe
         </span>
         <span className="t" title={s.title_full}>
           {s.icon && <img className="icon" src={s.icon} alt="" />}
-          {s.meta?.name || s.title || '(無題)'}
+          {withSuffix(s.meta?.name || s.title || '(無題)', s)}
           {isRemoteHost(s.host, selfHost) && <HostTag host={s.host} />}
           {s.session_source === 'synth' && <SynthTag />}
           {s.waiting && <WaitingTag text={s.waiting} />}

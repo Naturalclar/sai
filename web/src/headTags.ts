@@ -4,6 +4,7 @@ import { contextWarns } from '../../shared/contextSize.ts'
 import { isRemoteHost } from '../../shared/host.ts'
 import { projectName } from '../../shared/project.ts'
 import type { SessionSummary, Terminal } from '../../shared/types.ts'
+import { withSuffix } from '../../shared/sessionLabels.ts'
 
 /** 印 1 つ分。並びはこの順で出す */
 export type HeadTag =
@@ -57,6 +58,6 @@ export function headTags(s: HeadTagSession, input: HeadTagInput): HeadTag[] {
  * 狭い画面の 1 行目の名前。表示名があればそれを主にして `#project` を添え、無ければ `#project` だけ。
  * project は bare clone の worktree でも崩れないリポジトリ名で、分からなければ repo（広い画面の `<h1>` と同じ）
  */
-export function headName(s: Pick<SessionSummary, 'project' | 'repo' | 'meta'>): { name: string; project: string } {
-  return { name: s.meta?.name ?? '', project: projectName(s.project) || s.repo }
+export function headName(s: Pick<SessionSummary, 'project' | 'repo' | 'meta' | 'label_suffix'>): { name: string; project: string } {
+  return { name: s.meta?.name ? withSuffix(s.meta.name, s) : '', project: projectName(s.project) || s.repo }
 }

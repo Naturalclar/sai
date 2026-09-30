@@ -211,6 +211,11 @@ export interface SessionSummary {
    * 窓の中の行から応答時に数える。0 なら省略
    */
   unread?: number
+  /**
+   * 同じ project の中で同じ名前のセッションがあるときだけの、見分けの添え字（#572。`9/2〜` か ID の頭）。
+   * サーバが一覧を組むときに付ける（`shared/sessionLabels.ts` の `labelSuffixes()`）。名前を出す所は `withSuffix()` を通す
+   */
+  label_suffix?: string
   /** どこまで読んだか（#502。ミリ秒）。セッション画面の「ここから未読」の線はこれより新しい最初の返答の前に引く */
   read_at?: number
 }

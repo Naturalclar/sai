@@ -9,13 +9,15 @@ interface Props {
   settings: SettingsResponse | null
   /** 思考の折りたたみ。思考のある行が 1 つも無ければトグルは出さない */
   thinking: { has: boolean; open: boolean; toggle: () => void }
+  /** 一覧のセッション（#572）。名前を付けるときに同じ名前があれば知らせる */
+  peers?: readonly SessionSummary[] | undefined
 }
 
 /**
  * チャット見出しの「操作」（アーカイブ・表示名とアイコン・許可されているもの・一言の性格・思考を全部開く）。
  * 広い画面では見出しにそのまま並び、狭い画面では「⋯」のパネルの中に入る（#274）
  */
-export function SessionHeadActions({ s, settings, thinking }: Props) {
+export function SessionHeadActions({ s, settings, thinking, peers }: Props) {
   return (
     <>
       {/*
@@ -26,7 +28,7 @@ export function SessionHeadActions({ s, settings, thinking }: Props) {
         合成 ID（synth）でも出す（#248）。アーカイブは表示の都合なので、再開できるかとは別
       */}
       <ArchiveButton key={`archive:${s.id}:${s.archived ? 1 : 0}`} id={s.id} archived={Boolean(s.archived)} />
-      <MetaEditor key={`meta:${s.id}`} id={s.id} meta={s.meta} icon={s.icon} />
+      <MetaEditor key={`meta:${s.id}`} id={s.id} meta={s.meta} icon={s.icon} self={s} {...(peers ? { peers } : {})} />
       {s.agent === 'claude' && <PermissionsButton key={`perm:${s.id}`} id={s.id} />}
       {/* 一言が有効なときだけ。このセッションの性格（無ければヘッダの既定に従う） */}
       {settings?.digest && <SessionPersonaSelect key={`persona:${s.id}`} id={s.id} value={s.meta?.persona} off={Boolean(s.meta?.digest_off)} defaultPersona={settings.persona} />}

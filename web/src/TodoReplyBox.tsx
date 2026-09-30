@@ -1,4 +1,5 @@
 import type { Replying, SessionSummary } from './api'
+import { REPLY_FOR_ATTR } from './approvalKeys'
 import { ReplyBox } from './ReplyBox'
 import type { RestoreRequest } from './replyRestore'
 
@@ -25,7 +26,8 @@ interface Props {
  */
 export function TodoReplyBox({ session: s, replying, queued, onSend, sentFromConfirm, restore, onLeaveToSidebar }: Props) {
   return (
-    <div className="todo-reply">
+    // どのセッションの入力欄かを印にする。上の段の許可の ⌘Enter が、ここで押したキーを横取りしないように
+    <div className="todo-reply" {...{ [REPLY_FOR_ATTR]: s.id }}>
       <ReplyBox
         // 打ちかけは作ったときに 1 回だけ読むので、返信先ごとに作り直す（#306）
         key={`reply:${s.id}`}

@@ -10,12 +10,32 @@ export function rowReplyable(t: Pick<TodoItem, 'kind' | 'replyable' | 'session'>
 }
 
 /**
- * いま開いておく行。**開いていた行が並びから消えた**（送って処理中になった・端末で片付いた）ら閉じる。
- * 消えたまま開いた印を残すと、ターンが終わって行が戻ってきたときに勝手に開いてしまう
+ * 何もしなければ返信欄を開いておくか。**終わって次を待っている行（`done`）は最初から開く**（すぐ次を打てるように）。
+ * 待機中（`watch`）は答えを待っている段で、下段より数が少なく中身も長いので、押したときだけ開く
  */
-export function openRow(openId: string | null, items: readonly Pick<TodoItem, 'id' | 'kind' | 'replyable' | 'session'>[]): string | null {
-  if (!openId) return null
-  return items.some((t) => t.id === openId && rowReplyable(t)) ? openId : null
+export function opensByDefault(t: Pick<TodoItem, 'kind'>): boolean {
+  return t.kind === 'done'
+}
+
+/** 切り替えの鍵。区分を混ぜるので、待機中から終わった行に変わったら既定に戻る */
+export function toggleKey(t: Pick<TodoItem, 'id' | 'kind'>): string {
+  return `${t.kind}:${t.id}`
+}
+
+/** その行の返信欄が開いているか。`toggled` は人が既定から切り替えた行（開いた・閉じた）の鍵 */
+export function rowOpen(t: Pick<TodoItem, 'id' | 'kind' | 'replyable' | 'session'>, toggled: ReadonlySet<string>): boolean {
+  return rowReplyable(t) && opensByDefault(t) !== toggled.has(toggleKey(t))
+}
+
+/**
+ * 並びから消えた行の切り替えを忘れる（送って処理中になった・端末で片付いた）。忘れないと、ターンが終わって行が
+ * 戻ってきたときに前の開け閉めが残る。**何も消えなければ同じ Set を返す**（描画中に state を合わせるので、毎回新しくすると回り続ける）
+ */
+export function pruneToggled(toggled: ReadonlySet<string>, items: readonly Pick<TodoItem, 'id' | 'kind'>[]): ReadonlySet<string> {
+  if (toggled.size === 0) return toggled
+  const live = new Set(items.map(toggleKey))
+  const kept = [...toggled].filter((k) => live.has(k))
+  return kept.length === toggled.size ? toggled : new Set(kept)
 }
 
 /**

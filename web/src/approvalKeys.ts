@@ -27,3 +27,16 @@ export function approvalAction(e: KeyLike, hasAlways: boolean): ApprovalAction |
   if (!e.shiftKey) return 'allow'
   return hasAlways ? 'always' : 'allow'
 }
+
+/** 返信欄に付ける「どのセッションの入力欄か」の印（要対応の行の下の返信欄。#538 のレビュー） */
+export const REPLY_FOR_ATTR = 'data-reply-for'
+
+/**
+ * そのキー入力を許可のショートカットとして受けてよいか。**別のセッションの入力欄で押されたものは受けない**。
+ * 要対応は行ごとに返信欄を開いておくので、下段の返信欄で ⌘Enter を押すと一番上の（別のセッションの）許可が
+ * 通ってしまう。`replyFor` は押された場所に一番近い印の値で、印の無い場所（セッション画面の入力欄など、
+ * 返信先が許可と同じか分からないところ）は今までどおり受ける
+ */
+export function hotkeyApplies(replyFor: string | null, approvalEntity: string): boolean {
+  return replyFor === null || replyFor === approvalEntity
+}

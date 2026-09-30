@@ -11,7 +11,7 @@ import { useNarrow } from './useNarrow'
 import { shouldQueue } from './replyQueue.ts'
 import { loadDraft, saveDraft } from './replyDrafts'
 import { restoresText, type RestoreRequest } from './replyRestore'
-import { openRow, ownReplying, rowReplyable } from './todoReply'
+import { ownReplying, pruneToggled, rowOpen, rowReplyable, toggleKey } from './todoReply'
 import { doneItems, pendingItems, todoItems, type TodoItem } from '../../shared/todoItems.ts'
 import type { PaneProps } from './App'
 
@@ -55,20 +55,32 @@ export function TodoView({ list, onStatus, onOpenSidebar, onLeaveToSidebar }: Pr
   const replying = data?.replying ?? NO_REPLYING
   // useReply に見せるのは、この画面から送ったセッションのぶんだけ（ほかの画面から送った返信の失敗を拾わない）
   const [sentFrom, setSentFrom] = useState<ReadonlySet<string>>(() => new Set())
-  const { pending: sending, failed, send, confirm, confirmedSent, confirmReplace, confirmProcess, cancelConfirm } = useReply(
+  const { pending: sending, failed, send, confirm, confirmReplace, confirmProcess, cancelConfirm } = useReply(
     (id) => data?.sessions.find((s) => s.id === id)?.turns ?? 0,
     ownReplying(replying, sentFrom),
     updatedAt,
   )
   // 狭い画面では行の下に開かず、セッション画面に移る（入力欄とキーボードで画面がほぼ埋まる）
   const narrow = useNarrow()
-  const [openId, setOpenId] = useState<string | null>(null)
+  // 人が既定から切り替えた行（終わった行は最初から開き、待機中は押したときだけ開く）
+  const [toggled, setToggled] = useState<ReadonlySet<string>>(() => new Set())
+  // 確認から送り直して受け付けられた回数を行ごとに（#338）。まとめて数えると、開いているほかの行の打ちかけまで消える
+  const [confirmedById, setConfirmedById] = useState<Readonly<Record<string, number>>>({})
   const [restore, setRestore] = useState<{ id: string } & RestoreRequest>()
   // 送った・処理中の返信（行は消えるので、どこに送ったかは上に出す）
   const [sentTo, setSentTo] = useState<{ id: string; label: string } | null>(null)
-  // 開いていた行が消えた（送って処理中になった・別の画面で片付いた）ら閉じる。描画中に合わせる（effect で setState しない）
+  // 並びから消えた行（送って処理中になった・別の画面で片付いた）の切り替えは忘れる。描画中に合わせる（effect で setState しない）
   const openable = new Set(items.filter(rowReplyable).map((t) => t.id))
-  if (data && openRow(openId, items) !== openId) setOpenId(null)
+  const pruned = pruneToggled(toggled, items)
+  if (data && pruned !== toggled) setToggled(pruned)
+  const isOpen = (t: TodoItem) => !narrow && rowOpen(t, toggled)
+  const toggle = (t: TodoItem) =>
+    setToggled((prev) => {
+      const next = new Set(prev)
+      const k = toggleKey(t)
+      if (!next.delete(k)) next.add(k)
+      return next
+    })
 
   const labelOf = (id: string) => {
     const s = data?.sessions.find((x) => x.id === id)
@@ -89,12 +101,19 @@ export function TodoView({ list, onStatus, onOpenSidebar, onLeaveToSidebar }: Pr
   // 失敗した本文を入力欄に戻す（#350）。開いていればその場で、閉じていれば打ちかけに書いてから開く
   // （ReplyBox は作ったときの restore を「当てた」ことにするので、開くのと同時に頼んでも入らない）
   const restoreFailed = (f: ReplyFailed) => {
-    if (openId === f.id) {
+    const t = items.find((x) => x.id === f.id)
+    if (!t) return
+    if (isOpen(t)) {
       setRestore((r) => ({ id: f.id, text: f.text, seq: (r?.seq ?? 0) + 1 }))
       return
     }
     keepAsDraft(f)
-    setOpenId(f.id)
+    toggle(t)
+  }
+  // 確認から送り直す。受け付けられたらその行の数だけ増やす（その行の入力欄だけが空になる）
+  const fromConfirm = async (run: () => Promise<string>) => {
+    const id = confirm?.id
+    if (id && (await run()) === 'sent') setConfirmedById((m) => ({ ...m, [id]: (m[id] ?? 0) + 1 }))
   }
   const failedNotice = (f: ReplyFailed) => (
     <div className="notice error reply-failed">
@@ -117,7 +136,7 @@ export function TodoView({ list, onStatus, onOpenSidebar, onLeaveToSidebar }: Pr
   const rowOf = (t: TodoItem, key: string, hotkey: boolean, modeNote: string) => {
     const s = t.session
     const replyOk = rowReplyable(t)
-    const open = Boolean(replyOk) && !narrow && openId === t.id
+    const open = isOpen(t)
     return (
       <TodoRow
         key={key}
@@ -125,14 +144,14 @@ export function TodoView({ list, onStatus, onOpenSidebar, onLeaveToSidebar }: Pr
         now={now}
         hotkey={hotkey}
         modeNote={modeNote}
-        {...(replyOk ? { reply: { inline: !narrow, open, onToggle: () => setOpenId(open ? null : t.id) } } : {})}
+        {...(replyOk ? { reply: { inline: !narrow, open, onToggle: () => toggle(t) } } : {})}
       >
         {open && s && (
           <TodoReplyBox
             session={s}
             replying={replying[t.id]}
             queued={data?.queued[t.id]?.items.length ?? 0}
-            sentFromConfirm={confirmedSent}
+            sentFromConfirm={confirmedById[t.id] ?? 0}
             {...(restore?.id === t.id ? { restore } : {})}
             onSend={(text, attachments) => sendFrom(t, text, attachments)}
             onLeaveToSidebar={onLeaveToSidebar}
@@ -168,7 +187,7 @@ export function TodoView({ list, onStatus, onOpenSidebar, onLeaveToSidebar }: Pr
           </>
         )}
       </div>
-      {confirm && <ReplaceConfirm confirm={confirm} onReplace={() => void confirmReplace()} onProcess={() => void confirmProcess()} onCancel={cancelConfirm} />}
+      {confirm && <ReplaceConfirm confirm={confirm} onReplace={() => void fromConfirm(confirmReplace)} onProcess={() => void fromConfirm(confirmProcess)} onCancel={cancelConfirm} />}
     </section>
   )
 }

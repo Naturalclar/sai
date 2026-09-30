@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { alwaysAllowRule, answerAsk, askQuestions, ruleLabel } from '../../shared/approvals.ts'
-import { approvalAction } from './approvalKeys'
+import { approvalAction, hotkeyApplies, REPLY_FOR_ATTR } from './approvalKeys'
 import { api, type Approval } from './api'
 import { AskQuestions } from './AskQuestions'
 import { DialogPreview } from './DialogPreview'
@@ -71,13 +71,16 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false, modeNote =
     const onKeyDown = (e: KeyboardEvent) => {
       const action = approvalAction(e, hasAlways)
       if (!action) return
+      // 別のセッションの返信欄で押された ⌘Enter は、その返信欄の送信に任せる（要対応の行の下の返信欄）
+      const owner = e.target instanceof Element ? e.target.closest(`[${REPLY_FOR_ATTR}]`) : null
+      if (!hotkeyApplies(owner?.getAttribute(REPLY_FOR_ATTR) ?? null, approval.id)) return
       e.preventDefault()
       e.stopPropagation()
       void send(action === 'always' ? { behavior: 'allow', remember: 'local' } : { behavior: 'allow' })
     }
     window.addEventListener('keydown', onKeyDown, true)
     return () => window.removeEventListener('keydown', onKeyDown, true)
-  }, [armed, hasAlways, send])
+  }, [armed, hasAlways, send, approval.id])
 
   const detail = detailOf(approval)
   return (

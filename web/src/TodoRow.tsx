@@ -80,8 +80,9 @@ export function TodoRow({ item, now, hotkey, modeNote, reply, children }: Props)
               <span className="note">{noteFor(done, item.replyable)}</span>
             )}
           </div>
-          {/* 終わったものだけ片付けられる（#527）。待っているものを片付けると、止まったまま見えなくなる */}
-          {done && s && <TodoArchiveButton id={item.id} />}
+          {/* 終わったものだけ片付けられる（#527）。待っているものを片付けると、止まったまま見えなくなる。
+              押したあと次の行が届くとアーカイブは打ち消されて行が残るので、end ごとに作り直して「戻す」の表示を持ち越さない */}
+          {done && s && <TodoArchiveButton key={`archive:${s.end}`} id={item.id} />}
         </div>
       )}
       {children}

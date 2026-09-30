@@ -1,29 +1,38 @@
 // Manager が入力欄に置いた「案」（#565）を出すかどうか。サーバ（一覧・詳細に載せる）とテストが使う純粋関数
-import type { ManagerDraft, SessionSummary } from './types.ts'
+import { eventKind } from './events.ts'
+import type { FeedRow, ManagerDraft } from './types.ts'
+import { rowMs } from './unread.ts'
 
 /** 置いてから出しておく長さ。過ぎたら出さない（ファイルからは次に置いたときに捨てる） */
 export const MANAGER_DRAFT_TTL_MS = 24 * 60 * 60 * 1000
 
 /**
- * 置いたあとに人の入力が来たか。**時刻ではなく、置いたときの入力（`base_text`）と比べる**（#586 のレビュー）。
- * `last_user_ts` はターン完了の行からも付き、その行の `user_text` は**そのターンを始めた入力**なので、
- * 処理中に置いた案がそのターンの終わりで消えてしまう。
- * 置いたときにターンが回っていたら（`busy`）、そのターンが 1 つ終わっただけのときも入力とは数えない
- * （Codex は入力の行を書かないので、回っていたターンの入力はターン完了の行で初めて届く）
+ * 置いたあとに人の入力が来たか。**そのセッションの、置いた時刻より後の行**で決める（#586 のレビュー）:
+ * - 入力の行（`resume` で `user_text` のあるもの。Claude の `UserPromptSubmit`）が 1 本でも来たら、来た
+ * - ターン完了の行は、置いたときにターンが回っていなければ 1 本、回っていたら（`busy`）2 本目で来たとみなす
+ *   （回っていたターンの終わりは人の入力ではない。Codex は入力の行を書かないので、入力はターン完了の行でしか分からない）
+ *
+ * `last_user_ts` と比べるのはやめた（ターン完了の行でも進むので、処理中に置いた案がそのターンの終わりで消えた）。
+ * `last_user_text` や `turns` と比べるのもやめた（1 行目が同じ入力を見逃す・`turns` は窓で数えが変わる）
  */
-export function inputSinceDraft(draft: ManagerDraft, s: Pick<SessionSummary, 'last_user_text' | 'turns' | 'last_kind'>): boolean {
-  if ((s.last_user_text ?? '') === draft.base_text) return false
-  if (draft.busy && s.turns === draft.base_turns + 1 && s.last_kind === 'turn') return false
-  return true
+export function inputSinceDraft(draft: ManagerDraft, rows: readonly FeedRow[]): boolean {
+  let turns = 0
+  for (const r of rows) {
+    if (!(rowMs(r.ts) > draft.at)) continue
+    const kind = eventKind(r.event, r.text)
+    if (kind === 'resume' && r.user_text?.trim()) return true
+    if (kind === 'turn') turns++
+  }
+  return turns > (draft.busy ? 1 : 0)
 }
 
 /**
  * いま出してよい案か。**置いてから 24 時間以内**で、**置いたあとに人の入力が来ていない**（`inputSinceDraft()`）ときだけ。
- * 案を置いた後に人が何か送ったら、その案は前の文脈のものなので畳む
+ * `rows` はそのセッションの行（置いてから後の分が入っていればよい）。案を置いた後に人が何か送ったら、その案は前の文脈のものなので畳む
  */
-export function liveManagerDraft(draft: ManagerDraft | undefined, s: Pick<SessionSummary, 'last_user_text' | 'turns' | 'last_kind'>, now: number): ManagerDraft | undefined {
+export function liveManagerDraft(draft: ManagerDraft | undefined, rows: readonly FeedRow[], now: number): ManagerDraft | undefined {
   if (!draft || !draft.text.trim()) return undefined
   if (now - draft.at >= MANAGER_DRAFT_TTL_MS) return undefined
-  if (inputSinceDraft(draft, s)) return undefined
+  if (inputSinceDraft(draft, rows)) return undefined
   return draft
 }

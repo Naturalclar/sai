@@ -971,11 +971,23 @@ export function createApp(
     const unread = unreadCounts(rows, reads.marks)
     // Manager の案（#565）。出すのは 24 時間以内で、置いたあとに人の入力が来ていないものだけ。
     // rev には「いま出している案」を混ぜる（ファイルの (mtime, size) だと 24 時間が過ぎて消えたときに変わらない）
+    // 人の入力が来たかは、置いた時刻より後のそのセッションの行で見る。24 時間は日付を 2 つまたぐので、窓が 1 日でも 2 日ぶん読む
     const nowMs = Date.now()
     const live = new Map<string, ManagerDraft>()
-    for (const s of sessions) {
-      const d = liveManagerDraft(drafts[s.id], s, nowMs)
-      if (d) live.set(s.id, d)
+    const placed = new Set(sessions.map((s) => s.id).filter((id) => drafts[id]))
+    if (placed.size > 0) {
+      const rowsOf = new Map<string, FeedRow[]>()
+      for (const r of days >= 2 ? rows : await store.rows(2)) {
+        const id = entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? ''))
+        if (!placed.has(id)) continue
+        const list = rowsOf.get(id)
+        if (list) list.push(r)
+        else rowsOf.set(id, [r])
+      }
+      for (const id of placed) {
+        const d = liveManagerDraft(drafts[id], rowsOf.get(id) ?? [], nowMs)
+        if (d) live.set(id, d)
+      }
     }
     const built = await Promise.all(sessions.map(async (s) => {
         const m = meta.entries[s.id]
@@ -2316,9 +2328,9 @@ export function createApp(
         if (target.archived) return textResult('置けません: アーカイブ済み', true)
         const blocked = replyBlockedReason(target, selfHost())
         if (blocked) return textResult(`置けません: ${blocked}`, true)
-        // 置いたときの入力を覚えておき、これが変わったら（人が何か送ったら）出さない。回っているターンの終わりでは消さない
+        // 回っているターンがあれば覚えておく（そのターンの終わりは人の入力ではないので、そこでは消さない）
         const busy = mcpBusy(to) || (await progress.read(target)).active
-        await suggestionStore.put(to, text, access.caller, { base_text: target.last_user_text ?? '', base_turns: target.turns, busy })
+        await suggestionStore.put(to, text, access.caller, { busy })
         await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${mcpFrom(access)} → ${to} 案を置いた（${text.length} 字）\n`).catch(() => {})
         return textResult('入力欄に案を置きました（送ってはいません。人が SAI の画面で見て、入れて送るか捨てるかを決めます）')
       },

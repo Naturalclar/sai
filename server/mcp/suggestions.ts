@@ -20,7 +20,7 @@ function parse(text: string): Record<string, ManagerDraft> {
   for (const [id, v] of Object.entries(obj as Record<string, unknown>)) {
     const d = v as Partial<ManagerDraft> | null
     if (d && typeof d.text === 'string' && typeof d.from === 'string' && typeof d.at === 'number' && Number.isFinite(d.at)) {
-      out[id] = { text: d.text, from: d.from, at: d.at, base_text: typeof d.base_text === 'string' ? d.base_text : '', base_turns: typeof d.base_turns === 'number' ? d.base_turns : 0, busy: d.busy === true }
+      out[id] = { text: d.text, from: d.from, at: d.at, busy: d.busy === true }
     }
   }
   return out
@@ -58,7 +58,7 @@ export class SuggestionStore {
   }
 
   /** 置く（前のものは上書き）。ついでに 24 時間を過ぎたものと上限を超えたものを捨てる。置いたものを返す */
-  async put(id: string, text: string, from: string, base: Pick<ManagerDraft, 'base_text' | 'base_turns' | 'busy'>): Promise<ManagerDraft> {
+  async put(id: string, text: string, from: string, base: Pick<ManagerDraft, 'busy'>): Promise<ManagerDraft> {
     return this.serial(async () => {
       const now = this.now()
       const entries = Object.fromEntries(Object.entries(await this.all()).filter(([key, d]) => key !== id && now - d.at < MANAGER_DRAFT_TTL_MS))

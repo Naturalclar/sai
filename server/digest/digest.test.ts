@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
-import { ClaudeSummarizer, DEFAULT_OPENAI_URL, DIGEST_ALERT_FAILS, DIGEST_MAX_TRIES, DIGEST_RETRY_DELAYS_MS, DigestStore, Digester, OpenAISummarizer, createDigester, digestKey, digestable, personaResolver, stripThinking, summarizeCommand, summarizeRequest, summarizerFactory, mayRetryWithoutReasoning } from './digest.ts'
+import { ClaudeSummarizer, DEFAULT_OPENAI_URL, DIGEST_ALERT_FAILS, DIGEST_BREAK_MS, DIGEST_MAX_TRIES, DIGEST_RETRY_DELAYS_MS, DigestStore, Digester, OpenAISummarizer, createDigester, digestKey, digestable, personaResolver, stripThinking, summarizeCommand, summarizeRequest, summarizerFactory, mayRetryWithoutReasoning } from './digest.ts'
 import type { Summarizer } from './digest.ts'
 import { row } from '../rows/aggregate.test.ts'
 import type { PersonaId } from '../../shared/types.ts'
@@ -780,11 +780,12 @@ test('失敗した行は間を置いて作り直し、DIGEST_MAX_TRIES 回で諦
 })
 
 test('口が続けて DIGEST_ALERT_FAILS 回失敗したら error に出し、成功したら消える（#443）', async () => {
+  let now = at(10).getTime()
   const fake = new FakeSummarizer() as FakeSummarizer & { where?: string }
   fake.where = 'http://127.0.0.1:11434/v1'
   fake.failOn.add('落ちる')
   const dir = await mkdtemp(join(tmpdir(), 'sai-digest-'))
-  const d = new Digester(new DigestStore(join(dir, 'digest.jsonl')), fake, { enabled: true, model: 'm', since: at(0).toISOString(), persona: async () => 'none' })
+  const d = new Digester(new DigestStore(join(dir, 'digest.jsonl')), fake, { enabled: true, model: 'm', since: at(0).toISOString(), persona: async () => 'none', now: () => now })
   const rows = Array.from({ length: DIGEST_ALERT_FAILS }, (_, i) => row(at(i + 1), `S${i}`, { repo: 'r', text: `落ちる ${i}` }))
   d.scan(rows.slice(0, DIGEST_ALERT_FAILS - 1))
   await d.drain()
@@ -793,6 +794,9 @@ test('口が続けて DIGEST_ALERT_FAILS 回失敗したら error に出し、�
   await d.drain()
   assert.match(d.error, new RegExp(`直近 ${DIGEST_ALERT_FAILS} 件続けて失敗`))
   assert.match(d.error, /11434/, 'どこに投げているかを添える')
+  assert.match(d.error, /5 分後に再開/, '休んでいることも出す（#497）')
+  // 休み明けに 1 件通る
+  now += DIGEST_BREAK_MS
   d.scan([row(at(20), 'S9', { repo: 'r', text: '通る' })])
   await d.drain()
   assert.equal(d.error, '', '1 回でも通ったら消える')
@@ -835,6 +839,67 @@ test('作っている間に口を変えたら、前の口の失敗は数えな�
     // 新しい口では、間を置かずにすぐ作る（前の口の失敗が 1 回目として数えられていない）
     d.scan([r])
     assert.equal(d.pending(), 1)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('口が続けて DIGEST_ALERT_FAILS 回落ちたら、列を進めずに DIGEST_BREAK_MS 休む。休み明けに通れば平常に戻る（#497。遮断器）', async () => {
+  let now = at(10).getTime()
+  const fake = new FakeSummarizer()
+  fake.failOn.add('timeout')
+  const dir = await mkdtemp(join(tmpdir(), 'sai-digest-'))
+  try {
+    const d = new Digester(new DigestStore(join(dir, 'digest.jsonl')), fake, { enabled: true, model: 'm', since: at(0).toISOString(), persona: async () => 'none', logPath: join(dir, 'digest.log'), now: () => now })
+    // 常に timeout する口に 5 本流す
+    const rows = Array.from({ length: 5 }, (_, i) => row(at(i + 1), `S${i}`, { repo: 'r', text: `timeout ${i}` }))
+    d.scan(rows)
+    await d.drain()
+    assert.equal(fake.prompts.length, DIGEST_ALERT_FAILS, '3 回目の失敗で止まる')
+    assert.equal(d.pending(), 5 - DIGEST_ALERT_FAILS, '残りは列に残る（捨てない）')
+    // 休んでいる間は、3 秒ごとの scan() でも、新しい行が来ても口を叩かない
+    now += DIGEST_BREAK_MS - 1
+    d.scan([...rows, row(at(8), 'S8', { repo: 'r', text: 'timeout 新しい行' })])
+    await d.drain()
+    assert.equal(fake.prompts.length, DIGEST_ALERT_FAILS, '休みが明けるまで summarize を呼ばない')
+    // 列には、残りの 2 本・新しい行・行ごとの作り直しの間隔（1 分）が来た失敗した 3 本が積まれる
+    assert.equal(d.pending(), 5 - DIGEST_ALERT_FAILS + 1 + DIGEST_ALERT_FAILS)
+    assert.match(d.error, /1 分後に再開/)
+    // 休み明けの 1 件も落ちたら、また休む（1 件だけ試す）
+    now += 1
+    d.scan(rows)
+    await d.drain()
+    assert.equal(fake.prompts.length, DIGEST_ALERT_FAILS + 1, '休み明けは 1 件だけ試す')
+    assert.match(await readFile(join(dir, 'digest.log'), 'utf-8'), /分休む/)
+    // 口が戻ったら、休み明けに通って平常に戻り、残りを続けて作る
+    fake.failOn.clear()
+    now += DIGEST_BREAK_MS
+    d.scan([])
+    await d.drain()
+    assert.equal(d.pending(), 0, '休んでいる間に積んだ分を回し切る')
+    assert.equal(d.error, '')
+    assert.equal(fake.prompts.length, DIGEST_ALERT_FAILS + 1 + 5)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('休んでいる間に口を変えたら、休みを解いてすぐ作る（#497）', async () => {
+  const now = at(10).getTime()
+  const fake = new FakeSummarizer()
+  fake.failOn.add('timeout')
+  const dir = await mkdtemp(join(tmpdir(), 'sai-digest-'))
+  try {
+    const d = new Digester(new DigestStore(join(dir, 'digest.jsonl')), fake, { enabled: true, model: 'm', since: at(0).toISOString(), persona: async () => 'none', now: () => now })
+    d.scan(Array.from({ length: DIGEST_ALERT_FAILS + 1 }, (_, i) => row(at(i + 1), `S${i}`, { repo: 'r', text: `timeout ${i}` })))
+    await d.drain()
+    assert.equal(d.pending(), 1)
+    fake.failOn.clear()
+    d.configure({ digest: true, digest_provider: 'claude', digest_model: 'haiku' })
+    d.scan([row(at(9), 'S9', { repo: 'r', text: '通る' })])
+    await d.drain()
+    assert.equal(d.pending(), 0)
+    assert.equal(d.error, '')
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

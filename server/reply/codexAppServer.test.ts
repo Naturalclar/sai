@@ -74,6 +74,11 @@ class FakeConnection implements CodexConnection {
     this.disconnect()
   }
 
+  /** app-server のプロセスの pid（#482） */
+  pid(): number {
+    return 9191
+  }
+
   emit(message: Message): void {
     for (const listener of this.messages) listener(message)
   }
@@ -384,4 +389,18 @@ test('turn/completed が failed なら、エラーの文を失敗として残す
   assert.ok(app.replying()['thread-1@repo']?.failed)
   now += CODEX_TURN_FAILED_TTL_MS + 1
   assert.equal(app.replying()['thread-1@repo'], undefined)
+})
+
+test('ownPid: 繋いでいる app-server の pid。thread/closed で holds() が偽になっても変わらず、切断で 0（#482）', async () => {
+  const connection = new FakeConnection()
+  const app = new CodexAppServer(async () => connection, () => Date.parse('2026-09-09T12:00:00Z'))
+  assert.equal(app.ownPid(), 0, 'まだ繋いでいない')
+  await app.start({ id: 'thread-1@repo', threadId: 'thread-1', text: '続けて', cwd: '/repo' })
+  assert.equal(app.ownPid(), 9191)
+  assert.equal(app.holds('thread-1'), true)
+  connection.emit({ method: 'thread/closed', params: { threadId: 'thread-1' } })
+  assert.equal(app.holds('thread-1'), false)
+  assert.equal(app.ownPid(), 9191, 'thread/closed のあとも app-server は生きている（行の pid はこれを指したまま）')
+  connection.disconnect()
+  assert.equal(app.ownPid(), 0)
 })

@@ -24,6 +24,8 @@ export interface CodexConnection {
   onMessage(listener: (message: RpcMessage) => void): void
   onClose(listener: (error?: Error) => void): void
   close(): void
+  /** 繋いでいる app-server のプロセスの pid（#482）。分からなければ無くてよい */
+  pid?(): number
 }
 
 export type CodexConnector = () => Promise<CodexConnection>
@@ -86,6 +88,13 @@ export interface CodexApp {
    * 自分が持っているスレッドへの次の返信を queue に回してしまう（#329）。偽物は持たなくてよい
    */
   holds?(threadId: string): boolean
+  /**
+   * SAI 自身の app-server のプロセスの pid（#482。繋いでいなければ 0）。SAI の app-server が回したターンでも
+   * `notify` は鳴り、record.py は行の `pid` にこの app-server を載せる（0.154.0 で実測）。`holds()` が
+   * `thread/closed` で偽になったあとも app-server は生きているので、行の `pid` だけを見ると自分を「ほか」と数える。
+   * 偽物は持たなくてよい
+   */
+  ownPid?(): number
   /**
    * `/` の候補にする Codex のスキル（#402）。**cwd に依らない分だけ**（`skills/list` は app-server を起こした場所の
    * リポジトリのスキルも返すが、それはこのセッションのものではないので `parseCodexSkills()` が落とす）。
@@ -183,6 +192,10 @@ class ProcessConnection implements CodexConnection {
   private stderr = ''
   private readonly child: ChildProcessWithoutNullStreams
 
+  pid(): number {
+    return this.ended ? 0 : (this.child.pid ?? 0)
+  }
+
   constructor(child: ChildProcessWithoutNullStreams) {
     this.child = child
     const lines = createInterface({ input: child.stdout })
@@ -268,6 +281,10 @@ export class CodexAppServer implements CodexApp {
 
   holds(threadId: string): boolean {
     return this.loaded.has(threadId)
+  }
+
+  ownPid(): number {
+    return this.connection?.pid?.() ?? 0
   }
 
   /**

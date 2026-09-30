@@ -439,3 +439,23 @@ test('待ちの畳み: 端末で開いていないセッションは触らない
   const list = await sessions()
   assert.equal(list.sessions.find((s) => s.id === 'D1@r')?.waiting, '許可待ち: Edit: x.ts', '端末が無ければ残す')
 })
+
+test('返信: ペインの走査が締切より遅くても、待ち切ってから振り分ける（#496 のレビュー。締切は一覧だけ）', async () => {
+  // 再起動の直後のように前回の結果が空（`last()` は []）で、走査が 0.7 秒の締切を越える。締切で抜けると
+  // 「端末で開いていない」と読んで、開いている TUI に打ち込まず別プロセスへ回してしまう
+  let release!: () => void
+  codexPanes.hold = new Promise<void>((resolve) => (release = resolve))
+  const timer = setTimeout(() => release(), 1_200)
+  tmux.screen = 'some output\n› '
+  tmux.calls.length = 0
+  try {
+    const res = await post('X5@r', '遅い走査のあとでも端末へ')
+    assert.equal(res.status, 202)
+    assert.equal(((await res.json()) as ReplyResponse).via, 'terminal', 'ペインで見つかる Codex には端末へ打ち込む')
+    assert.ok(tmux.calls.some((c) => c[0] === 'paste-buffer' && c.includes('%13')), `ペイン %13 に貼る: ${JSON.stringify(tmux.calls)}`)
+  } finally {
+    clearTimeout(timer)
+    codexPanes.hold = null
+    tmux.screen = IDLE
+  }
+})

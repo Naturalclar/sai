@@ -510,24 +510,30 @@ export function createApp(
    * 前（#335 以前）の行は notify のラッパー（すぐ終わるシェル）の pid を持っていて、ペインでは Codex が
    * 動いているのに「端末で開いていない」ままだった（許可待ちの検出にも端末への打ち込みにも回らない）。
    * lock はセッション ID ごとのファイルなので、同じペインで別の Codex を起動し直していても取り違えない。
+   *
+   * **`soft` は画面に出す一覧だけ**（#495）: 締切（`SCAN_WAIT_MS`）までに走査が終わらなければ前回の結果で返す。
+   * **返信の振り分けとレビューの断りは待ち切る**（#496 のレビュー）。前回の結果が空（再起動の直後・ペインを開いた直後）の
+   * ときに締切で抜けると「端末で開いていない」と読み、開いている TUI の会話をレビューの `thread/resume` が奪う・
+   * 返信が端末に打ち込まれず別プロセスや queue に回る（0.154.0 の TUI は lock を開かないので `codexHeldElsewhere()` も拾えない）
    */
   const codexPanes = terminal.codexPanes ?? new CodexPanes({ tmux: terminal.tmux })
-  const terminalOf = async (s: SessionSummary) => {
+  const terminalOf = async (s: SessionSummary, { soft = false }: { soft?: boolean } = {}) => {
+    const wait = <T,>(work: Promise<T>, last: () => T): Promise<T> => (soft ? softWait(work, last) : work)
     if (!terminalEnabled) return null
     if (s.pane && s.pid && isAlive(s.pid)) return { pane: s.pane, pid: s.pid }
     if (s.agent !== 'codex') return null
     const session = sessionOf(s)
     if (!session) return null
     if (s.pane) {
-      // 締切までに引けなければ前回の結果（#495。lsof が重いときに一覧を止めない）
-      const pid = await softWait(codexTerminals.pid(session, s.pane), () => codexTerminals.last?.(session, s.pane!) ?? 0)
+      // 一覧なら、締切までに引けなければ前回の結果（#495。lsof が重いときに一覧を止めない）
+      const pid = await wait(codexTerminals.pid(session, s.pane), () => codexTerminals.last?.(session, s.pane!) ?? 0)
       if (pid) return { pane: s.pane, pid }
     }
     // lock で引けない Codex（実測: 0.154.0 の TUI は lock を開かず、共有の app-server が握っている）は、
     // ペインで動いている codex が**いま開いている rollout**と突き合わせる（#417 / #429）。**行の pane ではなく
     // いまのペイン**を使うので、ペインを移した・行がまだ 1 本も無いセッションでも当たる。
     // **cwd では突き合わせない**（同じ worktree に会話が 2 本あると別の会話のペインに打ち込む。#429）
-    const pane = (await softWait(codexPanes.scan(), () => codexPanes.last?.() ?? [])).find((p) => p.session === session)
+    const pane = (await wait(codexPanes.scan(), () => codexPanes.last?.() ?? [])).find((p) => p.session === session)
     return pane ? { pane: pane.pane, pid: pane.pid } : null
   }
   /**
@@ -815,7 +821,8 @@ export function createApp(
         const m = meta.entries[s.id]
         const icon = icons.entries.get(iconKey(s.id))
         // 端末で開いているか（pid の生存）は毎回見る。rev には混ぜない（端末を閉じても次の行で rev が変わる）
-        const out: SessionSummary = { ...s, terminal: await terminalOf(s) }
+        // 画面に出す一覧なので締切で抜けてよい（#495）。返信・レビューは待ち切る方を呼ぶ
+        const out: SessionSummary = { ...s, terminal: await terminalOf(s, { soft: true }) }
         if (m) {
           out.meta = m
           if (!!m.archived_at && Date.parse(m.archived_at) >= Date.parse(s.end)) out.archived = true

@@ -9,6 +9,7 @@
 // （送るのは止めない。本文にも中身を引用するので、エージェントは行番号がずれていても当てられる）。
 
 import type { DiffFile, DiffLine } from '../../shared/diff.ts'
+import { anchorOf, findDiffLine } from '../../shared/prReview.ts'
 
 /** どの区切りの差分か。ブランチの差分（base...HEAD）か、未コミットか */
 export type DiffCommentSection = 'branch' | 'working'
@@ -33,10 +34,8 @@ export const DIFF_COMMENTS_MAX = 100
 const SECTION_LABEL: Record<DiffCommentSection, string> = { branch: 'ブランチの差分', working: '未コミット' }
 const KIND_LABEL: Record<DiffLine['kind'], string> = { add: '追加した行', del: '消した行', ctx: '変えていない行' }
 
-/** その行にコメントを付けるときの側と行番号。消した行は旧い側、ほかは新しい側 */
-export function lineAnchor(line: DiffLine): { side: 'old' | 'new'; line: number } {
-  return line.kind === 'del' ? { side: 'old', line: line.oldNo } : { side: 'new', line: line.newNo }
-}
+/** その行にコメントを付けるときの側と行番号。消した行は旧い側、ほかは新しい側（GitHub への投稿と同じ 1 つ。#526） */
+export const lineAnchor = anchorOf
 
 /** 同じ行のコメントか（区切り・パス・側・行番号） */
 export function sameLine(c: Pick<DiffComment, 'section' | 'path' | 'side' | 'line'>, d: Pick<DiffComment, 'section' | 'path' | 'side' | 'line'>): boolean {
@@ -88,17 +87,12 @@ export function withDiffComments(all: Record<string, DiffComment[]>, id: string,
   return next
 }
 
-/** いまの差分で、そのコメントの行（区切りは呼ぶ側が選ぶ）。ファイルや行が差分に無ければ null */
+/**
+ * いまの差分で、そのコメントの行（区切りは呼ぶ側が選ぶ）。ファイルや行が差分に無ければ null。
+ * ファイルは表示に使うパス（消したファイルは旧いパス）で引く（GitHub への投稿と同じ 1 つ。#526）
+ */
 export function commentLine(comment: DiffComment, files: readonly DiffFile[]): DiffLine | null {
-  const file = files.find((f) => f.path === comment.path)
-  if (!file) return null
-  for (const hunk of file.hunks) {
-    for (const line of hunk.lines) {
-      const at = lineAnchor(line)
-      if (at.side === comment.side && at.line === comment.line) return line
-    }
-  }
-  return null
+  return findDiffLine(files, comment)
 }
 
 /**

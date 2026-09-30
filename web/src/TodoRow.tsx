@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { projectName } from '../../shared/project.ts'
 import type { TodoItem } from '../../shared/todoItems.ts'
 import { ApprovalBubble } from './ApprovalBubble'
@@ -13,6 +14,13 @@ interface Props {
   hotkey: boolean
   /** 処理中のターンが今の設定と違う許可モードで動いていれば、聞かれている理由（#272） */
   modeNote: string
+  /**
+   * 行から次の指示を送る口（#522）。渡したときだけ「返信」を出す（`watch` / `done` で `replyable` のもの）。
+   * `inline` が false（狭い画面）のときは行の下に開かず、セッション画面へのリンクにする（入力欄で画面がほぼ埋まるため）
+   */
+  reply?: { inline: boolean; open: boolean; onToggle: () => void }
+  /** 行の下に出すもの（開いた返信欄・その行の送信失敗）。TodoView が組み立てる */
+  children?: ReactNode
 }
 
 /**
@@ -21,7 +29,7 @@ interface Props {
  * 違うのは**印と添え書き**だけ: `done` は詰まっていないので「待っている」ではなく「終わっている」と言い、
  * できることも「答える」ではなく「次を送る」になる。
  */
-export function TodoRow({ item, now, hotkey, modeNote }: Props) {
+export function TodoRow({ item, now, hotkey, modeNote, reply, children }: Props) {
   const s = item.session
   const label = s ? s.meta?.name || s.title || s.id : item.id
   const where = s ? projectName(s.project) || s.repo : ''
@@ -54,10 +62,24 @@ export function TodoRow({ item, now, hotkey, modeNote }: Props) {
           )}
           {/* 文言は行の text のまま（`入力待ち（バックグラウンドのセッション）` の区別を捨てない） */}
           <span className="text">{item.text}</span>
-          {/* 選択肢は SAI に届いていないのでボタンは出せないが、返信欄からは打てる（#232） */}
-          <span className="note">{noteFor(done, item.replyable)}</span>
+          {/* 選択肢は SAI に届いていないのでボタンは出せないが、返信欄からは打てる（#232）。
+              ここから送れるなら、セッション画面に移らずに行の下で打てる（#522） */}
+          {reply && item.replyable ? (
+            reply.inline ? (
+              <button type="button" className={`linkish todo-reply-open${reply.open ? ' open' : ''}`} aria-expanded={reply.open} onClick={reply.onToggle}>
+                {reply.open ? '返信を閉じる' : done ? '次の指示を送る' : '返信する'}
+              </button>
+            ) : (
+              <a className="todo-reply-open" href={`#/s/${encodeURIComponent(item.id)}`}>
+                {done ? '開いて次の指示を送る' : '開いて返信する'}
+              </a>
+            )
+          ) : (
+            <span className="note">{noteFor(done, item.replyable)}</span>
+          )}
         </div>
       )}
+      {children}
     </div>
   )
 }

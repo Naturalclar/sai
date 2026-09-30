@@ -1322,7 +1322,9 @@ export function createApp(
     for (const r of read) {
       if (!r.own) continue
       recorded.push(r.s.id)
-      covered.add(r.real)
+      // 記録が worktree の下のディレクトリ（`/repo/server`）でも、その worktree（`/repo`）は記録のあるものとして扱う
+      // （#584 のレビュー。cwd で覚えていたら、同じ worktree が「記録なし」としてもう 1 度並んだ）
+      covered.add(r.own.path)
     }
     const siblings: SiblingWorktree[] = []
     const offered = new Set<string>()

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { NEAR_BOTTOM_PX, followsBottom, nearBottom, prepended } from './chatScroll.ts'
+import { NEAR_BOTTOM_PX, followsBottom, followsResize, nearBottom, prepended } from './chatScroll.ts'
 
 test('nearBottom は最下部までの距離が NEAR_BOTTOM_PX 未満のときだけ真', () => {
   // scrollHeight 1000, clientHeight 500 → 最下部は scrollTop 500
@@ -20,6 +20,16 @@ test('followsBottom は追従中で高さが変わったときだけ真', () => 
   assert.equal(followsBottom(true, 1000, 1000), false) // 中身が変わっていない（3 秒ごとの描き直し）
   assert.equal(followsBottom(false, 1000, 1200), false) // 上に遡っている間は追従しない
   assert.equal(followsBottom(false, 1000, 1000), false)
+})
+
+test('followsResize: 追従中に見えている高さが変わったら送る。読み返している間は送らない（#544）', () => {
+  // 差分ボタンが出て、入力欄の上に余白を取ったぶん箱が縮んだ（中身の高さは同じなので followsBottom は送らない）
+  assert.equal(followsBottom(true, 1000, 1000), false, '前提: 中身の高さだけでは送らない')
+  assert.equal(followsResize(true, 600, 568), true)
+  assert.equal(followsResize(true, 568, 600), true, 'ボタンが消えて広がったときも')
+  assert.equal(followsResize(true, 600, 600), false, '変わっていない')
+  assert.equal(followsResize(false, 600, 568), false, '上に遡って読んでいる間は動かさない')
+  assert.equal(followsResize(true, 0, 568), false, '最初の 1 回（まだ測っていない）は followsBottom に任せる')
 })
 
 test('prepended: 先頭の行がさかのぼったときだけ', () => {

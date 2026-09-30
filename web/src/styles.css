@@ -312,6 +312,9 @@
   .todo .who .icon { flex: none; width: 20px; height: 20px; border-radius: 20%; }
   .todo .who .where, .todo .who .waited { flex: none; color: var(--muted); font-size: 11px; white-space: nowrap; }
   .todo .who .waited { margin-left: auto; }
+  /* どのエージェントか（#520）。色の点はサイドバーの一覧と同じ .dot */
+  .todo .who .agent { flex: none; display: inline-flex; align-items: center; gap: 4px; color: var(--muted); font-size: 11px; white-space: nowrap; }
+  .todo .who .agent .dot { width: 8px; height: 8px; }
   .todo .why { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; margin-top: 6px; font-size: 13px; }
   .todo .why .text { overflow-wrap: anywhere; }
   .todo .why .note { color: var(--muted); font-size: 11px; }
@@ -366,6 +369,8 @@
 
   /* -- 狭い画面: 一覧かチャットのどちらかだけ。#/ が一覧、#/feed と #/s/<id> がチャット */
   @media (max-width: 900px) {
+    /* 要対応の行のエージェント（#520）: 狭い画面では名前を隠して点だけにする（名前が 1 文字まで縮むので）。名前は title に残る */
+    .todo .who .agent { font-size: 0; gap: 0; }
     header .sidebar-toggle { display: none; }
     main.layout, main.layout.sidebar-closed, main.layout.diff-open, main.layout.sidebar-closed.diff-open { grid-template-columns: minmax(0, 1fr); transition: none; }
     .diff-pane { display: none; }

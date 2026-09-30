@@ -144,6 +144,7 @@ export function aggregate(rows: FeedRow[]): SessionSummary[] {
       turns: turnRows.length,
       waiting,
       idle,
+      last_kind: lastKind,
       title: clip(titleFull, TITLE_LEN),
       title_full: clip(titleFull, TITLE_FULL_LEN),
       // 合成（synth）が 1 本でもあれば synth（返信できない方に倒す）。それ以外は値のある一番新しい行の出どころ

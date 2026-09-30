@@ -1,6 +1,7 @@
 // agent-feed の1行と、SAI の API の形。サーバ（server/）と画面（web/src/）が両方ここを import する。
 // フィールドを足すときはここに足す。JSONL の形は feed/record.py が正本。
 
+import type { EventKind } from './events.ts'
 import type { Skill } from './skills.ts'
 import type { TurnUsage } from './turnUsage.ts'
 
@@ -129,6 +130,12 @@ export interface SessionSummary {
    * 詰まっているわけではないので、要対応では下段（`done`）に置き、バッジにも通知にも数えない
    */
   idle: string
+  /**
+   * 最後の行の読み方（`eventKind()`。#513）。`turn` なら「ターンが終わって次の指示を待っている」。
+   * **時刻の比較（`end === last_turn_ts`）では決めない**: 行の `ts` は秒までなので、ターン完了と同じ秒に届いた
+   * 次の入力（`UserPromptSubmit`）や `/clear` の `SessionEnd` と見分けが付かない（#517 のレビュー）
+   */
+  last_kind?: EventKind
   /**
    * 一番新しい user_text の1行目（画面からの返信でも端末で打った指示でも、最後の入力に追従する）。
    * 無ければ first_user_text、それも無ければ最初の text の1行目。60文字で切る

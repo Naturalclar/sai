@@ -90,13 +90,13 @@ export function todoItems(sessions: readonly SessionSummary[], approvals: Approv
  * 60 秒放置されたとき**にしか鳴らない（SAI から返信した `claude -p`・Codex・OpenCode は鳴らさない）。実測（直近 7 日）で
  * ターン完了の行 360 本に対して `入力待ち` は 17 本で、終わっているセッションのほとんどが下段に出ていなかった。
  *
- * そこで**最後の行がターン完了**（`end === last_turn_ts`）も数える。後ろに何か来ていれば `end` がずれるので自然に外れる:
+ * そこで**最後の行がターン完了**（`last_kind === 'turn'`）も数える。後ろに何か来ていれば最後の行が変わるので自然に外れる:
  * 次の入力（`UserPromptSubmit`＝ターンが回っている）、`SessionEnd`（`/clear` で会話は別のセッションに移った）、
- * 待ちの行（`watch` の方）。`idle` は最後の行が `入力待ち` なので、`end` とは別に数える
+ * 待ちの行（`watch` の方）。**時刻（`end === last_turn_ts`）では比べない**——行の `ts` は秒までなので、
+ * ターン完了と同じ秒に届いた次の入力や `/clear` を見分けられない（#517 のレビュー）
  */
-export function awaitsNext(s: Pick<SessionSummary, 'idle' | 'end' | 'last_turn_ts'>): boolean {
-  if (s.idle) return true
-  return Boolean(s.last_turn_ts) && s.last_turn_ts === s.end
+export function awaitsNext(s: Pick<SessionSummary, 'idle' | 'last_kind'>): boolean {
+  return Boolean(s.idle) || s.last_kind === 'turn'
 }
 
 /**

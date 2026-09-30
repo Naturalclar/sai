@@ -233,19 +233,19 @@ test('todoItems: done でも返信欄から次を送れるかは watch と同じ
 const END = '2026-09-02T10:10:00+09:00'
 
 test('todoItems: 最後の行がターン完了なら、入力待ちが鳴っていなくても done（#513。-p・Codex・OpenCode は鳴らさない）', () => {
-  const items = todoItems([summary({ id: 's1@sai', end: END, last_turn_ts: END, last_text: 'PR を出しました' })], {}, SELF)
+  const items = todoItems([summary({ id: 's1@sai', end: END, last_turn_ts: END, last_kind: 'turn', last_text: 'PR を出しました' })], {}, SELF)
   assert.deepEqual(
     items.map((t) => [t.kind, t.text, t.since]),
     [['done', 'PR を出しました', END]],
   )
   assert.equal(pendingItems(items).length, 0, 'バッジ・タブの題名・通知には数えない（#438 のまま）')
   for (const agent of ['codex', 'opencode'] as const) {
-    assert.deepEqual(todoItems([summary({ agent, end: END, last_turn_ts: END })], {}, SELF).map((t) => t.kind), ['done'], agent)
+    assert.deepEqual(todoItems([summary({ agent, end: END, last_turn_ts: END, last_kind: 'turn' })], {}, SELF).map((t) => t.kind), ['done'], agent)
   }
 })
 
 test('todoItems: 文言は一言があればそれ、無ければ最後の発言、どちらも無ければ（本文なし）', () => {
-  const at = { end: END, last_turn_ts: END }
+  const at = { end: END, last_turn_ts: END, last_kind: 'turn' as const }
   assert.equal(todoItems([summary({ ...at, last_summary: 'PR 出したよ', last_text: '長い本文' })], {}, SELF)[0]!.text, 'PR 出したよ')
   assert.equal(todoItems([summary({ ...at, last_text: '' })], {}, SELF)[0]!.text, '（本文なし）')
   assert.equal(todoItems([summary({ ...at, last_text: 'PR [#374](https://github.com/o/r/pull/374) を出した' })], {}, SELF)[0]!.text, 'PR #374 を出した', 'Markdown の記号は落とす')
@@ -253,16 +253,23 @@ test('todoItems: 文言は一言があればそれ、無ければ最後の発言
 
 test('todoItems: ターン完了のあとに次の入力・終了・待ちが来ていれば done にしない（#513）', () => {
   const after = '2026-09-02T10:12:00+09:00'
-  // 次の入力（UserPromptSubmit）が来ている＝ターンが回っている。/clear の SessionEnd も end がずれる
-  assert.deepEqual(todoItems([summary({ end: after, last_turn_ts: END })], {}, SELF), [])
+  // 次の入力（UserPromptSubmit）が来ている＝ターンが回っている。/clear の SessionEnd も最後の行が変わる
+  assert.deepEqual(todoItems([summary({ end: after, last_turn_ts: END, last_kind: 'resume' })], {}, SELF), [])
+  assert.deepEqual(todoItems([summary({ end: after, last_turn_ts: END, last_kind: 'end' })], {}, SELF), [])
   // ターンが 1 回も終わっていない
-  assert.deepEqual(todoItems([summary({ end: END, last_turn_ts: '' })], {}, SELF), [])
+  assert.deepEqual(todoItems([summary({ end: END, last_turn_ts: '', last_kind: 'resume' })], {}, SELF), [])
   // 待ちの行が後ろにあれば watch の方
-  assert.deepEqual(todoItems([summary({ end: after, last_turn_ts: END, waiting: '許可待ち: Bash: ls' })], {}, SELF).map((t) => t.kind), ['watch'])
+  assert.deepEqual(todoItems([summary({ end: after, last_turn_ts: END, last_kind: 'waiting', waiting: '許可待ち: Bash: ls' })], {}, SELF).map((t) => t.kind), ['watch'])
+})
+
+test('todoItems: ターン完了と同じ秒に次の入力や /clear が届いても done にしない（行の ts は秒まで。#517 のレビュー）', () => {
+  // end と last_turn_ts が同じ秒でも、最後の行が入力・終了なら終わって待っているのではない
+  assert.deepEqual(todoItems([summary({ end: END, last_turn_ts: END, last_kind: 'resume' })], {}, SELF), [])
+  assert.deepEqual(todoItems([summary({ end: END, last_turn_ts: END, last_kind: 'end' })], {}, SELF), [])
 })
 
 test('todoItems: 返信が処理中なら、端末に打ち込んだものでも done にしない（ターンが回っている。#513）', () => {
-  const s = summary({ end: END, last_turn_ts: END })
+  const s = summary({ end: END, last_turn_ts: END, last_kind: 'turn' as const })
   const terminal: ReplyingMap = { 's1@sai': { text: '次', since: '2026-09-02T10:11:00+09:00', via: 'terminal' } }
   assert.deepEqual(todoItems([s], {}, SELF, terminal), [])
   const failed: ReplyingMap = { 's1@sai': { text: '次', since: '2026-09-02T10:11:00+09:00', failed: { code: 1, tail: 'x' } } }
@@ -272,8 +279,8 @@ test('todoItems: 返信が処理中なら、端末に打ち込んだものでも
 test('todoItems: done は終わった時刻の古い順（待たせている順）', () => {
   const items = todoItems(
     [
-      summary({ id: 'new@sai', end: '2026-09-02T12:00:00+09:00', last_turn_ts: '2026-09-02T12:00:00+09:00' }),
-      summary({ id: 'old@sai', end: '2026-09-01T09:00:00+09:00', last_turn_ts: '2026-09-01T09:00:00+09:00' }),
+      summary({ id: 'new@sai', end: '2026-09-02T12:00:00+09:00', last_turn_ts: '2026-09-02T12:00:00+09:00', last_kind: 'turn' }),
+      summary({ id: 'old@sai', end: '2026-09-01T09:00:00+09:00', last_turn_ts: '2026-09-01T09:00:00+09:00', last_kind: 'turn' }),
     ],
     {},
     SELF,
@@ -282,8 +289,8 @@ test('todoItems: done は終わった時刻の古い順（待たせている順�
 })
 
 test('awaitsNext: 入力待ちか、最後の行がターン完了', () => {
-  assert.equal(awaitsNext({ idle: '入力待ち', end: END, last_turn_ts: '' }), true)
-  assert.equal(awaitsNext({ idle: '', end: END, last_turn_ts: END }), true)
-  assert.equal(awaitsNext({ idle: '', end: END, last_turn_ts: '2026-09-02T10:00:00+09:00' }), false)
-  assert.equal(awaitsNext({ idle: '', end: END }), false)
+  assert.equal(awaitsNext({ idle: '入力待ち', last_kind: 'idle' }), true)
+  assert.equal(awaitsNext({ idle: '', last_kind: 'turn' }), true)
+  for (const k of ['resume', 'end', 'waiting', 'other'] as const) assert.equal(awaitsNext({ idle: '', last_kind: k }), false, k)
+  assert.equal(awaitsNext({ idle: '' }), false, '分からなければ出さない')
 })

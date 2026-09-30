@@ -49,3 +49,20 @@ test('SettingsStore: jev_auto は 0 か 0.5〜1 だけ読む（#499）。それ�
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+test('SettingsStore: next_ask が無い settings.json は一言の入切に従う（#560 より前の形）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-settings-next-ask-'))
+  try {
+    const path = join(dir, 'settings.json')
+    await writeFile(path, JSON.stringify({ digest: true }))
+    assert.equal((await new SettingsStore(path).get()).next_ask, true, '一言を入にしていた人の案は止めない')
+    await writeFile(path, JSON.stringify({ digest: false }))
+    assert.equal((await new SettingsStore(path).get()).next_ask, false, '入にしていなかった人の本文を黙って送り始めない')
+    await writeFile(path, JSON.stringify({ digest: false, next_ask: true }))
+    assert.equal((await new SettingsStore(path).get()).next_ask, true, 'あればそちら')
+    await writeFile(path, JSON.stringify({ digest: true, next_ask: 'yes' }))
+    assert.equal((await new SettingsStore(path).get()).next_ask, true, '読めなければ一言に従う')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})

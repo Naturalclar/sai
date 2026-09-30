@@ -1477,7 +1477,7 @@ test('GET/PUT /api/settings: 性格と Linear の workspace。知らない値は
   let data = (await res.json()) as SettingsResponse
   assert.deepEqual(
     data,
-    { persona: 'ENFP', linear_workspace: '', digest: true, digest_on: false, digest_error: '', provider: 'claude', digest_model: '', model: 'fake', jev_on: true, jev_ready: false, jev_auto: 0 },
+    { persona: 'ENFP', linear_workspace: '', digest: true, digest_on: false, digest_error: '', next_ask: true, next_ask_on: false, provider: 'claude', digest_model: '', model: 'fake', jev_on: true, jev_ready: false, jev_auto: 0 },
     '既定は ENFP。digest はテストで差し替えた Digester の状態（有効、口は既定の claude）で、settings.json の入切（既定オフ）では組み直さない。Linear は未設定',
   )
   const put = (body: unknown, headers: Record<string, string> = {}) =>
@@ -1520,7 +1520,7 @@ test('GET/PUT /api/settings: 性格と Linear の workspace。知らない値は
   assert.equal(data.digest_error, '')
   assert.equal(data.digest_model, 'qwen3:8b', '前後の空白は落とす')
   assert.equal(data.model, 'qwen3:8b')
-  assert.deepEqual(JSON.parse(await readFile(join(feedDir, 'settings.json'), 'utf-8')), { persona: 'ISTJ', linear_workspace: '', digest: true, digest_provider: 'openai', digest_model: 'qwen3:8b', jev: true, jev_auto: 0 })
+  assert.deepEqual(JSON.parse(await readFile(join(feedDir, 'settings.json'), 'utf-8')), { persona: 'ISTJ', linear_workspace: '', digest: true, next_ask: false, digest_provider: 'openai', digest_model: 'qwen3:8b', jev: true, jev_auto: 0 })
   data = (await (await put({ digest_provider: 'claude', digest_model: '' })).json()) as SettingsResponse
   assert.equal(data.model, 'haiku', 'claude でモデルが空なら haiku')
   assert.equal((await put({ digest: 'yes' })).status, 400)
@@ -1533,8 +1533,21 @@ test('GET/PUT /api/settings: 性格と Linear の workspace。知らない値は
   assert.equal((await put({ digest_url: 'https://evil.example/v1' })).status, 400)
   assert.ok(!('digest_url' in JSON.parse(await readFile(join(feedDir, 'settings.json'), 'utf-8'))))
 
+  // 次に送る文面の案は一言とは別に入切する（#560）。一言を切っても案は作り続ける（口は一言と同じ）
+  data = (await (await put({ next_ask: true })).json()) as SettingsResponse
+  assert.equal(data.next_ask_on, true)
+  assert.equal(data.next_ask, true)
+  data = (await (await put({ digest: false })).json()) as SettingsResponse
+  assert.equal(data.digest, false, '一言は止まる')
+  assert.equal(data.next_ask, true, '案は作り続ける')
+  assert.equal(data.model, 'haiku')
+  data = (await (await put({ next_ask: false })).json()) as SettingsResponse
+  assert.equal(data.next_ask, false)
+  assert.equal((await put({ next_ask: 'yes' })).status, 400)
+  assert.equal((await put({ next_ask: true }, { Origin: 'http://evil.local' })).status, 403)
+
   // 後のテストのために戻す（差し替えた偽物の口と、そのモデル名）
-  await put({ persona: 'none', digest: true, digest_provider: 'claude', digest_model: 'fake' })
+  await put({ persona: 'none', digest: true, next_ask: true, digest_provider: 'claude', digest_model: 'fake' })
 })
 
 test('digest: 起動後に増えた行に一言が付いて feed / 詳細 / 一覧に載り、rev が変わる', async () => {
@@ -1621,6 +1634,8 @@ test('digest: 起動後に増えた行に一言が付いて feed / 詳細 / 一�
     // すでに作ってあるぶんも出さない（一覧・詳細・フィードの 3 か所）
     const offList = (await (await get('/api/sessions?days=3')).json()) as SessionsResponse
     assert.equal(offList.sessions.find((s) => s.id === 'D2@r')?.last_summary, undefined, '一覧に出さない')
+    // 次に送る文面の案は一言とは別で、切ったセッションでも作って載せる（#560）
+    assert.equal(offList.sessions.find((s) => s.id === 'D2@r')?.next_ask, '次はどうする？', '案は出す')
     const offDetail = (await (await get('/api/sessions/D2%40r?days=3')).json()) as SessionDetailResponse
     assert.equal(offDetail.rows.filter((r) => r.summary).length, 0, '詳細の行にも載せない')
     assert.equal(offDetail.session.last_summary, undefined)

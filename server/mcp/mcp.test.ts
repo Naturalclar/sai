@@ -342,9 +342,9 @@ test('/mcp: Manager の案は人の入力が後に来たら消え、24 時間で
   assert.equal((await call('sai_suggest', { to: 'C1@r', text: '終わったら見て' })).isError, undefined)
   runner.busy.delete('C1@r')
   await new Promise((r) => setTimeout(r, 1100))
-  await appendFile(feedFile, JSON.stringify(row(new Date(), 'C1', { repo: 'r', cwd: work, project: 'o/other', user_text: '回っていたターンの入力', text: '終わりました' })) + '\n')
+  await appendFile(feedFile, JSON.stringify(row(new Date(), 'C1', { repo: 'r', cwd: work, project: 'o/other', agent: 'codex', user_text: '回っていたターンの入力', text: '終わりました' })) + '\n')
   assert.equal((await draftOf('C1@r'))?.text, '終わったら見て', '回っていたターンの終わりでは消さない')
-  await appendFile(feedFile, JSON.stringify(row(new Date(), 'C1', { repo: 'r', cwd: work, project: 'o/other', user_text: '次の指示', text: 'やりました' })) + '\n')
+  await appendFile(feedFile, JSON.stringify(row(new Date(), 'C1', { repo: 'r', cwd: work, project: 'o/other', agent: 'codex', user_text: '次の指示', text: 'やりました' })) + '\n')
   assert.equal(await draftOf('C1@r'), undefined, 'その次のターンが来たら、人が送ったので消す')
 
   // 24 時間を過ぎた案はファイルにあっても出さない

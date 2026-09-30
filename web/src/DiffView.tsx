@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { parseUnifiedDiff } from '../../shared/diff.ts'
+import { parseUnifiedDiff, type DiffFile } from '../../shared/diff.ts'
 import { autoOpenPaths } from './diffOpen.ts'
 import type { DiffComment, DiffCommentSection } from './diffComments'
 import { DiffFileItem, type EditingAt } from './DiffFileItem'
@@ -15,9 +15,14 @@ export interface DiffViewComments {
   onRemove: (id: string) => void
 }
 
+/** 一覧のパス（新しい方）でパース済みの本文を引く。リネームは旧パスでも当たる */
+function fileOf(files: readonly DiffFile[], path: string): DiffFile | undefined {
+  return files.find((f) => f.path === path || f.oldPath === path)
+}
+
 /** そのファイルを開いたときに描く行数（文脈行も数える）。本文の無いファイルは 0 */
-function lineCount(files: ReturnType<typeof parseUnifiedDiff>, path: string): number {
-  const file = files.find((f) => f.path === path || f.oldPath === path)
+function lineCount(files: readonly DiffFile[], path: string): number {
+  const file = fileOf(files, path)
   return file ? file.hunks.reduce((n, h) => n + h.lines.length, 0) : 0
 }
 
@@ -26,7 +31,8 @@ function lineCount(files: ReturnType<typeof parseUnifiedDiff>, path: string): nu
  * **最初は上から順に開いた状態**で出る（#221。予算を超えたぶんだけ閉じたまま）。
  * 本文の木は shared/diff.ts が作る（HTML 文字列は作らない）。
  * 本文の行は**見えている分だけ DOM に置く**（#287。ファイルごとに `DiffFileItem` → `DiffFilePatch`）。どこが見えているかは
- * この部品の祖先のスクロール容器（`.diff-scroll` など。無ければ window）を `useScrollTick` で見張り、`ScrollTick` で各ファイルに配る
+ * この部品の祖先のスクロール容器（`.diff-scroll` など。無ければ window）を `useScrollTick` で見張り、`ScrollTick` で各ファイルに配る。
+ * `comments` は呼び出し側が `useMemo` で同じものを渡す（毎回作ると `DiffFileItem` の memo が効かず、ポーリングのたびに全ファイルが描き直る）
  */
 export function DiffView({ section, title, empty, action, comments }: { section: DiffSection; title: string; empty: string; action?: ReactNode; comments?: DiffViewComments }) {
   // patch のパースは重いので、同じ本文なら作り直さない（全部開くようになって行数が増えたぶん効く）
@@ -65,7 +71,7 @@ export function DiffView({ section, title, empty, action, comments }: { section:
               <DiffFileItem
                 key={f.path}
                 f={f}
-                file={files.find((x) => x.path === f.path || x.oldPath === f.path)}
+                file={fileOf(files, f.path)}
                 files={files}
                 shown={open[f.path] ?? autoOpen.has(f.path)}
                 onToggle={onToggle}

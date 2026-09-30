@@ -12,10 +12,11 @@ test('layoutFile: 見出しと行を上から平らに並べ、固定の高さ�
       ['header', 0, -1, 0],
       ['line', 0, 0, HUNK_HEADER_H],
       ['line', 0, 1, HUNK_HEADER_H + LINE_H],
-      ['header', 1, -1, HUNK_HEADER_H + LINE_H * 2 + HUNK_GAP],
+      ['header', 1, -1, HUNK_HEADER_H + LINE_H * 2],
       ['line', 1, 0, HUNK_HEADER_H * 2 + LINE_H * 2 + HUNK_GAP],
     ],
   )
+  assert.equal(rows[3]!.height, HUNK_HEADER_H + HUNK_GAP, '2 つ目の見出しは罫線ぶん高い')
   assert.equal(height, HUNK_HEADER_H * 2 + LINE_H * 3 + HUNK_GAP)
   assert.deepEqual(layoutFile([]), { rows: [], height: 0 })
 })
@@ -38,6 +39,10 @@ test('visibleRange: 見えている範囲 ± 余白の行だけ。上下に余�
   assert.deepEqual(visibleRange(rows, LINE_H * 5000, LINE_H * 5100, new Map(), 0), [0, 0])
   assert.deepEqual(visibleRange(rows, -5000, -4000, new Map(), 0), [0, 0])
   assert.deepEqual(visibleRange(rows, 10, 10, new Map(), 0), [0, 0], '高さ 0 の窓')
+  // 丸ごと上に外れたファイル（ピン留めの余分な高さの分まで見てから外れたと判断する）
+  const { rows: r2, height: h2 } = layoutFile(hunks(10))
+  assert.deepEqual(visibleRange(r2, h2 + 1, h2 + 500, new Map(), 0), [0, 0])
+  assert.notDeepEqual(visibleRange(r2, h2 + 1, h2 + 500, new Map([[9, 100]]), 0), [0, 0], 'コメントの分だけ下に伸びている')
   assert.deepEqual(visibleRange([], 0, 100), [0, 0])
 })
 
@@ -66,6 +71,7 @@ test('charWidth / textWidth: 全角と絵文字は 2、半角は 1、結合と�
   assert.equal(textWidth('Ａ１'), 4, '全角英数は 2')
   assert.equal(textWidth('한글'), 4)
   assert.equal(textWidth('🚀'), 2)
+  assert.equal(textWidth('✅❌⭐⏰🀄'), 10, '絵文字として描かれる記号も 2')
   assert.equal(textWidth('é'), 1, '結合記号は 0')
   assert.equal(textWidth('a\tb'), 9)
   assert.equal(textWidth('abcdefgh\tb'), 17, 'タブは次の 8 桁へ')

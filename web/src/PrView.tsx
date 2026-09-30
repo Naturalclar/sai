@@ -96,6 +96,11 @@ export function PrView({ repo, number, onStatus, onInsertToSession }: { repo: st
   // 行へのコメント（#525）。置き場は PR ごと
   const draftKey = prCommentKey(knownRepo || repo, number)
   const comments = useDiffComments(draftKey)
+  // 同じものを渡し続ける（毎回作ると DiffFileItem の memo が効かない）
+  const diffComments = useMemo(
+    () => (canWrite ? { section: 'branch' as const, list: comments.list, onAdd: comments.add, onRemove: comments.remove } : undefined),
+    [canWrite, comments.list, comments.add, comments.remove],
+  )
   const [reviewBody, setReviewBody] = usePrReviewBody(draftKey)
   const [reviewing, setReviewing] = useState(false)
   const [posted, setPosted] = useState<{ url: string; event: PrReviewEvent } | null>(null)
@@ -210,9 +215,7 @@ export function PrView({ repo, number, onStatus, onInsertToSession }: { repo: st
               section={loaded.data.diff}
               title="変更"
               empty="差分はありません"
-              {...(canWrite
-                ? { comments: { section: 'branch' as const, list: comments.list, onAdd: comments.add, onRemove: comments.remove } }
-                : {})}
+              {...(diffComments ? { comments: diffComments } : {})}
             />
           )}
           {loaded.data.diff.truncated && (

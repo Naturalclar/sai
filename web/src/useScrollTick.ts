@@ -1,22 +1,24 @@
-import { createContext, useContext, useEffect, useMemo, useState } from 'react'
+import { createContext, useContext, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 
 /**
  * 差分ビューアの仮想化（#287）が「いま何が見えているか」を測り直す合図。スクロール容器（`.diff-scroll` など。無ければ window）の
  * scroll と resize を 1 か所で受け、rAF ごとに 1 回だけ購読者に知らせる。ファイルごとの部品（`DiffFilePatch`）は購読して
- * 自分の位置を `getBoundingClientRect()` で測り直し、**描く範囲が変わったときだけ** state を触る（描き直す）。
- * React の state で数を進める形にすると、1 フレームごとに全ファイルが描き直される（実測で 4 倍の CPU 絞りで 1 フレーム 67ms）
+ * 自分の位置を `getBoundingClientRect()` で測り直し、**描く範囲が変わったときだけ**描き直す。
+ * React の state で数を進める形にすると、1 フレームごとに全ファイルが描き直される（実測で 4 倍の CPU 絞りで 1 フレーム 67ms）。
+ * 容器は ref に持つ（state にすると effect の中で setState になる。読むのは購読者の callback と effect の中だけ）
  */
 export interface ScrollWatch {
-  scroller: HTMLElement | null
+  /** スクロール容器。無ければ window。render の中では読まない（callback / effect で読む） */
+  scrollerRef: RefObject<HTMLElement | null>
   /** 合図の購読。戻り値で解除 */
   subscribe: (fn: () => void) => () => void
 }
 
-const NONE: ScrollWatch = { scroller: null, subscribe: () => () => {} }
+const NONE: ScrollWatch = { scrollerRef: { current: null }, subscribe: () => () => {} }
 export const ScrollTick = createContext<ScrollWatch>(NONE)
 
-/** ref の祖先で縦にスクロールする要素（overflow-y が auto / scroll）。無ければ null（= window） */
+/** el の祖先で縦にスクロールする要素（overflow-y が auto / scroll）。無ければ null（= window） */
 export function findScroller(el: HTMLElement | null): HTMLElement | null {
   for (let p = el?.parentElement ?? null; p; p = p.parentElement) {
     const oy = getComputedStyle(p).overflowY
@@ -25,14 +27,16 @@ export function findScroller(el: HTMLElement | null): HTMLElement | null {
   return null
 }
 
-/** `ref` の祖先のスクロール容器を見つけ、その scroll / window の resize を 1 か所で受けて配る */
+/**
+ * `ref` の祖先のスクロール容器を見つけ、その scroll / window の resize を 1 か所で受けて配る。
+ * layout effect で決める: 子（`DiffFilePatch`）の passive effect はこの後に走るので、そこで容器が読める
+ */
 export function useScrollTick(ref: RefObject<HTMLElement | null>): ScrollWatch {
-  const [scroller, setScroller] = useState<HTMLElement | null>(null)
+  const scrollerRef = useRef<HTMLElement | null>(null)
   const [listeners] = useState(() => new Set<() => void>())
-  useEffect(() => {
-    setScroller(findScroller(ref.current))
-  }, [ref])
-  useEffect(() => {
+  useLayoutEffect(() => {
+    const scroller = findScroller(ref.current)
+    scrollerRef.current = scroller
     const target: HTMLElement | Window = scroller ?? window
     let raf = 0
     const bump = () => {
@@ -53,11 +57,12 @@ export function useScrollTick(ref: RefObject<HTMLElement | null>): ScrollWatch {
       window.removeEventListener('resize', bump)
       ro?.disconnect()
       if (raf) cancelAnimationFrame(raf)
+      scrollerRef.current = null
     }
-  }, [scroller, listeners])
+  }, [ref, listeners])
   return useMemo(
     () => ({
-      scroller,
+      scrollerRef,
       subscribe: (fn: () => void) => {
         listeners.add(fn)
         return () => {
@@ -65,7 +70,7 @@ export function useScrollTick(ref: RefObject<HTMLElement | null>): ScrollWatch {
         }
       },
     }),
-    [scroller, listeners],
+    [listeners],
   )
 }
 

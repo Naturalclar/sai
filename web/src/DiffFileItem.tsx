@@ -2,6 +2,7 @@ import { memo } from 'react'
 import type { ReactNode } from 'react'
 import type { DiffFile, DiffLine } from '../../shared/diff.ts'
 import type { DiffFileStat } from './api'
+import { findDiffLine } from '../../shared/prReview.ts'
 import { commentMoved, lineAnchor, sameLine, type DiffComment, type DiffCommentSection } from './diffComments'
 import { DiffCommentEditor } from './DiffCommentEditor'
 import { DiffCommentNote } from './DiffCommentNote'
@@ -16,11 +17,8 @@ const STATUS_LABEL: Record<DiffFileStat['status'], string> = {
   other: '',
 }
 
-export interface EditingAt {
-  path: string
-  side: 'old' | 'new'
-  line: number
-}
+/** コメント欄を開いている行。コメントと同じ形（ファイル・側・番号） */
+export type EditingAt = Pick<DiffComment, 'path' | 'side' | 'line'>
 
 interface Props {
   f: DiffFileStat
@@ -37,11 +35,6 @@ interface Props {
   setEditing: (at: EditingAt | null) => void
 }
 
-const pinKey = (l: DiffLine) => {
-  const a = lineAnchor(l)
-  return `${a.side}:${a.line}`
-}
-
 /**
  * 差分の 1 ファイル（見出しのボタンと本文）。`memo` で、**他のファイルの開閉・編集ではこのファイルを描き直さない**（#287）。
  * 本文の行は `DiffFilePatch` が見えている分だけ置く。コメントが付いている行と編集中の行は `pinned` として渡し、常に置かせる
@@ -55,8 +48,8 @@ export const DiffFileItem = memo(function DiffFileItem({ f, file, files, shown, 
     </>
   )
 
-  // このファイルのコメント（行ごと）と編集中の行。行番号に印を付け、行の下に描くものを組む
-  const here = comments ? comments.list.filter((c) => c.section === comments.section && c.path === f.path) : []
+  // このファイルのコメント（行ごと）と編集中の行。行番号に印を付け、行の下に描くものを組む（list は呼び出し側が区切りで絞ってある）
+  const here = comments ? comments.list.filter((c) => c.path === f.path) : []
   const pinned = new Map<string, ReactNode>()
   if (comments && file) {
     const at = (side: 'old' | 'new', line: number) => ({ section: comments.section, path: f.path, side, line })
@@ -66,7 +59,7 @@ export const DiffFileItem = memo(function DiffFileItem({ f, file, files, shown, 
       const line = Number(n)
       const notes = here.filter((c) => sameLine(c, at(side, line)))
       const isEditing = editing !== null && editing.side === side && editing.line === line
-      const src = file.hunks.flatMap((h) => h.lines).find((l) => pinKey(l) === key)
+      const src = findDiffLine([file], { path: f.path, side, line })
       pinned.set(
         key,
         <>
@@ -133,7 +126,7 @@ export const DiffFileItem = memo(function DiffFileItem({ f, file, files, shown, 
         <div className="patch">
           {file.binary && <div className="note">バイナリなので中身は出せません</div>}
           {file.skipped && <div className="note">大きすぎるので本文は出していません</div>}
-          {file.hunks.length > 0 && <DiffFilePatch file={file} renderLine={renderLine} pinned={pinned} pinKey={pinKey} />}
+          {file.hunks.length > 0 && <DiffFilePatch file={file} renderLine={renderLine} pinned={pinned} />}
         </div>
       )}
       {shown && !file && (

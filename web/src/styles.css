@@ -132,7 +132,8 @@
    * 見えている幅より狭ければ min-width で伸ばし、横に流したときにはみ出した分にも追加・削除の色が付く。
    * **行の高さは固定**（.ln 18px、.hh 20.5px。web/src/diffVirtual.ts の LINE_H / HUNK_HEADER_H と揃える。変えたら両方）
    */
-  .diff-section .vlist { position: relative; min-width: 100%; box-sizing: border-box; }
+  /* `ch` を本文と同じ等幅・同じ大きさで解決させる（親の 14px のサンセリフで解決すると、文字数から出した幅と中身の幅が合わない） */
+  .diff-section .vlist { position: relative; min-width: 100%; box-sizing: border-box; font-family: var(--mono); font-size: 12px; outline: none; }
   .diff-section .vlist > .row, .diff-section .vlist > .hh { position: absolute; left: 0; right: 0; box-sizing: border-box; }
   .diff-section .patch .note { color: var(--muted); padding: 6px 10px; font-family: inherit; font-size: 12px; }
   .diff-section .hh { font-family: var(--mono); font-size: 11px; line-height: 16.5px; height: 20.5px; color: var(--muted); background: var(--bg); padding: 2px 10px; white-space: pre; overflow: hidden; }
@@ -162,8 +163,11 @@
   .diff-orphan { margin: 0 0 8px; font-size: 12px; }
   .diff-orphan .diff-comment { margin-top: 2px; border-left: 3px solid var(--accent); background: var(--bg); padding: 6px 10px; font-size: 13px; }
   /* タッチでは行番号の幅が指に足りないので広げる */
-  /* 指で押せる大きさ。行の高さ（18px 固定。#287）は変えず、押せる範囲だけ上下に広げる（padding を負の margin で打ち消す） */
-  @media (hover: none) and (pointer: coarse) { .diff-section .ln .nos .no { width: 4em; padding-top: 4px; padding-bottom: 4px; margin-top: -4px; margin-bottom: -4px; } }
+  /*
+   * 指で押せる幅（4em）。高さは行の高さ（18px 固定。#287）のまま。前は上下 4px の padding で 26px にしていたが、行が absolute の兄弟になったので
+   * はみ出した分は隣の行と重なり、後の行が押し勝つ（下の 4px が次の行のコメント欄を開く）。重ねずに広げる手が無いので、高さは広げない
+   */
+  @media (hover: none) and (pointer: coarse) { .diff-section .ln .nos .no { width: 4em; } }
   .diff-section .ln.add { background: color-mix(in srgb, var(--codex) 14%, transparent); }
   .diff-section .ln.del { background: color-mix(in srgb, var(--claude) 14%, transparent); }
   .modal.permissions .mode { font-size: 13px; margin-bottom: 10px; }

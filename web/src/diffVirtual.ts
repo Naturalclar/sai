@@ -13,7 +13,7 @@
 export const LINE_H = 18
 /** ハンク見出しの高さ（`.hh`。11px × 1.5 + padding 2px × 2） */
 export const HUNK_HEADER_H = 20.5
-/** ハンクの間の罫線（`.hunk + .hunk` の border-top） */
+/** ハンクの間の罫線（2 つ目からの見出し `.hh.next` の border-top）。2 つ目からの見出しの高さに含める */
 export const HUNK_GAP = 1
 /** 見えている範囲の上下に余分に描く高さ（px）。指で送ったときに白い帯が見えにくい程度 */
 export const OVERSCAN_PX = 400
@@ -30,14 +30,14 @@ export interface FileRow {
   height: number
 }
 
-/** ファイルの行を平らにする。位置は固定の高さだけで組む */
+/** ファイルの行を平らにする。位置は固定の高さだけで組む。ハンクの罫線は 2 つ目からの見出しの高さに含める（描く側は `height` をそのまま使う） */
 export function layoutFile(hunks: readonly { lines: readonly unknown[] }[]): { rows: FileRow[]; height: number } {
   const rows: FileRow[] = []
   let top = 0
   hunks.forEach((h, hunk) => {
-    if (hunk > 0) top += HUNK_GAP
-    rows.push({ kind: 'header', hunk, line: -1, top, height: HUNK_HEADER_H })
-    top += HUNK_HEADER_H
+    const height = HUNK_HEADER_H + (hunk > 0 ? HUNK_GAP : 0)
+    rows.push({ kind: 'header', hunk, line: -1, top, height })
+    top += height
     for (let line = 0; line < h.lines.length; line++) {
       rows.push({ kind: 'line', hunk, line, top, height: LINE_H })
       top += LINE_H
@@ -76,6 +76,9 @@ export function visibleRange(rows: readonly FileRow[], viewTop: number, viewBott
   if (rows.length === 0 || viewBottom <= viewTop) return [0, 0]
   const lo = viewTop - overscan
   const hi = viewBottom + overscan
+  // 上か下に丸ごと外れているファイルは走査しない（スクロールのたびに、上に流れた全ファイルの全行を歩かない）
+  const last = rows[rows.length - 1]!
+  if (hi <= 0 || lo >= fileHeight(last.top + last.height, extra)) return [0, 0]
   let from = -1
   let to = 0
   let add = 0
@@ -113,6 +116,11 @@ export function charWidth(cp: number): number {
   if (cp === 0x200d) return 0 // ZWJ
   if (
     (cp >= 0x1100 && cp <= 0x115f) ||
+    (cp >= 0x231a && cp <= 0x23f3) || // ⌚ ⏰ など
+    (cp >= 0x2600 && cp <= 0x27bf) || // ☀ ✅ ❌ ✔ など（絵文字として描かれるものが多い。広めに 2 と数える。広すぎても横スクロールが少し余るだけ）
+    cp === 0x2b50 ||
+    cp === 0x2b55 ||
+    (cp >= 0x1f000 && cp <= 0x1f2ff) ||
     (cp >= 0x2e80 && cp <= 0xa4cf && cp !== 0x303f) ||
     (cp >= 0xac00 && cp <= 0xd7a3) ||
     (cp >= 0xf900 && cp <= 0xfaff) ||
@@ -141,8 +149,11 @@ export function textWidth(text: string): number {
   return w
 }
 
-/** 番号 2 つ（3.5em × 2）＋記号（1.2em）＋本文の右の余白（10px ≒ 1.4ch）を、本文の文字幅に足すぶん（ch）。styles.css と揃える */
-export const LINE_CHROME_CH = 3.5 * 2 * (12 / 7.2) + 1.2 * (12 / 7.2) + 1.4
+/**
+ * 番号 2 つ（タッチ端末は 4em × 2。マウスは 3.5em だが広い方で数える。狭く見積もると色が本文の途中で切れる）＋記号（1.2em）＋
+ * 本文の右の余白（10px ≒ 1.4ch）を、本文の文字幅に足すぶん（ch）。`.vlist` は `.ln` と同じ 12px の等幅なので、1em = 12px、1ch ≒ 7.2px。styles.css と揃える
+ */
+export const LINE_CHROME_CH = 4 * 2 * (12 / 7.2) + 1.2 * (12 / 7.2) + 1.4
 /**
  * ファイルの本文の箱の幅（ch）。一番長い行（見出しも含む）の文字幅から先に決める（#287。#514 の「一番長い行の幅まで伸ばす」を
  * 見えている行だけでやると、その行が画面外に出た瞬間に幅が縮んで横スクロールが跳ねる）。

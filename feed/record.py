@@ -689,6 +689,9 @@ _CODEX_INTERNAL_PROMPT_PREFIXES = (
     "Generate a concise, single-line task title",
     "# Overview\n\nGenerate 0 to 3 hyperpersonalized suggestions",
     "You are an expert at upholding safety and compliance standards for Codex",
+    # 戻ってきた人向けの要約（catch-up。#563）。返答は `{"recap": …}` だが、入力に決まり文句が無いので下の判定に当たらない。
+    # 書き出しの 1 文まるごとで見るので、人が `Write a brief …` と打ったターンは落とさない
+    "Write a brief catch-up for a user returning to this Codex task.",
 )
 
 

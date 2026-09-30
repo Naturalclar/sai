@@ -1262,6 +1262,23 @@ class RecordTest(unittest.TestCase):
         self.assertEqual(rows[0]["user_text"], "Markdown適用不備をissue化")
         self.assertEqual(rows[0]["text"], "issue #101 を立てました。")
 
+    def test_codex_catch_up_is_not_recorded_but_similar_human_prompt_is(self):
+        # 戻ってきた人向けの要約（#563）。実物（2026-09 の記録 6 行）の書き出しと返答の形
+        wanted = "0c6bd4c9-6666-4a2b-9c3d-ffffffffffff"
+        self._rollout(wanted, str(self.cwd), first_user="Issue を探して")
+        catch_up = (
+            "Write a brief catch-up for a user returning to this Codex task. In at most 40 words and one or two "
+            "plain-text sentences, explain the objective, what was completed or learned, and the next step or blocker. "
+            "Mention changed files, tests, approvals, or requested decisions only when relevant.\n\nRecent conversation:\nUser: Issue を探して"
+        )
+        self._codex({"input-messages": [catch_up], "last-assistant-message": '{"recap":"修正用の専用オープンIssueはなく、近い既存Issueもクローズ済みでした。"}'})
+        self.assertEqual(read_rows(self.feed_dir), [], "catch-up は人のターンではないので行にしない（タイトルも英語の指示文に化けない）")
+        # 人が英語で似た書き出しを打ったターンは落とさない（書き出しの 1 文まるごとでしか見ない）
+        self._codex({"input-messages": ["Write a brief summary of this PR for the changelog."], "last-assistant-message": "Adds catch-up filtering."})
+        rows = read_rows(self.feed_dir)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["user_text"], "Write a brief summary of this PR for the changelog.")
+
     def test_codex_json_answer_to_a_human_prompt_is_recorded(self):
         # 人が JSON で答えさせたターンは内部ではない（決まり文句が無い）
         self._codex({"input-messages": ["package.json の scripts を JSON で出して"], "last-assistant-message": '{"test":"node --test","lint":"oxlint"}'})

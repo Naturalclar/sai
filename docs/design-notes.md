@@ -19,7 +19,7 @@ Claude の `Stop` は `session_id` を stdin の JSON に含むが、Codex の `
 
 それも取れなかったときは `(repo, cwd, agent)` が同じで前の行から**30分以内**なら同じセッションとみなし、ID は `synth-<repo>-<開始時刻>` にする。合成であることが後から分かるよう `session_source` を `synth` にする。一覧では「合成」の印が付く。
 
-もう1つ落とし穴がある。**Codex は人のターンとは別に裏で回す LLM 呼び出し（タスクのタイトル生成、次にやることの提案、安全性チェック）でも `agent-turn-complete` を鳴らす。** これにもセッション ID は無く、rollout にも書かれないので、そのまま記録すると同じ cwd で進行中のセッションに `{"title":"…"}` のような JSON だけの返答が紛れ込む。`record.py` は `input-messages` が既知の内部プロンプトで始まるか、返答が JSON オブジェクトだけで入力に内部プロンプトの決まり文句（`Do not answer the request`）があれば、行を書かない（`is_codex_internal_turn()`）。新しい種類の内部呼び出しが増えると JSON だけのバブルとして現れるので、そのときは接頭辞の一覧（`_CODEX_INTERNAL_PROMPT_PREFIXES`）に足す。
+もう1つ落とし穴がある。**Codex は人のターンとは別に裏で回す LLM 呼び出し（タスクのタイトル生成、次にやることの提案、安全性チェック、戻ってきた人向けの要約（catch-up。#563））でも `agent-turn-complete` を鳴らす。** これにもセッション ID は無く、rollout にも書かれないので、そのまま記録すると同じ cwd で進行中のセッションに `{"title":"…"}` のような JSON だけの返答が紛れ込む。`record.py` は `input-messages` が既知の内部プロンプトで始まるか、返答が JSON オブジェクトだけで入力に内部プロンプトの決まり文句（`Do not answer the request`）があれば、行を書かない（`is_codex_internal_turn()`）。新しい種類の内部呼び出しが増えると JSON だけのバブルとして現れるので、そのときは接頭辞の一覧（`_CODEX_INTERNAL_PROMPT_PREFIXES`）に足す。catch-up は返答が `{"recap": …}` の JSON だけなのに決まり文句が無く、どちらにも当たらずに 9 月の記録へ 6 行（3 セッション）紛れ込み、セッションのタイトルが英語の指示文に化けていた。接頭辞は**書き出しの 1 文まるごと**にしてあり、人が英語で `Write a brief …` と打ったターンは落とさない。
 
 ## 3. 「待っている」はターン完了とは別の行で掴む
 

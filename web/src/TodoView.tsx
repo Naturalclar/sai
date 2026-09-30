@@ -11,7 +11,7 @@ import { useNarrow } from './useNarrow'
 import { shouldQueue } from './replyQueue.ts'
 import { loadDraft, saveDraft } from './replyDrafts'
 import { restoresText, type RestoreRequest } from './replyRestore'
-import { openRow, rowReplyable } from './todoReply'
+import { openRow, ownReplying, rowReplyable } from './todoReply'
 import { doneItems, pendingItems, todoItems, type TodoItem } from '../../shared/todoItems.ts'
 import type { PaneProps } from './App'
 
@@ -53,9 +53,11 @@ export function TodoView({ list, onStatus, onOpenSidebar, onLeaveToSidebar }: Pr
 
   // 行から送る返信（#522）。行数はその返信先のターン完了の数（集計の turns。セッション画面と同じ数え方）
   const replying = data?.replying ?? NO_REPLYING
+  // useReply に見せるのは、この画面から送ったセッションのぶんだけ（ほかの画面から送った返信の失敗を拾わない）
+  const [sentFrom, setSentFrom] = useState<ReadonlySet<string>>(() => new Set())
   const { pending: sending, failed, send, confirm, confirmedSent, confirmReplace, confirmProcess, cancelConfirm } = useReply(
     (id) => data?.sessions.find((s) => s.id === id)?.turns ?? 0,
-    replying,
+    ownReplying(replying, sentFrom),
     updatedAt,
   )
   // 狭い画面では行の下に開かず、セッション画面に移る（入力欄とキーボードで画面がほぼ埋まる）
@@ -74,9 +76,15 @@ export function TodoView({ list, onStatus, onOpenSidebar, onLeaveToSidebar }: Pr
   }
   const sendFrom = async (t: TodoItem, text: string, attachments: string[]) => {
     const queued = data?.queued[t.id]?.items.length ?? 0
+    if (!sentFrom.has(t.id)) setSentFrom((prev) => new Set(prev).add(t.id))
     const outcome = await send(t.id, text, { attachments, queue: shouldQueue(false, queued) })
     if (outcome === 'sent') setSentTo({ id: t.id, label: labelOf(t.id) })
     return outcome === 'sent'
+  }
+  // 失敗した本文を打ちかけ（sai.drafts）に書く。人がもう打ち始めていれば上書きしない
+  const keepAsDraft = (f: ReplyFailed) => {
+    const draft = loadDraft(f.id)
+    if (restoresText(draft.text)) saveDraft(f.id, { ...draft, text: f.text })
   }
   // 失敗した本文を入力欄に戻す（#350）。開いていればその場で、閉じていれば打ちかけに書いてから開く
   // （ReplyBox は作ったときの restore を「当てた」ことにするので、開くのと同時に頼んでも入らない）
@@ -85,8 +93,7 @@ export function TodoView({ list, onStatus, onOpenSidebar, onLeaveToSidebar }: Pr
       setRestore((r) => ({ id: f.id, text: f.text, seq: (r?.seq ?? 0) + 1 }))
       return
     }
-    const draft = loadDraft(f.id)
-    if (restoresText(draft.text)) saveDraft(f.id, { ...draft, text: f.text })
+    keepAsDraft(f)
     setOpenId(f.id)
   }
   const failedNotice = (f: ReplyFailed) => (
@@ -94,11 +101,17 @@ export function TodoView({ list, onStatus, onOpenSidebar, onLeaveToSidebar }: Pr
       <span>
         送信失敗{openable.has(f.id) ? '' : `（${labelOf(f.id)}）`}: {f.message}
       </span>
-      {f.text && !narrow && (
-        <button type="button" className="linkish" onClick={() => restoreFailed(f)}>
-          入力欄に戻す
-        </button>
-      )}
+      {f.text &&
+        (openable.has(f.id) && !narrow ? (
+          <button type="button" className="linkish" onClick={() => restoreFailed(f)}>
+            入力欄に戻す
+          </button>
+        ) : (
+          // 行がもう並んでいない（狭い画面では行の下に開かない）ので、打ちかけに書いてセッション画面で開く
+          <a className="linkish" href={`#/s/${encodeURIComponent(f.id)}`} onClick={() => keepAsDraft(f)}>
+            セッション画面の入力欄に戻す
+          </a>
+        ))}
     </div>
   )
   const rowOf = (t: TodoItem, key: string, hotkey: boolean, modeNote: string) => {

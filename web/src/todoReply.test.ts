@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { openRow, rowReplyable } from './todoReply.ts'
+import { openRow, ownReplying, rowReplyable } from './todoReply.ts'
 import type { TodoItem } from '../../shared/todoItems.ts'
 
 const session = {} as NonNullable<TodoItem['session']>
@@ -24,4 +24,12 @@ test('openRow: 開いていた行が並びから消えたら閉じる（戻っ�
   assert.equal(openRow('c', items), null)
   // 行は残っているが、もう打てない（別のマシンの行に変わった等）
   assert.equal(openRow('a', [item('a', 'done', false)]), null)
+})
+
+test('ownReplying: この画面から送ったセッションの返信だけを残す（ほかから送った失敗を拾わない）', () => {
+  const replying = { a: { failed: true }, b: { failed: false }, c: { failed: true } }
+  assert.deepEqual(ownReplying(replying, new Set(['b'])), { b: { failed: false } })
+  // 送ったが、もうサーバに無い（終わった）
+  assert.deepEqual(ownReplying(replying, new Set(['x'])), {})
+  assert.deepEqual(ownReplying(replying, new Set()), {})
 })

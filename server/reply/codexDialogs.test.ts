@@ -264,3 +264,24 @@ test('CodexDialogs: 絞り込んだ口の走査は、見なかった相手の前
   now += 60_000
   assert.deepEqual(Object.keys(await dialogs.scan([session()])), ['T1@repo'])
 })
+
+test('scan / answer: 半分しか読めなかったダイアログは答えられない側にして、ボタンを出さずキーも送らない（#595）', async () => {
+  const tmux = new FakeTmux()
+  const dialogs = new CodexDialogs(tmux, async () => '200 100\n100 1\n', () => Date.parse('2026-10-01T03:00:00+09:00'), 0)
+  // 頭が欠けた（番号が 1 から始まらない）・印が無い、のどちらも
+  for (const screen of ['• 会話\n  2. Yes\n› 3. No\n  Press enter to confirm or esc to cancel', '  1. Yes\n  2. No\nEnter to confirm · Esc to cancel']) {
+    tmux.screen = screen
+    const approval = (await dialogs.scan([session()]))['T1@repo']?.[0]
+    assert.equal(approval?.answerable, false, screen)
+    assert.equal(approval?.decisions, undefined, '押しても 409 になるボタンは出さない')
+    assert.ok(approval?.dialog, '読めたぶんは見せる')
+    // 画面を通さずに直接叩かれても送らない
+    assert.deepEqual(await dialogs.answer(approval!.approval_id, { behavior: 'deny', decision: `opt-${approval!.dialog!.options.at(-1)!.number}` }), {
+      ok: false,
+      status: 409,
+      error: 'この待ちは端末で答えてください',
+    })
+  }
+  assert.deepEqual(tmux.keys, [], 'どれもキーを送らない')
+})
+

@@ -21,6 +21,16 @@
 //
 // 会話の側は字下げが無いので、**選択肢から上へ「2 文字下げの行」を辿る**だけで塊が切り出せる。
 // 人の入力欄（`› マージして`）も `›` で始まるが、番号付きの選択肢ではないので境目になる。
+//
+// **選択肢が画面の幅で折り返すと、続きは番号のぶん深い 5 文字下げになる**（#595。幅 272 文字のペインで実測）:
+//
+//     2. Yes, and don't ask again for commands that start with `gh pr create --base main … 場合
+//        より先に配送確認を実施\n- ターン完了またはエラー時には…  `git
+//        diff --check`'` (p)
+//     3. No, and tell Codex what to do differently (esc)
+//
+// 2 番は `<コマンド全文>` を抱えるので、コマンドが長いと必ずこうなる。深い字下げの行も辿らないと、
+// 塊が `3.` の 1 行だけになり、「No」しか出ない・印が読めないので押せもしない、になる。
 import type { ApprovalDecision, TerminalDialog, TerminalDialogOption } from './types.ts'
 
 /** ダイアログの終わりの行。`server/reply/terminal.ts` の DIALOG（検出）と同じ言い回し */
@@ -31,6 +41,8 @@ const OPTION = /^(\d+)\.\s+(.*)$/
 const MARKER = /^[›❯>][\s\u00a0]?/
 /** ダイアログの本文の字下げ（2 文字） */
 const INDENT = /^ {2}\S/
+/** 折り返した選択肢・複数行のコマンドの続き（3 文字以上の字下げ）。会話の側のツールの出力（`    … +3 lines`）も同じ形 */
+const DEEP = /^ {3,}\S/
 /** 画面のうち遡って見る行数。これより上に伸びるダイアログは頭が切れるだけ（`title` が空になる） */
 const MAX_LINES = 60
 const MAX_TITLE = 200
@@ -87,13 +99,15 @@ export function parseCodexDialog(screen: string): TerminalDialog | null {
   const end = footer >= 0 ? footer - 1 : lastOption
   if (end < 0 || lastOption < 0 || lastOption > end) return null
   if (!isDialogLine(lines[end]!)) return null
+  // 深い字下げの行も辿る（#595。折り返した選択肢の続きで止めると、その下の選択肢しか残らない）
   let start = end
-  while (start > 0 && isDialogLine(lines[start - 1]!) && !isBoxLine(lines[start - 1]!)) start--
+  while (start > 0 && (isDialogLine(lines[start - 1]!) || DEEP.test(lines[start - 1]!)) && !isBoxLine(lines[start - 1]!)) start--
+  const block = lines.slice(headStart(lines.slice(start, end + 1)) + start, end + 1)
 
   const head: string[] = []
   const command: string[] = []
   const options: TerminalDialogOption[] = []
-  for (const line of lines.slice(start, end + 1)) {
+  for (const line of block) {
     const { body, selected } = bodyOf(line)
     const option = OPTION.exec(body)
     if (option) {
@@ -123,6 +137,20 @@ export function parseCodexDialog(screen: string): TerminalDialog | null {
     command: clip(command.join('\n'), MAX_COMMAND),
     options,
   }
+}
+
+/**
+ * 辿った塊のうち、ダイアログが始まる位置。**深い字下げが続きになるのは `$` のコマンドと選択肢の下だけ**で、
+ * 見出し・説明は 2 文字下げで折り返す。そこより上にある深い字下げの行は会話の側のツールの出力
+ * （`    … +3 lines`）なので、その下から読む（巻き込むと出力の 1 行が見出しになる）
+ */
+function headStart(block: readonly string[]): number {
+  const firstOption = block.findIndex(isOption)
+  const command = block.findIndex((l, i) => i < firstOption && bodyOf(l).body.startsWith('$ '))
+  const headEnd = command >= 0 ? command : firstOption
+  let from = 0
+  for (let i = 0; i < headEnd; i++) if (DEEP.test(block[i]!)) from = i + 1
+  return from
 }
 
 /**
@@ -171,6 +199,22 @@ export function dialogDecisions(dialog: TerminalDialog | null): ApprovalDecision
   return dialog.options
     .filter((o) => !ALWAYS_OPTION.test(o.label))
     .map((o) => ({ id: dialogDecisionId(o), label: o.label, behavior: DENY_OPTION.test(o.label) ? ('deny' as const) : ('allow' as const) }))
+}
+
+/**
+ * 読めた中身が**答えられる形か**（#595）。半分しか読めなかったものに答えさせない:
+ *
+ * - 番号が 1 から続いていない（頭が欠けた。塊は下から辿るので、欠けるのはいつも上）
+ * - 印（`›`）の付いた選択肢がちょうど 1 つでない（どこから矢印を送ればよいか分からない）
+ * - 選択肢が 1 つしか無い、「はい」に当たるものが 1 つも残らない（選ばせる形になっていない）
+ *
+ * 当たったら `Approval.answerable` を false にして、ボタンを出さない（押しても `409` になるだけなので）
+ */
+export function dialogAnswerable(dialog: TerminalDialog | null): boolean {
+  if (!dialog || dialog.options.length < 2) return false
+  if (!dialog.options.every((o, i) => o.number === i + 1)) return false
+  if (dialog.options.filter((o) => o.selected).length !== 1) return false
+  return dialogDecisions(dialog).some((d) => d.behavior === 'allow')
 }
 
 /**

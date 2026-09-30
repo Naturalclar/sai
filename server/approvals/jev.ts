@@ -126,6 +126,11 @@ export class JevRisk {
     return undefined
   }
 
+  /** 覚えているルールの確率を見るだけ（#553。聞かない。読む経路から外へ送らないため）。無い・まだなら undefined */
+  peekRule(label: string): number | undefined {
+    return this.entries.get(`rule:${label}`)?.safe
+  }
+
   private pump() {
     while (this.judge && this.running < JEV_CONCURRENCY && this.waiting.length > 0) {
       const next = this.waiting.shift()!

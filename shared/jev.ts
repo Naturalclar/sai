@@ -150,6 +150,31 @@ export function jevAutoEligible(approval: Pick<Approval, 'tool_name' | 'agent' |
 }
 
 /**
+ * 自動の「常に許可」（#499）をこの許可にどうするか（#553）。`jevAutoOnce()` がこれで決め、**`skip` の理由は reply.log に 1 回だけ残す**
+ * （前はどこで落ちても何も残らず、90% のタグを見ても答えない理由が分からなかった）。
+ * - `none`: この回の確率が閾値に届いていない（人が見て決める。自動を期待する回ではないので理由も残さない）
+ * - `skip`: この回は閾値以上なのに自動では答えない（Bash 以外・ルールを作れない・ルールの確率が低い）
+ * - `wait`: ルールの確率がまだ届いていない
+ * - `allow`: 答える
+ * `rule` は `alwaysAllowRule()` の表記（作れなければ null）、`ruleSafe` はそのルールの確率（まだなら undefined）
+ */
+export type JevAutoDecision = { kind: 'none' } | { kind: 'wait' } | { kind: 'allow' } | { kind: 'skip'; reason: string }
+
+export function jevAutoDecision(
+  approval: Pick<Approval, 'tool_name' | 'agent' | 'answerable' | 'jev'>,
+  threshold: number,
+  rule: string | null,
+  ruleSafe: number | undefined,
+): JevAutoDecision {
+  if (!jevAutoAllows(approval.jev, threshold)) return { kind: 'none' }
+  if (!jevAutoEligible(approval)) return { kind: 'skip', reason: `Bash 以外（${approval.tool_name}）は自動で答えない` }
+  if (!rule) return { kind: 'skip', reason: '「常に許可」のルールを作れないコマンド（先頭が変数の代入・展開など）' }
+  if (ruleSafe === undefined) return { kind: 'wait' }
+  if (!jevAutoAllows(ruleSafe, threshold)) return { kind: 'skip', reason: `ルール ${rule} が ${jevPercent(ruleSafe)}%（閾値 ${jevPercent(threshold)}%）` }
+  return { kind: 'allow' }
+}
+
+/**
  * ルールそのものを Jev に聞く文（#499 のレビュー）。`JEV_SAFE_STATEMENT` はこの 1 回のコマンドについての主張で、
  * 「常に許可」で書かれるルール（`Bash(rm:*)` のような前方一致）はそれより広い。この回が問題なさそうでも、
  * ルールが広すぎれば自動では許さない。両方が閾値以上のときだけ答える

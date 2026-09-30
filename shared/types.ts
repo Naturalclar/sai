@@ -794,6 +794,12 @@ export interface Approval {
    * （`shared/jev.ts`）。設定の `jev_auto`（#499）が入で閾値以上なら、Claude の `-p` の許可はサーバが自動で「常に許可」を返す
    */
   jev?: number
+  /**
+   * 自動の「常に許可」（#499）で書かれるルールそのものの確率（#553）と、その表記。**自動を入にしていて、Claude の Bash で
+   * 聞き終わったときだけ**。この回の確率（`jev`）が高くてもルールは前方一致で広いので低く出ることが多く、
+   * 画面に出さないと「90% なのに自動で答えない」理由が見えなかった
+   */
+  jev_rule?: { label: string; safe: number }
 }
 
 export interface ApprovalDecision {

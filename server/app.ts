@@ -4,7 +4,8 @@ import { homedir } from 'node:os'
 import { appendFile, readFile, realpath, stat } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { basename, extname, join, resolve, sep } from 'node:path'
-import { historyIconUrl, ICON_MAX_BYTES, iconUrl } from '../shared/icon.ts'
+import { historyIconUrl, ICON_MAX_BYTES, ICON_MIME, iconUrl, sniffImageType } from '../shared/icon.ts'
+import type { IconType } from '../shared/icon.ts'
 import { ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_COUNT, ATTACHMENTS_DIR, withAttachments } from '../shared/attachments.ts'
 import { mergeMeta } from '../shared/meta.ts'
 import { mergeProfile, PROFILE_ICON_ID, profileIconUrl } from '../shared/profile.ts'
@@ -166,6 +167,8 @@ import { imageHeaders, imageTable, readSessionImage } from './local/images.ts'
 import { TranscriptImages } from './local/transcriptImages.ts'
 import { labelSuffixes } from '../shared/sessionLabels.ts'
 import { CodexImages } from './local/codexImages.ts'
+import { THUMB_MIN_BYTES, Thumbnails } from './local/thumbnails.ts'
+import type { ThumbMaker } from './local/thumbnails.ts'
 import { galleryFromRows, mergeGallery, rowTsAtOrAfter } from '../shared/gallery.ts'
 import { searchRows } from './rows/search.ts'
 import { searchWords } from '../shared/search.ts'
@@ -476,6 +479,8 @@ export interface TerminalDeps {
   claudeHooks?: ClaudeHooksReader
   /** Codex の画像生成で作った画像の置き場（#575）。テストでは一時ディレクトリを指す */
   codexImages?: CodexImages
+  /** 画像の軽い版を作る口（#589）。テストでは偽の縮める口を渡した Thumbnails か noThumbs */
+  thumbs?: ThumbMaker
 }
 
 export function createApp(
@@ -507,6 +512,8 @@ export function createApp(
   const transcriptImages = new TranscriptImages()
   // Codex の画像生成で作った画像（#575）。rollout の item_completed から拾い、CODEX_HOME/generated_images/<スレッド>/ の中だけ配る
   const codexImages = terminal.codexImages ?? new CodexImages()
+  // 画像の軽い版（#589）。置き場は feed dir の thumbs/（派生なので消してよい）。縮めるのは PATH の sips
+  const thumbs = terminal.thumbs ?? new Thumbnails(join(store.directory, 'thumbs'))
   // 端末に打ち込んだ返信の「処理中」。子プロセスの方（run）とは別に持ち、画面には合わせて出す
   const typed = terminal.replies ?? new TerminalReplies()
   const isAlive = terminal.alive ?? alive
@@ -1182,6 +1189,32 @@ export function createApp(
   const json = (res: ServerResponse, payload: unknown, status = 200) =>
     send(res, status, JSON.stringify(payload), 'application/json; charset=utf-8')
   const error = (res: ServerResponse, status: number, message: string) => json(res, { error: message }, status)
+
+  /**
+   * 読み終えた画像を配る（本文のパス・transcript・Codex の生成画像の 3 つの口）。`?thumb=1` なら軽い版（#589）: しきい値未満は元のまま、
+   * 縮めたら JPEG（透過があれば PNG）、縮められなければ 503 と `X-SAI-Thumb: unavailable`（画面は押すまで元を読まない）。
+   * ライトボックスとダウンロードは `?thumb=1` を付けないので元の画像のまま
+   */
+  const sendImage = async (req: IncomingMessage, res: ServerResponse, img: { bytes: Buffer; type: IconType; name: string; etag: string }, q: URLSearchParams) => {
+    const download = q.get('download') === '1'
+    const wantThumb = q.get('thumb') === '1' && !download
+    // 軽い版の ETag は元の ETag から作る（元が変われば軽い版も変わる）
+    const etag = wantThumb && img.bytes.length >= THUMB_MIN_BYTES ? img.etag.replace(/^"/, '"t-') : img.etag
+    if (req.headers['if-none-match'] === etag) {
+      res.writeHead(304, { ETag: etag, 'Cache-Control': 'private, no-cache' })
+      res.end()
+      return
+    }
+    const t = wantThumb ? await thumbs.thumb(img) : ({ kind: 'original' } as const)
+    if (t.kind === 'unavailable') {
+      res.writeHead(503, { 'Cache-Control': 'no-store', 'X-SAI-Thumb': 'unavailable', 'X-SAI-Image-Bytes': img.bytes.length, 'Content-Length': 0 })
+      res.end()
+      return
+    }
+    const out = t.kind === 'thumb' ? { ...img, bytes: t.bytes, type: t.type, etag } : img
+    res.writeHead(200, imageHeaders(out, download))
+    res.end(req.method === 'HEAD' ? undefined : out.bytes)
+  }
 
   /** dist/ の中だけを配る。外に出る path は 404 */
   const sendStatic = async (res: ServerResponse, relative: string) => {
@@ -3003,9 +3036,18 @@ export function createApp(
         } catch {
           return error(res, 404, 'attachment not found')
         }
+        // 軽い版（#589）。添付は画像だけ受けているが、種類は中身で見る
+        const type = q.get('thumb') === '1' ? sniffImageType(body) : null
+        const t = type ? await thumbs.thumb({ bytes: body, type }) : ({ kind: 'original' } as const)
+        if (t.kind === 'unavailable') {
+          res.writeHead(503, { 'Cache-Control': 'no-store', 'X-SAI-Thumb': 'unavailable', 'X-SAI-Image-Bytes': body.length, 'Content-Length': 0 })
+          res.end()
+          return
+        }
+        const out = t.kind === 'thumb' ? { bytes: t.bytes, mime: ICON_MIME[t.type] } : { bytes: body, mime: found.mime }
         // 名前が中身のハッシュなので、同じ URL の中身は変わらない
-        res.writeHead(200, { 'Content-Type': found.mime, 'Content-Length': body.length, 'Cache-Control': 'private, max-age=31536000, immutable' })
-        res.end(req.method === 'HEAD' ? undefined : body)
+        res.writeHead(200, { 'Content-Type': out.mime, 'Content-Length': out.bytes.length, 'Cache-Control': 'private, max-age=31536000, immutable' })
+        res.end(req.method === 'HEAD' ? undefined : out.bytes)
         return
       }
       // セッションに出てきた画像の一覧と、Claude の transcript の画像（#504）。どちらもパスはリクエストから受けない
@@ -3028,27 +3070,13 @@ export function createApp(
           if (!rollout) return error(res, 404, 'rollout がありません')
           const img = await codexImages.read(rollout, thread, path.slice(codexImagesAt + CODEX_IMAGES_SEGMENT.length))
           if (!img.ok) return error(res, img.status, img.reason)
-          if (req.headers['if-none-match'] === img.etag) {
-            res.writeHead(304, { ETag: img.etag, 'Cache-Control': 'private, no-cache' })
-            res.end()
-            return
-          }
-          res.writeHead(200, imageHeaders(img, q.get('download') === '1'))
-          res.end(method === 'HEAD' ? undefined : img.bytes)
-          return
+          return await sendImage(req, res, img, q)
         }
         if (transcriptAt > 0) {
           if (!transcript) return error(res, 404, 'transcript がありません')
           const img = await transcriptImages.read(transcript, path.slice(transcriptAt + TRANSCRIPT_IMAGES_SEGMENT.length))
           if (!img.ok) return error(res, img.status, img.reason)
-          if (req.headers['if-none-match'] === img.etag) {
-            res.writeHead(304, { ETag: img.etag, 'Cache-Control': 'private, no-cache' })
-            res.end()
-            return
-          }
-          res.writeHead(200, imageHeaders({ ...img, name: `image.${img.type === 'jpeg' ? 'jpg' : img.type}` }, q.get('download') === '1'))
-          res.end(method === 'HEAD' ? undefined : img.bytes)
-          return
+          return await sendImage(req, res, { ...img, name: `image.${img.type === 'jpeg' ? 'jpg' : img.type}` }, q)
         }
         if (remote) return json(res, { id, items: [] } satisfies GalleryResponse)
         const own = (await store.rows(days)).filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
@@ -3093,14 +3121,7 @@ export function createApp(
         if (!source) return error(res, 404, 'このセッションの本文に無い画像です')
         const img = await readSessionImage(source)
         if (!img.ok) return error(res, img.status, img.reason)
-        if (req.headers['if-none-match'] === img.etag) {
-          res.writeHead(304, { ETag: img.etag, 'Cache-Control': 'private, no-cache' })
-          res.end()
-          return
-        }
-        res.writeHead(200, imageHeaders(img, q.get('download') === '1'))
-        res.end(method === 'HEAD' ? undefined : img.bytes)
-        return
+        return await sendImage(req, res, img, q)
       }
       if (path.startsWith(SESSIONS_PREFIX) && path.endsWith(TURN_SUFFIX) && method === 'GET') {
         const id = sessionIdFrom(path, TURN_SUFFIX)

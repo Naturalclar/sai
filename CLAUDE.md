@@ -104,6 +104,7 @@ OpenCode (feed/opencode/sai.js) ─┘                           │
 - **ビルド追従・`buildFreshness.ts`** は `X-SAI-Build` と `build_stale` で知らせる。git は叩かない → docs/internals/server.md#ビルドが古いことの判定localbuildfreshnessts
 - **`server/local/claudeHooks.ts`** は `~/.claude/settings.json` を読むだけ。本物を読むのは `main.ts` だけで、`createApp` の既定は `NoClaudeHooks`。フックを足したら `shared/hooks.ts` の `EXPECTED_CLAUDE_HOOKS` と README の例の両方に足す。分からないときは出さない → docs/internals/server.md#フックの配線のずれlocalclaudehooksts
 - **`server/auth.ts`**（tailnet の認証）→ docs/internals/auth.md
+- **画像の軽い版・`local/thumbnails.ts`** は `sips` に**置き場に書き直したファイルだけ**を渡す（元のパス・リクエストの文字列は渡さない）。作れなければ 503 で画面は押すまで元を読まない。ライトボックスとダウンロードは元のまま → docs/internals/server.md#画像の軽い版localthumbnailsts
 
 ### 画面（web/src/）
 
@@ -210,7 +211,7 @@ OpenCode (feed/opencode/sai.js) ─┘                           │
 
 ### 切り分け・内部
 
-普段は設定しない（経路を切る・ログを残す）。**実行ファイル（`claude` / `codex` / `opencode` / `tmux` / `git` / `gh` / `tailscale`）はサーバの `PATH` から探す**（`replyCommand()` / `summarizeCommand()` / `codexQueueCommand()` / `realCodexConnector()` は名前を固定、`RealTmux` / `RealGit` / `GhPr` はコンストラクタの既定値。テストは偽物を引数で渡す。`tailscaleBins()` は PATH の後に macOS の GUI 版）。前は `SAI_*_BIN` で 7 つを 1 つずつ差し替えていたが、`PATH` を 1 つ直せば全部に効くのでやめた（#288）。
+普段は設定しない（経路を切る・ログを残す）。**実行ファイル（`claude` / `codex` / `opencode` / `tmux` / `git` / `gh` / `tailscale` / `sips`）はサーバの `PATH` から探す**（`replyCommand()` / `summarizeCommand()` / `codexQueueCommand()` / `realCodexConnector()` は名前を固定、`RealTmux` / `RealGit` / `GhPr` はコンストラクタの既定値、`sips` は `sipsShrink()`。テストは偽物を引数で渡す。`tailscaleBins()` は PATH の後に macOS の GUI 版）。前は `SAI_*_BIN` で 7 つを 1 つずつ差し替えていたが、`PATH` を 1 つ直せば全部に効くのでやめた（#288）。
 
 | | |
 | --- | --- |

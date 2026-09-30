@@ -4,6 +4,7 @@ import { ImageSourceContext } from './imageContext'
 import { ImageMark } from './ImageMark'
 import { DownloadMark } from './DownloadMark'
 import { LightboxContext, opensInPage } from './lightbox'
+import { ThumbImage } from './ThumbImage'
 
 /**
  * 本文の中の手元の画像（#321）。サーバが配れば（`GET /api/sessions/<id>/images/<key>`）サムネイル（押すとページの中のライトボックスで開く。#507）と
@@ -37,7 +38,7 @@ export function MarkdownImage({ src, alt }: { src: string; alt: string }) {
           openLightbox([{ url, name }], 0)
         }}
       >
-        <img src={url} alt={name} loading="lazy" onError={() => setFailed(true)} />
+        <ThumbImage url={url} alt={name} onBroken={() => setFailed(true)} />
       </a>
       <a className="md-img-dl" href={`${url}?download=1`} download={imageName(src)} title={`${src} をダウンロード`}>
         <DownloadMark />

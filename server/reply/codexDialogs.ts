@@ -35,6 +35,8 @@ export interface CodexDialogSource {
   scan(sessions: SessionSummary[], extra?: readonly DialogTarget[]): Promise<ApprovalMap>
   /** その approval_id が端末のダイアログか（#450。app.ts の分岐用）。偽物は持たなくてよい */
   has?(approvalId: string): boolean
+  /** 前回の走査で見えていたダイアログ（ペインを見に行かない。#495 の締切で使う）。偽物は持たなくてよい */
+  snapshot?(): ApprovalMap
   /** 画面から押された選択をペインに送る（#450）。偽物は持たなくてよい（持たなければ答えられないまま） */
   answer?(approvalId: string, answer: ApprovalAnswer): Promise<DialogAnswerResult>
 }
@@ -173,7 +175,7 @@ export class CodexDialogs implements CodexDialogSource {
     return this.settleMs > 0 ? new Promise((r) => setTimeout(r, this.settleMs)) : Promise.resolve()
   }
 
-  private snapshot(): ApprovalMap {
+  snapshot(): ApprovalMap {
     return Object.fromEntries(Array.from(this.active, ([id, approval]) => [id, [approval]]))
   }
 }

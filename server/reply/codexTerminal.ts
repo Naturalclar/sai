@@ -12,6 +12,8 @@ export const CODEX_PID_TTL_MS = 30_000
 export interface CodexTerminalSource {
   /** そのセッションを、そのペインで実際に握っている生きたプロセスの pid。引けなければ 0 */
   pid(session: string, pane: string): Promise<number>
+  /** 前回の結果（`lsof` を起こさない。#495 の締切で使う）。知らなければ 0。偽物は持たなくてよい */
+  last?(session: string, pane: string): number
 }
 
 export interface CodexTerminalDeps {
@@ -37,6 +39,8 @@ export interface CodexTerminalDeps {
  */
 export class CodexTerminals implements CodexTerminalSource {
   private cache = new Map<string, { at: number; pid: number }>()
+  /** 引き直しの最中（同じ鍵で `lsof` を重ねない。3 秒のポーリングが締切で抜けたあとも走っている） */
+  private inflight = new Map<string, Promise<number>>()
   private readonly holders: LockHolders
   private readonly alive: (pid: number) => boolean
   private readonly inPane: (pane: string, pid: number) => Promise<boolean>
@@ -58,11 +62,28 @@ export class CodexTerminals implements CodexTerminalSource {
     this.env = deps.env ?? process.env
   }
 
+  /** 前回の結果。TTL が切れていてもそのまま。覚えている pid が死んでいれば 0 */
+  last(session: string, pane: string): number {
+    const hit = this.cache.get(`${session}\n${pane}`)
+    return hit && (hit.pid === 0 || this.alive(hit.pid)) ? hit.pid : 0
+  }
+
   async pid(session: string, pane: string): Promise<number> {
     const key = `${session}\n${pane}`
     const hit = this.cache.get(key)
     // 覚えている pid が死んでいたら、TTL の中でも引き直す（端末を閉じたのに「開いている」と言い続けない）
     if (hit && this.now() - hit.at < CODEX_PID_TTL_MS && (hit.pid === 0 || this.alive(hit.pid))) return hit.pid
+    const running = this.inflight.get(key)
+    if (running) return running
+    const work = this.lookup(session, pane).finally(() => {
+      this.inflight.delete(key)
+    })
+    this.inflight.set(key, work)
+    return work
+  }
+
+  private async lookup(session: string, pane: string): Promise<number> {
+    const key = `${session}\n${pane}`
     let pid = 0
     if (pane) {
       try {

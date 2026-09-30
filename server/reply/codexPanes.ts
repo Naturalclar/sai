@@ -41,6 +41,8 @@ export interface PaneCodex {
 
 export interface CodexPaneSource {
   scan(): Promise<PaneCodex[]>
+  /** 前回の結果（走査を起こさない。#495 の締切で使う）。偽物は持たなくてよい */
+  last?(): PaneCodex[]
 }
 
 /** その pid が開いているもののうち、知りたい 2 つ */
@@ -258,6 +260,11 @@ export class CodexPanes implements CodexPaneSource {
     this.ps = deps.ps ?? realPsCommands
     this.openOf = deps.openOf ?? lsofPaneFiles(deps.env ?? process.env)
     this.now = deps.now ?? Date.now
+  }
+
+  /** 前回の結果。TTL が切れていてもそのまま（走査は起こさない） */
+  last(): PaneCodex[] {
+    return this.cache?.panes ?? []
   }
 
   async scan(): Promise<PaneCodex[]> {

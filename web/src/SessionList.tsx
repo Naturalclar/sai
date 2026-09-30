@@ -5,6 +5,7 @@ import type { Polled } from './hooks'
 import { useMediaQuery } from './hooks'
 import { DaysSelect } from './DaysSelect'
 import { FacetSelect } from './FacetSelect'
+import { ProjectPicker } from './ProjectPicker'
 import { SessionItem } from './SessionItem'
 import type { NavTarget } from './sessionNav'
 import { isCollapsed, type SessionGroup } from './sessionGroups'
@@ -63,7 +64,8 @@ export function SessionList({ list, filters, setFilters, active, creating = fals
     <>
       <div className="filters">
         {/* 値は repo フィールド（worktree ならそのディレクトリ名）。GitHub のリポジトリではないので画面では「セッション」と呼ぶ（#151） */}
-        <FacetSelect label="リポジトリ" value={filters.project} options={facets.projects} onChange={(project) => setFilters({ project })} />
+        {/* 複数選べる（#529）。フィードの見出しの切り替えと同じ部品・同じ filters.projects */}
+        <ProjectPicker place="side" selected={filters.projects} projects={facets.projects} onChange={(projects) => setFilters({ projects })} />
         {/* worktree（git の toplevel の basename）。bare clone だと 1 リポジトリに複数あるので、2 つ以上あるときだけ出す */}
         {(facets.repos.length > 1 || filters.repo) && (
           <FacetSelect label="worktree" value={filters.repo} options={facets.repos} onChange={(repo) => setFilters({ repo })} />
@@ -75,7 +77,7 @@ export function SessionList({ list, filters, setFilters, active, creating = fals
         <FacetSelect label="エージェント" value={filters.agent} options={facets.agents} onChange={(agent) => setFilters({ agent })} />
         <FacetSelect label="日付" value={filters.date} options={facets.dates} onChange={(date) => setFilters({ date })} />
         <DaysSelect value={filters.days} options={[1, 3, 7, 30, 90]} onChange={(days) => setFilters({ days })} />
-        <button type="button" onClick={() => setFilters({ project: '', repo: '', agent: '', date: '', host: '' })}>絞り込みを消す</button>
+        <button type="button" onClick={() => setFilters({ projects: [], repo: '', agent: '', date: '', host: '' })}>絞り込みを消す</button>
         <button
           type="button"
           className={archived ? 'on' : ''}

@@ -20,6 +20,7 @@ import type { Skill } from '../shared/skills.ts'
 import { UsageStore } from './local/usage.ts'
 import { ProgressReader } from './local/progress.ts'
 import { claudeProjectName } from '../shared/progress.ts'
+import { rowProject } from '../shared/project.ts'
 import type { SessionProgressResponse } from '../shared/types.ts'
 import { localDate } from './rows/aggregate.ts'
 import { replyCommand, splitArgs } from './reply/runner.ts'
@@ -397,6 +398,15 @@ test('/api/sessions?project= で絞る（bare clone の worktree でもリポジ
 
   const feed = (await (await get(`/api/feed?days=30&project=${encodeURIComponent('Naturalclar/kanban')}`)).json()) as FeedResponse
   assert.deepEqual([...new Set(feed.rows.map((r) => r.session))], ['PJ3'], 'フィードも project で絞れる')
+
+  // 複数選べる（#529）。`?project=a&project=b` のどれかに当たれば出す
+  const both = `project=${encodeURIComponent('Naturalclar/sai')}&project=${encodeURIComponent('Naturalclar/kanban')}`
+  const many = (await (await get(`/api/sessions?days=30&${both}`)).json()) as SessionsResponse
+  assert.ok(['PJ1@wt-a', 'PJ2@wmain', 'PJ3@wmain'].every((id) => many.sessions.some((s) => s.id === id)), '2 つのリポジトリのセッションが両方出る')
+  assert.ok(many.sessions.every((s) => s.project === 'Naturalclar/sai' || s.project === 'Naturalclar/kanban'), 'ほかのリポジトリは出ない')
+  const manyFeed = (await (await get(`/api/feed?days=30&${both}`)).json()) as FeedResponse
+  assert.deepEqual(new Set(manyFeed.rows.filter((r) => r.session?.startsWith('PJ')).map((r) => r.session)), new Set(['PJ1', 'PJ2', 'PJ3']))
+  assert.ok(manyFeed.rows.every((r) => ['Naturalclar/sai', 'Naturalclar/kanban'].includes(rowProject(r))), 'フィードもほかのリポジトリの行は流さない')
 })
 
 test('GET /api/sessions/<id>/diff: git のリポジトリでない cwd は 404、知らないセッションも 404', async () => {

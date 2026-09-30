@@ -1,6 +1,7 @@
 // 行 → セッションの集計。エンティティの単位は (セッション, リポジトリ)。キーは shared/entity.ts。
 import { entityId, localDate } from '../../shared/entity.ts'
 import { rowProject } from '../../shared/project.ts'
+import { matchesProjects } from '../../shared/projectFilter.ts'
 import { eventKind } from '../../shared/events.ts'
 import type { Agent, Facets, FeedRow, SessionSource, SessionSummary } from '../../shared/types.ts'
 
@@ -167,8 +168,8 @@ export function aggregate(rows: FeedRow[]): SessionSummary[] {
 }
 
 export interface SessionFilter {
-  /** リポジトリ（`Naturalclar/sai`）。主軸 */
-  project?: string
+  /** リポジトリ（`Naturalclar/sai`）。主軸。**複数選べる**（#529。どれか 1 つに当たれば出す。空ならすべて） */
+  projects?: readonly string[]
   /** worktree（git の toplevel の basename）。project の中をさらに絞る */
   repo?: string
   agent?: string
@@ -177,9 +178,9 @@ export interface SessionFilter {
   host?: string
 }
 
-export function filterSessions(sessions: SessionSummary[], { project = '', repo = '', agent = '', date = '', host = '' }: SessionFilter): SessionSummary[] {
+export function filterSessions(sessions: SessionSummary[], { projects = [], repo = '', agent = '', date = '', host = '' }: SessionFilter): SessionSummary[] {
   let result = sessions
-  if (project) result = result.filter((s) => s.projects.includes(project))
+  if (projects.length > 0) result = result.filter((s) => matchesProjects(projects, s.projects))
   if (repo) result = result.filter((s) => s.repos.includes(repo))
   if (agent) result = result.filter((s) => s.agents.includes(agent as Agent))
   if (date) result = result.filter((s) => s.dates.includes(date))

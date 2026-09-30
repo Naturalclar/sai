@@ -117,7 +117,19 @@ async function sendRaw<T>(method: 'POST' | 'PUT' | 'DELETE', url: string, body?:
 /** アイコンの履歴（#465）を誰のために開くか。セッションか自分か */
 export type IconTarget = { kind: 'session'; id: string } | { kind: 'profile' }
 
-const qs = (params: object) => new URLSearchParams(Object.entries(params)).toString()
+/**
+ * クエリ文字列。配列は同じ名前を繰り返す。`projects` だけはサーバの受け口の名前 `project` に直す
+ * （#529。`?project=a&project=b`。1 つだけ送っていた前の形とそのまま互換）
+ */
+const qs = (params: object) => {
+  const out = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    const name = key === 'projects' ? 'project' : key
+    if (Array.isArray(value)) for (const v of value) out.append(name, String(v))
+    else out.append(name, String(value))
+  }
+  return out.toString()
+}
 
 export const api = {
   sessions: (f: SessionFilters) => getJSON<SessionsResponse>(`/api/sessions?${qs(f)}`),

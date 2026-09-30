@@ -1109,8 +1109,11 @@ export interface SettingsRequest {
 }
 
 export interface SessionFilters {
-  /** リポジトリ（`Naturalclar/sai`）。主軸 */
-  project: string
+  /**
+   * リポジトリ（`Naturalclar/sai`）。主軸。**複数選べる**（#529。空ならすべて、選んだどれかに当たれば出す）。
+   * クエリには `project` を繰り返して載せる（`?project=a&project=b`）
+   */
+  projects: string[]
   /** worktree（git の toplevel の basename）。project の中をさらに絞る */
   repo: string
   agent: string
@@ -1123,8 +1126,8 @@ export interface SessionFilters {
 }
 
 export interface FeedFilters {
-  /** リポジトリ（`Naturalclar/sai`）。サイドバーの絞り込みに従う */
-  project: string
+  /** リポジトリ（`Naturalclar/sai`）。サイドバーの絞り込みに従う（複数。#529） */
+  projects: string[]
   days: string
 }
 

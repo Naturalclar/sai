@@ -19,7 +19,19 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 広い画面はチャットの右にもう1枚のペイン（`DiffPane`。`main.layout.diff-open` の3列目）、狭い画面はモーダル（`DiffModal`）。中身は両方 `DiffBody`。
 - 開いている id は `App.tsx` が持ち（`useNarrow()` で出し分け）、そのセッションを開いている間だけ出す。フィードのバブルから開いたものだけはフィードでも出す。規則は `web/src/feedDiff.ts` の `visibleDiff()`。
 - 枠は両方とも「流れない見出し（`.diff-head`。題名 + ✕）＋ 流れる中身（`.diff-scroll`）」。モーダル側は `.modal.diff` の `padding` を外して `flex` にしてある（`overflow-y` をモーダル自身に付けると閉じるボタンが差分の一番下まで流れる）。
-- 本文の行の箱（`.hunk`）は一番長い行の幅まで伸ばす（`width: max-content; min-width: 100%`）。そのぶん行のコメントの幅は `.patch` を container にした `100cqw`（見えている幅）で抑える。
+- 本文の行の箱（`.vlist`）は一番長い行の幅まで伸ばす（幅は DOM ではなく文字数から決める。下の「仮想化」）。そのぶん行のコメントの幅は `.patch` を container にした `100cqw`（見えている幅）で抑える。
+
+### 仮想化（#287）
+
+大きい差分（4,000 行近く）を狭い画面で開くと重かった（差分だけで約 1.7 万要素。時間の大半は layout）ので、**見えている行 ± 余白だけを DOM に置く**。
+
+- 単位は**ファイルごと**（`DiffView` → `DiffFileItem`（`memo`。他のファイルの開閉・編集で描き直さない）→ `DiffFilePatch`）。ファイルの開閉と、ファイルごとの横スクロールの箱（`.patch`）はそのまま。
+- 行の高さは固定（`.ln` 18px = 12px × 1.5、`.hh` 20.5px、ハンクの間の罫線 1px）。値は `web/src/diffVirtual.ts` の `LINE_H` / `HUNK_HEADER_H` / `HUNK_GAP` と `styles.css` の両方にあり、変えたら両方。指で押せる大きさ（`.nos .no` の padding）は負の margin で打ち消して行の高さを変えない。
+- 「スクロール位置 → 描く行の範囲」は `diffVirtual.ts` の純粋関数（`layoutFile` / `visibleRange` / `rowsToRender`。`diffVirtual.test.ts`）。上下に `OVERSCAN_PX`（400px）の余白。箱は全行ぶんの高さで、行は `position: absolute`。見えていないファイルは高さだけの空箱。
+- **行コメント（#511）が付いている行と編集中の行は、見えていなくても常に置く**（`pinned`）。高さは置いたあとに `ResizeObserver` で測り、その下の行の位置に足す（`rowTop` / `fileHeight` の `extra`）。
+- **横幅は DOM からではなく、ファイルの中で一番長い行の文字数から先に決める**（`fileWidthCh`。全角・絵文字は 2、タブは 8 桁。番号 2 つ + 記号 + 余白のぶんを足す）。見えている行だけで `max-content` にすると、一番長い行が画面外に出た瞬間に幅が縮んで横スクロールが跳ねる。
+- どこが見えているかは `useScrollTick`（`DiffView` の祖先のスクロール容器の scroll と resize を 1 か所で受け、rAF ごとに 1 回数を進める）を `ScrollTick` で各ファイルに配り、`DiffFilePatch` が自分の位置を `getBoundingClientRect()` で測り直す。容器は `.diff-scroll`（ペイン / モーダル）でも、PR の画面のように window がスクロールする場合でもよい（`findScroller`）。
+- ブラウザのページ内検索（⌘F）は DOM に無い行に当たらない。**いったん諦めている**（困ったら差分の中を探す検索欄を別 issue で）。
 - どこまで開くかは `web/src/diffOpen.ts` の `autoOpenPaths()`（上から順に描画行数を積み、`AUTO_OPEN_LINES` = 4000 行の予算まで。`diffOpen.test.ts`）。
 
 ## Codex にレビューさせる

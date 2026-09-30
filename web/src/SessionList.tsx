@@ -34,7 +34,7 @@ interface Props {
 export function SessionList({ list, filters, setFilters, active, creating = false, groups, collapsed, onToggleGroup }: Props) {
   // キーボードで固定項目に移ったとき、サイドバーの一番上まで見えるようにする（SessionItem と同じ扱い）
   const pinnedRef = useRef<HTMLAnchorElement>(null)
-  const pinned = active.kind === 'feed' || active.kind === 'todo'
+  const pinned = active.kind === 'feed' || active.kind === 'todo' || active.kind === 'prs'
   useEffect(() => {
     if (pinned) pinnedRef.current?.scrollIntoView({ block: 'nearest' })
   }, [pinned])
@@ -105,6 +105,11 @@ export function SessionList({ list, filters, setFilters, active, creating = fals
         <a className={`item todo${active.kind === 'todo' ? ' active' : ''}`} href="#/todo">
           <span className="t">要対応{todo > 0 && <span className="n">{todo}</span>}</span>
           <span className="last">{todo > 0 ? 'あなたを待っています' : '待っているものはありません'}</span>
+        </a>
+        {/* GitHub に出ている PR（#524）。読むだけ。件数は数えない（開いたときにだけ gh で読むので、ここでは取りに行かない） */}
+        <a className={`item prs${active.kind === 'prs' ? ' active' : ''}`} href="#/prs">
+          <span className="t">PR</span>
+          <span className="last">GitHub に出ている PR を見る</span>
         </a>
         {archived && <div className="head">アーカイブ済み（薄く出る。開いて「戻す」か、新しい行が届けば自動で戻る）</div>}
         {/* リポジトリごとの塊（#364）。**塊が 1 つでも見出しを出す**（並びが場合によって変わらない方が読みやすく、

@@ -55,6 +55,9 @@ import type { SessionTurnResponse,
   SessionModelsResponse,
   SessionSkillsResponse,
   SearchResponse,
+  PrDetailResponse,
+  PrRepo,
+  PrsResponse,
   SessionsResponse,
   ReviewRequest,
   ReviewResponse,
@@ -99,7 +102,10 @@ import type { Digester } from './digest/digest.ts'
 import { META_FILE, MetaStore } from './meta/meta.ts'
 import { collectPermissions } from './approvals/permissions.ts'
 import { compareUrl } from '../shared/diff.ts'
-import { NotAGitRepo, RealGit, resolveBase, sessionDiff, sessionDiffSummary } from './git/diff.ts'
+import { clampPatch, NotAGitRepo, RealGit, resolveBase, sessionDiff, sessionDiffSummary } from './git/diff.ts'
+import { prBrowserFromEnv } from './git/prs.ts'
+import type { PrBrowser } from './git/prs.ts'
+import { diffStats, isPrNumber, knownRepos, pickKnownRepo } from '../shared/prs.ts'
 import { fillRepo, ProjectResolver } from './git/project.ts'
 import type { Git } from './git/diff.ts'
 import { prLookupFromEnv } from './git/pr.ts'
@@ -182,6 +188,10 @@ const SETTINGS_PATH = '/api/settings'
 const DIGEST_FEEDBACK_PATH = '/api/digest/feedback'
 const USAGE_PATH = '/api/usage'
 const SEARCH_PATH = '/api/search'
+// GitHub に出ている PR（#524）。読むだけ
+const PRS_PATH = '/api/prs'
+/** 並べるリポジトリを拾うセッションの窓。アーカイブ済みのセッションのリポジトリも入る */
+const PRS_REPO_DAYS = 30
 /** 設定 body の上限 */
 export const MAX_SETTINGS_BYTES = 4 * 1024
 const REPLY_SUFFIX = '/reply'
@@ -453,6 +463,8 @@ export function createApp(
   // 生きている Claude のセッション（#418）。`claude agents --json` を叩くだけで、聞けなければ何も変えない
   // （名前は `agents`（#310 のセッション同士のメッセージ）と紛れるので `claudeAgents`）
   claudeAgents: AgentList = agentListFromEnv(),
+  // GitHub の PR を読む口（#524）。`gh` を叩くのは読むサブコマンドだけ。`SAI_GH=0` なら読まない
+  prs: PrBrowser = prBrowserFromEnv(),
 ): App {
   const distRoot = resolve(distDir)
   // Claude の transcript の画像（#504）。transcript ごとに読んだところを覚えて、増えた分だけ読み足す
@@ -2856,6 +2868,41 @@ export function createApp(
         const [rows, { sessions }] = await Promise.all([store.rows(days), sessionsWithMeta(days)])
         const { hits, truncated } = searchRows(rows, words, sessions)
         return json(res, { q: rawQuery, days, hits, truncated, scanned: rows.length } satisfies SearchResponse)
+      }
+
+      // GitHub に出ている PR（#524）。**読むだけ**で、並べるのは記録で知っているリポジトリ（セッションの remote）だけ。
+      // 3 秒のポーリングには乗せない（開いたとき・「読み直す」のときだけ）
+      if (path === PRS_PATH || path.startsWith(`${PRS_PATH}/`)) {
+        if (method !== 'GET') return error(res, 405, 'method not allowed')
+        const { sessions: raw } = await store.sessions(PRS_REPO_DAYS)
+        const known = knownRepos(await fillRepo(projects, raw))
+        if (path === PRS_PATH) {
+          const fresh = q.get('fresh') === '1'
+          const repos: PrRepo[] = await Promise.all(
+            known.map(async (repo): Promise<PrRepo> => {
+              const list = await prs.list(repo, fresh)
+              return list ? { repo, prs: list } : { repo, prs: [], error: 'gh で読めませんでした' }
+            }),
+          )
+          const rev = createHash('sha1').update(JSON.stringify(repos)).digest('hex').slice(0, 12)
+          return json(res, { rev, available: prs.available, repos } satisfies PrsResponse)
+        }
+        // `/api/prs/<owner>/<repo>/<番号>`。リポジトリは知っているものの中から引く（任意の名前を gh に渡さない）
+        const parts = path.slice(PRS_PATH.length + 1).split('/')
+        const [owner = '', name = '', n = ''] = parts
+        const repo = parts.length === 3 ? pickKnownRepo(known, `${owner}/${name}`) : ''
+        if (!repo || !isPrNumber(n)) return error(res, 404, 'not found')
+        const view = await prs.view(repo, Number(n))
+        if (!view) return error(res, 502, 'gh で PR を読めませんでした')
+        const out: PrDetailResponse = { repo, pr: view.pr, diff: { files: [], patch: '', truncated: false } }
+        if (view.patch === null) {
+          out.diff_error = '差分を読めませんでした（大きすぎるか、時間切れ）'
+        } else {
+          // 見出しは切る前の本文から数える（切ったあとだと、落としたファイルの行数が 0 になる）
+          const { patch, truncated } = clampPatch(view.patch)
+          out.diff = { files: diffStats(view.patch), patch, truncated }
+        }
+        return json(res, out)
       }
 
       if (path === '/api/sessions') {

@@ -43,6 +43,7 @@ test('isTypingTarget: 入力欄と contentEditable だけ', () => {
 
 const feed = { kind: 'feed' } as const
 const todo = { kind: 'todo' } as const
+const prs = { kind: 'prs' } as const
 const session = (id: string) => ({ kind: 'session', id }) as const
 
 test('navTarget: 開いているセッションを起点に隣へ。末尾の ↓ は止まる', () => {
@@ -52,13 +53,15 @@ test('navTarget: 開いているセッションを起点に隣へ。末尾の �
   assert.equal(navTarget(ids, session('c'), 'next'), null, '末尾で ↓ は止まる')
 })
 
-test('navTarget: 固定項目（フィード → 要対応）はサイドバーと同じくセッションより上', () => {
+test('navTarget: 固定項目（フィード → 要対応 → PR）はサイドバーと同じくセッションより上', () => {
   const ids = ['a', 'b', 'c']
-  assert.deepEqual(navTarget(ids, session('a'), 'prev'), todo, '一番上のセッションで ↑ は要対応へ')
+  assert.deepEqual(navTarget(ids, session('a'), 'prev'), prs, '一番上のセッションで ↑ は PR へ')
+  assert.deepEqual(navTarget(ids, prs, 'prev'), todo, 'PR で ↑ は要対応へ')
   assert.deepEqual(navTarget(ids, todo, 'prev'), feed, '要対応で ↑ はフィードへ')
   assert.equal(navTarget(ids, feed, 'prev'), null, 'フィードで ↑ は止まる（下へ動かない）')
   assert.deepEqual(navTarget(ids, feed, 'next'), todo)
-  assert.deepEqual(navTarget(ids, todo, 'next'), session('a'), '要対応で ↓ は先頭のセッションへ')
+  assert.deepEqual(navTarget(ids, todo, 'next'), prs)
+  assert.deepEqual(navTarget(ids, prs, 'next'), session('a'), 'PR で ↓ は先頭のセッションへ')
 })
 
 test('navTarget: 一覧に無ければ先頭のセッションへ。一覧が空なら行き先なし', () => {
@@ -68,7 +71,8 @@ test('navTarget: 一覧に無ければ先頭のセッションへ。一覧が空
   assert.equal(navTarget([], session('a'), 'next'), null)
   assert.equal(navTarget([], feed, 'prev'), null)
   assert.deepEqual(navTarget([], feed, 'next'), todo, '一覧が空でも固定項目の間は動ける')
-  assert.equal(navTarget([], todo, 'next'), null, '一覧が空なら要対応から下へは行けない')
+  assert.deepEqual(navTarget([], todo, 'next'), prs)
+  assert.equal(navTarget([], prs, 'next'), null, '一覧が空なら PR から下へは行けない')
 })
 
 test('navAction: → は入力欄へ', () => {

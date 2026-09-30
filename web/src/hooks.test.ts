@@ -56,3 +56,12 @@ test('parseRoute / sessionHash: 発言へのリンクはどちら側かも持つ
   // ts が無ければ side だけあっても普通のセッション
   assert.deepEqual(parseRoute('#/s/S1%40sai?side=me'), { name: 'session', id })
 })
+
+test('parseRoute: GitHub の PR（#524）。1 本は owner/repo/番号、壊れていれば一覧へ', () => {
+  assert.deepEqual(parseRoute('#/prs'), { name: 'prs' })
+  assert.deepEqual(parseRoute('#/pr/Naturalclar/sai/524'), { name: 'pr', repo: 'Naturalclar/sai', number: 524 })
+  assert.deepEqual(parseRoute('#/pr/Naturalclar/sai/0'), { name: 'prs' })
+  assert.deepEqual(parseRoute('#/pr/Naturalclar/sai/abc'), { name: 'prs' })
+  assert.deepEqual(parseRoute('#/pr/Naturalclar/524'), { name: 'prs' })
+  assert.deepEqual(parseRoute('#/pr/a/%E0%A4%A/1'), { name: 'prs' })
+})

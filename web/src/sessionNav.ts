@@ -34,11 +34,11 @@ export function isTypingTarget(target: { tagName?: string; isContentEditable?: b
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable === true
 }
 
-/** 移動の行き先＝サイドバーの項目。固定の「フィード」「要対応」がセッションより上に並ぶ */
-export type NavTarget = { kind: 'feed' } | { kind: 'todo' } | { kind: 'session'; id: string }
+/** 移動の行き先＝サイドバーの項目。固定の「フィード」「要対応」「PR」がセッションより上に並ぶ */
+export type NavTarget = { kind: 'feed' } | { kind: 'todo' } | { kind: 'prs' } | { kind: 'session'; id: string }
 
 /** サイドバーの固定項目（見た目の並びと同じ順）。セッションはこの後ろ */
-const PINNED: NavTarget[] = [{ kind: 'feed' }, { kind: 'todo' }]
+const PINNED: NavTarget[] = [{ kind: 'feed' }, { kind: 'todo' }, { kind: 'prs' }]
 
 const same = (a: NavTarget, b: NavTarget) => a.kind === b.kind && (a.kind !== 'session' || a.id === (b as { id: string }).id)
 

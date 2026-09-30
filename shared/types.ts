@@ -305,6 +305,68 @@ export interface DiffPr {
   draft: boolean
 }
 
+/** PR のチェック（CI）をまとめた状態（#524）。チェックが 1 つも無ければ空 */
+export type PrCheckState = 'success' | 'failure' | 'pending' | ''
+
+/** GitHub に出ている PR の 1 件（#524。`gh pr list` / `gh pr view` を読んだもの）。**読むだけ** */
+export interface PrSummary {
+  number: number
+  title: string
+  /** 出した人の GitHub のログイン名 */
+  author: string
+  /** head のブランチ */
+  head: string
+  /** base のブランチ */
+  base: string
+  draft: boolean
+  /** 最後に動いた時刻（ISO） */
+  updated_at: string
+  url: string
+  additions: number
+  deletions: number
+  changed_files: number
+  /** `APPROVED` / `CHANGES_REQUESTED` / `REVIEW_REQUIRED`、無ければ空 */
+  review_decision: string
+  checks: PrCheckState
+  /** 自分（`gh` でログインしている人）にレビューが頼まれている */
+  requested: boolean
+}
+
+/** 1 つのリポジトリの open な PR。`error` があれば引けなかった（prs は空） */
+export interface PrRepo {
+  /** `owner/repo` */
+  repo: string
+  prs: PrSummary[]
+  error?: string
+}
+
+/**
+ * GET /api/prs（#524）。SAI が記録で知っている GitHub のリポジトリの open な PR。3 秒のポーリングには載せない
+ * （開いたときと「読み直す」を押したときだけ）。`available` が false なら `gh` が使えない・`SAI_GH=0`
+ */
+export interface PrsResponse {
+  rev: string
+  available: boolean
+  repos: PrRepo[]
+}
+
+/** GET /api/prs/<owner>/<repo>/<番号>（#524）。PR 1 本の中身と差分。差分は `gh pr diff` を読んだもの */
+export interface PrDetailResponse {
+  repo: string
+  pr: PrSummary & {
+    /** 本文（Markdown） */
+    body: string
+    /** `OPEN` / `MERGED` / `CLOSED` */
+    state: string
+    /** head のコミット */
+    head_sha: string
+  }
+  /** base...head の差分。上限は #171 と同じ（超えたら本文を落として truncated） */
+  diff: DiffSection
+  /** 差分そのものを引けなかった理由（大きすぎる・時間切れ）。引けたら省略 */
+  diff_error?: string
+}
+
 /** 処理中のターンの 1 手順（#302）。サーバが transcript / rollout の末尾から読む（`shared/progress.ts`） */
 export interface ProgressStep {
   /** tool = ツールを呼んだ、thinking = 考えた（中身は出さない）、text = 返答を書いた */

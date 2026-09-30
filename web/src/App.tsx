@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { HIDDEN_POLL_MS, parseRoute, useHashRoute, useLocalState, usePolling } from './hooks'
+import { HIDDEN_POLL_MS, parseRoute, useHashRoute, useLocalState, usePolling, type Route } from './hooks'
 import { pendingItems, todoItems } from '../../shared/todoItems.ts'
 import { sessionGroups, toggleCollapsed, visibleIds } from './sessionGroups'
 import { titleWith } from '../../shared/notify.ts'
@@ -14,6 +14,8 @@ import { nextDiff, visibleDiff, type DiffOrigin, type OpenDiff } from './feedDif
 import { FeedView } from './FeedView'
 import { TodoView } from './TodoView'
 import { NewSessionView } from './NewSessionView'
+import { PrListView } from './PrListView'
+import { PrView } from './PrView'
 import { hm } from './format'
 import { MenuMark } from './MenuMark'
 import { GitHubMark } from './GitHubMark'
@@ -43,6 +45,14 @@ export interface PaneProps extends StatusProps {
   settings: SettingsResponse | null
   /** Linear の workspace（設定）。一言の中の PGR-123 のリンク先。空ならリンクにしない */
   linear: string
+}
+
+/** サイドバーで選ばれている項目。固定の「フィード」「要対応」「PR」もセッションと同じ 1 項目として扱う（PR 1 本は「PR」の下） */
+function navOf(route: Route): NavTarget {
+  if (route.name === 'session') return { kind: 'session', id: route.id }
+  if (route.name === 'todo') return { kind: 'todo' }
+  if (route.name === 'prs' || route.name === 'pr') return { kind: 'prs' }
+  return { kind: 'feed' }
 }
 
 /** `→` / `←` の当て先が描画されるのを待つ上限。過ぎたら諦める */
@@ -188,7 +198,7 @@ export function App() {
   // ↑↓（j / k）でサイドバーの並びのまま隣へ（フィード → 要対応 → セッション）、Esc でフィードへ。起点は「いま開いているセッション」なので state は持たない。
   // 入力欄にフォーカスがあるときはそちらの操作（caret の移動、@ の候補）なので触らない。サイドバーを閉じていても効く
   // サイドバーで選ばれている項目。固定の「フィード」「要対応」もセッションと同じ 1 項目として扱う（#224）
-  const active: NavTarget = route.name === 'session' ? { kind: 'session', id: route.id } : route.name === 'todo' ? { kind: 'todo' } : { kind: 'feed' }
+  const active = navOf(route)
   // リポジトリごとの塊（#364）。**画面の並びとキーボードの ↑↓ の並びは同じ関数から作る**ので、
   // 畳んだ塊の中のセッション（見えていない）には移らない
   // サイドバーの塊の見出しに出す「要対応」の数。**`done`（終わって次を待っているだけ）は数えない**（#438）。
@@ -217,15 +227,14 @@ export function App() {
       }
       if (action === 'feed') {
         const name = parseRoute(location.hash).name
-        if (name !== 'session' && name !== 'todo' && name !== 'new') return
+        if (name !== 'session' && name !== 'todo' && name !== 'new' && name !== 'prs' && name !== 'pr') return
         e.preventDefault()
         location.hash = '#/feed'
         return
       }
       // 起点は「押した瞬間の URL」。state（selectedId）だと、連打したとき再描画が追いつかず
       // 同じ場所から2回動こうとして取りこぼす
-      const at = parseRoute(location.hash)
-      const from: NavTarget = at.name === 'session' ? { kind: 'session', id: at.id } : at.name === 'todo' ? { kind: 'todo' } : { kind: 'feed' }
+      const from = navOf(parseRoute(location.hash))
       // 行き先はサイドバーの並びどおり（フィード → 要対応 → セッション）。端では何もしない。
       // preventDefault もしない（ページのスクロールに残す）
       const to = navTarget(sessionIds, from, action)
@@ -321,7 +330,11 @@ export function App() {
           </div>
         </aside>
         <div className="pane">
-          {route.name === 'new' ? (
+          {route.name === 'prs' ? (
+            <PrListView onStatus={onStatus} onOpenSidebar={openSidebar} />
+          ) : route.name === 'pr' ? (
+            <PrView key={`${route.repo}#${route.number}`} repo={route.repo} number={route.number} onStatus={onStatus} />
+          ) : route.name === 'new' ? (
             <NewSessionView replying={list.data?.replying} now={list.updatedAt?.getTime() ?? 0} onOpenSidebar={openSidebar} />
           ) : route.name === 'todo' ? (
             <TodoView list={list} onStatus={onStatus} onOpenSidebar={openSidebar} onLeaveToSidebar={focusSidebar} linear={linear} settings={settings} />

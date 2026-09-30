@@ -37,10 +37,12 @@ import type {
   ReplyQueueResponse,
   AgentStopResponse,
   UsageResponse,
+  PrsResponse,
+  PrDetailResponse,
 } from '../../shared/types.ts'
 import type { DigestFeedbackReason, DigestFeedbackRequest, DigestFeedbackResponse } from '../../shared/digestFeedback.ts'
 
-export type { Agent, FeedRow, SessionSource, SessionSummary, SessionMeta, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, QueuedReply, ReplyQueue, ReplyQueueMap, ReplyQueueResponse, AgentActivity, AgentActivityMessage, AgentStopResponse,Approval, ApprovalMap, ApprovalAnswer, TerminalDialog, Profile, PersonaId, SettingsResponse, SettingsRequest, Viewer, SessionPermissionsResponse, SessionProgressResponse, ProgressStep, SessionDiffResponse, SessionDiffSummaryResponse, GalleryResponse, GalleryItem, SearchResponse, SearchHit, DiffPr, DiffSection, DiffFileStat, AttachmentResponse, UsageResponse, UsageWindow, CodexUsage, ClaudeUsage } from '../../shared/types.ts'
+export type { Agent, FeedRow, SessionSource, SessionSummary, SessionMeta, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, QueuedReply, ReplyQueue, ReplyQueueMap, ReplyQueueResponse, AgentActivity, AgentActivityMessage, AgentStopResponse,Approval, ApprovalMap, ApprovalAnswer, TerminalDialog, Profile, PersonaId, SettingsResponse, SettingsRequest, Viewer, SessionPermissionsResponse, SessionProgressResponse, ProgressStep, SessionDiffResponse, SessionDiffSummaryResponse, GalleryResponse, GalleryItem, SearchResponse, SearchHit, DiffPr, DiffSection, DiffFileStat, PrSummary, PrRepo, PrsResponse, PrDetailResponse, AttachmentResponse, UsageResponse, UsageWindow, CodexUsage, ClaudeUsage } from '../../shared/types.ts'
 
 /**
  * `PUT /api/sessions/<id>/meta` のボディ。`SessionMeta` の一部を重ねる。
@@ -240,6 +242,9 @@ export const api = {
   clearProfileIcon: () => sendRaw<ProfileResponse>('DELETE', '/api/profile/icon'),
   /** 各エージェントの使用量。ローカルのファイルから読むだけ（ポーリングには乗せない） */
   usage: () => getJSON<UsageResponse>('/api/usage'),
+  /** GitHub に出ている PR（#524）。`fresh` のときだけサーバの覚えを捨てて gh で読み直す */
+  prs: (fresh = false) => getJSON<PrsResponse>(`/api/prs${fresh ? '?fresh=1' : ''}`),
+  pr: (repo: string, number: number) => getJSON<PrDetailResponse>(`/api/prs/${repo.split('/').map(encodeURIComponent).join('/')}/${number}`),
   /** サーバ側の設定（一言の性格。digest が有効か） */
   settings: () => getJSON<SettingsResponse>('/api/settings'),
   setSettings: (body: SettingsRequest) => sendJSON<SettingsResponse>('PUT', '/api/settings', body),

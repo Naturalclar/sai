@@ -48,7 +48,7 @@ class FakePrs implements PrBrowser {
   }
   async view(repo: string, number: number): Promise<PrView | null> {
     this.viewed.push([repo, number])
-    return { pr: { ...summary(number), body: '本文', state: 'OPEN', head_sha: 'abc' }, patch: this.patch }
+    return { pr: { ...summary(number), body: '本文', state: 'OPEN', head_sha: 'abc', cross_repo: false }, patch: this.patch }
   }
 }
 
@@ -150,7 +150,7 @@ test('GhPrs: 組み立てる gh の引数は読むサブコマンドだけ。頼
       { number: 1, updatedAt: '2026-09-30T00:00:00Z' },
       { number: 2, updatedAt: '2026-09-01T00:00:00Z' },
     ])
-    if (args[1] === 'view') return JSON.stringify({ number: 2, body: 'b', state: 'OPEN', headRefOid: 'sha' })
+    if (args[1] === 'view') return JSON.stringify({ number: 2, body: 'b', state: 'OPEN', headRefOid: 'sha', isCrossRepository: true })
     if (args[1] === 'diff') return PATCH
     return null
   }
@@ -160,6 +160,8 @@ test('GhPrs: 組み立てる gh の引数は読むサブコマンドだけ。頼
   const view = await gh.view('o/r', 2)
   assert.equal(view?.pr.requested, true)
   assert.equal(view?.pr.head_sha, 'sha')
+  // フォークから出た PR か（#525 の書いたセッションを探さない）
+  assert.equal(view?.pr.cross_repo, true)
   assert.equal(view?.patch, PATCH)
   // 呼んだのは pr list / pr view / pr diff だけで、どれも --repo で名指し
   for (const args of calls) {

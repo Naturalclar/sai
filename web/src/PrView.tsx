@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { parseUnifiedDiff } from '../../shared/diff.ts'
 import { replyBlockedReason } from '../../shared/reply.ts'
-import { api, type PrDetailResponse, type SessionsResponse } from './api'
+import { api, type PrDetailResponse, type SessionSummary } from './api'
 import { DiffView } from './DiffView'
 import { DiffCommentBar } from './DiffCommentBar'
 import { DiffCommentNote } from './DiffCommentNote'
 import { commentLine, formatDiffComments } from './diffComments'
 import { useDiffComments } from './useDiffComments'
-import { prAuthorSession, prCommentKey } from './prSession'
+import { newestFirst, prAuthorSession, prCommentKey } from './prSession'
 import { Markdown } from './Markdown'
 import { agoLabel, checkLabel, reviewLabel } from './prLabels'
 import type { PaneProps } from './App'
@@ -61,26 +61,29 @@ export function PrView({ repo, number, onStatus, onInsertToSession }: { repo: st
 
   useEffect(() => onStatus(loaded?.at ?? null, error || null), [loaded, error, onStatus])
 
-  // 書いたセッションを探すための一覧。**サイドバーの絞り込みに依らず**そのリポジトリの分を 1 回だけ取る（3 秒のポーリングには乗せない）
-  const [sessions, setSessions] = useState<SessionsResponse | null>(null)
+  // 書いたセッションを探すための一覧。**サイドバーの絞り込みに依らず**そのリポジトリの分を 1 回だけ取る（3 秒のポーリングには乗せない）。
+  // リポジトリ名はサーバが記録で知っている名前に直したもの（`loaded.data.repo`）を使う（URL の大文字小文字のままだと一覧に当たらない）。
+  // アーカイブ済みも取る（書いたセッションがアーカイブ済みなら理由を出す。除くと同じブランチの古いセッションを選んでしまう）
+  const knownRepo = loaded?.data.repo ?? ''
+  const [sessions, setSessions] = useState<{ repo: string; host: string; list: SessionSummary[] } | null>(null)
   useEffect(() => {
+    if (!knownRepo) return
     let alive = true
-    void api
-      .sessions({ projects: [repo], repo: '', agent: '', date: '', host: '', days: '30', archived: '' })
-      .then((d) => alive && setSessions(d))
+    const f = { projects: [knownRepo], repo: '', agent: '', date: '', host: '', days: '30' }
+    void Promise.all([api.sessions({ ...f, archived: '' }), api.sessions({ ...f, archived: '1' })])
+      .then(([live, archived]) => alive && setSessions({ repo: knownRepo, host: live.host, list: newestFirst(live.sessions, archived.sessions) }))
       .catch(() => {})
     return () => {
       alive = false
     }
-  }, [repo])
-
+  }, [knownRepo])
   const pr = loaded?.data.pr
-  const author = pr && sessions ? prAuthorSession(sessions.sessions, repo, pr.head) : null
+  const author = pr && sessions && sessions.repo === knownRepo ? prAuthorSession(sessions.list, knownRepo, pr.head, pr.cross_repo) : null
   const authorName = author ? author.meta?.name || author.title || author.id : ''
-  const blocked = author ? (author.archived ? 'アーカイブ済み' : replyBlockedReason(author, sessions?.host ?? '')) : ''
+  const blocked = author ? (author.archived ? 'アーカイブ済み。続けるならセッション画面で「戻す」を押してください' : replyBlockedReason(author, sessions?.host ?? '')) : ''
   const canComment = Boolean(author && !blocked && onInsertToSession)
   // 行へのコメント（#525）。置き場は PR ごと
-  const comments = useDiffComments(prCommentKey(repo, number))
+  const comments = useDiffComments(prCommentKey(knownRepo || repo, number))
   const files = useMemo(() => (loaded ? parseUnifiedDiff(loaded.data.diff.patch) : null), [loaded])
   // PR が更新されて行が見当たらなくなったコメントは、差分の上にまとめて出す（DiffBody と同じ）
   const orphans = canComment && files ? comments.list.filter((c) => !commentLine(c, files)) : []

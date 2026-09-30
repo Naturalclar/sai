@@ -360,6 +360,11 @@ export interface PrDetailResponse {
     state: string
     /** head のコミット */
     head_sha: string
+    /**
+     * フォークから出た PR（`isCrossRepository`）。head のブランチ名は出した人のリポジトリのもので、
+     * 手元のセッションのブランチと名前が同じでも関係が無い（#525 の「書いたセッション」を探さない）
+     */
+    cross_repo: boolean
   }
   /** base...head の差分。上限は #171 と同じ（超えたら本文を落として truncated） */
   diff: DiffSection

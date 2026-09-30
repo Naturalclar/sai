@@ -23,10 +23,10 @@ export const PRS_LIMIT = 50
 export const PR_DIFF_MAX_BYTES = 16 * 1024 * 1024
 
 const LIST_FIELDS = 'number,title,author,headRefName,baseRefName,isDraft,updatedAt,url,additions,deletions,changedFiles,reviewDecision,statusCheckRollup'
-const VIEW_FIELDS = `${LIST_FIELDS},body,state,headRefOid`
+const VIEW_FIELDS = `${LIST_FIELDS},body,state,headRefOid,isCrossRepository`
 
 export interface PrView {
-  pr: PrSummary & { body: string; state: string; head_sha: string }
+  pr: PrSummary & { body: string; state: string; head_sha: string; cross_repo: boolean }
   /** `gh pr diff` の出力そのもの（切る前）。引けなかった（大きすぎる・時間切れ）なら null */
   patch: string | null
 }
@@ -162,6 +162,8 @@ export class GhPrs implements PrBrowser {
         body: typeof o.body === 'string' ? o.body : '',
         state: typeof o.state === 'string' ? o.state : '',
         head_sha: typeof o.headRefOid === 'string' ? o.headRefOid : '',
+        // フォークから出た PR（#546 のレビュー）。head のブランチ名は他人のリポジトリのもので、手元のセッションとは関係が無い
+        cross_repo: o.isCrossRepository === true,
       },
       // 差分だけ引けない（大きすぎて上限を超えた・時間切れ）ときも、中身の表示は落とさない
       patch,

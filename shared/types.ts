@@ -1217,6 +1217,10 @@ export interface SettingsResponse {
   digest_on: boolean
   /** 入なのに作れない理由（openai の口でモデルが空など）。無ければ空 */
   digest_error: string
+  /** 次に送る文面の案をいま作っているか（#560。入にしていて、口が組めた）。一言と同じ口・同じモデルを使う */
+  next_ask: boolean
+  /** 案を入にしているか（#560。settings.json の `next_ask`。無いときは `digest` に従う） */
+  next_ask_on: boolean
   /** 一言を作る口。claude は `claude -p`、openai は OpenAI 互換の HTTP（Ollama / LM Studio など） */
   provider: DigestProvider
   /** 保存しているモデル名。空は口の既定 */
@@ -1243,6 +1247,8 @@ export interface SettingsRequest {
   linear_workspace?: string
   /** 一言を作るか */
   digest?: boolean
+  /** 次に送る文面の案を作るか（#560。一言とは別に入切する） */
+  next_ask?: boolean
   /** 一言を作る口 */
   digest_provider?: DigestProvider
   /** 一言を作るモデル。空文字で「口の既定」 */

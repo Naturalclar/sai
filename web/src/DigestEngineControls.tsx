@@ -22,12 +22,20 @@ interface Props {
  * openai 互換の送り先（SAI_DIGEST_URL）はここでは変えられない（画面から本文を外へ向けられないように）
  */
 export function DigestEngineControls({ settings, busy, error, onChange }: Props) {
-  // 作っている最中でも、口が続けて失敗していれば digest_error に出る（#443）。そのときは「作成中」ではなくそちらを出す
-  const status = !settings.digest_on ? '' : settings.digest && !settings.digest_error ? `${settings.model} で作成中` : settings.digest_error
+  // 作っている最中でも、口が続けて失敗していれば digest_error に出る（#443）。そのときは「作成中」ではなくそちらを出す。
+  // 口は一言と次の案（#560）で 1 つなので、どちらかを入にしていれば様子を出す
+  const on = settings.digest_on || settings.next_ask_on
+  const running = settings.digest || settings.next_ask
+  const what = settings.digest ? (settings.next_ask ? '一言と次の案を' : '一言を') : '次の案を'
+  const status = !on ? '' : running && !settings.digest_error ? `${settings.model} で${what}作成中` : settings.digest_error
   return (
     <div className="digest-engine">
       <button type="button" role="menuitemcheckbox" aria-checked={settings.digest_on} disabled={busy} onClick={() => onChange({ digest: !settings.digest_on })}>
         {settings.digest_on ? '✓ ' : ''}一言コメントを作る
+      </button>
+      {/* 次に送る文面の案（#371）。一言とは別に入切する（#560）。口とモデルは下の欄を一言と共有する */}
+      <button type="button" role="menuitemcheckbox" aria-checked={settings.next_ask_on} disabled={busy} onClick={() => onChange({ next_ask: !settings.next_ask_on })}>
+        {settings.next_ask_on ? '✓ ' : ''}次に送る文面の案を作る
       </button>
       <div className="fields">
         <select
@@ -48,7 +56,7 @@ export function DigestEngineControls({ settings, busy, error, onChange }: Props)
           busy={busy}
           onChange={(digest_model) => onChange({ digest_model })}
         />
-        {(error || status) && <div className={`note${error || !settings.digest ? ' error' : ''}`}>{error || status}</div>}
+        {(error || status) && <div className={`note${error || !running ? ' error' : ''}`}>{error || status}</div>}
       </div>
     </div>
   )

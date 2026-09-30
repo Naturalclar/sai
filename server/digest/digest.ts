@@ -13,7 +13,7 @@ import { appendFile, mkdir, readFile, stat } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { entityId } from '../../shared/entity.ts'
 import { eventKind } from '../../shared/events.ts'
-import { digestPrompt } from '../../shared/persona.ts'
+import { DEFAULT_PERSONA, digestPrompt } from '../../shared/persona.ts'
 import { digestIssues } from '../../shared/digestCheck.ts'
 import { digestKey } from '../../shared/digestFeedback.ts'
 import { cleanNextAsk, nextAskPrompt } from '../../shared/nextAsk.ts'
@@ -55,6 +55,10 @@ export interface DigestEntry {
   /** 行を一意に指す。`<entityId>|<ts>` */
   key: string
   persona: PersonaId
+  /**
+   * 一言。**空なら一言は作っていない**（#560。一言を切っていて、次の案だけ作った行。作らなかった行を鍵で覚えて、
+   * 3 秒ごとの scan() が同じ行を積み直さないようにする）。読む側は空を「一言なし」として扱う
+   */
   summary: string
   model: string
   /** 作った時刻 */
@@ -334,14 +338,21 @@ export type SummarizerFactory = (provider: DigestProvider, model: string) => Sum
 /** 一言の入切・口・モデル（settings.json のうち、作る側が見るぶん。`Settings` をそのまま渡せる） */
 export interface DigestSettings {
   digest: boolean
+  /**
+   * 次に送る文面の案を作るか（#560）。一言とは別に入切する（口とモデルは一言と同じ）。
+   * **省略なら `digest` に従う**（#560 より前の settings.json は案の入切を持たず、一言と一緒に動いていた）
+   */
+  next_ask?: boolean
   digest_provider: DigestProvider
   /** 空なら口の既定（claude は haiku。openai は既定が無いので作らない） */
   digest_model: string
 }
 
 export interface DigesterOptions {
-  /** 最初の入切。あとから `configure()` で変わる */
+  /** 最初の一言の入切。あとから `configure()` で変わる */
   enabled: boolean
+  /** 最初の案の入切（#560）。省略なら `enabled` と同じ */
+  nextAsk?: boolean
   model: string
   /** 一言を作る口。無ければ claude */
   provider?: DigestProvider
@@ -366,8 +377,12 @@ export interface DigesterOptions {
 export class Digester {
   readonly store: DigestStore
   private readonly make: SummarizerFactory | null
-  /** いまの口。null なら作らない（切っている・組めなかった） */
+  /** いまの口。null なら作らない（一言も案も切っている・組めなかった） */
   private summarizer: Summarizer | null
+  /** 一言を作るか（#560。口は一言と案で 1 つ。どちらかが入なら組む） */
+  private summaryOn: boolean
+  /** 次に送る文面の案を作るか（#560） */
+  private askOn: boolean
   private modelValue: string
   private providerValue: DigestProvider
   private errorValue = ''
@@ -407,7 +422,9 @@ export class Digester {
     this.make = summarizer === null ? null : typeof summarizer === 'function' ? summarizer : () => summarizer
     this.modelValue = opts.model
     this.providerValue = opts.provider ?? 'claude'
-    this.summarizer = opts.enabled && this.make ? this.make(this.providerValue, this.modelValue) : null
+    this.summaryOn = opts.enabled
+    this.askOn = opts.nextAsk ?? opts.enabled
+    this.summarizer = (this.summaryOn || this.askOn) && this.make ? this.make(this.providerValue, this.modelValue) : null
     this.persona = opts.persona
     this.logPath = opts.logPath
     this.ownDir = opts.ownDir
@@ -416,8 +433,18 @@ export class Digester {
     this.sinceMs = (Number.isNaN(since) ? this.now() : since) - DIGEST_SINCE_SLACK_MS
   }
 
-  /** いま作っているか（入にしていて、口が組めた） */
+  /** 一言をいま作っているか（入にしていて、口が組めた） */
   get enabled(): boolean {
+    return this.summarizer !== null && this.summaryOn
+  }
+
+  /** 次に送る文面の案をいま作っているか（#560。入にしていて、口が組めた） */
+  get nextAskEnabled(): boolean {
+    return this.summarizer !== null && this.askOn
+  }
+
+  /** 一言か案のどちらかを作っている＝行を見て列を回す（#560） */
+  get active(): boolean {
     return this.summarizer !== null
   }
 
@@ -451,7 +478,8 @@ export class Digester {
    * - openai の口でモデルが空なら作らず、理由を `error` に出す（サーバは落とさない）
    */
   configure(next: DigestSettings): void {
-    const was = this.enabled
+    const was = this.active
+    const summaryWas = this.enabled
     this.providerValue = next.digest_provider
     this.modelValue = next.digest_model || (next.digest_provider === 'claude' ? DEFAULT_DIGEST_MODEL : '')
     this.errorValue = ''
@@ -462,15 +490,18 @@ export class Digester {
     this.lastFailure = ''
     this.breakUntil = 0
     this.generation += 1
-    if (next.digest) {
+    this.summaryOn = next.digest
+    this.askOn = next.next_ask ?? next.digest
+    if (this.summaryOn || this.askOn) {
       if (!this.make) this.errorValue = '一言を作る口がありません'
       else if (!this.modelValue) this.errorValue = 'openai の口にはモデル名が要ります（ローカルのモデル名。例 qwen3:8b）'
       else this.summarizer = this.make(this.providerValue, this.modelValue)
     }
-    if (!this.enabled) {
+    if (!this.active) {
       for (const q of this.queue) this.queued.delete(q.key)
       this.queue = []
-    } else if (!was) {
+    } else if (!was || (this.enabled && !summaryWas)) {
+      // 案だけ作っていた間の行も、一言を入にした瞬間にさかのぼって積まない（#560。切から入にしたのと同じ扱い）
       this.sinceMs = this.now() - DIGEST_SINCE_SLACK_MS
     }
   }
@@ -501,12 +532,13 @@ export class Digester {
     if (this.store.size === 0) return rows
     return rows.map((r) => {
       const e = this.store.get(digestKey(r))
-      return e ? { ...r, summary: e.summary } : r
+      // 案だけ作った行（summary が空。#560）には一言を載せない
+      return e?.summary ? { ...r, summary: e.summary } : r
     })
   }
 
   summaryFor(entity: string, ts: string): string | undefined {
-    return ts ? this.store.get(`${entity}|${ts}`)?.summary : undefined
+    return (ts && this.store.get(`${entity}|${ts}`)?.summary) || undefined
   }
 
   /** 次に送る文面の案（#371）。一言と同じ行に入っている */
@@ -547,15 +579,22 @@ export class Digester {
    * 基準が時刻なのでそれらは積まれない（行の集合を基準にすると、窓が広がった瞬間に過去が全部「新しい行」になる。#159）
    */
   scan(rows: FeedRow[]): void {
-    if (!this.enabled) return
+    if (!this.active) return
+    const wanted = rows.filter((row) => this.wants(row))
+    // 古い行でも「一番新しいのはどれか」は覚える（案を作る行を決めるのに使う。#371）。
+    // 先に全部見てから選ぶ（一言を切っているときは一番新しい行しか積まないので、選ぶ前に決まっていないといけない。#560）
+    for (const row of wanted) this.noteLatest(row)
     const fresh: { key: string; row: FeedRow }[] = []
-    for (const row of rows) {
-      if (!this.wants(row)) continue
-      // 古い行でも「一番新しいのはどれか」は覚える（案を作る行を決めるのに使う。#371）
-      this.noteLatest(row)
+    for (const row of wanted) {
       if (this.isPast(row)) continue
+      // 一言を切っていて案だけなら、一番新しい行のほかは作るものが無い（#560）
+      if (!this.summaryOn && !this.isLatest(row)) continue
       const key = digestKey(row)
-      if (this.queued.has(key) || this.store.get(key)) continue
+      if (this.queued.has(key)) continue
+      // 作ってある行は積まない。ただし**案だけ作った行（一言が空。#560）は、一言を作る側に回ったらもう一度積む**
+      // （セッションの「作らない」を戻したとき。前は一言を切っていた行は記録に残らず、戻せば作られていた）
+      const done = this.store.get(key)
+      if (done && (done.summary || !this.summaryOn)) continue
       // 失敗した行は、間隔が来るまで・諦めたら積まない（#443）
       const failure = this.failed.get(key)
       if (failure && (failure.count >= DIGEST_MAX_TRIES || this.now() < failure.next)) continue
@@ -602,20 +641,26 @@ export class Digester {
         const summarizer = this.summarizer
         const model = this.modelValue
         const generation = this.generation
-        if (persona === null || !summarizer) {
+        // 一言は全体で入にしていて、そのセッションで切っていない（persona が null なら切っている。#263）ときだけ。
+        // 案は一言とは別に入切する（#560）。セッションの「作らない」は一言だけを止め、案は作る
+        const wantSummary = this.summaryOn && persona !== null
+        // 案だけ作ってある行（#560）を一言のために積み直したときは、案はもう作らない（口を叩くのは 1 ターン 1 回まで）
+        const prev = this.store.get(key)
+        const wantAsk = this.askOn && this.isLatest(row) && !prev
+        if (!summarizer || (!wantSummary && !wantAsk)) {
           this.queued.delete(key)
           continue
         }
         try {
           // 人が頼んだこと（#376）。返答だけを渡すと、`12` のような短い返答で作例を書き写していた
           const ask = row.user_text ?? ''
-          const summary = await summarizer.summarize(digestPrompt(persona, row.text, { ask }))
+          const summary = wantSummary && persona !== null ? await summarizer.summarize(digestPrompt(persona, row.text, { ask })) : ''
           // 出来上がりを機械で確かめ、駄目なら **1 回だけ** 作り直す（#346。LLM は呼ばない判定）。
           // 2 回目でも残ったら、そのまま出して digest.log に残す（一言が消えるより、残って数えられる方がよい）
-          const first = digestIssues(row.text, summary, ask)
+          const first = wantSummary ? digestIssues(row.text, summary, ask) : []
           let best = summary
           let issues = first
-          if (first.length > 0) {
+          if (first.length > 0 && persona !== null) {
             try {
               const again = await summarizer.summarize(digestPrompt(persona, row.text, { ask, retry: { summary, issues: first } }))
               const left = digestIssues(row.text, again, ask)
@@ -634,10 +679,16 @@ export class Digester {
           // （pump は増えた行を全部処理するが、古い行の案は作った瞬間に捨てられる）。
           // 一言とは別の呼び出しにしてあるので、ここで失敗しても一言は残る
           // 作っている間に画面から切られたら、案の口は叩かない（作りかけの一言だけ終わらせる。#288 と同じ扱い）
-          const nextAsk = this.enabled && this.isLatest(row) ? await this.makeNextAsk(row, summarizer, key) : ''
+          // **材料は要約する前の本文と人が送った文**（#560。一言を材料にすると、要約で落ちた質問・選択肢・番号に答えられない）。
+          // 一言を作らない行では案が唯一の仕事なので、失敗は一言と同じく数える（下の catch。口が落ちている間に同じ行を叩き続けない）
+          const nextAsk = !(wantAsk && this.askOn && this.active && this.isLatest(row))
+            ? (prev?.next_ask ?? '')
+            : wantSummary
+              ? await this.makeNextAsk(row, summarizer, key)
+              : cleanNextAsk(await summarizer.summarize(nextAskPrompt(row.user_text ?? '', row.text ?? '')))
           await this.store.append({
             key,
-            persona,
+            persona: persona ?? DEFAULT_PERSONA,
             summary: best,
             model,
             ts: new Date().toISOString(),

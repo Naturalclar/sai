@@ -116,7 +116,7 @@ import { AttachmentStore } from './reply/attachments.ts'
 import { PROFILE_FILE, ProfileStore } from './meta/profile.ts'
 import { READ_MARKS_FILE, ReadStore } from './meta/reads.ts'
 import { readMarkOf, rowMs, unreadCounts, unreadFromMark } from '../shared/unread.ts'
-import { SETTINGS_FILE, SettingsStore } from './meta/settings.ts'
+import { SETTINGS_FILE, SettingsStore, nextAskOn } from './meta/settings.ts'
 import type { Settings } from './meta/settings.ts'
 import { isLinearWorkspace } from '../shared/refs.ts'
 import { backgroundSessionCommand, newSessionCommand, ProcessRunner, replyCommand } from './reply/runner.ts'
@@ -882,7 +882,8 @@ export function createApp(
   /** 一言の対象を探して列に積む。3 秒ごとの応答のついでに呼ぶので軽い（無効なら何もしない） */
   const scanDigest = async (days: number): Promise<void> => {
     await digestReady
-    if (!digest.enabled) return
+    // 一言か案のどちらかを作っていれば見る（#560）
+    if (!digest.active) return
     digest.scan(await store.rows(days))
   }
 
@@ -921,16 +922,16 @@ export function createApp(
 
   /**
    * 一覧の「最後の発言」に一言を載せる。無い行はそのまま。
-   * **`digest_off` のセッションには載せない**（#263。切る前に作ってあるぶんも出さない。`digest.jsonl` は消さない）
+   * **`digest_off` のセッションには一言を載せない**（#263。切る前に作ってあるぶんも出さない。`digest.jsonl` は消さない）。
+   * 次に送る文面の案は一言とは別で（#560）、`digest_off` でも載せ、**案を切っているときは載せない**
    */
   const withLastSummary = (sessions: SessionSummary[]): SessionSummary[] => {
     if (digest.store.size === 0) return sessions
     return sessions.map((s) => {
-      if (s.meta?.digest_off) return s
       const ts = s.last_turn_ts ?? ''
-      const summary = digest.summaryFor(s.id, ts)
+      const summary = s.meta?.digest_off ? undefined : digest.summaryFor(s.id, ts)
       // 次に送る文面の案（#371）。一言と同じ行に入っているので、同じところで載せる
-      const nextAsk = digest.nextAskFor(s.id, ts)
+      const nextAsk = digest.nextAskEnabled ? digest.nextAskFor(s.id, ts) : undefined
       if (!summary && !nextAsk) return s
       return { ...s, ...(summary ? { last_summary: summary } : {}), ...(nextAsk ? { next_ask: nextAsk } : {}) }
     })
@@ -955,6 +956,8 @@ export function createApp(
       digest: digest.enabled,
       digest_on: s.digest,
       digest_error: digest.error,
+      next_ask: digest.nextAskEnabled,
+      next_ask_on: nextAskOn(s),
       provider: digest.provider,
       digest_model: s.digest_model,
       model: digest.model,
@@ -1031,7 +1034,8 @@ export function createApp(
     if ([...note].length > DIGEST_NOTE_MAX) return error(res, 400, `note は ${DIGEST_NOTE_MAX} 文字までです`)
     await digestReady
     const entry = digest.store.get(b.key)
-    if (!entry) return error(res, 404, 'その一言が見つかりません（作り直されたか、まだ届いていません）')
+    // 案だけ作った行（summary が空。#560）には一言が無い
+    if (!entry?.summary) return error(res, 404, 'その一言が見つかりません（作り直されたか、まだ届いていません）')
     await feedback.load()
     await feedback.append({
       key: b.key,
@@ -1080,6 +1084,10 @@ export function createApp(
       if (!isDigestModel(model)) return error(res, 400, 'digest_model はモデル名（英数字で始まり、英数字と . _ : / - [ ] だけ、64 文字まで。空なら口の既定）で送ってください')
       patch.digest_model = model
     }
+    if (b.next_ask !== undefined) {
+      if (typeof b.next_ask !== 'boolean') return error(res, 400, 'next_ask は true か false で送ってください')
+      patch.next_ask = b.next_ask
+    }
     if (b.jev !== undefined) {
       if (typeof b.jev !== 'boolean') return error(res, 400, 'jev は true か false で送ってください')
       patch.jev = b.jev
@@ -1090,11 +1098,11 @@ export function createApp(
       if (!isJevAuto(b.jev_auto)) return error(res, 400, 'jev_auto は 0（しない）か 0.5〜1 の数で送ってください')
       patch.jev_auto = b.jev_auto
     }
-    if (Object.keys(patch).length === 0) return error(res, 400, 'persona / linear_workspace / digest / digest_provider / digest_model / jev / jev_auto のどれかを送ってください')
+    if (Object.keys(patch).length === 0) return error(res, 400, 'persona / linear_workspace / digest / next_ask / digest_provider / digest_model / jev / jev_auto のどれかを送ってください')
     // 起動時の組み立て（settings.json の読み込み）が済んでから書く。後から古い値で組み直されないように
     await digestReady
     const saved = await settingsStore.set(patch)
-    if (patch.digest !== undefined || patch.digest_provider !== undefined || patch.digest_model !== undefined) digest.configure(saved)
+    if (patch.digest !== undefined || patch.next_ask !== undefined || patch.digest_provider !== undefined || patch.digest_model !== undefined) digest.configure(saved)
     // 閾値を入れた・下げたら、預かっている分にすぐ効かせる
     if (patch.jev_auto !== undefined || patch.jev !== undefined) void jevAutoTick()
     return json(res, await settingsPayload())

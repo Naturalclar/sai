@@ -71,6 +71,15 @@ find "$main/server" "$main/shared" -name '*.ts' -newer "$ref"; rm -f "$ref"
 
 何も出なければサーバは最新のコード。立て直さず 5 に進む。
 
+**立て直す前に「いま失うものがあるか」を手で確かめなくてよい**（#440）。次は立て直しをまたいで残る:
+
+- 返信を処理中のもの（`replying.json`）と預かり（`reply-queue.json`）
+- 返信中の許可・質問の預かり（`approvals.json`。返信の `claude -p` の子は生き残り、MCP サーバは繋ぎ直して同じ許可の答えを受け取る）
+- セッション間メッセージの記録・「送信を止める」・1 ターンの回数と量（`agent-messages.json`）、tailnet からの送信回数（`mcp-sends.json`）
+- **ターンを回している** `opencode serve`（C-c では落とさず、`opencode-serve.json` から次のサーバが引き取る。回していなければ今までどおり落とす）
+
+**残らないのは SAI の app-server が回している Codex のターンだけ**（`codex app-server --stdio` は stdin で繋いでいるので引き取れず、C-c で途中で切れる）。画面の「処理中」に Codex のターンがあれば、終わるのを待ってから立て直す。
+
 `pnpm start:watch`（`node --watch`）で動いていれば自分で再起動するので **C-c は送らない**。`Waiting for graceful termination...` は出るが、**接続を握ったまま試して 1 秒で戻った**（#296 で SIGTERM でも数秒以内に終わるようにした。前の「処理中の返信を待って数十秒」という注記は取り違えで、待っていたのは返信の子ではなく**閉じない接続**。返信の子は detached なので待たれない）。
 
 ### 一言（digest）の口

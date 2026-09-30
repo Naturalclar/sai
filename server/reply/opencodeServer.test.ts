@@ -3,6 +3,10 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
+import { execFileSync } from 'node:child_process'
+import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { OpencodeServer, listeningUrl, promptBody } from './opencodeServer.ts'
 
 test('promptBody: 本文は text のパーツ。モデルは最初の / で割る（モデル名に / が入ることがある）', () => {
@@ -364,5 +368,116 @@ test('abort: 回していたのにサーバがもう居なければ、処理中�
     assert.equal(app.running('S1@r'), false)
   } finally {
     await new Promise<void>((r) => server.close(() => r()))
+  }
+})
+
+/** 鍵の要る本物の HTTP サーバ。受けたリクエストを覚える（引き取った `opencode serve` の代わり） */
+async function authedServer(password: string) {
+  const got: { method: string; url: string; auth: string }[] = []
+  const server: Server = createServer((req, res) => {
+    req.resume()
+    req.on('end', () => {
+      got.push({ method: req.method ?? '', url: req.url ?? '', auth: req.headers.authorization ?? '' })
+      const ok = req.headers.authorization === `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}`
+      res.writeHead(ok ? 200 : 401, { 'content-type': 'application/json' })
+      res.end(ok ? 'true' : '{}')
+    })
+  })
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+  const addr = server.address()
+  return { server, got, url: `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}` }
+}
+
+test('立て直し: 前の SAI が残した opencode serve を引き取り、回していたターンを処理中のまま止められる（#440）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-oc-serve-'))
+  const statePath = join(dir, 'opencode-serve.json')
+  const { server, got, url } = await authedServer('pw-1')
+  const killed: number[] = []
+  try {
+    await writeFile(statePath, JSON.stringify({ pid: 4242, url, password: 'pw-1', turns: { 'E@r': { since: '2026-09-30T10:00:00.000Z', text: '長いターン', session: 'ses_abc' } } }))
+    const app = new OpencodeServer(fetch, Date.now, undefined, { statePath, logPath: join(dir, 'log'), alive: (pid) => pid === 4242, kill: (pid) => killed.push(pid) })
+    assert.equal(app.running('E@r'), true, '回していたターンは処理中のまま（画面の「処理中」と預かりが続く）')
+    assert.equal(app.replying()['E@r']?.interruptible, true)
+    // 引き取ったサーバに、残した鍵で届く
+    assert.equal(await app.abort('E@r'), true)
+    assert.deepEqual(got.at(-1), { method: 'POST', url: '/session/ses_abc/abort', auth: `Basic ${Buffer.from('opencode:pw-1').toString('base64')}` })
+    assert.equal(app.running('E@r'), false)
+    // 回していないときの C-c は今までどおり落とす（#457。渡したものも溜まらない）
+    app.stop()
+    assert.deepEqual(killed, [4242])
+    await assert.rejects(stat(statePath), '落としたらファイルも消す')
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()))
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('立て直し: ターンを回している間の C-c では落とさず、次の SAI に渡す（#440）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-oc-serve-'))
+  const statePath = join(dir, 'opencode-serve.json')
+  const { server, url } = await authedServer('pw-2')
+  const killed: number[] = []
+  try {
+    await writeFile(statePath, JSON.stringify({ pid: 5151, url, password: 'pw-2', turns: {} }))
+    const deps = { statePath, logPath: join(dir, 'log'), alive: (pid: number) => pid === 5151, kill: (pid: number) => killed.push(pid) }
+    const first = new OpencodeServer(fetch, Date.now, undefined, deps)
+    await first.start({ id: 'E@r', session: 'ses_x', text: '回っている' })
+    first.stop()
+    assert.deepEqual(killed, [], '回しているので落とさない')
+    const kept = JSON.parse(await readFile(statePath, 'utf-8')) as { pid: number; turns: Record<string, { session: string }> }
+    assert.equal(kept.pid, 5151)
+    assert.equal(kept.turns['E@r']?.session, 'ses_x', '回しているターンも渡す')
+    const second = new OpencodeServer(fetch, Date.now, undefined, deps)
+    assert.equal(second.running('E@r'), true, '次の SAI が引き取る')
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()))
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('立て直し: 残した pid が死んでいれば引き取らず、ファイルを消す（#440）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-oc-serve-'))
+  const statePath = join(dir, 'opencode-serve.json')
+  try {
+    await writeFile(statePath, JSON.stringify({ pid: 6161, url: 'http://127.0.0.1:9', password: 'x', turns: { 'E@r': { since: 'x', text: 'x', session: 's' } } }))
+    const app = new OpencodeServer(fetch, Date.now, undefined, { statePath, logPath: join(dir, 'log'), alive: () => false, kill: () => assert.fail('死んでいるものは落とさない') })
+    assert.equal(app.running('E@r'), false, '死んだサーバのターンは処理中にしない')
+    await assert.rejects(stat(statePath))
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('立て直し: 起こした opencode serve は別の pgid で、待ち受け先は出力のファイルから読み、居場所を残す（#440）', async () => {
+  // PATH の先頭に偽物の `opencode` を置く（待ち受けの行を出して眠るだけ）
+  const dir = await mkdtemp(join(tmpdir(), 'sai-oc-spawn-'))
+  const bin = join(dir, 'bin')
+  const fake = join(bin, 'opencode')
+  execFileSync('mkdir', ['-p', bin])
+  await writeFile(fake, '#!/bin/sh\necho "opencode server listening on http://127.0.0.1:59999"\nexec sleep 30\n')
+  await chmod(fake, 0o755)
+  const savedPath = process.env.PATH
+  process.env.PATH = `${bin}:${savedPath}`
+  const statePath = join(dir, 'opencode-serve.json')
+  const logPath = join(dir, 'opencode-serve.log')
+  const app = new OpencodeServer(fetch, Date.now, undefined, { statePath, logPath })
+  try {
+    // 立てるだけの口は無いので、`/` の候補（起こしてから聞く）で起こす。聞いた先は偽物なので空が返る
+    await app.skills('/tmp').catch(() => [])
+    const kept = JSON.parse(await readFile(statePath, 'utf-8')) as { pid: number; url: string; password: string }
+    assert.equal(kept.url, 'http://127.0.0.1:59999', '待ち受け先を出力のファイルから読んだ')
+    assert.ok(kept.password.length > 0, '鍵も残す（引き取った SAI が同じ鍵で叩く）')
+    assert.match(await readFile(logPath, 'utf-8'), /listening on/, '出力は pipe ではなくファイルへ')
+    const pgid = (pid: number) => execFileSync('ps', ['-o', 'pgid=', '-p', String(pid)]).toString().trim()
+    assert.notEqual(pgid(kept.pid), pgid(process.pid), 'C-c の SIGINT を受けないよう、別の pgid で起こす')
+    // 回していないので、止めれば落とす（#457）
+    app.stop()
+    await new Promise((r) => setTimeout(r, 300))
+    assert.throws(() => process.kill(kept.pid, 0), '落ちた')
+    await assert.rejects(stat(statePath))
+  } finally {
+    process.env.PATH = savedPath
+    app.stop()
+    await rm(dir, { recursive: true, force: true })
   }
 })

@@ -74,7 +74,7 @@ import { codexLockHolders, codexQueueCommand, codexWriterActive, isAppServer, ru
 import type { CodexQueue } from './reply/codex.ts'
 import { CodexAppServer } from './reply/codexAppServer.ts'
 import type { CodexApp } from './reply/codexAppServer.ts'
-import { OpencodeServer } from './reply/opencodeServer.ts'
+import { OPENCODE_SERVE_FILE, OPENCODE_SERVE_LOG, OpencodeServer } from './reply/opencodeServer.ts'
 import type { OpencodeApp } from './reply/opencodeServer.ts'
 import { OpencodePermissions } from './reply/opencodePermissions.ts'
 import { approvalMapKey, CodexDialogs, mergeApprovalMaps } from './reply/codexDialogs.ts'
@@ -458,7 +458,8 @@ export function createApp(
   const background = terminal.claudeBackground ?? new ClaudeBackground()
   const codexDialogs = terminal.codexDialogs ?? new CodexDialogs(terminal.tmux, terminal.ps)
   const codexApp = terminal.codexApp ?? new CodexAppServer()
-  const opencodeApp = terminal.opencodeApp ?? new OpencodeServer()
+  // 立て直しをまたいで同じ `opencode serve` を使う（#440）。ターンを回している間の C-c では落とさず、次の SAI が引き取る
+  const opencodeApp = terminal.opencodeApp ?? new OpencodeServer(fetch, Date.now, undefined, { statePath: join(store.directory, OPENCODE_SERVE_FILE), logPath: join(store.directory, OPENCODE_SERVE_LOG) })
   // OpenCode の許可待ち（#421）。立っているサーバにだけ聞くので、返信を回していなければ何もしない
   const opencodePerms = new OpencodePermissions(opencodeApp)
   // 許可の確率（#491）。鍵が無ければ judge が null で、何も送らない

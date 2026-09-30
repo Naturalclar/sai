@@ -125,7 +125,9 @@
   .diff-section .counts .del { color: var(--claude); }
   .diff-section .untracked li { font-size: 13px; padding: 2px 2px; }
   .diff-section .untracked code, .diff-section .patch .note { font-family: var(--mono); font-size: 12px; }
-  .diff-section .patch { border: 1px solid var(--line); border-radius: 6px; margin: 2px 0 8px; overflow-x: auto; background: var(--panel); }
+  .diff-section .patch { border: 1px solid var(--line); border-radius: 6px; margin: 2px 0 8px; overflow-x: auto; background: var(--panel); container-type: inline-size; }
+  /* 行の箱を一番長い行の幅まで伸ばす（#514）。見えている幅で止めると、横に流したときにはみ出した分の追加・削除の色が付かない */
+  .diff-section .hunk { width: max-content; min-width: 100%; }
   .diff-section .patch .note { color: var(--muted); padding: 6px 10px; font-family: inherit; font-size: 12px; }
   .diff-section .hunk + .hunk { border-top: 1px solid var(--line); }
   .diff-section .hh { font-family: var(--mono); font-size: 11px; color: var(--muted); background: var(--bg); padding: 2px 10px; white-space: pre; }
@@ -138,7 +140,8 @@
   .diff-section .ln .nos:hover .no, .diff-section .ln .nos:focus-visible .no { color: var(--accent); opacity: 1; }
   .diff-section .ln .nos:hover .no.new::after { content: " +"; }
   .diff-section .ln.commented .no { color: var(--accent); opacity: 1; font-weight: 600; }
-  .diff-section .diff-comment, .diff-section .diff-comment-editor { position: sticky; left: 0; box-sizing: border-box; width: 100%; max-width: 44rem; margin: 4px 0 6px; padding: 6px 10px; border-left: 3px solid var(--accent); background: var(--bg); font-size: 13px; white-space: normal; }
+  /* 行の箱は一番長い行の幅まであるので、コメントの幅は見えている幅（.patch の container。100cqw）で抑える（#514） */
+  .diff-section .diff-comment, .diff-section .diff-comment-editor { position: sticky; left: 0; box-sizing: border-box; width: 100cqw; max-width: 44rem; margin: 4px 0 6px; padding: 6px 10px; border-left: 3px solid var(--accent); background: var(--bg); font-size: 13px; white-space: normal; }
   .diff-comment .body { white-space: pre-wrap; overflow-wrap: anywhere; }
   .diff-comment .moved { color: var(--muted); font-size: 12px; margin-top: 2px; }
   .diff-comment .linkish { font-size: 12px; margin-top: 2px; }

@@ -44,12 +44,31 @@ function matchesAll(matcher: string): boolean {
   return matcher === '' || matcher === '*'
 }
 
-/** `A|B` を値の集合に。正規表現として書かれていても、`|` で並べた名前だけを数える（当たるかは名前の一致で見る） */
+/** `A|B` を値の集合に（正規表現として読めないときの落としどころ） */
 function alternatives(matcher: string): string[] {
   return matcher
     .split('|')
     .map((s) => s.trim())
     .filter(Boolean)
+}
+
+/**
+ * その matcher が値に当たるか。**Claude Code の matcher は正規表現**なので（`.*`・`idle_.*` のように書ける。#569 のレビュー）、
+ * 全体に当たるかを正規表現で見る。正規表現として読めなければ、`|` で並べた名前の一致に落とす
+ */
+function matcherHits(matcher: string, value: string): boolean {
+  if (matchesAll(matcher)) return true
+  try {
+    return new RegExp(`^(?:${matcher})$`).test(value)
+  } catch {
+    return alternatives(matcher).includes(value)
+  }
+}
+
+/** 名前を問わず当たる matcher か（matcher 無しで繋ぐべきイベントに付いていても、全部に当たるなら足りている） */
+const ANY_PROBES = ['Bash', 'x', '__sai_probe__']
+function matchesAnything(matcher: string): boolean {
+  return ANY_PROBES.every((v) => matcherHits(matcher, v))
 }
 
 /**
@@ -89,14 +108,14 @@ export function claudeHookGaps(settings: readonly unknown[], reaches: ReachesRec
       gaps.push({ event: want.event, kind: 'missing', uncovered: [] })
       continue
     }
-    if (matchers.some(matchesAll)) continue
+    if (matchers.some(matchesAnything)) continue
     // matcher 無しで繋ぐべきものが、特定の値の matcher でだけ繋がっている
     if (!want.matcher) {
       gaps.push({ event: want.event, kind: 'matcher', uncovered: [] })
       continue
     }
-    const have = new Set(matchers.flatMap(alternatives))
-    const uncovered = alternatives(want.matcher).filter((v) => !have.has(v))
+    // あるべき値のそれぞれに、どれかの塊の matcher が当たるか（複数の塊は合わせて見る）
+    const uncovered = alternatives(want.matcher).filter((v) => !matchers.some((m) => matcherHits(m, v)))
     if (uncovered.length > 0) gaps.push({ event: want.event, kind: 'matcher', uncovered })
   }
   return gaps

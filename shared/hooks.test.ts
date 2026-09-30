@@ -56,3 +56,19 @@ test('claudeHookGaps: 設定を複数渡したら合わせて見る（ユーザ�
   assert.deepEqual(claudeHookGaps([user, project], reaches), [])
   assert.deepEqual(claudeHookGaps([user], reaches)!.map((g) => g.event), ['PermissionRequest', 'PreToolUse', 'Notification', 'UserPromptSubmit', 'SessionEnd'])
 })
+
+test('claudeHookGaps: matcher は正規表現として見る（.* や前方の一致も当たっている扱い。#569 のレビュー）', () => {
+  const s = full()
+  s.hooks.Notification = [group('sai-record', '.*')]
+  s.hooks.PreToolUse = [group('sai-record', 'AskUser.*|ExitPlanMode')]
+  s.hooks.PermissionRequest = [group('sai-record', '.*')]
+  assert.deepEqual(claudeHookGaps([s], reaches), [])
+  s.hooks.Notification = [group('sai-record', 'idle_.*|agent_needs_input|elicitation_.*|permission_prompt')]
+  assert.deepEqual(claudeHookGaps([s], reaches), [])
+  // 当たらない正規表現は今までどおり足りない値を出す
+  s.hooks.Notification = [group('sai-record', 'idle_.*')]
+  assert.deepEqual(claudeHookGaps([s], reaches)![0]!.uncovered, ['agent_needs_input', 'elicitation_dialog', 'elicitation_url_dialog', 'permission_prompt'])
+  // 正規表現として読めなければ名前の一致に落とす（落ちない）
+  s.hooks.Notification = [group('sai-record', 'idle_prompt|(broken')]
+  assert.equal(claudeHookGaps([s], reaches)![0]!.kind, 'matcher')
+})

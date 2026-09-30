@@ -27,6 +27,7 @@ HERE = Path(__file__).resolve().parent
 RECORD = HERE / "record.py"
 sys.path.insert(0, str(HERE.parent))
 from feed.record import ASSISTANT_IDLE_S, ASSISTANT_WAIT_S  # noqa: E402
+from feed import record  # noqa: E402
 JST = timezone(timedelta(hours=9))
 
 
@@ -727,6 +728,54 @@ class RecordTest(unittest.TestCase):
             "質問: どのフレームワーク? / 型は?",
             "プランの承認待ち: ## 認証を直す\n1. トークンの検証を足す\n2. テスト",
         ])
+
+    def test_ask_user_question_row_carries_the_questions(self):
+        """質問の待ちの行に、選択肢まで載せる（#334）。text は今までどおり"""
+        self._hook({"hook_event_name": "PreToolUse", "tool_name": "AskUserQuestion", "tool_input": {
+            "questions": [
+                {"question": "サーバー側の変更をどう進めますか？", "header": "進め方", "multiSelect": False, "options": [
+                    {"label": "今の PR に足す (Recommended)", "description": "レビューが 1 回で済む"},
+                    {"label": "別の PR にする", "description": ""},
+                ]},
+                {"question": "web-admin 側は？", "header": "PR 2", "multiSelect": True, "options": [{"label": "あとで"}]},
+            ],
+        }})
+        row = read_rows(self.feed_dir)[0]
+        self.assertEqual(row["text"], "質問: サーバー側の変更をどう進めますか？ / web-admin 側は？", "text は変えない（shared/approvals.test.ts と揃えている）")
+        self.assertEqual(row["questions"], [
+            {"question": "サーバー側の変更をどう進めますか？", "header": "進め方", "multiSelect": False, "options": [
+                {"label": "今の PR に足す (Recommended)", "description": "レビューが 1 回で済む"},
+                {"label": "別の PR にする", "description": ""},
+            ]},
+            {"question": "web-admin 側は？", "header": "PR 2", "multiSelect": True, "options": [{"label": "あとで", "description": ""}]},
+        ])
+        self.assertNotIn("clipped", row)
+        self.assertEqual(row["v"], record.RECORD_VERSION)
+
+    def test_ask_user_question_questions_are_clipped_and_marked(self):
+        long = "あ" * (record.MAX_OPTION_DESCRIPTION + 10)
+        self._hook({"hook_event_name": "PermissionRequest", "tool_name": "AskUserQuestion", "tool_input": {
+            "questions": [{"question": f"問{i}", "options": [{"label": "L", "description": long}] + [{"label": f"o{j}"} for j in range(20)]} for i in range(12)],
+        }})
+        row = read_rows(self.feed_dir)[0]
+        self.assertEqual(len(row["questions"]), record.MAX_QUESTIONS)
+        self.assertEqual(len(row["questions"][0]["options"]), record.MAX_QUESTION_OPTIONS)
+        self.assertEqual(len(row["questions"][0]["options"][0]["description"]), record.MAX_OPTION_DESCRIPTION)
+        self.assertEqual(row["clipped"], ["questions"], "切ったことを印にする（#358 と同じ形）")
+
+    def test_ask_user_question_with_odd_input_still_records_and_exits_zero(self):
+        self._hook({"hook_event_name": "PreToolUse", "tool_name": "AskUserQuestion", "tool_input": {
+            "questions": ["文字だけ", {"question": ""}, {"question": "残る", "options": ["x", {"label": 3}, {"label": "ok", "description": 5}]}],
+        }})
+        row = read_rows(self.feed_dir)[0]
+        self.assertEqual(row["questions"], [{"question": "残る", "header": "", "multiSelect": False, "options": [{"label": "ok", "description": ""}]}])
+        # 形の読めない質問しか無ければキーごと載せない
+        self._hook({"hook_event_name": "PermissionRequest", "tool_name": "AskUserQuestion", "tool_input": {"questions": "壊れた"}})
+        # ほかのツールの待ちには載せない
+        self._hook({"hook_event_name": "PermissionRequest", "tool_name": "Bash", "tool_input": {"command": "ls"}})
+        rows = read_rows(self.feed_dir)
+        self.assertNotIn("questions", rows[-1])
+        self.assertTrue(all("questions" not in r for r in rows[1:]))
 
     # -- 終了（#385。実機で確かめた reason: /clear → clear、/exit → prompt_input_exit、-p の 1 回とペインの kill → other）
 

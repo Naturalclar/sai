@@ -18,13 +18,14 @@ import { HostTag } from './HostTag'
 import { opensDiff, type ChatDiffs } from './feedDiff.ts'
 import { JUMP_FLASH_MS, type FeedJump } from './feedJump.ts'
 import { followsBottom, nearBottom, prepended } from './chatScroll.ts'
-import { questionsFor } from './terminalQuestion.ts'
+import { questionsFor, rowQuestions } from './terminalQuestion.ts'
 import { wasClipped } from '../../shared/clipped.ts'
 import type { PendingQuestion } from '../../shared/types.ts'
 import type { MessageSide } from './hooks.ts'
 import { drawnKey, focusSideIn, isFocused, messageCopyText, messageUrl } from './messageLink.ts'
 
 const NO_SESSIONS: never[] = []
+const NO_IDS: ReadonlySet<string> = new Set()
 
 interface Props {
   rows: FeedRow[]
@@ -82,6 +83,11 @@ interface Props {
    */
   question?: PendingQuestion
   /**
+   * SAI の画面で質問に答えられるセッションの id（`terminalQuestion.ts` の `answerableIds()`）。行に載った選択肢（#334）を
+   * 読むだけで出すのは、ここに無いセッションだけ（答えられるバブルと同じ質問を 2 つ並べない）
+   */
+  answerable?: ReadonlySet<string>
+  /**
    * バブルの下に足す画像（#507。`shared/gallery.ts` の `imagesByBubble()`。鍵は `bubbleKey(ts, 自分 = user / 返答 = agent)`）。
    * セッション画面だけが渡す
    */
@@ -99,7 +105,7 @@ function flash(el: HTMLElement) {
   window.setTimeout(() => el.classList.remove('found'), JUMP_FLASH_MS)
 }
 
-export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_SESSIONS, trailer, showThinking = false, thinkingOpen = false, longOpen = false, profile, linear = '', focusTs = '', focusSide: askedSide, diffs, jumpTo = null, question, images }: Props) {
+export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_SESSIONS, trailer, showThinking = false, thinkingOpen = false, longOpen = false, profile, linear = '', focusTs = '', focusSide: askedSide, diffs, jumpTo = null, question, answerable = NO_IDS, images }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const stickToBottom = useRef(true)
   // 最後に最下部へ送ったときの scrollHeight。中身の高さが変わったときだけ送るため（#344）
@@ -255,7 +261,7 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
                         text={u.text}
                         markdown={u.speaker !== 'me'}
                         waiting={u.waiting}
-                        questions={questionsFor(u, question)}
+                        questions={rowQuestions(u, byId.get(id), answerable.has(id)) ?? questionsFor(u, question)}
                         resolved={u.resolved}
                         thinking={showThinking ? u.thinking : undefined}
                         thinkingOpen={thinkingOpen}

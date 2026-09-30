@@ -65,7 +65,8 @@ Codex CLI ──[notify]───────┘
 | `pane` / `pid` | セッションが開いている tmux のペイン（`%12`。フックが受け取る `TMUX_PANE`）と本体の pid（Claude は `CLAUDE_PID`、Codex は notify の親から辿った `codex` 本体。ラッパー越しの notify でも本体に届く。見つからなければ親。#332）。SAI の返信をそのペインに打ち込むのに使う。tmux の外なら `pane` は空。**SAI が起動したターン（`claude -p` など）でも空**（サーバが子に `TMUX_PANE` を渡さない。#234）|
 | `permission_mode` | そのターンの許可モード（Claude のフックの `permission_mode`。`default` / `acceptEdits` / `plan` / `auto` / `dontAsk` / `bypassPermissions`）。Codex には無い。一番新しい行の値が一覧とチャット見出しの印になる |
 | `first_user_text` | 最初のユーザー発話。`user_text` が1行も無い古いセッションのタイトルに使う。300文字で切る |
-| `clipped` | 本文を上限で切った項目（`["text"]` / `["user_text", "thinking"]` など。#358）。切っていなければ**キーごと無い**。画面はその本文の末尾に「ここで切れています」を出す（切ったことが分からないと、そこで終わったのか切られたのかが読めない）。`first_user_text` は本文ではないので数えない |
+| `clipped` | 本文を上限で切った項目（`["text"]` / `["user_text", "thinking"]` など。#358。質問の形を切ったときは `"questions"`）。切っていなければ**キーごと無い**。画面はその本文の末尾に「ここで切れています」を出す（切ったことが分からないと、そこで終わったのか切られたのかが読めない）。`first_user_text` は本文ではないので数えない |
+| `questions` | `AskUserQuestion` の待ちの行（`PreToolUse` / `PermissionRequest`）だけに載る、質問と選択肢（#334。v9 から）。`[{ question, header, multiSelect, options: [{ label, description }] }]` で、キーの名前はフックの `tool_input.questions` と同じ。`text` は今までどおり質問の文だけ（`質問: A / B`）なので、選択肢はここから出す。問は 8・選択肢は 10・文は 500 字（見出し 100・選択肢の名前 200）で切り、切ったら `clipped` に `"questions"`。読めない質問しか無ければ**キーごと無い**。画面は待ちのバブルの下に読むだけで出し（セッション画面・フィード）、無い古い行は #333 の transcript から読む方に落ちる |
 
 日付は `Asia/Tokyo` で切る。
 

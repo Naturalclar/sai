@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { answerableIds } from './terminalQuestion.ts'
 import { canSteer, replyBlockedReason } from '../../shared/reply.ts'
 import { launchedModeNote } from '../../shared/permissions.ts'
 import { RECENT_DAYS } from '../../shared/recentRows.ts'
@@ -72,6 +73,8 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
   const confirmHere = confirm && confirm.id === id ? confirm : null
 
   const approvals = data?.approvals[id] ?? NO_APPROVALS
+  // SAI で答えられる質問のあるセッション。行に載った選択肢を読むだけで重ねて出さない（#334）
+  const answerable = useMemo(() => (data ? answerableIds(data.approvals, data.replying) : undefined), [data])
   // 処理中に送って預かっている返信（#305）
   const queuedHere = data?.queued[id]
   const queuedCount = queuedHere?.items.length ?? 0
@@ -151,6 +154,7 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
           leader={data.older > 0 ? <OlderRowsButton count={data.older} days={RECENT_DAYS} onMore={() => setWide({ id, days: recent + RECENT_DAYS })} /> : undefined}
           showChannel={false}
           sessions={[data.session]}
+          {...(answerable ? { answerable } : {})}
           profile={data.profile}
           linear={linear}
           showThinking

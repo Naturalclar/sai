@@ -113,9 +113,13 @@ interface Props {
   prs?: readonly PrRepo[]
 }
 
-/** 見出しのセッションの PR へのリンク（#554）。一覧に居ない・PR が無ければ何も出さない */
-function prLinkOf(session: SessionSummary | undefined, prs: readonly PrRepo[]) {
-  const hit = session ? prForSession(session, prs) : null
+/**
+ * 見出しの PR へのリンク（#554）。**見出しに出ているブランチ（その発言を書いたときのもの）で引く**。セッションのいまのブランチで
+ * 引くと、ブランチを移ったセッションの前の発言に別の PR が付く（#555 のレビュー。差分ボタンの #280 と同じ食い違い）。
+ * 一覧に居ない・PR が無ければ何も出さない
+ */
+function prLinkOf(session: SessionSummary | undefined, branch: string, prs: readonly PrRepo[]) {
+  const hit = session ? prForSession({ remote: session.remote, branch }, prs) : null
   return hit ? <SessionPrLink repo={hit.repo} pr={hit.pr} /> : null
 }
 
@@ -293,7 +297,7 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
                       )}
                       {showChannel && isRemoteHost(g.host, selfHost) && <HostTag host={g.host} />}
                       {g.branch && <code className="branch" title={g.branch}>{g.branch}</code>}
-                      {showChannel && prs && prLinkOf(byId.get(id), prs)}
+                      {showChannel && prs && prLinkOf(byId.get(id), g.branch, prs)}
                       <span className="time">{hm(g.firstTs)}</span>
                     </div>
                     {g.items.map((u) => {

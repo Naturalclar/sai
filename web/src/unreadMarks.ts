@@ -9,7 +9,8 @@ import type { Utterance } from './chatGroups.ts'
 export function firstUnreadKey(items: readonly Utterance[], after: number | undefined): string {
   if (after === undefined || !Number.isFinite(after)) return ''
   for (const u of items) {
-    if (u.speaker === 'me' || u.waiting || u.ended) continue
+    // 送ったメッセージへの返答（#588）は相手のセッションの行なので、このセッションの既読の印では数えない
+    if (u.speaker === 'me' || u.waiting || u.ended || u.reply) continue
     if (!isUnreadCandidate(u.row)) continue
     if (rowMs(u.row.ts) > after) return u.key
   }

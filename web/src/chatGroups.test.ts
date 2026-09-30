@@ -204,3 +204,15 @@ test('終わって放置されているだけの行（入力待ち）はバブ�
   const waiting = toUtterances([row(0, { text: 'できた' }), row(1, { event: 'Notification', text: '許可待ち: Bash: ls' })])
   assert.deepEqual(waiting.map((u) => [u.text, u.waiting ?? false]), [['できた', false], ['許可待ち: Bash: ls', true]])
 })
+
+test('送ったメッセージへの返答（#588）は相手のバブル 1 つだけで、相手に届いた文は自分のバブルにしない。相手のセッションの塊になる', () => {
+  const reply = row(5, { session: 's2', user_text: '【SAI】#o/r の「x」からのメッセージです（id: a1）。…', text: '着手しました', agent_reply: { message_id: 'a1', to_name: '明.', sent_at: at(1) } })
+  const us = toUtterances([row(0, { user_text: '頼んで' }), reply])
+  assert.deepEqual(us.map((x) => [x.speaker, x.text, x.reply?.to_name]), [
+    ['me', '頼んで', undefined],
+    ['claude', '返答', undefined],
+    ['claude', '着手しました', '明.'],
+  ])
+  const groups = groupRows([row(0), reply])[0]!.groups
+  assert.deepEqual(groups.map((g) => g.session), ['s1', 's2'], '同じエージェントでも別のセッションなので塊を分ける')
+})

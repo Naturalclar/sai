@@ -461,3 +461,32 @@ test('sai_wait: 相手のターンが失敗したら failed と理由を返す',
     idle('B1@r')
   }
 })
+
+test('送り元が待たずにターンを終えても、相手の返答が送り元の詳細の応答に載る。rev も変わる（#588）', async () => {
+  turn('A1@r')
+  let messageId = ''
+  let delivered = ''
+  try {
+    const body = (await (await send('A1@r', 'B1@r', '着手して')).json()) as AgentSendResponse
+    messageId = body.message_id
+    delivered = runner.started.at(-1)!.cmd.text
+  } finally {
+    // 送り元は待たない（sai_wait を呼ばずにターンを終える）
+    idle('A1@r')
+  }
+  assert.match(delivered, /返答として送り元の画面に出ます/, '見出しは「送り元に返ります」と言い切らない')
+  const detail = async () => (await (await fetch(`${base}/api/sessions/A1%40r`)).json()) as SessionDetailResponse
+  const before = await detail()
+  assert.equal(before.agent_replies?.some((r) => r.agent_reply?.message_id === messageId) ?? false, false, 'まだ返っていない')
+  await appendFile(feedFile, JSON.stringify(row(new Date(), 'B1', { repo: 'r', cwd: work2, project: 'o/r', user_text: delivered, text: '着手しました。PR を出しました' })) + '\n')
+  const after = await detail()
+  assert.notEqual(after.rev, before.rev, '返答が届いたら画面が描き直す')
+  const reply = after.agent_replies?.find((r) => r.agent_reply?.message_id === messageId)
+  assert.equal(reply?.text, '着手しました。PR を出しました')
+  assert.equal(reply?.session, 'B1', '行は相手のセッションのもの')
+  assert.equal(reply?.agent_reply?.to_name, '#r', '表示名が無ければ worktree 名（題名は届けた見出しになっているので使わない）')
+  // 受け取った側の詳細には載せない（自分が送ったメッセージではない）
+  assert.equal(((await (await fetch(`${base}/api/sessions/B1%40r`)).json()) as SessionDetailResponse).agent_replies?.some((r) => r.agent_reply?.message_id === messageId) ?? false, false)
+  await humanReply('B1@r')
+  idle('B1@r')
+})

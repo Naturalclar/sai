@@ -104,6 +104,20 @@ export interface FeedRow {
    * **SAI が起こした Claude のターンだけ**に付く（端末で打ったターン・Codex / OpenCode・別のマシンには付かない）
    */
   usage?: TurnUsage
+  /**
+   * 別のセッションへ送ったメッセージの返答として、**送り元の**セッション画面に並べるときだけ付く（#588）。
+   * 行そのものは相手のセッションのターン完了の行で、JSONL には無い（サーバが詳細の応答に `agent_replies` として載せる）
+   */
+  agent_reply?: AgentReplyTag
+}
+
+/** 送り元の画面に並べる返答の印（#588） */
+export interface AgentReplyTag {
+  message_id: string
+  /** 相手の呼び名（表示名 → 題名 → ID） */
+  to_name: string
+  /** 送った時刻 */
+  sent_at: string
 }
 
 /** 行をセッション単位にまとめたもの。GET /api/sessions の1件 */
@@ -999,6 +1013,11 @@ export interface SessionDetailResponse {
   question?: PendingQuestion
   /** `claude --bg` のセッションなら、端末で開くための短い ID と状態（#462） */
   background?: BackgroundSession
+  /**
+   * このセッションが別のセッションに送ったメッセージへの返答（#588）。相手のターン完了の行に `agent_reply` を付けたもの（古い順）。
+   * 送り元が `sai_wait` せずにターンを終えても、返答がこの画面に出る。描いている窓（`recent`）より前の返答は載せない
+   */
+  agent_replies?: FeedRow[]
   /**
    * いまのコンテキスト量（#441。返信 1 回で読み直す量）。`ProgressReader.read()` の `context_tokens` で、分からない
    * （別のマシン・読めない・サーバの立っていない OpenCode）ときは載せない

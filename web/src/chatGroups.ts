@@ -1,5 +1,5 @@
 // チャットの行をバブルの塊にまとめる。DOM に依存しないので node:test で回す（chatGroups.test.ts）
-import type { FeedRow, Profile, SessionSummary } from '../../shared/types.ts'
+import type { AgentReplyTag, FeedRow, Profile, SessionSummary } from '../../shared/types.ts'
 import { wasClipped } from '../../shared/clipped.ts'
 import { entityId } from '../../shared/entity.ts'
 import { eventKind } from '../../shared/events.ts'
@@ -37,6 +37,11 @@ export interface Utterance {
    * `text` は「なぜ終わったか」（`セッション終了: 会話をリセット（/clear）`）
    */
   ended?: boolean
+  /**
+   * 別のセッションに送ったメッセージへの返答（#588）。行は相手のセッションのターン完了の行で、送り元の画面にだけ並ぶ。
+   * 相手に届いた文（見出し付きの入力）は自分のバブルにしない
+   */
+  reply?: AgentReplyTag
 }
 
 export interface Group {
@@ -78,6 +83,11 @@ export function toUtterances(rows: FeedRow[]): Utterance[] {
   rows.forEach((row, index) => {
     const id = entityId(row.session, row.repo, row.ts)
     const kind = eventKind(row.event, row.text)
+    // 送ったメッセージへの返答（#588）。相手の返答だけを出す（入力は相手に届いた文で、ここで打ったものではない）
+    if (row.agent_reply) {
+      out.push({ speaker: row.agent, row, text: row.text ?? '', key: `${row.ts}:${index}:reply`, reply: row.agent_reply, ...(wasClipped(row, 'text') ? { clipped: true } : {}) })
+      return
+    }
     const mine = (row.user_text ?? '').trim()
     if (kind === 'resume') {
       // 入力した瞬間の行。user_text があれば自分の発言。無い（合図だけの古い形）ならバブルにしない

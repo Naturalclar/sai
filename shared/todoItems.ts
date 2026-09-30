@@ -132,3 +132,32 @@ export function pendingItems(items: readonly TodoItem[]): TodoItem[] {
 export function doneItems(items: readonly TodoItem[]): TodoItem[] {
   return items.filter((t) => t.kind === 'done')
 }
+
+/** 要対応の画面の段（#551）。上から `answer` → `unread` → `watch` → `done` の順に出す */
+export interface TodoSections {
+  /** 答え待ち。この画面から答えられるので、未読かどうかに関わらず一番上 */
+  answer: TodoItem[]
+  /** 未読の返答があるセッション（`watch` も `done` も）。読んでいない返答が下段の奥に埋もれないように上げる */
+  unread: TodoItem[]
+  /** 未読の無い待機中 */
+  watch: TodoItem[]
+  /** 未読の無い「終わって次を待っている」 */
+  done: TodoItem[]
+}
+
+/**
+ * 画面に出す順に段へ分ける（#551）。各段の中は `todoItems()` の並び（待たせている順）のまま。
+ *
+ * **並びを変えるだけで、数えるぶん（`pendingItems()`）は変えない。** 未読で上がった `done` をバッジや通知に数えると、
+ * 返答を 1 回読まないだけで通知が鳴るようになる。行の `kind` も変えないので、返信欄を最初から開くのは
+ * 今までどおり `done` の行だけ（#522）
+ */
+export function todoSections(items: readonly TodoItem[]): TodoSections {
+  const out: TodoSections = { answer: [], unread: [], watch: [], done: [] }
+  for (const t of items) {
+    if (t.kind === 'answer') out.answer.push(t)
+    else if ((t.session?.unread ?? 0) > 0) out.unread.push(t)
+    else out[t.kind].push(t)
+  }
+  return out
+}

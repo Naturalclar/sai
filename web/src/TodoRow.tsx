@@ -5,6 +5,7 @@ import { ApprovalBubble } from './ApprovalBubble'
 import { AgentChip } from './AgentChip'
 import { TodoArchiveButton } from './TodoArchiveButton'
 import { WaitingTag } from './WaitingTag'
+import { UnreadTag } from './UnreadTag'
 import { TodoSource } from './TodoSource'
 import { sourceTs } from './todoRowSource.ts'
 import { elapsedLabel } from './format'
@@ -50,6 +51,8 @@ export function TodoRow({ item, now, hotkey, modeNote, reply, children }: Props)
         <span className="name">{label}</span>
         {where && <span className="where">#{where}</span>}
         {agent && <AgentChip agent={agent} />}
+        {/* 読んでいない返答（#551）。答え待ちは未読でも一番上なので、印は待機中と終了の行にだけ */}
+        {s && item.kind !== 'answer' && !!s.unread && <UnreadTag n={s.unread} />}
         {waited && <span className="waited">{done ? `終わってから ${waited}` : `${waited} 待っている`}</span>}
       </a>
       {item.kind === 'answer' && item.approval ? (

@@ -10,7 +10,7 @@
 //   `model`（`{providerID, modelID}`）と `parts`（text / file）を**ターンごとに**渡せるので、今までの `-m` / `-f` と同じ
 // - 許可（read / bash）は**聞かれずに通った**。`opencode run` が許可を自動 reject して本文なしで終わる（#273）のに当たらない。
 //   ただし設定で `ask` にしている人は答え待ちで止まる（答える口は #382 の 2 段目）
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
@@ -39,7 +39,7 @@ export interface OpencodeServeState {
   statePath: string
   /** 出力の置き場（`OPENCODE_SERVE_LOG`） */
   logPath: string
-  /** 生きているか（テストが差し替える） */
+  /** 生きていて `opencode serve` か（テストが差し替える。既定は `isServeProcess()`） */
   alive?: (pid: number) => boolean
   /** 落とす（テストが差し替える。自分のプロセスを落とさないように） */
   kill?: (pid: number) => void
@@ -53,10 +53,19 @@ interface PersistedServe {
   turns: Record<string, { since: string; text: string; session: string }>
 }
 
-const isAlive = (pid: number): boolean => {
+/**
+ * その pid が生きていて、**いまも `opencode serve` か**（#519 のレビュー）。残したファイルの pid は、serve が落ちたあと
+ * OS に使い回されることがあるので、生きているだけで引き取る・落とすと、無関係のプロセスを落としてしまう
+ */
+export const isServeProcess = (pid: number): boolean => {
   try {
     process.kill(pid, 0)
-    return true
+  } catch {
+    return false
+  }
+  try {
+    const command = execFileSync('ps', ['-o', 'command=', '-p', String(pid)], { encoding: 'utf-8', timeout: 2_000 })
+    return /\bopencode\b/.test(command) && /\bserve\b/.test(command)
   } catch {
     return false
   }
@@ -197,8 +206,11 @@ export class OpencodeServer implements OpencodeApp {
   }
 
   private alive(pid: number): boolean {
-    return (this.state?.alive ?? isAlive)(pid)
+    return (this.state?.alive ?? isServeProcess)(pid)
   }
+
+  /** 引き取った serve の確かめが終わったら解ける（テストが待つ）。引き取っていなければ最初から解けている */
+  adopted: Promise<void> = Promise.resolve()
 
   /** 立っているか。自分の子なら exit していないか、引き取ったものなら pid が生きているか */
   private up(): boolean {
@@ -231,6 +243,52 @@ export class OpencodeServer implements OpencodeApp {
       this.active.set(id, { since: t.since, text: t.text, interruptible: true })
       this.sessions.set(id, t.session)
     }
+    this.adopted = this.verifyAdopted()
+  }
+
+  /**
+   * 引き取った serve と、戻したターンを本体に確かめる（#519 のレビュー）。
+   * - **残した鍵で答えなければ使わない**（落とさない。別物かもしれないので触らず、次の返信で起こし直す）
+   * - **戻したターンは、本体がいまも回していると言うものだけ残す**。行が届かないまま残った「処理中」が、立て直しのたびに
+   *   持ち越されて永久に消えない（前は立て直せば消えた）・ずっと「回している」ので C-c で serve が落ちない、を防ぐ。
+   *   `GET /session/status` は `directory` ごとなので、セッションの `directory` を引いてから聞く（1.18.30 で実測）
+   */
+  private async verifyAdopted(): Promise<void> {
+    const ready = this.ready
+    if (!ready) return
+    const get = async (path: string): Promise<unknown> => {
+      const res = await this.fetchFn(`${ready.url}${path}`, { headers: { authorization: ready.auth } })
+      if (!res.ok) throw new Error(String(res.status))
+      return res.json()
+    }
+    try {
+      await get('/session/status')
+    } catch {
+      if (this.ready === ready) {
+        this.ready = null
+        this.adoptedPid = 0
+        this.active.clear()
+        this.sessions.clear()
+        this.forget()
+      }
+      return
+    }
+    for (const [id, session] of [...this.sessions]) {
+      let busy = false
+      try {
+        const info = (await get(`/session/${encodeURIComponent(session)}`)) as { directory?: unknown }
+        const dir = typeof info?.directory === 'string' ? `?directory=${encodeURIComponent(info.directory)}` : ''
+        const status = (await get(`/session/status${dir}`)) as Record<string, unknown>
+        busy = Boolean(status && typeof status === 'object' && session in status)
+      } catch {
+        busy = false
+      }
+      if (!busy && this.sessions.get(id) === session) {
+        this.active.delete(id)
+        this.sessions.delete(id)
+      }
+    }
+    this.persist()
   }
 
   /** いまの居場所・鍵・回しているターンを書く（tmp → rename。鍵が入るので 0600）。立っていなければ何もしない */
@@ -545,7 +603,9 @@ export class OpencodeServer implements OpencodeApp {
         poll = setInterval(() => {
           let text = ''
           try {
-            text = readFileSync(logPath, 'utf-8').slice(logStart)
+            // 起こしたあとに書かれた分だけ。位置はバイトで測ったので、バイトで切ってから文字にする（#519 のレビュー。
+            // 先に文字にしてから文字数で切ると、ログに ASCII でない文字があると切り所が後ろにずれて待ち受けの行を読み飛ばす）
+            text = readFileSync(logPath).subarray(logStart).toString('utf-8')
           } catch {
             return
           }

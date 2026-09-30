@@ -5,7 +5,7 @@ import { DiffView } from './DiffView'
 import { ReviewButton } from './ReviewButton'
 import { DiffCommentBar } from './DiffCommentBar'
 import { DiffCommentNote } from './DiffCommentNote'
-import { commentLine, formatDiffComments, type DiffComment, type DiffCommentSection } from './diffComments'
+import { commentLine, formatDiffComments, type DiffComment } from './diffComments'
 import { useDiffComments } from './useDiffComments'
 
 /**
@@ -19,8 +19,16 @@ export function DiffBody({ id, canReview = false, onInsertComments }: { id: stri
   const [error, setError] = useState('')
   // 行へのコメント（#511）。入れる先（そのセッションの返信欄）があるときだけ書ける
   const comments = useDiffComments(id)
-  const commentsOf = (section: DiffCommentSection) =>
-    onInsertComments ? { section, list: comments.list.filter((c) => c.section === section), onAdd: comments.add, onRemove: comments.remove } : undefined
+  // 区切りごとの口。同じものを渡し続ける（毎回作ると DiffFileItem の memo が効かず、ポーリングのたびに全ファイルが描き直る）
+  const canComment = Boolean(onInsertComments)
+  const branchComments = useMemo(
+    () => (canComment ? { section: 'branch' as const, list: comments.list.filter((c) => c.section === 'branch'), onAdd: comments.add, onRemove: comments.remove } : undefined),
+    [canComment, comments.list, comments.add, comments.remove],
+  )
+  const workingComments = useMemo(
+    () => (canComment ? { section: 'working' as const, list: comments.list.filter((c) => c.section === 'working'), onAdd: comments.add, onRemove: comments.remove } : undefined),
+    [canComment, comments.list, comments.add, comments.remove],
+  )
   // いまの差分に行が見当たらないコメント（エージェントが編集して消えた・区切りが変わった）。行の下に出せないので上にまとめる
   const parsed = useMemo(
     () => (data ? { branch: parseUnifiedDiff(data.branch.patch), working: parseUnifiedDiff(data.working.patch) } : null),
@@ -76,7 +84,7 @@ export function DiffBody({ id, canReview = false, onInsertComments }: { id: stri
               title="ブランチの差分"
               empty={`${data.base} との差はありません`}
               action={canReview && data.branch.files.length > 0 ? <ReviewButton id={id} target="baseBranch" /> : undefined}
-              comments={commentsOf('branch')}
+              comments={branchComments}
             />
           )}
           <DiffView
@@ -84,7 +92,7 @@ export function DiffBody({ id, canReview = false, onInsertComments }: { id: stri
             title="未コミット"
             empty="コミットしていない変更はありません"
             action={canReview && data.working.files.length > 0 ? <ReviewButton id={id} target="uncommittedChanges" /> : undefined}
-            comments={commentsOf('working')}
+            comments={workingComments}
           />
           {data.untracked.length > 0 && (
             <div className="diff-section">

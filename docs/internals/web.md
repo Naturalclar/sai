@@ -15,6 +15,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - `hooks.ts` の `usePolling` がデータ取得の中心で、`rev` が変わらない限り state を触らず、タブが隠れている間は止まる。
 - `hiddenMs` を渡された時だけ裏でも回る（`HIDDEN_POLL_MS` = 20 秒）。渡すのは `App` の一覧だけで、チャットとフィードは今までどおり止まる（通知のため。下の「タブの題名と通知」）。
 - `rev` が同じでも `updatedAt` のために 3 秒ごとに state を更新する（最下部追従が高さで見る理由。下の「最下部追従」）。
+- **一覧・詳細・フィードは、変わっていなければ本文を受け取らない**（#592。`revCache.ts` の `fetchByRev()`）。前の本文を URL ごとに 8 個まで覚え、`If-None-Match` を付けて聞く。304 なら覚えた本文（同じオブジェクト）を返すので、`usePolling` から見ると今までどおり「rev が同じ」。ブラウザのキャッシュには任せない（`no-store` のまま）。
 - フィルタは `useLocalState` で localStorage に残る。絞り込みの state は `App.tsx` が持ち、サイドバーとフィードの両方に渡す。
 
 ## 要対応（TodoView。#224）

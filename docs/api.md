@@ -2,6 +2,8 @@
 
 サーバが返す API と、集計・返信の実行の中身。セットアップは [README](../README.md)。
 
+**`rev` を持つ 3 つ（`GET /api/sessions`・`GET /api/sessions/<id>`・`GET /api/feed`）は `ETag`（`rev` のハッシュ）を返し、`If-None-Match` が合えば本文なしの `304`**（#592。`Cache-Control: no-store` のままで、付けるのは画面）。
+
 | | |
 | --- | --- |
 | `GET /` | ビューア（`web/dist/index.html`） |

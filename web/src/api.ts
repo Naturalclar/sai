@@ -45,6 +45,7 @@ import type {
   PrReviewRequest,
   PrReviewResponse,
 } from '../../shared/types.ts'
+import { fetchByRev, RevCache } from './revCache.ts'
 import type { DigestFeedbackReason, DigestFeedbackRequest, DigestFeedbackResponse } from '../../shared/digestFeedback.ts'
 
 export type { Agent, FeedRow, SessionSource, SessionSummary, SessionMeta, ManagerDraft, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, QueuedReply, ReplyQueue, ReplyQueueMap, ReplyQueueResponse, AgentActivity, AgentActivityMessage, AgentStopResponse,Approval, ApprovalMap, ApprovalAnswer, TerminalDialog, Profile, PersonaId, SettingsResponse, SettingsRequest, Viewer, SessionPermissionsResponse, SessionProgressResponse, ProgressStep, SessionDiffResponse, SessionDiffSummaryResponse, GalleryResponse, GalleryItem, SearchResponse, SearchHit, DiffPr, DiffSection, DiffFileStat, PrSummary, PrRepo, PrsResponse, PrDetailResponse, PrReviewRequest, PrReviewResponse, PrReviewEvent, AttachmentResponse, UsageResponse, UsageWindow, CodexUsage, ClaudeUsage } from '../../shared/types.ts'
@@ -111,6 +112,15 @@ async function getJSON<T>(url: string): Promise<T> {
   return (await res.json()) as T
 }
 
+/** 一覧・詳細・フィード（rev を持つ応答）。変わっていなければサーバは 304 で本文を送らない（#592。`revCache.ts`） */
+const revCache = new RevCache()
+async function getRevJSON<T>(url: string): Promise<T> {
+  const { res, data } = await fetchByRev(revCache, url, (u, init) => fetch(u, init))
+  if (data === undefined) throw await failure(res, url)
+  watchBuild(res)
+  return data as T
+}
+
 async function sendJSON<T>(method: 'POST' | 'PUT', url: string, body: object): Promise<T> {
   const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
   if (!res.ok) throw await failure(res, url)
@@ -142,13 +152,13 @@ const qs = (params: object) => {
 }
 
 export const api = {
-  sessions: (f: SessionFilters) => getJSON<SessionsResponse>(`/api/sessions?${qs(f)}`),
+  sessions: (f: SessionFilters) => getRevJSON<SessionsResponse>(`/api/sessions?${qs(f)}`),
   /** `recent` を付けると直近その日数の行だけ（#477）。`focus`（検索の飛び先）はそこまで必ず含める */
   session: (id: string, { recent, focus = '' }: { recent?: number; focus?: string } = {}, days = 90) =>
-    getJSON<SessionDetailResponse>(
+    getRevJSON<SessionDetailResponse>(
       `/api/sessions/${encodeURIComponent(id)}?days=${days}${recent ? `&recent=${recent}` : ''}${focus ? `&focus=${encodeURIComponent(focus)}` : ''}`,
     ),
-  feed: (f: FeedFilters) => getJSON<FeedResponse>(`/api/feed?${qs(f)}`),
+  feed: (f: FeedFilters) => getRevJSON<FeedResponse>(`/api/feed?${qs(f)}`),
   /** 返信。replaceTyped は端末の打ちかけを消して打ち込んでよい（409 の code: terminal_typed を人が確認したあと） */
   reply: (id: string, text: string, options: { replaceTyped?: boolean; via?: 'process'; attachments?: string[]; queue?: boolean; steer?: boolean; compact?: boolean } = {}, days = 90) =>
     sendJSON<ReplyResponse>(

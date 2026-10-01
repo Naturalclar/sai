@@ -63,6 +63,12 @@ C-c / SIGTERM では必ず終わる（#296。`main.ts` の `shutdown()`）。
 - チップに何をどの順で出すかは `web/src/usageChips.ts` の `usageChips()` / `chipsLevel()` に 1 つだけ置く（#347。`usageChips.test.ts`）。Claude が先。Claude は 5 時間の枠が無ければ週に落として `週` の印を付ける。上限中は割合が無くても出す。
 - パネルの「ステータスラインを設定すると出ます」の案内は、割合が 1 つも無いときだけ出す。
 
+## rev が同じなら 304（#592）
+
+- `app.ts` の `jsonByRev()`。一覧・詳細・フィードの 3 つだけが通す。`ETag` は `rev` の sha1 の頭 20 桁で、`If-None-Match` が合えば本文を作らずに 304。
+- rev を組むまでの仕事（行の集計・走査の結果）は減らない。減るのは JSON にする・送る・画面がパースする分。
+- `X-SAI-Build` は 304 にも付く（`watchBuild` が見る）。
+
 ## ビルドへの追従
 
 - サーバは `web/dist/` を毎回ディスクから読み、`/api/*` に `X-SAI-Build`（`dist/index.html` の mtime）を付ける。

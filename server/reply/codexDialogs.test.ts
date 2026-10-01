@@ -222,3 +222,45 @@ test('answer: 中身が読めていないダイアログは端末に任せる', 
     error: 'この待ちは端末で答えてください',
   })
 })
+
+test('CodexDialogs: 1 回の走査で ps は 1 本。覚えている間は見に行かず、見ていない相手が居れば・切れたら見に行く（#592）', async () => {
+  const tmux = new FakeTmux()
+  let now = Date.parse('2026-09-09T12:00:00+09:00')
+  let psCalls = 0
+  const dialogs = new CodexDialogs(tmux, async () => (psCalls++, '200 100\n100 1\n'), () => now, 0, 5_000)
+  const other = { id: 'T2@repo', terminal: { pane: '%9', pid: 200 } }
+  assert.equal(dialogs.known(), false)
+
+  const first = await dialogs.scan([session()], [other])
+  assert.deepEqual(Object.keys(first).sort(), ['T1@repo', 'T2@repo'])
+  assert.equal(psCalls, 1, '対象は 2 つでも ps は 1 本')
+  assert.equal(dialogs.known(), true)
+
+  now += 4_000
+  tmux.screen = 'done\n› Ask Codex to do anything\n  gpt-5.6-sol medium · /work'
+  assert.deepEqual(Object.keys(await dialogs.scan([session()])), ['T1@repo', 'T2@repo'], '覚えた結果（相手が減っても見に行かない）')
+  assert.equal(psCalls, 1)
+
+  // 前の走査が見ていない相手が居れば、覚えている間でも見に行く
+  assert.deepEqual(await dialogs.scan([session()], [other, { id: 'T3@repo', terminal: { pane: '%9', pid: 200 } }]), {})
+  assert.equal(psCalls, 2)
+
+  now += 5_000
+  await dialogs.scan([session()])
+  assert.equal(psCalls, 3, '切れたら読み直す')
+})
+
+test('CodexDialogs: 絞り込んだ口の走査は、見なかった相手の前の結果を消さない（#599 のレビュー）', async () => {
+  const tmux = new FakeTmux()
+  let now = Date.parse('2026-09-09T12:00:00+09:00')
+  const dialogs = new CodexDialogs(tmux, async () => '200 100\n100 1\n', () => now, 0, 5_000)
+  const other = { id: 'T2@repo', terminal: { pane: '%9', pid: 200 } }
+  await dialogs.scan([session()], [other])
+  now += 6_000
+  // 狭い口（T1 だけ）が読み直しても、T2 は残る。答える先のペインも残る
+  assert.deepEqual(Object.keys(await dialogs.scan([session()])).sort(), ['T1@repo', 'T2@repo'])
+  assert.equal(dialogs.has((dialogs.snapshot()['T2@repo'] ?? [])[0]!.approval_id), true)
+  // 誰も見なくなった相手は、いずれ落ちる
+  now += 60_000
+  assert.deepEqual(Object.keys(await dialogs.scan([session()])), ['T1@repo'])
+})

@@ -45,6 +45,8 @@ export interface CodexPaneSource {
   scan(): Promise<PaneCodex[]>
   /** 前回の結果（走査を起こさない。#495 の締切で使う）。偽物は持たなくてよい */
   last?(): PaneCodex[]
+  /** 1 度でも走査が終わっているか（#592。終わっていれば画面の道は待たずに `last()` を返す）。偽物は持たなくてよい */
+  known?(): boolean
 }
 
 /** その pid が開いているもののうち、知りたい 2 つ */
@@ -444,6 +446,10 @@ export class CodexPanes implements CodexPaneSource {
   /** 前回の結果。TTL が切れていてもそのまま（走査は起こさない） */
   last(): PaneCodex[] {
     return this.cache?.panes ?? []
+  }
+
+  known(): boolean {
+    return this.cache !== null
   }
 
   async scan(): Promise<PaneCodex[]> {

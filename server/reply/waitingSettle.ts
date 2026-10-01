@@ -14,7 +14,8 @@
 // `eventKind()` が `idle` に分けて `SessionSummary.idle` に載せる）。以前はそれもここに流れてきて、
 // 入力欄が空なのを「人が答えた」と読んで畳んでいた——結果は正しかったが、理由が違っていた
 // （答えてはいない。ただ放置されているだけ）。ペインの無い端末では畳めず、要対応に残り続けていた。
-import { inspectPrompt } from './terminal.ts'
+import { SCAN_KEEP_FACTOR } from './codexDialogs.ts'
+import { inspectPrompt, sharedPs } from './terminal.ts'
 import type { PsFn, Tmux } from './terminal.ts'
 import type { SessionSummary } from '../../shared/types.ts'
 
@@ -23,6 +24,8 @@ export interface WaitingSettleSource {
   scan(sessions: readonly SessionSummary[]): Promise<ReadonlySet<string>>
   /** 前回の結果（ペインを見に行かない。#495 の締切で使う）。偽物は持たなくてよい */
   last?(): ReadonlySet<string>
+  /** 1 度でも走査が終わっているか（#592。終わっていれば画面の道は待たずに `last()` を返す）。偽物は持たなくてよい */
+  known?(): boolean
 }
 
 /** 何もしない実装（`SAI_TERMINAL=0` と、端末を見ないテスト） */
@@ -51,19 +54,43 @@ export class WaitingSettle implements WaitingSettleSource {
   private lastResult: ReadonlySet<string> = new Set()
   private readonly tmux: Tmux
   private readonly ps: PsFn
+  private readonly ttlMs: number
+  private readonly now: () => number
+  /** 相手ごとの、最後に見た時刻 */
+  private seenAt = new Map<string, number>()
+  private scannedOnce = false
 
-  constructor(tmux: Tmux, ps: PsFn) {
+  /** `ttlMs` は結果を覚える長さ（#592。既定は覚えない。`createApp` が `DIALOG_SCAN_TTL_MS` を渡す） */
+  constructor(tmux: Tmux, ps: PsFn, ttlMs = 0, now: () => number = Date.now) {
     this.tmux = tmux
     this.ps = ps
+    this.ttlMs = ttlMs
+    this.now = now
+  }
+
+  known(): boolean {
+    return this.scannedOnce
   }
 
   /** 3 秒のポーリングが重なっても、走っているスキャンは 1 本だけ（CodexDialogs と同じ） */
   scan(sessions: readonly SessionSummary[]): Promise<ReadonlySet<string>> {
+    // 覚えている間は見に行かない（#592）。**前の走査が見ていない待ちが居れば見に行く**
+    const asked = this.now()
+    if (sessions.every((s) => !(s.waiting && s.terminal) || asked - (this.seenAt.get(s.id) ?? -Infinity) < this.ttlMs)) {
+      return Promise.resolve(this.lastResult)
+    }
     if (!this.scanning) {
       this.scanning = this.scanNow(sessions)
         .then((result) => {
-          this.lastResult = result
-          return result
+          // **今回見なかった相手の前の結果は残す**（#599 のレビュー。絞り込んだ口の走査が、広い口の結果を消さない）。
+          // 古くなりすぎたものだけ落とす（`SCAN_KEEP_FACTOR`）
+          const now = this.now()
+          const fresh = new Set(sessions.filter((s) => s.waiting && s.terminal).map((s) => s.id))
+          const kept = (id: string) => !fresh.has(id) && now - (this.seenAt.get(id) ?? -Infinity) < this.ttlMs * SCAN_KEEP_FACTOR
+          this.lastResult = new Set([...[...this.lastResult].filter(kept), ...result])
+          this.seenAt = new Map([...[...this.seenAt].filter(([id]) => kept(id)), ...[...fresh].map((id): [string, number] => [id, now])])
+          this.scannedOnce = true
+          return this.lastResult
         })
         .finally(() => {
           this.scanning = null
@@ -80,10 +107,12 @@ export class WaitingSettle implements WaitingSettleSource {
   private async scanNow(sessions: readonly SessionSummary[]): Promise<ReadonlySet<string>> {
     // 見るのは「端末で開いていて、行の上では待っている」ものだけ。普段は 0〜1 件
     const targets = sessions.filter((s) => s.waiting && s.terminal)
+    // `ps` はこの走査で 1 本だけ（#592。対象ごとに起こさない）
+    const ps = sharedPs(this.ps)
     const settled = await Promise.all(
       targets.map(async (session) => {
         try {
-          const state = await inspectPrompt(this.tmux, this.ps, session.terminal!, session.agent)
+          const state = await inspectPrompt(this.tmux, ps, session.terminal!, session.agent)
           // ダイアログが消えていれば人が答えた。読めない（unknown）ときは畳まない
           return state.kind === 'idle' || state.kind === 'typed' ? session.id : null
         } catch {

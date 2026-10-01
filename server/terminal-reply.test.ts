@@ -129,6 +129,8 @@ before(async () => {
       ps: async () => ' 100     1\n 200   100\n 201   100\n 204   100\n 205   100\n 206   100\n',
       replies: new TerminalReplies(),
       alive: (pid) => alivePids.has(pid),
+      // 画面を差し替えた次の一覧で結果を見るので、走査は覚えさせない（#592 の TTL は codexDialogs / waitingSettle のテストで見る）
+      scanTtlMs: 0,
       codexWriterActive: async (session) => session === 'X1' || session === 'X2',
       codexTerminals,
       codexPanes,

@@ -22,6 +22,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - `status: busy` が 1 つも無いと分かったときだけ `active` を false にし、`rev` にも印を付ける（同じ rev だと画面が描き直さない）
 - 同じ `sessionId` の行が複数出る（端末の TUI が `idle`、SAI が `-p --resume` で起こした子が同じ ID で `busy`）ので、1 つでも busy なら回っている（`busyIn()`）
 - 全体で 1 回叩いて 3 秒覚え、返る前に来た呼び出しは走っている 1 本を待つ（#433）
+- 詳細の `backgroundOf()`（`--bg` のセッションか）は、前に引いた一覧があれば待たずに `peekBackground()` で返す（#592。引き直しは裏で続く。引けないまま `AGENTS_PEEK_MAX_MS` = 30 秒を過ぎたら「分からない」に戻す）。返信の直前（`launch()`）は今までどおり引き直して待つ
 - `claude` が無い・古い・時間切れ・壊れた出力は `undefined`（分からない）で、transcript の判定を使う（`GhPr` と同じ作法）。`SAI_CLAUDE_AGENTS=0` で丸ごと切れる
 - Claude だけ
 

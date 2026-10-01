@@ -14,6 +14,8 @@ export interface CodexTerminalSource {
   pid(session: string, pane: string): Promise<number>
   /** 前回の結果（`lsof` を起こさない。#495 の締切で使う）。知らなければ 0。偽物は持たなくてよい */
   last?(session: string, pane: string): number
+  /** `pid()` を 1 度でも引き終えているか（#592。`last()` の 0 は「居ない」と「知らない」が区別できない） */
+  known?(session: string, pane: string): boolean
   /**
    * 行の pid（生きている）がそのペインの中で動いているか（#562）。中ならその pid、外なら 0。
    * 無ければ（テストの偽物）今までどおり行の pid をそのまま使う
@@ -73,6 +75,10 @@ export class CodexTerminals implements CodexTerminalSource {
   last(session: string, pane: string): number {
     const hit = this.cache.get(`${session}\n${pane}`)
     return hit && (hit.pid === 0 || this.alive(hit.pid)) ? hit.pid : 0
+  }
+
+  known(session: string, pane: string): boolean {
+    return this.cache.has(`${session}\n${pane}`)
   }
 
   async pid(session: string, pane: string): Promise<number> {

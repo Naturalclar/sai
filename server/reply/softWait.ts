@@ -15,6 +15,16 @@ export const SCAN_WAIT_MS = 700
  * （終われば呼び出し側のキャッシュに入り、次の要求で読める）。締切の前に失敗したらそのまま投げ、
  * 締切のあとの失敗は誰も待っていないので捨てる
  */
+/**
+ * 画面に出す道の待ち方（#592）。**前回の結果がもうあれば待たずにそれを返す**（走査は裏で続き、次のポーリングが新しい結果を拾う。
+ * 覚えている最中なら `work` はその場で解決するので新しい値が返る）。まだ 1 度も走っていなければ締切まで待つ。
+ * 締切の 0.7 秒は「たまに当たる上限」のつもりだったが、混んでいると走査が毎回 0.7 秒に収まらず、ポーリングのたびに払っていた。
+ * **返信の振り分けとレビューの断りには使わない**（古い結果で送り先を決めない。あちらは待ち切る）
+ */
+export function screenWait<T>(work: Promise<T>, fallback: () => T, known: boolean): Promise<T> {
+  return softWait(work, fallback, known ? 0 : SCAN_WAIT_MS)
+}
+
 export function softWait<T>(work: Promise<T>, fallback: () => T, waitMs = SCAN_WAIT_MS): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     let done = false

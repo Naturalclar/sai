@@ -19,6 +19,8 @@ import { spawn } from 'node:child_process'
 export const AGENTS_TIMEOUT_MS = 4000
 /** 引き直さない時間。画面のポーリングは 3 秒なので、そのあいだは 1 回で足りる */
 export const AGENTS_CACHE_MS = 3000
+/** `peekBackground()` が前の一覧を出してよい長さ（#592）。引き直しが失敗し続けたら、ここで「分からない」に戻す */
+export const AGENTS_PEEK_MAX_MS = 30_000
 
 /** 生きている Claude のセッション 1 つ。`claude agents --json` の 1 要素（見るキーだけ） */
 export interface ClaudeAgent {
@@ -52,6 +54,11 @@ export interface AgentList {
    * 無ければ `null`、**分からなければ `undefined`**。`fresh` なら覚えている一覧を使わずに引き直す（返信の直前）
    */
   background?(sessionId: string, fresh?: boolean): Promise<ClaudeAgent | null | undefined>
+  /**
+   * `background()` の前回の結果（#592。`claude` を起こさない。TTL が切れていても `AGENTS_PEEK_MAX_MS` まではそのまま）。
+   * 1 度も引けていない・引けないまま古くなったら `undefined`。偽物は持たなくてよい
+   */
+  peekBackground?(sessionId: string): ClaudeAgent | null | undefined
 }
 
 /** 引かない実装（`SAI_CLAUDE_AGENTS=0`、テストの既定） */
@@ -128,6 +135,7 @@ export class ClaudeAgents implements AgentList {
   readonly bin: string
   private readonly ttl: number
   private readonly timeout: number
+  private readonly peekMax: number
   private at = 0
   private agents: ClaudeAgent[] | null = null
   /**
@@ -139,7 +147,8 @@ export class ClaudeAgents implements AgentList {
   private noAll = false
 
   /** 実行ファイルは既定でサーバの PATH の `claude`（#288）。テストは偽物を渡す */
-  constructor(bin: string = 'claude', ttl = AGENTS_CACHE_MS, timeout = AGENTS_TIMEOUT_MS) {
+  constructor(bin: string = 'claude', ttl = AGENTS_CACHE_MS, timeout = AGENTS_TIMEOUT_MS, peekMax = AGENTS_PEEK_MAX_MS) {
+    this.peekMax = peekMax
     this.bin = bin
     this.ttl = ttl
     this.timeout = timeout
@@ -155,6 +164,12 @@ export class ClaudeAgents implements AgentList {
     if (!sessionId) return undefined
     const agents = await this.list(fresh)
     return agents === null ? undefined : backgroundIn(agents, sessionId)
+  }
+
+  peekBackground(sessionId: string): ClaudeAgent | null | undefined {
+    // 聞けないままのときに古い一覧を出し続けない（#599 のレビュー。`listNow()` は失敗しても前の一覧を消さない）
+    if (this.agents === null || !sessionId || Date.now() - this.at >= this.peekMax) return undefined
+    return backgroundIn(this.agents, sessionId)
   }
 
   /** 生きているセッションの一覧。**セッションごとではなく全体で 1 回**叩いて、少しのあいだ覚える */

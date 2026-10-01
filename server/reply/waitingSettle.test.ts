@@ -153,3 +153,45 @@ test('settledKey: 集合が変われば鍵も変わる（並びには依らな�
 test('NoWaitingSettle: SAI_TERMINAL=0 のときの実装は何も畳まない', async () => {
   assert.equal((await new NoWaitingSettle().scan()).size, 0)
 })
+
+test('WaitingSettle: 1 回の走査で ps は 1 本（対象ごとに起こさない。#592）', async () => {
+  const tmux = new FakeTmux()
+  let psCalls = 0
+  const counting = async () => (psCalls++, ' 100     1\n 200   100\n')
+  await new WaitingSettle(tmux, counting).scan([summary({ id: 'a@r' }), summary({ id: 'b@r' }), summary({ id: 'c@r' })])
+  assert.equal(tmux.calls.filter((c) => c[0] === 'capture-pane').length, 3)
+  assert.equal(psCalls, 1)
+})
+
+test('WaitingSettle: 覚えている間は見に行かない。見ていない待ちが居れば・切れたら見に行く（#592）', async () => {
+  const tmux = new FakeTmux()
+  let now = 1_000
+  const settle = new WaitingSettle(tmux, ps, 5_000, () => now)
+  const captures = () => tmux.calls.filter((c) => c[0] === 'capture-pane').length
+  assert.equal(settle.known(), false)
+  assert.deepEqual([...(await settle.scan([summary({})]))], ['S1@r'])
+  assert.equal(settle.known(), true)
+  now += 4_000
+  tmux.screen = CLAUDE_DIALOG
+  assert.deepEqual([...(await settle.scan([summary({})]))], ['S1@r'], '覚えた結果')
+  // 待っていないもの・端末で開いていないものが増えても見に行かない
+  await settle.scan([summary({}), summary({ id: 'a@r', waiting: '' }), summary({ id: 'b@r', terminal: null })])
+  assert.equal(captures(), 1)
+  // 前の走査が見ていない待ち
+  await settle.scan([summary({}), summary({ id: 'c@r' })])
+  assert.equal(captures(), 3)
+  now += 5_000
+  assert.deepEqual([...(await settle.scan([summary({})]))], [], '切れたら読み直す')
+  assert.equal(captures(), 4)
+})
+
+test('WaitingSettle: 絞り込んだ口の走査は、見なかった相手の前の結果を消さない（#599 のレビュー）', async () => {
+  const tmux = new FakeTmux()
+  let now = 1_000
+  const settle = new WaitingSettle(tmux, ps, 5_000, () => now)
+  await settle.scan([summary({ id: 'a@r' }), summary({ id: 'b@r' })])
+  now += 6_000
+  assert.deepEqual([...(await settle.scan([summary({ id: 'a@r' })]))].sort(), ['a@r', 'b@r'])
+  now += 60_000
+  assert.deepEqual([...(await settle.scan([summary({ id: 'a@r' })]))], ['a@r'], '誰も見なくなった相手はいずれ落ちる')
+})

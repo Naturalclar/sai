@@ -2,7 +2,7 @@
 // 前は 30 分の TTL で何も言わずに「処理中」が消え、受け取り手のいない queue に渡したことが分からなかった
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { QUEUE_DELIVERY_WAIT_MS, QUEUE_FAILED_TTL_MS, TERMINAL_DELIVERY_WAIT_MS, TERMINAL_FAILED_TTL_MS, TERMINAL_REPLY_TTL_MS, TerminalReplies } from './terminal.ts'
+import { QUEUE_DELIVERY_WAIT_MS, QUEUE_FAILED_TTL_MS, TERMINAL_DELIVERY_WAIT_MS, TERMINAL_FAILED_TTL_MS, TERMINAL_REPLY_TTL_MS, TerminalReplies, TERMINAL_DELIVERED_TTL_MS } from './terminal.ts'
 import type { DeliveryQuery } from './terminal.ts'
 
 const T0 = Date.parse('2026-09-11T05:04:03Z')
@@ -123,16 +123,43 @@ test('checkDelivery: 聞いた先が投げたら届いた扱い。聞いてい�
   assert.equal(r.snapshot()['B@r']?.text, 'b2')
 })
 
-test('届いたあとは今までどおり、ターン完了が来なくても TTL で黙って消す（長いターンを失敗と言わない）', async () => {
+test('届いた返信は 30 分を超えても、ターン完了かエラーまで消さない。上限は 6 時間（#559）', async () => {
   let now = T0
   const r = new TerminalReplies(() => now)
   r.start('L@r', '長い作業', 'queue')
+  r.start('U@r', '届かない', 'queue')
   now += TERMINAL_DELIVERY_WAIT_MS
-  await r.checkDelivery(async () => true)
+  const asked: string[] = []
+  await r.checkDelivery(async (id) => {
+    asked.push(id)
+    return id === 'L@r' ? true : null
+  })
+  assert.deepEqual(asked, ['L@r', 'U@r'])
   now = T0 + TERMINAL_REPLY_TTL_MS + 1
-  await r.checkDelivery(async () => false)
   r.settle(() => undefined)
-  assert.equal(r.snapshot()['L@r'], undefined)
+  assert.equal(r.snapshot()['L@r']?.text, '長い作業', '配送済みなら 30 分を超えた正常なターンも処理中のまま')
+  assert.equal(r.snapshot()['U@r'], undefined, '材料が無く null のままだった方は、今までどおり 30 分で黙って消える')
+  // 行が届かないまま終わったターン（Esc で止めた・ペインを閉じた）のために上限がある。無いと永久に 409 になる
+  now = T0 + TERMINAL_DELIVERED_TTL_MS + 1
+  r.settle(() => undefined)
+  assert.equal(r.snapshot()['L@r'], undefined, '6 時間で諦める')
+})
+
+test('settle({ ttl: false }) は行で終わったものだけ消す（配送の確認の前に呼ぶ。終わった返信の rollout を読まない）', async () => {
+  let now = T0
+  const r = new TerminalReplies(() => now)
+  r.start('D@r', '終わった', 'queue')
+  r.start('S@r', 'まだ', 'queue')
+  now = T0 + TERMINAL_REPLY_TTL_MS + 1
+  r.settle((id) => (id === 'D@r' ? new Date(T0 + 1_000).toISOString() : undefined), { ttl: false })
+  assert.equal(r.snapshot()['D@r'], undefined, '行で終わった')
+  assert.equal(r.snapshot()['S@r']?.text, 'まだ', 'TTL は見ない')
+  const asked: string[] = []
+  await r.checkDelivery(async (id) => {
+    asked.push(id)
+    return null
+  })
+  assert.deepEqual(asked, ['S@r'], '終わった返信には聞きに行かない')
 })
 
 test('checkTurnEnd: 届いた返信のターンがエラーで終わったら failed にし、30 分見せる（#475。行が残らないので黙って消えていた）', async () => {

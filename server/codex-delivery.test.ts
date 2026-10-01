@@ -19,7 +19,7 @@ import { row } from './rows/aggregate.test.ts'
 import { FeedStore } from './rows/store.ts'
 import { BuildFreshness } from './local/buildFreshness.ts'
 import { Authenticator } from './auth.ts'
-import { QUEUE_DELIVERY_WAIT_MS, TERMINAL_DELIVERY_WAIT_MS, TerminalReplies } from './reply/terminal.ts'
+import { QUEUE_DELIVERY_WAIT_MS, TERMINAL_DELIVERY_WAIT_MS, TERMINAL_REPLY_TTL_MS, TerminalReplies } from './reply/terminal.ts'
 import type { Tmux } from './reply/terminal.ts'
 import type { ReplyCommand, Runner } from './reply/runner.ts'
 import type { CodexApp, CodexTurnInput } from './reply/codexAppServer.ts'
@@ -141,11 +141,11 @@ test('queue に渡して 2 分たってもターンが始まらなければ、�
   assert.equal(res.status, 202, '失敗にしたら次の返信を 409 にしない')
 })
 
-test('送ったあとに rollout が書かれていれば届いた扱いで、処理中のまま', async () => {
+test('送ったあとに rollout が書かれていれば、次のポーリングが30分後でも処理中のまま（#559）', async () => {
   offset = 0
   assert.equal((await post('Q2@r', 'やって')).status, 202)
   updatedAt.set('Q2@r', new Date(clock() + 5_000).toISOString())
-  offset = TERMINAL_DELIVERY_WAIT_MS + 1_000
+  offset = TERMINAL_REPLY_TTL_MS + 1_000
   const replying = (await sessions()).replying['Q2@r']
   assert.equal(replying?.text, 'やって')
   assert.equal(replying?.failed, undefined)

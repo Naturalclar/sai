@@ -677,7 +677,9 @@ export function createApp(
   const typedStarted = async (sessions: SessionSummary[], id: string, query: DeliveryQuery): Promise<DeliveryAnswer> => {
     const { since } = query
     const s = sessions.find((x) => x.id === id)
-    if (!s || isRemoteHost(s.host, selfHost()) || (s.agent !== 'claude' && s.agent !== 'codex')) return true
+    // 材料が無いときは決めない（null）。届いた扱いにすると、その返信は TTL の上限が 6 時間に延びる（#559 のレビュー）。
+    // 一覧の窓（days）に無い・別のマシン・Claude と Codex 以外は、30 分の TTL で今までどおり黙って消える
+    if (!s || isRemoteHost(s.host, selfHost()) || (s.agent !== 'claude' && s.agent !== 'codex')) return null
     // queue に渡した Codex への返信は、**送った本文そのものが rollout に現れたか**で見る（#474）。mtime は「何か書かれた」で
     // しかなく、受け取り手のいない queue でも別の書き込みで進みうる。rollout が見つからなければ下の mtime の判定に落ちる
     if (s.agent === 'codex' && query.kind === 'queue') {
@@ -697,7 +699,7 @@ export function createApp(
     const at = Math.floor(Date.parse(since) / 1000) * 1000
     if (s.agent === 'claude' && s.last_user_ts && Date.parse(s.last_user_ts) >= at) return true
     const { updated_at } = await progress.read(s)
-    if (!updated_at) return s.agent === 'claude' ? !s.last_user_ts : true
+    if (!updated_at) return s.agent === 'claude' && s.last_user_ts ? false : null
     return Date.parse(updated_at) >= at
   }
   /**
@@ -738,7 +740,9 @@ export function createApp(
   /** 預かりに並んだ「起こす」（#594 の 3）。回ったら渡した扱いにし、取り消されたら渡していないままにする */
   const wakeQueued = new Map<string, { from: string; ids: string[]; queueId: string; origin: string }>()
   const replyingOf = async (sessions: SessionSummary[]): Promise<ReplyingMap> => {
-    typed.settle((id) => sessions.find((s) => s.id === id)?.last_turn)
+    // 先に、行が届いて終わった返信を片付ける（TTL は見ない）。終わっている返信の配送を rollout を読んで確かめない（#559 のレビュー）
+    const lastTurnOf = (id: string) => sessions.find((s) => s.id === id)?.last_turn
+    typed.settle(lastTurnOf, { ttl: false })
     // 答えを返したのにプロセスが終わらない CLI（実測: `opencode run -s`）は、行が届いた時点で終わりにする（#375）。
     // 当てるのは OpenCode だけ（Claude の `-p` と SAI 管理の Codex は普通に終わるので、挙動を変えない）
     for (const id of run.settle?.((rid) => opencodeTurnOf(sessions, rid)) ?? []) await drain(id)
@@ -746,6 +750,8 @@ export function createApp(
       // 画面の失敗は時間で消えるので、届かなかったことは reply.log にも残す（#474。あとから辿れるように）
       await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${miss.id} ${miss.kind === 'queue' ? 'queue に渡した返信が届いていない' : '端末に打ち込んだ返信でターンが始まっていない'}: ${miss.reason}\n`).catch(() => {})
     }
+    // 配送確認を TTL の整理より先にする（#559）。30 分以上ポーリングが空いても、届いていた長いターンの仮バブルを消さない
+    typed.settle(lastTurnOf)
     // 届いたが、ターンがエラーで終わった（#475。行が残らないので、ここで拾わないと黙って消える）
     for (const miss of await typed.checkTurnEnd((id, query) => typedTurnError(sessions, id, query))) {
       await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${miss.id} ${miss.kind === 'queue' ? 'queue に渡した' : '端末に打ち込んだ'}返信のターンがエラーで終わった: ${miss.reason}\n`).catch(() => {})

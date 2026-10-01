@@ -1049,6 +1049,9 @@
   .gh .handed { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 8px; padding: 0 6px; }
   .gh .handed.done { color: var(--ink); }
   .handed-note { font-size: 11px; color: var(--muted); margin: 2px 0 -2px; text-align: right; }
+  /* 返答の一部を選んだときの「引用して返信」（#604）。選択のすぐ下に浮かせる（fixed。位置は quoteButtonPosition()） */
+  .quote-btn { position: fixed; z-index: 15; font: inherit; font-size: 12px; font-weight: 600; padding: 5px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--accent); box-shadow: 0 4px 14px rgba(0, 0, 0, .18); cursor: pointer; white-space: nowrap; }
+  @media (pointer: coarse) { .quote-btn { font-size: 14px; padding: 8px 12px; } }
   /* 送り方（#579。要約してから送る・そのまま・新しいセッション）。モデル・許可の選択と同じ控えめな見た目 */
   .reply .send-mode { font: inherit; font-size: 11px; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 2px 4px; max-width: 12em; }
   /* iOS は 16px 未満の欄にフォーカスすると拡大する（#122） */

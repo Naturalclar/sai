@@ -119,6 +119,14 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 1 回しか読まないので、`SessionView` は `ReplyBox` に `key={`reply:${id}`}` を付けてセッションごとに作り直す。今も `usePolling` が id の変化で `data` を空にして一度外れるが、それは副作用で、id が変わった直後の 1 回の描画では A の `data` のまま id だけ B になる。作り直さないと A の打ちかけを B に送れてしまう。
 - フィードには渡さない（返信先が `@` で動き、本文だけ戻しても合わない）。
 
+### 返答の一部を引用して入れる（#604）
+
+- 返答のバブルの中で文字を選ぶと、選択のすぐ下に `QuoteButton`（「引用して返信」）が出る。押すと打ちかけの末尾に Markdown の引用（`> …`）と空行を足し、入力欄にフォーカスを移す（カーソルは引用の下）。**送らない**（差分の行コメント #511 と同じで、足すだけ）。
+- 判定と組み立ては `web/src/quoteReply.ts` の純粋関数（`quoteReply.test.ts`）: `quotable()`（**1 つの返答のバブルの中**だけ。自分の入力・待ちのバブル・バブルをまたいだ選択・空白だけには出さない）、`quoteText()`（行ごとに `> `、前後の空行と行末の空白を落とし、`QUOTE_MAX_CHARS`＝600 字で切って `…`）、`quoteInsert()`、`quoteButtonPosition()`（選択の下の左端。画面からはみ出さない）。
+- 選択を読むのは `web/src/useQuoteSelection.ts`（`selectionchange`・スクロール・リサイズで読み直す。バブルは `.msg` の `data-side`＝`agent` と `.waiting` の有無で見る）。**ボタンを押しても選択を外さない**（pointerdown / mousedown の既定を止める）。タッチ端末は押した瞬間に選択が外れてから click が届くので、外れてから消すまで `CLEAR_DELAY_MS`（250ms）待つ。
+- `Chat` は `onQuote` を渡されたときだけ見る。渡すのは `SessionView` だけ（返信欄を出しているとき）で、フィード・要対応には出さない。`SessionView` が `quote`（`{ text, seq }`）を持ち、`ReplyBox` が `insert`（#511）と同じく **`seq` が増えたときだけ** `appendInsert()` で足す。`ReplyBox` は `key` でセッションごとに作り直され、作ったときの `seq` は当てた扱いにするので、別のセッションには持ち越さない。
+- 入力欄はただの textarea のまま（引用をチップにしない）。箇条書きの項目ごとの印は出していない。
+
 ## ⌘K と検索
 
 - `⌘K` の移動用モーダルは `CommandPalette` + `useCommandPalette`。候補の組み立てと絞り込みは `shared/palette.ts`（`paletteItems` / `filterPalette` / `paletteHash` / `moveIndex`）で、`shared/palette.test.ts` で回す。

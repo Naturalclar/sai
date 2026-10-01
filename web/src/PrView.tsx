@@ -1,3 +1,4 @@
+import { RefreshButton } from './RefreshButton'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { parseUnifiedDiff } from '../../shared/diff.ts'
 import { replyBlockedReason } from '../../shared/reply.ts'
@@ -27,7 +28,7 @@ const STATE_LABEL: Record<string, string> = { OPEN: 'open', MERGED: 'マージ�
 
 /**
  * PR 1 本（#524）。題名・出した人・ブランチ・チェック・本文と、差分を**セッションの差分と同じビューア**（`DiffView`）で出す。
- * 開いたときに 1 回と「読み直す」のときだけ取る。
+ * 開いたときに 1 回と「更新」のときだけ取る。
  *
  * **その PR を書いたセッションが見つかれば、差分の行にコメントを書いてそのセッションの入力欄に入れられる**（#525）。
  * 書いたセッションは `prAuthorSession()`（同じリポジトリで、いまのブランチが head と同じ一番新しいもの）。
@@ -124,9 +125,7 @@ export function PrView({ repo, number, onStatus, onInsertToSession }: { repo: st
               GitHub で開く
             </a>
           )}
-          <button type="button" onClick={() => void load()} disabled={busy}>
-            {busy ? '読んでいます…' : '読み直す'}
-          </button>
+          <RefreshButton busy={busy} onClick={() => void load()} />
         </span>
       </div>
       {error && !loaded && <div className="empty">取得失敗: {error}</div>}

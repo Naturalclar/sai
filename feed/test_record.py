@@ -705,6 +705,20 @@ class RecordTest(unittest.TestCase):
         outside = Path(self.tmp.name) / "plain"
         outside.mkdir()
         self.assertEqual(record.toplevel_name(str(outside)), "", "git の外は空（呼び出し側が cwd の名前に落とす）")
+        # git は実パスを返すので、シンボリックリンク越しでもリンクの名前にしない
+        link = Path(self.tmp.name) / "link"
+        link.symlink_to(self.cwd)
+        (self.cwd / "sub").mkdir(exist_ok=True)
+        self.assertEqual(record.toplevel_name(str(link / "sub")), self.cwd.name)
+
+    def test_repo_stays_the_cwd_name_when_git_refuses(self):
+        """git が「断った」とき（時間切れではない）は、今までどおり cwd の名前。上に .git があっても変えない
+        （変えると、既にあるセッションの repo＝エンティティ ID が変わる）"""
+        inside = self.cwd / ".git" / "hooks"
+        inside.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(setattr, record, "_git_gave_up", record._git_gave_up)
+        record._git_gave_up = False
+        self.assertEqual(record.git_facts(str(inside))[0], "hooks")
 
     def test_hard_timer_is_cancelled_before_exit(self):
         """終わるときに保険のタイマーを外す。残したままだと、後片付けが遅いあいだに届いた SIGALRM で非 0 になる

@@ -227,15 +227,24 @@ def detect_cwd(payload: dict) -> str:
         return ""
 
 
+# git が「答えなかった」（時間切れ・予算切れ）ことがあったか。「断った」（リポジトリの外・safe.directory）とは分ける
+_git_gave_up = False
+
+
 def _git(cwd: str, *args: str) -> str:
     # 混んでいて git が遅いときは、もう起こさない（#613）。git に使い切ると、行を書く前に 15 秒の保険に掛かる。
     # 取れなかった値は空（branch / remote / project）。repo だけは `toplevel_name()` で git 無しでも引く
+    global _git_gave_up
     if _STARTED is not None and time.monotonic() - _STARTED > GIT_BUDGET_SECONDS:
+        _git_gave_up = True
         return ""
     try:
         out = subprocess.run(
             ["git", "-C", cwd, *args], capture_output=True, text=True, timeout=3
         )
+    except subprocess.TimeoutExpired:
+        _git_gave_up = True
+        return ""
     except Exception:
         return ""
     return out.stdout.strip() if out.returncode == 0 else ""
@@ -248,7 +257,8 @@ def toplevel_name(cwd: str) -> str:
     **エンティティ ID は `<セッション>@<repo>`** なので、ここが cwd の名前に落ちると、下のディレクトリで動いている
     セッションの行が別のエンティティになる。worktree は `.git` がファイルだが、あるディレクトリは同じ
     """
-    path = os.path.abspath(cwd)
+    # git は実パスを返すので、こちらもシンボリックリンクを解いてから上がる（解かないとリンクの名前になる）
+    path = os.path.realpath(cwd)
     for _ in range(64):
         if os.path.exists(os.path.join(path, ".git")):
             return os.path.basename(path.rstrip(os.sep))
@@ -336,7 +346,9 @@ def git_facts(cwd: str) -> tuple[str, str]:
         return repo, ""
     toplevel = _git(cwd, "rev-parse", "--show-toplevel")
     if not toplevel:
-        return toplevel_name(cwd) or repo, ""
+        # **git が答えなかったときだけ**代わりを引く。断ったとき（リポジトリの外・`.git` の中・safe.directory）は
+        # 今までどおり cwd の名前（そこを変えると、既にあるセッションの repo＝エンティティ ID が変わる）
+        return (toplevel_name(cwd) if _git_gave_up else "") or repo, ""
     repo = os.path.basename(toplevel.rstrip("/")) or repo
     # symbolic-ref はコミットが1つも無い直後のブランチでも取れる。detached なら短い SHA
     branch = _git(cwd, "symbolic-ref", "--short", "-q", "HEAD") or _git(cwd, "rev-parse", "--short", "HEAD")

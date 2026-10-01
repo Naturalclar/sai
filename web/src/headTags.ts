@@ -21,7 +21,7 @@ export type HeadTag =
   | { kind: 'mode'; mode: string }
   | { kind: 'context'; tokens: number }
 
-export type HeadTagSession = Pick<SessionSummary, 'host' | 'session_source' | 'terminal' | 'waiting' | 'archived' | 'permission_mode' | 'meta'>
+export type HeadTagSession = Pick<SessionSummary, 'host' | 'session_source' | 'terminal' | 'waiting' | 'archived' | 'permission_mode' | 'meta'> & Partial<Pick<SessionSummary, 'last_kind' | 'last_turn_ts'>>
 
 export interface HeadTagInput {
   /** サーバのマシン名（応答の host）。行の host と違えば別のマシンの印 */

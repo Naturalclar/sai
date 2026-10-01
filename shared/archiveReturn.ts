@@ -7,9 +7,13 @@ import type { SessionSummary } from './types.ts'
  * 戻ってきたセッションなら、アーカイブした時刻（`meta.archived_at`）。そうでなければ空。
  * **`archived_at` があるのに `archived` でない**ときだけ（アーカイブ済みのままなら「アーカイブ」の印が出ている）
  */
-export function returnedFromArchive(s: Pick<SessionSummary, 'meta' | 'archived'>): string {
+export function returnedFromArchive(s: Pick<SessionSummary, 'meta' | 'archived'> & Partial<Pick<SessionSummary, 'last_kind' | 'last_turn_ts'>>): string {
   const at = s.meta?.archived_at ?? ''
-  return at && !s.archived && Number.isFinite(Date.parse(at)) ? at : ''
+  if (!at || s.archived || !Number.isFinite(Date.parse(at))) return ''
+  // アーカイブしたあと端末を閉じただけ（`SessionEnd` の行が増えただけ）なら、返信は続いていないので印を出さない（#610 のレビュー）。
+  // 最後の行が終わりの行で、アーカイブより後に終わったターンが無いとき
+  if (s.last_kind === 'end' && !(Date.parse(s.last_turn_ts ?? '') > Date.parse(at))) return ''
+  return at
 }
 
 type Sibling = Pick<SessionSummary, 'id' | 'project' | 'repo' | 'host' | 'start' | 'archived'>

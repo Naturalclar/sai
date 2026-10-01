@@ -29,3 +29,11 @@ test('newerSibling: 同じ worktree でアーカイブのあとに始まった�
   assert.equal(newerSibling(self, [self, peer('old@main', '2026-09-02T00:00:00Z')]), undefined, 'アーカイブより前に始まったものは出さない')
   assert.equal(newerSibling({ ...self, meta: {} }, peers), undefined, '戻ってきたセッションでなければ探さない')
 })
+
+test('returnedFromArchive: アーカイブのあと端末を閉じただけ（SessionEnd の行だけ増えた）なら印を出さない（#610 のレビュー）', () => {
+  const before = '2026-01-01T00:00:00+09:00'
+  assert.equal(returnedFromArchive({ meta: { archived_at: AT }, last_kind: 'end', last_turn_ts: before }), '', 'アーカイブより後に終わったターンが無い')
+  assert.equal(returnedFromArchive({ meta: { archived_at: AT }, last_kind: 'end' }), '', 'ターン完了が 1 つも無い')
+  assert.equal(returnedFromArchive({ meta: { archived_at: AT }, last_kind: 'end', last_turn_ts: '2099-01-01T00:00:00+09:00' }), AT, 'ターンが回ってから閉じた')
+  assert.equal(returnedFromArchive({ meta: { archived_at: AT }, last_kind: 'turn', last_turn_ts: before }), AT, '終わりの行でなければ今までどおり')
+})

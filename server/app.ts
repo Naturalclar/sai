@@ -2862,7 +2862,7 @@ export function createApp(
     if (session.agent !== 'claude' || !cwd) return json(res, empty)
     const { sources, rules } = await collectPermissions(cwd, { home: homedir() })
     // よく許可しているが、許可のルールに無いもの（#445。出すだけで、足すのはチャットの [常に許可]）
-    const frequent = approvalLog.frequent(cwd, new Set(rules.filter((r) => r.kind === 'allow').map((r) => r.rule)))
+    const frequent = approvalLog.frequent(cwd, rules.filter((r) => r.kind === 'allow').map((r) => r.rule))
     return json(res, { ...empty, sources, rules, ...(frequent.length ? { frequent } : {}) } satisfies SessionPermissionsResponse)
   }
 

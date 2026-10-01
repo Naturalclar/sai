@@ -40,7 +40,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 記録は `server/approvals/approvalLog.ts` の `ApprovalLog`（`<feed dir>/approvals.jsonl`）。`answerApproval()` が Claude の許可に答えたときと、Jev の自動の「常に許可」（`jevAutoOnce()`）のあとに `logAnswer()` が 1 行足す（`ApprovalLogRow`: `ts` / `id` / `cwd` / `tool` / `rule` / `by` / `behavior` / `remember` / `waited_s`）。cwd はセッションの行から取り、コマンドの全文は書かない。Codex・OpenCode・端末のダイアログの答えは足さない。
 - 回数は起動時にこのファイルを読み直して持つ（`countsTowardSuggest()`: 人が許可した・ルールがある・cwd が分かる行を、cwd とルールごとに直近 `APPROVAL_COUNT_DAYS`（30）日ぶん）。
 - `approvalsNow()` が、ルールの作れる Claude の許可（`countedRule()`）に `count`（数えた回数 + 1）と `suggest`（`APPROVAL_SUGGEST_AT`（3）以上）を付ける。**付けるだけで、答えもルールも書かない**（読む経路なので）。
-- 画面は `ApprovalBubble` が `countNote()` の 1 行を出し、`suggest` なら [常に許可] に `suggest` のクラスを付ける。盾のモーダルは `GET …/permissions` の `frequent`（`ApprovalLog.frequent()`。2 回以上で、許可のルールに無いもの）を上に出す。
+- 画面は `ApprovalBubble` が `countNote()` の 1 行を出し、`suggest` なら [常に許可] に `suggest` のクラスを付ける。盾のモーダルは `GET …/permissions` の `frequent`（`ApprovalLog.frequent()`。2 回以上で、許可のルールに覆われていないもの。`ruleCovered()` は同じ表記のほか、より広い Bash のルール（`Bash(gh:*)`）と別の書き方（`Bash(gh pr *)`）も覆っている扱いにする）を上に出す。
 - 人の答えは**記録に足してから**応答を返す（次のポーリングの「何回目」がずれない）。
 
 ## セッションに効いている許可

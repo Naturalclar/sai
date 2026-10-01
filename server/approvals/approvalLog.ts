@@ -4,7 +4,7 @@
 // 派生の記録なので、ファイルを消しても数え直しになるだけ（記録の JSONL とは別物）
 import { readFileSync } from 'node:fs'
 import { appendFile } from 'node:fs/promises'
-import { APPROVAL_COUNT_DAYS, APPROVAL_FREQUENT_MAX, countsTowardSuggest } from '../../shared/approvalCounts.ts'
+import { APPROVAL_COUNT_DAYS, APPROVAL_FREQUENT_MAX, countsTowardSuggest, ruleCovered } from '../../shared/approvalCounts.ts'
 import type { ApprovalLogRow } from '../../shared/types.ts'
 
 export const APPROVAL_LOG_FILE = 'approvals.jsonl'
@@ -61,8 +61,8 @@ export class ApprovalLog {
     return (this.allowed.get(key(cwd, rule)) ?? []).filter((at) => at >= since).length
   }
 
-  /** その cwd でよく許可しているルール（多い順。2 回以上）。`except` はもう許可のルールにあるもの */
-  frequent(cwd: string, except: ReadonlySet<string>): { rule: string; count: number }[] {
+  /** その cwd でよく許可しているルール（多い順。2 回以上）。`allowed` はもう許可のルールにあるもの（覆われているものは出さない） */
+  frequent(cwd: string, allowed: readonly string[]): { rule: string; count: number }[] {
     if (!cwd) return []
     const prefix = key(cwd, '')
     const out: { rule: string; count: number }[] = []
@@ -70,7 +70,7 @@ export class ApprovalLog {
       if (!k.startsWith(prefix)) continue
       const rule = k.slice(prefix.length)
       const count = this.count(cwd, rule)
-      if (count >= 2 && !except.has(rule)) out.push({ rule, count })
+      if (count >= 2 && !ruleCovered(rule, allowed)) out.push({ rule, count })
     }
     return out.sort((a, b) => b.count - a.count || a.rule.localeCompare(b.rule)).slice(0, APPROVAL_FREQUENT_MAX)
   }

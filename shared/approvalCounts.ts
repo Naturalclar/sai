@@ -32,3 +32,25 @@ export function countNote(a: Pick<Approval, 'count' | 'suggest'>, label: string)
   if (!a.count || a.count < 2 || !label) return ''
   return `${a.count} 回目の許可（${label}）${a.suggest ? '。「常に許可」にすると、この形は聞かれなくなります' : ''}`
 }
+
+/** `Bash(gh pr:*)` / `Bash(gh pr *)` の前方一致の頭（`gh pr`）。前方一致の Bash のルールでなければ null */
+function bashPrefix(rule: string): string | null {
+  const m = /^Bash\((.*?)(?::\*| \*)\)$/.exec(rule)
+  return m ? m[1]!.trim() : null
+}
+
+/**
+ * そのルールが、もう許可のルールで覆われているか（#621 のレビュー）。同じ表記のほか、**より広いルール**
+ * （`Bash` そのもの・`Bash(gh:*)` は `Bash(gh pr:*)` を覆う）と**別の書き方**（`Bash(gh pr *)`）も覆っている扱いにする。
+ * 見るのは設定ファイルの許可のルールだけ（`SAI_CLAUDE_ARGS` の `--allowedTools` は見ない）
+ */
+export function ruleCovered(rule: string, allowed: readonly string[]): boolean {
+  if (allowed.includes(rule)) return true
+  const prefix = bashPrefix(rule)
+  if (prefix === null) return false
+  return allowed.some((a) => {
+    if (a === 'Bash' || a === 'Bash(*)') return true
+    const p = bashPrefix(a)
+    return p !== null && (p === '' || prefix === p || prefix.startsWith(`${p} `))
+  })
+}

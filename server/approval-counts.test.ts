@@ -149,8 +149,9 @@ test('ApprovalLog: 数えるのは直近の日数ぶんだけ。Jev の自動・
     assert.equal(log.count('/other', 'Bash(gh pr:*)'), 0)
     log.record({ ...base, ts: at(0) })
     assert.equal(log.count('/w', 'Bash(gh pr:*)'), 2)
-    assert.deepEqual(log.frequent('/w', new Set()), [{ rule: 'Bash(gh pr:*)', count: 2 }], '1 回だけのものは出さない')
-    assert.deepEqual(log.frequent('/w', new Set(['Bash(gh pr:*)'])), [], 'もうルールにあるものは出さない')
+    assert.deepEqual(log.frequent('/w', []), [{ rule: 'Bash(gh pr:*)', count: 2 }], '1 回だけのものは出さない')
+    assert.deepEqual(log.frequent('/w', ['Bash(gh pr:*)']), [], 'もうルールにあるものは出さない')
+    assert.deepEqual(log.frequent('/w', ['Bash(gh:*)']), [], 'より広いルールで覆われているものも出さない（#621 のレビュー）')
   } finally {
     await rm(d, { recursive: true, force: true })
   }

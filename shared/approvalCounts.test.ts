@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { countedRule, countNote, countsTowardSuggest } from './approvalCounts.ts'
+import { countedRule, countNote, countsTowardSuggest, ruleCovered } from './approvalCounts.ts'
 import type { ApprovalLogRow } from './types.ts'
 
 test('countedRule: 「常に許可」が出せる許可だけ数える（Claude で、ルールが作れるツール）', () => {
@@ -25,4 +25,12 @@ test('countNote: 2 回目から数字を出し、勧める回数からは一言�
   assert.equal(countNote({}, 'Bash(gh pr:*)'), '')
   assert.equal(countNote({ count: 2 }, 'Bash(gh pr:*)'), '2 回目の許可（Bash(gh pr:*)）')
   assert.equal(countNote({ count: 3, suggest: true }, 'Bash(gh pr:*)'), '3 回目の許可（Bash(gh pr:*)）。「常に許可」にすると、この形は聞かれなくなります')
+})
+
+test('ruleCovered: 同じ表記・より広いルール・別の書き方は覆っている。狭いルールや別のコマンドは覆っていない（#621 のレビュー）', () => {
+  const rule = 'Bash(gh pr:*)'
+  for (const allowed of ['Bash(gh pr:*)', 'Bash(gh:*)', 'Bash(gh pr *)', 'Bash(gh *)', 'Bash']) assert.equal(ruleCovered(rule, [allowed]), true, allowed)
+  for (const allowed of ['Bash(gh pr create:*)', 'Bash(g:*)', 'Bash(git:*)', 'Bash(gh pr view)', 'mcp__github__create_issue']) assert.equal(ruleCovered(rule, [allowed]), false, allowed)
+  assert.equal(ruleCovered('mcp__github__create_issue', ['mcp__github__create_issue']), true)
+  assert.equal(ruleCovered('mcp__github__create_issue', ['Bash']), false)
 })

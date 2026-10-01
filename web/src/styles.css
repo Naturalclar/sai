@@ -1058,9 +1058,27 @@
   .quote-btn { position: fixed; z-index: 15; font: inherit; font-size: 12px; font-weight: 600; padding: 5px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--accent); box-shadow: 0 4px 14px rgba(0, 0, 0, .18); cursor: pointer; white-space: nowrap; }
   @media (pointer: coarse) { .quote-btn { font-size: 14px; padding: 8px 12px; } }
   /* 送り方（#579。要約してから送る・そのまま・新しいセッション）。モデル・許可の選択と同じ控えめな見た目 */
-  .reply .send-mode { font: inherit; font-size: 11px; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 2px 4px; max-width: 12em; }
-  /* iOS は 16px 未満の欄にフォーカスすると拡大する（#122） */
-  @media (pointer: coarse) { .reply .send-mode.send-mode { font-size: 16px; min-height: 36px; } }
+  .reply .send-mode { position: relative; display: inline-flex; align-items: center; flex: none; font-size: 11px; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 2px 6px; white-space: nowrap; }
+  .reply .send-mode.picked { border-color: var(--accent); color: var(--accent); }
+  .reply .send-mode .label { display: inline-flex; align-items: center; gap: 3px; pointer-events: none; }
+  .reply .send-mode .short { display: none; }
+  .reply .row button[type="submit"] .send-short { display: none; }
+  .reply .send-mode .caret { font-size: 9px; opacity: .7; }
+  /* 透明なネイティブの select を上に重ねる（押すと OS のメニューが開く。中身は長い名前のまま。#629） */
+  .reply .send-mode select { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; font: inherit; border: 0; margin: 0; padding: 0; appearance: none; }
+  .reply .send-mode:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
+  /* 狭い画面・タッチ端末では短い表記だけ（幅 390 で 16px の select が行の半分を取り、送信ボタンが次の段に落ちていた。#629）。
+     iOS は 16px 未満の欄にフォーカスすると拡大するので、重ねた select は 16px にする（#122） */
+  @media (max-width: 900px), (pointer: coarse) {
+    .reply .send-mode .long { display: none; }
+    .reply .send-mode .short { display: inline; }
+    .reply .row button[type="submit"] .send-long { display: none; }
+    .reply .row button[type="submit"] .send-short { display: inline; }
+  }
+  @media (pointer: coarse) {
+    .reply .send-mode { font-size: 13px; min-height: 36px; padding: 2px 8px; box-sizing: border-box; }
+    .reply .send-mode select { font-size: 16px; }
+  }
   .notice.steered { font-size: 12px; color: var(--muted); }
   .reply .diff-float button.diff-btn, .msg button.diff-btn { display: inline-flex; align-items: center; gap: 5px; background: transparent; color: var(--muted); border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px; font-family: inherit; font-size: 12px; font-weight: 400; cursor: pointer; }
   .reply .diff-float button.diff-btn:hover, .msg button.diff-btn:hover { background: var(--hover); color: var(--ink); }

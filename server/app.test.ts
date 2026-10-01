@@ -2621,8 +2621,16 @@ test('POST /api/sessions/new: handoff は最後のターン（引き継ぎの返
   assert.equal((await postNew({ from: 'X1@r', handoff: true })).status, 400, '引き継げるのも Claude のセッションだけ')
   assert.equal((await postNew({ from: 'H1@r', handoff: true }, { Origin: 'https://evil.example' })).status, 403, '同一オリジンのみ')
 
-  const res = await postNew({ from: 'H1@r', handoff: true, text: '勝手な本文' })
-  assert.equal(res.status, 202)
+  // 前のセッションが処理中なら始めない
+  runner.busy.set('H1@r', { since: new Date().toISOString(), text: 'x' })
+  assert.equal((await postNew({ from: 'H1@r', handoff: true })).status, 409)
+  runner.busy.delete('H1@r')
+  assert.equal(runner.started.length, 0)
+
+  // 2 枚の画面で同時に押しても、始まるのは 1 つ（#622 のレビュー）
+  const [res, rival] = await Promise.all([postNew({ from: 'H1@r', handoff: true, text: '勝手な本文' }), postNew({ from: 'H1@r', handoff: true })])
+  assert.deepEqual([res.status, rival.status], [202, 409])
+  assert.equal(runner.started.length, 1)
   const fresh = (await res.json()) as NewSessionResponse
   const cmd = runner.started[0]!.cmd
   assert.equal(cmd.cwd, dir, 'cwd は from から')

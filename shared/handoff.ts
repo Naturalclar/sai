@@ -31,7 +31,7 @@ export function isHandoffPrompt(userText: string | undefined): boolean {
 
 /**
  * そのセッションの行から、書けている引き継ぎを取る。**最後のターン完了の行**の入力が依頼文で、返答が空でないときだけ。
- * あとから別のターンが回っていれば（人が直しを頼んだ・作業を続けた）null——古い引き継ぎで始めない
+ * あとから別のターンが回っていれば（人が直しを頼んだ・作業を続けた。**入力の行だけでまだ終わっていないものも**）null——古い引き継ぎで始めない
  */
 export function handoffReady(rows: readonly Pick<FeedRow, 'ts' | 'event' | 'text' | 'user_text'>[]): { ts: string; text: string } | null {
   let last: Pick<FeedRow, 'ts' | 'event' | 'text' | 'user_text'> | null = null
@@ -40,6 +40,9 @@ export function handoffReady(rows: readonly Pick<FeedRow, 'ts' | 'event' | 'text
     if (!last || Date.parse(r.ts) >= Date.parse(last.ts)) last = r
   }
   if (!last || !isHandoffPrompt(last.user_text)) return null
+  // 引き継ぎのあとに人が入力していれば（まだ終わっていないターンが回っている）、それも「別のターン」
+  const lastMs = Date.parse(last.ts)
+  if (rows.some((r) => eventKind(r.event, r.text) === 'resume' && Date.parse(r.ts) > lastMs)) return null
   const text = (last.text ?? '').trim()
   return text ? { ts: last.ts, text } : null
 }

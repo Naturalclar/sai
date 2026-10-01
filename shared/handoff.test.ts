@@ -23,6 +23,9 @@ test('handoffReady: 最後のターン完了の入力が依頼文のときだけ
   assert.equal(handoffReady([a, h, turn('2026-10-01T12:00:00+09:00', '番号も書いて', '直しました')]), null)
   // ターン完了ではない行（待ち・入力）は「最後のターン」に数えない
   assert.deepEqual(handoffReady([h, turn('2026-10-01T12:00:00+09:00', '', '許可待ち: Bash: ls', 'PermissionRequest')])?.ts, h.ts)
+  // 引き継ぎのあとに人が入力していて、まだ終わっていない（#622 のレビュー）。前の入力は関係ない
+  assert.equal(handoffReady([h, turn('2026-10-01T11:30:00+09:00', '続けて', '', 'UserPromptSubmit')]), null)
+  assert.deepEqual(handoffReady([turn('2026-10-01T10:59:00+09:00', HANDOFF_PROMPT, '', 'UserPromptSubmit'), h])?.ts, h.ts)
   // 返答が空・まだ終わっていない・行が無い
   assert.equal(handoffReady([turn('2026-10-01T11:00:00+09:00', HANDOFF_PROMPT, '  ')]), null)
   assert.equal(handoffReady([a]), null)

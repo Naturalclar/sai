@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { FeedRow } from '../../shared/types.ts'
 import { aggregate, clip, facets, filterSessions, localDate, recentDates, recordVersionOf } from './aggregate.ts'
-import { withHandedReplies } from '../../shared/agentMessages.ts'
+import { STEERED_NOTE, withHandedReplies } from '../../shared/agentMessages.ts'
 
 export function row(ts: Date, session: string, over: Partial<FeedRow> = {}): FeedRow {
   return {
@@ -384,3 +384,15 @@ test('aggregate: 題名と最後の入力は、SAI が頭に足した返答の�
   assert.equal(s!.title, '579着手して')
   assert.equal(s!.last_user_text, '579着手して')
 })
+
+test('aggregate: 返答を渡すためだけに SAI が置いた本文（#594 の 2・3）は、題名にも最後の入力にもしない', () => {
+  const t = new Date()
+  const steered = withHandedReplies(STEERED_NOTE, [{ message_id: 'ab', to_name: 'かなで', status: 'done', text: 'PR #9' }])
+  const [s] = aggregate([
+    row(new Date(t.getTime() - 2000), 'S', { user_text: '579着手して', event: 'UserPromptSubmit', text: '' }),
+    row(t, 'S', { user_text: steered, event: 'UserPromptSubmit', text: '' }),
+  ])
+  assert.equal(s!.title, '579着手して')
+  assert.equal(s!.last_user_text, '579着手して')
+})
+

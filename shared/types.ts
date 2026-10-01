@@ -784,6 +784,11 @@ export interface AgentSendRequest {
   from: string
   to: string
   text: string
+  /**
+   * **返答が来たら送り元を起こす**（#594 の 3）。同じターンで `wake` を付けて送ったものが全部返った（か失敗した）ときに、
+   * 送り元のターンを 1 回だけ起こして返答を渡す。既定は付けない（返答は次のターンの頭に届く）。起こされたターンからは送れない
+   */
+  wake?: boolean
 }
 
 /** `POST /api/agent/send` の応答 */

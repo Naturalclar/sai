@@ -54,7 +54,12 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 記録の `user_text` には塊ごと残る（SAI は行を書き換えない）。画面は `splitHandedReplies()` で塊を外して見せる: 自分のバブル（`chatGroups.ts` の `Utterance.handedReplies` →「返答 N 件を添えました」）・仮バブル（`PendingBubble`）・題名と最後の入力（`aggregate.ts`）・↑ の履歴（`replyHistory.ts`）。
 - 返答のバブルの見出しには、送り元の会話に渡したか（`AgentReplyTag.handed_at`）を「会話に渡した / 次のターンで渡す」で出す。
 - 見出しの `REPLY_NOTE` と `sai_send` / `sai_wait` の説明（`approve-mcp.ts` の `AGENT_TOOLS`）は「待たずに終えてよい・返答は次のターンの頭に届く・`sai_wait` はその場で答えが要る短い質問だけ」に合わせた。
-- まだやっていないもの（#594 の 2・3）: 送り元がまだ回っていれば入力の口（#386）からその場で足す、`sai_send` で「返答が来たら起こす」を選ぶ。
+- **送り元がまだ回っていれば、その場で足す**（#594 の 2）: `app.ts` の `deliverReplies()` が、入力の口（#386 の stream-json）が開いている送り元（`run.snapshot()[from].interruptible`。要約だけのターンは除く）に、返答の塊＋`STEERED_NOTE` を `run.steer()` で書く。足せたら「渡した」にする（次のターンには重ねない）。読み直しは増えない。呼ぶのは相手のターンが終わったとき（`-p` の `onExit`・Codex の `onTurnEnd`）と、画面のポーリングのついで（`drainAll()`）。
+- **「返答が来たら起こす」**（#594 の 3。`sai_send` の `wake` → `AgentSendRequest.wake` → `AgentMessage.wake` / `turn` / `url`）: 同じ送り元・同じターンで `wake` を付けたもの（`AgentMessages.wakeGroups()`）が**全部返った（か失敗した）**ら、`deliverReplies()` が送り元のターンを **1 回だけ**起こす（本文は返答の塊＋`WAKE_NOTE`。ほかの未渡しの返答も一緒に渡す）。
+  - 起こすのは `launch(from, …, { queue: true, origin })` で、**メッセージで起こしたターンと同じ扱い**にする: 起こしたターンからは送れない（連鎖 1 段。#311）、送り元が処理中なら預かりに並ぶ、人が「送信を止める」を押せば預かりからも取り消される。
+  - 起こさない場面: 送ったターンがまだ回っている（上の「その場で足す」に任せる）・人が「送信を止める」にしている・送り元のエージェントの使用量の枠が残り少ない（`usageRefusal()`）・一度起こせなかった組（ポーリングのたびに繰り返さない）。起こさなかった分は未渡しのまま残り、次に SAI から回るターンの頭で渡る。理由は reply.log に 1 回だけ残す。
+  - `/mcp`（tailnet）の `sai_send` には `wake` を出さない（送り元がセッションではない）。
+- `STEERED_NOTE` / `WAKE_NOTE` だけの入力は人の入力ではないので、題名・一覧の「最後の入力」（`aggregate.ts`）・↑ の履歴には使わない（`isHandedOnly()`）。
 
 ### トークンの歯止め（#311）
 

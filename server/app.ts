@@ -144,6 +144,8 @@ import {
   agentReplyRows,
   HANDED_KEEP_DAYS,
   splitHandedReplies,
+  STEERED_NOTE,
+  WAKE_NOTE,
   withHandedReplies,
   replierName,
   agentTargets,
@@ -1536,6 +1538,8 @@ export function createApp(
       await run.start(id, cmd, () => {
         approvals.drop(id)
         void drain(id)
+        // 終わったターンが誰かへの返答なら、送り元へ渡す（#594）
+        void deliverReplies()
       })
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code
@@ -1944,6 +1948,8 @@ export function createApp(
       await run.start(id, cmd, () => {
         approvals.drop(id)
         void drain(id)
+        // 終わったターンが誰かへの返答なら、送り元へ渡す（#594）
+        void deliverReplies()
       })
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code
@@ -2007,10 +2013,100 @@ export function createApp(
   /** 預かりのあるセッションを全部見る。画面のポーリングのついでに呼ぶ */
   const drainAll = async (): Promise<void> => {
     for (const id of queue.ids()) await drain(id)
+    await deliverReplies()
+  }
+
+  /**
+   * 返ってきた返答を、次のターンを待たずに送り元へ渡す（#594 の 2・3）。相手のターンが終わったときと、画面のポーリングのついでに呼ぶ。
+   *
+   * - **送り元がまだ回っていれば、その場で足す**（2）: 入力の口（#386 の stream-json）が開いている Claude のターンに、返答の塊を
+   *   2 通目の `user` として書く。読み直しは増えない。足せたら「渡した」にする（次のターンには重ねない）
+   * - **「返答が来たら起こす」で送ったもの**（3。`sai_send` の `wake`）: 同じターンで `wake` を付けたものが全部返った（か失敗した）ら、
+   *   送り元のターンを **1 回だけ**起こす。人が「送信を止める」にしていれば起こさない・送り元の使用量の枠が残り少なければ起こさない・
+   *   送り元が処理中なら預かりに並ぶ・起こしたターンからは送れない（連鎖 1 段。#311）。起こさなかった分は未渡しのまま残り、
+   *   次に SAI から回るターンの頭に届く
+   */
+  let delivering = false
+  const wakeSkipped = new Set<string>()
+  const wakeGaveUp = new Set<string>()
+  const deliverReplies = async (): Promise<void> => {
+    if (delivering) return
+    delivering = true
+    try {
+      const log = join(store.directory, 'reply.log')
+      const notBefore = Date.now() - HANDED_KEEP_DAYS * 86_400_000
+      const snap = run.snapshot()
+      // 2: 回っている送り元に、その場で足す
+      if (run.steer) {
+        for (const [from, r] of Object.entries(snap)) {
+          if (!r.interruptible || r.failed || r.compact) continue
+          if (agents.unhanded(from, notBefore).length === 0) continue
+          const p = await pendingRepliesOf(from)
+          if (p.ids.length === 0) continue
+          if (!run.steer(from, withHandedReplies(STEERED_NOTE, p.replies))) continue
+          agents.handed(p.ids)
+          await appendFile(log, `--- ${new Date().toISOString()} ${from} 回っているターンに返答 ${p.ids.length} 件を足した（${p.ids.join(', ')}）\n`).catch(() => {})
+        }
+      }
+      // 3: 「返答が来たら起こす」
+      for (const group of agents.wakeGroups(notBefore)) {
+        const first = group[0]!
+        const from = first.from
+        // 送ったターンがまだ回っていれば起こさない（上の 2 がその場で足す。足せなければ、ターンが終わってから）
+        if (snap[from] && !snap[from]!.failed && snap[from]!.since === first.turn) continue
+        const results = await Promise.all(group.map((m) => agentResult(m)))
+        if (results.some((r) => !r || r.status === 'pending')) continue
+        const key = group.map((m) => m.message_id).join(',')
+        // 一度起こせなかった組は繰り返さない（ポーリングのたびに起動を試さない。返答は次のターンの頭で渡る）
+        if (wakeGaveUp.has(key)) continue
+        const skip = async (why: string) => {
+          if (wakeSkipped.has(key)) return
+          wakeSkipped.add(key)
+          await appendFile(log, `--- ${new Date().toISOString()} ${from} 返答がそろったが起こさない（${why}）。次のターンの頭で渡す\n`).catch(() => {})
+        }
+        if (agents.isStopped(from)) {
+          await skip('人が送信を止めている')
+          continue
+        }
+        const { sessions } = await store.sessions(QUEUE_DAYS)
+        const sender = sessions.find((s) => s.id === from)
+        if (!sender) continue
+        const over = usageRefusal(await usageStore.get(), sender.agent)
+        if (over) {
+          await skip(over)
+          continue
+        }
+        // そろった分に加えて、ほかの未渡しの返答も一緒に渡す
+        const p = await pendingRepliesOf(from)
+        if (p.ids.length === 0) continue
+        const out = await launch(from, withHandedReplies(WAKE_NOTE, p.replies), [], {
+          days: QUEUE_DAYS,
+          replaceTyped: false,
+          forceProcess: false,
+          url: first.url ?? '',
+          queue: true,
+          // メッセージで起こしたターンと同じ扱いにする（このターンからは送らせない。人が止めたら預かりからも取り消される）
+          origin: first.message_id,
+        })
+        if (out.status !== 202) {
+          wakeGaveUp.add(key)
+          await skip(`起こせなかった: ${(out.body as ReplyError).error}`)
+          continue
+        }
+        agents.handed(p.ids)
+        handedTurns.set(from, { ids: p.ids, at: Date.now() })
+        await appendFile(log, `--- ${new Date().toISOString()} ${from} 返答がそろったので起こした（${p.ids.join(', ')}。${(out.body as ReplyResponse).via}）\n`).catch(() => {})
+      }
+    } finally {
+      delivering = false
+    }
   }
 
   // SAI 管理の Codex のターンが終わったら、預かりを回す（-p の exit と同じ扱い）
-  codexApp.onTurnEnd?.((id) => void drain(id))
+  codexApp.onTurnEnd?.((id) => {
+    void drain(id)
+    void deliverReplies()
+  })
 
   /**
    * `DELETE /api/sessions/<id>/queue/<queue_id>`（預けた返信の取り消し）と `POST /api/sessions/<id>/queue/resume`
@@ -2183,7 +2279,11 @@ export function createApp(
     const out = await launch(to, delivered, [], { days: QUEUE_DAYS, replaceTyped: false, forceProcess: false, url: selfUrl(req), queue: true, origin: messageId })
     if (out.status !== 202) return json(res, out.body, out.status)
     const via = (out.body as ReplyResponse).via
-    agents.record({ message_id: messageId, from: found.session.id, to, text, since: new Date().toISOString() }, found.turn, context)
+    agents.record(
+      { message_id: messageId, from: found.session.id, to, text, since: new Date().toISOString(), turn: found.turn, ...(b.wake === true ? { wake: true as const, url: selfUrl(req) } : {}) },
+      found.turn,
+      context,
+    )
     await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${found.session.id} → ${to} メッセージ ${messageId}（${via}）\n`).catch(() => {})
     const payload: AgentSendResponse = {
       message_id: messageId,

@@ -3,7 +3,7 @@
 // 履歴はどこにも保存せず、**行の user_text から作る**。SAI から送った分も端末で打った分も同じように
 // 載っている（record.py が UserPromptSubmit と Stop の両方に載せる）ので、これだけで足りる。
 // DOM を触らない純粋関数にして replyHistory.test.ts で回す。
-import { splitHandedReplies } from '../../shared/agentMessages.ts'
+import { isHandedOnly, splitHandedReplies } from '../../shared/agentMessages.ts'
 import { entityId } from '../../shared/entity.ts'
 import type { FeedRow } from '../../shared/types.ts'
 
@@ -31,7 +31,8 @@ export function historyFrom(rows: readonly FeedRow[], id: string, extra: readonl
     if (entityId(row.session, row.repo, row.ts) !== id) continue
     // SAI が頭に足した返答の塊（#594）は履歴に入れない（人が打った文だけを呼び戻す）
     const text = splitHandedReplies(row.user_text ?? '').text.trim()
-    if (!text || text === out[out.length - 1]) continue
+    // 返答を渡すためだけに SAI が置いた本文（走っているターンに足した・起こした）は人の入力ではない
+    if (!text || isHandedOnly(text) || text === out[out.length - 1]) continue
     out.push(text)
   }
   const items: string[] = []

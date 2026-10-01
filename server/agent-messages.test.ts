@@ -7,7 +7,7 @@ import type { Server } from 'node:http'
 import { appendFile, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { AGENT_SEND_MAX, HANDED_MARK, splitHandedReplies } from '../shared/agentMessages.ts'
+import { AGENT_SEND_MAX, HANDED_MARK, splitHandedReplies, STEERED_NOTE, WAKE_NOTE } from '../shared/agentMessages.ts'
 import type {
   AgentSendResponse,
   AgentSessionsResponse,
@@ -55,6 +55,13 @@ class FakeRunner implements Runner {
   }
   async start(id: string, cmd: ReplyCommand) {
     this.started.push({ id, cmd })
+  }
+  /** 入力の口に足した分（#386 / #594）。本物と同じく `interruptible` が付いているときだけ受ける */
+  steered: { id: string; text: string }[] = []
+  steer(id: string, text: string) {
+    if (!this.busy.get(id)?.interruptible) return false
+    this.steered.push({ id, text })
+    return true
   }
 }
 const runner = new FakeRunner()
@@ -638,6 +645,111 @@ test('返答を足したターンが失敗したら「渡した」を取り消�
   idle('A1@r')
   await humanReply('A1@r')
   assert.match(runner.started.at(-1)!.cmd.text, new RegExp(`message_id: ${messageId}`), '読まれていないので、もう一度足す')
+  idle('A1@r')
+})
+
+const poll = () => fetch(`${base}/api/sessions?days=7`)
+const sendWake = (from: string, to: string, text: string) => agent('/api/agent/send', { method: 'POST', body: JSON.stringify({ from, to, text, wake: true }) })
+
+test('送り元がまだ回っていれば、届いた返答を入力の口からその場で足す。次のターンには重ねない（#594 の 2）', async () => {
+  // 前のテストまでの未渡しを空にしておく
+  await humanReply('A1@r')
+  idle('A1@r')
+  runner.steered.length = 0
+  const since = new Date().toISOString()
+  turn('A1@r', since, { interruptible: true })
+  let messageId = ''
+  let delivered = ''
+  try {
+    messageId = ((await (await send('A1@r', 'B1@r', '回っている間に返して')).json()) as AgentSendResponse).message_id
+    delivered = runner.started.at(-1)!.cmd.text
+    await poll()
+    assert.equal(runner.steered.length, 0, 'まだ返っていない')
+    await humanReply('B1@r')
+    idle('B1@r')
+    await appendFile(feedFile, JSON.stringify(row(new Date(), 'B1', { repo: 'r', cwd: work2, project: 'o/r', user_text: delivered, text: '途中で返しました' })) + '\n')
+    await poll()
+    assert.equal(runner.steered.length, 1)
+    assert.equal(runner.steered[0]!.id, 'A1@r')
+    assert.ok(runner.steered[0]!.text.startsWith(HANDED_MARK))
+    assert.match(runner.steered[0]!.text, new RegExp(`message_id: ${messageId}`))
+    assert.ok(runner.steered[0]!.text.endsWith(STEERED_NOTE))
+    await poll()
+    assert.equal(runner.steered.length, 1, '2 回は足さない')
+  } finally {
+    idle('A1@r')
+  }
+  await humanReply('A1@r')
+  assert.equal(runner.started.at(-1)!.cmd.text, '人から', '次のターンには重ねない')
+  idle('A1@r')
+})
+
+test('wake を付けて送ると、返答がそろったときに送り元を 1 回だけ起こす。起こしたターンからは送れない（#594 の 3）', async () => {
+  const since = new Date().toISOString()
+  turn('A1@r', since)
+  let messageId = ''
+  let delivered = ''
+  try {
+    const res = await sendWake('A1@r', 'B1@r', '返答を受けて続ける')
+    assert.equal(res.status, 202)
+    messageId = ((await res.json()) as AgentSendResponse).message_id
+    delivered = runner.started.at(-1)!.cmd.text
+    await humanReply('B1@r')
+    idle('B1@r')
+    await appendFile(feedFile, JSON.stringify(row(new Date(), 'B1', { repo: 'r', cwd: work2, project: 'o/r', user_text: delivered, text: 'そろいました' })) + '\n')
+    runner.started.length = 0
+    await poll()
+    assert.equal(runner.started.length, 0, '送ったターンがまだ回っている間は起こさない')
+  } finally {
+    idle('A1@r')
+  }
+  await poll()
+  assert.equal(runner.started.length, 1, '1 回だけ起こす')
+  const woke = runner.started[0]!
+  assert.equal(woke.id, 'A1@r')
+  assert.ok(woke.cmd.text.startsWith(HANDED_MARK))
+  assert.match(woke.cmd.text, new RegExp(`message_id: ${messageId}`))
+  assert.ok(woke.cmd.text.endsWith(WAKE_NOTE))
+  await poll()
+  assert.equal(runner.started.length, 1, 'ポーリングのたびに起こさない')
+  // 起こしたターンからは送れない（連鎖 1 段）
+  turn('A1@r')
+  try {
+    const chained = await send('A1@r', 'B1@r', 'さらに頼む')
+    assert.equal(chained.status, 429)
+  } finally {
+    await humanReply('A1@r')
+    idle('A1@r')
+  }
+})
+
+test('wake: 人が「送信を止める」にしていれば起こさない。返答は未渡しのまま次のターンの頭で渡る（#594 の 3）', async () => {
+  turn('A1@r', new Date().toISOString())
+  let messageId = ''
+  let delivered = ''
+  try {
+    messageId = ((await (await sendWake('A1@r', 'B1@r', '止めている間の依頼')).json()) as AgentSendResponse).message_id
+    delivered = runner.started.at(-1)!.cmd.text
+  } finally {
+    idle('A1@r')
+  }
+  await humanReply('B1@r')
+  idle('B1@r')
+  const stop = (what: 'stop' | 'resume') => fetch(`${base}/api/sessions/A1%40r/agent/${what}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+  assert.equal((await stop('stop')).status, 200)
+  try {
+    await appendFile(feedFile, JSON.stringify(row(new Date(), 'B1', { repo: 'r', cwd: work2, project: 'o/r', user_text: delivered, text: '止まっている間の返答' })) + '\n')
+    runner.started.length = 0
+    await poll()
+    assert.equal(runner.started.length, 0, '起こさない')
+  } finally {
+    await stop('resume')
+  }
+  // 再開したら起きる（返答はそろっている）
+  await poll()
+  assert.equal(runner.started.length, 1)
+  assert.match(runner.started[0]!.cmd.text, new RegExp(`message_id: ${messageId}`))
+  await humanReply('A1@r')
   idle('A1@r')
 })
 

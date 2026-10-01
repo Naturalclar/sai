@@ -596,6 +596,139 @@ class RecordTest(unittest.TestCase):
         self.assertLess(elapsed, ASSISTANT_WAIT_S, "上限（2 秒）まで待たない")
         self.assertGreater(ASSISTANT_WAIT_S, ASSISTANT_IDLE_S, "諦めるのは上限より早い")
 
+    # -- 締切に間に合わなくても行は書く（#613）
+
+    def _slow_stop(self, patch: str, entries: list[dict] | None = None):
+        """record.py を、読み取りの一部を遅くして Stop で回す。締切は 0.5 秒に縮める（保険の 15 秒は本物のまま）"""
+        transcript = Path(self.tmp.name) / "transcript.jsonl"
+        write_jsonl(transcript, claude_entries(entries or [
+            {"type": "user", "message": {"role": "user", "content": "前の依頼"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "前の返答"}]}},
+            {"type": "user", "message": {"role": "user", "content": "いまの依頼"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "いまの返答"}]}},
+        ]))
+        payload = {"session_id": "s", "transcript_path": str(transcript), "cwd": str(self.cwd), "hook_event_name": "Stop"}
+        script = (
+            "import sys, time\n"
+            f"sys.path.insert(0, {str(HERE.parent)!r})\n"
+            "from feed import record as r\n"
+            "def spin(*a, **k):\n"
+            "    end = time.monotonic() + 30\n"
+            "    while time.monotonic() < end:\n"
+            "        pass\n"
+            f"{patch}\n"
+            "r._entry([])\n"
+        )
+        started = time.monotonic()
+        result = subprocess.run([sys.executable, "-c", script], input=json.dumps(payload), capture_output=True, text=True,
+                                env=dict(os.environ, **self.env), timeout=30)
+        elapsed = time.monotonic() - started
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, "", "stdout には何も出さない")
+        self.assertLess(elapsed, 10, "締切で切り上げる（保険の 15 秒まで掴まない）")
+        return [r for r in read_rows(self.feed_dir) if r["session"] == "s"]
+
+    def test_stop_row_is_written_even_when_the_transcript_read_misses_the_deadline(self):
+        """本文を読み切れなくても、ターン完了の行は書く。本文は空（前のターンの返答で埋めない。#467）"""
+        rows = self._slow_stop("r.SOFT_DEADLINE_SECONDS = 0.5\nr.last_assistant_text = spin")
+        self.assertEqual(len(rows), 1, "1 ターンに Stop の行は 1 本")
+        row = rows[0]
+        self.assertEqual(row["event"], "Stop")
+        self.assertEqual(row["text"], "")
+        self.assertEqual(row["user_text"], "")
+        self.assertEqual(row["first_user_text"], "前の依頼", "先に読めた分は載る")
+        self.assertEqual(row["repo"], self.cwd.name, "エンティティ ID に要る値は読み取りより前に取ってある")
+        self.assertEqual(row["session_source"], "payload")
+
+    def test_deadline_keeps_what_was_already_read(self):
+        """本文のあとで締切が来たら、本文は載せて、読めなかったものだけ空にする"""
+        rows = self._slow_stop("r.SOFT_DEADLINE_SECONDS = 1.0\nr.last_user_text = spin")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["text"], "いまの返答")
+        self.assertEqual(rows[0]["user_text"], "")
+        self.assertEqual(rows[0]["model"], "")
+
+    def test_deadline_already_passed_skips_the_read_and_still_writes(self):
+        """transcript に取りかかる前に締切を過ぎていたら（git が遅い）、読まずに行だけ書く"""
+        rows = self._slow_stop("r.SOFT_DEADLINE_SECONDS = 0\nr.first_user_text = spin")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["event"], "Stop")
+        self.assertEqual(rows[0]["text"], "")
+
+    def test_deadline_is_not_swallowed_by_a_broad_except(self):
+        """読み取りの中の `except Exception` に飲まれない（飲まれると切り上がらず、保険も外れたまま回り続ける）"""
+        rows = self._slow_stop(
+            "def swallow(*a, **k):\n"
+            "    try:\n"
+            "        spin()\n"
+            "    except Exception:\n"
+            "        spin()\n"
+            "r.SOFT_DEADLINE_SECONDS = 0.5\nr.last_assistant_text = swallow"
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["text"], "")
+
+    def test_slow_git_does_not_eat_the_deadline_and_repo_still_resolves(self):
+        """git が遅いときは予算（GIT_BUDGET_SECONDS）で打ち切り、repo は .git のあるディレクトリから引く。
+        下のディレクトリで動いていても、同じエンティティ（<セッション>@<repo>）に行が入る"""
+        sub = self.cwd / "server" / "deep"
+        sub.mkdir(parents=True)
+        transcript = Path(self.tmp.name) / "transcript.jsonl"
+        write_jsonl(transcript, claude_entries([
+            {"type": "user", "message": {"role": "user", "content": "いまの依頼"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "いまの返答"}]}},
+        ]))
+        payload = {"session_id": "s", "transcript_path": str(transcript), "cwd": str(sub), "hook_event_name": "Stop"}
+        script = (
+            "import sys\n"
+            f"sys.path.insert(0, {str(HERE.parent)!r})\n"
+            "from feed import record as r\n"
+            "calls = []\n"
+            "real = r.subprocess.run\n"
+            "def counted(cmd, *a, **k):\n"
+            "    calls.append(cmd)\n"
+            "    return real(cmd, *a, **k)\n"
+            "r.subprocess.run = counted\n"
+            "r.GIT_BUDGET_SECONDS = -1\n"
+            "r._entry([])\n"
+        )
+        result = subprocess.run([sys.executable, "-c", script], input=json.dumps(payload), capture_output=True, text=True,
+                                env=dict(os.environ, **self.env), timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        row = read_rows(self.feed_dir)[-1]
+        self.assertEqual(row["repo"], self.cwd.name, "cwd の名前（deep）ではなく、作業ツリーのトップの名前")
+        self.assertEqual(row["branch"], "")
+        self.assertEqual(row["text"], "いまの返答", "git を聞けなくても本文は読む")
+
+    def test_toplevel_name(self):
+        self.assertEqual(record.toplevel_name(str(self.cwd)), self.cwd.name)
+        outside = Path(self.tmp.name) / "plain"
+        outside.mkdir()
+        self.assertEqual(record.toplevel_name(str(outside)), "", "git の外は空（呼び出し側が cwd の名前に落とす）")
+
+    def test_hard_timer_is_cancelled_before_exit(self):
+        """終わるときに保険のタイマーを外す。残したままだと、後片付けが遅いあいだに届いた SIGALRM で非 0 になる
+        （Python は終了時にシグナルの受け口を既定に戻す）"""
+        script = (
+            "import signal, sys\n"
+            f"sys.path.insert(0, {str(HERE.parent)!r})\n"
+            "from feed import record as r\n"
+            "r.main = lambda argv: None\n"
+            "try:\n"
+            "    r._entry([])\n"
+            "except SystemExit as e:\n"
+            "    print(e.code, signal.getitimer(signal.ITIMER_REAL)[0])\n"
+        )
+        result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, env=dict(os.environ, **self.env), timeout=30)
+        self.assertEqual(result.stdout.strip(), "0 0.0", result.stderr)
+
+    def test_before_deadline_is_a_plain_call_outside_the_hook(self):
+        """build_row() を直に呼ぶとき（テスト・ほかのスクリプト）はタイマーを掛けない"""
+        called = []
+        self.assertIsNone(record._STARTED)
+        self.assertTrue(record.before_deadline(lambda: called.append(1)))
+        self.assertEqual(called, [1])
+
     # -- 端末の居場所（pane / pid）
 
     def test_row_carries_tmux_pane_and_session_pid(self):

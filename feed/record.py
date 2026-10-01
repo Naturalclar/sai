@@ -59,6 +59,14 @@ SYNTH_GAP_SECONDS = 30 * 60
 ROLLOUT_MAX_AGE_SECONDS = 48 * 3600
 ROLLOUT_SCAN_LIMIT = 60
 HARD_TIMEOUT_SECONDS = 15
+# transcript / rollout を読むのを切り上げる時刻（起動から。#613）。ここを過ぎたら**読めた分だけで行を書く**
+# （本文が空でも、ターン完了の行はある方がよい。行が無いと画面は「まだ回っている／止まった」の区別が付かない）。
+# 15 秒は延ばさない（フックが長く掴むとエージェント本体の終わりが遅れる）。残りの 3 秒は行を書く分
+SOFT_DEADLINE_SECONDS = 12
+# git を起こしてよいのは起動からここまで（#613）。過ぎたら残りの git は聞かず、取れた分で進む
+GIT_BUDGET_SECONDS = 6
+# 起動した時刻。フックの入口（`_entry()`）が入れる。None なら締切を見ない（テストが build_row() を直に呼ぶとき）
+_STARTED: float | None = None
 
 _JST = timezone(timedelta(hours=9), "JST")
 
@@ -220,6 +228,10 @@ def detect_cwd(payload: dict) -> str:
 
 
 def _git(cwd: str, *args: str) -> str:
+    # 混んでいて git が遅いときは、もう起こさない（#613）。git に使い切ると、行を書く前に 15 秒の保険に掛かる。
+    # 取れなかった値は空（branch / remote / project）。repo だけは `toplevel_name()` で git 無しでも引く
+    if _STARTED is not None and time.monotonic() - _STARTED > GIT_BUDGET_SECONDS:
+        return ""
     try:
         out = subprocess.run(
             ["git", "-C", cwd, *args], capture_output=True, text=True, timeout=3
@@ -227,6 +239,24 @@ def _git(cwd: str, *args: str) -> str:
     except Exception:
         return ""
     return out.stdout.strip() if out.returncode == 0 else ""
+
+
+def toplevel_name(cwd: str) -> str:
+    """git を起こさずに、作業ツリーのトップの名前を引く（`.git` のあるディレクトリまで上がる）。見つからなければ空。
+
+    `git rev-parse --show-toplevel` が答えなかったとき（混んでいて時間切れ・予算切れ）の代わり。
+    **エンティティ ID は `<セッション>@<repo>`** なので、ここが cwd の名前に落ちると、下のディレクトリで動いている
+    セッションの行が別のエンティティになる。worktree は `.git` がファイルだが、あるディレクトリは同じ
+    """
+    path = os.path.abspath(cwd)
+    for _ in range(64):
+        if os.path.exists(os.path.join(path, ".git")):
+            return os.path.basename(path.rstrip(os.sep))
+        parent = os.path.dirname(path)
+        if parent == path:
+            break
+        path = parent
+    return ""
 
 
 def normalize_remote(url: str) -> str:
@@ -306,7 +336,7 @@ def git_facts(cwd: str) -> tuple[str, str]:
         return repo, ""
     toplevel = _git(cwd, "rev-parse", "--show-toplevel")
     if not toplevel:
-        return repo, ""
+        return toplevel_name(cwd) or repo, ""
     repo = os.path.basename(toplevel.rstrip("/")) or repo
     # symbolic-ref はコミットが1つも無い直後のブランチでも取れる。detached なら短い SHA
     branch = _git(cwd, "symbolic-ref", "--short", "-q", "HEAD") or _git(cwd, "rev-parse", "--short", "HEAD")
@@ -1465,14 +1495,20 @@ def build_row(payload: dict, now: datetime, directory: Path, declared: str = "")
         transcript = payload.get("transcript_path")
         if isinstance(transcript, str) and transcript:
             path = Path(transcript).expanduser()
-            # タイトル用の first_user_text はどの行にも載せる。本文と入力はターン完了の行だけ
-            first_user = first_user_text(path)
-            if event not in ("UserPromptSubmit",) and waiting is None and ended is None:
-                # 待つのはターン完了の行のときだけ（途中で鳴るフックで本体を止めない。#467）
-                text = last_assistant_text(path, wait=event == "Stop")
-                user_text = last_user_text(path)
-                thinking = last_turn_thinking(path)
-                model = last_assistant_model(path)
+
+            def read_transcript() -> None:
+                nonlocal first_user, text, user_text, thinking, model
+                # タイトル用の first_user_text はどの行にも載せる。本文と入力はターン完了の行だけ
+                first_user = first_user_text(path)
+                if event not in ("UserPromptSubmit",) and waiting is None and ended is None:
+                    # 待つのはターン完了の行のときだけ（途中で鳴るフックで本体を止めない。#467）
+                    text = last_assistant_text(path, wait=event == "Stop")
+                    user_text = last_user_text(path)
+                    thinking = last_turn_thinking(path)
+                    model = last_assistant_model(path)
+
+            # 締切に間に合わなければ、読めた分だけで行を書く（#613。本文が空の `Stop` の行になる）
+            before_deadline(read_transcript)
         if event == "UserPromptSubmit":
             # 入力した瞬間の行。本文は無く、打った文を user_text にそのまま載せる
             # （画面は Stop を待たずに自分側のバブルを出す）。transcript にはまだ無いので payload から
@@ -1516,9 +1552,16 @@ def build_row(payload: dict, now: datetime, directory: Path, declared: str = "")
                 user_text = label
         rollout = find_codex_rollout(session) if source == "rollout" else None
         if rollout is not None:
-            first_user = first_user_text(rollout)
-            thinking = rollout_last_turn_reasoning(rollout)
-            model = rollout_last_model(rollout)
+            codex_rollout = rollout
+
+            def read_rollout() -> None:
+                nonlocal first_user, thinking, model
+                first_user = first_user_text(codex_rollout)
+                thinking = rollout_last_turn_reasoning(codex_rollout)
+                model = rollout_last_model(codex_rollout)
+
+            # 本文は payload にあるので、rollout が読み切れなくても行は書く（#613）
+            before_deadline(read_rollout)
         if not first_user:
             first_user = user_text
 
@@ -1648,6 +1691,66 @@ def build_row(payload: dict, now: datetime, directory: Path, declared: str = "")
     return row
 
 
+class _Deadline(BaseException):
+    """重い読み取りの締切（`SOFT_DEADLINE_SECONDS`）。`before_deadline()` の中でだけ投げられ、外には出ない。
+    `Exception` にしない: 読み取りの中の `except Exception`（壊れた行を飛ばす）に飲まれると、切り上げられない"""
+
+
+# いま `before_deadline()` の中か。外で届いたアラームは何もしない（行を書いている最中に例外を投げない）
+_reading = False
+
+
+def _arm_hard_guard() -> None:
+    """15 秒の保険（`_bail`）に戻す。締切のタイマーは同じ SIGALRM を使うので、使い終わったら必ず掛け直す"""
+    try:
+        signal.signal(signal.SIGALRM, _bail)
+        left = HARD_TIMEOUT_SECONDS - (time.monotonic() - (_STARTED or time.monotonic()))
+        signal.setitimer(signal.ITIMER_REAL, max(0.1, left))
+    except Exception:
+        pass
+
+
+def _on_soft_deadline(signum, frame):
+    # 先に保険を掛け直す（このあと行を書く間も、15 秒で必ず終わる）
+    _arm_hard_guard()
+    if _reading:
+        raise _Deadline()
+
+
+def before_deadline(read) -> bool:
+    """`read()`（transcript / rollout を読んで行の値を埋める）を締切まで回す。間に合えば True。
+
+    間に合わなければ途中で切り上げて False を返し、**呼び出し側は読めた分だけで行を書く**（#613）。値は 1 つずつ
+    代入されるので、切り上げた時点で入っているものはどれも読み終わったもの（途中まで読んだ本文は入らない）。
+    **前のターンの返答で埋めない**（#467。空の方がよい）。アラームを使うのはこの中だけで、抜けたら
+    `HARD_TIMEOUT_SECONDS` の保険（`_bail`）に戻す
+    """
+    global _reading
+    if _STARTED is None or not hasattr(signal, "setitimer"):
+        read()
+        return True
+    remaining = SOFT_DEADLINE_SECONDS - (time.monotonic() - _STARTED)
+    if remaining <= 0:
+        return False
+    try:
+        signal.signal(signal.SIGALRM, _on_soft_deadline)
+        signal.setitimer(signal.ITIMER_REAL, remaining)
+    except Exception:
+        read()
+        return True
+    try:
+        _reading = True
+        read()
+        _reading = False
+        return True
+    except _Deadline:
+        # タイマーは 1 回きりなので、ここから先でもう 1 度投げられることは無い
+        _reading = False
+        return False
+    finally:
+        _arm_hard_guard()
+
+
 def append_row(directory: Path, row: dict, now: datetime) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     try:
@@ -1704,17 +1807,30 @@ def _bail(signum, frame):  # pragma: no cover - タイムアウト時の保険
     os._exit(0)
 
 
-if __name__ == "__main__":
+def _entry(argv: list[str]) -> None:
+    """フックの入口。保険のタイマーを掛けてから回し、何が起きても exit 0"""
+    global _STARTED
+    _STARTED = time.monotonic()
     try:
         signal.signal(signal.SIGALRM, _bail)
         signal.alarm(HARD_TIMEOUT_SECONDS)
     except Exception:
         pass
     try:
-        main(sys.argv[1:])
+        main(argv)
     except BaseException:
         try:
             _log_error(feed_dir())
         except BaseException:
             pass
+    # **保険のタイマーを外してから終わる**（#613）。Python は終わるときにシグナルの受け口を既定に戻すので、
+    # 混んでいて後片付けが遅いあいだにアラームが届くと、SIGALRM で殺されて非 0 で終わる（混ませた測定で実際に出た）
+    try:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+    except Exception:
+        pass
     sys.exit(0)
+
+
+if __name__ == "__main__":
+    _entry(sys.argv[1:])

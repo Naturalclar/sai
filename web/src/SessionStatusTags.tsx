@@ -7,6 +7,7 @@ import { TerminalTag } from './TerminalTag'
 import { WaitingTag } from './WaitingTag'
 import { ReplyingTag } from './ReplyingTag'
 import { ArchivedTag } from './ArchivedTag'
+import { ReturnedTag } from './ReturnedTag'
 import { PermissionModeTag } from './PermissionModeTag'
 import { ContextTag } from './ContextTag'
 
@@ -28,6 +29,8 @@ function tagOf(tag: HeadTag, now: number): ReactNode {
       return <ReplyingTag since={tag.since} now={now} />
     case 'archived':
       return <ArchivedTag />
+    case 'returned':
+      return <ReturnedTag at={tag.at} />
     case 'mode':
       return <PermissionModeTag mode={tag.mode} />
     case 'context':
@@ -36,7 +39,7 @@ function tagOf(tag: HeadTag, now: number): ReactNode {
 }
 
 /**
- * チャット見出しの「いまの状態」の印の列（別のマシン・合成・端末・待機中・返信中・アーカイブ・許可モード・大きすぎるコンテキスト）。
+ * チャット見出しの「いまの状態」の印の列（別のマシン・合成・端末・待機中・返信中・アーカイブ・アーカイブ後も継続・許可モード・大きすぎるコンテキスト）。
  * 広い画面の見出しと、狭い画面の 1 行目（#274）が使う。title はセッション ID（マウスを乗せると出る）
  */
 export function SessionStatusTags({ tags, now, title }: { tags: HeadTag[]; now: number; title: string }) {

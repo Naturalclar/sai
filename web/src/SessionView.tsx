@@ -35,6 +35,9 @@ import { SessionHeadActions } from './SessionHeadActions'
 import { SessionHeadMenu } from './SessionHeadMenu'
 import { SessionTitle } from './SessionTitle'
 import { headName, headTags } from './headTags'
+import { ArchiveReturnNote } from './ArchiveReturnNote'
+import { newerSibling, returnedFromArchive } from '../../shared/archiveReturn.ts'
+import { withSuffix } from '../../shared/sessionLabels.ts'
 import { useNarrow } from './useNarrow'
 import { useDiffSummary } from './useDiffSummary'
 import { useGallery } from './useGallery'
@@ -159,6 +162,8 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
   const tagInput = { serverHost: data?.host ?? '', approval: approvals[0]?.text ?? '', replyingSince: mine?.since ?? '', contextTokens }
   const thinking = { has: hasThinking, open: thinkingUi.open, toggle: () => setThinkingUi({ open: !thinkingUi.open }) }
   const label = s ? headName(s) : { name: '', project: '' }
+  const returned = s ? returnedFromArchive(s) : ''
+  const sibling = s && returned ? newerSibling(s, peers ?? []) : undefined
   return (
     <section>
       {/* 狭い画面では見出しの 1 行目に入る。読み込み中と取得に失敗したときは見出しが無いのでここに出す */}
@@ -253,6 +258,15 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
               {data.background && <BackgroundAttachBar background={data.background} />}
             </>
           }
+        />
+      )}
+      {/* アーカイブしたのに返信が続いている（#583）。止めはせず、知らせて「このまま使う」か新しい方へのリンクを出す */}
+      {s && returned && (
+        <ArchiveReturnNote
+          key={`return:${id}:${returned}`}
+          id={id}
+          at={returned}
+          sibling={sibling ? { id: sibling.id, name: withSuffix(sibling.meta?.name || sibling.title || '(無題)', sibling), start: sibling.start } : undefined}
         />
       )}
       {s &&

@@ -7,6 +7,8 @@ import { HostTag } from './HostTag'
 import { isRemoteHost } from '../../shared/host.ts'
 import { ReplyingTag } from './ReplyingTag'
 import { ArchivedTag } from './ArchivedTag'
+import { ReturnedTag } from './ReturnedTag'
+import { returnedFromArchive } from '../../shared/archiveReturn.ts'
 import { WaitingTag } from './WaitingTag'
 import { UnreadTag } from './UnreadTag'
 import { SessionPrTag } from './SessionPrTag'
@@ -136,6 +138,7 @@ export function SessionItem({ s, active, replying, profile, approval, now, swipe
           {!!s.unread && <UnreadTag n={s.unread} />}
           {pr && <SessionPrTag pr={pr} />}
           {s.archived && <ArchivedTag />}
+          {returnedFromArchive(s) && <ReturnedTag at={returnedFromArchive(s)} />}
         </span>
         {preview && (
           <span className={`last${preview.from === 'me' ? ' mine' : ''}`}>

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { canCompact, COMPACT_MIN_TOKENS, compactPrompt, sendModes, startsNewWork } from './compact.ts'
+import { canCompact, COMPACT_MIN_TOKENS, compactPrompt, SEND_MODE_LABEL, SEND_MODE_SHORT, sendModes, startsNewWork } from './compact.ts'
 import { CONTEXT_WARN_TOKENS } from './contextSize.ts'
 
 test('startsNewWork: 実データの着手の形は当たる（#579）', () => {
@@ -44,4 +44,11 @@ test('compactPrompt: /compact に次に取りかかることを添える（1 行
   assert.match(p, /^\/compact /)
   assert.match(p, /「579着手して」/)
   assert.doesNotMatch(p, /詳しくは本文/)
+})
+
+test('SEND_MODE_SHORT: どの送り方にも短い表記があり、正式な名前より短い（#629）', () => {
+  for (const mode of ['compact', 'plain', 'new'] as const) {
+    assert.ok(SEND_MODE_SHORT[mode].length > 0)
+    assert.ok(SEND_MODE_SHORT[mode].length < SEND_MODE_LABEL[mode].length, mode)
+  }
 })

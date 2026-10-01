@@ -15,7 +15,8 @@ import { leavesToSidebar } from './replyFocus'
 import { DiffButton, type DiffButtonProps } from './DiffButton'
 import { acceptsSuggestion, suggestionFor, suggestionLabel } from './replySuggest'
 import { NEXT_ASK_MAX_CHARS } from '../../shared/nextAsk.ts'
-import { SEND_MODE_LABEL, sendModes, type SendMode } from '../../shared/compact.ts'
+import { sendModes, type SendMode } from '../../shared/compact.ts'
+import { SendModePicker } from './SendModePicker'
 import { CONTEXT_WARN_TOKENS } from '../../shared/contextSize.ts'
 import { SuggestionChip } from './SuggestionChip'
 import { reportDigestUsage } from './digestUsage'
@@ -666,17 +667,7 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
         {model && <ReplyModelPicker key={`model-${model.id}`} {...model} />}
         {permission && <ReplyPermissionPicker key={`perm-${permission.id}`} {...permission} />}
         {choices.length > 1 && (
-          <select
-            className="send-mode"
-            value={sendModeNow}
-            aria-label="送り方"
-            title="要約してから送ると、新しい作業の前に会話を要約して読み直す量を減らす（#579）"
-            onChange={(e) => setModePicked(e.target.value as SendMode)}
-          >
-            {choices.map((m) => (
-              <option key={m} value={m}>{SEND_MODE_LABEL[m]}</option>
-            ))}
-          </select>
+          <SendModePicker value={sendModeNow} choices={choices} onChange={setModePicked} />
         )}
         {queueing && steerable && (
           <label className="steer" title="いま走っているターンに足す（取り消せない。終わっていれば預かりに回る）">
@@ -689,7 +680,13 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
           disabled={attach.busy || (!(mention?.picked ? stripMention(text, mention.picked.label) : text).trim() && attach.items.length === 0)}
           title={steering ? '走っているターンに足す（取り消せない）' : queueing ? '前の返信が終わってから続けて回す（預けた分は取り消せる）' : undefined}
         >
-          {steering ? '足す' : queueing ? 'あとで送る' : sendModeNow === 'compact' ? '要約して送る' : sendModeNow === 'new' ? '新しく始める' : '送信'}
+          {steering ? '足す' : queueing ? 'あとで送る' : sendModeNow === 'plain' ? '送信' : (
+            // 狭い画面・タッチ端末では「送信」だけ（#629。送り方は左の選択に出ている。長い文言だと 360 幅でボタンが次の段に落ちる）
+            <>
+              <span className="send-long">{sendModeNow === 'compact' ? '要約して送る' : '新しく始める'}</span>
+              <span className="send-short">送信</span>
+            </>
+          )}
         </button>
       </div>
       {skillOpen && (

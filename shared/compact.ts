@@ -16,6 +16,13 @@ export const SEND_MODE_LABEL: Record<SendMode, string> = {
   new: '新しいセッションで送る',
 }
 
+/** 狭い画面・タッチ端末で、閉じているときに出す短い表記（#629）。開いたメニューは `SEND_MODE_LABEL` のまま */
+export const SEND_MODE_SHORT: Record<SendMode, string> = {
+  compact: '要約',
+  plain: 'そのまま',
+  new: '新規',
+}
+
 /**
  * 1 行目が「着手して」の形か。**狭い方に倒す**（着手でない文を要約してから送る方が害が大きい。取りこぼしたら人が選べばよい）。
  * 実データ（人の入力 1,800 回）で 1 行目が着手の形だったのは 215 回: `着手して` / `N着手して` / `Nに着手して` / `N対応して` / `Nを着手して`。

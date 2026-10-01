@@ -120,6 +120,9 @@ export class ProgressReader {
       }
       const { steps } = cached.value
       const active = progressActive(cached.value, st.mtimeMs, this.now())
+      // ターンが閉じた時刻（#614）。始まりを見ていて閉じており、手順があるときだけ（Claude の end_turn。途中から読んだ・Esc で止めた・回っている、は載せない）
+      const last = steps[steps.length - 1]
+      const closedAt = s.agent === 'claude' && cached.value.started && !cached.value.open && last ? last.ended || last.started : ''
       return {
         rev: `${sig}:${active ? 1 : 0}`,
         id: s.id,
@@ -127,6 +130,7 @@ export class ProgressReader {
         steps: steps.slice(-PROGRESS_STEPS),
         total: steps.length,
         updated_at: new Date(st.mtimeMs).toISOString(),
+        ...(closedAt ? { closed_at: closedAt } : {}),
         // セッション同士のメッセージで、送ると相手がどれだけ読み直すかに使う（#311）
         context_tokens: cached.value.context ?? 0,
         // 答えを待っている質問（#333）。詳細の応答が、行の待ちと同じ文のときだけ使う

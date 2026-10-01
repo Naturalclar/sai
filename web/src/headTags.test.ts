@@ -70,3 +70,9 @@ test('アーカイブしたのに行が増えて戻ってきたセッション�
   assert.deepEqual(kinds(headTags({ ...base, meta: { archived_at: at }, archived: true }, compact)), ['archived'])
   assert.deepEqual(kinds(headTags({ ...base, meta: { name: 'sai_main' } }, compact)), [])
 })
+
+test('ターン完了の行が落ちたセッション（stop_missing）は印を出す。返信中は出さない（#614）', () => {
+  assert.deepEqual(kinds(headTags({ ...base, stop_missing: true }, compact)), ['stop_missing'], '狭い画面の 1 行目にも出す')
+  assert.deepEqual(kinds(headTags({ ...base, stop_missing: true }, { ...compact, replyingSince: '2026-10-01T02:00:00Z' })), ['replying'])
+  assert.deepEqual(kinds(headTags(base, compact)), [])
+})

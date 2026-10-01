@@ -1,3 +1,5 @@
+import { QuoteButton } from './QuoteButton'
+import { useQuoteSelection } from './useQuoteSelection'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { entityId } from '../../shared/entity.ts'
@@ -33,6 +35,11 @@ const NO_SESSIONS: never[] = []
 const NO_IDS: ReadonlySet<string> = new Set()
 
 interface Props {
+  /**
+   * 返答の一部を選んで引用として返信欄に入れる（#604）。渡したとき（セッション画面で返信できるとき）だけ、選択の下に
+   * 「引用して返信」を出す。渡すのは選んだ文字そのもの（引用の形にするのは呼ぶ側）
+   */
+  onQuote?: (selected: string) => void
   rows: FeedRow[]
   showChannel: boolean
   /**
@@ -134,8 +141,10 @@ function flash(el: HTMLElement) {
   window.setTimeout(() => el.classList.remove('found'), JUMP_FLASH_MS)
 }
 
-export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_SESSIONS, trailer, showThinking = false, thinkingOpen = false, longOpen = false, profile, linear = '', focusTs = '', focusSide: askedSide, diffs, jumpTo = null, question, answerable = NO_IDS, images, unreadAfter, onSeenBottom, onMarkUnread, prs }: Props) {
+export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_SESSIONS, trailer, showThinking = false, thinkingOpen = false, longOpen = false, profile, linear = '', focusTs = '', focusSide: askedSide, diffs, jumpTo = null, question, answerable = NO_IDS, images, unreadAfter, onSeenBottom, onMarkUnread, prs, onQuote }: Props) {
   const ref = useRef<HTMLDivElement>(null)
+  // 返答の一部を選んだら「引用して返信」を出す（#604）。出すかの判定は quoteReply.ts の quotable()
+  const quote = useQuoteSelection(ref, Boolean(onQuote))
   const stickToBottom = useRef(true)
   // 最後に最下部へ送ったときの scrollHeight。中身の高さが変わったときだけ送るため（#344）
   const appliedHeight = useRef(0)
@@ -273,6 +282,16 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
   return (
     <LightboxProvider>
     <div className="chat-wrap">
+      {quote.pick && onQuote && (
+        <QuoteButton
+          left={quote.pick.left}
+          top={quote.pick.top}
+          onQuote={() => {
+            onQuote(quote.pick!.text)
+            quote.clear()
+          }}
+        />
+      )}
       <div className="chat" ref={ref} onScroll={onScroll}>
         {leader}
         {days.map((day) => (

@@ -145,6 +145,11 @@ interface Props {
   restore?: RestoreRequest
   /** 差分へのコメントを入力欄に入れる頼み（#511）。`seq` が増えたときだけ、打ちかけの後ろへ足す（送らない） */
   insert?: RestoreRequest
+  /**
+   * 返答の一部の引用を入力欄に入れる頼み（#604）。`insert` と同じく `seq` が増えたときだけ打ちかけの後ろへ足し（送らない）、
+   * 入力欄にフォーカスを移す（カーソルは引用の下）
+   */
+  quote?: RestoreRequest
   /** 本文が空のときの `←`。サイドバーのいま開いている項目にフォーカスを戻す（#204）。渡さなければ ← はカーソル移動のまま */
   onLeaveToSidebar?: () => void
   mention?: MentionProps
@@ -156,7 +161,7 @@ const NO_HISTORY: readonly string[] = []
 const keyOf = (e: KeyboardEvent<HTMLTextAreaElement>) => ({ key: e.key, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, shiftKey: e.shiftKey })
 
 /** 入力欄。Enter で送信、Shift+Enter で改行。IME 変換中の Enter は送らない */
-export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerable = false, now = 0, onSend, sendMode, onDraft, model, permission, diff, skillsId, skillsAgent, attachId, draftKey, sentFromConfirm = 0, restore, insert, history = NO_HISTORY, nextAsk, nextAskKey, managerDraft, onManagerDraft, onLeaveToSidebar, mention }: Props) {
+export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerable = false, now = 0, onSend, sendMode, onDraft, model, permission, diff, skillsId, skillsAgent, attachId, draftKey, sentFromConfirm = 0, restore, insert, quote, history = NO_HISTORY, nextAsk, nextAskKey, managerDraft, onManagerDraft, onLeaveToSidebar, mention }: Props) {
   // 前に打ちかけて離れた分（#306）。作ったときに 1 回だけ読む
   const [initial] = useState(() => (draftKey ? loadDraft(draftKey) : EMPTY_DRAFT))
   const [text, setText] = useState(initial.text)
@@ -251,6 +256,24 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
     setText(next)
     setCaret(next.length)
   }
+
+  // 返答の一部の引用（#604）。選んで「引用して返信」を押したときだけで、打ちかけがあれば後ろへ足す。続けて答えを打てるように
+  // 入力欄へフォーカスを移す（effect は DOM に触るだけで、state は描画中に合わせる）
+  const [quotedSeq, setQuotedSeq] = useState(quote?.seq ?? 0)
+  if (quote && restoresOnRequest(quotedSeq, quote.seq)) {
+    setQuotedSeq(quote.seq)
+    const next = appendInsert(text, quote.text)
+    setText(next)
+    setCaret(next.length)
+  }
+  const firstQuoted = useRef(quotedSeq)
+  useEffect(() => {
+    if (quotedSeq === firstQuoted.current) return
+    const el = ref.current
+    if (!el) return
+    el.focus()
+    el.setSelectionRange(el.value.length, el.value.length)
+  }, [quotedSeq])
 
   // 打ちかけを残す（#306）。変わるたびに書くので、画面を移るときに書き忘れる経路が無い。
   // 送ったら本文も画像も空になり、空を書く = 消す。送れずに本文を戻したときはまた残る。

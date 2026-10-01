@@ -1,3 +1,4 @@
+import { quoteInsert } from './quoteReply'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { answerableIds } from './terminalQuestion.ts'
 import { canSteer, replyBlockedReason } from '../../shared/reply.ts'
@@ -144,6 +145,10 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
 
   // 狭い画面では見出しを「← 名前 状態の印 ⋯」と題名 1 行に畳み、詳しい情報と操作は ⋯ のパネルへ（#274。
   // 見出しだけで 283px あり、スクロールしない場所なのでチャットが画面の 1/3 を切っていた）
+  // 返答の一部の引用（#604）。押すたびに seq を進め、ReplyBox が打ちかけの後ろへ足す（送らない）。
+  // ReplyBox は key でセッションごとに作り直され、作ったときの seq は当てた扱いにするので、別のセッションには持ち越さない
+  const [quote, setQuote] = useState<RestoreRequest | null>(null)
+  const canQuote = Boolean(s && !s.archived && !blocked)
   const narrow = useNarrow()
   const contextTokens = data?.context_tokens ?? 0
   // 「新しいセッションで送る」（#579）。表示名・アイコン・一言の性格を引き継いで始め、最初の記録が届いたらそちらへ移る。
@@ -226,6 +231,8 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
           leader={data.older > 0 ? <OlderRowsButton count={data.older} days={RECENT_DAYS} onMore={() => setWide({ id, days: recent + RECENT_DAYS })} /> : undefined}
           showChannel={false}
           sessions={[data.session]}
+          // 返答の一部を引用して返信欄に入れる（#604）。返信欄を出しているときだけ
+          {...(canQuote ? { onQuote: (selected: string) => setQuote((q) => ({ text: quoteInsert(selected), seq: (q?.seq ?? 0) + 1 })) } : {})}
           {...(answerable ? { answerable } : {})}
           profile={data.profile}
           linear={linear}
@@ -326,6 +333,7 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
             // 前の返信を処理中か、預かりが残っていれば預ける（#305。先に預けたものを追い越さない）
             {...(restore ? { restore } : {})}
             {...(insert ? { insert } : {})}
+            {...(quote ? { quote } : {})}
             // 送れなかった（確認待ち・送信失敗）ら ReplyBox が本文・画像・返信先を戻す（#350）
             // 送り方（#579）。着手の指示なら「要約してから送る」が既定。量は詳細の context_tokens（#441）
             sendMode={{ agent: s.agent, contextTokens, terminal: Boolean(s.terminal) }}

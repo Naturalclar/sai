@@ -12,6 +12,7 @@ import { mergeProfile, PROFILE_ICON_ID, profileIconUrl } from '../shared/profile
 import { isPersonaId } from '../shared/persona.ts'
 import { canSteer, replyBlockedReason, replyFailureText } from '../shared/reply.ts'
 import { compactPrompt } from '../shared/compact.ts'
+import { handoffFirstText, handoffReady } from '../shared/handoff.ts'
 import { selfHost } from './host.ts'
 import type { SessionTurnResponse,
   AgentActivity,
@@ -1530,6 +1531,8 @@ export function createApp(
    * Claude の `--session-id` と同じく最初の行より前に鍵が決まる（実測）。作ったスレッドは rollout がまだ無いので、
    * 最初のターンだけ `thread/resume` を飛ばす（`CodexAppServer` 側でやる）
    */
+  /** 引き継ぎで始めている最中の（前のセッション, 引き継ぎの行）（#442）。同時に 2 本来たときに 2 つ始めない */
+  const handoffStarting = new Set<string>()
   const startSession = async (req: IncomingMessage, res: ServerResponse, days: number) => {
     if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
     let body: unknown
@@ -1539,8 +1542,10 @@ export function createApp(
       return error(res, 400, err instanceof Error ? err.message : 'bad body')
     }
     const asked = (body && typeof body === 'object' ? body : {}) as Partial<NewSessionRequest>
-    const text = typeof asked.text === 'string' ? asked.text.trim() : ''
-    if (!text) return error(res, 400, 'text is required')
+    // 引き継いで始める（#442）。最初の入力は body からではなく、`from` の最後のターン完了の行（引き継ぎの返答）から取る
+    const handoff = asked.handoff === true
+    let text = typeof asked.text === 'string' ? asked.text.trim() : ''
+    if (!text && !handoff) return error(res, 400, 'text is required')
     if (typeof asked.from !== 'string' || !asked.from) return error(res, 400, 'from（どの worktree で始めるか）が要ります')
     const agent = asked.agent ?? 'claude'
     if (agent !== 'claude' && agent !== 'codex' && agent !== 'opencode') return error(res, 400, '始められるのは claude か codex か opencode です')
@@ -1558,16 +1563,44 @@ export function createApp(
     // `claude --bg` で始める（#462）。デーモンの口は Claude にしか無い
     const inBackground = asked.background === true
     if (inBackground && agent !== 'claude') return error(res, 400, 'バックグラウンドで始められるのは Claude だけです')
+    if (handoff && (agent !== 'claude' || inBackground)) return error(res, 400, '引き継いで始められるのは Claude の（バックグラウンドでない）セッションだけです')
 
     const { sessions } = await store.sessions(days)
     const from = sessions.find((s) => s.id === asked.from)
     if (!from) return error(res, 404, 'session not found in window')
+    let handoffTs = ''
+    let handoffKey = ''
+    // 始められなかったら印を外す（直してもう一度押せるように）
+    const refuse = (status: number, message: string) => {
+      if (handoffKey) handoffStarting.delete(handoffKey)
+      return error(res, status, message)
+    }
+    if (handoff) {
+      if (from.agent !== 'claude') return error(res, 400, '引き継げるのは Claude のセッションだけです')
+      const rows = (await store.rows(days)).filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === from.id)
+      const ready = handoffReady(rows)
+      if (!ready) return error(res, 409, '引き継ぎがまだ書かれていません（最後のターンが引き継ぎの依頼への返答ではありません）')
+      const old = await metaStore.get(from.id)
+      // 同じ引き継ぎで 2 回始めない（2 枚の画面で押した・押し直した）
+      // メタに書くのは起動のあとなので、その間に来た 2 本目はメモリの印で断る（#622 のレビュー。get のあと await を挟まずに置く）
+      const key = `${from.id}\n${ready.ts}`
+      if (old?.continued_at === ready.ts || handoffStarting.has(key)) return error(res, 409, 'この引き継ぎでは、もう新しいセッションを始めています')
+      // 前のセッションがまだ回っていれば始めない（同じ worktree で 2 つが同時に動く）
+      if (run.running(from.id) || typed.running(from.id)) return error(res, 409, '前のセッションがまだ処理中です。終わってから始めてください')
+      handoffStarting.add(key)
+      handoffKey = key
+      text = handoffFirstText(ready.text)
+      handoffTs = ready.ts
+      // モデルと許可モードも引き継ぐ（保存済みの値なので検査は済んでいる。body で指定があればそちら）
+      if (!meta.model && old?.model) meta.model = old.model
+      if (!meta.permission_mode && old?.permission_mode) meta.permission_mode = old.permission_mode
+    }
     // 別のマシンの worktree はこのマシンに無い（#114）
-    if (isRemoteHost(from.host, selfHost())) return error(res, 400, `別のマシン（${from.host}）の worktree なので、ここでは始められません`)
+    if (isRemoteHost(from.host, selfHost())) return refuse(400, `別のマシン（${from.host}）の worktree なので、ここでは始められません`)
     // 始める場所を決める（#319）。**git の作業ツリーの中だけ**（`/`・`/tmp`・scratchpad は断る）。兄弟 worktree は
     // 鍵で選ばせ、`from` の cwd で `git worktree list` を読み直して、その中に同じ鍵があるときだけ通す（パスは受けない）
     const place = await startPlace(from, typeof asked.worktree === 'string' ? asked.worktree : '')
-    if ('reason' in place) return error(res, 400, place.reason)
+    if ('reason' in place) return refuse(400, place.reason)
     const { cwd } = place
     // エンティティ ID の repo は record.py が行に書くもの（cwd の toplevel の basename）に揃える。兄弟 worktree では from と違う
     const target: SessionSummary = { ...from, cwd, repo: place.repo }
@@ -1579,7 +1612,7 @@ export function createApp(
     const session = randomUUID()
     const id = entityId(session, target.repo, '')
     // 「新しいセッションで送る」（#579）: 表示名・アイコン・一言の性格を引き継ぐ。前のセッションは触らない（消さない・アーカイブしない）
-    if (asked.inherit === true) {
+    if (asked.inherit === true || handoff) {
       const old = await metaStore.get(from.id)
       if (old?.name) meta.name = old.name
       if (old?.persona) meta.persona = old.persona
@@ -1589,6 +1622,7 @@ export function createApp(
         if (bytes) await iconStore.put(id, bytes)
       }
     }
+    if (handoff) meta.continued_from = from.id
     if (Object.keys(meta).length > 0) await metaStore.set(id, meta)
     const via = { url: selfUrl(req), entity: id, tokenFile: agentTokenPath }
     const cmd = newSessionCommand(session, text, cwd, process.env, via, meta.model, meta.permission_mode, meta.name)
@@ -1602,8 +1636,10 @@ export function createApp(
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code
       const hint = code === 'ENOENT' ? `${cmd.bin} が見つかりません（サーバを起動した環境の PATH に ${cmd.bin} があるか確かめてください）` : ''
-      return error(res, 500, hint || (err instanceof Error ? err.message : String(err)))
+      return refuse(500, hint || (err instanceof Error ? err.message : String(err)))
     }
+    // 前のセッションに「→ 続き」を書く（#442）。アーカイブはしない（人が決める）
+    if (handoff) await metaStore.set(from.id, { ...((await metaStore.get(from.id)) ?? {}), continued_to: id, continued_at: handoffTs })
     // 人が始めたターン（メッセージの連鎖ではない。#311）
     agents.launched(id, undefined)
     const payload: NewSessionResponse = { accepted: true, id, agent: 'claude', session, cwd, via: 'process' }

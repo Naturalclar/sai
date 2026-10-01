@@ -1,5 +1,7 @@
 import type { SessionSummary, SettingsResponse } from './api'
 import { ArchiveButton } from './ArchiveButton'
+import { ContinuedLinks } from './ContinuedLinks'
+import { HandoffButton } from './HandoffButton'
 import { MetaEditor } from './MetaEditor'
 import { PermissionsButton } from './PermissionsButton'
 import { SessionPersonaSelect } from './SessionPersonaSelect'
@@ -11,13 +13,15 @@ interface Props {
   thinking: { has: boolean; open: boolean; toggle: () => void }
   /** 一覧のセッション（#572）。名前を付けるときに同じ名前があれば知らせる */
   peers?: readonly SessionSummary[] | undefined
+  /** 引き継ぎを書かせる（#442）。返信できない・Claude でないセッションでは渡さない（ボタンを出さない） */
+  onHandoff?: (() => void) | undefined
 }
 
 /**
  * チャット見出しの「操作」（アーカイブ・表示名とアイコン・許可されているもの・一言の性格・思考を全部開く）。
  * 広い画面では見出しにそのまま並び、狭い画面では「⋯」のパネルの中に入る（#274）
  */
-export function SessionHeadActions({ s, settings, thinking, peers }: Props) {
+export function SessionHeadActions({ s, settings, thinking, peers, onHandoff }: Props) {
   return (
     <>
       {/*
@@ -30,6 +34,8 @@ export function SessionHeadActions({ s, settings, thinking, peers }: Props) {
       <ArchiveButton key={`archive:${s.id}:${s.archived ? 1 : 0}`} id={s.id} archived={Boolean(s.archived)} />
       <MetaEditor key={`meta:${s.id}`} id={s.id} meta={s.meta} icon={s.icon} self={s} {...(peers ? { peers } : {})} />
       {s.agent === 'claude' && <PermissionsButton key={`perm:${s.id}`} id={s.id} />}
+      <ContinuedLinks key={`continued:${s.id}`} meta={s.meta} />
+      {onHandoff && <HandoffButton key={`handoff:${s.id}`} onHandoff={onHandoff} />}
       {/* 一言が有効なときだけ。このセッションの性格（無ければヘッダの既定に従う） */}
       {settings?.digest && <SessionPersonaSelect key={`persona:${s.id}`} id={s.id} value={s.meta?.persona} off={Boolean(s.meta?.digest_off)} defaultPersona={settings.persona} />}
       {thinking.has && (

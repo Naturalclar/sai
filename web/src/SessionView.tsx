@@ -29,6 +29,8 @@ import { useReply } from './useReply'
 import { historyFrom, withOlder } from './replyHistory'
 import { ReplaceConfirm } from './ReplaceConfirm'
 import { NewSessionStarting } from './NewSessionStarting'
+import { HandoffReadyNote } from './HandoffReadyNote'
+import { handoffReady, HANDOFF_PROMPT } from '../../shared/handoff.ts'
 import { SessionStatusTags } from './SessionStatusTags'
 import { SessionHeadInfo } from './SessionHeadInfo'
 import { SessionHeadActions } from './SessionHeadActions'
@@ -159,6 +161,23 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
       return false
     }
   }
+  // 引き継いで新しいセッション（#442）。1) 引き継ぎを書かせる 1 ターンを普通の返信として送る 2) 書けたら（最後のターンが
+  // その返答なら）入力欄の下に「この引き継ぎで始める」を出す。**判定は行から**（`handoffReady()`）なので、画面を閉じても残る
+  const canHandoff = Boolean(s && s.agent === 'claude' && !s.archived && !blocked)
+  const onHandoff = canHandoff ? () => void send(id, HANDOFF_PROMPT, { queue: shouldQueue(mine !== null || bgBusy, queuedCount) }) : undefined
+  const handoff = canHandoff && data ? handoffReady(data.rows) : null
+  const handoffOpen = handoff !== null && s?.meta?.continued_at !== handoff.ts && mine === null
+  const startHandoff = async (): Promise<boolean> => {
+    setFreshError('')
+    try {
+      const res = await api.startSession({ from: id, text: '', handoff: true })
+      setFresh({ from: id, id: res.id, text: '（前のセッションからの引き継ぎ）', since: Date.now() })
+      return true
+    } catch (err) {
+      setFreshError(err instanceof Error ? err.message : String(err))
+      return false
+    }
+  }
   const tagInput = { serverHost: data?.host ?? '', approval: approvals[0]?.text ?? '', replyingSince: mine?.since ?? '', contextTokens }
   const thinking = { has: hasThinking, open: thinkingUi.open, toggle: () => setThinkingUi({ open: !thinkingUi.open }) }
   const label = s ? headName(s) : { name: '', project: '' }
@@ -184,7 +203,7 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
                 <code>{s.id}</code>
                 {s.session_source && s.session_source !== 'synth' && <span className="tag">{s.session_source}</span>}
               </span>
-              <SessionHeadActions s={s} settings={settings} thinking={thinking} peers={peers} />
+              <SessionHeadActions s={s} settings={settings} thinking={thinking} peers={peers} onHandoff={onHandoff} />
             </SessionHeadMenu>
           </div>
           {s.title_full && <SessionTitle key={`title:${s.id}`} text={s.title_full} />}
@@ -196,7 +215,7 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
           <h1><span className="hash">#</span>{label.project}</h1>
           <SessionHeadInfo s={s} contextTokens={contextTokens} />
           <SessionStatusTags tags={headTags(s, { ...tagInput, compact: false })} now={now} title={s.id} />
-          <SessionHeadActions s={s} settings={settings} thinking={thinking} peers={peers} />
+          <SessionHeadActions s={s} settings={settings} thinking={thinking} peers={peers} onHandoff={onHandoff} />
           {s.title_full && <div className="meta wide">{s.title_full}</div>}
         </div>
       )}
@@ -316,6 +335,7 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
             }}
           />
         ))}
+      {handoffOpen && fresh?.from !== id && <HandoffReadyNote key={`handoff:${id}:${handoff.ts}`} onStart={startHandoff} />}
       {fresh?.from === id && (
         <NewSessionStarting key={`starting:${fresh.id}`} id={fresh.id} text={fresh.text} since={fresh.since} replying={data?.replying[fresh.id]} now={now} onRetry={() => setFresh(null)} />
       )}

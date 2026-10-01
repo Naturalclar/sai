@@ -6,6 +6,8 @@ import type { SessionMeta } from './types.ts'
 
 export const META_NAME_MAX = 100
 export const META_MODEL_MAX = 64
+/** `continued_from` / `continued_to`（エンティティ ID）の上限 */
+export const META_LINK_MAX = 300
 /**
  * モデル名・別名に使える文字。`claude-opus-5`、`opus`、`gpt-5.6-sol`、設定の `fable[1m]` のような形。
  * 先頭は英数字（`-` で始まると CLI の引数に化ける）
@@ -80,6 +82,25 @@ export function mergeMeta(current: SessionMeta, input: unknown): { meta: Session
     else delete meta.digest_off
   }
 
+  // 引き継ぎの前後（#442）。書くのはサーバ（`POST /api/sessions/new` の `handoff`）だが、ファイルの読み込みもここを通るので受ける。
+  // 画面からは消すだけ（リンクを外す）のつもりで、値はエンティティ ID の形までは見ない（リンクにするときに encode する）
+  for (const key of ['continued_from', 'continued_to'] as const) {
+    if (raw[key] === undefined) continue
+    if (raw[key] !== null && typeof raw[key] !== 'string') return { meta: {}, error: `${key} は文字列で送ってください` }
+    const value = (raw[key] ?? '').trim()
+    if (value.length > META_LINK_MAX) return { meta: {}, error: `${key} が長すぎます` }
+    if (value) meta[key] = value
+    else delete meta[key]
+  }
+  if (raw.continued_at !== undefined) {
+    if (raw.continued_at !== null && typeof raw.continued_at !== 'string') return { meta: {}, error: 'continued_at は時刻の文字列で送ってください' }
+    const at = (raw.continued_at ?? '').trim()
+    if (at && Number.isNaN(Date.parse(at))) return { meta: {}, error: 'continued_at は ISO 形式の時刻で送ってください' }
+    // 行の `ts` と文字列のまま比べるので、形は変えない
+    if (at) meta.continued_at = at
+    else delete meta.continued_at
+  }
+
   return { meta, error: '' }
 }
 
@@ -90,5 +111,5 @@ export function normalizeMeta(input: unknown): { meta: SessionMeta; error: strin
 
 /** 何も付いていないか */
 export function isEmptyMeta(meta: SessionMeta | undefined): boolean {
-  return !meta || (!meta.name && !meta.archived_at && !meta.model && !meta.persona && !meta.permission_mode && !meta.digest_off)
+  return !meta || (!meta.name && !meta.archived_at && !meta.model && !meta.persona && !meta.permission_mode && !meta.digest_off && !meta.continued_from && !meta.continued_to && !meta.continued_at)
 }

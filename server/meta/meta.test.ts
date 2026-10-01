@@ -133,3 +133,15 @@ test('mergeMeta: digest_off は「あることが状態」。false / null / 空 
   assert.equal(isEmptyMeta({ digest_off: true }), false)
   assert.equal(isEmptyMeta({}), true)
 })
+
+test('mergeMeta: continued_from / continued_to / continued_at は入る・消せる。他のキーは触らない（#442）', () => {
+  const linked = mergeMeta({ name: 'a' }, { continued_from: ' S1@r ', continued_to: 'S3@r', continued_at: '2026-10-01T11:00:00+09:00' })
+  assert.deepEqual(linked, { meta: { name: 'a', continued_from: 'S1@r', continued_to: 'S3@r', continued_at: '2026-10-01T11:00:00+09:00' }, error: '' })
+  assert.deepEqual(mergeMeta(linked.meta, { continued_from: null, continued_to: '', continued_at: '' }).meta, { name: 'a' })
+  // ファイルの読み込み（normalizeMeta）でも落ちない
+  assert.deepEqual(normalizeMeta({ continued_from: 'S1@r' }).meta, { continued_from: 'S1@r' })
+  assert.equal(isEmptyMeta({ continued_to: 'S3@r' }), false)
+  assert.match(mergeMeta({}, { continued_from: 1 }).error, /文字列/)
+  assert.match(mergeMeta({}, { continued_to: 'x'.repeat(301) }).error, /長すぎ/)
+  assert.match(mergeMeta({}, { continued_at: 'きのう' }).error, /ISO/)
+})

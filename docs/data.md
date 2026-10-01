@@ -126,6 +126,8 @@ SAIから開始したCodex turnの待機もJSONLにはせず、`CodexAppServer` 
 
 終わったセッションは**アーカイブ**して一覧とフィードから隠せる（Slack のチャンネルのアーカイブと同じで、消すのではなく既定では見えなくする）。これも同じ `session-meta.json` に `archived_at`（アーカイブした時刻、ISO）として持つ。
 
+引き継いで始めたセッション（#442）は、同じファイルに前後を持つ: 新しい方に `continued_from`（前のセッションの ID）、前の方に `continued_to`（続きの ID）と `continued_at`（使った引き継ぎの行の `ts`。同じ引き継ぎで 2 回始めないための印）。
+
 ```json
 { "sess-abc@kanban": { "name": "背中メニュー", "archived_at": "2026-09-02T07:40:00.000Z" } }
 ```

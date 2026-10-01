@@ -48,6 +48,9 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 足すのは、送ってから `HANDED_KEEP_DAYS`（7 日）以内で、相手のターンが終わった（`agentResult()` が `done`）か失敗した（`failed`。1 行で知らせる）もので、まだ返っていない依頼は足さない。古い順に `HANDED_MAX_ITEMS`（8 件）・本文の合計 `HANDED_MAX_CHARS`（12,000 字）まで本文を載せ、入りきらない分は名前と id だけの 1 行にする。1 件は `clipReply()`（4,000 字）のまま。
 - 起動できたとき（`202`）だけ `AgentMessages.handed()` で `AgentMessage.handed_at` を付け、`agent-messages.json` に残す（立て直しても 2 回は足さない）。**`sai_wait` で受け取ったもの（エージェント用の口と `/mcp` の両方）も渡した扱い**にする。
 - 足す経路は SAI が送り元のターンを起こすものすべて（人の返信・預かりが回る・端末への打ち込み）。**要約だけのターン（#579）には足さない**（`/compact` の本文には付けず、預かりの本文を回すときに足す）。**端末で直接続けたターンには足せない**ので、未渡しのまま残し、次に SAI から回したときに渡す。
+- **足さない場面**: 別のセッションから届いたメッセージで起こすターン（`o.origin`。見出し `【SAI】…` が頭に無いと `deliveredId()` / `replyOf()` が当たらず、送り元が返答を引き当てられない）と、`/`・`$` で始まる指示（スキル・コマンドは頭に無いと CLI が展開しない）。どちらも未渡しのまま残り、次のふつうのターンで渡る。
+- **足したターンが失敗したら「渡した」を取り消す**（`AgentMessages.unhand()`）: `launch()` が `handedTurns` に覚え、`replyingOf()` がそのターンの `failed` を見たら取り消す（エージェントは読んでいないので、次のターンでもう一度足す）。覚えはメモリだけ（立て直しをまたいだ失敗は渡した扱いのまま）。
+- **応答の `replying[].text` からは塊を外す**（`replyingOf()`）。入力欄への戻し（`useReply`）・一覧の 2 行目（`sessionPreview()`）・↑ の履歴の `extra` がこの文を使うため。`promptArrived()` は記録の `user_text` の側も外して比べる。
 - 記録の `user_text` には塊ごと残る（SAI は行を書き換えない）。画面は `splitHandedReplies()` で塊を外して見せる: 自分のバブル（`chatGroups.ts` の `Utterance.handedReplies` →「返答 N 件を添えました」）・仮バブル（`PendingBubble`）・題名と最後の入力（`aggregate.ts`）・↑ の履歴（`replyHistory.ts`）。
 - 返答のバブルの見出しには、送り元の会話に渡したか（`AgentReplyTag.handed_at`）を「会話に渡した / 次のターンで渡す」で出す。
 - 見出しの `REPLY_NOTE` と `sai_send` / `sai_wait` の説明（`approve-mcp.ts` の `AGENT_TOOLS`）は「待たずに終えてよい・返答は次のターンの頭に届く・`sai_wait` はその場で答えが要る短い質問だけ」に合わせた。

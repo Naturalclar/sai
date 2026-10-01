@@ -219,6 +219,21 @@ export class AgentMessages {
     this.persist()
   }
 
+  /** 「渡した」を取り消す（#594。返答を頭に足したターンが失敗して、エージェントが読んでいないとき） */
+  unhand(messageIds: readonly string[]): void {
+    let changed = false
+    for (const id of messageIds) {
+      const m = this.messages.get(id)
+      if (!m?.handed_at) continue
+      const { handed_at: _dropped, ...rest } = m
+      this.messages.set(id, rest)
+      changed = true
+    }
+    if (!changed) return
+    this.version++
+    this.persist()
+  }
+
   /** そのセッションが送って、まだ返答を渡していない記録（古い順）。`since` がこれより前のものは除く */
   unhanded(from: string, notBefore: number): AgentMessage[] {
     return [...this.messages.values()].filter((m) => m.from === from && !m.handed_at && Date.parse(m.since) >= notBefore)

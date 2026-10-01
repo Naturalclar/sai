@@ -575,3 +575,69 @@ test('相手のターンが失敗した依頼は、次のターンの頭に 1 �
     idle('B1@r')
   }
 })
+
+test('返答を足さない場面: 別のセッションから届いたメッセージのターン・/ や $ で始まる指示（#596 のレビュー）', async () => {
+  // A1 に未渡しの返答を 1 件作る
+  turn('A1@r')
+  let delivered = ''
+  let messageId = ''
+  try {
+    messageId = ((await (await send('A1@r', 'B1@r', '足さない場面の準備')).json()) as AgentSendResponse).message_id
+    delivered = runner.started.at(-1)!.cmd.text
+  } finally {
+    idle('A1@r')
+  }
+  await humanReply('B1@r')
+  idle('B1@r')
+  await appendFile(feedFile, JSON.stringify(row(new Date(), 'B1', { repo: 'r', cwd: work2, project: 'o/r', user_text: delivered, text: '返しました' })) + '\n')
+
+  // B1 から A1 へのメッセージで A1 のターンが起きる。見出しが頭のまま（塊を足すと、B1 が返答を引き当てられなくなる）
+  turn('B1@r')
+  try {
+    assert.equal((await send('B1@r', 'A1@r', 'これ見て')).status, 202)
+    assert.ok(runner.started.at(-1)!.cmd.text.startsWith('【SAI】'), '届けた見出しが頭')
+  } finally {
+    idle('B1@r')
+    idle('A1@r')
+  }
+  // スキル・コマンドは頭に無いと CLI が展開しないので足さない
+  const slash = await fetch(`${base}/api/sessions/A1%40r/reply`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: '/merge 596' }) })
+  assert.equal(slash.status, 202)
+  assert.equal(runner.started.at(-1)!.cmd.text, '/merge 596')
+  idle('A1@r')
+  // 未渡しのまま残っていて、次のふつうの返信で渡る
+  await humanReply('A1@r')
+  assert.match(runner.started.at(-1)!.cmd.text, new RegExp(`message_id: ${messageId}`))
+  idle('A1@r')
+})
+
+test('返答を足したターンが失敗したら「渡した」を取り消し、次のターンでもう一度足す。画面に出す処理中の本文からは塊を外す（#596 のレビュー）', async () => {
+  turn('A1@r')
+  let delivered = ''
+  let messageId = ''
+  try {
+    messageId = ((await (await send('A1@r', 'B1@r', '失敗するターンの準備')).json()) as AgentSendResponse).message_id
+    delivered = runner.started.at(-1)!.cmd.text
+  } finally {
+    idle('A1@r')
+  }
+  await humanReply('B1@r')
+  idle('B1@r')
+  await appendFile(feedFile, JSON.stringify(row(new Date(), 'B1', { repo: 'r', cwd: work2, project: 'o/r', user_text: delivered, text: '返しました 2' })) + '\n')
+
+  await humanReply('A1@r')
+  const carried = runner.started.at(-1)!.cmd.text
+  assert.match(carried, new RegExp(`message_id: ${messageId}`))
+  // 回っている間、画面に出す本文は人が打った文だけ（入力欄への戻し・一覧の 2 行目がこれを使う）
+  turn('A1@r', new Date().toISOString(), { text: carried })
+  const running = (await (await fetch(`${base}/api/sessions?days=7`)).json()) as SessionsResponse
+  assert.equal(running.replying['A1@r']?.text, '人から')
+  // そのターンが失敗した → 渡していないことに戻る
+  turn('A1@r', new Date().toISOString(), { text: carried, failed: { code: 1, tail: '落ちた' } })
+  await fetch(`${base}/api/sessions?days=7`)
+  idle('A1@r')
+  await humanReply('A1@r')
+  assert.match(runner.started.at(-1)!.cmd.text, new RegExp(`message_id: ${messageId}`), '読まれていないので、もう一度足す')
+  idle('A1@r')
+})
+

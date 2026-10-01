@@ -146,7 +146,7 @@ const PROMPT_SLACK_MS = 60_000
  * 届いていれば仮バブルの本文はもう要らない（本物の自分バブルが出ている）ので、「処理中」の1行だけにする
  */
 export function promptArrived(rows: FeedRow[], id: string, text: string, since: string): boolean {
-  const want = text.trim()
+  const want = splitHandedReplies(text).text.trim()
   const from = (parseTs(since)?.getTime() ?? 0) - PROMPT_SLACK_MS
   return rows.some((r) => {
     const kind = eventKind(r.event, r.text)
@@ -155,7 +155,8 @@ export function promptArrived(rows: FeedRow[], id: string, text: string, since: 
     // これを見ないと本物の自分バブルと仮バブルで同じ文が 2 つ並ぶ（OpenCode はプロセスが終わらないので残り続けた）
     if (kind !== 'resume' && kind !== 'turn') return false
     return (
-      (r.user_text ?? '').trim() === want &&
+      // 記録の入力には SAI が頭に足した返答の塊（#594）が残るので、外して比べる（仮バブルの本文は外してある）
+      splitHandedReplies(r.user_text ?? '').text.trim() === want &&
       entityId(r.session, r.repo, r.ts) === id &&
       (parseTs(r.ts)?.getTime() ?? 0) >= from
     )

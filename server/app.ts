@@ -143,6 +143,7 @@ import {
   agentOverlap,
   agentReplyRows,
   HANDED_KEEP_DAYS,
+  splitHandedReplies,
   withHandedReplies,
   replierName,
   agentTargets,
@@ -720,6 +721,8 @@ export function createApp(
     return session?.agent === 'opencode' ? session.last_turn : undefined
   }
 
+  /** 返答を頭に足して起こしたターン（#594）。失敗したら「渡した」を取り消すために、終わるまで覚える（メモリだけ） */
+  const handedTurns = new Map<string, { ids: string[]; at: number }>()
   const replyingOf = async (sessions: SessionSummary[]): Promise<ReplyingMap> => {
     typed.settle((id) => sessions.find((s) => s.id === id)?.last_turn)
     // 答えを返したのにプロセスが終わらない CLI（実測: `opencode run -s`）は、行が届いた時点で終わりにする（#375）。
@@ -739,7 +742,22 @@ export function createApp(
     const app = Object.entries(codexApp.replying())
     const appFailed = Object.fromEntries(app.filter(([, r]) => r.failed))
     const appActive = Object.fromEntries(app.filter(([, r]) => !r.failed))
-    return { ...appFailed, ...typed.snapshot(), ...run.snapshot(), ...appActive, ...opencodeApp.replying() }
+    const all: ReplyingMap = { ...appFailed, ...typed.snapshot(), ...run.snapshot(), ...appActive, ...opencodeApp.replying() }
+    // 返答を頭に足したターン（#594）が失敗したら、「渡した」を取り消す（エージェントは読んでいない。次のターンでもう一度足す）。
+    // 終わっていれば覚えを捨てる
+    for (const [id, turn] of handedTurns) {
+      const r = all[id]
+      if (r?.failed && Date.parse(r.since) >= turn.at - 5000) {
+        agents.unhand(turn.ids)
+        handedTurns.delete(id)
+      } else if (!r) handedTurns.delete(id)
+    }
+    // 画面に出す本文は人が打った文だけ（SAI が頭に足した返答の塊は外す。入力欄への戻し・一覧の 2 行目・↑ の履歴がこれを使う）
+    for (const [id, r] of Object.entries(all)) {
+      const plain = splitHandedReplies(r.text).text
+      if (plain !== r.text) all[id] = { ...r, text: plain }
+    }
+    return all
   }
   // ターンごとのトークン・費用（#387 / #411）。書く側（ProcessRunner）と読む側（応答に載せる）で同じ 1 つを使う
   const usage = new TurnUsageLog(join(store.directory, TURN_USAGE_FILE))
@@ -1783,10 +1801,13 @@ export function createApp(
     launching.add(id)
     try {
       // 送り元にまだ渡していない返答を、このターンの本文の頭に足す（#594）。起動できたときだけ「渡した」にする
-      const handed = await pendingRepliesOf(id)
+      // 別のセッションから届いたメッセージで起こすターンには足さない（見出しが頭に無いと、送り元が返答を引き当てられない）。
+      // `/` のスキル・コマンドと Codex の `$` も、頭に無いと CLI が展開しないので足さない（未渡しのまま次のターンへ）
+      const handed = o.origin || /^[/$]/.test(text.trimStart()) ? { replies: [], ids: [] } : await pendingRepliesOf(id)
       const out = await startTurn(id, session, raw, cwd, openTerminal, withHandedReplies(text, handed.replies), attachments, o)
       if (out.status === 202 && handed.ids.length > 0) {
         agents.handed(handed.ids)
+        handedTurns.set(id, { ids: handed.ids, at: Date.now() })
         await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} 待っていなかった返答 ${handed.ids.length} 件を本文の頭に足した（${handed.ids.join(', ')}）\n`).catch(() => {})
       }
       // メッセージで起動したターンかを覚える（そのターンからは送らせない。連鎖 1 段。#311）。人の返信で起動したら忘れる

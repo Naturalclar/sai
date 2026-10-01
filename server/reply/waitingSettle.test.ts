@@ -184,3 +184,14 @@ test('WaitingSettle: 覚えている間は見に行かない。見ていない�
   assert.deepEqual([...(await settle.scan([summary({})]))], [], '切れたら読み直す')
   assert.equal(captures(), 4)
 })
+
+test('WaitingSettle: 絞り込んだ口の走査は、見なかった相手の前の結果を消さない（#599 のレビュー）', async () => {
+  const tmux = new FakeTmux()
+  let now = 1_000
+  const settle = new WaitingSettle(tmux, ps, 5_000, () => now)
+  await settle.scan([summary({ id: 'a@r' }), summary({ id: 'b@r' })])
+  now += 6_000
+  assert.deepEqual([...(await settle.scan([summary({ id: 'a@r' })]))].sort(), ['a@r', 'b@r'])
+  now += 60_000
+  assert.deepEqual([...(await settle.scan([summary({ id: 'a@r' })]))], ['a@r'], '誰も見なくなった相手はいずれ落ちる')
+})

@@ -27,6 +27,11 @@ const SETTLE_MS = 150
  * 画面に出るのが最大でこの長さ＋ポーリング 1 回ぶん遅れる。**答える（`answer()`）ときは毎回その場で読み直す**ので、古い結果では押さない
  */
 export const DIALOG_SCAN_TTL_MS = 5_000
+/**
+ * 今回の走査が見なかった相手の前の結果を、TTL の何倍まで残すか（#599 のレビュー）。絞り込んだ口（MCP の `project` つきなど）の
+ * 走査が、広い口（一覧）の結果を消さないため。広い口は 3 秒ごとに来て古い相手を読み直すので、ここまで残るのは誰も見なくなった相手だけ
+ */
+export const SCAN_KEEP_FACTOR = 6
 
 /**
  * 見に行く先。ふだんは行から作った一覧（`SessionSummary`）だが、**行がまだ 1 本も無いセッション**も
@@ -59,8 +64,9 @@ export class CodexDialogs implements CodexDialogSource {
   /** 見に行く先（`answer()` がペインを引くのに使う）。`scan()` のたびに入れ替える */
   private targets = new Map<string, Terminal>()
   private readonly ttlMs: number
-  /** 最後の走査が終わった時刻。まだなら -Infinity */
-  private scannedAt = -Infinity
+  /** 相手ごとの、最後に見た時刻 */
+  private seenAt = new Map<string, number>()
+  private scannedOnce = false
 
   /**
    * `ttlMs` は走査の結果を覚える長さ（#592。既定は覚えない＝呼ぶたびに見に行く。`createApp` が `DIALOG_SCAN_TTL_MS` を渡す）
@@ -74,13 +80,14 @@ export class CodexDialogs implements CodexDialogSource {
   }
 
   known(): boolean {
-    return this.scannedAt > -Infinity
+    return this.scannedOnce
   }
 
   async scan(sessions: SessionSummary[], extra: readonly DialogTarget[] = []): Promise<ApprovalMap> {
     // 覚えている間は見に行かない（#592。一覧・詳細・フィード・2 枚目の画面が同じ結果を分け合う）。
     // **前の走査が見ていない相手が居れば見に行く**（窓の広い口が、狭い口の結果で相手を取りこぼさない）
-    if (this.now() - this.scannedAt < this.ttlMs && this.wanted(sessions, extra).every((t) => this.targets.has(t.id))) return this.snapshot()
+    const now = this.now()
+    if (this.wanted(sessions, extra).every((t) => now - (this.seenAt.get(t.id) ?? -Infinity) < this.ttlMs)) return this.snapshot()
     if (!this.scanning) {
       this.scanning = this.scanNow(sessions, extra).finally(() => {
         this.scanning = null
@@ -132,9 +139,14 @@ export class CodexDialogs implements CodexDialogSource {
         }
       }),
     )
-    this.active = new Map(found.filter((entry): entry is [string, Approval] => entry !== null))
-    this.targets = new Map(targets.map((t) => [t.id, t.terminal]))
-    this.scannedAt = this.now()
+    // **今回見なかった相手の前の結果は残す**（絞り込んだ口の走査が、広い口の結果を消さない）。古くなりすぎたものだけ落とす
+    const now = this.now()
+    const fresh = new Set(targets.map((t) => t.id))
+    const kept = (id: string) => !fresh.has(id) && now - (this.seenAt.get(id) ?? -Infinity) < this.ttlMs * SCAN_KEEP_FACTOR
+    this.active = new Map([...[...this.active].filter(([id]) => kept(id)), ...found.filter((entry): entry is [string, Approval] => entry !== null)])
+    this.targets = new Map([...[...this.targets].filter(([id]) => kept(id)), ...targets.map((t): [string, Terminal] => [t.id, t.terminal])])
+    this.seenAt = new Map([...[...this.seenAt].filter(([id]) => kept(id)), ...targets.map((t): [string, number] => [t.id, now])])
+    this.scannedOnce = true
   }
 
   /** その approval_id が、いま出ている端末のダイアログか（#450） */

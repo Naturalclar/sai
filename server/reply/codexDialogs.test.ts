@@ -249,3 +249,18 @@ test('CodexDialogs: 1 回の走査で ps は 1 本。覚えている間は見に
   await dialogs.scan([session()])
   assert.equal(psCalls, 3, '切れたら読み直す')
 })
+
+test('CodexDialogs: 絞り込んだ口の走査は、見なかった相手の前の結果を消さない（#599 のレビュー）', async () => {
+  const tmux = new FakeTmux()
+  let now = Date.parse('2026-09-09T12:00:00+09:00')
+  const dialogs = new CodexDialogs(tmux, async () => '200 100\n100 1\n', () => now, 0, 5_000)
+  const other = { id: 'T2@repo', terminal: { pane: '%9', pid: 200 } }
+  await dialogs.scan([session()], [other])
+  now += 6_000
+  // 狭い口（T1 だけ）が読み直しても、T2 は残る。答える先のペインも残る
+  assert.deepEqual(Object.keys(await dialogs.scan([session()])).sort(), ['T1@repo', 'T2@repo'])
+  assert.equal(dialogs.has((dialogs.snapshot()['T2@repo'] ?? [])[0]!.approval_id), true)
+  // 誰も見なくなった相手は、いずれ落ちる
+  now += 60_000
+  assert.deepEqual(Object.keys(await dialogs.scan([session()])), ['T1@repo'])
+})

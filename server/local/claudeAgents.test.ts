@@ -123,6 +123,10 @@ test('ClaudeAgents.peekBackground: 前に引いた一覧から返す。claude �
   assert.equal(agents.peekBackground('S2')?.id, '4a4a3485', 'TTL（0）が切れていても前回の結果')
   assert.equal(agents.peekBackground('S9'), null)
   assert.equal(agents.peekBackground(''), undefined)
+  // 引けないまま古くなったら「分からない」に戻す（古い一覧を出し続けない）
+  const stale = new ClaudeAgents(await fakeClaude(bgRows), 0, undefined, 0)
+  await stale.background('S2')
+  assert.equal(stale.peekBackground('S2'), undefined)
 })
 
 test('ClaudeAgents: --all を知らない版では付けずに引き直し、以後は付けない（#462）', async () => {

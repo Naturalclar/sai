@@ -10,8 +10,14 @@ import { parseCodexDialog } from '../../shared/codexDialog.ts'
 import { settledByRow } from '../../shared/turnSettled.ts'
 import type { Agent, Replying, ReplyingMap, Terminal, TerminalDialog } from '../../shared/types.ts'
 
-/** 配送を確認できないまま、これだけ経ったら諦めて「処理中」を消す。配送済みならターン完了かエラーまで残す（#559） */
+/** 配送を確認できないまま、これだけ経ったら諦めて「処理中」を消す。配送済みはこれでは消さない（#559。下の上限まで） */
 export const TERMINAL_REPLY_TTL_MS = 30 * 60_000
+/**
+ * 配送済みの返信を諦める上限（#559 のレビュー）。配送済みはターン完了かエラーまで残すが、**行が届かないまま終わるターンがある**
+ * （Esc で止めた Claude は Stop フックが鳴らない。ペインを閉じた）。上限が無いとその返信が永久に「処理中」で、
+ * そのセッションへの次の返信が 409 で断られ続ける（立て直すまで）。長いターンでもこれを超えることは実測で無い
+ */
+export const TERMINAL_DELIVERED_TTL_MS = 6 * 60 * 60_000
 
 /** pid が生きているか。EPERM は「いるが自分のものではない」なので生きている扱い */
 export function alive(pid: number): boolean {
@@ -445,21 +451,27 @@ export class TerminalReplies {
     this.active.set(id, { replying: entry, kind, delivered: false })
     return entry
   }
-  /** lastTurn(id) がその返信より新しければ終わり。未配送のTTL超過も消す。配送済みはターン完了かエラーまで残す（#559） */
-  settle(lastTurn: (id: string) => string | undefined): void {
+  /**
+   * lastTurn(id) がその返信より新しければ終わり。時間でも消す: 未配送は `TERMINAL_REPLY_TTL_MS`（30 分）、
+   * 配送済みはターン完了かエラーまで残したうえで `TERMINAL_DELIVERED_TTL_MS`（6 時間）を上限にする（#559）。
+   * `ttl: false` なら行で終わったものだけ消す（配送の確認の前に呼び、終わっている返信に rollout を読みに行かない）
+   */
+  settle(lastTurn: (id: string) => string | undefined, { ttl = true }: { ttl?: boolean } = {}): void {
     for (const [id, entry] of this.active) {
       const since = Math.floor(Date.parse(entry.replying.since) / 1000) * 1000
       // 行で終わったかの判定は shared/turnSettled.ts に 1 つだけ（ProcessRunner.settle() と共用。#375）
       if (settledByRow(entry.replying.since, lastTurn(id))) this.active.delete(id)
+      else if (!ttl) continue
       else if (entry.failedAt !== undefined) {
         if (this.now() - entry.failedAt > (entry.failedTtl ?? FAILED_TTL[entry.kind])) this.active.delete(id)
-      } else if (!entry.delivered && this.now() - since > TERMINAL_REPLY_TTL_MS) this.active.delete(id)
+      } else if (this.now() - since > (entry.delivered ? TERMINAL_DELIVERED_TTL_MS : TERMINAL_REPLY_TTL_MS)) this.active.delete(id)
     }
   }
   /**
    * 待ち（経路ごと。端末は TERMINAL_DELIVERY_WAIT_MS、queue は QUEUE_DELIVERY_WAIT_MS）を過ぎてまだ確かめていない返信について、
    * 届いたかを `started` に聞く。届いていなければ失敗にし、**新しく失敗にしたものを返す**（呼ぶ側が reply.log に残す。
-   * 画面から消えたあとも辿れるように）。`started` は材料が無ければ true を返す（届いていないと決めつけない）。投げたら届いた扱い。
+   * 画面から消えたあとも辿れるように）。`started` は材料が無ければ **null** を返す（届いたとも届いていないとも決めない。
+   * 届いた扱いにすると TTL の上限が 6 時間に延びるので、証拠があるときだけ true）。投げたら null 扱い。
    * 文字列を返したら、それを理由として経路の文言の前に付ける
    */
   async checkDelivery(started: (id: string, query: DeliveryQuery) => Promise<DeliveryAnswer>): Promise<Undelivered[]> {
@@ -471,7 +483,7 @@ export class TerminalReplies {
       try {
         answer = await started(id, { since: entry.replying.since, kind: entry.kind, text: entry.replying.text })
       } catch {
-        answer = true
+        answer = null
       }
       // 聞いている間に消えた・送り直したものは触らない
       if (this.active.get(id) !== entry) continue

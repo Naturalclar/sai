@@ -1150,6 +1150,9 @@
   .notice.archive-return button { min-height: 28px; padding: 2px 10px; background: var(--chip); color: var(--ink); border: 1px solid var(--line); border-radius: 999px; font: inherit; cursor: pointer; }
   .notice.archive-return a { color: var(--accent); }
   .notice.archive-return .err { color: var(--claude); }
+  .chat-head .continued { display: inline-flex; gap: 10px; }
+  .chat-head .continued a { color: var(--accent); }
+  .chat-head .handoff-ask { display: inline-flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
   .notice.error { color: var(--claude); }
   /* 失敗の理由と「入力欄に戻す」を並べる（#350）。一言の .msg .summary と同じ形 */
   .notice.reply-failed { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }

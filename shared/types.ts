@@ -288,6 +288,12 @@ export interface SessionMeta {
    * 端末（tmux）に打ち込む経路ではフラグを渡す先が無いので効かない
    */
   permission_mode?: ReplyPermissionMode
+  /** 引き継いで始めたセッション（#442）の、前のセッションのエンティティ ID。見出しに「← 前のセッション」を出す */
+  continued_from?: string
+  /** 引き継いだ先のセッションのエンティティ ID（#442）。見出しに「→ 続き」を出す。前のセッションはアーカイブしない */
+  continued_to?: string
+  /** `continued_to` を始めたときに使った引き継ぎの行の `ts`（#442）。同じ引き継ぎで 2 回始めないための印 */
+  continued_at?: string
 }
 
 /**
@@ -1275,6 +1281,13 @@ export interface NewSessionRequest {
    * 前のセッションは消さず、アーカイブもしない
    */
   inherit?: boolean
+  /**
+   * **引き継いで始める**（#442。Claude だけ）。最初の入力は `text` ではなく、**サーバが `from` の最後のターン完了の行から取る**
+   * （その入力が引き継ぎの依頼文 `shared/handoff.ts` の `HANDOFF_PROMPT` のときだけ。違えば `409`）。`text` は見ない。
+   * 表示名・アイコン・一言の性格（`inherit`）に加えて、モデルと許可モードも `from` のメタから引き継ぎ、
+   * 新しい方に `continued_from`、前の方に `continued_to` を書く
+   */
+  handoff?: boolean
 }
 
 /** 記録の無い兄弟 worktree 1 つ（#319）。`from` は同じリポジトリの、記録のある一番新しいセッション */

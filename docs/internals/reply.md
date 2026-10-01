@@ -213,6 +213,15 @@ SAI が起こした Claude のターンは、使ったトークンと費用も�
 - 使用量: 要約のターンの `result.usage` は全部 0 で、量は `modelUsage` にだけ載る。`parseTurnUsage()` は `usage` が 0 なら `modelUsage` の合計を採り、`TurnUsage.compact` の印を付けて `turn-usage.jsonl` に残す。**`usageByRow()` は印の付いたものをどのバブルにも付けない**（結ぶ行が無く、前のターンのバブルに付いてしまう）
 - **新しいセッションで送る**: `NewSessionRequest.inherit` で `from` の表示名・一言の性格（`session-meta.json`）とアイコン（`IconStore` のファイルを写す）を引き継ぐ（Claude の経路だけ。表示名は `-n` で CLI にも渡る。#391）。前のセッションは消さず、アーカイブもしない。画面は `NewSessionStarting` で最初の記録を待ってから移る
 
+## 引き継いで新しいセッション（#442）
+
+- 判定と文面は `shared/handoff.ts`（純粋関数）。依頼文 `HANDOFF_PROMPT` は固定で、1 行目 `HANDOFF_MARK` で見分ける。
+- 手順は 2 つ。(1) 見出しの「引き継いで新しいセッション」（`HandoffButton`。1 回確かめる）が、依頼文を**普通の返信**として送る（処理中なら預かり）。(2) 最後のターン完了の行の入力が依頼文なら `handoffReady()` が返答を返し、入力欄の下に `HandoffReadyNote` が出る。押すと `POST /api/sessions/new` に `handoff: true`。
+- **サーバは「頼んだ」ことを覚えない**。行から毎回読むので、画面を閉じても・立て直しても同じ。あとから別のターンが回っていれば出ない（古い引き継ぎで始めない）。
+- `handoff: true` のとき、最初の入力は **body の `text` ではなくサーバが行から取る**（`handoffFirstText()` で前置きを 1 段落添える）。表示名・アイコン・性格（`inherit` と同じ）に加えてモデル・許可モードも前のメタから引き継ぐ。
+- メタは新しい方に `continued_from`、前の方に `continued_to` と `continued_at`（使った引き継ぎの行の `ts`）。**`continued_at` が同じなら `409`**（同じ引き継ぎで 2 回始めない）。前のセッションはアーカイブしない。見出しのリンクは `ContinuedLinks`。
+- Claude だけ（引き継ぐ側も始める側も。`--bg` も不可）。Codex / OpenCode は `400`。
+
 ## 打ちかけと失敗の戻し
 
 ### 端末の打ちかけ

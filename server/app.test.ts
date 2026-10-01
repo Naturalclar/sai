@@ -6,6 +6,7 @@ import { mkdtemp, rm, writeFile, appendFile, mkdir, stat, utimes, readFile, real
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { IconHistoryResponse } from '../shared/types.ts'
+import { handoffFirstText, HANDOFF_PROMPT } from '../shared/handoff.ts'
 import type { ApprovalAnswer, ApprovalMap, NewSessionResponse, Replying, ReplyQueueResponse, ReplyResponse,SessionsResponse, SessionDetailResponse, SessionIconResponse, SessionMetaResponse, FeedResponse, SettingsResponse, HealthResponse, SessionSkillsResponse, SessionPermissionsResponse, SearchResponse, UsageResponse } from '../shared/types.ts'
 import { DEFAULT_SETTINGS } from './meta/settings.ts'
 import { createApp, parseDays, revWith, selfUrl, sessionIdFrom, stripThinking } from './app.ts'
@@ -2593,6 +2594,58 @@ test('GET /api/sessions/<id>: claude --bg のセッションなら attach の短
     assert.deepEqual(stopped.background, { attach: '5738db0d', live: false, status: '' }, '止めたものも attach で起こし直せるので出す')
   } finally {
     claudeAgents.bg = null
+  }
+})
+
+test('POST /api/sessions/new: handoff は最後のターン（引き継ぎの返答）を最初の入力にして始め、前後のメタに書く（#442）', async () => {
+  const feed = join(feedDir, `${localDate(new Date().toISOString())}.jsonl`)
+  const at = (sec: number) => new Date(Date.now() + 60_000 + sec * 1000)
+  const meta = async (id: string) => ((await (await get(`/api/sessions/${encodeURIComponent(id)}/meta`)).json()) as SessionMetaResponse).meta
+  // 記録のファイルはほかのテストと共有しているので、足した行は最後に消す
+  const original = await readFile(feed, 'utf-8')
+  try {
+  const putMeta = (id: string, body: unknown) =>
+    fetch(`${base}/api/sessions/${encodeURIComponent(id)}/meta`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  await appendFile(feed, JSON.stringify(row(at(0), 'H1', { repo: 'r', cwd: dir, text: '終わりました', user_text: '着手して' })) + '\n')
+  assert.equal((await putMeta('H1@r', { name: 'あかり', model: 'opus', permission_mode: 'acceptEdits' })).status, 200)
+
+  // まだ引き継ぎを書かせていない: 始めない。本文を付けても、それを最初の入力にはしない
+  runner.started.length = 0
+  const early = await postNew({ from: 'H1@r', handoff: true, text: '勝手な本文' })
+  assert.equal(early.status, 409)
+  assert.match(((await early.json()) as { error: string }).error, /引き継ぎがまだ書かれていません/)
+  assert.equal(runner.started.length, 0)
+
+  await appendFile(feed, JSON.stringify(row(at(1), 'H1', { repo: 'r', cwd: dir, text: 'いまは issue の途中です。次はテストを書きます。', user_text: HANDOFF_PROMPT })) + '\n')
+  assert.equal((await postNew({ from: 'H1@r', handoff: true, agent: 'codex' })).status, 400, 'Claude だけ')
+  assert.equal((await postNew({ from: 'X1@r', handoff: true })).status, 400, '引き継げるのも Claude のセッションだけ')
+  assert.equal((await postNew({ from: 'H1@r', handoff: true }, { Origin: 'https://evil.example' })).status, 403, '同一オリジンのみ')
+
+  const res = await postNew({ from: 'H1@r', handoff: true, text: '勝手な本文' })
+  assert.equal(res.status, 202)
+  const fresh = (await res.json()) as NewSessionResponse
+  const cmd = runner.started[0]!.cmd
+  assert.equal(cmd.cwd, dir, 'cwd は from から')
+  // 本文は stdin（stream-json）か引数のどちらかに載る。どちらでも、引き継ぎの返答が入り body の text は入らない
+  const sent = JSON.stringify(cmd)
+  assert.ok(sent.includes(JSON.stringify(handoffFirstText('いまは issue の途中です。次はテストを書きます。')).slice(1, -1)), '最初の入力は引き継ぎの返答')
+  assert.ok(!sent.includes('勝手な本文'), 'body の text は見ない')
+  assert.ok(cmd.args.includes('opus'), 'モデルを引き継ぐ')
+  assert.ok(cmd.args.includes('acceptEdits'), '許可モードを引き継ぐ')
+  assert.deepEqual(await meta(fresh.id), { name: 'あかり', model: 'opus', permission_mode: 'acceptEdits', continued_from: 'H1@r' })
+  const old = await meta('H1@r')
+  assert.equal(old.continued_to, fresh.id)
+  assert.equal(old.archived_at, undefined, '前のセッションはアーカイブしない')
+
+  // 同じ引き継ぎで 2 回は始めない
+  const twice = await postNew({ from: 'H1@r', handoff: true })
+  assert.equal(twice.status, 409)
+  assert.equal(runner.started.length, 1)
+  // あとから別のターンが回ったら、古い引き継ぎでは始めない
+  await appendFile(feed, JSON.stringify(row(at(2), 'H1', { repo: 'r', cwd: dir, text: '直しました', user_text: '番号も書いて' })) + '\n')
+  assert.equal((await postNew({ from: 'H1@r', handoff: true })).status, 409)
+  } finally {
+    await writeFile(feed, original)
   }
 })
 

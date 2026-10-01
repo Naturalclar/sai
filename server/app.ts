@@ -22,6 +22,7 @@ import type { SessionTurnResponse,
   AgentSendResponse,
   AgentSessionsResponse,
   AgentWaitResponse,
+  Approval,
   ApprovalAnswer,
   GalleryItem,
   GalleryResponse,
@@ -83,6 +84,8 @@ import { cleanProjects, matchesProjects } from '../shared/projectFilter.ts'
 import { ICONS_DIR, IconStore, iconKey } from './meta/icons.ts'
 import { historyKey, ICON_HISTORY_DIR, ICON_HISTORY_FILE, IconHistory, isHistoryKey } from './meta/iconHistory.ts'
 import { alwaysAllowRule, ruleLabel } from '../shared/approvals.ts'
+import { APPROVAL_SUGGEST_AT, countedRule } from '../shared/approvalCounts.ts'
+import { APPROVAL_LOG_FILE, ApprovalLog } from './approvals/approvalLog.ts'
 import { APPROVALS_FILE, Approvals, WAIT_MS } from './approvals/approvals.ts'
 import { BuildFreshness } from './local/buildFreshness.ts'
 import { NoClaudeHooks, type ClaudeHooksReader } from './local/claudeHooks.ts'
@@ -788,6 +791,19 @@ export function createApp(
   const run: Runner = runner ?? new ProcessRunner(join(store.directory, 'reply.log'), join(store.directory, 'replying.json'), usage)
   // 返信中の許可・質問の預かりも立て直しをまたぐ（#440）。引き取るのは、いま回っている返信の子（`replying.json` から引き取った分）のものだけ
   approvals.persistTo(join(store.directory, APPROVALS_FILE), (id) => run.running(id))
+  // 許可に答えた記録（#445 / #582）。回数を数えて「常に許可」を勧めるのに使う（勧めるだけで、ルールは書かない）
+  const approvalLog = new ApprovalLog(join(store.directory, APPROVAL_LOG_FILE))
+  /** 答えたことを記録に足す。cwd はセッションの行から（リクエストからは受けない）。コマンドの全文は書かない */
+  const logAnswer = async (a: Approval, by: 'human' | 'jev', behavior: 'allow' | 'deny', remember: boolean) => {
+    try {
+      const cwd = (await store.sessions(90)).sessions.find((s) => s.id === a.id)?.cwd ?? ''
+      const now = Date.now()
+      const waited = Math.max(0, Math.round((now - Date.parse(a.since)) / 1000))
+      approvalLog.record({ ts: new Date(now).toISOString(), id: a.id, cwd, tool: a.tool_name, rule: countedRule(a), by, behavior, remember, waited_s: Number.isFinite(waited) ? waited : 0 })
+    } catch {
+      // 記録できなくても答えは止めない
+    }
+  }
   const metaStore = new MetaStore(join(store.directory, META_FILE))
   // 未読の印（#502）。立て直しても消えないようにファイルに持つ
   const readStore = new ReadStore(join(store.directory, READ_MARKS_FILE))
@@ -866,7 +882,18 @@ export function createApp(
       terminalEnabled ? screenWait(codexDialogs.scan(sessions, await paneOnlyTargets(sessions)), () => codexDialogs.snapshot?.() ?? {}, codexDialogs.known?.() ?? false) : Promise.resolve({} as ApprovalMap),
       opencodeServerEnabled ? opencodePerms.scan(sessions) : Promise.resolve({} as ApprovalMap),
     ])
-    const merged = mergeApprovalMaps(mergeApprovalMaps(mergeApprovalMaps(approvals.snapshot(), codexApp.snapshot()), dialogs), opencode)
+    const all = mergeApprovalMaps(mergeApprovalMaps(mergeApprovalMaps(approvals.snapshot(), codexApp.snapshot()), dialogs), opencode)
+    // 同じ cwd で同じルールの何回目か（#445）。数えるのは人が許可した回数で、決めた回数からは「常に許可」を勧める（勧めるだけ）
+    const merged: ApprovalMap = {}
+    for (const [id, list] of Object.entries(all)) {
+      const cwd = sessions.find((s) => s.id === id)?.cwd ?? ''
+      merged[id] = list.map((a) => {
+        const rule = cwd && a.answerable !== false ? countedRule(a) : ''
+        if (!rule) return a
+        const count = approvalLog.count(cwd, rule) + 1
+        return { ...a, count, suggest: count >= APPROVAL_SUGGEST_AT }
+      })
+    }
     // 問題なさそうかの確率（#491）。聞いていないものは投げるだけで、届いたら次の応答に載る（rev は approvalMapKey が拾う）
     // 読む経路（一覧・詳細・フィード・MCP の sai_sessions）は写しに確率を付けるだけで、預かりの本物は触らない。
     // 自動の「常に許可」（#499）は jevAutoTick が別に動く（読んだだけで許可が書かれない）
@@ -944,6 +971,7 @@ export function createApp(
         }
         if (decision.kind !== 'allow' || !rule || !label) continue
         if (!approvals.answer(a.approval_id, { behavior: 'allow', updatedInput: a.input, updatedPermissions: permissionsFor(rule) })) continue
+        void logAnswer(a, 'jev', 'allow', true)
         lines.push(`--- ${new Date().toISOString()} ${a.id} Jev が自動で常に許可（この回 ${jevPercent(a.jev!)}%、ルール ${jevPercent(ruleSafe!)}%、閾値 ${jevPercent(s.jev_auto)}%）: ${label}\n`)
       }
     }
@@ -2833,6 +2861,8 @@ export function createApp(
       answer.updatedPermissions = permissionsFor(rule)
     }
     if (!approvals.answer(approvalId, answer)) return error(res, 409, 'already answered')
+    // 回数に足してから返す（次のポーリングの「何回目」がずれない）
+    await logAnswer(current, 'human', answer.behavior, !!answer.updatedPermissions)
     return json(res, { ok: true, approval_id: approvalId, behavior: answer.behavior, remembered: answer.updatedPermissions ? ruleLabel(answer.updatedPermissions[0]!.rules[0]!) : undefined })
   }
 
@@ -2875,7 +2905,9 @@ export function createApp(
     // 許可の形が Claude Code のものなので、Codex には当てない（Codex は config.toml の approval_policy / trust_level）
     if (session.agent !== 'claude' || !cwd) return json(res, empty)
     const { sources, rules } = await collectPermissions(cwd, { home: homedir() })
-    return json(res, { ...empty, sources, rules } satisfies SessionPermissionsResponse)
+    // よく許可しているが、許可のルールに無いもの（#445。出すだけで、足すのはチャットの [常に許可]）
+    const frequent = approvalLog.frequent(cwd, rules.filter((r) => r.kind === 'allow').map((r) => r.rule))
+    return json(res, { ...empty, sources, rules, ...(frequent.length ? { frequent } : {}) } satisfies SessionPermissionsResponse)
   }
 
   /**

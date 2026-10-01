@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { alwaysAllowRule, answerAsk, askQuestions, ruleLabel } from '../../shared/approvals.ts'
+import { countNote } from '../../shared/approvalCounts.ts'
 import { approvalAction, hotkeyApplies, REPLY_FOR_ATTR } from './approvalKeys'
 import { api, type Approval } from './api'
 import { AskQuestions } from './AskQuestions'
@@ -44,6 +45,9 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false, modeNote =
   // 「常に許可」で書かれるルール。無いツール（Edit や質問）にはボタンを出さない
   const always = agent === 'claude' && questions.length === 0 ? alwaysAllowRule(approval.tool_name, approval.input) : null
   const decisions = approval.decisions ?? []
+  // 同じルールの何回目か（#445）。決めた回数からは「常に許可」を勧める（押すのは人）
+  const counted = always ? countNote(approval, ruleLabel(always)) : ''
+  const suggest = !!always && !!approval.suggest
 
   const send = useCallback(
     async (body: Parameters<typeof api.answerApproval>[1]) => {
@@ -97,6 +101,7 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false, modeNote =
           {/* 許可して問題なさそうかの予想（#491）。押すのは人。自動で答えるかは設定の閾値（#499。答えたバブルはここに出ない） */}
           {approval.jev !== undefined && <JevTag safe={approval.jev} rule={approval.jev_rule} />}
           {detail && <pre className="detail">{detail}</pre>}
+          {counted && <div className={`count-note${suggest ? ' suggest' : ''}`}>{counted}</div>}
           {/* 端末の画面から読んだ選択肢（#425）。下のボタンで答えられる（#450） */}
           {approval.dialog && <DialogPreview dialog={approval.dialog} />}
           {/* 素通しに変えても、処理中のターンは起動したときのモードのまま聞いてくる（#272）。質問は素通しでも出るので付けない */}
@@ -139,7 +144,7 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false, modeNote =
               {always && (
                 <button
                   type="button"
-                  className="always"
+                  className={`always${suggest ? ' suggest' : ''}`}
                   disabled={busy || done !== null}
                   title={`${ruleLabel(always)} を返信先の .claude/settings.local.json に書く。以後この形は聞かれない（端末の「今後も許可」と同じ）${armed ? '。⌘⇧Enter / Ctrl+⇧Enter' : ''}`}
                   onClick={() => void send({ behavior: 'allow', remember: 'local' })}

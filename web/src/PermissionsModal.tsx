@@ -53,6 +53,24 @@ export function PermissionsModal({ id, onClose }: { id: string; onClose: () => v
               </div>
             ) : (
               <>
+                {/* よく許可しているが、許可のルールに無いもの（#445）。ここからは足せないので、次に聞かれたときの [常に許可] を勧めるだけ */}
+                {(data.frequent?.length ?? 0) > 0 && (
+                  <div className="group frequent">
+                    <div className="head">
+                      よく許可しているが、ルールに無いもの
+                      <span className="n">{data.frequent!.length}</span>
+                    </div>
+                    <ul>
+                      {data.frequent!.map((f) => (
+                        <li key={`frequent:${f.rule}`}>
+                          <code>{f.rule}</code>
+                          <span className="src">{f.count} 回許可</span>
+                        </li>
+                      ))}
+                    </ul>
+                    <div className="hint">次に聞かれたときに [常に許可] を押すと、この形は聞かれなくなります。</div>
+                  </div>
+                )}
                 {rules.length === 0 && <div className="hint">個別のルールはありません（毎回聞かれます）。</div>}
                 {PERMISSION_KINDS.map((kind) => {
                   const group = rules.filter((r) => r.kind === kind)

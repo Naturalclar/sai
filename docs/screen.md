@@ -369,6 +369,7 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 許可モード（`permission_mode`。行に載っている一番新しい値）も併せて出す。ルールが 1 件も無くても `auto` や `bypassPermissions` なら通ってしまうので、ルールだけ見ると誤解する。`default` 以外のときは一覧とチャット見出しに印が付く。Codex は許可の形が別（`~/.codex/config.toml` の `approval_policy` / `trust_level`）なので対象外。
 
 - **[常に許可]** は端末の「今後も許可」と同じ。決定に `updatedPermissions`（`Bash(gh pr:*)` のような Claude の許可ルール。`destination: localSettings`）を付けて返すと、CLI が返信先の cwd の `.claude/settings.local.json` に書き、次のプロセスからその形は聞かれない（CLI 2.1.259 で確認）。ルールは SAI が組み立てる（`shared/approvals.ts` の `alwaysAllowRule`。CLI は候補を送ってこない）: Bash はコマンドの先頭 1 語、`gh` / `git` / `npm` のようにサブコマンドを持つ CLI は 2 語で前方一致。MCP ツールはそのツール名。Edit / Write などファイル系と `AskUserQuestion` / `ExitPlanMode` には出さない（設定に焼くには広すぎる）。ボタンにマウスを乗せると書かれるルールが見える。「常に拒否」は無い
+- **同じ形の許可を何度もしていると、[常に許可] を勧める**（#445）。SAI の画面で人が許可した回数を、作業ディレクトリと「常に許可」で書かれるルール（`Bash(gh pr:*)` など）ごとに数え、2 回目からバブルに「N 回目の許可（ルール）」を出し、**3 回目からは [常に許可] のボタンを目立たせる**。盾のモーダルの一番上にも「よく許可しているが、ルールに無いもの」を並べる。**勧めるだけで、ルールは書かない**（書くのは今までどおり [常に許可] を押したときだけ）。数えるのは直近 30 日で、拒否・Jev の自動の許可・端末で答えた許可・ルールが作れないツール（`Edit` など）は数えない。数は `~/.agent-feed/approvals.jsonl`（答えるたびに 1 行。コマンドの全文は入らない）から数え直すので、消しても数がゼロに戻るだけ
 - 答える口は同一オリジンのみ（`isCrossOrigin`）。ここが通ると別サイトから許可が押せてしまうので外さない
 - **Claude だけ。** Codex に同等の口は無い（返信は今までどおり、承認が要るものは拒否される）
 - 外すなら `SAI_APPROVE=0`。運用者が `SAI_CLAUDE_ARGS` に自前の `--permission-prompt-tool` を入れていれば SAI は足さない。`--mcp-config` は追加なので、`~/.claude.json` や `.mcp.json` の MCP サーバはそのまま使える（`--strict-mcp-config` は付けない）

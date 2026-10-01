@@ -1,3 +1,4 @@
+import { RefreshButton } from './RefreshButton'
 import { useCallback, useEffect, useState } from 'react'
 import { api, type PrsResponse } from './api'
 import { useLocalState } from './hooks'
@@ -15,7 +16,7 @@ interface Loaded {
  * GitHub に出ている PR の一覧（#524）。**読むだけ**で、並べるのは SAI が記録で知っているリポジトリ（セッションの remote）の
  * open な PR。自分が出したもの以外も出す（他人のコードのレビューのため）。自分にレビューが頼まれているものを先に並べる。
  *
- * 3 秒のポーリングには乗せない（リポジトリの数だけ `gh` が走る）。開いたときに 1 回と、「読み直す」を押したときだけ取る
+ * 3 秒のポーリングには乗せない（リポジトリの数だけ `gh` が走る）。開いたときに 1 回と、「更新」を押したときだけ取る
  */
 export function PrListView({ onStatus, onOpenSidebar }: Pick<PaneProps, 'onStatus' | 'onOpenSidebar'>) {
   const [loaded, setLoaded] = useState<Loaded | null>(null)
@@ -68,9 +69,7 @@ export function PrListView({ onStatus, onOpenSidebar }: Pick<PaneProps, 'onStatu
           <button type="button" className={ui.requested ? 'on' : ''} aria-pressed={ui.requested} onClick={() => setUi({ requested: !ui.requested })}>
             レビュー依頼だけ
           </button>
-          <button type="button" onClick={() => void load(true)} disabled={busy}>
-            {busy ? '読んでいます…' : '読み直す'}
-          </button>
+          <RefreshButton busy={busy} onClick={() => void load(true)} />
         </span>
       </div>
       {error && !data && <div className="empty">取得失敗: {error}</div>}

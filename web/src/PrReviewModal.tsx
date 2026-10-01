@@ -1,3 +1,4 @@
+import { RefreshButton } from './RefreshButton'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { parseUnifiedDiff } from '../../shared/diff.ts'
 import { moveToBody, REVIEW_EVENT_LABEL, reviewEmptyReason, reviewEvents, reviewLineState } from '../../shared/prReview.ts'
@@ -12,7 +13,7 @@ interface Props {
   /** 全体のコメントの下書き */
   body: string
   onBody: (body: string) => void
-  /** PR を読み直す（head が進んでいたとき） */
+  /** PR を取り直す（head が進んでいたとき。ボタンは「更新」） */
   onReload: () => Promise<unknown>
   /** 投稿できた。下書きを消して、レビューへのリンクを出すのは呼ぶ側 */
   onPosted: (url: string, event: PrReviewEvent) => void
@@ -51,7 +52,7 @@ export function PrReviewModal({ data, comments, onRemoveComment, body, onBody, o
   const stale = lines.filter((l) => l.state !== 'ok').length
   const headMoved = latestHead !== '' && latestHead !== pr.head_sha
   const empty = reviewEmptyReason(event, body, comments.length)
-  const blocked = checking ? 'PR が進んでいないか確かめています…' : headMoved ? 'PR が読んだあとに進みました。読み直してください' : stale > 0 ? `行が変わったコメントが ${stale} 件あります。外すか全体のコメントに移してください` : empty
+  const blocked = checking ? 'PR が進んでいないか確かめています…' : headMoved ? 'PR が読んだあとに進みました。更新してください' : stale > 0 ? `行が変わったコメントが ${stale} 件あります。外すか全体のコメントに移してください` : empty
 
   useEffect(() => ref.current?.focus(), [])
 
@@ -122,7 +123,7 @@ export function PrReviewModal({ data, comments, onRemoveComment, body, onBody, o
         {headMoved && (
           <div className="warn">
             PR が読んだあとに進みました。{' '}
-            <button type="button" className="linkish" onClick={reload}>読み直す</button>
+            <RefreshButton busy={checking} onClick={reload} linkish />
           </div>
         )}
         <fieldset className="pr-review-event">

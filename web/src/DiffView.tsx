@@ -20,6 +20,21 @@ function fileOf(files: readonly DiffFile[], path: string): DiffFile | undefined 
   return files.find((f) => f.path === path || f.oldPath === path)
 }
 
+/**
+ * コメントをファイルごとに分ける（#611）。描画のたびに組む（コメントの件数ぶんで安い）。1 件足す・消すたびに全ファイルの `comments` が
+ * 新しくなっても、`DiffFileItem` の memo は `comments` を中身（区切り・口・一覧の要素）で比べる（`sameComments`）ので描き直らない。
+ * コメントの無いファイルにも口は要る（行番号を押せる）ので、空の一覧の口を 1 つ共用する
+ */
+function perFileComments(comments: DiffViewComments | undefined): (path: string) => DiffViewComments | undefined {
+  if (!comments) return () => undefined
+  const byPath = new Map<string, DiffComment[]>()
+  for (const c of comments.list) (byPath.get(c.path) ?? byPath.set(c.path, []).get(c.path)!).push(c)
+  const of = (list: readonly DiffComment[]): DiffViewComments => ({ section: comments.section, list, onAdd: comments.onAdd, onRemove: comments.onRemove })
+  const perPath = new Map([...byPath].map(([path, list]) => [path, of(list)] as const))
+  const empty = of([])
+  return (path: string) => perPath.get(path) ?? empty
+}
+
 /** そのファイルを開いたときに描く行数（文脈行も数える）。本文の無いファイルは 0 */
 function lineCount(files: readonly DiffFile[], path: string): number {
   const file = fileOf(files, path)
@@ -43,6 +58,7 @@ export function DiffView({ section, title, empty, action, comments }: { section:
   const total = section.files.reduce((n, f) => n + f.added + f.removed, 0)
   const rootRef = useRef<HTMLDivElement>(null)
   const scroll = useScrollTick(rootRef)
+  const commentsOf = perFileComments(comments)
 
   // 最初から開いておくファイル（#221）。上から順に、描画する行数が予算に収まるぶんだけ開く。
   // 普段の差分は全部開き、極端に大きいものだけ後ろが閉じたまま出る
@@ -75,7 +91,7 @@ export function DiffView({ section, title, empty, action, comments }: { section:
                 files={files}
                 shown={open[f.path] ?? autoOpen.has(f.path)}
                 onToggle={onToggle}
-                comments={comments}
+                comments={commentsOf(f.path)}
                 editing={editing?.path === f.path ? editing : null}
                 setEditing={setEditing}
               />

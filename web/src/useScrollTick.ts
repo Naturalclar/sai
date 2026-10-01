@@ -48,9 +48,11 @@ export function useScrollTick(ref: RefObject<HTMLElement | null>): ScrollWatch {
     }
     target.addEventListener('scroll', bump, { passive: true })
     window.addEventListener('resize', bump)
-    // 容器の大きさ（ペインの幅・キーボードの出入り）が変わっても測り直す
-    const ro = scroller && typeof ResizeObserver === 'function' ? new ResizeObserver(bump) : null
-    ro?.observe(scroller!)
+    // 容器の大きさ（ペインの幅・キーボードの出入り）と、根の高さ（上のファイルの開閉・コメント欄の出入りで下のファイルが
+    // スクロール無しでずれる。#611）が変わっても測り直す
+    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(bump) : null
+    if (scroller) ro?.observe(scroller)
+    if (ref.current) ro?.observe(ref.current)
     bump()
     return () => {
       target.removeEventListener('scroll', bump)

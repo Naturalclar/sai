@@ -128,12 +128,14 @@
   .diff-section .patch { border: 1px solid var(--line); border-radius: 6px; margin: 2px 0 8px; overflow-x: auto; background: var(--panel); container-type: inline-size; }
   /*
    * 本文は見えている行だけ DOM に置く（#287。DiffFilePatch）。箱（.vlist）は全行ぶんの高さで、行は position: absolute。
-   * 幅は一番長い行の文字数から先に決める（`fileWidthCh` の ch。#514 の「一番長い行の幅まで伸ばす」を DOM に頼らずやる）。
+   * 幅は一番長い行の文字数（--cols / --hcols。fileWidthCells）から先に決める（#514 の「一番長い行の幅まで伸ばす」を DOM に頼らずやる）。
+   * 単位の計算はここ: 本文は 1ch × 文字数 + 番号 2 つ（タッチの 4em で数える。マウスは 3.5em で少し余る）+ 記号 1.2em + 右の余白 10px、
+   * 見出しは 11px なので 1ch × 11/12 × 文字数 + padding 10px × 2。広い方（#611。JS で 1ch = 7.2px と決め打たない）
    * 見えている幅より狭ければ min-width で伸ばし、横に流したときにはみ出した分にも追加・削除の色が付く。
    * **行の高さは固定**（.ln 18px、.hh 20.5px。web/src/diffVirtual.ts の LINE_H / HUNK_HEADER_H と揃える。変えたら両方）
    */
   /* `ch` を本文と同じ等幅・同じ大きさで解決させる（親の 14px のサンセリフで解決すると、文字数から出した幅と中身の幅が合わない） */
-  .diff-section .vlist { position: relative; min-width: 100%; box-sizing: border-box; font-family: var(--mono); font-size: 12px; outline: none; }
+  .diff-section .vlist { position: relative; min-width: 100%; box-sizing: border-box; font-family: var(--mono); font-size: 12px; outline: none; width: max(calc(var(--cols, 0) * 1ch + 8em + 1.2em + 10px), calc(var(--hcols, 0) * 0.9167ch + 20px)); }
   .diff-section .vlist > .row, .diff-section .vlist > .hh { position: absolute; left: 0; right: 0; box-sizing: border-box; }
   .diff-section .patch .note { color: var(--muted); padding: 6px 10px; font-family: inherit; font-size: 12px; }
   .diff-section .hh { font-family: var(--mono); font-size: 11px; line-height: 16.5px; height: 20.5px; color: var(--muted); background: var(--bg); padding: 2px 10px; white-space: pre; overflow: hidden; }

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { HUNK_GAP, HUNK_HEADER_H, LINE_CHROME_CH, LINE_H, charWidth, fileHeight, fileWidthCh, layoutFile, rowTop, rowsToRender, textWidth, visibleRange } from './diffVirtual.ts'
+import { HUNK_GAP, HUNK_HEADER_H, LINE_H, charWidth, fileHeight, fileWidthCells, layoutFile, rowTop, rowsToRender, textWidth, visibleRange } from './diffVirtual.ts'
 
 const hunks = (...sizes: number[]) => sizes.map((n) => ({ header: '@@', lines: Array.from({ length: n }, (_, i) => ({ text: `l${i}` })) }))
 
@@ -72,6 +72,8 @@ test('charWidth / textWidth: 全角と絵文字は 2、半角は 1、結合と�
   assert.equal(textWidth('한글'), 4)
   assert.equal(textWidth('🚀'), 2)
   assert.equal(textWidth('✅❌⭐⏰🀄'), 10, '絵文字として描かれる記号も 2')
+  assert.equal(textWidth('※①●─→'), 10, '等幅に無い記号（別の書体で約 1em）も 2（#611）')
+  assert.equal(textWidth('├── src/'), 11, '罫線は 2')
   assert.equal(textWidth('é'), 1, '結合記号は 0')
   assert.equal(textWidth('a\tb'), 9)
   assert.equal(textWidth('abcdefgh\tb'), 17, 'タブは次の 8 桁へ')
@@ -79,11 +81,10 @@ test('charWidth / textWidth: 全角と絵文字は 2、半角は 1、結合と�
   assert.equal(textWidth(''), 0)
 })
 
-test('fileWidthCh: 一番長い行の文字幅に番号・記号の分を足す。見出しも数える（11px なので縮めて）', () => {
-  const w = fileWidthCh([{ header: '@@ -1 +1 @@', lines: [{ text: 'short' }, { text: 'x'.repeat(100) }, { text: 'あ'.repeat(30) }] }])
-  assert.equal(w, Math.ceil(100 + LINE_CHROME_CH), '100 文字の行が一番長い')
-  assert.equal(fileWidthCh([{ header: '@@', lines: [{ text: 'あ'.repeat(60) }] }]), Math.ceil(120 + LINE_CHROME_CH), '全角 60 字 = 120')
+test('fileWidthCells: 行と見出しそれぞれの一番長い文字幅（セル数）。px にするのは CSS', () => {
+  assert.deepEqual(fileWidthCells([{ header: '@@ -1 +1 @@', lines: [{ text: 'short' }, { text: 'x'.repeat(100) }, { text: 'あ'.repeat(30) }] }]), { cols: 100, hcols: 11 })
+  assert.deepEqual(fileWidthCells([{ header: '@@', lines: [{ text: 'あ'.repeat(60) }] }]), { cols: 120, hcols: 2 }, '全角 60 字 = 120')
   const long = '@@ -1,3 +1,4 @@ ' + 'h'.repeat(200)
-  assert.equal(fileWidthCh([{ header: long, lines: [{ text: 'a' }] }]), Math.ceil((textWidth(long) + 2.8) * (11 / 12)), '見出しの方が長ければ見出し')
-  assert.equal(fileWidthCh([]), 0)
+  assert.deepEqual(fileWidthCells([{ header: long, lines: [{ text: 'a' }] }]), { cols: 1, hcols: textWidth(long) })
+  assert.deepEqual(fileWidthCells([]), { cols: 0, hcols: 0 })
 })

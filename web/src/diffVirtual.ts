@@ -3,7 +3,7 @@
 // 決めた形（#287 の「決めたこと」）:
 // - 単位は**ファイルごと**。見えていないファイルは高さだけの空箱。開いているファイルの中で行を間引く
 // - 行コメント（#511）が付いている行と編集中の行は、見えていなくても常に DOM に置く（`pinned`）。高さは置いたあとに測って下の行に足す
-// - 横幅は DOM からではなく、ファイルの中で一番長い行の文字数から先に計算して固定する（`fileWidthCh()`。全角は 2）
+// - 横幅は DOM からではなく、ファイルの中で一番長い行の文字数から先に計算して固定する（`fileWidthCells()`。全角は 2）
 // - ページ内検索（⌘F）が DOM に無い行に当たらなくなるのは、いったん諦める
 //
 // 行の高さは固定（等幅 12px × 1.5 = 18px、`white-space: pre` で折り返さない）。ハンク見出し `.hh` と注記も固定。
@@ -116,6 +116,11 @@ export function charWidth(cp: number): number {
   if (cp === 0x200d) return 0 // ZWJ
   if (
     (cp >= 0x1100 && cp <= 0x115f) ||
+    // 等幅フォントに無くて別の書体で約 1em になる記号（East Asian Ambiguous。※ ① ● ─ → など）。狭く数えると色が途中で切れるので 2（#611）
+    cp === 0x203b ||
+    (cp >= 0x2190 && cp <= 0x21ff) ||
+    (cp >= 0x2460 && cp <= 0x24ff) ||
+    (cp >= 0x2500 && cp <= 0x25ff) ||
     (cp >= 0x231a && cp <= 0x23f3) || // ⌚ ⏰ など
     (cp >= 0x2600 && cp <= 0x27bf) || // ☀ ✅ ❌ ✔ など（絵文字として描かれるものが多い。広めに 2 と数える。広すぎても横スクロールが少し余るだけ）
     cp === 0x2b50 ||
@@ -149,21 +154,26 @@ export function textWidth(text: string): number {
   return w
 }
 
+/** 1 ファイルの本文の幅の材料。px にするのは CSS（`.vlist` の `--cols` / `--hcols`。フォントの比率を JS に埋めない。#611） */
+export interface FileWidthCells {
+  /** 行の本文で一番長いものの文字幅（セル数）。番号・記号・余白は CSS が em / px で足す */
+  cols: number
+  /** ハンク見出しで一番長いものの文字幅（セル数）。見出しは 11px なので CSS が縮めて、padding を足す */
+  hcols: number
+}
+
 /**
- * 番号 2 つ（タッチ端末は 4em × 2。マウスは 3.5em だが広い方で数える。狭く見積もると色が本文の途中で切れる）＋記号（1.2em）＋
- * 本文の右の余白（10px ≒ 1.4ch）を、本文の文字幅に足すぶん（ch）。`.vlist` は `.ln` と同じ 12px の等幅なので、1em = 12px、1ch ≒ 7.2px。styles.css と揃える
- */
-export const LINE_CHROME_CH = 4 * 2 * (12 / 7.2) + 1.2 * (12 / 7.2) + 1.4
-/**
- * ファイルの本文の箱の幅（ch）。一番長い行（見出しも含む）の文字幅から先に決める（#287。#514 の「一番長い行の幅まで伸ばす」を
+ * ファイルの本文の箱の幅の材料。一番長い行（見出しも別に）の文字幅から先に決める（#287。#514 の「一番長い行の幅まで伸ばす」を
  * 見えている行だけでやると、その行が画面外に出た瞬間に幅が縮んで横スクロールが跳ねる）。
- * `.ln` は 12px の等幅で、1ch ≒ 7.2px。`.hh` は 11px なのでこちらは 11/12 に縮めて数える。見えている幅（min-width: 100%）より狭ければ CSS が伸ばす
+ * 単位の計算（1ch が何 px か、番号の幅の em、padding の px）は CSS に置く（`calc(var(--cols) * 1ch + …)`）。
+ * JS で 1ch = 7.2px と決め打つと、ch が狭いフォント（Consolas ≈ 0.55em）で足りなくなる
  */
-export function fileWidthCh(hunks: readonly { header: string; lines: readonly { text: string }[] }[]): number {
-  let widest = 0
+export function fileWidthCells(hunks: readonly { header: string; lines: readonly { text: string }[] }[]): FileWidthCells {
+  let cols = 0
+  let hcols = 0
   for (const h of hunks) {
-    widest = Math.max(widest, (textWidth(h.header) + 2.8) * (11 / 12))
-    for (const l of h.lines) widest = Math.max(widest, textWidth(l.text) + LINE_CHROME_CH)
+    hcols = Math.max(hcols, textWidth(h.header))
+    for (const l of h.lines) cols = Math.max(cols, textWidth(l.text))
   }
-  return Math.ceil(widest)
+  return { cols, hcols }
 }

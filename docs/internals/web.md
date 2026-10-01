@@ -123,7 +123,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 
 - 返答のバブルの中で文字を選ぶと、選択のすぐ下に `QuoteButton`（「引用して返信」）が出る。押すと打ちかけの末尾に Markdown の引用（`> …`）と空行を足し、入力欄にフォーカスを移す（カーソルは引用の下）。**送らない**（差分の行コメント #511 と同じで、足すだけ）。
 - 判定と組み立ては `web/src/quoteReply.ts` の純粋関数（`quoteReply.test.ts`）: `quotable()`（**1 つの返答のバブルの中**だけ。自分の入力・待ちのバブル・バブルをまたいだ選択・空白だけには出さない）、`quoteText()`（行ごとに `> `、前後の空行と行末の空白を落とし、`QUOTE_MAX_CHARS`＝600 字で切って `…`）、`quoteInsert()`、`quoteButtonPosition()`（選択の下の左端。画面からはみ出さない）。
-- 選択を読むのは `web/src/useQuoteSelection.ts`（`selectionchange`・スクロール・リサイズで読み直す。バブルは `.msg` の `data-side`＝`agent` と `.waiting` の有無で見る）。**ボタンを押しても選択を外さない**（pointerdown / mousedown の既定を止める）。タッチ端末は押した瞬間に選択が外れてから click が届くので、外れてから消すまで `CLEAR_DELAY_MS`（250ms）待つ。
+- 選択を読むのは `web/src/useQuoteSelection.ts`（`selectionchange`・スクロール・リサイズで読み直す）。**引用できるのは返答の本文（`.msg` の中の `.body`）だけ**で、一言（`.summary`。LLM の言い換えでエージェントの文ではない）・思考・時刻・使用量の印・ボタンの文字には出さない。側は `.msg` の `data-side`＝`agent`、待ちは `.waiting` で見る。**選択がチャットの見えている範囲から流れ出たら出さない**（`selectionVisible()`）。位置が変わらなければ state を触らない。**ボタンを押しても選択を外さない**（pointerdown / mousedown の既定を止める）。タッチ端末は押した瞬間に選択が外れてから click が届くので、外れてから消すまで `CLEAR_DELAY_MS`（250ms）待つ。
 - `Chat` は `onQuote` を渡されたときだけ見る。渡すのは `SessionView` だけ（返信欄を出しているとき）で、フィード・要対応には出さない。`SessionView` が `quote`（`{ text, seq }`）を持ち、`ReplyBox` が `insert`（#511）と同じく **`seq` が増えたときだけ** `appendInsert()` で足す。`ReplyBox` は `key` でセッションごとに作り直され、作ったときの `seq` は当てた扱いにするので、別のセッションには持ち越さない。
 - 入力欄はただの textarea のまま（引用をチップにしない）。箇条書きの項目ごとの印は出していない。
 

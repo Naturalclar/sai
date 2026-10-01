@@ -50,6 +50,14 @@ export function quoteInsert(selected: string): string {
   return quote ? `${quote}\n\n` : ''
 }
 
+/**
+ * 選択がチャットの見えている範囲にあるか（縦だけ見る）。スクロールで外へ流れた選択にはボタンを出さない
+ * （見えない所を引用させない。fixed のボタンが見出しや入力欄の上に張り付くのも防ぐ）
+ */
+export function selectionVisible(rect: { top: number; bottom: number }, box: { top: number; bottom: number }): boolean {
+  return rect.bottom > box.top && rect.top < box.bottom
+}
+
 /** ボタンを置く位置。選択の下の左端。画面からはみ出さないように寄せる */
 export function quoteButtonPosition(rect: { left: number; bottom: number }, viewport: { width: number; height: number }, size = { width: 120, height: 30 }): { left: number; top: number } {
   const left = Math.max(8, Math.min(rect.left, viewport.width - size.width - 8))

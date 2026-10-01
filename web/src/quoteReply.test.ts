@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { QUOTE_MAX_CHARS, quotable, quoteButtonPosition, quoteInsert, quoteText } from './quoteReply.ts'
+import { QUOTE_MAX_CHARS, quotable, quoteButtonPosition, quoteInsert, quoteText, selectionVisible } from './quoteReply.ts'
 import { appendInsert } from './replyRestore.ts'
 
 test('quoteText: 行ごとに > を付ける。複数行・箇条書き・コードの行もそのまま引用にする（#604）', () => {
@@ -42,4 +42,12 @@ test('quoteButtonPosition: 選択の下の左端に置き、画面からはみ�
   assert.deepEqual(quoteButtonPosition({ left: 40, bottom: 200 }, vp), { left: 40, top: 206 })
   assert.deepEqual(quoteButtonPosition({ left: 380, bottom: 840 }, vp), { left: 390 - 120 - 8, top: 844 - 30 - 8 })
   assert.deepEqual(quoteButtonPosition({ left: -20, bottom: -50 }, vp), { left: 8, top: 8 })
+})
+
+test('selectionVisible: 選択がチャットの見えている範囲から流れ出たら出さない', () => {
+  const box = { top: 100, bottom: 700 }
+  assert.equal(selectionVisible({ top: 300, bottom: 320 }, box), true)
+  assert.equal(selectionVisible({ top: 690, bottom: 720 }, box), true, '一部でも見えていれば出す')
+  assert.equal(selectionVisible({ top: 20, bottom: 90 }, box), false, '上へ流れた')
+  assert.equal(selectionVisible({ top: 710, bottom: 760 }, box), false, '下へ流れた')
 })

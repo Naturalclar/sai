@@ -407,6 +407,86 @@ def _iter_jsonl(path: Path, limit: int | None = None):
         return
 
 
+#: 末尾から読むときの 1 回ぶん（#613）
+_TAIL_CHUNK = 1 << 20
+
+
+def _iter_jsonl_reversed(path: Path):
+    """JSONL を**末尾から**1 行ずつ返す（#613）。読むのは要る分だけ。
+
+    Claude の transcript は 2 万行・80MB を超える（貼った画像やツールの出力が 1 行に入る）。
+    ターン完了で要るのは**最後のターンの行だけ**なのに、頭から全部を `json.loads` していて、
+    1 回 0.65 秒（混んでいると 15 秒）を 1 回の実行で 4〜5 回繰り返し、15 秒の自殺タイマーに
+    掛かって行が黙って落ちていた。行の読み方（空行・壊れた行・dict でない行は飛ばす）は
+    `_iter_jsonl()` と同じ。
+    """
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            pos = handle.tell()
+            rest = b""
+            while pos > 0:
+                size = min(_TAIL_CHUNK, pos)
+                pos -= size
+                handle.seek(pos)
+                lines = (handle.read(size) + rest).split(b"\n")
+                # 先頭の切れ端は、もう 1 つ手前の塊の続き（ファイルの頭まで来たらそれも 1 行）
+                rest = lines[0] if pos > 0 else b""
+                for raw in reversed(lines[1:] if pos > 0 else lines):
+                    line = raw.decode("utf-8", errors="replace").strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except Exception:
+                        continue
+                    if isinstance(obj, dict):
+                        yield obj
+    except Exception:
+        return
+
+
+class _Tail:
+    """末尾から読んだ行を覚えておき、何度でも末尾から辿れるようにする（#613）。
+
+    1 回の実行で本文・入力・思考・モデルの 4 つが同じ「最後のターン」を辿るので、
+    同じ行を 4 回 `json.loads` しない。
+    """
+
+    def __init__(self, path: Path):
+        self._source = _iter_jsonl_reversed(path)
+        self._seen: list[dict] = []
+
+    def __iter__(self):
+        index = 0
+        while True:
+            if index < len(self._seen):
+                yield self._seen[index]
+            else:
+                try:
+                    self._seen.append(next(self._source))
+                except StopIteration:
+                    return
+                yield self._seen[index]
+            index += 1
+
+
+#: path → (読んだときの印, _Tail)。**ファイルが増えたら読み直す**（待っている間に着いた行を拾う）
+_TAILS: dict[str, tuple[tuple[int, int], "_Tail"]] = {}
+
+
+def _tail(path: Path) -> "_Tail":
+    """そのファイルを末尾から辿るもの。印（大きさと mtime）が同じ間は読んだ分を使い回す。"""
+    key = str(path)
+    signature = _file_signature(path)
+    cached = _TAILS.get(key)
+    if cached and cached[0] == signature and signature != (0, 0):
+        return cached[1]
+    tail = _Tail(path)
+    _TAILS[key] = (signature, tail)
+    return tail
+
+
 def _role_and_text(entry: dict) -> tuple[str, str]:
     """Claude の transcript / Codex の rollout どちらの行からも (role, text) を取る。"""
     if entry.get("isMeta") or entry.get("isSidechain"):
@@ -447,7 +527,12 @@ def _turn_assistant_text(entries: list[dict]) -> tuple[str, bool]:
     （`stop_reason: tool_use` に付いた 1〜2 文）しか無ければそれを返し、本文が 1 つも
     無ければ `("", False)`。
     """
-    for entry in reversed(entries):
+    return _turn_assistant_text_reversed(reversed(entries))
+
+
+def _turn_assistant_text_reversed(newest_first) -> tuple[str, bool]:
+    """`_turn_assistant_text()` の中身。行を**新しい順**に受ける（末尾から読んだものをそのまま渡せる。#613）。"""
+    for entry in newest_first:
         if _is_prompt_row(entry):
             break
         if entry.get("isMeta") or entry.get("isSidechain") or entry.get("type") != "assistant":
@@ -484,7 +569,7 @@ def last_assistant_text(path: Path, wait: bool = False) -> str:
     signature = _file_signature(path)
     if signature == (0, 0):
         return ""  # 読めない transcript を待っても増えない
-    text, closed = _turn_assistant_text(list(_iter_jsonl(path)))
+    text, closed = _turn_assistant_text_reversed(_tail(path))
     if closed or not wait:
         return text
     deadline = time.monotonic() + ASSISTANT_WAIT_S
@@ -493,12 +578,12 @@ def last_assistant_text(path: Path, wait: bool = False) -> str:
         time.sleep(ASSISTANT_POLL_S)
         current = _file_signature(path)
         if current == signature:
-            continue  # 増えていないなら読み直さない（大きいファイルを何度も舐めない）
+            continue  # 増えていないなら読み直さない
         # **印は読む前のものを持ち越す**。読み終わってから stat すると、読んでいる最中に
         # 着いた行がその印に含まれてしまい、次の比較で「増えていない」になって永久に拾えない
         signature = current
         idle_until = time.monotonic() + ASSISTANT_IDLE_S
-        text, closed = _turn_assistant_text(list(_iter_jsonl(path)))
+        text, closed = _turn_assistant_text_reversed(_tail(path))
         if closed:
             break
     return text
@@ -549,8 +634,7 @@ def last_user_text(path: Path) -> str:
     空文字で止まる。それは新しいターンの起点で、そのターンに人の入力は無い。飛ばして手前の
     入力を探すと、前のターンの入力が 2 回目の Stop にも載って画面で二重に出る。
     """
-    entries = list(_iter_jsonl(path))
-    for entry in reversed(entries):
+    for entry in _tail(path):
         if entry.get("isMeta") or entry.get("isSidechain"):
             continue
         message = entry.get("message")
@@ -596,9 +680,8 @@ def last_turn_thinking(path: Path) -> str:
     元の順に `\n\n` で繋ぐ。本文が空のブロック（signature だけ）は飛ばす。
     `text`（返答）とは別に拾うので、_blocks_to_text() には混ざらない。
     """
-    entries = list(_iter_jsonl(path))
     parts: list[str] = []
-    for entry in reversed(entries):
+    for entry in _tail(path):
         if _is_prompt_row(entry):
             break
         if entry.get("isMeta") or entry.get("isSidechain") or entry.get("type") != "assistant":
@@ -619,8 +702,7 @@ def last_turn_thinking(path: Path) -> str:
 def last_assistant_model(path: Path) -> str:
     """Claude の transcript から、最後の assistant 行のモデル名（message.model）を取る。
     CLI が合成した行（`<synthetic>`）は飛ばす。"""
-    entries = list(_iter_jsonl(path))
-    for entry in reversed(entries):
+    for entry in _tail(path):
         if entry.get("isMeta") or entry.get("isSidechain") or entry.get("type") != "assistant":
             continue
         message = entry.get("message")

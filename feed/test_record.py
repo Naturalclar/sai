@@ -1618,5 +1618,93 @@ class RecordTest(unittest.TestCase):
         self.assertEqual((row["agent"], row["session"], row["text"]), ("grok", self.GROK_SESSION, "y"))
 
 
+    # ---- 大きい transcript は末尾から要る分だけ読む（#613） ----
+
+    def _count_parses(self, fn):
+        """`fn` の間に record.py が `json.loads` した回数。"""
+        real = record.json.loads
+        calls = [0]
+
+        def counting(text, *args, **kwargs):
+            calls[0] += 1
+            return real(text, *args, **kwargs)
+
+        record.json.loads = counting
+        try:
+            result = fn()
+        finally:
+            record.json.loads = real
+        return result, calls[0]
+
+    def test_tail_reader_matches_forward_reader_across_chunk_boundaries(self):
+        # 塊の境目が、行の途中・改行の真上・マルチバイト文字の途中のどこに来ても、頭から読んだものの逆順と同じ
+        path = Path(self.tmp.name) / "t.jsonl"
+        lines = [json.dumps({"i": i, "text": "あ" * (i % 7)}, ensure_ascii=False) for i in range(60)]
+        lines[10] = "{壊れた行"
+        lines[20] = ""
+        lines[30] = "[1, 2]"
+        path.write_text("\n".join(lines) + "\n\n", encoding="utf-8")
+        forward = list(record._iter_jsonl(path))
+        self.assertEqual(len(forward), 57)
+        original = record._TAIL_CHUNK
+        try:
+            for chunk in (1, 2, 3, 5, 7, 16, 64, 1 << 20):
+                record._TAIL_CHUNK = chunk
+                self.assertEqual(list(record._iter_jsonl_reversed(path)), forward[::-1], f"chunk={chunk}")
+        finally:
+            record._TAIL_CHUNK = original
+        # 末尾に改行が無くても最後の行を落とさない。無いファイルは空
+        path.write_text('{"a": 1}\n{"b": 2}', encoding="utf-8")
+        self.assertEqual(list(record._iter_jsonl_reversed(path)), [{"b": 2}, {"a": 1}])
+        self.assertEqual(list(record._iter_jsonl_reversed(Path(self.tmp.name) / "none.jsonl")), [])
+
+    def test_stop_on_a_large_transcript_parses_only_the_last_turn(self):
+        # 2 万行の transcript でも、読むのは最後のターンの行だけ（前は全行を 4〜5 回 json.loads して、
+        # 混んでいると 15 秒の自殺タイマーに掛かり、ターン完了の行が黙って落ちた）
+        path = Path(self.tmp.name) / "big.jsonl"
+        old = []
+        for i in range(10_000):
+            old.append({"type": "user", "message": {"role": "user", "content": f"前の依頼 {i}"}})
+            old.append({"type": "assistant", "message": {"role": "assistant", "model": "claude-old", "content": [{"type": "text", "text": f"前の返答 {i}"}]}})
+        last = [
+            {"type": "user", "message": {"role": "user", "content": "最後の依頼"}},
+            {"type": "assistant", "message": {"role": "assistant", "model": "claude-new", "content": [{"type": "thinking", "thinking": "考えた"}, {"type": "tool_use", "id": "t", "name": "Bash", "input": {}}]}},
+            {"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t", "content": "ok"}]}},
+            {"type": "assistant", "message": {"role": "assistant", "model": "claude-new", "content": [{"type": "text", "text": "最後の返答"}]}},
+        ]
+        write_jsonl(path, claude_entries(old + last))
+        record._TAILS.clear()
+
+        def read_all():
+            return (record.last_assistant_text(path, wait=True), record.last_user_text(path), record.last_turn_thinking(path), record.last_assistant_model(path))
+
+        result, parses = self._count_parses(read_all)
+        self.assertEqual(result, ("最後の返答", "最後の依頼", "考えた", "claude-new"))
+        self.assertLessEqual(parses, 10, "最後のターンの行だけを 1 回ずつ（4 つの読みで使い回す）")
+
+        # フックとして回しても行が書ける（exit 0・stdout は空）
+        payload = {"hook_event_name": "Stop", "session_id": "big", "transcript_path": str(path), "cwd": str(self.cwd)}
+        proc = run(stdin=json.dumps(payload), env=self.env)
+        self.assertEqual((proc.returncode, proc.stdout), (0, ""))
+        row = read_rows(self.feed_dir)[-1]
+        self.assertEqual((row["text"], row["user_text"], row["thinking"], row["model"]), ("最後の返答", "最後の依頼", "考えた", "claude-new"))
+
+    def test_tail_is_reread_when_the_transcript_grows(self):
+        # 待っている間に着いた行を拾う（印が変わったら覚えた分を捨てて読み直す）。前のターンには遡らない（#467）
+        path = Path(self.tmp.name) / "grow.jsonl"
+        entries = [
+            {"type": "user", "message": {"role": "user", "content": "前の依頼"}},
+            {"type": "assistant", "message": {"role": "assistant", "stop_reason": "end_turn", "content": [{"type": "text", "text": "前の返答"}]}},
+            {"type": "user", "message": {"role": "user", "content": "今の依頼"}},
+        ]
+        write_jsonl(path, entries)
+        record._TAILS.clear()
+        self.assertEqual(record.last_assistant_text(path), "", "今のターンの返答はまだ無い（前の返答は返さない）")
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps({"type": "assistant", "message": {"role": "assistant", "stop_reason": "end_turn", "content": [{"type": "text", "text": "今の返答"}]}}, ensure_ascii=False) + "\n")
+        self.assertEqual(record.last_assistant_text(path), "今の返答")
+        self.assertEqual(record.last_user_text(path), "今の依頼")
+
+
 if __name__ == "__main__":
     unittest.main()

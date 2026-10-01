@@ -133,7 +133,9 @@ export class RecoveredTurns {
    */
   private judge(turn: ClaudeTurn, now: number): Found | null | undefined {
     const endedMs = Date.parse(turn.endedAt)
-    if (turn.closed && turn.text && Number.isFinite(endedMs)) {
+    if (turn.closed && turn.text) {
+      // 時刻の読めない行は並べる場所が決まらないので補わない（決まらないまま読み続けない）
+      if (!Number.isFinite(endedMs)) return null
       if (turn.over || now - endedMs >= STOP_MISSING_AFTER_MS) return { text: turn.text, endedMs }
       return undefined
     }
@@ -156,6 +158,9 @@ export class RecoveredTurns {
         if (got !== undefined) {
           this.settled.set(key, got)
           this.fullAt.delete(key)
+        } else if (turn?.closed) {
+          // 閉じていて 60 秒の待ちが明けていないだけ。5 分ではなく、次の間隔でもう一度見る（#627 のレビュー）
+          this.fullAt.set(key, this.now() - FULL_RETRY_MS + RETRY_MS)
         }
       })
       .catch(() => undefined)

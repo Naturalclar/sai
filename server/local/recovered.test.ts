@@ -66,3 +66,24 @@ test('末尾に見当たらないターンは裏で頭から読むが、決ま�
   }
   assert.equal(state.fulls, 1, '回っているセッションの transcript を 15 秒ごとに頭から読まない')
 })
+
+test('頭から読んだターンが閉じたばかりなら、5 分ではなく次の間隔で見直す。時刻の読めない行は補わず、読み続けない', async () => {
+  const next: FeedRow = { ...input, ts: '2026-10-01T11:09:30+09:00', user_text: '次の指示' }
+  const { state, recovered } = setup(turn({ text: 'できました', closed: true, endedAt: new Date(T0 + 10 * 60_000 - 5_000).toISOString() }))
+  await recovered.apply([input, next])
+  await recovered.idle()
+  assert.equal(state.fulls, 1)
+  state.now += 70_000
+  await recovered.apply([input, next])
+  await recovered.idle()
+  // 2 つ目の入力（最後のターン）のぶんも裏で読むので、回数ではなく「5 分待たずに出る」ことを見る
+  assert.ok(state.fulls >= 2, '待ちが明けたらもう一度読む')
+  assert.equal((await recovered.apply([input, next])).rows.find((r) => r.recovered)?.text, 'できました')
+
+  const broken = setup(turn({ text: '返答', closed: true, endedAt: '' }))
+  for (let i = 0; i < 4; i++) {
+    await broken.recovered.apply([input])
+    broken.state.now += 20_000
+  }
+  assert.equal(broken.state.tails, 1, '決まった（補わない）ので読み直さない')
+})

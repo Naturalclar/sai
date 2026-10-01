@@ -318,3 +318,13 @@ test('dialogSteps: いまの印から狙った選択肢までの矢印（番号�
   assert.equal(dialogSteps(noMark, 0), null)
   assert.equal(dialogSteps(dialog, 9), null, '並びの外は動かさない')
 })
+
+
+test('最後の選択肢が折り返していても読む（#597 のレビュー。終わりの行の上が続きの行でも塊にする）', () => {
+  const options = ['  Would you like to run the following command?', '  $ git add -A', '› 1. Yes, proceed (y)', '  2. No, and tell Codex what to do', '     differently (esc)']
+  const withFooter = parseCodexDialog([...options, '  Press enter to confirm or esc to cancel'].join('\n'))
+  assert.deepEqual(withFooter?.options.map((o) => o.label), ['Yes, proceed (y)', 'No, and tell Codex what to do differently (esc)'])
+  assert.equal(dialogAnswerable(withFooter ?? null), true)
+  // 終わりの行が画面に無くても、続きをラベルから落とさない
+  assert.deepEqual(parseCodexDialog(options.join('\n'))?.options.map((o) => o.label), ['Yes, proceed (y)', 'No, and tell Codex what to do differently (esc)'])
+})

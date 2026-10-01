@@ -96,9 +96,12 @@ export function parseCodexDialog(screen: string): TerminalDialog | null {
   const footer = lastIndex(lines, (l) => FOOTER.test(l))
   const lastOption = lastIndex(lines, isOption)
   // 終わりの行があればその 1 つ上まで、無ければ一番下の選択肢まで
-  const end = footer >= 0 ? footer - 1 : lastOption
+  let end = footer >= 0 ? footer - 1 : lastOption
   if (end < 0 || lastOption < 0 || lastOption > end) return null
-  if (!isDialogLine(lines[end]!)) return null
+  // **最後の選択肢が折り返している**と、塊の最後の行は深い字下げの続きになる（#597 のレビュー）。
+  // 終わりの行が無いときは、最後の選択肢の下の続きまでを塊に入れる（入れないとラベルが途中で切れる）
+  if (footer < 0) while (end + 1 < lines.length && DEEP.test(lines[end + 1]!)) end++
+  if (!isDialogLine(lines[end]!) && !DEEP.test(lines[end]!)) return null
   // 深い字下げの行も辿る（#595。折り返した選択肢の続きで止めると、その下の選択肢しか残らない）
   let start = end
   while (start > 0 && (isDialogLine(lines[start - 1]!) || DEEP.test(lines[start - 1]!)) && !isBoxLine(lines[start - 1]!)) start--

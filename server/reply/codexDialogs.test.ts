@@ -285,3 +285,16 @@ test('scan / answer: 半分しか読めなかったダイアログは答えら�
   assert.deepEqual(tmux.keys, [], 'どれもキーを送らない')
 })
 
+
+
+test('approvalMapKey: 答えられるかどうかが変われば鍵も変わる（#597 のレビュー。描き直しの途中を読んだあと、正しく読めたら画面が描き直す）', async () => {
+  const tmux = new FakeTmux()
+  const dialogs = new CodexDialogs(tmux, async () => '200 100\n100 1\n', () => Date.parse('2026-10-01T03:00:00+09:00'), 0)
+  tmux.screen = '  1. Yes\n  2. No\n  Press enter to confirm or esc to cancel'
+  const before = await dialogs.scan([session()])
+  tmux.screen = '› 1. Yes\n  2. No\n  Press enter to confirm or esc to cancel'
+  const after = await dialogs.scan([session()])
+  assert.equal(before['T1@repo']?.[0]?.approval_id, after['T1@repo']?.[0]?.approval_id, '印の位置は id に入らない')
+  assert.equal(after['T1@repo']?.[0]?.answerable, true)
+  assert.notEqual(approvalMapKey(before), approvalMapKey(after))
+})

@@ -753,3 +753,83 @@ test('wake: 人が「送信を止める」にしていれば起こさない。�
   idle('A1@r')
 })
 
+test('sai_wait で待っている返答は、入力の口からは足さない（同じターンで 2 回読ませない。#607 のレビュー）', async () => {
+  await humanReply('A1@r')
+  idle('A1@r')
+  runner.steered.length = 0
+  turn('A1@r', new Date().toISOString(), { interruptible: true })
+  try {
+    const messageId = ((await (await send('A1@r', 'B1@r', '待って受け取る')).json()) as AgentSendResponse).message_id
+    const delivered = runner.started.at(-1)!.cmd.text
+    await humanReply('B1@r')
+    idle('B1@r')
+    // 送り元は sai_wait で待っている（まだ返っていないので 202）
+    assert.equal((await agent(`/api/agent/wait?from=A1%40r&message_id=${messageId}`)).status, 202)
+    await appendFile(feedFile, JSON.stringify(row(new Date(), 'B1', { repo: 'r', cwd: work2, project: 'o/r', user_text: delivered, text: '待っていた返答' })) + '\n')
+    await poll()
+    assert.equal(runner.steered.length, 0, '待っている分は足さない')
+    assert.equal((await agent(`/api/agent/wait?from=A1%40r&message_id=${messageId}`)).status, 200, 'sai_wait が受け取る')
+    await poll()
+    assert.equal(runner.steered.length, 0, '受け取ったものは渡した扱い')
+  } finally {
+    idle('A1@r')
+  }
+})
+
+test('途中で足したターンが失敗したら「渡した」を取り消し、次のターンの頭でもう一度足す（#607 のレビュー）', async () => {
+  runner.steered.length = 0
+  const since = new Date().toISOString()
+  turn('A1@r', since, { interruptible: true })
+  let messageId = ''
+  try {
+    messageId = ((await (await send('A1@r', 'B1@r', '足したあと落ちる')).json()) as AgentSendResponse).message_id
+    const delivered = runner.started.at(-1)!.cmd.text
+    await humanReply('B1@r')
+    idle('B1@r')
+    await appendFile(feedFile, JSON.stringify(row(new Date(), 'B1', { repo: 'r', cwd: work2, project: 'o/r', user_text: delivered, text: '落ちる前の返答' })) + '\n')
+    await new Promise((r) => setTimeout(r, 10))
+    await poll()
+    assert.equal(runner.steered.length, 1)
+    // そのターンが失敗した
+    turn('A1@r', since, { failed: { code: 1, tail: '落ちた' } })
+    await poll()
+  } finally {
+    idle('A1@r')
+  }
+  await humanReply('A1@r')
+  assert.match(runner.started.at(-1)!.cmd.text, new RegExp(`message_id: ${messageId}`), '読まれていないので、もう一度足す')
+  idle('A1@r')
+})
+
+test('wake: 預かりに並んだ「起こす」を人が取り消したら、返答は未渡しのまま次のターンの頭で渡る（#607 のレビュー）', async () => {
+  const sent = new Date().toISOString()
+  turn('A1@r', sent)
+  let messageId = ''
+  let delivered = ''
+  try {
+    messageId = ((await (await sendWake('A1@r', 'B1@r', '取り消される依頼')).json()) as AgentSendResponse).message_id
+    delivered = runner.started.at(-1)!.cmd.text
+  } finally {
+    idle('A1@r')
+  }
+  await humanReply('B1@r')
+  idle('B1@r')
+  // 送り元は別のターンを回している → 起こすのは預かりに並ぶ
+  turn('A1@r', 'another-turn')
+  await appendFile(feedFile, JSON.stringify(row(new Date(), 'B1', { repo: 'r', cwd: work2, project: 'o/r', user_text: delivered, text: '取り消される返答' })) + '\n')
+  runner.started.length = 0
+  await poll()
+  const queued = ((await (await poll()).json()) as SessionsResponse).queued['A1@r']
+  assert.equal(queued?.items.length, 1, '預かりに 1 件だけ並ぶ（ポーリングを重ねても増えない）')
+  assert.ok(queued!.items[0]!.text.endsWith(WAKE_NOTE))
+  // 人が取り消す
+  assert.equal((await fetch(`${base}/api/sessions/A1%40r/queue/${queued!.items[0]!.queue_id}`, { method: 'DELETE' })).status, 200)
+  await poll()
+  idle('A1@r')
+  await poll()
+  assert.equal(runner.started.length, 0, '取り消したので起こさない')
+  await humanReply('A1@r')
+  assert.match(runner.started.at(-1)!.cmd.text, new RegExp(`message_id: ${messageId}`), '未渡しのまま残っていて、次のターンの頭で渡る')
+  idle('A1@r')
+})
+

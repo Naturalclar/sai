@@ -6,6 +6,7 @@
 // 別プロセスを立てないので、返答は端末に出て、フックが普通のターンとして JSONL に足す。
 // 「処理中」は子プロセスが無いので、since より新しいターン完了の行が届いたら解消（settle）。
 import { spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { parseCodexDialog } from '../../shared/codexDialog.ts'
 import { settledByRow } from '../../shared/turnSettled.ts'
 import type { Agent, Replying, ReplyingMap, Terminal, TerminalDialog } from '../../shared/types.ts'
@@ -242,6 +243,74 @@ export type PsFn = () => Promise<string>
 export function sharedPs(ps: PsFn): PsFn {
   let once: Promise<string> | null = null
   return () => (once ??= ps())
+}
+
+/** `list-panes -a` の出力（`<pane_id> <pane_pid>` の行）を読む */
+export function parsePanePids(out: string): Map<string, string> {
+  const pids = new Map<string, string>()
+  for (const line of out.split('\n')) {
+    const m = /^(%\d+) (\d+)$/.exec(line.trim())
+    if (m) pids.set(m[1]!, m[2]!)
+  }
+  return pids
+}
+
+/**
+ * 1 回の走査の中で、`inspectPrompt()` が対象ごとに起こす `tmux` 2 本（`display-message` と `capture-pane`）を、
+ * **全員ぶんまとめて 2 本**にする（#592。#599 のあとも、起こす子の半分がこの 2 つだった）:
+ * - ペインの pid は `list-panes -a` の 1 本から引く（一覧に無いペインは「無い」）
+ * - 画面は `capture-pane ; display-message <区切り> ; capture-pane ; …` の 1 本で取る。区切りは走査ごとの乱数
+ *   （画面の中身が区切りを装えない）。一覧に居るペインだけを並べる（1 つでも無いと tmux は並び全体を止める）
+ *
+ * **まとめて取れなければ、今までどおり 1 つずつ聞く**（古い tmux・途中で消えたペイン・区切りの数が合わない）。
+ * `panes` はこの走査が見るペイン。それ以外のペインと、ほかのコマンドはそのまま通す。
+ * **走査をまたいでは使い回さない**。キーを送る道（`typeInto()` / `CodexDialogs.answer()`）には使わない（あちらは毎回読み直す）
+ */
+export function sharedTmux(tmux: Tmux, panes: readonly string[], mark: string = randomUUID()): Tmux {
+  const wanted = [...new Set(panes)]
+  let listing: Promise<Map<string, string> | null> | null = null
+  const pids = () => (listing ??= tmux.run(['list-panes', '-a', '-F', '#{pane_id} #{pane_pid}']).then((out) => {
+      // 1 つも読めなければ「分からない」（1 つずつ聞く道に落とす）
+      const live = parsePanePids(out)
+      return live.size > 0 ? live : null
+    }, () => null))
+  let capturing: Promise<Map<string, string> | null> | null = null
+  const captureAll = async (): Promise<Map<string, string> | null> => {
+    const live = await pids()
+    if (!live) return null
+    const targets = wanted.filter((pane) => live.has(pane))
+    if (targets.length === 0) return new Map()
+    const line = `<<${mark}>>`
+    try {
+      const out = await tmux.run(targets.flatMap((pane, i) => [...(i ? [';'] : []), 'capture-pane', '-p', '-t', pane, ';', 'display-message', '-p', line]))
+      const parts = out.split(`${line}\n`)
+      // 最後の区切りのあとは空。数が合わなければ、どれがどのペインか言えない
+      if (parts.length !== targets.length + 1 || parts.at(-1) !== '') return null
+      return new Map(targets.map((pane, i) => [pane, parts[i]!]))
+    } catch {
+      return null
+    }
+  }
+  return {
+    async run(args, input) {
+      const pane = args[3] ?? ''
+      if (input === undefined && wanted.includes(pane) && args[1] === '-p' && args[2] === '-t') {
+        if (args[0] === 'display-message' && args[4] === '#{pane_pid}' && args.length === 5) {
+          const live = await pids()
+          if (live) {
+            const pid = live.get(pane)
+            if (pid === undefined) throw new Error(`can't find pane: ${pane}`)
+            return `${pid}\n`
+          }
+        }
+        if (args[0] === 'capture-pane' && args.length === 4) {
+          const screen = (await (capturing ??= captureAll()))?.get(pane)
+          if (screen !== undefined) return screen
+        }
+      }
+      return tmux.run(args, input)
+    },
+  }
 }
 
 export const realPs: PsFn = () =>

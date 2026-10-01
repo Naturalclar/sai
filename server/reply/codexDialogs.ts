@@ -13,7 +13,7 @@
 import { createHash } from 'node:crypto'
 import { codexDialogKey, codexDialogText, dialogAnswerable, dialogDecisionIndex, dialogDecisions, dialogSteps, selectedIndex } from '../../shared/codexDialog.ts'
 import type { Approval, ApprovalAnswer, ApprovalMap, SessionSummary, Terminal, TerminalDialog } from '../../shared/types.ts'
-import { inspectPrompt, sharedPs } from './terminal.ts'
+import { inspectPrompt, sharedPs, sharedTmux } from './terminal.ts'
 import type { PsFn, Tmux } from './terminal.ts'
 
 /** 答えた結果。`codexAppServer.ts` の `CodexAnswerResult` と同じ形にして、app.ts の分岐を揃える */
@@ -105,10 +105,12 @@ export class CodexDialogs implements CodexDialogSource {
     const targets = this.wanted(sessions, extra)
     // `ps` はこの走査で 1 本だけ（#592。対象ごとに起こさない）
     const ps = sharedPs(this.ps)
+    // `tmux` も全員ぶんまとめて 2 本（pid の一覧と、画面）
+    const tmux = sharedTmux(this.tmux, targets.map((t) => t.terminal.pane))
     const found = await Promise.all(
       targets.map(async (session): Promise<[string, Approval] | null> => {
         try {
-          const state = await inspectPrompt(this.tmux, ps, session.terminal, 'codex')
+          const state = await inspectPrompt(tmux, ps, session.terminal, 'codex')
           if (state.kind !== 'dialog') return null
           const dialog = state.dialog ?? null
           // **中身も id に混ぜる**（`approvalMapKey()` は approval_id しか見ないので、混ぜないと

@@ -1249,6 +1249,23 @@ export function createApp(
   const json = (res: ServerResponse, payload: unknown, status = 200) =>
     send(res, status, JSON.stringify(payload), 'application/json; charset=utf-8')
   const error = (res: ServerResponse, status: number, message: string) => json(res, { error: message }, status)
+  /**
+   * rev を持つ応答（一覧・詳細・フィード）。**前に渡した rev と同じなら本文を送らず 304**（#592。3 秒のポーリングは
+   * 変わっていないことの方が多く、詳細は 0.2〜0.4MB を毎回送っていた）。画面は rev が同じなら元々描き直さないので、
+   * 見えるものは変わらない。`Cache-Control: no-store` のまま（ブラウザのキャッシュには載せず、画面が `If-None-Match` を自分で付ける）。
+   * ETag は rev のハッシュ（rev には日本語や区切りの記号が入るので、そのままヘッダに載せない）
+   */
+  const jsonByRev = (req: IncomingMessage, res: ServerResponse, payload: { rev: string }) => {
+    const etag = `"${createHash('sha1').update(payload.rev).digest('hex').slice(0, 20)}"`
+    if (req.headers['if-none-match'] === etag) {
+      res.writeHead(304, { ETag: etag, 'Cache-Control': 'no-store' })
+      res.end()
+      return
+    }
+    const buf = Buffer.from(JSON.stringify(payload), 'utf-8')
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': buf.length, 'Cache-Control': 'no-store', ETag: etag })
+    res.end(buf)
+  }
 
   /**
    * 読み終えた画像を配る（本文のパス・transcript・Codex の生成画像の 3 つの口）。`?thumb=1` なら軽い版（#589）: しきい値未満は元のまま、
@@ -3482,7 +3499,7 @@ export function createApp(
           viewer,
           host: selfHost(),
         }
-        return json(res, body)
+        return jsonByRev(req, res, body)
       }
 
       if (path.startsWith(SESSIONS_PREFIX)) {
@@ -3539,7 +3556,7 @@ export function createApp(
           ...(context > 0 ? { context_tokens: context } : {}),
           ...(replies.length > 0 ? { agent_replies: replies } : {}),
         }
-        return json(res, body)
+        return jsonByRev(req, res, body)
       }
 
       if (path === '/api/feed') {
@@ -3578,7 +3595,7 @@ export function createApp(
           profile: me.profile,
           viewer,
         }
-        return json(res, body)
+        return jsonByRev(req, res, body)
       }
 
       return error(res, 404, 'not found')

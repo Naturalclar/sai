@@ -457,6 +457,24 @@ test('/api/sessions/<id>', async () => {
   assert.equal((await get('/api/sessions/')).status, 400)
 })
 
+test('一覧・詳細・フィード: rev が同じなら If-None-Match に 304 で本文を送らない。変われば 200（#592）', async () => {
+  for (const path of ['/api/sessions', `/api/sessions/${encodeURIComponent('S1@kanban')}`, '/api/feed']) {
+    const first = await get(path)
+    const etag = first.headers.get('etag')
+    assert.match(etag ?? '', /^"[0-9a-f]{20}"$/, path)
+    assert.equal(first.headers.get('cache-control'), 'no-store', 'ブラウザのキャッシュには載せない')
+    await first.arrayBuffer()
+    const same = await fetch(base + path, { headers: { 'If-None-Match': etag! } })
+    assert.equal(same.status, 304, path)
+    assert.equal((await same.arrayBuffer()).byteLength, 0)
+    assert.equal(same.headers.get('etag'), etag)
+    // 合わない ETag・別の窓（rev が違う）には本文を返す
+    assert.equal((await fetch(base + path, { headers: { 'If-None-Match': '"0000"' } })).status, 200)
+  }
+  // 失敗は 304 にしない
+  assert.equal((await fetch(`${base}/api/sessions/nope`, { headers: { 'If-None-Match': '"x"' } })).status, 404)
+})
+
 test('/api/sessions/<id>?recent=: 直近の行だけ返し、前の行の数を older に出す。focus はそこまで含める（#477）', async () => {
   const old = new Date(Date.now() - 10 * 24 * 60 * 60_000)
   const file = join(feedDir, `${localDate(old.toISOString())}.jsonl`)

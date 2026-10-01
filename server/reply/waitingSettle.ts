@@ -15,7 +15,7 @@
 // 入力欄が空なのを「人が答えた」と読んで畳んでいた——結果は正しかったが、理由が違っていた
 // （答えてはいない。ただ放置されているだけ）。ペインの無い端末では畳めず、要対応に残り続けていた。
 import { SCAN_KEEP_FACTOR } from './codexDialogs.ts'
-import { inspectPrompt, sharedPs } from './terminal.ts'
+import { inspectPrompt, sharedPs, sharedTmux } from './terminal.ts'
 import type { PsFn, Tmux } from './terminal.ts'
 import type { SessionSummary } from '../../shared/types.ts'
 
@@ -109,10 +109,12 @@ export class WaitingSettle implements WaitingSettleSource {
     const targets = sessions.filter((s) => s.waiting && s.terminal)
     // `ps` はこの走査で 1 本だけ（#592。対象ごとに起こさない）
     const ps = sharedPs(this.ps)
+    // `tmux` も全員ぶんまとめて 2 本（pid の一覧と、画面）
+    const tmux = sharedTmux(this.tmux, targets.map((s) => s.terminal!.pane))
     const settled = await Promise.all(
       targets.map(async (session) => {
         try {
-          const state = await inspectPrompt(this.tmux, ps, session.terminal!, session.agent)
+          const state = await inspectPrompt(tmux, ps, session.terminal!, session.agent)
           // ダイアログが消えていれば人が答えた。読めない（unknown）ときは畳まない
           return state.kind === 'idle' || state.kind === 'typed' ? session.id : null
         } catch {

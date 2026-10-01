@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { CLEAR_RECAPTURES, isDescendant, MAX_CLEAR_KEYS, parsePs, promptState, TerminalBusy, TerminalGone, TerminalReplies, typeInto, TERMINAL_REPLY_TTL_MS } from './terminal.ts'
+import { CLEAR_RECAPTURES, isDescendant, MAX_CLEAR_KEYS, parsePs, promptState, sharedTmux, TerminalBusy, TerminalGone, TerminalReplies, typeInto, TERMINAL_REPLY_TTL_MS } from './terminal.ts'
 import type { Tmux } from './terminal.ts'
 
 const CLAUDE_IDLE = [
@@ -314,4 +314,81 @@ test('typeInto: 候補メニューが開いていれば Escape で閉じてか�
   assert.equal(slow.calls.filter((c) => c.args.includes('C-u')).length, 1, '見直しの間は C-u を重ねない')
   assert.ok(slow.calls.some((c) => c.args[0] === 'paste-buffer'))
   assert.ok(CLEAR_RECAPTURES >= 2)
+})
+
+/** `list-panes -a` と、区切りつきの `capture-pane` の並びに答える tmux（本物と同じ出力の形） */
+class BatchTmux implements Tmux {
+  calls: string[][] = []
+  panes = new Map([['%1', { pid: 101, screen: 'one\n› \n' }], ['%2', { pid: 102, screen: 'two\n' }]])
+  noList = false
+  async run(args: string[]): Promise<string> {
+    this.calls.push(args)
+    if (args[0] === 'list-panes') {
+      if (this.noList) throw new Error('unknown option')
+      return [...this.panes].map(([id, p]) => `${id} ${p.pid}`).join('\n') + '\n'
+    }
+    let out = ''
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === ';') continue
+      if (args[i] === 'capture-pane') {
+        const pane = this.panes.get(args[i + 3]!)
+        if (!pane) throw new Error(`can't find pane: ${args[i + 3]}`)
+        out += pane.screen
+        i += 3
+      } else if (args[i] === 'display-message') {
+        const what = args[i + 2] === '-t' ? args[i + 4]! : args[i + 2]!
+        if (what === '#{pane_pid}') {
+          const pane = this.panes.get(args[i + 3]!)
+          if (!pane) throw new Error(`can't find pane: ${args[i + 3]}`)
+          out += `${pane.pid}\n`
+          i += 4
+        } else {
+          out += `${what}\n`
+          i += 2
+        }
+      }
+    }
+    return out
+  }
+}
+
+test('sharedTmux: 対象が何個でも、pid は list-panes の 1 本・画面は capture-pane の並びの 1 本（#592）', async () => {
+  const real = new BatchTmux()
+  const tmux = sharedTmux(real, ['%1', '%2', '%9'], 'MARK')
+  assert.equal(await tmux.run(['display-message', '-p', '-t', '%1', '#{pane_pid}']), '101\n')
+  assert.equal(await tmux.run(['display-message', '-p', '-t', '%2', '#{pane_pid}']), '102\n')
+  await assert.rejects(tmux.run(['display-message', '-p', '-t', '%9', '#{pane_pid}']), /can't find pane/, '一覧に無いペインは無い')
+  const [one, two] = await Promise.all([tmux.run(['capture-pane', '-p', '-t', '%1']), tmux.run(['capture-pane', '-p', '-t', '%2'])])
+  assert.equal(one, 'one\n› \n')
+  assert.equal(two, 'two\n')
+  assert.deepEqual(real.calls.map((c) => c[0]), ['list-panes', 'capture-pane'], '起こすのは 2 本だけ')
+  // 並べるのは一覧に居るペインだけ（%9 を混ぜると tmux は並び全体を止める）
+  assert.deepEqual(real.calls[1], ['capture-pane', '-p', '-t', '%1', ';', 'display-message', '-p', '<<MARK>>', ';', 'capture-pane', '-p', '-t', '%2', ';', 'display-message', '-p', '<<MARK>>'])
+  // 見ると言っていないペイン・ほかのコマンドはそのまま通す
+  await tmux.run(['send-keys', '-t', '%1', 'Enter'])
+  assert.deepEqual(real.calls.at(-1), ['send-keys', '-t', '%1', 'Enter'])
+})
+
+test('sharedTmux: まとめて取れなければ 1 つずつ聞く（list-panes が無い・途中でペインが消えた・画面が区切りを装う）', async () => {
+  const old = new BatchTmux()
+  old.noList = true
+  const a = sharedTmux(old, ['%1'], 'MARK')
+  assert.equal(await a.run(['display-message', '-p', '-t', '%1', '#{pane_pid}']), '101\n')
+  assert.equal(await a.run(['capture-pane', '-p', '-t', '%1']), 'one\n› \n')
+  assert.deepEqual(old.calls.map((c) => c.join(' ')), ['list-panes -a -F #{pane_id} #{pane_pid}', 'display-message -p -t %1 #{pane_pid}', 'capture-pane -p -t %1'])
+
+  // 一覧のあとで %2 が消えた: 並びが失敗するので 1 つずつ。生きている %1 は読める
+  const gone = new BatchTmux()
+  const b = sharedTmux(gone, ['%1', '%2'], 'MARK')
+  await b.run(['display-message', '-p', '-t', '%1', '#{pane_pid}'])
+  gone.panes.delete('%2')
+  assert.equal(await b.run(['capture-pane', '-p', '-t', '%1']), 'one\n› \n')
+  await assert.rejects(b.run(['capture-pane', '-p', '-t', '%2']), /can't find pane/)
+
+  // 画面に区切りと同じ行がある: 数が合わないので、まとめた結果は使わない
+  const spoof = new BatchTmux()
+  spoof.panes.set('%1', { pid: 101, screen: 'x\n<<MARK>>\ny\n' })
+  const c = sharedTmux(spoof, ['%1', '%2'], 'MARK')
+  assert.equal(await c.run(['capture-pane', '-p', '-t', '%1']), 'x\n<<MARK>>\ny\n')
+  assert.equal(await c.run(['capture-pane', '-p', '-t', '%2']), 'two\n')
 })

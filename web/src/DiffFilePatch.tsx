@@ -1,13 +1,16 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import type { DiffFile, DiffLine } from '../../shared/diff.ts'
-import { lineAnchor } from './diffComments'
+import { lineAnchor, type DiffComment } from './diffComments'
 import { OVERSCAN_PX, fileHeight, fileWidthCells, layoutFile, rowTop, rowsToRender, visibleRange, type ExtraHeights, type FileRow } from './diffVirtual.ts'
 import { useScrollWatch, viewportOf } from './useScrollTick.ts'
 
-/** ピン留めの鍵（`${side}:${line}`）。行に付く側と番号は行コメントと同じ決め方（lineAnchor）。作るのはこの関数だけ */
-export const pinKey = (l: Pick<DiffLine, 'oldNo' | 'newNo' | 'kind'>): string => {
-  const a = lineAnchor(l as DiffLine)
+/**
+ * ピン留めの鍵（`${side}:${line}`）。作るのはこの関数だけ。行（`DiffLine`。側と番号は行コメントと同じ `lineAnchor()` で決める）
+ * でも、コメントや編集中の位置（`{ side, line }`）でも作れる
+ */
+export const pinKey = (at: Pick<DiffLine, 'oldNo' | 'newNo' | 'kind'> | Pick<DiffComment, 'side' | 'line'>): string => {
+  const a = 'side' in at ? at : lineAnchor(at as DiffLine)
   return `${a.side}:${a.line}`
 }
 
@@ -79,7 +82,9 @@ export function DiffFilePatch({ file, renderLine, pinned }: Props) {
   useEffect(() => {
     const el = ref.current
     if (!el || typeof IntersectionObserver !== 'function') return
-    // 親の layout effect が容器を決めたあとに走る（passive effect）。observe した直後に 1 回鳴る
+    // 親の layout effect が容器を決めたあとに走る（passive effect）。observe した直後に 1 回鳴るので、mount 時の窓基準の近似をここで正す。
+    // scroll / resize / 根の高さの変化のどれにも当たらない位置ずれ（差分ビューアより**上**の要素——PR の説明やチャット——の高さが
+    // 変わって全体が動いた）も、見えた・隠れたの境を越えればここで拾う
     const io = new IntersectionObserver(() => measure.current(), { root: scrollerRef.current, rootMargin: `${OVERSCAN_PX}px 0px` })
     io.observe(el)
     return () => io.disconnect()

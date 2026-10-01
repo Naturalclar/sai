@@ -1,11 +1,11 @@
 import { memo, useMemo } from 'react'
 import type { DiffFile, DiffLine } from '../../shared/diff.ts'
 import type { DiffFileStat } from './api'
-import { commentMoved, lineAnchor, sameLine, type DiffComment } from './diffComments'
+import { lineAnchor, sameLine, type DiffComment } from './diffComments'
 import { DiffCommentEditor } from './DiffCommentEditor'
 import { DiffCommentNote } from './DiffCommentNote'
-import { DiffFilePatch } from './DiffFilePatch'
-import type { DiffViewComments } from './DiffView'
+import { DiffFilePatch, pinKey } from './DiffFilePatch'
+import { sameComments, type DiffViewComments } from './diffFileComments.ts'
 
 const STATUS_LABEL: Record<DiffFileStat['status'], string> = {
   added: '追加',
@@ -25,8 +25,6 @@ interface Props {
   f: DiffFileStat
   /** パースした本文。無ければ「本文がありません」 */
   file: DiffFile | undefined
-  /** パース済みの全ファイル（コメントの「行が変わりました」の判定に使う） */
-  files: readonly DiffFile[]
   shown: boolean
   onToggle: (path: string) => void
   /** 行にコメントを付ける口（#511）。`list` は**このファイルの分だけ**（DiffView が分ける。他のファイルのコメントで描き直さない）。無ければ行番号は押せない */
@@ -42,18 +40,10 @@ interface Props {
  * 本文の行は `DiffFilePatch` が見えている分だけ置く。コメントが付いている行と編集中の行は鍵の集合（`pinned`）で渡し、常に置かせる。
  * 行の下に描くもの（コメント・編集欄）は `renderLine` が行そのものを持っているので、そこで描く（行を探し直さない。#611）
  */
-/** コメントの口を中身で比べる（区切り・口・一覧の要素の同一性）。`useDiffComments` はコメントのオブジェクトを持ち越すので要素で比べられる */
-function sameComments(a: DiffViewComments | undefined, b: DiffViewComments | undefined): boolean {
-  if (a === b) return true
-  if (!a || !b) return false
-  return a.section === b.section && a.onAdd === b.onAdd && a.onRemove === b.onRemove && a.list.length === b.list.length && a.list.every((c, i) => c === b.list[i])
-}
-
 function sameProps(a: Props, b: Props): boolean {
   return (
     a.f === b.f &&
     a.file === b.file &&
-    a.files === b.files &&
     a.shown === b.shown &&
     a.onToggle === b.onToggle &&
     a.editing === b.editing &&
@@ -62,7 +52,7 @@ function sameProps(a: Props, b: Props): boolean {
   )
 }
 
-export const DiffFileItem = memo(function DiffFileItem({ f, file, files, shown, onToggle, comments, editing, setEditing }: Props) {
+export const DiffFileItem = memo(function DiffFileItem({ f, file, shown, onToggle, comments, editing, setEditing }: Props) {
   const sign = (l: DiffLine) => (l.kind === 'add' ? '+' : l.kind === 'del' ? '−' : ' ')
   const numbers = (l: DiffLine) => (
     <>
@@ -72,13 +62,27 @@ export const DiffFileItem = memo(function DiffFileItem({ f, file, files, shown, 
   )
 
   const here = comments?.list ?? NO_COMMENTS
-  // 常に置く行の鍵。コメントの集合と編集中の行が同じなら同じ Set（DiffFilePatch の memo が効く）
+  // 常に置く行の鍵（`pinKey()`）。コメントの集合と編集中の行が同じなら同じ Set（DiffFilePatch の memo が効く）
   const pinned = useMemo(() => {
     const keys = new Set<string>()
-    for (const c of here) keys.add(`${c.side}:${c.line}`)
-    if (editing) keys.add(`${editing.side}:${editing.line}`)
+    for (const c of here) keys.add(pinKey(c))
+    if (editing) keys.add(pinKey(editing))
     return keys
   }, [here, editing])
+  // 書いたあとに行が変わったコメント（エージェントが編集して行がずれた）。**このファイルの本文**で引く（`findDiffLine` は
+  // `path || oldPath` の片方でしか当たらず、`oldPath` でしか引けないファイルでは全部「変わった」になる。#617 のレビュー）。
+  // 描くたびに全行を歩かないよう、ファイルごとに 1 回
+  const moved = useMemo(() => {
+    const out = new Set<string>()
+    if (!file || here.length === 0) return out
+    const byKey = new Map<string, DiffLine>()
+    for (const h of file.hunks) for (const l of h.lines) byKey.set(pinKey(l), l)
+    for (const c of here) {
+      const l = byKey.get(pinKey(c))
+      if (!l || l.text !== c.code) out.add(c.id)
+    }
+    return out
+  }, [file, here])
 
   const renderLine = (l: DiffLine, isPinned: boolean) => {
     if (!comments) {
@@ -92,7 +96,7 @@ export const DiffFileItem = memo(function DiffFileItem({ f, file, files, shown, 
     }
     // 行番号を押すとその行にコメントを書ける（#511。GitHub の「+」と同じ場所。狭い画面でも押せる大きさ）
     const a = lineAnchor(l)
-    const at = { section: comments.section, path: f.path, side: a.side, line: a.line }
+    const at = { ...a, section: comments.section, path: f.path }
     const notes = isPinned ? here.filter((c) => sameLine(c, at)) : []
     const isEditing = editing !== null && editing.side === a.side && editing.line === a.line
     return (
@@ -103,7 +107,7 @@ export const DiffFileItem = memo(function DiffFileItem({ f, file, files, shown, 
             className="nos"
             aria-label={`${f.path}:${a.line} にコメント`}
             title="この行にコメントを書く"
-            onClick={() => setEditing(isEditing ? null : { path: f.path, side: a.side, line: a.line })}
+            onClick={() => setEditing(isEditing ? null : { ...a, path: f.path })}
           >
             {numbers(l)}
           </button>
@@ -111,7 +115,7 @@ export const DiffFileItem = memo(function DiffFileItem({ f, file, files, shown, 
           <span className="src">{l.text || ' '}</span>
         </div>
         {notes.map((c) => (
-          <DiffCommentNote key={c.id} comment={c} moved={commentMoved(c, files)} onRemove={() => comments.onRemove(c.id)} />
+          <DiffCommentNote key={c.id} comment={c} moved={moved.has(c.id)} onRemove={() => comments.onRemove(c.id)} />
         ))}
         {isPinned && isEditing && (
           <DiffCommentEditor

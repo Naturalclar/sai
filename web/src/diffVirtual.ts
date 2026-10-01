@@ -114,13 +114,13 @@ export function charWidth(cp: number): number {
   if (cp >= 0x300 && cp <= 0x36f) return 0 // 結合記号
   if (cp >= 0xfe00 && cp <= 0xfe0f) return 0 // 異体字セレクタ
   if (cp === 0x200d) return 0 // ZWJ
+  if (cp < 0x1100) return 1 // ASCII と Latin はここで抜ける（2 の範囲は全部これより上）
   if (
     (cp >= 0x1100 && cp <= 0x115f) ||
-    // 等幅フォントに無くて別の書体で約 1em になる記号（East Asian Ambiguous。※ ① ● ─ → など）。狭く数えると色が途中で切れるので 2（#611）
+    // 等幅フォントに無くて別の書体で約 1em になる記号（※ ①〜⑳）。狭く数えると色が途中で切れるので 2（#611）。
+    // 罫線（─ │ ├）・矢印（→）・幾何（● ■）はコーディング用の等幅（Menlo / SF Mono / JetBrains Mono / Consolas）が 1 セルで持つので 1 のまま
     cp === 0x203b ||
-    (cp >= 0x2190 && cp <= 0x21ff) ||
     (cp >= 0x2460 && cp <= 0x24ff) ||
-    (cp >= 0x2500 && cp <= 0x25ff) ||
     (cp >= 0x231a && cp <= 0x23f3) || // ⌚ ⏰ など
     (cp >= 0x2600 && cp <= 0x27bf) || // ☀ ✅ ❌ ✔ など（絵文字として描かれるものが多い。広めに 2 と数える。広すぎても横スクロールが少し余るだけ）
     cp === 0x2b50 ||

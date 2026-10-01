@@ -32,8 +32,8 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - **横幅は DOM からではなく、ファイルの中で一番長い行の文字数から先に計算して固定する**（`fileWidthCells` が行と見出しそれぞれのセル数を出し、CSS の `--cols` / `--hcols` に渡す。全角・絵文字・等幅に無い記号（※ ① ● ─ →）は 2、タブは 8 桁）。px にする計算（1ch × 文字数 + 番号 2 つ + 記号 + 余白）は `styles.css` の `.vlist` の `calc()`（JS で 1ch = 7.2px と決め打つと ch の狭いフォントで足りない。#611）。見えている行だけで `max-content` にすると、一番長い行が画面外に出た瞬間に幅が縮んで横スクロールが跳ねる。
 - どこが見えているかは `useScrollTick`（`DiffView` の祖先のスクロール容器の scroll と resize、**根の高さの変化**（上のファイルの開閉で下のファイルがスクロール無しでずれる。#611）を 1 か所で受け、rAF ごとに 1 回購読者に配る）を `ScrollTick` で各ファイルに配り、`DiffFilePatch` が自分の位置を `getBoundingClientRect()` で測り直す。箱ごとの IntersectionObserver も合図。最初の描画でも 1 回測る（空箱の 1 フレームを出さない）。容器は `.diff-scroll`（ペイン / モーダル）でも、PR の画面のように window がスクロールする場合でもよい（`findScroller`）。
 - ブラウザのページ内検索（⌘F）は DOM に無い行に当たらず、全部を選んでコピーしても DOM にある行しか入らない。**いったん諦めている**（困ったら差分の中を探す検索欄を別 issue で）。
-- 描く範囲は render の中で導く（見えている範囲は ref に持ち、測り直して範囲が変わったときだけ数を進めて描き直す）。ピン留めの高さだけは DOM を描かないと分からないので `useLayoutEffect` で測って state に書く（CLAUDE.md の「effect の中で setState しない」の例外）。
-- `.vlist` は `.ln` と同じ 12px の等幅にして `ch` を解決させる。番号の幅はタッチ端末の 4em で数える（広い方。狭く見積もると色が本文の途中で切れる）。コメントの口は `DiffView` がファイルごとに分け、中身が同じなら同じオブジェクトを渡す（`usePerFileComments`。1 件足すたびに全ファイルが描き直らない）。
+- 描く範囲は render の中で導く（見えている範囲は ref に持ち、測り直して範囲が変わったときだけ数を進めて描き直す）。ピン留めの高さと、mount 直後の 1 回の測定（開いた瞬間の空箱を出さない）は DOM を描かないと分からないので `useLayoutEffect` で測って state に書く（CLAUDE.md の「effect の中で setState しない」の例外は、この 2 つ）。
+- `.vlist` は `.ln` と同じ 12px の等幅にして `ch` を解決させる。番号の幅はタッチ端末の 4em で数える（広い方。狭く見積もると色が本文の途中で切れる）。コメントの口は `DiffView` がファイルごとに分け（`web/src/diffFileComments.ts` の `perFileComments()`。描くたびに組み直す）、`DiffFileItem` の memo は `sameComments()` で中身（区切り・口・一覧の要素）を比べる（1 件足すたびに全ファイルが描き直らない）。「書いたあとに行が変わった」は `DiffFileItem` がそのファイルの本文で引く（`findDiffLine` は `path || oldPath` の片方でしか当たらない）。
 - タッチ端末で行番号の押せる高さを上下 4px 広げていたのはやめた（行が absolute の兄弟になったので、はみ出した分は隣の行と重なり、後の行が押し勝つ）。幅 4em はそのまま。
 - どこまで開くかは `web/src/diffOpen.ts` の `autoOpenPaths()`（上から順に描画行数を積み、`AUTO_OPEN_LINES` = 4000 行の予算まで。`diffOpen.test.ts`）。
 

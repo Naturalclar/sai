@@ -104,7 +104,8 @@
   .modal.diff .where code { font-family: var(--mono); background: var(--chip); padding: 1px 6px; border-radius: 4px; color: var(--ink); }
   .modal.diff .warn { color: var(--synth); font-size: 12px; margin-top: 6px; }
   .modal.diff .none { color: var(--muted); font-size: 12px; padding: 2px 0 8px; }
-  .diff-section { margin-bottom: 14px; }
+  /* 行の部品の寸法（幅の calc と各部品で共用。#611） */
+  .diff-section { margin-bottom: 14px; --diff-no-w: 3.5em; --diff-no-touch-w: 4em; --diff-sign-w: 1.2em; --diff-src-pad: 10px; --diff-hh-pad: 10px; }
   .diff-section .head { font-size: 12px; font-weight: 700; color: var(--muted); border-bottom: 1px solid var(--line); padding-bottom: 2px; margin-bottom: 4px; }
   .diff-section .head { display: flex; align-items: baseline; gap: 6px; }
   .diff-section .head .n { font-weight: 400; margin-left: 6px; }
@@ -135,15 +136,15 @@
    * **行の高さは固定**（.ln 18px、.hh 20.5px。web/src/diffVirtual.ts の LINE_H / HUNK_HEADER_H と揃える。変えたら両方）
    */
   /* `ch` を本文と同じ等幅・同じ大きさで解決させる（親の 14px のサンセリフで解決すると、文字数から出した幅と中身の幅が合わない） */
-  .diff-section .vlist { position: relative; min-width: 100%; box-sizing: border-box; font-family: var(--mono); font-size: 12px; outline: none; width: max(calc(var(--cols, 0) * 1ch + 8em + 1.2em + 10px), calc(var(--hcols, 0) * 0.9167ch + 20px)); }
+  .diff-section .vlist { position: relative; min-width: 100%; box-sizing: border-box; font-family: var(--mono); font-size: 12px; outline: none; width: max(calc(var(--cols, 0) * 1ch + 2 * var(--diff-no-touch-w) + var(--diff-sign-w) + var(--diff-src-pad)), calc(var(--hcols, 0) * 0.9167ch + 2 * var(--diff-hh-pad))); }
   .diff-section .vlist > .row, .diff-section .vlist > .hh { position: absolute; left: 0; right: 0; box-sizing: border-box; }
   .diff-section .patch .note { color: var(--muted); padding: 6px 10px; font-family: inherit; font-size: 12px; }
-  .diff-section .hh { font-family: var(--mono); font-size: 11px; line-height: 16.5px; height: 20.5px; color: var(--muted); background: var(--bg); padding: 2px 10px; white-space: pre; overflow: hidden; }
+  .diff-section .hh { font-family: var(--mono); font-size: 11px; line-height: 16.5px; height: 20.5px; color: var(--muted); background: var(--bg); padding: 2px var(--diff-hh-pad); white-space: pre; overflow: hidden; }
   .diff-section .hh.next { border-top: 1px solid var(--line); }
   .diff-section .ln { display: flex; height: 18px; font-family: var(--mono); font-size: 12px; line-height: 18px; white-space: pre; }
-  .diff-section .ln .no { flex: none; width: 3.5em; text-align: right; padding-right: 8px; color: var(--muted); opacity: .7; user-select: none; }
-  .diff-section .ln .sign { flex: none; width: 1.2em; user-select: none; }
-  .diff-section .ln .src { flex: 1; padding-right: 10px; }
+  .diff-section .ln .no { flex: none; width: var(--diff-no-w); text-align: right; padding-right: 8px; color: var(--muted); opacity: .7; user-select: none; }
+  .diff-section .ln .sign { flex: none; width: var(--diff-sign-w); user-select: none; }
+  .diff-section .ln .src { flex: 1; padding-right: var(--diff-src-pad); }
   /* -- 行へのコメント（#511）。行番号がそのままボタン。押すとその行の下に欄が開く */
   .diff-section .ln .nos { display: flex; flex: none; padding: 0; border: 0; background: none; font: inherit; color: inherit; cursor: pointer; }
   .diff-section .ln .nos:hover .no, .diff-section .ln .nos:focus-visible .no { color: var(--accent); opacity: 1; }
@@ -169,7 +170,7 @@
    * 指で押せる幅（4em）。高さは行の高さ（18px 固定。#287）のまま。前は上下 4px の padding で 26px にしていたが、行が absolute の兄弟になったので
    * はみ出した分は隣の行と重なり、後の行が押し勝つ（下の 4px が次の行のコメント欄を開く）。重ねずに広げる手が無いので、高さは広げない
    */
-  @media (hover: none) and (pointer: coarse) { .diff-section .ln .nos .no { width: 4em; } }
+  @media (hover: none) and (pointer: coarse) { .diff-section .ln .nos .no { width: var(--diff-no-touch-w); } }
   .diff-section .ln.add { background: color-mix(in srgb, var(--codex) 14%, transparent); }
   .diff-section .ln.del { background: color-mix(in srgb, var(--claude) 14%, transparent); }
   .modal.permissions .mode { font-size: 13px; margin-bottom: 10px; }

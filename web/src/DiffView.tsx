@@ -2,37 +2,16 @@ import { useCallback, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import { parseUnifiedDiff, type DiffFile } from '../../shared/diff.ts'
 import { autoOpenPaths } from './diffOpen.ts'
-import type { DiffComment, DiffCommentSection } from './diffComments'
+import { perFileComments, type DiffViewComments } from './diffFileComments.ts'
 import { DiffFileItem, type EditingAt } from './DiffFileItem'
 import { ScrollTick, useScrollTick } from './useScrollTick.ts'
 import type { DiffFileStat, DiffSection } from './api'
 
-/** 行にコメントを付ける口（#511）。渡されたときだけ行番号が押せるようになる */
-export interface DiffViewComments {
-  section: DiffCommentSection
-  list: readonly DiffComment[]
-  onAdd: (comment: Omit<DiffComment, 'id'>) => void
-  onRemove: (id: string) => void
-}
+export type { DiffViewComments } from './diffFileComments.ts'
 
 /** 一覧のパス（新しい方）でパース済みの本文を引く。リネームは旧パスでも当たる */
 function fileOf(files: readonly DiffFile[], path: string): DiffFile | undefined {
   return files.find((f) => f.path === path || f.oldPath === path)
-}
-
-/**
- * コメントをファイルごとに分ける（#611）。描画のたびに組む（コメントの件数ぶんで安い）。1 件足す・消すたびに全ファイルの `comments` が
- * 新しくなっても、`DiffFileItem` の memo は `comments` を中身（区切り・口・一覧の要素）で比べる（`sameComments`）ので描き直らない。
- * コメントの無いファイルにも口は要る（行番号を押せる）ので、空の一覧の口を 1 つ共用する
- */
-function perFileComments(comments: DiffViewComments | undefined): (path: string) => DiffViewComments | undefined {
-  if (!comments) return () => undefined
-  const byPath = new Map<string, DiffComment[]>()
-  for (const c of comments.list) (byPath.get(c.path) ?? byPath.set(c.path, []).get(c.path)!).push(c)
-  const of = (list: readonly DiffComment[]): DiffViewComments => ({ section: comments.section, list, onAdd: comments.onAdd, onRemove: comments.onRemove })
-  const perPath = new Map([...byPath].map(([path, list]) => [path, of(list)] as const))
-  const empty = of([])
-  return (path: string) => perPath.get(path) ?? empty
 }
 
 /** そのファイルを開いたときに描く行数（文脈行も数える）。本文の無いファイルは 0 */
@@ -47,7 +26,7 @@ function lineCount(files: readonly DiffFile[], path: string): number {
  * 本文の木は shared/diff.ts が作る（HTML 文字列は作らない）。
  * 本文の行は**見えている分だけ DOM に置く**（#287。ファイルごとに `DiffFileItem` → `DiffFilePatch`）。どこが見えているかは
  * この部品の祖先のスクロール容器（`.diff-scroll` など。無ければ window）を `useScrollTick` で見張り、`ScrollTick` で各ファイルに配る。
- * `comments` は呼び出し側が `useMemo` で同じものを渡す（毎回作ると `DiffFileItem` の memo が効かず、ポーリングのたびに全ファイルが描き直る）
+ * `comments` はファイルごとに分けて渡す（`perFileComments`）。`DiffFileItem` の memo は中身で比べるので、呼び出し側が同じオブジェクトを渡し続ける必要は無い
  */
 export function DiffView({ section, title, empty, action, comments }: { section: DiffSection; title: string; empty: string; action?: ReactNode; comments?: DiffViewComments }) {
   // patch のパースは重いので、同じ本文なら作り直さない（全部開くようになって行数が増えたぶん効く）
@@ -88,7 +67,6 @@ export function DiffView({ section, title, empty, action, comments }: { section:
                 key={f.path}
                 f={f}
                 file={fileOf(files, f.path)}
-                files={files}
                 shown={open[f.path] ?? autoOpen.has(f.path)}
                 onToggle={onToggle}
                 comments={commentsOf(f.path)}

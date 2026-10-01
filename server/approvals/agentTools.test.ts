@@ -169,7 +169,7 @@ test('AGENT_TOOLS: 説明を書き直しても、ツールの名前と引数は�
     AGENT_TOOLS.map((t) => [t.name, Object.keys(t.inputSchema.properties), 'required' in t.inputSchema ? t.inputSchema.required : []]),
     [
       ['sai_sessions', [], []],
-      ['sai_send', ['to', 'text'], ['to', 'text']],
+      ['sai_send', ['to', 'text', 'wake'], ['to', 'text']],
       ['sai_wait', ['message_id'], ['message_id']],
     ],
   )

@@ -239,6 +239,17 @@ export const HANDED_MAX_CHARS = 12_000
 /** 送ってからこれより古い返答は足さない（何日も前の依頼の返答を、関係の無い次のターンに混ぜない） */
 export const HANDED_KEEP_DAYS = 7
 
+/** 走っているターンの途中に返答だけを足すとき（#594 の 2）の、塊のあとに置く本文 */
+export const STEERED_NOTE = '（走っているターンの途中で届いた返答です。いまの作業の続きに使ってください）'
+/** 返答がそろって送り元を起こすとき（#594 の 3。`sai_send` の `wake`）の、塊のあとに置く本文 */
+export const WAKE_NOTE = '（「返答が来たら起こす」で送ったメッセージの返答がそろいました。続きを進めてください。このターンから別のセッションへは送れません）'
+
+/** 人が打った文ではなく、SAI が返答を渡すためだけに置いた本文か（題名にしない） */
+export function isHandedOnly(text: string): boolean {
+  const t = text.trim()
+  return t === STEERED_NOTE || t === WAKE_NOTE
+}
+
 /** 送り元にまだ渡していない返答 1 件 */
 export interface PendingReply {
   message_id: string

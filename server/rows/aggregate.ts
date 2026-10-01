@@ -3,7 +3,7 @@ import { entityId, localDate } from '../../shared/entity.ts'
 import { rowProject } from '../../shared/project.ts'
 import { matchesProjects } from '../../shared/projectFilter.ts'
 import { eventKind } from '../../shared/events.ts'
-import { splitHandedReplies } from '../../shared/agentMessages.ts'
+import { isHandedOnly, splitHandedReplies } from '../../shared/agentMessages.ts'
 import type { Agent, Facets, FeedRow, SessionSource, SessionSummary } from '../../shared/types.ts'
 
 export { entityId, localDate, TIME_ZONE } from '../../shared/entity.ts'
@@ -64,7 +64,8 @@ export function sessionTitle(items: FeedRow[]): string {
   for (let i = items.length - 1; i >= 0; i--) {
     // SAI が頭に足した返答の塊（#594）は題名にしない（人が打った文だけ）
     const t = splitHandedReplies(items[i]!.user_text ?? '').text
-    if (t.trim()) return firstLine(t)
+    // 返答を渡すためだけに SAI が置いた本文（走っているターンに足した・起こした）も題名にしない
+    if (t.trim() && !isHandedOnly(t)) return firstLine(t)
   }
   for (const row of items) {
     if (row.first_user_text?.trim()) return firstLine(row.first_user_text)
@@ -109,7 +110,8 @@ export function aggregate(rows: FeedRow[]): SessionSummary[] {
     // 一覧の 2 行目で、最後に言ったのが自分かを決めるのに使う（ターン完了より新しければ自分の返信）
     const lastInput = [...items].reverse().find((r) => {
       const kind = eventKind(r.event, r.text)
-      return (kind === 'turn' || kind === 'resume') && r.user_text?.trim()
+      // 返答を渡すためだけに SAI が置いた本文（#594）は「自分の入力」に数えない
+      return (kind === 'turn' || kind === 'resume') && r.user_text?.trim() && !isHandedOnly(splitHandedReplies(r.user_text).text)
     })
     // 最後の行が待ちなら、まだ人を待っている。後にターン完了か再開が来ていれば解消
     const lastKind = eventKind(last.event, last.text)

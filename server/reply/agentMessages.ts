@@ -34,6 +34,12 @@ export interface AgentMessage {
    * 付いていれば 2 回は足さない（立て直しても残る）
    */
   handed_at?: string
+  /** 返答が来たら送り元を起こす（#594 の 3。`sai_send` の `wake`） */
+  wake?: true
+  /** 送ったときの送り元のターン（`Replying.since`）。同じターンで `wake` を付けたものをまとめて 1 回だけ起こす */
+  turn?: string
+  /** 起こすときに使う、このサーバ自身の宛先（許可・質問を画面で答える MCP の宛先。`selfUrl()`） */
+  url?: string
 }
 
 /**
@@ -217,6 +223,21 @@ export class AgentMessages {
     if (!changed) return
     this.version++
     this.persist()
+  }
+
+  /**
+   * 「返答が来たら起こす」で送って、まだ渡していないものを、送り元とターンごとにまとめる（#594 の 3）。`since` が `notBefore` より前は除く
+   */
+  wakeGroups(notBefore: number): AgentMessage[][] {
+    const groups = new Map<string, AgentMessage[]>()
+    for (const m of this.messages.values()) {
+      if (!m.wake || m.handed_at || Date.parse(m.since) < notBefore) continue
+      const key = `${m.from}\0${m.turn ?? ''}`
+      const list = groups.get(key)
+      if (list) list.push(m)
+      else groups.set(key, [m])
+    }
+    return [...groups.values()]
   }
 
   /** 「渡した」を取り消す（#594。返答を頭に足したターンが失敗して、エージェントが読んでいないとき） */

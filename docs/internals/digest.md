@@ -58,6 +58,13 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 画面は一言の横の「変？」（`web/src/DigestFeedback.tsx`）。
 - 理由には `why`（なぜそうしたか分からない）と `next`（次にすることが分からない）がある（#359）。
 
+### 使われたかを数える（#446）
+
+- 同じ口・同じファイルに、画面の操作のついでの合図を 2 つ溜める（`shared/digestFeedback.ts` の `DIGEST_USAGE_REASONS`）: `opened`（`Message` の一言の「詳細」を開いた。閉じるときは送らない）と `next_ask_accepted`（`ReplyBox` で一言の口の案を `→` / チップで受け取った。鍵は `<エンティティID>|<last_turn_ts>`。Manager の案と履歴の続きは数えない）。
+- 画面は `web/src/digestUsage.ts` の `reportDigestUsage()`。同じ鍵・同じ合図はページを開いている間 1 回だけ（`digestUsageOnce.ts` の `firstUse()`）。失敗しても何も出さない。
+- `FeedbackStore.size` と応答の `count` は「変？」だけを数える（合図で「ありがとう、N 件目」を増やさない）。
+- 集計は `python3 -m feed.digest_stats`（`feed/digest_stats.py`。標準ライブラリのみ・読むだけ）。一言のうち詳細を開いた割合、案の受け取り率を、全体・モデルごと・性格ごとに出す。分母は既定で、最初の合図より後に作ったものと、それより前で合図が付いたもの（`--all` で全部）。画面には出さない。表示しただけ（impression）は数えない。
+
 ## 頼んだことを渡す
 
 - 一言には「人が頼んだこと」も渡す（#376）: `digestPrompt(persona, text, { ask })` に行の `user_text` を入れる（`DIGEST_ASK_MAX_CHARS` = 200 字で切る）。

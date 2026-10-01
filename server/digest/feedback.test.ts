@@ -53,3 +53,21 @@ test('FeedbackStore: すでにあるファイルの件数を読む。空行は�
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+test('FeedbackStore: 使われたかの合図（opened / next_ask_accepted）は溜めるが、件数には数えない（#446）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-fb-'))
+  try {
+    const path = join(dir, 'digest-feedback.jsonl')
+    await writeFile(path, [entry(), entry({ reason: 'opened' }), entry({ reason: 'next_ask_accepted', next_ask: '直して' })].map((e) => JSON.stringify(e)).join('\n') + '\n')
+    const store = new FeedbackStore(path)
+    await store.load()
+    assert.equal(store.size, 1, '読み込んだときも「変？」だけ数える')
+    await store.append(entry({ reason: 'opened' }))
+    assert.equal(store.size, 1)
+    await store.append(entry({ reason: 'tone' }))
+    assert.equal(store.size, 2)
+    assert.equal((await readFile(path, 'utf-8')).trim().split('\n').length, 5, '行は全部残る')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})

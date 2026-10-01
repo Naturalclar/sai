@@ -24,6 +24,8 @@ let dir: string
 let server: Server
 let base: string
 let key: string
+/** 案だけ作った行（一言は切っていて summary が空。#560） */
+let askKey: string
 
 const post = (body: unknown, origin = true) =>
   fetch(`${base}/api/digest/feedback`, {
@@ -42,11 +44,13 @@ before(async () => {
   const now = new Date()
   const r = row(now, 'S1', { repo: 'r', text: 'PR #284 を出しました。よければ「マージして」と言ってください。' })
   key = digestKey(r)
-  await writeFile(join(dir, `${localDate(now.toISOString())}.jsonl`), JSON.stringify(r) + '\n')
+  const r2 = row(now, 'S2', { repo: 'r', text: 'テストが 2 本落ちています。直しますか？' })
+  askKey = digestKey(r2)
+  await writeFile(join(dir, `${localDate(now.toISOString())}.jsonl`), JSON.stringify(r) + '\n' + JSON.stringify(r2) + '\n')
 
   // 一言はすでに作ってあることにする（口は叩かない）
   const store = new DigestStore(join(dir, 'digest.jsonl'))
-  await writeFile(store.path, JSON.stringify({ key, persona: 'ESFP', summary: 'PR #284 出したよ、マージして？', model: 'qwen3:8b', ts: now.toISOString() }) + '\n')
+  await writeFile(store.path, JSON.stringify({ key, persona: 'ESFP', summary: 'PR #284 出したよ、マージして？', model: 'qwen3:8b', ts: now.toISOString() }) + '\n' + JSON.stringify({ key: askKey, persona: 'ESFP', summary: '', model: 'qwen3:8b', ts: now.toISOString(), next_ask: '直して' }) + '\n')
   await store.load()
   const digester = new Digester(store, null, { enabled: false, model: '', persona: async () => 'ESFP' })
 
@@ -122,4 +126,27 @@ test('note は省ける。2 件目も後ろに足される', async () => {
   assert.equal(got.length, 4)
   assert.equal(got.at(-1)!.note, undefined)
   assert.equal(got.at(-1)!.reason, 'long')
+})
+
+test('使われたかの合図（#446）: 詳細を開いた・案を受け取った、も同じファイルに溜める。「変？」の件数には数えない', async () => {
+  const before = (await lines()).length
+  const complaints = ((await (await post({ key, reason: 'other' })).json()) as DigestFeedbackResponse).count
+
+  let res = await post({ key, reason: 'opened', note: '画面は送らないが、来ても残さない' })
+  assert.equal(res.status, 200)
+  assert.equal(((await res.json()) as DigestFeedbackResponse).count, complaints, '「ありがとう、N 件目」は増やさない')
+  let got = await lines()
+  assert.equal(got.length, before + 2)
+  assert.deepEqual([got.at(-1)!.reason, got.at(-1)!.key, got.at(-1)!.summary, got.at(-1)!.model, got.at(-1)!.persona, got.at(-1)!.note], ['opened', key, 'PR #284 出したよ、マージして？', 'qwen3:8b', 'ESFP', undefined])
+
+  res = await post({ key: askKey, reason: 'next_ask_accepted', next_ask: '嘘の案' })
+  assert.equal(res.status, 200)
+  got = await lines()
+  assert.deepEqual([got.at(-1)!.reason, got.at(-1)!.key, got.at(-1)!.next_ask, got.at(-1)!.summary], ['next_ask_accepted', askKey, '直して', ''], '案は鍵から引く。一言の無い行（案だけ）でも受ける')
+
+  assert.equal((await post({ key, reason: 'next_ask_accepted' })).status, 404, '案の無い行')
+  assert.equal((await post({ key: askKey, reason: 'opened' })).status, 404, '一言の無い行')
+  const cross = await fetch(`${base}/api/digest/feedback`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: 'http://evil.example' }, body: JSON.stringify({ key, reason: 'opened' }) })
+  assert.equal(cross.status, 403, '別オリジンは 403')
+  assert.equal((await lines()).length, before + 3, '弾いたものは残さない')
 })

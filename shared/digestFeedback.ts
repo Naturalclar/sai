@@ -13,6 +13,20 @@ export function digestKey(row: { session?: string; repo?: string; ts: string }):
 
 export type DigestFeedbackReason = 'meaning' | 'why' | 'next' | 'wrong' | 'long' | 'prefix' | 'tone' | 'other'
 
+/**
+ * 使われたかの合図（#446）。「変？」とは別で、**人が押して言うものではなく、画面の操作のついでに数える**:
+ * - `opened`: 一言の「詳細」を開いた（一言では足りなかった）
+ * - `next_ask_accepted`: 次に送る文面の案を `→` / チップで受け取った（送った本文が案のままかは見ない）
+ *
+ * 同じ口（`POST /api/digest/feedback`）・同じファイルに溜める。表示しただけ（impression）は数えない
+ */
+export type DigestUsageReason = 'opened' | 'next_ask_accepted'
+export const DIGEST_USAGE_REASONS: readonly DigestUsageReason[] = ['opened', 'next_ask_accepted']
+
+export function isDigestUsageReason(value: unknown): value is DigestUsageReason {
+  return typeof value === 'string' && (DIGEST_USAGE_REASONS as readonly string[]).includes(value)
+}
+
 /** 画面のメニューの並び。文言は日本語（UI 文言の方針どおり） */
 export const DIGEST_FEEDBACK_REASONS: readonly { id: DigestFeedbackReason; label: string }[] = [
   { id: 'meaning', label: '意味が変わった' },
@@ -37,13 +51,14 @@ export function isDigestFeedbackReason(value: unknown): value is DigestFeedbackR
 export interface DigestFeedbackRequest {
   /** 一言の鍵（`<エンティティID>|<行の ts>`）。画面は行の id と ts から組み立てる */
   key: string
-  reason: DigestFeedbackReason
-  /** 「こうしてほしい」（任意） */
+  /** 「変？」の理由か、使われたかの合図（#446） */
+  reason: DigestFeedbackReason | DigestUsageReason
+  /** 「こうしてほしい」（任意。「変？」のときだけ） */
   note?: string
 }
 
 export interface DigestFeedbackResponse {
   ok: true
-  /** 溜まっている件数（画面の「ありがとう、N 件目」に使う） */
+  /** 溜まっている「変？」の件数（画面の「ありがとう、N 件目」に使う。使われたかの合図は数えない） */
   count: number
 }

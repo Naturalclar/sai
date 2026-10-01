@@ -105,6 +105,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 使用量の枠（`usageRefusal()`）と読み直させる量の予算（`budgetRefusal()`）は #311 の口と同じものを見る。予算の「1 ターン」の代わりは `McpSendLimiter.windowKey()`（10 分の区切り）で、`AgentMessages.record()` / `readInTurn()` にその鍵で載せる。
 - 素通し（`bypassPermissions`）のセッションには送らない（`mcpSendRefusal()`）。
 - `sai_wait` は最大 120 秒で返し、まだならもう一度呼ばせる。
+- 返答を引く行は `rowsNow()`（#614。ターン完了の行が落ちた・本文が空だったターンは、transcript から補った行が返答になる。→ [progress.md](progress.md#落ちた返答を-transcript-から補う614)）。
 - 送り元は `mcp:<ログイン名>` として記録し、本人だけが待てる。
 
 ### 案を置く（`sai_suggest`。#565）

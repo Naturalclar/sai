@@ -10,6 +10,7 @@ import { AttachedImages } from './AttachedImages'
 import { splitAttachments } from '../../shared/attachments.ts'
 import { DiffButton, type DiffButtonProps } from './DiffButton'
 import { reportDigestUsage } from './digestUsage'
+import { RecoveredTag } from './RecoveredTag'
 import { DigestFeedback } from './DigestFeedback'
 import { SourceImages } from './SourceImages'
 import { ImageSourceContext } from './imageContext'
@@ -61,6 +62,8 @@ interface Props {
    * 隅に合計を出し、内訳と費用は title の中（`usageLabel.ts`）
    */
   usage?: TurnUsage
+  /** 記録に本文が無く、サーバが transcript から補った返答か（#614）。小さい印を付ける */
+  recovered?: boolean
   /**
    * 検索から飛んできた当たり（#230）。`Chat` がこの印で場所を探して、そこまでスクロールして光らせる。
    * 行ごとに DOM の目印を置くのはここだけなので、3 つの分岐すべてに同じものを付ける
@@ -94,7 +97,7 @@ interface Props {
 }
 
 /** バブル1つ分の本文。長ければ折りたたんで「もっと見る」を付ける */
-export function Message({ ts, text: raw, markdown, waiting, questions, resolved, thinking, thinkingOpen = false, summary, digestKey, model, usage, remote, sourceAsk = '', linear, found = false, utteranceKey, side, menu, images, diff, clipped = false, thinkingClipped = false, defaultOpen = false }: Props) {
+export function Message({ ts, text: raw, markdown, waiting, questions, resolved, thinking, thinkingOpen = false, summary, digestKey, model, usage, recovered = false, remote, sourceAsk = '', linear, found = false, utteranceKey, side, menu, images, diff, clipped = false, thinkingClipped = false, defaultOpen = false }: Props) {
   // 自分の入力に添えた画像は、パスの文字列ではなくサムネイルで出す（本文の末尾に足してある。shared/attachments.ts）
   const { body: text, urls } = markdown ? { body: raw, urls: [] as string[] } : splitAttachments(raw)
   // 長い本文を開いているか。#365 の画面（フィード）では最初から開いた状態で始める。
@@ -127,6 +130,7 @@ export function Message({ ts, text: raw, markdown, waiting, questions, resolved,
         <span className="time">{hm(ts)}</span>
         {menu && <MessageMenu {...menu} />}
         {usage && <TurnUsageTag usage={usage} />}
+        {recovered && <RecoveredTag />}
         {thinking && <ThinkingBlock text={thinking} openAll={thinkingOpen} clipped={thinkingClipped} />}
         <div className="summary" ref={summaryRef}>
           {/* 一言の中の URL・#123・PGR-123 はリンクにする（shared/refs.ts）。HTML 文字列は作らない */}
@@ -172,6 +176,7 @@ export function Message({ ts, text: raw, markdown, waiting, questions, resolved,
       {menu && <MessageMenu {...menu} />}
       {model && <span className="tag model" title="このターンからモデルが変わった">{model}</span>}
       {usage && <TurnUsageTag usage={usage} />}
+      {recovered && <RecoveredTag />}
       {thinking && <ThinkingBlock text={thinking} openAll={thinkingOpen} clipped={thinkingClipped} />}
       {text ? (
         <div className={`body${long && !open ? ' clamped' : ''}`} ref={bodyRef}>{markdown ? <Markdown text={text} /> : text}</div>

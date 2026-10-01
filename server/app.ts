@@ -78,7 +78,7 @@ import type { SessionTurnResponse,
   UsageResponse,
   Viewer,
 } from '../shared/types.ts'
-import { entityId, facets, filterSessions, recordVersionOf } from './rows/aggregate.ts'
+import { clip, entityId, facets, filterSessions, firstLine, recordVersionOf } from './rows/aggregate.ts'
 import { rowProject } from '../shared/project.ts'
 import { cleanProjects, matchesProjects } from '../shared/projectFilter.ts'
 import { ICONS_DIR, IconStore, iconKey } from './meta/icons.ts'
@@ -130,6 +130,7 @@ import { READ_MARKS_FILE, ReadStore } from './meta/reads.ts'
 import { SUGGESTIONS_FILE, SuggestionStore } from './mcp/suggestions.ts'
 import { liveManagerDraft } from '../shared/managerDraft.ts'
 import { stopMissing, stopMissingCandidate } from '../shared/stopMissing.ts'
+import { RecoveredTurns } from './local/recovered.ts'
 import { readMarkOf, rowMs, unreadCounts, unreadFromMark } from '../shared/unread.ts'
 import { SETTINGS_FILE, SettingsStore, nextAskOn } from './meta/settings.ts'
 import type { Settings } from './meta/settings.ts'
@@ -1041,12 +1042,23 @@ export function createApp(
     return suffixes
   }
 
+  // ターン完了の行が落ちた・本文が空だったターンの返答を transcript から補う（#614）。JSONL には書かず、応答の行に重ねるだけ
+  const recovered = new RecoveredTurns(progress, { isRemote: (host) => isRemoteHost(host ?? '', selfHost()), busy: (id) => mcpBusy(id) })
+  /**
+   * 応答に載せる行。記録の行（`store.rows()`）に、補った行（`recovered: true`）を重ねたもの。
+   * **人に見せる・返答を引く道はこちらを使う**（詳細・フィード・未読・セッション同士のメッセージの返答）。
+   * 一言（digest）と集計（`store.sessions()`。`turns` はここで数える）は記録の行のまま
+   */
+  const rowsNow = async (days: number): Promise<FeedRow[]> => (await recovered.apply(await store.rows(days))).rows as FeedRow[]
+
   const sessionsWithMeta = async (days: number): Promise<{ rev: string; sessions: SessionSummary[] }> => {
     const [{ rev, sessions: raw }, meta, icons, reads, rows, drafts] = await Promise.all([store.sessions(days), metaStore.all(), iconStore.all(), readStore.get(), store.rows(days), suggestionStore.all()])
     // project / remote の無い古い行のセッションは cwd から git で引いて埋める（cwd ごとに 1 回だけ。#182、#212）
     const sessions = await fillRepo(projects, raw)
+    // 補った返答（#614）を重ねた行。未読はこちらで数える（終わったことを知らせる）。`turns` は集計のまま進めない
+    const shown = await recovered.apply(rows)
     // 未読の数（#502）。印は read-marks.json、数えるのは窓の中のターン完了の行
-    const unread = unreadCounts(rows, reads.marks)
+    const unread = unreadCounts(shown.rows, reads.marks)
     // Manager の案（#565）。出すのは 24 時間以内で、置いたあとに人の入力が来ていないものだけ。
     // rev には「いま出している案」を混ぜる（ファイルの (mtime, size) だと 24 時間が過ぎて消えたときに変わらない）
     // 人の入力が来たかは、置いた時刻より後のそのセッションの行で見る。24 時間は日付を 2 つまたぐので、窓が 1 日でも 2 日ぶん読む
@@ -1093,6 +1105,26 @@ export function createApp(
       const suffix = suffixes.get(s.id)
       if (suffix) s.label_suffix = suffix
     }
+    // 補った返答（#614）が最後の行になるセッションは、一覧でも「ターンが終わって次を待っている」として見せる
+    // （最後の発言・最後の行の読み方・終わりの時刻。要対応では下段に出て、バッジ・通知には数えない）。`turns` は触らない
+    if (shown.rows !== rows) {
+      const lastRecovered = new Map<string, FeedRow>()
+      for (const r of shown.rows) if (r.recovered) lastRecovered.set(entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')), r)
+      for (const s of built) {
+        const r = lastRecovered.get(s.id)
+        if (!r) continue
+        if (rowMs(r.ts) > rowMs(s.end)) {
+          s.end = r.ts
+          s.last_kind = 'turn'
+          s.last_turn = r.ts
+          s.last_turn_ts = r.ts
+          s.last_text = clip(firstLine(r.text ?? ''), 120)
+        } else if (r.ts === s.last_turn_ts) {
+          // 本文が空だったターン完了の行に補った
+          s.last_text = clip(firstLine(r.text ?? ''), 120)
+        }
+      }
+    }
     // ターンは終わっているのにターン完了の行が無い（#614）。行だけで候補を絞ってから transcript を読む（候補は普段 0 件）。
     // 別のマシンのセッションは transcript が無いので見ない。時間で出る印なので、出しているものを rev に混ぜる
     const missing: string[] = []
@@ -1110,7 +1142,7 @@ export function createApp(
         missing.push(s.id)
       }
     }
-    return { rev: `${rev}-${meta.rev}-${icons.rev}-${reads.rev}-${[...live].map(([id, d]) => `${id}:${d.at}`).join(',')}-${missing.join(',')}`, sessions: built }
+    return { rev: `${rev}-${meta.rev}-${icons.rev}-${reads.rev}-${[...live].map(([id, d]) => `${id}:${d.at}`).join(',')}-${missing.join(',')}-${shown.key}`, sessions: built }
   }
 
   /**
@@ -1440,7 +1472,7 @@ export function createApp(
     if (!codexApp.review) return error(res, 400, 'この SAI ではレビューを頼めません')
     const blocked = replyBlockedReason(session, selfHost())
     if (blocked) return error(res, 400, blocked)
-    const rows = (await store.rows(days)).filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
+    const rows = (await rowsNow(days)).filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
     const raw = rows[rows.length - 1]?.session ?? ''
     if (!raw) return error(res, 400, 'session id missing in rows')
     const cwd = session.cwd
@@ -1605,7 +1637,7 @@ export function createApp(
     }
     if (handoff) {
       if (from.agent !== 'claude') return error(res, 400, '引き継げるのは Claude のセッションだけです')
-      const rows = (await store.rows(days)).filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === from.id)
+      const rows = (await rowsNow(days)).filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === from.id)
       const ready = handoffReady(rows)
       if (!ready) return error(res, 409, '引き継ぎがまだ書かれていません（最後のターンが引き継ぎの依頼への返答ではありません）')
       const old = await metaStore.get(from.id)
@@ -1817,7 +1849,7 @@ export function createApp(
     if (blocked) return refuse(400, blocked)
 
     // CLI に渡す生のセッションIDは URL から切り出さず、行の session を使う（entity.ts に逆変換を足さない）
-    const rows = (await store.rows(o.days)).filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
+    const rows = (await rowsNow(o.days)).filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
     const raw = rows[rows.length - 1]?.session ?? ''
     if (!raw) return refuse(400, 'session id missing in rows')
     const cwd = session.cwd
@@ -2469,7 +2501,7 @@ export function createApp(
   /** 送ったメッセージの結果。相手のそのターンが終わっていれば返答、失敗・止まっていれば理由。まだなら null */
   const agentResult = async (message: AgentMessage): Promise<AgentWaitResponse | null> => {
     const base = { message_id: message.message_id, to: message.to }
-    const answered = replyOf(await store.rows(QUEUE_DAYS), message.to, message.message_id)
+    const answered = replyOf(await rowsNow(QUEUE_DAYS), message.to, message.message_id)
     if (answered) return { ...base, status: 'done', text: clipReply(answered.text ?? '') }
     const turn = run.snapshot()[message.to]
     if (turn?.failed && isDeliveryOf(turn.text, message.message_id)) {
@@ -2626,7 +2658,7 @@ export function createApp(
       },
       run: async (args) => {
         const id = mcpStr(args.id)
-        const turns = (await store.rows(QUEUE_DAYS)).filter((r) => eventKind(r.event, r.text) === 'turn' && entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
+        const turns = (await rowsNow(QUEUE_DAYS)).filter((r) => eventKind(r.event, r.text) === 'turn' && entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
         if (turns.length === 0) return textResult('そのセッションのターンは見つかりません（sai_sessions の id を渡してください）', true)
         return textResult(
           turns
@@ -2956,7 +2988,7 @@ export function createApp(
   const getTurn = async (res: ServerResponse, id: string, ts: string, days: number) => {
     const { sessions } = await store.sessions(days)
     if (!sessions.some((s) => s.id === id)) return error(res, 404, 'session not found in window')
-    const turns = (await store.rows(days)).filter((r) => eventKind(r.event, r.text) === 'turn' && entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
+    const turns = (await rowsNow(days)).filter((r) => eventKind(r.event, r.text) === 'turn' && entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
     const hits = ts ? turns.filter((r) => r.ts === ts) : turns
     const payload: SessionTurnResponse = { id, row: hits.at(-1) ?? null }
     return json(res, payload)
@@ -3527,7 +3559,7 @@ export function createApp(
           return await sendImage(req, res, { ...img, name: `image.${img.type === 'jpeg' ? 'jpg' : img.type}` }, q)
         }
         if (remote) return json(res, { id, items: [] } satisfies GalleryResponse)
-        const own = (await store.rows(days)).filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
+        const own = (await rowsNow(days)).filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
         const fromTranscript: GalleryItem[] = transcript
           ? (await transcriptImages.list(transcript)).map((t) => ({
               url: `${SESSIONS_PREFIX}${encodeURIComponent(id)}${TRANSCRIPT_IMAGES_SEGMENT}${t.key}`,
@@ -3564,7 +3596,7 @@ export function createApp(
         if (!session) return error(res, 404, 'session not found in window')
         // 別のマシンのセッションのファイルはこちらに無い（同じパスのファイルがあっても別物）
         if (isRemoteHost(session.host, selfHost())) return error(res, 404, `別のマシン（${session.host}）のファイルは配れません`)
-        const own = (await store.rows(days)).filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
+        const own = (await rowsNow(days)).filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
         const source = imageTable(own, session.cwd).get(path.slice(imagesAt + IMAGES_SEGMENT.length))
         if (!source) return error(res, 404, 'このセッションの本文に無い画像です')
         const img = await readSessionImage(source)
@@ -3641,7 +3673,7 @@ export function createApp(
         if (words.length === 0) {
           return json(res, { q: rawQuery, days, hits: [], truncated: false, scanned: 0 } satisfies SearchResponse)
         }
-        const [rows, { sessions }] = await Promise.all([store.rows(days), sessionsWithMeta(days)])
+        const [rows, { sessions }] = await Promise.all([rowsNow(days), sessionsWithMeta(days)])
         const { hits, truncated } = searchRows(rows, words, sessions)
         return json(res, { q: rawQuery, days, hits, truncated, scanned: rows.length } satisfies SearchResponse)
       }
@@ -3703,7 +3735,7 @@ export function createApp(
         const build_stale = await freshness.stale()
         await scanDigest(days)
         // 記録側の版は窓の中の一番新しい行から。行が変われば rev も変わるので、ここでは rev に混ぜない
-        const windowRows = await store.rows(days)
+        const windowRows = await rowsNow(days)
         const record_version = recordVersionOf(windowRows)
         // 足りないフック（#567）。**このマシンの Claude の行が窓の中に無ければ言わない**（使っていない人・別のマシンの行だけの人に出さない）。
         // 設定が読めない・record.py に届くフックが 1 つも見えないときも言わない（null）
@@ -3749,7 +3781,7 @@ export function createApp(
         if (!session) return error(res, 404, 'session not found in window')
         await scanDigest(days)
         // このセッションが一言を切っていれば載せない（#263）
-        const every = await store.rows(days)
+        const every = await rowsNow(days)
         const own = every.filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
         await usageReady
         // 画面は直近のぶんだけ取る（#477。行の多いセッションで描き直しが重く、打鍵が止まる）。一言・使用量を付ける前に絞る
@@ -3804,7 +3836,7 @@ export function createApp(
         const [{ rev: sessionsRev, sessions }, me] = await Promise.all([sessionsWithMeta(days), profileNow()])
         const rev = `${sessionsRev}~${me.rev}~${terminalKey(sessions)}`
         const archived = new Set(sessions.filter((s) => s.archived).map((s) => s.id))
-        let rows = await store.rows(days)
+        let rows = await rowsNow(days)
         if (projects.length > 0) rows = rows.filter((r) => matchesProjects(projects, [rowProject(r)]))
         if (repo) rows = rows.filter((r) => r.repo === repo)
         if (archived.size) rows = rows.filter((r) => !archived.has(entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? ''))))

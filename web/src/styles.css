@@ -591,6 +591,7 @@
   .tag.mode.loud { background: color-mix(in srgb, var(--claude) 18%, transparent); color: var(--claude); }
   /* コンテキストが大きすぎる（#441）。素通しの印と同じ目立たせ方は強すぎるので、待機中と同じ注意の色 */
   .tag.context-warn { background: color-mix(in srgb, var(--synth) 18%, transparent); color: var(--synth); font-weight: 600; white-space: nowrap; }
+  .tag.recovered { background: color-mix(in srgb, var(--muted) 18%, transparent); color: var(--muted); }
   .tag.stop-missing { background: color-mix(in srgb, var(--synth) 18%, transparent); color: var(--synth); font-weight: 600; }
   .tag.archived { background: color-mix(in srgb, var(--muted) 18%, transparent); color: var(--muted); font-weight: 600; }
   /* アーカイブしたのに返信が続いている（#583）。アーカイブの印より目立たせる */

@@ -38,8 +38,10 @@ before(async () => {
   await mkdir(feedDir)
   await mkdir(projectDir, { recursive: true })
   const closed = [user(ago(10), 'PR を出して'), said(ago(5), 'PR #610 を出しました', 'end_turn')].join('\n') + '\n'
-  // 落ちた: ターンは 5 分前に閉じているのに、記録の最後は 10 分前の入力のまま
-  await writeFile(join(projectDir, 'DROPPED.jsonl'), closed)
+  // 落ちた: ターンは 5 分前に閉じているのに、記録の最後は 10 分前の入力のまま。
+  // **返答の本文が transcript に無い**（考えただけで閉じた）ので補えない = 印だけが出る。本文があれば補う（recovered-turns.test.ts）
+  const thought = JSON.stringify({ type: 'assistant', timestamp: ago(5).toISOString(), message: { role: 'assistant', content: [{ type: 'thinking', thinking: '…' }], stop_reason: 'end_turn' } })
+  await writeFile(join(projectDir, 'DROPPED.jsonl'), [user(ago(10), 'PR を出して'), thought].join('\n') + '\n')
   // まだ回っている（ツールの途中）
   await writeFile(join(projectDir, 'RUNNING.jsonl'), [user(ago(10), 'PR を出して'), tool(ago(9))].join('\n') + '\n')
   // 端末で Esc で止めた（閉じていない）
@@ -87,18 +89,18 @@ after(async () => {
   await rm(dir, { recursive: true, force: true })
 })
 
-test('一覧と詳細: transcript でターンが閉じているのに記録の最後が人の入力のままのセッションにだけ stop_missing が載る（#614）', async () => {
+test('一覧と詳細: transcript でターンが閉じているのに記録の最後が人の入力のまま（返答も補えない）セッションにだけ stop_missing が載る（#614）', async () => {
   const list = (await (await fetch(`${base}/api/sessions?days=2`)).json()) as SessionsResponse
   const flagged = list.sessions.filter((s) => s.stop_missing).map((s) => s.id)
   assert.deepEqual(flagged, ['DROPPED@repo'], '回っている・Esc で止めた・完了の行がある（別の worktree のエンティティでも）・別のマシン・閉じたばかり・前のターン・transcript が無い、は出さない')
 
   const dropped = list.sessions.find((s) => s.id === 'DROPPED@repo')!
   assert.equal(dropped.turns, 0, 'turns は進めない（数えるのはターン完了の行だけ）')
-  assert.equal(dropped.unread, undefined, '未読も進めない')
+  assert.equal(dropped.unread, undefined, '補えなければ未読も進まない')
   assert.equal(dropped.waiting, '', '待ちにもしない（要対応に数えない）')
 
   const detail = (await (await fetch(`${base}/api/sessions/${encodeURIComponent('DROPPED@repo')}`)).json()) as SessionDetailResponse
   assert.equal(detail.session.stop_missing, true, '詳細（見出し）にも載る')
-  assert.equal(detail.rows.length, 1, '行は補わない')
+  assert.equal(detail.rows.length, 1, '補える本文が無ければ行は足さない')
   assert.equal(await readFile(feedFile, 'utf-8'), feedBefore, 'SAI は JSONL に行を書かない')
 })

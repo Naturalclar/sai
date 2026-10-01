@@ -11,7 +11,7 @@
 // 2. 動かしたあとにもう一度読み、**印が狙った選択肢に来たか**を確かめてから `Enter`
 // 3. `Enter` のあとにもう一度読み、**そのダイアログが消えたか**を確かめる。残っていれば「送れなかった」と返す（押し直さない）
 import { createHash } from 'node:crypto'
-import { codexDialogKey, codexDialogText, dialogDecisionIndex, dialogDecisions, dialogSteps, selectedIndex } from '../../shared/codexDialog.ts'
+import { codexDialogKey, codexDialogText, dialogAnswerable, dialogDecisionIndex, dialogDecisions, dialogSteps, selectedIndex } from '../../shared/codexDialog.ts'
 import type { Approval, ApprovalAnswer, ApprovalMap, SessionSummary, Terminal, TerminalDialog } from '../../shared/types.ts'
 import { inspectPrompt, sharedPs } from './terminal.ts'
 import type { PsFn, Tmux } from './terminal.ts'
@@ -125,12 +125,14 @@ export class CodexDialogs implements CodexDialogSource {
             tool_use_id: '',
             text: codexDialogText(dialog),
             agent: 'codex',
-            // 中身が読めているときだけ答えられる（読めていなければ今までどおり端末で。#450）
-            answerable: dialog !== null,
+            // 中身が読めているときだけ答えられる（読めていなければ今までどおり端末で。#450）。
+            // 半分しか読めなかったもの（番号が 1 から続かない・印が無い、など）も読めていない側（#595）
+            answerable: dialogAnswerable(dialog),
           }
           if (dialog) {
             approval.dialog = dialog
-            approval.decisions = dialogDecisions(dialog)
+            // 答えられないものにボタンは出さない（押しても 409 になるだけ）
+            if (approval.answerable) approval.decisions = dialogDecisions(dialog)
           }
           return [session.id, approval]
         } catch {
@@ -164,7 +166,7 @@ export class CodexDialogs implements CodexDialogSource {
     const [id, approval] = entry
     const terminal = this.targets.get(id)
     const shown = approval.dialog ?? null
-    if (!terminal || !shown) return { ok: false, status: 409, error: 'この待ちは端末で答えてください' }
+    if (!terminal || !shown || !dialogAnswerable(shown)) return { ok: false, status: 409, error: 'この待ちは端末で答えてください' }
     const index = dialogDecisionIndex(shown, answer.decision, answer.behavior)
     if (index === null) return { ok: false, status: 400, error: '提示されていない選択です' }
 
@@ -235,7 +237,9 @@ export function approvalMapKey(map: ApprovalMap): string {
   return Object.values(map)
     .flat()
     // 確率（#491）とルールの確率（#553）が届いたら rev を変える（混ぜないと画面が描き直さない）
-    .map((approval) => [approval.approval_id, approval.jev ?? '', approval.jev_rule?.safe ?? ''].join(':').replace(/:+$/, ''))
+    // 答えられるかどうかも混ぜる（#597 のレビュー）: 端末のダイアログは印（`›`）の読め方で変わるが、approval_id にカーソルの位置は
+    // 入らないので、描き直しの途中を読んだ 1 回のあと正しく読めても、画面が「読めませんでした」のまま残る
+    .map((approval) => [approval.approval_id, approval.jev ?? '', approval.jev_rule?.safe ?? '', approval.answerable === false ? 'x' : ''].join(':').replace(/:+$/, ''))
     .sort()
     .join(',')
 }

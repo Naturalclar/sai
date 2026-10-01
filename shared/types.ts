@@ -890,9 +890,12 @@ export interface Approval {
   text: string
   /** 表示するエージェント。古い値と Claude の MCP 経路は省略（claude 扱い） */
   agent?: Agent
-  /** false は検出専用。SAI から答えを返す安全な経路が無いので、端末で回答する案内だけを出す */
+  /**
+   * false は検出専用。SAI から答えを返す安全な経路が無いので、端末で回答する案内だけを出す。端末のダイアログは、
+   * 中身が読めなかったときと**半分しか読めなかったとき**（#595。`shared/codexDialog.ts` の `dialogAnswerable()`）
+   */
   answerable?: boolean
-  /** 端末の画面から読んだダイアログの中身（#425。`answerable: false` のときだけ。読めなければ省略） */
+  /** 端末の画面から読んだダイアログの中身（#425）。読めたぶんをそのまま載せるので、`answerable: false` でも付くことがある。読めなければ省略 */
   dialog?: TerminalDialog
   /** Codex app-server がこのrequestで提示した決定だけ。idから実際のdecisionを引くのはサーバ */
   decisions?: ApprovalDecision[]

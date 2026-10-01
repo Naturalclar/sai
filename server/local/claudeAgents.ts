@@ -52,6 +52,11 @@ export interface AgentList {
    * 無ければ `null`、**分からなければ `undefined`**。`fresh` なら覚えている一覧を使わずに引き直す（返信の直前）
    */
   background?(sessionId: string, fresh?: boolean): Promise<ClaudeAgent | null | undefined>
+  /**
+   * `background()` の前回の結果（#592。`claude` を起こさない。TTL が切れていてもそのまま）。
+   * 1 度も引けていなければ `undefined`。偽物は持たなくてよい
+   */
+  peekBackground?(sessionId: string): ClaudeAgent | null | undefined
 }
 
 /** 引かない実装（`SAI_CLAUDE_AGENTS=0`、テストの既定） */
@@ -155,6 +160,10 @@ export class ClaudeAgents implements AgentList {
     if (!sessionId) return undefined
     const agents = await this.list(fresh)
     return agents === null ? undefined : backgroundIn(agents, sessionId)
+  }
+
+  peekBackground(sessionId: string): ClaudeAgent | null | undefined {
+    return this.agents === null || !sessionId ? undefined : backgroundIn(this.agents, sessionId)
   }
 
   /** 生きているセッションの一覧。**セッションごとではなく全体で 1 回**叩いて、少しのあいだ覚える */

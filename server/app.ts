@@ -92,13 +92,13 @@ import type { CodexApp } from './reply/codexAppServer.ts'
 import { OPENCODE_SERVE_FILE, OPENCODE_SERVE_LOG, OpencodeServer } from './reply/opencodeServer.ts'
 import type { OpencodeApp } from './reply/opencodeServer.ts'
 import { OpencodePermissions } from './reply/opencodePermissions.ts'
-import { approvalMapKey, CodexDialogs, mergeApprovalMaps } from './reply/codexDialogs.ts'
+import { approvalMapKey, CodexDialogs, DIALOG_SCAN_TTL_MS, mergeApprovalMaps } from './reply/codexDialogs.ts'
 import { JevRisk } from './approvals/jev.ts'
 import { isJevAuto, jevAutoAllows, jevAutoDecision, jevAutoEligible, jevPercent, jevRuleState } from '../shared/jev.ts'
 import type { JevJudge } from './approvals/jev.ts'
 import { CodexTerminals, type CodexTerminalSource } from './reply/codexTerminal.ts'
 import { CodexPanes, type CodexPaneSource } from './reply/codexPanes.ts'
-import { softWait } from './reply/softWait.ts'
+import { screenWait } from './reply/softWait.ts'
 import { clearSettled, settledKey, WaitingSettle } from './reply/waitingSettle.ts'
 import type { WaitingSettleSource } from './reply/waitingSettle.ts'
 import type { CodexDialogSource, DialogTarget } from './reply/codexDialogs.ts'
@@ -475,6 +475,8 @@ export interface TerminalDeps {
   opencodeApp?: OpencodeApp
   /** 端末で答えたぶんの待ちを畳む（#255）。テストでは差し替える */
   waitingSettle?: WaitingSettleSource
+  /** 端末のダイアログ・待ちの走査を覚える長さ（#592。既定 `DIALOG_SCAN_TTL_MS`）。画面の変化をすぐ見たいテストは 0 にする */
+  scanTtlMs?: number
   /** `claude --bg` で始める・止める（#462）。テストでは差し替える */
   claudeBackground?: BackgroundSessions
   /** `claude --bg` のターンを待つ預かりを見に行く間隔（#462）。テストでは 0 にする */
@@ -534,7 +536,7 @@ export function createApp(
   const isCodexWriterActive = terminal.codexWriterActive ?? codexWriterActive
   const queueCodex = terminal.codexQueue ?? runCodexQueue
   const background = terminal.claudeBackground ?? new ClaudeBackground()
-  const codexDialogs = terminal.codexDialogs ?? new CodexDialogs(terminal.tmux, terminal.ps)
+  const codexDialogs = terminal.codexDialogs ?? new CodexDialogs(terminal.tmux, terminal.ps, undefined, undefined, terminal.scanTtlMs ?? DIALOG_SCAN_TTL_MS)
   const codexApp = terminal.codexApp ?? new CodexAppServer()
   // 立て直しをまたいで同じ `opencode serve` を使う（#440）。ターンを回している間の C-c では落とさず、次の SAI が引き取る
   const opencodeApp = terminal.opencodeApp ?? new OpencodeServer(fetch, Date.now, undefined, { statePath: join(store.directory, OPENCODE_SERVE_FILE), logPath: join(store.directory, OPENCODE_SERVE_LOG) })
@@ -547,7 +549,7 @@ export function createApp(
   const jevRisk = new JevRisk(terminal.jev ?? null)
   // フックの配線のずれ（#567）。読むのは ttl に 1 回、設定の mtime が変わったときだけ
   const claudeHooks = terminal.claudeHooks ?? new NoClaudeHooks()
-  const waitingSettle = terminal.waitingSettle ?? new WaitingSettle(terminal.tmux, terminal.ps)
+  const waitingSettle = terminal.waitingSettle ?? new WaitingSettle(terminal.tmux, terminal.ps, terminal.scanTtlMs ?? DIALOG_SCAN_TTL_MS)
   const codexAppEnabled = process.env.SAI_CODEX_APP_SERVER !== '0'
   // OpenCode は `opencode serve` の HTTP に送る（#382）。`0` で今までどおり `opencode run -s` に戻す
   const opencodeServerEnabled = process.env.SAI_OPENCODE_SERVER !== '0'
@@ -602,7 +604,8 @@ export function createApp(
    */
   const codexPanes = terminal.codexPanes ?? new CodexPanes({ tmux: terminal.tmux })
   const terminalOf = async (s: SessionSummary, { soft = false }: { soft?: boolean } = {}) => {
-    const wait = <T,>(work: Promise<T>, last: () => T): Promise<T> => (soft ? softWait(work, last) : work)
+    // 一覧は前回の結果があれば待たない（#592）。返信・レビューは待ち切る
+    const wait = <T,>(work: Promise<T>, last: () => T, known: boolean): Promise<T> => (soft ? screenWait(work, last, known) : work)
     if (!terminalEnabled) return null
     if (s.pane && s.pid && isAlive(s.pid)) {
       if (s.agent !== 'codex' || !codexTerminals.owner) return { pane: s.pane, pid: s.pid }
@@ -610,7 +613,7 @@ export function createApp(
       // notify を鳴らすのは app-server。行の pane は app-server を起こしたペインなので、その app-server が回す**どのスレッドの行も**
       // 同じペインを指す）。生きているだけで端末とみなすと、別の会話の TUI を端末と取り違える。ペインの中のときだけ採り、
       // 外なら下の補欠に落とす。一覧は締切までに引けなければ前回の結果（初回は今までどおり）
-      const owner = await wait(codexTerminals.owner(s.pane, s.pid), () => codexTerminals.lastOwner?.(s.pane!, s.pid!) ?? s.pid!)
+      const owner = await wait(codexTerminals.owner(s.pane, s.pid), () => codexTerminals.lastOwner?.(s.pane!, s.pid!) ?? s.pid!, codexTerminals.lastOwner?.(s.pane, s.pid) !== undefined)
       if (owner) return { pane: s.pane, pid: owner }
     }
     if (s.agent !== 'codex') return null
@@ -618,7 +621,7 @@ export function createApp(
     if (!session) return null
     if (s.pane) {
       // 一覧なら、締切までに引けなければ前回の結果（#495。lsof が重いときに一覧を止めない）
-      const pid = await wait(codexTerminals.pid(session, s.pane), () => codexTerminals.last?.(session, s.pane!) ?? 0)
+      const pid = await wait(codexTerminals.pid(session, s.pane), () => codexTerminals.last?.(session, s.pane!) ?? 0, codexTerminals.known?.(session, s.pane) ?? false)
       if (pid) return { pane: s.pane, pid }
     }
     // lock で引けない Codex（実測: 0.154.0 の TUI は lock を開かず、共有の app-server が握っている）は、
@@ -626,7 +629,7 @@ export function createApp(
     // プロセス開始秒・cwd と一致する一意の rollout にだけ落とす（#448）。**行の pane ではなく
     // いまのペイン**を使うので、ペインを移した・行がまだ 1 本も無いセッションでも当たる。
     // **cwd の新しい順では突き合わせない**（同じ worktree に会話が 2 本あると別の会話のペインに打ち込む。#429）
-    const pane = (await wait(codexPanes.scan(), () => codexPanes.last?.() ?? [])).find((p) => p.session === session)
+    const pane = (await wait(codexPanes.scan(), () => codexPanes.last?.() ?? [], codexPanes.known?.() ?? false)).find((p) => p.session === session)
     return pane ? { pane: pane.pane, pid: pane.pid } : null
   }
   /**
@@ -780,7 +783,7 @@ export function createApp(
     if (opencodeServerEnabled) await opencodePerms.scan(sessions)
     const opencode = opencodeServerEnabled ? opencodePerms.settle(sessions, selfHost()) : new Set<string>()
     // 締切までに見終わらなければ前回の結果（#495）
-    const terminal = terminalEnabled ? await softWait(waitingSettle.scan(sessions), () => waitingSettle.last?.() ?? new Set<string>()) : new Set<string>()
+    const terminal = terminalEnabled ? await screenWait(waitingSettle.scan(sessions), () => waitingSettle.last?.() ?? new Set<string>(), waitingSettle.known?.() ?? false) : new Set<string>()
     if (opencode.size === 0 && terminal.size === 0) return { sessions, key: '' }
     const settled = new Set([...terminal, ...opencode])
     return { sessions: clearSettled(sessions, settled), key: settledKey(settled) }
@@ -809,7 +812,7 @@ export function createApp(
   const paneOnlyTargets = async (sessions: SessionSummary[]): Promise<DialogTarget[]> => {
     const known = new Set(sessions.map((s) => sessionOf(s)).filter(Boolean))
     const out: DialogTarget[] = []
-    for (const pane of await softWait(codexPanes.scan(), () => codexPanes.last?.() ?? [])) {
+    for (const pane of await screenWait(codexPanes.scan(), () => codexPanes.last?.() ?? [], codexPanes.known?.() ?? false)) {
       if (!pane.session || known.has(pane.session)) continue
       out.push({ id: entityId(pane.session, await repoOf(pane.cwd), ''), terminal: { pane: pane.pane, pid: pane.pid } })
     }
@@ -820,7 +823,7 @@ export function createApp(
   const approvalsNow = async (sessions: SessionSummary[]) => {
     const [dialogs, opencode] = await Promise.all([
       // 締切までに見終わらなければ前回の走査で見えていたダイアログ（#495）
-      terminalEnabled ? softWait(codexDialogs.scan(sessions, await paneOnlyTargets(sessions)), () => codexDialogs.snapshot?.() ?? {}) : Promise.resolve({} as ApprovalMap),
+      terminalEnabled ? screenWait(codexDialogs.scan(sessions, await paneOnlyTargets(sessions)), () => codexDialogs.snapshot?.() ?? {}, codexDialogs.known?.() ?? false) : Promise.resolve({} as ApprovalMap),
       opencodeServerEnabled ? opencodePerms.scan(sessions) : Promise.resolve({} as ApprovalMap),
     ])
     const merged = mergeApprovalMaps(mergeApprovalMaps(mergeApprovalMaps(approvals.snapshot(), codexApp.snapshot()), dialogs), opencode)
@@ -2686,7 +2689,11 @@ export function createApp(
     if (session.agent !== 'claude' || !claudeAgents.background || isRemoteHost(session.host, selfHost())) return undefined
     const raw = sessionOf(session)
     if (!raw) return undefined
-    const bg = await claudeAgents.background(raw)
+    // 画面の道なので、前に引いた一覧があれば待たずにそれで返す（#592。`claude agents` の TTL はポーリングと同じ 3 秒で、
+    // 待ち切るとポーリングのたびに子が終わるまで詳細が止まる。引き直しは裏で続き、状態が変われば rev で次に拾う）。
+    // 返信の直前（`launch()`）は今までどおり引き直して待つ
+    const seen = claudeAgents.peekBackground?.(raw)
+    const bg = await screenWait(claudeAgents.background(raw), () => seen, seen !== undefined)
     if (!bg || !bg.id) return undefined
     return { attach: bg.id, live: backgroundLive(bg), status: bg.state || bg.status }
   }

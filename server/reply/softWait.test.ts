@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { softWait } from './softWait.ts'
+import { screenWait, softWait } from './softWait.ts'
 
 const after = <T,>(ms: number, value: T) => new Promise<T>((resolve) => setTimeout(() => resolve(value), ms))
 
@@ -23,4 +23,17 @@ test('softWait: 締切の前の失敗はそのまま投げ、締切のあとの�
   const lateFail = new Promise<string>((_, reject) => setTimeout(() => reject(new Error('late')), 60))
   assert.equal(await softWait(lateFail, () => 'stale', 20), 'stale')
   await new Promise((r) => setTimeout(r, 80)) // 失敗が起きるまで待つ。unhandled なら node:test が落とす
+})
+
+test('screenWait: 前回の結果があれば待たずに返し、無ければ締切まで待つ（#592）', async () => {
+  let finished = ''
+  const slow = after(40, 'late').then((v) => (finished = v))
+  assert.equal(await screenWait(slow, () => 'stale', true), 'stale', '終わっていない走査を待たない')
+  assert.equal(finished, '', 'まだ走っている')
+  await slow
+  assert.equal(finished, 'late', '裏で終わる')
+  // すでに終わっている走査（TTL の中で覚えた結果）はその結果
+  assert.equal(await screenWait(Promise.resolve('fresh'), () => 'stale', true), 'fresh')
+  // 1 度も終わっていなければ、今までどおり締切まで待つ
+  assert.equal(await screenWait(after(20, 'first'), () => 'empty', false), 'first')
 })

@@ -227,6 +227,17 @@ export class RealTmux implements Tmux {
 /** ps を叩く口。テストでは差し替える */
 export type PsFn = () => Promise<string>
 
+/**
+ * 1 回の走査の中で `ps` を 1 本だけ起こして分け合う（#592）。`inspectPrompt()` は対象ごとに `ps` を起こすので、
+ * 端末つきのセッションが 6 つあれば 1 回の走査で `ps` が 6 本起きていた（子を起こす呼び出しはイベントループの上で同期に走り、
+ * その間サーバが全部止まる）。**走査をまたいでは使い回さない**（走査ごとに作る）。キーを送る道（`typeInto()` /
+ * `CodexDialogs.answer()`）には使わない
+ */
+export function sharedPs(ps: PsFn): PsFn {
+  let once: Promise<string> | null = null
+  return () => (once ??= ps())
+}
+
 export const realPs: PsFn = () =>
   new Promise((resolve, reject) => {
     const child = spawn('ps', ['-axo', 'pid=,ppid='], { stdio: ['ignore', 'pipe', 'ignore'] })

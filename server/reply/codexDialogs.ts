@@ -13,7 +13,7 @@
 import { createHash } from 'node:crypto'
 import { codexDialogKey, codexDialogText, dialogDecisionIndex, dialogDecisions, dialogSteps, selectedIndex } from '../../shared/codexDialog.ts'
 import type { Approval, ApprovalAnswer, ApprovalMap, SessionSummary, Terminal, TerminalDialog } from '../../shared/types.ts'
-import { inspectPrompt } from './terminal.ts'
+import { inspectPrompt, sharedPs } from './terminal.ts'
 import type { PsFn, Tmux } from './terminal.ts'
 
 /** 答えた結果。`codexAppServer.ts` の `CodexAnswerResult` と同じ形にして、app.ts の分岐を揃える */
@@ -21,6 +21,12 @@ export type DialogAnswerResult = { ok: true } | { ok: false; status: number; err
 
 /** キーを送ってから画面が描き直るのを待つ既定（`terminal.ts` の `SETTLE_MS` と同じ）。テストは 0 */
 const SETTLE_MS = 150
+/**
+ * 端末のダイアログ・待ちの走査を覚える長さ（#592。`WaitingSettle` も同じ値を使う）。走査は対象ごとに `tmux` を 2 本起こすので、
+ * 3 秒のポーリング（一覧・詳細・2 枚目の画面）のたびに見に行くと、起こす呼び出しだけでサーバが止まる。
+ * 画面に出るのが最大でこの長さ＋ポーリング 1 回ぶん遅れる。**答える（`answer()`）ときは毎回その場で読み直す**ので、古い結果では押さない
+ */
+export const DIALOG_SCAN_TTL_MS = 5_000
 
 /**
  * 見に行く先。ふだんは行から作った一覧（`SessionSummary`）だが、**行がまだ 1 本も無いセッション**も
@@ -37,6 +43,8 @@ export interface CodexDialogSource {
   has?(approvalId: string): boolean
   /** 前回の走査で見えていたダイアログ（ペインを見に行かない。#495 の締切で使う）。偽物は持たなくてよい */
   snapshot?(): ApprovalMap
+  /** 1 度でも走査が終わっているか（#592。終わっていれば画面の道は待たずに `snapshot()` を返す）。偽物は持たなくてよい */
+  known?(): boolean
   /** 画面から押された選択をペインに送る（#450）。偽物は持たなくてよい（持たなければ答えられないまま） */
   answer?(approvalId: string, answer: ApprovalAnswer): Promise<DialogAnswerResult>
 }
@@ -50,15 +58,29 @@ export class CodexDialogs implements CodexDialogSource {
   private readonly settleMs: number
   /** 見に行く先（`answer()` がペインを引くのに使う）。`scan()` のたびに入れ替える */
   private targets = new Map<string, Terminal>()
+  private readonly ttlMs: number
+  /** 最後の走査が終わった時刻。まだなら -Infinity */
+  private scannedAt = -Infinity
 
-  constructor(tmux: Tmux, ps: PsFn, now: () => number = Date.now, settleMs: number = SETTLE_MS) {
+  /**
+   * `ttlMs` は走査の結果を覚える長さ（#592。既定は覚えない＝呼ぶたびに見に行く。`createApp` が `DIALOG_SCAN_TTL_MS` を渡す）
+   */
+  constructor(tmux: Tmux, ps: PsFn, now: () => number = Date.now, settleMs: number = SETTLE_MS, ttlMs = 0) {
     this.tmux = tmux
     this.ps = ps
     this.now = now
     this.settleMs = settleMs
+    this.ttlMs = ttlMs
+  }
+
+  known(): boolean {
+    return this.scannedAt > -Infinity
   }
 
   async scan(sessions: SessionSummary[], extra: readonly DialogTarget[] = []): Promise<ApprovalMap> {
+    // 覚えている間は見に行かない（#592。一覧・詳細・フィード・2 枚目の画面が同じ結果を分け合う）。
+    // **前の走査が見ていない相手が居れば見に行く**（窓の広い口が、狭い口の結果で相手を取りこぼさない）
+    if (this.now() - this.scannedAt < this.ttlMs && this.wanted(sessions, extra).every((t) => this.targets.has(t.id))) return this.snapshot()
     if (!this.scanning) {
       this.scanning = this.scanNow(sessions, extra).finally(() => {
         this.scanning = null
@@ -68,15 +90,18 @@ export class CodexDialogs implements CodexDialogSource {
     return this.snapshot()
   }
 
+  private wanted(sessions: SessionSummary[], extra: readonly DialogTarget[]): DialogTarget[] {
+    return [...sessions.filter((s) => s.agent === 'codex' && s.terminal).map((s) => ({ id: s.id, terminal: s.terminal! })), ...extra]
+  }
+
   private async scanNow(sessions: SessionSummary[], extra: readonly DialogTarget[]): Promise<void> {
-    const targets: DialogTarget[] = [
-      ...sessions.filter((s) => s.agent === 'codex' && s.terminal).map((s) => ({ id: s.id, terminal: s.terminal! })),
-      ...extra,
-    ]
+    const targets = this.wanted(sessions, extra)
+    // `ps` はこの走査で 1 本だけ（#592。対象ごとに起こさない）
+    const ps = sharedPs(this.ps)
     const found = await Promise.all(
       targets.map(async (session): Promise<[string, Approval] | null> => {
         try {
-          const state = await inspectPrompt(this.tmux, this.ps, session.terminal, 'codex')
+          const state = await inspectPrompt(this.tmux, ps, session.terminal, 'codex')
           if (state.kind !== 'dialog') return null
           const dialog = state.dialog ?? null
           // **中身も id に混ぜる**（`approvalMapKey()` は approval_id しか見ないので、混ぜないと
@@ -109,6 +134,7 @@ export class CodexDialogs implements CodexDialogSource {
     )
     this.active = new Map(found.filter((entry): entry is [string, Approval] => entry !== null))
     this.targets = new Map(targets.map((t) => [t.id, t.terminal]))
+    this.scannedAt = this.now()
   }
 
   /** その approval_id が、いま出ている端末のダイアログか（#450） */

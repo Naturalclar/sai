@@ -116,6 +116,15 @@ test('ClaudeAgents.background: 引ける・無い・分からない', async () =
   assert.equal(await new ClaudeAgents('/nonexistent/claude').background('S1', true), undefined)
 })
 
+test('ClaudeAgents.peekBackground: 前に引いた一覧から返す。claude は起こさない（#592）', async () => {
+  const agents = new ClaudeAgents(await fakeClaude(bgRows), 0)
+  assert.equal(agents.peekBackground('S2'), undefined, '1 度も引いていない')
+  await agents.background('S2')
+  assert.equal(agents.peekBackground('S2')?.id, '4a4a3485', 'TTL（0）が切れていても前回の結果')
+  assert.equal(agents.peekBackground('S9'), null)
+  assert.equal(agents.peekBackground(''), undefined)
+})
+
 test('ClaudeAgents: --all を知らない版では付けずに引き直し、以後は付けない（#462）', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'sai-agents-'))
   const bin = join(dir, 'claude')

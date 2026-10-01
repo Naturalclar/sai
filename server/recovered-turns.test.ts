@@ -56,6 +56,9 @@ before(async () => {
   await t('RUNNING', [user(ago(10), 'PR を出して'), tool(ago(9))])
   await t('EARLIER', [user(ago(30), '前の指示'), said(ago(20), '前のターンの返答', 'end_turn')])
   await t('STOPPED', [user(ago(30), '長い作業'), said(ago(29), '途中の地の文', 'tool_use'), user(ago(20), '別のことをして'), said(ago(15), 'しました', 'end_turn')])
+  // 端末のセッション: 落ちたターンの 1 分あとに「入力待ち」の行が来る／許可を端末で答えたあとターン完了が落ちた
+  await t('IDLE', [user(ago(10), 'PR を出して'), said(ago(5), 'PR #622 を出しました', 'end_turn')])
+  await t('ASKED', [user(ago(10), 'PR を出して'), tool(ago(9)), said(ago(5), 'PR #623 を出しました', 'end_turn')])
   await t('REMOTE', [user(ago(10), 'PR を出して'), said(ago(5), '別のマシンの返答', 'end_turn')])
   const lines = [
     stop(ago(39), 'LATEST', '前の指示', '前のターンの返答'),
@@ -72,6 +75,11 @@ before(async () => {
     stop(ago(15), 'STOPPED', '別のことをして', 'しました'),
     input(ago(10), 'REMOTE', 'PR を出して', { host: 'far-away-machine' }),
     input(ago(10), 'NOFILE', 'PR を出して'),
+    stop(ago(40), 'IDLE', '前の指示', '前のターンの返答'),
+    input(ago(10), 'IDLE', 'PR を出して'),
+    row(ago(4), 'IDLE', { repo: 'repo', cwd: dir, agent: 'claude', event: 'Notification', text: '入力待ち', user_text: '' }),
+    input(ago(10), 'ASKED', 'PR を出して'),
+    row(ago(9), 'ASKED', { repo: 'repo', cwd: dir, agent: 'claude', event: 'PermissionRequest', text: '許可待ち: Bash: pnpm test', user_text: '' }),
   ].sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0))
   feedFile = join(feedDir, `${localDate(now.toISOString())}.jsonl`)
   feedBefore = lines.map((l) => JSON.stringify(l)).join('\n') + '\n'
@@ -146,4 +154,14 @@ test('補わない: まだ回っている・閉じたのは前のターン・閉
   await new Promise((r) => setTimeout(r, 300))
   assert.deepEqual(await recoveredOf('STOPPED'), [], '途中の地の文を返答として出さない')
   assert.equal(await readFile(feedFile, 'utf-8'), feedBefore)
+})
+
+test('一覧: 補った返答のあとに「入力待ち」の行が来ていても最後の発言になる。前の待ち（許可）は畳む（#627 のレビュー）', async () => {
+  const list = (await (await fetch(`${base}/api/sessions?days=2`)).json()) as SessionsResponse
+  const idle = list.sessions.find((x) => x.id === 'IDLE@repo')!
+  assert.equal(idle.last_text, 'PR #622 を出しました', '最後の行（入力待ち）ではなく、最後のターン完了と比べる')
+  assert.equal(idle.last_kind, 'idle', '最後の行の読み方は記録のまま')
+  assert.equal(idle.turns, 1)
+  const asked = list.sessions.find((x) => x.id === 'ASKED@repo')!
+  assert.deepEqual([asked.last_text, asked.last_kind, asked.waiting], ['PR #623 を出しました', 'turn', ''], '終わったターンの許可待ちを「待機中」のまま残さない')
 })

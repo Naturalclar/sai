@@ -31,6 +31,8 @@ export interface RecoveredDeps {
 
 /** 閉じていなかった最後のターンを、transcript が変わっていなくても見直す間隔（閉じてから 60 秒の待ちが明けるのを拾う） */
 const RETRY_MS = 15_000
+/** 頭から読んでも決まらなかった候補を、もう一度頭から読むまでの間隔 */
+const FULL_RETRY_MS = 5 * 60_000
 
 export class RecoveredTurns {
   private readonly progress: ProgressReader
@@ -39,7 +41,9 @@ export class RecoveredTurns {
   /** 候補の鍵 → 決まった結果（補えない、も決まった結果。もう変わらないものだけ） */
   private readonly settled = new Map<string, Found | null>()
   /** まだ決まらない候補 → 見たときの transcript の印と時刻 */
-  private readonly waiting = new Map<string, { sig: string; at: number }>()
+  private readonly waiting = new Map<string, { sig: string; at: number; closing: boolean }>()
+  /** 頭から読んでも決まらなかった候補 → 読んだ時刻（回っているセッションの transcript を 15 秒ごとに頭から読み直さない） */
+  private readonly fullAt = new Map<string, number>()
   /** 裏で頭から読む順番待ち（鍵で 1 回だけ） */
   private readonly queued = new Set<string>()
   private chain: Promise<void> = Promise.resolve()
@@ -87,10 +91,23 @@ export class RecoveredTurns {
       if (now - rowMs(row.ts) < STOP_MISSING_AFTER_MS) return null
       if (this.deps.busy(entityId(session, row.repo ?? '', row.ts))) return null
     }
-    const tail = await this.progress.claudeTurns(session, cwd, false)
-    if (!tail) return null
+    // **読む前に**間引く（#627 のレビュー。決まらない候補 = 長く回っている端末のターン・途中で落ちたセッション・閉じた本文の無い
+    // 空の行、を 3 秒のポーリングのたびに読まない。#592）: 見てから RETRY_MS は読まず、そのあとも transcript が変わっておらず
+    // 「閉じたのを待っているだけ」でもなければ読まない
     const seen = this.waiting.get(key)
-    if (seen && seen.sig === tail.sig && now - seen.at < RETRY_MS) return null
+    if (seen && now - seen.at < RETRY_MS) return null
+    if (seen && !seen.closing) {
+      const sig = await this.progress.claudeSig(session, cwd)
+      if (sig === seen.sig) {
+        seen.at = now
+        return null
+      }
+    }
+    const tail = await this.progress.claudeTurns(session, cwd, false)
+    if (!tail) {
+      this.waiting.set(key, { sig: '', at: now, closing: false })
+      return null
+    }
     const turn = findTurn(tail.turns, this.target(gap))
     const got = turn ? this.judge(turn, now) : undefined
     if (got !== undefined) {
@@ -98,7 +115,8 @@ export class RecoveredTurns {
       this.settled.set(key, got)
       return got
     }
-    this.waiting.set(key, { sig: tail.sig, at: now })
+    // 閉じているが 60 秒の待ちが明けていないだけなら、transcript が変わらなくても次は読む
+    this.waiting.set(key, { sig: tail.sig, at: now, closing: Boolean(turn?.closed) })
     // 末尾に見当たらない = そのあとに別の入力（タスクの通知・割り込み）が続いている。頭から読めば見つかる
     if (!turn && tail.turns.length > 0) this.later(key, session, cwd, gap)
     return null
@@ -124,6 +142,9 @@ export class RecoveredTurns {
 
   private later(key: string, session: string, cwd: string, gap: TurnGap): void {
     if (this.queued.has(key) || this.settled.has(key)) return
+    const tried = this.fullAt.get(key)
+    if (tried !== undefined && this.now() - tried < FULL_RETRY_MS) return
+    this.fullAt.set(key, this.now())
     this.queued.add(key)
     this.chain = this.chain
       .then(async () => {
@@ -132,7 +153,10 @@ export class RecoveredTurns {
         if (!full) return
         const turn = findTurn(full.turns, this.target(gap))
         const got = turn ? this.judge(turn, this.now()) : null
-        if (got !== undefined) this.settled.set(key, got)
+        if (got !== undefined) {
+          this.settled.set(key, got)
+          this.fullAt.delete(key)
+        }
       })
       .catch(() => undefined)
       .finally(() => {

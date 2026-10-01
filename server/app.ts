@@ -1113,15 +1113,21 @@ export function createApp(
       for (const s of built) {
         const r = lastRecovered.get(s.id)
         if (!r) continue
-        if (rowMs(r.ts) > rowMs(s.end)) {
-          s.end = r.ts
-          s.last_kind = 'turn'
+        // **最後のターン完了より新しければ**最後の発言にする（最後の行とは比べない。端末のセッションは、落ちたターンの
+        // 60 秒あとに `入力待ち` の行が来るので、最後の行と比べると補った返答が一覧に出ない。#627 のレビュー）。
+        // 本文が空だったターン完了の行に補ったときは ts が同じ
+        if (rowMs(r.ts) >= rowMs(s.last_turn_ts || undefined) || !s.last_turn_ts) {
           s.last_turn = r.ts
           s.last_turn_ts = r.ts
           s.last_text = clip(firstLine(r.text ?? ''), 120)
-        } else if (r.ts === s.last_turn_ts) {
-          // 本文が空だったターン完了の行に補った
-          s.last_text = clip(firstLine(r.text ?? ''), 120)
+        }
+        // 補った返答が最後の行になるときは、最後の行の読み方もターン完了にする。それより前の待ち（許可を端末で答えたあと
+        // ターン完了が落ちた）は解消しているので畳む（残すと「待機中」のまま要対応に数える）
+        if (rowMs(r.ts) > rowMs(s.end)) {
+          s.end = r.ts
+          s.last_kind = 'turn'
+          s.waiting = ''
+          s.idle = ''
         }
       }
     }

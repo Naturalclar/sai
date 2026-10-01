@@ -54,11 +54,11 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - **見つける**のは `shared/recoveredTurns.ts` の `turnGaps()`（行だけで決まる純粋関数）。セッション単位で（エンティティではなく。ターンの途中で別の worktree に移ることがある）、入力の行（`resume` で `user_text` あり）のあと次の入力の行までにターン完了の行が無ければ `missing`、ターン完了の行の本文が空なら `empty`（#613 の、締切に間に合わなかったときの行）。Claude・このマシン・`session_source: payload` の行だけ。
 - **読む**のは `shared/claudeTurns.ts`。`turnParser()` / `claudeTurns()` が transcript を人の入力で区切り、そのターンのいちばん新しい本文と、その行が閉じた行（`end_turn` / `stop_sequence`）かを取る（`record.py` の `_turn_assistant_text()` と同じ読み方）。`findTurn()` が入力の行の時刻（±10 秒。複数あれば入力の頭が同じもの）で当てる。入力の行が無い `empty` は、行の時刻の 60 秒前〜5 秒後に終わったターン。**近いものが無ければ当てない**（前のターンの返答を出さない。#467）。
 - **取るのは候補のときだけ**（`server/local/recovered.ts` の `RecoveredTurns`）:
-  - 最後のターン（あとに行が続いていない）は `ProgressReader.claudeTurns(…, false)` で**末尾だけ**読む。入力から 60 秒・閉じてから 60 秒（`STOP_MISSING_AFTER_MS`）たっていて、SAI が回していない（`mcpBusy()`）ときだけ補う。閉じていなければ transcript の印が変わるか 15 秒たつまで読み直さない。
+  - 最後のターン（あとに行が続いていない）は `ProgressReader.claudeTurns(…, false)` で**末尾だけ**読む。入力から 60 秒・閉じてから 60 秒（`STOP_MISSING_AFTER_MS`）たっていて、SAI が回していない（`mcpBusy()`）ときだけ補う。**読む前に間引く**: 決まらなかった候補は 15 秒（`RETRY_MS`）は読まず、そのあとも `claudeSig()`（stat だけ）で transcript が変わっていなければ読まない（閉じていて 60 秒の待ちが明けるのを待っているだけのときは読む）。末尾に見当たらず頭から読んでも決まらなければ、次に頭から読むのは 5 分後（`FULL_RETRY_MS`）。
   - もう終わった古いターンは `claudeTurns(…, true)` で頭から 1 行ずつ読む（`worthParsing()` でツールの戻りと本文の無い assistant の行は JSON にしない）。**応答は待たせず**裏で 1 本ずつ読み、決まったら次の応答から載る。決まった結果（補えない、も含む）は鍵（`gapKey()`）で覚えるので、同じ候補で読み直さない。立て直すと読み直す。
   - 閉じないまま次の入力が来ていたターン（Esc で止めた）は補わない（途中の地の文を返答にしない）。
 - **重ねる**のは `applyRecovered()`: `missing` は入力の行の身元を引き継いだ `Stop` の行（時刻は閉じた時刻、`user_text` は入力の行のもの）を足し、`empty` は本文を載せた写しに差し替える。どちらも `recovered: true`。**JSONL は書かない・書き換えない**。
-- **使い分け**: `app.ts` の `rowsNow()`（補った行を重ねたもの）を、人に見せる・返答を引く道が使う（詳細・フィード・ターンの取得・未読・`replyOf()` = 画面の返答 / 次のターンの頭 / `sai_wait`・MCP の `sai_session`）。**集計（`store.sessions()`。`turns`）と一言（`digest.scan()`）は記録の行（`store.rows()`）のまま**。一覧の `last_kind` / `last_text` / `end` / `last_turn` は `sessionsWithMeta()` が補った行で上書きする（要対応の下段に出すため）。重ねた候補の鍵のハッシュを rev に混ぜる。
+- **使い分け**: `app.ts` の `rowsNow()`（補った行を重ねたもの）を、人に見せる・返答を引く道が使う（詳細・フィード・ターンの取得・未読・`replyOf()` = 画面の返答 / 次のターンの頭 / `sai_wait`・MCP の `sai_session`）。**集計（`store.sessions()`。`turns`）と一言（`digest.scan()`）は記録の行（`store.rows()`）のまま**。一覧は `sessionsWithMeta()` が補った行で上書きする: `last_text` / `last_turn` / `last_turn_ts` は**最後のターン完了より新しければ**（最後の行とは比べない。端末のセッションは 60 秒あとに `入力待ち` の行が来る）、`end` / `last_kind`（`turn`）は最後の行より新しければ。そのとき前の `waiting` / `idle` は畳む（許可を端末で答えたあとターン完了が落ちたセッションを「待機中」のまま残さない）。重ねた候補の鍵のハッシュを rev に混ぜる。
 - 補えたセッションは `stopMissingCandidate()` に当たらなくなる（`last_kind` が `turn`）ので、見出しの「完了の記録なし」は出ない。
 
 ## 画面

@@ -138,6 +138,19 @@ export class ProgressReader {
     }
   }
 
+  /** Claude の transcript の (mtime, size)。読まずに「変わったか」だけ見る（#614。無ければ空） */
+  async claudeSig(session: string, cwd: string): Promise<string> {
+    if (!SESSION_RE.test(session) || session.startsWith('unknown-')) return ''
+    const path = await this.locate(`claude:${session}`, 'claude', session, cwd)
+    if (!path) return ''
+    try {
+      const st = await stat(path)
+      return `${st.mtimeMs}:${st.size}`
+    } catch {
+      return ''
+    }
+  }
+
   /** OpenCode の読んだ量の聞き先を渡す（#396）。渡さなければ今までどおり OpenCode は空 */
   useOpencode(context: (session: string) => Promise<number>): void {
     this.opencode = context

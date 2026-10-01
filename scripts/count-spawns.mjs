@@ -20,8 +20,16 @@ const als = new AsyncLocalStorage()
 const out = process.env.SPAWN_COUNT_OUT || '/tmp/spawn-count.json'
 /** key = 口 \t コマンド → { n, syncMs, lifeMs } */
 const stats = new Map()
-const route = (p) =>
-  p.replace(/\?.*$/, '').replace(/^\/api\/sessions\/[^/]+\/(\w+).*$/, '/api/sessions/:id/$1').replace(/^\/api\/sessions\/(?!new$)[^/]+$/, '/api/sessions/:id')
+// 口の名前。id の入るところを畳む（畳まないと id ごとに 1 行になる）。GET 以外はメソッドを頭に付けて分ける
+const route = (p, method = 'GET') => {
+  const path = p
+    .replace(/\?.*$/, '')
+    .replace(/^\/api\/sessions\/[^/]+\/(\w+).*$/, '/api/sessions/:id/$1')
+    .replace(/^\/api\/sessions\/(?!new$)[^/]+$/, '/api/sessions/:id')
+    // sessions の外は 3 つ目から先を畳む（/api/approvals/<id>/answer、/api/prs/<owner>/<repo>/<番号> など）
+    .replace(/^(\/api\/(?!sessions(?:\/|$))[^/]+)\/.+$/, '$1/:rest')
+  return method === 'GET' ? path : `${method} ${path}`
+}
 const label = (bin, args) => {
   const name = String(bin).split('/').pop()
   const words = (args || []).filter((a) => typeof a === 'string')
@@ -35,7 +43,7 @@ const label = (bin, args) => {
 }
 const add = (bin, args, syncMs, child) => {
   const store = als.getStore()
-  const key = `${store ? route(store.path) : '(裏)'}\t${label(bin, args)}`
+  const key = `${store ? route(store.path, store.method) : '(裏)'}\t${label(bin, args)}`
   const s = stats.get(key) ?? { n: 0, syncMs: 0, maxSyncMs: 0, lifeMs: 0 }
   s.n++
   s.syncMs += syncMs
@@ -71,14 +79,14 @@ http.createServer = function (...a) {
   const handler = a.find((x) => typeof x === 'function')
   const wrapped = (req, res) => {
     const t = performance.now()
-    const r = route(req.url || '')
+    const r = route(req.url || '', req.method)
     res.once('finish', () => {
       const s = requests.get(r) ?? { n: 0, ms: [] }
       s.n++
       s.ms.push(Math.round(performance.now() - t))
       requests.set(r, s)
     })
-    als.run({ path: req.url || '' }, () => handler(req, res))
+    als.run({ path: req.url || '', method: req.method }, () => handler(req, res))
   }
   return origCreate.call(this, ...a.map((x) => (x === handler ? wrapped : x)))
 }
@@ -89,7 +97,12 @@ const dump = () => {
     const [path, cmd] = k.split('\t')
     return { path, cmd, n: v.n, syncMs: Math.round(v.syncMs), maxSyncMs: Math.round(v.maxSyncMs), lifeMs: Math.round(v.lifeMs) }
   })
-  writeFileSync(out, JSON.stringify({ at: new Date().toISOString(), spawns: rows, requests: Object.fromEntries(requests) }, null, 1))
+  // 書けなくても、測っているサーバは落とさない（書き先が無い・権限が無い）
+  try {
+    writeFileSync(out, JSON.stringify({ at: new Date().toISOString(), spawns: rows, requests: Object.fromEntries(requests) }, null, 1))
+  } catch {
+    // 次の 0.5 秒でまた試す
+  }
 }
 setInterval(dump, 500).unref()
 process.on('SIGUSR2', () => {

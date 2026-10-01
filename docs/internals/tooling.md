@@ -35,4 +35,5 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 応答の道で起こしている子プロセス（`ps` / `tmux` / `lsof` / `claude agents` / `gh` / `git`）を、口ごと・コマンドごとに数える preload。サーバのコードは触らず `node --import ./scripts/count-spawns.mjs server/main.ts --port <8787 以外>` で起こす。
 - 数えるのは回数・起こす呼び出しそのものの時間（`posix_spawn` はイベントループの上で同期に走るので、その間サーバは全部止まる）・子が終わるまでの時間、それと口ごとの応答の時間。0.5 秒ごとに `SPAWN_COUNT_OUT`（既定 `/tmp/spawn-count.json`）に書き、`kill -USR2 <pid>` で数え直す。
 - **本物の `~/.agent-feed` では回さない**。`AGENT_FEED_DIR` を一時ディレクトリにして日付の `*.jsonl` だけを写す（`replying.json`・預かり・`settings.json` は写さない。返信が二重に走る・本物の子を終わらせる・一言の `claude -p` が走るため）。`JEV_API_KEY` も渡さない。
+- **口ごとの内訳は目安**。口は「その子を起こす走査を最初に始めた要求」に付く（`AsyncLocalStorage`）。走査は要求をまたいで 1 本に絞ってあるので、一覧と詳細が同時に来ると先に着いた方に全部付く。要求の中で始めたタイマーから後で起きた子も、その口に付く。**前後を比べるときは口ごとではなく合計で見る**。
 

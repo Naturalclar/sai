@@ -299,6 +299,15 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
                           送ったメッセージへの返答
                         </a>
                       )}
+                      {/* 送り元のエージェントがこの返答を知っているか（#594）。渡すのは次に SAI から回すターンの頭か、sai_wait */}
+                      {reply && (
+                        <span
+                          className={`handed${reply.handed_at ? ' done' : ''}`}
+                          title={reply.handed_at ? `${hm(reply.handed_at)} にこのセッションの会話に渡した` : 'このセッションのエージェントはまだ読んでいません。次に SAI から送るターンの頭に添えます'}
+                        >
+                          {reply.handed_at ? '会話に渡した' : '次のターンで渡す'}
+                        </span>
+                      )}
                       {showChannel && (
                         <a className="ch" href={`#/s/${encodeURIComponent(id)}`} title={g.session}>#{g.repo}</a>
                       )}
@@ -334,6 +343,11 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
                       return (
                       <ImageSourceContext key={u.key} value={imageUrl}>
                       {u.key === unreadKey && <UnreadLine />}
+                      {u.handedReplies ? (
+                        <div className="handed-note" title="SAI がこの指示の頭に、別のセッションからの返答を足してエージェントに渡した（記録にはそのまま残る）">
+                          返答 {u.handedReplies} 件を添えました
+                        </div>
+                      ) : null}
                       <Message
                         {...(diff ? { diff } : {})}
                         ts={u.row.ts}

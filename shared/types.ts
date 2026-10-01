@@ -118,6 +118,11 @@ export interface AgentReplyTag {
   to_name: string
   /** 送った時刻 */
   sent_at: string
+  /**
+   * 送り元の会話（エージェントの文脈）に渡した時刻（#594。次のターンの頭に足したか、`sai_wait` で受け取った）。
+   * 無ければまだ渡していない（次に SAI から送り元のターンを回すときに足す）
+   */
+  handed_at?: string
 }
 
 /** 行をセッション単位にまとめたもの。GET /api/sessions の1件 */

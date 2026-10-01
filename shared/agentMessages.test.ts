@@ -20,6 +20,12 @@ import {
   sessionLabel,
   tokensLabel,
   usageRefusal,
+  AGENT_HEADER_MARK,
+  HANDED_MARK,
+  HANDED_MAX_CHARS,
+  HANDED_MAX_ITEMS,
+  splitHandedReplies,
+  withHandedReplies,
 } from './agentMessages.ts'
 import type { FeedRow, SessionSummary, UsageResponse } from './types.ts'
 
@@ -188,4 +194,29 @@ test('agentOverlap: どちらの worktree でも変わっているファイル�
 test('agentEntry: overlap を渡さなければ空（#564）', () => {
   const e = agentEntry({ id: 'B1@r', title: 't', project: 'o/r', branch: 'x', agent: 'claude', last_text: '' } as unknown as SessionSummary, false)
   assert.deepEqual([e.overlap, e.overlap_more], [[], 0])
+})
+
+test('withHandedReplies / splitHandedReplies: 返答を本文の頭に足し、画面では外せる。失敗は 1 行（#594）', () => {
+  const t = withHandedReplies('579着手して', [
+    { message_id: 'ab', to_name: 'かなで', status: 'done', text: 'PR #9 を出しました' },
+    { message_id: 'cd', to_name: '明', status: 'failed', error: '終了コード 1' },
+  ])
+  assert.ok(t.startsWith(HANDED_MARK))
+  assert.ok(!t.startsWith(AGENT_HEADER_MARK), '届けた見出し（【SAI】）と取り違えない')
+  assert.equal(deliveredId(t), '', 'deliveredId() は返答の塊を「届いたメッセージ」と読まない')
+  assert.match(t, /「明」（message_id: cd）への依頼は失敗しました: 終了コード 1/)
+  assert.deepEqual(splitHandedReplies(t), { text: '579着手して', handed: 2 })
+  assert.equal(withHandedReplies('そのまま', []), 'そのまま', '返答が無ければ本文だけ')
+  assert.deepEqual(splitHandedReplies('人が 【SAI 返答】と打った'), { text: '人が 【SAI 返答】と打った', handed: 0 })
+})
+
+test('withHandedReplies: 件数と合計の字数に上限があり、入りきらない分は名前だけ 1 行（#594）', () => {
+  const many = Array.from({ length: HANDED_MAX_ITEMS + 2 }, (_, i) => ({ message_id: `m${i}`, to_name: `s${i}`, status: 'done' as const, text: 'x' }))
+  const t = withHandedReplies('本文', many)
+  assert.equal((t.match(/からの返答:/g) ?? []).length, HANDED_MAX_ITEMS)
+  assert.match(t, /ほか 2 件（本文は相手のセッションで読めます）: 「s8」（message_id: m8）、「s9」（message_id: m9）/)
+  const big = Array.from({ length: 5 }, (_, i) => ({ message_id: `b${i}`, to_name: `s${i}`, status: 'done' as const, text: 'あ'.repeat(4000) }))
+  const u = withHandedReplies('本文', big)
+  assert.equal((u.match(/からの返答:/g) ?? []).length, Math.floor(HANDED_MAX_CHARS / 4050), `合計 ${HANDED_MAX_CHARS} 字まで`)
+  assert.equal(splitHandedReplies(u).handed, 5, '数は足した全部（名前だけの分も渡した扱い）')
 })

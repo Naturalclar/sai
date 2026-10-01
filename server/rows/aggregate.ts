@@ -3,6 +3,7 @@ import { entityId, localDate } from '../../shared/entity.ts'
 import { rowProject } from '../../shared/project.ts'
 import { matchesProjects } from '../../shared/projectFilter.ts'
 import { eventKind } from '../../shared/events.ts'
+import { splitHandedReplies } from '../../shared/agentMessages.ts'
 import type { Agent, Facets, FeedRow, SessionSource, SessionSummary } from '../../shared/types.ts'
 
 export { entityId, localDate, TIME_ZONE } from '../../shared/entity.ts'
@@ -61,8 +62,9 @@ function latestValue(items: FeedRow[], pick: (row: FeedRow) => string | undefine
  */
 export function sessionTitle(items: FeedRow[]): string {
   for (let i = items.length - 1; i >= 0; i--) {
-    const t = items[i]!.user_text
-    if (t?.trim()) return firstLine(t)
+    // SAI が頭に足した返答の塊（#594）は題名にしない（人が打った文だけ）
+    const t = splitHandedReplies(items[i]!.user_text ?? '').text
+    if (t.trim()) return firstLine(t)
   }
   for (const row of items) {
     if (row.first_user_text?.trim()) return firstLine(row.first_user_text)
@@ -152,7 +154,7 @@ export function aggregate(rows: FeedRow[]): SessionSummary[] {
       session_source: sources.includes('synth') ? 'synth' : (latestValue(items, (r) => r.session_source) as SessionSource),
       sources,
       last_text: clip(firstLine(lastTurn?.text ?? ''), 120),
-      last_user_text: clip(firstLine(lastInput?.user_text ?? ''), 120),
+      last_user_text: clip(firstLine(splitHandedReplies(lastInput?.user_text ?? '').text), 120),
       last_user_ts: lastInput?.ts ?? '',
       pane: typeof last.pane === 'string' ? last.pane : '',
       pid: typeof last.pid === 'number' && last.pid > 0 ? last.pid : 0,

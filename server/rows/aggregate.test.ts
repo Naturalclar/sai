@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { FeedRow } from '../../shared/types.ts'
 import { aggregate, clip, facets, filterSessions, localDate, recentDates, recordVersionOf } from './aggregate.ts'
+import { withHandedReplies } from '../../shared/agentMessages.ts'
 
 export function row(ts: Date, session: string, over: Partial<FeedRow> = {}): FeedRow {
   return {
@@ -375,4 +376,11 @@ test('last_kind: 最後の行の読み方。ターン完了と同じ秒に届い
   assert.equal(aggregate([turn, input])[0]!.last_kind, 'resume')
   const end = row(t, 'S1', { event: 'SessionEnd', text: 'セッション終了: 会話をリセット（/clear）' })
   assert.equal(aggregate([turn, end])[0]!.last_kind, 'end')
+})
+
+test('aggregate: 題名と最後の入力は、SAI が頭に足した返答の塊（#594）を外した人の文', () => {
+  const user_text = withHandedReplies('579着手して', [{ message_id: 'ab', to_name: 'かなで', status: 'done', text: 'PR #9' }])
+  const [s] = aggregate([row(new Date(), 'S', { user_text, event: 'UserPromptSubmit', text: '' })])
+  assert.equal(s!.title, '579着手して')
+  assert.equal(s!.last_user_text, '579着手して')
 })

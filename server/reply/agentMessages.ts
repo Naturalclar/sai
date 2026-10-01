@@ -29,6 +29,11 @@ export interface AgentMessage {
   text: string
   /** 送った時刻 */
   since: string
+  /**
+   * 返答（か失敗）を送り元の会話に渡した時刻（#594）。次のターンの頭に足したか、`sai_wait` で受け取ったとき。
+   * 付いていれば 2 回は足さない（立て直しても残る）
+   */
+  handed_at?: string
 }
 
 /**
@@ -198,6 +203,42 @@ export class AgentMessages {
     return String(this.version)
   }
 
+  /**
+   * 返答を送り元の会話に渡した（#594）。もう渡してあるものは触らない（最初に渡した時刻を残す）
+   */
+  handed(messageIds: readonly string[], at: string = new Date().toISOString()): void {
+    let changed = false
+    for (const id of messageIds) {
+      const m = this.messages.get(id)
+      if (!m || m.handed_at) continue
+      this.messages.set(id, { ...m, handed_at: at })
+      changed = true
+    }
+    if (!changed) return
+    this.version++
+    this.persist()
+  }
+
+  /** 「渡した」を取り消す（#594。返答を頭に足したターンが失敗して、エージェントが読んでいないとき） */
+  unhand(messageIds: readonly string[]): void {
+    let changed = false
+    for (const id of messageIds) {
+      const m = this.messages.get(id)
+      if (!m?.handed_at) continue
+      const { handed_at: _dropped, ...rest } = m
+      this.messages.set(id, rest)
+      changed = true
+    }
+    if (!changed) return
+    this.version++
+    this.persist()
+  }
+
+  /** そのセッションが送って、まだ返答を渡していない記録（古い順）。`since` がこれより前のものは除く */
+  unhanded(from: string, notBefore: number): AgentMessage[] {
+    return [...this.messages.values()].filter((m) => m.from === from && !m.handed_at && Date.parse(m.since) >= notBefore)
+  }
+
   get(messageId: string): AgentMessage | undefined {
     return this.messages.get(messageId)
   }
@@ -222,5 +263,5 @@ export class AgentMessages {
 function isMessage(m: unknown): m is AgentMessage {
   if (!m || typeof m !== 'object') return false
   const r = m as Record<string, unknown>
-  return ['message_id', 'from', 'to', 'text', 'since'].every((k) => typeof r[k] === 'string')
+  return ['message_id', 'from', 'to', 'text', 'since'].every((k) => typeof r[k] === 'string') && (r.handed_at === undefined || typeof r.handed_at === 'string')
 }

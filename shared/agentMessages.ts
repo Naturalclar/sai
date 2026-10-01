@@ -35,7 +35,7 @@ export const AGENT_HEADER_MARK = '【SAI】'
  * 見出しの「返答はどこへ行くか」（#588）。**送り元が待っていないこともある**ので「送り元に返ります」とは言い切らない
  * （待たずにターンを終えた送り元には、返答は画面にしか出ない）
  */
-export const REPLY_NOTE = 'このターンの最後の発言が返答として送り元の画面に出ます（送り元が sai_wait で待っていれば、そのまま受け取ります）。'
+export const REPLY_NOTE = 'このターンの最後の発言が返答として送り元の画面に出て、送り元の次のターンの頭にも届きます（送り元が sai_wait で待っていれば、その場で受け取ります）。'
 
 /**
  * 相手に届ける文。見出しの 1 行で「人ではなく別のセッションから」「返答はこのターンの最後の発言」を伝える。
@@ -68,7 +68,7 @@ export function deliveredId(userText: string | undefined): string {
  * 相手が違う行（見出しを写しただけの行）は数えない。古い順
  */
 export function agentReplyRows(
-  sent: readonly { message_id: string; to: string; since: string }[],
+  sent: readonly { message_id: string; to: string; since: string; handed_at?: string }[],
   rows: readonly FeedRow[],
   toName: (id: string) => string,
 ): FeedRow[] {
@@ -83,7 +83,7 @@ export function agentReplyRows(
     if (!m || seen.has(id)) continue
     if (entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) !== m.to) continue
     seen.add(id)
-    out.push({ ...r, agent_reply: { message_id: id, to_name: toName(m.to), sent_at: m.since } })
+    out.push({ ...r, agent_reply: { message_id: id, to_name: toName(m.to), sent_at: m.since, ...(m.handed_at ? { handed_at: m.handed_at } : {}) } })
   }
   return out.sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts))
 }
@@ -225,3 +225,65 @@ export function budgetRefusal(spent: number, next: number, budget: number = AGEN
   if (!(next > 0) || spent + next <= budget) return ''
   return `このターンで相手に読み直させる量が予算を超えます（これまで ${spent > 0 ? tokensLabel(spent) : '0'}、この相手は${tokensLabel(next)}、予算は${tokensLabel(budget)}）。小さい相手を選ぶか、人に確かめてください`
 }
+
+// ---- 返答を送り元の会話に戻す（#594）
+
+/** 送り元の次のターンの頭に足す返答の塊の始まり。`【SAI】` で始めない（`deliveredId()` が届けた見出しと取り違えないように） */
+export const HANDED_MARK = '【SAI 返答】'
+/** 塊の終わり。ここから後ろが人（か預かり）の本文 */
+export const HANDED_END = '【SAI 返答ここまで。以下が今回の指示です】'
+/** 1 回に足す返答の数の上限。超えた分は 1 行で名前だけ知らせる（渡した扱いにする） */
+export const HANDED_MAX_ITEMS = 8
+/** 1 回に足す返答の本文の合計の上限（字）。1 件は `clipReply()` の長さのまま。実データの返答は 1 件 539〜2,060 字 */
+export const HANDED_MAX_CHARS = 12_000
+/** 送ってからこれより古い返答は足さない（何日も前の依頼の返答を、関係の無い次のターンに混ぜない） */
+export const HANDED_KEEP_DAYS = 7
+
+/** 送り元にまだ渡していない返答 1 件 */
+export interface PendingReply {
+  message_id: string
+  /** 相手の呼び名 */
+  to_name: string
+  status: 'done' | 'failed'
+  /** done のときの返答（`clipReply()` 済み） */
+  text?: string
+  /** failed のときの理由 */
+  error?: string
+}
+
+/**
+ * 送り元の次のターンの本文の頭に、まだ渡していない返答を足す（#594）。返答が無ければ本文をそのまま返す。
+ * 古い順に `HANDED_MAX_ITEMS` 件・合計 `HANDED_MAX_CHARS` 字まで本文を載せ、入りきらない分は名前と id だけの 1 行にする。
+ * 足したものは全部「渡した」にする（名前だけの分も、あることは伝わっているので 2 回は足さない）
+ */
+export function withHandedReplies(text: string, replies: readonly PendingReply[]): string {
+  if (replies.length === 0) return text
+  const blocks: string[] = []
+  const rest: PendingReply[] = []
+  let used = 0
+  for (const r of replies) {
+    const body = r.status === 'failed' ? `--- 「${r.to_name}」（message_id: ${r.message_id}）への依頼は失敗しました: ${r.error ?? ''}` : `--- 「${r.to_name}」（message_id: ${r.message_id}）からの返答:\n${r.text ?? ''}`
+    if (blocks.length >= HANDED_MAX_ITEMS || (blocks.length > 0 && used + body.length > HANDED_MAX_CHARS)) {
+      rest.push(r)
+      continue
+    }
+    blocks.push(body)
+    used += body.length
+  }
+  if (rest.length > 0) blocks.push(`--- ほか ${rest.length} 件（本文は相手のセッションで読めます）: ${rest.map((r) => `「${r.to_name}」（message_id: ${r.message_id}）`).join('、')}`)
+  const head = `${HANDED_MARK}あなたが別のセッションに送ったメッセージへの返答が ${replies.length} 件届いています（待たずにターンを終えたので、ここで渡します）。`
+  return `${head}\n\n${blocks.join('\n\n')}\n\n${HANDED_END}\n\n${text}`
+}
+
+/**
+ * 本文の頭に足した返答の塊を外す（#594）。画面の自分のバブル・題名・↑ の履歴は人が打った文だけを見せる。
+ * 記録の `user_text` には塊ごと残る（SAI は行を書き換えない）。塊が無ければ `handed: 0` でそのまま
+ */
+export function splitHandedReplies(userText: string): { text: string; handed: number } {
+  if (!userText.startsWith(HANDED_MARK)) return { text: userText, handed: 0 }
+  const end = userText.indexOf(HANDED_END)
+  if (end < 0) return { text: userText, handed: 0 }
+  const handed = Number(/返答が (\d+) 件届いています/.exec(userText.slice(0, 200))?.[1] ?? 0)
+  return { text: userText.slice(end + HANDED_END.length).replace(/^\s+/, ''), handed }
+}
+

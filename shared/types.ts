@@ -925,6 +925,36 @@ export interface Approval {
    * 画面に出さないと「90% なのに自動で答えない」理由が見えなかった
    */
   jev_rule?: { label: string; safe: number }
+  /**
+   * この許可が、同じ cwd で同じルール（`alwaysAllowRule()` の表記）の**何回目か**（#445。人が許可した回数 + 1）。
+   * Claude の `-p` の許可で、ルールが作れるツールのときだけ。`suggest` は「常に許可」を勧める回数（`APPROVAL_SUGGEST_AT`）に達したか。
+   * **勧めるだけ**で、サーバはルールを書かない
+   */
+  count?: number
+  suggest?: boolean
+}
+
+/**
+ * `<feed dir>/approvals.jsonl` の 1 行（#445 / #582）。SAI の口で許可・質問に**答えたとき**に足す。
+ * コマンドの全文や本文は書かない（ルールの表記まで）
+ */
+export interface ApprovalLogRow {
+  /** 答えた時刻（ISO） */
+  ts: string
+  /** エンティティ ID */
+  id: string
+  /** そのセッションの cwd（行から。分からなければ空） */
+  cwd: string
+  tool: string
+  /** `alwaysAllowRule()` の表記。作れないツールは空 */
+  rule: string
+  /** 誰が答えたか。`jev` は自動の「常に許可」（#499） */
+  by: 'human' | 'jev'
+  behavior: 'allow' | 'deny'
+  /** 「常に許可」で答えた（ルールを書いた） */
+  remember: boolean
+  /** 預かってから答えるまでの秒数 */
+  waited_s: number
 }
 
 export interface ApprovalDecision {
@@ -1474,6 +1504,8 @@ export interface SessionPermissionsResponse {
   sources: PermissionSource[]
   /** deny → ask → allow の順 */
   rules: PermissionRuleEntry[]
+  /** よく許可しているが、許可のルールに無いもの（#445。多い順）。無ければ省略 */
+  frequent?: { rule: string; count: number }[]
 }
 
 /** 使用量の枠 1 つ。Codex の rate_limits の primary（5 時間）/ secondary（週） */

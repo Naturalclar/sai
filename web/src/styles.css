@@ -960,6 +960,10 @@
   .group.approval .actions button { font: inherit; font-size: 13px; padding: 4px 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; }
   .group.approval .actions button.allow { background: var(--accent); border-color: var(--accent); color: #fff; }
   .group.approval .actions button.always { border-color: var(--accent); color: var(--accent); }
+  /* 同じルールを何度も許可しているとき（#445）。「常に許可」を勧める見た目にする（押すのは人） */
+  .group.approval .actions button.always.suggest { background: var(--accent); color: #fff; font-weight: 600; }
+  .group.approval .count-note { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+  .group.approval .count-note.suggest { color: var(--accent); }
   .group.approval .actions button:disabled { opacity: .5; cursor: default; }
   /* 質問（AskUserQuestion）は 1 問ずつ。選択肢は縦に積んで説明を label の下に出す（携帯ではツールチップが読めないため） */
   .group.approval .questions { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }

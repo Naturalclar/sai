@@ -192,6 +192,11 @@ export interface SessionSummary {
    */
   next_ask?: string
   /**
+   * ターンは終わっているのに、ターン完了（`Stop`）の行が記録されていない（#614）。サーバが transcript と突き合わせて、
+   * **分かったときだけ**載せる（`shared/stopMissing.ts`）。要対応・未読・`turns` には数えない。無ければ省略
+   */
+  stop_missing?: true
+  /**
    * Manager が置いた案（#565。`sai_suggest`）。**置いてから 24 時間以内で、そのあと人の入力が来ていない**（置いた時刻より後の行で決める）ときだけ
    * サーバが `suggestions.json` から載せる（`shared/managerDraft.ts`）。入力欄が空のとき、`next_ask` より先に出す
    */
@@ -498,6 +503,11 @@ export interface SessionProgressResponse {
   total: number
   /** transcript / rollout が最後に書かれた時刻（ISO）。読めなければ空 */
   updated_at: string
+  /**
+   * 最後のターンが**閉じている**とき、その最後の手順の時刻（#614。Claude だけ）。閉じていない・手順が無い・読めなければ省く。
+   * ターン完了の行が落ちたかの判定（`shared/stopMissing.ts`）に使う
+   */
+  closed_at?: string
   /**
    * 最後にモデルを呼んだときに読んだ量（トークン。#311）。そのセッションに送ると、少なくともこれだけ読み直す。
    * セッション同士のメッセージの予算に使う。読めなければ 0

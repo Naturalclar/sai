@@ -125,6 +125,7 @@ import { PROFILE_FILE, ProfileStore } from './meta/profile.ts'
 import { READ_MARKS_FILE, ReadStore } from './meta/reads.ts'
 import { SUGGESTIONS_FILE, SuggestionStore } from './mcp/suggestions.ts'
 import { liveManagerDraft } from '../shared/managerDraft.ts'
+import { stopMissing, stopMissingCandidate } from '../shared/stopMissing.ts'
 import { readMarkOf, rowMs, unreadCounts, unreadFromMark } from '../shared/unread.ts'
 import { SETTINGS_FILE, SettingsStore, nextAskOn } from './meta/settings.ts'
 import type { Settings } from './meta/settings.ts'
@@ -1063,7 +1064,19 @@ export function createApp(
       const suffix = suffixes.get(s.id)
       if (suffix) s.label_suffix = suffix
     }
-    return { rev: `${rev}-${meta.rev}-${icons.rev}-${reads.rev}-${[...live].map(([id, d]) => `${id}:${d.at}`).join(',')}`, sessions: built }
+    // ターンは終わっているのにターン完了の行が無い（#614）。行だけで候補を絞ってから transcript を読む（候補は普段 0 件）。
+    // 別のマシンのセッションは transcript が無いので見ない。時間で出る印なので、出しているものを rev に混ぜる
+    const missing: string[] = []
+    for (const s of built) {
+      if (!stopMissingCandidate(s, nowMs) || isRemoteHost(s.host, selfHost())) continue
+      const busy = mcpBusy(s.id)
+      const closedAt = busy ? '' : ((await progress.read(s)).closed_at ?? '')
+      if (stopMissing(s, { busy, closedAt, now: nowMs })) {
+        s.stop_missing = true
+        missing.push(s.id)
+      }
+    }
+    return { rev: `${rev}-${meta.rev}-${icons.rev}-${reads.rev}-${[...live].map(([id, d]) => `${id}:${d.at}`).join(',')}-${missing.join(',')}`, sessions: built }
   }
 
   /**

@@ -7,6 +7,7 @@ import { HostTag } from './HostTag'
 import { isRemoteHost } from '../../shared/host.ts'
 import { ReplyingTag } from './ReplyingTag'
 import { ArchivedTag } from './ArchivedTag'
+import { StopMissingTag } from './StopMissingTag'
 import { ReturnedTag } from './ReturnedTag'
 import { returnedFromArchive } from '../../shared/archiveReturn.ts'
 import { WaitingTag } from './WaitingTag'
@@ -135,6 +136,8 @@ export function SessionItem({ s, active, replying, profile, approval, now, swipe
           {s.waiting && <WaitingTag text={s.waiting} />}
           {!s.waiting && approval && <WaitingTag text={approval.text} />}
           {replying && <ReplyingTag since={replying.since} now={now} />}
+          {/* ターン完了の行が落ちた（#614。見出しと同じ `stop_missing`） */}
+          {s.stop_missing && !replying && <StopMissingTag />}
           {!!s.unread && <UnreadTag n={s.unread} />}
           {pr && <SessionPrTag pr={pr} />}
           {s.archived && <ArchivedTag />}

@@ -7,6 +7,7 @@ import { TerminalTag } from './TerminalTag'
 import { WaitingTag } from './WaitingTag'
 import { ReplyingTag } from './ReplyingTag'
 import { ArchivedTag } from './ArchivedTag'
+import { StopMissingTag } from './StopMissingTag'
 import { ReturnedTag } from './ReturnedTag'
 import { PermissionModeTag } from './PermissionModeTag'
 import { ContextTag } from './ContextTag'
@@ -27,6 +28,8 @@ function tagOf(tag: HeadTag, now: number): ReactNode {
       return <WaitingTag text={tag.text} />
     case 'replying':
       return <ReplyingTag since={tag.since} now={now} />
+    case 'stop_missing':
+      return <StopMissingTag />
     case 'archived':
       return <ArchivedTag />
     case 'returned':

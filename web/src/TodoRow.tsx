@@ -6,6 +6,8 @@ import { AgentChip } from './AgentChip'
 import { TodoArchiveButton } from './TodoArchiveButton'
 import { WaitingTag } from './WaitingTag'
 import { UnreadTag } from './UnreadTag'
+import { ReturnedTag } from './ReturnedTag'
+import { returnedFromArchive } from '../../shared/archiveReturn.ts'
 import { TodoSource } from './TodoSource'
 import { sourceTs } from './todoRowSource.ts'
 import { elapsedLabel } from './format'
@@ -63,6 +65,8 @@ export function TodoRow({ item, now, hotkey, modeNote, reply, children, prs = []
         {agent && <AgentChip agent={agent} />}
         {/* 読んでいない返答（#551）。答え待ちは未読でも一番上なので、印は待機中と終了の行にだけ */}
         {s && item.kind !== 'answer' && !!s.unread && <UnreadTag n={s.unread} />}
+        {/* アーカイブしたのに返信が続いているセッション（#583。見出し・サイドバーと同じ判定） */}
+        {s && returnedFromArchive(s) && <ReturnedTag at={returnedFromArchive(s)} />}
         {waited && <span className="waited">{done ? `終わってから ${waited}` : `${waited} 待っている`}</span>}
       </a>
       {pr && <SessionPrLink repo={pr.repo} pr={pr.pr} />}

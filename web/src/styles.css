@@ -581,6 +581,8 @@
   /* コンテキストが大きすぎる（#441）。素通しの印と同じ目立たせ方は強すぎるので、待機中と同じ注意の色 */
   .tag.context-warn { background: color-mix(in srgb, var(--synth) 18%, transparent); color: var(--synth); font-weight: 600; white-space: nowrap; }
   .tag.archived { background: color-mix(in srgb, var(--muted) 18%, transparent); color: var(--muted); font-weight: 600; }
+  /* アーカイブしたのに返信が続いている（#583）。アーカイブの印より目立たせる */
+  .tag.returned { background: color-mix(in srgb, var(--synth) 22%, transparent); color: var(--synth); font-weight: 600; }
   .tag.waiting { background: color-mix(in srgb, var(--synth) 18%, transparent); color: var(--synth); font-weight: 600; }
   /* そのセッションの PR（#548）。色は下書き・チェックが落ちている・承認済み・それ以外 */
   .tag.session-pr { display: inline-flex; align-items: center; gap: 3px; font-family: var(--mono); font-weight: 600; color: var(--ink); }
@@ -1135,6 +1137,10 @@
   .reply .note { color: var(--muted); font-size: 11px; padding: 0 2px; }
   .reply .note.blocked { color: var(--synth); }
   .notice { color: var(--muted); font-size: 12px; margin-top: 10px; }
+  .notice.archive-return { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
+  .notice.archive-return button { min-height: 28px; padding: 2px 10px; background: var(--chip); color: var(--ink); border: 1px solid var(--line); border-radius: 999px; font: inherit; cursor: pointer; }
+  .notice.archive-return a { color: var(--accent); }
+  .notice.archive-return .err { color: var(--claude); }
   .notice.error { color: var(--claude); }
   /* 失敗の理由と「入力欄に戻す」を並べる（#350）。一言の .msg .summary と同じ形 */
   .notice.reply-failed { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }

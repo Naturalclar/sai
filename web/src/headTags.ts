@@ -3,6 +3,7 @@
 import { contextWarns } from '../../shared/contextSize.ts'
 import { isRemoteHost } from '../../shared/host.ts'
 import { projectName } from '../../shared/project.ts'
+import { returnedFromArchive } from '../../shared/archiveReturn.ts'
 import type { SessionSummary, Terminal } from '../../shared/types.ts'
 import { withSuffix } from '../../shared/sessionLabels.ts'
 
@@ -16,10 +17,11 @@ export type HeadTag =
   | { kind: 'approval'; text: string }
   | { kind: 'replying'; since: string }
   | { kind: 'archived' }
+  | { kind: 'returned'; at: string }
   | { kind: 'mode'; mode: string }
   | { kind: 'context'; tokens: number }
 
-export type HeadTagSession = Pick<SessionSummary, 'host' | 'session_source' | 'terminal' | 'waiting' | 'archived' | 'permission_mode'>
+export type HeadTagSession = Pick<SessionSummary, 'host' | 'session_source' | 'terminal' | 'waiting' | 'archived' | 'permission_mode' | 'meta'> & Partial<Pick<SessionSummary, 'last_kind' | 'last_turn_ts'>>
 
 export interface HeadTagInput {
   /** サーバのマシン名（応答の host）。行の host と違えば別のマシンの印 */
@@ -47,6 +49,9 @@ export function headTags(s: HeadTagSession, input: HeadTagInput): HeadTag[] {
   if (input.approval) tags.push({ kind: 'approval', text: input.approval })
   if (input.replyingSince) tags.push({ kind: 'replying', since: input.replyingSince })
   if (s.archived) tags.push({ kind: 'archived' })
+  // アーカイブしたのに行が増えて戻ってきた（#583）。狭い画面の 1 行目にも残す（片付けたはずの方に送り続けるのを止めたい）
+  const returned = returnedFromArchive(s)
+  if (returned) tags.push({ kind: 'returned', at: returned })
   // 通常のモードは印を出さない（普段と違うときだけ目立たせる）
   if (s.permission_mode && s.permission_mode !== 'default') tags.push({ kind: 'mode', mode: s.permission_mode })
   // 大きくなりすぎたコンテキスト（#441）。狭い画面の 1 行目にも残す（返信のたびに読み直す量なので、気づかないまま続けるのが一番高くつく）

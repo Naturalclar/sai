@@ -63,3 +63,10 @@ test('コンテキスト: 閾値を超えたときだけ印を出し、狭い画
   assert.deepEqual(headTags(base, { ...compact, contextTokens: 830_000 }), [{ kind: 'context', tokens: 830_000 }])
   assert.deepEqual(kinds(headTags({ ...base, permission_mode: 'bypassPermissions' }, { ...compact, contextTokens: CONTEXT_WARN_TOKENS })), ['mode', 'context'])
 })
+
+test('アーカイブしたのに行が増えて戻ってきたセッションは「アーカイブ後も継続」の印。アーカイブ済みのまま・archived_at 無しでは出さない（#583）', () => {
+  const at = '2026-09-04T03:00:00.000Z'
+  assert.deepEqual(headTags({ ...base, meta: { archived_at: at } }, compact), [{ kind: 'returned', at }], '狭い画面の 1 行目にも出す')
+  assert.deepEqual(kinds(headTags({ ...base, meta: { archived_at: at }, archived: true }, compact)), ['archived'])
+  assert.deepEqual(kinds(headTags({ ...base, meta: { name: 'sai_main' } }, compact)), [])
+})

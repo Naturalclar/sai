@@ -46,7 +46,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 
 - 判定は `shared/stopMissing.ts`。`stopMissingCandidate()` が行だけで候補を絞り（Claude・`last_kind === 'resume'`・`last_user_ts === end` = 最後の行が入力の載った入力の行・`STOP_MISSING_AFTER_MS` = 60 秒たっている）、`stopMissing()` が transcript と突き合わせる。
 - transcript の側は `ProgressReader.read()` が返す `closed_at`（Claude だけ。ターンの始まりを見ていて・閉じていて（`end_turn`）・手順があるときの、最後の手順の時刻）。**入力の行より後に閉じていて、閉じてから 60 秒たっている**ときだけ印。回っている・Esc で止めた（`[Request interrupted` が次の入力として開く）・途中から読んだ・読めない、は `closed_at` が無いので出ない。
-- 載せるのは `sessionsWithMeta()`（一覧・詳細・要対応が同じものを見る）。候補のときだけ transcript を読む（普段は 0 件）。別のマシンのセッションと、SAI が回しているセッション（`mcpBusy()`）は見ない。時間で出る印なので、出しているセッションの id を rev に混ぜる。
+- 載せるのは `sessionsWithMeta()`（一覧・詳細・要対応が同じものを見る）。候補のときだけ transcript を読む（普段は 0 件）。別のマシンのセッションと、SAI が回しているセッション（`mcpBusy()`）は見ない。同じセッション ID のターン完了の行が、その入力より後に**別のエンティティ**（ターンの途中で別の worktree に移った）に載っていれば出さない（transcript はセッション ID で引くため）。時間で出る印なので、出しているセッションの id を rev に混ぜる。
 - **行は書かない・補わない**。`turns`・未読・`todoItems()` は触らない（数えるのはターン完了の行だけ、のまま）。
 
 ## 画面

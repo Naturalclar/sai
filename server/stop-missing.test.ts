@@ -48,6 +48,7 @@ before(async () => {
   await writeFile(join(projectDir, 'DONE.jsonl'), closed)
   // 別のマシンのセッション（同じ ID の transcript がこちらにあっても読まない）
   await writeFile(join(projectDir, 'REMOTE.jsonl'), closed)
+  await writeFile(join(projectDir, 'MOVED.jsonl'), closed)
   // 閉じたばかり（フックの行を待つ）
   await writeFile(join(projectDir, 'JUST.jsonl'), [user(ago(10), 'PR を出して'), said(new Date(now.getTime() - 5_000), 'できました', 'end_turn')].join('\n') + '\n')
   // 閉じたのは前のターン（入力はそのあと）
@@ -62,6 +63,9 @@ before(async () => {
     input('JUST'),
     input('EARLIER'),
     input('NOFILE'),
+    // ターンの途中で別の worktree に移り、ターン完了の行はそちらのエンティティに載った
+    input('MOVED'),
+    row(ago(5), 'MOVED', { repo: 'other', cwd: dir, agent: 'claude', user_text: 'PR を出して', text: 'PR #610 を出しました' }),
   ]
   feedFile = join(feedDir, `${localDate(now.toISOString())}.jsonl`)
   feedBefore = lines.map((l) => JSON.stringify(l)).join('\n') + '\n'
@@ -86,7 +90,7 @@ after(async () => {
 test('一覧と詳細: transcript でターンが閉じているのに記録の最後が人の入力のままのセッションにだけ stop_missing が載る（#614）', async () => {
   const list = (await (await fetch(`${base}/api/sessions?days=2`)).json()) as SessionsResponse
   const flagged = list.sessions.filter((s) => s.stop_missing).map((s) => s.id)
-  assert.deepEqual(flagged, ['DROPPED@repo'], '回っている・Esc で止めた・完了の行がある・別のマシン・閉じたばかり・前のターン・transcript が無い、は出さない')
+  assert.deepEqual(flagged, ['DROPPED@repo'], '回っている・Esc で止めた・完了の行がある（別の worktree のエンティティでも）・別のマシン・閉じたばかり・前のターン・transcript が無い、は出さない')
 
   const dropped = list.sessions.find((s) => s.id === 'DROPPED@repo')!
   assert.equal(dropped.turns, 0, 'turns は進めない（数えるのはターン完了の行だけ）')

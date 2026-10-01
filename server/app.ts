@@ -1069,6 +1069,11 @@ export function createApp(
     const missing: string[] = []
     for (const s of built) {
       if (!stopMissingCandidate(s, nowMs) || isRemoteHost(s.host, selfHost())) continue
+      // 同じセッションのターン完了の行が、別の worktree のエンティティに載っていることがある（ターンの途中で cd した。#616 のレビュー）。
+      // transcript はセッション ID で引くので、どのエンティティの行でも、その入力より後にターン完了があれば落ちていない
+      const session = sessionOf(s)
+      const endMs = rowMs(s.end)
+      if (session && rows.some((r) => r.session === session && rowMs(r.ts) >= endMs && eventKind(r.event, r.text) === 'turn')) continue
       const busy = mcpBusy(s.id)
       const closedAt = busy ? '' : ((await progress.read(s)).closed_at ?? '')
       if (stopMissing(s, { busy, closedAt, now: nowMs })) {

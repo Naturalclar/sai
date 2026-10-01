@@ -46,7 +46,7 @@ import type {
   PrReviewResponse,
 } from '../../shared/types.ts'
 import { fetchByRev, RevCache } from './revCache.ts'
-import type { DigestFeedbackReason, DigestFeedbackRequest, DigestFeedbackResponse } from '../../shared/digestFeedback.ts'
+import type { DigestFeedbackReason, DigestFeedbackRequest, DigestFeedbackResponse, DigestUsageReason } from '../../shared/digestFeedback.ts'
 
 export type { Agent, FeedRow, SessionSource, SessionSummary, SessionMeta, ManagerDraft, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, QueuedReply, ReplyQueue, ReplyQueueMap, ReplyQueueResponse, AgentActivity, AgentActivityMessage, AgentStopResponse,Approval, ApprovalMap, ApprovalAnswer, TerminalDialog, Profile, PersonaId, SettingsResponse, SettingsRequest, Viewer, SessionPermissionsResponse, SessionProgressResponse, ProgressStep, SessionDiffResponse, SessionDiffSummaryResponse, GalleryResponse, GalleryItem, SearchResponse, SearchHit, DiffPr, DiffSection, DiffFileStat, PrSummary, PrRepo, PrsResponse, PrDetailResponse, PrReviewRequest, PrReviewResponse, PrReviewEvent, AttachmentResponse, UsageResponse, UsageWindow, CodexUsage, ClaudeUsage } from '../../shared/types.ts'
 
@@ -203,7 +203,7 @@ export const api = {
    * 一言が変だと伝える（#346）。~/.agent-feed/digest-feedback.jsonl に溜めるだけで、その場の一言は変わらない。
    * 一言そのものはサーバが鍵から引くので送らない
    */
-  digestFeedback: (key: string, reason: DigestFeedbackReason, note?: string) =>
+  digestFeedback: (key: string, reason: DigestFeedbackReason | DigestUsageReason, note?: string) =>
     sendJSON<DigestFeedbackResponse>('POST', '/api/digest/feedback', { key, reason, ...(note ? { note } : {}) } satisfies DigestFeedbackRequest),
   /** 発言の本文を検索する（#230）。⌘K で打ち終わったときだけ叩く（ポーリングには乗せない） */
   search: (q: string, days = 90) => getJSON<SearchResponse>(`/api/search?q=${encodeURIComponent(q)}&days=${days}`),

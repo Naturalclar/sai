@@ -104,7 +104,7 @@ import type { WaitingSettleSource } from './reply/waitingSettle.ts'
 import type { CodexDialogSource, DialogTarget } from './reply/codexDialogs.ts'
 import { DIGEST_FILE, DigestStore, createDigester } from './digest/digest.ts'
 import { FEEDBACK_FILE, FeedbackStore } from './digest/feedback.ts'
-import { DIGEST_NOTE_MAX, isDigestFeedbackReason } from '../shared/digestFeedback.ts'
+import { DIGEST_NOTE_MAX, isDigestFeedbackReason, isDigestUsageReason } from '../shared/digestFeedback.ts'
 import type { DigestFeedbackRequest, DigestFeedbackResponse } from '../shared/digestFeedback.ts'
 import { isDigestModel, isDigestProvider } from '../shared/digestSettings.ts'
 import type { Digester } from './digest/digest.ts'
@@ -1180,6 +1180,7 @@ export function createApp(
   /**
    * POST /api/digest/feedback（#346）。一言が変だと言われたら、そのときの一言・口・性格と一緒に
    * `~/.agent-feed/digest-feedback.jsonl` に残す。溜めたものは規則を直すときの材料と回帰テストの素材にする。
+   * 使われたかの合図（#446。詳細を開いた `opened`・案を受け取った `next_ask_accepted`）も同じ口・同じファイルに溜める。
    * **一言そのものは鍵から引く**（画面から来た文字列は信じない）。**同一オリジンのみ**（画面から叩くので、返信と同じ）
    */
   const postDigestFeedback = async (req: IncomingMessage, res: ServerResponse) => {
@@ -1193,13 +1194,19 @@ export function createApp(
     if (!body || typeof body !== 'object' || Array.isArray(body)) return error(res, 400, 'body はオブジェクトで送ってください')
     const b = body as Partial<DigestFeedbackRequest>
     if (typeof b.key !== 'string' || !b.key) return error(res, 400, 'key（一言の鍵）を送ってください')
-    if (!isDigestFeedbackReason(b.reason)) return error(res, 400, 'reason が不明です（shared/digestFeedback.ts にある id を送ってください）')
-    const note = typeof b.note === 'string' ? b.note.trim() : ''
+    if (!isDigestFeedbackReason(b.reason) && !isDigestUsageReason(b.reason)) return error(res, 400, 'reason が不明です（shared/digestFeedback.ts にある id を送ってください）')
+    // 使われたかの合図（#446）に「こうしてほしい」は付かない（画面は送らない。来ても残さない）
+    const note = typeof b.note === 'string' && !isDigestUsageReason(b.reason) ? b.note.trim() : ''
     if ([...note].length > DIGEST_NOTE_MAX) return error(res, 400, `note は ${DIGEST_NOTE_MAX} 文字までです`)
     await digestReady
     const entry = digest.store.get(b.key)
-    // 案だけ作った行（summary が空。#560）には一言が無い
-    if (!entry?.summary) return error(res, 404, 'その一言が見つかりません（作り直されたか、まだ届いていません）')
+    // 案を受け取った（#446）: その行に案があること。一言は無くてよい（案だけ作った行。#560）。**案も鍵から引く**
+    if (b.reason === 'next_ask_accepted') {
+      if (!entry?.next_ask) return error(res, 404, 'その案が見つかりません（作り直されたか、まだ届いていません）')
+    } else if (!entry?.summary) {
+      // 案だけ作った行（summary が空。#560）には一言が無い
+      return error(res, 404, 'その一言が見つかりません（作り直されたか、まだ届いていません）')
+    }
     await feedback.load()
     await feedback.append({
       key: b.key,
@@ -1207,6 +1214,7 @@ export function createApp(
       model: entry.model,
       persona: entry.persona,
       reason: b.reason,
+      ...(b.reason === 'next_ask_accepted' && entry.next_ask ? { next_ask: entry.next_ask } : {}),
       ...(note ? { note } : {}),
       ts: new Date().toISOString(),
     })

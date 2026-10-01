@@ -9,6 +9,7 @@ import { useReveal } from './useReveal'
 import { AttachedImages } from './AttachedImages'
 import { splitAttachments } from '../../shared/attachments.ts'
 import { DiffButton, type DiffButtonProps } from './DiffButton'
+import { reportDigestUsage } from './digestUsage'
 import { DigestFeedback } from './DigestFeedback'
 import { SourceImages } from './SourceImages'
 import { ImageSourceContext } from './imageContext'
@@ -133,7 +134,16 @@ export function Message({ ts, text: raw, markdown, waiting, questions, resolved,
               本文に無い番号を書くことがある。押すと無関係の issue に飛ぶ） */}
           {/* 一言の中の画像は名前だけ（LLM が本文から写したもの）。画像そのものは下に元の本文から並べる（#321） */}
           <span className="line"><ImageSourceContext value={null}><Inlines nodes={linkifyRefs(summary, { remote, linear, source: sourceAsk ? `${text}\n${sourceAsk}` : text })} /></ImageSourceContext></span>
-          <button type="button" className="linkish details-toggle" onClick={() => setDetails((v) => !v)} aria-expanded={details}>
+          <button
+            type="button"
+            className="linkish details-toggle"
+            onClick={() => {
+              // 詳細を開いた = 一言では足りなかった（#446。手元で数えるだけ。閉じるときは数えない）
+              if (!details) reportDigestUsage(digestKey, 'opened')
+              setDetails(!details)
+            }}
+            aria-expanded={details}
+          >
             {details ? '詳細を閉じる' : '詳細'}
           </button>
           {digestKey && <DigestFeedback digestKey={digestKey} />}

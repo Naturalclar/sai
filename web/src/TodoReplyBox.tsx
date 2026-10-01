@@ -37,7 +37,7 @@ export function TodoReplyBox({ session: s, replying, queued, onSend, sentFromCon
         repo={s.repo}
         skillsId={s.id}
         skillsAgent={s.agent}
-        {...(s.next_ask ? { nextAsk: s.next_ask } : {})}
+        {...(s.next_ask ? { nextAsk: s.next_ask, nextAskKey: `${s.id}|${s.last_turn_ts ?? ''}` } : {})}
         {...(s.manager_draft ? { managerDraft: s.manager_draft } : {})}
         onManagerDraft={(action, at) => void api.suggestionAction(s.id, { action, at }).catch(() => {})}
         {...(onLeaveToSidebar ? { onLeaveToSidebar } : {})}

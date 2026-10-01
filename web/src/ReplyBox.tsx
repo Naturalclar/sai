@@ -18,6 +18,7 @@ import { NEXT_ASK_MAX_CHARS } from '../../shared/nextAsk.ts'
 import { SEND_MODE_LABEL, sendModes, type SendMode } from '../../shared/compact.ts'
 import { CONTEXT_WARN_TOKENS } from '../../shared/contextSize.ts'
 import { SuggestionChip } from './SuggestionChip'
+import { reportDigestUsage } from './digestUsage'
 import { ManagerDraftCard } from './ManagerDraftCard'
 import { useMediaQuery } from './hooks'
 import { PhotoMark } from './PhotoMark'
@@ -120,6 +121,11 @@ interface Props {
    */
   nextAsk?: string
   /**
+   * その案の鍵（`<エンティティID>|<案を作った行の ts>`。一言と同じ鍵）。渡すと、案を受け取ったときに手元で数える（#446）。
+   * 送った本文が案のままかは見ない
+   */
+  nextAskKey?: string
+  /**
    * Manager が置いた案（#565。`SessionSummary.manager_draft`）。**入力欄が空で、処理中でないときだけ**、`nextAsk` より先に
    * ゴーストと札（出どころ・全文・捨てる）で出す。受け取りは `→` か札の「入れる」で、入るだけで送らない。
    * フィードには渡さない（`nextAsk` と同じ理由）
@@ -150,7 +156,7 @@ const NO_HISTORY: readonly string[] = []
 const keyOf = (e: KeyboardEvent<HTMLTextAreaElement>) => ({ key: e.key, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, shiftKey: e.shiftKey })
 
 /** 入力欄。Enter で送信、Shift+Enter で改行。IME 変換中の Enter は送らない */
-export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerable = false, now = 0, onSend, sendMode, onDraft, model, permission, diff, skillsId, skillsAgent, attachId, draftKey, sentFromConfirm = 0, restore, insert, history = NO_HISTORY, nextAsk, managerDraft, onManagerDraft, onLeaveToSidebar, mention }: Props) {
+export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerable = false, now = 0, onSend, sendMode, onDraft, model, permission, diff, skillsId, skillsAgent, attachId, draftKey, sentFromConfirm = 0, restore, insert, history = NO_HISTORY, nextAsk, nextAskKey, managerDraft, onManagerDraft, onLeaveToSidebar, mention }: Props) {
   // 前に打ちかけて離れた分（#306）。作ったときに 1 回だけ読む
   const [initial] = useState(() => (draftKey ? loadDraft(draftKey) : EMPTY_DRAFT))
   const [text, setText] = useState(initial.text)
@@ -429,6 +435,8 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
     setCaret(at)
     wantCaret.current = at
     if (fromManager) settleDraft('accept', draftShown.at)
+    // 一言の口の案を受け取った（#446。手元で数えるだけ）
+    if (fromNext) reportDigestUsage(nextAskKey, 'next_ask_accepted')
   }
 
   /** Manager の案を入れた・捨てた（#565）。ここで伏せて、サーバには取り除くよう頼む */

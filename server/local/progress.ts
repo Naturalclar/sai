@@ -5,10 +5,14 @@
 // transcript は大きい（手元で 29.7MB、1 行の最大は 1MB = 画像の tool_result）。末尾から「ターンの始まり」までの距離は
 // ターンによって違う（最新の assistant の行まで中央値 5KB、p99 170KB、最大 1.2MB）ので、64KB から倍々に読み足し、
 // ターンの始まりが見えたか PROGRESS_TAIL_MAX に届いたところで止める
+import { createReadStream } from 'node:fs'
 import { open, readdir, stat } from 'node:fs/promises'
+import { createInterface } from 'node:readline'
 import { join } from 'node:path'
 import { claudeProgress, claudeProjectName, codexProgress, PROGRESS_STEPS, progressActive } from '../../shared/progress.ts'
 import type { ParsedProgress } from '../../shared/progress.ts'
+import { claudeTurns, turnParser, worthParsing } from '../../shared/claudeTurns.ts'
+import type { ClaudeTurn } from '../../shared/claudeTurns.ts'
 import type { SessionProgressResponse, SessionSummary } from '../../shared/types.ts'
 import { CODEX_DAYS } from './usage.ts'
 
@@ -92,6 +96,59 @@ export class ProgressReader {
     this.claudeProjects = claudeProjects
     this.codexSessions = codexSessions
     this.now = now
+  }
+
+  /** ファイル → 頭から全部読んだターン（#614。(mtime, size) が同じ間は読み直さない） */
+  private readonly fullTurns = new Map<string, { sig: string; turns: ClaudeTurn[] }>()
+
+  /**
+   * Claude の transcript をターンに切って返す（#614。落ちたターン完了の行の返答を補うため）。読めなければ null。
+   * - `full` でなければ**末尾だけ**（最後のターンの始まりが見えるところまで。`read()` と同じ読み方）。いま回っているかもしれない最後のターン用
+   * - `full` なら頭から全部を 1 行ずつ読む（大きいので、呼ぶ側は結果を覚えて何度も呼ばない）。もう終わった古いターン用
+   *
+   * `sig` は読んだときの (mtime, size)。パスは `read()` と同じくセッション ID と cwd から組み立てる
+   */
+  async claudeTurns(session: string, cwd: string, full: boolean): Promise<{ sig: string; turns: ClaudeTurn[] } | null> {
+    if (!SESSION_RE.test(session) || session.startsWith('unknown-')) return null
+    const key = `claude:${session}`
+    const path = await this.locate(key, 'claude', session, cwd)
+    if (!path) return null
+    try {
+      const st = await stat(path)
+      const sig = `${st.mtimeMs}:${st.size}`
+      if (!full) {
+        for (let bytes = PROGRESS_TAIL_START; ; bytes *= 2) {
+          const turns = claudeTurns(await readTail(path, st.size, Math.min(bytes, st.size)))
+          if (turns.length > 0 || bytes >= st.size || bytes >= PROGRESS_TAIL_MAX) return { sig, turns }
+        }
+      }
+      const cached = this.fullTurns.get(path)
+      if (cached?.sig === sig) return cached
+      // 1 行ずつ読んでその場でターンに畳む（transcript は数百 MB になるので、行は溜めない）
+      const parser = turnParser()
+      const rl = createInterface({ input: createReadStream(path, { encoding: 'utf-8' }), crlfDelay: Infinity })
+      for await (const line of rl) if (worthParsing(line)) parser.push(line)
+      const turns = parser.turns
+      const value = { sig, turns }
+      this.fullTurns.set(path, value)
+      return value
+    } catch {
+      this.paths.delete(key)
+      return null
+    }
+  }
+
+  /** Claude の transcript の (mtime, size)。読まずに「変わったか」だけ見る（#614。無ければ空） */
+  async claudeSig(session: string, cwd: string): Promise<string> {
+    if (!SESSION_RE.test(session) || session.startsWith('unknown-')) return ''
+    const path = await this.locate(`claude:${session}`, 'claude', session, cwd)
+    if (!path) return ''
+    try {
+      const st = await stat(path)
+      return `${st.mtimeMs}:${st.size}`
+    } catch {
+      return ''
+    }
   }
 
   /** OpenCode の読んだ量の聞き先を渡す（#396）。渡さなければ今までどおり OpenCode は空 */

@@ -81,6 +81,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 幅で 2 つの形を出し分ける（`SessionView` が `useNarrow()` で選ぶ）。広い画面は全部を並べ、狭い画面は `.chat-head.compact`（1 行目 = `BackLink compact` + 名前 + 状態の印 + `SessionHeadMenu` の `⋯`、2 行目 = `SessionTitle` の題名 1 行）。
 - 中身は 2 つの形で共用する（`SessionHeadInfo` = 詳しい情報、`SessionHeadActions` = 操作、`SessionStatusTags` = 状態の印）。
 - どの印を出すかは `web/src/headTags.ts` の `headTags()`（`headTags.test.ts`）の 1 つだけ。狭い画面の 1 行目で落とすのは素の出どころ（`payload` / `rollout`）だけ（合成と許可モードは残す。素通しを選んだまま忘れないため。#253）。
+- 「記録から補った」（#614）は行の `recovered` をそのまま出す（`Chat` → `Message` の `RecoveredTag`。自分側・待ちの行には出さない）。
 - 「完了の記録なし」（#614）は、サーバが載せる `SessionSummary.stop_missing` をそのまま出す（`headTags()` の `stop_missing` と `SessionItem`。判定は画面でしない。→ [progress.md](progress.md#ターン完了の行が落ちた印614)）。返信中の印とは同時に出さない。
 - 「アーカイブ後も継続」（#583）は `shared/archiveReturn.ts` の `returnedFromArchive()`（`meta.archived_at` があるのに `archived` でない）で決め、`headTags()` の `returned`・サイドバー（`SessionItem`）・要対応（`TodoRow`）が同じ関数を呼ぶ。入力欄の上の 1 行は `ArchiveReturnNote`（［このまま使う］= `api.setMeta(id, { archived_at: '' })`）。リンク先は `newerSibling()`（同じ `project` / `repo` / `host` で、アーカイブのあとに始まった一番新しいもの。候補は `App` が渡すサイドバーの一覧 `peers` なので、絞り込みで外れていれば出ない）。
 - `⋯` のパネルは `.chat-head` の中に置く（タッチ端末の 16px / 36px の指定が `.chat-head` に閉じていて、外に出すと iOS で入力欄を押したときに画面が拡大する。#122 / #127）。

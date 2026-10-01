@@ -109,6 +109,11 @@ export interface FeedRow {
    * 行そのものは相手のセッションのターン完了の行で、JSONL には無い（サーバが詳細の応答に `agent_replies` として載せる）
    */
   agent_reply?: AgentReplyTag
+  /**
+   * ターン完了の行が落ちた・本文が空だったので、**サーバが transcript から補った**（#614）。JSONL には無く、応答にだけ載る
+   * （`shared/recoveredTurns.ts`）。画面は「記録から補った」の印を付ける。`turns` には数えない
+   */
+  recovered?: true
 }
 
 /** 送り元の画面に並べる返答の印（#588） */

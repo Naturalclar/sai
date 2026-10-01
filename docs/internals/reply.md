@@ -66,6 +66,7 @@ SAI が起こした Claude のターンは、使ったトークンと費用も�
 - 宛先がターンの途中なら判定を保留して次のポーリングで聞き直す（`turnInProgress()`。末尾の最後のターンの印が `task_started`、または印が読んだ範囲に無くても書き込みが続いている。最後の書き込みが `QUEUE_BUSY_STALE_MS`＝10 分より古ければ途中とみなさない。`turn_aborted` も閉じる印）。聞き先が `null` を返すと `checkDelivery()` は届いたとも失敗ともしない。
 - 握っているのが `codex app-server` なら理由に pid を書く（`codexLockHolders()` / `isAppServer()`）。
 - 届かなかったことは reply.log にも 1 行残す（`checkDelivery()` が新しく失敗にしたものを返す）。
+- **`TERMINAL_REPLY_TTL_MS`（30 分）で黙って消すのは未配送だけ**（#559）。届いたと確かめた返信はターン完了（`settledByRow()`）かエラー（`checkTurnEnd()`）まで「処理中」のまま。`replyingOf()` は `checkDelivery()` のあとで `settle()` を呼ぶ（ポーリングが 30 分以上空いても、届いていた長いターンの仮バブルを消さない）。
 
 ### エラーで終わったターン（#475。`shared/codexTurnError.ts`）
 

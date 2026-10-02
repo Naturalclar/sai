@@ -1050,6 +1050,7 @@
   /* 走っているターンに足す（#404）。送信ボタンの左に小さく出す */
   .reply .steer { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); white-space: nowrap; cursor: pointer; }
   .reply .steer input { margin: 0; }
+  .reply .steer .short { display: none; }
   /* 返答を送り元の会話に渡したか（#594）。返答のバブルの見出しと、SAI が返答を足した自分の発言 */
   .gh .handed { font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 8px; padding: 0 6px; }
   .gh .handed.done { color: var(--ink); }
@@ -1072,12 +1073,16 @@
   @media (max-width: 900px), (pointer: coarse) {
     .reply .send-mode .long { display: none; }
     .reply .send-mode .short { display: inline; }
+    /* 処理中だけ出る「今のターンに足す」も短く（#631。チェック・添付・モデル・許可・「あとで送る」で幅 390 を超えていた） */
+    .reply .steer .long { display: none; }
+    .reply .steer .short { display: inline; }
     .reply .row button[type="submit"] .send-long { display: none; }
     .reply .row button[type="submit"] .send-short { display: inline; }
   }
   @media (pointer: coarse) {
     .reply .send-mode { font-size: 13px; min-height: 36px; padding: 2px 8px; box-sizing: border-box; }
     .reply .send-mode select { font-size: 16px; }
+    .reply .steer { font-size: 13px; min-height: 36px; }
   }
   .notice.steered { font-size: 12px; color: var(--muted); }
   .reply .diff-float button.diff-btn, .msg button.diff-btn { display: inline-flex; align-items: center; gap: 5px; background: transparent; color: var(--muted); border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px; font-family: inherit; font-size: 12px; font-weight: 400; cursor: pointer; }

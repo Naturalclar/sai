@@ -18,8 +18,10 @@ dir=${2:-}
 since_of() {
   local s
   s=$(cat "$1/since" 2>/dev/null)
-  [ -n "$s" ] || s=$(stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null)
-  echo "${s:-}"
+  # GNU の `stat -f` は「ファイルシステムの情報」で、失敗しつつ stdout に別のものを出す。先に GNU の形（-c）を試し、macOS は -f に落とす
+  [ -n "$s" ] || s=$(stat -c %Y "$1" 2>/dev/null) || s=$(stat -f %m "$1" 2>/dev/null)
+  case "$s" in ''|*[!0-9]*) s='' ;; esac   # 数字でなければ「分からない」（算術に渡して落ちない）
+  echo "$s"
 }
 
 case "$cmd" in
@@ -75,7 +77,8 @@ case "$cmd" in
     ;;
   status)
     if [ -d "$dir" ]; then
-      echo "held: $(cat "$dir/owner" 2>/dev/null) $(( $(date +%s) - $(since_of "$dir") ))s"
+      since=$(since_of "$dir")
+      echo "held: $(cat "$dir/owner" 2>/dev/null) $(( $(date +%s) - ${since:-$(date +%s)} ))s"
     else
       echo free
     fi

@@ -292,6 +292,11 @@ export class OpenAISummarizer implements Summarizer {
   }
 }
 
+/** 口が時間切れで落ちたか（`AbortSignal.timeout()` の `TimeoutError` と、`ClaudeSummarizer` の `timeout after …`） */
+export function isTimeout(err: unknown): boolean {
+  return err instanceof Error && (err.name === 'TimeoutError' || /^timeout after /.test(err.message))
+}
+
 /** digest.jsonl。起動時に全部読み、以後は追記した分をメモリにも足す */
 export class DigestStore {
   readonly path: string
@@ -577,7 +582,9 @@ export class Digester {
 
   /**
    * 一言にしないほうがよい返答かを、同じ口にもう 1 回聞く（#639）。**聞けない・答えが読めないときは `undefined`**
-   * （今までどおり一言を作る。口が落ちているなら、続く一言の呼び出しが失敗として数える）
+   * （今までどおり一言を作る。口が落ちているなら、続く一言の呼び出しが失敗として数える）。
+   * **timeout だけは投げ直す**（その行の失敗として数える。飲み込むと、口が固まっているときに続く一言でもう 1 回
+   * DIGEST_TIMEOUT_MS を待ち、1 行で列を 2 倍の時間ふさぐ。#652 のレビュー）
    */
   private async judgeFullText(row: FeedRow, summarizer: Summarizer, key: string): Promise<'full' | 'summary' | undefined> {
     try {
@@ -587,6 +594,7 @@ export class Digester {
       return full === null ? undefined : full ? 'full' : 'summary'
     } catch (err) {
       await this.log(`${new Date().toISOString()} ${key} 判定に失敗: ${err instanceof Error ? err.message : String(err)}`)
+      if (isTimeout(err)) throw err
       return undefined
     }
   }

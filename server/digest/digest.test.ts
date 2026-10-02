@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
-import { ClaudeSummarizer, DEFAULT_OPENAI_URL, DIGEST_ALERT_FAILS, DIGEST_BREAK_MS, DIGEST_MAX_TRIES, DIGEST_RETRY_DELAYS_MS, DigestStore, Digester, OpenAISummarizer, createDigester, digestKey, digestable, personaResolver, stripThinking, summarizeCommand, summarizeRequest, summarizerFactory, mayRetryWithoutReasoning } from './digest.ts'
+import { isTimeout, ClaudeSummarizer, DEFAULT_OPENAI_URL, DIGEST_ALERT_FAILS, DIGEST_BREAK_MS, DIGEST_MAX_TRIES, DIGEST_RETRY_DELAYS_MS, DigestStore, Digester, OpenAISummarizer, createDigester, digestKey, digestable, personaResolver, stripThinking, summarizeCommand, summarizeRequest, summarizerFactory, mayRetryWithoutReasoning } from './digest.ts'
 import type { Summarizer } from './digest.ts'
 import { row } from '../rows/aggregate.test.ts'
 import type { PersonaId } from '../../shared/types.ts'
@@ -54,6 +54,13 @@ test('digestKey / digestable: ターン完了で本文がある行だけ', () =>
   assert.equal(digestable(row(at(0), 'S1', { event: 'UserPromptSubmit', text: '' })), false)
   assert.equal(digestable(row(at(0), 'S1', { event: 'PermissionRequest', text: '許可待ち: Bash' })), false)
   assert.equal(digestable(row(at(0), 'S1', { text: '   ' })), false)
+})
+
+test('isTimeout: fetch の時間切れと claude -p の時間切れだけ（#639）', () => {
+  assert.equal(isTimeout(new DOMException('x', 'TimeoutError')), true)
+  assert.equal(isTimeout(new Error('timeout after 90000ms')), true)
+  assert.equal(isTimeout(new Error('empty result')), false)
+  assert.equal(isTimeout(new Error('HTTP 500: x')), false)
 })
 
 test('summarizeCommand: -p / --model / json 出力。--bare は使わない（OAuth を読まない）', () => {
@@ -1186,6 +1193,30 @@ test('Digester: 判定の答えが壊れている（1 語でない・口が失�
     assert.equal(down.judges.length, 1)
     assert.ok(store.get(digestKey(other))?.summary, '判定が落ちても一言は作る')
     assert.equal(d2.error, '', '口の不調にしない')
+    // 判定が時間切れなら、続けて一言を叩かない（1 行で 2 回待たない）。その行の失敗として数え、作り直しでは聞かない
+    class JudgeHangs extends FakeSummarizer {
+      override async summarize(prompt: string): Promise<string> {
+        if (prompt.includes('報告なら SUMMARY')) {
+          this.judges.push(prompt)
+          throw new DOMException('The operation was aborted due to timeout', 'TimeoutError')
+        }
+        return super.summarize(prompt)
+      }
+    }
+    let now = at(10).getTime()
+    const hangs = new JudgeHangs()
+    const d3 = new Digester(store, hangs, { enabled: true, model: 'local', provider: 'openai', since: at(0).toISOString(), persona: async () => 'none', now: () => now })
+    const stuck = row(at(3), 'S3', { repo: 'r', text: '片づけて、結果を書きました。', user_text: '片づけて' })
+    d3.scan([stuck])
+    await d3.drain()
+    assert.equal(hangs.prompts.length, 0, '時間切れのあとに一言を叩かない')
+    assert.equal(hangs.nextAsks.length, 0)
+    assert.equal(store.get(digestKey(stuck)), undefined)
+    now += DIGEST_RETRY_DELAYS_MS[0]! + 1
+    d3.scan([stuck])
+    await d3.drain()
+    assert.equal(hangs.judges.length, 1, '作り直しでは聞かない')
+    assert.ok(store.get(digestKey(stuck))?.summary)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

@@ -420,9 +420,10 @@ export function App() {
         </aside>
         <div className={`panes${split ? ' split' : ''}`}>
           {route.name === 'session' ? (
-            // 並べているときは列の数だけ（#633）。key は列の番号（1 つのときは今までどおり同じ SessionView が id だけ変わる）
+            // 並べているときは列の数だけ（#633）。key は並びが持つ列の番号（`PaneLayout.keys`）: 中身を入れ替えても同じ
+            // SessionView が id だけ変わり（1 つのときの今までの動き）、左を閉じた・間に足したときも残ったペインは作り直さない
             paneIds.map((id, i) => (
-              <ChatPane key={`pane:${i}`} focused={id === currentId} onFocusPane={split ? () => focusPane(i) : undefined} onClose={split ? () => closePane(i) : undefined}>
+              <ChatPane key={`pane:${split ? layout.keys[i] : layout.keys[layout.focus] ?? 0}`} focused={id === currentId} onFocusPane={split ? () => focusPane(i) : undefined} onClose={split ? () => closePane(i) : undefined}>
                 <SessionView
                   id={id}
                   // 発言への飛び先（ts）は URL が指しているペインだけ

@@ -14,14 +14,23 @@ export type PaneItem = { kind: 'session'; id: string } | { kind: 'todo' }
 export interface PaneLayout {
   columns: PaneItem[][]
   focus: number
+  /**
+   * 列ごとの番号（React の key）。**中身を入れ替えても列の番号は変わらず、左を閉じた・間に足したときも
+   * 残った列の番号は動かない**（列の位置を key にすると、右のペインが別の `SessionView` に付け替わって
+   * 送った直後の分・確認待ち・読んでいた場所を失う。#641 のレビュー）
+   */
+  keys: number[]
 }
 
 /** 左右に並べる上限。数字はここ 1 つ */
 export const MAX_COLUMNS = 3
 
-export const EMPTY_LAYOUT: PaneLayout = { columns: [], focus: 0 }
+export const EMPTY_LAYOUT: PaneLayout = { columns: [], focus: 0, keys: [] }
 
 export const sameItem = (a: PaneItem, b: PaneItem): boolean => a.kind === b.kind && (a.kind !== 'session' || a.id === (b as { id: string }).id)
+
+/** まだ使っていない列の番号 */
+const nextKey = (keys: readonly number[]): number => keys.reduce((max, k) => Math.max(max, k), -1) + 1
 
 function itemOf(raw: unknown): PaneItem | null {
   if (typeof raw !== 'object' || raw === null) return null
@@ -36,16 +45,23 @@ function itemOf(raw: unknown): PaneItem | null {
  * いまは各列の先頭の 1 つだけを取る（上下はまだ無い）
  */
 export function normalizeLayout(raw: unknown): PaneLayout {
-  const { columns, focus } = (typeof raw === 'object' && raw !== null ? raw : {}) as { columns?: unknown; focus?: unknown }
+  const { columns, focus, keys } = (typeof raw === 'object' && raw !== null ? raw : {}) as { columns?: unknown; focus?: unknown; keys?: unknown }
   const out: PaneItem[][] = []
+  const outKeys: number[] = []
+  const rawKeys = Array.isArray(keys) ? keys : []
+  let at = -1
   for (const column of Array.isArray(columns) ? columns : []) {
+    at++
     const item = itemOf(Array.isArray(column) ? column[0] : undefined)
     if (!item || out.some((c) => sameItem(c[0]!, item))) continue
     out.push([item])
+    // 番号が無い・数でない・重なっているときは、まだ使っていない番号を振る
+    const key: unknown = rawKeys[at]
+    outKeys.push(typeof key === 'number' && Number.isInteger(key) && key >= 0 && !outKeys.includes(key) ? key : nextKey(outKeys))
     if (out.length === MAX_COLUMNS) break
   }
-  const at = typeof focus === 'number' && Number.isInteger(focus) ? focus : 0
-  return { columns: out, focus: Math.min(Math.max(at, 0), Math.max(out.length - 1, 0)) }
+  const want = typeof focus === 'number' && Number.isInteger(focus) ? focus : 0
+  return { columns: out, focus: Math.min(Math.max(want, 0), Math.max(out.length - 1, 0)), keys: outKeys }
 }
 
 /** 各列に出ているもの（左から） */
@@ -63,7 +79,7 @@ const columnOf = (layout: PaneLayout, item: PaneItem): number => layout.columns.
 export function placeItem(layout: PaneLayout, item: PaneItem): PaneLayout {
   const at = columnOf(layout, item)
   if (at >= 0) return at === layout.focus ? layout : { ...layout, focus: at }
-  if (layout.columns.length === 0) return { columns: [[item]], focus: 0 }
+  if (layout.columns.length === 0) return { columns: [[item]], focus: 0, keys: [0] }
   return { ...layout, columns: layout.columns.map((c, i) => (i === layout.focus ? [item] : c)) }
 }
 
@@ -76,14 +92,16 @@ export function placeItem(layout: PaneLayout, item: PaneItem): PaneLayout {
 export function openBeside(layout: PaneLayout, item: PaneItem): PaneLayout {
   const at = columnOf(layout, item)
   if (at >= 0) return at === layout.focus ? layout : { ...layout, focus: at }
-  if (layout.columns.length === 0) return { columns: [[item]], focus: 0 }
+  if (layout.columns.length === 0) return { columns: [[item]], focus: 0, keys: [0] }
   if (layout.columns.length < MAX_COLUMNS) {
     const columns = [...layout.columns]
+    const keys = [...layout.keys]
     columns.splice(layout.focus + 1, 0, [item])
-    return { columns, focus: layout.focus + 1 }
+    keys.splice(layout.focus + 1, 0, nextKey(layout.keys))
+    return { columns, focus: layout.focus + 1, keys }
   }
   const target = layout.focus + 1 < layout.columns.length ? layout.focus + 1 : layout.focus - 1
-  return { columns: layout.columns.map((c, i) => (i === target ? [item] : c)), focus: target }
+  return { ...layout, columns: layout.columns.map((c, i) => (i === target ? [item] : c)), focus: target }
 }
 
 /**
@@ -94,7 +112,7 @@ export function closeColumn(layout: PaneLayout, index: number): PaneLayout {
   if (layout.columns.length <= 1 || index < 0 || index >= layout.columns.length) return layout
   const columns = layout.columns.filter((_, i) => i !== index)
   const focus = index < layout.focus || (index === layout.focus && index > 0) ? layout.focus - 1 : layout.focus
-  return { columns, focus }
+  return { columns, focus, keys: layout.keys.filter((_, i) => i !== index) }
 }
 
 /** ペインにフォーカスを移す（ペインの中を押した） */

@@ -134,7 +134,8 @@ test('visibleDiff: 並べているとき（#633）は、フォーカスの無い
   const d = { id: 's1@sai', origin: 'session' as const }
   assert.equal(visibleDiff(d, { name: 'session', id: 's2@sai' }, false, ['s1@sai', 's2@sai']), 's1@sai', 'フォーカスを s2 に移しても付いていかない')
   assert.equal(visibleDiff(d, { name: 'session', id: 's2@sai' }, false, ['s2@sai', 's3@sai']), null, '並びから外れたら出さない')
-  assert.equal(visibleDiff(d, { name: 'feed' }, false, ['s1@sai']), null, '全幅のフィードでは今までどおり出さない')
+  assert.equal(visibleDiff(d, { name: 'todo' }, false, ['s1@sai']), 's1@sai', 'フォーカスが要対応のペインでも、隣に出ていれば出したまま')
+  assert.equal(visibleDiff(d, { name: 'feed' }, false, []), null, '全幅のフィードでは今までどおり出さない（ペインは出ていない）')
 })
 
 test('nextDiff: 出ているものを押すと閉じる。覚えているだけで出ていないものを押すと開く', () => {

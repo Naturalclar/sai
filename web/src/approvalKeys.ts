@@ -37,6 +37,8 @@ export const REPLY_FOR_ATTR = 'data-reply-for'
  * 通ってしまう。`replyFor` は押された場所に一番近い印の値で、印の無い場所（セッション画面の入力欄など、
  * 返信先が許可と同じか分からないところ）は今までどおり受ける
  */
-export function hotkeyApplies(replyFor: string | null, approvalEntity: string): boolean {
+export function hotkeyApplies(replyFor: string | null, approvalEntity: string, inDialog = false): boolean {
+  // モーダル（⌘K・レビューの確認など）の中で押した ⌘Enter は、そのモーダルのもの（#633。⌘K の ⌘Enter は「横に開く」）
+  if (inDialog) return false
   return replyFor === null || replyFor === approvalEntity
 }

@@ -10,6 +10,7 @@ import { SessionItem } from './SessionItem'
 import { prForSession } from '../../shared/prs.ts'
 import type { PrRepo } from '../../shared/types.ts'
 import type { NavTarget } from './sessionNav'
+import type { PaneItem } from './paneLayout'
 import { isCollapsed, type SessionGroup } from './sessionGroups'
 import { pendingItems, todoItems } from '../../shared/todoItems.ts'
 
@@ -35,11 +36,13 @@ interface Props {
   /** 並べて出しているセッション（#633）。フォーカスの無い方にも薄い印を付ける */
   shown?: readonly string[]
   /** 横に並べて開く（#633）。並べられない幅では渡されない */
-  onOpenBeside?: ((id: string) => void) | undefined
+  onOpenBeside?: ((item: PaneItem) => void) | undefined
+  /** 要対応を、フォーカスの無い方も含めてペインに出している（#633） */
+  todoShown?: boolean
 }
 
 /** 左サイドバー。絞り込み、固定の「＋ 新しいセッション」「フィード」「要対応」、その下にセッション一覧（新しい順） */
-export function SessionList({ list, filters, setFilters, active, creating = false, groups, collapsed, onToggleGroup, prs = [], shown = [], onOpenBeside }: Props) {
+export function SessionList({ list, filters, setFilters, active, creating = false, groups, collapsed, onToggleGroup, prs = [], shown = [], onOpenBeside, todoShown = false }: Props) {
   // キーボードで固定項目に移ったとき、サイドバーの一番上まで見えるようにする（SessionItem と同じ扱い）
   const pinnedRef = useRef<HTMLAnchorElement>(null)
   const pinned = active.kind === 'feed' || active.kind === 'todo' || active.kind === 'prs'
@@ -110,7 +113,16 @@ export function SessionList({ list, filters, setFilters, active, creating = fals
           <span className="last">{filters.repo ? `#${filters.repo}` : '全セッション'}を時系列に</span>
         </a>
         {/* 要対応（#224）。件数は一覧と同じ取得結果から数えるので、ここでも取りに行かない */}
-        <a className={`item todo${active.kind === 'todo' ? ' active' : ''}`} href="#/todo">
+        <a
+          className={`item todo${active.kind === 'todo' ? ' active' : todoShown ? ' beside' : ''}`}
+          href="#/todo"
+          // ⌘ + クリック（Ctrl + クリック）は横に並べて開く（#633。セッションの項目と同じ）
+          onClick={(e) => {
+            if (!onOpenBeside || !(e.metaKey || e.ctrlKey)) return
+            e.preventDefault()
+            onOpenBeside({ kind: 'todo' })
+          }}
+        >
           <span className="t">要対応{todo > 0 && <span className="n">{todo}</span>}</span>
           <span className="last">{todo > 0 ? 'あなたを待っています' : '待っているものはありません'}</span>
         </a>
@@ -156,7 +168,7 @@ export function SessionList({ list, filters, setFilters, active, creating = fals
                     pr={prForSession(s, prs)?.pr ?? null}
                     loop={data?.loops[s.id] ?? null}
                     beside={shown.includes(s.id)}
-                    onOpenBeside={onOpenBeside ? () => onOpenBeside(s.id) : undefined}
+                    onOpenBeside={onOpenBeside ? () => onOpenBeside({ kind: 'session', id: s.id }) : undefined}
                   />
                 ))}
             </div>

@@ -40,6 +40,12 @@ test('approvalAction: IME 変換中・Alt 付き・Enter 以外は何もしな�
   assert.equal(approvalAction(key({ key: 'Escape', metaKey: true }), true), null)
 })
 
+test('hotkeyApplies: モーダルの中で押した ⌘Enter は許可に使わない（⌘K の ⌘Enter は「横に開く」。#633）', () => {
+  assert.equal(hotkeyApplies(null, 'a@repo', true), false)
+  assert.equal(hotkeyApplies('a@repo', 'a@repo', true), false)
+  assert.equal(hotkeyApplies(null, 'a@repo', false), true)
+})
+
 test('hotkeyApplies: 別のセッションの返信欄で押した ⌘Enter は許可に使わない（要対応の行の下の返信欄）', () => {
   // 印の無い場所（セッション画面の入力欄・本文）は今までどおり
   assert.equal(hotkeyApplies(null, 'a@repo'), true)

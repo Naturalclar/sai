@@ -24,6 +24,8 @@ interface Props extends PaneProps {
   list: Polled<SessionsResponse>
   /** GitHub の open な PR（#554。App の `useSessionPrs()`）。行のセッションに紐づくものにリンクを出す */
   prs?: readonly PrRepo[]
+  /** フォーカスのあるペインか（#633。省くと true）。許可の ⌘Enter を受けるのはフォーカスのあるペインだけ */
+  focused?: boolean
 }
 
 /**
@@ -43,7 +45,7 @@ interface Props extends PaneProps {
  * 送る仕組みはセッション画面と同じ `useReply`（端末の打ちかけの確認・預かり・失敗したら戻す）で、**ここで持つ**:
  * 送ると行は次のポーリングで「処理中」として消えるので、行の中に持つと失敗を受け取る前に消えてしまう。
  */
-export function TodoView({ list, onStatus, onOpenSidebar, onLeaveToSidebar, prs }: Props) {
+export function TodoView({ list, onStatus, onOpenSidebar, onLeaveToSidebar, prs, focused = true }: Props) {
   const { data, error, updatedAt } = list
   // 自分では取りに行かないが、出しているのはこの取得結果なのでヘッダの「更新 hh:mm」はこれに合わせる
   useEffect(() => onStatus(updatedAt, error), [updatedAt, error, onStatus])
@@ -175,7 +177,7 @@ export function TodoView({ list, onStatus, onOpenSidebar, onLeaveToSidebar, prs 
     const out: ReactNode[] = []
     const heading = (id: string, label: string) => out.push(<h2 key={id} className="todo-section">{label}</h2>)
     // ⌘Enter が効くのは一番上の答え待ちだけ（フィードと同じ扱い）
-    sections.answer.forEach((t, i) => out.push(rowOf(t, t.id, i === 0, modeNoteOf(t))))
+    sections.answer.forEach((t, i) => out.push(rowOf(t, t.id, i === 0 && focused, modeNoteOf(t))))
     // 読んでいない返答があるもの（#551）。終わっているものも、下段の奥に埋もれないようにここへ上げる
     if (sections.unread.length > 0) heading('section:unread', `未読（${sections.unread.length}）`)
     for (const t of sections.unread) out.push(rowOf(t, keyOf(t), false, modeNoteOf(t)))

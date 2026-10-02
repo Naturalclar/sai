@@ -77,7 +77,8 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false, modeNote =
       if (!action) return
       // 別のセッションの返信欄で押された ⌘Enter は、その返信欄の送信に任せる（要対応の行の下の返信欄）
       const owner = e.target instanceof Element ? e.target.closest(`[${REPLY_FOR_ATTR}]`) : null
-      if (!hotkeyApplies(owner?.getAttribute(REPLY_FOR_ATTR) ?? null, approval.id)) return
+      const inDialog = e.target instanceof Element && e.target.closest('[role="dialog"]') !== null
+      if (!hotkeyApplies(owner?.getAttribute(REPLY_FOR_ATTR) ?? null, approval.id, inDialog)) return
       e.preventDefault()
       e.stopPropagation()
       void send(action === 'always' ? { behavior: 'allow', remember: 'local' } : { behavior: 'allow' })

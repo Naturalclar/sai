@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { closeColumn, diffModalBelow, EMPTY_LAYOUT, focusColumn, focusedItem, MAX_COLUMNS, normalizeLayout, openBeside, placeItem, sessionIdsIn, type PaneItem, type PaneLayout } from './paneLayout.ts'
+import { closeColumn, diffModalBelow, EMPTY_LAYOUT, focusColumn, focusedItem, MAX_COLUMNS, nextUnshown, normalizeLayout, openBeside, openInNeighbor, placeItem, sessionIdsIn, type PaneItem, type PaneLayout } from './paneLayout.ts'
 
 const s = (id: string): PaneItem => ({ kind: 'session', id })
 /** 番号は見ずに並びとフォーカスだけを比べる形（番号は下の「列の番号」のテストで見る） */
@@ -150,4 +150,58 @@ test('normalizeLayout: 番号が無い・壊れている・重なっていると
   }
   // 落とした列（同じ ID の 2 回目）の番号は、後ろの列にずらさない
   assert.deepEqual(normalizeLayout({ columns: [[s('a')], [s('a')], [s('b')]], focus: 0, keys: [3, 4, 5] }).keys, [3, 5])
+})
+
+// ---- 要対応の行からセッションへ: 隣のペインに開く
+
+const todo: PaneItem = { kind: 'todo' }
+const withTodo = (rest: string[], focus = 0, at = 0): PaneLayout => {
+  const columns = rest.map((id) => [s(id)])
+  columns.splice(at, 0, [todo])
+  return { columns, focus, keys: columns.map((_, i) => i) }
+}
+
+test('openInNeighbor: 隣が無ければ右に 1 つ足す。要対応は残り、フォーカスは開いた方へ', () => {
+  assert.deepEqual(shape(openInNeighbor(withTodo([]), s('a'))), { columns: [[todo], [s('a')]], focus: 1 })
+})
+
+test('openInNeighbor: 右隣があれば中身を入れ替える（行を順に開いてもペインが増えない）', () => {
+  const next = openInNeighbor(withTodo(['a']), s('b'))
+  assert.deepEqual(shape(next), { columns: [[todo], [s('b')]], focus: 1 })
+  assert.deepEqual(next.keys, [0, 1], '同じ列を使い回す')
+  assert.deepEqual(shape(openInNeighbor(withTodo(['a', 'b']), s('c'))), { columns: [[todo], [s('c')], [s('b')]], focus: 1 })
+})
+
+test('openInNeighbor: 上限で右隣が無ければ左隣を入れ替える', () => {
+  assert.deepEqual(shape(openInNeighbor(withTodo(['a', 'b'], 2, 2), s('c'))), { columns: [[s('a')], [s('c')], [todo]], focus: 1 })
+})
+
+test('openInNeighbor: もう並びにあれば、そのペインにフォーカスを移すだけ', () => {
+  assert.deepEqual(shape(openInNeighbor(withTodo(['a', 'b']), s('b'))), { columns: [[todo], [s('a')], [s('b')]], focus: 2 })
+})
+
+test('openInNeighbor: 空の並びには 1 つ目として入る', () => {
+  assert.deepEqual(shape(openInNeighbor(EMPTY_LAYOUT, s('a'))), of(['a']))
+})
+
+// ---- % で分けたときに入れるセッション
+
+test('nextUnshown: サイドバーの並びで、いまの次の、まだ出していないもの', () => {
+  assert.equal(nextUnshown(['a', 'b', 'c', 'd'], ['a'], 'a'), 'b')
+  assert.equal(nextUnshown(['a', 'b', 'c', 'd'], ['a', 'b'], 'a'), 'c', '次がもう出ていれば、その次')
+})
+
+test('nextUnshown: 末尾まで無ければ先頭に戻って探す', () => {
+  assert.equal(nextUnshown(['a', 'b', 'c'], ['c'], 'c'), 'a')
+  assert.equal(nextUnshown(['a', 'b', 'c'], ['b', 'c'], 'b'), 'a')
+})
+
+test('nextUnshown: いまが要対応・並びに無いセッションなら先頭から', () => {
+  assert.equal(nextUnshown(['a', 'b'], [], ''), 'a')
+  assert.equal(nextUnshown(['a', 'b'], ['a', 'zz'], 'zz'), 'b')
+})
+
+test('nextUnshown: 出していないものが無ければ null（分けない）', () => {
+  assert.equal(nextUnshown(['a', 'b'], ['a', 'b'], 'a'), null)
+  assert.equal(nextUnshown([], [], ''), null)
 })

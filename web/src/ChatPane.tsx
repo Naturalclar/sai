@@ -1,4 +1,4 @@
-import type { ReactNode, SyntheticEvent } from 'react'
+import type { MouseEvent, ReactNode, SyntheticEvent } from 'react'
 import { CloseMark } from './CloseMark'
 
 interface Props {
@@ -8,6 +8,8 @@ interface Props {
   onFocusPane?: (() => void) | undefined
   /** 並べているときだけ渡す。右上に × を出す */
   onClose?: (() => void) | undefined
+  /** ペインの中のクリックを先に見る（要対応のペインが、セッションへ飛ぶリンクを隣のペインに開くのに使う） */
+  onClickCapture?: ((e: MouseEvent<HTMLDivElement>) => void) | undefined
   children: ReactNode
 }
 
@@ -15,7 +17,7 @@ interface Props {
  * チャットの領域の 1 枚（#633）。並べていないときは今までの `.pane` と同じ箱で、並べているときだけ
  * フォーカスの受け口と × が付く。× は見出しの中でなくここに置く（読み込み中・取得に失敗したペインも閉じられるように）
  */
-export function ChatPane({ focused, onFocusPane, onClose, children }: Props) {
+export function ChatPane({ focused, onFocusPane, onClose, onClickCapture, children }: Props) {
   // × を押したときはフォーカスを移さない（閉じるペインへ URL を動かしてから閉じる、の 2 段にしない）
   const onEnter = (e: SyntheticEvent<HTMLDivElement>) => {
     if (focused || !onFocusPane) return
@@ -23,7 +25,7 @@ export function ChatPane({ focused, onFocusPane, onClose, children }: Props) {
     onFocusPane()
   }
   return (
-    <div className={`pane${focused ? ' focused' : ''}`} onPointerDownCapture={onEnter} onFocusCapture={onEnter}>
+    <div className={`pane${focused ? ' focused' : ''}`} onPointerDownCapture={onEnter} onFocusCapture={onEnter} onClickCapture={onClickCapture}>
       {onClose && (
         <button type="button" className="iconbtn pane-close" onClick={onClose} aria-label="このペインを閉じる" title="このペインを閉じる">
           <CloseMark />

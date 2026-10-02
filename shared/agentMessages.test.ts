@@ -19,6 +19,9 @@ import {
   replyOf,
   sessionLabel,
   sendHow,
+  resolveTarget,
+  targetNames,
+  targetRefusal,
   tokensLabel,
   usageRefusal,
   AGENT_HEADER_MARK,
@@ -226,4 +229,26 @@ test('sendHow: sai_send の返事に、相手のターンをどう回したか�
   assert.match(sendHow('compact'), /要約（\/compact）してから始めます/)
   assert.match(sendHow('queued'), /終わってから回ります/)
   assert.equal(sendHow('process'), '相手のターンを始めました')
+})
+
+test('resolveTarget: id・表示名・worktree 名・題名の完全一致で、ちょうど 1 つのときだけ当てる（#625）', () => {
+  const s = (id: string, repo: string, title: string, name = '') => ({ id, repo, title, ...(name ? { meta: { name } } : {}) }) as SessionSummary
+  const targets = [s('a@dev-clared', 'dev-clared', '着手して', 'くらら'), s('b@dev-min', 'dev-min', '319 対応して', '明'), s('c@dev-x', 'dev-x', 'x', '明. - Avvy deco'), s('d@main', 'main', '一覧'), s('e@main', 'main', '取り次ぎ')]
+  const idOf = (to: string) => resolveTarget(targets, to).target?.id
+  assert.equal(idOf('a@dev-clared'), 'a@dev-clared')
+  assert.equal(idOf('くらら'), 'a@dev-clared')
+  assert.equal(idOf(' DEV-Clared '), 'a@dev-clared', '大文字小文字と前後の空白は無視')
+  assert.equal(idOf('一覧'), 'd@main', '表示名が無ければ題名')
+  assert.equal(idOf('明'), 'b@dev-min', '「明. - Avvy deco」とは取り違えない（完全一致だけ）')
+  assert.equal(idOf('着手して'), undefined, '表示名のあるセッションは題名では引かない（題名は最初の入力で、他と重なりやすい）')
+  assert.equal(idOf('くら'), undefined, '前方一致はしない')
+  assert.equal(idOf(''), undefined)
+  const dup = resolveTarget(targets, 'main')
+  assert.ok(!dup.target && dup.ambiguous)
+  assert.deepEqual(!dup.target && dup.candidates.map((c) => c.id), ['d@main', 'e@main'], '同じ worktree に 2 つ居れば当てず、当たった分を候補に')
+  const none = resolveTarget(targets, 'だれか')
+  assert.ok(!none.target && !none.ambiguous && none.candidates.length === targets.length, '無ければ送れる相手の全部を候補に')
+  assert.match(targetRefusal('main', dup as never, '送れません'), /「main」に当たる相手が 2 つあります。[^\n]*\n- d@main「一覧」\n- e@main「取り次ぎ」/)
+  assert.equal(targetRefusal('x', { target: null, ambiguous: false, candidates: [] }, '送れません'), '送れません')
+  assert.deepEqual(targetNames(targets[0]!), ['a@dev-clared', 'くらら', 'dev-clared'])
 })

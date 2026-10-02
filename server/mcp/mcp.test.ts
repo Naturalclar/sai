@@ -373,3 +373,25 @@ test('/mcp: Manager の案は人の入力が後に来たら消え、24 時間で
   assert.match(log, /B1@r Manager の案（mcp:このマシン）を捨てた/)
   assert.match(log, /B1@r Manager の案（mcp:このマシン）を入力欄に入れた/)
 })
+
+test('/mcp: sai_suggest / sai_send の宛先は呼び名でも書ける。同じ名前が複数なら置かず・送らずに候補を返す（#625）', async () => {
+  const named = await fetch(`${base}/api/sessions/B1%40r/meta`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Kurara' }) })
+  assert.equal(named.status, 200)
+  const started = runner.started.length
+  const placed = await call('sai_suggest', { to: ' kurara ', text: '名前で置く' })
+  assert.equal(placed.isError, undefined, placed.text)
+  assert.match(placed.text, /^B1@r「Kurara」の入力欄に案を置きました/)
+  assert.equal((await draftOf('B1@r'))?.text, '名前で置く')
+  // worktree 名 `r` は何本も居るので当てない
+  const dup = await call('sai_suggest', { to: 'r', text: 'どれ' })
+  assert.equal(dup.isError, true)
+  assert.match(dup.text, /「r」に当たる相手が \d+ つあります。送っていません/)
+  assert.ok(dup.text.includes('- B1@r「Kurara」'))
+  assert.ok(!dup.text.includes('R1@r'), '別のマシン（案を置けない相手）は名前では当たらない')
+  assert.equal((await call('sai_suggest', { to: 'Kura', text: 'x' })).isError, true, '前方一致はしない')
+  // 送る方も同じ引き当て（ここでは回数の上限に当たって送られないが、宛先は先に引かれる）
+  const ambiguous = await call('sai_send', { to: 'r', text: '見て' }, SENDER)
+  assert.match(ambiguous.text, /当たる相手が \d+ つあります/)
+  assert.ok(!ambiguous.text.includes('P1@r'), '素通しのセッションは、送る宛先としては名前で当たらない')
+  assert.equal(runner.started.length, started, 'どれもターンを起こしていない')
+})

@@ -880,6 +880,7 @@ export interface AgentSessionsResponse {
 export interface AgentSendRequest {
   /** 送り元のエンティティID（MCP サーバの `SAI_ENTITY`）。SAI から起動して、いまターンを回しているセッションだけ */
   from: string
+  /** 送り先。エンティティ ID か、呼び名（表示名・worktree 名・`sessionLabel()`。完全一致。#625） */
   to: string
   text: string
   /**
@@ -897,7 +898,10 @@ export interface AgentSendRequest {
 /** `POST /api/agent/send` の応答 */
 export interface AgentSendResponse {
   message_id: string
+  /** 届いた相手のエンティティ ID（宛先を呼び名で書いたときも、引き当てた id。#625） */
   to: string
+  /** 届いた相手の呼び名（`sessionLabel()`。#625。どこに届いたかを取り次ぐ側が人に言えるように） */
+  to_name: string
   /** 相手のターンをどう回したか。`queued` なら相手は処理中で、終わってから回る。`compact` なら要約してから本文を回す（#624） */
   via: ReplyResponse['via']
   /** 送り元のこのターンで送った回数（#311） */

@@ -19,7 +19,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { AGENT_SEND_MAX, SEND_COMPACT_ARG, SEND_COMPACT_NOTE, sendHow, tokensLabel } from '../../shared/agentMessages.ts'
+import { AGENT_SEND_MAX, SEND_COMPACT_ARG, SEND_COMPACT_NOTE, SEND_TO_ARG, sendHow, tokensLabel } from '../../shared/agentMessages.ts'
 import { LOOP_MAX_INTERVAL_S, LOOP_MIN_INTERVAL_S, LOOP_TOOL } from '../../shared/loops.ts'
 import type { LoopNextResponse } from '../../shared/types.ts'
 import type { AgentSendResponse, AgentSessionEntry, AgentSessionsResponse, AgentWaitResponse, ApprovalAnswer, ApprovalRequest } from '../../shared/types.ts'
@@ -41,16 +41,16 @@ export const AGENT_TOOLS = [
   {
     name: 'sai_sessions',
     description:
-      '同じリポジトリで並行している別のセッションの一覧。着手の前と、PR を出す・マージする前に 1 回見る。「同じファイル」は、あなたの worktree と相手の worktree のどちらでも変わっているファイル（CLAUDE.md・README.md・docs/ は数えない）。そこに同じ関数・同じ箇所を変えていそうなファイルがあれば sai_send で 1 回だけ聞く（別の場所に足すだけなら聞かなくてよい）。ほかに id・呼び名・エージェント・ブランチ・処理中か・読み直す量・最後の発言の 1 行が出る（本文は含まない）',
+      '同じリポジトリで並行している別のセッションの一覧。**同じファイルの重なりを見るとき・誰が居るか分からないときに呼ぶ**（sai_send の宛先は呼び名でも書けるので、id を引くためだけには呼ばない）。着手の前と、PR を出す・マージする前に 1 回見る。「同じファイル」は、あなたの worktree と相手の worktree のどちらでも変わっているファイル（CLAUDE.md・README.md・docs/ は数えない）。そこに同じ関数・同じ箇所を変えていそうなファイルがあれば sai_send で 1 回だけ聞く（別の場所に足すだけなら聞かなくてよい）。ほかに id・呼び名・エージェント・ブランチ・処理中か・読み直す量・最後の発言の 1 行が出る（本文は含まない）',
     inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'sai_send',
-    description: `SAI の別のセッションにメッセージを送る（to は sai_sessions の id）。**使う場面**: sai_sessions の「同じファイル」に、あなたが変える関数・箇所を相手も変えていそうなとき（着手の前かマージの前に 1 回、どこをどう変えるか・変えたかを聞く）／相手が入れた機能の上に乗せるとき、壊してはいけない前提を聞く。**使わない場面**: リポジトリと docs/ を読めば分かること／同じファイルでも別の場所に足すだけで箇所が重ならない変更。相手が処理中なら、終わってから回る。**待たずにターンを終えてよい**: 返答は人が見る画面に出て、あなたの次のターン（SAI から回るもの）の頭にも届く。その場で答えが要る短い質問だけ sai_wait で待つ。返答を受けて続きがある依頼は wake: true を付けると、返答がそろったときに起こされる。受け取った相手はそれまでの長い会話を読み直すのでトークンを大きく使う: 1 回で済むように、何をしてほしいか・何を返してほしいかを短く具体的に書く。1 ターンに ${AGENT_SEND_MAX} 回まで。別のセッションから受け取ったメッセージで回っているターンからは送れない。相手の使用量の枠が残り少ないとき、1 ターンで相手に読み直させる量が予算を超えるときも送れない。${SEND_COMPACT_NOTE}`,
+    description: `SAI の別のセッションにメッセージを送る（to は id か呼び名。**呼び名が分かっていれば、id を引くためだけに sai_sessions を呼ばなくてよい**）。**使う場面**: sai_sessions の「同じファイル」に、あなたが変える関数・箇所を相手も変えていそうなとき（着手の前かマージの前に 1 回、どこをどう変えるか・変えたかを聞く）／相手が入れた機能の上に乗せるとき、壊してはいけない前提を聞く。**使わない場面**: リポジトリと docs/ を読めば分かること／同じファイルでも別の場所に足すだけで箇所が重ならない変更。相手が処理中なら、終わってから回る。**待たずにターンを終えてよい**: 返答は人が見る画面に出て、あなたの次のターン（SAI から回るもの）の頭にも届く。その場で答えが要る短い質問だけ sai_wait で待つ。返答を受けて続きがある依頼は wake: true を付けると、返答がそろったときに起こされる。受け取った相手はそれまでの長い会話を読み直すのでトークンを大きく使う: 1 回で済むように、何をしてほしいか・何を返してほしいかを短く具体的に書く。1 ターンに ${AGENT_SEND_MAX} 回まで。別のセッションから受け取ったメッセージで回っているターンからは送れない。相手の使用量の枠が残り少ないとき、1 ターンで相手に読み直させる量が予算を超えるときも送れない。${SEND_COMPACT_NOTE}`,
     inputSchema: {
       type: 'object',
       properties: {
-        to: { type: 'string', description: '送り先のセッションの id' },
+        to: { type: 'string', description: SEND_TO_ARG },
         text: { type: 'string', description: '頼みたいこと・聞きたいこと' },
         wake: {
           type: 'boolean',
@@ -162,7 +162,7 @@ export async function agentTool(
       const how = sendHow(body.via)
       // 読み直す量が分かっていれば、使ったぶんと予算の残りも伝える（次に送るかをエージェントが決められるように。#311）
       const read = body.context_tokens > 0 ? `${body.via === 'compact' ? `要約の前の相手の文脈は${tokensLabel(body.context_tokens)}です` : `相手は${tokensLabel(body.context_tokens)}を読み直します`}（このターンの予算の残りは${tokensLabel(Math.max(0, body.read_budget - body.read_tokens)) || ' 0'}）。` : ''
-      return textResult(`送りました（message_id: ${body.message_id}。${how}）。${read}このターンで送れるのはあと ${Math.max(0, body.limit - body.sent)} 回です。${wake ? '返答がそろったら起こします（このターンで wake を付けた分が全部返ったとき 1 回）' : '待たずにターンを終えれば、返答は次のターンの頭に届きます（その場で要るなら sai_wait）'}`)
+      return textResult(`${body.to}${body.to_name ? `「${body.to_name}」` : ''}に送りました（message_id: ${body.message_id}。${how}）。${read}このターンで送れるのはあと ${Math.max(0, body.limit - body.sent)} 回です。${wake ? '返答がそろったら起こします（このターンで wake を付けた分が全部返ったとき 1 回）' : '待たずにターンを終えれば、返答は次のターンの頭に届きます（その場で要るなら sai_wait）'}`)
     }
     if (name === 'sai_wait') {
       const id = typeof args.message_id === 'string' ? args.message_id : ''

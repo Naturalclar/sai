@@ -135,6 +135,38 @@ export function agentTargets(sessions: readonly SessionSummary[], from: SessionS
   return sessions.filter((s) => s.id !== from.id && s.project === from.project && !s.archived && !replyBlockedReason(s, serverHost))
 }
 
+/** 宛先の名前を比べる形（#625）。前後の空白と大文字小文字だけ無視する（前方一致・あいまいな一致はしない） */
+const targetKey = (name: string): string => name.trim().toLowerCase()
+
+/** 宛先として書ける名前（#625）: id・表示名・worktree 名（`repo`）・`sai_sessions` に出る呼び名（`sessionLabel()`） */
+export function targetNames(s: Pick<SessionSummary, 'id' | 'title' | 'meta' | 'repo'>): string[] {
+  return [...new Set([s.id, s.meta?.name ?? '', s.repo, sessionLabel(s)].map(targetKey).filter(Boolean))]
+}
+
+/** 宛先を引いた結果。`target` が無ければ送らない（`candidates` は選び直すための一覧。当たりが複数ならその当たり、無ければ送れる相手の全部） */
+export type ResolvedTarget = { target: SessionSummary } | { target: null; ambiguous: boolean; candidates: SessionSummary[] }
+
+/**
+ * `sai_send` の宛先（`to`）を、送ってよい相手（`targets`）の中から引く（#625）。id がそのまま当たればそれ。
+ * 当たらなければ名前（`targetNames()`）の**完全一致**で探し、**ちょうど 1 つに決まったときだけ**返す。
+ * 同じ名前が 2 つ以上（#572）・1 つも無いときは当てない（「明」と「明. - Avvy deco」のような取り違えを避ける）
+ */
+export function resolveTarget(targets: readonly SessionSummary[], to: string): ResolvedTarget {
+  const byId = targets.find((s) => s.id === to)
+  if (byId) return { target: byId }
+  const key = targetKey(to)
+  const hits = key ? targets.filter((s) => targetNames(s).includes(key)) : []
+  if (hits.length === 1) return { target: hits[0]! }
+  return { target: null, ambiguous: hits.length > 1, candidates: hits.length > 1 ? hits : [...targets] }
+}
+
+/** 宛先が決まらなかったときに返す文（#625）。候補を id と呼び名で並べ、選び直させる */
+export function targetRefusal(to: string, resolved: Extract<ResolvedTarget, { target: null }>, none: string): string {
+  const list = resolved.candidates.map((s) => `- ${s.id}「${sessionLabel(s)}」`).join('\n')
+  if (resolved.ambiguous) return `「${to.trim()}」に当たる相手が ${resolved.candidates.length} つあります。送っていません。id で選び直してください:\n${list}`
+  return list ? `${none}\n送れる相手:\n${list}` : none
+}
+
 /** `overlap` に並べる数（多ければ残りは数だけ） */
 export const AGENT_OVERLAP_SHOW = 5
 
@@ -308,6 +340,10 @@ export const SEND_COMPACT_NOTE =
 /** `sai_send` の `compact` の説明（#624） */
 export const SEND_COMPACT_ARG =
   '相手に要約（/compact）してから始めさせるか。省略すれば 1 行目が着手の形のときだけ要約する。調査のような着手の形でない依頼でも要約させたいときは true、着手の形でも要約させたくないときは false。要約できない相手（端末で開いている・Claude でない・文脈が小さい）はそのまま始める'
+
+/** 宛先（`to`）の説明（#625）。セッション同士の口と tailnet の `/mcp` で同じ文 */
+export const SEND_TO_ARG =
+  '送り先。セッションの id か、呼び名（表示名・worktree 名・sai_sessions に出る呼び名。完全一致で、大文字小文字と前後の空白は無視）。呼び名がちょうど 1 つに決まったときだけ送り、決まらなければ送らずに候補を返す'
 
 /** `sai_send` の返事の、相手のターンをどう回したか（#624。`via` は `ReplyResponse` のもの） */
 export function sendHow(via: string): string {

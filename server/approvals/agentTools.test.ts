@@ -44,7 +44,7 @@ before(async () => {
         return reply(200, { from: 'A1@r', sessions: [{ id: 'B1@r', name: 'レビュー', project: 'o/r', branch: 'main', agent: 'claude', busy: true, last_text: '見ました', context_tokens: 120_000 }] })
       }
       if (req.url === '/api/agent/send') {
-        return reply(202, { message_id: 'm1', to: 'B1@r', via: 'queued', sent: 1, limit: 3, context_tokens: 900_000, read_tokens: 900_000, read_budget: 3_000_000 })
+        return reply(202, { message_id: 'm1', to: 'B1@r', to_name: 'レビュー', via: 'queued', sent: 1, limit: 3, context_tokens: 900_000, read_tokens: 900_000, read_budget: 3_000_000 })
       }
       if (req.url?.startsWith('/api/agent/wait')) {
         const next = waits.shift() ?? { status: 404, body: { error: 'そのメッセージは見つかりません' } }
@@ -76,7 +76,7 @@ test('agentTool: トークンをファイルから読んでヘッダに載せ、
 test('agentTool: sai_send は送り元・送り先・本文を送り、預けたか・あと何回送れるかを返す', async () => {
   seen.length = 0
   const result = await agentTool('sai_send', { to: 'B1@r', text: '見て' }, base, 'A1@r', tokenFile)
-  assert.match(result.content[0]!.text, /message_id: m1。相手は処理中なので、終わってから回ります/)
+  assert.match(result.content[0]!.text, /^B1@r「レビュー」に送りました（message_id: m1。相手は処理中なので、終わってから回ります/, 'どこに届いたか（id と呼び名。#625）')
   assert.match(result.content[0]!.text, /あと 2 回/)
   assert.match(result.content[0]!.text, /相手は約 90 万トークンを読み直します（このターンの予算の残りは約 210 万トークン）/, '次に送るかを決められるよう、読み直す量と予算の残りも伝える（#311）')
   assert.deepEqual(JSON.parse(seen[0]!.body), { from: 'A1@r', to: 'B1@r', text: '見て' })

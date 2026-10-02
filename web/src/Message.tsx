@@ -7,6 +7,7 @@ import { linkifyRefs } from '../../shared/refs.ts'
 import { ThinkingBlock } from './ThinkingBlock'
 import { useReveal } from './useReveal'
 import { AttachedImages } from './AttachedImages'
+import { AttachedFiles } from './AttachedFiles'
 import { splitAttachments } from '../../shared/attachments.ts'
 import { DiffButton, type DiffButtonProps } from './DiffButton'
 import { reportDigestUsage } from './digestUsage'
@@ -102,7 +103,7 @@ interface Props {
 /** バブル1つ分の本文。長ければ折りたたんで「もっと見る」を付ける */
 export function Message({ ts, text: raw, markdown, waiting, questions, resolved, thinking, thinkingOpen = false, summary, digestKey, model, usage, recovered = false, steps, remote, sourceAsk = '', linear, found = false, utteranceKey, side, menu, images, diff, clipped = false, thinkingClipped = false, defaultOpen = false }: Props) {
   // 自分の入力に添えた画像は、パスの文字列ではなくサムネイルで出す（本文の末尾に足してある。shared/attachments.ts）
-  const { body: text, urls } = markdown ? { body: raw, urls: [] as string[] } : splitAttachments(raw)
+  const { body: text, urls, files } = markdown ? { body: raw, urls: [] as string[], files: [] } : splitAttachments(raw)
   // 長い本文を開いているか。#365 の画面（フィード）では最初から開いた状態で始める。
   // `useReveal` は初期値を覚えてから比べるので、開いた状態で始めても mount では動かない
   const [open, setOpen] = useState(defaultOpen)
@@ -185,9 +186,10 @@ export function Message({ ts, text: raw, markdown, waiting, questions, resolved,
       {text ? (
         <div className={`body${long && !open ? ' clamped' : ''}`} ref={bodyRef}>{markdown ? <Markdown text={text} /> : text}</div>
       ) : (
-        urls.length === 0 && <div className="empty-text">(本文なし)</div>
+        urls.length === 0 && files.length === 0 && <div className="empty-text">(本文なし)</div>
       )}
       <AttachedImages urls={urls} />
+      <AttachedFiles files={files} />
       {steps && <TurnSteps id={steps.id} ts={steps.ts} />}
       {images && <MessageImages items={images} />}
       {clipped && <ClippedNote />}

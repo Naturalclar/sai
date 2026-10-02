@@ -129,7 +129,7 @@ OpenCode (feed/opencode/sai.js) ─┘                           │
 - **預かり**: 前が `failed` なら回さない・追い越さない。steer は既定にしない、判定は `canSteer()` 1 つ → docs/internals/reply.md#預かりと-steer
 - **Claude の `-p` を止める・足す**: 返信 1 回 = 1 プロセスのまま入力の口（stream-json）を開ける（長寿命にしない）。stdin だけ pipe、stdout はログの fd のまま。運用者が `--output-format` を指定したら口を開けない。止めた返信は失敗にせず使用量も残さない → docs/internals/reply.md#claude-の--p-を止める足す386
 - **打ちかけ**: 端末の打ちかけは人の確認なしに消さない。失敗の戻しは入力欄が空のときだけ、非同期の失敗は押したときだけ → docs/internals/reply.md#打ちかけと失敗の戻し
-- **画像**: `ReplyRequest.attachments` の絶対パスを信じず `resolvePath()` を通す → docs/internals/reply.md#画像
+- **画像・ファイル**: `ReplyRequest.attachments` の絶対パスを信じず `resolvePath()` を通す。種類は中身で決め、配る口（`find()`）は画像だけ。画像を受ける口（`-i` など）へ渡すのも画像だけ → docs/internals/reply.md#画像
 - **許可モード**: 素通しでも SAI は許可を自動で返さない。`REPLY_MODES` 外は `400`。名前は英語 → docs/internals/reply.md#許可モード
 - **モデル**: 名前（`Default` / `Custom model…`）は英語、保存値は正式名 → docs/internals/reply.md#モデル
 - **別のマシン**: 判定は `isRemoteHost()` 1 つ、`host` が空はリモートにしない → docs/internals/reply.md#別のマシン

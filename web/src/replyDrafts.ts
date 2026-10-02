@@ -33,6 +33,17 @@ const has = (drafts: Drafts, id: string) => Object.prototype.hasOwnProperty.call
 /** 本文が空白だけで画像も無い。残す意味が無いので消す */
 export const isEmptyDraft = (d: Draft): boolean => d.text.trim() === '' && d.attachments.length === 0
 
+/** 覚えておく項目だけを写す。画像以外（#608）は種類・名前・大きさも（サムネイルが無いので、戻したときに何か分かるように） */
+const keepAttached = (a: Attached): Attached => {
+  const out: Attached = { path: a.path, url: a.url }
+  if (a.kind === 'text' || a.kind === 'pdf') {
+    out.kind = a.kind
+    if (typeof a.name === 'string') out.name = a.name
+    if (typeof a.size === 'number') out.size = a.size
+  }
+  return out
+}
+
 const isAttached = (a: unknown): a is Attached =>
   !!a && typeof a === 'object' && typeof (a as Attached).path === 'string' && typeof (a as Attached).url === 'string'
 
@@ -54,7 +65,7 @@ export function parseDrafts(raw: string | null): Drafts {
     if (!value || typeof value !== 'object') continue
     const { text, attachments, at } = value as Record<string, unknown>
     if (typeof text !== 'string' || typeof at !== 'number' || !Array.isArray(attachments)) continue
-    entries.push([id, { text, attachments: attachments.filter(isAttached).map(({ path, url }) => ({ path, url })), at }])
+    entries.push([id, { text, attachments: attachments.filter(isAttached).map(keepAttached), at }])
   }
   return Object.fromEntries(entries)
 }

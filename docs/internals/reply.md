@@ -252,13 +252,18 @@ SAI が起こした Claude のターンは、使ったトークンと費用も�
 
 ## 画像
 
-返信に添える画像。
+返信に添える画像と、画像以外のファイル（#608。文字のファイルと PDF）。
 
 - `server/reply/attachments.ts` の `AttachmentStore` が `~/.agent-feed/attachments/<sha1(ID) の先頭16桁>/<sha1(中身) の先頭16桁>.<ext>` に置く（JSONL には書かない。ID からパスを組み立てない）。
 - `ReplyRequest.attachments` の絶対パスは信じず、`resolvePath()` がそのセッションの置き場のものだけを通す（CLI に渡って読まれるため）。
 - 受け付け条件と本文への足し方・取り出し方（`withAttachments` / `splitAttachments`）は `shared/attachments.ts`（`shared/attachments.test.ts`）。
+- 種類は `AttachmentStore.put()` が**中身で**決める: `sniffImageType()` → `sniffPdf()`（`%PDF-`）→ `isUtf8Text()`（全部を UTF-8 として読め、NUL などの制御文字が無い）。どれでもなければ断る。画面（`useAttachments`）は頭の 4KB で先に弾くが、決めるのはサーバ。
+- 置く名前は画像が `ATTACHMENT_NAME_RE`、ほかが `ATTACHMENT_FILE_NAME_RE`（文字は元の拡張子に関わらず `.txt`、PDF は `.pdf`）。元の名前は `attachmentLabel()` で出せる形にして隣の `<名前>.name` に置き、返信のときに `labelOf()` で読む（**リクエストからは受けない**）。
+- `resolvePath()` は両方の名前を通す。**`find()`（配る口）は画像の名前だけ**（HTML / SVG を文字として保存しても、同じオリジンで描かれない）。
+- 本文は `withAttachments()` が画像を「添付した画像:」、ほかを「添付したファイル:」（`<パス>（<元の名前>）`）の 2 つの塊で足し、`splitAttachments()` が両方を外す（`urls` と `files`）。
+- **画像を受ける口（Codex の `-i`・app-server の `localImage`・OpenCode の `-f`・預かり）へ渡すのは画像だけ**（返信の口で `isImageAttachmentPath()` で絞ってから `launch()` に渡す）。ファイルは本文のパスで渡る。
 - Claude は画像のフラグが無いので本文の末尾にパスを足すだけ、Codex は `-i` でも渡す（`server/reply/runner.ts` の `replyCommand`）。
-- 画面は `web/src/useAttachments.ts` が預けて `ReplyBox` が貼り付け・ドロップ・ファイル選択で受け、`Message` / `PendingBubble` が `splitAttachments()` でサムネイル（`AttachedImages`）にする。
+- 画面は `web/src/useAttachments.ts` が預けて `ReplyBox` が貼り付け・ドロップ・ファイル選択で受け、`Message` / `PendingBubble` / `QueuedBubble` が `splitAttachments()` でサムネイル（`AttachedImages`）と、印と名前（`AttachedFiles`。リンクにはしない）にする。入力欄の並びは `AttachmentStrip`（ファイルは印・名前・種類と大きさ）。
 
 ## 許可モード
 

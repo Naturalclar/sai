@@ -1303,15 +1303,19 @@ export interface ReplyRequest {
   compact?: boolean
 }
 
-/** POST /api/sessions/<id>/attachments。body は画像そのもの */
+/** POST /api/sessions/<id>/attachments?name=。body はファイルそのもの（画像・文字のファイル・PDF。#608） */
 export interface AttachmentResponse {
   id: string
   /** 返信の `attachments` に入れる絶対パス */
   path: string
-  /** <img src> に使う URL */
+  /** <img src> に使う URL。**画像だけ**（ほかのファイルは配らないので空） */
   url: string
   mime: string
   size: number
+  /** 中身から決めた種類 */
+  kind: 'image' | 'text' | 'pdf'
+  /** 元のファイル名を出せる形にしたもの（画像と、名前の無いものは空） */
+  name: string
 }
 
 /**

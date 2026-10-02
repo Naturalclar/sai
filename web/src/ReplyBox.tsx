@@ -423,9 +423,9 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
     })
   }
 
-  /** 貼り付け・ドロップ・ファイル選択から来た画像を預ける（画像でないものは useAttachments が弾く） */
+  /** 貼り付け・ドロップ・ファイル選択から来たファイルを預ける（画像・文字のファイル・PDF。#608。受けられないものは useAttachments が中身で弾く） */
   const takeFiles = (list: FileList | null | undefined) => {
-    const files = [...(list ?? [])].filter((f) => f.type.startsWith('image/') || f.type === '')
+    const files = [...(list ?? [])]
     if (files.length > 0) void attach.add(files)
     return files.length > 0
   }
@@ -613,7 +613,7 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
               ref={fileRef}
               className="file"
               type="file"
-              accept="image/png,image/jpeg,image/gif,image/webp"
+              // 種類は絞らない（#608。拡張子の無いログやソースも選べるように。受けるかは中身で決める）
               multiple
               onChange={(e) => {
                 takeFiles(e.target.files)
@@ -621,7 +621,7 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
               }}
             />
             <IconButton
-              label={attach.items.length >= ATTACHMENT_MAX_COUNT ? `画像は ${ATTACHMENT_MAX_COUNT} 枚までです` : '画像を添える（貼り付け・ドロップでも添えられる）'}
+              label={attach.items.length >= ATTACHMENT_MAX_COUNT ? `添付は ${ATTACHMENT_MAX_COUNT} 個までです` : '画像・ファイルを添える（文字のファイルと PDF。貼り付け・ドロップでも添えられる）'}
               onClick={() => fileRef.current?.click()}
               disabled={attach.busy || attach.items.length >= ATTACHMENT_MAX_COUNT}
             >

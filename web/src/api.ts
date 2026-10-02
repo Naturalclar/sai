@@ -250,8 +250,8 @@ export const api = {
     sendJSON<SessionMetaResponse>('PUT', `/api/sessions/${encodeURIComponent(id)}/meta?days=${days}`, meta),
   /** アイコン画像を置く。返ってくる icon が新しい URL */
   /** 返信に添える画像を預ける。返った path を reply の attachments に入れる */
-  addAttachment: (id: string, file: Blob, days = 90) =>
-    sendRaw<AttachmentResponse>('POST', `/api/sessions/${encodeURIComponent(id)}/attachments?days=${days}`, file),
+  addAttachment: (id: string, file: Blob, name = '', days = 90) =>
+    sendRaw<AttachmentResponse>('POST', `/api/sessions/${encodeURIComponent(id)}/attachments?days=${days}${name ? `&name=${encodeURIComponent(name)}` : ''}`, file),
   setIcon: (id: string, file: Blob, days = 90) =>
     sendRaw<SessionIconResponse>('PUT', `/api/sessions/${encodeURIComponent(id)}/icon?days=${days}`, file),
   clearIcon: (id: string) => sendRaw<SessionIconResponse>('DELETE', `/api/sessions/${encodeURIComponent(id)}/icon`),

@@ -11,6 +11,7 @@ import { splitAttachments } from '../../shared/attachments.ts'
 import { DiffButton, type DiffButtonProps } from './DiffButton'
 import { reportDigestUsage } from './digestUsage'
 import { RecoveredTag } from './RecoveredTag'
+import { TurnSteps } from './TurnSteps'
 import { DigestFeedback } from './DigestFeedback'
 import { SourceImages } from './SourceImages'
 import { ImageSourceContext } from './imageContext'
@@ -64,6 +65,8 @@ interface Props {
   usage?: TurnUsage
   /** 記録に本文が無く、サーバが transcript から補った返答か（#614）。小さい印を付ける */
   recovered?: boolean
+  /** このターンの手順（#605）を開けるようにする。返答のバブルにだけ渡す（セッションの ID と、その行の ts） */
+  steps?: { id: string; ts: string }
   /**
    * 検索から飛んできた当たり（#230）。`Chat` がこの印で場所を探して、そこまでスクロールして光らせる。
    * 行ごとに DOM の目印を置くのはここだけなので、3 つの分岐すべてに同じものを付ける
@@ -97,7 +100,7 @@ interface Props {
 }
 
 /** バブル1つ分の本文。長ければ折りたたんで「もっと見る」を付ける */
-export function Message({ ts, text: raw, markdown, waiting, questions, resolved, thinking, thinkingOpen = false, summary, digestKey, model, usage, recovered = false, remote, sourceAsk = '', linear, found = false, utteranceKey, side, menu, images, diff, clipped = false, thinkingClipped = false, defaultOpen = false }: Props) {
+export function Message({ ts, text: raw, markdown, waiting, questions, resolved, thinking, thinkingOpen = false, summary, digestKey, model, usage, recovered = false, steps, remote, sourceAsk = '', linear, found = false, utteranceKey, side, menu, images, diff, clipped = false, thinkingClipped = false, defaultOpen = false }: Props) {
   // 自分の入力に添えた画像は、パスの文字列ではなくサムネイルで出す（本文の末尾に足してある。shared/attachments.ts）
   const { body: text, urls } = markdown ? { body: raw, urls: [] as string[] } : splitAttachments(raw)
   // 長い本文を開いているか。#365 の画面（フィード）では最初から開いた状態で始める。
@@ -154,6 +157,7 @@ export function Message({ ts, text: raw, markdown, waiting, questions, resolved,
         </div>
         {/* 詳細を開いたら本文の中に出るので、ここでは二重に出さない */}
         {!details && <SourceImages text={text} />}
+        {steps && <TurnSteps id={steps.id} ts={steps.ts} />}
         {images && <MessageImages items={images} />}
         {details && (
           <div className="details" ref={detailsRef}>
@@ -184,6 +188,7 @@ export function Message({ ts, text: raw, markdown, waiting, questions, resolved,
         urls.length === 0 && <div className="empty-text">(本文なし)</div>
       )}
       <AttachedImages urls={urls} />
+      {steps && <TurnSteps id={steps.id} ts={steps.ts} />}
       {images && <MessageImages items={images} />}
       {clipped && <ClippedNote />}
       {long && (

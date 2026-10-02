@@ -13,6 +13,8 @@ import { claudeProgress, claudeProjectName, codexProgress, PROGRESS_STEPS, progr
 import type { ParsedProgress } from '../../shared/progress.ts'
 import { claudeTurns, turnParser, worthParsing } from '../../shared/claudeTurns.ts'
 import type { ClaudeTurn } from '../../shared/claudeTurns.ts'
+import { claudeStepParser, codexStepParser, skipForSteps } from '../../shared/turnSteps.ts'
+import type { StepTurn } from '../../shared/turnSteps.ts'
 import type { SessionProgressResponse, SessionSummary } from '../../shared/types.ts'
 import { CODEX_DAYS } from './usage.ts'
 
@@ -20,6 +22,8 @@ import { CODEX_DAYS } from './usage.ts'
 export const PROGRESS_TAIL_START = 64 * 1024
 /** 読み足す上限。ここまで読んでもターンの始まりが無ければ、読めたぶんで組む（長いターンの途中から） */
 export const PROGRESS_TAIL_MAX = 4 * 1024 * 1024
+/** 手順（#605）を覚えておくファイルの数 */
+const STEP_FILES_KEPT = 4
 /** 見つからなかったセッションを探し直すまでの間（画面は 3 秒おきに聞いてくる） */
 export const PROGRESS_MISS_MS = 60_000
 /** OpenCode の読んだ量を覚えておく長さ（#396）。`sai_sessions` は相手の数だけ一度に聞くので、そのたびに本体を叩かない */
@@ -132,6 +136,38 @@ export class ProgressReader {
       const value = { sig, turns }
       this.fullTurns.set(path, value)
       return value
+    } catch {
+      this.paths.delete(key)
+      return null
+    }
+  }
+
+  /** ファイル → ターンごとの手順（#605。(mtime, size) が同じ間は読み直さない。直近に開いた数本だけ覚える） */
+  private readonly stepTurns = new Map<string, { sig: string; turns: StepTurn[] }>()
+
+  /**
+   * 終わったターンの手順（#605）。transcript / rollout を頭から 1 行ずつ読んで、ターンごとのツールの呼び出しにする。
+   * **人が開いたときだけ**呼ぶ（重いのでポーリングの道からは呼ばない）。Claude と Codex だけ。読めなければ null。
+   * パスは `read()` と同じくセッション ID と cwd から組み立てる（リクエストからは受けない）
+   */
+  async turnSteps(s: Target): Promise<StepTurn[] | null> {
+    const session = sessionOf(s)
+    if (!session || (s.agent !== 'claude' && s.agent !== 'codex')) return null
+    const key = `${s.agent}:${session}`
+    const path = await this.locate(key, s.agent, session, s.cwd)
+    if (!path) return null
+    try {
+      const st = await stat(path)
+      const sig = `${st.mtimeMs}:${st.size}`
+      const cached = this.stepTurns.get(path)
+      if (cached?.sig === sig) return cached.turns
+      const parser = s.agent === 'claude' ? claudeStepParser() : codexStepParser()
+      const rl = createInterface({ input: createReadStream(path, { encoding: 'utf-8' }), crlfDelay: Infinity })
+      for await (const line of rl) if (!skipForSteps(line)) parser.push(line)
+      this.stepTurns.delete(path)
+      this.stepTurns.set(path, { sig, turns: parser.turns })
+      for (const old of [...this.stepTurns.keys()].slice(0, Math.max(0, this.stepTurns.size - STEP_FILES_KEPT))) this.stepTurns.delete(old)
+      return parser.turns
     } catch {
       this.paths.delete(key)
       return null

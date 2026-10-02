@@ -89,12 +89,17 @@ const CODEX_KEYS = ['cmd', 'command', 'path', 'file_path', 'url', 'query', 'patt
  * 分からなければ空（コードや JSON をそのまま出しても読めない）
  */
 export function codexToolSummary(raw: unknown): string {
+  return oneLine(codexToolText(raw))
+}
+
+/** `codexToolSummary()` の切る前（#605。終わったターンの手順では、コマンドを 1 行に切らずに出す） */
+export function codexToolText(raw: unknown): string {
   const text = str(raw)
   if (!text.trim()) return ''
   const quoted = /"cmd"\s*:\s*("(?:[^"\\]|\\.)*")/.exec(text)?.[1]
   if (quoted) {
     try {
-      return oneLine(String(JSON.parse(quoted)))
+      return String(JSON.parse(quoted))
     } catch {
       // 引数の JSON として読み直す
     }
@@ -108,10 +113,10 @@ export function codexToolSummary(raw: unknown): string {
   if (!args) return ''
   for (const key of CODEX_KEYS) {
     const v = args[key]
-    if (typeof v === 'string' && v.trim()) return oneLine(v)
+    if (typeof v === 'string' && v.trim()) return v
     if (Array.isArray(v)) {
       const last = v.filter((x): x is string => typeof x === 'string').at(-1)
-      if (last?.trim()) return oneLine(last)
+      if (last?.trim()) return last
     }
   }
   return ''

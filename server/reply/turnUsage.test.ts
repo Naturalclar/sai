@@ -99,6 +99,10 @@ test('TurnUsageLog: 行に載せる費用は、そのターンぶん（同じセ
         // 別のセッションの値は引かない
         JSON.stringify({ ts: '2026-09-16T05:00:00.500Z', id: 'T@r', ...usage, cost_usd: 100 }),
         JSON.stringify({ ts: '2026-09-16T05:30:01.000Z', id: 'S@r', ...usage, cost_usd: 8 }),
+        // 費用の無い行を挟んでも、前の行の値を忘れない（忘れると次の行に積み上げが丸ごと乗る。#602 のレビュー）
+        JSON.stringify({ ts: '2026-09-16T07:00:01.000Z', id: 'Z@r', ...usage, cost_usd: 40 }),
+        JSON.stringify({ ts: '2026-09-16T07:30:01.000Z', id: 'Z@r', ...usage, cost_usd: 0 }),
+        JSON.stringify({ ts: '2026-09-16T08:00:01.000Z', id: 'Z@r', ...usage, cost_usd: 45.5 }),
         // 数え直しで下がったら、その行の値をそのまま
         JSON.stringify({ ts: '2026-09-16T06:00:01.000Z', id: 'S@r', ...usage, cost_usd: 0.25 }),
         '',
@@ -110,6 +114,7 @@ test('TurnUsageLog: 行に載せる費用は、そのターンぶん（同じセ
     const row = (ts: string, session = 'S') => ({ ts, agent: 'claude', repo: 'r', branch: '', session, session_source: 'payload', cwd: '/w', event: 'Stop', text: 'ok' }) as FeedRow
     const attached = log.attach([row('2026-09-16T13:57:11+09:00'), row('2026-09-16T14:00:00+09:00', 'T'), row('2026-09-16T14:30:00+09:00'), row('2026-09-16T15:00:00+09:00')])
     assert.deepEqual(attached.map((r) => r.usage?.cost_usd), [2.5, 100, 0.5, 0.25])
+    assert.deepEqual(log.attach([row('2026-09-16T16:00:00+09:00', 'Z'), row('2026-09-16T16:30:00+09:00', 'Z'), row('2026-09-16T17:00:00+09:00', 'Z')]).map((r) => r.usage?.cost_usd), [40, 0, 5.5])
     // 記録した分も、読み返した分の続きとして差にする
     const rowTs = new Date().toISOString()
     log.record('S@r', { ...usage, cost_usd: 1.25 })

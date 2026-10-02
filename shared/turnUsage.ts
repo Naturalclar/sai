@@ -143,6 +143,9 @@ export function turnCost(prev: number | undefined, cur: number): number {
   return Math.round((cur - prev) * 1e8) / 1e8
 }
 
+/** 費用が載っている行か（0 より大きい有限の数） */
+export const hasCost = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0
+
 /**
  * 各行のそのターンぶんの費用（`entries` と同じ並び）。**渡す順 = 書いた順**（turn-usage.jsonl は追記だけなので、ファイルの順のまま）。
  * 前の行は同じ `id`（エンティティ）の中で辿る。要約だけのターン（`compact`）も同じ積み上げの中にあるので飛ばさない。
@@ -151,6 +154,9 @@ export function turnCost(prev: number | undefined, cur: number): number {
 export function turnCosts(entries: readonly Pick<TurnUsageEntry, 'id' | 'cost_usd'>[]): number[] {
   const last = new Map<string, number>()
   return entries.map((e) => {
+    // 費用の無い行（0・数字でない。`num_turns` 0 の空振りやエラーの result）は 0 として、**前の行の値を忘れない**
+    // （忘れると、次の行にそれまでの積み上げが丸ごと乗る。実測で 40.469 → 0 → 45.608）
+    if (!hasCost(e.cost_usd)) return 0
     const cost = turnCost(last.get(e.id), e.cost_usd)
     last.set(e.id, e.cost_usd)
     return cost

@@ -5,7 +5,7 @@
 import { appendFile, mkdir, readFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { digestKey } from '../../shared/digestFeedback.ts'
-import { turnCost, usageByRow } from '../../shared/turnUsage.ts'
+import { hasCost, turnCost, usageByRow } from '../../shared/turnUsage.ts'
 import type { TurnUsage, TurnUsageEntry } from '../../shared/turnUsage.ts'
 import type { FeedRow } from '../../shared/types.ts'
 
@@ -100,9 +100,13 @@ export class TurnUsageLog implements TurnUsageSink {
 
   /** その行のそのターンぶんの費用を控える。**書いた順に呼ぶ**（ファイルの順・追記の順） */
   private remember(e: TurnUsageEntry): void {
-    const cur = typeof e.cost_usd === 'number' && Number.isFinite(e.cost_usd) ? e.cost_usd : 0
-    this.costs.set(e, turnCost(this.lastCost.get(e.id), cur))
-    this.lastCost.set(e.id, cur)
+    // 費用の無い行は 0 として、前の行の値を忘れない（`turnCosts()` と同じ）
+    if (!hasCost(e.cost_usd)) {
+      this.costs.set(e, 0)
+      return
+    }
+    this.costs.set(e, turnCost(this.lastCost.get(e.id), e.cost_usd))
+    this.lastCost.set(e.id, e.cost_usd)
   }
 
   /** 覚えている行の数（読み返しの窓の中だけ） */

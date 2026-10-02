@@ -192,3 +192,13 @@ test('turnCosts: 前の行は同じセッションの中で辿る（別のセッ
   assert.equal(entries.reduce((a, e) => a + e.cost_usd, 0), 28.5)
   assert.deepEqual(turnCosts([]), [])
 })
+
+test('turnCosts: 費用の無い行（0・数字でない）は 0 で、前の行の値を忘れない（次の行に積み上げが丸ごと乗らない。#602 のレビュー）', () => {
+  const costs = turnCosts([
+    { id: 'A@r', cost_usd: 40.469 },
+    { id: 'A@r', cost_usd: 0 },
+    { id: 'A@r', cost_usd: Number.NaN },
+    { id: 'A@r', cost_usd: 45.608 },
+  ])
+  assert.deepEqual(costs, [40.469, 0, 0, 5.139])
+})

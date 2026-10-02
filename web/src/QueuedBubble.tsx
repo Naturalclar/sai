@@ -1,3 +1,4 @@
+import { Avatar } from './Avatar'
 import { useState } from 'react'
 import { splitAttachments } from '../../shared/attachments.ts'
 import { api, type Profile, type QueuedReply } from './api'
@@ -45,7 +46,7 @@ export function QueuedBubble({ id, item, order, paused, now, repo, profile }: Pr
   const head = order === 1 && paused !== ''
   return (
     <div className="group pending queued">
-      <div className="avatar me">{profile?.icon ? <img src={profile.icon} alt="" /> : '私'}</div>
+      <Avatar kind="me" icon={profile?.icon} mark="私" />
       <div>
         <div className="gh">
           <span className="name">{profile?.name || 'あなた'}</span>

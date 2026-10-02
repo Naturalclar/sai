@@ -219,6 +219,13 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 画面は `Chat` がバブルごとに `ImageSourceContext`（`web/src/imageContext.ts`。URL を作る関数で、別のマシン・自分の入力は null）を渡し、`MarkdownImage` がサムネイル（押すと元の大きさ）＋ダウンロードにする。口が無い・読めない（`onError`）ときは印と名前（`.md-image`）。
 - 一言も `linkifyRefs()` → `parseInline()` を通るので同じく `image` になるが、一言の中は印と名前だけ（`Message` が context を null にする）で、画像は一言の下に元の本文から並べる（`SourceImages`。詳細を開いている間は本文の中に出るので出さない）。
 
+### アバター（#666）
+
+- バブルの左のアバターは `Avatar`（`kind` = `me` かエージェントの種類、`icon` があれば画像、無ければ `mark` の頭文字）の 1 つ。`Chat`・`ApprovalBubble`・`PendingBubble`・`QueuedBubble` が使う。**新しいバブルを足すときもこれを使う**（別々に書いていた頃は、許可のバブルと送ったメッセージへの返答が頭文字だけだった）。
+- `Chat` の見出しの発言者は `chatGroups.ts` の `groupSpeaker()`。ふつうのバブルは `speakerLabel()` のまま、送ったメッセージへの返答（#588）は印の `to_name` / `to_icon`（無ければ一覧から引けたもの → 頭文字）。
+- `to_icon` はサーバが詳細の応答で付ける（`agentReplyRows()` の第 4 引数。`iconStore.all()` から相手の ID で引くので、相手がアーカイブ済み・一覧の窓の外でもファイルがあれば出る）。行の形は変えていない（`agent_reply` は応答に付けるだけ）。
+- `ApprovalBubble` には呼ぶ側がセッションのアイコンを渡す（`FeedView` は一覧から、`SessionView` はそのセッション、`TodoRow` は行のセッション。要対応ではバブルのアバターは CSS で隠れていて、行の名前の横のアイコンが出る）。
+
 ### バブルの下の画像（ギャラリー。#504 / #507）
 
 - セッション画面では、画像を出てきた発言のバブルの下に足す（`useGallery` → `shared/gallery.ts` の `imagesByBubble()` → `Chat` の `images` → `MessageImages`。`GET /api/sessions/<id>/gallery`）。バブルの中にもう出ているもの＝返答の本文の画像と SAI の添付は除く。鍵は `bubbleKey(ts, user / agent)` で `Chat` の `data-ts` / `data-side` と同じ組。

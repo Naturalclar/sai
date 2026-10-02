@@ -121,6 +121,8 @@ export function FeedView({ selected, projects, onProjects, sessions = NO_SESSION
   const onJump = jumpKey ? () => setJump((j) => ({ key: jumpKey, seq: (j?.seq ?? 0) + 1 })) : undefined
 
   const repoOf = (id: string) => targets.find((t) => t.id === id)?.repo
+  /** そのセッションのアイコン（#666。許可・質問のバブルに出す）。一覧に居なければ無い（頭文字） */
+  const iconOf = (id: string) => sessions.find((x) => x.id === id)?.icon
   /**
    * 送信ボタンの左に出すモデルの選択。サイドバーの一覧に居るセッションだけ（フィードの行だけからは
    * agent と出てきたモデルが分からない）。一覧に無ければ出さない。
@@ -185,7 +187,7 @@ export function FeedView({ selected, projects, onProjects, sessions = NO_SESSION
                 ))}
                 {/* ショートカット（⌘Enter）が効くのは一番上の 1 つだけ。複数出るので、どれに効いたか分からなくならないように */}
                 {approvals.map((a, i) => (
-                  <ApprovalBubble key={a.approval_id} approval={a} now={now} repo={repoOf(a.id)} hotkey={i === 0} modeNote={modeNoteOf(a.id)} />
+                  <ApprovalBubble key={a.approval_id} approval={a} now={now} repo={repoOf(a.id)} hotkey={i === 0} modeNote={modeNoteOf(a.id)} icon={iconOf(a.id)} />
                 ))}
                 {queuedShown.flatMap(([qid, q]) =>
                   q.items.map((item, i) => (

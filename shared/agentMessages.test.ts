@@ -97,6 +97,11 @@ test('deliveredId / agentReplyRows: 送ったメッセージへの返答（相�
   ], '入力の行・別の相手・2 本目・まだ返っていないものは入れない。古い順')
   assert.equal(out[1]?.agent_reply?.sent_at, '2026-09-30T16:21:56Z')
   assert.deepEqual(agentReplyRows([], rows, (id) => id), [])
+  // 相手のアイコン（#666）。あれば印に載せ、無ければキーごと載せない
+  assert.ok(out.every((r) => !('to_icon' in r.agent_reply!)))
+  const iconed = agentReplyRows(sent, rows, (id) => id, (id) => (id === 'B1@r' ? '/api/sessions/B1%40r/icon?v=1' : undefined))
+  assert.deepEqual(iconed.map((r) => r.agent_reply?.to_icon), ['/api/sessions/B1%40r/icon?v=1', '/api/sessions/B1%40r/icon?v=1'])
+  assert.ok(agentReplyRows(sent, rows, (id) => id, () => '').every((r) => !('to_icon' in r.agent_reply!)), '空の URL も載せない')
 })
 
 test('replierName: 表示名があればそれ。題名が届けた見出しなら worktree 名（#588）', () => {

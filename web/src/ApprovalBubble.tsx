@@ -8,6 +8,7 @@ import { DialogPreview } from './DialogPreview'
 import { JevTag } from './JevTag'
 import { elapsedLabel, hm } from './format'
 import { AGENT_INITIAL, AGENT_LABEL } from './chatGroups.ts'
+import { Avatar } from './Avatar'
 
 interface Props {
   approval: Approval
@@ -25,6 +26,11 @@ interface Props {
    * 「素通しにしたのに聞かれる」の理由がこれなので、バブルに添える。無ければ空
    */
   modeNote?: string
+  /**
+   * そのセッションのアイコン（#666。`SessionSummary.icon`）。あれば頭文字の代わりに出す。
+   * 記録に 1 行も無いセッション（端末の Codex のダイアログ。#417）はアイコンが無いので頭文字のまま
+   */
+  icon?: string | undefined
 }
 
 /**
@@ -33,7 +39,7 @@ interface Props {
  * 通常起動の Codex TUI は待機を検出できても安全な回答経路が無いので、端末で答える案内だけを出す。
  * 答えるとサーバの approvals から消え、次のポーリングでこのバブルも消える（送った直後は done で押せなくする）
  */
-export function ApprovalBubble({ approval, now, repo, hotkey = false, modeNote = '' }: Props) {
+export function ApprovalBubble({ approval, now, repo, hotkey = false, modeNote = '', icon }: Props) {
   const [busy, setBusy] = useState(false)
   const [done, setDone] = useState<'allow' | 'always' | 'deny' | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -92,7 +98,7 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false, modeNote =
   const detail = detailOf(approval)
   return (
     <div className={`group approval${done ? ' done' : ''}`}>
-      <div className={`avatar ${agent}`}>{AGENT_INITIAL[agent] ?? 'C'}</div>
+      <Avatar kind={agent} icon={icon} mark={AGENT_INITIAL[agent] ?? 'C'} />
       <div>
         <div className="gh">
           <span className="name">{AGENT_LABEL[agent] ?? 'Claude Code'}</span>

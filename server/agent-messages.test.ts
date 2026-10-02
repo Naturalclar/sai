@@ -31,6 +31,7 @@ import type { CodexApp } from './reply/codexAppServer.ts'
 import type { ReplyCommand, Runner } from './reply/runner.ts'
 import { localDate } from './rows/aggregate.ts'
 import { row } from './rows/aggregate.test.ts'
+import { PNG } from './meta/icons.test.ts'
 import { FeedStore } from './rows/store.ts'
 
 let dir: string
@@ -492,6 +493,15 @@ test('送り元が待たずにターンを終えても、相手の返答が送�
   assert.equal(reply?.text, '着手しました。PR を出しました')
   assert.equal(reply?.session, 'B1', '行は相手のセッションのもの')
   assert.equal(reply?.agent_reply?.to_name, '#r', '表示名が無ければ worktree 名（題名は届けた見出しになっているので使わない）')
+  assert.equal(reply?.agent_reply?.to_icon, undefined, 'アイコンを付けていない相手は印に載せない（画面は頭文字）')
+  // 相手がアイコンを付けたら、返答の印にも載る（#666）。rev も変わる（送り元の画面が描き直す）
+  const iconOf = (id: string, init: RequestInit) => fetch(`${base}/api/sessions/${encodeURIComponent(id)}/icon`, { headers: { Origin: base }, ...init })
+  assert.equal((await iconOf('B1@r', { method: 'PUT', body: PNG })).status, 200)
+  const withIcon = await detail()
+  assert.notEqual(withIcon.rev, after.rev)
+  assert.match(withIcon.agent_replies?.find((r) => r.agent_reply?.message_id === messageId)?.agent_reply?.to_icon ?? '', /^\/api\/sessions\/B1%40r\/icon\?v=/)
+  assert.equal((await iconOf('B1@r', { method: 'DELETE' })).status, 200)
+  assert.equal((await detail()).agent_replies?.find((r) => r.agent_reply?.message_id === messageId)?.agent_reply?.to_icon, undefined)
   // 受け取った側の詳細には載せない（自分が送ったメッセージではない）
   assert.equal(((await (await fetch(`${base}/api/sessions/B1%40r`)).json()) as SessionDetailResponse).agent_replies?.some((r) => r.agent_reply?.message_id === messageId) ?? false, false)
   await humanReply('B1@r')

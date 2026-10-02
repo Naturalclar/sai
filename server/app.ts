@@ -4254,10 +4254,20 @@ export function createApp(
         // 別のセッションへ送ったメッセージへの返答（#588）。送り元が待たずにターンを終えても、この画面に並べる。
         // 描いている窓より前の返答は載せない（窓を広げれば出る）
         const shownFrom = older > 0 && shown[0] ? Date.parse(shown[0].ts) : -Infinity
-        const replies = agentReplyRows(agents.sentBy(id, Infinity), every, (to) => {
-          const target = sessions.find((s) => s.id === to)
-          return target ? replierName(target) : to
-        }).filter((r) => Date.parse(r.ts) >= shownFrom)
+        // 相手のアイコン（#666）は置き場から引く（相手がアーカイブ済み・一覧の窓の外でも、ファイルがあれば出る）
+        const replyIcons = (await iconStore.all()).entries
+        const replies = agentReplyRows(
+          agents.sentBy(id, Infinity),
+          every,
+          (to) => {
+            const target = sessions.find((s) => s.id === to)
+            return target ? replierName(target) : to
+          },
+          (to) => {
+            const icon = replyIcons.get(iconKey(to))
+            return icon ? iconUrl(to, icon.version) : undefined
+          },
+        ).filter((r) => Date.parse(r.ts) >= shownFrom)
         // いまのコンテキスト量（#441）。(mtime, size) で覚えているので読み直しは軽い。rev には丸めた値だけ混ぜる
         const context = isRemoteHost(session.host, selfHost()) ? 0 : (await progress.read(session)).context_tokens
         const body: SessionDetailResponse = {

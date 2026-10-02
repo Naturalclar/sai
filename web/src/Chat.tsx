@@ -15,7 +15,8 @@ import { bubbleKey } from '../../shared/gallery.ts'
 import type { GalleryItem } from './api'
 import type { FeedRow, Profile, SessionSummary } from './api'
 import { hm } from './format'
-import { groupRows, speakerLabel } from './chatGroups.ts'
+import { groupRows, groupSpeaker } from './chatGroups.ts'
+import { Avatar } from './Avatar'
 import { Message } from './Message'
 import { SessionEndLine } from './SessionEndLine'
 import { UnreadLine } from './UnreadLine'
@@ -314,15 +315,15 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
                 const end = g.items[0]!
                 return <SessionEndLine key={`end:${end.key}`} text={end.text} ts={end.row.ts} />
               }
-              const who = speakerLabel(g.speaker, byId.get(id), profile)
-              // 送ったメッセージへの返答（#588）。名前は相手の呼び名にし、相手のセッションへのリンクを添える
+              // 送ったメッセージへの返答（#588）。名前とアイコンは相手のもの（#666）にし、相手のセッションへのリンクを添える
               const reply = g.items[0]?.reply
+              const who = groupSpeaker(g.speaker, byId.get(id), profile, reply)
               return (
                 <div className={`group${reply ? ' agent-reply' : ''}`} key={`${g.speaker}:${g.session}:${g.firstTs}`}>
-                  <div className={`avatar ${g.speaker}`}>{who.icon ? <img src={who.icon} alt="" /> : who.mark}</div>
+                  <Avatar kind={g.speaker} icon={who.icon} mark={who.mark} />
                   <div>
                     <div className="gh">
-                      <span className="name">{reply ? reply.to_name : who.name}</span>
+                      <span className="name">{who.name}</span>
                       {reply && (
                         <a className="reply-of" href={`#/s/${encodeURIComponent(id)}`} title={`送ったメッセージ（id: ${reply.message_id}）への返答。押すと相手のセッションを開く`}>
                           送ったメッセージへの返答

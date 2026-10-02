@@ -121,6 +121,8 @@ export interface AgentReplyTag {
   message_id: string
   /** 相手の呼び名（表示名 → 題名 → ID） */
   to_name: string
+  /** 相手のアイコンの URL（#666。`SessionSummary.icon` と同じ形）。付けていなければ無い（画面は頭文字を出す） */
+  to_icon?: string
   /** 送った時刻 */
   sent_at: string
   /**

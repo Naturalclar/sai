@@ -173,6 +173,8 @@ export const DiffFileItem = memo(function DiffFileItem({ f, file, shown, onToggl
         <span className="mark">{shown ? '▾' : '▸'}</span>
         <code className="path">{f.old_path && f.old_path !== f.path ? `${f.old_path} → ${f.path}` : f.path}</code>
         {STATUS_LABEL[f.status] && <span className={`tag ${f.status}`}>{STATUS_LABEL[f.status]}</span>}
+        {/* GitHub でこのファイルの行に付いたやり取りの数（#600）。閉じているファイルにコメントがあることが分かるように見出しに出す */}
+        {threads.length > 0 && <span className="tag posted" title="GitHub で行に付いたコメント">コメント {threads.length}</span>}
         <span className="counts">
           {f.added > 0 && <span className="add">+{f.added}</span>}
           {f.removed > 0 && <span className="del">−{f.removed}</span>}

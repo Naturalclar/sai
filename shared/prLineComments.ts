@@ -10,10 +10,11 @@ export const PR_LINE_COMMENTS_MAX = 300
 
 /**
  * `gh api --jq` に渡す絞り込み（**決め打ち**。リクエストからは作らない）。1 件を 1 行の JSON にして、要る項目だけ残す
- * （`diff_hunk` は最後の行＝コメントの付いた行の中身を取るためだけに読む）
+ * （`diff_hunk` はコメントの付いた行の中身を取るためだけに読むので、**jq の中で最後の 2 行に切る**——最後が `\\ No newline…` のことがある。
+ * 丸ごと受けると、長い hunk にコメントが多い PR で出力の上限を超えて全部読めなくなる。#668 のレビュー）
  */
 export const LINE_COMMENTS_JQ =
-  '.[] | {id, in_reply_to_id, path, line, original_line, side, subject_type, user: .user.login, user_type: .user.type, body, created_at, html_url, diff_hunk}'
+  '.[] | {id, in_reply_to_id, path, line, original_line, side, subject_type, user: .user.login, user_type: .user.type, body, created_at, html_url, diff_hunk: ((.diff_hunk // "") | split("\n") | .[-2:] | join("\n"))}'
 
 export interface PrLineCommentList {
   /** 時刻の古い順 */
@@ -140,9 +141,12 @@ export function placeLineThreads(threads: readonly PrLineThread[], files: readon
   const rest: PrLineThread[] = []
   for (const thread of threads) {
     const { root } = thread
-    const file = root.line ? files.find((f) => f.path === root.path || f.oldPath === root.path) : undefined
+    // GitHub が返すのは新しいパス。**同じ名前のファイルを先に**探す（`b.ts` を `a.ts` に移して新しい `b.ts` を足した PR で、
+    // 旧いパスが先に当たると別のファイルに出る。#668 のレビュー）。旧いパスは、消したファイルなど新しいパスで当たらないときだけ
+    const file = root.line ? (files.find((f) => f.path === root.path) ?? files.find((f) => f.oldPath === root.path)) : undefined
     const l = file ? lineAt(file, root.side, root.line) : null
-    if (!file || !l || (root.code !== undefined && root.code !== l.text)) {
+    // 改行が CRLF のファイルは、差分の行に `\r` が残る（`hunkLastLine()` は外している）ので、外して比べる
+    if (!file || !l || (root.code !== undefined && root.code !== l.text.replace(/\r$/, ''))) {
       rest.push(thread)
       continue
     }

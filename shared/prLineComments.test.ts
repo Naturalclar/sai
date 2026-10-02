@@ -112,3 +112,40 @@ test('placeLineThreads: いまの差分のその側のその行で、中身が�
   ])
   assert.deepEqual(rest.map((t) => t.root.id), [4, 5, 6, 7, 8])
 })
+
+test('placeLineThreads: 同じ名前のファイルを先に探す（移したファイルの旧いパスと、新しく足した同名のファイル）', () => {
+  const patch = [
+    'diff --git a/b.ts b/a.ts',
+    'similarity index 90%',
+    'rename from b.ts',
+    'rename to a.ts',
+    '--- a/b.ts',
+    '+++ b/a.ts',
+    '@@ -1 +1 @@',
+    '-x',
+    '+same',
+    'diff --git a/b.ts b/b.ts',
+    'new file mode 100644',
+    '--- /dev/null',
+    '+++ b/b.ts',
+    '@@ -0,0 +1 @@',
+    '+same',
+    '',
+  ].join('\n')
+  const list = parse(raw(1, { path: 'b.ts', line: 1, diff_hunk: '@@ -0,0 +1 @@\n+same' }))?.comments ?? []
+  const { placed } = placeLineThreads(threadLineComments(list), parseUnifiedDiff(patch))
+  assert.deepEqual(placed.map((p) => p.path), ['b.ts'], '新しい b.ts に出す（b.ts から移した a.ts ではない）')
+})
+
+test('placeLineThreads: CRLF のファイルでも行に当たる（差分の行に残る \\r を外して比べる）', () => {
+  const patch = ['diff --git a/w.ts b/w.ts', '--- a/w.ts', '+++ b/w.ts', '@@ -1 +1,2 @@', ' keep\r', '+added\r', ''].join('\n')
+  const list = parse(raw(1, { path: 'w.ts', line: 2, diff_hunk: '@@ -1 +1,2 @@\n keep\r\n+added\r' }))?.comments ?? []
+  const { placed, rest } = placeLineThreads(threadLineComments(list), parseUnifiedDiff(patch))
+  assert.deepEqual([placed.length, rest.length], [1, 0])
+})
+
+test('hunkLastLine: jq で最後の 2 行に切った形でも同じ行が取れる', () => {
+  assert.equal(hunkLastLine(' keep\n+added'), 'added')
+  assert.equal(hunkLastLine('+b\n\\ No newline at end of file'), 'b')
+  assert.equal(hunkLastLine('@@ -1 +1 @@\n+only'), 'only')
+})

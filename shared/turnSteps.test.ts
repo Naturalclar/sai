@@ -72,12 +72,14 @@ test('codexStepParser: task_started から task_complete までを 1 ターン�
   assert.equal(JSON.stringify(p.turns).includes('SECRET'), false)
 })
 
+const from = (ms: number, input?: string) => ({ starts: [{ ms, ...(input ? { input } : {}) }] })
+
 test('findStepTurn: 入力の行の時刻で当て、無ければターン完了の行の少し前に終わったもの。近いものが無ければ null', () => {
   const turns = parsed(claude)
-  assert.equal(findStepTurn(turns, { startMs: T0 + 400, endMs: T0 + 21_000 })?.steps.length, 3)
+  assert.equal(findStepTurn(turns, { ...from(T0 + 400), endMs: T0 + 21_000 })?.steps.length, 3)
   assert.equal(findStepTurn(turns, { endMs: T0 + 112_000 }), turns[1], '入力の行が無い（メッセージ・自分で起きたターン）ときは終わりで当てる')
   assert.equal(findStepTurn(turns, { endMs: T0 + 21_000 }), turns[0])
-  assert.equal(findStepTurn(turns, { startMs: T0 + 60_000, endMs: T0 + 70_000 }), null, '別のターンの手順を出さない')
+  assert.equal(findStepTurn(turns, { ...from(T0 + 60_000), endMs: T0 + 70_000 }), null, '別のターンの手順を出さない')
   assert.equal(findStepTurn([], { endMs: T0 }), null)
 })
 
@@ -93,12 +95,16 @@ test('findStepTurn: 途中で入力が足されたターンはつないで 1 つ
   // 1 つの記録のターンの途中で入力が足された（steer・タスクの通知）: transcript では 2 つに切れる
   const steered = parsed([user(0, '実装して'), use(5, 'Bash', { command: 'pnpm test' }), user(10, 'lint も回して'), use(15, 'Bash', { command: 'pnpm lint' }), said(20, 'しました')])
   assert.equal(steered.length, 2)
-  assert.deepEqual(findStepTurn(steered, { startMs: T0, input: '実装して', endMs: T0 + 21_000 })?.steps.map((s) => s.summary), ['pnpm test', 'pnpm lint'])
+  assert.deepEqual(findStepTurn(steered, { starts: [{ ms: T0, input: '実装して' }, { ms: T0 + 10_000, input: 'lint も回して' }], endMs: T0 + 21_000 })?.steps.map((s) => s.summary), ['pnpm test', 'pnpm lint'])
 
   // Esc で止めた入力（ターン完了の行なし）のあと、入力の行の無いターンが終わった
   const stopped = parsed([user(0, '消して'), use(5, 'Bash', { command: 'rm -rf build' }), user(8, '[Request interrupted by user]'), user(100, '<task-notification>done</task-notification>'), use(105, 'Bash', { command: 'git status' }), said(110, '確認しました')])
-  assert.deepEqual(findStepTurn(stopped, { startMs: T0, input: '消して', endMs: T0 + 111_000 })?.steps.map((s) => s.summary), ['git status'], '止めたターンのコマンドを、次の返答の手順として出さない')
+  assert.deepEqual(findStepTurn(stopped, { ...from(T0, '消して'), endMs: T0 + 111_000 })?.steps.map((s) => s.summary), ['git status'], '止めたターンのコマンドを、次の返答の手順として出さない')
 
-  // 始まりは見つかったが、終わりの時刻が合わない（そのターンのターン完了の行ではない）
-  assert.equal(findStepTurn(parsed(claude), { startMs: T0, endMs: T0 + 5_000_000 }), null)
+  // Esc ですぐ止めた入力は transcript に残らないことがある: 次の入力の行で当てる
+  const pulled = parsed([user(30, 'やり直し'), use(35, 'Bash', { command: 'pnpm build' }), said(40, 'しました')])
+  assert.deepEqual(findStepTurn(pulled, { starts: [{ ms: T0, input: '打ちかけ' }, { ms: T0 + 30_000, input: 'やり直し' }], endMs: T0 + 41_000 })?.steps.map((s) => s.summary), ['pnpm build'])
+
+  // ターン完了の行のあともそのターンが続いた（Stop フックが続けさせた）・行が遅れて書かれた: 始まりで当てたターンを返す
+  assert.equal(findStepTurn(parsed(claude), { ...from(T0), endMs: T0 + 5_000_000 })?.steps.length, 3)
 })

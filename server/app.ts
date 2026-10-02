@@ -3336,18 +3336,17 @@ export function createApp(
     if (!row || isRemoteHost(row.host ?? '', selfHost())) return json(res, none)
     const turns = await progress.turnSteps({ id, repo: session.repo, agent: row.agent ?? session.agent, cwd: row.cwd || session.cwd })
     if (!turns) return json(res, none)
-    let before: FeedRow | undefined
-    // 前のターン完了の行まで遡り、その間の**いちばん古い**入力の行を始まりにする（#663 のレビュー。途中で足した入力
-    // ＝ steer の行を始まりにすると、足す前の手順が落ちる）。Esc で止めた入力が挟まっていれば `findStepTurn()` が切る
+    // 前のターン完了の行まで遡り、その間の入力の行を古い順に渡す（#663 のレビュー。途中で足した入力 = steer の行を
+    // 始まりにすると、足す前の手順が落ちる）。どれを始まりにするか・Esc で止めた跡で切るのは `findStepTurn()`
+    const starts: { ms: number; input: string }[] = []
     for (let i = at - 1; i >= 0; i--) {
       const r = rows[i]!
       if (r.session !== row.session) continue
       const kind = eventKind(r.event, r.text)
       if (kind === 'turn') break
-      if (kind === 'resume' && r.user_text?.trim()) before = r
+      if (kind === 'resume' && r.user_text?.trim()) starts.unshift({ ms: rowMs(r.ts), input: r.user_text })
     }
-    const started = before
-    const turn = findStepTurn(turns, { ...(started ? { startMs: rowMs(started.ts), input: started.user_text ?? '' } : {}), endMs: rowMs(row.ts) })
+    const turn = findStepTurn(turns, { starts, endMs: rowMs(row.ts) })
     if (!turn) return json(res, none)
     const payload: TurnStepsResponse = { id, ts, found: true, steps: turn.steps.slice(0, TURN_STEPS_MAX), total: turn.steps.length }
     return json(res, payload)

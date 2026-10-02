@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_COUNT, hasBinaryBytes, sniffPdf } from '../../shared/attachments.ts'
+import { PASTE_FILE_NAME, pasteChars } from '../../shared/pasteFile.ts'
 import { sniffImageType } from '../../shared/icon.ts'
 import { api } from './api'
 import { restoresImages } from './replyRestore.ts'
@@ -14,6 +15,11 @@ export interface Attached {
   kind?: 'text' | 'pdf'
   name?: string
   size?: number
+  /**
+   * 長い貼り付けをファイルにしたもの（#609）。字数と、貼った文そのもの（「本文に戻す」と中身の確かめに使う。
+   * 置き場のファイルは画面から読めないので、こちらで持つ）
+   */
+  pasted?: { chars: number; text: string }
 }
 
 /** 画面で先に見る頭の長さ。文字のファイルかどうかは、ここに制御文字（NUL など）が無いかで見る（全部を見るのはサーバ） */
@@ -64,6 +70,31 @@ export function useAttachments(id: string | undefined, initial: readonly Attache
     }
   }
 
+  /** 貼り付けをファイルにできるか（預け先がある・数に空きがある・大きさが上限以内）。貼った瞬間に同期で決める */
+  const canPaste = (text: string): boolean => Boolean(id) && !busy && items.length < ATTACHMENT_MAX_COUNT && new Blob([text]).size <= ATTACHMENT_MAX_BYTES
+
+  /**
+   * 長い貼り付けをテキストファイルにして預ける（#609）。預けられたらその項目、失敗したら null（呼ぶ側が本文に入れる。貼った文を失わない）。
+   * 項目を返すのは、預けている間に入力欄が作り直されたとき（別のセッションへ移った）に、呼ぶ側が下書きへ足せるように
+   */
+  const addPasted = async (text: string): Promise<Attached | null> => {
+    if (!id) return null
+    setError('')
+    setBusy(true)
+    try {
+      const saved = await api.addAttachment(id, new Blob([text], { type: 'text/plain' }), PASTE_FILE_NAME)
+      if (saved.kind !== 'text') return null
+      const item: Attached = { path: saved.path, url: '', kind: 'text', name: saved.name, size: saved.size, pasted: { chars: pasteChars(text), text } }
+      setItems((list) => (list.some((x) => x.path === saved.path) ? list : [...list, item]))
+      return item
+    } catch (err) {
+      setError(`貼り付けをファイルにできなかったので、本文に入れました（${err instanceof Error ? err.message : String(err)}）`)
+      return null
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const remove = (path: string) => setItems((list) => list.filter((x) => x.path !== path))
   /**
    * 送れなかったぶんを戻す（#350）。サーバには置いたままなので預け直さない（パスはそのまま使える）。
@@ -78,5 +109,5 @@ export function useAttachments(id: string | undefined, initial: readonly Attache
     setError('')
   }
 
-  return { items, busy, error, add, remove, restore, clear, paths: items.map((x) => x.path) }
+  return { items, busy, error, add, addPasted, canPaste, remove, restore, clear, paths: items.map((x) => x.path) }
 }

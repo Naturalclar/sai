@@ -32,6 +32,8 @@ import { isTypingTarget, navAction, navTarget, type NavTarget } from './sessionN
 import { DigestControls } from './DigestControls'
 import { DigestEngineControls } from './DigestEngineControls'
 import { JevControls } from './JevControls'
+import { PasteControls } from './PasteControls'
+import { PasteToFileContext } from './pasteSetting'
 import { useSettings } from './useSettings'
 import { useCommandPalette } from './useCommandPalette'
 import { CommandPalette } from './CommandPalette'
@@ -429,7 +431,7 @@ export function App() {
   const palette = useCommandPalette()
 
   return (
-    <>
+    <PasteToFileContext value={settings?.paste_to_file === true}>
       {palette.open && (
         <CommandPalette sessions={palette.all ?? list.data?.sessions ?? EMPTY_SESSIONS} loading={palette.all === null} onClose={palette.close} onOpenBeside={narrow ? undefined : openBesideHash} />
       )}
@@ -469,6 +471,8 @@ export function App() {
           {settings && <DigestEngineControls settings={settings} busy={settingsBusy} error={settingsError} onChange={(p) => void updateSettings(p)} />}
           {/* 許可の確率を Jev に聞くか（#491。既定は入。鍵が無ければ送らない） */}
           {settings && <JevControls settings={settings} busy={settingsBusy} onChange={(p) => void updateSettings(p)} />}
+          {/* 長い貼り付けをファイルにして添えるか（#609。既定は切） */}
+          {settings && <PasteControls settings={settings} busy={settingsBusy} onChange={(p) => void updateSettings(p)} />}
           {settings?.digest && narrow && (
             <DigestControls settings={settings} busy={settingsBusy} error="" onPersona={(p) => void setPersona(p)} onLinearWorkspace={(ws) => void setLinearWorkspace(ws)} />
           )}
@@ -574,7 +578,7 @@ export function App() {
         {diffOpen !== null && !narrow && <DiffPane id={diffOpen} onClose={closeDiff} canReview={canReview} {...(canComment ? { onInsertComments: insertComments } : {})} />}
       </main>
       {diffOpen !== null && narrow && <DiffModal id={diffOpen} onClose={closeDiff} canReview={canReview} {...(canComment ? { onInsertComments: insertComments } : {})} />}
-    </>
+    </PasteToFileContext>
   )
 }
 

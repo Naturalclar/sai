@@ -203,3 +203,15 @@ test('自動で常に許可（#499）: 預かった時に Jev に聞き、この
   await put(base, { jev: true })
   assert.equal(((await (await fetch(`${base}/api/settings`)).json()) as SettingsResponse).jev_auto, 0, '入に戻しても自動は切のまま')
 })
+
+test('設定 paste_to_file（#609）: 既定は切。true / false だけ受け、settings.json に残る', async () => {
+  const base = await start(new Approvals())
+  // 既定（ファイルにまだ無いとき）は切。ほかのテストが settings.json を書いていても、このキーは書いていない
+  assert.equal(((await (await fetch(`${base}/api/settings`)).json()) as SettingsResponse).paste_to_file, false)
+  for (const bad of ['true', 1, null]) assert.equal((await put(base, { paste_to_file: bad })).status, 400, JSON.stringify(bad))
+  const on = await put(base, { paste_to_file: true })
+  assert.equal(on.status, 200)
+  assert.equal(((await on.json()) as SettingsResponse).paste_to_file, true)
+  assert.equal(JSON.parse(await readFile(join(feedDir, 'settings.json'), 'utf-8')).paste_to_file, true)
+  assert.equal(((await (await put(base, { paste_to_file: false })).json()) as SettingsResponse).paste_to_file, false)
+})

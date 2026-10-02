@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { DRAFT_MAX_AGE_MS, DRAFT_MAX_COUNT, EMPTY_DRAFT, draftOf, isEmptyDraft, parseDrafts, withDraft } from './replyDrafts.ts'
+import { DRAFT_MAX_AGE_MS, DRAFT_MAX_COUNT, EMPTY_DRAFT, draftOf, isEmptyDraft, parseDrafts, withDraft, DRAFT_PASTE_MAX_CHARS } from './replyDrafts.ts'
 import type { Drafts } from './replyDrafts.ts'
 
 const NOW = Date.parse('2026-09-10T12:00:00+09:00')
@@ -65,4 +65,17 @@ test('parseDrafts: __proto__ という鍵でも Object の prototype を書き�
   assert.equal(Object.getPrototypeOf(drafts), Object.prototype)
   assert.equal(draftOf(drafts, '__proto__').text, 'x')
   assert.deepEqual(draftOf({}, '__proto__'), EMPTY_DRAFT, '持っていない鍵は prototype から拾わない')
+})
+
+test('parseDrafts: ファイルにした貼り付け（#609）は文ごと残る（別の画面へ行って戻っても「本文に戻す」が効く）。大きすぎる文は残さない', () => {
+  const FILE = { path: '/home/u/.agent-feed/attachments/7c7dfbcf88dd8246/1111222233334444.txt', url: '', kind: 'text' as const, name: '貼り付けた文.txt', size: 30000 }
+  const pasted = { ...FILE, pasted: { chars: 10001, text: 'あ'.repeat(10001) } }
+  const drafts = parseDrafts(JSON.stringify(withDraft({}, 'a@sai', { text: '', attachments: [pasted] }, NOW)))
+  assert.deepEqual(draftOf(drafts, 'a@sai').attachments, [pasted])
+  const huge = { ...FILE, pasted: { chars: DRAFT_PASTE_MAX_CHARS + 1, text: 'a'.repeat(DRAFT_PASTE_MAX_CHARS + 1) } }
+  const kept = draftOf(parseDrafts(JSON.stringify(withDraft({}, 'a@sai', { text: '', attachments: [huge] }, NOW))), 'a@sai').attachments
+  assert.deepEqual(kept, [FILE], '添付は残るが、文は持たない')
+  assert.equal(JSON.stringify(withDraft({}, 'a@sai', { text: '', attachments: [huge] }, NOW)).length < 1000, true, '書くときに落とす（localStorage に大きい文を入れない。#673 のレビュー）')
+  const broken = draftOf(parseDrafts(JSON.stringify({ 'a@sai': { text: '', at: NOW, attachments: [{ ...FILE, pasted: { chars: 'x', text: 1 } }] } })), 'a@sai').attachments
+  assert.deepEqual(broken, [FILE])
 })

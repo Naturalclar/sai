@@ -1242,6 +1242,7 @@ export function createApp(
       jev_on: s.jev,
       jev_ready: jevRisk.ready,
       jev_auto: s.jev_auto,
+      paste_to_file: s.paste_to_file,
     }
   }
   /**
@@ -1382,11 +1383,15 @@ export function createApp(
       // Jev を切ったら自動も切（隠れて残った閾値で、入に戻した瞬間に自動で答えない）
       if (!b.jev) patch.jev_auto = 0
     }
+    if (b.paste_to_file !== undefined) {
+      if (typeof b.paste_to_file !== 'boolean') return error(res, 400, 'paste_to_file は true か false で送ってください')
+      patch.paste_to_file = b.paste_to_file
+    }
     if (b.jev_auto !== undefined) {
       if (!isJevAuto(b.jev_auto)) return error(res, 400, 'jev_auto は 0（しない）か 0.5〜1 の数で送ってください')
       patch.jev_auto = b.jev_auto
     }
-    if (Object.keys(patch).length === 0) return error(res, 400, 'persona / linear_workspace / digest / next_ask / digest_provider / digest_model / jev / jev_auto のどれかを送ってください')
+    if (Object.keys(patch).length === 0) return error(res, 400, 'persona / linear_workspace / digest / next_ask / digest_provider / digest_model / paste_to_file / jev / jev_auto のどれかを送ってください')
     // 起動時の組み立て（settings.json の読み込み）が済んでから書く。後から古い値で組み直されないように
     await digestReady
     const saved = await settingsStore.set(patch)

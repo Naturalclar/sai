@@ -126,6 +126,15 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - Manager が置いた案（#565。`SessionSummary.manager_draft`）は、打ちかけが無いとき次に送る文面の案より先に出る。ゴーストと `→` は同じで、チップの代わりに `ManagerDraftCard`（出どころ・全文・長ければ畳む・入れる・捨てる。畳むかは `managerDraftFold.ts`）を入力欄の上に出す。入れた・捨てたら `api.suggestionAction()` でサーバから取り除き、届くまでは `ReplyBox` の中で伏せる。フィードには渡さない。
 - ゴーストは textarea（`background: transparent`）の背面に `.field > .ghost` を敷いて描くので、字送りに関わる CSS（`font` / `padding` / `white-space` / 折り返し、狭い画面の `font-size` の上書き）は必ず両方に当てる（ずれると 2 行目以降で本文と重なる）。
 
+### 長い貼り付けをファイルにする（#609）
+
+- 判定と文言は `shared/pasteFile.ts`（`pasteBecomesFile()`: 設定が入で、コードポイントで `PASTE_FILE_MIN_CHARS` = 10,000 字を**超えた**とき。`pasteLabel()` / `restorePaste()` / `pastePreview()`）。
+- 設定は `settings.json` の `paste_to_file`（既定は切）。`App` が `PasteToFileContext`（`web/src/pasteSetting.ts`）で渡し、`ReplyBox` が読む（入力欄はセッション画面・フィード・要対応の 3 か所から使うので、prop で配らない）。入切は自分のメニューの `PasteControls`。
+- `ReplyBox` の `onPaste`: ファイルが貼られていれば今までどおり預ける。そうでなく文字が長ければ、`attach.canPaste()`（預け先がある・数に空き・10MB 以内。**同期で決める**）を見てから `preventDefault()` し、`useAttachments` の `addPasted()` が #608 の口（`POST /api/sessions/<id>/attachments?name=貼り付けた文.txt`）へ預ける。預けられなければ本文に入れる（貼った文を失わない）。既定の貼り付けを止めるので、選んでいた範囲は自分で消す。預けている間に入力欄が作り直されたら（別のセッションへ移った）、結果を下書きに足す。
+- 添付の項目（`Attached.pasted`）に字数と貼った文そのものを持つ（置き場のファイルは画面から読めない）。`AttachmentStrip` が印を押せるボタンにし、押すと中身の頭と「本文に戻す」（`ReplyBox` の `restorePasted()`: 添付から外して本文の後ろに足す）を出す。
+- 打ちかけ（`replyDrafts.ts`）は `pasted` も残す（文は `DRAFT_PASTE_MAX_CHARS` = 20 万字まで。超えたら添付だけ残り「本文に戻す」は出ない。**書くとき**に `withDraft()` が落とす）。
+- `.thumb` の中の `button` は ✕ の指定（右上の小さい丸）を受けるので、印のボタンには打ち消しの CSS を当てている。
+
 ### 打ちかけ（#306）
 
 - 入力欄の打ちかけ（本文と画像）はセッションごとに localStorage の `sai.drafts` に残す。

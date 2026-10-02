@@ -7,6 +7,8 @@
 import type { Attached } from './useAttachments'
 
 export const DRAFTS_KEY = 'sai.drafts'
+/** 下書きに残す、ファイルにした貼り付けの文の上限（localStorage を埋めない。超えたら添付だけ残り、「本文に戻す」は出ない） */
+export const DRAFT_PASTE_MAX_CHARS = 200_000
 /** これより古い下書きは、次に書くときに捨てる */
 export const DRAFT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 /** 残す数の上限（新しい順）。セッションを渡り歩いても溜まり続けない */
@@ -40,6 +42,9 @@ const keepAttached = (a: Attached): Attached => {
     out.kind = a.kind
     if (typeof a.name === 'string') out.name = a.name
     if (typeof a.size === 'number') out.size = a.size
+    // ファイルにした貼り付け（#609）は文そのものも残す（別の画面へ行って戻っても「本文に戻す」が効く）。大きすぎるものは残さない
+    const p = a.pasted as { chars?: unknown; text?: unknown } | undefined
+    if (p && typeof p.chars === 'number' && typeof p.text === 'string' && p.text.length <= DRAFT_PASTE_MAX_CHARS) out.pasted = { chars: p.chars, text: p.text }
   }
   return out
 }
@@ -80,9 +85,13 @@ export function draftOf(drafts: Drafts, id: string): Draft {
  * 下書きを書いた後の全体。空なら消す。ついでに DRAFT_MAX_AGE_MS より古いものを捨て、
  * 新しい順に DRAFT_MAX_COUNT 件までにする
  */
+/**
+ * **書くときに** `keepAttached()` を通す（#673 のレビュー。読むときだけ切ると、大きい貼り付けの文がそのまま localStorage に入り、
+ * 容量を超えるとそのセッションの下書きが黙って残らなくなる）
+ */
 export function withDraft(drafts: Drafts, id: string, draft: Draft, now: number): Drafts {
   const rest = Object.entries(drafts).filter(([key, d]) => key !== id && now - d.at <= DRAFT_MAX_AGE_MS)
-  const next: [string, Stored][] = isEmptyDraft(draft) ? rest : [[id, { text: draft.text, attachments: draft.attachments, at: now }], ...rest]
+  const next: [string, Stored][] = isEmptyDraft(draft) ? rest : [[id, { text: draft.text, attachments: draft.attachments.map(keepAttached), at: now }], ...rest]
   next.sort((a, b) => b[1].at - a[1].at)
   return Object.fromEntries(next.slice(0, DRAFT_MAX_COUNT))
 }

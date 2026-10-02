@@ -2636,7 +2636,7 @@ export function createApp(
    * - **Claude だけ**: エージェントが「次」を言う口（`sai_loop_next`）は SAI が `claude -p` に渡す MCP にしか無い
    * - **端末で開いているセッションには組まない**: 打ち込む経路には MCP が無く、端末の `/loop` と二重に回るのを見分けられない
    * - **素通し（`bypassPermissions`）には組まない**: 人が見ていない間に、何も聞かれずに回り続ける。運用者が
-   *   `SAI_CLAUDE_ARGS` で渡しているときも同じ
+   *   `SAI_CLAUDE_ARGS` で渡しているときも同じ（`--permission-mode=bypassPermissions` の 1 語の形も見る）
    */
   const loopRefusal = async (session: SessionSummary): Promise<string> => {
     if (session.archived) return 'アーカイブ済みのセッションにはループを組めません'
@@ -2646,7 +2646,7 @@ export function createApp(
     const extra = splitArgs(process.env.SAI_CLAUDE_ARGS)
     if (process.env.SAI_APPROVE === '0' || extra.includes('--permission-prompt-tool')) return 'SAI の MCP を渡していない（SAI_APPROVE=0 など）ので、エージェントが次を言う口がありません'
     const mode = (await metaStore.get(session.id))?.permission_mode
-    if (mode === 'bypassPermissions' || extra.includes('bypassPermissions') || extra.includes('--dangerously-skip-permissions')) return '許可を聞かないモード（Bypass permissions）のセッションにはループを組めません'
+    if (mode === 'bypassPermissions' || extra.some((a) => a.includes('bypassPermissions')) || extra.includes('--dangerously-skip-permissions')) return '許可を聞かないモード（Bypass permissions）のセッションにはループを組めません'
     if (await terminalOf(session)) return '端末で開いているセッションにはループを組めません（端末の /loop と二重に回るのを避けるため）'
     return ''
   }
@@ -2665,7 +2665,11 @@ export function createApp(
     const l = loops.get(id)
     if (!l) return
     const now = loopNow()
+    // **読んだあとに await を挟んだら、書く前にもう一度見る**（#640 のレビュー）: その間に人が止めた・片付けた・一時停止したなら、
+    // 古い状態で上書きしない（止めたループを `running` に戻して次の周を起こさない）。置き場は書くたびに新しい値を入れるので、同じ値かで分かる
+    const moved = () => loops.get(id) !== l
     const halt = async (state: LoopState, status: Exclude<LoopState['status'], 'running'>, reason: string) => {
+      if (moved()) return
       loops.set(id, loopHalt(state, status, reason))
       await loopLog(id, `${status}（${reason}）`)
     }
@@ -2691,6 +2695,7 @@ export function createApp(
     if (refusal) return halt(l, 'paused', refusal)
     const over = usageRefusal(await usageStore.get(), session.agent)
     if (over) return halt(l, 'stopped', over)
+    if (moved()) return
     const { next_at: _next, said: _said, ...rest } = l
     const sending: LoopState = { ...rest, round: l.round + 1, turn: 'pending' }
     loops.set(id, sending)
@@ -2705,10 +2710,12 @@ export function createApp(
     }
     // `claude --bg` のターンを待っている（#462）。止めずに、次に見に来たときにもう一度
     if (out.retry) {
+      // ここまで来たのは、置き場がまだ自分の書いた `sending` のとき（上で見ている）
       loops.set(id, l)
       return
     }
-    await halt(l, 'paused', `${sending.round} 周目を起こせませんでした: ${(out.body as ReplyError).error}`)
+    loops.set(id, loopHalt(l, 'paused', `${sending.round} 周目を起こせませんでした: ${(out.body as ReplyError).error}`))
+    await loopLog(id, `paused（${sending.round} 周目を起こせなかった）`)
   }
 
   let loopTicking = false

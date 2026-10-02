@@ -58,7 +58,8 @@ class FakeRunner implements Runner {
 }
 const runner = new FakeRunner()
 const codexApp: CodexApp = { running: () => false, replying: () => ({}), snapshot: () => ({}), getApproval: () => undefined, async start() {}, answer: () => ({ ok: false, status: 404, error: 'approval not found' }) }
-const usage = { value: {} as UsageResponse, async get() { return this.value } }
+/** `hook` は使用量を読んでいる最中（周を起こす直前の await）に挟む操作 */
+const usage = { value: {} as UsageResponse, hook: null as null | (() => Promise<void>), async get() { const h = this.hook; this.hook = null; if (h) await h(); return this.value } }
 const progress = { async read(s: Pick<SessionSummary, 'id'>): Promise<SessionProgressResponse> { return { rev: '', id: s.id, active: false, steps: [], total: 0, updated_at: '', context_tokens: 0 } } }
 const realNow = new Date()
 /** ループが見る時計。テストが進める */
@@ -278,7 +279,43 @@ test('組めないセッション: Claude 以外・端末で開いている・�
   assert.equal(meta.status, 200)
   assert.match(await refuse('P1'), /Bypass permissions/)
   assert.equal((await post(url('nope'), GOAL)).status, 404)
+  // 運用者が SAI_CLAUDE_ARGS で素通しを渡しているとき（2 語の形・`=` の 1 語の形・--dangerously-skip-permissions）も組めない
+  const savedArgs = process.env.SAI_CLAUDE_ARGS
+  try {
+    for (const args of ['--permission-mode bypassPermissions', '--permission-mode=bypassPermissions', '--dangerously-skip-permissions']) {
+      process.env.SAI_CLAUDE_ARGS = args
+      assert.match(await refuse('L9'), /Bypass permissions/, args)
+    }
+  } finally {
+    if (savedArgs === undefined) delete process.env.SAI_CLAUDE_ARGS
+    else process.env.SAI_CLAUDE_ARGS = savedArgs
+  }
   assert.equal(runner.started.some((s) => ['X1@r', 'T1@r', 'P1@r', 'R1@r'].includes(s.id)), false)
+})
+
+test('周を起こす直前に人が止めた・片付けたら、その周は起こさない（古い状態で上書きしない。#640 のレビュー）', async () => {
+  // L3 は前のテストで止まっているので組み直せる
+  await start('L3', { interval_s: 60 })
+  const sent = () => runner.sent('L3@r').length
+  await endRound('L3')
+  const before = sent()
+  advance(60)
+  usage.hook = async () => {
+    assert.equal((await post(url('L3', '/stop'))).status, 200)
+  }
+  const stopped = (await poll('L3'))!
+  assert.deepEqual([stopped.status, stopped.reason, sent()], ['stopped', '人が止めました', before])
+
+  assert.equal((await fetch(url('L3'), { method: 'DELETE' })).status, 200)
+  await start('L3', { interval_s: 60 })
+  await endRound('L3')
+  const again = sent()
+  advance(60)
+  usage.hook = async () => {
+    assert.equal((await fetch(url('L3'), { method: 'DELETE' })).status, 200)
+  }
+  assert.equal(await poll('L3'), undefined, '片付けたループが戻ってこない')
+  assert.equal(sent(), again)
 })
 
 test('口の守り: 別オリジンからは組めない・止められない。エージェントの口はトークンが要り、別のセッション・周でないターンからは動かせない', async () => {

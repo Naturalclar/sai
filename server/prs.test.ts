@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { PrDetailResponse, PrReviewRequest, PrReviewResponse, PrSummary, PrsResponse, ReplyError } from '../shared/types.ts'
 import type { GithubReview } from '../shared/prReview.ts'
+import type { PrCommentList } from '../shared/prComments.ts'
 import { createApp } from './app.ts'
 import { FeedStore } from './rows/store.ts'
 import { localDate } from './rows/aggregate.ts'
@@ -49,6 +50,14 @@ class FakePrs implements PrBrowser {
   login: string | null = 'me'
   posted: [string, number, GithubReview][] = []
   postResult: { ok: true; url: string } | { ok: false; error: string } = { ok: true, url: 'https://github.com/o/known/pull/7#pullrequestreview-1' }
+  /** コメント（#600）。null は「読めなかった」、throw もさせられる */
+  commentList: PrCommentList | null | Error = { comments: [], omitted: 0 }
+  commented: [string, number][] = []
+  async comments(repo: string, number: number) {
+    this.commented.push([repo, number])
+    if (this.commentList instanceof Error) throw this.commentList
+    return this.commentList
+  }
   async viewer() {
     return this.login
   }
@@ -139,6 +148,36 @@ test('1 本: 差分を読めなければ中身は返し、理由を添える', a
   assert.equal(body.diff.files.length, 0)
   assert.ok(body.diff_error)
   prs.patch = PATCH
+})
+
+test('1 本: 会話のコメントとレビューを載せる。落とした数があれば添える（#600）', async () => {
+  const one = { id: 'c1', kind: 'comment' as const, author: 'alice', at: '2026-10-01T00:00:00Z', body: '見ました', url: 'https://github.com/o/known/pull/7#issuecomment-1' }
+  prs.commentList = { comments: [one], omitted: 2 }
+  prs.commented = []
+  const body = (await (await fetch(`${base}/api/prs/O/Known/7`)).json()) as PrDetailResponse
+  assert.deepEqual(body.comments, [one])
+  assert.equal(body.comments_omitted, 2)
+  assert.equal(body.comments_error, undefined)
+  assert.deepEqual(prs.commented, [['o/known', 7]], '知っている名前で読みに行く')
+  prs.commentList = { comments: [], omitted: 0 }
+  const none = (await (await fetch(`${base}/api/prs/o/known/7`)).json()) as PrDetailResponse
+  assert.deepEqual(none.comments, [])
+  assert.equal(none.comments_omitted, undefined)
+})
+
+test('1 本: コメントだけ読めなくても、本文と差分は返して理由を添える（#600）', async () => {
+  for (const broken of [null, new Error('gh が落ちた')]) {
+    prs.commentList = broken
+    prs.patch = PATCH
+    const res = await fetch(`${base}/api/prs/o/known/7`)
+    assert.equal(res.status, 200)
+    const body = (await res.json()) as PrDetailResponse
+    assert.equal(body.pr.body, '本文')
+    assert.equal(body.diff.files.length, 1)
+    assert.equal(body.comments, undefined)
+    assert.ok(body.comments_error)
+  }
+  prs.commentList = { comments: [], omitted: 0 }
 })
 
 test('1 本: 知らないリポジトリ・GitHub 以外・番号でないものは読みに行かずに 404', async () => {
@@ -342,6 +381,29 @@ test('GhPrs: 組み立てる gh の引数は読むサブコマンドだけ。頼
   const called = calls.length
   assert.equal(await gh.list('-x/y'), null)
   assert.equal(await gh.view('o/r', 0), null)
+  assert.equal(calls.length, called)
+})
+
+test('GhPrs: コメントは gh pr view --json comments,reviews の 1 形で読む。読めなければ null、形の悪い宛先は gh を起こさない（#600）', async () => {
+  const calls: string[][] = []
+  let out: string | null = JSON.stringify({
+    comments: [{ id: 'c1', author: { login: 'alice' }, body: '見ました', createdAt: '2026-10-01T00:00:00Z', isMinimized: false, url: 'https://github.com/o/r/pull/2#issuecomment-1' }],
+    reviews: [{ id: 'r1', author: { login: 'bob' }, body: '', submittedAt: '2026-10-01T01:00:00Z', state: 'APPROVED' }],
+  })
+  const gh = new GhPrs(async (args) => {
+    calls.push(args)
+    return out
+  })
+  const list = await gh.comments('o/r', 2)
+  assert.deepEqual(list?.comments.map((c) => [c.kind, c.author, c.state]), [['comment', 'alice', undefined], ['review', 'bob', 'APPROVED']])
+  assert.deepEqual(calls, [['pr', 'view', '2', '--repo', 'o/r', '--json', 'comments,reviews']])
+  out = null
+  assert.equal(await gh.comments('o/r', 2), null)
+  out = 'not json'
+  assert.equal(await gh.comments('o/r', 2), null)
+  const called = calls.length
+  assert.equal(await gh.comments('-x/y', 2), null)
+  assert.equal(await gh.comments('o/r', 0), null)
   assert.equal(calls.length, called)
 })
 

@@ -4094,9 +4094,20 @@ export function createApp(
         const [owner = '', name = '', n = ''] = parts
         const repo = parts.length === 3 ? pickKnownRepo(known, `${owner}/${name}`) : ''
         if (!repo || !isPrNumber(n)) return error(res, 404, 'not found')
-        const [view, login] = await Promise.all([prs.view(repo, Number(n)), prs.available ? prs.viewer() : Promise.resolve(null)])
+        // コメント（#600）は中身と並べて引く。読めなくても本文と差分は落とさない
+        const [view, login, comments] = await Promise.all([
+          prs.view(repo, Number(n)),
+          prs.available ? prs.viewer() : Promise.resolve(null),
+          prs.comments(repo, Number(n)).catch(() => null),
+        ])
         if (!view) return error(res, 502, 'gh で PR を読めませんでした')
         const out: PrDetailResponse = { repo, pr: view.pr, diff: { files: [], patch: '', truncated: false } }
+        if (comments) {
+          out.comments = comments.comments
+          if (comments.omitted) out.comments_omitted = comments.omitted
+        } else {
+          out.comments_error = 'コメントを読めませんでした'
+        }
         // 投稿の口（#526）は `gh` でログインしている人が引けたときだけ出す
         if (login) out.review = { viewer: login, own: login.toLowerCase() === view.pr.author.toLowerCase() }
         if (view.patch === null) {

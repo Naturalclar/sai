@@ -3,6 +3,7 @@
 // 差分ボタンの PR 番号（pr.ts。#211）と同じ作法で閉じてある:
 //
 // - 読むのは下の 5 形だけ（`gh pr list` / `gh pr list --search review-requested:@me` / `gh pr view` / `gh pr diff` / `gh api user`）。
+//   コメント（#600）も `gh pr view --json comments,reviews` で、同じ形の項目違い。
 //   書くのは `gh api -X POST repos/<owner>/<repo>/pulls/<番号>/reviews --input -` の 1 形だけ（中身は shared/prReview.ts の
 //   githubReview() が組み立てたもの。呼ぶ側が同一オリジン・head の SHA・行の位置を確かめてから呼ぶ）。
 //   引数はここで組み立て、任意のサブコマンドは作れない。シェルは通さない
@@ -15,6 +16,8 @@ import { spawn } from 'node:child_process'
 import { isPrNumber, isRepoName, parsePrList, parseRequested, prFromGh, sortPrs } from '../../shared/prs.ts'
 import type { GithubReview } from '../../shared/prReview.ts'
 import { githubErrorText } from '../../shared/prReview.ts'
+import { parsePrComments } from '../../shared/prComments.ts'
+import type { PrCommentList } from '../../shared/prComments.ts'
 import type { PrSummary } from '../../shared/types.ts'
 
 /** 1 回の `gh` を諦めるまで。一覧はリポジトリの数だけ並べて走らせる */
@@ -33,6 +36,10 @@ export const REVIEW_POST_TIMEOUT_MS = 30_000
 
 const LIST_FIELDS = 'number,title,author,headRefName,baseRefName,isDraft,updatedAt,url,additions,deletions,changedFiles,reviewDecision,statusCheckRollup,isCrossRepository'
 const VIEW_FIELDS = `${LIST_FIELDS},body,state,headRefOid`
+/** 会話のコメントとレビュー（#600）。**中身の `gh pr view` とは別に引く**（コメントが大きすぎて上限を超えても、本文と差分は落とさない） */
+const COMMENT_FIELDS = 'comments,reviews'
+/** コメントの出力をどこまで受けるか。超えたら「読めませんでした」 */
+export const PR_COMMENTS_MAX_BYTES = 8 * 1024 * 1024
 
 export interface PrView {
   pr: PrSummary & { body: string; state: string; head_sha: string; cross_repo: boolean }
@@ -46,6 +53,8 @@ export interface PrBrowser {
   readonly available: boolean
   list(repo: string, fresh?: boolean): Promise<PrSummary[] | null>
   view(repo: string, number: number): Promise<PrView | null>
+  /** 会話のコメントとレビュー（#600）。読めなければ null（「無い」の空と分ける）。画面を開いたときと「更新」のときだけ呼ぶ */
+  comments(repo: string, number: number): Promise<PrCommentList | null>
   /** `gh` でログインしている人（#526。投稿の口を出すか・自分の PR か）。未ログイン・引けなければ null */
   viewer(): Promise<string | null>
   /** レビューを投稿する（#526）。投稿できたらそのレビューの URL、できなければ理由 */
@@ -59,6 +68,9 @@ export class NoPrs implements PrBrowser {
     return Promise.resolve(null)
   }
   view(): Promise<PrView | null> {
+    return Promise.resolve(null)
+  }
+  comments(): Promise<PrCommentList | null> {
     return Promise.resolve(null)
   }
   viewer(): Promise<string | null> {
@@ -225,6 +237,12 @@ export class GhPrs implements PrBrowser {
     if (!prs) return null
     const requested = requestedOut === null ? new Set<number>() : parseRequested(requestedOut)
     return sortPrs(prs.map((p) => ({ ...p, requested: requested.has(p.number) })))
+  }
+
+  async comments(repo: string, number: number): Promise<PrCommentList | null> {
+    if (!isRepoName(repo) || !isPrNumber(String(number))) return null
+    const out = await this.run(['pr', 'view', String(number), '--repo', repo, '--json', COMMENT_FIELDS], PR_COMMENTS_MAX_BYTES)
+    return out === null ? null : parsePrComments(out)
   }
 
   async view(repo: string, number: number): Promise<PrView | null> {

@@ -104,7 +104,7 @@ import { JevRisk } from './approvals/jev.ts'
 import { isJevAuto, jevAutoAllows, jevAutoDecision, jevAutoEligible, jevPercent, jevRuleState } from '../shared/jev.ts'
 import type { JevJudge } from './approvals/jev.ts'
 import { CodexTerminals, type CodexTerminalSource } from './reply/codexTerminal.ts'
-import { CodexPanes, type CodexPaneSource } from './reply/codexPanes.ts'
+import { CodexPanes, codexAppServer, type AppServerProbe, type CodexPaneSource } from './reply/codexPanes.ts'
 import { screenWait } from './reply/softWait.ts'
 import { clearSettled, settledKey, WaitingSettle } from './reply/waitingSettle.ts'
 import type { WaitingSettleSource } from './reply/waitingSettle.ts'
@@ -487,6 +487,8 @@ export interface TerminalDeps {
   codexWriterActive?: (session: string) => Promise<boolean>
   /** 開いている Codex への queue。テストでは差し替える */
   codexQueue?: CodexQueue
+  /** その pid が `codex app-server`（共有のデーモン）か（#653）。テストでは差し替える */
+  codexAppServer?: AppServerProbe
   /** 記録した pid が死んでいる Codex を lock から引き直す（#332）。テストでは差し替える */
   codexTerminals?: CodexTerminalSource
   /** tmux のペインで動いている Codex（行を見ずに見つける。#417）。テストでは差し替える */
@@ -601,6 +603,7 @@ export function createApp(
     return [...repo, ...(await codexApp.skills?.() ?? []).filter((skill) => !seen.has(skill.name))]
   }
 
+  const isCodexAppServer = terminal.codexAppServer ?? codexAppServer
   const codexTerminals =
     terminal.codexTerminals ??
     new CodexTerminals({
@@ -610,7 +613,10 @@ export function createApp(
       inPane: async (pane, pid) => {
         try {
           const panePid = Number((await terminal.tmux.run(['display-message', '-p', '-t', pane, '#{pane_pid}'])).trim())
-          return Boolean(panePid) && isDescendant(pid, panePid, parsePs(await terminal.ps()))
+          if (!panePid || !isDescendant(pid, panePid, parsePs(await terminal.ps()))) return false
+          // ペインの中でも、共有のデーモン（`codex app-server`）は端末ではない（#653。Codex 0.160 のデーモンは
+          // 起こした TUI のペインの子孫で、回している**どのスレッドの行も lock も**そのペインを指す）
+          return !(await isCodexAppServer(pid))
         } catch {
           return false
         }
@@ -630,7 +636,7 @@ export function createApp(
    * ときに締切で抜けると「端末で開いていない」と読み、開いている TUI の会話をレビューの `thread/resume` が奪う・
    * 返信が端末に打ち込まれず別プロセスや queue に回る（0.154.0 の TUI は lock を開かないので `codexHeldElsewhere()` も拾えない）
    */
-  const codexPanes = terminal.codexPanes ?? new CodexPanes({ tmux: terminal.tmux })
+  const codexPanes = terminal.codexPanes ?? new CodexPanes({ tmux: terminal.tmux, appServer: isCodexAppServer })
   const terminalOf = async (s: SessionSummary, { soft = false }: { soft?: boolean } = {}) => {
     // 一覧は前回の結果があれば待たない（#592）。返信・レビューは待ち切る
     const wait = <T,>(work: Promise<T>, last: () => T, known: boolean): Promise<T> => (soft ? screenWait(work, last, known) : work)

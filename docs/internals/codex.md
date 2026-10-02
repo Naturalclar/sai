@@ -40,7 +40,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 ## 行の pid が生きていてもペインの中かを見る
 
 - `CodexTerminals.owner()`。行の `pid` がペインの子孫のときだけ採り、外なら上の補欠に落とす（30 秒覚える。一覧は締切で前回の結果、初回は今までどおり行の pid）
-- **ペインの子孫でも `codex app-server` は端末にしない**（#653）。`server/app.ts` の `inPane` が子孫かを見たあと `codexAppServer(pid)`（`ps -p <pid> -o command=` を `isAppServerCommand()` で読む。`server/reply/codexPanes.ts`）を当てるので、行の pid を見る `owner()` と lock の持ち主を見る `pid()` の両方に効く。`CodexPanes.scan()` も同じ判定でデーモンを飛ばす（デーモンは回している全スレッドの rollout を開いているので、数えると一番新しい名前の rollout がそのペインの会話に化ける）。`ps` が読めなければ app-server ではない扱い（今までどおり）
+- **ペインの子孫でも `codex app-server` は端末にしない**（#653）。`server/app.ts` の `inPane` が子孫かを見たあと `codexAppServer(pid)`（`ps -p <pid> -o command=` を `isAppServerCommand()` で読む。`server/reply/codexPanes.ts`）を当てるので、行の pid を見る `owner()` と lock の持ち主を見る `pid()` の両方に効く。`CodexPanes.scan()` も同じ判定でデーモンを飛ばす（デーモンは回している全スレッドの rollout を開いているので、数えると一番新しい名前の rollout がそのペインの会話に化ける）。見るのはサブコマンドの位置の `app-server` だけ（最初の入力に出てくるだけの TUI は巻き込まない）。`ps` が読めなければ app-server 扱い（端末にしない。分からなければ当てない）
 - 共有の `codex app-server --listen unix://` の客の TUI では、行の `pid` は tmux の外の app-server、`pane` は app-server を起こしたペインになり、その app-server が回すどのスレッドの行も同じペインを指すため
 - Claude は触らない
 

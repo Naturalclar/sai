@@ -77,20 +77,36 @@ export interface CodexPaneDeps {
  * デーモンは最初の TUI が起こすので**そのペインの子孫**になる（間に `codex app-server daemon pid-update-loop` を挟む）。
  * notify を鳴らすのはデーモンなので、どのスレッドの行も同じ `pane` / `pid` を指す。「ペインの子孫なら端末」
  * （#562 は app-server が tmux の外にいる前提だった）だと、同じペインの**別の会話**に返信を打ち込む。
- * コマンド名（`comm`）はどれも `codex` なので、引数まで見る
+ * コマンド名（`comm`）はどれも `codex` なので、引数まで見る。
+ *
+ * **サブコマンドの位置の `app-server` だけ**（前にあるのはオプションとその値だけ）。`codex "app-server を直して"` のような
+ * 最初の入力に出てくるだけの TUI を巻き込まない。実行ファイルのパスは空白を含みうるので、空白で割らずに `codex` の後ろを見る
  */
 export function isAppServerCommand(command: string): boolean {
-  const [executable = '', ...args] = command.trim().split(/\s+/)
-  return basename(executable) === 'codex' && args.includes('app-server')
+  const m = command.trim().match(/(?:^|\/)codex\s+(.*)$/)
+  if (!m) return false
+  const args = m[1]!.split(/\s+/)
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!
+    if (arg === 'app-server') return true
+    if (!arg.startsWith('-')) return false
+    // `-c key=value` / `--config key=value` は値を 1 つ取る（実測: ChatGPT アプリは `codex -c … app-server`）
+    if (arg === '-c' || arg === '--config') i++
+  }
+  return false
 }
 
 export type AppServerProbe = (pid: number) => Promise<boolean>
 
-/** 読めなければ false（今までどおりに扱う。プロセスがもう居なければ、生存の確認と打ち込む前の検査が落とす） */
+/**
+ * **読めなければ true**（端末にしない。分からなければ当てない）。false に倒すと、`ps` が締切に掛かっただけで
+ * デーモンが端末になり、30 秒覚えたまま別の会話のペインに打ち込む。当てなくても queue・別プロセスの経路は残る
+ */
 export const codexAppServer: AppServerProbe = (pid: number) =>
   new Promise((resolve) => {
     execFile('ps', ['-p', String(pid), '-o', 'command='], { timeout: 5_000 }, (err, stdout) => {
-      resolve(!err && isAppServerCommand(String(stdout)))
+      const command = String(stdout ?? '').trim()
+      resolve(Boolean(err) || !command || isAppServerCommand(command))
     })
   })
 

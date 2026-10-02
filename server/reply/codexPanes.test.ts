@@ -6,6 +6,7 @@ import test from 'node:test'
 import {
   CODEX_PANES_TTL_MS,
   CodexPanes,
+  codexAppServer,
   isAppServerCommand,
   lsofPaneFiles,
   parseCodexStart,
@@ -112,7 +113,16 @@ test('isAppServerCommand: 引数に app-server のある codex だけ（#653）'
   assert.equal(isAppServerCommand('codex'), false, '対話の TUI')
   assert.equal(isAppServerCommand('codex resume 01a0'), false)
   assert.equal(isAppServerCommand('node /repo/app-server.js app-server'), false, 'codex ではない')
-  assert.equal(isAppServerCommand(''), false, '読めなければ今までどおり')
+  assert.equal(isAppServerCommand('codex restart app-server and check logs'), false, '最初の入力に出てくるだけの TUI を巻き込まない')
+  assert.equal(isAppServerCommand('codex --model gpt app-server'), false, 'オプションの値の後ろは分からないので当てない（今までどおり端末の検査に任せる）')
+  assert.equal(isAppServerCommand('/Users/Jane Doe/.codex/packages/standalone/bin/codex app-server --listen unix://'), true, 'パスに空白があっても読む')
+  assert.equal(isAppServerCommand(''), false)
+})
+
+test('codexAppServer: ps で読めない pid は true（端末にしない。分からなければ当てない）', async () => {
+  // 居ない pid（ps は非 0 で空を返す）。false に倒すと、読めなかっただけでデーモンが端末になる
+  assert.equal(await codexAppServer(2 ** 31 - 1), true)
+  assert.equal(await codexAppServer(process.pid), false, '読めて、codex app-server ではない')
 })
 
 test('rollout を 1 つも開いていない codex は、当てずに空で返す（呼ぶ側が捨てる）', async () => {

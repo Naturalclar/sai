@@ -101,9 +101,14 @@ interface Props {
   answerable?: ReadonlySet<string>
   /**
    * バブルの下に足す画像（#507。`shared/gallery.ts` の `imagesByBubble()`。鍵は `bubbleKey(ts, 自分 = user / 返答 = agent)`）。
-   * セッション画面だけが渡す
+   * セッション画面が渡す（1 つのセッションの分）
    */
   images?: ReadonlyMap<string, GalleryItem[]>
+  /**
+   * 同じものをセッションごとに分けたもの（#657。エンティティ ID → `bubbleKey` → 画像）。フィードが渡す。
+   * `bubbleKey` はセッションの中でだけ一意なので、複数のセッションが混ざるフィードではセッションで引いてから鍵で引く
+   */
+  imagesBySession?: ReadonlyMap<string, ReadonlyMap<string, GalleryItem[]>>
   /**
    * 未読の線（#502）。このミリ秒より新しい最初の返答の前に「ここから未読」を引く。セッション画面だけが渡す
    * （開いたときの印を覚えて渡すので、読んだそばから線が消えることはない）
@@ -141,7 +146,7 @@ function flash(el: HTMLElement) {
   window.setTimeout(() => el.classList.remove('found'), JUMP_FLASH_MS)
 }
 
-export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_SESSIONS, trailer, showThinking = false, thinkingOpen = false, longOpen = false, profile, linear = '', focusTs = '', focusSide: askedSide, diffs, jumpTo = null, question, answerable = NO_IDS, images, unreadAfter, onSeenBottom, onMarkUnread, prs, onQuote }: Props) {
+export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_SESSIONS, trailer, showThinking = false, thinkingOpen = false, longOpen = false, profile, linear = '', focusTs = '', focusSide: askedSide, diffs, jumpTo = null, question, answerable = NO_IDS, images, imagesBySession, unreadAfter, onSeenBottom, onMarkUnread, prs, onQuote }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   // 返答の一部を選んだら「引用して返信」を出す（#604）。出すかの判定は quoteReply.ts の quotable()
   const quote = useQuoteSelection(ref, Boolean(onQuote))
@@ -203,7 +208,8 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
     if (!followsBottom(stickToBottom.current, appliedHeight.current, el.scrollHeight)) return
     appliedHeight.current = el.scrollHeight
     el.scrollTop = el.scrollHeight
-  }, [rows, trailer, focusKey])
+    // バブルの下の画像は行より後から届く（#657）。届いて高さが増えたときも、最下部を見ていれば送り直す
+  }, [rows, trailer, focusKey, images, imagesBySession])
 
   // 箱の見えている高さが変わったとき（差分ボタンが出て入力欄の上に余白を取った・入力欄が伸びた・キーボードが出た）も、
   // 追従中なら最下部へ送り直す（#544）。上の effect は中身の高さしか見ないので、箱だけが縮むと最後の発言の下が隠れたまま止まる。
@@ -345,7 +351,8 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
                       const imageUrl = u.speaker !== 'me' && !isRemoteHost(g.host, selfHost) ? (src: string) => sessionImageUrl(id, src) : null
                       const side: MessageSide = u.speaker === 'me' ? 'me' : 'agent'
                       // バブルの中に出ていない、この発言の画像（#507）。待ちのバブルには付けない
-                      const extra = u.waiting ? undefined : images?.get(bubbleKey(u.row.ts, side === 'me' ? 'user' : 'agent'))
+                      const imageKey = bubbleKey(u.row.ts, side === 'me' ? 'user' : 'agent')
+                      const extra = u.waiting ? undefined : (images?.get(imageKey) ?? imagesBySession?.get(id)?.get(imageKey))
                       // 発言ごとの「⋯」（#503）。待ちのバブルは発言ではないので出さない。リンクはフィードからでもセッション画面へ向ける
                       const menu = u.waiting
                         ? undefined

@@ -226,6 +226,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - transcript は大きいので増えた分だけ読み足す（縮んだら最初から、書きかけの最後の行は次に回す）。
 - 付ける行は `rowTsAtOrAfter(rows, at, from)`（その秒以降で一番古い、その側のバブルが出る行。貼った画像は自分の入力の行、Read で開いた画像はそのターンの返答の行）。待ちの行には付けない（待ちのバブルには画像を出さないので消える。#508 のレビュー）。
 - 取るのは開いたときと新しい発言が記録されたとき（`useDiffSummary` と同じ形）。
+- **フィードでも出す**（#657）。`FeedView` が `feedGallery.ts` の `galleryStamps()`（自分のマシンのセッション → 発言の出る一番新しい行の `ts`。新しい順に `FEED_GALLERY_MAX` 個まで）を `useGalleries` に渡し、目印が変わったセッションだけ `GET /api/sessions/<id>/gallery` を 1 つずつ順に取る（`useDiffSummaries` と同じ形。3 秒のポーリングには載せない）。`Chat` には `imagesBySession`（エンティティ ID → `bubbleKey` → 画像）で渡す。`bubbleKey` はセッションの中でだけ一意なので、**セッションで引いてから鍵で引く**（1 枚の Map に混ぜない）。ライトボックスの ← → は `MessageImages` が持つその発言の画像だけなので、別のセッションの画像へは送らない。
 - **Codex の画像生成（`imagegen`）で作った画像も同じ一覧に足す**（#575。`server/local/codexImages.ts` の `CodexImages`、`source: 'generated'`）。画像は `CODEX_HOME/generated_images/<スレッド>/exec-<item id>.png` に保存され、返答の本文にもフックの payload にもパスが載らない。手がかりは rollout の `event_msg` の `item_completed`（`Extension` の `kind: image_gen.generation` の `id`、見せた画像の `ImageView` の `path`）なので、`ProgressReader.codexRollout()` で引いた rollout を `TranscriptImages` と同じく増えた分だけ読む。
 - 拾うのは**そのスレッドの置き場の直下のファイルだけ**（`ImageView` でもリポジトリの中の画像は拾わない。そちらは本文のパスの経路）。配るのは一覧で見つけたファイル名の鍵だけ（`/codex-images/<key>`。スレッドの ID も鍵も名前 1 つぶんだけ・realpath がその置き場の中・中身で種類を判定して SVG は配らない）。付ける行は `rowTsAtOrAfter()`（作った時刻以降で一番古い返答の行）。置き場は `TerminalDeps.codexImages`（テストは一時ディレクトリ）。
 

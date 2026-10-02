@@ -25,6 +25,8 @@ import { ReplaceConfirm } from './ReplaceConfirm'
 import { prStamps } from './feedDiff.ts'
 import { lastUtteranceKey, type FeedJump } from './feedJump.ts'
 import { useDiffSummaries } from './useDiffSummaries'
+import { galleryStamps } from './feedGallery.ts'
+import { useGalleries } from './useGalleries'
 import type { PaneProps } from './App'
 
 const NO_ROWS: never[] = []
@@ -65,6 +67,9 @@ export function FeedView({ selected, projects, onProjects, sessions = NO_SESSION
   // PR に触れているセッションだけ、行数と PR 番号を取る（#280。目印が変わったときだけで、3 秒ごとには投げない）
   const prSessions = useMemo(() => prStamps(rows, selfHost), [rows, selfHost])
   const diffSummaries = useDiffSummaries(prSessions)
+  // バブルの下の画像（貼った画像・Read で開いた画像・Codex の生成画像。#657）。新しい発言が記録されたセッションだけ取り直す
+  const gallerySessions = useMemo(() => galleryStamps(rows, selfHost), [rows, selfHost])
+  const bubbleImages = useGalleries(gallerySessions)
   // 返信先の候補は、サイドバーの一覧（表示名・アイコン付き）を先に、フィードにしか無いセッションを後ろに。
   // 既定の返信先は「一番新しい行のセッション」なのでフィード側の先頭を覚えておく
   const feedTargets = useMemo(() => feedReplyTargets(rows, selfHost), [rows, selfHost])
@@ -169,6 +174,7 @@ export function FeedView({ selected, projects, onProjects, sessions = NO_SESSION
           linear={linear}
           diffs={{ summaries: diffSummaries, open: openDiff, onToggle: onToggleDiff }}
           longOpen
+          imagesBySession={bubbleImages}
           jumpTo={jump}
           {...(prs ? { prs } : {})}
           trailer={

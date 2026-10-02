@@ -64,9 +64,51 @@ export interface CodexPaneDeps {
   openOf?: (pid: number) => Promise<PaneFiles>
   /** rollout を開かない TUI のセッション（既定は起動時刻・目印・読み込み中のスレッドで推定する。#448 / #568） */
   sessionAtStart?: (pid: number, cwd: string, pane: string) => Promise<string>
+  /** その pid が `codex app-server` か（#653。既定は `ps` で引数を読む）。そうならペインの Codex に数えない */
+  appServer?: AppServerProbe
   now?: () => number
   env?: NodeJS.ProcessEnv
 }
+
+/**
+ * `ps -o command=` の 1 行が `codex app-server`（共有のデーモン）か（#653）。
+ *
+ * **Codex 0.160 の TUI は、全スレッドを回す常駐の `codex app-server --listen unix:// --managed-daemon` の客**で、
+ * デーモンは最初の TUI が起こすので**そのペインの子孫**になる（間に `codex app-server daemon pid-update-loop` を挟む）。
+ * notify を鳴らすのはデーモンなので、どのスレッドの行も同じ `pane` / `pid` を指す。「ペインの子孫なら端末」
+ * （#562 は app-server が tmux の外にいる前提だった）だと、同じペインの**別の会話**に返信を打ち込む。
+ * コマンド名（`comm`）はどれも `codex` なので、引数まで見る。
+ *
+ * **サブコマンドの位置の `app-server` だけ**（前にあるのはオプションとその値だけ）。`codex "app-server を直して"` のような
+ * 最初の入力に出てくるだけの TUI を巻き込まない。実行ファイルのパスは空白を含みうるので、空白で割らずに `codex` の後ろを見る
+ */
+export function isAppServerCommand(command: string): boolean {
+  const m = command.trim().match(/(?:^|\/)codex\s+(.*)$/)
+  if (!m) return false
+  const args = m[1]!.split(/\s+/)
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!
+    if (arg === 'app-server') return true
+    if (!arg.startsWith('-')) return false
+    // `-c key=value` / `--config key=value` は値を 1 つ取る（実測: ChatGPT アプリは `codex -c … app-server`）
+    if (arg === '-c' || arg === '--config') i++
+  }
+  return false
+}
+
+export type AppServerProbe = (pid: number) => Promise<boolean>
+
+/**
+ * **読めなければ true**（端末にしない。分からなければ当てない）。false に倒すと、`ps` が締切に掛かっただけで
+ * デーモンが端末になり、30 秒覚えたまま別の会話のペインに打ち込む。当てなくても queue・別プロセスの経路は残る
+ */
+export const codexAppServer: AppServerProbe = (pid: number) =>
+  new Promise((resolve) => {
+    execFile('ps', ['-p', String(pid), '-o', 'command='], { timeout: 5_000 }, (err, stdout) => {
+      const command = String(stdout ?? '').trim()
+      resolve(Boolean(err) || !command || isAppServerCommand(command))
+    })
+  })
 
 /** `ps -axo pid=,ppid=,comm=`。comm は空白を含みうるので 3 列目以降をまとめて名前にする */
 export const realPsCommands: PsFn = () =>
@@ -427,6 +469,7 @@ export class CodexPanes implements CodexPaneSource {
   private readonly ps: PsFn
   private readonly openOf: (pid: number) => Promise<PaneFiles>
   private readonly sessionAtStart: (pid: number, cwd: string, pane: string) => Promise<string>
+  private readonly appServer: AppServerProbe
   private readonly now: () => number
 
   constructor(deps: CodexPaneDeps) {
@@ -440,6 +483,7 @@ export class CodexPanes implements CodexPaneSource {
         // 離れた印（`codex resume <id>`）を探すだけ。history-limit を超えた分は流れているので 3 の補い
         scrollback: (pane) => this.tmux.run(['capture-pane', '-p', '-J', '-S', '-3000', '-t', pane]),
       })
+    this.appServer = deps.appServer ?? codexAppServer
     this.now = deps.now ?? Date.now
   }
 
@@ -480,6 +524,9 @@ export class CodexPanes implements CodexPaneSource {
           if (row.comm !== 'codex') continue
           const shell = shells.find((s) => isDescendant(row.pid, s.pid, parents))
           if (!shell) continue // tmux の外（ChatGPT アプリの app-server など）
+          // ペインの中にいる共有のデーモン（#653）。回している全スレッドの rollout を開いているので、
+          // 数えると「一番新しい名前の rollout」がそのペインの会話に化ける
+          if (await this.appServer(row.pid)) continue
           const { cwd, rollouts } = await this.openOf(row.pid)
           const opened = await rolloutSession(rollouts)
           const session = opened || (await this.sessionAtStart(row.pid, cwd, shell.pane))

@@ -6,6 +6,8 @@ import test from 'node:test'
 import {
   CODEX_PANES_TTL_MS,
   CodexPanes,
+  codexAppServer,
+  isAppServerCommand,
   lsofPaneFiles,
   parseCodexStart,
   parsePaneFiles,
@@ -58,6 +60,7 @@ const deps = (over: Partial<CodexPaneDeps> = {}): CodexPaneDeps => ({
   ps: async () => PS,
   openOf: async () => ({ cwd: '/repo/one', rollouts: [] }),
   sessionAtStart: async () => '',
+  appServer: async () => false,
   ...over,
 })
 
@@ -83,6 +86,43 @@ test('tmux の外の codex は数えない（ChatGPT アプリの app-server な
   const panes = new CodexPanes(deps())
   const found = await panes.scan()
   assert.deepEqual(found.map((p) => p.pid), [101])
+})
+
+test('ペインの中の共有デーモン（codex app-server）は、ペインの Codex に数えない（#653）', async () => {
+  // 実測（0.160）: %1 のシェル → TUI → pid-update-loop → デーモン。comm はどれも codex で、デーモンは
+  // 回している全スレッドの rollout を開いている。数えると、一番新しい名前の rollout が %1 の会話に化ける
+  const dir = await mkdtemp(join(tmpdir(), 'sai-panes-'))
+  const other = await writeRollout(dir, `rollout-2026-10-02T12-30-48-${OTHER}.jsonl`, OTHER, '/repo/one')
+  const ps = ['  100     1 -zsh', '  101   100 codex', '  102   101 codex', '  103   102 codex'].join('\n')
+  const asked: number[] = []
+  const panes = new CodexPanes(
+    deps({
+      ps: async () => ps,
+      openOf: async (pid) => ({ cwd: '/repo/one', rollouts: pid === 103 ? [other] : [] }),
+      appServer: async (pid) => (asked.push(pid), pid === 102 || pid === 103),
+    }),
+  )
+  assert.deepEqual(await panes.scan(), [{ pane: '%1', pid: 101, cwd: '/repo/one', session: '' }], 'TUI だけ。デーモンの開いている rollout から当てない')
+  assert.deepEqual(asked, [101, 102, 103])
+})
+
+test('isAppServerCommand: 引数に app-server のある codex だけ（#653）', () => {
+  assert.equal(isAppServerCommand('/Users/me/.codex/packages/standalone/releases/0.160.0/bin/codex app-server --listen unix:// --managed-daemon'), true)
+  assert.equal(isAppServerCommand('/Users/me/.codex/bin/codex app-server daemon pid-update-loop'), true)
+  assert.equal(isAppServerCommand('/Applications/ChatGPT.app/Contents/Resources/codex -c features.code_mode_host=true app-server --analytics-default-enabled'), true)
+  assert.equal(isAppServerCommand('codex'), false, '対話の TUI')
+  assert.equal(isAppServerCommand('codex resume 01a0'), false)
+  assert.equal(isAppServerCommand('node /repo/app-server.js app-server'), false, 'codex ではない')
+  assert.equal(isAppServerCommand('codex restart app-server and check logs'), false, '最初の入力に出てくるだけの TUI を巻き込まない')
+  assert.equal(isAppServerCommand('codex --model gpt app-server'), false, 'オプションの値の後ろは分からないので当てない（今までどおり端末の検査に任せる）')
+  assert.equal(isAppServerCommand('/Users/Jane Doe/.codex/packages/standalone/bin/codex app-server --listen unix://'), true, 'パスに空白があっても読む')
+  assert.equal(isAppServerCommand(''), false)
+})
+
+test('codexAppServer: ps で読めない pid は true（端末にしない。分からなければ当てない）', async () => {
+  // 居ない pid（ps は非 0 で空を返す）。false に倒すと、読めなかっただけでデーモンが端末になる
+  assert.equal(await codexAppServer(2 ** 31 - 1), true)
+  assert.equal(await codexAppServer(process.pid), false, '読めて、codex app-server ではない')
 })
 
 test('rollout を 1 つも開いていない codex は、当てずに空で返す（呼ぶ側が捨てる）', async () => {

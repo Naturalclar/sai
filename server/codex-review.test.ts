@@ -96,7 +96,7 @@ before(async () => {
     new BuildFreshness(join(dir, 'dist'), [], 0),
     undefined,
     new Authenticator(async () => null),
-    { tmux: { run: async (args) => (args[0] === 'display-message' ? `${PANE_PID}\n` : '') }, ps: async () => `${OWN_CHILD_PID} ${OWN_PID}\n${OTHER_PID} 1\n${TUI_PID} ${PANE_PID}\n`, alive: (pid) => ALIVE.has(pid), codexWriterActive: async (session) => locked.has(session), codexApp },
+    { tmux: { run: async (args) => (args[0] === 'display-message' ? `${PANE_PID}\n` : '') }, ps: async () => `${OWN_CHILD_PID} ${OWN_PID}\n${OTHER_PID} 1\n${TUI_PID} ${PANE_PID}\n`, alive: (pid) => ALIVE.has(pid), codexAppServer: async () => false, codexWriterActive: async (session) => locked.has(session), codexApp },
     undefined,
     git,
   )

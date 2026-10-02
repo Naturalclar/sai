@@ -4114,10 +4114,11 @@ export function createApp(
         const repo = parts.length === 3 ? pickKnownRepo(known, `${owner}/${name}`) : ''
         if (!repo || !isPrNumber(n)) return error(res, 404, 'not found')
         // コメント（#600）は中身と並べて引く。読めなくても本文と差分は落とさない
-        const [view, login, comments] = await Promise.all([
+        const [view, login, comments, lineComments] = await Promise.all([
           prs.view(repo, Number(n)),
           prs.available ? prs.viewer() : Promise.resolve(null),
           prs.comments(repo, Number(n)).catch(() => null),
+          prs.lineComments(repo, Number(n)).catch(() => null),
         ])
         if (!view) return error(res, 502, 'gh で PR を読めませんでした')
         const out: PrDetailResponse = { repo, pr: view.pr, diff: { files: [], patch: '', truncated: false } }
@@ -4126,6 +4127,12 @@ export function createApp(
           if (comments.omitted) out.comments_omitted = comments.omitted
         } else {
           out.comments_error = 'コメントを読めませんでした'
+        }
+        if (lineComments) {
+          out.line_comments = lineComments.comments
+          if (lineComments.omitted) out.line_comments_omitted = lineComments.omitted
+        } else {
+          out.line_comments_error = '差分の行に付いたコメントを読めませんでした'
         }
         // 投稿の口（#526）は `gh` でログインしている人が引けたときだけ出す
         if (login) out.review = { viewer: login, own: login.toLowerCase() === view.pr.author.toLowerCase() }

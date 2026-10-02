@@ -11,6 +11,8 @@ import { join } from 'node:path'
 import type { PrDetailResponse, PrReviewRequest, PrReviewResponse, PrSummary, PrsResponse, ReplyError } from '../shared/types.ts'
 import type { GithubReview } from '../shared/prReview.ts'
 import type { PrCommentList } from '../shared/prComments.ts'
+import { LINE_COMMENTS_JQ } from '../shared/prLineComments.ts'
+import type { PrLineCommentList } from '../shared/prLineComments.ts'
 import { createApp } from './app.ts'
 import { FeedStore } from './rows/store.ts'
 import { localDate } from './rows/aggregate.ts'
@@ -57,6 +59,12 @@ class FakePrs implements PrBrowser {
     this.commented.push([repo, number])
     if (this.commentList instanceof Error) throw this.commentList
     return this.commentList
+  }
+  /** 差分の行に付いたコメント（#600 の案 2） */
+  lineList: PrLineCommentList | null | Error = { comments: [], omitted: 0 }
+  async lineComments() {
+    if (this.lineList instanceof Error) throw this.lineList
+    return this.lineList
   }
   async viewer() {
     return this.login
@@ -178,6 +186,27 @@ test('1 本: コメントだけ読めなくても、本文と差分は返して�
     assert.ok(body.comments_error)
   }
   prs.commentList = { comments: [], omitted: 0 }
+})
+
+test('1 本: 差分の行に付いたコメントを載せる。読めなくてもほかは返す（#600 の案 2）', async () => {
+  const one = { id: 11, path: 'a.ts', side: 'new' as const, line: 2, original_line: 2, code: 'more', author: 'alice', at: '2026-10-01T00:00:00Z', body: 'ここ', url: 'https://github.com/o/known/pull/7#discussion_r11' }
+  prs.lineList = { comments: [one], omitted: 1 }
+  const body = (await (await fetch(`${base}/api/prs/o/known/7`)).json()) as PrDetailResponse
+  assert.deepEqual(body.line_comments, [one])
+  assert.equal(body.line_comments_omitted, 1)
+  assert.equal(body.line_comments_error, undefined)
+  for (const broken of [null, new Error('gh が落ちた')]) {
+    prs.lineList = broken
+    const res = await fetch(`${base}/api/prs/o/known/7`)
+    assert.equal(res.status, 200)
+    const out = (await res.json()) as PrDetailResponse
+    assert.equal(out.pr.body, '本文')
+    assert.equal(out.diff.files.length, 1)
+    assert.deepEqual(out.comments, [], '会話のコメントは出る')
+    assert.equal(out.line_comments, undefined)
+    assert.ok(out.line_comments_error)
+  }
+  prs.lineList = { comments: [], omitted: 0 }
 })
 
 test('1 本: 知らないリポジトリ・GitHub 以外・番号でないものは読みに行かずに 404', async () => {
@@ -404,6 +433,33 @@ test('GhPrs: コメントは gh pr view --json comments,reviews の 1 形で読�
   const called = calls.length
   assert.equal(await gh.comments('-x/y', 2), null)
   assert.equal(await gh.comments('o/r', 0), null)
+  assert.equal(calls.length, called)
+})
+
+test('GhPrs: 行コメントは gh api -X GET repos/<repo>/pulls/<番号>/comments の 1 形で読む。形の悪い宛先は gh を起こさない（#600 の案 2）', async () => {
+  const calls: string[][] = []
+  let out: string | null = [
+    JSON.stringify({ id: 11, in_reply_to_id: null, path: 'a.ts', line: 2, original_line: 2, side: 'RIGHT', subject_type: 'line', user: 'alice', user_type: 'User', body: 'ここ', created_at: '2026-10-01T00:00:00Z', html_url: 'https://github.com/o/r/pull/2#discussion_r11', diff_hunk: '@@ -1 +1,2 @@\n-old\n+new\n+more' }),
+    JSON.stringify({ id: 12, in_reply_to_id: 11, path: 'a.ts', line: 2, original_line: 2, side: 'RIGHT', subject_type: 'line', user: 'bob', user_type: 'User', body: '直します', created_at: '2026-10-01T01:00:00Z', html_url: 'https://github.com/o/r/pull/2#discussion_r12', diff_hunk: '@@ -1 +1,2 @@\n-old\n+new\n+more' }),
+  ].join('\n')
+  const gh = new GhPrs(async (args) => {
+    calls.push(args)
+    return out
+  })
+  const list = await gh.lineComments('o/r', 2)
+  assert.deepEqual(list?.comments.map((c) => [c.id, c.reply_to, c.path, c.side, c.line, c.code, c.author]), [
+    [11, undefined, 'a.ts', 'new', 2, 'more', 'alice'],
+    [12, 11, 'a.ts', 'new', 2, 'more', 'bob'],
+  ])
+  // 読むだけの決まった形: GET を明示し、書き込みに使う引数（-f / --input / POST）は無い
+  assert.deepEqual(calls, [['api', '-X', 'GET', 'repos/o/r/pulls/2/comments?per_page=100', '--paginate', '--jq', LINE_COMMENTS_JQ]])
+  out = null
+  assert.equal(await gh.lineComments('o/r', 2), null)
+  out = '{"id": 1, "path":'
+  assert.equal(await gh.lineComments('o/r', 2), null, '切れた出力は「読めなかった」')
+  const called = calls.length
+  assert.equal(await gh.lineComments('o/r/../x', 2), null)
+  assert.equal(await gh.lineComments('o/r', 0), null)
   assert.equal(calls.length, called)
 })
 

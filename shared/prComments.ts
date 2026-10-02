@@ -52,7 +52,8 @@ function authorOf(v: unknown): { login: string; bot: boolean } {
   return { login, bot: o.is_bot === true || isBotLogin(login) }
 }
 
-function clip(body: string): { body: string; truncated: boolean } {
+/** 本文を上限で切る（行コメントも同じ上限。prLineComments.ts） */
+export function clipBody(body: string): { body: string; truncated: boolean } {
   if (body.length <= PR_COMMENT_MAX_CHARS) return { body, truncated: false }
   // サロゲートペアの途中で切らない
   const points = Array.from(body)
@@ -61,7 +62,7 @@ function clip(body: string): { body: string; truncated: boolean } {
 }
 
 /** GitHub のそのコメントへのリンクだけ通す（ほかの形は捨てる。画面はそのまま `href` に置く） */
-const githubUrl = (v: unknown): string => (/^https:\/\/github\.com\/[^\s]+$/.test(str(v)) ? str(v) : '')
+export const githubUrl = (v: unknown): string => (/^https:\/\/github\.com\/[^\s]+$/.test(str(v)) ? str(v) : '')
 
 /**
  * `gh pr view <番号> --json comments,reviews` の出力を、時刻の順の 1 本の一覧にする。読めなければ null
@@ -94,7 +95,7 @@ export function parsePrComments(stdout: string): PrCommentList | null {
     const text = str(c.body)
     if (kind === 'review' && state === 'COMMENTED' && !text.trim()) return
     const { login, bot } = authorOf(c.author)
-    const { body, truncated } = clip(text)
+    const { body, truncated } = clipBody(text)
     const folded = c.isMinimized === true ? 'minimized' : bot ? 'bot' : ''
     all.push({
       id,

@@ -5,6 +5,8 @@ import { lineAnchor, sameLine, type DiffComment } from './diffComments'
 import { DiffCommentEditor } from './DiffCommentEditor'
 import { DiffCommentNote } from './DiffCommentNote'
 import { DiffFilePatch, pinKey } from './DiffFilePatch'
+import { PrLineThreadNote } from './PrLineThreadNote'
+import type { PlacedLineThread } from '../../shared/prLineComments.ts'
 import { sameComments, type DiffViewComments } from './diffFileComments.ts'
 import { collapseScrollBy } from './diffSticky.ts'
 import { useScrollWatch } from './useScrollTick.ts'
@@ -19,6 +21,7 @@ const STATUS_LABEL: Record<DiffFileStat['status'], string> = {
 }
 
 const NO_COMMENTS: readonly DiffComment[] = []
+const NO_THREADS: readonly PlacedLineThread[] = []
 
 /** コメント欄を開いている行。コメントと同じ形（ファイル・側・番号） */
 export type EditingAt = Pick<DiffComment, 'path' | 'side' | 'line'>
@@ -34,6 +37,13 @@ interface Props {
   /** コメント欄を開いている行。このファイルのものだけ渡される（他のファイルの編集で描き直さない） */
   editing: EditingAt | null
   setEditing: (at: EditingAt | null) => void
+  /**
+   * GitHub でこのファイルの行に付いたやり取り（#600 の案 2）。**このファイルの分だけ**で、同じ中身なら同じ配列（`DiffView` が
+   * ファイルごとに分けて覚える）。行の下に、書かれたものとして出す。その行は下書きのコメントと同じく常に DOM に置く
+   */
+  threads?: readonly PlacedLineThread[]
+  /** 「何分前」の基準（読んだ時刻）。描画中に Date.now() を呼ばない */
+  now?: number
 }
 
 /**
@@ -52,11 +62,13 @@ function sameProps(a: Props, b: Props): boolean {
     a.onToggle === b.onToggle &&
     a.editing === b.editing &&
     a.setEditing === b.setEditing &&
+    a.threads === b.threads &&
+    a.now === b.now &&
     sameComments(a.comments, b.comments)
   )
 }
 
-export const DiffFileItem = memo(function DiffFileItem({ f, file, shown, onToggle, comments, editing, setEditing }: Props) {
+export const DiffFileItem = memo(function DiffFileItem({ f, file, shown, onToggle, comments, editing, setEditing, threads = NO_THREADS, now = 0 }: Props) {
   const sign = (l: DiffLine) => (l.kind === 'add' ? '+' : l.kind === 'del' ? '−' : ' ')
   const numbers = (l: DiffLine) => (
     <>
@@ -83,9 +95,10 @@ export const DiffFileItem = memo(function DiffFileItem({ f, file, shown, onToggl
   const pinned = useMemo(() => {
     const keys = new Set<string>()
     for (const c of here) keys.add(pinKey(c))
+    for (const t of threads) keys.add(pinKey(t))
     if (editing) keys.add(pinKey(editing))
     return keys
-  }, [here, editing])
+  }, [here, threads, editing])
   // 書いたあとに行が変わったコメント（エージェントが編集して行がずれた）。**このファイルの本文**で引く（`findDiffLine` は
   // `path || oldPath` の片方でしか当たらず、`oldPath` でしか引けないファイルでは全部「変わった」になる。#617 のレビュー）。
   // 描くたびに全行を歩かないよう、ファイルごとに 1 回
@@ -102,23 +115,29 @@ export const DiffFileItem = memo(function DiffFileItem({ f, file, shown, onToggl
   }, [file, here])
 
   const renderLine = (l: DiffLine, isPinned: boolean) => {
+    const a = lineAnchor(l)
+    // GitHub でこの行に付いたやり取り（#600）。コメントを書けない PR（書いたセッションが無く、gh も未ログイン）でも出す
+    const posted = isPinned && threads.length > 0 ? threads.filter((t) => t.side === a.side && t.line === a.line) : []
+    const postedNotes = posted.map((t) => <PrLineThreadNote key={t.thread.root.id} thread={t.thread} now={now} />)
     if (!comments) {
       return (
-        <div className={`ln ${l.kind}`}>
-          {numbers(l)}
-          <span className="sign">{sign(l)}</span>
-          <span className="src">{l.text || ' '}</span>
-        </div>
+        <>
+          <div className={`ln ${l.kind}${posted.length ? ' commented' : ''}`}>
+            {numbers(l)}
+            <span className="sign">{sign(l)}</span>
+            <span className="src">{l.text || ' '}</span>
+          </div>
+          {postedNotes}
+        </>
       )
     }
     // 行番号を押すとその行にコメントを書ける（#511。GitHub の「+」と同じ場所。狭い画面でも押せる大きさ）
-    const a = lineAnchor(l)
     const at = { ...a, section: comments.section, path: f.path }
     const notes = isPinned ? here.filter((c) => sameLine(c, at)) : []
     const isEditing = editing !== null && editing.side === a.side && editing.line === a.line
     return (
       <>
-        <div className={`ln ${l.kind}${notes.length ? ' commented' : ''}`}>
+        <div className={`ln ${l.kind}${notes.length || posted.length ? ' commented' : ''}`}>
           <button
             type="button"
             className="nos"
@@ -131,6 +150,7 @@ export const DiffFileItem = memo(function DiffFileItem({ f, file, shown, onToggl
           <span className="sign">{sign(l)}</span>
           <span className="src">{l.text || ' '}</span>
         </div>
+        {postedNotes}
         {notes.map((c) => (
           <DiffCommentNote key={c.id} comment={c} moved={moved.has(c.id)} onRemove={() => comments.onRemove(c.id)} />
         ))}

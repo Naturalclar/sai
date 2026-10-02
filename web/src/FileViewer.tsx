@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { FileRef } from '../../shared/files.ts'
-import { api, type SessionFileResponse } from './api'
+import type { SessionFileResponse } from '../../shared/types.ts'
+import { api } from './api'
 import { CloseMark } from './CloseMark'
 import { FileSessionContext } from './fileContext'
 import { FILE_LINE_H, fileLines, fileSizeLabel, initialMode, isMarkdownFile, lineNumbers, scrollTopFor, targetLine, type FileMode } from './fileView'

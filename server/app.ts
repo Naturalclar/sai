@@ -3316,7 +3316,7 @@ export function createApp(
   /**
    * GET /api/sessions/<id>/turn-steps?ts=（#605）。`ts` のターン完了の行のターンで呼んだツール（コマンド・ファイル名まで。出力は出さない）。
    * **バブルの「手順」を開いたときに 1 回だけ**取る（transcript / rollout を頭から読むので、ポーリングには乗せない）。
-   * ターンは行から引き当てる: 同じセッションの直前の行が入力の行ならその時刻（始まり）、そうでなければ `ts`（終わり）。
+   * ターンは行から引き当てる: 前のターン完了の行より後の、いちばん古い入力の行の時刻（始まり）から `ts`（終わり）まで。入力の行が無ければ終わりだけ。
    * 引けない・別のマシン・OpenCode は `found: false`（画面は「記録がありません」）。パスはリクエストから受けない
    */
   const getTurnSteps = async (res: ServerResponse, id: string, ts: string, days: number) => {
@@ -3336,15 +3336,17 @@ export function createApp(
     if (!row || isRemoteHost(row.host ?? '', selfHost())) return json(res, none)
     const turns = await progress.turnSteps({ id, repo: session.repo, agent: row.agent ?? session.agent, cwd: row.cwd || session.cwd })
     if (!turns) return json(res, none)
-    // 同じセッションの直前の行（ターン完了か、入力の載った入力の行）。入力の行なら、このターンはそこで始まっている
     let before: FeedRow | undefined
-    for (let i = at - 1; i >= 0 && !before; i--) {
+    // 前のターン完了の行まで遡り、その間の**いちばん古い**入力の行を始まりにする（#663 のレビュー。途中で足した入力
+    // ＝ steer の行を始まりにすると、足す前の手順が落ちる）。Esc で止めた入力が挟まっていれば `findStepTurn()` が切る
+    for (let i = at - 1; i >= 0; i--) {
       const r = rows[i]!
       if (r.session !== row.session) continue
       const kind = eventKind(r.event, r.text)
-      if (kind === 'turn' || (kind === 'resume' && r.user_text?.trim())) before = r
+      if (kind === 'turn') break
+      if (kind === 'resume' && r.user_text?.trim()) before = r
     }
-    const started = before && eventKind(before.event, before.text) === 'resume' ? before : undefined
+    const started = before
     const turn = findStepTurn(turns, { ...(started ? { startMs: rowMs(started.ts), input: started.user_text ?? '' } : {}), endMs: rowMs(row.ts) })
     if (!turn) return json(res, none)
     const payload: TurnStepsResponse = { id, ts, found: true, steps: turn.steps.slice(0, TURN_STEPS_MAX), total: turn.steps.length }

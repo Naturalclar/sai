@@ -88,3 +88,17 @@ test('skipForSteps / stepCounts', () => {
   assert.deepEqual(parsed(claude.filter((l) => !skipForSteps(l))), parsed(claude), '落としても結果は変わらない')
   assert.equal(stepCounts([{ tool: 'Edit' }, { tool: 'Bash' }, { tool: 'Bash' }, { tool: '' }]), 'Bash 2・Edit 1・ツール 1')
 })
+
+test('findStepTurn: 途中で入力が足されたターンはつないで 1 つにする。Esc で止めたターンの手順は次のターンに混ぜない（#663 のレビュー）', () => {
+  // 1 つの記録のターンの途中で入力が足された（steer・タスクの通知）: transcript では 2 つに切れる
+  const steered = parsed([user(0, '実装して'), use(5, 'Bash', { command: 'pnpm test' }), user(10, 'lint も回して'), use(15, 'Bash', { command: 'pnpm lint' }), said(20, 'しました')])
+  assert.equal(steered.length, 2)
+  assert.deepEqual(findStepTurn(steered, { startMs: T0, input: '実装して', endMs: T0 + 21_000 })?.steps.map((s) => s.summary), ['pnpm test', 'pnpm lint'])
+
+  // Esc で止めた入力（ターン完了の行なし）のあと、入力の行の無いターンが終わった
+  const stopped = parsed([user(0, '消して'), use(5, 'Bash', { command: 'rm -rf build' }), user(8, '[Request interrupted by user]'), user(100, '<task-notification>done</task-notification>'), use(105, 'Bash', { command: 'git status' }), said(110, '確認しました')])
+  assert.deepEqual(findStepTurn(stopped, { startMs: T0, input: '消して', endMs: T0 + 111_000 })?.steps.map((s) => s.summary), ['git status'], '止めたターンのコマンドを、次の返答の手順として出さない')
+
+  // 始まりは見つかったが、終わりの時刻が合わない（そのターンのターン完了の行ではない）
+  assert.equal(findStepTurn(parsed(claude), { startMs: T0, endMs: T0 + 5_000_000 }), null)
+})

@@ -138,27 +138,43 @@ export const STEP_END_AFTER_MS = 5_000
 
 const head = (s: string) => s.replace(/\s+/g, ' ').trim().slice(0, 40)
 
+/** Esc で止めたときに Claude が書く入力の行。ここで前の流れは切れている */
+const isInterrupt = (input: string) => input.startsWith('[Request interrupted')
+
 /**
- * 記録の行に当たるターン。`startMs`（そのターンの入力の行の時刻）があれば始まりが近いもの（複数あれば入力の頭が同じ方）、
- * 無ければ `endMs`（ターン完了の行の時刻）の少し前に終わった一番新しいもの。**近いものが無ければ null**（別のターンの手順を出さない）
+ * 記録の行（ターン完了の行）に当たるターン。**1 つの記録のターンが transcript では複数に切れていることがある**
+ * （ターンの途中で入力が足された = steer・タスクの通知）ので、始まりから終わりまでをつないで 1 つにして返す（#663 のレビュー）。
+ * - `endMs`（ターン完了の行の時刻）の少し前に終わった一番新しいターンが「終わり」
+ * - `startMs`（そのターンの入力の行の時刻）があれば、始まりが近いターン（複数あれば入力の頭が同じ方）が「始まり」。
+ *   **始まりが分かっているのに近いターンが無ければ null**（transcript にそのターンが無い。別のターンの手順を出さない）
+ * - 始まりから終わりまでの間に Esc で止めた跡があれば、その後ろからにする（止めたターンの手順を、次のターンのものとして出さない）
+ * - 始まりだけ見つかって、それが終わりの時刻と合わなければ null
  */
 export function findStepTurn(turns: readonly StepTurn[], at: { startMs?: number; endMs?: number; input?: string }): StepTurn | null {
-  if (at.startMs !== undefined && Number.isFinite(at.startMs)) {
-    const start = at.startMs
-    const near = turns.filter((t) => Math.abs(t.startedAt - start) <= STEP_START_SLACK_MS)
-    // 始まりが分かっているのに近いターンが無ければ、transcript にそのターンが無い（終わりの近さでは当てない）
-    if (near.length === 0) return null
-    const want = at.input ? head(at.input) : ''
-    const same = want ? near.filter((t) => head(t.input) === want) : []
-    return (same.length > 0 ? same : near).reduce((a, b) => (Math.abs(b.startedAt - start) < Math.abs(a.startedAt - start) ? b : a))
-  }
+  let endIdx = -1
   if (at.endMs !== undefined && Number.isFinite(at.endMs)) {
-    for (let i = turns.length - 1; i >= 0; i--) {
+    for (let i = turns.length - 1; i >= 0 && endIdx < 0; i--) {
       const t = turns[i]!
-      if (t.endedAt >= at.endMs - STEP_END_BEFORE_MS && t.endedAt <= at.endMs + STEP_END_AFTER_MS) return t
+      if (t.endedAt >= at.endMs - STEP_END_BEFORE_MS && t.endedAt <= at.endMs + STEP_END_AFTER_MS) endIdx = i
     }
   }
-  return null
+  if (at.startMs === undefined || !Number.isFinite(at.startMs)) return endIdx >= 0 ? turns[endIdx]! : null
+  const start = at.startMs
+  const near = turns.map((t, i) => ({ t, i })).filter(({ t }) => Math.abs(t.startedAt - start) <= STEP_START_SLACK_MS)
+  if (near.length === 0) return null
+  const want = at.input ? head(at.input) : ''
+  const same = want ? near.filter(({ t }) => head(t.input) === want) : []
+  const startIdx = (same.length > 0 ? same : near).reduce((a, b) => (Math.abs(b.t.startedAt - start) < Math.abs(a.t.startedAt - start) ? b : a)).i
+  if (endIdx < startIdx) {
+    // 終わりが見つからない。終わりの時刻が分からない（手順も返答も無い）ターンならそのまま、時刻が合わないなら別のターン
+    const only = turns[startIdx]!
+    return at.endMs === undefined || !Number.isFinite(only.endedAt) ? only : null
+  }
+  let from = startIdx
+  for (let i = startIdx + 1; i <= endIdx; i++) if (isInterrupt(turns[i]!.input)) from = Math.min(i + 1, endIdx)
+  if (from === endIdx) return turns[endIdx]!
+  const first = turns[from]!
+  return { startedAt: first.startedAt, endedAt: turns[endIdx]!.endedAt, input: first.input, steps: turns.slice(from, endIdx + 1).flatMap((t) => t.steps) }
 }
 
 /** 畳んだ 1 行（`Bash 12・Edit 3・Read 2`）。多い順、同数は出てきた順 */

@@ -31,6 +31,9 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 別の目でのレビュー → 直す → PR のコメント → レビューした SHA で squash マージ → `merged: true` を見てから後始末。文書の置き場（#444）もここで見る。
 - 後始末の最後に `/sync-main` を呼ぶ（#580）。手順は `/sync-main` の側にだけ置き、`/merge` には写さない。
 
+- 積み重ねた PR のベースを `main` に付け替えるとき、`gh pr edit --base` が GraphQL の非推奨エラーで落ちたら `gh api -X PATCH repos/<owner>/<repo>/pulls/<番号> -f base=main`。
+- マージは `gh api -X PUT repos/<owner>/<repo>/pulls/<番号>/merge -f merge_method=squash -f sha=<40 桁>`（HEAD が動いていれば `405`）。`/code-review <番号>` は別プロセスで動く。
+
 ## CI（`.github/workflows/ci.yml`）
 
 - コミット前の一式（`pnpm test && pnpm test:feed && pnpm lint && pnpm typecheck`）＋ `pnpm build` を `main` への push と PR で回す。Node 22 系の最新、Python 3.9 と最新。
@@ -42,3 +45,46 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - **本物の `~/.agent-feed` では回さない**。`AGENT_FEED_DIR` を一時ディレクトリにして日付の `*.jsonl` だけを写す（`replying.json`・預かり・`settings.json` は写さない。返信が二重に走る・本物の子を終わらせる・一言の `claude -p` が走るため）。`JEV_API_KEY` も渡さない。
 - **口ごとの内訳は目安**。口は「その子を起こす走査を最初に始めた要求」に付く（`AsyncLocalStorage`）。走査は要求をまたいで 1 本に絞ってあるので、一覧と詳細が同時に来ると先に着いた方に全部付く。要求の中で始めたタイマーから後で起きた子も、その口に付く。**前後を比べるときは口ごとではなく合計で見る**。
 
+
+## テストを単体で回す
+
+```
+node --test --disable-warning=ExperimentalWarning server/rows/aggregate.test.ts
+node --test --disable-warning=ExperimentalWarning --test-name-pattern="clip" server/rows/aggregate.test.ts
+python3 -m unittest feed.test_record.RecordTest.test_garbage_stdin_exits_zero_and_records_nothing
+python3 -m unittest feed.test_record -k synth
+```
+
+## Node と pnpm のバージョン
+
+決まりは CLAUDE.md。ここは破ったときの出方と理由。
+
+- サーバとテストは Node の型剥がしで `.ts` を直接実行するので **Node 22.18+**（`package.json` の `engines`）。古いと `ERR_UNKNOWN_FILE_EXTENSION`。応急処置は `node --experimental-strip-types ...`。
+- **pnpm 12 系**（CI の `pnpm/action-setup` も `version: 12`）。12 系は `package.json` の `"pnpm"` を無視するので、設定は `pnpm-workspace.yaml` に置く。
+  - `allowBuilds: { esbuild: true }` が無いと `ERR_PNPM_IGNORED_BUILDS`。
+  - `packages: [.]` が無いと、入れ子の `pnpm typecheck` が `packages field missing or empty` で落ちる。
+- `package.json` に `packageManager` を書かない。pnpm 12 は corepack のキャッシュに `bin/pnpm.cjs` を持たず、書くと入れ子の `pnpm` が `Cannot find module .../pnpm.cjs` で落ちる。
+
+## 環境変数の表
+
+表そのものは README の「環境変数」だけに置く（#675。前は CLAUDE.md にも同じ表があった）。`server/docs.test.ts` が README の表とコードを突き合わせる。
+
+- **コードが読む変数は表に載っていること・表にあるものはコードが読むこと・2 つの小見出し（「設定することがあるもの」「切り分け・内部」）に分かれていて同じ変数が 2 回出てこないこと**を見る。変数を足したら README の表に足す。
+- コードとして見るのは `.ts` / `.tsx` / `.js` / `.mjs` / `.py`（テストは除く）。
+- 表に載せないもの（`server/docs.test.ts` の `INTERNAL`）:
+  - `AGENT_FEED_SKIP`: SAI が一言を作る `claude -p` に自分で付ける合図。record.py / statusline.py / OpenCode のプラグインが見る。
+  - `SAI_URL` / `SAI_ENTITY` / `SAI_LOOP`: `server/reply/runner.ts` が `--mcp-config` の env で `server/approvals/approve-mcp.ts` に渡す。`SAI_LOOP` はループの周のターンの印（#634）。
+  - `SAI_APPROVE_RECONNECT_MS`: `approve-mcp.ts` が SAI に届かないとき繋ぎ直しを続ける長さ。テストが短くするためだけで、SAI は渡さない（#440）。
+  - `TMUX_PANE` / `CLAUDE_PID`: エージェントが record.py に渡してくる。
+  - `REPO_URL` / `PROD`: Vite の `import.meta.env`。
+  - `PATH`: フックのラッパーを引く（#567）。
+- **実行ファイル（`claude` / `codex` / `opencode` / `tmux` / `git` / `gh` / `tailscale` / `sips`）はサーバの `PATH` から探す。** `replyCommand()` / `summarizeCommand()` / `codexQueueCommand()` / `realCodexConnector()` は名前を固定、`RealTmux` / `RealGit` / `GhPr` はコンストラクタの既定値、`sips` は `sipsShrink()`。テストは偽物を引数で渡す。`tailscaleBins()` は PATH の後に macOS の GUI 版を試す。
+- 読む場所が決まっている変数:
+  - `SAI_HOME`: README のフック設定例（`settings.json` の `env`）と、OpenCode のプラグイン（`feed/opencode/sai.js` の `recordPath()`。無ければ置いたファイルの隣から辿る）が使う。`record.py` とサーバは読まない。
+  - `SAI_PORT`: `web/vite.config.ts` の `/api` の proxy 先もこれ（判定は `shared/port.ts`。`--port` は Vite から見えない）。
+  - `AGENT_FEED_HOST`: 既定は `gethostname()` / `os.hostname()` の短い形。record.py は行の `host` に載せ（合成セッションもこれで割る。設定したときだけ書き込み先が `YYYY-MM-DD.<host>.jsonl` になる。#113）、サーバは `server/host.ts` の `selfHost()` で自分の名前にして応答の `host` に載せる（行の `host` と違えば「別のマシン」= 返信不可。#114）。
+  - `JEV_API_KEY`: 読むのは `server/main.ts` の `jevFromEnv()` だけ（`createApp` の既定は送らない。#491）。`settings.json` の `jev` で切れる。
+  - `SAI_DIGEST_URL` / `SAI_DIGEST_API_KEY`: 口が `openai` のときの base URL（既定 `http://127.0.0.1:11434/v1`）と鍵。入切・口・モデルは `settings.json`。
+  - `SAI_CLAUDE_ARGS` / `SAI_CODEX_ARGS` / `SAI_OPENCODE_ARGS`: シェル風に割る（`server/reply/runner.ts` の `splitArgs()`）。Claude は先頭に置く（`--allowedTools` は可変長で、後ろだと本文を飲む）。`SAI_CODEX_APP_SERVER_ARGS` は `codex app-server --stdio` の引数。
+  - `SAI_TERMINAL` / `SAI_APPROVE` / `SAI_CODEX_APP_SERVER` / `SAI_OPENCODE_SERVER` / `SAI_CLAUDE_AGENTS`（#418） / `SAI_GH`: どれも `0` で経路を切る。`SAI_OPENCODE_SERVER=0` は `opencode run -s` に戻す（#382）。`SAI_APPROVE=0` は `--permission-prompt-tool` の配線を付けない。`SAI_GH` が叩く形は `gh pr view` / `gh pr list` / `gh pr diff` / `gh api user` / `gh api -X GET …/pulls/<番号>/comments`（#600）と、人が押したときの `gh api -X POST …/reviews`。
+  - `CODEX_HOME`（既定 `~/.codex`）/ `GROK_HOME`（既定 `~/.grok`。`record.py` が `sessions/` を読む）: それぞれのエージェント自身の変数に従うだけ。`AGENT_FEED_DEBUG` は `1` で record.py の例外をログに残す。

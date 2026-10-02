@@ -1,5 +1,5 @@
-// ドキュメントとコードのずれを見る。環境変数の表（README と CLAUDE.md）が、コードが実際に読む変数と揃っているか。
-// 表が 2 つあるのでどちらか一方だけ更新される（#143）。ここで縛る
+// ドキュメントとコードのずれを見る。環境変数の表（README）が、コードが実際に読む変数と揃っているか。
+// 表は README だけに置く（#675。前は CLAUDE.md にも同じ表があった）
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
@@ -48,8 +48,11 @@ function envReadByCode(): Set<string> {
   return out
 }
 
+/** 表を置く文書（#675） */
+const TABLE_FILE = 'README.md'
+
 /** ドキュメントの「## 環境変数」の節（次の `## ` の手前まで。`###` の小見出しは中に含む） */
-function envSection(file: string): string {
+function envSection(file: string = TABLE_FILE): string {
   const text = readFileSync(join(ROOT, file), 'utf-8')
   const start = text.indexOf('\n## 環境変数')
   assert.ok(start >= 0, `${file} に「## 環境変数」の節が無い`)
@@ -59,9 +62,9 @@ function envSection(file: string): string {
 }
 
 /** 表の行ごとの `VAR`（1 行に複数書いてあってもよい） */
-function envRows(file: string): string[][] {
+function envRows(): string[][] {
   const rows: string[][] = []
-  for (const line of envSection(file).split('\n')) {
+  for (const line of envSection().split('\n')) {
     if (!line.startsWith('| `')) continue
     const cell = line.slice(1).split('|')[0] ?? ''
     rows.push([...cell.matchAll(/`([A-Z][A-Z0-9_]{2,})`/g)].map((m) => m[1]!))
@@ -69,35 +72,35 @@ function envRows(file: string): string[][] {
   return rows
 }
 
-const envInTable = (file: string): Set<string> => new Set(envRows(file).flat())
+const envInTable = (): Set<string> => new Set(envRows().flat())
 
-test('環境変数: コードが読むものは README と CLAUDE.md の表の両方に載っている', () => {
+test('環境変数: コードが読むものは README の表に載っている', () => {
   const code = envReadByCode()
   assert.ok(code.size >= 10, `コードから環境変数が拾えていない: ${[...code].join(', ')}`)
-  for (const file of ['README.md', 'CLAUDE.md']) {
-    const table = envInTable(file)
-    const missing = [...code].filter((v) => !table.has(v)).sort()
-    assert.deepEqual(missing, [], `${file} の環境変数の表に無い: ${missing.join(', ')}`)
-  }
+  const table = envInTable()
+  assert.ok(table.size >= 10, `${TABLE_FILE} の表から変数が拾えていない: ${[...table].join(', ')}`)
+  const missing = [...code].filter((v) => !table.has(v)).sort()
+  assert.deepEqual(missing, [], `${TABLE_FILE} の環境変数の表に無い: ${missing.join(', ')}`)
 })
 
 test('環境変数: 表にあるものはコードが読む', () => {
   const code = envReadByCode()
-  for (const file of ['README.md', 'CLAUDE.md']) {
-    const stale = [...envInTable(file)].filter((v) => !code.has(v)).sort()
-    assert.deepEqual(stale, [], `${file} の表にあるがコードが読まない: ${stale.join(', ')}`)
-  }
+  const stale = [...envInTable()].filter((v) => !code.has(v)).sort()
+  assert.deepEqual(stale, [], `${TABLE_FILE} の表にあるがコードが読まない: ${stale.join(', ')}`)
 })
 
 test('環境変数: 表は「設定することがあるもの」と「切り分け・内部」に分け、同じ変数を 2 回載せない（#288）', () => {
-  for (const file of ['README.md', 'CLAUDE.md']) {
-    const section = envSection(file)
-    for (const heading of SUBSECTIONS) assert.ok(section.includes(`\n${heading}\n`), `${file} の環境変数の節に「${heading}」が無い`)
-    const seen = new Map<string, number>()
-    for (const name of envRows(file).flat()) seen.set(name, (seen.get(name) ?? 0) + 1)
-    const twice = [...seen].filter(([, n]) => n > 1).map(([name]) => name)
-    assert.deepEqual(twice, [], `${file} の表に 2 回ある: ${twice.join(', ')}`)
-  }
+  const section = envSection()
+  for (const heading of SUBSECTIONS) assert.ok(section.includes(`\n${heading}\n`), `${TABLE_FILE} の環境変数の節に「${heading}」が無い`)
+  const seen = new Map<string, number>()
+  for (const name of envRows().flat()) seen.set(name, (seen.get(name) ?? 0) + 1)
+  const twice = [...seen].filter(([, n]) => n > 1).map(([name]) => name)
+  assert.deepEqual(twice, [], `${TABLE_FILE} の表に 2 回ある: ${twice.join(', ')}`)
+})
+
+test('環境変数: CLAUDE.md には表を置かない（表は README だけ。#675）', () => {
+  const rows = envSection('CLAUDE.md').split('\n').filter((line) => line.startsWith('|'))
+  assert.deepEqual(rows, [], 'CLAUDE.md の環境変数の節に表がある。README の表に足す')
 })
 
 /**

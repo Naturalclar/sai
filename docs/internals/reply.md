@@ -208,6 +208,7 @@ SAI が起こした Claude のターンは、使ったトークンと費用も�
   - `compactPrompt(text)`: `/compact` に添える指示（次に取りかかることは本文の 1 行目）
 - 画面は `ReplyBox` の `sendMode`（`SessionView` だけが渡す。フィードと要対応の行は詳細の `context_tokens` を持たないので出さない）で、送信ボタンの左に「送り方」の select を出す。**選んだものは送るまでで覚えない**。処理中・預かりがあるときと、画像を添えているときの「新しいセッション」は出さない
 - 選択の部品は `web/src/SendModePicker.tsx`（#629）。**閉じているときは短く、開いたメニューは正式な名前のまま**: 見えているのは自前のラベルで、その上に透明なネイティブの `<select>` を重ねてある。狭い画面（900px 以下）とタッチ端末では短い表記（`shared/compact.ts` の `SEND_MODE_SHORT`＝`要約` / `そのまま` / `新規`）だけを出し、送信ボタンの文言も「送信」にする（送り方は左に出ている）。重ねた select はタッチ端末で 16px（iOS の拡大を避ける。#122）
+- 処理中だけ出る「今のターンに足す」のチェックと「あとで送る」も、同じ区切り（900px 以下・タッチ端末）で短い表記（`足す` / `あとで`）にする（#631。`.steer .long` / `.short` と、送信ボタンの `.send-long` / `.send-short`）。正式な文はチェックの `aria-label` とラベルの `title` に残す
 - **順番は預かり（#305）に任せる**（新しい順番の仕組みは作らない）: `ReplyRequest.compact` を受けた `launch()` が、本文を預かりの先頭に置いてから `/compact …` のターンを起こす（`startTurn(…, { forceProcess, compact })`。`ReplyCommand.compact` → `Replying.compact`）。要約のプロセスが終わると `drain()` が本文を**そのまま**回し、要約が失敗すれば今までどおり預かりが止まる（「続けて送る」で要約せずに送る）。応答は `via: "compact"` と本文の `queue_id`
 - **効くのは Claude で、端末で開いておらず、処理中でも預かりが残ってもいないときだけ**。当たらなければ付いていないのと同じで、reply.log に 1 行残して今までの経路で送る
 - 要約だけのターンは**記録に行が 1 本も無い**（`UserPromptSubmit` も `Stop` も鳴らない）ので、「本文なし」のバブルは出ず、処理中はプロセスの終了で外れる。仮バブルは `Replying.compact` を見て本文を出さず「要約中」の 1 行（`PendingBubble` の `label`）、本文は預かりのバブル（`QueuedBubble`）に出る

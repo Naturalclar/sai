@@ -671,8 +671,10 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
         )}
         {queueing && steerable && (
           <label className="steer" title="いま走っているターンに足す（取り消せない。終わっていれば預かりに回る）">
-            <input type="checkbox" checked={steerWanted} onChange={(e) => setSteerWanted(e.target.checked)} />
-            今のターンに足す
+            <input type="checkbox" aria-label="今のターンに足す" checked={steerWanted} onChange={(e) => setSteerWanted(e.target.checked)} />
+            {/* 狭い画面・タッチ端末では短い表記（#631。処理中だけ出るこの欄で、送信ボタンが次の段に落ちていた） */}
+            <span className="long">今のターンに足す</span>
+            <span className="short">足す</span>
           </label>
         )}
         <button
@@ -680,7 +682,13 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
           disabled={attach.busy || (!(mention?.picked ? stripMention(text, mention.picked.label) : text).trim() && attach.items.length === 0)}
           title={steering ? '走っているターンに足す（取り消せない）' : queueing ? '前の返信が終わってから続けて回す（預けた分は取り消せる）' : undefined}
         >
-          {steering ? '足す' : queueing ? 'あとで送る' : sendModeNow === 'plain' ? '送信' : (
+          {steering ? '足す' : queueing ? (
+            // 狭い画面・タッチ端末では「あとで」（#631）
+            <>
+              <span className="send-long">あとで送る</span>
+              <span className="send-short">あとで</span>
+            </>
+          ) : sendModeNow === 'plain' ? '送信' : (
             // 狭い画面・タッチ端末では「送信」だけ（#629。送り方は左の選択に出ている。長い文言だと 360 幅でボタンが次の段に落ちる）
             <>
               <span className="send-long">{sendModeNow === 'compact' ? '要約して送る' : '新しく始める'}</span>

@@ -1,6 +1,5 @@
 import type { PrSummary } from '../../shared/types.ts'
-import { ApprovedMark } from './ApprovedMark'
-import { GitHubMark } from './GitHubMark'
+import { SessionPrBadge } from './SessionPrBadge'
 import { sessionPrTag } from './sessionPrState.ts'
 
 /**
@@ -12,8 +11,7 @@ export function SessionPrTag({ pr }: { pr: PrSummary }) {
   const tag = sessionPrTag(pr)
   return (
     <span className={`tag session-pr ${tag.state}`} title={tag.title}>
-      <GitHubMark size={10} />#{pr.number}
-      {tag.state === 'approved' && <ApprovedMark size={10} />}
+      <SessionPrBadge pr={pr} tag={tag} />
     </span>
   )
 }

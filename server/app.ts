@@ -1237,6 +1237,8 @@ export function createApp(
       return json(res, payload, 409)
     }
     const result = await prs.postReview(repo, Number(n), built.review)
+    // 差分ボタン横のリンクが持つ承認の状態（GhPr の 60 秒のキャッシュ）も引き直す（#636）
+    if (result.ok) pr.forget?.()
     const log = `--- ${new Date().toISOString()} GitHub へレビュー ${repo}#${n} ${r.event} 行コメント ${built.review.comments.length} 件 commit ${r.commit_id.slice(0, 12)} (${login})`
     await appendFile(join(store.directory, 'reply.log'), result.ok ? `${log} → ${result.url || '(URL 不明)'}\n` : `${log} 失敗: ${result.error}\n`).catch(() => {})
     if (!result.ok) return error(res, 502, `GitHub に投稿できませんでした: ${result.error}`)

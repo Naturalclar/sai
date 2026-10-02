@@ -354,7 +354,8 @@
   .pr-meta .check.pending { color: var(--synth); }
   .pr-meta .review.changes_requested { color: var(--claude); }
   .pr-meta .review { display: inline-flex; align-items: center; gap: 3px; }
-  .pr-meta .review svg { flex: none; }
+  /* 承認済みの印（#636）。4 か所（一覧・PR 画面・サイドバー・差分ボタン横）で同じ色。置く場所の svg の色より優先させる */
+  svg.approved-mark { flex: none; color: var(--codex) !important; }
   .pr-meta .review.approved { color: var(--codex); }
   .tag.requested { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); font-weight: 600; }
   .tag.state.open { background: color-mix(in srgb, var(--codex) 16%, transparent); color: var(--codex); font-weight: 600; }
@@ -1112,9 +1113,8 @@
   .reply .diff-float a.pr-link svg { flex: none; color: var(--ink); }
   .reply .diff-float a.pr-link.draft, .reply .diff-float a.pr-link.closed { color: var(--muted); }
   .reply .diff-float a.pr-link.merged { color: #8957e5; }
-  /* 承認済み（#636）。印の色は文字と同じ緑 */
+  /* 承認済み（#636）。色は緑。印そのものの色は .approved-mark（上の方） */
   .reply .diff-float a.pr-link.approved { color: var(--codex); }
-  .reply .diff-float a.pr-link.approved svg:last-child { color: var(--codex); }
   .reply .diff-float button.diff-btn.on { background: var(--hover); }
   .msg .msg-diff { margin: 4px 0 0; }
   .reply .attachments { display: flex; flex-wrap: wrap; gap: 8px; }

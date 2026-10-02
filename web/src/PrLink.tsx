@@ -15,7 +15,7 @@ export function PrLink({ pr }: { pr: SessionDiffSummaryResponse['pr'] }) {
     <a className={`pr-link ${link.state}`} href={link.url} target="_blank" rel="noopener noreferrer" title={link.title}>
       <GitHubMark size={13} />
       {link.label}
-      {link.state === 'approved' && <ApprovedMark size={12} />}
+      {link.approved && <ApprovedMark size={12} />}
     </a>
   )
 }

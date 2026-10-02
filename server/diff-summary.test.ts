@@ -77,7 +77,7 @@ after(async () => {
 })
 
 test('summary=1: 行数を返し、PR は引いた口の答えをそのまま載せる', async () => {
-  pr.pr = { number: 211, url: 'https://github.com/o/r/pull/211', state: 'OPEN', draft: false }
+  pr.pr = { number: 211, url: 'https://github.com/o/r/pull/211', state: 'OPEN', draft: false, review_decision: 'APPROVED' }
   pr.calls.length = 0
 
   const res = await get('/api/sessions/S1%40repo/diff?summary=1')
@@ -91,7 +91,7 @@ test('summary=1: 行数を返し、PR は引いた口の答えをそのまま載
   assert.deepEqual(s.working, { files: 0, added: 0, removed: 0 }, '未コミットの書き換えは無い')
   assert.equal(s.files, 2)
   assert.equal(s.untracked, 1, '追跡外は数だけ')
-  assert.deepEqual(s.pr, { number: 211, url: 'https://github.com/o/r/pull/211', state: 'OPEN', draft: false })
+  assert.deepEqual(s.pr, { number: 211, url: 'https://github.com/o/r/pull/211', state: 'OPEN', draft: false, review_decision: 'APPROVED' })
 
   assert.deepEqual(pr.calls, [[repo, 'feat/x']], 'cwd はセッションの行から、ブランチは git から')
   assert.ok(!('cwd' in s), '要約は cwd を返さない（ボタンに要らない）')

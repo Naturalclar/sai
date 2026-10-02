@@ -19,6 +19,8 @@ export const PR_CACHE_MS = 60_000
 export interface PrLookup {
   /** 見つからない・引けないは null（例外にしない） */
   find(cwd: string, branch: string): Promise<DiffPr | null>
+  /** 覚えている分を捨てる（SAI からレビューを投稿したあと。承認の状態が変わるので引き直す。#636 のレビュー）。偽物は持たなくてよい */
+  forget?(): void
 }
 
 /** 引かない実装（`SAI_GH=0`、テストの既定） */
@@ -65,6 +67,10 @@ interface Entry {
 export class GhPr implements PrLookup {
   readonly bin: string
   private readonly cache = new Map<string, Entry>()
+
+  forget(): void {
+    this.cache.clear()
+  }
   private readonly ttl: number
   private readonly timeout: number
 

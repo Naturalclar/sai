@@ -14,6 +14,10 @@ test('色は 下書き → チェックが落ちている → 承認済み → �
   assert.equal(sessionPrTag(pr({ checks: 'failure', review_decision: 'APPROVED' })).state, 'failing')
   assert.equal(sessionPrTag(pr({ review_decision: 'APPROVED' })).state, 'approved')
   assert.equal(sessionPrTag(pr({ checks: 'pending' })).state, 'open')
+  // 印（#636）は色とは別。承認されていれば下書き・チェック落ちでも付く
+  assert.equal(sessionPrTag(pr({ draft: true, review_decision: 'APPROVED' })).approved, true)
+  assert.equal(sessionPrTag(pr({ checks: 'failure', review_decision: 'APPROVED' })).approved, true)
+  assert.equal(sessionPrTag(pr({ review_decision: 'CHANGES_REQUESTED' })).approved, false)
 })
 
 test('title は題名と分かるぶんの状態', () => {

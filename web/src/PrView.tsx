@@ -15,8 +15,8 @@ import { REVIEW_EVENT_LABEL } from '../../shared/prReview.ts'
 import type { PrReviewEvent } from './api'
 import { newestFirst, prAuthorSession, prCommentKey } from './prSession'
 import { Markdown } from './Markdown'
-import { agoLabel, checkLabel, isApproved, reviewLabel } from './prLabels'
-import { ApprovedMark } from './ApprovedMark'
+import { agoLabel, checkLabel } from './prLabels'
+import { ReviewBadge } from './ReviewBadge'
 import type { PaneProps } from './App'
 import { withSuffix } from '../../shared/sessionLabels.ts'
 
@@ -111,7 +111,6 @@ export function PrView({ repo, number, onStatus, onInsertToSession }: { repo: st
   // PR が更新されて行が見当たらなくなったコメントは、差分の上にまとめて出す（DiffBody と同じ）
   const orphans = canWrite && files ? comments.list.filter((c) => !commentLine(c, files)) : []
   const check = pr ? checkLabel(pr.checks) : null
-  const review = pr ? reviewLabel(pr.review_decision) : ''
 
   return (
     <section className="pr-view">
@@ -146,12 +145,7 @@ export function PrView({ repo, number, onStatus, onInsertToSession }: { repo: st
                 {check.mark} {check.title}
               </span>
             )}
-            {review && (
-              <span className={`review ${pr.review_decision.toLowerCase()}`}>
-                {isApproved(pr.review_decision) && <ApprovedMark size={13} />}
-                {review}
-              </span>
-            )}
+            <ReviewBadge decision={pr.review_decision} size={13} />
             <span className="ago">{agoLabel(pr.updated_at, loaded.at.getTime())}に更新</span>
             <span className="repo">{loaded.data.repo}</span>
           </div>

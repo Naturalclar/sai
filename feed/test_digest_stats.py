@@ -56,6 +56,19 @@ class DigestStatsTest(unittest.TestCase):
         self.assertEqual(stats["total"]["summaries"], 3)
         self.assertIn("一言にしなかった: 1 本", digest_stats.render(stats))
 
+    def test_model_verdicts_are_matched_against_the_opened_signal(self):
+        # 手元のモデルの判定（#639）。全文が要る＝一言にしなかった。足りると答えたのに開いた＝拾えなかった
+        full = dict(digest("f|1", "2026-10-02T04:00:00.000Z", summary=""), skipped="judged", judge="full")
+        kept = dict(digest("g|1", "2026-10-02T04:00:00.000Z"), judge="summary")
+        missed = dict(digest("h|1", "2026-10-02T04:00:00.000Z"), judge="summary")
+        stats = digest_stats.collect(self.digests + [full, kept, missed], self.feedback + [fb("h|1", "opened", "2026-10-02T12:04:00.000Z")])
+        self.assertEqual(stats["judge"], {"full": 1, "summary": 2, "summary_opened": 1})
+        self.assertEqual(stats["total"]["asking"], 0, "規則が当てた分とは別に数える")
+        self.assertIn("全文が要る 1 本", digest_stats.render(stats))
+        self.assertIn("要約で足りる 2 本、うち詳細を開いた 1 本", digest_stats.render(stats))
+        # 聞いていないときは行を出さない
+        self.assertNotIn("手元のモデルの判定", digest_stats.render(digest_stats.collect(self.digests, self.feedback)))
+
     def test_an_older_digest_that_got_a_signal_is_counted(self):
         # 数え始める前に作った一言でも、開いたなら画面に出ていたということ
         stats = digest_stats.collect(self.digests, self.feedback + [fb("old|1", "opened", "2026-10-03T00:00:00.000Z")])

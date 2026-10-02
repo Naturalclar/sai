@@ -43,18 +43,21 @@ test('本文の無い COMMENTED のレビュー（行コメントの入れ物）
   assert.deepEqual(out?.comments.map((c) => c.id), ['r3', 'r4', 'r5'])
 })
 
-test('畳まれたものと bot のものは folded が付く（畳まれている方が先）', () => {
+test('畳まれたものと bot のものは folded が付く（畳まれている方が先）。bot は名前で見る', () => {
+  // 実測: gh はコメント・レビューの書いた人を {login} だけで返す（is_bot も [bot] も付かない）
   const out = parse(
     [
       comment('c1', '2026-10-01T01:00:00Z', { isMinimized: true, minimizedReason: 'outdated' }),
-      comment('c2', '2026-10-01T02:00:00Z', { author: { login: 'github-actions', is_bot: true } }),
+      comment('c2', '2026-10-01T02:00:00Z', { author: { login: 'github-actions' } }),
       comment('c3', '2026-10-01T03:00:00Z', { author: { login: 'dependabot[bot]' } }),
-      comment('c4', '2026-10-01T04:00:00Z', { author: { login: 'ci', is_bot: true }, isMinimized: true }),
+      comment('c4', '2026-10-01T04:00:00Z', { author: { login: 'app/some-app' }, isMinimized: true }),
       comment('c5', '2026-10-01T05:00:00Z'),
+      comment('c6', '2026-10-01T06:00:00Z', { author: { login: 'Codecov' } }),
+      comment('c7', '2026-10-01T07:00:00Z', { author: { login: 'robot-fan' } }),
     ],
-    [],
+    [review('r1', '2026-10-01T08:00:00Z', 'COMMENTED', '自動のレビュー', { author: { login: 'copilot-pull-request-reviewer' } })],
   )
-  assert.deepEqual(out?.comments.map((c) => c.folded), ['minimized', 'bot', 'bot', 'minimized', undefined])
+  assert.deepEqual(out?.comments.map((c) => c.folded), ['minimized', 'bot', 'bot', 'minimized', undefined, 'bot', undefined, 'bot'])
 })
 
 test('長い本文は上限で切って truncated。絵文字の途中では切らない', () => {

@@ -16,11 +16,40 @@ export interface PrCommentList {
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '')
 
+/**
+ * bot として畳む名前（小文字）。**`gh pr view --json comments,reviews` の書いた人は `{login}` だけで、bot かどうかを返さない**
+ * （実測: PR を出した人には `is_bot` が付くが、コメントとレビューには付かず、`[bot]` も付かない）。そのため名前で見る。
+ * 載っていない bot は畳まれずに出るだけ（読めなくはならない）
+ */
+const KNOWN_BOTS = new Set([
+  'github-actions',
+  'dependabot',
+  'renovate',
+  'codecov',
+  'codecov-commenter',
+  'vercel',
+  'netlify',
+  'sonarcloud',
+  'sonarqubecloud',
+  'coderabbitai',
+  'copilot-pull-request-reviewer',
+  'github-advanced-security',
+  'linear',
+  'mergify',
+  'changeset-bot',
+])
+
+/** bot の名前か。`app/…`（gh が App に付ける頭）・`…[bot]`（REST の形）・既知の名前 */
+export function isBotLogin(login: string): boolean {
+  const name = login.toLowerCase()
+  return name.startsWith('app/') || name.endsWith('[bot]') || KNOWN_BOTS.has(name)
+}
+
 function authorOf(v: unknown): { login: string; bot: boolean } {
   if (!v || typeof v !== 'object') return { login: '', bot: false }
   const o = v as Record<string, unknown>
   const login = str(o.login)
-  return { login, bot: o.is_bot === true || login.endsWith('[bot]') }
+  return { login, bot: o.is_bot === true || isBotLogin(login) }
 }
 
 function clip(body: string): { body: string; truncated: boolean } {

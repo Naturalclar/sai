@@ -19,8 +19,18 @@ export class FakeSummarizer implements Summarizer {
   prompts: string[] = []
   /** 次に送る文面の案のプロンプト（#371） */
   nextAsks: string[] = []
+  /** 「要約で足りるか」の判定のプロンプト（#639） */
+  judges: string[] = []
+  /** 判定の答え。本文にこの文があれば FULL、無ければ `judgeAnswer` */
+  fullOn = new Set<string>()
+  judgeAnswer = 'SUMMARY'
   failOn = new Set<string>()
   async summarize(prompt: string): Promise<string> {
+    if (prompt.includes('報告なら SUMMARY')) {
+      this.judges.push(prompt)
+      for (const needle of this.failOn) if (prompt.includes(needle)) throw new Error(`fail: ${needle}`)
+      return [...this.fullOn].some((needle) => prompt.includes(needle)) ? 'FULL' : this.judgeAnswer
+    }
     const next = prompt.includes('あなたが次に送る文')
     ;(next ? this.nextAsks : this.prompts).push(prompt)
     for (const needle of this.failOn) if (prompt.includes(needle)) throw new Error(`fail: ${needle}`)
@@ -1097,6 +1107,126 @@ test('Digester: 人に聞いている返答で案に失敗しても、作らな�
     d.scan([asking])
     await d.drain()
     assert.equal(fake.nextAsks.length, 1, '積み直さない')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('Digester: 規則が当てなかった返答は手元のモデルに聞き、全文が要ると返ったら一言を作らない。足りると返ったら今までどおり（#639）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-digest-judge-'))
+  try {
+    const path = join(dir, 'digest.jsonl')
+    const store = new DigestStore(path)
+    await store.load()
+    const fake = new FakeSummarizer()
+    fake.fullOn.add('甲と乙を比べ')
+    const d = new Digester(store, fake, { enabled: true, model: 'local', provider: 'openai', since: at(0).toISOString(), persona: async () => 'none' })
+    const comparing = row(at(1), 'S1', { repo: 'r', text: '甲と乙を比べました。甲は速く、乙は安全です。', user_text: '調べて' })
+    const report = row(at(1), 'S2', { repo: 'r', text: '直して push しました。', user_text: '直して' })
+    const asking = row(at(1), 'S3', { repo: 'r', text: '甲と乙があります。\n\nどちらにしますか？', user_text: '進めて' })
+    d.scan([comparing, report, asking])
+    await d.drain()
+    assert.equal(fake.judges.length, 2, '規則が当てた行では聞かない')
+    assert.ok(!fake.judges.some((p) => p.includes('どちらにしますか')))
+    assert.equal(fake.prompts.length, 1, '一言を作るのは、足りると返った行だけ')
+    assert.match(fake.prompts[0]!, /直して push しました/)
+    assert.equal(fake.nextAsks.length, 3, '案は今までどおり')
+    const judged = store.get(digestKey(comparing))
+    assert.equal(judged?.summary, '')
+    assert.equal(judged?.skipped, 'judged')
+    assert.equal(judged?.judge, 'full')
+    assert.ok(judged?.next_ask)
+    assert.equal(d.attach([comparing])[0]!.summary, undefined, '画面は本文をそのまま出す')
+    const kept = store.get(digestKey(report))
+    assert.ok(kept?.summary)
+    assert.equal(kept?.skipped, undefined)
+    assert.equal(kept?.judge, 'summary', '足りると返った行も、あとで合図と突き合わせるために残す')
+    assert.equal(store.get(digestKey(asking))?.skipped, 'asking')
+    assert.equal(store.get(digestKey(asking))?.judge, undefined)
+    // 3 秒ごとの scan() が積み直さない・聞き直さない
+    const lines = (await readFile(path, 'utf-8')).trim().split('\n').length
+    d.scan([comparing, report, asking])
+    await d.drain()
+    assert.equal((await readFile(path, 'utf-8')).trim().split('\n').length, lines)
+    assert.equal(fake.judges.length, 2)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('Digester: 判定の答えが壊れている（1 語でない・口が失敗）ときは、今までどおり一言を作る（#639）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-digest-judge-broken-'))
+  try {
+    const store = new DigestStore(join(dir, 'digest.jsonl'))
+    await store.load()
+    const fake = new FakeSummarizer()
+    fake.judgeAnswer = 'FULL か SUMMARY のどちらかです'
+    const d = new Digester(store, fake, { enabled: true, model: 'local', provider: 'openai', since: at(0).toISOString(), persona: async () => 'none', logPath: join(dir, 'digest.log') })
+    const wordy = row(at(1), 'S1', { repo: 'r', text: '直して push しました。', user_text: '直して' })
+    d.scan([wordy])
+    await d.drain()
+    assert.ok(store.get(digestKey(wordy))?.summary)
+    assert.equal(store.get(digestKey(wordy))?.judge, undefined, '読めなかった答えは残さない')
+    assert.match(await readFile(join(dir, 'digest.log'), 'utf-8'), /判定が読めない/)
+    // 判定の呼び出しだけが落ちる（一言は通る）
+    class JudgeDown extends FakeSummarizer {
+      override async summarize(prompt: string): Promise<string> {
+        if (prompt.includes('報告なら SUMMARY')) {
+          this.judges.push(prompt)
+          throw new Error('empty result')
+        }
+        return super.summarize(prompt)
+      }
+    }
+    const down = new JudgeDown()
+    const d2 = new Digester(store, down, { enabled: true, model: 'local', provider: 'openai', since: at(0).toISOString(), persona: async () => 'none', logPath: join(dir, 'digest.log') })
+    const other = row(at(2), 'S2', { repo: 'r', text: '調べて、原因を書きました。', user_text: '調べて' })
+    d2.scan([other])
+    await d2.drain()
+    assert.equal(down.judges.length, 1)
+    assert.ok(store.get(digestKey(other))?.summary, '判定が落ちても一言は作る')
+    assert.equal(d2.error, '', '口の不調にしない')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('Digester: 口が claude のとき・セッションで一言を切っているとき・失敗して作り直す行では、判定を聞かない（#639）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-digest-judge-skip-'))
+  try {
+    const store = new DigestStore(join(dir, 'digest.jsonl'))
+    await store.load()
+    const report = row(at(1), 'S1', { repo: 'r', text: '直して push しました。', user_text: '直して' })
+    const claude = new FakeSummarizer()
+    const d = new Digester(store, claude, { enabled: true, model: 'haiku', since: at(0).toISOString(), persona: async () => 'none' })
+    d.scan([report])
+    await d.drain()
+    assert.equal(claude.judges.length, 0, 'claude の口では呼び出しを増やさない')
+    assert.equal(claude.prompts.length, 1)
+
+    const off = new FakeSummarizer()
+    const d2 = new Digester(store, off, { enabled: true, model: 'local', provider: 'openai', since: at(0).toISOString(), persona: async () => null })
+    const muted = row(at(2), 'S2', { repo: 'r', text: '調べて、原因を書きました。', user_text: '調べて' })
+    d2.scan([muted])
+    await d2.drain()
+    assert.equal(off.judges.length, 0, '一言を作らない行では聞かない')
+    assert.equal(off.nextAsks.length, 1)
+
+    let now = at(10).getTime()
+    const flaky = new FakeSummarizer()
+    flaky.failOn.add('片づけて、結果')
+    const d3 = new Digester(store, flaky, { enabled: true, nextAsk: false, model: 'local', provider: 'openai', since: at(0).toISOString(), persona: async () => 'none', now: () => now })
+    const retried = row(at(3), 'S3', { repo: 'r', text: '片づけて、結果を書きました。', user_text: '片づけて' })
+    d3.scan([retried])
+    await d3.drain()
+    assert.equal(flaky.judges.length, 1)
+    assert.equal(store.get(digestKey(retried)), undefined, '一言が失敗した')
+    flaky.failOn.clear()
+    now += DIGEST_RETRY_DELAYS_MS[0]! + 1
+    d3.scan([retried])
+    await d3.drain()
+    assert.ok(store.get(digestKey(retried))?.summary)
+    assert.equal(flaky.judges.length, 1, '作り直しでは聞き直さない')
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

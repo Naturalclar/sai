@@ -90,8 +90,18 @@ def collect(digests, feedback, include_all=False):
             groups.setdefault(str(d.get(field) or "(不明)"), []).append(d)
         return {name: tally(rows) for name, rows in sorted(groups.items())}
 
+    # 手元のモデルに「要約で足りるか」を聞いた行（#639）。足りると答えたのに詳細を開いた＝拾えなかった。
+    # 全文が要ると答えた行は本文がそのまま出ていて「開く」が無いので、誤って拾ったかは合図からは分からない（読んで確かめる）
+    judged_summary = [d for d in base if d.get("judge") == "summary" and str(d.get("summary") or "").strip()]
+    judge = {
+        "full": sum(1 for d in base if d.get("skipped") == "judged"),
+        "summary": len(judged_summary),
+        "summary_opened": sum(1 for d in judged_summary if d["key"] in opened),
+    }
+
     return {
         "since": since,
+        "judge": judge,
         "counting": bool(stamps),
         "total": tally(base),
         "by_model": by("model"),
@@ -119,6 +129,10 @@ def render(stats):
         out.append("数え始め: %s 以降に作ったものと、それより前で合図が付いたものを分母にしています（--all で全部）" % datetime.fromtimestamp(stats["since"]).strftime("%Y-%m-%d %H:%M"))
     out.append(line("全体", stats["total"]))
     out.append("  人に聞いている返答なので一言にしなかった: %d 本（本文をそのまま出した。#638）" % stats["total"].get("asking", 0))
+    j = stats.get("judge") or {}
+    if j.get("full") or j.get("summary"):
+        out.append("  手元のモデルの判定（#639）: 全文が要る %d 本（一言にしなかった） / 要約で足りる %d 本、うち詳細を開いた %d 本 (%s。拾えなかった分)" % (
+            j["full"], j["summary"], j["summary_opened"], rate(j["summary_opened"], j["summary"])))
     out.append("モデルごと:")
     out.extend(line(name, t) for name, t in stats["by_model"].items())
     out.append("性格ごと:")

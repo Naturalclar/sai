@@ -17,6 +17,7 @@ import { DEFAULT_PERSONA, digestPrompt } from '../../shared/persona.ts'
 import { digestIssues } from '../../shared/digestCheck.ts'
 import { digestKey } from '../../shared/digestFeedback.ts'
 import { needsFullText } from '../../shared/fullText.ts'
+import { fullTextJudgePrompt, parseFullTextJudge } from '../../shared/fullTextJudge.ts'
 import { cleanNextAsk, nextAskPrompt } from '../../shared/nextAsk.ts'
 import type { DigestIssueCode } from '../../shared/digestCheck.ts'
 import { childEnv } from '../reply/runner.ts'
@@ -75,9 +76,15 @@ export interface DigestEntry {
   next_ask?: string
   /**
    * 一言を**わざと作らなかった**理由（#638）。`asking` = 人に判断・回答を求めている返答（`needsFullText()`）なので、
-   * 言い換えずに本文をそのまま出す。`summary` は空。**一言を切っていて作らなかった行（#560）と違い、積み直さない**
+   * 言い換えずに本文をそのまま出す。`judged` = 規則は当てなかったが、一言を作っている手元のモデルが「全文が要る」と答えた（#639）。
+   * `summary` は空。**一言を切っていて作らなかった行（#560）と違い、積み直さない**
    */
-  skipped?: 'asking'
+  skipped?: 'asking' | 'judged'
+  /**
+   * 手元のモデルに「要約で足りるか」を聞いた答え（#639）。聞かなかった行・答えが読めなかった行には付けない。
+   * `summary` の行も残すのは、あとで「詳細を開いた」の合図と突き合わせるため（`feed/digest_stats.py`）
+   */
+  judge?: 'full' | 'summary'
 }
 
 /** 行のキー。行は (エンティティ, ts) で一意。**画面と同じものを使う**（shared/digestFeedback.ts。#346） */
@@ -568,6 +575,22 @@ export class Digester {
     return !seen || seen <= row.ts
   }
 
+  /**
+   * 一言にしないほうがよい返答かを、同じ口にもう 1 回聞く（#639）。**聞けない・答えが読めないときは `undefined`**
+   * （今までどおり一言を作る。口が落ちているなら、続く一言の呼び出しが失敗として数える）
+   */
+  private async judgeFullText(row: FeedRow, summarizer: Summarizer, key: string): Promise<'full' | 'summary' | undefined> {
+    try {
+      const answer = await summarizer.summarize(fullTextJudgePrompt(row.text ?? ''))
+      const full = parseFullTextJudge(answer)
+      if (full === null) await this.log(`${new Date().toISOString()} ${key} 判定が読めない: ${answer.trim().slice(0, 40)}`)
+      return full === null ? undefined : full ? 'full' : 'summary'
+    } catch (err) {
+      await this.log(`${new Date().toISOString()} ${key} 判定に失敗: ${err instanceof Error ? err.message : String(err)}`)
+      return undefined
+    }
+  }
+
   /** 案を 1 つ。作れなければ空（失敗は digest.log に残し、一言はそのまま出す） */
   private async makeNextAsk(row: FeedRow, summarizer: Summarizer, key: string): Promise<string> {
     try {
@@ -600,7 +623,7 @@ export class Digester {
       // 作ってある行は積まない。ただし**案だけ作った行（一言が空。#560）は、一言を作る側に回ったらもう一度積む**
       // （セッションの「作らない」を戻したとき。前は一言を切っていた行は記録に残らず、戻せば作られていた）
       const done = this.store.get(key)
-      // 人に聞いている返答（#638）は、一言が空でも積み直さない（わざと作っていない）
+      // 人に聞いている返答（#638）・手元のモデルが全文が要ると答えた返答（#639）は、一言が空でも積み直さない（わざと作っていない）
       if (done && (done.summary || done.skipped || !this.summaryOn)) continue
       // 失敗した行は、間隔が来るまで・諦めたら積まない（#443）
       const failure = this.failed.get(key)
@@ -647,6 +670,7 @@ export class Digester {
         // 口は 1 件ごとに取り直す（性格を引いている間にも、画面から切られたり口を変えられたりする。#288）
         const summarizer = this.summarizer
         const model = this.modelValue
+        const provider = this.providerValue
         const generation = this.generation
         // 一言は全体で入にしていて、そのセッションで切っていない（persona が null なら切っている。#263）ときだけ。
         // 案は一言とは別に入切する（#560）。セッションの「作らない」は一言だけを止め、案は作る
@@ -668,10 +692,16 @@ export class Digester {
         try {
           // 人が頼んだこと（#376）。返答だけを渡すと、`12` のような短い返答で作例を書き写していた
           const ask = row.user_text ?? ''
-          const summary = wantSummary && persona !== null ? await summarizer.summarize(digestPrompt(persona, row.text, { ask })) : ''
+          // 規則（#638）が当てなかった返答は、一言を作る前に同じ口に「要約で足りるか」を聞く（#639）。
+          // **手元の口（openai）のときだけ**（claude は呼び出しが 1 回増えるぶん時間とトークンが掛かる）。
+          // 失敗して作り直す行では聞かない（口が重いときに 1 行で 2 回待たない）
+          const judge = wantSummary && provider === 'openai' && !this.failed.has(key) ? await this.judgeFullText(row, summarizer, key) : undefined
+          const skipped = asking ? ('asking' as const) : judge === 'full' ? ('judged' as const) : undefined
+          const makeSummary = wantSummary && !skipped
+          const summary = makeSummary && persona !== null ? await summarizer.summarize(digestPrompt(persona, row.text, { ask })) : ''
           // 出来上がりを機械で確かめ、駄目なら **1 回だけ** 作り直す（#346。LLM は呼ばない判定）。
           // 2 回目でも残ったら、そのまま出して digest.log に残す（一言が消えるより、残って数えられる方がよい）
-          const first = wantSummary ? digestIssues(row.text, summary, ask) : []
+          const first = makeSummary ? digestIssues(row.text, summary, ask) : []
           let best = summary
           let issues = first
           if (first.length > 0 && persona !== null) {
@@ -710,7 +740,8 @@ export class Digester {
             ...(first.length > 0 ? { retried: true } : {}),
             ...(issues.length > 0 ? { issues: issues.map((i) => i.code) } : {}),
             ...(nextAsk ? { next_ask: nextAsk } : {}),
-            ...(asking ? { skipped: 'asking' as const } : {}),
+            ...(skipped ? { skipped } : {}),
+            ...(judge ? { judge } : {}),
           })
           if (generation === this.generation) {
             this.failed.delete(key)

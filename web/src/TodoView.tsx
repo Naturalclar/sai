@@ -49,7 +49,7 @@ export function TodoView({ list, onStatus, onOpenSidebar, onLeaveToSidebar, prs 
   useEffect(() => onStatus(updatedAt, error), [updatedAt, error, onStatus])
 
   // replying を渡すのは、別プロセスの返信を処理中なら「待っている」ではなく「動いている」ため（#232）
-  const items = data ? todoItems(data.sessions, data.approvals, data.host, data.replying) : []
+  const items = data ? todoItems(data.sessions, data.approvals, data.host, data.replying, data.loops) : []
   // 数えるのは答えを待っているものだけ（#438）。並びは 答え待ち → 未読 → 待機中 → 終わっているもの（#551）
   const pending = pendingItems(items)
   const sections = todoSections(items)

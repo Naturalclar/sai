@@ -3,6 +3,8 @@ import assert from 'node:assert/strict'
 import type { FeedRow } from '../../shared/types.ts'
 import { groupRows, promptArrived, speakerLabel, toUtterances } from './chatGroups.ts'
 import { withHandedReplies } from '../../shared/agentMessages.ts'
+import { loopPrompt } from '../../shared/loops.ts'
+import { entityId } from '../../shared/entity.ts'
 
 // 時刻は Asia/Tokyo 固定のプロセスに依存しないよう、同じ日の中で分だけ動かす
 const base = new Date('2026-09-02T03:00:00Z')
@@ -225,4 +227,16 @@ test('toUtterances: SAI が頭に足した返答の塊（#594）は自分のバ�
   assert.equal(mine!.handedReplies, 1)
   const [plain] = toUtterances([row(0, { user_text: '人から' })])
   assert.equal(plain!.handedReplies, undefined)
+})
+
+test('toUtterances: ループの周の入力（#634）は「ループ N 周目」にして印を付ける。届いたかの判定も同じ形で比べる', () => {
+  const user_text = loopPrompt({ goal: 'PR を片付ける', until: '0 件', max_rounds: 10, deadline: at(60), interval_s: 600, round: 3, note: '前の周' }, Date.parse(at(0)))
+  const [mine] = toUtterances([row(0, { user_text })])
+  assert.deepEqual([mine!.text, mine!.loop], ['ループ 3 周目', true])
+  const [plain] = toUtterances([row(0, { user_text: '人から' })])
+  assert.equal(plain!.loop, undefined)
+  // 処理中の本文はサーバが「ループ 3 周目」にして返す。記録の入力（全文）と突き合う
+  const arrived = row(0, { user_text, event: 'UserPromptSubmit', text: '' })
+  assert.equal(promptArrived([arrived], entityId(arrived.session, arrived.repo, arrived.ts), 'ループ 3 周目', arrived.ts), true)
+  assert.equal(promptArrived([arrived], entityId(arrived.session, arrived.repo, arrived.ts), 'ループ 4 周目', arrived.ts), false)
 })

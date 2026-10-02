@@ -133,6 +133,7 @@ OpenCode (feed/opencode/sai.js) ─┘                           │
 - **許可モード**: 素通しでも SAI は許可を自動で返さない。`REPLY_MODES` 外は `400`。名前は英語 → docs/internals/reply.md#許可モード
 - **モデル**: 名前（`Default` / `Custom model…`）は英語、保存値は正式名 → docs/internals/reply.md#モデル
 - **別のマシン**: 判定は `isRemoteHost()` 1 つ、`host` が空はリモートにしない → docs/internals/reply.md#別のマシン
+- **ループ**: 上限なしでは組めない。エージェントの口（`sai_loop_next`）から動かせるのは自分のループの「次」だけ。周は送る前に書く（立て直しで 2 回送らない）。起こすのは `launch()` のまま（権限のフラグを足さない・許可を自動で返さない）。素通し・端末・Claude 以外には組まない → docs/internals/reply.md#ループ634
 
 ### Codex の端末・app-server と処理中の手順
 
@@ -226,6 +227,6 @@ OpenCode (feed/opencode/sai.js) ─┘                           │
 | `GROK_HOME` | Grok Build のホーム（既定 `~/.grok`）。Grok 自身の変数に従うだけ（`record.py` が `sessions/` を読む） |
 | `AGENT_FEED_DEBUG` | `1` で record.py の例外をログに残す |
 
-表に載せないもの（`server/docs.test.ts` の `INTERNAL`）: `AGENT_FEED_SKIP`（SAI が一言を作る `claude -p` に自分で付ける合図。record.py / statusline.py / OpenCode のプラグインが見る）、`SAI_URL` / `SAI_ENTITY`（`server/reply/runner.ts` が `--mcp-config` の env で `server/approvals/approve-mcp.ts` に渡す）、`SAI_APPROVE_RECONNECT_MS`（`approve-mcp.ts` が SAI に届かないとき繋ぎ直しを続ける長さ。テストが短くするためだけで、SAI は渡さない。#440）、`TMUX_PANE` / `CLAUDE_PID`（エージェントが record.py に渡してくる）、`REPO_URL` / `PROD`（Vite の `import.meta.env`）、`PATH`（フックのラッパーを引く。#567）。
+表に載せないもの（`server/docs.test.ts` の `INTERNAL`）: `AGENT_FEED_SKIP`（SAI が一言を作る `claude -p` に自分で付ける合図。record.py / statusline.py / OpenCode のプラグインが見る）、`SAI_URL` / `SAI_ENTITY` / `SAI_LOOP`（`server/reply/runner.ts` が `--mcp-config` の env で `server/approvals/approve-mcp.ts` に渡す。`SAI_LOOP` はループの周のターンの印。#634）、`SAI_APPROVE_RECONNECT_MS`（`approve-mcp.ts` が SAI に届かないとき繋ぎ直しを続ける長さ。テストが短くするためだけで、SAI は渡さない。#440）、`TMUX_PANE` / `CLAUDE_PID`（エージェントが record.py に渡してくる）、`REPO_URL` / `PROD`（Vite の `import.meta.env`）、`PATH`（フックのラッパーを引く。#567）。
 
 コードが読む環境変数が README とこの表の両方に載っていること・表にあるものをコードが読むこと・2 つの小見出しに分かれていて同じ変数が 2 回出てこないことは `server/docs.test.ts` が見る（変数を足したら両方の表に足す）。**コードとして見るのは `.ts` / `.tsx` / `.js` / `.mjs` / `.py`**（`.js` を見ていなかった頃は、OpenCode のプラグインが読む `SAI_HOME` を「コードは読まない」と書いたままになっていた。#288）。

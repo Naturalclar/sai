@@ -16,7 +16,7 @@ const ROOT = resolve(import.meta.dirname, '..')
  * - REPO_URL / PROD: Vite の import.meta.env（vite.config.ts の define と組み込み）
  * - PATH: フックのラッパー（`sai-record` など）を引くのにサーバの PATH を見る（#567）。SAI の設定ではない
  */
-const INTERNAL = new Set(['SAI_URL', 'SAI_ENTITY', 'SAI_TOKEN_FILE', 'SAI_APPROVE_RECONNECT_MS', 'AGENT_FEED_SKIP', 'TMUX_PANE', 'CLAUDE_PID', 'REPO_URL', 'PROD', 'PATH'])
+const INTERNAL = new Set(['SAI_URL', 'SAI_ENTITY', 'SAI_TOKEN_FILE', 'SAI_LOOP', 'SAI_APPROVE_RECONNECT_MS', 'AGENT_FEED_SKIP', 'TMUX_PANE', 'CLAUDE_PID', 'REPO_URL', 'PROD', 'PATH'])
 
 /** 「## 環境変数」の中の 2 つの表の見出し（#288）。区別の無い 1 枚の表だと、全部設定しないと動かないように見える */
 const SUBSECTIONS = ['### 設定することがあるもの', '### 切り分け・内部']

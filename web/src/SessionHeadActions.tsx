@@ -15,13 +15,15 @@ interface Props {
   peers?: readonly SessionSummary[] | undefined
   /** 引き継ぎを書かせる（#442）。返信できない・Claude でないセッションでは渡さない（ボタンを出さない） */
   onHandoff?: (() => void) | undefined
+  /** ループを組む画面を開く（#634）。組めないセッション・もう組んであるセッションでは渡さない（ボタンを出さない） */
+  onLoop?: (() => void) | undefined
 }
 
 /**
  * チャット見出しの「操作」（アーカイブ・表示名とアイコン・許可されているもの・一言の性格・思考を全部開く）。
  * 広い画面では見出しにそのまま並び、狭い画面では「⋯」のパネルの中に入る（#274）
  */
-export function SessionHeadActions({ s, settings, thinking, peers, onHandoff }: Props) {
+export function SessionHeadActions({ s, settings, thinking, peers, onHandoff, onLoop }: Props) {
   return (
     <>
       {/*
@@ -36,6 +38,13 @@ export function SessionHeadActions({ s, settings, thinking, peers, onHandoff }: 
       {s.agent === 'claude' && <PermissionsButton key={`perm:${s.id}`} id={s.id} />}
       <ContinuedLinks key={`continued:${s.id}`} meta={s.meta} />
       {onHandoff && <HandoffButton key={`handoff:${s.id}`} onHandoff={onHandoff} />}
+      {onLoop && (
+        <span className="meta">
+          <button type="button" className="linkish" onClick={onLoop} title="目的と終わりの条件を決めて、このセッションを何周も回す（次にいつ起きるかはエージェントが決め、上限は SAI が止める）">
+            ループを組む
+          </button>
+        </span>
+      )}
       {/* 一言が有効なときだけ。このセッションの性格（無ければヘッダの既定に従う） */}
       {settings?.digest && <SessionPersonaSelect key={`persona:${s.id}`} id={s.id} value={s.meta?.persona} off={Boolean(s.meta?.digest_off)} defaultPersona={settings.persona} />}
       {thinking.has && (

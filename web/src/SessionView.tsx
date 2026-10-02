@@ -19,6 +19,9 @@ import { useProgress } from './useProgress'
 import { openPromptSince } from './openPrompt'
 import { QueuedBubble } from './QueuedBubble'
 import { AgentActivityBar } from './AgentActivityBar'
+import { LoopBar } from './LoopBar'
+import { LoopForm } from './LoopForm'
+import { loopLive } from '../../shared/loops.ts'
 import { withAgentReplies } from './agentReplies'
 import { BackgroundAttachBar } from './BackgroundAttachBar'
 import { shouldQueue } from './replyQueue.ts'
@@ -183,6 +186,11 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
       return false
     }
   }
+  // ループ（#634）。組めるのは Claude の、端末で開いていない、返信できるセッション（サーバも同じ理由で断る）
+  const loop = data?.loops[id]
+  const [loopFormFor, setLoopFormFor] = useState('')
+  const canLoop = Boolean(s && s.agent === 'claude' && !s.archived && !blocked && !s.terminal && !(loop && loopLive(loop.status)))
+  const onLoop = canLoop ? () => setLoopFormFor(id) : undefined
   const tagInput = { serverHost: data?.host ?? '', approval: approvals[0]?.text ?? '', replyingSince: mine?.since ?? '', contextTokens }
   const thinking = { has: hasThinking, open: thinkingUi.open, toggle: () => setThinkingUi({ open: !thinkingUi.open }) }
   const label = s ? headName(s) : { name: '', project: '' }
@@ -208,7 +216,7 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
                 <code>{s.id}</code>
                 {s.session_source && s.session_source !== 'synth' && <span className="tag">{s.session_source}</span>}
               </span>
-              <SessionHeadActions s={s} settings={settings} thinking={thinking} peers={peers} onHandoff={onHandoff} />
+              <SessionHeadActions s={s} settings={settings} thinking={thinking} peers={peers} onHandoff={onHandoff} onLoop={onLoop} />
             </SessionHeadMenu>
           </div>
           {s.title_full && <SessionTitle key={`title:${s.id}`} text={s.title_full} />}
@@ -220,7 +228,7 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
           <h1><span className="hash">#</span>{label.project}</h1>
           <SessionHeadInfo s={s} contextTokens={contextTokens} />
           <SessionStatusTags tags={headTags(s, { ...tagInput, compact: false })} now={now} title={s.id} />
-          <SessionHeadActions s={s} settings={settings} thinking={thinking} peers={peers} onHandoff={onHandoff} />
+          <SessionHeadActions s={s} settings={settings} thinking={thinking} peers={peers} onHandoff={onHandoff} onLoop={onLoop} />
           {s.title_full && <div className="meta wide">{s.title_full}</div>}
         </div>
       )}
@@ -281,11 +289,13 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
               ))}
               {/* このセッションから別のセッションへのメッセージ（#311）。送ったことがあるか止めているときだけ */}
               {data.agent && <AgentActivityBar id={id} activity={data.agent} now={now} />}
+              {loop && <LoopBar key={`loop:${id}`} id={id} loop={loop} now={now} />}
               {data.background && <BackgroundAttachBar background={data.background} />}
             </>
           }
         />
       )}
+      {loopFormFor === id && canLoop && <LoopForm key={`loopform:${id}`} id={id} onClose={() => setLoopFormFor('')} />}
       {/* アーカイブしたのに返信が続いている（#583）。止めはせず、知らせて「このまま使う」か新しい方へのリンクを出す */}
       {s && returned && (
         <ArchiveReturnNote

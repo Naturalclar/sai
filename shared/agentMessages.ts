@@ -2,6 +2,7 @@
 // SAI サーバが同じ規則を見る。DOM にもファイルにも触らないので shared/agentMessages.test.ts で回す
 import { entityId } from './entity.ts'
 import { eventKind } from './events.ts'
+import { isLoopPrompt } from './loops.ts'
 import { replyBlockedReason } from './reply.ts'
 import type { Agent, AgentSessionEntry, FeedRow, SessionSummary, UsageResponse, UsageWindow } from './types.ts'
 
@@ -244,10 +245,11 @@ export const STEERED_NOTE = '（走っているターンの途中で届いた返
 /** 返答がそろって送り元を起こすとき（#594 の 3。`sai_send` の `wake`）の、塊のあとに置く本文 */
 export const WAKE_NOTE = '（「返答が来たら起こす」で送ったメッセージの返答がそろいました。続きを進めてください。このターンから別のセッションへは送れません）'
 
-/** 人が打った文ではなく、SAI が返答を渡すためだけに置いた本文か（題名にしない） */
+/** 人が打った文ではなく、SAI が置いた本文か（返答を渡すためだけの文・ループの周の文。題名にしない） */
 export function isHandedOnly(text: string): boolean {
   const t = text.trim()
-  return t === STEERED_NOTE || t === WAKE_NOTE
+  // ループの周として SAI が送った本文（#634）も、人が打った文ではない
+  return t === STEERED_NOTE || t === WAKE_NOTE || isLoopPrompt(t)
 }
 
 /** 送り元にまだ渡していない返答 1 件 */

@@ -10,13 +10,15 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { APPROVE_MCP_PATH } from '../reply/runner.ts'
-import { AGENT_TOOLS, agentTool, overlapLabel } from './approve-mcp.ts'
+import { AGENT_TOOLS, agentTool, LOOP_TOOLS, overlapLabel } from './approve-mcp.ts'
 
 let dir: string
 let server: Server
 let base: string
 let tokenFile: string
 const seen: { method: string; url: string; token: string; body: string }[] = []
+/** /api/agent/loop が返すもの（#634） */
+let loopReply: { status: number; body: unknown } = { status: 200, body: {} }
 /** /api/agent/wait が順に返すもの */
 let waits: { status: number; body: unknown }[] = []
 
@@ -48,6 +50,7 @@ before(async () => {
         const next = waits.shift() ?? { status: 404, body: { error: 'そのメッセージは見つかりません' } }
         return reply(next.status, next.body)
       }
+      if (req.url === '/api/agent/loop') return reply(loopReply.status, loopReply.body)
       reply(404, { error: 'not found' })
     })
   })
@@ -152,7 +155,9 @@ test('approve-mcp.ts: トークンの置き場を渡されたときだけ sai_* 
   const without = await names({ SAI_URL: base, SAI_ENTITY: 'A1@r' })
   assert.deepEqual(without.tools, ['approve'], 'トークンの置き場が無ければ、叩いても断られるツールを見せない')
   const withToken = await names({ SAI_URL: base, SAI_ENTITY: 'A1@r', SAI_TOKEN_FILE: tokenFile })
-  assert.deepEqual(withToken.tools, ['approve', 'sai_sessions', 'sai_send', 'sai_wait'])
+  assert.deepEqual(withToken.tools, ['approve', 'sai_sessions', 'sai_send', 'sai_wait'], 'ループの周でないターンには sai_loop_next を見せない（#634）')
+  const inLoop = await names({ SAI_URL: base, SAI_ENTITY: 'A1@r', SAI_TOKEN_FILE: tokenFile, SAI_LOOP: '1' })
+  assert.deepEqual(inLoop.tools, ['approve', 'sai_sessions', 'sai_send', 'sai_wait', 'sai_loop_next'])
   const text = ((withToken.call!.result as { content: { text: string }[] }).content[0]!.text)
   assert.match(text, /B1@r「レビュー」/)
 })
@@ -175,4 +180,25 @@ test('AGENT_TOOLS: 説明を書き直しても、ツールの名前と引数は�
   )
   const send = AGENT_TOOLS.find((t) => t.name === 'sai_send')!.description
   assert.ok(send.indexOf('使う場面') < send.indexOf('1 ターンに'), '使う場面を先に、制限は後ろに書く')
+})
+
+test('sai_loop_next: 送り元・action・秒・申し送りを送り、次にどうなるかを言葉で返す。上限や目的は引数に無い（#634）', async () => {
+  assert.deepEqual(LOOP_TOOLS.map((t) => [t.name, Object.keys(t.inputSchema.properties), t.inputSchema.required]), [['sai_loop_next', ['action', 'seconds', 'note'], ['action']]])
+  seen.length = 0
+  loopReply = { status: 200, body: { status: 'running', round: 2, max_rounds: 10, next_in_s: 300 } }
+  const go = await agentTool('sai_loop_next', { action: 'continue', seconds: 300, note: 'CI を待つ', max_rounds: 99 }, base, 'A1@r', tokenFile)
+  assert.match(go.content[0]!.text, /300 秒後に次の周（3 \/ 10）を起こします。待たずにこのターンを終えてください/)
+  assert.deepEqual(JSON.parse(seen[0]!.body), { from: 'A1@r', action: 'continue', note: 'CI を待つ', seconds: 300 }, '知らない引数（上限など）は送らない')
+  assert.equal(seen[0]!.token, 'secret-token')
+
+  loopReply = { status: 200, body: { status: 'running', round: 10, max_rounds: 10 } }
+  assert.match((await agentTool('sai_loop_next', { action: 'continue', note: 'x' }, base, 'A1@r', tokenFile)).content[0]!.text, /上限の 10 周に達した/)
+  loopReply = { status: 200, body: { status: 'done', round: 3, max_rounds: 10 } }
+  assert.match((await agentTool('sai_loop_next', { action: 'done', note: '0 件' }, base, 'A1@r', tokenFile)).content[0]!.text, /ループを終わりにしました/)
+  loopReply = { status: 200, body: { status: 'paused', round: 3, max_rounds: 10, next_in_s: 60 } }
+  assert.match((await agentTool('sai_loop_next', { action: 'continue', note: 'x' }, base, 'A1@r', tokenFile)).content[0]!.text, /人が一時停止している/)
+  loopReply = { status: 409, body: { error: 'このターンはループの周ではありません' } }
+  const refused = await agentTool('sai_loop_next', { action: 'done', note: 'x' }, base, 'A1@r', tokenFile)
+  assert.equal(refused.isError, true)
+  assert.match(refused.content[0]!.text, /ループの周ではありません/)
 })

@@ -766,6 +766,81 @@ export interface ReplyQueue {
 /** エンティティID → 預かっている返信。無ければ空 */
 export type ReplyQueueMap = Record<string, ReplyQueue>
 
+/**
+ * ループの状態（#634）。`running` は回っている（周のターン中か、次に起こす時刻を待っている）、`paused` は人の操作か
+ * 起こせない事情で止まっている（「再開」で続く）。残りは終わり: `done`（エージェントが条件を満たしたと言った）・
+ * `gave_up`（エージェントが進められないと言った）・`stopped`（上限・失敗・使用量・進んでいない・人が止めた）
+ */
+export type LoopStatus = 'running' | 'paused' | 'done' | 'gave_up' | 'stopped'
+
+/**
+ * セッションに組んだループ（#634）。**目的と終わりの条件は人が決め、次にいつ起きるか・終わったかはエージェントが周の終わりに言い
+ * （`sai_loop_next`）、上限と止めることは SAI が持つ**。正本はサーバ（`server/reply/loops.ts`。メモリと `<feed dir>/loops.json`）
+ */
+export interface Loop {
+  /** 目的（人が書く） */
+  goal: string
+  /** 終わりの条件（人が書く。確かめられる形で） */
+  until: string
+  /** 周の数の上限 */
+  max_rounds: number
+  /** これを過ぎたら次の周を起こさない */
+  deadline: string
+  /** エージェントが次の時刻を言わなかったときの間隔（秒） */
+  interval_s: number
+  status: LoopStatus
+  /** 送った周の数（0 はまだ 1 周も送っていない） */
+  round: number
+  /** 次に起こす時刻。周のターンが回っている間と、終わったループには無い */
+  next_at?: string
+  /** 前の周の申し送り（エージェントが `sai_loop_next` で言った文）。次の周の頭に SAI が渡す */
+  note?: string
+  /** 止まっている・終わった理由（`done` ならエージェントが言った根拠） */
+  reason?: string
+  /** 組んだ時刻 */
+  since: string
+  /** いま周のターンが回っている */
+  turning?: true
+}
+
+/** エンティティID → ループ。無ければ空 */
+export type LoopMap = Record<string, Loop>
+
+/** `POST /api/sessions/<id>/loop`（ループを組む。同一オリジンのみ）。数字は省略すると既定値で、範囲の外は丸めずに 400 */
+export interface LoopRequest {
+  goal: string
+  until: string
+  max_rounds?: number
+  /** 組んでから何時間で止めるか */
+  hours?: number
+  interval_s?: number
+}
+
+/** ループの口（組む・止める・再開・いま起こす・片付ける）の応答。片付けたあとは `loop: null` */
+export interface LoopResponse {
+  id: string
+  loop: Loop | null
+}
+
+/** `POST /api/agent/loop`（`sai_loop_next`）。エージェントが周の終わりに言う。**動かせるのは自分のループの「次」だけ** */
+export interface LoopNextRequest {
+  /** 呼んだセッション（MCP の `SAI_ENTITY`） */
+  from: string
+  action: 'continue' | 'done' | 'give_up'
+  /** `continue` のとき、何秒後に起こすか（下限と上限は SAI が丸める。省略は既定の間隔） */
+  seconds?: number
+  /** `continue` は次の周への申し送り、`done` は根拠、`give_up` は理由 */
+  note?: string
+}
+
+export interface LoopNextResponse {
+  status: LoopStatus
+  round: number
+  max_rounds: number
+  /** `continue` のとき、丸めたあとの秒。上限の周に達していて次が無ければ載せない */
+  next_in_s?: number
+}
+
 /** `DELETE /api/sessions/<id>/queue/<queue_id>` と `POST /api/sessions/<id>/queue/resume` の応答。いまの預かり */
 export interface ReplyQueueResponse {
   id: string
@@ -1047,6 +1122,8 @@ export interface SessionsResponse {
   replying: ReplyingMap
   /** 処理中に送って預かっている返信（#305。窓の外のセッションも含む全部）。これが変わると rev も変わる */
   queued: ReplyQueueMap
+  /** 組んであるループ（#634。窓の外のセッションも含む全部）。これが変わると rev も変わる */
+  loops: LoopMap
   /** 返信中のエージェントが待っている許可・質問（ID → 古い順）。これが変わると rev も変わる */
   approvals: ApprovalMap
   /** 配っている web/dist/ が web/src / shared より古い（git pull のあと pnpm build していない）。これが変わると rev も変わる */
@@ -1095,6 +1172,8 @@ export interface SessionDetailResponse {
   replying: ReplyingMap
   /** 預かっている返信（#305。SessionsResponse と同じ） */
   queued: ReplyQueueMap
+  /** 組んであるループ（#634。SessionsResponse と同じ） */
+  loops: LoopMap
   /** そのセッションから別のセッションへのメッセージのようす（#311）。送ったことがあるか止めているときだけ */
   agent?: AgentActivity
   /** 返信中のエージェントが待っている許可・質問（ID → 古い順）。これが変わると rev も変わる */

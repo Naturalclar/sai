@@ -290,3 +290,22 @@ SAI が起こした Claude のターンは、使ったトークンと費用も�
 - 判定は `shared/host.ts` の `isRemoteHost()` の 1 つだけ。`host` が空の行（古い record.py）とサーバの名前が取れないときはリモートにしない。比較は大文字小文字を無視し、`shortHost()` が `record.py` の `host_name()` と同じ規則で短くする。
 - `replyBlockedReason()` は第 2 引数（サーバの host）を省略できない（呼び出し側の漏れは `pnpm typecheck` で止まる）。
 - 印は `web/src/HostTag.tsx` の `@<host>` で、一覧・チャット見出し・フィードのバブル（`Chat` の `showChannel` のときだけ）に出る。絞り込みは `Facets.hosts` が 2 件以上のときだけ出す。
+
+## ループ（#634）
+
+- **決まりごとは `shared/loops.ts`**（純粋関数）: 組むときの検査 `loopFromRequest()`、周の頭の文 `loopPrompt()`（頭は `LOOP_MARK`＝`【SAI ループ】`）、周が終わったあとの状態 `loopAfterRound()`、止める `loopHalt()`、画面に出す形 `loopView()` と 1 行 `loopStatusLine()`。数字は `LOOP_*`（既定 10 周・2 時間・10 分、間隔 60〜3600 秒、`LOOP_STALL_ROUNDS` = 3）。
+- **置き場は `server/reply/loops.ts` の `LoopStore`**（`<feed dir>/loops.json`。tmp → rename、0600）。持つのは `LoopState`（画面に出す `Loop` ＋ 回っている周のターン `turn`・この周で言われたこと `said`・同じ申し送りの数 `stalled`・起こすときの宛先 `url`）。
+- **起こすのは `app.ts` の `tickLoops()` → `tickLoop()`**。呼ぶのは `drainAll()`（画面のポーリングのついで）と、見に行く相手がいる間だけ立てるタイマー（`LOOP_TICK_MS` = 5 秒。`unref()`。`dispose()` で消す。`TerminalDeps.loopTickMs` を 0 にすると立てない＝テスト）。時計は `TerminalDeps.loopNow`。
+  - 周のターン（`turn`）が終わっていれば `loopAfterRound()`（失敗していれば `stopped`）。
+  - 時刻が来ていれば、終わりの時刻 → 周の上限 → 処理中・預かり（待つ）→ 前の返信の失敗（一時停止）→ `loopRefusal()`（一時停止）→ `usageRefusal()`（止める）の順に見て、`launch()` に `loop: true`・`forceProcess: true`・`queue: false` で渡す。
+  - **送る前に `round + 1` と `turn: 'pending'` を書く**。起動できたら `turn` を `Replying.since` にする。立て直したあと子が居なければ「その周は終わった」として次の時刻を待つので、同じ周を 2 回は送らない。
+  - `claude --bg` を待つ `retry` は止めずに元へ戻す。
+- **`loopRefusal()`** は組むときと周を起こす直前の両方で見る（Claude だけ・`replyBlockedReason()`・アーカイブ・`SAI_APPROVE=0` か運用者の `--permission-prompt-tool`・`bypassPermissions`（メタと `SAI_CLAUDE_ARGS`）・`terminalOf()`）。
+- **エージェントの口**: `launch()` の `loop` → `ApproveVia.loop` → MCP の env `SAI_LOOP=1` → `approve-mcp.ts` が `LOOP_TOOLS`（`sai_loop_next`）を **周のターンにだけ**出す。ツールは `POST /api/agent/loop`（`agentLoopNext()`）を叩き、`agentFrom()` の送り元のターンが `LoopState.turn` と同じときだけ受ける。上限・目的を動かす引数は無い。
+- **一時停止**は `pauseLoop()`: 人の返信（`reply` が `202` を返したとき）と、人がターンを止めたとき（`interrupt`。止めたターンは失敗にならないので、ここで止めないと次の周が起きる）。一時停止は `turn` を覚えたままにし、その周が終わったら申し送りだけ残す。
+- **応答**: 一覧と詳細の `loops`（`LoopMap`）。`loops.key()` を rev に混ぜる。処理中の本文（`replying[].text`）は `loopPromptLabel()` で「ループ N 周目」にする。
+- **人が打った文ではない**: `isHandedOnly()` がループの周の文も真にするので、題名・一覧の「最後の入力」・↑ の履歴に使わない。画面は `chatGroups.ts` の `mineOf()` が「ループ N 周目」にして `Utterance.loop` を付け、`promptArrived()` も同じ形で比べる。
+- **要対応**: `todoItems()` の 5 番目の引数 `loops`。`running` のセッションは `done` に出さない（3 か所とも同じ引数で呼ぶ）。
+- **画面**: `LoopForm`（組む）・`LoopBar`（チャットの末尾）・`LoopTag`（サイドバー）。開くボタンは `SessionHeadActions` の `onLoop`。
+- テストは `server/loops.test.ts`（偽の Runner と進められる時計の `createApp`）・`shared/loops.test.ts`・`server/approvals/agentTools.test.ts`。
+

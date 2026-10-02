@@ -367,6 +367,11 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
                           返答 {u.handedReplies} 件を添えました
                         </div>
                       ) : null}
+                      {u.loop ? (
+                        <div className="handed-note" title="SAI がループの周として送った入力（目的・終わりの条件・前の周の申し送りを渡している。全文は記録に残る）">
+                          ループが送りました
+                        </div>
+                      ) : null}
                       <Message
                         {...(diff ? { diff } : {})}
                         ts={u.row.ts}

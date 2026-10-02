@@ -38,6 +38,8 @@ import type {
   SettingsRequest,
   SettingsResponse,
   ReplyQueueResponse,
+  LoopRequest,
+  LoopResponse,
   AgentStopResponse,
   UsageResponse,
   PrsResponse,
@@ -48,7 +50,7 @@ import type {
 import { fetchByRev, RevCache } from './revCache.ts'
 import type { DigestFeedbackReason, DigestFeedbackRequest, DigestFeedbackResponse, DigestUsageReason } from '../../shared/digestFeedback.ts'
 
-export type { Agent, FeedRow, SessionSource, SessionSummary, SessionMeta, ManagerDraft, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, QueuedReply, ReplyQueue, ReplyQueueMap, ReplyQueueResponse, AgentActivity, AgentActivityMessage, AgentStopResponse,Approval, ApprovalMap, ApprovalAnswer, TerminalDialog, Profile, PersonaId, SettingsResponse, SettingsRequest, Viewer, SessionPermissionsResponse, SessionProgressResponse, ProgressStep, SessionDiffResponse, SessionDiffSummaryResponse, GalleryResponse, GalleryItem, SearchResponse, SearchHit, DiffPr, DiffSection, DiffFileStat, PrSummary, PrRepo, PrsResponse, PrDetailResponse, PrReviewRequest, PrReviewResponse, PrReviewEvent, AttachmentResponse, UsageResponse, UsageWindow, CodexUsage, ClaudeUsage } from '../../shared/types.ts'
+export type { Agent, FeedRow, SessionSource, SessionSummary, SessionMeta, ManagerDraft, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, QueuedReply, ReplyQueue, ReplyQueueMap, ReplyQueueResponse, Loop, LoopMap, LoopRequest, AgentActivity, AgentActivityMessage, AgentStopResponse,Approval, ApprovalMap, ApprovalAnswer, TerminalDialog, Profile, PersonaId, SettingsResponse, SettingsRequest, Viewer, SessionPermissionsResponse, SessionProgressResponse, ProgressStep, SessionDiffResponse, SessionDiffSummaryResponse, GalleryResponse, GalleryItem, SearchResponse, SearchHit, DiffPr, DiffSection, DiffFileStat, PrSummary, PrRepo, PrsResponse, PrDetailResponse, PrReviewRequest, PrReviewResponse, PrReviewEvent, AttachmentResponse, UsageResponse, UsageWindow, CodexUsage, ClaudeUsage } from '../../shared/types.ts'
 
 /**
  * `PUT /api/sessions/<id>/meta` のボディ。`SessionMeta` の一部を重ねる。
@@ -195,6 +197,12 @@ export const api = {
   stopAgent: (id: string) => sendJSON<AgentStopResponse>('POST', `/api/sessions/${encodeURIComponent(id)}/agent/stop`, {}),
   /** 止めた送信を再開する */
   resumeAgent: (id: string) => sendJSON<AgentStopResponse>('POST', `/api/sessions/${encodeURIComponent(id)}/agent/resume`, {}),
+  /** ループを組む（#634）。目的と終わりの条件は必須で、上限は省略すると既定値 */
+  startLoop: (id: string, body: LoopRequest) => sendJSON<LoopResponse>('POST', `/api/sessions/${encodeURIComponent(id)}/loop`, body),
+  /** ループを止める・再開する・いま起こす。止めても回っている周のターンは止まらない */
+  loopAction: (id: string, action: 'stop' | 'resume' | 'wake') => sendJSON<LoopResponse>('POST', `/api/sessions/${encodeURIComponent(id)}/loop/${action}`, {}),
+  /** 終わったループを片付ける */
+  clearLoop: (id: string) => sendRaw<LoopResponse>('DELETE', `/api/sessions/${encodeURIComponent(id)}/loop`),
   meta: (id: string) => getJSON<SessionMetaResponse>(`/api/sessions/${encodeURIComponent(id)}/meta`),
   /** `/` の候補になるスキル。入力欄で `/` を打った時に 1 回だけ取る */
   sessionSkills: (id: string) => getJSON<SessionSkillsResponse>(`/api/sessions/${encodeURIComponent(id)}/skills`),

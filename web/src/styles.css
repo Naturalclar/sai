@@ -393,6 +393,25 @@
   .pr-description { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--panel); overflow-wrap: anywhere; }
   .pr-description .none, .pr-view .warn { color: var(--muted); font-size: 12px; }
   .pr-view .warn { color: var(--synth); }
+  /* PR に付いているコメント（#600）。本文と同じ枠で、判定のあるレビューは左の線で色を分ける。畳んだもの（bot・GitHub で畳まれたもの）は見出しの 1 行だけ */
+  .pr-comments { display: flex; flex-direction: column; gap: 8px; }
+  .pr-comments > h2 { margin: 0; font-size: 12px; font-weight: 700; color: var(--muted); }
+  .pr-comment { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); overflow-wrap: anywhere; }
+  .pr-comment.approved { border-left: 3px solid var(--codex); }
+  .pr-comment.changes { border-left: 3px solid var(--claude); }
+  .pr-comment > .head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 8px 12px; font-size: 12px; color: var(--muted); }
+  .pr-comment > .head .author { color: var(--ink); font-weight: 600; }
+  .pr-comment > .head .tag { margin-left: 0; }
+  .pr-comment > .head .tag.approved { background: color-mix(in srgb, var(--codex) 16%, transparent); color: var(--codex); font-weight: 600; }
+  .pr-comment > .head .tag.changes { background: color-mix(in srgb, var(--claude) 16%, transparent); color: var(--claude); font-weight: 600; }
+  .pr-comment > .head .ago { margin-left: auto; }
+  /* flex にすると既定の三角が消えるので、自分で出す */
+  .pr-comment > summary.head { cursor: pointer; list-style: none; }
+  .pr-comment > summary.head::-webkit-details-marker { display: none; }
+  .pr-comment > summary.head::before { content: '▸'; width: 1em; }
+  .pr-comment[open] > summary.head::before { content: '▾'; }
+  .pr-comment > .body, .pr-comment > .foot { padding: 0 12px 10px; }
+  .pr-comment > .foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 12px; }
   /* 1 行に収める（折り返すと「N 待っている」だけが次の行の右端に飛ぶ）。溢れる名前は … で切る */
   /* 名前（セッションへのリンク）の外に PR へのリンク（#554）を並べる。リンクの中にリンクは置けない */
   .todo .who-row { display: flex; align-items: center; gap: 6px; min-width: 0; }

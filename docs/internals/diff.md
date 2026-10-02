@@ -88,6 +88,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 並べるリポジトリは `shared/prs.ts` の `knownRepos()`（直近 30 日のセッションの remote が GitHub のもの）。URL の `owner/repo` も `pickKnownRepo()` で知っているものから引く。
 - 3 秒のポーリングには乗せず（開いたときと「更新」だけ。ボタンは `web/src/RefreshButton.tsx`＝`RefreshMark` ＋文字で、取っている間は CSS でアイコンを回す。#601）、一覧は 60 秒覚える（失敗も覚える）。
 - 差分は `gh pr diff` の本文から `diffStats()` で見出しを数え（切る前に数える）、`clampPatch()` で #171 と同じ上限に切り、画面はセッションと同じ `DiffView` で出す。
+- **会話のコメントとレビュー（#600）**は `PrBrowser.comments()`。`gh pr view <番号> --repo <repo> --json comments,reviews`（`pr view` の項目違いで、形は増やしていない）を**中身の `pr view` とは別に**引き、`shared/prComments.ts` の `parsePrComments()` が 1 本の一覧（古い順）にする。上限は `PR_COMMENTS_MAX`（100 件。古い方を落とす）と `PR_COMMENT_MAX_CHARS`（20000 字）、出力は `PR_COMMENTS_MAX_BYTES`（8MB）まで。読めなければ null で、`GET /api/prs/…` は `comments_error` を添えて本文と差分を返す。レビューの投稿（`handlePrReview`）は `view()` しか呼ばないのでコメントは引かない。画面は `PrComments` → `PrCommentItem`（畳むものは `<details>`）、文言は `prCommentLabels.ts`。
 - `SAI_GH=0` なら `NoPrs`。テストは `PrBrowser` を差し替える（`server/prs.test.ts`）。
 
 ### 書いたセッションの入力欄に入れる（#525）

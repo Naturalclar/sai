@@ -413,6 +413,27 @@ export interface PrsResponse {
   repos: PrRepo[]
 }
 
+/** PR に付いている会話のコメント・レビューの 1 件（#600。`gh pr view --json comments,reviews` を読んだもの）。**読むだけ** */
+export interface PrComment {
+  /** GitHub の node id（並べるときの key） */
+  id: string
+  /** `comment` は PR の下に並ぶ会話のコメント、`review` はレビューの本文と判定 */
+  kind: 'comment' | 'review'
+  /** 書いた人の GitHub のログイン名。消えたアカウントは空 */
+  author: string
+  /** 書いた時刻（ISO。レビューは送った時刻） */
+  at: string
+  /** 本文（Markdown）。上限で切ったら `truncated` */
+  body: string
+  /** GitHub のそのコメントへのリンク。レビューには無い（空） */
+  url: string
+  /** レビューの判定（`APPROVED` / `CHANGES_REQUESTED` / `COMMENTED` / `DISMISSED`）。会話のコメントには無い */
+  state?: string
+  /** 畳んで出す理由。`minimized` は GitHub で畳まれたもの、`bot` は bot が書いたもの。画面は 1 行にして、押すと開く */
+  folded?: 'minimized' | 'bot'
+  truncated?: boolean
+}
+
 /** GET /api/prs/<owner>/<repo>/<番号>（#524）。PR 1 本の中身と差分。差分は `gh pr diff` を読んだもの */
 export interface PrDetailResponse {
   repo: string
@@ -438,6 +459,12 @@ export interface PrDetailResponse {
    * `viewer` は `gh` でログインしている人、`own` はその人が出した PR か（GitHub が自分の PR への Approve / Request changes を受けないので、種類を Comment に絞る）
    */
   review?: { viewer: string; own: boolean }
+  /** 会話のコメントとレビュー（#600）。時刻の古い順。読めなければ省略して `comments_error` */
+  comments?: PrComment[]
+  /** 件数の上限で落とした古いコメントの数。落としていなければ省略 */
+  comments_omitted?: number
+  /** コメントだけ読めなかった理由（本文と差分は出す） */
+  comments_error?: string
 }
 
 /** GitHub のレビューの種類（#526）。既定は COMMENT で、ほかは人が明示的に選んだときだけ */

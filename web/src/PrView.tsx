@@ -16,6 +16,7 @@ import { REVIEW_EVENT_LABEL } from '../../shared/prReview.ts'
 import type { PrReviewEvent } from './api'
 import { newestFirst, prAuthorSession, prCommentKey } from './prSession'
 import { Markdown } from './Markdown'
+import { PrComments } from './PrComments'
 import { agoLabel, checkLabel } from './prLabels'
 import { ReviewBadge } from './ReviewBadge'
 import type { PaneProps } from './App'
@@ -29,7 +30,7 @@ interface Loaded {
 const STATE_LABEL: Record<string, string> = { OPEN: 'open', MERGED: 'マージ済み', CLOSED: '閉じた' }
 
 /**
- * PR 1 本（#524）。題名・出した人・ブランチ・チェック・本文と、差分を**セッションの差分と同じビューア**（`DiffView`）で出す。
+ * PR 1 本（#524）。題名・出した人・ブランチ・チェック・本文・**付いているコメント**（#600。`PrComments`。読むだけ）と、差分を**セッションの差分と同じビューア**（`DiffView`）で出す。
  * 開いたときに 1 回と「更新」のときだけ取る。
  *
  * **その PR を書いたセッションが見つかれば、差分の行にコメントを書いてそのセッションの入力欄に入れられる**（#525）。
@@ -175,6 +176,7 @@ export function PrView({ repo, number, onStatus, onInsertToSession }: { repo: st
             <span className="repo">{loaded.data.repo}</span>
           </div>
           <div className="pr-description body">{pr.body.trim() ? <Markdown text={pr.body} /> : <span className="none">本文はありません</span>}</div>
+          <PrComments data={loaded.data} now={loaded.at.getTime()} />
           {loaded.data.diff_error && <div className="warn">{loaded.data.diff_error}</div>}
           {author && blocked && (
             <div className="note pr-author">この PR を書いたセッション「{authorName}」には返信できないので、行へのコメントは書けません（{blocked}）</div>

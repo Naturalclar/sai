@@ -74,21 +74,22 @@ export function useAttachments(id: string | undefined, initial: readonly Attache
   const canPaste = (text: string): boolean => Boolean(id) && !busy && items.length < ATTACHMENT_MAX_COUNT && new Blob([text]).size <= ATTACHMENT_MAX_BYTES
 
   /**
-   * 長い貼り付けをテキストファイルにして預ける（#609）。預けられたら true。失敗したら false（呼ぶ側が本文に入れる。貼った文を失わない）
+   * 長い貼り付けをテキストファイルにして預ける（#609）。預けられたらその項目、失敗したら null（呼ぶ側が本文に入れる。貼った文を失わない）。
+   * 項目を返すのは、預けている間に入力欄が作り直されたとき（別のセッションへ移った）に、呼ぶ側が下書きへ足せるように
    */
-  const addPasted = async (text: string): Promise<boolean> => {
-    if (!id) return false
+  const addPasted = async (text: string): Promise<Attached | null> => {
+    if (!id) return null
     setError('')
     setBusy(true)
     try {
       const saved = await api.addAttachment(id, new Blob([text], { type: 'text/plain' }), PASTE_FILE_NAME)
-      if (saved.kind !== 'text') return false
+      if (saved.kind !== 'text') return null
       const item: Attached = { path: saved.path, url: '', kind: 'text', name: saved.name, size: saved.size, pasted: { chars: pasteChars(text), text } }
       setItems((list) => (list.some((x) => x.path === saved.path) ? list : [...list, item]))
-      return true
+      return item
     } catch (err) {
       setError(`貼り付けをファイルにできなかったので、本文に入れました（${err instanceof Error ? err.message : String(err)}）`)
-      return false
+      return null
     } finally {
       setBusy(false)
     }

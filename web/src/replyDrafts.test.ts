@@ -75,6 +75,7 @@ test('parseDrafts: ファイルにした貼り付け（#609）は文ごと残る
   const huge = { ...FILE, pasted: { chars: DRAFT_PASTE_MAX_CHARS + 1, text: 'a'.repeat(DRAFT_PASTE_MAX_CHARS + 1) } }
   const kept = draftOf(parseDrafts(JSON.stringify(withDraft({}, 'a@sai', { text: '', attachments: [huge] }, NOW))), 'a@sai').attachments
   assert.deepEqual(kept, [FILE], '添付は残るが、文は持たない')
+  assert.equal(JSON.stringify(withDraft({}, 'a@sai', { text: '', attachments: [huge] }, NOW)).length < 1000, true, '書くときに落とす（localStorage に大きい文を入れない。#673 のレビュー）')
   const broken = draftOf(parseDrafts(JSON.stringify({ 'a@sai': { text: '', at: NOW, attachments: [{ ...FILE, pasted: { chars: 'x', text: 1 } }] } })), 'a@sai').attachments
   assert.deepEqual(broken, [FILE])
 })

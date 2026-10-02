@@ -85,9 +85,13 @@ export function draftOf(drafts: Drafts, id: string): Draft {
  * 下書きを書いた後の全体。空なら消す。ついでに DRAFT_MAX_AGE_MS より古いものを捨て、
  * 新しい順に DRAFT_MAX_COUNT 件までにする
  */
+/**
+ * **書くときに** `keepAttached()` を通す（#673 のレビュー。読むときだけ切ると、大きい貼り付けの文がそのまま localStorage に入り、
+ * 容量を超えるとそのセッションの下書きが黙って残らなくなる）
+ */
 export function withDraft(drafts: Drafts, id: string, draft: Draft, now: number): Drafts {
   const rest = Object.entries(drafts).filter(([key, d]) => key !== id && now - d.at <= DRAFT_MAX_AGE_MS)
-  const next: [string, Stored][] = isEmptyDraft(draft) ? rest : [[id, { text: draft.text, attachments: draft.attachments, at: now }], ...rest]
+  const next: [string, Stored][] = isEmptyDraft(draft) ? rest : [[id, { text: draft.text, attachments: draft.attachments.map(keepAttached), at: now }], ...rest]
   next.sort((a, b) => b[1].at - a[1].at)
   return Object.fromEntries(next.slice(0, DRAFT_MAX_COUNT))
 }

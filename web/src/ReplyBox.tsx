@@ -173,6 +173,14 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
   const attach = useAttachments(attachId, initial.attachments)
   const fileRef = useRef<HTMLInputElement>(null)
   const anyFileRef = useRef<HTMLInputElement>(null)
+  // この入力欄がまだ画面にあるか（預けている間に作り直されたときの後始末に使う。#609）
+  const alive = useRef(true)
+  useEffect(() => {
+    alive.current = true
+    return () => {
+      alive.current = false
+    }
+  }, [])
   // 長い貼り付けをファイルにするか（#609。設定。既定は切）
   const pasteToFile = useContext(PasteToFileContext)
   // 画像を落とせる場所だと分かるように、ドラッグ中は枠を光らせる
@@ -688,9 +696,25 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
             const pasted = e.clipboardData.getData('text/plain')
             if (attachId && pasteBecomesFile(pasted, pasteToFile) && attach.canPaste(pasted)) {
               e.preventDefault()
-              // 預けられなかったら本文に入れる（貼った文を失わない）
-              void attach.addPasted(pasted).then((ok) => {
-                if (!ok) setText((cur) => restorePaste(cur, pasted))
+              // 既定の貼り付けを止めるので、選んでいた範囲は自分で消す（#673 のレビュー。全部選んで貼ったのに前の本文が残り、
+              // そのまま送ってしまう）
+              const { selectionStart: from, selectionEnd: to } = e.currentTarget
+              if (to > from) {
+                change(text.slice(0, from) + text.slice(to))
+                setCaret(from)
+                wantCaret.current = from
+              }
+              void attach.addPasted(pasted).then((item) => {
+                // 預けられなかったら本文に入れる（貼った文を失わない）
+                if (alive.current) {
+                  if (!item) setText((cur) => restorePaste(cur, pasted))
+                  return
+                }
+                // 預けている間に入力欄が作り直された（別のセッションへ移った）。下書きに足しておく（戻ったときに出る）
+                if (!draftKey) return
+                const d = loadDraft(draftKey)
+                if (item) saveDraft(draftKey, { text: d.text, attachments: d.attachments.some((a) => a.path === item.path) ? d.attachments : [...d.attachments, item] })
+                else saveDraft(draftKey, { text: restorePaste(d.text, pasted), attachments: d.attachments })
               })
             }
           }}

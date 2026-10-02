@@ -40,10 +40,14 @@ export interface Settings {
    * 入にするのはその人）。それ以外は 0.5〜1（`isJevAuto()`）
    */
   jev_auto: number
+  /**
+   * 入力欄への長い貼り付けを、本文に入れずファイルにして添えるか（#609）。**既定は切**（人が長い文を貼った実績がほぼ無いので、入にした人だけ）
+   */
+  paste_to_file: boolean
 }
 
 /** 既定。テストもこれを使う（キーを足したらここ 1 か所） */
-export const DEFAULT_SETTINGS: Settings = { persona: DEFAULT_PERSONA, linear_workspace: '', digest: false, digest_provider: 'claude', digest_model: '', jev: true, jev_auto: 0 }
+export const DEFAULT_SETTINGS: Settings = { persona: DEFAULT_PERSONA, linear_workspace: '', digest: false, digest_provider: 'claude', digest_model: '', jev: true, jev_auto: 0, paste_to_file: false }
 
 export class SettingsStore {
   readonly path: string
@@ -67,6 +71,7 @@ export class SettingsStore {
       if (isDigestModel(raw?.digest_model)) settings.digest_model = raw.digest_model
       if (raw?.jev === false) settings.jev = false
       if (isJevAuto(raw?.jev_auto)) settings.jev_auto = raw.jev_auto
+      if (raw?.paste_to_file === true) settings.paste_to_file = true
       // Jev を切っていれば自動も切（切っている間に隠れて残った閾値で、入に戻した瞬間に自動で答えない。#499 のレビュー）
       if (!settings.jev) settings.jev_auto = 0
     } catch {

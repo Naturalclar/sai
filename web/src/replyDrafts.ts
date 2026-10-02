@@ -7,6 +7,8 @@
 import type { Attached } from './useAttachments'
 
 export const DRAFTS_KEY = 'sai.drafts'
+/** 下書きに残す、ファイルにした貼り付けの文の上限（localStorage を埋めない。超えたら添付だけ残り、「本文に戻す」は出ない） */
+export const DRAFT_PASTE_MAX_CHARS = 200_000
 /** これより古い下書きは、次に書くときに捨てる */
 export const DRAFT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 /** 残す数の上限（新しい順）。セッションを渡り歩いても溜まり続けない */
@@ -40,6 +42,9 @@ const keepAttached = (a: Attached): Attached => {
     out.kind = a.kind
     if (typeof a.name === 'string') out.name = a.name
     if (typeof a.size === 'number') out.size = a.size
+    // ファイルにした貼り付け（#609）は文そのものも残す（別の画面へ行って戻っても「本文に戻す」が効く）。大きすぎるものは残さない
+    const p = a.pasted as { chars?: unknown; text?: unknown } | undefined
+    if (p && typeof p.chars === 'number' && typeof p.text === 'string' && p.text.length <= DRAFT_PASTE_MAX_CHARS) out.pasted = { chars: p.chars, text: p.text }
   }
   return out
 }

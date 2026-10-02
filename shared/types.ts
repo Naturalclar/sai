@@ -1586,6 +1586,8 @@ export interface SettingsResponse {
   jev_ready: boolean
   /** Jev の確率がこれ以上なら自動で「常に許可」する閾値（#499。0 = しない。既定 0）。Claude の `-p` の許可だけ */
   jev_auto: number
+  /** 入力欄への長い貼り付けをファイルにして添えるか（#609。settings.json の `paste_to_file`。既定は切） */
+  paste_to_file: boolean
 }
 
 /** 一言を作る口。`claude`（`claude -p`。既定）か `openai`（OpenAI 互換の `/v1/chat/completions`。ローカルの LLM はこちら） */
@@ -1608,6 +1610,8 @@ export interface SettingsRequest {
   jev?: boolean
   /** 自動で常に許可する閾値（#499）。0 で「しない」、それ以外は 0.5〜1 */
   jev_auto?: number
+  /** 入力欄への長い貼り付けをファイルにして添えるか（#609） */
+  paste_to_file?: boolean
 }
 
 export interface SessionFilters {

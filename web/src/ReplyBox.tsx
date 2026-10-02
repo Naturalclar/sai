@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent, SyntheticEvent } from 'react'
 import { filterReplyTargets, mentionLabels, mentionQuery, stripMention, targetProjectLabel, type ReplyTarget } from '../../shared/reply.ts'
 import { filterSkills, skillInvocation, skillSummary, slashQuery, type Skill } from '../../shared/skills.ts'
@@ -6,6 +6,7 @@ import { emojiQuery, filterEmoji, type EmojiHit } from '../../shared/emoji.ts'
 import { elapsedLabel } from './format'
 import { useSkills } from './useSkills'
 import { useAttachments } from './useAttachments'
+import type { Attached } from './useAttachments'
 import { AttachmentStrip } from './AttachmentStrip'
 import { IconButton } from './IconButton'
 import { ReplyModelPicker, type ReplyModelProps } from './ReplyModelPicker'
@@ -24,6 +25,8 @@ import { ManagerDraftCard } from './ManagerDraftCard'
 import { useMediaQuery } from './hooks'
 import { PhotoMark } from './PhotoMark'
 import { FileMark } from './FileMark'
+import { pasteBecomesFile, restorePaste } from '../../shared/pasteFile.ts'
+import { PasteToFileContext } from './pasteSetting'
 import { ATTACHMENT_MAX_COUNT } from '../../shared/attachments.ts'
 import { NOT_IN_HISTORY, canGoBack, canGoForward, stepHistory } from './replyHistory'
 import type { HistoryState } from './replyHistory'
@@ -170,6 +173,8 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
   const attach = useAttachments(attachId, initial.attachments)
   const fileRef = useRef<HTMLInputElement>(null)
   const anyFileRef = useRef<HTMLInputElement>(null)
+  // 長い貼り付けをファイルにするか（#609。設定。既定は切）
+  const pasteToFile = useContext(PasteToFileContext)
   // 画像を落とせる場所だと分かるように、ドラッグ中は枠を光らせる
   const [dropping, setDropping] = useState(false)
   // caret は「@ の検出」に使う。onChange と onSelect（カーソル移動）で追う
@@ -425,6 +430,14 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
     })
   }
 
+  /** ファイルにした貼り付け（#609）を本文に戻す。添付から外して、本文の後ろに足す（送りはしない） */
+  const restorePasted = (item: Attached) => {
+    if (!item.pasted) return
+    attach.remove(item.path)
+    change(restorePaste(text, item.pasted.text))
+    ref.current?.focus()
+  }
+
   /** 貼り付け・ドロップ・ファイル選択から来たファイルを預ける（画像・文字のファイル・PDF。#608。受けられないものは useAttachments が中身で弾く） */
   const takeFiles = (list: FileList | null | undefined) => {
     const files = [...(list ?? [])]
@@ -597,7 +610,7 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
               ? '別プロセスで回す。端末には出ない'
               : '端末で開いていれば打ち込む'}
       </div>
-      <AttachmentStrip items={attach.items} onRemove={attach.remove} disabled={attach.busy} />
+      <AttachmentStrip items={attach.items} onRemove={attach.remove} disabled={attach.busy} onRestorePaste={restorePasted} />
       {attach.error && <div className="note err">{attach.error}</div>}
       {/* 続き（#349）と案（#373）をタップで受け取る。入力欄のすぐ上に置くので、ソフトキーボードが出ていても隠れない */}
       {fromManager && <ManagerDraftCard text={suggestion} onAccept={acceptSuggestion} onDiscard={() => settleDraft('discard', draftShown.at)} />}
@@ -669,8 +682,17 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
           onSelect={track}
           onKeyDown={onKeyDown}
           onPaste={(e) => {
-            // 画像を貼ったらファイルとして預ける。文字の貼り付けは今までどおり
-            if (attachId && takeFiles(e.clipboardData.files)) e.preventDefault()
+            // 画像・ファイルを貼ったら預ける。文字の貼り付けは今までどおり
+            if (attachId && takeFiles(e.clipboardData.files)) return e.preventDefault()
+            // 長い文の貼り付けは、設定が入なら本文に入れずテキストファイルにして添える（#609。「本文に戻す」で戻せる）
+            const pasted = e.clipboardData.getData('text/plain')
+            if (attachId && pasteBecomesFile(pasted, pasteToFile) && attach.canPaste(pasted)) {
+              e.preventDefault()
+              // 預けられなかったら本文に入れる（貼った文を失わない）
+              void attach.addPasted(pasted).then((ok) => {
+                if (!ok) setText((cur) => restorePaste(cur, pasted))
+              })
+            }
           }}
           // 案を出している間は空にする（ゴーストと同じ場所に重なるため）。消える分は aria-label で補う
           placeholder={fromNext || fromManager ? '' : hint}

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { HIDDEN_POLL_MS, parseRoute, sessionHash, useHashRoute, useLocalState, usePolling, type Route } from './hooks'
+import { HIDDEN_POLL_MS, parseRoute, sessionHash, useHashRoute, useLocalState, useMediaQuery, usePolling, type Route } from './hooks'
+import { closeColumn, diffModalBelow, EMPTY_LAYOUT, focusColumn, focusedItem, normalizeLayout, openBeside, placeItem, sessionIdsIn, type PaneItem, type PaneLayout } from './paneLayout'
+import { ChatPane } from './ChatPane'
 import { pendingItems, todoItems } from '../../shared/todoItems.ts'
 import { sessionGroups, toggleCollapsed, visibleIds } from './sessionGroups'
 import { titleWith } from '../../shared/notify.ts'
@@ -85,6 +87,16 @@ const DEFAULT_GROUPS: GroupState = { collapsed: [] }
 /** ⌘K の候補がまだ何も無いとき（一覧の取得前）。毎回作り直すと再描画が増える */
 const EMPTY_SESSIONS: never[] = []
 const EMPTY_PROJECTS: never[] = []
+/** フォーカスの無いペインの取得状況はヘッダに出さない（#633。「更新 hh:mm」はフォーカスのあるペインの分だけ） */
+const NO_STATUS: StatusProps['onStatus'] = () => {}
+/** サイドバーの幅（styles.css の `main.layout` の 1 列目と同じ値） */
+const SIDEBAR_PX = 320
+
+/** フォーカスを移した・ペインを閉じたあと、URL をフォーカスのあるペインに合わせる */
+function goTo(item: PaneItem | null) {
+  if (item?.kind === 'session') location.hash = sessionHash(item.id)
+  else if (item?.kind === 'todo') location.hash = '#/todo'
+}
 
 /**
  * 1画面。左のサイドバーにセッション一覧、右にチャット（フィード or 選んだセッション）。
@@ -93,6 +105,31 @@ const EMPTY_PROJECTS: never[] = []
  */
 export function App() {
   const route = useHashRoute()
+  const narrow = useNarrow()
+
+  // チャットの領域を左右に分ける並び（#633）。localStorage に持ち、**URL はフォーカスのあるペインの 1 つを指す**。
+  // URL が変わったら（クリック・↑↓・戻る）並びに反映する: もう並んでいればそのペインへフォーカスを移し、
+  // 無ければフォーカスのあるペインの中身を入れ替える。route が変わったときだけ合わせる（描画中に導く。
+  // 毎回合わせると、ペインを閉じた直後のまだ古い URL で、閉じたものを並びに戻してしまう）
+  const [storedPanes, setStoredPanes] = useLocalState<PaneLayout>('sai.panes', EMPTY_LAYOUT)
+  const layout = useMemo(() => normalizeLayout(storedPanes), [storedPanes])
+  const [placed, setPlaced] = useState<Route | null>(null)
+  if (placed !== route) {
+    setPlaced(route)
+    if (route.name === 'session') {
+      const next = placeItem(layout, { kind: 'session', id: route.id })
+      if (next !== layout) setStoredPanes(next)
+    }
+  }
+  // 並べて出すのは、セッションを開いていて広い画面のときだけ。フィード・要対応・PR・新しいセッションは全幅で、
+  // セッションに戻れば並びも戻る。狭い画面（900px 以下）は今までどおり 1 つ
+  const focused = focusedItem(layout)
+  // 「いま開いているセッション」はフォーカスのあるペイン（題名・↑↓ の起点・差分ボタン）。並びを動かした直後の、
+  // URL がまだ追いついていない 1 回の描画でも並びの方を見る
+  const currentId = route.name !== 'session' ? '' : focused?.kind === 'session' ? focused.id : route.id
+  const layoutIds = useMemo(() => sessionIdsIn(layout), [layout])
+  const split = route.name === 'session' && !narrow && layoutIds.length > 1
+  const paneIds = useMemo(() => (split ? layoutIds : currentId ? [currentId] : []), [split, layoutIds, currentId])
   // ヘッダの「更新 hh:mm」は右側（チャット）の分だけ。サイドバーは自分の失敗を自分の中に出す
   const [status, setStatus] = useState<{ at: Date | null; error: string | null }>({ at: null, error: null })
   // 子の useEffect の依存に入るので、毎回作り直すと無限に再描画する
@@ -128,13 +165,12 @@ export function App() {
 
   // 差分を出しているセッションと、どこから開いたか。広い画面はチャットの右にペイン、狭い画面はモーダル（useNarrow）
   const [diff, setDiff] = useState<OpenDiff | null>(null)
-  const narrow = useNarrow()
   const closeDiff = useCallback(() => setDiff(null), [])
   // 差分へのコメント（#511）を返信欄に入れる頼み。入れる先はそのセッションの画面の返信欄だけ（フィードは返信先が @ で動く）
   const [commentInsert, setCommentInsert] = useState<{ id: string; text: string; seq: number } | null>(null)
   // 出すのは、いま開いているセッションの分と、フィードのバブルから開いたものはフィードにいる間（#280）。
   // 別のセッションへ移っている間は出さない（戻ってくれば、また出る。閉じるまで覚えておく）。規則は feedDiff.ts
-  const diffOpen = visibleDiff(diff, route, narrow)
+  const diffOpen = visibleDiff(diff, route, narrow, paneIds)
   // ボタンはトグル（出ていれば閉じる。#211）。「いま出ているか」で決めるので、セッションで開いたまま
   // フィードに来て同じセッションのバブルを押しても、閉じずに開く
   const toggleDiff = useCallback((id: string, origin: DiffOrigin = 'session') => setDiff(nextDiff(diffOpen, id, origin)), [diffOpen])
@@ -145,7 +181,7 @@ export function App() {
   // 行へのコメントは、そのセッションを開いていて返信欄が出ているときだけ（入れる先がある）。
   // 条件は SessionView が返信欄を出す条件と同じ（アーカイブ済みは返信欄の代わりに案内が出る。#512 のレビュー）
   const canComment =
-    diffOpen !== null && route.name === 'session' && route.id === diffOpen && diffSession !== undefined && !diffSession.archived && !replyBlockedReason(diffSession, list.data?.host ?? '')
+    diffOpen !== null && route.name === 'session' && paneIds.includes(diffOpen) && diffSession !== undefined && !diffSession.archived && !replyBlockedReason(diffSession, list.data?.host ?? '')
   // PR の差分へのコメント（#525）を、その PR を書いたセッションの入力欄に入れてそのセッションへ移る（送るのは人）。
   // **打ちかけ（sai.drafts）の後ろに足してから移る**: 移った先の ReplyBox は作られたときに打ちかけを読むが、
   // 作られたときにもう来ている insert は「当てた」扱いにする（#511 は返信欄が開いたままなので当たっていた）
@@ -154,14 +190,46 @@ export function App() {
     saveDraft(id, { ...draft, text: appendInsert(draft.text, text) })
     location.hash = sessionHash(id)
   }, [])
+  // 並べているとき、差分を足すと 1 ペインが狭くなりすぎる幅ではモーダルに落とす（#633。1 つのときは今までどおり）
+  const tight = useMediaQuery(`(max-width: ${diffModalBelow(paneIds.length, sidebarOpen ? SIDEBAR_PX : 0)}px)`)
+  const diffModal = narrow || (split && tight)
+  // 横に並べて開く（サイドバーの ⌘ + クリックと項目のボタン）。フォーカスは開いた方へ移る
+  const openBesideSession = useCallback(
+    (id: string) => {
+      setStoredPanes(openBeside(layout, { kind: 'session', id }))
+      location.hash = sessionHash(id)
+    },
+    [layout, setStoredPanes],
+  )
+  const focusPane = useCallback(
+    (index: number) => {
+      const next = focusColumn(layout, index)
+      if (next === layout) return
+      setStoredPanes(next)
+      goTo(focusedItem(next))
+    },
+    [layout, setStoredPanes],
+  )
+  // ペインを閉じる。そのセッションの差分を出していれば差分も閉じる（覚えたままにすると、また並べたとき不意に出る）
+  const closePane = useCallback(
+    (index: number) => {
+      const next = closeColumn(layout, index)
+      if (next === layout) return
+      const closed = layout.columns[index]?.[0]
+      if (closed?.kind === 'session' && diff?.id === closed.id) setDiff(null)
+      setStoredPanes(next)
+      goTo(focusedItem(next))
+    },
+    [layout, setStoredPanes, diff],
+  )
   const insertComments = useCallback(
     (text: string) => {
       if (diffOpen === null) return
       setCommentInsert((prev) => ({ id: diffOpen, text, seq: (prev?.seq ?? 0) + 1 }))
-      // 狭い画面はモーダルが返信欄を隠しているので閉じる（広い画面はペインを残したまま、横の返信欄に入る）
-      if (narrow) setDiff(null)
+      // モーダルは返信欄を隠しているので閉じる（右のペインで出しているときは残したまま、横の返信欄に入る）
+      if (diffModal) setDiff(null)
     },
-    [diffOpen, narrow],
+    [diffOpen, diffModal],
   )
 
   // Cmd/Ctrl + \ で開閉（VS Code と同じ）。入力欄にフォーカスがあっても効く。IME 変換中は無視
@@ -188,7 +256,8 @@ export function App() {
     if (!pending) return
     const el =
       pending.want === 'input'
-        ? document.querySelector<HTMLTextAreaElement>('.reply textarea')
+        ? // 並べているときはフォーカスのあるペインの入力欄（#633）
+          document.querySelector<HTMLTextAreaElement>('.pane.focused .reply textarea')
         : // サイドバーの選ばれている項目。フィードは <a> そのもの、セッションは <div> の中の <a class="link">
           (() => {
             const item = document.querySelector<HTMLElement>('.channels .item.active')
@@ -261,8 +330,8 @@ export function App() {
 
   // 待っている件数をタブの題名に出す（#231）。通知と違って許可が要らないので、切っていても出る
   useEffect(() => {
-    document.title = titleWith(pendingItems(todo ?? []).length, route.name === 'session' ? route.id.slice(0, 12) : '')
-  }, [route, todo])
+    document.title = titleWith(pendingItems(todo ?? []).length, currentId.slice(0, 12))
+  }, [currentId, todo])
 
   /** 入力欄で `←` を押されたとき。見えていない所には当てないので、閉じたサイドバーは開き、狭い画面は一覧側へ移る */
   const focusSidebar = useCallback(() => {
@@ -342,46 +411,70 @@ export function App() {
           画面のビルドが古い。別のターミナルで <code>pnpm build</code> してください（終わると自動で読み直す）
         </div>
       )}
-      <main className={`layout route-${route.name}${sidebarOpen ? '' : ' sidebar-closed'}${diffOpen !== null && !narrow ? ' diff-open' : ''}`}>
+      <main className={`layout route-${route.name}${sidebarOpen ? '' : ' sidebar-closed'}${diffOpen !== null && !diffModal ? ' diff-open' : ''}`}>
         <aside className="sidebar">
           {/* 幅を固定した箱に入れる。開閉の遷移中に列だけが縮み、中身は折り返さない */}
           <div className="side-inner">
-            <SessionList list={list} filters={filters} setFilters={setFilters} active={active} creating={route.name === 'new'} groups={groups} collapsed={groupUi.collapsed} onToggleGroup={toggleGroup} prs={sessionPrs} />
+            <SessionList list={list} filters={filters} setFilters={setFilters} active={active} creating={route.name === 'new'} groups={groups} collapsed={groupUi.collapsed} onToggleGroup={toggleGroup} prs={sessionPrs} shown={split ? paneIds : EMPTY_SESSIONS} onOpenBeside={narrow ? undefined : openBesideSession} />
           </div>
         </aside>
-        <div className="pane">
-          {route.name === 'prs' ? (
-            <PrListView onStatus={onStatus} onOpenSidebar={openSidebar} />
-          ) : route.name === 'pr' ? (
-            <PrView key={`${route.repo}#${route.number}`} repo={route.repo} number={route.number} onStatus={onStatus} onInsertToSession={insertToSession} />
-          ) : route.name === 'new' ? (
-            <NewSessionView replying={list.data?.replying} now={list.updatedAt?.getTime() ?? 0} onOpenSidebar={openSidebar} />
-          ) : route.name === 'todo' ? (
-            <TodoView list={list} onStatus={onStatus} onOpenSidebar={openSidebar} onLeaveToSidebar={focusSidebar} linear={linear} settings={settings} prs={sessionPrs} />
-          ) : route.name === 'session' ? (
-            <SessionView id={route.id} focusTs={route.ts ?? ''} {...(route.side ? { focusSide: route.side } : {})} onStatus={onStatus} onOpenSidebar={openSidebar} onLeaveToSidebar={focusSidebar} onToggleDiff={toggleDiff} diffOpen={diffOpen !== null} {...(commentInsert && commentInsert.id === route.id ? { insert: commentInsert } : {})} linear={linear} settings={settings} peers={list.data?.sessions} />
+        <div className={`panes${split ? ' split' : ''}`}>
+          {route.name === 'session' ? (
+            // 並べているときは列の数だけ（#633）。key は列の番号（1 つのときは今までどおり同じ SessionView が id だけ変わる）
+            paneIds.map((id, i) => (
+              <ChatPane key={`pane:${i}`} focused={id === currentId} onFocusPane={split ? () => focusPane(i) : undefined} onClose={split ? () => closePane(i) : undefined}>
+                <SessionView
+                  id={id}
+                  // 発言への飛び先（ts）は URL が指しているペインだけ
+                  focusTs={id === route.id ? (route.ts ?? '') : ''}
+                  {...(id === route.id && route.side ? { focusSide: route.side } : {})}
+                  onStatus={id === currentId ? onStatus : NO_STATUS}
+                  onOpenSidebar={openSidebar}
+                  onLeaveToSidebar={focusSidebar}
+                  onToggleDiff={toggleDiff}
+                  diffOpen={diffOpen === id}
+                  focused={id === currentId}
+                  {...(commentInsert && commentInsert.id === id ? { insert: commentInsert } : {})}
+                  linear={linear}
+                  settings={settings}
+                  peers={list.data?.sessions}
+                />
+              </ChatPane>
+            ))
           ) : (
-            <FeedView
-              selected={filters.projects}
-              projects={list.data?.filters.projects ?? EMPTY_PROJECTS}
-              onProjects={(projects) => setFilters({ projects })}
-              sessions={list.data?.sessions}
-              selfHost={list.data?.host ?? ''}
-              openDiff={diffOpen}
-              onToggleDiff={toggleFeedDiff}
-              onStatus={onStatus}
-              onOpenSidebar={openSidebar}
-              onLeaveToSidebar={focusSidebar}
-              linear={linear}
-              settings={settings}
-              prs={sessionPrs}
-            />
+            <ChatPane focused>
+            {route.name === 'prs' ? (
+              <PrListView onStatus={onStatus} onOpenSidebar={openSidebar} />
+            ) : route.name === 'pr' ? (
+              <PrView key={`${route.repo}#${route.number}`} repo={route.repo} number={route.number} onStatus={onStatus} onInsertToSession={insertToSession} />
+            ) : route.name === 'new' ? (
+              <NewSessionView replying={list.data?.replying} now={list.updatedAt?.getTime() ?? 0} onOpenSidebar={openSidebar} />
+            ) : route.name === 'todo' ? (
+              <TodoView list={list} onStatus={onStatus} onOpenSidebar={openSidebar} onLeaveToSidebar={focusSidebar} linear={linear} settings={settings} prs={sessionPrs} />
+            ) : (
+              <FeedView
+                selected={filters.projects}
+                projects={list.data?.filters.projects ?? EMPTY_PROJECTS}
+                onProjects={(projects) => setFilters({ projects })}
+                sessions={list.data?.sessions}
+                selfHost={list.data?.host ?? ''}
+                openDiff={diffOpen}
+                onToggleDiff={toggleFeedDiff}
+                onStatus={onStatus}
+                onOpenSidebar={openSidebar}
+                onLeaveToSidebar={focusSidebar}
+                linear={linear}
+                settings={settings}
+                prs={sessionPrs}
+              />
+            )}
+            </ChatPane>
           )}
         </div>
         {/* 広い画面はチャットの右にもう1枚。狭い画面は今までどおりモーダルで重ねる */}
-        {diffOpen !== null && !narrow && <DiffPane id={diffOpen} onClose={closeDiff} canReview={canReview} {...(canComment ? { onInsertComments: insertComments } : {})} />}
+        {diffOpen !== null && !diffModal && <DiffPane id={diffOpen} onClose={closeDiff} canReview={canReview} {...(canComment ? { onInsertComments: insertComments } : {})} />}
       </main>
-      {diffOpen !== null && narrow && <DiffModal id={diffOpen} onClose={closeDiff} canReview={canReview} {...(canComment ? { onInsertComments: insertComments } : {})} />}
+      {diffOpen !== null && diffModal && <DiffModal id={diffOpen} onClose={closeDiff} canReview={canReview} {...(canComment ? { onInsertComments: insertComments } : {})} />}
     </>
   )
 }

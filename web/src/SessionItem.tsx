@@ -19,6 +19,7 @@ import type { PrSummary } from '../../shared/types.ts'
 import { More } from './More'
 import { projectName } from '../../shared/project.ts'
 import { SessionArchiveButton } from './SessionArchiveButton'
+import { SessionSplitButton } from './SessionSplitButton'
 import { ArchiveMark } from './ArchiveMark'
 import { useArchive } from './useArchive'
 import { useSwipe } from './useSwipe'
@@ -49,6 +50,10 @@ interface Props {
   pr?: PrSummary | null
   /** このセッションに組んであるループ（#634）。回っている・一時停止のあいだだけ印を出す */
   loop?: Loop | null
+  /** フォーカスの無い方のペインに出ている（#633）。選ばれている項目より薄い印を付ける */
+  beside?: boolean
+  /** 横に並べて開く（#633。⌘ + クリックと項目のボタン）。並べられない幅では渡されない（⌘ + クリックはブラウザに残す） */
+  onOpenBeside?: (() => void) | undefined
 }
 
 /**
@@ -56,7 +61,7 @@ interface Props {
  * （<a> の中に <button> は置けない。押してもページを動かさない）。
  * タッチ端末では <a> を左にずらして、下のレール（アーカイブ / 戻す）を見せる
  */
-export function SessionItem({ s, active, replying, profile, approval, now, swipe, reduced, selfHost, open, onOpenChange, pr = null, loop = null }: Props) {
+export function SessionItem({ s, active, replying, profile, approval, now, swipe, reduced, selfHost, open, onOpenChange, pr = null, loop = null, beside = false, onOpenBeside }: Props) {
   // 選ばれたら見えるところまでサイドバーをスクロールする（キーボードで移動したとき用。見えていれば動かない）
   const ref = useRef<HTMLAnchorElement>(null)
   useEffect(() => {
@@ -82,10 +87,16 @@ export function SessionItem({ s, active, replying, profile, approval, now, swipe
     if (open || sw.swiped()) {
       e.preventDefault()
       onOpenChange(false)
+      return
+    }
+    // ⌘ + クリック（Windows / Linux は Ctrl + クリック）は横に並べて開く（#633）。「新しいタブで開く」は奪う
+    if (onOpenBeside && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault()
+      onOpenBeside()
     }
   }
 
-  const cls = ['item', active && 'active', s.archived && 'archived', sw.dragging && 'dragging', open && 'open'].filter(Boolean).join(' ')
+  const cls = ['item', active && 'active', beside && !active && 'beside', s.archived && 'archived', sw.dragging && 'dragging', open && 'open'].filter(Boolean).join(' ')
   // 2 行目は最後に誰が何を言ったか（#300）。自分が返信したら、次のターンを待たずに自分の返信になる
   const preview = sessionPreview(s, replying, profile)
   return (
@@ -115,6 +126,7 @@ export function SessionItem({ s, active, replying, profile, approval, now, swipe
         </div>
       )}
       <SessionArchiveButton archive={archive} />
+      {onOpenBeside && !swipe && <SessionSplitButton onOpen={onOpenBeside} />}
       <a
         ref={ref}
         className="link"

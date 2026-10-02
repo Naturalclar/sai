@@ -32,10 +32,14 @@ interface Props {
   onToggleGroup: (key: string) => void
   /** GitHub の open な PR（#548。`useSessionPrs()`）。各セッションに紐づくものを印にする */
   prs?: readonly PrRepo[]
+  /** 並べて出しているセッション（#633）。フォーカスの無い方にも薄い印を付ける */
+  shown?: readonly string[]
+  /** 横に並べて開く（#633）。並べられない幅では渡されない */
+  onOpenBeside?: ((id: string) => void) | undefined
 }
 
 /** 左サイドバー。絞り込み、固定の「＋ 新しいセッション」「フィード」「要対応」、その下にセッション一覧（新しい順） */
-export function SessionList({ list, filters, setFilters, active, creating = false, groups, collapsed, onToggleGroup, prs = [] }: Props) {
+export function SessionList({ list, filters, setFilters, active, creating = false, groups, collapsed, onToggleGroup, prs = [], shown = [], onOpenBeside }: Props) {
   // キーボードで固定項目に移ったとき、サイドバーの一番上まで見えるようにする（SessionItem と同じ扱い）
   const pinnedRef = useRef<HTMLAnchorElement>(null)
   const pinned = active.kind === 'feed' || active.kind === 'todo' || active.kind === 'prs'
@@ -151,6 +155,8 @@ export function SessionList({ list, filters, setFilters, active, creating = fals
                     onOpenChange={(open) => setOpenId(open ? s.id : openId === s.id ? null : openId)}
                     pr={prForSession(s, prs)?.pr ?? null}
                     loop={data?.loops[s.id] ?? null}
+                    beside={shown.includes(s.id)}
+                    onOpenBeside={onOpenBeside ? () => onOpenBeside(s.id) : undefined}
                   />
                 ))}
             </div>

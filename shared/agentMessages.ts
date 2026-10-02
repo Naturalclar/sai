@@ -109,6 +109,8 @@ export function agentReplyRows(
   sent: readonly { message_id: string; to: string; since: string; handed_at?: string }[],
   rows: readonly FeedRow[],
   toName: (id: string) => string,
+  /** 相手のアイコンの URL（#666）。付けていなければ空・undefined で、印には載せない */
+  toIcon: (id: string) => string | undefined = () => undefined,
 ): FeedRow[] {
   const want = new Map(sent.map((m) => [m.message_id, m]))
   if (want.size === 0) return []
@@ -121,7 +123,8 @@ export function agentReplyRows(
     if (!m || seen.has(id)) continue
     if (entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) !== m.to) continue
     seen.add(id)
-    out.push({ ...r, agent_reply: { message_id: id, to_name: toName(m.to), sent_at: m.since, ...(m.handed_at ? { handed_at: m.handed_at } : {}) } })
+    const icon = toIcon(m.to)
+    out.push({ ...r, agent_reply: { message_id: id, to_name: toName(m.to), ...(icon ? { to_icon: icon } : {}), sent_at: m.since, ...(m.handed_at ? { handed_at: m.handed_at } : {}) } })
   }
   return out.sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts))
 }

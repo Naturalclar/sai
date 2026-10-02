@@ -233,3 +233,20 @@ export function speakerLabel(speaker: Speaker, session: Pick<SessionSummary, 'me
   if (session?.icon) out.icon = session.icon
   return out
 }
+
+/**
+ * 見出しに出す発言者（#666）。ふつうのバブルは `speakerLabel()` のまま。**送ったメッセージへの返答（#588）は相手の名前とアイコン**
+ * （印の `to_name` / `to_icon`）にする。送り元のセッション画面は相手のセッションを一覧に持っていないので、印に載ったものを使う。
+ * 印にアイコンが無ければ、一覧から引けたもの（フィード）、それも無ければ頭文字
+ */
+export function groupSpeaker(
+  speaker: Speaker,
+  session: Pick<SessionSummary, 'meta' | 'icon' | 'label_suffix'> | undefined,
+  profile: Profile | undefined,
+  reply?: Pick<AgentReplyTag, 'to_name' | 'to_icon'>,
+): SpeakerLabel {
+  const who = speakerLabel(speaker, session, profile)
+  if (!reply) return who
+  const icon = reply.to_icon || who.icon
+  return { name: reply.to_name, mark: who.mark, ...(icon ? { icon } : {}) }
+}

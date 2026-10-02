@@ -1,3 +1,4 @@
+import { Avatar } from './Avatar'
 import type { ReactNode } from 'react'
 import type { Profile } from './api'
 import { elapsedLabel, hm, LONG_REPLY_MS, parseTs } from './format'
@@ -32,7 +33,7 @@ export function PendingBubble({ text, since, now, repo, quiet, profile, typed, l
   }
   return (
     <div className={`group pending${long ? ' long' : ''}`}>
-      <div className="avatar me">{profile?.icon ? <img src={profile.icon} alt="" /> : '私'}</div>
+      <Avatar kind="me" icon={profile?.icon} mark="私" />
       <div>
         <div className="gh">
           <span className="name">{profile?.name || 'あなた'}</span>

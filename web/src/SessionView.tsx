@@ -287,7 +287,7 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
                 </PendingBubble>
               )}
               {approvals.map((a, i) => (
-                <ApprovalBubble key={a.approval_id} approval={a} now={now} hotkey={i === 0 && focused} modeNote={launchedModeNote(data.replying[id], data.session.meta?.permission_mode)} />
+                <ApprovalBubble key={a.approval_id} approval={a} now={now} hotkey={i === 0 && focused} modeNote={launchedModeNote(data.replying[id], data.session.meta?.permission_mode)} icon={data.session.icon} />
               ))}
               {queuedHere?.items.map((q, i) => (
                 <QueuedBubble key={q.queue_id} id={id} item={q} order={i + 1} paused={queuedHere.paused ?? ''} now={now} profile={data.profile} />

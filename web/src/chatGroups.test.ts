@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { FeedRow } from '../../shared/types.ts'
-import { groupRows, promptArrived, speakerLabel, toUtterances } from './chatGroups.ts'
+import { groupRows, groupSpeaker, promptArrived, speakerLabel, toUtterances } from './chatGroups.ts'
 import { withHandedReplies } from '../../shared/agentMessages.ts'
 import { loopPrompt } from '../../shared/loops.ts'
 import { entityId } from '../../shared/entity.ts'
@@ -159,6 +159,16 @@ test('speakerLabel: 表示名・アイコン画像があればそれ、無けれ
   assert.deepEqual(speakerLabel('claude', { meta: { name: '背中メニュー' } }), { name: '背中メニュー', mark: 'C' }, '名前だけなら icon キーは無い（頭文字のまま）')
   assert.deepEqual(speakerLabel('claude', { icon: '/i/1' }), { name: 'Claude Code', mark: 'C', icon: '/i/1' })
   assert.deepEqual(speakerLabel('me', { meta: { name: '背中メニュー' }, icon: '/i/1' }), { name: 'あなた', mark: '私' }, '自分側はセッションの表示名・画像に引きずられない')
+})
+
+test('groupSpeaker: ふつうのバブルはそのセッションの名前とアイコン。送ったメッセージへの返答は相手の名前とアイコン（#666）', () => {
+  const mine = { meta: { name: '送り元' }, icon: '/i/mine' }
+  assert.deepEqual(groupSpeaker('claude', mine, undefined), { name: '送り元', mark: 'C', icon: '/i/mine' }, '返答でなければ speakerLabel のまま')
+  assert.deepEqual(groupSpeaker('me', mine, { name: 'J', icon: '/i/me' }), { name: 'J', mark: '私', icon: '/i/me' })
+  // セッション画面は相手を一覧に持っていない（session が undefined）。印に載った名前とアイコンを出す
+  assert.deepEqual(groupSpeaker('claude', undefined, undefined, { to_name: 'くらら', to_icon: '/i/kurara' }), { name: 'くらら', mark: 'C', icon: '/i/kurara' })
+  assert.deepEqual(groupSpeaker('codex', undefined, undefined, { to_name: 'くらら' }), { name: 'くらら', mark: 'X' }, '相手がアイコンを付けていなければ頭文字')
+  assert.deepEqual(groupSpeaker('claude', { icon: '/i/list' }, undefined, { to_name: 'くらら' }), { name: 'くらら', mark: 'C', icon: '/i/list' }, '印に無くても、一覧から引けたものがあれば出す')
 })
 
 test('speakerLabel: 自分は profile があればその名前とアイコン、無ければ「あなた」「私」', () => {

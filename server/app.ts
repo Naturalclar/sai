@@ -52,6 +52,7 @@ import type { SessionTurnResponse, TurnStepsResponse,
   SessionDetailResponse,
   BackgroundSession,
   SessionDiffResponse,
+  SessionFileResponse,
   SessionDiffSummaryResponse,
   SessionProgressResponse,
   SessionTodo,
@@ -199,6 +200,8 @@ import { agentListFromEnv, backgroundLive, type AgentList, type ClaudeAgent } fr
 import { isRemoteHost } from '../shared/host.ts'
 import { IMAGES_SEGMENT } from '../shared/images.ts'
 import { imageHeaders, imageTable, readSessionImage } from './local/images.ts'
+import { fileTable, isLoopbackHostHeader, readSessionFile } from './local/files.ts'
+import { FILES_SEGMENT } from '../shared/files.ts'
 import { TranscriptImages } from './local/transcriptImages.ts'
 import { labelSuffixes } from '../shared/sessionLabels.ts'
 import { CodexImages } from './local/codexImages.ts'
@@ -3974,6 +3977,27 @@ export function createApp(
             }))
           : []
         return json(res, { id, items: mergeGallery([...galleryFromRows(id, own), ...fromTranscript, ...generated]) } satisfies GalleryResponse)
+      }
+      // 返答に出てきたファイル（#603）。画像と同じく `<key>` は本文から拾った参照の鍵で、表に無ければ 404（パスはリクエストから受けない）。
+      // **当面ループバックだけ**（tailnet 越しには出さない。名前で断る一覧をすり抜けた秘密が、手元の外に出ないように）
+      const filesAt = path.startsWith(SESSIONS_PREFIX) ? path.indexOf(FILES_SEGMENT, SESSIONS_PREFIX.length) : -1
+      if (filesAt > 0) {
+        if (who.kind !== 'local') return error(res, 403, '返答のファイルは、SAI を動かしているマシンのブラウザからだけ開けます（tailnet 越しには出していません）')
+        // 外のページがホスト名を 127.0.0.1 に向け直して読む（DNS rebinding）のを断る。ソケットがループバックでも Host は外の名前になる
+        if (!isLoopbackHostHeader(req.headers.host)) return error(res, 403, '返答のファイルは、127.0.0.1 / localhost で開いた SAI からだけ開けます')
+        const id = sessionIdFrom(path, path.slice(filesAt))
+        if (id === null) return error(res, 400, 'bad session id')
+        const days = parseDays(q.get('days'), 90)
+        const { sessions } = await store.sessions(days)
+        const session = sessions.find((s) => s.id === id)
+        if (!session) return error(res, 404, 'session not found in window')
+        if (isRemoteHost(session.host, selfHost())) return error(res, 404, `別のマシン（${session.host}）のファイルは開けません`)
+        const own = (await rowsNow(days)).filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
+        const source = fileTable(own, session.cwd).get(path.slice(filesAt + FILES_SEGMENT.length))
+        if (!source) return error(res, 404, 'このセッションの返答に出てきていないファイルです')
+        const file = await readSessionFile(source)
+        if (!file.ok) return error(res, file.status, file.reason)
+        return json(res, { path: file.path, name: file.name, text: file.text, bytes: file.bytes } satisfies SessionFileResponse)
       }
       // 本文の画像（#321）。`<key>` はそのセッションのターン完了の行の本文から拾った参照の鍵で、表に無ければ 404（パスはリクエストから受けない）
       const imagesAt = path.startsWith(SESSIONS_PREFIX) ? path.indexOf(IMAGES_SEGMENT, SESSIONS_PREFIX.length) : -1

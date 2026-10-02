@@ -46,10 +46,12 @@ import type {
   PrsResponse,
   UsageReportResponse,
   PrDetailResponse,
+  SessionFileResponse,
   PrReviewRequest,
   PrReviewResponse,
 } from '../../shared/types.ts'
 import { fetchByRev, RevCache } from './revCache.ts'
+import { sessionFileUrl } from '../../shared/files.ts'
 import type { DigestFeedbackReason, DigestFeedbackRequest, DigestFeedbackResponse, DigestUsageReason } from '../../shared/digestFeedback.ts'
 
 export type { Agent, FeedRow, TurnStepsResponse, SessionSource, SessionSummary, SessionMeta, ManagerDraft, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, QueuedReply, ReplyQueue, ReplyQueueMap, ReplyQueueResponse, Loop, LoopMap, LoopRequest, AgentActivity, AgentActivityMessage, AgentStopResponse,Approval, ApprovalMap, ApprovalAnswer, TerminalDialog, Profile, PersonaId, SettingsResponse, SettingsRequest, Viewer, SessionPermissionsResponse, SessionProgressResponse, ProgressStep, SessionDiffResponse, SessionDiffSummaryResponse, GalleryResponse, GalleryItem, SearchResponse, SearchHit, DiffPr, DiffSection, DiffFileStat, PrSummary, PrRepo, PrsResponse, PrDetailResponse, PrComment, PrReviewRequest, PrReviewResponse, PrReviewEvent, AttachmentResponse, UsageResponse, UsageReportResponse, UsageReportRow, UsageSessionRow, UsageTotals, UsageWindow, CodexUsage, ClaudeUsage } from '../../shared/types.ts'
@@ -227,6 +229,8 @@ export const api = {
   /** 差分の大きさと PR 番号だけ（本文は作らない）。入力欄のボタンが開く前に出す（#211） */
   diffSummary: (id: string) => getJSON<SessionDiffSummaryResponse>(`/api/sessions/${encodeURIComponent(id)}/diff?summary=1`),
   /** そのセッションに出てきた画像（#504）。開いたときと新しいターンが記録されたときだけ取る */
+  /** 返答に出てきたファイル（#603）。URL に載せるのは鍵だけ。読めなければサーバの理由つきで投げる */
+  sessionFile: (id: string, path: string) => getJSON<SessionFileResponse>(sessionFileUrl(id, path)),
   gallery: (id: string) => getJSON<GalleryResponse>(`/api/sessions/${encodeURIComponent(id)}/gallery`),
   /** 一言のもとになったターン完了の行（#537）。要対応の「終了」の行で「元の文」を押したときだけ */
   /** 終わったターンで呼んだツール（#605）。開いたときに 1 回だけ */

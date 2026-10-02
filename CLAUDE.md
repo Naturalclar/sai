@@ -105,6 +105,7 @@ OpenCode (feed/opencode/sai.js) ─┘                           │
 - **`server/local/claudeHooks.ts`** は `~/.claude/settings.json` を読むだけ。本物を読むのは `main.ts` だけで、`createApp` の既定は `NoClaudeHooks`。フックを足したら `shared/hooks.ts` の `EXPECTED_CLAUDE_HOOKS` と README の例の両方に足す。分からないときは出さない → docs/internals/server.md#フックの配線のずれlocalclaudehooksts
 - **補った返答・`local/recovered.ts`**（#614）は JSONL に書かない。transcript を読むのは候補のときだけで、古いターンは裏で読む（応答を待たせない）。人に見せる・返答を引く道は `rowsNow()`、集計（`turns`）と一言は `store.rows()` のまま。前のターンの返答は出さない → docs/internals/progress.md#落ちた返答を-transcript-から補う614
 - **`server/auth.ts`**（tailnet の認証）→ docs/internals/auth.md
+- **返答に出てきたファイル・`local/files.ts`**（#603）はパスを受けず鍵で引く。cwd の中の文字のファイルだけ、名前で断る一覧（`isSecretPath()`）を外さない。**ループバックだけ**、HTML は描かない → docs/internals/server.md#返答に出てきたファイルを読むlocalfilests603
 - **画像の軽い版・`local/thumbnails.ts`** は `sips` に**置き場に書き直したファイルだけ**を渡す（元のパス・リクエストの文字列は渡さない）。作れなければ 503 で画面は押すまで元を読まない。ライトボックスとダウンロードは元のまま → docs/internals/server.md#画像の軽い版localthumbnailsts
 
 ### 画面（web/src/）

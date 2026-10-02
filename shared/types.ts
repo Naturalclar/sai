@@ -363,6 +363,20 @@ export interface DiffPr {
   review_decision?: string
 }
 
+/**
+ * GET /api/sessions/<id>/files/<key>（#603）。返答に出てきた手元のファイルの中身。**文字のファイルだけ**で、画面も文字として見せる
+ * （HTML を描かない）。`<key>` は本文に書かれたパスの鍵（パスはリクエストから受けない）。読めなければ理由つきの 4xx
+ */
+export interface SessionFileResponse {
+  /** 本文に書かれたパスそのもの */
+  path: string
+  /** ファイル名 */
+  name: string
+  text: string
+  /** 中身の大きさ（バイト） */
+  bytes: number
+}
+
 /** PR のチェック（CI）をまとめた状態（#524）。チェックが 1 つも無ければ空 */
 export type PrCheckState = 'success' | 'failure' | 'pending' | ''
 

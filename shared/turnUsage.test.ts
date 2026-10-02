@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { USAGE_MATCH_MS, failureTail, parseTurnUsage, totalTokens, usageByRow } from './turnUsage.ts'
+import { USAGE_MATCH_MS, failureTail, parseTurnUsage, totalTokens, turnCost, turnCosts, usageByRow } from './turnUsage.ts'
 import type { TurnUsageEntry } from './turnUsage.ts'
 import type { FeedRow } from './types.ts'
 
@@ -165,4 +165,30 @@ test('parseTurnUsage: 要約だけのターンは usage が 0 なので modelUsa
 test('usageByRow: 要約だけのターンの使用量は、前のターンのバブルに付けない（#579。行を書かない）', () => {
   const rows = [row('2026-09-16T13:57:11+09:00')]
   assert.equal(usageByRow(rows, [entry('2026-09-16T04:57:40.000Z', 'S@r', { compact: true })]).size, 0)
+})
+
+test('turnCost: 積み上げの値を、前の行との差にする。下がったら（数え直し）その行の値をそのまま（#602）', () => {
+  assert.equal(turnCost(undefined, 1.5), 1.5)
+  assert.equal(turnCost(1.5, 4), 2.5)
+  assert.equal(turnCost(4, 4), 0)
+  assert.equal(turnCost(4, 0.25), 0.25)
+  // 浮動小数の端数を残さない（0.3 - 0.1 は 0.19999999999999998）
+  assert.equal(turnCost(0.1, 0.3), 0.2)
+})
+
+test('turnCosts: 前の行は同じセッションの中で辿る（別のセッションの値を引かない）。合計は積み上げの単純な足し算より小さい（#602）', () => {
+  const entries = [
+    { id: 'A@r', cost_usd: 1 },
+    { id: 'B@r', cost_usd: 10 },
+    { id: 'A@r', cost_usd: 3 },
+    { id: 'B@r', cost_usd: 12 },
+    // 数え直しで下がった
+    { id: 'A@r', cost_usd: 0.5 },
+    { id: 'A@r', cost_usd: 2 },
+  ]
+  const costs = turnCosts(entries)
+  assert.deepEqual(costs, [1, 10, 2, 2, 0.5, 1.5])
+  assert.equal(costs.reduce((a, b) => a + b, 0), 17)
+  assert.equal(entries.reduce((a, e) => a + e.cost_usd, 0), 28.5)
+  assert.deepEqual(turnCosts([]), [])
 })

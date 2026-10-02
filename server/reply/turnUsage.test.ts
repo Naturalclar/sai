@@ -84,3 +84,41 @@ test('TurnUsageLog: ファイルが無ければ空のまま（行はそのまま
   const rows = [{ ts: '2026-09-16T13:57:11+09:00', agent: 'claude', repo: 'r', branch: '', session: 'S', session_source: 'payload', cwd: '/w', event: 'Stop', text: 'ok' }] as FeedRow[]
   assert.equal(log.attach(rows), rows)
 })
+
+test('TurnUsageLog: 行に載せる費用は、そのターンぶん（同じセッションの前の行との差。ファイルは積み上げのまま。#602）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-turnusage-'))
+  try {
+    const path = join(dir, 'turn-usage.jsonl')
+    const old = new Date(Date.now() - (TURN_USAGE_KEEP_DAYS + 1) * 24 * 60 * 60_000).toISOString()
+    await writeFile(
+      path,
+      [
+        // 窓の外の行も「前の行」として辿る（辿らないと、窓の最初の行にそれまでの積み上げが丸ごと乗る）
+        JSON.stringify({ ts: old, id: 'S@r', ...usage, cost_usd: 5 }),
+        JSON.stringify({ ts: '2026-09-16T04:57:12.500Z', id: 'S@r', ...usage, cost_usd: 7.5 }),
+        // 別のセッションの値は引かない
+        JSON.stringify({ ts: '2026-09-16T05:00:00.500Z', id: 'T@r', ...usage, cost_usd: 100 }),
+        JSON.stringify({ ts: '2026-09-16T05:30:01.000Z', id: 'S@r', ...usage, cost_usd: 8 }),
+        // 数え直しで下がったら、その行の値をそのまま
+        JSON.stringify({ ts: '2026-09-16T06:00:01.000Z', id: 'S@r', ...usage, cost_usd: 0.25 }),
+        '',
+      ].join('\n'),
+      'utf-8',
+    )
+    const log = new TurnUsageLog(path)
+    await log.load()
+    const row = (ts: string, session = 'S') => ({ ts, agent: 'claude', repo: 'r', branch: '', session, session_source: 'payload', cwd: '/w', event: 'Stop', text: 'ok' }) as FeedRow
+    const attached = log.attach([row('2026-09-16T13:57:11+09:00'), row('2026-09-16T14:00:00+09:00', 'T'), row('2026-09-16T14:30:00+09:00'), row('2026-09-16T15:00:00+09:00')])
+    assert.deepEqual(attached.map((r) => r.usage?.cost_usd), [2.5, 100, 0.5, 0.25])
+    // 記録した分も、読み返した分の続きとして差にする
+    const rowTs = new Date().toISOString()
+    log.record('S@r', { ...usage, cost_usd: 1.25 })
+    assert.equal(log.attach([row(rowTs)])[0]?.usage?.cost_usd, 1)
+    // ファイルには CLI の値（積み上げ）のまま書く
+    for (let i = 0; i < 50 && !(await readFile(path, 'utf-8')).includes('1.25'); i++) await new Promise((r) => setTimeout(r, 10))
+    const lines = (await readFile(path, 'utf-8')).trim().split('\n')
+    assert.equal((JSON.parse(lines[lines.length - 1]!) as TurnUsageEntry).cost_usd, 1.25)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})

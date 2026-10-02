@@ -5,7 +5,7 @@
 import { appendFile, mkdir, readFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { digestKey } from '../../shared/digestFeedback.ts'
-import { usageByRow } from '../../shared/turnUsage.ts'
+import { turnCost, usageByRow } from '../../shared/turnUsage.ts'
 import type { TurnUsage, TurnUsageEntry } from '../../shared/turnUsage.ts'
 import type { FeedRow } from '../../shared/types.ts'
 
@@ -35,6 +35,13 @@ export class TurnUsageLog implements TurnUsageSink {
   /** 直前の追記。**順に書く**（投げっぱなしのまま並べると、2 件が同時に来たとき行の順が入れ替わる） */
   private last: Promise<void> = Promise.resolve()
   private entries: TurnUsageEntry[] = []
+  /**
+   * 各行のそのターンぶんの費用（#602）。ファイルの `cost_usd` はセッションの積み上げなので、同じセッションの前の行との差にして持つ。
+   * 前の行は**読み返しの窓より古いものも辿る**（窓の最初の行に、それまでの積み上げが丸ごと乗らないように）
+   */
+  private costs = new WeakMap<TurnUsageEntry, number>()
+  /** セッションごとの、最後に見た積み上げの値 */
+  private lastCost = new Map<string, number>()
   private loaded = false
   private revValue = ''
 
@@ -55,7 +62,9 @@ export class TurnUsageLog implements TurnUsageSink {
           const e = JSON.parse(t) as TurnUsageEntry
           if (!e || typeof e.ts !== 'string' || typeof e.id !== 'string') continue
           const at = Date.parse(e.ts)
-          if (Number.isNaN(at) || at < since) continue
+          if (Number.isNaN(at)) continue
+          this.remember(e)
+          if (at < since) continue
           this.entries.push(e)
         } catch {
           // 壊れた行は落とす
@@ -69,6 +78,7 @@ export class TurnUsageLog implements TurnUsageSink {
 
   record(id: string, usage: TurnUsage): void {
     const entry: TurnUsageEntry = { ts: new Date().toISOString(), id, ...usage }
+    this.remember(entry)
     this.entries.push(entry)
     this.bumpRev()
     this.last = this.last.then(() => this.append(entry))
@@ -83,8 +93,16 @@ export class TurnUsageLog implements TurnUsageSink {
       const e = byRow.get(digestKey(r))
       if (!e) return r
       const { ts: _ts, id: _id, ...usage } = e
-      return { ...r, usage }
+      // 費用は積み上げでなく、そのターンぶん（#602）
+      return { ...r, usage: { ...usage, cost_usd: this.costs.get(e) ?? usage.cost_usd } }
     })
+  }
+
+  /** その行のそのターンぶんの費用を控える。**書いた順に呼ぶ**（ファイルの順・追記の順） */
+  private remember(e: TurnUsageEntry): void {
+    const cur = typeof e.cost_usd === 'number' && Number.isFinite(e.cost_usd) ? e.cost_usd : 0
+    this.costs.set(e, turnCost(this.lastCost.get(e.id), cur))
+    this.lastCost.set(e.id, cur)
   }
 
   /** 覚えている行の数（読み返しの窓の中だけ） */

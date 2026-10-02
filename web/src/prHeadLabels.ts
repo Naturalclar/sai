@@ -17,10 +17,10 @@ function withCount(label: string, n: number): string {
   return n > 0 ? `${label} ${n}` : label
 }
 
-/** 「GitHub にレビューを投稿…」。押すと確認の画面を開くだけ（#526） */
+/** 「Submit review」（GitHub の Files changed のボタンと同じ文言。#649）。押すと確認の画面を開くだけ（#526） */
 export function reviewLabel(count: number, hasBody: boolean): HeadLabel {
   const n = draftCount(count, hasBody)
-  return { full: withCount('GitHub にレビューを投稿…', n), short: withCount('レビュー', n) }
+  return { full: withCount('Submit review', n), short: withCount('レビュー', n) }
 }
 
 /** 書いたセッションの入力欄に入れる（#525）。全体のコメントは入力欄には入れないので、数えるのは行コメントだけ */

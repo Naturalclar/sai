@@ -29,7 +29,8 @@ const EVENT_HINT: Record<PrReviewEvent, string> = {
 const SIDE_LABEL = { old: '消した行', new: '' } as const
 
 /**
- * GitHub にレビューを投稿する前の確認（#526）。**GitHub に載る形をそのまま**出す: 種類・全体のコメント・行ごとのコメント。
+ * GitHub にレビューを投稿する前の確認（#526）。**GitHub に載る形をそのまま**出す: 全体のコメント・種類・行ごとのコメント
+ * （並びは GitHub と同じく入力欄が上、種類が下。#649）。
  * 人が「GitHub に送る」を押したときだけ送る。
  *
  * - 開いたときに PR を読み直し、head が進んでいれば送らせない（読み直させる）。サーバも同じことを確かめる
@@ -47,6 +48,7 @@ export function PrReviewModal({ data, comments, onRemoveComment, body, onBody, o
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const ref = useRef<HTMLDivElement>(null)
+  const bodyRef = useRef<HTMLTextAreaElement>(null)
   const files = useMemo(() => parseUnifiedDiff(data.diff.patch), [data.diff.patch])
   const lines = comments.map((c) => ({ comment: c, state: reviewLineState(files, c) }))
   const stale = lines.filter((l) => l.state !== 'ok').length
@@ -54,7 +56,14 @@ export function PrReviewModal({ data, comments, onRemoveComment, body, onBody, o
   const empty = reviewEmptyReason(event, body, comments.length)
   const blocked = checking ? 'PR が進んでいないか確かめています…' : headMoved ? 'PR が読んだあとに進みました。更新してください' : stale > 0 ? `行が変わったコメントが ${stale} 件あります。外すか全体のコメントに移してください` : empty
 
-  useEffect(() => ref.current?.focus(), [])
+  // 開いたらすぐ書けるように、全体のコメントの欄にフォーカスを入れる（#649。GitHub と同じ）。打ちかけがあれば末尾から続ける。
+  // タッチ端末では入れない（ソフトキーボードが出て、種類と行ごとのコメントが隠れる）。Esc は欄からも枠の onKeyDown に上がってくる
+  useEffect(() => {
+    const el = bodyRef.current
+    if (!el || window.matchMedia('(hover: none) and (pointer: coarse)').matches) return ref.current?.focus()
+    el.focus()
+    el.setSelectionRange(el.value.length, el.value.length)
+  }, [])
 
   // 開いたときに head を確かめる（画面を開いたまま時間が経っていることがある）
   useEffect(() => {
@@ -126,6 +135,10 @@ export function PrReviewModal({ data, comments, onRemoveComment, body, onBody, o
             <RefreshButton busy={checking} onClick={reload} linkish />
           </div>
         )}
+        <label className="pr-review-body">
+          <span>全体のコメント</span>
+          <textarea ref={bodyRef} value={body} onChange={(e) => onBody(e.target.value)} rows={4} placeholder={event === 'REQUEST_CHANGES' ? '何を直してほしいか（必須）' : '（なくてもよい）'} />
+        </label>
         <fieldset className="pr-review-event">
           <legend>種類</legend>
           {events.map((e) => (
@@ -136,10 +149,6 @@ export function PrReviewModal({ data, comments, onRemoveComment, body, onBody, o
           ))}
           {own && <div className="note">自分の PR なので Comment だけです（GitHub が自分の PR への承認・変更要求を受けません）</div>}
         </fieldset>
-        <label className="pr-review-body">
-          <span>全体のコメント</span>
-          <textarea value={body} onChange={(e) => onBody(e.target.value)} rows={4} placeholder={event === 'REQUEST_CHANGES' ? '何を直してほしいか（必須）' : '（なくてもよい）'} />
-        </label>
         <div className="pr-review-lines">
           <div className="head">行ごとのコメント {comments.length} 件</div>
           {lines.length === 0 && <div className="dim">ありません</div>}

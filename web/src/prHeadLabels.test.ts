@@ -3,13 +3,13 @@ import assert from 'node:assert/strict'
 import { draftCount, draftSummary, insertLabel, reviewLabel } from './prHeadLabels.ts'
 
 test('reviewLabel: 下書きが無ければ数を付けない（ボタンは 0 件でも出すので「0」は書かない）', () => {
-  assert.deepEqual(reviewLabel(0, false), { full: 'GitHub にレビューを投稿…', short: 'レビュー' })
+  assert.deepEqual(reviewLabel(0, false), { full: 'Submit review', short: 'レビュー' })
 })
 
 test('reviewLabel: 行コメントだけ・全体のコメントだけ・両方', () => {
-  assert.deepEqual(reviewLabel(3, false), { full: 'GitHub にレビューを投稿… 3', short: 'レビュー 3' })
-  assert.deepEqual(reviewLabel(0, true), { full: 'GitHub にレビューを投稿… 1', short: 'レビュー 1' })
-  assert.deepEqual(reviewLabel(3, true), { full: 'GitHub にレビューを投稿… 4', short: 'レビュー 4' })
+  assert.deepEqual(reviewLabel(3, false), { full: 'Submit review 3', short: 'レビュー 3' })
+  assert.deepEqual(reviewLabel(0, true), { full: 'Submit review 1', short: 'レビュー 1' })
+  assert.deepEqual(reviewLabel(3, true), { full: 'Submit review 4', short: 'レビュー 4' })
 })
 
 test('insertLabel: 入れる先の名前を出し、数えるのは行コメントだけ', () => {

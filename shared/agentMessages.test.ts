@@ -18,6 +18,7 @@ import {
   isDeliveryOf,
   replyOf,
   sessionLabel,
+  sendHow,
   tokensLabel,
   usageRefusal,
   AGENT_HEADER_MARK,
@@ -219,4 +220,10 @@ test('withHandedReplies: 件数と合計の字数に上限があり、入りき�
   const u = withHandedReplies('本文', big)
   assert.equal((u.match(/からの返答:/g) ?? []).length, Math.floor(HANDED_MAX_CHARS / 4050), `合計 ${HANDED_MAX_CHARS} 字まで`)
   assert.equal(splitHandedReplies(u).handed, 5, '数は足した全部（名前だけの分も渡した扱い）')
+})
+
+test('sendHow: sai_send の返事に、相手のターンをどう回したかを出す（#624）', () => {
+  assert.match(sendHow('compact'), /要約（\/compact）してから始めます/)
+  assert.match(sendHow('queued'), /終わってから回ります/)
+  assert.equal(sendHow('process'), '相手のターンを始めました')
 })

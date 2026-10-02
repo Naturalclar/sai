@@ -300,3 +300,18 @@ export function splitHandedReplies(userText: string): { text: string; handed: nu
   return { text: userText.slice(end + HANDED_END.length).replace(/^\s+/, ''), handed }
 }
 
+
+/** `sai_send` の説明に足す、着手の頼み方（#624）。セッション同士の口（`approve-mcp.ts`）と tailnet の `/mcp` が同じ文を出す */
+export const SEND_COMPACT_NOTE =
+  '**着手を頼むときは、1 行目を「#N に着手してください。」だけにして、説明は 2 行目から書く**（1 行目がその形なら、相手は要約（/compact）してから始めるので読み直す量が減る。1 行目に続きを書くと要約されない）'
+
+/** `sai_send` の `compact` の説明（#624） */
+export const SEND_COMPACT_ARG =
+  '相手に要約（/compact）してから始めさせるか。省略すれば 1 行目が着手の形のときだけ要約する。調査のような着手の形でない依頼でも要約させたいときは true、着手の形でも要約させたくないときは false。要約できない相手（端末で開いている・Claude でない・文脈が小さい）はそのまま始める'
+
+/** `sai_send` の返事の、相手のターンをどう回したか（#624。`via` は `ReplyResponse` のもの） */
+export function sendHow(via: string): string {
+  if (via === 'queued') return '相手は処理中なので、終わってから回ります（要約は挟みません）'
+  if (via === 'compact') return '相手は要約（/compact）してから始めます'
+  return '相手のターンを始めました'
+}

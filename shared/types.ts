@@ -887,13 +887,18 @@ export interface AgentSendRequest {
    * 送り元のターンを 1 回だけ起こして返答を渡す。既定は付けない（返答は次のターンの頭に届く）。起こされたターンからは送れない
    */
   wake?: boolean
+  /**
+   * 相手に要約（`/compact`）してから始めさせるか（#624）。省略すれば画面からの送信と同じ判定（`shared/compact.ts` の
+   * `messageCompacts()`: 本文の 1 行目が着手の形で、相手が要約できるとき）。`true` でも要約できない相手にはそのまま送る
+   */
+  compact?: boolean
 }
 
 /** `POST /api/agent/send` の応答 */
 export interface AgentSendResponse {
   message_id: string
   to: string
-  /** 相手のターンをどう回したか。`queued` なら相手は処理中で、終わってから回る */
+  /** 相手のターンをどう回したか。`queued` なら相手は処理中で、終わってから回る。`compact` なら要約してから本文を回す（#624） */
   via: ReplyResponse['via']
   /** 送り元のこのターンで送った回数（#311） */
   sent: number

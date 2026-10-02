@@ -833,3 +833,134 @@ test('wake: 預かりに並んだ「起こす」を人が取り消したら、�
   idle('A1@r')
 })
 
+
+// ---- 着手の依頼は要約（/compact）してから始める（#624）
+
+const sendWith = (from: string, to: string, text: string, over: Record<string, unknown>) => agent('/api/agent/send', { method: 'POST', body: JSON.stringify({ from, to, text, ...over }) })
+/** 預かりに残ったものを消して、止まった預かりを戻す（次のテストに持ち越さない） */
+const clearQueue = async (id: string) => {
+  const list = (await (await poll()).json()) as SessionsResponse
+  for (const item of list.queued[id]?.items ?? []) await fetch(`${base}/api/sessions/${encodeURIComponent(id)}/queue/${item.queue_id}`, { method: 'DELETE', headers: { Origin: base } })
+  await fetch(`${base}/api/sessions/${encodeURIComponent(id)}/queue/resume`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: '{}' })
+}
+
+test('sai_send: 1 行目が着手の形で相手が要約できるなら、/compact のターンを先に回し、本文は見出し付きのまま預かりから回る。返答も引き当たる（#624）', async () => {
+  runner.started.length = 0
+  contexts.set('B1@r', 500_000)
+  turn('A1@r')
+  let messageId = ''
+  try {
+    const res = await send('A1@r', 'B1@r', '#624 に着手してください。\nissue の本文とコメントが正本です。')
+    assert.equal(res.status, 202)
+    const body = (await res.json()) as AgentSendResponse
+    messageId = body.message_id
+    assert.equal(body.via, 'compact')
+    assert.equal(body.context_tokens, 500_000, '予算の数え方は今のまま（要約の前の大きさを足す）')
+    assert.equal(runner.started.length, 1, '起こしたのは要約のターンだけ')
+    const first = runner.started[0]!.cmd
+    assert.equal(first.compact, true)
+    assert.match(first.text, /^\/compact 次は「#624 に着手してください。」に取りかかる/, '指示は見出しを付ける前の、送り元が書いた 1 行目から')
+    assert.ok(!first.text.includes('【SAI】'))
+  } finally {
+    idle('A1@r')
+  }
+  // 要約が回っている間は本文を回さない
+  runner.busy.set('B1@r', { since: new Date().toISOString(), text: '/compact …', compact: true })
+  await poll()
+  assert.equal(runner.started.length, 1)
+  // 要約が終わったら、預かりが本文を回す（見出しの id は本文に残る）
+  idle('B1@r')
+  await poll()
+  assert.equal(runner.started.length, 2)
+  const delivered = runner.started[1]!.cmd.text
+  assert.match(delivered, new RegExp(`^【SAI】#o/r の「実装して」からのメッセージです（id: ${messageId}）`))
+  assert.ok(delivered.endsWith('#624 に着手してください。\nissue の本文とコメントが正本です。'))
+  assert.equal(runner.started[1]!.cmd.compact, undefined)
+  // 本文のターンも、メッセージで起動したターン（連鎖は 1 段まで）
+  turn('B1@r')
+  try {
+    assert.equal((await send('B1@r', 'A1@r', '頼み返す')).status, 429)
+  } finally {
+    idle('B1@r')
+  }
+  // 相手の返答が送り元に引き当てられる
+  await appendFile(feedFile, JSON.stringify(row(new Date(), 'B1', { repo: 'r', cwd: work2, project: 'o/r', user_text: delivered, text: 'PR を出しました' })) + '\n')
+  const done = (await (await agent(`/api/agent/wait?from=${encodeURIComponent('A1@r')}&message_id=${messageId}`)).json()) as AgentWaitResponse
+  assert.deepEqual([done.status, done.text], ['done', 'PR を出しました'])
+  contexts.delete('B1@r')
+  await humanReply('B1@r')
+  idle('B1@r')
+})
+
+test('sai_send: 着手の形でない本文・1 行目に続きを書いた依頼・小さい相手は要約しない。指定（compact）があれば指定が勝つ（#624）', async () => {
+  contexts.set('B1@r', 500_000)
+  const viaOf = async (text: string, over: Record<string, unknown> = {}) => {
+    runner.started.length = 0
+    turn('A1@r')
+    try {
+      const res = await sendWith('A1@r', 'B1@r', text, over)
+      assert.equal(res.status, 202)
+      const via = ((await res.json()) as AgentSendResponse).via
+      return { via, cmd: runner.started.at(-1)!.cmd }
+    } finally {
+      idle('A1@r')
+      await clearQueue('B1@r')
+      await humanReply('B1@r')
+      idle('B1@r')
+    }
+  }
+  try {
+    assert.equal((await viaOf('この関数はどこから呼ばれていますか？')).via, 'process', '質問は要約しない')
+    assert.equal((await viaOf('#589 に着手してください（重い画像の件）。issue が正本です。')).via, 'process', '判定は緩めない（1 行目に続きがあれば当たらない）')
+    assert.equal((await viaOf('#624 に着手してください。', { compact: false })).via, 'process', '着手の形でも、false なら要約しない')
+    const asked = await viaOf('#592 の調査を進めてください', { compact: true })
+    assert.equal(asked.via, 'compact', '着手の形でなくても、true なら要約する')
+    assert.match(asked.cmd.text, /^\/compact 次は「#592 の調査を進めてください」/)
+    assert.equal((await viaOf('#624 に着手してください。', { compact: 'yes' })).via, 'compact', '真偽値でない指定は無いものとして、判定に任せる')
+    contexts.set('B1@r', 100_000)
+    assert.equal((await viaOf('#624 に着手してください。')).via, 'process', '文脈が小さい相手は要約しない')
+    assert.equal((await viaOf('#624 に着手してください。', { compact: true })).via, 'process', '要約できない相手は、指定してもそのまま')
+  } finally {
+    contexts.delete('B1@r')
+  }
+})
+
+test('sai_send: 相手が処理中なら、着手の形でも要約を挟まずに預かりに並ぶ。要約が失敗したら本文は回さず、送り元には失敗と返る（#624）', async () => {
+  contexts.set('B1@r', 500_000)
+  runner.started.length = 0
+  turn('A1@r')
+  turn('B1@r')
+  try {
+    const res = await send('A1@r', 'B1@r', '#624 に着手してください。')
+    assert.equal(((await res.json()) as AgentSendResponse).via, 'queued', '画面からの送信と同じ（処理中は預かるだけ）')
+    assert.equal(runner.started.length, 0)
+    idle('B1@r')
+    await poll()
+    assert.match(runner.started.at(-1)!.cmd.text, /^【SAI】/, '順番が来たら、要約せずに本文を回す')
+    assert.equal(runner.started.at(-1)!.cmd.compact, undefined)
+  } finally {
+    idle('A1@r')
+    idle('B1@r')
+  }
+  await humanReply('B1@r')
+  idle('B1@r')
+
+  runner.started.length = 0
+  turn('A1@r')
+  try {
+    const body = (await (await send('A1@r', 'B1@r', '#624 に着手してください。')).json()) as AgentSendResponse
+    assert.equal(body.via, 'compact')
+    runner.busy.set('B1@r', { since: new Date().toISOString(), text: '/compact …', compact: true, failed: { code: 1, tail: '要約できなかった' } })
+    await poll()
+    assert.equal(runner.started.length, 1, '本文は回さない')
+    const failed = (await (await agent(`/api/agent/wait?from=${encodeURIComponent('A1@r')}&message_id=${body.message_id}`)).json()) as AgentWaitResponse
+    assert.equal(failed.status, 'failed')
+  } finally {
+    idle('A1@r')
+    idle('B1@r')
+    contexts.delete('B1@r')
+    await clearQueue('B1@r')
+  }
+  await humanReply('B1@r')
+  idle('B1@r')
+})

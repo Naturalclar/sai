@@ -64,6 +64,17 @@ export function sendModes(input: SendModeInput, warnTokens: number): { mode: Sen
 }
 
 /**
+ * 別のセッションからのメッセージ（`sai_send`。#624）を、要約してから始めるか。**画面からの送信と同じ判定**（`sendModes()`）で、
+ * 着手の形の本文を、要約できる相手に送るときだけ。`input.text` は**送り元が書いた文そのもの**（見出しを付ける前）を渡す。
+ * 送る側の指定（`asked`）があれば指定が勝つが、要約できない相手（端末で開いている・Claude でない・文脈が小さい）は指定しても要約しない
+ */
+export function messageCompacts(input: SendModeInput, warnTokens: number, asked?: boolean): boolean {
+  if (asked === false) return false
+  if (asked === true) return canCompact(input)
+  return sendModes(input, warnTokens).mode === 'compact'
+}
+
+/**
  * `/compact` に添える指示（サーバが 1 か所で持つ）。次に取りかかることは本文の 1 行目から
  */
 export function compactPrompt(text: string): string {

@@ -59,6 +59,7 @@ SAI が起こした Claude のターンは、使ったトークンと費用も�
 ### queue（開いている Codex）
 
 - lock はファイルがあるだけでは数えず、開いているプロセスがいるときだけ（`codexWriterActive()` が `lsof -t`。#329）。`lsof` が無ければファイルがあれば開いている扱い。
+- **画像は `-i` で渡さない**（#678）: `codexQueueCommand()` は `-i` を付けず、画像のパスは本文の末尾（`withAttachments()`）だけで渡る。応答に `note`（`shared/attachments.ts` の `QUEUE_IMAGE_NOTE`）を載せ、`useReply` の `noted` が次に送るまで `SessionView` に出す。
 - SAI の app-server が読み込んでいるスレッド（`CodexApp.holds()`）は queue に回さない（app-server は `thread/resume` したスレッドの lock をターンが終わっても開いたままにする）。
 
 ### queue に渡した返信が届いたか（#474）
@@ -265,7 +266,7 @@ SAI が起こした Claude のターンは、使ったトークンと費用も�
 - `resolvePath()` は両方の名前を通す。**`find()`（配る口）は画像の名前だけ**（HTML / SVG を文字として保存しても、同じオリジンで描かれない）。
 - 本文は `withAttachments()` が画像を「添付した画像:」、ほかを「添付したファイル:」（`<パス>（<元の名前>）`）の 2 つの塊で足し、`splitAttachments()` が両方を外す（`urls` と `files`）。
 - **画像を受ける口（Codex の `-i`・app-server の `localImage`・OpenCode の `-f`・預かり）へ渡すのは画像だけ**（返信の口で `isImageAttachmentPath()` で絞ってから `launch()` に渡す）。ファイルは本文のパスで渡る。
-- Claude は画像のフラグが無いので本文の末尾にパスを足すだけ、Codex は `-i` でも渡す（`server/reply/runner.ts` の `replyCommand`）。
+- Claude は画像のフラグが無いので本文の末尾にパスを足すだけ、Codex は `-i` でも渡す（`server/reply/runner.ts` の `replyCommand`）。**開いている Codex（`codex queue`）は本文のパスだけ**（上の「queue」）。
 - 画面は `web/src/useAttachments.ts` が預けて `ReplyBox` が貼り付け・ドロップ・ファイル選択で受け、`Message` / `PendingBubble` / `QueuedBubble` が `splitAttachments()` でサムネイル（`AttachedImages`）と、印と名前（`AttachedFiles`。リンクにはしない）にする。入力欄の並びは `AttachmentStrip`（ファイルは印・名前・種類と大きさ）。
 
 ## 許可モード

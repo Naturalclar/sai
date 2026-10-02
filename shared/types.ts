@@ -1448,6 +1448,8 @@ export interface ReplyResponse {
   via: 'terminal' | 'process' | 'queue' | 'app-server' | 'queued' | 'steer' | 'compact'
   /** via が queued / compact のとき、預かった返信の id（取り消しに使う。compact は要約のあとに回る本文） */
   queue_id?: string
+  /** 送り方についての一言（#678。開いている Codex に画像を添えたとき）。画面が入力欄の上に出す */
+  note?: string
   session: string
   cwd: string
 }

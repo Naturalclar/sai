@@ -100,6 +100,8 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
   const [steered, setSteered] = useState<{ id: string; text: string } | null>(null)
   // 確認から送り直して受け付けられた回数（#338）。ReplyBox がこれを見て入力欄を空にする
   const [confirmedSent, setConfirmedSent] = useState(0)
+  // 受け付けた応答に付いてきた一言（#678。開いている Codex に画像を添えた）。次に送るまで出す
+  const [noted, setNoted] = useState<{ id: string; message: string } | null>(null)
   // サーバが「処理中」と言った id と、最初にそう見えたときの行数・本文。消えたときに行が増えていなければ失敗
   // （本文は「入力欄に戻す」に使う。#350）
   const seen = useRef(new Map<string, { rows: number; text: string }>())
@@ -154,11 +156,13 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
     setFailed(null)
     setConfirm(null)
     setSteered(null)
+    setNoted(null)
     // 預ける（処理中の返信がある）ときは繋ぎを作らない。前の返信の「処理中」を上書きしてしまう（#305）
     // 要約してから送る（#579）ときも作らない（仮バブルはサーバの replying の「要約中」、本文は預かりのバブルに出る）
     if (!options.queue && !options.compact) setSent((list) => [...list.filter((s) => s.id !== id), entry])
     try {
       const accepted = await api.reply(id, text, options)
+      if (accepted.note) setNoted({ id, message: accepted.note })
       // 走っているターンに足した（#404）。新しいターンではないので仮バブルは作らず、入力欄の下に出すだけ
       // （足した文はそのターンの記録に載るので、ターンが終われば普通のバブルとして出る）
       if (accepted.via === 'steer') {
@@ -212,5 +216,5 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
   const confirmProcess = (): Promise<SendOutcome> => sendFromConfirm({ via: 'process' })
   const cancelConfirm = () => setConfirm(null)
 
-  return { pending, failed, steered, send, confirm, confirmedSent, confirmReplace, confirmProcess, cancelConfirm }
+  return { pending, failed, steered, noted, send, confirm, confirmedSent, confirmReplace, confirmProcess, cancelConfirm }
 }

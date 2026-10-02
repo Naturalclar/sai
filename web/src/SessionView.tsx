@@ -83,7 +83,7 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
   // 返信先はこのセッションだけなので、行数はこの画面のターン完了の行数（入力の行は返信の終わりではない）。
   // 描いている行ではなく集計から数える（「前の 7 日を表示」で行が増えたのを返信の終わりと取り違えない）
   const turns = data?.session.turns ?? 0
-  const { pending, failed, steered, send, confirm, confirmedSent, confirmReplace, confirmProcess, cancelConfirm } = useReply((target) => (target === id ? turns : 0), data?.replying ?? NO_REPLYING, updatedAt)
+  const { pending, failed, steered, noted, send, confirm, confirmedSent, confirmReplace, confirmProcess, cancelConfirm } = useReply((target) => (target === id ? turns : 0), data?.replying ?? NO_REPLYING, updatedAt)
   const mine = pending.find((p) => p.id === id) ?? null
   const now = updatedAt?.getTime() ?? 0
   const failedHere = failed && failed.id === id ? failed : null
@@ -369,6 +369,7 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
       {steered?.id === id && mine !== null && (
         <div className="notice steered">走っているターンに足しました: {steered.text}</div>
       )}
+      {noted?.id === id && <div className="notice steered">{noted.message}</div>}
       {failedHere && (
         <div className="notice error reply-failed">
           <span>送信失敗: {failedHere.message}</span>

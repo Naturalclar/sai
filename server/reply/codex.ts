@@ -100,20 +100,17 @@ export async function codexLockHolders(
 /** 握っているのが app-server か（TUI ではない）。画面の文言を分ける */
 export const isAppServer = (command: string): boolean => /\bcodex\b.*\bapp-server\b/.test(command)
 
-/** active writer を持つ Codex へ、resume せず app-server 経由でメッセージを足すコマンド。 */
-export function codexQueueCommand(
-  session: string,
-  text: string,
-  cwd: string,
-  env: NodeJS.ProcessEnv = process.env,
-  model?: string,
-  attachments: readonly string[] = [],
-): ReplyCommand {
+/**
+ * active writer を持つ Codex へ、resume せず app-server 経由でメッセージを足すコマンド。
+ * **画像は `-i` で渡さない**（#678）: `codex queue --help` には `-i` が載っているが、渡すと
+ * `codex queue does not support image attachments` で本文ごと断られる。画像のパスは本文の末尾
+ * （`withAttachments()`）に入っているので、Codex がそれを自分で開く
+ */
+export function codexQueueCommand(session: string, text: string, cwd: string, env: NodeJS.ProcessEnv = process.env, model?: string): ReplyCommand {
   const pick = model ? ['-m', model] : []
-  const images = attachments.flatMap((path) => ['-i', path])
   return {
     bin: 'codex',
-    args: ['queue', ...splitArgs(env.SAI_CODEX_ARGS), ...pick, ...images, '--thread', session, '--message', text],
+    args: ['queue', ...splitArgs(env.SAI_CODEX_ARGS), ...pick, '--thread', session, '--message', text],
     cwd,
     text,
   }

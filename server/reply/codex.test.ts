@@ -63,13 +63,13 @@ test('lsofHolders: 本物の lsof で、開いているプロセスがいれば�
   }
 })
 
-test('active Codex への返信は exec resume ではなく queue コマンドにする', () => {
+test('active Codex への返信は exec resume ではなく queue コマンドにする（画像の -i は付けない。#678）', () => {
   assert.deepEqual(
     // SAI_CODEX_BIN はもう読まない。実行ファイルはサーバの PATH の codex（#288）
-    codexQueueCommand(SESSION, '-から始まる\n本文', '/work', { SAI_CODEX_BIN: '/opt/codex', SAI_CODEX_ARGS: '-s workspace-write' }, 'gpt-5', ['/tmp/a.png']),
+    codexQueueCommand(SESSION, '-から始まる\n本文', '/work', { SAI_CODEX_BIN: '/opt/codex', SAI_CODEX_ARGS: '-s workspace-write' }, 'gpt-5'),
     {
       bin: 'codex',
-      args: ['queue', '-s', 'workspace-write', '-m', 'gpt-5', '-i', '/tmp/a.png', '--thread', SESSION, '--message', '-から始まる\n本文'],
+      args: ['queue', '-s', 'workspace-write', '-m', 'gpt-5', '--thread', SESSION, '--message', '-から始まる\n本文'],
       cwd: '/work',
       text: '-から始まる\n本文',
     },

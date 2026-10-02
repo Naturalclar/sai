@@ -88,6 +88,12 @@ export interface AttachedFile {
   kind: 'text' | 'pdf'
 }
 
+/**
+ * 開いている Codex（`codex queue`）に画像を添えたときの一言（#678）。queue は画像の口（`-i`）を持たないので、
+ * 本文の末尾のパスを Codex が自分で開く。黙って渡し方を変えないために、受け付けた応答の `note` に載せる
+ */
+export const QUEUE_IMAGE_NOTE = 'この経路（開いている Codex）では、画像はパスとして渡ります（Codex が開いて見ます）'
+
 /** 絶対パスが添付の置き場の**画像**か（末尾 3 つで見る）。Codex の `-i` など、画像だけを受ける口に渡す前に通す */
 export function isImageAttachmentPath(path: string): boolean {
   return attachmentUrlFromPath(path) !== null

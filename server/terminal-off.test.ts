@@ -8,7 +8,8 @@ import type { Server } from 'node:http'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ReplyingMap, ReplyResponse } from '../shared/types.ts'
+import type { AttachmentResponse, ReplyingMap, ReplyResponse } from '../shared/types.ts'
+import { QUEUE_IMAGE_NOTE, splitAttachments } from '../shared/attachments.ts'
 import { createApp } from './app.ts'
 import { FeedStore } from './rows/store.ts'
 import { localDate } from './rows/aggregate.ts'
@@ -60,7 +61,9 @@ before(async () => {
   // 端末で開いていることになっている Codex の行（pane と**生きている** pid 付き）。
   // SAI_TERMINAL が効いていなければ、返信はこのペインへ打ち込みに行く
   const line = JSON.stringify(row(now, 'X1', { agent: 'codex', repo: 'r', cwd, pane: '%1', pid: process.pid, session_source: 'rollout' }))
-  await writeFile(join(feedDir, `${localDate(now.toISOString())}.jsonl`), `${line}\n`)
+  // 画像を添える返信の宛先（#678。X1 は前のテストの返信を処理中になるので分ける）
+  const second = JSON.stringify(row(now, 'X2', { agent: 'codex', repo: 'r', cwd, pane: '%2', pid: process.pid, session_source: 'rollout' }))
+  await writeFile(join(feedDir, `${localDate(now.toISOString())}.jsonl`), `${line}\n${second}\n`)
 
   const store = new FeedStore(feedDir)
   const app = createApp(store, join(dir, 'dist'), runner, undefined, undefined, undefined, undefined, {
@@ -107,8 +110,28 @@ test('SAI_TERMINAL=0: 端末で開いている Codex への返信も、ペイン
     body: JSON.stringify({ text: 'やって' }),
   })
   assert.equal(res.status, 202, '受け付ける（端末を使わない経路で）')
-  assert.equal(((await res.json()) as ReplyResponse).via, 'queue', '開いている Codex なので queue に回る')
+  const body = (await res.json()) as ReplyResponse
+  assert.equal(body.via, 'queue', '開いている Codex なので queue に回る')
+  assert.equal(body.note, undefined, '画像が無ければ一言は付けない（#678）')
   assert.equal(queued.length, 1)
   assert.equal(tmux.calls, 0, 'ペインに打ち込まない（SAI_TERMINAL=0）')
   assert.equal(panes.scans, 0, 'ペインを探しにも行かない')
+})
+
+test('開いている Codex への queue に画像を添えても -i は付けず、本文のパスで渡して一言を返す（#678）', async () => {
+  queued.length = 0
+  const up = await fetch(`${base}/api/sessions/X2%40r/attachments`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream', Origin: base },
+    body: Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex'),
+  })
+  assert.equal(up.status, 200)
+  const { path } = (await up.json()) as AttachmentResponse
+  const res = await fetch(`${base}/api/sessions/X2%40r/reply`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ text: '見て', attachments: [path] }) })
+  assert.equal(res.status, 202)
+  const body = (await res.json()) as ReplyResponse
+  assert.deepEqual([body.via, body.note], ['queue', QUEUE_IMAGE_NOTE], '渡し方が変わることを黙らない')
+  assert.equal(queued[0]!.args.includes('-i'), false, '`codex queue` は -i を断る（本文ごと失敗する）')
+  assert.deepEqual(splitAttachments(queued[0]!.text).urls.length, 1, '画像のパスは本文の末尾に入っている')
+  assert.equal(queued[0]!.args.at(-1), queued[0]!.text)
 })

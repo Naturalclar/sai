@@ -6,7 +6,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { basename, extname, join, resolve, sep } from 'node:path'
 import { historyIconUrl, ICON_MAX_BYTES, ICON_MIME, iconUrl, sniffImageType } from '../shared/icon.ts'
 import type { IconType } from '../shared/icon.ts'
-import { ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_COUNT, ATTACHMENTS_DIR, isImageAttachmentPath, withAttachments } from '../shared/attachments.ts'
+import { ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_COUNT, ATTACHMENTS_DIR, isImageAttachmentPath, QUEUE_IMAGE_NOTE, withAttachments } from '../shared/attachments.ts'
 import { mergeMeta } from '../shared/meta.ts'
 import { mergeProfile, PROFILE_ICON_ID, profileIconUrl } from '../shared/profile.ts'
 import { isPersonaId } from '../shared/persona.ts'
@@ -2069,11 +2069,11 @@ export function createApp(
     // app-server の queue へ渡す（別プロセスは短く起動するが、writer を奪わず開いている会話に届く）。
     // 「ほかが握っているか」はレビューと同じ `codexHeldElsewhere()`（SAI の app-server が読み込んでいるスレッドは除く）
     const codexActive = await codexHeldElsewhere(session, raw)
-    // モデルと画像は queue / exec resume の両方で使う。
+    // モデルは queue / exec resume の両方で使う。画像を `-i` で渡すのは exec resume だけ（queue は断る。#678）
     const own = await metaStore.get(id)
     const model = own?.model
     const sendQueue = async () => {
-      const cmd = codexQueueCommand(raw, text, cwd, process.env, model, attachments)
+      const cmd = codexQueueCommand(raw, text, cwd, process.env, model)
       await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} 開いている Codex へ queue ${JSON.stringify(cmd.args)} (cwd ${cwd})\n`).catch(() => {})
       try {
         await queueCodex(cmd)
@@ -2084,7 +2084,7 @@ export function createApp(
       }
       // 受け取られたかは、2 分後に typed.checkDelivery() が確かめる（#329。受け取り手のいない queue でも exit 0 で返ってくる）
       typed.start(id, text, 'queue')
-      const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd, via: 'queue' }
+      const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd, via: 'queue', ...(attachments.length > 0 ? { note: QUEUE_IMAGE_NOTE } : {}) }
       return { status: 202, body: payload }
     }
     if (codexActive && (!term || forceProcess)) return sendQueue()

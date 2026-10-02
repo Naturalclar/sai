@@ -73,7 +73,7 @@ python3 -m unittest feed.test_record -k synth
 - コードとして見るのは `.ts` / `.tsx` / `.js` / `.mjs` / `.py`（テストは除く）。
 - 表に載せないもの（`server/docs.test.ts` の `INTERNAL`）:
   - `AGENT_FEED_SKIP`: SAI が一言を作る `claude -p` に自分で付ける合図。record.py / statusline.py / OpenCode のプラグインが見る。
-  - `SAI_URL` / `SAI_ENTITY` / `SAI_LOOP`: `server/reply/runner.ts` が `--mcp-config` の env で `server/approvals/approve-mcp.ts` に渡す。`SAI_LOOP` はループの周のターンの印（#634）。
+  - `SAI_URL` / `SAI_ENTITY` / `SAI_TOKEN_FILE` / `SAI_LOOP`: `server/reply/runner.ts` が `--mcp-config` の env で `server/approvals/approve-mcp.ts` に渡す。`SAI_TOKEN_FILE` はエージェント用の口のトークンを置いたファイル（#310）、`SAI_LOOP` はループの周のターンの印（#634）。
   - `SAI_APPROVE_RECONNECT_MS`: `approve-mcp.ts` が SAI に届かないとき繋ぎ直しを続ける長さ。テストが短くするためだけで、SAI は渡さない（#440）。
   - `TMUX_PANE` / `CLAUDE_PID`: エージェントが record.py に渡してくる。
   - `REPO_URL` / `PROD`: Vite の `import.meta.env`。

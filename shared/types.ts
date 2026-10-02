@@ -1758,3 +1758,57 @@ export interface GalleryResponse {
   id: string
   items: GalleryItem[]
 }
+
+/** 使用量の画面（#602）の合計。トークンは 1 ターンぶんの足し算、費用は API 換算の目安（セッションの積み上げとの差で数える） */
+export interface UsageTotals {
+  /** SAI が起こしたターンの数（turn-usage.jsonl の行の数） */
+  turns: number
+  input_tokens: number
+  output_tokens: number
+  /** 読み直し（キャッシュ読み） */
+  cache_read_input_tokens: number
+  /** キャッシュ書き */
+  cache_creation_input_tokens: number
+  /** 4 つの合計 */
+  tokens: number
+  /** API 換算の目安（USD）。定額プランでは実際に請求されるものではない */
+  cost_usd: number
+  /** 未許可で断られたツールの数 */
+  denials: number
+  /** エラーで終わったターンの数 */
+  errors: number
+}
+
+/** 使用量の表の 1 行（日別・モデル別）。`key` は日付（Asia/Tokyo の YYYY-MM-DD）かモデル名（分からなければ空） */
+export interface UsageReportRow extends UsageTotals {
+  key: string
+  /** 全体のトークンに占める割合（0〜1） */
+  token_share: number
+  /** 全体の費用に占める割合（0〜1） */
+  cost_share: number
+}
+
+/** セッション別の 1 行。`key` はエンティティ ID */
+export interface UsageSessionRow extends UsageReportRow {
+  /** 呼び名か題名。記録に見つからなければ無い（画面は ID を出す） */
+  name?: string
+  /** モデルを 1 回呼ぶたびに読み直した量の平均（読み直し ÷ CLI の中で回ったターン数） */
+  read_per_call: number
+  /** 読み直しが大きい（コンテキストの注意 #441 と同じ区切り） */
+  heavy: boolean
+}
+
+/** `GET /api/usage/report?days=`（#602）。SAI が起こした Claude のターンだけ（端末で回したぶん・Codex・OpenCode は入らない） */
+export interface UsageReportResponse {
+  /** 期間（日） */
+  days: number
+  /** 数えはじめの時刻（ISO） */
+  since: string
+  total: UsageTotals
+  /** トークンの多い順 */
+  sessions: UsageSessionRow[]
+  /** 新しい日から */
+  by_day: UsageReportRow[]
+  /** トークンの多い順 */
+  by_model: UsageReportRow[]
+}

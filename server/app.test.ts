@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { IconHistoryResponse } from '../shared/types.ts'
 import { handoffFirstText, HANDOFF_PROMPT } from '../shared/handoff.ts'
-import type { ApprovalAnswer, ApprovalMap, NewSessionResponse, Replying, ReplyQueueResponse, ReplyResponse,SessionsResponse, SessionDetailResponse, SessionIconResponse, SessionMetaResponse, FeedResponse, SettingsResponse, HealthResponse, SessionSkillsResponse, SessionPermissionsResponse, SearchResponse, UsageResponse } from '../shared/types.ts'
+import type { ApprovalAnswer, ApprovalMap, NewSessionResponse, Replying, ReplyQueueResponse, ReplyResponse,SessionsResponse, SessionDetailResponse, SessionIconResponse, SessionMetaResponse, FeedResponse, SettingsResponse, HealthResponse, SessionSkillsResponse, SessionPermissionsResponse, SearchResponse, UsageReportResponse, UsageResponse } from '../shared/types.ts'
 import { DEFAULT_SETTINGS } from './meta/settings.ts'
 import { createApp, parseDays, revWith, selfUrl, sessionIdFrom, stripThinking } from './app.ts'
 import { BuildFreshness } from './local/buildFreshness.ts'
@@ -770,6 +770,22 @@ test('GET /api/usage: ローカルのファイルから読むだけ。Claude は
   })
   assert.equal(data.claude, undefined, '弾かれた記録が無ければキーごと付かない（画面は黙って出さない）')
   assert.equal((await fetch(`${base}/api/usage`, { method: 'POST' })).status, 405, '読むだけ')
+})
+
+test('GET /api/usage/report: SAI が起こしたターンの使用量を期間で切って足す。読むだけ（#602）', async () => {
+  const res = await get('/api/usage/report?days=1')
+  assert.equal(res.status, 200)
+  const data = (await res.json()) as UsageReportResponse
+  assert.equal(data.days, 1)
+  assert.deepEqual(data.total, { turns: 1, input_tokens: 10, output_tokens: 94, cache_read_input_tokens: 17582, cache_creation_input_tokens: 8431, tokens: 26117, cost_usd: 0.019, denials: 2, errors: 0 })
+  assert.deepEqual(data.sessions.map((s) => [s.key, s.turns, s.token_share, s.heavy]), [['S1@kanban', 1, 1, false]])
+  // 呼び名は記録にあるセッションの題名（一覧と同じ。表示名があればそちら）
+  assert.equal(data.sessions[0]?.name, '続きの題名')
+  assert.deepEqual(data.by_model.map((m) => m.key), ['claude-opus-5'])
+  assert.equal(data.by_day.length, 1)
+  // 知らない期間は 7 日に落とす
+  assert.equal(((await (await get('/api/usage/report?days=9999')).json()) as UsageReportResponse).days, 7)
+  assert.equal((await fetch(`${base}/api/usage/report`, { method: 'POST' })).status, 405, '読むだけ')
 })
 
 test('/api/feed は壊れた行を落とす', async () => {

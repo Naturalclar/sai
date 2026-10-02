@@ -116,6 +116,8 @@ test('TurnUsageLog: 行に載せる費用は、そのターンぶん（同じセ
     const attached = log.attach([row('2026-09-16T13:57:11+09:00'), row('2026-09-16T14:00:00+09:00', 'T'), row('2026-09-16T14:30:00+09:00'), row('2026-09-16T15:00:00+09:00')])
     assert.deepEqual(attached.map((r) => r.usage?.cost_usd), [2.5, 100, 0.5, 0.25])
     assert.deepEqual(log.attach([row('2026-09-16T16:00:00+09:00', 'Z'), row('2026-09-16T16:30:00+09:00', 'Z'), row('2026-09-16T17:00:00+09:00', 'Z')]).map((r) => r.usage?.cost_usd), [40, 0, 5.5])
+    // 使用量の画面に渡す写し（#602）も同じ値（窓の外の行は入らない。書いた順）
+    assert.deepEqual(log.turns().map((e) => [e.id, e.cost_usd]), [['S@r', 2.5], ['T@r', 100], ['S@r', 0.5], ['Z@r', 40], ['Z@r', 0], ['Z@r', 5.5], ['S@r', 0.25]])
     // 記録した分も、読み返した分の続きとして差にする
     const rowTs = new Date().toISOString()
     log.record('S@r', { ...usage, cost_usd: 1.25 })

@@ -69,7 +69,7 @@ export function UsageChip() {
           </span>
         ))}
       </button>
-      {open && <UsagePanel usage={usage} now={at} />}
+      {open && <UsagePanel usage={usage} now={at} onNavigate={() => setOpen(false)} />}
     </div>
   )
 }

@@ -18,6 +18,9 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 「いま開いているセッション」は `currentId`（route がセッションのとき、並びのフォーカスの ID）。題名・差分・`SessionView` の `focused` はこれを見る。**`route.id` を直接見るのは `focusTs` / `focusSide`（発言への飛び先）だけ。**
 - 描くのは `.panes` の中の `ChatPane`（`.pane`）で、並べているときだけ `.panes.split`。`ChatPane` の key は並びが持つ列の番号（`PaneLayout.keys`。列の位置ではない）: 中身を入れ替えても番号は変わらず（1 つのときは今までどおり同じ `SessionView` が `id` だけ変わる）、左を閉じた・間に足したときも残った列の番号は動かない。× は見出しでなく `ChatPane` に置く（読み込み中・取得に失敗したペインも閉じられる）。
 - `→` の当て先は `.pane.focused .reply textarea`。ヘッダの取得状況（`onStatus`）はフォーカスのあるペインにだけ本物を渡す。
+- キーボードは `paneKeys.ts` の `paneKey(e, typing)`（`paneKeys.test.ts`）を `App.tsx` の window の keydown が呼ぶ。`%` で入れるセッションは `nextUnshown()`（サイドバーの `visibleIds()` の並びで、いまの次の、まだ出していないもの）。`Ctrl+数字` は `focusPane()` のあと `focusLater` に入力欄を頼む（当て先の `.pane.focused` は描き直したあとに変わるので、その場では当てない）。
+- 要対応のペインは `ChatPane` の `onClickCapture` で `a[href^="#/s/"]` のクリックを先に見て、`openInNeighbor()`（押されたペインの列を起点に）で隣へ開く。`TodoRow` には何も渡していない。
+- ⌘K の `⌘Enter` は `CommandPalette` の `onOpenBeside(hash)`。許可のバブルの `⌘Enter`（window の capture）が先に拾わないよう、`hotkeyApplies()` の第 3 引数（`role="dialog"` の中で押されたか）で断る。
 - 差分は `visibleDiff()` の第 4 引数に並んでいる ID を渡す（並びのどれかなら出したまま）。モーダルに落とす境目は `diffModalBelow()`（差分の幅 `clamp(360px, 38vw, 760px)` を解く。**CSS の値を変えたらここも直す**）。
 
 ## データ取得（usePolling）

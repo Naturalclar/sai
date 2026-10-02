@@ -13,6 +13,8 @@ interface Props {
   /** 取り直しがまだ終わっていない。「絞り込み中の分だけ」と断る */
   loading: boolean
   onClose: () => void
+  /** ⌘Enter（Ctrl+Enter）: 選んでいるセッション・発言を横に並べて開く（#633）。並べられない幅では渡されない（Enter と同じになる） */
+  onOpenBeside?: ((hash: string) => void) | undefined
 }
 
 /**
@@ -26,7 +28,7 @@ interface Props {
  *
  * ↑↓ は 2 つの群を通しで動く（`rows` に平らに並べてある）ので、境目を意識しなくていい。
  */
-export function CommandPalette({ sessions, loading, onClose }: Props) {
+export function CommandPalette({ sessions, loading, onClose, onOpenBeside }: Props) {
   const [query, setQuery] = useState('')
   const [index, setIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -64,7 +66,15 @@ export function CommandPalette({ sessions, loading, onClose }: Props) {
     // IME の変換中の Enter で決めない（候補の確定）
     if (e.key === 'Enter' && !(e.nativeEvent.isComposing || e.keyCode === 229)) {
       e.preventDefault()
-      listRef.current?.querySelectorAll('li.pick')[at]?.querySelector('a')?.click()
+      const link = listRef.current?.querySelectorAll('li.pick')[at]?.querySelector('a')
+      const hash = link?.getAttribute('href') ?? ''
+      // ⌘Enter はセッション（発言の当たりも）を横に並べて開く。フィードは並べられないので Enter と同じ
+      if ((e.metaKey || e.ctrlKey) && onOpenBeside && hash.startsWith('#/s/')) {
+        onOpenBeside(hash)
+        onClose()
+        return
+      }
+      link?.click()
     }
   }
 
@@ -79,7 +89,7 @@ export function CommandPalette({ sessions, loading, onClose }: Props) {
             setQuery(e.target.value)
             setIndex(0)
           }}
-          placeholder="セッション名か発言の中身で検索（↑↓ で選んで Enter、Esc で閉じる）"
+          placeholder={`セッション名か発言の中身で検索（↑↓ で選んで Enter${onOpenBeside ? '、⌘Enter で横に開く' : ''}、Esc で閉じる）`}
           aria-label="検索"
           role="combobox"
           aria-expanded="true"

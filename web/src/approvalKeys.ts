@@ -37,6 +37,11 @@ export const REPLY_FOR_ATTR = 'data-reply-for'
  * 通ってしまう。`replyFor` は押された場所に一番近い印の値で、印の無い場所（セッション画面の入力欄など、
  * 返信先が許可と同じか分からないところ）は今までどおり受ける
  */
-export function hotkeyApplies(replyFor: string | null, approvalEntity: string): boolean {
+export function hotkeyApplies(replyFor: string | null, approvalEntity: string, elsewhere = false): boolean {
+  // `elsewhere`: 許可とは別の場所で押された（#633）。受けない。
+  // - モーダル（⌘K・レビューの確認など）の中: そのモーダルのもの（⌘K の ⌘Enter は「横に開く」）
+  // - フォーカスの無いペインの中: `Ctrl+数字` で入力欄の無いペインへ移ると、キャレットは前のペインの入力欄に残る。
+  //   そこで押した ⌘Enter はその入力欄の送信で、移った先のペインの許可ではない（#643 のレビュー）
+  if (elsewhere) return false
   return replyFor === null || replyFor === approvalEntity
 }

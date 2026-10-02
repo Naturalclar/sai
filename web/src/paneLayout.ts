@@ -142,3 +142,33 @@ export function diffModalBelow(panes: number, sidebar: number): number {
   if (width * DIFF.vw >= DIFF.max) return need + DIFF.max
   return Math.ceil(width)
 }
+
+/**
+ * 隣のペインに開く（要対応の行からセッションへ飛ぶリンク）。開く元（フォーカスのあるペイン）は残り、フォーカスは開いた方へ移る。
+ * - もう並びにあれば、そのペインにフォーカスを移すだけ
+ * - 右隣があれば、その中身を入れ替える（行を順に開いていってもペインが増えていかない）
+ * - 右隣が無ければ右に 1 つ足す。上限で足せなければ左隣の中身を入れ替える
+ */
+export function openInNeighbor(layout: PaneLayout, item: PaneItem): PaneLayout {
+  const at = columnOf(layout, item)
+  if (at >= 0) return at === layout.focus ? layout : { ...layout, focus: at }
+  if (layout.columns.length === 0) return { columns: [[item]], focus: 0, keys: [0] }
+  const right = layout.focus + 1
+  if (right >= layout.columns.length && layout.columns.length < MAX_COLUMNS) {
+    return { columns: [...layout.columns, [item]], focus: right, keys: [...layout.keys, nextKey(layout.keys)] }
+  }
+  const target = right < layout.columns.length ? right : layout.focus - 1
+  if (target < 0) return placeItem(layout, item)
+  return { ...layout, columns: layout.columns.map((c, i) => (i === target ? [item] : c)), focus: target }
+}
+
+/**
+ * `%` で分けたとき、新しいペインに入れるセッション。**サイドバーの並び（`ids`）で、いまのセッションの次から探して
+ * 最初の、まだ出していないもの**（末尾まで無ければ先頭に戻って探す）。いまが要対応・並びに無いセッションなら先頭から。
+ * 出していないものが無ければ null（分けない）
+ */
+export function nextUnshown(ids: readonly string[], shown: readonly string[], from: string): string | null {
+  const at = ids.indexOf(from)
+  const order = at < 0 ? ids : [...ids.slice(at + 1), ...ids.slice(0, at)]
+  return order.find((id) => !shown.includes(id)) ?? null
+}

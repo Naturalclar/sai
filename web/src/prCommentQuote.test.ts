@@ -29,3 +29,12 @@ test('quotePrLineThread: 前の版へのコメントは元の行番号とその�
   assert.match(file, /\n\na\.ts（ファイル全体へのコメント）\n\nalice:\n/)
   assert.match(quotePrLineThread(PR, { root: line(1, { code: '' }), replies: [] }), /\na\.ts:12\n>\n\nalice/, '空の行')
 })
+
+test('上限で切られたコメントは、途中までだと分かる 1 行と全文の場所を添える', () => {
+  const c = quotePrComment(PR, comment({ body: '長い本文', truncated: true, url: 'https://github.com/o/r/pull/7#issuecomment-1' }))
+  assert.ok(c.endsWith('> 長い本文\n（長いので途中までです。全文: https://github.com/o/r/pull/7#issuecomment-1）'), c)
+  assert.ok(quotePrComment(PR, comment({ kind: 'review', truncated: true })).endsWith('（長いので途中までです。全文は GitHub で読んでください）'))
+  const t = quotePrLineThread(PR, { root: line(1), replies: [line(2, { author: 'bob', body: '返信', truncated: true, url: 'https://github.com/o/r/pull/7#discussion_r2' })] })
+  assert.ok(t.endsWith('bob:\n> 返信\n（長いので途中までです。全文: https://github.com/o/r/pull/7#discussion_r2）'), t)
+  assert.ok(!quotePrComment(PR, comment()).includes('途中まで'))
+})

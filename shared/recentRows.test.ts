@@ -50,3 +50,8 @@ test('parseRecent: 無い・読めない・0 以下は絞らない', () => {
   assert.equal(parseRecent('0'), null)
   assert.equal(parseRecent('14'), 14)
 })
+
+test('olderPrompts: 自動の要約の文が入力として記録された行は載せない（#626）', () => {
+  const dropped = [{ user_text: '頼み' }, { user_text: 'This session is being continued from a previous conversation that ran out of context.' }]
+  assert.deepEqual(olderPrompts(dropped), ['頼み'])
+})

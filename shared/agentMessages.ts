@@ -72,14 +72,21 @@ export function deliveredId(userText: string | undefined): string {
  * 入力した瞬間の行（`UserPromptSubmit`）の見出し**で当てる。
  * - 救うのは `user_text` が要約の行だけ（入力が空のターン = バックグラウンドの通知で回ったターンなどには当てない）
  * - 入力の行の見出しは、次のターン完了の行 1 つにだけ使う（別のターンの返答を当てない）
+ * - **そのターンが終わったと分かる行（`入力待ち`・セッションの終了）が来たら見出しを捨てる**（#661 のレビュー）。届けたターンの
+ *   ターン完了の行が落ちたまま、あとの「入力の行が無く、入力が要約になっている」ターンを返答に当てないため。
+ *   `入力待ち` が鳴らない道（`-p` の返信）で落ちたターンは、落ちた返答を補った行（`rowsNow()`。#614）がターン完了として見出しを使う
  */
 export function deliveryMatcher(): { headOf: (row: FeedRow) => string } {
   const prompted = new Map<string, string>()
   return {
     headOf(row) {
       const kind = eventKind(row.event, row.text)
-      if (kind !== 'turn' && kind !== 'resume') return ''
+      if (kind === 'waiting' || kind === 'other') return ''
       const entity = entityId(row.session ?? '', row.repo ?? '', String(row.ts ?? ''))
+      if (kind === 'idle' || kind === 'end') {
+        prompted.delete(entity)
+        return ''
+      }
       if (kind === 'resume') {
         // 本文の無い合図だけの行（待ちのあとの再開）は、入力の行ではないので前の見出しを消さない
         if (row.user_text?.trim()) prompted.set(entity, row.user_text)

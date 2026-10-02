@@ -288,6 +288,18 @@ test('replyOf / agentReplyRows: ターン完了の行の入力が要約の文に
   assert.equal(replyOf(plain, 'B1@r', 'a1'), null, '入力の行の見出しは、次のターン完了の 1 つにだけ使う')
 })
 
+test('replyOf: 届けたターンが終わったと分かる行（入力待ち）のあとの、要約が入ったターンには当てない（#626）', () => {
+  const summary = `${COMPACT_SUMMARY_HEAD} that ran out of context. …`
+  const sent = deliveredText({ label: '実装', project: 'o/r' }, 'a1', '見て')
+  const rows = [
+    { ts: '2026-09-11T01:00:00Z', session: 'B1', repo: 'r', event: 'UserPromptSubmit', user_text: sent, text: '' },
+    // 届けたターンのターン完了の行は落ちた。60 秒あとに「入力待ち」だけが来る
+    { ts: '2026-09-11T01:05:00Z', session: 'B1', repo: 'r', event: 'Notification', text: '入力待ち: Claude is waiting for your input' },
+    { ts: '2026-09-11T02:00:00Z', session: 'B1', repo: 'r', event: 'Stop', user_text: summary, text: '通知で回った、関係の無いターン' },
+  ] as FeedRow[]
+  assert.equal(replyOf(rows, 'B1@r', 'a1'), null)
+})
+
 test('isCompactSummaryText: 要約の決まり文句で始まる入力だけ', () => {
   assert.equal(isCompactSummaryText(`${COMPACT_SUMMARY_HEAD} that ran out of context.`), true)
   assert.equal(isCompactSummaryText(`\n  ${COMPACT_SUMMARY_HEAD}`), true)

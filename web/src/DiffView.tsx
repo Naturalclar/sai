@@ -6,7 +6,7 @@ import { perFileComments, type DiffViewComments } from './diffFileComments.ts'
 import { DiffFileItem, type EditingAt } from './DiffFileItem'
 import { ScrollTick, useScrollTick } from './useScrollTick.ts'
 import type { DiffFileStat, DiffSection } from './api'
-import type { PlacedLineThread } from '../../shared/prLineComments.ts'
+import type { PlacedLineThread, PrLineThread } from '../../shared/prLineComments.ts'
 
 export type { DiffViewComments } from './diffFileComments.ts'
 
@@ -38,6 +38,7 @@ export function DiffView({
   comments,
   threads,
   now,
+  onQuoteThread,
 }: {
   section: DiffSection
   title: string
@@ -48,6 +49,8 @@ export function DiffView({
   threads?: readonly PlacedLineThread[]
   /** 「何分前」の基準（読んだ時刻） */
   now?: number
+  /** やり取りを返信欄に入れる口（#600 の案 3）。同じ関数を渡し続ける（毎回作ると全ファイルが描き直る） */
+  onQuoteThread?: (thread: PrLineThread) => void
 }) {
   // patch のパースは重いので、同じ本文なら作り直さない（全部開くようになって行数が増えたぶん効く）
   const files = useMemo(() => parseUnifiedDiff(section.patch), [section.patch])
@@ -102,7 +105,7 @@ export function DiffView({
                 comments={commentsOf(f.path)}
                 editing={editing?.path === f.path ? editing : null}
                 setEditing={setEditing}
-                {...(threadsOf.has(f.path) ? { threads: threadsOf.get(f.path)!, now: now ?? 0 } : {})}
+                {...(threadsOf.has(f.path) ? { threads: threadsOf.get(f.path)!, now: now ?? 0, onQuoteThread } : {})}
               />
             ))}
           </ul>

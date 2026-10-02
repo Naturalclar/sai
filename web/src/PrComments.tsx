@@ -1,4 +1,4 @@
-import type { PrDetailResponse } from './api'
+import type { PrComment, PrDetailResponse } from './api'
 import { PrCommentItem } from './PrCommentItem'
 import { commentsHeading } from './prCommentLabels'
 
@@ -7,7 +7,7 @@ import { commentsHeading } from './prCommentLabels'
  * 取るのは PR を開いたときと「更新」のときだけ（`PrView` の 1 回の応答に載ってくる）。
  * 読めなかったときは 1 行出すだけで、本文と差分はそのまま出る。1 件も無ければ何も出さない
  */
-export function PrComments({ data, now }: { data: PrDetailResponse; now: number }) {
+export function PrComments({ data, now, onQuote }: { data: PrDetailResponse; now: number; onQuote?: (comment: PrComment) => void }) {
   if (data.comments_error) return <div className="warn pr-comments-error">{data.comments_error}</div>
   const list = data.comments ?? []
   if (list.length === 0) return null
@@ -15,7 +15,7 @@ export function PrComments({ data, now }: { data: PrDetailResponse; now: number 
     <section className="pr-comments">
       <h2>{commentsHeading(list.length, data.comments_omitted)}</h2>
       {list.map((c) => (
-        <PrCommentItem key={c.id} comment={c} now={now} />
+        <PrCommentItem key={c.id} comment={c} now={now} {...(onQuote ? { onQuote } : {})} />
       ))}
     </section>
   )

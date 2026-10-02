@@ -215,6 +215,8 @@
   .diff-comment.posted .body { white-space: normal; }
   .diff-comment.posted .foot { margin-top: 6px; font-size: 12px; }
   .diff-section .file .tag.posted { background: color-mix(in srgb, var(--codex) 16%, transparent); color: var(--codex); font-weight: 600; }
+  /* 「返信欄に入れる」（#600 の案 3）。GitHub へのリンクの横に控えめに置く */
+  .pr-comment > .foot .quote, .diff-comment.posted .foot .quote { font-size: 12px; margin-left: 8px; }
   .pr-line-rest > h2 { margin: 0 0 6px; font-size: 12px; font-weight: 700; color: var(--muted); }
   .diff-orphan { margin: 0 0 8px; font-size: 12px; }
   .diff-orphan .diff-comment { margin-top: 2px; border-left: 3px solid var(--accent); background: var(--bg); padding: 6px 10px; font-size: 13px; }

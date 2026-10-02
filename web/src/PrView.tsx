@@ -19,6 +19,9 @@ import { Markdown } from './Markdown'
 import { PrComments } from './PrComments'
 import { PrLineThreadNote } from './PrLineThreadNote'
 import { placeLineThreads, threadLineComments } from '../../shared/prLineComments.ts'
+import type { PrLineThread } from '../../shared/prLineComments.ts'
+import { quotePrComment, quotePrLineThread } from './prCommentQuote'
+import type { PrComment } from './api'
 import { agoLabel, checkLabel } from './prLabels'
 import { ReviewBadge } from './ReviewBadge'
 import type { PaneProps } from './App'
@@ -122,6 +125,12 @@ export function PrView({ repo, number, onStatus, onInsertToSession }: { repo: st
     () => (loaded && files ? placeLineThreads(threadLineComments(loaded.data.line_comments ?? []), files) : null),
     [loaded, files],
   )
+  // コメントを、この PR を書いたセッションの返信欄に引用として入れる（#600 の案 3）。**入れるだけで送らない**（#525 と同じ口。
+  // 入れたらそのセッションへ移り、送るのは人）。書いたセッションに返信できないときは口を出さない
+  const quoteTo = canComment && author && pr ? author.id : ''
+  const prRef = useMemo(() => (pr ? { number: pr.number, title: pr.title, url: pr.url } : null), [pr])
+  const quoteComment = useCallback((c: PrComment) => quoteTo && prRef && onInsertToSession?.(quoteTo, quotePrComment(prRef, c)), [quoteTo, prRef, onInsertToSession])
+  const quoteThread = useCallback((t: PrLineThread) => quoteTo && prRef && onInsertToSession?.(quoteTo, quotePrLineThread(prRef, t)), [quoteTo, prRef, onInsertToSession])
   const check = pr ? checkLabel(pr.checks) : null
 
   return (
@@ -183,7 +192,7 @@ export function PrView({ repo, number, onStatus, onInsertToSession }: { repo: st
             <span className="repo">{loaded.data.repo}</span>
           </div>
           <div className="pr-description body">{pr.body.trim() ? <Markdown text={pr.body} /> : <span className="none">本文はありません</span>}</div>
-          <PrComments data={loaded.data} now={loaded.at.getTime()} />
+          <PrComments data={loaded.data} now={loaded.at.getTime()} {...(quoteTo ? { onQuote: quoteComment } : {})} />
           {loaded.data.diff_error && <div className="warn">{loaded.data.diff_error}</div>}
           {author && blocked && (
             <div className="note pr-author">この PR を書いたセッション「{authorName}」には返信できないので、行へのコメントは書けません（{blocked}）</div>
@@ -239,7 +248,7 @@ export function PrView({ repo, number, onStatus, onInsertToSession }: { repo: st
               {lineThreads.rest.map((t) => (
                 <div className="diff-orphan" key={t.root.id}>
                   <code>{t.root.original_line ? `${t.root.path}:${t.root.original_line}` : t.root.path}</code>
-                  <PrLineThreadNote thread={t} now={loaded.at.getTime()} />
+                  <PrLineThreadNote thread={t} now={loaded.at.getTime()} {...(quoteTo ? { onQuote: quoteThread } : {})} />
                 </div>
               ))}
             </section>
@@ -251,6 +260,7 @@ export function PrView({ repo, number, onStatus, onInsertToSession }: { repo: st
               empty="差分はありません"
               {...(diffComments ? { comments: diffComments } : {})}
               {...(lineThreads && lineThreads.placed.length > 0 ? { threads: lineThreads.placed, now: loaded.at.getTime() } : {})}
+              {...(quoteTo ? { onQuoteThread: quoteThread } : {})}
             />
           )}
           {loaded.data.diff.truncated && (

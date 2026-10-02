@@ -6,7 +6,7 @@ import { DiffCommentEditor } from './DiffCommentEditor'
 import { DiffCommentNote } from './DiffCommentNote'
 import { DiffFilePatch, pinKey } from './DiffFilePatch'
 import { PrLineThreadNote } from './PrLineThreadNote'
-import type { PlacedLineThread } from '../../shared/prLineComments.ts'
+import type { PlacedLineThread, PrLineThread } from '../../shared/prLineComments.ts'
 import { sameComments, type DiffViewComments } from './diffFileComments.ts'
 import { collapseScrollBy } from './diffSticky.ts'
 import { useScrollWatch } from './useScrollTick.ts'
@@ -44,6 +44,8 @@ interface Props {
   threads?: readonly PlacedLineThread[]
   /** 「何分前」の基準（読んだ時刻）。描画中に Date.now() を呼ばない */
   now?: number
+  /** やり取りを返信欄に入れる口（#600 の案 3）。無ければボタンを出さない。同じ関数を渡し続ける */
+  onQuoteThread?: ((thread: PrLineThread) => void) | undefined
 }
 
 /**
@@ -64,11 +66,12 @@ function sameProps(a: Props, b: Props): boolean {
     a.setEditing === b.setEditing &&
     a.threads === b.threads &&
     a.now === b.now &&
+    a.onQuoteThread === b.onQuoteThread &&
     sameComments(a.comments, b.comments)
   )
 }
 
-export const DiffFileItem = memo(function DiffFileItem({ f, file, shown, onToggle, comments, editing, setEditing, threads = NO_THREADS, now = 0 }: Props) {
+export const DiffFileItem = memo(function DiffFileItem({ f, file, shown, onToggle, comments, editing, setEditing, threads = NO_THREADS, now = 0, onQuoteThread }: Props) {
   const sign = (l: DiffLine) => (l.kind === 'add' ? '+' : l.kind === 'del' ? '−' : ' ')
   const numbers = (l: DiffLine) => (
     <>
@@ -118,7 +121,7 @@ export const DiffFileItem = memo(function DiffFileItem({ f, file, shown, onToggl
     const a = lineAnchor(l)
     // GitHub でこの行に付いたやり取り（#600）。コメントを書けない PR（書いたセッションが無く、gh も未ログイン）でも出す
     const posted = isPinned && threads.length > 0 ? threads.filter((t) => t.side === a.side && t.line === a.line) : []
-    const postedNotes = posted.map((t) => <PrLineThreadNote key={t.thread.root.id} thread={t.thread} now={now} />)
+    const postedNotes = posted.map((t) => <PrLineThreadNote key={t.thread.root.id} thread={t.thread} now={now} {...(onQuoteThread ? { onQuote: onQuoteThread } : {})} />)
     if (!comments) {
       return (
         <>

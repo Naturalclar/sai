@@ -7,9 +7,10 @@ import { agoLabel } from './prLabels'
 /**
  * PR のコメント 1 件（#600）。会話のコメントか、レビューの本文と判定。**読むだけ**（返信・解決の口は無い）。
  * 本文は今の `Markdown` で描く（HTML 文字列は作らない・外の URL の画像は読み込まない）。
+ * `onQuote` があれば「返信欄に入れる」を出す（#600 の案 3。その PR を書いたセッションの入力欄に引用として足すだけで、送らない）。
  * GitHub で畳まれたものと bot のものは 1 行にして、押すと開く（`<details>`。開け閉めの状態は持たない）
  */
-export function PrCommentItem({ comment, now }: { comment: PrComment; now: number }) {
+export function PrCommentItem({ comment, now, onQuote }: { comment: PrComment; now: number; onQuote?: (comment: PrComment) => void }) {
   const state = reviewStateLabel(comment.state)
   const fold = foldLabel(comment.folded)
   const head = (
@@ -27,10 +28,15 @@ export function PrCommentItem({ comment, now }: { comment: PrComment; now: numbe
           <Markdown text={comment.body} />
         </div>
       )}
-      {(comment.truncated || comment.url) && (
+      {(comment.truncated || comment.url || onQuote) && (
         <div className="foot">
           {comment.truncated && <span className="warn">長いので途中までです。</span>}
           {comment.url && <OpenInGitHub href={comment.url} />}
+          {onQuote && (
+            <button type="button" className="linkish quote" onClick={() => onQuote(comment)}>
+              返信欄に入れる
+            </button>
+          )}
         </div>
       )}
     </>

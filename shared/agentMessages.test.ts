@@ -32,6 +32,7 @@ import {
   withHandedReplies,
 } from './agentMessages.ts'
 import type { FeedRow, SessionSummary, UsageResponse } from './types.ts'
+import { COMPACT_SUMMARY_HEAD, isCompactSummaryText } from './compactSummary.ts'
 
 const session = (id: string, over: Partial<SessionSummary> = {}): SessionSummary =>
   ({
@@ -257,4 +258,52 @@ test('resolveTarget: id・表示名・worktree 名・題名の完全一致で、
   assert.equal(resolveTarget(targets, 'b@dev-min', [s('z@dev-z', 'dev-z', 'z', '明')]).target?.id, 'b@dev-min', 'id なら今までどおり')
   assert.equal(resolveTarget(targets, 'だれか', [s('z@dev-z', 'dev-z', 'z', 'だれか')]).target, null)
   assert.deepEqual(targetNames(targets[0]!), ['a@dev-clared', 'くらら', 'dev-clared'])
+})
+
+test('replyOf / agentReplyRows: ターン完了の行の入力が要約の文に置き換わっていても、直前の入力の行の見出しで当てる（#626）', () => {
+  const summary = `${COMPACT_SUMMARY_HEAD} that ran out of context. …`
+  const sent = deliveredText({ label: '実装', project: 'o/r' }, 'a1', '見て')
+  const rows = [
+    { ts: '2026-09-11T01:00:00Z', session: 'B1', repo: 'r', event: 'UserPromptSubmit', user_text: sent, text: '' },
+    { ts: '2026-09-11T01:01:00Z', session: 'B1', repo: 'r', event: 'PermissionRequest', user_text: sent, text: '許可待ち: Bash: ls' },
+    { ts: '2026-09-11T01:01:30Z', session: 'B1', repo: 'r', event: 'UserPromptSubmit', text: '' },
+    { ts: '2026-09-11T01:02:00Z', session: 'C1', repo: 'r', event: 'Stop', user_text: summary, text: '別のセッションの要約のターン' },
+    { ts: '2026-09-11T01:04:00Z', session: 'B1', repo: 'r', event: 'Stop', user_text: summary, text: '見ました' },
+    { ts: '2026-09-11T01:10:00Z', session: 'B1', repo: 'r', event: 'Stop', user_text: summary, text: '次のターン（入力の行が無い）' },
+    { ts: '2026-09-11T01:20:00Z', session: 'B1', repo: 'r', event: 'UserPromptSubmit', user_text: '人が打った', text: '' },
+    { ts: '2026-09-11T01:21:00Z', session: 'B1', repo: 'r', event: 'Stop', user_text: summary, text: '人の入力のターン' },
+  ] as FeedRow[]
+  assert.equal(replyOf(rows, 'B1@r', 'a1')?.text, '見ました', '合図だけの再開の行は見出しを消さない。当てるのは次のターン完了の 1 つだけ')
+  assert.equal(replyOf(rows, 'C1@r', 'a1'), null, '別のセッションの行には当てない')
+  const out = agentReplyRows([{ message_id: 'a1', to: 'B1@r', since: '2026-09-11T00:59:00Z' }], rows, (id) => id)
+  assert.deepEqual(out.map((r) => r.text), ['見ました'])
+
+  // 入力が要約でないターン（バックグラウンドの通知で回った・人が打った）は救わない
+  const plain = [
+    { ts: '2026-09-11T01:00:00Z', session: 'B1', repo: 'r', event: 'UserPromptSubmit', user_text: sent, text: '' },
+    { ts: '2026-09-11T01:04:00Z', session: 'B1', repo: 'r', event: 'Stop', user_text: '', text: '通知のターン' },
+    { ts: '2026-09-11T01:05:00Z', session: 'B1', repo: 'r', event: 'Stop', user_text: '人が打った', text: '別のターン' },
+    { ts: '2026-09-11T01:06:00Z', session: 'B1', repo: 'r', event: 'Stop', user_text: summary, text: 'さらに後の、要約が入ったターン' },
+  ] as FeedRow[]
+  assert.equal(replyOf(plain, 'B1@r', 'a1'), null, '入力の行の見出しは、次のターン完了の 1 つにだけ使う')
+})
+
+test('replyOf: 届けたターンが終わったと分かる行（入力待ち）のあとの、要約が入ったターンには当てない（#626）', () => {
+  const summary = `${COMPACT_SUMMARY_HEAD} that ran out of context. …`
+  const sent = deliveredText({ label: '実装', project: 'o/r' }, 'a1', '見て')
+  const rows = [
+    { ts: '2026-09-11T01:00:00Z', session: 'B1', repo: 'r', event: 'UserPromptSubmit', user_text: sent, text: '' },
+    // 届けたターンのターン完了の行は落ちた。60 秒あとに「入力待ち」だけが来る
+    { ts: '2026-09-11T01:05:00Z', session: 'B1', repo: 'r', event: 'Notification', text: '入力待ち: Claude is waiting for your input' },
+    { ts: '2026-09-11T02:00:00Z', session: 'B1', repo: 'r', event: 'Stop', user_text: summary, text: '通知で回った、関係の無いターン' },
+  ] as FeedRow[]
+  assert.equal(replyOf(rows, 'B1@r', 'a1'), null)
+})
+
+test('isCompactSummaryText: 要約の決まり文句で始まる入力だけ', () => {
+  assert.equal(isCompactSummaryText(`${COMPACT_SUMMARY_HEAD} that ran out of context.`), true)
+  assert.equal(isCompactSummaryText(`\n  ${COMPACT_SUMMARY_HEAD}`), true)
+  assert.equal(isCompactSummaryText(`要約に「${COMPACT_SUMMARY_HEAD}」と出る`), false, '途中に出てくるだけの文は人の入力')
+  assert.equal(isCompactSummaryText(''), false)
+  assert.equal(isCompactSummaryText(undefined), false)
 })

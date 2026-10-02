@@ -4,6 +4,7 @@
 // 載っている（record.py が UserPromptSubmit と Stop の両方に載せる）ので、これだけで足りる。
 // DOM を触らない純粋関数にして replyHistory.test.ts で回す。
 import { isHandedOnly, splitHandedReplies } from '../../shared/agentMessages.ts'
+import { isCompactSummaryText } from '../../shared/compactSummary.ts'
 import { entityId } from '../../shared/entity.ts'
 import type { FeedRow } from '../../shared/types.ts'
 
@@ -32,7 +33,8 @@ export function historyFrom(rows: readonly FeedRow[], id: string, extra: readonl
     // SAI が頭に足した返答の塊（#594）は履歴に入れない（人が打った文だけを呼び戻す）
     const text = splitHandedReplies(row.user_text ?? '').text.trim()
     // 返答を渡すためだけに SAI が置いた本文（走っているターンに足した・起こした）は人の入力ではない
-    if (!text || isHandedOnly(text) || text === out[out.length - 1]) continue
+    // 自動の要約の文が入力として記録された行（#626）も同じ
+    if (!text || isHandedOnly(text) || isCompactSummaryText(text) || text === out[out.length - 1]) continue
     out.push(text)
   }
   const items: string[] = []

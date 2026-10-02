@@ -93,3 +93,11 @@ test('withOlder: 描いていない前の行の入力を後ろに足し、継ぎ
   assert.deepEqual(withOlder(['新', '中'], ['中', '古']), ['新', '中', '古'])
   assert.deepEqual(withOlder([], ['古']), ['古'])
 })
+
+test('historyFrom: 自動の要約の文が入力として記録された行は履歴に入れない（#626）', () => {
+  const rows = [
+    row({ ts: '2026-09-09T10:00:00+09:00', event: 'UserPromptSubmit', user_text: '頼み' }),
+    row({ ts: '2026-09-09T10:05:00+09:00', event: 'Stop', user_text: 'This session is being continued from a previous conversation that ran out of context.' }),
+  ]
+  assert.deepEqual(historyFrom(rows, 's1@sai'), ['頼み'])
+})

@@ -27,6 +27,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 ## タイトルと 1 つだけ出す値
 
 - `aggregate.ts` の `sessionTitle()` が新しい行から遡って最初の `user_text` の 1 行目を使う（画面から返信しても端末で続きを打っても、次のターンが記録された時点で変わる）。フィードの `@` の候補のラベル（`feedReplyTargets`）も同じ順。`user_text` が 1 行も無いときだけ `first_user_text` に落ちる。
+- **`user_text` が自動の要約の文になっている行（#626）は、題名にも `last_user_text` にも数えない**（`shared/compactSummary.ts` の `isCompactSummaryText()`。文の書き出し `This session is being continued from a previous conversation` で見る）。`record.py` は直したが、もう書かれた行には印が無く、記録は書き換えないので読む側で飛ばす。同じ判定を画面の自分のバブル（`chatGroups.ts`）・↑ の履歴（`replyHistory.ts`）・メッセージの返答の引き当て（`deliveryMatcher()`）が使う。
 - `first_user_text` は毎行に載る（フォールバックの集計は最古の行の値を使うので、`days` の窓から 1 行目が落ちてもタイトルが残る）。
 - `session_source` / `branch` / `host` / `remote` / `project` / `agent` / `repo` は `latestValue()`（値のある一番新しい行。値の無い行では上書きしない。#283）。`session_source` だけは合成（`synth`）が 1 本でもあれば `synth` に倒す（返信できない方）。`agents` / `branches` / `sources` などの一覧は出てきた順のまま。
 

@@ -396,3 +396,16 @@ test('aggregate: 返答を渡すためだけに SAI が置いた本文（#594 �
   assert.equal(s!.last_user_text, '579着手して')
 })
 
+
+test('入力が自動の要約の文になっている行は、題名にも last_user_text にもしない（#626）', () => {
+  const summary = 'This session is being continued from a previous conversation that ran out of context. …'
+  const t0 = new Date('2026-10-01T02:00:00Z')
+  const [s] = aggregate([
+    row(t0, 's1', { event: 'UserPromptSubmit', user_text: 'issue追加。重い画像', text: '' }),
+    row(new Date(t0.getTime() + min(10)), 's1', { user_text: summary, text: '追加しました' }),
+  ])
+  assert.equal(s!.title, 'issue追加。重い画像')
+  assert.equal(s!.last_user_text, 'issue追加。重い画像')
+  assert.equal(s!.last_user_ts, t0.toISOString().replace(/\.\d{3}Z$/, '+00:00'), '入力した瞬間の行のもの')
+  assert.equal(s!.last_text, '追加しました')
+})

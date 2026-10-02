@@ -240,3 +240,11 @@ test('toUtterances: ループの周の入力（#634）は「ループ N 周目�
   assert.equal(promptArrived([arrived], entityId(arrived.session, arrived.repo, arrived.ts), 'ループ 3 周目', arrived.ts), true)
   assert.equal(promptArrived([arrived], entityId(arrived.session, arrived.repo, arrived.ts), 'ループ 4 周目', arrived.ts), false)
 })
+
+test('入力が自動の要約の文になっているターン完了の行では、自分のバブルを増やさない（#626）', () => {
+  const summary = 'This session is being continued from a previous conversation that ran out of context. …'
+  const out = toUtterances([row(0, { event: 'UserPromptSubmit', user_text: '頼み', text: '' }), row(5, { user_text: summary })])
+  assert.deepEqual(out.map((u) => [u.speaker, u.text]), [['me', '頼み'], ['claude', '返答']])
+  // 入力した瞬間の行が窓の外でも、要約を自分の発言にはしない
+  assert.deepEqual(toUtterances([row(5, { user_text: summary })]).map((u) => u.speaker), ['claude'])
+})

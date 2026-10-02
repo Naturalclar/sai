@@ -33,6 +33,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 ### Claude の `text`（そのターンの返答）
 
 - Claude の `text` は「そのターンの返答」で、前のターンには遡らない（#467。`last_assistant_text()` → `_turn_assistant_text()`）。ターンの境目は `_is_prompt_row()`（`last_turn_thinking()` が使っているのと同じ判定）。
+- 「人の入力でも返答でもない行」は `_not_human()` の 1 つ: `isMeta`・`isSidechain`・**自動の要約の行（`isCompactSummary`。#626）**。`last_user_text()` はこれを飛ばして手前の入力に届き、`_is_prompt_row()` は境目にしない（ターンの途中で要約が走っても、要約より前の地の文・思考はそのターンのもの）。見分けるのは印だけで、本文の決まり文句では見ない。`shared/progress.ts` の `claudeProgress()`・`shared/claudeTurns.ts` と同じ行を飛ばすことは、3 つのテストが同じ transcript（`shared/testdata/compact-transcript.ndjson`）を読んで突き合わせる。
 - Claude の `Stop` の payload には返答が載っていない（Codex の `last-assistant-message` / Grok の `lastAssistantMessage` と違う）ので transcript を読むしかなく、`Stop` フックはそのターンの最後の行が transcript に書かれる前に走るので、Claude だけこの競走に当たる。
 - そのターンのいちばん新しい本文を返し、それが閉じた行（`end_turn` / `stop_sequence`。`shared/progress.ts` と同じ 2 つ）でなければ現れるまで `ASSISTANT_WAIT_S`（2 秒）待つ。現れなければ途中の地の文か空を返す（空の行は正直だが、前回の返答は嘘になる）。
 - 古い閉じた行を先に返してはいけない（`stop_sequence` は Claude Code の合成通知「You've reached your … limit」のことがあり、そのあともターンが続くことがある。先に返すと本物の返答を押しのける）。

@@ -16,6 +16,7 @@ import {
   stepsSince,
 } from './progress.ts'
 import type { ProgressStep } from './types.ts'
+import { readFileSync } from 'node:fs'
 
 const j = (o: unknown) => JSON.stringify(o)
 const T = (s: number) => new Date(Date.UTC(2026, 8, 10, 12, 0, s)).toISOString()
@@ -220,4 +221,23 @@ test('opencodeContext: 一番新しい、入力の量が 0 でない返答の入
   assert.equal(opencodeContext([{ info: { role: 'user' } }]), 0, '返答がまだ無ければ 0')
   assert.equal(opencodeContext({ data: [] }), 0, '形が違えば 0（v2 の /context の形）')
   assert.equal(opencodeContext([{ info: { role: 'assistant', tokens: { input: 'x' } } }]), 0)
+})
+
+// 「人の入力か」の判定が記録の側（feed/record.py）とずれないように、同じ transcript を読ませる（#626）。
+// `feed/test_record.py` の `test_compact_summary_row_is_not_a_prompt_same_fixture_as_shared_tests` と、`shared/claudeTurns.test.ts` が同じファイルを読む
+test('claudeProgress: 要約の行（isCompactSummary）でターンを切らない — record.py と同じ transcript で突き合わせる（#626）', () => {
+  const lines = readFileSync(new URL('./testdata/compact-transcript.ndjson', import.meta.url), 'utf8').split('\n').filter(Boolean)
+  const p = claudeProgress(lines)
+  // 要約の行（s1）で切っていれば、要約より前の手順（u2 のターンの思考・地の文・Read）が消える
+  assert.deepEqual(
+    p.steps.map((s) => [s.kind, s.tool ?? '', s.summary]),
+    [
+      ['thinking', '', ''],
+      ['text', '', '要約の前の地の文'],
+      ['tool', 'Read', '/repo/a.ts'],
+      ['text', '', '要約のあとの返答'],
+    ],
+  )
+  assert.equal(p.started, true)
+  assert.equal(p.open, false)
 })

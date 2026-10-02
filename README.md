@@ -348,4 +348,4 @@ rsync -a --include='????-??-??.*.jsonl' --exclude='*' mini:~/.agent-feed/ ~/.age
 | `GROK_HOME` | Grok Build のホーム（既定 `~/.grok`）。Grok 自身の変数で、`record.py` が `sessions/` から入力とモデルを読むときにそれに従うだけ |
 | `AGENT_FEED_DEBUG` | `1` で `record.py` の例外をログに残す |
 
-表に無いもの（SAI が自分で付ける・エージェントが渡してくる）: `AGENT_FEED_SKIP`（SAI が一言を作るために回す `claude -p` に付け、`record.py` に自分自身を記録させない）、`SAI_URL` / `SAI_ENTITY`（返信の `claude` に足す MCP サーバに渡す）、`TMUX_PANE` / `CLAUDE_PID`（エージェントが `record.py` に渡してくる）、`PATH`（フックのラッパーを引くのにサーバの PATH を見る。#567）。
+表に無いもの（SAI が自分で付ける・エージェントが渡してくる）: `AGENT_FEED_SKIP`（SAI が一言を作るために回す `claude -p` に付け、`record.py` に自分自身を記録させない）、`SAI_URL` / `SAI_ENTITY` / `SAI_TOKEN_FILE` / `SAI_LOOP`（返信の `claude` に足す MCP サーバに渡す）、`SAI_APPROVE_RECONNECT_MS`（その MCP サーバが繋ぎ直しを続ける長さ。テスト用）、`TMUX_PANE` / `CLAUDE_PID`（エージェントが `record.py` に渡してくる）、`REPO_URL` / `PROD`（Vite のビルド時の値）、`PATH`（フックのラッパーを引くのにサーバの PATH を見る。#567）。

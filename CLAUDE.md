@@ -36,13 +36,10 @@ pnpm test:feed              # python3 -m unittest feed.test_record
 
 コミット前の一式: `pnpm test && pnpm test:feed && pnpm lint && pnpm typecheck`。CI（`.github/workflows/ci.yml`）も同じ一式＋ `pnpm build` を `main` への push と PR で回す（Node 22 系の最新、Python 3.9 と最新）。**スクリプトを足したら CI にも足す。**
 
-単体で回す:
+単体で回す（ほかの形は `docs/internals/tooling.md`）:
 
 ```
-node --test --disable-warning=ExperimentalWarning server/rows/aggregate.test.ts
 node --test --disable-warning=ExperimentalWarning --test-name-pattern="clip" server/rows/aggregate.test.ts
-python3 -m unittest feed.test_record.RecordTest.test_garbage_stdin_exits_zero_and_records_nothing
-python3 -m unittest feed.test_record -k synth
 ```
 
 このリポジトリだけに置くスキル（`~/.claude/skills/` には置かない。中身は `docs/internals/tooling.md`）:
@@ -50,25 +47,23 @@ python3 -m unittest feed.test_record -k synth
 - `/setup-sai` — clone 直後の配線と点検。**既存の設定を上書きしない**（1 つしか持てない `notify` / `statusLine` は読んで見せてから畳む）
 - `/sync-main` — main worktree だけを最新の `main` に進めてビルドし、古いコードのサーバをそのペインで立て直す（起動コマンドに一言の設定は付けない）
 - `/manager` — 他のセッションに送る文を提案する。**自分からは送らない**（人が「置いて」と言ったときだけ `sai_suggest` で宛先の入力欄に案を置く。`.claude/settings.json` の自動の許可には入れない）。読む口は `.mcp.json` の `sai-read`（SAI が渡す `sai` とは名前を分ける）。ツールの名前を変えたらスキルと `.mcp.json` も直す（`server/mcp/mcp.test.ts` が突き合わせる）
-- `/merge` — 下の「PR とマージ」の手順
+- `/merge` — レビューしてから squash マージするまでの手順（下の「PR とマージ」）
 
 ### PR とマージ
 
 - **着手の前に、並行しているセッションと同じファイルを触っていないかを見る**（#564）。SAI から回っているターンなら `sai_sessions` の「同じファイル」で分かる。同じ関数・同じ箇所を変えていそうなら `sai_send` で 1 回だけ聞く（別の場所に足すだけなら聞かない）
-- PR のベースは **必ず `main`**。積み重ねた PR は下が入ってからリベースしてベースを `main` に付け替える（`gh pr edit --base` が GraphQL の非推奨エラーで落ちたら `gh api -X PATCH repos/<owner>/<repo>/pulls/<番号> -f base=main`）
+- PR のベースは **必ず `main`**。積み重ねた PR は下が入ってからリベースしてベースを `main` に付け替える
 - マージは **squash マージ**。`main` は PR 1 つ = コミット 1 つ
-- **マージの前に、書いた本人とは別の目で 1 回レビューする**（#449。手順は `/merge`）。自分で読み直すのは代わりにならないので、`/code-review <番号>`（別プロセス）かサブエージェントに読ませる
-- **正しい指摘は直してから、結果を PR のコメントに残す**（直す前に書くと「どうしたか」が嘘になる）。**指摘が 0 件でも 1 行残す**
-- 直したら **CI をもう一度待つ**。直さないものは理由をコメントに書き、直しが大きいときはマージせず人に戻す。**既知の flake の回し直しは 1 回まで**で、回し直したことはコメントに書く
-- **マージは「レビューした SHA」を指定して投げる**（`gh api -X PUT repos/<owner>/<repo>/pulls/<番号>/merge -f merge_method=squash -f sha=<40 桁>`。別のセッションが同じブランチへ push すると読んでいないコミットが入るため。HEAD が動いていれば `405`）
-- マージしたら **`merged: true` を確かめてから**ブランチを消す（失敗したまま消すと PR が閉じて reopen できない）
+- **マージの前に、書いた本人とは別の目で 1 回レビューする**（#449）。自分で読み直すのは代わりにならない。レビューからマージ・後始末までの手順は `/merge` が正本で、飛ばさない
 
 ### Node と pnpm のバージョン
 
-- サーバとテストは Node の型剥がしで `.ts` を直接実行するため **Node 22.18+**（`package.json` の `engines`）。古いと `ERR_UNKNOWN_FILE_EXTENSION`。応急処置は `node --experimental-strip-types ...`
+エラーの出方と理由は `docs/internals/tooling.md`。
+
+- **Node 22.18+**（`package.json` の `engines`。サーバとテストは型剥がしで `.ts` を直接実行する）
 - `server/tsconfig.json` は `erasableSyntaxOnly: true`。サーバ側では enum / namespace / パラメータプロパティなど型剥がしで消せない構文は使えない
-- **pnpm 12 系**（CI の `pnpm/action-setup` も `version: 12`）。設定は `package.json` の `"pnpm"` ではなく **`pnpm-workspace.yaml`**（12 系は前者を無視する）。`allowBuilds: { esbuild: true }`（無いと `ERR_PNPM_IGNORED_BUILDS`）と `packages: [.]`（無いと入れ子の `pnpm typecheck` が `packages field missing or empty` で落ちる）は消さない
-- `package.json` に `packageManager` は**書かない**（pnpm 12 は corepack のキャッシュに `bin/pnpm.cjs` を持たず、入れ子の `pnpm` が `Cannot find module .../pnpm.cjs` で落ちる）
+- **pnpm 12 系**（CI も `version: 12`）。設定は `package.json` の `"pnpm"` ではなく **`pnpm-workspace.yaml`** で、`allowBuilds: { esbuild: true }` と `packages: [.]` は消さない
+- `package.json` に `packageManager` は**書かない**
 
 ## 構造（部品の地図）
 
@@ -97,16 +92,16 @@ OpenCode (feed/opencode/sai.js) ─┘                           │
 
 ### サーバ（server/）
 
-- **`server/`** は node:http 直書きで依存ゼロを保つ（検索も索引を持たず `store.rows()` を舐める）。ルーティングは `createApp()` にあり、テストはこれを直接叩く。C-c / SIGTERM では必ず終わる（`shutdown()`。2 回目は即終了）。SAI が起こした `opencode serve` は回していなければ落とし、回していれば別 pgid・`opencode-serve.log` 出力のまま次のサーバへ渡す。`codex app-server --stdio` は触らない → docs/internals/server.md#終わり方shutdown
+- **`server/`** は node:http 直書きで依存ゼロを保つ（検索も索引を持たない）。ルーティングは `createApp()` にあり、テストはこれを直接叩く。C-c / SIGTERM では必ず終わる（`shutdown()`）。SAI が起こした `opencode serve` は回していなければ落とし、回していれば次のサーバへ渡す。`codex app-server --stdio` は触らない → docs/internals/server.md#終わり方shutdown
 - **`server/rows/store.ts`** の読む先は日付から組み立てず `readdir` + `feedFiles()` で拾う（`<host>` 付きも読む） → docs/internals/server.md#行の読み込みstorets
 - **`server/rows/search.ts`** は `thinking` と待ちの行を見ず、アーカイブ済みも出す。判定と抜粋は `shared/search.ts` を画面と共用する → docs/internals/server.md#本文の検索rowssearchts
-- **`server/local/usage.ts`** は API を叩かない（読むのはローカルのファイルだけ）。`UsageStore` のコンストラクタは置き場に既定値を持たせない（本番の組み立ては `createApp` だけ）。チップの出し方は `web/src/usageChips.ts` の 1 か所だけ → docs/internals/server.md#使用量localusagets
+- **`server/local/usage.ts`** は API を叩かない（読むのはローカルのファイルだけ）。`UsageStore` のコンストラクタは置き場に既定値を持たせない。チップの出し方は `web/src/usageChips.ts` の 1 か所だけ → docs/internals/server.md#使用量localusagets
 - **ビルド追従・`buildFreshness.ts`** は `X-SAI-Build` と `build_stale` で知らせる。git は叩かない → docs/internals/server.md#ビルドが古いことの判定localbuildfreshnessts
 - **`server/local/claudeHooks.ts`** は `~/.claude/settings.json` を読むだけ。本物を読むのは `main.ts` だけで、`createApp` の既定は `NoClaudeHooks`。フックを足したら `shared/hooks.ts` の `EXPECTED_CLAUDE_HOOKS` と README の例の両方に足す。分からないときは出さない → docs/internals/server.md#フックの配線のずれlocalclaudehooksts
-- **補った返答・`local/recovered.ts`**（#614）は JSONL に書かない。transcript を読むのは候補のときだけで、古いターンは裏で読む（応答を待たせない）。人に見せる・返答を引く道は `rowsNow()`、集計（`turns`）と一言は `store.rows()` のまま。前のターンの返答は出さない → docs/internals/progress.md#落ちた返答を-transcript-から補う614
+- **補った返答・`local/recovered.ts`**（#614）は JSONL に書かない。transcript を読むのは候補のときだけで、応答を待たせない。人に見せる・返答を引く道は `rowsNow()`、集計（`turns`）と一言は `store.rows()` のまま。前のターンの返答は出さない → docs/internals/progress.md#落ちた返答を-transcript-から補う614
 - **`server/auth.ts`**（tailnet の認証）→ docs/internals/auth.md
-- **返答に出てきたファイル・`local/files.ts`**（#603）はパスを受けず鍵で引く。cwd の中の文字のファイルだけ、名前で断る一覧（`isSecretPath()`）を外さない。**ループバックだけ**、HTML は描かない → docs/internals/server.md#返答に出てきたファイルを読むlocalfilests603
-- **画像の軽い版・`local/thumbnails.ts`** は `sips` に**置き場に書き直したファイルだけ**を渡す（元のパス・リクエストの文字列は渡さない）。作れなければ 503 で画面は押すまで元を読まない。ライトボックスとダウンロードは元のまま → docs/internals/server.md#画像の軽い版localthumbnailsts
+- **返答に出てきたファイル・`local/files.ts`**（#603）はパスを受けず鍵で引く。cwd の中の文字のファイルだけで、`isSecretPath()` を外さない。**ループバックだけ**、HTML は描かない → docs/internals/server.md#返答に出てきたファイルを読むlocalfilests603
+- **画像の軽い版・`local/thumbnails.ts`** は `sips` に**置き場に書き直したファイルだけ**を渡す（元のパス・リクエストの文字列は渡さない）。作れなければ 503。ライトボックスとダウンロードは元のまま → docs/internals/server.md#画像の軽い版localthumbnailsts
 
 ### 画面（web/src/）
 
@@ -128,13 +123,13 @@ OpenCode (feed/opencode/sai.js) ─┘                           │
 - **新しいセッション**: ID はサーバが決め cwd は `from` から。OpenCode は serve だけ（run に落とさない） → docs/internals/reply.md#新しいセッション
 - **claude --bg**: 置き場は `--settings` の `env`、許可の配線なし。attach 中・ターン中は `claude stop` しない（`ps` が読めなければ居る扱い）。`run.start` に載せない → docs/internals/reply.md#claude---bg
 - **預かり**: 前が `failed` なら回さない・追い越さない。steer は既定にしない、判定は `canSteer()` 1 つ → docs/internals/reply.md#預かりと-steer
-- **Claude の `-p` を止める・足す**: 返信 1 回 = 1 プロセスのまま入力の口（stream-json）を開ける（長寿命にしない）。stdin だけ pipe、stdout はログの fd のまま。運用者が `--output-format` を指定したら口を開けない。止めた返信は失敗にせず使用量も残さない → docs/internals/reply.md#claude-の--p-を止める足す386
+- **Claude の `-p` を止める・足す**: 返信 1 回 = 1 プロセスのまま（長寿命にしない）。stdin だけ pipe、stdout はログの fd のまま。運用者が `--output-format` を指定したら口を開けない。止めた返信は失敗にせず使用量も残さない → docs/internals/reply.md#claude-の--p-を止める足す386
 - **打ちかけ**: 端末の打ちかけは人の確認なしに消さない。失敗の戻しは入力欄が空のときだけ、非同期の失敗は押したときだけ → docs/internals/reply.md#打ちかけと失敗の戻し
 - **画像・ファイル**: `ReplyRequest.attachments` の絶対パスを信じず `resolvePath()` を通す。種類は中身で決め、配る口（`find()`）は画像だけ。画像を受ける口（`-i` など）へ渡すのも画像だけ → docs/internals/reply.md#画像
 - **許可モード**: 素通しでも SAI は許可を自動で返さない。`REPLY_MODES` 外は `400`。名前は英語 → docs/internals/reply.md#許可モード
 - **モデル**: 名前（`Default` / `Custom model…`）は英語、保存値は正式名 → docs/internals/reply.md#モデル
 - **別のマシン**: 判定は `isRemoteHost()` 1 つ、`host` が空はリモートにしない → docs/internals/reply.md#別のマシン
-- **ループ**: 上限なしでは組めない。エージェントの口（`sai_loop_next`）から動かせるのは自分のループの「次」だけ。周は送る前に書く（立て直しで 2 回送らない）。起こすのは `launch()` のまま（権限のフラグを足さない・許可を自動で返さない）。素通し・端末・Claude 以外には組まない → docs/internals/reply.md#ループ634
+- **ループ**: 上限なしでは組めない。`sai_loop_next` から動かせるのは自分のループの「次」だけ。周は送る前に書く。起こすのは `launch()` のまま（権限のフラグを足さない・許可を自動で返さない）。素通し・端末・Claude 以外には組まない → docs/internals/reply.md#ループ634
 
 ### Codex の端末・app-server と処理中の手順
 
@@ -197,37 +192,10 @@ OpenCode (feed/opencode/sai.js) ─┘                           │
 
 ## 環境変数
 
-どれも省略できる（既定値で動く）。表は README と同じく 2 つに分ける（#288。区別の無い 1 枚の表だと、全部設定しないと動かないように見えていた）。
+**表は README の「環境変数」だけに置く**（#675。どれも省略でき、既定値で動く）。読み方の細部は `docs/internals/tooling.md#環境変数の表`。
 
-### 設定することがあるもの
-
-| | |
-| --- | --- |
-| `SAI_HOME` | このリポジトリの場所。README のフック設定例（`settings.json` の `env`）と、OpenCode のプラグイン（`feed/opencode/sai.js` の `recordPath()`。無ければ置いたファイルの隣から辿る）が使う。`record.py` とサーバは読まない |
-| `AGENT_FEED_DIR` | JSONL の置き場（既定 `~/.agent-feed`）。record.py とサーバの両方が見る |
-| `SAI_PORT` | サーバの既定ポート（既定 `8787`）。`web/vite.config.ts` の `/api` の proxy 先もこれ（判定は `shared/port.ts`。`--port` は Vite から見えない） |
-| `AGENT_FEED_HOST` | このマシンの名前（既定は `gethostname()` / `os.hostname()` の短い形）。record.py は行の `host` に載せ（複数マシンの JSONL を集めるとき用で、合成セッションもこれで割る。**設定したときだけ**書き込み先が `YYYY-MM-DD.<host>.jsonl` になる。#113）、サーバは `server/host.ts` の `selfHost()` で自分の名前にして応答の `host` に載せる（行の `host` と違えば「別のマシン」= 返信不可。#114）。**記録側とサーバが同じ変数を見る**ので、同じ環境から起動すれば揃う（前はサーバ側だけ `SAI_HOST` で、片方だけ設定すると自分のセッションが「別のマシン」になった。#288） |
-| `JEV_API_KEY` | 許可のバブルに「許可して問題なさそうか」の確率を出す Jev（TypeSafe AI）の鍵（#491）。**あるときだけ許可の要約・コマンド・理由を外に送る**（`settings.json` の `jev` で切れる。既定は入）。読むのは `server/main.ts` の `jevFromEnv()` だけ（`createApp` の既定は送らない） |
-| `SAI_DIGEST_URL` / `SAI_DIGEST_API_KEY` | 一言の口が `openai` のときの base URL（既定 Ollama の `http://127.0.0.1:11434/v1`）と任意の鍵。**入切・口・モデルは環境変数ではなく `settings.json`**（画面の自分のメニュー。#288）で、**送り先と鍵だけは画面から変えさせない**（同一オリジンの PUT 1 つで本文を任意の URL に流せるようになるため） |
-| `SAI_CLAUDE_ARGS` / `SAI_CODEX_ARGS` / `SAI_OPENCODE_ARGS` | 返信のコマンドに足す引数（`--allowedTools "Bash(gh *)"` など。シェル風に割る。`server/reply/runner.ts` の `splitArgs()`）。Claude は先頭に置く（`--allowedTools` は可変長で、後ろだと本文を飲む） |
-| `SAI_CODEX_APP_SERVER_ARGS` | `codex app-server --stdio` の引数 |
-
-### 切り分け・内部
-
-普段は設定しない（経路を切る・ログを残す）。**実行ファイル（`claude` / `codex` / `opencode` / `tmux` / `git` / `gh` / `tailscale` / `sips`）はサーバの `PATH` から探す**（`replyCommand()` / `summarizeCommand()` / `codexQueueCommand()` / `realCodexConnector()` は名前を固定、`RealTmux` / `RealGit` / `GhPr` はコンストラクタの既定値、`sips` は `sipsShrink()`。テストは偽物を引数で渡す。`tailscaleBins()` は PATH の後に macOS の GUI 版）。前は `SAI_*_BIN` で 7 つを 1 つずつ差し替えていたが、`PATH` を 1 つ直せば全部に効くのでやめた（#288）。
-
-| | |
-| --- | --- |
-| `SAI_TERMINAL` | `0` で「tmux のペインに打ち込む」を切る。Claude と閉じた Codex は別プロセス、開いている Codex は queue |
-| `SAI_APPROVE` | `0` で返信中の許可・質問を画面で答える配線（`--mcp-config` + `--permission-prompt-tool`）を付けない |
-| `SAI_CODEX_APP_SERVER` | `0` で閉じたCodexを従来の `exec resume` に戻す（既定はapp-server） |
-| `SAI_OPENCODE_SERVER` | `0` で OpenCode への返信を従来の `opencode run -s` に戻す（既定は長寿命の `opencode serve` へ HTTP。#382） |
-| `SAI_CLAUDE_AGENTS` | `0` で `claude agents --json` を聞きに行かない（既定は聞く。#418）。聞けなければ処理中の判定は今までどおり transcript だけ |
-| `SAI_GH` | `0` で差分ボタンの PR 番号を引かず、PR の一覧（#524）も読まず、レビューの投稿（#526）の口も出さない（既定は読む）。叩くのは PATH の `gh` の `gh pr view` / `gh pr list` / `gh pr diff` / `gh api user` / 行コメントを読む `gh api -X GET …/pulls/<番号>/comments`（#600） と、人が押したときのレビューの投稿（`gh api -X POST …/reviews`）だけで、引けなければ番号が付かない・一覧に「読めませんでした」と出るだけ |
-| `CODEX_HOME` | Codex のホーム（既定 `~/.codex`）。Codex 自身の変数に従うだけ |
-| `GROK_HOME` | Grok Build のホーム（既定 `~/.grok`）。Grok 自身の変数に従うだけ（`record.py` が `sessions/` を読む） |
-| `AGENT_FEED_DEBUG` | `1` で record.py の例外をログに残す |
-
-表に載せないもの（`server/docs.test.ts` の `INTERNAL`）: `AGENT_FEED_SKIP`（SAI が一言を作る `claude -p` に自分で付ける合図。record.py / statusline.py / OpenCode のプラグインが見る）、`SAI_URL` / `SAI_ENTITY` / `SAI_LOOP`（`server/reply/runner.ts` が `--mcp-config` の env で `server/approvals/approve-mcp.ts` に渡す。`SAI_LOOP` はループの周のターンの印。#634）、`SAI_APPROVE_RECONNECT_MS`（`approve-mcp.ts` が SAI に届かないとき繋ぎ直しを続ける長さ。テストが短くするためだけで、SAI は渡さない。#440）、`TMUX_PANE` / `CLAUDE_PID`（エージェントが record.py に渡してくる）、`REPO_URL` / `PROD`（Vite の `import.meta.env`）、`PATH`（フックのラッパーを引く。#567）。
-
-コードが読む環境変数が README とこの表の両方に載っていること・表にあるものをコードが読むこと・2 つの小見出しに分かれていて同じ変数が 2 回出てこないことは `server/docs.test.ts` が見る（変数を足したら両方の表に足す）。**コードとして見るのは `.ts` / `.tsx` / `.js` / `.mjs` / `.py`**（`.js` を見ていなかった頃は、OpenCode のプラグインが読む `SAI_HOME` を「コードは読まない」と書いたままになっていた。#288）。
+- **変数を足したら README の表に足す。** 表は「設定することがあるもの」と「切り分け・内部」の 2 つに分け、同じ変数を 2 回載せない（#288）。コードが読む変数と表が揃っているかは `server/docs.test.ts` が見る
+- 利用者が設定しないもの（SAI が自分で付ける・エージェントが渡してくる）は表に載せず、`server/docs.test.ts` の `INTERNAL` と README の表の下の一文に足す
+- **実行ファイル（`claude` / `codex` / `opencode` / `tmux` / `git` / `gh` / `tailscale` / `sips`）はサーバの `PATH` から探す。** 差し替えの変数（`SAI_*_BIN`）は作らず、テストは偽物を引数で渡す
+- **記録側とサーバは同じ変数を見る**（`AGENT_FEED_DIR` / `AGENT_FEED_HOST`。片方だけ別の名前にすると自分のセッションが「別のマシン」になる）
+- 一言の送り先（`SAI_DIGEST_URL`）と鍵は環境変数だけ。Jev の鍵（`JEV_API_KEY`）を読むのは `server/main.ts` の `jevFromEnv()` だけ

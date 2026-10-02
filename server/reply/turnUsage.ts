@@ -5,7 +5,7 @@
 import { appendFile, mkdir, readFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { digestKey } from '../../shared/digestFeedback.ts'
-import { hasCost, turnCost, usageByRow } from '../../shared/turnUsage.ts'
+import { COST_CUMULATIVE_SINCE_MS, costIsCumulative, hasCost, turnCost, usageByRow } from '../../shared/turnUsage.ts'
 import type { TurnUsage, TurnUsageEntry } from '../../shared/turnUsage.ts'
 import type { FeedRow } from '../../shared/types.ts'
 
@@ -45,8 +45,12 @@ export class TurnUsageLog implements TurnUsageSink {
   private loaded = false
   private revValue = ''
 
-  constructor(path: string) {
+  /** `cost_usd` が積み上げになった時刻。テストが差し替える（既定は記録の実測の `COST_CUMULATIVE_SINCE_MS`） */
+  private readonly cumulativeSince: number
+
+  constructor(path: string, cumulativeSince = COST_CUMULATIVE_SINCE_MS) {
     this.path = path
+    this.cumulativeSince = cumulativeSince
   }
 
   /** 起動時に 1 回。無ければ空のまま（返信を 1 度も回していないマシンでは、そもそもファイルが無い） */
@@ -103,6 +107,11 @@ export class TurnUsageLog implements TurnUsageSink {
     // 費用の無い行は 0 として、前の行の値を忘れない（`turnCosts()` と同じ）
     if (!hasCost(e.cost_usd)) {
       this.costs.set(e, 0)
+      return
+    }
+    // 積み上げになる前の行は 1 ターンぶんのまま（`turnCosts()` と同じ）
+    if (!costIsCumulative(e.ts, this.cumulativeSince)) {
+      this.costs.set(e, e.cost_usd)
       return
     }
     this.costs.set(e, turnCost(this.lastCost.get(e.id), e.cost_usd))

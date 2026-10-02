@@ -19,7 +19,7 @@ export interface TurnUsage {
   cache_creation_input_tokens: number
   /**
    * CLI が出した費用（USD）。定額プランでは実際に請求されるものではない。
-   * **turn-usage.jsonl の中ではそのセッションの積み上げ**（CLI の `total_cost_usd` のまま）で、行に載せるとき（`FeedRow.usage`）に
+   * **turn-usage.jsonl の中ではそのセッションの積み上げ**（CLI の `total_cost_usd` のまま。`COST_CUMULATIVE_SINCE_MS` より前の行は 1 ターンぶん）で、行に載せるとき（`FeedRow.usage`）に
    * そのターンぶん（`turnCost()`。前の行との差）に直す（#602）
    */
   cost_usd: number
@@ -143,6 +143,22 @@ export function turnCost(prev: number | undefined, cur: number): number {
   return Math.round((cur - prev) * 1e8) / 1e8
 }
 
+/**
+ * `cost_usd` が積み上げになった時刻（#602 のレビュー）。**これより前の行はもともと 1 ターンぶん**なので、差にしない。
+ *
+ * 手元の記録の実測: 9/16〜9/18 は「前の行以上」が半分ほど（16/30・14/29・44/88）で、100 万トークンあたりの費用も行ごとに揃っている。
+ * 9/19 の 03:38Z〜05:05Z の間から「前の行以上」がほぼ全部（37/41、以降 29/29・103/105…）になった。**なぜ変わったかは分かっていない**
+ * （SAI のその日のコミットには無い。CLI の更新かもしれない）。行そのものからは区別が付かないので、時刻で切る。
+ * 切り替わりはセッションごとにきれいには揃っていないので、境目の前後数時間の行は 1 ターンぶんずれうる
+ */
+export const COST_CUMULATIVE_SINCE_MS = Date.parse('2026-09-19T05:00:00Z')
+
+/** その行の `cost_usd` が積み上げか。`ts` が無い・読めない行は積み上げとして扱う（いまの CLI の形） */
+export function costIsCumulative(ts: string | undefined, since = COST_CUMULATIVE_SINCE_MS): boolean {
+  const at = Date.parse(ts ?? '')
+  return Number.isNaN(at) || at >= since
+}
+
 /** 費用が載っている行か（0 より大きい有限の数） */
 export const hasCost = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0
 
@@ -151,12 +167,14 @@ export const hasCost = (v: unknown): v is number => typeof v === 'number' && Num
  * 前の行は同じ `id`（エンティティ）の中で辿る。要約だけのターン（`compact`）も同じ積み上げの中にあるので飛ばさない。
  * トークン（`*_tokens`）は 1 ターンぶんなので、差にしない
  */
-export function turnCosts(entries: readonly Pick<TurnUsageEntry, 'id' | 'cost_usd'>[]): number[] {
+export function turnCosts(entries: readonly (Pick<TurnUsageEntry, 'id' | 'cost_usd'> & { ts?: string })[], since = COST_CUMULATIVE_SINCE_MS): number[] {
   const last = new Map<string, number>()
   return entries.map((e) => {
     // 費用の無い行（0・数字でない。`num_turns` 0 の空振りやエラーの result）は 0 として、**前の行の値を忘れない**
     // （忘れると、次の行にそれまでの積み上げが丸ごと乗る。実測で 40.469 → 0 → 45.608）
     if (!hasCost(e.cost_usd)) return 0
+    // 積み上げになる前の行は 1 ターンぶんのまま。積み上げの「前の行」にもしない
+    if (!costIsCumulative(e.ts, since)) return e.cost_usd
     const cost = turnCost(last.get(e.id), e.cost_usd)
     last.set(e.id, e.cost_usd)
     return cost

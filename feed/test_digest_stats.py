@@ -43,10 +43,18 @@ class DigestStatsTest(unittest.TestCase):
 
     def test_rates_count_only_digests_made_after_counting_began(self):
         stats = digest_stats.collect(self.digests, self.feedback)
-        self.assertEqual(stats["total"], {"summaries": 3, "opened": 1, "next_asks": 3, "accepted": 2})
-        self.assertEqual(stats["by_model"]["haiku"], {"summaries": 1, "opened": 0, "next_asks": 1, "accepted": 0})
-        self.assertEqual(stats["by_persona"]["ESFP"], {"summaries": 2, "opened": 1, "next_asks": 2, "accepted": 2})
+        self.assertEqual(stats["total"], {"summaries": 3, "opened": 1, "next_asks": 3, "accepted": 2, "asking": 0})
+        self.assertEqual(stats["by_model"]["haiku"], {"summaries": 1, "opened": 0, "next_asks": 1, "accepted": 0, "asking": 0})
+        self.assertEqual(stats["by_persona"]["ESFP"], {"summaries": 2, "opened": 1, "next_asks": 2, "accepted": 2, "asking": 0})
         self.assertEqual(stats["complaints"], {"meaning": 1})
+
+    def test_replies_left_as_full_text_are_counted_apart_from_summaries(self):
+        # 人に聞いている返答は一言を作らない（#638）。一言の数にも「開いた」の分母にも入れず、別に数える
+        skipped = dict(digest("e|1", "2026-10-02T04:00:00.000Z", summary=""), skipped="asking")
+        stats = digest_stats.collect(self.digests + [skipped], self.feedback)
+        self.assertEqual(stats["total"]["asking"], 1)
+        self.assertEqual(stats["total"]["summaries"], 3)
+        self.assertIn("一言にしなかった: 1 本", digest_stats.render(stats))
 
     def test_an_older_digest_that_got_a_signal_is_counted(self):
         # 数え始める前に作った一言でも、開いたなら画面に出ていたということ

@@ -80,6 +80,8 @@ def collect(digests, feedback, include_all=False):
             "opened": sum(1 for d in summaries if d["key"] in opened),
             "next_asks": len(asks),
             "accepted": sum(1 for d in asks if d["key"] in accepted),
+            # 人に聞いている返答なので、わざと一言を作らなかった行（#638）
+            "asking": sum(1 for d in rows if d.get("skipped") == "asking"),
         }
 
     def by(field):
@@ -116,6 +118,7 @@ def render(stats):
     elif stats["since"] is not None:
         out.append("数え始め: %s 以降に作ったものと、それより前で合図が付いたものを分母にしています（--all で全部）" % datetime.fromtimestamp(stats["since"]).strftime("%Y-%m-%d %H:%M"))
     out.append(line("全体", stats["total"]))
+    out.append("  人に聞いている返答なので一言にしなかった: %d 本（本文をそのまま出した。#638）" % stats["total"].get("asking", 0))
     out.append("モデルごと:")
     out.extend(line(name, t) for name, t in stats["by_model"].items())
     out.append("性格ごと:")

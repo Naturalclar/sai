@@ -61,6 +61,15 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - **使い分け**: `app.ts` の `rowsNow()`（補った行を重ねたもの）を、人に見せる・返答を引く道が使う（詳細・フィード・ターンの取得・未読・`replyOf()` = 画面の返答 / 次のターンの頭 / `sai_wait`・MCP の `sai_session`）。**集計（`store.sessions()`。`turns`）と一言（`digest.scan()`）は記録の行（`store.rows()`）のまま**。一覧は `sessionsWithMeta()` が補った行で上書きする: `last_text` / `last_turn` / `last_turn_ts` は**最後のターン完了より新しければ**（最後の行とは比べない。端末のセッションは 60 秒あとに `入力待ち` の行が来る）、`end` / `last_kind`（`turn`）は最後の行より新しければ。そのとき前の `waiting` / `idle` は畳む（許可を端末で答えたあとターン完了が落ちたセッションを「待機中」のまま残さない）。重ねた候補の鍵のハッシュを rev に混ぜる。
 - 補えたセッションは `stopMissingCandidate()` に当たらなくなる（`last_kind` が `turn`）ので、見出しの「完了の記録なし」は出ない。
 
+## 終わったターンの手順（#605）
+
+- `GET /api/sessions/<id>/turn-steps?ts=`（`app.ts` の `getTurnSteps()`）。**人が開いたときだけ**呼ばれる（`web/src/TurnSteps.tsx`。ポーリングには乗せない）。
+- 読むのは `ProgressReader.turnSteps()`: transcript / rollout を頭から 1 行ずつ `shared/turnSteps.ts` の `claudeStepParser()` / `codexStepParser()` に流す。ツールの戻りの行は JSON にしない（`skipForSteps()`）。結果は (mtime, size) が同じ間、直近 4 ファイルぶんだけ覚える。
+- ターンの切り方: Claude は人の入力（メタ・要約・ツールの戻り・サブエージェントでない user の行）から次の人の入力まで、Codex は `task_started` から。手順は `tool_use` / `function_call` / `custom_tool_call` だけ（考えた・書いたは入れない）。
+- 要約は許可のバブルと同じ `toolSummary()`（Claude）。Bash の `description` は `note` に分ける（`summary` はコマンドそのもの）。Codex は `codexToolText()`（`codexToolSummary()` の 1 行に切る前）。どちらも 300 字で切る。**出力は読まない**。
+- 行との引き当ては `findStepTurn()`: 「終わり」は行の `ts` の 20 秒前〜5 秒後に終わった一番新しいターン。「始まり」は、前のターン完了の行より後の入力の行を古い順に試し、transcript に近いターン（±10 秒。複数あれば入力の頭が同じ方）がある最初のもの（Esc ですぐ止めた入力は transcript に残らないことがある）。**始まりから終わりまでをつないで返す**（ターンの途中で入力が足される = steer・タスクの通知と、transcript では 2 つに切れる）。間に Esc で止めた跡（`[Request interrupted`）があればその後ろから。始まりだけ見つかればそのターン、始まりが 1 つも無ければ（自分で起きた・Codex）終わりだけで当て、どちらも無ければ当てない。
+- 引けない・別のマシン・OpenCode は `found: false`（画面は「記録がありません」）。行（JSONL）には何も足さない。
+
 ## 画面
 
 - 処理中のセッションを出している間だけ `web/src/useProgress.ts` が 3 秒おきに取る（一覧のポーリングには乗せない）

@@ -6,6 +6,7 @@ import { entityId } from '../../shared/entity.ts'
 import { isRemoteHost } from '../../shared/host.ts'
 import { sessionImageUrl } from '../../shared/images.ts'
 import { digestKey } from '../../shared/digestFeedback.ts'
+import { eventKind } from '../../shared/events.ts'
 import { ImageSourceContext } from './imageContext'
 import { LightboxProvider } from './LightboxProvider'
 import { bubbleKey } from '../../shared/gallery.ts'
@@ -394,6 +395,8 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
                         model={u.model}
                         usage={u.speaker !== 'me' && !u.waiting ? u.row.usage : undefined}
                         recovered={u.speaker !== 'me' && !u.waiting && Boolean(u.row.recovered)}
+                        // このターンで実行したコマンド・ツール（#605）。ターン完了の返答にだけ、Claude と Codex だけ。別のセッションの返答（#588）には付けない
+                        {...(u.speaker !== 'me' && !u.waiting && !u.reply && (u.row.agent === 'claude' || u.row.agent === 'codex') && eventKind(u.row.event, u.row.text) === 'turn' ? { steps: { id, ts: u.row.ts } } : {})}
                         remote={u.row.remote}
                         sourceAsk={u.row.user_text}
                         linear={linear}

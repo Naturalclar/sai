@@ -630,6 +630,18 @@
   .tag.mode.loud { background: color-mix(in srgb, var(--claude) 18%, transparent); color: var(--claude); }
   /* コンテキストが大きすぎる（#441）。素通しの印と同じ目立たせ方は強すぎるので、待機中と同じ注意の色 */
   .tag.context-warn { background: color-mix(in srgb, var(--synth) 18%, transparent); color: var(--synth); font-weight: 600; white-space: nowrap; }
+  /* 終わったターンの手順（#605）。返答の下に畳んで置く。開くと等幅で 1 行ずつ（長いコマンドは折り返す） */
+  .turn-steps { margin-top: 4px; font-size: 12px; color: var(--muted); min-width: 0; }
+  .turn-steps .counts { color: var(--muted); }
+  .turn-steps .note { margin-top: 4px; }
+  .turn-steps .note.err { color: var(--claude); }
+  .turn-steps .list { margin: 4px 0 0; padding: 0; list-style: none; max-height: 50vh; overflow-y: auto; border-left: 2px solid var(--line); }
+  .turn-steps .list li { display: flex; flex-wrap: wrap; gap: 2px 8px; align-items: baseline; padding: 2px 0 2px 8px; min-width: 0; }
+  .turn-steps .list .when { flex: none; font-variant-numeric: tabular-nums; }
+  .turn-steps .list .tool { flex: none; color: var(--ink); font-weight: 600; }
+  .turn-steps .list .what { flex: 1 1 12em; min-width: 0; font-family: var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink); background: transparent; padding: 0; }
+  .turn-steps .list .why { flex: 1 1 100%; padding-left: 0; }
+  .turn-steps .list .more { font-style: italic; }
   .tag.recovered { background: color-mix(in srgb, var(--muted) 18%, transparent); color: var(--muted); }
   .tag.stop-missing { background: color-mix(in srgb, var(--synth) 18%, transparent); color: var(--synth); font-weight: 600; }
   .tag.archived { background: color-mix(in srgb, var(--muted) 18%, transparent); color: var(--muted); font-weight: 600; }

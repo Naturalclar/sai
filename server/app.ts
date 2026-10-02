@@ -14,7 +14,7 @@ import { canSteer, replyBlockedReason, replyFailureText } from '../shared/reply.
 import { compactPrompt, messageCompacts } from '../shared/compact.ts'
 import { handoffFirstText, handoffReady } from '../shared/handoff.ts'
 import { selfHost } from './host.ts'
-import type { SessionTurnResponse,
+import type { SessionTurnResponse, TurnStepsResponse,
   AgentActivity,
   AgentActivityMessage,
   AgentStopResponse,
@@ -134,6 +134,7 @@ import { SUGGESTIONS_FILE, SuggestionStore } from './mcp/suggestions.ts'
 import { liveManagerDraft } from '../shared/managerDraft.ts'
 import { stopMissing, stopMissingCandidate } from '../shared/stopMissing.ts'
 import { RecoveredTurns } from './local/recovered.ts'
+import { TURN_STEPS_MAX, findStepTurn } from '../shared/turnSteps.ts'
 import { readMarkOf, rowMs, unreadCounts, unreadFromMark } from '../shared/unread.ts'
 import { SETTINGS_FILE, SettingsStore, nextAskOn } from './meta/settings.ts'
 import type { Settings } from './meta/settings.ts'
@@ -261,6 +262,8 @@ const PROGRESS_SUFFIX = '/progress'
 const GALLERY_SUFFIX = '/gallery'
 /** 一言のもとになったターン完了の行（#537） */
 const TURN_SUFFIX = '/turn'
+/** `GET /api/sessions/<id>/turn-steps?ts=`（#605）。終わったターンで呼んだツール */
+const TURN_STEPS_SUFFIX = '/turn-steps'
 /** `GET /api/sessions/<id>/transcript-images/<key>`（#504）。id は `/` を含まないので、最初のこれが区切り */
 const TRANSCRIPT_IMAGES_SEGMENT = '/transcript-images/'
 /** `GET /api/sessions/<id>/codex-images/<key>`（#575）。Codex の画像生成で作った画像。鍵は一覧で見つけたファイル名だけ */
@@ -3310,6 +3313,45 @@ export function createApp(
    * 一言は `(id, last_turn_ts)` で引いているので、同じ `ts` を渡せば同じ行が返る（新しいターンが届いていても取り違えない）。
    * 同じ秒に 2 本あれば、あとに書かれた方（`aggregate.ts` の `last_turn_ts` と同じ）
    */
+  /**
+   * GET /api/sessions/<id>/turn-steps?ts=（#605）。`ts` のターン完了の行のターンで呼んだツール（コマンド・ファイル名まで。出力は出さない）。
+   * **バブルの「手順」を開いたときに 1 回だけ**取る（transcript / rollout を頭から読むので、ポーリングには乗せない）。
+   * ターンは行から引き当てる: 前のターン完了の行より後の、いちばん古い入力の行の時刻（始まり）から `ts`（終わり）まで。入力の行が無ければ終わりだけ。
+   * 引けない・別のマシン・OpenCode は `found: false`（画面は「記録がありません」）。パスはリクエストから受けない
+   */
+  const getTurnSteps = async (res: ServerResponse, id: string, ts: string, days: number) => {
+    if (!ts) return error(res, 400, 'ts が要ります')
+    const { sessions } = await store.sessions(days)
+    const session = sessions.find((s) => s.id === id)
+    if (!session) return error(res, 404, 'session not found in window')
+    const none: TurnStepsResponse = { id, ts, found: false, steps: [], total: 0 }
+    const rows = await rowsNow(days)
+    // 同じ秒に 2 本あれば、あとに書かれた方（`getTurn` と同じ）
+    let at = -1
+    for (let i = rows.length - 1; i >= 0 && at < 0; i--) {
+      const r = rows[i]!
+      if (r.ts === ts && eventKind(r.event, r.text) === 'turn' && entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id) at = i
+    }
+    const row = rows[at]
+    if (!row || isRemoteHost(row.host ?? '', selfHost())) return json(res, none)
+    const turns = await progress.turnSteps({ id, repo: session.repo, agent: row.agent ?? session.agent, cwd: row.cwd || session.cwd })
+    if (!turns) return json(res, none)
+    // 前のターン完了の行まで遡り、その間の入力の行を古い順に渡す（#663 のレビュー。途中で足した入力 = steer の行を
+    // 始まりにすると、足す前の手順が落ちる）。どれを始まりにするか・Esc で止めた跡で切るのは `findStepTurn()`
+    const starts: { ms: number; input: string }[] = []
+    for (let i = at - 1; i >= 0; i--) {
+      const r = rows[i]!
+      if (r.session !== row.session) continue
+      const kind = eventKind(r.event, r.text)
+      if (kind === 'turn') break
+      if (kind === 'resume' && r.user_text?.trim()) starts.unshift({ ms: rowMs(r.ts), input: r.user_text })
+    }
+    const turn = findStepTurn(turns, { starts, endMs: rowMs(row.ts) })
+    if (!turn) return json(res, none)
+    const payload: TurnStepsResponse = { id, ts, found: true, steps: turn.steps.slice(0, TURN_STEPS_MAX), total: turn.steps.length }
+    return json(res, payload)
+  }
+
   const getTurn = async (res: ServerResponse, id: string, ts: string, days: number) => {
     const { sessions } = await store.sessions(days)
     if (!sessions.some((s) => s.id === id)) return error(res, 404, 'session not found in window')
@@ -3939,6 +3981,11 @@ export function createApp(
         const img = await readSessionImage(source)
         if (!img.ok) return error(res, img.status, img.reason)
         return await sendImage(req, res, img, q)
+      }
+      if (path.startsWith(SESSIONS_PREFIX) && path.endsWith(TURN_STEPS_SUFFIX) && method === 'GET') {
+        const id = sessionIdFrom(path, TURN_STEPS_SUFFIX)
+        if (id === null) return error(res, 400, 'bad session id')
+        return await getTurnSteps(res, id, q.get('ts') ?? '', parseDays(q.get('days'), 90))
       }
       if (path.startsWith(SESSIONS_PREFIX) && path.endsWith(TURN_SUFFIX) && method === 'GET') {
         const id = sessionIdFrom(path, TURN_SUFFIX)

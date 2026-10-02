@@ -1695,6 +1695,33 @@ export interface SessionTurnResponse {
   row: FeedRow | null
 }
 
+/** 終わったターンの 1 手順（#605）。ツールの呼び出しだけで、出力は載せない */
+export interface TurnStep {
+  /** ツール名（`Bash` / `Edit` / `exec_command` …） */
+  tool: string
+  /** 何をしたか（コマンド・ファイルのパス・URL など。許可のバブルと同じ要約。300 字まで）。分からなければ空 */
+  summary: string
+  /** Bash などの `description`（何のためか）。あれば */
+  note?: string
+  /** 呼んだ時刻（ISO） */
+  at: string
+}
+
+/**
+ * `GET /api/sessions/<id>/turn-steps?ts=` の応答（#605）。`ts` のターン完了の行のターンで呼んだツール（古い順）。
+ * **開いたときに 1 回だけ**取る（ポーリングには乗せない）。`found: false` は「記録がありません」
+ * （transcript / rollout が無い・そのターンが引けない・別のマシン・OpenCode）
+ */
+export interface TurnStepsResponse {
+  id: string
+  ts: string
+  found: boolean
+  /** 多ければ頭の `TURN_STEPS_MAX` 件 */
+  steps: TurnStep[]
+  /** そのターンの手順の数 */
+  total: number
+}
+
 /** GET /api/sessions/<id>/gallery。そのセッションに出てきた画像（新しい順）。開いたときと新しいターンが記録されたときだけ取る */
 export interface GalleryResponse {
   id: string

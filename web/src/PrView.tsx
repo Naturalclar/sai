@@ -4,12 +4,12 @@ import { parseUnifiedDiff } from '../../shared/diff.ts'
 import { replyBlockedReason } from '../../shared/reply.ts'
 import { api, type PrDetailResponse, type SessionSummary } from './api'
 import { DiffView } from './DiffView'
-import { DiffCommentBar } from './DiffCommentBar'
 import { DiffCommentNote } from './DiffCommentNote'
 import { commentLine, formatDiffComments } from './diffComments'
 import { useDiffComments } from './useDiffComments'
 import { usePrReviewBody } from './usePrReviewBody'
-import { PrReviewBar } from './PrReviewBar'
+import { PrDraftBar } from './PrDraftBar'
+import { PrHeadActions } from './PrHeadActions'
 import { PrReviewModal } from './PrReviewModal'
 import { REVIEW_EVENT_LABEL } from '../../shared/prReview.ts'
 import type { PrReviewEvent } from './api'
@@ -36,7 +36,8 @@ const STATE_LABEL: Record<string, string> = { OPEN: 'open', MERGED: 'マージ�
  * 直接は送らない（#511 と同じく、入れたらそのセッションへ移って人が送る）。書いたセッションが返信できなければ口は出さず理由を出す。
  *
  * **同じ下書きを GitHub にレビューとして投稿もできる**（#526。`gh` でログインしていて PR が open のとき）。確認の画面（`PrReviewModal`）で
- * GitHub に載る形を見せ、押したときだけ送る。書いたセッションが見つかる PR では入力欄に入れる方が既定で、投稿は控えめに並べる
+ * GitHub に載る形を見せ、押したときだけ送る。書いたセッションが見つかる PR では入力欄に入れる方が既定で、投稿は控えめに並べる。
+ * **2 つのボタンは題名の行に置く**（#646。`PrHeadActions`。題名の行は流れないので、差分のどこを読んでいても押せる）
  */
 export function PrView({ repo, number, onStatus, onInsertToSession }: { repo: string; number: number; onInsertToSession?: (id: string, text: string) => void } & Pick<PaneProps, 'onStatus'>) {
   const [loaded, setLoaded] = useState<Loaded | null>(null)
@@ -105,6 +106,8 @@ export function PrView({ repo, number, onStatus, onInsertToSession }: { repo: st
     [canWrite, comments.list, comments.add, comments.remove],
   )
   const [reviewBody, setReviewBody] = usePrReviewBody(draftKey)
+  // 全体のコメントは GitHub への投稿にだけ載る（入力欄には入れない）ので、投稿できないときは下書きに数えない
+  const hasBody = canPost && reviewBody.trim() !== ''
   const [reviewing, setReviewing] = useState(false)
   const [posted, setPosted] = useState<{ url: string; event: PrReviewEvent } | null>(null)
   const files = useMemo(() => (loaded ? parseUnifiedDiff(loaded.data.diff.patch) : null), [loaded])
@@ -124,6 +127,29 @@ export function PrView({ repo, number, onStatus, onInsertToSession }: { repo: st
             <a href={pr.url} target="_blank" rel="noopener noreferrer">
               GitHub で開く
             </a>
+          )}
+          {pr && (
+            <PrHeadActions
+              count={comments.list.length}
+              hasBody={hasBody}
+              target={authorName}
+              onInsert={
+                canComment && author
+                  ? () => {
+                      onInsertToSession?.(author.id, formatDiffComments(comments.list, `PR #${number}「${pr.title}」の差分へのコメントです（${pr.url}）。`))
+                      comments.clear()
+                    }
+                  : undefined
+              }
+              onReview={
+                canPost
+                  ? () => {
+                      setPosted(null)
+                      setReviewing(true)
+                    }
+                  : undefined
+              }
+            />
           )}
           <RefreshButton busy={busy} onClick={() => void load()} />
         </span>
@@ -154,26 +180,10 @@ export function PrView({ repo, number, onStatus, onInsertToSession }: { repo: st
           {author && blocked && (
             <div className="note pr-author">この PR を書いたセッション「{authorName}」には返信できないので、行へのコメントは書けません（{blocked}）</div>
           )}
-          {canComment && author && (
-            <DiffCommentBar
+          {canWrite && (
+            <PrDraftBar
               count={comments.list.length}
-              target={authorName}
-              onInsert={() => {
-                onInsertToSession?.(author.id, formatDiffComments(comments.list, `PR #${number}「${pr.title}」の差分へのコメントです（${pr.url}）。`))
-                comments.clear()
-              }}
-              onClear={comments.clear}
-            />
-          )}
-          {canPost && (
-            <PrReviewBar
-              count={comments.list.length}
-              hasBody={reviewBody.trim() !== ''}
-              secondary={canComment}
-              onOpen={() => {
-                setPosted(null)
-                setReviewing(true)
-              }}
+              hasBody={hasBody}
               onClear={() => {
                 comments.clear()
                 setReviewBody('')

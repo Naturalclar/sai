@@ -214,6 +214,9 @@ export function App() {
     },
     [layout, setStoredPanes],
   )
+  // 要対応から、もうペインに出ているセッションの入力欄へ文を戻す（送れなかった返信）。出ている入力欄は打ちかけを
+  // 読み直さないので、差分のコメントと同じ口（`insert`）で後ろに足す（#643 のレビュー）
+  const insertToShown = useCallback((id: string, text: string) => setCommentInsert((prev) => ({ id, text, seq: (prev?.seq ?? 0) + 1 })), [])
   const openBesideHash = useCallback(
     (hash: string) => {
       const to = parseRoute(hash)
@@ -383,9 +386,13 @@ export function App() {
           focusSoon('input')
           return
         }
-        focusPane(key.index)
-        // 当て先（.pane.focused）は描き直したあとに変わるので、その場では当てず描画のあとの effect に任せる
+        // 当て先（.pane.focused）は描き直したあとに変わるので、その場では当てず描画のあとの effect に任せる。
+        // blur より先に頼んでおく（blur がその場で描き直しを起こし、そのあとでは次の描画が来ないことがある）
         focusLater.current = { want: 'input', at: Date.now() }
+        focusPane(key.index)
+        // 移った先に入力欄が無い（要対応・アーカイブ済み）とき、キャレットを前のペインの入力欄に残さない
+        // （残すと、フォーカスの印は移ったのに打った字と ⌘Enter は前のペインに行く。#643 のレビュー）
+        if (document.activeElement instanceof HTMLElement && document.activeElement.closest('.pane')) document.activeElement.blur()
         return
       }
       if (!split) return
@@ -511,7 +518,7 @@ export function App() {
                   onClickCapture={item.kind === 'todo' && !narrow ? (e) => openFromTodo(e, index) : undefined}
                 >
                   {item.kind === 'todo' ? (
-                    <TodoView list={list} onStatus={here ? onStatus : NO_STATUS} onOpenSidebar={openSidebar} onLeaveToSidebar={focusSidebar} linear={linear} settings={settings} prs={sessionPrs} focused={here} />
+                    <TodoView list={list} onStatus={here ? onStatus : NO_STATUS} onOpenSidebar={openSidebar} onLeaveToSidebar={focusSidebar} linear={linear} settings={settings} prs={sessionPrs} focused={here} shown={paneIds} onInsertToShown={insertToShown} />
                   ) : (
                     <SessionView
                       id={id}

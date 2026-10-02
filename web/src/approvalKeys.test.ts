@@ -40,7 +40,7 @@ test('approvalAction: IME 変換中・Alt 付き・Enter 以外は何もしな�
   assert.equal(approvalAction(key({ key: 'Escape', metaKey: true }), true), null)
 })
 
-test('hotkeyApplies: モーダルの中で押した ⌘Enter は許可に使わない（⌘K の ⌘Enter は「横に開く」。#633）', () => {
+test('hotkeyApplies: モーダルの中・フォーカスの無いペインの中で押した ⌘Enter は許可に使わない（#633）', () => {
   assert.equal(hotkeyApplies(null, 'a@repo', true), false)
   assert.equal(hotkeyApplies('a@repo', 'a@repo', true), false)
   assert.equal(hotkeyApplies(null, 'a@repo', false), true)

@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 import type { Profile } from './api'
 import { elapsedLabel, hm, LONG_REPLY_MS, parseTs } from './format'
 import { AttachedImages } from './AttachedImages'
+import { AttachedFiles } from './AttachedFiles'
 import { splitAttachments } from '../../shared/attachments.ts'
 import { splitHandedReplies } from '../../shared/agentMessages.ts'
 
@@ -42,6 +43,7 @@ export function PendingBubble({ text, since, now, repo, quiet, profile, typed, l
         <div className="msg">
           <div className="body">{splitAttachments(splitHandedReplies(text).text).body}</div>
           <AttachedImages urls={splitAttachments(splitHandedReplies(text).text).urls} />
+          <AttachedFiles files={splitAttachments(splitHandedReplies(text).text).files} />
         </div>
       </div>
     </div>

@@ -6,7 +6,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { basename, extname, join, resolve, sep } from 'node:path'
 import { historyIconUrl, ICON_MAX_BYTES, ICON_MIME, iconUrl, sniffImageType } from '../shared/icon.ts'
 import type { IconType } from '../shared/icon.ts'
-import { ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_COUNT, ATTACHMENTS_DIR, withAttachments } from '../shared/attachments.ts'
+import { ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_COUNT, ATTACHMENTS_DIR, isImageAttachmentPath, withAttachments } from '../shared/attachments.ts'
 import { mergeMeta } from '../shared/meta.ts'
 import { mergeProfile, PROFILE_ICON_ID, profileIconUrl } from '../shared/profile.ts'
 import { isPersonaId } from '../shared/persona.ts'
@@ -1475,15 +1475,21 @@ export function createApp(
       return error(res, 400, 'attachments は文字列の配列で送ってください')
     }
     const asked = (wanted ?? []) as string[]
-    if (asked.length > ATTACHMENT_MAX_COUNT) return error(res, 400, `画像は ${ATTACHMENT_MAX_COUNT} 枚までです`)
-    const attachments: string[] = []
+    if (asked.length > ATTACHMENT_MAX_COUNT) return error(res, 400, `添付は ${ATTACHMENT_MAX_COUNT} 個までです`)
+    const attached: string[] = []
+    const names = new Map<string, string>()
     for (const p of asked) {
       const resolved = attachmentStore.resolvePath(id, p)
-      if (!resolved) return error(res, 400, 'このセッションに預けた画像ではありません')
-      attachments.push(resolved)
+      if (!resolved) return error(res, 400, 'このセッションに預けた添付ではありません')
+      attached.push(resolved)
+      // 画像以外（#608）は元の名前を行に添える。名前は置いたときに隣へ書いたもの（リクエストからは受けない）
+      if (!isImageAttachmentPath(resolved)) names.set(resolved, await attachmentStore.labelOf(resolved))
     }
     // 本文の末尾にパスを足す（Claude はこれを Read で読む。Codex は -i でも渡すが、記録と自分バブルのために本文にも）
-    const text = withAttachments(typedText, attachments)
+    const text = withAttachments(typedText, attached, names)
+    // **画像を受ける口（Codex の `-i`・app-server の localImage・OpenCode の `-f`）へ渡すのは画像だけ**。
+    // 文字のファイルと PDF は本文のパスで渡す（エージェントが自分で読む）
+    const attachments = attached.filter(isImageAttachmentPath)
     if (!text) return error(res, 400, 'text is required')
     const replaceTyped = (body as ReplyRequest).replace_typed === true
     const forceProcess = (body as ReplyRequest).via === 'process'
@@ -3231,24 +3237,25 @@ export function createApp(
    * アーカイブは archived_at を載せるだけで、専用のエンドポイントは無い。窓の中に無いセッションには付けない
    */
   /**
-   * POST /api/sessions/<id>/attachments。body は画像そのもの（Content-Type は見ず中身で判定）。
+   * POST /api/sessions/<id>/attachments?name=。body はファイルそのもの（Content-Type も拡張子も見ず、中身で判定。
+   * 画像・文字のファイル・PDF。#608）。`name` は元のファイル名で、画面に出す・本文の行に添えるだけ（パスには使わない）。
    * 返した path を返信の `attachments` に入れると、本文の末尾に足されて CLI に渡る
    */
-  const postAttachment = async (req: IncomingMessage, res: ServerResponse, id: string, days: number) => {
+  const postAttachment = async (req: IncomingMessage, res: ServerResponse, id: string, days: number, name = '') => {
     if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
     let bytes: Buffer
     try {
       bytes = await readBody(req, ATTACHMENT_MAX_BYTES)
     } catch (err) {
       const big = err instanceof Error && err.message === 'body too large'
-      return error(res, big ? 413 : 400, big ? `画像は ${ATTACHMENT_MAX_BYTES / 1024 / 1024}MB までです` : err instanceof Error ? err.message : 'bad body')
+      return error(res, big ? 413 : 400, big ? `添付は ${ATTACHMENT_MAX_BYTES / 1024 / 1024}MB までです` : err instanceof Error ? err.message : 'bad body')
     }
-    if (bytes.length === 0) return error(res, 400, '画像が空です')
+    if (bytes.length === 0) return error(res, 400, 'ファイルが空です')
     const { sessions } = await store.sessions(days)
     if (!sessions.some((s) => s.id === id)) return error(res, 404, 'session not found in window')
-    const { attachment, error: reason } = await attachmentStore.put(id, bytes)
+    const { attachment, error: reason } = await attachmentStore.put(id, bytes, name)
     if (!attachment) return error(res, 400, reason || '保存できませんでした')
-    const payload: AttachmentResponse = { id, path: attachment.path, url: attachment.url, mime: attachment.mime, size: attachment.size }
+    const payload: AttachmentResponse = { id, path: attachment.path, url: attachment.url, mime: attachment.mime, size: attachment.size, kind: attachment.kind, name: attachment.label }
     return json(res, payload)
   }
 
@@ -3883,7 +3890,7 @@ export function createApp(
       if (isAttachUpload) {
         const id = sessionIdFrom(path, ATTACHMENTS_SUFFIX)
         if (id === null) return error(res, 400, 'bad session id')
-        return await postAttachment(req, res, id, parseDays(q.get('days'), 90))
+        return await postAttachment(req, res, id, parseDays(q.get('days'), 90), q.get('name') ?? '')
       }
       if (isAttachFile) {
         const [dir = '', name = '', ...rest] = path.slice(ATTACHMENTS_PREFIX.length).split('/')

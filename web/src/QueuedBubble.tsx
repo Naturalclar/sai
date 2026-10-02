@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { splitAttachments } from '../../shared/attachments.ts'
 import { api, type Profile, type QueuedReply } from './api'
 import { AttachedImages } from './AttachedImages'
+import { AttachedFiles } from './AttachedFiles'
 import { elapsedLabel, hm } from './format'
 import { queuedLabel } from './replyQueue.ts'
 
@@ -39,7 +40,7 @@ export function QueuedBubble({ id, item, order, paused, now, repo, profile }: Pr
       setBusy(false)
     }
   }
-  const { body, urls } = splitAttachments(item.text)
+  const { body, urls, files } = splitAttachments(item.text)
   // 止めている理由と「続けて送る」は先頭にだけ出す（止めるのはセッション単位で、回すのは先頭から）
   const head = order === 1 && paused !== ''
   return (
@@ -56,6 +57,7 @@ export function QueuedBubble({ id, item, order, paused, now, repo, profile }: Pr
         <div className="msg">
           <div className="body">{body}</div>
           <AttachedImages urls={urls} />
+          <AttachedFiles files={files} />
           {head && <div className="queue-note">{paused}</div>}
           <div className="queue-actions">
             {head && (

@@ -1,12 +1,12 @@
 ---
 name: sync-main
-description: main worktree を最新の main に進めて web/dist/ をビルドし直し、古いコードで動いているサーバを一言（digest）付きで立て直す。cwd がどの worktree でも main worktree だけを触る。ユーザーが「最新をpullしてビルドして」「mainを最新にして」「main worktree を更新して」「pull the latest main and build」「sync main」と言ったときに使う。
+description: main worktree を最新の main に進めて web/dist/ をビルドし直し、古いコードで動いているサーバを一言（digest）付きで立て直す。cwd がどの worktree でも main worktree だけを触る。`/merge` の後始末からも呼ばれる。ユーザーが「最新をpullしてビルドして」「mainを最新にして」「main worktree を更新して」「pull the latest main and build」「sync main」と言ったときに使う。
 ---
 
 # sync-main
 
 main worktree を最新の `main` に進めて `web/dist/` を作り直し、サーバがそれで動いているところまで確かめる。
-やるのは fetch → ff-only merge → install → build → サーバを最新のコードにする → 報告。**main worktree の状態は壊さない**（reset / checkout / stash はしない）。
+やるのは **lock を取る** → fetch → ff-only merge → install → build → サーバを最新のコードにする → **lock を外す** → 報告。**main worktree の状態は壊さない**（reset / checkout / stash はしない）。
 
 セッションは `dev-*` のような別の worktree から呼ばれることが多い。cwd は動かさず、`git -C "$main"` / `pnpm -C "$main"` で main worktree を操作する。
 
@@ -20,6 +20,29 @@ echo "$main"
 
 `main` ブランチに乗っている worktree が 1 つも無ければ止めて、`git worktree list` の一覧を添えて報告する（main worktree で枝を切って作業中、ということがある。勝手に `main` に戻さない）。
 
+## 0.5 lock を取る（1 本ずつにする。#580）
+
+`/merge` の後始末からも呼ばれるので、**2 つのセッションがほぼ同時にマージすると 2 本同時に走る**。`git merge --ff-only` は重なっても安全だが、**サーバの立て直しが重なると、片方が打った起動コマンドがもう片方に飲まれる**（#296 の形）。**後から来た方が譲る**:
+
+```sh
+lockdir="$(git -C "$main" rev-parse --path-format=absolute --git-common-dir)/sai-sync-main.lock"
+locksh="$main/.claude/skills/sync-main/lock.sh"
+[ -f "$locksh" ] || locksh="$(git rev-parse --show-toplevel)/.claude/skills/sync-main/lock.sh"   # main がまだこの版より前のとき
+who="$(basename "$(git rev-parse --show-toplevel)") $(date +%H:%M:%S)"; echo "who=$who"          # 外すときに同じ文字列を渡すので控える
+bash "$locksh" acquire "$lockdir" "$who"      # Bash の timeout は 600000 にする（最長 8 分待つ）
+```
+
+- **置き場は git の共通ディレクトリ**（bare clone なら `sai.git/`）。どの worktree から呼んでも同じ場所で、main worktree の `git status` を汚さない
+- `acquired waited=0s` なら自分が先。`waited` が付いていれば**先の方が終わるのを待った**ということ。**どちらでも、このあとの手順をそのまま回す**: 先の方が最新まで進めていれば 2 は「最新です」、4 は「サーバは最新のコード」で、何もせずに終わる。先の方が fetch したあとに自分のマージが入っていたら（先の方は 1 つ前までしか進めていない）、ここで自分が進める。**譲る = 何もしないで終わる、ではない**
+- **`timeout:`（終了コード 3）なら何も回さない。** main worktree もサーバも触らず、「進んでいません」と、誰がいつから持っているか（出力にある）を報告して終わる。**lock を消しに行かない**
+- 落ちたまま残った lock（途中でセッションが止まった）は、取ってから 15 分を過ぎていれば次に来た方が引き取る（`stale:` と出る）。それより若い lock は生きているものとして待つ
+
+**取れたら、どの道で終わるときも必ず外す**（1 や 2 で止めたとき・ビルドが落ちたとき・立て直しで止めたときも）:
+
+```sh
+bash "$locksh" release "$lockdir" "$who"
+```
+
 ## 1. 更新してよい状態か
 
 ```sh
@@ -27,7 +50,7 @@ git -C "$main" status --short             # 空でなければ止める（誰か
 git -C "$main" branch --show-current      # main でなければ止める
 ```
 
-どちらかで止めたら、理由と `status` の中身を報告して終わり。
+どちらかで止めたら、**lock を外して**、理由と `status` の中身を報告して終わり。
 
 ## 2. 取り込む
 
@@ -78,7 +101,30 @@ find "$main/server" "$main/shared" -name '*.ts' -newer "$ref"; rm -f "$ref"
 - セッション間メッセージの記録・「送信を止める」・1 ターンの回数と量（`agent-messages.json`）、tailnet からの送信回数（`mcp-sends.json`）
 - **ターンを回している** `opencode serve`（C-c では落とさず、`opencode-serve.json` から次のサーバが引き取る。回していなければ今までどおり落とす）
 
-**残らないのは SAI の app-server が回している Codex のターンだけ**（`codex app-server --stdio` は stdin で繋いでいるので引き取れず、C-c で途中で切れる）。画面の「処理中」に Codex のターンがあれば、終わるのを待ってから立て直す。
+**残らないのは SAI の app-server が回している Codex のターンだけ**（`codex app-server --stdio` は stdin で繋いでいるので引き取れず、C-c で途中で切れる）。**立て直す前に必ず見る**:
+
+```sh
+curl -sS -m 10 'http://127.0.0.1:8787/api/sessions?days=7' | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print("聞けなかった（立て直さない）"); sys.exit(0)
+agent = {s["id"]: s.get("agent") for s in d["sessions"]}
+for i, r in d.get("replying", {}).items():
+    if r.get("via") == "terminal" or r.get("failed"):
+        continue
+    a = agent.get(i)
+    if a == "codex":
+        print("codex 処理中:", i, r.get("since"))
+    elif a is None:
+        print("エージェントが分からない処理中（Codex かもしれない）:", i, r.get("since"))'
+```
+
+**1 行でも出たら立て直さない**（何も出なかったときだけ進む）。端末に打ち込んだ Codex のターンは SAI の外で回っているので数えない。`replying` は 7 日の窓に絞られないので、窓の外のセッション・まだ行の無い新しいセッションは「分からない」と出る——**分からないものは Codex として扱う**。応答が読めなかったときも立て直さない。
+
+- **`/merge` の後始末から呼ばれたときは待たない**（マージのターンを Codex の 1 ターンぶん延ばさない）: ビルドまでで止め、lock を外して、「Codex のターンが回っているので立て直していません。終わったら `/sync-main`」と報告する
+- 人に頼まれて回しているなら終わるのを待ってよいが、**lock を持ったまま待たない**（0.5 の `release` を先に打つ。持ったままだと、待っている側が 480 秒で諦め、900 秒を過ぎると生きている lock を「落ちたまま」と見て引き取られ、立て直しが重なる）。ターンが終わったら 0.5 から取り直す
 
 `pnpm start:watch`（`node --watch`）で動いていれば自分で再起動するので **C-c は送らない**。`Waiting for graceful termination...` は出るが、**接続を握ったまま試して 1 秒で戻った**（#296 で SIGTERM でも数秒以内に終わるようにした。前の「処理中の返信を待って数十秒」という注記は取り違えで、待っていたのは返信の子ではなく**閉じない接続**。返信の子は detached なので待たれない）。
 
@@ -154,12 +200,18 @@ stat -f '%m' "$main/web/dist/index.html"                            # 上の X-S
 
 一言は**サーバの起動時刻（あとから入にしたならその時刻）より後の行**だけ作る（#164 / #288）。窓の広さで基準が変わることはもう無いので、`days` を先回りして叩くような小細工は要らない。
 
-## 5. 報告
+## 5. lock を外して報告
+
+```sh
+bash "$locksh" release "$lockdir" "$who"
+```
+
 
 - 入ったコミットの一覧（`HEAD..FETCH_HEAD` の 1 行ずつ）。無ければ「最新でした」
 - ビルドの結果
 - サーバを立て直したか（立て直したなら、どのコマンドで・一言の口はどちらか）。立て直していないならその理由（最新のコードだった / 起動していない / tmux の外）。`/api/settings` の中身を一言
-- 止めた場合はその理由（dirty、別ブランチ、ff 不可、ビルド失敗）と、人が何をすれば進むか
+- 止めた場合はその理由（dirty、別ブランチ、ff 不可、ビルド失敗、lock を待ち切れなかった）と、人が何をすれば進むか
+- lock を待ったなら、何秒待ったか（`waited=`）
 
 ## やらないこと
 
@@ -167,5 +219,6 @@ stat -f '%m' "$main/web/dist/index.html"                            # 上の X-S
 - 止まっているサーバを起動すること（立て直すのは、動いていて古いコードのときだけ）
 - `kill` / `kill -9`。C-c で終わらなければ、残っている pid を添えて報告するところまで（処理中の返信を巻き込むかは人が決める）
 - Ollama の起動・モデルの pull（無ければ `claude` の口に落として報告する）
+- 他のセッションが持っている lock を消すこと・lock を取ったまま終わること（0.5）
 - 他の worktree（`dev-*`）の更新。それは各セッションが自分でやる
 - tailscale serve の操作（`tailscale-serve` スキルが別にある）

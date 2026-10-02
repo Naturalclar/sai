@@ -72,6 +72,11 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
   - `AgentMessages.readInTurn()` に足していき、`budgetRefusal()` が超えるなら `429`。大きさが分からない相手は足さない。
   - `sai_sessions` と `sai_send` の返事にも出す（エージェントが小さい相手を選べるように）。
 - テストは `createApp` に偽の `UsageStore` / `ProgressReader` を渡す（本物は ~/.claude と ~/.codex を読む）。
+- **着手の依頼は要約してから始める**（#624）: `agentSend` と `/mcp` の `sai_send` が `messageCompactOf()` → `shared/compact.ts` の `messageCompacts()`（画面と同じ `sendModes()`。指定 `AgentSendRequest.compact` があれば指定、ただし `canCompact()` でなければ要約しない）で決め、`launch()` に `compact` と `compactFrom`（**見出しを付ける前の文**。`compactPrompt()` はここから作る）を渡す。
+  - 相手の大きさは予算の検査で読んだ `context_tokens` をそのまま使う（読み直しは増やさない）。予算に足す量も今のまま（要約の前の大きさ）。
+  - 本文（見出し付き）は `launch()` が預かりの先頭に `origin` 付きで置くので、要約のあとに回る本文のターンも「メッセージで起動したターン」のままで、返答は `replyOf()` で引き当たる。要約が失敗すれば預かりが止まり、送り元には `failed` が返る（`agentResult()` の「預かりの先頭のまま止まった」）。
+  - 相手が処理中・預かりが残っているときは `launch()` が今までどおり預かりに並べる（要約は挟まない）。
+  - 返事の文は `shared/agentMessages.ts` の `sendHow()`、ツールの説明に足す文は `SEND_COMPACT_NOTE` / `SEND_COMPACT_ARG`（セッション同士の口と `/mcp` で同じ文）。
 
 ### 記録
 

@@ -82,6 +82,11 @@ test('agentTool: sai_send は送り元・送り先・本文を送り、預けた
   assert.deepEqual(JSON.parse(seen[0]!.body), { from: 'A1@r', to: 'B1@r', text: '見て' })
   const missing = await agentTool('sai_send', { to: 'B1@r' }, base, 'A1@r', tokenFile)
   assert.equal(missing.isError, true)
+  // 要約の指定（#624）は、真偽値のときだけ送る
+  seen.length = 0
+  await agentTool('sai_send', { to: 'B1@r', text: '見て', compact: false }, base, 'A1@r', tokenFile)
+  await agentTool('sai_send', { to: 'B1@r', text: '見て', compact: 'yes' }, base, 'A1@r', tokenFile)
+  assert.deepEqual(seen.map((s) => JSON.parse(s.body)), [{ from: 'A1@r', to: 'B1@r', text: '見て', compact: false }, { from: 'A1@r', to: 'B1@r', text: '見て' }])
 })
 
 test('agentTool: sai_wait は 202 の間サーバ側の待ちを繰り返し、返答の本文を返す。失敗と期限切れも言葉で返す（#311）', async () => {
@@ -174,12 +179,13 @@ test('AGENT_TOOLS: 説明を書き直しても、ツールの名前と引数は�
     AGENT_TOOLS.map((t) => [t.name, Object.keys(t.inputSchema.properties), 'required' in t.inputSchema ? t.inputSchema.required : []]),
     [
       ['sai_sessions', [], []],
-      ['sai_send', ['to', 'text', 'wake'], ['to', 'text']],
+      ['sai_send', ['to', 'text', 'wake', 'compact'], ['to', 'text']],
       ['sai_wait', ['message_id'], ['message_id']],
     ],
   )
   const send = AGENT_TOOLS.find((t) => t.name === 'sai_send')!.description
   assert.ok(send.indexOf('使う場面') < send.indexOf('1 ターンに'), '使う場面を先に、制限は後ろに書く')
+  assert.match(send, /1 行目を「#N に着手してください。」だけ/, '着手の頼み方（#624。1 行目がこの形のときだけ要約される）')
 })
 
 test('sai_loop_next: 送り元・action・秒・申し送りを送り、次にどうなるかを言葉で返す。上限や目的は引数に無い（#634）', async () => {

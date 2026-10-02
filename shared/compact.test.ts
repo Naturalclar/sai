@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { canCompact, COMPACT_MIN_TOKENS, compactPrompt, SEND_MODE_LABEL, SEND_MODE_SHORT, sendModes, startsNewWork } from './compact.ts'
+import { canCompact, COMPACT_MIN_TOKENS, compactPrompt, messageCompacts, SEND_MODE_LABEL, SEND_MODE_SHORT, sendModes, startsNewWork } from './compact.ts'
 import { CONTEXT_WARN_TOKENS } from './contextSize.ts'
 
 test('startsNewWork: 実データの着手の形は当たる（#579）', () => {
@@ -50,5 +50,18 @@ test('SEND_MODE_SHORT: どの送り方にも短い表記があり、正式な名
   for (const mode of ['compact', 'plain', 'new'] as const) {
     assert.ok(SEND_MODE_SHORT[mode].length > 0)
     assert.ok(SEND_MODE_SHORT[mode].length < SEND_MODE_LABEL[mode].length, mode)
+  }
+})
+
+test('messageCompacts: メッセージは画面と同じ判定。指定があれば指定が勝つが、要約できない相手は要約しない（#624）', () => {
+  const big = { agent: 'claude', contextTokens: 500_000, terminal: false }
+  assert.equal(messageCompacts({ ...big, text: '#624 に着手してください。\n説明は 2 行目から' }, CONTEXT_WARN_TOKENS), true)
+  assert.equal(messageCompacts({ ...big, text: '#624 に着手してください（説明）。正本は issue です。' }, CONTEXT_WARN_TOKENS), false, '1 行目に続きを書くと当たらない')
+  assert.equal(messageCompacts({ ...big, text: 'ここはどう変えましたか？' }, CONTEXT_WARN_TOKENS), false, '警告を超えていても、着手でなければ要約しない')
+  assert.equal(messageCompacts({ ...big, text: 'ここはどう変えましたか？' }, CONTEXT_WARN_TOKENS, true), true)
+  assert.equal(messageCompacts({ ...big, text: '#624 に着手してください。' }, CONTEXT_WARN_TOKENS, false), false)
+  for (const cannot of [{ ...big, terminal: true }, { ...big, agent: 'codex' }, { ...big, contextTokens: COMPACT_MIN_TOKENS - 1 }, { ...big, contextTokens: 0 }]) {
+    assert.equal(messageCompacts({ ...cannot, text: '#624 に着手してください。' }, CONTEXT_WARN_TOKENS), false)
+    assert.equal(messageCompacts({ ...cannot, text: '#624 に着手してください。' }, CONTEXT_WARN_TOKENS, true), false)
   }
 })

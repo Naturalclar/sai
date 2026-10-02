@@ -11,7 +11,7 @@ import { mergeMeta } from '../shared/meta.ts'
 import { mergeProfile, PROFILE_ICON_ID, profileIconUrl } from '../shared/profile.ts'
 import { isPersonaId } from '../shared/persona.ts'
 import { canSteer, replyBlockedReason, replyFailureText } from '../shared/reply.ts'
-import { compactPrompt } from '../shared/compact.ts'
+import { compactPrompt, messageCompacts } from '../shared/compact.ts'
 import { handoffFirstText, handoffReady } from '../shared/handoff.ts'
 import { selfHost } from './host.ts'
 import type { SessionTurnResponse,
@@ -167,6 +167,9 @@ import {
   deliveredText,
   isDeliveryOf,
   replyOf,
+  sendHow,
+  SEND_COMPACT_ARG,
+  SEND_COMPACT_NOTE,
   sessionLabel,
   tokensLabel,
   usageRefusal,
@@ -174,7 +177,7 @@ import {
 import type { PendingReply } from '../shared/agentMessages.ts'
 import { eventKind } from '../shared/events.ts'
 import { stepLabel } from '../shared/progress.ts'
-import { contextRevKey } from '../shared/contextSize.ts'
+import { CONTEXT_WARN_TOKENS, contextRevKey } from '../shared/contextSize.ts'
 import { treeOf, Worktrees } from './git/worktrees.ts'
 import { mcpAccess, normalizeOrigin } from './mcp/access.ts'
 import type { McpAccess } from './mcp/access.ts'
@@ -461,6 +464,11 @@ interface LaunchOptions {
   steer?: boolean
   /** 要約してから送る（#579。`ReplyRequest.compact`）。startTurn では「このターンは要約だけ」の印 */
   compact?: boolean
+  /**
+   * `/compact` に添える指示を作る元の文（#624）。メッセージは本文の頭に見出し（【SAI】…）が付くので、送り元が書いた文を別に渡す。
+   * 無ければ本文から
+   */
+  compactFrom?: string
   /** ループの周として SAI が起こすターン（#634）。MCP に `sai_loop_next` を出す */
   loop?: boolean
 }
@@ -1955,7 +1963,7 @@ export function createApp(
         const item = queue.add(id, text, attachments, o.url, new Date(), o.origin ?? '')
         if (!item) return refuse(409, `預かれるのは ${QUEUE_MAX} 件までです`)
         await appendFile(log, `--- ${new Date().toISOString()} ${id} 要約（/compact）してから送る。本文は預かりの先頭に置いた\n`).catch(() => {})
-        const out = await startTurn(id, session, raw, cwd, null, compactPrompt(text), [], { ...o, forceProcess: true, compact: true })
+        const out = await startTurn(id, session, raw, cwd, null, compactPrompt(o.compactFrom ?? text), [], { ...o, forceProcess: true, compact: true })
         if (out.status !== 202) {
           // 要約を起こせなければ本文も預からない（画面が入力欄に戻す）
           queue.remove(id, item.queue_id)
@@ -2461,6 +2469,16 @@ export function createApp(
   }
 
   /**
+   * メッセージを要約（`/compact`）してから始めさせるか（#624）。画面からの送信と同じ判定で、渡すのは**見出しを付ける前の文**
+   * （着手の形かの判定も、`/compact` に添える指示もそこから作る）。相手が処理中・預かりがあるときは `launch()` が今までどおり
+   * 預かりに並べる（画面からの送信と同じ。並んだものの前に要約は挟まない）
+   */
+  const messageCompactOf = (target: SessionSummary, text: string, contextTokens: number, asked: unknown): { compact?: true; compactFrom?: string } =>
+    messageCompacts({ text, agent: target.agent, contextTokens, terminal: Boolean(target.terminal) }, CONTEXT_WARN_TOKENS, typeof asked === 'boolean' ? asked : undefined)
+      ? { compact: true, compactFrom: text }
+      : {}
+
+  /**
    * POST /api/agent/send。別のセッションに送る（#310）。相手が処理中なら預かり（#305）に並ぶ。
    * 断るのは: トークン・送り元がターンを回していない・相手が同じ project の返信できるセッションでない（403）、
    * 受け取ったメッセージで回っているターンから（連鎖）・1 ターンの回数を超えた（429。#311）
@@ -2494,7 +2512,8 @@ export function createApp(
     if (overBudget) return error(res, 429, overBudget)
     const messageId = agents.newId()
     const delivered = deliveredText({ label: sessionLabel(found.session), project: found.session.project }, messageId, text)
-    const out = await launch(to, delivered, [], { days: QUEUE_DAYS, replaceTyped: false, forceProcess: false, url: selfUrl(req), queue: true, origin: messageId })
+    const compact = messageCompactOf(target, text, context, b.compact)
+    const out = await launch(to, delivered, [], { days: QUEUE_DAYS, replaceTyped: false, forceProcess: false, url: selfUrl(req), queue: true, origin: messageId, ...compact })
     if (out.status !== 202) return json(res, out.body, out.status)
     const via = (out.body as ReplyResponse).via
     agents.record(
@@ -2979,8 +2998,12 @@ export function createApp(
     {
       name: 'sai_send',
       scope: 'send',
-      description: `別のセッションに頼む・聞く。相手が処理中なら終わってから回る。返答は sai_wait で受け取る。本文は ${AGENT_TEXT_MAX_CHARS} 字まで`,
-      inputSchema: { type: 'object', properties: { to: { type: 'string', description: 'sai_sessions の id' }, text: { type: 'string' } }, required: ['to', 'text'] },
+      description: `別のセッションに頼む・聞く。相手が処理中なら終わってから回る。返答は sai_wait で受け取る。本文は ${AGENT_TEXT_MAX_CHARS} 字まで。${SEND_COMPACT_NOTE}`,
+      inputSchema: {
+        type: 'object',
+        properties: { to: { type: 'string', description: 'sai_sessions の id' }, text: { type: 'string' }, compact: { type: 'boolean', description: SEND_COMPACT_ARG } },
+        required: ['to', 'text'],
+      },
       run: async (args) => {
         const to = mcpStr(args.to)
         const text = mcpStr(args.text).trim()
@@ -3002,7 +3025,8 @@ export function createApp(
         const overBudget = budgetRefusal(agents.readInTurn(mcpFrom(access), window), context)
         if (overBudget) return textResult(overBudget, true)
         const messageId = agents.newId()
-        const out = await launch(to, deliveredFromTailnet(access.caller, messageId, text), [], { days: QUEUE_DAYS, replaceTyped: false, forceProcess: false, url: selfUrl(req), queue: true, origin: messageId })
+        const compact = messageCompactOf(target, text, context, args.compact)
+        const out = await launch(to, deliveredFromTailnet(access.caller, messageId, text), [], { days: QUEUE_DAYS, replaceTyped: false, forceProcess: false, url: selfUrl(req), queue: true, origin: messageId, ...compact })
         if (out.status !== 202) return textResult(`送れませんでした: ${(out.body as ReplyError).error}`, true)
         const via = (out.body as ReplyResponse).via
         mcpLimiter.record(access.caller)
@@ -3010,8 +3034,8 @@ export function createApp(
         await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${mcpFrom(access)} → ${to} メッセージ ${messageId}（${via}）\n`).catch(() => {})
         const size = tokensLabel(context)
         return textResult(
-          `送りました（message_id: ${messageId}。${via === 'queued' ? '相手は処理中なので、終わってから回ります' : '相手のターンを始めました'}）。` +
-            `${size ? `相手が読み直す量は${size}（予算の残り ${tokensLabel(Math.max(0, AGENT_TURN_READ_BUDGET - agents.readInTurn(mcpFrom(access), window))) || '0'}）。` : ''}返答は sai_wait で受け取れます`,
+          `送りました（message_id: ${messageId}。${sendHow(via)}）。` +
+            `${size ? `${via === 'compact' ? '要約の前の相手の文脈は' : '相手が読み直す量は'}${size}（予算の残り ${tokensLabel(Math.max(0, AGENT_TURN_READ_BUDGET - agents.readInTurn(mcpFrom(access), window))) || '0'}）。` : ''}返答は sai_wait で受け取れます`,
         )
       },
     },

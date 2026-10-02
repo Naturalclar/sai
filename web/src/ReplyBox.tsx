@@ -23,6 +23,7 @@ import { reportDigestUsage } from './digestUsage'
 import { ManagerDraftCard } from './ManagerDraftCard'
 import { useMediaQuery } from './hooks'
 import { PhotoMark } from './PhotoMark'
+import { FileMark } from './FileMark'
 import { ATTACHMENT_MAX_COUNT } from '../../shared/attachments.ts'
 import { NOT_IN_HISTORY, canGoBack, canGoForward, stepHistory } from './replyHistory'
 import type { HistoryState } from './replyHistory'
@@ -168,6 +169,7 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
   const [text, setText] = useState(initial.text)
   const attach = useAttachments(attachId, initial.attachments)
   const fileRef = useRef<HTMLInputElement>(null)
+  const anyFileRef = useRef<HTMLInputElement>(null)
   // 画像を落とせる場所だと分かるように、ドラッグ中は枠を光らせる
   const [dropping, setDropping] = useState(false)
   // caret は「@ の検出」に使う。onChange と onSelect（カーソル移動）で追う
@@ -613,7 +615,8 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
               ref={fileRef}
               className="file"
               type="file"
-              // 種類は絞らない（#608。拡張子の無いログやソースも選べるように。受けるかは中身で決める）
+              // 写真の口は前のまま絞る（#667 のレビュー。絞りを外すと、iPhone の写真が HEIC のまま来て中身の判定で弾かれるおそれがある）
+              accept="image/png,image/jpeg,image/gif,image/webp"
               multiple
               onChange={(e) => {
                 takeFiles(e.target.files)
@@ -621,11 +624,29 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
               }}
             />
             <IconButton
-              label={attach.items.length >= ATTACHMENT_MAX_COUNT ? `添付は ${ATTACHMENT_MAX_COUNT} 個までです` : '画像・ファイルを添える（文字のファイルと PDF。貼り付け・ドロップでも添えられる）'}
+              label={attach.items.length >= ATTACHMENT_MAX_COUNT ? `添付は ${ATTACHMENT_MAX_COUNT} 個までです` : '画像を添える（貼り付け・ドロップでも添えられる）'}
               onClick={() => fileRef.current?.click()}
               disabled={attach.busy || attach.items.length >= ATTACHMENT_MAX_COUNT}
             >
               <PhotoMark />
+            </IconButton>
+            {/* 画像以外のファイル（#608）。種類は絞らない（拡張子の無いログやソースも選べるように。受けるかは中身で決める） */}
+            <input
+              ref={anyFileRef}
+              className="file"
+              type="file"
+              multiple
+              onChange={(e) => {
+                takeFiles(e.target.files)
+                e.target.value = ''
+              }}
+            />
+            <IconButton
+              label={attach.items.length >= ATTACHMENT_MAX_COUNT ? `添付は ${ATTACHMENT_MAX_COUNT} 個までです` : 'ファイルを添える（文字のファイルと PDF。ドロップでも添えられる）'}
+              onClick={() => anyFileRef.current?.click()}
+              disabled={attach.busy || attach.items.length >= ATTACHMENT_MAX_COUNT}
+            >
+              <FileMark />
             </IconButton>
           </>
         )}

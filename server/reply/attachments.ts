@@ -4,7 +4,7 @@
 // **返信の attachments は CLI に渡って読まれる**ので、画面から来た絶対パスをそのまま信じない。
 // resolvePath() が「このセッションの置き場の、この形の名前」だけを通す（他のファイルを読ませない）。
 import { createHash } from 'node:crypto'
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { ATTACHMENT_FILE_NAME_RE, ATTACHMENT_NAME_RE, ATTACHMENT_DIR_RE, attachmentLabel, attachmentUrl, isUtf8Text, sniffPdf } from '../../shared/attachments.ts'
 import type { AttachmentKind } from '../../shared/attachments.ts'
@@ -58,7 +58,9 @@ export class AttachmentStore {
     try {
       await mkdir(dirPath, { recursive: true })
       await writeFile(join(dirPath, name), bytes)
+      // 名前なしで同じ中身を置き直したら、前の名前は消す（#667 のレビュー。残すと、画面は名前なしなのに本文には前の名前が載る）
       if (label) await writeFile(join(dirPath, `${name}${LABEL_SUFFIX}`), label, 'utf-8')
+      else if (kind !== 'image') await rm(join(dirPath, `${name}${LABEL_SUFFIX}`), { force: true })
     } catch (err) {
       return { error: err instanceof Error ? err.message : '保存できませんでした' }
     }

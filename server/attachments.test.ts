@@ -166,6 +166,8 @@ test('AttachmentStore.labelOf: 元の名前は隣のファイルから読み、�
   const store = new AttachmentStore(join(dir, 'attachments'))
   const put = await store.put('A1@r', Buffer.from('名前つき\n'), 'a（b）\n.md')
   assert.equal(await store.labelOf(put.attachment!.path), 'ab.md')
+  await store.put('A1@r', Buffer.from('名前つき\n'))
+  assert.equal(await store.labelOf(put.attachment!.path), '', '同じ中身を名前なしで置き直したら、前の名前は残さない')
   const bare = await store.put('A1@r', Buffer.from('名前なし\n'))
   assert.equal(await store.labelOf(bare.attachment!.path), '')
   assert.equal(store.resolvePath('A1@r', put.attachment!.path), put.attachment!.path)

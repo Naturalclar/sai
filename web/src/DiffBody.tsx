@@ -7,6 +7,7 @@ import { DiffCommentBar } from './DiffCommentBar'
 import { DiffCommentNote } from './DiffCommentNote'
 import { commentLine, formatDiffComments, type DiffComment } from './diffComments'
 import { useDiffComments } from './useDiffComments'
+import { OpenInGitHub } from './OpenInGitHub'
 
 /**
  * そのセッションの worktree の差分の中身（#171）。開いたときに 1 回だけ取る（3 秒のポーリングには乗せない）。
@@ -112,7 +113,7 @@ export function DiffBody({ id, canReview = false, onInsertComments }: { id: stri
               {data.compare_url && (
                 <>
                   {' '}
-                  <a href={data.compare_url} target="_blank" rel="noopener noreferrer">GitHub で見る</a>
+                  <OpenInGitHub href={data.compare_url} />
                 </>
               )}
             </div>

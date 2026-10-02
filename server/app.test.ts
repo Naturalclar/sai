@@ -2643,11 +2643,13 @@ test('POST /api/sessions/new: handoff は最後のターン（引き継ぎの返
   runner.busy.delete('H1@r')
   assert.equal(runner.started.length, 0)
 
-  // 2 枚の画面で同時に押しても、始まるのは 1 つ（#622 のレビュー）
-  const [res, rival] = await Promise.all([postNew({ from: 'H1@r', handoff: true, text: '勝手な本文' }), postNew({ from: 'H1@r', handoff: true })])
-  assert.deepEqual([res.status, rival.status], [202, 409])
+  // 2 枚の画面で同時に押しても、始まるのは 1 つ（#622 のレビュー）。
+  // どちらが勝つかは決まらない（サーバは排他に入る前に await を挟む）ので、順番は見ない（#671）。
+  // 本文は両方に付けておき、どちらが勝っても「body の text は見ない」を確かめられるようにする
+  const pressed = await Promise.all([postNew({ from: 'H1@r', handoff: true, text: '勝手な本文' }), postNew({ from: 'H1@r', handoff: true, text: '勝手な本文' })])
+  assert.deepEqual(pressed.map((r) => r.status).sort(), [202, 409])
   assert.equal(runner.started.length, 1)
-  const fresh = (await res.json()) as NewSessionResponse
+  const fresh = (await pressed.find((r) => r.status === 202)!.json()) as NewSessionResponse
   const cmd = runner.started[0]!.cmd
   assert.equal(cmd.cwd, dir, 'cwd は from から')
   // 本文は stdin（stream-json）か引数のどちらかに載る。どちらでも、引き継ぎの返答が入り body の text は入らない

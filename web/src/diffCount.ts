@@ -73,5 +73,5 @@ export interface PrLinkInfo {
  */
 export function prLink(pr: SessionDiffSummaryResponse['pr']): PrLinkInfo | null {
   if (!pr || pr.number <= 0 || !/^https:\/\//i.test(pr.url)) return null
-  return { url: pr.url, label: `#${pr.number}`, state: prLinkState(pr), title: `PR #${pr.number}（${prState(pr)}）を GitHub で開く`, approved: isApproved(pr.review_decision) }
+  return { url: pr.url, label: `#${pr.number}`, state: prLinkState(pr), title: `PR #${pr.number}（${prState(pr)}） — Open in GitHub`, approved: isApproved(pr.review_decision) }
 }

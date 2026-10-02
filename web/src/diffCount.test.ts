@@ -72,14 +72,14 @@ test('diffTitle: base が無ければその旨を出し、PR の状態も言い�
 
 test('prLink: PR の url へ GitHub の印 + #番号で飛ぶ。状態は色の区別に、言葉は title に（#536）', () => {
   const pr = { number: 531, url: 'https://github.com/Naturalclar/sai/pull/531', state: 'OPEN', draft: false }
-  assert.deepEqual(prLink(pr), { url: pr.url, label: '#531', state: 'open', title: 'PR #531（オープン）を GitHub で開く', approved: false })
+  assert.deepEqual(prLink(pr), { url: pr.url, label: '#531', state: 'open', title: 'PR #531（オープン） — Open in GitHub', approved: false })
   assert.equal(prLink({ ...pr, draft: true })?.state, 'draft')
   assert.equal(prLink({ ...pr, state: 'MERGED' })?.state, 'merged')
-  assert.equal(prLink({ ...pr, state: 'CLOSED' })?.title, 'PR #531（クローズ済み）を GitHub で開く')
+  assert.equal(prLink({ ...pr, state: 'CLOSED' })?.title, 'PR #531（クローズ済み） — Open in GitHub')
   // 承認済み（#636）: open のときだけ。下書き・マージ済みが優先
   assert.equal(prLink({ ...pr, review_decision: 'APPROVED' })?.state, 'approved')
-  assert.equal(prLink({ ...pr, review_decision: 'APPROVED' })?.title, 'PR #531（オープン・承認済み）を GitHub で開く', '状態の言葉は残し、承認は注記')
-  assert.equal(prLink({ ...pr, draft: true, review_decision: 'CHANGES_REQUESTED' })?.title, 'PR #531（下書き・修正の依頼あり）を GitHub で開く')
+  assert.equal(prLink({ ...pr, review_decision: 'APPROVED' })?.title, 'PR #531（オープン・承認済み） — Open in GitHub', '状態の言葉は残し、承認は注記')
+  assert.equal(prLink({ ...pr, draft: true, review_decision: 'CHANGES_REQUESTED' })?.title, 'PR #531（下書き・修正の依頼あり） — Open in GitHub')
   assert.equal(prLink({ ...pr, draft: true, review_decision: 'APPROVED' })?.state, 'draft', '色は下書きが優先')
   assert.equal(prLink({ ...pr, draft: true, review_decision: 'APPROVED' })?.approved, true, '印は承認されていれば下書きでも付く（4 か所で同じ規則）')
   assert.equal(prLink({ ...pr, state: 'MERGED', review_decision: 'APPROVED' })?.state, 'merged')

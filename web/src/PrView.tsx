@@ -10,6 +10,7 @@ import { useDiffComments } from './useDiffComments'
 import { usePrReviewBody } from './usePrReviewBody'
 import { PrDraftBar } from './PrDraftBar'
 import { PrHeadActions } from './PrHeadActions'
+import { OpenInGitHub } from './OpenInGitHub'
 import { PrReviewModal } from './PrReviewModal'
 import { REVIEW_EVENT_LABEL } from '../../shared/prReview.ts'
 import type { PrReviewEvent } from './api'
@@ -124,9 +125,7 @@ export function PrView({ repo, number, onStatus, onInsertToSession }: { repo: st
         </h1>
         <span className="pr-actions">
           {pr?.url && (
-            <a href={pr.url} target="_blank" rel="noopener noreferrer">
-              GitHub で開く
-            </a>
+            <OpenInGitHub href={pr.url} compact />
           )}
           {pr && (
             <PrHeadActions
@@ -194,7 +193,7 @@ export function PrView({ repo, number, onStatus, onInsertToSession }: { repo: st
           {posted && (
             <div className="note pr-posted">
               GitHub にレビューを載せました（{REVIEW_EVENT_LABEL[posted.event]}）。{' '}
-              <a href={posted.url || pr.url} target="_blank" rel="noopener noreferrer">GitHub で見る</a>
+              <OpenInGitHub href={posted.url || pr.url} />
             </div>
           )}
           {reviewing && (
@@ -232,7 +231,7 @@ export function PrView({ repo, number, onStatus, onInsertToSession }: { repo: st
           {loaded.data.diff.truncated && (
             <div className="warn">
               差分が大きいので一部は出していません。{' '}
-              <a href={`${pr.url}/files`} target="_blank" rel="noopener noreferrer">GitHub で見る</a>
+              <OpenInGitHub href={`${pr.url}/files`} />
             </div>
           )}
         </div>

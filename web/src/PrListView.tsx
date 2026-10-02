@@ -81,7 +81,7 @@ export function PrListView({ onStatus, onOpenSidebar }: Pick<PaneProps, 'onStatu
         {repos.map((r) => (
           <div className="pr-repo" key={r.repo}>
             <h2>
-              <a href={`https://github.com/${r.repo}/pulls`} target="_blank" rel="noopener noreferrer" title="GitHub で開く">
+              <a href={`https://github.com/${r.repo}/pulls`} target="_blank" rel="noopener noreferrer" title="Open in GitHub">
                 {r.repo}
               </a>
               <span className="n">{r.prs.length}</span>

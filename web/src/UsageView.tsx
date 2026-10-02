@@ -27,7 +27,8 @@ const PERIODS = [...USAGE_REPORT_DAYS].sort((a, b) => a - b)
 export function UsageView({ onStatus, onOpenSidebar }: Pick<PaneProps, 'onStatus' | 'onOpenSidebar'>) {
   const [ui, setUi] = useLocalState<{ days: number }>('sai.usage', { days: USAGE_REPORT_DAYS[0] })
   const days = (USAGE_REPORT_DAYS as readonly number[]).includes(ui.days) ? ui.days : USAGE_REPORT_DAYS[0]
-  const [loaded, setLoaded] = useState<Loaded | null>(null)
+  // 期間ごとに持つ（「更新」の応答が期間を切り替えたあとに届いても、いまの期間のぶんを上書きしない）
+  const [byDays, setByDays] = useState<Record<number, Loaded>>({})
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(true)
 
@@ -35,7 +36,7 @@ export function UsageView({ onStatus, onOpenSidebar }: Pick<PaneProps, 'onStatus
     setBusy(true)
     return api.usageReport(d).then(
       (data) => {
-        setLoaded({ data, at: new Date() })
+        setByDays((prev) => ({ ...prev, [data.days]: { data, at: new Date() } }))
         setError('')
         setBusy(false)
       },
@@ -50,7 +51,7 @@ export function UsageView({ onStatus, onOpenSidebar }: Pick<PaneProps, 'onStatus
   useEffect(() => {
     let alive = true
     void api.usageReport(days).then(
-      (data) => alive && (setLoaded({ data, at: new Date() }), setError(''), setBusy(false)),
+      (data) => alive && (setByDays((prev) => ({ ...prev, [data.days]: { data, at: new Date() } })), setError(''), setBusy(false)),
       (err: unknown) => alive && (setError(err instanceof Error ? err.message : String(err)), setBusy(false)),
     )
     return () => {
@@ -58,10 +59,12 @@ export function UsageView({ onStatus, onOpenSidebar }: Pick<PaneProps, 'onStatus
     }
   }, [days])
 
+  // 出すのはいまの期間のぶんだけ（前に見た期間に戻ったときは、取り直すまで前の数字を出しておく）
+  const loaded = byDays[days] ?? null
+  const data = loaded?.data ?? null
+
   useEffect(() => onStatus(loaded?.at ?? null, error || null), [loaded, error, onStatus])
 
-  // 切り替えた直後は前の期間の表を出さない
-  const data = loaded && loaded.data.days === days ? loaded.data : null
   const total = data?.total
 
   return (

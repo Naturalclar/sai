@@ -4056,8 +4056,9 @@ export function createApp(
       if (path === USAGE_REPORT_PATH) {
         const days = usageReportDays(q.get('days'))
         await usageReady
-        // 呼び名は記録にあるセッションから引く（期間の中に行が無いセッションは ID のまま出る）
-        const [{ sessions: known }, { entries: metas }] = await Promise.all([store.sessions(days), metaStore.all()])
+        // 呼び名は記録にあるセッションから引く（期間の中に行が無いセッションは ID のまま出る）。
+        // 集計は「いまから days×24 時間前まで」、記録の窓は「今日を含む days 個の日付」なので、1 日多く読む
+        const [{ sessions: known }, { entries: metas }] = await Promise.all([store.sessions(days + 1), metaStore.all()])
         const names = new Map<string, string>()
         for (const s of known) {
           const name = metas[s.id]?.name || s.title

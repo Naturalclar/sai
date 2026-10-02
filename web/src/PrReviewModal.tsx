@@ -120,6 +120,8 @@ export function PrReviewModal({ data, comments, onRemoveComment, body, onBody, o
           if (e.key !== 'Escape') return
           // App の Esc（フィードへ）まで動かさない
           e.stopPropagation()
+          // 日本語入力の変換をやめる Esc では閉じない（開くと入力欄にフォーカスが入るので、ここを通るのが普通になった。#649）
+          if (e.nativeEvent.isComposing || e.keyCode === 229) return
           if (!busy) onClose()
         }}
       >

@@ -1079,3 +1079,25 @@ test('Digester: セッションで一言を切っているときは、人に聞�
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+test('Digester: 人に聞いている返答で案に失敗しても、作らなかった印は残り、口の失敗には数えない（#638）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-digest-asking-fail-'))
+  try {
+    const store = new DigestStore(join(dir, 'digest.jsonl'))
+    await store.load()
+    const fake = new FakeSummarizer()
+    fake.failOn.add('どちらにしますか')
+    const d = new Digester(store, fake, { enabled: true, model: 'haiku', since: at(0).toISOString(), persona: async () => 'none', logPath: join(dir, 'digest.log') })
+    const asking = row(at(1), 'S1', { repo: 'r', text: '甲と乙があります。\n\nどちらにしますか？', user_text: '進めて' })
+    d.scan([asking])
+    await d.drain()
+    assert.equal(store.get(digestKey(asking))?.skipped, 'asking')
+    assert.equal(store.get(digestKey(asking))?.next_ask, undefined)
+    assert.equal(d.error, '', '口の不調にしない')
+    d.scan([asking])
+    await d.drain()
+    assert.equal(fake.nextAsks.length, 1, '積み直さない')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})

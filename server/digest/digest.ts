@@ -697,8 +697,9 @@ export class Digester {
           // 一言を作らない行では案が唯一の仕事なので、失敗は一言と同じく数える（下の catch。口が落ちている間に同じ行を叩き続けない）
           const nextAsk = !(wantAsk && this.askOn && this.active && this.isLatest(row))
             ? (prev?.next_ask ?? '')
-            : wantSummary
-              ? await this.makeNextAsk(row, summarizer, key)
+            : wantSummary || asking
+              ? // 人に聞いている返答（#638）も、案の失敗は一言の側と同じく飲み込む（作らなかった印は残す。口を休ませる数えに入れない）
+                await this.makeNextAsk(row, summarizer, key)
               : cleanNextAsk(await summarizer.summarize(nextAskPrompt(row.user_text ?? '', row.text ?? '')))
           await this.store.append({
             key,

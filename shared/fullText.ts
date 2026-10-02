@@ -11,7 +11,13 @@ const DECIDE = /(?:決めてほしい|決めて欲しい|決めること|決め�
 /** 最後の文が問いかけか。疑問符で終わるか、「〜ますか」「〜でしょうか」などで終わる */
 const ASKS = /(?:[?？]|(?:ますか|ですか|でしょうか|ましょうか|どうしますか|どちらにしますか|よいですか|いいですか|よろしいですか)[。.]?)$/
 
-/** コード・引用・表を落とす（その中の「?」や語は、人への問いかけではない） */
+/** 見出しに語があっても、もう残っていない・決まったと言っている行（「決めることは残っていません」） */
+const SETTLED = /(?:ありません|残っていません|無い|ない|なし|済み|決まりました|決めました|ませんでした)/
+
+/** 落とした行（コード・引用・表）の代わりに置く印。**空行にしない**（空行にすると、表で終わる返答の「最後の段落」が表の前の段落になる） */
+const DROPPED = '[-]'
+
+/** コード・引用・表を落とす（その中の「?」や語は、人への問いかけではない）。URL とインラインコードも外す */
 function proseLines(text: string): string[] {
   const out: string[] = []
   let fenced = false
@@ -19,12 +25,15 @@ function proseLines(text: string): string[] {
     const line = raw.trimEnd()
     if (/^\s*(```|~~~)/.test(line)) {
       fenced = !fenced
+      out.push(DROPPED)
       continue
     }
-    if (fenced) continue
-    if (/^\s*>/.test(line)) continue
-    if (/^\s*\|.*\|\s*$/.test(line)) continue
-    out.push(line.replace(/`[^`\n]*`/g, ''))
+    if (fenced || /^\s*>/.test(line) || /^\s*\|.*\|\s*$/.test(line)) {
+      out.push(DROPPED)
+      continue
+    }
+    // URL の `?days=7` を問いかけにしない
+    out.push(line.replace(/`[^`\n]*`/g, '').replace(/https?:\/\/\S+/g, ''))
   }
   return out
 }
@@ -41,7 +50,7 @@ function bare(line: string): string {
 /** 見出し・太字・「〜:」で終わる項目名として DECIDE の語が出ているか */
 function hasDecideHeading(lines: string[]): boolean {
   return lines.some((line) => {
-    if (!DECIDE.test(line)) return false
+    if (!DECIDE.test(line) || SETTLED.test(line)) return false
     const t = line.trim()
     if (/^#{1,6}\s/.test(t)) return true
     // 太字の中に語がある（`**決めてほしいこと**` / `**決めること（2 つ）**:`）
@@ -54,7 +63,8 @@ function hasDecideHeading(lines: string[]): boolean {
 /** 文に分ける。句点と、疑問符のあとで切る（「どれにしますか？ どれでも構いません。」の前半を拾う） */
 function sentences(line: string): string[] {
   return bare(line)
-    .split(/(?<=[。?？])/u)
+    // 半角の「?」は後ろが空白か行末のときだけ文の終わり（`name?: string` のような書き方を切らない）
+    .split(/(?<=[。？])|(?<=\?)(?=\s)/u)
     .map((t) => t.trim())
     .filter(Boolean)
 }

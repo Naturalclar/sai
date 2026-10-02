@@ -355,8 +355,10 @@
   @media (prefers-reduced-motion: reduce) { button.refresh.busy .refresh-mark { animation: none; } }
   /* 狭い画面では文字を隠してアイコンだけ（見出しで「Open in GitHub」と並んで折り返さないように）。読み上げは aria-label */
   @media (max-width: 900px) { .pr-actions button.refresh .label { display: none; } .pr-actions button.refresh { padding: 5px 8px; } }
-  /* GitHub へ出るリンク（#655）。印 + 「Open in GitHub」。見出しのもの（`.compact`）だけ、狭い画面では「更新」と同じく印だけにする */
-  a.open-in-github { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; vertical-align: bottom; }
+  /* GitHub へ出るリンク（#655）。印 + 「Open in GitHub」。**文字のリンクでなくボタンの形**（隣の「更新」と同じ枠・地・字の色）。
+     見出しのもの（`.compact`）だけ、狭い画面では「更新」と同じく印だけにする */
+  a.open-in-github { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; vertical-align: middle; font-size: 12px; line-height: 1.5; padding: 3px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); text-decoration: none; }
+  a.open-in-github:hover { background: var(--hover); text-decoration: none; }
   a.open-in-github svg { flex: none; }
   @media (max-width: 900px) { a.open-in-github.compact .label { display: none; } a.open-in-github.compact { padding: 5px 8px; } }
   .pr-repo h2 { display: flex; align-items: baseline; gap: 8px; margin: 0 0 6px; font-size: 13px; color: var(--muted); }

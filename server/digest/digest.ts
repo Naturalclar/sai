@@ -16,6 +16,7 @@ import { eventKind } from '../../shared/events.ts'
 import { DEFAULT_PERSONA, digestPrompt } from '../../shared/persona.ts'
 import { digestIssues } from '../../shared/digestCheck.ts'
 import { digestKey } from '../../shared/digestFeedback.ts'
+import { needsFullText } from '../../shared/fullText.ts'
 import { cleanNextAsk, nextAskPrompt } from '../../shared/nextAsk.ts'
 import type { DigestIssueCode } from '../../shared/digestCheck.ts'
 import { childEnv } from '../reply/runner.ts'
@@ -72,6 +73,11 @@ export interface DigestEntry {
    * **そのセッションの一番新しい行の分だけ**で、作れなければ付けない
    */
   next_ask?: string
+  /**
+   * 一言を**わざと作らなかった**理由（#638）。`asking` = 人に判断・回答を求めている返答（`needsFullText()`）なので、
+   * 言い換えずに本文をそのまま出す。`summary` は空。**一言を切っていて作らなかった行（#560）と違い、積み直さない**
+   */
+  skipped?: 'asking'
 }
 
 /** 行のキー。行は (エンティティ, ts) で一意。**画面と同じものを使う**（shared/digestFeedback.ts。#346） */
@@ -594,7 +600,8 @@ export class Digester {
       // 作ってある行は積まない。ただし**案だけ作った行（一言が空。#560）は、一言を作る側に回ったらもう一度積む**
       // （セッションの「作らない」を戻したとき。前は一言を切っていた行は記録に残らず、戻せば作られていた）
       const done = this.store.get(key)
-      if (done && (done.summary || !this.summaryOn)) continue
+      // 人に聞いている返答（#638）は、一言が空でも積み直さない（わざと作っていない）
+      if (done && (done.summary || done.skipped || !this.summaryOn)) continue
       // 失敗した行は、間隔が来るまで・諦めたら積まない（#443）
       const failure = this.failed.get(key)
       if (failure && (failure.count >= DIGEST_MAX_TRIES || this.now() < failure.next)) continue
@@ -643,11 +650,18 @@ export class Digester {
         const generation = this.generation
         // 一言は全体で入にしていて、そのセッションで切っていない（persona が null なら切っている。#263）ときだけ。
         // 案は一言とは別に入切する（#560）。セッションの「作らない」は一言だけを止め、案は作る
-        const wantSummary = this.summaryOn && persona !== null
+        // **人に判断・回答を求めている返答は一言にしない**（#638。本文を読まないと答えられないので、そのまま出す。LLM は呼ばない判定）
+        const asking = this.summaryOn && persona !== null && needsFullText(row.text ?? '')
+        const wantSummary = this.summaryOn && persona !== null && !asking
         // 案だけ作ってある行（#560）を一言のために積み直したときは、案はもう作らない（口を叩くのは 1 ターン 1 回まで）
         const prev = this.store.get(key)
         const wantAsk = this.askOn && this.isLatest(row) && !prev
         if (!summarizer || (!wantSummary && !wantAsk)) {
+          // 作らなかったことを残す（3 秒ごとの scan() が同じ行を積み直して判定し直さない。集計で数えられる。#638）。
+          // 案だけ作ってあった行は、案を持ち越す
+          if (asking && !prev?.skipped) {
+            await this.store.append({ key, persona: persona ?? DEFAULT_PERSONA, summary: '', model, ts: new Date().toISOString(), skipped: 'asking', ...(prev?.next_ask ? { next_ask: prev.next_ask } : {}) })
+          }
           this.queued.delete(key)
           continue
         }
@@ -683,8 +697,9 @@ export class Digester {
           // 一言を作らない行では案が唯一の仕事なので、失敗は一言と同じく数える（下の catch。口が落ちている間に同じ行を叩き続けない）
           const nextAsk = !(wantAsk && this.askOn && this.active && this.isLatest(row))
             ? (prev?.next_ask ?? '')
-            : wantSummary
-              ? await this.makeNextAsk(row, summarizer, key)
+            : wantSummary || asking
+              ? // 人に聞いている返答（#638）も、案の失敗は一言の側と同じく飲み込む（作らなかった印は残す。口を休ませる数えに入れない）
+                await this.makeNextAsk(row, summarizer, key)
               : cleanNextAsk(await summarizer.summarize(nextAskPrompt(row.user_text ?? '', row.text ?? '')))
           await this.store.append({
             key,
@@ -695,6 +710,7 @@ export class Digester {
             ...(first.length > 0 ? { retried: true } : {}),
             ...(issues.length > 0 ? { issues: issues.map((i) => i.code) } : {}),
             ...(nextAsk ? { next_ask: nextAsk } : {}),
+            ...(asking ? { skipped: 'asking' as const } : {}),
           })
           if (generation === this.generation) {
             this.failed.delete(key)

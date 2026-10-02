@@ -1015,3 +1015,89 @@ test('休んでいる間に口を変えたら、休みを解いてすぐ作る�
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+test('Digester: 人に聞いている返答は一言を作らず、作らなかったことを残して、もう一度は判定しない。案は作る（#638）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-digest-asking-'))
+  try {
+    const path = join(dir, 'digest.jsonl')
+    const store = new DigestStore(path)
+    await store.load()
+    const fake = new FakeSummarizer()
+    const d = new Digester(store, fake, { enabled: true, model: 'haiku', since: at(0).toISOString(), persona: async () => 'none' })
+    const old = row(at(1), 'S1', { repo: 'r', text: '甲と乙があります。\n\nどちらにしますか？', user_text: '進めて' })
+    const asking = row(at(2), 'S1', { repo: 'r', text: '案を出しました。\n\n## 決めてほしいこと\n\n1. 甲か乙か', user_text: '進めて' })
+    const report = row(at(2), 'S2', { repo: 'r', text: '直して push しました。', user_text: '直して' })
+    d.scan([old, asking, report])
+    await d.drain()
+    assert.equal(fake.prompts.length, 1, '一言の口を叩くのは報告の行だけ')
+    assert.match(fake.prompts[0]!, /直して push しました/)
+    assert.equal(fake.nextAsks.length, 2, '案は今までどおり、各セッションの一番新しい行に作る')
+    for (const r of [old, asking]) {
+      const e = store.get(digestKey(r))
+      assert.equal(e?.summary, '')
+      assert.equal(e?.skipped, 'asking')
+    }
+    assert.equal(store.get(digestKey(old))?.next_ask, undefined, '古い行には案を作らない')
+    assert.ok(store.get(digestKey(asking))?.next_ask)
+    assert.equal(store.get(digestKey(report))?.skipped, undefined)
+    // 行に一言は載らない（画面は本文をそのまま出す）
+    assert.equal(d.attach([asking])[0]!.summary, undefined)
+    // 3 秒ごとの scan() が積み直さない
+    const lines = (await readFile(path, 'utf-8')).trim().split('\n').length
+    d.scan([old, asking, report])
+    await d.drain()
+    assert.equal(d.pending(), 0)
+    assert.equal((await readFile(path, 'utf-8')).trim().split('\n').length, lines)
+    assert.equal(fake.prompts.length, 1)
+    assert.equal(fake.nextAsks.length, 2)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('Digester: セッションで一言を切っているときは、人に聞いている返答かを残さない（戻したときに判定する。#638）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-digest-asking-off-'))
+  try {
+    const store = new DigestStore(join(dir, 'digest.jsonl'))
+    await store.load()
+    const fake = new FakeSummarizer()
+    let off = true
+    const d = new Digester(store, fake, { enabled: true, model: 'haiku', since: at(0).toISOString(), persona: async () => (off ? null : 'none') })
+    const asking = row(at(1), 'S1', { repo: 'r', text: '甲と乙があります。\n\nどちらにしますか？', user_text: '進めて' })
+    d.scan([asking])
+    await d.drain()
+    assert.equal(store.get(digestKey(asking))?.skipped, undefined)
+    assert.ok(store.get(digestKey(asking))?.next_ask, '案だけ作ってある')
+    off = false
+    d.scan([asking])
+    await d.drain()
+    assert.equal(store.get(digestKey(asking))?.skipped, 'asking')
+    assert.ok(store.get(digestKey(asking))?.next_ask, '案は持ち越す')
+    assert.equal(fake.prompts.length, 0)
+    assert.equal(fake.nextAsks.length, 1, '案の口は 1 ターンに 1 回まで')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('Digester: 人に聞いている返答で案に失敗しても、作らなかった印は残り、口の失敗には数えない（#638）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-digest-asking-fail-'))
+  try {
+    const store = new DigestStore(join(dir, 'digest.jsonl'))
+    await store.load()
+    const fake = new FakeSummarizer()
+    fake.failOn.add('どちらにしますか')
+    const d = new Digester(store, fake, { enabled: true, model: 'haiku', since: at(0).toISOString(), persona: async () => 'none', logPath: join(dir, 'digest.log') })
+    const asking = row(at(1), 'S1', { repo: 'r', text: '甲と乙があります。\n\nどちらにしますか？', user_text: '進めて' })
+    d.scan([asking])
+    await d.drain()
+    assert.equal(store.get(digestKey(asking))?.skipped, 'asking')
+    assert.equal(store.get(digestKey(asking))?.next_ask, undefined)
+    assert.equal(d.error, '', '口の不調にしない')
+    d.scan([asking])
+    await d.drain()
+    assert.equal(fake.nextAsks.length, 1, '積み直さない')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})

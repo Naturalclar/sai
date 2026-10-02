@@ -340,6 +340,13 @@
   .pr-actions button { font: inherit; font-size: 12px; padding: 3px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); cursor: pointer; }
   .pr-actions button.on { border-color: var(--accent); color: var(--accent); }
   .pr-actions button:disabled { opacity: .6; cursor: default; }
+  /* 題名の行の「入力欄に入れる」「GitHub にレビューを投稿…」（#646）。既定の方が主、もう片方はリンクの形。
+     狭い画面では短い文言（`.short`）に替える（「GitHub で開く」・更新と並んで折り返さないように） */
+  .pr-actions button.head-act { white-space: nowrap; max-width: 28em; overflow: hidden; text-overflow: ellipsis; }
+  .pr-actions button.head-act.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  .pr-actions button.head-act.linkish { background: none; border: 0; padding: 0; color: var(--accent); }
+  .pr-actions button.head-act .short { display: none; }
+  @media (max-width: 900px) { .pr-actions button.head-act .full { display: none; } .pr-actions button.head-act .short { display: inline; } }
   /* 「更新」（#601）。アイコン＋文字。取っている間だけアイコンを回す（動きを減らす設定では回さない） */
   button.refresh { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
   button.refresh .refresh-mark { flex: none; }
@@ -611,7 +618,6 @@
   .modal.pr-review .actions button.primary { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 6px 12px; font: inherit; font-weight: 600; cursor: pointer; }
   .modal.pr-review .actions button.primary.strong { background: var(--claude); }
   .modal.pr-review .actions button:disabled { opacity: .5; cursor: default; }
-  .pr-review-bar.secondary { margin-top: -4px; }
   .pr-posted a { margin-left: 4px; }
   @media (pointer: coarse) { .modal-backdrop .modal.pr-review .pr-review-body textarea { font-size: 16px; } }
   .tag.mode { background: color-mix(in srgb, var(--muted) 18%, transparent); color: var(--muted); font-family: var(--mono); font-weight: 600; }
@@ -1190,6 +1196,8 @@
      それより後ろに置く。前に置くと padding だけ負けて負のマージンだけが残り、文字が左上に 6〜8px ずれる */
   @media (pointer: coarse) {
     .linkish, .msg .more, .msg .think-toggle, .reply .target .clear, .reply .target .to { padding: 8px 6px; margin: -8px -6px; }
+    /* 題名の行のリンクの形のボタン（#646）は上の `.pr-actions button.head-act.linkish` の方が詳細度が高いので、同じ詳細度で書き直す */
+    .pr-actions button.head-act.linkish { padding: 8px 6px; margin: -8px -6px; }
   }
   .reply .target .clear:hover { color: var(--ink); }
   /* 打ちかけの続きをタップで受け取るボタン（#349）。タッチ端末のときだけ出す（ソフトキーボードに矢印キーが無い）。

@@ -304,7 +304,7 @@ test('周を起こす直前に人が止めた・片付けたら、その周は�
     assert.equal((await post(url('L3', '/stop'))).status, 200)
   }
   const stopped = (await poll('L3'))!
-  assert.deepEqual([stopped.status, stopped.reason, sent()], ['stopped', '人が止めました', before])
+  assert.deepEqual([stopped.status, stopped.reason, sent()], ['stopped', '人が止めました', sentBefore])
 
   assert.equal((await fetch(url('L3'), { method: 'DELETE' })).status, 200)
   await start('L3', { interval_s: 60 })
@@ -374,5 +374,5 @@ test('立て直しても続き、同じ周を 2 回送らない（loops.json か
     app2.dispose()
     await new Promise<void>((resolve) => server2.close(() => resolve()))
   }
-  assert.equal(runner.sent(`${id}@r`).length, before)
+  assert.equal(runner.sent(`${id}@r`).length, sentBefore)
 })

@@ -1,5 +1,6 @@
 import type { PrSummary } from '../../shared/types.ts'
 import { prHash } from '../../shared/prs.ts'
+import { ApprovedMark } from './ApprovedMark'
 import { GitHubMark } from './GitHubMark'
 import { sessionPrTag } from './sessionPrState.ts'
 
@@ -13,6 +14,7 @@ export function SessionPrLink({ repo, pr }: { repo: string; pr: PrSummary }) {
   return (
     <a className={`tag session-pr ${tag.state}`} href={prHash(repo, pr.number)} title={tag.title}>
       <GitHubMark size={10} />#{pr.number}
+      {tag.state === 'approved' && <ApprovedMark size={10} />}
     </a>
   )
 }

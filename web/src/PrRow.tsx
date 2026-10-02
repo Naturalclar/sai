@@ -1,6 +1,7 @@
 import type { PrSummary } from './api'
 import { prHash } from '../../shared/prs.ts'
-import { agoLabel, checkLabel, reviewLabel } from './prLabels'
+import { agoLabel, checkLabel, isApproved, reviewLabel } from './prLabels'
+import { ApprovedMark } from './ApprovedMark'
 
 /** PR の一覧の 1 行（#524）。押すと SAI の中で 1 本の画面を開く（GitHub へは 1 本の画面から飛ぶ） */
 export function PrRow({ repo, pr, now }: { repo: string; pr: PrSummary; now: number }) {
@@ -21,7 +22,12 @@ export function PrRow({ repo, pr, now }: { repo: string; pr: PrSummary; now: num
         )}
         <span className="author">{pr.author}</span>
         <code className="branch" title={`${pr.head} → ${pr.base}`}>{pr.head}</code>
-        {review && <span className={`review ${pr.review_decision.toLowerCase()}`}>{review}</span>}
+        {review && (
+          <span className={`review ${pr.review_decision.toLowerCase()}`} title={review}>
+            {isApproved(pr.review_decision) && <ApprovedMark size={12} />}
+            {review}
+          </span>
+        )}
         <span className="counts">
           <span className="add">+{pr.additions}</span> <span className="del">−{pr.deletions}</span>
         </span>

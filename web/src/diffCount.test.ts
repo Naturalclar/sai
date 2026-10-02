@@ -76,6 +76,12 @@ test('prLink: PR の url へ GitHub の印 + #番号で飛ぶ。状態は色の�
   assert.equal(prLink({ ...pr, draft: true })?.state, 'draft')
   assert.equal(prLink({ ...pr, state: 'MERGED' })?.state, 'merged')
   assert.equal(prLink({ ...pr, state: 'CLOSED' })?.title, 'PR #531（クローズ済み）を GitHub で開く')
+  // 承認済み（#636）: open のときだけ。下書き・マージ済みが優先
+  assert.equal(prLink({ ...pr, review_decision: 'APPROVED' })?.state, 'approved')
+  assert.equal(prLink({ ...pr, review_decision: 'APPROVED' })?.title, 'PR #531（承認済み）を GitHub で開く')
+  assert.equal(prLink({ ...pr, draft: true, review_decision: 'APPROVED' })?.state, 'draft')
+  assert.equal(prLink({ ...pr, state: 'MERGED', review_decision: 'APPROVED' })?.state, 'merged')
+  assert.equal(prLink({ ...pr, review_decision: 'CHANGES_REQUESTED' })?.state, 'open')
 })
 
 test('prLink: PR が無い・url が空・https でない url は出さない（href に javascript: などを入れない）', () => {

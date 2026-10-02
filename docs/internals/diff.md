@@ -74,6 +74,8 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 
 ## PR 番号（server/git/pr.ts）
 
+- `gh pr view <branch> --json number,url,state,isDraft,reviewDecision` の 1 形だけ（#636 で `reviewDecision` を足した）。`DiffPr.review_decision` は差分ボタン横のリンク（`PrLink`。`prLink()` が `approved` の状態を出す）で使う。承認済みの印（`ApprovedMark`）を出すかは `web/src/prLabels.ts` の `isApproved()` 1 か所で決め、PR 一覧・PR 画面・サイドバーの印・差分ボタン横のリンクが使う。
+
 - `PrLookup`。`GhPr` は `gh pr view <branch> --json …` の 1 形だけを組み立てる。`SAI_GH=0` で `NoPr` に差し替わる。
 - `gh` が無い・未ログイン・PR 無し・時間切れ（4 秒）は null を返すだけ。cwd はセッションの行から、ブランチは git（`headRef()`。detached なら空で引かない）。同じ (cwd, ブランチ) は 60 秒キャッシュ。
 - テストは `PrLookup` を差し替える（`server/diff-summary.test.ts`）ので、ネットワークにも `gh` にも触らない。

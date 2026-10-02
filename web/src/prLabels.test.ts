@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { agoLabel, checkLabel, filterRepos, requestedCount, reviewLabel } from './prLabels.ts'
+import { agoLabel, checkLabel, filterRepos, requestedCount, reviewLabel, isApproved } from './prLabels.ts'
 import type { PrRepo, PrSummary } from '../../shared/types.ts'
 
 test('checkLabel: 通った・落ちた・走っている。チェックが無ければ出さない', () => {
@@ -8,6 +8,13 @@ test('checkLabel: 通った・落ちた・走っている。チェックが無�
   assert.equal(checkLabel('failure')?.mark, '✗')
   assert.equal(checkLabel('pending')?.mark, '●')
   assert.equal(checkLabel(''), null)
+})
+
+test('isApproved: APPROVED だけ（#636）', () => {
+  assert.equal(isApproved('APPROVED'), true)
+  assert.equal(isApproved('CHANGES_REQUESTED'), false)
+  assert.equal(isApproved(''), false)
+  assert.equal(isApproved(undefined), false)
 })
 
 test('reviewLabel: 知らない値は空', () => {

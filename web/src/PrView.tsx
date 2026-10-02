@@ -15,7 +15,8 @@ import { REVIEW_EVENT_LABEL } from '../../shared/prReview.ts'
 import type { PrReviewEvent } from './api'
 import { newestFirst, prAuthorSession, prCommentKey } from './prSession'
 import { Markdown } from './Markdown'
-import { agoLabel, checkLabel, reviewLabel } from './prLabels'
+import { agoLabel, checkLabel, isApproved, reviewLabel } from './prLabels'
+import { ApprovedMark } from './ApprovedMark'
 import type { PaneProps } from './App'
 import { withSuffix } from '../../shared/sessionLabels.ts'
 
@@ -145,7 +146,12 @@ export function PrView({ repo, number, onStatus, onInsertToSession }: { repo: st
                 {check.mark} {check.title}
               </span>
             )}
-            {review && <span className={`review ${pr.review_decision.toLowerCase()}`}>{review}</span>}
+            {review && (
+              <span className={`review ${pr.review_decision.toLowerCase()}`}>
+                {isApproved(pr.review_decision) && <ApprovedMark size={13} />}
+                {review}
+              </span>
+            )}
             <span className="ago">{agoLabel(pr.updated_at, loaded.at.getTime())}に更新</span>
             <span className="repo">{loaded.data.repo}</span>
           </div>

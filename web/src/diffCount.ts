@@ -1,4 +1,5 @@
 import type { SessionDiffSummaryResponse } from './api'
+import { isApproved } from './prLabels.ts'
 
 /**
  * ボタンに出す行数の丸め方（#211）。入力欄の中の狭いボタンなので、4 桁からは `1.2k` にする。
@@ -19,7 +20,8 @@ export function hasDiff(s: SessionDiffSummaryResponse): boolean {
 export function prState(pr: NonNullable<SessionDiffSummaryResponse['pr']>): string {
   if (pr.state === 'MERGED') return 'マージ済み'
   if (pr.state === 'CLOSED') return 'クローズ済み'
-  return pr.draft ? '下書き' : 'オープン'
+  if (pr.draft) return '下書き'
+  return isApproved(pr.review_decision) ? '承認済み' : 'オープン'
 }
 
 /**
@@ -39,7 +41,8 @@ export function diffTitle(s: SessionDiffSummaryResponse | null, open: boolean): 
 }
 
 /** PR のリンクの見た目の区別（#536）。色だけ変える。開いているものが普段の形 */
-export type PrLinkState = 'open' | 'draft' | 'merged' | 'closed'
+/** `approved` は open で承認済み（#636。チェックの印を付ける） */
+export type PrLinkState = 'open' | 'draft' | 'merged' | 'closed' | 'approved'
 
 export interface PrLinkInfo {
   url: string
@@ -54,6 +57,6 @@ export interface PrLinkInfo {
  */
 export function prLink(pr: SessionDiffSummaryResponse['pr']): PrLinkInfo | null {
   if (!pr || pr.number <= 0 || !/^https:\/\//i.test(pr.url)) return null
-  const state: PrLinkState = pr.state === 'MERGED' ? 'merged' : pr.state === 'CLOSED' ? 'closed' : pr.draft ? 'draft' : 'open'
+  const state: PrLinkState = pr.state === 'MERGED' ? 'merged' : pr.state === 'CLOSED' ? 'closed' : pr.draft ? 'draft' : isApproved(pr.review_decision) ? 'approved' : 'open'
   return { url: pr.url, label: `#${pr.number}`, state, title: `PR #${pr.number}（${prState(pr)}）を GitHub で開く` }
 }

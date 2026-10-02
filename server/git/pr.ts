@@ -2,7 +2,7 @@
 //
 // **ここが SAI で唯一、外のネットワークに問い合わせる場所**なので、次のように閉じてある:
 //
-// - 叩くのは `gh pr view <branch> --json …` の 1 形だけ。他のサブコマンドは組み立てられない
+// - 叩くのは `gh pr view <branch> --json …` の 1 形だけ。他のサブコマンドは組み立てられない（#636 で reviewDecision を足した）
 // - 認証は `gh` に任せる（SAI は鍵を持たない）。`gh` が無い・ログインしていない・PR が無い・
 //   ネットワークが死んでいる、のどれでも **null を返すだけ**で、差分そのものの表示は落とさない
 // - `SAI_GH=0` で丸ごと切れる。実行ファイルはサーバの PATH の `gh`（#288）
@@ -53,6 +53,7 @@ export function parsePr(stdout: string): DiffPr | null {
     url: typeof o.url === 'string' ? o.url : '',
     state: typeof o.state === 'string' ? o.state : '',
     draft: o.isDraft === true,
+    review_decision: typeof o.reviewDecision === 'string' ? o.reviewDecision : '',
   }
 }
 
@@ -90,7 +91,7 @@ export class GhPr implements PrLookup {
     return new Promise((resolve) => {
       let child
       try {
-        child = spawn(this.bin, ['pr', 'view', branch, '--json', 'number,url,state,isDraft'], {
+        child = spawn(this.bin, ['pr', 'view', branch, '--json', 'number,url,state,isDraft,reviewDecision'], {
           cwd,
           stdio: ['ignore', 'pipe', 'ignore'],
         })

@@ -95,3 +95,19 @@ test('sync-main の lock: 同時に取りに行っても 1 つしか取れない
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+test('sync-main の lock: 古い lock を同時に引き取りに行っても、取れるのは 1 つ（引き取った人の lock を消さない）', async () => {
+  const { dir, lock } = await lockDir()
+  try {
+    await run('acquire', lock, 'dead', '0')
+    await writeFile(join(lock, 'since'), `${Math.floor(Date.now() / 1000) - 1000}\n`)
+    const rs = await Promise.all(['a', 'b', 'c', 'd', 'e', 'f'].map((w) => run('acquire', lock, w, '3', '900')))
+    const won = rs.filter((r) => r.code === 0)
+    assert.equal(won.length, 1)
+    assert.equal(rs.filter((r) => r.code === 3).length, 5)
+    assert.equal(existsSync(`${lock}.takeover`), false)
+    assert.equal(existsSync(join(lock, 'owner')), true)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})

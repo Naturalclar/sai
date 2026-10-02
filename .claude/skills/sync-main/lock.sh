@@ -39,15 +39,20 @@ case "$cmd" in
       now=$(date +%s)
       since=$(since_of "$dir")
       if [ -n "$since" ] && [ $(( now - since )) -ge "$stale" ]; then
-        # 落ちたまま残った lock。動かしてから「見たものと同じか」を確かめる（その間に誰かが引き取って取り直していたら戻す）
-        old="$dir.stale.$$"
-        if mv "$dir" "$old" 2>/dev/null; then
-          if [ "$(since_of "$old")" = "$since" ]; then
-            echo "stale: $(cat "$old/owner" 2>/dev/null) の lock（$(( now - since )) 秒前）を引き取った" >&2
-            rm -rf "$old"
-          else
-            mv "$old" "$dir" 2>/dev/null || rm -rf "$old"
+        # 落ちたまま残った lock。**引き取りは 1 人ずつ**（別の mkdir で直列にして、その中でもう一度古いことを確かめてから消す。
+        # 確かめずに消すと、ほかの人が引き取って取り直したばかりの lock を消してしまう）
+        take="$dir.takeover"
+        if mkdir "$take" 2>/dev/null; then
+          if [ "$(since_of "$dir")" = "$since" ]; then
+            echo "stale: $(cat "$dir/owner" 2>/dev/null) の lock（$(( now - since )) 秒前）を引き取った" >&2
+            rm -rf "$dir"
           fi
+          rmdir "$take" 2>/dev/null
+        else
+          # 引き取りの途中で落ちた印が残っていたら片付ける（中の仕事は一瞬なので 60 秒で十分）
+          t=$(since_of "$take")
+          if [ -n "$t" ] && [ $(( now - t )) -ge 60 ]; then rmdir "$take" 2>/dev/null; fi
+          sleep 1
         fi
         continue
       fi

@@ -106,14 +106,25 @@ find "$main/server" "$main/shared" -name '*.ts' -newer "$ref"; rm -f "$ref"
 ```sh
 curl -sS -m 10 'http://127.0.0.1:8787/api/sessions?days=7' | python3 -c '
 import json, sys
-d = json.load(sys.stdin)
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print("聞けなかった（立て直さない）"); sys.exit(0)
 agent = {s["id"]: s.get("agent") for s in d["sessions"]}
 for i, r in d.get("replying", {}).items():
-    if agent.get(i) == "codex" and r.get("via") != "terminal" and not r.get("failed"):
-        print("codex 処理中:", i, r.get("since"))'
+    if r.get("via") == "terminal" or r.get("failed"):
+        continue
+    a = agent.get(i)
+    if a == "codex":
+        print("codex 処理中:", i, r.get("since"))
+    elif a is None:
+        print("エージェントが分からない処理中（Codex かもしれない）:", i, r.get("since"))'
 ```
 
-1 行でも出たら**立て直さない**（端末に打ち込んだ Codex のターンは SAI の外で回っているので数えない）。人に頼まれて回しているなら終わるのを待ってから立て直してよいが、**`/merge` の後始末から呼ばれたときは待たない**（マージのターンを Codex の 1 ターンぶん延ばさない）: ビルドまでで止め、「Codex のターンが回っているので立て直していません。終わったら `/sync-main`」と報告する。
+**1 行でも出たら立て直さない**（何も出なかったときだけ進む）。端末に打ち込んだ Codex のターンは SAI の外で回っているので数えない。`replying` は 7 日の窓に絞られないので、窓の外のセッション・まだ行の無い新しいセッションは「分からない」と出る——**分からないものは Codex として扱う**。応答が読めなかったときも立て直さない。
+
+- **`/merge` の後始末から呼ばれたときは待たない**（マージのターンを Codex の 1 ターンぶん延ばさない）: ビルドまでで止め、lock を外して、「Codex のターンが回っているので立て直していません。終わったら `/sync-main`」と報告する
+- 人に頼まれて回しているなら終わるのを待ってよいが、**lock を持ったまま待たない**（0.5 の `release` を先に打つ。持ったままだと、待っている側が 480 秒で諦め、900 秒を過ぎると生きている lock を「落ちたまま」と見て引き取られ、立て直しが重なる）。ターンが終わったら 0.5 から取り直す
 
 `pnpm start:watch`（`node --watch`）で動いていれば自分で再起動するので **C-c は送らない**。`Waiting for graceful termination...` は出るが、**接続を握ったまま試して 1 秒で戻った**（#296 で SIGTERM でも数秒以内に終わるようにした。前の「処理中の返信を待って数十秒」という注記は取り違えで、待っていたのは返信の子ではなく**閉じない接続**。返信の子は detached なので待たれない）。
 

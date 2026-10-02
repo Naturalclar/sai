@@ -1,7 +1,7 @@
 // 「要対応」（#224）に並べるものを組み立てる。DOM に依存しないので todoItems.test.ts を node:test で回す。
 import { stripMarkdown } from './markdown.ts'
 import { replyBlockedReason } from './reply.ts'
-import type { Approval, ApprovalMap, ReplyingMap, SessionSummary } from './types.ts'
+import type { Approval, ApprovalMap, LoopMap, ReplyingMap, SessionSummary } from './types.ts'
 
 /**
  * - `answer`: エージェントが答えを待っていて、SAI がその口を持っている。**この画面から答えられる**
@@ -55,7 +55,7 @@ export interface TodoItem {
  * `selfHost` はこのサーバのマシン名（応答の `host`。#114）。別のマシンのセッションは項目としては出すが
  * （待っていることに変わりはない）、ここからは答えられないので `replyable` は false になる。
  */
-export function todoItems(sessions: readonly SessionSummary[], approvals: ApprovalMap, selfHost: string, replying: ReplyingMap = {}): TodoItem[] {
+export function todoItems(sessions: readonly SessionSummary[], approvals: ApprovalMap, selfHost: string, replying: ReplyingMap = {}, loops: LoopMap = {}): TodoItem[] {
   const byId = new Map(sessions.map((s) => [s.id, s]))
   const out: TodoItem[] = []
   for (const [id, list] of Object.entries(approvals)) {
@@ -75,6 +75,9 @@ export function todoItems(sessions: readonly SessionSummary[], approvals: Approv
     if (!awaitsNext(s)) continue
     const r = replying[s.id]
     if (r && !r.failed) continue
+    // ループ（#634）が次の周を待っている間は「終わって次を待っている」に出さない（次は SAI が起こす）。
+    // 終わった・諦めた・止まった・一時停止したループのセッションは出る（人が結果を見る）
+    if (loops[s.id]?.status === 'running') continue
     // `入力待ち`（端末で放置）はその文言のまま、ターンが終わっただけのものは最後の発言（一言があればそれ）
     // 本文は Markdown のままなので、一覧の 2 行目と同じく記号を落とす（`[#374](https://…)` がそのまま出ていた）
     const text = s.idle || stripMarkdown(s.last_summary || s.last_text || '') || '（本文なし）'

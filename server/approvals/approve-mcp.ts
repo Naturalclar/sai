@@ -15,10 +15,13 @@
 //   SAI_URL         SAI サーバ（http://127.0.0.1:8787）
 //   SAI_ENTITY      返信先のエンティティID（<セッション>@<リポジトリ>）。sai_* では送り元になる
 //   SAI_TOKEN_FILE  エージェント用の口のトークンを置いたファイル。中身は env にも引数にも載せない（ps で見える）
+//   SAI_LOOP        `1` なら、このターンはループの周（#634）。sai_loop_next を出す
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { AGENT_SEND_MAX, tokensLabel } from '../../shared/agentMessages.ts'
+import { LOOP_MAX_INTERVAL_S, LOOP_MIN_INTERVAL_S, LOOP_TOOL } from '../../shared/loops.ts'
+import type { LoopNextResponse } from '../../shared/types.ts'
 import type { AgentSendResponse, AgentSessionEntry, AgentSessionsResponse, AgentWaitResponse, ApprovalAnswer, ApprovalRequest } from '../../shared/types.ts'
 
 export const TOOL_NAME = 'approve'
@@ -26,6 +29,7 @@ export const TOOL_NAME = 'approve'
 const url = process.env.SAI_URL ?? ''
 const entity = process.env.SAI_ENTITY ?? ''
 const tokenFile = process.env.SAI_TOKEN_FILE ?? ''
+const inLoop = process.env.SAI_LOOP === '1'
 /** 繋ぎ直しを続ける長さ（ミリ秒）。テストが短くするためだけの口で、SAI は渡さない（既定は `RECONNECT_MS`） */
 const envReconnectMs = Number(process.env.SAI_APPROVE_RECONNECT_MS) || undefined
 
@@ -61,6 +65,25 @@ export const AGENT_TOOLS = [
     name: 'sai_wait',
     description: 'sai_send で送ったメッセージへの返答（相手のそのターンの最後の発言）を、相手のターンが終わるまで待って受け取る。**その場で答えが要る短い質問のときだけ**使う（着手のような長い依頼は待たずにターンを終える。返答は次のターンの頭に届く）。ここで受け取った返答は次のターンの頭には重ねない。長い返答は途中で切られる',
     inputSchema: { type: 'object', properties: { message_id: { type: 'string', description: 'sai_send が返した message_id' } }, required: ['message_id'] },
+  },
+]
+
+/**
+ * ループの周（#634）でだけ出すツール。エージェントが周の終わりに「次」を言う。上限・目的は動かせない（引数に無い）
+ */
+export const LOOP_TOOLS = [
+  {
+    name: LOOP_TOOL,
+    description: `SAI のループの周の終わりに、必ず 1 回呼ぶ。action は "continue"（まだ続きがある。seconds に次に起きるまでの秒＝${LOOP_MIN_INTERVAL_S}〜${LOOP_MAX_INTERVAL_S} に丸められる。note に次の周への申し送り＝この周でやったこと・次に見ること）／"done"（終わりの条件を満たした。note に確かめた根拠）／"give_up"（進められない・人の判断が要る。note に理由）。呼んだらターンを終える（sleep して待たない。次の周は SAI が起こす）。同じ申し送りが続くと、進んでいないとみなして止められる`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['continue', 'done', 'give_up'] },
+        seconds: { type: 'number', description: '次に起きるまでの秒（continue のとき。省略すると既定の間隔）' },
+        note: { type: 'string', description: '申し送り（continue）／根拠（done）／理由（give_up）' },
+      },
+      required: ['action'],
+    },
   },
 ]
 
@@ -155,6 +178,18 @@ export async function agentTool(
         if (body.status === 'failed') return textResult(`相手のターンが失敗しました: ${body.error ?? ''}`, true)
         return textResult(body.text ?? '')
       }
+    }
+    if (name === LOOP_TOOL) {
+      const action = typeof args.action === 'string' ? args.action : ''
+      const note = typeof args.note === 'string' ? args.note : ''
+      const res = await agentFetch(base, file, '/api/agent/loop', { method: 'POST', body: JSON.stringify({ from, action, note, ...(typeof args.seconds === 'number' ? { seconds: args.seconds } : {}) }) })
+      if (!res.ok) return textResult(`受け付けられませんでした: ${await errorOf(res)}`, true)
+      const body = (await res.json()) as LoopNextResponse
+      if (body.status === 'done') return textResult('ループを終わりにしました（根拠は人の画面に出ます）。このターンを終えてください')
+      if (body.status === 'gave_up') return textResult('ループを止めました（理由は人の画面に出ます）。このターンを終えてください')
+      if (body.status === 'paused') return textResult('申し送りを受け取りました。ループは人が一時停止しているので、再開されるまで次の周は起こされません。このターンを終えてください')
+      if (body.next_in_s === undefined) return textResult(`申し送りを受け取りました。上限の ${body.max_rounds} 周に達したので、次の周は起こされません。このターンを終えてください`)
+      return textResult(`${body.next_in_s} 秒後に次の周（${body.round + 1} / ${body.max_rounds}）を起こします。待たずにこのターンを終えてください`)
     }
     return textResult(`知らないツール: ${name}`, true)
   } catch (err) {
@@ -256,6 +291,8 @@ async function handle(msg: Rpc): Promise<void> {
           },
           // トークンの置き場が無ければ出さない（叩いても断られるツールをモデルに見せない）
           ...(tokenFile ? AGENT_TOOLS : []),
+          // ループの周のターンにだけ（周でないターンで呼んでもサーバが断る）
+          ...(tokenFile && inLoop ? LOOP_TOOLS : []),
         ],
       })
     case 'tools/call': {

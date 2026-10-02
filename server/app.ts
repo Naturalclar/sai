@@ -43,6 +43,9 @@ import type { SessionTurnResponse,
   ReplyError,
   Replying,
   ReplyingMap,
+  LoopNextRequest,
+  LoopNextResponse,
+  LoopResponse,
   ReplyQueueResponse,
   ReplyRequest,
   ReplyResponse,
@@ -135,12 +138,15 @@ import { readMarkOf, rowMs, unreadCounts, unreadFromMark } from '../shared/unrea
 import { SETTINGS_FILE, SettingsStore, nextAskOn } from './meta/settings.ts'
 import type { Settings } from './meta/settings.ts'
 import { isLinearWorkspace } from '../shared/refs.ts'
-import { backgroundSessionCommand, newSessionCommand, ProcessRunner, replyCommand } from './reply/runner.ts'
+import { backgroundSessionCommand, newSessionCommand, ProcessRunner, replyCommand, splitArgs } from './reply/runner.ts'
 import { BackgroundLookupError, ClaudeBackground, type BackgroundSessions } from './reply/claudeBackground.ts'
 import { TURN_USAGE_FILE, TurnUsageLog } from './reply/turnUsage.ts'
 import { QUEUE_FILE, QUEUE_MAX, ReplyQueueStore } from './reply/replyQueue.ts'
 import { AGENT_MESSAGES_FILE, AGENT_TOKEN_FILE, AGENT_TOKEN_HEADER, AgentMessages, ensureAgentToken, tokenMatches } from './reply/agentMessages.ts'
 import type { AgentMessage } from './reply/agentMessages.ts'
+import { LOOP_TICK_MS, LOOPS_FILE, LoopStore } from './reply/loops.ts'
+import { clampInterval, loopAfterRound, loopFromRequest, loopHalt, loopLive, LOOP_NOTE_MAX, loopPrompt, loopPromptLabel } from '../shared/loops.ts'
+import type { LoopState } from '../shared/loops.ts'
 import {
   AGENT_SEND_MAX,
   AGENT_TEXT_MAX_CHARS,
@@ -277,6 +283,10 @@ const AGENT_SESSIONS_PATH = '/api/agent/sessions'
 export const CHANGED_PATHS_TTL_MS = 30_000
 const AGENT_SEND_PATH = '/api/agent/send'
 const AGENT_WAIT_PATH = '/api/agent/wait'
+/** `sai_loop_next`（#634）。エージェントが周の終わりに「次」を言う口 */
+const AGENT_LOOP_PATH = '/api/agent/loop'
+/** 人がループを組む・片付ける（`/loop`）と、止める・再開・いま起こす（#634）。長い方から突き合わせる */
+const LOOP_SUFFIXES = ['/loop/stop', '/loop/resume', '/loop/wake', '/loop'] as const
 /** sai_wait をサーバ側で待つ間、相手の返答の行が届いたかを見る間隔 */
 const AGENT_POLL_MS = 1000
 /** 処理中のターンを止める口（#384）。`POST /api/sessions/<id>/interrupt`。同一オリジンのみ */
@@ -451,6 +461,8 @@ interface LaunchOptions {
   steer?: boolean
   /** 要約してから送る（#579。`ReplyRequest.compact`）。startTurn では「このターンは要約だけ」の印 */
   compact?: boolean
+  /** ループの周として SAI が起こすターン（#634）。MCP に `sai_loop_next` を出す */
+  loop?: boolean
 }
 
 /** 起動の結果。HTTP には書かずに返すので、POST はそのまま応答にし、drain は預かりを止める理由にする */
@@ -507,6 +519,10 @@ export interface TerminalDeps {
   codexImages?: CodexImages
   /** 画像の軽い版を作る口（#589）。テストでは偽の縮める口を渡した Thumbnails か noThumbs */
   thumbs?: ThumbMaker
+  /** ループ（#634）が見る時計。テストでは進める */
+  loopNow?: () => number
+  /** ループを見に行く間隔（既定 `LOOP_TICK_MS`）。テストは 0 にしてタイマーを立てず、ポーリングのついでだけで回す */
+  loopTickMs?: number
 }
 
 export function createApp(
@@ -780,7 +796,8 @@ export function createApp(
     }
     // 画面に出す本文は人が打った文だけ（SAI が頭に足した返答の塊は外す。入力欄への戻し・一覧の 2 行目・↑ の履歴がこれを使う）
     for (const [id, r] of Object.entries(all)) {
-      const plain = splitHandedReplies(r.text).text
+      // ループの周の本文（#634）は長いので、「ループ N 周目」にする
+      const plain = loopPromptLabel(splitHandedReplies(r.text).text)
       if (plain !== r.text) all[id] = { ...r, text: plain }
     }
     return all
@@ -827,6 +844,9 @@ export function createApp(
   const agentToken = ensureAgentToken(agentTokenPath)
   // 送った記録・止めたセッション・1 ターンの回数と量は、立て直しても残す（#440）
   const agents = new AgentMessages(join(store.directory, AGENT_MESSAGES_FILE))
+  // セッションに組んだループ（#634）。立て直しても続くようにファイルにも持つ
+  const loops = new LoopStore(join(store.directory, LOOPS_FILE))
+  const loopNow = terminal.loopNow ?? Date.now
 
   /**
    * 端末で人が答えたぶんの待ちを畳む（#255。#232 の積み残し）。行（集計）は触らず、応答を組み立てる
@@ -1449,6 +1469,8 @@ export function createApp(
     const wantSteer = (body as ReplyRequest).steer === true
     const wantCompact = (body as ReplyRequest).compact === true
     const out = await launch(id, text, attachments, { days, replaceTyped, forceProcess, url: selfUrl(req), queue: wantQueue, steer: wantSteer, ...(wantCompact ? { compact: true } : {}) })
+    // 人が自分で送ったら、そのセッションのループは一時停止する（#634。割り込みを優先。再開は人が押す）
+    if (out.status === 202) await pauseLoop(id, '人がこのセッションに送ったので一時停止しました')
     return json(res, out.body, out.status)
   }
 
@@ -2096,7 +2118,7 @@ export function createApp(
     // このサーバ自身が待ち受けているアドレス（ループバック）。Host だと tailscale serve 経由（https://<host>.ts.net → 127.0.0.1:8787）で
     // 開いた画面からの返信が `http://<host>.ts.net`（80 番、誰も聞いていない）に投げて「SAI に届かない: fetch failed」になる
     // トークンの置き場も渡すと、MCP サーバが別のセッションに話しかけるツール（sai_*）を出す（#310）
-    const via = { url: o.url, entity: id, tokenFile: agentTokenPath }
+    const via = { url: o.url, entity: id, tokenFile: agentTokenPath, ...(o.loop ? { loop: true } : {}) }
     // セッションに返信のモデルが設定されていれば（PUT /api/sessions/<id>/meta の model）それで回す
     // 表示名も渡すと、端末のタイトルと `/resume` のピッカーに SAI と同じ名前が出る（#391）
     const cmd = replyCommand(session.agent, raw, text, cwd, process.env, via, model, own?.permission_mode, attachments, own?.name)
@@ -2174,6 +2196,7 @@ export function createApp(
   const drainAll = async (): Promise<void> => {
     for (const id of queue.ids()) await drain(id)
     await deliverReplies()
+    await tickLoops()
   }
 
   /**
@@ -2358,6 +2381,8 @@ export function createApp(
       return error(res, 409, 'このターンはまだ止められません（起動した直後です）')
     }
     await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} 人が処理中のターンを止めた（#384 / #392 / #386）\n`).catch(() => {})
+    // 止めたターンは失敗にならないので、ループ（#634）が次の周を起こさないようにここで止めておく
+    await pauseLoop(id, '人がターンを止めたので一時停止しました')
     const payload: ReplyQueueResponse = { id, queue: queue.snapshot()[id] ?? { items: [] } }
     return json(res, payload)
   }
@@ -2586,6 +2611,229 @@ export function createApp(
     const { sessions } = await sessionsWithMeta(QUEUE_DAYS)
     const idle: AgentActivity = { stopped: false, sent: 0, limit: AGENT_SEND_MAX, read_tokens: 0, read_budget: AGENT_TURN_READ_BUDGET, recent: [] }
     const payload: AgentStopResponse = { id, agent: (await agentActivityOf(id, sessions)) ?? idle, cancelled }
+    return json(res, payload)
+  }
+
+
+  // ---- ループ（#634）
+
+  const loopLog = (id: string, message: string) => appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} ループ: ${message}\n`).catch(() => {})
+  /** 失敗で一時停止したあと「再開」を押したときの、その失敗（`Replying.since`）。同じ失敗でもう一度止めない */
+  const loopResumedFailure = new Map<string, string>()
+
+  /** 回っているループを一時停止する（人が送った・人がターンを止めた）。回っていなければ何もしない */
+  const pauseLoop = async (id: string, reason: string): Promise<void> => {
+    const l = loops.get(id)
+    if (l?.status !== 'running') return
+    loops.set(id, loopHalt(l, 'paused', `${reason}。続けるなら「再開」`))
+    await loopLog(id, `一時停止（${reason}）`)
+  }
+
+  /**
+   * そのセッションにループを組めない・周を起こせない理由。無ければ空。組むときと、周を起こす直前の両方で見る
+   * （組んだあとに端末で開いた・許可モードを素通しにした、も止める）。
+   *
+   * - **Claude だけ**: エージェントが「次」を言う口（`sai_loop_next`）は SAI が `claude -p` に渡す MCP にしか無い
+   * - **端末で開いているセッションには組まない**: 打ち込む経路には MCP が無く、端末の `/loop` と二重に回るのを見分けられない
+   * - **素通し（`bypassPermissions`）には組まない**: 人が見ていない間に、何も聞かれずに回り続ける。運用者が
+   *   `SAI_CLAUDE_ARGS` で渡しているときも同じ
+   */
+  const loopRefusal = async (session: SessionSummary): Promise<string> => {
+    if (session.archived) return 'アーカイブ済みのセッションにはループを組めません'
+    const blocked = replyBlockedReason(session, selfHost())
+    if (blocked) return blocked
+    if (session.agent !== 'claude') return 'ループを組めるのは、いまは Claude のセッションだけです'
+    const extra = splitArgs(process.env.SAI_CLAUDE_ARGS)
+    if (process.env.SAI_APPROVE === '0' || extra.includes('--permission-prompt-tool')) return 'SAI の MCP を渡していない（SAI_APPROVE=0 など）ので、エージェントが次を言う口がありません'
+    const mode = (await metaStore.get(session.id))?.permission_mode
+    if (mode === 'bypassPermissions' || extra.includes('bypassPermissions') || extra.includes('--dangerously-skip-permissions')) return '許可を聞かないモード（Bypass permissions）のセッションにはループを組めません'
+    if (await terminalOf(session)) return '端末で開いているセッションにはループを組めません（端末の /loop と二重に回るのを避けるため）'
+    return ''
+  }
+
+  /**
+   * ループを 1 つ進める。周のターンが終わっていれば次の時刻を決め（`loopAfterRound()`）、時刻が来ていれば次の周を起こす。
+   *
+   * - 起こす経路は返信と同じ `launch()`（`replyBlockedReason()`・モデル・許可モードはそのまま。**SAI は権限のフラグを足さず、
+   *   許可も自動で返さない**）。許可・質問で止まっている間はターンが回っているので、次の周は起こさない
+   * - **周を送る前に「送った」を書く**（`turn: 'pending'`）。そのまま落ちても、立て直したあとは「その周は終わった」として
+   *   次の時刻を待つので、同じ周を 2 回は送らない
+   * - 前のターンが回っている・預かりが残っている間は待つ。周のターンが失敗したら止める
+   * - 止める歯止め: 終わりの時刻・周の上限・使用量の枠（`usageRefusal()`）・申し送りが変わらない（`loopAfterRound()`）
+   */
+  const tickLoop = async (id: string): Promise<void> => {
+    const l = loops.get(id)
+    if (!l) return
+    const now = loopNow()
+    const halt = async (state: LoopState, status: Exclude<LoopState['status'], 'running'>, reason: string) => {
+      loops.set(id, loopHalt(state, status, reason))
+      await loopLog(id, `${status}（${reason}）`)
+    }
+    if (l.turn) {
+      if (run.running(id) || launching.has(id)) return
+      const r = run.snapshot()[id]
+      if (r?.failed && (l.turn === 'pending' || r.since === l.turn)) return halt(l, 'stopped', `${l.round} 周目のターンが失敗しました（${replyFailureText(r.failed)}）`)
+      const next = loopAfterRound(l, now)
+      loops.set(id, next)
+      await loopLog(id, `${l.round} 周目が終わった（${next.status}${next.next_at ? `。次は ${next.next_at}` : ''}${next.reason ? `。${next.reason}` : ''}）`)
+      return
+    }
+    if (l.status !== 'running' || !l.next_at || Date.parse(l.next_at) > now) return
+    if (now >= Date.parse(l.deadline)) return halt(l, 'stopped', '終わりの時刻になりました')
+    if (l.round >= l.max_rounds) return halt(l, 'stopped', `上限の ${l.max_rounds} 周を回りました`)
+    if (run.running(id) || codexApp.running(id) || opencodeApp.running(id) || typed.running(id) || launching.has(id) || queue.size(id) > 0) return
+    const failed = failedReply(id)
+    if (failed && loopResumedFailure.get(id) !== failed.since) return halt(l, 'paused', '前の返信が失敗しています。確かめてから「再開」してください')
+    const { sessions } = await sessionsWithMeta(QUEUE_DAYS)
+    const session = sessions.find((s) => s.id === id)
+    if (!session) return halt(l, 'paused', 'セッションが記録の窓に見つかりません')
+    const refusal = await loopRefusal(session)
+    if (refusal) return halt(l, 'paused', refusal)
+    const over = usageRefusal(await usageStore.get(), session.agent)
+    if (over) return halt(l, 'stopped', over)
+    const { next_at: _next, said: _said, ...rest } = l
+    const sending: LoopState = { ...rest, round: l.round + 1, turn: 'pending' }
+    loops.set(id, sending)
+    const out = await launch(id, loopPrompt(sending, now), [], { days: QUEUE_DAYS, replaceTyped: false, forceProcess: true, url: l.url ?? '', queue: false, loop: true })
+    // その間に人が止めた・片付けたなら、そちらを残す
+    const cur = loops.get(id)
+    if (!cur || cur.turn !== 'pending') return
+    if (out.status === 202) {
+      loops.set(id, { ...cur, turn: run.snapshot()[id]?.since ?? 'pending' })
+      await loopLog(id, `${sending.round} 周目を起こした`)
+      return
+    }
+    // `claude --bg` のターンを待っている（#462）。止めずに、次に見に来たときにもう一度
+    if (out.retry) {
+      loops.set(id, l)
+      return
+    }
+    await halt(l, 'paused', `${sending.round} 周目を起こせませんでした: ${(out.body as ReplyError).error}`)
+  }
+
+  let loopTicking = false
+  let loopTimer: ReturnType<typeof setInterval> | undefined
+  const loopTickMs = terminal.loopTickMs ?? LOOP_TICK_MS
+  /** 見に行く相手がいる間だけタイマーを立てる（画面を開いていなくても回るように。プロセスは引き留めない） */
+  const syncLoopTimer = (): void => {
+    const want = loopTickMs > 0 && loops.active().length > 0
+    if (want && !loopTimer) {
+      loopTimer = setInterval(() => void tickLoops().catch(() => {}), loopTickMs)
+      loopTimer.unref()
+    } else if (!want && loopTimer) {
+      clearInterval(loopTimer)
+      loopTimer = undefined
+    }
+  }
+  /** 組んであるループを全部見る。タイマーと、画面のポーリングのついでに呼ぶ（重なっても 1 本だけ） */
+  const tickLoops = async (): Promise<void> => {
+    if (loopTicking) return
+    loopTicking = true
+    try {
+      for (const [id] of loops.active()) await tickLoop(id)
+    } finally {
+      loopTicking = false
+      syncLoopTimer()
+    }
+  }
+  syncLoopTimer()
+
+  /**
+   * 人がループを組む・止める・再開する・いま起こす・片付ける（#634）。**同一オリジンのみ**（返信と同じ理由。組むと CLI を起こす）。
+   * `cwd` もパスも受けない（周は返信と同じ経路で、セッションの行から起こす）
+   */
+  const loopAction = async (req: IncomingMessage, res: ServerResponse, id: string, suffix: (typeof LOOP_SUFFIXES)[number]) => {
+    if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
+    const method = req.method ?? 'GET'
+    const cur = loops.get(id)
+    const at = new Date(loopNow()).toISOString()
+    if (suffix === '/loop') {
+      if (method === 'DELETE') {
+        if (!loops.delete(id)) return error(res, 404, 'このセッションにループは組まれていません')
+        await loopLog(id, '人が片付けた')
+      } else {
+        if (method !== 'POST') return error(res, 405, 'method not allowed')
+        if (cur && loopLive(cur.status)) return error(res, 409, 'もうループが組まれています。止めてから組み直してください')
+        let body: unknown
+        try {
+          body = await readJson(req, MAX_REPLY_BYTES)
+        } catch (err) {
+          return error(res, 400, err instanceof Error ? err.message : 'bad body')
+        }
+        const made = loopFromRequest(body, loopNow())
+        if ('error' in made) return error(res, 400, made.error)
+        const { sessions } = await sessionsWithMeta(QUEUE_DAYS)
+        const session = sessions.find((s) => s.id === id)
+        if (!session) return error(res, 404, 'session not found in window')
+        const refusal = await loopRefusal(session)
+        if (refusal) return error(res, 400, refusal)
+        loops.set(id, { ...made.loop, url: selfUrl(req) })
+        await loopLog(id, `人が組んだ（上限 ${made.loop.max_rounds} 周・${made.loop.deadline} まで・既定の間隔 ${made.loop.interval_s} 秒）`)
+        await tickLoops()
+      }
+    } else {
+      if (method !== 'POST') return error(res, 405, 'method not allowed')
+      if (!cur) return error(res, 404, 'このセッションにループは組まれていません')
+      if (suffix === '/loop/stop') {
+        if (!loopLive(cur.status)) return error(res, 409, 'このループはもう終わっています')
+        // 回っている周のターンは止めない（止めるのは見出しの「止める」）。次の周を起こさないだけ
+        loops.set(id, loopHalt(cur, 'stopped', '人が止めました'))
+        await loopLog(id, '人が止めた')
+      } else if (suffix === '/loop/resume') {
+        if (cur.status !== 'paused') return error(res, 409, '一時停止しているループだけ再開できます')
+        const failed = failedReply(id)
+        if (failed) loopResumedFailure.set(id, failed.since)
+        const { reason: _reason, ...rest } = cur
+        loops.set(id, { ...rest, status: 'running', stalled: 0, url: selfUrl(req), ...(cur.turn ? {} : { next_at: at }) })
+        await loopLog(id, '人が再開した')
+        await tickLoops()
+      } else {
+        if (cur.status !== 'running' || cur.turn) return error(res, 409, 'いま起こせるのは、次の周を待っているループだけです')
+        loops.set(id, { ...cur, next_at: at })
+        await loopLog(id, '人がいま起こした')
+        await tickLoops()
+      }
+    }
+    syncLoopTimer()
+    const payload: LoopResponse = { id, loop: loops.snapshot()[id] ?? null }
+    return json(res, payload)
+  }
+
+  /**
+   * `POST /api/agent/loop`（`sai_loop_next`。#634）。エージェントが周の終わりに「続ける（何秒後・申し送り）／終わり／諦める」を言う。
+   * **動かせるのは、自分に組まれたループの、いま回っている周だけ**（送り元は `agentFrom()`＝SAI が起こしていま回しているターン。
+   * 別のセッションのループ・周でないターン・上限・目的は動かせない）。間隔は SAI が丸める
+   */
+  const agentLoopNext = async (req: IncomingMessage, res: ServerResponse) => {
+    const refusal = agentRefusal(req)
+    if (refusal) return error(res, 403, refusal)
+    let body: unknown
+    try {
+      body = await readJson(req, MAX_REPLY_BYTES)
+    } catch (err) {
+      return error(res, 400, err instanceof Error ? err.message : 'bad body')
+    }
+    const b = (body ?? {}) as Partial<LoopNextRequest>
+    const found = await agentFrom(b.from)
+    if (typeof found === 'string') return error(res, 409, found)
+    const id = found.session.id
+    const l = loops.get(id)
+    if (!l || !l.turn || (l.turn !== 'pending' && l.turn !== found.turn)) return error(res, 409, 'このターンはループの周ではありません（動かせるのは、自分に組まれたループの、いま回っている周だけです）')
+    const note = typeof b.note === 'string' ? b.note.trim() : ''
+    if (note.length > LOOP_NOTE_MAX) return error(res, 400, `note は ${LOOP_NOTE_MAX} 字までです。短くまとめてください`)
+    if (b.action === 'continue') {
+      const seconds = clampInterval(b.seconds, l.interval_s)
+      loops.set(id, { ...l, said: { seconds, note } })
+      await loopLog(id, `${l.round} 周目: 続ける（${seconds} 秒後）`)
+      const payload: LoopNextResponse = { status: l.status, round: l.round, max_rounds: l.max_rounds, ...(l.round < l.max_rounds ? { next_in_s: seconds } : {}) }
+      return json(res, payload)
+    }
+    if (b.action !== 'done' && b.action !== 'give_up') return error(res, 400, 'action は continue / done / give_up のどれかです')
+    if (!note) return error(res, 400, b.action === 'done' ? 'note に、終わりの条件を満たした根拠を書いてください' : 'note に、進められない理由を書いてください')
+    const status = b.action === 'done' ? 'done' : 'gave_up'
+    loops.set(id, loopHalt(l, status, note))
+    await loopLog(id, `${l.round} 周目: ${status}`)
+    const payload: LoopNextResponse = { status, round: l.round, max_rounds: l.max_rounds }
     return json(res, payload)
   }
 
@@ -3321,6 +3569,7 @@ export function createApp(
    */
   const dispose = (): void => {
     opencodeApp.stop()
+    if (loopTimer) clearInterval(loopTimer)
   }
 
   const handler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
@@ -3359,6 +3608,8 @@ export function createApp(
     const isAgentStop = path.startsWith(SESSIONS_PREFIX) && (path.endsWith(AGENT_STOP_SUFFIX) || path.endsWith(AGENT_RESUME_SUFFIX))
     // 処理中のターンを止める（#384）。画面から叩くので同一オリジンで受ける
     const isInterrupt = path.startsWith(SESSIONS_PREFIX) && path.endsWith(INTERRUPT_SUFFIX)
+    // ループを組む・止める・再開・いま起こす・片付ける（#634）。画面から叩くので同一オリジンで受ける
+    const loopSuffix = path.startsWith(SESSIONS_PREFIX) ? LOOP_SUFFIXES.find((sfx) => path.endsWith(sfx)) : undefined
     const isAsk = path === APPROVALS_PATH
     const isAnswer = path.startsWith(APPROVALS_PREFIX) && path.endsWith(ANSWER_SUFFIX)
     const isProfile = path === PROFILE_PATH
@@ -3384,8 +3635,8 @@ export function createApp(
     // 「設定は PUT」「預かった返信の再開は POST、取り消しは DELETE」だけ。それ以外は GET / HEAD のみ
     const writable =
       (method === 'POST' &&
-        (isNewSession || isReply || isReview || isPrReview || isAsk || isAnswer || isAttachUpload || isQueue || isDigestFeedback || isSuggestion || path === AGENT_SEND_PATH || isAgentStop || isInterrupt)) ||
-      (method === 'DELETE' && (isQueue || isHistoryIcon)) ||
+        (isNewSession || isReply || isReview || isPrReview || isAsk || isAnswer || isAttachUpload || isQueue || isDigestFeedback || isSuggestion || path === AGENT_SEND_PATH || path === AGENT_LOOP_PATH || isAgentStop || isInterrupt || loopSuffix !== undefined)) ||
+      (method === 'DELETE' && (isQueue || isHistoryIcon || loopSuffix === '/loop')) ||
       (method === 'PUT' && (isMeta || isRead || isProfile || isSettings)) ||
       ((method === 'PUT' || method === 'DELETE') && (isIcon || isProfileIcon))
     if (!writable && method !== 'GET' && method !== 'HEAD') return error(res, 405, 'method not allowed')
@@ -3403,7 +3654,16 @@ export function createApp(
         if (id === null) return error(res, 400, 'bad session id')
         return await agentStop(req, res, id, stop)
       }
+      if (loopSuffix !== undefined) {
+        const id = sessionIdFrom(path, loopSuffix)
+        if (id === null) return error(res, 400, 'bad session id')
+        return await loopAction(req, res, id, loopSuffix)
+      }
       if (isAgent) {
+        if (path === AGENT_LOOP_PATH) {
+          if (method !== 'POST') return error(res, 405, 'method not allowed')
+          return await agentLoopNext(req, res)
+        }
         if (path === AGENT_SEND_PATH) {
           if (method !== 'POST') return error(res, 405, 'method not allowed')
           return await agentSend(req, res)
@@ -3749,7 +4009,7 @@ export function createApp(
         const hooks_missing = (localClaude && claudeHooks.missing()) || []
         const body: SessionsResponse = {
           // 足りないフックは rev に混ぜる（設定を直したら、次の行を待たずにバナーが消える）
-          rev: revWith(rev, replying, approvalMapKey(pendingApprovals), build_stale, digest.revKey(), queue.key()) + (hooks_missing.length ? `~hooks:${hooks_missing.join(',')}` : ''),
+          rev: revWith(rev, replying, approvalMapKey(pendingApprovals), build_stale, digest.revKey(), `${queue.key()}|${loops.key()}`) + (hooks_missing.length ? `~hooks:${hooks_missing.join(',')}` : ''),
           days,
           total: pool.length,
           sessions: withLastSummary(
@@ -3765,6 +4025,7 @@ export function createApp(
           filters: facets(pool),
           replying,
           queued: queue.snapshot(),
+          loops: loops.snapshot(),
           approvals: pendingApprovals,
           build_stale,
           record_version,
@@ -3814,13 +4075,14 @@ export function createApp(
         // いまのコンテキスト量（#441）。(mtime, size) で覚えているので読み直しは軽い。rev には丸めた値だけ混ぜる
         const context = isRemoteHost(session.host, selfHost()) ? 0 : (await progress.read(session)).context_tokens
         const body: SessionDetailResponse = {
-          rev: revWith(`${sessionsRev}~${me.rev}~${settled}~${terminalKey(sessions)}~${question?.asked_at ?? ''}~${bg ? `${bg.attach}:${bg.status}` : ''}~${contextRevKey(context)}~${replies.map((r) => r.agent_reply?.message_id).join(',')}`, replying, approvalMapKey(pendingApprovals), false, `${digest.revKey()}|${usage.rev()}`, `${queue.key()}|${agents.key()}`),
+          rev: revWith(`${sessionsRev}~${me.rev}~${settled}~${terminalKey(sessions)}~${question?.asked_at ?? ''}~${bg ? `${bg.attach}:${bg.status}` : ''}~${contextRevKey(context)}~${replies.map((r) => r.agent_reply?.message_id).join(',')}`, replying, approvalMapKey(pendingApprovals), false, `${digest.revKey()}|${usage.rev()}`, `${queue.key()}|${agents.key()}|${loops.key()}`),
           session: withLastSummary([session])[0]!,
           rows,
           older,
           older_prompts: olderPrompts(dropped),
           replying,
           queued: queue.snapshot(),
+          loops: loops.snapshot(),
           ...(activity ? { agent: activity } : {}),
           approvals: pendingApprovals,
           profile: me.profile,

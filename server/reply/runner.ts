@@ -81,6 +81,8 @@ export interface ApproveVia {
    * **中身ではなく場所を渡す**（`--mcp-config` は引数なので ps で見える）
    */
   tokenFile?: string
+  /** ループの周として起こすターン（#634）。MCP サーバが `sai_loop_next` を出す（周でないターンには見せない） */
+  loop?: boolean
 }
 
 /** `--mcp-config` に渡す JSON 文字列。子は node で approve-mcp.ts を直接実行する（サーバ本体と同じ型剥がし） */
@@ -91,7 +93,7 @@ export function approveMcpConfig(via: ApproveVia, execPath: string = process.exe
         type: 'stdio',
         command: execPath,
         args: ['--disable-warning=ExperimentalWarning', mcpPath],
-        env: { SAI_URL: via.url, SAI_ENTITY: via.entity, ...(via.tokenFile ? { SAI_TOKEN_FILE: via.tokenFile } : {}) },
+        env: { SAI_URL: via.url, SAI_ENTITY: via.entity, ...(via.tokenFile ? { SAI_TOKEN_FILE: via.tokenFile } : {}), ...(via.loop ? { SAI_LOOP: '1' } : {}) },
       },
     },
   })

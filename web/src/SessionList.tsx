@@ -51,7 +51,7 @@ export function SessionList({ list, filters, setFilters, active, creating = fals
   const sessions = data?.sessions ?? []
   // バッジの数は要対応の画面と必ず同じ引数で数える（replying を渡し忘れると件数だけずれる。#232）。
   // **`done`（終わって次を待っているだけ）は数えない**（#438。要対応の下段には出る）
-  const todo = data ? pendingItems(todoItems(data.sessions, data.approvals, data.host, data.replying)).length : 0
+  const todo = data ? pendingItems(todoItems(data.sessions, data.approvals, data.host, data.replying, data.loops)).length : 0
 
   // タッチ端末では項目を左にスワイプしてアーカイブを出す。開いている項目は 1 つだけ
   const swipe = useMediaQuery('(hover: none) and (pointer: coarse)')
@@ -150,6 +150,7 @@ export function SessionList({ list, filters, setFilters, active, creating = fals
                     open={openId === s.id}
                     onOpenChange={(open) => setOpenId(open ? s.id : openId === s.id ? null : openId)}
                     pr={prForSession(s, prs)?.pr ?? null}
+                    loop={data?.loops[s.id] ?? null}
                   />
                 ))}
             </div>

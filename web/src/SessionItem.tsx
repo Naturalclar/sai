@@ -1,6 +1,8 @@
 import { useEffect, useRef } from 'react'
 import type { MouseEvent } from 'react'
 import type { Approval, Profile, Replying, SessionSummary } from './api'
+import type { Loop } from '../../shared/types.ts'
+import { LoopTag } from './LoopTag'
 import { hm, md } from './format'
 import { SynthTag } from './SynthTag'
 import { HostTag } from './HostTag'
@@ -45,6 +47,8 @@ interface Props {
   onOpenChange: (open: boolean) => void
   /** このセッションのブランチから出ている open な PR（#548。`prForSession()`）。無ければ印を出さない */
   pr?: PrSummary | null
+  /** このセッションに組んであるループ（#634）。回っている・一時停止のあいだだけ印を出す */
+  loop?: Loop | null
 }
 
 /**
@@ -52,7 +56,7 @@ interface Props {
  * （<a> の中に <button> は置けない。押してもページを動かさない）。
  * タッチ端末では <a> を左にずらして、下のレール（アーカイブ / 戻す）を見せる
  */
-export function SessionItem({ s, active, replying, profile, approval, now, swipe, reduced, selfHost, open, onOpenChange, pr = null }: Props) {
+export function SessionItem({ s, active, replying, profile, approval, now, swipe, reduced, selfHost, open, onOpenChange, pr = null, loop = null }: Props) {
   // 選ばれたら見えるところまでサイドバーをスクロールする（キーボードで移動したとき用。見えていれば動かない）
   const ref = useRef<HTMLAnchorElement>(null)
   useEffect(() => {
@@ -136,6 +140,7 @@ export function SessionItem({ s, active, replying, profile, approval, now, swipe
           {s.waiting && <WaitingTag text={s.waiting} />}
           {!s.waiting && approval && <WaitingTag text={approval.text} />}
           {replying && <ReplyingTag since={replying.since} now={now} />}
+          {loop && <LoopTag loop={loop} now={now} />}
           {/* ターン完了の行が落ちた（#614。見出しと同じ `stop_missing`） */}
           {s.stop_missing && !replying && <StopMissingTag />}
           {!!s.unread && <UnreadTag n={s.unread} />}

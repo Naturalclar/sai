@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import type { Approval, ApprovalMap, ReplyingMap, SessionSummary } from './types.ts'
+import type { Approval, ApprovalMap, Loop, LoopMap, ReplyingMap, SessionSummary } from './types.ts'
 import { awaitsNext, doneItems, pendingItems, todoItems, todoSections } from './todoItems.ts'
 
 /** このサーバが動いているマシン（#114）。行の host が違えば「別のマシン」 */
@@ -274,6 +274,15 @@ test('todoItems: 返信が処理中なら、端末に打ち込んだものでも
   assert.deepEqual(todoItems([s], {}, SELF, terminal), [])
   const failed: ReplyingMap = { 's1@sai': { text: '次', since: '2026-09-02T10:11:00+09:00', failed: { code: 1, tail: 'x' } } }
   assert.deepEqual(todoItems([s], {}, SELF, failed).map((t) => t.kind), ['done'], '失敗して残っているものは「動いている」ではない')
+})
+
+test('todoItems: ループ（#634）が次の周を待っている間は done にしない。終わった・止まった・一時停止なら出す', () => {
+  const s = summary({ end: END, last_turn_ts: END, last_kind: 'turn' as const })
+  const loop = (status: Loop['status']): LoopMap => ({ 's1@sai': { goal: 'g', until: 'u', max_rounds: 10, deadline: END, interval_s: 600, status, round: 2, since: END } })
+  assert.deepEqual(todoItems([s], {}, SELF, {}, loop('running')), [])
+  for (const status of ['paused', 'done', 'gave_up', 'stopped'] as const) assert.deepEqual(todoItems([s], {}, SELF, {}, loop(status)).map((t) => t.kind), ['done'], status)
+  // 待ち（watch）はループ中でも出す
+  assert.deepEqual(todoItems([summary({ end: END, last_kind: 'waiting', waiting: '許可待ち: Bash: ls' })], {}, SELF, {}, loop('running')).map((t) => t.kind), ['watch'])
 })
 
 test('todoItems: done は終わった時刻の古い順（待たせている順）', () => {

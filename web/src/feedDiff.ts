@@ -62,14 +62,15 @@ export interface OpenDiff {
 /**
  * いま差分を出すエンティティID（出さなければ null）。
  *
- * - そのセッションを開いていれば、どこから開いたものでも出す
+ * - そのセッションを開いていれば、どこから開いたものでも出す。並べているとき（#633）は、並びのどのペインに出ていてもよい
+ *   （`shown`。**フォーカスを移しても差分は付いていかない**）
  * - フィードから開いたものは、フィードにいる間も出す。**セッションで開いたものはフィードでは出さない**（今までどおり）
  * - 別のセッションへ移っている間は出さない（閉じるまで覚えておき、戻ってくれば出る）
  * - 狭い画面の `#/` は一覧だけでフィードが見えていないので、モーダルを重ねない
  */
-export function visibleDiff(diff: OpenDiff | null, route: { name: string; id?: string }, narrow: boolean): string | null {
+export function visibleDiff(diff: OpenDiff | null, route: { name: string; id?: string }, narrow: boolean, shown: readonly string[] = []): string | null {
   if (!diff) return null
-  if (route.name === 'session') return route.id === diff.id ? diff.id : null
+  if (route.name === 'session') return route.id === diff.id || shown.includes(diff.id) ? diff.id : null
   if (diff.origin !== 'feed') return null
   return route.name === 'feed' || (route.name === 'list' && !narrow) ? diff.id : null
 }

@@ -10,6 +10,16 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - ルーティングは hash（`#/` と `#/feed` がフィード、`#/todo` が要対応、`#/s/<id>` がセッション）。広い画面では `#/` と `#/feed` は同じ表示で、狭い画面だけ `#/` が一覧のみになる。切り替えは CSS の `main.route-*`。
 - route の `ts` / `side`（検索・発言のリンクの飛び先）は `parseRoute` / `sessionHash`（`hooks.test.ts`）。
 
+### セッションを横に並べる（#633）
+
+- 並びの形と動かし方は `web/src/paneLayout.ts` の純粋関数（`paneLayout.test.ts`）。`PaneLayout` は **列の配列で、各列が上から下への配列**（いまはどの列も 1 つ。上下を足すための形）と `focus`（フォーカスのある列）、`keys`（列ごとの番号）。要素は種類つき（`session` / `todo`）で、上限は `MAX_COLUMNS` の 1 つ。
+- 持つのは `App.tsx`（`useLocalState('sai.panes')`。読んだものは毎回 `normalizeLayout()` を通す）。**URL はフォーカスのあるペインの 1 つを指し、`parseRoute()` は変えていない。**
+- URL → 並びは `placeItem()`。**route が変わったときだけ**描画中に合わせる（`placed` に前の route を覚える。effect の中で setState しない）。並び → URL は、操作（`openBeside()` / `focusColumn()` / `closeColumn()`）のあとに `location.hash` を書く。
+- 「いま開いているセッション」は `currentId`（route がセッションのとき、並びのフォーカスの ID）。題名・差分・`SessionView` の `focused` はこれを見る。**`route.id` を直接見るのは `focusTs` / `focusSide`（発言への飛び先）だけ。**
+- 描くのは `.panes` の中の `ChatPane`（`.pane`）で、並べているときだけ `.panes.split`。`ChatPane` の key は並びが持つ列の番号（`PaneLayout.keys`。列の位置ではない）: 中身を入れ替えても番号は変わらず（1 つのときは今までどおり同じ `SessionView` が `id` だけ変わる）、左を閉じた・間に足したときも残った列の番号は動かない。× は見出しでなく `ChatPane` に置く（読み込み中・取得に失敗したペインも閉じられる）。
+- `→` の当て先は `.pane.focused .reply textarea`。ヘッダの取得状況（`onStatus`）はフォーカスのあるペインにだけ本物を渡す。
+- 差分は `visibleDiff()` の第 4 引数に並んでいる ID を渡す（並びのどれかなら出したまま）。モーダルに落とす境目は `diffModalBelow()`（差分の幅 `clamp(360px, 38vw, 760px)` を解く。**CSS の値を変えたらここも直す**）。
+
 ## データ取得（usePolling）
 
 - `hooks.ts` の `usePolling` がデータ取得の中心で、`rev` が変わらない限り state を触らず、タブが隠れている間は止まる。

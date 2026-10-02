@@ -66,9 +66,14 @@ export interface DiffProps {
   diffOpen: boolean
   /** 差分へのコメント（#511）を返信欄に入れる頼み。`seq` が増えたときだけ入る */
   insert?: RestoreRequest
+  /**
+   * フォーカスのあるペインか（#633。省くと true）。許可の ⌘Enter を受けるのはフォーカスのあるペインだけ
+   * （同じ形の許可が 2 つのペインに出ていても、押した 1 回で両方を通さない）
+   */
+  focused?: boolean
 }
 
-export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSidebar, onToggleDiff, diffOpen, insert, onLeaveToSidebar, linear, settings, peers }: { id: string; focusTs?: string; focusSide?: MessageSide; peers?: readonly SessionSummary[] | undefined } & PaneProps & DiffProps) {
+export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSidebar, onToggleDiff, diffOpen, insert, focused = true, onLeaveToSidebar, linear, settings, peers }: { id: string; focusTs?: string; focusSide?: MessageSide; peers?: readonly SessionSummary[] | undefined } & PaneProps & DiffProps) {
   // 描く行は直近 RECENT_DAYS 日から（#477）。「前の 7 日を表示」で広げ、別のセッションに移ったら戻す（描画中に導く）
   const [wide, setWide] = useState({ id, days: RECENT_DAYS })
   const recent = wide.id === id ? wide.days : RECENT_DAYS
@@ -282,7 +287,7 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
                 </PendingBubble>
               )}
               {approvals.map((a, i) => (
-                <ApprovalBubble key={a.approval_id} approval={a} now={now} hotkey={i === 0} modeNote={launchedModeNote(data.replying[id], data.session.meta?.permission_mode)} />
+                <ApprovalBubble key={a.approval_id} approval={a} now={now} hotkey={i === 0 && focused} modeNote={launchedModeNote(data.replying[id], data.session.meta?.permission_mode)} />
               ))}
               {queuedHere?.items.map((q, i) => (
                 <QueuedBubble key={q.queue_id} id={id} item={q} order={i + 1} paused={queuedHere.paused ?? ''} now={now} profile={data.profile} />

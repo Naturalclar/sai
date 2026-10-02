@@ -217,6 +217,17 @@
      モバイルではページ全体が縮小されて文字が極端に小さくなる */
   .pane { min-height: 0; min-width: 0; display: flex; flex-direction: column; padding: 12px 18px 14px; }
   .pane > section { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  /* チャットの領域（#633）。ふだんは .pane が 1 枚で、並べているとき（.split）だけ等分の列になる */
+  .panes { min-height: 0; min-width: 0; display: grid; grid-template-rows: minmax(0, 1fr); grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); }
+  /* 送り先を取り違えないよう、フォーカスのあるペインの上の辺に色を付け、無い方は見出しを少し薄くする */
+  .panes.split .pane { position: relative; box-shadow: inset 0 2px 0 transparent; }
+  .panes.split .pane + .pane { border-left: 1px solid var(--line); }
+  .panes.split .pane.focused { box-shadow: inset 0 2px 0 var(--accent); }
+  .panes.split .pane:not(.focused) .chat-head { opacity: .6; }
+  /* × の分だけ見出しの右を空ける（見出しの操作と重ねない） */
+  .panes.split .chat-head { padding-right: 30px; }
+  .pane-close { position: absolute; top: 8px; right: 10px; z-index: 2; }
+  .pane-close:hover { color: var(--ink); }
   .back { display: none; margin-bottom: 8px; color: var(--muted); }
   /* サイドバーを閉じたとき。列の幅を 0 に遷移させる（display: none は遷移できない）。
      閉じ切ったら visibility を hidden にして、見えない一覧にフォーカスが移らないようにする
@@ -409,6 +420,10 @@
   .todo .group.approval .msg .time { display: none; }
   .channels .archive-btn { position: absolute; top: 4px; right: 6px; z-index: 1; opacity: 0; background: var(--panel); border: 1px solid var(--line); }
   .channels .archive-btn:hover { border-color: var(--muted); }
+  /* 横に並べて開く（#633）。アーカイブの左に並べる。出し方はアーカイブと同じ（乗せたときだけ） */
+  .channels .split-btn { position: absolute; top: 4px; right: 38px; z-index: 1; opacity: 0; background: var(--panel); border: 1px solid var(--line); }
+  .channels .split-btn:hover { border-color: var(--muted); color: var(--ink); }
+  .channels .item:hover .split-btn, .channels .item:focus-within .split-btn { opacity: 1; }
   .channels .archive-btn:disabled { background: var(--panel); }
   .channels .archive-btn.error { color: var(--claude); border-color: var(--claude); opacity: 1; }
   .channels .item:hover .archive-btn, .channels .item:focus-within .archive-btn { opacity: 1; }
@@ -433,6 +448,8 @@
     .msg .time { opacity: 1; }
   }
   .channels .item.active { background: color-mix(in srgb, var(--accent) 10%, transparent); box-shadow: inset 3px 0 var(--accent); }
+  /* フォーカスの無い方のペインに出ているセッション（#633）。選ばれている項目より薄い線だけ */
+  .channels .item.beside { box-shadow: inset 3px 0 color-mix(in srgb, var(--accent) 40%, transparent); }
   .channels .item.feed .t { font-weight: 600; }
   .channels .item.archived { opacity: .6; }
   .channels .head { padding: 6px 12px; font-size: 11px; color: var(--muted); background: var(--bg); border-bottom: 1px solid var(--line); }
@@ -460,6 +477,8 @@
     /* 「閉じた」を無視して、#/ では一覧を必ず出す */
     main.layout.route-list .sidebar { display: block; visibility: visible; }
     main.route-list .pane { display: none; }
+    /* 空の箱が行を 1 つ取って、一覧の高さを分け合わないように箱ごと消す（#633） */
+    main.route-list .panes { display: none; }
     .sidebar { box-shadow: none; }
     .side-inner { width: auto; }
     .back { display: inline-block; }

@@ -130,6 +130,13 @@ test('visibleDiff: フィードから開いたものは、フィードとその�
   assert.equal(visibleDiff(d, { name: 'todo' }, false), null)
 })
 
+test('visibleDiff: 並べているとき（#633）は、フォーカスの無い方のペインのセッションの差分も出したまま', () => {
+  const d = { id: 's1@sai', origin: 'session' as const }
+  assert.equal(visibleDiff(d, { name: 'session', id: 's2@sai' }, false, ['s1@sai', 's2@sai']), 's1@sai', 'フォーカスを s2 に移しても付いていかない')
+  assert.equal(visibleDiff(d, { name: 'session', id: 's2@sai' }, false, ['s2@sai', 's3@sai']), null, '並びから外れたら出さない')
+  assert.equal(visibleDiff(d, { name: 'feed' }, false, ['s1@sai']), null, '全幅のフィードでは今までどおり出さない')
+})
+
 test('nextDiff: 出ているものを押すと閉じる。覚えているだけで出ていないものを押すと開く', () => {
   assert.equal(nextDiff('s1@sai', 's1@sai', 'feed'), null)
   assert.deepEqual(nextDiff(null, 's1@sai', 'feed'), { id: 's1@sai', origin: 'feed' })

@@ -2503,7 +2503,10 @@ export function createApp(
     if (typeof found === 'string') return error(res, 409, found)
     // 宛先は id か呼び名（#625）。引くのは送ってよい相手の中からだけで、ちょうど 1 つに決まらなければ送らない
     const asked = typeof b.to === 'string' ? b.to : ''
-    const resolved = resolveTarget(agentTargets(found.sessions, found.session, selfHost()), asked)
+    const targets = agentTargets(found.sessions, found.session, selfHost())
+    // 同じ project に居るが送れないセッション（別のマシンなど）。同じ名前がそこにも居れば、名前では当てない
+    const blocked = found.sessions.filter((s) => s.id !== found.session.id && s.project === found.session.project && !s.archived && !targets.includes(s))
+    const resolved = resolveTarget(targets, asked, blocked)
     if (!resolved.target) {
       return error(res, resolved.ambiguous ? 409 : 403, targetRefusal(asked, resolved, 'その相手には送れません（同じリポジトリの、SAI から返信できる別のセッションだけ。sai_sessions で確かめてください）'))
     }
@@ -2919,7 +2922,8 @@ export function createApp(
   const mcpTarget = (sessions: SessionSummary[], asked: string, allowed: (s: SessionSummary) => boolean): SessionSummary | string => {
     const byId = sessions.find((s) => s.id === asked)
     if (byId) return byId
-    const resolved = resolveTarget(sessions.filter(allowed), asked)
+    // 送れない・置けないが居るセッション（素通し・別のマシンなど）に同じ名前があれば、名前では当てない（別の相手に黙って届かせない）
+    const resolved = resolveTarget(sessions.filter(allowed), asked, sessions.filter((s) => !s.archived && !allowed(s)))
     if (resolved.target) return resolved.target
     // 候補は当たりが複数のときだけ並べる（tailnet からは全リポジトリが見えるので、無いときに全部は並べない）
     return resolved.ambiguous ? targetRefusal(asked, resolved, '') : 'そのセッションは見つかりません（sai_sessions で確かめてください）'

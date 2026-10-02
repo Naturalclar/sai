@@ -250,5 +250,11 @@ test('resolveTarget: id・表示名・worktree 名・題名の完全一致で、
   assert.ok(!none.target && !none.ambiguous && none.candidates.length === targets.length, '無ければ送れる相手の全部を候補に')
   assert.match(targetRefusal('main', dup as never, '送れません'), /「main」に当たる相手が 2 つあります。[^\n]*\n- d@main「一覧」\n- e@main「取り次ぎ」/)
   assert.equal(targetRefusal('x', { target: null, ambiguous: false, candidates: [] }, '送れません'), '送れません')
+  // 送れないセッションに同じ名前が居れば、送れる方が 1 つでも当てない（別の相手に黙って届かせない）
+  const hidden = resolveTarget(targets, '明', [s('z@dev-z', 'dev-z', 'z', '明')])
+  assert.ok(!hidden.target && hidden.ambiguous && hidden.hidden === 1)
+  assert.match(targetRefusal('明', hidden as never, ''), /当たる相手が 2 つあります（うち 1 つは送れないセッション。下には送れる方だけ）。[^\n]*\n- b@dev-min「明」$/)
+  assert.equal(resolveTarget(targets, 'b@dev-min', [s('z@dev-z', 'dev-z', 'z', '明')]).target?.id, 'b@dev-min', 'id なら今までどおり')
+  assert.equal(resolveTarget(targets, 'だれか', [s('z@dev-z', 'dev-z', 'z', 'だれか')]).target, null)
   assert.deepEqual(targetNames(targets[0]!), ['a@dev-clared', 'くらら', 'dev-clared'])
 })

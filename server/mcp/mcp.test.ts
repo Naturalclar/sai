@@ -385,7 +385,7 @@ test('/mcp: sai_suggest / sai_send の宛先は呼び名でも書ける。同じ
   // worktree 名 `r` は何本も居るので当てない
   const dup = await call('sai_suggest', { to: 'r', text: 'どれ' })
   assert.equal(dup.isError, true)
-  assert.match(dup.text, /「r」に当たる相手が \d+ つあります。送っていません/)
+  assert.match(dup.text, /「r」に当たる相手が \d+ つあります.*送っていません/)
   assert.ok(dup.text.includes('- B1@r「Kurara」'))
   assert.ok(!dup.text.includes('R1@r'), '別のマシン（案を置けない相手）は名前では当たらない')
   assert.equal((await call('sai_suggest', { to: 'Kura', text: 'x' })).isError, true, '前方一致はしない')
@@ -394,4 +394,11 @@ test('/mcp: sai_suggest / sai_send の宛先は呼び名でも書ける。同じ
   assert.match(ambiguous.text, /当たる相手が \d+ つあります/)
   assert.ok(!ambiguous.text.includes('P1@r'), '素通しのセッションは、送る宛先としては名前で当たらない')
   assert.equal(runner.started.length, started, 'どれもターンを起こしていない')
+  // 素通しのセッションが同じ名前を持っていたら、送れる方が 1 つでも名前では送らない（#662 のレビュー）
+  const twin = await fetch(`${base}/api/sessions/P1%40r/meta`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'kurara' }) })
+  assert.equal(twin.status, 200)
+  const hidden = await call('sai_send', { to: 'Kurara', text: '見て' }, SENDER)
+  assert.equal(hidden.isError, true)
+  assert.match(hidden.text, /当たる相手が 2 つあります（うち 1 つは送れないセッション/)
+  assert.equal(runner.started.length, started)
 })

@@ -144,26 +144,35 @@ export function targetNames(s: Pick<SessionSummary, 'id' | 'title' | 'meta' | 'r
 }
 
 /** 宛先を引いた結果。`target` が無ければ送らない（`candidates` は選び直すための一覧。当たりが複数ならその当たり、無ければ送れる相手の全部） */
-export type ResolvedTarget = { target: SessionSummary } | { target: null; ambiguous: boolean; candidates: SessionSummary[] }
+export type ResolvedTarget = { target: SessionSummary } | { target: null; ambiguous: boolean; candidates: SessionSummary[]; hidden?: number }
 
 /**
  * `sai_send` の宛先（`to`）を、送ってよい相手（`targets`）の中から引く（#625）。id がそのまま当たればそれ。
  * 当たらなければ名前（`targetNames()`）の**完全一致**で探し、**ちょうど 1 つに決まったときだけ**返す。
- * 同じ名前が 2 つ以上（#572）・1 つも無いときは当てない（「明」と「明. - Avvy deco」のような取り違えを避ける）
+ * 同じ名前が 2 つ以上（#572）・1 つも無いときは当てない（「明」と「明. - Avvy deco」のような取り違えを避ける）。
+ *
+ * `blocked` は、送れないが居るセッション（素通し・別のマシンなど。アーカイブ済みは渡さない）。**同じ名前がそこにも居れば当てない**:
+ * 送れる相手だけで数えると、人が指していた方が送れないセッションのとき、同じ名前の別のセッションに黙って届く（#662 のレビュー）
  */
-export function resolveTarget(targets: readonly SessionSummary[], to: string): ResolvedTarget {
+export function resolveTarget(targets: readonly SessionSummary[], to: string, blocked: readonly SessionSummary[] = []): ResolvedTarget {
   const byId = targets.find((s) => s.id === to)
   if (byId) return { target: byId }
   const key = targetKey(to)
   const hits = key ? targets.filter((s) => targetNames(s).includes(key)) : []
-  if (hits.length === 1) return { target: hits[0]! }
-  return { target: null, ambiguous: hits.length > 1, candidates: hits.length > 1 ? hits : [...targets] }
+  const hidden = hits.length > 0 ? blocked.filter((s) => targetNames(s).includes(key)).length : 0
+  if (hits.length === 1 && hidden === 0) return { target: hits[0]! }
+  if (hits.length > 0) return { target: null, ambiguous: true, candidates: hits, ...(hidden ? { hidden } : {}) }
+  return { target: null, ambiguous: false, candidates: [...targets] }
 }
 
 /** 宛先が決まらなかったときに返す文（#625）。候補を id と呼び名で並べ、選び直させる */
 export function targetRefusal(to: string, resolved: Extract<ResolvedTarget, { target: null }>, none: string): string {
   const list = resolved.candidates.map((s) => `- ${s.id}「${sessionLabel(s)}」`).join('\n')
-  if (resolved.ambiguous) return `「${to.trim()}」に当たる相手が ${resolved.candidates.length} つあります。送っていません。id で選び直してください:\n${list}`
+  if (resolved.ambiguous) {
+    const total = resolved.candidates.length + (resolved.hidden ?? 0)
+    const hidden = resolved.hidden ? `（うち ${resolved.hidden} つは送れないセッション。下には送れる方だけ）` : ''
+    return `「${to.trim()}」に当たる相手が ${total} つあります${hidden}。送っていません。id で選び直してください:\n${list}`
+  }
   return list ? `${none}\n送れる相手:\n${list}` : none
 }
 

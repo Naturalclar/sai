@@ -982,9 +982,10 @@ test('sai_send: 宛先は id でも呼び名（表示名・worktree 名）でも
     assert.equal(runner.started.at(-1)?.id ?? runner.started[0]?.id, 'B1@r')
     assert.equal((await send('A1@r', 'Kurara', '4 回目')).status, 429, '呼び名で送っても 1 ターンの回数に数える')
     turn('A1@r')
-    // worktree 名（repo）は、同じ worktree に相手が 1 つだけなら当たる
-    const byRepo = (await (await send('A1@r', 'R', '見て')).json()) as AgentSendResponse
-    assert.equal(byRepo.to, 'B1@r')
+    // worktree 名 `r` には、送れないセッション（別のマシンの R1・合成 ID の S1）も居る。送れる方が 1 つでも名前では当てない（#662 のレビュー）
+    const byRepo = await send('A1@r', 'R', '見て')
+    assert.equal(byRepo.status, 409)
+    assert.match(((await byRepo.json()) as { error: string }).error, /当たる相手が 3 つあります（うち 2 つは送れないセッション。下には送れる方だけ）。[^\n]*\n- B1@r「Kurara」$/)
     // 前方一致・無い名前は当てない。送らずに、送れる相手を返す
     const before = runner.started.length
     for (const to of ['Kura', 'だれか', 'C1@r']) {

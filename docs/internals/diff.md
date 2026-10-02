@@ -20,6 +20,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 開いている id は `App.tsx` が持ち（`useNarrow()` で出し分け）、そのセッションを開いている間だけ出す。フィードのバブルから開いたものだけはフィードでも出す。規則は `web/src/feedDiff.ts` の `visibleDiff()`。
 - 枠は両方とも「流れない見出し（`.diff-head`。題名 + ✕）＋ 流れる中身（`.diff-scroll`）」。モーダル側は `.modal.diff` の `padding` を外して `flex` にしてある（`overflow-y` をモーダル自身に付けると閉じるボタンが差分の一番下まで流れる）。
 - 本文の行の箱（`.vlist`）は一番長い行の幅まで伸ばす（幅は DOM ではなく文字数から決める。下の「仮想化」）。そのぶん行のコメントの幅は `.patch` を container にした `100cqw`（見えている幅）で抑える。
+- **ファイルの見出し（`.file`）は開いている間 `position: sticky`**（#644。`[aria-expanded="true"]` のときだけ。貼り付く範囲は自分の `li` なので、次のファイルが来ると押し出される）。背景は不透明で、置かれた場所の地の色を `--diff-file-bg` で受ける（ペイン・モーダルは `--panel`、PR の画面は既定の `--bg`）。**貼り付く位置はスクロール容器の padding の内側から測られる**ので、`.diff-scroll` の上の padding は `--diff-scroll-pad` に持ち、`top` をそのぶん負にする（`.diff-scroll` の padding を変えるときはこの変数で。PR の画面の `.pr-body` は上の padding が無い）。`z-index: 1` で行（`.vlist` の absolute の行と行コメントの sticky）より上、メニューやモーダルより下。畳むときは `DiffFileItem` の `toggle()` が、`li` の上端がスクロール容器（`ScrollTick` の `scrollerRef`。無ければ window）の上端より上にあれば先にそのぶん戻す（`web/src/diffSticky.ts` の `collapseScrollBy()`）。仮想化の計算（`viewportOf()`）は触らない: 見出しが上の 28px ほどを隠すが、余白（`OVERSCAN_PX`）の内。
 
 ### 仮想化（#287）
 

@@ -1,4 +1,4 @@
-import { memo, useMemo } from 'react'
+import { memo, useMemo, useRef } from 'react'
 import type { DiffFile, DiffLine } from '../../shared/diff.ts'
 import type { DiffFileStat } from './api'
 import { lineAnchor, sameLine, type DiffComment } from './diffComments'
@@ -6,6 +6,8 @@ import { DiffCommentEditor } from './DiffCommentEditor'
 import { DiffCommentNote } from './DiffCommentNote'
 import { DiffFilePatch, pinKey } from './DiffFilePatch'
 import { sameComments, type DiffViewComments } from './diffFileComments.ts'
+import { collapseScrollBy } from './diffSticky.ts'
+import { useScrollWatch } from './useScrollTick.ts'
 
 const STATUS_LABEL: Record<DiffFileStat['status'], string> = {
   added: '追加',
@@ -38,7 +40,9 @@ interface Props {
  * 差分の 1 ファイル（見出しのボタンと本文）。`memo`（比較は `sameProps`。`comments` は中身で比べる）で、
  * **他のファイルの開閉・編集・コメントではこのファイルを描き直さない**（#287 / #611）。
  * 本文の行は `DiffFilePatch` が見えている分だけ置く。コメントが付いている行と編集中の行は鍵の集合（`pinned`）で渡し、常に置かせる。
- * 行の下に描くもの（コメント・編集欄）は `renderLine` が行そのものを持っているので、そこで描く（行を探し直さない。#611）
+ * 行の下に描くもの（コメント・編集欄）は `renderLine` が行そのものを持っているので、そこで描く（行を探し直さない。#611）。
+ * 見出しは開いている間、スクロール容器の上端に貼り付く（#644。CSS の `position: sticky`）。貼り付いた見出しから畳むときは、
+ * 先にそのファイルの先頭までスクロールを戻す（`collapseScrollBy()`。戻さないと縮んだぶん下のファイルの途中に飛ぶ）
  */
 function sameProps(a: Props, b: Props): boolean {
   return (
@@ -60,6 +64,19 @@ export const DiffFileItem = memo(function DiffFileItem({ f, file, shown, onToggl
       <span className="no new">{l.newNo || ''}</span>
     </>
   )
+
+  const itemRef = useRef<HTMLLIElement>(null)
+  const { scrollerRef } = useScrollWatch()
+  const toggle = () => {
+    const el = itemRef.current
+    if (shown && el) {
+      const scroller = scrollerRef.current
+      const viewTop = scroller ? scroller.getBoundingClientRect().top + scroller.clientTop : 0
+      const by = collapseScrollBy(el.getBoundingClientRect().top, viewTop)
+      if (by) (scroller ?? window).scrollBy(0, by)
+    }
+    onToggle(f.path)
+  }
 
   const here = comments?.list ?? NO_COMMENTS
   // 常に置く行の鍵（`pinKey()`）。コメントの集合と編集中の行が同じなら同じ Set（DiffFilePatch の memo が効く）
@@ -131,8 +148,8 @@ export const DiffFileItem = memo(function DiffFileItem({ f, file, shown, onToggl
   }
 
   return (
-    <li>
-      <button type="button" className="file" aria-expanded={shown} onClick={() => onToggle(f.path)}>
+    <li ref={itemRef}>
+      <button type="button" className="file" aria-expanded={shown} onClick={toggle}>
         <span className="mark">{shown ? '▾' : '▸'}</span>
         <code className="path">{f.old_path && f.old_path !== f.path ? `${f.old_path} → ${f.path}` : f.path}</code>
         {STATUS_LABEL[f.status] && <span className={`tag ${f.status}`}>{STATUS_LABEL[f.status]}</span>}

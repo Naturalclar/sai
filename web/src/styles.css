@@ -99,7 +99,7 @@
   .modal.diff { width: 900px; max-width: calc(100vw - 32px); max-height: 85vh; padding: 0; overflow: hidden; display: flex; flex-direction: column; }
   .modal.diff .diff-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 10px 12px 10px 16px; border-bottom: 1px solid var(--line); }
   .modal.diff .diff-head .title { margin: 0 auto 0 0; }
-  .modal.diff .diff-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 12px 16px 16px; }
+  .modal.diff .diff-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: var(--diff-scroll-pad) 16px 16px; }
   .modal.diff .where { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
   .modal.diff .where code { font-family: var(--mono); background: var(--chip); padding: 1px 6px; border-radius: 4px; color: var(--ink); }
   .modal.diff .warn { color: var(--synth); font-size: 12px; margin-top: 6px; }
@@ -116,7 +116,12 @@
   .diff-section .head .review-btn:disabled { cursor: default; opacity: .7; }
   .diff-section .head .review .err { color: var(--claude); font-size: 11px; }
   .diff-section ul { list-style: none; margin: 0; padding: 0; }
-  .diff-section .file { display: flex; align-items: baseline; gap: 8px; width: 100%; background: none; border: 0; padding: 4px 2px; font: inherit; font-size: 13px; color: inherit; cursor: pointer; text-align: left; }
+  /* ファイルの見出しは、開いている間スクロール容器の上端に貼り付く（#644）。下の行が透けないよう背景は不透明（置かれた場所の地の色）。
+     次のファイルの見出しが来たら押し出される（貼り付く範囲は自分の li の中）。行の上に重ねるが、モーダルやメニューよりは下 */
+  .diff-section .file { display: flex; align-items: baseline; gap: 8px; width: 100%; background: var(--diff-file-bg, var(--bg)); border: 0; padding: 4px 2px; font: inherit; font-size: 13px; color: inherit; cursor: pointer; text-align: left; }
+  .diff-section .file[aria-expanded="true"] { position: sticky; top: calc(-1 * var(--diff-scroll-pad, 0px)); z-index: 1; }
+  /* 貼り付く位置はスクロール容器の padding の内側から測られるので、上の padding のぶん戻す（戻さないと見出しの上の隙間に行が見える） */
+  .diff-pane, .modal.diff { --diff-file-bg: var(--panel); --diff-scroll-pad: 12px; }
   .diff-section .file:hover { background: var(--hover); }
   .diff-section .file .mark { color: var(--muted); flex: none; }
   .diff-section .file .path { font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
@@ -239,7 +244,7 @@
   .diff-pane { min-height: 0; min-width: 0; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--panel); }
   .diff-pane .diff-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
   .diff-pane .diff-head .title { font-weight: 700; margin-right: auto; }
-  .diff-pane .diff-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 12px; }
+  .diff-pane .diff-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: var(--diff-scroll-pad) 12px 12px; }
   .diff-pane .where { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
   .diff-pane .where code { font-family: var(--mono); background: var(--chip); padding: 1px 6px; border-radius: 4px; color: var(--ink); }
   .diff-pane .warn { color: var(--synth); font-size: 12px; margin-top: 6px; }

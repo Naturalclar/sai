@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { closeColumn, diffModalBelow, EMPTY_LAYOUT, focusColumn, focusedItem, MAX_COLUMNS, nextUnshown, normalizeLayout, openBeside, openInNeighbor, placeItem, sessionIdsIn, type PaneItem, type PaneLayout } from './paneLayout.ts'
+import { closeColumn, EMPTY_LAYOUT, focusColumn, focusedItem, MAX_COLUMNS, nextUnshown, normalizeLayout, openBeside, openInNeighbor, placeItem, sessionIdsIn, type PaneItem, type PaneLayout } from './paneLayout.ts'
 
 const s = (id: string): PaneItem => ({ kind: 'session', id })
 /** 番号は見ずに並びとフォーカスだけを比べる形（番号は下の「列の番号」のテストで見る） */
@@ -99,19 +99,6 @@ test('focusColumn: 範囲の外と同じ列は何もしない', () => {
 
 test('sessionIdsIn: 要対応のペインは含めない', () => {
   assert.deepEqual(sessionIdsIn({ columns: [[{ kind: 'todo' }], [s('b')]], focus: 0, keys: [0, 1] }), ['b'])
-})
-
-test('diffModalBelow: 差分を足すと 1 ペインが 400px を切る幅', () => {
-  // 差分の幅は clamp(360px, 38vw, 760px)。境目の幅で、残りがちょうど 400px × ペインの数になる
-  const paneAt = (width: number, panes: number, sidebar: number) => (width - sidebar - Math.min(Math.max(width * 0.38, 360), 760)) / panes
-  assert.equal(diffModalBelow(1, 0), 760, '38vw が 360px を下回る区間（差分は 360px）')
-  assert.equal(diffModalBelow(2, 320), 1807, '38vw の区間')
-  assert.equal(diffModalBelow(3, 320), 320 + 1200 + 760, '差分が 760px で頭打ちの区間')
-  for (const [panes, sidebar] of [[1, 0], [2, 0], [2, 320], [3, 0], [3, 320]] as const) {
-    const at = diffModalBelow(panes, sidebar)
-    assert.ok(paneAt(at + 1, panes, sidebar) >= 400, `${panes} 枚・サイドバー ${sidebar}: 境目より広ければ 400px 以上`)
-    assert.ok(paneAt(at - 2, panes, sidebar) < 400, `${panes} 枚・サイドバー ${sidebar}: 境目より狭ければ 400px を切る`)
-  }
 })
 
 // ---- 列の番号（React の key）。中身や位置が変わっても、残った列は同じ SessionView のまま

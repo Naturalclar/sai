@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
-import { HIDDEN_POLL_MS, parseRoute, sessionHash, useHashRoute, useLocalState, useMediaQuery, usePolling, type Route } from './hooks'
-import { closeColumn, diffModalBelow, EMPTY_LAYOUT, focusColumn, focusedItem, MAX_COLUMNS, nextUnshown, normalizeLayout, openBeside, openInNeighbor, placeItem, sessionIdsIn, type PaneItem, type PaneLayout } from './paneLayout'
+import { HIDDEN_POLL_MS, parseRoute, sessionHash, useHashRoute, useLocalState, usePolling, type Route } from './hooks'
+import { closeColumn, EMPTY_LAYOUT, focusColumn, focusedItem, MAX_COLUMNS, nextUnshown, normalizeLayout, openBeside, openInNeighbor, placeItem, sessionIdsIn, type PaneItem, type PaneLayout } from './paneLayout'
 import { paneKey } from './paneKeys'
 import { ChatPane } from './ChatPane'
 import { pendingItems, todoItems } from '../../shared/todoItems.ts'
@@ -90,8 +90,6 @@ const EMPTY_SESSIONS: never[] = []
 const EMPTY_PROJECTS: never[] = []
 /** フォーカスの無いペインの取得状況はヘッダに出さない（#633。「更新 hh:mm」はフォーカスのあるペインの分だけ） */
 const NO_STATUS: StatusProps['onStatus'] = () => {}
-/** サイドバーの幅（styles.css の `main.layout` の 1 列目と同じ値） */
-const SIDEBAR_PX = 320
 
 /** フォーカスを移した・ペインを閉じたあと、URL をフォーカスのあるペインに合わせる */
 function goTo(item: PaneItem | null) {
@@ -201,9 +199,8 @@ export function App() {
     saveDraft(id, { ...draft, text: appendInsert(draft.text, text) })
     location.hash = sessionHash(id)
   }, [])
-  // 並べているとき、差分を足すと 1 ペインが狭くなりすぎる幅ではモーダルに落とす（#633。1 つのときは今までどおり）
-  const tight = useMediaQuery(`(max-width: ${diffModalBelow(panes.length, sidebarOpen ? SIDEBAR_PX : 0)}px)`)
-  const diffModal = narrow || (split && tight)
+  // 差分をモーダルにするかは画面全体の幅だけで決める（#647。900px 以下ならモーダル）。並べている数・サイドバーの開閉では
+  // 変えない: 並べて見たいから並べているのに、差分を開くと全部が隠れるのを避ける。ペインが狭くなるのは受け入れる
   // 横に並べて開く（サイドバーの ⌘ + クリックと項目のボタン・`%`・⌘K の ⌘Enter）。フォーカスは開いた方へ移る。
   // `hash` は発言への飛び先まで付いているとき（⌘K の発言の当たり）
   const openBesideItem = useCallback(
@@ -264,9 +261,9 @@ export function App() {
       if (diffOpen === null) return
       setCommentInsert((prev) => ({ id: diffOpen, text, seq: (prev?.seq ?? 0) + 1 }))
       // モーダルは返信欄を隠しているので閉じる（右のペインで出しているときは残したまま、横の返信欄に入る）
-      if (diffModal) setDiff(null)
+      if (narrow) setDiff(null)
     },
-    [diffOpen, diffModal],
+    [diffOpen, narrow],
   )
 
   // Cmd/Ctrl + \ で開閉（VS Code と同じ）。入力欄にフォーカスがあっても効く。IME 変換中は無視
@@ -493,7 +490,7 @@ export function App() {
           画面のビルドが古い。別のターミナルで <code>pnpm build</code> してください（終わると自動で読み直す）
         </div>
       )}
-      <main className={`layout route-${route.name}${sidebarOpen ? '' : ' sidebar-closed'}${diffOpen !== null && !diffModal ? ' diff-open' : ''}`}>
+      <main className={`layout route-${route.name}${sidebarOpen ? '' : ' sidebar-closed'}${diffOpen !== null && !narrow ? ' diff-open' : ''}`}>
         <aside className="sidebar">
           {/* 幅を固定した箱に入れる。開閉の遷移中に列だけが縮み、中身は折り返さない */}
           <div className="side-inner">
@@ -569,9 +566,9 @@ export function App() {
           )}
         </div>
         {/* 広い画面はチャットの右にもう1枚。狭い画面は今までどおりモーダルで重ねる */}
-        {diffOpen !== null && !diffModal && <DiffPane id={diffOpen} onClose={closeDiff} canReview={canReview} {...(canComment ? { onInsertComments: insertComments } : {})} />}
+        {diffOpen !== null && !narrow && <DiffPane id={diffOpen} onClose={closeDiff} canReview={canReview} {...(canComment ? { onInsertComments: insertComments } : {})} />}
       </main>
-      {diffOpen !== null && diffModal && <DiffModal id={diffOpen} onClose={closeDiff} canReview={canReview} {...(canComment ? { onInsertComments: insertComments } : {})} />}
+      {diffOpen !== null && narrow && <DiffModal id={diffOpen} onClose={closeDiff} canReview={canReview} {...(canComment ? { onInsertComments: insertComments } : {})} />}
     </>
   )
 }

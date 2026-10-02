@@ -84,3 +84,66 @@ test('TurnUsageLog: ファイルが無ければ空のまま（行はそのまま
   const rows = [{ ts: '2026-09-16T13:57:11+09:00', agent: 'claude', repo: 'r', branch: '', session: 'S', session_source: 'payload', cwd: '/w', event: 'Stop', text: 'ok' }] as FeedRow[]
   assert.equal(log.attach(rows), rows)
 })
+
+test('TurnUsageLog: 行に載せる費用は、そのターンぶん（同じセッションの前の行との差。ファイルは積み上げのまま。#602）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-turnusage-'))
+  try {
+    const path = join(dir, 'turn-usage.jsonl')
+    const old = new Date(Date.now() - (TURN_USAGE_KEEP_DAYS + 1) * 24 * 60 * 60_000).toISOString()
+    await writeFile(
+      path,
+      [
+        // 窓の外の行も「前の行」として辿る（辿らないと、窓の最初の行にそれまでの積み上げが丸ごと乗る）
+        JSON.stringify({ ts: old, id: 'S@r', ...usage, cost_usd: 5 }),
+        JSON.stringify({ ts: '2026-09-16T04:57:12.500Z', id: 'S@r', ...usage, cost_usd: 7.5 }),
+        // 別のセッションの値は引かない
+        JSON.stringify({ ts: '2026-09-16T05:00:00.500Z', id: 'T@r', ...usage, cost_usd: 100 }),
+        JSON.stringify({ ts: '2026-09-16T05:30:01.000Z', id: 'S@r', ...usage, cost_usd: 8 }),
+        // 費用の無い行を挟んでも、前の行の値を忘れない（忘れると次の行に積み上げが丸ごと乗る。#602 のレビュー）
+        JSON.stringify({ ts: '2026-09-16T07:00:01.000Z', id: 'Z@r', ...usage, cost_usd: 40 }),
+        JSON.stringify({ ts: '2026-09-16T07:30:01.000Z', id: 'Z@r', ...usage, cost_usd: 0 }),
+        JSON.stringify({ ts: '2026-09-16T08:00:01.000Z', id: 'Z@r', ...usage, cost_usd: 45.5 }),
+        // 数え直しで下がったら、その行の値をそのまま
+        JSON.stringify({ ts: '2026-09-16T06:00:01.000Z', id: 'S@r', ...usage, cost_usd: 0.25 }),
+        '',
+      ].join('\n'),
+      'utf-8',
+    )
+    // 境目を 0 にして、どの行も積み上げとして読む（窓の外の行は 90 日より前なので、既定の境目だと 1 ターンぶんの扱いになる日がある）
+    const log = new TurnUsageLog(path, 0)
+    await log.load()
+    const row = (ts: string, session = 'S') => ({ ts, agent: 'claude', repo: 'r', branch: '', session, session_source: 'payload', cwd: '/w', event: 'Stop', text: 'ok' }) as FeedRow
+    const attached = log.attach([row('2026-09-16T13:57:11+09:00'), row('2026-09-16T14:00:00+09:00', 'T'), row('2026-09-16T14:30:00+09:00'), row('2026-09-16T15:00:00+09:00')])
+    assert.deepEqual(attached.map((r) => r.usage?.cost_usd), [2.5, 100, 0.5, 0.25])
+    assert.deepEqual(log.attach([row('2026-09-16T16:00:00+09:00', 'Z'), row('2026-09-16T16:30:00+09:00', 'Z'), row('2026-09-16T17:00:00+09:00', 'Z')]).map((r) => r.usage?.cost_usd), [40, 0, 5.5])
+    // 記録した分も、読み返した分の続きとして差にする
+    const rowTs = new Date().toISOString()
+    log.record('S@r', { ...usage, cost_usd: 1.25 })
+    assert.equal(log.attach([row(rowTs)])[0]?.usage?.cost_usd, 1)
+    // ファイルには CLI の値（積み上げ）のまま書く
+    for (let i = 0; i < 50 && !(await readFile(path, 'utf-8')).includes('1.25'); i++) await new Promise((r) => setTimeout(r, 10))
+    const lines = (await readFile(path, 'utf-8')).trim().split('\n')
+    assert.equal((JSON.parse(lines[lines.length - 1]!) as TurnUsageEntry).cost_usd, 1.25)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('TurnUsageLog: 積み上げになる前の行は、書かれた値のまま載せる（#602 のレビュー）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-turnusage-'))
+  try {
+    const path = join(dir, 'turn-usage.jsonl')
+    const at = (m: number) => new Date(Date.now() - m * 60_000).toISOString()
+    await writeFile(path, [JSON.stringify({ ts: at(30), id: 'S@r', ...usage, cost_usd: 7.5 }), JSON.stringify({ ts: at(20), id: 'S@r', ...usage, cost_usd: 9 }), JSON.stringify({ ts: at(5), id: 'S@r', ...usage, cost_usd: 1.5 }), ''].join('\n'), 'utf-8')
+    // 境目を 10 分前に置く: 前の 2 行は 1 ターンぶん、後ろの 1 行から積み上げ
+    const log = new TurnUsageLog(path, Date.now() - 10 * 60_000)
+    await log.load()
+    const row = (m: number) => ({ ts: new Date(Date.now() - m * 60_000 - 1000).toISOString(), agent: 'claude', repo: 'r', branch: '', session: 'S', session_source: 'payload', cwd: '/w', event: 'Stop', text: 'ok' }) as FeedRow
+    assert.deepEqual(log.attach([row(30), row(20), row(5)]).map((r) => r.usage?.cost_usd), [7.5, 9, 1.5])
+    const rowTs = new Date().toISOString()
+    log.record('S@r', { ...usage, cost_usd: 4 })
+    assert.equal(log.attach([row(30), row(20), row(5), { ...row(0), ts: rowTs }])[3]?.usage?.cost_usd, 2.5)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})

@@ -40,6 +40,8 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 
 SAI が起こした Claude のターンは、使ったトークンと費用も残す（#387）。
 
+- **`turn-usage.jsonl` の `cost_usd` はそのセッションの積み上げ**（CLI の `total_cost_usd` のまま書く）。行に載せるとき（`TurnUsageLog.attach()`）に、同じエンティティの前の行との差（`shared/turnUsage.ts` の `turnCost()`。下がっていたらその行の値）に直す（#602）。前の行は読み返しの窓（90 日）より古いものも辿る。**`COST_CUMULATIVE_SINCE_MS`（2026-09-19T05:00Z）より前の行はもともと 1 ターンぶん**なので差にせず、積み上げの「前の行」にもしない（`costIsCumulative()`）。費用の無い行（0）は 0 として、前の行の値を忘れない。トークン（`*_tokens`）は 1 ターンぶんなので差にしない。集計で使うときは `turnCosts()`（ファイルの順に渡す）。
+
 - `claudeHead()` が `--output-format stream-json` を付ける（#386 で `json` から変えた。運用者が自分の `--output-format` を指定していればそちら。`stream-json` でも最後の result の行から読める）。
 - `ProcessRunner` が終わったときに reply.log のそのターンぶん（`logOffset` 以降）を 1 回読んで `shared/turnUsage.ts` の `parseTurnUsage()` に通し、`<feed dir>/turn-usage.jsonl` に 1 行足す（`server/reply/turnUsage.ts`）。
 - 子の stdout はログの fd に直接書かせたまま（pipe にしない）。

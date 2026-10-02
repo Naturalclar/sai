@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { USAGE_MATCH_MS, failureTail, parseTurnUsage, totalTokens, usageByRow } from './turnUsage.ts'
+import { COST_CUMULATIVE_SINCE_MS, USAGE_MATCH_MS, costIsCumulative, failureTail, parseTurnUsage, totalTokens, turnCost, turnCosts, usageByRow } from './turnUsage.ts'
 import type { TurnUsageEntry } from './turnUsage.ts'
 import type { FeedRow } from './types.ts'
 
@@ -165,4 +165,62 @@ test('parseTurnUsage: 要約だけのターンは usage が 0 なので modelUsa
 test('usageByRow: 要約だけのターンの使用量は、前のターンのバブルに付けない（#579。行を書かない）', () => {
   const rows = [row('2026-09-16T13:57:11+09:00')]
   assert.equal(usageByRow(rows, [entry('2026-09-16T04:57:40.000Z', 'S@r', { compact: true })]).size, 0)
+})
+
+test('turnCost: 積み上げの値を、前の行との差にする。下がったら（数え直し）その行の値をそのまま（#602）', () => {
+  assert.equal(turnCost(undefined, 1.5), 1.5)
+  assert.equal(turnCost(1.5, 4), 2.5)
+  assert.equal(turnCost(4, 4), 0)
+  assert.equal(turnCost(4, 0.25), 0.25)
+  // 浮動小数の端数を残さない（0.3 - 0.1 は 0.19999999999999998）
+  assert.equal(turnCost(0.1, 0.3), 0.2)
+})
+
+test('turnCosts: 前の行は同じセッションの中で辿る（別のセッションの値を引かない）。合計は積み上げの単純な足し算より小さい（#602）', () => {
+  const entries = [
+    { id: 'A@r', cost_usd: 1 },
+    { id: 'B@r', cost_usd: 10 },
+    { id: 'A@r', cost_usd: 3 },
+    { id: 'B@r', cost_usd: 12 },
+    // 数え直しで下がった
+    { id: 'A@r', cost_usd: 0.5 },
+    { id: 'A@r', cost_usd: 2 },
+  ]
+  const costs = turnCosts(entries)
+  assert.deepEqual(costs, [1, 10, 2, 2, 0.5, 1.5])
+  assert.equal(costs.reduce((a, b) => a + b, 0), 17)
+  assert.equal(entries.reduce((a, e) => a + e.cost_usd, 0), 28.5)
+  assert.deepEqual(turnCosts([]), [])
+})
+
+test('turnCosts: 費用の無い行（0・数字でない）は 0 で、前の行の値を忘れない（次の行に積み上げが丸ごと乗らない。#602 のレビュー）', () => {
+  const costs = turnCosts([
+    { id: 'A@r', cost_usd: 40.469 },
+    { id: 'A@r', cost_usd: 0 },
+    { id: 'A@r', cost_usd: Number.NaN },
+    { id: 'A@r', cost_usd: 45.608 },
+  ])
+  assert.deepEqual(costs, [40.469, 0, 0, 5.139])
+})
+
+test('turnCosts: 積み上げになる前（9/19 14 時 JST より前）の行は 1 ターンぶんのまま。積み上げの「前の行」にもしない（#602 のレビュー）', () => {
+  assert.equal(new Date(COST_CUMULATIVE_SINCE_MS).toISOString(), '2026-09-19T05:00:00.000Z')
+  assert.equal(costIsCumulative('2026-09-19T04:59:59Z'), false)
+  assert.equal(costIsCumulative('2026-09-19T05:00:00Z'), true)
+  // ts が無い・読めない行は積み上げ（いまの CLI の形）
+  assert.equal(costIsCumulative(undefined), true)
+  assert.equal(costIsCumulative('壊れた時刻'), true)
+  const costs = turnCosts([
+    // 前の行より大きくても、差にしない（実測で 7.512 → 9.067 が 1.555 と出ていた）
+    { id: 'A@r', ts: '2026-09-18T12:00:00Z', cost_usd: 7.512 },
+    { id: 'A@r', ts: '2026-09-18T12:30:00Z', cost_usd: 9.067 },
+    // 同じ値が続いても 0 にしない
+    { id: 'A@r', ts: '2026-09-18T13:00:00Z', cost_usd: 9.067 },
+    // ここから積み上げ。最初の行は、前の 1 ターンぶんの値（9.067）を引かない
+    { id: 'A@r', ts: '2026-09-19T06:00:00Z', cost_usd: 1.5 },
+    { id: 'A@r', ts: '2026-09-19T07:00:00Z', cost_usd: 4 },
+  ])
+  assert.deepEqual(costs, [7.512, 9.067, 9.067, 1.5, 2.5])
+  // 境目は渡せる（テストと、別の記録のため）
+  assert.deepEqual(turnCosts([{ id: 'A@r', ts: '2026-09-18T12:00:00Z', cost_usd: 1 }, { id: 'A@r', ts: '2026-09-18T12:30:00Z', cost_usd: 3 }], 0), [1, 2])
 })

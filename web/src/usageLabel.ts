@@ -46,7 +46,8 @@ export function usageTitle(u: TurnUsage): string {
   const lines = ['このターンの使用量（SAI から送った返信）']
   lines.push(`入力 ${withCommas(u.input_tokens)} / 出力 ${withCommas(u.output_tokens)} / キャッシュ読み ${withCommas(u.cache_read_input_tokens)} / キャッシュ作成 ${withCommas(u.cache_creation_input_tokens)}`)
   lines.push(`${u.num_turns} ターン・${duration(u.duration_ms)}`)
-  if (u.cost_usd > 0) lines.push(`費用 $${u.cost_usd.toFixed(4)}（定額プランでは目安）`)
+  // 行に載っている `cost_usd` はそのターンぶん（サーバがセッションの積み上げとの差に直している。#602）
+  if (u.cost_usd > 0) lines.push(`費用 $${u.cost_usd.toFixed(4)}（このターンぶん。定額プランでは目安）`)
   if (u.model) lines.push(`モデル ${u.model}`)
   if (u.denials > 0) lines.push(`未許可で断られたツール ${u.denials} 件`)
   if (u.is_error) lines.push('エラーで終わった')

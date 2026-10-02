@@ -186,7 +186,8 @@ export function PrView({ repo, number, onStatus, onInsertToSession }: { repo: st
               hasBody={hasBody}
               onClear={() => {
                 comments.clear()
-                setReviewBody('')
+                // 見せている下書きだけを消す（投稿できない間は全体のコメントを数えていないので、残す）
+                if (hasBody) setReviewBody('')
               }}
             />
           )}

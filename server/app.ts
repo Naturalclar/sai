@@ -198,7 +198,7 @@ import { agentListFromEnv, backgroundLive, type AgentList, type ClaudeAgent } fr
 import { isRemoteHost } from '../shared/host.ts'
 import { IMAGES_SEGMENT } from '../shared/images.ts'
 import { imageHeaders, imageTable, readSessionImage } from './local/images.ts'
-import { fileTable, readSessionFile } from './local/files.ts'
+import { fileTable, isLoopbackHostHeader, readSessionFile } from './local/files.ts'
 import { FILES_SEGMENT } from '../shared/files.ts'
 import { TranscriptImages } from './local/transcriptImages.ts'
 import { labelSuffixes } from '../shared/sessionLabels.ts'
@@ -3979,6 +3979,8 @@ export function createApp(
       const filesAt = path.startsWith(SESSIONS_PREFIX) ? path.indexOf(FILES_SEGMENT, SESSIONS_PREFIX.length) : -1
       if (filesAt > 0) {
         if (who.kind !== 'local') return error(res, 403, '返答のファイルは、SAI を動かしているマシンのブラウザからだけ開けます（tailnet 越しには出していません）')
+        // 外のページがホスト名を 127.0.0.1 に向け直して読む（DNS rebinding）のを断る。ソケットがループバックでも Host は外の名前になる
+        if (!isLoopbackHostHeader(req.headers.host)) return error(res, 403, '返答のファイルは、127.0.0.1 / localhost で開いた SAI からだけ開けます')
         const id = sessionIdFrom(path, path.slice(filesAt))
         if (id === null) return error(res, 400, 'bad session id')
         const days = parseDays(q.get('days'), 90)

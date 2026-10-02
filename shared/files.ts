@@ -83,25 +83,33 @@ export function sessionFileUrl(id: string, path: string): string {
   return `/api/sessions/${encodeURIComponent(id)}${FILES_SEGMENT}${fileKey(path)}`
 }
 
-/** 置き場の名前で断るもの（どの階層にあっても）。中は鍵や認証の設定 */
-const SECRET_DIRS = new Set(['.git', '.ssh', '.aws', '.gnupg', '.kube', '.docker', '.azure', '.gcloud'])
+/** 置き場の名前で断るもの（どの階層にあっても）。中は鍵や認証の設定（`.config/gh/hosts.yml`・`.config/gcloud/…` など） */
+const SECRET_DIRS = new Set(['.git', '.ssh', '.aws', '.gnupg', '.kube', '.docker', '.azure', '.gcloud', '.config'])
 /** ファイル名そのもので断るもの */
-const SECRET_NAMES = new Set(['.npmrc', '.netrc', '.pypirc', '.htpasswd', '.pgpass', 'authorized_keys', 'known_hosts'])
-/** 拡張子で断るもの（鍵・証明書の入れ物・Terraform の状態と変数） */
-const SECRET_EXT = new Set(['pem', 'key', 'p12', 'pfx', 'jks', 'keystore', 'kdbx', 'tfstate', 'tfvars'])
+const SECRET_NAMES = new Set(['.npmrc', '.netrc', '.pypirc', '.htpasswd', '.pgpass', 'authorized_keys', 'known_hosts', '.claude.json', 'hosts.yml', 'hosts.yaml'])
+/** 拡張子で断るもの（鍵・証明書の入れ物・Terraform の状態と変数・`prod.env` の形） */
+const SECRET_EXT = new Set(['pem', 'key', 'p12', 'pfx', 'jks', 'keystore', 'kdbx', 'tfstate', 'tfvars', 'env'])
+/** 名前のどこにあっても断る語（`.credentials.json`・`.secrets.yml`・`private_key.json`・`passwords.txt`） */
+const SECRET_WORD = /credential|secret|passw(?:or)?d|private[_-]?key|service[_-]?account|api[_-]?key/
+/** 設定・データのファイルのときだけ断る語（`token.json`・`auth.json`。`tokenizer.ts`・`auth.ts` のようなソースは読ませる） */
+const SECRET_DATA_WORD = /token|auth/
+const DATA_EXT = new Set(['json', 'jsonc', 'json5', 'yml', 'yaml', 'toml', 'ini', 'cfg', 'conf', 'txt', 'xml', 'csv', 'lock'])
 
 /**
  * **名前で断るファイル**（秘密が入っていそうなもの。#603 の決めること 1）。パスのどこかの階層が鍵の置き場、または
- * ファイル名が `.env*`・`id_*`・`credentials*`・`secret*`・`*.pem`・`*.key` などに当たれば true。
- * **中身は見ない**（読む前に断るためのもの）。大文字小文字は区別しない
+ * ファイル名が `.env*`・`*.env`・`id_*`・`*credential*`・`*secret*`・`*.pem`・`*.key`・`token.json`・`auth.json` などに当たれば true。
+ * **中身は見ない**（読む前に断るためのもの）。大文字小文字は区別しない。
+ * 名前だけで決めるので、すり抜ける名前は必ず残る（`settings.json` に鍵が書かれている、など）。そのために口はループバックだけにしてある
  */
 export function isSecretPath(path: string): boolean {
   const parts = path.split(/[\\/]+/).filter(Boolean).map((p) => p.toLowerCase())
   const name = parts.at(-1) ?? ''
   if (parts.slice(0, -1).some((p) => SECRET_DIRS.has(p)) || SECRET_DIRS.has(name)) return true
   if (SECRET_NAMES.has(name)) return true
-  if (name.startsWith('.env') || name.startsWith('id_') || name.startsWith('credentials') || name.startsWith('secret')) return true
-  if (name.includes('service-account') || name.includes('serviceaccount')) return true
-  // `x.pem`・`x.key.json`・`terraform.tfstate.backup` のように、途中にあっても断る
-  return name.split('.').slice(1).some((ext) => SECRET_EXT.has(ext))
+  if (name.startsWith('.env') || name.startsWith('id_')) return true
+  if (SECRET_WORD.test(name)) return true
+  const exts = name.split('.').slice(1)
+  // `x.pem`・`x.key.json`・`terraform.tfstate.backup`・`prod.env` のように、途中にあっても断る
+  if (exts.some((ext) => SECRET_EXT.has(ext))) return true
+  return SECRET_DATA_WORD.test(name) && DATA_EXT.has(exts.at(-1) ?? '')
 }

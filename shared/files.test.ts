@@ -89,12 +89,25 @@ test('isSecretPath: 秘密が入っていそうな名前・置き場は断る', 
     'a/.ssh/config',
     '.aws/credentials',
     'gcp-service-account.json',
+    // 頭でなく途中にある語・設定の置き場（#670 のレビュー）
+    '.claude/.credentials.json',
+    '.secrets.yml',
+    'private_key.json',
+    'my-passwords.txt',
+    'api_key.txt',
+    'token.json',
+    '.codex/auth.json',
+    '.config/gh/hosts.yml',
+    '.claude.json',
+    'prod.env',
+    'deploy/staging.env.json',
     // 名前だけで決めるので、秘密の扱いを書いた文書も断る（安全な側に倒す）
     'secrets-handling.md',
+    'docs/handling-secrets.md',
   ]) {
     assert.equal(isSecretPath(path), true, path)
   }
-  for (const path of ['server/app.ts', 'docs/handling-secrets.md', 'keyboard.ts', 'src/key.ts', 'README.md', 'environment.ts', '.github/workflows/ci.yml', 'identity.ts']) {
+  for (const path of ['server/app.ts', 'keyboard.ts', 'src/key.ts', 'README.md', 'environment.ts', '.github/workflows/ci.yml', 'identity.ts', 'server/auth.ts', 'tokenizer.ts', 'docs/internals/auth.md', 'environment.yml', 'design-tokens.css']) {
     assert.equal(isSecretPath(path), false, path)
   }
 })

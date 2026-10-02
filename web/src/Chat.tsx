@@ -353,8 +353,9 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
                         : null
                       // 本文の画像はサーバが配る（#321）。別のマシンのセッションのファイルはこちらに無いので、印と名前だけ
                       const imageUrl = u.speaker !== 'me' && !isRemoteHost(g.host, selfHost) ? (src: string) => sessionImageUrl(id, src) : null
-                      // 返答の中のファイルのパスも、同じ条件で SAI の中で読める（#603）
-                      const fileSession = imageUrl ? id : null
+                      // 返答の中のファイルのパスも SAI の中で読める（#603）。**ターン完了の返答だけ**（サーバの表がそこからしか拾わない。
+                      // 待ちのバブルや別のセッションからの返答のパスを押せるようにすると、必ず「出てきていないファイル」になる）
+                      const fileSession = imageUrl && !u.waiting && !u.reply && eventKind(u.row.event, u.row.text) === 'turn' ? id : null
                       const side: MessageSide = u.speaker === 'me' ? 'me' : 'agent'
                       // バブルの中に出ていない、この発言の画像（#507）。待ちのバブルには付けない
                       const imageKey = bubbleKey(u.row.ts, side === 'me' ? 'user' : 'agent')

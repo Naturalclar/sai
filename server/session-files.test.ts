@@ -3,7 +3,7 @@
 // 名前で断るファイル・別のマシンのセッション・tailnet 越しは読めない（中身を返さない）ことを見る
 import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createServer } from 'node:http'
+import { createServer, request } from 'node:http'
 import type { Server } from 'node:http'
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -107,6 +107,24 @@ test('tailnet 越し（Serve のヘッダ付き）には出さない。同じ人
   // 認証そのものは通っている（一覧は読める）
   assert.equal((await fetch(`${base}/api/sessions`, { headers: TAILNET })).status, 200)
   assert.equal((await get('S1@repo', 'docs/report.md')).status, 200)
+})
+
+test('Host がループバックの名前でなければ出さない（外のページがホスト名を 127.0.0.1 に向け直しても読めない）', async () => {
+  const withHost = (host: string) =>
+    new Promise<{ status: number; body: string }>((resolve, reject) => {
+      const url = new URL(`${base}${sessionFileUrl('S1@repo', 'docs/report.md')}`)
+      const req = request({ host: url.hostname, port: url.port, path: url.pathname, headers: { Host: host } }, (res) => {
+        let body = ''
+        res.on('data', (c) => (body += c))
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body }))
+      })
+      req.on('error', reject)
+      req.end()
+    })
+  const rebound = await withHost(`evil.example.com:${new URL(base).port}`)
+  assert.equal(rebound.status, 403)
+  assert.ok(!rebound.body.includes('報告'))
+  assert.equal((await withHost(`localhost:${new URL(base).port}`)).status, 200)
 })
 
 test('書き込みのメソッドは受けない', async () => {

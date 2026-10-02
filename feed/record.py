@@ -529,9 +529,22 @@ def _tail(path: Path) -> "_Tail":
     return tail
 
 
+def _not_human(entry: dict) -> bool:
+    """人の入力でもエージェントの返答でもない行か（Claude の transcript）。
+
+    `isMeta`（差し込みの注記）・`isSidechain`（サブエージェント）に加えて、**自動の要約（compact）の行**
+    （`isCompactSummary`。#626）。要約の行は `type: user` で書かれるので、飛ばさないと要約の文
+    （`This session is being continued …` の 1 万字前後）が人の入力として記録され、そこがターンの
+    境目にもなる。`shared/progress.ts` の `claudeProgress()` / `shared/claudeTurns.ts` と同じ行を
+    飛ばす（両方のテストが同じ transcript `shared/testdata/compact-transcript.ndjson` を読んで突き合わせる）。
+    見分けるのは印だけで、本文の決まり文句では見ない（人がその文を打つこともある）。
+    """
+    return bool(entry.get("isMeta") or entry.get("isSidechain") or entry.get("isCompactSummary"))
+
+
 def _role_and_text(entry: dict) -> tuple[str, str]:
     """Claude の transcript / Codex の rollout どちらの行からも (role, text) を取る。"""
-    if entry.get("isMeta") or entry.get("isSidechain"):
+    if _not_human(entry):
         return "", ""
     node = entry
     payload = entry.get("payload")
@@ -668,7 +681,7 @@ def last_user_text(path: Path) -> str:
     """Claude の transcript から、最後のターンの入力（人が打った文）を取る。
 
     末尾から遡って最初に見つかる「人の入力」を返す。ツールの戻り（tool_result だけの
-    user 行）と isMeta の行は飛ばす。`<system-reminder>` や `[Request interrupted` の
+    user 行）と isMeta の行、自動の要約の行（`isCompactSummary`。#626）は飛ばす。`<system-reminder>` や `[Request interrupted` の
     ような差し込みも飛ばして、その手前の入力を探す。スラッシュコマンドは `/foo 引数`
     の形に戻す。画像だけの入力（text ブロックが無い）は空文字で止まる。
 
@@ -677,8 +690,8 @@ def last_user_text(path: Path) -> str:
     入力を探すと、前のターンの入力が 2 回目の Stop にも載って画面で二重に出る。
     """
     for entry in _tail(path):
-        if entry.get("isMeta") or entry.get("isSidechain"):
-            continue
+        if _not_human(entry):
+            continue  # 要約の行（#626）も飛ばして、その手前にある、そのターンの本当の入力に届く
         message = entry.get("message")
         if entry.get("type") != "user" or not isinstance(message, dict):
             continue
@@ -698,8 +711,12 @@ def last_user_text(path: Path) -> str:
 
 
 def _is_prompt_row(entry: dict) -> bool:
-    """人の入力の行か（ツールの戻りや差し込みではない）。ターンの境目を見つけるのに使う。"""
-    if entry.get("isMeta") or entry.get("isSidechain"):
+    """人の入力の行か（ツールの戻りや差し込みではない）。ターンの境目を見つけるのに使う。
+
+    自動の要約の行（#626）は境目にしない: ターンの途中で要約が走っても、要約より前の地の文・思考は
+    そのターンのもの。
+    """
+    if _not_human(entry):
         return False
     message = entry.get("message")
     if entry.get("type") != "user" or not isinstance(message, dict):

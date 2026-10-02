@@ -1852,6 +1852,65 @@ class RecordTest(unittest.TestCase):
         self.assertEqual(record.last_assistant_text(path), "今の返答")
         self.assertEqual(record.last_user_text(path), "今の依頼")
 
+    # -- 自動の要約（compact）の行は人の入力ではない（#626）
+
+    #: `shared/progress.test.ts` / `shared/claudeTurns.test.ts` と同じ transcript を読み、同じ期待値を置く
+    #: （「人の入力か」の判定が記録の側と読む側でずれないように）
+    COMPACT_TRANSCRIPT = HERE.parent / "shared" / "testdata" / "compact-transcript.ndjson"
+
+    def test_compact_summary_row_is_not_a_prompt_same_fixture_as_shared_tests(self):
+        entries = [json.loads(line) for line in self.COMPACT_TRANSCRIPT.read_text(encoding="utf-8").splitlines() if line.strip()]
+        prompts = [e["uuid"] for e in entries if record._is_prompt_row(e)]
+        self.assertEqual(prompts, ["u1", "u2"], "要約の行（s1）はターンの境目にしない")
+        self.assertEqual(record.last_user_text(self.COMPACT_TRANSCRIPT), "次の指示", "要約の文ではなく、その手前の人の入力")
+        self.assertEqual(record.last_assistant_text(self.COMPACT_TRANSCRIPT), "要約のあとの返答")
+        self.assertEqual(record.last_turn_thinking(self.COMPACT_TRANSCRIPT), "要約の前の思考", "要約より前でも、そのターンの思考")
+        self.assertEqual(record.first_user_text(self.COMPACT_TRANSCRIPT), "最初の指示")
+
+    def test_compact_summary_mid_turn_keeps_the_real_input_in_the_stop_row(self):
+        summary = "This session is being continued from a previous conversation that ran out of context. " + "x" * 9000
+        transcript = Path(self.tmp.name) / "transcript.jsonl"
+        write_jsonl(transcript, claude_entries([
+            {"type": "user", "message": {"role": "user", "content": "前の依頼"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "前の返答"}], "stop_reason": "end_turn"}},
+            {"type": "user", "message": {"role": "user", "content": "今の依頼"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "要約の前の地の文"}], "stop_reason": "tool_use"}},
+            {"type": "system", "subtype": "compact_boundary"},
+            {"type": "user", "isCompactSummary": True, "isVisibleInTranscriptOnly": True, "message": {"role": "user", "content": summary}},
+        ]))
+        payload = {"session_id": "sess-compact", "transcript_path": str(transcript), "cwd": str(self.cwd), "hook_event_name": "Stop"}
+        result = run(stdin=json.dumps(payload), env=self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        row = read_rows(self.feed_dir)[0]
+        self.assertEqual(row["user_text"], "今の依頼")
+        # 要約のあとの返答がまだ書かれていなくても、前のターンには遡らない（#467）。そのターンの地の文を返す
+        self.assertEqual(row["text"], "要約の前の地の文")
+
+    def test_compact_summary_first_then_prompt_keeps_the_prompt(self):
+        # 要約してから送る形（#579）: 要約 → /compact の行 → 人の入力 → 返答
+        transcript = Path(self.tmp.name) / "transcript.jsonl"
+        write_jsonl(transcript, claude_entries([
+            {"type": "user", "message": {"role": "user", "content": "前の依頼"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "前の返答"}], "stop_reason": "end_turn"}},
+            {"type": "system", "subtype": "compact_boundary"},
+            {"type": "user", "isCompactSummary": True, "message": {"role": "user", "content": "This session is being continued from a previous conversation"}},
+            {"type": "user", "message": {"role": "user", "content": "<command-name>/compact</command-name>\n<command-args>次は着手</command-args>"}},
+            {"type": "user", "message": {"role": "user", "content": "<local-command-stdout>Compacted </local-command-stdout>"}},
+            {"type": "user", "message": {"role": "user", "content": "着手して"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "始めます"}], "stop_reason": "end_turn"}},
+        ]))
+        self.assertEqual(record.last_user_text(transcript), "着手して")
+        self.assertEqual(record.last_assistant_text(transcript), "始めます")
+
+    def test_first_user_text_skips_a_leading_compact_summary(self):
+        # 要約から始まる transcript（続きのセッション）でも、題名に落とす最初の入力を要約にしない
+        transcript = Path(self.tmp.name) / "transcript.jsonl"
+        write_jsonl(transcript, claude_entries([
+            {"type": "user", "isCompactSummary": True, "message": {"role": "user", "content": "This session is being continued from a previous conversation"}},
+            {"type": "user", "message": {"role": "user", "content": "続きをやって"}},
+        ]))
+        self.assertEqual(record.first_user_text(transcript), "続きをやって")
+
 
 if __name__ == "__main__":
     unittest.main()

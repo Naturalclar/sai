@@ -1,5 +1,6 @@
 // セッション同士のメッセージ（#310 / #311）。SAI の MCP サーバのツール（sai_sessions / sai_send / sai_wait）と
 // SAI サーバが同じ規則を見る。DOM にもファイルにも触らないので shared/agentMessages.test.ts で回す
+import { isCompactSummaryText } from './compactSummary.ts'
 import { entityId } from './entity.ts'
 import { eventKind } from './events.ts'
 import { isLoopPrompt } from './loops.ts'
@@ -63,10 +64,39 @@ export function deliveredId(userText: string | undefined): string {
 }
 
 /**
+ * ターン完了の行が、どのメッセージで回ったターンのものかを引く道具（#626）。行を**古い順**に `headOf()` へ渡すと、
+ * ターン完了の行なら「そのターンの入力」（見出しを探す文）を返す。ターン完了でない行は空。
+ *
+ * ふつうはターン完了の行の `user_text` の見出しで分かる。**ターンの途中で自動の要約が走った行は `user_text` が要約の文に
+ * 置き換わっていて見出しが無い**（記録の側は直したが、もう書かれた行は残る）ので、そのときだけ**同じセッションの直前の
+ * 入力した瞬間の行（`UserPromptSubmit`）の見出し**で当てる。
+ * - 救うのは `user_text` が要約の行だけ（入力が空のターン = バックグラウンドの通知で回ったターンなどには当てない）
+ * - 入力の行の見出しは、次のターン完了の行 1 つにだけ使う（別のターンの返答を当てない）
+ */
+export function deliveryMatcher(): { headOf: (row: FeedRow) => string } {
+  const prompted = new Map<string, string>()
+  return {
+    headOf(row) {
+      const kind = eventKind(row.event, row.text)
+      if (kind !== 'turn' && kind !== 'resume') return ''
+      const entity = entityId(row.session ?? '', row.repo ?? '', String(row.ts ?? ''))
+      if (kind === 'resume') {
+        // 本文の無い合図だけの行（待ちのあとの再開）は、入力の行ではないので前の見出しを消さない
+        if (row.user_text?.trim()) prompted.set(entity, row.user_text)
+        return ''
+      }
+      const before = prompted.get(entity) ?? ''
+      prompted.delete(entity)
+      return isCompactSummaryText(row.user_text) ? before : (row.user_text ?? '')
+    },
+  }
+}
+
+/**
  * 送ったメッセージへの返答の行（#588）。送り元が `sai_wait` せずにターンを終えると、返答は相手のセッションにしか無く、
  * 送り元の会話は「頼みました」で止まって見える。そこで**送り元の画面に並べる**ために、相手のターン完了の行に印を付けて返す。
  * 行は 1 回だけ舐める（メッセージごとに `replyOf()` を呼ぶと、3 秒のポーリングのたびに 送った数 × 行 になる）。
- * 相手が違う行（見出しを写しただけの行）は数えない。古い順
+ * 相手が違う行（見出しを写しただけの行）は数えない。古い順。`rows` も古い順で渡す（`deliveryMatcher()` が直前の入力の行を見る）
  */
 export function agentReplyRows(
   sent: readonly { message_id: string; to: string; since: string; handed_at?: string }[],
@@ -77,9 +107,9 @@ export function agentReplyRows(
   if (want.size === 0) return []
   const out: FeedRow[] = []
   const seen = new Set<string>()
+  const matcher = deliveryMatcher()
   for (const r of rows) {
-    if (eventKind(r.event, r.text) !== 'turn') continue
-    const id = deliveredId(r.user_text)
+    const id = deliveredId(matcher.headOf(r))
     const m = id ? want.get(id) : undefined
     if (!m || seen.has(id)) continue
     if (entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) !== m.to) continue
@@ -95,12 +125,12 @@ export function isDeliveryOf(userText: string | undefined, messageId: string): b
   return head.startsWith(AGENT_HEADER_MARK) && head.includes(`（id: ${messageId}）`)
 }
 
-/** 相手の返答になる行（そのメッセージで回った、相手のターン完了の行）。まだ無ければ null */
+/** 相手の返答になる行（そのメッセージで回った、相手のターン完了の行）。まだ無ければ null。`rows` は古い順 */
 export function replyOf(rows: readonly FeedRow[], to: string, messageId: string): FeedRow | null {
+  const matcher = deliveryMatcher()
   for (const r of rows) {
-    if (eventKind(r.event, r.text) !== 'turn') continue
     if (entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) !== to) continue
-    if (isDeliveryOf(r.user_text, messageId)) return r
+    if (isDeliveryOf(matcher.headOf(r), messageId)) return r
   }
   return null
 }

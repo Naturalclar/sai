@@ -3,6 +3,7 @@ import { splitHandedReplies } from '../../shared/agentMessages.ts'
 import { isLoopPrompt, loopPromptLabel } from '../../shared/loops.ts'
 import type { AgentReplyTag, FeedRow, Profile, SessionSummary } from '../../shared/types.ts'
 import { wasClipped } from '../../shared/clipped.ts'
+import { isCompactSummaryText } from '../../shared/compactSummary.ts'
 import { entityId } from '../../shared/entity.ts'
 import { eventKind } from '../../shared/events.ts'
 import { dayLabel, minutesBetween, parseTs, ymd } from './format.ts'
@@ -102,7 +103,9 @@ export function toUtterances(rows: FeedRow[]): Utterance[] {
       out.push({ speaker: row.agent, row, text: row.text ?? '', key: `${row.ts}:${index}:reply`, reply: row.agent_reply, ...(wasClipped(row, 'text') ? { clipped: true } : {}) })
       return
     }
-    const mine = (row.user_text ?? '').trim()
+    // 自動の要約の文が入力として記録された行（#626）では、自分のバブルを立てない（人が打った文ではない。
+    // そのターンの本当の入力は、入力した瞬間の行でもう出ている）
+    const mine = isCompactSummaryText(row.user_text) ? '' : (row.user_text ?? '').trim()
     if (kind === 'resume') {
       // 入力した瞬間の行。user_text があれば自分の発言。無い（合図だけの古い形）ならバブルにしない
       if (mine) {

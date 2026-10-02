@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { claudeTurns, findTurn, worthParsing } from './claudeTurns.ts'
+import { readFileSync } from 'node:fs'
 
 const T0 = Date.parse('2026-10-01T02:34:40.000Z')
 const at = (s: number) => new Date(T0 + s * 1000).toISOString()
@@ -61,4 +62,12 @@ test('worthParsing: 落とすのはツールの戻りと本文の無い assistan
   assert.equal(worthParsing(said(1, '返答', 'end_turn')), true)
   assert.equal(worthParsing(user(0, 'これは "type":"tool_result" の話')), true, '本文の中の文字列は JSON ではエスケープされているので当たらない')
   assert.deepEqual(claudeTurns(lines.filter(worthParsing)), claudeTurns(lines))
+})
+
+// `feed/test_record.py`（`_is_prompt_row()` が u1・u2 だけ）と `shared/progress.test.ts` が同じファイルを読む（#626）
+test('claudeTurns: 要約の行（isCompactSummary）を入力にしない — record.py と同じ transcript で突き合わせる（#626）', () => {
+  const lines = readFileSync(new URL('./testdata/compact-transcript.ndjson', import.meta.url), 'utf8').split('\n').filter(Boolean)
+  const turns = claudeTurns(lines)
+  assert.deepEqual(turns.map((t) => t.input), ['最初の指示', '次の指示'], '要約の文は入力にならない')
+  assert.equal(turns[1]?.text, '要約のあとの返答', '要約をまたいでも同じターンの返答')
 })

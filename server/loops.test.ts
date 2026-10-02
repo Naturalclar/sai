@@ -244,13 +244,13 @@ test(`申し送りが ${LOOP_STALL_ROUNDS} 周続けて同じなら止まる。�
   for (let round = 1; round <= LOOP_STALL_ROUNDS; round++) {
     assert.equal((await poll('L7'))!.round, round)
     assert.equal((await next('L7', { action: 'continue', seconds: 600, note: 'CI を待っている' })).status, 200)
-    const after = await endRound('L7')
+    const ended = await endRound('L7')
     if (round < LOOP_STALL_ROUNDS) {
-      assert.equal(after.status, 'running')
+      assert.equal(ended.status, 'running')
       assert.equal((await post(url('L7', '/wake'))).status, 200)
     } else {
-      assert.equal(after.status, 'stopped')
-      assert.match(after.reason!, /進んでいない/)
+      assert.equal(ended.status, 'stopped')
+      assert.match(ended.reason!, /進んでいない/)
     }
   }
 })
@@ -298,7 +298,7 @@ test('周を起こす直前に人が止めた・片付けたら、その周は�
   await start('L3', { interval_s: 60 })
   const sent = () => runner.sent('L3@r').length
   await endRound('L3')
-  const before = sent()
+  const sentBefore = sent()
   advance(60)
   usage.hook = async () => {
     assert.equal((await post(url('L3', '/stop'))).status, 200)
@@ -349,7 +349,7 @@ test('立て直しても続き、同じ周を 2 回送らない（loops.json か
   const id = 'L4'
   assert.equal((await fetch(url(id), { method: 'DELETE' })).status, 200)
   await start(id, { interval_s: 120 })
-  const before = runner.sent(`${id}@r`).length
+  const sentBefore = runner.sent(`${id}@r`).length
   const saved = JSON.parse(await readFile(join(dir, LOOPS_FILE), 'utf-8')) as Record<string, { round: number; turn?: string }>
   assert.equal(saved[`${id}@r`]!.round, 1)
   assert.ok(saved[`${id}@r`]!.turn, '周を送ったことはファイルに残る')

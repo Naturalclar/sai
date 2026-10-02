@@ -29,8 +29,11 @@ test('parsePr: gh の JSON を読む。番号が無ければ null', () => {
     url: 'https://x/pull/210',
     state: 'MERGED',
     draft: false,
+    review_decision: '',
   })
   assert.equal(parsePr('{"isDraft":true,"number":7,"state":"OPEN","url":""}')?.draft, true)
+  assert.equal(parsePr('{"isDraft":false,"number":7,"state":"OPEN","url":"","reviewDecision":"APPROVED"}')?.review_decision, 'APPROVED', '#636')
+  assert.equal(parsePr('{"isDraft":false,"number":7,"state":"OPEN","url":"","reviewDecision":null}')?.review_decision, '', '文字列でなければ空')
   assert.equal(parsePr(''), null, 'gh が失敗したときの空')
   assert.equal(parsePr('no pull requests found for branch "x"'), null, 'JSON でない')
   assert.equal(parsePr('{}'), null, '番号が無い')
@@ -48,7 +51,7 @@ test('GhPr: gh の出力から PR を引き、同じブランチは引き直さ�
     await gh.find(dir, 'feat/x')
     const log = await readFile(join(dir, 'calls'), 'utf8')
     assert.equal(log.trim().split('\n').length, 1, '2 回目はキャッシュから返すので gh は 1 回だけ')
-    assert.match(log, /^pr view feat\/x --json number,url,state,isDraft$/m, '組み立てるのは pr view の 1 形だけ')
+    assert.match(log, /^pr view feat\/x --json number,url,state,isDraft,reviewDecision$/m, '組み立てるのは pr view の 1 形だけ（#636 で reviewDecision を足した）')
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

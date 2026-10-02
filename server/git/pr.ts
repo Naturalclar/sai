@@ -2,7 +2,7 @@
 //
 // **ここが SAI で唯一、外のネットワークに問い合わせる場所**なので、次のように閉じてある:
 //
-// - 叩くのは `gh pr view <branch> --json …` の 1 形だけ。他のサブコマンドは組み立てられない
+// - 叩くのは `gh pr view <branch> --json …` の 1 形だけ。他のサブコマンドは組み立てられない（#636 で reviewDecision を足した）
 // - 認証は `gh` に任せる（SAI は鍵を持たない）。`gh` が無い・ログインしていない・PR が無い・
 //   ネットワークが死んでいる、のどれでも **null を返すだけ**で、差分そのものの表示は落とさない
 // - `SAI_GH=0` で丸ごと切れる。実行ファイルはサーバの PATH の `gh`（#288）
@@ -19,6 +19,8 @@ export const PR_CACHE_MS = 60_000
 export interface PrLookup {
   /** 見つからない・引けないは null（例外にしない） */
   find(cwd: string, branch: string): Promise<DiffPr | null>
+  /** 覚えている分を捨てる（SAI からレビューを投稿したあと。承認の状態が変わるので引き直す。#636 のレビュー）。偽物は持たなくてよい */
+  forget?(): void
 }
 
 /** 引かない実装（`SAI_GH=0`、テストの既定） */
@@ -53,6 +55,7 @@ export function parsePr(stdout: string): DiffPr | null {
     url: typeof o.url === 'string' ? o.url : '',
     state: typeof o.state === 'string' ? o.state : '',
     draft: o.isDraft === true,
+    review_decision: typeof o.reviewDecision === 'string' ? o.reviewDecision : '',
   }
 }
 
@@ -64,6 +67,10 @@ interface Entry {
 export class GhPr implements PrLookup {
   readonly bin: string
   private readonly cache = new Map<string, Entry>()
+
+  forget(): void {
+    this.cache.clear()
+  }
   private readonly ttl: number
   private readonly timeout: number
 
@@ -90,7 +97,7 @@ export class GhPr implements PrLookup {
     return new Promise((resolve) => {
       let child
       try {
-        child = spawn(this.bin, ['pr', 'view', branch, '--json', 'number,url,state,isDraft'], {
+        child = spawn(this.bin, ['pr', 'view', branch, '--json', 'number,url,state,isDraft,reviewDecision'], {
           cwd,
           stdio: ['ignore', 'pipe', 'ignore'],
         })

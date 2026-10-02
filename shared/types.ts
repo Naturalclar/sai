@@ -359,6 +359,8 @@ export interface DiffPr {
   /** `gh pr view` の state（`OPEN` / `MERGED` / `CLOSED`）。表示は番号だけだが、後で色を変えるときのために持つ */
   state: string
   draft: boolean
+  /** `APPROVED` / `CHANGES_REQUESTED` / `REVIEW_REQUIRED`、無ければ空（#636。承認済みならチェックの印）。古いサーバの応答には無い */
+  review_decision?: string
 }
 
 /** PR のチェック（CI）をまとめた状態（#524）。チェックが 1 つも無ければ空 */

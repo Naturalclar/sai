@@ -9,6 +9,11 @@ export function checkLabel(state: PrCheckState): { mark: string; title: string }
   return null
 }
 
+/** 承認済みか（GitHub の `reviewDecision` が `APPROVED`）。チェックの印（`ApprovedMark`）を出すかはここ 1 か所で決める（#636） */
+export function isApproved(decision: string | undefined): boolean {
+  return decision === 'APPROVED'
+}
+
 /** レビューの判定。GitHub の `reviewDecision`。無い・知らない値は空 */
 export function reviewLabel(decision: string): string {
   if (decision === 'APPROVED') return '承認済み'

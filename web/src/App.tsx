@@ -18,6 +18,7 @@ import { FeedView } from './FeedView'
 import { TodoView } from './TodoView'
 import { NewSessionView } from './NewSessionView'
 import { PrListView } from './PrListView'
+import { UsageView } from './UsageView'
 import { PrView } from './PrView'
 import { loadDraft, saveDraft } from './replyDrafts'
 import { appendInsert } from './replyRestore'
@@ -343,7 +344,7 @@ export function App() {
       }
       if (action === 'feed') {
         const name = parseRoute(location.hash).name
-        if (name !== 'session' && name !== 'todo' && name !== 'new' && name !== 'prs' && name !== 'pr') return
+        if (name !== 'session' && name !== 'todo' && name !== 'new' && name !== 'prs' && name !== 'pr' && name !== 'usage') return
         e.preventDefault()
         location.hash = '#/feed'
         return
@@ -462,6 +463,8 @@ export function App() {
           </a>
         )}
         <UserMenu profile={list.data?.profile} viewer={list.data?.viewer ?? null} notify={notify} onOpen={refreshSettings}>
+          {/* 使用量の画面（#602）。帯の使用量（UsageChip）は取れないと出ないので、ここからも開けるようにする */}
+          <a className="menu-link" href="#/usage">使用量（トークンと費用）</a>
           {/* 一言の入切・口・モデルはどの幅でもここ（#288。前は環境変数）。PUT の失敗もここに出す */}
           {settings && <DigestEngineControls settings={settings} busy={settingsBusy} error={settingsError} onChange={(p) => void updateSettings(p)} />}
           {/* 許可の確率を Jev に聞くか（#491。既定は入。鍵が無ければ送らない） */}
@@ -543,6 +546,8 @@ export function App() {
               <PrListView onStatus={onStatus} onOpenSidebar={openSidebar} />
             ) : route.name === 'pr' ? (
               <PrView key={`${route.repo}#${route.number}`} repo={route.repo} number={route.number} onStatus={onStatus} onInsertToSession={insertToSession} />
+            ) : route.name === 'usage' ? (
+              <UsageView onStatus={onStatus} onOpenSidebar={openSidebar} />
             ) : route.name === 'new' ? (
               <NewSessionView replying={list.data?.replying} now={list.updatedAt?.getTime() ?? 0} onOpenSidebar={openSidebar} />
             ) : (

@@ -82,6 +82,43 @@
   .usage-panel h3 .usage-at { margin-left: auto; font-weight: 400; color: var(--muted); }
   .usage-panel .usage-note, .usage-panel .usage-hit { margin: 6px 0 0; color: var(--muted); line-height: 1.45; }
   .usage-panel .usage-hit { color: var(--claude); }
+  .usage-panel .usage-more { margin: 10px 0 0; padding-top: 8px; border-top: 1px solid var(--line); }
+  .usage-panel .usage-more a { color: var(--accent); text-decoration: none; }
+  .usage-panel .usage-more a:hover { text-decoration: underline; }
+  header .user-menu .menu a.menu-link { display: block; padding: 6px 12px; color: var(--ink); text-decoration: none; white-space: nowrap; }
+  header .user-menu .menu a.menu-link:hover { background: var(--chip); }
+  /* 使用量の画面（#602）。表は列が多いので、狭い画面では表だけを横に送る（画面全体は横に送らない）。名前の列は左に貼り付ける */
+  .usage-view { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
+  .usage-body { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; padding-bottom: 12px; }
+  .usage-body > .note { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+  .usage-total { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; }
+  .usage-total > div { flex: 1 1 7em; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; }
+  .usage-total dt { font-size: 11px; color: var(--muted); }
+  .usage-total dd { margin: 2px 0 0; font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .usage-table h2 { margin: 0 0 6px; font-size: 13px; }
+  .usage-table .none { color: var(--muted); font-size: 12px; }
+  .usage-table .scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+  .usage-table table { border-collapse: collapse; width: 100%; font-size: 12px; font-variant-numeric: tabular-nums; }
+  .usage-table th, .usage-table td { padding: 5px 10px; text-align: right; white-space: nowrap; border-bottom: 1px solid var(--line); }
+  .usage-table th { font-weight: 600; color: var(--muted); font-size: 11px; }
+  .usage-table tbody tr:last-child td { border-bottom: 0; }
+  .usage-table tfoot td { border-top: 1px solid var(--line); border-bottom: 0; font-weight: 700; }
+  /* 名前の列が残りの幅を取り、長い名前はそこで省略する（`width: 100%` + `max-width: 0`）。印（読み直し大）は省略に巻き込まない。
+     狭い画面では下の media query で決まった幅にする */
+  .usage-table .name { text-align: left; position: sticky; left: 0; background: var(--panel); width: 100%; max-width: 0; }
+  .usage-table .name .cell { display: flex; align-items: center; }
+  .usage-table .name .cell > a, .usage-table .name .cell > span:not(.tag) { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .usage-table .name .cell > .tag { flex: none; }
+  .usage-table .name a { color: var(--ink); text-decoration: none; }
+  .usage-table .name a:hover { color: var(--accent); text-decoration: underline; }
+  .usage-table .tag.heavy { background: color-mix(in srgb, var(--synth) 18%, transparent); color: var(--synth); font-weight: 600; }
+  .usage-table .errors { color: var(--claude); margin-left: 2px; }
+  .usage-table td.denied { color: var(--claude); font-weight: 600; }
+  .usage-table td.share { position: relative; min-width: 5em; }
+  .usage-table td.share .bar { position: absolute; left: 6px; top: 4px; bottom: 4px; max-width: calc(100% - 12px); background: color-mix(in srgb, var(--accent) 22%, transparent); border-radius: 3px; }
+  .usage-table td.share .pct { position: relative; }
+  /* 狭い画面では名前の列を決まった幅にして、残りは表ごと横に送る（`max-width: 0` のままだと列が潰れて隣の数字に重なる） */
+  @media (max-width: 900px) { .usage-table .name { width: auto; max-width: none; } .usage-table .name .cell { width: 9em; min-width: 0; } .usage-table th, .usage-table td { padding: 5px 7px; } .usage-total dd { font-size: 17px; } }
   .usage-bar + .usage-bar { margin-top: 8px; }
   .usage-bar-top { display: flex; align-items: baseline; gap: 6px; }
   .usage-bar-top .usage-window { color: var(--muted); }
@@ -510,7 +547,7 @@
     header .sidebar-toggle { display: none; }
     main.layout, main.layout.sidebar-closed, main.layout.diff-open, main.layout.sidebar-closed.diff-open { grid-template-columns: minmax(0, 1fr); transition: none; }
     .diff-pane { display: none; }
-    main.route-feed .sidebar, main.route-session .sidebar, main.route-todo .sidebar, main.route-new .sidebar, main.route-prs .sidebar, main.route-pr .sidebar { display: none; }
+    main.route-feed .sidebar, main.route-session .sidebar, main.route-todo .sidebar, main.route-new .sidebar, main.route-prs .sidebar, main.route-pr .sidebar, main.route-usage .sidebar { display: none; }
     /* 「閉じた」を無視して、#/ では一覧を必ず出す */
     main.layout.route-list .sidebar { display: block; visibility: visible; }
     main.route-list .pane { display: none; }

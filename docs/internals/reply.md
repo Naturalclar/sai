@@ -41,6 +41,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 SAI が起こした Claude のターンは、使ったトークンと費用も残す（#387）。
 
 - **`turn-usage.jsonl` の `cost_usd` はそのセッションの積み上げ**（CLI の `total_cost_usd` のまま書く）。行に載せるとき（`TurnUsageLog.attach()`）に、同じエンティティの前の行との差（`shared/turnUsage.ts` の `turnCost()`。下がっていたらその行の値）に直す（#602）。前の行は読み返しの窓（90 日）より古いものも辿る。**`COST_CUMULATIVE_SINCE_MS`（2026-09-19T05:00Z）より前の行はもともと 1 ターンぶん**なので差にせず、積み上げの「前の行」にもしない（`costIsCumulative()`）。費用の無い行（0）は 0 として、前の行の値を忘れない。トークン（`*_tokens`）は 1 ターンぶんなので差にしない。集計で使うときは `turnCosts()`（ファイルの順に渡す）。
+- **使用量の画面（#602）**: `GET /api/usage/report` が `TurnUsageLog.turns()`（覚えている行の写しで、費用をそのターンぶんに直したもの）を `shared/usageReport.ts` の `usageReport()` に渡す。期間で切る・セッション別 / 日別（Asia/Tokyo）/ モデル別に足す・割合・「読み直し大」（読み直し ÷ CLI の中で回ったターン数が `CONTEXT_WARN_TOKENS` 以上）はこの純粋関数。呼び名は `store.sessions(days)` と表示名から引く。画面は `web/src/UsageView.tsx` → `UsageTable.tsx` → `UsageRowLabel.tsx`、文字は `usageReportLabels.ts`。ファイルから費用を自分で足すときは、期間で切る前に `withTurnCosts()` を通す。
 
 - `claudeHead()` が `--output-format stream-json` を付ける（#386 で `json` から変えた。運用者が自分の `--output-format` を指定していればそちら。`stream-json` でも最後の result の行から読める）。
 - `ProcessRunner` が終わったときに reply.log のそのターンぶん（`logOffset` 以降）を 1 回読んで `shared/turnUsage.ts` の `parseTurnUsage()` に通し、`<feed dir>/turn-usage.jsonl` に 1 行足す（`server/reply/turnUsage.ts`）。

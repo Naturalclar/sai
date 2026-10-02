@@ -8,7 +8,7 @@ import type { UsageResponse } from './api'
  * **Claude の割合はステータスラインを設定している人しか取れない**ので、無いときは設定の場所を案内する
  * （割合が出ないのは不具合ではない。#250）
  */
-export function UsagePanel({ usage, now }: { usage: UsageResponse; now: number }) {
+export function UsagePanel({ usage, now, onNavigate }: { usage: UsageResponse; now: number; onNavigate?: () => void }) {
   return (
     <div className="usage-panel" role="dialog" aria-label="使用量">
       {usage.codex && (
@@ -44,6 +44,10 @@ export function UsagePanel({ usage, now }: { usage: UsageResponse; now: number }
           Claude の使用率は、ステータスライン（<code>feed/statusline.py</code>）を設定すると出ます。API は叩きません。
         </p>
       )}
+      {/* トークンと費用の内訳（#602）。SAI から送った Claude の返信の合計を、セッション別・日別・モデル別に見る */}
+      <p className="usage-more">
+        <a href="#/usage" onClick={onNavigate}>トークンと費用の内訳を見る</a>
+      </p>
       {!usage.codex && <p className="usage-note">Codex の使用量は見つかりませんでした（この Mac で Codex を使っていない、または記録がまだありません）。</p>}
     </div>
   )

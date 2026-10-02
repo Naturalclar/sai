@@ -15,6 +15,8 @@ export type Route =
   | { name: 'new' }
   /** GitHub に出ている PR の一覧（#524） */
   | { name: 'prs' }
+  /** 使用量の画面（#602） */
+  | { name: 'usage' }
   /** PR 1 本（#524）。`repo` は `owner/repo` */
   | { name: 'pr'; repo: string; number: number }
 
@@ -42,6 +44,7 @@ export function parseRoute(hash: string): Route {
   // 要対応（#224）。いま自分を待っているものだけ
   if (hash === '#/todo') return { name: 'todo' }
   if (hash === '#/new') return { name: 'new' }
+  if (hash === '#/usage') return { name: 'usage' }
   // GitHub の PR（#524）。1 本は `#/pr/<owner>/<repo>/<番号>`（番号は数字だけ。壊れていれば一覧へ）
   if (hash === '#/prs') return { name: 'prs' }
   const pr = hash.match(/^#\/pr\/([^/?#]+)\/([^/?#]+)\/([1-9][0-9]{0,8})$/)

@@ -44,6 +44,7 @@ import type {
   AgentStopResponse,
   UsageResponse,
   PrsResponse,
+  UsageReportResponse,
   PrDetailResponse,
   PrReviewRequest,
   PrReviewResponse,
@@ -51,7 +52,7 @@ import type {
 import { fetchByRev, RevCache } from './revCache.ts'
 import type { DigestFeedbackReason, DigestFeedbackRequest, DigestFeedbackResponse, DigestUsageReason } from '../../shared/digestFeedback.ts'
 
-export type { Agent, FeedRow, TurnStepsResponse, SessionSource, SessionSummary, SessionMeta, ManagerDraft, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, QueuedReply, ReplyQueue, ReplyQueueMap, ReplyQueueResponse, Loop, LoopMap, LoopRequest, AgentActivity, AgentActivityMessage, AgentStopResponse,Approval, ApprovalMap, ApprovalAnswer, TerminalDialog, Profile, PersonaId, SettingsResponse, SettingsRequest, Viewer, SessionPermissionsResponse, SessionProgressResponse, ProgressStep, SessionDiffResponse, SessionDiffSummaryResponse, GalleryResponse, GalleryItem, SearchResponse, SearchHit, DiffPr, DiffSection, DiffFileStat, PrSummary, PrRepo, PrsResponse, PrDetailResponse, PrComment, PrReviewRequest, PrReviewResponse, PrReviewEvent, AttachmentResponse, UsageResponse, UsageWindow, CodexUsage, ClaudeUsage } from '../../shared/types.ts'
+export type { Agent, FeedRow, TurnStepsResponse, SessionSource, SessionSummary, SessionMeta, ManagerDraft, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, QueuedReply, ReplyQueue, ReplyQueueMap, ReplyQueueResponse, Loop, LoopMap, LoopRequest, AgentActivity, AgentActivityMessage, AgentStopResponse,Approval, ApprovalMap, ApprovalAnswer, TerminalDialog, Profile, PersonaId, SettingsResponse, SettingsRequest, Viewer, SessionPermissionsResponse, SessionProgressResponse, ProgressStep, SessionDiffResponse, SessionDiffSummaryResponse, GalleryResponse, GalleryItem, SearchResponse, SearchHit, DiffPr, DiffSection, DiffFileStat, PrSummary, PrRepo, PrsResponse, PrDetailResponse, PrComment, PrReviewRequest, PrReviewResponse, PrReviewEvent, AttachmentResponse, UsageResponse, UsageReportResponse, UsageReportRow, UsageSessionRow, UsageTotals, UsageWindow, CodexUsage, ClaudeUsage } from '../../shared/types.ts'
 
 /**
  * `PUT /api/sessions/<id>/meta` のボディ。`SessionMeta` の一部を重ねる。
@@ -275,6 +276,8 @@ export const api = {
   clearProfileIcon: () => sendRaw<ProfileResponse>('DELETE', '/api/profile/icon'),
   /** 各エージェントの使用量。ローカルのファイルから読むだけ（ポーリングには乗せない） */
   usage: () => getJSON<UsageResponse>('/api/usage'),
+  /** 使用量の画面の集計（#602）。SAI が起こした Claude のターンだけ。開いたときと期間を切り替えたときだけ取る */
+  usageReport: (days: number) => getJSON<UsageReportResponse>(`/api/usage/report?days=${days}`),
   /** GitHub に出ている PR（#524）。`fresh` のときだけサーバの覚えを捨てて gh で読み直す */
   prs: (fresh = false) => getJSON<PrsResponse>(`/api/prs${fresh ? '?fresh=1' : ''}`),
   pr: (repo: string, number: number) => getJSON<PrDetailResponse>(`/api/prs/${repo.split('/').map(encodeURIComponent).join('/')}/${number}`),

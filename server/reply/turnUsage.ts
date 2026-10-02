@@ -118,6 +118,14 @@ export class TurnUsageLog implements TurnUsageSink {
     this.lastCost.set(e.id, e.cost_usd)
   }
 
+  /**
+   * 覚えている行（読み返しの窓の中。書いた順）の写しで、`cost_usd` を**そのターンぶん**に直したもの（#602）。
+   * 使用量の画面の集計（`shared/usageReport.ts`）に渡す。ファイルは読み直さない
+   */
+  turns(): TurnUsageEntry[] {
+    return this.entries.map((e) => ({ ...e, cost_usd: this.costs.get(e) ?? 0 }))
+  }
+
   /** 覚えている行の数（読み返しの窓の中だけ） */
   get size(): number {
     return this.entries.length

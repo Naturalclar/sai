@@ -78,6 +78,7 @@ import type { SessionTurnResponse, TurnStepsResponse,
   SessionSummary,
   SettingsRequest,
   SettingsResponse,
+  UsageReportResponse,
   UsageResponse,
   Viewer,
 } from '../shared/types.ts'
@@ -142,6 +143,7 @@ import { isLinearWorkspace } from '../shared/refs.ts'
 import { backgroundSessionCommand, newSessionCommand, ProcessRunner, replyCommand, splitArgs } from './reply/runner.ts'
 import { BackgroundLookupError, ClaudeBackground, type BackgroundSessions } from './reply/claudeBackground.ts'
 import { TURN_USAGE_FILE, TurnUsageLog } from './reply/turnUsage.ts'
+import { usageReport, usageReportDays } from '../shared/usageReport.ts'
 import { QUEUE_FILE, QUEUE_MAX, ReplyQueueStore } from './reply/replyQueue.ts'
 import { AGENT_MESSAGES_FILE, AGENT_TOKEN_FILE, AGENT_TOKEN_HEADER, AgentMessages, ensureAgentToken, tokenMatches } from './reply/agentMessages.ts'
 import type { AgentMessage } from './reply/agentMessages.ts'
@@ -235,6 +237,8 @@ const SETTINGS_PATH = '/api/settings'
 /** 一言が変だと言われたのを残す口（#346）。同一オリジンのみ */
 const DIGEST_FEEDBACK_PATH = '/api/digest/feedback'
 const USAGE_PATH = '/api/usage'
+/** 使用量の画面の集計（#602）。SAI が起こしたターンの使用量（turn-usage.jsonl）を期間で切って足す。読むだけ */
+const USAGE_REPORT_PATH = '/api/usage/report'
 const SEARCH_PATH = '/api/search'
 // GitHub に出ている PR（#524）。読むだけ
 const PRS_PATH = '/api/prs'
@@ -4046,6 +4050,21 @@ export function createApp(
       if (path === USAGE_PATH) {
         const payload: UsageResponse = await usageStore.get()
         return json(res, payload)
+      }
+      // 使用量の画面（#602）。メモリに持っている turn-usage.jsonl の中身を足すだけ（ファイルは読み直さない・記録は触らない・API は叩かない）。
+      // 3 秒のポーリングには乗せない（画面を開いたとき・期間を切り替えたときだけ）
+      if (path === USAGE_REPORT_PATH) {
+        const days = usageReportDays(q.get('days'))
+        await usageReady
+        // 呼び名は記録にあるセッションから引く（期間の中に行が無いセッションは ID のまま出る）。
+        // 集計は「いまから days×24 時間前まで」、記録の窓は「今日を含む days 個の日付」なので、1 日多く読む
+        const [{ sessions: known }, { entries: metas }] = await Promise.all([store.sessions(days + 1), metaStore.all()])
+        const names = new Map<string, string>()
+        for (const s of known) {
+          const name = metas[s.id]?.name || s.title
+          if (name) names.set(s.id, name)
+        }
+        return json(res, usageReport(usage.turns(), { now: Date.now(), days, names }) satisfies UsageReportResponse)
       }
       // 発言の本文の検索（#230）。索引は持たず、store が持っている行を舐めるだけ。
       // 3 秒のポーリングには乗せない（⌘K で打ち終わったときだけ叩く）

@@ -1,5 +1,6 @@
 import { Fragment } from 'react'
 import type { Inline } from '../../shared/markdown.ts'
+import { CodeSpan } from './CodeSpan'
 import { MarkdownImage } from './MarkdownImage'
 
 /** 行の中身（文字・コード・絵文字・太字・リンク・画像）。太字とリンクは中に自分を含む */
@@ -9,7 +10,8 @@ export function Inlines({ nodes }: { nodes: Inline[] }) {
       case 'text':
         return <Fragment key={i}>{node.text}</Fragment>
       case 'code':
-        return <code key={i}>{node.text}</code>
+        // ファイルのパスの形なら、押すと SAI の中で読める（#603。開ける先のセッションがあるときだけ）
+        return <CodeSpan key={i} text={node.text} />
       case 'emoji':
         // 元の名前を title に出す（Slack と同じ。何の絵文字か分かる）
         return <span key={i} className="emoji" title={`:${node.name}:`}>{node.char}</span>

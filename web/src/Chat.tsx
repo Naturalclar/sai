@@ -9,6 +9,8 @@ import { digestKey } from '../../shared/digestFeedback.ts'
 import { eventKind } from '../../shared/events.ts'
 import { ImageSourceContext } from './imageContext'
 import { LightboxProvider } from './LightboxProvider'
+import { FileViewerProvider } from './FileViewerProvider'
+import { FileSessionContext } from './fileContext'
 import { bubbleKey } from '../../shared/gallery.ts'
 import type { GalleryItem } from './api'
 import type { FeedRow, Profile, SessionSummary } from './api'
@@ -288,6 +290,7 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
   // 画像はページの中のライトボックスで開く（#507）。バブルの中の画像・添付・バブルの下の画像のどれも
   return (
     <LightboxProvider>
+    <FileViewerProvider>
     <div className="chat-wrap">
       {quote.pick && onQuote && (
         <QuoteButton
@@ -350,6 +353,8 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
                         : null
                       // 本文の画像はサーバが配る（#321）。別のマシンのセッションのファイルはこちらに無いので、印と名前だけ
                       const imageUrl = u.speaker !== 'me' && !isRemoteHost(g.host, selfHost) ? (src: string) => sessionImageUrl(id, src) : null
+                      // 返答の中のファイルのパスも、同じ条件で SAI の中で読める（#603）
+                      const fileSession = imageUrl ? id : null
                       const side: MessageSide = u.speaker === 'me' ? 'me' : 'agent'
                       // バブルの中に出ていない、この発言の画像（#507）。待ちのバブルには付けない
                       const imageKey = bubbleKey(u.row.ts, side === 'me' ? 'user' : 'agent')
@@ -369,6 +374,7 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
                       // 一言があるバブルには「変？」を出す（#346）。鍵はサーバ（作る側）と同じ関数で作る
                       return (
                       <ImageSourceContext key={u.key} value={imageUrl}>
+                      <FileSessionContext value={fileSession}>
                       {u.key === unreadKey && <UnreadLine />}
                       {u.handedReplies ? (
                         <div className="handed-note" title="SAI がこの指示の頭に、別のセッションからの返答を足してエージェントに渡した（記録にはそのまま残る）">
@@ -409,6 +415,7 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
                         thinkingClipped={showThinking && wasClipped(u.row, 'thinking')}
                         defaultOpen={longOpen}
                       />
+                      </FileSessionContext>
                       </ImageSourceContext>
                       )
                     })}
@@ -422,6 +429,7 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
       </div>
       {!atBottom && <JumpToBottom count={arrived} onClick={jump} />}
     </div>
+    </FileViewerProvider>
     </LightboxProvider>
   )
 }

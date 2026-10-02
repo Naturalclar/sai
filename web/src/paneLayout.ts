@@ -125,24 +125,6 @@ export function sessionIdsIn(layout: PaneLayout): string[] {
   return paneItems(layout).flatMap((item) => (item.kind === 'session' ? [item.id] : []))
 }
 
-/** 並べているとき、差分を足してもこれより狭いペインにはしない（切るならモーダルに落とす） */
-export const MIN_PANE_PX = 400
-/** 差分のペインの幅（styles.css の `main.layout.diff-open` の `clamp(360px, 38vw, 760px)` と同じ値） */
-const DIFF = { min: 360, vw: 0.38, max: 760 }
-
-/**
- * 差分を右のペインでなくモーダルで出す幅の境目（px。画面の幅がこれ以下ならモーダル）。差分を足すと 1 ペインが
- * `MIN_PANE_PX` を切る幅。`panes` はチャットのペインの数、`sidebar` はサイドバーの幅（閉じていれば 0）。
- * 差分の幅は画面の幅で変わる（38vw を 360〜760px に収める）ので、どの区間に落ちるかで解く
- */
-export function diffModalBelow(panes: number, sidebar: number): number {
-  const need = sidebar + panes * MIN_PANE_PX
-  const width = need / (1 - DIFF.vw)
-  if (width * DIFF.vw <= DIFF.min) return need + DIFF.min
-  if (width * DIFF.vw >= DIFF.max) return need + DIFF.max
-  return Math.ceil(width)
-}
-
 /**
  * 隣のペインに開く（要対応の行からセッションへ飛ぶリンク）。開く元（フォーカスのあるペイン）は残り、フォーカスは開いた方へ移る。
  * - もう並びにあれば、そのペインにフォーカスを移すだけ

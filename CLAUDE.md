@@ -222,7 +222,7 @@ OpenCode (feed/opencode/sai.js) ─┘                           │
 | `SAI_CODEX_APP_SERVER` | `0` で閉じたCodexを従来の `exec resume` に戻す（既定はapp-server） |
 | `SAI_OPENCODE_SERVER` | `0` で OpenCode への返信を従来の `opencode run -s` に戻す（既定は長寿命の `opencode serve` へ HTTP。#382） |
 | `SAI_CLAUDE_AGENTS` | `0` で `claude agents --json` を聞きに行かない（既定は聞く。#418）。聞けなければ処理中の判定は今までどおり transcript だけ |
-| `SAI_GH` | `0` で差分ボタンの PR 番号を引かず、PR の一覧（#524）も読まず、レビューの投稿（#526）の口も出さない（既定は読む）。叩くのは PATH の `gh` の `gh pr view` / `gh pr list` / `gh pr diff` / `gh api user` と、人が押したときのレビューの投稿（`gh api -X POST …/reviews`）だけで、引けなければ番号が付かない・一覧に「読めませんでした」と出るだけ |
+| `SAI_GH` | `0` で差分ボタンの PR 番号を引かず、PR の一覧（#524）も読まず、レビューの投稿（#526）の口も出さない（既定は読む）。叩くのは PATH の `gh` の `gh pr view` / `gh pr list` / `gh pr diff` / `gh api user` / 行コメントを読む `gh api -X GET …/pulls/<番号>/comments`（#600） と、人が押したときのレビューの投稿（`gh api -X POST …/reviews`）だけで、引けなければ番号が付かない・一覧に「読めませんでした」と出るだけ |
 | `CODEX_HOME` | Codex のホーム（既定 `~/.codex`）。Codex 自身の変数に従うだけ |
 | `GROK_HOME` | Grok Build のホーム（既定 `~/.grok`）。Grok 自身の変数に従うだけ（`record.py` が `sessions/` を読む） |
 | `AGENT_FEED_DEBUG` | `1` で record.py の例外をログに残す |

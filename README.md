@@ -343,7 +343,7 @@ rsync -a --include='????-??-??.*.jsonl' --exclude='*' mini:~/.agent-feed/ ~/.age
 | `SAI_CODEX_APP_SERVER` | `0` で閉じたCodexのapp-server管理を切り、従来の `codex exec resume` に戻す。既定は有効 |
 | `SAI_OPENCODE_SERVER` | `0` で OpenCode への返信を従来の `opencode run -s` に戻す。既定は長寿命の `opencode serve` に HTTP で送る |
 | `SAI_CLAUDE_AGENTS` | `0` で `claude agents --json` を聞きに行かない（既定は聞く）。**このマシンで生きている Claude のセッション**の一覧で、「端末で止めたターンがまだ処理中に見える」のを打ち消すのに使う。聞けなければ今までどおり transcript の判定のまま |
-| `SAI_GH` | `0` で差分ボタンの PR 番号を引かず、PR の一覧（#524）も読まず、レビューの投稿（#526）の口も出さない（既定は読む。SAI が外のネットワークに問い合わせる所の 1 つ。もう 1 つは `JEV_API_KEY`）。叩くのは `PATH` の `gh` の `gh pr view` / `gh pr list` / `gh pr diff` / `gh api user`（ここまで読むだけ）と、**人が確認の画面で押したときだけ**のレビューの投稿（`gh api -X POST repos/<owner>/<repo>/pulls/<番号>/reviews`）で、引けなければ番号が付かない・一覧に「読めませんでした」と出るだけ |
+| `SAI_GH` | `0` で差分ボタンの PR 番号を引かず、PR の一覧（#524）も読まず、レビューの投稿（#526）の口も出さない（既定は読む。SAI が外のネットワークに問い合わせる所の 1 つ。もう 1 つは `JEV_API_KEY`）。叩くのは `PATH` の `gh` の `gh pr view` / `gh pr list` / `gh pr diff` / `gh api user` / 行コメントを読む `gh api -X GET …/pulls/<番号>/comments`（#600）（ここまで読むだけ）と、**人が確認の画面で押したときだけ**のレビューの投稿（`gh api -X POST repos/<owner>/<repo>/pulls/<番号>/reviews`）で、引けなければ番号が付かない・一覧に「読めませんでした」と出るだけ |
 | `CODEX_HOME` | Codex のホーム（既定 `~/.codex`）。Codex 自身の変数で、SAI はそれに従うだけ |
 | `GROK_HOME` | Grok Build のホーム（既定 `~/.grok`）。Grok 自身の変数で、`record.py` が `sessions/` から入力とモデルを読むときにそれに従うだけ |
 | `AGENT_FEED_DEBUG` | `1` で `record.py` の例外をログに残す |

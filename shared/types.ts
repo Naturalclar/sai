@@ -434,6 +434,33 @@ export interface PrComment {
   truncated?: boolean
 }
 
+/** PR の差分の行に付いたコメントの 1 件（#600。`gh api repos/<repo>/pulls/<番号>/comments` を読んだもの）。**読むだけ** */
+export interface PrLineComment {
+  /** GitHub のコメントの番号 */
+  id: number
+  /** 返信なら、やり取りの最初のコメントの `id` */
+  reply_to?: number
+  path: string
+  /** `old` は左（base）側、`new` は右（head）側 */
+  side: 'old' | 'new'
+  /** **いまの差分**でのその側の行番号。前の版へのコメント（outdated）とファイル全体へのコメントは 0 */
+  line: number
+  /** 書かれたときの行番号（当てられなかったコメントの目安に出す）。無ければ 0 */
+  original_line: number
+  /** コメントの付いた行の中身（`diff_hunk` の最後の行）。画面はいまの差分のその行と同じときだけ行に出す。取れなければ省略 */
+  code?: string
+  /** 行ではなくファイル全体へのコメント */
+  file_level?: boolean
+  author: string
+  at: string
+  /** 本文（Markdown）。上限で切ったら `truncated` */
+  body: string
+  /** GitHub のそのコメントへのリンク */
+  url: string
+  bot?: boolean
+  truncated?: boolean
+}
+
 /** GET /api/prs/<owner>/<repo>/<番号>（#524）。PR 1 本の中身と差分。差分は `gh pr diff` を読んだもの */
 export interface PrDetailResponse {
   repo: string
@@ -465,6 +492,12 @@ export interface PrDetailResponse {
   comments_omitted?: number
   /** コメントだけ読めなかった理由（本文と差分は出す） */
   comments_error?: string
+  /** 差分の行に付いたコメント（#600 の案 2）。時刻の古い順。行に当てるのは画面（`placeLineThreads()`）。読めなければ省略して `line_comments_error` */
+  line_comments?: PrLineComment[]
+  /** 件数の上限で落とした古い行コメントの数。落としていなければ省略 */
+  line_comments_omitted?: number
+  /** 行コメントだけ読めなかった理由（ほかは出す） */
+  line_comments_error?: string
 }
 
 /** GitHub のレビューの種類（#526）。既定は COMMENT で、ほかは人が明示的に選んだときだけ */

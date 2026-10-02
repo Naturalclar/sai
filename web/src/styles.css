@@ -205,6 +205,17 @@
   .diff-comment-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 8px; font-size: 13px; }
   .diff-comment-bar.hint { color: var(--muted); font-size: 12px; }
   .diff-comment-bar .n { font-weight: 600; }
+  /* GitHub で行に付いたやり取り（#600 の案 2）。下書き（accent の線）と見分けるため、線を緑にして枠の地にする。本文は Markdown なので pre-wrap にしない */
+  .diff-section .diff-comment.posted, .diff-orphan .diff-comment.posted { border-left-color: var(--codex); background: var(--panel); border-top: 1px solid var(--line); border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); border-radius: 0 6px 6px 0; }
+  .diff-comment.posted .one + .one { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+  .diff-comment.posted .head { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; font-size: 12px; color: var(--muted); }
+  .diff-comment.posted .head .author { color: var(--ink); font-weight: 600; }
+  /* 差分の行（等幅）の中に置かれるので、読み物の字に戻す */
+  .diff-comment.posted { font-family: -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif; }
+  .diff-comment.posted .body { white-space: normal; }
+  .diff-comment.posted .foot { margin-top: 6px; font-size: 12px; }
+  .diff-section .file .tag.posted { background: color-mix(in srgb, var(--codex) 16%, transparent); color: var(--codex); font-weight: 600; }
+  .pr-line-rest > h2 { margin: 0 0 6px; font-size: 12px; font-weight: 700; color: var(--muted); }
   .diff-orphan { margin: 0 0 8px; font-size: 12px; }
   .diff-orphan .diff-comment { margin-top: 2px; border-left: 3px solid var(--accent); background: var(--bg); padding: 6px 10px; font-size: 13px; }
   /* タッチでは行番号の幅が指に足りないので広げる */

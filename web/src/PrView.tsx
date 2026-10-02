@@ -17,6 +17,8 @@ import type { PrReviewEvent } from './api'
 import { newestFirst, prAuthorSession, prCommentKey } from './prSession'
 import { Markdown } from './Markdown'
 import { PrComments } from './PrComments'
+import { PrLineThreadNote } from './PrLineThreadNote'
+import { placeLineThreads, threadLineComments } from '../../shared/prLineComments.ts'
 import { agoLabel, checkLabel } from './prLabels'
 import { ReviewBadge } from './ReviewBadge'
 import type { PaneProps } from './App'
@@ -115,6 +117,11 @@ export function PrView({ repo, number, onStatus, onInsertToSession }: { repo: st
   const files = useMemo(() => (loaded ? parseUnifiedDiff(loaded.data.diff.patch) : null), [loaded])
   // PR が更新されて行が見当たらなくなったコメントは、差分の上にまとめて出す（DiffBody と同じ）
   const orphans = canWrite && files ? comments.list.filter((c) => !commentLine(c, files)) : []
+  // GitHub で差分の行に付いたコメント（#600 の案 2）。行に当てるのはいまの差分で中身が同じときだけで、当たらないものは差分の上にまとめる
+  const lineThreads = useMemo(
+    () => (loaded && files ? placeLineThreads(threadLineComments(loaded.data.line_comments ?? []), files) : null),
+    [loaded, files],
+  )
   const check = pr ? checkLabel(pr.checks) : null
 
   return (
@@ -222,12 +229,28 @@ export function PrView({ repo, number, onStatus, onInsertToSession }: { repo: st
               <DiffCommentNote comment={c} moved onRemove={() => comments.remove(c.id)} />
             </div>
           ))}
+          {loaded.data.line_comments_error && <div className="warn">{loaded.data.line_comments_error}</div>}
+          {(loaded.data.line_comments_omitted ?? 0) > 0 && (
+            <div className="warn">行に付いたコメントが多いので、古い {loaded.data.line_comments_omitted} 件は出していません。</div>
+          )}
+          {lineThreads && lineThreads.rest.length > 0 && (
+            <section className="pr-line-rest">
+              <h2>いまの差分の行に当てられなかったコメント {lineThreads.rest.length} 件（前の版へのコメント・ファイル全体へのコメントなど）</h2>
+              {lineThreads.rest.map((t) => (
+                <div className="diff-orphan" key={t.root.id}>
+                  <code>{t.root.original_line ? `${t.root.path}:${t.root.original_line}` : t.root.path}</code>
+                  <PrLineThreadNote thread={t} now={loaded.at.getTime()} />
+                </div>
+              ))}
+            </section>
+          )}
           {!loaded.data.diff_error && (
             <DiffView
               section={loaded.data.diff}
               title="変更"
               empty="差分はありません"
               {...(diffComments ? { comments: diffComments } : {})}
+              {...(lineThreads && lineThreads.placed.length > 0 ? { threads: lineThreads.placed, now: loaded.at.getTime() } : {})}
             />
           )}
           {loaded.data.diff.truncated && (

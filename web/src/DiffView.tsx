@@ -6,6 +6,7 @@ import { perFileComments, type DiffViewComments } from './diffFileComments.ts'
 import { DiffFileItem, type EditingAt } from './DiffFileItem'
 import { ScrollTick, useScrollTick } from './useScrollTick.ts'
 import type { DiffFileStat, DiffSection } from './api'
+import type { PlacedLineThread } from '../../shared/prLineComments.ts'
 
 export type { DiffViewComments } from './diffFileComments.ts'
 
@@ -26,9 +27,28 @@ function lineCount(files: readonly DiffFile[], path: string): number {
  * 本文の木は shared/diff.ts が作る（HTML 文字列は作らない）。
  * 本文の行は**見えている分だけ DOM に置く**（#287。ファイルごとに `DiffFileItem` → `DiffFilePatch`）。どこが見えているかは
  * この部品の祖先のスクロール容器（`.diff-scroll` など。無ければ window）を `useScrollTick` で見張り、`ScrollTick` で各ファイルに配る。
+ * `threads`（GitHub で行に付いたやり取り。#600）もファイルごとに分けて渡す。
  * `comments` はファイルごとに分けて渡す（`perFileComments`）。`DiffFileItem` の memo は中身で比べるので、呼び出し側が同じオブジェクトを渡し続ける必要は無い
  */
-export function DiffView({ section, title, empty, action, comments }: { section: DiffSection; title: string; empty: string; action?: ReactNode; comments?: DiffViewComments }) {
+export function DiffView({
+  section,
+  title,
+  empty,
+  action,
+  comments,
+  threads,
+  now,
+}: {
+  section: DiffSection
+  title: string
+  empty: string
+  action?: ReactNode
+  comments?: DiffViewComments
+  /** GitHub で行に付いたやり取り（#600 の案 2。PR の画面だけ）。行に当てたもの（`placeLineThreads()`）を渡す。同じ中身なら同じ配列を渡し続ける */
+  threads?: readonly PlacedLineThread[]
+  /** 「何分前」の基準（読んだ時刻） */
+  now?: number
+}) {
   // patch のパースは重いので、同じ本文なら作り直さない（全部開くようになって行数が増えたぶん効く）
   const files = useMemo(() => parseUnifiedDiff(section.patch), [section.patch])
   const [open, setOpen] = useState<Record<string, boolean>>({})
@@ -38,6 +58,16 @@ export function DiffView({ section, title, empty, action, comments }: { section:
   const rootRef = useRef<HTMLDivElement>(null)
   const scroll = useScrollTick(rootRef)
   const commentsOf = perFileComments(comments)
+  // ファイルごとに分けて覚える（`DiffFileItem` の memo は配列の同一性で比べる。描くたびに分け直すと全ファイルが描き直る）
+  const threadsOf = useMemo(() => {
+    const byPath = new Map<string, PlacedLineThread[]>()
+    for (const t of threads ?? []) {
+      const list = byPath.get(t.path)
+      if (list) list.push(t)
+      else byPath.set(t.path, [t])
+    }
+    return byPath
+  }, [threads])
 
   // 最初から開いておくファイル（#221）。上から順に、描画する行数が予算に収まるぶんだけ開く。
   // 普段の差分は全部開き、極端に大きいものだけ後ろが閉じたまま出る
@@ -72,6 +102,7 @@ export function DiffView({ section, title, empty, action, comments }: { section:
                 comments={commentsOf(f.path)}
                 editing={editing?.path === f.path ? editing : null}
                 setEditing={setEditing}
+                {...(threadsOf.has(f.path) ? { threads: threadsOf.get(f.path)!, now: now ?? 0 } : {})}
               />
             ))}
           </ul>

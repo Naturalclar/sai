@@ -3,7 +3,9 @@
 // 差分ボタンの PR 番号（pr.ts。#211）と同じ作法で閉じてある:
 //
 // - 読むのは下の 5 形だけ（`gh pr list` / `gh pr list --search review-requested:@me` / `gh pr view` / `gh pr diff` / `gh api user`）。
-//   コメント（#600）も `gh pr view --json comments,reviews` で、同じ形の項目違い。
+//   コメント（#600）も `gh pr view --json comments,reviews` で、同じ形の項目違い。差分の行に付いたコメントは `gh pr view` では
+//   取れないので、`gh api -X GET repos/<owner>/<repo>/pulls/<番号>/comments?per_page=100 --paginate --jq <決め打ち>` を
+//   **読むだけの 1 形**として足した（6 形目。`-X GET` を明示し、`-f` / `--input` は付けない）。
 //   書くのは `gh api -X POST repos/<owner>/<repo>/pulls/<番号>/reviews --input -` の 1 形だけ（中身は shared/prReview.ts の
 //   githubReview() が組み立てたもの。呼ぶ側が同一オリジン・head の SHA・行の位置を確かめてから呼ぶ）。
 //   引数はここで組み立て、任意のサブコマンドは作れない。シェルは通さない
@@ -18,6 +20,8 @@ import type { GithubReview } from '../../shared/prReview.ts'
 import { githubErrorText } from '../../shared/prReview.ts'
 import { parsePrComments } from '../../shared/prComments.ts'
 import type { PrCommentList } from '../../shared/prComments.ts'
+import { LINE_COMMENTS_JQ, parsePrLineComments } from '../../shared/prLineComments.ts'
+import type { PrLineCommentList } from '../../shared/prLineComments.ts'
 import type { PrSummary } from '../../shared/types.ts'
 
 /** 1 回の `gh` を諦めるまで。一覧はリポジトリの数だけ並べて走らせる */
@@ -55,6 +59,8 @@ export interface PrBrowser {
   view(repo: string, number: number): Promise<PrView | null>
   /** 会話のコメントとレビュー（#600）。読めなければ null（「無い」の空と分ける）。画面を開いたときと「更新」のときだけ呼ぶ */
   comments(repo: string, number: number): Promise<PrCommentList | null>
+  /** 差分の行に付いたコメント（#600 の案 2）。読めなければ null。画面を開いたときと「更新」のときだけ呼ぶ */
+  lineComments(repo: string, number: number): Promise<PrLineCommentList | null>
   /** `gh` でログインしている人（#526。投稿の口を出すか・自分の PR か）。未ログイン・引けなければ null */
   viewer(): Promise<string | null>
   /** レビューを投稿する（#526）。投稿できたらそのレビューの URL、できなければ理由 */
@@ -71,6 +77,9 @@ export class NoPrs implements PrBrowser {
     return Promise.resolve(null)
   }
   comments(): Promise<PrCommentList | null> {
+    return Promise.resolve(null)
+  }
+  lineComments(): Promise<PrLineCommentList | null> {
     return Promise.resolve(null)
   }
   viewer(): Promise<string | null> {
@@ -243,6 +252,12 @@ export class GhPrs implements PrBrowser {
     if (!isRepoName(repo) || !isPrNumber(String(number))) return null
     const out = await this.run(['pr', 'view', String(number), '--repo', repo, '--json', COMMENT_FIELDS], PR_COMMENTS_MAX_BYTES)
     return out === null ? null : parsePrComments(out)
+  }
+
+  async lineComments(repo: string, number: number): Promise<PrLineCommentList | null> {
+    if (!isRepoName(repo) || !isPrNumber(String(number))) return null
+    const out = await this.run(['api', '-X', 'GET', `repos/${repo}/pulls/${number}/comments?per_page=100`, '--paginate', '--jq', LINE_COMMENTS_JQ], PR_COMMENTS_MAX_BYTES)
+    return out === null ? null : parsePrLineComments(out)
   }
 
   async view(repo: string, number: number): Promise<PrView | null> {

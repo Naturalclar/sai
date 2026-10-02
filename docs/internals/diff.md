@@ -84,11 +84,12 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 ## GitHub の PR を読む
 
 - `GET /api/prs` と `/api/prs/<owner>/<repo>/<番号>`、画面は `#/prs` の `PrListView` と `#/pr/<owner>/<repo>/<番号>` の `PrView`。
-- `GhPrs` が `gh pr list` / `gh pr list --search review-requested:@me` / `gh pr view` / `gh pr diff` の 4 形と、投稿の口を出すかのための `gh api user` を組み立てる（チェックアウトも fetch もしない）。
+- `GhPrs` が `gh pr list` / `gh pr list --search review-requested:@me` / `gh pr view` / `gh pr diff` の 4 形と、投稿の口を出すかのための `gh api user`、行コメントの `gh api -X GET …/pulls/<番号>/comments`（#600）を組み立てる（チェックアウトも fetch もしない）。
 - 並べるリポジトリは `shared/prs.ts` の `knownRepos()`（直近 30 日のセッションの remote が GitHub のもの）。URL の `owner/repo` も `pickKnownRepo()` で知っているものから引く。
 - 3 秒のポーリングには乗せず（開いたときと「更新」だけ。ボタンは `web/src/RefreshButton.tsx`＝`RefreshMark` ＋文字で、取っている間は CSS でアイコンを回す。#601）、一覧は 60 秒覚える（失敗も覚える）。
 - 差分は `gh pr diff` の本文から `diffStats()` で見出しを数え（切る前に数える）、`clampPatch()` で #171 と同じ上限に切り、画面はセッションと同じ `DiffView` で出す。
 - **会話のコメントとレビュー（#600）**は `PrBrowser.comments()`。`gh pr view <番号> --repo <repo> --json comments,reviews`（`pr view` の項目違いで、形は増やしていない）を**中身の `pr view` とは別に**引き、`shared/prComments.ts` の `parsePrComments()` が 1 本の一覧（古い順）にする。上限は `PR_COMMENTS_MAX`（100 件。古い方を落とす）と `PR_COMMENT_MAX_CHARS`（20000 字）、出力は `PR_COMMENTS_MAX_BYTES`（8MB）まで。読めなければ null で、`GET /api/prs/…` は `comments_error` を添えて本文と差分を返す。レビューの投稿（`handlePrReview`）は `view()` しか呼ばないのでコメントは引かない。画面は `PrComments` → `PrCommentItem`（畳むものは `<details>`）、文言は `prCommentLabels.ts`。
+- **差分の行に付いたコメント（#600 の案 2）**は `PrBrowser.lineComments()`。`gh api -X GET repos/<repo>/pulls/<番号>/comments?per_page=100 --paginate --jq <LINE_COMMENTS_JQ>` の 1 形（読むだけ。`-f` / `--input` は付けない。jq は `shared/prLineComments.ts` の決め打ちで、1 件 1 行の JSON にする）。`parsePrLineComments()` は読めない行が 1 つでもあれば null（切れた出力を「少ない」と読まない）。上限は `PR_LINE_COMMENTS_MAX`（300）。画面は `threadLineComments()` で返信をまとめ、`placeLineThreads()` で**いまの差分の行**に当てる（GitHub が `line` を返していて、その側のその行の中身が `code`＝`diff_hunk` の最後の行と同じときだけ。左側の文脈の行に付いたものは画面の鍵＝新しい側に直す）。当たったものは `DiffView` の `threads` → `DiffFileItem`（ファイルごとの配列を `useMemo` で覚え、memo は配列の同一性で比べる。鍵は `pinKey()` で `pinned` に足す）→ `PrLineThreadNote`、当たらないものは `PrView` が差分の上に出す。
 - `SAI_GH=0` なら `NoPrs`。テストは `PrBrowser` を差し替える（`server/prs.test.ts`）。
 
 ### 書いたセッションの入力欄に入れる（#525）

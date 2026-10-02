@@ -167,7 +167,10 @@ import {
   deliveredText,
   isDeliveryOf,
   replyOf,
+  resolveTarget,
+  targetRefusal,
   sendHow,
+  SEND_TO_ARG,
   SEND_COMPACT_ARG,
   SEND_COMPACT_NOTE,
   sessionLabel,
@@ -2498,9 +2501,17 @@ export function createApp(
     if (text.length > AGENT_TEXT_MAX_CHARS) return error(res, 400, `送れるのは ${AGENT_TEXT_MAX_CHARS} 字までです。短くまとめてください`)
     const found = await agentFrom(b.from)
     if (typeof found === 'string') return error(res, 409, found)
-    const to = typeof b.to === 'string' ? b.to : ''
-    const target = agentTargets(found.sessions, found.session, selfHost()).find((s) => s.id === to)
-    if (!target) return error(res, 403, 'その相手には送れません（同じリポジトリの、SAI から返信できる別のセッションだけ。sai_sessions で確かめてください）')
+    // 宛先は id か呼び名（#625）。引くのは送ってよい相手の中からだけで、ちょうど 1 つに決まらなければ送らない
+    const asked = typeof b.to === 'string' ? b.to : ''
+    const targets = agentTargets(found.sessions, found.session, selfHost())
+    // 同じ project に居るが送れないセッション（別のマシンなど）。同じ名前がそこにも居れば、名前では当てない
+    const blocked = found.sessions.filter((s) => s.id !== found.session.id && s.project === found.session.project && !s.archived && !targets.includes(s))
+    const resolved = resolveTarget(targets, asked, blocked)
+    if (!resolved.target) {
+      return error(res, resolved.ambiguous ? 409 : 403, targetRefusal(asked, resolved, 'その相手には送れません（同じリポジトリの、SAI から返信できる別のセッションだけ。sai_sessions で確かめてください）'))
+    }
+    const target = resolved.target
+    const to = target.id
     const limit = agents.refusal(found.session.id, found.turn)
     if (limit) return error(res, 429, limit)
     // 使用量の枠が残り少なければ送らない。見るのは相手のエージェントの枠（受け取って読み直すのは相手。#311）
@@ -2525,6 +2536,7 @@ export function createApp(
     const payload: AgentSendResponse = {
       message_id: messageId,
       to,
+      to_name: sessionLabel(target),
       via,
       sent: agents.sentInTurn(found.session.id, found.turn),
       limit: AGENT_SEND_MAX,
@@ -2904,6 +2916,20 @@ export function createApp(
   }
 
   /**
+   * `/mcp` の宛先を引く（#625）。**id がそのまま当たればそれ**（送れない・置けない理由は呼び出し側が今までどおり返す）。
+   * 当たらなければ、`allowed` を通るセッションの中から呼び名の完全一致で探し、ちょうど 1 つのときだけ返す。決まらなければ断りの文
+   */
+  const mcpTarget = (sessions: SessionSummary[], asked: string, allowed: (s: SessionSummary) => boolean): SessionSummary | string => {
+    const byId = sessions.find((s) => s.id === asked)
+    if (byId) return byId
+    // 送れない・置けないが居るセッション（素通し・別のマシンなど）に同じ名前があれば、名前では当てない（別の相手に黙って届かせない）
+    const resolved = resolveTarget(sessions.filter(allowed), asked, sessions.filter((s) => !s.archived && !allowed(s)))
+    if (resolved.target) return resolved.target
+    // 候補は当たりが複数のときだけ並べる（tailnet からは全リポジトリが見えるので、無いときに全部は並べない）
+    return resolved.ambiguous ? targetRefusal(asked, resolved, '') : 'そのセッションは見つかりません（sai_sessions で確かめてください）'
+  }
+
+  /**
    * MCP のツール。読むもの（read）は画面・REST と同じ範囲。案を置く（draft。#565）は入力欄に置くだけでターンを起こさない。
    * 送る・待つ（send）はエージェント用の口（#310）と同じ規則
    * （見出しで人の入力と見分ける・相手が処理中なら預かり・返答は見出しの id で探して切る・受け取ったターンからは先へ送らせない）
@@ -2975,15 +3001,18 @@ export function createApp(
       name: 'sai_suggest',
       scope: 'draft',
       description: `宛先のセッションの入力欄に「案」を置く（送らない・ターンを起こさない）。人が画面で見て、入れて送るか捨てるかを決める。1 セッションに 1 つで、置き直すと前の案は消える。24 時間か、人がそのセッションに何か送ると消える。本文は ${AGENT_TEXT_MAX_CHARS} 字まで`,
-      inputSchema: { type: 'object', properties: { to: { type: 'string', description: 'sai_sessions の id' }, text: { type: 'string', description: '入力欄に置く本文（そのまま送れる形で）' } }, required: ['to', 'text'] },
+      inputSchema: { type: 'object', properties: { to: { type: 'string', description: SEND_TO_ARG }, text: { type: 'string', description: '入力欄に置く本文（そのまま送れる形で）' } }, required: ['to', 'text'] },
       run: async (args) => {
-        const to = mcpStr(args.to)
+        const asked = mcpStr(args.to)
         const text = mcpStr(args.text).trim()
-        if (!to || !text) return textResult('to と text が要ります', true)
+        if (!asked || !text) return textResult('to と text が要ります', true)
         if (text.length > AGENT_TEXT_MAX_CHARS) return textResult(`置けるのは ${AGENT_TEXT_MAX_CHARS} 字までです。短くまとめてください`, true)
         const { sessions } = await sessionsWithMeta(QUEUE_DAYS)
-        const target = sessions.find((s) => s.id === to)
-        if (!target) return textResult('そのセッションは見つかりません（sai_sessions で確かめてください）', true)
+        // 宛先は id か呼び名（#625）。名前で引くのは、案を置ける相手（アーカイブ済みでない・画面に入力欄が出る）の中からだけ
+        const found = mcpTarget(sessions, asked, (s) => !s.archived && !replyBlockedReason(s, selfHost()))
+        if (typeof found === 'string') return textResult(found, true)
+        const target = found
+        const to = target.id
         // 別のリポジトリ・素通しのセッションにも置ける（送るのは人なので）。画面に入力欄が出ないものにだけは置かない
         if (target.archived) return textResult('置けません: アーカイブ済み', true)
         const blocked = replyBlockedReason(target, selfHost())
@@ -2992,7 +3021,7 @@ export function createApp(
         const busy = mcpBusy(to) || (await progress.read(target)).active
         await suggestionStore.put(to, text, access.caller, { busy })
         await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${mcpFrom(access)} → ${to} 案を置いた（${text.length} 字）\n`).catch(() => {})
-        return textResult('入力欄に案を置きました（送ってはいません。人が SAI の画面で見て、入れて送るか捨てるかを決めます）')
+        return textResult(`${to}「${sessionLabel(target)}」の入力欄に案を置きました（送ってはいません。人が SAI の画面で見て、入れて送るか捨てるかを決めます）`)
       },
     },
     {
@@ -3001,17 +3030,20 @@ export function createApp(
       description: `別のセッションに頼む・聞く。相手が処理中なら終わってから回る。返答は sai_wait で受け取る。本文は ${AGENT_TEXT_MAX_CHARS} 字まで。${SEND_COMPACT_NOTE}`,
       inputSchema: {
         type: 'object',
-        properties: { to: { type: 'string', description: 'sai_sessions の id' }, text: { type: 'string' }, compact: { type: 'boolean', description: SEND_COMPACT_ARG } },
+        properties: { to: { type: 'string', description: SEND_TO_ARG }, text: { type: 'string' }, compact: { type: 'boolean', description: SEND_COMPACT_ARG } },
         required: ['to', 'text'],
       },
       run: async (args) => {
-        const to = mcpStr(args.to)
+        const asked = mcpStr(args.to)
         const text = mcpStr(args.text).trim()
-        if (!to || !text) return textResult('to と text が要ります', true)
+        if (!asked || !text) return textResult('to と text が要ります', true)
         if (text.length > AGENT_TEXT_MAX_CHARS) return textResult(`送れるのは ${AGENT_TEXT_MAX_CHARS} 字までです。短くまとめてください`, true)
         const { sessions } = await sessionsWithMeta(QUEUE_DAYS)
-        const target = sessions.find((s) => s.id === to)
-        if (!target) return textResult('そのセッションは見つかりません（sai_sessions で確かめてください）', true)
+        // 宛先は id か呼び名（#625）。名前で引くのは送れる相手の中からだけ（id なら、送れない理由をそのまま返す）
+        const found = mcpTarget(sessions, asked, (s) => !mcpSendRefusal(s))
+        if (typeof found === 'string') return textResult(found, true)
+        const target = found
+        const to = target.id
         const why = mcpSendRefusal(target)
         if (why) return textResult(`送れません: ${why}`, true)
         const limit = mcpLimiter.refusal(access.caller)
@@ -3034,7 +3066,7 @@ export function createApp(
         await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${mcpFrom(access)} → ${to} メッセージ ${messageId}（${via}）\n`).catch(() => {})
         const size = tokensLabel(context)
         return textResult(
-          `送りました（message_id: ${messageId}。${sendHow(via)}）。` +
+          `${to}「${sessionLabel(target)}」に送りました（message_id: ${messageId}。${sendHow(via)}）。` +
             `${size ? `${via === 'compact' ? '要約の前の相手の文脈は' : '相手が読み直す量は'}${size}（予算の残り ${tokensLabel(Math.max(0, AGENT_TURN_READ_BUDGET - agents.readInTurn(mcpFrom(access), window))) || '0'}）。` : ''}返答は sai_wait で受け取れます`,
         )
       },

@@ -116,9 +116,33 @@ export interface FeedRow {
   recovered?: true
 }
 
+/**
+ * 人が送り元の画面の「返答のバブル」の下から、相手のセッションへ直接送った返信（#700）。チャットのバブルにはせず、
+ * そのバブルの下の小さい 1 行に出す。本文は頭だけ（`FOLLOWUP_SHOWN_CHARS`）
+ */
+export interface AgentFollowupLine {
+  id: string
+  /** 相手のエンティティ ID */
+  to: string
+  to_name: string
+  /** 送った文の頭 */
+  text: string
+  sent_at: string
+  /** どのバブルの下から送ったか（その返答の行の `ts`） */
+  anchor: string
+  /** 相手がこの返信に返した行の `ts`。まだ無ければ無い（その行は `agent_replies` に `followup` の印つきで載る） */
+  reply_ts?: string
+}
+
 /** 送り元の画面に並べる返答の印（#588） */
 export interface AgentReplyTag {
+  /** 送ったメッセージの id。`followup` のときは、人がこの画面から送った返信（`AgentFollowupLine.id`） */
   message_id: string
+  /**
+   * 人が**この画面の返答のバブルの下から**相手へ送った返信への返答（#700）。`sai_send` の返答ではないので、
+   * 送り元のエージェントの会話には渡さない（`handed_at` は付かず、画面も「渡した / 渡す」の印を出さない）
+   */
+  followup?: true
   /** 相手の呼び名（表示名 → 題名 → ID） */
   to_name: string
   /** 相手のアイコンの URL（#666。`SessionSummary.icon` と同じ形）。付けていなければ無い（画面は頭文字を出す） */
@@ -1336,6 +1360,13 @@ export interface SessionDetailResponse {
    * 送り元が `sai_wait` せずにターンを終えても、返答がこの画面に出る。描いている窓（`recent`）より前の返答は載せない
    */
   agent_replies?: FeedRow[]
+  /** 人がこの画面の返答のバブルの下から相手へ送った返信（#700。古い順）。バブルの下の 1 行に出す */
+  agent_followups?: AgentFollowupLine[]
+  /**
+   * `agent_replies` の相手のセッション（#700。その場で返信する入力欄・返信できるかの判定・案 `next_ask` に使う）。
+   * セッション画面は一覧を持たないのでここに載せる。一覧の窓の外の相手は載らない（そのときは返信の口を出さない）
+   */
+  agent_reply_sessions?: SessionSummary[]
   /**
    * いまのコンテキスト量（#441。返信 1 回で読み直す量）。`ProgressReader.read()` の `context_tokens` で、分からない
    * （別のマシン・読めない・サーバの立っていない OpenCode）ときは載せない
@@ -1434,6 +1465,12 @@ export interface ReplyRequest {
    * 効くのは Claude で、端末で開いておらず、処理中でも預かりが残ってもいないときだけ。それ以外は付いていないのと同じ
    */
   compact?: boolean
+  /**
+   * 別のセッション（送り元）の画面の、返答のバブルの下から送った（#700）。**送り方は変えない**（人の返信のまま）。
+   * サーバは「送り元がこの相手にメッセージを送ったことがある」ときだけ覚えて、送り元の画面に小さい 1 行と
+   * 相手のそのあとの返答を出す。`anchor` はどのバブルの下か（その行の `ts`）で、表示にしか使わない
+   */
+  sent_from?: { id: string; anchor: string }
 }
 
 /** POST /api/sessions/<id>/attachments?name=。body はファイルそのもの（画像・文字のファイル・PDF。#608） */

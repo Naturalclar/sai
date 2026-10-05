@@ -129,6 +129,53 @@ export function agentReplyRows(
   return out.sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts))
 }
 
+/** 人が返答のバブルの下から送った返信（#700）の、画面に出す文の長さ（頭だけ） */
+export const FOLLOWUP_SHOWN_CHARS = 40
+/** その返信で回ったターンを探すときに、入力の頭を何文字比べるか（record.py は入力を 2000 字で切り、添付のパスは後ろに足される） */
+export const FOLLOWUP_MATCH_CHARS = 200
+
+/** 画面に出す頭（1 行目だけ。長ければ切って … を付ける） */
+export function followupHead(text: string): string {
+  const line = text.trim().split('\n')[0]!.trim()
+  const chars = [...line]
+  return chars.length > FOLLOWUP_SHOWN_CHARS ? `${chars.slice(0, FOLLOWUP_SHOWN_CHARS).join('')}…` : line
+}
+
+/**
+ * 人が返答のバブルの下から相手へ送った返信（#700）に、相手が返した行を引く。`sai_send` と違って見出しに id が無いので、
+ * **相手のセッションの、送ったあとのターン完了の行のうち、入力の頭が送った文と同じ最初の 1 つ**を当てる
+ * （預かりに並んだときは間に別のターンが終わるので、「次のターン完了」では当てない）。
+ * - 1 つの行は 1 つの返信にしか当てない（同じ文を 2 回送ったら、古い順に 1 つずつ）
+ * - 入力が記録に無いターン（入力の行を書かないエージェント・要約で置き換わった入力）には当たらない。当たらなければ出さないだけ
+ * - `rows` は古い順（`deliveryMatcher()` が直前の入力の行を見る）
+ *
+ * 返すのは `agent_reply` に `followup` の印を付けた行（古い順）と、返信の id → その行の `ts`
+ */
+export function followupReplyRows(
+  followups: readonly { id: string; to: string; text: string; at: string }[],
+  rows: readonly FeedRow[],
+  toName: (id: string) => string,
+  toIcon: (id: string) => string | undefined = () => undefined,
+): { rows: FeedRow[]; answered: Map<string, string> } {
+  const answered = new Map<string, string>()
+  const out: FeedRow[] = []
+  if (followups.length === 0) return { rows: out, answered }
+  const open = [...followups].sort((a, b) => Date.parse(a.at) - Date.parse(b.at)).map((f) => ({ f, at: Date.parse(f.at), head: f.text.trim().slice(0, FOLLOWUP_MATCH_CHARS) }))
+  const matcher = deliveryMatcher()
+  for (const r of rows) {
+    const input = matcher.headOf(r).trim()
+    if (!input) continue
+    const entity = entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? ''))
+    const ts = Date.parse(r.ts)
+    const hit = open.find((o) => !answered.has(o.f.id) && o.f.to === entity && o.head !== '' && ts > o.at && input.startsWith(o.head))
+    if (!hit) continue
+    answered.set(hit.f.id, r.ts)
+    const icon = toIcon(hit.f.to)
+    out.push({ ...r, agent_reply: { message_id: hit.f.id, to_name: toName(hit.f.to), ...(icon ? { to_icon: icon } : {}), sent_at: hit.f.at, followup: true } })
+  }
+  return { rows: out, answered }
+}
+
 /** 行の入力が、そのメッセージで回ったターンのものか（見出しの id で見る） */
 export function isDeliveryOf(userText: string | undefined, messageId: string): boolean {
   const head = (userText ?? '').trimStart().slice(0, 400)

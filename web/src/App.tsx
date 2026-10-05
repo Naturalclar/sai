@@ -295,7 +295,8 @@ export function App() {
     const el =
       pending.want === 'input'
         ? // 並べているときはフォーカスのあるペインの入力欄（#633）
-          document.querySelector<HTMLTextAreaElement>('.pane.focused .reply textarea')
+          // 返答のバブルの下に開いた相手への入力欄（#700）は飛ばす（そのセッション自身の入力欄に当てる）
+          ([...document.querySelectorAll<HTMLTextAreaElement>('.pane.focused .reply textarea')].find((t) => !t.closest('.reply-footer')) ?? null)
         : // サイドバーの選ばれている項目。フィードは <a> そのもの、セッションは <div> の中の <a class="link">
           (() => {
             const item = document.querySelector<HTMLElement>('.channels .item.active')

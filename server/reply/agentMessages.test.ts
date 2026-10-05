@@ -138,3 +138,26 @@ test('AgentMessages: 残すファイルが壊れていても起きる（無か�
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+test('AgentMessages.follow: メッセージを送ったことのある相手への返信だけ覚え、立て直しても残る（#700）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-agents-'))
+  const path = join(dir, 'agent-messages.json')
+  try {
+    const before = new AgentMessages(path)
+    before.record({ message_id: 'm1', from: 'A@r', to: 'B@r', text: 'よろしく', since: '2026-10-05T03:00:00Z' }, 'turn-1')
+    const key = before.key()
+    assert.equal(before.follow('A@r', 'C@r', 'マージして', 'ts'), false, '送ったことのない相手')
+    assert.equal(before.follow('B@r', 'A@r', 'マージして', 'ts'), false, '逆向き')
+    assert.equal(before.follow('A@r', 'A@r', 'マージして', 'ts'), false)
+    assert.equal(before.key(), key, '覚えなければ rev を進めない')
+    assert.equal(before.follow('A@r', 'B@r', 'あ'.repeat(600), '2026-10-05T03:05:00Z', '2026-10-05T03:10:00Z'), true)
+    assert.notEqual(before.key(), key)
+    const after = new AgentMessages(path)
+    const [f] = after.followupsBy('A@r')
+    assert.deepEqual([f?.to, f?.text.length, f?.anchor, f?.at], ['B@r', 500, '2026-10-05T03:05:00Z', '2026-10-05T03:10:00Z'])
+    assert.deepEqual(after.followupsBy('B@r'), [])
+    assert.deepEqual(after.sentBy('A@r').map((m) => m.message_id), ['m1'], '送った記録はそのまま')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})

@@ -1038,3 +1038,58 @@ test('sai_send: 同じ名前の相手が 2 つ居たら、送らずに候補（i
   await humanReply('D1@r2')
   idle('D1@r2')
 })
+
+test('返答のバブルの下から人が相手へ送ると、相手のセッションへの人の返信になり、送り元の詳細に 1 行と相手のそのあとの返答が載る（#700）', async () => {
+  await clearQueue('B1@r')
+  idle('A1@r')
+  idle('B1@r')
+  const detail = async () => (await (await fetch(`${base}/api/sessions/A1%40r`)).json()) as SessionDetailResponse
+  const reply = (to: string, body: unknown, headers: Record<string, string> = {}) =>
+    fetch(`${base}/api/sessions/${encodeURIComponent(to)}/reply`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) })
+  const before = await detail()
+  assert.ok(before.agent_reply_sessions?.some((s) => s.id === 'B1@r'), '返答の相手のセッションが載る（入力欄と判定に使う）')
+  const anchor = before.agent_replies!.at(-1)!.ts
+
+  // 形が違えば 400、別オリジンは 403（返信の口の決まりのまま）
+  assert.equal((await reply('B1@r', { text: 'マージして', sent_from: 'A1@r' })).status, 400)
+  assert.equal((await reply('B1@r', { text: 'マージして', sent_from: { id: 'A1@r', anchor } }, { Origin: 'http://evil.example' })).status, 403)
+
+  runner.started.length = 0
+  const res = await reply('B1@r', { text: 'マージして', sent_from: { id: 'A1@r', anchor } })
+  assert.equal(res.status, 202)
+  assert.deepEqual(runner.started.map((s) => s.id), ['B1@r'], '起動するのは相手だけ（送り元のターンは起こさない）')
+  assert.equal(runner.started[0]!.cmd.text, 'マージして', '人の返信のまま（見出しを付けない）')
+
+  const sent = await detail()
+  assert.notEqual(sent.rev, before.rev, '送ったら送り元の画面が描き直す')
+  const line = sent.agent_followups?.at(-1)
+  assert.deepEqual([line?.to, line?.text, line?.anchor, line?.reply_ts], ['B1@r', 'マージして', anchor, undefined])
+  assert.equal(line?.to_name, sent.agent_replies!.at(-1)!.agent_reply!.to_name, '呼び名は返答のバブルと同じ')
+
+  // 相手が別のターン（入力が違う）を先に終えても当てない。送った文で回ったターンの返答だけを当てる
+  const later = (ms: number) => new Date(Date.now() + ms)
+  await appendFile(feedFile, JSON.stringify(row(later(1000), 'B1', { repo: 'r', cwd: work2, project: 'o/r', user_text: '端末で打った別の入力', text: '別のターン' })) + '\n')
+  assert.equal((await detail()).agent_followups?.at(-1)?.reply_ts, undefined)
+  await appendFile(feedFile, JSON.stringify(row(later(2000), 'B1', { repo: 'r', cwd: work2, project: 'o/r', user_text: 'マージして', text: 'マージしました' })) + '\n')
+  const answered = await detail()
+  assert.notEqual(answered.rev, sent.rev)
+  const answer = answered.agent_replies?.find((r) => r.agent_reply?.followup)
+  assert.equal(answer?.text, 'マージしました')
+  assert.equal(answer?.agent_reply?.message_id, line?.id)
+  assert.equal(answer?.agent_reply?.handed_at, undefined)
+  assert.equal(answered.agent_followups?.at(-1)?.reply_ts, answer?.ts)
+  // 送り元のエージェントの会話には足さない: 次に送り元へ送る文の頭に、この返答は入らない
+  runner.started.length = 0
+  await humanReply('A1@r')
+  assert.ok(!runner.started.at(-1)!.cmd.text.includes('マージしました'))
+  idle('A1@r')
+
+  // 送り元がメッセージを送ったことのない相手・居ない送り元の印は覚えない（返信そのものは届く）
+  idle('B1@r')
+  const stray = await reply('B1@r', { text: 'これは覚えない', sent_from: { id: 'ZZ@r', anchor } })
+  assert.equal(stray.status, 202)
+  assert.equal((await detail()).agent_followups?.some((f) => f.text === 'これは覚えない') ?? false, false)
+  idle('B1@r')
+  // 受け取った側の詳細には載せない
+  assert.equal(((await (await fetch(`${base}/api/sessions/B1%40r`)).json()) as SessionDetailResponse).agent_followups, undefined)
+})

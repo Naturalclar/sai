@@ -167,7 +167,7 @@ export const api = {
     ),
   feed: (f: FeedFilters) => getRevJSON<FeedResponse>(`/api/feed?${qs(f)}`),
   /** 返信。replaceTyped は端末の打ちかけを消して打ち込んでよい（409 の code: terminal_typed を人が確認したあと） */
-  reply: (id: string, text: string, options: { replaceTyped?: boolean; via?: 'process'; attachments?: string[]; queue?: boolean; steer?: boolean; compact?: boolean } = {}, days = 90) =>
+  reply: (id: string, text: string, options: { replaceTyped?: boolean; via?: 'process'; attachments?: string[]; queue?: boolean; steer?: boolean; compact?: boolean; sentFrom?: { id: string; anchor: string } } = {}, days = 90) =>
     sendJSON<ReplyResponse>(
       'POST',
       `/api/sessions/${encodeURIComponent(id)}/reply?days=${days}`,
@@ -182,6 +182,8 @@ export const api = {
         ...(options.steer ? { steer: true } : {}),
         // 要約してから送る（#579。当たらなければサーバがそのまま送る）
         ...(options.compact ? { compact: true } : {}),
+        // 別のセッションの画面の、返答のバブルの下から送った（#700。送り方は同じで、送り元の画面に 1 行出すための印）
+        ...(options.sentFrom ? { sent_from: options.sentFrom } : {}),
       } satisfies ReplyRequest,
     ),
   /** 新しいセッションを始める（#314）。worktree は既存のセッション（from）で指し、パスは送らない */

@@ -68,6 +68,8 @@ export interface ReplaceConfirm {
   reason: string
   /** 端末を使わない経路がある（Claude は resume、active Codex は queue） */
   canProcess: boolean
+  /** 返答のバブルの下から送った（#700）。確認から送り直すときも同じ印を付ける */
+  sentFrom?: { id: string; anchor: string }
 }
 
 /** send の結果。confirm のとき呼び出し側は本文を入力欄に戻す */
@@ -156,7 +158,8 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
     ...sent.filter((s) => !replying[s.id]).map((s) => ({ id: s.id, text: s.text, since: new Date(s.sentAt).toISOString() })),
   ]
 
-  const send = async (id: string, text: string, options: { replaceTyped?: boolean; via?: 'process'; attachments?: string[]; queue?: boolean; steer?: boolean; compact?: boolean } = {}): Promise<SendOutcome> => {
+  const send = async (id: string, text: string, options: { replaceTyped?: boolean; via?: 'process'; attachments?: string[]; queue?: boolean; steer?: boolean; compact?: boolean; sentFrom?: { id: string; anchor: string } } = {}): Promise<SendOutcome> => {
+    const from = options.sentFrom ? { sentFrom: options.sentFrom } : {}
     const entry: Sent = { id, text, rowsAtSend: countRows(id), sentAt: Date.now(), acceptedAt: null }
     setFailed(null)
     setConfirm(null)
@@ -187,7 +190,7 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
       if (err instanceof ApiError) {
         // 打ちかけを消すか、端末を使わない経路（Claude の resume / Codex の queue）を選べる。
         if (err.code === 'terminal_typed' && !options.replaceTyped) {
-          setConfirm({ id, kind: 'typed', text, typed: err.typed ?? '', reason: err.message, canProcess: err.canProcess })
+          setConfirm({ id, kind: 'typed', text, typed: err.typed ?? '', reason: err.message, canProcess: err.canProcess, ...from })
           return 'confirm'
         }
         if (err.canProcess) {
@@ -195,7 +198,7 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
             err.code === 'terminal_typed'
               ? `端末の打ちかけを消せなかった（まだ残っている: ${(err.typed ?? '').split('\n')[0]}）`
               : err.message
-          setConfirm({ id, kind: 'process', text, typed: err.typed ?? '', reason, canProcess: true })
+          setConfirm({ id, kind: 'process', text, typed: err.typed ?? '', reason, canProcess: true, ...from })
           return 'confirm'
         }
       }
@@ -210,8 +213,8 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
    */
   const sendFromConfirm = async (options: { replaceTyped?: boolean; via?: 'process' }): Promise<SendOutcome> => {
     if (!confirm) return 'failed'
-    const { id, text } = confirm
-    const outcome = await send(id, text, options)
+    const { id, text, sentFrom } = confirm
+    const outcome = await send(id, text, { ...options, ...(sentFrom ? { sentFrom } : {}) })
     if (outcome === 'sent') setConfirmedSent((n) => n + 1)
     return outcome
   }

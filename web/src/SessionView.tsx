@@ -25,6 +25,14 @@ import { LoopBar } from './LoopBar'
 import { LoopForm } from './LoopForm'
 import { loopLive } from '../../shared/loops.ts'
 import { withAgentReplies } from './agentReplies'
+import { replyFooter } from './replyAcross'
+import type { JustSent } from './replyAcross'
+import { AgentReplyFooter } from './AgentReplyFooter'
+import { TodoReplyBox } from './TodoReplyBox'
+import { reportDigestUsage } from './digestUsage'
+import { followupHead } from '../../shared/agentMessages.ts'
+import { loadDraft, saveDraft } from './replyDrafts'
+import { restoresText } from './replyRestore'
 import { BackgroundAttachBar } from './BackgroundAttachBar'
 import { shouldQueue } from './replyQueue.ts'
 import { ApprovalBubble } from './ApprovalBubble'
@@ -60,6 +68,26 @@ const NO_ROWS: never[] = []
 const NO_PROMPTS: string[] = []
 const NO_REPLYING = {}
 const NO_APPROVALS: never[] = []
+const NO_FOLLOWUPS: never[] = []
+const NO_TARGETS: ReadonlySet<string> = new Set()
+
+/** 返答のバブルの下から相手へ送る返信（#700）の、この画面だけの状態 */
+interface Across {
+  /** どのセッションの画面の状態か（別のセッションに移ったら捨てる） */
+  from: string
+  /** 開いている入力欄（1 つだけ）。相手と、どのバブルの下か */
+  open: { target: string; anchor: string } | null
+  /** この画面から送った相手（確認・失敗を拾うのはこの相手のぶんだけ） */
+  sentTo: ReadonlySet<string>
+  /** 送った直後の、サーバの応答にまだ載っていない行 */
+  just: JustSent[]
+  /** 確認から送り直して受け付けられた回数を相手ごとに（#338） */
+  confirmed: Readonly<Record<string, number>>
+  restore?: { target: string } & RestoreRequest
+  /** 案の 1 押しを送っている最中 */
+  quick: boolean
+}
+const noAcross = (from: string): Across => ({ from, open: null, sentTo: NO_TARGETS, just: [], confirmed: {}, quick: false })
 
 /** 差分のペインの開閉（#211）。ボタンは入力欄の上に浮かせるので、セッション画面だけが受け取る（#351） */
 export interface DiffProps {
@@ -86,13 +114,38 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
   // 返信先はこのセッションだけなので、行数はこの画面のターン完了の行数（入力の行は返信の終わりではない）。
   // 描いている行ではなく集計から数える（「前の 7 日を表示」で行が増えたのを返信の終わりと取り違えない）
   const turns = data?.session.turns ?? 0
-  const { pending, failed, steered, noted, send, confirm, confirmedSent, confirmReplace, confirmProcess, cancelConfirm } = useReply((target) => (target === id ? turns : 0), data?.replying ?? NO_REPLYING, updatedAt)
+  // 返答のバブルの下から相手へ送る返信（#700）も同じ `useReply` で送る。相手の行数は詳細に載っている相手のセッションから
+  const targets = useMemo(() => new Map((data?.agent_reply_sessions ?? []).map((t) => [t.id, t])), [data?.agent_reply_sessions])
+  const { pending, failed, steered, noted, send, confirm, confirmedSent, confirmReplace, confirmProcess, cancelConfirm } = useReply((target) => (target === id ? turns : (targets.get(target)?.turns ?? 0)), data?.replying ?? NO_REPLYING, updatedAt)
   const mine = pending.find((p) => p.id === id) ?? null
   const now = updatedAt?.getTime() ?? 0
   const failedHere = failed && failed.id === id ? failed : null
   // 非同期に失敗した返信を入力欄に戻す（#350）。押したときだけ流し込む
   const [restore, setRestore] = useState<RestoreRequest | null>(null)
-  const confirmHere = confirm && confirm.id === id ? confirm : null
+  // 返答のバブルの下の返信（#700）。開いている入力欄は 1 つだけ（相手とバブルで覚える）。別のセッションに移ったら忘れる
+  // （`from` が今の id でないものは無いものとして扱う。effect で setState しない）
+  const [across, setAcross] = useState<Across>(() => noAcross(id))
+  const acrossHere = across.from === id ? across : noAcross(id)
+  const patchAcross = (patch: (a: Across) => Partial<Across>) =>
+    setAcross((a) => {
+      const base = a.from === id ? a : noAcross(id)
+      return { ...base, ...patch(base) }
+    })
+  const targetBusy = (target: string) => pending.some((p) => p.id === target) || (data?.queued[target]?.items.length ?? 0) > 0
+  // 相手へ送る。送る仕組みは自分への返信と同じ（処理中・預かりが残っていれば預ける）。送り元の画面から送った印だけ添える
+  const sendAcross = async (target: string, anchor: string, text: string, attachments: string[]): Promise<boolean> => {
+    patchAcross((a) => ({ sentTo: a.sentTo.has(target) ? a.sentTo : new Set(a.sentTo).add(target) }))
+    const outcome = await send(target, text, { attachments, queue: shouldQueue(pending.some((p) => p.id === target), data?.queued[target]?.items.length ?? 0), sentFrom: { id, anchor } })
+    if (outcome !== 'sent') return false
+    patchAcross((a) => ({ open: null, just: [...a.just.slice(-9), { to: target, anchor, text: followupHead(text), at: Date.now() }] }))
+    return true
+  }
+  // 自分への返信の確認・失敗だけを下の入力欄の近くに出す。相手への分は、この画面から送った相手のものだけバブルの下に出す
+  const confirmHere = confirm && (confirm.id === id || acrossHere.sentTo.has(confirm.id)) ? confirm : null
+  const fromConfirm = async (run: () => Promise<string>) => {
+    const target = confirm?.id
+    if ((await run()) === 'sent' && target && target !== id) patchAcross((a) => ({ open: null, confirmed: { ...a.confirmed, [target]: (a.confirmed[target] ?? 0) + 1 } }))
+  }
 
   const approvals = data?.approvals[id] ?? NO_APPROVALS
   // SAI で答えられる質問のあるセッション。行に載った選択肢を読むだけで重ねて出さない（#334）
@@ -267,6 +320,59 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
           onMarkUnread={onMarkUnread}
           {...(focusSide ? { focusSide } : {})}
           {...(data.question ? { question: data.question } : {})}
+          renderReplyFooter={(target, tss, toName) => {
+            const session = targets.get(target)
+            const anchor = tss[tss.length - 1] ?? ''
+            const footer = replyFooter({ target, tss, session, toName, followups: data.agent_followups ?? NO_FOLLOWUPS, justSent: acrossHere.just, targetBusy: targetBusy(target), host: data.host })
+            const open = acrossHere.open?.target === target && tss.includes(acrossHere.open.anchor)
+            const failedThere = failed && failed.id === target && acrossHere.sentTo.has(target) ? failed : null
+            return (
+              <AgentReplyFooter
+                key={`footer:${target}:${anchor}`}
+                footer={footer}
+                open={open}
+                sending={acrossHere.quick}
+                onToggle={() => patchAcross(() => ({ open: open ? null : { target, anchor } }))}
+                onQuick={(text) => {
+                  // 案を使ったことを一言の口の集計に残す（入力欄の案を入れて送ったときと同じ）
+                  reportDigestUsage(`${target}|${session?.last_turn_ts ?? ''}`, 'next_ask_accepted')
+                  patchAcross(() => ({ quick: true }))
+                  void sendAcross(target, anchor, text, []).finally(() => patchAcross(() => ({ quick: false })))
+                }}
+              >
+                {open && session && footer.canReply && (
+                  <TodoReplyBox
+                    session={session}
+                    replying={data.replying[target]}
+                    queued={data.queued[target]?.items.length ?? 0}
+                    sentFromConfirm={acrossHere.confirmed[target] ?? 0}
+                    {...(acrossHere.restore?.target === target ? { restore: acrossHere.restore } : {})}
+                    onSend={(text, attachments) => sendAcross(target, anchor, text, attachments)}
+                  />
+                )}
+                {failedThere && (
+                  <div className="notice error reply-failed">
+                    <span>送信失敗: {failedThere.message}</span>
+                    {failedThere.text && (
+                      <button
+                        type="button"
+                        className="linkish"
+                        onClick={() => {
+                          // 開いていればその場で流し込む。閉じていれば打ちかけに書いてから開く（ReplyBox は作ったときの restore を当てた扱いにする）
+                          if (open) return patchAcross((a) => ({ restore: { target, text: failedThere.text, seq: (a.restore?.seq ?? 0) + 1 } }))
+                          const draft = loadDraft(target)
+                          if (restoresText(draft.text)) saveDraft(target, { ...draft, text: failedThere.text })
+                          patchAcross(() => ({ open: { target, anchor } }))
+                        }}
+                      >
+                        入力欄に戻す
+                      </button>
+                    )}
+                  </div>
+                )}
+              </AgentReplyFooter>
+            )
+          }}
           trailer={
             <>
               {/* いまのターンの間に画面から答えた許可（#693）。バブルは答えると消えるので、何を答えたかを残す */}
@@ -375,7 +481,7 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
         <NewSessionStarting key={`starting:${fresh.id}`} id={fresh.id} text={fresh.text} since={fresh.since} replying={data?.replying[fresh.id]} now={now} onRetry={() => setFresh(null)} />
       )}
       {freshError && <div className="notice error">新しいセッションを始められませんでした: {freshError}</div>}
-      {confirmHere && <ReplaceConfirm confirm={confirmHere} onReplace={() => void confirmReplace()} onProcess={() => void confirmProcess()} onCancel={cancelConfirm} />}
+      {confirmHere && <ReplaceConfirm confirm={confirmHere} onReplace={() => void fromConfirm(confirmReplace)} onProcess={() => void fromConfirm(confirmProcess)} onCancel={cancelConfirm} />}
       {/* 走っているターンに足した（#404）。新しいターンではないので仮バブルは作らず、ここに出す。
           ターンが終われば足した文も記録に載るので、この案内は次に送るかターンが終わると消える */}
       {steered?.id === id && mine !== null && (

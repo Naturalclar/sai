@@ -37,9 +37,26 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - `source` には行の `user_text` も足す（`Message` の `sourceAsk`。頼んだことから来た正しい番号をリンクにするため）。
 - テストは `shared/refs.test.ts`。
 
+## 一言を 2 つで組む（#713）
+
+一言は「何が起きたか」と「人が次にすること」の 2 つで組む。**言い換えさせるのは「何が起きたか」だけ**で、「人が次にすること」は本文の文をそのまま使う（口調も付けない）。組み方は `shared/digestParts.ts` の `digestPlan(text)` が本文だけを見て決める（LLM を呼ばない）:
+
+| `kind` | 本文 | 作り方 |
+| --- | --- | --- |
+| `two` | 人に頼んでいる文がある（`requestSentence()`） | 口には `digestWhatPrompt()`（何が起きたかだけ。人への頼み・質問は書かせない）。返ってきた文から言い換えた頼みを落とし（`cleanWhat()` → `stripAsks()`）、本文の頼みの文を後ろに足す（`joinDigest()`） |
+| `report` | 人がすることに触れていない（`mentionsNext()` が偽） | 口には `digestWhatPrompt()`。何も足さない |
+| `full` | 人がすることに触れているが、そのまま抜ける文が無い（頼みの形でない言い方・質問）。日本語でない本文もここ | 今までどおり `digestPrompt()` で 1 回で全部を書かせる |
+
+- `requestSentence()`（`shared/digestCheck.ts`）が拾うのは、頼みの形（`REQUEST`）か、人に言ってほしい言葉として引用された依頼（`QUOTED_ASK`。「と言ってください」「と伝えてもらえれば」の形だけ。一言の確かめに使う `QUOTED_REQUEST` は「と言われた件」「と言うエラー」にも当たるので、ここでは使わない）のある文だけ。文は URL・その場のコード・引用（「」『』）の中では切らない（`splitKeeping()`）。引用のある文を先に、同じなら後ろの文。質問・コードブロックの中・`DIGEST_MAX_CHARS` を超える文は拾わない。行の頭の Markdown の記号は落とす。
+- `digestWhatPrompt()`（`shared/persona.ts`）は、番号の規則を**本文か頼んだことが番号の話をしているときだけ**入れる（`NUMBER_TALK`）。うまくいかなかったことを書く文には口調の飾りを付けさせない。作例は置かない。
+- `stripAsks()` は文ごとに `asksPerson()` を見て、頼みの文と、文の中の頼みの節（読点で切ったもの。頭・途中・後ろ）を落とす。途中の節は言葉（`INVENTED_ASK`）だけで見る（「〜を直して、」は続きの形）。URL・コード・引用の中の `?` は問いかけと数えない（`masked()`）。全部が頼みなら落とさない（一言を空にしない）。
+- 画面に「起きたこと:」のような見出しは出さない。`summary` は 2 つを続けた 1 つの文で、`two` の回は分けたものも `DigestEntry.what` / `next` に残す（画面が場所ごとに出し分けるときに使う。`report` / `full` の回とこの欄が入る前の行には無く、`summary` をそのまま 1 つの一言として読む）。
+- 長さの枠（`DIGEST_MAX_CHARS`）は欄ごと: `two` の回は、口が書いた部分が枠に収まっていれば、繋いだ長さでは `too_long` にしない。
+- 作り直し（#346）は同じ組み方のまま、口が書いた部分だけを渡して頼み直す。
+
 ## 出来上がりの確かめ（digestIssues の各項目）
 
-- `shared/digestCheck.ts` の `digestIssues(source, summary, ask)` が出来上がりを見る（LLM を呼ばない純粋関数）。引っかかったら理由を添えて `digestPrompt(persona, text, { summary, issues })` でもう一度だけ頼み、問題が減ったときだけ採る。残った点は `DigestEntry.issues` と `digest.log` に書き、作り直したことは `retried` に載せる（#346）。
+- `shared/digestCheck.ts` の `digestIssues(source, summary, ask)` が出来上がりを見る（LLM を呼ばない純粋関数）。引っかかったら理由を添えて同じプロンプト（`digestPrompt()` か `digestWhatPrompt()`。`{ retry: { summary, issues } }`）でもう一度だけ頼み、問題が減ったときだけ採る。残った点は `DigestEntry.issues` と `digest.log` に書き、作り直したことは `retried` に載せる（#346）。
 - 判定の前に本文と一言を NFC に揃える。
 - 見るもの:
   - 引用された依頼が問いかけに化けた（本文の `「マージして」と言ってください` → 一言の `マージして？`）・要約せずプロンプトに答えた・前置きや引用符・長さ超過（#346）。
@@ -94,6 +111,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 ## 次に送る文面の案
 
 - 同じ pump・同じ口で「次に送る文面の案」も作る（#371）。プロンプトと後始末は `shared/nextAsk.ts` の `nextAskPrompt()` / `cleanNextAsk()`。
+- **本文に人に言ってほしい言葉が引用されていれば（「『〜』と言ってください」）、その引用をそのまま案にして口を呼ばない**（#713。`quotedNextAsk()`。見つけ方は `digestCheck.ts` の `quotedAsks()` = 引用の検出を頼みの形に絞ったもの。2 つ以上あれば最後、`NEXT_ASK_MAX_CHARS` を超えるものは使わない）。そのとき行に `next_ask_source: 'quote'` を付ける（一言を作り直すために同じ行を積み直すときは、持ち越す案と一緒に印も持ち越す。`feed/digest_stats.py` が出どころごとに数える）。引用が無ければ今までどおり口で作る。
 - 一言とは別に入切する（#560）: `settings.json` の `next_ask`（無ければ `digest` に従う）。読むときに埋めない（判定は `nextAskOn()`）。
 - `Digester` は `enabled`（一言）/ `nextAskEnabled`（案）/ `active`（どちらか＝口を組んで列を回す）を分けて持つ。
 - 一言を切っている（全体の `digest: false` かセッションの `digest_off`）行でも、一番新しい行なら案だけ作り、`digest.jsonl` に一言の空の行（`summary: ''`）として書く（書かないと 3 秒ごとの `scan()` が同じ行を積み直して口を叩き続ける）。読む側（`summaryFor()` / `attach()` / 一言への「変？」）は空を「一言なし」として扱い、セッションの `digest_off` を戻したら空の行にも一言を作る（案は叩き直さない）。
@@ -121,7 +139,7 @@ pnpm -s digest:eval --feed --days 7 -n 50            # ~/.agent-feed の実際�
 - **守ること**（事例の `expect`）は一言の文字だけで見られる形: `keep`（そのまま残る文字）/ `numbers`・`no_numbers`（出る・出ない番号）/ `action`（動作の語。どれか 1 つ）・`no_action`（出てはいけない動作の語）/ `request`（`keep` = 人が次にすることが残る・`none` = 頼みを作らない）。頼みの有無は `digestCheck.ts` の `hasNextAction()` / `asksPerson()` をそのまま呼ぶ。
 - **採点**は `scoreSummary()`: `digestIssues()` の項目と、守ることに反した項目（`expect:` 付き）を続けて返す。LLM の採点役は使わない。
 - **歯止め**は `validateCases()`（`score.test.ts` が `cases.json` に当てる。CI で回る）: 形の誤り・守ることと本文の食い違い（本文に無い番号を「出る」と書く、など）・`caseLeaks()` が見つけた形（ホームのパス・メールの形・UUID と `ses_` の ID・`github.com/<アカウント>`・`dev-` で始まる worktree 名・9000 未満の番号）。呼び名は一覧にできないので見ていない（PR のレビューで見る）。
-- **案**は `variants.ts` の `VARIANTS`。案は「本文と頼んだことを受けて一言を返す関数」で、口を呼ぶ回数は案が決める（2 つの欄を繋ぐ・LLM を呼ばずに抜き出す、も書ける）。`current` は `digestPrompt()` の 1 回目の一言（作り直しは含めない）、`bare` は規則なしの物差し。
+- **案**は `variants.ts` の `VARIANTS`。案は「本文と頼んだことを受けて一言を返す関数」で、口を呼ぶ回数は案が決める（2 つの欄を繋ぐ・LLM を呼ばずに抜き出す、も書ける）。`current` は `digestPrompt()` の 1 回目の一言（作り直しは含めない）、`bare` は規則なしの物差し、`two-part` は本番の組み方（`digestPlan()`。#713）、`extract` は LLM を呼ばずに本文の 1 行目と頼みの文を抜く物差し（口調なし）。
 - **回し方**（`cli.ts` の `runEval()`）: 事例 × 回 × 案を順に。同じ事例・同じ回を案で続けて回す。人に聞いている返答（`needsFullText()`。本番では一言にしない）は回さない（`--include-asking` で回す）。口が落ちた回は `error` として残す。
 - **集計**（`report.ts`）: 項目ごとの件数（案ごと）、長さ（最小・中央・90%・最大・80 字超）、今の案との差、事例ごとにどちらが良かったか。比べるのは**両方の案で一言が取れた組だけ**。悪くなった項目は頭に `▲` を付けて先に並べる。
 - **通す条件**（`GATES`）: 「本文に無い番号」「頼みが落ちた」「動作の取り違え」の 3 つは、今の案より 1 件でも増えていたら通さない（終了コード 1）。比べられた組が 1 つも無い（比べる案の口が全部落ちた）ときも通さない。`digestIssues()` の項目と、同じことを事例の側から見た項目を 1 つの組に数える。

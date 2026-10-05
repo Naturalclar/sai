@@ -769,26 +769,29 @@ class RetrySummarizer implements Summarizer {
 
 const SOURCE = 'PR #284 を出しました。CI は通っています。マージはまだしていないので、よければ「マージして」と言ってください。'
 
+/** SOURCE の中の、人への頼みの文（一言の「人が次にすること」に本文の言葉のまま入る。#713） */
+const SOURCE_NEXT_SENTENCE = 'マージはまだしていないので、よければ「マージして」と言ってください。'
+
 test('Digester: 機械の判定に引っかかったら 1 回だけ作り直す。直ったものを残す（#346）', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'sai-digest-'))
   try {
     const store = new DigestStore(join(dir, 'digest.jsonl'))
     await store.load()
-    // 1 回目は引用された依頼を問いかけに変えてしまう。2 回目は引用のまま
-    const fake = new RetrySummarizer(['PR #284 出したよ、マージして？', 'PR #284 出したよ。よければ「マージして」と言ってね'])
+    // 1 回目は本文に無い番号を書いてしまう。2 回目は本文の番号
+    const fake = new RetrySummarizer(['PR #999 出したよ！', 'PR #284 出したよ！'])
     const d = new Digester(store, fake, { enabled: true, model: 'qwen3:8b', since: at(0).toISOString(), persona: async () => 'ESFP', logPath: join(dir, 'digest.log') })
     const r = row(at(1), 'S1', { repo: 'r', text: SOURCE })
     d.scan([r])
     await d.drain()
 
     assert.equal(fake.prompts.length, 2, '1 回だけ作り直す')
-    assert.match(fake.prompts[1]!, /前に作った一言: PR #284 出したよ、マージして？/)
-    assert.match(fake.prompts[1]!, /引用のまま残してください/, '直してほしい点を伝える')
+    assert.match(fake.prompts[1]!, /前に作った一言: PR #999 出したよ！/, '作り直しに渡すのは口が書いた部分だけ')
+    assert.match(fake.prompts[1]!, /本文に出てこない番号（#999）を書かないでください/, '直してほしい点を伝える')
     const entry = store.get(digestKey(r))
-    assert.equal(entry?.summary, 'PR #284 出したよ。よければ「マージして」と言ってね', '直ったものを残す')
+    assert.equal(entry?.summary, `PR #284 出したよ！${SOURCE_NEXT_SENTENCE}`, '直ったものを残す')
     assert.equal(entry?.retried, true)
     assert.equal(entry?.issues, undefined, '残った点が無ければ付けない')
-    assert.match(await readFile(join(dir, 'digest.log'), 'utf-8'), /作り直し quoted_request → ok/)
+    assert.match(await readFile(join(dir, 'digest.log'), 'utf-8'), /作り直し invented_number → ok/)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -799,8 +802,8 @@ test('Digester: 作り直しても直らなければ 1 回目を残し、残っ�
   try {
     const store = new DigestStore(join(dir, 'digest.jsonl'))
     await store.load()
-    // 2 回目も問いかけのまま。しかも本文に無い番号が増えている（減っていないので 1 回目を残す）
-    const fake = new RetrySummarizer(['PR #284 出したよ、マージして？', 'PR #999 出したよ、マージして？'])
+    // 2 回目も本文に無い番号のまま（減っていないので 1 回目を残す）
+    const fake = new RetrySummarizer(['PR #999 出したよ！', 'PR #998 出したよ！'])
     const d = new Digester(store, fake, { enabled: true, model: 'qwen3:8b', since: at(0).toISOString(), persona: async () => 'ESFP', logPath: join(dir, 'digest.log') })
     const r = row(at(1), 'S1', { repo: 'r', text: SOURCE })
     d.scan([r])
@@ -808,10 +811,47 @@ test('Digester: 作り直しても直らなければ 1 回目を残し、残っ�
 
     assert.equal(fake.prompts.length, 2)
     const entry = store.get(digestKey(r))
-    assert.equal(entry?.summary, 'PR #284 出したよ、マージして？', '減らなかったので 1 回目のまま')
-    assert.deepEqual(entry?.issues, ['quoted_request'], '残った点を書いておく（数えられるように）')
+    assert.equal(entry?.summary, `PR #999 出したよ！${SOURCE_NEXT_SENTENCE}`, '減らなかったので 1 回目のまま')
+    assert.deepEqual(entry?.issues, ['invented_number'], '残った点を書いておく（数えられるように）')
     assert.equal(entry?.retried, true)
-    assert.match(await readFile(join(dir, 'digest.log'), 'utf-8'), /作り直し quoted_request → quoted_request/)
+    assert.match(await readFile(join(dir, 'digest.log'), 'utf-8'), /作り直し invented_number → invented_number/)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('Digester: 一言を 2 つで組む。人が次にすることは本文の文そのまま、口には何が起きたかだけを書かせる（#713）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-digest-two-'))
+  try {
+    const store = new DigestStore(join(dir, 'digest.jsonl'))
+    await store.load()
+    // 口が頼みを問いかけに言い換えても（前はこれで作り直していた）、その節は落として本文の文を足す
+    const fake = new RetrySummarizer(['PR #284 出したよ、マージして？'])
+    const d = new Digester(store, fake, { enabled: true, model: 'qwen3:8b', since: at(0).toISOString(), persona: async () => 'ESFP', logPath: join(dir, 'digest.log') })
+    const two = row(at(1), 'S1', { repo: 'r', text: SOURCE })
+    d.scan([two])
+    await d.drain()
+    assert.equal(fake.prompts.length, 1, '作り直さない')
+    assert.match(fake.prompts[0]!, /何が起きたか/)
+    assert.match(fake.prompts[0]!, /人への頼み・質問は書かない/)
+    assert.doesNotMatch(fake.prompts[0]!, /話の筋を残す/)
+    const entry = store.get(digestKey(two))
+    assert.equal(entry?.summary, `PR #284 出したよ。${SOURCE_NEXT_SENTENCE}`)
+    assert.deepEqual([entry?.what, entry?.next], ['PR #284 出したよ。', SOURCE_NEXT_SENTENCE], '分けたものも残す')
+    assert.equal(entry?.retried, undefined)
+
+    // 報告だけの本文: 何が起きたかだけを書かせる。分けた欄は付けない
+    const report = row(at(2), 'S2', { repo: 'r', text: '一覧の絞り込みを直しました。テストは通っています。' })
+    // 人がすることに触れているが、そのまま抜ける文が無い本文: 今までどおり 1 回で全部を書かせる
+    const full = row(at(3), 'S3', { repo: 'r', text: 'CI が落ちています。もう一度回したほうが確実です。' })
+    fake.prompts.length = 0
+    d.scan([report, full])
+    await d.drain()
+    const promptFor = (needle: string) => fake.prompts.find((p) => p.includes(needle)) ?? ''
+    assert.match(promptFor('一覧の絞り込み'), /人への頼み・質問は書かない/)
+    assert.match(promptFor('CI が落ちています'), /話の筋を残す/)
+    assert.equal(store.get(digestKey(report))?.next, undefined)
+    assert.equal(store.get(digestKey(full))?.next, undefined)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -828,7 +868,9 @@ test('Digester: 文句の無い一言は作り直さない（一言のために�
     d.scan([r])
     await d.drain()
     assert.equal(fake.prompts.length, 1)
-    assert.equal(fake.nextAsks.length, 1, '案（#371）はそれとは別に 1 回。一言の作り直しではない')
+    // 本文が「『マージして』と言って」と引用しているので、案はその引用で口を呼ばない（#713）。一言の作り直しもしない
+    assert.equal(fake.nextAsks.length, 0)
+    assert.equal(store.get(digestKey(r))?.next_ask, 'マージして')
     assert.equal(store.get(digestKey(r))?.retried, undefined)
   } finally {
     await rm(dir, { recursive: true, force: true })
@@ -1258,6 +1300,50 @@ test('Digester: 口が claude のとき・セッションで一言を切って�
     await d3.drain()
     assert.ok(store.get(digestKey(retried))?.summary)
     assert.equal(flaky.judges.length, 1, '作り直しでは聞き直さない')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('Digester: 本文に引用された人の言葉があれば、案はその引用で口を呼ばない。無ければ今までどおり口で作る（#713）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-next-ask-quote-'))
+  try {
+    const store = new DigestStore(join(dir, 'digest.jsonl'))
+    await store.load()
+    const fake = new FakeSummarizer()
+    const d = new Digester(store, fake, { enabled: true, model: 'haiku', since: at(0).toISOString(), persona: async () => 'none', logPath: join(dir, 'digest.log') })
+    const quoted = row(at(1), 'S1', { repo: 'r', text: '直しました。CI は緑です。「マージして」と言ってください。', user_text: '直して' })
+    const plain = row(at(1), 'S2', { repo: 'r', text: '直しました。', user_text: '直して' })
+    d.scan([quoted, plain])
+    await d.drain()
+    assert.equal(store.get(digestKey(quoted))?.next_ask, 'マージして')
+    assert.equal(store.get(digestKey(quoted))?.next_ask_source, 'quote', '引用から採った印')
+    assert.equal(store.get(digestKey(plain))?.next_ask, '直しました。（案）')
+    assert.equal(store.get(digestKey(plain))?.next_ask_source, undefined)
+    assert.equal(fake.nextAsks.length, 1, '口を呼ぶのは引用の無い行だけ')
+    // 一言を作り直すために同じ行を積み直しても（一言が空の行は積み直す）、持ち越した案の印は落とさない
+    const offStore = new DigestStore(join(dir, 'off.jsonl'))
+    await offStore.load()
+    let off = true
+    const d2 = new Digester(offStore, fake, { enabled: true, model: 'haiku', since: at(0).toISOString(), persona: async () => (off ? null : 'none'), logPath: join(dir, 'digest.log') })
+    d2.scan([quoted])
+    await d2.drain()
+    assert.deepEqual([offStore.get(digestKey(quoted))?.summary, offStore.get(digestKey(quoted))?.next_ask_source], ['', 'quote'], '一言を切っている間は案だけ')
+    off = false
+    d2.scan([quoted])
+    await d2.drain()
+    assert.notEqual(offStore.get(digestKey(quoted))?.summary, '')
+    assert.deepEqual([offStore.get(digestKey(quoted))?.next_ask, offStore.get(digestKey(quoted))?.next_ask_source], ['マージして', 'quote'], '持ち越した案の印も残る')
+    // 印の無い前の行（この欄が入る前に口が同じ文を作っていた）があっても、新しく引用から採った案には印が付く
+    const oldStore = new DigestStore(join(dir, 'old.jsonl'))
+    await oldStore.load()
+    await oldStore.append({ key: digestKey(quoted), persona: 'none', summary: '', model: 'haiku', ts: at(1).toISOString(), next_ask: 'マージして' })
+    const d3 = new Digester(oldStore, fake, { enabled: true, model: 'haiku', since: at(0).toISOString(), persona: async () => 'none', logPath: join(dir, 'digest.log') })
+    d3.scan([quoted])
+    await d3.drain()
+    assert.notEqual(oldStore.get(digestKey(quoted))?.summary, '')
+    assert.equal(oldStore.get(digestKey(quoted))?.next_ask_source, undefined, '作り直さず持ち越した案は、前の行の印のまま（無ければ無い）')
+    assert.ok(fake.prompts.some((p) => p.includes('「マージして」と言って')), '一言はいつもどおり作る（一言と案は別に数える）')
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

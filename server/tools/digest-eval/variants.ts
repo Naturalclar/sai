@@ -4,7 +4,9 @@
 // （2 つの欄に分けて答えさせて繋ぐ・LLM を呼ばずに本文から抜き出す、もこの形で書ける）。
 // 新しい案はここに足して `pnpm digest:eval --variants current,<id>` で比べる。
 // プロンプトの決まり（作例に具体的な番号・中身の語を置かない。`shared/persona.test.ts`）は、ここに書く案にも当てはまる
-import { DIGEST_MAX_CHARS, digestPrompt, personaOf } from '../../../shared/persona.ts'
+import { firstLine, requestSentence } from '../../../shared/digestCheck.ts'
+import { cleanWhat, digestPlan, joinDigest } from '../../../shared/digestParts.ts'
+import { DIGEST_MAX_CHARS, digestPrompt, digestWhatPrompt, personaOf } from '../../../shared/persona.ts'
 import type { PersonaId } from '../../../shared/types.ts'
 
 export interface VariantInput {
@@ -45,6 +47,28 @@ export const VARIANTS: readonly Variant[] = [
           input.text,
         ].join('\n'),
       ),
+  },
+  {
+    // #713 で比べて選んだ形: 「人が次にすること」は本文の文そのまま、口には「何が起きたか」だけを書かせる
+    id: 'two-part',
+    label: '2 つで組む（何が起きたかだけを書かせ、人が次にすることは本文の文をそのまま足す。抜ける文が無ければ今のプロンプト）',
+    make: async (input, summarize) => {
+      const plan = digestPlan(input.text)
+      if (plan.kind === 'full') return summarize(digestPrompt(input.persona, input.text, { ask: input.ask }))
+      const what = cleanWhat(plan, await summarize(digestWhatPrompt(input.persona, input.text, { ask: input.ask })))
+      return joinDigest(what, plan.kind === 'two' ? plan.next : '')
+    },
+  },
+  {
+    // 物差し（#713）: LLM を呼ばない。本文の 1 行目 + 頼みの文。1 行目が使えなければ今のプロンプトに落とす。口調は付かない
+    id: 'extract',
+    label: '要約せずに抜き出す（本文の 1 行目 + 頼みの文。使えなければ今のプロンプト。口調なしの物差し）',
+    make: async (input, summarize) => {
+      const head = firstLine(input.text)
+      if (!head) return summarize(digestPrompt(input.persona, input.text, { ask: input.ask }))
+      const next = requestSentence(input.text)
+      return joinDigest(head, next === head ? '' : next)
+    },
   },
 ]
 

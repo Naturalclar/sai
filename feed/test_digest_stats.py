@@ -69,6 +69,18 @@ class DigestStatsTest(unittest.TestCase):
         # 聞いていないときは行を出さない
         self.assertNotIn("手元のモデルの判定", digest_stats.render(digest_stats.collect(self.digests, self.feedback)))
 
+    def test_asks_taken_from_a_quote_are_counted_apart_from_made_ones(self):
+        # 本文の引用をそのまま採った案（#713）と、口で作った案を分けて数える
+        quoted = dict(digest("q|1", "2026-10-02T04:00:00.000Z"), next_ask="マージして", next_ask_source="quote")
+        unused = dict(digest("q|2", "2026-10-02T04:00:00.000Z"), next_ask="マージして", next_ask_source="quote")
+        base = digest_stats.collect(self.digests, self.feedback)["asks"]
+        stats = digest_stats.collect(self.digests + [quoted, unused], self.feedback + [fb("q|1", "next_ask_accepted", "2026-10-02T12:05:00.000Z")])
+        self.assertEqual(stats["asks"], {"quote": 2, "quote_accepted": 1, "llm": base["llm"], "llm_accepted": base["llm_accepted"]})
+        self.assertIn("本文の引用 2 本、うち受け取った 1 本 (50%)", digest_stats.render(stats))
+        # 引用から採った案が無ければ行を出さない
+        self.assertEqual(base["quote"], 0)
+        self.assertNotIn("案の出どころ", digest_stats.render(digest_stats.collect(self.digests, self.feedback)))
+
     def test_an_older_digest_that_got_a_signal_is_counted(self):
         # 数え始める前に作った一言でも、開いたなら画面に出ていたということ
         stats = digest_stats.collect(self.digests, self.feedback + [fb("old|1", "opened", "2026-10-03T00:00:00.000Z")])

@@ -13,12 +13,14 @@ import { appendFile, mkdir, readFile, stat } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { entityId } from '../../shared/entity.ts'
 import { eventKind } from '../../shared/events.ts'
-import { DEFAULT_PERSONA, digestPrompt } from '../../shared/persona.ts'
+import { DEFAULT_PERSONA, DIGEST_MAX_CHARS, digestPrompt, digestWhatPrompt } from '../../shared/persona.ts'
+import type { DigestRetry } from '../../shared/persona.ts'
 import { digestIssues } from '../../shared/digestCheck.ts'
 import { digestKey } from '../../shared/digestFeedback.ts'
 import { needsFullText } from '../../shared/fullText.ts'
 import { fullTextJudgePrompt, parseFullTextJudge } from '../../shared/fullTextJudge.ts'
-import { cleanNextAsk, nextAskPrompt } from '../../shared/nextAsk.ts'
+import { cleanNextAsk, nextAskPrompt, quotedNextAsk } from '../../shared/nextAsk.ts'
+import { cleanWhat, digestPlan, joinDigest } from '../../shared/digestParts.ts'
 import type { DigestIssueCode } from '../../shared/digestCheck.ts'
 import { childEnv } from '../reply/runner.ts'
 import type { DigestProvider, FeedRow, PersonaId } from '../../shared/types.ts'
@@ -62,6 +64,13 @@ export interface DigestEntry {
    * 3 秒ごとの scan() が同じ行を積み直さないようにする）。読む側は空を「一言なし」として扱う
    */
   summary: string
+  /**
+   * 2 つで組んだ一言（#713）の中身: `what` = 何が起きたか（口が書いた。性格の口調つき）、`next` = 人が次にすること
+   * （**本文の文そのまま**。口調なし）。`summary` はこの 2 つを繋いだもの。本文に人への頼みの文が無い回・
+   * この欄が入る前の行には付かない（`summary` をそのまま 1 つの一言として読む）
+   */
+  what?: string
+  next?: string
   model: string
   /** 作った時刻 */
   ts: string
@@ -74,6 +83,11 @@ export interface DigestEntry {
    * **そのセッションの一番新しい行の分だけ**で、作れなければ付けない
    */
   next_ask?: string
+  /**
+   * 案の出どころ（#713）。`quote` = 本文に引用された言葉（「『〜』と言ってください」）をそのまま採った（LLM を呼んでいない）。
+   * 口で作った案・案の無い行には付けない（この欄が入る前の行も、口で作ったもの）
+   */
+  next_ask_source?: 'quote'
   /**
    * 一言を**わざと作らなかった**理由（#638）。`asking` = 人に判断・回答を求めている返答（`needsFullText()`）なので、
    * 言い換えずに本文をそのまま出す。`judged` = 規則は当てなかったが、一言を作っている手元のモデルが「全文が要る」と答えた（#639）。
@@ -599,10 +613,18 @@ export class Digester {
     }
   }
 
+  /**
+   * 案を 1 つ作る（#713）。本文に人に言ってほしい言葉が引用されていれば、それをそのまま使って口を呼ばない。
+   * 無ければ今までどおり口で作る（`nextAskPrompt()`）
+   */
+  private async nextAskOf(row: FeedRow, summarizer: Summarizer): Promise<string> {
+    return quotedNextAsk(row.text ?? '') || cleanNextAsk(await summarizer.summarize(nextAskPrompt(row.user_text ?? '', row.text ?? '')))
+  }
+
   /** 案を 1 つ。作れなければ空（失敗は digest.log に残し、一言はそのまま出す） */
   private async makeNextAsk(row: FeedRow, summarizer: Summarizer, key: string): Promise<string> {
     try {
-      return cleanNextAsk(await summarizer.summarize(nextAskPrompt(row.user_text ?? '', row.text ?? '')))
+      return await this.nextAskOf(row, summarizer)
     } catch (err) {
       await this.log(`${new Date().toISOString()} ${key} 次の案に失敗: ${err instanceof Error ? err.message : String(err)}`)
       return ''
@@ -692,7 +714,7 @@ export class Digester {
           // 作らなかったことを残す（3 秒ごとの scan() が同じ行を積み直して判定し直さない。集計で数えられる。#638）。
           // 案だけ作ってあった行は、案を持ち越す
           if (asking && !prev?.skipped) {
-            await this.store.append({ key, persona: persona ?? DEFAULT_PERSONA, summary: '', model, ts: new Date().toISOString(), skipped: 'asking', ...(prev?.next_ask ? { next_ask: prev.next_ask } : {}) })
+            await this.store.append({ key, persona: persona ?? DEFAULT_PERSONA, summary: '', model, ts: new Date().toISOString(), skipped: 'asking', ...(prev?.next_ask ? { next_ask: prev.next_ask, ...(prev.next_ask_source ? { next_ask_source: prev.next_ask_source } : {}) } : {}) })
           }
           this.queued.delete(key)
           continue
@@ -706,19 +728,31 @@ export class Digester {
           const judge = wantSummary && provider === 'openai' && !this.failed.has(key) ? await this.judgeFullText(row, summarizer, key) : undefined
           const skipped = asking ? ('asking' as const) : judge === 'full' ? ('judged' as const) : undefined
           const makeSummary = wantSummary && !skipped
-          const summary = makeSummary && persona !== null ? await summarizer.summarize(digestPrompt(persona, row.text, { ask })) : ''
+          // 一言は 2 つで組む（#713）: 「人が次にすること」は本文の文そのまま、口には「何が起きたか」だけを書かせる。
+          // そのまま抜ける文が無い本文（頼みの形でない言い方・質問）は、今までどおり 1 回で全部を書かせる
+          const plan = digestPlan(row.text)
+          const next = plan.kind === 'two' ? plan.next : ''
+          const promptOf = (retry?: DigestRetry) =>
+            plan.kind === 'full' ? digestPrompt(persona ?? undefined, row.text, { ask, ...(retry ? { retry } : {}) }) : digestWhatPrompt(persona ?? undefined, row.text, { ask, ...(retry ? { retry } : {}) })
+          // 長さの枠は欄ごと（「人が次にすること」は本文の文なので、繋いだ長さでは咎めない）
+          const issuesOf = (what: string, whole: string) =>
+            digestIssues(row.text, whole, ask).filter((i) => !(i.code === 'too_long' && next && [...what].length <= DIGEST_MAX_CHARS))
+          let what = makeSummary && persona !== null ? cleanWhat(plan, await summarizer.summarize(promptOf())) : ''
+          const summary = makeSummary ? joinDigest(what, next) : ''
           // 出来上がりを機械で確かめ、駄目なら **1 回だけ** 作り直す（#346。LLM は呼ばない判定）。
           // 2 回目でも残ったら、そのまま出して digest.log に残す（一言が消えるより、残って数えられる方がよい）
-          const first = makeSummary ? digestIssues(row.text, summary, ask) : []
+          const first = makeSummary ? issuesOf(what, summary) : []
           let best = summary
           let issues = first
           if (first.length > 0 && persona !== null) {
             try {
-              const again = await summarizer.summarize(digestPrompt(persona, row.text, { ask, retry: { summary, issues: first } }))
-              const left = digestIssues(row.text, again, ask)
+              const againWhat = cleanWhat(plan, await summarizer.summarize(promptOf({ summary: what, issues: first })))
+              const again = joinDigest(againWhat, next)
+              const left = issuesOf(againWhat, again)
               // 減ったときだけ採る（作り直しで別の問題が増えることがある）
               if (left.length < first.length) {
                 best = again
+                what = againWhat
                 issues = left
               }
             } catch (err) {
@@ -733,21 +767,29 @@ export class Digester {
           // 作っている間に画面から切られたら、案の口は叩かない（作りかけの一言だけ終わらせる。#288 と同じ扱い）
           // **材料は要約する前の本文と人が送った文**（#560。一言を材料にすると、要約で落ちた質問・選択肢・番号に答えられない）。
           // 一言を作らない行では案が唯一の仕事なので、失敗は一言と同じく数える（下の catch。口が落ちている間に同じ行を叩き続けない）
-          const nextAsk = !(wantAsk && this.askOn && this.active && this.isLatest(row))
+          const freshAsk = wantAsk && this.askOn && this.active && this.isLatest(row)
+          const nextAsk = !freshAsk
             ? (prev?.next_ask ?? '')
             : wantSummary || asking
               ? // 人に聞いている返答（#638）も、案の失敗は一言の側と同じく飲み込む（作らなかった印は残す。口を休ませる数えに入れない）
                 await this.makeNextAsk(row, summarizer, key)
-              : cleanNextAsk(await summarizer.summarize(nextAskPrompt(row.user_text ?? '', row.text ?? '')))
+              : await this.nextAskOf(row, summarizer)
           await this.store.append({
             key,
             persona: persona ?? DEFAULT_PERSONA,
             summary: best,
+            // 2 つで組んだ回は、分けたものも残す（#713。画面が場所ごとに出し分けるときに使う。`summary` は 2 つを繋いだもの）
+            ...(best && next ? { what, next } : {}),
             model,
             ts: new Date().toISOString(),
             ...(first.length > 0 ? { retried: true } : {}),
             ...(issues.length > 0 ? { issues: issues.map((i) => i.code) } : {}),
             ...(nextAsk ? { next_ask: nextAsk } : {}),
+            // 新しく作った案が本文の引用そのものなら印を付ける。前の行から持ち越した案は、印もそのまま持ち越す
+            // （鍵ごとに最新の行を数えるので、落とすと引用から採った案が「口で作った」側に数えられる）
+            ...(freshAsk
+              ? nextAsk && nextAsk === quotedNextAsk(row.text ?? '') ? { next_ask_source: 'quote' as const } : {}
+              : nextAsk && prev?.next_ask_source ? { next_ask_source: prev.next_ask_source } : {}),
             ...(skipped ? { skipped } : {}),
             ...(judge ? { judge } : {}),
           })

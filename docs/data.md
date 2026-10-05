@@ -144,7 +144,7 @@ SAIから開始したCodex turnの待機もJSONLにはせず、`CodexAppServer` 
 | --- | --- | --- |
 | `turn-usage.jsonl` | 追記。1 行 = SAI から回した 1 ターン | `ts`（CLI が終わった時刻。UTC）・`id`（エンティティ ID）・`model`・`input_tokens` / `output_tokens` / `cache_read_input_tokens` / `cache_creation_input_tokens`・`duration_ms`・`num_turns`・`denials`・`is_error`・`cost_usd`・`compact`（要約だけのターンに `true`） |
 | `agent-messages.json` | 1 つの JSON | `messages`: 送った記録の配列（`message_id`・`from`・`to`（どちらもエンティティ ID）・`text`（見出しを付ける前の本文）・`since`（送った時刻）・`handed_at`（返答を送り元に渡した時刻）・`wake`・`turn`・`url`）。古いものから 500 件まで。`sends`: 送り元 → そのターンで送った回数（`turn`・`count`・`read`）。`origins`: メッセージで回っているセッション → その `message_id`。`stopped`: 人が送信を止めた送り元。`followups`: 返答のバブルの下から人が送った返信（#700。`id`・`from`・`to`・`text`・`at`・`anchor`。メッセージではないので `messages` には入らない） |
-| `digest.jsonl` | 追記。1 行 = 1 つの一言 | `key`（行の鍵）・`persona`・`summary`（空なら作っていない）・`model`・`ts`（作った時刻）・`next_ask`（次に送る文面の案）・`retried`・`issues`・`skipped`（わざと作らなかった理由）・`judge`（手元のモデルの判定） |
+| `digest.jsonl` | 追記。1 行 = 1 つの一言 | `key`（行の鍵）・`persona`・`summary`（空なら作っていない）・`what` / `next`（#713。`summary` を 2 つで組んだ回だけ: 何が起きたか／人が次にすること。無ければ `summary` が 1 つの一言）・`model`・`ts`（作った時刻）・`next_ask`（次に送る文面の案）・`next_ask_source`（`quote` = 本文の引用をそのまま採った。無ければ口で作った）・`retried`・`issues`・`skipped`（わざと作らなかった理由）・`judge`（手元のモデルの判定） |
 | `digest-feedback.jsonl` | 追記。1 行 = 1 つの合図 | `key`（行の鍵）・`summary`（そのとき出ていた一言）・`model`・`persona`・`reason`（「変？」の理由か、`opened` = 詳細を開いた・`next_ask_accepted` = 案を受け取った）・`next_ask`・`note`・`ts` |
 | `approvals.jsonl` | 追記。1 行 = 許可に答えた 1 回 | `ts`・`id`（エンティティ ID）・`cwd`・`tool`・`rule`（「常に許可」のルールの表記）・`by`（`human` / `jev`）・`behavior`（`allow` / `deny`）・`remember`・`waited_s`。コマンドの全文は書かない |
 | `approvals.json` | 配列 | いま預かっている許可・質問（`approval` と、まだ渡していない `answer`）。サーバの立て直しをまたぐためのもの |

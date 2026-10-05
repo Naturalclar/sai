@@ -158,6 +158,16 @@ test('ProgressReader(Codex): sessions/YYYY/MM/DD の rollout をセッション 
       p.steps.map((s) => [s.tool, s.summary]),
       [['exec', 'cargo build']],
     )
+    // 開いているターンの始まり（#693。端末で打った Codex のターンの「処理中」の起点）
+    assert.equal(p.turn_since, at(1))
+    // ターンが閉じたら載せない
+    await writeFile(
+      join(dir, `rollout-2026-09-10T12-00-00-${SID}.jsonl`),
+      [j({ timestamp: at(1), type: 'event_msg', payload: { type: 'task_started', turn_id: 't' } }), j({ timestamp: at(3), type: 'event_msg', payload: { type: 'task_complete', turn_id: 't' } })].join('\n') + '\n\n',
+    )
+    const closed = await new ProgressReader(projects, sessions).read({ id: `${SID}@r`, repo: 'r', agent: 'codex', cwd: '/w' })
+    assert.equal(closed.active, false)
+    assert.equal(closed.turn_since, undefined)
   })
 })
 

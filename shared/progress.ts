@@ -34,6 +34,8 @@ export interface ParsedProgress {
   started: boolean
   /** ターンが閉じていない（最後の assistant の行が tool_use で止まっている、または入力のあと返答がまだ） */
   open: boolean
+  /** ターンの始まりの時刻（#693。Codex の `task_started`）。始まりを見ていなければ省く */
+  since?: string
   /**
    * 最後にモデルを呼んだときに読んだ量（トークン）。そのセッションに送ると、少なくともこれだけ読み直す（#311）。
    * Claude は assistant の `message.usage` の入力（`input_tokens` + `cache_read_input_tokens` + `cache_creation_input_tokens`）、
@@ -259,6 +261,7 @@ export function codexProgress(lines: readonly string[]): ParsedProgress {
   let tools = new Map<string, ProgressStep>()
   let started = false
   let open = false
+  let since = ''
   let context = 0
   for (const line of lines) {
     const o = parseLine(line)
@@ -278,6 +281,7 @@ export function codexProgress(lines: readonly string[]): ParsedProgress {
         tools = new Map()
         started = true
         open = true
+        since = ts
       } else if (type === 'task_complete') {
         open = false
       } else if (type === 'token_count') {
@@ -305,7 +309,7 @@ export function codexProgress(lines: readonly string[]): ParsedProgress {
       else pushStep(steps, { kind: 'text', summary: oneLine(text), started: ts, ended: ts })
     }
   }
-  return { steps, started, open, context, notes }
+  return { steps, started, open, context, notes, ...(since ? { since } : {}) }
 }
 
 /**

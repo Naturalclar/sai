@@ -591,6 +591,9 @@
     .avatar { width: 28px; height: 28px; font-size: 12px; }
     .msg .time { left: -38px; width: 34px; }
     .pending-line { padding-left: 46px; }
+    .answered { padding-left: 46px; }
+    /* 狭い画面では押した選択肢の文言を出さない（何を答えたかの方を広く見せる。title には無いが、広い画面で見られる） */
+    .answered .label { display: none; }
     .day::before { left: 8px; right: 8px; }
     .chat-end::before { left: 8px; right: 8px; }
     .reply .target { flex-wrap: wrap; }
@@ -983,6 +986,15 @@
   .msg .msg-images { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
   .msg .msg-images img { display: block; width: 96px; height: 96px; object-fit: cover; border-radius: 6px; border: 1px solid var(--line); background: var(--chip); cursor: zoom-in; }
   /* ページの中で画像を大きく 1 枚（#507） */
+  /* いまのターンの間に画面から答えた許可（#693）。バブルは答えると消えるので、「処理中」の上に 1 行ずつ残す。長いコマンドは … で切る（全文は title） */
+  .answered { list-style: none; margin: 0; padding: 2px 16px 4px 62px; display: flex; flex-direction: column; gap: 2px; font-size: 12px; color: var(--muted); }
+  .answered li { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+  .answered .verb { flex: none; font-weight: 600; color: var(--codex); }
+  .answered li.deny .verb { color: var(--claude); }
+  .answered .mark { display: inline-block; width: 1.2em; text-align: center; }
+  .answered .time { flex: none; font-variant-numeric: tabular-nums; }
+  .answered .what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 11px; background: var(--chip); padding: 1px 5px; border-radius: 4px; color: var(--ink); }
+  .answered .label { flex: none; }
   /* 返答の中のファイルのパス（#603）。コードの見た目のまま、押せることだけ下線で示す */
   button.file-ref { font: inherit; padding: 0; border: 0; background: none; color: inherit; cursor: pointer; text-align: left; }
   button.file-ref code { text-decoration: underline dotted; text-underline-offset: 2px; }

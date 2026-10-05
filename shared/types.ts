@@ -608,6 +608,11 @@ export interface SessionProgressResponse {
   /** transcript / rollout が最後に書かれた時刻（ISO）。読めなければ空 */
   updated_at: string
   /**
+   * **開いているターンの始まり**（#693。Codex だけ。rollout の `task_started` の時刻）。閉じている・始まりを見ていなければ省く。
+   * Codex は入力の行を書かないので、端末で打ったターンの「処理中」の起点に使う
+   */
+  turn_since?: string
+  /**
    * 最後のターンが**閉じている**とき、その最後の手順の時刻（#614。Claude だけ）。閉じていない・手順が無い・読めなければ省く。
    * ターン完了の行が落ちたかの判定（`shared/stopMissing.ts`）に使う
    */
@@ -1155,6 +1160,21 @@ export interface ApprovalLogRow {
   waited_s: number
 }
 
+/**
+ * 画面から答えた許可・質問（#693）。ターンが終わる（次のターン完了の行が来る）まで、セッションの画面に残す。
+ * サーバのメモリだけにあり、記録（JSONL）には書かない
+ */
+export interface AnsweredApproval {
+  approval_id: string
+  /** 待っていたときに出していた 1 行（`Approval.text`） */
+  text: string
+  behavior: 'allow' | 'deny'
+  /** 答えた時刻（ISO） */
+  at: string
+  /** 押した選択肢の文言（Codex・OpenCode の「提示された選択」）。無ければ省略 */
+  label?: string
+}
+
 export interface ApprovalDecision {
   /** 画面へ渡す不透明な値。app-serverのdecision本体はブラウザへ信頼させない */
   id: string
@@ -1293,6 +1313,8 @@ export interface SessionDetailResponse {
   agent?: AgentActivity
   /** 返信中のエージェントが待っている許可・質問（ID → 古い順）。これが変わると rev も変わる */
   approvals: ApprovalMap
+  /** このセッションで、いまのターンの間に画面から答えた許可・質問（#693。古い順）。無ければ省略。変わると rev も変わる */
+  answered?: AnsweredApproval[]
   /** 自分の表示名とアイコン。変わると rev も変わる */
   profile: Profile
   /** このサーバのマシン名（SessionsResponse と同じ。#114）。セッション画面は一覧を持たないのでここにも載せる */

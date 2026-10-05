@@ -2035,6 +2035,33 @@ test('Codex app-serverの承認はAPIへ載り、decisionを同じ管理接続�
   assert.equal((await postJson('/api/approvals/codex-rpc-1/answer', { behavior: 'allow', decision: 'd0' }, { Origin: base })).status, 404)
 })
 
+test('画面から答えた許可は、ターンが終わるまでそのセッションの詳細に残る（#693。答えるとバブルが消えるだけだった）', async () => {
+  const before = (await (await get('/api/sessions/X1%40r?days=30')).json()) as SessionDetailResponse
+  codexApp.active = {
+    'X1@r': [{
+      approval_id: 'codex-rpc-693', id: 'X1@r', since: new Date().toISOString(), tool_name: 'CodexCommand',
+      input: { command: 'git add -A' }, tool_use_id: 'cmd-693', text: '許可待ち: コマンド: git add -A', agent: 'codex', answerable: true,
+      decisions: [{ id: 'd0', label: 'Yes, proceed', behavior: 'allow' }, { id: 'd1', label: '拒否', behavior: 'deny' }],
+    }],
+  }
+  // 画面に出してから（一覧が載せる）答える
+  await get('/api/sessions?days=30')
+  // 画面が送ってきた文字列は信じない: 文言は提示した decisions から引く
+  const res = await postJson('/api/approvals/codex-rpc-693/answer', { behavior: 'allow', decision: 'd0', label: '<b>偽の文言</b>' }, { Origin: base })
+  assert.equal(res.status, 200)
+  codexApp.active = {}
+  const detail = (await (await get('/api/sessions/X1%40r?days=30')).json()) as SessionDetailResponse
+  const mine = detail.answered?.find((a) => a.approval_id === 'codex-rpc-693')
+  assert.deepEqual(mine && { text: mine.text, behavior: mine.behavior, label: mine.label }, { text: '許可待ち: コマンド: git add -A', behavior: 'allow', label: 'Yes, proceed' })
+  assert.ok(mine && !Number.isNaN(Date.parse(mine.at)))
+  assert.notEqual(detail.rev, before.rev, '答えたら rev が変わる（画面が拾う）')
+  // 入力そのもの（コマンドの全文など）は持たない
+  assert.ok(!JSON.stringify(detail.answered).includes('"input"'))
+  // 別のセッションには出ない
+  const other = (await (await get('/api/sessions/T1%40r?days=30')).json()) as SessionDetailResponse
+  assert.ok(!other.answered?.some((a) => a.approval_id === 'codex-rpc-693'))
+})
+
 // ---- #305: 処理中に送った返信を預かり、前のターンが終わったら続けて回す
 
 const del = (path: string, headers: Record<string, string> = {}) => fetch(base + path, { method: 'DELETE', headers })

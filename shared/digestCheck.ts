@@ -287,12 +287,18 @@ export function quotedAsks(source: string): string[] {
   return [...out]
 }
 
-/** URL・その場のコード・引用（「」『』）。この中の句点や `?` は文の切れ目でも問いかけでもない */
-const OPAQUE = /https?:\/\/\S+|`[^`\n]*`|「[^」\n]*」|『[^』\n]*』/g
+/**
+ * URL・その場のコード・引用（「」『』）。この中の句点や `?` は文の切れ目でも問いかけでもない。
+ * URL は ASCII の続く所まで（空白なしで日本語が続く「…/pull/1です。」で、後ろの文まで飲み込まない）
+ */
+const OPAQUE = /https?:\/\/[\x21-\x7e]+|`[^`\n]*`|「[^」\n]*」|『[^』\n]*』/g
 
-/** `OPAQUE` に当たる所を、切れ目にも問いかけにも見えない 1 文字に置き換える（長さは変わるので、位置は戻せない。判定にだけ使う） */
+/**
+ * `OPAQUE` に当たる所を、切れ目にも問いかけにも見えない 1 文字に置き換える（長さは変わるので、位置は戻せない。判定にだけ使う）。
+ * **記号にしない**（`endsWithTe()` は末尾の記号を落としてから見るので、記号だと「…見て「問題なし」。」の「て」が末尾に見える）
+ */
 function masked(text: string): string {
-  return text.replace(OPAQUE, '\u25a1')
+  return text.replace(OPAQUE, 'Ｘ')
 }
 
 /**
@@ -377,7 +383,7 @@ export function requestSentence(rawSource: string, max: number = DIGEST_MAX_CHAR
     .split('\n')
     .flatMap((line) => sentencesOf(unmarked(line)))
     .filter((t) => [...t].length <= max && !/[?？]$/.test(t))
-    .map((t) => ({ t, quoted: new RegExp(QUOTED_ASK.source).test(t), asks: REQUEST.test(plain(t)) }))
+    .map((t) => ({ t, quoted: new RegExp(QUOTED_ASK.source).test(t), asks: REQUEST.test(masked(t)) }))
     .filter((x) => x.quoted || x.asks)
   const pick = found.filter((x) => x.quoted).at(-1) ?? found.at(-1)
   return pick?.t ?? ''

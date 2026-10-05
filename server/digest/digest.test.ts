@@ -1334,6 +1334,15 @@ test('Digester: 本文に引用された人の言葉があれば、案はその�
     await d2.drain()
     assert.notEqual(offStore.get(digestKey(quoted))?.summary, '')
     assert.deepEqual([offStore.get(digestKey(quoted))?.next_ask, offStore.get(digestKey(quoted))?.next_ask_source], ['マージして', 'quote'], '持ち越した案の印も残る')
+    // 印の無い前の行（この欄が入る前に口が同じ文を作っていた）があっても、新しく引用から採った案には印が付く
+    const oldStore = new DigestStore(join(dir, 'old.jsonl'))
+    await oldStore.load()
+    await oldStore.append({ key: digestKey(quoted), persona: 'none', summary: '', model: 'haiku', ts: at(1).toISOString(), next_ask: 'マージして' })
+    const d3 = new Digester(oldStore, fake, { enabled: true, model: 'haiku', since: at(0).toISOString(), persona: async () => 'none', logPath: join(dir, 'digest.log') })
+    d3.scan([quoted])
+    await d3.drain()
+    assert.notEqual(oldStore.get(digestKey(quoted))?.summary, '')
+    assert.equal(oldStore.get(digestKey(quoted))?.next_ask_source, undefined, '作り直さず持ち越した案は、前の行の印のまま（無ければ無い）')
     assert.ok(fake.prompts.some((p) => p.includes('「マージして」と言って')), '一言はいつもどおり作る（一言と案は別に数える）')
   } finally {
     await rm(dir, { recursive: true, force: true })

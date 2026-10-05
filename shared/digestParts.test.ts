@@ -19,6 +19,8 @@ test('cleanWhat / joinDigest: 言い換えた頼みを落とし、本文の文�
   assert.equal(joinDigest('直しました', '確認してください。'), '直しました。確認してください。', '文の終わりが無ければ句点を足す')
   assert.equal(joinDigest('PR 出したよ🎉', '確認してください。'), 'PR 出したよ🎉確認してください。', '絵文字で終わっていれば句点を足さない')
   assert.equal(joinDigest('直したよ✨️', '確認してください。'), '直したよ✨️確認してください。')
+  assert.equal(joinDigest('進捗 50%', '確認してください。'), '進捗 50%。確認してください。', '文の終わりでない記号の後ろには句点を足す')
+  assert.equal(joinDigest('ブランチは `main`', '確認してください。'), 'ブランチは `main`。確認してください。')
   assert.equal(joinDigest('直したよ！', ''), '直したよ！')
   assert.equal(joinDigest('', '確認してください。'), '確認してください。')
 })

@@ -767,7 +767,8 @@ export class Digester {
           // 作っている間に画面から切られたら、案の口は叩かない（作りかけの一言だけ終わらせる。#288 と同じ扱い）
           // **材料は要約する前の本文と人が送った文**（#560。一言を材料にすると、要約で落ちた質問・選択肢・番号に答えられない）。
           // 一言を作らない行では案が唯一の仕事なので、失敗は一言と同じく数える（下の catch。口が落ちている間に同じ行を叩き続けない）
-          const nextAsk = !(wantAsk && this.askOn && this.active && this.isLatest(row))
+          const freshAsk = wantAsk && this.askOn && this.active && this.isLatest(row)
+          const nextAsk = !freshAsk
             ? (prev?.next_ask ?? '')
             : wantSummary || asking
               ? // 人に聞いている返答（#638）も、案の失敗は一言の側と同じく飲み込む（作らなかった印は残す。口を休ませる数えに入れない）
@@ -786,9 +787,9 @@ export class Digester {
             ...(nextAsk ? { next_ask: nextAsk } : {}),
             // 新しく作った案が本文の引用そのものなら印を付ける。前の行から持ち越した案は、印もそのまま持ち越す
             // （鍵ごとに最新の行を数えるので、落とすと引用から採った案が「口で作った」側に数えられる）
-            ...(nextAsk && nextAsk === prev?.next_ask
-              ? prev.next_ask_source ? { next_ask_source: prev.next_ask_source } : {}
-              : nextAsk && nextAsk === quotedNextAsk(row.text ?? '') ? { next_ask_source: 'quote' as const } : {}),
+            ...(freshAsk
+              ? nextAsk && nextAsk === quotedNextAsk(row.text ?? '') ? { next_ask_source: 'quote' as const } : {}
+              : nextAsk && prev?.next_ask_source ? { next_ask_source: prev.next_ask_source } : {}),
             ...(skipped ? { skipped } : {}),
             ...(judge ? { judge } : {}),
           })

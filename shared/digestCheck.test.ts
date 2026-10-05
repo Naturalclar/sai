@@ -293,3 +293,12 @@ test('stripAsks: 頼みの節が文の頭・途中にあっても落とす。続
   assert.equal(stripAsks('空の入力を直して、変数名も揃えたよ！'), '空の入力を直して、変数名も揃えたよ！')
   assert.equal(stripAsks('直したよ！！テストも通ってる？！'), '直したよ！！', '区切りが続いても文を分けない')
 })
+
+test('requestSentence / stripAsks: URL の直後に日本語が続いても後ろの文を飲み込まない。引用・URL で終わる文を頼みと取り違えない（#713 のレビュー）', () => {
+  assert.equal(requestSentence('PRはhttps://example.com/a/b/pull/1です。マージしてください。'), 'マージしてください。')
+  assert.equal(stripAsks('PRはhttps://example.com/a/b/pull/1です。確認してね。'), 'PRはhttps://example.com/a/b/pull/1です。')
+  assert.equal(requestSentence('https://example.com/x?y=1を開いて確認してください。'), 'https://example.com/x?y=1を開いて確認してください。')
+  assert.equal(stripAsks('テストを直した。結果は見て「問題なし」。'), 'テストを直した。結果は見て「問題なし」。')
+  assert.equal(stripAsks('テストを直した。PRを出して https://example.com/a/b/pull/1'), 'テストを直した。PRを出して https://example.com/a/b/pull/1')
+  assert.equal(requestSentence('「確認してください」と書いた行を消しました。'), '', '引用の中の頼みの形は頼みではない')
+})

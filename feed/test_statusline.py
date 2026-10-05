@@ -72,6 +72,10 @@ class StatusLineTest(unittest.TestCase):
     def written(self, name: str = "usage-claude.json") -> dict:
         return json.loads((self.dir / name).read_text(encoding="utf-8"))
 
+    def windows(self) -> dict:
+        """書かれた窓から `changed_at`（その窓が最後に変わった時刻）を外したもの"""
+        return {name: {k: v for k, v in window.items() if k != "changed_at"} for name, window in self.written()["rate_limits"].items()}
+
     def test_records_rate_limits_and_prints_one_line(self):
         result = run(payload(), self.env)
         self.assertEqual(result.returncode, 0)
@@ -144,7 +148,7 @@ class StatusLineTest(unittest.TestCase):
         # 片方だけ切れているときは、生きている窓だけを書く
         (self.dir / "usage-claude.json").unlink()
         run(payload(rate_limits={"five_hour": {"used_percentage": 90, "resets_at": past}, "seven_day": {"used_percentage": 35, "resets_at": WEEK_RESETS}}), self.env)
-        self.assertEqual(self.written()["rate_limits"], {"seven_day": {"used_percentage": 35.0, "resets_at": WEEK_RESETS}})
+        self.assertEqual(self.windows(), {"seven_day": {"used_percentage": 35.0, "resets_at": WEEK_RESETS}})
 
     def record_at(self, ahead: timedelta, windows: dict) -> dict:
         """`ts` が今から `ahead` だけ先の記録を置く"""
@@ -187,27 +191,46 @@ class StatusLineTest(unittest.TestCase):
         self.assertNotEqual(self.written()["ts"], placed["ts"])
 
         run(week(3, WEEK_RESETS + 7 * 86400), self.env)
-        self.assertEqual(self.written()["rate_limits"]["seven_day"], {"used_percentage": 3.0, "resets_at": WEEK_RESETS + 7 * 86400}, "新しい窓は低くても置き直す")
+        self.assertEqual(self.windows()["seven_day"], {"used_percentage": 3.0, "resets_at": WEEK_RESETS + 7 * 86400}, "新しい窓は低くても置き直す")
         run(week(99), self.env)
         self.assertEqual(self.written()["rate_limits"]["seven_day"]["used_percentage"], 3.0, "前の窓の値では置き直さない")
 
-    def test_an_old_record_is_replaced_without_comparing(self):
+    def test_a_window_unchanged_for_a_day_takes_a_lower_value(self):
         # 枠が途中でリセットされたとき、高い値が窓の終わりまで残らないように（#689）
-        self.record_at(timedelta(hours=-25), {"five_hour": {"used_percentage": 5.0, "resets_at": FIVE_HOUR_RESETS}, "seven_day": {"used_percentage": 90.0, "resets_at": WEEK_RESETS}})
-        run(payload(rate_limits={"seven_day": {"used_percentage": 10, "resets_at": WEEK_RESETS}}), self.env)
-        self.assertEqual(self.written()["rate_limits"], {"seven_day": {"used_percentage": 10.0, "resets_at": WEEK_RESETS}})
+        low_week = payload(rate_limits={"seven_day": {"used_percentage": 10, "resets_at": WEEK_RESETS}})
+        both = {"five_hour": {"used_percentage": 5.0, "resets_at": FIVE_HOUR_RESETS}, "seven_day": {"used_percentage": 90.0, "resets_at": WEEK_RESETS}}
+        self.record_at(timedelta(hours=-25), both)
+        run(low_week, self.env)
+        self.assertEqual(self.windows(), {"five_hour": both["five_hour"], "seven_day": {"used_percentage": 10.0, "resets_at": WEEK_RESETS}}, "来なかった窓は古くても持ち越す")
+
+        # 5 時間の窓が動いていて記録の ts は新しくても、週が 1 日変わっていなければ週の逃げ道は開く
+        day_ago = time.time() - 25 * 3600
+        self.record_at(timedelta(minutes=-1), {"five_hour": both["five_hour"], "seven_day": dict(both["seven_day"], changed_at=day_ago)})
+        run(low_week, self.env)
+        self.assertEqual(self.windows()["seven_day"]["used_percentage"], 10.0)
+        self.record_at(timedelta(minutes=-1), {"seven_day": dict(both["seven_day"], changed_at=time.time() - 3600)})
+        run(low_week, self.env)
+        self.assertEqual(self.windows()["seven_day"]["used_percentage"], 90.0, "変わったばかりの窓は低い値で置き直さない")
 
     def test_merge_windows(self):
-        def w(percent, resets=None):
-            return {"used_percentage": percent, **({"resets_at": resets} if resets is not None else {})}
+        now = 10_000_000.0
 
-        merge = statusline.merge_windows
+        def w(percent, resets=None, changed=now - 60):
+            return {"used_percentage": percent, "changed_at": changed, **({"resets_at": resets} if resets is not None else {})}
+
+        def merge(existing, incoming):
+            return statusline.merge_windows(existing, incoming, now)
+
         gap = statusline.SAME_WINDOW_SECONDS
+        old = now - statusline.KEEP_SECONDS - 1
         self.assertEqual(merge({"seven_day": w(47, 1000)}, {"seven_day": w(37, 1000 + gap)}), {"seven_day": w(47, 1000)}, "幅の中は同じ窓")
         self.assertEqual(merge({"seven_day": w(47, 1000)}, {"seven_day": w(37, 1000 + gap + 1)}), {"seven_day": w(37, 1000 + gap + 1)}, "幅を超えて先なら新しい窓")
         self.assertEqual(merge({"seven_day": w(47, 1000)}, {"seven_day": w(99, 1000 - gap - 1)}), {"seven_day": w(47, 1000)}, "手前は前の窓")
         self.assertEqual(merge({"seven_day": w(47, 1000)}, {"seven_day": w(48, 1000 - gap)}), {"seven_day": w(48, 1000 - gap)})
-        self.assertEqual(merge({"five_hour": w(12, 500)}, {"seven_day": w(47, 1000)}), {"five_hour": w(12, 500), "seven_day": w(47, 1000)}, "来なかった窓は持ち越す")
+        self.assertEqual(merge({"seven_day": w(47, 1000, old)}, {"seven_day": w(37, 1000)}), {"seven_day": w(37, 1000)}, "長く変わっていない窓は低い値でも置き直す")
+        self.assertEqual(merge({"seven_day": w(47, 1000, old)}, {"seven_day": w(47, 1000)}), {"seven_day": w(47, 1000, old)}, "同じ値なら変わった時刻を進めない")
+        self.assertEqual(merge({"seven_day": w(47, 1000, old)}, {"seven_day": w(99, 1000 - gap - 1)}), {"seven_day": w(47, 1000, old)}, "前の窓の値は古くても取らない")
+        self.assertEqual(merge({"five_hour": w(12, 500, old)}, {"seven_day": w(47, 1000)}), {"five_hour": w(12, 500, old), "seven_day": w(47, 1000)}, "来なかった窓は持ち越す")
         self.assertEqual(merge({"five_hour": w(12)}, {"seven_day": w(47, 1000)}), {"seven_day": w(47, 1000)}, "戻る時刻の無い窓は持ち越さない")
         self.assertEqual(merge({"seven_day": w(47)}, {"seven_day": w(37, 1000)}), {"seven_day": w(37, 1000)}, "比べられなければ来たほう")
         self.assertEqual(merge({"seven_day": w(47, 1000)}, {"seven_day": w(37)}), {"seven_day": w(37)}, "比べられなければ来たほう")

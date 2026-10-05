@@ -46,8 +46,8 @@ WINDOWS = ("five_hour", "seven_day")
 NEWER_TRUST_SECONDS = 300
 #: `resets_at` の差がこの秒数以内なら同じ窓とみなす（描画ごとに少しずれても別の窓にしない。#689）
 SAME_WINDOW_SECONDS = 60
-#: 置いてある記録がこれより古ければ、比べずに来たもので置き直す（#689）。枠が途中でリセットされたとき、
-#: 高いほうを残す決まりだけだと古い高い値がその窓の終わりまで残るので、その逃げ道
+#: 置いてある窓の割合がこれより長く変わっていなければ、同じ窓の低い値でも置き直す（#689）。枠が途中で
+#: リセットされたとき、高いほうを残す決まりだけだと古い高い値がその窓の終わりまで残るので、その逃げ道
 KEEP_SECONDS = 24 * 60 * 60
 #: 保険の自殺タイマー。stdin が閉じないなど、何が起きても TUI を待たせない
 HARD_TIMEOUT_SECONDS = 5
@@ -121,11 +121,13 @@ def live_windows(windows: dict, now: datetime) -> dict:
     return {name: window for name, window in windows.items() if "resets_at" not in window or window["resets_at"] > at}
 
 
-def merge_windows(existing: dict, incoming: dict) -> dict:
+def merge_windows(existing: dict, incoming: dict, now: float) -> dict:
     """置いてある窓（生きているものだけ）と来た窓を、**窓ごとに新しいほう**でまとめる（#689）。
 
     - 同じ窓（`resets_at` の差が SAME_WINDOW_SECONDS 以内）は割合の高いほう。割合は窓の中で下がらないので、
-      低いほうは前に受け取った値を持ち回っているだけ。同じなら置いてあるほう（書き直さない）
+      低いほうは前に受け取った値を持ち回っているだけ。同じなら置いてあるほう（書き直さない）。
+      ただし置いてある窓が KEEP_SECONDS より長く変わっていなければ、低くても来たほう（枠の途中リセットの逃げ道。
+      **窓ごとの `changed_at` で見る**。記録全体の時刻で見ると、5 時間の窓が動いている間は週の逃げ道が開かない）
     - `resets_at` が先へ進んでいれば新しい窓なので、低くても来たほう。手前なら前の窓の値なので置いてあるほう
     - 来なかった窓は、置いてあるものを持ち越す（週だけ来た描画で、期限内の 5 時間を消さない）
     - どちらかに `resets_at` が無ければ比べられないので、来たほう（来なかったなら持ち越さない。
@@ -142,42 +144,58 @@ def merge_windows(existing: dict, incoming: dict) -> dict:
         if "resets_at" not in new:
             continue
         ahead = new["resets_at"] - old["resets_at"]
-        if ahead < -SAME_WINDOW_SECONDS or (ahead <= SAME_WINDOW_SECONDS and new["used_percentage"] <= old["used_percentage"]):
+        if ahead < -SAME_WINDOW_SECONDS:
             out[name] = old
+        elif ahead <= SAME_WINDOW_SECONDS and new["used_percentage"] <= old["used_percentage"]:
+            if new["used_percentage"] == old["used_percentage"] or now - old["changed_at"] <= KEEP_SECONDS:
+                out[name] = old
+    return out
+
+
+def stored_windows(value: dict, written: float) -> dict:
+    """置いてある記録の窓。`changed_at`（その窓の割合が最後に変わった時刻）が無い・読めない窓は記録の `ts` で補う"""
+    limits = value.get("rate_limits")
+    out = windows_of(value)
+    for name, window in out.items():
+        changed = _num(limits[name].get("changed_at"))
+        window["changed_at"] = changed if changed is not None else written
     return out
 
 
 def windows_to_write(path: Path, incoming: dict, now: datetime) -> dict | None:
     """いま置いてある記録と突き合わせて、書く窓を決める。**書かなくてよければ None**。
 
-    - 置いてある記録が無い・読めない・`ts` が比べられない・KEEP_SECONDS より古い → 来たものをそのまま
+    - 置いてある記録が無い・読めない・`ts` が比べられない → 来たものをそのまま
     - `ts` が今より少し先（NEWER_TRUST_SECONDS 以内）で生きている窓がある → 書かない（#683。新しい記録を残す）。
       先すぎる `ts`（時計の狂ったマシンが書いたもの）は残すとその時刻まで割合が止まるので、来たものをそのまま
     - それ以外は `merge_windows()`。**置いてあるものと同じになったら書かない**（`ts` を進めない）
     """
+    at = now.timestamp()
+    incoming = {name: dict(window, changed_at=at) for name, window in incoming.items()}
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
-        at = datetime.fromisoformat(value["ts"])
+        written_at = datetime.fromisoformat(value["ts"])
         # タイムゾーンの無い ts は比べられない（aware との比較は TypeError）。読めないのと同じ扱い
-        if at.tzinfo is None:
+        if written_at.tzinfo is None:
             return incoming
-        age = (now - at).total_seconds()
-        written = windows_of(value)
+        age = (now - written_at).total_seconds()
+        written = stored_windows(value, written_at.timestamp())
     except Exception:
         return incoming
-    if age > KEEP_SECONDS or age < -NEWER_TRUST_SECONDS:
+    if age < -NEWER_TRUST_SECONDS:
         return incoming
     live = live_windows(written, now)
     if age < 0:
         return None if live else incoming
-    merged = merge_windows(live, incoming)
+    merged = merge_windows(live, incoming, at)
     return None if merged == written else merged
 
 
 def build_record(payload: dict, windows: dict, now: datetime) -> dict:
     """書き出す中身。`ts` は**割合が最後に変わった時刻**（同じ値の描画では書き直さない。#689）。
 
-    `session` / `model` は最後に書いた描画のもの（持ち越した窓は別のセッションが受け取った値のことがある）
+    `session` / `model` は最後に書いた描画のもの（持ち越した窓は別のセッションが受け取った値のことがある）。
+    窓ごとの `changed_at`（epoch 秒）はその窓の割合が最後に変わった時刻で、読む側（shared/usage.ts）は見ない
     """
     model = payload.get("model")
     return {

@@ -44,8 +44,8 @@ C-c / SIGTERM では必ず終わる（#296。`main.ts` の `shutdown()`）。
 
 - 割合（`feed/statusline.py` が書く `<feed dir>/usage-claude[.<host>].json`）と「いま上限に当たっているか」（`~/.claude/projects/*/*.jsonl` の `quotaLimits`）を `mergeClaudeUsage()` で重ねる。片方だけのことがあるので、`ClaudeUsage.primary` / `limited` はそれぞれ任意。
 - ステータスラインの割合は、枠の `resets_at` を過ぎたものと、`STATUS_MAX_AGE_MS`（8 日）より古いファイルを捨てる。
-- 書く側（`feed/statusline.py`）も同じ条件で、`resets_at` を過ぎた窓は書かない（`live_windows()`。全部過ぎていればファイルに触らない）。置いてある記録のほうが新しければ上書きしない（`newer_record()`。`ts` が今より先で、`NEWER_TRUST_SECONDS`（5 分）以内で、生きている窓が 1 つはあるときだけ。読めない `ts`・先すぎる `ts`・窓が全部戻った記録は上書きする）。期限切れの境界（`resets_at <= now`）は `feed/test_statusline.py` と `shared/usage.test.ts` に同じ形で置く（#683）。
-- 書く窓は `windows_to_write()` が置いてある記録と突き合わせて決める（#689）。`merge_windows()` は窓ごとに新しいほうを残す: `resets_at` の差が `SAME_WINDOW_SECONDS`（60 秒）以内なら同じ窓で割合の高いほう、先へ進んでいれば新しい窓で来たほう、手前なら置いてあるほう。来なかった窓は持ち越す（`resets_at` の無い窓は持ち越さない）。**置いてあるものと同じになったら書かない**ので、`ts` は割合が最後に変わった時刻になる。置いてある記録が `KEEP_SECONDS`（24 時間）より古ければ、比べずに来たもので置き直す。
+- 書く側（`feed/statusline.py`）も同じ条件で、`resets_at` を過ぎた窓は書かない（`live_windows()`。全部過ぎていればファイルに触らない）。置いてある記録のほうが新しければ上書きしない（`windows_to_write()`。`ts` が今より先で、`NEWER_TRUST_SECONDS`（5 分）以内で、生きている窓が 1 つはあるときだけ。読めない `ts`・先すぎる `ts`・窓が全部戻った記録は上書きする）。期限切れの境界（`resets_at <= now`）は `feed/test_statusline.py` と `shared/usage.test.ts` に同じ形で置く（#683）。
+- 書く窓は `windows_to_write()` が置いてある記録と突き合わせて決める（#689）。`merge_windows()` は窓ごとに新しいほうを残す: `resets_at` の差が `SAME_WINDOW_SECONDS`（60 秒）以内なら同じ窓で割合の高いほう、先へ進んでいれば新しい窓で来たほう、手前なら置いてあるほう。来なかった窓は持ち越す（`resets_at` の無い窓は持ち越さない）。**置いてあるものと同じになったら書かない**ので、`ts` は割合が最後に変わった時刻になる。窓ごとに `changed_at`（その窓の割合が最後に変わった時刻。読む側は見ない。無ければ記録の `ts`）を持ち、`KEEP_SECONDS`（24 時間）より長く変わっていない窓は、同じ窓の低い値でも置き直す。
 
 ### Codex
 

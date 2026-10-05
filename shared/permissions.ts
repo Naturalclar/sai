@@ -61,9 +61,10 @@ export const MODE_HINT: Record<PermissionMode, string> = {
 /**
  * SAI の画面（入力欄の許可モードのボタン）から選べる許可モード。サーバの検査（shared/meta.ts の mergeMeta）と
  * 画面のメニューが同じ一覧を見るので、**ここに無い値は口としても受けない**（400）。
- * `bypassPermissions` は素通しなので、画面は modeSkipsRules() で目立たせる（#253）
+ * `auto`（#691）と `bypassPermissions`（#253）はルールに関係なく通るので、画面は modeSkipsRules() で目立たせ、強さは modeEmphasis() で分ける。
+ * 並びは弱い順（`acceptEdits` → `auto` → `bypassPermissions`）
  */
-export const REPLY_MODES: ReplyPermissionMode[] = ['acceptEdits', 'bypassPermissions']
+export const REPLY_MODES: ReplyPermissionMode[] = ['acceptEdits', 'auto', 'bypassPermissions']
 
 /**
  * 入力欄の許可モードのボタン（閉じているとき）に出す短い名前（#265）。
@@ -73,6 +74,7 @@ export const REPLY_MODES: ReplyPermissionMode[] = ['acceptEdits', 'bypassPermiss
 export const MODE_SHORT: Record<'default' | ReplyPermissionMode, string> = {
   default: 'Default',
   acceptEdits: 'Accept edits',
+  auto: 'Auto',
   bypassPermissions: 'Bypass',
 }
 
@@ -82,15 +84,49 @@ export function shortReplyMode(mode: string): string {
   return MODE_SHORT[key] ?? mode
 }
 
-/** 画面から選べる許可モードか。知らない値・素通し系は false */
+/** 画面から選べる許可モードか。知らない値は false */
 export function isReplyPermissionMode(value: unknown): value is ReplyPermissionMode {
   return typeof value === 'string' && (REPLY_MODES as string[]).includes(value)
 }
 
-/** ルールの一覧に関係なく通ってしまうモードか。画面で目立たせる */
+/**
+ * ルールの一覧に関係なく通ってしまうモードか（`auto` / `bypassPermissions`）。画面で目立たせ、
+ * **人が見ていない所から動かす口（tailnet の MCP から送る・ループを組む）はこれで断る**（#691。判定はこの 1 つ。
+ * `bypassPermissions` を直に比べない）
+ */
 export function modeSkipsRules(mode: string): boolean {
   return mode === 'auto' || mode === 'bypassPermissions'
 }
+
+/**
+ * 目立たせる強さ（#691）。`loud` = 素通し（赤）、`caution` = Auto mode（赤より 1 段弱い色）、空 = 目立たせない。
+ * 「目立たせるか」は modeSkipsRules()、「どの強さか」はこちら（CSS のクラス名にそのまま使う）
+ */
+export function modeEmphasis(mode: string): '' | 'caution' | 'loud' {
+  if (!modeSkipsRules(mode)) return ''
+  return mode === 'bypassPermissions' ? 'loud' : 'caution'
+}
+
+/**
+ * 運用者が渡した引数（`SAI_CLAUDE_ARGS`）の中の、ルールに関係なく通るモード。無ければ空。
+ * `--permission-mode auto`（2 語）・`--permission-mode=auto`（1 語）・`--dangerously-skip-permissions` と、
+ * `--settings` に JSON で渡した `"defaultMode": "…"` を見る（値に名前を含むだけの別の引数では当てない）
+ */
+export function skipModeInArgs(args: readonly string[]): string {
+  if (args.includes('--dangerously-skip-permissions')) return 'bypassPermissions'
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!
+    const mode = a === '--permission-mode' ? (args[i + 1] ?? '') : a.startsWith('--permission-mode=') ? a.slice('--permission-mode='.length) : ''
+    if (mode && modeSkipsRules(mode)) return mode
+    // `--settings '{"permissions":{"defaultMode":"bypassPermissions"}}'`（1 語でも `--settings=` でも、引数の中身を見る）
+    const byDefault = /"defaultMode"\s*:\s*"([A-Za-z]+)"/.exec(a)?.[1] ?? ''
+    if (modeSkipsRules(byDefault)) return byDefault
+  }
+  return ''
+}
+
+/** 断りの文に出すモードの名前（`Auto mode` / `Bypass permissions`）。知らない値はそのまま */
+export const modeName = (mode: string): string => MODE_LABEL[mode as PermissionMode] ?? mode
 
 /** 名前と説明（`Accept edits — ファイル編集は聞かない`）。知らない値でも落とさずそのまま出す */
 export function modeLabel(mode: string): string {

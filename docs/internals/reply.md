@@ -276,8 +276,9 @@ SAI が起こした Claude のターンは、使ったトークンと費用も�
 - 値は `SessionMeta.permission_mode`。UI は入力欄のモデルの右の `ReplyPermissionPicker`（#265。返信の設定は `[差分] [モデル] [許可]` と入力欄に集める）。
 - `replyCommand()` が Claude にだけ `--permission-mode` として付ける（運用者の `SAI_CLAUDE_ARGS` より後ろで後勝ち）。そのターン限りでセッションには残らない。端末に打ち込む経路では効かない。
 - 次の返信から効き、処理中のターンは起動したときのモードのまま（#272）。`replyCommand()` が付けたモードを `ReplyCommand.permissionMode` に持ち、`ProcessRunner` が `Replying.permission_mode`（`''` はフラグ無し、省略は分からない）として `replying.json` にも書く。画面はメタの値と違えば `shared/permissions.ts` の `launchedModeNote()` で、ボタンの横に「次の返信から」、許可のバブル（`SessionView` / `FeedView` / `TodoView`）に理由を出す。
-- 選べるのは `acceptEdits` と `bypassPermissions`（#253）。`REPLY_MODES` に無い値（`auto` など）は画面に並べず、`mergeMeta()` が `400` にする。一覧は `shared/permissions.ts` の `REPLY_MODES` / `isReplyPermissionMode()` で、サーバの検査と画面のメニューが同じものを見る（閉じているときの短い名前は `shortReplyMode()`）。
-- `bypassPermissions` を選んでいる間はボタンを赤くする（`modeSkipsRules()`。見出しのタグ・モーダルと同じ判定）。
+- 選べるのは `acceptEdits`・`auto`（#691）・`bypassPermissions`（#253）。`REPLY_MODES` に無い値（`plan` など）は画面に並べず、`mergeMeta()` が `400` にする。一覧は `shared/permissions.ts` の `REPLY_MODES` / `isReplyPermissionMode()` で、サーバの検査と画面のメニューが同じものを見る（閉じているときの短い名前は `shortReplyMode()`）。
+- 目立たせるかは `modeSkipsRules()`（`auto` / `bypassPermissions`）、強さは `modeEmphasis()`（素通しは `loud` = 赤、Auto mode は `caution` = 1 段弱い色。CSS のクラス名にそのまま使う）。ボタン・メニュー・見出しのタグ・モーダルが同じ判定。
+- **人が見ていない所から動かす口（tailnet の MCP から送る・ループを組む）は `modeSkipsRules()` で断る**（#691。`bypassPermissions` を直に比べない）。運用者の `SAI_CLAUDE_ARGS` の中は `skipModeInArgs()` が見る（`--permission-mode` の 2 つの形・`--dangerously-skip-permissions`・`--settings` の JSON の `defaultMode`）。
 - 名前（`MODE_LABEL` / `MODE_SHORT`）は英語（#271）。説明は `MODE_HINT`（日本語）に分けてあり、メニューの補足と `modeLabel()`（`Accept edits — ファイル編集は聞かない`。見出しのタグ・盾のモーダル）が使う。`server/approvals/permissions.test.ts` が名前に日本語が混ざると止める。
 
 ## モデル
@@ -309,7 +310,7 @@ SAI が起こした Claude のターンは、使ったトークンと費用も�
   - 時刻が来ていれば、終わりの時刻 → 周の上限 → 処理中・預かり（待つ）→ 前の返信の失敗（一時停止）→ `loopRefusal()`（一時停止）→ `usageRefusal()`（止める）の順に見て、`launch()` に `loop: true`・`forceProcess: true`・`queue: false` で渡す。
   - **送る前に `round + 1` と `turn: 'pending'` を書く**。起動できたら `turn` を `Replying.since` にする。立て直したあと子が居なければ「その周は終わった」として次の時刻を待つので、同じ周を 2 回は送らない。
   - `claude --bg` を待つ `retry` は止めずに元へ戻す。
-- **`loopRefusal()`** は組むときと周を起こす直前の両方で見る（Claude だけ・`replyBlockedReason()`・アーカイブ・`SAI_APPROVE=0` か運用者の `--permission-prompt-tool`・`bypassPermissions`（メタと `SAI_CLAUDE_ARGS`）・`terminalOf()`）。
+- **`loopRefusal()`** は組むときと周を起こす直前の両方で見る（Claude だけ・`replyBlockedReason()`・アーカイブ・`SAI_APPROVE=0` か運用者の `--permission-prompt-tool`・許可を聞かないモード（`modeSkipsRules()`。メタと `SAI_CLAUDE_ARGS`）・`terminalOf()`）。
 - **エージェントの口**: `launch()` の `loop` → `ApproveVia.loop` → MCP の env `SAI_LOOP=1` → `approve-mcp.ts` が `LOOP_TOOLS`（`sai_loop_next`）を **周のターンにだけ**出す。ツールは `POST /api/agent/loop`（`agentLoopNext()`）を叩き、`agentFrom()` の送り元のターンが `LoopState.turn` と同じときだけ受ける。上限・目的を動かす引数は無い。
 - **一時停止**は `pauseLoop()`: 人の返信（`reply` が `202` を返したとき）と、人がターンを止めたとき（`interrupt`。止めたターンは失敗にならないので、ここで止めないと次の周が起きる）。一時停止は `turn` を覚えたままにし、その周が終わったら申し送りだけ残す。
 - **応答**: 一覧と詳細の `loops`（`LoopMap`）。`loops.key()` を rev に混ぜる。処理中の本文（`replying[].text`）は `loopPromptLabel()` で「ループ N 周目」にする。

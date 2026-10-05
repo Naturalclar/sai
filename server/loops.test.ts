@@ -278,6 +278,9 @@ test('組めないセッション: Claude 以外・端末で開いている・�
   const meta = await fetch(`${base}/api/sessions/${encodeURIComponent('P1@r')}/meta`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ permission_mode: 'bypassPermissions' }) })
   assert.equal(meta.status, 200)
   assert.match(await refuse('P1'), /Bypass permissions/)
+  // Auto mode（#691）を選んだセッションにも組めない
+  assert.equal((await fetch(`${base}/api/sessions/${encodeURIComponent('P1@r')}/meta`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ permission_mode: 'auto' }) })).status, 200)
+  assert.match(await refuse('P1'), /Auto mode/)
   assert.equal((await post(url('nope'), GOAL)).status, 404)
   // 運用者が SAI_CLAUDE_ARGS で素通しを渡しているとき（2 語の形・`=` の 1 語の形・--dangerously-skip-permissions）も組めない
   const savedArgs = process.env.SAI_CLAUDE_ARGS
@@ -285,6 +288,11 @@ test('組めないセッション: Claude 以外・端末で開いている・�
     for (const args of ['--permission-mode bypassPermissions', '--permission-mode=bypassPermissions', '--dangerously-skip-permissions']) {
       process.env.SAI_CLAUDE_ARGS = args
       assert.match(await refuse('L9'), /Bypass permissions/, args)
+    }
+    // Auto mode（#691）も同じ扱い
+    for (const args of ['--permission-mode auto', '--permission-mode=auto']) {
+      process.env.SAI_CLAUDE_ARGS = args
+      assert.match(await refuse('L9'), /Auto mode/, args)
     }
   } finally {
     if (savedArgs === undefined) delete process.env.SAI_CLAUDE_ARGS

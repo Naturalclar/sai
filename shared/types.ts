@@ -1713,7 +1713,7 @@ export type PermissionMode = 'default' | 'acceptEdits' | 'plan' | 'auto' | 'dont
  * 実測（Claude Code 2.1.266）: **ツールの許可は `--permission-prompt-tool` を素通りするが、
  * `AskUserQuestion` の質問は素通りしない**ので、質問のバブルは今までどおり出て答えられる
  */
-export type ReplyPermissionMode = 'acceptEdits' | 'bypassPermissions'
+export type ReplyPermissionMode = 'acceptEdits' | 'auto' | 'bypassPermissions'
 
 /** ルールの種類。評価は deny → ask → allow の順で、最初に当たったものが決まる */
 export type PermissionKind = 'deny' | 'ask' | 'allow'

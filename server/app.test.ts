@@ -1171,7 +1171,17 @@ test('POST /api/sessions/new: モデルと許可モードは検査してから�
   await metaFile.set(data.id, {})
 
   runner.started.length = 0
-  assert.equal((await postNew({ from: 'C1@r', text: 'go', permission_mode: 'auto' })).status, 400, '画面から選べない許可モード')
+  assert.equal((await postNew({ from: 'C1@r', text: 'go', permission_mode: 'plan' })).status, 400, '画面から選べない許可モード')
+  assert.equal(runner.started.length, 0)
+  // Auto mode（#691）は選べる。起動のコマンドに付き、メタにも残る
+  const auto = await postNew({ from: 'C1@r', text: 'go', permission_mode: 'auto' })
+  assert.equal(auto.status, 202)
+  const autoId = ((await auto.json()) as { id: string }).id
+  const autoArgs = runner.started[0]!.cmd.args
+  assert.deepEqual(autoArgs.slice(autoArgs.indexOf('--permission-mode'), autoArgs.indexOf('--permission-mode') + 2), ['--permission-mode', 'auto'])
+  assert.deepEqual(await metaFile.get(autoId), { permission_mode: 'auto' })
+  await metaFile.set(autoId, {})
+  runner.started.length = 0
   assert.equal(runner.started.length, 0)
 })
 
@@ -1379,9 +1389,15 @@ test('PUT meta: permission_mode は次の返信の claude に --permission-mode 
     ['--permission-mode', 'bypassPermissions'],
   )
 
+  // Auto mode（#691）も選べて、次の返信に付く
+  assert.equal((await putMeta('C1@r', { permission_mode: 'auto' })).status, 200)
+  assert.equal((await post('C1@r', { text: 'z' })).status, 202)
+  const auto = runner.started[3]!.cmd.args
+  assert.deepEqual(auto.slice(auto.indexOf('--permission-mode'), auto.indexOf('--permission-mode') + 2), ['--permission-mode', 'auto'])
+
   // REPLY_MODES に無いものは口としても受けない
-  assert.equal((await putMeta('C1@r', { permission_mode: 'auto' })).status, 400)
   assert.equal((await putMeta('C1@r', { permission_mode: 'plan' })).status, 400)
+  assert.equal((await putMeta('C1@r', { permission_mode: 'dontAsk' })).status, 400)
 
   // あとのテストに持ち越さない（この fixture のアプリは 1 つで、メタは残る）
   assert.equal((await putMeta('C1@r', { permission_mode: '' })).status, 200)

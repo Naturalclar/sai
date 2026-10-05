@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { KIND_LABEL, modeLabel, modeSkipsRules, PERMISSION_KINDS, SOURCE_HINT, SOURCE_LABEL } from '../../shared/permissions.ts'
+import { KIND_LABEL, modeEmphasis, modeLabel, modeSkipsRules, PERMISSION_KINDS, SOURCE_HINT, SOURCE_LABEL } from '../../shared/permissions.ts'
 import { api, type SessionPermissionsResponse } from './api'
 
 /**
@@ -43,7 +43,7 @@ export function PermissionsModal({ id, onClose }: { id: string; onClose: () => v
           <>
             <div className="mode">
               許可モード:{' '}
-              <b className={modeSkipsRules(data.mode) ? 'loud' : ''}>{data.mode ? `${data.mode}（${modeLabel(data.mode)}）` : '不明（記録が古い）'}</b>
+              <b className={modeEmphasis(data.mode)}>{data.mode ? `${data.mode}（${modeLabel(data.mode)}）` : '不明（記録が古い）'}</b>
               {modeSkipsRules(data.mode) && <div className="warn">このモードでは下のルールに関係なく実行されます。</div>}
             </div>
             {data.agent !== 'claude' ? (

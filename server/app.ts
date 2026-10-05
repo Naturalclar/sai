@@ -121,6 +121,7 @@ import { isDigestModel, isDigestProvider } from '../shared/digestSettings.ts'
 import type { Digester } from './digest/digest.ts'
 import { META_FILE, MetaStore } from './meta/meta.ts'
 import { collectPermissions } from './approvals/permissions.ts'
+import { modeName, modeSkipsRules, skipModeInArgs } from '../shared/permissions.ts'
 import { compareUrl, parseUnifiedDiff } from '../shared/diff.ts'
 import { changedPaths, clampPatch, NotAGitRepo, RealGit, resolveBase, sessionDiff, sessionDiffSummary } from './git/diff.ts'
 import { prBrowserFromEnv } from './git/prs.ts'
@@ -2756,8 +2757,8 @@ export function createApp(
    *
    * - **Claude だけ**: エージェントが「次」を言う口（`sai_loop_next`）は SAI が `claude -p` に渡す MCP にしか無い
    * - **端末で開いているセッションには組まない**: 打ち込む経路には MCP が無く、端末の `/loop` と二重に回るのを見分けられない
-   * - **素通し（`bypassPermissions`）には組まない**: 人が見ていない間に、何も聞かれずに回り続ける。運用者が
-   *   `SAI_CLAUDE_ARGS` で渡しているときも同じ（`--permission-mode=bypassPermissions` の 1 語の形も見る）
+   * - **ルールに関係なく通るモード（`bypassPermissions` / `auto`。#691）には組まない**: 人が見ていない間に、何も聞かれずに回り続ける。
+   *   運用者が `SAI_CLAUDE_ARGS` で渡しているときも同じ（`skipModeInArgs()`。1 語の形も見る）。判定は `modeSkipsRules()` の 1 つ
    */
   const loopRefusal = async (session: SessionSummary): Promise<string> => {
     if (session.archived) return 'アーカイブ済みのセッションにはループを組めません'
@@ -2766,8 +2767,9 @@ export function createApp(
     if (session.agent !== 'claude') return 'ループを組めるのは、いまは Claude のセッションだけです'
     const extra = splitArgs(process.env.SAI_CLAUDE_ARGS)
     if (process.env.SAI_APPROVE === '0' || extra.includes('--permission-prompt-tool')) return 'SAI の MCP を渡していない（SAI_APPROVE=0 など）ので、エージェントが次を言う口がありません'
-    const mode = (await metaStore.get(session.id))?.permission_mode
-    if (mode === 'bypassPermissions' || extra.some((a) => a.includes('bypassPermissions')) || extra.includes('--dangerously-skip-permissions')) return '許可を聞かないモード（Bypass permissions）のセッションにはループを組めません'
+    const mode = (await metaStore.get(session.id))?.permission_mode ?? ''
+    const skips = modeSkipsRules(mode) ? mode : skipModeInArgs(extra)
+    if (skips) return `許可を聞かないモード（${modeName(skips)}）のセッションにはループを組めません`
     if (await terminalOf(session)) return '端末で開いているセッションにはループを組めません（端末の /loop と二重に回るのを避けるため）'
     return ''
   }
@@ -2987,13 +2989,14 @@ export function createApp(
 
   /**
    * tailnet から送れない相手なら理由。アーカイブ済み・返信できない（別のマシン・合成 ID など）に加えて、
-   * **素通し（bypassPermissions）を選んだセッションには送らない**（tailnet の呼び出し元の LLM が、許可を聞かないエージェントを動かせてしまう。#253）
+   * **ルールに関係なく通るモード（bypassPermissions / auto）を選んだセッションには送らない**（tailnet の呼び出し元の LLM が、許可を聞かないエージェントを動かせてしまう。#253 / #691）
    */
   const mcpSendRefusal = (s: SessionSummary): string => {
     if (s.archived) return 'アーカイブ済み'
     const blocked = replyBlockedReason(s, selfHost())
     if (blocked) return blocked
-    if (s.meta?.permission_mode === 'bypassPermissions') return '素通し（bypassPermissions）のセッションには tailnet から送れません'
+    const mode = s.meta?.permission_mode ?? ''
+    if (modeSkipsRules(mode)) return `許可を聞かないモード（${modeName(mode)}）のセッションには tailnet から送れません`
     return ''
   }
 

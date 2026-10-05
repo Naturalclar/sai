@@ -225,7 +225,7 @@ test('/mcp: sai_sessions / sai_session / sai_progress', async () => {
   assert.equal(r.isError, undefined)
   assert.ok(r.text.includes('A1@r'))
   assert.match(r.text, /R1@r.*送れない/, '別のマシンのセッションは送れない印付き')
-  assert.match(r.text, /P1@r.*送れない: 素通し/)
+  assert.match(r.text, /P1@r.*送れない: 許可を聞かないモード（Bypass permissions）/)
   // 待ちと最後の記録の時刻（#323。Manager が本文を読まずに急ぐものを選ぶ）
   assert.match(r.text, /C1@r.*（待ち: 許可待ち: Bash: ls） 最後の記録: \d{4}-\d{2}-\d{2}T/, '待ちは 1 行目だけ')
   assert.ok(!r.text.includes('2 行目'))
@@ -273,7 +273,12 @@ test('/mcp: sai_send は見出し付きで相手のターンを起動し、sai_w
   assert.equal(launched.id, 'B1@r')
   assert.ok(launched.cmd.text.startsWith(deliveredFromTailnet('me@example.com', messageId, 'レビューして').split('\n')[0]!), '人の入力と見分けられる見出し')
 
-  assert.match((await call('sai_send', { to: 'P1@r', text: 'やって' }, SENDER)).text, /素通し/)
+  assert.match((await call('sai_send', { to: 'P1@r', text: 'やって' }, SENDER)).text, /Bypass permissions/)
+  // Auto mode（#691）を選んだセッションにも tailnet からは送れない（素通しと同じ扱い）
+  const setMode = (mode: string) => fetch(`${base}/api/sessions/P1%40r/meta`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ permission_mode: mode }) })
+  assert.equal((await setMode('auto')).status, 200)
+  assert.match((await call('sai_send', { to: 'P1@r', text: 'やって' }, SENDER)).text, /Auto mode.*tailnet から送れません/)
+  assert.equal((await setMode('bypassPermissions')).status, 200)
   assert.equal((await call('sai_send', { to: 'R1@r', text: 'やって' }, SENDER)).isError, true)
   assert.equal((await call('sai_send', { to: 'A1@r', text: 'あ'.repeat(AGENT_TEXT_MAX_CHARS + 1) }, SENDER)).isError, true)
 

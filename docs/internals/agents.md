@@ -110,7 +110,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - #310 の口に乗せる: 見出しは `deliveredFromTailnet()`（`isDeliveryOf()` / `replyOf()` がそのまま返答を探せる形）、`launch()` に `queue: true` と `origin`（受け取ったターンから先へ送らせない）、返答は `agentResult()`。
 - 回数は `server/mcp/sendLimit.ts` の `McpSendLimiter`（呼んだ人ごとに 10 分 5 回。`mcp-sends.json` に残る）。
 - 使用量の枠（`usageRefusal()`）と読み直させる量の予算（`budgetRefusal()`）は #311 の口と同じものを見る。予算の「1 ターン」の代わりは `McpSendLimiter.windowKey()`（10 分の区切り）で、`AgentMessages.record()` / `readInTurn()` にその鍵で載せる。
-- 素通し（`bypassPermissions`）のセッションには送らない（`mcpSendRefusal()`）。
+- 許可を聞かないモード（`bypassPermissions` / `auto`。判定は `modeSkipsRules()`）のセッションには送らない（`mcpSendRefusal()`。断りの文にモードの名前を出す）。
 - `sai_wait` は最大 120 秒で返し、まだならもう一度呼ばせる。
 - 返答を引く行は `rowsNow()`（#614。ターン完了の行が落ちた・本文が空だったターンは、transcript から補った行が返答になる。→ [progress.md](progress.md#落ちた返答を-transcript-から補う614)）。
 - 送り元は `mcp:<ログイン名>` として記録し、本人だけが待てる。

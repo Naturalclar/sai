@@ -57,7 +57,7 @@ export function mergeMeta(current: SessionMeta, input: unknown): { meta: Session
     if (raw.permission_mode !== null && typeof raw.permission_mode !== 'string') return { meta: {}, error: 'permission_mode は文字列で送ってください' }
     const mode = (raw.permission_mode ?? '').trim()
     if (mode) {
-      // 素通し系（auto / bypassPermissions）はここで弾く。画面に出さないだけでなく、口としても受けない
+      // 画面から選べるもの（`REPLY_MODES`）以外はここで弾く。画面に出さないだけでなく、口としても受けない
       if (!isReplyPermissionMode(mode)) return { meta: {}, error: `permission_mode に使えるのは ${REPLY_MODES.join(' / ')} だけです` }
       meta.permission_mode = mode
     } else {

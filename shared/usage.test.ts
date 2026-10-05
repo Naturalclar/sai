@@ -176,6 +176,20 @@ test('parseStatusLineUsage: 戻る時刻を過ぎた枠は出さない（次に 
   assert.equal(parseStatusLineUsage(statusFile({ rate_limits: { five_hour: { used_percentage: 90, resets_at: Math.floor(NOW / 1000) - 1 } } }), NOW), null)
 })
 
+test('parseStatusLineUsage: 書く側（feed/statusline.py）と同じ境界で期限切れにする（#683）', () => {
+  // feed/test_statusline.py の test_live_windows_boundary_matches_the_reader と同じ形。片方だけ変えない
+  const now = 1_800_000_000 * 1000
+  const usage = parseStatusLineUsage(
+    statusFile({
+      ts: new Date(now).toISOString(),
+      rate_limits: { five_hour: { used_percentage: 1, resets_at: 1_800_000_000 }, seven_day: { used_percentage: 2, resets_at: 1_800_000_001 } },
+    }),
+    now,
+  )
+  assert.equal(usage?.primary, undefined, 'ちょうど戻る時刻は期限切れ')
+  assert.equal(usage?.secondary?.used_percent, 2)
+})
+
 test('parseStatusLineUsage: 古すぎるファイル・rate_limits の無いファイル・壊れた値は null', () => {
   assert.equal(parseStatusLineUsage(statusFile({ ts: new Date(NOW - STATUS_MAX_AGE_MS - 1).toISOString() }), NOW), null, '古すぎる')
   assert.equal(parseStatusLineUsage(statusFile({ ts: 'いつ？' }), NOW), null, '時刻が読めない')

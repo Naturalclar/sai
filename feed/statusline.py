@@ -10,6 +10,9 @@
 
 - 受け取った `rate_limits` を `<feed dir>/usage-claude[.<host>].json` に**上書き**する
   （履歴は要らない。画面はいつも「いまの割合」しか見ない）
+- **戻る時刻を過ぎた窓は書かない・置いてある新しい記録（`ts` が少し先で、まだ出せるもの）は上書きしない**（#683。
+  再開した古いセッションは最後に受け取った `rate_limits` を持ち回るので、そのまま書くと
+  取れていた割合が、読む側に全部捨てられる中身に置き換わる）
 - **stdout に書いたものがそのままステータスラインになる。** 何も出さなければ空になってしまうので、
   短い1行を出す。既に自分のステータスラインを持っている人は README のラッパーで繋ぐ
 - record.py と同じ規律: Python 3.9+ の標準ライブラリだけ・**必ず exit 0**・速いこと
@@ -36,6 +39,8 @@ import record
 USAGE_VERSION = 1
 #: 記録するもの。ここに無い窓（gateway の spend_limit など）は今は捨てる
 WINDOWS = ("five_hour", "seven_day")
+#: 置いてある記録の `ts` が今よりこれ以上先なら、新しい記録ではなく時計のずれとみなして上書きする（#683）
+NEWER_TRUST_SECONDS = 300
 #: 保険の自殺タイマー。stdin が閉じないなど、何が起きても TUI を待たせない
 HARD_TIMEOUT_SECONDS = 5
 #: ステータスラインに出す本文の上限（端末の1行に収める）
@@ -98,6 +103,35 @@ def windows_of(payload: dict) -> dict:
     return out
 
 
+def live_windows(windows: dict, now: datetime) -> dict:
+    """戻る時刻（`resets_at`）を過ぎた窓を落とす。`resets_at` の無い窓は残す。
+
+    **読む側（shared/usage.ts の `parseStatusWindow()`）と同じ条件**（`resets_at <= now` で期限切れ）。
+    片方だけ変えると「書いたのに出ない」か「出せるのに書かない」になるので、境界は両方のテストに同じ形で置く
+    """
+    at = now.timestamp()
+    return {name: window for name, window in windows.items() if "resets_at" not in window or window["resets_at"] > at}
+
+
+def newer_record(path: Path, now: datetime) -> bool:
+    """いま置いてある記録のほうが新しく、まだ出せるか（そうなら上書きしない）。
+
+    `ts` が今より先で、**先すぎず**（NEWER_TRUST_SECONDS 以内）、**生きている窓が 1 つはある**ときだけ True。
+    無い・読めない・時刻として読めないものは False（上書きしてよい）。先すぎる `ts`（時計の狂ったマシンが
+    書いたもの）や、窓が全部戻った記録を残すと、その時刻が来るまで割合が止まったままになる
+    """
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        at = datetime.fromisoformat(value["ts"])
+        # タイムゾーンの無い ts は比べられない（aware との比較は TypeError）。読めないのと同じ扱い
+        if at.tzinfo is None:
+            return False
+        ahead = (at - now).total_seconds()
+        return 0 < ahead <= NEWER_TRUST_SECONDS and bool(live_windows(windows_of(value), now))
+    except Exception:
+        return False
+
+
 def build_record(payload: dict, windows: dict, now: datetime) -> dict:
     """書き出す中身。`ts` は**いつ時点の割合か**（Claude が動いていない間は更新されない）"""
     model = payload.get("model")
@@ -111,10 +145,15 @@ def build_record(payload: dict, windows: dict, now: datetime) -> dict:
     }
 
 
-def write_record(directory: Path, row: dict) -> None:
-    """同じ名前に置き直す（履歴は持たない）。読む側が半端な JSON を見ないように tmp → replace"""
+def write_record(directory: Path, row: dict, now: datetime) -> None:
+    """同じ名前に置き直す（履歴は持たない）。読む側が半端な JSON を見ないように tmp → replace。
+
+    置いてある記録のほうが新しければ何もしない（#683。`newer_record()`）
+    """
     directory.mkdir(parents=True, exist_ok=True)
     path = usage_file(directory)
+    if newer_record(path, now):
+        return
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     tmp.write_text(json.dumps(row, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, path)
@@ -140,7 +179,11 @@ def main() -> None:
     windows = windows_of(payload)
     # AGENT_FEED_SKIP は record.py と同じ意味（SAI 自身が回す claude に付く）。表示だけして記録しない
     if windows and os.environ.get("AGENT_FEED_SKIP") != "1":
-        write_record(record.feed_dir(), build_record(payload, windows, datetime.now(record.tz())))
+        now = datetime.now(record.tz())
+        # 期限切れの窓は書かない。全部切れていれば、置いてある記録に触らない（#683）
+        live = live_windows(windows, now)
+        if live:
+            write_record(record.feed_dir(), build_record(payload, live, now), now)
     line = status_line(payload, windows)
     if line:
         print(line)

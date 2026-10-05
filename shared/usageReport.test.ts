@@ -61,12 +61,12 @@ test('usageReport: セッション別・日別・モデル別の合計と割合�
     entry('B@r', '2026-09-30T15:30:00Z', { model: 'claude-haiku-4-5', cache_read_input_tokens: 0, cache_creation_input_tokens: 0, input_tokens: 500, output_tokens: 500 }),
     entry('C@r', '2026-09-30T01:00:00Z', { model: '' }),
   ]
-  const r = usageReport(entries, { now: NOW, days: 7, names: new Map([['A@r', 'かなで']]) })
+  const r = usageReport(entries, { now: NOW, days: 7, names: new Map([['A@r', 'セッション C']]) })
   assert.deepEqual(r.total, { turns: 4, input_tokens: 530, output_tokens: 1430, cache_read_input_tokens: 3000, cache_creation_input_tokens: 300, tokens: 5260, cost_usd: 6, denials: 2, errors: 1 })
 
   // セッション別はトークンの多い順。名前は渡したものだけ
   assert.deepEqual(r.sessions.map((s) => [s.key, s.name, s.turns, s.tokens, s.cost_usd, s.denials, s.errors]), [
-    ['A@r', 'かなで', 2, 3130, 4, 2, 1],
+    ['A@r', 'セッション C', 2, 3130, 4, 2, 1],
     ['C@r', undefined, 1, 1130, 1, 0, 0],
     ['B@r', undefined, 1, 1000, 1, 0, 0],
   ])

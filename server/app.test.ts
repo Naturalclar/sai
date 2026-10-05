@@ -1324,10 +1324,10 @@ test('PUT meta: 表示名が一覧と詳細に載り、rev が変わり、ファ
 
 test('PUT meta: 表示名は次の返信の claude に -n として付き、消せば付かない（#391）', async () => {
   runner.started.length = 0
-  assert.equal((await putMeta('C1@r', { name: 'かなで' })).status, 200)
+  assert.equal((await putMeta('C1@r', { name: 'セッション C' })).status, 200)
   assert.equal((await post('C1@r', { text: 'つづき' })).status, 202)
   const args = runner.started[0]!.cmd.args
-  assert.deepEqual(args.slice(args.indexOf('-n'), args.indexOf('-n') + 2), ['-n', 'かなで'])
+  assert.deepEqual(args.slice(args.indexOf('-n'), args.indexOf('-n') + 2), ['-n', 'セッション C'])
   assert.ok(args.indexOf('-n') < args.indexOf('-p'), '-n は -p より前（本文は -- の後ろ）')
   // 消したら渡さない（端末で付けた名前を空で上書きしない）
   assert.equal((await putMeta('C1@r', { name: '' })).status, 200)
@@ -2750,17 +2750,17 @@ test('POST /api/sessions/new: inherit なら表示名・アイコン・一言の
   runner.started.length = 0
   const putMeta = (id: string, body: unknown) =>
     fetch(`${base}/api/sessions/${encodeURIComponent(id)}/meta`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-  assert.equal((await putMeta('X1@r', { name: 'くらら', persona: 'ISTJ' })).status, 200)
+  assert.equal((await putMeta('X1@r', { name: 'セッション A', persona: 'ISTJ' })).status, 200)
   assert.equal((await putIcon('X1@r', PNG)).status, 200)
   try {
     const fresh = (await (await postNew({ from: 'X1@r', text: '579着手して', inherit: true })).json()) as NewSessionResponse
     const meta = (await (await get(`/api/sessions/${encodeURIComponent(fresh.id)}/meta`)).json()) as { meta: { name?: string; persona?: string } }
-    assert.equal(meta.meta.name, 'くらら')
+    assert.equal(meta.meta.name, 'セッション A')
     assert.equal(meta.meta.persona, 'ISTJ')
     assert.equal((await get(`/api/sessions/${encodeURIComponent(fresh.id)}/icon`)).status, 200, 'アイコンも写す')
-    assert.ok(runner.started[0]!.cmd.args.includes('くらら'), '表示名は CLI にも -n で渡る（#391）')
+    assert.ok(runner.started[0]!.cmd.args.includes('セッション A'), '表示名は CLI にも -n で渡る（#391）')
     const old = (await (await get('/api/sessions/X1%40r/meta')).json()) as { meta: { name?: string; archived_at?: string } }
-    assert.equal(old.meta.name, 'くらら', '前のセッションはそのまま')
+    assert.equal(old.meta.name, 'セッション A', '前のセッションはそのまま')
     assert.equal(old.meta.archived_at, undefined, 'アーカイブしない')
     // 付けなければ引き継がない
     const plain = (await (await postNew({ from: 'X1@r', text: 'ふつうに' })).json()) as NewSessionResponse

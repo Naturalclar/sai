@@ -52,7 +52,7 @@ test('別のマシンの印はサーバと違うときだけ（サーバの名�
 })
 
 test('headName: 表示名があればそれと #project、無ければ project だけ。project が分からなければ repo', () => {
-  assert.deepEqual(headName({ project: 'Naturalclar/sai', repo: 'dev-kanade', meta: { name: 'かなで' } }), { name: 'かなで', project: 'sai' })
+  assert.deepEqual(headName({ project: 'Naturalclar/sai', repo: 'dev-kanade', meta: { name: 'セッション C' } }), { name: 'セッション C', project: 'sai' })
   assert.deepEqual(headName({ project: 'Naturalclar/sai', repo: 'dev-kanade', meta: undefined }), { name: '', project: 'sai' })
   assert.deepEqual(headName({ project: '', repo: 'dev-kanade', meta: {} }), { name: '', project: 'dev-kanade' })
 })

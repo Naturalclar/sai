@@ -163,15 +163,15 @@ test('newSessionCommand: 前半は返信と同じ（SAI_CLAUDE_ARGS が先頭・
 // ---- #391: セッションの表示名を CLI にも渡す（端末のタイトルと /resume のピッカー）
 
 test('replyCommand / newSessionCommand: 表示名があれば -n で渡す。無ければ渡さない', () => {
-  const named = replyCommand('claude', 'S', 'hi', '/w', {}, undefined, undefined, undefined, [], 'かなで')!.args
-  assert.deepEqual(named.slice(0, 2), ['-n', 'かなで'])
+  const named = replyCommand('claude', 'S', 'hi', '/w', {}, undefined, undefined, undefined, [], 'セッション C')!.args
+  assert.deepEqual(named.slice(0, 2), ['-n', 'セッション C'])
   // 名前はセッションに残るので、付いていないセッションでは渡さない（端末で付けた名前を空で上書きしない）
   assert.equal(replyCommand('claude', 'S', 'hi', '/w', {})!.args.includes('-n'), false)
   assert.equal(replyCommand('claude', 'S', 'hi', '/w', {}, undefined, undefined, undefined, [], '   ')!.args.includes('-n'), false, '空白だけは無い扱い')
-  assert.equal(newSessionCommand('U', 'hi', '/w', {}, undefined, undefined, undefined, 'かなで').args.includes('-n'), true)
+  assert.equal(newSessionCommand('U', 'hi', '/w', {}, undefined, undefined, undefined, 'セッション C').args.includes('-n'), true)
   // 渡す先は Claude だけ（Codex / OpenCode に同じ口は無い）
-  assert.equal(replyCommand('codex', 'S', 'hi', '/w', {}, undefined, undefined, undefined, [], 'かなで')!.args.includes('-n'), false)
-  assert.equal(replyCommand('opencode', 'S', 'hi', '/w', {}, undefined, undefined, undefined, [], 'かなで')!.args.includes('-n'), false)
+  assert.equal(replyCommand('codex', 'S', 'hi', '/w', {}, undefined, undefined, undefined, [], 'セッション C')!.args.includes('-n'), false)
+  assert.equal(replyCommand('opencode', 'S', 'hi', '/w', {}, undefined, undefined, undefined, [], 'セッション C')!.args.includes('-n'), false)
 })
 
 test('表示名は運用者の引数より後ろ（後勝ち）で、本文の前に入る', () => {

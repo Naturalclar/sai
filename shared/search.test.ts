@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { ELLIPSIS, EXCERPT_AFTER, EXCERPT_BEFORE, excerptOf, findHits, matchesAll, mergeHits, searchWords, splitHighlight } from './search.ts'
 
 test('searchWords: 小文字にして空白で割る。空白だけなら 0 語', () => {
-  assert.deepEqual(searchWords('SAI Kanade'), ['sai', 'kanade'])
+  assert.deepEqual(searchWords('SAI Feed'), ['sai', 'feed'])
   assert.deepEqual(searchWords('  　'), ['　'.trim()].filter(Boolean), '全角空白も \\s なので落ちる')
   assert.deepEqual(searchWords(''), [])
   assert.deepEqual(searchWords('あ  い'), ['あ', 'い'])

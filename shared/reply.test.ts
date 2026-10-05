@@ -183,59 +183,59 @@ test('feedReplyTargets: 再開できないものは blocked に理由が入る�
 test('filterReplyTargets: リポジトリ / ブランチ / タイトルの部分一致、大文字小文字は無視', () => {
   const targets = feedReplyTargets([
     row({ session: 'a', repo: 'sai', branch: 'feat/Markdown', first_user_text: 'PR を作る' }),
-    row({ session: 'b', repo: 'dotfiles', branch: 'main', first_user_text: 'zsh の設定', ts: '2026-09-02T10:01:00+09:00' }),
+    row({ session: 'b', repo: 'repo-b', branch: 'main', first_user_text: 'zsh の設定', ts: '2026-09-02T10:01:00+09:00' }),
   ], SELF)
-  assert.deepEqual(filterReplyTargets(targets, '').map((t) => t.id), ['b@dotfiles', 'a@sai'])
+  assert.deepEqual(filterReplyTargets(targets, '').map((t) => t.id), ['b@repo-b', 'a@sai'])
   assert.deepEqual(filterReplyTargets(targets, 'markdown').map((t) => t.id), ['a@sai'])
-  assert.deepEqual(filterReplyTargets(targets, 'ZSH').map((t) => t.id), ['b@dotfiles'])
-  assert.deepEqual(filterReplyTargets(targets, 'DOT').map((t) => t.id), ['b@dotfiles'])
+  assert.deepEqual(filterReplyTargets(targets, 'ZSH').map((t) => t.id), ['b@repo-b'])
+  assert.deepEqual(filterReplyTargets(targets, 'PO-B').map((t) => t.id), ['b@repo-b'])
   assert.deepEqual(filterReplyTargets(targets, 'nothing'), [])
 })
 
 // ---- #301: どのリポジトリのセッションか
 
 test('sessionReplyTargets: 一覧のセッションのリポジトリ（project）を載せる', () => {
-  const [sai, kanban, unknown] = sessionReplyTargets([
+  const [sai, repoA, unknown] = sessionReplyTargets([
     summary({ id: 's1@main', repo: 'main', project: 'Naturalclar/sai' }),
-    summary({ id: 's2@main', repo: 'main', project: 'Naturalclar/kanban' }),
+    summary({ id: 's2@main', repo: 'main', project: 'Naturalclar/repo-a' }),
     summary({ id: 's3@scratch', repo: 'scratch', project: '' }),
   ], SELF)
   assert.equal(sai!.project, 'Naturalclar/sai')
-  assert.equal(kanban!.project, 'Naturalclar/kanban', '同じ worktree 名（main）でもリポジトリで見分けられる')
+  assert.equal(repoA!.project, 'Naturalclar/repo-a', '同じ worktree 名（main）でもリポジトリで見分けられる')
   assert.equal(unknown!.project, '', '分からなければ空')
 })
 
 test('feedReplyTargets: 行の project → remote の順で載せ、一番新しい行に無ければ古い行から補う', () => {
   const targets = feedReplyTargets([
-    row({ session: 'a', repo: 'dev-lunasa', project: 'AnotherBall/persona-server', ts: '2026-09-02T10:00:00+09:00' }),
-    row({ session: 'b', repo: 'dev-min', remote: 'https://github.com/Naturalclar/sai', ts: '2026-09-02T10:01:00+09:00' }),
+    row({ session: 'a', repo: 'dev-worktree-i', project: 'other-org/repo-c', ts: '2026-09-02T10:00:00+09:00' }),
+    row({ session: 'b', repo: 'dev-worktree-b', remote: 'https://github.com/Naturalclar/sai', ts: '2026-09-02T10:01:00+09:00' }),
     row({ session: 'c', repo: 'scratch', ts: '2026-09-02T10:02:00+09:00' }),
     // a の一番新しい行は project も remote も載せていない（古い record.py など）。古い行の値を使う
-    row({ session: 'a', repo: 'dev-lunasa', ts: '2026-09-02T10:03:00+09:00' }),
+    row({ session: 'a', repo: 'dev-worktree-i', ts: '2026-09-02T10:03:00+09:00' }),
   ], SELF)
   assert.deepEqual(
     targets.map((t) => [t.id, t.project]),
     [
-      ['a@dev-lunasa', 'AnotherBall/persona-server'],
+      ['a@dev-worktree-i', 'other-org/repo-c'],
       ['c@scratch', ''],
-      ['b@dev-min', 'Naturalclar/sai'],
+      ['b@dev-worktree-b', 'Naturalclar/sai'],
     ],
   )
 })
 
 test('filterReplyTargets: リポジトリ（owner/repo）でも当たる（#301）', () => {
   const targets = feedReplyTargets([
-    row({ session: 'a', repo: 'dev-lunasa', project: 'AnotherBall/persona-server', first_user_text: 'ガチャ' }),
-    row({ session: 'b', repo: 'dev-min', project: 'Naturalclar/sai', first_user_text: 'マージして', ts: '2026-09-02T10:01:00+09:00' }),
+    row({ session: 'a', repo: 'dev-worktree-i', project: 'other-org/repo-c', first_user_text: 'ガチャ' }),
+    row({ session: 'b', repo: 'dev-worktree-b', project: 'Naturalclar/sai', first_user_text: 'マージして', ts: '2026-09-02T10:01:00+09:00' }),
   ], SELF)
-  assert.deepEqual(filterReplyTargets(targets, 'persona').map((t) => t.id), ['a@dev-lunasa'], 'worktree 名にもタイトルにも無い語')
-  assert.deepEqual(filterReplyTargets(targets, 'ANOTHERBALL').map((t) => t.id), ['a@dev-lunasa'], 'owner でも、大文字小文字は無視')
+  assert.deepEqual(filterReplyTargets(targets, 'repo-c').map((t) => t.id), ['a@dev-worktree-i'], 'worktree 名にもタイトルにも無い語')
+  assert.deepEqual(filterReplyTargets(targets, 'OTHER-ORG').map((t) => t.id), ['a@dev-worktree-i'], 'owner でも、大文字小文字は無視')
 })
 
 test('targetProjectLabel: 短いリポジトリ名。分からない・worktree 名と同じなら空', () => {
-  assert.equal(targetProjectLabel({ repo: 'dev-alqa', project: 'Naturalclar/sai' }), 'sai')
-  assert.equal(targetProjectLabel({ repo: 'main', project: 'AnotherBall/persona-server' }), 'persona-server')
-  assert.equal(targetProjectLabel({ repo: 'dev-alqa', project: '' }), '', 'worktree 名には落とさない（隣の @repo がすでにそれ）')
+  assert.equal(targetProjectLabel({ repo: 'dev-worktree-e', project: 'Naturalclar/sai' }), 'sai')
+  assert.equal(targetProjectLabel({ repo: 'main', project: 'other-org/repo-c' }), 'repo-c')
+  assert.equal(targetProjectLabel({ repo: 'dev-worktree-e', project: '' }), '', 'worktree 名には落とさない（隣の @repo がすでにそれ）')
   assert.equal(targetProjectLabel({ repo: 'oc-trial', project: 'oc-trial' }), '', '同じ名前を 2 回並べない')
   assert.equal(targetProjectLabel({ repo: 'SAI', project: 'Naturalclar/sai' }), '', '大文字小文字だけの違いも同じとみなす')
 })
@@ -259,7 +259,7 @@ test('mentionQuery: 行頭か空白の直後の半角 @ だけ。caret までに
 
 test('mentionLabels: @repo。同じリポジトリが複数なら @repo/branch、それでも被れば ~2', () => {
   const targets = feedReplyTargets([
-    row({ session: 'd', repo: 'dotfiles', branch: 'main', ts: '2026-09-02T09:00:00+09:00' }),
+    row({ session: 'd', repo: 'repo-b', branch: 'main', ts: '2026-09-02T09:00:00+09:00' }),
     row({ session: 'c', repo: 'sai', branch: 'feat/x', ts: '2026-09-02T09:10:00+09:00' }),
     row({ session: 'b', repo: 'sai', branch: 'feat/x', ts: '2026-09-02T09:20:00+09:00' }),
     row({ session: 'a', repo: 'sai', branch: 'main', ts: '2026-09-02T09:30:00+09:00' }),
@@ -268,7 +268,7 @@ test('mentionLabels: @repo。同じリポジトリが複数なら @repo/branch�
   assert.equal(labels.get('a@sai'), '@sai/main')
   assert.equal(labels.get('b@sai'), '@sai/feat/x')
   assert.equal(labels.get('c@sai'), '@sai/feat/x~2')
-  assert.equal(labels.get('d@dotfiles'), '@dotfiles')
+  assert.equal(labels.get('d@repo-b'), '@repo-b')
   // 表記は空白を含まないので、後ろに空白を付ければ打ちかけとは見なされない
   assert.equal(mentionQuery('@sai/main ', 10), null)
 })

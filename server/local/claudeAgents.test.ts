@@ -36,7 +36,7 @@ test('busyIn: 同じ sessionId が複数あるので、1 つでも busy なら�
   // 実測の形: 端末の TUI が idle、SAI が -p --resume で起こした子が同じ ID で busy
   const agents = parseAgents(JSON.stringify([
     { sessionId: 'S1', status: 'idle', kind: 'interactive', pid: 1, cwd: '/w', name: 'セッション C' },
-    { sessionId: 'S1', status: 'busy', kind: 'interactive', pid: 2, cwd: '/w', name: 'dev-kanade-34' },
+    { sessionId: 'S1', status: 'busy', kind: 'interactive', pid: 2, cwd: '/w', name: 'dev-worktree-c-34' },
   ]))!
   assert.equal(busyIn(agents, 'S1'), true)
   assert.equal(busyIn(agents, 'S2'), false, '一覧に無いセッションは回っていない')

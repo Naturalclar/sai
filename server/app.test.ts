@@ -225,7 +225,7 @@ before(async () => {
     join(feedDir, 'turn-usage.jsonl'),
     `${JSON.stringify({
       ts: new Date(now.getTime() - min(5) + 1500).toISOString(),
-      id: 'S1@kanban',
+      id: 'S1@repo-a',
       model: 'claude-opus-5',
       input_tokens: 10,
       output_tokens: 94,
@@ -392,9 +392,9 @@ test('/api/sessions', async () => {
   assert.equal(res.status, 200)
   const data = (await res.json()) as SessionsResponse
   assert.deepEqual(data.sessions.map((s) => s.id).slice(0, 2), ['S2@sai', 'synth-r-1@r'])
-  assert.deepEqual(data.filters.repos, ['kanban', 'r', 'sai'])
+  assert.deepEqual(data.filters.repos, ['r', 'repo-a', 'sai'])
   assert.deepEqual(data.filters.agents, ['claude', 'codex', 'unknown'])
-  const s1 = data.sessions.find((s) => s.id === 'S1@kanban')!
+  const s1 = data.sessions.find((s) => s.id === 'S1@repo-a')!
   assert.equal(s1.turns, 2)
   assert.equal(s1.title, '続きの題名', '一番新しい user_text がタイトル')
   assert.ok(data.rev)
@@ -420,15 +420,15 @@ test('/api/sessions?project= で絞る（bare clone の worktree でもリポジ
       // record.py が載せた project がそのまま使われる
       JSON.stringify(row(new Date(base.getTime() + min(1)), 'PJ2', { repo: 'wmain', cwd: dir, project: 'Naturalclar/sai' })),
       // worktree 名は同じ「wmain」でも別のリポジトリ
-      JSON.stringify(row(new Date(base.getTime() + min(2)), 'PJ3', { repo: 'wmain', cwd: dir, remote: 'https://github.com/Naturalclar/kanban' })),
+      JSON.stringify(row(new Date(base.getTime() + min(2)), 'PJ3', { repo: 'wmain', cwd: dir, remote: 'https://github.com/Naturalclar/repo-a' })),
     ].join('\n') + '\n',
   )
 
   const all = (await (await get('/api/sessions?days=30')).json()) as SessionsResponse
   assert.ok(all.filters.projects.includes('Naturalclar/sai'))
-  assert.ok(all.filters.projects.includes('Naturalclar/kanban'))
+  assert.ok(all.filters.projects.includes('Naturalclar/repo-a'))
   assert.equal(all.sessions.find((s) => s.id === 'PJ1@wt-a')?.project, 'Naturalclar/sai', '古い行（project 無し）は remote から補う')
-  assert.equal(all.sessions.find((s) => s.id === 'PJ3@wmain')?.project, 'Naturalclar/kanban', '同じ worktree 名でも別リポジトリ')
+  assert.equal(all.sessions.find((s) => s.id === 'PJ3@wmain')?.project, 'Naturalclar/repo-a', '同じ worktree 名でも別リポジトリ')
 
   const picked = (await (await get(`/api/sessions?days=30&project=${encodeURIComponent('Naturalclar/sai')}`)).json()) as SessionsResponse
   const ids = picked.sessions.map((s) => s.id)
@@ -438,17 +438,17 @@ test('/api/sessions?project= で絞る（bare clone の worktree でもリポジ
   const narrowed = (await (await get(`/api/sessions?days=30&project=${encodeURIComponent('Naturalclar/sai')}&repo=wt-a`)).json()) as SessionsResponse
   assert.deepEqual(narrowed.sessions.map((s) => s.id), ['PJ1@wt-a'], 'worktree でさらに絞れる')
 
-  const feed = (await (await get(`/api/feed?days=30&project=${encodeURIComponent('Naturalclar/kanban')}`)).json()) as FeedResponse
+  const feed = (await (await get(`/api/feed?days=30&project=${encodeURIComponent('Naturalclar/repo-a')}`)).json()) as FeedResponse
   assert.deepEqual([...new Set(feed.rows.map((r) => r.session))], ['PJ3'], 'フィードも project で絞れる')
 
   // 複数選べる（#529）。`?project=a&project=b` のどれかに当たれば出す
-  const both = `project=${encodeURIComponent('Naturalclar/sai')}&project=${encodeURIComponent('Naturalclar/kanban')}`
+  const both = `project=${encodeURIComponent('Naturalclar/sai')}&project=${encodeURIComponent('Naturalclar/repo-a')}`
   const many = (await (await get(`/api/sessions?days=30&${both}`)).json()) as SessionsResponse
   assert.ok(['PJ1@wt-a', 'PJ2@wmain', 'PJ3@wmain'].every((id) => many.sessions.some((s) => s.id === id)), '2 つのリポジトリのセッションが両方出る')
-  assert.ok(many.sessions.every((s) => s.project === 'Naturalclar/sai' || s.project === 'Naturalclar/kanban'), 'ほかのリポジトリは出ない')
+  assert.ok(many.sessions.every((s) => s.project === 'Naturalclar/sai' || s.project === 'Naturalclar/repo-a'), 'ほかのリポジトリは出ない')
   const manyFeed = (await (await get(`/api/feed?days=30&${both}`)).json()) as FeedResponse
   assert.deepEqual(new Set(manyFeed.rows.filter((r) => r.session?.startsWith('PJ')).map((r) => r.session)), new Set(['PJ1', 'PJ2', 'PJ3']))
-  assert.ok(manyFeed.rows.every((r) => ['Naturalclar/sai', 'Naturalclar/kanban'].includes(rowProject(r))), 'フィードもほかのリポジトリの行は流さない')
+  assert.ok(manyFeed.rows.every((r) => ['Naturalclar/sai', 'Naturalclar/repo-a'].includes(rowProject(r))), 'フィードもほかのリポジトリの行は流さない')
 })
 
 test('GET /api/sessions/<id>/diff: git のリポジトリでない cwd は 404、知らないセッションも 404', async () => {
@@ -463,10 +463,10 @@ test('GET /api/sessions/<id>/diff: git のリポジトリでない cwd は 404�
 })
 
 test('/api/sessions/<id>', async () => {
-  const res = await get(`/api/sessions/${encodeURIComponent('S1@kanban')}`)
+  const res = await get(`/api/sessions/${encodeURIComponent('S1@repo-a')}`)
   assert.equal(res.status, 200)
   const data = (await res.json()) as SessionDetailResponse
-  assert.equal(data.session.id, 'S1@kanban')
+  assert.equal(data.session.id, 'S1@repo-a')
   assert.deepEqual(data.rows.map((r) => r.text), ['hi', 'two'])
   assert.equal((await get('/api/sessions/S1')).status, 404, 'リポジトリ抜きの旧IDでは引けない')
   assert.equal((await get('/api/sessions/nope')).status, 404)
@@ -474,7 +474,7 @@ test('/api/sessions/<id>', async () => {
 })
 
 test('一覧・詳細・フィード: rev が同じなら If-None-Match に 304 で本文を送らない。変われば 200（#592）', async () => {
-  for (const path of ['/api/sessions', `/api/sessions/${encodeURIComponent('S1@kanban')}`, '/api/feed']) {
+  for (const path of ['/api/sessions', `/api/sessions/${encodeURIComponent('S1@repo-a')}`, '/api/feed']) {
     const first = await get(path)
     const etag = first.headers.get('etag')
     assert.match(etag ?? '', /^"[0-9a-f]{20}"$/, path)
@@ -496,7 +496,7 @@ test('/api/sessions/<id>?recent=: 直近の行だけ返し、前の行の数を 
   const file = join(feedDir, `${localDate(old.toISOString())}.jsonl`)
   await writeFile(file, JSON.stringify(row(old, 'S1', { text: '10 日前', user_text: '10 日前の指示' })) + '\n')
   try {
-    const detail = async (query: string) => (await (await get(`/api/sessions/${encodeURIComponent('S1@kanban')}?days=30${query}`)).json()) as SessionDetailResponse
+    const detail = async (query: string) => (await (await get(`/api/sessions/${encodeURIComponent('S1@repo-a')}?days=30${query}`)).json()) as SessionDetailResponse
     const all = await detail('')
     assert.deepEqual(all.rows.map((r) => r.text), ['10 日前', 'hi', 'two'], '付けなければ今までどおり全部')
     assert.equal(all.older, 0)
@@ -541,10 +541,10 @@ test('build_stale: dist がソースより古ければ true になり rev も変
 })
 
 test('sessionIdFrom: 空・/ 入り・壊れた %-エンコードは null。詳細だけ末尾の / を許す', () => {
-  assert.equal(sessionIdFrom('/api/sessions/S1%40kanban'), 'S1@kanban')
-  assert.equal(sessionIdFrom('/api/sessions/S1%40kanban/'), 'S1@kanban')
-  assert.equal(sessionIdFrom('/api/sessions/S1%40kanban/meta', '/meta'), 'S1@kanban')
-  assert.equal(sessionIdFrom('/api/sessions/S1%40kanban/reply', '/reply'), 'S1@kanban')
+  assert.equal(sessionIdFrom('/api/sessions/S1%40repo-a'), 'S1@repo-a')
+  assert.equal(sessionIdFrom('/api/sessions/S1%40repo-a/'), 'S1@repo-a')
+  assert.equal(sessionIdFrom('/api/sessions/S1%40repo-a/meta', '/meta'), 'S1@repo-a')
+  assert.equal(sessionIdFrom('/api/sessions/S1%40repo-a/reply', '/reply'), 'S1@repo-a')
   assert.equal(sessionIdFrom('/api/sessions/'), null)
   assert.equal(sessionIdFrom('/api/sessions//meta', '/meta'), null)
   assert.equal(sessionIdFrom('/api/sessions/a%2Fb'), null, 'デコード後の / も断る')
@@ -567,11 +567,11 @@ test('id の %-エンコードが壊れていれば 3 経路とも 400（500 に
   assert.equal(res.status, 400)
   assert.deepEqual(await res.json(), { error: 'bad session id' })
   // 正しい id は今までどおり
-  assert.equal((await get('/api/sessions/S1%40kanban/')).status, 200, '詳細は末尾の / を許す')
+  assert.equal((await get('/api/sessions/S1%40repo-a/')).status, 200, '詳細は末尾の / を許す')
 })
 
 test('thinking はセッション詳細の行には載り、フィードの行からは落ちる', async () => {
-  const detail = (await (await get('/api/sessions/S1%40kanban?days=3')).json()) as SessionDetailResponse
+  const detail = (await (await get('/api/sessions/S1%40repo-a?days=3')).json()) as SessionDetailResponse
   assert.deepEqual(detail.rows.map((r) => r.thinking ?? ''), ['', '考えた'])
   const feed = (await (await get('/api/feed?days=3')).json()) as FeedResponse
   assert.ok(feed.rows.length > 0)
@@ -753,7 +753,7 @@ test('GET /api/search: 発言の本文で探す（#230）。飛び先は id と 
   assert.equal(data.q, 'two')
   assert.equal(data.days, 90, '既定は 90 日')
   assert.ok(data.scanned > 0, '舐めた行数を返す')
-  assert.deepEqual(data.hits.map((h) => [h.id, h.who, h.excerpt]), [['S1@kanban', 'agent', 'two']])
+  assert.deepEqual(data.hits.map((h) => [h.id, h.who, h.excerpt]), [['S1@repo-a', 'agent', 'two']])
   assert.match(data.hits[0]!.ts, /^\d{4}-\d{2}-\d{2}T/, '飛び先の ts')
   assert.deepEqual(data.hits[0]!.hits, [[0, 3]], '強調する場所')
 
@@ -793,7 +793,7 @@ test('GET /api/usage/report: SAI が起こしたターンの使用量を期間�
   const data = (await res.json()) as UsageReportResponse
   assert.equal(data.days, 1)
   assert.deepEqual(data.total, { turns: 1, input_tokens: 10, output_tokens: 94, cache_read_input_tokens: 17582, cache_creation_input_tokens: 8431, tokens: 26117, cost_usd: 0.019, denials: 2, errors: 0 })
-  assert.deepEqual(data.sessions.map((s) => [s.key, s.turns, s.token_share, s.heavy]), [['S1@kanban', 1, 1, false]])
+  assert.deepEqual(data.sessions.map((s) => [s.key, s.turns, s.token_share, s.heavy]), [['S1@repo-a', 1, 1, false]])
   // 呼び名は記録にあるセッションの題名（一覧と同じ。表示名があればそちら）
   assert.equal(data.sessions[0]?.name, '続きの題名')
   assert.deepEqual(data.by_model.map((m) => m.key), ['claude-opus-5'])
@@ -817,7 +817,7 @@ test('フィードと詳細の行に、そのターンのトークンが載る�
   assert.equal(two?.usage?.denials, 2)
   // 同じセッションの前のターンには載らない（使用量は 1 つしか無い）
   assert.equal(feed.rows.find((r) => r.first_user_text === '題名')?.usage, undefined)
-  const detail = (await (await get(`/api/sessions/${encodeURIComponent('S1@kanban')}?days=3`)).json()) as SessionDetailResponse
+  const detail = (await (await get(`/api/sessions/${encodeURIComponent('S1@repo-a')}?days=3`)).json()) as SessionDetailResponse
   assert.equal(detail.rows.find((r) => r.text === 'two')?.usage?.output_tokens, 94)
 })
 
@@ -896,8 +896,8 @@ test('POST reply: 合成・不明・cwd 無しは受け付けない', async () =
   assert.match(((await res.json()) as { error: string }).error, /合成/)
   res = await post('U1@r', { text: 'x' })
   assert.equal(res.status, 400)
-  res = await post('S1@kanban', { text: 'x' })
-  assert.equal(res.status, 400, 'cwd /home/u/kanban は無い')
+  res = await post('S1@repo-a', { text: 'x' })
+  assert.equal(res.status, 400, 'cwd /home/u/repo-a は無い')
   assert.match(((await res.json()) as { error: string }).error, /cwd/)
   assert.equal((await post('nope@r', { text: 'x' })).status, 404)
   assert.equal(runner.started.length, 0)
@@ -1198,8 +1198,8 @@ test('POST /api/sessions/new: 受け付けないもの（#314）', async () => {
   let res = await postNew({ from: 'R1@r', text: 'x' })
   assert.equal(res.status, 400)
   assert.match(((await res.json()) as { error: string }).error, /別のマシン（mini）/)
-  res = await postNew({ from: 'S1@kanban', text: 'x' })
-  assert.equal(res.status, 400, 'cwd /home/u/kanban は無い')
+  res = await postNew({ from: 'S1@repo-a', text: 'x' })
+  assert.equal(res.status, 400, 'cwd /home/u/repo-a は無い')
   assert.match(((await res.json()) as { error: string }).error, /cwd/)
   assert.equal((await fetch(`${base}/api/sessions/new`, { method: 'PUT' })).status, 405)
   assert.equal(runner.started.length, 0)
@@ -1626,7 +1626,7 @@ test('PUT meta: archived_at でアーカイブ。一覧とフィードから消�
   assert.notEqual(list.rev, initial.rev, 'アーカイブしただけでも rev が変わる')
   assert.ok(!list.sessions.some((s) => s.id === 'S2@sai'), '既定ではアーカイブ済みは出ない')
   assert.equal(list.total, 6, 'total もアーカイブ済みを除く')
-  assert.deepEqual(list.filters.repos, ['kanban', 'r'], 'filters もアーカイブ済みを除いた集合から')
+  assert.deepEqual(list.filters.repos, ['r', 'repo-a'], 'filters もアーカイブ済みを除いた集合から')
 
   const arch = (await (await get('/api/sessions?days=7&archived=1')).json()) as SessionsResponse
   assert.deepEqual(arch.sessions.map((s) => [s.id, s.archived]), [['S2@sai', true]])
@@ -1779,8 +1779,8 @@ test('digest: 起動後に増えた行に一言が付いて feed / 詳細 / 一�
   assert.equal(list.sessions.find((s) => s.id === 'D1@r')!.last_summary, 'PR #35 を（まとめ）')
   // 次に送る文面の案（#371）も一言と同じ行から載る（一番新しいターン完了の行の分だけ）
   assert.equal(list.sessions.find((s) => s.id === 'D1@r')!.next_ask, '次はどうする？')
-  assert.equal(list.sessions.find((s) => s.id === 'S1@kanban')!.next_ask, undefined)
-  assert.equal(list.sessions.find((s) => s.id === 'S1@kanban')!.last_summary, undefined, '起動時にあった行しか無いセッションには付かない')
+  assert.equal(list.sessions.find((s) => s.id === 'S1@repo-a')!.next_ask, undefined)
+  assert.equal(list.sessions.find((s) => s.id === 'S1@repo-a')!.last_summary, undefined, '起動時にあった行しか無いセッションには付かない')
 
   // ファイルに残っている（作ったときの性格つき）
   const saved = (await readFile(join(feedDir, 'digest.jsonl'), 'utf-8')).trim().split('\n').map((l) => JSON.parse(l) as { key: string; persona: string; summary: string })
@@ -1949,14 +1949,14 @@ test('store.rows: cwd がフィードのディレクトリ（SAI 自身が回し
   try {
     const now = new Date()
     const lines = [
-      row(new Date(now.getTime() - min(3)), 'real', { cwd: '/home/u/kanban' }),
+      row(new Date(now.getTime() - min(3)), 'real', { cwd: '/home/u/repo-a' }),
       row(new Date(now.getTime() - min(2)), 'child', { cwd: d, text: '一言' }),
       row(new Date(now.getTime() - min(1)), 'child2', { cwd: join(d, 'sub'), text: '一言' }),
     ]
     await writeFile(join(d, `${localDate(now.toISOString())}.jsonl`), lines.map((l) => JSON.stringify(l)).join('\n') + '\n')
     const s = new FeedStore(d)
     assert.deepEqual((await s.rows(7)).map((r) => r.session), ['real'])
-    assert.deepEqual((await s.sessions(7)).sessions.map((x) => x.id), ['real@kanban'])
+    assert.deepEqual((await s.sessions(7)).sessions.map((x) => x.id), ['real@repo-a'])
   } finally {
     await rm(d, { recursive: true, force: true })
   }
@@ -2344,7 +2344,7 @@ test('profile: 表示名を置くと一覧・詳細・フィードの profile �
   const list = (await (await get('/api/sessions?days=30')).json()) as SessionsResponse
   assert.deepEqual(list.profile, { name: 'Jesse' })
   assert.notEqual(list.rev, prev.rev, '名前を付けただけで rev が変わる（JSONL は変わっていない）')
-  assert.deepEqual(((await (await get('/api/sessions/S1%40kanban?days=30')).json()) as SessionDetailResponse).profile, { name: 'Jesse' })
+  assert.deepEqual(((await (await get('/api/sessions/S1%40repo-a?days=30')).json()) as SessionDetailResponse).profile, { name: 'Jesse' })
   assert.deepEqual(((await (await get('/api/feed?days=30')).json()) as FeedResponse).profile, { name: 'Jesse' })
   assert.match(await readFile(join(feedDir, 'profile.json'), 'utf-8'), /"name": "Jesse"/)
 
@@ -2506,10 +2506,10 @@ test('POST interrupt: 入力の口を開けている Claude のターンを止�
 
 test('端末の Codex のダイアログに画面から答える（#450。同一オリジンのみ）', async () => {
   codexDialogs.active = {
-    'S1@kanban': [
+    'S1@repo-a': [
       {
         approval_id: 'codex-dialog-e2e',
-        id: 'S1@kanban',
+        id: 'S1@repo-a',
         since: new Date().toISOString(),
         tool_name: 'CodexDialog',
         input: {},
@@ -2528,7 +2528,7 @@ test('端末の Codex のダイアログに画面から答える（#450。同一
   codexDialogs.answered.length = 0
   try {
     const list = (await (await get('/api/sessions')).json()) as SessionsResponse
-    assert.equal(list.approvals['S1@kanban']?.[0]?.answerable, true, '答えられるバブルとして出る')
+    assert.equal(list.approvals['S1@repo-a']?.[0]?.answerable, true, '答えられるバブルとして出る')
 
     // 別オリジンは断る（ここが通ると別サイトから「許可」が押せる）
     const cross = await fetch(`${base}/api/approvals/codex-dialog-e2e/answer`, {

@@ -81,7 +81,7 @@
 - 2026-09-11 の手元: `ghq list` 47 リポジトリの worktree 77 のうち、90 日の記録にあるのは 15（リポジトリでは 6）。記録のあるリポジトリの記録の無い兄弟 worktree が 11。記録にある `cwd` 26 件には `/`・`/tmp`・scratchpad が混ざっていて、そこでも始められていた。
 - 決めたこと（2026-09-30）: 広げるのは**記録のあるリポジトリの worktree**（`git worktree list`）まで。**ghq の下の全リポジトリ（案 B）はやらない**——同一オリジンの守りが破られたときに走りうる場所が数倍に広がる。一度も記録の無いリポジトリは、端末で 1 ターン回せば候補に出る。**画面から worktree を作る口（案 C。#389 の `claude -w` も）もやらない**——SAI から始めた 59 回を数え直すと、記録の無い worktree はエージェントが PR の作業用に自分で切ったものだった。git に書く口は増やさない。
 - 実測（2026-10-01）: bare clone の中の worktree から `git worktree list --porcelain` を呼ぶと、先頭に bare 本体（`bare`）、消えたもの（`prunable gitdir file points to non-existent location`）、`/private/tmp` の下の worktree まで兄弟が全部出た。`locked` は中身があるので候補に残す。手元の記録で候補を作ると、git の外の 22 か所（`/`・`/tmp`・scratchpad など）が落ち、兄弟 worktree が 16 足された（最初の 1 回は 26 か所の `git worktree list` で約 4 秒。30 秒は覚える）。
-- 記録の無い worktree で record.py が書く行: `repo` はその worktree のディレクトリ名（`sai-issue-448` / `dev-lyrica`）、`project` は記録のある worktree と同じ（`Naturalclar/sai` / `AnotherBall/persona-server`）。そのためエンティティ ID の `repo` を `from` から借りず、その worktree の名前で組み立てる。
+- 記録の無い worktree で record.py が書く行: `repo` はその worktree のディレクトリ名（`sai-issue-448` / `dev-worktree-h`）、`project` は記録のある worktree と同じ（`Naturalclar/sai` / `other-org/repo-c`）。そのためエンティティ ID の `repo` を `from` から借りず、その worktree の名前で組み立てる。
 
 ## claude --bg（#462）
 
@@ -204,7 +204,7 @@
 ## 許可モードに Auto mode を足す（#691）
 
 - 選べるのが `acceptEdits` と `bypassPermissions` の 2 つで、「毎回聞かれる」か「何も確かめない」かの二択だった。10/1 以降の Claude のターン完了は日ごとに 77〜100% が素通しで、素通しを外すと `approvals.jsonl`（10/2〜）で人が答えた 92 件・待たせた時間の合計 113 分が乗る
-- 前は「`auto` は安全性の確認の中身が CLI 任せで説明できないので入れない」としていた。端末ではもう使われていて（`dev-alqa` が 10/1 以降 25 ターン）、SAI から返信すると引き継げなかった
+- 前は「`auto` は安全性の確認の中身が CLI 任せで説明できないので入れない」としていた。端末ではもう使われていて（`dev-worktree-e` が 10/1 以降 25 ターン）、SAI から返信すると引き継げなかった
 - **扱いは素通しと同じ**にした（tailnet から送れない・ループを組めない）。実測（2.1.287）で、`auto` のツールの呼び出しは `--permission-prompt-tool` を通らず、人がはっきり頼んだ操作（cwd の外の `rm -rf`・`git push --force`・`curl … | sudo bash`）は止められなかったため。外から指示が入る口を素通しと分ける理由が無い
 - 分類が止めたときの出方は確かめられていない（6 回試して 1 回も止められなかった。モデルが自分で断る方が先に来る）
 - **使えないモデルではエラーにならず `default` に落ちる**（`--model haiku` で `init` の `permissionMode` が `default`、終了コード 0）。選んだモードと実際のモードが違うことを知らせる仕組みは入れていない（人が決める）

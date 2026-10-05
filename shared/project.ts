@@ -1,6 +1,6 @@
 // 行がどのリポジトリのものか（`project`）。
 //
-// `repo` は git の toplevel の basename なので、bare clone の worktree（`…/sai.git/dev-min`）だと
+// `repo` は git の toplevel の basename なので、bare clone の worktree（`…/sai.git/dev-worktree-b`）だと
 // **worktree 名**になる（#163）。それだと一覧の絞り込みが worktree ごとに分かれて役に立たないし、
 // 別のリポジトリの worktree が同じ名前（`main`）だと同じ値になってしまう。
 //

@@ -40,7 +40,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 
 ## リポジトリ（`project`）と見出しのリンク
 
-- `repo` は git の toplevel の basename なので、bare clone の worktree（`…/sai.git/dev-min`）では worktree 名になる。絞り込みは `project`（どのリポジトリか）で見る（#163）。
+- `repo` は git の toplevel の basename なので、bare clone の worktree（`…/sai.git/dev-worktree-b`）では worktree 名になる。絞り込みは `project`（どのリポジトリか）で見る（#163）。
 - `record.py` の `git_project()` が `remote` の `owner/repo`、無ければ `--git-common-dir` からリポジトリ名を取って行に載せる。
 - `rowProject()`（`shared/project.ts`）は `project` → `remote` だけを見て、分からなければ空を返す（`repo` には落とさない。#182）。
 - 空のセッションは `server/git/project.ts` の `ProjectResolver` が cwd で git を読んで埋める（`remote get-url origin` → 無ければ `--git-common-dir`。cwd をキーにキャッシュ）。それでも分からなければ空のままで、絞り込みの候補には出さず、一覧の表示だけ worktree 名に落ちる。

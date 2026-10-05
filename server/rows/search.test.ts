@@ -9,16 +9,16 @@ const at = (m: number) => new Date(Date.parse('2026-09-02T10:00:00Z') + m * 60_0
 /** 一覧の 1 件。名前とアイコンを添えるためだけに使う（足りないところは searchRows が行から埋める） */
 function summary(over: Partial<SessionSummary>): SessionSummary {
   return {
-    id: 'S1@kanban',
+    id: 'S1@repo-a',
     start: '',
     end: '',
     date: '',
     dates: [],
     agent: 'claude',
     agents: ['claude'],
-    repo: 'kanban',
-    repos: ['kanban'],
-    project: 'Naturalclar/kanban',
+    repo: 'repo-a',
+    repos: ['repo-a'],
+    project: 'Naturalclar/repo-a',
     projects: [],
     remote: '',
     branch: 'main',
@@ -101,10 +101,10 @@ test('searchRows: 一覧にあれば表示名とアイコン、無ければ ID �
   assert.equal(named.hits[0]!.label, 'セッション C')
   assert.equal(named.hits[0]!.icon, '/icon.png')
   // hint は ⌘K のセッションの候補と同じ形（projectName が owner/ を落として短くする）
-  assert.equal(named.hits[0]!.hint, 'kanban / main', 'リポジトリ / ブランチ')
+  assert.equal(named.hits[0]!.hint, 'repo-a / main', 'リポジトリ / ブランチ')
 
   const bare = searchRows(rows, ['あたり'], [])
-  assert.equal(bare.hits[0]!.label, 'S1@kanban', '一覧に無ければ ID')
+  assert.equal(bare.hits[0]!.label, 'S1@repo-a', '一覧に無ければ ID')
   assert.equal(bare.hits[0]!.icon, undefined)
 })
 
@@ -124,5 +124,5 @@ test('searchRows: 飛び先の ts は当たった行のもの', () => {
   const rows = [row(at(3), 'S1', { text: 'あたり', user_text: '' })]
   const found = searchRows(rows, ['あたり'], [])
   assert.equal(found.hits[0]!.ts, rows[0]!.ts)
-  assert.equal(found.hits[0]!.id, 'S1@kanban')
+  assert.equal(found.hits[0]!.id, 'S1@repo-a')
 })

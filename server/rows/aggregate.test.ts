@@ -8,11 +8,11 @@ export function row(ts: Date, session: string, over: Partial<FeedRow> = {}): Fee
   return {
     ts: ts.toISOString().replace(/\.\d{3}Z$/, '+00:00'),
     agent: 'claude',
-    repo: 'kanban',
+    repo: 'repo-a',
     branch: 'main',
     session,
     session_source: 'payload',
-    cwd: '/home/u/kanban',
+    cwd: '/home/u/repo-a',
     event: 'Stop',
     text: 'hi',
     user_text: 'やって',
@@ -49,11 +49,11 @@ test('(セッション, リポジトリ) 単位にまとめて新しい順', () 
     row(new Date(base.getTime() + min(60)), 'B', { agent: 'codex', text: 'codex says', user_text: '', session_source: 'synth' }),
   ]
   const sessions = aggregate(rows)
-  assert.deepEqual(sessions.map((s) => s.id), ['B@kanban', 'A@kanban'])
+  assert.deepEqual(sessions.map((s) => s.id), ['B@repo-a', 'A@repo-a'])
   const a = sessions[1]!
   assert.equal(a.turns, 2)
   assert.equal(a.title, 'やりたいこと')
-  assert.equal(a.repo, 'kanban')
+  assert.equal(a.repo, 'repo-a')
   assert.equal(a.branch, 'feat')
   assert.deepEqual(a.branches, ['main', 'feat'])
   assert.equal(a.session_source, 'payload')
@@ -66,9 +66,9 @@ test('(セッション, リポジトリ) 単位にまとめて新しい順', () 
 test('一番新しい、値のある行の値を使う（途中に古い行が混ざっても、前の値に戻っても。#283）', () => {
   const base = new Date('2026-09-02T01:00:00Z')
   const at = (n: number) => new Date(base.getTime() + min(n))
-  const remote = 'https://github.com/o/kanban'
+  const remote = 'https://github.com/o/repo-a'
   const s = aggregate([
-    row(at(0), 'A', { branch: 'main', host: 'mini', remote, project: 'o/kanban' }),
+    row(at(0), 'A', { branch: 'main', host: 'mini', remote, project: 'o/repo-a' }),
     // 試作の record.py が書いた、出どころもホストも無い行（#54 の残り。JSON にキーが無いのと同じく空で扱う）
     row(at(1), 'A', { branch: 'feat', session_source: '' }),
     row(at(2), 'A', { branch: 'main' }),
@@ -81,7 +81,7 @@ test('一番新しい、値のある行の値を使う（途中に古い行が�
   assert.deepEqual(s.branches, ['main', 'feat'])
   assert.equal(s.host, 'mini')
   assert.equal(s.remote, remote)
-  assert.equal(s.project, 'o/kanban')
+  assert.equal(s.project, 'o/repo-a')
 
   // 合成（synth）が 1 本でもあれば synth（返信できない方に倒す。今までどおり）
   const synth = aggregate([row(at(0), 'B', { session_source: 'synth' }), row(at(1), 'B', { session_source: 'payload' })])[0]!
@@ -111,12 +111,12 @@ test('タイトルは一番新しい user_text に追従する（返信や端末
 test('同じセッションIDでもリポジトリが違えば別エンティティ', () => {
   const base = new Date('2026-09-02T01:00:00Z')
   const sessions = aggregate([
-    row(base, 'A', { text: 'kanban 側' }),
+    row(base, 'A', { text: 'repo-a 側' }),
     row(new Date(base.getTime() + min(9)), 'A', { repo: 'other', text: 'other 側' }),
   ])
-  assert.deepEqual(sessions.map((s) => s.id), ['A@other', 'A@kanban'])
+  assert.deepEqual(sessions.map((s) => s.id), ['A@other', 'A@repo-a'])
   assert.deepEqual(sessions.map((s) => s.turns), [1, 1])
-  assert.deepEqual(sessions.map((s) => s.repos), [['other'], ['kanban']])
+  assert.deepEqual(sessions.map((s) => s.repos), [['other'], ['repo-a']])
 })
 
 test('タイトルは60文字で切る', () => {
@@ -175,29 +175,29 @@ test('project: bare clone の worktree でもリポジトリでまとまる（re
   const base = new Date('2026-09-02T01:00:00Z')
   const sai = 'https://github.com/Naturalclar/sai'
   const sessions = aggregate([
-    // 同じ sai の別 worktree。repo は dev-min / dev-alqa と分かれるが project は 1 つ
-    row(base, 'A', { repo: 'dev-min', remote: sai }),
-    row(base, 'B', { repo: 'dev-alqa', remote: sai }),
+    // 同じ sai の別 worktree。repo は dev-worktree-b / dev-worktree-e と分かれるが project は 1 つ
+    row(base, 'B', { repo: 'dev-worktree-e', remote: sai }),
+    row(base, 'A', { repo: 'dev-worktree-b', remote: sai }),
     // worktree 名は同じ「main」でも別のリポジトリ
-    row(base, 'C', { repo: 'main', remote: 'https://github.com/Naturalclar/kanban' }),
+    row(base, 'C', { repo: 'main', remote: 'https://github.com/Naturalclar/repo-a' }),
     row(base, 'D', { repo: 'main', remote: sai, project: 'Naturalclar/sai' }),
     // remote も project も無い古い行は repo に落ちる
     row(base, 'E', { repo: 'local-only', remote: undefined }),
   ])
   const by = Object.fromEntries(sessions.map((s) => [s.id, s.project]))
-  assert.equal(by['A@dev-min'], 'Naturalclar/sai')
-  assert.equal(by['B@dev-alqa'], 'Naturalclar/sai', '古い行でも remote から補う')
-  assert.equal(by['C@main'], 'Naturalclar/kanban')
+  assert.equal(by['A@dev-worktree-b'], 'Naturalclar/sai')
+  assert.equal(by['B@dev-worktree-e'], 'Naturalclar/sai', '古い行でも remote から補う')
+  assert.equal(by['C@main'], 'Naturalclar/repo-a')
   assert.equal(by['D@main'], 'Naturalclar/sai', '同じ worktree 名でも別リポジトリ')
   assert.equal(by['E@local-only'], '', 'remote も project も無ければ空（サーバが cwd から埋める。#182）')
 
   const ids = (list: typeof sessions) => new Set(list.map((s) => s.id))
-  assert.deepEqual(ids(filterSessions(sessions, { projects: ['Naturalclar/sai'] })), new Set(['A@dev-min', 'B@dev-alqa', 'D@main']))
+  assert.deepEqual(ids(filterSessions(sessions, { projects: ['Naturalclar/sai'] })), new Set(['A@dev-worktree-b', 'B@dev-worktree-e', 'D@main']))
   // 複数選べる（#529）。どれか 1 つに当たれば出し、リポジトリの分からないもの（E）は出さない
-  assert.deepEqual(ids(filterSessions(sessions, { projects: ['Naturalclar/sai', 'Naturalclar/kanban'] })), new Set(['A@dev-min', 'B@dev-alqa', 'C@main', 'D@main']))
-  assert.deepEqual(ids(filterSessions(sessions, { projects: ['Naturalclar/sai'], repo: 'dev-min' })), new Set(['A@dev-min']), 'worktree でさらに絞れる')
-  assert.deepEqual(facets(sessions).projects, ['Naturalclar/kanban', 'Naturalclar/sai'], '分からないものは候補に出さない')
-  assert.deepEqual(facets(sessions).repos, ['dev-alqa', 'dev-min', 'local-only', 'main'])
+  assert.deepEqual(ids(filterSessions(sessions, { projects: ['Naturalclar/sai', 'Naturalclar/repo-a'] })), new Set(['A@dev-worktree-b', 'B@dev-worktree-e', 'C@main', 'D@main']))
+  assert.deepEqual(ids(filterSessions(sessions, { projects: ['Naturalclar/sai'], repo: 'dev-worktree-b' })), new Set(['A@dev-worktree-b']), 'worktree でさらに絞れる')
+  assert.deepEqual(facets(sessions).projects, ['Naturalclar/repo-a', 'Naturalclar/sai'], '分からないものは候補に出さない')
+  assert.deepEqual(facets(sessions).repos, ['dev-worktree-b', 'dev-worktree-e', 'local-only', 'main'])
 })
 
 test('session が空の行は unknown-<日付> にまとめる（リポジトリ別）', () => {

@@ -82,8 +82,8 @@ test('parseUnifiedDiff: 空・壊れた出力でも落ちない', () => {
 
 test('compareUrl', () => {
   assert.equal(
-    compareUrl('https://github.com/Naturalclar/sai', 'origin/main', 'dev-min'),
-    'https://github.com/Naturalclar/sai/compare/main...dev-min',
+    compareUrl('https://github.com/Naturalclar/sai', 'origin/main', 'dev-worktree-b'),
+    'https://github.com/Naturalclar/sai/compare/main...dev-worktree-b',
   )
   assert.equal(compareUrl('https://github.com/Naturalclar/sai/', 'main', 'feat/x'), 'https://github.com/Naturalclar/sai/compare/main...feat%2Fx')
   assert.equal(compareUrl('', 'main', 'x'), '')

@@ -316,7 +316,7 @@ def project_from_remote(remote: str) -> str:
 def git_project(cwd: str, remote: str) -> str:
     """このセッションがどのリポジトリのものか。remote があれば `owner/repo`、無ければリポジトリ名だけ。
 
-    `repo`（= toplevel の basename）は bare clone の worktree（`…/sai.git/dev-min`）だと **worktree 名**に
+    `repo`（= toplevel の basename）は bare clone の worktree（`…/sai.git/dev-worktree-b`）だと **worktree 名**に
     なるので、一覧の絞り込みに使えない（#163）。`--git-common-dir` はどの形でも共有の .git を指すので、
     そこからリポジトリ名を取る:
       普通の clone       → `.git` / `../../.git`（cwd からの相対）  → 親の basename が `sai`

@@ -1,7 +1,7 @@
 // 一言（digest）の中の参照をリンクにする。
 //   #123 / PR #123 / issue #123 → <remote>/issues/123（remote が github.com のとき。issue でも PR でも /issues/<n> で正しい方へ飛ぶ）
 //   owner/repo#123              → https://github.com/owner/repo/issues/123（remote に関係なく）
-//   PGR-10891                   → https://linear.app/<workspace>/issue/PGR-10891（workspace が設定されているときだけ）
+//   ABC-10891                   → https://linear.app/<workspace>/issue/ABC-10891（workspace が設定されているときだけ）
 //   https://…                   → そのまま（Markdown と同じ切り方。parseInline に任せる）
 // 出力は Markdown の Inline の木なので、描画は web/src/Inlines.tsx をそのまま使う。HTML 文字列は作らない。
 // DOM 非依存なので shared/refs.test.ts を node:test で回す。

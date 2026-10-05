@@ -7,16 +7,16 @@ import type { SessionSummary } from '../../shared/types.ts'
 const s = (id: string, project: string): SessionSummary => ({ id, project } as SessionSummary)
 
 test('sessionGroups: リポジトリごとにまとめ、塊の順は「中で一番新しいセッション」の順（#364）', () => {
-  const groups = sessionGroups([s('a@1', 'Naturalclar/sai'), s('b@1', 'acme/kanban'), s('c@1', 'Naturalclar/sai'), s('d@1', 'acme/kanban')])
-  assert.deepEqual(groups.map((g) => g.key), ['Naturalclar/sai', 'acme/kanban'], '先に出てきた方が上（= その塊の一番新しいセッションが新しい）')
-  assert.deepEqual(groups.map((g) => g.label), ['sai', 'kanban'], '見出しは最後の区切りだけ')
+  const groups = sessionGroups([s('a@1', 'Naturalclar/sai'), s('b@1', 'acme/repo-a'), s('c@1', 'Naturalclar/sai'), s('d@1', 'acme/repo-a')])
+  assert.deepEqual(groups.map((g) => g.key), ['Naturalclar/sai', 'acme/repo-a'], '先に出てきた方が上（= その塊の一番新しいセッションが新しい）')
+  assert.deepEqual(groups.map((g) => g.label), ['sai', 'repo-a'], '見出しは最後の区切りだけ')
   assert.deepEqual(groups.map((g) => g.sessions.map((x) => x.id)), [['a@1', 'c@1'], ['b@1', 'd@1']], '塊の中は渡された順のまま')
   assert.deepEqual(sessionGroups([]), [])
 })
 
 test('sessionGroups: project が空のセッションは「その他」にまとめる', () => {
-  const groups = sessionGroups([s('a@1', ''), s('b@1', 'acme/kanban'), s('c@1', '')])
-  assert.deepEqual(groups.map((g) => [g.label, g.sessions.length]), [[OTHER_LABEL, 2], ['kanban', 1]])
+  const groups = sessionGroups([s('a@1', ''), s('b@1', 'acme/repo-a'), s('c@1', '')])
+  assert.deepEqual(groups.map((g) => [g.label, g.sessions.length]), [[OTHER_LABEL, 2], ['repo-a', 1]])
 })
 
 test('sessionGroups: 塊が 1 つでもそのまま返す（見出しを出すかは画面側）', () => {

@@ -4,7 +4,7 @@ import { normalizeRemote, projectFromCommonDir, projectFromRemote, projectName, 
 
 test('projectFromRemote: 正規化済みの remote から owner/repo。読めなければ空', () => {
   assert.equal(projectFromRemote('https://github.com/Naturalclar/sai'), 'Naturalclar/sai')
-  assert.equal(projectFromRemote('https://github.com/Naturalclar/kanban'), 'Naturalclar/kanban')
+  assert.equal(projectFromRemote('https://github.com/Naturalclar/repo-a'), 'Naturalclar/repo-a')
   // GitLab のサブグループは最後の2つ
   assert.equal(projectFromRemote('https://gitlab.example.com/grp/sub/repo'), 'sub/repo')
   assert.equal(projectFromRemote('https://github.com/Naturalclar/sai/'), 'Naturalclar/sai')
@@ -22,12 +22,12 @@ test('rowProject: project → remote の順。分からなければ空（worktre
 
 test('normalizeRemote: record.py の normalize_remote と同じ答え', () => {
   for (const [raw, want] of [
-    ['https://github.com/acme/kanban.git', 'https://github.com/acme/kanban'],
-    ['https://github.com/acme/kanban', 'https://github.com/acme/kanban'],
-    ['git@github.com:acme/kanban.git', 'https://github.com/acme/kanban'],
-    ['ssh://git@github.com/acme/kanban.git', 'https://github.com/acme/kanban'],
+    ['https://github.com/acme/repo-a.git', 'https://github.com/acme/repo-a'],
+    ['https://github.com/acme/repo-a', 'https://github.com/acme/repo-a'],
+    ['git@github.com:acme/repo-a.git', 'https://github.com/acme/repo-a'],
+    ['ssh://git@github.com/acme/repo-a.git', 'https://github.com/acme/repo-a'],
     ['ssh://git@gitlab.example.com:2222/grp/sub/repo.git', 'https://gitlab.example.com/grp/sub/repo'],
-    ['https://user:token@github.com/acme/kanban.git', 'https://github.com/acme/kanban'],
+    ['https://user:token@github.com/acme/repo-a.git', 'https://github.com/acme/repo-a'],
     ['/Users/me/repos/local', ''],
     ['file:///Users/me/repos/local', ''],
     ['', ''],
@@ -40,7 +40,7 @@ test('normalizeRemote: record.py の normalize_remote と同じ答え', () => {
 
 test('projectFromCommonDir: bare も普通の clone も同じ答え', () => {
   // bare clone の worktree
-  assert.equal(projectFromCommonDir('/h/sai.git/dev-min', '/h/sai.git'), 'sai')
+  assert.equal(projectFromCommonDir('/h/sai.git/dev-worktree-b', '/h/sai.git'), 'sai')
   // 普通の clone（toplevel から / サブディレクトリから。cwd からの相対で来る）
   assert.equal(projectFromCommonDir('/h/sai', '.git'), 'sai')
   assert.equal(projectFromCommonDir('/h/sai/a/b', '../../.git'), 'sai')

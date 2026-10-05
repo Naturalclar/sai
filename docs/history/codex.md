@@ -27,7 +27,7 @@
 ## 行の pid が生きていてもペインの中かを見る（#562）
 
 - codex 0.153 の TUI は共有の `codex app-server --listen unix://` の客のことがあり、notify を鳴らすのは app-server なので行の `pid` は tmux の外（ppid 1）、`pane` は app-server を起こしたペインの `TMUX_PANE` になる（実測）
-- 実測で 1 本の app-server がスレッド 4 本・tmux の客の TUI 3 つを抱え、kanban と dotfiles の会話の行も sai の TUI のペインを指していた。生きているだけで端末とみなすと別の会話の TUI を端末と取り違えうる
+- 実測で 1 本の app-server がスレッド 4 本・tmux の客の TUI 3 つを抱え、リポジトリ A とリポジトリ B の会話の行も sai の TUI のペインを指していた。生きているだけで端末とみなすと別の会話の TUI を端末と取り違えうる
 - 「そのペインの TUI がその app-server の客か」で当てる案は捨てた。どのスレッドを映しているかを言わないので、別の会話に打ち込む（#566 のレビュー）
 
 ## ペインの中にいる共有デーモンを端末にしない（#653）

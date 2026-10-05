@@ -87,7 +87,7 @@ export type StartStatus =
  */
 export function startStatus(arrived: boolean, replying: Replying | undefined, since: number, now: number): StartStatus {
   if (arrived) return { kind: 'arrived' }
-  if (replying?.failed) return { kind: 'failed', message: replying.failed.tail || `終了コード ${replying.failed.code}` }
+  if (replying?.failed) return { kind: 'failed', message: `${replying.failed.logged_out ? 'Claude のログインが切れています（Mac の端末で claude auth login）。' : ''}${replying.failed.tail || `終了コード ${replying.failed.code}`}` }
   if (!replying && now - since > START_SILENT_MS) return { kind: 'silent' }
   return { kind: 'running' }
 }

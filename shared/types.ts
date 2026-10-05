@@ -826,6 +826,16 @@ export interface ReplyFailure {
    * これが無いと画面が「返信が届いていません」と出し、届いた指示を送り直させてしまう
    */
   turn_error?: true
+  /**
+   * **Claude のログインが切れている**と分かっている（#685。失敗したときに `claude auth status --json` を聞いた結果）。
+   * 画面は失敗の理由としてそれを出す。聞けなかった・切れていなければ無い
+   */
+  logged_out?: true
+}
+
+/** `POST /api/claude-auth/check` の応答（#685）。聞き直した結果。分からなければ（`claude` が無い・古い・時間切れ）`null` */
+export interface ClaudeAuthCheckResponse {
+  logged_in: boolean | null
 }
 
 /** エンティティID → 処理中の返信。無ければ空 */
@@ -1236,6 +1246,11 @@ export interface SessionsResponse {
    * 見えない・このマシンの Claude の行が窓に無い）ときも空。rev にも混ぜる（設定を直したら次の行を待たずに消える）
    */
   hooks_missing: string[]
+  /**
+   * Claude のログインが切れていると分かっている（#685。`claude auth status --json` の `loggedIn: false`）。
+   * 聞くのは起動時・Claude の返信が失敗したとき・画面の「確かめ直す」だけ。聞けていない・分からないは false
+   */
+  claude_logged_out: boolean
   /** 自分の表示名とアイコン。変わると rev も変わる */
   profile: Profile
   /** 誰として見ているか。tailnet 経由（tailscale serve）ならログイン名、ローカルの直アクセスなら null */

@@ -24,6 +24,7 @@ import { fileURLToPath } from 'node:url'
 import { DEFAULT_PORT, parsePort } from '../shared/port.ts'
 import { createApp } from './app.ts'
 import { ClaudeHooks } from './local/claudeHooks.ts'
+import { ClaudeAuth } from './local/claudeAuth.ts'
 import { jevFromEnv } from './approvals/jev.ts'
 import { RealTmux, realPs } from './reply/terminal.ts'
 import { FeedStore } from './rows/store.ts'
@@ -144,12 +145,16 @@ export function main(argv: string[]): void {
   const { port, host, feedDir } = parsed.options
   // 端末の口（8 つ目）だけ既定を上書きして、許可の確率を聞く Jev の口を渡す（#491）。**環境の JEV_API_KEY から組むのはここだけ**
   // （createApp の既定は「送らない」。テストが本物の Jev に送らないように）。間の引数は undefined で既定のまま
+  // Claude のログインが切れていないか（#685）。起動時に 1 回聞いておく（あとは返信が失敗したときと、画面の「確かめ直す」だけ）
+  const claudeAuth = new ClaudeAuth()
+  void claudeAuth.check()
   const app = createApp(new FeedStore(feedDir), DIST_DIR, undefined, undefined, undefined, undefined, undefined, {
     tmux: new RealTmux(),
     ps: realPs,
     jev: jevFromEnv(),
     // フックの配線のずれ（#567）。~/.claude/settings.json を読むだけ（書き換えない）
     claudeHooks: new ClaudeHooks(),
+    claudeAuth,
   })
   const server = createServer((req, res) => {
     void app(req, res)

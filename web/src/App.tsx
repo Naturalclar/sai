@@ -28,6 +28,7 @@ import { GitHubMark } from './GitHubMark'
 import { UserMenu } from './UserMenu'
 import { UsageChip } from './UsageChip'
 import { api, type SessionFilters, type SettingsResponse } from './api'
+import { ClaudeAuthBanner } from './ClaudeAuthBanner'
 import { isTypingTarget, navAction, navTarget, type NavTarget } from './sessionNav'
 import { DigestControls } from './DigestControls'
 import { DigestEngineControls } from './DigestEngineControls'
@@ -491,6 +492,8 @@ export function App() {
           フックが繋がっていません: <code>{list.data.hooks_missing.join('、')}</code>（README「1. フックを向ける」。<code>/setup-sai</code> で足せます）
         </div>
       )}
+      {/* Claude のログインが切れている（#685）。SAI が起こす claude の仕事が全部失敗するので、理由を先に出す */}
+      {list.data?.claude_logged_out && <ClaudeAuthBanner />}
       {/* 配っている web/dist/ がソースより古い（git pull のあと pnpm build していない）。pnpm dev は HMR で常に最新なので出さない */}
       {import.meta.env.PROD && list.data?.build_stale && (
         <div className="banner" role="status">

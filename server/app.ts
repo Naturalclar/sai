@@ -79,6 +79,7 @@ import type { SessionTurnResponse, TurnStepsResponse,
   SessionSummary,
   SettingsRequest,
   SettingsResponse,
+  ClaudeAuthCheckResponse,
   UsageReportResponse,
   UsageResponse,
   Viewer,
@@ -94,6 +95,7 @@ import { APPROVAL_LOG_FILE, ApprovalLog } from './approvals/approvalLog.ts'
 import { APPROVALS_FILE, Approvals, WAIT_MS } from './approvals/approvals.ts'
 import { BuildFreshness } from './local/buildFreshness.ts'
 import { NoClaudeHooks, type ClaudeHooksReader } from './local/claudeHooks.ts'
+import { NoClaudeAuth, type ClaudeAuthReader } from './local/claudeAuth.ts'
 import { codexLockHolders, codexQueueCommand, codexWriterActive, isAppServer, runCodexQueue } from './reply/codex.ts'
 import type { CodexQueue } from './reply/codex.ts'
 import { CodexAppServer } from './reply/codexAppServer.ts'
@@ -237,6 +239,8 @@ const ANSWER_SUFFIX = '/answer'
 /** 承認 body の上限。ツールの入力そのもの（Edit の new_string など）が入るので返信より大きめ */
 export const MAX_APPROVAL_BYTES = 1024 * 1024
 const SETTINGS_PATH = '/api/settings'
+/** Claude のログインを聞き直す（#685。読むだけだが `claude` を起こすので POST・同一オリジンのみ） */
+const CLAUDE_AUTH_CHECK_PATH = '/api/claude-auth/check'
 /** 一言が変だと言われたのを残す口（#346）。同一オリジンのみ */
 const DIGEST_FEEDBACK_PATH = '/api/digest/feedback'
 const USAGE_PATH = '/api/usage'
@@ -538,6 +542,8 @@ export interface TerminalDeps {
    * 既定で読むと、テストの結果が回したマシンの設定で変わる）
    */
   claudeHooks?: ClaudeHooksReader
+  /** Claude のログインが切れていないかを聞く口（#685）。既定は聞かない（本物の `claude` を叩くのは `main.ts` が渡したときだけ） */
+  claudeAuth?: ClaudeAuthReader
   /** Codex の画像生成で作った画像の置き場（#575）。テストでは一時ディレクトリを指す */
   codexImages?: CodexImages
   /** 画像の軽い版を作る口（#589）。テストでは偽の縮める口を渡した Thumbnails か noThumbs */
@@ -600,6 +606,32 @@ export function createApp(
   const jevRisk = new JevRisk(terminal.jev ?? null)
   // フックの配線のずれ（#567）。読むのは ttl に 1 回、設定の mtime が変わったときだけ
   const claudeHooks = terminal.claudeHooks ?? new NoClaudeHooks()
+  const claudeAuth = terminal.claudeAuth ?? new NoClaudeAuth()
+  // ログインを聞き直した失敗（`<id>\n<since>` → その問い合わせ）。同じ失敗で何度も `claude` を起こさない。
+  // 問い合わせそのものを持つのは、同時に来た応答（一覧と詳細）の後の方も答えを待つため（待たないと、印の無い失敗を先に返す）
+  const authAsked = new Map<string, Promise<unknown>>()
+  /**
+   * Claude の返信が失敗していたら、ログインが切れていないかを 1 回だけ聞く（#685）。切れていると分かったら、その失敗に印を付ける
+   * （画面は「ログインが切れています」と出す）。実際に切れたときの `claude -p` の文言は分からないので、文言には頼らない。
+   * 見るのはプロセスが非 0 で終わった失敗だけ（届かなかった・ターンのエラーは別の理由）。エージェントが分からないもの
+   * （行の無い新しいセッション）は Claude かもしれないので聞く
+   */
+  const withAuth = async (replying: ReplyingMap, sessions: readonly SessionSummary[]): Promise<ReplyingMap> => {
+    const failed = Object.entries(replying).filter(([id, r]) => {
+      if (!r.failed || r.failed.code === undefined || r.failed.turn_error) return false
+      const agent = sessions.find((s) => s.id === id)?.agent
+      return agent === undefined || agent === 'claude'
+    })
+    const keys = new Set(failed.map(([id, r]) => `${id}\n${r.since}`))
+    for (const key of authAsked.keys()) if (!keys.has(key)) authAsked.delete(key)
+    if (failed.length === 0) return replying
+    for (const key of keys) if (!authAsked.has(key)) authAsked.set(key, claudeAuth.check())
+    await Promise.all([...keys].map((key) => authAsked.get(key)))
+    if (claudeAuth.peek()?.loggedIn !== false) return replying
+    const out: ReplyingMap = { ...replying }
+    for (const [id, r] of failed) out[id] = { ...r, failed: { ...r.failed!, logged_out: true } }
+    return out
+  }
   const waitingSettle = terminal.waitingSettle ?? new WaitingSettle(terminal.tmux, terminal.ps, terminal.scanTtlMs ?? DIALOG_SCAN_TTL_MS)
   const codexAppEnabled = process.env.SAI_CODEX_APP_SERVER !== '0'
   // OpenCode は `opencode serve` の HTTP に送る（#382）。`0` で今までどおり `opencode run -s` に戻す
@@ -3752,6 +3784,7 @@ export function createApp(
     const isProfileIcon = path === PROFILE_ICON_PATH
     const isHistoryIcon = path.startsWith(`${ICON_HISTORY_PATH}/`)
     const isSettings = path === SETTINGS_PATH
+    const isAuthCheck = path === CLAUDE_AUTH_CHECK_PATH
     const isDigestFeedback = path === DIGEST_FEEDBACK_PATH
     const isNewSession = path === NEW_SESSION_PATH
     // GitHub へのレビューの投稿（#526）。SAI が GitHub に書く唯一の口
@@ -3771,7 +3804,7 @@ export function createApp(
     // 「設定は PUT」「預かった返信の再開は POST、取り消しは DELETE」だけ。それ以外は GET / HEAD のみ
     const writable =
       (method === 'POST' &&
-        (isNewSession || isReply || isReview || isPrReview || isAsk || isAnswer || isAttachUpload || isQueue || isDigestFeedback || isSuggestion || path === AGENT_SEND_PATH || path === AGENT_LOOP_PATH || isAgentStop || isInterrupt || loopSuffix !== undefined)) ||
+        (isNewSession || isAuthCheck || isReply || isReview || isPrReview || isAsk || isAnswer || isAttachUpload || isQueue || isDigestFeedback || isSuggestion || path === AGENT_SEND_PATH || path === AGENT_LOOP_PATH || isAgentStop || isInterrupt || loopSuffix !== undefined)) ||
       (method === 'DELETE' && (isQueue || isHistoryIcon || loopSuffix === '/loop')) ||
       (method === 'PUT' && (isMeta || isRead || isProfile || isSettings)) ||
       ((method === 'PUT' || method === 'DELETE') && (isIcon || isProfileIcon))
@@ -4072,6 +4105,14 @@ export function createApp(
         if (method !== 'POST') return error(res, 405, 'method not allowed')
         return await postDigestFeedback(req, res)
       }
+      if (isAuthCheck) {
+        if (method !== 'POST') return error(res, 405, 'method not allowed')
+        if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
+        const state = await claudeAuth.check()
+        // 渡すのはログインしているかどうかだけ（メール・組織は持っていない）。分からなければ null
+        const payload: ClaudeAuthCheckResponse = { logged_in: state ? state.loggedIn : null }
+        return json(res, payload)
+      }
       if (isSettings) {
         if (method === 'PUT') return await putSettings(req, res)
         return json(res, await settingsPayload())
@@ -4185,7 +4226,7 @@ export function createApp(
         const rev = `${sessionsRev}~${me.rev}~${settled}~${terminalKey(sessions)}`
         // 前のターンが終わっていれば、預かっている返信を回してから載せる（#305。再起動で引き取った子はここで拾う）
         await drainAll()
-        const replying = await replyingOf(sessions)
+        const replying = await withAuth(await replyingOf(sessions), sessions)
         const pendingApprovals = await approvalsNow(sessions)
         // 既定はアーカイブ済みを除く。archived=1 でアーカイブ済みだけ。total と filters はその集合の絞り込み前から作る
         const wantArchived = q.get('archived') === '1'
@@ -4200,9 +4241,11 @@ export function createApp(
         // 設定が読めない・record.py に届くフックが 1 つも見えないときも言わない（null）
         const localClaude = windowRows.some((r) => r.agent === 'claude' && !isRemoteHost(r.host ?? '', selfHost()))
         const hooks_missing = (localClaude && claudeHooks.missing()) || []
+        // Claude のログインが切れていると分かっているときだけ（#685。聞けていない・分からないは false）
+        const claude_logged_out = claudeAuth.peek()?.loggedIn === false
         const body: SessionsResponse = {
           // 足りないフックは rev に混ぜる（設定を直したら、次の行を待たずにバナーが消える）
-          rev: revWith(rev, replying, approvalMapKey(pendingApprovals), build_stale, digest.revKey(), `${queue.key()}|${loops.key()}`) + (hooks_missing.length ? `~hooks:${hooks_missing.join(',')}` : ''),
+          rev: revWith(rev, replying, approvalMapKey(pendingApprovals), build_stale, digest.revKey(), `${queue.key()}|${loops.key()}`) + (hooks_missing.length ? `~hooks:${hooks_missing.join(',')}` : '') + (claude_logged_out ? '~auth:out' : ''),
           days,
           total: pool.length,
           sessions: withLastSummary(
@@ -4223,6 +4266,7 @@ export function createApp(
           build_stale,
           record_version,
           hooks_missing,
+          claude_logged_out,
           profile: me.profile,
           viewer,
           host: selfHost(),
@@ -4249,7 +4293,7 @@ export function createApp(
         const { rows: shown, older, dropped } = recent === null ? { rows: own, older: 0, dropped: [] } : recentRows(own, recent, q.get('focus') ?? '')
         const rows = usage.attach(session.meta?.digest_off ? shown : digest.attach(shown))
         await drainAll()
-        const replying = await replyingOf(sessions)
+        const replying = await withAuth(await replyingOf(sessions), sessions)
         const pendingApprovals = await approvalsNow(sessions)
         // 別のセッションへのメッセージのようす（#311）。送った・止めた・再開したは agents.key() で rev に混ぜる
         const activity = await agentActivityOf(id, sessions)
@@ -4319,7 +4363,7 @@ export function createApp(
         rows = usage.attach(digest.attach(rows.map(stripThinking)))
         if (noDigest.size) rows = rows.map((r) => (r.summary && noDigest.has(entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? ''))) ? { ...r, summary: undefined } : r))
         await drainAll()
-        const replying = await replyingOf(sessions)
+        const replying = await withAuth(await replyingOf(sessions), sessions)
         const pendingApprovals = await approvalsNow(sessions)
         // rev はメタ（アーカイブ）と処理中の集合、答え待ちの承認、ビルドが古いか、一言の有無も混ぜる
         const build_stale = await freshness.stale()

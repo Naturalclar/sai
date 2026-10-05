@@ -23,6 +23,11 @@ export function reviewLabel(count: number, hasBody: boolean): HeadLabel {
   return { full: withCount('Submit review', n), short: withCount('レビュー', n) }
 }
 
+/** 投稿だけなら主ボタン、入力欄へ入れる方があるなら枠付きの副ボタン（#698） */
+export function reviewButtonClass(hasInsert: boolean): string {
+  return `head-act review ${hasInsert ? 'secondary' : 'primary'}`
+}
+
 /** 書いたセッションの入力欄に入れる（#525）。全体のコメントは入力欄には入れないので、数えるのは行コメントだけ */
 export function insertLabel(count: number, target: string): HeadLabel {
   const n = Math.max(0, count)

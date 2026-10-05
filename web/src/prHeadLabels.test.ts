@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { draftCount, draftSummary, insertLabel, reviewLabel } from './prHeadLabels.ts'
+import { draftCount, draftSummary, insertLabel, reviewButtonClass, reviewLabel } from './prHeadLabels.ts'
 
 test('reviewLabel: 下書きが無ければ数を付けない（ボタンは 0 件でも出すので「0」は書かない）', () => {
   assert.deepEqual(reviewLabel(0, false), { full: 'Submit review', short: 'レビュー' })
@@ -10,6 +10,12 @@ test('reviewLabel: 行コメントだけ・全体のコメントだけ・両方'
   assert.deepEqual(reviewLabel(3, false), { full: 'Submit review 3', short: 'レビュー 3' })
   assert.deepEqual(reviewLabel(0, true), { full: 'Submit review 1', short: 'レビュー 1' })
   assert.deepEqual(reviewLabel(3, true), { full: 'Submit review 4', short: 'レビュー 4' })
+})
+
+test('reviewButtonClass: 単独なら主ボタン、入力欄のボタンと並ぶなら枠付きの副ボタン', () => {
+  assert.equal(reviewButtonClass(false), 'head-act review primary')
+  assert.equal(reviewButtonClass(true), 'head-act review secondary')
+  assert.doesNotMatch(reviewButtonClass(true), /linkish/)
 })
 
 test('insertLabel: 入れる先の名前を出し、数えるのは行コメントだけ', () => {

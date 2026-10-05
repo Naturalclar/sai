@@ -12,6 +12,7 @@ import { createHash } from 'node:crypto'
 import { mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { IconType } from '../../shared/icon.ts'
+import { isBandImage } from '../../shared/images.ts'
 
 /** これより軽い画像は縮めずに元のまま返す（実測: 100KB 未満が 306 枚中 131 枚。縮める 0.1〜0.5 秒のほうが高い） */
 export const THUMB_MIN_BYTES = 200 * 1024
@@ -23,6 +24,14 @@ export const THUMB_QUALITY = 75
  * 512px なら 124〜290KB、384px なら 75〜175KB。枠の 96px を 3 倍の画素で描いても 288px で足りる）
  */
 export const THUMB_EDGE_ALPHA = 384
+/**
+ * 横に細長い画像（帯。`shared/images.ts` の `isBandImage()`）の軽い版の短辺（#709）。画面は帯を高さ 80px まで広げるので、
+ * 長辺 512px のまま（14:1 なら高さ 36px）だと広がらず字も読めない。短辺をこの値にして長辺を伸ばす（80px の 1.5 倍の画素）。
+ * 実測（2880×200・344KB の表のスクリーンショット）: 長辺 512px で 11KB、短辺 80px で 52KB、120px で 90KB 前後、160px で 155KB
+ */
+export const THUMB_BAND_SHORT = 120
+/** 帯の軽い版の長辺の上限（とても長い帯で元に近い大きさを作らない） */
+export const THUMB_BAND_EDGE_MAX = 2048
 /** `sips` 1 回の締切 */
 export const THUMB_TIMEOUT_MS = 15_000
 /** 同時に回す `sips` の数 */
@@ -106,6 +115,15 @@ export function imageSize(b: Buffer, type: IconType): { width: number; height: n
   }
 }
 
+/**
+ * 軽い版の長辺の目標。ふつうは `base`、帯は短辺が `THUMB_BAND_SHORT` になる長辺（`base` 以上・`THUMB_BAND_EDGE_MAX` 以下）。
+ * 大きさが読めなければ `base`
+ */
+export function thumbTarget(size: { width: number; height: number } | null, base: number): number {
+  if (!size || !isBandImage(size.width, size.height)) return base
+  return Math.max(base, Math.min(THUMB_BAND_EDGE_MAX, Math.round((size.width / size.height) * THUMB_BAND_SHORT)))
+}
+
 export class Thumbnails implements ThumbMaker {
   private readonly dir: string
   private readonly shrink: Shrinker
@@ -129,14 +147,16 @@ export class Thumbnails implements ThumbMaker {
   async thumb(img: { bytes: Buffer; type: IconType }): Promise<ThumbResult> {
     if (img.bytes.length < THUMB_MIN_BYTES) return { kind: 'original' }
     const format: ThumbFormat = hasAlpha(img.bytes, img.type) ? 'png' : 'jpeg'
-    const target = format === 'jpeg' ? THUMB_EDGE : THUMB_EDGE_ALPHA
+    const base = format === 'jpeg' ? THUMB_EDGE : THUMB_EDGE_ALPHA
     const size = imageSize(img.bytes, img.type)
+    const target = thumbTarget(size, base)
     const longest = size ? Math.max(size.width, size.height) : 0
     // 目標より小さい画像は引き伸ばさない。PNG は縮めずに作り直しても軽くならないので元のまま、JPEG は大きさを変えずに作り直す
     if (longest > 0 && longest <= target && format === 'png') return { kind: 'original' }
     const edge = longest > 0 ? Math.min(target, longest) : target
     const hash = createHash('sha256').update(img.bytes).digest('hex').slice(0, 32)
-    const out = join(this.dir, `${hash}.${format === 'jpeg' ? 'jpg' : 'png'}`)
+    // 帯は長辺が違うので名前を分ける（前に長辺 512px で作った帯の軽い版を返さない。#709）
+    const out = join(this.dir, `${hash}${target === base ? '' : `-${target}`}.${format === 'jpeg' ? 'jpg' : 'png'}`)
     try {
       return this.result(await readFile(out), format, img.bytes.length)
     } catch {
@@ -197,7 +217,7 @@ export class Thumbnails implements ThumbMaker {
   /** 置き場が THUMB_KEEP を超えたら古いもの（mtime）から捨てる。失敗しても黙って諦める */
   private async trim(): Promise<void> {
     try {
-      const names = (await readdir(this.dir)).filter((n) => /^[0-9a-f]{32}\.(jpg|png)$/.test(n))
+      const names = (await readdir(this.dir)).filter((n) => /^[0-9a-f]{32}(-\d+)?\.(jpg|png)$/.test(n))
       if (names.length <= THUMB_KEEP) return
       const aged = await Promise.all(names.map(async (n) => ({ n, t: (await stat(join(this.dir, n))).mtimeMs })))
       aged.sort((a, b) => a.t - b.t)

@@ -48,6 +48,12 @@ const fail = (status: number, reason: string): ImageRead => ({ ok: false, status
 /** `root` の中か（root そのものは画像ではないので、中身だけ） */
 const inside = (root: string, path: string) => path.startsWith(root.endsWith(sep) ? root : root + sep)
 
+/** 参照の realpath。読めなければ空（見せた画像が本文にも書かれているかを比べるのに使う。#704） */
+export function realImagePath(source: ImageSource): Promise<string> {
+  if (!source.cwd && !isAbsolute(source.src)) return Promise.resolve('')
+  return realpath(isAbsolute(source.src) ? source.src : resolve(source.cwd, source.src)).catch(() => '')
+}
+
 /** 表で引けた参照を読む。条件に合わなければ理由と HTTP の状態を返す */
 export async function readSessionImage(source: ImageSource, max = IMAGE_MAX_BYTES): Promise<ImageRead> {
   if (!source.cwd) return fail(404, '作業ディレクトリが分からないので読めません')

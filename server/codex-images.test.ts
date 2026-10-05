@@ -1,6 +1,7 @@
 // Codex の画像生成で作った画像（#575）。本物の createApp に一時の feed dir・Codex の sessions・generated_images を渡して、
 // rollout の item_completed（image_gen.generation / ImageView）に出てきた、そのスレッドの置き場の画像だけが一覧に並び、
-// 一覧の鍵でだけ配られ、置き場の外・言及の無いファイル・画像でない中身は配られないことを見る
+// 一覧の鍵でだけ配られ、置き場の外・言及の無いファイル・画像でない中身は配られないことを見る。
+// `view_image` で見せた画像（#704）は、realpath が行の cwd の中にあるものだけ並ぶ
 import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
@@ -57,6 +58,12 @@ before(async () => {
   await writeFile(join(dir, 'secret.png'), PNG)
   await symlink(join(dir, 'secret.png'), join(gen, THREAD, 'exec-link.png'))
   await writeFile(join(cwd, 'repo-shot.png'), PNG)
+  // #704: 見せた画像。cwd の中のもの・本文にも書いたもの・SVG・外を指すリンク・中身が画像でないもの
+  await mkdir(join(cwd, '.screenshots'))
+  await writeFile(join(cwd, '.screenshots', 'written.png'), PNG)
+  await writeFile(join(cwd, 'drawing.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>')
+  await writeFile(join(cwd, 'fake.png'), '<svg xmlns="http://www.w3.org/2000/svg"/>')
+  await symlink(join(dir, 'secret.png'), join(cwd, 'link-out.png'))
 
   const at = new Date(now.getTime() - 5000)
   rollout = join(rolloutDir, `rollout-2026-09-30T18-00-00-${THREAD}.jsonl`)
@@ -67,8 +74,16 @@ before(async () => {
       completed(at, { type: 'Extension', kind: 'image_gen.generation', id: 'exec-gen1', status: 'completed' }) +
       // 同じ画像を見せた（1 回に数える）
       completed(at, { type: 'ImageView', id: 'exec-v', path: pathToFileURL(join(gen, THREAD, 'exec-gen1.png')).href }) +
-      // 置き場の外の画像を見た（配らない）
+      // cwd の中の画像を見せた（#704。2 回見せても 1 回に数える）
       completed(at, { type: 'ImageView', id: 'exec-v2', path: pathToFileURL(join(cwd, 'repo-shot.png')).href }) +
+      completed(at, { type: 'ImageView', id: 'exec-v3', path: pathToFileURL(join(cwd, 'repo-shot.png')).href }) +
+      // 本文にも書いた・cwd の外・外を指すリンク・SVG・中身が画像でない・消えた
+      completed(at, { type: 'ImageView', id: 'exec-v4', path: pathToFileURL(join(cwd, '.screenshots', 'written.png')).href }) +
+      completed(at, { type: 'ImageView', id: 'exec-v5', path: pathToFileURL(join(dir, 'secret.png')).href }) +
+      completed(at, { type: 'ImageView', id: 'exec-v6', path: pathToFileURL(join(cwd, 'link-out.png')).href }) +
+      completed(at, { type: 'ImageView', id: 'exec-v7', path: pathToFileURL(join(cwd, 'drawing.svg')).href }) +
+      completed(at, { type: 'ImageView', id: 'exec-v8', path: pathToFileURL(join(cwd, 'fake.png')).href }) +
+      completed(at, { type: 'ImageView', id: 'exec-v9', path: pathToFileURL(join(cwd, 'gone.png')).href }) +
       // 中身が画像でない・置き場の外へのリンク（一覧には出るが配らない）
       completed(at, { type: 'Extension', kind: 'image_gen.generation', id: 'exec-svg', status: 'completed' }) +
       completed(at, { type: 'Extension', kind: 'image_gen.generation', id: 'exec-link', status: 'completed' }) +
@@ -77,7 +92,7 @@ before(async () => {
       turnEnd(now, 'T1'),
   )
   const lines = [
-    row(now, THREAD, { repo: 'repo', cwd, agent: 'codex', text: '生成しました。', user_text: 'キャラクターを描いて' }),
+    row(now, THREAD, { repo: 'repo', cwd, agent: 'codex', text: '生成しました。\n\n![書いた](.screenshots/written.png)', user_text: 'キャラクターを描いて' }),
     row(now, 'far', { repo: 'repo', cwd, agent: 'codex', host: 'far-away-machine', text: '生成しました。' }),
   ]
   await writeFile(join(feedDir, `${localDate(now.toISOString())}.jsonl`), lines.map((l) => JSON.stringify(l)).join('\n') + '\n')
@@ -104,8 +119,41 @@ test('gallery: rollout に出てきた、そのスレッドの置き場の画像
   const generated = items.filter((i) => i.source === 'generated')
   assert.deepEqual(generated.map((i) => i.url.split('/codex-images/')[1]).sort(), ['exec-gen1.png', 'exec-link.png', 'exec-svg.png'])
   assert.ok(generated.every((i) => i.from === 'agent' && i.ts !== ''), '返答のバブルに付く')
-  assert.ok(!items.some((i) => i.url.includes('repo-shot')), '置き場の外の画像は拾わない')
   assert.ok(!items.some((i) => i.url.includes('exec-other')), '言及の無い・失敗した生成は拾わない')
+})
+
+test('gallery: view_image で見せた画像は、realpath が cwd の中のものだけをバブルの下に足す。本文にも書いたものは 1 回だけ（#704）', async () => {
+  const { items } = await gallery()
+  const viewed = items.filter((i) => i.source === 'viewed')
+  // 残るのは repo-shot.png と、中身が画像でない fake.png（一覧には出るが配らない。生成した画像と同じ扱い）
+  assert.deepEqual(viewed.map((i) => i.name).sort(), ['fake.png', 'repo-shot.png'], 'cwd の外・外を指すリンク・SVG・消えたファイル・本文に書いたものは足さない')
+  const shot = viewed.find((i) => i.name === 'repo-shot.png')!
+  assert.equal(shot.from, 'agent')
+  assert.notEqual(shot.ts, '', '見せたターンの返答のバブルに付く')
+  assert.match(shot.url, /\/codex-images\/view-[0-9a-f]{16}\.png$/, '鍵にパスを載せない')
+  assert.equal(items.filter((i) => i.name === '書いた' || i.name === 'written.png').length, 1, '本文の画像（バブルの中）だけが残る')
+  assert.ok(!JSON.stringify(items).includes('secret'), '外のパスは応答に出ない')
+
+  const key = (name: string) => viewed.find((i) => i.name === name)!.url.split('/codex-images/')[1]!
+  const ok = await image(key('repo-shot.png'))
+  assert.equal(ok.status, 200)
+  assert.equal(ok.headers.get('content-type'), 'image/png')
+  assert.deepEqual(Buffer.from(await ok.arrayBuffer()), PNG)
+  assert.equal((await image(key('fake.png'))).status, 415, '拡張子が画像でも中身が SVG なら配らない')
+  assert.equal((await image('view-0000000000000000.png')).status, 404, '一覧に無い鍵は配らない')
+  // cwd を渡さなければ（行から取れなければ）見せた画像は拾わない
+  assert.ok(!(await new CodexImages(gen).list(rollout, THREAD)).some((i) => i.file))
+})
+
+test('gallery: 見せたあとに cwd の外へ向け直したリンクは配らない（#704）', async () => {
+  const cwd = join(dir, 'work')
+  await writeFile(join(cwd, 'swap.png'), PNG)
+  await appendFile(rollout, completed(new Date(), { type: 'ImageView', id: 'exec-swap', path: pathToFileURL(join(cwd, 'swap.png')).href }))
+  const item = (await gallery()).items.find((i) => i.name === 'swap.png')
+  assert.ok(item)
+  await rm(join(cwd, 'swap.png'))
+  await symlink(join(dir, 'secret.png'), join(cwd, 'swap.png'))
+  assert.equal((await image(item.url.split('/codex-images/')[1]!)).status, 404)
 })
 
 test('codex-images: 一覧の鍵でだけ配る。置き場の外へのリンク・画像でない中身・言及の無いファイル・変な鍵は断る', async () => {
@@ -131,14 +179,16 @@ test('gallery: 別のマシンのセッションは空。rollout が増えたら
   assert.equal((await image('exec-gen2.png')).status, 200)
 })
 
-test('imageMention: 生成は item id、見せた画像はそのスレッドの置き場の直下のときだけ', () => {
+test('imageMention: 生成は item id、見せた画像は置き場の直下ならファイル名・ほかは絶対パス（cwd の中かは一覧で見る）', () => {
   const threadDir = '/h/.codex/generated_images/T1'
   const ev = (item: Record<string, unknown>) => ({ type: 'event_msg', payload: { type: 'item_completed', item } })
   assert.deepEqual(imageMention(ev({ type: 'Extension', kind: 'image_gen.generation', id: 'exec-1', status: 'completed' }), threadDir), { id: 'exec-1', exact: false })
   assert.equal(imageMention(ev({ type: 'Extension', kind: 'image_gen.generation', id: '../x', status: 'completed' }), threadDir), null)
   assert.deepEqual(imageMention(ev({ type: 'ImageView', path: 'file:///h/.codex/generated_images/T1/a.png' }), threadDir), { id: 'a.png', exact: true })
-  assert.equal(imageMention(ev({ type: 'ImageView', path: 'file:///h/.codex/generated_images/T2/a.png' }), threadDir), null, '別のスレッド')
-  assert.equal(imageMention(ev({ type: 'ImageView', path: 'file:///h/.codex/generated_images/T1/sub/a.png' }), threadDir), null, '直下だけ')
+  assert.deepEqual(imageMention(ev({ type: 'ImageView', path: 'file:///h/.codex/generated_images/T2/a.png' }), threadDir), { id: '', exact: true, path: '/h/.codex/generated_images/T2/a.png' }, '別のスレッドの置き場は、ただのパス')
+  assert.deepEqual(imageMention(ev({ type: 'ImageView', path: 'file:///repo/.screenshots/a.PNG' }), threadDir), { id: '', exact: true, path: '/repo/.screenshots/a.PNG' })
+  assert.equal(imageMention(ev({ type: 'ImageView', path: 'file:///repo/a.svg' }), threadDir), null, 'SVG は拾わない')
+  assert.equal(imageMention(ev({ type: 'ImageView', path: 'shots/a.png' }), threadDir), null, '相対パスは拾わない（どこからか分からない）')
   assert.equal(imageMention({ type: 'response_item', payload: {} }, threadDir), null)
 })
 

@@ -1862,8 +1862,8 @@ export interface GalleryItem {
   ts: string
   /** 誰の発言に出てきたか */
   from: 'user' | 'agent'
-  /** どこから拾ったか（`generated` は Codex の画像生成で作った画像。#575） */
-  source: 'text' | 'attachment' | 'transcript' | 'generated'
+  /** どこから拾ったか（`generated` は Codex の画像生成で作った画像。#575。`viewed` は Codex が `view_image` で見せた cwd の中の画像。#704） */
+  source: 'text' | 'attachment' | 'transcript' | 'generated' | 'viewed'
 }
 
 /**

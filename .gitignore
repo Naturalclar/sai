@@ -3,6 +3,8 @@
 sessions/
 session-icons/
 attachments/
+# エージェントが SAI に見せるスクリーンショットの置き場（#704。AGENTS.md）
+.screenshots/
 
 __pycache__/
 *.pyc

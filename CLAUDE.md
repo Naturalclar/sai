@@ -112,7 +112,7 @@ OpenCode (feed/opencode/sai.js) ─┘                           │
 - **見出し**: 印は `headTags()` の 1 つ。`⋯` のパネルは `.chat-head` の中（外だと iOS で拡大）。Esc は capture で止める → docs/internals/web.md#チャット見出し274
 - **入力欄**: `ReplyBox` は打ちかけを作ったとき 1 回だけ読むので `key={`reply:${id}`}` でセッションごとに作り直す。フィードには `draftKey` を渡さない。字送りに関わる CSS は textarea と `.ghost` の両方に当てる → docs/internals/web.md#入力欄replybox
 - **チャット**: 発言は `ts` と側（`me` / `agent`）で名指しし、フィードの飛び先は `Utterance.key`。最下部追従は高さが変わったときだけ。返信の終わりは描いた行でなく `session.turns` で見る。検索の飛び先は 7 日の窓の外でも含める → docs/internals/web.md#セッション画面の-7-日の窓477
-- **Markdown・画像**: HTML 文字列は作らない。外の URL の画像は読み込まない。画像のパスはリクエストから受けず鍵で引き、SVG は配らない（Codex の生成画像はそのスレッドの置き場の直下だけ）。表のセルに `overflow-wrap: anywhere` を継がせない。ライトボックスのキーは capture で止める → docs/internals/web.md#画像
+- **Markdown・画像**: HTML 文字列は作らない。外の URL の画像は読み込まない。画像のパスはリクエストから受けず鍵で引き、SVG は配らない（Codex の生成画像はそのスレッドの置き場の直下、`view_image` で見せた画像は realpath が行の `cwd` の中のものだけ）。表のセルに `overflow-wrap: anywhere` を継がせない。ライトボックスのキーは capture で止める → docs/internals/web.md#画像
 - **型検査**: web の `tsconfig.json` はテストを除外し、`web/tsconfig.test.json` が `src/**/*.test.ts`、shared のテストは `server/tsconfig.json` が拾う → docs/internals/web.md#テストと型検査
 
 ### 返信
@@ -189,6 +189,7 @@ OpenCode (feed/opencode/sai.js) ─┘                           │
 - **ブラウザから叩く書き込みの口は同一オリジンのみ**（`app.ts` の `isCrossOrigin()` を外さない）: 返信・新しいセッション・承認の答え・レビュー・一言の「変？」・既読・送信の停止など。**`cwd`・パス・ブランチはリクエストから受けず、セッションの行から取る**（新しいセッションも `from` の `cwd`）
 - **SAI 自身は起動するコマンドに権限のフラグを付けない。** 運用者が `SAI_CLAUDE_ARGS` / `SAI_CODEX_ARGS` で渡すのは可（`docs/screen.md` の「返信と許可」の範囲。バイパスは勧めない）
 - **「処理中の返信」はメモリと `~/.agent-feed/replying.json` の両方**（再起動で忘れると返信が二重に走る）。失敗は `Replying.failed` で画面に出す
+- **SAI に画像を出すには返答の本文に `![名前](パス)` と書く。** 置き場は `.screenshots/`（`.gitignore` 済み）。`/tmp` と `web/dist/` は使わない（#704。`AGENTS.md` と同じ文）
 - 履歴（`*.jsonl`、`.agent-feed/`、`sessions/`）はコミットしない（`.gitignore` 済み）。テストやスクラッチのサーバで本物の `~/.agent-feed` を触らない（`AGENT_FEED_DIR` を一時ディレクトリに）
 
 ## 環境変数

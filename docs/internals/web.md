@@ -245,7 +245,10 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 取るのは開いたときと新しい発言が記録されたとき（`useDiffSummary` と同じ形）。
 - **フィードでも出す**（#657）。`FeedView` が `feedGallery.ts` の `galleryStamps()`（自分のマシンのセッション → 発言の出る一番新しい行の `ts`。新しい順に `FEED_GALLERY_MAX` 個まで）を `useGalleries` に渡し、目印が変わったセッションだけ `GET /api/sessions/<id>/gallery` を 1 つずつ順に取る（`useDiffSummaries` と同じ形。3 秒のポーリングには載せない）。`Chat` には `imagesBySession`（エンティティ ID → `bubbleKey` → 画像）で渡す。`bubbleKey` はセッションの中でだけ一意なので、**セッションで引いてから鍵で引く**（1 枚の Map に混ぜない）。ライトボックスの ← → は `MessageImages` が持つその発言の画像だけなので、別のセッションの画像へは送らない。
 - **Codex の画像生成（`imagegen`）で作った画像も同じ一覧に足す**（#575。`server/local/codexImages.ts` の `CodexImages`、`source: 'generated'`）。画像は `CODEX_HOME/generated_images/<スレッド>/exec-<item id>.png` に保存され、返答の本文にもフックの payload にもパスが載らない。手がかりは rollout の `event_msg` の `item_completed`（`Extension` の `kind: image_gen.generation` の `id`、見せた画像の `ImageView` の `path`）なので、`ProgressReader.codexRollout()` で引いた rollout を `TranscriptImages` と同じく増えた分だけ読む。
-- 拾うのは**そのスレッドの置き場の直下のファイルだけ**（`ImageView` でもリポジトリの中の画像は拾わない。そちらは本文のパスの経路）。配るのは一覧で見つけたファイル名の鍵だけ（`/codex-images/<key>`。スレッドの ID も鍵も名前 1 つぶんだけ・realpath がその置き場の中・中身で種類を判定して SVG は配らない）。付ける行は `rowTsAtOrAfter()`（作った時刻以降で一番古い返答の行）。置き場は `TerminalDeps.codexImages`（テストは一時ディレクトリ）。
+- 生成した画像で拾うのは**そのスレッドの置き場の直下のファイルだけ**。配るのは一覧で見つけたファイル名の鍵だけ（`/codex-images/<key>`。スレッドの ID も鍵も名前 1 つぶんだけ・realpath がその置き場の中・中身で種類を判定して SVG は配らない）。付ける行は `rowTsAtOrAfter()`（作った時刻以降で一番古い返答の行）。置き場は `TerminalDeps.codexImages`（テストは一時ディレクトリ）。
+- **`view_image` で見せた画像（`ImageView`）は、realpath が行の `cwd` の中にあるものも拾う**（#704。`source: 'viewed'`、名前はファイル名）。`imageMention()` は置き場の外の絶対パス（拡張子が png / jpg / jpeg / gif / webp のもの）を `path` で返し、cwd の中かは `list(rollout, thread, cwd)` が realpath で見る（`cwd` はセッションの行から。空なら拾わない）。cwd の外（`/tmp`）・外を指すシンボリックリンク・SVG・消えたファイルは一覧に載せない。
+- 鍵は `view-<realpath とターンの sha256 の先頭 16 桁>.<拡張子>`（パスを載せない）。**ターンごとに別の鍵**にして、同じパスに撮り直して後のターンで見せ直した画像もそのターンのバブルに出す（同じターンの中の 2 回は 1 回。#707 のレビュー）。配るのは同じ `/codex-images/<key>` で、読むのは本文の画像と同じ `readSessionImage()`（realpath が cwd の中・リンクを辿らずに開く・中身で種類を判定）。
+- **本文にも書かれている画像は足さない**（バブルの中にもう出る）。`app.ts` が `imageTable()` の参照を `realImagePath()` で realpath にして、同じファイルを除く（セッションの中のどの発言に書かれていても除く）。付ける行は生成した画像と同じ。
 
 ### 枠の軽い版（#589）
 

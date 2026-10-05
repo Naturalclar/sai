@@ -7,13 +7,19 @@
 // 配るのは一覧で見つけた鍵（そのスレッドの置き場の中のファイル名）だけ。realpath がそのスレッドの置き場の中にあることを確かめ、
 // 種類は中身から判定し（SVG は配らない）、IMAGE_MAX_BYTES を超えるものは配らない。rollout は大きい（手元で 10MB）ので
 // **増えた分だけ**読み足す（追記しかされない）
+//
+// `view_image` で見せた画像（`ImageView`）は、**realpath が行の `cwd` の中にあるものも**拾う（#704。前は置き場の直下だけで、
+// リポジトリの中のスクリーンショットを見せても SAI には出なかった）。鍵はパスのハッシュで、配る条件は本文の画像と同じ
+// `readSessionImage()`（cwd の外・外を指すシンボリックリンク・SVG は配らない）。`/tmp` のものは一覧にも載せない
+import { createHash } from 'node:crypto'
 import { open, readdir, readFile, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { basename, dirname, join, sep } from 'node:path'
+import { basename, dirname, extname, isAbsolute, join, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { IMAGE_MAX_BYTES } from '../../shared/images.ts'
 import { sniffImageType } from '../../shared/icon.ts'
 import type { IconType } from '../../shared/icon.ts'
+import { readSessionImage } from './images.ts'
 
 /** 生成した画像の置き場（`CODEX_HOME/generated_images`）。CODEX_HOME の読み方は usage.ts の codexSessionsDir() と同じ */
 export function codexGeneratedImagesDir(env: NodeJS.ProcessEnv = process.env, home: string = homedir()): string {
@@ -23,8 +29,10 @@ export function codexGeneratedImagesDir(env: NodeJS.ProcessEnv = process.env, ho
 }
 
 export interface CodexImage {
-  /** 置き場の中のファイル名（`exec-….png`）。配るときの鍵 */
+  /** 置き場の中のファイル名（`exec-….png`）。見せた cwd の中の画像は `view-<パスのハッシュ>.<拡張子>`。配るときの鍵 */
   key: string
+  /** 見せた cwd の中の画像（#704）の realpath。**サーバの中でだけ使う**（応答には載せない）。生成した画像には無い */
+  file?: string
   /** rollout のその行の `timestamp`（ISO） */
   at: string
   /**
@@ -43,6 +51,8 @@ interface Mention {
   /** 生成なら item id（`exec-…`。拡張子は置き場で探す）、見せた画像ならファイル名そのもの */
   id: string
   exact: boolean
+  /** 置き場の外の見せた画像の絶対パス（#704）。cwd の中かは一覧を作るときに realpath で見る */
+  path?: string
   at: string
   /** どのターンで作ったか（`item_completed` の `turn_id`） */
   turn: string
@@ -56,9 +66,18 @@ interface Scan {
   ends: Map<string, string>
 }
 
+/** 見せた画像として拾う拡張子（SVG は配らないので一覧にも載せない。中身は配るときにもう一度見る） */
+const VIEW_EXT = /^\.(?:png|jpe?g|gif|webp)$/i
+
 /**
- * rollout の 1 行から、そのスレッドの置き場の画像への言及を取る。生成（`image_gen.generation`）は item id、
- * 見せた画像（`ImageView`）はパスがそのスレッドの置き場の直下のときだけファイル名
+ * 見せた cwd の中の画像の鍵。パスは載せない（realpath とターンのハッシュ）。**ターンごとに別の鍵にする**（#707 のレビュー）:
+ * `.screenshots/` の画像は同じ名前で撮り直すので、ファイルだけで 1 つにまとめると、後のターンで見せ直しても最初のターンにしか出ない
+ */
+const viewKey = (real: string, turn: string) => `view-${createHash('sha256').update(`${real}\0${turn}`).digest('hex').slice(0, 16)}${extname(real).toLowerCase()}`
+
+/**
+ * rollout の 1 行から、画像への言及を取る。生成（`image_gen.generation`）は item id、
+ * 見せた画像（`ImageView`）はパスがそのスレッドの置き場の直下ならファイル名、ほかの絶対パスは `path`（#704。cwd の中かはここでは見ない）
  */
 export function imageMention(line: unknown, threadDir: string): Omit<Mention, 'at' | 'turn'> | null {
   const row = line as { type?: unknown; payload?: { type?: unknown; item?: Record<string, unknown> } } | null
@@ -77,6 +96,7 @@ export function imageMention(line: unknown, threadDir: string): Omit<Mention, 'a
     }
     const name = basename(file)
     if (dirname(file) === threadDir && NAME_RE.test(name)) return { id: name, exact: true }
+    if (isAbsolute(file) && VIEW_EXT.test(extname(file))) return { id: '', exact: true, path: file }
   }
   return null
 }
@@ -96,37 +116,54 @@ export class CodexImages {
     return NAME_RE.test(thread) ? join(this.root, thread) : ''
   }
 
-  /** rollout に出てきた、そのスレッドの生成した画像（古い順・同じファイルは 1 回）。読めなければ空 */
-  async list(rollout: string, thread: string): Promise<CodexImage[]> {
+  /**
+   * rollout に出てきた、そのスレッドの生成した画像と、見せた画像のうち realpath が `cwd` の中にあるもの（古い順・同じファイルは 1 回。見せた画像はターンごとに 1 回）。
+   * 読めなければ空。`cwd` はセッションの行から渡す（空なら見せた画像は拾わない）
+   */
+  async list(rollout: string, thread: string, cwd = ''): Promise<CodexImage[]> {
     const dir = this.threadDir(thread)
     if (!rollout || !dir) return []
     let mentions: Mention[]
     let ends: Map<string, string>
-    let files: string[]
     try {
       ;({ mentions, ends } = await this.scan(rollout, dir))
-      if (mentions.length === 0) return []
-      files = (await readdir(dir)).filter((n) => NAME_RE.test(n))
     } catch {
       return []
     }
+    if (mentions.length === 0) return []
+    // 生成した画像が 1 枚も無いスレッドには置き場が無い
+    const files = await readdir(dir).then((names) => names.filter((n) => NAME_RE.test(n)), () => [] as string[])
+    const root = cwd && mentions.some((m) => m.path) ? await realpath(cwd).catch(() => '') : ''
     const out: CodexImage[] = []
     const seen = new Set<string>()
     for (const m of mentions) {
-      const key = m.exact ? (files.includes(m.id) ? m.id : '') : (files.find((n) => n.startsWith(`${m.id}.`)) ?? '')
+      let key: string
+      let file: string | undefined
+      if (m.path) {
+        if (!root) continue
+        // 消えたファイル・cwd の外（`/tmp`、外を指すシンボリックリンク）は載せない
+        file = await realpath(m.path).catch(() => '')
+        if (!file || !file.startsWith(root + sep) || !VIEW_EXT.test(extname(file))) continue
+        key = viewKey(file, m.turn)
+      } else {
+        key = m.exact ? (files.includes(m.id) ? m.id : '') : (files.find((n) => n.startsWith(`${m.id}.`)) ?? '')
+      }
       if (!key || seen.has(key)) continue
       seen.add(key)
-      out.push({ key, at: m.at, until: ends.get(m.turn) ?? '' })
+      out.push({ key, at: m.at, until: ends.get(m.turn) ?? '', ...(file ? { file } : {}) })
     }
     return out
   }
 
-  /** 一覧で見つけた鍵の画像を読む。鍵が一覧に無ければ 404 */
-  async read(rollout: string, thread: string, key: string): Promise<CodexImageRead> {
+  /** 一覧で見つけた鍵の画像を読む。鍵が一覧に無ければ 404。`cwd` は一覧と同じくセッションの行から */
+  async read(rollout: string, thread: string, key: string, cwd = ''): Promise<CodexImageRead> {
     if (!CODEX_IMAGE_KEY_RE.test(key)) return { ok: false, status: 400, reason: 'bad key' }
     const dir = this.threadDir(thread)
     if (!dir) return { ok: false, status: 404, reason: '置き場がありません' }
-    if (!(await this.list(rollout, thread)).some((i) => i.key === key)) return { ok: false, status: 404, reason: 'このセッションで生成した画像ではありません' }
+    const found = (await this.list(rollout, thread, cwd)).find((i) => i.key === key)
+    if (!found) return { ok: false, status: 404, reason: 'このセッションで生成した・見せた画像ではありません' }
+    // 見せた cwd の中の画像は、本文の画像と同じ条件で読む（realpath が cwd の中・リンクを辿らずに開く・中身で種類を見る）
+    if (found.file) return readSessionImage({ src: found.file, cwd })
     try {
       // シンボリックリンクで置き場の外へ出ない
       const [real, realDir] = await Promise.all([realpath(join(dir, key)), realpath(dir)])

@@ -205,7 +205,7 @@ import { ProgressReader, sessionOf } from './local/progress.ts'
 import { agentListFromEnv, backgroundLive, type AgentList, type ClaudeAgent } from './local/claudeAgents.ts'
 import { isRemoteHost } from '../shared/host.ts'
 import { IMAGES_SEGMENT } from '../shared/images.ts'
-import { imageHeaders, imageTable, readSessionImage } from './local/images.ts'
+import { imageHeaders, imageTable, readSessionImage, realImagePath } from './local/images.ts'
 import { AnsweredApprovals, answeredAfter } from './approvals/answered.ts'
 import { fileTable, readSessionFile } from './local/files.ts'
 import { FILES_SEGMENT } from '../shared/files.ts'
@@ -4032,7 +4032,7 @@ export function createApp(
         const rollout = thread ? ((await progress.codexRollout?.(thread)) ?? '') : ''
         if (codexImagesAt > 0) {
           if (!rollout) return error(res, 404, 'rollout がありません')
-          const img = await codexImages.read(rollout, thread, path.slice(codexImagesAt + CODEX_IMAGES_SEGMENT.length))
+          const img = await codexImages.read(rollout, thread, path.slice(codexImagesAt + CODEX_IMAGES_SEGMENT.length), session.cwd)
           if (!img.ok) return error(res, img.status, img.reason)
           return await sendImage(req, res, img, q)
         }
@@ -4057,16 +4057,19 @@ export function createApp(
         // 画像を作ったターンの返答のバブルの下に出す（作った時刻以降で一番古い返答の行）。**そのターンが閉じた時刻まで**の行だけ
         // （#576 のレビュー）: エラーで終わった・止めたターンは行を書かないので、上限が無いと次のターンの返答に付く。
         // まだ閉じていないターンの画像は付けない（行が来ていない）
-        const generated: GalleryItem[] = rollout
-          ? (await codexImages.list(rollout, thread)).map((g) => ({
-              url: `${SESSIONS_PREFIX}${encodeURIComponent(id)}${CODEX_IMAGES_SEGMENT}${encodeURIComponent(g.key)}`,
-              name: '生成した画像',
-              at: g.at,
-              ts: g.until ? rowTsAtOrAfter(own.filter((r) => Date.parse(String(r.ts ?? '')) <= Date.parse(g.until) + CODEX_ROW_SLACK_MS), g.at, 'agent') : '',
-              from: 'agent' as const,
-              source: 'generated' as const,
-            }))
-          : []
+        // `view_image` で見せた cwd の中の画像（#704）も同じ並びで付ける。**本文にも書かれている画像は足さない**（バブルの中にもう出る）
+        const fromCodex = rollout ? await codexImages.list(rollout, thread, session.cwd) : []
+        const written = fromCodex.some((g) => g.file) ? new Set(await Promise.all([...imageTable(own, session.cwd).values()].map(realImagePath))) : new Set<string>()
+        const generated: GalleryItem[] = fromCodex
+          .filter((g) => !g.file || !written.has(g.file))
+          .map((g) => ({
+            url: `${SESSIONS_PREFIX}${encodeURIComponent(id)}${CODEX_IMAGES_SEGMENT}${encodeURIComponent(g.key)}`,
+            name: g.file ? basename(g.file) : '生成した画像',
+            at: g.at,
+            ts: g.until ? rowTsAtOrAfter(own.filter((r) => Date.parse(String(r.ts ?? '')) <= Date.parse(g.until) + CODEX_ROW_SLACK_MS), g.at, 'agent') : '',
+            from: 'agent' as const,
+            source: g.file ? ('viewed' as const) : ('generated' as const),
+          }))
         return json(res, { id, items: mergeGallery([...galleryFromRows(id, own), ...fromTranscript, ...generated]) } satisfies GalleryResponse)
       }
       // 返答に出てきたファイル（#603）。画像と同じく `<key>` は本文から拾った参照の鍵で、表に無ければ 404（パスはリクエストから受けない）。

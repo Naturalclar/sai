@@ -401,7 +401,7 @@
   .pr-actions button.head-act.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
   .pr-actions button.head-act.secondary { background: var(--chip); color: var(--ink); font-weight: 600; box-shadow: 0 1px 0 color-mix(in srgb, var(--ink) 10%, transparent); }
   .pr-actions button.head-act.secondary:hover { background: var(--hover); border-color: color-mix(in srgb, var(--ink) 28%, var(--line)); }
-  .pr-actions button.head-act.primary:hover { background: color-mix(in srgb, var(--accent) 85%, var(--ink)); }
+  .pr-actions button.head-act.primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 85%, var(--ink)); }
   .pr-actions button.head-act:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .pr-actions button.head-act .short { display: none; }
   @media (max-width: 900px) { .pr-actions button.head-act .full { display: none; } .pr-actions button.head-act .short { display: inline; } }

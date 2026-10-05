@@ -158,6 +158,8 @@ interface Props {
   /** 本文が空のときの `←`。サイドバーのいま開いている項目にフォーカスを戻す（#204）。渡さなければ ← はカーソル移動のまま */
   onLeaveToSidebar?: () => void
   mention?: MentionProps
+  /** 作ったときに入力欄へフォーカスする。人が「返信」のボタンで開いた入力欄だけ（最初から開いている入力欄には付けない） */
+  focusOnOpen?: boolean
 }
 
 const NO_HISTORY: readonly string[] = []
@@ -166,7 +168,7 @@ const NO_HISTORY: readonly string[] = []
 const keyOf = (e: KeyboardEvent<HTMLTextAreaElement>) => ({ key: e.key, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, shiftKey: e.shiftKey })
 
 /** 入力欄。Enter で送信、Shift+Enter で改行。IME 変換中の Enter は送らない */
-export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerable = false, now = 0, onSend, sendMode, onDraft, model, permission, diff, skillsId, skillsAgent, attachId, draftKey, sentFromConfirm = 0, restore, insert, quote, history = NO_HISTORY, nextAsk, nextAskKey, managerDraft, onManagerDraft, onLeaveToSidebar, mention }: Props) {
+export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerable = false, now = 0, onSend, sendMode, onDraft, model, permission, diff, skillsId, skillsAgent, attachId, draftKey, sentFromConfirm = 0, restore, insert, quote, history = NO_HISTORY, nextAsk, nextAskKey, managerDraft, onManagerDraft, onLeaveToSidebar, mention, focusOnOpen = false }: Props) {
   // 前に打ちかけて離れた分（#306）。作ったときに 1 回だけ読む
   const [initial] = useState(() => (draftKey ? loadDraft(draftKey) : EMPTY_DRAFT))
   const [text, setText] = useState(initial.text)
@@ -192,6 +194,16 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
   // Esc で閉じた検索語。続きを打って検索語が変われば開き直す
   const [dismissed, setDismissed] = useState<string | null>(null)
   const ref = useRef<HTMLTextAreaElement>(null)
+  // ボタンで開いた入力欄は、そのまま打ち始められるようにする。打ちかけが残っていれば続きから
+  useEffect(() => {
+    if (!focusOnOpen) return
+    const el = ref.current
+    if (!el) return
+    el.focus()
+    el.setSelectionRange(el.value.length, el.value.length)
+    // 作ったときの 1 回だけ（あとから true になっても、打っている別の欄からフォーカスを奪わない）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   // ↑ で呼び戻す履歴の位置と、入る前の打ちかけ。描画には出ないので ref（履歴そのものは props をその場で見る）。
   // id を一緒に持ち、返信先が変わっていたら押された時に捨てる（別のセッションの履歴に入ったままにしない）
   const hist = useRef<{ id: string; index: number; draft: string }>({ id: '', index: NOT_IN_HISTORY, draft: '' })

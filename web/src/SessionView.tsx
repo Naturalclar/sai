@@ -347,6 +347,7 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
                 {open && session && footer.canReply && (
                   <TodoReplyBox
                     session={session}
+                    focusOnOpen
                     replying={data.replying[target]}
                     queued={data.queued[target]?.items.length ?? 0}
                     sentFromConfirm={confirmedSentBy[target] ?? 0}

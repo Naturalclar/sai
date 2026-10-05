@@ -188,7 +188,7 @@ test('filterReplyTargets: リポジトリ / ブランチ / タイトルの部分
   assert.deepEqual(filterReplyTargets(targets, '').map((t) => t.id), ['b@repo-b', 'a@sai'])
   assert.deepEqual(filterReplyTargets(targets, 'markdown').map((t) => t.id), ['a@sai'])
   assert.deepEqual(filterReplyTargets(targets, 'ZSH').map((t) => t.id), ['b@repo-b'])
-  assert.deepEqual(filterReplyTargets(targets, 'REPO-B').map((t) => t.id), ['b@repo-b'])
+  assert.deepEqual(filterReplyTargets(targets, 'PO-B').map((t) => t.id), ['b@repo-b'])
   assert.deepEqual(filterReplyTargets(targets, 'nothing'), [])
 })
 

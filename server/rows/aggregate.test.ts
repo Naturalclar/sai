@@ -176,8 +176,8 @@ test('project: bare clone の worktree でもリポジトリでまとまる（re
   const sai = 'https://github.com/Naturalclar/sai'
   const sessions = aggregate([
     // 同じ sai の別 worktree。repo は dev-worktree-b / dev-worktree-e と分かれるが project は 1 つ
-    row(base, 'A', { repo: 'dev-worktree-b', remote: sai }),
     row(base, 'B', { repo: 'dev-worktree-e', remote: sai }),
+    row(base, 'A', { repo: 'dev-worktree-b', remote: sai }),
     // worktree 名は同じ「main」でも別のリポジトリ
     row(base, 'C', { repo: 'main', remote: 'https://github.com/Naturalclar/repo-a' }),
     row(base, 'D', { repo: 'main', remote: sai, project: 'Naturalclar/sai' }),

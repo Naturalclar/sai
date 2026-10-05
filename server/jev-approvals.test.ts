@@ -141,7 +141,7 @@ test('自動で常に許可（#499）: 預かった時に Jev に聞き、この
     return ((await res.json()) as { approval_id: string }).approval_id
   }
   const drain = async () => {
-    for (let i = 0; i < 6; i++) await settle()
+    for (let i = 0; i < 20; i++) await settle()
   }
 
   // 閾値 0（既定）: 0.97 でも残る（Jev には聞かない）
@@ -215,7 +215,7 @@ test('自動で常に許可（#705）: つないだコマンドは部品ごと�
     return ((await res.json()) as { approval_id: string }).approval_id
   }
   const drain = async () => {
-    for (let i = 0; i < 8; i++) await settle()
+    for (let i = 0; i < 20; i++) await settle()
   }
   assert.equal((await put(base, { jev: true, jev_auto: 0.9 })).status, 200)
 

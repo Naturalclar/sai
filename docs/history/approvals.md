@@ -46,6 +46,7 @@
 - `cd` のあとの書き込みが断られるのは Claude Code の意図した動き（本体の文言は「Compound command contains cd with write operation - manual approval required to prevent path resolution bypass」。`git` は「Compound commands with cd and git require approval to prevent bare repository attacks」）。書き込み扱いの並び（`mkdir` / `touch` / `rm` / `rmdir` / `mv` / `cp` / `sed` / `tee`）は本体の分類から取り、表の結果と合っている。
 - issue の案は「`cd dir && pnpm test` → `Bash(cd:*)` と `Bash(pnpm test:*)`」だったが、**`Bash(cd:*)` は書かない**ことにした。表のとおり一度も効かない（中はルール無しで通り、外はルールがあっても聞かれる）ので、許可の範囲を広げるだけになる。案 4（`cd` だけのときは勧めない）は、書くルールが無いので [常に許可] が出ない、という形で満たした。前の記録に残っている `Bash(cd:*)` は盾のモーダルの「よく許可しているが、ルールに無いもの」から外した。設定にもう書かれている `Bash(cd:*)` は消していない（害が無く、SAI は設定を「常に許可」の経路でしか書かない）。
 - 読むだけのコマンド（`UNASKED`）は、通ると確かめたものだけを並べた。書いても害は無いが、許可の範囲は聞かれるものだけにしたかった。ここに無い読むだけのコマンドは書く側に倒れる。
+- #710 のレビュー: 読むだけのコマンドを名前だけで飛ばすと、`cat /etc/hosts` のように引数しだいで聞かれた単体のコマンドから [常に許可] が消えた（前は出ていた）。ほかに書くルールが無いときは、その部品に書くようにした。`pnpm test | sort -o out.txt` のように、ほかにルールがあって読むだけのコマンドの側も聞かれる形は残っている（押しても次も聞かれうる。危ない方向ではない）。同じレビューで、`\\` で終わるコメント行の次の行を捨てていたのも直した（行の継続を先に空白へ置き換えていた）。
 - 回数の鍵を「書かれるルールの組」にしたので、同じコマンドでも設定にルールが足されると鍵が変わる（`Bash(a:*) + Bash(b:*)` → `Bash(a:*)`）。数えているのは「押すと何が書かれるか」なので、それでよいとした。
 - 通しでも確かめた（捨てのサーバと本物の `claude`）: `cd sub && node -v && npm -v | tail -1` のバブルに `Bash(node:*)` と `Bash(npm:*)` が並び、[常に許可] で 2 つとも `.claude/settings.local.json` に書かれ、次の `cd sub && npm -v && node -v | tail -1` は聞かれなかった。
 

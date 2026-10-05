@@ -34,7 +34,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 
 - 画面は `remember: 'local'` だけを送り、サーバが `app.ts` の `alwaysRules()` でルール（`Bash(gh pr:*)` など）を組み立てて、`updatedPermissions`（`destination: localSettings`。`permissionsFor()`）として CLI に返す。CLI が cwd の `.claude/settings.local.json` に書く。
 - **ルールを組むのは `alwaysRules()` の 1 つだけ**（#705）。画面に出す `Approval.always`・回数の鍵・人の答え・Jev の自動が同じものを見る。中身は `shared/approvals.ts` の `alwaysAllowRules()`（Bash は `shared/bashRules.ts` の `bashRulePrefixes()` が部品ごとの接頭辞を返す。null なら出さない）から、もう設定にあるもの（`ruleCovered()`）を除いたもの。空なら [常に許可] を出さず、`remember: 'local'` は `400`。
-- `bashRulePrefixes(command, cwd)`: `&&` / `||` / `;` / 改行 / `|` で部品に分け、部品ごとに「環境変数の代入 + 先頭 1 語（`SUBCOMMAND_CLIS` は 2 語）」を返す。`cd` と `UNASKED`（読むだけのコマンド）には作らない。null にするのは、切れない・通らない形（展開・波括弧・サブシェル・`KEYWORDS`・ファイルへのリダイレクト・`&`・行の途中の `#`・閉じていない引用符）、`cd` の行き先が `cwd` の外か `cwd` が分からないとき、`cd` と `NOT_AFTER_CD`（書き込み系と `git`）をつないだとき。`"$(cat <<'EOF' … EOF)"` は中身ごと空の引用符に置き換えてから読む。
+- `bashRulePrefixes(command, cwd)`: `&&` / `||` / `;` / 改行 / `|` で部品に分け、部品ごとに「環境変数の代入 + 先頭 1 語（`SUBCOMMAND_CLIS` は 2 語）」を返す。`cd` と `UNASKED`（読むだけのコマンド）には作らない（ほかに書くルールが 1 つも無いときは `UNASKED` の部品に作る。引数しだいで聞かれるので）。null にするのは、切れない・通らない形（展開・波括弧・サブシェル・`KEYWORDS`・ファイルへのリダイレクト・`&`・行の途中の `#`・閉じていない引用符）、`cd` の行き先が `cwd` の外か `cwd` が分からないとき、`cd` と `NOT_AFTER_CD`（書き込み系と `git`）をつないだとき。`"$(cat <<'EOF' … EOF)"` は中身ごと空の引用符に置き換えてから読む。
 - もう設定にあるルールは `terminal.allowedRules`（`permissions.ts` の `allowRules()`。設定ファイルを読むだけ）から。**本物を読むのは `main.ts` だけ**で、`createApp` の既定は「読まない」（テストが回したマシンの設定で変わらないように）。
 - 画面は `ApprovalBubble` が `approval.always` を `AlwaysRules` で並べる。**画面はルールを組まないし送らない**。
 - 入口は 2 つ: 人が押す [常に許可] と、Jev の自動の「常に許可」（#499。下の「自動で常に許可」）。

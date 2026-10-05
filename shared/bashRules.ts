@@ -14,7 +14,8 @@ const KEYWORDS = new Set(['for', 'while', 'until', 'if', 'then', 'else', 'elif',
 
 /**
  * ルールが無くても聞かれなかった読むだけのコマンド（実機で `node -v | <これ>` を `Bash(node:*)` だけで通した）。
- * ルールを書いても害は無いが、書く範囲は聞かれるものだけにする。ここに無いものは書く側に倒れる（`awk` は聞かれた）
+ * ルールを書いても害は無いが、書く範囲は聞かれるものだけにする。ここに無いものは書く側に倒れる（`awk` は聞かれた）。
+ * **ほかに書くルールがあるときだけ**飛ばす（引数しだいで聞かれるので、これしか無いコマンドには書く）
  */
 const UNASKED = new Set(['head', 'tail', 'grep', 'wc', 'sort', 'uniq', 'cat', 'cut', 'tr', 'echo', 'pwd', 'ls', 'true', 'sleep', 'date', 'which', 'jq'])
 
@@ -32,9 +33,9 @@ const QUOTED_HEREDOC = /"\$\(cat <<-?(['"])(\w+)\1\n[\s\S]*?\n[ \t]*\2\n?[ \t]*\
 
 /** 部品に分ける。語は引用符を外した文字。切れない・通らない形（展開・サブシェル・ファイルへのリダイレクト・`&`）は null */
 function splitParts(command: string): string[][] | null {
-  const text = command
-    .replace(/\\\r?\n/g, ' ')
-    .replace(QUOTED_HEREDOC, '""')
+  // 行の継続（`\` + 改行）は下で読み飛ばす。先に空白へ置き換えると、`\` で終わるコメント行の次の行まで捨ててしまう
+  // （bash はコメントの中の `\` を継続にしない。#710 のレビュー）
+  const text = command.replace(/\r\n/g, '\n').replace(QUOTED_HEREDOC, '""')
   const parts: string[][] = []
   let words: string[] = []
   let word: string | null = null
@@ -82,6 +83,10 @@ function splitParts(command: string): string[][] | null {
     }
     if (c === '\\') {
       if (i + 1 >= text.length) return null
+      if (text[i + 1] === '\n') {
+        i++
+        continue
+      }
       word = (word ?? '') + text[++i]!
       continue
     }
@@ -135,7 +140,7 @@ const within = (dir: string, root: string) => dir === root || dir.startsWith(roo
 /**
  * つないだコマンドの、部品ごとの接頭辞（`pnpm test` / `FOO=1 touch`）。重複は 1 つにまとめ、出てきた順。
  * **null は「このコマンドには [常に許可] を出さない」**: 1 つでもルールを作れない部品がある・全部の部品が通る見込みが無い。
- * 空の配列は「書くルールが無い」（`cd` と読むだけのコマンドしか無い）。
+ * 空の配列は「書くルールが無い」（`cd` しか無い）。
  *
  * - `cd` にはルールを作らない。プロジェクトの中への `cd` はルール無しで通り、外への `cd` は `Bash(cd:*)` があっても聞かれた
  *   （効くことが一度も無い）。行き先が `cwd` の外・`cwd` が分からないときは null
@@ -146,6 +151,8 @@ export function bashRulePrefixes(command: string, cwd: string): string[] | null 
   const parts = splitParts(command)
   if (!parts || parts.length === 0) return null
   const prefixes: string[] = []
+  // 読むだけのコマンドの接頭辞。ほかに書くルールが無いときだけ使う（下）
+  const unasked: string[] = []
   const names: string[] = []
   let dir = cwd ? normalize(cwd) : ''
   let cd = false
@@ -168,7 +175,10 @@ export function bashRulePrefixes(command: string, cwd: string): string[] | null 
       cd = true
       continue
     }
-    if (env.length === 0 && UNASKED.has(first)) continue
+    if (env.length === 0 && UNASKED.has(first)) {
+      if (!unasked.includes(first)) unasked.push(first)
+      continue
+    }
     const second = words[i + 1]
     // 2 語目がフラグ（-x / --long）や記号なら 1 語で止める
     const head = SUBCOMMAND_CLIS.has(first) && second && /^[\w.][\w.-]*$/.test(second) ? `${first} ${second}` : first
@@ -176,5 +186,7 @@ export function bashRulePrefixes(command: string, cwd: string): string[] | null 
     if (!prefixes.includes(prefix)) prefixes.push(prefix)
   }
   if (cd && names.some((n) => NOT_AFTER_CD.has(n))) return null
-  return prefixes
+  // 読むだけのコマンドしか無いのに許可が来たなら、聞かれたのはその部品（`cat /etc/hosts` のように引数しだいで聞かれる）。
+  // 書かないと、前は出ていた [常に許可] が消える（#710 のレビュー）
+  return prefixes.length > 0 ? prefixes : unasked
 }

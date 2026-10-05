@@ -31,7 +31,7 @@ import { AgentReplyFooter } from './AgentReplyFooter'
 import { TodoReplyBox } from './TodoReplyBox'
 import { reportDigestUsage } from './digestUsage'
 import { followupHead } from '../../shared/agentMessages.ts'
-import { loadDraft, saveDraft } from './replyDrafts'
+import { EMPTY_DRAFT, loadDraft, saveDraft } from './replyDrafts'
 import { restoresText } from './replyRestore'
 import { BackgroundAttachBar } from './BackgroundAttachBar'
 import { shouldQueue } from './replyQueue.ts'
@@ -143,8 +143,11 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
   const confirmHere = confirm && (confirm.id === id || acrossHere.sentTo[confirm.id] !== undefined) ? confirm : null
   const fromConfirm = async (run: () => Promise<string>) => {
     const target = confirm?.id
-    // 相手への送り直しが受け付けられたら、その入力欄を閉じる（空にするのは `confirmedSentBy` を見た相手の `ReplyBox`）
-    if ((await run()) === 'sent' && target && target !== id) patchAcross(() => ({ open: null }))
+    if ((await run()) !== 'sent' || !target || target === id) return
+    // 相手への送り直しが受け付けられたら、その入力欄を閉じる。閉じると相手の `ReplyBox` は増えた数（`confirmedSentBy`）を
+    // 見ないまま外れるので、戻してあった打ちかけはここで消す（残すと、相手のセッション画面や要対応で同じ本文をもう一度送れる。#338）
+    saveDraft(target, EMPTY_DRAFT)
+    patchAcross(() => ({ open: null }))
   }
 
   const approvals = data?.approvals[id] ?? NO_APPROVALS

@@ -996,7 +996,15 @@
   .md-image { display: inline-flex; align-items: center; gap: 4px; padding: 0 6px; border-radius: 4px; background: var(--chip); color: var(--ink); font-size: 0.95em; vertical-align: baseline; overflow-wrap: anywhere; }
   .md-image svg { flex: none; width: 13px; height: 13px; color: var(--muted); }
   .md-img { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 2px; margin: 4px 0; vertical-align: top; max-width: 100%; white-space: normal; }
-  .md-img img { display: block; max-width: min(320px, 100%); max-height: 320px; border-radius: 8px; border: 1px solid var(--line); background: var(--chip); }
+  .md-img img { display: block; max-width: 100%; max-height: 320px; border-radius: 8px; border: 1px solid var(--line); background: var(--chip); }
+  /* 押せる場所は絵の大きさに頼らない（#702。高さ 8px の帯でも指で当たる）。絵はその中で縦の中央に置く。
+     幅の上限（320px）は絵ではなくこの枠に持たせる（絵の % は枠の幅を指すので、絵に持たせると枠だけ広がる） */
+  .md-img > a:first-child { display: inline-flex; align-items: center; min-width: 44px; min-height: 44px; max-width: min(320px, 100%); }
+  /* 横に細長い画像（帯。bandLayout()）は幅の上限を --cap まで外す（320px に縮めると線になる）。バブルの幅に収まらなくても
+     --floor より狭くはせず、はみ出すぶんは枠の中で横にスクロールする（携帯の幅でも線にしない） */
+  .md-img.band { display: flex; }
+  .md-img.band > a:first-child { width: min(100%, var(--cap)); max-width: 100%; overflow-x: auto; }
+  .md-img.band img { flex: none; width: max(100%, var(--floor)); max-width: none; max-height: none; height: auto; }
   .md-img-dl { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--accent); overflow-wrap: anywhere; }
   .body a.md-img-dl { text-decoration: none; }
   .md-img-dl svg { flex: none; width: 13px; height: 13px; }
@@ -1047,6 +1055,10 @@
   /* ピンチで拡大している間は横にも動かせるように（スライドで送るのはやめている。#510 のレビュー） */
   .lightbox-stage.zoomed { touch-action: auto; }
   .lightbox-stage img { max-width: 100%; max-height: calc(94vh - 48px); object-fit: contain; border-radius: 6px; background: #111; transition: transform 0.15s ease-out; }
+  /* 画面より小さい画像は、画面に収まる範囲で --up 倍まで拡大する（#702）。--nw / --nh は読み込んだ画像の元の大きさ。
+     幅を「枠の幅・元の幅 × 上限・高さの上限から逆算した幅」の一番小さいものにするので、縦横比は崩れない */
+  .lightbox-stage img.sized { width: min(100%, calc(var(--nw) * var(--up) * 1px), calc((94vh - 48px) * var(--nw) / var(--nh))); height: auto; }
+  .lightbox-broken { padding: 24px; color: #bbb; font-size: 13px; }
   .lightbox-nav { position: absolute; top: 50%; transform: translateY(-50%); width: 44px; height: 64px; border: 0; border-radius: 8px; background: rgba(0, 0, 0, 0.45); color: #fff; font-size: 32px; cursor: pointer; }
   .lightbox-nav.prev { left: 4px; }
   .lightbox-nav.next { right: 4px; }

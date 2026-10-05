@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import type { LightboxImage } from './lightbox'
-import { stepIndex, swipeAllowed, swipeStep, TAP_MAX_PX } from './lightbox'
+import { LIGHTBOX_MAX_UPSCALE, stepIndex, swipeAllowed, swipeStep, TAP_MAX_PX } from './lightbox'
 import { IconButton } from './IconButton'
 import { CloseMark } from './CloseMark'
 import { DownloadMark } from './DownloadMark'
@@ -16,7 +16,8 @@ interface Props {
  * ページの中で画像を大きく 1 枚出す（#507）。Esc・背景・✕で閉じ、同じ発言に複数あれば ← → で送る。
  * キーは capture で拾って止める（App の Esc =「フィードへ」と ← →（一覧との行き来）まで動かないように。`ProjectPicker` と同じ）。
  * 閉じたら開いたときにフォーカスがあった所へ戻す。**横にスライド（スワイプ・ドラッグ）しても送れる**（#509。Pointer Events で
- * タッチもマウスも同じ扱い。動かしている間は画像が付いてくる。画像の外を押しただけなら閉じ、スライドしただけでは閉じない）
+ * タッチもマウスも同じ扱い。動かしている間は画像が付いてくる。画像の外を押しただけなら閉じ、スライドしただけでは閉じない）。
+ * 画面より小さい画像は、画面に収まる範囲で `LIGHTBOX_MAX_UPSCALE` 倍まで拡大する（#702。読み込んで大きさが分かってから）
  */
 export function ImageLightbox({ images, index, onIndex, onClose }: Props) {
   const closeRef = useRef<HTMLButtonElement>(null)
@@ -37,6 +38,11 @@ export function ImageLightbox({ images, index, onIndex, onClose }: Props) {
   }, [])
   const image = images[index]
   const count = images.length
+  // 読み込んだ画像の元の大きさ（#702）。どの画像のものかを一緒に持ち、送ったあと前の画像の大きさを使わない
+  const [natural, setNatural] = useState<{ url: string; width: number; height: number } | null>(null)
+  const size = natural && image && natural.url === image.url && natural.width > 0 && natural.height > 0 ? natural : null
+  // 読めなかった画像（#702 のレビュー）。枠の画像は lazy なので、まだ読んでいない壊れた画像が並びに残ることがある
+  const [brokenUrl, setBrokenUrl] = useState<string | null>(null)
 
   useEffect(() => {
     const back = document.activeElement instanceof HTMLElement ? document.activeElement : null
@@ -114,7 +120,23 @@ export function ImageLightbox({ images, index, onIndex, onClose }: Props) {
           {count > 1 && (
             <button type="button" className="lightbox-nav prev" aria-label="前の画像" disabled={index === 0} onClick={() => onIndex(stepIndex(index, count, -1))}>‹</button>
           )}
-          <img src={image.url} alt={image.name} draggable={false} style={dragX ? { transform: `translateX(${dragX}px)`, transition: 'none' } : undefined} />
+          {brokenUrl === image.url ? (
+            <span className="lightbox-broken">表示できません（ファイルが無い・作業ディレクトリの外・画像でない）</span>
+          ) : (
+          <img
+            key={image.url}
+            className={size ? 'sized' : undefined}
+            src={image.url}
+            alt={image.name}
+            draggable={false}
+            onLoad={(e) => setNatural({ url: image.url, width: e.currentTarget.naturalWidth, height: e.currentTarget.naturalHeight })}
+            onError={() => setBrokenUrl(image.url)}
+            style={{
+              ...(size ? ({ '--nw': size.width, '--nh': size.height, '--up': LIGHTBOX_MAX_UPSCALE } as CSSProperties) : {}),
+              ...(dragX ? { transform: `translateX(${dragX}px)`, transition: 'none' } : {}),
+            }}
+          />
+          )}
           {count > 1 && (
             <button type="button" className="lightbox-nav next" aria-label="次の画像" disabled={index === count - 1} onClick={() => onIndex(stepIndex(index, count, 1))}>›</button>
           )}

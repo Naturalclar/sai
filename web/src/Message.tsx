@@ -15,6 +15,7 @@ import { RecoveredTag } from './RecoveredTag'
 import { TurnSteps } from './TurnSteps'
 import { DigestFeedback } from './DigestFeedback'
 import { SourceImages } from './SourceImages'
+import { BodyImagesProvider } from './BodyImagesProvider'
 import { ImageSourceContext } from './imageContext'
 import { FileSessionContext } from './fileContext'
 import { QuestionPreview } from './QuestionPreview'
@@ -131,6 +132,7 @@ export function Message({ ts, text: raw, markdown, waiting, questions, resolved,
   if (summary && text) {
     // 一言 + 「詳細」。詳細を開いたら元の本文を今までどおり（Markdown、長ければ折りたたみ）
     return (
+      <BodyImagesProvider text={text}>
       <div className={`msg${mark}`} {...anchor}>
         <span className="time">{hm(ts)}</span>
         {menu && <MessageMenu {...menu} />}
@@ -174,9 +176,11 @@ export function Message({ ts, text: raw, markdown, waiting, questions, resolved,
         )}
         {diff && <div className="msg-diff"><DiffButton {...diff} /></div>}
       </div>
+      </BodyImagesProvider>
     )
   }
   return (
+    <BodyImagesProvider text={text}>
     <div className={`msg${mark}`} {...anchor}>
       <span className="time">{hm(ts)}</span>
       {menu && <MessageMenu {...menu} />}
@@ -201,5 +205,6 @@ export function Message({ ts, text: raw, markdown, waiting, questions, resolved,
       )}
       {diff && <div className="msg-diff"><DiffButton {...diff} /></div>}
     </div>
+    </BodyImagesProvider>
   )
 }

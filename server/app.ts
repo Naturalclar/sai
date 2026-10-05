@@ -16,6 +16,7 @@ import { handoffFirstText, handoffReady } from '../shared/handoff.ts'
 import { selfHost } from './host.ts'
 import type { SessionTurnResponse, TurnStepsResponse,
   AgentActivity,
+  AgentFollowupLine,
   AgentActivityMessage,
   AgentStopResponse,
   AgentSendRequest,
@@ -161,6 +162,8 @@ import {
   agentEntry,
   agentOverlap,
   agentReplyRows,
+  followupHead,
+  followupReplyRows,
   HANDED_KEEP_DAYS,
   splitHandedReplies,
   STEERED_NOTE,
@@ -1568,9 +1571,18 @@ export function createApp(
     const wantQueue = (body as ReplyRequest).queue === true
     const wantSteer = (body as ReplyRequest).steer === true
     const wantCompact = (body as ReplyRequest).compact === true
+    // 別のセッションの画面の、返答のバブルの下から送った（#700）。形だけ見て、覚えるかは受け付けたあとに決める
+    const from = (body as ReplyRequest).sent_from
+    if (from !== undefined && (!from || typeof from !== 'object' || typeof from.id !== 'string' || typeof from.anchor !== 'string' || from.id.length > 400 || from.anchor.length > 64)) {
+      return error(res, 400, 'sent_from の形が違います')
+    }
+    const sentAt = new Date().toISOString()
     const out = await launch(id, text, attachments, { days, replaceTyped, forceProcess, url: selfUrl(req), queue: wantQueue, steer: wantSteer, ...(wantCompact ? { compact: true } : {}) })
     // 人が自分で送ったら、そのセッションのループは一時停止する（#634。割り込みを優先。再開は人が押す）
     if (out.status === 202) await pauseLoop(id, '人がこのセッションに送ったので一時停止しました')
+    // 送り元の画面に「送った」の 1 行と、相手のそのあとの返答を出すために覚える（#700）。送り元がこの相手に
+    // メッセージを送ったことがあるときだけ（`follow()` が見る）。送り方は変えず、送り元の会話にも足さない
+    if (out.status === 202 && from) agents.follow(from.id, id, typedText || text, from.anchor, sentAt)
     return json(res, out.body, out.status)
   }
 
@@ -4356,6 +4368,26 @@ export function createApp(
             return icon ? iconUrl(to, icon.version) : undefined
           },
         ).filter((r) => Date.parse(r.ts) >= shownFrom)
+        // 人がこの画面の返答のバブルの下から相手へ送った返信（#700）と、相手がそれに返した行。返した行は同じ並びに混ぜる
+        const nameOfTarget = (to: string) => {
+          const target = sessions.find((s) => s.id === to)
+          return target ? replierName(target) : to
+        }
+        const followed = agents.followupsBy(id)
+        const followedUp = followupReplyRows(followed, every, nameOfTarget, (to) => {
+          const icon = replyIcons.get(iconKey(to))
+          return icon ? iconUrl(to, icon.version) : undefined
+        })
+        const followups: AgentFollowupLine[] = followed
+          .filter((f) => Date.parse(f.at) >= shownFrom)
+          .map((f) => {
+            const replyTs = followedUp.answered.get(f.id)
+            return { id: f.id, to: f.to, to_name: nameOfTarget(f.to), text: followupHead(f.text), sent_at: f.at, anchor: f.anchor, ...(replyTs ? { reply_ts: replyTs } : {}) }
+          })
+        const allReplies = [...replies, ...followedUp.rows.filter((r) => Date.parse(r.ts) >= shownFrom)].sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts))
+        // その場で返信する入力欄のために、返答の相手のセッションも載せる（#700。案 next_ask も相手のもの）
+        const replyTargetIds = new Set(allReplies.map((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? ''))))
+        const replyTargets = replyTargetIds.size > 0 ? withLastSummary(sessions.filter((s) => replyTargetIds.has(s.id))) : []
         // いまのコンテキスト量（#441）。(mtime, size) で覚えているので読み直しは軽い。rev には丸めた値だけ混ぜる
         const progressNow = isRemoteHost(session.host, selfHost()) ? null : await progress.read(session)
         const context = progressNow?.context_tokens ?? 0
@@ -4364,7 +4396,7 @@ export function createApp(
         const answeredSince = answeredAfter(session.last_turn_ts ?? '', progressNow)
         const answeredHere = answered.of(id, answeredSince)
         const body: SessionDetailResponse = {
-          rev: revWith(`${sessionsRev}~${me.rev}~${settled}~${terminalKey(sessions)}~${question?.asked_at ?? ''}~${bg ? `${bg.attach}:${bg.status}` : ''}~${contextRevKey(context)}~${replies.map((r) => r.agent_reply?.message_id).join(',')}~${answeredHere.map((a) => `${a.approval_id}:${a.behavior}`).join(',')}`, replying, approvalMapKey(pendingApprovals), false, `${digest.revKey()}|${usage.rev()}`, `${queue.key()}|${agents.key()}|${loops.key()}`),
+          rev: revWith(`${sessionsRev}~${me.rev}~${settled}~${terminalKey(sessions)}~${question?.asked_at ?? ''}~${bg ? `${bg.attach}:${bg.status}` : ''}~${contextRevKey(context)}~${allReplies.map((r) => r.agent_reply?.message_id).join(',')}~${answeredHere.map((a) => `${a.approval_id}:${a.behavior}`).join(',')}`, replying, approvalMapKey(pendingApprovals), false, `${digest.revKey()}|${usage.rev()}`, `${queue.key()}|${agents.key()}|${loops.key()}`),
           session: withLastSummary([session])[0]!,
           rows,
           older,
@@ -4380,7 +4412,9 @@ export function createApp(
           ...(question ? { question } : {}),
           ...(bg ? { background: bg } : {}),
           ...(context > 0 ? { context_tokens: context } : {}),
-          ...(replies.length > 0 ? { agent_replies: replies } : {}),
+          ...(allReplies.length > 0 ? { agent_replies: allReplies } : {}),
+          ...(followups.length > 0 ? { agent_followups: followups } : {}),
+          ...(replyTargets.length > 0 ? { agent_reply_sessions: replyTargets } : {}),
         }
         return jsonByRev(req, res, body)
       }

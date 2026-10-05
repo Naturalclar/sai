@@ -912,6 +912,20 @@
   /* 送ったメッセージへの返答（#588）。相手のセッションの行なので、名前の横に印とリンクを出す */
   .gh a.reply-of { font-size: 11px; color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); border-radius: 4px; padding: 1px 6px; text-decoration: none; white-space: nowrap; }
   .gh a.reply-of:hover { text-decoration: underline; }
+  /* 返答のバブルの下から、その場で相手へ返信する口（#700）。送ったことはバブルにせず小さい 1 行で出す */
+  .reply-footer { margin-top: 4px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .followup-line { display: flex; align-items: baseline; gap: 6px; font-size: 12px; color: var(--muted); min-width: 0; }
+  .followup-line .followup-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .followup-line .time { flex: none; }
+  .followup-line .tag.busy { flex: none; font-size: 11px; color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); border-radius: 8px; padding: 0 6px; }
+  .reply-footer-acts { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+  .reply-here { font: inherit; font-size: 12px; padding: 3px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); cursor: pointer; }
+  .reply-here:hover { border-color: var(--accent); }
+  .reply-footer-to { font-size: 12px; color: var(--muted); align-self: center; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .reply-here:disabled { opacity: 0.5; cursor: default; }
+  /* 案の 1 押し。長い案は 1 行に収めて切る（全文は相手の入力欄の案で読める） */
+  .reply-here.quick { color: var(--accent); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .reply-footer .todo-reply { margin-top: 2px; }
   .gh .ch { font-family: var(--mono); font-size: 12px; color: var(--accent); }
   /* ブランチ名は識別子なので code のチップにする（#356。前は .msg .branch に書いていて、見出し（.gh）の中には当たっていなかった）。
      見た目は返信先のチップ（.reply .target code）と揃え、長い名前は幅で切る（狭い画面でチップの中で 2 行に割れて時刻が落ちる。全文は title に持たせる） */

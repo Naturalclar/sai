@@ -17,6 +17,24 @@ export const AGENT_RECENT = 5
 export const AGENT_MESSAGES_FILE = 'agent-messages.json'
 /** 残す送った記録の数（古いものから捨てる。`sai_wait` が探すのは最近のものだけで、画面は直近 `AGENT_RECENT` 件） */
 export const AGENT_MESSAGES_KEEP = 500
+/** 覚えておく「返答のバブルの下から人が送った返信」（#700）の数。古いものから捨てる */
+export const AGENT_FOLLOWUPS_KEEP = 200
+/** 覚える本文の上限（返答を探すのに頭を比べるだけ。画面には頭しか出さない） */
+const FOLLOWUP_TEXT_CHARS = 500
+
+/**
+ * 人が送り元（`from`）の画面の、相手（`to`）の返答のバブルの下から送った返信（#700）。メッセージ（`sai_send`）ではない:
+ * 送り元のターンは起こさず、返答を送り元の会話にも渡さない。送り元の画面に出すためだけに覚える
+ */
+export interface AgentFollowup {
+  id: string
+  from: string
+  to: string
+  text: string
+  at: string
+  /** どのバブルの下か（その返答の行の `ts`）。表示にしか使わない */
+  anchor: string
+}
 
 /** 送った記録 1 件 */
 export interface AgentMessage {
@@ -79,6 +97,8 @@ export class AgentMessages {
   private origins = new Map<string, string>()
   /** 人が画面で「送信を止める」を押したセッション（送り元）。「再開する」を押すまで送らせない（#311） */
   private stopped = new Set<string>()
+  /** 人が返答のバブルの下から送った返信（#700。古い順） */
+  private followups: AgentFollowup[] = []
   /** 送った・止めた・再開したで進める（詳細の rev に混ぜる） */
   private version = 0
   private readonly statePath: string
@@ -99,7 +119,7 @@ export class AgentMessages {
       return
     }
     if (!raw || typeof raw !== 'object') return
-    const r = raw as Partial<Record<'messages' | 'sends' | 'origins' | 'stopped', unknown>>
+    const r = raw as Partial<Record<'messages' | 'sends' | 'origins' | 'stopped' | 'followups', unknown>>
     if (Array.isArray(r.messages)) {
       for (const m of r.messages) if (isMessage(m)) this.messages.set(m.message_id, m)
     }
@@ -113,6 +133,7 @@ export class AgentMessages {
       for (const [entity, id] of Object.entries(r.origins as Record<string, unknown>)) if (typeof id === 'string') this.origins.set(entity, id)
     }
     if (Array.isArray(r.stopped)) for (const from of r.stopped) if (typeof from === 'string') this.stopped.add(from)
+    if (Array.isArray(r.followups)) for (const f of r.followups) if (isFollowup(f)) this.followups.push(f)
   }
 
   /** いまの状態を書く。tmp → rename（`replying.json` と同じ）。書けなくても送る口は止めない */
@@ -123,7 +144,7 @@ export class AgentMessages {
     try {
       mkdirSync(dirname(this.statePath), { recursive: true })
       const tmp = `${this.statePath}.${process.pid}.tmp`
-      const body = { messages: [...this.messages.values()], sends: Object.fromEntries(this.sends), origins: Object.fromEntries(this.origins), stopped: [...this.stopped] }
+      const body = { messages: [...this.messages.values()], sends: Object.fromEntries(this.sends), origins: Object.fromEntries(this.origins), stopped: [...this.stopped], followups: this.followups }
       writeFileSync(tmp, JSON.stringify(body, null, 2) + '\n', { mode: 0o600 })
       renameSync(tmp, this.statePath)
     } catch {
@@ -197,6 +218,24 @@ export class AgentMessages {
   /** そのセッションが送った記録（新しい順、最大 n 件）。送った順に覚えているので、同じ時刻でも順が崩れない */
   sentBy(from: string, n: number = AGENT_RECENT): AgentMessage[] {
     return [...this.messages.values()].filter((m) => m.from === from).reverse().slice(0, n)
+  }
+
+  /**
+   * 人が `from` の画面の返答のバブルの下から `to` へ返信した（#700）。**`from` が `to` にメッセージを送ったことがあるときだけ**覚える
+   * （返答のバブルが出うる組だけ。それ以外は画面に出す場所が無い）。覚えたら true
+   */
+  follow(from: string, to: string, text: string, anchor: string, at: string = new Date().toISOString()): boolean {
+    if (from === to || ![...this.messages.values()].some((m) => m.from === from && m.to === to)) return false
+    this.followups.push({ id: this.newId(), from, to, text: text.slice(0, FOLLOWUP_TEXT_CHARS), at, anchor })
+    if (this.followups.length > AGENT_FOLLOWUPS_KEEP) this.followups.splice(0, this.followups.length - AGENT_FOLLOWUPS_KEEP)
+    this.version++
+    this.persist()
+    return true
+  }
+
+  /** `from` の画面から送った返信（古い順） */
+  followupsBy(from: string): AgentFollowup[] {
+    return this.followups.filter((f) => f.from === from)
   }
 
   /** 画面に出すか（一度でも送ったか、止めている） */
@@ -279,6 +318,12 @@ export class AgentMessages {
   origin(entity: string): string | undefined {
     return this.origins.get(entity)
   }
+}
+
+function isFollowup(f: unknown): f is AgentFollowup {
+  if (!f || typeof f !== 'object') return false
+  const v = f as Record<string, unknown>
+  return ['id', 'from', 'to', 'text', 'at', 'anchor'].every((k) => typeof v[k] === 'string')
 }
 
 function isMessage(m: unknown): m is AgentMessage {

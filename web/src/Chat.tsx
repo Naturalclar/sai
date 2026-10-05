@@ -60,6 +60,11 @@ interface Props {
   leader?: ReactNode
   /** 末尾に足す仮の要素（送信中の返信など）。行と同じく最下部追従の対象 */
   trailer?: ReactNode
+  /**
+   * 返答のバブル（#588）の下に足すもの（#700。その場で相手へ返信する口）。相手のエンティティ ID・その塊の行の `ts`・相手の呼び名を渡す。
+   * セッション画面だけが渡す（フィードには出さない）
+   */
+  renderReplyFooter?: (target: string, tss: string[], toName: string) => ReactNode
   /** エージェントのバブルに思考の折りたたみを出す（セッション画面だけ。フィードは出さない） */
   showThinking?: boolean
   /** 思考を最初から開いておく（ヘッダの「思考を全部開く」） */
@@ -150,7 +155,7 @@ function flash(el: HTMLElement) {
   window.setTimeout(() => el.classList.remove('found'), JUMP_FLASH_MS)
 }
 
-export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_SESSIONS, trailer, showThinking = false, thinkingOpen = false, longOpen = false, profile, linear = '', focusTs = '', focusSide: askedSide, diffs, jumpTo = null, question, answerable = NO_IDS, images, imagesBySession, unreadAfter, onSeenBottom, onMarkUnread, prs, onQuote }: Props) {
+export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_SESSIONS, trailer, renderReplyFooter, showThinking = false, thinkingOpen = false, longOpen = false, profile, linear = '', focusTs = '', focusSide: askedSide, diffs, jumpTo = null, question, answerable = NO_IDS, images, imagesBySession, unreadAfter, onSeenBottom, onMarkUnread, prs, onQuote }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   // 返答の一部を選んだら「引用して返信」を出す（#604）。出すかの判定は quoteReply.ts の quotable()
   const quote = useQuoteSelection(ref, Boolean(onQuote))
@@ -325,12 +330,12 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
                     <div className="gh">
                       <span className="name">{who.name}</span>
                       {reply && (
-                        <a className="reply-of" href={`#/s/${encodeURIComponent(id)}`} title={`送ったメッセージ（id: ${reply.message_id}）への返答。押すと相手のセッションを開く`}>
-                          送ったメッセージへの返答
+                        <a className="reply-of" href={`#/s/${encodeURIComponent(id)}`} title={reply.followup ? 'この画面から送った返信への返答。押すと相手のセッションを開く' : `送ったメッセージ（id: ${reply.message_id}）への返答。押すと相手のセッションを開く`}>
+                          {reply.followup ? '送った返信への返答' : '送ったメッセージへの返答'}
                         </a>
                       )}
                       {/* 送り元のエージェントがこの返答を知っているか（#594）。渡すのは次に SAI から回すターンの頭か、sai_wait */}
-                      {reply && (
+                      {reply && !reply.followup && (
                         <span
                           className={`handed${reply.handed_at ? ' done' : ''}`}
                           title={reply.handed_at ? `${hm(reply.handed_at)} にこのセッションの会話に渡した` : 'このセッションのエージェントはまだ読んでいません。次に SAI から送るターンの頭に添えます'}
@@ -421,6 +426,7 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
                       </ImageSourceContext>
                       )
                     })}
+                    {reply && renderReplyFooter?.(id, g.items.map((u) => u.row.ts), reply.to_name)}
                   </div>
                 </div>
               )

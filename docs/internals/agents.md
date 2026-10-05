@@ -43,6 +43,17 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 画面は `SessionView` が `web/src/agentReplies.ts` の `withAgentReplies()` で時刻の順に混ぜて `Chat` に渡す。`toUtterances()` は `agent_reply` の行を相手のバブル 1 つにし（届いた文を自分のバブルにしない）、見出しに相手の呼び名と「送ったメッセージへの返答」（相手のセッションへのリンク）を出す。**このセッションの未読には数えず**（`firstUnreadKey()`）、「ここから未読にする」も出さない。
 - 送り元の記録（JSONL）には書かない（SAI は行を起こさない）。フィードと要対応の未読の段には出さない（決まっていない）。
 
+### 返答のバブルから、その場で相手へ返信する（#700）
+
+- 送るのは**人**で、口は画面の返信（`POST /api/sessions/<相手>/reply`）のまま。`ReplyRequest.sent_from`（`{ id: 送り元, anchor: どのバブルの下か = その行の ts }`）を添えるだけで、送り方（端末・別プロセス・預かり）は変わらない。`sai_send` は通さないので、送り元のターンは起こさず、返答を送り元の会話にも渡さない（`handed_at` は付かない）。
+- サーバは受け付けた（`202`）あとに `AgentMessages.follow()` で覚える（`server/reply/agentMessages.ts`。`agent-messages.json` の `followups`。`AGENT_FOLLOWUPS_KEEP` = 200 件、本文は 500 字まで）。**覚えるのは、送り元がその相手にメッセージを送ったことがあるときだけ**（返答のバブルが出うる組）。そうでない `sent_from` は黙って捨て、返信そのものは届く。`anchor` は表示にしか使わない。
+- 送り元の詳細の応答に 3 つ載せる: `agent_followups`（バブルの下の 1 行。`AgentFollowupLine`。本文は `followupHead()` で 1 行目の頭 40 字）、`agent_replies` に混ぜる相手の返答（`agent_reply.followup: true`）、`agent_reply_sessions`（返答の相手の `SessionSummary`。セッション画面は一覧を持たないので、入力欄・`replyBlockedReason()`・相手の `next_ask`・行数（`turns`）はここから取る。一覧の窓の外の相手は載らず、そのときは返信の口を出さない）。
+- 相手の返答の引き当ては `shared/agentMessages.ts` の `followupReplyRows()`。見出しの id が無いので、**相手のセッションの、送ったあとのターン完了の行のうち、入力（`deliveryMatcher().headOf()`）の頭 `FOLLOWUP_MATCH_CHARS`（200 字）が送った文と同じ最初の 1 つ**を当てる（SAI が頭に足した返答の塊 #594 は `splitHandedReplies()` で外してから比べる）。預かりに並ぶと間に別のターンが終わるので「次のターン完了」では当てない。1 つの行は 1 つの返信にだけ（同じ文を 2 回送ったら古い順に 1 つずつ）。**入力が記録に無いターン（入力の行を書かないエージェント・要約で入力が置き換わった行・スキルの展開で入力が変わる場合）には当たらず、そのときは 1 行だけが残る**（返答は相手のセッションで読む）。
+- 画面は `web/src/replyAcross.ts` の `replyFooter()`（純粋関数）が、バブルごとに「出す行・返信できるか・1 押しの案」を決め、`AgentReplyFooter` が描く。`Chat` は `renderReplyFooter` を返答のバブルの下に呼ぶだけ（フィードには渡さない）。入力欄は要対応と同じ `TodoReplyBox`（中身は `ReplyBox`。`key` と打ちかけは相手の ID）で、送るのは `SessionView` の 1 つの `useReply`（相手の行数は `agent_reply_sessions` の `turns`）。確認（端末の打ちかけ）から送り直すときも `sent_from` を付け直す（`ReplaceConfirm.sentFrom`）。送り直して空にする入力欄は返信先ごとに数える（`useReply` の `confirmedSentBy`。全体の数で見ると、相手への送り直しで送り元自身の打ちかけが消える）。相手への送り直しが受け付けられたら入力欄を閉じ、戻してあった相手の打ちかけは `SessionView` が直接消す（閉じた `ReplyBox` は増えた数を見ないまま外れるため）。
+- 1 押しの案は**相手の** `next_ask` で、相手の最新のターン（`last_turn_ts`）のバブルにだけ、相手が処理中でも預かりが残ってもいないときだけ出す。押したら `reportDigestUsage(…, 'next_ask_accepted')` を残す。
+- 確認・失敗を拾うのは、この画面から送った相手のぶんだけ（`Across.sentTo`。ほかの画面から送った返信の失敗は拾わない）。失敗の案内は最後に送ったバブルの下にだけ出す。送った直後は、サーバの行が届くまで手元の 1 行（`JustSent`）で繋ぐ。届いたかは**そのバブルの下の行の数**（`known` より増えたか）で見て、時計では比べない（`withJustSent()`）。
+- `App` の入力欄へのフォーカス（`applyFocus()`）は `.reply-footer` の中の入力欄を飛ばす（そのセッション自身の入力欄に当てる）。
+
 ### 返答を送り元の会話に戻す（#594）
 
 - **送り元の次のターンの頭に、まだ渡していない返答を足す**（既定。ターンは増えない）。`launch()` が `startTurn()` の直前に `pendingRepliesOf(id)` を呼び、`shared/agentMessages.ts` の `withHandedReplies()` で本文の頭に塊を付ける。塊は `HANDED_MARK`（`【SAI 返答】`）で始まり `HANDED_END` で終わる。**`【SAI】` では始めない**（`deliveredId()` が届けた見出しと取り違えないため。id も `message_id: …` と書き、`（id: …）` の形にしない）。

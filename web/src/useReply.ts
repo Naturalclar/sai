@@ -68,6 +68,8 @@ export interface ReplaceConfirm {
   reason: string
   /** 端末を使わない経路がある（Claude は resume、active Codex は queue） */
   canProcess: boolean
+  /** 返答のバブルの下から送った（#700）。確認から送り直すときも同じ印を付ける */
+  sentFrom?: { id: string; anchor: string }
 }
 
 /** send の結果。confirm のとき呼び出し側は本文を入力欄に戻す */
@@ -105,6 +107,8 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
   const [steered, setSteered] = useState<{ id: string; text: string } | null>(null)
   // 確認から送り直して受け付けられた回数（#338）。ReplyBox がこれを見て入力欄を空にする
   const [confirmedSent, setConfirmedSent] = useState(0)
+  // 同じ数を返信先ごとに（#700）。1 つの画面に入力欄が 2 つ以上あるとき、送り直した先の入力欄だけを空にする
+  const [confirmedSentBy, setConfirmedSentBy] = useState<Readonly<Record<string, number>>>({})
   // 受け付けた応答に付いてきた一言（#678。開いている Codex に画像を添えた）。次に送るまで出す
   const [noted, setNoted] = useState<{ id: string; message: string } | null>(null)
   // サーバが「処理中」と言った id と、最初にそう見えたときの行数・本文。消えたときに行が増えていなければ失敗
@@ -156,7 +160,8 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
     ...sent.filter((s) => !replying[s.id]).map((s) => ({ id: s.id, text: s.text, since: new Date(s.sentAt).toISOString() })),
   ]
 
-  const send = async (id: string, text: string, options: { replaceTyped?: boolean; via?: 'process'; attachments?: string[]; queue?: boolean; steer?: boolean; compact?: boolean } = {}): Promise<SendOutcome> => {
+  const send = async (id: string, text: string, options: { replaceTyped?: boolean; via?: 'process'; attachments?: string[]; queue?: boolean; steer?: boolean; compact?: boolean; sentFrom?: { id: string; anchor: string } } = {}): Promise<SendOutcome> => {
+    const from = options.sentFrom ? { sentFrom: options.sentFrom } : {}
     const entry: Sent = { id, text, rowsAtSend: countRows(id), sentAt: Date.now(), acceptedAt: null }
     setFailed(null)
     setConfirm(null)
@@ -187,7 +192,7 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
       if (err instanceof ApiError) {
         // 打ちかけを消すか、端末を使わない経路（Claude の resume / Codex の queue）を選べる。
         if (err.code === 'terminal_typed' && !options.replaceTyped) {
-          setConfirm({ id, kind: 'typed', text, typed: err.typed ?? '', reason: err.message, canProcess: err.canProcess })
+          setConfirm({ id, kind: 'typed', text, typed: err.typed ?? '', reason: err.message, canProcess: err.canProcess, ...from })
           return 'confirm'
         }
         if (err.canProcess) {
@@ -195,7 +200,7 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
             err.code === 'terminal_typed'
               ? `端末の打ちかけを消せなかった（まだ残っている: ${(err.typed ?? '').split('\n')[0]}）`
               : err.message
-          setConfirm({ id, kind: 'process', text, typed: err.typed ?? '', reason, canProcess: true })
+          setConfirm({ id, kind: 'process', text, typed: err.typed ?? '', reason, canProcess: true, ...from })
           return 'confirm'
         }
       }
@@ -210,9 +215,12 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
    */
   const sendFromConfirm = async (options: { replaceTyped?: boolean; via?: 'process' }): Promise<SendOutcome> => {
     if (!confirm) return 'failed'
-    const { id, text } = confirm
-    const outcome = await send(id, text, options)
-    if (outcome === 'sent') setConfirmedSent((n) => n + 1)
+    const { id, text, sentFrom } = confirm
+    const outcome = await send(id, text, { ...options, ...(sentFrom ? { sentFrom } : {}) })
+    if (outcome === 'sent') {
+      setConfirmedSent((n) => n + 1)
+      setConfirmedSentBy((m) => ({ ...m, [id]: (m[id] ?? 0) + 1 }))
+    }
     return outcome
   }
   /** 確認に「消して送る」と答えた。打ちかけを消して同じ本文を送り直す */
@@ -221,5 +229,5 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
   const confirmProcess = (): Promise<SendOutcome> => sendFromConfirm({ via: 'process' })
   const cancelConfirm = () => setConfirm(null)
 
-  return { pending, failed, steered, noted, send, confirm, confirmedSent, confirmReplace, confirmProcess, cancelConfirm }
+  return { pending, failed, steered, noted, send, confirm, confirmedSent, confirmedSentBy, confirmReplace, confirmProcess, cancelConfirm }
 }

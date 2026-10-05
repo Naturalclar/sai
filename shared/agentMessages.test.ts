@@ -92,10 +92,10 @@ test('deliveredId / agentReplyRows: 送ったメッセージへの返答（相�
     { message_id: 'c3d4', to: 'B1@r', since: '2026-09-30T16:25:00Z' },
     { message_id: 'ffff', to: 'B1@r', since: '2026-09-30T16:26:00Z' },
   ]
-  const out = agentReplyRows(sent, rows, (id) => (id === 'B1@r' ? '明.' : id))
+  const out = agentReplyRows(sent, rows, (id) => (id === 'B1@r' ? 'セッション B' : id))
   assert.deepEqual(out.map((r) => [r.text, r.agent_reply?.message_id, r.agent_reply?.to_name]), [
-    ['別件の返答', 'c3d4', '明.'],
-    ['着手しました', 'a1b2', '明.'],
+    ['別件の返答', 'c3d4', 'セッション B'],
+    ['着手しました', 'a1b2', 'セッション B'],
   ], '入力の行・別の相手・2 本目・まだ返っていないものは入れない。古い順')
   assert.equal(out[1]?.agent_reply?.sent_at, '2026-09-30T16:21:56Z')
   assert.deepEqual(agentReplyRows([], rows, (id) => id), [])
@@ -108,7 +108,7 @@ test('deliveredId / agentReplyRows: 送ったメッセージへの返答（相�
 
 test('replierName: 表示名があればそれ。題名が届けた見出しなら worktree 名（#588）', () => {
   const s = (over: Partial<SessionSummary>) => ({ id: 'B1@dev-min', title: '', repo: 'dev-min', ...over }) as SessionSummary
-  assert.equal(replierName(s({ meta: { name: '明.' }, title: '【SAI】#o/r の「x」からのメッセージです' })), '明.')
+  assert.equal(replierName(s({ meta: { name: 'セッション B' }, title: '【SAI】#o/r の「x」からのメッセージです' })), 'セッション B')
   assert.equal(replierName(s({ title: '【SAI】#o/r の「x」からのメッセージです' })), '#dev-min')
   assert.equal(replierName(s({ title: 'PR を出して' })), 'PR を出して')
 })
@@ -210,13 +210,13 @@ test('agentEntry: overlap を渡さなければ空（#564）', () => {
 
 test('withHandedReplies / splitHandedReplies: 返答を本文の頭に足し、画面では外せる。失敗は 1 行（#594）', () => {
   const t = withHandedReplies('579着手して', [
-    { message_id: 'ab', to_name: 'かなで', status: 'done', text: 'PR #9 を出しました' },
-    { message_id: 'cd', to_name: '明', status: 'failed', error: '終了コード 1' },
+    { message_id: 'ab', to_name: 'セッション C', status: 'done', text: 'PR #9 を出しました' },
+    { message_id: 'cd', to_name: 'セッション B', status: 'failed', error: '終了コード 1' },
   ])
   assert.ok(t.startsWith(HANDED_MARK))
   assert.ok(!t.startsWith(AGENT_HEADER_MARK), '届けた見出し（【SAI】）と取り違えない')
   assert.equal(deliveredId(t), '', 'deliveredId() は返答の塊を「届いたメッセージ」と読まない')
-  assert.match(t, /「明」（message_id: cd）への依頼は失敗しました: 終了コード 1/)
+  assert.match(t, /「セッション B」（message_id: cd）への依頼は失敗しました: 終了コード 1/)
   assert.deepEqual(splitHandedReplies(t), { text: '579着手して', handed: 2 })
   assert.equal(withHandedReplies('そのまま', []), 'そのまま', '返答が無ければ本文だけ')
   assert.deepEqual(splitHandedReplies('人が 【SAI 返答】と打った'), { text: '人が 【SAI 返答】と打った', handed: 0 })
@@ -241,15 +241,15 @@ test('sendHow: sai_send の返事に、相手のターンをどう回したか�
 
 test('resolveTarget: id・表示名・worktree 名・題名の完全一致で、ちょうど 1 つのときだけ当てる（#625）', () => {
   const s = (id: string, repo: string, title: string, name = '') => ({ id, repo, title, ...(name ? { meta: { name } } : {}) }) as SessionSummary
-  const targets = [s('a@dev-clared', 'dev-clared', '着手して', 'くらら'), s('b@dev-min', 'dev-min', '319 対応して', '明'), s('c@dev-x', 'dev-x', 'x', '明. - Avvy deco'), s('d@main', 'main', '一覧'), s('e@main', 'main', '取り次ぎ')]
+  const targets = [s('a@dev-clared', 'dev-clared', '着手して', 'セッション A'), s('b@dev-min', 'dev-min', '319 対応して', 'セッション B'), s('c@dev-x', 'dev-x', 'x', 'セッション B - 別件'), s('d@main', 'main', '一覧'), s('e@main', 'main', '取り次ぎ')]
   const idOf = (to: string) => resolveTarget(targets, to).target?.id
   assert.equal(idOf('a@dev-clared'), 'a@dev-clared')
-  assert.equal(idOf('くらら'), 'a@dev-clared')
+  assert.equal(idOf('セッション A'), 'a@dev-clared')
   assert.equal(idOf(' DEV-Clared '), 'a@dev-clared', '大文字小文字と前後の空白は無視')
   assert.equal(idOf('一覧'), 'd@main', '表示名が無ければ題名')
-  assert.equal(idOf('明'), 'b@dev-min', '「明. - Avvy deco」とは取り違えない（完全一致だけ）')
+  assert.equal(idOf('セッション B'), 'b@dev-min', '「セッション B - 別件」とは取り違えない（完全一致だけ）')
   assert.equal(idOf('着手して'), undefined, '表示名のあるセッションは題名では引かない（題名は最初の入力で、他と重なりやすい）')
-  assert.equal(idOf('くら'), undefined, '前方一致はしない')
+  assert.equal(idOf('セッション'), undefined, '前方一致はしない')
   assert.equal(idOf(''), undefined)
   const dup = resolveTarget(targets, 'main')
   assert.ok(!dup.target && dup.ambiguous)
@@ -259,12 +259,12 @@ test('resolveTarget: id・表示名・worktree 名・題名の完全一致で、
   assert.match(targetRefusal('main', dup as never, '送れません'), /「main」に当たる相手が 2 つあります。[^\n]*\n- d@main「一覧」\n- e@main「取り次ぎ」/)
   assert.equal(targetRefusal('x', { target: null, ambiguous: false, candidates: [] }, '送れません'), '送れません')
   // 送れないセッションに同じ名前が居れば、送れる方が 1 つでも当てない（別の相手に黙って届かせない）
-  const hidden = resolveTarget(targets, '明', [s('z@dev-z', 'dev-z', 'z', '明')])
+  const hidden = resolveTarget(targets, 'セッション B', [s('z@dev-z', 'dev-z', 'z', 'セッション B')])
   assert.ok(!hidden.target && hidden.ambiguous && hidden.hidden === 1)
-  assert.match(targetRefusal('明', hidden as never, ''), /当たる相手が 2 つあります（うち 1 つは送れないセッション。下には送れる方だけ）。[^\n]*\n- b@dev-min「明」$/)
-  assert.equal(resolveTarget(targets, 'b@dev-min', [s('z@dev-z', 'dev-z', 'z', '明')]).target?.id, 'b@dev-min', 'id なら今までどおり')
+  assert.match(targetRefusal('セッション B', hidden as never, ''), /当たる相手が 2 つあります（うち 1 つは送れないセッション。下には送れる方だけ）。[^\n]*\n- b@dev-min「セッション B」$/)
+  assert.equal(resolveTarget(targets, 'b@dev-min', [s('z@dev-z', 'dev-z', 'z', 'セッション B')]).target?.id, 'b@dev-min', 'id なら今までどおり')
   assert.equal(resolveTarget(targets, 'だれか', [s('z@dev-z', 'dev-z', 'z', 'だれか')]).target, null)
-  assert.deepEqual(targetNames(targets[0]!), ['a@dev-clared', 'くらら', 'dev-clared'])
+  assert.deepEqual(targetNames(targets[0]!), ['a@dev-clared', 'セッション a', 'dev-clared'])
 })
 
 test('replyOf / agentReplyRows: ターン完了の行の入力が要約の文に置き換わっていても、直前の入力の行の見出しで当てる（#626）', () => {
@@ -324,7 +324,7 @@ test('followupReplyRows: 人が返答のバブルの下から送った返信に�
     { ts: '2026-10-05T03:14:00Z', session: 'B1', repo: 'r', event: 'Stop', user_text: 'マージして\n\n/tmp/a.png', text: 'マージしました' },
     { ts: '2026-10-05T03:20:00Z', session: 'B1', repo: 'r', event: 'Stop', user_text: 'マージして', text: '2 回目のマージ' },
     { ts: '2026-10-05T03:30:00Z', session: 'B1', repo: 'r', event: 'Stop', user_text: 'マージして', text: '当てる返信がもう無い' },
-    { ts: '2026-10-05T03:40:00Z', session: 'B1', repo: 'r', event: 'Stop', user_text: withHandedReplies('返答の塊のあと', [{ message_id: 'm9', to_name: '明.', status: 'done', text: '済み' }]), text: '頭に返答を足されたターン' },
+    { ts: '2026-10-05T03:40:00Z', session: 'B1', repo: 'r', event: 'Stop', user_text: withHandedReplies('返答の塊のあと', [{ message_id: 'm9', to_name: 'セッション B', status: 'done', text: '済み' }]), text: '頭に返答を足されたターン' },
   ] as FeedRow[]
   const followups = [
     { id: 'f2', to: 'B1@r', text: 'マージして', at: '2026-10-05T03:15:00Z' },
@@ -333,9 +333,9 @@ test('followupReplyRows: 人が返答のバブルの下から送った返信に�
     { id: 'f4', to: 'B1@r', text: '   ', at: '2026-10-05T03:00:00Z' },
     { id: 'f5', to: 'B1@r', text: '返答の塊のあと', at: '2026-10-05T03:35:00Z' },
   ]
-  const out = followupReplyRows(followups, rows, () => '明.', () => '/icon')
+  const out = followupReplyRows(followups, rows, () => 'セッション B', () => '/icon')
   assert.deepEqual(out.rows.map((r) => [r.text, r.agent_reply?.message_id]), [['マージしました', 'f1'], ['2 回目のマージ', 'f2'], ['頭に返答を足されたターン', 'f5']], 'SAI が頭に足した返答の塊（#594）は外して比べる。送る前・入力の行・別の入力・別の相手は当てない。同じ文は古い順に 1 つずつ')
-  assert.deepEqual(out.rows[0]?.agent_reply, { message_id: 'f1', to_name: '明.', to_icon: '/icon', sent_at: '2026-10-05T03:10:00Z', followup: true })
+  assert.deepEqual(out.rows[0]?.agent_reply, { message_id: 'f1', to_name: 'セッション B', to_icon: '/icon', sent_at: '2026-10-05T03:10:00Z', followup: true })
   assert.deepEqual([...out.answered], [['f1', '2026-10-05T03:14:00Z'], ['f2', '2026-10-05T03:20:00Z'], ['f5', '2026-10-05T03:40:00Z']])
   assert.deepEqual(followupReplyRows([], rows, (id) => id).rows, [])
 })

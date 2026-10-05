@@ -379,7 +379,7 @@ test('last_kind: 最後の行の読み方。ターン完了と同じ秒に届い
 })
 
 test('aggregate: 題名と最後の入力は、SAI が頭に足した返答の塊（#594）を外した人の文', () => {
-  const user_text = withHandedReplies('579着手して', [{ message_id: 'ab', to_name: 'かなで', status: 'done', text: 'PR #9' }])
+  const user_text = withHandedReplies('579着手して', [{ message_id: 'ab', to_name: 'セッション C', status: 'done', text: 'PR #9' }])
   const [s] = aggregate([row(new Date(), 'S', { user_text, event: 'UserPromptSubmit', text: '' })])
   assert.equal(s!.title, '579着手して')
   assert.equal(s!.last_user_text, '579着手して')
@@ -387,7 +387,7 @@ test('aggregate: 題名と最後の入力は、SAI が頭に足した返答の�
 
 test('aggregate: 返答を渡すためだけに SAI が置いた本文（#594 の 2・3）は、題名にも最後の入力にもしない', () => {
   const t = new Date()
-  const steered = withHandedReplies(STEERED_NOTE, [{ message_id: 'ab', to_name: 'かなで', status: 'done', text: 'PR #9' }])
+  const steered = withHandedReplies(STEERED_NOTE, [{ message_id: 'ab', to_name: 'セッション C', status: 'done', text: 'PR #9' }])
   const [s] = aggregate([
     row(new Date(t.getTime() - 2000), 'S', { user_text: '579着手して', event: 'UserPromptSubmit', text: '' }),
     row(t, 'S', { user_text: steered, event: 'UserPromptSubmit', text: '' }),

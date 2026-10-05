@@ -2,7 +2,7 @@
 import { replyBlockedReason } from '../../shared/reply.ts'
 import type { AgentFollowupLine, SessionSummary } from '../../shared/types.ts'
 
-/** バブルの下の 1 行（「→ くららに『マージして』と送った 12:34」） */
+/** バブルの下の 1 行（「→ セッション A に『マージして』と送った 12:34」） */
 export interface FooterLine {
   key: string
   toName: string

@@ -19,8 +19,8 @@ test('reviewButtonClass: 単独なら主ボタン、入力欄のボタンと並�
 })
 
 test('insertLabel: 入れる先の名前を出し、数えるのは行コメントだけ', () => {
-  assert.deepEqual(insertLabel(0, 'かなで'), { full: '「かなで」の入力欄に入れる', short: '入力欄へ' })
-  assert.deepEqual(insertLabel(2, 'かなで'), { full: '「かなで」の入力欄に入れる 2', short: '入力欄へ 2' })
+  assert.deepEqual(insertLabel(0, 'セッション C'), { full: '「セッション C」の入力欄に入れる', short: '入力欄へ' })
+  assert.deepEqual(insertLabel(2, 'セッション C'), { full: '「セッション C」の入力欄に入れる 2', short: '入力欄へ 2' })
   assert.deepEqual(insertLabel(2, ''), { full: '入力欄に入れる 2', short: '入力欄へ 2' })
 })
 

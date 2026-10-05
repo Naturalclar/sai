@@ -97,8 +97,8 @@ test('searchRows: 新しい順。上限に達したら truncated（古い方を�
 
 test('searchRows: 一覧にあれば表示名とアイコン、無ければ ID を label にする', () => {
   const rows = [row(at(0), 'S1', { text: 'あたり', user_text: '' })]
-  const named = searchRows(rows, ['あたり'], [summary({ meta: { name: 'かなで' }, icon: '/icon.png' })])
-  assert.equal(named.hits[0]!.label, 'かなで')
+  const named = searchRows(rows, ['あたり'], [summary({ meta: { name: 'セッション C' }, icon: '/icon.png' })])
+  assert.equal(named.hits[0]!.label, 'セッション C')
   assert.equal(named.hits[0]!.icon, '/icon.png')
   // hint は ⌘K のセッションの候補と同じ形（projectName が owner/ を落として短くする）
   assert.equal(named.hits[0]!.hint, 'kanban / main', 'リポジトリ / ブランチ')

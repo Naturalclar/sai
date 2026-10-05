@@ -978,31 +978,31 @@ test('sai_send: 相手が処理中なら、着手の形でも要約を挟まず�
 // ---- 宛先を呼び名でも書ける（#625）
 
 test('sai_send: 宛先は id でも呼び名（表示名・worktree 名）でも同じ相手に届く。返事に届いた相手の id と呼び名が出る。回数の歯止めは今のまま（#625）', async () => {
-  const meta = await fetch(`${base}/api/sessions/B1%40r/meta`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ name: 'Kurara' }) })
+  const meta = await fetch(`${base}/api/sessions/B1%40r/meta`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ name: 'SessionA' }) })
   assert.equal(meta.status, 200)
   runner.started.length = 0
   turn('A1@r')
   try {
-    for (const to of ['Kurara', '  kurara ', 'B1@r']) {
+    for (const to of ['SessionA', '  sessiona ', 'B1@r']) {
       const res = await send('A1@r', to, '見て')
       assert.equal(res.status, 202, to)
       const body = (await res.json()) as AgentSendResponse
-      assert.deepEqual([body.to, body.to_name], ['B1@r', 'Kurara'], to)
+      assert.deepEqual([body.to, body.to_name], ['B1@r', 'SessionA'], to)
     }
     assert.equal(runner.started.at(-1)?.id ?? runner.started[0]?.id, 'B1@r')
-    assert.equal((await send('A1@r', 'Kurara', '4 回目')).status, 429, '呼び名で送っても 1 ターンの回数に数える')
+    assert.equal((await send('A1@r', 'SessionA', '4 回目')).status, 429, '呼び名で送っても 1 ターンの回数に数える')
     turn('A1@r')
     // worktree 名 `r` には、送れないセッション（別のマシンの R1・合成 ID の S1）も居る。送れる方が 1 つでも名前では当てない（#662 のレビュー）
     const byRepo = await send('A1@r', 'R', '見て')
     assert.equal(byRepo.status, 409)
-    assert.match(((await byRepo.json()) as { error: string }).error, /当たる相手が 3 つあります（うち 2 つは送れないセッション。下には送れる方だけ）。[^\n]*\n- B1@r「Kurara」$/)
+    assert.match(((await byRepo.json()) as { error: string }).error, /当たる相手が 3 つあります（うち 2 つは送れないセッション。下には送れる方だけ）。[^\n]*\n- B1@r「SessionA」$/)
     // 前方一致・無い名前は当てない。送らずに、送れる相手を返す
     const before = runner.started.length
     for (const to of ['Kura', 'だれか', 'C1@r']) {
       const res = await send('A1@r', to, '見て')
       assert.equal(res.status, 403, to)
       const text = ((await res.json()) as { error: string }).error
-      assert.match(text, /送れる相手:\n- B1@r「Kurara」/, to)
+      assert.match(text, /送れる相手:\n- B1@r「SessionA」/, to)
       assert.ok(!text.includes('C1@r「'), '別の project のセッションは候補にも出さない')
     }
     assert.equal(runner.started.length, before)
@@ -1017,16 +1017,16 @@ test('sai_send: 宛先は id でも呼び名（表示名・worktree 名）でも
 test('sai_send: 同じ名前の相手が 2 つ居たら、送らずに候補（id と呼び名）を返す（#625）', async () => {
   // 同じ project に、同じ表示名のセッションをもう 1 つ
   await appendFile(feedFile, JSON.stringify(row(new Date(), 'D1', { repo: 'r2', cwd: work2, project: 'o/r', user_text: '別の作業' })) + '\n')
-  const meta = await fetch(`${base}/api/sessions/D1%40r2/meta`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ name: 'kurara' }) })
+  const meta = await fetch(`${base}/api/sessions/D1%40r2/meta`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ name: 'sessiona' }) })
   assert.equal(meta.status, 200)
   runner.started.length = 0
   turn('A1@r')
   try {
-    const res = await send('A1@r', 'Kurara', '見て')
+    const res = await send('A1@r', 'SessionA', '見て')
     assert.equal(res.status, 409)
     const text = ((await res.json()) as { error: string }).error
-    assert.match(text, /「Kurara」に当たる相手が 2 つあります。送っていません/)
-    assert.ok(text.includes('- B1@r「Kurara」') && text.includes('- D1@r2「kurara」'), text)
+    assert.match(text, /「SessionA」に当たる相手が 2 つあります。送っていません/)
+    assert.ok(text.includes('- B1@r「SessionA」') && text.includes('- D1@r2「sessiona」'), text)
     assert.equal(runner.started.length, 0)
     // id と worktree 名なら 1 つに決まる
     assert.equal(((await (await send('A1@r', 'D1@r2', '見て')).json()) as AgentSendResponse).to, 'D1@r2')

@@ -166,9 +166,9 @@ test('groupSpeaker: ふつうのバブルはそのセッションの名前とア
   assert.deepEqual(groupSpeaker('claude', mine, undefined), { name: '送り元', mark: 'C', icon: '/i/mine' }, '返答でなければ speakerLabel のまま')
   assert.deepEqual(groupSpeaker('me', mine, { name: 'J', icon: '/i/me' }), { name: 'J', mark: '私', icon: '/i/me' })
   // セッション画面は相手を一覧に持っていない（session が undefined）。印に載った名前とアイコンを出す
-  assert.deepEqual(groupSpeaker('claude', undefined, undefined, { to_name: 'くらら', to_icon: '/i/kurara' }), { name: 'くらら', mark: 'C', icon: '/i/kurara' })
-  assert.deepEqual(groupSpeaker('codex', undefined, undefined, { to_name: 'くらら' }), { name: 'くらら', mark: 'X' }, '相手がアイコンを付けていなければ頭文字')
-  assert.deepEqual(groupSpeaker('claude', { icon: '/i/list' }, undefined, { to_name: 'くらら' }), { name: 'くらら', mark: 'C', icon: '/i/list' }, '印に無くても、一覧から引けたものがあれば出す')
+  assert.deepEqual(groupSpeaker('claude', undefined, undefined, { to_name: 'セッション A', to_icon: '/i/a' }), { name: 'セッション A', mark: 'C', icon: '/i/a' })
+  assert.deepEqual(groupSpeaker('codex', undefined, undefined, { to_name: 'セッション A' }), { name: 'セッション A', mark: 'X' }, '相手がアイコンを付けていなければ頭文字')
+  assert.deepEqual(groupSpeaker('claude', { icon: '/i/list' }, undefined, { to_name: 'セッション A' }), { name: 'セッション A', mark: 'C', icon: '/i/list' }, '印に無くても、一覧から引けたものがあれば出す')
 })
 
 test('speakerLabel: 自分は profile があればその名前とアイコン、無ければ「あなた」「私」', () => {
@@ -219,19 +219,19 @@ test('終わって放置されているだけの行（入力待ち）はバブ�
 })
 
 test('送ったメッセージへの返答（#588）は相手のバブル 1 つだけで、相手に届いた文は自分のバブルにしない。相手のセッションの塊になる', () => {
-  const reply = row(5, { session: 's2', user_text: '【SAI】#o/r の「x」からのメッセージです（id: a1）。…', text: '着手しました', agent_reply: { message_id: 'a1', to_name: '明.', sent_at: at(1) } })
+  const reply = row(5, { session: 's2', user_text: '【SAI】#o/r の「x」からのメッセージです（id: a1）。…', text: '着手しました', agent_reply: { message_id: 'a1', to_name: 'セッション B', sent_at: at(1) } })
   const us = toUtterances([row(0, { user_text: '頼んで' }), reply])
   assert.deepEqual(us.map((x) => [x.speaker, x.text, x.reply?.to_name]), [
     ['me', '頼んで', undefined],
     ['claude', '返答', undefined],
-    ['claude', '着手しました', '明.'],
+    ['claude', '着手しました', 'セッション B'],
   ])
   const groups = groupRows([row(0), reply])[0]!.groups
   assert.deepEqual(groups.map((g) => g.session), ['s1', 's2'], '同じエージェントでも別のセッションなので塊を分ける')
 })
 
 test('toUtterances: SAI が頭に足した返答の塊（#594）は自分のバブルから外し、足した数を添える', () => {
-  const user_text = withHandedReplies('人から', [{ message_id: 'ab', to_name: 'かなで', status: 'done', text: 'PR #9' }])
+  const user_text = withHandedReplies('人から', [{ message_id: 'ab', to_name: 'セッション C', status: 'done', text: 'PR #9' }])
   const [mine] = toUtterances([row(0, { user_text })])
   assert.equal(mine!.text, '人から')
   assert.equal(mine!.handedReplies, 1)

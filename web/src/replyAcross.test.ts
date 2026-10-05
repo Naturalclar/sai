@@ -5,8 +5,8 @@ import { replyFooter, withJustSent } from './replyAcross.ts'
 
 const session = (over: Partial<SessionSummary> = {}): SessionSummary =>
   ({ id: 'B1@r', agent: 'claude', repo: 'r', session: 'B1', session_source: 'payload', host: 'mac', last_turn_ts: 't2', next_ask: 'マージして', ...over }) as SessionSummary
-const line = (over: Partial<AgentFollowupLine> = {}): AgentFollowupLine => ({ id: 'f1', to: 'B1@r', to_name: 'くらら', text: 'マージして', sent_at: '2026-10-05T03:10:00Z', anchor: 't2', ...over })
-const base = { target: 'B1@r', tss: ['t2'], toName: 'くらら', followups: [] as AgentFollowupLine[], justSent: [], targetBusy: false, host: 'mac' }
+const line = (over: Partial<AgentFollowupLine> = {}): AgentFollowupLine => ({ id: 'f1', to: 'B1@r', to_name: 'セッション A', text: 'マージして', sent_at: '2026-10-05T03:10:00Z', anchor: 't2', ...over })
+const base = { target: 'B1@r', tss: ['t2'], toName: 'セッション A', followups: [] as AgentFollowupLine[], justSent: [], targetBusy: false, host: 'mac' }
 
 test('replyFooter: 返信できる相手にだけ口を出す。判定は replyBlockedReason()（#700）', () => {
   assert.equal(replyFooter({ ...base, session: session() }).canReply, true)
@@ -36,7 +36,7 @@ test('replyFooter / withJustSent: 送った直後の繋ぎは、サーバの行�
   const at = Date.parse('2026-10-05T03:10:00Z')
   const sent = { to: 'B1@r', anchor: 't2', text: '進めて', at }
   const just = withJustSent([], [], sent, ['t2'])
-  assert.deepEqual(replyFooter({ ...base, justSent: just, session: session() }).lines.map((l) => [l.text, l.toName, l.busy]), [['進めて', 'くらら', true]])
+  assert.deepEqual(replyFooter({ ...base, justSent: just, session: session() }).lines.map((l) => [l.text, l.toName, l.busy]), [['進めて', 'セッション A', true]])
   // サーバの時計が 1 分手前でも先でも、行が 1 つ増えたら届いたとみなす
   for (const sentAt of ['2026-10-05T03:09:00Z', '2026-10-05T03:11:00Z']) {
     const after = replyFooter({ ...base, justSent: just, followups: [line({ text: '進めて', sent_at: sentAt })], session: session() })

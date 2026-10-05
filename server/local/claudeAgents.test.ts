@@ -17,12 +17,12 @@ async function fakeClaude(stdout: string, code = 0): Promise<string> {
 }
 
 const one = (over: Record<string, unknown> = {}) =>
-  JSON.stringify([{ pid: 1, cwd: '/w', kind: 'interactive', status: 'idle', sessionId: 'S1', name: 'かなで', ...over }])
+  JSON.stringify([{ pid: 1, cwd: '/w', kind: 'interactive', status: 'idle', sessionId: 'S1', name: 'セッション C', ...over }])
 
 test('parseAgents: 読めた分だけ返す。読めなければ null（空の配列とは別）', () => {
   const got = parseAgents(one({ status: 'busy' }))
   assert.equal(got?.length, 1)
-  assert.deepEqual(got?.[0], { sessionId: 'S1', id: '', kind: 'interactive', status: 'busy', state: '', cwd: '/w', pid: 1, name: 'かなで' })
+  assert.deepEqual(got?.[0], { sessionId: 'S1', id: '', kind: 'interactive', status: 'busy', state: '', cwd: '/w', pid: 1, name: 'セッション C' })
   assert.deepEqual(parseAgents('[]'), [], '生きているセッションが 0 件（聞けている）')
   assert.equal(parseAgents(''), null, '空は「聞けなかった」')
   assert.equal(parseAgents('not json'), null)
@@ -35,7 +35,7 @@ test('parseAgents: 読めた分だけ返す。読めなければ null（空の�
 test('busyIn: 同じ sessionId が複数あるので、1 つでも busy なら回っている', () => {
   // 実測の形: 端末の TUI が idle、SAI が -p --resume で起こした子が同じ ID で busy
   const agents = parseAgents(JSON.stringify([
-    { sessionId: 'S1', status: 'idle', kind: 'interactive', pid: 1, cwd: '/w', name: 'かなで' },
+    { sessionId: 'S1', status: 'idle', kind: 'interactive', pid: 1, cwd: '/w', name: 'セッション C' },
     { sessionId: 'S1', status: 'busy', kind: 'interactive', pid: 2, cwd: '/w', name: 'dev-kanade-34' },
   ]))!
   assert.equal(busyIn(agents, 'S1'), true)

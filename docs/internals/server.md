@@ -44,6 +44,7 @@ C-c / SIGTERM では必ず終わる（#296。`main.ts` の `shutdown()`）。
 
 - 割合（`feed/statusline.py` が書く `<feed dir>/usage-claude[.<host>].json`）と「いま上限に当たっているか」（`~/.claude/projects/*/*.jsonl` の `quotaLimits`）を `mergeClaudeUsage()` で重ねる。片方だけのことがあるので、`ClaudeUsage.primary` / `limited` はそれぞれ任意。
 - ステータスラインの割合は、枠の `resets_at` を過ぎたものと、`STATUS_MAX_AGE_MS`（8 日）より古いファイルを捨てる。
+- 書く側（`feed/statusline.py`）も同じ条件で、`resets_at` を過ぎた窓は書かない（`live_windows()`。全部過ぎていればファイルに触らない）。置いてある記録の `ts` のほうが新しければ上書きしない（`written_at()`。読めない `ts` は上書きする）。期限切れの境界（`resets_at <= now`）は `feed/test_statusline.py` と `shared/usage.test.ts` に同じ形で置く（#683）。
 
 ### Codex
 

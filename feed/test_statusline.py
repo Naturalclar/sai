@@ -8,6 +8,7 @@
 - 戻る時刻を過ぎた窓は書かず、置いてある記録より古い `ts` では上書きしない（#683）
 - AGENT_FEED_HOST を設定したときだけマシンごとに分ける（record.py の day_file と同じ規則）
 - stdout がそのままステータスラインになるので、そこに出す1行も見る
+- `AGENT_FEED_DEBUG=1` のときだけ描画ごとの入力の要点を残す。本文・パスは残さない（#694）
 """
 
 from __future__ import annotations
@@ -66,7 +67,8 @@ class StatusLineTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.dir = Path(self.tmp.name)
-        self.env = {"AGENT_FEED_DIR": str(self.dir)}
+        # AGENT_FEED_DEBUG は空にする（シェルに置いてあると、どのテストでも statusline-debug.log が出来る）
+        self.env = {"AGENT_FEED_DIR": str(self.dir), "AGENT_FEED_DEBUG": ""}
         self.addCleanup(self.tmp.cleanup)
 
     def written(self, name: str = "usage-claude.json") -> dict:
@@ -126,6 +128,75 @@ class StatusLineTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn("5時間", result.stdout)
         self.assertFalse((self.dir / "usage-claude.json").exists())
+
+    def debug_lines(self) -> list:
+        text = (self.dir / statusline.DEBUG_FILE).read_text(encoding="utf-8")
+        return [json.loads(line) for line in text.splitlines()]
+
+    def test_debug_is_off_unless_asked(self):
+        run(payload(), self.env)
+        self.assertFalse((self.dir / statusline.DEBUG_FILE).exists())
+
+    def test_debug_appends_one_line_per_render(self):
+        env = dict(self.env, AGENT_FEED_DEBUG="1")
+        run(payload(version="2.1.287", cost={"total_api_duration_ms": 1200, "total_cost_usd": 0.5}), env)
+        run(json.dumps({"session_id": "s2", "model": {"id": "claude-opus-5"}}), env)
+        first, second = self.debug_lines()
+        self.assertEqual(first["session"], "5f3a…")
+        self.assertEqual(first["version"], "2.1.287")
+        self.assertEqual(first["model"], "claude-opus-5")
+        self.assertEqual(first["api_ms"], 1200.0)
+        self.assertTrue(first["has_rate_limits"])
+        self.assertEqual(first["rate_limits"]["seven_day"], {"used_percentage": 71, "resets_at": WEEK_RESETS})
+        self.assertIn("rate_limits", first["keys"])
+        self.assertFalse(first["skip"])
+        self.assertFalse(second["has_rate_limits"], "載らなかった描画も 1 行（割合を出すのに要る）")
+        self.assertIsNone(second["rate_limits"])
+        self.assertIsNone(second["api_ms"])
+        self.assertEqual(second["keys"], ["model", "session_id"])
+
+    def test_debug_keeps_no_text_or_paths(self):
+        env = dict(self.env, AGENT_FEED_DEBUG="1")
+        secret = "ひみつ" * 40
+        row = json.loads(payload(cwd="/Users/someone/private-project", transcript_path="/Users/someone/t.jsonl"))
+        row["workspace"] = {"current_dir": "/Users/someone/private-project"}
+        row["rate_limits"]["note"] = secret
+        row["rate_limits"]["list"] = [secret]
+        row[secret] = 1
+        result = run(json.dumps(row), env)
+        self.assertEqual(result.returncode, 0)
+        text = (self.dir / statusline.DEBUG_FILE).read_text(encoding="utf-8")
+        self.assertNotIn("private-project", text)
+        self.assertNotIn("t.jsonl", text)
+        self.assertNotIn(secret, text, "長い文字列は切る")
+        self.assertEqual(self.debug_lines()[0]["rate_limits"]["list"], "<list 1>")
+
+    def test_debug_also_logs_skipped_and_garbage_renders(self):
+        # 記録（usage-claude.json）はしないが、調べるための行は残す
+        env = dict(self.env, AGENT_FEED_DEBUG="1", AGENT_FEED_SKIP="1")
+        self.assertEqual(run(payload(), env).returncode, 0)
+        self.assertEqual(run("ないよ", env).returncode, 0)
+        first, second = self.debug_lines()
+        self.assertTrue(first["skip"])
+        self.assertEqual(second["keys"], [])
+        self.assertFalse((self.dir / "usage-claude.json").exists())
+
+    def test_debug_stops_growing_past_the_cap(self):
+        env = dict(self.env, AGENT_FEED_DEBUG="1")
+        path = self.dir / statusline.DEBUG_FILE
+        path.write_bytes(b"x" * (statusline.DEBUG_MAX_BYTES + 1))
+        result = run(payload(), env)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(path.stat().st_size, statusline.DEBUG_MAX_BYTES + 1)
+        self.assertTrue((self.dir / "usage-claude.json").exists(), "記録は続ける")
+
+    def test_debug_failure_does_not_break_the_line(self):
+        # 書けない（同じ名前のディレクトリがある）ときも、表示と記録はそのまま
+        (self.dir / statusline.DEBUG_FILE).mkdir()
+        result = run(payload(), dict(self.env, AGENT_FEED_DEBUG="1"))
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("5時間", result.stdout)
+        self.assertTrue((self.dir / "usage-claude.json").exists())
 
     def test_makes_the_feed_dir_if_missing(self):
         env = {"AGENT_FEED_DIR": str(self.dir / "まだ無い")}

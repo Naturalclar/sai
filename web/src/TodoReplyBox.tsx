@@ -16,6 +16,8 @@ interface Props {
   sentFromConfirm: number
   restore?: RestoreRequest
   onLeaveToSidebar?: () => void
+  /** 人がボタンで開いたので、入力欄にフォーカスする */
+  focusOnOpen?: boolean
 }
 
 /**
@@ -25,7 +27,7 @@ interface Props {
  * 続きから打てる（逆も）。↑ の履歴は出さない（行を取っていないので作る材料が無い。取りに行くと要対応が
  * 「データを取りに行かない画面」でなくなる）。
  */
-export function TodoReplyBox({ session: s, replying, queued, onSend, sentFromConfirm, restore, onLeaveToSidebar }: Props) {
+export function TodoReplyBox({ session: s, replying, queued, onSend, sentFromConfirm, restore, onLeaveToSidebar, focusOnOpen = false }: Props) {
   return (
     // どのセッションの入力欄かを印にする。上の段の許可の ⌘Enter が、ここで押したキーを横取りしないように
     <div className="todo-reply" {...{ [REPLY_FOR_ATTR]: s.id }}>
@@ -33,6 +35,7 @@ export function TodoReplyBox({ session: s, replying, queued, onSend, sentFromCon
         // 打ちかけは作ったときに 1 回だけ読むので、返信先ごとに作り直す（#306）
         key={`reply:${s.id}`}
         draftKey={s.id}
+        focusOnOpen={focusOnOpen}
         sentFromConfirm={sentFromConfirm}
         repo={s.repo}
         skillsId={s.id}

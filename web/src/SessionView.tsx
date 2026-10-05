@@ -347,6 +347,8 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
                 {open && session && footer.canReply && (
                   <TodoReplyBox
                     session={session}
+                    // 押して開いた塊のままのときだけ。同じ塊に次の返答が届くと footer ごと作り直されるので、常に付けると打っている別の欄からフォーカスを奪う
+                    focusOnOpen={acrossHere.open?.anchor === anchor}
                     replying={data.replying[target]}
                     queued={data.queued[target]?.items.length ?? 0}
                     sentFromConfirm={confirmedSentBy[target] ?? 0}

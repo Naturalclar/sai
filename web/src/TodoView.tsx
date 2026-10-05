@@ -83,13 +83,20 @@ export function TodoView({ list, onStatus, onOpenSidebar, onLeaveToSidebar, prs,
   const pruned = pruneToggled(toggled, items)
   if (data && pruned !== toggled) setToggled(pruned)
   const isOpen = (t: TodoItem) => !narrow && rowOpen(t, toggled)
-  const toggle = (t: TodoItem) =>
+  // 人が「返信する」で開いた行（最初から開いている「終わった」行にはフォーカスしない。開いた途端に画面が動くため）。
+  // 鍵は `toggleKey()`（区分込み）: 待機中に開いたまま「終わった」に変わると行が作り直されるので、id だけで持つとそのときフォーカスを奪う
+  const [pressedOpen, setPressedOpen] = useState<string>()
+  const toggle = (t: TodoItem) => {
+    setPressedOpen(isOpen(t) ? undefined : toggleKey(t))
     setToggled((prev) => {
       const next = new Set(prev)
       const k = toggleKey(t)
       if (!next.delete(k)) next.add(k)
       return next
     })
+  }
+  // 並びから消えた・閉じた行の印は忘れる（送って消えた行が「終わった」で戻ってきたときにフォーカスを奪わない）。描画中に合わせる
+  if (pressedOpen && !items.some((t) => toggleKey(t) === pressedOpen && isOpen(t))) setPressedOpen(undefined)
 
   const labelOf = (id: string) => {
     const s = data?.sessions.find((x) => x.id === id)
@@ -160,6 +167,7 @@ export function TodoView({ list, onStatus, onOpenSidebar, onLeaveToSidebar, prs,
         {open && s && (
           <TodoReplyBox
             session={s}
+            focusOnOpen={pressedOpen === toggleKey(t)}
             replying={replying[t.id]}
             queued={data?.queued[t.id]?.items.length ?? 0}
             sentFromConfirm={confirmedById[t.id] ?? 0}

@@ -41,6 +41,8 @@ export function ImageLightbox({ images, index, onIndex, onClose }: Props) {
   // 読み込んだ画像の元の大きさ（#702）。どの画像のものかを一緒に持ち、送ったあと前の画像の大きさを使わない
   const [natural, setNatural] = useState<{ url: string; width: number; height: number } | null>(null)
   const size = natural && image && natural.url === image.url && natural.width > 0 && natural.height > 0 ? natural : null
+  // 読めなかった画像（#702 のレビュー）。枠の画像は lazy なので、まだ読んでいない壊れた画像が並びに残ることがある
+  const [brokenUrl, setBrokenUrl] = useState<string | null>(null)
 
   useEffect(() => {
     const back = document.activeElement instanceof HTMLElement ? document.activeElement : null
@@ -118,6 +120,9 @@ export function ImageLightbox({ images, index, onIndex, onClose }: Props) {
           {count > 1 && (
             <button type="button" className="lightbox-nav prev" aria-label="前の画像" disabled={index === 0} onClick={() => onIndex(stepIndex(index, count, -1))}>‹</button>
           )}
+          {brokenUrl === image.url ? (
+            <span className="lightbox-broken">表示できません（ファイルが無い・作業ディレクトリの外・画像でない）</span>
+          ) : (
           <img
             key={image.url}
             className={size ? 'sized' : undefined}
@@ -125,11 +130,13 @@ export function ImageLightbox({ images, index, onIndex, onClose }: Props) {
             alt={image.name}
             draggable={false}
             onLoad={(e) => setNatural({ url: image.url, width: e.currentTarget.naturalWidth, height: e.currentTarget.naturalHeight })}
+            onError={() => setBrokenUrl(image.url)}
             style={{
               ...(size ? ({ '--nw': size.width, '--nh': size.height, '--up': LIGHTBOX_MAX_UPSCALE } as CSSProperties) : {}),
               ...(dragX ? { transform: `translateX(${dragX}px)`, transition: 'none' } : {}),
             }}
           />
+          )}
           {count > 1 && (
             <button type="button" className="lightbox-nav next" aria-label="次の画像" disabled={index === count - 1} onClick={() => onIndex(stepIndex(index, count, 1))}>›</button>
           )}

@@ -263,6 +263,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 
 - 画像を押すとページの中のライトボックスで開く。`LightboxProvider` を `Chat` が持ち、`MarkdownImage` / `AttachedImages` / `MessageImages` が `LightboxContext` を読む。別のタブは開かない。⌘ クリック・中クリックは `opensInPage()` が見送ってブラウザの既定のまま。
 - **画面より小さい画像は拡大する**（#702）: `<img>` の `onLoad` で元の大きさを `--nw` / `--nh` に、上限を `--up`（`lightbox.ts` の `LIGHTBOX_MAX_UPSCALE` = 3）に置き、CSS（`.lightbox-stage img.sized`）が幅を「枠の幅・元の幅 × 上限・高さの上限から逆算した幅」の最小にする（JS で画面を測らないので、窓の大きさを変えても追従する）。大きさはどの URL のものかと一緒に持ち、送ったあと前の画像の大きさを使わない。
+- 読めなかった画像（`onError`）は「表示できません」の文にする（#702 のレビュー。枠の画像は `loading="lazy"` なので、まだ読んでいない壊れた画像は並びから外せていない）。
 - Esc・背景・✕で閉じ、同じ発言の画像は ← → で送る。キーは document の capture で拾って止める（App の Esc＝「フィードへ」と ← →＝一覧との行き来まで動かないように）。
 - 横にスライド（スワイプ・ドラッグ）しても送る（#509）。Pointer Events でタッチもマウスも同じ扱い、判定は `swipeStep()`＝横に `SWIPE_MIN_PX`（50px）以上かつ縦より横。動かしている間は画像が付いてくる。`touch-action: pan-y pinch-zoom` で縦のスクロールとピンチはブラウザに残す。
 - 枠が pointer を捕まえるので:

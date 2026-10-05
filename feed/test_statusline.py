@@ -3,7 +3,8 @@
 
 押さえること:
 - 何を食わせても exit 0（ステータスラインのコマンドが失敗すると TUI の表示が壊れる）
-- `rate_limits` があれば usage-claude.json に**上書き**で書く（履歴は持たない）
+- `rate_limits` があれば usage-claude.json に置き直す（履歴は持たない）
+- 窓ごとに新しいほうを残す: 同じ窓は高いほう・来なかった窓は持ち越す・変わらなければ書かない（#689）
 - 戻る時刻を過ぎた窓は書かず、置いてある記録より古い `ts` では上書きしない（#683）
 - AGENT_FEED_HOST を設定したときだけマシンごとに分ける（record.py の day_file と同じ規則）
 - stdout がそのままステータスラインになるので、そこに出す1行も見る
@@ -83,12 +84,12 @@ class StatusLineTest(unittest.TestCase):
         self.assertEqual(row["rate_limits"]["seven_day"]["resets_at"], WEEK_RESETS)
         self.assertTrue(row["ts"], "いつ時点の割合かが分からないと画面に出せない")
 
-    def test_overwrites_instead_of_appending(self):
+    def test_replaces_the_file_instead_of_appending(self):
         run(payload(), self.env)
-        run(payload(rate_limits={"five_hour": {"used_percentage": 90.0}}), self.env)
+        run(payload(rate_limits={"five_hour": {"used_percentage": 90.0, "resets_at": FIVE_HOUR_RESETS}}), self.env)
         row = self.written()
         self.assertEqual(row["rate_limits"]["five_hour"]["used_percentage"], 90.0)
-        self.assertNotIn("seven_day", row["rate_limits"], "前の内容が残らない（いまの割合だけを見る）")
+        self.assertEqual(row["rate_limits"]["seven_day"]["used_percentage"], 71.0, "来なかった窓は持ち越す（#689）")
         self.assertEqual([p.name for p in self.dir.iterdir()], ["usage-claude.json"], "tmp を残さない")
 
     def test_host_splits_the_file_only_when_set(self):
@@ -141,6 +142,7 @@ class StatusLineTest(unittest.TestCase):
         self.assertIn("5時間 90%", result.stdout, "表示はそのセッションが持っている値のまま")
 
         # 片方だけ切れているときは、生きている窓だけを書く
+        (self.dir / "usage-claude.json").unlink()
         run(payload(rate_limits={"five_hour": {"used_percentage": 90, "resets_at": past}, "seven_day": {"used_percentage": 35, "resets_at": WEEK_RESETS}}), self.env)
         self.assertEqual(self.written()["rate_limits"], {"seven_day": {"used_percentage": 35.0, "resets_at": WEEK_RESETS}})
 
@@ -167,6 +169,48 @@ class StatusLineTest(unittest.TestCase):
             self.record_at(ahead, windows)
             self.assertEqual(run(payload(), self.env).returncode, 0, label)
             self.assertEqual(self.written()["rate_limits"]["seven_day"]["used_percentage"], 71.0, label)
+
+    def test_keeps_the_higher_value_of_the_same_window(self):
+        # しばらく API を呼んでいないセッションは、前に受け取った低い値を持ち回る（#689）
+        def week(percent, resets=WEEK_RESETS):
+            return payload(rate_limits={"seven_day": {"used_percentage": percent, "resets_at": resets}})
+
+        placed = self.record_at(timedelta(minutes=-10), {"seven_day": {"used_percentage": 47.0, "resets_at": WEEK_RESETS}})
+        result = run(week(37), self.env)
+        self.assertEqual(self.written(), placed, "同じ窓の低い値では置き直さない（ts も進めない）")
+        self.assertIn("週 37%", result.stdout, "表示はそのセッションが持っている値のまま")
+        run(week(47, WEEK_RESETS + 5), self.env)
+        self.assertEqual(self.written(), placed, "同じ値の描画では書き直さない（ts は値が最後に変わった時刻）")
+
+        run(week(48), self.env)
+        self.assertEqual(self.written()["rate_limits"]["seven_day"]["used_percentage"], 48.0, "高い値は置き直す")
+        self.assertNotEqual(self.written()["ts"], placed["ts"])
+
+        run(week(3, WEEK_RESETS + 7 * 86400), self.env)
+        self.assertEqual(self.written()["rate_limits"]["seven_day"], {"used_percentage": 3.0, "resets_at": WEEK_RESETS + 7 * 86400}, "新しい窓は低くても置き直す")
+        run(week(99), self.env)
+        self.assertEqual(self.written()["rate_limits"]["seven_day"]["used_percentage"], 3.0, "前の窓の値では置き直さない")
+
+    def test_an_old_record_is_replaced_without_comparing(self):
+        # 枠が途中でリセットされたとき、高い値が窓の終わりまで残らないように（#689）
+        self.record_at(timedelta(hours=-25), {"five_hour": {"used_percentage": 5.0, "resets_at": FIVE_HOUR_RESETS}, "seven_day": {"used_percentage": 90.0, "resets_at": WEEK_RESETS}})
+        run(payload(rate_limits={"seven_day": {"used_percentage": 10, "resets_at": WEEK_RESETS}}), self.env)
+        self.assertEqual(self.written()["rate_limits"], {"seven_day": {"used_percentage": 10.0, "resets_at": WEEK_RESETS}})
+
+    def test_merge_windows(self):
+        def w(percent, resets=None):
+            return {"used_percentage": percent, **({"resets_at": resets} if resets is not None else {})}
+
+        merge = statusline.merge_windows
+        gap = statusline.SAME_WINDOW_SECONDS
+        self.assertEqual(merge({"seven_day": w(47, 1000)}, {"seven_day": w(37, 1000 + gap)}), {"seven_day": w(47, 1000)}, "幅の中は同じ窓")
+        self.assertEqual(merge({"seven_day": w(47, 1000)}, {"seven_day": w(37, 1000 + gap + 1)}), {"seven_day": w(37, 1000 + gap + 1)}, "幅を超えて先なら新しい窓")
+        self.assertEqual(merge({"seven_day": w(47, 1000)}, {"seven_day": w(99, 1000 - gap - 1)}), {"seven_day": w(47, 1000)}, "手前は前の窓")
+        self.assertEqual(merge({"seven_day": w(47, 1000)}, {"seven_day": w(48, 1000 - gap)}), {"seven_day": w(48, 1000 - gap)})
+        self.assertEqual(merge({"five_hour": w(12, 500)}, {"seven_day": w(47, 1000)}), {"five_hour": w(12, 500), "seven_day": w(47, 1000)}, "来なかった窓は持ち越す")
+        self.assertEqual(merge({"five_hour": w(12)}, {"seven_day": w(47, 1000)}), {"seven_day": w(47, 1000)}, "戻る時刻の無い窓は持ち越さない")
+        self.assertEqual(merge({"seven_day": w(47)}, {"seven_day": w(37, 1000)}), {"seven_day": w(37, 1000)}, "比べられなければ来たほう")
+        self.assertEqual(merge({"seven_day": w(47, 1000)}, {"seven_day": w(37)}), {"seven_day": w(37)}, "比べられなければ来たほう")
 
     def test_overwrites_a_record_whose_ts_cannot_be_compared(self):
         path = self.dir / "usage-claude.json"

@@ -8,9 +8,12 @@
 弾かれたときにしか載らない。`claude` CLI に `usage` のサブコマンドは無く、TUI の `/usage` が
 叩いている API は OAuth のトークンが要るので SAI からは叩かない）。
 
-- 受け取った `rate_limits` を `<feed dir>/usage-claude[.<host>].json` に**上書き**する
+- 受け取った `rate_limits` を `<feed dir>/usage-claude[.<host>].json` に置き直す
   （履歴は要らない。画面はいつも「いまの割合」しか見ない）
-- **戻る時刻を過ぎた窓は書かない・置いてある新しい記録（`ts` が少し先で、まだ出せるもの）は上書きしない**（#683。
+- **窓ごとに新しいほうを残す**（#689。`merge_windows()`）。`rate_limits` はそのセッションが最後に受け取った
+  ものを持ち回るので、しばらく API を呼んでいないセッションが描画すると、古い（低い）値が来る。
+  同じ窓なら高いほうを残し、何も変わらなければ書かない（`ts` は**値が最後に変わった時刻**）
+- **戻る時刻を過ぎた窓は書かない・置いてある新しい記録（`ts` が少し先で、まだ出せるもの）は置き直さない**（#683。
   再開した古いセッションは最後に受け取った `rate_limits` を持ち回るので、そのまま書くと
   取れていた割合が、読む側に全部捨てられる中身に置き換わる）
 - **stdout に書いたものがそのままステータスラインになる。** 何も出さなければ空になってしまうので、
@@ -41,6 +44,11 @@ USAGE_VERSION = 1
 WINDOWS = ("five_hour", "seven_day")
 #: 置いてある記録の `ts` が今よりこれ以上先なら、新しい記録ではなく時計のずれとみなして上書きする（#683）
 NEWER_TRUST_SECONDS = 300
+#: `resets_at` の差がこの秒数以内なら同じ窓とみなす（描画ごとに少しずれても別の窓にしない。#689）
+SAME_WINDOW_SECONDS = 60
+#: 置いてある記録がこれより古ければ、比べずに来たもので置き直す（#689）。枠が途中でリセットされたとき、
+#: 高いほうを残す決まりだけだと古い高い値がその窓の終わりまで残るので、その逃げ道
+KEEP_SECONDS = 24 * 60 * 60
 #: 保険の自殺タイマー。stdin が閉じないなど、何が起きても TUI を待たせない
 HARD_TIMEOUT_SECONDS = 5
 #: ステータスラインに出す本文の上限（端末の1行に収める）
@@ -113,27 +121,64 @@ def live_windows(windows: dict, now: datetime) -> dict:
     return {name: window for name, window in windows.items() if "resets_at" not in window or window["resets_at"] > at}
 
 
-def newer_record(path: Path, now: datetime) -> bool:
-    """いま置いてある記録のほうが新しく、まだ出せるか（そうなら上書きしない）。
+def merge_windows(existing: dict, incoming: dict) -> dict:
+    """置いてある窓（生きているものだけ）と来た窓を、**窓ごとに新しいほう**でまとめる（#689）。
 
-    `ts` が今より先で、**先すぎず**（NEWER_TRUST_SECONDS 以内）、**生きている窓が 1 つはある**ときだけ True。
-    無い・読めない・時刻として読めないものは False（上書きしてよい）。先すぎる `ts`（時計の狂ったマシンが
-    書いたもの）や、窓が全部戻った記録を残すと、その時刻が来るまで割合が止まったままになる
+    - 同じ窓（`resets_at` の差が SAME_WINDOW_SECONDS 以内）は割合の高いほう。割合は窓の中で下がらないので、
+      低いほうは前に受け取った値を持ち回っているだけ。同じなら置いてあるほう（書き直さない）
+    - `resets_at` が先へ進んでいれば新しい窓なので、低くても来たほう。手前なら前の窓の値なので置いてあるほう
+    - 来なかった窓は、置いてあるものを持ち越す（週だけ来た描画で、期限内の 5 時間を消さない）
+    - どちらかに `resets_at` が無ければ比べられないので、来たほう（来なかったなら持ち越さない。
+      戻る時刻の無い窓は自分では期限切れにならないため）
+    """
+    out = dict(incoming)
+    for name, old in existing.items():
+        if "resets_at" not in old:
+            continue
+        new = incoming.get(name)
+        if new is None:
+            out[name] = old
+            continue
+        if "resets_at" not in new:
+            continue
+        ahead = new["resets_at"] - old["resets_at"]
+        if ahead < -SAME_WINDOW_SECONDS or (ahead <= SAME_WINDOW_SECONDS and new["used_percentage"] <= old["used_percentage"]):
+            out[name] = old
+    return out
+
+
+def windows_to_write(path: Path, incoming: dict, now: datetime) -> dict | None:
+    """いま置いてある記録と突き合わせて、書く窓を決める。**書かなくてよければ None**。
+
+    - 置いてある記録が無い・読めない・`ts` が比べられない・KEEP_SECONDS より古い → 来たものをそのまま
+    - `ts` が今より少し先（NEWER_TRUST_SECONDS 以内）で生きている窓がある → 書かない（#683。新しい記録を残す）。
+      先すぎる `ts`（時計の狂ったマシンが書いたもの）は残すとその時刻まで割合が止まるので、来たものをそのまま
+    - それ以外は `merge_windows()`。**置いてあるものと同じになったら書かない**（`ts` を進めない）
     """
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
         at = datetime.fromisoformat(value["ts"])
         # タイムゾーンの無い ts は比べられない（aware との比較は TypeError）。読めないのと同じ扱い
         if at.tzinfo is None:
-            return False
-        ahead = (at - now).total_seconds()
-        return 0 < ahead <= NEWER_TRUST_SECONDS and bool(live_windows(windows_of(value), now))
+            return incoming
+        age = (now - at).total_seconds()
+        written = windows_of(value)
     except Exception:
-        return False
+        return incoming
+    if age > KEEP_SECONDS or age < -NEWER_TRUST_SECONDS:
+        return incoming
+    live = live_windows(written, now)
+    if age < 0:
+        return None if live else incoming
+    merged = merge_windows(live, incoming)
+    return None if merged == written else merged
 
 
 def build_record(payload: dict, windows: dict, now: datetime) -> dict:
-    """書き出す中身。`ts` は**いつ時点の割合か**（Claude が動いていない間は更新されない）"""
+    """書き出す中身。`ts` は**割合が最後に変わった時刻**（同じ値の描画では書き直さない。#689）。
+
+    `session` / `model` は最後に書いた描画のもの（持ち越した窓は別のセッションが受け取った値のことがある）
+    """
     model = payload.get("model")
     return {
         "v": USAGE_VERSION,
@@ -145,17 +190,18 @@ def build_record(payload: dict, windows: dict, now: datetime) -> dict:
     }
 
 
-def write_record(directory: Path, row: dict, now: datetime) -> None:
+def write_record(directory: Path, payload: dict, windows: dict, now: datetime) -> None:
     """同じ名前に置き直す（履歴は持たない）。読む側が半端な JSON を見ないように tmp → replace。
 
-    置いてある記録のほうが新しければ何もしない（#683。`newer_record()`）
+    書く窓は `windows_to_write()` が決める（置いてある記録のほうが新しい・何も変わらないときは書かない）
     """
     directory.mkdir(parents=True, exist_ok=True)
     path = usage_file(directory)
-    if newer_record(path, now):
+    merged = windows_to_write(path, windows, now)
+    if merged is None:
         return
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(row, ensure_ascii=False), encoding="utf-8")
+    tmp.write_text(json.dumps(build_record(payload, merged, now), ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, path)
 
 
@@ -183,7 +229,7 @@ def main() -> None:
         # 期限切れの窓は書かない。全部切れていれば、置いてある記録に触らない（#683）
         live = live_windows(windows, now)
         if live:
-            write_record(record.feed_dir(), build_record(payload, live, now), now)
+            write_record(record.feed_dir(), payload, live, now)
     line = status_line(payload, windows)
     if line:
         print(line)

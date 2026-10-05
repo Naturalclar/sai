@@ -1,8 +1,7 @@
 // 許可した回数（#445）。同じ許可（`gh pr create`・`pnpm test` …）を毎ターン聞かれるのが素通し（`bypassPermissions`）を選ぶ理由なので、
-// **人が許可した回数**を「常に許可」で書かれるルール（`alwaysAllowRule()` の表記）ごとに数え、何回目かをバブルに出して、
+// **人が許可した回数**を「常に許可」で書かれるルールの組（`rulesKey()`）ごとに数え、何回目かをバブルに出して、
 // 決めた回数からは「常に許可」を勧める。**勧めるだけで、ルールは書かない**（書くのは今までどおり人が「常に許可」を押したときだけ）。
 // DOM に依存しないので approvalCounts.test.ts を node:test で回す
-import { alwaysAllowRule, ruleLabel } from './approvals.ts'
 import type { Approval, ApprovalLogRow } from './types.ts'
 
 /** この回数目の許可から「常に許可」を勧める */
@@ -12,14 +11,29 @@ export const APPROVAL_COUNT_DAYS = 30
 /** 盾のモーダルに出す「よく許可しているがルールに無いもの」の数 */
 export const APPROVAL_FREQUENT_MAX = 8
 
+/** 組の区切り。ルールの表記に出てこない並び（`Bash(a:*) + Bash(b:*)`） */
+const RULES_SEP = ' + '
+
 /**
- * 数える鍵（`Bash(gh pr:*)` / `mcp__github__create_issue`）。**SAI の口で「常に許可」が出せる許可だけ**:
- * Claude の `-p` の許可で、ルールが作れるツール（Edit / Write や質問は作れないので数えない）。Codex / OpenCode には「常に許可」が無い
+ * 数える鍵。**「常に許可」で書かれるルールの組**（#705。`Bash(pnpm test:*) + Bash(tee:*)`。1 つならその表記のまま）。
+ * 前は先頭の語だけ（`Bash(cd:*)`）で束ねていたので、別々のコマンドが同じ回数に数えられ、効かないルールを勧め続けた。
+ * 渡すのはサーバが組んだ `Approval.always`（Claude の `-p` の許可で、ルールが作れて、まだ設定に無いもの）。無ければ空（数えない）
  */
-export function countedRule(a: Pick<Approval, 'tool_name' | 'input' | 'agent'>): string {
-  if ((a.agent ?? 'claude') !== 'claude') return ''
-  const rule = alwaysAllowRule(a.tool_name, a.input)
-  return rule ? ruleLabel(rule) : ''
+export function rulesKey(labels: readonly string[] | undefined): string {
+  return (labels ?? []).join(RULES_SEP)
+}
+
+/** 鍵をルールの表記に戻す */
+export function keyRules(key: string): string[] {
+  return key.split(RULES_SEP).filter(Boolean)
+}
+
+/**
+ * 勧めない鍵（#705）。`Bash(cd:*)` は一度も効かない: プロジェクトの中への `cd` はルール無しで通り、外への `cd` はルールがあっても聞かれる。
+ * いまは書かれないが、前の記録（`approvals.jsonl`）に残っている分を盾のモーダルで勧め続けない
+ */
+export function neverSuggested(key: string): boolean {
+  return keyRules(key).every((rule) => rule === 'Bash(cd:*)')
 }
 
 /** 記録の 1 行が、回数に数えるものか（人が許可した・ルールがある・cwd が分かる） */
@@ -53,4 +67,9 @@ export function ruleCovered(rule: string, allowed: readonly string[]): boolean {
     const p = bashPrefix(a)
     return p !== null && (p === '' || prefix === p || prefix.startsWith(`${p} `))
   })
+}
+
+/** 組の全部が覆われているか（盾のモーダルの「よく許可しているがルールに無いもの」から外す） */
+export function keyCovered(key: string, allowed: readonly string[]): boolean {
+  return keyRules(key).every((rule) => ruleCovered(rule, allowed))
 }

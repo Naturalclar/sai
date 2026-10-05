@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
-import { alwaysAllowRule, answerAsk, askQuestions, ruleLabel } from '../../shared/approvals.ts'
-import { countNote } from '../../shared/approvalCounts.ts'
+import { answerAsk, askQuestions } from '../../shared/approvals.ts'
+import { countNote, rulesKey } from '../../shared/approvalCounts.ts'
+import { AlwaysRules } from './AlwaysRules'
 import { approvalAction, hotkeyApplies, REPLY_FOR_ATTR } from './approvalKeys'
 import { api, type Approval } from './api'
 import { AskQuestions } from './AskQuestions'
@@ -48,11 +49,11 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false, modeNote =
   const agent = approval.agent ?? 'claude'
   const answerable = approval.answerable !== false
 
-  // 「常に許可」で書かれるルール。無いツール（Edit や質問）にはボタンを出さない
-  const always = agent === 'claude' && questions.length === 0 ? alwaysAllowRule(approval.tool_name, approval.input) : null
+  // 「常に許可」で書かれるルール（#705。サーバが組む。つないだコマンドは部品ごと）。無いツール・コマンドにはボタンを出さない
+  const always = agent === 'claude' && questions.length === 0 && approval.always?.length ? approval.always : null
   const decisions = approval.decisions ?? []
-  // 同じルールの何回目か（#445）。決めた回数からは「常に許可」を勧める（押すのは人）
-  const counted = always ? countNote(approval, ruleLabel(always)) : ''
+  // 同じルールの組の何回目か（#445）。決めた回数からは「常に許可」を勧める（押すのは人）
+  const counted = always ? countNote(approval, rulesKey(always)) : ''
   const suggest = !!always && !!approval.suggest
 
   const send = useCallback(
@@ -155,10 +156,10 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false, modeNote =
                   type="button"
                   className={`always${suggest ? ' suggest' : ''}`}
                   disabled={busy || done !== null}
-                  title={`${ruleLabel(always)} を返信先の .claude/settings.local.json に書く。以後この形は聞かれない（端末の「今後も許可」と同じ）${armed ? '。⌘⇧Enter / Ctrl+⇧Enter' : ''}`}
+                  title={`${rulesKey(always)} を返信先の .claude/settings.local.json に書く。以後この形は聞かれない（端末の「今後も許可」と同じ）${armed ? '。⌘⇧Enter / Ctrl+⇧Enter' : ''}`}
                   onClick={() => void send({ behavior: 'allow', remember: 'local' })}
                 >
-                  {done === 'always' ? `常に許可した（${ruleLabel(always)}）` : '常に許可'}
+                  {done === 'always' ? '常に許可した' : '常に許可'}
                 </button>
               )}
               <button type="button" className="deny" disabled={busy || done !== null} onClick={() => void send({ behavior: 'deny' })}>
@@ -166,6 +167,8 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false, modeNote =
               </button>
             </div>
           )}
+          {/* [常に許可] で何を許可することになるか（#705）。部品ごとに書くので、押す前に全部見せる */}
+          {always && answerable && decisions.length === 0 && <AlwaysRules rules={always} done={done === 'always'} />}
           {/* 拒否すると Codex は「どうしてほしいか」を聞いてくるので、そのまま入力欄へ（#450） */}
           {done === 'deny' && approval.dialog && <div className="notice">拒否しました。どうしてほしいかは、下の返信欄から送れます。</div>}
           {error && <div className="empty-text">送れなかった: {error}</div>}

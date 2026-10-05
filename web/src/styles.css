@@ -1172,6 +1172,9 @@
   /* 同じルールを何度も許可しているとき（#445）。「常に許可」を勧める見た目にする（押すのは人） */
   .group.approval .actions button.always.suggest { background: var(--accent); color: #fff; font-weight: 600; }
   .group.approval .count-note { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+  /* [常に許可] で書くルールの並び（#705）。長いルールは折り返す */
+  .group.approval .always-rules { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: 6px 0 0; color: var(--muted); font-size: 12px; }
+  .group.approval .always-rules code { padding: 1px 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--chip); color: var(--ink); font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
   .group.approval .count-note.suggest { color: var(--accent); }
   .group.approval .actions button:disabled { opacity: .5; cursor: default; }
   /* 質問（AskUserQuestion）は 1 問ずつ。選択肢は縦に積んで説明を label の下に出す（携帯ではツールチップが読めないため） */

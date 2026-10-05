@@ -27,8 +27,8 @@ let cwdB: string
 const servers: Server[] = []
 const saved: Record<string, string | undefined> = {}
 
-async function start(approvals: Approvals): Promise<string> {
-  const app = createApp(new FeedStore(feedDir), join(dir, 'dist'), runner, approvals, undefined, undefined, undefined, { tmux: { run: async () => '' }, ps: async () => '' })
+async function start(approvals: Approvals, allowedRules?: (cwd: string) => Promise<string[]>): Promise<string> {
+  const app = createApp(new FeedStore(feedDir), join(dir, 'dist'), runner, approvals, undefined, undefined, undefined, { tmux: { run: async () => '' }, ps: async () => '', ...(allowedRules ? { allowedRules } : {}) })
   const server = createServer((req, res) => void app(req, res))
   servers.push(server)
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -127,6 +127,57 @@ test('同じルールを 2 回許可すると、3 回目の許可に count: 3 �
   assert.equal(((await res.json()) as { remembered?: string }).remembered, 'Bash(zzsai:*)')
   await settle()
   assert.equal((await logRows()).at(-1)!.remember, true)
+})
+
+test('つないだコマンドは部品ごとにルールを書く（#705）: 何が書かれるかを応答に載せ、回数は組で数え、もう設定にある部品は足さない', async () => {
+  const approvals = new Approvals()
+  // cwdB にだけ、もう zztee のルールがある
+  const base = await start(approvals, async (cwd) => (cwd === cwdB ? ['Bash(zztee:*)', 'Bash(zzall:*)'] : []))
+  const ask = (id: string, command: string, t: string) => approvals.ask(id, 'Bash', { command }, t)
+
+  // cd にはルールを書かない（効かない）。後ろの部品ごとに書く
+  ask('S1@r', 'cd sub && zzrun test --secret | zztee log', 'c1')
+  const [first] = await pending(base, 'S1@r')
+  assert.deepEqual(first!.always, ['Bash(zzrun:*)', 'Bash(zztee:*)'], '押す前に、書かれるルールが全部見える')
+  assert.equal(first!.count, 1)
+  const res = await answer(base, first!.approval_id, { behavior: 'allow', remember: 'local' })
+  assert.equal(((await res.json()) as { remembered?: string }).remembered, 'Bash(zzrun:*) + Bash(zztee:*)')
+  assert.deepEqual((await approvals.wait(first!.approval_id, 10))?.updatedPermissions, [
+    { type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'zzrun:*' }, { toolName: 'Bash', ruleContent: 'zztee:*' }], behavior: 'allow', destination: 'localSettings' },
+  ])
+
+  // 回数は組で数える: 同じ先頭でも、後ろが違えば別（前は先頭の語だけで束ねていた）
+  ask('S1@r', 'zzrun build | zztee log', 'c2')
+  ask('S1@r', 'zzrun build', 'c3')
+  const [same, alone] = await pending(base, 'S1@r')
+  assert.deepEqual([same!.always, same!.count], [['Bash(zzrun:*)', 'Bash(zztee:*)'], 2])
+  assert.deepEqual([alone!.always, alone!.count], [['Bash(zzrun:*)'], 1])
+  for (const a of [same!, alone!]) assert.equal((await answer(base, a.approval_id, { behavior: 'deny' })).status, 200)
+
+  // 通らないと分かった形・ルールを作れない部品があるものには [常に許可] を出さず、押しても 400
+  const refused = ['cd sub && touch x', 'cd /tmp && zzrun x', 'for i in 1 2; do zzrun x; done', 'zzrun x > out.txt', 'cd sub']
+  refused.forEach((command, i) => ask('S1@r', command, `n${i}`))
+  const none = await pending(base, 'S1@r')
+  assert.deepEqual(none.map((a) => [a.always, a.count]), refused.map(() => [undefined, undefined]))
+  for (const a of none) {
+    assert.equal((await answer(base, a.approval_id, { behavior: 'allow', remember: 'local' })).status, 400, String(a.input.command))
+    assert.equal((await answer(base, a.approval_id, { behavior: 'deny' })).status, 200)
+  }
+
+  // もう設定にある部品は足さない。全部あるなら [常に許可] を出さない
+  ask('S2@r2', 'zzrun test | zztee log', 'c4')
+  ask('S2@r2', 'zzall a && zztee log', 'c5')
+  const [partly, covered] = await pending(base, 'S2@r2')
+  assert.deepEqual(partly!.always, ['Bash(zzrun:*)'], '設定にある zztee は足さない')
+  assert.equal(covered!.always, undefined, '全部もう設定にある')
+  assert.equal((await answer(base, covered!.approval_id, { behavior: 'allow', remember: 'local' })).status, 400)
+  assert.equal((await answer(base, partly!.approval_id, { behavior: 'allow', remember: 'local' })).status, 200)
+  assert.deepEqual((await approvals.wait(partly!.approval_id, 10))?.updatedPermissions?.[0]?.rules, [{ toolName: 'Bash', ruleContent: 'zzrun:*' }])
+
+  await settle()
+  const rows = (await logRows()).filter((r) => r.rule.includes('zzrun'))
+  assert.ok(rows.some((r) => r.rule === 'Bash(zzrun:*) + Bash(zztee:*)' && r.remember), '記録の鍵も組')
+  assert.ok(!JSON.stringify(await logRows()).includes('--secret'), 'コマンドの全文は書かない')
 })
 
 test('ApprovalLog: 数えるのは直近の日数ぶんだけ。Jev の自動・cwd の無い行・壊れた行は数えない', async () => {

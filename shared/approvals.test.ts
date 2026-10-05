@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { answerAsk, answersReady, approvalText, askQuestions, joinAnswer, toolSummary, alwaysAllowRule, ruleLabel } from './approvals.ts'
+import { answerAsk, answersReady, approvalText, askQuestions, joinAnswer, toolSummary, alwaysAllowRules, ruleLabel } from './approvals.ts'
 import type { Approval } from './types.ts'
 
 test('approvalText は record.py の waiting_text と同じ接頭辞', () => {
@@ -76,26 +76,18 @@ test('joinAnswer は選んだ label と自由記入を繋ぎ、answersReady は�
   assert.equal(answersReady(codex, { first: '1', second: '2' }), true, 'Codexは重複する質問文でもidで区別する')
 })
 
-test('alwaysAllowRule: Bash は先頭 1 語（サブコマンドを持つ CLI は 2 語）の前方一致、MCP はツール名、他は無し', () => {
-  const rule = (cmd: string) => alwaysAllowRule('Bash', { command: cmd })
-  assert.deepEqual(rule('gh pr create --title x'), { toolName: 'Bash', ruleContent: 'gh pr:*' })
-  assert.deepEqual(rule('git push origin main'), { toolName: 'Bash', ruleContent: 'git push:*' })
-  assert.deepEqual(rule('pnpm test'), { toolName: 'Bash', ruleContent: 'pnpm test:*' })
-  assert.deepEqual(rule('mkdir -p x/y'), { toolName: 'Bash', ruleContent: 'mkdir:*' })
-  assert.deepEqual(rule('gh --version'), { toolName: 'Bash', ruleContent: 'gh:*' }, '2 語目がフラグなら 1 語')
-  assert.deepEqual(rule('FOO=1 gh pr view'), { toolName: 'Bash', ruleContent: 'gh pr:*' }, '環境変数の代入は飛ばす')
-  assert.deepEqual(rule('gh pr list && rm -rf x'), { toolName: 'Bash', ruleContent: 'gh pr:*' }, '&& の手前だけ')
-  assert.deepEqual(rule('  ls -la | head'), { toolName: 'Bash', ruleContent: 'ls:*' })
-  assert.deepEqual(rule('./scripts/run.sh'), { toolName: 'Bash', ruleContent: './scripts/run.sh:*' })
-  assert.equal(rule(''), null)
-  assert.equal(rule('$(echo x)'), null, '展開で始まるものは当てにしない')
-  assert.equal(rule('"quoted cmd"'), null)
-  assert.deepEqual(alwaysAllowRule('mcp__github__create_issue', {}), { toolName: 'mcp__github__create_issue' })
-  assert.equal(alwaysAllowRule('Edit', { file_path: '/x' }), null, 'ファイル系には出さない')
-  assert.equal(alwaysAllowRule('Write', {}), null)
-  assert.equal(alwaysAllowRule('WebFetch', { url: 'https://x' }), null)
-  assert.equal(alwaysAllowRule('AskUserQuestion', { questions: [] }), null)
-  assert.equal(alwaysAllowRule('ExitPlanMode', { plan: 'x' }), null)
+test('alwaysAllowRules: Bash は部品ごとの前方一致、MCP はツール名、他は無し（切り方は bashRules.test.ts）', () => {
+  const rules = (cmd: string) => alwaysAllowRules('Bash', { command: cmd }, '/w')
+  assert.deepEqual(rules('gh pr create --title x'), [{ toolName: 'Bash', ruleContent: 'gh pr:*' }])
+  assert.deepEqual(rules('cd sub && pnpm test && pnpm lint | tail -5'), [{ toolName: 'Bash', ruleContent: 'pnpm test:*' }, { toolName: 'Bash', ruleContent: 'pnpm lint:*' }], '部品ごと。cd と読むだけのコマンドには書かない（#705）')
+  assert.deepEqual(rules('cd sub'), [], 'cd だけなら出さない')
+  assert.deepEqual(rules('cd sub && touch x'), [], '通らないと分かった形には出さない')
+  assert.deepEqual(rules('for i in 1 2; do touch x; done'), [], '構文')
+  assert.deepEqual(rules(''), [])
+  assert.deepEqual(alwaysAllowRules('Bash', {}, '/w'), [])
+  assert.deepEqual(alwaysAllowRules('mcp__github__create_issue', {}, ''), [{ toolName: 'mcp__github__create_issue' }])
+  assert.deepEqual(alwaysAllowRules('Edit', { file_path: '/x' }, '/w'), [], 'ファイル系には出さない')
+  for (const tool of ['Write', 'WebFetch', 'AskUserQuestion', 'ExitPlanMode']) assert.deepEqual(alwaysAllowRules(tool, {}, '/w'), [], tool)
   assert.equal(ruleLabel({ toolName: 'Bash', ruleContent: 'gh pr:*' }), 'Bash(gh pr:*)')
   assert.equal(ruleLabel({ toolName: 'mcp__github__create_issue' }), 'mcp__github__create_issue')
 })

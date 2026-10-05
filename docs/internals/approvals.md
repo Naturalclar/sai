@@ -32,15 +32,19 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 
 ### 「常に許可」
 
-- 画面は `remember: 'local'` だけを送り、サーバが `shared/approvals.ts` の `alwaysAllowRule()` でルール（`Bash(gh pr:*)` など）を組み立てて、`updatedPermissions`（`destination: localSettings`。`permissionsFor()`）として CLI に返す。CLI が cwd の `.claude/settings.local.json` に書く。
+- 画面は `remember: 'local'` だけを送り、サーバが `app.ts` の `alwaysRules()` でルール（`Bash(gh pr:*)` など）を組み立てて、`updatedPermissions`（`destination: localSettings`。`permissionsFor()`）として CLI に返す。CLI が cwd の `.claude/settings.local.json` に書く。
+- **ルールを組むのは `alwaysRules()` の 1 つだけ**（#705）。画面に出す `Approval.always`・回数の鍵・人の答え・Jev の自動が同じものを見る。中身は `shared/approvals.ts` の `alwaysAllowRules()`（Bash は `shared/bashRules.ts` の `bashRulePrefixes()` が部品ごとの接頭辞を返す。null なら出さない）から、もう設定にあるもの（`ruleCovered()`）を除いたもの。空なら [常に許可] を出さず、`remember: 'local'` は `400`。
+- `bashRulePrefixes(command, cwd)`: `&&` / `||` / `;` / 改行 / `|` で部品に分け、部品ごとに「環境変数の代入 + 先頭 1 語（`SUBCOMMAND_CLIS` は 2 語）」を返す。`cd` と `UNASKED`（読むだけのコマンド）には作らない。null にするのは、切れない・通らない形（展開・波括弧・サブシェル・`KEYWORDS`・ファイルへのリダイレクト・`&`・行の途中の `#`・閉じていない引用符）、`cd` の行き先が `cwd` の外か `cwd` が分からないとき、`cd` と `NOT_AFTER_CD`（書き込み系と `git`）をつないだとき。`"$(cat <<'EOF' … EOF)"` は中身ごと空の引用符に置き換えてから読む。
+- もう設定にあるルールは `terminal.allowedRules`（`permissions.ts` の `allowRules()`。設定ファイルを読むだけ）から。**本物を読むのは `main.ts` だけ**で、`createApp` の既定は「読まない」（テストが回したマシンの設定で変わらないように）。
+- 画面は `ApprovalBubble` が `approval.always` を `AlwaysRules` で並べる。**画面はルールを組まないし送らない**。
 - 入口は 2 つ: 人が押す [常に許可] と、Jev の自動の「常に許可」（#499。下の「自動で常に許可」）。
 
 ### 許可した回数と「常に許可」の勧め（#445）
 
 - 記録は `server/approvals/approvalLog.ts` の `ApprovalLog`（`<feed dir>/approvals.jsonl`）。`answerApproval()` が Claude の許可に答えたときと、Jev の自動の「常に許可」（`jevAutoOnce()`）のあとに `logAnswer()` が 1 行足す（`ApprovalLogRow`: `ts` / `id` / `cwd` / `tool` / `rule` / `by` / `behavior` / `remember` / `waited_s`）。cwd はセッションの行から取り、コマンドの全文は書かない。Codex・OpenCode・端末のダイアログの答えは足さない。
 - 回数は起動時にこのファイルを読み直して持つ（`countsTowardSuggest()`: 人が許可した・ルールがある・cwd が分かる行を、cwd とルールごとに直近 `APPROVAL_COUNT_DAYS`（30）日ぶん）。
-- `approvalsNow()` が、ルールの作れる Claude の許可（`countedRule()`）に `count`（数えた回数 + 1）と `suggest`（`APPROVAL_SUGGEST_AT`（3）以上）を付ける。**付けるだけで、答えもルールも書かない**（読む経路なので）。
-- 画面は `ApprovalBubble` が `countNote()` の 1 行を出し、`suggest` なら [常に許可] に `suggest` のクラスを付ける。盾のモーダルは `GET …/permissions` の `frequent`（`ApprovalLog.frequent()`。2 回以上で、許可のルールに覆われていないもの。`ruleCovered()` は同じ表記のほか、より広い Bash のルール（`Bash(gh:*)`）と別の書き方（`Bash(gh pr *)`）も覆っている扱いにする）を上に出す。
+- `approvalsNow()` が、ルールの作れる Claude の許可に `always`（書かれるルール）と、`count`（数えた回数 + 1）・`suggest`（`APPROVAL_SUGGEST_AT`（3）以上）を付ける。数える鍵は書かれるルールの組（`rulesKey()`。`Bash(a:*) + Bash(b:*)`。1 つならその表記のまま）で、記録の `rule` も同じ。鍵は**答える前に**組む（答えたあとは設定に書かれて空になる）。**付けるだけで、答えもルールも書かない**（読む経路なので）。
+- 画面は `ApprovalBubble` が `countNote()` の 1 行を出し、`suggest` なら [常に許可] に `suggest` のクラスを付ける。盾のモーダルは `GET …/permissions` の `frequent`（`ApprovalLog.frequent()`。2 回以上で、許可のルールに覆われていないもの。`ruleCovered()` は同じ表記のほか、より広い Bash のルール（`Bash(gh:*)`）と別の書き方（`Bash(gh pr *)`）も覆っている扱いにする。組は `keyCovered()` で全部が覆われたときだけ外す）を上に出す。`Bash(cd:*)` だけの鍵（#705 より前の記録）は `neverSuggested()` で出さない。
 - 人の答えは**記録に足してから**応答を返す（次のポーリングの「何回目」がずれない）。
 
 ### 答えた許可を残す（#693）
@@ -83,6 +87,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 動かすのは `jevAutoTick()`。呼ばれるのは 3 か所: 許可を預かった時（`POST /api/approvals`）・Jev の答えが届いた時（`JevRisk.onArrive`）・設定を変えた時。同時に 1 本（届くたびに呼ばれる）。
 - 流れ: `approvals.snapshot()`（Claude の `-p` の許可だけ）を `annotate()` し、`jevAutoEligible()`（Bash だけ）で絞り、この回のコマンドとルールの両方が閾値以上のものだけを画面の [常に許可] と同じ答え（`permissionsFor()`）で `approvals.answer()` し、`reply.log` に残す。
 - ルールは `JevRisk.ruleSafe()` が `JEV_RULE_STATEMENT`（`jevRuleState()`）で別に聞く（`Bash(rm:*)` のような前方一致は Jev が見た 1 回より広い）。`JEV_RULE_STATEMENT` は「普段の作業（調べる・ビルド・テスト）の範囲として許してよいか」を聞く文。
+- つないだコマンドは `alwaysRules()` の**部品ごとに** `ruleSafe()` で聞き、`jevLowestRule()`（一番低いもの。1 つでも届いていなければ待つ）で判定する（#705）。`Approval.jev_rule` も一番低いルール。
 - 答えるか・なぜ答えないかは `shared/jev.ts` の `jevAutoDecision()` の 1 つで決める（#553）。この回が閾値以上なのに答えないもの（Bash 以外・ルールを作れない・ルールの確率が閾値未満）は、理由を `reply.log` に同じ許可に 1 行だけ残す。
 - ルールの確率は `Approval.jev_rule` として許可のバブルにも出す。`approvalsNow()` は `JevRisk.peekRule()` で覚えているものを見るだけで、読む経路から外へは送らない。
 - Codex / OpenCode の許可には「常に許可」が無いので触らない。

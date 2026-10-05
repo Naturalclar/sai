@@ -48,5 +48,7 @@ test('quotedNextAsk: 本文に引用された人の言葉があれば、それ�
   assert.equal(quotedNextAsk('「調べて」と言われた件です。終わったら『進めて』と伝えてください'), '進めて', '2 つあれば最後')
   assert.equal(quotedNextAsk('マージしてください'), '', '引用でなければ取らない（口で作る）')
   assert.equal(quotedNextAsk('「マージ」の手順を足しました'), '', '「と言って」が無い引用は頼みではない')
+  assert.equal(quotedNextAsk('さきほど「後で」と言われた件を直しました。'), '', '言われた言葉の引用は頼みではない')
+  assert.equal(quotedNextAsk('「connection refused」と言うエラーが出ます。'), '')
   assert.equal(quotedNextAsk(''), '')
 })

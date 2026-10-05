@@ -4,7 +4,7 @@
 // `record.py` の `is_codex_internal_turn()` が捨てている（セッション ID が無く、同じ cwd の無関係なセッションに紛れ込むため）。
 // ここはプロンプトと後始末だけを持ち、口は `server/digest/digest.ts` の `Summarizer` をそのまま使う。
 // DOM も node も触らないので `shared/nextAsk.test.ts` を node:test で回す。
-import { quotedRequests } from './digestCheck.ts'
+import { quotedAsks } from './digestCheck.ts'
 
 /**
  * 案の長さの目安（文字）。プロンプトで指示し、超えたぶんは `cleanNextAsk()` が切る。
@@ -70,10 +70,11 @@ export function cleanNextAsk(raw: string): string {
 
 /**
  * 本文が人に言ってほしい言葉を引用の形で書いていれば（「『〜』と言ってください」）、**その引用をそのまま案にする**（#713）。
- * LLM は呼ばない。見つけ方は一言の確かめ（`digestCheck.ts` の `quotedRequests()`）と同じものを使う。
+ * LLM は呼ばない。見つけ方は `digestCheck.ts` の `quotedAsks()`（一言の確かめの引用の検出を、頼みの形「と言ってください」に絞ったもの。
+ * 「と言われた件」「と言うエラー」の引用は頼みではないので採らない）。
  * 引用が 2 つ以上あれば最後のもの（頼みは最後の段落に多い）。案の長さを超えるもの・無ければ空（呼び出し側は今までどおり口で作る）
  */
 export function quotedNextAsk(text: string): string {
-  const quoted = quotedRequests((text ?? '').normalize('NFC')).at(-1) ?? ''
+  const quoted = quotedAsks((text ?? '').normalize('NFC')).at(-1) ?? ''
   return quoted && [...quoted].length <= NEXT_ASK_MAX_CHARS ? quoted : ''
 }

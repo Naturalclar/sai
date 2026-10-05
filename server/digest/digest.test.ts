@@ -1321,6 +1321,19 @@ test('Digester: 本文に引用された人の言葉があれば、案はその�
     assert.equal(store.get(digestKey(plain))?.next_ask, '直しました。（案）')
     assert.equal(store.get(digestKey(plain))?.next_ask_source, undefined)
     assert.equal(fake.nextAsks.length, 1, '口を呼ぶのは引用の無い行だけ')
+    // 一言を作り直すために同じ行を積み直しても（一言が空の行は積み直す）、持ち越した案の印は落とさない
+    const offStore = new DigestStore(join(dir, 'off.jsonl'))
+    await offStore.load()
+    let off = true
+    const d2 = new Digester(offStore, fake, { enabled: true, model: 'haiku', since: at(0).toISOString(), persona: async () => (off ? null : 'none'), logPath: join(dir, 'digest.log') })
+    d2.scan([quoted])
+    await d2.drain()
+    assert.deepEqual([offStore.get(digestKey(quoted))?.summary, offStore.get(digestKey(quoted))?.next_ask_source], ['', 'quote'], '一言を切っている間は案だけ')
+    off = false
+    d2.scan([quoted])
+    await d2.drain()
+    assert.notEqual(offStore.get(digestKey(quoted))?.summary, '')
+    assert.deepEqual([offStore.get(digestKey(quoted))?.next_ask, offStore.get(digestKey(quoted))?.next_ask_source], ['マージして', 'quote'], '持ち越した案の印も残る')
     assert.ok(fake.prompts.some((p) => p.includes('「マージして」と言って')), '一言はいつもどおり作る（一言と案は別に数える）')
   } finally {
     await rm(dir, { recursive: true, force: true })

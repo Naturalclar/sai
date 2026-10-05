@@ -2,7 +2,7 @@
 // 本文と一言は、長さだけ詰めて形は変えていない
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { digestIssues, firstLine, mentionsNext, quotedRequests, requestSentence, stripAsks } from './digestCheck.ts'
+import { digestIssues, firstLine, mentionsNext, quotedAsks, quotedRequests, requestSentence, stripAsks } from './digestCheck.ts'
 import { DIGEST_MAX_CHARS } from './persona.ts'
 
 const codes = (source: string, summary: string) => digestIssues(source, summary).map((i) => i.code)
@@ -269,4 +269,27 @@ test('mentionsNext / stripAsks: 報告だけの本文かどうか・一言から
   assert.equal(stripAsks('PR を出したよ、マージして？'), 'PR を出したよ。', '文の後ろの節だけが頼みなら、そこだけ落とす')
   assert.equal(stripAsks('直したよ！テストも通ってる！'), '直したよ！テストも通ってる！', '頼みが無ければそのまま')
   assert.equal(stripAsks('マージして？'), 'マージして？', '全部が頼みなら落とさない（空にしない）')
+})
+
+test('quotedAsks / requestSentence: 頼みでない引用（「と言われた件」「と言うエラー」）は採らない（#713 のレビュー）', () => {
+  assert.deepEqual(quotedAsks('さきほど「後で」と言われた件を直しました。'), [])
+  assert.deepEqual(quotedAsks('「connection refused」と言うエラーが出ます。'), [])
+  assert.deepEqual(quotedAsks('よければ「マージして」と言ってください。終わったら『進めて』と伝えてもらえれば続けます。'), ['マージして', '進めて'])
+  assert.deepEqual(quotedAsks('「続けて」と言ってね'), ['続けて'])
+  assert.equal(requestSentence('「調べて」と言われた件を調べました。原因は設定です。結果を確認してください。'), '結果を確認してください。', '頼みでない引用の文を、本物の頼みより先に選ばない')
+  assert.equal(requestSentence('「調べて」と言われた件を調べました。'), '')
+})
+
+test('requestSentence / stripAsks: URL・コード・引用の中の「？」や句点では切らない（#713 のレビュー）', () => {
+  assert.equal(requestSentence('http://localhost:8787/?days=7 を開いて確認してください。'), 'http://localhost:8787/?days=7 を開いて確認してください。')
+  assert.equal(requestSentence('直しました。よければ「マージしていい？」と言ってください。'), 'よければ「マージしていい？」と言ってください。')
+  assert.equal(requestSentence('`a ? b : c` の形に直しました。確認してください。'), '確認してください。')
+  assert.equal(stripAsks('https://example.com/x?y=1 に載せたよ！'), 'https://example.com/x?y=1 に載せたよ！', 'URL の ? は問いかけではない')
+  assert.equal(stripAsks('「どうする？」と聞かれた所を直したよ！'), '「どうする？」と聞かれた所を直したよ！')
+})
+
+test('stripAsks: 頼みの節が文の頭・途中にあっても落とす。続きの「〜して、」は落とさない（#713 のレビュー）', () => {
+  assert.equal(stripAsks('確認してね、PR 出したよ！'), 'PR 出したよ！')
+  assert.equal(stripAsks('空の入力を直して、変数名も揃えたよ！'), '空の入力を直して、変数名も揃えたよ！')
+  assert.equal(stripAsks('直したよ！！テストも通ってる？！'), '直したよ！！', '区切りが続いても文を分けない')
 })

@@ -47,9 +47,9 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 | `report` | 人がすることに触れていない（`mentionsNext()` が偽） | 口には `digestWhatPrompt()`。何も足さない |
 | `full` | 人がすることに触れているが、そのまま抜ける文が無い（頼みの形でない言い方・質問）。日本語でない本文もここ | 今までどおり `digestPrompt()` で 1 回で全部を書かせる |
 
-- `requestSentence()`（`shared/digestCheck.ts`）が拾うのは、頼みの形（`REQUEST`）か引用された依頼（`QUOTED_REQUEST`）のある文だけ。引用のある文を先に、同じなら後ろの文。質問・コードブロックの中・`DIGEST_MAX_CHARS` を超える文は拾わない。行の頭の Markdown の記号は落とす。
+- `requestSentence()`（`shared/digestCheck.ts`）が拾うのは、頼みの形（`REQUEST`）か、人に言ってほしい言葉として引用された依頼（`QUOTED_ASK`。「と言ってください」「と伝えてもらえれば」の形だけ。一言の確かめに使う `QUOTED_REQUEST` は「と言われた件」「と言うエラー」にも当たるので、ここでは使わない）のある文だけ。文は URL・その場のコード・引用（「」『』）の中では切らない（`splitKeeping()`）。引用のある文を先に、同じなら後ろの文。質問・コードブロックの中・`DIGEST_MAX_CHARS` を超える文は拾わない。行の頭の Markdown の記号は落とす。
 - `digestWhatPrompt()`（`shared/persona.ts`）は、番号の規則を**本文か頼んだことが番号の話をしているときだけ**入れる（`NUMBER_TALK`）。うまくいかなかったことを書く文には口調の飾りを付けさせない。作例は置かない。
-- `stripAsks()` は文ごとに `asksPerson()` を見て、頼みの文と、文の後ろの頼みの節（読点の後ろ）を落とす。全部が頼みなら落とさない（一言を空にしない）。
+- `stripAsks()` は文ごとに `asksPerson()` を見て、頼みの文と、文の中の頼みの節（読点で切ったもの。頭・途中・後ろ）を落とす。途中の節は言葉（`INVENTED_ASK`）だけで見る（「〜を直して、」は続きの形）。URL・コード・引用の中の `?` は問いかけと数えない（`masked()`）。全部が頼みなら落とさない（一言を空にしない）。
 - 画面に「起きたこと:」のような見出しは出さない。`summary` は 2 つを続けた 1 つの文で、`two` の回は分けたものも `DigestEntry.what` / `next` に残す（画面が場所ごとに出し分けるときに使う。`report` / `full` の回とこの欄が入る前の行には無く、`summary` をそのまま 1 つの一言として読む）。
 - 長さの枠（`DIGEST_MAX_CHARS`）は欄ごと: `two` の回は、口が書いた部分が枠に収まっていれば、繋いだ長さでは `too_long` にしない。
 - 作り直し（#346）は同じ組み方のまま、口が書いた部分だけを渡して頼み直す。
@@ -111,7 +111,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 ## 次に送る文面の案
 
 - 同じ pump・同じ口で「次に送る文面の案」も作る（#371）。プロンプトと後始末は `shared/nextAsk.ts` の `nextAskPrompt()` / `cleanNextAsk()`。
-- **本文に人に言ってほしい言葉が引用されていれば（「『〜』と言ってください」）、その引用をそのまま案にして口を呼ばない**（#713。`quotedNextAsk()`。見つけ方は `digestCheck.ts` の `quotedRequests()`。2 つ以上あれば最後、`NEXT_ASK_MAX_CHARS` を超えるものは使わない）。そのとき行に `next_ask_source: 'quote'` を付ける（`feed/digest_stats.py` が出どころごとに数える）。引用が無ければ今までどおり口で作る。
+- **本文に人に言ってほしい言葉が引用されていれば（「『〜』と言ってください」）、その引用をそのまま案にして口を呼ばない**（#713。`quotedNextAsk()`。見つけ方は `digestCheck.ts` の `quotedAsks()` = 引用の検出を頼みの形に絞ったもの。2 つ以上あれば最後、`NEXT_ASK_MAX_CHARS` を超えるものは使わない）。そのとき行に `next_ask_source: 'quote'` を付ける（一言を作り直すために同じ行を積み直すときは、持ち越す案と一緒に印も持ち越す。`feed/digest_stats.py` が出どころごとに数える）。引用が無ければ今までどおり口で作る。
 - 一言とは別に入切する（#560）: `settings.json` の `next_ask`（無ければ `digest` に従う）。読むときに埋めない（判定は `nextAskOn()`）。
 - `Digester` は `enabled`（一言）/ `nextAskEnabled`（案）/ `active`（どちらか＝口を組んで列を回す）を分けて持つ。
 - 一言を切っている（全体の `digest: false` かセッションの `digest_off`）行でも、一番新しい行なら案だけ作り、`digest.jsonl` に一言の空の行（`summary: ''`）として書く（書かないと 3 秒ごとの `scan()` が同じ行を積み直して口を叩き続ける）。読む側（`summaryFor()` / `attach()` / 一言への「変？」）は空を「一言なし」として扱い、セッションの `digest_off` を戻したら空の行にも一言を作る（案は叩き直さない）。

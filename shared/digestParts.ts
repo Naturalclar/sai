@@ -42,5 +42,6 @@ export function cleanWhat(plan: DigestPlan, what: string): string {
 export function joinDigest(what: string, next: string): string {
   if (!next) return what
   if (!what) return next
-  return `${/[。．.！!？?…～〜♪)）」』]$/u.test(what) ? what : `${what}。`}${next}`
+  // 記号・絵文字で終わっていれば句点を足さない（口調によっては絵文字で終える）
+  return `${/[\p{P}\p{S}\p{Extended_Pictographic}\uFE0F]$/u.test(what) ? what : `${what}。`}${next}`
 }

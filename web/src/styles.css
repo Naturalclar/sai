@@ -396,11 +396,14 @@
   .pr-actions button { font: inherit; font-size: 12px; padding: 3px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); cursor: pointer; }
   .pr-actions button.on { border-color: var(--accent); color: var(--accent); }
   .pr-actions button:disabled { opacity: .6; cursor: default; }
-  /* 題名の行の「入力欄に入れる」「GitHub にレビューを投稿…」（#646）。既定の方が主、もう片方はリンクの形。
+  /* 題名の行の「入力欄に入れる」「Submit review」（#646 / #698）。既定の方が主、もう片方も操作だと分かる枠付きの副ボタン。
      狭い画面では短い文言（`.short`）に替える（「Open in GitHub」・更新と並んで折り返さないように） */
   .pr-actions button.head-act { white-space: nowrap; max-width: 28em; overflow: hidden; text-overflow: ellipsis; }
   .pr-actions button.head-act.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
-  .pr-actions button.head-act.linkish { background: none; border: 0; padding: 0; color: var(--accent); }
+  .pr-actions button.head-act.secondary { background: var(--chip); color: var(--ink); font-weight: 600; box-shadow: 0 1px 0 color-mix(in srgb, var(--ink) 10%, transparent); }
+  .pr-actions button.head-act.secondary:hover { background: var(--hover); border-color: color-mix(in srgb, var(--ink) 28%, var(--line)); }
+  .pr-actions button.head-act.primary:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 85%, var(--ink)); }
+  .pr-actions button.head-act:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .pr-actions button.head-act .short { display: none; }
   @media (max-width: 900px) { .pr-actions button.head-act .full { display: none; } .pr-actions button.head-act .short { display: inline; } }
   /* 「更新」（#601）。アイコン＋文字。取っている間だけアイコンを回す（動きを減らす設定では回さない） */
@@ -1391,8 +1394,6 @@
      それより後ろに置く。前に置くと padding だけ負けて負のマージンだけが残り、文字が左上に 6〜8px ずれる */
   @media (pointer: coarse) {
     .linkish, .msg .more, .msg .think-toggle, .reply .target .clear, .reply .target .to { padding: 8px 6px; margin: -8px -6px; }
-    /* 題名の行のリンクの形のボタン（#646）は上の `.pr-actions button.head-act.linkish` の方が詳細度が高いので、同じ詳細度で書き直す */
-    .pr-actions button.head-act.linkish { padding: 8px 6px; margin: -8px -6px; }
   }
   .reply .target .clear:hover { color: var(--ink); }
   /* 打ちかけの続きをタップで受け取るボタン（#349）。タッチ端末のときだけ出す（ソフトキーボードに矢印キーが無い）。

@@ -112,7 +112,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 ### GitHub にレビューを投稿する
 
 - `POST /api/prs/<owner>/<repo>/<番号>/review`（同一オリジンのみ）。画面は題名の行の `PrHeadActions` → 確認の画面 `PrReviewModal`。全体のコメントの下書きは `web/src/prReviewDraft.ts` の `sai.prReviewBody`。
-- **ボタンの置き場（#646）**: 「入力欄に入れる」と「Submit review」（#649 で GitHub の文言に合わせた。狭い画面は「レビュー」のまま）は `PrView` の題名の行（`.chat-head` の `.pr-actions`。スクロール容器 `.pr-body` の外）に `PrHeadActions` が出す。`onInsert` / `onReview` を渡したものだけ出し（条件は `canComment` / `canPost` のまま）、両方あれば入れる方が `primary`・投稿が `linkish`。文言と数は `web/src/prHeadLabels.ts`（`reviewLabel()` / `insertLabel()` / `draftSummary()`）で、広い・狭いの 2 つを両方描いて CSS（900px 以下）が切り替える。差分の上は `PrDraftBar`（案内か、下書きの中身と「全部消す」）。全体のコメントは投稿にだけ載るので、`canPost` でなければ下書きに数えない。セッションの差分（`DiffBody`）の `DiffCommentBar` は変えていない。
+- **ボタンの置き場（#646）**: 「入力欄に入れる」と「Submit review」（#649 で GitHub の文言に合わせた。狭い画面は「レビュー」のまま）は `PrView` の題名の行（`.chat-head` の `.pr-actions`。スクロール容器 `.pr-body` の外）に `PrHeadActions` が出す。`onInsert` / `onReview` を渡したものだけ出し（条件は `canComment` / `canPost` のまま）、両方あれば入れる方が `primary`・投稿が枠付きの `secondary`（#698）。投稿だけなら投稿が `primary`。文言と数は `web/src/prHeadLabels.ts`（`reviewLabel()` / `insertLabel()` / `draftSummary()`）で、広い・狭いの 2 つを両方描いて CSS（900px 以下）が切り替える。差分の上は `PrDraftBar`（案内か、下書きの中身と「全部消す」）。全体のコメントは投稿にだけ載るので、`canPost` でなければ下書きに数えない。セッションの差分（`DiffBody`）の `DiffCommentBar` は変えていない。
 - 書いたセッションが見つかる PR では入力欄に入れる方（#525）が既定。種類の既定は Comment。自分の PR（`gh api user` のログイン名＝作者）には Comment しか出さない（サーバも 400）。
 - サーバ（`app.ts` の `postPrReview()`）は画面の位置をそのまま渡さない:
   - いまの PR を読み直し、head が画面の読んだ SHA（`commit_id`）と違えば 409 `head_moved`。

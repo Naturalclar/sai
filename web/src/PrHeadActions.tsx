@@ -1,9 +1,9 @@
-import { insertLabel, reviewLabel } from './prHeadLabels'
+import { insertLabel, reviewButtonClass, reviewLabel } from './prHeadLabels'
 
 /**
  * PR の画面の題名の行に置く「入力欄に入れる」（#525）と「Submit review」（GitHub へのレビューの投稿。#526 / #649）。題名の行は流れないので、
  * 差分のどこを読んでいても押せる（#646。前は差分の上にあり、読み終わると一番上まで戻らないと押せなかった）。
- * **その PR の既定の方を主のボタン、もう片方を小さいリンクにする**（書いたセッションが見つかる PR は入力欄に入れる方が主）。
+ * **その PR の既定の方を主のボタン、もう片方を枠付きの副ボタンにする**（書いたセッションが見つかる PR は入力欄に入れる方が主）。
  * 投稿は押すと確認の画面を開くだけで、ここからは送らない。狭い画面では文言を短くする（CSS が `.full` / `.short` を切り替える）
  */
 export function PrHeadActions({
@@ -27,7 +27,7 @@ export function PrHeadActions({
   return (
     <>
       {onReview && (
-        <button type="button" className={`head-act ${onInsert ? 'linkish' : 'primary'}`} onClick={onReview} title="確認の画面を開く（押すまで GitHub には送らない）" aria-label={review.full}>
+        <button type="button" className={reviewButtonClass(!!onInsert)} onClick={onReview} title="確認の画面を開く（押すまで GitHub には送らない）" aria-label={review.full}>
           <span className="full">{review.full}</span>
           <span className="short">{review.short}</span>
         </button>

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { decodeText, fileTable, isLoopbackHostHeader, readSessionFile } from './files.ts'
+import { decodeText, fileTable, readSessionFile } from './files.ts'
 import { fileKey } from '../../shared/files.ts'
 import { row } from '../rows/aggregate.test.ts'
 
@@ -94,9 +94,4 @@ test('decodeText: UTF-8 の文字だけ。NUL・壊れたバイト列は null', 
   assert.equal(decodeText(Buffer.alloc(0)), '')
   assert.equal(decodeText(Buffer.from([0x61, 0x00])), null)
   assert.equal(decodeText(Buffer.from([0xff, 0xfe, 0x61])), null)
-})
-
-test('isLoopbackHostHeader: ループバックの名前だけ（ポートは問わない）。外の名前・空は断る', () => {
-  for (const host of ['127.0.0.1:8787', '127.0.0.1', 'localhost:5173', 'LOCALHOST', '[::1]:8787']) assert.equal(isLoopbackHostHeader(host), true, host)
-  for (const host of [undefined, '', 'evil.example.com:8787', '127.0.0.1.evil.example.com', 'mac.tailnet.ts.net', '127.0.0.2', 'localhost.evil.com']) assert.equal(isLoopbackHostHeader(host), false, String(host))
 })

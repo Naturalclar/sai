@@ -316,6 +316,21 @@ after(async () => {
 
 const get = (path: string) => fetch(base + path)
 
+/** fetch では Host を差し替えられないので、DNS rebinding の形は node:http で送る */
+const requestWithHost = (path: string, method: string, host: string, headers: Record<string, string> = {}, body = '') =>
+  new Promise<number>((resolve, reject) => {
+    const { port } = new URL(base)
+    const req = httpRequest(
+      { hostname: '127.0.0.1', port, path, method, headers: { Host: host, ...(body ? { 'Content-Length': Buffer.byteLength(body) } : {}), ...headers } },
+      (res) => {
+        res.resume()
+        res.on('end', () => resolve(res.statusCode ?? 0))
+      },
+    )
+    req.on('error', reject)
+    req.end(body)
+  })
+
 test('selfUrl: ソケットの待ち受けアドレス。IPv6 は角括弧、IPv4-mapped は IPv4 に戻す、無ければ既定', () => {
   const at = (localAddress: string, localPort: number) => selfUrl({ socket: { localAddress, localPort } } as never)
   assert.equal(at('127.0.0.1', 8787), 'http://127.0.0.1:8787')
@@ -852,7 +867,7 @@ test('POST reply: tailscale serve 経由（Host が ts.net）でも SAI_URL は�
   const status = await new Promise<number>((resolve, reject) => {
     const body = JSON.stringify({ text: 'go' })
     const req = httpRequest(
-      { host: '127.0.0.1', port, method: 'POST', path: '/api/sessions/C1%40r/reply', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), Host: 'jesses-mac-mini.taild2a5cb.ts.net', 'X-Forwarded-Proto': 'https' } },
+      { host: '127.0.0.1', port, method: 'POST', path: '/api/sessions/C1%40r/reply', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), Host: 'jesses-mac-mini.taild2a5cb.ts.net', ...TAILNET } },
       (res) => {
         res.resume()
         res.on('end', () => resolve(res.statusCode ?? 0))
@@ -1394,6 +1409,19 @@ test('認証: ヘッダ無しのローカル直アクセスは通り、viewer �
   assert.deepEqual(health, { ok: true, viewer: null })
   const list = (await (await get('/api/sessions?days=7')).json()) as SessionsResponse
   assert.equal(list.viewer, null)
+})
+
+test('認証: ローカル直アクセスは Host もループバックだけ通す（DNS rebinding を GET・書き込みとも断る）', async () => {
+  assert.equal(await requestWithHost('/api/health', 'GET', 'evil.example'), 403)
+  assert.equal(
+    await requestWithHost('/api/sessions/C1%40r/meta', 'PUT', 'evil.example', { 'Content-Type': 'application/json', Origin: 'http://evil.example' }, '{}'),
+    403,
+    'Origin と Host が同じ外の名前でも断る',
+  )
+  for (const host of ['127.0.0.1:8787', 'localhost:5173', '[::1]:8787']) {
+    assert.equal(await requestWithHost('/api/health', 'GET', host), 200, host)
+  }
+  assert.equal(await requestWithHost('/api/health', 'GET', 'mac.tailnet.ts.net', TAILNET), 200, 'whois で確かめた Serve 経由は MagicDNS の Host でも通す')
 })
 
 test('認証: Tailscale-User-Login は whois と一致したときだけ通り、viewer にログイン名が載る', async () => {

@@ -39,17 +39,6 @@ export function fileTable(rows: FeedRow[], fallbackCwd = ''): Map<string, FileSo
   return table
 }
 
-/**
- * `Host` がループバックの名前か（`127.0.0.1` / `localhost` / `[::1]`。ポートは問わない）。
- * **DNS の付け替え（rebinding）への備え**: ソケットがループバックでも、外のページが自分のホスト名を 127.0.0.1 に向け直すと
- * 「同じオリジンの GET」として読めてしまう。そのときブラウザが送る `Host` は外の名前なので、ここで断る
- */
-export function isLoopbackHostHeader(host: string | undefined): boolean {
-  if (!host) return false
-  const name = host.trim().toLowerCase().replace(/:\d+$/, '')
-  return name === '127.0.0.1' || name === 'localhost' || name === '[::1]'
-}
-
 export type FileRead =
   | { ok: true; text: string; bytes: number; name: string; path: string }
   | { ok: false; status: number; reason: string }

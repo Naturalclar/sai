@@ -200,7 +200,7 @@ import { agentListFromEnv, backgroundLive, type AgentList, type ClaudeAgent } fr
 import { isRemoteHost } from '../shared/host.ts'
 import { IMAGES_SEGMENT } from '../shared/images.ts'
 import { imageHeaders, imageTable, readSessionImage } from './local/images.ts'
-import { fileTable, isLoopbackHostHeader, readSessionFile } from './local/files.ts'
+import { fileTable, readSessionFile } from './local/files.ts'
 import { FILES_SEGMENT } from '../shared/files.ts'
 import { TranscriptImages } from './local/transcriptImages.ts'
 import { labelSuffixes } from '../shared/sessionLabels.ts'
@@ -215,7 +215,7 @@ import { codexTurnErrorReason, queuedTurnError } from '../shared/codexTurnError.
 import { alive, isDescendant, parsePs, RealTmux, realPs, TerminalBusy, TerminalGone, TerminalReplies, typeInto } from './reply/terminal.ts'
 import type { DeliveryAnswer, DeliveryQuery, PsFn, Tmux } from './reply/terminal.ts'
 import type { Runner } from './reply/runner.ts'
-import { Authenticator, tailscaleWhois } from './auth.ts'
+import { Authenticator, isLoopbackHostHeader, tailscaleWhois } from './auth.ts'
 import type { Identity } from './auth.ts'
 import type { FeedStore } from './rows/store.ts'
 
@@ -3714,6 +3714,8 @@ export function createApp(
       return error(res, 500, err instanceof Error ? `${err.name}: ${err.message}` : String(err))
     }
     if (!who) return error(res, 401, 'unauthorized: Tailscale-User-Login が whois と一致しない')
+    // 接続元アドレスだけでは DNS rebinding を見分けられない。Serve 経由は whois で確かめるので Host は MagicDNS 名のまま通す
+    if (who.kind === 'local' && !isLoopbackHostHeader(req.headers.host)) return error(res, 403, 'ローカルから使うときは Host が 127.0.0.1 / localhost / [::1] でなければなりません')
     const viewer = viewerOf(who)
     const url = new URL(req.url ?? '/', 'http://127.0.0.1')
     const q = url.searchParams
@@ -3988,8 +3990,6 @@ export function createApp(
       const filesAt = path.startsWith(SESSIONS_PREFIX) ? path.indexOf(FILES_SEGMENT, SESSIONS_PREFIX.length) : -1
       if (filesAt > 0) {
         if (who.kind !== 'local') return error(res, 403, '返答のファイルは、SAI を動かしているマシンのブラウザからだけ開けます（tailnet 越しには出していません）')
-        // 外のページがホスト名を 127.0.0.1 に向け直して読む（DNS rebinding）のを断る。ソケットがループバックでも Host は外の名前になる
-        if (!isLoopbackHostHeader(req.headers.host)) return error(res, 403, '返答のファイルは、127.0.0.1 / localhost で開いた SAI からだけ開けます')
         const id = sessionIdFrom(path, path.slice(filesAt))
         if (id === null) return error(res, 400, 'bad session id')
         const days = parseDays(q.get('days'), 90)

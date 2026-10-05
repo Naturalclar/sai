@@ -5,220 +5,48 @@ description: main worktree を最新の main に進めて web/dist/ をビルド
 
 # sync-main
 
-main worktree を最新の `main` に進めて `web/dist/` を作り直し、サーバがそれで動いているところまで確かめる。
-やるのは **lock を取る** → fetch → ff-only merge → install → build → サーバを最新のコードにする → **lock を外す** → 報告。**main worktree の状態は壊さない**（reset / checkout / stash はしない）。
+main worktree の更新、ビルド、必要なサーバ再起動は `sync.sh` がまとめて行う。エージェントが個々の `git` / `pnpm` / `lsof` / `ps` / `curl` / `tmux` を順番に呼ばない。
 
-セッションは `dev-*` のような別の worktree から呼ばれることが多い。cwd は動かさず、`git -C "$main"` / `pnpm -C "$main"` で main worktree を操作する。
+## 実行
 
-## 0. main worktree を見つける
-
-```sh
-main=$(git worktree list --porcelain | awk '/^worktree /{w=$2} /^branch refs\/heads\/main$/{print w}')
-[ -n "$main" ] || main=$(git rev-parse --show-toplevel)   # worktree を使っていない普通の clone
-echo "$main"
-```
-
-`main` ブランチに乗っている worktree が 1 つも無ければ止めて、`git worktree list` の一覧を添えて報告する（main worktree で枝を切って作業中、ということがある。勝手に `main` に戻さない）。
-
-## 0.5 lock を取る（1 本ずつにする。#580）
-
-`/merge` の後始末からも呼ばれるので、**2 つのセッションがほぼ同時にマージすると 2 本同時に走る**。`git merge --ff-only` は重なっても安全だが、**サーバの立て直しが重なると、片方が打った起動コマンドがもう片方に飲まれる**（#296 の形）。**後から来た方が譲る**:
+今いるリポジトリのルートを渡して、次の **1 回だけ**を実行する。最長8分lockを待つので、コマンドのタイムアウトは10分以上にする。
 
 ```sh
-lockdir="$(git -C "$main" rev-parse --path-format=absolute --git-common-dir)/sai-sync-main.lock"
-locksh="$main/.claude/skills/sync-main/lock.sh"
-[ -f "$locksh" ] || locksh="$(git rev-parse --show-toplevel)/.claude/skills/sync-main/lock.sh"   # main がまだこの版より前のとき
-who="$(basename "$(git rev-parse --show-toplevel)") $(date +%H:%M:%S)"; echo "who=$who"          # 外すときに同じ文字列を渡すので控える
-bash "$locksh" acquire "$lockdir" "$who"      # Bash の timeout は 600000 にする（最長 8 分待つ）
+root=$(git rev-parse --show-toplevel)
+bash "$root/.claude/skills/sync-main/sync.sh" "$root"
 ```
 
-- **置き場は git の共通ディレクトリ**（bare clone なら `sai.git/`）。どの worktree から呼んでも同じ場所で、main worktree の `git status` を汚さない
-- `acquired waited=0s` なら自分が先。`waited` が付いていれば**先の方が終わるのを待った**ということ。**どちらでも、このあとの手順をそのまま回す**: 先の方が最新まで進めていれば 2 は「最新です」、4 は「サーバは最新のコード」で、何もせずに終わる。先の方が fetch したあとに自分のマージが入っていたら（先の方は 1 つ前までしか進めていない）、ここで自分が進める。**譲る = 何もしないで終わる、ではない**
-- **`timeout:`（終了コード 3）なら何も回さない。** main worktree もサーバも触らず、「進んでいません」と、誰がいつから持っているか（出力にある）を報告して終わる。**lock を消しに行かない**
-- 落ちたまま残った lock（途中でセッションが止まった）は、取ってから 15 分を過ぎていれば次に来た方が引き取る（`stale:` と出る）。それより若い lock は生きているものとして待つ
+スクリプトは短い `key=value` の行だけを返す。
 
-**取れたら、どの道で終わるときも必ず外す**（1 や 2 で止めたとき・ビルドが落ちたとき・立て直しで止めたときも）:
+- `main=`: 操作対象のmain worktree
+- `lock=`: `acquired waited=Ns`。最後の `lock=released` まで出れば解放済み
+- `sync=updated commits=...` / `sync=latest`: 取り込んだコミット、または既に最新
+- `build=ok`: install・typecheck・build成功
+- `server=`: `restarted` / `latest` / `watch` / `stopped` / `deferred` / `blocked`
+- `digest=`: 入切・口・モデル・エラー。切なら、ローカルの `qwen3:8b` があればopenai、無ければclaudeに設定する
+- `verify=build-yes`: `X-SAI-Build` と `web/dist/index.html` が一致
+- `status=ok` / `status=blocked stage=...`: 全体の結果
 
-```sh
-bash "$locksh" release "$lockdir" "$who"
-```
+## 結果の扱い
 
-## 1. 更新してよい状態か
+- `status=ok`: そのまま報告する。`server=stopped` は人が止めている意図を守って起動していない
+- `server=deferred ... reason=codex-busy`: mainとbuildは更新済み。`/merge` の後始末なら待たず、「Codexのターンが回っているため再起動していない。終わったら `/sync-main`」と報告する。人が直接頼んだ実行なら、終わったあとこのスキルをもう一度呼べる
+- `server=blocked`: mainとbuildは更新済みだが、安全に再起動・検証できなかった。`reason`をそのまま報告し、手作業でC-cやkillを足さない
+- `status=blocked`: `stage`と`detail`を報告して止める。dirty、main worktree不在、ff不可、install/build失敗を勝手にreset・checkout・stashで直さない
+- 終了コード3: 他の同期がlockを持ったまま待ち切れなかった。lockを消さず持ち主を報告する
 
-```sh
-git -C "$main" status --short             # 空でなければ止める（誰かがそこで作業中）
-git -C "$main" branch --show-current      # main でなければ止める
-```
+## スクリプトが守ること
 
-どちらかで止めたら、**lock を外して**、理由と `status` の中身を報告して終わり。
+- mainブランチのworktreeだけを触り、cleanでなければfetch前に止まる。取り込みは`FETCH_HEAD`への`--ff-only`だけ
+- 共通gitディレクトリのlockを取り、成功・失敗・シグナルのどの出口でも自分のlockだけを解放する
+- サーバが止まっていれば起動しない。`node --watch`ならC-cしない
+- 通常のサーバを再起動するのは、`server/`か`shared/`が起動時刻より新しく、SAIのapp-serverが回すCodexターンが無く、同じtmuxペインを引けたときだけ
+- 再起動は同じペインで C-c → シェルの子が消えるまで待つ → C-u → `pnpm start`。新しいpidが同じシェルの子でなければ、それ以上触らない
+- `kill`・`reset`・`checkout`・`stash`、tailscale serveの操作はしない。一言が既に入なら設定を変えない
 
-## 2. 取り込む
+## 報告
 
-bare repo + worktree の構成では `origin/*` の追跡 ref が無い（refspec 無し）。`origin/main` ではなく **`FETCH_HEAD`** を使う。
-
-```sh
-git -C "$main" fetch origin main
-git -C "$main" log --oneline HEAD..FETCH_HEAD     # 何が入るか。空なら「最新です」。ビルドは 4 の確認だけして終わる
-git -C "$main" merge --ff-only FETCH_HEAD          # ff できなければ止める（main に直接コミットがある）
-```
-
-入るコミットの一覧は報告に使うので控えておく。
-
-## 3. ビルド
-
-Node は `package.json` の `engines`（22.18+）。asdf の環境では版を渡さないと古い Node が選ばれ、`pnpm build` / `pnpm start` が `ERR_UNKNOWN_FILE_EXTENSION` で落ちる。
-
-```sh
-node -v                                   # 22.18 未満なら ASDF_NODEJS_VERSION=22.x を付けてやり直す
-pnpm -C "$main" install --frozen-lockfile  # lockfile が変わっていなくても速いので毎回
-pnpm -C "$main" build                      # typecheck 込み。落ちたらここで止めて出力をそのまま出す
-```
-
-## 4. サーバを最新のコードにする
-
-```sh
-pid=$(lsof -nP -iTCP:8787 -sTCP:LISTEN -t)    # ポートは SAI_PORT / --port で変わる
-```
-
-**動いていなければ起動しない。** 「起動していない」と報告して、下の起動コマンドを添えるだけにする（止めてあるのはその人の意図かもしれない）。
-
-### 立て直しが要るか
-
-`pnpm start` は `server/` が変わっても再起動しない。**今回の sync だけでなく、前回の sync のあと立て直さないままのことがある**（実際に 2 回続けて、1 時間前のコードのサーバが動いていた）。`before..HEAD` の差分ではなく、**プロセスの起動時刻より新しいファイルがあるか**で見ると、どちらの場合も拾える（merge / checkout は変わったファイルの mtime だけ更新する）。
-
-```sh
-started=$(date -j -f '%c' "$(ps -o lstart= -p "$pid")" +%s)      # macOS
-ref=$(mktemp); touch -t "$(date -r $started +%Y%m%d%H%M.%S)" "$ref"
-find "$main/server" "$main/shared" -name '*.ts' -newer "$ref"; rm -f "$ref"
-```
-
-何も出なければサーバは最新のコード。立て直さず 5 に進む。
-
-**立て直す前に「いま失うものがあるか」を手で確かめなくてよい**（#440）。次は立て直しをまたいで残る:
-
-- 返信を処理中のもの（`replying.json`）と預かり（`reply-queue.json`）
-- 返信中の許可・質問の預かり（`approvals.json`。返信の `claude -p` の子は生き残り、MCP サーバは繋ぎ直して同じ許可の答えを受け取る）
-- セッション間メッセージの記録・「送信を止める」・1 ターンの回数と量（`agent-messages.json`）、tailnet からの送信回数（`mcp-sends.json`）
-- **ターンを回している** `opencode serve`（C-c では落とさず、`opencode-serve.json` から次のサーバが引き取る。回していなければ今までどおり落とす）
-
-**残らないのは SAI の app-server が回している Codex のターンだけ**（`codex app-server --stdio` は stdin で繋いでいるので引き取れず、C-c で途中で切れる）。**立て直す前に必ず見る**:
-
-```sh
-curl -sS -m 10 'http://127.0.0.1:8787/api/sessions?days=7' | python3 -c '
-import json, sys
-try:
-    d = json.load(sys.stdin)
-except Exception:
-    print("聞けなかった（立て直さない）"); sys.exit(0)
-agent = {s["id"]: s.get("agent") for s in d["sessions"]}
-for i, r in d.get("replying", {}).items():
-    if r.get("via") == "terminal" or r.get("failed"):
-        continue
-    a = agent.get(i)
-    if a == "codex":
-        print("codex 処理中:", i, r.get("since"))
-    elif a is None:
-        print("エージェントが分からない処理中（Codex かもしれない）:", i, r.get("since"))'
-```
-
-**1 行でも出たら立て直さない**（何も出なかったときだけ進む）。端末に打ち込んだ Codex のターンは SAI の外で回っているので数えない。`replying` は 7 日の窓に絞られないので、窓の外のセッション・まだ行の無い新しいセッションは「分からない」と出る——**分からないものは Codex として扱う**。応答が読めなかったときも立て直さない。
-
-- **`/merge` の後始末から呼ばれたときは待たない**（マージのターンを Codex の 1 ターンぶん延ばさない）: ビルドまでで止め、lock を外して、「Codex のターンが回っているので立て直していません。終わったら `/sync-main`」と報告する
-- 人に頼まれて回しているなら終わるのを待ってよいが、**lock を持ったまま待たない**（0.5 の `release` を先に打つ。持ったままだと、待っている側が 480 秒で諦め、900 秒を過ぎると生きている lock を「落ちたまま」と見て引き取られ、立て直しが重なる）。ターンが終わったら 0.5 から取り直す
-
-`pnpm start:watch`（`node --watch`）で動いていれば自分で再起動するので **C-c は送らない**。`Waiting for graceful termination...` は出るが、**接続を握ったまま試して 1 秒で戻った**（#296 で SIGTERM でも数秒以内に終わるようにした。前の「処理中の返信を待って数十秒」という注記は取り違えで、待っていたのは返信の子ではなく**閉じない接続**。返信の子は detached なので待たれない）。
-
-### 一言（digest）の口
-
-一言の入切・口・モデルは `~/.agent-feed/settings.json` に残る（#288。前は起動コマンドの環境変数で、立て直すたびに打ち直していた）ので、**起動コマンドは `pnpm start` だけ**。立て直したあとの「確かめる」で `digest_on` を見て、**入になっていれば触らない**（人が画面で選んだ口を上書きしない）。切のとき（初回や settings.json を消したとき）だけ、下の PUT で決める。
-
-既定はローカルの Ollama（本文が手元から出ない。`claude` の usage も使わない）。**モデルがあるかを先に見る**。無いモデルを指定すると、一言が 1 つも付かず、`~/.agent-feed/digest.log` にモデルのエラーが並ぶだけになる。
-
-```sh
-curl -sS -m 5 http://127.0.0.1:11434/v1/models    # qwen3:8b が居るか
-```
-
-| 状況 | 設定（サーバが立ってから。`Origin` の無い curl は同一オリジンの検査を通る） |
-| --- | --- |
-| Ollama に `qwen3:8b` が居る（既定） | `curl -sS -X PUT -H 'Content-Type: application/json' -d '{"digest":true,"digest_provider":"openai","digest_model":"qwen3:8b"}' http://127.0.0.1:8787/api/settings` |
-| Ollama が居ない / モデルが無い | 同じ PUT で `-d '{"digest":true,"digest_provider":"claude","digest_model":""}'`（`claude -p --model haiku`。usage を使うことを報告に書く） |
-
-口を `claude` にしてモデルに `qwen3:8b` を残してはいけない。`claude` CLI は Anthropic のモデル名しか受けず、`There's an issue with the selected model` が並ぶだけになる。ローカルのモデルは `openai` の口とだけ組む（画面は口を変えるとモデルを空に戻す）。
-
-### サーバが居るペインで立て直す
-
-サーバは人が開いた tmux のペインで動いている。**そのペインで立て直す**（別の場所で `spawn` すると、その人の画面からログが見えなくなる）。ペインは listen している pid の tty から引く:
-
-```sh
-tty=$(ps -o tty= -p "$pid" | tr -d ' ')
-pane=$(tmux list-panes -a -F '#{pane_id} #{pane_tty}' | awk -v t="/dev/$tty" '$2==t{print $1}')
-shell=$(tmux display -p -t "$pane" '#{pane_pid}')      # そのペインのシェル
-tmux send-keys -t "$pane" C-c
-```
-
-**待つのは「港が空くまで」ではなく「ペインのシェルに子が居なくなるまで」**（#296）。`server.close()` は listen を先に落とすので、**港が空いた時点ではまだ node が生きていることがある**。そこへ打ち込むと、キーは foreground の pnpm に飲まれて**シェルに届かない**（新しいサーバは立たず、古いサーバは listen していないので画面も携帯も繋がらないまま）。
-
-```sh
-kids() { ps -A -o pid=,ppid=,command= | awk -v p="$shell" '$2==p{print}'; }
-i=0; until [ -z "$(kids)" ] || [ $i -gt 3000000 ]; do i=$((i+1)); done
-kids                                   # 空になったか。`pgrep -f server/main.ts` は拾わないので使わない
-```
-
-**子が残ったまま抜けたら、打ち込まずに止める。** 残っている `kids` の出力と `ps -t "/dev/$tty"` を添えて報告し、**自分では `kill -9` しない**（処理中の返信を巻き込まないかは人が決める）。
-
-子が居なくなったら、プロンプトが戻っていることを見て、飲まれて残っている入力を消してから打つ:
-
-```sh
-tmux capture-pane -p -t "$pane" | grep -v '^\s*$' | tail -2   # プロンプトが戻っているか
-tmux send-keys -t "$pane" C-u                                  # 打ちかけ・飲まれた分を消す
-tmux send-keys -t "$pane" 'pnpm start' Enter
-i=0; until [ -n "$(lsof -nP -iTCP:8787 -sTCP:LISTEN -t)" ] || [ $i -gt 3000000 ]; do i=$((i+1)); done
-```
-
-**立ったら、それがこのペインの子か**を確かめる（飲まれていたキーがあとからシェルに渡って、打ち直した分と 2 つ起動しかけたことがある）。`pnpm start` は node ← pnpm ← シェルなので、親を 1 段見るのではなく遡る:
-
-```sh
-new=$(lsof -nP -iTCP:8787 -sTCP:LISTEN -t)
-up=$new; while [ -n "$up" ] && [ "$up" != 1 ] && [ "$up" != "$shell" ]; do up=$(ps -o ppid= -p "$up" | tr -d ' '); done
-[ "$up" = "$shell" ] && echo 'このペインの子' || echo '別のところで立っている（二重起動を疑う）'
-tmux capture-pane -p -t "$pane" | grep -v '^\s*$' | tail -3
-```
-
-このペインの子でなければ、**それ以上打ち込まずに** `kids` と `ps -t "/dev/$tty"` を添えて報告する。
-
-ペインが引けなければ（tmux の外で動いている）立て直さず、「このコマンドで立て直してください」と報告する。
-
-### 確かめる
-
-```sh
-curl -sS -m 10 http://127.0.0.1:8787/api/settings                  # digest / digest_on / digest_error / provider / model
-curl -sS -m 10 -D - -o /dev/null 'http://127.0.0.1:8787/api/sessions?days=1' | grep -i x-sai-build
-stat -f '%m' "$main/web/dist/index.html"                            # 上の X-SAI-Build と一致すること
-```
-
-`digest_on` が `false` なら「一言（digest）の口」の PUT で決める（`true` なら触らない）。`digest_on` が `true` なのに `digest` が `false` なら `digest_error` に理由がある（openai の口でモデルが空など）。入なら起動時のログに `digest: openai http://127.0.0.1:11434/v1 model=qwen3:8b` が出る。`X-SAI-Build` が `dist/index.html` の更新時刻と一致していれば、開いているタブは `watchBuild` が自分で再読み込みする（#87 の「ビルドが古い」バナーもそれで消える）。
-
-一言は**サーバの起動時刻（あとから入にしたならその時刻）より後の行**だけ作る（#164 / #288）。窓の広さで基準が変わることはもう無いので、`days` を先回りして叩くような小細工は要らない。
-
-## 5. lock を外して報告
-
-```sh
-bash "$locksh" release "$lockdir" "$who"
-```
-
-
-- 入ったコミットの一覧（`HEAD..FETCH_HEAD` の 1 行ずつ）。無ければ「最新でした」
-- ビルドの結果
-- サーバを立て直したか（立て直したなら、どのコマンドで・一言の口はどちらか）。立て直していないならその理由（最新のコードだった / 起動していない / tmux の外）。`/api/settings` の中身を一言
-- 止めた場合はその理由（dirty、別ブランチ、ff 不可、ビルド失敗、lock を待ち切れなかった）と、人が何をすれば進むか
-- lock を待ったなら、何秒待ったか（`waited=`）
-
-## やらないこと
-
-- `git reset` / `git checkout` / `git stash`。stash は他のセッションと共有なので特に触らない
-- 止まっているサーバを起動すること（立て直すのは、動いていて古いコードのときだけ）
-- `kill` / `kill -9`。C-c で終わらなければ、残っている pid を添えて報告するところまで（処理中の返信を巻き込むかは人が決める）
-- Ollama の起動・モデルの pull（無ければ `claude` の口に落として報告する）
-- 他のセッションが持っている lock を消すこと・lock を取ったまま終わること（0.5）
-- 他の worktree（`dev-*`）の更新。それは各セッションが自分でやる
-- tailscale serve の操作（`tailscale-serve` スキルが別にある）
+- 入ったコミット（無ければ「最新でした」）とビルド結果
+- サーバを再起動したか。しなかった場合は `server=` の理由
+- `digest=` と `verify=` の結果（出ている場合）
+- lockを待った場合は `waited=` の秒数

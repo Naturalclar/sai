@@ -10,12 +10,13 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 
 ## `/sync-main`（`.claude/skills/sync-main/SKILL.md`）
 
-- main worktree を最新の `main` に進めてビルドし直す。別の worktree から呼んでも main worktree だけを触る。
-- 古いコードで動いているサーバは、そのペインで `pnpm start` に立て直す。一言の入切・口・モデルは `settings.json` に残っているので起動コマンドには付けない（#288）。
+- `sync.sh` 1 回で、main worktree の検出、lock、clean/main の確認、fetch、ff-only merge、install、build、サーバの状態確認と必要な再起動、digest・`X-SAI-Build` の検証まで行う（#687）。出力は10行以内の `key=value` に絞り、`/api/sessions` の本文は出さない。
+- 別の worktree から呼んでも main worktree だけを触る。古いコードで動いているサーバは、そのペインで `pnpm start` に立て直す。一言の入切・口・モデルは `settings.json` に残っているので起動コマンドには付けない（#288）。切ならローカルの `qwen3:8b` を先に見て、無ければClaudeに設定する。
 - **1 本ずつにする lock**（#580。`.claude/skills/sync-main/lock.sh`）。置き場は git の共通ディレクトリの `sai-sync-main.lock/`（`mkdir` で取る。中は `since` と `owner`）で、どの worktree から呼んでも同じ場所・main worktree の `git status` を汚さない。
   - 後から来た方は最長 480 秒待ち、取れたら普段の手順をそのまま回す（先の方が最新まで進めていれば fetch も立て直しの判定も「何もしない」になる。遅れていれば自分で進める）。待ち切れなければ終了コード 3 で、何も回さず報告する。
   - 落ちたまま残った lock は、取ってから 900 秒を過ぎたら次に来た方が引き取る。引き取りは `sai-sync-main.lock.takeover/` で 1 人ずつにし、その中でもう一度古いことを確かめてから消す。外せるのは取った本人（`owner` が同じ）だけ。`server/syncMainLock.test.ts` が回す。
 - 立て直す前に、SAI の app-server が回している Codex のターン（`/api/sessions` の `replying` のうち、Codex で `via: terminal` でないもの）を見る。あれば立て直さない。エージェントが引けないもの（窓の外・行の無い新しいセッション）と、応答が読めなかったときも立て直さない。待つときは lock を外してから待つ。
+- `server/syncMain.test.ts` は一時のbare repoとworktreeで、成功、dirty、main worktree不在、ff不可、build失敗、サーバ停止を通し、どの出口でもlockが残らないことと出力行数を確かめる。本物のmain worktreeと8787は触らない。
 
 ## `/manager`（`.claude/skills/manager/SKILL.md`。#323）
 

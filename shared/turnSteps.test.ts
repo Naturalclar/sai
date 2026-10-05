@@ -108,3 +108,19 @@ test('findStepTurn: 途中で入力が足されたターンはつないで 1 つ
   // ターン完了の行のあともそのターンが続いた（Stop フックが続けさせた）・行が遅れて書かれた: 始まりで当てたターンを返す
   assert.equal(findStepTurn(parsed(claude), { ...from(T0), endMs: T0 + 5_000_000 })?.steps.length, 3)
 })
+
+test('途中で書いた文（#680）も時刻順に並べる。最後の返答は入れず、数（stepCounts）はツールだけ', () => {
+  const mid = (s: number, text: string) => JSON.stringify({ type: 'assistant', timestamp: at(s), message: { role: 'assistant', content: [{ type: 'text', text }], stop_reason: 'tool_use' } })
+  const c = claudeStepParser()
+  for (const l of [user(0, '直して'), mid(1, 'まず読みます。'), use(2, 'Bash', { command: 'ls' }), result(3), mid(4, `原因です。\n${'あ'.repeat(3000)}`), use(5, 'Edit', { file_path: '/w/a.ts' }), said(9, '直しました')]) c.push(l)
+  const steps = c.turns[0]!.steps
+  assert.deepEqual(steps.map((s) => [s.tool, s.text === undefined ? null : s.text.slice(0, 7), s.at]), [['', 'まず読みます。', at(1)], ['Bash', null, at(2)], ['', '原因です。\nあ', at(4)], ['Edit', null, at(5)]], '最後の返答（end_turn の文）は入れない')
+  assert.equal(Array.from(steps[2]!.text ?? '').length, 2000, '長い文は切る')
+  assert.equal(stepCounts(steps), 'Bash 1・Edit 1')
+
+  const ev = (s: number, type: string) => JSON.stringify({ timestamp: at(s), type: 'event_msg', payload: { type } })
+  const msg = (s: number, text: string, phase?: string) => JSON.stringify({ timestamp: at(s), type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text }], ...(phase ? { phase } : {}) } })
+  const x = codexStepParser()
+  for (const l of [ev(0, 'task_started'), msg(1, '確認します', 'commentary'), msg(2, 'phase の無い文'), JSON.stringify({ timestamp: at(3), type: 'response_item', payload: { type: 'message', role: 'user', content: [{ text: '人の入力' }], phase: 'commentary' } }), msg(8, '終わりました', 'final_answer'), ev(9, 'task_complete')]) x.push(l)
+  assert.deepEqual(x.turns[0]!.steps, [{ tool: '', summary: '', at: at(1), text: '確認します' }], 'commentary だけ')
+})

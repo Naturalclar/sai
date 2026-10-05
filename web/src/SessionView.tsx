@@ -13,6 +13,7 @@ import { Chat } from './Chat'
 import { OlderRowsButton } from './OlderRowsButton'
 import { PendingBubble } from './PendingBubble'
 import { InterruptButton } from './InterruptButton'
+import { ProgressNotes } from './ProgressNotes'
 import { ProgressSteps } from './ProgressSteps'
 import { ProgressTodos } from './ProgressTodos'
 import { useProgress } from './useProgress'
@@ -279,6 +280,8 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
                   {mine.interruptible && <InterruptButton id={id} />}
                 </PendingBubble>
               )}
+              {/* 途中でエージェントが書いた文（#680）。仮バブルと一緒に出て、一緒に消える */}
+              {mine && <ProgressNotes progress={progress} since={mine.since} />}
               {/* 端末で打ったターン（#302）。SAI は起動していないので、transcript の上で動いているときだけ「処理中」を出す */}
               {!mine && promptSince && progress?.active && (
                 <PendingBubble text="" since={promptSince} now={now} quiet typed>
@@ -286,6 +289,7 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
                   <ProgressTodos progress={progress} />
                 </PendingBubble>
               )}
+              {!mine && promptSince && progress?.active && <ProgressNotes progress={progress} since={promptSince} />}
               {approvals.map((a, i) => (
                 <ApprovalBubble key={a.approval_id} approval={a} now={now} hotkey={i === 0 && focused} modeNote={launchedModeNote(data.replying[id], data.session.meta?.permission_mode)} icon={data.session.icon} />
               ))}

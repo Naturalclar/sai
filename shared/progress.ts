@@ -5,12 +5,15 @@
 // 実測（#302）: transcript の tool_use は**実行前に**、tool_result は終わってから追記されるので、走っている間は
 // tool_use の行だけがある。thinking は 694 個のうち本文が入っていたのが 30 個で、中身は出さない（「考え中」だけ）
 import { approvalText, toolSummary } from './approvals.ts'
-import type { PendingQuestion, ProgressStep } from './types.ts'
+import type { PendingQuestion, ProgressNote, ProgressStep } from './types.ts'
 
 /** 画面に返す手順の数（ターンの末尾から） */
 export const PROGRESS_STEPS = 8
 /** 要約の長さ。画面は 1 行で切るので、許可待ち（300 文字）より短くてよい */
 export const PROGRESS_SUMMARY_MAX = 200
+/** 途中の文（#680）を画面に返す数（ターンの末尾から）と、1 つの長さ。3 秒おきに取る応答なので膨らませない */
+export const PROGRESS_NOTES = 5
+export const PROGRESS_NOTE_MAX = 2000
 /**
  * ターンが閉じていなくても、走っているツールが無いままこれより長く書かれていなければ「止まっている」。
  * 端末で Esc を押して止めたターンは閉じないまま残る（#302 の実測で 536 件中 13 件）。
@@ -37,6 +40,12 @@ export interface ParsedProgress {
    * Codex は `token_count` の `last_token_usage.input_tokens`（キャッシュぶんを含む）。読んだ範囲に無ければ 0
    */
   context?: number
+  /**
+   * ターンの途中でエージェントが書いた文（#680。古い順、全部）。`steps` の `text` は 1 行に切ってあり、ツールの呼び出しに
+   * 押し出されるので、切る前の文を別に持つ。**最後の返答は入れない**（Codex は `phase: commentary` のものだけ、Claude は閉じたターンの最後の文を除く。
+   * それは行として届く）
+   */
+  notes?: ProgressNote[]
   /**
    * いま答えを待っている `AskUserQuestion`（#333。Claude だけ）。今のターンで返事（`tool_result`）がまだ付いていない、
    * 一番新しいもの。フックの待ちの行には質問の文しか無いので、端末で開いたセッションの選択肢はここから出す
@@ -133,6 +142,19 @@ function pushStep(steps: ProgressStep[], next: ProgressStep): void {
   steps.push(next)
 }
 
+const clipNote = (text: string): string => {
+  const chars = Array.from(text.trim())
+  return chars.length <= PROGRESS_NOTE_MAX ? chars.join('') : `${chars.slice(0, PROGRESS_NOTE_MAX - 1).join('')}…`
+}
+
+/** 書いた文を手順と途中の文（#680）の両方に足す。文が続いていれば（手順が 1 つにまとまる）途中の文も 1 つに繋ぐ */
+function pushText(steps: ProgressStep[], notes: ProgressNote[], text: string, ts: string): void {
+  const joined = steps[steps.length - 1]?.kind === 'text' ? notes[notes.length - 1] : undefined
+  pushStep(steps, { kind: 'text', summary: oneLine(text), started: ts, ended: ts })
+  if (joined) joined.text = clipNote(`${joined.text}\n\n${text.trim()}`)
+  else notes.push({ text: clipNote(text), at: ts })
+}
+
 /**
  * Claude の transcript の行（古い順）から、最後のターンの手順。
  * - 人の入力（`isMeta` / 要約でない user の行で、tool_result でないもの）でターンが始まる
@@ -142,6 +164,7 @@ function pushStep(steps: ProgressStep[], next: ProgressStep): void {
  */
 export function claudeProgress(lines: readonly string[]): ParsedProgress {
   let steps: ProgressStep[] = []
+  let notes: ProgressNote[] = []
   let tools = new Map<string, ProgressStep>()
   let started = false
   let open = false
@@ -175,6 +198,7 @@ export function claudeProgress(lines: readonly string[]): ParsedProgress {
       const said = typeof content === 'string' ? content.trim() !== '' : blocks.some((b) => b?.type === 'text')
       if (said) {
         steps = []
+        notes = []
         tools = new Map()
         started = true
         open = true
@@ -212,14 +236,16 @@ export function claudeProgress(lines: readonly string[]): ParsedProgress {
       } else if (b.type === 'thinking') {
         pushStep(steps, { kind: 'thinking', summary: '', started: ts, ended: ts })
       } else if (b.type === 'text' && str(b.text).trim()) {
-        pushStep(steps, { kind: 'text', summary: oneLine(str(b.text)), started: ts, ended: ts })
+        pushText(steps, notes, str(b.text), ts)
       }
     }
     const stop = message?.stop_reason
     if (stop === 'tool_use') open = true
     else if (stop === 'end_turn' || stop === 'stop_sequence') open = false
   }
-  return { steps, started, open, context, ...(question ? { question } : {}) }
+  // 閉じたターンの最後の文は返答そのもの（行として届く）。途中の文には数えない
+  if (!open && steps[steps.length - 1]?.kind === 'text') notes = notes.slice(0, -1)
+  return { steps, started, open, context, notes, ...(question ? { question } : {}) }
 }
 
 /**
@@ -229,6 +255,7 @@ export function claudeProgress(lines: readonly string[]): ParsedProgress {
  */
 export function codexProgress(lines: readonly string[]): ParsedProgress {
   let steps: ProgressStep[] = []
+  let notes: ProgressNote[] = []
   let tools = new Map<string, ProgressStep>()
   let started = false
   let open = false
@@ -247,6 +274,7 @@ export function codexProgress(lines: readonly string[]): ParsedProgress {
     if (o.type === 'event_msg') {
       if (type === 'task_started') {
         steps = []
+        notes = []
         tools = new Map()
         started = true
         open = true
@@ -270,10 +298,14 @@ export function codexProgress(lines: readonly string[]): ParsedProgress {
       pushStep(steps, { kind: 'thinking', summary: '', started: ts, ended: ts })
     } else if (type === 'message' && payload.role === 'assistant') {
       const text = (Array.isArray(payload.content) ? payload.content : []).map((c) => str(obj(c)?.text)).join('\n')
-      if (text.trim()) pushStep(steps, { kind: 'text', summary: oneLine(text), started: ts, ended: ts })
+      if (!text.trim()) continue
+      // 途中の文は `phase: commentary` だけ。最後の返答（`final_answer`）は行として届くので手順にだけ足す。
+      // phase の無い古い rollout は見分けられないので、途中の文にしない（返答を二重に出さない）
+      if (payload.phase === 'commentary') pushText(steps, notes, text, ts)
+      else pushStep(steps, { kind: 'text', summary: oneLine(text), started: ts, ended: ts })
     }
   }
-  return { steps, started, open, context }
+  return { steps, started, open, context, notes }
 }
 
 /**
@@ -320,6 +352,16 @@ export function stepsSince(steps: readonly ProgressStep[], since: string): Progr
   return steps.filter((s) => {
     const started = Date.parse(s.started)
     return Number.isNaN(started) || started >= t - PROGRESS_SINCE_SLACK_MS
+  })
+}
+
+/** 途中の文（#680）も同じく、送った時刻より前のもの（前のターン）を落とす */
+export function notesSince(notes: readonly ProgressNote[], since: string): ProgressNote[] {
+  const t = Date.parse(since)
+  if (Number.isNaN(t)) return [...notes]
+  return notes.filter((n) => {
+    const at = Date.parse(n.at)
+    return Number.isNaN(at) || at >= t - PROGRESS_SINCE_SLACK_MS
   })
 }
 

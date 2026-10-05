@@ -1,9 +1,10 @@
 // 終わったターンで実行したコマンド・ツールを、あとから見る（#605）。
-// Claude の transcript / Codex の rollout をターンに切り、ターンごとに**ツールの呼び出しだけ**を並べる。
+// Claude の transcript / Codex の rollout をターンに切り、ターンごとに**ツールの呼び出しと、途中で書いた文（#680）**を並べる。
 // 出すのはツール名と「何をしたか」（コマンド・ファイルのパスなど）まで。**ツールの出力は読まない・出さない**。
+// 最後の返答（Claude は `end_turn` の文、Codex は `phase: commentary` でない文）は行として届いているので入れない。
 // 要約は許可のバブルと同じ作り（`shared/approvals.ts` の `toolSummary()`）。行（JSONL）には載せず、開いたときに派生で読むだけ
 import { toolSummary } from './approvals.ts'
-import { codexToolText } from './progress.ts'
+import { codexToolText, PROGRESS_NOTE_MAX } from './progress.ts'
 import type { TurnStep } from './types.ts'
 
 type Obj = Record<string, unknown>
@@ -19,6 +20,14 @@ const clip = (text: string) => {
   const chars = Array.from(text.trim())
   return chars.length <= TURN_STEP_TEXT_MAX ? chars.join('') : `${chars.slice(0, TURN_STEP_TEXT_MAX - 1).join('')}…`
 }
+
+const clipText = (text: string) => {
+  const chars = Array.from(text.trim())
+  return chars.length <= PROGRESS_NOTE_MAX ? chars.join('') : `${chars.slice(0, PROGRESS_NOTE_MAX - 1).join('')}…`
+}
+
+/** 途中で書いた文の手順（#680） */
+const textStep = (text: string, at: string): TurnStep => ({ tool: '', summary: '', at, text: clipText(text) })
 
 export interface StepTurn {
   /** ターンの始まり（人の入力 / task_started）の時刻。読めなければ NaN */
@@ -80,8 +89,11 @@ export function claudeStepParser(): StepParser {
     const ts = str(o.timestamp)
     const at = Date.parse(ts)
     if (Number.isFinite(at)) cur.endedAt = at
+    // 最後の返答の文（`end_turn` / `stop_sequence` の行）は行として届いているので、途中の文にしない
+    const final = message?.stop_reason === 'end_turn' || message?.stop_reason === 'stop_sequence'
     for (const raw of content) {
       const b = obj(raw)
+      if (b?.type === 'text' && !final && str(b.text).trim()) cur.steps.push(textStep(str(b.text), ts))
       if (b?.type !== 'tool_use') continue
       const name = str(b.name)
       const input = obj(b.input) ?? {}
@@ -117,6 +129,9 @@ export function codexStepParser(): StepParser {
     if (Number.isFinite(at)) cur.endedAt = at
     if (type === 'custom_tool_call' || type === 'function_call') {
       cur.steps.push({ tool: str(payload.name), summary: clip(codexToolText(type === 'custom_tool_call' ? payload.input : payload.arguments)), at: ts })
+    } else if (type === 'message' && payload.role === 'assistant' && payload.phase === 'commentary') {
+      const text = (Array.isArray(payload.content) ? payload.content : []).map((c) => str(obj(c)?.text)).join('\n')
+      if (text.trim()) cur.steps.push(textStep(text, ts))
     }
   }
   return { push, turns }
@@ -179,8 +194,8 @@ export function findStepTurn(turns: readonly StepTurn[], at: { starts?: readonly
 }
 
 /** 畳んだ 1 行（`Bash 12・Edit 3・Read 2`）。多い順、同数は出てきた順 */
-export function stepCounts(steps: readonly Pick<TurnStep, 'tool'>[]): string {
+export function stepCounts(steps: readonly Pick<TurnStep, 'tool' | 'text'>[]): string {
   const counts = new Map<string, number>()
-  for (const s of steps) counts.set(s.tool || 'ツール', (counts.get(s.tool || 'ツール') ?? 0) + 1)
+  for (const s of steps) if (s.text === undefined) counts.set(s.tool || 'ツール', (counts.get(s.tool || 'ツール') ?? 0) + 1)
   return [...counts].sort((a, b) => b[1] - a[1]).map(([tool, n]) => `${tool} ${n}`).join('・')
 }

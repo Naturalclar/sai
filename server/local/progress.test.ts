@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { claudeProjectName, PROGRESS_IDLE_MS } from '../../shared/progress.ts'
+import { claudeProjectName, PROGRESS_IDLE_MS, PROGRESS_NOTES } from '../../shared/progress.ts'
 import { OPENCODE_CONTEXT_TTL_MS, PROGRESS_TAIL_START, ProgressReader, sessionOf } from './progress.ts'
 
 const SID = '11111111-2222-3333-4444-555555555555'
@@ -191,4 +191,24 @@ test('ProgressReader: OpenCode は読んだ量だけ本体に聞いて埋め、�
   })
   now += OPENCODE_CONTEXT_TTL_MS
   assert.deepEqual(await reader.read(target), none, '聞けなければ空（予算の判定は「分からない相手は足さない」のまま）')
+})
+
+test('ProgressReader: 途中で書いた文（#680）は手順とは別に末尾だけ返す。無ければ載せない', async () => {
+  await withDirs(async ({ projects, sessions }) => {
+    const cwd = '/Users/me/work/sai.git/dev-n'
+    const dir = join(projects, claudeProjectName(cwd))
+    await mkdir(dir, { recursive: true })
+    const path = join(dir, `${SID}.jsonl`)
+    const reader = new ProgressReader(projects, sessions)
+    const s = { id: `${SID}@sai`, repo: 'sai', agent: 'claude' as const, cwd }
+    await writeFile(path, [prompt(at(0), '直して'), assistant(at(1), [bash('t0', 'ls')], 'tool_use')].join('\n') + '\n')
+    let p = await reader.read(s)
+    assert.equal('notes' in p, false, '途中の文が無ければ載せない')
+    const lines: string[] = []
+    for (let i = 0; i < PROGRESS_NOTES + 2; i++) lines.push(assistant(at(10 + i * 2), [{ type: 'text', text: `途中の文 ${i}` }], 'tool_use'), assistant(at(11 + i * 2), [bash(`t${i + 1}`, 'ls')], 'tool_use'))
+    await appendFile(path, lines.join('\n') + '\n')
+    p = await reader.read(s)
+    assert.equal(p.notes_total, PROGRESS_NOTES + 2)
+    assert.deepEqual(p.notes?.map((n) => n.text), Array.from({ length: PROGRESS_NOTES }, (_, i) => `途中の文 ${i + 2}`), 'ツールの呼び出しに押し出されず、末尾の分だけ')
+  })
 })

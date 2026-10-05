@@ -564,6 +564,14 @@ export interface ProgressStep {
   ended?: string
 }
 
+/** ターンの途中でエージェントが書いた文（#680。Codex の `commentary`・Claude のツールの合間の文）。最後の返答は入らない */
+export interface ProgressNote {
+  /** 本文（Markdown。2000 字まで） */
+  text: string
+  /** 書いた時刻（ISO） */
+  at: string
+}
+
 /**
  * GET /api/sessions/<id>/progress（#302）。処理中のターンが何をしているか。
  * 3 秒のポーリング（一覧・詳細）には載せず、画面が処理中のセッションを出している間だけそのセッションの分を取る
@@ -590,6 +598,13 @@ export interface SessionProgressResponse {
   steps: ProgressStep[]
   /** 最後のターンの手順の数（steps は末尾だけなので、それより前にいくつあったか） */
   total: number
+  /**
+   * 最後のターンの途中でエージェントが書いた文（#680。古い順、末尾の `PROGRESS_NOTES` 件）。無ければ省く。
+   * 処理中の仮バブルに出すためのもので、行（JSONL）には無い
+   */
+  notes?: ProgressNote[]
+  /** 途中の文の数（notes は末尾だけなので、それより前にいくつあったか）。notes が無ければ省く */
+  notes_total?: number
   /** transcript / rollout が最後に書かれた時刻（ISO）。読めなければ空 */
   updated_at: string
   /**
@@ -1781,10 +1796,12 @@ export interface SessionTurnResponse {
   row: FeedRow | null
 }
 
-/** 終わったターンの 1 手順（#605）。ツールの呼び出しだけで、出力は載せない */
+/** 終わったターンの 1 手順（#605）。ツールの呼び出しと、途中で書いた文（#680）。ツールの出力は載せない */
 export interface TurnStep {
-  /** ツール名（`Bash` / `Edit` / `exec_command` …） */
+  /** ツール名（`Bash` / `Edit` / `exec_command` …）。途中の文（`text` がある）では空 */
   tool: string
+  /** 途中でエージェントが書いた文（#680。2000 字まで）。あればこの手順はツールの呼び出しではない */
+  text?: string
   /** 何をしたか（コマンド・ファイルのパス・URL など。許可のバブルと同じ要約。300 字まで）。分からなければ空 */
   summary: string
   /** Bash などの `description`（何のためか）。あれば */
@@ -1802,10 +1819,12 @@ export interface TurnStepsResponse {
   id: string
   ts: string
   found: boolean
-  /** 多ければ頭の `TURN_STEPS_MAX` 件 */
+  /** 多ければ頭の `TURN_STEPS_MAX` 件。途中の文（`text`。#680）も時刻順に混ざる */
   steps: TurnStep[]
-  /** そのターンの手順の数 */
+  /** そのターンで呼んだツールの数（途中の文は数えない） */
   total: number
+  /** steps に入り切らなかった数（ツールと途中の文の合計）。無ければ省く */
+  more?: number
 }
 
 /** GET /api/sessions/<id>/gallery。そのセッションに出てきた画像（新しい順）。開いたときと新しいターンが記録されたときだけ取る */

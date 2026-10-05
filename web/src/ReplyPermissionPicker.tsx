@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { launchedModeNote, MODE_HINT, MODE_LABEL, modeLabel, modeSkipsRules, REPLY_MODES, shortReplyMode } from '../../shared/permissions.ts'
+import { launchedModeNote, MODE_HINT, MODE_LABEL, modeEmphasis, modeLabel, REPLY_MODES, shortReplyMode } from '../../shared/permissions.ts'
 import type { Replying, ReplyPermissionMode } from '../../shared/types.ts'
 import { api } from './api'
 
@@ -24,7 +24,7 @@ export interface ReplyPermissionProps {
  *
  * 並ぶのは `shared/permissions.ts` の `REPLY_MODES` で、サーバの検査と同じ一覧。
  * **モードの名前は英語**（#271。Claude Code の Shift+Tab の表示と揃える）で、何が起きるかは日本語の補足で出す。
- * **素通し（bypassPermissions）を選んでいる間は赤くする**（#253。選んだまま忘れているのが一番まずい）。
+ * **素通し（bypassPermissions）を選んでいる間は赤く、Auto mode は 1 段弱い色にする**（#253 / #691。選んだまま忘れているのが一番まずい）。
  * 端末に打ち込む経路ではフラグを渡す先が無いので効かない（薄くして、その旨を title に出す）。
  * **処理中のターンは起動したときのモードのまま**なので、選んだものと違えば横に「次の返信から」と出す（#272）。
  * 呼び出し側は key={id} を付けること（別のセッションに移ったら開閉ごと作り直す）
@@ -39,7 +39,7 @@ export function ReplyPermissionPicker({ id, value, terminal, replying }: ReplyPe
   const buttonRef = useRef<HTMLButtonElement>(null)
 
   const current = saved !== null ? saved : (value ?? '')
-  const loud = modeSkipsRules(current)
+  const loud = modeEmphasis(current)
   // 保存した直後から出す（props の value を待たない）ので、比べる相手は current
   const note = launchedModeNote(replying, current)
 
@@ -80,7 +80,7 @@ export function ReplyPermissionPicker({ id, value, terminal, replying }: ReplyPe
       <button
         ref={buttonRef}
         type="button"
-        className={loud ? 'loud' : ''}
+        className={loud}
         onClick={() => setOpen((v) => !v)}
         disabled={busy}
         aria-haspopup="menu"
@@ -112,7 +112,7 @@ export function ReplyPermissionPicker({ id, value, terminal, replying }: ReplyPe
               type="button"
               role="menuitem"
               key={m}
-              className={`${m === current ? 'picked' : ''}${modeSkipsRules(m) ? ' loud' : ''}`}
+              className={`${m === current ? 'picked' : ''} ${modeEmphasis(m)}`.trim()}
               onClick={() => void save(m)}
             >
               {MODE_LABEL[m]}

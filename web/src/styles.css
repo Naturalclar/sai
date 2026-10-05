@@ -235,6 +235,7 @@
   .diff-section .ln.del { background: color-mix(in srgb, var(--claude) 14%, transparent); }
   .modal.permissions .mode { font-size: 13px; margin-bottom: 10px; }
   .modal.permissions .mode b.loud { color: var(--claude); }
+  .modal.permissions .mode b.caution { color: var(--synth); }
   .modal.permissions .mode .warn { color: var(--claude); font-size: 12px; margin-top: 2px; }
   .modal.permissions .group, .modal.permissions .files { margin-bottom: 10px; }
   .modal.permissions .head { font-size: 12px; font-weight: 700; color: var(--muted); border-bottom: 1px solid var(--line); padding-bottom: 2px; margin-bottom: 4px; }
@@ -658,6 +659,8 @@
   .reply .row .model-pick > button:hover:not(:disabled), .reply .row .perm-pick > button:hover:not(:disabled) { background: var(--hover); color: var(--ink); }
   /* 素通し（bypassPermissions）を選んでいる間は赤くする。選んだまま忘れているのが一番まずい（#253） */
   .reply .row .perm-pick > button.loud { color: var(--claude); border-color: color-mix(in srgb, var(--claude) 45%, var(--line)); font-weight: 600; }
+  /* Auto mode（#691）は素通しより 1 段弱い色。目立たせるが赤にはしない */
+  .reply .row .perm-pick > button.caution { color: var(--synth); border-color: color-mix(in srgb, var(--synth) 45%, var(--line)); font-weight: 600; }
   /* 端末（tmux）で開いている間はこの設定が効かない。押せるが薄くする（理由は title） */
   .reply .row .perm-pick.inactive > button { opacity: .55; }
   .reply .row .model-pick .menu, .reply .row .perm-pick .menu { position: absolute; bottom: calc(100% + 6px); left: 0; min-width: 12em; max-height: 40vh; overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 24px rgba(0, 0, 0, .12); padding: 4px 0; z-index: 6; }
@@ -665,6 +668,7 @@
   .reply .row .model-pick .menu button:hover, .reply .row .perm-pick .menu button:hover { background: var(--hover); }
   .reply .row .model-pick .menu button.picked, .reply .row .perm-pick .menu button.picked { font-weight: 700; }
   .reply .row .perm-pick .menu button.loud { color: var(--claude); }
+  .reply .row .perm-pick .menu button.caution { color: var(--synth); }
   .reply .row .model-pick .menu button .why, .reply .row .perm-pick .menu button .why { color: var(--muted); font-size: 11px; margin-left: 6px; }
   .reply .row .model-pick .err, .reply .row .perm-pick .err { color: var(--claude); font-size: 11px; }
   /* 処理中のターンは起動したときのモードのまま（#272）。全文は title */
@@ -705,6 +709,7 @@
   @media (pointer: coarse) { .modal-backdrop .modal.pr-review .pr-review-body textarea { font-size: 16px; } }
   .tag.mode { background: color-mix(in srgb, var(--muted) 18%, transparent); color: var(--muted); font-family: var(--mono); font-weight: 600; }
   .tag.mode.loud { background: color-mix(in srgb, var(--claude) 18%, transparent); color: var(--claude); }
+  .tag.mode.caution { background: color-mix(in srgb, var(--synth) 18%, transparent); color: var(--synth); }
   /* コンテキストが大きすぎる（#441）。素通しの印と同じ目立たせ方は強すぎるので、待機中と同じ注意の色 */
   .tag.context-warn { background: color-mix(in srgb, var(--synth) 18%, transparent); color: var(--synth); font-weight: 600; white-space: nowrap; }
   /* 終わったターンの手順（#605）。返答の下に畳んで置く。開くと等幅で 1 行ずつ（長いコマンドは折り返す） */

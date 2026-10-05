@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { argsRules, collectPermissions, managedSettingsPath, orderRules, parseSettings, settingsPaths } from './permissions.ts'
-import { isReplyPermissionMode, launchedModeNote, MODE_HINT, MODE_LABEL, modeLabel, modeSkipsRules, REPLY_MODES, shortReplyMode } from '../../shared/permissions.ts'
+import { isReplyPermissionMode, launchedModeNote, MODE_HINT, MODE_LABEL, modeEmphasis, modeLabel, modeName, modeSkipsRules, REPLY_MODES, shortReplyMode, skipModeInArgs } from '../../shared/permissions.ts'
 
 test('MODE_HINT / modeLabel: 何が起きるかは日本語で添え、タグ・モーダル用は「名前 — 説明」（#271）', () => {
   // 名前を英語にしても、説明が消えてはいけない（メニューの補足と見出しのタグが空になる）
@@ -104,11 +104,10 @@ test('collectPermissions: 設定が 1 つも無い cwd でも空で返る（落�
 
 test('REPLY_MODES: 画面の select とサーバの検査が同じ一覧を見る', () => {
   // 並ぶ順がそのまま select の順。素通しは「聞かない方が強い」ので後ろ
-  assert.deepEqual(REPLY_MODES, ['acceptEdits', 'bypassPermissions'])
-  assert.equal(isReplyPermissionMode('acceptEdits'), true)
-  assert.equal(isReplyPermissionMode('bypassPermissions'), true)
-  // REPLY_MODES に無いものは通さない。`auto` は「安全性の確認つき」の中身が CLI 任せで説明できないので入れない
-  for (const bad of ['auto', 'plan', 'dontAsk', 'default', '', 'XXX']) {
+  assert.deepEqual(REPLY_MODES, ['acceptEdits', 'auto', 'bypassPermissions'])
+  for (const ok of REPLY_MODES) assert.equal(isReplyPermissionMode(ok), true)
+  // REPLY_MODES に無いものは通さない
+  for (const bad of ['plan', 'dontAsk', 'manual', 'default', '', 'XXX']) {
     assert.equal(isReplyPermissionMode(bad), false, `${bad} は選べない`)
   }
 })
@@ -118,8 +117,26 @@ test('modeSkipsRules: 素通しだけ true。画面はこれで印を出す', ()
   assert.equal(modeSkipsRules('auto'), true)
   assert.equal(modeSkipsRules('acceptEdits'), false, 'ファイル編集だけなら印は出さない')
   assert.equal(modeSkipsRules(''), false)
-  // 選べるモードのうち印が要るものは bypassPermissions だけ、が画面の前提
-  assert.deepEqual(REPLY_MODES.filter(modeSkipsRules), ['bypassPermissions'])
+  assert.deepEqual(REPLY_MODES.filter(modeSkipsRules), ['auto', 'bypassPermissions'])
+})
+
+test('modeEmphasis: 素通しは赤（loud）、Auto mode は 1 段弱い色（caution）。目立たせるかは modeSkipsRules と揃う（#691）', () => {
+  assert.equal(modeEmphasis('bypassPermissions'), 'loud')
+  assert.equal(modeEmphasis('auto'), 'caution')
+  for (const mode of ['', 'default', 'acceptEdits', 'plan', 'dontAsk', 'XXX']) assert.equal(modeEmphasis(mode), '', mode)
+  for (const mode of ['', 'default', 'acceptEdits', 'auto', 'plan', 'dontAsk', 'bypassPermissions']) assert.equal(modeEmphasis(mode) !== '', modeSkipsRules(mode), mode)
+})
+
+test('skipModeInArgs: 運用者の引数の中の、ルールに関係なく通るモード（2 語・1 語・--dangerously-skip-permissions）', () => {
+  assert.equal(skipModeInArgs(['--permission-mode', 'bypassPermissions']), 'bypassPermissions')
+  assert.equal(skipModeInArgs(['--permission-mode=auto']), 'auto')
+  assert.equal(skipModeInArgs(['--model', 'x', '--permission-mode', 'auto']), 'auto')
+  assert.equal(skipModeInArgs(['--dangerously-skip-permissions']), 'bypassPermissions')
+  assert.equal(skipModeInArgs(['--permission-mode', 'acceptEdits']), '')
+  assert.equal(skipModeInArgs(['--allowedTools', 'Bash(auto *)']), '', '値に auto を含むだけの別の引数では当てない')
+  assert.equal(skipModeInArgs(['--permission-mode']), '')
+  assert.equal(modeName('auto'), 'Auto mode')
+  assert.equal(modeName('bypassPermissions'), 'Bypass permissions')
 })
 
 test('MODE_LABEL: 選べるモードには必ずラベルがある（メニューが空欄にならない）', () => {
@@ -147,6 +164,9 @@ test('shortReplyMode: 入力欄のボタンに出す短い名前。空は「既�
 
 test('launchedModeNote: 処理中のターンが今の設定と違うモードで動いているときだけ出す（#272）', () => {
   const running = { since: '2026-09-10T06:11:35.000Z', text: 'x' }
+  // Auto mode（#691）でも同じに出る
+  assert.equal(launchedModeNote({ ...running, permission_mode: 'acceptEdits' }, 'auto'), 'このターンは「Accept edits」で動いています。「Auto mode」は次の返信から効きます')
+  assert.equal(launchedModeNote({ ...running, permission_mode: 'auto' }, 'auto'), '')
   // 実際に起きた形: acceptEdits で起動したターンの途中で素通しに変えた。
   // モードの名前は MODE_LABEL の英語（#271。端末の Shift+Tab と同じ言い回し。ボタンと違って幅の制約が無いので短くしない）
   assert.equal(

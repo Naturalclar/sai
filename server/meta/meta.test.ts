@@ -62,7 +62,9 @@ test('mergeMeta: permission_mode は画面から選べるものだけ。空 / nu
   // 素通し（bypassPermissions）は #253 で選べるようにした。受ける
   assert.deepEqual(mergeMeta(cur, { permission_mode: 'bypassPermissions' }).meta, { name: 'A', permission_mode: 'bypassPermissions' })
   // REPLY_MODES に無いものは今までどおり口としても受けない（画面に並べないだけでなく）
-  for (const bad of ['auto', 'dontAsk', 'default', 'plan', 'XXX', 1]) {
+  // Auto mode は #691 で選べるようにした
+  assert.deepEqual(mergeMeta(cur, { permission_mode: 'auto' }).meta, { name: 'A', permission_mode: 'auto' })
+  for (const bad of ['dontAsk', 'default', 'plan', 'manual', 'XXX', 1]) {
     assert.notEqual(mergeMeta(cur, { permission_mode: bad }).error, '', `${String(bad)} は弾く`)
   }
   assert.equal(isEmptyMeta({ permission_mode: 'acceptEdits' }), false, 'モードだけでも空ではない（エントリが消えない）')

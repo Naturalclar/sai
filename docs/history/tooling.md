@@ -43,3 +43,11 @@
 - 前は `SAI_*_BIN` で実行ファイルを 7 つ 1 つずつ差し替えていたが、`PATH` を 1 つ直せば全部に効くのでやめた（#288）。
 - `.js` を見ていなかった頃は、OpenCode のプラグインが読む `SAI_HOME` を「コードは読まない」と書いたままになっていた（#288）。
 - `/merge` と重なっていた項目（指摘は直してからコメント・0 件でも 1 行・CI をもう一度・flake の回し直しは 1 回まで・SHA を指定してマージ・`merged: true` を見てからブランチを消す）は `/merge` の本文だけに置いた。
+
+## 記録を調べる道具を TypeScript に置いた（#703）
+
+- 調査のたびに `~/.agent-feed` を読む使い捨てのスクリプトを書いていた（9/25 以降の実測で 169 回。うち 28 回はファイルの形を調べるだけ、6 回はエラー）。その場で書いた集計で 2 つ数え間違えている: `turn-usage.jsonl` の `cost_usd` を積み上げのまま足して約 20 倍にした（#579 / #602）、要約の文を人の入力に数えた（#609）。
+- 正本は Python（`feed/` に標準ライブラリだけ）と TypeScript のどちらかで、issue は実装のときに比べることにしていた。**TypeScript にした**: 要る読み方（`entityId()`・`eventKind()`・`localDate()`・`isCompactSummaryText()`・`turnCosts()` と積み上げに変わった時刻・`agentReplyRows()`・`resolveTarget()`・`feedFiles()`・`aggregate()`）は全部もう `shared/` と `server/` にあり、Python にすると 9 つを写して両方のテストで突き合わせ続けることになる（`dumpsLikePython()` は 1 つだから保てている）。数え間違いの元は「読み方を書き直すこと」なので、写しを増やさないほうを取った。
+- Python の利点だった起動の速さは、実測で差にならなかった（`node server/tools/feed.ts rows …` が手元の 7 日ぶんで 0.1 秒）。失うのは「`feed/` だけ写せば Node の無い場所でも動く」ことだが、調べるのは SAI を動かしているマシンの置き場なので要らない。
+- 置き場は `server/tools/`（`pnpm lint` / `pnpm typecheck` / `pnpm test` がそのまま拾うので、CI に足すものが無い）。
+- サブコマンドは `rows`・`messages`・`usage` の 3 つから（実測で問いの多かった順）。`turns --missing` と `prompts` は関数（`pairTurns()`・`humanPrompt()`）だけ置いた。MCP の読む口には寄せていない（シェルから呼べて出力を絞りやすいほうを取った）。

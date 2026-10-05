@@ -188,7 +188,8 @@ def windows_to_write(path: Path, incoming: dict, now: datetime) -> dict | None:
     if age < 0:
         return None if live else incoming
     merged = merge_windows(live, incoming, at)
-    return None if merged == written else merged
+    # 比べる相手は生きている窓だけ（期限切れの窓が残っているだけで書き直すと、値が変わっていないのに ts が進む）
+    return None if merged == live else merged
 
 
 def build_record(payload: dict, windows: dict, now: datetime) -> dict:

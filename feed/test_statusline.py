@@ -186,6 +186,12 @@ class StatusLineTest(unittest.TestCase):
         run(week(47, WEEK_RESETS + 5), self.env)
         self.assertEqual(self.written(), placed, "同じ値の描画では書き直さない（ts は値が最後に変わった時刻）")
 
+        # 期限切れの窓が残っているだけでは書き直さない（値が変わっていないのに「時点」が進んでしまう）
+        expired = {"used_percentage": 80.0, "resets_at": int(time.time()) - 60}
+        placed = self.record_at(timedelta(hours=-3), {"five_hour": expired, "seven_day": {"used_percentage": 47.0, "resets_at": WEEK_RESETS}})
+        run(week(37), self.env)
+        self.assertEqual(self.written(), placed)
+
         run(week(48), self.env)
         self.assertEqual(self.written()["rate_limits"]["seven_day"]["used_percentage"], 48.0, "高い値は置き直す")
         self.assertNotEqual(self.written()["ts"], placed["ts"])

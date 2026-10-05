@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { Authenticator, WHOIS_RETRY_MS, WHOIS_STALE_MS, WhoisUnavailable, loginFromWhois, tailscaleBins, tailscaleWhois, whoisFromJson } from './auth.ts'
+import { Authenticator, WHOIS_RETRY_MS, WHOIS_STALE_MS, WhoisUnavailable, isLoopbackHostHeader, loginFromWhois, tailscaleBins, tailscaleWhois, whoisFromJson } from './auth.ts'
 import { chmod, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -14,6 +14,11 @@ function req(headers: Record<string, string>, remote = '127.0.0.1'): IncomingMes
 
 const user = (login: string, caps: WhoisInfo['caps'] = {}): WhoisInfo => ({ login, tagged: false, node: 'laptop', caps })
 const tagged = (caps: WhoisInfo['caps'] = {}): WhoisInfo => ({ login: 'tagged-devices', tagged: true, node: 'ci', caps })
+
+test('isLoopbackHostHeader: ループバックの名前だけ（ポートは問わない）。外の名前・空は断る', () => {
+  for (const host of ['127.0.0.1:8787', '127.0.0.1', 'localhost:5173', 'LOCALHOST', '[::1]:8787']) assert.equal(isLoopbackHostHeader(host), true, host)
+  for (const host of [undefined, '', 'evil.example.com:8787', '127.0.0.1.evil.example.com', 'mac.tailnet.ts.net', '127.0.0.2', 'localhost.evil.com']) assert.equal(isLoopbackHostHeader(host), false, String(host))
+})
 
 test('loginFromWhois: UserProfile.LoginName を取る。形が違えば null', () => {
   assert.equal(loginFromWhois(JSON.stringify({ Node: {}, UserProfile: { LoginName: 'a@example.com' } })), 'a@example.com')

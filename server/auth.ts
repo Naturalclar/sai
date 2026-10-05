@@ -25,6 +25,16 @@ export type CapMap = Record<string, unknown[]>
  */
 export type Identity = { kind: 'local' } | { kind: 'tailnet'; login: string; name?: string; caps: CapMap } | { kind: 'tagged'; node: string; caps: CapMap }
 
+/**
+ * `Host` がループバックの名前か（`127.0.0.1` / `localhost` / `[::1]`。ポートは問わない）。
+ * DNS rebinding ではソケットがループバックでも `Host` は外の名前になるので、ローカル直アクセスの認証に両方を使う。
+ */
+export function isLoopbackHostHeader(host: string | undefined): boolean {
+  if (!host) return false
+  const name = host.trim().toLowerCase().replace(/:\d+$/, '')
+  return name === '127.0.0.1' || name === 'localhost' || name === '[::1]'
+}
+
 /** `tailscale whois` で引けた相手 */
 export interface WhoisInfo {
   /** ログイン名。タグ付きの端末は持ち主のユーザーがいないので、tailscale が付けた名前（`tagged-devices`）になる */

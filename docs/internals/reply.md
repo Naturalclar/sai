@@ -278,7 +278,7 @@ SAI が起こした Claude のターンは、使ったトークンと費用も�
 - 次の返信から効き、処理中のターンは起動したときのモードのまま（#272）。`replyCommand()` が付けたモードを `ReplyCommand.permissionMode` に持ち、`ProcessRunner` が `Replying.permission_mode`（`''` はフラグ無し、省略は分からない）として `replying.json` にも書く。画面はメタの値と違えば `shared/permissions.ts` の `launchedModeNote()` で、ボタンの横に「次の返信から」、許可のバブル（`SessionView` / `FeedView` / `TodoView`）に理由を出す。
 - 選べるのは `acceptEdits`・`auto`（#691）・`bypassPermissions`（#253）。`REPLY_MODES` に無い値（`plan` など）は画面に並べず、`mergeMeta()` が `400` にする。一覧は `shared/permissions.ts` の `REPLY_MODES` / `isReplyPermissionMode()` で、サーバの検査と画面のメニューが同じものを見る（閉じているときの短い名前は `shortReplyMode()`）。
 - 目立たせるかは `modeSkipsRules()`（`auto` / `bypassPermissions`）、強さは `modeEmphasis()`（素通しは `loud` = 赤、Auto mode は `caution` = 1 段弱い色。CSS のクラス名にそのまま使う）。ボタン・メニュー・見出しのタグ・モーダルが同じ判定。
-- **人が見ていない所から動かす口（tailnet の MCP から送る・ループを組む）は `modeSkipsRules()` で断る**（#691。`bypassPermissions` を直に比べない）。運用者の `SAI_CLAUDE_ARGS` の中は `skipModeInArgs()` が見る。
+- **人が見ていない所から動かす口（tailnet の MCP から送る・ループを組む）は `modeSkipsRules()` で断る**（#691。`bypassPermissions` を直に比べない）。運用者の `SAI_CLAUDE_ARGS` の中は `skipModeInArgs()` が見る（`--permission-mode` の 2 つの形・`--dangerously-skip-permissions`・`--settings` の JSON の `defaultMode`）。
 - 名前（`MODE_LABEL` / `MODE_SHORT`）は英語（#271）。説明は `MODE_HINT`（日本語）に分けてあり、メニューの補足と `modeLabel()`（`Accept edits — ファイル編集は聞かない`。見出しのタグ・盾のモーダル）が使う。`server/approvals/permissions.test.ts` が名前に日本語が混ざると止める。
 
 ## モデル

@@ -135,6 +135,10 @@ test('skipModeInArgs: 運用者の引数の中の、ルールに関係なく通�
   assert.equal(skipModeInArgs(['--permission-mode', 'acceptEdits']), '')
   assert.equal(skipModeInArgs(['--allowedTools', 'Bash(auto *)']), '', '値に auto を含むだけの別の引数では当てない')
   assert.equal(skipModeInArgs(['--permission-mode']), '')
+  // --settings に JSON で渡した既定のモードも見る（#697 のレビュー。前は引数のどこかに名前があれば当てていた）
+  assert.equal(skipModeInArgs(['--settings', '{"permissions":{"defaultMode":"bypassPermissions"}}']), 'bypassPermissions')
+  assert.equal(skipModeInArgs(['--settings={"permissions": {"defaultMode" : "auto"}}']), 'auto')
+  assert.equal(skipModeInArgs(['--settings', '{"permissions":{"defaultMode":"acceptEdits"}}']), '')
   assert.equal(modeName('auto'), 'Auto mode')
   assert.equal(modeName('bypassPermissions'), 'Bypass permissions')
 })

@@ -109,7 +109,8 @@ export function modeEmphasis(mode: string): '' | 'caution' | 'loud' {
 
 /**
  * 運用者が渡した引数（`SAI_CLAUDE_ARGS`）の中の、ルールに関係なく通るモード。無ければ空。
- * `--permission-mode auto`（2 語）・`--permission-mode=auto`（1 語）・`--dangerously-skip-permissions` を見る
+ * `--permission-mode auto`（2 語）・`--permission-mode=auto`（1 語）・`--dangerously-skip-permissions` と、
+ * `--settings` に JSON で渡した `"defaultMode": "…"` を見る（値に名前を含むだけの別の引数では当てない）
  */
 export function skipModeInArgs(args: readonly string[]): string {
   if (args.includes('--dangerously-skip-permissions')) return 'bypassPermissions'
@@ -117,6 +118,9 @@ export function skipModeInArgs(args: readonly string[]): string {
     const a = args[i]!
     const mode = a === '--permission-mode' ? (args[i + 1] ?? '') : a.startsWith('--permission-mode=') ? a.slice('--permission-mode='.length) : ''
     if (mode && modeSkipsRules(mode)) return mode
+    // `--settings '{"permissions":{"defaultMode":"bypassPermissions"}}'`（1 語でも `--settings=` でも、引数の中身を見る）
+    const byDefault = /"defaultMode"\s*:\s*"([A-Za-z]+)"/.exec(a)?.[1] ?? ''
+    if (modeSkipsRules(byDefault)) return byDefault
   }
   return ''
 }

@@ -168,6 +168,7 @@ test('ProgressReader(Codex): sessions/YYYY/MM/DD の rollout をセッション 
     const closed = await new ProgressReader(projects, sessions).read({ id: `${SID}@r`, repo: 'r', agent: 'codex', cwd: '/w' })
     assert.equal(closed.active, false)
     assert.equal(closed.turn_since, undefined)
+    assert.equal(closed.turn_closed, at(3), '閉じた時刻（止めたターンで答えた許可を片付けるのに使う）')
   })
 })
 

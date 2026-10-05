@@ -202,7 +202,7 @@ import { agentListFromEnv, backgroundLive, type AgentList, type ClaudeAgent } fr
 import { isRemoteHost } from '../shared/host.ts'
 import { IMAGES_SEGMENT } from '../shared/images.ts'
 import { imageHeaders, imageTable, readSessionImage } from './local/images.ts'
-import { AnsweredApprovals } from './approvals/answered.ts'
+import { AnsweredApprovals, answeredAfter } from './approvals/answered.ts'
 import { fileTable, readSessionFile } from './local/files.ts'
 import { FILES_SEGMENT } from '../shared/files.ts'
 import { TranscriptImages } from './local/transcriptImages.ts'
@@ -4354,11 +4354,14 @@ export function createApp(
           },
         ).filter((r) => Date.parse(r.ts) >= shownFrom)
         // いまのコンテキスト量（#441）。(mtime, size) で覚えているので読み直しは軽い。rev には丸めた値だけ混ぜる
-        const context = isRemoteHost(session.host, selfHost()) ? 0 : (await progress.read(session)).context_tokens
-        // いまのターンの間に画面から答えた許可（#693）。最後のターン完了より後のものだけ
-        const answeredHere = answered.of(id, session.last_turn_ts ?? '')
+        const progressNow = isRemoteHost(session.host, selfHost()) ? null : await progress.read(session)
+        const context = progressNow?.context_tokens ?? 0
+        // いまのターンの間に画面から答えた許可（#693）。終わったターンのものは出さない: ターン完了の行のほか、
+        // 止めたターン（行が来ない）は transcript / rollout の上で閉じた時刻で片付ける
+        const answeredSince = answeredAfter(session.last_turn_ts ?? '', progressNow)
+        const answeredHere = answered.of(id, answeredSince)
         const body: SessionDetailResponse = {
-          rev: revWith(`${sessionsRev}~${me.rev}~${settled}~${terminalKey(sessions)}~${question?.asked_at ?? ''}~${bg ? `${bg.attach}:${bg.status}` : ''}~${contextRevKey(context)}~${replies.map((r) => r.agent_reply?.message_id).join(',')}~${answered.key(id, session.last_turn_ts ?? '')}`, replying, approvalMapKey(pendingApprovals), false, `${digest.revKey()}|${usage.rev()}`, `${queue.key()}|${agents.key()}|${loops.key()}`),
+          rev: revWith(`${sessionsRev}~${me.rev}~${settled}~${terminalKey(sessions)}~${question?.asked_at ?? ''}~${bg ? `${bg.attach}:${bg.status}` : ''}~${contextRevKey(context)}~${replies.map((r) => r.agent_reply?.message_id).join(',')}~${answeredHere.map((a) => `${a.approval_id}:${a.behavior}`).join(',')}`, replying, approvalMapKey(pendingApprovals), false, `${digest.revKey()}|${usage.rev()}`, `${queue.key()}|${agents.key()}|${loops.key()}`),
           session: withLastSummary([session])[0]!,
           rows,
           older,

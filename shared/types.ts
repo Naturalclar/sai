@@ -613,6 +613,11 @@ export interface SessionProgressResponse {
    */
   turn_since?: string
   /**
+   * **最後のターンが閉じた時刻**（#693。Codex だけ。`task_complete` / `turn_aborted`）。止めたターンはターン完了の行が来ないので、
+   * 答えた許可（`answered`）を「そのターンは終わった」と片付けるのに使う
+   */
+  turn_closed?: string
+  /**
    * 最後のターンが**閉じている**とき、その最後の手順の時刻（#614。Claude だけ）。閉じていない・手順が無い・読めなければ省く。
    * ターン完了の行が落ちたかの判定（`shared/stopMissing.ts`）に使う
    */

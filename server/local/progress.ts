@@ -228,6 +228,7 @@ export class ProgressReader {
         ...(closedAt ? { closed_at: closedAt } : {}),
         // 開いているターンの始まり（#693。Codex の端末で打ったターンの「処理中」の起点）
         ...(s.agent === 'codex' && cached.value.open && cached.value.since ? { turn_since: cached.value.since } : {}),
+        ...(s.agent === 'codex' && !cached.value.open && cached.value.closed ? { turn_closed: cached.value.closed } : {}),
         // セッション同士のメッセージで、送ると相手がどれだけ読み直すかに使う（#311）
         context_tokens: cached.value.context ?? 0,
         // 答えを待っている質問（#333）。詳細の応答が、行の待ちと同じ文のときだけ使う

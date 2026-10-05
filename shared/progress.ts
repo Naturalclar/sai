@@ -36,6 +36,8 @@ export interface ParsedProgress {
   open: boolean
   /** ターンの始まりの時刻（#693。Codex の `task_started`）。始まりを見ていなければ省く */
   since?: string
+  /** 最後のターンが閉じた時刻（#693。Codex の `task_complete` / `turn_aborted`）。開いている・見ていなければ省く */
+  closed?: string
   /**
    * 最後にモデルを呼んだときに読んだ量（トークン）。そのセッションに送ると、少なくともこれだけ読み直す（#311）。
    * Claude は assistant の `message.usage` の入力（`input_tokens` + `cache_read_input_tokens` + `cache_creation_input_tokens`）、
@@ -262,6 +264,7 @@ export function codexProgress(lines: readonly string[]): ParsedProgress {
   let started = false
   let open = false
   let since = ''
+  let closed = ''
   let context = 0
   for (const line of lines) {
     const o = parseLine(line)
@@ -282,8 +285,12 @@ export function codexProgress(lines: readonly string[]): ParsedProgress {
         started = true
         open = true
         since = ts
-      } else if (type === 'task_complete') {
+        closed = ''
+      } else if (type === 'task_complete' || type === 'turn_aborted') {
+        // 人が止めたターンは `task_complete` を書かず `turn_aborted` で終わる（`shared/codexQueue.ts` の `TURN_CLOSED` と同じ見方）。
+        // 見ないと、止めたターンが最後の書き込みから 10 分「処理中」のままになる（#695 のレビュー）
         open = false
+        closed = ts
       } else if (type === 'token_count') {
         const read = num(obj(obj(payload.info)?.last_token_usage)?.input_tokens)
         if (read > 0) context = read
@@ -309,7 +316,7 @@ export function codexProgress(lines: readonly string[]): ParsedProgress {
       else pushStep(steps, { kind: 'text', summary: oneLine(text), started: ts, ended: ts })
     }
   }
-  return { steps, started, open, context, notes, ...(since ? { since } : {}) }
+  return { steps, started, open, context, notes, ...(since ? { since } : {}), ...(closed ? { closed } : {}) }
 }
 
 /**

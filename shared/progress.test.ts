@@ -296,4 +296,10 @@ test('codexProgress: ターンの始まり（task_started）の時刻を返す�
   const closed = codexProgress([ev('2026-10-05T03:00:00.000Z', 'task_started'), ev('2026-10-05T03:01:00.000Z', 'task_complete')])
   assert.equal(closed.open, false)
   assert.equal(codexProgress([ev('2026-10-05T03:01:00.000Z', 'task_complete')]).since, undefined, '始まりを見ていない（途中から読んだ）')
+  // 人が止めたターンは task_complete を書かず turn_aborted で終わる（#695 のレビュー。見ないと止めたターンが「処理中」のまま）
+  const aborted = codexProgress([ev('2026-10-05T03:00:00.000Z', 'task_started'), ev('2026-10-05T03:02:00.000Z', 'turn_aborted')])
+  assert.equal(aborted.open, false)
+  assert.equal(aborted.closed, '2026-10-05T03:02:00.000Z')
+  assert.equal(closed.closed, '2026-10-05T03:01:00.000Z')
+  assert.equal(open.closed, undefined, '新しいターンが始まったら閉じた時刻は持たない')
 })

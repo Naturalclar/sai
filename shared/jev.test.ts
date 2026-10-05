@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { isJevAuto, jevAsks, jevAutoAllows, jevAutoDecision, jevAutoEligible, jevLabel, jevLevel, jevPercent, jevRuleState, jevSafeOf, jevState, JEV_AUTO_MIN, JEV_STATE_MAX } from './jev.ts'
+import { isJevAuto, jevAsks, jevAutoAllows, jevAutoDecision, jevAutoEligible, jevLabel, jevLowestRule, jevLevel, jevPercent, jevRuleState, jevSafeOf, jevState, JEV_AUTO_MIN, JEV_STATE_MAX } from './jev.ts'
 import type { Approval } from './types.ts'
 
 const a = (over: Partial<Approval> = {}): Approval => ({
@@ -108,6 +108,13 @@ test('jevAutoEligible / jevRuleState: 自動で常に許可するのは Claude �
   const state = jevRuleState(approval, 'Bash(rm:*)')
   assert.match(state, /Command: rm -rf build/)
   assert.match(state, /every future command matching the rule: Bash\(rm:\*\)$/)
+})
+
+test('jevLowestRule（#705）: 部品ごとのルールのうち一番低いもの。1 つでも届いていなければ待つ', () => {
+  assert.deepEqual(jevLowestRule([{ label: 'Bash(git status:*)', safe: 0.96 }, { label: 'Bash(rm:*)', safe: 0.1 }, { label: 'Bash(tee:*)', safe: 0.5 }]), { label: 'Bash(rm:*)', safe: 0.1 })
+  assert.deepEqual(jevLowestRule([{ label: 'Bash(git status:*)', safe: 0.96 }]), { label: 'Bash(git status:*)', safe: 0.96 })
+  assert.equal(jevLowestRule([{ label: 'Bash(git status:*)', safe: 0.96 }, { label: 'Bash(rm:*)', safe: undefined }]), undefined, '揃うまで待つ（高い方だけで判定しない）')
+  assert.equal(jevLowestRule([]), undefined)
 })
 
 test('jevAutoDecision（#553）: この回が閾値未満は none、Bash 以外・ルールを作れない・ルールが低いは skip（理由つき）、ルール待ちは wait', () => {

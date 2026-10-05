@@ -107,6 +107,19 @@ export const readSettingsFile: ReadSettings = async (path) => {
 }
 
 /** その cwd に効いている許可ルールと、読んだファイルの一覧 */
+/**
+ * その cwd に効いている**許可**のルールの表記だけ（#705。[常に許可] でもう設定にある部品を足さないために見る）。
+ * 読むだけ。読めなければ空（覆われていない扱いになり、同じルールをもう一度書くだけで害は無い）
+ */
+export async function allowRules(cwd: string, home: string): Promise<string[]> {
+  try {
+    const { rules } = await collectPermissions(cwd, { home })
+    return rules.filter((r) => r.kind === 'allow').map((r) => r.rule)
+  } catch {
+    return []
+  }
+}
+
 export async function collectPermissions(
   cwd: string,
   options: { home: string; env?: NodeJS.ProcessEnv; platform?: NodeJS.Platform; read?: ReadSettings } ,

@@ -15,6 +15,41 @@
 - Jev の自動の許可も記録には足すが、勧める回数には数えない（人が押した回数ではない。自動のほうはその場でルールを書く）。
 - #621 のレビュー: 盾の「よく許可しているが、ルールに無いもの」は表記が同じルールしか外していなかったので、あとから広いルール（`Bash(gh:*)`）を足しても 30 日のあいだ `Bash(gh pr:*)` が並び続けた。覆われているかで外すようにした。
 
+### つないだコマンドの [常に許可] が効かなかった（#705）
+
+- 前は `&&` や `|` の**手前まで**の先頭の語だけでルールを作っていた（`cd dir && pnpm test` → `Bash(cd:*)`）。Claude Code はつないだコマンドを部品ごとに見るので後ろが通らず、押しても次も聞かれた。記録（10/2〜10/5 の `approvals.jsonl`）では Bash の許可 69 件のうち `Bash(cd:*)` が 31 件で、ある worktree では [常に許可] を 11 回押したあとも 20 回聞かれていた。`Bash(for:*)` も 7 件あった。
+- 実装の前に実機で形を試した（Claude Code 2.1.287。捨てのディレクトリで `claude -p "<文>" --model haiku --setting-sources project --output-format json --allowedTools "<ルール>"`、`permission_denials` で判定。各 1 回）:
+
+| 実行したコマンド | 許可していたルール | 結果 |
+| --- | --- | --- |
+| `touch x && mkdir d` / `touch a; mkdir b` / `touch a && mkdir b \|\| rm -f c` | 部品の全部 | 通る |
+| `touch x && mkdir d` / 改行でつないだ `touch a` と `mkdir b` | `Bash(touch:*)` だけ | 断られる |
+| `node -v \| tee v.txt` / `touch p1 \| tee p2` | 前だけ | 断られる |
+| 同じ | 前と `Bash(tee:*)` | 通る（**パイプの後ろも部品**） |
+| `node -v \| head -1`（`tail` / `grep` / `wc` / `sort \| uniq` / `cat` / `cut \| tr` / `sed -n 1p` / `xargs echo` / `jq`）、`node -v && echo done`、`node -v; pwd; ls`、`\|\| true`、`&& sleep 1 && date`、`&& which node` | `Bash(node:*)` だけ | 通る（読むだけのコマンドはルールが要らない） |
+| `node -v \| awk "{print}"` | `Bash(node:*)` だけ | 断られる |
+| `cd sub` | 関係ないルールだけ | 通る |
+| `cd sub && node -v` | `Bash(node:*)` だけ | 通る（**中への `cd` はルールが要らない**） |
+| `cd /tmp && node -v` / `cd ../.. && node -v` | `Bash(cd:*)` と `Bash(node:*)` | 断られる（**外への `cd` はルールがあっても聞かれる**） |
+| `cd sub && touch x`（`;` でも・順が逆でも・`mkdir` / `rm` / `cp` / `mv` / `sed -i` / `tee` でも） | `Bash(cd:*)` と後ろのルール | 断られる |
+| `cd sub && git status` / `cd sub && pnpm -v && git status` | 全部 | 断られる |
+| `cd sub && node -v`（`npm` / `pnpm` / `make` / `cat` / `chmod +x f` / `ln -s a b` / `python3 -c …`）、`cd sub && pnpm -v \| tail -5` | `Bash(cd:*)` と後ろのルール | 通る |
+| `echo hi > y.txt` / `node -v > out.txt` / `cd sub && node -v > out.txt` | コマンドのルール | 断られる |
+| `node -v 2>&1` / `2>/dev/null` / `>/dev/null` / `touch x < /dev/null` | コマンドのルール | 通る |
+| `FOO=1 touch x` | `Bash(touch:*)` | 断られる |
+| `FOO=1 touch x` / `FOO=1 BAR=2 touch x` / `NODE_ENV=test touch x` | 代入ごとのルール（`Bash(FOO=1 touch:*)`） | 通る |
+| `touch $(echo x)` / `touch "$(echo x)"` / `` touch `echo x` `` / `touch "$PWD/x"` / `touch x$FOO` / `touch a{1,2}` | `Bash(touch:*)` | 断られる |
+| `touch "$(cat <<'EOF' … EOF)"` / `git commit -m "$(cat <<'EOF' … EOF)"` | コマンドのルール | 通る |
+| `for i in 1 2; do touch $i; done` / `(touch a && mkdir b)` / `touch a && { mkdir b; }` / `node -v & touch x` | 出てくる語の全部 | 断られる |
+| `touch "a && b"` / 行の頭の `# コメント` のあとの `touch x` | `Bash(touch:*)` | 通る |
+
+- `cd` のあとの書き込みが断られるのは Claude Code の意図した動き（本体の文言は「Compound command contains cd with write operation - manual approval required to prevent path resolution bypass」。`git` は「Compound commands with cd and git require approval to prevent bare repository attacks」）。書き込み扱いの並び（`mkdir` / `touch` / `rm` / `rmdir` / `mv` / `cp` / `sed` / `tee`）は本体の分類から取り、表の結果と合っている。
+- issue の案は「`cd dir && pnpm test` → `Bash(cd:*)` と `Bash(pnpm test:*)`」だったが、**`Bash(cd:*)` は書かない**ことにした。表のとおり一度も効かない（中はルール無しで通り、外はルールがあっても聞かれる）ので、許可の範囲を広げるだけになる。案 4（`cd` だけのときは勧めない）は、書くルールが無いので [常に許可] が出ない、という形で満たした。前の記録に残っている `Bash(cd:*)` は盾のモーダルの「よく許可しているが、ルールに無いもの」から外した。設定にもう書かれている `Bash(cd:*)` は消していない（害が無く、SAI は設定を「常に許可」の経路でしか書かない）。
+- 読むだけのコマンド（`UNASKED`）は、通ると確かめたものだけを並べた。書いても害は無いが、許可の範囲は聞かれるものだけにしたかった。ここに無い読むだけのコマンドは書く側に倒れる。
+- #710 のレビュー: 読むだけのコマンドを名前だけで飛ばすと、`cat /etc/hosts` のように引数しだいで聞かれた単体のコマンドから [常に許可] が消えた（前は出ていた）。ほかに書くルールが無いときは、その部品に書くようにした。`pnpm test | sort -o out.txt` のように、ほかにルールがあって読むだけのコマンドの側も聞かれる形は残っている（押しても次も聞かれうる。危ない方向ではない）。同じレビューで、`\\` で終わるコメント行の次の行を捨てていたのも直した（行の継続を先に空白へ置き換えていた）。
+- 回数の鍵を「書かれるルールの組」にしたので、同じコマンドでも設定にルールが足されると鍵が変わる（`Bash(a:*) + Bash(b:*)` → `Bash(a:*)`）。数えているのは「押すと何が書かれるか」なので、それでよいとした。
+- 通しでも確かめた（捨てのサーバと本物の `claude`）: `cd sub && node -v && npm -v | tail -1` のバブルに `Bash(node:*)` と `Bash(npm:*)` が並び、[常に許可] で 2 つとも `.claude/settings.local.json` に書かれ、次の `cd sub && npm -v && node -v | tail -1` は聞かれなかった。
+
 ## Jev
 
 ### Claude の要約を送らない（#493 のレビュー）

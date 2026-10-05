@@ -1158,7 +1158,13 @@ export interface Approval {
    */
   jev_rule?: { label: string; safe: number }
   /**
-   * この許可が、同じ cwd で同じルール（`alwaysAllowRule()` の表記）の**何回目か**（#445。人が許可した回数 + 1）。
+   * [常に許可] を押すと書かれるルールの表記（#705。`['Bash(pnpm test:*)', 'Bash(pnpm lint:*)']`）。**サーバが組む**（画面は出すだけで送らない）。
+   * つないだコマンドは部品ごと（`shared/bashRules.ts`）で、もう設定にあるルールは除いてある。
+   * **無ければ [常に許可] を出さない**（Claude の `-p` 以外・ルールを作れないツールやコマンド・全部もう設定にある）
+   */
+  always?: string[]
+  /**
+   * この許可が、同じ cwd で同じルールの組（`rulesKey(always)`）の**何回目か**（#445。人が許可した回数 + 1）。
    * Claude の `-p` の許可で、ルールが作れるツールのときだけ。`suggest` は「常に許可」を勧める回数（`APPROVAL_SUGGEST_AT`）に達したか。
    * **勧めるだけ**で、サーバはルールを書かない
    */
@@ -1178,7 +1184,7 @@ export interface ApprovalLogRow {
   /** そのセッションの cwd（行から。分からなければ空） */
   cwd: string
   tool: string
-  /** `alwaysAllowRule()` の表記。作れないツールは空 */
+  /** 書かれるルールの組（`rulesKey()`。`Bash(pnpm test:*) + Bash(tee:*)`）。作れないツール・コマンドは空 */
   rule: string
   /** 誰が答えたか。`jev` は自動の「常に許可」（#499） */
   by: 'human' | 'jev'

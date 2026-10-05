@@ -90,8 +90,8 @@ import { rowProject } from '../shared/project.ts'
 import { cleanProjects, matchesProjects } from '../shared/projectFilter.ts'
 import { ICONS_DIR, IconStore, iconKey } from './meta/icons.ts'
 import { historyKey, ICON_HISTORY_DIR, ICON_HISTORY_FILE, IconHistory, isHistoryKey } from './meta/iconHistory.ts'
-import { alwaysAllowRule, ruleLabel } from '../shared/approvals.ts'
-import { APPROVAL_SUGGEST_AT, countedRule } from '../shared/approvalCounts.ts'
+import { alwaysAllowRules, ruleLabel } from '../shared/approvals.ts'
+import { APPROVAL_SUGGEST_AT, ruleCovered, rulesKey } from '../shared/approvalCounts.ts'
 import { APPROVAL_LOG_FILE, ApprovalLog } from './approvals/approvalLog.ts'
 import { APPROVALS_FILE, Approvals, WAIT_MS } from './approvals/approvals.ts'
 import { BuildFreshness } from './local/buildFreshness.ts'
@@ -106,7 +106,7 @@ import type { OpencodeApp } from './reply/opencodeServer.ts'
 import { OpencodePermissions } from './reply/opencodePermissions.ts'
 import { approvalMapKey, CodexDialogs, DIALOG_SCAN_TTL_MS, mergeApprovalMaps } from './reply/codexDialogs.ts'
 import { JevRisk } from './approvals/jev.ts'
-import { isJevAuto, jevAutoAllows, jevAutoDecision, jevAutoEligible, jevPercent, jevRuleState } from '../shared/jev.ts'
+import { isJevAuto, jevAutoAllows, jevAutoDecision, jevAutoEligible, jevLowestRule, jevPercent, jevRuleState } from '../shared/jev.ts'
 import type { JevJudge } from './approvals/jev.ts'
 import { CodexTerminals, type CodexTerminalSource } from './reply/codexTerminal.ts'
 import { CodexPanes, codexAppServer, type AppServerProbe, type CodexPaneSource } from './reply/codexPanes.ts'
@@ -550,6 +550,11 @@ export interface TerminalDeps {
   claudeHooks?: ClaudeHooksReader
   /** Claude のログインが切れていないかを聞く口（#685）。既定は聞かない（本物の `claude` を叩くのは `main.ts` が渡したときだけ） */
   claudeAuth?: ClaudeAuthReader
+  /**
+   * その cwd にもう効いている許可のルール（#705。[常に許可] で同じ部品を足さないために見る）。**省略は「読まない」**
+   * （本物の `~/.claude/settings.json` を読むのは main.ts だけ。既定で読むと、テストの結果が回したマシンの設定で変わる）
+   */
+  allowedRules?: (cwd: string) => Promise<string[]>
   /** Codex の画像生成で作った画像の置き場（#575）。テストでは一時ディレクトリを指す */
   codexImages?: CodexImages
   /** 画像の軽い版を作る口（#589）。テストでは偽の縮める口を渡した Thumbnails か noThumbs */
@@ -613,6 +618,7 @@ export function createApp(
   // フックの配線のずれ（#567）。読むのは ttl に 1 回、設定の mtime が変わったときだけ
   const claudeHooks = terminal.claudeHooks ?? new NoClaudeHooks()
   const claudeAuth = terminal.claudeAuth ?? new NoClaudeAuth()
+  const allowedRules = terminal.allowedRules ?? (async () => [] as string[])
   // ログインを聞き直した失敗（`<id>\n<since>` → その問い合わせ）。同じ失敗で何度も `claude` を起こさない。
   // 問い合わせそのものを持つのは、同時に来た応答（一覧と詳細）の後の方も答えを待つため（待たないと、印の無い失敗を先に返す）
   const authAsked = new Map<string, Promise<unknown>>()
@@ -879,13 +885,24 @@ export function createApp(
   approvals.persistTo(join(store.directory, APPROVALS_FILE), (id) => run.running(id))
   // 許可に答えた記録（#445 / #582）。回数を数えて「常に許可」を勧めるのに使う（勧めるだけで、ルールは書かない）
   const approvalLog = new ApprovalLog(join(store.directory, APPROVAL_LOG_FILE))
-  /** 答えたことを記録に足す。cwd はセッションの行から（リクエストからは受けない）。コマンドの全文は書かない */
-  const logAnswer = async (a: Approval, by: 'human' | 'jev', behavior: 'allow' | 'deny', remember: boolean) => {
+  /**
+   * [常に許可] を押すと書かれるルール（#705）。**組むのはここだけ**（画面の表示・回数の鍵・人の答え・Jev の自動が同じものを見る）。
+   * つないだコマンドは部品ごとで、もう設定にあるルール（`ruleCovered()`）は足さない。Claude の `-p` の許可だけ
+   * （Codex / OpenCode には「常に許可」が無い）。空なら [常に許可] を出さない。`cwd` はセッションの行から
+   */
+  const alwaysRules = async (a: Approval, cwd: string): Promise<PermissionRule[]> => {
+    if ((a.agent ?? 'claude') !== 'claude' || a.answerable === false) return []
+    const rules = alwaysAllowRules(a.tool_name, a.input, cwd)
+    if (rules.length === 0 || !cwd) return rules
+    const allowed = await allowedRules(cwd).catch(() => [] as string[])
+    return rules.filter((rule) => !ruleCovered(ruleLabel(rule), allowed))
+  }
+  /** 答えたことを記録に足す。cwd はセッションの行から（リクエストからは受けない）。コマンドの全文は書かない。`rule` は答える前に組んだ組 */
+  const logAnswer = (a: Approval, cwd: string, rule: string, by: 'human' | 'jev', behavior: 'allow' | 'deny', remember: boolean) => {
     try {
-      const cwd = (await store.sessions(90)).sessions.find((s) => s.id === a.id)?.cwd ?? ''
       const now = Date.now()
       const waited = Math.max(0, Math.round((now - Date.parse(a.since)) / 1000))
-      approvalLog.record({ ts: new Date(now).toISOString(), id: a.id, cwd, tool: a.tool_name, rule: countedRule(a), by, behavior, remember, waited_s: Number.isFinite(waited) ? waited : 0 })
+      approvalLog.record({ ts: new Date(now).toISOString(), id: a.id, cwd, tool: a.tool_name, rule, by, behavior, remember, waited_s: Number.isFinite(waited) ? waited : 0 })
     } catch {
       // 記録できなくても答えは止めない
     }
@@ -994,16 +1011,18 @@ export function createApp(
       opencodeServerEnabled ? opencodePerms.scan(sessions) : Promise.resolve({} as ApprovalMap),
     ])
     const all = mergeApprovalMaps(mergeApprovalMaps(mergeApprovalMaps(approvals.snapshot(), codexApp.snapshot()), dialogs), opencode)
-    // 同じ cwd で同じルールの何回目か（#445）。数えるのは人が許可した回数で、決めた回数からは「常に許可」を勧める（勧めるだけ）
+    // [常に許可] で書かれるルール（#705）と、同じ cwd で同じ組の何回目か（#445）。数えるのは人が許可した回数で、
+    // 決めた回数からは「常に許可」を勧める（勧めるだけ）
     const merged: ApprovalMap = {}
     for (const [id, list] of Object.entries(all)) {
       const cwd = sessions.find((s) => s.id === id)?.cwd ?? ''
-      merged[id] = list.map((a) => {
-        const rule = cwd && a.answerable !== false ? countedRule(a) : ''
-        if (!rule) return a
-        const count = approvalLog.count(cwd, rule) + 1
-        return { ...a, count, suggest: count >= APPROVAL_SUGGEST_AT }
-      })
+      merged[id] = await Promise.all(list.map(async (a) => {
+        const always = (await alwaysRules(a, cwd)).map(ruleLabel)
+        if (always.length === 0) return a
+        if (!cwd) return { ...a, always }
+        const count = approvalLog.count(cwd, rulesKey(always)) + 1
+        return { ...a, always, count, suggest: count >= APPROVAL_SUGGEST_AT }
+      }))
     }
     // 問題なさそうかの確率（#491）。聞いていないものは投げるだけで、届いたら次の応答に載る（rev は approvalMapKey が拾う）
     // 読む経路（一覧・詳細・フィード・MCP の sai_sessions）は写しに確率を付けるだけで、預かりの本物は触らない。
@@ -1017,17 +1036,16 @@ export function createApp(
     for (const [id, list] of Object.entries(annotated)) {
       out[id] = list.map((a) => {
         if (!jevAutoEligible(a)) return a
-        const rule = alwaysAllowRule(a.tool_name, a.input)
-        const label = rule ? ruleLabel(rule) : ''
-        const safe = label ? jevRisk.peekRule(label) : undefined
-        return label && safe !== undefined ? { ...a, jev_rule: { label, safe } } : a
+        // 部品ごとのルールのうち一番低いもの（#705。全部が届いてから出す）
+        const lowest = jevLowestRule((a.always ?? []).map((label) => ({ label, safe: jevRisk.peekRule(label) })))
+        return lowest ? { ...a, jev_rule: lowest } : a
       })
     }
     return rememberShown(out)
   }
 
   /** 「常に許可」の答えに付けるもの（#96）。CLI が cwd の .claude/settings.local.json に書く（端末の「今後も許可」と同じ） */
-  const permissionsFor = (rule: PermissionRule): PermissionUpdate[] => [{ type: 'addRules', rules: [rule], behavior: 'allow', destination: 'localSettings' }]
+  const permissionsFor = (rules: PermissionRule[]): PermissionUpdate[] => [{ type: 'addRules', rules, behavior: 'allow', destination: 'localSettings' }]
 
   /**
    * Jev の確率が閾値以上の許可を、人を待たずに [常に許可] と同じ答えで返す（#499）。
@@ -1036,6 +1054,7 @@ export function createApp(
    * 対象は `jevAutoEligible()`（Claude の `-p` の **Bash** だけ。Jev が見たコマンドと許可するものが同じ）。
    * **この回のコマンドとルールの両方**が閾値以上のときだけ答える: ルール（`Bash(rm:*)` のような前方一致）は Jev が見た 1 回より
    * 広いので、`ruleSafe()` で別の文を立てて聞く（届くまでは待つ。届いたら `onArrive` でもう一度ここに来る）。
+   * つないだコマンドは**部品ごとに聞き、一番低いもの**で判定する（#705。全部の部品が閾値以上のときだけ答える）。
    * 答えは画面の [常に許可] とまったく同じ（`permissionsFor()`）。`approvals.answer()` は 2 回目に false を返すので二重に答えない。
    * 同時に走らせない（届くたびに呼ばれるので、走っている間の分は終わってからもう 1 回）
    */
@@ -1064,13 +1083,17 @@ export function createApp(
     if (!s.jev || s.jev_auto <= 0 || !jevRisk.ready) return
     // 預かっている Claude の許可だけ（Codex / OpenCode には「常に許可」が無い）。聞いていないものはここで投げる
     const lines: string[] = []
+    const { sessions } = await store.sessions(90)
     for (const list of Object.values(jevRisk.annotate(approvals.snapshot(), true))) {
       for (const a of list) {
-        const rule = jevAutoEligible(a) ? alwaysAllowRule(a.tool_name, a.input) : null
-        const label = rule ? ruleLabel(rule) : null
+        const cwd = sessions.find((session) => session.id === a.id)?.cwd ?? ''
+        const rules = jevAutoEligible(a) ? await alwaysRules(a, cwd) : []
+        const labels = rules.map(ruleLabel)
         // ルールはこの回が閾値以上のときだけ聞く（聞くだけで外に出るので、自動を期待しない回には送らない）
-        const ruleSafe = label && jevAutoAllows(a.jev, s.jev_auto) ? jevRisk.ruleSafe(label, jevRuleState(a, label)) : undefined
-        const decision = jevAutoDecision(a, s.jev_auto, label, ruleSafe === undefined && label && jevRisk.ruleFailed(label) ? 'failed' : ruleSafe)
+        const asked = jevAutoAllows(a.jev, s.jev_auto) ? labels.map((label) => ({ label, safe: jevRisk.ruleSafe(label, jevRuleState(a, label)) })) : []
+        const failed = asked.find((r) => r.safe === undefined && jevRisk.ruleFailed(r.label))?.label
+        const lowest = jevLowestRule(asked)
+        const decision = jevAutoDecision(a, s.jev_auto, labels.length > 0 ? (failed ?? lowest?.label ?? rulesKey(labels)) : null, failed ? 'failed' : lowest?.safe)
         if (decision.kind === 'skip') {
           // 答えない理由（#553）。同じ許可には 1 回だけ（届くたびに呼ばれるので、覚えないと同じ行が何本も並ぶ）
           if (!jevSkipLogged.has(a.approval_id)) {
@@ -1080,10 +1103,10 @@ export function createApp(
           }
           continue
         }
-        if (decision.kind !== 'allow' || !rule || !label) continue
-        if (!approvals.answer(a.approval_id, { behavior: 'allow', updatedInput: a.input, updatedPermissions: permissionsFor(rule) })) continue
-        void logAnswer(a, 'jev', 'allow', true)
-        lines.push(`--- ${new Date().toISOString()} ${a.id} Jev が自動で常に許可（この回 ${jevPercent(a.jev!)}%、ルール ${jevPercent(ruleSafe!)}%、閾値 ${jevPercent(s.jev_auto)}%）: ${label}\n`)
+        if (decision.kind !== 'allow' || rules.length === 0 || !lowest) continue
+        if (!approvals.answer(a.approval_id, { behavior: 'allow', updatedInput: a.input, updatedPermissions: permissionsFor(rules) })) continue
+        logAnswer(a, cwd, rulesKey(labels), 'jev', 'allow', true)
+        lines.push(`--- ${new Date().toISOString()} ${a.id} Jev が自動で常に許可（この回 ${jevPercent(a.jev!)}%、ルール ${jevPercent(lowest.safe)}%、閾値 ${jevPercent(s.jev_auto)}%）: ${rulesKey(labels)}\n`)
       }
     }
     if (lines.length > 0) void appendFile(join(store.directory, 'reply.log'), lines.join('')).catch(() => {})
@@ -3312,17 +3335,19 @@ export function createApp(
     const answer: ApprovalAnswer = b.behavior === 'allow'
       ? { behavior: 'allow', updatedInput: b.updatedInput && typeof b.updatedInput === 'object' && !Array.isArray(b.updatedInput) ? b.updatedInput : current.input }
       : { behavior: 'deny', message: typeof b.message === 'string' && b.message.trim() ? b.message.trim() : 'SAI の画面で拒否された' }
+    // 「常に許可」のルール。画面から受け取らず、預かっているツール名と入力からサーバが組み立てる（cwd もセッションの行から）
+    const cwd = (await store.sessions(90).catch(() => ({ sessions: [] as SessionSummary[] }))).sessions.find((s) => s.id === current.id)?.cwd ?? ''
+    const rules = await alwaysRules(current, cwd)
     if (answer.behavior === 'allow' && b.remember === 'local') {
-      // 「常に許可」。ルールは画面から受け取らず、預かっているツール名と入力からサーバが組み立てる
-      const rule = alwaysAllowRule(current.tool_name, current.input)
-      if (!rule) return error(res, 400, 'このツールには「常に許可」は無い')
-      answer.updatedPermissions = permissionsFor(rule)
+      if (rules.length === 0) return error(res, 400, 'このツールには「常に許可」は無い')
+      answer.updatedPermissions = permissionsFor(rules)
     }
     if (!approvals.answer(approvalId, answer)) return error(res, 409, 'already answered')
-    // 回数に足してから返す（次のポーリングの「何回目」がずれない）
-    await logAnswer(current, 'human', answer.behavior, !!answer.updatedPermissions)
+    // 回数に足してから返す（次のポーリングの「何回目」がずれない）。鍵は答える前に組んだ組（答えたあとは設定に書かれて空になる）
+    const remembered = rulesKey(rules.map(ruleLabel))
+    logAnswer(current, cwd, remembered, 'human', answer.behavior, !!answer.updatedPermissions)
     answered.add(current, answer.behavior, answer.updatedPermissions ? '常に許可' : '')
-    return json(res, { ok: true, approval_id: approvalId, behavior: answer.behavior, remembered: answer.updatedPermissions ? ruleLabel(answer.updatedPermissions[0]!.rules[0]!) : undefined })
+    return json(res, { ok: true, approval_id: approvalId, behavior: answer.behavior, remembered: answer.updatedPermissions ? remembered : undefined })
   }
 
   /**

@@ -241,7 +241,7 @@ export function approvalMapKey(map: ApprovalMap): string {
     // 確率（#491）とルールの確率（#553）が届いたら rev を変える（混ぜないと画面が描き直さない）
     // 答えられるかどうかも混ぜる（#597 のレビュー）: 端末のダイアログは印（`›`）の読め方で変わるが、approval_id にカーソルの位置は
     // 入らないので、描き直しの途中を読んだ 1 回のあと正しく読めても、画面が「読めませんでした」のまま残る
-    .map((approval) => [approval.approval_id, approval.jev ?? '', approval.jev_rule?.safe ?? '', approval.answerable === false ? 'x' : ''].join(':').replace(/:+$/, ''))
+    .map((approval) => [approval.approval_id, approval.jev ?? '', approval.jev_rule?.safe ?? '', approval.answerable === false ? 'x' : '', (approval.always ?? []).join('+')].join(':').replace(/:+$/, ''))
     .sort()
     .join(',')
 }

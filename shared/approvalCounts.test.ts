@@ -1,14 +1,24 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { countedRule, countNote, countsTowardSuggest, ruleCovered } from './approvalCounts.ts'
+import { countNote, countsTowardSuggest, keyCovered, keyRules, neverSuggested, ruleCovered, rulesKey } from './approvalCounts.ts'
 import type { ApprovalLogRow } from './types.ts'
 
-test('countedRule: 「常に許可」が出せる許可だけ数える（Claude で、ルールが作れるツール）', () => {
-  assert.equal(countedRule({ tool_name: 'Bash', input: { command: 'gh pr create --base main' } }), 'Bash(gh pr:*)')
-  assert.equal(countedRule({ tool_name: 'mcp__github__create_issue', input: {} }), 'mcp__github__create_issue')
-  assert.equal(countedRule({ tool_name: 'Edit', input: { file_path: '/x' } }), '', 'ファイル系はルールが無い')
-  assert.equal(countedRule({ tool_name: 'AskUserQuestion', input: {} }), '', '質問は数えない')
-  assert.equal(countedRule({ tool_name: 'Bash', input: { command: 'gh pr view' }, agent: 'codex' }), '', 'Codex には「常に許可」が無い')
+test('rulesKey: 数える鍵は書かれるルールの組。1 つならその表記のまま（前の記録と同じ鍵になる）', () => {
+  assert.equal(rulesKey(['Bash(gh pr:*)']), 'Bash(gh pr:*)')
+  assert.equal(rulesKey(['Bash(pnpm test:*)', 'Bash(tee:*)']), 'Bash(pnpm test:*) + Bash(tee:*)')
+  assert.equal(rulesKey([]), '', 'ルールが無ければ数えない')
+  assert.equal(rulesKey(undefined), '')
+  assert.deepEqual(keyRules('Bash(pnpm test:*) + Bash(tee:*)'), ['Bash(pnpm test:*)', 'Bash(tee:*)'])
+  assert.deepEqual(keyRules(''), [])
+})
+
+test('keyCovered / neverSuggested: 組は全部が覆われたときだけ覆われている。Bash(cd:*) だけの鍵は勧めない（#705）', () => {
+  const key = 'Bash(pnpm test:*) + Bash(tee:*)'
+  assert.equal(keyCovered(key, ['Bash(pnpm:*)']), false, '片方だけ')
+  assert.equal(keyCovered(key, ['Bash(pnpm:*)', 'Bash(tee:*)']), true)
+  assert.equal(neverSuggested('Bash(cd:*)'), true, '前の記録に残っている効かないルール')
+  assert.equal(neverSuggested('Bash(cd:*) + Bash(pnpm test:*)'), false)
+  assert.equal(neverSuggested('Bash(gh pr:*)'), false)
 })
 
 test('countsTowardSuggest: 人が許可した・ルールがある・cwd が分かる行だけ', () => {

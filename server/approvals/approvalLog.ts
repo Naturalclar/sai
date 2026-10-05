@@ -4,7 +4,7 @@
 // 派生の記録なので、ファイルを消しても数え直しになるだけ（記録の JSONL とは別物）
 import { readFileSync } from 'node:fs'
 import { appendFile } from 'node:fs/promises'
-import { APPROVAL_COUNT_DAYS, APPROVAL_FREQUENT_MAX, countsTowardSuggest, ruleCovered } from '../../shared/approvalCounts.ts'
+import { APPROVAL_COUNT_DAYS, APPROVAL_FREQUENT_MAX, countsTowardSuggest, keyCovered, neverSuggested } from '../../shared/approvalCounts.ts'
 import type { ApprovalLogRow } from '../../shared/types.ts'
 
 export const APPROVAL_LOG_FILE = 'approvals.jsonl'
@@ -70,7 +70,7 @@ export class ApprovalLog {
       if (!k.startsWith(prefix)) continue
       const rule = k.slice(prefix.length)
       const count = this.count(cwd, rule)
-      if (count >= 2 && !ruleCovered(rule, allowed)) out.push({ rule, count })
+      if (count >= 2 && !neverSuggested(rule) && !keyCovered(rule, allowed)) out.push({ rule, count })
     }
     return out.sort((a, b) => b.count - a.count || a.rule.localeCompare(b.rule)).slice(0, APPROVAL_FREQUENT_MAX)
   }

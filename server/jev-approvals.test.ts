@@ -141,7 +141,7 @@ test('自動で常に許可（#499）: 預かった時に Jev に聞き、この
     return ((await res.json()) as { approval_id: string }).approval_id
   }
   const drain = async () => {
-    for (let i = 0; i < 6; i++) await settle()
+    for (let i = 0; i < 20; i++) await settle()
   }
 
   // 閾値 0（既定）: 0.97 でも残る（Jev には聞かない）
@@ -202,6 +202,44 @@ test('自動で常に許可（#499）: 預かった時に Jev に聞き、この
   assert.equal(off.jev_auto, 0)
   await put(base, { jev: true })
   assert.equal(((await (await fetch(`${base}/api/settings`)).json()) as SettingsResponse).jev_auto, 0, '入に戻しても自動は切のまま')
+})
+
+test('自動で常に許可（#705）: つないだコマンドは部品ごとにルールを聞き、一番低いもので判定する。全部が閾値以上のときだけ答える', async () => {
+  judged.length = 0
+  const approvals = new Approvals()
+  const busy: Runner = { ...runner, running: (id) => id === 'S1@r' }
+  const base = await start(approvals, judge, busy)
+  const post = async (command: string) => {
+    const res = await fetch(`${base}/api/approvals`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: 'S1@r', tool_name: 'Bash', input: { command }, tool_use_id: 't' }) })
+    assert.equal(res.status, 201)
+    return ((await res.json()) as { approval_id: string }).approval_id
+  }
+  const drain = async () => {
+    for (let i = 0; i < 20; i++) await settle()
+  }
+  assert.equal((await put(base, { jev: true, jev_auto: 0.9 })).status, 200)
+
+  // 片方のルール（Bash(zzwide:*)）が低い → 自動では答えない。前は先頭の語（git status）のルールだけ聞いて答えていた
+  const mixed = await post('git status && zzwide --all')
+  const both = await post('git diff --stat && git log --oneline | tail -3')
+  await drain()
+  assert.equal(await approvals.wait(mixed, 10), null, '一番低い部品で判定する')
+  const answer = await approvals.wait(both, 10)
+  assert.deepEqual(answer?.updatedPermissions, [
+    { type: 'addRules', rules: [{ toolName: 'Bash', ruleContent: 'git diff:*' }, { toolName: 'Bash', ruleContent: 'git log:*' }], behavior: 'allow', destination: 'localSettings' },
+  ], '全部の部品が閾値以上なら、部品ごとのルールで答える（読むだけの tail には書かない）')
+  for (const rule of ['git status', 'zzwide', 'git diff', 'git log']) assert.ok(judged.some((st) => st.includes(`rule: Bash(${rule}:*)`)), `${rule} のルールを聞く`)
+  assert.ok(!judged.some((st) => st.includes('rule: Bash(tail')), '書かないルールは聞かない')
+
+  // 前のテストが預けたままの許可も引き取られているので、ここで預けたものだけ見る
+  const listed = (await sessions(base)).approvals['S1@r']!.filter((a) => /zzwide|git (diff|log)/.test(String(a.input.command)))
+  assert.deepEqual(listed.map((a) => [a.input.command, a.always, a.jev_rule]), [
+    ['git status && zzwide --all', ['Bash(git status:*)', 'Bash(zzwide:*)'], { label: 'Bash(zzwide:*)', safe: 0.2 }],
+  ], '一覧には、書かれるルールの全部と、一番低いルールの確率が出る')
+  const log = await readFile(join(feedDir, 'reply.log'), 'utf-8')
+  assert.match(log, /見送り（この回 97%）: ルール Bash\(zzwide:\*\) が 20%（閾値 90%）/)
+  assert.match(log, /Jev が自動で常に許可（この回 97%、ルール 96%、閾値 90%）: Bash\(git diff:\*\) \+ Bash\(git log:\*\)/)
+  await put(base, { jev_auto: 0 })
 })
 
 test('設定 paste_to_file（#609）: 既定は切。true / false だけ受け、settings.json に残る', async () => {

@@ -140,9 +140,9 @@ export function jevPercent(safe: number): number {
 /**
  * 自動で「常に許可」してよい種類の許可か。**Bash だけ**。
  * - Bash は `jevState()` がコマンドそのものを送るので、Jev が見たものと許可するものが同じ
- * - MCP ツール（`mcp__…`）は `alwaysAllowRule()` が名前だけのルールを組めるが、`jevState()` は引数を送らない（本文が混ざるため）ので、
+ * - MCP ツール（`mcp__…`）は `alwaysAllowRules()` が名前だけのルールを組めるが、`jevState()` は引数を送らない（本文が混ざるため）ので、
  *   Jev が見ていないものを永久に許すことになる。人が [常に許可] を押すのは今までどおりできる
- * - Edit / Write などはそもそもルールが無い（`alwaysAllowRule()` が null）
+ * - Edit / Write などはそもそもルールが無い（`alwaysAllowRules()` が空）
  * Codex / OpenCode の許可には「常に許可」が無い
  */
 export function jevAutoEligible(approval: Pick<Approval, 'tool_name' | 'agent' | 'answerable'>): boolean {
@@ -156,7 +156,7 @@ export function jevAutoEligible(approval: Pick<Approval, 'tool_name' | 'agent' |
  * - `skip`: この回は閾値以上なのに自動では答えない（Bash 以外・ルールを作れない・ルールの確率が低い）
  * - `wait`: ルールの確率がまだ届いていない
  * - `allow`: 答える
- * `rule` は `alwaysAllowRule()` の表記（作れなければ null）、`ruleSafe` はそのルールの確率（まだなら undefined、
+ * `rule` は書かれるルールのうち**確率が一番低いもの**の表記（#705。部品ごとに聞く。作れなければ null）、`ruleSafe` はその確率（1 つでもまだなら undefined、
  * 聞いて失敗したら `'failed'`。失敗は聞き直さないので `wait` のままにすると理由が永久に残らない。#556 のレビュー）
  */
 export type JevAutoDecision = { kind: 'none' } | { kind: 'wait' } | { kind: 'allow' } | { kind: 'skip'; reason: string }
@@ -169,11 +169,25 @@ export function jevAutoDecision(
 ): JevAutoDecision {
   if (!jevAutoAllows(approval.jev, threshold)) return { kind: 'none' }
   if (!jevAutoEligible(approval)) return { kind: 'skip', reason: `Bash 以外（${approval.tool_name}）は自動で答えない` }
-  if (!rule) return { kind: 'skip', reason: '「常に許可」のルールを作れないコマンド（先頭が変数の代入・展開など）' }
+  if (!rule) return { kind: 'skip', reason: '「常に許可」のルールを作れないコマンド（展開・構文・ファイルへのリダイレクト・cd のあとの書き込みなど）か、もう設定にある' }
   if (ruleSafe === undefined) return { kind: 'wait' }
   if (ruleSafe === 'failed') return { kind: 'skip', reason: `ルール ${rule} の確率を Jev に聞けなかった` }
   if (!jevAutoAllows(ruleSafe, threshold)) return { kind: 'skip', reason: `ルール ${rule} が ${jevPercent(ruleSafe)}%（閾値 ${jevPercent(threshold)}%）` }
   return { kind: 'allow' }
+}
+
+/**
+ * 書かれるルールのうち、確率が一番低いもの（#705）。つないだコマンドは部品ごとにルールを書くので、部品ごとに聞いて
+ * **一番低いものでその組を判定する**（1 つでも危ないルールが混ざっていれば自動では書かない）。
+ * 1 つでも届いていなければ undefined（揃うまで待つ）。ルールが無ければ undefined
+ */
+export function jevLowestRule(rules: readonly { label: string; safe: number | undefined }[]): { label: string; safe: number } | undefined {
+  let lowest: { label: string; safe: number } | undefined
+  for (const { label, safe } of rules) {
+    if (safe === undefined) return undefined
+    if (!lowest || safe < lowest.safe) lowest = { label, safe }
+  }
+  return lowest
 }
 
 /**

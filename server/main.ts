@@ -25,6 +25,7 @@ import { DEFAULT_PORT, parsePort } from '../shared/port.ts'
 import { createApp } from './app.ts'
 import { ClaudeHooks } from './local/claudeHooks.ts'
 import { ClaudeAuth } from './local/claudeAuth.ts'
+import { allowRules } from './approvals/permissions.ts'
 import { jevFromEnv } from './approvals/jev.ts'
 import { RealTmux, realPs } from './reply/terminal.ts'
 import { FeedStore } from './rows/store.ts'
@@ -155,6 +156,8 @@ export function main(argv: string[]): void {
     // フックの配線のずれ（#567）。~/.claude/settings.json を読むだけ（書き換えない）
     claudeHooks: new ClaudeHooks(),
     claudeAuth,
+    // [常に許可] で、もう設定にあるルールを足さない（#705）。設定ファイルを読むだけ
+    allowedRules: (cwd) => allowRules(cwd, homedir()),
   })
   const server = createServer((req, res) => {
     void app(req, res)

@@ -86,6 +86,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - `ProgressSteps` が仮バブルの「処理中 N分」の横にいまの手順を 1 行、押すと直近の手順を出す。送った時刻より前に始まった手順は `stepsSince()` で落とす（新しい入力が transcript に届く前は、最後のターンが前のターンのままなので）
 - セッション画面は、`replying` が無くても、行の上で最後が人の入力（`web/src/openPrompt.ts` の `openPromptSince()`）かつ `active` なら「処理中」を出す（端末で打ったターン）
 - フィードは `FeedPendingBubble` がバブルごとに取る（端末で打ったターンはフィードには出さない）
+- **端末で打った Codex のターン（#693）**: Codex は入力の行を書かないので `openPromptSince()` に当たらない。`codexProgress()` が `task_started` の時刻を `ParsedProgress.since` に持ち、`ProgressReader` が**開いているターンのときだけ** `turn_since` として返す（Codex だけ）。ターンを閉じる印は `task_complete` と **`turn_aborted`**（人が止めたターン。`shared/codexQueue.ts` の `TURN_CLOSED` と同じ）で、閉じた時刻は `turn_closed` に載せる。`SessionView` は、このマシンの・アーカイブしていない Codex のセッションで `replying` も入力の行も無いとき（`codexWatch`）にも `useProgress` を回し、`web/src/openPrompt.ts` の `codexTurnSince()`（`active` で、`turn_since` が最後のターン完了の行の秒より後）が返した時刻を起点に、端末で打ったターンと同じ `PendingBubble` を出す。読むのは rollout の末尾だけで、`(mtime, size)` が変わらなければ組み直さない
 
 ## 端末の Claude の質問の選択肢
 

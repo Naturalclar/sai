@@ -287,3 +287,19 @@ test('途中の文（#680）: Claude はツールの合間の文。続いた文�
   assert.equal(p.open, false)
   assert.deepEqual(p.notes?.map((n) => n.text), ['読みます。\n\n続きの文。', '原因が分かりました。'], '閉じたターンの最後の文は返答そのもの')
 })
+
+test('codexProgress: ターンの始まり（task_started）の時刻を返す。新しいターンが始まれば新しい方（#693）', () => {
+  const ev = (timestamp: string, type: string) => JSON.stringify({ timestamp, type: 'event_msg', payload: { type } })
+  const open = codexProgress([ev('2026-10-05T03:00:00.000Z', 'task_started'), ev('2026-10-05T03:01:00.000Z', 'task_complete'), ev('2026-10-05T03:05:00.123Z', 'task_started')])
+  assert.equal(open.open, true)
+  assert.equal(open.since, '2026-10-05T03:05:00.123Z')
+  const closed = codexProgress([ev('2026-10-05T03:00:00.000Z', 'task_started'), ev('2026-10-05T03:01:00.000Z', 'task_complete')])
+  assert.equal(closed.open, false)
+  assert.equal(codexProgress([ev('2026-10-05T03:01:00.000Z', 'task_complete')]).since, undefined, '始まりを見ていない（途中から読んだ）')
+  // 人が止めたターンは task_complete を書かず turn_aborted で終わる（#695 のレビュー。見ないと止めたターンが「処理中」のまま）
+  const aborted = codexProgress([ev('2026-10-05T03:00:00.000Z', 'task_started'), ev('2026-10-05T03:02:00.000Z', 'turn_aborted')])
+  assert.equal(aborted.open, false)
+  assert.equal(aborted.closed, '2026-10-05T03:02:00.000Z')
+  assert.equal(closed.closed, '2026-10-05T03:01:00.000Z')
+  assert.equal(open.closed, undefined, '新しいターンが始まったら閉じた時刻は持たない')
+})

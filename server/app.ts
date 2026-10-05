@@ -202,6 +202,7 @@ import { agentListFromEnv, backgroundLive, type AgentList, type ClaudeAgent } fr
 import { isRemoteHost } from '../shared/host.ts'
 import { IMAGES_SEGMENT } from '../shared/images.ts'
 import { imageHeaders, imageTable, readSessionImage } from './local/images.ts'
+import { AnsweredApprovals, answeredAfter } from './approvals/answered.ts'
 import { fileTable, readSessionFile } from './local/files.ts'
 import { FILES_SEGMENT } from '../shared/files.ts'
 import { TranscriptImages } from './local/transcriptImages.ts'
@@ -960,6 +961,28 @@ export function createApp(
   }
 
   /** Claude、SAI管理のCodex、通常Codex TUIの検出専用ダイアログ、SAI が起こした OpenCode の許可（#421）を合わせる。 */
+  // 画面から答えた許可（#693）。答えるとバブルが消えるだけで、Codex はターンが終わるまで何も出なかった。メモリだけ
+  const answered = new AnsweredApprovals()
+  /** 画面に出したことのある許可（approval_id → 中身）。答えたときに、どのセッションの何だったかを引く。画面に出していないものは答えられない */
+  const shownApprovals = new Map<string, Approval>()
+  const rememberShown = (map: ApprovalMap): ApprovalMap => {
+    const live = new Set<string>()
+    for (const list of Object.values(map)) {
+      for (const a of list) {
+        live.add(a.approval_id)
+        shownApprovals.set(a.approval_id, a)
+      }
+    }
+    // 消えたものは捨てる（答えた直後に引くので、答える口が先に引いてから次の走査が来る）
+    if (shownApprovals.size > 500) for (const key of shownApprovals.keys()) if (!live.has(key)) shownApprovals.delete(key)
+    return map
+  }
+  /** 答えが通ったあとに覚える。押した選択肢の文言は、画面に渡していた `decisions` から引く（画面の文字列は信じない） */
+  const noteAnswered = (approvalId: string, behavior: 'allow' | 'deny', decision?: string) => {
+    const shown = shownApprovals.get(approvalId)
+    if (!shown) return
+    answered.add(shown, behavior, shown.decisions?.find((d) => d.id === decision)?.label ?? '')
+  }
   const approvalsNow = async (sessions: SessionSummary[]) => {
     const [dialogs, opencode] = await Promise.all([
       // 締切までに見終わらなければ前回の走査で見えていたダイアログ（#495）
@@ -983,7 +1006,7 @@ export function createApp(
     // 自動の「常に許可」（#499）は jevAutoTick が別に動く（読んだだけで許可が書かれない）
     const s = await settingsStore.get()
     const annotated = jevRisk.annotate(merged, s.jev)
-    if (!s.jev || s.jev_auto <= 0) return annotated
+    if (!s.jev || s.jev_auto <= 0) return rememberShown(annotated)
     // 自動の「常に許可」で書かれるルールの確率も添える（#553）。**聞くのは jevAutoOnce だけ**で、ここは覚えているものを見るだけ
     // （読む経路から外へ送らない）。この回が 90% でもルールは低く出ることが多く、出さないと答えない理由が見えなかった
     const out: ApprovalMap = {}
@@ -996,7 +1019,7 @@ export function createApp(
         return label && safe !== undefined ? { ...a, jev_rule: { label, safe } } : a
       })
     }
-    return out
+    return rememberShown(out)
   }
 
   /** 「常に許可」の答えに付けるもの（#96）。CLI が cwd の .claude/settings.local.json に書く（端末の「今後も許可」と同じ） */
@@ -3244,6 +3267,7 @@ export function createApp(
       if (b.remember !== undefined) return error(res, 400, '端末の Codex では提示された選択だけ選べます')
       const result = await codexDialogs.answer!(approvalId, { behavior: b.behavior, ...(typeof b.decision === 'string' ? { decision: b.decision } : {}) })
       if (!result.ok) return error(res, result.status, result.error)
+      noteAnswered(approvalId, b.behavior, typeof b.decision === 'string' ? b.decision : undefined)
       return json(res, { ok: true, approval_id: approvalId, behavior: b.behavior })
     }
     // OpenCode の許可（#421）。提示した選択肢（許可 / 拒否）だけを本体に返す
@@ -3251,6 +3275,7 @@ export function createApp(
       if (b.remember !== undefined) return error(res, 400, 'OpenCode では提示された選択だけ選べます')
       const result = await opencodePerms.answer(approvalId, { behavior: b.behavior, ...(typeof b.decision === 'string' ? { decision: b.decision } : {}) })
       if (!result.ok) return error(res, result.status, result.error)
+      noteAnswered(approvalId, b.behavior, typeof b.decision === 'string' ? b.decision : undefined)
       return json(res, { ok: true, approval_id: approvalId, behavior: b.behavior })
     }
     const codexCurrent = codexApp.getApproval(approvalId)
@@ -3263,6 +3288,8 @@ export function createApp(
       }
       const result = codexApp.answer(approvalId, answer)
       if (!result.ok) return error(res, result.status, result.error)
+      shownApprovals.set(approvalId, shownApprovals.get(approvalId) ?? codexCurrent)
+      noteAnswered(approvalId, answer.behavior, answer.decision)
       return json(res, { ok: true, approval_id: approvalId, behavior: answer.behavior })
     }
     const current = approvals.get(approvalId)
@@ -3279,6 +3306,7 @@ export function createApp(
     if (!approvals.answer(approvalId, answer)) return error(res, 409, 'already answered')
     // 回数に足してから返す（次のポーリングの「何回目」がずれない）
     await logAnswer(current, 'human', answer.behavior, !!answer.updatedPermissions)
+    answered.add(current, answer.behavior, answer.updatedPermissions ? '常に許可' : '')
     return json(res, { ok: true, approval_id: approvalId, behavior: answer.behavior, remembered: answer.updatedPermissions ? ruleLabel(answer.updatedPermissions[0]!.rules[0]!) : undefined })
   }
 
@@ -4326,9 +4354,14 @@ export function createApp(
           },
         ).filter((r) => Date.parse(r.ts) >= shownFrom)
         // いまのコンテキスト量（#441）。(mtime, size) で覚えているので読み直しは軽い。rev には丸めた値だけ混ぜる
-        const context = isRemoteHost(session.host, selfHost()) ? 0 : (await progress.read(session)).context_tokens
+        const progressNow = isRemoteHost(session.host, selfHost()) ? null : await progress.read(session)
+        const context = progressNow?.context_tokens ?? 0
+        // いまのターンの間に画面から答えた許可（#693）。終わったターンのものは出さない: ターン完了の行のほか、
+        // 止めたターン（行が来ない）は transcript / rollout の上で閉じた時刻で片付ける
+        const answeredSince = answeredAfter(session.last_turn_ts ?? '', progressNow)
+        const answeredHere = answered.of(id, answeredSince)
         const body: SessionDetailResponse = {
-          rev: revWith(`${sessionsRev}~${me.rev}~${settled}~${terminalKey(sessions)}~${question?.asked_at ?? ''}~${bg ? `${bg.attach}:${bg.status}` : ''}~${contextRevKey(context)}~${replies.map((r) => r.agent_reply?.message_id).join(',')}`, replying, approvalMapKey(pendingApprovals), false, `${digest.revKey()}|${usage.rev()}`, `${queue.key()}|${agents.key()}|${loops.key()}`),
+          rev: revWith(`${sessionsRev}~${me.rev}~${settled}~${terminalKey(sessions)}~${question?.asked_at ?? ''}~${bg ? `${bg.attach}:${bg.status}` : ''}~${contextRevKey(context)}~${replies.map((r) => r.agent_reply?.message_id).join(',')}~${answeredHere.map((a) => `${a.approval_id}:${a.behavior}`).join(',')}`, replying, approvalMapKey(pendingApprovals), false, `${digest.revKey()}|${usage.rev()}`, `${queue.key()}|${agents.key()}|${loops.key()}`),
           session: withLastSummary([session])[0]!,
           rows,
           older,
@@ -4338,6 +4371,7 @@ export function createApp(
           loops: loops.snapshot(),
           ...(activity ? { agent: activity } : {}),
           approvals: pendingApprovals,
+          ...(answeredHere.length > 0 ? { answered: answeredHere } : {}),
           profile: me.profile,
           host: selfHost(),
           ...(question ? { question } : {}),

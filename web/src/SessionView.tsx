@@ -17,7 +17,8 @@ import { ProgressNotes } from './ProgressNotes'
 import { ProgressSteps } from './ProgressSteps'
 import { ProgressTodos } from './ProgressTodos'
 import { useProgress } from './useProgress'
-import { openPromptSince } from './openPrompt'
+import { codexTurnSince, openPromptSince } from './openPrompt'
+import { isRemoteHost } from '../../shared/host.ts'
 import { QueuedBubble } from './QueuedBubble'
 import { AgentActivityBar } from './AgentActivityBar'
 import { LoopBar } from './LoopBar'
@@ -27,6 +28,7 @@ import { withAgentReplies } from './agentReplies'
 import { BackgroundAttachBar } from './BackgroundAttachBar'
 import { shouldQueue } from './replyQueue.ts'
 import { ApprovalBubble } from './ApprovalBubble'
+import { AnsweredApprovals } from './AnsweredApprovals'
 import { ReplyBox } from './ReplyBox'
 import type { RestoreRequest } from './replyRestore'
 import { BackLink } from './BackLink'
@@ -104,7 +106,11 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
   // 処理中のターンがいま何をしているか（#302）。SAI から送った返信を処理中か、端末で打った入力のあとターン完了がまだのときだけ取る。
   // 端末で打ったターンは SAI が起動していないので、transcript の上で本当に動いているか（active）で出す
   const promptSince = mine ? '' : openPromptSince(data?.rows ?? NO_ROWS)
-  const progress = useProgress(id, Boolean(mine) || Boolean(promptSince))
+  // 端末で打った Codex のターン（#693）。Codex は入力の行を書かないので、行からは「動いているか」が分からない。
+  // このマシンの Codex のセッションを出している間は progress を取り、rollout の開いているターンを見る（読むのは末尾だけで、変わらなければ組み直さない）
+  const codexWatch = Boolean(data && !mine && !promptSince && data.session.agent === 'codex' && !data.session.archived && !isRemoteHost(data.session.host, data.host))
+  const progress = useProgress(id, Boolean(mine) || Boolean(promptSince) || codexWatch)
+  const typedSince = promptSince || (codexWatch ? codexTurnSince(data?.rows ?? NO_ROWS, progress) : '')
 
   // 思考の折りたたみを全部開いておくか。localStorage に残る。思考のある行が1つも無ければトグルは出さない
   const [thinkingUi, setThinkingUi] = useLocalState<{ open: boolean }>('sai.thinking', { open: false })
@@ -263,6 +269,8 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
           {...(data.question ? { question: data.question } : {})}
           trailer={
             <>
+              {/* いまのターンの間に画面から答えた許可（#693）。バブルは答えると消えるので、何を答えたかを残す */}
+              {data.answered && <AnsweredApprovals list={data.answered} />}
               {mine && (
                 <PendingBubble
                   text={mine.text}
@@ -283,9 +291,9 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
               {/* 途中でエージェントが書いた文（#680）。仮バブルと一緒に出て、一緒に消える */}
               {mine && <ProgressNotes progress={progress} since={mine.since} />}
               {/* 端末で打ったターン（#302）。SAI は起動していないので、transcript の上で動いているときだけ「処理中」を出す */}
-              {!mine && promptSince && progress?.active && (
-                <PendingBubble text="" since={promptSince} now={now} quiet typed>
-                  <ProgressSteps progress={progress} since={promptSince} now={now} />
+              {!mine && typedSince && progress?.active && (
+                <PendingBubble text="" since={typedSince} now={now} quiet typed>
+                  <ProgressSteps progress={progress} since={typedSince} now={now} />
                   <ProgressTodos progress={progress} />
                 </PendingBubble>
               )}

@@ -43,6 +43,13 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 画面は `ApprovalBubble` が `countNote()` の 1 行を出し、`suggest` なら [常に許可] に `suggest` のクラスを付ける。盾のモーダルは `GET …/permissions` の `frequent`（`ApprovalLog.frequent()`。2 回以上で、許可のルールに覆われていないもの。`ruleCovered()` は同じ表記のほか、より広い Bash のルール（`Bash(gh:*)`）と別の書き方（`Bash(gh pr *)`）も覆っている扱いにする）を上に出す。
 - 人の答えは**記録に足してから**応答を返す（次のポーリングの「何回目」がずれない）。
 
+### 答えた許可を残す（#693）
+
+- `server/approvals/answered.ts` の `AnsweredApprovals`。`POST /api/approvals/<id>/answer` が通ったあと（端末の Codex のダイアログ・Codex app-server・OpenCode・Claude の `-p` のどれでも）、画面に出していた 1 行（`Approval.text`）と答えの向き・押した選択肢の文言を、セッションごとにメモリに覚える（`ANSWERED_MAX` 20 件・`ANSWERED_TTL_MS` 6 時間。**JSONL にも state にも書かない**。入力そのものは持たない）
+- どのセッションの何だったかは `app.ts` の `shownApprovals`（`approvalsNow()` が画面に渡した許可を approval_id で覚える）から引く。選択肢の文言は提示した `decisions` から引き、リクエストの文字列は使わない
+- 詳細（`GET /api/sessions/<id>`）は `answered.of(id, answeredAfter(…))` を `answered` に載せ、その並びを `rev` に混ぜる。`answeredAfter()` は「ここより前は終わったターン」の時刻で、最後のターン完了の行（行は秒までなので、その秒の終わり）・transcript / rollout の上でターンが閉じた時刻（Claude の `closed_at`、Codex の `turn_closed`。**止めたターンは行が来ない**）・Codex の開いているターンの始まり（`turn_since`）のうち一番新しいもの
+- 画面は `AnsweredApprovals`（`SessionView` の trailer の先頭。「処理中」の上）。文言は `web/src/answeredLabels.ts` の `answeredLine()`
+
 ## セッションに効いている許可
 
 - `server/approvals/permissions.ts` が cwd から読むだけ。書き換えは「常に許可」の経路だけ（人が押す `remember: 'local'` と、Jev の自動の `jevAutoTick()`）。

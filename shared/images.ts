@@ -58,6 +58,20 @@ export function sessionImageUrl(id: string, src: string): string {
   return `/api/sessions/${encodeURIComponent(id)}${IMAGES_SEGMENT}${imageKey(src)}`
 }
 
+/** 本文の画像の幅の上限（px）。`styles.css` の `.md-img > a:first-child` の `320px` と同じ値 */
+export const BODY_IMAGE_WIDTH = 320
+/**
+ * 幅の上限まで縮めたときの高さがこれ（px）を切る画像を「帯」（横に細長い）と見なす（#702）。境目の縦横比は
+ * `BODY_IMAGE_WIDTH / BAND_MIN_HEIGHT` = 4:1。帯は高さがこの値になるまで幅を広げる（境目で大きさが飛ばない）。
+ * **画面（`web/src/imageShape.ts`）とサーバ（軽い版の大きさ。#709）が同じ値で見分ける**
+ */
+export const BAND_MIN_HEIGHT = 80
+
+/** 帯（横に細長い画像）か。大きさが分からない（0・NaN）ものは帯にしない */
+export function isBandImage(width: number, height: number): boolean {
+  return width > 0 && height > 0 && width / height >= BODY_IMAGE_WIDTH / BAND_MIN_HEIGHT
+}
+
 /**
  * 枠に出す軽い版の URL（#589。`?thumb=1`）。ライトボックスとダウンロードは元の URL のまま。
  * 本文のパス・transcript・Codex の生成画像・添付の 4 つの口が同じ `?thumb=1` を受ける

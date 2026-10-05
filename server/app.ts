@@ -1525,8 +1525,9 @@ export function createApp(
   const sendImage = async (req: IncomingMessage, res: ServerResponse, img: { bytes: Buffer; type: IconType; name: string; etag: string }, q: URLSearchParams) => {
     const download = q.get('download') === '1'
     const wantThumb = q.get('thumb') === '1' && !download
-    // 軽い版の ETag は元の ETag から作る（元が変われば軽い版も変わる）
-    const etag = wantThumb && img.bytes.length >= THUMB_MIN_BYTES ? img.etag.replace(/^"/, '"t-') : img.etag
+    // 軽い版の ETag は元の ETag から作る（元が変われば軽い版も変わる）。`t2` は帯の軽い版の大きさを変えたとき（#709）に上げた
+    // （上げないと、ブラウザが持っている長辺 512px の帯が 304 でそのまま使われる）
+    const etag = wantThumb && img.bytes.length >= THUMB_MIN_BYTES ? img.etag.replace(/^"/, '"t2-') : img.etag
     if (req.headers['if-none-match'] === etag) {
       res.writeHead(304, { ETag: etag, 'Cache-Control': 'private, no-cache' })
       res.end()

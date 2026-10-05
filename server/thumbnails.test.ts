@@ -7,12 +7,13 @@ import { createServer } from 'node:http'
 import type { Server } from 'node:http'
 import { mkdir, mkdtemp, readdir, rm, symlink, truncate, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
+import { createHash } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { createApp } from './app.ts'
 import { FeedStore } from './rows/store.ts'
 import { localDate } from './rows/aggregate.ts'
 import { row } from './rows/aggregate.test.ts'
-import { hasAlpha, imageSize, noThumbs, THUMB_FAILED_TTL_MS, THUMB_MIN_BYTES, Thumbnails } from './local/thumbnails.ts'
+import { hasAlpha, imageSize, noThumbs, THUMB_BAND_EDGE_MAX, THUMB_BAND_SHORT, THUMB_EDGE, THUMB_EDGE_ALPHA, THUMB_FAILED_TTL_MS, THUMB_MIN_BYTES, thumbTarget, Thumbnails } from './local/thumbnails.ts'
 import type { Shrinker, ThumbFormat } from './local/thumbnails.ts'
 import { IMAGE_MAX_BYTES, sessionImageUrl, thumbUrl } from '../shared/images.ts'
 
@@ -207,6 +208,48 @@ test('Thumbnails: 目標より小さい画像は引き伸ばさない（PNG は�
   } finally {
     await rm(d, { recursive: true, force: true })
   }
+})
+
+test('Thumbnails: 横に細長い画像（帯）は短辺を保って長辺を伸ばす。前に長辺 512px で作った軽い版は返さない（#709）', async () => {
+  const d = await mkdtemp(join(tmpdir(), 'sai-thumbs-band-'))
+  try {
+    const made: { edge: number; out: string }[] = []
+    const th = new Thumbnails(d, async (_i, o, _f, edge) => {
+      made.push({ edge, out: o })
+      await writeFile(o, JPEG_THUMB)
+    })
+    const sized = (w: number, h: number, colorType = 2) => {
+      const b = png(THUMB_MIN_BYTES + w + h + colorType, colorType)
+      b.writeUInt32BE(w, 16)
+      b.writeUInt32BE(h, 20)
+      return { bytes: b, type: 'png' as const }
+    }
+    const band = sized(2880, 200)
+    // 前の版が置いた、長辺 512px の軽い版（名前は中身のハッシュだけ）
+    const hash = createHash('sha256').update(band.bytes).digest('hex').slice(0, 32)
+    await writeFile(join(d, `${hash}.jpg`), JPEG_THUMB)
+    assert.equal((await th.thumb(band)).kind, 'thumb')
+    assert.deepEqual(made.map((m) => m.edge), [(2880 / 200) * THUMB_BAND_SHORT], '14.4:1 は短辺 120px = 長辺 1728px')
+    assert.ok((await readdir(d)).includes(`${hash}-1728.jpg`), '帯の軽い版は名前を分けて置く')
+    await th.thumb(band)
+    assert.equal(made.length, 1, '2 回目は置き場から')
+    // ふつうの画像・縦長は今までどおり長辺 512px
+    await th.thumb(sized(2000, 1000))
+    await th.thumb(sized(200, 2880))
+    assert.deepEqual(made.slice(1).map((m) => m.edge), [THUMB_EDGE, THUMB_EDGE])
+  } finally {
+    await rm(d, { recursive: true, force: true })
+  }
+})
+
+test('thumbTarget: 帯だけ長辺を伸ばす。上限と、ふつうの画像の長辺を下回らないこと（#709）', () => {
+  assert.equal(thumbTarget({ width: 2000, height: 1000 }, THUMB_EDGE), THUMB_EDGE)
+  assert.equal(thumbTarget(null, THUMB_EDGE), THUMB_EDGE, '大きさが読めなければ今までどおり')
+  assert.equal(thumbTarget({ width: 1279, height: 320 }, THUMB_EDGE), THUMB_EDGE, '4:1 の手前は帯ではない')
+  assert.equal(thumbTarget({ width: 1280, height: 320 }, THUMB_EDGE), THUMB_EDGE, '4:1 ちょうどは短辺 120px で 480px。512px を下回らせない')
+  assert.equal(thumbTarget({ width: 1280, height: 320 }, THUMB_EDGE_ALPHA), 4 * THUMB_BAND_SHORT)
+  assert.equal(thumbTarget({ width: 2880, height: 200 }, THUMB_EDGE), 1728)
+  assert.equal(thumbTarget({ width: 30000, height: 200 }, THUMB_EDGE), THUMB_BAND_EDGE_MAX, 'とても長い帯は上限まで')
 })
 
 test('imageSize: 見出しから縦横を読む（PNG / GIF / JPEG）', () => {

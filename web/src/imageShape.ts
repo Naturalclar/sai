@@ -1,10 +1,8 @@
-/** 本文の画像の幅の上限（px）。`styles.css` の `.md-img > a:first-child` の `320px` と同じ値 */
-export const THUMB_WIDTH = 320
-/**
- * 幅の上限まで縮めたときの高さがこれ（px）を切る画像を「帯」（横に細長い）と見なす（#702）。境目の縦横比は
- * `THUMB_WIDTH / BAND_MIN_HEIGHT` = 4:1。帯は高さがこの値になるまで幅を広げる（境目で大きさが飛ばない）
- */
-export const BAND_MIN_HEIGHT = 80
+import { BAND_MIN_HEIGHT, BODY_IMAGE_WIDTH, isBandImage } from '../../shared/images.ts'
+
+/** 本文の画像の幅の上限（px）と、帯と見なす高さ。値は `shared/images.ts`（サーバの軽い版と同じ見分け。#709） */
+export const THUMB_WIDTH = BODY_IMAGE_WIDTH
+export { BAND_MIN_HEIGHT }
 /**
  * 帯をバブルの幅に収めても、高さをこれ（px）より小さくは縮めない（元がもっと低ければ元の高さ）。
  * 収まらないぶんは枠の中で横にスクロールする（携帯の幅で 1084×27 が高さ 9px の線にならないように）
@@ -22,9 +20,8 @@ export interface BandLayout {
  * 元の大きさより大きくはしない
  */
 export function bandLayout(width: number, height: number): BandLayout | null {
-  if (!(width > 0) || !(height > 0)) return null
+  if (!isBandImage(width, height)) return null
   const ratio = width / height
-  if (ratio < THUMB_WIDTH / BAND_MIN_HEIGHT) return null
   const cap = Math.min(width, Math.round(ratio * BAND_MIN_HEIGHT))
   return { cap, floor: Math.min(cap, Math.round(ratio * Math.min(height, BAND_FLOOR_HEIGHT))) }
 }

@@ -144,13 +144,29 @@ class StatusLineTest(unittest.TestCase):
         run(payload(rate_limits={"five_hour": {"used_percentage": 90, "resets_at": past}, "seven_day": {"used_percentage": 35, "resets_at": WEEK_RESETS}}), self.env)
         self.assertEqual(self.written()["rate_limits"], {"seven_day": {"used_percentage": 35.0, "resets_at": WEEK_RESETS}})
 
+    def record_at(self, ahead: timedelta, windows: dict) -> dict:
+        """`ts` が今から `ahead` だけ先の記録を置く"""
+        row = {"v": 1, "ts": (datetime.now(timezone.utc) + ahead).isoformat(timespec="seconds"), "rate_limits": windows}
+        (self.dir / "usage-claude.json").write_text(json.dumps(row), encoding="utf-8")
+        return row
+
     def test_does_not_overwrite_a_newer_record(self):
-        path = self.dir / "usage-claude.json"
-        newer = {"v": 1, "ts": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(timespec="seconds"), "rate_limits": {"seven_day": {"used_percentage": 35}}}
-        path.write_text(json.dumps(newer), encoding="utf-8")
+        newer = self.record_at(timedelta(minutes=1), {"seven_day": {"used_percentage": 35, "resets_at": WEEK_RESETS}})
         self.assertEqual(run(payload(), self.env).returncode, 0)
         self.assertEqual(self.written(), newer, "ts が新しいほうを残す")
         self.assertEqual([p.name for p in self.dir.iterdir()], ["usage-claude.json"], "tmp を残さない")
+
+    def test_overwrites_a_newer_record_that_would_freeze_the_usage(self):
+        # 残すと、その時刻が来るまで割合が止まる（時計の狂ったマシンが書いた・窓がもう全部戻っている）
+        past = int(time.time()) - 60
+        for label, ahead, windows in (
+            ("ts が先すぎる", timedelta(hours=1), {"seven_day": {"used_percentage": 35, "resets_at": WEEK_RESETS}}),
+            ("窓が全部戻っている", timedelta(minutes=1), {"seven_day": {"used_percentage": 35, "resets_at": past}}),
+            ("窓が無い", timedelta(minutes=1), {}),
+        ):
+            self.record_at(ahead, windows)
+            self.assertEqual(run(payload(), self.env).returncode, 0, label)
+            self.assertEqual(self.written()["rate_limits"]["seven_day"]["used_percentage"], 71.0, label)
 
     def test_overwrites_a_record_whose_ts_cannot_be_compared(self):
         path = self.dir / "usage-claude.json"

@@ -47,6 +47,8 @@ export const USAGE = `usage: pnpm feed <rows|messages|usage> [options]   （~/.a
 export const DEFAULT_ROWS = 10
 /** 既定で読む日数 */
 export const DEFAULT_DAYS = 7
+/** `--days` の上限（10 年。日付に直せない大きさを受けない） */
+export const MAX_DAYS = 3650
 /** 決まらなかったときに並べる候補の数 */
 export const CANDIDATES_SHOW = 10
 
@@ -171,7 +173,8 @@ function parse(argv: readonly string[], now: Date): { command: string; positiona
   if (values.help) return { error: '' }
   const command = positionals[0]
   if (!command) return { error: 'コマンドを指定してください' }
-  const allowed = ALLOWED[command]
+  // 素のオブジェクトなので、`toString` などの継いだ名前をコマンドに当てない
+  const allowed = Object.hasOwn(ALLOWED, command) ? ALLOWED[command] : undefined
   if (!allowed) return { error: `知らないコマンドです: ${command}` }
   const name = (key: string) => (key === 'n' ? '-n' : `--${key}`)
   const extra = Object.keys(values).filter((key) => !allowed.includes(key))
@@ -189,6 +192,7 @@ function parse(argv: readonly string[], now: Date): { command: string; positiona
   if (typeof n === 'string') return { error: n }
   const days = count('days', values.days, DEFAULT_DAYS)
   if (typeof days === 'string') return { error: days }
+  if (days > MAX_DAYS) return { error: `--days は ${MAX_DAYS} までです: ${days}` }
   for (const key of ['from', 'to'] as const) {
     const v = values[key]
     if (v !== undefined && !isDate(v)) return { error: `--${key} は実在する日付を YYYY-MM-DD で指定してください: ${v}` }

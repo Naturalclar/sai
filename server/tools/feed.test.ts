@@ -344,6 +344,10 @@ test('使い方の誤りは終了コード 2 で、何も読まない', async ()
     ['rows', 'alpha', '--all', '-n', '3'],
     ['rows', 'alpha', 'beta'],
     ['messages', 'alpha'],
+    // 継いだ名前はコマンドではない・日付に直せない日数は受けない
+    ['toString', '--json'],
+    ['constructor'],
+    ['usage', '--days', '1000000000'],
   ]
   for (const argv of wrong) {
     const { code, out } = await cli(...argv)

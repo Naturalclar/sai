@@ -2,7 +2,7 @@
 // 本文と一言は、長さだけ詰めて形は変えていない
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { digestIssues, quotedRequests } from './digestCheck.ts'
+import { digestIssues, firstLine, mentionsNext, quotedRequests, requestSentence, stripAsks } from './digestCheck.ts'
 import { DIGEST_MAX_CHARS } from './persona.ts'
 
 const codes = (source: string, summary: string) => digestIssues(source, summary).map((i) => i.code)
@@ -237,4 +237,36 @@ test('kind_swap: 頼んだこと（ask）が PR と呼んでいれば裏付け�
   const source = 'https://github.com/o/r/issues/468 の件を直しました'
   assert.ok(codes(source, 'PR #468 マージ').includes('kind_swap'))
   assert.ok(!digestIssues(source, 'PR #468 マージ', 'PR #468 をマージして').some((i) => i.code === 'kind_swap'))
+})
+
+// ---- #713: 一言を 2 つで組むための抜き出し
+
+test('requestSentence: 人に頼んでいる文を、本文の言葉のまま 1 つ返す', () => {
+  const merge = 'PR を出しました。CI は通っています。\n\nマージはまだしていないので、よければ「マージして」と言ってください。'
+  assert.equal(requestSentence(merge), 'マージはまだしていないので、よければ「マージして」と言ってください。')
+  assert.equal(requestSentence('- 設定を確認してください。\n- **終わったら「続けて」と伝えてください**'), '終わったら「続けて」と伝えてください', 'Markdown の記号は落とす。引用のある文を先に')
+  assert.equal(requestSentence('再起動してください。そのあとログを送ってください。'), 'そのあとログを送ってください。', '同じなら後ろの文')
+  assert.equal(requestSentence('直しました。テストは通っています。'), '', '報告だけ')
+  assert.equal(requestSentence('どちらにしますか？'), '', '質問は拾わない')
+  assert.equal(requestSentence('もう一度回したほうが確実です。'), '', '頼みの形でない言い方は拾わない')
+  assert.equal(requestSentence('次を実行します。\n```\necho 確認してください\n```\n終わりました。'), '', 'コードブロックの中は見ない')
+  assert.equal(requestSentence(`${'あ'.repeat(90)}してください。`), '', '長すぎる文は返さない（切ると意味が変わる）')
+})
+
+test('firstLine: 本文の 1 行目から Markdown の記号を落とす。長すぎる・コードで始まるなら空', () => {
+  assert.equal(firstLine('\n## **直しました**\n\n詳細は…'), '直しました')
+  assert.equal(firstLine('---\n- 1 件目を直しました'), '1 件目を直しました')
+  assert.equal(firstLine('```\nls\n```'), '')
+  assert.equal(firstLine('あ'.repeat(81)), '')
+  assert.equal(firstLine(''), '')
+})
+
+test('mentionsNext / stripAsks: 報告だけの本文かどうか・一言から頼みの文と節を落とす', () => {
+  assert.equal(mentionsNext('直しました。テストは通っています。'), false)
+  assert.equal(mentionsNext('もう一度回したほうが確実です。'), true)
+  assert.equal(mentionsNext('`curl "x?y=1"` を足しました。'), false, 'コードの中の ? は数えない')
+  assert.equal(stripAsks('PR を出したよ！マージして？'), 'PR を出したよ！')
+  assert.equal(stripAsks('PR を出したよ、マージして？'), 'PR を出したよ。', '文の後ろの節だけが頼みなら、そこだけ落とす')
+  assert.equal(stripAsks('直したよ！テストも通ってる！'), '直したよ！テストも通ってる！', '頼みが無ければそのまま')
+  assert.equal(stripAsks('マージして？'), 'マージして？', '全部が頼みなら落とさない（空にしない）')
 })

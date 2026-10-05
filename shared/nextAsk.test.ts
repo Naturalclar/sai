@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { NEXT_ASK_MAX_CHARS, cleanNextAsk, nextAskPrompt } from './nextAsk.ts'
+import { NEXT_ASK_MAX_CHARS, cleanNextAsk, nextAskPrompt, quotedNextAsk } from './nextAsk.ts'
 
 test('nextAskPrompt: 人の立場で 1 文。口調（性格）は足さない。直前の入力があれば添える', () => {
   const p = nextAskPrompt('テストを足して', 'テストを 3 つ足したよ。')
@@ -41,4 +41,12 @@ test('cleanNextAsk: 作れていなければ空。長すぎれば切る', () => 
   assert.equal(cleanNextAsk('あ'.repeat(NEXT_ASK_MAX_CHARS + 10)), 'あ'.repeat(NEXT_ASK_MAX_CHARS))
   // 囲みだけの返事で中身が消えない（片方しか無ければ触らない）
   assert.equal(cleanNextAsk('「マージして'), '「マージして')
+})
+
+test('quotedNextAsk: 本文に引用された人の言葉があれば、それをそのまま案にする（#713）', () => {
+  assert.equal(quotedNextAsk('PR を出しました。よければ「マージして」と言ってください。'), 'マージして')
+  assert.equal(quotedNextAsk('「調べて」と言われた件です。終わったら『進めて』と伝えてください'), '進めて', '2 つあれば最後')
+  assert.equal(quotedNextAsk('マージしてください'), '', '引用でなければ取らない（口で作る）')
+  assert.equal(quotedNextAsk('「マージ」の手順を足しました'), '', '「と言って」が無い引用は頼みではない')
+  assert.equal(quotedNextAsk(''), '')
 })

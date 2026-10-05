@@ -268,6 +268,75 @@ export function quotedRequests(source: string): string[] {
   return [...out]
 }
 
+/** 本文が「人がすること」に触れているか（`SOURCE_NEXT`。コード・URL は見ない）。触れていなければ報告だけの本文（#713） */
+export function mentionsNext(rawSource: string): boolean {
+  return SOURCE_NEXT.test(plain(rawSource.normalize('NFC')))
+}
+
+/**
+ * 一言から、人に何かを求めている文（`asksPerson()`）を落とす（#713）。「人が次にすること」を本文の言葉のまま別に足す回で、
+ * 「何が起きたか」の側に言い換えた頼み（「〜して？」）が残ると、同じ頼みが 2 つ並び、片方は問いかけに化けている。
+ * 全部の文が頼みなら、落とさずそのまま返す（一言を空にしない）
+ */
+export function stripAsks(summary: string): string {
+  const kept = sentencesOf(summary).map(withoutTrailingAsk).filter(Boolean)
+  return kept.length > 0 ? kept.join('') : summary.trim()
+}
+
+/** 文の後ろから、人に求めている節（読点で切った後ろ側）を落とす。文ごと頼みなら空。頼みでなければそのまま */
+function withoutTrailingAsk(sentence: string): string {
+  if (!asksPerson(sentence)) return sentence
+  const clauses = sentence.split(/(?<=[、,，])/)
+  while (clauses.length > 1) {
+    clauses.pop()
+    const rest = clauses.join('').replace(/[、,，\s]+$/u, '')
+    if (rest && !asksPerson(rest)) return `${rest}。`
+  }
+  return ''
+}
+
+/** 本文を文に切る（句点・感嘆符・疑問符・改行）。区切りの記号は文に残す */
+function sentencesOf(text: string): string[] {
+  return (text.match(/[^。！!？?\n]+[。！!？?]*/g) ?? []).map((t) => t.trim()).filter(Boolean)
+}
+
+/** 行の頭の Markdown の記号（見出し・箇条書き・引用・番号）と、強調の `**` を落とす */
+function unmarked(line: string): string {
+  return line.replace(/^\s*(?:#{1,6}\s+|[-*+]\s+|>\s*|\d+[.)]\s+)+/, '').replace(/\*\*|__/g, '').trim()
+}
+
+/**
+ * 本文の中の**人に頼んでいる文**を 1 つ、本文の言葉のまま返す（#713。一言の「人が次にすること」に使う）。無ければ空。
+ *
+ * - 見るのは `REQUEST`（頼みの形）か、引用された依頼（`QUOTED_REQUEST`）のある文だけ。`SOURCE_NEXT` ほど広く取らない
+ *   （「〜したほうが確実です」まで拾うと、頼みでない文を人への頼みとして出してしまう）。質問は拾わない
+ *   （人に聞いている返答は一言にしない。#638）
+ * - 引用された依頼のある文を先に、同じなら**後ろにある文**を選ぶ（頼みは最後の段落に多い）
+ * - コードブロックの中は見ない。`max` 文字を超える文は返さない（切ると意味が変わる）
+ */
+export function requestSentence(rawSource: string, max: number = DIGEST_MAX_CHARS): string {
+  const source = withoutCode(rawSource.normalize('NFC'))
+  const found = source
+    .split('\n')
+    .flatMap((line) => sentencesOf(unmarked(line)))
+    .filter((t) => [...t].length <= max && !/[?？]$/.test(t))
+    .map((t) => ({ t, quoted: new RegExp(QUOTED_REQUEST.source).test(t), asks: REQUEST.test(plain(t)) }))
+    .filter((x) => x.quoted || x.asks)
+  const pick = found.filter((x) => x.quoted).at(-1) ?? found.at(-1)
+  return pick?.t ?? ''
+}
+
+/**
+ * 本文の 1 行目（空行と区切り線を飛ばした最初の行）から、Markdown の記号を落としたもの（#713。一言を作れなかったときの落とし先）。
+ * コードブロックで始まる本文・`max` 文字を超える 1 行目は空（切ると途中で終わった一言になる）
+ */
+export function firstLine(rawSource: string, max: number = DIGEST_MAX_CHARS): string {
+  const line = rawSource.normalize('NFC').split('\n').map((l) => l.trim()).find((l) => l && !/^[-=*_]{3,}$/.test(l)) ?? ''
+  if (line.startsWith('```')) return ''
+  const text = unmarked(line)
+  return [...text].length <= max ? text : ''
+}
+
 /** その位置の語が引用符で囲まれているか（一言の中で引用のまま残っていれば意味は変わらない） */
 function quotedAt(summary: string, at: number, len: number): boolean {
   const before = summary.charAt(at - 1)

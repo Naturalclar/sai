@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { DEFAULT_PERSONA, DIGEST_ASK_MAX_CHARS, PERSONAS, digestPrompt, isPersonaId, personaOf } from './persona.ts'
+import { DEFAULT_PERSONA, DIGEST_ASK_MAX_CHARS, PERSONAS, digestPrompt, digestWhatPrompt, isPersonaId, personaOf } from './persona.ts'
 import { digestIssues } from './digestCheck.ts'
 
 test('PERSONAS: 性格なし + MBTI 16 で、id は重複しない', () => {
@@ -122,4 +122,37 @@ test('digestPrompt: 頼んだことは頭だけ渡す（DIGEST_ASK_MAX_CHARS）'
   const p = digestPrompt('ESFP', 'やった', { ask: long })
   assert.ok(p.includes(`${'あ'.repeat(DIGEST_ASK_MAX_CHARS)}…`))
   assert.ok(!p.includes('あ'.repeat(DIGEST_ASK_MAX_CHARS + 1)), '上限を超えたぶんは渡さない')
+})
+
+// ---- #713: 「何が起きたか」だけを書かせるプロンプト
+
+test('digestWhatPrompt: 人への頼みは書かせない。口調と本文は digestPrompt と同じ置き方', () => {
+  const text = '一覧の絞り込みを直しました。'
+  const p = digestWhatPrompt('ESFP', text, { ask: '直して' })
+  assert.match(p, /何が起きたか/)
+  assert.match(p, /人への頼み・質問は書かない/)
+  assert.match(p, new RegExp(`口調: ${personaOf('ESFP').tone}`))
+  assert.match(p, /うまくいかなかったことを書く文には口調の飾りを付けない/)
+  assert.doesNotMatch(p, /話の筋を残す/, '4 つを 1 文に入れさせない')
+  assert.ok(p.endsWith(`人が頼んだこと:\n直して\n\nエージェントの返答:\n${text}`))
+  assert.ok(digestWhatPrompt('none', text).endsWith(`---\n${text}`), '頼んだことが無ければ本文だけ')
+})
+
+test('digestWhatPrompt: 指示の部分に書き写せる番号・作例が無い。番号の規則は番号の話をしている回だけ', () => {
+  const withNumber = digestWhatPrompt('none', 'Issue #12345 を作りました').split('\n---\n')[0]!
+  assert.doesNotMatch(withNumber, /#\d/)
+  assert.doesNotMatch(withNumber, /例:/, '作例は置かない（書き写される）')
+  assert.match(withNumber, /渡された文に出てこない番号は書かない/)
+  assert.match(withNumber, /PR か Issue かは、渡された文に書いてあるときだけ/)
+  const without = digestWhatPrompt('none', '一覧の絞り込みを直しました。').split('\n---\n')[0]!
+  assert.doesNotMatch(without, /マージ|クローズ|PR/, '番号の無い回に、番号まわりの語を渡さない（書き写される）')
+  assert.match(without, /番号（`#` に続く数字）は書かない/)
+  // 頼んだことに番号があれば、番号の規則を入れる
+  assert.match(digestWhatPrompt('none', '直しました。', { ask: 'PR を出して' }), /渡された文に出てこない番号は書かない/)
+})
+
+test('digestWhatPrompt: 作り直しは前の一言と直してほしい点を足す', () => {
+  const p = digestWhatPrompt('ESFP', '直しました。', { retry: { summary: '直したよ！', issues: [{ code: 'too_long', hint: '短くしてください' }] } })
+  assert.match(p, /前に作った一言: 直したよ！/)
+  assert.match(p, /- 短くしてください/)
 })

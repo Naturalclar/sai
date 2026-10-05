@@ -99,9 +99,20 @@ def collect(digests, feedback, include_all=False):
         "summary_opened": sum(1 for d in judged_summary if d["key"] in opened),
     }
 
+    # 案の出どころ（#713）。本文の引用をそのまま採った案（LLM を呼んでいない）と、口で作った案を分けて数える
+    with_ask = [d for d in base if str(d.get("next_ask") or "").strip()]
+    quoted = [d for d in with_ask if d.get("next_ask_source") == "quote"]
+    asks = {
+        "quote": len(quoted),
+        "quote_accepted": sum(1 for d in quoted if d["key"] in accepted),
+        "llm": len(with_ask) - len(quoted),
+        "llm_accepted": sum(1 for d in with_ask if d.get("next_ask_source") != "quote" and d["key"] in accepted),
+    }
+
     return {
         "since": since,
         "judge": judge,
+        "asks": asks,
         "counting": bool(stamps),
         "total": tally(base),
         "by_model": by("model"),
@@ -133,6 +144,10 @@ def render(stats):
     if j.get("full") or j.get("summary"):
         out.append("  手元のモデルの判定（#639）: 全文が要る %d 本（一言にしなかった） / 要約で足りる %d 本、うち詳細を開いた %d 本 (%s。拾えなかった分)" % (
             j["full"], j["summary"], j["summary_opened"], rate(j["summary_opened"], j["summary"])))
+    k = stats.get("asks") or {}
+    if k.get("quote"):
+        out.append("  案の出どころ（#713）: 本文の引用 %d 本、うち受け取った %d 本 (%s) / 口で作った %d 本、うち受け取った %d 本 (%s)" % (
+            k["quote"], k["quote_accepted"], rate(k["quote_accepted"], k["quote"]), k["llm"], k["llm_accepted"], rate(k["llm_accepted"], k["llm"])))
     out.append("モデルごと:")
     out.extend(line(name, t) for name, t in stats["by_model"].items())
     out.append("性格ごと:")

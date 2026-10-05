@@ -163,7 +163,8 @@ export function followupReplyRows(
   const open = [...followups].sort((a, b) => Date.parse(a.at) - Date.parse(b.at)).map((f) => ({ f, at: Date.parse(f.at), head: f.text.trim().slice(0, FOLLOWUP_MATCH_CHARS) }))
   const matcher = deliveryMatcher()
   for (const r of rows) {
-    const input = matcher.headOf(r).trim()
+    // 相手に未渡しの返答があると、SAI が本文の頭に返答の塊を足して渡す（#594）。比べるのは人が打った文だけ
+    const input = splitHandedReplies(matcher.headOf(r)).text.trim()
     if (!input) continue
     const entity = entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? ''))
     const ts = Date.parse(r.ts)

@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { AgentFollowupLine, SessionSummary } from '../../shared/types.ts'
-import { replyFooter } from './replyAcross.ts'
+import { replyFooter, withJustSent } from './replyAcross.ts'
 
 const session = (over: Partial<SessionSummary> = {}): SessionSummary =>
   ({ id: 'B1@r', agent: 'claude', repo: 'r', session: 'B1', session_source: 'payload', host: 'mac', last_turn_ts: 't2', next_ask: 'マージして', ...over }) as SessionSummary
@@ -32,14 +32,24 @@ test('replyFooter: 送った行はそのバブルの下にだけ出し、「処�
   assert.equal(replyFooter({ ...base, followups, session: undefined }).lines.length, 3)
 })
 
-test('replyFooter: 送った直後の繋ぎは、サーバの行が届いたら重ねない（#700）', () => {
+test('replyFooter / withJustSent: 送った直後の繋ぎは、サーバの行が増えたら重ねない。時計では比べない（#700）', () => {
   const at = Date.parse('2026-10-05T03:10:00Z')
-  const just = [{ to: 'B1@r', anchor: 't2', text: '進めて', at }]
-  const before = replyFooter({ ...base, justSent: just, session: session() })
-  assert.deepEqual(before.lines.map((l) => [l.text, l.toName, l.busy]), [['進めて', 'くらら', true]])
-  const after = replyFooter({ ...base, justSent: just, followups: [line({ text: '進めて', sent_at: '2026-10-05T03:09:58Z' })], session: session() })
-  assert.deepEqual(after.lines.map((l) => l.key), ['f1'], '時計が少し手前でも同じ送信とみなす')
-  const old = replyFooter({ ...base, justSent: just, followups: [line({ sent_at: '2026-10-05T03:00:00Z', reply_ts: 't3' })], session: session() })
-  assert.equal(old.lines.length, 2, '前に送った行とは別')
+  const sent = { to: 'B1@r', anchor: 't2', text: '進めて', at }
+  const just = withJustSent([], [], sent, ['t2'])
+  assert.deepEqual(replyFooter({ ...base, justSent: just, session: session() }).lines.map((l) => [l.text, l.toName, l.busy]), [['進めて', 'くらら', true]])
+  // サーバの時計が 1 分手前でも先でも、行が 1 つ増えたら届いたとみなす
+  for (const sentAt of ['2026-10-05T03:09:00Z', '2026-10-05T03:11:00Z']) {
+    const after = replyFooter({ ...base, justSent: just, followups: [line({ text: '進めて', sent_at: sentAt })], session: session() })
+    assert.deepEqual(after.lines.map((l) => l.key), ['f1'], sentAt)
+  }
+  // 前に送った行がもう出ているバブルで送ったら、その行とは別に数える
+  const old = [line({ id: 'f0', sent_at: '2026-10-05T03:00:00Z', reply_ts: 't3' })]
+  const again = withJustSent([], old, sent, ['t2'])
+  assert.equal(replyFooter({ ...base, justSent: again, followups: old, session: session() }).lines.length, 2)
+  assert.equal(replyFooter({ ...base, justSent: again, followups: [...old, line({ id: 'f1' })], session: session() }).lines.length, 2, '届いたら繋ぎは消える')
+  // 届く前に続けて 2 回送ったら、1 つ届いても 2 つ目の繋ぎは残る
+  const twice = withJustSent(just, [], { ...sent, text: 'もう 1 つ', at: at + 1 }, ['t2'])
+  assert.deepEqual(twice.map((j) => j.known), [0, 1])
+  assert.deepEqual(replyFooter({ ...base, justSent: twice, followups: [line()], session: session() }).lines.map((l) => l.text), ['マージして', 'もう 1 つ'])
   assert.equal(replyFooter({ ...base, tss: ['t1'], justSent: just, session: session() }).lines.length, 0, '別のバブルの下には出さない')
 })

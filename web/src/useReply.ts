@@ -107,6 +107,8 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
   const [steered, setSteered] = useState<{ id: string; text: string } | null>(null)
   // 確認から送り直して受け付けられた回数（#338）。ReplyBox がこれを見て入力欄を空にする
   const [confirmedSent, setConfirmedSent] = useState(0)
+  // 同じ数を返信先ごとに（#700）。1 つの画面に入力欄が 2 つ以上あるとき、送り直した先の入力欄だけを空にする
+  const [confirmedSentBy, setConfirmedSentBy] = useState<Readonly<Record<string, number>>>({})
   // 受け付けた応答に付いてきた一言（#678。開いている Codex に画像を添えた）。次に送るまで出す
   const [noted, setNoted] = useState<{ id: string; message: string } | null>(null)
   // サーバが「処理中」と言った id と、最初にそう見えたときの行数・本文。消えたときに行が増えていなければ失敗
@@ -215,7 +217,10 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
     if (!confirm) return 'failed'
     const { id, text, sentFrom } = confirm
     const outcome = await send(id, text, { ...options, ...(sentFrom ? { sentFrom } : {}) })
-    if (outcome === 'sent') setConfirmedSent((n) => n + 1)
+    if (outcome === 'sent') {
+      setConfirmedSent((n) => n + 1)
+      setConfirmedSentBy((m) => ({ ...m, [id]: (m[id] ?? 0) + 1 }))
+    }
     return outcome
   }
   /** 確認に「消して送る」と答えた。打ちかけを消して同じ本文を送り直す */
@@ -224,5 +229,5 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
   const confirmProcess = (): Promise<SendOutcome> => sendFromConfirm({ via: 'process' })
   const cancelConfirm = () => setConfirm(null)
 
-  return { pending, failed, steered, noted, send, confirm, confirmedSent, confirmReplace, confirmProcess, cancelConfirm }
+  return { pending, failed, steered, noted, send, confirm, confirmedSent, confirmedSentBy, confirmReplace, confirmProcess, cancelConfirm }
 }

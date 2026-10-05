@@ -27,12 +27,14 @@ export interface JustSent {
   to: string
   anchor: string
   text: string
-  /** 送った時刻（ms） */
+  /** 送った時刻（ms。出す時刻と鍵にだけ使う） */
   at: number
+  /**
+   * 送ったときに、そのバブルの下にもう出ていた行の数（サーバの行と、まだ届いていない繋ぎ）。サーバの行がこれより増えたら届いたとみなす。
+   * **時計では比べない**（携帯とサーバの時計がずれていると、届いた行と繋ぎが二重に出る）
+   */
+  known: number
 }
-
-/** サーバの行が、送った直後の繋ぎと同じものか（同じ相手・同じバブルで、送った時刻より後ろ。時計の差を少し見る） */
-const SAME_SEND_SLACK_MS = 5000
 
 export function replyFooter(input: {
   /** 相手のエンティティ ID */
@@ -57,7 +59,7 @@ export function replyFooter(input: {
   const lines: FooterLine[] = here.map((f) => ({ key: f.id, toName: f.to_name, text: f.text, sentAt: f.sent_at, busy: targetBusy && f === lastOpen }))
   for (const j of justSent) {
     if (j.to !== target || !tss.includes(j.anchor)) continue
-    if (here.some((f) => Date.parse(f.sent_at) >= j.at - SAME_SEND_SLACK_MS)) continue
+    if (here.length > j.known) continue
     lines.push({ key: `just:${j.at}`, toName, text: j.text, sentAt: new Date(j.at).toISOString(), busy: true })
   }
   const canReply = Boolean(session && !session.archived && !replyBlockedReason(session, host))
@@ -66,4 +68,11 @@ export function replyFooter(input: {
   const latest = Boolean(session?.last_turn_ts && tss.includes(session.last_turn_ts))
   const quickAsk = canReply && latest && !targetBusy ? (session?.next_ask ?? '').trim() : ''
   return { toName, lines, canReply, quickAsk }
+}
+
+/** 送った直後の繋ぎを足す。`known` はいまそのバブルの下に出ている行の数（サーバの行 + まだ届いていない繋ぎ） */
+export function withJustSent(just: readonly JustSent[], followups: readonly AgentFollowupLine[], sent: Omit<JustSent, 'known'>, tss: readonly string[]): JustSent[] {
+  const here = followups.filter((f) => f.to === sent.to && tss.includes(f.anchor)).length
+  const waiting = just.filter((j) => j.to === sent.to && tss.includes(j.anchor) && j.known >= here).length
+  return [...just.slice(-9), { ...sent, known: here + waiting }]
 }

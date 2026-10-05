@@ -324,17 +324,19 @@ test('followupReplyRows: 人が返答のバブルの下から送った返信に�
     { ts: '2026-10-05T03:14:00Z', session: 'B1', repo: 'r', event: 'Stop', user_text: 'マージして\n\n/tmp/a.png', text: 'マージしました' },
     { ts: '2026-10-05T03:20:00Z', session: 'B1', repo: 'r', event: 'Stop', user_text: 'マージして', text: '2 回目のマージ' },
     { ts: '2026-10-05T03:30:00Z', session: 'B1', repo: 'r', event: 'Stop', user_text: 'マージして', text: '当てる返信がもう無い' },
+    { ts: '2026-10-05T03:40:00Z', session: 'B1', repo: 'r', event: 'Stop', user_text: withHandedReplies('返答の塊のあと', [{ message_id: 'm9', to_name: '明.', status: 'done', text: '済み' }]), text: '頭に返答を足されたターン' },
   ] as FeedRow[]
   const followups = [
     { id: 'f2', to: 'B1@r', text: 'マージして', at: '2026-10-05T03:15:00Z' },
     { id: 'f1', to: 'B1@r', text: ' マージして ', at: '2026-10-05T03:10:00Z' },
     { id: 'f3', to: 'B1@r', text: 'まだ返っていない', at: '2026-10-05T03:16:00Z' },
     { id: 'f4', to: 'B1@r', text: '   ', at: '2026-10-05T03:00:00Z' },
+    { id: 'f5', to: 'B1@r', text: '返答の塊のあと', at: '2026-10-05T03:35:00Z' },
   ]
   const out = followupReplyRows(followups, rows, () => '明.', () => '/icon')
-  assert.deepEqual(out.rows.map((r) => [r.text, r.agent_reply?.message_id]), [['マージしました', 'f1'], ['2 回目のマージ', 'f2']], '送る前・入力の行・別の入力・別の相手は当てない。同じ文は古い順に 1 つずつ')
+  assert.deepEqual(out.rows.map((r) => [r.text, r.agent_reply?.message_id]), [['マージしました', 'f1'], ['2 回目のマージ', 'f2'], ['頭に返答を足されたターン', 'f5']], 'SAI が頭に足した返答の塊（#594）は外して比べる。送る前・入力の行・別の入力・別の相手は当てない。同じ文は古い順に 1 つずつ')
   assert.deepEqual(out.rows[0]?.agent_reply, { message_id: 'f1', to_name: '明.', to_icon: '/icon', sent_at: '2026-10-05T03:10:00Z', followup: true })
-  assert.deepEqual([...out.answered], [['f1', '2026-10-05T03:14:00Z'], ['f2', '2026-10-05T03:20:00Z']])
+  assert.deepEqual([...out.answered], [['f1', '2026-10-05T03:14:00Z'], ['f2', '2026-10-05T03:20:00Z'], ['f5', '2026-10-05T03:40:00Z']])
   assert.deepEqual(followupReplyRows([], rows, (id) => id).rows, [])
 })
 

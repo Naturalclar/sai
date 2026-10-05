@@ -30,6 +30,11 @@ export function MarkdownImage({ src, alt }: { src: string; alt: string }) {
       </span>
     )
   }
+  // 読めなかったら名前だけにし、同じ発言のライトボックスの並びからも外す
+  const broken = () => {
+    setFailed(true)
+    body?.markBroken(url)
+  }
   return (
     <span className={`md-img${band ? ' band' : ''}`} style={band ? ({ '--cap': `${band.cap}px`, '--floor': `${band.floor}px` } as CSSProperties) : undefined}>
       {/* 押したらページの中のライトボックスで開く（#507）。⌘ クリックなどはブラウザの既定のまま */}
@@ -45,15 +50,7 @@ export function MarkdownImage({ src, alt }: { src: string; alt: string }) {
           openLightbox(shown.images, shown.index)
         }}
       >
-        <ThumbImage
-          url={url}
-          alt={name}
-          onSize={(w, h) => setBand(bandLayout(w, h))}
-          onBroken={() => {
-            setFailed(true)
-            body?.markBroken(url)
-          }}
-        />
+        <ThumbImage url={url} alt={name} onSize={(w, h) => setBand(bandLayout(w, h))} onBroken={broken} />
       </a>
       <a className="md-img-dl" href={`${url}?download=1`} download={imageName(src)} title={`${src} をダウンロード`}>
         <DownloadMark />

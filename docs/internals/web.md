@@ -225,7 +225,10 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 画像そのものはサーバが配る（`GET /api/sessions/<id>/images/<key>`。`server/local/images.ts`）。`key` は `shared/images.ts` の `imageKey()`（本文に書かれたパスの FNV-1a。画面でも同期で作る）で、サーバはそのセッションのターン完了の行の `text` から `imageRefs()` で拾った表（`imageTable()`）を引くだけ（パスはリクエストから受けない。待ちの行は見ない）。
 - 自分の入力（`user_text`）の画像の参照と地の文の画像のパスも表に入る（#504。`shared/gallery.ts` の `userImageSrcs()` を一覧と共用する）。
 - 読むのは realpath が行の `cwd` の中（シンボリックリンク・`../` で外に出ない。`/tmp` も配らない）・中身が PNG / JPEG / GIF / WebP（`sniffImageType()`。SVG は同じオリジンで開くとスクリプトが動くので配らない）・20MB 以下のものだけ。`nosniff` と `CSP: sandbox` を付け、`?download=1` のときだけ `Content-Disposition: attachment`。別のマシンのセッションは 404。
-- 画面は `Chat` がバブルごとに `ImageSourceContext`（`web/src/imageContext.ts`。URL を作る関数で、別のマシン・自分の入力は null）を渡し、`MarkdownImage` がサムネイル（押すと元の大きさ）＋ダウンロードにする。口が無い・読めない（`onError`）ときは印と名前（`.md-image`）。
+- 画面は `Chat` がバブルごとに `ImageSourceContext`（`web/src/imageContext.ts`。URL を作る関数で、別のマシン・自分の入力は null）を渡し、`MarkdownImage` がサムネイル（押すとライトボックス）＋ダウンロードにする。口が無い・読めない（`onError`）ときは印と名前（`.md-image`）。
+- **横に細長い画像（帯）**（#702）: `ThumbImage` が `onLoad` で絵の大きさを返し、`imageShape.ts` の `bandLayout()` が帯（幅の上限 `THUMB_WIDTH` = 320px まで縮めた高さが `BAND_MIN_HEIGHT` = 80px を切る = 4:1 以上）なら `{ cap, floor }` を返す。`MarkdownImage` が `.md-img.band` と `--cap`（高さ 80px になる幅。元の幅まで）・`--floor`（高さ `BAND_FLOOR_HEIGHT` = 18px になる幅）を付け、CSS が枠を `min(100%, --cap)`、絵を `max(100%, --floor)` にする（収まらなければ枠の中で横スクロール）。境目では今までと同じ大きさなので、縦横比で大きさが飛ばない。
+- **押せる場所**（#702）: 包んでいる `<a>`（`.md-img > a:first-child`）が `min-width` / `min-height: 44px` を持ち、絵は縦の中央。幅の上限（320px）は絵でなくこの枠に持たせる（絵の `%` は枠の幅を指すので、絵に持たせると枠だけが広がる）。`imageShape.test.ts` が CSS の `320px` と `THUMB_WIDTH` を突き合わせる。
+- **同じ発言の本文の画像を送る**（#702）: `Message` が `BodyImagesProvider`（本文と、読めなかった URL の集合）で包み、`MarkdownImage` は**押されたとき**に `bodyImages.ts` の `bodyImages()`（`imageRefs()` を URL にして、同じ URL は 1 つ・読めなかったものは除く）と `lightboxFrom()`（並びと自分の位置。並びに居なければ自分 1 枚）でライトボックスに渡す。描くたびに本文を解釈しない。
 - 一言も `linkifyRefs()` → `parseInline()` を通るので同じく `image` になるが、一言の中は印と名前だけ（`Message` が context を null にする）で、画像は一言の下に元の本文から並べる（`SourceImages`。詳細を開いている間は本文の中に出るので出さない）。
 
 ### アバター（#666）
@@ -259,6 +262,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 ### ライトボックス（#507 / #509）
 
 - 画像を押すとページの中のライトボックスで開く。`LightboxProvider` を `Chat` が持ち、`MarkdownImage` / `AttachedImages` / `MessageImages` が `LightboxContext` を読む。別のタブは開かない。⌘ クリック・中クリックは `opensInPage()` が見送ってブラウザの既定のまま。
+- **画面より小さい画像は拡大する**（#702）: `<img>` の `onLoad` で元の大きさを `--nw` / `--nh` に、上限を `--up`（`lightbox.ts` の `LIGHTBOX_MAX_UPSCALE` = 3）に置き、CSS（`.lightbox-stage img.sized`）が幅を「枠の幅・元の幅 × 上限・高さの上限から逆算した幅」の最小にする（JS で画面を測らないので、窓の大きさを変えても追従する）。大きさはどの URL のものかと一緒に持ち、送ったあと前の画像の大きさを使わない。
 - Esc・背景・✕で閉じ、同じ発言の画像は ← → で送る。キーは document の capture で拾って止める（App の Esc＝「フィードへ」と ← →＝一覧との行き来まで動かないように）。
 - 横にスライド（スワイプ・ドラッグ）しても送る（#509）。Pointer Events でタッチもマウスも同じ扱い、判定は `swipeStep()`＝横に `SWIPE_MIN_PX`（50px）以上かつ縦より横。動かしている間は画像が付いてくる。`touch-action: pan-y pinch-zoom` で縦のスクロールとピンチはブラウザに残す。
 - 枠が pointer を捕まえるので:

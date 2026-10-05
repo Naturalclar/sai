@@ -15,6 +15,12 @@ export type OpenLightbox = (images: LightboxImage[], index: number) => void
 
 export const LightboxContext = createContext<OpenLightbox | null>(null)
 
+/**
+ * 画面より小さい画像を、ライトボックスで何倍まで拡大するか（#702）。画面に収まる範囲で、これを超えては広げない
+ * （引き伸ばしすぎるとぼける）。計算は CSS（`.lightbox-stage img.sized`）で、ここは上限を渡すだけ
+ */
+export const LIGHTBOX_MAX_UPSCALE = 3
+
 /** ライトボックスの送り先。端で止める（回さない） */
 export function stepIndex(index: number, count: number, delta: number): number {
   return Math.min(Math.max(index + delta, 0), Math.max(count - 1, 0))

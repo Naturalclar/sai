@@ -998,7 +998,7 @@ test('sai_send: 宛先は id でも呼び名（表示名・worktree 名）でも
     assert.match(((await byRepo.json()) as { error: string }).error, /当たる相手が 3 つあります（うち 2 つは送れないセッション。下には送れる方だけ）。[^\n]*\n- B1@r「SessionA」$/)
     // 前方一致・無い名前は当てない。送らずに、送れる相手を返す
     const before = runner.started.length
-    for (const to of ['Kura', 'だれか', 'C1@r']) {
+    for (const to of ['Sess', 'だれか', 'C1@r']) {
       const res = await send('A1@r', to, '見て')
       assert.equal(res.status, 403, to)
       const text = ((await res.json()) as { error: string }).error

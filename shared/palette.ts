@@ -56,7 +56,7 @@ function keysOf(item: PaletteItem): string {
 
 /**
  * 検索語で絞る。空なら全部。小文字にして部分一致（`filterReplyTargets` / `filterSkills` と同じ規則）。
- * 空白で区切った語は **すべて** 当たったものだけ残す（`sai kanade` で絞れる）
+ * 空白で区切った語は **すべて** 当たったものだけ残す（`sai feed` で絞れる）
  */
 export function filterPalette(items: readonly PaletteItem[], query: string): PaletteItem[] {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean)

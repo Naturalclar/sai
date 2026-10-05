@@ -12,6 +12,15 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 64KB から倍々に、ターンの始まりが見えるまで（上限 4MB）読み、`(mtime, size)` が変わらなければ組み直さない
 - パスは行の `cwd` と、エンティティ ID から取ったセッション ID（`sessionOf()`。`/` や `.` を含む形と `unknown-` は空）で組み立てる。別のマシンのセッション（`isRemoteHost()`）は空
 
+## 途中で書いた文（#680）
+
+- `claudeProgress()` / `codexProgress()` は手順（`steps`）とは別に `notes`（`{ text, at }`。古い順、全部）を返す。`steps` の `text` は `oneLine()` で 1 行に切ってあり、直近 `PROGRESS_STEPS` 件に絞るとツールの呼び出しに押し出されるため
+- **最後の返答は入れない**（行として届くので二重になる）。Codex は `phase: commentary` の文だけ（`final_answer` と、`phase` の無い古い rollout の文は入れない）。Claude は閉じたターンの最後の文を除く
+- 文が続けば（手順が 1 つにまとまるとき）`pushText()` が 1 つに繋ぐ。1 つ `PROGRESS_NOTE_MAX`（2000 字）で切る。サブエージェントの文（`isSidechain`）は見ない
+- `ProgressReader.read()` が末尾 `PROGRESS_NOTES`（5 件）を `notes`、全部の数を `notes_total` で返す（無ければ省く）
+- 画面は `web/src/ProgressNotes.tsx`（一覧）と `ProgressNoteItem.tsx`（1 つ。Markdown で描き、`isLongNote()` なら畳む）。`notesSince()` で送った時刻より前の文を落とし、`web/src/noteClamp.ts` の `shownNotes()` が出す数と「ほか N 件」を決める。仮バブル（`PendingBubble`）の兄弟として置くので、仮バブルが消えると一緒に消える
+- 行（JSONL）・`turns`・未読・検索には載せない
+
 ## active
 
 - `progressActive()`: 「ターンが閉じておらず、走っているツールが 3 時間以内に始まっているか、最後の書き込みが 10 分以内」
@@ -65,9 +74,10 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 
 - `GET /api/sessions/<id>/turn-steps?ts=`（`app.ts` の `getTurnSteps()`）。**人が開いたときだけ**呼ばれる（`web/src/TurnSteps.tsx`。ポーリングには乗せない）。
 - 読むのは `ProgressReader.turnSteps()`: transcript / rollout を頭から 1 行ずつ `shared/turnSteps.ts` の `claudeStepParser()` / `codexStepParser()` に流す。ツールの戻りの行は JSON にしない（`skipForSteps()`）。結果は (mtime, size) が同じ間、直近 4 ファイルぶんだけ覚える。
-- ターンの切り方: Claude は人の入力（メタ・要約・ツールの戻り・サブエージェントでない user の行）から次の人の入力まで、Codex は `task_started` から。手順は `tool_use` / `function_call` / `custom_tool_call` だけ（考えた・書いたは入れない）。
+- ターンの切り方: Claude は人の入力（メタ・要約・ツールの戻り・サブエージェントでない user の行）から次の人の入力まで、Codex は `task_started` から。手順は `tool_use` / `function_call` / `custom_tool_call` と、途中で書いた文（下。考えた・最後の返答は入れない）。
 - 要約は許可のバブルと同じ `toolSummary()`（Claude）。Bash の `description` は `note` に分ける（`summary` はコマンドそのもの）。Codex は `codexToolText()`（`codexToolSummary()` の 1 行に切る前）。どちらも 300 字で切る。**出力は読まない**。
 - 行との引き当ては `findStepTurn()`: 「終わり」は行の `ts` の 20 秒前〜5 秒後に終わった一番新しいターン。「始まり」は、前のターン完了の行より後の入力の行を古い順に試し、transcript に近いターン（±10 秒。複数あれば入力の頭が同じ方）がある最初のもの（Esc ですぐ止めた入力は transcript に残らないことがある）。**始まりから終わりまでをつないで返す**（ターンの途中で入力が足される = steer・タスクの通知と、transcript では 2 つに切れる）。間に Esc で止めた跡（`[Request interrupted`）があればその後ろから。始まりだけ見つかればそのターン、始まりが 1 つも無ければ（自分で起きた・Codex）終わりだけで当て、どちらも無ければ当てない。
+- **途中で書いた文も手順に混ぜる**（#680）。`text` のある `TurnStep`（`tool` は空）で、Claude は `stop_reason` が `end_turn` / `stop_sequence` でない行の文、Codex は `phase: commentary` の文。`total` と `stepCounts()` はツールの呼び出しだけを数え、`TURN_STEPS_MAX` に入り切らなかった数は `more`。
 - 引けない・別のマシン・OpenCode は `found: false`（画面は「記録がありません」）。行（JSONL）には何も足さない。
 
 ## 画面

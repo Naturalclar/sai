@@ -1,5 +1,6 @@
 import type { Profile } from './api'
 import { PendingBubble } from './PendingBubble'
+import { ProgressNotes } from './ProgressNotes'
 import { ProgressSteps } from './ProgressSteps'
 import { ProgressTodos } from './ProgressTodos'
 import { useProgress } from './useProgress'
@@ -11,9 +12,13 @@ import { useProgress } from './useProgress'
 export function FeedPendingBubble({ id, text, since, now, repo, quiet, profile, compact }: { id: string; text: string; since: string; now: number; repo?: string; quiet?: boolean; profile?: Profile; /** 要約だけのターン（#579）。本文（/compact …）は出さず「要約中」の 1 行 */ compact?: boolean }) {
   const progress = useProgress(id, true)
   return (
-    <PendingBubble text={text} since={since} now={now} repo={repo} quiet={Boolean(compact) || quiet} {...(compact ? { label: '要約中' } : {})} profile={profile}>
-      <ProgressSteps progress={progress} since={since} now={now} />
-      <ProgressTodos progress={progress} />
-    </PendingBubble>
+    <>
+      <PendingBubble text={text} since={since} now={now} repo={repo} quiet={Boolean(compact) || quiet} {...(compact ? { label: '要約中' } : {})} profile={profile}>
+        <ProgressSteps progress={progress} since={since} now={now} />
+        <ProgressTodos progress={progress} />
+      </PendingBubble>
+      {/* 途中で書いた文（#680）。フィードは場所を取らないよう最新の 1 つだけ */}
+      <ProgressNotes progress={progress} since={since} max={1} />
+    </>
   )
 }

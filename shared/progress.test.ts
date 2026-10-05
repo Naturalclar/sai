@@ -12,6 +12,8 @@ import {
   PROGRESS_IDLE_MS,
   PROGRESS_SUMMARY_MAX,
   PROGRESS_TOOL_MAX_MS,
+  notesSince,
+  PROGRESS_NOTE_MAX,
   stepLabel,
   stepsSince,
 } from './progress.ts'
@@ -80,7 +82,7 @@ test('claudeProgress: 始まりが読んだ範囲に無くても、最後の ass
   assert.equal(mid.open, true)
   assert.equal(mid.steps.length, 1)
   assert.equal(claudeProgress([assistant(T(1), [{ type: 'text', text: 'done' }], 'end_turn')]).open, false)
-  assert.deepEqual(claudeProgress(['', '{ broken', 'null', '[]']), { steps: [], started: false, open: false, context: 0 })
+  assert.deepEqual(claudeProgress(['', '{ broken', 'null', '[]']), { steps: [], started: false, open: false, context: 0, notes: [] })
 })
 
 test('claudeProgress / codexProgress: 最後にモデルを呼んだときに読んだ量（送ると相手が読み直す量。#311）', () => {
@@ -240,4 +242,48 @@ test('claudeProgress: 要約の行（isCompactSummary）でターンを切らな
   )
   assert.equal(p.started, true)
   assert.equal(p.open, false)
+})
+
+test('途中の文（#680）: Codex は commentary だけを全文で持ち、final_answer と phase の無い文は入れない。ツールに押し出されない', () => {
+  const say = (ts: string, text: string, phase?: string) => item(ts, { type: 'message', role: 'assistant', content: [{ type: 'output_text', text }], ...(phase ? { phase } : {}) })
+  const long = `1 行目\n\n${'あ'.repeat(PROGRESS_NOTE_MAX + 50)}`
+  const lines = [
+    ev(T(0), { type: 'task_started', turn_id: 'a' }),
+    say(T(1), '前のターンの途中の文', 'commentary'),
+    ev(T(2), { type: 'task_complete', turn_id: 'a' }),
+    ev(T(10), { type: 'task_started', turn_id: 'b' }),
+    say(T(11), 'まず `server/app.ts` を読みます。\n原因を探します。', 'commentary'),
+    ...Array.from({ length: 12 }, (_, i) => item(T(12), { type: 'function_call', call_id: `c${i}`, name: 'shell', arguments: j({ command: ['bash', '-lc', 'ls'] }) })),
+    say(T(20), long, 'commentary'),
+    say(T(21), 'phase の無い文'),
+  ]
+  let p = codexProgress(lines)
+  assert.deepEqual(p.notes?.map((n) => n.at), [T(11), T(20)], '前のターンの文と phase の無い文は入れない')
+  assert.equal(p.notes?.[0]?.text, 'まず `server/app.ts` を読みます。\n原因を探します。', '1 行に切らない')
+  assert.equal(Array.from(p.notes?.[1]?.text ?? '').length, PROGRESS_NOTE_MAX, '長ければ切る')
+  assert.equal(p.steps.filter((s) => s.kind === 'text').length, 2, '手順には今までどおり 1 行で入る（続いた文は 1 手順）')
+  p = codexProgress([...lines, say(T(30), '直しました', 'final_answer'), ev(T(31), { type: 'task_complete', turn_id: 'b' })])
+  assert.deepEqual(p.notes?.map((n) => n.at), [T(11), T(20)], '最後の返答は途中の文にしない（行として届く）')
+  assert.deepEqual(notesSince(p.notes ?? [], T(40)).length, 0, '送った時刻より前の文は落とす')
+  assert.deepEqual(notesSince(p.notes ?? [], T(25)).map((n) => n.at), [T(20)])
+})
+
+test('途中の文（#680）: Claude はツールの合間の文。続いた文は 1 つに繋ぎ、閉じたターンの最後の文（返答）は入れない', () => {
+  const said = (ts: string, text: string, stop: string) => j({ type: 'assistant', timestamp: ts, message: { role: 'assistant', content: [{ type: 'text', text }], stop_reason: stop } })
+  const use = (ts: string, id: string) => j({ type: 'assistant', timestamp: ts, message: { role: 'assistant', content: [{ type: 'tool_use', id, name: 'Bash', input: { command: 'ls' } }], stop_reason: 'tool_use' } })
+  const lines = [
+    prompt(T(0), '前のターン'),
+    said(T(1), '前のターンの文', 'tool_use'),
+    prompt(T(10), '直して'),
+    said(T(11), '読みます。', 'tool_use'),
+    said(T(12), '続きの文。', 'tool_use'),
+    use(T(13), 't1'),
+    j({ type: 'assistant', isSidechain: true, timestamp: T(14), message: { role: 'assistant', content: [{ type: 'text', text: 'サブエージェントの文' }] } }),
+    said(T(15), '原因が分かりました。', 'tool_use'),
+  ]
+  let p = claudeProgress(lines)
+  assert.deepEqual(p.notes, [{ text: '読みます。\n\n続きの文。', at: T(11) }, { text: '原因が分かりました。', at: T(15) }])
+  p = claudeProgress([...lines, use(T(16), 't2'), said(T(20), '直しました。', 'end_turn')])
+  assert.equal(p.open, false)
+  assert.deepEqual(p.notes?.map((n) => n.text), ['読みます。\n\n続きの文。', '原因が分かりました。'], '閉じたターンの最後の文は返答そのもの')
 })

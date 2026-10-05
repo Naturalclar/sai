@@ -3367,7 +3367,9 @@ export function createApp(
     }
     const turn = findStepTurn(turns, { starts, endMs: rowMs(row.ts) })
     if (!turn) return json(res, none)
-    const payload: TurnStepsResponse = { id, ts, found: true, steps: turn.steps.slice(0, TURN_STEPS_MAX), total: turn.steps.length }
+    // 数えるのはツールの呼び出しだけ（途中の文は数に入れない。#680）
+    const more = Math.max(0, turn.steps.length - TURN_STEPS_MAX)
+    const payload: TurnStepsResponse = { id, ts, found: true, steps: turn.steps.slice(0, TURN_STEPS_MAX), total: turn.steps.filter((s) => s.text === undefined).length, ...(more > 0 ? { more } : {}) }
     return json(res, payload)
   }
 

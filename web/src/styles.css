@@ -588,6 +588,7 @@
     .avatar { width: 28px; height: 28px; font-size: 12px; }
     .msg .time { left: -38px; width: 34px; }
     .pending-line { padding-left: 46px; }
+    .progress-notes { margin-left: 46px; margin-right: 8px; }
     .day::before { left: 8px; right: 8px; }
     .chat-end::before { left: 8px; right: 8px; }
     .reply .target { flex-wrap: wrap; }
@@ -713,6 +714,11 @@
   .turn-steps .list .what { flex: 1 1 12em; min-width: 0; font-family: var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink); background: transparent; padding: 0; }
   .turn-steps .list .why { flex: 1 1 100%; padding-left: 0; }
   .turn-steps .list .more { font-style: italic; }
+  /* 途中で書いた文（#680）。ツールの行と見分けがつくよう、本文の色で折り返して出す */
+  .turn-steps .list .said { flex-wrap: nowrap; }
+  .turn-steps .list .said .body { flex: 1 1 auto; min-width: 0; color: var(--ink); overflow-wrap: anywhere; }
+  .turn-steps .list .said .body > :first-child { margin-top: 0; }
+  .turn-steps .list .said .body > :last-child { margin-bottom: 0; }
   .tag.recovered { background: color-mix(in srgb, var(--muted) 18%, transparent); color: var(--muted); }
   .tag.stop-missing { background: color-mix(in srgb, var(--synth) 18%, transparent); color: var(--synth); font-weight: 600; }
   .tag.archived { background: color-mix(in srgb, var(--muted) 18%, transparent); color: var(--muted); font-weight: 600; }
@@ -1161,6 +1167,16 @@
   .group.approval .dialog-preview .choices .rec { padding: 1px 6px; border-radius: 8px; background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); font-size: 11px; font-weight: 600; white-space: nowrap; }
   .group.approval.done { opacity: .6; }
   .pending-line.long .time { color: var(--synth); font-weight: 600; }
+  /* 処理中のターンの途中でエージェントが書いた文（#680）。仮バブルの下に、行より薄く出す（まだ記録ではない） */
+  .progress-notes { list-style: none; margin: -4px 16px 10px 62px; padding: 0 0 0 10px; border-left: 2px solid var(--line); font-size: 13px; min-width: 0; }
+  .progress-notes li { display: flex; gap: 8px; align-items: baseline; padding: 2px 0; min-width: 0; }
+  .progress-notes .when { flex: none; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .progress-notes .said { flex: 1 1 auto; min-width: 0; }
+  .progress-notes .body { color: var(--ink); opacity: .8; overflow-wrap: anywhere; }
+  .progress-notes .body > :first-child { margin-top: 0; }
+  .progress-notes .body > :last-child { margin-bottom: 0; }
+  .progress-notes .body.clamped { max-height: 9.5em; overflow: hidden; -webkit-mask-image: linear-gradient(#000 70%, transparent); mask-image: linear-gradient(#000 70%, transparent); }
+  .progress-notes .more { color: var(--muted); font-size: 12px; font-style: italic; }
   /* 処理中のターンがいま何をしているか（#302）。「処理中 N分」の横に 1 行、押すと直近の手順。長いコマンドは切って 1 行に収める */
   .pending-line { flex-wrap: wrap; }
   .progress { min-width: 0; flex: 1 1 12em; font-size: 12px; color: var(--muted); font-style: normal; }

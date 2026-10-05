@@ -9,7 +9,7 @@ import { createReadStream } from 'node:fs'
 import { open, readdir, stat } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
 import { join } from 'node:path'
-import { claudeProgress, claudeProjectName, codexProgress, PROGRESS_STEPS, progressActive } from '../../shared/progress.ts'
+import { claudeProgress, claudeProjectName, codexProgress, PROGRESS_NOTES, PROGRESS_STEPS, progressActive } from '../../shared/progress.ts'
 import type { ParsedProgress } from '../../shared/progress.ts'
 import { claudeTurns, turnParser, worthParsing } from '../../shared/claudeTurns.ts'
 import type { ClaudeTurn } from '../../shared/claudeTurns.ts'
@@ -211,7 +211,7 @@ export class ProgressReader {
         cached = { sig, value: await parseTail(path, st.size, s.agent === 'claude' ? claudeProgress : codexProgress) }
         this.parsed.set(path, cached)
       }
-      const { steps } = cached.value
+      const { steps, notes = [] } = cached.value
       const active = progressActive(cached.value, st.mtimeMs, this.now())
       // ターンが閉じた時刻（#614）。始まりを見ていて閉じており、手順があるときだけ（Claude の end_turn。途中から読んだ・Esc で止めた・回っている、は載せない）
       const last = steps[steps.length - 1]
@@ -222,6 +222,8 @@ export class ProgressReader {
         active,
         steps: steps.slice(-PROGRESS_STEPS),
         total: steps.length,
+        // 途中で書いた文（#680）。手順とは別に末尾だけ返す（ツールの呼び出しに押し出されない）
+        ...(notes.length > 0 ? { notes: notes.slice(-PROGRESS_NOTES), notes_total: notes.length } : {}),
         updated_at: new Date(st.mtimeMs).toISOString(),
         ...(closedAt ? { closed_at: closedAt } : {}),
         // セッション同士のメッセージで、送ると相手がどれだけ読み直すかに使う（#311）

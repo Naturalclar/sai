@@ -34,11 +34,11 @@ Codex CLI ──[notify]───────┘
 {
   "ts": "2026-09-02T12:45:04+09:00",
   "agent": "claude",
-  "repo": "kanban",
+  "repo": "repo-a",
   "branch": "20260902",
   "session": "sess-abc",
   "session_source": "payload",
-  "cwd": "/home/user/kanban",
+  "cwd": "/home/user/repo-a",
   "event": "Stop",
   "text": "背中のメニューを出した。ワンハンドロウ 10kg×10×3。",
   "user_text": "背中のメニューを出して",
@@ -53,7 +53,7 @@ Codex CLI ──[notify]───────┘
 | `remote` | origin の URL を `https://host/owner/repo` に正規化したもの（`record.py` の `normalize_remote()`。ssh の `git@host:o/r.git` も同じ形、認証情報と `.git` は落とす）。origin が無ければ空。画面が一言の中の `#123` をこのリポジトリの issue に向けるのに使う |
 | `v` | 記録側の版（`record.py` の `RECORD_VERSION`。`shared/types.ts` にも同じ値があり、ずれると `pnpm test:feed` が止まる）。行の形を変えるたびに上げる。無い行は試作か古い `record.py` が書いたもの（1 扱い） |
 | `agent` | `claude` / `codex` / `opencode` / `grok` / `unknown`。payload の形で当てるが、`record.py --agent <名前>` と名乗られていればそれ（OpenCode のプラグインはこちら）。Grok Build は Claude 向けの別名（`hook_event_name` / `session_id`）も載せてくるので、camelCase の `hookEventName` があれば Claude より先に `grok` にする（#325） |
-| `repo` | `git rev-parse --show-toplevel` の basename。bare + worktree の構成では worktree のディレクトリ名（`dev-kanade` など）になり、GitHub のリポジトリ名とは限らない。画面では「worktree」と呼ぶ（同じリポジトリに複数あるときだけ絞り込みに出る）。エンティティID（`<セッション>@<リポジトリ>`）はこれで作るので、値は変えない |
+| `repo` | `git rev-parse --show-toplevel` の basename。bare + worktree の構成では worktree のディレクトリ名（`dev-worktree-c` など）になり、GitHub のリポジトリ名とは限らない。画面では「worktree」と呼ぶ（同じリポジトリに複数あるときだけ絞り込みに出る）。エンティティID（`<セッション>@<リポジトリ>`）はこれで作るので、値は変えない |
 | `project` | **どのリポジトリのものか**（`Naturalclar/sai`）。`remote` があればその `owner/repo`、無ければ `git rev-parse --git-common-dir` から取ったリポジトリ名だけ（bare なら `…/sai.git` → `sai`、普通の clone なら `<toplevel>/.git` → その親、のどちらでも同じ答えになる）。画面の絞り込みと見出しはこれを使う。無い行（古い `record.py`）はサーバが `remote` から補い、それも無ければ **`cwd` で git を読んで埋める**（`server/git/project.ts`。cwd ごとに 1 回だけ）。**それでも分からなければ空**で、絞り込みの候補には出さない（`repo` = worktree 名には落とさない。#182） |
 | `session_source` | `payload`（ペイロードから）/ `rollout`（Codex のファイルから）/ `synth`（時間で合成）。一覧の信頼度がここで分かる。セッションとしては、合成の行が 1 本でもあれば `synth`、そうでなければ**値のある一番新しい行のもの**（`server/rows/aggregate.ts` の `latestValue()`。`branch` / `host` / `remote` / `project` / `agent` も同じ取り方）。**値の無い行では上書きしない**ので、試作や古い `record.py` の行（キーごと無い）が途中に混ざっても、そのセッションが「IDの出どころが不明」になって返信を弾かれることはない（#283。前は「最後に初めて出てきた値」を使っていて、`payload` → 空 → `payload` で空になっていた） |
 | `event` | 何の行か。ターン完了は `Stop`（Claude / Grok）/ `agent-turn-complete`（Codex）/ `session.idle`（OpenCode）。人を待って止まった行は `PermissionRequest` / `PreToolUse` / `Notification` / `permission.asked`（OpenCode）、人が答えて再開した行は `UserPromptSubmit` / `permission.replied`（OpenCode）、セッションが終わった行は `SessionEnd`（Claude だけ。#385。`text` は `セッション終了: 会話をリセット（/clear）` のように**なぜ終わったか**）。読み方は `shared/events.ts` の `eventKind()` にまとめてあり、集計と画面が同じ判定を使う。**ここに挙がっていない値（`SubagentStop`、Codex の `session-configured` など）は `other` で、ターンにも数えず画面にも出さない**（#235）。`hook_event_name` も `type` も無いペイロードでは `unknown` になり、これはターン完了として扱う |
@@ -85,7 +85,7 @@ SAIから開始したCodex turnの待機もJSONLにはせず、`CodexAppServer` 
 表示名は JSONL ではなく `~/.agent-feed/session-meta.json` に持つ。
 
 ```json
-{ "sess-abc@kanban": { "name": "背中メニュー", "persona": "ISTJ", "digest_off": true } }
+{ "sess-abc@repo-a": { "name": "背中メニュー", "persona": "ISTJ", "digest_off": true } }
 ```
 
 キーはエンティティID（`<セッション>@<リポジトリ>`）。記録側（`record.py`）はこのファイルを知らないし、集計（`aggregate()`）も触らない。サーバが応答を返すときに載せるだけなので、消しても履歴は壊れない。
@@ -107,7 +107,7 @@ SAIから開始したCodex turnの待機もJSONLにはせず、`CodexAppServer` 
 どこまで読んだかは `~/.agent-feed/read-marks.json` に持つ（JSONL は触らない）。セッションごとに**読んだ最後の返答の時刻（ミリ秒）を 1 つだけ**。`since` は初めてファイルを作った時刻で、**印の無いセッションはそこまで読んだ扱い**にする。
 
 ```json
-{ "since": 1790658563592, "sessions": { "sess-abc@kanban": 1790744911000 } }
+{ "since": 1790658563592, "sessions": { "sess-abc@repo-a": 1790744911000 } }
 ```
 
 未読の数はサーバが応答のたびに、窓の中の返答（ターン完了の行）のうち印より新しいものを数えて `SessionSummary.unread` に載せる。覚えるセッションは 2000 件まで（古い印から捨てる。捨てたものは `since` まで読んだ扱いに戻る）。
@@ -117,7 +117,7 @@ SAIから開始したCodex turnの待機もJSONLにはせず、`CodexAppServer` 
 `/manager` が `sai_suggest` で置いた案は `~/.agent-feed/suggestions.json` に、宛先のエンティティ ID ごとに 1 つだけ持つ（JSONL は触らない。置き直すと上書き）。
 
 ```json
-{ "sess-abc@kanban": { "text": "CI を見て、落ちていたら直して", "from": "このマシン", "at": 1790744911000, "busy": false } }
+{ "sess-abc@repo-a": { "text": "CI を見て、落ちていたら直して", "from": "このマシン", "at": 1790744911000, "busy": false } }
 ```
 
 `from` は置いた呼び出し元（`このマシン` か tailnet のログイン名）、`at` は置いた時刻（ミリ秒）、`busy` は置いたときに宛先のターンが回っていたか（回っていたターンの終わりは人の入力と数えない）。画面に出すのは**置いてから 24 時間以内で、そのあと人の入力が来ていないもの**だけで、サーバが応答のたびに決めて `SessionSummary.manager_draft` に載せる。捨てる・入れると取り除く。24 時間を過ぎたものは次に置いたときにファイルからも捨てる（500 件まで）。
@@ -129,7 +129,7 @@ SAIから開始したCodex turnの待機もJSONLにはせず、`CodexAppServer` 
 引き継いで始めたセッション（#442）は、同じファイルに前後を持つ: 新しい方に `continued_from`（前のセッションの ID）、前の方に `continued_to`（続きの ID）と `continued_at`（使った引き継ぎの行の `ts`。同じ引き継ぎで 2 回始めないための印）。
 
 ```json
-{ "sess-abc@kanban": { "name": "背中メニュー", "archived_at": "2026-09-02T07:40:00.000Z" } }
+{ "sess-abc@repo-a": { "name": "背中メニュー", "archived_at": "2026-09-02T07:40:00.000Z" } }
 ```
 
 「アーカイブ済みか」は `archived: true` のような印ではなく、サーバが応答時に **`archived_at >= そのセッションの最後の行の ts`** で決める。アーカイブしたあとに端末でそのセッションを続けると最後の行が `archived_at` を追い越すので、メタを書き換えずに自動で一覧に戻る。「戻す」は `archived_at` を消すだけ。`synth`（時間で合成した ID）のセッションもアーカイブできる（#248。合成 ID は `record.py` が記録時に決めて行に書き込むので、集計の窓でずれない）。返信できないのは別の話（`replyBlockedReason()` の `synth`）。

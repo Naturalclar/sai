@@ -107,9 +107,9 @@ test('deliveredId / agentReplyRows: 送ったメッセージへの返答（相�
 })
 
 test('replierName: 表示名があればそれ。題名が届けた見出しなら worktree 名（#588）', () => {
-  const s = (over: Partial<SessionSummary>) => ({ id: 'B1@dev-min', title: '', repo: 'dev-min', ...over }) as SessionSummary
+  const s = (over: Partial<SessionSummary>) => ({ id: 'B1@dev-worktree-b', title: '', repo: 'dev-worktree-b', ...over }) as SessionSummary
   assert.equal(replierName(s({ meta: { name: 'セッション B' }, title: '【SAI】#o/r の「x」からのメッセージです' })), 'セッション B')
-  assert.equal(replierName(s({ title: '【SAI】#o/r の「x」からのメッセージです' })), '#dev-min')
+  assert.equal(replierName(s({ title: '【SAI】#o/r の「x」からのメッセージです' })), '#dev-worktree-b')
   assert.equal(replierName(s({ title: 'PR を出して' })), 'PR を出して')
 })
 
@@ -241,13 +241,13 @@ test('sendHow: sai_send の返事に、相手のターンをどう回したか�
 
 test('resolveTarget: id・表示名・worktree 名・題名の完全一致で、ちょうど 1 つのときだけ当てる（#625）', () => {
   const s = (id: string, repo: string, title: string, name = '') => ({ id, repo, title, ...(name ? { meta: { name } } : {}) }) as SessionSummary
-  const targets = [s('a@dev-clared', 'dev-clared', '着手して', 'セッション A'), s('b@dev-min', 'dev-min', '319 対応して', 'セッション B'), s('c@dev-x', 'dev-x', 'x', 'セッション B - 別件'), s('d@main', 'main', '一覧'), s('e@main', 'main', '取り次ぎ')]
+  const targets = [s('a@dev-worktree-a', 'dev-worktree-a', '着手して', 'セッション A'), s('b@dev-worktree-b', 'dev-worktree-b', '319 対応して', 'セッション B'), s('c@dev-x', 'dev-x', 'x', 'セッション B - 別件'), s('d@main', 'main', '一覧'), s('e@main', 'main', '取り次ぎ')]
   const idOf = (to: string) => resolveTarget(targets, to).target?.id
-  assert.equal(idOf('a@dev-clared'), 'a@dev-clared')
-  assert.equal(idOf('セッション A'), 'a@dev-clared')
-  assert.equal(idOf(' DEV-Clared '), 'a@dev-clared', '大文字小文字と前後の空白は無視')
+  assert.equal(idOf('a@dev-worktree-a'), 'a@dev-worktree-a')
+  assert.equal(idOf('セッション A'), 'a@dev-worktree-a')
+  assert.equal(idOf(' DEV-Worktree-A '), 'a@dev-worktree-a', '大文字小文字と前後の空白は無視')
   assert.equal(idOf('一覧'), 'd@main', '表示名が無ければ題名')
-  assert.equal(idOf('セッション B'), 'b@dev-min', '「セッション B - 別件」とは取り違えない（完全一致だけ）')
+  assert.equal(idOf('セッション B'), 'b@dev-worktree-b', '「セッション B - 別件」とは取り違えない（完全一致だけ）')
   assert.equal(idOf('着手して'), undefined, '表示名のあるセッションは題名では引かない（題名は最初の入力で、他と重なりやすい）')
   assert.equal(idOf('セッション'), undefined, '前方一致はしない')
   assert.equal(idOf(''), undefined)
@@ -261,10 +261,10 @@ test('resolveTarget: id・表示名・worktree 名・題名の完全一致で、
   // 送れないセッションに同じ名前が居れば、送れる方が 1 つでも当てない（別の相手に黙って届かせない）
   const hidden = resolveTarget(targets, 'セッション B', [s('z@dev-z', 'dev-z', 'z', 'セッション B')])
   assert.ok(!hidden.target && hidden.ambiguous && hidden.hidden === 1)
-  assert.match(targetRefusal('セッション B', hidden as never, ''), /当たる相手が 2 つあります（うち 1 つは送れないセッション。下には送れる方だけ）。[^\n]*\n- b@dev-min「セッション B」$/)
-  assert.equal(resolveTarget(targets, 'b@dev-min', [s('z@dev-z', 'dev-z', 'z', 'セッション B')]).target?.id, 'b@dev-min', 'id なら今までどおり')
+  assert.match(targetRefusal('セッション B', hidden as never, ''), /当たる相手が 2 つあります（うち 1 つは送れないセッション。下には送れる方だけ）。[^\n]*\n- b@dev-worktree-b「セッション B」$/)
+  assert.equal(resolveTarget(targets, 'b@dev-worktree-b', [s('z@dev-z', 'dev-z', 'z', 'セッション B')]).target?.id, 'b@dev-worktree-b', 'id なら今までどおり')
   assert.equal(resolveTarget(targets, 'だれか', [s('z@dev-z', 'dev-z', 'z', 'だれか')]).target, null)
-  assert.deepEqual(targetNames(targets[0]!), ['a@dev-clared', 'セッション a', 'dev-clared'])
+  assert.deepEqual(targetNames(targets[0]!), ['a@dev-worktree-a', 'セッション a', 'dev-worktree-a'])
 })
 
 test('replyOf / agentReplyRows: ターン完了の行の入力が要約の文に置き換わっていても、直前の入力の行の見出しで当てる（#626）', () => {

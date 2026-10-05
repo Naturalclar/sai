@@ -32,7 +32,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 
 ## 番号のリンク
 
-- 一言の中の `#123` / `owner/repo#123` / Linear の `PGR-123` / URL は `shared/refs.ts` の `linkifyRefs()` が Markdown の `Inline` の木にしてリンクにする（`#123` の向き先は行の `remote`、Linear の workspace は `settings.json` の `linear_workspace`）。
+- 一言の中の `#123` / `owner/repo#123` / Linear の `ABC-123` / URL は `shared/refs.ts` の `linkifyRefs()` が Markdown の `Inline` の木にしてリンクにする（`#123` の向き先は行の `remote`、Linear の workspace は `settings.json` の `linear_workspace`）。
 - `linkifyRefs()` に `ctx.source`（言い換える前の本文）を渡すと、そこに無い番号はリンクにしない（消さずに文字のまま残す。`Message.tsx` が `summary` と一緒に持っている `text` を渡す）。裏付けは同じ regex で拾うので本文の `#1234` が一言の `#123` に当たらず、本文が URL（`<remote>/issues/70`）で番号を出していれば裏付けになる。`owner/repo#123` と URL はそのまま通す（行き先が本文に依らない）。`source` を渡さなければ全部リンクにする。
 - `source` には行の `user_text` も足す（`Message` の `sourceAsk`。頼んだことから来た正しい番号をリンクにするため）。
 - テストは `shared/refs.test.ts`。

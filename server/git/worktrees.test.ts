@@ -12,7 +12,7 @@ test('parseWorktreeList: bare / branch / detached / locked / prunable を読む�
     'worktree /r/sai.git',
     'bare',
     '',
-    'worktree /r/sai.git/dev-min',
+    'worktree /r/sai.git/dev-worktree-b',
     'HEAD 690d8db',
     'branch refs/heads/issue-319',
     '',
@@ -29,17 +29,17 @@ test('parseWorktreeList: bare / branch / detached / locked / prunable を読む�
   ].join('\n')
   assert.deepEqual(parseWorktreeList(out), [
     { path: '/r/sai.git', branch: '', bare: true, prunable: false, locked: false },
-    { path: '/r/sai.git/dev-min', branch: 'issue-319', bare: false, prunable: false, locked: false },
+    { path: '/r/sai.git/dev-worktree-b', branch: 'issue-319', bare: false, prunable: false, locked: false },
     { path: '/tmp/pr454-wt', branch: '', bare: false, prunable: true, locked: false },
     { path: '/r/sai.git/dev-lock', branch: 'feat/a', bare: false, prunable: false, locked: true },
   ])
 })
 
-test('insideTree / treeOf: 同じか下のディレクトリだけ。名前の前方一致（dev-min と dev-minx）には当てない。入れ子は深い方', () => {
-  assert.equal(insideTree('/r/sai.git/dev-min', '/r/sai.git/dev-min'), true)
-  assert.equal(insideTree('/r/sai.git/dev-min/web', '/r/sai.git/dev-min'), true)
-  assert.equal(insideTree('/r/sai.git/dev-minx', '/r/sai.git/dev-min'), false)
-  assert.equal(insideTree('/r/sai.git', '/r/sai.git/dev-min'), false, 'bare 本体は作業ツリーの中ではない')
+test('insideTree / treeOf: 同じか下のディレクトリだけ。名前の前方一致（dev-worktree-b と dev-worktree-bx）には当てない。入れ子は深い方', () => {
+  assert.equal(insideTree('/r/sai.git/dev-worktree-b', '/r/sai.git/dev-worktree-b'), true)
+  assert.equal(insideTree('/r/sai.git/dev-worktree-b/web', '/r/sai.git/dev-worktree-b'), true)
+  assert.equal(insideTree('/r/sai.git/dev-worktree-bx', '/r/sai.git/dev-worktree-b'), false)
+  assert.equal(insideTree('/r/sai.git', '/r/sai.git/dev-worktree-b'), false, 'bare 本体は作業ツリーの中ではない')
   const trees = [
     { path: '/r/app', key: worktreeKey('/r/app'), branch: 'main' },
     { path: '/r/app/.claude/worktrees/x', key: worktreeKey('/r/app/.claude/worktrees/x'), branch: 'x' },

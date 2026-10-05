@@ -120,12 +120,12 @@ class RecordTest(unittest.TestCase):
         from feed.record import normalize_remote
 
         for raw, want in [
-            ("https://github.com/acme/kanban.git", "https://github.com/acme/kanban"),
-            ("https://github.com/acme/kanban", "https://github.com/acme/kanban"),
-            ("git@github.com:acme/kanban.git", "https://github.com/acme/kanban"),
-            ("ssh://git@github.com/acme/kanban.git", "https://github.com/acme/kanban"),
+            ("https://github.com/acme/repo-a.git", "https://github.com/acme/repo-a"),
+            ("https://github.com/acme/repo-a", "https://github.com/acme/repo-a"),
+            ("git@github.com:acme/repo-a.git", "https://github.com/acme/repo-a"),
+            ("ssh://git@github.com/acme/repo-a.git", "https://github.com/acme/repo-a"),
             ("ssh://git@gitlab.example.com:2222/grp/sub/repo.git", "https://gitlab.example.com/grp/sub/repo"),
-            ("https://user:token@github.com/acme/kanban.git", "https://github.com/acme/kanban"),
+            ("https://user:token@github.com/acme/repo-a.git", "https://github.com/acme/repo-a"),
             ("/Users/me/repos/local", ""),
             ("file:///Users/me/repos/local", ""),
             ("", ""),
@@ -213,13 +213,13 @@ class RecordTest(unittest.TestCase):
         # bare clone + worktree（ghq --vcs や git clone --bare + git worktree add の形）
         bare = root / "sai.git"
         subprocess.run(["git", "clone", "-q", "--bare", str(src), str(bare)], check=True)
-        wt = bare / "dev-min"
+        wt = bare / "dev-worktree-b"
         subprocess.run(["git", "-C", str(bare), "worktree", "add", "-q", str(wt), "main"], check=True)
 
         # remote が無いので --git-common-dir から取る（bare は `…/sai.git` を返す）
         self.assertEqual(git_project(str(wt), ""), "sai")
         # repo（toplevel の basename）は worktree 名のまま = これが #163 の原因
-        self.assertEqual(git_facts(str(wt))[0], "dev-min")
+        self.assertEqual(git_facts(str(wt))[0], "dev-worktree-b")
 
         # 普通の clone も、そのサブディレクトリからも同じ答え
         self.assertEqual(git_project(str(src), ""), "src")
@@ -239,7 +239,7 @@ class RecordTest(unittest.TestCase):
         run(stdin=json.dumps(payload), env=self.env)
         row = read_rows(self.feed_dir)[-1]
         self.assertEqual(row["project"], "sai")
-        self.assertEqual(row["repo"], "dev-min")
+        self.assertEqual(row["repo"], "dev-worktree-b")
 
     def test_row_carries_record_version_matching_shared_types(self):
         """行の v は shared/types.ts の RECORD_VERSION と同じ値。行の形を変えたら両方上げる"""

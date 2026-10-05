@@ -53,7 +53,7 @@ export interface PaneProps extends StatusProps {
   onLeaveToSidebar: () => void
   /** サーバ側の設定（一言が有効か、既定の性格）。まだ取れていなければ null */
   settings: SettingsResponse | null
-  /** Linear の workspace（設定）。一言の中の PGR-123 のリンク先。空ならリンクにしない */
+  /** Linear の workspace（設定）。一言の中の ABC-123 のリンク先。空ならリンクにしない */
   linear: string
 }
 

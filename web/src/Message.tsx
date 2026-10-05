@@ -57,7 +57,7 @@ interface Props {
    * **番号の裏付けとして本文と一緒に見る**（`#371 に着手して` と頼まれた回の `#371` をリンクにする）
    */
   sourceAsk?: string
-  /** 一言の中の PGR-123 の向き先（設定の Linear の workspace）。空ならリンクにしない */
+  /** 一言の中の ABC-123 の向き先（設定の Linear の workspace）。空ならリンクにしない */
   linear?: string
   /** このターンからモデルが変わった。そのモデル名を小さく出す */
   model?: string
@@ -140,7 +140,7 @@ export function Message({ ts, text: raw, markdown, waiting, questions, resolved,
         {recovered && <RecoveredTag />}
         {thinking && <ThinkingBlock text={thinking} openAll={thinkingOpen} clipped={thinkingClipped} />}
         <div className="summary" ref={summaryRef}>
-          {/* 一言の中の URL・#123・PGR-123 はリンクにする（shared/refs.ts）。HTML 文字列は作らない */}
+          {/* 一言の中の URL・#123・ABC-123 はリンクにする（shared/refs.ts）。HTML 文字列は作らない */}
           {/* source に元の本文を渡すと、そこに無い番号はリンクにならない（#268。一言は LLM が書くので、
               本文に無い番号を書くことがある。押すと無関係の issue に飛ぶ） */}
           {/* 一言の中の画像は名前だけ（LLM が本文から写したもの）。画像そのものは下に元の本文から並べる（#321） */}

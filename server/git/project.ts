@@ -2,7 +2,7 @@
 //
 // #126 より前の `record.py` が書いた行には `project` も `remote` も無い。そのままだと絞り込みの候補に
 // 出せないので、worktree がまだ手元にあるうちに cwd から引く。手元で数えたところ、分からなかった
-// 28 セッションのうち 19 は cwd から引けた（`AnotherBall/persona-server` が 7 件など）。
+// 28 セッションのうち 19 は cwd から引けた（`other-org/repo-c` が 7 件など）。
 //
 // `remote` は見出しのリポジトリへのリンク（#212）の飛び先。origin の URL は `project` を出すために
 // どのみち読んでいるので、`owner/repo` を取ったあと**捨てずに一緒に載せる**。

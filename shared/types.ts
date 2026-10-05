@@ -1682,7 +1682,7 @@ export interface SettingsResponse {
   digest_model: string
   /** 実際に使うモデル（`digest_model` が空なら口の既定。openai には既定が無いので空） */
   model: string
-  /** Linear の workspace（URL の linear.app/<workspace>/ の部分）。一言の中の PGR-123 のような識別子のリンク先。空なら組まない */
+  /** Linear の workspace（URL の linear.app/<workspace>/ の部分）。一言の中の ABC-123 のような識別子のリンク先。空なら組まない */
   linear_workspace: string
   /** 許可を Jev で予想するか（#491。settings.json の `jev`。既定は入） */
   jev_on: boolean

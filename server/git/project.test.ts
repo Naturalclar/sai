@@ -29,11 +29,11 @@ class FakeGit implements Git {
 
 test('ProjectResolver: origin があれば owner/repo と URL、無ければ common-dir からリポジトリ名', async () => {
   const g = new FakeGit()
-  g.answers.set('/w/sai.git/dev-min remote get-url origin', 'git@github.com:Naturalclar/sai.git\n')
+  g.answers.set('/w/sai.git/dev-worktree-b remote get-url origin', 'git@github.com:Naturalclar/sai.git\n')
   g.answers.set('/w/local/wt rev-parse --git-common-dir', '/w/local.git\n')
   const r = new ProjectResolver(g)
   assert.deepEqual(
-    await r.resolve('/w/sai.git/dev-min'),
+    await r.resolve('/w/sai.git/dev-worktree-b'),
     { project: 'Naturalclar/sai', remote: 'https://github.com/Naturalclar/sai' },
     'remote から来た行と同じ形（候補が割れない）。URL も捨てない（#212）',
   )
@@ -109,7 +109,7 @@ test('ProjectResolver: 本物のリポジトリ（bare clone の worktree と普
     await git(src, 'commit', '-q', '--allow-empty', '-m', 'x')
     const bare = join(dir, 'myrepo.git')
     await run('git', ['clone', '-q', '--bare', src, bare])
-    const wt = join(bare, 'dev-min')
+    const wt = join(bare, 'dev-worktree-b')
     await git(bare, 'worktree', 'add', '-q', wt, 'main')
 
     const r = new ProjectResolver(new RealGit())

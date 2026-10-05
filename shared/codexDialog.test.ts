@@ -7,7 +7,7 @@ const COMMAND_SCREEN = [
   '› マージして',
   '',
   '',
-  '• 了解です。dev-chiki の実装をコミットし、最新の origin/main を取り込んで検証後、ローカル main をマージ済みコミットへ進めます。',
+  '• 了解です。dev-worktree-p の実装をコミットし、最新の origin/main を取り込んで検証後、ローカル main をマージ済みコミットへ進めます。',
   '',
   '• Running git add -A',
   '',
@@ -87,7 +87,7 @@ test('コマンドのない質問のダイアログ（見出しと選択肢だ�
     '  どのブランチから始めますか？',
     '',
     '› 1. main',
-    '  2. dev-min',
+    '  2. dev-worktree-b',
     '',
     '  Press enter to confirm or esc to cancel',
   ].join('\n')
@@ -119,7 +119,7 @@ test('鍵はカーソルの位置では変わらない（矢印で選び直し�
 })
 
 test('会話の引用の枠（`│` / `└`）で遡るのを止める（字下げがダイアログと同じ）', () => {
-  // 実機（prism-river の `gh pr create`）。枠で止めないと見出しが `│` になり、理由が説明に押し出される
+  // 実機（リポジトリ D の `gh pr create`）。枠で止めないと見出しが `│` になり、理由が説明に押し出される
   const screen = [
     '• Ran gh pr create --base main --title "docs: remove incidental metadata"',
     '  │',

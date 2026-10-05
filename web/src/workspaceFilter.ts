@@ -1,6 +1,6 @@
 // 新しいセッションの画面（#314）で、worktree を打った文字で絞る（#489）。DOM に依存しないので workspaceFilter.test.ts を node:test で回す。
 //
-// **fuzzy**（飛び飛びの文字でも当たる。`saimin` → `Naturalclar/sai · dev-min`）。⌘K の `filterPalette()` /
+// **fuzzy**（飛び飛びの文字でも当たる。`saimin` → `Naturalclar/sai · dev-mint`）。⌘K の `filterPalette()` /
 // `shared/search.ts` の `matchesAll()` は「語ごとの部分一致」のままにしてある（あちらの当たり方は変えない）。
 import { mergeHits } from '../../shared/search.ts'
 import type { Hit } from '../../shared/search.ts'

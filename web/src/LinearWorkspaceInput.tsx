@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { KeyboardEvent } from 'react'
 
 /**
- * ヘッダの「Linear の workspace」。一言の中の PGR-123 のような識別子を linear.app/<workspace>/issue/… に向けるための設定。
+ * ヘッダの「Linear の workspace」。一言の中の ABC-123 のような識別子を linear.app/<workspace>/issue/… に向けるための設定。
  * 値はサーバ（PUT /api/settings）。Enter か欄を離れたときに保存し、空にすれば「設定なし」（リンクにしない）
  */
 export function LinearWorkspaceInput({ value, busy, onChange }: { value: string; busy: boolean; onChange: (next: string) => void }) {
@@ -32,7 +32,7 @@ export function LinearWorkspaceInput({ value, busy, onChange }: { value: string;
       disabled={busy}
       placeholder="Linear の workspace"
       aria-label="Linear の workspace（linear.app/<workspace>/ の部分）"
-      title="一言の中の PGR-123 のような識別子を linear.app/<workspace>/issue/… に向ける。空ならリンクにしない"
+      title="一言の中の ABC-123 のような識別子を linear.app/<workspace>/issue/… に向ける。空ならリンクにしない"
       spellCheck={false}
       onFocus={() => {
         setDraft(value)

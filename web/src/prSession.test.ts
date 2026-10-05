@@ -13,7 +13,7 @@ test('prAuthorSession: 同じリポジトリで head と同じブランチの、
 })
 
 test('prAuthorSession: 別のリポジトリの同じブランチ名・ブランチが違う・材料が無いときは見つからない', () => {
-  const list = [s('a', 'Naturalclar/dotfiles', 'fix-x'), s('b', 'Naturalclar/sai', 'main')]
+  const list = [s('a', 'Naturalclar/repo-b', 'fix-x'), s('b', 'Naturalclar/sai', 'main')]
   assert.equal(prAuthorSession(list, 'Naturalclar/sai', 'fix-x'), null)
   assert.equal(prAuthorSession(list, '', 'fix-x'), null)
   assert.equal(prAuthorSession(list, 'Naturalclar/sai', ''), null)

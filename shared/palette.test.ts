@@ -14,8 +14,8 @@ function session(over: Partial<SessionSummary>): SessionSummary {
     agents: ['claude'],
     project: 'Naturalclar/sai',
     projects: ['Naturalclar/sai'],
-    repo: 'dev-kanade',
-    repos: ['dev-kanade'],
+    repo: 'dev-worktree-c',
+    repos: ['dev-worktree-c'],
     branch: 'main',
     branches: ['main'],
     host: '',
@@ -59,23 +59,23 @@ test('paletteItems: 先頭はフィード。ラベルは表示名 → タイト�
 })
 
 test('paletteItems: project が空なら repo（worktree 名）に落ちる', () => {
-  const [, item] = paletteItems([session({ project: '', repo: 'dev-min', branch: '' })])
-  assert.equal(item?.kind === 'session' ? item.hint : '', 'dev-min')
+  const [, item] = paletteItems([session({ project: '', repo: 'dev-worktree-b', branch: '' })])
+  assert.equal(item?.kind === 'session' ? item.hint : '', 'dev-worktree-b')
 })
 
 test('filterPalette: 空なら全部。語がすべて当たるものだけ残す', () => {
   const items = paletteItems([
-    session({ id: 'A@dev-kanade', repo: 'dev-kanade', title: '画像を添える' }),
-    session({ id: 'B@dev-min', repo: 'dev-min', project: 'Naturalclar/other', title: 'CI の整備' }),
+    session({ id: 'A@dev-worktree-c', repo: 'dev-worktree-c', title: '画像を添える' }),
+    session({ id: 'B@dev-worktree-b', repo: 'dev-worktree-b', project: 'Naturalclar/other', title: 'CI の整備' }),
   ])
   assert.equal(filterPalette(items, '').length, 3)
   assert.deepEqual(filterPalette(items, '画像').map((i) => i.kind), ['session'])
   // 複数語は AND
-  assert.deepEqual(filterPalette(items, 'sai 画像').map((i) => (i.kind === 'session' ? i.id : '')), ['A@dev-kanade'])
+  assert.deepEqual(filterPalette(items, 'sai 画像').map((i) => (i.kind === 'session' ? i.id : '')), ['A@dev-worktree-c'])
   assert.deepEqual(filterPalette(items, 'sai CI'), [], 'other/CI は sai に当たらない')
   // 大文字小文字は無視。ID でも当たる
-  assert.deepEqual(filterPalette(items, 'ci').map((i) => (i.kind === 'session' ? i.id : '')), ['B@dev-min'])
-  assert.deepEqual(filterPalette(items, 'B@dev').map((i) => (i.kind === 'session' ? i.id : '')), ['B@dev-min'])
+  assert.deepEqual(filterPalette(items, 'ci').map((i) => (i.kind === 'session' ? i.id : '')), ['B@dev-worktree-b'])
+  assert.deepEqual(filterPalette(items, 'B@dev').map((i) => (i.kind === 'session' ? i.id : '')), ['B@dev-worktree-b'])
   // フィードは日本語でも英語でも当たる
   assert.deepEqual(filterPalette(items, 'feed').map((i) => i.kind), ['feed'])
   assert.deepEqual(filterPalette(items, 'フィード').map((i) => i.kind), ['feed'])

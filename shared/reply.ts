@@ -33,7 +33,7 @@ export interface ReplyTarget {
   id: string
   /** 返信先のエージェント。入力欄でスキルを名指しする記法（Codex は `$`）にも使う */
   agent: string
-  /** worktree のディレクトリ名（`dev-alqa` / `main`）。GitHub のリポジトリではない（#151）。`@` の表記の元 */
+  /** worktree のディレクトリ名（`dev-worktree-e` / `main`）。GitHub のリポジトリではない（#151）。`@` の表記の元 */
   repo: string
   /**
    * どのリポジトリか（`Naturalclar/sai`）。分からなければ空（#301）。`repo` は worktree 名なので、
@@ -139,7 +139,7 @@ export function mergeReplyTargets(list: ReplyTarget[], feed: ReplyTarget[]): Rep
 
 /**
  * 検索語で worktree 名 / リポジトリ / ブランチ / タイトルを部分一致（大文字小文字は無視）。空なら全部。
- * リポジトリは `owner/repo` のまま見るので、`@persona` でも `@anotherball` でも当たる（#301）
+ * リポジトリは `owner/repo` のまま見るので、`@repo-c` でも `@other-org` でも当たる（#301）
  */
 export function filterReplyTargets(targets: ReplyTarget[], query: string): ReplyTarget[] {
   const q = query.toLowerCase()

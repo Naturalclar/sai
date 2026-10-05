@@ -76,7 +76,7 @@ interface Props {
   longOpen?: boolean
   /** 自分の表示名とアイコン（自分側のバブル） */
   profile?: Profile
-  /** Linear の workspace（設定）。一言の中の PGR-123 のリンク先。空ならリンクにしない */
+  /** Linear の workspace（設定）。一言の中の ABC-123 のリンク先。空ならリンクにしない */
   linear?: string
   /**
    * 検索から飛んできた当たりの `ts`（#230）。その発言まで送って光らせ、**最下部には送らない**。

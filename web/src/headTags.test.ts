@@ -52,9 +52,9 @@ test('別のマシンの印はサーバと違うときだけ（サーバの名�
 })
 
 test('headName: 表示名があればそれと #project、無ければ project だけ。project が分からなければ repo', () => {
-  assert.deepEqual(headName({ project: 'Naturalclar/sai', repo: 'dev-kanade', meta: { name: 'セッション C' } }), { name: 'セッション C', project: 'sai' })
-  assert.deepEqual(headName({ project: 'Naturalclar/sai', repo: 'dev-kanade', meta: undefined }), { name: '', project: 'sai' })
-  assert.deepEqual(headName({ project: '', repo: 'dev-kanade', meta: {} }), { name: '', project: 'dev-kanade' })
+  assert.deepEqual(headName({ project: 'Naturalclar/sai', repo: 'dev-worktree-c', meta: { name: 'セッション C' } }), { name: 'セッション C', project: 'sai' })
+  assert.deepEqual(headName({ project: 'Naturalclar/sai', repo: 'dev-worktree-c', meta: undefined }), { name: '', project: 'sai' })
+  assert.deepEqual(headName({ project: '', repo: 'dev-worktree-c', meta: {} }), { name: '', project: 'dev-worktree-c' })
 })
 
 test('コンテキスト: 閾値を超えたときだけ印を出し、狭い画面の 1 行目にも残す（#441）', () => {

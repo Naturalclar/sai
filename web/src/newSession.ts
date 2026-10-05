@@ -56,7 +56,7 @@ export function workspaceChoices(sessions: readonly SessionSummary[], selfHost: 
 }
 
 /**
- * 選択肢の見出し（`Naturalclar/sai · dev-shaka（main）`）。どのリポジトリか分からなければ worktree 名だけ。
+ * 選択肢の見出し（`Naturalclar/sai · dev-worktree-d（main）`）。どのリポジトリか分からなければ worktree 名だけ。
  * 記録の無い兄弟 worktree（#319）には `· 記録なし` を添える（まだそこでエージェントを動かしていない）
  */
 export function workspaceLabel(w: Workspace): string {

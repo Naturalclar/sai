@@ -20,7 +20,7 @@ test('#123 / PR #123 は remote の issues に。remote が無ければ文字の
 })
 
 test('owner/repo#123 は remote に関係なくそのリポジトリへ', () => {
-  assert.deepEqual(linkifyRefs('acme/kanban#12 を見て', {}), [a('https://github.com/acme/kanban/issues/12', 'acme/kanban#12'), t(' を見て')])
+  assert.deepEqual(linkifyRefs('acme/repo-a#12 を見て', {}), [a('https://github.com/acme/repo-a/issues/12', 'acme/repo-a#12'), t(' を見て')])
 })
 
 test('参照でないものは触らない: URL の途中の #、&#123;、a#1、code の中', () => {
@@ -45,17 +45,17 @@ test('太字の中の番号もリンクになる', () => {
 })
 
 test('Linear の識別子は workspace があるときだけ。SHA-256 のような語は除く', () => {
-  assert.deepEqual(linkifyRefs('PGR-10891 を直した', { linear: 'acme' }), [a('https://linear.app/acme/issue/PGR-10891', 'PGR-10891'), t(' を直した')])
-  assert.deepEqual(linkifyRefs('PGR-10891 を直した', {}), [t('PGR-10891 を直した')])
+  assert.deepEqual(linkifyRefs('ABC-10891 を直した', { linear: 'acme' }), [a('https://linear.app/acme/issue/ABC-10891', 'ABC-10891'), t(' を直した')])
+  assert.deepEqual(linkifyRefs('ABC-10891 を直した', {}), [t('ABC-10891 を直した')])
   assert.deepEqual(linkifyRefs('SHA-256 と UTF-8 と CVE-2024-1234 と ABC-1-2', { linear: 'acme' }), [t('SHA-256 と UTF-8 と CVE-2024-1234 と ABC-1-2')])
-  assert.deepEqual(linkifyRefs('xPGR-1 pgr-1 PGR-1x', { linear: 'acme' }), [t('xPGR-1 pgr-1 PGR-1x')], '前後に英数字、小文字は除く')
+  assert.deepEqual(linkifyRefs('xABC-1 abc-1 ABC-1x', { linear: 'acme' }), [t('xABC-1 abc-1 ABC-1x')], '前後に英数字、小文字は除く')
 })
 
 test('GitHub と Linear と URL が混ざる', () => {
-  const out = linkifyRefs('#3 と PGR-7 と https://x.test/ok', { ...GH, linear: 'acme' })
+  const out = linkifyRefs('#3 と ABC-7 と https://x.test/ok', { ...GH, linear: 'acme' })
   assert.deepEqual(out.filter((n) => n.kind === 'link').map((n) => (n.kind === 'link' ? n.href : '')), [
     'https://github.com/Naturalclar/sai/issues/3',
-    'https://linear.app/acme/issue/PGR-7',
+    'https://linear.app/acme/issue/ABC-7',
     'https://x.test/ok',
   ])
 })
@@ -92,7 +92,7 @@ test('本文の #1234 は一言の #123 の裏付けにしない（前方一致�
 
 test('owner/repo#123 は source に関係なくリンク（行き先を自分で名乗っている）', () => {
   const ctx = { ...GH, source: '番号の無い本文' }
-  assert.deepEqual(linkifyRefs('acme/kanban#7 を見る', ctx), [a('https://github.com/acme/kanban/issues/7', 'acme/kanban#7'), t(' を見る')])
+  assert.deepEqual(linkifyRefs('acme/repo-a#7 を見る', ctx), [a('https://github.com/acme/repo-a/issues/7', 'acme/repo-a#7'), t(' を見る')])
 })
 
 test('本文の owner/repo#123 は、その owner/repo が remote と同じときだけ裸の #123 を裏付ける', () => {
@@ -100,14 +100,14 @@ test('本文の owner/repo#123 は、その owner/repo が remote と同じと�
   const same = { ...GH, source: 'Naturalclar/sai#256 をマージ' }
   assert.deepEqual(linkifyRefs('#256 マージ', same), [a('https://github.com/Naturalclar/sai/issues/256', '#256'), t(' マージ')])
   // 別のリポジトリの番号は、このリポジトリの番号として飛ばさない
-  const other = { ...GH, source: 'acme/kanban#256 を見た' }
+  const other = { ...GH, source: 'acme/repo-a#256 を見た' }
   assert.deepEqual(linkifyRefs('#256 マージ', other), [t('#256 マージ')])
 })
 
 test('Linear の識別子も同じ規則（本文に無ければ文字のまま）', () => {
-  const ctx = { remote: GH.remote, linear: 'acme', source: 'PGR-10891 を直した' }
-  assert.deepEqual(linkifyRefs('PGR-10891 完了', ctx), [a('https://linear.app/acme/issue/PGR-10891', 'PGR-10891'), t(' 完了')])
-  assert.deepEqual(linkifyRefs('PGR-99999 完了', ctx), [t('PGR-99999 完了')])
+  const ctx = { remote: GH.remote, linear: 'acme', source: 'ABC-10891 を直した' }
+  assert.deepEqual(linkifyRefs('ABC-10891 完了', ctx), [a('https://linear.app/acme/issue/ABC-10891', 'ABC-10891'), t(' 完了')])
+  assert.deepEqual(linkifyRefs('ABC-99999 完了', ctx), [t('ABC-99999 完了')])
 })
 
 test('URL はそのまま（source に無くても切らない）', () => {
@@ -127,7 +127,7 @@ test('本文が URL で番号を出していれば裏付けになる（エージ
 })
 
 test('別のリポジトリの URL は、このリポジトリの番号の裏付けにしない', () => {
-  // 実データにあった形: dotfiles の PR 番号が sai の issue として貼られていた
-  const ctx = { ...GH, source: 'https://github.com/Naturalclar/dotfiles/pull/355 を出した' }
+  // 実データにあった形: リポジトリ B の PR 番号が sai の issue として貼られていた
+  const ctx = { ...GH, source: 'https://github.com/Naturalclar/repo-b/pull/355 を出した' }
   assert.deepEqual(linkifyRefs('PR #355 開いた', ctx), [t('PR #355 開いた')])
 })

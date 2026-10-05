@@ -134,6 +134,42 @@ SAIから開始したCodex turnの待機もJSONLにはせず、`CodexAppServer` 
 
 「アーカイブ済みか」は `archived: true` のような印ではなく、サーバが応答時に **`archived_at >= そのセッションの最後の行の ts`** で決める。アーカイブしたあとに端末でそのセッションを続けると最後の行が `archived_at` を追い越すので、メタを書き換えずに自動で一覧に戻る。「戻す」は `archived_at` を消すだけ。`synth`（時間で合成した ID）のセッションもアーカイブできる（#248。合成 ID は `record.py` が記録時に決めて行に書き込むので、集計の窓でずれない）。返信できないのは別の話（`replyBlockedReason()` の `synth`）。
 
+## 派生のファイル（#703）
+
+`~/.agent-feed/` には、記録（`YYYY-MM-DD.jsonl`）のほかに SAI が自分で書くファイルがある。どれも**派生**で、消しても記録は壊れない（消えるのはその機能の状態だけ）。上の節にあるもの（`session-meta.json`・`profile.json`・`read-marks.json`・`suggestions.json`・`session-icons/`）は省く。調べるときは使い捨てのスクリプトを書く前に `pnpm feed`（[使い方](internals/tooling.md#記録を調べるpnpm-feed703)）を見る。
+
+鍵の「エンティティ ID」は `<セッション>@<リポジトリ>`、「行の鍵」は `<エンティティ ID>|<行の ts>`。
+
+| ファイル | 形 | 何が入っているか |
+| --- | --- | --- |
+| `turn-usage.jsonl` | 追記。1 行 = SAI から回した 1 ターン | `ts`（CLI が終わった時刻。UTC）・`id`（エンティティ ID）・`model`・`input_tokens` / `output_tokens` / `cache_read_input_tokens` / `cache_creation_input_tokens`・`duration_ms`・`num_turns`・`denials`・`is_error`・`cost_usd`・`compact`（要約だけのターンに `true`） |
+| `agent-messages.json` | 1 つの JSON | `messages`: 送った記録の配列（`message_id`・`from`・`to`（どちらもエンティティ ID）・`text`（見出しを付ける前の本文）・`since`（送った時刻）・`handed_at`（返答を送り元に渡した時刻）・`wake`・`turn`・`url`）。古いものから 500 件まで。`sends`: 送り元 → そのターンで送った回数（`turn`・`count`・`read`）。`origins`: メッセージで回っているセッション → その `message_id`。`stopped`: 人が送信を止めた送り元。`followups`: 返答のバブルの下から人が送った返信（#700。`id`・`from`・`to`・`text`・`at`・`anchor`。メッセージではないので `messages` には入らない） |
+| `digest.jsonl` | 追記。1 行 = 1 つの一言 | `key`（行の鍵）・`persona`・`summary`（空なら作っていない）・`model`・`ts`（作った時刻）・`next_ask`（次に送る文面の案）・`retried`・`issues`・`skipped`（わざと作らなかった理由）・`judge`（手元のモデルの判定） |
+| `digest-feedback.jsonl` | 追記。1 行 = 1 つの合図 | `key`（行の鍵）・`summary`（そのとき出ていた一言）・`model`・`persona`・`reason`（「変？」の理由か、`opened` = 詳細を開いた・`next_ask_accepted` = 案を受け取った）・`next_ask`・`note`・`ts` |
+| `approvals.jsonl` | 追記。1 行 = 許可に答えた 1 回 | `ts`・`id`（エンティティ ID）・`cwd`・`tool`・`rule`（「常に許可」のルールの表記）・`by`（`human` / `jev`）・`behavior`（`allow` / `deny`）・`remember`・`waited_s`。コマンドの全文は書かない |
+| `approvals.json` | 配列 | いま預かっている許可・質問（`approval` と、まだ渡していない `answer`）。サーバの立て直しをまたぐためのもの |
+| `replying.json` | エンティティ ID → 1 件 | SAI が回している最中の返信: `pid`・`since`（起動した時刻）・`text`（送った文）・`permission_mode`・`compact`。**終わると消える**（履歴ではない） |
+| `reply-queue.json` | エンティティ ID → `items` | 処理中に預かった返信: `queue_id`・`text`・`since`・`attachments`・`url`・`origin`。`paused` は自動で回さない理由 |
+| `loops.json` | エンティティ ID → 1 件 | 組んだループの状態（`goal`・`until`・`max_rounds`・`round`・`status` など。`shared/loops.ts` の `LoopState`） |
+| `reply.log` | 追記の文字のログ | SAI が起こした子の stdout / stderr と、SAI が足す 1 行（`--- <時刻> <エンティティ ID> <何をしたか>`） |
+| `digest.log` | 追記の文字のログ | 一言を作る子の出力と、諦めた・作り直した理由 |
+| `usage-claude.json` | 1 つの JSON | `statusline.py` が書く Claude の使用率（`v`・`ts`・`host`・`session`・`model`・`rate_limits`） |
+| `mcp-sends.json` / `opencode-serve.json` / `icon-history.json` / `agent-token` | — | tailnet の MCP から送った時刻・SAI が起こした `opencode serve` の居場所・アイコンの履歴・エージェント用の口のトークン（**中身を出力に写さない**） |
+| `attachments/` / `thumbs/` / `icon-history/` | ディレクトリ | 返信に添えたファイル・画像の軽い版・アイコンの履歴の画像 |
+
+### 間違えやすい所
+
+- **`turn-usage.jsonl` の `cost_usd` はそのセッションの積み上げ**で、1 ターンぶんではない（2026-09-19 05:00Z より前の行だけは 1 ターンぶん）。そのまま足すと何倍にもなる（#579 / #602 で実際に約 20 倍にした）。1 ターンぶんは同じ `id` の前の行との差で、`shared/turnUsage.ts` の `turnCosts()` が出す。**差を取ってから日付で絞る**（絞ってから差を取ると、範囲の最初の行にそれまでの積み上げが乗る）。トークン（`*_tokens`）は 1 ターンぶんなので差にしない
+- **`turn-usage.jsonl` にあるのは SAI から回したターンだけ**（端末で打ったターンは無い）。全体の使用率は `usage-claude.json` と画面の `#/usage`
+- **`user_text` が人の入力とは限らない。** 自動の要約が入ったターンの行は要約の文（`This session is being continued from a previous conversation…`）に置き換わっていて（#626 より前に書かれた行）、別のセッションから届いたメッセージは `【SAI】` で始まり、待たなかった返答は `【SAI 返答】` の塊として頭に足されている。人の入力を数えるときは `server/tools/feedRead.ts` の `humanPrompt()` を通す（#609 で要約を「長い入力」に数えた）
+- **`user_text` は 2026-09-13（#360）より前の行では 2,000 字で切れている**（いまは 20,000 字。切ったら行に `clipped` が付く）
+- **ターン完了は `event` の名前でなく `eventKind(event, text) === 'turn'` で見る**（`Stop` / `agent-turn-complete` / `session.idle`。`Notification` は本文で `waiting` と `idle` に分かれる）
+- **エンティティ ID は自分で組み立てず `entityId()` を通す**（セッションが空の行は `unknown-<日付>`）。日付は `Asia/Tokyo` で切る（行の `ts` は `+09:00` 付き、`turn-usage.jsonl` と `agent-messages.json` は UTC の `Z`。文字列で比べない）
+- **`reply.log` には stream-json が混ざる**（入力の口を開けた `claude -p` の stdout。1 行が数万字になる）。並行する返信の出力も混ざるので、`--- ` で始まる SAI の行だけを拾うか、`session_id` まで見る。大きい（100 MB を超える）ので丸ごと読まない
+- **`replying.json` は「いま」だけ**。過去に何を送ったかは記録の `UserPromptSubmit` の行か `reply.log` の `--- ` の行で見る
+- 記録のファイルは `YYYY-MM-DD.jsonl` のほかに `YYYY-MM-DD.<host>.jsonl` がある（#113）。日付から名前を組み立てると別のマシンのぶんが落ちる
+- 置き場の `*.jsonl` のうち、名前が日付で始まるものだけが記録（`turn-usage.jsonl` などを行として読まない）
+
 ## 履歴はリポジトリに入れない
 
 `~/.agent-feed/` はリポジトリの外。作業内容の断片が入るので、うっかりコミットされない場所に置く。`.gitignore` の `*.jsonl` / `.agent-feed/` / `sessions/` は、手元にコピーしたときの保険として最初のコミットから入っている。

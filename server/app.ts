@@ -7,7 +7,7 @@ import { basename, extname, join, resolve, sep } from 'node:path'
 import { historyIconUrl, ICON_MAX_BYTES, ICON_MIME, iconUrl, sniffImageType } from '../shared/icon.ts'
 import type { IconType } from '../shared/icon.ts'
 import { ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_COUNT, ATTACHMENTS_DIR, isImageAttachmentPath, QUEUE_IMAGE_NOTE, withAttachments } from '../shared/attachments.ts'
-import { mergeMeta } from '../shared/meta.ts'
+import { isArchivedAt, mergeMeta } from '../shared/meta.ts'
 import { mergeProfile, PROFILE_ICON_ID, profileIconUrl } from '../shared/profile.ts'
 import { isPersonaId } from '../shared/persona.ts'
 import { canSteer, replyBlockedReason, replyFailureText } from '../shared/reply.ts'
@@ -1197,7 +1197,7 @@ export function createApp(
         const out: SessionSummary = { ...s, terminal: await terminalOf(s, { soft: true }) }
         if (m) {
           out.meta = m
-          if (!!m.archived_at && Date.parse(m.archived_at) >= Date.parse(s.end)) out.archived = true
+          if (isArchivedAt(m, s.end)) out.archived = true
         }
         if (icon) out.icon = iconUrl(s.id, icon.version)
         const n = unread.get(s.id)

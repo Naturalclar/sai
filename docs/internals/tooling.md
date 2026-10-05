@@ -47,6 +47,34 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - **口ごとの内訳は目安**。口は「その子を起こす走査を最初に始めた要求」に付く（`AsyncLocalStorage`）。走査は要求をまたいで 1 本に絞ってあるので、一覧と詳細が同時に来ると先に着いた方に全部付く。要求の中で始めたタイマーから後で起きた子も、その口に付く。**前後を比べるときは口ごとではなく合計で見る**。
 
 
+## 記録を調べる（`pnpm feed`。#703）
+
+`~/.agent-feed` を調べるときに、使い捨ての `python3` / `jq` を書く前に使う道具。**読むだけ**（置き場に何も書かない）で、置き場は `AGENT_FEED_DIR`（無ければ `~/.agent-feed`）。ファイルの形と間違えやすい所は [docs/data.md](../data.md#派生のファイル703)。
+
+```
+pnpm -s feed rows <セッション>           # あるセッションの最近の行（時刻・種類・入力と返答の頭）
+pnpm -s feed messages                    # 送ったメッセージと、返答が届いたか（--session で送り元・宛先を絞る）
+pnpm -s feed usage                       # セッション別の使用量。--by day で日別。費用は前の行との差
+node --disable-warning=ExperimentalWarning server/tools/feed.ts rows <セッション>   # pnpm を通さない形（別の cwd からはこのパスを絶対で）
+```
+
+- **出力は既定で絞る**（結果は呼んだ側の文脈に残り続けるため）: 10 行・直近 7 日・入力と返答は頭だけ。見出しに「10 / 159 行（--all で全部）」と書く。広げるのは `-n <数>` / `--all`（全部）/ `--days <数>` / `--from` `--to`（`YYYY-MM-DD`。`Asia/Tokyo`）/ `--full`（切らない）。機械向けは `--json`。**そのコマンドで効かないオプション（`usage --session` など）・一緒に効かない組み合わせ（`--days` と `--from`、`--all` と `-n`）・存在しない日付はエラー（終了コード 2）**で、黙って無視しない。
+- **セッションの指定**は ID・表示名・worktree 名・呼び名の完全一致（`sai_send` の宛先と同じ `resolveTarget()`。#625）で、ちょうど 1 つのときだけ読む。足してあるのは 2 つ: アーカイブしていない中で決まればそれを採る・名前で当たらなければ ID の頭（4 字以上）で引く。**決まらなければ読まずに候補を出して終了コード 1**（使い方の誤りは 2）。
+- **`rows` の入力の欄は人の打った文とは限らない**ので印を付ける: 要約の文は `[要約]`、頭に足した返答の塊は外して `[返答 N 件]`、届いたメッセージは本文の `【SAI】` のまま（`--full` でも同じ）。`--json` は 1 行ごとに `prompt_kind`（`human` / `compact` / `message` / `empty`）と `handed`（足されていた返答の数）を添える。数えるのは `prompt_kind: "human"` だけ。`--json --full` の `user_text` は記録のまま。
+- **`messages` の返答は記録の行で見る**。行があれば時刻と頭、無ければ「行なし」で、送り元に渡してあれば「行なし（… に送り元へ渡した）」（`--json` は `state`: `replied` / `handed` / `none`）。**「行なし」は未着とは限らない**: 完了の行が落ちて transcript から補った返答（#614）は JSONL に書かれないので、画面には出ていてもここでは見えない。
+- `usage` が数えるのは `turn-usage.jsonl`（SAI から回したターンだけ）。画面の `#/usage` で足りるときはそちらを見る。絞ったときは「小計（上の N）」と「合計（全 N）」を分けて出す（`--json` は `shown_sum` と `sum`）。呼び名は表示名で足りればそれで出し、付いていないセッションがあるときだけ題名のために範囲の記録を読む。
+- **読み方は `server/tools/feedRead.ts` の関数**で、その場かぎりの問いはこれを import して書く（サブコマンドにはしない）: `readRows(dir, range)`（`<host>` 付きも・SAI 自身の雑音は落とす）/ `dateRange()` / `rowEntity()` / `isTurn()` / `pairTurns()`（入力の行と完了の行の対応。`missing` = 完了の行が落ちた、`empty` = 本文が空、`open` = まだ来ていない）/ `promptKind()` と `humanPrompt()`（要約・届いたメッセージを人の入力から外す）/ `readTurnUsage()` → `usageRows()` → `usageTotals()` / `readAgentMessages()` → `messageReplies()` / `sessionsOf()` → `resolveSession()`。
+
+  ```
+  node --disable-warning=ExperimentalWarning --input-type=module -e "
+  import { feedDir, dateRange, readRows, pairTurns } from './server/tools/feedRead.ts'
+  const pairs = pairTurns(await readRows(feedDir(), dateRange({ days: 3 })))
+  console.log(pairs.filter((p) => p.state === 'missing').length)"
+  ```
+
+- **読み方を新しく決めない・写さない**。判定は `shared/` のもの（`entityId()`・`eventKind()`・`localDate()`・`isCompactSummaryText()`・`turnCosts()`・`agentReplyRows()`・`resolveTarget()`・`isArchivedAt()`・入力の行を辿る `promptTracker()`）、ファイルの読み方はサーバのもの（`FeedStore.rowsOn()`・`MetaStore`・`parseTurnUsageLog()`・`isMessage()`）をそのまま呼ぶ。正本を TypeScript に置いたのはこのため（→ [経緯](../history/tooling.md#記録を調べる道具を-typescript-に置いた703)）。
+- テストは `server/tools/feed.test.ts`（`pnpm test` に入る。一時ディレクトリの記録で回し、本物の置き場は触らない）。「費用を積み上げのまま足す」「要約の文を人の入力に数える」の 2 つを、間違えない例として入れてある。
+
 ## テストを単体で回す
 
 ```

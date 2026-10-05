@@ -2,9 +2,9 @@
 // SAI サーバが同じ規則を見る。DOM にもファイルにも触らないので shared/agentMessages.test.ts で回す
 import { isCompactSummaryText } from './compactSummary.ts'
 import { entityId } from './entity.ts'
-import { eventKind } from './events.ts'
 import { isLoopPrompt } from './loops.ts'
 import { replyBlockedReason } from './reply.ts'
+import { promptTracker } from './turnPrompts.ts'
 import type { Agent, AgentSessionEntry, FeedRow, SessionSummary, UsageResponse, UsageWindow } from './types.ts'
 
 /**
@@ -77,24 +77,13 @@ export function deliveredId(userText: string | undefined): string {
  *   `入力待ち` が鳴らない道（`-p` の返信）で落ちたターンは、落ちた返答を補った行（`rowsNow()`。#614）がターン完了として見出しを使う
  */
 export function deliveryMatcher(): { headOf: (row: FeedRow) => string } {
-  const prompted = new Map<string, string>()
+  // 入力の行を覚える・捨てる規則は `promptTracker()`（記録を調べる道具の `pairTurns()` と同じもの。#703）
+  const tracker = promptTracker()
   return {
     headOf(row) {
-      const kind = eventKind(row.event, row.text)
-      if (kind === 'waiting' || kind === 'other') return ''
-      const entity = entityId(row.session ?? '', row.repo ?? '', String(row.ts ?? ''))
-      if (kind === 'idle' || kind === 'end') {
-        prompted.delete(entity)
-        return ''
-      }
-      if (kind === 'resume') {
-        // 本文の無い合図だけの行（待ちのあとの再開）は、入力の行ではないので前の見出しを消さない
-        if (row.user_text?.trim()) prompted.set(entity, row.user_text)
-        return ''
-      }
-      const before = prompted.get(entity) ?? ''
-      prompted.delete(entity)
-      return isCompactSummaryText(row.user_text) ? before : (row.user_text ?? '')
+      const step = tracker.step(row)
+      if (!step?.turn) return ''
+      return isCompactSummaryText(row.user_text) ? (step.prompt?.user_text ?? '') : (row.user_text ?? '')
     },
   }
 }

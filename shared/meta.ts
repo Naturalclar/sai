@@ -109,6 +109,14 @@ export function normalizeMeta(input: unknown): { meta: SessionMeta; error: strin
   return mergeMeta({}, input)
 }
 
+/**
+ * アーカイブ済みか。`archived_at >= そのセッションの最後の行の ts`（アーカイブ後に行が増えると、メタを書き換えずに戻る）。
+ * サーバの応答と、記録を調べる道具（`server/tools/feedRead.ts`）が同じこの 1 つを見る
+ */
+export function isArchivedAt(meta: Pick<SessionMeta, 'archived_at'> | undefined, end: string): boolean {
+  return !!meta?.archived_at && Date.parse(meta.archived_at) >= Date.parse(end)
+}
+
 /** 何も付いていないか */
 export function isEmptyMeta(meta: SessionMeta | undefined): boolean {
   return !meta || (!meta.name && !meta.archived_at && !meta.model && !meta.persona && !meta.permission_mode && !meta.digest_off && !meta.continued_from && !meta.continued_to && !meta.continued_at)

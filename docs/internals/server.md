@@ -102,7 +102,7 @@ C-c / SIGTERM では必ず終わる（#296。`main.ts` の `shutdown()`）。
 - `ClaudeAuth.check()` が `claude auth status --json` を起こし、`parseAuthStatus()` が `loggedIn` と `authMethod` だけを読む（`email` / `orgName` などは持たない）。終了コードは見ず、stdout の JSON を読む。`claude` が無い・古い・時間切れ（`AUTH_TIMEOUT_MS` = 5 秒）・壊れた出力は `undefined`（分からない）で、前の結果も捨てる
 - 走っている 1 本を待ち、`AUTH_CACHE_MS`（5 秒）の間は聞き直さない（返信がまとめて失敗しても 1 回）。`peek()` は前の結果を返すだけで `claude` を起こさない
 - 聞くのは 3 か所だけ: `main.ts` の起動時、`app.ts` の `withAuth()`（Claude の返信が失敗したとき）、`POST /api/claude-auth/check`（画面の「確かめ直す」。同一オリジンのみ）
-- `withAuth()` は `replyingOf()` の結果を受け、**プロセスが非 0 で終わった失敗**（`code` があり `turn_error` でない）のうち、エージェントが Claude か分からないもの（行の無い新しいセッション）を見る。失敗 1 つ（`<id>` と `since`）につき 1 回だけ `check()` を待ち、`loggedIn: false` なら `failed.logged_out: true` を付ける。**失敗が最初に見えた応答で待つ**のは、画面（`useReply`）が失敗を 1 回しか読まないため
+- `withAuth()` は `replyingOf()` の結果を受け、**プロセスが非 0 で終わった失敗**（`code` があり `turn_error` でない）のうち、Claude のものを見る。Claude かどうかは起こしたコマンド（`startedBin`。行の無い新しいセッションもこれで分かる）、無ければセッションの行で決め、どちらでも分からなければ聞かない（Codex・OpenCode の失敗に Claude のログイン切れと出さない）。`revWith()` は `logged_out` も混ぜる。失敗 1 つ（`<id>` と `since`）につき 1 回だけ `check()` を待ち、`loggedIn: false` なら `failed.logged_out: true` を付ける。**失敗が最初に見えた応答で待つ**のは、画面（`useReply`）が失敗を 1 回しか読まないため
 - 一覧は `peek()` が `loggedIn: false` のときだけ `claude_logged_out: true` を載せ、`rev` に混ぜる。画面は `web/src/ClaudeAuthBanner.tsx`（文は `claudeAuthNote.ts`）
 - 本物を渡すのは `main.ts` だけで、`createApp` の既定は `NoClaudeAuth`（聞かない）
 

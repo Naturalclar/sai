@@ -133,7 +133,7 @@ test('claude_logged_out: Claude の返信が失敗したら 1 回だけ聞き、
   }
 })
 
-test('claude_logged_out: Codex の失敗・届かなかった返信・ターンのエラーでは聞かない。行の無いセッションの失敗は聞く', async () => {
+test('claude_logged_out: Codex の失敗・届かなかった返信・ターンのエラー・エージェントが分からない失敗では聞かない', async () => {
   const auth = new FakeAuth({ loggedIn: false, method: 'none' })
   const base = await start(rows(), auth)
   try {
@@ -148,11 +148,11 @@ test('claude_logged_out: Codex の失敗・届かなかった返信・ターン�
     replying = { 'S1@r': failed('2026-10-05T01:00:00.000Z', { turn_error: true }) }
     await sessions(base)
     assert.equal(auth.asked, 0)
-    // 新しいセッション（行がまだ無い）は Claude かもしれない
+    // 起こしたコマンドも行も無い（どのエージェントか分からない）失敗では聞かない。Codex の失敗に Claude のログイン切れと出さない
     replying = { 'NEW@r': failed('2026-10-05T01:00:00.000Z') }
     list = await sessions(base)
-    assert.equal(auth.asked, 1)
-    assert.equal(list.replying['NEW@r']?.failed?.logged_out, true)
+    assert.equal(auth.asked, 0)
+    assert.equal(list.replying['NEW@r']?.failed?.logged_out, undefined)
   } finally {
     replying = {}
   }

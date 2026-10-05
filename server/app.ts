@@ -423,7 +423,8 @@ export function revWith(rev: string, replying: ReplyingMap, approvalsKey = '', b
   // 失敗には終了コードが無いこともある（端末・queue で届かなかった。#329）ので、有無そのものも混ぜる
   for (const id of ids) {
     const failed = replying[id]!.failed
-    h.update(`${id}\n${replying[id]!.since}\n${failed ? `failed:${failed.code ?? ''}` : ''}\n`)
+    // ログイン切れの印（#685）も混ぜる（付いた・外れたを詳細とフィードにも伝える）
+    h.update(`${id}\n${replying[id]!.since}\n${failed ? `failed:${failed.code ?? ''}${failed.logged_out ? ':out' : ''}` : ''}\n`)
   }
   h.update(`approvals:${approvalsKey}`)
   // ビルドが古いかが変わったら画面に伝えたい（画面は rev が同じなら描き直さない）
@@ -610,17 +611,20 @@ export function createApp(
   // ログインを聞き直した失敗（`<id>\n<since>` → その問い合わせ）。同じ失敗で何度も `claude` を起こさない。
   // 問い合わせそのものを持つのは、同時に来た応答（一覧と詳細）の後の方も答えを待つため（待たないと、印の無い失敗を先に返す）
   const authAsked = new Map<string, Promise<unknown>>()
+  // 返信・新しいセッションで起こしたコマンド（エンティティ ID → `claude` / `codex` / `opencode`）。立て直すと忘れる（そのときはセッションの行で決める）
+  const startedBin = new Map<string, string>()
   /**
    * Claude の返信が失敗していたら、ログインが切れていないかを 1 回だけ聞く（#685）。切れていると分かったら、その失敗に印を付ける
    * （画面は「ログインが切れています」と出す）。実際に切れたときの `claude -p` の文言は分からないので、文言には頼らない。
-   * 見るのはプロセスが非 0 で終わった失敗だけ（届かなかった・ターンのエラーは別の理由）。エージェントが分からないもの
-   * （行の無い新しいセッション）は Claude かもしれないので聞く
+   * 見るのはプロセスが非 0 で終わった失敗だけ（届かなかった・ターンのエラーは別の理由）。Claude かどうかは、起こしたコマンド
+   * （`startedBin`。行の無い新しいセッションもこれで分かる）、無ければセッションの行で決める。**どちらでも分からなければ聞かない**
+   * （Codex・OpenCode の失敗に「Claude のログインが切れています」と出さない）
    */
   const withAuth = async (replying: ReplyingMap, sessions: readonly SessionSummary[]): Promise<ReplyingMap> => {
     const failed = Object.entries(replying).filter(([id, r]) => {
       if (!r.failed || r.failed.code === undefined || r.failed.turn_error) return false
-      const agent = sessions.find((s) => s.id === id)?.agent
-      return agent === undefined || agent === 'claude'
+      const bin = startedBin.get(id)
+      return bin !== undefined ? bin === 'claude' : sessions.find((s) => s.id === id)?.agent === 'claude'
     })
     const keys = new Set(failed.map(([id, r]) => `${id}\n${r.since}`))
     for (const key of authAsked.keys()) if (!keys.has(key)) authAsked.delete(key)
@@ -1787,6 +1791,7 @@ export function createApp(
     const via = { url: selfUrl(req), entity: id, tokenFile: agentTokenPath }
     const cmd = newSessionCommand(session, text, cwd, process.env, via, meta.model, meta.permission_mode, meta.name)
     try {
+      startedBin.set(id, cmd.bin)
       await run.start(id, cmd, () => {
         approvals.drop(id)
         void drain(id)
@@ -2199,6 +2204,7 @@ export function createApp(
     try {
       // プロセスが終わったら、そのセッションの答え待ちは deny で片付ける（もう誰も答えを取りに来ない）。
       // 預かっている返信があれば続けて回す（#305）
+      startedBin.set(id, cmd.bin)
       await run.start(id, cmd, () => {
         approvals.drop(id)
         void drain(id)

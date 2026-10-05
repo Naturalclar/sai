@@ -35,6 +35,9 @@
   .msg .summary .line a { text-decoration: underline; text-underline-offset: 2px; }
   .banner { flex: none; padding: 6px 18px; font-size: 12px; color: var(--synth); background: color-mix(in srgb, var(--synth) 14%, transparent); border-bottom: 1px solid var(--line); }
   .banner code { font-family: var(--mono); background: var(--chip); padding: 1px 5px; border-radius: 4px; color: var(--ink); }
+  /* Claude のログイン切れ（#685）。「確かめ直す」と結果を同じ行に置く */
+  .banner.auth .linkish { margin-left: 10px; font-size: inherit; }
+  .banner.auth .note { margin-left: 8px; color: var(--muted); }
   header .github:hover { color: var(--ink); text-decoration: none; }
   header .sidebar-toggle { display: inline-flex; margin-left: -6px; padding: 4px; background: transparent; border: 0; border-radius: 6px; color: var(--muted); cursor: pointer; }
   header .sidebar-toggle:hover { background: var(--hover); color: var(--ink); }

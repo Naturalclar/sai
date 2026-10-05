@@ -44,6 +44,7 @@ test('startStatus: 最初の行が届いたら移る。届く前に落ちたら�
   assert.deepEqual(startStatus(false, running, since, since + 2000), { kind: 'running' })
   assert.deepEqual(startStatus(true, running, since, since + 2000), { kind: 'arrived' }, '届いたらプロセスがまだ動いていても移る')
   assert.deepEqual(startStatus(false, { ...running, failed: { code: 1, tail: 'Invalid API key' } }, since, since + 5000), { kind: 'failed', message: 'Invalid API key' })
+  assert.match((startStatus(false, { ...running, failed: { code: 1, tail: 'boom', logged_out: true } }, since, since + 5000) as { message: string }).message, /^Claude のログインが切れています.*boom$/, 'ログイン切れ（#685）は理由を先に出す')
   assert.deepEqual(startStatus(false, { ...running, failed: { code: 2, tail: '' } }, since, since + 5000), { kind: 'failed', message: '終了コード 2' })
   // 送った直後はまだ一覧に replying が載っていない（ポーリング待ち）ので、落ちたとは決めない
   assert.deepEqual(startStatus(false, undefined, since, since + 3000), { kind: 'running' })

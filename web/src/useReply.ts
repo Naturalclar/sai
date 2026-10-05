@@ -33,12 +33,17 @@ const GRACE_MS = 1000
 
 export const ENDED_WITHOUT_ROW = '返信は終わったが記録が増えなかった（~/.agent-feed/reply.log を見る）'
 
+/** Claude のログインが切れているときの文（#685。バナーと返信の失敗で同じ文を出す） */
+export const CLAUDE_LOGGED_OUT = 'Claude のログインが切れています。Mac の端末で claude auth login を打ってから送り直してください'
+
 /**
  * サーバが「返信が失敗した」と言っているときの文（#172）。プロセスが非0で終わったときは理由が reply.log の末尾から来る。
  * 端末・開いている Codex の queue に渡して届かなかったとき（#329）は終了コードが無く、理由だけ
  */
 export function replyFailureMessage(failed: NonNullable<Replying['failed']>): string {
   const why = failed.tail.trim()
+  // Claude のログインが切れている（#685）。CLI の文言より先に、直し方を出す
+  if (failed.logged_out) return `${CLAUDE_LOGGED_OUT}（終了コード ${failed.code}）${why ? `: ${why}` : ''}`
   // 届いたが、ターンがエラーで終わった（#475）。「届いていません」と出すと、届いた指示を送り直させてしまう
   if (failed.turn_error) return `返信は届きましたが、${why || 'ターンがエラーで終わりました'}`
   if (failed.code === undefined) return `返信が届いていません${why ? `: ${why}` : ''}`

@@ -14,6 +14,7 @@
     "test": "node --test --disable-warning=ExperimentalWarning \"server/**/*.test.ts\" \"shared/**/*.test.ts\" \"web/src/**/*.test.ts\"",
     "test:feed": "python3 -m unittest feed.test_record feed.test_statusline feed.test_digest_stats",
     "feed": "node --disable-warning=ExperimentalWarning server/tools/feed.ts",
+    "digest:eval": "node --disable-warning=ExperimentalWarning server/tools/digest-eval/cli.ts",
     "lint": "oxlint web/src server shared",
     "typecheck": "tsc -p web && tsc -p web/tsconfig.test.json && tsc -p server"
   },

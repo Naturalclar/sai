@@ -83,13 +83,13 @@ function endsWithTe(summary: string): boolean {
   return /[てで]$/u.test(summary.replace(/[\s\p{P}\p{S}]+$/u, ''))
 }
 
-/** 一言が人に何かを求めているか（#363。作り話かを見るので、誘いは数えない） */
-function asksPerson(summary: string): boolean {
+/** 一言が人に何かを求めているか（#363。作り話かを見るので、誘いは数えない）。事例の「頼みを作らない」も同じ判定で見る（#712） */
+export function asksPerson(summary: string): boolean {
   return INVENTED_ASK.test(summary) || endsWithTe(summary)
 }
 
-/** 一言が「人が次にすること」に触れているか */
-function hasNextAction(summary: string): boolean {
+/** 一言が「人が次にすること」に触れているか。事例の「頼みが残る」も同じ判定で見る（#712） */
+export function hasNextAction(summary: string): boolean {
   return NEXT_WORDS.test(summary) || endsWithRequest(summary)
 }
 

@@ -171,6 +171,7 @@ OpenCode (feed/opencode/sai.js) ─┘                           │
   - 「変？」の POST は同一オリジンのみで、溜めたものは外に出さない。一言・口・性格は鍵から引く。
   - 次に送る文面の案（`next_ask`）に性格を足さない。フィードには渡さない。`settings.json` の `next_ask` は読むときに埋めない。
   - 偽の `Summarizer` は一言と案のプロンプトを別に数える。
+  - プロンプトを変える前に `pnpm digest:eval` で今の案と比べる（#712。手元で回す）。**事例（`server/tools/digest-eval/cases.json`）は作り物だけ**で、実際の返答・名前の類をコミットしない。出力はリポジトリの外、貼るのは件数と割合だけ。
   → docs/internals/digest.md#出来上がりの確かめdigestissues-の各項目
 
 

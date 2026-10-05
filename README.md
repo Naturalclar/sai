@@ -346,6 +346,6 @@ rsync -a --include='????-??-??.*.jsonl' --exclude='*' mini:~/.agent-feed/ ~/.age
 | `SAI_GH` | `0` で差分ボタンの PR 番号を引かず、PR の一覧（#524）も読まず、レビューの投稿（#526）の口も出さない（既定は読む。SAI が外のネットワークに問い合わせる所の 1 つ。もう 1 つは `JEV_API_KEY`）。叩くのは `PATH` の `gh` の `gh pr view` / `gh pr list` / `gh pr diff` / `gh api user` / 行コメントを読む `gh api -X GET …/pulls/<番号>/comments`（#600）（ここまで読むだけ）と、**人が確認の画面で押したときだけ**のレビューの投稿（`gh api -X POST repos/<owner>/<repo>/pulls/<番号>/reviews`）で、引けなければ番号が付かない・一覧に「読めませんでした」と出るだけ |
 | `CODEX_HOME` | Codex のホーム（既定 `~/.codex`）。Codex 自身の変数で、SAI はそれに従うだけ |
 | `GROK_HOME` | Grok Build のホーム（既定 `~/.grok`）。Grok 自身の変数で、`record.py` が `sessions/` から入力とモデルを読むときにそれに従うだけ |
-| `AGENT_FEED_DEBUG` | `1` で `record.py` の例外をログに残す |
+| `AGENT_FEED_DEBUG` | `1` で `record.py` の例外をログに残す（`record-errors.log`）。`statusline.py` は描画ごとの入力の要点を `statusline-debug.log` に足す（使用率が載る描画を調べるため。本文・パスは残さない。5 MB で止まる） |
 
 表に無いもの（SAI が自分で付ける・エージェントが渡してくる）: `AGENT_FEED_SKIP`（SAI が一言を作るために回す `claude -p` に付け、`record.py` に自分自身を記録させない）、`SAI_URL` / `SAI_ENTITY` / `SAI_TOKEN_FILE` / `SAI_LOOP`（返信の `claude` に足す MCP サーバに渡す）、`SAI_APPROVE_RECONNECT_MS`（その MCP サーバが繋ぎ直しを続ける長さ。テスト用）、`TMUX_PANE` / `CLAUDE_PID`（エージェントが `record.py` に渡してくる）、`REPO_URL` / `PROD`（Vite のビルド時の値）、`PATH`（フックのラッパーを引くのにサーバの PATH を見る。#567）。

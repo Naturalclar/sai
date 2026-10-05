@@ -20,6 +20,8 @@
   短い1行を出す。既に自分のステータスラインを持っている人は README のラッパーで繋ぐ
 - record.py と同じ規律: Python 3.9+ の標準ライブラリだけ・**必ず exit 0**・速いこと
   （描画のたびに呼ばれるので、遅いと TUI が待つ）
+- `AGENT_FEED_DEBUG=1` のときだけ、描画ごとの入力の要点を `<feed dir>/statusline-debug.log` に足す
+  （#694。`rate_limits` がどういう描画に載るかを調べるため。本文・パスは残さない）
 
 読み書きする形は shared/types.ts の `ClaudeUsage` と shared/usage.ts の `parseStatusLineUsage()`。
 """
@@ -53,6 +55,14 @@ KEEP_SECONDS = 24 * 60 * 60
 HARD_TIMEOUT_SECONDS = 5
 #: ステータスラインに出す本文の上限（端末の1行に収める）
 MAX_LINE = 200
+#: `AGENT_FEED_DEBUG=1` のときに描画ごとの入力の要点を足すファイル（1 行 1 JSON。#694）。
+#: `.jsonl` にしない（feed dir の `*.jsonl` は記録として読まれる）
+DEBUG_FILE = "statusline-debug.log"
+#: DEBUG_FILE がこれを超えたら足さない（描画のたびに呼ばれるので、切り忘れても膨らみ続けない）
+DEBUG_MAX_BYTES = 5 * 1024 * 1024
+#: DEBUG_FILE に残す文字列の上限と、入れ子を辿る深さ
+DEBUG_MAX_STRING = 40
+DEBUG_MAX_DEPTH = 4
 #: ファイル名に使えない文字（record.py の day_file と同じ扱い）
 _FILE_HOST_RE = record._FILE_HOST_RE
 
@@ -224,6 +234,61 @@ def write_record(directory: Path, payload: dict, windows: dict, now: datetime) -
     os.replace(tmp, path)
 
 
+def _debug_value(value, depth: int = 0):
+    """DEBUG_FILE に残してよい形にする。数字・真偽・短い文字列と、その入れ子だけ（長い文字列は切る・配列は長さだけ）"""
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return value[:DEBUG_MAX_STRING]
+    if isinstance(value, dict) and depth < DEBUG_MAX_DEPTH:
+        return {str(key)[:DEBUG_MAX_STRING]: _debug_value(item, depth + 1) for key, item in value.items()}
+    if isinstance(value, list):
+        return f"<list {len(value)}>"
+    return f"<{type(value).__name__}>"
+
+
+def debug_entry(payload: dict, now: datetime) -> dict:
+    """描画 1 回ぶんの要点（#694）。**本文・パスは載せない**。
+
+    `rate_limits` は来たままの形（`windows_of()` が捨てる窓も調べたいので絞らない）。`keys` は入力の一番上の
+    キーの名前だけ、`api_ms` は `cost.total_api_duration_ms`（最初の API 応答の前かどうかの手がかり）
+    """
+    model = payload.get("model")
+    cost = payload.get("cost")
+    limits = payload.get("rate_limits")
+    return {
+        "ts": now.isoformat(timespec="seconds"),
+        "session": payload.get("session_id")[:DEBUG_MAX_STRING] if isinstance(payload.get("session_id"), str) else "",
+        "version": _debug_value(payload.get("version")),
+        "model": model.get("id", "")[:DEBUG_MAX_STRING] if isinstance(model, dict) and isinstance(model.get("id"), str) else "",
+        "api_ms": _num(cost.get("total_api_duration_ms")) if isinstance(cost, dict) else None,
+        "skip": os.environ.get("AGENT_FEED_SKIP") == "1",
+        "keys": sorted(str(key)[:DEBUG_MAX_STRING] for key in payload),
+        "has_rate_limits": "rate_limits" in payload,
+        "rate_limits": _debug_value(limits) if "rate_limits" in payload else None,
+    }
+
+
+def write_debug(directory: Path, payload: dict, now: datetime) -> None:
+    """`AGENT_FEED_DEBUG=1` のときだけ DEBUG_FILE に 1 行足す。失敗しても黙って諦める（表示と記録を巻き込まない）"""
+    if os.environ.get("AGENT_FEED_DEBUG") != "1":
+        return
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / DEBUG_FILE
+        if path.exists() and path.stat().st_size > DEBUG_MAX_BYTES:
+            return
+        line = json.dumps(debug_entry(payload, now), ensure_ascii=False) + "\n"
+        # 1 回の write で足す（並んで描画するセッションの行が混ざらない）
+        handle = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+        try:
+            os.write(handle, line.encode("utf-8"))
+        finally:
+            os.close(handle)
+    except Exception:
+        pass
+
+
 def status_line(payload: dict, windows: dict) -> str:
     """ステータスラインに出す1行。使用率が無ければモデル名だけになる"""
     parts = []
@@ -242,9 +307,10 @@ def status_line(payload: dict, windows: dict) -> str:
 def main() -> None:
     payload = read_stdin_obj()
     windows = windows_of(payload)
+    now = datetime.now(record.tz())
+    write_debug(record.feed_dir(), payload, now)
     # AGENT_FEED_SKIP は record.py と同じ意味（SAI 自身が回す claude に付く）。表示だけして記録しない
     if windows and os.environ.get("AGENT_FEED_SKIP") != "1":
-        now = datetime.now(record.tz())
         # 期限切れの窓は書かない。全部切れていれば、置いてある記録に触らない（#683）
         live = live_windows(windows, now)
         if live:

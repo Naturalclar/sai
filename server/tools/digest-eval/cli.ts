@@ -10,7 +10,7 @@
 import { realpathSync } from 'node:fs'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join, resolve, sep } from 'node:path'
+import { basename, dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { isDigestModel, isDigestProvider } from '../../../shared/digestSettings.ts'
@@ -123,11 +123,13 @@ export async function runEval(opts: {
 
 /** 出力の置き場がリポジトリの中か（実際の返答と一言が入るので、コミットできる場所に置かせない） */
 export function insideRepo(path: string, root: string = REPO_ROOT): boolean {
-  const real = (p: string) => {
+  // まだ無いパスは、在る所まで遡って実体を引き、残りを繋ぐ（リンク越しの「これから作る」置き場を外と見誤らない。#716 のレビュー）
+  const real = (p: string): string => {
     try {
       return realpathSync(p)
     } catch {
-      return resolve(p)
+      const parent = dirname(p)
+      return parent === p ? p : join(real(parent), basename(p))
     }
   }
   const target = real(resolve(path))
@@ -227,7 +229,9 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
   // 口・モデル・性格は画面の設定から（読むだけ）。送り先と鍵は環境変数のまま（`summarizerFactory()`）
   const settings = await new SettingsStore(join(io.dir, SETTINGS_FILE)).get()
   const provider = o.provider ?? settings.digest_provider
-  const model = o.model ?? (settings.digest_model || (provider === 'claude' ? DEFAULT_DIGEST_MODEL : ''))
+  // 設定のモデルは、設定の口のもの。口だけ切り替えたときは持ち越さない（手元のモデルの名前を claude に渡さない。#716 のレビュー）
+  const saved = provider === settings.digest_provider ? settings.digest_model : ''
+  const model = o.model ?? (saved || (provider === 'claude' ? DEFAULT_DIGEST_MODEL : ''))
   const persona = o.persona ?? settings.persona
   if (provider === 'claude' && !o.claude) {
     io.err('口が claude です。回すたびに費用がかかるので、回すなら --claude を付けてください（手元の口で回すなら --provider openai --model <名前>）')

@@ -107,7 +107,7 @@ export interface Comparison {
   worse: ScoreCode[]
   /** 通す条件の組ごとの件数。`failed` は今の案より増えたもの */
   gates: { id: string; label: string; base: number; candidate: number; failed: boolean }[]
-  /** 通す条件を全部満たしたか */
+  /** 通す条件を全部満たしたか。**比べた組が 1 つも無ければ満たさない**（比べる案の口が全部落ちたのを「増えていない」と読まない） */
   pass: boolean
   outcomes: CaseOutcome[]
 }
@@ -143,7 +143,7 @@ export function compare(samples: readonly Sample[], base: string, candidate: str
     return { case: id, winner }
   })
   const all = new Set(samples.filter((s) => s.variant === base || s.variant === candidate).map(pairKey)).size
-  return { base: b, candidate: c, pairs: b.samples, unpaired: all - b.samples, diffs, worse: SCORE_ORDER.filter((code) => (diffs[code] ?? 0) > 0), gates, pass: gates.every((g) => !g.failed), outcomes }
+  return { base: b, candidate: c, pairs: b.samples, unpaired: all - b.samples, diffs, worse: SCORE_ORDER.filter((code) => (diffs[code] ?? 0) > 0), gates, pass: b.samples > 0 && gates.every((g) => !g.failed), outcomes }
 }
 
 const rate = (n: number, of: number): string => (of > 0 ? `${n}（${Math.round((n / of) * 100)}%）` : String(n))
@@ -184,7 +184,8 @@ export function comparisonLines(c: Comparison): string[] {
   const lines = [`### ${c.base.variant} → ${c.candidate.variant}`, '']
   lines.push(`比べた組（事例 × 回）: ${c.pairs}${c.unpaired > 0 ? `（片方の口が落ちて比べられなかった組: ${c.unpaired}）` : ''}`)
   lines.push('')
-  lines.push(c.pass ? '**通す条件: 満たした**' : `**通す条件: 満たしていない**（${c.gates.filter((g) => g.failed).map((g) => g.label).join('・')} が今より増えた）`)
+  const failed = c.gates.filter((g) => g.failed).map((g) => g.label).join('・')
+  lines.push(c.pass ? '**通す条件: 満たした**' : `**通す条件: 満たしていない**（${c.pairs === 0 ? '比べられた組が 1 つも無い' : `${failed} が今より増えた`}）`)
   lines.push('')
   lines.push(row(['通す条件', c.base.variant, c.candidate.variant, '差']), row(['---', '---', '---', '---']))
   for (const g of c.gates) lines.push(row([`${g.failed ? '▲ ' : ''}${g.label}`, String(g.base), String(g.candidate), signed(g.candidate - g.base)]))

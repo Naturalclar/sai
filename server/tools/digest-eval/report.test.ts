@@ -93,3 +93,14 @@ test('report: 3 つ以上の案は、どれも最初の案と比べる', () => {
   assert.deepEqual(r.comparisons.map((c) => [c.candidate.variant, c.pass]), [['b', true], ['c', false]])
   assert.equal(r.pass, false)
 })
+
+test('compare: 比べる案の口が全部落ちて比べた組が無ければ、通さない（#716 のレビュー）', () => {
+  const samples = [s('1', 'a'), s('1', 'b', [], { error: 'timeout' }), s('2', 'a'), s('2', 'b', [], { error: 'timeout' })]
+  const c = compare(samples, 'a', 'b')
+  assert.equal(c.pairs, 0)
+  assert.equal(c.unpaired, 2)
+  assert.equal(c.pass, false)
+  const r = report({ samples, variants: ['a', 'b'] })
+  assert.equal(r.pass, false)
+  assert.match(r.lines.join('\n'), /通す条件: 満たしていない.*比べられた組が 1 つも無い/)
+})

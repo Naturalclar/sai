@@ -1,10 +1,11 @@
 // 一言の案を比べる道具を、偽の口で通しで回す（#712）。本物の口・本物の置き場は触らない
 import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { localDate } from '../../../shared/entity.ts'
+import { DEFAULT_DIGEST_MODEL } from '../../digest/digest.ts'
 import type { Summarizer, SummarizerFactory } from '../../digest/digest.ts'
 import { feedCases, insideRepo, REPO_ROOT, run, runEval } from './cli.ts'
 import type { Io } from './cli.ts'
@@ -122,6 +123,16 @@ test('run: 出力の置き場がリポジトリの中なら断る（口は叩か
   assert.equal(insideRepo(dir), false)
 })
 
+test('insideRepo: リンク越しで、まだ無い置き場も中と見る（#716 のレビュー）', async () => {
+  const root = join(dir, 'fake-repo')
+  await mkdir(root)
+  const link = join(dir, 'link-to-repo')
+  await symlink(root, link)
+  assert.equal(insideRepo(join(link, 'not-yet', 'out'), root), true)
+  assert.equal(insideRepo(join(root, 'not-yet'), root), true)
+  assert.equal(insideRepo(join(dir, 'elsewhere', 'not-yet'), root), false)
+})
+
 test('run: 口が claude なら --claude を付けたときだけ回す', async () => {
   const prompts: string[] = []
   const x = io({ factory: fakeFactory(prompts) })
@@ -131,7 +142,11 @@ test('run: 口が claude なら --claude を付けたときだけ回す', async 
   const seen: string[] = []
   const y = io({ factory: (provider, model) => (seen.push(`${provider}/${model}`), fakeFactory()(provider, model)) })
   assert.equal(await run(['--provider', 'claude', '--claude', '--out', join(dir, 'out-claude')], y), 0)
-  assert.deepEqual(seen, ['claude/fake-model'])
+  // 設定のモデル（手元の口のもの）は持ち越さず、claude の既定になる（#716 のレビュー）
+  assert.deepEqual(seen, [`claude/${DEFAULT_DIGEST_MODEL}`])
+  const z = io({ factory: (provider, model) => (seen.push(`${provider}/${model}`), fakeFactory()(provider, model)) })
+  assert.equal(await run(['--provider', 'claude', '--claude', '--model', 'other', '--out', join(dir, 'out-claude')], z), 0)
+  assert.equal(seen[1], 'claude/other')
 })
 
 test('run: 使い方の誤りは 2', async () => {

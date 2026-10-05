@@ -51,3 +51,5 @@
 - Python の利点だった起動の速さは、実測で差にならなかった（`node server/tools/feed.ts rows …` が手元の 7 日ぶんで 0.1 秒）。失うのは「`feed/` だけ写せば Node の無い場所でも動く」ことだが、調べるのは SAI を動かしているマシンの置き場なので要らない。
 - 置き場は `server/tools/`（`pnpm lint` / `pnpm typecheck` / `pnpm test` がそのまま拾うので、CI に足すものが無い）。
 - サブコマンドは `rows`・`messages`・`usage` の 3 つから（実測で問いの多かった順）。`turns --missing` と `prompts` は関数（`pairTurns()`・`humanPrompt()`）だけ置いた。MCP の読む口には寄せていない（シェルから呼べて出力を絞りやすいほうを取った）。
+- レビュー（#706）で、道具がサーバの読み方を 4 つ写していて、うち 1 つがもう食い違っていた（サーバは `ts` が読めない使用量の行を落とすが、道具は残す）。「読み方を 1 か所に」が目的なので、写しをやめて同じ関数を呼ぶ形にした: 行は `FeedStore.rowsOn()`、アーカイブは `shared/meta.ts` の `isArchivedAt()`、使用量は `parseTurnUsageLog()`、メッセージは `isMessage()`。入力の行を覚える・捨てる状態機械も `deliveryMatcher()` の写しだったので、`shared/turnPrompts.ts` の `promptTracker()` に出して両方が使う。
+- 同じレビューで、`messages` が「返答の行が JSONL に無い」を「未着」と出していた。補った返答（#614）は JSONL に書かれないので、行の有無だけでは未着と言えない。「行なし」と出し、`handed_at` があれば渡してあることを書く。

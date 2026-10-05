@@ -6,7 +6,7 @@
 //
 // 出力は既定で数行の表に絞る（結果は呼んだ側の文脈に残り続けるので）。全部出すのは `--all` を付けたときだけ。
 // 置き場は `AGENT_FEED_DIR`（無ければ `~/.agent-feed`）。
-import { resolve } from 'node:path'
+import { realpathSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { sessionLabel, splitHandedReplies } from '../../shared/agentMessages.ts'
@@ -30,7 +30,7 @@ import {
   usageRows,
   usageTotals,
 } from './feedRead.ts'
-import type { DateRange, PromptKind } from './feedRead.ts'
+import type { DateRange, PromptKind, ReplyState, UsageRow, UsageTotal } from './feedRead.ts'
 
 export const USAGE = `usage: pnpm feed <rows|messages|usage> [options]   （~/.agent-feed を読むだけ。置き場は AGENT_FEED_DIR）
 
@@ -40,7 +40,8 @@ export const USAGE = `usage: pnpm feed <rows|messages|usage> [options]   （~/.a
 
   -n <数>             出す行数（既定 10）        --all        全部出す
   --days <数>         読む日数（既定 7）         --from / --to  YYYY-MM-DD（Asia/Tokyo）
-  --json              JSON で出す                --full       入力・返答を切らずに出す`
+  --json              JSON で出す                --full       入力・返答を切らずに出す
+  --session / --by    messages / usage だけ（そのコマンドで効かないオプションはエラー）`
 
 /** 既定で出す行数 */
 export const DEFAULT_ROWS = 10
@@ -113,12 +114,18 @@ export function stamp(ts: string | undefined): string {
   return `${p.month}-${p.day} ${p.hour}:${p.minute}`
 }
 
+/** 入力が人の打った文でないときの印（表の頭に付ける）。届いたメッセージは本文が `【SAI】` で始まるので足さない */
 const KIND_MARK: Record<PromptKind, string> = { human: '', compact: '[要約] ', message: '', empty: '' }
 
-/** 入力の頭。要約の文は人の入力ではないので印を付け、頭に足した返答の塊は外す */
-function promptHead(userText: string | undefined, max: number): string {
+/**
+ * 表に出す入力。要約の文は人の入力ではないので印を付け、頭に足した返答の塊（`【SAI 返答】`）は外して件数の印にする
+ * （`--full` でも同じ。生の `user_text` は `--json --full` に出す）。`max` 0 は切らない
+ */
+function promptCell(userText: string | undefined, max: number): string {
   const kind = promptKind(userText)
-  return KIND_MARK[kind] + head(kind === 'compact' ? userText : splitHandedReplies(userText ?? '').text, max)
+  if (kind === 'compact') return KIND_MARK.compact + head(userText, max)
+  const { text, handed } = splitHandedReplies(userText ?? '')
+  return (handed > 0 ? `[返答 ${handed} 件] ` : '') + KIND_MARK[kind] + head(text, max)
 }
 
 const labelOf = (sessions: readonly SessionSummary[]) => {
@@ -129,6 +136,15 @@ const labelOf = (sessions: readonly SessionSummary[]) => {
   }
 }
 
+/** コマンドごとに効くオプション。ここに無いものを付けたらエラーにする（受け付けて黙って無視しない） */
+const ALLOWED: Record<string, readonly string[]> = {
+  rows: ['n', 'all', 'json', 'full', 'days', 'from', 'to'],
+  messages: ['n', 'all', 'json', 'full', 'days', 'from', 'to', 'session'],
+  usage: ['n', 'all', 'json', 'days', 'from', 'to', 'by'],
+}
+/** 位置引数の数（コマンドの後ろ） */
+const POSITIONALS: Record<string, number> = { rows: 1, messages: 0, usage: 0 }
+
 function parse(argv: readonly string[], now: Date): { command: string; positionals: string[]; options: Options } | { error: string } {
   let parsed
   try {
@@ -137,15 +153,15 @@ function parse(argv: readonly string[], now: Date): { command: string; positiona
       allowPositionals: true,
       options: {
         n: { type: 'string', short: 'n' },
-        all: { type: 'boolean', default: false },
-        json: { type: 'boolean', default: false },
-        full: { type: 'boolean', default: false },
+        all: { type: 'boolean' },
+        json: { type: 'boolean' },
+        full: { type: 'boolean' },
         days: { type: 'string' },
         from: { type: 'string' },
         to: { type: 'string' },
-        by: { type: 'string', default: 'session' },
-        session: { type: 'string', default: '' },
-        help: { type: 'boolean', short: 'h', default: false },
+        by: { type: 'string' },
+        session: { type: 'string' },
+        help: { type: 'boolean', short: 'h' },
       },
     })
   } catch (e) {
@@ -153,27 +169,38 @@ function parse(argv: readonly string[], now: Date): { command: string; positiona
   }
   const { values, positionals } = parsed
   if (values.help) return { error: '' }
-  if (positionals.length === 0) return { error: 'コマンドを指定してください' }
-  const count = (name: string, raw: string | undefined, fallback: number): number | string => {
+  const command = positionals[0]
+  if (!command) return { error: 'コマンドを指定してください' }
+  const allowed = ALLOWED[command]
+  if (!allowed) return { error: `知らないコマンドです: ${command}` }
+  const name = (key: string) => (key === 'n' ? '-n' : `--${key}`)
+  const extra = Object.keys(values).filter((key) => !allowed.includes(key))
+  if (extra.length > 0) return { error: `${command} では効かないオプションです: ${extra.map(name).join(' ')}` }
+  const rest = positionals.slice(1)
+  if (rest.length > POSITIONALS[command]!) return { error: `余分な引数です: ${rest.slice(POSITIONALS[command]!).join(' ')}` }
+  if (values.all && values.n !== undefined) return { error: '--all と -n は一緒に指定できません' }
+  if (values.days !== undefined && values.from !== undefined) return { error: '--days と --from は一緒に指定できません（--from 〜 --to で範囲を決めます）' }
+  const count = (key: string, raw: string | undefined, fallback: number): number | string => {
     if (raw === undefined) return fallback
     const v = Number(raw)
-    return Number.isInteger(v) && v > 0 ? v : `${name} は 1 以上の整数で指定してください: ${raw}`
+    return Number.isInteger(v) && v > 0 ? v : `${name(key)} は 1 以上の整数で指定してください: ${raw}`
   }
-  const n = count('-n', values.n, DEFAULT_ROWS)
+  const n = count('n', values.n, DEFAULT_ROWS)
   if (typeof n === 'string') return { error: n }
-  const days = count('--days', values.days, DEFAULT_DAYS)
+  const days = count('days', values.days, DEFAULT_DAYS)
   if (typeof days === 'string') return { error: days }
   for (const key of ['from', 'to'] as const) {
     const v = values[key]
-    if (v !== undefined && !isDate(v)) return { error: `--${key} は YYYY-MM-DD で指定してください: ${v}` }
+    if (v !== undefined && !isDate(v)) return { error: `--${key} は実在する日付を YYYY-MM-DD で指定してください: ${v}` }
   }
-  if (values.by !== 'session' && values.by !== 'day') return { error: `--by は session か day です: ${values.by}` }
+  const by = values.by ?? 'session'
+  if (by !== 'session' && by !== 'day') return { error: `--by は session か day です: ${by}` }
   const range = dateRange({ from: values.from, to: values.to, days }, now)
   if (range.from > range.to) return { error: `--from が --to より後です: ${range.from} > ${range.to}` }
   return {
-    command: positionals[0]!,
-    positionals: positionals.slice(1),
-    options: { n, all: values.all, json: values.json, full: values.full, range, ranged: values.days !== undefined || values.from !== undefined || values.to !== undefined, by: values.by, session: values.session },
+    command,
+    positionals: rest,
+    options: { n, all: !!values.all, json: !!values.json, full: !!values.full, range, ranged: values.days !== undefined || values.from !== undefined || values.to !== undefined, by, session: values.session ?? '' },
   }
 }
 
@@ -209,30 +236,50 @@ async function rowsCommand(args: readonly string[], o: Options, io: Io): Promise
   if (!session) return 1
   const own = rows.filter((r) => rowEntity(r) === session.id)
   const picked = o.all ? own : own.slice(-o.n)
-  const cells = (r: FeedRow) => ({
-    ts: r.ts,
-    event: r.event ?? '',
-    kind: eventKind(r.event, r.text),
-    user_text: o.full ? (r.user_text ?? '') : promptHead(r.user_text, 48),
-    text: o.full ? (r.text ?? '') : head(r.text, 72),
-  })
   if (o.json) {
-    io.out(JSON.stringify({ id: session.id, label: sessionLabel(session), range: o.range, total: own.length, rows: picked.map(cells) }))
+    // 入力は `prompt_kind` を必ず添える（要約の文・届いたメッセージを人の入力に数えないように。`human` だけが人の入力）。
+    // `--full` の `user_text` は記録のままで、頭に足した返答の塊（`handed` 件）も付いたまま
+    const items = picked.map((r) => {
+      const { text, handed } = splitHandedReplies(r.user_text ?? '')
+      return {
+        ts: r.ts,
+        event: r.event ?? '',
+        kind: eventKind(r.event, r.text),
+        prompt_kind: promptKind(r.user_text),
+        handed,
+        user_text: o.full ? (r.user_text ?? '') : head(text, 48),
+        text: o.full ? (r.text ?? '') : head(r.text, 72),
+      }
+    })
+    io.out(JSON.stringify({ id: session.id, label: sessionLabel(session), range: o.range, total: own.length, rows: items }))
     return 0
   }
   io.out(`${session.id}「${head(sessionLabel(session), 40)}」 ${shown(picked.length, own.length, '行')}・${rangeNote(o.range)}`)
   // 表は 1 行 1 件のまま（--full でも改行は空白にする）
-  const body = picked.map(cells).map((c) => [stamp(c.ts), c.kind, head(c.user_text, 0), head(c.text, 0)])
+  const body = picked.map((r) => [stamp(r.ts), eventKind(r.event, r.text), promptCell(r.user_text, o.full ? 0 : 48), head(r.text, o.full ? 0 : 72)])
   for (const line of table(['時刻', '種類', '入力', '返答'], body)) io.out(line)
   return 0
+}
+
+/** 返答の欄。行が無いときは「未着」と言い切らず、送り元に渡してあるかを書く */
+function replyCell(m: { state: ReplyState; replied_at: string; reply: string; handed_at: string }): string {
+  if (m.state === 'replied') return `${stamp(m.replied_at)} ${head(m.reply, 0)}`
+  return m.state === 'handed' ? `行なし（${stamp(m.handed_at)} に送り元へ渡した）` : '行なし'
 }
 
 async function messagesCommand(o: Options, io: Io): Promise<number> {
   const meta = await readMeta(io.dir)
   let messages = await readAgentMessages(io.dir)
   if (o.ranged) messages = messages.filter((m) => inRange(m.since, o.range))
+  // 読んだ行は覚えておき、同じ範囲に収まるならもう読まない
+  let read: { range: DateRange; rows: FeedRow[] } | null = null
+  const rowsFor = async (range: DateRange): Promise<FeedRow[]> => {
+    if (read && read.range.from <= range.from && read.range.to >= range.to) return read.rows
+    read = { range, rows: await readRows(io.dir, range) }
+    return read.rows
+  }
   if (o.session) {
-    const session = pick(sessionsOf(await readRows(io.dir, o.range), meta), o.session, o, io)
+    const session = pick(sessionsOf(await rowsFor(o.range), meta), o.session, o, io)
     if (!session) return 1
     messages = messages.filter((m) => m.from === session.id || m.to === session.id)
   }
@@ -240,10 +287,10 @@ async function messagesCommand(o: Options, io: Io): Promise<number> {
   const picked = o.all ? messages : messages.slice(-o.n)
   // 引き当ては、出すメッセージを送った日から今日までの行で見る（返答は送ったあとに来る。古いメッセージのために全部は読まない）
   const today = localDate(io.now.toISOString())
-  const rows = await readRows(io.dir, { from: picked.reduce((min, m) => (localDate(m.since) < min ? localDate(m.since) : min), today), to: today })
+  const rows = await rowsFor({ from: picked.reduce((min, m) => (localDate(m.since) < min ? localDate(m.since) : min), today), to: today })
   const label = labelOf(sessionsOf(rows, meta))
   const clip = (text: string | undefined, max: number) => (o.full ? (text ?? '') : head(text, max))
-  const items = messageReplies(picked, rows).map(({ message: m, reply }) => ({
+  const items = messageReplies(picked, rows).map(({ message: m, reply, state }) => ({
     message_id: m.message_id,
     since: m.since,
     from: m.from,
@@ -251,6 +298,7 @@ async function messagesCommand(o: Options, io: Io): Promise<number> {
     to: m.to,
     to_label: label(m.to),
     text: clip(m.text, 48),
+    state,
     replied_at: reply?.ts ?? '',
     reply: clip(reply?.text, 56),
     handed_at: m.handed_at ?? '',
@@ -259,8 +307,8 @@ async function messagesCommand(o: Options, io: Io): Promise<number> {
     io.out(JSON.stringify({ total, messages: items }))
     return 0
   }
-  io.out(`送ったメッセージ ${shown(items.length, total, '件')}`)
-  const body = items.map((m) => [stamp(m.since), m.from_label, m.to_label, head(m.text, 0), m.replied_at ? `${stamp(m.replied_at)} ${head(m.reply, 0)}` : '未着'])
+  io.out(`送ったメッセージ ${shown(items.length, total, '件')}・返答は記録の行で見る（「行なし」は未着とは限らない。補った返答は記録に無い）`)
+  const body = items.map((m) => [stamp(m.since), m.from_label, m.to_label, head(m.text, 0), replyCell(m)])
   for (const line of table(['送った', '送り元', '宛先', '本文', '返答'], body)) io.out(line)
   return 0
 }
@@ -272,16 +320,27 @@ async function usageCommand(o: Options, io: Io): Promise<number> {
   const inWindow = usageRows(await readTurnUsage(io.dir)).filter((r) => inRange(r.ts, o.range))
   const totals = usageTotals(inWindow, o.by)
   const picked = o.all ? totals : o.by === 'day' ? totals.slice(-o.n) : totals.slice(0, o.n)
-  const sum = usageTotals(inWindow.map((r) => ({ ...r, id: '合計' })), 'session')[0]
+  // 合計は 2 つ: 出した行の合計（`shown_sum`）と、範囲の全部の合計（`sum`）。絞っていなければ同じ
+  const sumOf = (rows: readonly UsageRow[]) => usageTotals(rows.map((r) => ({ ...r, id: '' })), 'session')[0] ?? null
+  const keys = new Set(picked.map((t) => t.key))
+  const sum = sumOf(inWindow)
+  const shownSum = picked.length < totals.length ? sumOf(inWindow.filter((r) => keys.has(o.by === 'day' ? localDate(r.ts) : r.id))) : sum
   if (o.json) {
-    io.out(JSON.stringify({ range: o.range, by: o.by, total: totals.length, sum: sum ?? null, rows: picked }))
+    io.out(JSON.stringify({ range: o.range, by: o.by, total: totals.length, sum, shown_sum: shownSum, rows: picked }))
     return 0
   }
-  const label = o.by === 'session' ? labelOf(sessionsOf(await readRows(io.dir, o.range), await readMeta(io.dir))) : (key: string) => key
-  const cells = (t: (typeof totals)[number], name: string) => [name, String(t.turns), tokens(t.input_tokens), tokens(t.output_tokens), tokens(t.cache_read_input_tokens), tokens(t.cache_creation_input_tokens), t.cost_usd.toFixed(2)]
-  io.out(`使用量（SAI から回したターンだけ）${rangeNote(o.range)}・${shown(picked.length, totals.length, o.by === 'day' ? '日' : 'セッション')}・費用は前の行との差（cost_usd は積み上げ）`)
+  const unit = o.by === 'day' ? '日' : 'セッション'
+  // 呼び名は表示名（メタ）で足りればそれで出す。足りないときだけ、題名のために範囲の記録を読む
+  const meta = o.by === 'session' ? await readMeta(io.dir) : {}
+  const unnamed = o.by === 'session' && picked.some((t) => !meta[t.key]?.name)
+  const titled = unnamed ? labelOf(sessionsOf(await readRows(io.dir, o.range), meta)) : (key: string) => key
+  const label = (key: string): string => (o.by === 'day' ? key : meta[key]?.name ? head(meta[key].name, 24) : titled(key))
+  const cells = (t: UsageTotal, name: string) => [name, String(t.turns), tokens(t.input_tokens), tokens(t.output_tokens), tokens(t.cache_read_input_tokens), tokens(t.cache_creation_input_tokens), t.cost_usd.toFixed(2)]
+  io.out(`使用量（SAI から回したターンだけ）${rangeNote(o.range)}・${shown(picked.length, totals.length, unit)}・費用は前の行との差（cost_usd は積み上げ）`)
   const body = picked.map((t) => cells(t, label(t.key)))
-  for (const line of table([o.by === 'day' ? '日付' : 'セッション', 'ターン', '入力', '出力', 'キャッシュ読', 'キャッシュ書', '費用$'], sum ? [...body, cells(sum, '合計')] : body)) io.out(line)
+  if (picked.length < totals.length && shownSum) body.push(cells(shownSum, `小計（上の ${picked.length} ${unit}）`))
+  if (sum) body.push(cells(sum, `合計（全 ${totals.length} ${unit}）`))
+  for (const line of table([o.by === 'day' ? '日付' : 'セッション', 'ターン', '入力', '出力', 'キャッシュ読', 'キャッシュ書', '費用$'], body)) io.out(line)
   return 0
 }
 
@@ -296,12 +355,20 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
   const { command, positionals, options } = parsed
   if (command === 'rows') return rowsCommand(positionals, options, io)
   if (command === 'messages') return messagesCommand(options, io)
-  if (command === 'usage') return usageCommand(options, io)
-  io.err(`知らないコマンドです: ${command}`)
-  io.err(USAGE)
-  return 2
+  return usageCommand(options, io)
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+/** このファイルを直接起動したか。`/tmp/…`（macOS では `/private/tmp` へのリンク）のようなリンク越しのパスでも当たるよう、実体で比べる */
+function isMain(): boolean {
+  const entry = process.argv[1]
+  if (!entry) return false
+  try {
+    return realpathSync(entry) === realpathSync(fileURLToPath(import.meta.url))
+  } catch {
+    return false
+  }
+}
+
+if (isMain()) {
   process.exitCode = await run(process.argv.slice(2), { dir: feedDir(), now: new Date(), out: (line) => console.log(line), err: (line) => console.error(line) })
 }

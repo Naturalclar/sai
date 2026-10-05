@@ -5,23 +5,26 @@
 // ここは読み方を新しく決めず、サーバと画面が使っている `shared/` の判定をそのまま呼ぶ
 // （エンティティの ID = `entityId()`、ターン完了 = `eventKind() === 'turn'`、日付 = `Asia/Tokyo`、費用 = `turnCosts()`）。
 // コマンドは `server/tools/feed.ts`（`pnpm feed`）。その場かぎりの問いは、ここの関数を import して書く。
-import { readdir, readFile } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join, resolve, sep } from 'node:path'
+import { join, resolve } from 'node:path'
 import { AGENT_HEADER_MARK, agentReplyRows, resolveTarget, splitHandedReplies } from '../../shared/agentMessages.ts'
 import type { ResolvedTarget } from '../../shared/agentMessages.ts'
 import { isCompactSummaryText } from '../../shared/compactSummary.ts'
 import { entityId, localDate } from '../../shared/entity.ts'
+import { isArchivedAt } from '../../shared/meta.ts'
+import { promptTracker } from '../../shared/turnPrompts.ts'
 import { eventKind } from '../../shared/events.ts'
 import { turnCosts } from '../../shared/turnUsage.ts'
 import type { TurnUsageEntry } from '../../shared/turnUsage.ts'
-import type { FeedRow, SessionMeta, SessionSummary } from '../../shared/types.ts'
-import { AGENT_MESSAGES_FILE } from '../reply/agentMessages.ts'
+import type { FeedRow, SessionSummary } from '../../shared/types.ts'
+import { AGENT_MESSAGES_FILE, isMessage } from '../reply/agentMessages.ts'
 import type { AgentMessage } from '../reply/agentMessages.ts'
-import { TURN_USAGE_FILE } from '../reply/turnUsage.ts'
+import { parseTurnUsageLog, TURN_USAGE_FILE } from '../reply/turnUsage.ts'
 import { aggregate } from '../rows/aggregate.ts'
-import { feedFiles, parseRows } from '../rows/store.ts'
-import { META_FILE } from '../meta/meta.ts'
+import { FeedStore } from '../rows/store.ts'
+import { META_FILE, MetaStore } from '../meta/meta.ts'
+import type { MetaMap } from '../meta/meta.ts'
 
 /** 置き場。記録側・サーバと同じ `AGENT_FEED_DIR`（無ければ `~/.agent-feed`） */
 export function feedDir(env: NodeJS.ProcessEnv = process.env): string {
@@ -32,8 +35,13 @@ export function feedDir(env: NodeJS.ProcessEnv = process.env): string {
 const DAY_MS = 86_400_000
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 
-/** 日付（`YYYY-MM-DD`）か。範囲の指定に使う */
-export const isDate = (v: string): boolean => DATE_RE.test(v) && !Number.isNaN(Date.parse(`${v}T00:00:00Z`))
+/** 実在する日付（`YYYY-MM-DD`）か。範囲の指定に使う */
+export function isDate(v: string): boolean {
+  if (!DATE_RE.test(v)) return false
+  const at = Date.parse(`${v}T00:00:00Z`)
+  // `2026-02-31` は読めてしまう（3/3 になる）ので、戻して同じ日付になるものだけ通す
+  return !Number.isNaN(at) && new Date(at).toISOString().slice(0, 10) === v
+}
 
 /** `from` 〜 `to`（両端を含む）の日付を古い順に。読めない・逆さまなら空 */
 export function datesBetween(from: string, to: string): string[] {
@@ -67,32 +75,11 @@ export function inRange(ts: string, range: DateRange): boolean {
 }
 
 /**
- * 範囲の行を古い順に読む。ファイルは日付から組み立てず `readdir` で拾う（`YYYY-MM-DD.<host>.jsonl` も読む。#113）。
- * サーバ（`FeedStore.rows()`）と同じく、置き場を cwd にした行（一言を作る子のターン）は SAI 自身の雑音として落とす
+ * 範囲の行を古い順に読む。読み方はサーバと同じ `FeedStore`（`readdir` で拾うので `YYYY-MM-DD.<host>.jsonl` も読む。
+ * 置き場を cwd にした行 = 一言を作る子のターンは SAI 自身の雑音として落とす。`ts` に並べ直す）
  */
 export async function readRows(dir: string, range: DateRange): Promise<FeedRow[]> {
-  let names: string[]
-  try {
-    names = await readdir(dir)
-  } catch {
-    return [] // 置き場がまだ無い
-  }
-  const rows: FeedRow[] = []
-  for (const name of feedFiles(names, datesBetween(range.from, range.to))) {
-    let text: string
-    try {
-      text = await readFile(join(dir, name), 'utf-8')
-    } catch {
-      continue // 読む直前に消えたぶんは飛ばす
-    }
-    for (const r of parseRows(text)) {
-      const cwd = r.cwd ?? ''
-      if (cwd !== dir && !cwd.startsWith(dir + sep)) rows.push(r)
-    }
-  }
-  // 別マシンのファイルは日付ごとに後ろに付くので ts に並べ直す（sort は安定なので同じ ts は読んだ順）
-  rows.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0))
-  return rows
+  return new FeedStore(dir).rowsOn(datesBetween(range.from, range.to))
 }
 
 /** 行が属するエンティティの ID（`<セッション>@<リポジトリ>`）。自分で組み立てず必ずここを通す */
@@ -149,65 +136,41 @@ export interface TurnPair {
   state: TurnState
 }
 
-/** 入力の行と完了の行を対応付ける。`rows` は古い順（別のエンティティが混ざっていてよい）。返すのは始まりの古い順 */
+/**
+ * 入力の行と完了の行を対応付ける。`rows` は古い順（別のエンティティが混ざっていてよい）。返すのは始まりの古い順。
+ * 入力の行を覚える・捨てる規則は、メッセージの返答の引き当てと同じ `promptTracker()`
+ */
 export function pairTurns(rows: readonly FeedRow[]): TurnPair[] {
-  const pending = new Map<string, FeedRow>()
+  const tracker = promptTracker()
   const out: TurnPair[] = []
-  const lost = (entity: string, state: 'missing' | 'open') => {
-    const prompt = pending.get(entity)
-    if (!prompt) return
-    pending.delete(entity)
-    out.push({ entity, prompt, user_text: prompt.user_text ?? '', kind: promptKind(prompt.user_text), state })
-  }
+  const lost = (entity: string, prompt: FeedRow, state: 'missing' | 'open') => out.push({ entity, prompt, user_text: prompt.user_text ?? '', kind: promptKind(prompt.user_text), state })
   for (const row of rows) {
-    const kind = eventKind(row.event, row.text)
-    if (kind === 'waiting' || kind === 'other') continue
-    const entity = rowEntity(row)
-    if (kind === 'idle' || kind === 'end') {
-      lost(entity, 'missing')
-      continue
-    }
-    if (kind === 'resume') {
-      // 本文の無い合図だけの行（待ちのあとの再開）は入力の行ではない
-      if (!row.user_text?.trim()) continue
-      lost(entity, 'missing')
-      pending.set(entity, row)
-      continue
-    }
-    const prompt = pending.get(entity)
-    pending.delete(entity)
-    const userText = isCompactSummaryText(row.user_text) ? (prompt?.user_text ?? row.user_text ?? '') : (row.user_text ?? prompt?.user_text ?? '')
-    out.push({ entity, ...(prompt ? { prompt } : {}), stop: row, user_text: userText, kind: promptKind(userText), state: row.text?.trim() ? 'done' : 'empty' })
+    const step = tracker.step(row)
+    if (!step) continue
+    if (step.dropped) lost(step.entity, step.dropped, 'missing')
+    if (!step.turn) continue
+    const { prompt } = step
+    // 完了の行の入力が要約の文・空（`record.py` は無いときも `""` を書く）なら、入力の行のほうを採る
+    const own = row.user_text?.trim() && !isCompactSummaryText(row.user_text) ? row.user_text : ''
+    const userText = own || prompt?.user_text || row.user_text || ''
+    out.push({ entity: step.entity, ...(prompt ? { prompt } : {}), stop: row, user_text: userText, kind: promptKind(userText), state: row.text?.trim() ? 'done' : 'empty' })
   }
-  for (const entity of [...pending.keys()]) lost(entity, 'open')
+  for (const [entity, prompt] of tracker.pending()) lost(entity, prompt, 'open')
   const at = (p: TurnPair) => (p.prompt ?? p.stop)!.ts
   return out.sort((a, b) => (at(a) < at(b) ? -1 : at(a) > at(b) ? 1 : 0))
 }
 
-async function readJson(path: string): Promise<unknown> {
-  try {
-    return JSON.parse(await readFile(path, 'utf-8'))
-  } catch {
-    return null // 無い・壊れている
-  }
+/** `session-meta.json`（表示名・アーカイブ）。サーバと同じ `MetaStore` で読む（壊れた値は落とす）。無ければ空 */
+export async function readMeta(dir: string): Promise<MetaMap> {
+  return (await new MetaStore(join(dir, META_FILE)).all()).entries
 }
 
-/** `session-meta.json`（表示名・アーカイブ）。無ければ空 */
-export async function readMeta(dir: string): Promise<Record<string, SessionMeta>> {
-  const raw = await readJson(join(dir, META_FILE))
-  return raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, SessionMeta>) : {}
-}
-
-/**
- * 行をセッションにまとめ、表示名とアーカイブを載せる（新しい順）。アーカイブ済みかはサーバと同じく
- * `archived_at >= 最後の行の ts` で決める
- */
-export function sessionsOf(rows: FeedRow[], meta: Record<string, SessionMeta> = {}): SessionSummary[] {
+/** 行をセッションにまとめ、表示名とアーカイブを載せる（新しい順）。アーカイブ済みかはサーバと同じ `isArchivedAt()` */
+export function sessionsOf(rows: FeedRow[], meta: MetaMap = {}): SessionSummary[] {
   return aggregate(rows).map((s) => {
     const m = meta[s.id]
-    if (!m || typeof m !== 'object') return s
-    const archived = !!m.archived_at && Date.parse(m.archived_at) >= Date.parse(s.end)
-    return { ...s, meta: m, ...(archived ? { archived: true } : {}) }
+    if (!m) return s
+    return { ...s, meta: m, ...(isArchivedAt(m, s.end) ? { archived: true } : {}) }
   })
 }
 
@@ -234,25 +197,13 @@ export function resolveSession(sessions: readonly SessionSummary[], query: strin
   return { target: null, ambiguous: hits.length > 1, candidates: hits.length > 0 ? hits : live }
 }
 
-/** `turn-usage.jsonl` を書いた順（= ファイルの順）に読む。壊れた行は落とす */
+/** `turn-usage.jsonl` を書いた順（= ファイルの順）に読む。サーバの読み返しと同じ `parseTurnUsageLog()`。無ければ空 */
 export async function readTurnUsage(dir: string): Promise<TurnUsageEntry[]> {
-  let text: string
   try {
-    text = await readFile(join(dir, TURN_USAGE_FILE), 'utf-8')
+    return parseTurnUsageLog(await readFile(join(dir, TURN_USAGE_FILE), 'utf-8'))
   } catch {
     return []
   }
-  const out: TurnUsageEntry[] = []
-  for (const line of text.split('\n')) {
-    if (!line.trim()) continue
-    try {
-      const e = JSON.parse(line) as TurnUsageEntry
-      if (e && typeof e.ts === 'string' && typeof e.id === 'string') out.push(e)
-    } catch {
-      // 壊れた行は落とす
-    }
-  }
-  return out
 }
 
 /** 使用量の 1 行に、そのターンぶんの費用を足したもの */
@@ -303,17 +254,32 @@ export function usageTotals(rows: readonly UsageRow[], by: 'session' | 'day'): U
   return by === 'day' ? out.sort((a, b) => (a.key < b.key ? -1 : 1)) : out.sort((a, b) => b.cost_usd - a.cost_usd)
 }
 
-/** `agent-messages.json` の送った記録を古い順に。無ければ空 */
+/** `agent-messages.json` の送った記録を古い順に（サーバと同じ `isMessage()` の検査）。無い・壊れていれば空 */
 export async function readAgentMessages(dir: string): Promise<AgentMessage[]> {
-  const raw = (await readJson(join(dir, AGENT_MESSAGES_FILE))) as { messages?: unknown } | null
-  if (!raw || !Array.isArray(raw.messages)) return []
-  return (raw.messages as AgentMessage[]).filter((m) => m && typeof m.message_id === 'string' && typeof m.to === 'string' && typeof m.since === 'string')
+  let raw: unknown
+  try {
+    raw = JSON.parse(await readFile(join(dir, AGENT_MESSAGES_FILE), 'utf-8'))
+  } catch {
+    return []
+  }
+  const messages = (raw as { messages?: unknown } | null)?.messages
+  return Array.isArray(messages) ? messages.filter(isMessage) : []
 }
+
+/**
+ * 返答がどこまで来たか。
+ * - `replied`: 相手の返答の行が記録にある
+ * - `handed`: 行は記録に無いが、返答（か失敗）を送り元に渡してある（`handed_at`）。完了の行が落ちて
+ *   transcript から補った返答（#614。JSONL には書かれない）は、画面には出ているがここでは行が見えない
+ * - `none`: 行も無く、渡してもいない（まだ返っていないか、補った返答をまだ渡していない）
+ */
+export type ReplyState = 'replied' | 'handed' | 'none'
 
 export interface MessageReply {
   message: AgentMessage
-  /** 相手の返答になった行（そのメッセージで回った、相手のターン完了の行）。まだ無い・読んだ範囲に無ければ null */
+  /** 相手の返答になった行（そのメッセージで回った、相手のターン完了の行）。記録に無い・読んだ範囲に無ければ null */
   reply: FeedRow | null
+  state: ReplyState
 }
 
 /**
@@ -323,5 +289,8 @@ export interface MessageReply {
 export function messageReplies(messages: readonly AgentMessage[], rows: readonly FeedRow[]): MessageReply[] {
   const replies = new Map<string, FeedRow>()
   for (const r of agentReplyRows(messages, rows, () => '')) if (r.agent_reply) replies.set(r.agent_reply.message_id, r)
-  return messages.map((message) => ({ message, reply: replies.get(message.message_id) ?? null }))
+  return messages.map((message) => {
+    const reply = replies.get(message.message_id) ?? null
+    return { message, reply, state: reply ? 'replied' : message.handed_at ? 'handed' : 'none' }
+  })
 }

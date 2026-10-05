@@ -19,6 +19,26 @@ export const TURN_USAGE_KEEP_DAYS = 90
 
 export type { TurnUsageEntry }
 
+/**
+ * turn-usage.jsonl の中身を、書いた順（= ファイルの順）の行にする。壊れた行・`ts` が読めない行・`id` の無い行は落とす。
+ * サーバの読み返し（`TurnUsageLog.load()`）と、記録を調べる道具（`server/tools/feedRead.ts`。#703）が同じこの 1 つで読む
+ */
+export function parseTurnUsageLog(text: string): TurnUsageEntry[] {
+  const out: TurnUsageEntry[] = []
+  for (const line of text.split('\n')) {
+    const t = line.trim()
+    if (!t) continue
+    try {
+      const e = JSON.parse(t) as TurnUsageEntry
+      if (!e || typeof e.ts !== 'string' || typeof e.id !== 'string' || Number.isNaN(Date.parse(e.ts))) continue
+      out.push(e)
+    } catch {
+      // 壊れた行は落とす
+    }
+  }
+  return out
+}
+
 /** 使用量の行き先。テストでは差し替える（本物はファイルに追記する） */
 export interface TurnUsageSink {
   record(id: string, usage: TurnUsage): void
@@ -59,20 +79,9 @@ export class TurnUsageLog implements TurnUsageSink {
     this.loaded = true
     const since = Date.now() - TURN_USAGE_KEEP_DAYS * 24 * 60 * 60_000
     try {
-      for (const line of (await readFile(this.path, 'utf-8')).split('\n')) {
-        const t = line.trim()
-        if (!t) continue
-        try {
-          const e = JSON.parse(t) as TurnUsageEntry
-          if (!e || typeof e.ts !== 'string' || typeof e.id !== 'string') continue
-          const at = Date.parse(e.ts)
-          if (Number.isNaN(at)) continue
-          this.remember(e)
-          if (at < since) continue
-          this.entries.push(e)
-        } catch {
-          // 壊れた行は落とす
-        }
+      for (const e of parseTurnUsageLog(await readFile(this.path, 'utf-8'))) {
+        this.remember(e)
+        if (Date.parse(e.ts) >= since) this.entries.push(e)
       }
     } catch {
       // 無ければ空

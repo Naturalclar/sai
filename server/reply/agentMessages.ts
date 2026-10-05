@@ -326,7 +326,8 @@ function isFollowup(f: unknown): f is AgentFollowup {
   return ['id', 'from', 'to', 'text', 'at', 'anchor'].every((k) => typeof v[k] === 'string')
 }
 
-function isMessage(m: unknown): m is AgentMessage {
+/** 送った記録の形か。壊れた 1 件は読まない（記録を調べる道具も同じこの検査で読む。#703） */
+export function isMessage(m: unknown): m is AgentMessage {
   if (!m || typeof m !== 'object') return false
   const r = m as Record<string, unknown>
   return ['message_id', 'from', 'to', 'text', 'since'].every((k) => typeof r[k] === 'string') && (r.handed_at === undefined || typeof r.handed_at === 'string')

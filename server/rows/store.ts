@@ -76,19 +76,19 @@ export class FeedStore {
    * 読むファイル名（#113）。1台なら日付ぶんの1つだが、複数マシンの記録を集めていれば
    * 同じ日に `<host>` 違いが並ぶので、`readdir` して拾う（日付から組み立てると別マシンのぶんが落ちる）
    */
-  private async names(days: number): Promise<string[]> {
+  private async names(dates: readonly string[]): Promise<string[]> {
     let entries: string[]
     try {
       entries = await readdir(this.directory)
     } catch {
       return [] // 置き場がまだ無い
     }
-    return feedFiles(entries, recentDates(days))
+    return feedFiles(entries, dates)
   }
 
   async signature(days: number): Promise<Signature> {
     const parts: Signature = []
-    for (const name of await this.names(days)) {
+    for (const name of await this.names(recentDates(days))) {
       try {
         const st = await stat(join(this.directory, name))
         parts.push([name, st.mtimeMs, st.size])
@@ -130,8 +130,13 @@ export class FeedStore {
   }
 
   async rows(days: number): Promise<FeedRow[]> {
+    return this.rowsOn(recentDates(days))
+  }
+
+  /** その日付（`YYYY-MM-DD`）ぶんの行。記録を調べる道具（`server/tools/feedRead.ts`。#703）が日付の範囲で読む */
+  async rowsOn(dates: readonly string[]): Promise<FeedRow[]> {
     const rows: FeedRow[] = []
-    for (const name of await this.names(days)) {
+    for (const name of await this.names(dates)) {
       for (const r of await this.readFile(join(this.directory, name))) if (!this.isOwnNoise(r)) rows.push(r)
     }
     // 別マシンのファイルは日付ごとに丸ごと後ろに付くので、ここで ts に並べ直す（sort は安定なので同じ ts は読んだ順）

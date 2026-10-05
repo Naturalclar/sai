@@ -8,6 +8,19 @@ export const NOTE_CLAMP_LINES = 8
 export const isLongNote = (text: string): boolean => Array.from(text).length > NOTE_CLAMP_CHARS || text.split('\n').length > NOTE_CLAMP_LINES
 
 /**
+ * 兄弟の鍵。時刻で名指しする（並びの添字は使わない。末尾だけの窓がずれると全部が作り直され、開いていた「全文」が畳まれる）。
+ * 同じ時刻の文が並んだときだけ、その中での順番を足す
+ */
+export function noteKeys(notes: readonly ProgressNote[]): string[] {
+  const seen = new Map<string, number>()
+  return notes.map((n) => {
+    const k = seen.get(n.at) ?? 0
+    seen.set(n.at, k + 1)
+    return `note:${n.at}:${k}`
+  })
+}
+
+/**
  * 出す文（古い順の末尾 max 件）と、出していない数。`total` はそのターンの途中の文の数、`sent` は応答に載ってきた数
  * （応答は末尾だけ）。前のターンの文を落としたあとの `notes` が `sent` より少なければ、落とした分は「ほか」に数えない
  */

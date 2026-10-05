@@ -1,7 +1,7 @@
 import { notesSince } from '../../shared/progress.ts'
 import type { SessionProgressResponse } from './api'
 import { ProgressNoteItem } from './ProgressNoteItem'
-import { shownNotes } from './noteClamp.ts'
+import { noteKeys, shownNotes } from './noteClamp.ts'
 
 /**
  * 処理中のターンの途中でエージェントが書いた文（#680。Codex の commentary・Claude のツールの合間の文）。
@@ -12,11 +12,12 @@ export function ProgressNotes({ progress, since, max }: { progress: SessionProgr
   const notes = notesSince(progress?.notes ?? [], since)
   const { shown, earlier } = shownNotes(notes, progress?.notes_total ?? notes.length, progress?.notes?.length ?? 0, max)
   if (shown.length === 0) return null
+  const keys = noteKeys(shown)
   return (
     <ol className="progress-notes" aria-label="処理中のターンの途中の文">
       {earlier > 0 && <li className="more">ほか {earlier} 件（終わったあと「手順」で読めます）</li>}
       {shown.map((n, i) => (
-        <ProgressNoteItem key={`note:${n.at}:${i}`} note={n} />
+        <ProgressNoteItem key={keys[i]} note={n} />
       ))}
     </ol>
   )

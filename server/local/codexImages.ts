@@ -69,8 +69,11 @@ interface Scan {
 /** 見せた画像として拾う拡張子（SVG は配らないので一覧にも載せない。中身は配るときにもう一度見る） */
 const VIEW_EXT = /^\.(?:png|jpe?g|gif|webp)$/i
 
-/** 見せた cwd の中の画像の鍵。パスは載せない（realpath のハッシュ） */
-const viewKey = (real: string) => `view-${createHash('sha256').update(real).digest('hex').slice(0, 16)}${extname(real).toLowerCase()}`
+/**
+ * 見せた cwd の中の画像の鍵。パスは載せない（realpath とターンのハッシュ）。**ターンごとに別の鍵にする**（#707 のレビュー）:
+ * `.screenshots/` の画像は同じ名前で撮り直すので、ファイルだけで 1 つにまとめると、後のターンで見せ直しても最初のターンにしか出ない
+ */
+const viewKey = (real: string, turn: string) => `view-${createHash('sha256').update(`${real}\0${turn}`).digest('hex').slice(0, 16)}${extname(real).toLowerCase()}`
 
 /**
  * rollout の 1 行から、画像への言及を取る。生成（`image_gen.generation`）は item id、
@@ -114,7 +117,7 @@ export class CodexImages {
   }
 
   /**
-   * rollout に出てきた、そのスレッドの生成した画像と、見せた画像のうち realpath が `cwd` の中にあるもの（古い順・同じファイルは 1 回）。
+   * rollout に出てきた、そのスレッドの生成した画像と、見せた画像のうち realpath が `cwd` の中にあるもの（古い順・同じファイルは 1 回。見せた画像はターンごとに 1 回）。
    * 読めなければ空。`cwd` はセッションの行から渡す（空なら見せた画像は拾わない）
    */
   async list(rollout: string, thread: string, cwd = ''): Promise<CodexImage[]> {
@@ -141,7 +144,7 @@ export class CodexImages {
         // 消えたファイル・cwd の外（`/tmp`、外を指すシンボリックリンク）は載せない
         file = await realpath(m.path).catch(() => '')
         if (!file || !file.startsWith(root + sep) || !VIEW_EXT.test(extname(file))) continue
-        key = viewKey(file)
+        key = viewKey(file, m.turn)
       } else {
         key = m.exact ? (files.includes(m.id) ? m.id : '') : (files.find((n) => n.startsWith(`${m.id}.`)) ?? '')
       }

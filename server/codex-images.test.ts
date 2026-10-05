@@ -145,6 +145,24 @@ test('gallery: view_image で見せた画像は、realpath が cwd の中のも�
   assert.ok(!(await new CodexImages(gen).list(rollout, THREAD)).some((i) => i.file))
 })
 
+test('gallery: 同じパスの画像を後のターンで見せ直したら、そのターンのバブルにも出す（#707 のレビュー）', async () => {
+  const cwd = join(dir, 'work')
+  const t0 = new Date(Date.now() + 10 * 60_000)
+  // T7 で repo-shot.png を見せ直した（T1 でも見せている）。同じターンの中の 2 回は 1 回に数える
+  await appendFile(
+    rollout,
+    completed(t0, { type: 'ImageView', id: 'exec-again', path: pathToFileURL(join(cwd, 'repo-shot.png')).href }, 'T7') +
+      completed(t0, { type: 'ImageView', id: 'exec-again2', path: pathToFileURL(join(cwd, 'repo-shot.png')).href }, 'T7') +
+      turnEnd(new Date(t0.getTime() + 1000), 'T7'),
+  )
+  await appendFile(join(dir, 'feed', `${localDate(t0.toISOString())}.jsonl`), JSON.stringify(row(new Date(t0.getTime() + 1000), THREAD, { repo: 'repo', cwd, agent: 'codex', text: '撮り直しました。' })) + '\n')
+  const shots = (await gallery()).items.filter((i) => i.name === 'repo-shot.png')
+  assert.equal(shots.length, 2, 'ターンごとに 1 回')
+  assert.equal(new Set(shots.map((i) => i.url)).size, 2, '鍵はターンごとに別')
+  assert.equal(new Set(shots.map((i) => i.ts)).size, 2, 'それぞれのターンの返答に付く')
+  for (const i of shots) assert.equal((await image(i.url.split('/codex-images/')[1]!)).status, 200)
+})
+
 test('gallery: 見せたあとに cwd の外へ向け直したリンクは配らない（#704）', async () => {
   const cwd = join(dir, 'work')
   await writeFile(join(cwd, 'swap.png'), PNG)

@@ -26,7 +26,7 @@ echo "$repo"
 pr=$(gh pr view "$(git branch --show-current)" --repo "$repo" --json number -q .number)
 ```
 
-引けなければ `gh pr list --repo "$repo" --state open` を見せて、**どれかを人に選ばせる**（勝手に 1 本目を選ばない）。以降で使う値をここで揃えておく:
+引けなければ `gh pr list --repo "$repo" --state open`（**`--json` に `body` を付けない**。本文を読むのは選んだ 1 件だけ。#688）を見せて、**どれかを人に選ばせる**（勝手に 1 本目を選ばない）。以降で使う値をここで揃えておく:
 
 ```sh
 head=$(gh api "repos/$repo/pulls/$pr" -q .head.ref)
@@ -115,7 +115,7 @@ gh pr diff "$pr" --repo "$repo" | awk '/^diff --git a\/CLAUDE\.md /{p=1} /^diff 
 
 **コメントより先に直す**（コメントには「何を言われて、どうしたか」を一緒に書くので、直す前に書くと嘘になる）。
 
-- **正しい指摘は直してからマージする。** 直したら `pnpm test && pnpm test:feed && pnpm lint && pnpm typecheck` を回し、push して**CI をもう一度待つ**（1 に戻る）
+- **正しい指摘は直してからマージする。** 直したら一式を **`bash scripts/suite.sh`** で回し（通れば 1 行ずつ、落ちたら落ちたテストだけが出る。**素の `pnpm test` は回さない**——1 万字を超える出力が文脈に残る。#688）、push して**CI をもう一度待つ**（1 に戻る）
 - 直さないと決めたものは**理由を控えておく**（範囲外・別 issue に分けた・誤検出、など）。別 issue に分けたなら番号も
 - 直しが大きい（別の設計になる・他のファイルに波及する）ときは、**マージせずに人に戻す**。指摘とそのまま貼れる選択肢を出して止まる
 

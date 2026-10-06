@@ -75,6 +75,14 @@ node --disable-warning=ExperimentalWarning server/tools/feed.ts rows <セッシ�
 - **読み方を新しく決めない・写さない**。判定は `shared/` のもの（`entityId()`・`eventKind()`・`localDate()`・`isCompactSummaryText()`・`turnCosts()`・`agentReplyRows()`・`resolveTarget()`・`isArchivedAt()`・入力の行を辿る `promptTracker()`）、ファイルの読み方はサーバのもの（`FeedStore.rowsOn()`・`MetaStore`・`parseTurnUsageLog()`・`isMessage()`）をそのまま呼ぶ。正本を TypeScript に置いたのはこのため（→ [経緯](../history/tooling.md#記録を調べる道具を-typescript-に置いた703)）。
 - テストは `server/tools/feed.test.ts`（`pnpm test` に入る。一時ディレクトリの記録で回し、本物の置き場は触らない）。「費用を積み上げのまま足す」「要約の文を人の入力に数える」の 2 つを、間違えない例として入れてある。
 
+## 一式を短い出力で回す（`scripts/suite.sh`。#688）
+
+- `bash scripts/suite.sh` が `pnpm -s test` / `test:feed` / `lint` / `typecheck`（`--build` で `build` も）を順に回し、1 つにつき 1 行（`test=ok tests=… pass=… fail=…`、`lint=ok warnings=… errors=…`）と、最後に `status=ok` か `status=fail log=<置き場>` を出す。
+- 落ちたものは、落ちた所だけを `SUITE_MAX_LINES`（既定 40）行まで出す: `test` は `not ok` の行、`test:feed` は `FAIL:` / `ERROR:` の行、`lint` は `: error ` の行（警告は数だけ）、`typecheck` は `error TS` の行、`build` は末尾。全文は一時ディレクトリの `<名前>.log`（全部通れば消す）。
+- どれかが落ちても残りは回す（1 回で全部の落ち方が分かる）。落ちたら exit 1。
+- `package.json` のスクリプトにはしていない（CI は今までどおり 4 つを別々に回す。人が読むときは全文のほうがよい）。偽の `pnpm` で確かめるテストは `server/suite.test.ts`。
+- `/setup-sai` の点検（一番新しい行・届いているフック・使用率のファイル・`statusLine`）は `.claude/skills/setup-sai/doctor.py`（読むだけ）。SKILL.md の本文に埋めていた Python を出したもの。
+
 ## テストを単体で回す
 
 ```

@@ -14,10 +14,7 @@ clone した SAI を「1 ターン回すと画面に出る」ところまで持�
 設定を追いかけるより、**書かれた行を見るほうが速くて確実**。
 
 ```sh
-# 日付のファイルだけを見る。*.jsonl だと digest.jsonl（一言。行の形が違う）を拾って
-# agent も v も None になり、動いているのに「壊れている」と読み違える
-ls -t ~/.agent-feed/20??-??-??*.jsonl 2>/dev/null | head -1 | xargs tail -1 |
-  python3 -c "import json,sys; r=json.load(sys.stdin); print(r.get('ts'), r.get('agent'), 'v=%s' % r.get('v'), r.get('repo'))"
+python3 .claude/skills/setup-sai/doctor.py last        # 一番新しい記録の行（日付のファイルだけを見る。digest.jsonl は拾わない）
 ```
 
 | 出たもの | 意味 | 次に見るところ |
@@ -73,24 +70,7 @@ worktree を複数持っているなら**どれを記録に使うかは人が決
 フックのコマンドは `python3 "$SAI_HOME/feed/record.py"` の直書きとは限らない。**PATH に置いたラッパー**（`sai-record` のような、中で `record.py` を呼ぶもの）を指していることがあるので、**コマンド名だけで判断せず中身を読む**:
 
 ```sh
-python3 - <<'PY'
-import json, os, shutil
-def reaches(cmd):
-    if 'record.py' in cmd: return cmd
-    exe = (cmd.split() or [''])[0]
-    p = shutil.which(exe)
-    if not p: return None
-    try: body = open(p, encoding='utf-8', errors='replace').read()
-    except Exception: return None
-    return f'{p} 経由' if 'record.py' in body else None
-for label, path in [('user', os.path.expanduser('~/.claude/settings.json')), ('project', '.claude/settings.json')]:
-    try: hooks = (json.load(open(path)) or {}).get('hooks') or {}
-    except Exception: print(f'{label}: {path} は無い / 読めない'); continue
-    hits = [(e, g.get('matcher',''), h.get('command',''), reaches(h.get('command','')))
-            for e, gs in hooks.items() for g in gs for h in g.get('hooks', []) if reaches(h.get('command',''))]
-    print(f'{label}: {path} → record.py に届くフック {len(hits)} 件')
-    for e, m, c, v in hits: print(f'   {e:18} matcher={m!r} {c!r} -> {v}')
-PY
+python3 .claude/skills/setup-sai/doctor.py hooks       # user と project の両方。読むだけ
 ```
 
 - **両方に出たら二重掛け。** 片方を外すことを勧める（どちらを残すかは人が決める）
@@ -133,22 +113,7 @@ Claude の 5 時間・週の使用率をヘッダに出すための口（#250）
 まず**結果を見る**（フックと同じ順序）。判定はサーバと同じ規則にする（`server/local/usage.ts` の `isClaudeUsageFile`、`shared/usage.ts` の `STATUS_MAX_AGE_MS`）:
 
 ```sh
-python3 - <<'PY'
-import json, os, re, time
-feed = os.environ.get('AGENT_FEED_DIR') or os.path.expanduser('~/.agent-feed')
-MAX_AGE = 8 * 86400  # shared/usage.ts の STATUS_MAX_AGE_MS。これより古いとサーバが捨てる
-try: names = sorted(n for n in os.listdir(feed) if re.fullmatch(r'usage-claude(\.[^/]+)?\.json', n))
-except OSError: names = []
-if not names: print(f'{feed}: usage-claude*.json が無い → statusLine 未設定か、まだ 1 回も描画されていない')
-now = time.time()
-for n in names:
-    try: d = json.load(open(os.path.join(feed, n)))
-    except Exception as e: print(f'{n}: 読めない ({e})'); continue
-    age = now - (time.mktime(time.strptime(d.get('ts','')[:19], '%Y-%m-%dT%H:%M:%S')) if d.get('ts') else 0)
-    limits = d.get('rate_limits') or {}
-    windows = {k: v.get('used_percentage') for k, v in limits.items() if isinstance(v, dict)}
-    print(f'{n}: ts={d.get("ts")} ({age/3600:.1f}h 前{"、古すぎる" if age > MAX_AGE else ""}) windows={windows or "空（subscription でない？）"}')
-PY
+python3 .claude/skills/setup-sai/doctor.py usage
 ```
 
 **ファイルがあって新しく、`windows` に数字が入っていれば、もう出ている。** `statusLine` は触らない。
@@ -156,25 +121,7 @@ PY
 無ければ、いまの `statusLine` を読む（フックと同じで、**コマンド名だけで判断せず中身を読む**。ラッパー経由で届いていることがある）:
 
 ```sh
-python3 - <<'PY'
-import json, os, shutil
-def reaches(cmd, needle):
-    if not cmd: return None
-    if needle in cmd: return cmd
-    exe = (cmd.split() or [''])[0]
-    p = shutil.which(exe)
-    if not p: return None
-    try: body = open(p, encoding='utf-8', errors='replace').read()
-    except Exception: return None
-    return f'{p} 経由' if needle in body else None
-path = os.path.expanduser('~/.claude/settings.json')
-try: sl = (json.load(open(path)) or {}).get('statusLine')
-except Exception as e: print(f'{path} は無い / 読めない ({e})'); raise SystemExit
-if not sl: print('statusLine: 未設定 → SAI の割合は永久に出ない'); raise SystemExit
-cmd = sl.get('command', '') if isinstance(sl, dict) else str(sl)
-print(f'statusLine: {cmd!r}')
-print('  statusline.py に届くか:', reaches(cmd, 'statusline.py') or '届かない → 別のものに取られている')
-PY
+python3 .claude/skills/setup-sai/doctor.py statusline
 ```
 
 | いまの値 | どうするか |
@@ -240,7 +187,7 @@ echo 'not json at all' | python3 feed/record.py; echo $?   # 0 で、行は増�
 **3.3 を設定したなら**、そちらも見る。ステータスラインは**ターンを回さなくても**、Claude Code を開いて描画されれば書かれる:
 
 ```sh
-curl -sS -m 5 http://127.0.0.1:8787/api/usage    # claude.primary に割合が載る
+curl -sS -m 5 http://127.0.0.1:8787/api/usage | head -c 600    # claude.primary に割合が載る
 ```
 
 ヘッダの使用量に `Claude NN%` が出れば完了。載らないときは 3.3 の表（未設定 / 取られている / 古い / subscription でない）に戻る。

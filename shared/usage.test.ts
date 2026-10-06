@@ -7,7 +7,13 @@ import {
   parseCodexUsage,
   parseStatusLineUsage,
   resetLabel,
+  isUsageStale,
   STATUS_MAX_AGE_MS,
+  USAGE_HIGH,
+  USAGE_STALE_MS,
+  USAGE_WARN,
+  usageAgeLabel,
+  usageAtLabel,
   usageLevel,
   windowLabel,
 } from './usage.ts'
@@ -214,4 +220,42 @@ test('mergeClaudeUsage: 割合（ステータスライン）と上限中（trans
   assert.equal(mergeClaudeUsage(windows, null), windows)
   assert.equal(mergeClaudeUsage(null, limited), limited)
   assert.equal(mergeClaudeUsage(null, null), null)
+})
+
+test('古さ: 30 分を過ぎたら古い。分からない時刻・先の時刻は古いと言わない（#694）', () => {
+  const at = (ms: number) => new Date(NOW - ms).toISOString()
+  assert.equal(isUsageStale(at(USAGE_STALE_MS), NOW), false, 'ちょうどはまだ')
+  assert.equal(isUsageStale(at(USAGE_STALE_MS + 1), NOW), true)
+  assert.equal(isUsageStale('', NOW), false)
+  assert.equal(isUsageStale(undefined, NOW), false)
+  assert.equal(isUsageStale('いつか', NOW), false)
+  assert.equal(isUsageStale(at(-60_000), NOW), false, '時計がずれて先の時刻になっているもの')
+  assert.equal(isUsageStale(at(3_600_000), 0), false, 'まだ取ってきていない（now が無い）')
+})
+
+test('古さの閾値は、捨てる上限より短く、色の境目の幅より先に付く（#694）', () => {
+  // 30 分〜8 日は「古い」と印を付けて出し、8 日を過ぎたものは parseStatusLineUsage() が出さない
+  assert.ok(USAGE_STALE_MS < STATUS_MAX_AGE_MS)
+  const old = statusFile({ ts: new Date(NOW - USAGE_STALE_MS - 60_000).toISOString() })
+  const usage = parseStatusLineUsage(old, NOW)
+  assert.ok(usage, '古くても 8 日までは出す')
+  assert.equal(isUsageStale(usage.at, NOW), true)
+  // 根拠にした実測の進み（30 分で 10 ポイント）が、色の境目の幅（15 ポイント）に収まること
+  assert.ok((USAGE_STALE_MS / (30 * 60_000)) * 10 < USAGE_HIGH - USAGE_WARN)
+})
+
+test('どれだけ前か・いつ時点かの言い換え（今日でなければ日付も）（#694）', () => {
+  const at = (ms: number) => new Date(NOW - ms).toISOString()
+  assert.equal(usageAgeLabel(at(30_000), NOW), '')
+  assert.equal(usageAgeLabel(at(45 * 60_000), NOW), '45分前')
+  assert.equal(usageAgeLabel(at(27 * 3_600_000 + 5 * 60_000), NOW), '27時間前')
+  assert.equal(usageAgeLabel(at(47 * 3_600_000), NOW), '47時間前')
+  assert.equal(usageAgeLabel(at(3 * 86_400_000), NOW), '3日前')
+  assert.equal(usageAgeLabel('', NOW), '')
+  const d = new Date(NOW - 45 * 60_000)
+  const clock = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  assert.equal(usageAtLabel(d.toISOString(), NOW), `${clock} 時点`)
+  const y = new Date(NOW - 27 * 3_600_000)
+  assert.match(usageAtLabel(y.toISOString(), NOW), new RegExp(`^${y.getMonth() + 1}/${y.getDate()} \\d\\d:\\d\\d 時点$`))
+  assert.equal(usageAtLabel('', NOW), '')
 })

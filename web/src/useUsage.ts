@@ -3,12 +3,18 @@ import { api, type UsageResponse } from './api'
 
 /**
  * 各エージェントの使用量（#216）。**3 秒のポーリングには乗せない**（サーバがファイルを漁るので）。
- * 取るのは、開いたとき・タブに戻ってきたとき・パネルを開いたとき（reload）だけ
+ * 取るのは、開いたとき・タブに戻ってきたとき・パネルを開いたとき（reload）と、表に出ているあいだの 5 分おき（#694）
  * （`useSkills` / `useCommandPalette` と同じ流儀）。サーバ側も 30 秒キャッシュしている。
  *
  * 取れなかった（Codex を使っていない、Claude が上限に当たっていない）は空の `{}` で返るので、
  * 「まだ取っていない」（null）と区別できる。失敗は黙って捨てる（ヘッダの飾りなので、画面に出すほどのことではない）
  */
+/**
+ * 開いたままのタブで取り直す間隔（#694）。取り直さないと「取ってきた時刻」が進まず、何時間たっても古い値に印が付かない。
+ * `USAGE_STALE_MS`（30 分）より十分短く、サーバの 30 秒キャッシュより長い
+ */
+export const USAGE_REFRESH_MS = 5 * 60_000
+
 export function useUsage() {
   // at は取ってきた時刻。「あと 42 分」の基準に使う（描画中に Date.now() を呼ばない）
   const [state, setState] = useState<{ usage: UsageResponse | null; at: number }>({ usage: null, at: 0 })
@@ -38,6 +44,14 @@ export function useUsage() {
     }
     document.addEventListener('visibilitychange', onVisible)
     return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [reload])
+
+  // 表に出ているあいだは USAGE_REFRESH_MS おきに取り直す（隠れているタブでは取らない。戻ったときに上の effect が取る）
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (!document.hidden) reload()
+    }, USAGE_REFRESH_MS)
+    return () => clearInterval(timer)
   }, [reload])
 
   return { usage: state.usage, at: state.at, reload }

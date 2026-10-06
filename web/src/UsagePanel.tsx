@@ -2,6 +2,7 @@ import { hm } from './format'
 import { limitKindLabel, resetLabel } from '../../shared/usage.ts'
 import { UsageBar } from './UsageBar'
 import type { UsageResponse } from './api'
+import { claudeFreshness, CLAUDE_USAGE_WHY } from './usageChips'
 
 /**
  * 使用量の詳細（UsageChip を押すと出る）。どちらも 5時間 / 週のゲージ。
@@ -9,6 +10,8 @@ import type { UsageResponse } from './api'
  * （割合が出ないのは不具合ではない。#250）
  */
 export function UsagePanel({ usage, now, onNavigate }: { usage: UsageResponse; now: number; onNavigate?: () => void }) {
+  // Claude の割合がいつの値か・5 時間が欠けているか（#694）。判定は usageChips.ts の 1 か所
+  const fresh = claudeFreshness(usage.claude, now)
   return (
     <div className="usage-panel" role="dialog" aria-label="使用量">
       {usage.codex && (
@@ -26,9 +29,24 @@ export function UsagePanel({ usage, now, onNavigate }: { usage: UsageResponse; n
         <section>
           <h3>
             Claude
-            {usage.claude.at && <span className="usage-at">{hm(usage.claude.at)} 時点</span>}
+            {/* 今日でなければ日付も出し、古ければ目立たせて「何時間前」を添える（#694） */}
+            {fresh.at && (
+              <span className={`usage-at${fresh.stale ? ' stale' : ''}`}>
+                {fresh.at}
+                {fresh.stale && ` · ${fresh.age}から変化なし`}
+              </span>
+            )}
           </h3>
           {usage.claude.primary && <UsageBar window={usage.claude.primary} now={now} />}
+          {/* 週は来ているのに 5 時間が来ていないときは、黙って消さずにそう出す */}
+          {fresh.fiveHourMissing && (
+            <div className="usage-bar missing">
+              <div className="usage-bar-top">
+                <span className="usage-window">5時間</span>
+                <span className="usage-missing">取れていません</span>
+              </div>
+            </div>
+          )}
           {usage.claude.secondary && <UsageBar window={usage.claude.secondary} now={now} />}
           {usage.claude.limited && (
             <p className="usage-hit">
@@ -36,6 +54,7 @@ export function UsagePanel({ usage, now, onNavigate }: { usage: UsageResponse; n
               {resetLabel(usage.claude.limited.resets_at, now)}）
             </p>
           )}
+          {(fresh.stale || fresh.fiveHourMissing) && <p className="usage-note">{CLAUDE_USAGE_WHY}</p>}
         </section>
       )}
       {/* 割合が 1 つも取れないときだけ案内する（#347。週だけ取れている人に「設定すると出ます」は嘘になる） */}

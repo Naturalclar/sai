@@ -64,6 +64,7 @@ C-c / SIGTERM では必ず終わる（#296。`main.ts` の `shutdown()`）。
 
 - ヘッダの `UsageChip`。`useUsage.ts` が開いたとき・タブに戻ったとき・パネルを開いたときだけ取る。取れなければ何も出さない。
 - チップに何をどの順で出すかは `web/src/usageChips.ts` の `usageChips()` / `chipsLevel()` に 1 つだけ置く（#347。`usageChips.test.ts`）。Claude が先。Claude は 5 時間の枠が無ければ週に落として `週` の印を付ける。上限中は割合が無くても出す。
+- 割合が古いか（#694）は `shared/usage.ts` の `isUsageStale(at, now)`（`USAGE_STALE_MS` = 30 分。`at` が無い・読めない・先の時刻・`now` が 0 なら古いと言わない）、言い換えは `usageAgeLabel()`（「27時間前」）と `usageAtLabel()`（今日でなければ日付も）。画面に渡す形は `web/src/usageChips.ts` の `claudeFreshness(claude, now)`（`at`・`age`・`stale`・`fiveHourMissing`）の 1 つで、**測る起点は `at`（割合が最後に変わった時刻。`usage-claude.json` の `ts`）**で、届いているが変わっていない値にも付く（だから文言は「変わっていません」）。`useUsage.ts` は表に出ているあいだ `USAGE_REFRESH_MS`（5 分）おきに取り直す（取り直さないと `now` が進まず、開いたままのタブで印が付かない）。`usageChips(usage, now)` の `stale` / `age`、`UsageChip` の title、`UsagePanel` が同じものを見る。古さを見るのは割合があるときだけ（上限中だけの記録の `at` は transcript の行の時刻）。理由の文は `CLAUDE_USAGE_WHY`。サーバ（`local/usage.ts`）は変えていない: `USAGE_STALE_MS` < `STATUS_MAX_AGE_MS` で、30 分〜8 日は印を付けて出し、8 日を過ぎたら `parseStatusLineUsage()` が今までどおり落とす（`shared/usage.test.ts` が順を見る）。
 - パネルの「ステータスラインを設定すると出ます」の案内は、割合が 1 つも無いときだけ出す。
 
 ## rev が同じなら 304（#592）

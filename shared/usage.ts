@@ -100,6 +100,8 @@ function parseStatusWindow(value: unknown, minutes: number, now: number): UsageW
   return window
 }
 
+const pad = (n: number) => String(n).padStart(2, '0')
+
 /** `resets_at` の無い窓を信じる上限。ファイルが古いまま残っていても、いつまでも出さない */
 export const STATUS_MAX_AGE_MS = 8 * 24 * 60 * 60 * 1000
 
@@ -122,6 +124,58 @@ export function parseStatusLineUsage(file: unknown, now: number): ClaudeUsage | 
   if (primary) usage.primary = primary
   if (secondary) usage.secondary = secondary
   return primary || secondary ? usage : null
+}
+
+/**
+ * Claude の割合を「古い」と見なすまでの時間（#694）。値が届くのは**端末の Claude Code がステータスラインを描いたとき**だけで、
+ * SAI から回した返信（`claude -p`）は描かないので、SAI から回しているあいだは値が進まない。
+ * **測るのは「割合が最後に変わってから」**（`usage-claude.json` の `ts`。#689）で、「最後に届いてから」ではない:
+ * 届いているが変わっていない値（上限中の 100%・軽い利用）にも付くので、画面は「◯ 前から変わっていません」としか言わない。
+ * 「最後に届いた時刻」は、API を叩いていない描き直しと区別が付かないうちは持たない（#719 のレビュー）。
+ *
+ * 30 分にした根拠: 実測（2026-10-05）で、並行して回していた 30 分に週の割合が 37% → 47% と 10 ポイント進んでいた。
+ * 色が変わる境目（`USAGE_WARN` 80 と `USAGE_HIGH` 95）の間が 15 ポイントなので、これより長く黙っていると色を 1 段取り違えうる。
+ * 端末で使っているあいだは発言のたびに描かれて数分おきに届くので、ふつうに使っていて付くことはない。
+ * **`STATUS_MAX_AGE_MS`（8 日）より必ず短い**: ここから 8 日までは「古い」と印を付けて出し、8 日を過ぎたら今までどおり出さない
+ */
+export const USAGE_STALE_MS = 30 * 60_000
+
+/** その値が届いてからの時間（ミリ秒）。`at` が無い・読めない・先の時刻なら null（古いとは言わない） */
+export function usageAgeMs(at: string | undefined, now: number): number | null {
+  const written = Date.parse(at ?? '')
+  if (Number.isNaN(written) || now <= 0) return null
+  const age = now - written
+  return age >= 0 ? age : null
+}
+
+/** 値が古いか（`USAGE_STALE_MS` より前に届いたまま）。いつの値か分からないものは古いと言わない */
+export function isUsageStale(at: string | undefined, now: number, staleMs: number = USAGE_STALE_MS): boolean {
+  const age = usageAgeMs(at, now)
+  return age !== null && age > staleMs
+}
+
+/** どれだけ前の値か（「45分前」「27時間前」「3日前」）。1 分未満・分からないときは空 */
+export function usageAgeLabel(at: string | undefined, now: number): string {
+  const age = usageAgeMs(at, now)
+  if (age === null) return ''
+  const minutes = Math.floor(age / 60_000)
+  if (minutes < 1) return ''
+  if (minutes < 60) return `${minutes}分前`
+  const hours = Math.floor(minutes / 60)
+  return hours < 48 ? `${hours}時間前` : `${Math.floor(hours / 24)}日前`
+}
+
+/**
+ * いつ時点の値か（「10:57 時点」。**今日でなければ日付も**「10/5 10:57 時点」）。時刻だけだと、きのうの値が今日の値に見える。
+ * 読めなければ空
+ */
+export function usageAtLabel(at: string | undefined, now: number): string {
+  const d = new Date(at ?? '')
+  if (Number.isNaN(d.getTime())) return ''
+  const today = new Date(now)
+  const sameDay = d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth() && d.getDate() === today.getDate()
+  const clock = `${pad(d.getHours())}:${pad(d.getMinutes())}`
+  return `${sameDay ? clock : `${d.getMonth() + 1}/${d.getDate()} ${clock}`} 時点`
 }
 
 /**
@@ -150,8 +204,6 @@ export function limitKindLabel(kind: string): string {
   if (kind === 'weekly' || kind === 'seven_day') return '週'
   return kind
 }
-
-const pad = (n: number) => String(n).padStart(2, '0')
 
 /**
  * 戻る時刻の言い換え。`resets_at` は epoch 秒。1 時間を切ったら残り、それより先は時刻（同じ日でなければ日付も）。

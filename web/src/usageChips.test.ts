@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { chipsLevel, usageChips } from './usageChips.ts'
+import { chipsLevel, claudeFreshness, usageChips } from './usageChips.ts'
 import type { UsageWindow } from '../../shared/types.ts'
 
 const five = (used: number): UsageWindow => ({ used_percent: used, window_minutes: 300, resets_at: 1789578000 })
@@ -41,4 +41,37 @@ test('chipsLevel: 一番きつい枠に合わせる。割合の無いチップ�
   assert.equal(chipsLevel(usageChips({ claude: { secondary: week(96), at: '' } })), 'high', '週でも色は付ける')
   assert.equal(chipsLevel(usageChips({ claude: { limited: { resets_at: 1, kind: '' }, at: '' } })), 'ok')
   assert.equal(chipsLevel([]), 'ok')
+})
+
+// #694: Claude の割合は端末の Claude Code が描いたときにしか届かない。古い値をいまの値と取り違えないようにする
+const NOW = Date.parse('2026-10-06T14:00:00+09:00')
+const ago = (ms: number) => new Date(NOW - ms).toISOString()
+// 時刻の言い換えは動かしているマシンの時間帯で出るので、期待も同じ時間帯で組む（CI は UTC）
+const clock = (iso: string) => {
+  const d = new Date(iso)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+const dated = (iso: string) => `${new Date(iso).getMonth() + 1}/${new Date(iso).getDate()} ${clock(iso)}`
+
+test('usageChips: Claude の割合が 30 分より古ければ stale と「何時間前」を付ける。Codex には付けない（#694）', () => {
+  const fresh = usageChips({ codex: codex(15), claude: { secondary: week(37), at: ago(29 * 60_000) } }, NOW)
+  assert.deepEqual(fresh.map((p) => [p.agent, p.stale, p.age]), [['claude', false, ''], ['codex', false, '']])
+  const stale = usageChips({ codex: codex(15), claude: { secondary: week(37), at: ago(27 * 3_600_000) } }, NOW)
+  assert.deepEqual(stale.map((p) => [p.agent, p.percent, p.stale, p.age]), [['claude', 37, true, '27時間前'], ['codex', 15, false, '']])
+  // 色は割合のまま決める（古い 96% を緑にはしない）
+  assert.equal(chipsLevel(usageChips({ claude: { primary: five(96), at: ago(3_600_000) } }, NOW)), 'high')
+  // いつの値か分からない・now を渡さない（今までの呼び方）なら古いと言わない
+  assert.deepEqual(usageChips({ claude: { secondary: week(37), at: '' } }, NOW).map((p) => p.stale), [false])
+  assert.deepEqual(usageChips({ claude: { secondary: week(37), at: ago(27 * 3_600_000) } }).map((p) => p.stale), [false])
+})
+
+test('claudeFreshness: いつの値か（今日でなければ日付も）・古いか・5 時間が欠けているか（#694）', () => {
+  // 実測の形: 10/5 10:57 に週だけ届いたまま、27 時間たっている
+  const real = claudeFreshness({ secondary: week(37), at: '2026-10-05T10:57:58+09:00' }, NOW)
+  assert.deepEqual(real, { at: `${dated('2026-10-05T10:57:58+09:00')} 時点`, age: '27時間前', stale: true, fiveHourMissing: true })
+  // 5 時間も来ていて新しい
+  assert.deepEqual(claudeFreshness({ primary: five(12), secondary: week(47), at: ago(5 * 60_000) }, NOW), { at: `${clock(ago(5 * 60_000))} 時点`, age: '5分前', stale: false, fiveHourMissing: false })
+  // 上限中だけ（割合が 1 つも無い）: `at` は transcript の行の時刻なので古いとは言わず、「5 時間が取れていません」も出さない（設定の案内のほうが出る）
+  assert.deepEqual(claudeFreshness({ limited: { resets_at: 1789578000, kind: 'five_hour' }, at: ago(5 * 3_600_000) }, NOW), { at: `${clock(ago(5 * 3_600_000))} 時点`, age: '', stale: false, fiveHourMissing: false })
+  assert.deepEqual(claudeFreshness(undefined, NOW), { at: '', age: '', stale: false, fiveHourMissing: false })
 })

@@ -19,7 +19,7 @@ excerpt() {
   case "$1" in
     test) grep -E '^not ok' "$2" ;;
     feed) grep -E '^(FAIL|ERROR): ' "$2" ;;
-    lint) grep -E ': error ' "$2" || tail -n "$max" "$2" ;;
+    lint) grep -E '\[Error/' "$2" || tail -n "$max" "$2" ;;
     typecheck) grep -E 'error TS' "$2" ;;
     *) tail -n "$max" "$2" ;;
   esac | head -n "$max"
@@ -29,11 +29,14 @@ num() { grep -E "^# $1 " "$2" | tail -n 1 | awk '{print $3}'; }
 for step in "${steps[@]}"; do
   name=$(script_of "$step")
   out="$log/$step.log"
-  if pnpm -s "$name" >"$out" 2>&1; then state=ok; else state=fail; failed=1; fi
+  # oxlint の出力の形は環境で変わる（エージェントの環境変数があると 1 行形式、無ければ飾り付き）ので、形を指定して数える
+  extra=()
+  [ "$step" = lint ] && extra=(--format=unix)
+  if pnpm -s "$name" ${extra[@]+"${extra[@]}"} >"$out" 2>&1; then state=ok; else state=fail; failed=1; fi
   case "$step" in
     test) note="tests=$(num tests "$out") pass=$(num pass "$out") fail=$(num fail "$out")" ;;
     feed) note=$(grep -E '^Ran [0-9]+ tests?' "$out" | tail -n 1 | awk '{print "tests=" $2}') ;;
-    lint) note="warnings=$(grep -c ': warning ' "$out") errors=$(grep -c ': error ' "$out")" ;;
+    lint) note="warnings=$(grep -c '\[Warning/' "$out") errors=$(grep -c '\[Error/' "$out")" ;;
     *) note= ;;
   esac
   echo "$name=$state${note:+ $note}"

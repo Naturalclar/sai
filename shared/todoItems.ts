@@ -31,6 +31,11 @@ export interface TodoItem {
    * **「SAI からは答えられない」と決めつけない**（端末で開いていれば打ち込めるし、再開もできる）
    */
   replyable: boolean
+  /**
+   * `text` の後ろに小さく添える文（#713）。`done` で、最後のターンの一言が 2 つで組まれているときだけ:
+   * `text` が「人が次にすること」、こちらが「何が起きたか」。無ければ今までどおり `text` だけ
+   */
+  sub?: string
 }
 
 /**
@@ -80,8 +85,11 @@ export function todoItems(sessions: readonly SessionSummary[], approvals: Approv
     if (loops[s.id]?.status === 'running') continue
     // `入力待ち`（端末で放置）はその文言のまま、ターンが終わっただけのものは最後の発言（一言があればそれ）
     // 本文は Markdown のままなので、一覧の 2 行目と同じく記号を落とす（`[#374](https://…)` がそのまま出ていた）
-    const text = s.idle || stripMarkdown(s.last_summary || s.last_text || '') || '（本文なし）'
-    out.push({ id: s.id, kind: 'done', text, since: s.idle ? s.end : s.last_turn_ts || s.end, session: s, approval: null, replyable: watchReplyable(s, selfHost) })
+    // 一言が 2 つで組まれていれば（#713）、「人が次にすること」を先に、「何が起きたか」を後ろに小さく
+    const next = s.idle ? '' : stripMarkdown((s.last_summary && s.last_summary_next) || '')
+    const what = stripMarkdown(s.last_summary || s.last_text || '')
+    const text = s.idle || next || what || '（本文なし）'
+    out.push({ id: s.id, kind: 'done', text, since: s.idle ? s.end : s.last_turn_ts || s.end, session: s, approval: null, replyable: watchReplyable(s, selfHost), ...(next && what ? { sub: what } : {}) })
   }
   return out.sort((a, b) => (a.since === b.since ? a.id.localeCompare(b.id) : a.since < b.since ? -1 : 1))
 }

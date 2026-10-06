@@ -46,6 +46,11 @@ interface Props {
   /** 一言版（digest）。あればこれを本文にして、元の text は「詳細」で開く */
   summary?: string
   /**
+   * 一言の「人が次にすること」（#713）。本文の文そのまま（口調なし）。あれば一言の下に 1 行で出す。
+   * 見出し（「次に:」など）は付けない（続けて読める 2 文にする）
+   */
+  summaryNext?: string
+  /**
    * その一言の鍵（`shared/digestFeedback.ts` の `digestKey()`）。渡されたら一言の横に「変？」を出す（#346）。
    * 押すと理由が `~/.agent-feed/digest-feedback.jsonl` に溜まる（その場の一言は変わらない）
    */
@@ -103,7 +108,7 @@ interface Props {
 }
 
 /** バブル1つ分の本文。長ければ折りたたんで「もっと見る」を付ける */
-export function Message({ ts, text: raw, markdown, waiting, questions, resolved, thinking, thinkingOpen = false, summary, digestKey, model, usage, recovered = false, steps, remote, sourceAsk = '', linear, found = false, utteranceKey, side, menu, images, diff, clipped = false, thinkingClipped = false, defaultOpen = false }: Props) {
+export function Message({ ts, text: raw, markdown, waiting, questions, resolved, thinking, thinkingOpen = false, summary, summaryNext, digestKey, model, usage, recovered = false, steps, remote, sourceAsk = '', linear, found = false, utteranceKey, side, menu, images, diff, clipped = false, thinkingClipped = false, defaultOpen = false }: Props) {
   // 自分の入力に添えた画像は、パスの文字列ではなくサムネイルで出す（本文の末尾に足してある。shared/attachments.ts）
   const { body: text, urls, files } = markdown ? { body: raw, urls: [] as string[], files: [] } : splitAttachments(raw)
   // 長い本文を開いているか。#365 の画面（フィード）では最初から開いた状態で始める。
@@ -159,6 +164,10 @@ export function Message({ ts, text: raw, markdown, waiting, questions, resolved,
           </button>
           {digestKey && <DigestFeedback digestKey={digestKey} />}
         </div>
+        {/* 人が次にすること（#713）。本文の文そのままなので、一言と同じく番号はリンクにする */}
+        {summaryNext && (
+          <div className="summary-next"><ImageSourceContext value={null}><FileSessionContext value={null}><Inlines nodes={linkifyRefs(summaryNext, { remote, linear, source: sourceAsk ? `${text}\n${sourceAsk}` : text })} /></FileSessionContext></ImageSourceContext></div>
+        )}
         {/* 詳細を開いたら本文の中に出るので、ここでは二重に出さない */}
         {!details && <SourceImages text={text} />}
         {steps && <TurnSteps id={steps.id} ts={steps.ts} />}

@@ -101,6 +101,21 @@ export interface DigestEntry {
   judge?: 'full' | 'summary'
 }
 
+/** 画面に渡す一言（#713）。`next` が無ければ `what` が一言の全部 */
+export interface DigestParts {
+  what: string
+  next?: string
+}
+
+/**
+ * `digest.jsonl` の行 → 画面に渡す形。一言が空（案だけ作った行。#560）なら undefined。
+ * **`what` と `next` が両方そろっている行だけ**を 2 つとして渡す（片方だけの行は、繋いである `summary` を 1 つの一言として渡す）
+ */
+export function partsOf(e: Pick<DigestEntry, 'summary' | 'what' | 'next'>): DigestParts | undefined {
+  if (!e.summary) return undefined
+  return e.what?.trim() && e.next?.trim() ? { what: e.what, next: e.next } : { what: e.summary }
+}
+
 /** 行のキー。行は (エンティティ, ts) で一意。**画面と同じものを使う**（shared/digestFeedback.ts。#346） */
 export { digestKey }
 
@@ -565,12 +580,22 @@ export class Digester {
     return rows.map((r) => {
       const e = this.store.get(digestKey(r))
       // 案だけ作った行（summary が空。#560）には一言を載せない
-      return e?.summary ? { ...r, summary: e.summary } : r
+      const parts = e ? partsOf(e) : undefined
+      return parts ? { ...r, summary: parts.what, ...(parts.next ? { summary_next: parts.next } : {}) } : r
     })
   }
 
   summaryFor(entity: string, ts: string): string | undefined {
     return (ts && this.store.get(`${entity}|${ts}`)?.summary) || undefined
+  }
+
+  /**
+   * 一言を、画面が場所ごとに出し分けられる形で返す（#713）。2 つで組んだ行は `what`（何が起きたか）と `next`
+   * （人が次にすること）、そうでない行（報告だけ・今までのプロンプト・前の一言）は `what` に一言の全部で `next` は無い
+   */
+  partsFor(entity: string, ts: string): DigestParts | undefined {
+    const e = ts ? this.store.get(`${entity}|${ts}`) : undefined
+    return e ? partsOf(e) : undefined
   }
 
   /** 次に送る文面の案（#371）。一言と同じ行に入っている */

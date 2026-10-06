@@ -50,7 +50,9 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - `requestSentence()`（`shared/digestCheck.ts`）が拾うのは、頼みの形（`REQUEST`）か、人に言ってほしい言葉として引用された依頼（`QUOTED_ASK`。「と言ってください」「と伝えてもらえれば」の形だけ。一言の確かめに使う `QUOTED_REQUEST` は「と言われた件」「と言うエラー」にも当たるので、ここでは使わない）のある文だけ。文は URL・その場のコード・引用（「」『』）の中では切らない（`splitKeeping()`）。引用のある文を先に、同じなら後ろの文。質問・コードブロックの中・`DIGEST_MAX_CHARS` を超える文は拾わない。行の頭の Markdown の記号は落とす。
 - `digestWhatPrompt()`（`shared/persona.ts`）は、番号の規則を**本文か頼んだことが番号の話をしているときだけ**入れる（`NUMBER_TALK`）。うまくいかなかったことを書く文には口調の飾りを付けさせない。作例は置かない。
 - `stripAsks()` は文ごとに `asksPerson()` を見て、頼みの文と、文の中の頼みの節（読点で切ったもの。頭・途中・後ろ）を落とす。途中の節は言葉（`INVENTED_ASK`）だけで見る（「〜を直して、」は続きの形）。URL・コード・引用の中の `?` は問いかけと数えない（`masked()`）。全部が頼みなら落とさない（一言を空にしない）。
-- 画面に「起きたこと:」のような見出しは出さない。`summary` は 2 つを続けた 1 つの文で、`two` の回は分けたものも `DigestEntry.what` / `next` に残す（画面が場所ごとに出し分けるときに使う。`report` / `full` の回とこの欄が入る前の行には無く、`summary` をそのまま 1 つの一言として読む）。
+- 画面に「起きたこと:」のような見出しは出さない。`summary` は 2 つを続けた 1 つの文で、`two` の回は分けたものも `DigestEntry.what` / `next` に残す（画面が場所ごとに出し分ける。`report` / `full` の回とこの欄が入る前の行には無く、`summary` をそのまま 1 つの一言として読む）。
+- 画面に渡すときは `partsOf()`（`server/digest/digest.ts`）が分ける: `what` と `next` が両方ある行だけ 2 つ（行の `summary` = 何が起きたか・`summary_next` = 人が次にすること、一覧は `last_summary` / `last_summary_next`）。そうでない行（報告だけ・今までのプロンプト・#718 より前の一言・片方だけの行）は、繋いである `summary` を 1 つの一言として渡す。`digest_off` のセッションにはどちらも載せない。「変？」に残すのは繋いだ文（`summaryFor()`）のまま。
+- 画面の出し分け: バブルは `Message` が一言の下に `.summary-next` を 1 行（`chatGroups.ts` の `Utterance.summaryNext`。一言が無い発言には出さない）。要対応は `todoItems()` が `done` の `text` を「人が次にすること」にして `sub` に「何が起きたか」を入れ、`TodoRow` が後ろに小さく出す（`入力待ち` の行は文言を変えない）。一覧（`sessionPreview()`）は `last_summary` だけ。
 - 長さの枠（`DIGEST_MAX_CHARS`）は欄ごと: `two` の回は、口が書いた部分が枠に収まっていれば、繋いだ長さでは `too_long` にしない。
 - 作り直し（#346）は同じ組み方のまま、口が書いた部分だけを渡して頼み直す。
 

@@ -99,6 +99,12 @@ export interface FeedRow {
    */
   summary?: string
   /**
+   * 一言の「人が次にすること」（#713）。本文の文そのままで、口調は付いていない。**これがある行の `summary` は
+   * 「何が起きたか」だけ**（2 つで組んだ一言を、画面が場所ごとに出し分ける）。無い行の `summary` は 1 つの一言
+   * （報告だけの回・2 つに分かれていない前の一言）。`summary` と同じく JSONL には無い
+   */
+  summary_next?: string
+  /**
    * そのターンが使ったトークンと費用（#411）。JSONL には無く、サーバが応答時に
    * ~/.agent-feed/turn-usage.jsonl から載せる（server/reply/turnUsage.ts）。
    * **SAI が起こした Claude のターンだけ**に付く（端末で打ったターン・Codex / OpenCode・別のマシンには付かない）
@@ -217,6 +223,11 @@ export interface SessionSummary {
   last_turn_ts?: string
   /** last_text の一言版（digest）。無ければ省略で、画面は last_text を出す */
   last_summary?: string
+  /**
+   * 最後のターンの一言の「人が次にすること」（#713。`FeedRow.summary_next` と同じ読み方）。これがあるとき
+   * `last_summary` は「何が起きたか」だけ。要対応の行はこちらを先に出し、一覧の「最後の発言」は `last_summary` だけを出す
+   */
+  last_summary_next?: string
   /**
    * 次に送る文面の案（#371）。一言（digest）と同じ口・同じタイミングで、一番新しいターン完了の行の分だけ作る。
    * 無ければ省略。入力欄が空のときだけチップに出す（`web/src/nextAskChip.ts`）

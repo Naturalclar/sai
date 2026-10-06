@@ -404,6 +404,7 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
                         thinking={showThinking ? u.thinking : undefined}
                         thinkingOpen={thinkingOpen}
                         summary={u.summary}
+                        {...(u.summaryNext ? { summaryNext: u.summaryNext } : {})}
                         digestKey={u.summary ? digestKey(u.row) : undefined}
                         model={u.model}
                         usage={u.speaker !== 'me' && !u.waiting ? u.row.usage : undefined}

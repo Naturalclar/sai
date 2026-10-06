@@ -31,6 +31,8 @@ export interface Utterance {
   thinking?: string
   /** エージェントの発言の一言版（digest）。あればバブルの本文はこれで、元の text は「詳細」で開く */
   summary?: string
+  /** 一言の「人が次にすること」（#713。本文の文そのまま）。あれば一言の下に 1 行で出す */
+  summaryNext?: string
   /** エージェントの発言で、そのターンからモデルが変わったならそのモデル名（毎回は出さない。変わったときだけ） */
   model?: string
   /** この発言の本文が record.py に切られている（#358）。バブルの末尾に印を出す */
@@ -134,7 +136,11 @@ export function toUtterances(rows: FeedRow[]): Utterance[] {
     prompted.delete(id)
     const theirs: Utterance = { speaker: row.agent, row, text: row.text ?? '', key: `${row.ts}:${index}`, ...(wasClipped(row, 'text') ? { clipped: true } : {}) }
     if (row.thinking?.trim()) theirs.thinking = row.thinking
-    if (row.summary?.trim()) theirs.summary = row.summary
+    if (row.summary?.trim()) {
+      theirs.summary = row.summary
+      // 一言の「人が次にすること」（#713）。一言があるときだけ（単独では出さない）
+      if (row.summary_next?.trim()) theirs.summaryNext = row.summary_next
+    }
     const model = (row.model ?? '').trim()
     if (model) {
       const prev = lastModel.get(id)

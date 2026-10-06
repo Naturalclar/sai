@@ -7,8 +7,9 @@ import { dirname } from 'node:path'
 import { isDigestModel, isDigestProvider } from '../../shared/digestSettings.ts'
 import { DEFAULT_PERSONA, isPersonaId } from '../../shared/persona.ts'
 import { isJevAuto } from '../../shared/jev.ts'
+import { isReplyPermissionMode } from '../../shared/permissions.ts'
 import { isLinearWorkspace } from '../../shared/refs.ts'
-import type { DigestProvider, PersonaId } from '../../shared/types.ts'
+import type { DigestProvider, PersonaId, ReplyPermissionMode } from '../../shared/types.ts'
 
 export const SETTINGS_FILE = 'settings.json'
 
@@ -44,10 +45,15 @@ export interface Settings {
    * 入力欄への長い貼り付けを、本文に入れずファイルにして添えるか（#609）。**既定は切**（人が長い文を貼った実績がほぼ無いので、入にした人だけ）
    */
   paste_to_file: boolean
+  /**
+   * 返信の既定の許可モード（#582）。**セッションのメタに許可モードが無いときだけ使う**（メタがあればそちらが勝つ。
+   * `shared/permissions.ts` の `replyModeOf()`）。選べるのは `REPLY_MODES` の中だけで、空は「決めない」（**既定**。CLI の既定に従う）
+   */
+  reply_mode: ReplyPermissionMode | ''
 }
 
 /** 既定。テストもこれを使う（キーを足したらここ 1 か所） */
-export const DEFAULT_SETTINGS: Settings = { persona: DEFAULT_PERSONA, linear_workspace: '', digest: false, digest_provider: 'claude', digest_model: '', jev: true, jev_auto: 0, paste_to_file: false }
+export const DEFAULT_SETTINGS: Settings = { persona: DEFAULT_PERSONA, linear_workspace: '', digest: false, digest_provider: 'claude', digest_model: '', jev: true, jev_auto: 0, paste_to_file: false, reply_mode: '' }
 
 export class SettingsStore {
   readonly path: string
@@ -72,6 +78,7 @@ export class SettingsStore {
       if (raw?.jev === false) settings.jev = false
       if (isJevAuto(raw?.jev_auto)) settings.jev_auto = raw.jev_auto
       if (raw?.paste_to_file === true) settings.paste_to_file = true
+      if (isReplyPermissionMode(raw?.reply_mode)) settings.reply_mode = raw.reply_mode
       // Jev を切っていれば自動も切（切っている間に隠れて残った閾値で、入に戻した瞬間に自動で答えない。#499 のレビュー）
       if (!settings.jev) settings.jev_auto = 0
     } catch {

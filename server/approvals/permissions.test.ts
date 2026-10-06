@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { argsRules, collectPermissions, managedSettingsPath, orderRules, parseSettings, settingsPaths } from './permissions.ts'
-import { isReplyPermissionMode, launchedModeNote, MODE_HINT, MODE_LABEL, modeEmphasis, modeLabel, modeName, modeSkipsRules, REPLY_MODES, shortReplyMode, skipModeInArgs } from '../../shared/permissions.ts'
+import { defaultModeHint, isReplyPermissionMode, launchedModeNote, MODE_HINT, MODE_LABEL, modeEmphasis, modeLabel, modeName, modeSkipsRules, REPLY_MODES, replyModeOf, shortReplyMode, skipModeInArgs } from '../../shared/permissions.ts'
 
 test('MODE_HINT / modeLabel: 何が起きるかは日本語で添え、タグ・モーダル用は「名前 — 説明」（#271）', () => {
   // 名前を英語にしても、説明が消えてはいけない（メニューの補足と見出しのタグが空になる）
@@ -164,6 +164,23 @@ test('shortReplyMode: 入力欄のボタンに出す短い名前。空は「既�
   // 返信で選べる値には全部短い名前がある（増やしたらここで止まる）
   for (const m of REPLY_MODES) assert.notEqual(shortReplyMode(m), m, m)
   assert.equal(shortReplyMode('しらない値'), 'しらない値', '知らない値はそのまま出す')
+})
+
+test('replyModeOf / defaultModeHint（#582）: セッションで選んだものが勝ち、無いときだけ設定の既定。どちらも無ければ空', () => {
+  assert.equal(replyModeOf('bypassPermissions', 'acceptEdits'), 'bypassPermissions')
+  assert.equal(replyModeOf('acceptEdits', 'bypassPermissions'), 'acceptEdits', '既定のほうが強くても、選んだものが勝つ')
+  assert.equal(replyModeOf(undefined, 'acceptEdits'), 'acceptEdits')
+  assert.equal(replyModeOf('', 'auto'), 'auto')
+  assert.equal(replyModeOf(undefined, ''), '')
+  assert.equal(replyModeOf(undefined, undefined), '')
+  // 既定が素通しなら、何も選んでいないセッションも「ルールに関係なく通る」として扱われる（ループ・tailnet の断り）
+  assert.equal(modeSkipsRules(replyModeOf(undefined, 'bypassPermissions')), true)
+  assert.equal(modeSkipsRules(replyModeOf('acceptEdits', 'bypassPermissions')), false)
+  // 既定で動いたターンは、いまの設定と同じなので「次の返信から」を出さない
+  assert.equal(launchedModeNote({ since: '', text: '', permission_mode: 'acceptEdits' }, replyModeOf(undefined, 'acceptEdits')), '')
+  assert.equal(defaultModeHint('acceptEdits'), '設定の既定に従う（Accept edits）')
+  assert.equal(defaultModeHint(''), `CLI に任せる（${MODE_HINT.default}）`)
+  assert.equal(defaultModeHint(undefined), `CLI に任せる（${MODE_HINT.default}）`)
 })
 
 test('launchedModeNote: 処理中のターンが今の設定と違うモードで動いているときだけ出す（#272）', () => {

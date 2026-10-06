@@ -35,6 +35,8 @@ import { DigestEngineControls } from './DigestEngineControls'
 import { JevControls } from './JevControls'
 import { PasteControls } from './PasteControls'
 import { PasteToFileContext } from './pasteSetting'
+import { ReplyModeControls } from './ReplyModeControls'
+import { DefaultReplyModeContext } from './replyModeSetting'
 import { useSettings } from './useSettings'
 import { useCommandPalette } from './useCommandPalette'
 import { CommandPalette } from './CommandPalette'
@@ -434,6 +436,7 @@ export function App() {
 
   return (
     <PasteToFileContext value={settings?.paste_to_file === true}>
+    <DefaultReplyModeContext value={settings?.reply_mode ?? ''}>
       {palette.open && (
         <CommandPalette sessions={palette.all ?? list.data?.sessions ?? EMPTY_SESSIONS} loading={palette.all === null} onClose={palette.close} onOpenBeside={narrow ? undefined : openBesideHash} />
       )}
@@ -475,6 +478,8 @@ export function App() {
           {settings && <JevControls settings={settings} busy={settingsBusy} onChange={(p) => void updateSettings(p)} />}
           {/* 長い貼り付けをファイルにして添えるか（#609。既定は切） */}
           {settings && <PasteControls settings={settings} busy={settingsBusy} onChange={(p) => void updateSettings(p)} />}
+          {/* 返信の既定の許可モード（#582。既定は「決めない」。セッションごとに選んだものが勝つ） */}
+          {settings && <ReplyModeControls settings={settings} busy={settingsBusy} onChange={(p) => void updateSettings(p)} />}
           {settings?.digest && narrow && (
             <DigestControls settings={settings} busy={settingsBusy} error="" onPersona={(p) => void setPersona(p)} onLinearWorkspace={(ws) => void setLinearWorkspace(ws)} />
           )}
@@ -582,6 +587,7 @@ export function App() {
         {diffOpen !== null && !narrow && <DiffPane id={diffOpen} onClose={closeDiff} canReview={canReview} {...(canComment ? { onInsertComments: insertComments } : {})} />}
       </main>
       {diffOpen !== null && narrow && <DiffModal id={diffOpen} onClose={closeDiff} canReview={canReview} {...(canComment ? { onInsertComments: insertComments } : {})} />}
+    </DefaultReplyModeContext>
     </PasteToFileContext>
   )
 }

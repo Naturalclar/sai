@@ -1703,6 +1703,11 @@ export interface SettingsResponse {
   jev_auto: number
   /** 入力欄への長い貼り付けをファイルにして添えるか（#609。settings.json の `paste_to_file`。既定は切） */
   paste_to_file: boolean
+  /**
+   * 返信の既定の許可モード（#582。settings.json の `reply_mode`）。セッションのメタに許可モードが無いときだけ使う。
+   * `REPLY_MODES` のどれかで、空は「決めない」（CLI の既定）
+   */
+  reply_mode: ReplyPermissionMode | ''
 }
 
 /** 一言を作る口。`claude`（`claude -p`。既定）か `openai`（OpenAI 互換の `/v1/chat/completions`。ローカルの LLM はこちら） */
@@ -1727,6 +1732,8 @@ export interface SettingsRequest {
   jev_auto?: number
   /** 入力欄への長い貼り付けをファイルにして添えるか（#609） */
   paste_to_file?: boolean
+  /** 返信の既定の許可モード（#582）。`REPLY_MODES` のどれか。空文字で「決めない」 */
+  reply_mode?: ReplyPermissionMode | ''
 }
 
 export interface SessionFilters {

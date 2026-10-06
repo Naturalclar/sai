@@ -1,5 +1,5 @@
-import { useEffect, useState, type ReactNode } from 'react'
-import { launchedModeNote } from '../../shared/permissions.ts'
+import { useContext, useEffect, useState, type ReactNode } from 'react'
+import { launchedModeNote, replyModeOf } from '../../shared/permissions.ts'
 import type { ReplyingMap, SessionsResponse } from './api'
 import type { Polled } from './hooks'
 import { BackLink } from './BackLink'
@@ -15,6 +15,7 @@ import { restoresText, type RestoreRequest } from './replyRestore'
 import { ownReplying, pruneToggled, rowOpen, rowReplyable, toggleKey } from './todoReply'
 import { pendingItems, todoItems, todoSections, type TodoItem } from '../../shared/todoItems.ts'
 import type { PaneProps } from './App'
+import { DefaultReplyModeContext } from './replyModeSetting'
 import { withSuffix } from '../../shared/sessionLabels.ts'
 
 const NO_REPLYING: ReplyingMap = {}
@@ -50,6 +51,8 @@ interface Props extends PaneProps {
  */
 export function TodoView({ list, onStatus, onOpenSidebar, onLeaveToSidebar, prs, focused = true, shown = [], onInsertToShown }: Props) {
   const { data, error, updatedAt } = list
+  // 許可モードを選んでいないセッションは設定の既定で回る（#582）
+  const defaultReplyMode = useContext(DefaultReplyModeContext)
   // 自分では取りに行かないが、出しているのはこの取得結果なのでヘッダの「更新 hh:mm」はこれに合わせる
   useEffect(() => onStatus(updatedAt, error), [updatedAt, error, onStatus])
 
@@ -181,7 +184,7 @@ export function TodoView({ list, onStatus, onOpenSidebar, onLeaveToSidebar, prs,
     )
   }
   const modeNoteOf = (t: TodoItem) =>
-    t.kind !== 'done' && t.session ? launchedModeNote(data?.replying[t.id], t.session.meta?.permission_mode) : ''
+    t.kind !== 'done' && t.session ? launchedModeNote(data?.replying[t.id], replyModeOf(t.session.meta?.permission_mode, defaultReplyMode)) : ''
   const keyOf = (t: TodoItem) => (t.kind === 'done' ? `done:${t.id}` : t.id)
   // 段の見出しも行も、1 本の平らな並びにして出す（#551 のレビュー）。段ごとに Fragment で包むと、別の端末で読んで
   // 未読の段から外れた行が別の親に移ったことになり、作り直されて開いていた返信欄のフォーカスと変換中の文字を失う

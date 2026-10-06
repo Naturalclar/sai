@@ -122,7 +122,7 @@ import { isDigestModel, isDigestProvider } from '../shared/digestSettings.ts'
 import type { Digester } from './digest/digest.ts'
 import { META_FILE, MetaStore } from './meta/meta.ts'
 import { collectPermissions } from './approvals/permissions.ts'
-import { modeName, modeSkipsRules, skipModeInArgs } from '../shared/permissions.ts'
+import { isReplyPermissionMode, modeName, modeSkipsRules, REPLY_MODES, replyModeOf, skipModeInArgs } from '../shared/permissions.ts'
 import { compareUrl, parseUnifiedDiff } from '../shared/diff.ts'
 import { changedPaths, clampPatch, NotAGitRepo, RealGit, resolveBase, sessionDiff, sessionDiffSummary } from './git/diff.ts'
 import { prBrowserFromEnv } from './git/prs.ts'
@@ -1312,6 +1312,9 @@ export function createApp(
    * GET/PUT /api/settings。PUT は同一オリジンのみ。一言の入切・口・モデルは、変えたらその場で組み直す（#288。前は環境変数）。
    * 本文の送り先（SAI_DIGEST_URL）と鍵（SAI_DIGEST_API_KEY）は環境変数のままで、受けも返しもしない
    */
+  /** そのセッションの返信に付く許可モード（#582）。メタにあればそれ、無ければ設定の既定。どちらも無ければ空 */
+  const replyMode = async (meta: Pick<SessionMeta, 'permission_mode'> | undefined | null): Promise<string> =>
+    replyModeOf(meta?.permission_mode, (await settingsStore.get()).reply_mode)
   const settingsPayload = async (): Promise<SettingsResponse> => {
     await digestReady
     const s = await settingsStore.get()
@@ -1330,6 +1333,7 @@ export function createApp(
       jev_ready: jevRisk.ready,
       jev_auto: s.jev_auto,
       paste_to_file: s.paste_to_file,
+      reply_mode: s.reply_mode,
     }
   }
   /**
@@ -1474,11 +1478,16 @@ export function createApp(
       if (typeof b.paste_to_file !== 'boolean') return error(res, 400, 'paste_to_file は true か false で送ってください')
       patch.paste_to_file = b.paste_to_file
     }
+    if (b.reply_mode !== undefined) {
+      // セッションのメタ（mergeMeta）と同じ一覧。画面から選べないモードは既定にもできない
+      if (b.reply_mode !== '' && !isReplyPermissionMode(b.reply_mode)) return error(res, 400, `reply_mode に使えるのは ${REPLY_MODES.join(' / ')} だけです（空文字で「決めない」）`)
+      patch.reply_mode = b.reply_mode
+    }
     if (b.jev_auto !== undefined) {
       if (!isJevAuto(b.jev_auto)) return error(res, 400, 'jev_auto は 0（しない）か 0.5〜1 の数で送ってください')
       patch.jev_auto = b.jev_auto
     }
-    if (Object.keys(patch).length === 0) return error(res, 400, 'persona / linear_workspace / digest / next_ask / digest_provider / digest_model / paste_to_file / jev / jev_auto のどれかを送ってください')
+    if (Object.keys(patch).length === 0) return error(res, 400, 'persona / linear_workspace / digest / next_ask / digest_provider / digest_model / paste_to_file / reply_mode / jev / jev_auto のどれかを送ってください')
     // 起動時の組み立て（settings.json の読み込み）が済んでから書く。後から古い値で組み直されないように
     await digestReady
     const saved = await settingsStore.set(patch)
@@ -1850,7 +1859,8 @@ export function createApp(
     if (handoff) meta.continued_from = from.id
     if (Object.keys(meta).length > 0) await metaStore.set(id, meta)
     const via = { url: selfUrl(req), entity: id, tokenFile: agentTokenPath }
-    const cmd = newSessionCommand(session, text, cwd, process.env, via, meta.model, meta.permission_mode, meta.name)
+    // 許可モードを選ばずに始めたら設定の既定で回す（#582）。**メタには書かない**（既定を変えたら次の返信から付いてくるように）
+    const cmd = newSessionCommand(session, text, cwd, process.env, via, meta.model, await replyMode(meta) || undefined, meta.name)
     try {
       startedBin.set(id, cmd.bin)
       await run.start(id, cmd, () => {
@@ -1886,7 +1896,7 @@ export function createApp(
     meta: SessionMeta,
   ) => {
     const log = join(store.directory, 'reply.log')
-    const cmd = backgroundSessionCommand(text, cwd, store.directory, process.env, meta.model, meta.permission_mode, meta.name)
+    const cmd = backgroundSessionCommand(text, cwd, store.directory, process.env, meta.model, await replyMode(meta) || undefined, meta.name)
     await appendFile(log, `--- ${new Date().toISOString()} バックグラウンドで新しいセッション（claude --bg） (cwd ${cwd})\n`).catch(() => {})
     let started
     try {
@@ -2170,6 +2180,8 @@ export function createApp(
     // モデルは queue / exec resume の両方で使う。画像を `-i` で渡すのは exec resume だけ（queue は断る。#678）
     const own = await metaStore.get(id)
     const model = own?.model
+    // 許可モードはメタにあればそれ、無ければ設定の既定（#582）
+    const mode = await replyMode(own)
     const sendQueue = async () => {
       const cmd = codexQueueCommand(raw, text, cwd, process.env, model)
       await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} 開いている Codex へ queue ${JSON.stringify(cmd.args)} (cwd ${cwd})\n`).catch(() => {})
@@ -2259,7 +2271,7 @@ export function createApp(
     const via = { url: o.url, entity: id, tokenFile: agentTokenPath, ...(o.loop ? { loop: true } : {}) }
     // セッションに返信のモデルが設定されていれば（PUT /api/sessions/<id>/meta の model）それで回す
     // 表示名も渡すと、端末のタイトルと `/resume` のピッカーに SAI と同じ名前が出る（#391）
-    const cmd = replyCommand(session.agent, raw, text, cwd, process.env, via, model, own?.permission_mode, attachments, own?.name)
+    const cmd = replyCommand(session.agent, raw, text, cwd, process.env, via, model, mode || undefined, attachments, own?.name)
     if (!cmd) return refuse(400, replyBlockedReason(session, selfHost()) || 'unsupported agent')
     if (o.compact) cmd.compact = true
     try {
@@ -2804,7 +2816,7 @@ export function createApp(
     if (session.agent !== 'claude') return 'ループを組めるのは、いまは Claude のセッションだけです'
     const extra = splitArgs(process.env.SAI_CLAUDE_ARGS)
     if (process.env.SAI_APPROVE === '0' || extra.includes('--permission-prompt-tool')) return 'SAI の MCP を渡していない（SAI_APPROVE=0 など）ので、エージェントが次を言う口がありません'
-    const mode = (await metaStore.get(session.id))?.permission_mode ?? ''
+    const mode = await replyMode(await metaStore.get(session.id))
     const skips = modeSkipsRules(mode) ? mode : skipModeInArgs(extra)
     if (skips) return `許可を聞かないモード（${modeName(skips)}）のセッションにはループを組めません`
     if (await terminalOf(session)) return '端末で開いているセッションにはループを組めません（端末の /loop と二重に回るのを避けるため）'
@@ -3028,11 +3040,13 @@ export function createApp(
    * tailnet から送れない相手なら理由。アーカイブ済み・返信できない（別のマシン・合成 ID など）に加えて、
    * **ルールに関係なく通るモード（bypassPermissions / auto）を選んだセッションには送らない**（tailnet の呼び出し元の LLM が、許可を聞かないエージェントを動かせてしまう。#253 / #691）
    */
-  const mcpSendRefusal = (s: SessionSummary): string => {
+  const mcpSendRefusal = (s: SessionSummary, byDefault: string): string => {
     if (s.archived) return 'アーカイブ済み'
     const blocked = replyBlockedReason(s, selfHost())
     if (blocked) return blocked
-    const mode = s.meta?.permission_mode ?? ''
+    // 設定の既定が素通しなら、メタに何も無いセッションも素通しで回る（#582）。既定が付くのは Claude だけ
+    // （`--permission-mode` を渡す先が無い Codex / OpenCode まで断らない）
+    const mode = replyModeOf(s.meta?.permission_mode, s.agent === 'claude' ? byDefault : '')
     if (modeSkipsRules(mode)) return `許可を聞かないモード（${modeName(mode)}）のセッションには tailnet から送れません`
     return ''
   }
@@ -3071,11 +3085,12 @@ export function createApp(
         // 返信中の答え待ち（承認のバブル）も足す
         const { sessions } = await settleWaiting(list)
         const pending = await approvalsNow(sessions)
+        const byDefault = (await settingsStore.get()).reply_mode
         return textResult(
           sessions
             .map((s) => {
               const e = agentEntry(s, mcpBusy(s.id))
-              const why = mcpSendRefusal(s)
+              const why = mcpSendRefusal(s, byDefault)
               const waiting = clipReply((s.waiting || pending[s.id]?.[0]?.text || '').split('\n')[0] ?? '', 120)
               return `- ${e.id}「${e.name}」${e.project} ${e.agent}${e.branch ? ` ${e.branch}` : ''}${e.busy ? '（処理中）' : ''}${waiting ? `（待ち: ${waiting}）` : ''}${why ? `（送れない: ${why}）` : ''}${s.manager_draft ? '（案を置いてある）' : ''} 最後の記録: ${s.end}${e.last_text ? ` 最後の発言: ${e.last_text}` : ''}`
             })
@@ -3162,11 +3177,12 @@ export function createApp(
         if (text.length > AGENT_TEXT_MAX_CHARS) return textResult(`送れるのは ${AGENT_TEXT_MAX_CHARS} 字までです。短くまとめてください`, true)
         const { sessions } = await sessionsWithMeta(QUEUE_DAYS)
         // 宛先は id か呼び名（#625）。名前で引くのは送れる相手の中からだけ（id なら、送れない理由をそのまま返す）
-        const found = mcpTarget(sessions, asked, (s) => !mcpSendRefusal(s))
+        const byDefault = (await settingsStore.get()).reply_mode
+        const found = mcpTarget(sessions, asked, (s) => !mcpSendRefusal(s, byDefault))
         if (typeof found === 'string') return textResult(found, true)
         const target = found
         const to = target.id
-        const why = mcpSendRefusal(target)
+        const why = mcpSendRefusal(target, byDefault)
         if (why) return textResult(`送れません: ${why}`, true)
         const limit = mcpLimiter.refusal(access.caller)
         if (limit) return textResult(limit, true)

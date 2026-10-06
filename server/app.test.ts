@@ -1403,6 +1403,66 @@ test('PUT meta: permission_mode は次の返信の claude に --permission-mode 
   assert.equal((await putMeta('C1@r', { permission_mode: '' })).status, 200)
 })
 
+test('設定 reply_mode（#582）: メタに許可モードが無いセッションの返信と新しいセッションに付く。メタにあればそちらが勝つ。REPLY_MODES 外は 400、別オリジンは 403', async () => {
+  const putSettings = (body: unknown, headers: Record<string, string> = {}) =>
+    fetch(`${base}/api/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) })
+  const modeOf = (args: readonly string[]) => (args.includes('--permission-mode') ? args[args.indexOf('--permission-mode') + 1] : undefined)
+  const metaFile = new MetaStore(join(feedDir, META_FILE))
+  runner.started.length = 0
+  try {
+    assert.equal(((await (await get('/api/settings')).json()) as SettingsResponse).reply_mode, '', '既定は「決めない」')
+    // 選べるのはセッションのメタと同じ REPLY_MODES だけ
+    for (const bad of ['plan', 'dontAsk', 'default', 'しらない', 1, null, true]) assert.equal((await putSettings({ reply_mode: bad })).status, 400, JSON.stringify(bad))
+    assert.equal((await putSettings({ reply_mode: 'acceptEdits' }, { Origin: 'https://evil.example' })).status, 403)
+    assert.equal(((await (await get('/api/settings')).json()) as SettingsResponse).reply_mode, '', '断ったものは残らない')
+
+    const saved = await putSettings({ reply_mode: 'acceptEdits' })
+    assert.equal(saved.status, 200)
+    assert.equal(((await saved.json()) as SettingsResponse).reply_mode, 'acceptEdits')
+    assert.equal(JSON.parse(await readFile(join(feedDir, 'settings.json'), 'utf-8')).reply_mode, 'acceptEdits')
+
+    // メタに無いセッションの返信に付く。起動したモードとしても残る（#272 の「次の返信から」が比べる）
+    assert.equal((await metaFile.get('C1@r'))?.permission_mode, undefined)
+    assert.equal((await post('C1@r', { text: 'a' })).status, 202)
+    assert.equal(modeOf(runner.started[0]!.cmd.args), 'acceptEdits')
+    assert.equal(runner.started[0]!.cmd.permissionMode, 'acceptEdits')
+    assert.equal((await metaFile.get('C1@r'))?.permission_mode, undefined, 'メタには書かない（既定を変えたら付いてくるように）')
+
+    // メタにあればそちらが勝つ（既定より強くても弱くても）
+    assert.equal((await putMeta('C1@r', { permission_mode: 'bypassPermissions' })).status, 200)
+    assert.equal((await post('C1@r', { text: 'b' })).status, 202)
+    assert.equal(modeOf(runner.started[1]!.cmd.args), 'bypassPermissions')
+    assert.equal((await putSettings({ reply_mode: 'bypassPermissions' })).status, 200)
+    assert.equal((await putMeta('C1@r', { permission_mode: 'acceptEdits' })).status, 200)
+    assert.equal((await post('C1@r', { text: 'c' })).status, 202)
+    assert.equal(modeOf(runner.started[2]!.cmd.args), 'acceptEdits', '既定が素通しでも、セッションで選んだものが勝つ')
+    assert.equal((await putMeta('C1@r', { permission_mode: '' })).status, 200)
+
+    // 新しいセッション: 選ばずに始めれば既定で回り、メタには書かない。選べばそれ
+    assert.equal((await putSettings({ reply_mode: 'acceptEdits' })).status, 200)
+    const plain = await postNew({ from: 'C1@r', text: 'go' })
+    assert.equal(plain.status, 202)
+    const plainId = ((await plain.json()) as NewSessionResponse).id
+    assert.equal(modeOf(runner.started[3]!.cmd.args), 'acceptEdits')
+    assert.equal(runner.started[3]!.cmd.permissionMode, 'acceptEdits')
+    assert.equal(await metaFile.get(plainId), undefined)
+    const picked = await postNew({ from: 'C1@r', text: 'go', permission_mode: 'auto' })
+    const pickedId = ((await picked.json()) as NewSessionResponse).id
+    assert.equal(modeOf(runner.started[4]!.cmd.args), 'auto')
+    await metaFile.set(pickedId, {})
+
+    // 「決めない」に戻すと付かない
+    assert.equal((await putSettings({ reply_mode: '' })).status, 200)
+    assert.equal((await post('C1@r', { text: 'd' })).status, 202)
+    assert.equal(modeOf(runner.started[5]!.cmd.args), undefined)
+    assert.equal(runner.started[5]!.cmd.permissionMode, '')
+  } finally {
+    // あとのテストに持ち越さない（この fixture のアプリは 1 つで、設定もメタも残る）
+    await putSettings({ reply_mode: '' })
+    await putMeta('C1@r', { permission_mode: '' })
+  }
+})
+
 test('PUT meta: 検査', async () => {
   const bad = async (body: unknown, re: RegExp) => {
     const res = await putMeta('C1@r', body)
@@ -1668,7 +1728,7 @@ test('GET/PUT /api/settings: 性格と Linear の workspace。知らない値は
   let data = (await res.json()) as SettingsResponse
   assert.deepEqual(
     data,
-    { persona: 'ENFP', linear_workspace: '', digest: true, digest_on: false, digest_error: '', next_ask: true, next_ask_on: false, provider: 'claude', digest_model: '', model: 'fake', jev_on: true, jev_ready: false, jev_auto: 0, paste_to_file: false },
+    { persona: 'ENFP', linear_workspace: '', digest: true, digest_on: false, digest_error: '', next_ask: true, next_ask_on: false, provider: 'claude', digest_model: '', model: 'fake', jev_on: true, jev_ready: false, jev_auto: 0, paste_to_file: false, reply_mode: '' },
     '既定は ENFP。digest はテストで差し替えた Digester の状態（有効、口は既定の claude）で、settings.json の入切（既定オフ）では組み直さない。Linear は未設定',
   )
   const put = (body: unknown, headers: Record<string, string> = {}) =>
@@ -1711,7 +1771,7 @@ test('GET/PUT /api/settings: 性格と Linear の workspace。知らない値は
   assert.equal(data.digest_error, '')
   assert.equal(data.digest_model, 'qwen3:8b', '前後の空白は落とす')
   assert.equal(data.model, 'qwen3:8b')
-  assert.deepEqual(JSON.parse(await readFile(join(feedDir, 'settings.json'), 'utf-8')), { persona: 'ISTJ', linear_workspace: '', digest: true, digest_provider: 'openai', digest_model: 'qwen3:8b', jev: true, jev_auto: 0, paste_to_file: false }, '案の入切は押すまで書かない（#561 のレビュー）')
+  assert.deepEqual(JSON.parse(await readFile(join(feedDir, 'settings.json'), 'utf-8')), { persona: 'ISTJ', linear_workspace: '', digest: true, digest_provider: 'openai', digest_model: 'qwen3:8b', jev: true, jev_auto: 0, paste_to_file: false, reply_mode: '' }, '案の入切は押すまで書かない（#561 のレビュー）')
   data = (await (await put({ digest_provider: 'claude', digest_model: '' })).json()) as SettingsResponse
   assert.equal(data.model, 'haiku', 'claude でモデルが空なら haiku')
   assert.equal((await put({ digest: 'yes' })).status, 400)

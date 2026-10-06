@@ -90,6 +90,24 @@ export function isReplyPermissionMode(value: unknown): value is ReplyPermissionM
 }
 
 /**
+ * そのセッションの返信に実際に付く許可モード（#582）。**セッションのメタにあればそちらが勝ち**、無いときだけ
+ * 設定（`settings.json` の `reply_mode`）の既定を使う。どちらも無ければ空（= CLI の既定。フラグを付けない）。
+ * 返信・新しいセッション・ループと tailnet の断り・画面のボタンが同じこの 1 つで決める（別々に読むと、
+ * 既定が素通しなのに「聞かれるモード」として扱う口が出る）
+ */
+export function replyModeOf(own: string | undefined, byDefault: string | undefined): string {
+  return own || byDefault || ''
+}
+
+/**
+ * メニューの「Default」（セッションでは何も選ばない）の補足（#582）。設定に既定があればそれに従うことを、無ければ CLI に任せることを書く
+ */
+export function defaultModeHint(byDefault: string | undefined): string {
+  if (byDefault) return `設定の既定に従う（${MODE_LABEL[byDefault as PermissionMode] ?? byDefault}）`
+  return `CLI に任せる（${MODE_HINT.default}）`
+}
+
+/**
  * ルールの一覧に関係なく通ってしまうモードか（`auto` / `bypassPermissions`）。画面で目立たせ、
  * **人が見ていない所から動かす口（tailnet の MCP から送る・ループを組む）はこれで断る**（#691。判定はこの 1 つ。
  * `bypassPermissions` を直に比べない）

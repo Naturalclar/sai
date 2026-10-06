@@ -274,6 +274,7 @@ SAI が起こした Claude のターンは、使ったトークンと費用も�
 返信の `--permission-mode`。
 
 - 値は `SessionMeta.permission_mode`。UI は入力欄のモデルの右の `ReplyPermissionPicker`（#265。返信の設定は `[差分] [モデル] [許可]` と入力欄に集める）。
+- **メタに無いときは設定の既定**（#582。`settings.json` の `reply_mode`。空 = 決めない が既定）。決めるのは `shared/permissions.ts` の `replyModeOf(メタ, 既定)` の 1 つ（メタがあればそちらが勝つ）で、返信・新しいセッション（`--bg` も）・`loopRefusal()`・`mcpSendRefusal()`・画面（`ReplyPermissionPicker` のボタンと `launchedModeNote()` の相手）が同じものを通す。**既定をメタに書き写さない**（新しいセッションも、選ばずに始めたらメタは空のまま。既定を変えたら次の返信から付いてくる）。画面には `App` が `DefaultReplyModeContext`（`web/src/replyModeSetting.ts`）で渡し、入切は自分のメニューの `ReplyModeControls`。`PUT /api/settings` は `REPLY_MODES` と空文字だけ受ける（ほかは `400`）。
 - `replyCommand()` が Claude にだけ `--permission-mode` として付ける（運用者の `SAI_CLAUDE_ARGS` より後ろで後勝ち）。そのターン限りでセッションには残らない。端末に打ち込む経路では効かない。
 - 次の返信から効き、処理中のターンは起動したときのモードのまま（#272）。`replyCommand()` が付けたモードを `ReplyCommand.permissionMode` に持ち、`ProcessRunner` が `Replying.permission_mode`（`''` はフラグ無し、省略は分からない）として `replying.json` にも書く。画面はメタの値と違えば `shared/permissions.ts` の `launchedModeNote()` で、ボタンの横に「次の返信から」、許可のバブル（`SessionView` / `FeedView` / `TodoView`）に理由を出す。
 - 選べるのは `acceptEdits`・`auto`（#691）・`bypassPermissions`（#253）。`REPLY_MODES` に無い値（`plan` など）は画面に並べず、`mergeMeta()` が `400` にする。一覧は `shared/permissions.ts` の `REPLY_MODES` / `isReplyPermissionMode()` で、サーバの検査と画面のメニューが同じものを見る（閉じているときの短い名前は `shortReplyMode()`）。

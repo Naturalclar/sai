@@ -270,6 +270,19 @@ test('使用量の枠が残り少なければ止める', async () => {
   }
 })
 
+test('設定の既定の許可モード（#582）が素通し・Auto mode なら、何も選んでいないセッションにも組めない', async () => {
+  const refuse = async (id: string) => ((await (await post(url(id), GOAL)).json()) as { error: string }).error
+  const putSettings = (reply_mode: string) => fetch(`${base}/api/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reply_mode }) })
+  try {
+    assert.equal((await putSettings('bypassPermissions')).status, 200)
+    assert.match(await refuse('L9'), /Bypass permissions/)
+    assert.equal((await putSettings('auto')).status, 200)
+    assert.match(await refuse('L9'), /Auto mode/)
+  } finally {
+    assert.equal((await putSettings('')).status, 200)
+  }
+})
+
 test('組めないセッション: Claude 以外・端末で開いている・素通し・別のマシン。もう組んであれば 409', async () => {
   const refuse = async (id: string) => ((await (await post(url(id), GOAL)).json()) as { error: string }).error
   assert.match(await refuse('X1'), /Claude のセッションだけ/)

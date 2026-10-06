@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useContext, useEffect, useMemo, useState } from 'react'
 import { answerableIds } from './terminalQuestion.ts'
 import type { PrRepo } from '../../shared/types.ts'
 import { entityId } from '../../shared/entity.ts'
 import { eventKind } from '../../shared/events.ts'
 import { promptArrived } from './chatGroups'
 import { defaultReplyTarget, feedReplyTargets, mergeReplyTargets, sessionReplyTargets } from '../../shared/reply.ts'
-import { launchedModeNote } from '../../shared/permissions.ts'
+import { launchedModeNote, replyModeOf } from '../../shared/permissions.ts'
 import type { ReplyingMap, ReplyQueueMap } from '../../shared/types.ts'
 import { api, type ApprovalMap, type SessionSummary } from './api'
 import { useLocalState, usePolling } from './hooks'
@@ -28,6 +28,7 @@ import { useDiffSummaries } from './useDiffSummaries'
 import { galleryStamps } from './feedGallery.ts'
 import { useGalleries } from './useGalleries'
 import type { PaneProps } from './App'
+import { DefaultReplyModeContext } from './replyModeSetting'
 
 const NO_ROWS: never[] = []
 const NO_SESSIONS: never[] = []
@@ -59,6 +60,8 @@ interface Props extends PaneProps {
 
 /** 全チャンネルを時系列に流す。リポジトリと日数を見出しで選ぶ（リポジトリはサイドバーの絞り込みと同じ値） */
 export function FeedView({ selected, projects, onProjects, sessions = NO_SESSIONS, selfHost, openDiff, onToggleDiff, onStatus, onOpenSidebar, onLeaveToSidebar, linear, prs }: Props) {
+  // 許可モードを選んでいないセッションは設定の既定で回る（#582）
+  const defaultReplyMode = useContext(DefaultReplyModeContext)
   const [local, setLocal] = useLocalState<{ days: string }>('sai.feed', { days: '3' })
   const { data, error, updatedAt } = usePolling(() => api.feed({ projects: [...selected], days: local.days }), [selected.join('\n'), local.days])
   useEffect(() => onStatus(updatedAt, error), [updatedAt, error, onStatus])
@@ -148,7 +151,7 @@ export function FeedView({ selected, projects, onProjects, sessions = NO_SESSION
   /** 処理中のターンが今の設定と違う許可モードで動いていれば、聞かれている理由を添える（#272）。一覧に無いセッションは設定が分からないので出さない */
   const modeNoteOf = (id: string) => {
     const s = sessions.find((x) => x.id === id)
-    return s ? launchedModeNote(replying[id], s.meta?.permission_mode) : ''
+    return s ? launchedModeNote(replying[id], replyModeOf(s.meta?.permission_mode, defaultReplyMode)) : ''
   }
 
   return (

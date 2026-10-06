@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { MODE_LABEL, REPLY_MODES } from '../../shared/permissions.ts'
-import type { ReplyingMap, SessionSummary, WorkspacesResponse } from '../../shared/types.ts'
+import type { ReplyingMap, ReplyPermissionMode, SessionSummary, WorkspacesResponse } from '../../shared/types.ts'
 import { api } from './api'
 import { BackLink } from './BackLink'
 import { modelChoices, MODEL_DEFAULT_LABEL } from './modelChoices'
@@ -9,6 +9,7 @@ import { NewSessionStarting } from './NewSessionStarting'
 import { workspaceChoices } from './newSession'
 import { filterWorkspaces } from './workspaceFilter'
 import { WorkspacePicker } from './WorkspacePicker'
+import { DefaultReplyModeContext } from './replyModeSetting'
 
 interface Props {
   /** 一覧（App のポーリング）の処理中の返信。始めたセッションが最初の行を書く前に落ちたら、ここに failed が載る */
@@ -58,6 +59,8 @@ export function NewSessionView({ replying, now, onOpenSidebar }: Props) {
   const [agent, setAgent] = useState<NewAgent>('claude')
   const [model, setModel] = useState('')
   const [mode, setMode] = useState('')
+  // 何も選ばずに始めると設定の既定で回る（#582）ので、選択肢にそう書く
+  const defaultReplyMode = useContext(DefaultReplyModeContext)
   // `claude --bg` で始める（#462。Claude だけ）
   const [background, setBackground] = useState(false)
   const [text, setText] = useState('')
@@ -200,7 +203,7 @@ export function NewSessionView({ replying, now, onOpenSidebar }: Props) {
               <label>
                 許可モード
                 <select value={mode} onChange={(e) => setMode(e.target.value)}>
-                  <option value="">{MODE_LABEL.default}</option>
+                  <option value="">{defaultReplyMode ? `${MODE_LABEL.default}（設定の既定: ${MODE_LABEL[defaultReplyMode as ReplyPermissionMode] ?? defaultReplyMode}）` : MODE_LABEL.default}</option>
                   {REPLY_MODES.map((m) => (
                     <option key={m} value={m}>
                       {MODE_LABEL[m]}

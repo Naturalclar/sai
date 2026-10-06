@@ -1,8 +1,8 @@
 import { quoteInsert } from './quoteReply'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { answerableIds } from './terminalQuestion.ts'
 import { canSteer, replyBlockedReason } from '../../shared/reply.ts'
-import { launchedModeNote } from '../../shared/permissions.ts'
+import { launchedModeNote, replyModeOf } from '../../shared/permissions.ts'
 import { RECENT_DAYS } from '../../shared/recentRows.ts'
 import { promptArrived } from './chatGroups'
 import { api } from './api'
@@ -63,6 +63,7 @@ import { hasDiff } from './diffCount'
 import { latestTurnMs, unreadFromMark } from '../../shared/unread.ts'
 import { readToSend } from './unreadMarks.ts'
 import type { PaneProps } from './App'
+import { DefaultReplyModeContext } from './replyModeSetting'
 
 const NO_ROWS: never[] = []
 const NO_PROMPTS: string[] = []
@@ -103,6 +104,8 @@ export interface DiffProps {
 }
 
 export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSidebar, onToggleDiff, diffOpen, insert, focused = true, onLeaveToSidebar, linear, settings, peers }: { id: string; focusTs?: string; focusSide?: MessageSide; peers?: readonly SessionSummary[] | undefined } & PaneProps & DiffProps) {
+  // 許可モードを選んでいないセッションは設定の既定で回る（#582）
+  const defaultReplyMode = useContext(DefaultReplyModeContext)
   // 描く行は直近 RECENT_DAYS 日から（#477）。「前の 7 日を表示」で広げ、別のセッションに移ったら戻す（描画中に導く）
   const [wide, setWide] = useState({ id, days: RECENT_DAYS })
   const recent = wide.id === id ? wide.days : RECENT_DAYS
@@ -411,7 +414,7 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
               )}
               {!mine && promptSince && progress?.active && <ProgressNotes progress={progress} since={promptSince} />}
               {approvals.map((a, i) => (
-                <ApprovalBubble key={a.approval_id} approval={a} now={now} hotkey={i === 0 && focused} modeNote={launchedModeNote(data.replying[id], data.session.meta?.permission_mode)} icon={data.session.icon} />
+                <ApprovalBubble key={a.approval_id} approval={a} now={now} hotkey={i === 0 && focused} modeNote={launchedModeNote(data.replying[id], replyModeOf(data.session.meta?.permission_mode, defaultReplyMode))} icon={data.session.icon} />
               ))}
               {queuedHere?.items.map((q, i) => (
                 <QueuedBubble key={q.queue_id} id={id} item={q} order={i + 1} paused={queuedHere.paused ?? ''} now={now} profile={data.profile} />

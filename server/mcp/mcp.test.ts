@@ -220,6 +220,25 @@ test('/mcp: sai_send は、相手のエージェントの使用量の枠が残�
   }
 })
 
+test('/mcp: 設定の既定の許可モード（#582）が素通しなら、何も選んでいないセッションにも tailnet から送れない', async () => {
+  const putSettings = (reply_mode: string) => fetch(`${base}/api/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reply_mode }) })
+  try {
+    assert.equal((await putSettings('bypassPermissions')).status, 200)
+    const list = await call('sai_sessions', {})
+    assert.match(list.text, /B1@r.*送れない: 許可を聞かないモード（Bypass permissions）/)
+    const runs = runner.started.length
+    const refused = await call('sai_send', { to: 'B1@r', text: '見て' }, SENDER)
+    assert.equal(refused.isError, true)
+    assert.match(refused.text, /Bypass permissions/)
+    assert.equal(runner.started.length, runs, '送っていない')
+    // Accept edits のように聞かれるモードなら今までどおり
+    assert.equal((await putSettings('acceptEdits')).status, 200)
+    assert.doesNotMatch((await call('sai_sessions', {})).text.split('\n').find((l) => l.includes('B1@r')) ?? '', /許可を聞かないモード/)
+  } finally {
+    assert.equal((await putSettings('')).status, 200)
+  }
+})
+
 test('/mcp: sai_sessions / sai_session / sai_progress', async () => {
   let r = await call('sai_sessions', {})
   assert.equal(r.isError, undefined)

@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
-import { launchedModeNote, MODE_HINT, MODE_LABEL, modeEmphasis, modeLabel, REPLY_MODES, shortReplyMode } from '../../shared/permissions.ts'
+import { useContext, useEffect, useRef, useState } from 'react'
+import { defaultModeHint, launchedModeNote, MODE_HINT, MODE_LABEL, modeEmphasis, modeLabel, REPLY_MODES, replyModeOf, shortReplyMode } from '../../shared/permissions.ts'
 import type { Replying, ReplyPermissionMode } from '../../shared/types.ts'
 import { api } from './api'
+import { DefaultReplyModeContext } from './replyModeSetting'
 
 export interface ReplyPermissionProps {
   /** 返信先のエンティティID。ここに保存する */
@@ -27,6 +28,7 @@ export interface ReplyPermissionProps {
  * **素通し（bypassPermissions）を選んでいる間は赤く、Auto mode は 1 段弱い色にする**（#253 / #691。選んだまま忘れているのが一番まずい）。
  * 端末に打ち込む経路ではフラグを渡す先が無いので効かない（薄くして、その旨を title に出す）。
  * **処理中のターンは起動したときのモードのまま**なので、選んだものと違えば横に「次の返信から」と出す（#272）。
+ * **何も選んでいないセッションは設定の既定（自分のメニュー）で回る**ので、ボタンにはそのモードを出す（#582。`replyModeOf()`）。
  * 呼び出し側は key={id} を付けること（別のセッションに移ったら開閉ごと作り直す）
  */
 export function ReplyPermissionPicker({ id, value, terminal, replying }: ReplyPermissionProps) {
@@ -38,10 +40,14 @@ export function ReplyPermissionPicker({ id, value, terminal, replying }: ReplyPe
   const ref = useRef<HTMLDivElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
 
+  const byDefault = useContext(DefaultReplyModeContext)
+  // このセッションで選んだもの（空 = 選んでいない）と、実際に次の返信に付くもの（選んでいなければ設定の既定）
   const current = saved !== null ? saved : (value ?? '')
-  const loud = modeEmphasis(current)
-  // 保存した直後から出す（props の value を待たない）ので、比べる相手は current
-  const note = launchedModeNote(replying, current)
+  const effective = replyModeOf(current, byDefault)
+  const loud = modeEmphasis(effective)
+  // 保存した直後から出す（props の value を待たない）ので、比べる相手は effective
+  const note = launchedModeNote(replying, effective)
+  const what = `${modeLabel(effective || 'default')}${!current && byDefault ? '（設定の既定）' : ''}`
 
   useEffect(() => {
     if (!open) return
@@ -88,11 +94,11 @@ export function ReplyPermissionPicker({ id, value, terminal, replying }: ReplyPe
         aria-label="SAI から返信するときの許可モード"
         title={
           terminal
-            ? `SAI から返信するときの許可モード: ${modeLabel(current || 'default')}。いまは端末（tmux）で開いているので返信は端末に打ち込まれ、この設定は効かない（端末側は Shift+Tab で切り替える）`
-            : `SAI から返信するときの許可モード: ${modeLabel(current || 'default')}。押すと変えられる。次の返信から効き（処理中のターンは起動したときのモードのまま）、セッションには残らない`
+            ? `SAI から返信するときの許可モード: ${what}。いまは端末（tmux）で開いているので返信は端末に打ち込まれ、この設定は効かない（端末側は Shift+Tab で切り替える）`
+            : `SAI から返信するときの許可モード: ${what}。押すと変えられる。次の返信から効き（処理中のターンは起動したときのモードのまま）、セッションには残らない`
         }
       >
-        {busy ? '…' : shortReplyMode(current)}
+        {busy ? '…' : shortReplyMode(effective)}
       </button>
       {/* 処理中のターンは起動したときのモードのまま（#272）。入力欄は幅が無いので短く出し、全文は title */}
       {note && (
@@ -105,7 +111,7 @@ export function ReplyPermissionPicker({ id, value, terminal, replying }: ReplyPe
           {/* ボタンの短い名前と違って、メニューでは名前（英語）の横に何が起きるか（日本語）を添える */}
           <button type="button" role="menuitem" className={current ? '' : 'picked'} onClick={() => void save('')}>
             {MODE_LABEL.default}
-            <span className="why">CLI に任せる（{MODE_HINT.default}）</span>
+            <span className="why">{defaultModeHint(byDefault)}</span>
           </button>
           {REPLY_MODES.map((m) => (
             <button

@@ -1843,8 +1843,13 @@ export interface ClaudeUsage {
   secondary?: UsageWindow
   /** いま上限に当たっている */
   limited?: ClaudeLimited
-  /** いつ時点の値か（ISO）。Claude が動いていない間は増えない */
+  /** いつ時点の値か（ISO）。Claude が動いていない間は増えない。割合は**最後に変わった時刻** */
   at: string
+  /**
+   * 割合が**最後に届いた時刻**（ISO。#694）。同じ値の描画でも進むので、「届いていない」と「届いているが変わっていない」を
+   * これで分ける。古い `statusline.py` が書いたファイルには無い（そのときは `at` で見る）
+   */
+  seen?: string
 }
 
 /**

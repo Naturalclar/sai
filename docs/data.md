@@ -153,7 +153,7 @@ SAIから開始したCodex turnの待機もJSONLにはせず、`CodexAppServer` 
 | `loops.json` | エンティティ ID → 1 件 | 組んだループの状態（`goal`・`until`・`max_rounds`・`round`・`status` など。`shared/loops.ts` の `LoopState`） |
 | `reply.log` | 追記の文字のログ | SAI が起こした子の stdout / stderr と、SAI が足す 1 行（`--- <時刻> <エンティティ ID> <何をしたか>`） |
 | `digest.log` | 追記の文字のログ | 一言を作る子の出力と、諦めた・作り直した理由 |
-| `usage-claude.json` | 1 つの JSON | `statusline.py` が書く Claude の使用率（`v`・`ts`・`host`・`session`・`model`・`rate_limits`） |
+| `usage-claude.json` | 1 つの JSON | `statusline.py` が書く Claude の使用率（`v`・`ts` = 割合が最後に変わった時刻・`seen` = 最後に届いた時刻（#694）・`host`・`session`・`model`・`rate_limits`） |
 | `mcp-sends.json` / `opencode-serve.json` / `icon-history.json` / `agent-token` | — | tailnet の MCP から送った時刻・SAI が起こした `opencode serve` の居場所・アイコンの履歴・エージェント用の口のトークン（**中身を出力に写さない**） |
 | `attachments/` / `thumbs/` / `icon-history/` | ディレクトリ | 返信に添えたファイル・画像の軽い版・アイコンの履歴の画像 |
 

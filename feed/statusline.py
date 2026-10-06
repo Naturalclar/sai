@@ -51,6 +51,8 @@ SAME_WINDOW_SECONDS = 60
 #: 置いてある窓の割合がこれより長く変わっていなければ、同じ窓の低い値でも置き直す（#689）。枠が途中で
 #: リセットされたとき、高いほうを残す決まりだけだと古い高い値がその窓の終わりまで残るので、その逃げ道
 KEEP_SECONDS = 24 * 60 * 60
+#: 同じ値の描画が来たとき、`seen`（最後に届いた時刻）を書き直す間隔（#694）。描画のたびには書かない
+SEEN_REFRESH_SECONDS = 300
 #: 保険の自殺タイマー。stdin が閉じないなど、何が起きても TUI を待たせない
 HARD_TIMEOUT_SECONDS = 5
 #: ステータスラインに出す本文の上限（端末の1行に収める）
@@ -202,8 +204,45 @@ def windows_to_write(path: Path, incoming: dict, now: datetime) -> dict | None:
     return None if merged == live else merged
 
 
+def seen_to_write(path: Path, incoming: dict, now: datetime) -> dict | None:
+    """割合は変わっていないが、**置いてあるのと同じ値が届いた**ときに書き直す中身（`seen` だけ進める。#694）。要らなければ None。
+
+    `ts` は割合が最後に変わった時刻なので、それだけだと「値が届いていない」と「届いているが変わっていない」
+    （上限中の 100%・軽い利用）が読む側で区別できない。`seen` に最後に届いた時刻を残す。
+    - 来た窓が**全部**、置いてある生きた窓と同じ値のときだけ（低い値を持ち回っているセッションの描画は「届いた」に数えない）
+    - 前の `seen`（無ければ `ts`）から SEEN_REFRESH_SECONDS たっていなければ書かない（描画のたびに書かない）
+    - 置いてある記録が読めない・`ts` が今より先（別の描画が書いた新しい記録）なら触らない
+    """
+    incoming = live_windows(incoming, now)
+    if not incoming:
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        written_at = datetime.fromisoformat(value["ts"])
+        if written_at.tzinfo is None or written_at > now:
+            return None
+        live = live_windows(stored_windows(value, written_at.timestamp()), now)
+        seen_at = written_at
+        if isinstance(value.get("seen"), str):
+            parsed = datetime.fromisoformat(value["seen"])
+            if parsed.tzinfo is not None:
+                seen_at = max(written_at, parsed)
+    except Exception:
+        return None
+    for name, window in incoming.items():
+        old = live.get(name)
+        if old is None or old["used_percentage"] != window["used_percentage"]:
+            return None
+        if "resets_at" in old and "resets_at" in window and abs(old["resets_at"] - window["resets_at"]) > SAME_WINDOW_SECONDS:
+            return None
+    if (now - seen_at).total_seconds() < SEEN_REFRESH_SECONDS:
+        return None
+    return dict(value, seen=now.isoformat(timespec="seconds"))
+
+
 def build_record(payload: dict, windows: dict, now: datetime) -> dict:
     """書き出す中身。`ts` は**割合が最後に変わった時刻**（同じ値の描画では書き直さない。#689）。
+    `seen` は**最後に届いた時刻**（#694。同じ値の描画でも `seen_to_write()` が進める。読む側は古さをこれで見る）。
 
     `session` / `model` は最後に書いた描画のもの（持ち越した窓は別のセッションが受け取った値のことがある）。
     窓ごとの `changed_at`（epoch 秒）はその窓の割合が最後に変わった時刻で、読む側（shared/usage.ts）は見ない
@@ -212,6 +251,7 @@ def build_record(payload: dict, windows: dict, now: datetime) -> dict:
     return {
         "v": USAGE_VERSION,
         "ts": now.isoformat(timespec="seconds"),
+        "seen": now.isoformat(timespec="seconds"),
         "host": record.host_name(),
         "session": payload.get("session_id") if isinstance(payload.get("session_id"), str) else "",
         "model": model.get("id", "") if isinstance(model, dict) else "",
@@ -222,15 +262,17 @@ def build_record(payload: dict, windows: dict, now: datetime) -> dict:
 def write_record(directory: Path, payload: dict, windows: dict, now: datetime) -> None:
     """同じ名前に置き直す（履歴は持たない）。読む側が半端な JSON を見ないように tmp → replace。
 
-    書く窓は `windows_to_write()` が決める（置いてある記録のほうが新しい・何も変わらないときは書かない）
+    書く窓は `windows_to_write()` が決める（置いてある記録のほうが新しい・何も変わらないときは書かない）。
+    何も変わらないときも、同じ値が届いていれば `seen` だけ進める（`seen_to_write()`。#694）
     """
     directory.mkdir(parents=True, exist_ok=True)
     path = usage_file(directory)
     merged = windows_to_write(path, windows, now)
-    if merged is None:
+    out = build_record(payload, merged, now) if merged is not None else seen_to_write(path, windows, now)
+    if out is None:
         return
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(build_record(payload, merged, now), ensure_ascii=False), encoding="utf-8")
+    tmp.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, path)
 
 

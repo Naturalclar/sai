@@ -74,4 +74,10 @@ test('claudeFreshness: いつの値か（今日でなければ日付も）・古
   // 上限中だけ（割合が 1 つも無い）: `at` は transcript の行の時刻なので古いとは言わず、「5 時間が取れていません」も出さない（設定の案内のほうが出る）
   assert.deepEqual(claudeFreshness({ limited: { resets_at: 1789578000, kind: 'five_hour' }, at: ago(5 * 3_600_000) }, NOW), { at: `${clock(ago(5 * 3_600_000))} 時点`, age: '', stale: false, fiveHourMissing: false })
   assert.deepEqual(claudeFreshness(undefined, NOW), { at: '', age: '', stale: false, fiveHourMissing: false })
+  // 割合は 5 時間前から変わっていないが、5 分前にも同じ値が届いている（上限中・軽い利用）: 古いと言わない。「時点」は届いた時刻
+  const seen = claudeFreshness({ primary: five(100), secondary: week(60), at: ago(5 * 3_600_000), seen: ago(5 * 60_000) }, NOW)
+  assert.deepEqual(seen, { at: `${clock(ago(5 * 60_000))} 時点`, age: '5分前', stale: false, fiveHourMissing: false })
+  assert.deepEqual(usageChips({ claude: { primary: five(100), at: ago(5 * 3_600_000), seen: ago(5 * 60_000) } }, NOW).map((p) => p.stale), [false])
+  // 届いたのも 2 時間前なら古い（変わったのが 5 時間前でも、出すのは届いてからの時間）
+  assert.deepEqual(claudeFreshness({ primary: five(100), at: ago(5 * 3_600_000), seen: ago(2 * 3_600_000) }, NOW).age, '2時間前')
 })

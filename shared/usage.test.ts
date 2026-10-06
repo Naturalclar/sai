@@ -259,3 +259,15 @@ test('どれだけ前か・いつ時点かの言い換え（今日でなけれ�
   assert.match(usageAtLabel(y.toISOString(), NOW), new RegExp(`^${y.getMonth() + 1}/${y.getDate()} \\d\\d:\\d\\d 時点$`))
   assert.equal(usageAtLabel('', NOW), '')
 })
+
+test('ステータスラインの記録: 最後に届いた時刻（seen）を読む。読めない・ts より前のものは使わない（#694）', () => {
+  const ts = '2026-09-10T00:30:00+09:00'
+  assert.equal(parseStatusLineUsage(statusFile({ ts, seen: '2026-09-10T00:58:00+09:00' }), NOW)?.seen, '2026-09-10T00:58:00+09:00')
+  assert.equal(parseStatusLineUsage(statusFile({ ts }), NOW)?.seen, undefined, '古い statusline.py が書いたファイルには無い')
+  assert.equal(parseStatusLineUsage(statusFile({ ts, seen: 'いつか' }), NOW)?.seen, undefined)
+  assert.equal(parseStatusLineUsage(statusFile({ ts, seen: '2026-09-10T00:10:00+09:00' }), NOW)?.seen, undefined)
+  assert.equal(parseStatusLineUsage(statusFile({ ts, seen: 5 }), NOW)?.seen, undefined)
+  // 上限中の記録と重ねても残る
+  const merged = mergeClaudeUsage(parseStatusLineUsage(statusFile({ ts, seen: '2026-09-10T00:58:00+09:00' }), NOW), { limited: { resets_at: 1789578000, kind: 'five_hour' }, at: '2026-09-10T00:40:00+09:00' })
+  assert.equal(merged?.seen, '2026-09-10T00:58:00+09:00')
+})

@@ -3043,8 +3043,9 @@ export function createApp(
     if (s.archived) return 'アーカイブ済み'
     const blocked = replyBlockedReason(s, selfHost())
     if (blocked) return blocked
-    // 設定の既定が素通しなら、メタに何も無いセッションも素通しで回る（#582）
-    const mode = replyModeOf(s.meta?.permission_mode, byDefault)
+    // 設定の既定が素通しなら、メタに何も無いセッションも素通しで回る（#582）。既定が付くのは Claude だけ
+    // （`--permission-mode` を渡す先が無い Codex / OpenCode まで断らない）
+    const mode = replyModeOf(s.meta?.permission_mode, s.agent === 'claude' ? byDefault : '')
     if (modeSkipsRules(mode)) return `許可を聞かないモード（${modeName(mode)}）のセッションには tailnet から送れません`
     return ''
   }

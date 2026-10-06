@@ -43,6 +43,16 @@ export function useSettings() {
       .catch(() => {})
   }, [])
 
+  // 別の端末で変えた設定（返信の既定の許可モードなど。#582）を、画面に戻ってきたときに取り直す。
+  // 入力欄のボタンは実際に付くモードを出すので、古いままだと素通しで回るのに「Default」と見える
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refresh()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [refresh])
+
   const setPersona = useCallback((persona: PersonaId) => update({ persona }), [update])
   const setLinearWorkspace = useCallback((linear_workspace: string) => update({ linear_workspace }), [update])
 

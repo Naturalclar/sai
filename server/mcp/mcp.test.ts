@@ -82,6 +82,8 @@ before(async () => {
     [
       row(minutesAgo(9), 'A1', { repo: 'r', cwd: work, project: 'o/r', user_text: '実装して', text: '実装しました' }),
       row(minutesAgo(8), 'B1', { repo: 'r', cwd: work, project: 'o/r', user_text: 'レビューして', text: 'レビューしました' }),
+      // Claude でないセッション（許可モードのフラグを渡す先が無い。#582）
+      row(minutesAgo(8), 'K1', { repo: 'r', cwd: work, project: 'o/r', agent: 'codex', user_text: '見て', text: '見ました' }),
       row(minutesAgo(7), 'C1', { repo: 'r', cwd: work, project: 'o/other' }),
       row(minutesAgo(6), 'P1', { repo: 'r', cwd: work, project: 'o/r' }),
       row(minutesAgo(5), 'R1', { repo: 'r', cwd: work, project: 'o/r', host: 'mini' }),
@@ -231,6 +233,9 @@ test('/mcp: 設定の既定の許可モード（#582）が素通しなら、何�
     assert.equal(refused.isError, true)
     assert.match(refused.text, /Bypass permissions/)
     assert.equal(runner.started.length, runs, '送っていない')
+    // 既定が付くのは Claude だけ。Codex のセッションまで断らない（#722 のレビュー）
+    assert.doesNotMatch(list.text.split('\n').find((l) => l.includes('K1@r')) ?? '', /許可を聞かないモード/)
+    assert.ok(list.text.includes('K1@r'))
     // Accept edits のように聞かれるモードなら今までどおり
     assert.equal((await putSettings('acceptEdits')).status, 200)
     assert.doesNotMatch((await call('sai_sessions', {})).text.split('\n').find((l) => l.includes('B1@r')) ?? '', /許可を聞かないモード/)

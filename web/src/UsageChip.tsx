@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { limitKindLabel, resetLabel, windowLabel } from '../../shared/usage.ts'
 import type { UsageWindow } from './api'
 import { UsagePanel } from './UsagePanel'
-import { chipsLevel, usageChips } from './usageChips'
+import { chipsLevel, claudeFreshness, CLAUDE_USAGE_WHY, usageChips } from './usageChips'
 import { useUsage } from './useUsage'
 
 /**
@@ -37,7 +37,9 @@ export function UsageChip() {
   const codex = usage.codex
   const claude = usage.claude
   // 何をどの順で出すか（Claude が先、5 時間が無ければ週）と色は usageChips.ts に 1 つだけ置く（#347）
-  const chips = usageChips(usage)
+  const chips = usageChips(usage, at)
+  // Claude の割合がいつの値か・5 時間が欠けているか（#694）。判定は usageChips.ts
+  const fresh = claudeFreshness(claude, at)
   const level = chipsLevel(chips)
   const line = (name: string, w: UsageWindow) =>
     `${name} ${Math.round(w.used_percent)}%（${windowLabel(w.window_minutes)}）${w.resets_at ? ` · ${resetLabel(w.resets_at, at)}` : ''}`
@@ -46,7 +48,10 @@ export function UsageChip() {
     codex?.secondary && line('Codex', codex.secondary),
     claude?.primary && line('Claude', claude.primary),
     claude?.secondary && line('Claude', claude.secondary),
+    fresh.fiveHourMissing && 'Claude 5時間: 取れていません',
     claude?.limited && `Claude ${limitKindLabel(claude.limited.kind)}の上限中 · ${resetLabel(claude.limited.resets_at, at)}`,
+    fresh.stale && `Claude は ${fresh.at}（${fresh.age}）の値です`,
+    (fresh.stale || fresh.fiveHourMissing) && CLAUDE_USAGE_WHY,
   ]
     .filter(Boolean)
     .join('\n')
@@ -61,11 +66,13 @@ export function UsageChip() {
       <button type="button" className={`usage-chip ${level}`} onClick={toggle} aria-expanded={open} aria-label="使用量" title={title}>
         {/* 狭い画面ではエージェント名を落として色の点だけにする（ヘッダの 1 行に収める）。週の印は狭くても残す */}
         {chips.map((c) => (
-          <span key={c.agent} className={`usage-part${c.limited ? ' hit' : ''}`}>
+          <span key={c.agent} className={`usage-part${c.limited ? ' hit' : ''}${c.stale ? ' stale' : ''}`}>
             <span className={`dot ${c.agent}`} />
             <span className="usage-name">{c.name}</span>{' '}
             {c.percent === null ? '上限中' : <b>{Math.round(c.percent)}%</b>}
             {c.week && <span className="usage-window">週</span>}
+            {/* 古い値は割合を薄くして、どれだけ前かを添える（#694。いまの値と取り違えないように） */}
+            {c.stale && <span className="usage-age">{c.age}</span>}
           </span>
         ))}
       </button>

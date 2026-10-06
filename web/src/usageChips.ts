@@ -1,7 +1,7 @@
 // ヘッダの使用量のチップに、何をどの順で出すか（#347）。DOM に触らないので node:test で回す（usageChips.test.ts）。
 // 言い換え（%・戻る時刻）は shared/usage.ts、描画は UsageChip.tsx。
-import { usageLevel, type UsageLevel } from '../../shared/usage.ts'
-import type { UsageResponse } from './api'
+import { isUsageStale, usageAgeLabel, usageAtLabel, usageLevel, type UsageLevel } from '../../shared/usage.ts'
+import type { ClaudeUsage, UsageResponse } from '../../shared/types.ts'
 
 /** 色の強さの順。複数の枠のうち一番きついものを採る */
 const RANK: Record<UsageLevel, number> = { ok: 0, warn: 1, high: 2 }
@@ -15,6 +15,39 @@ export interface UsageChipPart {
   week: boolean
   /** いま上限に当たっている（Claude だけ） */
   limited: boolean
+  /** 割合が古い（#694。Claude だけ）。画面は割合を薄くして `age` を添える */
+  stale: boolean
+  /** どれだけ前の値か（「27時間前」）。古くなければ空 */
+  age: string
+}
+
+/** なぜ Claude の値が古くなるのか・5 時間が出ないのか（#694）。パネルとチップの title が同じ文を出す */
+export const CLAUDE_USAGE_WHY = 'Claude の使用率は、端末の Claude Code が画面を描いたときにだけ届きます。SAI から回した返信（claude -p）では進みません。'
+
+export interface ClaudeFreshness {
+  /** 「10/5 10:57 時点」。いつの値か分からなければ空 */
+  at: string
+  /** 「27時間前」。1 分未満・分からなければ空 */
+  age: string
+  /** 割合が `USAGE_STALE_MS` より前に届いたまま */
+  stale: boolean
+  /** 週は取れているのに 5 時間の枠が無い（「取れていません」と出す。割合が 1 つも無いときは設定の案内のほうを出す） */
+  fiveHourMissing: boolean
+}
+
+/**
+ * Claude の割合がいつの値で、何が欠けているか（#694）。**古いかどうかを見るのは割合があるときだけ**
+ * （上限中だけの記録の `at` は transcript の行の時刻で、割合の古さではない）。`now` は取ってきた時刻
+ */
+export function claudeFreshness(claude: ClaudeUsage | undefined, now: number): ClaudeFreshness {
+  const has = Boolean(claude?.primary || claude?.secondary)
+  const stale = has && isUsageStale(claude?.at, now)
+  return {
+    at: claude ? usageAtLabel(claude.at, now) : '',
+    age: has ? usageAgeLabel(claude?.at, now) : '',
+    stale,
+    fiveHourMissing: Boolean(claude && !claude.primary && claude.secondary),
+  }
 }
 
 /**
@@ -23,12 +56,16 @@ export interface UsageChipPart {
  * **Claude は 5 時間の枠が無ければ週に落とす**: Claude Code は `rate_limits` に `five_hour` を載せないことがあり
  * （手元では `seven_day` だけの日があった）、5 時間だけを見ていると、割合が取れていてパネルには週のゲージが
  * 出ているのに、チップからは Claude が丸ごと消えていた。上限中（`limited`）は割合が無くても出す。
- * Codex は今までどおり 5 時間の枠（週はパネルで見る）
+ * Codex は今までどおり 5 時間の枠（週はパネルで見る）。
+ *
+ * `now`（取ってきた時刻）を渡すと、Claude の割合が古いとき `stale` と `age` を付ける（#694）。Codex には付けない
+ * （rollout にほぼ毎ターン載るので、古いのは使っていないときだけ）
  */
-export function usageChips(usage: UsageResponse): UsageChipPart[] {
+export function usageChips(usage: UsageResponse, now: number = 0): UsageChipPart[] {
   const parts: UsageChipPart[] = []
   const claude = usage.claude
   const window = claude?.primary ?? claude?.secondary
+  const fresh = claudeFreshness(claude, now)
   if (claude && (window || claude.limited)) {
     parts.push({
       agent: 'claude',
@@ -36,10 +73,12 @@ export function usageChips(usage: UsageResponse): UsageChipPart[] {
       percent: window ? window.used_percent : null,
       week: Boolean(window && !claude.primary),
       limited: Boolean(claude.limited),
+      stale: fresh.stale,
+      age: fresh.stale ? fresh.age : '',
     })
   }
   if (usage.codex) {
-    parts.push({ agent: 'codex', name: 'Codex', percent: usage.codex.primary.used_percent, week: false, limited: false })
+    parts.push({ agent: 'codex', name: 'Codex', percent: usage.codex.primary.used_percent, week: false, limited: false, stale: false, age: '' })
   }
   return parts
 }

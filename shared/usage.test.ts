@@ -8,6 +8,9 @@ import {
   parseStatusLineUsage,
   resetLabel,
   isUsageStale,
+  lastRateLimitEvent,
+  mergeUsageWindows,
+  parseRateLimitEvent,
   STATUS_MAX_AGE_MS,
   USAGE_HIGH,
   USAGE_STALE_MS,
@@ -258,4 +261,70 @@ test('どれだけ前か・いつ時点かの言い換え（今日でなけれ�
   const y = new Date(NOW - 27 * 3_600_000)
   assert.match(usageAtLabel(y.toISOString(), NOW), new RegExp(`^${y.getMonth() + 1}/${y.getDate()} \\d\\d:\\d\\d 時点$`))
   assert.equal(usageAtLabel('', NOW), '')
+})
+
+// ---- SAI から回した返信の出力に載る使用率（#694）
+/** 手元の reply.log（`claude -p --output-format stream-json`、2.1.287）から取った実物の形 */
+const limitEvent = (five: number, week: number, fiveResets = 1791269400, weekResets = 1791392400) => ({
+  type: 'rate_limit_event',
+  rate_limit_info: {
+    status: 'allowed',
+    resetsAt: fiveResets,
+    rateLimitType: 'five_hour',
+    overageStatus: 'rejected',
+    isUsingOverage: false,
+    unifiedWindows: { five_hour: { utilization: five, resetsAt: fiveResets }, seven_day: { utilization: week, resetsAt: weekResets } },
+  },
+  uuid: '45344eae',
+  session_id: 'S1',
+})
+
+test('rate_limit_event: 5 時間と週の割合を usage-claude.json と同じ形にする（0〜1 → %）', () => {
+  assert.deepEqual(parseRateLimitEvent(limitEvent(0.14, 0.6)), {
+    five_hour: { used_percentage: 14, resets_at: 1791269400 },
+    seven_day: { used_percentage: 60, resets_at: 1791392400 },
+  })
+  assert.equal(parseRateLimitEvent(limitEvent(0, 1.2))?.seven_day?.used_percentage, 100, '100 を超えない')
+  assert.deepEqual(parseRateLimitEvent(limitEvent(0, 0.61))?.five_hour, { used_percentage: 0, resets_at: 1791269400 }, '0% も値')
+  // 割合の載っていない知らせ・別の行・壊れた形は読まない
+  assert.equal(parseRateLimitEvent({ type: 'rate_limit_event', rate_limit_info: { status: 'allowed' } }), null)
+  assert.equal(parseRateLimitEvent({ type: 'rate_limit_event', rate_limit_info: { unifiedWindows: { five_hour: { utilization: 'x' } } } }), null)
+  assert.equal(parseRateLimitEvent({ type: 'assistant', rate_limit_info: limitEvent(0.1, 0.2).rate_limit_info }), null)
+  assert.equal(parseRateLimitEvent(null), null)
+})
+
+test('rate_limit_event: 出力のかたまりから最後のものを採る（ほかの行・書きかけの行は飛ばす）', () => {
+  const text = [
+    JSON.stringify({ type: 'assistant', message: { content: '"rate_limit_event" という文字を含む本文' } }),
+    JSON.stringify(limitEvent(0.13, 0.6)),
+    '--- 2026-10-06T05:00:00.000Z A@r 何か',
+    JSON.stringify(limitEvent(0.14, 0.61)),
+    '{"type":"rate_limit_event","rate_limit_info":{"unifiedWin',
+  ].join('\n')
+  assert.deepEqual(lastRateLimitEvent(text), { five_hour: { used_percentage: 14, resets_at: 1791269400 }, seven_day: { used_percentage: 61, resets_at: 1791392400 } })
+  assert.equal(lastRateLimitEvent('{"type":"result"}\n'), null)
+  assert.equal(lastRateLimitEvent(''), null)
+})
+
+test('割合の 2 つの出どころを窓ごとにまとめる（#694）', () => {
+  const w = (used: number, minutes: number, resets?: number) => ({ used_percent: used, window_minutes: minutes, ...(resets ? { resets_at: resets } : {}) })
+  const R5 = 1791269400
+  const R7 = 1791392400
+  // 実測の形: ステータスラインは 10/5 の週 37% だけ。返信の出力は 5 時間 2%・週 61%
+  const status = { at: '2026-10-05T10:57:58+09:00', secondary: w(37, 10080, R7) }
+  const replies = { at: '2026-10-06T14:00:00+09:00', primary: w(2, 300, R5), secondary: w(61, 10080, R7) }
+  assert.deepEqual(mergeUsageWindows(status, replies), replies)
+  assert.deepEqual(mergeUsageWindows(replies, status), replies, '渡す順に依らない')
+  assert.equal(mergeUsageWindows(status, null), status)
+  assert.equal(mergeUsageWindows(null, null), null)
+  // 古い値を持ち回っている端末があとから低い値を書いても、同じ窓なら高いほうを残す（時刻は採った窓の出どころ）
+  const staleTui = { at: '2026-10-06T14:30:00+09:00', secondary: w(40, 10080, R7 + 5) }
+  assert.deepEqual(mergeUsageWindows(staleTui, replies), { at: '2026-10-06T14:00:00+09:00', primary: w(2, 300, R5), secondary: w(61, 10080, R7) })
+  // 戻る時刻が先へ進んでいれば新しい窓なので、低くてもそちら
+  const nextWindow = { at: '2026-10-06T15:00:00+09:00', primary: w(1, 300, R5 + 18000) }
+  assert.deepEqual(mergeUsageWindows(replies, nextWindow), { at: '2026-10-06T15:00:00+09:00', primary: w(1, 300, R5 + 18000), secondary: w(61, 10080, R7) })
+  // 古いほうが先の窓を持っていれば、そちらを残す
+  assert.deepEqual(mergeUsageWindows({ at: '2026-10-06T13:00:00+09:00', primary: w(9, 300, R5 + 18000) }, replies)?.primary, w(9, 300, R5 + 18000))
+  // 同じ値・戻る時刻が比べられないときは、届いたのが新しいほう
+  assert.deepEqual(mergeUsageWindows({ at: '2026-10-06T13:00:00+09:00', secondary: w(90, 10080) }, { at: '2026-10-06T14:00:00+09:00', secondary: w(61, 10080, R7) })?.secondary, w(61, 10080, R7))
 })

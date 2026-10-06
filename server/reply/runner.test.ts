@@ -572,3 +572,20 @@ test('要約だけのターン: snapshot に compact を載せ、使用量には
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+test('返信の出力に流れた使用率の知らせを、ターンの途中と終わりに渡す（#694）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-limits-run-'))
+  try {
+    const seen: string[] = []
+    const runner = new ProcessRunner(join(dir, 'reply.log'), null, null, { observe: (text) => seen.push(text) })
+    // 先に使用率を出してから 600ms 動き続ける子（result は出さない = 見張りは最後まで回る）
+    const script = `console.log(JSON.stringify({ type: 'rate_limit_event', rate_limit_info: { unifiedWindows: { five_hour: { utilization: 0.5, resetsAt: 1 } } } })); setTimeout(() => console.log(JSON.stringify({ type: 'assistant' })), 600); process.stdin.on('end', () => process.exit(0)); setTimeout(() => process.exit(0), 900)`
+    await runner.start('A@r', { bin: process.execPath, args: ['-e', script], cwd: dir, text: 'やって', input: claudeUserLine('やって'), session: 'S' })
+    assert.ok(await until(() => seen.some((t) => t.includes('rate_limit_event'))), '終わる前に渡る')
+    assert.equal(runner.running('A@r'), true, 'まだターンの途中')
+    assert.ok(await until(() => !runner.running('A@r')))
+    assert.ok(seen.at(-1)!.includes('rate_limit_event'), '終わりにもそのターンぶんの出力を渡す（見張りの無い返信のぶん）')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})

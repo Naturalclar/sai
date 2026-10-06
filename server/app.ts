@@ -146,6 +146,7 @@ import { SETTINGS_FILE, SettingsStore, nextAskOn } from './meta/settings.ts'
 import type { Settings } from './meta/settings.ts'
 import { isLinearWorkspace } from '../shared/refs.ts'
 import { backgroundSessionCommand, newSessionCommand, ProcessRunner, replyCommand, splitArgs } from './reply/runner.ts'
+import { CLAUDE_REPLY_LIMITS_FILE, ClaudeLimitsFile } from './reply/claudeLimits.ts'
 import { BackgroundLookupError, ClaudeBackground, type BackgroundSessions } from './reply/claudeBackground.ts'
 import { TURN_USAGE_FILE, TurnUsageLog } from './reply/turnUsage.ts'
 import { usageReport, usageReportDays } from '../shared/usageReport.ts'
@@ -880,7 +881,7 @@ export function createApp(
   const usage = new TurnUsageLog(join(store.directory, TURN_USAGE_FILE))
   const usageReady = usage.load()
   // 処理中の返信は replying.json にも持ち、サーバを再起動しても生きている分を引き取る（#100）
-  const run: Runner = runner ?? new ProcessRunner(join(store.directory, 'reply.log'), join(store.directory, 'replying.json'), usage)
+  const run: Runner = runner ?? new ProcessRunner(join(store.directory, 'reply.log'), join(store.directory, 'replying.json'), usage, new ClaudeLimitsFile(join(store.directory, CLAUDE_REPLY_LIMITS_FILE)))
   // 返信中の許可・質問の預かりも立て直しをまたぐ（#440）。引き取るのは、いま回っている返信の子（`replying.json` から引き取った分）のものだけ
   approvals.persistTo(join(store.directory, APPROVALS_FILE), (id) => run.running(id))
   // 許可に答えた記録（#445 / #582）。回数を数えて「常に許可」を勧めるのに使う（勧めるだけで、ルールは書かない）

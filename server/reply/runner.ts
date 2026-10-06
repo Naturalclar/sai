@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url'
 import type { Agent, Replying, ReplyFailure, ReplyingMap } from '../../shared/types.ts'
 import { settledByRow } from '../../shared/turnSettled.ts'
 import { failureTail, parseTurnUsage } from '../../shared/turnUsage.ts'
+import type { ClaudeLimitsSink } from './claudeLimits.ts'
 import type { TurnUsageSink } from './turnUsage.ts'
 
 /** 失敗した返信を画面に見せておく時間。ポーリングは3秒なので、これだけあれば拾える */
@@ -449,15 +450,19 @@ export class ProcessRunner implements Runner {
   private polls = new Map<string, () => void>()
   /** ターンが終わったときに使用量を渡す先（#387）。無ければ何もしない */
   private readonly usage: TurnUsageSink | null
+  /** 返信の出力に載る使用率（`rate_limit_event`）を渡す先（#694）。無ければ何もしない */
+  private readonly limits: ClaudeLimitsSink | null
 
   /**
    * logPath があれば子プロセスの stdout/stderr を追記する（うまく動かないときの手がかり）。
-   * statePath があれば処理中をそこにも持つ。usage があれば、終わったターンの使用量を渡す
+   * statePath があれば処理中をそこにも持つ。usage があれば、終わったターンの使用量を渡す。
+   * limits があれば、出力に流れてきた使用率の知らせを渡す（ターンの途中でも。#694）
    */
-  constructor(logPath: string | null, statePath: string | null = null, usage: TurnUsageSink | null = null) {
+  constructor(logPath: string | null, statePath: string | null = null, usage: TurnUsageSink | null = null, limits: ClaudeLimitsSink | null = null) {
     this.logPath = logPath
     this.statePath = statePath
     this.usage = usage
+    this.limits = limits
     this.adopt()
   }
 
@@ -659,6 +664,8 @@ export class ProcessRunner implements Runner {
       if (this.inputs.get(id) === child.stdin) this.closeInput(id)
       // このターンぶんの出力を 1 回だけ読む。失敗の理由も使用量もここから出る（#387）
       const slice = this.logPath ? readFrom(this.logPath, logOffset) : ''
+      // 使用率の知らせ（#694）。見張りが読み切れなかった末尾と、見張りの無い返信のぶん。止めたターンでも口座の値は正しい
+      this.limits?.observe(slice)
       if (entry.interrupted) {
         // 人が止めたターン（#386）。非 0 で終わるのは止めたからで、失敗ではない。
         // `Stop` フックが鳴らず結ぶ行が無いので、使用量も残さない（前のターンのバブルに付いてしまう）
@@ -726,6 +733,8 @@ export class ProcessRunner implements Runner {
           const end = chunk.lastIndexOf('\n')
           if (end < 0) return
           pos += Buffer.byteLength(chunk.slice(0, end + 1))
+          // ターンの途中でも使用率を拾う（長いターンのあいだ値を止めない。#694）
+          this.limits?.observe(chunk.slice(0, end + 1))
           if (hasResultFor(chunk.slice(0, end + 1), cmd.session ?? '')) {
             if (watch) clearInterval(watch)
             watch = null

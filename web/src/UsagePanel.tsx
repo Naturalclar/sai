@@ -33,7 +33,7 @@ export function UsagePanel({ usage, now, onNavigate }: { usage: UsageResponse; n
             {fresh.at && (
               <span className={`usage-at${fresh.stale ? ' stale' : ''}`}>
                 {fresh.at}
-                {fresh.stale && ` · ${fresh.age}`}
+                {fresh.stale && ` · ${fresh.age}から変化なし`}
               </span>
             )}
           </h3>

@@ -119,8 +119,6 @@ export function parseStatusLineUsage(file: unknown, now: number): ClaudeUsage | 
   if (!limits || typeof limits !== 'object') return null
   const l = limits as Record<string, unknown>
   const usage: ClaudeUsage = { at }
-  // 最後に届いた時刻（#694）。読めない・`ts` より前のものは使わない
-  if (typeof row.seen === 'string' && Date.parse(row.seen) >= written) usage.seen = row.seen
   const primary = parseStatusWindow(l.five_hour, FIVE_HOURS_MINUTES, now)
   const secondary = parseStatusWindow(l.seven_day, WEEK_MINUTES, now)
   if (primary) usage.primary = primary
@@ -131,8 +129,9 @@ export function parseStatusLineUsage(file: unknown, now: number): ClaudeUsage | 
 /**
  * Claude の割合を「古い」と見なすまでの時間（#694）。値が届くのは**端末の Claude Code がステータスラインを描いたとき**だけで、
  * SAI から回した返信（`claude -p`）は描かないので、SAI から回しているあいだは値が進まない。
- * 測るのは**最後に届いてから**（`ClaudeUsage.seen`。`statusline.py` は同じ値が届いても 5 分おきに進める）で、
- * 割合が最後に変わってから（`at`）ではない: 上限中の 100% や軽い利用は、届いていても変わらない。
+ * **測るのは「割合が最後に変わってから」**（`usage-claude.json` の `ts`。#689）で、「最後に届いてから」ではない:
+ * 届いているが変わっていない値（上限中の 100%・軽い利用）にも付くので、画面は「◯ 前から変わっていません」としか言わない。
+ * 「最後に届いた時刻」は、API を叩いていない描き直しと区別が付かないうちは持たない（#719 のレビュー）。
  *
  * 30 分にした根拠: 実測（2026-10-05）で、並行して回していた 30 分に週の割合が 37% → 47% と 10 ポイント進んでいた。
  * 色が変わる境目（`USAGE_WARN` 80 と `USAGE_HIGH` 95）の間が 15 ポイントなので、これより長く黙っていると色を 1 段取り違えうる。

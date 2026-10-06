@@ -255,9 +255,7 @@ class StatusLineTest(unittest.TestCase):
         self.assertEqual(self.written(), placed, "同じ窓の低い値では置き直さない（ts も進めない）")
         self.assertIn("週 37%", result.stdout, "表示はそのセッションが持っている値のまま")
         run(week(47, WEEK_RESETS + 5), self.env)
-        same = self.written()
-        self.assertEqual({k: v for k, v in same.items() if k != "seen"}, placed, "同じ値の描画では ts も窓も変えない（ts は値が最後に変わった時刻）")
-        self.assertIn("seen", same, "同じ値が届いたことは seen に残す（#694）")
+        self.assertEqual(self.written(), placed, "同じ値の描画では書き直さない（ts は値が最後に変わった時刻）")
 
         # 期限切れの窓が残っているだけでは書き直さない（値が変わっていないのに「時点」が進んでしまう）
         expired = {"used_percentage": 80.0, "resets_at": int(time.time()) - 60}
@@ -273,37 +271,6 @@ class StatusLineTest(unittest.TestCase):
         self.assertEqual(self.windows()["seven_day"], {"used_percentage": 3.0, "resets_at": WEEK_RESETS + 7 * 86400}, "新しい窓は低くても置き直す")
         run(week(99), self.env)
         self.assertEqual(self.written()["rate_limits"]["seven_day"]["used_percentage"], 3.0, "前の窓の値では置き直さない")
-
-    def test_seen_moves_when_the_same_value_arrives(self):
-        # 値は変わっていないが届いてはいる（上限中の 100%・軽い利用）と、届いていないを読む側が区別できるようにする（#694）
-        def week(percent):
-            return payload(rate_limits={"seven_day": {"used_percentage": percent, "resets_at": WEEK_RESETS}})
-
-        run(week(47), self.env)
-        first = self.written()
-        self.assertEqual(first["seen"], first["ts"], "値を書いたときは seen も同じ時刻")
-
-        run(week(47), self.env)
-        self.assertEqual(self.written(), first, "前に届いてから SEEN_REFRESH_SECONDS たっていなければ書かない")
-
-        placed = self.record_at(timedelta(minutes=-40), {"seven_day": {"used_percentage": 47.0, "resets_at": WEEK_RESETS}})
-        run(week(37), self.env)
-        self.assertEqual(self.written(), placed, "低い値を持ち回っているセッションの描画は、届いたことにしない")
-        run(payload(rate_limits=None), self.env)
-        self.assertEqual(self.written(), placed, "rate_limits の無い描画でも進めない")
-
-        run(week(47), self.env)
-        seen = self.written()
-        self.assertEqual(seen["ts"], placed["ts"], "ts（最後に変わった時刻）は進めない")
-        self.assertEqual(seen["rate_limits"], placed["rate_limits"])
-        self.assertGreater(datetime.fromisoformat(seen["seen"]), datetime.fromisoformat(placed["ts"]) + timedelta(minutes=39))
-        run(week(47), self.env)
-        self.assertEqual(self.written(), seen, "進めた直後は書かない")
-        self.assertEqual([p.name for p in self.dir.iterdir()], ["usage-claude.json"], "tmp を残さない")
-
-        newer = self.record_at(timedelta(minutes=1), {"seven_day": {"used_percentage": 47.0, "resets_at": WEEK_RESETS}})
-        run(week(47), self.env)
-        self.assertEqual(self.written(), newer, "今より先の記録（別の描画が書いた新しいもの）は触らない")
 
     def test_a_window_unchanged_for_a_day_takes_a_lower_value(self):
         # 枠が途中でリセットされたとき、高い値が窓の終わりまで残らないように（#689）

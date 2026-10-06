@@ -50,7 +50,7 @@ export function UsageChip() {
     claude?.secondary && line('Claude', claude.secondary),
     fresh.fiveHourMissing && 'Claude 5時間: 取れていません',
     claude?.limited && `Claude ${limitKindLabel(claude.limited.kind)}の上限中 · ${resetLabel(claude.limited.resets_at, at)}`,
-    fresh.stale && `Claude は ${fresh.at}（${fresh.age}）の値です`,
+    fresh.stale && `Claude の割合は ${fresh.at}（${fresh.age}）から変わっていません`,
     (fresh.stale || fresh.fiveHourMissing) && CLAUDE_USAGE_WHY,
   ]
     .filter(Boolean)

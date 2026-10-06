@@ -21,15 +21,18 @@ export interface UsageChipPart {
   age: string
 }
 
-/** なぜ Claude の値が古くなるのか・5 時間が出ないのか（#694）。パネルとチップの title が同じ文を出す */
-export const CLAUDE_USAGE_WHY = 'Claude の使用率は、端末の Claude Code が画面を描いたときにだけ届きます。SAI から回した返信（claude -p）では進みません。'
+/**
+ * なぜ Claude の値が古くなるのか・5 時間が出ないのか（#694）。パネルとチップの title が同じ文を出す。
+ * 「届いていない」とは言い切らない（変わっていないだけのこともある）
+ */
+export const CLAUDE_USAGE_WHY = 'Claude の使用率は、端末の Claude Code が画面を描いたときにだけ届きます。SAI から回した返信（claude -p）では進まないので、実際より低いことがあります。'
 
 export interface ClaudeFreshness {
-  /** 「10/5 10:57 時点」（最後に届いた時刻）。いつの値か分からなければ空 */
+  /** 「10/5 10:57 時点」（割合が最後に変わった時刻）。いつの値か分からなければ空 */
   at: string
   /** 「27時間前」。1 分未満・分からなければ空 */
   age: string
-  /** 最後に届いてから `USAGE_STALE_MS` を過ぎている */
+  /** 割合が `USAGE_STALE_MS` より長く変わっていない（届いていないのか、届いているが変わっていないのかは分からない） */
   stale: boolean
   /** 週は取れているのに 5 時間の枠が無い（「取れていません」と出す。割合が 1 つも無いときは設定の案内のほうを出す） */
   fiveHourMissing: boolean
@@ -41,12 +44,10 @@ export interface ClaudeFreshness {
  */
 export function claudeFreshness(claude: ClaudeUsage | undefined, now: number): ClaudeFreshness {
   const has = Boolean(claude?.primary || claude?.secondary)
-  // 古さは「最後に届いた時刻」で見る（同じ値が届き続けているだけなら古くない）。無ければ割合が最後に変わった時刻
-  const seen = claude?.seen ?? claude?.at
-  const stale = has && isUsageStale(seen, now)
+  const stale = has && isUsageStale(claude?.at, now)
   return {
-    at: claude ? usageAtLabel(seen, now) : '',
-    age: has ? usageAgeLabel(seen, now) : '',
+    at: claude ? usageAtLabel(claude.at, now) : '',
+    age: has ? usageAgeLabel(claude?.at, now) : '',
     stale,
     fiveHourMissing: Boolean(claude && !claude.primary && claude.secondary),
   }

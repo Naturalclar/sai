@@ -258,3 +258,14 @@ test('入力が自動の要約の文になっているターン完了の行で�
   // 入力した瞬間の行が窓の外でも、要約を自分の発言にはしない
   assert.deepEqual(toUtterances([row(5, { user_text: summary })]).map((u) => u.speaker), ['claude'])
 })
+
+test('一言の「人が次にすること」は、一言があるエージェントの発言にだけ載る（#713）', () => {
+  const [two, old, bare] = toUtterances([
+    row(0, { summary: 'PR 出したよ！', summary_next: 'よければ「マージして」と言ってください。' }),
+    row(1, { summary: 'PR 出したよ、「マージして」と言ってね！' }),
+    row(2, { summary_next: '確認してください。' }),
+  ])
+  assert.deepEqual([two?.summary, two?.summaryNext], ['PR 出したよ！', 'よければ「マージして」と言ってください。'])
+  assert.deepEqual([old?.summary, old?.summaryNext], ['PR 出したよ、「マージして」と言ってね！', undefined], '分かれていない一言は今までどおり')
+  assert.deepEqual([bare?.summary, bare?.summaryNext], [undefined, undefined], '一言が無ければ単独では出さない')
+})

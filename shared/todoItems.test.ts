@@ -248,6 +248,13 @@ test('todoItems: 文言は一言があればそれ、無ければ最後の発言
   const at = { end: END, last_turn_ts: END, last_kind: 'turn' as const }
   assert.equal(todoItems([summary({ ...at, last_summary: 'PR 出したよ', last_text: '長い本文' })], {}, SELF)[0]!.text, 'PR 出したよ')
   assert.equal(todoItems([summary({ ...at, last_text: '' })], {}, SELF)[0]!.text, '（本文なし）')
+  // 一言が 2 つで組まれていれば（#713）、「人が次にすること」が行の文言で、「何が起きたか」は後ろに小さく添える
+  const two = todoItems([summary({ ...at, last_summary: 'PR 出したよ！', last_summary_next: 'よければ「マージして」と言ってください。', last_text: '長い本文' })], {}, SELF)[0]!
+  assert.deepEqual([two.text, two.sub], ['よければ「マージして」と言ってください。', 'PR 出したよ！'])
+  assert.equal(todoItems([summary({ ...at, last_summary: 'PR 出したよ', last_text: '長い本文' })], {}, SELF)[0]!.sub, undefined, '分かれていない一言は今までどおり 1 つ')
+  const idle = todoItems([summary({ ...at, last_kind: 'idle', idle: '入力待ち', last_summary: 'PR 出したよ！', last_summary_next: '確認してください。' })], {}, SELF)[0]!
+  assert.deepEqual([idle.text, idle.sub], ['入力待ち', undefined], '入力待ちの行は文言を変えない')
+  assert.equal(todoItems([summary({ ...at, last_summary_next: '確認してください。', last_text: '長い本文' })], {}, SELF)[0]!.text, '長い本文', '一言が無ければ「人が次にすること」だけでは出さない')
   assert.equal(todoItems([summary({ ...at, last_text: 'PR [#374](https://github.com/o/r/pull/374) を出した' })], {}, SELF)[0]!.text, 'PR #374 を出した', 'Markdown の記号は落とす')
 })
 

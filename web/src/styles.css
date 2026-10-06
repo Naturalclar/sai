@@ -488,6 +488,8 @@
   .todo .who .agent .dot { width: 8px; height: 8px; }
   .todo .why { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; margin-top: 6px; font-size: 13px; }
   .todo .why .text { overflow-wrap: anywhere; }
+  /* 何が起きたか（#713）。行の主役は「人が次にすること」なので、後ろに小さく薄く */
+  .todo .why .sub { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
   .todo .why .note { color: var(--muted); font-size: 11px; }
   /* 行から次の指示を送る（#522）。開いている間は下段の行も薄くしない */
   .todo .why .todo-reply-open { font-size: 12px; }
@@ -1076,6 +1078,9 @@
   /* 一言コメント（digest）。本文は一言で、元の text は「詳細」で開く */
   .msg .summary { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
   .msg .summary .line { white-space: pre-wrap; overflow-wrap: anywhere; }
+  /* 一言の「人が次にすること」（#713）。本文の文そのままを一言の下に 1 行。見出しは付けず、左の細い線で「別の声」だと分かるようにする */
+  .msg .summary-next { margin-top: 3px; padding-left: 8px; border-left: 2px solid color-mix(in srgb, var(--accent) 55%, transparent); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .msg .summary-next a { text-decoration: underline; text-underline-offset: 2px; }
   .msg .summary .details-toggle { flex: none; font-size: 11px; color: var(--muted); }
   .msg .summary .details-toggle:hover { color: var(--accent); }
   /* 一言が変だと残す口（#346）。普段は目立たせず、開いたときだけ理由を並べる */

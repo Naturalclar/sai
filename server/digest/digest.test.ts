@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
-import { isTimeout, ClaudeSummarizer, DEFAULT_OPENAI_URL, DIGEST_ALERT_FAILS, DIGEST_BREAK_MS, DIGEST_MAX_TRIES, DIGEST_RETRY_DELAYS_MS, DigestStore, Digester, OpenAISummarizer, createDigester, digestKey, digestable, personaResolver, stripThinking, summarizeCommand, summarizeRequest, summarizerFactory, mayRetryWithoutReasoning } from './digest.ts'
+import { isTimeout, ClaudeSummarizer, DEFAULT_OPENAI_URL, DIGEST_ALERT_FAILS, DIGEST_BREAK_MS, DIGEST_MAX_TRIES, DIGEST_RETRY_DELAYS_MS, DigestStore, Digester, OpenAISummarizer, createDigester, digestKey, digestable, partsOf, personaResolver, stripThinking, summarizeCommand, summarizeRequest, summarizerFactory, mayRetryWithoutReasoning } from './digest.ts'
 import type { Summarizer } from './digest.ts'
 import { row } from '../rows/aggregate.test.ts'
 import type { PersonaId } from '../../shared/types.ts'
@@ -1344,6 +1344,42 @@ test('Digester: 本文に引用された人の言葉があれば、案はその�
     assert.notEqual(oldStore.get(digestKey(quoted))?.summary, '')
     assert.equal(oldStore.get(digestKey(quoted))?.next_ask_source, undefined, '作り直さず持ち越した案は、前の行の印のまま（無ければ無い）')
     assert.ok(fake.prompts.some((p) => p.includes('「マージして」と言って')), '一言はいつもどおり作る（一言と案は別に数える）')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('partsOf / attach / partsFor: 2 つで組んだ一言は分けて渡し、そうでない一言（前の行・報告だけ）は 1 つのまま渡す（#713）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-digest-parts-'))
+  try {
+    const store = new DigestStore(join(dir, 'digest.jsonl'))
+    await store.load()
+    const two = row(at(1), 'S1', { repo: 'r', text: SOURCE })
+    const old = row(at(2), 'S2', { repo: 'r', text: SOURCE })
+    const report = row(at(3), 'S3', { repo: 'r', text: '直しました。' })
+    const askOnly = row(at(4), 'S4', { repo: 'r', text: SOURCE })
+    const base = { persona: 'ESFP' as const, model: 'qwen3:8b', ts: at(5).toISOString() }
+    await store.append({ ...base, key: digestKey(two), summary: `PR 出したよ！${SOURCE_NEXT_SENTENCE}`, what: 'PR 出したよ！', next: SOURCE_NEXT_SENTENCE })
+    // #718 より前の一言: 分けたものが無い。繋いだ文のまま 1 つの一言として読む
+    await store.append({ ...base, key: digestKey(old), summary: 'PR 出したよ、「マージして」と言ってね！' })
+    await store.append({ ...base, key: digestKey(report), summary: '直したよ！' })
+    // 案だけ作った行（一言は空。#560）
+    await store.append({ ...base, key: digestKey(askOnly), summary: '', next_ask: 'マージして' })
+    const d = new Digester(store, new FakeSummarizer(), { enabled: true, model: 'qwen3:8b', since: at(9).toISOString(), persona: async () => 'ESFP', logPath: join(dir, 'digest.log') })
+
+    const [a, b, c, e] = d.attach([two, old, report, askOnly])
+    assert.deepEqual([a?.summary, a?.summary_next], ['PR 出したよ！', SOURCE_NEXT_SENTENCE], '2 つに分けて渡す（summary は何が起きたかだけ）')
+    assert.deepEqual([b?.summary, b?.summary_next], ['PR 出したよ、「マージして」と言ってね！', undefined], '前の一言はそのまま')
+    assert.deepEqual([c?.summary, c?.summary_next], ['直したよ！', undefined])
+    assert.equal(e, askOnly, '一言の無い行には何も載せない')
+    assert.deepEqual(d.partsFor('S1@r', two.ts), { what: 'PR 出したよ！', next: SOURCE_NEXT_SENTENCE })
+    assert.deepEqual(d.partsFor('S2@r', old.ts), { what: 'PR 出したよ、「マージして」と言ってね！' })
+    assert.equal(d.partsFor('S4@r', askOnly.ts), undefined)
+    assert.equal(d.partsFor('S1@r', ''), undefined)
+    assert.equal(d.summaryFor('S1@r', two.ts), `PR 出したよ！${SOURCE_NEXT_SENTENCE}`, '繋いだ文はそのまま引ける（「変？」に残す文）')
+    // 片方だけの行（手で書き換えた・壊れた）は、繋いである summary を 1 つの一言として渡す
+    assert.deepEqual(partsOf({ summary: '繋いだ文', what: '何か' }), { what: '繋いだ文' })
+    assert.deepEqual(partsOf({ summary: '繋いだ文', what: '  ', next: '頼み' }), { what: '繋いだ文' })
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

@@ -88,6 +88,8 @@ export function TodoRow({ item, now, hotkey, modeNote, reply, children, prs = []
             )}
             {/* 文言は行の text のまま（`入力待ち（バックグラウンドのセッション）` の区別を捨てない） */}
             <span className="text">{item.text}</span>
+            {/* 何が起きたか（#713）。行の主役は「人が次にすること」なので、後ろに小さく */}
+            {item.sub && <span className="sub">{item.sub}</span>}
             {source && (
               <button type="button" className="linkish todo-source-toggle" aria-expanded={sourceOpen} onClick={() => setSourceOpen((v) => !v)}>
                 {sourceOpen ? '元の文を閉じる' : '元の文'}

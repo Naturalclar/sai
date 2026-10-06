@@ -1293,11 +1293,12 @@ export function createApp(
     if (digest.store.size === 0) return sessions
     return sessions.map((s) => {
       const ts = s.last_turn_ts ?? ''
-      const summary = s.meta?.digest_off ? undefined : digest.summaryFor(s.id, ts)
+      // 2 つで組んだ一言（#713）は「何が起きたか」と「人が次にすること」に分けて載せる（画面が場所ごとに出し分ける）
+      const parts = s.meta?.digest_off ? undefined : digest.partsFor(s.id, ts)
       // 次に送る文面の案（#371）。一言と同じ行に入っているので、同じところで載せる
       const nextAsk = digest.nextAskEnabled ? digest.nextAskFor(s.id, ts) : undefined
-      if (!summary && !nextAsk) return s
-      return { ...s, ...(summary ? { last_summary: summary } : {}), ...(nextAsk ? { next_ask: nextAsk } : {}) }
+      if (!parts && !nextAsk) return s
+      return { ...s, ...(parts ? { last_summary: parts.what, ...(parts.next ? { last_summary_next: parts.next } : {}) } : {}), ...(nextAsk ? { next_ask: nextAsk } : {}) }
     })
   }
 
@@ -4467,7 +4468,7 @@ export function createApp(
         const noDigest = await digestOffIds()
         await usageReady
         rows = usage.attach(digest.attach(rows.map(stripThinking)))
-        if (noDigest.size) rows = rows.map((r) => (r.summary && noDigest.has(entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? ''))) ? { ...r, summary: undefined } : r))
+        if (noDigest.size) rows = rows.map((r) => (r.summary && noDigest.has(entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? ''))) ? { ...r, summary: undefined, summary_next: undefined } : r))
         await drainAll()
         const replying = await withAuth(await replyingOf(sessions), sessions)
         const pendingApprovals = await approvalsNow(sessions)

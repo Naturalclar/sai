@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import type { Replying } from '../../shared/types.ts'
+import type { Replying, SessionSummary } from '../../shared/types.ts'
 import { sessionPreview } from './sessionPreview.ts'
 
 const T = (min: number) => new Date(Date.UTC(2026, 8, 10, 3, min)).toISOString()
@@ -48,6 +48,9 @@ test('sessionPreview: 一言はエージェントの発言にだけ使う', () =
   const s = { ...base, last_summary: '青にしたよ！' }
   assert.equal(sessionPreview(s, null)?.text, '青にしたよ！')
   assert.equal(sessionPreview({ ...s, last_user_text: '赤も', last_user_ts: T(12) }, null)?.text, '赤も', '自分の返信に一言は出さない')
+  // 一覧の「最後の発言」は「何が起きたか」だけ（#713。人が次にすることは要対応とバブルに出す）
+  const two: SessionSummary = { ...(s as SessionSummary), last_summary_next: 'よければ「マージして」と言ってください。' }
+  assert.equal(sessionPreview(two, null)?.text, '青にしたよ！')
 })
 
 test('sessionPreview: 画像を添えた返信は、本文の末尾に足したパスを出さない', () => {

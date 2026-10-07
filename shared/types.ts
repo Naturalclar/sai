@@ -1,6 +1,7 @@
 // agent-feed の1行と、SAI の API の形。サーバ（server/）と画面（web/src/）が両方ここを import する。
 // フィールドを足すときはここに足す。JSONL の形は feed/record.py が正本。
 
+import type { BashNoRuleReason } from './bashRules.ts'
 import type { EventKind } from './events.ts'
 import type { Skill } from './skills.ts'
 import type { TurnUsage } from './turnUsage.ts'
@@ -1259,7 +1260,22 @@ export interface ApprovalLogRow {
   remember: boolean
   /** 預かってから答えるまでの秒数 */
   waited_s: number
+  /**
+   * `rule` が空だった理由の種類（#724。`rule` があるときは載せない。#724 より前の行には無い）。
+   * **種類だけ**で、コマンドの文字・引数・パスは書かない
+   */
+  no_rule?: NoRuleReason
 }
+
+/**
+ * [常に許可] のルールが空だった理由の種類（#724）。
+ * - Bash の形: `shared/bashRules.ts` の `BashNoRuleReason`（一覧と意味はそちら。最初に当たった 1 つ）
+ * - `cd_only`: `cd` しか無く、書くルールが無い
+ * - `covered`: 組めたが、全部もう設定の許可のルールにある（ルールがあるのに聞かれている）
+ * - `not_bash`: Bash でも MCP でもないツール（Edit / Read / 質問など。もともとルールが無い）
+ * 全部の並びは `shared/approvals.ts` の `NO_RULE_REASONS`
+ */
+export type NoRuleReason = BashNoRuleReason | 'cd_only' | 'covered' | 'not_bash'
 
 /**
  * 画面から答えた許可・質問（#693）。ターンが終わる（次のターン完了の行が来る）まで、セッションの画面に残す。

@@ -4,6 +4,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import { NO_RULE_REASONS } from '../shared/approvals.ts'
 import { EXPECTED_CLAUDE_HOOKS } from '../shared/hooks.ts'
 
 const ROOT = resolve(import.meta.dirname, '..')
@@ -121,3 +122,14 @@ test('フック: README の Claude Code の例と EXPECTED_CLAUDE_HOOKS が揃�
   const key = (h: { event: string; matcher: string }) => `${h.event}|${h.matcher}`
   assert.deepEqual(readmeClaudeHooks().map(key).sort(), EXPECTED_CLAUDE_HOOKS.map(key).sort())
 })
+
+test('docs/data.md の approvals.jsonl の no_rule の一覧が、コードの種類（NO_RULE_REASONS）と揃っている（#724）', () => {
+  const line = readFileSync(join(ROOT, 'docs/data.md'), 'utf-8').split('\n').find((l) => l.startsWith('| `approvals.jsonl`')) ?? ''
+  const part = line.slice(line.indexOf('`no_rule`'))
+  assert.ok(part, 'approvals.jsonl の行に no_rule の説明がある')
+  for (const kind of NO_RULE_REASONS) assert.ok(part.includes(`\`${kind}\``), `docs/data.md に ${kind} が無い`)
+  // 文書にだけ残った種類も止める（小文字と _ だけの語のうち、行のほかのキーでないもの）
+  const known = new Set<string>([...NO_RULE_REASONS, 'no_rule', 'rule', 'cwd'])
+  for (const m of part.matchAll(/`([a-z_]+)`/g)) assert.ok(known.has(m[1]!), `docs/data.md の ${m[1]} はコードに無い`)
+})
+

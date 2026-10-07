@@ -92,7 +92,7 @@ interface Props {
    * 送り方を選ぶ材料（#579）。渡したときだけ、着手の指示なら「要約してから送る」を既定にして、そのまま・新しいセッションも選べる。
    * フィードには渡さない（返信先が `@` で動く）。判定は `shared/compact.ts` の `sendModes()`
    */
-  sendMode?: { agent: string; contextTokens: number; terminal: boolean }
+  sendMode?: { agent: string; contextTokens: number; terminal: boolean; forkable?: boolean }
   /** 本文が空でないかが変わったら知らせる。FeedView は入力中に既定の返信先を動かさないために使う */
   onDraft?: (drafting: boolean) => void
   /** モデルの右に出す許可モードの選択。渡さなければ出さない（Claude 以外と、返信先が一覧に無いとき） */
@@ -246,7 +246,8 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
   // 画像を添えているときは新しいセッションを出さない（新しいセッションの口は画像を受けない）
   const [modePicked, setModePicked] = useState<SendMode | null>(null)
   const offered = sendMode && !queueing ? sendModes({ ...sendMode, text }, CONTEXT_WARN_TOKENS) : null
-  const choices = (offered?.choices ?? []).filter((m) => m !== 'new' || attach.items.length === 0)
+  // 新しいセッション・分岐（#405）は本文だけを送る口なので、画像を添えているあいだは出さない
+  const choices = (offered?.choices ?? []).filter((m) => (m !== 'new' && m !== 'fork') || attach.items.length === 0)
   const sendModeNow: SendMode = modePicked && choices.includes(modePicked) ? modePicked : choices.includes(offered?.mode ?? 'plain') ? (offered?.mode ?? 'plain') : 'plain'
 
   const drafting = text.trim() !== ''
@@ -770,7 +771,7 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
           ) : sendModeNow === 'plain' ? '送信' : (
             // 狭い画面・タッチ端末では「送信」だけ（#629。送り方は左の選択に出ている。長い文言だと 360 幅でボタンが次の段に落ちる）
             <>
-              <span className="send-long">{sendModeNow === 'compact' ? '要約して送る' : '新しく始める'}</span>
+              <span className="send-long">{sendModeNow === 'compact' ? '要約して送る' : sendModeNow === 'fork' ? '分岐して送る' : '新しく始める'}</span>
               <span className="send-short">送信</span>
             </>
           )}

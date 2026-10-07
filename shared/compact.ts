@@ -7,13 +7,17 @@
 /** これより小さいセッションは要約しない（新しいセッションの最初は約 4.9 万・要約の直後は約 8.3 万で、得るものが無い） */
 export const COMPACT_MIN_TOKENS = 150_000
 
-/** 返信の送り方。`compact` = 要約してから送る、`plain` = そのまま、`new` = 新しいセッションで送る */
-export type SendMode = 'compact' | 'plain' | 'new'
+/**
+ * 返信の送り方。`compact` = 要約してから送る、`plain` = そのまま、`new` = 新しいセッションで送る、
+ * `fork` = 会話ごと分岐して、分岐先に送る（#405。Codex だけ）
+ */
+export type SendMode = 'compact' | 'plain' | 'new' | 'fork'
 
 export const SEND_MODE_LABEL: Record<SendMode, string> = {
   compact: '要約してから送る',
   plain: 'そのまま送る',
   new: '新しいセッションで送る',
+  fork: '分岐して送る',
 }
 
 /** 狭い画面・タッチ端末で、閉じているときに出す短い表記（#629）。開いたメニューは `SEND_MODE_LABEL` のまま */
@@ -21,6 +25,7 @@ export const SEND_MODE_SHORT: Record<SendMode, string> = {
   compact: '要約',
   plain: 'そのまま',
   new: '新規',
+  fork: '分岐',
 }
 
 /**
@@ -41,6 +46,11 @@ export interface SendModeInput {
   contextTokens: number
   /** 端末（tmux）で開いている。**要約は別プロセスでしか回さない**（端末の TUI に打ち込むと、要約中の入力の扱いを確かめていない） */
   terminal: boolean
+  /**
+   * 会話ごと分岐できる（#405）。Codex の、返信できる（ID が rollout から引けている・このマシンの）セッション。
+   * 端末で開いているものには出さない（サーバも `codexHeldElsewhere()` で断る）
+   */
+  forkable?: boolean
 }
 
 /** 要約を選べるか。Claude で、端末で開いておらず、下限以上のとき（量が分からなければ出さない） */
@@ -60,6 +70,8 @@ export function sendModes(input: SendModeInput, warnTokens: number): { mode: Sen
   const offerCompact = compactable && (work || input.contextTokens >= warnTokens)
   const choices: SendMode[] = offerCompact ? ['compact', 'plain'] : ['plain']
   if (claude && (offerCompact || work)) choices.push('new')
+  // 分岐（#405）は既定にしない。Codex で分岐できるときに、そのままの横に出すだけ
+  if (input.agent === 'codex' && input.forkable && !input.terminal) choices.push('fork')
   return { mode: offerCompact && work ? 'compact' : 'plain', choices: choices.length > 1 ? choices : [] }
 }
 

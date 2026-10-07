@@ -11,6 +11,8 @@ class FakeConnection implements CodexConnection {
   skillsResult: unknown = { data: [] }
   /** `thread/start` の応答（#401）。null なら thread を返さない */
   newThread: string | null = 'thread-new'
+  /** `thread/fork` の応答の thread id（#405）。null なら thread を返さない */
+  forked: string | null = 'thread-forked'
   /** true なら `turn/steer` を断る（#404。実測のエラーは `no active turn to steer`） */
   failSteer = false
   private messages: ((message: Message) => void)[] = []
@@ -44,6 +46,13 @@ class FakeConnection implements CodexConnection {
       const id = message.id
       const fail = this.failSteer
       queueMicrotask(() => this.emit(fail ? { id, error: { message: 'no active turn to steer' } } : { id, result: { turnId: 'turn-1' } }))
+      return
+    }
+    if (message.method === 'thread/fork') {
+      const id = message.id
+      const made = this.forked
+      const from = (message.params as { threadId?: string } | undefined)?.threadId
+      queueMicrotask(() => this.emit({ id, result: made ? { thread: { id: made, forkedFromId: from, path: '/x/rollout.jsonl', turns: [] }, cwd: '/repo', model: 'm' } : {} }))
       return
     }
     if (message.method === 'thread/start') {
@@ -403,4 +412,33 @@ test('ownPid: 繋いでいる app-server の pid。thread/closed で holds() が
   assert.equal(app.ownPid(), 9191, 'thread/closed のあとも app-server は生きている（行の pid はこれを指したまま）')
   connection.disconnect()
   assert.equal(app.ownPid(), 0)
+})
+
+test('fork: thread/fork に threadId だけを渡し、分岐先の最初のターンでは resume しない（#405）', async () => {
+  const connection = new FakeConnection()
+  const app = new CodexAppServer(async () => connection, () => Date.parse('2026-10-07T06:00:00Z'))
+  const forked = await app.fork('thread-src')
+  assert.equal(forked, 'thread-forked')
+  const sent = connection.sent.find((m) => m.method === 'thread/fork')
+  // cwd・model・sandbox・approvalPolicy の上書きは渡さない（元のスレッドのまま）。履歴は返させない
+  assert.deepEqual(sent?.params, { threadId: 'thread-src', excludeTurns: true })
+
+  await app.start({ id: 'thread-forked@repo', threadId: forked, text: '別の方針で', cwd: '/repo' })
+  assert.deepEqual(
+    connection.sent.map((m) => m.method),
+    ['initialize', 'initialized', 'thread/fork', 'turn/start'],
+    '分岐先はこの接続がもう読み込んでいるので thread/resume を投げない（0.160.1 で実測）',
+  )
+  assert.equal((connection.sent.at(-1)!.params as { threadId: string }).threadId, 'thread-forked', 'ターンは分岐先で回す（元のスレッドではない）')
+  assert.equal(app.running('thread-forked@repo'), true)
+  assert.equal(app.holds('thread-src'), false, '元のスレッドは読み込まない')
+})
+
+test('fork: 新しい id が取れない応答は失敗にする（元のスレッドでターンを回さない）', async () => {
+  const connection = new FakeConnection()
+  const app = new CodexAppServer(async () => connection)
+  connection.forked = null
+  await assert.rejects(app.fork('thread-src'), /thread\/fork/)
+  connection.forked = 'thread-src'
+  await assert.rejects(app.fork('thread-src'), /thread\/fork/, '元と同じ id が返ったら分岐できていない')
 })

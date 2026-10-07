@@ -188,6 +188,8 @@ export const api = {
     ),
   /** 新しいセッションを始める（#314）。worktree は既存のセッション（from）で指し、パスは送らない */
   startSession: (body: NewSessionRequest, days = 90) => sendJSON<NewSessionResponse>('POST', `/api/sessions/new?days=${days}`, body),
+  /** Codex のセッションを会話ごと分岐して、分岐先に最初の指示を送る（#405） */
+  forkSession: (id: string, text: string, days = 90) => sendJSON<NewSessionResponse>('POST', `/api/sessions/${encodeURIComponent(id)}/fork?days=${days}`, { text }),
   /** 新しいセッションを始められる場所（#319。git の作業ツリーの中の記録と、同じリポジトリの兄弟 worktree）。画面を開いたときだけ */
   workspaces: (days = 90) => getJSON<WorkspacesResponse>(`/api/workspaces?days=${days}`),
   /** 預けた返信を取り消す（#305。まだ回していないものだけ） */

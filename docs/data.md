@@ -128,6 +128,8 @@ SAIから開始したCodex turnの待機もJSONLにはせず、`CodexAppServer` 
 
 引き継いで始めたセッション（#442）は、同じファイルに前後を持つ: 新しい方に `continued_from`（前のセッションの ID）、前の方に `continued_to`（続きの ID）と `continued_at`（使った引き継ぎの行の `ts`。同じ引き継ぎで 2 回始めないための印）。
 
+分岐して作った Codex のセッション（#405）は、分岐先に `forked_from`（元のセッションの ID）を持つ。元のセッションの側には何も書かない。
+
 ```json
 { "sess-abc@repo-a": { "name": "背中メニュー", "archived_at": "2026-09-02T07:40:00.000Z" } }
 ```

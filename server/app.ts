@@ -7,7 +7,7 @@ import { basename, extname, join, resolve, sep } from 'node:path'
 import { historyIconUrl, ICON_MAX_BYTES, ICON_MIME, iconUrl, sniffImageType } from '../shared/icon.ts'
 import type { IconType } from '../shared/icon.ts'
 import { ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_COUNT, ATTACHMENTS_DIR, isImageAttachmentPath, QUEUE_IMAGE_NOTE, withAttachments } from '../shared/attachments.ts'
-import { isArchivedAt, mergeMeta } from '../shared/meta.ts'
+import { isArchivedAt, mergeMeta, META_NAME_MAX } from '../shared/meta.ts'
 import { mergeProfile, PROFILE_ICON_ID, profileIconUrl } from '../shared/profile.ts'
 import { isPersonaId } from '../shared/persona.ts'
 import { canSteer, replyBlockedReason, replyFailureText } from '../shared/reply.ts'
@@ -78,6 +78,7 @@ import type { SessionTurnResponse, TurnStepsResponse,
   PrRepo,
   PrsResponse,
   SessionsResponse,
+  ForkSessionRequest,
   ReviewRequest,
   ReviewResponse,
   SessionMeta,
@@ -272,6 +273,10 @@ export const MAX_SETTINGS_BYTES = 4 * 1024
 export const MAX_PR_REVIEW_BYTES = 8 * 1024 * 1024
 const REPLY_SUFFIX = '/reply'
 const REVIEW_SUFFIX = '/review'
+/** `POST /api/sessions/<id>/fork`（#405） */
+const FORK_SUFFIX = '/fork'
+/** 分岐先の表示名に足す印（元に表示名があるときだけ） */
+const FORK_NAME_SUFFIX = '（分岐）'
 const META_SUFFIX = '/meta'
 /** 未読の印を置く（#502）。`PUT /api/sessions/<id>/read`。同一オリジンのみ */
 const READ_SUFFIX = '/read'
@@ -1641,6 +1646,66 @@ export function createApp(
   }
 
   /**
+   * Codex のセッションを会話ごと分岐して、分岐先で最初の 1 ターンを回す（#405。`POST /api/sessions/<id>/fork`）。
+   * **同一オリジンのみ**。受け取るのは最初の指示だけで、**`cwd`・モデル・権限はリクエストから受けない**（cwd は元のセッションの行から、
+   * モデルは元のセッションのメタから）。新しい ID は app-server（`thread/fork`）が決め、SAI は行を起こさない
+   * （分岐先の行は、回した 1 ターンの `notify` が書く）。git も worktree も触らない。
+   * 元のセッションが動いている・ほかで開かれているあいだは断る（同じ作業ディレクトリで 2 本が同時に動く）
+   */
+  const fork = async (req: IncomingMessage, res: ServerResponse, id: string, days: number) => {
+    if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
+    let body: unknown
+    try {
+      body = await readJson(req, MAX_REPLY_BYTES)
+    } catch (err) {
+      return error(res, 400, err instanceof Error ? err.message : 'bad body')
+    }
+    const asked = (body && typeof body === 'object' ? body : {}) as Partial<ForkSessionRequest>
+    const text = typeof asked.text === 'string' ? asked.text.trim() : ''
+    if (!text) return error(res, 400, 'text is required')
+    const { sessions } = await store.sessions(days)
+    const session = sessions.find((s) => s.id === id)
+    if (!session) return error(res, 404, 'session not found in window')
+    // 会話の分岐を持っているのは Codex だけ（Claude の `--fork-session` は別の話）
+    if (session.agent !== 'codex') return error(res, 400, '分岐できるのは Codex のセッションだけです')
+    if (!codexAppEnabled) return error(res, 400, 'SAI_CODEX_APP_SERVER=0 のときは分岐できません')
+    if (!codexApp.fork) return error(res, 400, 'この SAI では分岐できません')
+    const blocked = replyBlockedReason(session, selfHost())
+    if (blocked) return error(res, 400, blocked)
+    const rows = (await rowsNow(days)).filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
+    const raw = rows[rows.length - 1]?.session ?? ''
+    if (!raw) return error(res, 400, 'session id missing in rows')
+    const cwd = session.cwd
+    try {
+      if (!cwd || !(await stat(cwd)).isDirectory()) throw new Error('not a directory')
+    } catch {
+      return error(res, 400, `cwd が見つかりません: ${cwd || '(空)'}`)
+    }
+    // 分岐先は同じ作業ディレクトリで動く。元が動いている・預かりが残っているあいだは始めない
+    if (run.running(id) || codexApp.running(id) || opencodeApp.running(id) || typed.running(id) || launching.has(id) || queue.size(id) > 0) {
+      return error(res, 409, '元のセッションがまだ処理中です。終わってから分岐してください')
+    }
+    // ほかで開いているスレッドも同じ理由で断る（レビュー・返信の振り分けと同じ 2 つを見る。#430）
+    if (await terminalOf(session)) return error(res, 400, '端末で開いているセッションは分岐できません（端末を閉じてから分岐してください）')
+    if (await codexHeldElsewhere(session, raw)) return error(res, 400, 'ほかのところ（端末・ほかのアプリ）で開いているセッションは分岐できません')
+    // 分岐を始めているあいだは、元のセッションを「起動中」にしておく（返信・レビュー・メッセージと同じ `launching`）。
+    // `thread/fork` と最初の `turn/start` を待っている間に元へ返信が来ても、同じ作業ディレクトリで 2 本を同時に始めない。
+    // 上の検査（`launching.has`）からここまで await を挟まないので、押し直し・2 枚の画面から同時に来ても 2 つは作らない
+    launching.add(id)
+    try {
+      // 分岐先のメタ: 分岐元を残し、モデルと表示名（付いていれば「（分岐）」を足して）を引き継ぐ。値は保存済みなので検査は済んでいる
+      const old = await metaStore.get(id)
+      const meta: SessionMeta = { forked_from: id }
+      if (old?.model) meta.model = old.model
+      // 長い表示名は元の名前のほうを切る（印が切れると元と見分けが付かない）。サロゲートペアの途中では切らない
+      if (old?.name) meta.name = `${old.name.slice(0, META_NAME_MAX - FORK_NAME_SUFFIX.length).replace(/[\uD800-\uDBFF]$/, '')}${FORK_NAME_SUFFIX}`
+      return await startCodexSession(res, session, cwd, text, meta, { thread: () => codexApp.fork!(raw), label: `Codex のセッションを分岐（thread/fork ${raw} → turn/start）` })
+    } finally {
+      launching.delete(id)
+    }
+  }
+
+  /**
    * 差分のレビューを Codex に頼む（#403。`POST /api/sessions/<id>/review`）。**同一オリジンのみ**（返信と同じ扱い）。
    * 受け取るのは対象の種類だけで、**`cwd` もブランチ名もリクエストからは受けない**（cwd は行から、
    * 比べる相手は差分ビューアと同じ `resolveBase()` で決める）。結果は普通のターン完了の行として届く
@@ -1949,11 +2014,13 @@ export function createApp(
     cwd: string,
     text: string,
     meta: SessionMeta,
+    /** スレッドの作り方。省略なら新しいスレッド（`thread/start`）。分岐（#405）は `thread/fork` を渡す */
+    make: { thread: () => Promise<string>; label: string } = { thread: () => codexApp.startThread!(cwd), label: 'Codex の新しいセッション（thread/start → turn/start）' },
   ) => {
     const log = join(store.directory, 'reply.log')
     let session: string
     try {
-      session = await codexApp.startThread!(cwd)
+      session = await make.thread()
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code
       const hint = code === 'ENOENT' ? 'codex が見つかりません（サーバを起動した環境の PATH に codex があるか確かめてください）' : ''
@@ -1962,12 +2029,14 @@ export function createApp(
     // 記録の `session` は rollout から引かれるが、それは thread/start が返した id と同じになる（#401 で実測）
     const id = entityId(session, from.repo, '')
     if (Object.keys(meta).length > 0) await metaStore.set(id, meta)
-    await appendFile(log, `--- ${new Date().toISOString()} ${id} Codex の新しいセッション（thread/start → turn/start） (cwd ${cwd})\n`).catch(() => {})
+    await appendFile(log, `--- ${new Date().toISOString()} ${id} ${make.label} (cwd ${cwd})\n`).catch(() => {})
     try {
       await codexApp.start({ id, threadId: session, text, cwd, model: meta.model })
     } catch (err) {
       const message = `Codex のセッションを始められませんでした: ${err instanceof Error ? err.message : String(err)}`
       await appendFile(log, `${message}\n`).catch(() => {})
+      // 始まらなかったセッションのメタは残さない（行が無いので、画面からは消せない）
+      if (Object.keys(meta).length > 0) await metaStore.set(id, {}).catch(() => {})
       return error(res, 500, message)
     }
     // 人が始めたターン（メッセージの連鎖ではない。#311）
@@ -4086,6 +4155,7 @@ export function createApp(
     const path = url.pathname
     const isReply = path.startsWith(SESSIONS_PREFIX) && path.endsWith(REPLY_SUFFIX)
     const isReview = path.startsWith(SESSIONS_PREFIX) && path.endsWith(REVIEW_SUFFIX)
+    const isFork = path.startsWith(SESSIONS_PREFIX) && path.endsWith(FORK_SUFFIX)
     const isMeta = path.startsWith(SESSIONS_PREFIX) && path.endsWith(META_SUFFIX)
     const isRead = path.startsWith(SESSIONS_PREFIX) && path.endsWith(READ_SUFFIX)
     const isSuggestion = path.startsWith(SESSIONS_PREFIX) && path.endsWith(SUGGESTION_SUFFIX)
@@ -4134,7 +4204,7 @@ export function createApp(
     // 「設定は PUT」「預かった返信の再開は POST、取り消しは DELETE」だけ。それ以外は GET / HEAD のみ
     const writable =
       (method === 'POST' &&
-        (isNewSession || isAuthCheck || isReply || isReview || isPrReview || isAsk || isAnswer || isAttachUpload || isQueue || isDigestFeedback || isSuggestion || path === AGENT_SEND_PATH || path === AGENT_LOOP_PATH || isAgentStop || isInterrupt || loopSuffix !== undefined)) ||
+        (isNewSession || isAuthCheck || isReply || isReview || isFork || isPrReview || isAsk || isAnswer || isAttachUpload || isQueue || isDigestFeedback || isSuggestion || path === AGENT_SEND_PATH || path === AGENT_LOOP_PATH || isAgentStop || isInterrupt || loopSuffix !== undefined)) ||
       (method === 'DELETE' && (isQueue || isHistoryIcon || loopSuffix === '/loop')) ||
       (method === 'PUT' && (isMeta || isRead || isProfile || isSettings)) ||
       ((method === 'PUT' || method === 'DELETE') && (isIcon || isProfileIcon))
@@ -4194,6 +4264,12 @@ export function createApp(
         const id = sessionIdFrom(path, REVIEW_SUFFIX)
         if (id === null) return error(res, 400, 'bad session id')
         return await review(req, res, id, parseDays(q.get('days'), 90))
+      }
+      if (isFork) {
+        if (method !== 'POST') return error(res, 405, 'method not allowed')
+        const id = sessionIdFrom(path, FORK_SUFFIX)
+        if (id === null) return error(res, 400, 'bad session id')
+        return await fork(req, res, id, parseDays(q.get('days'), 90))
       }
       if (isAsk) {
         if (method !== 'POST') return error(res, 405, 'method not allowed')

@@ -135,6 +135,15 @@ class FakeCodexApp implements CodexApp {
     this.threads.push(cwd)
     return this.nextThread
   }
+  /** `thread/fork` で分岐した元のスレッド（#405）。分岐先の id は `nextFork` */
+  forks: string[] = []
+  nextFork = 'F1'
+  failFork: Error | null = null
+  async fork(threadId: string) {
+    if (this.failFork) throw this.failFork
+    this.forks.push(threadId)
+    return this.nextFork
+  }
   /** app-server の `skills/list` から来る分（cwd に依らないもの）。#402 */
   skillList: Skill[] = [
     { name: 'browser:control-in-app-browser', description: 'ブラウザを操作する', source: 'user' },
@@ -1145,6 +1154,123 @@ test('POST /api/sessions/new: Codex は thread/start の id で始める（#401�
   assert.deepEqual(codexApp.threads, [dir], 'スレッドは from の cwd で作る（body の cwd は見ない）')
   assert.deepEqual(codexApp.started.map((t) => [t.id, t.threadId, t.text, t.cwd]), [[data.id, codexApp.nextThread, 'Codex で始めて', dir]])
   assert.equal(runner.started.length, 0, 'Claude は起動しない')
+})
+
+const postFork = (id: string, body: unknown, headers: Record<string, string> = {}) =>
+  fetch(`${base}/api/sessions/${encodeURIComponent(id)}/fork`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: typeof body === 'string' ? body : JSON.stringify(body) })
+
+test('POST /api/sessions/<id>/fork: Codex のセッションを分岐して、分岐先で最初の指示を回す（#405）', async () => {
+  runner.started.length = 0
+  codexApp.forks.length = 0
+  codexApp.threads.length = 0
+  codexApp.started.length = 0
+  codexApp.nextFork = '01a11501-1dd3-7fb1-8a37-3a95d4b81bd9'
+  await putMeta('X1@r', { name: '検証', model: 'gpt-test' })
+  try {
+    // body の cwd・model・id は見ない
+    const res = await postFork('X1@r', { text: '  別の方針で試して  ', cwd: '/etc', model: 'other', id: 'mine', threadId: 'other' })
+    assert.equal(res.status, 202)
+    const data = (await res.json()) as NewSessionResponse
+    assert.deepEqual([data.agent, data.via, data.session, data.id, data.cwd], ['codex', 'app-server', codexApp.nextFork, `${codexApp.nextFork}@r`, dir])
+    assert.deepEqual(codexApp.forks, ['X1'], '分岐するのは行から引いた元のスレッド')
+    assert.deepEqual(codexApp.threads, [], '新しいスレッド（thread/start）は作らない')
+    assert.deepEqual(
+      codexApp.started.map((t) => [t.id, t.threadId, t.text, t.cwd, t.model]),
+      [[data.id, codexApp.nextFork, '別の方針で試して', dir, 'gpt-test']],
+      'ターンは分岐先で回す。cwd は元のセッションの行から、モデルは元のセッションのメタから',
+    )
+    assert.equal(runner.started.length, 0)
+    const meta = (await (await get(`/api/sessions/${encodeURIComponent(data.id)}/meta`)).json()) as { meta: { forked_from?: string; name?: string; model?: string } }
+    assert.deepEqual(meta.meta, { forked_from: 'X1@r', model: 'gpt-test', name: '検証（分岐）' })
+  } finally {
+    await putMeta('X1@r', { name: '', model: '' })
+    // 分岐先のメタは片付ける（あとのテストが session-meta.json の中身を丸ごと比べる。分岐先は行が無いので PUT では消せない）
+    await new MetaStore(join(feedDir, META_FILE)).set(`${codexApp.nextFork}@r`, {})
+  }
+})
+
+test('POST /api/sessions/<id>/fork: 別オリジン・本文なし・Codex 以外・合成 ID・別のマシン・処理中は断り、分岐しない（#405）', async () => {
+  codexApp.forks.length = 0
+  codexApp.started.length = 0
+  assert.equal((await postFork('X1@r', { text: 'x' }, { Origin: 'http://evil.local:8787' })).status, 403)
+  assert.equal((await postFork('X1@r', { text: '   ' })).status, 400)
+  assert.equal((await postFork('X1@r', 'not json')).status, 400)
+  assert.equal((await postFork('nobody@r', { text: 'x' })).status, 404)
+  assert.equal((await postFork('C1@r', { text: 'x' })).status, 400, 'Claude のセッションは分岐できない')
+  assert.equal((await postFork('synth-r-1@r', { text: 'x' })).status, 400)
+  assert.equal((await postFork('R1@r', { text: 'x' })).status, 400)
+  assert.equal((await fetch(`${base}/api/sessions/X1%40r/fork`)).status, 405)
+  // 元のセッションが動いているあいだは分岐しない（同じ作業ディレクトリで 2 本が動く）
+  codexApp.busy.set('X1@r', { since: new Date().toISOString(), text: '作業中' })
+  try {
+    assert.equal((await postFork('X1@r', { text: 'x' })).status, 409)
+  } finally {
+    codexApp.busy.delete('X1@r')
+  }
+  assert.deepEqual(codexApp.forks, [])
+  // 分岐そのものが失敗したら 500 で、ターンは回さない
+  codexApp.failFork = new Error('no rollout found for thread id X1')
+  try {
+    const res = await postFork('X1@r', { text: 'x' })
+    assert.equal(res.status, 500)
+    assert.match(((await res.json()) as { error: string }).error, /no rollout found/)
+  } finally {
+    codexApp.failFork = null
+  }
+  assert.deepEqual(codexApp.started, [])
+  // 分岐はできたが最初のターンが始まらなかったら、分岐先のメタを残さない（行が無いので画面からは消せない）
+  codexApp.nextFork = 'F-fail'
+  codexApp.fail = new Error('turn/start が落ちた')
+  try {
+    assert.equal((await postFork('X1@r', { text: 'x' })).status, 500)
+  } finally {
+    codexApp.fail = null
+  }
+  assert.equal(await new MetaStore(join(feedDir, META_FILE)).get('F-fail@r'), undefined)
+})
+
+test('POST /api/sessions/<id>/fork: 分岐を始めているあいだ、元のセッションへの返信・2 本目の分岐は始めない（#405）', async () => {
+  codexApp.forks.length = 0
+  codexApp.started.length = 0
+  codexApp.nextFork = 'F-slow'
+  // thread/fork の応答を止めておく
+  let release = () => {}
+  const held = new Promise<void>((resolve) => (release = resolve))
+  const original = codexApp.fork.bind(codexApp)
+  codexApp.fork = async (threadId: string) => {
+    await held
+    return original(threadId)
+  }
+  try {
+    const first = postFork('X1@r', { text: '別の方針で' })
+    await new Promise((r) => setTimeout(r, 100))
+    assert.equal((await postFork('X1@r', { text: 'もう 1 本' })).status, 409, '2 本目の分岐')
+    const reply = await post('X1@r', { text: '元に返信' })
+    assert.notEqual(reply.status, 202, '元のセッションでターンを始めない（預かりにも回さず断る）')
+    release()
+    assert.equal((await first).status, 202)
+    assert.deepEqual(codexApp.started.map((t) => t.threadId), ['F-slow'], '回ったのは分岐先の 1 本だけ')
+  } finally {
+    release()
+    codexApp.fork = original
+    await new MetaStore(join(feedDir, META_FILE)).set('F-slow@r', {})
+  }
+})
+
+test('POST /api/sessions/<id>/fork: 長い表示名は元の名前のほうを切って「（分岐）」を残す（#405）', async () => {
+  codexApp.nextFork = 'F-name'
+  // 上限ちょうど（100）で、切る位置が絵文字（サロゲートペア）の真ん中に来る名前
+  const long = '名'.repeat(95) + '😀' + '名'.repeat(3)
+  await putMeta('X1@r', { name: long })
+  try {
+    assert.equal((await postFork('X1@r', { text: 'x' })).status, 202)
+    const name = (await new MetaStore(join(feedDir, META_FILE)).get('F-name@r'))?.name ?? ''
+    assert.equal(name, '名'.repeat(95) + '（分岐）', '絵文字の片割れを残さない')
+    assert.ok(name.length <= 100)
+  } finally {
+    await putMeta('X1@r', { name: '' })
+    await new MetaStore(join(feedDir, META_FILE)).set('F-name@r', {})
+  }
 })
 
 test('POST /api/sessions/new: 始められるのは claude / codex / opencode だけ（#401 / #452）', async () => {

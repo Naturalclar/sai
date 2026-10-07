@@ -236,7 +236,20 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
       setFresh({ from: id, id: res.id, text, since: Date.now() })
       return true
     } catch (err) {
-      setFreshError(err instanceof Error ? err.message : String(err))
+      setFreshError(`新しいセッションを始められませんでした: ${err instanceof Error ? err.message : String(err)}`)
+      return false
+    }
+  }
+  // 分岐して送る（#405）。Codex の会話をそこまで持ったまま分岐し、分岐先に最初の指示を送る。元のセッションは変わらない。
+  // 待ちの出し方は「新しいセッションで送る」と同じ（分岐先の行は最初のターンが終わるまで無い）
+  const startFork = async (text: string): Promise<boolean> => {
+    setFreshError('')
+    try {
+      const res = await api.forkSession(id, text)
+      setFresh({ from: id, id: res.id, text, since: Date.now() })
+      return true
+    } catch (err) {
+      setFreshError(`分岐できませんでした: ${err instanceof Error ? err.message : String(err)}`)
       return false
     }
   }
@@ -253,7 +266,7 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
       setFresh({ from: id, id: res.id, text: '（前のセッションからの引き継ぎ）', since: Date.now() })
       return true
     } catch (err) {
-      setFreshError(err instanceof Error ? err.message : String(err))
+      setFreshError(`新しいセッションを始められませんでした: ${err instanceof Error ? err.message : String(err)}`)
       return false
     }
   }
@@ -479,9 +492,10 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
             {...(quote ? { quote } : {})}
             // 送れなかった（確認待ち・送信失敗）ら ReplyBox が本文・画像・返信先を戻す（#350）
             // 送り方（#579）。着手の指示なら「要約してから送る」が既定。量は詳細の context_tokens（#441）
-            sendMode={{ agent: s.agent, contextTokens, terminal: Boolean(s.terminal) }}
+            sendMode={{ agent: s.agent, contextTokens, terminal: Boolean(s.terminal), forkable: s.agent === 'codex' && !blocked }}
             onSend={async (text, attachments, { steer, mode }) => {
               if (mode === 'new') return await startFresh(text)
+              if (mode === 'fork') return await startFork(text)
               return (await send(id, text, { attachments, queue: shouldQueue(mine !== null || bgBusy, queuedCount), ...(steer ? { steer: true } : {}), ...(mode === 'compact' ? { compact: true } : {}) })) === 'sent'
             }}
           />
@@ -490,7 +504,7 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
       {fresh?.from === id && (
         <NewSessionStarting key={`starting:${fresh.id}`} id={fresh.id} text={fresh.text} since={fresh.since} replying={data?.replying[fresh.id]} now={now} onRetry={() => setFresh(null)} />
       )}
-      {freshError && <div className="notice error">新しいセッションを始められませんでした: {freshError}</div>}
+      {freshError && <div className="notice error">{freshError}</div>}
       {confirmHere && <ReplaceConfirm confirm={confirmHere} onReplace={() => void fromConfirm(confirmReplace)} onProcess={() => void fromConfirm(confirmProcess)} onCancel={cancelConfirm} />}
       {/* 走っているターンに足した（#404）。新しいターンではないので仮バブルは作らず、ここに出す。
           ターンが終われば足した文も記録に載るので、この案内は次に送るかターンが終わると消える */}

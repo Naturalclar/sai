@@ -84,7 +84,8 @@ export function mergeMeta(current: SessionMeta, input: unknown): { meta: Session
 
   // 引き継ぎの前後（#442）。書くのはサーバ（`POST /api/sessions/new` の `handoff`）だが、ファイルの読み込みもここを通るので受ける。
   // 画面からは消すだけ（リンクを外す）のつもりで、値はエンティティ ID の形までは見ない（リンクにするときに encode する）
-  for (const key of ['continued_from', 'continued_to'] as const) {
+  // 分岐元（#405。書くのは `POST /api/sessions/<id>/fork`）も同じ扱い
+  for (const key of ['continued_from', 'continued_to', 'forked_from'] as const) {
     if (raw[key] === undefined) continue
     if (raw[key] !== null && typeof raw[key] !== 'string') return { meta: {}, error: `${key} は文字列で送ってください` }
     const value = (raw[key] ?? '').trim()
@@ -119,5 +120,5 @@ export function isArchivedAt(meta: Pick<SessionMeta, 'archived_at'> | undefined,
 
 /** 何も付いていないか */
 export function isEmptyMeta(meta: SessionMeta | undefined): boolean {
-  return !meta || (!meta.name && !meta.archived_at && !meta.model && !meta.persona && !meta.permission_mode && !meta.digest_off && !meta.continued_from && !meta.continued_to && !meta.continued_at)
+  return !meta || (!meta.name && !meta.archived_at && !meta.model && !meta.persona && !meta.permission_mode && !meta.digest_off && !meta.continued_from && !meta.forked_from && !meta.continued_to && !meta.continued_at)
 }

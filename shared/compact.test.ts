@@ -65,3 +65,12 @@ test('messageCompacts: メッセージは画面と同じ判定。指定があれ
     assert.equal(messageCompacts({ ...cannot, text: '#624 に着手してください。' }, CONTEXT_WARN_TOKENS, true), false)
   }
 })
+
+test('分岐して送る（#405）: Codex で分岐できるときだけ、そのままの横に出す。既定にはしない', () => {
+  const codex = { agent: 'codex', contextTokens: 0, terminal: false, text: '別の方針で' }
+  assert.deepEqual(sendModes({ ...codex, forkable: true }, CONTEXT_WARN_TOKENS), { mode: 'plain', choices: ['plain', 'fork'] })
+  assert.deepEqual(sendModes(codex, CONTEXT_WARN_TOKENS), { mode: 'plain', choices: [] }, '分岐できなければ今までどおり何も出さない')
+  assert.deepEqual(sendModes({ ...codex, forkable: true, terminal: true }, CONTEXT_WARN_TOKENS).choices, [], '端末で開いているものには出さない')
+  assert.deepEqual(sendModes({ ...codex, agent: 'claude', forkable: true }, CONTEXT_WARN_TOKENS).choices, [], 'Claude には出さない')
+  assert.equal(SEND_MODE_LABEL.fork, '分岐して送る')
+})

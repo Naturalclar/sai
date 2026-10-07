@@ -2820,6 +2820,8 @@ export function createApp(
           for (const h of agents.heldBy(from)) {
             if (h.halted) continue
             if (sentNow >= AGENT_SEND_MAX) break
+            // 巡の途中で人が「送信を止める」を押した
+            if (agents.isStopped(from)) break
             // 送らないと決めた 1 件は捨てずに止めて残す（エージェントには「預かった」と返してあるので、黙って消さない。画面に理由が出る）
             const halt = async (why: string) => {
               agents.haltHeld(h.message_id, why)
@@ -2849,6 +2851,16 @@ export function createApp(
                 await halt(`送れませんでした: ${(out.body as ReplyError).error}`)
                 continue
               }
+              // 起動を待っている間に人が「送信を止める」を押した（預かりはもう捨てられている）。相手の預かりに並んだだけなら
+              // 取り消す（止めた側の取り消しは記録から探すので、まだ記録していないこの 1 件には当たらない）。
+              // もう相手で回り始めていたら止めない（相手で回っているターンは止めない）ので、届いたものとして記録する
+              if (!agents.heldBy(from).some((x) => x.message_id === h.message_id)) {
+                const removed = queue.removeWhere((_to, item) => item.origin === h.message_id)
+                if (removed > 0) {
+                  await appendFile(log, `--- ${new Date().toISOString()} ${from} → ${h.to} 預かっていたメッセージ ${h.message_id} は、止められたので取り消した\n`).catch(() => {})
+                  continue
+                }
+              }
               // 記録してから預かりを外す（どちらも同じファイル。記録の済んだ預かりは、読み込むときにも捨てる）。
               // 1 ターンの回数・量（`sends`）には足さない（送り元がいま回している別のターンの数を潰さない）
               agents.recordHeld({ message_id: h.message_id, from, to: h.to, text: h.text, since: new Date().toISOString(), turn: h.turn, ...(h.wake ? { wake: true as const, url: h.url } : {}) })
@@ -2866,7 +2878,8 @@ export function createApp(
         }
       } while (backlogAgain)
     } catch (err) {
-      // 一覧・使用量が読めなかった巡は何もしない（預かりは残る。次のポーリングかタイマーでもう一度）
+      // 一覧・使用量が読めなかった巡は何もしない（預かりは残る）。タイマーはもう切れているので、掛け直してもう一度見る
+      for (const from of agents.heldFroms()) scheduleBacklog(from, AGENT_BACKLOG_ROUND_MS)
       await appendFile(log, `--- ${new Date().toISOString()} 預かったメッセージを送る巡が失敗した: ${err instanceof Error ? err.message : String(err)}\n`).catch(() => {})
     } finally {
       backlogBusy = false

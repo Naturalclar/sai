@@ -1213,7 +1213,7 @@
   .group.approval .jev-tag.safe { color: var(--accent); }
   .group.approval .jev-tag.unsure { color: var(--muted); }
   .group.approval .jev-tag.risky { color: var(--claude); }
-  .group.approval .actions { display: flex; gap: 8px; margin-top: 8px; }
+  .group.approval .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
   .group.approval .actions button { font: inherit; font-size: 13px; padding: 4px 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; }
   .group.approval .actions button.allow { background: var(--accent); border-color: var(--accent); color: #fff; }
   .group.approval .actions button.always { border-color: var(--accent); color: var(--accent); }

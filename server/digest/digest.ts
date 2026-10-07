@@ -182,9 +182,13 @@ export function summarizeStats(parsed: unknown): SummarizeStats | undefined {
 }
 
 /**
- * 一言の `claude -p` から外すもの（#740）。一言は文を 1 つ返すだけなので、道具・MCP・スキルの一覧・利用者の設定は要らない。
- * 何も指定しないと、利用者の設定と claude.ai のコネクタがそのまま載り、**文脈が 2.7 万トークン**（うち 1 万前後を毎回書き直す）になった
- * （Claude Code 2.1.292 で実測。外すと 0.76 万）。**足すのは減らす側のフラグだけ**で、権限のフラグは足さない
+ * 一言の `claude -p` から外すもの（#740）。一言は文を 1 つ返すだけなので、道具・MCP・スキルの一覧は要らない。
+ * 何も指定しないと claude.ai のコネクタと道具の一覧がそのまま載り、**文脈が 2.7 万トークン**（うち 1 万前後を毎回書き直す）になった
+ * （Claude Code 2.1.292 で実測。外すと 0.76 万）。**足すのは減らす側のフラグだけ**で、権限のフラグは足さない。
+ *
+ * **利用者の設定ファイルは読むまま**にする（`--setting-sources ""` は付けない）: 付けるとさらに 2〜3 秒縮むが、設定の `env`
+ * （プロキシ・`ANTHROPIC_BASE_URL`・Bedrock の指定・モデルの読み替え）が効かなくなり、OAuth のログインがあると
+ * **落ちずに別の経路で本文を送る**（#746 のレビュー。利用者が決めた送り先を黙って変えない）
  */
 export const SUMMARIZE_LIGHT_ARGS: readonly string[] = [
   // 道具を渡さない
@@ -196,9 +200,6 @@ export const SUMMARIZE_LIGHT_ARGS: readonly string[] = [
   '{"mcpServers":{}}',
   // スラッシュコマンド・スキルの一覧を載せない
   '--disable-slash-commands',
-  // 利用者・プロジェクト・手元の設定ファイルを読まない（フック・許可・`env`。ログインは設定ファイルではないので読める）
-  '--setting-sources',
-  '',
 ]
 
 /**
@@ -211,7 +212,7 @@ export const SUMMARIZE_ENV: Readonly<Record<string, string>> = { MAX_THINKING_TO
 
 /**
  * `claude -p` の起動引数。テストで並びを見る。実行ファイルはサーバの PATH の `claude`（#288）。
- * `light: false` は外すフラグを付けない前の形（知らないフラグで落ちる版の CLI・設定ファイルでログインしている環境のための戻り先）
+ * `light: false` は外すフラグを付けない前の形（知らないフラグで落ちる版の CLI のための戻り先）
  */
 export function summarizeCommand(model: string, light = true): { bin: string; args: string[] } {
   // --bare は OAuth を読まないので使えない（Not logged in になる）。フックは AGENT_FEED_SKIP=1 で黙らせる
@@ -221,11 +222,23 @@ export function summarizeCommand(model: string, light = true): { bin: string; ar
   }
 }
 
+/** 前の形でも通らなかったあと、次に前の形を試すまで */
+export const FALLBACK_RETRY_MS = 10 * 60_000
+
+/**
+ * 軽い形の失敗が**起こし方のせい**か（#740）。前の形を試すのはこのときだけ:
+ * CLI が JSON を返さずに終わった（知らないフラグで即終了する版。`exit N: …`）。
+ * API の失敗・空の答え（`claude: …`）と時間切れは起こし方のせいではない
+ */
+export function formFailure(err: unknown): boolean {
+  return err instanceof Error && /^exit /.test(err.message)
+}
+
 export interface ClaudeSummarizerOptions {
   /** 外すフラグを付けない前の形で起こす（`pnpm digest:eval --claude-legacy` が前後を比べるのに使う）。思考を切る指定も付けない */
   legacy?: boolean
-  /** 前の形へ戻したときの知らせ。既定は捨てる（本物は `summarizerFactory` がサーバの stderr に出す） */
-  log?: (line: string) => void
+  /** 前の形へ戻したときの知らせ（引数は軽い形が落ちた理由の頭）。既定は捨てる（本物は `summarizerFactory` がサーバの stderr に出す） */
+  onFallback?: (reason: string) => void
   timeoutMs?: number
   /** 実行ファイル。既定はサーバの PATH の `claude`。テストは偽物を渡す */
   bin?: string
@@ -237,14 +250,16 @@ export class ClaudeSummarizer implements Summarizer {
   private readonly cwd: string
   private readonly env: NodeJS.ProcessEnv
   private readonly legacy: boolean
-  private readonly log: (line: string) => void
+  private readonly onFallback: (reason: string) => void
   private readonly timeoutMs: number
   private readonly bin: string | undefined
   /**
    * 軽い形が通らなかったので、前の形で起こしている（このプロセスの間は覚える。毎回 2 本起こさない）。
-   * 知らないフラグで落ちる版の CLI と、設定ファイルの中身でログインしている環境（`--setting-sources ""` で読めなくなる）のため
+   * 知らないフラグで落ちる版の CLI のため
    */
   private fellBack = false
+  /** 前の形でも通らなかった。しばらくは前の形を試さない（切れている間、毎回 2 本起こさない） */
+  private noRetryUntil = 0
   lastStats: SummarizeStats | undefined
 
   get where(): string {
@@ -256,26 +271,38 @@ export class ClaudeSummarizer implements Summarizer {
     this.cwd = cwd
     this.env = env
     this.legacy = opts.legacy ?? false
-    this.log = opts.log ?? (() => {})
+    this.onFallback = opts.onFallback ?? (() => {})
     this.timeoutMs = opts.timeoutMs ?? DIGEST_TIMEOUT_MS
     this.bin = opts.bin
   }
 
   async summarize(prompt: string): Promise<string> {
-    if (this.legacy || this.fellBack) return this.run(prompt, false)
+    if (this.legacy || this.fellBack) return this.run(prompt, false, this.timeoutMs)
+    const started = Date.now()
     try {
-      return await this.run(prompt, true)
+      return await this.run(prompt, true, this.timeoutMs)
     } catch (err) {
-      // 時間切れは形のせいではない（前の形はもっと遅い）。それ以外は 1 回だけ前の形で試し、通ったら以後そちらで起こす
-      if (isTimeout(err)) throw err
-      const text = await this.run(prompt, false)
+      // 前の形を試すのは、**起こし方のせいで落ちた**ときだけ（`formFailure()`）。時間切れ・API の一時的な失敗・空の答えでは試さない
+      // （試して通ると、以後ずっと遅い前の形に戻ってしまう。#746 のレビュー）
+      if (!formFailure(err) || Date.now() < this.noRetryUntil) throw err
+      // 待つのは合わせて 1 件ぶんまで（2 回目に新しく数えると、1 行で列を 2 倍の時間ふさぐ）
+      const left = this.timeoutMs - (Date.now() - started)
+      if (left <= 0) throw err
+      let text: string
+      try {
+        text = await this.run(prompt, false, left)
+      } catch {
+        // 前の形でも通らない（ログイン切れ・モデル名の間違いなど）: しばらく試さず、最初の理由を返す
+        this.noRetryUntil = Date.now() + FALLBACK_RETRY_MS
+        throw err
+      }
       this.fellBack = true
-      this.log(`digest: claude の軽い形が通らなかったので、前の形で起こします（${err instanceof Error ? err.message.slice(0, 120) : String(err)}）`)
+      this.onFallback(err instanceof Error ? err.message.slice(0, 120) : String(err))
       return text
     }
   }
 
-  private run(prompt: string, light: boolean): Promise<string> {
+  private run(prompt: string, light: boolean, timeoutMs: number): Promise<string> {
     const { bin, args } = summarizeCommand(this.model, light)
     this.lastStats = undefined
     return new Promise<string>((resolve, reject) => {
@@ -291,7 +318,7 @@ export class ClaudeSummarizer implements Summarizer {
       const timer = setTimeout(() => {
         child.kill('SIGKILL')
         reject(new Error(`timeout after ${this.timeoutMs}ms`))
-      }, this.timeoutMs)
+      }, timeoutMs)
       child.stdout.on('data', (b: Buffer) => out.push(b))
       child.stderr.on('data', (b: Buffer) => err.push(b))
       // 子が先に入力を閉じても落ちない（知らないフラグで即終了する版）
@@ -1027,7 +1054,7 @@ export function summarizerFactory(feedDir: string, env: NodeJS.ProcessEnv = proc
       return new OpenAISummarizer(url, model, { apiKey: env.SAI_DIGEST_API_KEY || undefined, log })
     }
     log(`digest: claude model=${model}`)
-    return new ClaudeSummarizer(model, feedDir, env, { log })
+    return new ClaudeSummarizer(model, feedDir, env, { onFallback: (reason) => log(`digest: claude の軽い形が通らなかったので、前の形で起こします（${reason}）`) })
   }
 }
 

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
-import { isTimeout, ClaudeSummarizer, SUMMARIZE_ENV, summarizeStats, DEFAULT_OPENAI_URL, DIGEST_ALERT_FAILS, DIGEST_BREAK_MS, DIGEST_MAX_TRIES, DIGEST_RETRY_DELAYS_MS, DigestStore, Digester, OpenAISummarizer, createDigester, digestKey, digestable, partsOf, personaResolver, stripThinking, summarizeCommand, summarizeRequest, summarizerFactory, mayRetryWithoutReasoning } from './digest.ts'
+import { isTimeout, ClaudeSummarizer, SUMMARIZE_ENV, formFailure, summarizeStats, DEFAULT_OPENAI_URL, DIGEST_ALERT_FAILS, DIGEST_BREAK_MS, DIGEST_MAX_TRIES, DIGEST_RETRY_DELAYS_MS, DigestStore, Digester, OpenAISummarizer, createDigester, digestKey, digestable, partsOf, personaResolver, stripThinking, summarizeCommand, summarizeRequest, summarizerFactory, mayRetryWithoutReasoning } from './digest.ts'
 import type { Summarizer } from './digest.ts'
 import { row } from '../rows/aggregate.test.ts'
 import type { PersonaId } from '../../shared/types.ts'
@@ -64,13 +64,14 @@ test('isTimeout: fetch の時間切れと claude -p の時間切れだけ（#639
   assert.equal(isTimeout(new Error('HTTP 500: x')), false)
 })
 
-test('summarizeCommand: -p / --model / json 出力に、道具・MCP・スキル・設定を外すフラグを足す。--bare と権限のフラグは使わない（#740）', () => {
+test('summarizeCommand: -p / --model / json 出力に、道具・MCP・スキルを外すフラグを足す。--bare と権限のフラグは使わない（#740）', () => {
   const c = summarizeCommand('haiku')
   assert.equal(c.bin, 'claude', 'サーバの PATH の claude（SAI_CLAUDE_BIN は無い。#288）')
   assert.deepEqual(c.args, [
     '-p', '--model', 'haiku', '--output-format', 'json', '--no-session-persistence',
-    '--tools', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disable-slash-commands', '--setting-sources', '',
+    '--tools', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disable-slash-commands',
   ])
+  assert.ok(!c.args.includes('--setting-sources'), '利用者の設定ファイルは読むまま（設定の env の送り先・プロキシを黙って迂回しない）')
   assert.ok(!c.args.includes('--bare'), 'OAuth を読まない')
   for (const flag of c.args) assert.doesNotMatch(flag, /permission|allowedTools|allowed-tools|dangerously/i, '足すのは減らす側だけ')
   // 前の形（軽い形が通らないときの戻り先）
@@ -91,7 +92,8 @@ const FAKE_CLAUDE = `#!/bin/bash
 d="$(dirname "$0")"
 echo "$* | think=$MAX_THINKING_TOKENS/$CLAUDE_CODE_DISABLE_THINKING skip=$AGENT_FEED_SKIP" >> "$d/calls"
 cat > /dev/null
-[ -f "$d/slow" ] && sleep 5
+[ -f "$d/slow" ] && exec sleep 5
+[ -n "$FAKE_API_ERROR" ] && { echo '{"type":"result","is_error":true,"result":"API Error: Overloaded"}'; exit 1; }
 for a in "$@"; do if [ -n "$FAKE_REJECT" ] && [ "$a" = "$FAKE_REJECT" ]; then echo "error: unknown option '$a'" >&2; exit 1; fi; done
 echo '{"type":"result","is_error":false,"result":" できました ","duration_ms":1200,"duration_api_ms":900,"total_cost_usd":0.002,"usage":{"input_tokens":3,"cache_creation_input_tokens":0,"cache_read_input_tokens":7000,"output_tokens":40}}'
 `
@@ -114,25 +116,37 @@ test('ClaudeSummarizer: 軽い形で起こし、思考を切る指定と AGENT_F
     assert.equal(await s.summarize('言い換えて'), 'できました')
     assert.deepEqual(s.lastStats, { duration_ms: 1200, duration_api_ms: 900, input_tokens: 3, cache_write_tokens: 0, cache_read_tokens: 7000, output_tokens: 40, cost_usd: 0.002 })
     const [line] = await calls()
-    assert.match(line!, /--tools  --strict-mcp-config --mcp-config \{"mcpServers":\{\}\} --disable-slash-commands --setting-sources  \| think=0\/1 skip=1$/)
+    assert.match(line!, /--tools  --strict-mcp-config --mcp-config \{"mcpServers":\{\}\} --disable-slash-commands \| think=0\/1 skip=1$/)
   })
 })
 
-test('ClaudeSummarizer: 軽い形が通らなければ（知らないフラグ・設定を読めずログインできない）前の形で 1 回試し、通ったら以後は前の形で起こす', async () => {
+test('ClaudeSummarizer: 軽い形が知らないフラグで落ちる版では、前の形で 1 回試し、通ったら以後は前の形で起こす', async () => {
   await withFakeClaude(async (bin, calls, dir) => {
-    const logs: string[] = []
-    const s = new ClaudeSummarizer('haiku', dir, { FAKE_REJECT: '--setting-sources' }, { bin, log: (l) => logs.push(l) })
+    const reasons: string[] = []
+    const s = new ClaudeSummarizer('haiku', dir, { FAKE_REJECT: '--strict-mcp-config' }, { bin, onFallback: (r) => reasons.push(r) })
     assert.equal(await s.summarize('1 回目'), 'できました')
     assert.equal(await s.summarize('2 回目'), 'できました')
     const lines = await calls()
     assert.equal(lines.length, 3, '1 回目は軽い形 → 前の形、2 回目は前の形だけ（毎回 2 本起こさない）')
-    assert.match(lines[0]!, /--setting-sources/)
+    assert.match(lines[0]!, /--strict-mcp-config/)
     for (const line of lines.slice(1)) assert.match(line, /^-p --model haiku --output-format json --no-session-persistence \| think=\/ skip=1$/, '前の形には外すフラグも思考の指定も付けない')
-    assert.equal(logs.length, 1)
-    assert.match(logs[0]!, /前の形で起こします/)
-    // どちらの形でも落ちるなら、落ちたまま（覚えない）
+    assert.equal(reasons.length, 1)
+    assert.match(reasons[0]!, /unknown option/)
+  })
+})
+
+test('ClaudeSummarizer: API の失敗・空の答えでは前の形を試さない（通ると、以後ずっと遅い前の形に戻ってしまう）。どちらの形でも落ちるなら、しばらく 2 本起こさない', async () => {
+  assert.equal(formFailure(new Error("exit 1: error: unknown option '--tools'")), true)
+  for (const msg of ['claude: API Error: Overloaded', 'claude: empty result', 'claude: Not logged in · Please run /login', 'timeout after 90000ms']) assert.equal(formFailure(new Error(msg)), false, msg)
+  await withFakeClaude(async (bin, calls, dir) => {
+    const s = new ClaudeSummarizer('haiku', dir, { FAKE_API_ERROR: '1' }, { bin })
+    await assert.rejects(s.summarize('x'), /API Error: Overloaded/)
+    assert.equal((await calls()).length, 1, '前の形は起こさない')
+    // どちらの形でも落ちる（CLI が壊れている）: 最初の理由を返し、次からは 1 本だけ
     const broken = new ClaudeSummarizer('haiku', dir, { FAKE_REJECT: '-p' }, { bin })
     await assert.rejects(broken.summarize('x'), /unknown option/)
+    await assert.rejects(broken.summarize('y'), /unknown option/)
+    assert.equal((await calls()).length, 1 + 2 + 1)
   })
 })
 

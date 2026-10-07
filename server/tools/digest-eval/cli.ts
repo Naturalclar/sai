@@ -38,7 +38,7 @@ export const USAGE = `usage: pnpm digest:eval [options]   （一言のプロン�
   --cases <パス>      事例のファイル（既定は作り物の cases.json）
   --feed              ~/.agent-feed の実際の返答を事例にする（読むだけ）。--days（既定 7）・-n（既定 30）・--project で絞る
   --provider / --model / --persona   口・モデル・性格（既定は settings.json）。claude の口は --claude を付けたときだけ
-  --claude-legacy     claude の口を、道具・MCP・設定・思考を外さない前の形で起こす（#740。前後を比べる）
+  --claude-legacy     claude の口を、道具・MCP・スキル・思考を外さない前の形で起こす（#740。前後を比べる。--ask では使えない）
   --include-asking    人に聞いている返答（本番では一言にしない。#638）も回す
   --out <ディレクトリ>  本文と一言を残す先（既定は一時ディレクトリ。リポジトリの中は断る）`
 
@@ -224,6 +224,7 @@ function parse(argv: readonly string[], now: Date): Options | { error: string } 
   if (typeof variants === 'string') return { error: variants }
   if (ask && values['include-asking'] !== undefined) return { error: '--include-asking は --ask では効きません（案は、人に聞いている返答にも作る）' }
   if (ask && values.persona !== undefined) return { error: '--persona は --ask では効きません（案に性格は足さない）' }
+  if (ask && values['claude-legacy'] !== undefined) return { error: '--claude-legacy は --ask では効きません（一言の案を比べるときだけ）' }
   const runs = count('runs', 1, MAX_RUNS)
   if (typeof runs === 'string') return { error: runs }
   const days = count('days', DEFAULT_FEED_DAYS, 3650)
@@ -290,8 +291,13 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
     io.err('--claude-legacy は口が claude のときだけ効きます')
     return 2
   }
-  const summarizer = o.claudeLegacy && !io.factory ? new ClaudeSummarizer(model, io.dir, io.env, { legacy: true }) : (io.factory ?? summarizerFactory(io.dir, io.env, (line) => line.includes('前の形') && io.err(line)))(provider, model)
-  const where = provider === 'openai' ? (summarizer.where ?? io.env.SAI_DIGEST_URL ?? DEFAULT_OPENAI_URL) : o.claudeLegacy ? 'claude（前の形）' : 'claude'
+  // claude の口は自分で組む（前の形で起こす指定と、途中で前の形へ戻ったときの知らせを渡す）。テストの偽物（io.factory）はそのまま
+  const own = provider === 'claude' && !io.factory
+  const legacy = own && o.claudeLegacy
+  const summarizer = own
+    ? new ClaudeSummarizer(model, io.dir, io.env, { legacy, onFallback: (reason) => io.err(`claude の軽い形が通らなかったので、ここから前の形で起こしています（時間の表は 2 つの形が混ざります）: ${reason}`) })
+    : (io.factory ?? summarizerFactory(io.dir, io.env, () => {}))(provider, model)
+  const where = provider === 'openai' ? (summarizer.where ?? io.env.SAI_DIGEST_URL ?? DEFAULT_OPENAI_URL) : legacy ? 'claude（前の形）' : 'claude'
   io.err(`口: ${where} / ${model} / ${persona}・事例 ${cases.length} 件 × ${o.runs} 回 × 案 ${o.variants.length}（${o.variants.map((v) => v.id).join(', ')}）`)
   const { samples, skipped } = await runEval({ cases, variants: o.variants, runs: o.runs, persona, summarizer, includeAsking: o.includeAsking, progress: io.err })
   const ran = cases.filter((c) => !skipped.includes(c.id))
@@ -299,7 +305,7 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
     samples,
     variants: o.variants.map((v) => v.id),
     notes: [
-      `口: ${provider}${o.claudeLegacy ? '（前の形: 道具・MCP・設定・思考を外さない）' : ''} / ${model}・性格 ${persona}・${o.runs} 回ずつ`,
+      `口: ${provider}${legacy ? '（前の形: 道具・MCP・スキル・思考を外さない）' : ''} / ${model}・性格 ${persona}・${o.runs} 回ずつ`,
       `事例: ${o.feed ? `記録の実際の返答（直近 ${o.days} 日の新しい方から）` : '作り物'} ${ran.length} 件${o.feed ? '' : `（${shapeNote(ran)}）`}`,
       ...(skipped.length > 0 ? [`人に聞いている返答なので回さなかった（本番では一言にしない。#638）: ${skipped.length} 件${o.feed ? '' : `（${skipped.join(', ')}）`}`] : []),
       ...o.variants.map((v) => `\`${v.id}\`: ${v.label}`),

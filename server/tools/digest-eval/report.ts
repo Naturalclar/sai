@@ -225,8 +225,9 @@ export function timingTable(timings: readonly (Timing | null)[]): string[] {
   lines.push(row(['1 回の全体（平均 / 中央 / 最大）', ...shown.map((t) => `${seconds(t.wall.mean)} / ${seconds(t.wall.median)} / ${seconds(t.wall.max)}`)]))
   if (shown.some((t) => t.stats)) {
     const cell = (f: (s: NonNullable<Timing['stats']>) => string) => shown.map((t) => (t.stats ? f(t.stats) : '-'))
-    lines.push(row(['└ 起動まわり（全体 − CLI の中）', ...cell((s) => seconds(s.startup_ms))]))
-    lines.push(row(['└ CLI の中（うち API の中）', ...cell((s) => `${seconds(s.cli_ms)}（${seconds(s.api_ms)}）`)]))
+    // ここから下は、口が数字を返した回だけの平均（落ちた回は入らないので、上の全体とは足し合わない）
+    lines.push(row(['数字を返した回の 起動まわり（全体 − CLI の中）', ...cell((s) => seconds(s.startup_ms))]))
+    lines.push(row(['数字を返した回の CLI の中（うち API の中）', ...cell((s) => `${seconds(s.cli_ms)}（${seconds(s.api_ms)}）`)]))
     lines.push(row(['入力 / キャッシュの書き / 読み（平均トークン）', ...cell((s) => `${s.input} / ${s.cache_write} / ${s.cache_read}`)]))
     lines.push(row(['出力（平均トークン。思考を含む）', ...cell((s) => String(s.output))]))
     lines.push(row(['費用の合計（API 換算）', ...cell((s) => `$${s.cost_usd.toFixed(3)}（${s.n} 回）`)]))

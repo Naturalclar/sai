@@ -322,7 +322,8 @@ test('割合の 2 つの出どころをまとめる: 返信が新しければ丸
   // （枠が途中でリセットされて下がった・端数の違い・古い 5 時間の窓を「いま」として出さない）
   const higher = { at: '2026-10-06T11:00:00+09:00', primary: w(80, 300, R5), secondary: w(62, 10080, R7) }
   assert.equal(mergeUsageWindows(higher, replies), replies)
-  assert.equal(mergeUsageWindows(higher, { at: replies.at, secondary: replies.secondary })?.primary, undefined)
+  // 返信に無い窓だけはステータスラインから（黙って消さない）。混ぜたときの時刻は古いほう
+  assert.deepEqual(mergeUsageWindows(higher, { at: replies.at, secondary: replies.secondary }), { at: higher.at, primary: w(80, 300, R5), secondary: w(61, 10080, R7) })
   assert.equal(mergeUsageWindows({ ...higher, at: replies.at }, replies), replies, '同じ時刻なら返信')
 
   // ステータスラインのほうが新しい: 端末で使って進んだ値はそちら

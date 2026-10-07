@@ -8,6 +8,7 @@
 import { mkdirSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { lastRateLimitEvent, type RateLimitWindows } from '../../shared/usage.ts'
+import { selfHost } from '../host.ts'
 
 /** `AGENT_FEED_HOST` を設定していないときの名前 */
 export const CLAUDE_REPLY_LIMITS_FILE = 'usage-claude-replies.json'
@@ -17,22 +18,27 @@ export const isReplyLimitsFile = (name: string): boolean => /^usage-claude-repli
 
 /**
  * 置くファイルの名前。**`AGENT_FEED_HOST` を設定したときだけ**マシンごとに分ける（`statusline.py` の `usage_file()` と同じ規則。
- * 同期フォルダで複数のマシンのサーバが同じファイルを上書きし合わないように）
+ * 同期フォルダで複数のマシンのサーバが同じファイルを上書きし合わないように）。名前は記録側と同じ `selfHost()`
  */
 export function replyLimitsFile(env: NodeJS.ProcessEnv = process.env): string {
-  const host = (env.AGENT_FEED_HOST ?? '').trim().split('.')[0]!.replace(/[^A-Za-z0-9_-]/g, '-')
+  if (!(env.AGENT_FEED_HOST ?? '').trim()) return CLAUDE_REPLY_LIMITS_FILE
+  const host = selfHost(env).replace(/[^A-Za-z0-9_-]/g, '-')
   return host ? `usage-claude-replies.${host}.json` : CLAUDE_REPLY_LIMITS_FILE
 }
 
 /**
  * 書く間隔の下限。知らせは API の応答ごとに来て値もほぼ毎回変わるので、**値に依らず時間で間引く**
- * （サーバのイベントループの上で同期に書くので、並行する返信のぶんだけ書かない）。「届いた時刻」のずれはここまで
+ * （サーバのイベントループの上で同期に書くので、並行する返信のぶんだけ書かない）。間引いた値は捨てずに覚えておき、
+ * 次の知らせか、返信が終わったとき（`flush()`）に、**届いた時刻のまま**書く
  */
 export const LIMITS_WRITE_MS = 10_000
 
 /** 返信の出力を渡す先。テストでは差し替える */
 export interface ClaudeLimitsSink {
+  /** 出力の一部を渡す（**いま届いたばかりのもの**。届いた時刻として、渡された時刻を刻む） */
   observe(text: string): void
+  /** まだ書いていない値があれば書き切る（返信が終わったとき） */
+  flush(): void
 }
 
 export class ClaudeLimitsFile implements ClaudeLimitsSink {
@@ -40,25 +46,36 @@ export class ClaudeLimitsFile implements ClaudeLimitsSink {
   private readonly now: () => number
   /** 最後に書けた時刻 */
   private wrote = 0
+  /** 届いたが、まだ書いていない値 */
+  private pending: { at: number; windows: RateLimitWindows } | null = null
 
   constructor(path: string, now: () => number = Date.now) {
     this.path = path
     this.now = now
   }
 
-  /** 返信の出力の一部を渡す。使用率の知らせが無ければ何もしない。**書けなくても返信は止めない** */
+  /** 使用率の知らせが無ければ何もしない。**書けなくても返信は止めない** */
   observe(text: string): void {
-    const at = this.now()
-    if (at - this.wrote < LIMITS_WRITE_MS) return
     const windows = lastRateLimitEvent(text)
     if (!windows) return
+    const at = this.now()
+    this.pending = { at, windows }
+    // 時計が戻ったとき（at < wrote）は間引かない（戻った先の時刻まで何も書けなくなる）
+    if (at >= this.wrote && at - this.wrote < LIMITS_WRITE_MS) return
+    this.flush()
+  }
+
+  flush(): void {
+    const pending = this.pending
+    if (!pending) return
     try {
       mkdirSync(dirname(this.path), { recursive: true })
       const tmp = `${this.path}.${process.pid}.tmp`
-      writeFileSync(tmp, JSON.stringify(limitsRecord(windows, at)))
+      writeFileSync(tmp, JSON.stringify(limitsRecord(pending.windows, pending.at)))
       renameSync(tmp, this.path)
-      // 書けたときだけ覚える（書けなかったら、次の知らせでまた試す）
-      this.wrote = at
+      // 書けたときだけ片付ける（書けなかったら、次の知らせか次の flush でまた試す）
+      this.wrote = this.now()
+      this.pending = null
     } catch {
       // あれば嬉しい程度のもの
     }

@@ -623,6 +623,8 @@ export class ProcessRunner implements Runner {
     let logOffset = 0
     // 使用率の知らせ（#694）をどこまで渡したか。見張りが読み進めた位置で、終わったときはここから後ろだけを渡す
     let limitsPos = 0
+    // 見張りが 1 回でも読んだか。読んでいない返信（見張りの無い返信）は、知らせがいつ届いたか分からないので使わない
+    let limitsWatched = false
     if (this.logPath) {
       try {
         fd = openSync(this.logPath, 'a', 0o600)
@@ -667,9 +669,13 @@ export class ProcessRunner implements Runner {
       if (this.inputs.get(id) === child.stdin) this.closeInput(id)
       // このターンぶんの出力を 1 回だけ読む。失敗の理由も使用量もここから出る（#387）
       const slice = this.logPath ? readFrom(this.logPath, logOffset) : ''
-      // 使用率の知らせ（#694）。**見張りがまだ渡していない末尾だけ**（ターンの頭から渡し直すと、何時間も前の知らせに
-      // 「いま届いた」と刻んでしまう）。見張りの無い返信ではターンぶん全部。止めたターンでも口座の値は正しい
-      if (this.limits && this.logPath) this.limits.observe(readFrom(this.logPath, limitsPos))
+      // 使用率の知らせ（#694）。**見張りがまだ渡していない末尾だけ**を渡す（ターンの頭から渡し直すと、何時間も前の知らせに
+      // 「いま届いた」と刻んでしまう）。見張りの無い返信では、いつ届いたか分からないので渡さない。
+      // 止めたターンでも口座の値は正しい。間引いて書いていない最後の値は、ここで書き切る
+      if (this.limits) {
+        if (limitsWatched && this.logPath) this.limits.observe(readFrom(this.logPath, limitsPos))
+        this.limits.flush()
+      }
       if (entry.interrupted) {
         // 人が止めたターン（#386）。非 0 で終わるのは止めたからで、失敗ではない。
         // `Stop` フックが鳴らず結ぶ行が無いので、使用量も残さない（前のターンのバブルに付いてしまう）
@@ -739,6 +745,7 @@ export class ProcessRunner implements Runner {
           pos += Buffer.byteLength(chunk.slice(0, end + 1))
           // ターンの途中でも使用率を拾う（長いターンのあいだ値を止めない。#694）
           limitsPos = pos
+          limitsWatched = true
           this.limits?.observe(chunk.slice(0, end + 1))
           if (hasResultFor(chunk.slice(0, end + 1), cmd.session ?? '')) {
             if (watch) clearInterval(watch)

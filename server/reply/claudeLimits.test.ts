@@ -29,12 +29,21 @@ test('返信の出力の使用率を usage-claude.json と同じ形で置く。�
     const usage = parseStatusLineUsage(first, now)
     assert.deepEqual([usage?.primary?.used_percent, usage?.secondary?.used_percent, usage?.at], [13, 60, first.ts])
 
-    now += LIMITS_WRITE_MS - 1
+    now += 3000
     limits.observe(`${event(0.14, 0.6, resets)}\n`)
     assert.deepEqual(await read(), first, '値が変わっていても、間隔の中では書かない（応答のたびに書かない）')
-    now += 1
-    limits.observe(`${event(0.14, 0.6, resets)}\n`)
-    assert.deepEqual([(await read()).ts, (await read()).rate_limits.five_hour.used_percentage], [new Date(now).toISOString(), 14])
+    // 間引いた値は捨てない: 返信が終わったら、届いた時刻のまま書き切る
+    const arrived = new Date(now).toISOString()
+    now += 2000
+    limits.flush()
+    assert.deepEqual([(await read()).ts, (await read()).rate_limits.five_hour.used_percentage], [arrived, 14])
+    limits.flush()
+    assert.equal((await read()).ts, arrived, '書くものが無ければ何もしない')
+    // 時計が戻っても書ける（戻った先の時刻まで黙らない）
+    now -= 3_600_000
+    limits.observe(`${event(0.15, 0.6, resets)}\n`)
+    assert.equal((await read()).rate_limits.five_hour.used_percentage, 15)
+    now += 3_600_000 + LIMITS_WRITE_MS
     now += LIMITS_WRITE_MS
     limits.observe(`${event(0.14, 0.6, resets)}\n`)
     assert.equal((await read()).ts, new Date(now).toISOString(), '同じ値でも、届いた時刻は進める')
@@ -52,10 +61,11 @@ test('書けなかったときは覚えず、次の知らせでまた試す', as
     await writeFile(join(dir, 'blocker'), '')
     const limits = new ClaudeLimitsFile(join(dir, 'blocker', 'x.json'), () => now)
     assert.doesNotThrow(() => limits.observe(`${event(0.1, 0.2, 1791269400)}\n`))
-    const ok = new ClaudeLimitsFile(join(dir, 'x.json'), () => now)
-    Object.assign(limits, { path: ok.path })
-    limits.observe(`${event(0.1, 0.2, 1791269400)}\n`)
-    assert.deepEqual(await readdir(dir), ['blocker', 'x.json'], '同じ時刻でも、前が書けていなければ書く')
+    assert.doesNotThrow(() => limits.flush())
+    // 置き場が直ったら、覚えていた値を書く
+    Object.assign(limits, { path: join(dir, 'x.json') })
+    limits.flush()
+    assert.deepEqual(await readdir(dir), ['blocker', 'x.json'])
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -65,6 +75,7 @@ test('置くファイルの名前: AGENT_FEED_HOST を設定したときだけ�
   assert.equal(replyLimitsFile({}), 'usage-claude-replies.json')
   assert.equal(replyLimitsFile({ AGENT_FEED_HOST: ' mbp.local ' }), 'usage-claude-replies.mbp.json')
   assert.equal(replyLimitsFile({ AGENT_FEED_HOST: 'my mac/1' }), 'usage-claude-replies.my-mac-1.json')
+  assert.equal(replyLimitsFile({ AGENT_FEED_HOST: '  ' }), 'usage-claude-replies.json')
   for (const name of ['usage-claude-replies.json', 'usage-claude-replies.mbp.json']) {
     assert.equal(isReplyLimitsFile(name), true, name)
     assert.equal(isClaudeUsageFile(name), false, `${name} は statusline.py のファイルとして読まれない`)

@@ -228,26 +228,29 @@ export const SAME_WINDOW_SECONDS = 60
  * 割合の 2 つの出どころ（端末のステータスライン・SAI から回した返信の出力。#694）を 1 つにする。どちらも口座の値。
  *
  * **2 つは時刻の意味が違う**: 返信の `at` は「届いた時刻」（その時点の口座の値そのもの）、ステータスラインの `at` は
- * 「割合が最後に変わった時刻」で、古い値を持ち回っている端末が書いたものかもしれない。
- * - 返信のほうが新しい（同じ時刻も）→ **返信を丸ごと**（届いたばかりの値に、古いステータスラインの窓を混ぜない。
- *   枠が途中でリセットされて割合が下がったときも、返信の値が勝つ）
- * - ステータスラインのほうが新しい → 窓ごとにステータスラインを採る。ただし**同じ窓（`resets_at` の差が
- *   `SAME_WINDOW_SECONDS` 以内）で返信より低い**ものは持ち回りの古い値なので返信のほう。ステータスラインに無い窓も返信から
+ * 「割合が最後に変わった時刻」で、古い値を持ち回っている端末が書いたものかもしれない。窓ごとに選ぶ:
+ * - 返信のほうが新しい（同じ時刻も）→ 返信の窓。高いステータスラインの値は混ぜない（枠が途中でリセットされて
+ *   下がったとき・端数の違いで、古い値が勝たないように）。**返信に無い窓だけ**ステータスラインから
+ * - ステータスラインのほうが新しい → ステータスラインの窓。ただし**同じ窓（`resets_at` の差が `SAME_WINDOW_SECONDS` 以内）で
+ *   返信より低い**ものは持ち回りの古い値なので返信のほう。ステータスラインに無い窓も返信から
  * - `at` は、**出している窓のうち古いほうの出どころの時刻**（片方が古ければ古いと言う。新しく見せない）
  */
 export function mergeUsageWindows(statusLine: ClaudeUsage | null, replies: ClaudeUsage | null): ClaudeUsage | null {
   if (!statusLine || !replies) return statusLine ?? replies
-  if (!(Date.parse(statusLine.at) > Date.parse(replies.at))) return replies
-  const carried = (s: UsageWindow | undefined, r: UsageWindow | undefined): boolean =>
-    !!s && !!r && s.resets_at !== undefined && r.resets_at !== undefined && Math.abs(s.resets_at - r.resets_at) <= SAME_WINDOW_SECONDS && s.used_percent < r.used_percent
-  const fromStatus = (s: UsageWindow | undefined, r: UsageWindow | undefined): boolean => !!s && !carried(s, r)
+  const statusNewer = Date.parse(statusLine.at) > Date.parse(replies.at)
+  const carried = (s: UsageWindow, r: UsageWindow): boolean =>
+    s.resets_at !== undefined && r.resets_at !== undefined && Math.abs(s.resets_at - r.resets_at) <= SAME_WINDOW_SECONDS && s.used_percent < r.used_percent
+  // その窓をステータスラインから採るか
+  const fromStatus = (s: UsageWindow | undefined, r: UsageWindow | undefined): boolean => !!s && (!r || (statusNewer && !carried(s, r)))
   const primaryStatus = fromStatus(statusLine.primary, replies.primary)
   const secondaryStatus = fromStatus(statusLine.secondary, replies.secondary)
-  if (!primaryStatus && !secondaryStatus) return replies
   const primary = primaryStatus ? statusLine.primary : replies.primary
   const secondary = secondaryStatus ? statusLine.secondary : replies.secondary
+  const usedStatus = primaryStatus || secondaryStatus
   const usedReplies = (!primaryStatus && !!replies.primary) || (!secondaryStatus && !!replies.secondary)
-  const out: ClaudeUsage = { at: usedReplies ? replies.at : statusLine.at }
+  if (!usedStatus) return replies
+  if (!usedReplies) return statusLine
+  const out: ClaudeUsage = { at: statusNewer ? replies.at : statusLine.at }
   if (primary) out.primary = primary
   if (secondary) out.secondary = secondary
   return out

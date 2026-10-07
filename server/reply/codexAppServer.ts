@@ -113,6 +113,12 @@ export interface CodexApp {
    */
   startThread?(cwd: string): Promise<string>
   /**
+   * スレッドを会話ごと分岐して、新しい thread id を返す（#405。`thread/fork`）。**末尾から**（そこまでの会話を全部持った
+   * 新しいスレッド）。元のスレッドは変わらない。分岐した時点で rollout は書かれるが、SAI に現れるのは最初のターンの行から。
+   * 無い実装（古い SAI・`SAI_CODEX_APP_SERVER=0`）では分岐の口を出さない
+   */
+  fork?(threadId: string): Promise<string>
+  /**
    * 走っているターンに指示を足す（#404。`turn/steer`）。足せたら true。
    * 回っているターンが無い・別のターンになっていたら false を返すので、呼び出し側は今までどおりの経路に落とせる。
    * 偽物は持たなくてよい
@@ -408,6 +414,20 @@ export class CodexAppServer implements CodexApp {
     const thread = object(object(await this.request('thread/start', { cwd }))?.thread)
     const id = typeof thread?.id === 'string' ? thread.id : ''
     if (!id) throw new Error('Codex app-serverのthread/start応答にthread idがありません')
+    this.fresh.add(id)
+    return id
+  }
+
+  /**
+   * スレッドを分岐する（#405）。`thread/fork` に要るのは `threadId` だけで、rollout から作るので**この接続が読み込んでいない
+   * スレッドでも分岐できる**（0.160.1 で実測）。`cwd`・`model`・`sandbox`・`approvalPolicy` の上書きは渡さない（元のスレッドのまま）。
+   * `excludeTurns` で履歴を返させない（要るのは id だけ）。分岐先はこの接続がもう読み込んでいるので、`startThread()` と同じく
+   * 最初のターンでは `thread/resume` を飛ばす（飛ばして `turn/start` が通ることも実測）
+   */
+  async fork(threadId: string): Promise<string> {
+    const thread = object(object(await this.request('thread/fork', { threadId, excludeTurns: true }))?.thread)
+    const id = typeof thread?.id === 'string' ? thread.id : ''
+    if (!id || id === threadId) throw new Error('Codex app-serverのthread/fork応答に新しいthread idがありません')
     this.fresh.add(id)
     return id
   }

@@ -184,6 +184,15 @@ SAI が起こした Claude のターンは、使ったトークンと費用も�
 - 画面は `QueuedBubble`（取り消す・続けて送る）を処理中の仮バブルの下に出し、入力欄は止めずにボタンを「あとで送る」にする。
 - フィードは `ReplyTarget.terminal`（`sessionReplyTargets` が `SessionSummary.terminal` から載せる）で判断する。
 
+### 分岐（#405。`POST /api/sessions/<id>/fork`）
+
+- `CodexAppServer.fork(threadId)` が `thread/fork { threadId, excludeTurns: true }` を投げ、応答の `thread.id` を返す。`cwd`・`model`・`sandbox`・`approvalPolicy` の上書きは渡さない（`thread/fork` は受けるが、元のスレッドのままにする）。id が無い・元と同じなら失敗。分岐先は `fresh` に入れ、最初のターンで `thread/resume` を飛ばす（`startThread()` と同じ）。
+- `app.ts` の `fork()` は検査のあと `startCodexSession()` に「スレッドの作り方」（`make.thread`）として `codexApp.fork(raw)` を渡す。**作ったあとは新しいセッション（#401）と同じ道**（メタを書く → `reply.log` に 1 行 → `codexApp.start()` → `agents.launched()` → `NewSessionResponse` を 202）。
+- 検査の順: 同一オリジン → 本文 → 窓にある → Codex → app-server が有効で `fork` がある → `replyBlockedReason()`（合成 ID・別のマシン）→ 行から元のスレッドの id → cwd がある → 処理中・預かり（`run` / `codexApp` / `typed` / `launching` / `queue`）→ `terminalOf()` → `codexHeldElsewhere()` → 同じセッションの分岐が進行中（`forking`）。レビュー（#403）と同じ並び。
+- 分岐先のメタは `forked_from`（元のエンティティ ID）・元の `model`・元の `name` +「（分岐）」。リクエストからは `text` しか読まない。
+- 画面: `shared/compact.ts` の `SendMode` に `fork`。`sendModes()` は `agent === 'codex' && forkable && !terminal` のとき `['plain', 'fork']` を返す（既定は `plain`）。`forkable` は `SessionView` が `replyBlockedReason()` の結果から渡す。`ReplyBox` は画像を添えているあいだ `new` と `fork` を出さない。送ると `api.forkSession()` → `NewSessionStarting`（「新しいセッションで送る」と同じ `fresh` の状態）。`ContinuedLinks` が `forked_from` に「← 分岐元」を出す。
+- 0.160.1 で実測したこと（捨てのスレッドで 1 回）: 応答は `thread`（`id`・`forkedFromId`・`path` …）ほか。**分岐した時点で rollout が書かれる**（`thread/start` と違う）。`session_meta` の `id` / `session_id` は分岐先のもの（`forked_from_id` に元）なので、記録の `session` は分岐先の id になる。`thread/resume` なしで `turn/start` が通る。分岐先は元の会話を覚えている。元の rollout は 1 バイトも増えない。別の接続（そのスレッドを読み込んでいない）からも分岐できる。存在しない id は `no rollout found for thread id …`。
+
 ### steer（Codex の「今のターンに足す」。#404。Claude は下の「Claude の `-p` を止める・足す」）
 
 - `ReplyRequest.steer` → `CodexApp.steer()` → `turn/steer`。既定は預かりで、画面で選んだときだけ足す。

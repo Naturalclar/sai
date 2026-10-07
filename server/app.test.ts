@@ -1218,6 +1218,59 @@ test('POST /api/sessions/<id>/fork: 別オリジン・本文なし・Codex 以�
     codexApp.failFork = null
   }
   assert.deepEqual(codexApp.started, [])
+  // 分岐はできたが最初のターンが始まらなかったら、分岐先のメタを残さない（行が無いので画面からは消せない）
+  codexApp.nextFork = 'F-fail'
+  codexApp.fail = new Error('turn/start が落ちた')
+  try {
+    assert.equal((await postFork('X1@r', { text: 'x' })).status, 500)
+  } finally {
+    codexApp.fail = null
+  }
+  assert.equal(await new MetaStore(join(feedDir, META_FILE)).get('F-fail@r'), undefined)
+})
+
+test('POST /api/sessions/<id>/fork: 分岐を始めているあいだ、元のセッションへの返信・2 本目の分岐は始めない（#405）', async () => {
+  codexApp.forks.length = 0
+  codexApp.started.length = 0
+  codexApp.nextFork = 'F-slow'
+  // thread/fork の応答を止めておく
+  let release = () => {}
+  const held = new Promise<void>((resolve) => (release = resolve))
+  const original = codexApp.fork.bind(codexApp)
+  codexApp.fork = async (threadId: string) => {
+    await held
+    return original(threadId)
+  }
+  try {
+    const first = postFork('X1@r', { text: '別の方針で' })
+    await new Promise((r) => setTimeout(r, 100))
+    assert.equal((await postFork('X1@r', { text: 'もう 1 本' })).status, 409, '2 本目の分岐')
+    const reply = await post('X1@r', { text: '元に返信' })
+    assert.notEqual(reply.status, 202, '元のセッションでターンを始めない（預かりにも回さず断る）')
+    release()
+    assert.equal((await first).status, 202)
+    assert.deepEqual(codexApp.started.map((t) => t.threadId), ['F-slow'], '回ったのは分岐先の 1 本だけ')
+  } finally {
+    release()
+    codexApp.fork = original
+    await new MetaStore(join(feedDir, META_FILE)).set('F-slow@r', {})
+  }
+})
+
+test('POST /api/sessions/<id>/fork: 長い表示名は元の名前のほうを切って「（分岐）」を残す（#405）', async () => {
+  codexApp.nextFork = 'F-name'
+  // 上限ちょうど（100）で、切る位置が絵文字（サロゲートペア）の真ん中に来る名前
+  const long = '名'.repeat(95) + '😀' + '名'.repeat(3)
+  await putMeta('X1@r', { name: long })
+  try {
+    assert.equal((await postFork('X1@r', { text: 'x' })).status, 202)
+    const name = (await new MetaStore(join(feedDir, META_FILE)).get('F-name@r'))?.name ?? ''
+    assert.equal(name, '名'.repeat(95) + '（分岐）', '絵文字の片割れを残さない')
+    assert.ok(name.length <= 100)
+  } finally {
+    await putMeta('X1@r', { name: '' })
+    await new MetaStore(join(feedDir, META_FILE)).set('F-name@r', {})
+  }
 })
 
 test('POST /api/sessions/new: 始められるのは claude / codex / opencode だけ（#401 / #452）', async () => {

@@ -771,7 +771,7 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
           ) : sendModeNow === 'plain' ? '送信' : (
             // 狭い画面・タッチ端末では「送信」だけ（#629。送り方は左の選択に出ている。長い文言だと 360 幅でボタンが次の段に落ちる）
             <>
-              <span className="send-long">{sendModeNow === 'compact' ? '要約して送る' : '新しく始める'}</span>
+              <span className="send-long">{sendModeNow === 'compact' ? '要約して送る' : sendModeNow === 'fork' ? '分岐して送る' : '新しく始める'}</span>
               <span className="send-short">送信</span>
             </>
           )}

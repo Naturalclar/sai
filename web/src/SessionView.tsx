@@ -236,7 +236,7 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
       setFresh({ from: id, id: res.id, text, since: Date.now() })
       return true
     } catch (err) {
-      setFreshError(err instanceof Error ? err.message : String(err))
+      setFreshError(`新しいセッションを始められませんでした: ${err instanceof Error ? err.message : String(err)}`)
       return false
     }
   }
@@ -249,7 +249,7 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
       setFresh({ from: id, id: res.id, text, since: Date.now() })
       return true
     } catch (err) {
-      setFreshError(err instanceof Error ? err.message : String(err))
+      setFreshError(`分岐できませんでした: ${err instanceof Error ? err.message : String(err)}`)
       return false
     }
   }
@@ -266,7 +266,7 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
       setFresh({ from: id, id: res.id, text: '（前のセッションからの引き継ぎ）', since: Date.now() })
       return true
     } catch (err) {
-      setFreshError(err instanceof Error ? err.message : String(err))
+      setFreshError(`新しいセッションを始められませんでした: ${err instanceof Error ? err.message : String(err)}`)
       return false
     }
   }
@@ -504,7 +504,7 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
       {fresh?.from === id && (
         <NewSessionStarting key={`starting:${fresh.id}`} id={fresh.id} text={fresh.text} since={fresh.since} replying={data?.replying[fresh.id]} now={now} onRetry={() => setFresh(null)} />
       )}
-      {freshError && <div className="notice error">新しいセッションを始められませんでした: {freshError}</div>}
+      {freshError && <div className="notice error">{freshError}</div>}
       {confirmHere && <ReplaceConfirm confirm={confirmHere} onReplace={() => void fromConfirm(confirmReplace)} onProcess={() => void fromConfirm(confirmProcess)} onCancel={cancelConfirm} />}
       {/* 走っているターンに足した（#404）。新しいターンではないので仮バブルは作らず、ここに出す。
           ターンが終われば足した文も記録に載るので、この案内は次に送るかターンが終わると消える */}

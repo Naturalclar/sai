@@ -275,6 +275,8 @@ const REPLY_SUFFIX = '/reply'
 const REVIEW_SUFFIX = '/review'
 /** `POST /api/sessions/<id>/fork`（#405） */
 const FORK_SUFFIX = '/fork'
+/** 分岐先の表示名に足す印（元に表示名があるときだけ） */
+const FORK_NAME_SUFFIX = '（分岐）'
 const META_SUFFIX = '/meta'
 /** 未読の印を置く（#502）。`PUT /api/sessions/<id>/read`。同一オリジンのみ */
 const READ_SUFFIX = '/read'
@@ -1643,8 +1645,6 @@ export function createApp(
     return json(res, out.body, out.status)
   }
 
-  /** 分岐を始めている最中のセッション（#405）。押し直し・2 枚の画面から同時に来たときに 2 つ作らない */
-  const forking = new Set<string>()
   /**
    * Codex のセッションを会話ごと分岐して、分岐先で最初の 1 ターンを回す（#405。`POST /api/sessions/<id>/fork`）。
    * **同一オリジンのみ**。受け取るのは最初の指示だけで、**`cwd`・モデル・権限はリクエストから受けない**（cwd は元のセッションの行から、
@@ -1682,23 +1682,26 @@ export function createApp(
       return error(res, 400, `cwd が見つかりません: ${cwd || '(空)'}`)
     }
     // 分岐先は同じ作業ディレクトリで動く。元が動いている・預かりが残っているあいだは始めない
-    if (run.running(id) || codexApp.running(id) || typed.running(id) || launching.has(id) || queue.size(id) > 0) {
+    if (run.running(id) || codexApp.running(id) || opencodeApp.running(id) || typed.running(id) || launching.has(id) || queue.size(id) > 0) {
       return error(res, 409, '元のセッションがまだ処理中です。終わってから分岐してください')
     }
     // ほかで開いているスレッドも同じ理由で断る（レビュー・返信の振り分けと同じ 2 つを見る。#430）
     if (await terminalOf(session)) return error(res, 400, '端末で開いているセッションは分岐できません（端末を閉じてから分岐してください）')
     if (await codexHeldElsewhere(session, raw)) return error(res, 400, 'ほかのところ（端末・ほかのアプリ）で開いているセッションは分岐できません')
-    if (forking.has(id)) return error(res, 409, 'このセッションの分岐を始めているところです')
-    forking.add(id)
+    // 分岐を始めているあいだは、元のセッションを「起動中」にしておく（返信・レビュー・メッセージと同じ `launching`）。
+    // `thread/fork` と最初の `turn/start` を待っている間に元へ返信が来ても、同じ作業ディレクトリで 2 本を同時に始めない。
+    // 上の検査（`launching.has`）からここまで await を挟まないので、押し直し・2 枚の画面から同時に来ても 2 つは作らない
+    launching.add(id)
     try {
       // 分岐先のメタ: 分岐元を残し、モデルと表示名（付いていれば「（分岐）」を足して）を引き継ぐ。値は保存済みなので検査は済んでいる
       const old = await metaStore.get(id)
       const meta: SessionMeta = { forked_from: id }
       if (old?.model) meta.model = old.model
-      if (old?.name) meta.name = `${old.name}（分岐）`.slice(0, META_NAME_MAX)
+      // 長い表示名は元の名前のほうを切る（印が切れると元と見分けが付かない）。サロゲートペアの途中では切らない
+      if (old?.name) meta.name = `${old.name.slice(0, META_NAME_MAX - FORK_NAME_SUFFIX.length).replace(/[\uD800-\uDBFF]$/, '')}${FORK_NAME_SUFFIX}`
       return await startCodexSession(res, session, cwd, text, meta, { thread: () => codexApp.fork!(raw), label: `Codex のセッションを分岐（thread/fork ${raw} → turn/start）` })
     } finally {
-      forking.delete(id)
+      launching.delete(id)
     }
   }
 
@@ -2032,6 +2035,8 @@ export function createApp(
     } catch (err) {
       const message = `Codex のセッションを始められませんでした: ${err instanceof Error ? err.message : String(err)}`
       await appendFile(log, `${message}\n`).catch(() => {})
+      // 始まらなかったセッションのメタは残さない（行が無いので、画面からは消せない）
+      if (Object.keys(meta).length > 0) await metaStore.set(id, {}).catch(() => {})
       return error(res, 500, message)
     }
     // 人が始めたターン（メッセージの連鎖ではない。#311）

@@ -3,6 +3,7 @@
 // 出すのは件数と割合だけで、本文も一言も出さない（PR に貼れるのは数字だけ。実例は置き場の外の `outputs.jsonl` にだけ残る）。
 // 比べるのは**両方の案で一言が取れた (事例, 回) の組だけ**（口が落ちた回を片方だけ数えると、落ちた側の件数が少なく見える）
 import { DIGEST_MAX_CHARS } from '../../../shared/persona.ts'
+import type { SummarizeStats } from '../../digest/digest.ts'
 import { SCORE_LABELS, SCORE_ORDER } from './score.ts'
 import type { ScoreCode } from './score.ts'
 
@@ -18,6 +19,16 @@ export interface Sample {
   chars: number
   codes: ScoreCode[]
   error?: string
+  /** 口を呼んだ 1 回ごとの時間と数字（#740）。案が口を呼ばなければ空。**数字だけ**で本文は入らない */
+  calls?: Call[]
+}
+
+/** 口の 1 回ぶん。`wall_ms` は道具が外から測った全体（プロセスの起動を含む）。`stats` は口が返した数字（`claude` だけ） */
+export interface Call {
+  wall_ms: number
+  /** 口が落ちた回（時間切れなど） */
+  failed?: boolean
+  stats?: SummarizeStats
 }
 
 /**
@@ -147,6 +158,83 @@ export function compare(samples: readonly Sample[], base: string, candidate: str
 }
 
 const rate = (n: number, of: number): string => (of > 0 ? `${n}（${Math.round((n / of) * 100)}%）` : String(n))
+export interface Timing {
+  variant: string
+  /** 口を呼んだ回数（落ちた回を含む） */
+  calls: number
+  failed: number
+  /** 外から測った全体（ミリ秒）。落ちた回を含む */
+  wall: { mean: number; median: number; max: number }
+  /** 口が数字を返した回だけの平均（無ければ null） */
+  stats: null | {
+    n: number
+    /** CLI が測った全体 */
+    cli_ms: number
+    /** API を待っていた時間 */
+    api_ms: number
+    /** 外から測った全体 − CLI が測った全体 = プロセスの起動から CLI が測り始めるまで */
+    startup_ms: number
+    input: number
+    cache_write: number
+    cache_read: number
+    output: number
+    /** 回した分の合計（ドル） */
+    cost_usd: number
+  }
+}
+
+/** 案 1 つの、口の時間とトークンの集計（#740）。口を 1 回も呼んでいなければ null */
+export function timingOf(variant: string, samples: readonly Sample[]): Timing | null {
+  const calls = samples.filter((s) => s.variant === variant).flatMap((s) => s.calls ?? [])
+  if (calls.length === 0) return null
+  const walls = calls.map((c) => c.wall_ms).sort((a, b) => a - b)
+  const mean = (xs: readonly number[]) => Math.round(xs.reduce((a, b) => a + b, 0) / xs.length)
+  const withStats = calls.filter((c): c is Call & { stats: SummarizeStats } => c.stats !== undefined)
+  const pick = (f: (s: SummarizeStats) => number) => mean(withStats.map((c) => f(c.stats)))
+  return {
+    variant,
+    calls: calls.length,
+    failed: calls.filter((c) => c.failed).length,
+    wall: { mean: mean(walls), median: quantile(walls, 0.5), max: walls[walls.length - 1]! },
+    stats:
+      withStats.length === 0
+        ? null
+        : {
+            n: withStats.length,
+            cli_ms: pick((s) => s.duration_ms),
+            api_ms: pick((s) => s.duration_api_ms),
+            startup_ms: mean(withStats.map((c) => Math.max(0, c.wall_ms - c.stats.duration_ms))),
+            input: pick((s) => s.input_tokens),
+            cache_write: pick((s) => s.cache_write_tokens),
+            cache_read: pick((s) => s.cache_read_tokens),
+            output: pick((s) => s.output_tokens),
+            cost_usd: withStats.reduce((a, c) => a + c.stats.cost_usd, 0),
+          },
+  }
+}
+
+const seconds = (ms: number): string => `${(ms / 1000).toFixed(1)} 秒`
+
+/** 口の時間とトークンの表（#740）。どの案も口を呼んでいなければ空 */
+export function timingTable(timings: readonly (Timing | null)[]): string[] {
+  const shown = timings.filter((t): t is Timing => t !== null)
+  if (shown.length === 0) return []
+  const head = ['口の時間', ...shown.map((t) => t.variant)]
+  const lines = [row(head), row(head.map(() => '---'))]
+  lines.push(row(['口を呼んだ回数（うち落ちた）', ...shown.map((t) => `${t.calls}（${t.failed}）`)]))
+  lines.push(row(['1 回の全体（平均 / 中央 / 最大）', ...shown.map((t) => `${seconds(t.wall.mean)} / ${seconds(t.wall.median)} / ${seconds(t.wall.max)}`)]))
+  if (shown.some((t) => t.stats)) {
+    const cell = (f: (s: NonNullable<Timing['stats']>) => string) => shown.map((t) => (t.stats ? f(t.stats) : '-'))
+    // ここから下は、口が数字を返した回だけの平均（落ちた回は入らないので、上の全体とは足し合わない）
+    lines.push(row(['数字を返した回の 起動まわり（全体 − CLI の中）', ...cell((s) => seconds(s.startup_ms))]))
+    lines.push(row(['数字を返した回の CLI の中（うち API の中）', ...cell((s) => `${seconds(s.cli_ms)}（${seconds(s.api_ms)}）`)]))
+    lines.push(row(['入力 / キャッシュの書き / 読み（平均トークン）', ...cell((s) => `${s.input} / ${s.cache_write} / ${s.cache_read}`)]))
+    lines.push(row(['出力（平均トークン。思考を含む）', ...cell((s) => String(s.output))]))
+    lines.push(row(['費用の合計（API 換算）', ...cell((s) => `$${s.cost_usd.toFixed(3)}（${s.n} 回）`)]))
+  }
+  return lines
+}
+
 const signed = (n: number): string => (n > 0 ? `+${n}` : String(n))
 const row = (cells: readonly string[]): string => `| ${cells.join(' | ')} |`
 
@@ -229,6 +317,8 @@ export function report(input: ReportInput): Report {
   const totals = input.variants.map((v) => totalsOf(v, input.samples))
   const comparisons = candidates.map((v) => compare(input.samples, base, v))
   const lines = ['## 一言の案の比べ', '', ...(input.notes ?? []).map((n) => `- ${n}`), '', ...totalsTable(totals), '', ...lengthsTable(totals)]
+  const timing = timingTable(input.variants.map((v) => timingOf(v, input.samples)))
+  if (timing.length > 0) lines.push('', ...timing)
   for (const c of comparisons) lines.push('', ...comparisonLines(c))
   return { lines, comparisons, pass: comparisons.every((c) => c.pass) }
 }

@@ -18,12 +18,12 @@ import { needsFullText } from '../../../shared/fullText.ts'
 import { isPersonaId } from '../../../shared/persona.ts'
 import { rowProject } from '../../../shared/project.ts'
 import type { DigestProvider, PersonaId } from '../../../shared/types.ts'
-import { DEFAULT_DIGEST_MODEL, DEFAULT_OPENAI_URL, summarizerFactory } from '../../digest/digest.ts'
+import { ClaudeSummarizer, DEFAULT_DIGEST_MODEL, DEFAULT_OPENAI_URL, summarizerFactory } from '../../digest/digest.ts'
 import type { Summarizer, SummarizerFactory } from '../../digest/digest.ts'
 import { SETTINGS_FILE, SettingsStore } from '../../meta/settings.ts'
 import { dateRange, feedDir, isTurn, readRows } from '../feedRead.ts'
 import { report } from './report.ts'
-import type { Sample } from './report.ts'
+import type { Call, Sample } from './report.ts'
 import { scoreSummary, SHAPE_LABELS, validateCases } from './score.ts'
 import type { EvalCase, Shape } from './score.ts'
 import { pickVariants } from './variants.ts'
@@ -38,6 +38,7 @@ export const USAGE = `usage: pnpm digest:eval [options]   （一言のプロン�
   --cases <パス>      事例のファイル（既定は作り物の cases.json）
   --feed              ~/.agent-feed の実際の返答を事例にする（読むだけ）。--days（既定 7）・-n（既定 30）・--project で絞る
   --provider / --model / --persona   口・モデル・性格（既定は settings.json）。claude の口は --claude を付けたときだけ
+  --claude-legacy     claude の口を、道具・MCP・スキル・思考を外さない前の形で起こす（#740。前後を比べる。--ask では使えない）
   --include-asking    人に聞いている返答（本番では一言にしない。#638）も回す
   --out <ディレクトリ>  本文と一言を残す先（既定は一時ディレクトリ。リポジトリの中は断る）`
 
@@ -98,7 +99,10 @@ export async function runEval(opts: {
   summarizer: Summarizer
   includeAsking?: boolean
   progress?: (line: string) => void
+  /** 時刻（ミリ秒）。テストが差し替える */
+  now?: () => number
 }): Promise<EvalRun> {
+  const now = opts.now ?? Date.now
   const samples: Sample[] = []
   const skipped: string[] = []
   const todo = opts.cases.filter((c) => {
@@ -112,11 +116,24 @@ export async function runEval(opts: {
     for (let turn = 1; turn <= opts.runs; turn++) {
       for (const v of opts.variants) {
         const base = { case: c.id, shape: c.shape, variant: v.id, run: turn }
+        // 口の 1 回ごとに、外から測った時間と口が返した数字を控える（#740。本文は控えない）
+        const calls: Call[] = []
+        const timed = async (prompt: string): Promise<string> => {
+          const started = now()
+          try {
+            const text = await opts.summarizer.summarize(prompt)
+            calls.push({ wall_ms: now() - started, ...(opts.summarizer.lastStats ? { stats: opts.summarizer.lastStats } : {}) })
+            return text
+          } catch (err) {
+            calls.push({ wall_ms: now() - started, failed: true, ...(opts.summarizer.lastStats ? { stats: opts.summarizer.lastStats } : {}) })
+            throw err
+          }
+        }
         try {
-          const summary = (await v.make({ persona: opts.persona, text: c.text, ask: c.ask }, (prompt) => opts.summarizer.summarize(prompt))).trim()
-          samples.push({ ...base, summary, chars: [...summary].length, codes: scoreSummary(c, summary) })
+          const summary = (await v.make({ persona: opts.persona, text: c.text, ask: c.ask }, timed)).trim()
+          samples.push({ ...base, summary, chars: [...summary].length, codes: scoreSummary(c, summary), calls })
         } catch (err) {
-          samples.push({ ...base, summary: '', chars: 0, codes: [], error: err instanceof Error ? err.message : String(err) })
+          samples.push({ ...base, summary: '', chars: 0, codes: [], error: err instanceof Error ? err.message : String(err), calls })
         }
         done++
         opts.progress?.(`[${done}/${total}] ${c.id} ${v.id}${samples[samples.length - 1]!.error ? ' 口の失敗' : ''}`)
@@ -157,6 +174,7 @@ interface Options {
   model?: string
   persona?: PersonaId
   claude: boolean
+  claudeLegacy: boolean
   includeAsking: boolean
   out: string
 }
@@ -181,6 +199,7 @@ function parse(argv: readonly string[], now: Date): Options | { error: string } 
         model: { type: 'string' },
         persona: { type: 'string' },
         claude: { type: 'boolean' },
+        'claude-legacy': { type: 'boolean' },
         'include-asking': { type: 'boolean' },
         out: { type: 'string' },
         help: { type: 'boolean', short: 'h' },
@@ -205,6 +224,7 @@ function parse(argv: readonly string[], now: Date): Options | { error: string } 
   if (typeof variants === 'string') return { error: variants }
   if (ask && values['include-asking'] !== undefined) return { error: '--include-asking は --ask では効きません（案は、人に聞いている返答にも作る）' }
   if (ask && values.persona !== undefined) return { error: '--persona は --ask では効きません（案に性格は足さない）' }
+  if (ask && values['claude-legacy'] !== undefined) return { error: '--claude-legacy は --ask では効きません（一言の案を比べるときだけ）' }
   const runs = count('runs', 1, MAX_RUNS)
   if (typeof runs === 'string') return { error: runs }
   const days = count('days', DEFAULT_FEED_DAYS, 3650)
@@ -222,7 +242,7 @@ function parse(argv: readonly string[], now: Date): Options | { error: string } 
   if (persona !== undefined && !isPersonaId(persona)) return { error: `--persona が読めません: ${persona}` }
   const out = resolve(str('out') ?? join(tmpdir(), 'sai-digest-eval', now.toISOString().replace(/[:.]/g, '-')))
   if (insideRepo(out)) return { error: `--out はリポジトリの外にしてください（実際の返答と一言が入るので、コミットできる場所には置かない）: ${out}` }
-  return { ask, askVariants, variants, runs, casesPath: str('cases') ?? (ask ? ASK_CASES_PATH : CASES_PATH), feed, days, n, project: str('project') ?? '', provider, model, persona, claude: !!values.claude, includeAsking: !!values['include-asking'], out }
+  return { ask, askVariants, variants, runs, casesPath: str('cases') ?? (ask ? ASK_CASES_PATH : CASES_PATH), feed, days, n, project: str('project') ?? '', provider, model, persona, claudeLegacy: !!values['claude-legacy'], claude: !!values.claude, includeAsking: !!values['include-asking'], out }
 }
 
 /** 形ごとの事例の数（`完了の報告 4・…`） */
@@ -267,8 +287,17 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
     io.err('事例がありません')
     return 1
   }
-  const summarizer = (io.factory ?? summarizerFactory(io.dir, io.env, () => {}))(provider, model)
-  const where = provider === 'openai' ? (summarizer.where ?? io.env.SAI_DIGEST_URL ?? DEFAULT_OPENAI_URL) : 'claude'
+  if (o.claudeLegacy && provider !== 'claude') {
+    io.err('--claude-legacy は口が claude のときだけ効きます')
+    return 2
+  }
+  // claude の口は自分で組む（前の形で起こす指定と、途中で前の形へ戻ったときの知らせを渡す）。テストの偽物（io.factory）はそのまま
+  const own = provider === 'claude' && !io.factory
+  const legacy = own && o.claudeLegacy
+  const summarizer = own
+    ? new ClaudeSummarizer(model, io.dir, io.env, { legacy, onFallback: (reason) => io.err(`claude の軽い形が通らなかったので、ここから前の形で起こしています（時間の表は 2 つの形が混ざります）: ${reason}`) })
+    : (io.factory ?? summarizerFactory(io.dir, io.env, () => {}))(provider, model)
+  const where = provider === 'openai' ? (summarizer.where ?? io.env.SAI_DIGEST_URL ?? DEFAULT_OPENAI_URL) : legacy ? 'claude（前の形）' : 'claude'
   io.err(`口: ${where} / ${model} / ${persona}・事例 ${cases.length} 件 × ${o.runs} 回 × 案 ${o.variants.length}（${o.variants.map((v) => v.id).join(', ')}）`)
   const { samples, skipped } = await runEval({ cases, variants: o.variants, runs: o.runs, persona, summarizer, includeAsking: o.includeAsking, progress: io.err })
   const ran = cases.filter((c) => !skipped.includes(c.id))
@@ -276,7 +305,7 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
     samples,
     variants: o.variants.map((v) => v.id),
     notes: [
-      `口: ${provider} / ${model}・性格 ${persona}・${o.runs} 回ずつ`,
+      `口: ${provider}${legacy ? '（前の形: 道具・MCP・スキル・思考を外さない）' : ''} / ${model}・性格 ${persona}・${o.runs} 回ずつ`,
       `事例: ${o.feed ? `記録の実際の返答（直近 ${o.days} 日の新しい方から）` : '作り物'} ${ran.length} 件${o.feed ? '' : `（${shapeNote(ran)}）`}`,
       ...(skipped.length > 0 ? [`人に聞いている返答なので回さなかった（本番では一言にしない。#638）: ${skipped.length} 件${o.feed ? '' : `（${skipped.join(', ')}）`}`] : []),
       ...o.variants.map((v) => `\`${v.id}\`: ${v.label}`),

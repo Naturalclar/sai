@@ -1,7 +1,7 @@
 // 一言の案を比べる道具の集計（#712）: 項目ごとの件数・長さ・事例ごとの勝ち負け・悪くなった項目の印・通す条件
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { compare, lengthsOf, paired, report, totalsOf } from './report.ts'
+import { compare, lengthsOf, paired, report, timingOf, timingTable, totalsOf } from './report.ts'
 import type { Sample } from './report.ts'
 import type { ScoreCode } from './score.ts'
 
@@ -79,6 +79,30 @@ test('report: 悪くなった項目に ▲ を付け、通す条件の結果を�
   assert.match(text, /b が良い 1・a が良い 1・同じ 0/)
   assert.match(text, /- 作り物 2 件/)
   assert.doesNotMatch(text, /一言-/)
+})
+
+test('timingOf / timingTable: 口の時間を、外から測った全体・起動まわり・CLI の中・API の中に分け、トークンと費用を出す（#740）', () => {
+  const stats = (duration_ms: number, output_tokens: number) => ({ duration_ms, duration_api_ms: duration_ms - 500, input_tokens: 10, cache_write_tokens: 1000, cache_read_tokens: 6000, output_tokens, cost_usd: 0.01 })
+  const samples = [
+    s('a', 'current', [], { calls: [{ wall_ms: 8000, stats: stats(2000, 40) }] }),
+    s('b', 'current', [], { calls: [{ wall_ms: 12000, stats: stats(4000, 60) }] }),
+    s('c', 'current', [], { error: 'timeout', calls: [{ wall_ms: 90000, failed: true }] }),
+    s('a', 'extract', [], { calls: [] }),
+  ]
+  const t = timingOf('current', samples)!
+  assert.deepEqual([t.calls, t.failed, t.wall], [3, 1, { mean: 36667, median: 12000, max: 90000 }], '落ちた回も全体の時間に数える')
+  assert.deepEqual(t.stats, { n: 2, cli_ms: 3000, api_ms: 2500, startup_ms: 7000, input: 10, cache_write: 1000, cache_read: 6000, output: 50, cost_usd: 0.02 }, '数字は返した回だけの平均')
+  assert.equal(timingOf('extract', samples), null, '口を呼ばない案には出さない')
+  const table = timingTable([t, null]).join('\n')
+  assert.match(table, /口を呼んだ回数（うち落ちた） \| 3（1） \|/)
+  assert.match(table, /起動まわり（全体 − CLI の中） \| 7\.0 秒 \|/)
+  assert.match(table, /CLI の中（うち API の中） \| 3\.0 秒（2\.5 秒） \|/)
+  assert.match(table, /出力（平均トークン。思考を含む） \| 50 \|/)
+  assert.deepEqual(timingTable([null]), [])
+  // 数字を返さない口（openai）は、外から測った時間だけ
+  const plain = timingTable([timingOf('bare', [s('a', 'bare', [], { calls: [{ wall_ms: 900 }] })])])
+  assert.equal(plain.length, 4)
+  assert.ok(report({ samples, variants: ['current'] }).lines.join('\n').includes('口の時間'), '全体の結果にも載る')
 })
 
 test('report: 案が 1 つだけなら件数と長さだけで、通す', () => {

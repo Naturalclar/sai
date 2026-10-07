@@ -74,6 +74,30 @@ test('runEval: 口が落ちた回は error として残し、止めない', asyn
   assert.deepEqual(r.samples.map((s) => s.error ?? 'ok'), ['timeout after 90s', 'ok'])
 })
 
+test('runEval: 口の 1 回ごとに、外から測った時間と口が返した数字を控える。落ちた回も数える。本文は控えない（#740）', async () => {
+  let n = 0
+  let clock = 0
+  const stats = { duration_ms: 1500, duration_api_ms: 900, input_tokens: 3, cache_write_tokens: 0, cache_read_tokens: 7000, output_tokens: 40, cost_usd: 0.002 }
+  const summarizer: Summarizer & { lastStats?: typeof stats | undefined } = {
+    summarize: async () => {
+      clock += 4000
+      if (++n === 1) {
+        summarizer.lastStats = undefined
+        throw new Error('timeout after 90000ms')
+      }
+      summarizer.lastStats = stats
+      return '終わったよ'
+    },
+  }
+  const cases: EvalCase[] = [{ id: 'a', shape: 'done', ask: '', text: '足しました。' }, { id: 'b', shape: 'done', ask: '', text: '消しました。' }]
+  const r = await runEval({ cases, variants: [VARIANTS[0]!], runs: 1, persona: 'none', summarizer, now: () => clock })
+  assert.deepEqual(r.samples.map((s) => s.calls), [[{ wall_ms: 4000, failed: true }], [{ wall_ms: 4000, stats }]])
+  assert.ok(!JSON.stringify(r.samples.map((s) => s.calls)).includes('足しました'))
+  // 口を呼ばない案（抜き出し）は、控えが空
+  const extract = await runEval({ cases, variants: [VARIANTS.find((v) => v.id === 'extract')!], runs: 1, persona: 'none', summarizer })
+  assert.deepEqual(extract.samples.map((s) => s.calls), [[], []])
+})
+
 test('今のプロンプトの案は digestPrompt() をそのまま渡す（頼んだことも）', async () => {
   const prompts: string[] = []
   await VARIANTS[0]!.make({ persona: 'none', text: '足しました。', ask: '足して' }, async (p) => (prompts.push(p), 'x'))

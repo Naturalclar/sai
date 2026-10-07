@@ -139,7 +139,7 @@ OpenCode (feed/opencode/sai.js) ─┘                           │
 - **Codex の端末のダイアログ**: `CodexDialogs.answer()` は送る前・矢印のあと・`Enter` のあとの 3 回とも画面を読み直し、食い違えば `409` でキーは送らず押し直しもしない。`don't ask again` は範囲が全部読めたときだけ、範囲を書いたボタンにする（`dontAskScope()`。#741。`default.rules` は SAI が書かない・読まない）。中身が読めないダイアログは `answerable: false`。`approval_id` には中身を混ぜ、カーソルの位置は混ぜない → docs/internals/codex.md#ダイアログに画面から答える
 - **ペイン → セッションの引き当て**: 分からなければ当てない。cwd の一番新しい rollout からは引かない。`lsof` が無ければ端末扱いにしない。tmux が落ちても前の結果は捨てず、失敗も覚える。前方一致は realpath でも比べ、返すパスは lsof のまま。行の無いセッションはダイアログの監視にだけ足す。`SAI_TERMINAL=0` では `scan()` を呼ばない → docs/internals/codex.md#ペインの側から探す
 - **走査の締切**: `softWait()` を当てるのは画面に出す道だけ。返信の振り分けとレビューの断りは待ち切る → docs/internals/codex.md#走査の締切
-- **app-server の許可・止める**: 画面に渡すのは不透明な id だけ。別の thread/turn・出していない decision・二重回答は断る。「常に許可」は出さない。止めるのは SAI が回しているターンだけで、投げる前に預かりを `pause()` する。OpenCode の `abort` の返り値は当てにしない → docs/internals/codex.md#ターンを止める
+- **app-server の許可・止める**: 画面に渡すのは不透明な id だけ。別の thread/turn・出していない decision・二重回答は断る。SAI 自身の「常に許可」（Claude の設定に書くルール）は出さない。Codex が候補に出してきた規則の追加は、範囲をボタンに書けるときだけ出す（`amendmentLabel()`。`default.rules` は読まない・書かない）。止めるのは SAI が回しているターンだけで、投げる前に預かりを `pause()` する。OpenCode の `abort` の返り値は当てにしない → docs/internals/codex.md#ターンを止める
 - **処理中の手順**: `claude agents` には必ず `--json` を付ける。打ち消すのは busy が 1 つも無いと分かったときだけ、聞けなければ `undefined`。OpenCode は立っている serve にだけ聞く（段取りのために起こさない） → docs/internals/progress.md#claude-agents---json-で打ち消す
 
 ### 許可・Jev・セッション同士のメッセージ・MCP

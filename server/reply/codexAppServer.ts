@@ -6,6 +6,7 @@ import { createInterface } from 'node:readline'
 import type { Approval, ApprovalAnswer, ApprovalMap, Replying, ReplyingMap, ReviewTarget } from '../../shared/types.ts'
 import { codexErrorText, codexTurnErrorReason } from '../../shared/codexTurnError.ts'
 import { parseCodexSkills, type Skill } from '../../shared/skills.ts'
+import { amendmentLabel } from './codexAmendment.ts'
 import { childEnv, splitArgs } from './runner.ts'
 
 type RpcId = string | number
@@ -656,7 +657,7 @@ export class CodexAppServer implements CodexApp {
       const paths = changes.map(object).map((change) => change?.path).filter((path): path is string => typeof path === 'string')
       const target = paths.join(', ') || (typeof params.grantRoot === 'string' ? params.grantRoot : '') || (typeof params.reason === 'string' ? params.reason : 'ファイル変更')
       text = `許可待ち: ファイル変更: ${target}`
-      decisions = ['accept', 'acceptForSession', 'decline', 'cancel'].map((value, index) => decisionOf(index, value, { decision: value }))
+      decisions = ['accept', 'acceptForSession', 'decline', 'cancel'].map((value, index) => decisionOf(index, value, { decision: value })).filter((v): v is Decision => !!v)
     } else if (method === 'item/permissions/requestApproval') {
       toolName = 'CodexPermissions'
       input = pick(params, ['cwd', 'reason', 'permissions', 'environmentId'])
@@ -771,13 +772,18 @@ function threadIdOf(params: JsonObject): string {
   return typeof params.threadId === 'string' ? params.threadId : ''
 }
 
-function decisionOf(index: number, value: unknown, result: JsonObject): Decision {
+/**
+ * 候補 1 つをボタンにする。**規則の追加（今後も聞かない）は、範囲をボタンに書けるときだけ**（#741。`amendmentLabel()`）。
+ * 書けないものは null で、呼ぶ側が落とす（id は元の並びの番号のまま。落とした候補の id は誰にも渡らないので、答えにも使えない）
+ */
+function decisionOf(index: number, value: unknown, result: JsonObject): Decision | null {
+  const amendment = amendmentLabel(value)
+  if (amendment === null) return null
+  if (amendment) return { id: `d${index}`, ...amendment, result }
   const name = typeof value === 'string' ? value : Object.keys(object(value) ?? {})[0] ?? 'decision'
   const labels: Record<string, string> = {
     accept: '許可',
     acceptForSession: 'セッション中許可',
-    acceptWithExecpolicyAmendment: '同種のコマンドを許可',
-    applyNetworkPolicyAmendment: 'ネットワーク規則を適用',
     decline: '拒否',
     cancel: 'ターンを中止',
   }

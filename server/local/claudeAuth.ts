@@ -68,6 +68,8 @@ export class ClaudeAuth implements ClaudeAuthReader {
   private asking: Promise<ClaudeAuthState | undefined> | null = null
   /** 走っている聞き直し（`refresh()`）。同時に来た呼び出しで分け合う */
   private fresh: Promise<ClaudeAuthState | undefined> | null = null
+  /** 走っている聞き直しが終わったあとの、次の聞き直し（待っている呼び出しで分け合う） */
+  private queued: Promise<ClaudeAuthState | undefined> | null = null
 
   /** 実行ファイルは既定でサーバの PATH の `claude`（#288）。テストは偽物を渡す */
   constructor(bin: string = 'claude', ttl = AUTH_CACHE_MS, timeout = AUTH_TIMEOUT_MS, now: () => number = Date.now) {
@@ -83,11 +85,19 @@ export class ClaudeAuth implements ClaudeAuthReader {
 
   /**
    * 前の結果を使わずに聞き直す（#577。ログインの子が終わった直後・始める前は、数秒前の「切れている」を使わない）。
-   * 同時に来た呼び出しは 1 回の聞き直しを分け合う。**聞けなかったら前の結果を残す**（`check()` は「分からない」に戻すが、
+   * 走っている聞き直しの結果は使わず、そのあとにもう 1 回聞く（その 1 回は待っている呼び出しで分け合う）。**聞けなかったら前の結果を残す**（`check()` は「分からない」に戻すが、
    * ここで戻すと、ログインを始めようと押しただけでバナーごと消える）
    */
   refresh(): Promise<ClaudeAuthState | undefined> {
-    if (this.fresh) return this.fresh
+    // 走っている聞き直しは、**それが始まったあとの変化**（ログインの子がいま資格情報を書いた）を見ていないかもしれない。
+    // その結果は返さず、終わってからもう 1 回聞く（待っている呼び出しは、その 1 回を分け合う）
+    if (this.fresh) {
+      this.queued ??= this.fresh.then(() => {
+        this.queued = null
+        return this.refresh()
+      })
+      return this.queued
+    }
     const ask = async () => {
       if (this.asking) await this.asking
       // 走っていた分が書いた結果を「前の結果」にする（それより古いものへ戻さない）

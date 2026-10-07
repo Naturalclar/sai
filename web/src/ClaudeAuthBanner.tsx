@@ -18,9 +18,9 @@ export function ClaudeAuthBanner() {
   // 開いていたことは、このバナーが描き直されても覚えている（`claudeLoginOpen.ts`。絞り込みを変えると一瞬消える）
   // `restored` = 描き直しで開き直した（パネルは状態を聞くだけで、始めない）/ `fresh` = いま人が押した
   const [login, setLogin] = useState<'closed' | 'fresh' | 'restored'>(() => (loginPanelOpen(Date.now()) ? 'restored' : 'closed'))
-  const openLogin = (open: boolean) => {
-    rememberLoginPanel(open, Date.now())
-    setLogin(open ? 'fresh' : 'closed')
+  const openLogin = () => {
+    rememberLoginPanel(true, Date.now())
+    setLogin('fresh')
   }
   const closeLogin = useCallback(() => {
     rememberLoginPanel(false, Date.now())
@@ -38,7 +38,7 @@ export function ClaudeAuthBanner() {
     <div className="banner auth" role="status">
       Claude のログインが切れています。返信・新しいセッションは失敗します。ここからログインするか、Mac の端末で <code>claude auth login</code> を打ってください
       {login === 'closed' && (
-        <button type="button" className="linkish" onClick={() => openLogin(true)}>
+        <button type="button" className="linkish" onClick={openLogin}>
           SAI からログインする
         </button>
       )}

@@ -162,6 +162,23 @@ interface Running {
   sentTimers: ReturnType<typeof setTimeout>[]
 }
 
+/**
+ * 子にシグナルを送る。子は自分のプロセスグループで起こしてある（`detached`）ので、**グループごと**送る
+ * （`claude` が包みのスクリプトでも、本体の `auth login` を残さない）。グループに送れなければ子だけに送る
+ */
+function signalGroup(child: ChildProcessWithoutNullStreams, sig: NodeJS.Signals): void {
+  try {
+    if (child.pid !== undefined) process.kill(-child.pid, sig)
+    else child.kill(sig)
+  } catch {
+    try {
+      child.kill(sig)
+    } catch {
+      // もう居ない
+    }
+  }
+}
+
 const SHIM = '#!/bin/sh\n# SAI がログインの子にだけ見せる、何もしない open（#577。Mac のブラウザを開かせない）\nexit 0\n'
 /** 出力を持ち過ぎたら残す末尾の長さ（「コードが違う」を探すのに足りる分） */
 const OUTPUT_TAIL = 8192
@@ -263,7 +280,9 @@ export class ClaudeLogin implements ClaudeLoginRunner {
   cancel(): ClaudeLoginResponse {
     this.generation++
     if (this.running) this.drop(this.running, 'cancel')
-    if (!this.settling) this.current = { status: 'idle' }
+    // 結果を聞き直している途中でも最初に戻す（その回の結果は捨てる。次の「始める」に前の回の結果を見せない）
+    this.settling = null
+    this.current = { status: 'idle' }
     return this.current
   }
 
@@ -278,7 +297,10 @@ export class ClaudeLogin implements ClaudeLoginRunner {
     for (const run of runs) {
       if (!run.dropped) run.endedBy = 'shutdown'
       run.dropped = true
-      run.child.kill('SIGKILL')
+      clearTimeout(run.timer)
+      clearTimeout(run.urlTimer)
+      for (const timer of run.sentTimers.splice(0)) clearTimeout(timer)
+      signalGroup(run.child, 'SIGKILL')
       try {
         rmSync(run.shim, { recursive: true, force: true })
       } catch {
@@ -304,9 +326,10 @@ export class ClaudeLogin implements ClaudeLoginRunner {
       this.settling = run
       this.current = { status: 'checking' }
     }
-    run.child.kill('SIGTERM')
+    signalGroup(run.child, 'SIGTERM')
     const timer = setTimeout(() => {
-      if (run.child.exitCode === null && run.child.signalCode === null) run.child.kill('SIGKILL')
+      // 終わったあとには送らない（終わった子の番号が、別のプロセスに使い回されているかもしれない）
+      if (run.child.exitCode === null && run.child.signalCode === null) signalGroup(run.child, 'SIGKILL')
     }, this.killGraceMs)
     timer.unref()
     run.child.once('exit', () => clearTimeout(timer))
@@ -350,7 +373,7 @@ export class ClaudeLogin implements ClaudeLoginRunner {
       // 用意している間にやめた・終わった: 起こさない（人の居ない子に URL を持たせない）
       if (stale() || this.stopped) return
       const env = childEnv()
-      const child = spawn(this.bin, ['auth', 'login'], { stdio: ['pipe', 'pipe', 'pipe'], env: { ...env, PATH: `${shim}${delimiter}${env.PATH || FALLBACK_PATH}` } })
+      const child = spawn(this.bin, ['auth', 'login'], { stdio: ['pipe', 'pipe', 'pipe'], detached: true, env: { ...env, PATH: `${shim}${delimiter}${env.PATH || FALLBACK_PATH}` } })
       this.watch(child, shim)
       shim = ''
     } catch {
@@ -387,7 +410,7 @@ export class ClaudeLogin implements ClaudeLoginRunner {
     child.stdout.setEncoding('utf-8')
     child.stderr.setEncoding('utf-8')
     child.stdout.on('data', (chunk: string) => {
-      run.stdoutBytes += chunk.length
+      run.stdoutBytes += Buffer.byteLength(chunk)
       run.stdoutLines += lines(chunk)
       // 落とした子の出力は状態に触らない
       if (this.running !== run) return
@@ -407,7 +430,7 @@ export class ClaudeLogin implements ClaudeLoginRunner {
       }
     })
     child.stderr.on('data', (chunk: string) => {
-      run.stderrBytes += chunk.length
+      run.stderrBytes += Buffer.byteLength(chunk)
       run.stderrLines += lines(chunk)
     })
     // 子が先に閉じた stdin へ書いても落ちない
@@ -419,6 +442,15 @@ export class ClaudeLogin implements ClaudeLoginRunner {
       clearTimeout(run.timer)
       clearTimeout(run.urlTimer)
       for (const timer of run.sentTimers.splice(0)) clearTimeout(timer)
+      // 子が終わった瞬間に、グループに残った孫（`claude` が包みのスクリプトのときの本体）を落とす。
+      // あとからは送らない（終わった子の番号が使い回されるかもしれない）
+      if (child.pid !== undefined) {
+        try {
+          process.kill(-child.pid, 'SIGKILL')
+        } catch {
+          // 残っていない
+        }
+      }
       void rm(run.shim, { recursive: true, force: true }).catch(() => {})
       this.dying.delete(run)
       if (this.running === run) {

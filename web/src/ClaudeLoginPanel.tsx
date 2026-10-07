@@ -23,11 +23,14 @@ export function ClaudeLoginPanel({ resume, onClose, onDone }: { resume: boolean;
   const [lost, setLost] = useState(false)
   // 応答の順番。操作（POST）より前に出した問い合わせ（GET）の応答で、新しい状態を上書きしない
   const seq = useRef(0)
+  // 最初の「始める」が返るのを待つ口。返る前に「やめる」を押したら、返ってから送る（やめるが先に届くと、そのあと子が起きる）
+  const opening = useRef<Promise<unknown>>(Promise.resolve())
 
   useEffect(() => {
     let alive = true
     const mine = ++seq.current
     const first = resume ? api.claudeLoginState() : api.claudeLogin({ action: 'start' })
+    opening.current = first.catch(() => {})
     first
       .then((s) => {
         if (!alive || mine !== seq.current) return
@@ -79,7 +82,13 @@ export function ClaudeLoginPanel({ resume, onClose, onDone }: { resume: boolean;
     api
       .claudeLogin(body)
       .then((s) => mine === seq.current && setState(s))
-      .catch((err: unknown) => mine === seq.current && setError(err instanceof Error ? err.message : String(err)))
+      .catch((err: unknown) => {
+        if (mine !== seq.current) return
+        // 受け取られなかったコードは欄に戻す（ページからコピーし直さなくて済むように）
+        const rejected = body.action === 'code' ? body.code : undefined
+        if (rejected) setCode((now) => now || rejected)
+        setError(err instanceof Error ? err.message : String(err))
+      })
   }
   const send = () => {
     const text = code.trim()
@@ -92,7 +101,7 @@ export function ClaudeLoginPanel({ resume, onClose, onDone }: { resume: boolean;
     // 「やめる」は進んでいる手順を落とす。終わった・失敗したあとの「閉じる」は何も送らない
     if (loginActive(state)) {
       seq.current++
-      api.claudeLogin({ action: 'cancel' }).catch(() => {})
+      void opening.current.then(() => api.claudeLogin({ action: 'cancel' }).catch(() => {}))
     }
     onClose()
   }
@@ -135,6 +144,11 @@ export function ClaudeLoginPanel({ resume, onClose, onDone }: { resume: boolean;
       )}
       {note && <span className="note">{note}</span>}
       {error && <span className="note err">{error}</span>}
+      {started && !loginActive(state) && state.status !== 'done' && (
+        <button type="button" className="linkish" onClick={() => act({ action: 'start' })}>
+          もう一度始める
+        </button>
+      )}
       <button type="button" className="linkish" onClick={close}>
         {loginActive(state) ? 'やめる' : '閉じる'}
       </button>

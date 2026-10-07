@@ -369,6 +369,23 @@ test('ClaudeLogin: 落とした子があとから出した URL を、次の回�
   f.login.cancel()
 })
 
+test('ClaudeLogin: claude が包みのスクリプトでも、やめたら本体（孫）を残さない', async () => {
+  const f = await fixture('wrapper')
+  // 本体を exec せずに起こす包み。SIGTERM は包みにだけ効いて、本体が残る形
+  await writeFile(join(f.root, 'real'), FAKE)
+  await chmod(join(f.root, 'real'), 0o755)
+  await writeFile(join(f.root, 'claude'), `#!/bin/bash\n"${join(f.root, 'real')}" "$@"\n`)
+  f.login.start()
+  await until(() => f.login.state().status === 'waiting')
+  assert.equal((await f.alive()).length, 1, '本体（孫）が動いている')
+  f.login.cancel()
+  let left = await f.alive()
+  await until(() => {
+    void f.alive().then((a) => (left = a))
+    return left.length === 0
+  })
+})
+
 test('ClaudeLogin: サーバが終わるときは待たずに SIGKILL し、置き場もその場で消す', async () => {
   const f = await fixture('shutdown', { mode: 'stubborn', killGraceMs: 60_000 })
   f.login.start()

@@ -4949,12 +4949,8 @@ export function createApp(
       if (isAuthLogin) {
         if (method !== 'GET' && method !== 'POST') return error(res, 405, 'method not allowed')
         if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
-        // URL が載るので持たせない
-        const reply = (state: ReturnType<ClaudeLoginRunner['state']>, status = 200) => {
-          const body = JSON.stringify(state)
-          res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(body), 'Cache-Control': 'no-store' })
-          res.end(body)
-        }
+        // 応答に URL が載る。`json()` は `no-store` で返す
+        const reply = (state: ReturnType<ClaudeLoginRunner['state']>) => json(res, state)
         if (method === 'GET') return reply(claudeLogin.state())
         let body: ClaudeLoginRequest
         try {

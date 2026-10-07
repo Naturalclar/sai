@@ -1039,6 +1039,38 @@ export interface AgentSendRequest {
    * `messageCompacts()`: 本文の 1 行目が着手の形で、相手が要約できるとき）。`true` でも要約できない相手にはそのまま送る
    */
   compact?: boolean
+  /**
+   * **複数の宛先を 1 つの依頼として送る**（#727）。あれば `to` / `text` は見ない。先に全部の宛先を確かめて読み直す量を数え、
+   * 依頼の上限（`AGENT_REQUEST_MAX` 件・`AGENT_REQUEST_READ_BUDGET`）を超えるなら **1 件も送らずに断る**。
+   * 収まれば上から順に、1 ターンの回数までその場で送り、残りは預かって送り元のターンが終わってから順に送る。
+   * `wake` は全部に掛かる
+   */
+  items?: { to: string; text: string; compact?: boolean }[]
+}
+
+/** `items` で送ったときの 1 件ぶんの結果（#727） */
+export interface AgentSendResult {
+  message_id: string
+  to: string
+  to_name: string
+  /** その場で送れたときの回し方 */
+  via?: ReplyResponse['via']
+  /** 預かった（送り元のターンが終わってから送る） */
+  held?: true
+  context_tokens: number
+  /** その場で送ろうとして起動できなかった理由（預かりには回していない） */
+  error?: string
+}
+
+/** `POST /api/agent/send` に `items` を付けたときの応答（#727） */
+export interface AgentSendManyResponse {
+  results: AgentSendResult[]
+  sent: number
+  limit: number
+  /** この送り元の預かりの数（この依頼のぶんを含む） */
+  held_count: number
+  read_tokens: number
+  read_budget: number
 }
 
 /** `POST /api/agent/send` の応答 */
@@ -1048,8 +1080,15 @@ export interface AgentSendResponse {
   to: string
   /** 届いた相手の呼び名（`sessionLabel()`。#625。どこに届いたかを取り次ぐ側が人に言えるように） */
   to_name: string
-  /** 相手のターンをどう回したか。`queued` なら相手は処理中で、終わってから回る。`compact` なら要約してから本文を回す（#624） */
-  via: ReplyResponse['via']
+  /** 相手のターンをどう回したか。`queued` なら相手は処理中で、終わってから回る。`compact` なら要約してから本文を回す（#624）。**預かったときは無い** */
+  via?: ReplyResponse['via']
+  /**
+   * 1 ターンの回数（か読み直しの予算）を超えたので、**断らずに預かった**（#727）。送り元のターンが終わってから SAI が順に送る。
+   * `message_id` はもう決まっている（返答はいつもどおり画面と次のターンの頭に届く。`sai_wait` では待てない）
+   */
+  held?: true
+  /** この送り元の預かりの数（`held` のとき。この送信を含む） */
+  held_count?: number
   /** 送り元のこのターンで送った回数（#311） */
   sent: number
   /** 1 ターンに送れる回数 */
@@ -1097,6 +1136,22 @@ export interface AgentActivity {
   read_budget: number
   /** 直近に送ったもの（新しい順、最大 5 件） */
   recent: AgentActivityMessage[]
+  /**
+   * 預かっている送信（#727。古い順＝送る順）。1 ターンの回数を超えた分で、送り元のターンが終わってから SAI が順に送る。
+   * 「送信を止める」で全部捨てる。無ければ省略
+   */
+  held?: AgentHeldMessage[]
+}
+
+/** 預かっている送信 1 件（#727） */
+export interface AgentHeldMessage {
+  message_id: string
+  to: string
+  to_name: string
+  /** 預かった時刻 */
+  at: string
+  /** 止まっている理由（自動では送らない。立て直しの前に送りかけていた、など）。無ければ順番待ち */
+  halted?: string
 }
 
 /** `POST /api/sessions/<id>/agent/stop` と `.../agent/resume` の応答 */

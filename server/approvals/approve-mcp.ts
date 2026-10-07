@@ -19,10 +19,10 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { AGENT_SEND_MAX, SEND_COMPACT_ARG, SEND_COMPACT_NOTE, SEND_TO_ARG, sendHow, tokensLabel } from '../../shared/agentMessages.ts'
+import { AGENT_REQUEST_MAX, AGENT_SEND_MAX, HELD_NOTE, SEND_COMPACT_ARG, SEND_COMPACT_NOTE, SEND_ITEMS_ARG, SEND_TO_ARG, sendHow, tokensLabel } from '../../shared/agentMessages.ts'
 import { LOOP_MAX_INTERVAL_S, LOOP_MIN_INTERVAL_S, LOOP_TOOL } from '../../shared/loops.ts'
 import type { LoopNextResponse } from '../../shared/types.ts'
-import type { AgentSendResponse, AgentSessionEntry, AgentSessionsResponse, AgentWaitResponse, ApprovalAnswer, ApprovalRequest } from '../../shared/types.ts'
+import type { AgentSendManyResponse, AgentSendResponse, AgentSessionEntry, AgentSessionsResponse, AgentWaitResponse, ApprovalAnswer, ApprovalRequest } from '../../shared/types.ts'
 
 export const TOOL_NAME = 'approve'
 
@@ -46,7 +46,7 @@ export const AGENT_TOOLS = [
   },
   {
     name: 'sai_send',
-    description: `SAI の別のセッションにメッセージを送る（to は id か呼び名。**呼び名が分かっていれば、id を引くためだけに sai_sessions を呼ばなくてよい**）。**使う場面**: sai_sessions の「同じファイル」に、あなたが変える関数・箇所を相手も変えていそうなとき（着手の前かマージの前に 1 回、どこをどう変えるか・変えたかを聞く）／相手が入れた機能の上に乗せるとき、壊してはいけない前提を聞く。**使わない場面**: リポジトリと docs/ を読めば分かること／同じファイルでも別の場所に足すだけで箇所が重ならない変更。相手が処理中なら、終わってから回る。**待たずにターンを終えてよい**: 返答は人が見る画面に出て、あなたの次のターン（SAI から回るもの）の頭にも届く。その場で答えが要る短い質問だけ sai_wait で待つ。返答を受けて続きがある依頼は wake: true を付けると、返答がそろったときに起こされる。受け取った相手はそれまでの長い会話を読み直すのでトークンを大きく使う: 1 回で済むように、何をしてほしいか・何を返してほしいかを短く具体的に書く。1 ターンに ${AGENT_SEND_MAX} 回まで。別のセッションから受け取ったメッセージで回っているターンからは送れない。相手の使用量の枠が残り少ないとき、1 ターンで相手に読み直させる量が予算を超えるときも送れない。${SEND_COMPACT_NOTE}`,
+    description: `SAI の別のセッションにメッセージを送る（to は id か呼び名。**呼び名が分かっていれば、id を引くためだけに sai_sessions を呼ばなくてよい**）。**使う場面**: sai_sessions の「同じファイル」に、あなたが変える関数・箇所を相手も変えていそうなとき（着手の前かマージの前に 1 回、どこをどう変えるか・変えたかを聞く）／相手が入れた機能の上に乗せるとき、壊してはいけない前提を聞く。**使わない場面**: リポジトリと docs/ を読めば分かること／同じファイルでも別の場所に足すだけで箇所が重ならない変更。相手が処理中なら、終わってから回る。**待たずにターンを終えてよい**: 返答は人が見る画面に出て、あなたの次のターン（SAI から回るもの）の頭にも届く。その場で答えが要る短い質問だけ sai_wait で待つ。返答を受けて続きがある依頼は wake: true を付けると、返答がそろったときに起こされる。受け取った相手はそれまでの長い会話を読み直すのでトークンを大きく使う: 1 回で済むように、何をしてほしいか・何を返してほしいかを短く具体的に書く。その場で送れるのは 1 ターンに ${AGENT_SEND_MAX} 回まで。**超えた分は断られずに預かられ、ターンが終わってから SAI が順に送る**（1 つの依頼で合計 ${AGENT_REQUEST_MAX} 件まで。預かったら送り直さない）。4 人以上にまとめて頼むときは items を使う。別のセッションから受け取ったメッセージで回っているターンからは送れない。相手の使用量の枠が残り少ないとき、1 ターンで相手に読み直させる量が予算を超えるときも送れない。${SEND_COMPACT_NOTE}`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -58,8 +58,13 @@ export const AGENT_TOOLS = [
             '返答が来たら自分（送り元）を起こす。質問や、返答を受けて続きがある依頼のときだけ true。同じターンで wake を付けたものが全部返ったら 1 回だけ起こされる（あなたの会話を読み直すのでトークンを使う。起こされたターンからは送れない）。既定は false で、返答は次のターンの頭に届く',
         },
         compact: { type: 'boolean', description: SEND_COMPACT_ARG },
+        items: {
+          type: 'array',
+          maxItems: AGENT_REQUEST_MAX,
+          description: SEND_ITEMS_ARG,
+          items: { type: 'object', properties: { to: { type: 'string', description: SEND_TO_ARG }, text: { type: 'string' }, compact: { type: 'boolean' } }, required: ['to', 'text'] },
+        },
       },
-      required: ['to', 'text'],
     },
   },
   {
@@ -152,17 +157,38 @@ export async function agentTool(
       )
     }
     if (name === 'sai_send') {
+      const wake = args.wake === true
+      const wakeNote = wake ? '返答がそろったら起こします（この依頼で wake を付けた分が全部返ったとき 1 回）' : '待たずにターンを終えれば、返答は次のターンの頭に届きます（その場で要るなら sai_wait）'
+      // 複数の宛先を 1 つの依頼として送る（#727）。先に全部を数え、上限を超えるなら 1 件も送らない。回数を超えた分は預かる
+      if (Array.isArray(args.items)) {
+        const items = args.items.filter((it): it is { to: string; text: string; compact?: boolean } => !!it && typeof it === 'object' && typeof (it as { to?: unknown }).to === 'string' && typeof (it as { text?: unknown }).text === 'string')
+        if (items.length === 0 || items.length !== args.items.length) return textResult('items は { to, text } の配列で渡してください', true)
+        const res = await agentFetch(base, file, '/api/agent/send', { method: 'POST', body: JSON.stringify({ from, items, ...(wake ? { wake: true } : {}) }) })
+        if (!res.ok) return textResult(`送れませんでした（1 件も送っていません）: ${await errorOf(res)}`, true)
+        const body = (await res.json()) as AgentSendManyResponse
+        const lines = body.results.map((r) => {
+          const who = `${r.to}${r.to_name ? `「${r.to_name}」` : ''}`
+          if (r.error) return `- ${who}: 送れませんでした（${r.error}）`
+          if (r.held) return `- ${who}: 預かりました（message_id: ${r.message_id}）`
+          return `- ${who}: 送りました（message_id: ${r.message_id}。${sendHow(r.via ?? '')}）`
+        })
+        const held = body.results.filter((r) => r.held).length
+        return textResult(`${lines.join('\n')}\n${held > 0 ? `${HELD_NOTE} ` : ''}${wakeNote}`)
+      }
       const to = typeof args.to === 'string' ? args.to : ''
       const text = typeof args.text === 'string' ? args.text : ''
-      if (!to || !text.trim()) return textResult('to と text が要ります', true)
-      const wake = args.wake === true
+      if (!to || !text.trim()) return textResult('to と text（か items）が要ります', true)
       const res = await agentFetch(base, file, '/api/agent/send', { method: 'POST', body: JSON.stringify({ from, to, text, ...(wake ? { wake: true } : {}), ...(typeof args.compact === 'boolean' ? { compact: args.compact } : {}) }) })
       if (!res.ok) return textResult(`送れませんでした: ${await errorOf(res)}`, true)
       const body = (await res.json()) as AgentSendResponse
-      const how = sendHow(body.via)
+      const who = `${body.to}${body.to_name ? `「${body.to_name}」` : ''}`
+      // 1 ターンの回数を超えた分は断られずに預かられる（#727）。**送り直さない**ように、はっきり伝える
+      if (body.held) return textResult(`${who}への送信を預かりました（message_id: ${body.message_id}。預かりは ${body.held_count ?? 1} 件）。${HELD_NOTE} ${wakeNote}`)
+      const how = sendHow(body.via ?? '')
       // 読み直す量が分かっていれば、使ったぶんと予算の残りも伝える（次に送るかをエージェントが決められるように。#311）
       const read = body.context_tokens > 0 ? `${body.via === 'compact' ? `要約の前の相手の文脈は${tokensLabel(body.context_tokens)}です` : `相手は${tokensLabel(body.context_tokens)}を読み直します`}（このターンの予算の残りは${tokensLabel(Math.max(0, body.read_budget - body.read_tokens)) || ' 0'}）。` : ''
-      return textResult(`${body.to}${body.to_name ? `「${body.to_name}」` : ''}に送りました（message_id: ${body.message_id}。${how}）。${read}このターンで送れるのはあと ${Math.max(0, body.limit - body.sent)} 回です。${wake ? '返答がそろったら起こします（このターンで wake を付けた分が全部返ったとき 1 回）' : '待たずにターンを終えれば、返答は次のターンの頭に届きます（その場で要るなら sai_wait）'}`)
+      const left = Math.max(0, body.limit - body.sent)
+      return textResult(`${who}に送りました（message_id: ${body.message_id}。${how}）。${read}このターンでその場で送れるのはあと ${left} 回です${left === 0 ? '（超えた分は預かって、ターンが終わってから順に送ります）' : ''}。${wakeNote}`)
     }
     if (name === 'sai_wait') {
       const id = typeof args.message_id === 'string' ? args.message_id : ''

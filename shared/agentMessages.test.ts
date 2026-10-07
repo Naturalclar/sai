@@ -7,7 +7,9 @@ import {
   AGENT_OVERLAP_SHOW,
   agentEntry,
   agentOverlap,
+  AGENT_REQUEST_MAX,
   agentReplyRows,
+  requestRefusal,
   followupHead,
   followupReplyRows,
   replierName,
@@ -344,4 +346,15 @@ test('followupHead: 画面に出すのは 1 行目の頭だけ（#700）', () =>
   assert.equal(followupHead('  マージして\n2 行目'), 'マージして')
   assert.equal(followupHead('あ'.repeat(41)), `${'あ'.repeat(40)}…`)
   assert.equal(followupHead('あ'.repeat(40)), 'あ'.repeat(40))
+})
+
+test('requestRefusal: 依頼 1 つの件数と、読み直させる量の合計の上限。超えたら宛先ごとの量を言う（#727）', () => {
+  const small = (n: number) => Array.from({ length: n }, (_, i) => ({ name: `相手${i}`, tokens: 100_000 }))
+  assert.equal(requestRefusal(3, 300_000, small(AGENT_REQUEST_MAX - 3)), '')
+  assert.match(requestRefusal(3, 0, small(AGENT_REQUEST_MAX - 2)), new RegExp(`${AGENT_REQUEST_MAX} 件まで.*1 件も預かっていません`))
+  assert.equal(requestRefusal(0, 2_000_000, [{ name: '甲', tokens: 4_000_000 }]), '', 'ちょうどは通す')
+  const over = requestRefusal(1, 2_000_000, [{ name: '甲', tokens: 2_500_000 }, { name: '乙', tokens: 2_000_000 }, { name: '丙', tokens: 0 }])
+  assert.match(over, /合計が予算を超えます（これまで 約 200 万トークン、今回 約 450 万トークン＝甲 約 250 万トークン、乙 約 200 万トークン。予算は約 600 万トークン）/)
+  assert.match(over, /1 件も預かっていません/)
+  assert.equal(requestRefusal(0, 5_900_000, [{ name: '甲', tokens: 0 }]), '', '大きさの分からない相手は足さない')
 })

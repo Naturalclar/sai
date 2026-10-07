@@ -29,6 +29,18 @@ export const AGENT_WEEKLY_STOP_PERCENT = 95
  * 超えるなら送らない。手元の長いセッションは 1 回の呼び出しで 90 万トークン近く読んでいた
  */
 export const AGENT_TURN_READ_BUDGET = 3_000_000
+/**
+ * 依頼 1 つ（送り元の 1 ターンで頼んだ分。もう送った分 + 預かっている分）で送れる数（#727。仮の既定）。
+ * 1 ターンの回数（`AGENT_SEND_MAX`）を超えた分は断らずに預かり、送り元のターンが終わってから順に送る。その合計の上限
+ */
+export const AGENT_REQUEST_MAX = 8
+/**
+ * 依頼 1 つで相手に読み直させてよい量の合計（トークン。#727。仮の既定）。**預かる前に数え**、超えるなら 1 件も預からずに断る。
+ * 1 ターンの予算（`AGENT_TURN_READ_BUDGET`）の 2 倍に置いてある
+ */
+export const AGENT_REQUEST_READ_BUDGET = 6_000_000
+/** 預かった分を送る 1 巡と次の 1 巡の間（ミリ秒。#727。仮の既定）。1 巡で送るのは `AGENT_SEND_MAX` 件・`AGENT_TURN_READ_BUDGET` まで */
+export const AGENT_BACKLOG_ROUND_MS = 60_000
 
 /** 見出しの書き出し。人が打った入力と見分けるための印 */
 export const AGENT_HEADER_MARK = '【SAI】'
@@ -345,6 +357,23 @@ export function budgetRefusal(spent: number, next: number, budget: number = AGEN
   return `このターンで相手に読み直させる量が予算を超えます（これまで ${spent > 0 ? tokensLabel(spent) : '0'}、この相手は${tokensLabel(next)}、予算は${tokensLabel(budget)}）。小さい相手を選ぶか、人に確かめてください`
 }
 
+/**
+ * 依頼 1 つの上限（#727）に収まるか。収まれば空、収まらなければ理由。**預かる前に、依頼の全部について**呼ぶ
+ * （`sizes` はこれから足す宛先ごとの読み直す量、`count` / `read` はその依頼でもう送った分と預かっている分）
+ */
+export function requestRefusal(count: number, read: number, sizes: readonly { name: string; tokens: number }[]): string {
+  const total = count + sizes.length
+  if (total > AGENT_REQUEST_MAX) {
+    return `1 つの依頼で送れるのは ${AGENT_REQUEST_MAX} 件までです（もう ${count} 件、今回 ${sizes.length} 件）。1 件も預かっていません。宛先を減らすか、人に確かめてください`
+  }
+  const adding = sizes.reduce((sum, s) => sum + (s.tokens > 0 ? s.tokens : 0), 0)
+  if (adding > 0 && read + adding > AGENT_REQUEST_READ_BUDGET) {
+    const each = sizes.filter((s) => s.tokens > 0).map((s) => `${s.name} ${tokensLabel(s.tokens).trim()}`).join('、')
+    return `この依頼で相手に読み直させる量の合計が予算を超えます（これまで ${read > 0 ? tokensLabel(read).trim() : '0'}、今回 ${tokensLabel(adding).trim()}＝${each}。予算は${tokensLabel(AGENT_REQUEST_READ_BUDGET)}）。1 件も預かっていません。小さい相手に絞るか、人に確かめてください`
+  }
+  return ''
+}
+
 // ---- 返答を送り元の会話に戻す（#594）
 
 /** 送り元の次のターンの頭に足す返答の塊の始まり。`【SAI】` で始めない（`deliveredId()` が届けた見出しと取り違えないように） */
@@ -418,6 +447,12 @@ export function splitHandedReplies(userText: string): { text: string; handed: nu
   return { text: userText.slice(end + HANDED_END.length).replace(/^\s+/, ''), handed }
 }
 
+
+/** 預かったことをエージェントに伝える文（#727）。**送り直させない**のが目的 */
+export const HELD_NOTE = '預かった分は、このターンが終わったあと SAI が順に送ります（1 巡 3 件まで、巡の間は約 1 分）。**同じものを送り直さないでください**。人が画面の「送信を止める」を押すと、残りは送られません。預かった分は sai_wait では待てません（返答は画面と次のターンの頭に届きます）。'
+
+/** `sai_send` の `items` の説明（#727） */
+export const SEND_ITEMS_ARG = `複数の相手に 1 つの依頼としてまとめて送るときに使う（{ to, text } の配列。最大 ${AGENT_REQUEST_MAX} 件。あれば to / text は見ない）。**割り振りのように 4 人以上へ頼むときはこれを使う**: 先に全部の相手の読み直す量を数え、合計が依頼の予算を超えるなら 1 件も送らずに断る。収まれば上から順に、このターンで送れる回数まではその場で送り、残りは預かってターンが終わってから順に送る`
 
 /** `sai_send` の説明に足す、着手の頼み方（#624）。セッション同士の口（`approve-mcp.ts`）と tailnet の `/mcp` が同じ文を出す */
 export const SEND_COMPACT_NOTE =

@@ -184,7 +184,7 @@ SAI が起こした Claude のターンは、使ったトークンと費用も�
 - 画面は `QueuedBubble`（取り消す・続けて送る）を処理中の仮バブルの下に出し、入力欄は止めずにボタンを「あとで送る」にする。
 - フィードは `ReplyTarget.terminal`（`sessionReplyTargets` が `SessionSummary.terminal` から載せる）で判断する。
 
-### 分岐（#405。`POST /api/sessions/<id>/fork`）
+### 分岐（#405 / #398。`POST /api/sessions/<id>/fork`）
 
 - `CodexAppServer.fork(threadId)` が `thread/fork { threadId, excludeTurns: true }` を投げ、応答の `thread.id` を返す。`cwd`・`model`・`sandbox`・`approvalPolicy` の上書きは渡さない（`thread/fork` は受けるが、元のスレッドのままにする）。id が無い・元と同じなら失敗。分岐先は `fresh` に入れ、最初のターンで `thread/resume` を飛ばす（`startThread()` と同じ）。
 - `app.ts` の `fork()` は検査のあと `startCodexSession()` に「スレッドの作り方」（`make.thread`）として `codexApp.fork(raw)` を渡す。**作ったあとは新しいセッション（#401）と同じ道**（メタを書く → `reply.log` に 1 行 → `codexApp.start()` → `agents.launched()` → `NewSessionResponse` を 202）。
@@ -193,6 +193,8 @@ SAI が起こした Claude のターンは、使ったトークンと費用も�
 - **止めていないこと**: 分岐先のターンが回っているあいだに元のセッションへ返信すること。同じ作業ディレクトリで 2 本が同時に回ると、`record.py` は完了の行のセッションを「cwd の一番新しい rollout」から引くので、行が別のセッションに付きうる（#735）。
 - 画面: `shared/compact.ts` の `SendMode` に `fork`。`sendModes()` は `agent === 'codex' && forkable && !terminal` のとき `['plain', 'fork']` を返す（既定は `plain`）。`forkable` は `SessionView` が `replyBlockedReason()` の結果から渡す。`ReplyBox` は画像を添えているあいだ `new` と `fork` を出さない。送ると `api.forkSession()` → `NewSessionStarting`（「新しいセッションで送る」と同じ `fresh` の状態）。`ContinuedLinks` が `forked_from` に「← 分岐元」を出す。
 - 0.160.1 で実測したこと（捨てのスレッドで 1 回）: 応答は `thread`（`id`・`forkedFromId`・`path` …）ほか。**分岐した時点で rollout が書かれる**（`thread/start` と違う）。`session_meta` の `id` / `session_id` は分岐先のもの（`forked_from_id` に元）なので、記録の `session` は分岐先の id になる。`thread/resume` なしで `turn/start` が通る。分岐先は元の会話を覚えている。元の rollout は 1 バイトも増えない。別の接続（そのスレッドを読み込んでいない）からも分岐できる。存在しない id は `no rollout found for thread id …`。
+- **OpenCode も同じ口で分岐する**（#398）。`OpencodeServer.fork(session, cwd)` が `POST /session/<id>/fork?directory=<cwd>`（本文 `{}`）を投げ、応答の `id` を返す（元と同じ id・id の無い応答は投げる）。`app.ts` の `fork()` は Codex と同じ検査を通し（Codex だけの「ほかで開いているスレッド」`codexHeldElsewhere()` は見ない。端末で開いているかは同じく見る）、`startOpencodeSession()` に「セッションの作り方」（`make.session`）として渡す。**作ったあとは新しいセッション（#452）と同じ道**（メタを書く → `reply.log` に 1 行 → `opencodeApp.start()` = `prompt_async`）で、始まらなかったら書いたメタを消す。`SAI_OPENCODE_SERVER=0` では断る（一発の `opencode run` には落とさない）。分岐のために `opencode serve` を起こすのは、新しいセッションと同じ（`serve()`）。画面は `sendModes()` が `agent === 'opencode'` にも `fork` を返すだけ。
+- 1.18.30 で実測したこと（捨てのディレクトリの捨てのセッションで。ターンは回していない）: `/doc` の定義は `POST /session/{sessionID}/fork`、query に `directory`・`workspace`、本文は `{ messageID?: "msg…" }`、応答は `Session`。実際の応答は `id`・`directory`・`title`（元の題名 + ` (fork #1)`）・`projectID`・`slug`・`time` ほかで、**`parentID` は付かない**（サブセッションではなく、並びの別のセッション）。本文なし（`content-type` だけ）でも 200 で分岐する。知らない id は 404（`NotFoundError`）。`messageID`（途中までで分ける）は使っていない。
 
 ### steer（Codex の「今のターンに足す」。#404。Claude は下の「Claude の `-p` を止める・足す」）
 

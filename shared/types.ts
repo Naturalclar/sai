@@ -338,7 +338,7 @@ export interface SessionMeta {
   permission_mode?: ReplyPermissionMode
   /** 引き継いで始めたセッション（#442）の、前のセッションのエンティティ ID。見出しに「← 前のセッション」を出す */
   continued_from?: string
-  /** 分岐元のセッションの ID（#405。Codex の `thread/fork` で作ったセッションに、サーバが書く） */
+  /** 分岐元のセッションの ID（#405 / #398。Codex の `thread/fork`・OpenCode の `/session/<id>/fork` で作ったセッションに、サーバが書く） */
   forked_from?: string
   /** 引き継いだ先のセッションのエンティティ ID（#442）。見出しに「→ 続き」を出す。前のセッションはアーカイブしない */
   continued_to?: string
@@ -1720,7 +1720,7 @@ export interface Terminal {
 }
 
 /**
- * `POST /api/sessions/<id>/fork` の本文（#405）。Codex のセッションを会話ごと分岐して、分岐先で最初の 1 ターンを回す。
+ * `POST /api/sessions/<id>/fork` の本文（#405 / #398）。Codex・OpenCode のセッションを会話ごと分岐して、分岐先で最初の 1 ターンを回す。
  * **`cwd`・モデル・権限はリクエストから受けない**（元のセッションのまま）。応答は `NewSessionResponse`
  */
 export interface ForkSessionRequest {

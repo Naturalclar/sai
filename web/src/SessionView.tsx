@@ -241,7 +241,7 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
       return false
     }
   }
-  // 分岐して送る（#405）。Codex の会話をそこまで持ったまま分岐し、分岐先に最初の指示を送る。元のセッションは変わらない。
+  // 分岐して送る（#405 / #398）。Codex・OpenCode の会話をそこまで持ったまま分岐し、分岐先に最初の指示を送る。元のセッションは変わらない。
   // 待ちの出し方は「新しいセッションで送る」と同じ（分岐先の行は最初のターンが終わるまで無い）
   const startFork = async (text: string): Promise<boolean> => {
     setFreshError('')
@@ -497,7 +497,7 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
             {...(quote ? { quote } : {})}
             // 送れなかった（確認待ち・送信失敗）ら ReplyBox が本文・画像・返信先を戻す（#350）
             // 送り方（#579）。着手の指示なら「要約してから送る」が既定。量は詳細の context_tokens（#441）
-            sendMode={{ agent: s.agent, contextTokens, terminal: Boolean(s.terminal), forkable: s.agent === 'codex' && !blocked }}
+            sendMode={{ agent: s.agent, contextTokens, terminal: Boolean(s.terminal), forkable: (s.agent === 'codex' || s.agent === 'opencode') && !blocked }}
             onSend={async (text, attachments, { steer, mode }) => {
               if (mode === 'new') return await startFresh(text)
               if (mode === 'fork') return await startFork(text)

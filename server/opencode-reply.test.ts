@@ -37,6 +37,10 @@ const contextCalls: string[] = []
 /** `POST /session` で作ったセッションの cwd（#452） */
 const startedSessions: string[] = []
 const started: { id: string; cmd: ReplyCommand }[] = []
+/** `POST /session/<id>/fork` で分岐した元のセッションと cwd（#398）。分岐先の id は `nextFork`（投げさせるなら `forkFails`） */
+const forks: { session: string; cwd: string }[] = []
+let nextFork = 'ses_forked'
+let forkFails = false
 /** いま `opencode serve` が答えを待っている許可（#421）。テストごとに差し替える */
 let pending: OpencodePermission[] = []
 /** 保留を引けたか（#422。false は「サーバが立っていない・読めない」） */
@@ -92,6 +96,11 @@ const opencodeApp: OpencodeApp = {
     startedSessions.push(cwd)
     if (cwd === '/bad') throw new Error('opencode serve が 500 を返しました')
     return 'ses_new'
+  },
+  async fork(session: string, cwd: string) {
+    forks.push({ session, cwd })
+    if (forkFails) throw new Error('opencode serve が 404 を返しました')
+    return nextFork
   },
   async todos(session: string) {
     todoCalls.push(session)
@@ -457,5 +466,89 @@ test('処理中の OpenCode のターンを止める。預かりは勝手に回�
   } finally {
     oc.busy = false
     abortOk = true
+  }
+})
+
+// ---- #398: 会話を分岐する（口・形・断り方は Codex の分岐 #405 と同じ）
+
+test('POST /api/sessions/<id>/fork: OpenCode のセッションを分岐して、分岐先で最初の指示を回す（#398）', async () => {
+  forks.length = 0
+  const sentBefore = sent.length
+  const ranBefore = started.length
+  const createdBefore = startedSessions.length
+  // 元のセッションに表示名とモデルを付けておく（分岐先に引き継ぐ）
+  const put = await fetch(`${base}/api/sessions/ses_ng%40r/meta`, { method: 'PUT', headers: { 'content-type': 'application/json', origin: base }, body: JSON.stringify({ name: '検証', model: 'ollama/qwen3:8b' }) })
+  assert.equal(put.status, 200)
+  const res = await post('/api/sessions/ses_ng%40r/fork', { text: '別の案で試して', cwd: '/etc', model: 'x' })
+  assert.equal(res.status, 202)
+  const body = (await res.json()) as NewSessionResponse
+  assert.deepEqual({ id: body.id, agent: body.agent, session: body.session, via: body.via }, { id: 'ses_forked@r', agent: 'opencode', session: 'ses_forked', via: 'app-server' })
+  assert.equal(body.cwd, work, 'cwd はリクエストからではなく元のセッションの行から取る')
+  assert.deepEqual(forks, [{ session: 'ses_ng', cwd: work }], '分岐するのは行から引いた元のセッション。directory を渡す')
+  assert.deepEqual(sent.slice(sentBefore).map((x) => ({ id: x.id, session: x.session, text: x.text, model: x.model })), [
+    { id: 'ses_forked@r', session: 'ses_forked', text: '別の案で試して', model: 'ollama/qwen3:8b' },
+  ], '分岐先で 1 ターン目を回す（元のセッションには送らない）。モデルは元のメタから')
+  assert.equal(started.length, ranBefore, '`opencode run` は起こさない')
+  assert.equal(startedSessions.length, createdBefore, '新しいセッション（POST /session）は作らない')
+  const meta = (await (await fetch(`${base}/api/sessions/${encodeURIComponent(body.id)}/meta`)).json()) as { meta: Record<string, unknown> }
+  assert.deepEqual(meta.meta, { forked_from: 'ses_ng@r', model: 'ollama/qwen3:8b', name: '検証（分岐）' })
+})
+
+test('POST /api/sessions/<id>/fork: 別オリジン・本文なし・処理中・serve が断ったときは分岐しない。始まらなければメタを残さない（#398）', async () => {
+  forks.length = 0
+  const sentBefore = sent.length
+  const cross = await fetch(`${base}/api/sessions/ses_ng%40r/fork`, { method: 'POST', headers: { 'content-type': 'application/json', origin: 'http://evil.example' }, body: JSON.stringify({ text: 'x' }) })
+  assert.equal(cross.status, 403)
+  assert.equal((await post('/api/sessions/ses_ng%40r/fork', { text: '  ' })).status, 400)
+  assert.equal((await post('/api/sessions/nope%40r/fork', { text: 'x' })).status, 404)
+  // 元のセッションが処理中のあいだは始めない（同じ作業ディレクトリで 2 本が同時に動く）
+  ;(opencodeApp as OpencodeApp & { busy: boolean }).busy = true
+  try {
+    const busy = await post('/api/sessions/ses_1%40r/fork', { text: 'x' })
+    assert.equal(busy.status, 409)
+    assert.match(await busy.text(), /処理中/)
+  } finally {
+    ;(opencodeApp as OpencodeApp & { busy: boolean }).busy = false
+  }
+  assert.deepEqual(forks, [], 'ここまで 1 回も分岐していない')
+  // serve が断った（知らないセッション、など）→ 500 で理由。何も送らない
+  forkFails = true
+  try {
+    const failed = await post('/api/sessions/ses_ng%40r/fork', { text: 'x' })
+    assert.equal(failed.status, 500)
+    assert.match(await failed.text(), /OpenCode のセッションを分岐できませんでした.*404/)
+  } finally {
+    forkFails = false
+  }
+  // 分岐はできたが 1 ターン目を始められなかった → 書いたメタは消す（行が無いので、画面からは消せない）
+  nextFork = 'ses_ng'
+  try {
+    const notStarted = await post('/api/sessions/ses_1%40r/fork', { text: 'x' })
+    // ses_1 に前のテストの預かりが残っていれば 409（そのときはメタも書かれていない）
+    assert.ok(notStarted.status === 500 || notStarted.status === 409)
+  } finally {
+    nextFork = 'ses_forked'
+  }
+  assert.equal(sent.length, sentBefore, '1 回も送っていない')
+})
+
+test('POST /api/sessions/<id>/fork: SAI_OPENCODE_SERVER=0 では分岐しない（run に落とさない。#398）', async () => {
+  const savedEnv = process.env.SAI_OPENCODE_SERVER
+  process.env.SAI_OPENCODE_SERVER = '0'
+  const handler = app()
+  const off = createServer((req, res) => void handler(req, res))
+  await new Promise<void>((r) => off.listen(0, '127.0.0.1', r))
+  const addr = off.address()
+  const offBase = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`
+  forks.length = 0
+  try {
+    const res = await fetch(`${offBase}/api/sessions/ses_ng%40r/fork`, { method: 'POST', headers: { 'content-type': 'application/json', origin: offBase }, body: JSON.stringify({ text: 'x' }) })
+    assert.equal(res.status, 400)
+    assert.match(await res.text(), /SAI_OPENCODE_SERVER=0/)
+    assert.deepEqual(forks, [])
+  } finally {
+    if (savedEnv === undefined) delete process.env.SAI_OPENCODE_SERVER
+    else process.env.SAI_OPENCODE_SERVER = savedEnv
+    await new Promise<void>((r) => off.close(() => r()))
   }
 })

@@ -1,8 +1,7 @@
-import { hm } from './format'
 import { limitKindLabel, resetLabel } from '../../shared/usage.ts'
 import { UsageBar } from './UsageBar'
 import type { UsageResponse } from './api'
-import { claudeFreshness, CLAUDE_USAGE_WHY } from './usageChips'
+import { claudeFreshness, CLAUDE_USAGE_WHY, codexFreshness } from './usageChips'
 
 /**
  * 使用量の詳細（UsageChip を押すと出る）。どちらも 5時間 / 週のゲージ。
@@ -12,6 +11,8 @@ import { claudeFreshness, CLAUDE_USAGE_WHY } from './usageChips'
 export function UsagePanel({ usage, now, onNavigate }: { usage: UsageResponse; now: number; onNavigate?: () => void }) {
   // Claude の割合がいつの値か・5 時間が欠けているか（#694）。判定は usageChips.ts の 1 か所
   const fresh = claudeFreshness(usage.claude, now)
+  // Codex も同じ閾値で「古い」と出す（#726。使っていないあいだは rollout が増えず、値が進まない）
+  const codexFresh = codexFreshness(usage.codex, now)
   return (
     <div className="usage-panel" role="dialog" aria-label="使用量">
       {usage.codex && (
@@ -19,7 +20,12 @@ export function UsagePanel({ usage, now, onNavigate }: { usage: UsageResponse; n
           <h3>
             Codex
             {usage.codex.plan && <span className="usage-plan">{usage.codex.plan}</span>}
-            {usage.codex.at && <span className="usage-at">{hm(usage.codex.at)} 時点</span>}
+            {codexFresh.at && (
+              <span className={`usage-at${codexFresh.stale ? ' stale' : ''}`}>
+                {codexFresh.at}
+                {codexFresh.stale && ` · ${codexFresh.age}の値`}
+              </span>
+            )}
           </h3>
           <UsageBar window={usage.codex.primary} now={now} />
           {usage.codex.secondary && <UsageBar window={usage.codex.secondary} now={now} />}

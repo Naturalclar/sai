@@ -7,6 +7,7 @@ import {
   parseCodexUsage,
   parseStatusLineUsage,
   resetLabel,
+  windowExpired,
   isUsageStale,
   lastRateLimitEvent,
   mergeUsageWindows,
@@ -144,7 +145,11 @@ test('resetLabel: 1時間未満は残り、それより先は時刻。日をま�
   assert.equal(resetLabel(local(2026, 9, 9, 10, 42), now), 'あと42分')
   assert.equal(resetLabel(local(2026, 9, 9, 13, 30), now), '13:30 に戻る')
   assert.equal(resetLabel(local(2026, 9, 11, 9, 5), now), '9/11 09:05 に戻る')
-  assert.equal(resetLabel(local(2026, 9, 9, 9, 0), now), 'まもなく戻る', '過ぎている')
+  // 過ぎた時刻（#726）: 数分までは「まもなく」、それより前は戻った時刻を言う（2 日前に「まもなく」と言わない）
+  assert.equal(resetLabel(local(2026, 9, 9, 9, 58), now), 'まもなく戻る', '過ぎて 2 分')
+  assert.equal(resetLabel(local(2026, 9, 9, 9, 55), now), 'まもなく戻る', '過ぎてちょうど 5 分')
+  assert.equal(resetLabel(local(2026, 9, 9, 9, 0), now), '09:00 に戻った', '過ぎて 1 時間')
+  assert.equal(resetLabel(local(2026, 9, 7, 15, 38), now), '9/7 15:38 に戻った', '過ぎて 2 日')
   assert.equal(resetLabel(Number.NaN, now), '')
 })
 
@@ -340,4 +345,15 @@ test('割合の 2 つの出どころをまとめる: 返信が新しければ丸
   // 戻る時刻が先へ進んでいれば新しい窓なので、低くても端末のほう
   const next = { at: '2026-10-06T15:00:00+09:00', primary: w(1, 300, R5 + 18000), secondary: w(61, 10080, R7) }
   assert.deepEqual(mergeUsageWindows(next, replies), next)
+})
+
+// ---- 復帰時刻を過ぎた枠（#726）
+test('windowExpired: 復帰時刻を過ぎた枠だけ。時刻が無い・now が無いなら過ぎたと言わない', () => {
+  const now = local(2026, 9, 9, 10, 0) * 1000
+  assert.equal(windowExpired({ resets_at: local(2026, 9, 9, 9, 59) }, now), true)
+  assert.equal(windowExpired({ resets_at: local(2026, 9, 9, 10, 0) }, now), true, 'ちょうど')
+  assert.equal(windowExpired({ resets_at: local(2026, 9, 9, 10, 1) }, now), false)
+  assert.equal(windowExpired({}, now), false)
+  assert.equal(windowExpired(undefined, now), false)
+  assert.equal(windowExpired({ resets_at: local(2026, 9, 9, 9, 0) }, 0), false)
 })

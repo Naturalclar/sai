@@ -20,6 +20,11 @@ export interface ClaudeTurn {
   endedAt: string
   /** このあとに人の入力が続いている（= このターンはもう変わらない） */
   over: boolean
+  /**
+   * その本文は返答ではなく、**ログイン切れで CLI が出した文**（行の `error: "authentication_failed"`。#577。
+   * `Not logged in · Please run /login`）。ターンは途中で止まっている。違えば無い
+   */
+  authFailed?: true
 }
 
 const CLOSED = new Set(['end_turn', 'stop_sequence'])
@@ -80,6 +85,8 @@ export function turnParser(): { push: (line: string) => void; turns: ClaudeTurn[
     if (!text) return
     // いちばん新しい本文が勝つ
     cur.text = text
+    if (o.error === 'authentication_failed') cur.authFailed = true
+    else delete cur.authFailed
     cur.closed = CLOSED.has(str(message.stop_reason))
     cur.endedAt = str(o.timestamp)
   }

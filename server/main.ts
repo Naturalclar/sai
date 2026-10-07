@@ -25,6 +25,7 @@ import { DEFAULT_PORT, parsePort } from '../shared/port.ts'
 import { createApp } from './app.ts'
 import { ClaudeHooks } from './local/claudeHooks.ts'
 import { ClaudeAuth } from './local/claudeAuth.ts'
+import { ClaudeLogin } from './local/claudeLogin.ts'
 import { allowRules } from './approvals/permissions.ts'
 import { jevFromEnv } from './approvals/jev.ts'
 import { RealTmux, realPs } from './reply/terminal.ts'
@@ -156,6 +157,8 @@ export function main(argv: string[]): void {
     // フックの配線のずれ（#567）。~/.claude/settings.json を読むだけ（書き換えない）
     claudeHooks: new ClaudeHooks(),
     claudeAuth,
+    // SAI からログインし直す（#577）。**本物の `claude auth login` を起こすのはここで組んだものだけ**
+    claudeLogin: new ClaudeLogin({ shimDir: join(feedDir, 'login-shim'), logDir: feedDir, recheck: () => claudeAuth.refresh() }),
     // [常に許可] で、もう設定にあるルールを足さない（#705）。設定ファイルを読むだけ
     allowedRules: (cwd) => allowRules(cwd, homedir()),
   })

@@ -38,6 +38,17 @@
   /* Claude のログイン切れ（#685）。「確かめ直す」と結果を同じ行に置く */
   .banner.auth .linkish { margin-left: 10px; font-size: inherit; }
   .banner.auth .note { margin-left: 8px; color: var(--muted); }
+  /* SAI からログインし直す手順（#577）。バナーの中に 1 段足す。携帯でも押せる大きさにする */
+  .banner.auth .auth-login { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 6px; color: var(--ink); }
+  .banner.auth .auth-login ol { flex: 1 1 100%; margin: 0; padding-left: 1.4em; line-height: 1.9; }
+  .banner.auth .auth-login a { color: var(--accent); font-weight: 600; }
+  .banner.auth .auth-login .code { display: inline-flex; gap: 6px; margin-left: 6px; vertical-align: middle; max-width: 100%; }
+  .banner.auth .auth-login input { width: 18em; max-width: 60vw; font: inherit; font-size: 16px; font-family: var(--mono); padding: 3px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); }
+  .banner.auth .auth-login .code button { font: inherit; padding: 3px 12px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: #fff; cursor: pointer; }
+  .banner.auth .auth-login .code button:disabled { opacity: .6; cursor: default; }
+  .banner.auth .auth-login .note { margin-left: 0; }
+  .banner.auth .auth-login .note.err { color: var(--synth); }
+  .banner.auth .auth-login > .linkish { margin-left: 0; }
   header .github:hover { color: var(--ink); text-decoration: none; }
   header .sidebar-toggle { display: inline-flex; margin-left: -6px; padding: 4px; background: transparent; border: 0; border-radius: 6px; color: var(--muted); cursor: pointer; }
   header .sidebar-toggle:hover { background: var(--hover); color: var(--ink); }
@@ -750,6 +761,7 @@
   .turn-steps .list .said .body > :first-child { margin-top: 0; }
   .turn-steps .list .said .body > :last-child { margin-bottom: 0; }
   .tag.recovered { background: color-mix(in srgb, var(--muted) 18%, transparent); color: var(--muted); }
+  .tag.recovered.auth-failed { background: color-mix(in srgb, var(--synth) 16%, transparent); color: var(--synth); }
   .tag.stop-missing { background: color-mix(in srgb, var(--synth) 18%, transparent); color: var(--synth); font-weight: 600; }
   .tag.archived { background: color-mix(in srgb, var(--muted) 18%, transparent); color: var(--muted); font-weight: 600; }
   /* アーカイブしたのに返信が続いている（#583）。アーカイブの印より目立たせる */

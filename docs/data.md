@@ -156,6 +156,8 @@ SAIから開始したCodex turnの待機もJSONLにはせず、`CodexAppServer` 
 | `loops.json` | エンティティ ID → 1 件 | 組んだループの状態（`goal`・`until`・`max_rounds`・`round`・`status` など。`shared/loops.ts` の `LoopState`） |
 | `reply.log` | 追記の文字のログ | SAI が起こした子の stdout / stderr と、SAI が足す 1 行（`--- <時刻> <エンティティ ID> <何をしたか>`） |
 | `digest.log` | 追記の文字のログ | 一言を作る子の出力と、諦めた・作り直した理由 |
+| `claude-login.log` | 追記の JSON 行 | SAI からログインし直したとき（#577）、子が終わるごとに 1 行: `ended_by`（`exit` / `timeout` / `cancel` / `no_url` / `logged_in` = コードを渡したあと子が終わらないままログインできていたので落とした / `shutdown`）・`exit_code`・`signal`・`duration_ms`・出力の行数とバイト数・`codes_sent`・`invalid_codes`・`logged_in_after`。**数だけ**で、URL・コード・出力の文言は書かない |
+| `login-shim/` | ディレクトリ | ログインの子にだけ見せる、何もしない `open` の置き場（#577。Mac のブラウザを開かせない）。起こすたびに中に 0700 のディレクトリを作り、子が終われば消す（ふだんは空） |
 | `usage-claude.json` | 1 つの JSON | `statusline.py` が書く Claude の使用率（`v`・`ts`・`host`・`session`・`model`・`rate_limits`） |
 | `usage-claude-replies.json`（`AGENT_FEED_HOST` があれば `usage-claude-replies.<host>.json`） | 1 つの JSON | SAI から回した Claude の返信の出力（`rate_limit_event`）から拾った使用率（#694。`v`・`ts` = 届いた時刻・`source`・`rate_limits`。形は `usage-claude.json` と同じ） |
 | `mcp-sends.json` / `opencode-serve.json` / `icon-history.json` / `agent-token` | — | tailnet の MCP から送った時刻・SAI が起こした `opencode serve` の居場所・アイコンの履歴・エージェント用の口のトークン（**中身を出力に写さない**） |

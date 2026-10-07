@@ -19,6 +19,8 @@ import type { ProgressReader } from './progress.ts'
 interface Found {
   text: string
   endedMs: number
+  /** ログイン切れで CLI が出した文（#577） */
+  authFailed?: true
 }
 
 export interface RecoveredDeps {
@@ -136,7 +138,7 @@ export class RecoveredTurns {
     if (turn.closed && turn.text) {
       // 時刻の読めない行は並べる場所が決まらないので補わない（決まらないまま読み続けない）
       if (!Number.isFinite(endedMs)) return null
-      if (turn.over || now - endedMs >= STOP_MISSING_AFTER_MS) return { text: turn.text, endedMs }
+      if (turn.over || now - endedMs >= STOP_MISSING_AFTER_MS) return { text: turn.text, endedMs, ...(turn.authFailed ? { authFailed: true as const } : {}) }
       return undefined
     }
     return turn.over ? null : undefined

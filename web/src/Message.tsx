@@ -73,6 +73,8 @@ interface Props {
   usage?: TurnUsage
   /** 記録に本文が無く、サーバが transcript から補った返答か（#614）。小さい印を付ける */
   recovered?: boolean
+  /** 補った本文が、ログイン切れで CLI が出した文（#577。行の `recovered_auth_failed`） */
+  authFailed?: boolean
   /** このターンの手順（#605）を開けるようにする。返答のバブルにだけ渡す（セッションの ID と、その行の ts） */
   steps?: { id: string; ts: string }
   /**
@@ -108,7 +110,7 @@ interface Props {
 }
 
 /** バブル1つ分の本文。長ければ折りたたんで「もっと見る」を付ける */
-export function Message({ ts, text: raw, markdown, waiting, questions, resolved, thinking, thinkingOpen = false, summary, summaryNext, digestKey, model, usage, recovered = false, steps, remote, sourceAsk = '', linear, found = false, utteranceKey, side, menu, images, diff, clipped = false, thinkingClipped = false, defaultOpen = false }: Props) {
+export function Message({ ts, text: raw, markdown, waiting, questions, resolved, thinking, thinkingOpen = false, summary, summaryNext, digestKey, model, usage, recovered, authFailed = false, steps, remote, sourceAsk = '', linear, found = false, utteranceKey, side, menu, images, diff, clipped = false, thinkingClipped = false, defaultOpen = false }: Props) {
   // 自分の入力に添えた画像は、パスの文字列ではなくサムネイルで出す（本文の末尾に足してある。shared/attachments.ts）
   const { body: text, urls, files } = markdown ? { body: raw, urls: [] as string[], files: [] } : splitAttachments(raw)
   // 長い本文を開いているか。#365 の画面（フィード）では最初から開いた状態で始める。
@@ -142,7 +144,7 @@ export function Message({ ts, text: raw, markdown, waiting, questions, resolved,
         <span className="time">{hm(ts)}</span>
         {menu && <MessageMenu {...menu} />}
         {usage && <TurnUsageTag usage={usage} />}
-        {recovered && <RecoveredTag />}
+        {recovered && <RecoveredTag authFailed={authFailed} />}
         {thinking && <ThinkingBlock text={thinking} openAll={thinkingOpen} clipped={thinkingClipped} />}
         <div className="summary" ref={summaryRef}>
           {/* 一言の中の URL・#123・ABC-123 はリンクにする（shared/refs.ts）。HTML 文字列は作らない */}
@@ -195,7 +197,7 @@ export function Message({ ts, text: raw, markdown, waiting, questions, resolved,
       {menu && <MessageMenu {...menu} />}
       {model && <span className="tag model" title="このターンからモデルが変わった">{model}</span>}
       {usage && <TurnUsageTag usage={usage} />}
-      {recovered && <RecoveredTag />}
+      {recovered && <RecoveredTag authFailed={authFailed} />}
       {thinking && <ThinkingBlock text={thinking} openAll={thinkingOpen} clipped={thinkingClipped} />}
       {text ? (
         <div className={`body${long && !open ? ' clamped' : ''}`} ref={bodyRef}>{markdown ? <Markdown text={text} /> : text}</div>

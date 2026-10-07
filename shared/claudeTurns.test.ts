@@ -71,3 +71,14 @@ test('claudeTurns: 要約の行（isCompactSummary）を入力にしない — r
   assert.deepEqual(turns.map((t) => t.input), ['最初の指示', '次の指示'], '要約の文は入力にならない')
   assert.equal(turns[1]?.text, '要約のあとの返答', '要約をまたいでも同じターンの返答')
 })
+
+test('claudeTurns: ログイン切れで CLI が出した文（error: authentication_failed）には authFailed を付ける。あとに本物の返答が続けば外す（#577）', () => {
+  // 実物の形（2.1.292）: モデルは <synthetic>、行の頭に error と isApiErrorMessage、stop_reason は stop_sequence
+  const failed = (s: number) =>
+    JSON.stringify({ type: 'assistant', timestamp: at(s), error: 'authentication_failed', isApiErrorMessage: true, message: { role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text: 'Not logged in · Please run /login' }], stop_reason: 'stop_sequence' } })
+  const [stopped] = claudeTurns([user(0, '続けて'), said(5, '途中の文', 'tool_use'), failed(60)])
+  assert.deepEqual([stopped!.text, stopped!.closed, stopped!.authFailed], ['Not logged in · Please run /login', true, true])
+  const [resumed] = claudeTurns([user(0, '続けて'), failed(60), said(90, '終わりました', 'end_turn')])
+  assert.deepEqual([resumed!.text, resumed!.authFailed], ['終わりました', undefined])
+  assert.equal(claudeTurns([user(0, '続けて'), said(5, 'Not logged in · Please run /login', 'end_turn')])[0]!.authFailed, undefined, '文言では決めない（行の error で決める）')
+})

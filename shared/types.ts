@@ -121,6 +121,11 @@ export interface FeedRow {
    * （`shared/recoveredTurns.ts`）。画面は「記録から補った」の印を付ける。`turns` には数えない
    */
   recovered?: true
+  /**
+   * 補った返答が、**Claude のログイン切れで CLI が出した文**（transcript の `error: "authentication_failed"`。#577）。
+   * そのターンは途中で止まっていて、フックも鳴らないので記録の行は無い。画面は返答ではなく「ログイン切れで止まった」と出す
+   */
+  recovered_auth_failed?: true
 }
 
 /**
@@ -879,6 +884,33 @@ export interface ReplyFailure {
    * 画面は失敗の理由としてそれを出す。聞けなかった・切れていなければ無い
    */
   logged_out?: true
+}
+
+/**
+ * SAI からのログインの手順（#577）のいま。`starting` = 子を起こして URL を待っている / `waiting` = URL を出してコードを待っている /
+ * `sent` = コードを子に渡した / `checking` = 子が終わって `claude auth status` を聞き直している / `done` = ログインできた /
+ * `failed` = できなかった（`note` に理由）
+ */
+export type ClaudeLoginStatus = 'idle' | 'starting' | 'waiting' | 'sent' | 'checking' | 'done' | 'failed'
+/**
+ * 理由。`invalid_code` = 子がコードを受け付けなかった（待ちに戻る）/ `timeout` = 時間切れで子を落とした /
+ * `no_url` = 子が URL を出さなかった / `exited` = 子は終わったがログインできていない / `spawn_failed` = `claude` を起こせない /
+ * `unavailable` = このサーバはログインの子を起こさない（テスト・スクラッチ）/ `logged_in` = もうログインできているので起こさなかった /
+ * `unknown` = ログインの状態が分からないので起こさなかった
+ */
+export type ClaudeLoginNote = 'invalid_code' | 'timeout' | 'no_url' | 'exited' | 'spawn_failed' | 'unavailable' | 'logged_in' | 'unknown'
+
+/** `GET` / `POST /api/claude-auth/login` の応答（#577）。`url` は人が自分のブラウザで開くログイン用の URL（`waiting` / `sent` の間だけ） */
+export interface ClaudeLoginResponse {
+  status: ClaudeLoginStatus
+  url?: string
+  note?: ClaudeLoginNote
+}
+
+/** `POST /api/claude-auth/login` の body（#577）。`code` は `action: 'code'` のときだけ（サーバは子の stdin に渡すだけで残さない） */
+export interface ClaudeLoginRequest {
+  action: 'start' | 'code' | 'cancel'
+  code?: string
 }
 
 /** `POST /api/claude-auth/check` の応答（#685）。聞き直した結果。分からなければ（`claude` が無い・古い・時間切れ）`null` */

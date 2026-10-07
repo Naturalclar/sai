@@ -13,9 +13,9 @@
 
 ## 2. Codex の notify ペイロードにセッションIDが無い
 
-Claude の `Stop` は `session_id` を stdin の JSON に含むが、Codex の `agent-turn-complete` には無い。
+Claude の `Stop` は `session_id` を stdin の JSON に含むが、Codex の `agent-turn-complete` には無い。Codex 0.160 の notify には代わりに `thread-id` が載る。
 
-→ **記録時に、cwd が一致する直近の rollout ファイル（`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`）からセッションIDを引く。** `session_index.jsonl` は壊れていることがある（`codex resume --all` が「No sessions yet」になる既知の問題）ので、索引ではなくファイル名から直接取る。
+→ **記録時に `thread-id` と同じ rollout ファイル（`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`）からセッションIDを引く。** レビューなどの子スレッドは `session_meta.session_id` が親を指すので、ファイル名の子 ID ではなくこちらを使う。`thread-id` が無い古い payload、または対応する rollout が見つからない payload だけ、cwd が一致する直近の rollout に戻る。`session_index.jsonl` は壊れていることがある（`codex resume --all` が「No sessions yet」になる既知の問題）ので、索引ではなくファイル名から直接取る。
 
 それも取れなかったときは `(repo, cwd, agent)` が同じで前の行から**30分以内**なら同じセッションとみなし、ID は `synth-<repo>-<開始時刻>` にする。合成であることが後から分かるよう `session_source` を `synth` にする。一覧では「合成」の印が付く。
 

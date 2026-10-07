@@ -2,6 +2,11 @@
 
 なぜ今の形になったか（前はどうだったか・実測・レビューの指摘）。仕組みは [internals/aggregate.md](../internals/aggregate.md)。新しい経緯はこのファイルの該当する節に足す。
 
+## 同じ cwd の Codex の完了行が別スレッドに付いていた（#735）
+
+- Codex 0.160 の notify には `session_id` は無いが `thread-id` がある。それを読まず cwd の一番新しい rollout を選んでいたため、同じ worktree で 2 本のターンが同時に走ると、あとから rollout を更新した別スレッドへ完了行が付いた。
+- `thread-id` の rollout を直接引き、そこから `session_meta.session_id`（レビューなどの子スレッドなら親）を読む。古い notify と、未知の `thread-id` だけは従来の cwd による解決へ戻す。
+
 ## Codex のレビューの行が別のセッションになっていた（#403）
 
 - レビューの子スレッドの rollout と親の rollout のどちらが cwd で当たるかは mtime の差（実測 5ms）で決まる。`session_meta.session_id` を先に見ていなかったころは、レビューの行が別のセッションとして現れることがあった。

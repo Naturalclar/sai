@@ -1299,6 +1299,39 @@ class RecordTest(unittest.TestCase):
         self.assertEqual(row["user_text"], "README を直して")
         self.assertEqual(row["repo"], "myrepo")
 
+    def test_codex_thread_id_wins_over_newest_rollout_in_same_cwd(self):
+        """同じ cwd で別のスレッドが新しく動いていても、notify を送ったスレッドに行が付く（#735）。"""
+        first = "0c6bd4c9-7351-4a2b-9c3d-aaaaaaaaaaaa"
+        second = "0c6bd4c9-7352-4a2b-9c3d-bbbbbbbbbbbb"
+        first_rollout = self._rollout(first, str(self.cwd), first_user="一つ目の依頼")
+        second_rollout = self._rollout(second, str(self.cwd), first_user="二つ目の依頼")
+
+        # 二つ目が新しくても、一つ目から届いた notify は一つ目に付く。
+        older = datetime.now().timestamp() - 10
+        os.utime(first_rollout, (older, older))
+        os.utime(second_rollout, None)
+        self._codex({
+            "type": "agent-turn-complete",
+            "thread-id": first,
+            "input-messages": ["一つ目の依頼"],
+            "last-assistant-message": "一つ目を完了",
+        })
+
+        # 今度は一つ目を新しくして、二つ目から届いた notify も取り違えない。
+        os.utime(first_rollout, None)
+        os.utime(second_rollout, (older, older))
+        self._codex({
+            "type": "agent-turn-complete",
+            "thread-id": second,
+            "input-messages": ["二つ目の依頼"],
+            "last-assistant-message": "二つ目を完了",
+        })
+
+        rows = read_rows(self.feed_dir)
+        self.assertEqual([row["session"] for row in rows], [first, second])
+        self.assertEqual([row["first_user_text"] for row in rows], ["一つ目の依頼", "二つ目の依頼"])
+        self.assertEqual([row["session_source"] for row in rows], ["rollout", "rollout"])
+
     # Codex の `review/start`（v0.154.0 で実測した形）
     REVIEW_PROMPT = "Review the current code changes (staged, unstaged, and untracked files) and provide prioritized findings."
     REVIEW_REPLY = json.dumps({
@@ -1323,10 +1356,15 @@ class RecordTest(unittest.TestCase):
         """
         parent = "0c6bd4c9-3333-4a2b-9c3d-aaaaaaaaaaaa"
         child = "0c6bd4c9-4444-4a2b-9c3d-bbbbbbbbbbbb"
-        self._rollout(parent, str(self.cwd), first_user="README を直して", meta={"session_id": parent})
-        # 子のほうが新しい = cwd で引くとこちらが当たる
-        newer = self._rollout(child, str(self.cwd), meta={"session_id": parent, "parent_thread_id": parent})
-        os.utime(newer, None)
+        unrelated = "0c6bd4c9-5555-4a2b-9c3d-cccccccccccc"
+        parent_rollout = self._rollout(parent, str(self.cwd), first_user="README を直して", meta={"session_id": parent})
+        child_rollout = self._rollout(child, str(self.cwd), meta={"session_id": parent, "parent_thread_id": parent})
+        unrelated_rollout = self._rollout(unrelated, str(self.cwd), first_user="別の依頼")
+        # cwd だけで引けば無関係な rollout が当たる条件にする。
+        now = datetime.now().timestamp()
+        os.utime(parent_rollout, (now - 20, now - 20))
+        os.utime(child_rollout, (now - 10, now - 10))
+        os.utime(unrelated_rollout, (now, now))
         payload = {
             "type": "agent-turn-complete",
             "thread-id": child,

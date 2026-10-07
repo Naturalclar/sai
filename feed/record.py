@@ -1194,14 +1194,20 @@ def _rollout_session_id(path: Path) -> str:
     return _rollout_id(path)
 
 
-def resolve_codex_session(cwd: str) -> str:
-    """cwd が一致する直近の rollout ファイルからセッションIDを引く。
+def resolve_codex_session(cwd: str, thread_id: str = "") -> str:
+    """notify の thread-id、無ければ cwd が一致する直近の rollout からセッションIDを引く。
 
     session_index.jsonl は壊れていることがある（`codex resume --all` が
     「No sessions yet」になる既知の問題）ので、索引ではなくファイル名から取る。
     """
     root = codex_home() / "sessions"
-    if not cwd or not root.is_dir():
+    if not root.is_dir():
+        return ""
+    if thread_id and _UUID_RE.fullmatch(thread_id):
+        rollout = find_codex_rollout(thread_id)
+        if rollout is not None:
+            return _rollout_session_id(rollout)
+    if not cwd:
         return ""
     cutoff = datetime.now().timestamp() - ROLLOUT_MAX_AGE_SECONDS
     candidates: list[tuple[float, Path]] = []
@@ -1561,7 +1567,8 @@ def build_row(payload: dict, now: datetime, directory: Path, declared: str = "")
         if isinstance(session_id, str) and session_id:
             session, source = session_id, "payload"
         else:
-            resolved = resolve_codex_session(cwd)
+            thread_id = payload.get("thread-id") or payload.get("thread_id")
+            resolved = resolve_codex_session(cwd, thread_id if isinstance(thread_id, str) else "")
             if resolved:
                 session, source = resolved, "rollout"
         # resume/queue 後の input-messages は過去の入力も含むため、末尾の今回分だけを使う。

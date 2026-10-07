@@ -135,20 +135,100 @@ export function digestable(row: FeedRow): boolean {
   return eventKind(row.event, row.text) === 'turn' && Boolean(row.text?.trim())
 }
 
+/**
+ * `claude -p --output-format json` の 1 回ぶんの数字（#740）。**本文は持たない**。
+ * `pnpm digest:eval` が案ごとに集計して、どこで時間がかかっているか（起動まわり／API の中／思考の出力）を切り分ける
+ */
+export interface SummarizeStats {
+  /** CLI が測った全体（ミリ秒）。プロセスの起動は含まない */
+  duration_ms: number
+  /** そのうち API を待っていた時間（ミリ秒） */
+  duration_api_ms: number
+  input_tokens: number
+  /** キャッシュに書いた入力（毎回書き直すと、ここが大きいまま） */
+  cache_write_tokens: number
+  cache_read_tokens: number
+  /** 出力。**思考も入る**（一言は数十トークンのはずなので、桁が違えば思考） */
+  output_tokens: number
+  /** API 換算の費用（ドル） */
+  cost_usd: number
+}
+
 export interface Summarizer {
   /** prompt を渡して一言を返す。空文字や失敗は throw（呼び出し側が「無いまま」にする） */
   summarize(prompt: string): Promise<string>
   /** どこに投げているか（口の不調を画面に出すときに添える。例 `http://127.0.0.1:11434/v1`）。無くてよい */
   readonly where?: string
+  /** 直前の 1 回の数字（取れる口だけ。取れなければ無い）。順に呼ぶ道具（`pnpm digest:eval`）が読む */
+  readonly lastStats?: SummarizeStats | undefined
 }
 
-/** `claude -p` の起動引数。テストで並びを見る。実行ファイルはサーバの PATH の `claude`（#288） */
-export function summarizeCommand(model: string): { bin: string; args: string[] } {
+/** `--output-format json` の出力から数字だけを抜く。数字が 1 つも無ければ `undefined` */
+export function summarizeStats(parsed: unknown): SummarizeStats | undefined {
+  if (!parsed || typeof parsed !== 'object') return undefined
+  const o = parsed as Record<string, unknown>
+  const usage = (o.usage && typeof o.usage === 'object' ? o.usage : {}) as Record<string, unknown>
+  const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+  if (typeof o.duration_ms !== 'number' && typeof usage.output_tokens !== 'number') return undefined
+  return {
+    duration_ms: num(o.duration_ms),
+    duration_api_ms: num(o.duration_api_ms),
+    input_tokens: num(usage.input_tokens),
+    cache_write_tokens: num(usage.cache_creation_input_tokens),
+    cache_read_tokens: num(usage.cache_read_input_tokens),
+    output_tokens: num(usage.output_tokens),
+    cost_usd: num(o.total_cost_usd),
+  }
+}
+
+/**
+ * 一言の `claude -p` から外すもの（#740）。一言は文を 1 つ返すだけなので、道具・MCP・スキルの一覧・利用者の設定は要らない。
+ * 何も指定しないと、利用者の設定と claude.ai のコネクタがそのまま載り、**文脈が 2.7 万トークン**（うち 1 万前後を毎回書き直す）になった
+ * （Claude Code 2.1.292 で実測。外すと 0.76 万）。**足すのは減らす側のフラグだけ**で、権限のフラグは足さない
+ */
+export const SUMMARIZE_LIGHT_ARGS: readonly string[] = [
+  // 道具を渡さない
+  '--tools',
+  '',
+  // MCP を繋がない（利用者・プロジェクトの設定のものも、claude.ai のコネクタも）
+  '--strict-mcp-config',
+  '--mcp-config',
+  '{"mcpServers":{}}',
+  // スラッシュコマンド・スキルの一覧を載せない
+  '--disable-slash-commands',
+  // 利用者・プロジェクト・手元の設定ファイルを読まない（フック・許可・`env`。ログインは設定ファイルではないので読める）
+  '--setting-sources',
+  '',
+]
+
+/**
+ * 思考を切る（#740）。一言は 80 字なのに、既定のままだと**答え 25〜69 字に対して出力が 1,750〜7,112 トークン**出て、
+ * 1 回 30〜85 秒かかり 90 秒の時間切れに掛かった（haiku・6 件の実測。切ると出力 32〜75 トークン・全体 5〜8 秒）。
+ * `--effort low` では減らなかった。手元の口（qwen3）で切ってあるのと同じ理由（`REASONING_OFF`）。
+ * 環境変数なので、知らない版の CLI でも落ちない（効かないだけ）
+ */
+export const SUMMARIZE_ENV: Readonly<Record<string, string>> = { MAX_THINKING_TOKENS: '0', CLAUDE_CODE_DISABLE_THINKING: '1' }
+
+/**
+ * `claude -p` の起動引数。テストで並びを見る。実行ファイルはサーバの PATH の `claude`（#288）。
+ * `light: false` は外すフラグを付けない前の形（知らないフラグで落ちる版の CLI・設定ファイルでログインしている環境のための戻り先）
+ */
+export function summarizeCommand(model: string, light = true): { bin: string; args: string[] } {
   // --bare は OAuth を読まないので使えない（Not logged in になる）。フックは AGENT_FEED_SKIP=1 で黙らせる
   return {
     bin: 'claude',
-    args: ['-p', '--model', model, '--output-format', 'json', '--no-session-persistence'],
+    args: ['-p', '--model', model, '--output-format', 'json', '--no-session-persistence', ...(light ? SUMMARIZE_LIGHT_ARGS : [])],
   }
+}
+
+export interface ClaudeSummarizerOptions {
+  /** 外すフラグを付けない前の形で起こす（`pnpm digest:eval --claude-legacy` が前後を比べるのに使う）。思考を切る指定も付けない */
+  legacy?: boolean
+  /** 前の形へ戻したときの知らせ。既定は捨てる（本物は `summarizerFactory` がサーバの stderr に出す） */
+  log?: (line: string) => void
+  timeoutMs?: number
+  /** 実行ファイル。既定はサーバの PATH の `claude`。テストは偽物を渡す */
+  bin?: string
 }
 
 /** 本物。`claude -p` にプロンプトを stdin で渡し、JSON の result を取る */
@@ -156,35 +236,66 @@ export class ClaudeSummarizer implements Summarizer {
   private readonly model: string
   private readonly cwd: string
   private readonly env: NodeJS.ProcessEnv
+  private readonly legacy: boolean
+  private readonly log: (line: string) => void
+  private readonly timeoutMs: number
+  private readonly bin: string | undefined
+  /**
+   * 軽い形が通らなかったので、前の形で起こしている（このプロセスの間は覚える。毎回 2 本起こさない）。
+   * 知らないフラグで落ちる版の CLI と、設定ファイルの中身でログインしている環境（`--setting-sources ""` で読めなくなる）のため
+   */
+  private fellBack = false
+  lastStats: SummarizeStats | undefined
 
   get where(): string {
     return `claude -p --model ${this.model}`
   }
 
-  constructor(model: string, cwd: string, env: NodeJS.ProcessEnv = process.env) {
+  constructor(model: string, cwd: string, env: NodeJS.ProcessEnv = process.env, opts: ClaudeSummarizerOptions = {}) {
     this.model = model
     this.cwd = cwd
     this.env = env
+    this.legacy = opts.legacy ?? false
+    this.log = opts.log ?? (() => {})
+    this.timeoutMs = opts.timeoutMs ?? DIGEST_TIMEOUT_MS
+    this.bin = opts.bin
   }
 
-  summarize(prompt: string): Promise<string> {
-    const { bin, args } = summarizeCommand(this.model)
+  async summarize(prompt: string): Promise<string> {
+    if (this.legacy || this.fellBack) return this.run(prompt, false)
+    try {
+      return await this.run(prompt, true)
+    } catch (err) {
+      // 時間切れは形のせいではない（前の形はもっと遅い）。それ以外は 1 回だけ前の形で試し、通ったら以後そちらで起こす
+      if (isTimeout(err)) throw err
+      const text = await this.run(prompt, false)
+      this.fellBack = true
+      this.log(`digest: claude の軽い形が通らなかったので、前の形で起こします（${err instanceof Error ? err.message.slice(0, 120) : String(err)}）`)
+      return text
+    }
+  }
+
+  private run(prompt: string, light: boolean): Promise<string> {
+    const { bin, args } = summarizeCommand(this.model, light)
+    this.lastStats = undefined
     return new Promise<string>((resolve, reject) => {
-      const child = spawn(bin, args, {
+      const child = spawn(this.bin ?? bin, args, {
         cwd: this.cwd,
         // フック（record.py）に「記録するな」を伝える。この子が Stop の行として載るのを防ぐ。
         // 万一記録されても、SAI が起動した子なのでサーバのペインは継がせない（childEnv。#234）
-        env: { ...childEnv(this.env), AGENT_FEED_SKIP: '1' },
+        env: { ...childEnv(this.env), AGENT_FEED_SKIP: '1', ...(light ? SUMMARIZE_ENV : {}) },
         stdio: ['pipe', 'pipe', 'pipe'],
       })
       const out: Buffer[] = []
       const err: Buffer[] = []
       const timer = setTimeout(() => {
         child.kill('SIGKILL')
-        reject(new Error(`timeout after ${DIGEST_TIMEOUT_MS}ms`))
-      }, DIGEST_TIMEOUT_MS)
+        reject(new Error(`timeout after ${this.timeoutMs}ms`))
+      }, this.timeoutMs)
       child.stdout.on('data', (b: Buffer) => out.push(b))
       child.stderr.on('data', (b: Buffer) => err.push(b))
+      // 子が先に入力を閉じても落ちない（知らないフラグで即終了する版）
+      child.stdin.on('error', () => {})
       child.once('error', (e) => {
         clearTimeout(timer)
         reject(e)
@@ -199,6 +310,7 @@ export class ClaudeSummarizer implements Summarizer {
           parsed = null
         }
         if (!parsed) return reject(new Error(`exit ${code}: ${(Buffer.concat(err).toString('utf-8') || stdout).trim().slice(0, 200)}`))
+        this.lastStats = summarizeStats(parsed)
         const result = typeof parsed.result === 'string' ? parsed.result.trim() : ''
         if (parsed.is_error || !result) return reject(new Error(`claude: ${result || 'empty result'}`))
         resolve(result)
@@ -915,7 +1027,7 @@ export function summarizerFactory(feedDir: string, env: NodeJS.ProcessEnv = proc
       return new OpenAISummarizer(url, model, { apiKey: env.SAI_DIGEST_API_KEY || undefined, log })
     }
     log(`digest: claude model=${model}`)
-    return new ClaudeSummarizer(model, feedDir, env)
+    return new ClaudeSummarizer(model, feedDir, env, { log })
   }
 }
 

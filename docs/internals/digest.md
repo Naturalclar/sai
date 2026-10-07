@@ -29,6 +29,9 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - セッションごとに切れる（#263）: 同じ resolver が `digest_off` のセッションで `null` を返し、`pump()` がそれを見て一言を作らない。メタの読み出しは非同期なので同期の `scan()` では引けず、「作るか」と「どの口調か」を 1 回の読み出しで決める。
 - 切る前に作ってあるぶんは表示側で落とす（`withLastSummary` と `/api/feed` の `digestOffIds()`）。
 - 一言を作る `claude -p` の子プロセスには `AGENT_FEED_SKIP=1` を渡す。
+- **一言の `claude -p` は、要らないものを外して起こす**（#740。`summarizeCommand()`）: `--tools ""`（道具を渡さない）・`--strict-mcp-config --mcp-config '{"mcpServers":{}}'`（MCP を繋がない。claude.ai のコネクタも）・`--disable-slash-commands`（スキルの一覧を載せない）・`--setting-sources ""`（利用者・プロジェクト・手元の設定ファイルを読まない）。環境には `SUMMARIZE_ENV`（`MAX_THINKING_TOKENS=0` と `CLAUDE_CODE_DISABLE_THINKING=1`）を足して**思考を切る**。**足すのは減らす側だけ**で、権限のフラグは足さない。`--bare` は OAuth を読まないので使わない。
+- 軽い形が通らなかったとき（知らないフラグで落ちる版の CLI・設定ファイルの中身でログインしている環境）は、**時間切れ以外なら**前の形（外すフラグも思考の指定も無し）で 1 回試し、通ったらそのサーバの間は前の形で起こす（`fellBack`。stderr に 1 回知らせる）。
+- `ClaudeSummarizer.lastStats` に、直前の 1 回の時間とトークン（`--output-format json` の `duration_ms` / `duration_api_ms` / `usage` / `total_cost_usd`）を持つ（`summarizeStats()`。本文は持たない）。読むのは `pnpm digest:eval` だけ。
 
 ## 番号のリンク
 
@@ -144,7 +147,10 @@ pnpm -s digest:eval                                  # 今のプロンプトを�
 pnpm -s digest:eval --variants current,bare --runs 3 # 2 つの案を比べる（最初が今の案）
 pnpm -s digest:eval --feed --days 7 -n 50            # ~/.agent-feed の実際の返答を事例にする（読むだけ）
 pnpm -s digest:eval --ask --runs 2                   # 「次に送る文面の案」の作り方を比べる（#729）
+pnpm -s digest:eval --provider claude --model haiku --claude                  # claude の口で回す（費用がかかる）。--claude-legacy で、外さない前の形と比べる（#740）
 ```
+
+- 結果の最後に**口の時間**の表が付く（#740。`report.ts` の `timingOf()` / `timingTable()`）: 口を呼んだ回数と落ちた数、1 回の全体（道具が外から測った時間。平均 / 中央 / 最大）。`claude` の口では、起動まわり（全体 − CLI が測った時間）・CLI の中・API の中、入力 / キャッシュの書き / 読み / 出力のトークン（出力は思考を含む）、費用の合計も出す。出力のトークンが答えの長さと桁違いなら思考が出ている。
 
 - **事例**（`cases.json`）は**作り物だけ**。実際の返答の形（`score.ts` の `SHAPES`: 完了の報告・「マージして」待ち・質問で終わる・失敗・番号が複数・番号なし・英語・長い）を写し、中身は書き直す。番号は `CASE_NUMBER_MIN`（9000）以上だけ。
 - **守ること**（事例の `expect`）は一言の文字だけで見られる形: `keep`（そのまま残る文字）/ `numbers`・`no_numbers`（出る・出ない番号）/ `action`（動作の語。どれか 1 つ）・`no_action`（出てはいけない動作の語）/ `request`（`keep` = 人が次にすることが残る・`none` = 頼みを作らない）。頼みの有無は `digestCheck.ts` の `hasNextAction()` / `asksPerson()` をそのまま呼ぶ。

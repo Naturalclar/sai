@@ -4973,6 +4973,9 @@ export function createApp(
         if (method !== 'POST') return error(res, 405, 'method not allowed')
         if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
         const state = await claudeAuth.check()
+        // ログインできていると分かったら、待っているログインの子は落とす（#577。Mac の端末でログインし直したあとに
+        // 子が残っていると、別の画面からコードを渡して、いまのログインを差し替えられる）
+        if (state?.loggedIn === true) claudeLogin.cancel()
         // 渡すのはログインしているかどうかだけ（メール・組織は持っていない）。分からなければ null
         const payload: ClaudeAuthCheckResponse = { logged_in: state ? state.loggedIn : null }
         return json(res, payload)

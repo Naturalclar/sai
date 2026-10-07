@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { ClaudeLoginRequest, ClaudeLoginResponse } from '../../shared/types.ts'
 import { api } from './api'
 import { LOGIN_LOST_NOTE, loginAcceptsCode, loginActive, loginNote } from './claudeLoginNote.ts'
+import { rememberLoginPanel } from './claudeLoginOpen.ts'
 
 /**
  * SAI から Claude にログインし直す手順（#577）。バナーの「SAI からログインする」で開く。
@@ -90,6 +91,23 @@ export function ClaudeLoginPanel({ resume, onClose, onDone }: { resume: boolean;
         setError(err instanceof Error ? err.message : String(err))
       })
   }
+  // 「もう一度始める」。返るまでの間も「進んでいる」扱いにする（返る前に閉じたら、返ってから「やめる」を送れるように）
+  const restart = () => {
+    rememberLoginPanel(true, Date.now())
+    const mine = ++seq.current
+    setError('')
+    setLost(false)
+    setState({ status: 'starting' })
+    const again = api.claudeLogin({ action: 'start' })
+    opening.current = again.catch(() => {})
+    again
+      .then((s) => mine === seq.current && setState(s))
+      .catch((err: unknown) => {
+        if (mine !== seq.current) return
+        setState({ status: 'idle' })
+        setError(err instanceof Error ? err.message : String(err))
+      })
+  }
   const send = () => {
     const text = code.trim()
     if (!text) return
@@ -145,7 +163,7 @@ export function ClaudeLoginPanel({ resume, onClose, onDone }: { resume: boolean;
       {note && <span className="note">{note}</span>}
       {error && <span className="note err">{error}</span>}
       {started && !loginActive(state) && state.status !== 'done' && (
-        <button type="button" className="linkish" onClick={() => act({ action: 'start' })}>
+        <button type="button" className="linkish" onClick={restart}>
           もう一度始める
         </button>
       )}

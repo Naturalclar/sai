@@ -45,6 +45,8 @@ export const LOGIN_SENT_RECHECK_MS = [5_000, 15_000, 40_000]
 const SHIM_STALE_MS = 60 * 60_000
 /** SIGTERM で終わらない子を SIGKILL するまで（終わらないと、次のログインがずっと始められない） */
 export const LOGIN_KILL_GRACE_MS = 3000
+/** 出力がこれだけ止まったら、末尾に区切りの無い URL も取る */
+export const LOGIN_URL_SETTLE_MS = 700
 /** PATH が空のときに子へ渡す PATH（末尾が空の PATH は、子の作業ディレクトリを PATH に載せてしまう） */
 const FALLBACK_PATH = '/usr/bin:/bin'
 /** ログイン用の URL として出してよいホスト（2.1.292 は `claude.com`。同じ持ち主のドメインだけ） */
@@ -88,10 +90,12 @@ const ESCAPES = /\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)|\u001b\[[0-9;?]*[A-
 /**
  * 子の stdout からログイン用の URL を取る。**https・Anthropic のホスト・戻り先（`redirect_uri`）があって `localhost` でないもの**
  * （携帯で開いてコードを表示する方）だけ。**後ろに区切りが来ているもの**だけを取る（出力の切れ目で途中までの URL を出さない）。
+ * 出力が止まったあと（`settled`）は、末尾の URL も取る（URL を出したきり改行せずに入力を待つ版）。
  * 見つからなければ空
  */
-export function loginUrl(out: string): string {
-  const plain = out.replace(ESCAPES, ' ')
+export function loginUrl(out: string, settled = false): string {
+  // `settled` = 出力が止まった（もう続きは来ない）。末尾の URL も区切りが来たものとして取る
+  const plain = `${out.replace(ESCAPES, ' ')}${settled ? ' ' : ''}`
   for (const m of plain.matchAll(/https:\/\/[^\s"'<>]+(?=[\s"'<>])/g)) {
     let url: URL
     try {
@@ -160,6 +164,8 @@ interface Running {
   urlTimer: ReturnType<typeof setTimeout>
   /** コードを渡したあとの聞き直しの予定 */
   sentTimers: ReturnType<typeof setTimeout>[]
+  /** 出力が止まるのを待つ（末尾の URL を取る） */
+  settleTimer?: ReturnType<typeof setTimeout>
 }
 
 /**
@@ -294,11 +300,16 @@ export class ClaudeLogin implements ClaudeLoginRunner {
     this.stopped = true
     this.generation++
     const runs = [...this.dying, ...(this.running ? [this.running] : [])]
+    // 止めたあとも応答する間（終わるのを待っている）に、「確かめています」のまま残さない
+    this.running = null
+    this.settling = null
+    this.current = { status: 'idle' }
     for (const run of runs) {
       if (!run.dropped) run.endedBy = 'shutdown'
       run.dropped = true
       clearTimeout(run.timer)
       clearTimeout(run.urlTimer)
+      clearTimeout(run.settleTimer)
       for (const timer of run.sentTimers.splice(0)) clearTimeout(timer)
       signalGroup(run.child, 'SIGKILL')
       try {
@@ -319,6 +330,7 @@ export class ClaudeLogin implements ClaudeLoginRunner {
     run.endedBy = by
     clearTimeout(run.timer)
     clearTimeout(run.urlTimer)
+    clearTimeout(run.settleTimer)
     for (const timer of run.sentTimers.splice(0)) clearTimeout(timer)
     if (this.running === run) this.running = null
     this.dying.add(run)
@@ -423,6 +435,15 @@ export class ClaudeLogin implements ClaudeLoginRunner {
       if (this.current.status === 'starting') {
         const url = loginUrl(run.out)
         if (url) this.current = { status: 'waiting', url }
+        else {
+          // 続きが来なければ、末尾の URL を取る
+          clearTimeout(run.settleTimer)
+          run.settleTimer = setTimeout(() => {
+            if (this.running !== run || this.current.status !== 'starting') return
+            const last = loginUrl(run.out, true)
+            if (last) this.current = { status: 'waiting', url: last }
+          }, LOGIN_URL_SETTLE_MS)
+        }
       } else if (this.current.status === 'sent' && INVALID_CODE.test(run.out.slice(run.mark))) {
         run.invalid++
         run.mark = run.out.length
@@ -441,6 +462,7 @@ export class ClaudeLogin implements ClaudeLoginRunner {
       ended = true
       clearTimeout(run.timer)
       clearTimeout(run.urlTimer)
+      clearTimeout(run.settleTimer)
       for (const timer of run.sentTimers.splice(0)) clearTimeout(timer)
       // 子が終わった瞬間に、グループに残った孫（`claude` が包みのスクリプトのときの本体）を落とす。
       // あとからは送らない（終わった子の番号が使い回されるかもしれない）

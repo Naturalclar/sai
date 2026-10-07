@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ClaudeLoginResponse } from '../shared/types.ts'
 import { createApp } from './app.ts'
+import type { ClaudeAuthReader } from './local/claudeAuth.ts'
 import { ClaudeLogin, LOGIN_CODE_MAX, LOGIN_LOG_FILE, NoClaudeLogin, loginCode, loginUrl } from './local/claudeLogin.ts'
 import type { ClaudeLoginRunner } from './local/claudeLogin.ts'
 import { FeedStore } from './rows/store.ts'
@@ -34,6 +35,8 @@ echo "$PATH" > "$FAKE_DIR/path"
 case "$(command -v open)" in "$FAKE_DIR"/shim/p-*/open) open "${URL_OPENED}"; echo $? > "$FAKE_DIR/open-exit" ;; esac
 # late: SIGTERM を無視し、少し待ってから自分の pid 入りの URL を出す（落とされたあとに URL を出す子）
 if [ "$FAKE_MODE" = late ]; then sleep 0.6; echo "visit: ${URL_SHOWN}&n=$$ "; fi
+# bare: URL を出したきり改行しない
+if [ "$FAKE_MODE" = bare ]; then printf 'visit: %s' "${URL_SHOWN}"; exec sleep 30; fi
 [ "$FAKE_MODE" = notice ] && echo "A new version is available: https://updates.example/claude/latest "
 printf 'Opening browser to sign in…\\nIf the browser did not open, visit: \\033]8;;%s\\007%s\\033]8;;\\007\\nPaste code here if prompted > ' "${URL_SHOWN}" "${URL_SHOWN}"
 while IFS= read -r line; do
@@ -128,13 +131,16 @@ test('loginUrl: 端末のリンクの印を外して https の URL を取る。�
   assert.equal(loginUrl(`see https://updates.example/latest \nvisit: ${URL_SHOWN}\n`), URL_SHOWN)
   assert.equal(loginUrl('visit: https://claude.com.evil.example/authorize?x=1\n'), '')
   assert.equal(loginUrl('visit: https://evilclaude.com/authorize?x=1\n'), '')
-  const console_ = 'https://console.anthropic.com/oauth/authorize?redirect_uri=https%3A%2F%2Fconsole.anthropic.com%2Foauth%2Fcode%2Fcallback'
-  assert.equal(loginUrl(`visit: ${console_}\n`), console_)
+  const consoleUrl = 'https://console.anthropic.com/oauth/authorize?redirect_uri=https%3A%2F%2Fconsole.anthropic.com%2Foauth%2Fcode%2Fcallback'
+  assert.equal(loginUrl(`visit: ${consoleUrl}\n`), consoleUrl)
   // 認可の URL だけ（戻り先の無い案内のリンクを、ログインのリンクにしない）
   assert.equal(loginUrl(`Docs: https://docs.claude.com/en/setup \nvisit: ${URL_SHOWN}\n`), URL_SHOWN)
   assert.equal(loginUrl('Docs: https://docs.claude.com/en/setup \n'), '')
   // 出力の切れ目で途中までの URL を出さない（後ろに区切りが来てから取る）
   assert.equal(loginUrl(`visit: ${URL_SHOWN.slice(0, 60)}`), '')
+  // 出力が止まったあとは、末尾の URL も取る（URL を出したきり改行せずに入力を待つ版）
+  assert.equal(loginUrl(`visit: ${URL_SHOWN}`), '')
+  assert.equal(loginUrl(`visit: ${URL_SHOWN}`, true), URL_SHOWN)
 })
 
 test('loginCode: 1 行のコードだけ。改行・制御文字・長すぎ・文字列でないものは渡さない', () => {
@@ -293,6 +299,14 @@ test('ClaudeLogin: 子が先に別の URL を出しても、それをログイ�
   f.login.cancel()
 })
 
+test('ClaudeLogin: 末尾に区切りの無い URL も、出力が止まれば取る', async () => {
+  const f = await fixture('bare', { mode: 'bare' })
+  f.login.start()
+  await until(() => f.login.state().status === 'waiting')
+  assert.equal(f.login.state().url, URL_SHOWN)
+  f.login.cancel()
+})
+
 test('ClaudeLogin: 起こしている途中にやめたら子を起こさない。SIGTERM で終わらない子は SIGKILL する', async () => {
   const quick = await fixture('quick')
   quick.login.start()
@@ -398,6 +412,7 @@ test('ClaudeLogin: サーバが終わるときは待たずに SIGKILL し、置�
     void f.alive().then((a) => (left = a))
     return left.length === 0
   }, 2000)
+  assert.deepEqual(f.login.state(), { status: 'idle' }, '止めたあとに「確かめています」のまま残さない')
   // 止めたあとに届いた start は起こさない（落とす者の居ない子を残さない）
   assert.deepEqual(f.login.start(), { status: 'failed', note: 'unavailable' })
   await new Promise((r) => setTimeout(r, 300))
@@ -452,11 +467,12 @@ class FakeLogin implements ClaudeLoginRunner {
   }
 }
 
-async function serve(_auth: undefined, login: ClaudeLoginRunner | undefined) {
+async function serve(auth: ClaudeAuthReader | undefined, login: ClaudeLoginRunner | undefined) {
   const feedDir = await mkdtemp(join(dir, 'feed-'))
   const app = createApp(new FeedStore(feedDir), join(dir, 'dist'), undefined, undefined, undefined, undefined, undefined, {
     tmux: { run: async () => '' },
     ps: async () => '',
+    ...(auth ? { claudeAuth: auth } : {}),
     ...(login ? { claudeLogin: login } : {}),
   })
   const server = createServer((req, res) => void app(req, res))
@@ -470,7 +486,8 @@ async function serve(_auth: undefined, login: ClaudeLoginRunner | undefined) {
 
 test('/api/claude-auth/login: 同一オリジンだけ。始める・コードを渡す・やめるを手順に取り次ぎ、サーバが終わるとき子を残さない', async () => {
   const login = new FakeLogin()
-  const { base, post, app } = await serve(undefined, login)
+  const auth = { answer: undefined as { loggedIn: boolean; method: string } | undefined, check: async () => auth.answer, peek: () => auth.answer }
+  const { base, post, app } = await serve(auth, login)
 
   assert.equal((await post({ action: 'start' }, 'http://evil.example')).status, 403)
   assert.equal((await fetch(`${base}/api/claude-auth/login`, { headers: { Origin: 'http://evil.example' } })).status, 403, '状態（URL が載る）も同一オリジンだけ')
@@ -490,6 +507,17 @@ test('/api/claude-auth/login: 同一オリジンだけ。始める・コード�
   assert.equal((await post({ action: 'code', code: 'again' })).status, 409, 'コードを待っていなければ断る')
   assert.deepEqual(await (await post({ action: 'cancel' })).json(), { status: 'idle' })
   assert.deepEqual(login.calls, ['start', 'code:abc#def', 'code:again', 'cancel'])
+
+  // 「確かめ直す」でログインできていると分かったら、待っているログインの子を落とす（いまのログインを差し替えさせない）
+  login.calls = []
+  await post({ action: 'start' })
+  const check = () => fetch(`${base}/api/claude-auth/check`, { method: 'POST', headers: { Origin: base, 'Content-Type': 'application/json' }, body: '{}' })
+  auth.answer = { loggedIn: false, method: 'none' }
+  await check()
+  assert.deepEqual(login.calls, ['start'], '切れたままなら落とさない')
+  auth.answer = { loggedIn: true, method: 'claude.ai' }
+  await check()
+  assert.deepEqual(login.calls, ['start', 'cancel'])
 
   app.dispose()
   assert.equal(login.stopped, 1, 'サーバが終わるとき子を残さない')

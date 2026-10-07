@@ -22,7 +22,8 @@ import { fileURLToPath } from 'node:url'
 import { AGENT_REQUEST_MAX, AGENT_SEND_MAX, HELD_NOTE, SEND_COMPACT_ARG, SEND_COMPACT_NOTE, SEND_ITEMS_ARG, SEND_TO_ARG, sendHow, tokensLabel } from '../../shared/agentMessages.ts'
 import { holdingLabel } from '../../shared/holding.ts'
 import { LOOP_MAX_INTERVAL_S, LOOP_MIN_INTERVAL_S, LOOP_TOOL } from '../../shared/loops.ts'
-import type { LoopNextResponse } from '../../shared/types.ts'
+import { WAIT_FOR_TOOL, WAIT_MAX_MS, WAIT_MAX_PER_SESSION, waitResultText } from '../../shared/waits.ts'
+import type { LoopNextResponse, WaitForResponse } from '../../shared/types.ts'
 import type { AgentSendManyResponse, AgentSendResponse, AgentSessionEntry, AgentSessionsResponse, AgentWaitResponse, ApprovalAnswer, ApprovalRequest } from '../../shared/types.ts'
 
 export const TOOL_NAME = 'approve'
@@ -72,6 +73,19 @@ export const AGENT_TOOLS = [
     name: 'sai_wait',
     description: 'sai_send で送ったメッセージへの返答（相手のそのターンの最後の発言）を、相手のターンが終わるまで待って受け取る。**その場で答えが要る短い質問のときだけ**使う（着手のような長い依頼は待たずにターンを終える。返答は次のターンの頭に届く）。ここで受け取った返答は次のターンの頭には重ねない。長い返答は途中で切られる',
     inputSchema: { type: 'object', properties: { message_id: { type: 'string', description: 'sai_send が返した message_id' } }, required: ['message_id'] },
+  },
+  {
+    name: WAIT_FOR_TOOL,
+    description:
+      `「PR の CI が終わったら起こして」を SAI に預ける（#732）。**PR を出した・push したあと、CI の結果を見てから報告したいときに、ターンの終わりで 1 回呼ぶ**。呼んだら待たずにターンを終える（gh pr checks --watch や sleep で待たない。待っている間は SAI が gh で確かめ、あなたのターンは回らない）。CI が終わると（通っても落ちても）SAI がこのセッションを 1 回だけ起こし、結果の要点（通った・落ちたチェックの名前）を渡す。**起きたターンでやってよいのは、結果を確かめて報告するまで**（マージはしない。別のセッションへ送る・次の待ちを預けることもできない）。もうマージ・クローズされていれば預からずにそう返す（「通った」「落ちた」は 1 回では信じないので、預かって確かめてから起こす。全部のチェックが終わってから 1 回）。待てるのはこのセッションのリポジトリの PR だけで、同時に ${WAIT_MAX_PER_SESSION} 件まで、1 件は ${Math.round(WAIT_MAX_MS / 60_000)} 分まで。枠が少ないときは起こされず、人の画面に出る`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pr: { type: 'number', description: 'PR の番号（このセッションのリポジトリのもの）' },
+        then: { type: 'string', description: '起きたときにやることを 1 文で（例: 結果を読んで、落ちていれば原因を報告する）' },
+      },
+      required: ['pr', 'then'],
+    },
   },
 ]
 
@@ -207,6 +221,16 @@ export async function agentTool(
         if (body.status === 'failed') return textResult(`相手のターンが失敗しました: ${body.error ?? ''}`, true)
         return textResult(body.text ?? '')
       }
+    }
+    if (name === WAIT_FOR_TOOL) {
+      const res = await agentFetch(base, file, '/api/agent/wait-for', { method: 'POST', body: JSON.stringify({ from, pr: args.pr, then: args.then }) })
+      if (!res.ok) return textResult(`預かれませんでした: ${await errorOf(res)}`, true)
+      const body = (await res.json()) as WaitForResponse
+      if (body.result) {
+        const failing = body.failing && body.failing.length > 0 ? `（落ちたチェック: ${body.failing.join(' / ')}）` : ''
+        return textResult(`預かっていません。もう終わっています: ${waitResultText(body.result)}${failing}。このターンで結果を確かめて報告してください`)
+      }
+      return textResult(`預かりました。PR #${body.wait?.pr} の CI が終わったら（通っても落ちても）1 回だけ起こします。${body.wait?.deadline ?? ''} までに終わらなければ起こさず、人の画面に出します。待たずにこのターンを終えてください（あと ${body.left} 件預けられます）`)
     }
     if (name === LOOP_TOOL) {
       const action = typeof args.action === 'string' ? args.action : ''

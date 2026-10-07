@@ -22,6 +22,7 @@ import { isRemoteHost } from '../../shared/host.ts'
 import { QueuedBubble } from './QueuedBubble'
 import { AgentActivityBar } from './AgentActivityBar'
 import { LoopBar } from './LoopBar'
+import { WaitBar } from './WaitBar'
 import { LoopForm } from './LoopForm'
 import { loopLive } from '../../shared/loops.ts'
 import { withAgentReplies } from './agentReplies'
@@ -435,6 +436,10 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
               {/* このセッションから別のセッションへのメッセージ（#311）。送ったことがあるか止めているときだけ */}
               {data.agent && <AgentActivityBar id={id} activity={data.agent} now={now} />}
               {loop && <LoopBar key={`loop:${id}`} id={id} loop={loop} now={now} />}
+              {/* 預けた待ち（#732）。古いサーバ（waits を返さない）では出さない */}
+              {(data?.waits?.[id] ?? []).map((w) => (
+                <WaitBar key={`wait:${w.id}`} id={id} wait={w} now={now} />
+              ))}
               {data.background && <BackgroundAttachBar background={data.background} />}
             </>
           }

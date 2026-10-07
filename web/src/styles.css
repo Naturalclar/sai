@@ -1145,6 +1145,7 @@
   .loop-bar.paused, .loop-bar.stopped, .loop-bar.gave_up { border-color: color-mix(in srgb, var(--claude) 45%, var(--line)); }
   .loop-bar.done { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
   .loop-bar .actions { margin-left: auto; display: flex; gap: 6px; }
+  .wait-bar.ready, .wait-bar.expired, .wait-bar.halted { border-color: color-mix(in srgb, var(--claude) 45%, var(--line)); }
   .loop-bar .head .actions button { margin-left: 0; }
   .loop-fields { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 10px; margin: 6px 0 0; }
   .loop-fields dt { color: var(--muted); }

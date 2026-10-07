@@ -5,6 +5,7 @@
 import { parseUnifiedDiff } from './diff.ts'
 import { normalizeRemote, projectFromRemote, remoteHost } from './project.ts'
 import type { DiffFileStat, PrCheckState, PrRepo, PrSummary } from './types.ts'
+import type { PrCi } from './waits.ts'
 
 /** `owner/repo` の形か。`gh --repo` に渡すので、フラグに化けるもの（先頭の `-`）や空白・`..` は通さない */
 export function isRepoName(repo: string): boolean {
@@ -46,6 +47,37 @@ export function knownRepos(sessions: readonly { remote?: string }[]): string[] {
 export function pickKnownRepo(known: readonly string[], repo: string): string {
   const want = repo.toLowerCase()
   return known.find((r) => r.toLowerCase() === want) ?? ''
+}
+
+/** 落ちたチェックの名前（#732。待ちが終わったときに渡す要点）。重複は 1 つにして、出てきた順 */
+export function failingChecks(rollup: unknown): string[] {
+  if (!Array.isArray(rollup)) return []
+  const names: string[] = []
+  for (const c of rollup) {
+    if (!c || typeof c !== 'object') continue
+    const o = c as Record<string, unknown>
+    if (checkState([o]) !== 'failure') continue
+    const name = [o.name, o.context].find((v): v is string => typeof v === 'string' && v.trim() !== '')?.trim() ?? '（名前なし）'
+    if (!names.includes(name)) names.push(name)
+  }
+  return names
+}
+
+/** `gh pr view --json state,statusCheckRollup` の出力（#732）。読めなければ null */
+export function parsePrCi(stdout: string): PrCi | null {
+  let obj: unknown
+  try {
+    obj = JSON.parse(stdout)
+  } catch {
+    return null
+  }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null
+  const o = obj as Record<string, unknown>
+  if (typeof o.state !== 'string' || !o.state) return null
+  const rollup = Array.isArray(o.statusCheckRollup) ? o.statusCheckRollup : []
+  // 1 つずつ見て、終わっていないものがあるか（`checkState()` は 1 つ落ちていれば、残りが走っていても failure を返す）
+  const pending = rollup.some((c) => checkState([c]) === 'pending')
+  return { state: o.state, checks: checkState(rollup), failing: failingChecks(rollup), pending }
 }
 
 /** GitHub のチェックの状態を 1 つにまとめる。どれか落ちていれば failure、終わっていないものがあれば pending */

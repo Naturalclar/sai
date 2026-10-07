@@ -393,6 +393,11 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
                           ループが送りました
                         </div>
                       ) : null}
+                      {u.wait ? (
+                        <div className="handed-note" title="預けてあった待ち（PR の CI）が終わったので、SAI がこのセッションを起こした入力（人が打った文ではない）">
+                          待ちが終わって SAI が送りました
+                        </div>
+                      ) : null}
                       <Message
                         {...(diff ? { diff } : {})}
                         ts={u.row.ts}

@@ -312,6 +312,26 @@ SAI が起こした Claude のターンは、使ったトークンと費用も�
 - `replyBlockedReason()` は第 2 引数（サーバの host）を省略できない（呼び出し側の漏れは `pnpm typecheck` で止まる）。
 - 印は `web/src/HostTag.tsx` の `@<host>` で、一覧・チャット見出し・フィードのバブル（`Chat` の `showChannel` のときだけ）に出る。絞り込みは `Facets.hosts` が 2 件以上のときだけ出す。
 
+## 待ち（#732）
+
+「PR の CI が終わったら、そのセッションを 1 回起こす」。形はループに寄せてある（置き場・時計・タイマー・断る線）。
+
+- **決まりごとは `shared/waits.ts`**（純粋関数。`waits.test.ts`）: 引数の検査 `waitFromRequest()`、数の上限 `waitLimitRefusal()` / `wakesExhausted()`、終わったかの判定 `waitOutcome()`、起こすときの本文 `waitPrompt()`（頭は `WAIT_MARK`＝`【SAI 待ち】`）、画面に出す形 `waitView()` と 1 行 `waitStatusLine()`。
+- **上限は仮の値で、変えるなら `shared/waits.ts` の定数**: `WAIT_MAX_PER_SESSION`（2）・`WAIT_MAX_MS`（2 時間）・`WAIT_WAKES_PER_DAY`（6）・`WAIT_POLL_MS`（60 秒）・`WAIT_EMPTY_GRACE_MS`（3 分。PR を出した直後の「チェックなし」を「まだ載っていない」と読む間）。
+- **置き場は `server/reply/waits.ts` の `WaitStore`**（`<feed dir>/waits.json`。tmp → rename、0600）。エンティティごとの `WaitState[]` と、自動で起こした時刻。読み込むときに `waking` のまま残っていたものを `halted` にする（送り直さない）。終わったまま片付けられなかった待ち（`WAIT_KEEP_MS` = 7 日）と 1 日より前の起こした時刻は、読み込むときに落とす。
+- **確かめるのは `server/git/prs.ts` の `PrBrowser.ci()`**: `gh pr view <n> --repo <repo> --json state,statusCheckRollup` の 1 本だけ（`shared/prs.ts` の `parsePrCi()` / `failingChecks()`）。リポジトリは `githubRepoOf(session.remote)`（セッションの行のもの。リクエストからは受けない）。
+- **進めるのは `app.ts` の `tickWaits()` → `tickWait()`**。呼ぶのは `drainAll()`（画面のポーリングのついで。**タイマーが立っているときは待たずに投げるだけ**＝`gh` の往復でポーリングの応答を止めない）と、見に行く相手がいる間だけ立てるタイマー（`WAIT_TICK_MS` = 5 秒。時計と間隔は `TerminalDeps.loopNow` / `loopTickMs` をループと共用）。`gh` を叩くのは待ちごとの `next_check_at` が来たときだけ。
+  - `waiting`: 読めなければ理由を付けて次へ。終わっていれば `ready` にして起こしに行く。**`success` / `failure` は `seen_once` に書いて、次に確かめたときも同じなら終わり**（`waitConfirmed()`。1 回では信じない。変われば数え直す）。`waitOutcome()` は、走っているチェックがある（`PrCi.pending`）うちは `failure` でも「まだ」を返す。終わりの時刻を過ぎていたら、最後に 1 回読んでから `expired`（そのときの結果はそのまま信じる）。画面に出る形が変わらない書き込み（次に確かめる時刻など）は `WaitStore.set()` が rev を進めない。
+  - `ready`: `wakeWait()`。処理中・預かり・前の返信の失敗 → `loopRefusal(session, 'wait')` → `usageRefusal()` → 1 日の回数、の順に見て、どれかに当たれば `reason` を付けて残す（当たった待ちは `WAIT_RETRY_MS` = 10 秒、枠・回数・断りのように長く続く理由は 60 秒は見に行かない。同じ種類の理由のあいだは置き場を書き直さない＝使用量の割合が動くたびに rev を進めない）。途中の読み取りが例外になっても理由を付けて残す。人の「いま起こす」（`forced`）が越えるのは使用量と回数だけで、起こせなかったときは待ちを元のまま残し、理由は押した人に返すだけ。`ready` のまま `WAIT_READY_MAX_MS`（6 時間）経ったら `halted`。
+  - **起こす前に `waking` を書き**、`launch()` に `forceProcess: true`・`queue: false` で渡す。`canCompact()` が真なら `compact: true`（本文は預かりの先頭に置かれ、要約のあとに `drain()` が回す）。起こせたら待ちを消す（要約を挟むときは、要約のターンが始まった時点で消える。本文は預かりにあり、要約が失敗すれば預かりが止まる）。`launch()` が `409`（上で見たあとに人が返信した）なら `ready` のまま少し置いてもう一度、例外・それ以外は `halted`。`claude --bg` を待つ `retry` は `WAIT_BG_RETRY_MS`（30 秒）置く。
+- **エージェントの口**: `approve-mcp.ts` の `AGENT_TOOLS` の `sai_wait_for` → `POST /api/agent/wait-for`（`agentWaitFor()`）。送り元は `agentFrom()`（SAI が起こしていま回しているターン）。預かる前に 1 回 `ci()` を読み、読めなければ断り、マージ済み・クローズなら預からずに結果を返す（`success` / `failure` はその場では信じず、`seen_once` を付けて預かる）。
+- **待ちで起きたターンは、いま回しているターンの本文が `WAIT_MARK` で始まるかで見分ける**（`splitHandedReplies()` を外してから `isWaitPrompt()`。要約を挟んでも、本文のターンはこの頭のまま）。そのターンからの `sai_wait_for` は `409`、`sai_send` は `429`。別のセッションから受け取ったメッセージで回っているターンは、預けること自体はできる（起きたターンが先へ送れないので、伝言は続かない）。
+- **人の口**: `POST /api/sessions/<id>/wait/stop` / `/wait/wake`（`waitAction()`。同一オリジンのみ。body の `wait` で名指し）。
+- **応答**: 一覧と詳細の `waits`（`WaitMap`）。`waits.key()` を rev に混ぜる。処理中の本文（`replying[].text`）は `waitPromptLabel()` で「待ちが終わった: PR #N」にする（`chatGroups.ts` の `promptArrived()` も同じ形で比べる）。`isHandedOnly()` が待ちの本文も真にするので、題名・「最後の入力」・↑ の履歴に使わない。
+- **画面**: `WaitBar`（チャットの末尾。待ち 1 件に 1 つ）。起きたターンの自分のバブルは本文のまま出し、`Utterance.wait` で「待ちが終わって SAI が送りました」の印を付ける（`chatGroups.ts` の `mineOf()`）。
+- 「送信を止める」（#311）で止めているセッションは、待ちも預かれない（もう預かっている待ちは消さない。止めるのは待ちの帯）。#727 の預かり（`agent-messages.json`）とは置き場を分けてある: あちらは相手に送る文で、止めると全部捨てる。待ちは 1 件ずつ止める。
+- テストは `server/waits.test.ts`（偽の Runner・偽の `PrBrowser`・進められる時計の `createApp`）・`shared/waits.test.ts`・`server/prs.test.ts`（`gh` の形）・`server/approvals/agentTools.test.ts`。
+
 ## ループ（#634）
 
 - **決まりごとは `shared/loops.ts`**（純粋関数）: 組むときの検査 `loopFromRequest()`、周の頭の文 `loopPrompt()`（頭は `LOOP_MARK`＝`【SAI ループ】`）、周が終わったあとの状態 `loopAfterRound()`、止める `loopHalt()`、画面に出す形 `loopView()` と 1 行 `loopStatusLine()`。数字は `LOOP_*`（既定 10 周・2 時間・10 分、間隔 60〜3600 秒、`LOOP_STALL_ROUNDS` = 3）。

@@ -15,7 +15,8 @@
 // - `SAI_GH=0` で丸ごと切れる（NoPrs）。実行ファイルはサーバの PATH の `gh`（#288）
 // - チェックアウトも fetch もしない（`RealGit` の「読むだけ」の外に出ない）
 import { spawn } from 'node:child_process'
-import { isPrNumber, isRepoName, parsePrList, parseRequested, prFromGh, sortPrs } from '../../shared/prs.ts'
+import { isPrNumber, isRepoName, parsePrCi, parsePrList, parseRequested, prFromGh, sortPrs } from '../../shared/prs.ts'
+import type { PrCi } from '../../shared/waits.ts'
 import type { GithubReview } from '../../shared/prReview.ts'
 import { githubErrorText } from '../../shared/prReview.ts'
 import { parsePrComments } from '../../shared/prComments.ts'
@@ -40,6 +41,8 @@ export const REVIEW_POST_TIMEOUT_MS = 30_000
 
 const LIST_FIELDS = 'number,title,author,headRefName,baseRefName,isDraft,updatedAt,url,additions,deletions,changedFiles,reviewDecision,statusCheckRollup,isCrossRepository'
 const VIEW_FIELDS = `${LIST_FIELDS},body,state,headRefOid`
+/** CI が終わったかを確かめるときに読む分だけ（#732。差分も本文も引かない） */
+const CI_FIELDS = 'state,statusCheckRollup'
 /** 会話のコメントとレビュー（#600）。**中身の `gh pr view` とは別に引く**（コメントが大きすぎて上限を超えても、本文と差分は落とさない） */
 const COMMENT_FIELDS = 'comments,reviews'
 /** コメントの出力をどこまで受けるか。超えたら「読めませんでした」 */
@@ -70,6 +73,11 @@ export interface PrBrowser {
   lineComments(repo: string, number: number): Promise<PrLineCommentList | null>
   /** `gh` でログインしている人（#526。投稿の口を出すか・自分の PR か）。未ログイン・引けなければ null */
   viewer(): Promise<string | null>
+  /**
+   * PR の CI の状態（#732。待ちを確かめる）。`gh pr view <n> --repo <repo> --json state,statusCheckRollup` の 1 本だけ。
+   * 読めなければ null（「まだ終わっていない」と分ける）。持たない実装（テストの偽物）は「読めない」と同じ
+   */
+  ci?(repo: string, number: number): Promise<PrCi | null>
   /** レビューを投稿する（#526）。投稿できたらそのレビューの URL、できなければ理由 */
   postReview(repo: string, number: number, review: GithubReview): Promise<{ ok: true; url: string } | { ok: false; error: string }>
 }
@@ -262,6 +270,12 @@ export class GhPrs implements PrBrowser {
     if (!prs) return null
     const requested = requestedOut === null ? new Set<number>() : parseRequested(requestedOut)
     return sortPrs(prs.map((p) => ({ ...p, requested: requested.has(p.number) })))
+  }
+
+  async ci(repo: string, number: number): Promise<PrCi | null> {
+    if (!isRepoName(repo) || !isPrNumber(String(number))) return null
+    const out = await this.run(['pr', 'view', String(number), '--repo', repo, '--json', CI_FIELDS], 1024 * 1024)
+    return out === null ? null : parsePrCi(out)
   }
 
   async comments(repo: string, number: number): Promise<PrCommentList | null> {

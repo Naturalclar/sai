@@ -19,6 +19,7 @@ let tokenFile: string
 const seen: { method: string; url: string; token: string; body: string }[] = []
 /** /api/agent/loop が返すもの（#634） */
 let loopReply: { status: number; body: unknown } = { status: 200, body: {} }
+let waitForReply: { status: number; body: unknown } = { status: 200, body: {} }
 /** /api/agent/send が次に返すもの（無ければいつもの 1 件ぶん）。1 回使ったら戻る */
 let sendReply: { status: number; body: unknown } | null = null
 /** /api/agent/wait が順に返すもの */
@@ -53,6 +54,7 @@ before(async () => {
         }
         return reply(202, { message_id: 'm1', to: 'B1@r', to_name: 'レビュー', via: 'queued', sent: 1, limit: 3, context_tokens: 900_000, read_tokens: 900_000, read_budget: 3_000_000 })
       }
+      if (req.url === '/api/agent/wait-for') return reply(waitForReply.status, waitForReply.body)
       if (req.url?.startsWith('/api/agent/wait')) {
         const next = waits.shift() ?? { status: 404, body: { error: 'そのメッセージは見つかりません' } }
         return reply(next.status, next.body)
@@ -167,9 +169,9 @@ test('approve-mcp.ts: トークンの置き場を渡されたときだけ sai_* 
   const without = await names({ SAI_URL: base, SAI_ENTITY: 'A1@r' })
   assert.deepEqual(without.tools, ['approve'], 'トークンの置き場が無ければ、叩いても断られるツールを見せない')
   const withToken = await names({ SAI_URL: base, SAI_ENTITY: 'A1@r', SAI_TOKEN_FILE: tokenFile })
-  assert.deepEqual(withToken.tools, ['approve', 'sai_sessions', 'sai_send', 'sai_wait'], 'ループの周でないターンには sai_loop_next を見せない（#634）')
+  assert.deepEqual(withToken.tools, ['approve', 'sai_sessions', 'sai_send', 'sai_wait', 'sai_wait_for'], 'ループの周でないターンには sai_loop_next を見せない（#634）')
   const inLoop = await names({ SAI_URL: base, SAI_ENTITY: 'A1@r', SAI_TOKEN_FILE: tokenFile, SAI_LOOP: '1' })
-  assert.deepEqual(inLoop.tools, ['approve', 'sai_sessions', 'sai_send', 'sai_wait', 'sai_loop_next'])
+  assert.deepEqual(inLoop.tools, ['approve', 'sai_sessions', 'sai_send', 'sai_wait', 'sai_wait_for', 'sai_loop_next'])
   const text = ((withToken.call!.result as { content: { text: string }[] }).content[0]!.text)
   assert.match(text, /B1@r「レビュー」/)
 })
@@ -232,6 +234,7 @@ test('AGENT_TOOLS: 説明を書き直しても、ツールの名前と引数は�
       // to / text は必須にしない（#727。items で渡す形がある。どちらも無ければツールが言葉で断る）
       ['sai_send', ['to', 'text', 'wake', 'compact', 'items'], []],
       ['sai_wait', ['message_id'], ['message_id']],
+      ['sai_wait_for', ['pr', 'then'], ['pr', 'then']],
     ],
   )
   const send = AGENT_TOOLS.find((t) => t.name === 'sai_send')!.description
@@ -259,3 +262,27 @@ test('sai_loop_next: 送り元・action・秒・申し送りを送り、次に�
   assert.equal(refused.isError, true)
   assert.match(refused.content[0]!.text, /ループの周ではありません/)
 })
+
+test('sai_wait_for: 送り元・PR の番号・起きたときにやることだけを送る。預かった・もう終わっている・断られたを言葉で返す（#732）', async () => {
+  const tool = AGENT_TOOLS.find((t) => t.name === 'sai_wait_for')!
+  assert.deepEqual([Object.keys(tool.inputSchema.properties), tool.inputSchema.required], [['pr', 'then'], ['pr', 'then']], '長さ・間隔・回数・リポジトリは引数に無い')
+  seen.length = 0
+  waitForReply = { status: 200, body: { wait: { id: 'w1', repo: 'o/r', pr: 12, then: '報告する', status: 'waiting', since: '2026-10-07T00:00:00.000Z', deadline: '2026-10-07T02:00:00.000Z' }, left: 1 } }
+  const held = await agentTool('sai_wait_for', { pr: 12, then: '報告する', repo: 'evil/other', max_minutes: 999 }, base, 'A1@r', tokenFile)
+  assert.equal(held.isError, undefined)
+  assert.match(held.content[0]!.text, /預かりました。PR #12 の CI が終わったら（通っても落ちても）1 回だけ起こします/)
+  assert.match(held.content[0]!.text, /待たずにこのターンを終えてください（あと 1 件預けられます）/)
+  const sent = seen.at(-1)!
+  assert.deepEqual([sent.method, sent.url, sent.token !== ''], ['POST', '/api/agent/wait-for', true])
+  assert.deepEqual(JSON.parse(sent.body), { from: 'A1@r', pr: 12, then: '報告する' }, '余計な引数は送らない')
+
+  waitForReply = { status: 200, body: { result: 'failure', failing: ['node (test)'], left: 2 } }
+  const done = await agentTool('sai_wait_for', { pr: 12, then: '報告する' }, base, 'A1@r', tokenFile)
+  assert.match(done.content[0]!.text, /預かっていません。もう終わっています: CI が落ちました（落ちたチェック: node \(test\)）/)
+
+  waitForReply = { status: 429, body: { error: '同時に待てるのは 2 件までです（いま 2 件）' } }
+  const refused = await agentTool('sai_wait_for', { pr: 13, then: '報告する' }, base, 'A1@r', tokenFile)
+  assert.equal(refused.isError, true)
+  assert.match(refused.content[0]!.text, /預かれませんでした: 同時に待てるのは 2 件まで/)
+})
+

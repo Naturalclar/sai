@@ -3,6 +3,7 @@
 import { isCompactSummaryText } from './compactSummary.ts'
 import { entityId } from './entity.ts'
 import { isLoopPrompt } from './loops.ts'
+import { isWaitPrompt } from './waits.ts'
 import { replyBlockedReason } from './reply.ts'
 import { promptTracker } from './turnPrompts.ts'
 import type { Agent, AgentSessionEntry, FeedRow, SessionSummary, UsageResponse, UsageWindow } from './types.ts'
@@ -396,7 +397,8 @@ export const WAKE_NOTE = '（「返答が来たら起こす」で送ったメッ
 export function isHandedOnly(text: string): boolean {
   const t = text.trim()
   // ループの周として SAI が送った本文（#634）も、人が打った文ではない
-  return t === STEERED_NOTE || t === WAKE_NOTE || isLoopPrompt(t)
+  // 待ちが終わって SAI が起こしたターンの本文（#732）も同じ
+  return t === STEERED_NOTE || t === WAKE_NOTE || isLoopPrompt(t) || isWaitPrompt(t)
 }
 
 /** 送り元にまだ渡していない返答 1 件 */

@@ -16,7 +16,7 @@ export function prOfBranch(prs: readonly PrSummary[] | null | undefined, branch:
  * 持っていそうな issue の番号。**機械で引けるものだけ**（当て推量で埋めない）:
  * - ブランチ名の `issue-<番号>`（`issue-727-…`・`fix/issue_12`）
  * - PR の題名の、**括弧の中**の `#<番号>`（`… (#727)`・`（#727 の案 A）`。squash の題名の決まった形。括弧の外の
- *   「#728 の上に積む」は別の PR のことが多いので拾わない。その PR 自身の番号も除く）
+ *   「#728 の上に積む」は別の PR のことが多いので拾わない。括弧の中でも `PR #N` は拾わない。その PR 自身の番号も除く）
  * - 届いていてまだ返していない依頼の 1 行目の、**行の頭の `#<番号>`** か **`issue #<番号>`**（`#727 に着手してください。`）。
  *   `PR #734 をレビューして` の番号は PR なので拾わない。本文の途中に出てくる関連の番号も拾わない
  */
@@ -27,7 +27,7 @@ export function issueNumbers(branch: string, pr: Pick<PrSummary, 'number' | 'tit
     if (Number.isInteger(n) && n > 0 && n !== pr?.number && !out.includes(n)) out.push(n)
   }
   for (const m of branch.matchAll(/(?:^|[/_-])issue[-_]?(\d{1,6})(?!\d)/gi)) add(m[1])
-  for (const group of (pr?.title ?? '').matchAll(/[（(]([^（()）]*)[)）]/g)) for (const m of (group[1] ?? '').matchAll(/(?<![A-Za-z0-9])#(\d{1,6})(?!\d)/g)) add(m[1])
+  for (const group of (pr?.title ?? '').matchAll(/[（(]([^（()）]*)[)）]/g)) for (const m of (group[1] ?? '').matchAll(/(?<!(?:PRs?|pull request|プルリク(?:エスト)?)\s*)(?<![A-Za-z0-9])#(\d{1,6})(?!\d)/gi)) add(m[1])
   for (const ask of asks) {
     const line = ask.trim().split('\n')[0] ?? ''
     for (const m of line.matchAll(/(?:^\s*|(?<![A-Za-z])issue\s*)#(\d{1,6})(?!\d)/gi)) add(m[1])

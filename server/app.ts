@@ -2667,15 +2667,20 @@ export function createApp(
         if (id) replied.add(`${entityId(row.session ?? '', row.repo ?? '', String(row.ts ?? ''))}\0${id}`)
       }
     }
+    // いま回っているターン（どの経路でも。読むだけで、片付けや配送の確かめは回さない）
+    const turns: ReplyingMap = { ...typed.snapshot(), ...run.snapshot(), ...codexApp.replying(), ...opencodeApp.replying() }
     const out = new Map<string, SessionHolding>()
     await Promise.all(
       list.map(async (s) => {
         // 未完に数えるのは、返答がまだ無く、**まだ生きている**依頼だけ: 相手の預かりに並んでいるか、相手がいまターンを回している。
         // 失敗した・人が止めた・預かりから取り消された依頼（返答の行が来ない）を、いつまでも頼まれ中に数えない
+        // 「回している」は、**その依頼で回っているターン**（いまのターンの入力が、その依頼の見出しを持つ）のときだけ。
+        // 相手が別のターンを回しているだけでは、前に死んだ依頼を生き返らせない。端末に打ち込んだ依頼（`typed`）も同じ形で見る
         const inQueue = new Set(queue.origins(s.id))
-        const running = run.running(s.id) || codexApp.running(s.id) || opencodeApp.running(s.id) || launching.has(s.id)
+        const turn = turns[s.id]
+        const live = (m: AgentMessage) => inQueue.has(m.message_id) || (turn !== undefined && !turn.failed && isDeliveryOf(turn.text, m.message_id))
         const asks = [
-          ...(pending.get(s.id) ?? []).filter((m) => !replied.has(`${s.id}\0${m.message_id}`) && (inQueue.has(m.message_id) || running)).map((m) => m.text),
+          ...(pending.get(s.id) ?? []).filter((m) => !replied.has(`${s.id}\0${m.message_id}`) && live(m)).map((m) => m.text),
           ...agents.heldFor(s.id).map((h) => h.text),
         ]
         const repo = isRemoteHost(s.host, selfHost()) ? '' : githubRepoOf(s.remote)

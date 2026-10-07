@@ -32,6 +32,7 @@ test('issueNumbers: ブランチ名・PR の題名・届いている依頼の 1 
   assert.deepEqual(issueNumbers('dev-worktree-a', undefined, ['issue #9200 を調べて', '  #9300 に着手してください。']), [9200, 9300])
   assert.deepEqual(issueNumbers('dev-worktree-a', pr({ number: 9129, title: '預かる (#9127 の案 A) の続き。#9128 の上に積む' }), []), [9127], '題名は括弧の中だけ（括弧の外は別の PR のことが多い）')
   assert.deepEqual(issueNumbers('dev-worktree-a', pr({ title: '全角の括弧（#9100）' }), []), [9100])
+  assert.deepEqual(issueNumbers('dev-worktree-a', pr({ title: '直す (see PR #9700)（PR #9728 の続き）(#9100)' }), []), [9100], '括弧の中でも PR の番号は issue ではない')
 })
 
 test('holdingOf / holdingLabel: 分かるものだけを短い印にする。本文・題名は載せない（#727）', () => {

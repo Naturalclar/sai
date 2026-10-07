@@ -169,7 +169,8 @@ test('sai_sessions: 処理中・待ち・預かりがあれば空きではない
   } finally {
     runner.busy.delete('A1@r')
   }
-  runner.busy.set('C1@r', { since: 'turn-c', text: '着手' })
+  // C1 はその依頼のターンを回している（いまのターンの入力が、依頼の見出しを持つ）
+  runner.busy.set('C1@r', { since: 'turn-c', text: runner.started.at(-1)!.cmd.text })
   let c = (await sessionsFor()).find((s) => s.id === 'C1@r')
   assert.deepEqual(c?.holding, { issues: [9200], asked: 1 }, '処理中で、頼まれて未完。空きではない')
   assert.match(await mcpLine('C1@r'), /（処理中） issue #9200 頼まれ中 1 件 最後の記録: /)
@@ -213,5 +214,10 @@ test('sai_sessions: 失敗した・止められた依頼（返答が来ないま
   assert.equal(b?.holding?.asked, undefined)
   assert.deepEqual(b?.holding?.issues, [9100], '死んだ依頼の番号も持ち越さない')
   assert.equal(b?.holding?.free, true)
+  // 相手が**別の**ターンを回している間も、死んだ依頼は生き返らない（空きではないだけ）
+  runner.busy.set('B1@r', { since: 'turn-b', text: '人からの別の指示' })
+  const busy = (await sessionsFor()).find((s) => s.id === 'B1@r')
+  runner.busy.delete('B1@r')
+  assert.deepEqual([busy?.holding?.issues, busy?.holding?.asked, busy?.holding?.free], [[9100], undefined, undefined])
 })
 

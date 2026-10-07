@@ -475,3 +475,29 @@ test('GhPrs: 一覧は覚えておき、fresh のときだけ読み直す。読�
   await gh.list('o/r', true)
   assert.equal(n, 2)
 })
+
+test('GhPrs.cached: 前に引いた一覧を待たずに返し、古ければ裏で引き直す。まだ引いていなければ undefined（#727）', async () => {
+  let calls = 0
+  let release: () => void = () => {}
+  const gate = new Promise<void>((done) => (release = done))
+  const gh = new GhPrs(async (args) => {
+    if (args.includes('--search')) return '[]'
+    calls++
+    if (calls > 1) await gate
+    return JSON.stringify([{ number: calls, title: 't', headRefName: 'b', baseRefName: 'main', author: { login: 'me' } }])
+  }, 0)
+  assert.equal(gh.cached('o/repo-a'), undefined, 'まだ 1 回も引いていない（裏で引き始める）')
+  assert.equal(gh.cached('bad name'), null, 'リポジトリの形でなければ引かない')
+  await new Promise((r) => setTimeout(r, 20))
+  // ttl 0 なので毎回「古い」。それでも前の結果をすぐ返し、引き直しは裏で 1 本だけ
+  assert.deepEqual(gh.cached('o/repo-a')?.map((p) => p.number), [1])
+  assert.deepEqual(gh.cached('o/repo-a')?.map((p) => p.number), [1], '引き直しを待たない')
+  assert.equal(calls, 2, '同じリポジトリを同時に 2 本引かない')
+  release()
+  await new Promise((r) => setTimeout(r, 20))
+  assert.deepEqual(gh.cached('o/repo-a')?.map((p) => p.number), [2], '次に呼んだときには新しくなっている')
+  // 古すぎる結果は「いま」として返さない（呼び出し側が短く待つか、印を付けずに返す）
+  await new Promise((r) => setTimeout(r, 15))
+  assert.equal(gh.cached('o/repo-a', 5), undefined)
+  assert.deepEqual(gh.cached('o/repo-a', 60_000)?.length, 1)
+})

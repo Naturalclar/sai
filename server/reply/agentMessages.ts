@@ -265,6 +265,16 @@ export class AgentMessages {
     return this.stopped.has(from)
   }
 
+  /** そのセッションに届けた記録（古い順。#727）。`since` が `notBefore` より前のものは除く */
+  sentTo(to: string, notBefore: number): AgentMessage[] {
+    return [...this.messages.values()].filter((m) => m.to === to && Date.parse(m.since) >= notBefore)
+  }
+
+  /** そのセッション宛ての、まだ送っていない預かり（古い順。止まっているものは除く。#727） */
+  heldFor(to: string): HeldSend[] {
+    return this.backlog.filter((h) => h.to === to && !h.halted)
+  }
+
   /** そのセッションが送った記録（新しい順、最大 n 件）。送った順に覚えているので、同じ時刻でも順が崩れない */
   sentBy(from: string, n: number = AGENT_RECENT): AgentMessage[] {
     return [...this.messages.values()].filter((m) => m.from === from).reverse().slice(0, n)

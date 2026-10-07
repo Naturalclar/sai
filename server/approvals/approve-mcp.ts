@@ -20,6 +20,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { AGENT_REQUEST_MAX, AGENT_SEND_MAX, HELD_NOTE, SEND_COMPACT_ARG, SEND_COMPACT_NOTE, SEND_ITEMS_ARG, SEND_TO_ARG, sendHow, tokensLabel } from '../../shared/agentMessages.ts'
+import { holdingLabel } from '../../shared/holding.ts'
 import { LOOP_MAX_INTERVAL_S, LOOP_MIN_INTERVAL_S, LOOP_TOOL } from '../../shared/loops.ts'
 import type { LoopNextResponse } from '../../shared/types.ts'
 import type { AgentSendManyResponse, AgentSendResponse, AgentSessionEntry, AgentSessionsResponse, AgentWaitResponse, ApprovalAnswer, ApprovalRequest } from '../../shared/types.ts'
@@ -41,7 +42,7 @@ export const AGENT_TOOLS = [
   {
     name: 'sai_sessions',
     description:
-      '同じリポジトリで並行している別のセッションの一覧。**同じファイルの重なりを見るとき・誰が居るか分からないときに呼ぶ**（sai_send の宛先は呼び名でも書けるので、id を引くためだけには呼ばない）。着手の前と、PR を出す・マージする前に 1 回見る。「同じファイル」は、あなたの worktree と相手の worktree のどちらでも変わっているファイル（CLAUDE.md・README.md・docs/ は数えない）。そこに同じ関数・同じ箇所を変えていそうなファイルがあれば sai_send で 1 回だけ聞く（別の場所に足すだけなら聞かなくてよい）。ほかに id・呼び名・エージェント・ブランチ・処理中か・読み直す量・最後の発言の 1 行が出る（本文は含まない）',
+      '同じリポジトリで並行している別のセッションの一覧。**同じファイルの重なりを見るとき・誰が居るか分からないときに呼ぶ**（sai_send の宛先は呼び名でも書けるので、id を引くためだけには呼ばない）。着手の前と、PR を出す・マージする前に 1 回見る。「同じファイル」は、あなたの worktree と相手の worktree のどちらでも変わっているファイル（CLAUDE.md・README.md・docs/ は数えない）。そこに同じ関数・同じ箇所を変えていそうなファイルがあれば sai_send で 1 回だけ聞く（別の場所に足すだけなら聞かなくてよい）。ほかに id・呼び名・エージェント・ブランチ・処理中か・読み直す量・最後の発言の 1 行が出る（本文は含まない）。**誰が空いているか・誰が何を持っているかを見るときにも使う**: 各行に、空いているか（「（空き）」＝処理中でも待ちでもなく、頼まれて未完のものも無い）・そのブランチから出ている open な PR と CI（「PR #N（CI 緑 / 赤 / 待ち）」）・ブランチ名や PR の題名・届いている依頼から引けた issue の番号・頼まれてまだ返していない依頼の数（「頼まれ中 N 件」）が、機械で引けたときだけ付く（付いていなければ分からないということで、無いという意味ではない）',
     inputSchema: { type: 'object', properties: {} },
   },
   {
@@ -151,7 +152,7 @@ export async function agentTool(
         body.sessions
           .map(
             (s) =>
-              `- ${s.id}「${s.name}」${s.agent}${s.branch ? ` ${s.branch}` : ''}${s.busy ? '（処理中）' : ''}${s.context_tokens ? ` 読み直す量: ${tokensLabel(s.context_tokens)}` : ''}${overlapLabel(s)}${s.last_text ? ` 最後の発言: ${s.last_text}` : ''}`,
+              `- ${s.id}「${s.name}」${s.agent}${s.branch ? ` ${s.branch}` : ''}${s.busy ? '（処理中）' : ''}${holdingLabel(s.holding ?? {})}${s.context_tokens ? ` 読み直す量: ${tokensLabel(s.context_tokens)}` : ''}${overlapLabel(s)}${s.last_text ? ` 最後の発言: ${s.last_text}` : ''}`,
           )
           .join('\n'),
       )

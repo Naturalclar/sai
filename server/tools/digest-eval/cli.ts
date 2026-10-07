@@ -34,7 +34,7 @@ import type { AskCase, AskVariant } from './ask.ts'
 export const USAGE = `usage: pnpm digest:eval [options]   （一言のプロンプトの案を、同じ事例・同じ回数で比べる。手元で回す）
 
   --variants <a,b>    比べる案（最初が今の案。既定 current）   --runs <数>   事例 1 つを何回回すか（既定 1）
-  --ask               一言ではなく「次に送る文面の案」を比べる（#729。案は old / old-check / form / form-check。既定は全部）
+  --ask               一言ではなく「次に送る文面の案」を比べる（#729。案は nocheck / check / form / form-check。既定は全部）
   --cases <パス>      事例のファイル（既定は作り物の cases.json）
   --feed              ~/.agent-feed の実際の返答を事例にする（読むだけ）。--days（既定 7）・-n（既定 30）・--project で絞る
   --provider / --model / --persona   口・モデル・性格（既定は settings.json）。claude の口は --claude を付けたときだけ
@@ -199,7 +199,7 @@ function parse(argv: readonly string[], now: Date): Options | { error: string } 
     return Number.isInteger(v) && v > 0 && v <= max ? v : `--${key} は 1〜${max} の整数で指定してください: ${raw}`
   }
   const ask = !!values.ask
-  const askVariants = ask ? pickAskVariants(str('variants') ?? 'old,old-check,form,form-check') : []
+  const askVariants = ask ? pickAskVariants(str('variants') ?? 'nocheck,check,form,form-check') : []
   if (typeof askVariants === 'string') return { error: askVariants }
   const variants = ask ? [] : pickVariants(str('variants') ?? 'current')
   if (typeof variants === 'string') return { error: variants }

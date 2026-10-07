@@ -4,7 +4,7 @@
 // 採点は本番の確かめと同じ `shared/nextAskCheck.ts`（LLM の採点役は使わない）。なので「確かめあり」の案は、出たものは必ず読める側に入る。
 // 確かめの効き目は「読める割合がどれだけ増え、出ない割合がどれだけ増えたか」で読む。
 // 事例の置き場は隣の `ask-cases.json`（**作り物だけ**）。形は本文の終わり方で分ける。
-import { NEXT_ASK_MAX_CHARS, composeNextAsk, nextAskPrompt, quotedNextAsk } from '../../../shared/nextAsk.ts'
+import { NEXT_ASK_MAX_CHARS, composeNextAsk, quotedNextAsk } from '../../../shared/nextAsk.ts'
 import type { NextAskRetry } from '../../../shared/nextAsk.ts'
 import { NEXT_ASK_ISSUE_LABELS, nextAskIssues } from '../../../shared/nextAskCheck.ts'
 import type { NextAskIssueCode } from '../../../shared/nextAskCheck.ts'
@@ -55,18 +55,23 @@ export function validateAskCases(raw: unknown): string[] {
 }
 
 /**
- * #729 の前のプロンプト（比べる相手として残す。本番では使わない）。
- * 「エージェントへの指示か質問にする」が、エージェントの問いをそのまま人の問いとして出すことを許していた
+ * 文末の形で縛ったプロンプト（#729 の案 3）。**本番には入れていない**: 確かめなしでは読める割合が上がるが、
+ * 確かめと合わせると今のプロンプトより良くならず、選択肢つきの本文では下がった。比べる相手として残す
  */
-export function oldNextAskPrompt(userText: string, text: string, opts: { retry?: NextAskRetry } = {}): string {
+export function formNextAskPrompt(userText: string, text: string, opts: { retry?: NextAskRetry } = {}): string {
   const asked = (userText ?? '').trim()
-  const fix = opts.retry ? ['', `前に作った文: ${opts.retry.nextAsk}`, 'この文には次の点がありました。直して作り直してください:', ...opts.retry.issues.map((i) => `- ${i.hint}`)] : []
+  const { retry } = opts
+  const fix = retry ? ['', `前に作った文: ${retry.nextAsk}`, 'この文には次の点がありました。直して作り直してください:', ...retry.issues.map((i) => `- ${i.hint}`)] : []
   return [
-    'あなたはコーディングエージェントを使っている人です。直前のやりとりを読んで、**あなたが次に送る文**を 1 つ考えてください。',
-    `- 日本語で 1 文、${NEXT_ASK_MAX_CHARS} 文字以内。エージェントへの指示か質問にする`,
+    'あなたはコーディングエージェントを使っている人です。直前のやりとりを読んで、**あなたが次に送る文**（エージェントへの返信）を 1 つ考えてください。',
+    `- 日本語で 1 文、${NEXT_ASK_MAX_CHARS} 文字以内。**エージェントへの指示（「〜して」の形）か、エージェントの問いへの答え**にする`,
+    '- **エージェントの文を写さない。** 「〜します」「〜しました」（エージェントが言う宣言）、「〜しますか？」「〜しましょうか？」（エージェントが聞く問い）で終わる文は書かない',
+    '- 本文がエージェントの問いで終わっているなら、**問いを繰り返さず、答えを書く**（進めてよければ、その作業を「〜して」と指示する。選択肢が示されていればどれかを選ぶ）',
+    '- 本文がエージェントからあなたへの頼み（「〜してください」）で終わっているなら、同じ頼みをエージェントに返さない',
+    // 一言と同じ理由（#268）。本文に無い番号を書かせない。**作例に具体的な数字や題材を置かない**のも同じ
+    // （小さいモデルは作例をそのまま書き写すので、番号の無いターンでもその数字を書いてしまう）
     '- **本文に書かれていることだけ**を材料にする。番号（`#` に続く数字）・ファイル名・コマンドは本文にあるものだけ使い、本文に無い番号は書かない',
-    '- **本文にエージェントからの質問や頼みがあれば、それに答える文にする**（最優先。選択肢が示されていればどれかを選ぶ）',
-    '- 本文が報告だけで終わっているなら、そこから自然に続く一手にする。本文に出てこない作業を思いつきで足さない',
+    '- 本文が報告だけで終わっているなら、そこから自然に続く一手を指示する。本文に出てこない作業を思いつきで足さない',
     '- 出力は文だけ。引用符、「案:」などの前置き、箇条書きの印、2 つ目以降の案は付けない',
     ...fix,
     '',
@@ -85,13 +90,13 @@ export interface AskVariant {
 }
 
 export const ASK_VARIANTS: readonly AskVariant[] = [
-  { id: 'old', label: '前のプロンプト・確かめなし（#729 の前）', make: async (c, s) => (await composeNextAsk(c.ask, c.text, s, { prompt: oldNextAskPrompt, check: false })).next_ask },
-  { id: 'old-check', label: '前のプロンプト・確かめあり（駄目なら 1 回作り直し、それでも駄目なら出さない）', make: async (c, s) => (await composeNextAsk(c.ask, c.text, s, { prompt: oldNextAskPrompt })).next_ask },
-  { id: 'form', label: '形で縛ったプロンプト・確かめなし', make: async (c, s) => (await composeNextAsk(c.ask, c.text, s, { prompt: nextAskPrompt, check: false })).next_ask },
-  { id: 'form-check', label: '形で縛ったプロンプト・確かめあり（いまの本番）', make: async (c, s) => (await composeNextAsk(c.ask, c.text, s)).next_ask },
+  { id: 'nocheck', label: '今のプロンプト・確かめなし（#729 の前）', make: async (c, s) => (await composeNextAsk(c.ask, c.text, s, { check: false })).next_ask },
+  { id: 'check', label: '今のプロンプト・確かめあり（駄目なら 1 回作り直し、それでも駄目なら出さない。いまの本番）', make: async (c, s) => (await composeNextAsk(c.ask, c.text, s)).next_ask },
+  { id: 'form', label: '形で縛ったプロンプト・確かめなし（入れていない）', make: async (c, s) => (await composeNextAsk(c.ask, c.text, s, { prompt: formNextAskPrompt, check: false })).next_ask },
+  { id: 'form-check', label: '形で縛ったプロンプト・確かめあり（入れていない）', make: async (c, s) => (await composeNextAsk(c.ask, c.text, s, { prompt: formNextAskPrompt })).next_ask },
 ]
 
-/** `old,form-check` → 案の並び。知らない ID・重なりがあれば文で返す */
+/** `nocheck,check` → 案の並び。知らない ID・重なりがあれば文で返す */
 export function pickAskVariants(spec: string): AskVariant[] | string {
   const ids = spec.split(',').map((s) => s.trim()).filter(Boolean)
   if (ids.length === 0) return '案を 1 つは指定してください'

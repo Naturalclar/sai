@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { nextAskPrompt } from '../../../shared/nextAsk.ts'
 import type { Summarizer, SummarizerFactory } from '../../digest/digest.ts'
-import { ASK_SHAPES, ASK_VARIANTS, askReport, askTotals, oldNextAskPrompt, pickAskVariants, runAsk, validateAskCases } from './ask.ts'
+import { ASK_SHAPES, ASK_VARIANTS, askReport, askTotals, formNextAskPrompt, pickAskVariants, runAsk, validateAskCases } from './ask.ts'
 import type { AskCase, AskSample } from './ask.ts'
 import { ASK_CASES_PATH, run } from './cli.ts'
 import type { Io } from './cli.ts'
@@ -38,18 +38,23 @@ test('validateAskCases: 形の誤り・引用の頼み・コミットしては�
 
 // ---- 案の一覧
 
-test('前のプロンプトは比べる相手として残す。本番のプロンプトとは形の縛りが違う', () => {
-  assert.match(oldNextAskPrompt('入力', '返答'), /エージェントへの指示か質問にする/)
-  assert.doesNotMatch(nextAskPrompt('入力', '返答'), /エージェントへの指示か質問にする/)
+test('形で縛ったプロンプトは比べる相手として残す（本番には入れていない）。形の例は型だけで、中身の語を置かない', () => {
+  const head = formNextAskPrompt('入力', '返答').split('\n---\n')[0]!
+  assert.match(head, /エージェントへの指示（「〜して」の形）か、エージェントの問いへの答え/)
+  assert.doesNotMatch(nextAskPrompt('入力', '返答'), /エージェントの問いへの答え/)
   // どちらも同じ印（偽の口が案のプロンプトを見分ける文）を持つ
-  for (const p of [oldNextAskPrompt('入力', '返答'), nextAskPrompt('入力', '返答')]) assert.match(p, /あなたが次に送る文/)
-  assert.doesNotMatch(oldNextAskPrompt('入力', '返答'), /#\d/)
+  for (const p of [formNextAskPrompt('入力', '返答'), nextAskPrompt('入力', '返答')]) assert.match(p, /あなたが次に送る文/)
+  assert.doesNotMatch(head, /#\d/)
+  // 「」の中は型（〜 で始まる）だけ
+  for (const m of head.matchAll(/「([^」]+)」/g)) assert.match(m[1]!, /^(?:〜|案:$)/, `作例「${m[1]}」に中身がある（書き写される）`)
+  // 作り直しの材料も同じ形で足す
+  assert.match(formNextAskPrompt('入力', '返答', { retry: { nextAsk: '前の案', issues: [{ code: 'copy', hint: '直す点' }] } }), /前に作った文: 前の案[\s\S]*- 直す点/)
 })
 
 test('pickAskVariants: 知らない案・重なりは断る', () => {
-  assert.deepEqual((pickAskVariants('old,form-check') as { id: string }[]).map((v) => v.id), ['old', 'form-check'])
+  assert.deepEqual((pickAskVariants('nocheck,check') as { id: string }[]).map((v) => v.id), ['nocheck', 'check'])
   assert.match(String(pickAskVariants('current')), /知らない案: current/)
-  assert.match(String(pickAskVariants('old,old')), /2 回/)
+  assert.match(String(pickAskVariants('check,check')), /2 回/)
 })
 
 // ---- 回し方と集計
@@ -63,13 +68,13 @@ const CASES: AskCase[] = [
 const echo = async (prompt: string) => (prompt.split('エージェントの返答:\n')[1] ?? '').trim()
 
 test('runAsk: 確かめなしは写しをそのまま出し、確かめありは作り直しても駄目なら出さない', async () => {
-  const variants = ASK_VARIANTS.filter((v) => v.id === 'old' || v.id === 'form-check')
+  const variants = ASK_VARIANTS.filter((v) => v.id === 'nocheck' || v.id === 'check')
   const samples = await runAsk({ cases: CASES, variants, runs: 1, summarize: echo })
   assert.deepEqual(samples.map((s) => [s.case, s.variant, s.next_ask, s.codes]), [
-    ['q', 'old', 'この変更で出しますか？', ['question_back']],
-    ['q', 'form-check', '', []],
-    ['r', 'old', '書き直しました。', ['declaration']],
-    ['r', 'form-check', '', []],
+    ['q', 'nocheck', 'この変更で出しますか？', ['question_back']],
+    ['q', 'check', '', []],
+    ['r', 'nocheck', '書き直しました。', ['declaration']],
+    ['r', 'check', '', []],
   ])
 })
 
@@ -119,7 +124,7 @@ test('run --ask: 作り物の事例で案を比べる。数字だけを出し、
   const out = join(dir, 'out-ask')
   const prompts: string[] = []
   const x = io(prompts)
-  assert.equal(await run(['--ask', '--variants', 'old,form-check', '--out', out], x), 0)
+  assert.equal(await run(['--ask', '--variants', 'nocheck,check', '--out', out], x), 0)
   const text = x.stdout.join('\n')
   assert.match(text, /次に送る文面の案の比べ/)
   assert.match(text, /\*\*人の返信として読める\*\* \| 20（100%） \| 20（100%）/)

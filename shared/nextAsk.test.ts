@@ -55,17 +55,6 @@ test('quotedNextAsk: 本文に引用された人の言葉があれば、それ�
 })
 
 // ---- #729: 案を人の返信の形にする（プロンプトを形で縛る・機械で確かめて作り直す・駄目なら出さない）
-test('nextAskPrompt: 形で縛る（指示か答え。宣言と問いの形を書かない）。形の例は型だけで、中身の語を置かない', () => {
-  const p = nextAskPrompt('入力', '返答')
-  const head = p.split('\n---\n')[0]!
-  assert.match(head, /エージェントへの指示（「〜して」の形）か、エージェントの問いへの答え/)
-  assert.match(head, /エージェントの文を写さない/)
-  assert.match(head, /問いを繰り返さず、答えを書く/)
-  assert.doesNotMatch(head, /指示か質問にする/, '前の言い方（エージェントの問いをそのまま出すことを許していた）')
-  // 「」の中は型（〜 で始まる）だけ
-  for (const m of head.matchAll(/「([^」]+)」/g)) assert.match(m[1]!, /^(?:〜|案:$)/, `作例「${m[1]}」に中身がある（書き写される）`)
-})
-
 test('nextAskPrompt: 作り直しは前の案と直してほしい点を足す。本文は末尾のまま', () => {
   const issues = nextAskIssues('修正に入ります', '次は修正に入ります。')
   const p = nextAskPrompt('入力', '次は修正に入ります。', { retry: { nextAsk: '修正に入ります', issues } })

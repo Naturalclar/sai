@@ -69,6 +69,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - **重ねる**のは `applyRecovered()`: `missing` は入力の行の身元を引き継いだ `Stop` の行（時刻は閉じた時刻、`user_text` は入力の行のもの）を足し、`empty` は本文を載せた写しに差し替える。どちらも `recovered: true`。**JSONL は書かない・書き換えない**。
 - **使い分け**: `app.ts` の `rowsNow()`（補った行を重ねたもの）を、人に見せる・返答を引く道が使う（詳細・フィード・ターンの取得・未読・`replyOf()` = 画面の返答 / 次のターンの頭 / `sai_wait`・MCP の `sai_session`）。**集計（`store.sessions()`。`turns`）と一言（`digest.scan()`）は記録の行（`store.rows()`）のまま**。一覧は `sessionsWithMeta()` が補った行で上書きする: `last_text` / `last_turn` / `last_turn_ts` は**最後のターン完了より新しければ**（最後の行とは比べない。端末のセッションは 60 秒あとに `入力待ち` の行が来る）、`end` / `last_kind`（`turn`）は最後の行より新しければ。そのとき前の `waiting` / `idle` は畳む（許可を端末で答えたあとターン完了が落ちたセッションを「待機中」のまま残さない）。重ねた候補の鍵のハッシュを rev に混ぜる。
 - 補えたセッションは `stopMissingCandidate()` に当たらなくなる（`last_kind` が `turn`）ので、見出しの「完了の記録なし」は出ない。
+- **ログイン切れで止まったターン**（#577）: CLI は `error: "authentication_failed"` の付いた assistant の行（本文 `Not logged in · Please run /login`、モデルは `<synthetic>`）を transcript に書いて止まり、フックは鳴らない（記録の行が無い）。`turnParser()` がその行を `authFailed` にし（**文言ではなく行の `error` で決める**。あとに本物の返答が続けば外す）、補った行に `recovered_auth_failed: true` を載せる。画面は「記録から補った」の代わりに「ログイン切れで停止」の印を出す（`RecoveredTag`）。
 
 ## 終わったターンの手順（#605）
 

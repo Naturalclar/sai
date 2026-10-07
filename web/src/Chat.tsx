@@ -414,6 +414,7 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
                         model={u.model}
                         usage={u.speaker !== 'me' && !u.waiting ? u.row.usage : undefined}
                         recovered={u.speaker !== 'me' && !u.waiting && Boolean(u.row.recovered)}
+                        authFailed={u.speaker !== 'me' && !u.waiting && Boolean(u.row.recovered_auth_failed)}
                         // このターンで実行したコマンド・ツール（#605）。ターン完了の返答にだけ、Claude と Codex だけ。別のセッションの返答（#588）には付けない
                         {...(u.speaker !== 'me' && !u.waiting && !u.reply && (u.row.agent === 'claude' || u.row.agent === 'codex') && eventKind(u.row.event, u.row.text) === 'turn' ? { steps: { id, ts: u.row.ts } } : {})}
                         remote={u.row.remote}

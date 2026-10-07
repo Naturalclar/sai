@@ -58,6 +58,10 @@ test('applyRecovered: 補った行を ts 順に足し、空の行は写しに本
   assert.equal(out[1]!.user_text, '#583 に着手して', '入力は入力の行のもの（返答の引き当てに使う）')
   assert.equal(empty.text, '', '元の行は書き換えない')
   assert.equal(empty.recovered, undefined)
+  assert.ok(out.every((r) => r.recovered_auth_failed === undefined), 'ふつうの返答には付けない')
+  // ログイン切れで止まったターン（#577）は、補った行に印を載せる
+  const failed = applyRecovered(rows, gaps, new Map([[gapKey(gaps[0]!), { text: 'Not logged in · Please run /login', endedMs: Date.parse('2026-10-01T02:45:10.500Z'), authFailed: true as const }]]))
+  assert.deepEqual(failed.filter((r) => r.recovered).map((r) => [r.text, r.recovered_auth_failed]), [['Not logged in · Please run /login', true]])
 })
 
 test('tsLike: 行の ts と同じオフセット・秒までにする', () => {

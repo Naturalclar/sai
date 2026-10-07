@@ -38,6 +38,8 @@ import type {
   SessionsResponse,
   SettingsRequest,
   ClaudeAuthCheckResponse,
+  ClaudeLoginRequest,
+  ClaudeLoginResponse,
   SettingsResponse,
   ReplyQueueResponse,
   LoopRequest,
@@ -301,5 +303,9 @@ export const api = {
   setSettings: (body: SettingsRequest) => sendJSON<SettingsResponse>('PUT', '/api/settings', body),
   /** Claude のログインを聞き直す（#685。`claude auth status --json`。読むだけ） */
   checkClaudeAuth: () => sendJSON<ClaudeAuthCheckResponse>('POST', '/api/claude-auth/check', {}),
+  /** SAI から Claude にログインし直す（#577）。始める・コードを渡す・やめる。応答の `url` は人が自分のブラウザで開く */
+  claudeLogin: (body: ClaudeLoginRequest) => sendJSON<ClaudeLoginResponse>('POST', '/api/claude-auth/login', body),
+  /** その手順のいまの状態（開いている間だけ聞く） */
+  claudeLoginState: () => getJSON<ClaudeLoginResponse>('/api/claude-auth/login'),
 }
 

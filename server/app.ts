@@ -92,6 +92,7 @@ import type { SessionTurnResponse, TurnStepsResponse,
   SettingsRequest,
   SettingsResponse,
   ClaudeAuthCheckResponse,
+  ClaudeLoginRequest,
   UsageReportResponse,
   UsageResponse,
   Viewer,
@@ -108,6 +109,7 @@ import { APPROVALS_FILE, Approvals, WAIT_MS } from './approvals/approvals.ts'
 import { BuildFreshness } from './local/buildFreshness.ts'
 import { NoClaudeHooks, type ClaudeHooksReader } from './local/claudeHooks.ts'
 import { NoClaudeAuth, type ClaudeAuthReader } from './local/claudeAuth.ts'
+import { NoClaudeLogin, loginCode, type ClaudeLoginRunner } from './local/claudeLogin.ts'
 import { codexLockHolders, codexQueueCommand, codexWriterActive, isAppServer, runCodexQueue } from './reply/codex.ts'
 import type { CodexQueue } from './reply/codex.ts'
 import { CodexAppServer } from './reply/codexAppServer.ts'
@@ -267,6 +269,13 @@ export const MAX_APPROVAL_BYTES = 1024 * 1024
 const SETTINGS_PATH = '/api/settings'
 /** Claude のログインを聞き直す（#685。読むだけだが `claude` を起こすので POST・同一オリジンのみ） */
 const CLAUDE_AUTH_CHECK_PATH = '/api/claude-auth/check'
+/**
+ * SAI から Claude にログインし直す（#577）。GET はいまの状態、POST は `start` / `code` / `cancel`。**どちらも同一オリジンのみ**
+ * （応答にログイン用の URL が載る）。切れていると分かっているときしか起こさない（`ClaudeLogin.start()` が聞き直して決める）
+ */
+const CLAUDE_LOGIN_PATH = '/api/claude-auth/login'
+/** ログインの body の上限（コードは 100 字前後） */
+const MAX_LOGIN_BYTES = 8 * 1024
 /** 一言が変だと言われたのを残す口（#346）。同一オリジンのみ */
 const DIGEST_FEEDBACK_PATH = '/api/digest/feedback'
 const USAGE_PATH = '/api/usage'
@@ -587,6 +596,8 @@ export interface TerminalDeps {
   claudeHooks?: ClaudeHooksReader
   /** Claude のログインが切れていないかを聞く口（#685）。既定は聞かない（本物の `claude` を叩くのは `main.ts` が渡したときだけ） */
   claudeAuth?: ClaudeAuthReader
+  /** SAI からのログイン（#577）。既定は起こさない（`NoClaudeLogin`）。本物を渡すのは `main.ts` だけ */
+  claudeLogin?: ClaudeLoginRunner
   /**
    * その cwd にもう効いている許可のルール（#705。[常に許可] で同じ部品を足さないために見る）。**省略は「読まない」**
    * （本物の `~/.claude/settings.json` を読むのは main.ts だけ。既定で読むと、テストの結果が回したマシンの設定で変わる）
@@ -655,6 +666,7 @@ export function createApp(
   // フックの配線のずれ（#567）。読むのは ttl に 1 回、設定の mtime が変わったときだけ
   const claudeHooks = terminal.claudeHooks ?? new NoClaudeHooks()
   const claudeAuth = terminal.claudeAuth ?? new NoClaudeAuth()
+  const claudeLogin = terminal.claudeLogin ?? new NoClaudeLogin()
   const allowedRules = terminal.allowedRules ?? (async () => [] as string[])
   // ログインを聞き直した失敗（`<id>\n<since>` → その問い合わせ）。同じ失敗で何度も `claude` を起こさない。
   // 問い合わせそのものを持つのは、同時に来た応答（一覧と詳細）の後の方も答えを待つため（待たないと、印の無い失敗を先に返す）
@@ -4538,6 +4550,8 @@ export function createApp(
    * **返信の子（`claude -p` など）は巻き込まない**（別の pgid で detached。次のサーバが `replying.json` から引き取る。#296）
    */
   const dispose = (): void => {
+    // ログインの子（#577）は残さない（残ると、人が居ないままコードを待ち続ける）
+    claudeLogin.stop()
     opencodeApp.stop()
     if (loopTimer) clearInterval(loopTimer)
     if (waitTimer) clearInterval(waitTimer)
@@ -4593,6 +4607,7 @@ export function createApp(
     const isHistoryIcon = path.startsWith(`${ICON_HISTORY_PATH}/`)
     const isSettings = path === SETTINGS_PATH
     const isAuthCheck = path === CLAUDE_AUTH_CHECK_PATH
+    const isAuthLogin = path === CLAUDE_LOGIN_PATH
     const isDigestFeedback = path === DIGEST_FEEDBACK_PATH
     const isNewSession = path === NEW_SESSION_PATH
     // GitHub へのレビューの投稿（#526）。SAI が GitHub に書く唯一の口
@@ -4612,7 +4627,7 @@ export function createApp(
     // 「設定は PUT」「預かった返信の再開は POST、取り消しは DELETE」だけ。それ以外は GET / HEAD のみ
     const writable =
       (method === 'POST' &&
-        (isNewSession || isAuthCheck || isReply || isReview || isFork || isPrReview || isAsk || isAnswer || isAttachUpload || isQueue || isDigestFeedback || isSuggestion || path === AGENT_SEND_PATH || path === AGENT_LOOP_PATH || path === AGENT_WAIT_FOR_PATH || isAgentStop || isInterrupt || loopSuffix !== undefined || waitSuffix !== undefined)) ||
+        (isNewSession || isAuthCheck || isAuthLogin || isReply || isReview || isFork || isPrReview || isAsk || isAnswer || isAttachUpload || isQueue || isDigestFeedback || isSuggestion || path === AGENT_SEND_PATH || path === AGENT_LOOP_PATH || path === AGENT_WAIT_FOR_PATH || isAgentStop || isInterrupt || loopSuffix !== undefined || waitSuffix !== undefined)) ||
       (method === 'DELETE' && (isQueue || isHistoryIcon || loopSuffix === '/loop')) ||
       (method === 'PUT' && (isMeta || isRead || isProfile || isSettings)) ||
       ((method === 'PUT' || method === 'DELETE') && (isIcon || isProfileIcon))
@@ -4931,10 +4946,36 @@ export function createApp(
         if (method !== 'POST') return error(res, 405, 'method not allowed')
         return await postDigestFeedback(req, res)
       }
+      if (isAuthLogin) {
+        if (method !== 'GET' && method !== 'POST') return error(res, 405, 'method not allowed')
+        if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
+        // 応答に URL が載る。`json()` は `no-store` で返す
+        const reply = (state: ReturnType<ClaudeLoginRunner['state']>) => json(res, state)
+        if (method === 'GET') return reply(claudeLogin.state())
+        let body: ClaudeLoginRequest
+        try {
+          body = (await readJson(req, MAX_LOGIN_BYTES)) as ClaudeLoginRequest
+        } catch {
+          return error(res, 400, 'invalid JSON body')
+        }
+        const action = body && typeof body === 'object' ? body.action : undefined
+        if (action === 'cancel') return reply(claudeLogin.cancel())
+        if (action === 'code') {
+          if (!loginCode(body.code)) return error(res, 400, 'コードの形が違います（1 行で貼ってください）')
+          if (!claudeLogin.code(String(body.code))) return error(res, 409, 'コードを待っているログインがありません（もう一度「ログインする」から）')
+          return reply(claudeLogin.state())
+        }
+        if (action !== 'start') return error(res, 400, 'action は start / code / cancel のどれか')
+        // 切れていると分かっているときだけ起こす・もう進んでいればそのまま返す、は `ClaudeLogin.start()` の中
+        return reply(claudeLogin.start())
+      }
       if (isAuthCheck) {
         if (method !== 'POST') return error(res, 405, 'method not allowed')
         if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
         const state = await claudeAuth.check()
+        // ログインできていると分かったら、待っているログインの子は落とす（#577。Mac の端末でログインし直したあとに
+        // 子が残っていると、別の画面からコードを渡して、いまのログインを差し替えられる）
+        if (state?.loggedIn === true) claudeLogin.cancel()
         // 渡すのはログインしているかどうかだけ（メール・組織は持っていない）。分からなければ null
         const payload: ClaudeAuthCheckResponse = { logged_in: state ? state.loggedIn : null }
         return json(res, payload)

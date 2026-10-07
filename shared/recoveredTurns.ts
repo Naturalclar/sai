@@ -62,28 +62,28 @@ const clipText = (text: string) => (text.length > RECOVERED_TEXT_MAX ? text.slic
  * 落ちたターン完了の行の代わりに応答へ載せる行。入力の行の身元（セッション・worktree・ブランチ…）を引き継ぎ、
  * 時刻は transcript でそのターンが閉じた時刻（入力の行より前にはしない）。`recovered: true` で見分ける
  */
-export function recoveredRow(input: FeedRow, text: string, endedMs: number): FeedRow {
+export function recoveredRow(input: FeedRow, text: string, endedMs: number, authFailed = false): FeedRow {
   const at = Math.max(endedMs, rowMs(input.ts) + 1000)
-  return { ...input, ts: tsLike(at, input.ts), event: 'Stop', text: clipText(text), recovered: true }
+  return { ...input, ts: tsLike(at, input.ts), event: 'Stop', text: clipText(text), recovered: true, ...(authFailed ? { recovered_auth_failed: true as const } : {}) }
 }
 
 /** 本文が空のターン完了の行に、補った本文を載せた写し（元の行は書き換えない） */
-export function filledRow(row: FeedRow, text: string): FeedRow {
-  return { ...row, text: clipText(text), recovered: true }
+export function filledRow(row: FeedRow, text: string, authFailed = false): FeedRow {
+  return { ...row, text: clipText(text), recovered: true, ...(authFailed ? { recovered_auth_failed: true as const } : {}) }
 }
 
 /**
  * 候補に補った本文を当てて、応答に載せる行の並びを作る。補うものが無ければ**同じ配列をそのまま返す**。
  * `resolved` は候補の鍵 → 補った結果（無いものは補わない）
  */
-export function applyRecovered(rows: readonly FeedRow[], gaps: readonly TurnGap[], resolved: ReadonlyMap<string, { text: string; endedMs: number }>): readonly FeedRow[] {
+export function applyRecovered(rows: readonly FeedRow[], gaps: readonly TurnGap[], resolved: ReadonlyMap<string, { text: string; endedMs: number; authFailed?: true }>): readonly FeedRow[] {
   const filled = new Map<FeedRow, FeedRow>()
   const added: FeedRow[] = []
   for (const gap of gaps) {
     const got = resolved.get(gapKey(gap))
     if (!got?.text.trim()) continue
-    if (gap.kind === 'empty') filled.set(gap.row, filledRow(gap.row, got.text))
-    else added.push(recoveredRow(gap.input, got.text, got.endedMs))
+    if (gap.kind === 'empty') filled.set(gap.row, filledRow(gap.row, got.text, got.authFailed))
+    else added.push(recoveredRow(gap.input, got.text, got.endedMs, got.authFailed))
   }
   if (filled.size === 0 && added.length === 0) return rows
   const out = rows.map((r) => filled.get(r) ?? r).concat(added)

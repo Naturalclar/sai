@@ -34,7 +34,7 @@ const GRACE_MS = 1000
 export const ENDED_WITHOUT_ROW = '返信は終わったが記録が増えなかった（~/.agent-feed/reply.log を見る）'
 
 /** Claude のログインが切れているときの文（#685。バナーと返信の失敗で同じ文を出す） */
-export const CLAUDE_LOGGED_OUT = 'Claude のログインが切れています。Mac の端末で claude auth login を打ってから送り直してください'
+export const CLAUDE_LOGGED_OUT = 'Claude のログインが切れています。画面の上の「SAI からログインする」か、Mac の端末で claude auth login を打ってから送り直してください'
 
 /**
  * サーバが「返信が失敗した」と言っているときの文（#172）。プロセスが非0で終わったときは理由が reply.log の末尾から来る。

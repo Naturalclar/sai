@@ -56,3 +56,32 @@ test('ClaudeAuth: claude が無い・壊れた出力・時間切れは undefined
     assert.equal(await new ClaudeAuth(bin, 0, 100).check(), undefined)
   })
 })
+
+test('ClaudeAuth.refresh: TTL の中でも聞き直す。走っている聞き直しの結果は使わず次の 1 回を分け合い、聞けなかったら前の結果を残す（#577）', async () => {
+  // 状態は起動した瞬間に読む（`slow` があれば、読んでから答えるまで 0.4 秒かかる）
+  await withFake('d="$(dirname "$0")"; echo x >> "$d/calls"; if [ -f "$d/in" ]; then v=true; else v=false; fi; [ -f "$d/slow" ] && sleep 0.4; if [ -f "$d/broken" ]; then echo "oops"; else echo "{\\"loggedIn\\":$v}"; fi', async (bin, dir) => {
+    const calls = async () => (await readFile(join(dir, 'calls'), 'utf-8')).split('\n').filter(Boolean).length
+    const auth = new ClaudeAuth(bin, 60_000, 4000, () => 1000)
+    assert.equal((await auth.check())?.loggedIn, false)
+    await auth.check()
+    assert.equal(await calls(), 1, 'check は TTL の間は聞き直さない')
+    const [a, b, c] = await Promise.all([auth.refresh(), auth.refresh(), auth.refresh()])
+    assert.deepEqual([a?.loggedIn, b?.loggedIn, c?.loggedIn], [false, false, false])
+    // 1 つ目が聞いている間に来た 2 つは、その結果を使わず（始まったあとの変化を見ていないかもしれない）、次の 1 回を分け合う
+    assert.equal(await calls(), 3, '同時の 3 回で起こすのは 2 回（走っている分と、そのあとの 1 回）')
+    // 聞いている途中で状態が変わったら（ログインの子が資格情報を書いた）、あとから来た聞き直しは新しい方を返す
+    await writeFile(join(dir, 'slow'), '')
+    const early = auth.refresh()
+    await new Promise((r) => setTimeout(r, 100))
+    await writeFile(join(dir, 'in'), '')
+    const late = auth.refresh()
+    assert.equal((await early)?.loggedIn, false)
+    assert.equal((await late)?.loggedIn, true, '走っていた分（変わる前に読んだ）の結果を返さない')
+    await rm(join(dir, 'slow'))
+    await rm(join(dir, 'in'))
+    assert.equal((await auth.refresh())?.loggedIn, false)
+    await writeFile(join(dir, 'broken'), '')
+    assert.equal(await auth.refresh(), undefined, '返すのは「分からない」')
+    assert.equal(auth.peek()?.loggedIn, false, '前の「切れている」は残す（押しただけでバナーを消さない）')
+  })
+})

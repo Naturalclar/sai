@@ -19,7 +19,9 @@ import { digestIssues } from '../../shared/digestCheck.ts'
 import { digestKey } from '../../shared/digestFeedback.ts'
 import { needsFullText } from '../../shared/fullText.ts'
 import { fullTextJudgePrompt, parseFullTextJudge } from '../../shared/fullTextJudge.ts'
-import { cleanNextAsk, nextAskPrompt, quotedNextAsk } from '../../shared/nextAsk.ts'
+import { composeNextAsk, quotedNextAsk } from '../../shared/nextAsk.ts'
+import type { ComposedNextAsk } from '../../shared/nextAsk.ts'
+import type { NextAskIssueCode } from '../../shared/nextAskCheck.ts'
 import { cleanWhat, digestPlan, joinDigest } from '../../shared/digestParts.ts'
 import type { DigestIssueCode } from '../../shared/digestCheck.ts'
 import { childEnv } from '../reply/runner.ts'
@@ -88,6 +90,15 @@ export interface DigestEntry {
    * 口で作った案・案の無い行には付けない（この欄が入る前の行も、口で作ったもの）
    */
   next_ask_source?: 'quote'
+  /**
+   * 口で作った案が人の返信として読めず（`nextAskIssues()`）、作り直した（#729）。作り直して出した案にも、出さなかった行にも付く
+   */
+  next_ask_retried?: true
+  /**
+   * 作り直しても残り、**案を出さなかった**理由（#729。`nextAskIssues()` の code）。`next_ask` は付かない。
+   * 「作れなかった」（口の失敗・空）と「わざと出さなかった」を、あとから数え分けるために残す
+   */
+  next_ask_dropped?: NextAskIssueCode[]
   /**
    * 一言を**わざと作らなかった**理由（#638）。`asking` = 人に判断・回答を求めている返答（`needsFullText()`）なので、
    * 言い換えずに本文をそのまま出す。`judged` = 規則は当てなかったが、一言を作っている手元のモデルが「全文が要る」と答えた（#639）。
@@ -640,19 +651,22 @@ export class Digester {
 
   /**
    * 案を 1 つ作る（#713）。本文に人に言ってほしい言葉が引用されていれば、それをそのまま使って口を呼ばない。
-   * 無ければ今までどおり口で作る（`nextAskPrompt()`）
+   * 無ければ口で作り、人の返信として読めるかを確かめる（#729。駄目なら 1 回だけ作り直し、それでも駄目なら出さない。`composeNextAsk()`）
    */
-  private async nextAskOf(row: FeedRow, summarizer: Summarizer): Promise<string> {
-    return quotedNextAsk(row.text ?? '') || cleanNextAsk(await summarizer.summarize(nextAskPrompt(row.user_text ?? '', row.text ?? '')))
+  private async nextAskOf(row: FeedRow, summarizer: Summarizer): Promise<ComposedNextAsk> {
+    const quoted = quotedNextAsk(row.text ?? '')
+    if (quoted) return { next_ask: quoted, first: [], dropped: [] }
+    // 作り直す前にもう一度見る（1 回目を待つ間に、画面から切られた・次のターンが来た。#288 と同じ扱い）
+    return composeNextAsk(row.user_text ?? '', row.text ?? '', (prompt) => summarizer.summarize(prompt), { stillWanted: () => this.askOn && this.active && this.isLatest(row) })
   }
 
   /** 案を 1 つ。作れなければ空（失敗は digest.log に残し、一言はそのまま出す） */
-  private async makeNextAsk(row: FeedRow, summarizer: Summarizer, key: string): Promise<string> {
+  private async makeNextAsk(row: FeedRow, summarizer: Summarizer, key: string): Promise<ComposedNextAsk> {
     try {
       return await this.nextAskOf(row, summarizer)
     } catch (err) {
       await this.log(`${new Date().toISOString()} ${key} 次の案に失敗: ${err instanceof Error ? err.message : String(err)}`)
-      return ''
+      return { next_ask: '', first: [], dropped: [] }
     }
   }
 
@@ -732,14 +746,14 @@ export class Digester {
         // **人に判断・回答を求めている返答は一言にしない**（#638。本文を読まないと答えられないので、そのまま出す。LLM は呼ばない判定）
         const asking = this.summaryOn && persona !== null && needsFullText(row.text ?? '')
         const wantSummary = this.summaryOn && persona !== null && !asking
-        // 案だけ作ってある行（#560）を一言のために積み直したときは、案はもう作らない（口を叩くのは 1 ターン 1 回まで）
+        // 案だけ作ってある行（#560）を一言のために積み直したときは、案はもう作らない（案を作るのは 1 ターン 1 回まで。その 1 回の中で、確かめに落ちたら 1 度だけ作り直す。#729）
         const prev = this.store.get(key)
         const wantAsk = this.askOn && this.isLatest(row) && !prev
         if (!summarizer || (!wantSummary && !wantAsk)) {
           // 作らなかったことを残す（3 秒ごとの scan() が同じ行を積み直して判定し直さない。集計で数えられる。#638）。
           // 案だけ作ってあった行は、案を持ち越す
           if (asking && !prev?.skipped) {
-            await this.store.append({ key, persona: persona ?? DEFAULT_PERSONA, summary: '', model, ts: new Date().toISOString(), skipped: 'asking', ...(prev?.next_ask ? { next_ask: prev.next_ask, ...(prev.next_ask_source ? { next_ask_source: prev.next_ask_source } : {}) } : {}) })
+            await this.store.append({ key, persona: persona ?? DEFAULT_PERSONA, summary: '', model, ts: new Date().toISOString(), skipped: 'asking', ...(prev?.next_ask ? { next_ask: prev.next_ask, ...(prev.next_ask_source ? { next_ask_source: prev.next_ask_source } : {}) } : {}), ...(prev?.next_ask_retried ? { next_ask_retried: true as const } : {}), ...(prev?.next_ask_dropped ? { next_ask_dropped: prev.next_ask_dropped } : {}) })
           }
           this.queued.delete(key)
           continue
@@ -793,12 +807,16 @@ export class Digester {
           // **材料は要約する前の本文と人が送った文**（#560。一言を材料にすると、要約で落ちた質問・選択肢・番号に答えられない）。
           // 一言を作らない行では案が唯一の仕事なので、失敗は一言と同じく数える（下の catch。口が落ちている間に同じ行を叩き続けない）
           const freshAsk = wantAsk && this.askOn && this.active && this.isLatest(row)
-          const nextAsk = !freshAsk
-            ? (prev?.next_ask ?? '')
+          const composed: ComposedNextAsk = !freshAsk
+            ? { next_ask: prev?.next_ask ?? '', first: [], dropped: [] }
             : wantSummary || asking
               ? // 人に聞いている返答（#638）も、案の失敗は一言の側と同じく飲み込む（作らなかった印は残す。口を休ませる数えに入れない）
                 await this.makeNextAsk(row, summarizer, key)
               : await this.nextAskOf(row, summarizer)
+          const nextAsk = composed.next_ask
+          if (composed.first.length > 0) {
+            await this.log(`${new Date().toISOString()} ${key} 案の作り直し ${composed.first.join(',')} → ${composed.dropped.length > 0 ? `${composed.dropped.join(',')}（出さない）` : 'ok'}`)
+          }
           await this.store.append({
             key,
             persona: persona ?? DEFAULT_PERSONA,
@@ -810,6 +828,10 @@ export class Digester {
             ...(first.length > 0 ? { retried: true } : {}),
             ...(issues.length > 0 ? { issues: issues.map((i) => i.code) } : {}),
             ...(nextAsk ? { next_ask: nextAsk } : {}),
+            // 作り直した・出さなかったの印。積み直した行（案はもう作ってある）では前の行から持ち越す
+            // （鍵ごとに最新の行を数えるので、落とすと「わざと出さなかった」が「作れなかった」に数えられる。#736 のレビュー）
+            ...((freshAsk ? composed.first.length > 0 : prev?.next_ask_retried) ? { next_ask_retried: true as const } : {}),
+            ...(freshAsk ? (composed.dropped.length > 0 ? { next_ask_dropped: composed.dropped } : {}) : prev?.next_ask_dropped ? { next_ask_dropped: prev.next_ask_dropped } : {}),
             // 新しく作った案が本文の引用そのものなら印を付ける。前の行から持ち越した案は、印もそのまま持ち越す
             // （鍵ごとに最新の行を数えるので、落とすと引用から採った案が「口で作った」側に数えられる）
             ...(freshAsk

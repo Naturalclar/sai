@@ -28,10 +28,13 @@ import { scoreSummary, SHAPE_LABELS, validateCases } from './score.ts'
 import type { EvalCase, Shape } from './score.ts'
 import { pickVariants } from './variants.ts'
 import type { Variant } from './variants.ts'
+import { askReport, pickAskVariants, runAsk, validateAskCases } from './ask.ts'
+import type { AskCase, AskVariant } from './ask.ts'
 
 export const USAGE = `usage: pnpm digest:eval [options]   （一言のプロンプトの案を、同じ事例・同じ回数で比べる。手元で回す）
 
   --variants <a,b>    比べる案（最初が今の案。既定 current）   --runs <数>   事例 1 つを何回回すか（既定 1）
+  --ask               一言ではなく「次に送る文面の案」を比べる（#729。案は nocheck / check / form / form-check。既定は全部）
   --cases <パス>      事例のファイル（既定は作り物の cases.json）
   --feed              ~/.agent-feed の実際の返答を事例にする（読むだけ）。--days（既定 7）・-n（既定 30）・--project で絞る
   --provider / --model / --persona   口・モデル・性格（既定は settings.json）。claude の口は --claude を付けたときだけ
@@ -40,6 +43,8 @@ export const USAGE = `usage: pnpm digest:eval [options]   （一言のプロン�
 
 /** 作り物の事例の置き場 */
 export const CASES_PATH = join(dirname(fileURLToPath(import.meta.url)), 'cases.json')
+/** 「次に送る文面の案」の作り物の事例の置き場（#729） */
+export const ASK_CASES_PATH = join(dirname(fileURLToPath(import.meta.url)), 'ask-cases.json')
 /** リポジトリの根（`server/tools/digest-eval/` の 3 つ上）。出力をここの中に置かせない */
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 
@@ -138,6 +143,9 @@ export function insideRepo(path: string, root: string = REPO_ROOT): boolean {
 }
 
 interface Options {
+  /** 「次に送る文面の案」を比べる（#729）。そのときの案は `askVariants` */
+  ask: boolean
+  askVariants: AskVariant[]
   variants: Variant[]
   runs: number
   casesPath: string
@@ -164,6 +172,7 @@ function parse(argv: readonly string[], now: Date): Options | { error: string } 
         variants: { type: 'string' },
         runs: { type: 'string' },
         cases: { type: 'string' },
+        ask: { type: 'boolean' },
         feed: { type: 'boolean' },
         days: { type: 'string' },
         n: { type: 'string', short: 'n' },
@@ -189,8 +198,13 @@ function parse(argv: readonly string[], now: Date): Options | { error: string } 
     const v = Number(raw)
     return Number.isInteger(v) && v > 0 && v <= max ? v : `--${key} は 1〜${max} の整数で指定してください: ${raw}`
   }
-  const variants = pickVariants(str('variants') ?? 'current')
+  const ask = !!values.ask
+  const askVariants = ask ? pickAskVariants(str('variants') ?? 'nocheck,check,form,form-check') : []
+  if (typeof askVariants === 'string') return { error: askVariants }
+  const variants = ask ? [] : pickVariants(str('variants') ?? 'current')
   if (typeof variants === 'string') return { error: variants }
+  if (ask && values['include-asking'] !== undefined) return { error: '--include-asking は --ask では効きません（案は、人に聞いている返答にも作る）' }
+  if (ask && values.persona !== undefined) return { error: '--persona は --ask では効きません（案に性格は足さない）' }
   const runs = count('runs', 1, MAX_RUNS)
   if (typeof runs === 'string') return { error: runs }
   const days = count('days', DEFAULT_FEED_DAYS, 3650)
@@ -208,7 +222,7 @@ function parse(argv: readonly string[], now: Date): Options | { error: string } 
   if (persona !== undefined && !isPersonaId(persona)) return { error: `--persona が読めません: ${persona}` }
   const out = resolve(str('out') ?? join(tmpdir(), 'sai-digest-eval', now.toISOString().replace(/[:.]/g, '-')))
   if (insideRepo(out)) return { error: `--out はリポジトリの外にしてください（実際の返答と一言が入るので、コミットできる場所には置かない）: ${out}` }
-  return { variants, runs, casesPath: str('cases') ?? CASES_PATH, feed, days, n, project: str('project') ?? '', provider, model, persona, claude: !!values.claude, includeAsking: !!values['include-asking'], out }
+  return { ask, askVariants, variants, runs, casesPath: str('cases') ?? (ask ? ASK_CASES_PATH : CASES_PATH), feed, days, n, project: str('project') ?? '', provider, model, persona, claude: !!values.claude, includeAsking: !!values['include-asking'], out }
 }
 
 /** 形ごとの事例の数（`完了の報告 4・…`） */
@@ -241,6 +255,7 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
     io.err('モデルが決まっていません。--model <名前> を付けるか、画面の設定で選んでください')
     return 2
   }
+  if (o.ask) return runAskCommand(o, io, provider, model)
   let cases: EvalCase[]
   try {
     cases = o.feed ? await feedCases(io.dir, { days: o.days, n: o.n, project: o.project }, io.now) : await loadCases(o.casesPath)
@@ -280,6 +295,55 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
     return 1
   }
   return result.pass ? 0 : 1
+}
+
+/** 「次に送る文面の案」の事例のファイルを読む。形が違えば文を並べて投げる */
+export async function loadAskCases(path: string): Promise<AskCase[]> {
+  const raw: unknown = JSON.parse(await readFile(path, 'utf-8'))
+  const errors = validateAskCases(raw)
+  if (errors.length > 0) throw new Error(`事例のファイルが読めません（${path}）:\n${errors.map((e) => `  ${e}`).join('\n')}`)
+  return raw as AskCase[]
+}
+
+/** `--ask`: 案（next_ask）の作り方を比べる（#729）。出すのは件数と割合だけで、案の中身は `--out` にだけ残す */
+async function runAskCommand(o: Options, io: Io, provider: DigestProvider, model: string): Promise<number> {
+  let cases: AskCase[]
+  try {
+    cases = o.feed
+      ? (await feedCases(io.dir, { days: o.days, n: o.n, project: o.project }, io.now)).map((c) => ({ id: c.id, shape: 'feed' as const, ask: c.ask, text: c.text }))
+      : await loadAskCases(o.casesPath)
+  } catch (err) {
+    io.err(err instanceof Error ? err.message : String(err))
+    return 2
+  }
+  if (cases.length === 0) {
+    io.err('事例がありません')
+    return 1
+  }
+  const summarizer = (io.factory ?? summarizerFactory(io.dir, io.env, () => {}))(provider, model)
+  const where = provider === 'openai' ? (summarizer.where ?? io.env.SAI_DIGEST_URL ?? DEFAULT_OPENAI_URL) : 'claude'
+  io.err(`口: ${where} / ${model}・事例 ${cases.length} 件 × ${o.runs} 回 × 案 ${o.askVariants.length}（${o.askVariants.map((v) => v.id).join(', ')}）`)
+  const samples = await runAsk({ cases, variants: o.askVariants, runs: o.runs, summarize: (prompt) => summarizer.summarize(prompt), progress: io.err })
+  const counts = new Map<string, number>()
+  for (const c of cases) counts.set(c.shape, (counts.get(c.shape) ?? 0) + 1)
+  const lines = askReport(samples, o.askVariants.map((v) => v.id), [
+    `口: ${provider} / ${model}・${o.runs} 回ずつ`,
+    `事例: ${o.feed ? `記録の実際の返答（直近 ${o.days} 日の新しい方から）` : '作り物'} ${cases.length} 件${o.feed ? '' : `（形ごとに ${[...counts.values()].join(' / ')}）`}`,
+    '採点は本番の確かめと同じ `nextAskIssues()`（確かめありの案は、出たものは必ず「読める」に入る）',
+    ...o.askVariants.map((v) => `\`${v.id}\`: ${v.label}`),
+  ])
+  await mkdir(o.out, { recursive: true, mode: 0o700 })
+  const write = (name: string, body: string) => writeFile(join(o.out, name), body, { mode: 0o600 })
+  await write('outputs.jsonl', samples.map((s) => JSON.stringify(s)).join('\n') + '\n')
+  await write('report.md', lines.join('\n') + '\n')
+  if (o.feed) await write('cases.jsonl', cases.map((c) => JSON.stringify(c)).join('\n') + '\n')
+  for (const line of lines) io.out(line)
+  io.err(`案の中身は ${join(o.out, 'outputs.jsonl')}（リポジトリの外。貼るのは上の数字だけ）`)
+  if (samples.length > 0 && samples.every((s) => s.error)) {
+    io.err(`口が全部落ちました: ${samples[0]!.error}`)
+    return 1
+  }
+  return 0
 }
 
 /** このファイルを直接起動したか（リンク越しのパスでも当たるよう、実体で比べる） */

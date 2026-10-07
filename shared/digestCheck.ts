@@ -369,6 +369,16 @@ function unmarked(line: string): string {
 }
 
 /**
+ * 本文を文に分けたもの（コードブロックを外し、行の頭の Markdown の記号を落とす）。
+ * 案（`next_ask`）が本文の文を写していないかを見るのに使う（#729。`requestSentence()` と同じ分け方）
+ */
+export function proseSentences(rawSource: string): string[] {
+  return withoutCode(rawSource.normalize('NFC'))
+    .split('\n')
+    .flatMap((line) => sentencesOf(unmarked(line)))
+}
+
+/**
  * 本文の中の**人に頼んでいる文**を 1 つ、本文の言葉のまま返す（#713。一言の「人が次にすること」に使う）。無ければ空。
  *
  * - 見るのは `REQUEST`（頼みの形）か、人に言ってほしい言葉として引用された依頼（`QUOTED_ASK`）のある文だけ。`SOURCE_NEXT` ほど広く取らない
@@ -378,10 +388,7 @@ function unmarked(line: string): string {
  * - コードブロックの中は見ない。`max` 文字を超える文は返さない（切ると意味が変わる）
  */
 export function requestSentence(rawSource: string, max: number = DIGEST_MAX_CHARS): string {
-  const source = withoutCode(rawSource.normalize('NFC'))
-  const found = source
-    .split('\n')
-    .flatMap((line) => sentencesOf(unmarked(line)))
+  const found = proseSentences(rawSource)
     .filter((t) => [...t].length <= max && !/[?？]$/.test(t))
     .map((t) => ({ t, quoted: new RegExp(QUOTED_ASK.source).test(t), asks: REQUEST.test(masked(t)) }))
     .filter((x) => x.quoted || x.asks)

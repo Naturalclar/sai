@@ -182,11 +182,56 @@ function lastIndex(lines: readonly string[], test: (line: string) => boolean): n
 // ---- 画面から答える（#450） ----
 
 /**
- * **押せるようにしない選択肢**（`2. Yes, and don't ask again for commands that start with …`）。
- * 効く範囲（どこまでの `git` を今後も通すのか）がボタンの文字からは読み切れないので、
- * #421 で OpenCode の `always` を出さないことにしたのと同じ理由で落とす。端末でなら今までどおり押せる
+ * **範囲が読めたときだけ押せるようにする選択肢**（`2. Yes, and don't ask again for commands that start with …`。#741）。
+ * 押すと Codex が「その語で始まるコマンドを今後聞かない」規則を自分で足す（SAI は書かない）。
+ * 前は一律に落としていた（効く範囲がボタンの文字から読み切れない。#421 で OpenCode の `always` を出さなかったのと同じ理由）。
+ * いまは `dontAskScope()` が**範囲を全部読めたときだけ**、その範囲をボタンに書いて出す。読めなければ今までどおり落とす（端末でなら押せる）
  */
 const ALWAYS_OPTION = /don'?t ask again|always (?:allow|approve)/i
+/**
+ * 範囲を読める形。**文の終わり（閉じる引用符と近道キー `(p)`）まで辿れていること**を形で確かめる
+ * （折り返しの途中までしか読めていなければ、最後が `` ` (p) `` にならない）。範囲そのものに引用符が入ることがあるので、
+ * 閉じるのは最後の引用符
+ */
+const DONT_ASK = /^Yes, and don't ask again for commands that start with `(.+)` \(p\)$/
+/** ボタンに書ける範囲の長さ。これより長いものは、押す人が読み切れないので出さない */
+export const DONT_ASK_SCOPE_MAX = 120
+
+const squash = (text: string): string => text.trim().replace(/\s+/g, ' ')
+
+/**
+ * 「今後も聞かない」が効く範囲（**その語で始まるコマンド**の「その語」）。**全部読めたときだけ**返し、少しでも怪しければ null（#741）:
+ *
+ * - その選択肢がちょうど 1 つで、文が終わり（閉じる引用符と `(p)`）まで読めている
+ * - 幅や長さで切れていない（`…` が入っていない。`MAX_LABEL` で切ったものも `…` が付く）
+ * - **読めた範囲が、見出しのコマンド（`$ …`）の 1 行目の頭と語の区切りで一致する**（別のコマンドの規則・ネットワークの規則のような
+ *   別の形の文、折り返しが語の途中に入って空白が紛れたもの、をここで落とす）。コマンドが幅で折り返している・複数行のときは、
+ *   範囲が 1 行目の途中の語の区切りまでに収まっているときだけ（1 行目の終わりちょうどだと、次の行に語の続きがあるか分からない）
+ * - ボタンに書ける長さ（`DONT_ASK_SCOPE_MAX`）に収まる
+ *
+ * **範囲が広すぎるか（`sudo` や `rm` の 1 語など）は見ない**: 範囲をそのままボタンに書いて、押すかは人が決める
+ */
+export function dontAskScope(dialog: TerminalDialog | null): { option: TerminalDialogOption; scope: string } | null {
+  if (!dialog) return null
+  const always = dialog.options.filter((o) => ALWAYS_OPTION.test(o.label))
+  if (always.length !== 1) return null
+  const option = always[0]!
+  if (option.label.includes('…')) return null
+  const scope = DONT_ASK.exec(option.label)?.[1]
+  if (!scope || scope !== scope.trim() || /\s{2,}/.test(scope) || scope.length > DONT_ASK_SCOPE_MAX) return null
+  // 突き合わせるのはコマンドの 1 行目（幅で折り返したコマンドも、ヒアドキュメントのような本当の複数行も、続きは次の行になる）
+  const lines = dialog.command.trim().split('\n')
+  const first = squash(lines[0] ?? '')
+  if (!first) return null
+  if (!first.startsWith(`${scope} `) && !(lines.length === 1 && first === scope)) return null
+  return { option, scope }
+}
+
+/**
+ * 「今後も聞かない」のボタンの文言。**範囲そのもの**を書く（「常に許可」とだけ書かない。押した範囲が本人に見えるように）。
+ * 頭の「許可して、」は元の文の `Yes, and`: 押すと**いまのコマンドも実行される**（規則を足すだけのボタンに見せない）
+ */
+export const dontAskLabel = (scope: string): string => `許可して、\`${scope}\` で始まるコマンドを今後聞かない`
 /** 「はい」ではない選択肢（ボタンの色と `behavior` を決めるだけ） */
 const DENY_OPTION = /^(?:no\b|don'?t\b|reject|cancel|いいえ)/i
 
@@ -194,14 +239,20 @@ const DENY_OPTION = /^(?:no\b|don'?t\b|reject|cancel|いいえ)/i
 export const dialogDecisionId = (option: Pick<TerminalDialogOption, 'number'>): string => `opt-${option.number}`
 
 /**
- * 画面に出す選択肢（#450）。**「今後も確認しない」は落とす**ので、ダイアログに 3 つあっても 2 つになる。
- * ラベルは画面に出ている英語のまま（Codex 自身の言い回し。許可モードの名前を英語のままにしているのと同じ）
+ * 画面に出す選択肢（#450）。**「今後も聞かない」は、範囲が全部読めたときだけ出す**（#741。`dontAskScope()`）。読めなければ落とすので、
+ * ダイアログに 3 つあっても 2 つになる。ラベルは画面に出ている英語のまま（Codex 自身の言い回し。許可モードの名前を英語のままに
+ * しているのと同じ）で、「今後も聞かない」だけは範囲を書いた文にする（`dontAskLabel()`）。並びはダイアログのまま
  */
 export function dialogDecisions(dialog: TerminalDialog | null): ApprovalDecision[] {
   if (!dialog) return []
+  const dontAsk = dontAskScope(dialog)
   return dialog.options
-    .filter((o) => !ALWAYS_OPTION.test(o.label))
-    .map((o) => ({ id: dialogDecisionId(o), label: o.label, behavior: DENY_OPTION.test(o.label) ? ('deny' as const) : ('allow' as const) }))
+    .filter((o) => !ALWAYS_OPTION.test(o.label) || o === dontAsk?.option)
+    .map((o) => ({
+      id: dialogDecisionId(o),
+      label: o === dontAsk?.option ? dontAskLabel(dontAsk.scope) : o.label,
+      behavior: DENY_OPTION.test(o.label) ? ('deny' as const) : ('allow' as const),
+    }))
 }
 
 /**

@@ -198,14 +198,58 @@ test('answer: Enter のあともダイアログが残っていたら、押せた
   assert.equal(dialogs.has(approvalId), true, 'バブルは残す（まだ答えられていない）')
 })
 
-test('answer: 出していない選択肢（今後も確認しない）と、知らない approval は受けない', async () => {
+test('answer: 出していない選択肢と、知らない approval は受けない。範囲が読めない「今後も聞かない」は出していないので受けない', async () => {
   const tmux = new FakeTmux()
-  tmux.screen = threeScreen(1)
+  // 2 番の範囲が見出しのコマンドと合わない → ボタンにしていない
+  tmux.screen = threeScreen(1).replace('`git add` (p)', '`git push` (p)')
   const { dialogs, approvalId } = await ready(tmux)
+  assert.deepEqual((await dialogs.scan([session()]))['T1@repo']?.[0]?.decisions?.map((d) => d.id), ['opt-1', 'opt-3'])
   assert.deepEqual(await dialogs.answer(approvalId, { behavior: 'allow', decision: 'opt-2' }), { ok: false, status: 400, error: '提示されていない選択です' })
   assert.deepEqual(await dialogs.answer(approvalId, { behavior: 'deny', decision: 'opt-1' }), { ok: false, status: 400, error: '提示されていない選択です' })
   assert.deepEqual(await dialogs.answer('codex-dialog-知らない', { behavior: 'allow', decision: 'opt-1' }), { ok: false, status: 404, error: 'approval not found' })
   assert.deepEqual(tmux.keys, [], 'どれもキーを送らない')
+})
+
+test('「今後も聞かない」（#741）: 範囲が読めたときだけ、範囲を書いたボタンを出す。押すと 2 番まで動かして Enter', async () => {
+  const tmux = new FakeTmux()
+  tmux.screen = threeScreen(1)
+  const { dialogs, approvalId } = await ready(tmux)
+  const approval = (await dialogs.scan([session()]))['T1@repo']![0]!
+  assert.deepEqual(approval.decisions, [
+    { id: 'opt-1', label: 'Yes, proceed (y)', behavior: 'allow' },
+    { id: 'opt-2', label: '許可して、`git add` で始まるコマンドを今後聞かない', behavior: 'allow' },
+    { id: 'opt-3', label: 'No, and tell Codex what to do differently (esc)', behavior: 'deny' },
+  ])
+  tmux.onKeys = (keys) => {
+    if (keys[0] === 'Enter') tmux.screen = IDLE
+    else if (keys[0] === 'Down') tmux.screen = threeScreen(1 + keys.length)
+  }
+  assert.deepEqual(await dialogs.answer(approvalId, { behavior: 'allow', decision: 'opt-2' }), { ok: true })
+  assert.deepEqual(tmux.keys, ['Down', 'Enter'], '1 つ下げて、印が 2 番に来たのを読んでから確定')
+})
+
+test('「今後も聞かない」（#741）: 読み直したら範囲が変わっていたら、キーを送らない（別のダイアログとして扱う）', async () => {
+  const tmux = new FakeTmux()
+  tmux.screen = threeScreen(1)
+  const { dialogs, approvalId } = await ready(tmux)
+  // 同じコマンドのまま、2 番の範囲だけが広くなった（`git add` → `git`）
+  tmux.screen = threeScreen(1).replace('`git add` (p)', '`git` (p)')
+  assert.deepEqual(await dialogs.answer(approvalId, { behavior: 'allow', decision: 'opt-2' }), { ok: false, status: 409, error: '画面が変わりました（もう一度確かめてください）' })
+  assert.deepEqual(tmux.keys, [], 'キーを 1 つも送らない')
+  // 走査し直すと別の approval_id になり、ボタンの範囲も新しいものになる
+  const next = (await dialogs.scan([session()]))['T1@repo']![0]!
+  assert.notEqual(next.approval_id, approvalId)
+  assert.equal(next.decisions?.find((d) => d.id === 'opt-2')?.label, '許可して、`git` で始まるコマンドを今後聞かない')
+
+  // 矢印のあとに範囲が変わった場合も Enter を送らない
+  const tmux2 = new FakeTmux()
+  tmux2.screen = threeScreen(1)
+  const second = await ready(tmux2)
+  tmux2.onKeys = (keys) => {
+    if (keys[0] === 'Down') tmux2.screen = threeScreen(2).replace('`git add` (p)', '`git` (p)')
+  }
+  assert.deepEqual(await second.dialogs.answer(second.approvalId, { behavior: 'allow', decision: 'opt-2' }), { ok: false, status: 409, error: '選び直せませんでした（端末で答えてください）' })
+  assert.deepEqual(tmux2.keys, ['Down'], 'Enter は送っていない')
 })
 
 test('answer: 中身が読めていないダイアログは端末に任せる', async () => {

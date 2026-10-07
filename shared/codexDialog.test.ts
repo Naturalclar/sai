@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { CODEX_DIALOG_TEXT, codexDialogKey, codexDialogText, dialogAnswerable, dialogDecisionIndex, dialogDecisions, dialogSteps, parseCodexDialog, selectedIndex } from './codexDialog.ts'
+import { CODEX_DIALOG_TEXT, codexDialogKey, codexDialogText, dialogAnswerable, dialogDecisionIndex, dialogDecisions, dialogSteps, DONT_ASK_SCOPE_MAX, dontAskLabel, dontAskScope, parseCodexDialog, selectedIndex } from './codexDialog.ts'
 
 /** 実機の画面（codex 0.154.0。tmux capture-pane -p。要素の間に空行が入る） */
 const COMMAND_SCREEN = [
@@ -191,7 +191,8 @@ test('折り返した選択肢の続き（5 文字下げ）で遡るのを止め
   assert.ok(dialog.options[1]!.label.startsWith("Yes, and don't ask again for commands that start with `gh pr create"), dialog.options[1]!.label)
   assert.equal(dialog.options[2]!.label, 'No, and tell Codex what to do differently (esc)')
   assert.ok(!dialog.options[2]!.label.includes('diff --check'), '2 番の続きが 3 番に混ざっている')
-  // 画面に出るのは「はい」と「いいえ」の 2 つ（「今後も確認しない」は落とす）。印が読めているので押せる
+  // 画面に出るのは「はい」と「いいえ」の 2 つ（「今後も聞かない」は、範囲が長すぎてボタンに書けないので落とす。#741）。印が読めているので押せる
+  assert.equal(dontAskScope(dialog), null)
   assert.deepEqual(
     dialogDecisions(dialog).map((d) => [d.id, d.behavior]),
     [
@@ -284,10 +285,11 @@ test('dialogAnswerable: 半分しか読めなかったものは答えられな�
 
 // ---- 画面から答える（#450） ----
 
-test('dialogDecisions: 「今後も確認しない」はボタンにしない。はい／いいえは色を分ける', () => {
+test('dialogDecisions: 「今後も聞かない」は範囲が読めたときだけ、範囲を書いたボタンにする（#741）。はい／いいえは色を分ける', () => {
   const dialog = parseCodexDialog(COMMAND_SCREEN)!
   assert.deepEqual(dialogDecisions(dialog), [
     { id: 'opt-1', label: 'Yes, proceed (y)', behavior: 'allow' },
+    { id: 'opt-2', label: '許可して、`git add` で始まるコマンドを今後聞かない', behavior: 'allow' },
     { id: 'opt-3', label: 'No, and tell Codex what to do differently (esc)', behavior: 'deny' },
   ])
   assert.deepEqual(dialogDecisions(null), [])
@@ -296,8 +298,12 @@ test('dialogDecisions: 「今後も確認しない」はボタンにしない。
 test('dialogDecisionIndex: 出していない選択肢と、食い違う behavior は受けない', () => {
   const dialog = parseCodexDialog(COMMAND_SCREEN)!
   assert.equal(dialogDecisionIndex(dialog, 'opt-1', 'allow'), 0)
-  assert.equal(dialogDecisionIndex(dialog, 'opt-3', 'deny'), 2, '画面の並びの位置（落とした 2 つめを飛ばさない）')
-  assert.equal(dialogDecisionIndex(dialog, 'opt-2', 'allow'), null, '「今後も確認しない」は出していない')
+  assert.equal(dialogDecisionIndex(dialog, 'opt-3', 'deny'), 2, '画面の並びの位置')
+  assert.equal(dialogDecisionIndex(dialog, 'opt-2', 'allow'), 1, '範囲が読めた「今後も聞かない」は出している（#741）')
+  assert.equal(dialogDecisionIndex(dialog, 'opt-2', 'deny'), null)
+  // 範囲が読めないダイアログでは出していないので、受けない
+  assert.equal(dialogDecisionIndex(parseCodexDialog(WRAPPED_SCREEN)!, 'opt-2', 'allow'), null, '「今後も聞かない」は出していない')
+  assert.equal(dialogDecisionIndex(parseCodexDialog(WRAPPED_SCREEN)!, 'opt-3', 'deny'), 2, '落とした 2 つめを飛ばさない')
   assert.equal(dialogDecisionIndex(dialog, 'opt-1', 'deny'), null, 'ボタンと食い違う behavior は受けない')
   assert.equal(dialogDecisionIndex(dialog, 'opt-9', 'allow'), null)
   assert.equal(dialogDecisionIndex(dialog, undefined, 'allow'), null, '選択を送らない画面からは受けない')
@@ -328,3 +334,88 @@ test('最後の選択肢が折り返していても読む（#597 のレビュー
   // 終わりの行が画面に無くても、続きをラベルから落とさない
   assert.deepEqual(parseCodexDialog(options.join('\n'))?.options.map((o) => o.label), ['Yes, proceed (y)', 'No, and tell Codex what to do differently (esc)'])
 })
+
+// ---- 「今後も聞かない」を、範囲が読めたときだけ出す（#741。文字列は作り物） ----
+
+/** コマンドと 2 番の行（折り返した続きは 5 文字下げ）から画面を組む */
+const askScreen = (command: string, second: string[], mark = 1) =>
+  [
+    '  Would you like to run the following command?',
+    '',
+    `  $ ${command}`,
+    '',
+    `${mark === 1 ? '›' : ' '} 1. Yes, proceed (y)`,
+    `${mark === 2 ? '›' : ' '} 2. ${second[0]}`,
+    ...second.slice(1).map((l) => `     ${l}`),
+    `${mark === 3 ? '›' : ' '} 3. No, and tell Codex what to do differently (esc)`,
+    '',
+    '  Press enter to confirm or esc to cancel',
+  ].join('\n')
+const scopeOf = (command: string, second: string[]) => dontAskScope(parseCodexDialog(askScreen(command, second)))?.scope ?? null
+const HEAD = "Yes, and don't ask again for commands that start with"
+
+test('dontAskScope: 2 番が 1 行・2 行・3 行に折り返していても、終わりまで辿れていれば範囲を読む', () => {
+  assert.equal(scopeOf('zztool sync --all', [`${HEAD} \`zztool sync\` (p)`]), 'zztool sync')
+  assert.equal(scopeOf('zztool sync --all', [`${HEAD} \`zztool`, 'sync` (p)']), 'zztool sync')
+  assert.equal(scopeOf('zztool sync --all --dry-run', [`${HEAD}`, '`zztool sync', '--all` (p)']), 'zztool sync --all')
+  // コマンドそのもの（引数まで全部）が範囲のとき
+  assert.equal(scopeOf('zztool sync --all', [`${HEAD} \`zztool sync --all\` (p)`]), 'zztool sync --all')
+  // 範囲に引用符が入っていても、閉じるのは最後の引用符
+  assert.equal(scopeOf('zzecho `date` now', [`${HEAD} \`zzecho \`date\`\` (p)`]), 'zzecho `date`')
+  // ボタンの文言は範囲そのもの
+  assert.equal(dontAskLabel('zztool sync'), '許可して、`zztool sync` で始まるコマンドを今後聞かない')
+  const decisions = dialogDecisions(parseCodexDialog(askScreen('zztool sync --all', [`${HEAD} \`zztool`, 'sync` (p)'])))
+  assert.deepEqual(decisions.map((d) => [d.id, d.label, d.behavior]), [
+    ['opt-1', 'Yes, proceed (y)', 'allow'],
+    ['opt-2', '許可して、`zztool sync` で始まるコマンドを今後聞かない', 'allow'],
+    ['opt-3', 'No, and tell Codex what to do differently (esc)', 'deny'],
+  ])
+})
+
+test('dontAskScope: 読み切れていない・見出しのコマンドと合わない・別の形の文では出さない（ボタンは 2 つのまま）', () => {
+  const none: [string, string, string[]][] = [
+    ['幅で切れている', 'zztool sync --all', [`${HEAD} \`zztool sy… (p)`]],
+    ['範囲に … が入っている（切れたものと見分けられない）', 'zzecho … done', [`${HEAD} \`zzecho …\` (p)`]],
+    ['引用符が閉じていない（続きが画面の外）', 'zztool sync --all', [`${HEAD} \`zztool sync`]],
+    ['近道キーまで辿れていない', 'zztool sync --all', [`${HEAD} \`zztool sync\``]],
+    ['先頭の語がコマンドと合わない', 'zztool sync --all', [`${HEAD} \`zzother sync\` (p)`]],
+    ['語の途中で一致している', 'zztoolbox sync', [`${HEAD} \`zztool\` (p)`]],
+    ['折り返しが語の途中に入った（空白が紛れる）', 'zztool sync --all', [`${HEAD} \`zzto`, 'ol sync` (p)']],
+    ['コマンドの頭ではなく途中', 'env zztool sync', [`${HEAD} \`zztool sync\` (p)`]],
+    ['別の形の文（ネットワークの規則など）', 'zztool sync --all', ["Yes, and don't ask again for this host (p)"]],
+    ['別の形の文（always）', 'zztool sync --all', ['Yes, always allow `zztool sync` (p)']],
+    ['範囲が空', 'zztool sync --all', [`${HEAD} \`\` (p)`]],
+    ['範囲が長すぎてボタンに書けない', `zztool ${'a'.repeat(DONT_ASK_SCOPE_MAX)} x`, [`${HEAD} \`zztool ${'a'.repeat(DONT_ASK_SCOPE_MAX)}\` (p)`]],
+  ]
+  for (const [why, command, second] of none) {
+    const dialog = parseCodexDialog(askScreen(command, second))
+    assert.equal(dontAskScope(dialog), null, why)
+    assert.deepEqual(dialogDecisions(dialog).map((d) => d.id), ['opt-1', 'opt-3'], why)
+    assert.equal(dialogAnswerable(dialog), true, `${why}: はい／いいえは今までどおり押せる`)
+  }
+  // コマンドが複数行・コマンドの無い質問・読めないダイアログ
+  // コマンドが幅で折り返している・複数行のときは 1 行目と突き合わせる（#744 のレビュー。長いコマンドこそ聞かれ続ける）
+  const wrapped = (first: string, rest: string, scope: string) =>
+    parseCodexDialog(askScreen('X', [`${HEAD} \`${scope}\` (p)`]).replace('  $ X', `  $ ${first}\n      ${rest}`))
+  const long = wrapped('zztool pr create --base main --body "とても長い', '本文の続き"', 'zztool pr create')
+  assert.equal(long?.command.includes('\n'), true)
+  assert.equal(dontAskScope(long)?.scope, 'zztool pr create', '範囲が 1 行目の途中の語の区切りまでに収まっている')
+  assert.equal(dontAskScope(wrapped('zztool sync', '--all', 'zztool sync')), null, '1 行目の終わりちょうど（次の行に語の続きがあるか分からない）')
+  assert.equal(dontAskScope(wrapped('zztool pr cre', 'ate --base main', 'zztool pr create')), null, '範囲が 2 行目にまたがる')
+  assert.equal(dontAskScope(wrapped('zzother pr create --base', 'main', 'zztool pr create')), null)
+  const question = parseCodexDialog(['  どちらで進めますか？', '', '› 1. 案 A', "  2. Yes, and don't ask again for commands that start with `zztool` (p)", '', '  Press enter to confirm or esc to cancel'].join('\n'))
+  assert.equal(question?.command, '')
+  assert.equal(dontAskScope(question), null, 'コマンドの無いダイアログ')
+  assert.equal(dontAskScope(null), null)
+  // 「今後も聞かない」に当たる選択肢が 2 つあるような形は、どちらも出さない
+  const twice = parseCodexDialog(askScreen('zztool sync', [`${HEAD} \`zztool sync\` (p)`]).replace('3. No, and tell', "3. Yes, and don't ask again for anything (a)\n  4. No, and tell"))
+  assert.equal(dontAskScope(twice), null)
+})
+
+test('鍵には範囲の文も入る: 読み直して範囲が変わっていれば別のダイアログ（#741）', () => {
+  const a = parseCodexDialog(askScreen('zztool sync --all', [`${HEAD} \`zztool sync\` (p)`]))
+  const b = parseCodexDialog(askScreen('zztool sync --all', [`${HEAD} \`zztool\` (p)`]))
+  assert.deepEqual([dontAskScope(a)?.scope, dontAskScope(b)?.scope], ['zztool sync', 'zztool'])
+  assert.notEqual(codexDialogKey(a), codexDialogKey(b))
+})
+

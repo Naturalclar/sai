@@ -83,7 +83,16 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - server request の `(request id, threadId, turnId, itemId)` を同じ接続に束ね、`request_user_input`、コマンド、ファイル変更、追加権限を `Approval` にする
 - コマンドの `availableDecisions` は実値をサーバ内に隠して不透明な id だけ画面へ渡し、ファイルと権限もプロトコルが許す候補だけを作る
 - 別 thread / turn、未提示の decision、二重回答は拒否。`serverRequest/resolved`、turn 完了、idle、切断で消す
-- 「常に許可」は Codex には出さない
+- **SAI 自身の「常に許可」（Claude の設定に書くルール。`AlwaysRules`）は Codex には出さない。Codex が候補に出してきた規則の追加は、範囲を書いてボタンにする**（#741）
+  - 対象は `availableDecisions` の `acceptWithExecpolicyAmendment`（語の並びを今後聞かない）と `applyNetworkPolicyAmendment`（ホストへの通信を今後聞かない／今後も断る）。押すと Codex が自分の規則（`CODEX_HOME/rules/default.rules`。セッションをまたいで残る）に足す。**SAI はそのファイルを読まないし書かない**
+  - 文言は `server/reply/codexAmendment.ts` の `amendmentLabel()`: 「`git status`」を今後聞かない／「`example.com`」への通信を今後聞かない（`action: deny` は「今後も断る」で、ボタンの向きも拒否）。範囲は**候補そのものの中身**から読む（押したときに Codex へ返す値。別の欄の `proposedExecpolicyAmendment` は詳細に出すだけ）
+  - **範囲をボタンに書き切れないときは、その候補を出さない**（切って見せない）: 配列でない・空・文字でない語・空の語・読めない文字・`AMENDMENT_WORDS_MAX`（12 語）超・`AMENDMENT_RANGE_MAX`（80 字）超、ホストが名前として読めない・`action` が allow / deny 以外。落とした候補の id は画面に渡らないので、答えにも使えない（「出していない decision」として断る）
+  - 出すのは**知っている形だけ**: 今回かぎりの 4 つ（`accept` / `acceptForSession` / `decline` / `cancel`）と、上の 2 つの規則の追加。知らない名前の候補は出さない（新しい版が別の「今後も…」を足してきても、英語の名前のまま許可の色で出さない）。候補の鍵が 2 つある・中身に余分な欄があるものも出さない（押すと候補がまるごと Codex に返るので、見せていないものまで通すことになる）
+  - 見た目と中身が食い違う文字（制御・書式・結合文字・半角以外の空白・何も描かれない字・「」『』｢｣）が入った語は読めない扱い
+  - 文言に「で始まる」とは書かない（規則が前方一致で照合されるかは、押して確かめていない）
+  - **出せる候補が 1 つも残らなければ `answerable: false`**（バブルは「ここからは答えられません。『止める』でターンを止めてください」と出す。来ていない候補は足さない）
+  - 空白や引用符を含む語は `"…"` で囲む（`/bin/zsh -lc "touch out.txt"`。語の切れ目が分かるように）
+- コマンドに「拒否」が無いことがある（実測 0.160.1 では `accept` / `acceptWithExecpolicyAmendment` / `cancel` だけで、`decline` が来ない）。SAI は来ていない decision を足さないので、そのときは「ターンを中止」しか選べない
 
 ## ターンを止める
 

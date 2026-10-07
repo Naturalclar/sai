@@ -141,7 +141,8 @@ test('requestUserInput: 質問を表示し、question idへ安全に回答して
 
 test('command approval: availableDecisionsだけを出し、選んだ実値をそのまま返す', async () => {
   const { app, connection } = await started()
-  const amendment = { acceptWithExecpolicyAmendment: { execpolicy_amendment: ['prefix_rule(pattern=["git", "status"], decision="allow")'] } }
+  // 規則の追加（今後も聞かない）は、覚えられる範囲をボタンに書く（#741）
+  const amendment = { acceptWithExecpolicyAmendment: { execpolicy_amendment: ['git', 'status'] } }
   connection.emit({
     id: 'cmd-rpc', method: 'item/commandExecution/requestApproval',
     params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'cmd-1', startedAtMs: Date.parse('2026-09-09T11:59:00Z'), command: 'git status', cwd: '/repo', availableDecisions: ['decline', amendment] },
@@ -149,12 +150,64 @@ test('command approval: availableDecisionsだけを出し、選んだ実値を�
   const approval = app.snapshot()['thread-1@repo']![0]!
   assert.deepEqual(approval.decisions?.map(({ label, behavior }) => ({ label, behavior })), [
     { label: '拒否', behavior: 'deny' },
-    { label: '同種のコマンドを許可', behavior: 'allow' },
+    { label: '「git status」を今後聞かない', behavior: 'allow' },
   ])
   assert.deepEqual(app.answer(approval.approval_id, { behavior: 'allow', decision: 'd0' }), { ok: false, status: 400, error: '提示されていないdecisionです' }, 'behaviorの改ざんも拒否')
   assert.deepEqual(app.answer(approval.approval_id, { behavior: 'allow', decision: 'not-offered' }), { ok: false, status: 400, error: '提示されていないdecisionです' })
   assert.deepEqual(app.answer(approval.approval_id, { behavior: 'allow', decision: 'd1' }), { ok: true })
   assert.deepEqual(connection.sent.at(-1), { id: 'cmd-rpc', result: { decision: amendment } })
+})
+
+test('command approval: 範囲をボタンに書けない規則の追加は出さず、その id では答えられない（#741）', async () => {
+  const { app, connection } = await started()
+  const unreadable = { acceptWithExecpolicyAmendment: { execpolicy_amendment: ['sh', '-c', `echo ${'x'.repeat(200)}`] } }
+  const nameless = { acceptWithExecpolicyAmendment: {} }
+  const allowHost = { applyNetworkPolicyAmendment: { network_policy_amendment: { host: 'example.com', action: 'allow' } } }
+  const denyHost = { applyNetworkPolicyAmendment: { network_policy_amendment: { host: 'example.com', action: 'deny' } } }
+  const badHost = { applyNetworkPolicyAmendment: { network_policy_amendment: { host: 'not a host', action: 'allow' } } }
+  connection.emit({
+    id: 'cmd-rpc', method: 'item/commandExecution/requestApproval',
+    params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'cmd-1', command: 'curl example.com', cwd: '/repo', availableDecisions: ['accept', unreadable, nameless, allowHost, denyHost, badHost, 'cancel'] },
+  })
+  const approval = app.snapshot()['thread-1@repo']![0]!
+  assert.deepEqual(approval.decisions, [
+    { id: 'd0', label: '許可', behavior: 'allow' },
+    { id: 'd3', label: '「example.com」への通信を今後聞かない', behavior: 'allow' },
+    { id: 'd4', label: '「example.com」への通信を今後も断る', behavior: 'deny' },
+    { id: 'd6', label: 'ターンを中止', behavior: 'deny' },
+  ])
+  // 出していない候補の id は通らない（落とした規則の追加を、id を当てて押させない）
+  for (const hidden of ['d1', 'd2', 'd5']) {
+    assert.deepEqual(app.answer(approval.approval_id, { behavior: 'allow', decision: hidden }), { ok: false, status: 400, error: '提示されていないdecisionです' }, hidden)
+  }
+  assert.deepEqual(app.answer(approval.approval_id, { behavior: 'allow', decision: 'd4' }), { ok: false, status: 400, error: '提示されていないdecisionです' }, '断る規則を許可として送らせない')
+  assert.deepEqual(app.answer(approval.approval_id, { behavior: 'deny', decision: 'd4' }), { ok: true })
+  assert.deepEqual(connection.sent.at(-1), { id: 'cmd-rpc', result: { decision: denyHost } })
+})
+
+test('command approval: 知らない名前の候補は出さない。出せる候補が 1 つも無ければ、画面からは答えられないと出す（#742 のレビュー）', async () => {
+  const { app, connection } = await started()
+  connection.emit({
+    id: 'cmd-a', method: 'item/commandExecution/requestApproval',
+    params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'cmd-a', command: 'git status', cwd: '/repo', availableDecisions: ['accept', 'acceptAlways', { declineWithSomething: { x: 1 } }, 'toString'] },
+  })
+  const first = app.snapshot()['thread-1@repo']![0]!
+  assert.deepEqual(first.decisions, [{ id: 'd0', label: '許可', behavior: 'allow' }])
+  assert.equal(first.answerable, true)
+  for (const hidden of ['d1', 'd2', 'd3']) assert.equal(app.answer(first.approval_id, { behavior: 'allow', decision: hidden }).ok, false, hidden)
+  assert.deepEqual(app.answer(first.approval_id, { behavior: 'allow', decision: 'd0' }), { ok: true })
+
+  // 来たのが、範囲を書けない規則の追加だけ
+  const long = { acceptWithExecpolicyAmendment: { execpolicy_amendment: ['sh', '-c', 'x'.repeat(200)] } }
+  connection.emit({
+    id: 'cmd-b', method: 'item/commandExecution/requestApproval',
+    params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'cmd-b', command: 'sh -c …', cwd: '/repo', availableDecisions: [long] },
+  })
+  const second = app.snapshot()['thread-1@repo']!.find((a) => a.tool_use_id === 'cmd-b')!
+  assert.equal(second.decisions, undefined)
+  assert.equal(second.answerable, false, '押しても通らないボタンを並べない')
+  assert.equal(app.answer(second.approval_id, { behavior: 'allow' }).ok, false)
+  assert.equal(app.answer(second.approval_id, { behavior: 'allow', decision: 'd0' }).ok, false)
 })
 
 test('file/permissions: 変更対象と追加権限を出し、turn/session/拒否を明示する', async () => {

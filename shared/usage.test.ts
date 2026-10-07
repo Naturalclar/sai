@@ -306,25 +306,37 @@ test('rate_limit_event: 出力のかたまりから最後のものを採る（�
   assert.equal(lastRateLimitEvent(''), null)
 })
 
-test('割合の 2 つの出どころを窓ごとにまとめる（#694）', () => {
+test('割合の 2 つの出どころをまとめる: 返信が新しければ丸ごと、ステータスラインが新しければ窓ごと（#694）', () => {
   const w = (used: number, minutes: number, resets?: number) => ({ used_percent: used, window_minutes: minutes, ...(resets ? { resets_at: resets } : {}) })
   const R5 = 1791269400
   const R7 = 1791392400
-  // 実測の形: ステータスラインは 10/5 の週 37% だけ。返信の出力は 5 時間 2%・週 61%
-  const status = { at: '2026-10-05T10:57:58+09:00', secondary: w(37, 10080, R7) }
   const replies = { at: '2026-10-06T14:00:00+09:00', primary: w(2, 300, R5), secondary: w(61, 10080, R7) }
-  assert.deepEqual(mergeUsageWindows(status, replies), replies)
-  assert.deepEqual(mergeUsageWindows(replies, status), replies, '渡す順に依らない')
-  assert.equal(mergeUsageWindows(status, null), status)
+  assert.equal(mergeUsageWindows(null, replies), replies)
   assert.equal(mergeUsageWindows(null, null), null)
-  // 古い値を持ち回っている端末があとから低い値を書いても、同じ窓なら高いほうを残す（時刻は採った窓の出どころ）
-  const staleTui = { at: '2026-10-06T14:30:00+09:00', secondary: w(40, 10080, R7 + 5) }
-  assert.deepEqual(mergeUsageWindows(staleTui, replies), { at: '2026-10-06T14:00:00+09:00', primary: w(2, 300, R5), secondary: w(61, 10080, R7) })
-  // 戻る時刻が先へ進んでいれば新しい窓なので、低くてもそちら
-  const nextWindow = { at: '2026-10-06T15:00:00+09:00', primary: w(1, 300, R5 + 18000) }
-  assert.deepEqual(mergeUsageWindows(replies, nextWindow), { at: '2026-10-06T15:00:00+09:00', primary: w(1, 300, R5 + 18000), secondary: w(61, 10080, R7) })
-  // 古いほうが先の窓を持っていれば、そちらを残す
-  assert.deepEqual(mergeUsageWindows({ at: '2026-10-06T13:00:00+09:00', primary: w(9, 300, R5 + 18000) }, replies)?.primary, w(9, 300, R5 + 18000))
-  // 同じ値・戻る時刻が比べられないときは、届いたのが新しいほう
-  assert.deepEqual(mergeUsageWindows({ at: '2026-10-06T13:00:00+09:00', secondary: w(90, 10080) }, { at: '2026-10-06T14:00:00+09:00', secondary: w(61, 10080, R7) })?.secondary, w(61, 10080, R7))
+
+  // 実測の形: ステータスラインは 10/5 の週 37% だけ → 返信を丸ごと
+  const old = { at: '2026-10-05T10:57:58+09:00', secondary: w(37, 10080, R7) }
+  assert.equal(mergeUsageWindows(old, replies), replies)
+  assert.equal(mergeUsageWindows(old, null), old)
+  // 返信が新しければ、ステータスラインのほうが高くても・窓を余分に持っていても混ぜない
+  // （枠が途中でリセットされて下がった・端数の違い・古い 5 時間の窓を「いま」として出さない）
+  const higher = { at: '2026-10-06T11:00:00+09:00', primary: w(80, 300, R5), secondary: w(62, 10080, R7) }
+  assert.equal(mergeUsageWindows(higher, replies), replies)
+  assert.equal(mergeUsageWindows(higher, { at: replies.at, secondary: replies.secondary })?.primary, undefined)
+  assert.equal(mergeUsageWindows({ ...higher, at: replies.at }, replies), replies, '同じ時刻なら返信')
+
+  // ステータスラインのほうが新しい: 端末で使って進んだ値はそちら
+  const tui = { at: '2026-10-06T14:30:00+09:00', primary: w(5, 300, R5 + 3), secondary: w(63, 10080, R7) }
+  assert.deepEqual(mergeUsageWindows(tui, replies), tui)
+  // 同じ窓で返信より低いものは、古い値を持ち回っている端末が書いたもの → 返信のほう。全部そうなら返信を丸ごと
+  const carried = { at: '2026-10-06T14:30:00+09:00', secondary: w(40, 10080, R7 + 5) }
+  assert.equal(mergeUsageWindows(carried, replies), replies)
+  // 片方の窓だけ端末が進めた: 混ぜたときの時刻は古いほう（返信）の時刻。新しく見せない
+  const half = { at: '2026-10-06T14:30:00+09:00', primary: w(9, 300, R5), secondary: w(40, 10080, R7) }
+  assert.deepEqual(mergeUsageWindows(half, replies), { at: replies.at, primary: w(9, 300, R5), secondary: w(61, 10080, R7) })
+  // 端末に無い窓は返信から（時刻は返信）
+  assert.deepEqual(mergeUsageWindows({ at: '2026-10-06T14:30:00+09:00', secondary: w(70, 10080, R7) }, replies), { at: replies.at, primary: w(2, 300, R5), secondary: w(70, 10080, R7) })
+  // 戻る時刻が先へ進んでいれば新しい窓なので、低くても端末のほう
+  const next = { at: '2026-10-06T15:00:00+09:00', primary: w(1, 300, R5 + 18000), secondary: w(61, 10080, R7) }
+  assert.deepEqual(mergeUsageWindows(next, replies), next)
 })

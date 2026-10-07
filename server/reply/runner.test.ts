@@ -584,7 +584,8 @@ test('返信の出力に流れた使用率の知らせを、ターンの途中�
     assert.ok(await until(() => seen.some((t) => t.includes('rate_limit_event'))), '終わる前に渡る')
     assert.equal(runner.running('A@r'), true, 'まだターンの途中')
     assert.ok(await until(() => !runner.running('A@r')))
-    assert.ok(seen.at(-1)!.includes('rate_limit_event'), '終わりにもそのターンぶんの出力を渡す（見張りの無い返信のぶん）')
+    // 終わりに渡すのは、見張りがまだ渡していない末尾だけ（ターンの頭の知らせを「いま届いた」として渡し直さない）
+    assert.equal(seen.filter((t) => t.includes('rate_limit_event')).length, 1)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

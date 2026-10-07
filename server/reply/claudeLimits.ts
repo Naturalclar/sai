@@ -9,10 +9,26 @@ import { mkdirSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { lastRateLimitEvent, type RateLimitWindows } from '../../shared/usage.ts'
 
+/** `AGENT_FEED_HOST` を設定していないときの名前 */
 export const CLAUDE_REPLY_LIMITS_FILE = 'usage-claude-replies.json'
 
-/** 値が変わっていなくても、これだけたったら書き直す（`ts` = 最後に届いた時刻を進める。応答のたびには書かない） */
-export const LIMITS_REFRESH_MS = 60_000
+/** feed dir に置かれる、返信の出力から拾った使用率のファイル（マシンごとに分けたものも） */
+export const isReplyLimitsFile = (name: string): boolean => /^usage-claude-replies(\.[^/]+)?\.json$/.test(name)
+
+/**
+ * 置くファイルの名前。**`AGENT_FEED_HOST` を設定したときだけ**マシンごとに分ける（`statusline.py` の `usage_file()` と同じ規則。
+ * 同期フォルダで複数のマシンのサーバが同じファイルを上書きし合わないように）
+ */
+export function replyLimitsFile(env: NodeJS.ProcessEnv = process.env): string {
+  const host = (env.AGENT_FEED_HOST ?? '').trim().split('.')[0]!.replace(/[^A-Za-z0-9_-]/g, '-')
+  return host ? `usage-claude-replies.${host}.json` : CLAUDE_REPLY_LIMITS_FILE
+}
+
+/**
+ * 書く間隔の下限。知らせは API の応答ごとに来て値もほぼ毎回変わるので、**値に依らず時間で間引く**
+ * （サーバのイベントループの上で同期に書くので、並行する返信のぶんだけ書かない）。「届いた時刻」のずれはここまで
+ */
+export const LIMITS_WRITE_MS = 10_000
 
 /** 返信の出力を渡す先。テストでは差し替える */
 export interface ClaudeLimitsSink {
@@ -22,7 +38,8 @@ export interface ClaudeLimitsSink {
 export class ClaudeLimitsFile implements ClaudeLimitsSink {
   readonly path: string
   private readonly now: () => number
-  private last: { at: number; key: string } | null = null
+  /** 最後に書けた時刻 */
+  private wrote = 0
 
   constructor(path: string, now: () => number = Date.now) {
     this.path = path
@@ -31,17 +48,17 @@ export class ClaudeLimitsFile implements ClaudeLimitsSink {
 
   /** 返信の出力の一部を渡す。使用率の知らせが無ければ何もしない。**書けなくても返信は止めない** */
   observe(text: string): void {
+    const at = this.now()
+    if (at - this.wrote < LIMITS_WRITE_MS) return
     const windows = lastRateLimitEvent(text)
     if (!windows) return
-    const at = this.now()
-    const key = JSON.stringify(windows)
-    if (this.last && this.last.key === key && at - this.last.at < LIMITS_REFRESH_MS) return
-    this.last = { at, key }
     try {
       mkdirSync(dirname(this.path), { recursive: true })
       const tmp = `${this.path}.${process.pid}.tmp`
       writeFileSync(tmp, JSON.stringify(limitsRecord(windows, at)))
       renameSync(tmp, this.path)
+      // 書けたときだけ覚える（書けなかったら、次の知らせでまた試す）
+      this.wrote = at
     } catch {
       // あれば嬉しい程度のもの
     }

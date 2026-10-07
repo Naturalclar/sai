@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, writeFile, utimes } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, writeFile, utimes } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -242,6 +242,14 @@ test('UsageStore: SAI から回した返信の出力の割合を、ステータ�
   )
   const both = await new UsageStore(join(root, 'codex'), join(root, 'claude'), feed, () => now).get()
   assert.deepEqual([both.claude?.primary?.used_percent, both.claude?.secondary?.used_percent, both.claude?.at], [2, 61, '2026-10-06T04:59:00.000Z'])
+
+  // マシンごとに分けたファイルも読み、届いたのが新しいほうを採る
+  await writeFile(
+    join(feed, 'usage-claude-replies.mbp.json'),
+    JSON.stringify({ v: 1, ts: '2026-10-06T04:59:30.000Z', source: 'replies', rate_limits: { five_hour: { used_percentage: 3, resets_at: five }, seven_day: { used_percentage: 61, resets_at: week } } }),
+  )
+  assert.equal((await new UsageStore(join(root, 'codex'), join(root, 'claude'), feed, () => now).get()).claude?.primary?.used_percent, 3)
+  await rm(join(feed, 'usage-claude-replies.mbp.json'))
 
   // 壊れた・期限切れのファイルは無いのと同じ
   await writeFile(join(feed, 'usage-claude-replies.json'), '{"v":1,"ts":')

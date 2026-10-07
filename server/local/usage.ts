@@ -15,7 +15,7 @@ import { open, readdir, readFile, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { mergeClaudeUsage, mergeUsageWindows, parseClaudeUsage, parseCodexUsage, parseStatusLineUsage } from '../../shared/usage.ts'
-import { CLAUDE_REPLY_LIMITS_FILE } from '../reply/claudeLimits.ts'
+import { isReplyLimitsFile } from '../reply/claudeLimits.ts'
 import type { ClaudeUsage, CodexUsage, UsageResponse } from '../../shared/types.ts'
 
 /** ファイルの末尾から読む量。手元の rollout では 64KB で最後の token_count に届いた */
@@ -199,11 +199,17 @@ export async function readStatusLineUsage(feedDir: string, now: number): Promise
  * `at` は**届いた時刻**（ステータスラインのほうは割合が最後に変わった時刻）
  */
 export async function readReplyLimits(feedDir: string, now: number): Promise<ClaudeUsage | null> {
-  try {
-    return parseStatusLineUsage(JSON.parse(await readFile(join(feedDir, CLAUDE_REPLY_LIMITS_FILE), 'utf-8')), now)
-  } catch {
-    return null // 無い・書きかけ
+  let best: ClaudeUsage | null = null
+  // マシンごとに分かれていることがある（`AGENT_FEED_HOST`）。届いた時刻なので、一番新しいものがいまの値
+  for (const name of await names(feedDir)) {
+    if (!isReplyLimitsFile(name)) continue
+    try {
+      best = newer(best, parseStatusLineUsage(JSON.parse(await readFile(join(feedDir, name), 'utf-8')), now))
+    } catch {
+      // 書きかけ・壊れている。読めるものだけ使う
+    }
   }
+  return best
 }
 
 export async function readClaudeUsage(projectsDir: string, now: number): Promise<ClaudeUsage | null> {

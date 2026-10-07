@@ -186,7 +186,9 @@ test('つないだコマンドは部品ごとにルールを書く（#705）: �
   assert.deepEqual(reasons, ['cd_then_write', 'cd_outside', 'keyword', 'redirect', 'cd_only', 'covered'])
   assert.ok(all.filter((r) => r.rule).every((r) => !('no_rule' in r)), 'ルールがある行には載せない')
   // 種類だけ。コマンドの文字・引数・パスは書かない
-  for (const word of ['out.txt', '/tmp', 'touch', 'zzall', 'do zzrun']) assert.ok(!JSON.stringify(all.filter((r) => !r.rule)).includes(word), word)
+  // （行の `cwd` はセッションの行のもので、Linux では一時ディレクトリが /tmp の下になるので外して見る）
+  const bare = JSON.stringify(all.filter((r) => !r.rule).map((r) => ({ ...r, cwd: '' })))
+  for (const word of ['out.txt', '/tmp', 'touch', 'zzall', 'do zzrun']) assert.ok(!bare.includes(word), word)
 
   // Bash でないツール（もともとルールが無い）は not_bash
   approvals.ask('S1@r', 'Edit', { file_path: join(cwdA, 'secret-name.ts'), old_string: 'a', new_string: 'b' }, 'e1')

@@ -141,7 +141,8 @@ test('requestUserInput: 質問を表示し、question idへ安全に回答して
 
 test('command approval: availableDecisionsだけを出し、選んだ実値をそのまま返す', async () => {
   const { app, connection } = await started()
-  const amendment = { acceptWithExecpolicyAmendment: { execpolicy_amendment: ['prefix_rule(pattern=["git", "status"], decision="allow")'] } }
+  // 0.160.1 で実測した形: 規則の追加は「語の並び」で来る
+  const amendment = { acceptWithExecpolicyAmendment: { execpolicy_amendment: ['git', 'status'] } }
   connection.emit({
     id: 'cmd-rpc', method: 'item/commandExecution/requestApproval',
     params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'cmd-1', startedAtMs: Date.parse('2026-09-09T11:59:00Z'), command: 'git status', cwd: '/repo', availableDecisions: ['decline', amendment] },
@@ -149,12 +150,43 @@ test('command approval: availableDecisionsだけを出し、選んだ実値を�
   const approval = app.snapshot()['thread-1@repo']![0]!
   assert.deepEqual(approval.decisions?.map(({ label, behavior }) => ({ label, behavior })), [
     { label: '拒否', behavior: 'deny' },
-    { label: '同種のコマンドを許可', behavior: 'allow' },
+    // 「同種のコマンドを許可」とは書かない。何を今後聞かなくなるかをボタンに書く（#741）
+    { label: '「git status」を今後聞かない', behavior: 'allow' },
   ])
+  assert.equal(approval.no_decline, undefined, '拒否が来ていれば案内は出さない')
   assert.deepEqual(app.answer(approval.approval_id, { behavior: 'allow', decision: 'd0' }), { ok: false, status: 400, error: '提示されていないdecisionです' }, 'behaviorの改ざんも拒否')
   assert.deepEqual(app.answer(approval.approval_id, { behavior: 'allow', decision: 'not-offered' }), { ok: false, status: 400, error: '提示されていないdecisionです' })
   assert.deepEqual(app.answer(approval.approval_id, { behavior: 'allow', decision: 'd1' }), { ok: true })
   assert.deepEqual(connection.sent.at(-1), { id: 'cmd-rpc', result: { decision: amendment } })
+})
+
+test('command approval: 規則の追加は、範囲をボタンに書けるときだけ出す。拒否が来なければそう知らせる（#741）', async () => {
+  const { app, connection } = await started()
+  const ask = (id: number, itemId: string, pattern: unknown) =>
+    connection.emit({
+      id, method: 'item/commandExecution/requestApproval',
+      params: { threadId: 'thread-1', turnId: 'turn-1', itemId, command: 'x', cwd: '/repo', availableDecisions: ['accept', { acceptWithExecpolicyAmendment: { execpolicy_amendment: pattern } }, 'cancel'] },
+    })
+  const labels = (itemId: string) => app.snapshot()['thread-1@repo']!.find((a) => a.tool_use_id === itemId)!.decisions!.map((d) => `${d.id}:${d.label}`)
+  // 実測の形（シェルに包まれたコマンド）: 中身をボタンに書く
+  ask(1, 'wrapped', ['/bin/zsh', '-lc', 'touch ~/Library/Caches/probe/a.txt'])
+  assert.deepEqual(labels('wrapped'), ['d0:許可', 'd1:「touch ~/Library/Caches/probe/a.txt」を今後聞かない', 'd2:ターンを中止'])
+  const wrapped = app.snapshot()['thread-1@repo']!.find((a) => a.tool_use_id === 'wrapped')!
+  assert.equal(wrapped.no_decline, true, 'Codex は拒否を出していない（足さずに、選べないことを知らせる）')
+  assert.deepEqual(wrapped.decisions!.map((d) => d.persists ?? false), [false, true, false], '残る許可には印を付ける（画面は「許可」と同じ強さで出さない）')
+  // 広すぎる・読めない提案は出さない。残った候補の id は詰めない（位置のまま）
+  ask(2, 'shell-only', ['/bin/zsh', '-lc'])
+  assert.deepEqual(labels('shell-only'), ['d0:許可', 'd2:ターンを中止'])
+  ask(3, 'broad', ['git'])
+  assert.deepEqual(labels('broad'), ['d0:許可', 'd2:ターンを中止'])
+  ask(4, 'unreadable', 'prefix_rule(...)')
+  assert.deepEqual(labels('unreadable'), ['d0:許可', 'd2:ターンを中止'])
+  // 出さなかった候補には答えられない
+  const broad = app.snapshot()['thread-1@repo']!.find((a) => a.tool_use_id === 'broad')!
+  assert.deepEqual(app.answer(broad.approval_id, { behavior: 'allow', decision: 'd1' }), { ok: false, status: 400, error: '提示されていないdecisionです' })
+  // 出した候補は、Codex が出した実値のまま返す
+  assert.deepEqual(app.answer(wrapped.approval_id, { behavior: 'allow', decision: 'd1' }), { ok: true })
+  assert.deepEqual(connection.sent.at(-1), { id: 1, result: { decision: { acceptWithExecpolicyAmendment: { execpolicy_amendment: ['/bin/zsh', '-lc', 'touch ~/Library/Caches/probe/a.txt'] } } } })
 })
 
 test('file/permissions: 変更対象と追加権限を出し、turn/session/拒否を明示する', async () => {

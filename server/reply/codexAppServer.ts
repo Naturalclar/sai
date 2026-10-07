@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import type { Approval, ApprovalAnswer, ApprovalMap, Replying, ReplyingMap, ReviewTarget } from '../../shared/types.ts'
+import { amendmentLabel } from '../../shared/codexAmendment.ts'
 import { codexErrorText, codexTurnErrorReason } from '../../shared/codexTurnError.ts'
 import { parseCodexSkills, type Skill } from '../../shared/skills.ts'
 import { childEnv, splitArgs } from './runner.ts'
@@ -145,6 +146,8 @@ interface Decision {
   label: string
   behavior: 'allow' | 'deny'
   result: JsonObject
+  /** 押すとこの 1 回を越えて残る（規則の追加） */
+  persists?: true
 }
 
 interface PendingApproval {
@@ -626,6 +629,7 @@ export class CodexAppServer implements CodexApp {
     let text = ''
     let input: JsonObject = {}
     let decisions: Decision[] = []
+    let noDecline = false
 
     if (method === 'item/tool/requestUserInput') {
       toolName = 'AskUserQuestion'
@@ -648,6 +652,9 @@ export class CodexAppServer implements CodexApp {
         ? params.availableDecisions
         : ['accept', 'decline']
       decisions = available.map((value, index) => decisionOf(index, value, { decision: value })).filter((v): v is Decision => !!v)
+      // Codex は「拒否」（decline）を出さないことがある（0.160.1 のコマンドの許可は 許可・規則の追加・中止 だけ）。
+      // 出していない decision は足さず、選べないことを画面に知らせる
+      noDecline = !decisions.some((d) => object(d.result)?.decision === 'decline')
     } else if (method === 'item/fileChange/requestApproval') {
       toolName = 'CodexFileChange'
       const item = this.items.get(`${threadIdOf(params)}\n${itemId}`)
@@ -656,7 +663,7 @@ export class CodexAppServer implements CodexApp {
       const paths = changes.map(object).map((change) => change?.path).filter((path): path is string => typeof path === 'string')
       const target = paths.join(', ') || (typeof params.grantRoot === 'string' ? params.grantRoot : '') || (typeof params.reason === 'string' ? params.reason : 'ファイル変更')
       text = `許可待ち: ファイル変更: ${target}`
-      decisions = ['accept', 'acceptForSession', 'decline', 'cancel'].map((value, index) => decisionOf(index, value, { decision: value }))
+      decisions = ['accept', 'acceptForSession', 'decline', 'cancel'].map((value, index) => decisionOf(index, value, { decision: value })).filter((v): v is Decision => !!v)
     } else if (method === 'item/permissions/requestApproval') {
       toolName = 'CodexPermissions'
       input = pick(params, ['cwd', 'reason', 'permissions', 'environmentId'])
@@ -681,7 +688,8 @@ export class CodexAppServer implements CodexApp {
       text,
       agent: 'codex',
       answerable: true,
-      ...(decisions.length ? { decisions: decisions.map(({ id, label, behavior }) => ({ id, label, behavior })) } : {}),
+      ...(decisions.length ? { decisions: decisions.map(({ id, label, behavior, persists }) => ({ id, label, behavior, ...(persists ? { persists } : {}) })) } : {}),
+      ...(noDecline ? { no_decline: true as const } : {}),
     }
     return { approval, requestId, requestKey: keyOf(requestId), threadId: turn.threadId, turnId, method, decisions }
   }
@@ -771,12 +779,21 @@ function threadIdOf(params: JsonObject): string {
   return typeof params.threadId === 'string' ? params.threadId : ''
 }
 
-function decisionOf(index: number, value: unknown, result: JsonObject): Decision {
+/**
+ * Codex が出した候補 1 つ → 画面のボタン。**ボタンにしないものは null**（#741）:
+ * 規則の追加（`acceptWithExecpolicyAmendment`。押すとセッションをまたいで残る許可になる）は、何を今後聞かなくなるかを
+ * ボタンに書けるときだけ出す（`shared/codexAmendment.ts`。提案が無い・読めない・広すぎるものは出さない）
+ */
+function decisionOf(index: number, value: unknown, result: JsonObject): Decision | null {
   const name = typeof value === 'string' ? value : Object.keys(object(value) ?? {})[0] ?? 'decision'
+  if (name === 'acceptWithExecpolicyAmendment') {
+    const label = amendmentLabel(object(object(value)?.acceptWithExecpolicyAmendment)?.execpolicy_amendment)
+    // id は候補の並びの位置のまま（出さなかった候補の番号を詰めない）
+    return label ? { id: `d${index}`, label, behavior: 'allow', result, persists: true } : null
+  }
   const labels: Record<string, string> = {
     accept: '許可',
     acceptForSession: 'セッション中許可',
-    acceptWithExecpolicyAmendment: '同種のコマンドを許可',
     applyNetworkPolicyAmendment: 'ネットワーク規則を適用',
     decline: '拒否',
     cancel: 'ターンを中止',

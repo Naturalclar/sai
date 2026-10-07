@@ -132,7 +132,7 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false, modeNote =
                 <button
                   type="button"
                   key={decision.id}
-                  className={decision.behavior === 'allow' ? 'allow' : 'deny'}
+                  className={decision.persists ? 'always' : decision.behavior === 'allow' ? 'allow' : 'deny'}
                   disabled={busy || done !== null}
                   onClick={() => void send({ behavior: decision.behavior, decision: decision.id })}
                 >
@@ -168,6 +168,8 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false, modeNote =
             </div>
           )}
           {/* [常に許可] で何を許可することになるか（#705）。部品ごとに書くので、押す前に全部見せる */}
+          {/* Codex が「拒否」を出していない許可（#741）。出されていない答えは足さないので、選べないことを書く */}
+          {approval.no_decline && answerable && done === null && <div className="mode-note">「拒否」は選べません（Codex が候補に出していません）。やめさせるには「ターンを中止」を押して、指示し直してください。</div>}
           {always && answerable && decisions.length === 0 && <AlwaysRules rules={always} done={done === 'always'} />}
           {/* 拒否すると Codex は「どうしてほしいか」を聞いてくるので、そのまま入力欄へ（#450） */}
           {done === 'deny' && approval.dialog && <div className="notice">拒否しました。どうしてほしいかは、下の返信欄から送れます。</div>}

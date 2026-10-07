@@ -4,7 +4,7 @@
 // 試した表は docs/history/approvals.md。DOM に依存しないので bashRules.test.ts を node:test で回す
 
 /** サブコマンドを持つ CLI。`gh pr create` なら `gh pr` までを接頭辞にする（`gh` 全部を許すのは広すぎる） */
-const SUBCOMMAND_CLIS = new Set([
+export const SUBCOMMAND_CLIS = new Set([
   'gh', 'git', 'npm', 'pnpm', 'yarn', 'npx', 'bun', 'deno', 'node', 'python', 'python3', 'pip', 'pip3', 'uv', 'poetry',
   'docker', 'kubectl', 'cargo', 'go', 'make', 'brew', 'terraform', 'aws', 'gcloud', 'az', 'tailscale',
 ])

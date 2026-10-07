@@ -82,7 +82,12 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - server request の `(request id, threadId, turnId, itemId)` を同じ接続に束ね、`request_user_input`、コマンド、ファイル変更、追加権限を `Approval` にする
 - コマンドの `availableDecisions` は実値をサーバ内に隠して不透明な id だけ画面へ渡し、ファイルと権限もプロトコルが許す候補だけを作る
 - 別 thread / turn、未提示の decision、二重回答は拒否。`serverRequest/resolved`、turn 完了、idle、切断で消す
-- 「常に許可」は Codex には出さない
+- **SAI 自身の「常に許可」（Claude の設定にルールを書く `AlwaysRules`）は Codex には出さない。Codex が候補に入れてきた規則の追加（`acceptWithExecpolicyAmendment`）は、範囲をボタンに書けるときだけボタンにする**（#741）。押すと Codex が自分の規則（`CODEX_HOME/rules/` の `prefix_rule(pattern=[…], decision="allow")`）を足し、セッションをまたいで残る。SAI は規則を組まない・書かない・読んで先回りしない。
+  - 文言と出す条件は `shared/codexAmendment.ts`。`amendmentLabel(execpolicy_amendment)` が「`<語の並び>`」を今後聞かない、を作る（シェルに包まれた `zsh -lc '<中身>'` は中身を出す。改行は空白にし、`AMENDMENT_LABEL_WIDTH` = 48 で切る。全部は詳細の「実行規則の提案」に出る）。
+  - **ボタンにしない（null）**: 形が読めない（配列でない・空・文字列でない語）／シェルだけで中身が無い（`["/bin/zsh","-lc"]`）／1 語だけで広すぎる（インタプリタ・`rm`・`curl` など、サブコマンドを持つ CLI = `shared/bashRules.ts` の `SUBCOMMAND_CLIS`）／`sudo`・`doas` で始まる。`decisionOf()` が null を返した候補は画面に出さず、**残った候補の id は位置のまま**（詰めない）なので、出さなかった候補には答えられない（`提示されていないdecisionです`）。
+  - 0.160.1 の実測: コマンドの許可の `availableDecisions` は毎回 `accept` / `acceptWithExecpolicyAmendment` / `cancel`。`acceptForSession` と `decline` は来ない。提案の規則は「そのコマンドそのもの」（`curl` は引数まで全部、シェルに包まれたものは `["/bin/zsh","-lc","<全文>"]`）。ファイル変更には `availableDecisions` が来ず、SAI が `accept` / `acceptForSession` / `decline` / `cancel` を並べる（`acceptForSession` は次のターンでも効いた）。
+  - 規則の追加のボタンには `ApprovalDecision.persists` を付け、画面（`ApprovalBubble`）は「許可」と同じ塗りにせず枠だけ（`.always`）で出す。ボタンの並びは折り返す（`.group.approval .actions` の `flex-wrap`。長い文言のボタンが短いボタンを潰さない）。
+  - **「拒否」が来なかったコマンドの許可には `Approval.no_decline` を付ける**。出されていない decision は足さず、画面が「拒否は選べません。中止して指示し直してください」と出す。
 
 ## ターンを止める
 

@@ -1213,8 +1213,9 @@
   .group.approval .jev-tag.safe { color: var(--accent); }
   .group.approval .jev-tag.unsure { color: var(--muted); }
   .group.approval .jev-tag.risky { color: var(--claude); }
-  .group.approval .actions { display: flex; gap: 8px; margin-top: 8px; }
-  .group.approval .actions button { font: inherit; font-size: 13px; padding: 4px 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; }
+  /* 長い文言のボタン（#741 の「〜を今後聞かない」）は次の段に送り、短いボタンを縦書きに潰さない */
+  .group.approval .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  .group.approval .actions button { max-width: 100%; text-align: left; overflow-wrap: anywhere; font: inherit; font-size: 13px; padding: 4px 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; }
   .group.approval .actions button.allow { background: var(--accent); border-color: var(--accent); color: #fff; }
   .group.approval .actions button.always { border-color: var(--accent); color: var(--accent); }
   /* 同じルールを何度も許可しているとき（#445）。「常に許可」を勧める見た目にする（押すのは人） */

@@ -1330,6 +1330,11 @@ export interface Approval {
   /** Codex app-server がこのrequestで提示した決定だけ。idから実際のdecisionを引くのはサーバ */
   decisions?: ApprovalDecision[]
   /**
+   * 「拒否」が選べない（#741）。Codex がコマンドの許可の候補に `decline` を入れてこなかったとき。SAI は出されていない
+   * decision を足さないので、画面は「中止して指示し直す」と案内する
+   */
+  no_decline?: true
+  /**
    * 許可して問題なさそうかを Jev で予想した確率（#491。0..1）。**聞いていない・まだ届いていない・聞けなかったときは省略**
    * （`shared/jev.ts`）。設定の `jev_auto`（#499）が入で閾値以上なら、Claude の `-p` の許可はサーバが自動で「常に許可」を返す
    */
@@ -1414,6 +1419,10 @@ export interface ApprovalDecision {
   label: string
   /** 押した後の表示にだけ使う */
   behavior: 'allow' | 'deny'
+  /**
+   * 押すと、この 1 回を越えて残る許可になる（#741。Codex の規則の追加）。画面は「許可」と同じ強さで出さない（枠だけのボタン）
+   */
+  persists?: true
 }
 
 /** エンティティID → 答え待ちの承認（古い順）。無ければ空 */

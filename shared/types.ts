@@ -955,6 +955,69 @@ export interface Loop {
 /** エンティティID → ループ。無ければ空 */
 export type LoopMap = Record<string, Loop>
 
+/**
+ * 待ちの状態（#732）。`waiting` = サーバが確かめている、`ready` = 終わったがまだ起こしていない（処理中・枠が少ない など。`reason`）、
+ * `waking` = いま起こしている、`expired` = 待てる時間のうちに終わらなかった、`halted` = 起こせなかった。起こせた待ちは消える
+ */
+export type WaitStatus = 'waiting' | 'ready' | 'waking' | 'expired' | 'halted'
+
+/** 待ちの結果。`none` = チェックが 1 つも無い、`merged` / `closed` = 待っている間に PR がマージ・クローズされた */
+export type WaitResult = 'success' | 'failure' | 'none' | 'merged' | 'closed'
+
+/**
+ * 「これが終わったら起こして」の待ち（#732）。エージェントが `sai_wait_for` で預け、SAI が `gh` で確かめて、終わったら
+ * そのセッションを 1 回だけ起こす。いま待てるのは PR の CI だけ。正本はサーバ（`server/reply/waits.ts`。メモリと `<feed dir>/waits.json`）
+ */
+export interface Wait {
+  /** 待ちの id（止める・いま起こすで名指しする） */
+  id: string
+  /** リポジトリ（`owner/name`。記録で知っているものだけ） */
+  repo: string
+  /** PR の番号 */
+  pr: number
+  /** 起きたときにやること（エージェントが預けるときに書いた 1 文） */
+  then: string
+  status: WaitStatus
+  /** 終わっていれば結果 */
+  result?: WaitResult
+  /** まだ起こしていない・起こせなかった理由 */
+  reason?: string
+  /** 預かった時刻 */
+  since: string
+  /** これを過ぎたら待つのをやめる */
+  deadline: string
+}
+
+/** エンティティID → 待ち（古い順）。無ければキーが無い */
+export type WaitMap = Record<string, Wait[]>
+
+/** `POST /api/agent/wait-for`（`sai_wait_for`）の body。`from` は MCP が付ける送り元 */
+export interface WaitForRequest {
+  from: string
+  pr: number
+  then: string
+}
+
+/** 預かれたときは `wait`。もう終わっていたときは預からずに `result`（と落ちたチェックの名前）を返す */
+export interface WaitForResponse {
+  wait?: Wait
+  result?: WaitResult
+  failing?: string[]
+  /** 預かれる残りの数 */
+  left: number
+}
+
+/** `POST /api/sessions/<id>/wait/stop` / `wake` の body（同一オリジンのみ） */
+export interface WaitActionRequest {
+  wait: string
+}
+
+/** 人が待ちを止めた・いま起こしたあとの、そのセッションの待ち */
+export interface WaitActionResponse {
+  id: string
+  waits: Wait[]
+}
+
 /** `POST /api/sessions/<id>/loop`（ループを組む。同一オリジンのみ）。数字は省略すると既定値で、範囲の外は丸めずに 400 */
 export interface LoopRequest {
   goal: string
@@ -1392,6 +1455,8 @@ export interface SessionsResponse {
   queued: ReplyQueueMap
   /** 組んであるループ（#634。窓の外のセッションも含む全部）。これが変わると rev も変わる */
   loops: LoopMap
+  /** 預かっている待ち（#732）。エンティティID → 古い順 */
+  waits: WaitMap
   /** 返信中のエージェントが待っている許可・質問（ID → 古い順）。これが変わると rev も変わる */
   approvals: ApprovalMap
   /** 配っている web/dist/ が web/src / shared より古い（git pull のあと pnpm build していない）。これが変わると rev も変わる */
@@ -1447,6 +1512,8 @@ export interface SessionDetailResponse {
   queued: ReplyQueueMap
   /** 組んであるループ（#634。SessionsResponse と同じ） */
   loops: LoopMap
+  /** 預かっている待ち（#732）。エンティティID → 古い順 */
+  waits: WaitMap
   /** そのセッションから別のセッションへのメッセージのようす（#311）。送ったことがあるか止めているときだけ */
   agent?: AgentActivity
   /** 返信中のエージェントが待っている許可・質問（ID → 古い順）。これが変わると rev も変わる */

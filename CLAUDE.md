@@ -130,6 +130,7 @@ OpenCode (feed/opencode/sai.js) ─┘                           │
 - **許可モード**: 素通しでも SAI は許可を自動で返さない。`REPLY_MODES` 外は `400`。名前は英語 → docs/internals/reply.md#許可モード
 - **モデル**: 名前（`Default` / `Custom model…`）は英語、保存値は正式名 → docs/internals/reply.md#モデル
 - **別のマシン**: 判定は `isRemoteHost()` 1 つ、`host` が空はリモートにしない → docs/internals/reply.md#別のマシン
+- **待ち**（#732）: 待てるのは PR の CI だけで、確かめるのはサーバの `gh`（決まった形。エージェントのターンは回さない）。1 つの待ちで起こすのは 1 回、起こす前に書く。断る線はループと同じ `loopRefusal()`。起きたターンから先へは送らせない・次を預けさせない → docs/internals/reply.md#待ち732
 - **ループ**: 上限なしでは組めない。`sai_loop_next` から動かせるのは自分のループの「次」だけ。周は送る前に書く。起こすのは `launch()` のまま（権限のフラグを足さない・許可を自動で返さない）。素通し・端末・Claude 以外には組まない → docs/internals/reply.md#ループ634
 
 ### Codex の端末・app-server と処理中の手順

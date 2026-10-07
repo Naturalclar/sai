@@ -152,6 +152,7 @@ SAIから開始したCodex turnの待機もJSONLにはせず、`CodexAppServer` 
 | `approvals.json` | 配列 | いま預かっている許可・質問（`approval` と、まだ渡していない `answer`）。サーバの立て直しをまたぐためのもの |
 | `replying.json` | エンティティ ID → 1 件 | SAI が回している最中の返信: `pid`・`since`（起動した時刻）・`text`（送った文）・`permission_mode`・`compact`。**終わると消える**（履歴ではない） |
 | `reply-queue.json` | エンティティ ID → `items` | 処理中に預かった返信: `queue_id`・`text`・`since`・`attachments`・`url`・`origin`。`paused` は自動で回さない理由 |
+| `waits.json` | `{ waits, wakes }` | 預かっている待ち（#732）。`waits`: エンティティ ID → 古い順の配列（`id`・`repo`・`pr`・`then`・`status`（`waiting` / `ready` / `waking` / `expired` / `halted`）・`result`・`reason`・`since`・`deadline`・`checked_at`・`next_check_at`・`seen_once`・`failing`・`url`。`shared/waits.ts` の `WaitState`）。`wakes`: エンティティ ID → 自動で起こした時刻（ms）の配列（1 日の回数の上限に使う）。起こせた待ちは消える |
 | `loops.json` | エンティティ ID → 1 件 | 組んだループの状態（`goal`・`until`・`max_rounds`・`round`・`status` など。`shared/loops.ts` の `LoopState`） |
 | `reply.log` | 追記の文字のログ | SAI が起こした子の stdout / stderr と、SAI が足す 1 行（`--- <時刻> <エンティティ ID> <何をしたか>`） |
 | `digest.log` | 追記の文字のログ | 一言を作る子の出力と、諦めた・作り直した理由 |

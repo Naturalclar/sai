@@ -1,6 +1,7 @@
 // チャットの行をバブルの塊にまとめる。DOM に依存しないので node:test で回す（chatGroups.test.ts）
 import { splitHandedReplies } from '../../shared/agentMessages.ts'
 import { isLoopPrompt, loopPromptLabel } from '../../shared/loops.ts'
+import { isWaitPrompt, waitPromptLabel } from '../../shared/waits.ts'
 import type { AgentReplyTag, FeedRow, Profile, SessionSummary } from '../../shared/types.ts'
 import { wasClipped } from '../../shared/clipped.ts'
 import { isCompactSummaryText } from '../../shared/compactSummary.ts'
@@ -51,14 +52,16 @@ export interface Utterance {
   handedReplies?: number
   /** SAI がループの周として送った入力（#634）。text は「ループ N 周目」にしてあり、印だけ出す */
   loop?: true
+  /** 待ちが終わって SAI が起こした入力（#732）。text は渡した本文のまま（結果の要点なので読めるように）で、印だけ出す */
+  wait?: true
 }
 
 /** 自分の発言の本文。SAI が頭に足した返答の塊（#594）は外し、足した数を添える（記録の `user_text` には残っている） */
-function mineOf(userText: string | undefined): { text: string; handedReplies?: number; loop?: true } {
+function mineOf(userText: string | undefined): { text: string; handedReplies?: number; loop?: true; wait?: true } {
   const { text, handed } = splitHandedReplies(userText ?? '')
   // ループの周の本文（#634）は毎周同じ長い文なので、「ループ N 周目」にする（記録の `user_text` には全文が残っている）
   const loop = isLoopPrompt(text)
-  return { text: loop ? loopPromptLabel(text) : text, ...(handed > 0 ? { handedReplies: handed } : {}), ...(loop ? { loop: true as const } : {}) }
+  return { text: loop ? loopPromptLabel(text) : text, ...(handed > 0 ? { handedReplies: handed } : {}), ...(loop ? { loop: true as const } : {}), ...(isWaitPrompt(text) ? { wait: true as const } : {}) }
 }
 
 export interface Group {
@@ -161,7 +164,8 @@ const PROMPT_SLACK_MS = 60_000
  */
 export function promptArrived(rows: FeedRow[], id: string, text: string, since: string): boolean {
   // ループの周（#634）は、処理中の本文も記録の入力も「ループ N 周目」に揃えて比べる
-  const want = loopPromptLabel(splitHandedReplies(text).text).trim()
+  // 待ちで起こしたターン（#732）も、サーバが処理中の本文を短い形にしているので同じ形に揃える
+  const want = waitPromptLabel(loopPromptLabel(splitHandedReplies(text).text)).trim()
   const from = (parseTs(since)?.getTime() ?? 0) - PROMPT_SLACK_MS
   return rows.some((r) => {
     const kind = eventKind(r.event, r.text)
@@ -171,7 +175,7 @@ export function promptArrived(rows: FeedRow[], id: string, text: string, since: 
     if (kind !== 'resume' && kind !== 'turn') return false
     return (
       // 記録の入力には SAI が頭に足した返答の塊（#594）が残るので、外して比べる（仮バブルの本文は外してある）
-      loopPromptLabel(splitHandedReplies(r.user_text ?? '').text).trim() === want &&
+      waitPromptLabel(loopPromptLabel(splitHandedReplies(r.user_text ?? '').text)).trim() === want &&
       entityId(r.session, r.repo, r.ts) === id &&
       (parseTs(r.ts)?.getTime() ?? 0) >= from
     )

@@ -501,3 +501,20 @@ test('GhPrs.cached: 前に引いた一覧を待たずに返し、古ければ裏
   assert.equal(gh.cached('o/repo-a', 5), undefined)
   assert.deepEqual(gh.cached('o/repo-a', 60_000)?.length, 1)
 })
+
+test('GhPrs.ci（#732）: gh は決まった形の 1 本だけ。リポジトリ名・番号の形でなければ叩かない。読めなければ null', async () => {
+  const calls: string[][] = []
+  const gh = new GhPrs(async (args) => {
+    calls.push(args)
+    return JSON.stringify({ state: 'OPEN', statusCheckRollup: [{ name: 'node', status: 'COMPLETED', conclusion: 'FAILURE' }] })
+  })
+  assert.deepEqual(await gh.ci('o/r', 12), { state: 'OPEN', checks: 'failure', failing: ['node'], pending: false })
+  assert.deepEqual(calls, [['pr', 'view', '12', '--repo', 'o/r', '--json', 'state,statusCheckRollup']])
+  assert.equal(await gh.ci('o/r; rm -rf /', 12), null)
+  assert.equal(await gh.ci('--repo', 12), null)
+  assert.equal(await gh.ci('o/r', -1), null)
+  assert.equal(calls.length, 1, '形の違うものでは gh を起こさない')
+  assert.equal(await new GhPrs(async () => null).ci('o/r', 12), null)
+  assert.equal(await new GhPrs(async () => 'not json').ci('o/r', 12), null)
+})
+

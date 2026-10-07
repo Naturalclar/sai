@@ -5,6 +5,8 @@
 // ここはプロンプトと後始末だけを持ち、口は `server/digest/digest.ts` の `Summarizer` をそのまま使う。
 // DOM も node も触らないので `shared/nextAsk.test.ts` を node:test で回す。
 import { quotedAsks } from './digestCheck.ts'
+import { nextAskIssues } from './nextAskCheck.ts'
+import type { NextAskIssue, NextAskIssueCode } from './nextAskCheck.ts'
 
 /**
  * 案の長さの目安（文字）。プロンプトで指示し、超えたぶんは `cleanNextAsk()` が切る。
@@ -12,21 +14,37 @@ import { quotedAsks } from './digestCheck.ts'
  */
 export const NEXT_ASK_MAX_CHARS = 60
 
+/** 作り直しの材料（#729）。`nextAskIssues()` が見つけた点を、そのまま LLM に伝える */
+export interface NextAskRetry {
+  /** 前に作った案 */
+  nextAsk: string
+  issues: readonly NextAskIssue[]
+}
+
 /**
  * LLM に渡すプロンプト。一言と違って性格（口調）は足さない。
- * **これは人が送る文**で、エージェントの声ではないため（性格を混ぜると、自分が打った覚えのない口調の文が入力欄に入る）
+ * **これは人が送る文**で、エージェントの声ではないため（性格を混ぜると、自分が打った覚えのない口調の文が入力欄に入る）。
+ *
+ * 文末の形で縛る（#729）。前は「エージェントへの指示か質問にする」で、本文の最後の問い・宣言・頼みを写した案が 6 割あった
+ * （小さいモデルは直前に読んだ本文の声に引っ張られる）。**形の例は「〜して」のような型だけ**にし、中身の語は置かない
  */
-export function nextAskPrompt(userText: string, text: string): string {
+export function nextAskPrompt(userText: string, text: string, opts: { retry?: NextAskRetry } = {}): string {
   const asked = (userText ?? '').trim()
+  const { retry } = opts
+  // 作り直し（#729）。前の案と、機械で見つけた直してほしい点を足す
+  const fix = retry ? ['', `前に作った文: ${retry.nextAsk}`, 'この文には次の点がありました。直して作り直してください:', ...retry.issues.map((i) => `- ${i.hint}`)] : []
   return [
-    'あなたはコーディングエージェントを使っている人です。直前のやりとりを読んで、**あなたが次に送る文**を 1 つ考えてください。',
-    `- 日本語で 1 文、${NEXT_ASK_MAX_CHARS} 文字以内。エージェントへの指示か質問にする`,
+    'あなたはコーディングエージェントを使っている人です。直前のやりとりを読んで、**あなたが次に送る文**（エージェントへの返信）を 1 つ考えてください。',
+    `- 日本語で 1 文、${NEXT_ASK_MAX_CHARS} 文字以内。**エージェントへの指示（「〜して」の形）か、エージェントの問いへの答え**にする`,
+    '- **エージェントの文を写さない。** 「〜します」「〜しました」（エージェントが言う宣言）、「〜しますか？」「〜しましょうか？」（エージェントが聞く問い）で終わる文は書かない',
+    '- 本文がエージェントの問いで終わっているなら、**問いを繰り返さず、答えを書く**（進めてよければ、その作業を「〜して」と指示する。選択肢が示されていればどれかを選ぶ）',
+    '- 本文がエージェントからあなたへの頼み（「〜してください」）で終わっているなら、同じ頼みをエージェントに返さない',
     // 一言と同じ理由（#268）。本文に無い番号を書かせない。**作例に具体的な数字や題材を置かない**のも同じ
     // （小さいモデルは作例をそのまま書き写すので、番号の無いターンでもその数字を書いてしまう）
     '- **本文に書かれていることだけ**を材料にする。番号（`#` に続く数字）・ファイル名・コマンドは本文にあるものだけ使い、本文に無い番号は書かない',
-    '- **本文にエージェントからの質問や頼みがあれば、それに答える文にする**（最優先。選択肢が示されていればどれかを選ぶ）',
-    '- 本文が報告だけで終わっているなら、そこから自然に続く一手にする。本文に出てこない作業を思いつきで足さない',
+    '- 本文が報告だけで終わっているなら、そこから自然に続く一手を指示する。本文に出てこない作業を思いつきで足さない',
     '- 出力は文だけ。引用符、「案:」などの前置き、箇条書きの印、2 つ目以降の案は付けない',
+    ...fix,
     '',
     '---',
     ...(asked ? ['直前にあなたが送った文:', asked, ''] : []),
@@ -77,4 +95,37 @@ export function cleanNextAsk(raw: string): string {
 export function quotedNextAsk(text: string): string {
   const quoted = quotedAsks((text ?? '').normalize('NFC')).at(-1) ?? ''
   return quoted && [...quoted].length <= NEXT_ASK_MAX_CHARS ? quoted : ''
+}
+
+export interface ComposedNextAsk {
+  /** 出す案。空なら出さない */
+  next_ask: string
+  /** 1 回目の案に見つかった点（あれば作り直している） */
+  first: NextAskIssueCode[]
+  /** 作り直しても残り、案を出さなかった理由。出したとき・作れなかっただけのときは空 */
+  dropped: NextAskIssueCode[]
+}
+
+export interface ComposeOptions {
+  /** プロンプトの作り方（比べる道具が前のプロンプトを渡す。既定は `nextAskPrompt()`） */
+  prompt?: (userText: string, text: string, opts?: { retry?: NextAskRetry }) => string
+  /** 確かめるか（比べる道具が「確かめなし」を測るときだけ false） */
+  check?: boolean
+}
+
+/**
+ * 口で案を 1 つ作る（#729）。出来上がりを `nextAskIssues()` で確かめ、人の返信として読めなければ **1 回だけ** 作り直す。
+ * それでも駄目なら**出さない**（間違った案が入力欄に入るより、無いほうがよい）。`summarize` は口を 1 回呼ぶ。
+ * 引用の頼み（`quotedNextAsk()`）は呼ぶ側が先に見る（口を呼ばない道なので、ここには入れない）
+ */
+export async function composeNextAsk(userText: string, text: string, summarize: (prompt: string) => Promise<string>, opts: ComposeOptions = {}): Promise<ComposedNextAsk> {
+  const prompt = opts.prompt ?? nextAskPrompt
+  const made = cleanNextAsk(await summarize(prompt(userText, text)))
+  if (opts.check === false) return { next_ask: made, first: [], dropped: [] }
+  const first = nextAskIssues(made, text)
+  if (first.length === 0) return { next_ask: made, first: [], dropped: [] }
+  const codes = first.map((i) => i.code)
+  const again = cleanNextAsk(await summarize(prompt(userText, text, { retry: { nextAsk: made, issues: first } })))
+  const left = nextAskIssues(again, text)
+  return left.length === 0 ? { next_ask: again, first: codes, dropped: [] } : { next_ask: '', first: codes, dropped: left.map((i) => i.code) }
 }

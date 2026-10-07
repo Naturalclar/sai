@@ -194,6 +194,15 @@ test('AgentMessages の預かり: 送る前に印を書き、印が付いたま�
     assert.equal(after.beginHeld('h2'), false, '届いたか分からないものは送り直さない')
     assert.equal(after.beginHeld('h3'), true, '順番待ちはそのまま送れる')
     assert.equal(after.heldBy('A@r')[0]?.wake, true)
+    // 送らないと決めた 1 件は、捨てずに理由を付けて止める（画面に出る。自動では送らない）
+    assert.equal(after.haltHeld('h3', '相手がもう送れるセッションではありません'), true)
+    assert.equal(after.haltHeld('nope', 'x'), false)
+    assert.deepEqual(new AgentMessages(path).heldBy('A@r').map((h) => h.halted), [HALTED_ON_RESTART, '相手がもう送れるセッションではありません'])
+    // 預かっていた分を送れたときの記録は、1 ターンの回数・量を上書きしない（送り元がいま回している別のターンの数を潰さない）
+    after.record({ message_id: 'n1', from: 'A@r', to: 'B@r', text: '新しいターン', since: '2026-10-07T03:05:00Z' }, 'turn-3', 700)
+    after.recordHeld({ message_id: 'h9', from: 'A@r', to: 'B@r', text: '預かっていた分', since: '2026-10-07T03:06:00Z', turn: 'turn-1' })
+    assert.deepEqual([after.sentInTurn('A@r', 'turn-3'), after.readInTurn('A@r', 'turn-3')], [1, 700])
+    assert.equal(after.get('h9')?.turn, 'turn-1', '記録には載る（返答はいつもどおり引ける）')
     // 人が止めたら、その送り元の預かりだけ全部捨てる
     assert.equal(after.dropHeldBy('A@r'), 2)
     assert.equal(after.dropHeldBy('A@r'), 0)

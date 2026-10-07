@@ -1256,3 +1256,34 @@ test('受け取ったメッセージで回っているターン・人が止め�
   }
   await clearQueue('B1@r')
 })
+
+test('並べて呼ばれた sai_send も 1 つずつ数える。1 件で 1 ターンの予算を超える相手は預からずに断る（#727 のレビュー）', async () => {
+  await freshTurn()
+  try {
+    // エージェントがツールを 5 つ並べて呼んだ形。その場で送るのは 3 件まで、残りは預かる（全部が「まだ 0 回」を見ない）
+    const all = await Promise.all([1, 2, 3, 4, 5].map((n) => send('A1@r', 'B1@r', `並べて ${n}`)))
+    const bodies = (await Promise.all(all.map((r) => r.json()))) as AgentSendResponse[]
+    assert.deepEqual(all.map((r) => r.status), [202, 202, 202, 202, 202])
+    assert.equal(bodies.filter((b) => b.held).length, 2)
+    assert.equal(runner.started.length, 3)
+    assert.equal((await agentOf('A1@r'))?.sent, 3)
+    await stopSending('A1@r', 'stop')
+    await stopSending('A1@r', 'resume')
+    // 1 件だけで 1 ターン（＝1 巡）の予算を超える相手は、預かっても送れないので今までどおり断る
+    contexts.set('B1@r', 3_500_000)
+    turn('A1@r')
+    const big = await send('A1@r', 'B1@r', '大きい相手')
+    assert.equal(big.status, 429)
+    assert.match(((await big.json()) as { error: string }).error, /予算を超えます/)
+    assert.equal((await agentOf('A1@r'))?.held, undefined)
+    // 空の items は付いていないのと同じ（to / text の形として送る）
+    contexts.clear()
+    const res = await agent('/api/agent/send', { method: 'POST', body: JSON.stringify({ from: 'A1@r', to: 'B1@r', text: '空の items 付き', items: [] }) })
+    assert.equal(res.status, 202)
+    assert.equal(((await res.json()) as AgentSendResponse).to, 'B1@r')
+  } finally {
+    idle('A1@r')
+    contexts.clear()
+  }
+  await clearQueue('B1@r')
+})

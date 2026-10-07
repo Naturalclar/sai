@@ -219,6 +219,9 @@ test('agentTool: sai_send が預かられたら「送り直さない」と伝え
   assert.equal((await agentTool('sai_send', { items: [{ to: 'B1@r' }] }, base, 'A1@r', tokenFile)).isError, true)
   assert.equal((await agentTool('sai_send', { items: [] }, base, 'A1@r', tokenFile)).isError, true)
   assert.equal(seen.length, before)
+  // 空の items は付いていないのと同じ（to / text の形として送る）
+  await agentTool('sai_send', { to: 'B1@r', text: '見て', items: [] }, base, 'A1@r', tokenFile)
+  assert.deepEqual(JSON.parse(seen.at(-1)!.body), { from: 'A1@r', to: 'B1@r', text: '見て' })
 })
 
 test('AGENT_TOOLS: 説明を書き直しても、ツールの名前と引数は変わらない（#564）', () => {

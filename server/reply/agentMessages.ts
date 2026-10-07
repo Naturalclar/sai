@@ -234,6 +234,16 @@ export class AgentMessages {
     this.persist()
   }
 
+  /**
+   * 預かっていた分を送れたので記録する（#727）。**1 ターンの回数・量（`sends`）には足さない**: 送るのは送り元のターンの外で、
+   * 足すと送り元がいま回している別のターンの数を上書きしてしまう（1 巡の上限は送る側が自分で数える）
+   */
+  recordHeld(message: AgentMessage): void {
+    this.messages.set(message.message_id, message)
+    this.version++
+    this.persist()
+  }
+
   /** 人が送信を止めた（#311）。もう止まっていれば false */
   stop(from: string): boolean {
     if (this.stopped.has(from)) return false
@@ -311,7 +321,18 @@ export class AgentMessages {
     return true
   }
 
-  /** 預かりから外す（送れた・送らないと決めた）。外したら true */
+  /** 止める（自動では送らない）。理由を付けて残す。もう無ければ false */
+  haltHeld(messageId: string, reason: string): boolean {
+    const i = this.backlog.findIndex((h) => h.message_id === messageId)
+    const h = this.backlog[i]
+    if (!h) return false
+    this.backlog[i] = { ...h, halted: reason }
+    this.version++
+    this.persist()
+    return true
+  }
+
+  /** 預かりから外す（送れた・人が止めた）。外したら true */
   dropHeld(messageId: string): boolean {
     const before = this.backlog.length
     this.backlog = this.backlog.filter((h) => h.message_id !== messageId)

@@ -160,9 +160,10 @@ export async function agentTool(
       const wake = args.wake === true
       const wakeNote = wake ? '返答がそろったら起こします（この依頼で wake を付けた分が全部返ったとき 1 回）' : '待たずにターンを終えれば、返答は次のターンの頭に届きます（その場で要るなら sai_wait）'
       // 複数の宛先を 1 つの依頼として送る（#727）。先に全部を数え、上限を超えるなら 1 件も送らない。回数を超えた分は預かる
-      if (Array.isArray(args.items)) {
+      // 空の items は付いていないのと同じ（to / text の形として扱う）
+      if (Array.isArray(args.items) && args.items.length > 0) {
         const items = args.items.filter((it): it is { to: string; text: string; compact?: boolean } => !!it && typeof it === 'object' && typeof (it as { to?: unknown }).to === 'string' && typeof (it as { text?: unknown }).text === 'string')
-        if (items.length === 0 || items.length !== args.items.length) return textResult('items は { to, text } の配列で渡してください', true)
+        if (items.length !== args.items.length) return textResult('items は { to, text } の配列で渡してください', true)
         const res = await agentFetch(base, file, '/api/agent/send', { method: 'POST', body: JSON.stringify({ from, items, ...(wake ? { wake: true } : {}) }) })
         if (!res.ok) return textResult(`送れませんでした（1 件も送っていません）: ${await errorOf(res)}`, true)
         const body = (await res.json()) as AgentSendManyResponse

@@ -60,7 +60,8 @@ export function AgentActivityBar({ id, activity, now }: Props) {
               <span className="to" title={h.to}>
                 → {h.to_name}
               </span>
-              <span className="status">{heldStatusLabel(h, n)}</span>
+              {/* 何番目に送るかは、止まっているものを除いて数える */}
+              <span className="status">{heldStatusLabel(h, held.slice(0, n).filter((x) => !x.halted).length)}</span>
               <span className="time">{elapsedLabel(h.at, now)}</span>
             </li>
           ))}

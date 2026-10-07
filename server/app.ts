@@ -18,6 +18,7 @@ import type { SessionTurnResponse, TurnStepsResponse,
   AgentActivity,
   AgentFollowupLine,
   AgentHeldMessage,
+  PrSummary,
   AgentSendManyResponse,
   AgentSendResult,
   AgentActivityMessage,
@@ -131,7 +132,9 @@ import { compareUrl, parseUnifiedDiff } from '../shared/diff.ts'
 import { changedPaths, clampPatch, NotAGitRepo, RealGit, resolveBase, sessionDiff, sessionDiffSummary } from './git/diff.ts'
 import { prBrowserFromEnv } from './git/prs.ts'
 import type { PrBrowser } from './git/prs.ts'
-import { diffStats, isPrNumber, knownRepos, pickKnownRepo } from '../shared/prs.ts'
+import { diffStats, githubRepoOf, isPrNumber, knownRepos, pickKnownRepo } from '../shared/prs.ts'
+import { holdingLabel, holdingOf } from '../shared/holding.ts'
+import type { SessionHolding } from '../shared/holding.ts'
 import { githubReview, parseReviewRequest } from '../shared/prReview.ts'
 import { fillRepo, ProjectResolver } from './git/project.ts'
 import type { Git } from './git/diff.ts'
@@ -170,6 +173,8 @@ import {
   agentEntry,
   agentOverlap,
   agentReplyRows,
+  deliveredId,
+  deliveryMatcher,
   followupHead,
   followupReplyRows,
   HANDED_KEEP_DAYS,
@@ -315,6 +320,10 @@ const AGENT_SESSIONS_PATH = '/api/agent/sessions'
 /** `overlap`（#564）の材料を覚える時間 */
 export const CHANGED_PATHS_TTL_MS = 30_000
 const AGENT_SEND_PATH = '/api/agent/send'
+/** `sai_sessions` の行に PR を足すとき、まだ 1 回も引いていないリポジトリを待つ長さ（#727。前の結果があれば待たない） */
+const HOLDING_PR_WAIT_MS = 1500
+/** 「頼まれて未完」を数える依頼の新しさ（日。#727）。返答の来なかった古い依頼を、いつまでも頼まれ中に数えない */
+const HOLDING_ASK_DAYS = 2
 /** 立て直したあと、前のサーバが残した預かり（#727）を送り始めるまでの間（引き取った子プロセスの様子が分かってから） */
 const BACKLOG_STARTUP_MS = 5_000
 const AGENT_WAIT_PATH = '/api/agent/wait'
@@ -2608,6 +2617,58 @@ export function createApp(
     return paths
   }
 
+  /**
+   * セッションがいま何を持っているか（#727 の案 D の読む側）。`sai_sessions` の 2 つの口（SAI が渡す `sai` と tailnet の `/mcp`）が
+   * 1 行に足す。**SAI は持ち場を書いて持たない**: ブランチ・open な PR・届いている依頼から機械で引けるものだけ。
+   * - PR は記録で知っているリポジトリ（セッションの remote）だけを、`gh pr list` の決まった形で読む。**応答を待たせない**:
+   *   前の結果があればそれを返し（古ければ裏で引き直す）、まだ 1 回も引いていないときだけ `HOLDING_PR_WAIT_MS` 待つ。
+   *   引けなくても行は落とさない（PR の印が付かないだけ）
+   * - 頼まれて未完の依頼は、`HOLDING_ASK_DAYS` 日以内に届けたメッセージのうち、返答（そのターンの完了の行）がまだ無いものと、
+   *   まだ送っていない預かり。行は 1 回だけ舐める
+   */
+  const holdingsOf = async (list: readonly SessionSummary[], occupied: (s: SessionSummary) => boolean): Promise<Map<string, SessionHolding>> => {
+    const repos = new Map<string, Promise<PrSummary[] | null | undefined>>()
+    const prsOf = (repo: string): Promise<PrSummary[] | null | undefined> => {
+      if (!repo || !prs.available) return Promise.resolve(null)
+      const known = repos.get(repo)
+      if (known) return known
+      const hit = prs.cached?.(repo)
+      const job =
+        hit !== undefined
+          ? Promise.resolve(hit)
+          : Promise.race([prs.list(repo).catch(() => null), new Promise<null>((done) => setTimeout(() => done(null), HOLDING_PR_WAIT_MS).unref())])
+      repos.set(repo, job)
+      return job
+    }
+    // 返答の済んだメッセージの id（行を 1 回だけ舐める）
+    const notBefore = Date.now() - HOLDING_ASK_DAYS * 86_400_000
+    const pending = new Map<string, AgentMessage[]>()
+    for (const s of list) {
+      const got = agents.sentTo(s.id, notBefore)
+      if (got.length > 0) pending.set(s.id, got)
+    }
+    const replied = new Set<string>()
+    if (pending.size > 0) {
+      const matcher = deliveryMatcher()
+      for (const row of await rowsNow(QUEUE_DAYS)) {
+        const id = deliveredId(matcher.headOf(row))
+        if (id) replied.add(`${entityId(row.session ?? '', row.repo ?? '', String(row.ts ?? ''))}\0${id}`)
+      }
+    }
+    const out = new Map<string, SessionHolding>()
+    await Promise.all(
+      list.map(async (s) => {
+        const asks = [
+          ...(pending.get(s.id) ?? []).filter((m) => !replied.has(`${s.id}\0${m.message_id}`)).map((m) => m.text),
+          ...agents.heldFor(s.id).map((h) => h.text),
+        ]
+        const repo = isRemoteHost(s.host, selfHost()) ? '' : githubRepoOf(s.remote)
+        out.set(s.id, holdingOf({ branch: s.branch ?? '', prs: await prsOf(repo), asks, occupied: occupied(s) }))
+      }),
+    )
+    return out
+  }
+
   /** GET /api/agent/sessions?from=。話しかけられる相手（同じ project の、返信できる別のセッション） */
   const agentSessions = async (req: IncomingMessage, res: ServerResponse, q: URLSearchParams) => {
     const refusal = agentRefusal(req)
@@ -2620,11 +2681,19 @@ export function createApp(
     const sizes = await Promise.all(targets.map(async (s) => (await progress.read(s)).context_tokens))
     // 同じファイルを触っているか（#564）。知らせるだけで、送るかはエージェントが決める
     const [mine, ...theirs] = await Promise.all([changedOf(found.session), ...targets.map(changedOf)])
+    // いま何を持っているか（#727）。待ち（端末で答えたぶんは畳む。#255）・返信中の答え待ち・預かりがあれば空きではない
+    const { sessions: settled } = await settleWaiting(targets)
+    const waitingIds = new Set(settled.filter((s) => s.waiting).map((s) => s.id))
+    const pendingApprovals = await approvalsNow(targets)
+    const queued = queue.snapshot()
+    const holdings = await holdingsOf(targets, (s) => busy(s.id) || waitingIds.has(s.id) || (pendingApprovals[s.id]?.length ?? 0) > 0 || (queued[s.id]?.items.length ?? 0) > 0)
     const payload: AgentSessionsResponse = {
       from: found.session.id,
-      sessions: targets.map((s, i) =>
-        agentEntry(s, busy(s.id), sizes[i] ?? 0, agentOverlap(mine ?? { root: '', paths: [] }, theirs[i] ?? { root: '', paths: [] })),
-      ),
+      sessions: targets.map((s, i) => {
+        const entry = agentEntry(s, busy(s.id), sizes[i] ?? 0, agentOverlap(mine ?? { root: '', paths: [] }, theirs[i] ?? { root: '', paths: [] }))
+        const holding = holdings.get(s.id)
+        return holding && Object.keys(holding).length > 0 ? { ...entry, holding } : entry
+      }),
     }
     return json(res, payload)
   }
@@ -3312,7 +3381,7 @@ export function createApp(
     {
       name: 'sai_sessions',
       scope: 'read',
-      description: `SAI に並んでいるセッションの一覧（直近 ${MCP_LIST_DAYS} 日、アーカイブ済みを除く）。id・呼び名・リポジトリ・エージェント・ブランチ・処理中か・待ち（許可・質問）・送れない理由・最後の記録の時刻・最後の発言の 1 行目`,
+      description: `SAI に並んでいるセッションの一覧（直近 ${MCP_LIST_DAYS} 日、アーカイブ済みを除く）。id・呼び名・リポジトリ・エージェント・ブランチ・処理中か・**いま持っているもの**（空いているか・ブランチから出ている open な PR と CI・ブランチ名や PR の題名・届いている依頼から引けた issue の番号・頼まれてまだ返していない依頼の数。機械で引けたものだけで、無ければ出ない）・待ち（許可・質問）・送れない理由・最後の記録の時刻・最後の発言の 1 行目`,
       inputSchema: { type: 'object', properties: { project: { type: 'string', description: 'リポジトリ（owner/repo）で絞る' } } },
       run: async (args) => {
         const project = mcpStr(args.project)
@@ -3324,13 +3393,16 @@ export function createApp(
         const { sessions } = await settleWaiting(list)
         const pending = await approvalsNow(sessions)
         const byDefault = (await settingsStore.get()).reply_mode
+        // いま何を持っているか（#727）。待ち・答え待ち・預かり・処理中のどれかがあれば空きではない
+        const queued = queue.snapshot()
+        const holdings = await holdingsOf(sessions, (s) => mcpBusy(s.id) || Boolean(s.waiting) || (pending[s.id]?.length ?? 0) > 0 || (queued[s.id]?.items.length ?? 0) > 0)
         return textResult(
           sessions
             .map((s) => {
               const e = agentEntry(s, mcpBusy(s.id))
               const why = mcpSendRefusal(s, byDefault)
               const waiting = clipReply((s.waiting || pending[s.id]?.[0]?.text || '').split('\n')[0] ?? '', 120)
-              return `- ${e.id}「${e.name}」${e.project} ${e.agent}${e.branch ? ` ${e.branch}` : ''}${e.busy ? '（処理中）' : ''}${waiting ? `（待ち: ${waiting}）` : ''}${why ? `（送れない: ${why}）` : ''}${s.manager_draft ? '（案を置いてある）' : ''} 最後の記録: ${s.end}${e.last_text ? ` 最後の発言: ${e.last_text}` : ''}`
+              return `- ${e.id}「${e.name}」${e.project} ${e.agent}${e.branch ? ` ${e.branch}` : ''}${e.busy ? '（処理中）' : ''}${holdingLabel(holdings.get(s.id) ?? {})}${waiting ? `（待ち: ${waiting}）` : ''}${why ? `（送れない: ${why}）` : ''}${s.manager_draft ? '（案を置いてある）' : ''} 最後の記録: ${s.end}${e.last_text ? ` 最後の発言: ${e.last_text}` : ''}`
             })
             .join('\n'),
         )

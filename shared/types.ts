@@ -1015,6 +1015,12 @@ export interface AgentSessionEntry {
   overlap: string[]
   /** `overlap` に載せきれなかった数（無ければ 0） */
   overlap_more: number
+  /**
+   * いま何を持っているか（#727。`shared/holding.ts` の `SessionHolding`）。機械で引けたものだけで、無ければ省略:
+   * `pr` = worktree のブランチから出ている open な PR と CI、`issues` = ブランチ名・PR の題名・届いている依頼の 1 行目から引けた番号、
+   * `free` = 空いている、`asked` = 頼まれてまだ返していないメッセージの数。本文は載せない
+   */
+  holding?: import('./holding.ts').SessionHolding
 }
 
 /** `GET /api/agent/sessions?from=` の応答 */

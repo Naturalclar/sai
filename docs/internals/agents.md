@@ -26,6 +26,17 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - **ツールが呼ばれたときだけ**計算し（ポーリングには乗せない）、`app.ts` の `changedOf()` が `(cwd, last_turn_ts)` で `CHANGED_PATHS_TTL_MS`（30 秒）覚える。時間でも切るのは、呼んだ側はターンの途中で編集していて `last_turn_ts` が変わらないため。
 - **知らせるだけで、自動では送らない**。送るかはエージェントが決める（ツールの説明に「使う場面・使わない場面」を先に書いてある。`approve-mcp.ts` の `AGENT_TOOLS`）。MCP の `sai_sessions`（`/mcp`。Manager・tailnet 用）には出さない（呼び出し元に「自分の worktree」が無い）。
 
+### いま何を持っているか（#727 の案 D の読む側）
+
+- `sai_sessions` の 2 つの口（SAI が渡す `sai` = `GET /api/agent/sessions` と、tailnet の `/mcp`）の 1 行に、そのセッションが**いま持っているもの**を足す。組み立ては `shared/holding.ts`（純粋関数）で、`app.ts` の `holdingsOf()` が材料を集める。**SAI は持ち場を書いて持たない**（登録する口は無い）。機械で引けたものだけで、引けなければ付けない。
+- `pr`: そのセッションのブランチ（`SessionSummary.branch`）から出ている open な PR の番号と CI（`PrSummary.checks`）・下書きか（`prOfBranch()`。fork の同じ名前のブランチは結ばない）。リポジトリは記録の `remote`（`githubRepoOf()`）で、別のマシンのセッションと remote の無いセッションでは引かない。読むのは今ある `gh pr list` の決まった形（`PrBrowser`）だけ。
+- **応答を `gh` に待たせない**: `PrBrowser.cached()` が前に引いた一覧をそのまま返し、古ければ（`PRS_CACHE_MS`）裏で引き直す。まだ 1 回も引いていないリポジトリだけ `HOLDING_PR_WAIT_MS`（1.5 秒）待ち、間に合わなければ PR の印を付けずに返す（行は落とさない）。同じリポジトリは 1 回の呼び出しで 1 回しか聞かない。`SAI_GH=0` では引かない。
+- `issues`: `issueNumbers()` が、ブランチ名の `issue-<番号>`・PR の題名の `#<番号>`（その PR 自身の番号は除く）・届いていてまだ返していない依頼の **1 行目**の `#<番号>` から引く（`HOLDING_ISSUES_MAX` = 3 件まで）。本文の途中の番号は拾わない。
+- `asked`: 別のセッションから頼まれて、まだ返していないメッセージの数。`AgentMessages.sentTo()` の `HOLDING_ASK_DAYS`（2 日）以内のもののうち、返答（そのメッセージで回ったターンの完了の行。見出しの id）がまだ無いものと、まだ送っていない預かり（`heldFor()`）。行は 1 回だけ舐める。
+- `free`: 処理中でない・待ち（許可・質問・入力。端末で答えたぶんは畳む）が無い・預かりが無い・`asked` が無い。
+- 1 行の印は `holdingLabel()`: `（空き） PR #728（CI 緑） issue #727 頼まれ中 1 件`。題名・本文は載せない（#688）。増える字数は 1 行あたり 0〜56 字（空きだけなら 5 字、PR と issue が 1 つずつで 25 字、空き + PR + issue で 31 字。下書きの 5 桁の PR・issue 3 つ・頼まれ中が全部付いて 56 字）。
+- エージェント用の応答では `AgentSessionEntry.holding`（何も分からなければ省略）。
+
 ### 送る・待つ
 
 - 送るときは `deliveredText()` の見出し（`【SAI】#<project> の「<呼び名>」からのメッセージです（id: <message_id>）…`）を付けて、`launch()` に `queue: true` と `origin: message_id` で渡す。処理中なら #305 の預かりに並び、`StoredReply.origin` として持ち越す。

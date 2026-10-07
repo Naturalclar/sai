@@ -150,7 +150,7 @@ test('command approval: availableDecisionsだけを出し、選んだ実値を�
   const approval = app.snapshot()['thread-1@repo']![0]!
   assert.deepEqual(approval.decisions?.map(({ label, behavior }) => ({ label, behavior })), [
     { label: '拒否', behavior: 'deny' },
-    { label: '「git status」で始まるコマンドを今後聞かない', behavior: 'allow' },
+    { label: '「git status」を今後聞かない', behavior: 'allow' },
   ])
   assert.deepEqual(app.answer(approval.approval_id, { behavior: 'allow', decision: 'd0' }), { ok: false, status: 400, error: '提示されていないdecisionです' }, 'behaviorの改ざんも拒否')
   assert.deepEqual(app.answer(approval.approval_id, { behavior: 'allow', decision: 'not-offered' }), { ok: false, status: 400, error: '提示されていないdecisionです' })
@@ -183,6 +183,31 @@ test('command approval: 範囲をボタンに書けない規則の追加は出�
   assert.deepEqual(app.answer(approval.approval_id, { behavior: 'allow', decision: 'd4' }), { ok: false, status: 400, error: '提示されていないdecisionです' }, '断る規則を許可として送らせない')
   assert.deepEqual(app.answer(approval.approval_id, { behavior: 'deny', decision: 'd4' }), { ok: true })
   assert.deepEqual(connection.sent.at(-1), { id: 'cmd-rpc', result: { decision: denyHost } })
+})
+
+test('command approval: 知らない名前の候補は出さない。出せる候補が 1 つも無ければ、画面からは答えられないと出す（#742 のレビュー）', async () => {
+  const { app, connection } = await started()
+  connection.emit({
+    id: 'cmd-a', method: 'item/commandExecution/requestApproval',
+    params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'cmd-a', command: 'git status', cwd: '/repo', availableDecisions: ['accept', 'acceptAlways', { declineWithSomething: { x: 1 } }, 'toString'] },
+  })
+  const first = app.snapshot()['thread-1@repo']![0]!
+  assert.deepEqual(first.decisions, [{ id: 'd0', label: '許可', behavior: 'allow' }])
+  assert.equal(first.answerable, true)
+  for (const hidden of ['d1', 'd2', 'd3']) assert.equal(app.answer(first.approval_id, { behavior: 'allow', decision: hidden }).ok, false, hidden)
+  assert.deepEqual(app.answer(first.approval_id, { behavior: 'allow', decision: 'd0' }), { ok: true })
+
+  // 来たのが、範囲を書けない規則の追加だけ
+  const long = { acceptWithExecpolicyAmendment: { execpolicy_amendment: ['sh', '-c', 'x'.repeat(200)] } }
+  connection.emit({
+    id: 'cmd-b', method: 'item/commandExecution/requestApproval',
+    params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'cmd-b', command: 'sh -c …', cwd: '/repo', availableDecisions: [long] },
+  })
+  const second = app.snapshot()['thread-1@repo']!.find((a) => a.tool_use_id === 'cmd-b')!
+  assert.equal(second.decisions, undefined)
+  assert.equal(second.answerable, false, '押しても通らないボタンを並べない')
+  assert.equal(app.answer(second.approval_id, { behavior: 'allow' }).ok, false)
+  assert.equal(app.answer(second.approval_id, { behavior: 'allow', decision: 'd0' }).ok, false)
 })
 
 test('file/permissions: 変更対象と追加権限を出し、turn/session/拒否を明示する', async () => {

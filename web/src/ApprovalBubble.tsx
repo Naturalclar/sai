@@ -117,7 +117,12 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false, modeNote =
           {/* 素通しに変えても、処理中のターンは起動したときのモードのまま聞いてくる（#272）。質問は素通しでも出るので付けない */}
           {modeNote && questions.length === 0 && <div className="mode-note">{modeNote}</div>}
           {!answerable ? (
-            <div className="notice">このCodexのダイアログは画面から読めませんでした。回答はtmuxの画面で行ってください。</div>
+            <div className="notice">
+              {/* 端末のダイアログ（`dialog` がある）か、SAI が回している app-server の許可か（#741）で、答える場所が違う */}
+              {approval.dialog || !approval.tool_name.startsWith('Codex')
+                ? 'このCodexのダイアログは画面から読めませんでした。回答はtmuxの画面で行ってください。'
+                : 'Codex が出した選択肢を、画面に書ける形で読めませんでした。ここからは答えられません。続けない場合は「止める」でターンを止めてください。'}
+            </div>
           ) : questions.length > 0 ? (
             <AskQuestions
               questions={questions}

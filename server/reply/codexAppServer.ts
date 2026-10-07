@@ -627,6 +627,7 @@ export class CodexAppServer implements CodexApp {
     let text = ''
     let input: JsonObject = {}
     let decisions: Decision[] = []
+    let unanswerable = false
 
     if (method === 'item/tool/requestUserInput') {
       toolName = 'AskUserQuestion'
@@ -649,6 +650,9 @@ export class CodexAppServer implements CodexApp {
         ? params.availableDecisions
         : ['accept', 'decline']
       decisions = available.map((value, index) => decisionOf(index, value, { decision: value })).filter((v): v is Decision => !!v)
+      // 出せる候補が 1 つも残らなかった（来たのが、範囲を書けない規則の追加・知らない形だけ）。来ていない候補は足さないので、
+      // 画面からは答えられない。そう出して、止めるのは「止める」に任せる（黙って押せないボタンを並べない。#742 のレビュー）
+      unanswerable = decisions.length === 0
     } else if (method === 'item/fileChange/requestApproval') {
       toolName = 'CodexFileChange'
       const item = this.items.get(`${threadIdOf(params)}\n${itemId}`)
@@ -657,7 +661,7 @@ export class CodexAppServer implements CodexApp {
       const paths = changes.map(object).map((change) => change?.path).filter((path): path is string => typeof path === 'string')
       const target = paths.join(', ') || (typeof params.grantRoot === 'string' ? params.grantRoot : '') || (typeof params.reason === 'string' ? params.reason : 'ファイル変更')
       text = `許可待ち: ファイル変更: ${target}`
-      decisions = ['accept', 'acceptForSession', 'decline', 'cancel'].map((value, index) => decisionOf(index, value, { decision: value })).filter((v): v is Decision => !!v)
+      decisions = ['accept', 'acceptForSession', 'decline', 'cancel'].map((value, index) => plainDecision(index, value))
     } else if (method === 'item/permissions/requestApproval') {
       toolName = 'CodexPermissions'
       input = pick(params, ['cwd', 'reason', 'permissions', 'environmentId'])
@@ -681,7 +685,7 @@ export class CodexAppServer implements CodexApp {
       tool_use_id: itemId,
       text,
       agent: 'codex',
-      answerable: true,
+      answerable: !unanswerable,
       ...(decisions.length ? { decisions: decisions.map(({ id, label, behavior }) => ({ id, label, behavior })) } : {}),
     }
     return { approval, requestId, requestKey: keyOf(requestId), threadId: turn.threadId, turnId, method, decisions }
@@ -772,22 +776,34 @@ function threadIdOf(params: JsonObject): string {
   return typeof params.threadId === 'string' ? params.threadId : ''
 }
 
+/** 今回かぎりの候補（規則を足さないもの）の文言と向き。**ここに無い名前の候補は出さない** */
+const PLAIN_DECISIONS: Record<string, { label: string; behavior: 'allow' | 'deny' }> = {
+  accept: { label: '許可', behavior: 'allow' },
+  acceptForSession: { label: 'セッション中許可', behavior: 'allow' },
+  decline: { label: '拒否', behavior: 'deny' },
+  cancel: { label: 'ターンを中止', behavior: 'deny' },
+}
+
+/** SAI が自分で並べる候補（ファイル変更）。名前は `PLAIN_DECISIONS` にあるものだけ */
+function plainDecision(index: number, name: keyof typeof PLAIN_DECISIONS & string): Decision {
+  return { id: `d${index}`, ...PLAIN_DECISIONS[name]!, result: { decision: name } }
+}
+
 /**
- * 候補 1 つをボタンにする。**規則の追加（今後も聞かない）は、範囲をボタンに書けるときだけ**（#741。`amendmentLabel()`）。
- * 書けないものは null で、呼ぶ側が落とす（id は元の並びの番号のまま。落とした候補の id は誰にも渡らないので、答えにも使えない）
+ * Codex が出してきた候補 1 つをボタンにする。出すのは**知っている形だけ**（#741）:
+ * - 今回かぎりの候補（`PLAIN_DECISIONS`）
+ * - 規則の追加（今後も聞かない）で、範囲をボタンに書けるもの（`amendmentLabel()`）
+ *
+ * それ以外（範囲を書けない規則の追加・知らない名前の候補）は null で、呼ぶ側が落とす。知らない名前を英語のまま「許可」の色で出すと、
+ * 何が起きるか分からないボタンになる（新しい版の Codex が別の「今後も…」を足してきたとき。#742 のレビュー）。
+ * id は元の並びの番号のまま（落とした候補の id は誰にも渡らないので、答えにも使えない）
  */
 function decisionOf(index: number, value: unknown, result: JsonObject): Decision | null {
   const amendment = amendmentLabel(value)
   if (amendment === null) return null
   if (amendment) return { id: `d${index}`, ...amendment, result }
-  const name = typeof value === 'string' ? value : Object.keys(object(value) ?? {})[0] ?? 'decision'
-  const labels: Record<string, string> = {
-    accept: '許可',
-    acceptForSession: 'セッション中許可',
-    decline: '拒否',
-    cancel: 'ターンを中止',
-  }
-  return { id: `d${index}`, label: labels[name] ?? name, behavior: name === 'decline' || name === 'cancel' ? 'deny' : 'allow', result }
+  const plain = typeof value === 'string' && Object.hasOwn(PLAIN_DECISIONS, value) ? PLAIN_DECISIONS[value] : undefined
+  return plain ? { id: `d${index}`, ...plain, result } : null
 }
 
 function grantedPermissions(raw: unknown): JsonObject {

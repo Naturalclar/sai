@@ -131,6 +131,8 @@ test('同じルールを 2 回許可すると、3 回目の許可に count: 3 �
 
 test('つないだコマンドは部品ごとにルールを書く（#705）: 何が書かれるかを応答に載せ、回数は組で数え、もう設定にある部品は足さない', async () => {
   const approvals = new Approvals()
+  await settle()
+  const logged = (await logRows()).length
   // cwdB にだけ、もう zztee のルールがある
   const base = await start(approvals, async (cwd) => (cwd === cwdB ? ['Bash(zztee:*)', 'Bash(zzall:*)'] : []))
   const ask = (id: string, command: string, t: string) => approvals.ask(id, 'Bash', { command }, t)
@@ -181,9 +183,14 @@ test('つないだコマンドは部品ごとにルールを書く（#705）: �
   assert.ok(!JSON.stringify(await logRows()).includes('--secret'), 'コマンドの全文は書かない')
 
   // ルールが空だった行には、なぜ空かの種類が残る（#724）。組めなかった形と、組めたが全部もう設定にあるものを分ける
-  const all = await logRows()
-  const reasons = all.filter((r) => !r.rule).map((r) => r.no_rule)
-  assert.deepEqual(reasons, ['cd_then_write', 'cd_outside', 'keyword', 'redirect', 'cd_only', 'covered'])
+  // 書き込みは待たずに足されるので、並びでなく中身で比べる。このテストが足した行だけを見る
+  let all = (await logRows()).slice(logged)
+  for (let i = 0; i < 40 && all.filter((r) => !r.rule).length < 6; i++) {
+    await settle()
+    all = (await logRows()).slice(logged)
+  }
+  const reasons = all.filter((r) => !r.rule).map((r) => r.no_rule).sort()
+  assert.deepEqual(reasons, ['cd_only', 'cd_outside', 'cd_then_write', 'covered', 'keyword', 'redirect'])
   assert.ok(all.filter((r) => r.rule).every((r) => !('no_rule' in r)), 'ルールがある行には載せない')
   // 種類だけ。コマンドの文字・引数・パスは書かない
   // （行の `cwd` はセッションの行のもので、Linux では一時ディレクトリが /tmp の下になるので外して見る）

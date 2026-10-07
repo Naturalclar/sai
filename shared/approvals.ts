@@ -1,7 +1,7 @@
 // 返信中の許可・質問（Approval）の読み書き。サーバ（server/approvals/approvals.ts）が text を作り、
 // 画面（web/src/ApprovalBubble.tsx）が AskUserQuestion の選択肢を出して answers を組み立てる。
 // 文言は feed/record.py の待ちの行（tool_summary / waiting_text）と揃えてある
-import { bashRulePlan } from './bashRules.ts'
+import { BASH_NO_RULE_REASONS, bashRulePlan } from './bashRules.ts'
 import { dumpsLikePython } from './pyjson.ts'
 import type { Approval, ApprovalAnswer, NoRuleReason, PermissionRule } from './types.ts'
 
@@ -154,6 +154,9 @@ export function answerAsk(approval: Approval, answers: Record<string, string>): 
 export function alwaysAllowRules(toolName: string, input: Record<string, unknown>, cwd: string): PermissionRule[] {
   return alwaysAllowPlan(toolName, input, cwd).rules
 }
+
+/** `approvals.jsonl` の `no_rule` に出る種類の全部（#724）。`docs/data.md` の一覧と `server/docs.test.ts` が突き合わせる */
+export const NO_RULE_REASONS: readonly NoRuleReason[] = [...BASH_NO_RULE_REASONS, 'cd_only', 'covered', 'not_bash']
 
 /**
  * `alwaysAllowRules()` の中身（#724）。ルールが空のときは、**なぜ空か**の種類を一緒に返す（`approvals.jsonl` の `no_rule`）。

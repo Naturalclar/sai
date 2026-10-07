@@ -897,7 +897,8 @@ export function createApp(
    * 「組めなかった」（Bash の形）と「組めたが全部もう設定にある」（`covered`）を分ける
    */
   const alwaysPlan = async (a: Approval, cwd: string): Promise<{ rules: PermissionRule[]; reason?: NoRuleReason }> => {
-    if ((a.agent ?? 'claude') !== 'claude' || a.answerable === false) return { rules: [], reason: 'not_claude' }
+    // Claude の許可でない・画面から答えられない預かりは記録に足さない（`logAnswer()` に来ない）ので、理由も付けない
+    if ((a.agent ?? 'claude') !== 'claude' || a.answerable === false) return { rules: [] }
     const plan = alwaysAllowPlan(a.tool_name, a.input, cwd)
     if (plan.rules.length === 0 || !cwd) return plan
     const allowed = await allowedRules(cwd).catch(() => [] as string[])

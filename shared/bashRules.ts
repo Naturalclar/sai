@@ -34,16 +34,31 @@ const QUOTED_HEREDOC = /"\$\(cat <<-?(['"])(\w+)\1\n[\s\S]*?\n[ \t]*\2\n?[ \t]*\
 /**
  * ルールを組めなかった理由の**種類**（#724）。`approvals.jsonl` に残して、どの形が多いかを数える。
  * **種類だけ**で、コマンドの文字・引数・パスは持たない。判定は変えず、今まで null を返していた所に名前を付けただけ
+ * **1 行に残るのは、頭から読んで最初に当たった 1 つ**（`echo $(x) > out` は `expansion` だけ）。
  * - `expansion`: `$(…)`・`$VAR`・バッククォート（引用符の中も）
- * - `redirect`: ファイルへのリダイレクト・`|&` / `heredoc`: ヒアドキュメント（`<<`） / `background`: `&`
- * - `subshell`: `(` `)` / `brace`: `{` `}` / `comment`: 行の途中の `#` / `unclosed`: 閉じていない引用符・末尾の `\`
- * - `keyword`: `for` / `if` などの構文の語 / `odd_command`: 先頭の語がコマンドの名前の形でない / `env_value`: 代入の値に空白や記号
+ * - `redirect`: ファイルへのリダイレクト・`|&` / `heredoc`: ヒアドキュメント（`<<`） / `here_string`: `<<<` / `background`: `&`
+ * - `subshell`: 引用符の外の `(` `)`（`<(…)` `>(…)` も） / `brace`: 引用符の外の `{` `}`（波括弧の組のほか `HEAD@{1}`・`-exec … {}` も）
+ * - `comment`: 行の途中の `#` / `unclosed`: 閉じていない引用符・末尾の `\`
+ * - `keyword`: `for` / `if` などの構文の語 / `assign_only`: 代入だけでコマンドが無い（`FOO=1`）
+ * - `odd_command`: 先頭の語がコマンドの名前の形でない（`[`・`!`・`~/bin/x` など） / `env_value`: 代入の値に空白や記号
  * - `cd_form`: `cd` の形が読めない（引数が 1 つでない・`-`・`~`） / `cd_no_cwd`: `cwd` が分からない / `cd_outside`: 行き先が `cwd` の外
  * - `cd_then_write`: `cd` と書き込み系・`git` のつなぎ / `empty`: 部品が無い
  */
-export type BashNoRuleReason =
-  | 'expansion' | 'redirect' | 'heredoc' | 'background' | 'subshell' | 'brace' | 'comment' | 'unclosed'
-  | 'keyword' | 'odd_command' | 'env_value' | 'cd_form' | 'cd_no_cwd' | 'cd_outside' | 'cd_then_write' | 'empty'
+export const BASH_NO_RULE_REASONS = [
+  'expansion', 'redirect', 'heredoc', 'here_string', 'background', 'subshell', 'brace', 'comment', 'unclosed',
+  'keyword', 'assign_only', 'odd_command', 'env_value', 'cd_form', 'cd_no_cwd', 'cd_outside', 'cd_then_write', 'empty',
+] as const
+export type BashNoRuleReason = (typeof BASH_NO_RULE_REASONS)[number]
+
+/** 捨てられないリダイレクトの種類。`rest` はその記号から先（頭の fd の数字も含む） */
+function redirectReason(rest: string): BashNoRuleReason {
+  const op = rest.replace(/^\d+/, '')
+  if (op.startsWith('<<<')) return 'here_string'
+  if (op.startsWith('<<')) return 'heredoc'
+  if (/^[<>]\(/.test(op)) return 'subshell'
+  if (op.startsWith('&') && !op.startsWith('&>')) return 'background'
+  return 'redirect'
+}
 
 /** 部品に分ける。語は引用符を外した文字。切れない・通らない形（展開・サブシェル・ファイルへのリダイレクト・`&`）は理由の種類を返す */
 function splitParts(command: string): string[][] | BashNoRuleReason {
@@ -126,7 +141,7 @@ function splitParts(command: string): string[][] | BashNoRuleReason {
     if (c === '>' || c === '<' || c === '&' || (/\d/.test(c) && word === null && /^\d+[<>]/.test(text.slice(i, i + 4)))) {
       const m = HARMLESS_REDIRECT.exec(text.slice(i))
       // ファイルへのリダイレクト・ヒアドキュメント・`&`（バックグラウンド）
-      if (!m) return text.startsWith('<<', i) ? 'heredoc' : c === '&' && !/^&>/.test(text.slice(i, i + 2)) ? 'background' : 'redirect'
+      if (!m) return redirectReason(text.slice(i))
       endWord()
       i += m[0].length - 1
       continue
@@ -193,7 +208,8 @@ export function bashRulePlan(command: string, cwd: string): { prefixes: string[]
       env.push(words[i]!)
     }
     const first = words[i]!
-    if (/[^\w./+-]/.test(first) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(first)) return no('odd_command')
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(first)) return no('assign_only')
+    if (/[^\w./+-]/.test(first)) return no('odd_command')
     if (KEYWORDS.has(first)) return no('keyword')
     names.push(first)
     if (first === 'cd') {

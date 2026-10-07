@@ -1214,14 +1214,13 @@ export interface ApprovalLogRow {
 
 /**
  * [常に許可] のルールが空だった理由の種類（#724）。
- * - Bash の形（`shared/bashRules.ts` の `BashNoRuleReason`）: `expansion` / `redirect` / `heredoc` / `background` / `subshell` / `brace` /
- *   `comment` / `unclosed` / `keyword` / `odd_command` / `env_value` / `cd_form` / `cd_no_cwd` / `cd_outside` / `cd_then_write` / `empty`
+ * - Bash の形: `shared/bashRules.ts` の `BashNoRuleReason`（一覧と意味はそちら。最初に当たった 1 つ）
  * - `cd_only`: `cd` しか無く、書くルールが無い
  * - `covered`: 組めたが、全部もう設定の許可のルールにある（ルールがあるのに聞かれている）
  * - `not_bash`: Bash でも MCP でもないツール（Edit / Read / 質問など。もともとルールが無い）
- * - `not_claude`: Claude の `-p` の許可でない・画面から答えられない預かり（「常に許可」が無い）
+ * 全部の並びは `shared/approvals.ts` の `NO_RULE_REASONS`
  */
-export type NoRuleReason = BashNoRuleReason | 'cd_only' | 'covered' | 'not_bash' | 'not_claude'
+export type NoRuleReason = BashNoRuleReason | 'cd_only' | 'covered' | 'not_bash'
 
 /**
  * 画面から答えた許可・質問（#693）。ターンが終わる（次のターン完了の行が来る）まで、セッションの画面に残す。

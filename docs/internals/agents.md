@@ -76,7 +76,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 
 ### トークンの歯止め（#311）
 
-- 回数: `AgentMessages` が 1 ターン（送り元の `Replying.since`）に `AGENT_SEND_MAX`（3）回まで数える。
+- 回数: `AgentMessages` が 1 ターン（送り元の `Replying.since`）に `AGENT_SEND_MAX`（3）回まで数える。**その場で送れるのがこの回数まで**で、超えた分は断らずに預かる（下の「上限を超えた送信を預かる」）。
 - 連鎖: `launch()` がメッセージで起動したターンを `agents.launched(id, origin)` で覚えて、そこからは送らせない（連鎖 1 段。人の返信で起動し直すと忘れる）。
 - 使用量: `usageRefusal()` が相手のエージェントの枠（`UsageStore.get()`。5 時間 `AGENT_USAGE_STOP_PERCENT` = 80%、週 `AGENT_WEEKLY_STOP_PERCENT` = 95%、Claude の `limited`）を見て `429`。戻った枠と取れない使用量では止めない。
 - 読み直させる量の予算 `AGENT_TURN_READ_BUDGET`（300 万トークン）:
@@ -90,6 +90,19 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
   - 本文（見出し付き）は `launch()` が預かりの先頭に `origin` 付きで置くので、要約のあとに回る本文のターンも「メッセージで起動したターン」のままで、返答は `replyOf()` で引き当たる。要約が失敗すれば預かりが止まり、送り元には `failed` が返る（`agentResult()` の「預かりの先頭のまま止まった」）。
   - 相手が処理中・預かりが残っているときは `launch()` が今までどおり預かりに並べる（要約は挟まない）。
   - 返事の文は `shared/agentMessages.ts` の `sendHow()`、ツールの説明に足す文は `SEND_COMPACT_NOTE` / `SEND_COMPACT_ARG`（セッション同士の口と `/mcp` で同じ文）。
+
+### 上限を超えた送信を預かる（#727）
+
+- `POST /api/agent/send` は、1 ターンの回数（`AGENT_SEND_MAX`）か 1 ターンの読み直しの予算（`AGENT_TURN_READ_BUDGET`）を超える送信を `429` にせず**預かる**（応答は `202` で `held: true`。`message_id` は預かるときに決める）。預かりが残っている間は、あとから来た送信も後ろに並べる（追い越さない）。同じ送り元からの送信は 1 つずつ通す（`sendLocks`。ツールを並べて呼ばれても、どれも「まだ 0 回」を見ない）。**1 件だけで 1 ターンの予算を超える相手**は、預かっても 1 巡で送れないので今までどおり `429`。空の `items` は付いていないのと同じ。
+- **預かる前に数える**: 宛先を全部引き当て、相手の使用量の枠と読み直す量（`progress.read().context_tokens`）を見てから、`requestRefusal()`（`shared/agentMessages.ts`）が依頼 1 つの上限を見る。依頼＝送り元のそのターンで頼んだ分（もう送った分 + 預かっている分 + 今回）で、上限は **`AGENT_REQUEST_MAX`（8 件）と `AGENT_REQUEST_READ_BUDGET`（600 万トークン）**。超えるなら 1 件も送らず・預からずに `429`（宛先ごとの量を理由に書く）。**仮の値で、変えるならこの 2 つの定数**（と巡の間 `AGENT_BACKLOG_ROUND_MS`）。
+- 複数の宛先を 1 つの依頼として渡す形（body の `items: [{ to, text, compact? }]`。ツールでは `sai_send` の `items`）は、同じ道を通る: 全部を確かめてから、上から順にその場で送れる分を送り、残りを預かる。応答は `AgentSendManyResponse`（1 件ずつ `via` / `held` / `error`）。
+- 人が止めている・受け取ったメッセージで回っているターン（連鎖）からは、預かりもしない（`AgentMessages.refusal(from, turn, Infinity)`。回数だけを見ない）。
+- 送るのは `drainBacklog()`（`server/app.ts`）: **送り元のターンが終わってから**（`run.running(from)` の間は送らない）、1 巡に `AGENT_SEND_MAX` 件・`AGENT_TURN_READ_BUDGET` まで、巡と巡の間は `AGENT_BACKLOG_ROUND_MS`（60 秒）空ける。呼ばれるのはターンの終わり・画面のポーリング（`drainAll()`）・前の巡が掛けたタイマー（`unref()`）。送り方は `sai_send` と同じ `launch()`（相手が処理中なら相手の預かりに並ぶ。権限のフラグは足さない）で、送れたらいつもの記録に載る（`recordHeld()`。返答は送り元の画面と次のターンの頭に届く。1 ターンの回数・量 `sends` には足さない＝送り元がいま回している別のターンの数を潰さない）。巡の途中で呼ばれたら終わったあとにもう 1 回見る（`backlogAgain`）。立て直したあとは `BACKLOG_STARTUP_MS`（5 秒）後に、前のサーバが残した預かりを見始める。
+- 送る直前にもう一度確かめる: 相手がまだ送ってよい相手か・相手の使用量の枠・相手が 1 件で 1 巡の予算を超えていないか。通らない 1 件・起動できなかった 1 件・途中で例外になった 1 件は、**捨てずに理由を付けて止める**（`haltHeld()`。エージェントには「預かった」と返してあるので黙って消さない。画面に「送っていません」と出て、`reply.log` にも残る）。止まった分は自動では送らず、人が「送信を止める」で捨てる。
+- 置き場は `AgentMessages` の `backlog`（メモリと `agent-messages.json`）。**送る前に送りかけの印を書く**（`beginHeld()`）。印が付いたまま立て直されたものは、届いたか分からないので送り直さず、理由（`HALTED_ON_RESTART`）を付けて残す（画面に「送っていません」と出る。人が「送信を止める」で捨てる）。記録の済んだ預かりは読み込むときに捨てる。順番待ちの預かりはそのまま残り、立て直したあとの最初の巡で送る。
+- 「返答が来たら起こす」（`wake`）は、同じ依頼の `wake` 付きの預かりが残っている間は起こさない（送り切って、その返答がそろってから 1 回）。
+- 画面: 詳細の `agent.held`（`AgentHeldMessage`。古い順＝送る順）を `AgentActivityBar` が「預かり（N 番目に送ります）」で出し、見出しに「預かり N 件」を足す。**止める口は今までどおり「送信を止める」**（`POST /api/sessions/<id>/agent/stop`）で、預かりを全部捨てる（`dropHeldBy()`。応答の `cancelled` に数える）。
+- tailnet の `/mcp` の `sai_send` は変えていない（回数は `McpSendLimiter` のまま、超えたら断る）。
 
 ### 記録
 

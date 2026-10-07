@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AGENT_SEND_MAX } from '../../shared/agentMessages.ts'
+import { HALTED_ON_RESTART } from './agentMessages.ts'
 import { AgentMessages, ensureAgentToken, tokenMatches } from './agentMessages.ts'
 
 test('ensureAgentToken: 無ければ作って 0600 で書き、あれば同じものを読む。形が違えば作り直す（#310）', async () => {
@@ -157,6 +158,55 @@ test('AgentMessages.follow: メッセージを送ったことのある相手へ�
     assert.deepEqual([f?.to, f?.text.length, f?.anchor, f?.at], ['B@r', 500, '2026-10-05T03:05:00Z', '2026-10-05T03:10:00Z'])
     assert.deepEqual(after.followupsBy('B@r'), [])
     assert.deepEqual(after.sentBy('A@r').map((m) => m.message_id), ['m1'], '送った記録はそのまま')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('AgentMessages の預かり: 送る前に印を書き、印が付いたまま立て直されたら送り直さない。順番待ちは残る（#727）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-agents-'))
+  const path = join(dir, 'agent-messages.json')
+  const held = (id: string, over: Record<string, unknown> = {}) => ({ message_id: id, from: 'A@r', to: 'B@r', text: `本文 ${id}`, turn: 'turn-1', at: '2026-10-07T03:00:00Z', context: 100, url: 'http://127.0.0.1:1', ...over })
+  try {
+    const before = new AgentMessages(path)
+    const key = before.key()
+    before.hold(held('h1'))
+    before.hold(held('h2', { wake: true }))
+    before.hold(held('h3', { turn: 'turn-2', context: 50 }))
+    before.hold(held('x1', { from: 'C@r' }))
+    assert.notEqual(before.key(), key, '預かったら画面が描き直す')
+    assert.equal(before.hasActivity('A@r'), true, '送ったことが無くても、預かりがあれば枠を出す')
+    assert.deepEqual(before.heldInTurn('A@r', 'turn-1'), { count: 2, read: 200 })
+    assert.deepEqual(before.heldFroms(), ['A@r', 'C@r'])
+    // 人が止めている・連鎖のターンは、回数を見なくても断る
+    before.launched('Z@r', 'm0')
+    assert.match(before.refusal('Z@r', 't', Infinity), /連鎖は 1 段まで/)
+    assert.equal(before.refusal('A@r', 'turn-1', Infinity), '', '回数は見ない（超えた分は預かる）')
+
+    // h1 は送って記録した。h2 は送りかけの印を付けたところで落ちた。h3 は順番待ち
+    assert.equal(before.beginHeld('h1'), true)
+    before.record({ message_id: 'h1', from: 'A@r', to: 'B@r', text: '本文 h1', since: '2026-10-07T03:01:00Z' }, 'backlog:1')
+    assert.equal(before.beginHeld('h2'), true)
+    assert.equal(before.beginHeld('h2'), false, '送りかけのものをもう一度は始めない')
+
+    const after = new AgentMessages(path)
+    assert.deepEqual(after.heldBy('A@r').map((h) => [h.message_id, h.halted]), [['h2', HALTED_ON_RESTART], ['h3', undefined]], '記録の済んだ預かりは捨て、送りかけは止めて残す')
+    assert.equal(after.beginHeld('h2'), false, '届いたか分からないものは送り直さない')
+    assert.equal(after.beginHeld('h3'), true, '順番待ちはそのまま送れる')
+    assert.equal(after.heldBy('A@r')[0]?.wake, true)
+    // 送らないと決めた 1 件は、捨てずに理由を付けて止める（画面に出る。自動では送らない）
+    assert.equal(after.haltHeld('h3', '相手がもう送れるセッションではありません'), true)
+    assert.equal(after.haltHeld('nope', 'x'), false)
+    assert.deepEqual(new AgentMessages(path).heldBy('A@r').map((h) => h.halted), [HALTED_ON_RESTART, '相手がもう送れるセッションではありません'])
+    // 預かっていた分を送れたときの記録は、1 ターンの回数・量を上書きしない（送り元がいま回している別のターンの数を潰さない）
+    after.record({ message_id: 'n1', from: 'A@r', to: 'B@r', text: '新しいターン', since: '2026-10-07T03:05:00Z' }, 'turn-3', 700)
+    after.recordHeld({ message_id: 'h9', from: 'A@r', to: 'B@r', text: '預かっていた分', since: '2026-10-07T03:06:00Z', turn: 'turn-1' })
+    assert.deepEqual([after.sentInTurn('A@r', 'turn-3'), after.readInTurn('A@r', 'turn-3')], [1, 700])
+    assert.equal(after.get('h9')?.turn, 'turn-1', '記録には載る（返答はいつもどおり引ける）')
+    // 人が止めたら、その送り元の預かりだけ全部捨てる
+    assert.equal(after.dropHeldBy('A@r'), 2)
+    assert.equal(after.dropHeldBy('A@r'), 0)
+    assert.deepEqual(new AgentMessages(path).heldFroms(), ['C@r'])
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

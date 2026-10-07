@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AGENT_SEND_MAX, HANDED_MARK, splitHandedReplies, STEERED_NOTE, WAKE_NOTE } from '../shared/agentMessages.ts'
 import type {
+  AgentSendManyResponse,
   AgentSendResponse,
   AgentSessionsResponse,
   AgentStopResponse,
@@ -269,15 +270,19 @@ test('連鎖は 1 段まで: メッセージで起動したターンからは送
   idle('A1@r')
 })
 
-test(`1 ターンに ${AGENT_SEND_MAX} 回まで。次のターンでは数え直す（#311）`, async () => {
+test(`その場で送れるのは 1 ターンに ${AGENT_SEND_MAX} 回まで（超えた分は預かる。#727）。次のターンでは数え直す（#311）`, async () => {
   turn('A1@r', 'turn-a')
   try {
-    for (let i = 0; i < AGENT_SEND_MAX; i++) assert.equal((await send('A1@r', 'B1@r', `${i}`)).status, 202, `${i + 1} 回目`)
+    for (let i = 0; i < AGENT_SEND_MAX; i++) assert.equal(((await (await send('A1@r', 'B1@r', `${i}`)).json()) as AgentSendResponse).held, undefined, `${i + 1} 回目`)
     const res = await send('A1@r', 'B1@r', 'もう一回')
-    assert.equal(res.status, 429)
-    assert.match(((await res.json()) as { error: string }).error, new RegExp(`${AGENT_SEND_MAX} 回まで`))
+    assert.equal(res.status, 202, '断らずに預かる')
+    const body = (await res.json()) as AgentSendResponse
+    assert.deepEqual([body.held, body.sent, body.limit], [true, AGENT_SEND_MAX, AGENT_SEND_MAX], 'その場で送った回数は増えない')
+    // 預かりを片付けてから次のターンへ（預かりが残っている間は、次のターンの送信も後ろに並ぶ）
+    await stopSending('A1@r', 'stop')
+    await stopSending('A1@r', 'resume')
     turn('A1@r', 'turn-b')
-    assert.equal((await send('A1@r', 'B1@r', '次のターン')).status, 202)
+    assert.equal(((await (await send('A1@r', 'B1@r', '次のターン')).json()) as AgentSendResponse).held, undefined)
   } finally {
     idle('A1@r')
   }
@@ -333,7 +338,7 @@ test('相手のエージェントの 5 時間の枠が 80% を超えていたら
   idle('B1@r')
 })
 
-test('1 ターンで相手に読み直させる量の予算を超える相手には送らない（429）。次のターンでは数え直す（#311）', async () => {
+test('1 ターンで相手に読み直させる量の予算を超える分は預かり（#727）、依頼の予算を超えたら断る（429）。次のターンでは数え直す（#311）', async () => {
   contexts.set('B1@r', 2_000_000)
   turn('A1@r', 'budget-a')
   try {
@@ -341,11 +346,18 @@ test('1 ターンで相手に読み直させる量の予算を超える相手に
     assert.equal(first.status, 202)
     const body = (await first.json()) as AgentSendResponse
     assert.deepEqual([body.context_tokens, body.read_tokens, body.read_budget], [2_000_000, 2_000_000, 3_000_000])
-    const second = await send('A1@r', 'B1@r', '二回目')
-    assert.equal(second.status, 429)
-    assert.match(((await second.json()) as { error: string }).error, /予算を超えます/)
+    // 200 万 + 200 万は 1 ターンの予算（300 万）を超える → その場では送らず預かる。数えた量は増えない
+    const second = (await (await send('A1@r', 'B1@r', '二回目')).json()) as AgentSendResponse
+    assert.deepEqual([second.held, second.read_tokens], [true, 2_000_000])
+    // 依頼の予算（600 万）ちょうどまでは預かり、超えたら 1 件も預からずに断る
+    assert.equal(((await (await send('A1@r', 'B1@r', '三回目')).json()) as AgentSendResponse).held, true)
+    const fourth = await send('A1@r', 'B1@r', '四回目')
+    assert.equal(fourth.status, 429)
+    assert.match(((await fourth.json()) as { error: string }).error, /この依頼で相手に読み直させる量の合計が予算を超えます/)
+    await stopSending('A1@r', 'stop')
+    await stopSending('A1@r', 'resume')
     turn('A1@r', 'budget-b')
-    assert.equal((await send('A1@r', 'B1@r', '次のターン')).status, 202)
+    assert.equal(((await (await send('A1@r', 'B1@r', '次のターン')).json()) as AgentSendResponse).held, undefined)
   } finally {
     contexts.delete('B1@r')
     idle('A1@r')
@@ -990,7 +1002,9 @@ test('sai_send: 宛先は id でも呼び名（表示名・worktree 名）でも
       assert.deepEqual([body.to, body.to_name], ['B1@r', 'SessionA'], to)
     }
     assert.equal(runner.started.at(-1)?.id ?? runner.started[0]?.id, 'B1@r')
-    assert.equal((await send('A1@r', 'SessionA', '4 回目')).status, 429, '呼び名で送っても 1 ターンの回数に数える')
+    assert.equal(((await (await send('A1@r', 'SessionA', '4 回目')).json()) as AgentSendResponse).held, true, '呼び名で送っても 1 ターンの回数に数える（超えた分は預かる。#727）')
+    await stopSending('A1@r', 'stop')
+    await stopSending('A1@r', 'resume')
     turn('A1@r')
     // worktree 名 `r` には、送れないセッション（別のマシンの R1・合成 ID の S1）も居る。送れる方が 1 つでも名前では当てない（#662 のレビュー）
     const byRepo = await send('A1@r', 'R', '見て')
@@ -1092,4 +1106,184 @@ test('返答のバブルの下から人が相手へ送ると、相手のセッ�
   idle('B1@r')
   // 受け取った側の詳細には載せない
   assert.equal(((await (await fetch(`${base}/api/sessions/B1%40r`)).json()) as SessionDetailResponse).agent_followups, undefined)
+})
+
+// ---- #727: 1 ターンの回数を超えた送信を預かり、送り元のターンが終わってから順に送る
+
+const sendMany = (from: string, items: { to: string; text: string }[]) => agent('/api/agent/send', { method: 'POST', body: JSON.stringify({ from, items }) })
+const agentOf = async (id: string) => ((await (await fetch(`${base}/api/sessions/${encodeURIComponent(id)}`)).json()) as SessionDetailResponse).agent
+const stopSending = (id: string, what: 'stop' | 'resume') => fetch(`${base}/api/sessions/${encodeURIComponent(id)}/agent/${what}`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: '{}' })
+/** 前のテストの残り（預かり・相手の預かり・連鎖の印・読み直す量）を片付けて、送り元 A1 の新しいターンを始める */
+const freshTurn = async () => {
+  await stopSending('A1@r', 'stop')
+  await stopSending('A1@r', 'resume')
+  await clearQueue('B1@r')
+  contexts.clear()
+  idle('B1@r')
+  await humanReply('A1@r')
+  idle('A1@r')
+  turn('A1@r')
+  runner.started.length = 0
+}
+
+test('1 ターンの回数を超えた sai_send は断らずに預かり、送り元のターンが終わってから順に送る。人が止めると残りは送られない（#727）', async () => {
+  await freshTurn()
+  try {
+    for (const n of [1, 2, 3]) {
+      const sent = (await (await send('A1@r', 'B1@r', `その場で送る ${n}`)).json()) as AgentSendResponse
+      assert.equal(sent.held, undefined)
+      assert.ok(sent.via)
+    }
+    assert.equal(runner.started.length, 3)
+    // 4 件目からは 429 にせず預かる。相手のターンはまだ起こさない
+    const held: AgentSendResponse[] = []
+    for (const n of [4, 5, 6, 7, 8]) {
+      const res = await send('A1@r', 'B1@r', `預かる ${n}`)
+      assert.equal(res.status, 202)
+      held.push((await res.json()) as AgentSendResponse)
+    }
+    assert.deepEqual(held.map((h) => [h.held, h.via, h.held_count]), [[true, undefined, 1], [true, undefined, 2], [true, undefined, 3], [true, undefined, 4], [true, undefined, 5]])
+    assert.equal(new Set(held.map((h) => h.message_id)).size, 5, 'message_id は預かるときに決まる')
+    assert.equal(runner.started.length, 3, '預かっただけでは相手を起こさない')
+    // 依頼 1 つの上限（もう送った分 + 預かり）を超えたら断る。預かりは増えない
+    const over = await send('A1@r', 'B1@r', '9 件目')
+    assert.equal(over.status, 429)
+    assert.match(((await over.json()) as { error: string }).error, /1 つの依頼で送れるのは 8 件まで/)
+    // 人が画面で見える（古い順＝送る順）
+    const shown = await agentOf('A1@r')
+    assert.deepEqual(shown?.held?.map((h) => h.message_id), held.map((h) => h.message_id))
+    assert.equal(shown?.held?.[0]?.halted, undefined)
+    // 送り元が回っている間は、ポーリングが来ても送らない
+    await poll()
+    assert.equal(runner.started.length, 3)
+  } finally {
+    idle('A1@r')
+  }
+  // 送り元のターンが終わった → 1 巡ぶん（3 件）だけ、預かった順に送る。見出しの id は預かったときのもの
+  await poll()
+  assert.equal(runner.started.length, 6, '1 巡は 1 ターンの回数まで')
+  assert.deepEqual(runner.started.slice(3).map((s) => s.id), ['B1@r', 'B1@r', 'B1@r'])
+  assert.match(runner.started[3]!.cmd.text, /預かる 4$/)
+  assert.match(runner.started[5]!.cmd.text, /預かる 6$/)
+  assert.match(runner.started[3]!.cmd.text, /^【SAI】.*からのメッセージです（id: [0-9a-f]+）/)
+  const afterRound = await agentOf('A1@r')
+  assert.equal(afterRound?.held?.length, 2, '残りは次の巡まで預かったまま')
+  assert.ok(afterRound?.recent.length, '送った分はいつもの記録に載る（返答は画面と次のターンの頭に届く）')
+  // すぐもう一度ポーリングが来ても、巡の間が空くまでは送らない
+  await poll()
+  assert.equal(runner.started.length, 6)
+  // 人が「送信を止める」→ 残りは捨てられ、もう送られない
+  const stopped = (await (await stopSending('A1@r', 'stop')).json()) as AgentStopResponse
+  assert.ok(stopped.cancelled >= 2, '預かりの残りも取り消した数に入る')
+  assert.equal(stopped.agent.held, undefined)
+  await poll()
+  assert.equal(runner.started.length, 6)
+  await stopSending('A1@r', 'resume')
+  await clearQueue('B1@r')
+})
+
+test('items: 複数の宛先を 1 つの依頼として受け、合計の読み直す量が予算を超えるなら 1 件も送らずに断る。収まれば回数まで送って残りを預かる（#727）', async () => {
+  await freshTurn()
+  try {
+    // 先に全部を数える: 250 万 × 3 = 750 万 > 600 万
+    contexts.set('B1@r', 2_500_000)
+    const tooBig = await sendMany('A1@r', [{ to: 'B1@r', text: '1' }, { to: 'B1@r', text: '2' }, { to: 'B1@r', text: '3' }])
+    assert.equal(tooBig.status, 429)
+    const why = ((await tooBig.json()) as { error: string }).error
+    assert.match(why, /読み直させる量の合計が予算を超えます/)
+    assert.match(why, /1 件も預かっていません/)
+    assert.equal(runner.started.length, 0, '1 件も送っていない')
+    assert.equal((await agentOf('A1@r'))?.held, undefined, '1 件も預かっていない')
+    // 件数の上限・宛先の誤り・空の本文も、全部を確かめてから断る（途中まで送らない）
+    contexts.clear()
+    assert.equal((await sendMany('A1@r', Array.from({ length: 9 }, (_, n) => ({ to: 'B1@r', text: `${n}` })))).status, 429)
+    assert.equal((await sendMany('A1@r', [{ to: 'B1@r', text: '送れる' }, { to: 'C1@r', text: '別のリポジトリ' }])).status, 403)
+    assert.equal((await sendMany('A1@r', [{ to: 'B1@r', text: '送れる' }, { to: 'B1@r', text: '  ' }])).status, 400)
+    assert.equal((await sendMany('A1@r', [])).status, 400)
+    assert.equal(runner.started.length, 0)
+
+    // 収まる依頼: 上から 3 件はその場で、残り 2 件は預かる
+    contexts.set('B1@r', 100_000)
+    const res = await sendMany('A1@r', [1, 2, 3, 4, 5].map((n) => ({ to: 'B1@r', text: `まとめて ${n}` })))
+    assert.equal(res.status, 202)
+    const body = (await res.json()) as AgentSendManyResponse
+    assert.deepEqual(body.results.map((r) => Boolean(r.held)), [false, false, false, true, true])
+    assert.ok(body.results.every((r) => r.message_id && r.to === 'B1@r' && r.context_tokens === 100_000))
+    assert.deepEqual([body.sent, body.limit, body.held_count], [3, 3, 2])
+    assert.equal(runner.started.length, 3)
+    // 1 件でも預かったあとは、同じターンの次の送信も後ろに並ぶ（追い越さない）
+    const later = (await (await send('A1@r', 'B1@r', 'あとから 1 件')).json()) as AgentSendResponse
+    assert.deepEqual([later.held, later.held_count], [true, 3])
+  } finally {
+    idle('A1@r')
+  }
+  await stopSending('A1@r', 'stop')
+  await stopSending('A1@r', 'resume')
+  await clearQueue('B1@r')
+  contexts.clear()
+})
+
+test('受け取ったメッセージで回っているターン・人が止めている送り元からは、預かりもしない（#727。連鎖を作らない）', async () => {
+  await freshTurn()
+  idle('A1@r')
+  // B1 を A1 からのメッセージで起こす（B1 のターンはメッセージで回っている）
+  turn('A1@r')
+  try {
+    assert.equal((await send('A1@r', 'B1@r', '見て')).status, 202)
+  } finally {
+    idle('A1@r')
+  }
+  turn('B1@r')
+  try {
+    const chained = await sendMany('B1@r', [{ to: 'A1@r', text: '返す' }])
+    assert.equal(chained.status, 429)
+    assert.match(((await chained.json()) as { error: string }).error, /連鎖は 1 段まで/)
+    assert.equal((await agentOf('B1@r'))?.held, undefined)
+  } finally {
+    idle('B1@r')
+  }
+  await humanReply('B1@r')
+  idle('B1@r')
+  await stopSending('A1@r', 'stop')
+  turn('A1@r')
+  try {
+    const res = await send('A1@r', 'B1@r', '止めている間')
+    assert.equal(res.status, 429)
+    assert.match(((await res.json()) as { error: string }).error, /送信を止めています/)
+  } finally {
+    idle('A1@r')
+    await stopSending('A1@r', 'resume')
+  }
+  await clearQueue('B1@r')
+})
+
+test('並べて呼ばれた sai_send も 1 つずつ数える。1 件で 1 ターンの予算を超える相手は預からずに断る（#727 のレビュー）', async () => {
+  await freshTurn()
+  try {
+    // エージェントがツールを 5 つ並べて呼んだ形。その場で送るのは 3 件まで、残りは預かる（全部が「まだ 0 回」を見ない）
+    const all = await Promise.all([1, 2, 3, 4, 5].map((n) => send('A1@r', 'B1@r', `並べて ${n}`)))
+    const bodies = (await Promise.all(all.map((r) => r.json()))) as AgentSendResponse[]
+    assert.deepEqual(all.map((r) => r.status), [202, 202, 202, 202, 202])
+    assert.equal(bodies.filter((b) => b.held).length, 2)
+    assert.equal(runner.started.length, 3)
+    assert.equal((await agentOf('A1@r'))?.sent, 3)
+    await stopSending('A1@r', 'stop')
+    await stopSending('A1@r', 'resume')
+    // 1 件だけで 1 ターン（＝1 巡）の予算を超える相手は、預かっても送れないので今までどおり断る
+    contexts.set('B1@r', 3_500_000)
+    turn('A1@r')
+    const big = await send('A1@r', 'B1@r', '大きい相手')
+    assert.equal(big.status, 429)
+    assert.match(((await big.json()) as { error: string }).error, /予算を超えます/)
+    assert.equal((await agentOf('A1@r'))?.held, undefined)
+    // 空の items は付いていないのと同じ（to / text の形として送る）
+    contexts.clear()
+    const res = await agent('/api/agent/send', { method: 'POST', body: JSON.stringify({ from: 'A1@r', to: 'B1@r', text: '空の items 付き', items: [] }) })
+    assert.equal(res.status, 202)
+    assert.equal(((await res.json()) as AgentSendResponse).to, 'B1@r')
+  } finally {
+    idle('A1@r')
+    contexts.clear()
+  }
+  await clearQueue('B1@r')
 })

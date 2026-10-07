@@ -19,6 +19,8 @@ let tokenFile: string
 const seen: { method: string; url: string; token: string; body: string }[] = []
 /** /api/agent/loop が返すもの（#634） */
 let loopReply: { status: number; body: unknown } = { status: 200, body: {} }
+/** /api/agent/send が次に返すもの（無ければいつもの 1 件ぶん）。1 回使ったら戻る */
+let sendReply: { status: number; body: unknown } | null = null
 /** /api/agent/wait が順に返すもの */
 let waits: { status: number; body: unknown }[] = []
 
@@ -44,6 +46,11 @@ before(async () => {
         return reply(200, { from: 'A1@r', sessions: [{ id: 'B1@r', name: 'レビュー', project: 'o/r', branch: 'main', agent: 'claude', busy: true, last_text: '見ました', context_tokens: 120_000 }] })
       }
       if (req.url === '/api/agent/send') {
+        if (sendReply) {
+          const next = sendReply
+          sendReply = null
+          return reply(next.status, next.body)
+        }
         return reply(202, { message_id: 'm1', to: 'B1@r', to_name: 'レビュー', via: 'queued', sent: 1, limit: 3, context_tokens: 900_000, read_tokens: 900_000, read_budget: 3_000_000 })
       }
       if (req.url?.startsWith('/api/agent/wait')) {
@@ -77,7 +84,7 @@ test('agentTool: sai_send は送り元・送り先・本文を送り、預けた
   seen.length = 0
   const result = await agentTool('sai_send', { to: 'B1@r', text: '見て' }, base, 'A1@r', tokenFile)
   assert.match(result.content[0]!.text, /^B1@r「レビュー」に送りました（message_id: m1。相手は処理中なので、終わってから回ります/, 'どこに届いたか（id と呼び名。#625）')
-  assert.match(result.content[0]!.text, /あと 2 回/)
+  assert.match(result.content[0]!.text, /その場で送れるのはあと 2 回です。/)
   assert.match(result.content[0]!.text, /相手は約 90 万トークンを読み直します（このターンの予算の残りは約 210 万トークン）/, '次に送るかを決められるよう、読み直す量と予算の残りも伝える（#311）')
   assert.deepEqual(JSON.parse(seen[0]!.body), { from: 'A1@r', to: 'B1@r', text: '見て' })
   const missing = await agentTool('sai_send', { to: 'B1@r' }, base, 'A1@r', tokenFile)
@@ -174,12 +181,56 @@ test('overlapLabel: 同じファイルを 1 行に出す。無ければ空・古
   assert.equal(overlapLabel({} as never), '', '上の sai_sessions の偽物は overlap を返さない（古いサーバ）')
 })
 
+test('agentTool: sai_send が預かられたら「送り直さない」と伝える。items は 1 つの依頼として送り、1 件ずつの結果を返す（#727）', async () => {
+  seen.length = 0
+  sendReply = { status: 202, body: { message_id: 'm9', to: 'B1@r', to_name: 'レビュー', held: true, held_count: 2, sent: 3, limit: 3, context_tokens: 0, read_tokens: 0, read_budget: 3_000_000 } }
+  const held = await agentTool('sai_send', { to: 'B1@r', text: '4 件目' }, base, 'A1@r', tokenFile)
+  assert.equal(held.isError, undefined, '預かりは失敗ではない')
+  assert.match(held.content[0]!.text, /^B1@r「レビュー」への送信を預かりました（message_id: m9。預かりは 2 件）/)
+  assert.match(held.content[0]!.text, /同じものを送り直さないでください/)
+  assert.match(held.content[0]!.text, /「送信を止める」を押すと、残りは送られません/)
+
+  sendReply = {
+    status: 202,
+    body: {
+      results: [
+        { message_id: 'a1', to: 'B1@r', to_name: 'レビュー', via: 'process', context_tokens: 0 },
+        { message_id: 'a2', to: 'C1@r', to_name: '実装', held: true, context_tokens: 0 },
+        { message_id: 'a3', to: 'D1@r', to_name: '調査', error: '起動できませんでした', context_tokens: 0 },
+      ],
+      sent: 3, limit: 3, held_count: 1, read_tokens: 0, read_budget: 3_000_000,
+    },
+  }
+  const items = [{ to: 'B1@r', text: '一' }, { to: 'C1@r', text: '二' }, { to: 'D1@r', text: '三' }]
+  const many = await agentTool('sai_send', { items, wake: true }, base, 'A1@r', tokenFile)
+  assert.deepEqual(JSON.parse(seen[1]!.body), { from: 'A1@r', items, wake: true }, 'to / text は送らない')
+  const lines = many.content[0]!.text.split('\n')
+  assert.match(lines[0]!, /^- B1@r「レビュー」: 送りました（message_id: a1。相手のターンを始めました）/)
+  assert.match(lines[1]!, /^- C1@r「実装」: 預かりました（message_id: a2）/)
+  assert.match(lines[2]!, /^- D1@r「調査」: 送れませんでした（起動できませんでした）/)
+  assert.match(lines[3]!, /同じものを送り直さないでください/)
+  // 依頼ごと断られたら、1 件も送っていないと伝える
+  sendReply = { status: 429, body: { error: 'この依頼で相手に読み直させる量の合計が予算を超えます' } }
+  const refused = await agentTool('sai_send', { items }, base, 'A1@r', tokenFile)
+  assert.equal(refused.isError, true)
+  assert.match(refused.content[0]!.text, /^送れませんでした（1 件も送っていません）: /)
+  // 形の違う items は送らない
+  const before = seen.length
+  assert.equal((await agentTool('sai_send', { items: [{ to: 'B1@r' }] }, base, 'A1@r', tokenFile)).isError, true)
+  assert.equal((await agentTool('sai_send', { items: [] }, base, 'A1@r', tokenFile)).isError, true)
+  assert.equal(seen.length, before)
+  // 空の items は付いていないのと同じ（to / text の形として送る）
+  await agentTool('sai_send', { to: 'B1@r', text: '見て', items: [] }, base, 'A1@r', tokenFile)
+  assert.deepEqual(JSON.parse(seen.at(-1)!.body), { from: 'A1@r', to: 'B1@r', text: '見て' })
+})
+
 test('AGENT_TOOLS: 説明を書き直しても、ツールの名前と引数は変わらない（#564）', () => {
   assert.deepEqual(
     AGENT_TOOLS.map((t) => [t.name, Object.keys(t.inputSchema.properties), 'required' in t.inputSchema ? t.inputSchema.required : []]),
     [
       ['sai_sessions', [], []],
-      ['sai_send', ['to', 'text', 'wake', 'compact'], ['to', 'text']],
+      // to / text は必須にしない（#727。items で渡す形がある。どちらも無ければツールが言葉で断る）
+      ['sai_send', ['to', 'text', 'wake', 'compact', 'items'], []],
       ['sai_wait', ['message_id'], ['message_id']],
     ],
   )

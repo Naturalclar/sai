@@ -22,6 +22,36 @@ export const AGENT_FOLLOWUPS_KEEP = 200
 /** 覚える本文の上限（返答を探すのに頭を比べるだけ。画面には頭しか出さない） */
 const FOLLOWUP_TEXT_CHARS = 500
 
+/** 立て直しの前に送りかけていた預かりに付ける理由（#727） */
+export const HALTED_ON_RESTART = '送っている途中でサーバが立て直されました。届いたか分からないので、送り直していません'
+
+/**
+ * 1 ターンの回数（か読み直しの予算）を超えたので預かった送信（#727）。送り元のターンが終わってから、サーバが順に送る。
+ * `message_id` は預かるときに決める（エージェントに返してあり、送るときの見出しにもそのまま入る）
+ */
+export interface HeldSend {
+  message_id: string
+  from: string
+  to: string
+  /** エージェントが書いた本文（見出しを付ける前） */
+  text: string
+  /** 預かったときの送り元のターン（`Replying.since`）。依頼の単位 */
+  turn: string
+  /** 預かった時刻 */
+  at: string
+  /** 預かったときに数えた、相手が読み直す量（分からなければ 0） */
+  context: number
+  /** 送るときに使うサーバの URL（預かったときのリクエストのもの） */
+  url: string
+  wake?: true
+  /** エージェントが渡した `compact`（省略なら送るときに判定する） */
+  compact?: boolean
+  /** 送りかけの印（送る直前に書く）。付いたまま立て直されたら送り直さない */
+  sending?: string
+  /** 止まった理由。付いているものは自動では送らない（人が「送信を止める」で捨てる） */
+  halted?: string
+}
+
 /**
  * 人が送り元（`from`）の画面の、相手（`to`）の返答のバブルの下から送った返信（#700）。メッセージ（`sai_send`）ではない:
  * 送り元のターンは起こさず、返答を送り元の会話にも渡さない。送り元の画面に出すためだけに覚える
@@ -99,6 +129,8 @@ export class AgentMessages {
   private stopped = new Set<string>()
   /** 人が返答のバブルの下から送った返信（#700。古い順） */
   private followups: AgentFollowup[] = []
+  /** 1 ターンの回数を超えて預かった送信（#727。古い順）。送り元のターンが終わってから順に送る */
+  private backlog: HeldSend[] = []
   /** 送った・止めた・再開したで進める（詳細の rev に混ぜる） */
   private version = 0
   private readonly statePath: string
@@ -119,7 +151,7 @@ export class AgentMessages {
       return
     }
     if (!raw || typeof raw !== 'object') return
-    const r = raw as Partial<Record<'messages' | 'sends' | 'origins' | 'stopped' | 'followups', unknown>>
+    const r = raw as Partial<Record<'messages' | 'sends' | 'origins' | 'stopped' | 'followups' | 'backlog', unknown>>
     if (Array.isArray(r.messages)) {
       for (const m of r.messages) if (isMessage(m)) this.messages.set(m.message_id, m)
     }
@@ -134,6 +166,14 @@ export class AgentMessages {
     }
     if (Array.isArray(r.stopped)) for (const from of r.stopped) if (typeof from === 'string') this.stopped.add(from)
     if (Array.isArray(r.followups)) for (const f of r.followups) if (isFollowup(f)) this.followups.push(f)
+    // 預かり（#727）。**送りかけの印が付いたまま残っているものは、前のサーバが送っている途中で落ちた分**。届いたかどうか
+    // 分からないので送り直さず（二重に送らない）、止まった理由を付けて残す（忘れない。人が画面で見て、止めるか頼み直す）
+    if (Array.isArray(r.backlog)) {
+      for (const h of r.backlog) {
+        if (!isHeld(h) || this.messages.has(h.message_id)) continue
+        this.backlog.push(h.sending && !h.halted ? { ...h, halted: HALTED_ON_RESTART } : h)
+      }
+    }
   }
 
   /** いまの状態を書く。tmp → rename（`replying.json` と同じ）。書けなくても送る口は止めない */
@@ -144,7 +184,7 @@ export class AgentMessages {
     try {
       mkdirSync(dirname(this.statePath), { recursive: true })
       const tmp = `${this.statePath}.${process.pid}.tmp`
-      const body = { messages: [...this.messages.values()], sends: Object.fromEntries(this.sends), origins: Object.fromEntries(this.origins), stopped: [...this.stopped], followups: this.followups }
+      const body = { messages: [...this.messages.values()], sends: Object.fromEntries(this.sends), origins: Object.fromEntries(this.origins), stopped: [...this.stopped], followups: this.followups, backlog: this.backlog }
       writeFileSync(tmp, JSON.stringify(body, null, 2) + '\n', { mode: 0o600 })
       renameSync(tmp, this.statePath)
     } catch {
@@ -194,6 +234,16 @@ export class AgentMessages {
     this.persist()
   }
 
+  /**
+   * 預かっていた分を送れたので記録する（#727）。**1 ターンの回数・量（`sends`）には足さない**: 送るのは送り元のターンの外で、
+   * 足すと送り元がいま回している別のターンの数を上書きしてしまう（1 巡の上限は送る側が自分で数える）
+   */
+  recordHeld(message: AgentMessage): void {
+    this.messages.set(message.message_id, message)
+    this.version++
+    this.persist()
+  }
+
   /** 人が送信を止めた（#311）。もう止まっていれば false */
   stop(from: string): boolean {
     if (this.stopped.has(from)) return false
@@ -233,6 +283,77 @@ export class AgentMessages {
     return true
   }
 
+  // ---- 預かった送信（#727）
+
+  /** 預かる。送る順は預かった順 */
+  hold(item: HeldSend): void {
+    this.backlog.push(item)
+    this.version++
+    this.persist()
+  }
+
+  /** その送り元の預かり（古い順）。止まっているもの（`halted`）も含む */
+  heldBy(from: string): HeldSend[] {
+    return this.backlog.filter((h) => h.from === from)
+  }
+
+  /** 預かりのある送り元 */
+  heldFroms(): string[] {
+    return [...new Set(this.backlog.map((h) => h.from))]
+  }
+
+  /** その依頼（送り元のそのターン）で預かっている数と、読み直させる量の合計 */
+  heldInTurn(from: string, turn: string): { count: number; read: number } {
+    const list = this.backlog.filter((h) => h.from === from && h.turn === turn)
+    return { count: list.length, read: list.reduce((sum, h) => sum + h.context, 0) }
+  }
+
+  /**
+   * これから送る印を付けて書く（**送る前に書く**。送っている途中でサーバが落ちても、立て直したあとに同じものをもう一度送らない）。
+   * もう無い・止まっている・送りかけなら false
+   */
+  beginHeld(messageId: string, at: string = new Date().toISOString()): boolean {
+    const i = this.backlog.findIndex((h) => h.message_id === messageId)
+    const h = this.backlog[i]
+    if (!h || h.halted || h.sending) return false
+    this.backlog[i] = { ...h, sending: at }
+    this.persist()
+    return true
+  }
+
+  /** 止める（自動では送らない）。理由を付けて残す。もう無ければ false */
+  haltHeld(messageId: string, reason: string): boolean {
+    const i = this.backlog.findIndex((h) => h.message_id === messageId)
+    const h = this.backlog[i]
+    if (!h) return false
+    this.backlog[i] = { ...h, halted: reason }
+    this.version++
+    this.persist()
+    return true
+  }
+
+  /** 預かりから外す（送れた・人が止めた）。外したら true */
+  dropHeld(messageId: string): boolean {
+    const before = this.backlog.length
+    this.backlog = this.backlog.filter((h) => h.message_id !== messageId)
+    if (this.backlog.length === before) return false
+    this.version++
+    this.persist()
+    return true
+  }
+
+  /** その送り元の預かりを全部捨てる（人が「送信を止める」を押した）。捨てた数 */
+  dropHeldBy(from: string): number {
+    const before = this.backlog.length
+    this.backlog = this.backlog.filter((h) => h.from !== from)
+    const dropped = before - this.backlog.length
+    if (dropped > 0) {
+      this.version++
+      this.persist()
+    }
+    return dropped
+  }
+
   /** `from` の画面から送った返信（古い順） */
   followupsBy(from: string): AgentFollowup[] {
     return this.followups.filter((f) => f.from === from)
@@ -240,7 +361,7 @@ export class AgentMessages {
 
   /** 画面に出すか（一度でも送ったか、止めている） */
   hasActivity(from: string): boolean {
-    return this.stopped.has(from) || [...this.messages.values()].some((m) => m.from === from)
+    return this.stopped.has(from) || this.backlog.some((h) => h.from === from) || [...this.messages.values()].some((m) => m.from === from)
   }
 
   /** rev に混ぜる。送った・止めた・再開したで変わる */
@@ -318,6 +439,12 @@ export class AgentMessages {
   origin(entity: string): string | undefined {
     return this.origins.get(entity)
   }
+}
+
+function isHeld(h: unknown): h is HeldSend {
+  if (!h || typeof h !== 'object') return false
+  const v = h as Record<string, unknown>
+  return ['message_id', 'from', 'to', 'text', 'turn', 'at', 'url'].every((k) => typeof v[k] === 'string') && typeof v.context === 'number'
 }
 
 function isFollowup(f: unknown): f is AgentFollowup {

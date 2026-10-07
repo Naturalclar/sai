@@ -17,6 +17,9 @@ import { selfHost } from './host.ts'
 import type { SessionTurnResponse, TurnStepsResponse,
   AgentActivity,
   AgentFollowupLine,
+  AgentHeldMessage,
+  AgentSendManyResponse,
+  AgentSendResult,
   AgentActivityMessage,
   AgentStopResponse,
   AgentSendRequest,
@@ -160,6 +163,9 @@ import {
   AGENT_SEND_MAX,
   AGENT_TEXT_MAX_CHARS,
   AGENT_TURN_READ_BUDGET,
+  AGENT_BACKLOG_ROUND_MS,
+  AGENT_REQUEST_MAX,
+  requestRefusal,
   agentEntry,
   agentOverlap,
   agentReplyRows,
@@ -308,6 +314,8 @@ const AGENT_SESSIONS_PATH = '/api/agent/sessions'
 /** `overlap`（#564）の材料を覚える時間 */
 export const CHANGED_PATHS_TTL_MS = 30_000
 const AGENT_SEND_PATH = '/api/agent/send'
+/** 立て直したあと、前のサーバが残した預かり（#727）を送り始めるまでの間（引き取った子プロセスの様子が分かってから） */
+const BACKLOG_STARTUP_MS = 5_000
 const AGENT_WAIT_PATH = '/api/agent/wait'
 /** `sai_loop_next`（#634）。エージェントが周の終わりに「次」を言う口 */
 const AGENT_LOOP_PATH = '/api/agent/loop'
@@ -1869,6 +1877,7 @@ export function createApp(
         void drain(id)
         // 終わったターンが誰かへの返答なら、送り元へ渡す（#594）
         void deliverReplies()
+        void drainBacklog()
       })
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code
@@ -2284,6 +2293,7 @@ export function createApp(
         void drain(id)
         // 終わったターンが誰かへの返答なら、送り元へ渡す（#594）
         void deliverReplies()
+        void drainBacklog()
       })
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code
@@ -2348,6 +2358,7 @@ export function createApp(
   const drainAll = async (): Promise<void> => {
     for (const id of queue.ids()) await drain(id)
     await deliverReplies()
+    await drainBacklog()
     await tickLoops()
   }
 
@@ -2392,6 +2403,8 @@ export function createApp(
         const from = first.from
         // 送ったターンがまだ回っていれば起こさない（上の 2 がその場で足す。足せなければ、ターンが終わってから）
         if (snap[from] && !snap[from]!.failed && snap[from]!.since === first.turn) continue
+        // 同じ依頼の「起こす」がまだ預かりに残っていれば、送り切ってその返答がそろうまで起こさない（#727。先に起こすと 1 回で受け取れない）
+        if (agents.heldBy(from).some((h) => h.wake && !h.halted && h.turn === first.turn)) continue
         const results = await Promise.all(group.map((m) => agentResult(m)))
         if (results.some((r) => !r || r.status === 'pending')) continue
         const key = group.map((m) => m.message_id).join(',')
@@ -2466,6 +2479,7 @@ export function createApp(
   codexApp.onTurnEnd?.((id) => {
     void drain(id)
     void deliverReplies()
+    void drainBacklog()
   })
 
   /**
@@ -2629,56 +2643,261 @@ export function createApp(
       return error(res, 400, err instanceof Error ? err.message : 'bad body')
     }
     const b = (body ?? {}) as Partial<AgentSendRequest>
-    const text = typeof b.text === 'string' ? b.text.trim() : ''
-    if (!text) return error(res, 400, 'text が要ります')
-    if (text.length > AGENT_TEXT_MAX_CHARS) return error(res, 400, `送れるのは ${AGENT_TEXT_MAX_CHARS} 字までです。短くまとめてください`)
+    // **同じ送り元からの送信は 1 つずつ通す**（#727 のレビュー）。エージェントがツールを並べて呼ぶと、どの呼び出しも
+    // 「まだ 0 回」を見てしまい、回数の上限も依頼の上限も数え損ねる（預かりの順も崩れる）
+    const key = typeof b.from === 'string' ? b.from : ''
+    const before = sendLocks.get(key) ?? Promise.resolve()
+    let release: () => void = () => {}
+    const mine = before.then(() => new Promise<void>((done) => (release = done)))
+    sendLocks.set(key, mine)
+    await before
+    try {
+      return await agentSendOne(req, res, b)
+    } finally {
+      release()
+      if (sendLocks.get(key) === mine) sendLocks.delete(key)
+    }
+  }
+  const sendLocks = new Map<string, Promise<void>>()
+  const agentSendOne = async (req: IncomingMessage, res: ServerResponse, b: Partial<AgentSendRequest>) => {
+    // 宛先は 1 つ（`to` / `text`）か、1 つの依頼としての複数（`items`。#727）。どちらも同じ道を通す。
+    // 空の `items` は付いていないのと同じ（省略できる配列を空で埋めて呼ぶモデルがある）
+    const many = b.items !== undefined && !(Array.isArray(b.items) && b.items.length === 0)
+    if (many && (!Array.isArray(b.items) || b.items.some((it) => !it || typeof it !== 'object'))) return error(res, 400, 'items は { to, text } の配列で送ってください')
+    const asks = many ? b.items!.map((it) => ({ to: it.to, text: it.text, compact: it.compact })) : [{ to: b.to, text: b.text, compact: b.compact }]
+    if (asks.length > AGENT_REQUEST_MAX) return error(res, 429, requestRefusal(0, 0, asks.map(() => ({ name: '', tokens: 0 }))))
+    const nth = (n: number) => (many ? `${n + 1} 件目: ` : '')
+    for (const [n, a] of asks.entries()) {
+      const text = typeof a.text === 'string' ? a.text.trim() : ''
+      if (!text) return error(res, 400, `${nth(n)}text が要ります`)
+      if (text.length > AGENT_TEXT_MAX_CHARS) return error(res, 400, `${nth(n)}送れるのは ${AGENT_TEXT_MAX_CHARS} 字までです。短くまとめてください`)
+    }
     const found = await agentFrom(b.from)
     if (typeof found === 'string') return error(res, 409, found)
+    const from = found.session.id
+    // 人が止めている・受け取ったメッセージで回っているターン（連鎖）からは、預かりもしない（回数はここでは見ない）
+    const barred = agents.refusal(from, found.turn, Infinity)
+    if (barred) return error(res, 429, barred)
     // 宛先は id か呼び名（#625）。引くのは送ってよい相手の中からだけで、ちょうど 1 つに決まらなければ送らない
-    const asked = typeof b.to === 'string' ? b.to : ''
     const targets = agentTargets(found.sessions, found.session, selfHost())
     // 同じ project に居るが送れないセッション（別のマシンなど）。同じ名前がそこにも居れば、名前では当てない
-    const blocked = found.sessions.filter((s) => s.id !== found.session.id && s.project === found.session.project && !s.archived && !targets.includes(s))
-    const resolved = resolveTarget(targets, asked, blocked)
-    if (!resolved.target) {
-      return error(res, resolved.ambiguous ? 409 : 403, targetRefusal(asked, resolved, 'その相手には送れません（同じリポジトリの、SAI から返信できる別のセッションだけ。sai_sessions で確かめてください）'))
+    const blocked = found.sessions.filter((s) => s.id !== from && s.project === found.session.project && !s.archived && !targets.includes(s))
+    // **先に全部の宛先を確かめて数える**（#727）。1 つでも通らなければ、1 件も送らず・預からずに断る
+    const usageNow = await usageStore.get()
+    const planned: { target: SessionSummary; text: string; context: number; compact: boolean | undefined }[] = []
+    for (const [n, a] of asks.entries()) {
+      const asked = typeof a.to === 'string' ? a.to : ''
+      const resolved = resolveTarget(targets, asked, blocked)
+      if (!resolved.target) {
+        return error(res, resolved.ambiguous ? 409 : 403, nth(n) + targetRefusal(asked, resolved, 'その相手には送れません（同じリポジトリの、SAI から返信できる別のセッションだけ。sai_sessions で確かめてください）'))
+      }
+      // 使用量の枠が残り少なければ送らない。見るのは相手のエージェントの枠（受け取って読み直すのは相手。#311）
+      const overUsage = usageRefusal(usageNow, resolved.target.agent)
+      if (overUsage) return error(res, 429, nth(n) + overUsage)
+      // 相手の大きさは transcript / rollout の直近の呼び出しの入力
+      const context = (await progress.read(resolved.target)).context_tokens
+      // 1 件だけで 1 ターンの読み直しの予算を超える相手には、預かっても送れない（1 巡の予算は同じ）。今までどおり断る（#311）
+      const tooBig = budgetRefusal(0, context)
+      if (tooBig) return error(res, 429, nth(n) + tooBig)
+      planned.push({ target: resolved.target, text: (a.text as string).trim(), context, compact: typeof a.compact === 'boolean' ? a.compact : undefined })
     }
-    const target = resolved.target
-    const to = target.id
-    const limit = agents.refusal(found.session.id, found.turn)
-    if (limit) return error(res, 429, limit)
-    // 使用量の枠が残り少なければ送らない。見るのは相手のエージェントの枠（受け取って読み直すのは相手。#311）
-    const overUsage = usageRefusal(await usageStore.get(), target.agent)
-    if (overUsage) return error(res, 429, overUsage)
-    // 1 ターンで相手に読み直させる量の予算（#311）。相手の大きさは transcript / rollout の直近の呼び出しの入力
-    const context = (await progress.read(target)).context_tokens
-    const overBudget = budgetRefusal(agents.readInTurn(found.session.id, found.turn), context)
-    if (overBudget) return error(res, 429, overBudget)
-    const messageId = agents.newId()
-    const delivered = deliveredText({ label: sessionLabel(found.session), project: found.session.project }, messageId, text)
-    const compact = messageCompactOf(target, text, context, b.compact)
-    const out = await launch(to, delivered, [], { days: QUEUE_DAYS, replaceTyped: false, forceProcess: false, url: selfUrl(req), queue: true, origin: messageId, ...compact })
-    if (out.status !== 202) return json(res, out.body, out.status)
-    const via = (out.body as ReplyResponse).via
-    agents.record(
-      { message_id: messageId, from: found.session.id, to, text, since: new Date().toISOString(), turn: found.turn, ...(b.wake === true ? { wake: true as const, url: selfUrl(req) } : {}) },
-      found.turn,
-      context,
-    )
-    await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${found.session.id} → ${to} メッセージ ${messageId}（${via}）\n`).catch(() => {})
-    const payload: AgentSendResponse = {
-      message_id: messageId,
-      to,
-      to_name: sessionLabel(target),
-      via,
-      sent: agents.sentInTurn(found.session.id, found.turn),
+    const heldBefore = agents.heldInTurn(from, found.turn)
+    const sentBefore = agents.sentInTurn(from, found.turn)
+    // この依頼がその場で送り切れるか（1 ターンの回数と読み直しの予算。#311）。送り切れないなら、依頼の上限（#727）を先に見る
+    let spent = agents.readInTurn(from, found.turn)
+    // 預かりが残っている間は、あとから来た送信も後ろに並べる（前のターンで預かった分を追い越さない）
+    let room = agents.heldBy(from).some((h) => !h.halted) ? 0 : Math.max(0, AGENT_SEND_MAX - sentBefore)
+    let direct = 0
+    for (const p of planned) {
+      if (room <= 0 || budgetRefusal(spent, p.context)) break
+      room--
+      spent += p.context
+      direct++
+    }
+    if (direct < planned.length) {
+      const over = requestRefusal(sentBefore + heldBefore.count, agents.readInTurn(from, found.turn) + heldBefore.read, planned.map((p) => ({ name: sessionLabel(p.target), tokens: p.context })))
+      if (over) return error(res, 429, over)
+    }
+    const results: AgentSendResult[] = []
+    for (const [n, p] of planned.entries()) {
+      const to = p.target.id
+      const messageId = agents.newId()
+      const base = { message_id: messageId, to, to_name: sessionLabel(p.target), context_tokens: p.context }
+      if (n >= direct) {
+        // 預かる（#727）。送るのは送り元のターンが終わってから（`drainBacklog()`）
+        agents.hold({ message_id: messageId, from, to, text: p.text, turn: found.turn, at: new Date().toISOString(), context: p.context, url: selfUrl(req), ...(b.wake === true ? { wake: true as const } : {}), ...(p.compact !== undefined ? { compact: p.compact } : {}) })
+        await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${from} → ${to} メッセージ ${messageId} を預かった（1 ターンの上限を超えた分。ターンが終わってから送る）\n`).catch(() => {})
+        results.push({ ...base, held: true })
+        continue
+      }
+      const delivered = deliveredText({ label: sessionLabel(found.session), project: found.session.project }, messageId, p.text)
+      const compact = messageCompactOf(p.target, p.text, p.context, p.compact)
+      const out = await launch(to, delivered, [], { days: QUEUE_DAYS, replaceTyped: false, forceProcess: false, url: selfUrl(req), queue: true, origin: messageId, ...compact })
+      if (out.status !== 202) {
+        if (!many) return json(res, out.body, out.status)
+        results.push({ ...base, error: (out.body as ReplyError).error })
+        continue
+      }
+      const via = (out.body as ReplyResponse).via
+      agents.record(
+        { message_id: messageId, from, to, text: p.text, since: new Date().toISOString(), turn: found.turn, ...(b.wake === true ? { wake: true as const, url: selfUrl(req) } : {}) },
+        found.turn,
+        p.context,
+      )
+      await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${from} → ${to} メッセージ ${messageId}（${via}）\n`).catch(() => {})
+      results.push({ ...base, via })
+    }
+    const counts = {
+      sent: agents.sentInTurn(from, found.turn),
       limit: AGENT_SEND_MAX,
-      context_tokens: context,
-      read_tokens: agents.readInTurn(found.session.id, found.turn),
+      read_tokens: agents.readInTurn(from, found.turn),
       read_budget: AGENT_TURN_READ_BUDGET,
+    }
+    const heldCount = agents.heldBy(from).length
+    if (many) {
+      const payload: AgentSendManyResponse = { results, ...counts, held_count: heldCount }
+      return json(res, payload, 202)
+    }
+    const one = results[0]!
+    const payload: AgentSendResponse = {
+      message_id: one.message_id,
+      to: one.to,
+      to_name: one.to_name,
+      ...(one.via ? { via: one.via } : {}),
+      ...(one.held ? { held: true as const, held_count: heldCount } : {}),
+      ...counts,
+      context_tokens: one.context_tokens,
     }
     return json(res, payload, 202)
   }
+
+  /**
+   * 預かった送信（#727）を送る。**送り元のターンが終わってから**（回っている間は送らない）、1 巡に `AGENT_SEND_MAX` 件・
+   * `AGENT_TURN_READ_BUDGET` まで、巡と巡の間は `AGENT_BACKLOG_ROUND_MS` 空ける。相手のターンが終わったとき・画面のポーリングの
+   * ついで・前の巡のタイマーから呼ぶ。
+   *
+   * - 人が「送信を止める」にしていれば送らない（押したときに預かりごと捨てている）
+   * - 送る直前にもう一度確かめる: 相手がまだ送ってよい相手か・相手の使用量の枠。通らなければその 1 件は捨てて `reply.log` に残す
+   * - **送る前に送りかけの印を書く**（`beginHeld()`）。印が付いたまま立て直されたら送り直さない
+   * - 送り方は `sai_send` と同じ `launch()`（相手が処理中なら相手の預かりに並ぶ。権限のフラグは足さない）
+   */
+  const backlogRoundAt = new Map<string, number>()
+  const backlogTimers = new Map<string, NodeJS.Timeout>()
+  let backlogBusy = false
+  /** 巡の途中で呼ばれた（別の送り元のターンが終わった、など）。終わったらもう 1 回見る */
+  let backlogAgain = false
+  const drainBacklog = async (): Promise<void> => {
+    if (backlogBusy) {
+      backlogAgain = true
+      return
+    }
+    backlogBusy = true
+    const log = join(store.directory, 'reply.log')
+    try {
+      do {
+        backlogAgain = false
+        const froms = agents.heldFroms().filter((from) => !agents.isStopped(from) && agents.heldBy(from).some((h) => !h.halted))
+        if (froms.length === 0) break
+        // 一覧と使用量は 1 巡に 1 回だけ取る
+        const { sessions } = await sessionsWithMeta(QUEUE_DAYS)
+        const usageNow = await usageStore.get()
+        for (const from of froms) {
+          // 送り元がまだ回っている間は送らない（ターンの終わりがもう一度ここを呼ぶ）
+          if (run.running(from)) continue
+          const wait = (backlogRoundAt.get(from) ?? 0) + AGENT_BACKLOG_ROUND_MS - Date.now()
+          if (wait > 0) {
+            scheduleBacklog(from, wait)
+            continue
+          }
+          const sender = sessions.find((x) => x.id === from)
+          if (!sender) {
+            // 一覧の窓の外に出た送り元。見出しを組めないので送らない（忘れずに残し、時間を置いてもう一度見る）
+            scheduleBacklog(from, AGENT_BACKLOG_ROUND_MS)
+            continue
+          }
+          const targets = agentTargets(sessions, sender, selfHost())
+          let sentNow = 0
+          let readNow = 0
+          for (const h of agents.heldBy(from)) {
+            if (h.halted) continue
+            if (sentNow >= AGENT_SEND_MAX) break
+            // 巡の途中で人が「送信を止める」を押した
+            if (agents.isStopped(from)) break
+            // 送らないと決めた 1 件は捨てずに止めて残す（エージェントには「預かった」と返してあるので、黙って消さない。画面に理由が出る）
+            const halt = async (why: string) => {
+              agents.haltHeld(h.message_id, why)
+              await appendFile(log, `--- ${new Date().toISOString()} ${from} → ${h.to} 預かっていたメッセージ ${h.message_id} は送らなかった: ${why}\n`).catch(() => {})
+            }
+            try {
+              const target = targets.find((x) => x.id === h.to)
+              const gone = !target ? '相手がもう送れるセッションではありません' : usageRefusal(usageNow, target.agent)
+              if (!target || gone) {
+                await halt(gone)
+                continue
+              }
+              const context = (await progress.read(target)).context_tokens
+              // 預かったあとに相手が大きくなって、1 件で 1 巡の予算を超えた
+              const tooBig = budgetRefusal(0, context)
+              if (tooBig) {
+                await halt(tooBig)
+                continue
+              }
+              // この巡の予算の残りに入らなければ、次の巡へ
+              if (budgetRefusal(readNow, context)) break
+              if (!agents.beginHeld(h.message_id)) continue
+              const delivered = deliveredText({ label: sessionLabel(sender), project: sender.project }, h.message_id, h.text)
+              const compact = messageCompactOf(target, h.text, context, h.compact)
+              const out = await launch(h.to, delivered, [], { days: QUEUE_DAYS, replaceTyped: false, forceProcess: false, url: h.url, queue: true, origin: h.message_id, ...compact })
+              if (out.status !== 202) {
+                await halt(`送れませんでした: ${(out.body as ReplyError).error}`)
+                continue
+              }
+              // 起動を待っている間に人が「送信を止める」を押した（預かりはもう捨てられている）。相手の預かりに並んだだけなら
+              // 取り消す（止めた側の取り消しは記録から探すので、まだ記録していないこの 1 件には当たらない）。
+              // もう相手で回り始めていたら止めない（相手で回っているターンは止めない）ので、届いたものとして記録する
+              if (!agents.heldBy(from).some((x) => x.message_id === h.message_id)) {
+                const removed = queue.removeWhere((_to, item) => item.origin === h.message_id)
+                if (removed > 0) {
+                  await appendFile(log, `--- ${new Date().toISOString()} ${from} → ${h.to} 預かっていたメッセージ ${h.message_id} は、止められたので取り消した\n`).catch(() => {})
+                  continue
+                }
+              }
+              // 記録してから預かりを外す（どちらも同じファイル。記録の済んだ預かりは、読み込むときにも捨てる）。
+              // 1 ターンの回数・量（`sends`）には足さない（送り元がいま回している別のターンの数を潰さない）
+              agents.recordHeld({ message_id: h.message_id, from, to: h.to, text: h.text, since: new Date().toISOString(), turn: h.turn, ...(h.wake ? { wake: true as const, url: h.url } : {}) })
+              agents.dropHeld(h.message_id)
+              sentNow++
+              readNow += context
+              await appendFile(log, `--- ${new Date().toISOString()} ${from} → ${h.to} 預かっていたメッセージ ${h.message_id} を送った（${(out.body as ReplyResponse).via}）\n`).catch(() => {})
+            } catch (err) {
+              // 途中で落ちた 1 件は、送りかけの印が付いたままになる。届いたか分からないので送り直さず、止めて残す
+              await halt(`送っている途中で失敗しました: ${err instanceof Error ? err.message : String(err)}`)
+            }
+          }
+          if (sentNow > 0) backlogRoundAt.set(from, Date.now())
+          if (agents.heldBy(from).some((h) => !h.halted)) scheduleBacklog(from, AGENT_BACKLOG_ROUND_MS)
+        }
+      } while (backlogAgain)
+    } catch (err) {
+      // 一覧・使用量が読めなかった巡は何もしない（預かりは残る）。タイマーはもう切れているので、掛け直してもう一度見る
+      for (const from of agents.heldFroms()) scheduleBacklog(from, AGENT_BACKLOG_ROUND_MS)
+      await appendFile(log, `--- ${new Date().toISOString()} 預かったメッセージを送る巡が失敗した: ${err instanceof Error ? err.message : String(err)}\n`).catch(() => {})
+    } finally {
+      backlogBusy = false
+    }
+  }
+  /** 次の巡を時間で起こす（画面を開いていなくても進むように）。プロセスの終了は待たせない */
+  const scheduleBacklog = (from: string, ms: number): void => {
+    if (backlogTimers.has(from)) return
+    const timer = setTimeout(() => {
+      backlogTimers.delete(from)
+      void drainBacklog()
+    }, Math.max(0, ms))
+    timer.unref()
+    backlogTimers.set(from, timer)
+  }
+  // 前のサーバが残した預かりを、画面が開かれなくても送り始める（立て直したあとに忘れない）
+  for (const from of agents.heldFroms()) scheduleBacklog(from, BACKLOG_STARTUP_MS)
 
   /**
    * 送り元（`from`）にまだ渡していない返答（#594）。送ってから `HANDED_KEEP_DAYS` 以内で、相手のターンが終わった・失敗したものだけ（古い順）。
@@ -2755,6 +2974,10 @@ export function createApp(
         return { message_id: m.message_id, to: m.to, to_name: target ? sessionLabel(target) : m.to, since: m.since, status: result ? result.status : 'pending' }
       }),
     )
+    const held: AgentHeldMessage[] = agents.heldBy(id).map((h) => {
+      const target = sessions.find((s) => s.id === h.to)
+      return { message_id: h.message_id, to: h.to, to_name: target ? sessionLabel(target) : h.to, at: h.at, ...(h.halted ? { halted: h.halted } : {}) }
+    })
     return {
       stopped: agents.isStopped(id),
       sent: turn ? agents.sentInTurn(id, turn) : 0,
@@ -2762,6 +2985,7 @@ export function createApp(
       read_tokens: turn ? agents.readInTurn(id, turn) : 0,
       read_budget: AGENT_TURN_READ_BUDGET,
       recent,
+      ...(held.length > 0 ? { held } : {}),
     }
   }
 
@@ -2776,6 +3000,8 @@ export function createApp(
     if (stop) {
       agents.stop(id)
       cancelled = queue.removeWhere((_to, item) => item.origin !== undefined && agents.get(item.origin)?.from === id)
+      // まだ送っていない預かり（#727）も捨てる。依頼の残りはここで止まる
+      cancelled += agents.dropHeldBy(id)
       await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} 人がメッセージの送信を止めた（預かりから ${cancelled} 件取り消した）\n`).catch(() => {})
     } else {
       agents.resume(id)

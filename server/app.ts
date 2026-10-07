@@ -28,6 +28,7 @@ import type { SessionTurnResponse, TurnStepsResponse,
   GalleryItem,
   GalleryResponse,
   ApprovalMap,
+  NoRuleReason,
   PermissionRule,
   PermissionUpdate,
   ApprovalRequest,
@@ -90,7 +91,7 @@ import { rowProject } from '../shared/project.ts'
 import { cleanProjects, matchesProjects } from '../shared/projectFilter.ts'
 import { ICONS_DIR, IconStore, iconKey } from './meta/icons.ts'
 import { historyKey, ICON_HISTORY_DIR, ICON_HISTORY_FILE, IconHistory, isHistoryKey } from './meta/iconHistory.ts'
-import { alwaysAllowRules, ruleLabel } from '../shared/approvals.ts'
+import { alwaysAllowPlan, ruleLabel } from '../shared/approvals.ts'
 import { APPROVAL_SUGGEST_AT, ruleCovered, rulesKey } from '../shared/approvalCounts.ts'
 import { APPROVAL_LOG_FILE, ApprovalLog } from './approvals/approvalLog.ts'
 import { APPROVALS_FILE, Approvals, WAIT_MS } from './approvals/approvals.ts'
@@ -890,19 +891,28 @@ export function createApp(
    * つないだコマンドは部品ごとで、もう設定にあるルール（`ruleCovered()`）は足さない。Claude の `-p` の許可だけ
    * （Codex / OpenCode には「常に許可」が無い）。空なら [常に許可] を出さない。`cwd` はセッションの行から
    */
-  const alwaysRules = async (a: Approval, cwd: string): Promise<PermissionRule[]> => {
-    if ((a.agent ?? 'claude') !== 'claude' || a.answerable === false) return []
-    const rules = alwaysAllowRules(a.tool_name, a.input, cwd)
-    if (rules.length === 0 || !cwd) return rules
+  const alwaysRules = async (a: Approval, cwd: string): Promise<PermissionRule[]> => (await alwaysPlan(a, cwd)).rules
+  /**
+   * `alwaysRules()` の中身。ルールが空のときは、なぜ空かの種類も返す（#724。記録の `no_rule` に書くだけで、判定には使わない）。
+   * 「組めなかった」（Bash の形）と「組めたが全部もう設定にある」（`covered`）を分ける
+   */
+  const alwaysPlan = async (a: Approval, cwd: string): Promise<{ rules: PermissionRule[]; reason?: NoRuleReason }> => {
+    if ((a.agent ?? 'claude') !== 'claude' || a.answerable === false) return { rules: [], reason: 'not_claude' }
+    const plan = alwaysAllowPlan(a.tool_name, a.input, cwd)
+    if (plan.rules.length === 0 || !cwd) return plan
     const allowed = await allowedRules(cwd).catch(() => [] as string[])
-    return rules.filter((rule) => !ruleCovered(ruleLabel(rule), allowed))
+    const rules = plan.rules.filter((rule) => !ruleCovered(ruleLabel(rule), allowed))
+    return rules.length > 0 ? { rules } : { rules, reason: 'covered' }
   }
-  /** 答えたことを記録に足す。cwd はセッションの行から（リクエストからは受けない）。コマンドの全文は書かない。`rule` は答える前に組んだ組 */
-  const logAnswer = (a: Approval, cwd: string, rule: string, by: 'human' | 'jev', behavior: 'allow' | 'deny', remember: boolean) => {
+  /**
+   * 答えたことを記録に足す。cwd はセッションの行から（リクエストからは受けない）。コマンドの全文は書かない。`rule` は答える前に組んだ組。
+   * `rule` が空なら、空だった理由の種類（`noRule`）を添える（#724）
+   */
+  const logAnswer = (a: Approval, cwd: string, rule: string, by: 'human' | 'jev', behavior: 'allow' | 'deny', remember: boolean, noRule?: NoRuleReason) => {
     try {
       const now = Date.now()
       const waited = Math.max(0, Math.round((now - Date.parse(a.since)) / 1000))
-      approvalLog.record({ ts: new Date(now).toISOString(), id: a.id, cwd, tool: a.tool_name, rule, by, behavior, remember, waited_s: Number.isFinite(waited) ? waited : 0 })
+      approvalLog.record({ ts: new Date(now).toISOString(), id: a.id, cwd, tool: a.tool_name, rule, by, behavior, remember, waited_s: Number.isFinite(waited) ? waited : 0, ...(!rule && noRule ? { no_rule: noRule } : {}) })
     } catch {
       // 記録できなくても答えは止めない
     }
@@ -3355,7 +3365,7 @@ export function createApp(
       : { behavior: 'deny', message: typeof b.message === 'string' && b.message.trim() ? b.message.trim() : 'SAI の画面で拒否された' }
     // 「常に許可」のルール。画面から受け取らず、預かっているツール名と入力からサーバが組み立てる（cwd もセッションの行から）
     const cwd = (await store.sessions(90).catch(() => ({ sessions: [] as SessionSummary[] }))).sessions.find((s) => s.id === current.id)?.cwd ?? ''
-    const rules = await alwaysRules(current, cwd)
+    const { rules, reason: noRule } = await alwaysPlan(current, cwd)
     if (answer.behavior === 'allow' && b.remember === 'local') {
       if (rules.length === 0) return error(res, 400, 'このツールには「常に許可」は無い')
       answer.updatedPermissions = permissionsFor(rules)
@@ -3363,7 +3373,7 @@ export function createApp(
     if (!approvals.answer(approvalId, answer)) return error(res, 409, 'already answered')
     // 回数に足してから返す（次のポーリングの「何回目」がずれない）。鍵は答える前に組んだ組（答えたあとは設定に書かれて空になる）
     const remembered = rulesKey(rules.map(ruleLabel))
-    logAnswer(current, cwd, remembered, 'human', answer.behavior, !!answer.updatedPermissions)
+    logAnswer(current, cwd, remembered, 'human', answer.behavior, !!answer.updatedPermissions, noRule)
     answered.add(current, answer.behavior, answer.updatedPermissions ? '常に許可' : '')
     return json(res, { ok: true, approval_id: approvalId, behavior: answer.behavior, remembered: answer.updatedPermissions ? remembered : undefined })
   }

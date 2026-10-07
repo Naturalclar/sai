@@ -31,8 +31,22 @@ const HARMLESS_REDIRECT = /^(?:\d*>&\d+|(?:\d*>>?|&>>?|<)\s*\/dev\/null(?![\w./-
 /** `"$(cat <<'EOF' … EOF )"`（コミットメッセージの定番）。この形だけは展開でも通った。中身ごと空の引用符に置き換える */
 const QUOTED_HEREDOC = /"\$\(cat <<-?(['"])(\w+)\1\n[\s\S]*?\n[ \t]*\2\n?[ \t]*\)"/g
 
-/** 部品に分ける。語は引用符を外した文字。切れない・通らない形（展開・サブシェル・ファイルへのリダイレクト・`&`）は null */
-function splitParts(command: string): string[][] | null {
+/**
+ * ルールを組めなかった理由の**種類**（#724）。`approvals.jsonl` に残して、どの形が多いかを数える。
+ * **種類だけ**で、コマンドの文字・引数・パスは持たない。判定は変えず、今まで null を返していた所に名前を付けただけ
+ * - `expansion`: `$(…)`・`$VAR`・バッククォート（引用符の中も）
+ * - `redirect`: ファイルへのリダイレクト・`|&` / `heredoc`: ヒアドキュメント（`<<`） / `background`: `&`
+ * - `subshell`: `(` `)` / `brace`: `{` `}` / `comment`: 行の途中の `#` / `unclosed`: 閉じていない引用符・末尾の `\`
+ * - `keyword`: `for` / `if` などの構文の語 / `odd_command`: 先頭の語がコマンドの名前の形でない / `env_value`: 代入の値に空白や記号
+ * - `cd_form`: `cd` の形が読めない（引数が 1 つでない・`-`・`~`） / `cd_no_cwd`: `cwd` が分からない / `cd_outside`: 行き先が `cwd` の外
+ * - `cd_then_write`: `cd` と書き込み系・`git` のつなぎ / `empty`: 部品が無い
+ */
+export type BashNoRuleReason =
+  | 'expansion' | 'redirect' | 'heredoc' | 'background' | 'subshell' | 'brace' | 'comment' | 'unclosed'
+  | 'keyword' | 'odd_command' | 'env_value' | 'cd_form' | 'cd_no_cwd' | 'cd_outside' | 'cd_then_write' | 'empty'
+
+/** 部品に分ける。語は引用符を外した文字。切れない・通らない形（展開・サブシェル・ファイルへのリダイレクト・`&`）は理由の種類を返す */
+function splitParts(command: string): string[][] | BashNoRuleReason {
   // 行の継続（`\` + 改行）は下で読み飛ばす。先に空白へ置き換えると、`\` で終わるコメント行の次の行まで捨ててしまう
   // （bash はコメントの中の `\` を継続にしない。#710 のレビュー）
   const text = command.replace(/\r\n/g, '\n').replace(QUOTED_HEREDOC, '""')
@@ -53,7 +67,7 @@ function splitParts(command: string): string[][] | null {
   for (let i = 0; i < text.length; i++) {
     const c = text[i]!
     if (c === '#' && word === null) {
-      if (!lineStart) return null
+      if (!lineStart) return 'comment'
       const end = text.indexOf('\n', i)
       i = (end < 0 ? text.length : end) - 1
       continue
@@ -62,7 +76,7 @@ function splitParts(command: string): string[][] | null {
     else if (c !== ' ' && c !== '\t' && c !== '\r') lineStart = false
     if (c === "'") {
       const end = text.indexOf("'", i + 1)
-      if (end < 0) return null
+      if (end < 0) return 'unclosed'
       word = (word ?? '') + text.slice(i + 1, end)
       i = end
       continue
@@ -72,17 +86,17 @@ function splitParts(command: string): string[][] | null {
       let j = i + 1
       for (; j < text.length && text[j] !== '"'; j++) {
         const d = text[j]!
-        if (d === '$' || d === '`') return null // 引用符の中でも展開される
+        if (d === '$' || d === '`') return 'expansion' // 引用符の中でも展開される
         if (d === '\\' && j + 1 < text.length) body += text[++j]!
         else body += d
       }
-      if (j >= text.length) return null
+      if (j >= text.length) return 'unclosed'
       word = (word ?? '') + body
       i = j
       continue
     }
     if (c === '\\') {
-      if (i + 1 >= text.length) return null
+      if (i + 1 >= text.length) return 'unclosed'
       if (text[i + 1] === '\n') {
         i++
         continue
@@ -104,20 +118,23 @@ function splitParts(command: string): string[][] | null {
       continue
     }
     if (c === '|') {
-      if (text[i + 1] === '&') return null
+      if (text[i + 1] === '&') return 'redirect'
       endPart()
       if (text[i + 1] === '|') i++
       continue
     }
     if (c === '>' || c === '<' || c === '&' || (/\d/.test(c) && word === null && /^\d+[<>]/.test(text.slice(i, i + 4)))) {
       const m = HARMLESS_REDIRECT.exec(text.slice(i))
-      if (!m) return null // ファイルへのリダイレクト・ヒアドキュメント・`&`（バックグラウンド）
+      // ファイルへのリダイレクト・ヒアドキュメント・`&`（バックグラウンド）
+      if (!m) return text.startsWith('<<', i) ? 'heredoc' : c === '&' && !/^&>/.test(text.slice(i, i + 2)) ? 'background' : 'redirect'
       endWord()
       i += m[0].length - 1
       continue
     }
     // 展開・サブシェル・波括弧
-    if (c === '$' || c === '`' || c === '(' || c === ')' || c === '{' || c === '}') return null
+    if (c === '$' || c === '`') return 'expansion'
+    if (c === '(' || c === ')') return 'subshell'
+    if (c === '{' || c === '}') return 'brace'
     word = (word ?? '') + c
   }
   endPart()
@@ -148,8 +165,19 @@ const within = (dir: string, root: string) => dir === root || dir.startsWith(roo
  * - 環境変数の代入はそのまま接頭辞に入れる（`FOO=1 touch x` は `Bash(touch:*)` では通らず、`Bash(FOO=1 touch:*)` で通った）
  */
 export function bashRulePrefixes(command: string, cwd: string): string[] | null {
+  const plan = bashRulePlan(command, cwd)
+  return 'reason' in plan ? null : plan.prefixes
+}
+
+/**
+ * `bashRulePrefixes()` の中身（#724）。組めなかったときは null の代わりに**理由の種類**を返す。判定は同じ 1 つ
+ * （`bashRulePrefixes()` はこれを呼ぶだけ）なので、[常に許可] を出すかと記録の理由がずれない
+ */
+export function bashRulePlan(command: string, cwd: string): { prefixes: string[] } | { reason: BashNoRuleReason } {
+  const no = (reason: BashNoRuleReason) => ({ reason })
   const parts = splitParts(command)
-  if (!parts || parts.length === 0) return null
+  if (typeof parts === 'string') return no(parts)
+  if (parts.length === 0) return no('empty')
   const prefixes: string[] = []
   // 読むだけのコマンドの接頭辞。ほかに書くルールが無いときだけ使う（下）
   const unasked: string[] = []
@@ -161,17 +189,19 @@ export function bashRulePrefixes(command: string, cwd: string): string[] | null 
     let i = 0
     for (; i < words.length - 1 && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i]!); i++) {
       // 値に空白や記号があると、ルールの表記とコマンドの字面が揃わない
-      if (!/^[A-Za-z_][A-Za-z0-9_]*=[\w./:@%+,-]*$/.test(words[i]!)) return null
+      if (!/^[A-Za-z_][A-Za-z0-9_]*=[\w./:@%+,-]*$/.test(words[i]!)) return no('env_value')
       env.push(words[i]!)
     }
     const first = words[i]!
-    if (/[^\w./+-]/.test(first) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(first) || KEYWORDS.has(first)) return null
+    if (/[^\w./+-]/.test(first) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(first)) return no('odd_command')
+    if (KEYWORDS.has(first)) return no('keyword')
     names.push(first)
     if (first === 'cd') {
       const target = words[i + 1]
-      if (env.length > 0 || words.length !== i + 2 || !target || !dir || target.startsWith('-') || target.startsWith('~')) return null
+      if (env.length > 0 || words.length !== i + 2 || !target || target.startsWith('-') || target.startsWith('~')) return no('cd_form')
+      if (!dir) return no('cd_no_cwd')
       dir = normalize(target.startsWith('/') ? target : `${dir}/${target}`)
-      if (!within(dir, normalize(cwd))) return null
+      if (!within(dir, normalize(cwd))) return no('cd_outside')
       cd = true
       continue
     }
@@ -185,8 +215,8 @@ export function bashRulePrefixes(command: string, cwd: string): string[] | null 
     const prefix = [...env, head].join(' ')
     if (!prefixes.includes(prefix)) prefixes.push(prefix)
   }
-  if (cd && names.some((n) => NOT_AFTER_CD.has(n))) return null
+  if (cd && names.some((n) => NOT_AFTER_CD.has(n))) return no('cd_then_write')
   // 読むだけのコマンドしか無いのに許可が来たなら、聞かれたのはその部品（`cat /etc/hosts` のように引数しだいで聞かれる）。
   // 書かないと、前は出ていた [常に許可] が消える（#710 のレビュー）
-  return prefixes.length > 0 ? prefixes : unasked
+  return { prefixes: prefixes.length > 0 ? prefixes : unasked }
 }

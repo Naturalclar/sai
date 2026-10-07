@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { bashRulePrefixes } from './bashRules.ts'
+import { bashRulePlan, bashRulePrefixes } from './bashRules.ts'
 
 const CWD = '/w/repo'
 const p = (command: string, cwd = CWD) => bashRulePrefixes(command, cwd)
@@ -124,4 +124,53 @@ test('bashRulePrefixes: fd の付け替え・/dev/null・行ごとのコメン�
   assert.deepEqual(p('# note \\\nrm -rf build\npnpm test'), ['rm', 'pnpm test'], 'コメントの中の \\ は継続にしない（次の行を捨てない。#710 のレビュー）')
   assert.deepEqual(p('pnpm \\\ntest'), ['pnpm test'])
   assert.deepEqual(p('touch file2.txt'), ['touch'], '数字で終わる語はリダイレクトと読み違えない')
+})
+
+test('bashRulePlan: 組めなかった理由の種類を返す（#724）。判定は bashRulePrefixes と同じ 1 つ', () => {
+  const reason = (command: string, cwd = CWD) => {
+    const plan = bashRulePlan(command, cwd)
+    return 'reason' in plan ? plan.reason : plan.prefixes
+  }
+  const cases: [string, string][] = [
+    ['echo $(date)', 'expansion'],
+    ['echo "$HOME"', 'expansion'],
+    ['echo `date`', 'expansion'],
+    ['pnpm test > out.txt', 'redirect'],
+    ['pnpm test 2> err.txt', 'redirect'],
+    ['pnpm test &> all.txt', 'redirect'],
+    ['pnpm test |& tee log', 'redirect'],
+    ['cat <<EOF\nx\nEOF', 'heredoc'],
+    ['pnpm start &', 'background'],
+    ['(cd sub && pnpm test)', 'subshell'],
+    ['{ pnpm test; }', 'brace'],
+    ['pnpm test # あとで', 'comment'],
+    ["echo 'abc", 'unclosed'],
+    ['echo "abc', 'unclosed'],
+    ['pnpm test \\', 'unclosed'],
+    ['for i in 1 2; do pnpm test; done', 'keyword'],
+    ['if true; then pnpm test; fi', 'keyword'],
+    ['[ -f x ] && pnpm test', 'odd_command'],
+    ['FOO=1', 'odd_command'],
+    ['FOO="a b" touch x', 'env_value'],
+    ['cd', 'cd_form'],
+    ['cd -', 'cd_form'],
+    ['cd ~/x && pnpm test', 'cd_form'],
+    ['cd a b', 'cd_form'],
+    ['cd /tmp && pnpm test', 'cd_outside'],
+    ['cd .. && pnpm test', 'cd_outside'],
+    ['cd sub && git status', 'cd_then_write'],
+    ['touch sub/x && cd sub', 'cd_then_write'],
+    ['', 'empty'],
+    ['# コメントだけ', 'empty'],
+  ]
+  for (const [command, want] of cases) {
+    assert.equal(reason(command), want, command)
+    assert.equal(p(command), null, `${command}: 理由があるなら [常に許可] は出さない`)
+  }
+  assert.equal(reason('cd sub && pnpm test', ''), 'cd_no_cwd')
+  // 組めたときは理由を持たない。cd しか無いときは空の配列（理由 cd_only は呼ぶ側が付ける）
+  assert.deepEqual(bashRulePlan('cd sub && pnpm test | tail -5', CWD), { prefixes: ['pnpm test'] })
+  assert.deepEqual(bashRulePlan('cd sub', CWD), { prefixes: [] })
+  // 理由は種類だけ。コマンドの文字を混ぜない
+  assert.deepEqual(bashRulePlan('echo $(cat /secret/path)', CWD), { reason: 'expansion' })
 })

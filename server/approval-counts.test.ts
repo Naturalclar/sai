@@ -171,6 +171,7 @@ test('つないだコマンドは部品ごとにルールを書く（#705）: �
   assert.deepEqual(partly!.always, ['Bash(zzrun:*)'], '設定にある zztee は足さない')
   assert.equal(covered!.always, undefined, '全部もう設定にある')
   assert.equal((await answer(base, covered!.approval_id, { behavior: 'allow', remember: 'local' })).status, 400)
+  assert.equal((await answer(base, covered!.approval_id, { behavior: 'allow' })).status, 200)
   assert.equal((await answer(base, partly!.approval_id, { behavior: 'allow', remember: 'local' })).status, 200)
   assert.deepEqual((await approvals.wait(partly!.approval_id, 10))?.updatedPermissions?.[0]?.rules, [{ toolName: 'Bash', ruleContent: 'zzrun:*' }])
 
@@ -178,6 +179,23 @@ test('つないだコマンドは部品ごとにルールを書く（#705）: �
   const rows = (await logRows()).filter((r) => r.rule.includes('zzrun'))
   assert.ok(rows.some((r) => r.rule === 'Bash(zzrun:*) + Bash(zztee:*)' && r.remember), '記録の鍵も組')
   assert.ok(!JSON.stringify(await logRows()).includes('--secret'), 'コマンドの全文は書かない')
+
+  // ルールが空だった行には、なぜ空かの種類が残る（#724）。組めなかった形と、組めたが全部もう設定にあるものを分ける
+  const all = await logRows()
+  const reasons = all.filter((r) => !r.rule).map((r) => r.no_rule)
+  assert.deepEqual(reasons, ['cd_then_write', 'cd_outside', 'keyword', 'redirect', 'cd_only', 'covered'])
+  assert.ok(all.filter((r) => r.rule).every((r) => !('no_rule' in r)), 'ルールがある行には載せない')
+  // 種類だけ。コマンドの文字・引数・パスは書かない
+  for (const word of ['out.txt', '/tmp', 'touch', 'zzall', 'do zzrun']) assert.ok(!JSON.stringify(all.filter((r) => !r.rule)).includes(word), word)
+
+  // Bash でないツール（もともとルールが無い）は not_bash
+  approvals.ask('S1@r', 'Edit', { file_path: join(cwdA, 'secret-name.ts'), old_string: 'a', new_string: 'b' }, 'e1')
+  const [edit] = await pending(base, 'S1@r')
+  assert.equal((await answer(base, edit!.approval_id, { behavior: 'allow' })).status, 200)
+  await settle()
+  const last = (await logRows()).at(-1)!
+  assert.deepEqual([last.tool, last.rule, last.no_rule], ['Edit', '', 'not_bash'])
+  assert.ok(!JSON.stringify(last).includes('secret-name'))
 })
 
 test('ApprovalLog: 数えるのは直近の日数ぶんだけ。Jev の自動・cwd の無い行・壊れた行は数えない', async () => {

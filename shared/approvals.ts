@@ -1,9 +1,9 @@
 // 返信中の許可・質問（Approval）の読み書き。サーバ（server/approvals/approvals.ts）が text を作り、
 // 画面（web/src/ApprovalBubble.tsx）が AskUserQuestion の選択肢を出して answers を組み立てる。
 // 文言は feed/record.py の待ちの行（tool_summary / waiting_text）と揃えてある
-import { bashRulePrefixes } from './bashRules.ts'
+import { bashRulePlan } from './bashRules.ts'
 import { dumpsLikePython } from './pyjson.ts'
-import type { Approval, ApprovalAnswer, PermissionRule } from './types.ts'
+import type { Approval, ApprovalAnswer, NoRuleReason, PermissionRule } from './types.ts'
 
 export const APPROVAL_TEXT_MAX = 300
 
@@ -152,12 +152,24 @@ export function answerAsk(approval: Approval, answers: Record<string, string>): 
  * もう設定にあるルールを除くのはサーバ（`ruleCovered()`。設定を読めるのがサーバだけなので）
  */
 export function alwaysAllowRules(toolName: string, input: Record<string, unknown>, cwd: string): PermissionRule[] {
+  return alwaysAllowPlan(toolName, input, cwd).rules
+}
+
+/**
+ * `alwaysAllowRules()` の中身（#724）。ルールが空のときは、**なぜ空か**の種類を一緒に返す（`approvals.jsonl` の `no_rule`）。
+ * - Bash: 組めなかった形の種類（`shared/bashRules.ts` の `BashNoRuleReason`）。`cd` しか無くて書くものが無いときは `cd_only`
+ * - Bash でも MCP でもないツール（Edit / Read / AskUserQuestion など）: `not_bash`
+ * 種類だけで、コマンドの文字・引数・パスは返さない
+ */
+export function alwaysAllowPlan(toolName: string, input: Record<string, unknown>, cwd: string): { rules: PermissionRule[]; reason?: NoRuleReason } {
   if (toolName === 'Bash') {
-    const prefixes = bashRulePrefixes(typeof input.command === 'string' ? input.command : '', cwd)
-    return (prefixes ?? []).map((prefix) => ({ toolName: 'Bash', ruleContent: `${prefix}:*` }))
+    const plan = bashRulePlan(typeof input.command === 'string' ? input.command : '', cwd)
+    if ('reason' in plan) return { rules: [], reason: plan.reason }
+    if (plan.prefixes.length === 0) return { rules: [], reason: 'cd_only' }
+    return { rules: plan.prefixes.map((prefix) => ({ toolName: 'Bash', ruleContent: `${prefix}:*` })) }
   }
-  if (/^mcp__[^_]+.*__.+$/.test(toolName)) return [{ toolName }]
-  return []
+  if (/^mcp__[^_]+.*__.+$/.test(toolName)) return { rules: [{ toolName }] }
+  return { rules: [], reason: 'not_bash' }
 }
 
 /** 設定に書かれる表記。`Bash(gh pr:*)` / `mcp__github__create_issue` */

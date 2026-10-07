@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { answerAsk, answersReady, approvalText, askQuestions, joinAnswer, toolSummary, alwaysAllowRules, ruleLabel } from './approvals.ts'
+import { answerAsk, answersReady, approvalText, askQuestions, joinAnswer, toolSummary, alwaysAllowPlan, alwaysAllowRules, ruleLabel } from './approvals.ts'
 import type { Approval } from './types.ts'
 
 test('approvalText は record.py の waiting_text と同じ接頭辞', () => {
@@ -74,6 +74,17 @@ test('joinAnswer は選んだ label と自由記入を繋ぎ、answersReady は�
   assert.equal(answersReady([], {}), false)
   const codex = askQuestions({ questions: [{ id: 'first', question: '同じ質問' }, { id: 'second', question: '同じ質問' }] })
   assert.equal(answersReady(codex, { first: '1', second: '2' }), true, 'Codexは重複する質問文でもidで区別する')
+})
+
+test('alwaysAllowPlan: ルールが空のときは、なぜ空かの種類を返す（#724）。ルールがあれば理由は無い', () => {
+  assert.deepEqual(alwaysAllowPlan('Bash', { command: 'zzrun x > out.txt' }, '/w'), { rules: [], reason: 'redirect' })
+  assert.deepEqual(alwaysAllowPlan('Bash', { command: 'cd sub' }, '/w'), { rules: [], reason: 'cd_only' })
+  assert.deepEqual(alwaysAllowPlan('Bash', {}, '/w'), { rules: [], reason: 'empty' })
+  assert.deepEqual(alwaysAllowPlan('Bash', { command: 'zzrun x' }, '/w'), { rules: [{ toolName: 'Bash', ruleContent: 'zzrun:*' }] })
+  assert.deepEqual(alwaysAllowPlan('mcp__github__create_issue', {}, ''), { rules: [{ toolName: 'mcp__github__create_issue' }] })
+  for (const tool of ['Edit', 'Write', 'Read', 'WebFetch', 'AskUserQuestion', 'ExitPlanMode']) assert.deepEqual(alwaysAllowPlan(tool, { file_path: '/x' }, '/w'), { rules: [], reason: 'not_bash' }, tool)
+  // alwaysAllowRules は同じ判定の rules だけ
+  for (const command of ['zzrun x', 'cd sub', 'echo $(date)']) assert.deepEqual(alwaysAllowRules('Bash', { command }, '/w'), alwaysAllowPlan('Bash', { command }, '/w').rules, command)
 })
 
 test('alwaysAllowRules: Bash は部品ごとの前方一致、MCP はツール名、他は無し（切り方は bashRules.test.ts）', () => {

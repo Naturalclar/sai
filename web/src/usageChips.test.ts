@@ -1,10 +1,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { chipsLevel, claudeFreshness, usageChips } from './usageChips.ts'
+import { chipsLevel, claudeFreshness, codexFreshness, usageChips, waitingNote } from './usageChips.ts'
 import type { UsageWindow } from '../../shared/types.ts'
 
-const five = (used: number): UsageWindow => ({ used_percent: used, window_minutes: 300, resets_at: 1789578000 })
-const week = (used: number): UsageWindow => ({ used_percent: used, window_minutes: 10080, resets_at: 1789578000 })
+// 復帰時刻はどのテストの「いま」よりも先（過ぎた枠は別のテストで、その場で組む。#726）
+const RESETS = Math.floor(Date.parse('2027-01-01T00:00:00+09:00') / 1000)
+const five = (used: number): UsageWindow => ({ used_percent: used, window_minutes: 300, resets_at: RESETS })
+const week = (used: number): UsageWindow => ({ used_percent: used, window_minutes: 10080, resets_at: RESETS })
 const codex = (used: number) => ({ primary: five(used), at: '2026-09-13T16:00:00+09:00' })
 
 test('usageChips: Claude が先、Codex が後（狭い画面で落とすのは Codex 側。#347）', () => {
@@ -53,11 +55,13 @@ const clock = (iso: string) => {
 }
 const dated = (iso: string) => `${new Date(iso).getMonth() + 1}/${new Date(iso).getDate()} ${clock(iso)}`
 
-test('usageChips: Claude の割合が 30 分より古ければ stale と「何時間前」を付ける。Codex には付けない（#694）', () => {
-  const fresh = usageChips({ codex: codex(15), claude: { secondary: week(37), at: ago(29 * 60_000) } }, NOW)
+test('usageChips: 割合が 30 分より古ければ stale と「何時間前」を付ける（Claude は #694、Codex は #726）', () => {
+  // 復帰時刻はまだ先の Codex
+  const live = (used: number, at: string) => ({ primary: { ...five(used), resets_at: Math.floor(NOW / 1000) + 3600 }, at })
+  const fresh = usageChips({ codex: live(15, ago(29 * 60_000)), claude: { secondary: week(37), at: ago(29 * 60_000) } }, NOW)
   assert.deepEqual(fresh.map((p) => [p.agent, p.stale, p.age]), [['claude', false, ''], ['codex', false, '']])
-  const stale = usageChips({ codex: codex(15), claude: { secondary: week(37), at: ago(27 * 3_600_000) } }, NOW)
-  assert.deepEqual(stale.map((p) => [p.agent, p.percent, p.stale, p.age]), [['claude', 37, true, '27時間前'], ['codex', 15, false, '']])
+  const stale = usageChips({ codex: live(15, ago(31 * 60_000)), claude: { secondary: week(37), at: ago(27 * 3_600_000) } }, NOW)
+  assert.deepEqual(stale.map((p) => [p.agent, p.percent, p.stale, p.age]), [['claude', 37, true, '27時間前'], ['codex', 15, true, '31分前']])
   // 色は割合のまま決める（古い 96% を緑にはしない）
   assert.equal(chipsLevel(usageChips({ claude: { primary: five(96), at: ago(3_600_000) } }, NOW)), 'high')
   // いつの値か分からない・now を渡さない（今までの呼び方）なら古いと言わない
@@ -74,4 +78,61 @@ test('claudeFreshness: いつの値か（今日でなければ日付も）・古
   // 上限中だけ（割合が 1 つも無い）: `at` は transcript の行の時刻なので古いとは言わず、「5 時間が取れていません」も出さない（設定の案内のほうが出る）
   assert.deepEqual(claudeFreshness({ limited: { resets_at: 1789578000, kind: 'five_hour' }, at: ago(5 * 3_600_000) }, NOW), { at: `${clock(ago(5 * 3_600_000))} 時点`, age: '', stale: false, fiveHourMissing: false })
   assert.deepEqual(claudeFreshness(undefined, NOW), { at: '', age: '', stale: false, fiveHourMissing: false })
+})
+
+// ---- 復帰時刻を過ぎた Codex の枠（#726）
+test('usageChips: 復帰時刻を過ぎた Codex の枠は割合を出さず waiting にする（0% にも、消しもしない）', () => {
+  // 実測の形: 76% のまま、復帰時刻を 44 時間過ぎ、値は 47 時間前
+  const old = { primary: { used_percent: 76, window_minutes: 300, resets_at: Math.floor(NOW / 1000) - 44 * 3600 }, at: ago(47 * 3_600_000) }
+  const parts = usageChips({ codex: old }, NOW)
+  assert.deepEqual(parts, [{ agent: 'codex', name: 'Codex', percent: null, week: false, limited: false, stale: false, age: '', waiting: true }])
+  // 色には数えない（前の枠の 96% でヘッダを赤くしない）
+  assert.equal(chipsLevel(usageChips({ codex: { ...old, primary: { ...old.primary, used_percent: 96 } } }, NOW)), 'ok')
+  // now を渡さない呼び方では今までどおり
+  assert.deepEqual(usageChips({ codex: old }).map((p) => [p.percent, p.waiting]), [[76, false]])
+  // Claude の側は waiting にならない
+  assert.deepEqual(usageChips({ claude: { primary: five(36), at: '' } }, NOW).map((p) => p.waiting), [false])
+})
+
+test('codexFreshness: いつの値か・古いか・復帰時刻を過ぎたか（#726）', () => {
+  const at = ago(47 * 3_600_000)
+  const old = { primary: { used_percent: 76, window_minutes: 300, resets_at: Math.floor(NOW / 1000) - 44 * 3600 }, at }
+  assert.deepEqual(codexFreshness(old, NOW), { at: `${dated(at)} 時点`, age: '47時間前', stale: true, waiting: true })
+  const live = { primary: { used_percent: 20, window_minutes: 300, resets_at: Math.floor(NOW / 1000) + 600 }, at: ago(60_000) }
+  assert.deepEqual(codexFreshness(live, NOW).stale, false)
+  assert.deepEqual(codexFreshness(live, NOW).waiting, false)
+  assert.deepEqual(codexFreshness(undefined, NOW), { at: '', age: '', stale: false, waiting: false })
+})
+
+// ---- #730 のレビュー
+test('usageChips: 5 時間の枠は過ぎていても、週の枠が高ければ週の割合を出す（週で使い切っているのを隠さない）', () => {
+  const sec = (n: number) => Math.floor(NOW / 1000) + n
+  const at = ago(3 * 3_600_000)
+  const codexWith = (weekUsed: number, weekResets: number) => ({
+    primary: { used_percent: 76, window_minutes: 300, resets_at: sec(-3 * 3600) },
+    secondary: { used_percent: weekUsed, window_minutes: 10080, resets_at: weekResets },
+    at,
+  })
+  const high = usageChips({ codex: codexWith(100, sec(3 * 86400)) }, NOW)
+  assert.deepEqual(high.map((p) => [p.percent, p.week, p.waiting, p.stale, p.age]), [[100, true, false, true, '3時間前']])
+  assert.equal(chipsLevel(high), 'high')
+  // 週が低ければ更新待ちのまま（13% を 5 時間の値のように出さない）
+  assert.deepEqual(usageChips({ codex: codexWith(13, sec(3 * 86400)) }, NOW).map((p) => [p.percent, p.week, p.waiting]), [[null, false, true]])
+  // 週の枠も過ぎていれば更新待ち
+  assert.deepEqual(usageChips({ codex: codexWith(100, sec(-60)) }, NOW).map((p) => [p.percent, p.waiting]), [[null, true]])
+})
+
+test('usageChips: Claude の枠も、取ってきたあとに復帰時刻を過ぎたら割合を出さない（パネルのゲージと揃える）', () => {
+  const gone = { used_percent: 96, window_minutes: 300, resets_at: Math.floor(NOW / 1000) - 20 }
+  const parts = usageChips({ claude: { primary: gone, at: ago(60_000) } }, NOW)
+  assert.deepEqual(parts.map((p) => [p.percent, p.waiting, p.limited]), [[null, true, false]])
+  assert.equal(chipsLevel(parts), 'ok')
+})
+
+test('waitingNote: 過ぎた枠だけに「戻った時刻・次に使うと更新」。過ぎた直後でも「まもなく」と言わない', () => {
+  const sec = (n: number) => Math.floor(NOW / 1000) + n
+  assert.match(waitingNote({ used_percent: 76, window_minutes: 300, resets_at: sec(-120) }, NOW), /^\d\d:\d\d に戻った・次に使うと更新$/)
+  assert.equal(waitingNote({ used_percent: 76, window_minutes: 300, resets_at: sec(120) }, NOW), '')
+  assert.equal(waitingNote({ used_percent: 76, window_minutes: 300 }, NOW), '')
+  assert.equal(waitingNote(undefined, NOW), '')
 })

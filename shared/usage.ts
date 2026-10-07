@@ -283,19 +283,34 @@ export function limitKindLabel(kind: string): string {
   return kind
 }
 
+/** 復帰時刻を過ぎてからこの時間までは「まもなく戻る」と言う（値が届くまでの数分の遅れ）。それより前は「戻った」時刻を出す（#726） */
+export const RESET_SOON_MS = 5 * 60_000
+
+/**
+ * 枠の復帰時刻を過ぎているか（#726）。過ぎた枠の割合は前の枠のもので、いまの値ではない
+ * （Codex は使っていないあいだ rollout が増えないので、戻ったあとも古い割合が残る）。
+ * 復帰時刻が載っていない枠・`now` が無いときは過ぎたと言わない
+ */
+export function windowExpired(w: { resets_at?: number } | undefined, now: number): boolean {
+  return Boolean(w?.resets_at) && now > 0 && w!.resets_at! * 1000 <= now
+}
+
 /**
  * 戻る時刻の言い換え。`resets_at` は epoch 秒。1 時間を切ったら残り、それより先は時刻（同じ日でなければ日付も）。
+ * 過ぎた時刻は、`RESET_SOON_MS` までは「まもなく戻る」、それより前は「10/5 15:38 に戻った」（#726。2 日前の時刻に「まもなく」と言わない）。
+ * `past` を付けると、過ぎた直後でも「戻った」と言う（「更新待ち」の脇で「まもなく戻る」と言わない。#730 のレビュー）。
  * now は呼ぶ側から渡す（描画中に Date.now() を呼ばない）
  */
-export function resetLabel(resetsAt: number, now: number): string {
+export function resetLabel(resetsAt: number, now: number, opts: { past?: boolean } = {}): string {
   const at = new Date(resetsAt * 1000)
   if (Number.isNaN(at.getTime())) return ''
   const left = at.getTime() - now
-  if (left <= 0) return 'まもなく戻る'
-  const minutes = Math.ceil(left / 60000)
-  if (minutes < 60) return `あと${minutes}分`
   const today = new Date(now)
   const sameDay = at.getFullYear() === today.getFullYear() && at.getMonth() === today.getMonth() && at.getDate() === today.getDate()
   const clock = `${pad(at.getHours())}:${pad(at.getMinutes())}`
-  return sameDay ? `${clock} に戻る` : `${at.getMonth() + 1}/${at.getDate()} ${clock} に戻る`
+  const when = sameDay ? clock : `${at.getMonth() + 1}/${at.getDate()} ${clock}`
+  if (left <= 0) return -left <= RESET_SOON_MS && !opts.past ? 'まもなく戻る' : `${when} に戻った`
+  const minutes = Math.ceil(left / 60000)
+  if (minutes < 60) return `あと${minutes}分`
+  return `${when} に戻る`
 }

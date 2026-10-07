@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { limitKindLabel, resetLabel, windowLabel } from '../../shared/usage.ts'
 import type { UsageWindow } from './api'
 import { UsagePanel } from './UsagePanel'
-import { chipsLevel, claudeFreshness, CLAUDE_USAGE_WHY, usageChips } from './usageChips'
+import { chipsLevel, claudeFreshness, CLAUDE_USAGE_WHY, codexFreshness, usageChips, waitingNote } from './usageChips'
 import { useUsage } from './useUsage'
 
 /**
@@ -41,11 +41,19 @@ export function UsageChip() {
   // Claude の割合がいつの値か・5 時間が欠けているか（#694）。判定は usageChips.ts
   const fresh = claudeFreshness(claude, at)
   const level = chipsLevel(chips)
-  const line = (name: string, w: UsageWindow) =>
-    `${name} ${Math.round(w.used_percent)}%（${windowLabel(w.window_minutes)}）${w.resets_at ? ` · ${resetLabel(w.resets_at, at)}` : ''}`
+  // Codex の割合がいつの値か（#726）
+  const codexFresh = codexFreshness(codex, at)
+  // 復帰時刻を過ぎた枠は割合を言わない（#726）
+  const line = (name: string, w: UsageWindow) => {
+    const waiting = waitingNote(w, at)
+    return waiting
+      ? `${name} ${windowLabel(w.window_minutes)}: 更新待ち（${waiting}）`
+      : `${name} ${Math.round(w.used_percent)}%（${windowLabel(w.window_minutes)}）${w.resets_at ? ` · ${resetLabel(w.resets_at, at)}` : ''}`
+  }
   const title = [
     codex && line('Codex', codex.primary),
     codex?.secondary && line('Codex', codex.secondary),
+    codexFresh.stale && `Codex の値は ${codexFresh.at}（${codexFresh.age}）のものです`,
     claude?.primary && line('Claude', claude.primary),
     claude?.secondary && line('Claude', claude.secondary),
     fresh.fiveHourMissing && 'Claude 5時間: 取れていません',
@@ -69,7 +77,8 @@ export function UsageChip() {
           <span key={c.agent} className={`usage-part${c.limited ? ' hit' : ''}${c.stale ? ' stale' : ''}`}>
             <span className={`dot ${c.agent}`} />
             <span className="usage-name">{c.name}</span>{' '}
-            {c.percent === null ? '上限中' : <b>{Math.round(c.percent)}%</b>}
+            {/* 上限中が先（割合が無くても、いま止まっていることのほうが大事）。狭い画面では「待ち」だけにする（ヘッダを 1 行に収める） */}
+            {c.percent !== null ? <b>{Math.round(c.percent)}%</b> : c.limited ? '上限中' : c.waiting ? <span className="usage-waiting"><span className="usage-waiting-long">更新</span>待ち</span> : '上限中'}
             {c.week && <span className="usage-window">週</span>}
             {/* 古い値は割合を薄くして、どれだけ前かを添える（#694。いまの値と取り違えないように） */}
             {c.stale && <span className="usage-age">{c.age}</span>}

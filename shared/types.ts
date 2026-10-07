@@ -1020,8 +1020,21 @@ export interface AgentSessionEntry {
    * `pr` = worktree のブランチから出ている open な PR と CI、`issues` = ブランチ名・PR の題名・届いている依頼の 1 行目から引けた番号、
    * `free` = 空いている、`asked` = 頼まれてまだ返していないメッセージの数。本文は載せない
    */
-  holding?: import('./holding.ts').SessionHolding
+  holding?: SessionHolding
 }
+
+/** `sai_sessions` の 1 行に足す「いま持っているもの」（#727。組み立ては `shared/holding.ts`）。どれも分かるときだけ */
+export interface SessionHolding {
+  /** そのセッションの worktree のブランチから出ている open な PR と、CI の状態 */
+  pr?: { number: number; checks: PrCheckState; draft?: true }
+  /** 持っていそうな issue の番号（ブランチ名・PR の題名・届いている依頼の 1 行目から引けたもの。古い順に重複なし） */
+  issues?: number[]
+  /** 空いている（処理中でない・預かりが無い・待ちが無い・未完の依頼も無い） */
+  free?: true
+  /** 別のセッションから頼まれて、まだ返していないメッセージの数（まだ送られていない預かりを含む） */
+  asked?: number
+}
+
 
 /** `GET /api/agent/sessions?from=` の応答 */
 export interface AgentSessionsResponse {

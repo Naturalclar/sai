@@ -58,10 +58,11 @@ export interface PrBrowser {
   list(repo: string, fresh?: boolean): Promise<PrSummary[] | null>
   /**
    * **待たずに**前に引いた一覧を返す（#727。`sai_sessions` の行に PR を足すとき、応答を `gh` に待たせない）。
-   * 古ければ裏で引き直す（次に呼ばれたときに新しくなっている）。まだ 1 回も引いていなければ undefined。
+   * 古ければ裏で引き直す（次に呼ばれたときに新しくなっている）。まだ 1 回も引いていない・`maxAgeMs` より古ければ undefined
+   * （何時間も前の CI の状態を「いま」として出さない。呼び出し側は短く待つか、印を付けずに返す）。
    * 無い実装（テストの偽物）は「前の結果は無い」として扱われる
    */
-  cached?(repo: string): PrSummary[] | null | undefined
+  cached?(repo: string, maxAgeMs?: number): PrSummary[] | null | undefined
   view(repo: string, number: number): Promise<PrView | null>
   /** 会話のコメントとレビュー（#600）。読めなければ null（「無い」の空と分ける）。画面を開いたときと「更新」のときだけ呼ぶ */
   comments(repo: string, number: number): Promise<PrCommentList | null>
@@ -228,12 +229,13 @@ export class GhPrs implements PrBrowser {
     return { ok: true, url }
   }
 
-  cached(repo: string): PrSummary[] | null | undefined {
+  cached(repo: string, maxAgeMs = Infinity): PrSummary[] | null | undefined {
     if (!isRepoName(repo)) return null
     const hit = this.lists.get(repo)
+    const age = hit ? Date.now() - hit.at : Infinity
     // 古い・まだ無いなら裏で引く（待たない。失敗は list() が null として覚える）
-    if (!hit || Date.now() - hit.at >= this.ttl) void this.list(repo).catch(() => null)
-    return hit ? hit.prs : undefined
+    if (age >= this.ttl) void this.list(repo).catch(() => null)
+    return hit && age <= maxAgeMs ? hit.prs : undefined
   }
 
   async list(repo: string, fresh = false): Promise<PrSummary[] | null> {

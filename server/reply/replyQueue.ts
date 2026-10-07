@@ -112,6 +112,11 @@ export class ReplyQueueStore {
     return this.queues.get(id)?.items[0]
   }
 
+  /** そのセッションの預かりに並んでいる、メッセージ（`sai_send`）の id（#727。どの依頼がまだ生きているかを見る） */
+  origins(id: string): string[] {
+    return (this.queues.get(id)?.items ?? []).map((it) => it.origin ?? '').filter(Boolean)
+  }
+
   size(id: string): number {
     return this.queues.get(id)?.items.length ?? 0
   }

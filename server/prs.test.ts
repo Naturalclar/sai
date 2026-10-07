@@ -496,4 +496,8 @@ test('GhPrs.cached: 前に引いた一覧を待たずに返し、古ければ裏
   release()
   await new Promise((r) => setTimeout(r, 20))
   assert.deepEqual(gh.cached('o/repo-a')?.map((p) => p.number), [2], '次に呼んだときには新しくなっている')
+  // 古すぎる結果は「いま」として返さない（呼び出し側が短く待つか、印を付けずに返す）
+  await new Promise((r) => setTimeout(r, 15))
+  assert.equal(gh.cached('o/repo-a', 5), undefined)
+  assert.deepEqual(gh.cached('o/repo-a', 60_000)?.length, 1)
 })

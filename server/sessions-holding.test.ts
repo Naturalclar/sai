@@ -54,8 +54,10 @@ class FakePrs extends NoPrs {
   lists = new Map<string, PrSummary[] | null>()
   asked: string[] = []
   slow = false
-  cached(repo: string): PrSummary[] | null | undefined {
-    return this.lists.get(repo)
+  /** 前の結果が何ミリ秒前のものか（既定は新しい） */
+  age = 0
+  cached(repo: string, maxAgeMs = Infinity): PrSummary[] | null | undefined {
+    return this.age <= maxAgeMs ? this.lists.get(repo) : undefined
   }
   override list(repo?: string): Promise<PrSummary[] | null> {
     this.asked.push(repo ?? '')
@@ -189,5 +191,27 @@ test('sai_sessions: PR をまだ 1 回も引いていないリポジトリは短
   assert.deepEqual(prs.asked, ['o/repo-x'], 'リポジトリごとに 1 回だけ聞く（セッションの数だけ聞かない）')
   assert.deepEqual(list.find((s) => s.id === 'B1@r')?.holding, { issues: [9100], free: true }, 'PR の印が付かないだけ')
   assert.equal(list.length, 3)
+  // 前の結果が古すぎるときも「いま」として出さず、同じように短く待つ（何時間も前の CI を今の状態として出さない）
+  prs.lists.set('o/repo-x', [pr(9101, 'issue-9100-stock-filter', { checks: 'failure' })])
+  prs.age = 60 * 60_000
+  prs.asked.length = 0
+  assert.deepEqual((await sessionsFor()).find((s) => s.id === 'B1@r')?.holding, { issues: [9100], free: true })
+  assert.deepEqual(prs.asked, ['o/repo-x'])
+  prs.age = 0
   prs.slow = false
 })
+
+test('sai_sessions: 失敗した・止められた依頼（返答が来ないまま、相手がもう回っていない）は頼まれ中に数えない（#727 のレビュー）', async () => {
+  runner.busy.set('A1@r', { since: 'turn-2', text: 'やって' })
+  try {
+    assert.equal((await agent('/api/agent/send', { method: 'POST', body: JSON.stringify({ from: 'A1@r', to: 'B1@r', text: '#9500 に着手してください。' }) })).status, 202)
+  } finally {
+    runner.busy.delete('A1@r')
+  }
+  // 相手のターンは起動されたが、返答の行を残さずに終わった（失敗・人が止めた）。相手はもう回っていない
+  const b = (await sessionsFor()).find((s) => s.id === 'B1@r')
+  assert.equal(b?.holding?.asked, undefined)
+  assert.deepEqual(b?.holding?.issues, [9100], '死んだ依頼の番号も持ち越さない')
+  assert.equal(b?.holding?.free, true)
+})
+

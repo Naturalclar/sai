@@ -25,7 +25,13 @@ test('issueNumbers: ブランチ名・PR の題名・届いている依頼の 1 
   assert.deepEqual(issueNumbers('dev-worktree-a', pr({ number: 9101, title: '絞り込みを直す (#9100) #9101' }), []), [9100], 'PR 自身の番号は issue に数えない')
   assert.deepEqual(issueNumbers('dev-worktree-a', undefined, ['#9200 に着手してください。\n関連: #1 #2 #3']), [9200], '依頼は 1 行目だけ（本文の途中の関連の番号まで拾わない）')
   assert.deepEqual(issueNumbers('issue-9100-x', pr(), ['#9100 の続きです', '#9300 も見て']), [9100, 9300], '重複は 1 つ。出てきた順')
-  assert.equal(issueNumbers('issue-1-x', pr({ title: '#2 #3 #4 #5' }), []).length, HOLDING_ISSUES_MAX)
+  assert.equal(issueNumbers('issue-1-x', pr({ title: 'まとめて直す (#2 #3 #4 #5)' }), []).length, HOLDING_ISSUES_MAX)
+  // PR の番号・別の PR・色の指定などを issue と呼ばない（#727 のレビュー）
+  assert.deepEqual(issueNumbers('dev-worktree-a', undefined, ['PR #9134 をレビューしてください']), [], '依頼の PR の番号は issue ではない')
+  assert.deepEqual(issueNumbers('dev-worktree-a', undefined, ['色を #123456 にして', '見て。#9 も']), [], '行の頭でも issue とも書いていない番号は拾わない')
+  assert.deepEqual(issueNumbers('dev-worktree-a', undefined, ['issue #9200 を調べて', '  #9300 に着手してください。']), [9200, 9300])
+  assert.deepEqual(issueNumbers('dev-worktree-a', pr({ number: 9129, title: '預かる (#9127 の案 A) の続き。#9128 の上に積む' }), []), [9127], '題名は括弧の中だけ（括弧の外は別の PR のことが多い）')
+  assert.deepEqual(issueNumbers('dev-worktree-a', pr({ title: '全角の括弧（#9100）' }), []), [9100])
 })
 
 test('holdingOf / holdingLabel: 分かるものだけを短い印にする。本文・題名は載せない（#727）', () => {
@@ -38,6 +44,7 @@ test('holdingOf / holdingLabel: 分かるものだけを短い印にする。本
   assert.deepEqual(idle, { free: true })
   assert.equal(holdingLabel(idle), ' （空き）')
   assert.equal(holdingOf({ branch: 'main', prs: [], asks: ['見て'], occupied: false }).free, undefined, '頼まれて未完のものがあれば空きではない')
+  assert.deepEqual(holdingOf({ branch: 'main', prs: [], asks: [], occupied: false, sendable: false }), {}, '頼めない相手（別のマシン・送れないセッション）に空きは付けない')
   // CI の状態と下書き。チェックが無い PR は番号だけ
   assert.equal(holdingLabel({ pr: { number: 7, checks: 'failure' } }), ' PR #7（CI 赤）')
   assert.equal(holdingLabel({ pr: { number: 7, checks: 'pending', draft: true } }), ' PR #7（下書き・CI 待ち）')

@@ -1,22 +1,10 @@
 // セッションがいま何を持っているか（#727 の案 D の読む側）。`sai_sessions` の 1 行に足す短い印を作る。
 // **SAI は持ち場を書いて持たない**: ブランチ・open な PR・届いている依頼から、機械で引けるものだけを出す（引けなければ出さない）。
 // DOM にもファイルにも触らない純粋関数だけを置く（shared/holding.test.ts）
-import type { PrCheckState, PrSummary } from './types.ts'
+import type { PrCheckState, PrSummary, SessionHolding } from './types.ts'
 
 /** 1 行に出す issue の番号の数（多すぎる行にしない） */
 export const HOLDING_ISSUES_MAX = 3
-
-/** `sai_sessions` の 1 行に足すもの。どれも分かるときだけ */
-export interface SessionHolding {
-  /** そのセッションの worktree のブランチから出ている open な PR と、CI の状態 */
-  pr?: { number: number; checks: PrCheckState; draft?: true }
-  /** 持っていそうな issue の番号（ブランチ名・PR の題名・届いている依頼の 1 行目から引けたもの。古い順に重複なし） */
-  issues?: number[]
-  /** 空いている（処理中でない・預かりが無い・待ちが無い・未完の依頼も無い） */
-  free?: true
-  /** 別のセッションから頼まれて、まだ返していないメッセージの数（まだ送られていない預かりを含む） */
-  asked?: number
-}
 
 /** ブランチから出ている open な PR。fork の同じ名前のブランチは結ばない（#548）。ブランチが分からなければ無し */
 export function prOfBranch(prs: readonly PrSummary[] | null | undefined, branch: string): PrSummary | undefined {
@@ -27,8 +15,10 @@ export function prOfBranch(prs: readonly PrSummary[] | null | undefined, branch:
 /**
  * 持っていそうな issue の番号。**機械で引けるものだけ**（当て推量で埋めない）:
  * - ブランチ名の `issue-<番号>`（`issue-727-…`・`fix/issue_12`）
- * - PR の題名の `#<番号>`（その PR 自身の番号は除く）
- * - 届いていてまだ返していない依頼の **1 行目**の `#<番号>`（本文の途中に出てくる関連の番号まで拾わない）
+ * - PR の題名の、**括弧の中**の `#<番号>`（`… (#727)`・`（#727 の案 A）`。squash の題名の決まった形。括弧の外の
+ *   「#728 の上に積む」は別の PR のことが多いので拾わない。その PR 自身の番号も除く）
+ * - 届いていてまだ返していない依頼の 1 行目の、**行の頭の `#<番号>`** か **`issue #<番号>`**（`#727 に着手してください。`）。
+ *   `PR #734 をレビューして` の番号は PR なので拾わない。本文の途中に出てくる関連の番号も拾わない
  */
 export function issueNumbers(branch: string, pr: Pick<PrSummary, 'number' | 'title'> | undefined, asks: readonly string[]): number[] {
   const out: number[] = []
@@ -37,8 +27,11 @@ export function issueNumbers(branch: string, pr: Pick<PrSummary, 'number' | 'tit
     if (Number.isInteger(n) && n > 0 && n !== pr?.number && !out.includes(n)) out.push(n)
   }
   for (const m of branch.matchAll(/(?:^|[/_-])issue[-_]?(\d{1,6})(?!\d)/gi)) add(m[1])
-  for (const m of (pr?.title ?? '').matchAll(/#(\d{1,6})(?!\d)/g)) add(m[1])
-  for (const ask of asks) for (const m of (ask.trim().split('\n')[0] ?? '').matchAll(/#(\d{1,6})(?!\d)/g)) add(m[1])
+  for (const group of (pr?.title ?? '').matchAll(/[（(]([^（()）]*)[)）]/g)) for (const m of (group[1] ?? '').matchAll(/(?<![A-Za-z0-9])#(\d{1,6})(?!\d)/g)) add(m[1])
+  for (const ask of asks) {
+    const line = ask.trim().split('\n')[0] ?? ''
+    for (const m of line.matchAll(/(?:^\s*|(?<![A-Za-z])issue\s*)#(\d{1,6})(?!\d)/gi)) add(m[1])
+  }
   return out.slice(0, HOLDING_ISSUES_MAX)
 }
 
@@ -51,6 +44,8 @@ export function holdingOf(input: {
   asks: readonly string[]
   /** 処理中・預かりあり・待ち（許可・質問・入力）のどれか */
   occupied: boolean
+  /** 頼める相手か（別のマシン・送れないセッションは false。省けば true）。頼めない相手に「空き」は付けない */
+  sendable?: boolean
 }): SessionHolding {
   const pr = prOfBranch(input.prs, input.branch)
   const issues = issueNumbers(input.branch, pr, input.asks)
@@ -58,7 +53,7 @@ export function holdingOf(input: {
     ...(pr ? { pr: { number: pr.number, checks: pr.checks, ...(pr.draft ? { draft: true as const } : {}) } } : {}),
     ...(issues.length > 0 ? { issues } : {}),
     ...(input.asks.length > 0 ? { asked: input.asks.length } : {}),
-    ...(!input.occupied && input.asks.length === 0 ? { free: true as const } : {}),
+    ...(!input.occupied && input.asks.length === 0 && input.sendable !== false ? { free: true as const } : {}),
   }
 }
 

@@ -19,6 +19,7 @@ import type { SessionTurnResponse, TurnStepsResponse,
   AgentFollowupLine,
   AgentHeldMessage,
   PrSummary,
+  SessionHolding,
   AgentSendManyResponse,
   AgentSendResult,
   AgentActivityMessage,
@@ -134,7 +135,6 @@ import { prBrowserFromEnv } from './git/prs.ts'
 import type { PrBrowser } from './git/prs.ts'
 import { diffStats, githubRepoOf, isPrNumber, knownRepos, pickKnownRepo } from '../shared/prs.ts'
 import { holdingLabel, holdingOf } from '../shared/holding.ts'
-import type { SessionHolding } from '../shared/holding.ts'
 import { githubReview, parseReviewRequest } from '../shared/prReview.ts'
 import { fillRepo, ProjectResolver } from './git/project.ts'
 import type { Git } from './git/diff.ts'
@@ -322,6 +322,8 @@ export const CHANGED_PATHS_TTL_MS = 30_000
 const AGENT_SEND_PATH = '/api/agent/send'
 /** `sai_sessions` の行に PR を足すとき、まだ 1 回も引いていないリポジトリを待つ長さ（#727。前の結果があれば待たない） */
 const HOLDING_PR_WAIT_MS = 1500
+/** 前に引いた PR の一覧を「いま」として出してよい古さ（#727）。これより古ければ、まだ引いていないのと同じに扱う（短く待つ） */
+const HOLDING_PR_STALE_MS = 10 * 60_000
 /** 「頼まれて未完」を数える依頼の新しさ（日。#727）。返答の来なかった古い依頼を、いつまでも頼まれ中に数えない */
 const HOLDING_ASK_DAYS = 2
 /** 立て直したあと、前のサーバが残した預かり（#727）を送り始めるまでの間（引き取った子プロセスの様子が分かってから） */
@@ -2626,21 +2628,31 @@ export function createApp(
    * - 頼まれて未完の依頼は、`HOLDING_ASK_DAYS` 日以内に届けたメッセージのうち、返答（そのターンの完了の行）がまだ無いものと、
    *   まだ送っていない預かり。行は 1 回だけ舐める
    */
-  const holdingsOf = async (list: readonly SessionSummary[], occupied: (s: SessionSummary) => boolean): Promise<Map<string, SessionHolding>> => {
+  const holdingsOf = async (list: readonly SessionSummary[], occupied: (s: SessionSummary) => boolean, sendable: (s: SessionSummary) => boolean = () => true): Promise<Map<string, SessionHolding>> => {
+    // 同じリポジトリを書き方の違い（大文字小文字）で 2 回引かない（#533 と同じ。PR の画面が埋めたキャッシュとも揃う）
+    const known = knownRepos(list)
     const repos = new Map<string, Promise<PrSummary[] | null | undefined>>()
-    const prsOf = (repo: string): Promise<PrSummary[] | null | undefined> => {
+    const prsOf = (asked: string): Promise<PrSummary[] | null | undefined> => {
+      const repo = asked ? pickKnownRepo(known, asked) || asked : ''
       if (!repo || !prs.available) return Promise.resolve(null)
-      const known = repos.get(repo)
-      if (known) return known
-      const hit = prs.cached?.(repo)
+      const before = repos.get(repo)
+      if (before) return before
+      const hit = prs.cached?.(repo, HOLDING_PR_STALE_MS)
+      let timer: NodeJS.Timeout | undefined
       const job =
         hit !== undefined
           ? Promise.resolve(hit)
-          : Promise.race([prs.list(repo).catch(() => null), new Promise<null>((done) => setTimeout(() => done(null), HOLDING_PR_WAIT_MS).unref())])
+          : Promise.race([
+              prs.list(repo).catch(() => null),
+              new Promise<null>((done) => {
+                timer = setTimeout(() => done(null), HOLDING_PR_WAIT_MS)
+                timer.unref()
+              }),
+            ]).finally(() => clearTimeout(timer))
       repos.set(repo, job)
       return job
     }
-    // 返答の済んだメッセージの id（行を 1 回だけ舐める）
+    // 返答の済んだメッセージの id（行を 1 回だけ舐める。見るのは依頼の新しさの分だけ）
     const notBefore = Date.now() - HOLDING_ASK_DAYS * 86_400_000
     const pending = new Map<string, AgentMessage[]>()
     for (const s of list) {
@@ -2650,7 +2662,7 @@ export function createApp(
     const replied = new Set<string>()
     if (pending.size > 0) {
       const matcher = deliveryMatcher()
-      for (const row of await rowsNow(QUEUE_DAYS)) {
+      for (const row of await rowsNow(HOLDING_ASK_DAYS + 1)) {
         const id = deliveredId(matcher.headOf(row))
         if (id) replied.add(`${entityId(row.session ?? '', row.repo ?? '', String(row.ts ?? ''))}\0${id}`)
       }
@@ -2658,12 +2670,16 @@ export function createApp(
     const out = new Map<string, SessionHolding>()
     await Promise.all(
       list.map(async (s) => {
+        // 未完に数えるのは、返答がまだ無く、**まだ生きている**依頼だけ: 相手の預かりに並んでいるか、相手がいまターンを回している。
+        // 失敗した・人が止めた・預かりから取り消された依頼（返答の行が来ない）を、いつまでも頼まれ中に数えない
+        const inQueue = new Set(queue.origins(s.id))
+        const running = run.running(s.id) || codexApp.running(s.id) || opencodeApp.running(s.id) || launching.has(s.id)
         const asks = [
-          ...(pending.get(s.id) ?? []).filter((m) => !replied.has(`${s.id}\0${m.message_id}`)).map((m) => m.text),
+          ...(pending.get(s.id) ?? []).filter((m) => !replied.has(`${s.id}\0${m.message_id}`) && (inQueue.has(m.message_id) || running)).map((m) => m.text),
           ...agents.heldFor(s.id).map((h) => h.text),
         ]
         const repo = isRemoteHost(s.host, selfHost()) ? '' : githubRepoOf(s.remote)
-        out.set(s.id, holdingOf({ branch: s.branch ?? '', prs: await prsOf(repo), asks, occupied: occupied(s) }))
+        out.set(s.id, holdingOf({ branch: s.branch ?? '', prs: await prsOf(repo), asks, occupied: occupied(s) || launching.has(s.id), sendable: sendable(s) }))
       }),
     )
     return out
@@ -2678,15 +2694,16 @@ export function createApp(
     const busy = (id: string) => run.running(id) || codexApp.running(id) || opencodeApp.running(id) || typed.running(id)
     const targets = agentTargets(found.sessions, found.session, selfHost())
     // 相手が読み直す量（直近の呼び出しの入力）。transcript の末尾を読むだけで、(mtime, size) が同じなら組み直さない（#311）
-    const sizes = await Promise.all(targets.map(async (s) => (await progress.read(s)).context_tokens))
+    const progressOf = await Promise.all(targets.map((s) => progress.read(s)))
+    const sizes = progressOf.map((p) => p.context_tokens)
     // 同じファイルを触っているか（#564）。知らせるだけで、送るかはエージェントが決める
     const [mine, ...theirs] = await Promise.all([changedOf(found.session), ...targets.map(changedOf)])
-    // いま何を持っているか（#727）。待ち（端末で答えたぶんは畳む。#255）・返信中の答え待ち・預かりがあれば空きではない
-    const { sessions: settled } = await settleWaiting(targets)
-    const waitingIds = new Set(settled.filter((s) => s.waiting).map((s) => s.id))
-    const pendingApprovals = await approvalsNow(targets)
+    // いま何を持っているか（#727）。処理中（端末で人が回しているターンも。transcript の上で動いていれば）・待ち・預かりがあれば空きではない。
+    // **ここでは端末と許可の走査を回さない**（画面の走査の結果を、同じリポジトリの相手だけの結果で上書きしないため）。
+    // 待ちは行の `waiting` のまま見るので、端末で答えた直後は少しの間「空きではない」側に倒れる
+    const active = new Map(targets.map((s, i) => [s.id, Boolean(progressOf[i]?.active)]))
     const queued = queue.snapshot()
-    const holdings = await holdingsOf(targets, (s) => busy(s.id) || waitingIds.has(s.id) || (pendingApprovals[s.id]?.length ?? 0) > 0 || (queued[s.id]?.items.length ?? 0) > 0)
+    const holdings = await holdingsOf(targets, (s) => busy(s.id) || Boolean(active.get(s.id)) || Boolean(s.waiting) || (queued[s.id]?.items.length ?? 0) > 0)
     const payload: AgentSessionsResponse = {
       from: found.session.id,
       sessions: targets.map((s, i) => {
@@ -3393,9 +3410,16 @@ export function createApp(
         const { sessions } = await settleWaiting(list)
         const pending = await approvalsNow(sessions)
         const byDefault = (await settingsStore.get()).reply_mode
-        // いま何を持っているか（#727）。待ち・答え待ち・預かり・処理中のどれかがあれば空きではない
+        // いま何を持っているか（#727）。待ち・答え待ち・預かり・処理中（端末で人が回しているターンも）のどれかがあれば空きではない。
+        // 送れない相手（別のマシン・素通し・合成 ID など）に「空き」は付けない
         const queued = queue.snapshot()
-        const holdings = await holdingsOf(sessions, (s) => mcpBusy(s.id) || Boolean(s.waiting) || (pending[s.id]?.length ?? 0) > 0 || (queued[s.id]?.items.length ?? 0) > 0)
+        const here = sessions.filter((s) => !isRemoteHost(s.host, selfHost()))
+        const active = new Map(await Promise.all(here.map(async (s) => [s.id, (await progress.read(s)).active] as const)))
+        const holdings = await holdingsOf(
+          sessions,
+          (s) => mcpBusy(s.id) || Boolean(active.get(s.id)) || Boolean(s.waiting) || (pending[s.id]?.length ?? 0) > 0 || (queued[s.id]?.items.length ?? 0) > 0,
+          (s) => !mcpSendRefusal(s, byDefault),
+        )
         return textResult(
           sessions
             .map((s) => {

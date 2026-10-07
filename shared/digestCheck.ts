@@ -388,10 +388,7 @@ export function proseSentences(rawSource: string): string[] {
  * - コードブロックの中は見ない。`max` 文字を超える文は返さない（切ると意味が変わる）
  */
 export function requestSentence(rawSource: string, max: number = DIGEST_MAX_CHARS): string {
-  const source = withoutCode(rawSource.normalize('NFC'))
-  const found = source
-    .split('\n')
-    .flatMap((line) => sentencesOf(unmarked(line)))
+  const found = proseSentences(rawSource)
     .filter((t) => [...t].length <= max && !/[?？]$/.test(t))
     .map((t) => ({ t, quoted: new RegExp(QUOTED_ASK.source).test(t), asks: REQUEST.test(masked(t)) }))
     .filter((x) => x.quoted || x.asks)

@@ -656,7 +656,8 @@ export class Digester {
   private async nextAskOf(row: FeedRow, summarizer: Summarizer): Promise<ComposedNextAsk> {
     const quoted = quotedNextAsk(row.text ?? '')
     if (quoted) return { next_ask: quoted, first: [], dropped: [] }
-    return composeNextAsk(row.user_text ?? '', row.text ?? '', (prompt) => summarizer.summarize(prompt))
+    // 作り直す前にもう一度見る（1 回目を待つ間に、画面から切られた・次のターンが来た。#288 と同じ扱い）
+    return composeNextAsk(row.user_text ?? '', row.text ?? '', (prompt) => summarizer.summarize(prompt), { stillWanted: () => this.askOn && this.active && this.isLatest(row) })
   }
 
   /** 案を 1 つ。作れなければ空（失敗は digest.log に残し、一言はそのまま出す） */
@@ -745,14 +746,14 @@ export class Digester {
         // **人に判断・回答を求めている返答は一言にしない**（#638。本文を読まないと答えられないので、そのまま出す。LLM は呼ばない判定）
         const asking = this.summaryOn && persona !== null && needsFullText(row.text ?? '')
         const wantSummary = this.summaryOn && persona !== null && !asking
-        // 案だけ作ってある行（#560）を一言のために積み直したときは、案はもう作らない（口を叩くのは 1 ターン 1 回まで）
+        // 案だけ作ってある行（#560）を一言のために積み直したときは、案はもう作らない（案を作るのは 1 ターン 1 回まで。その 1 回の中で、確かめに落ちたら 1 度だけ作り直す。#729）
         const prev = this.store.get(key)
         const wantAsk = this.askOn && this.isLatest(row) && !prev
         if (!summarizer || (!wantSummary && !wantAsk)) {
           // 作らなかったことを残す（3 秒ごとの scan() が同じ行を積み直して判定し直さない。集計で数えられる。#638）。
           // 案だけ作ってあった行は、案を持ち越す
           if (asking && !prev?.skipped) {
-            await this.store.append({ key, persona: persona ?? DEFAULT_PERSONA, summary: '', model, ts: new Date().toISOString(), skipped: 'asking', ...(prev?.next_ask ? { next_ask: prev.next_ask, ...(prev.next_ask_source ? { next_ask_source: prev.next_ask_source } : {}) } : {}) })
+            await this.store.append({ key, persona: persona ?? DEFAULT_PERSONA, summary: '', model, ts: new Date().toISOString(), skipped: 'asking', ...(prev?.next_ask ? { next_ask: prev.next_ask, ...(prev.next_ask_source ? { next_ask_source: prev.next_ask_source } : {}) } : {}), ...(prev?.next_ask_retried ? { next_ask_retried: true as const } : {}), ...(prev?.next_ask_dropped ? { next_ask_dropped: prev.next_ask_dropped } : {}) })
           }
           this.queued.delete(key)
           continue
@@ -827,8 +828,10 @@ export class Digester {
             ...(first.length > 0 ? { retried: true } : {}),
             ...(issues.length > 0 ? { issues: issues.map((i) => i.code) } : {}),
             ...(nextAsk ? { next_ask: nextAsk } : {}),
-            ...(composed.first.length > 0 ? { next_ask_retried: true as const } : {}),
-            ...(composed.dropped.length > 0 ? { next_ask_dropped: composed.dropped } : {}),
+            // 作り直した・出さなかったの印。積み直した行（案はもう作ってある）では前の行から持ち越す
+            // （鍵ごとに最新の行を数えるので、落とすと「わざと出さなかった」が「作れなかった」に数えられる。#736 のレビュー）
+            ...((freshAsk ? composed.first.length > 0 : prev?.next_ask_retried) ? { next_ask_retried: true as const } : {}),
+            ...(freshAsk ? (composed.dropped.length > 0 ? { next_ask_dropped: composed.dropped } : {}) : prev?.next_ask_dropped ? { next_ask_dropped: prev.next_ask_dropped } : {}),
             // 新しく作った案が本文の引用そのものなら印を付ける。前の行から持ち越した案は、印もそのまま持ち越す
             // （鍵ごとに最新の行を数えるので、落とすと引用から採った案が「口で作った」側に数えられる）
             ...(freshAsk

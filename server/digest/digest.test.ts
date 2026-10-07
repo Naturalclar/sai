@@ -1462,3 +1462,50 @@ test('Digester: 引用の頼みは今までどおり機械で採り、確かめ�
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+test('Digester: 出さなかった案の印は、行を積み直しても持ち越す。作り直しの口が落ちても口の失敗に数えない（#736 のレビュー）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-next-ask-carry-'))
+  try {
+    const store = new DigestStore(join(dir, 'digest.jsonl'))
+    await store.load()
+    const fake = new AskScript(['書き直します', '書き直しますね'])
+    let off = true
+    const d = new Digester(store, fake, { enabled: true, model: 'haiku', since: at(0).toISOString(), persona: async () => (off ? null : 'none'), logPath: join(dir, 'digest.log') })
+    const r = row(at(1), 'S1', { repo: 'r', text: '見出しを足しました。', user_text: '足して' })
+    d.scan([r])
+    await d.drain()
+    assert.deepEqual(store.get(digestKey(r))?.next_ask_dropped, ['declaration'])
+    assert.equal(store.get(digestKey(r))?.summary, '')
+    // セッションの一言を戻すと積み直されるが、案は叩き直さず、出さなかった印も残る
+    off = false
+    d.scan([r])
+    await d.drain()
+    const e = store.get(digestKey(r))
+    assert.ok(e?.summary)
+    assert.equal(e?.next_ask, undefined)
+    assert.equal(e?.next_ask_retried, true)
+    assert.deepEqual(e?.next_ask_dropped, ['declaration'])
+    assert.equal(fake.nextAsks.length, 2)
+
+    // 作り直しの呼び出しだけが落ちる口: 出さないで終わり、失敗として積み直さない
+    class RetryFails extends FakeSummarizer {
+      override async summarize(prompt: string): Promise<string> {
+        if (!prompt.includes('あなたが次に送る文')) return super.summarize(prompt)
+        this.nextAsks.push(prompt)
+        if (prompt.includes('前に作った文')) throw new Error('timeout after 90s')
+        return '次も足します'
+      }
+    }
+    const failing = new RetryFails()
+    const d2 = new Digester(store, failing, { enabled: false, nextAsk: true, model: 'haiku', since: at(0).toISOString(), persona: async () => 'none', logPath: join(dir, 'digest.log') })
+    const r2 = row(at(2), 'S2', { repo: 'r', text: '項目を足しました。', user_text: '足して' })
+    d2.scan([r2])
+    await d2.drain()
+    assert.deepEqual(store.get(digestKey(r2))?.next_ask_dropped, ['declaration'])
+    d2.scan([r2])
+    await d2.drain()
+    assert.equal(failing.nextAsks.length, 2, '同じ行を叩き直さない')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})

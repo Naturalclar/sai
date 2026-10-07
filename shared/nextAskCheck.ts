@@ -8,7 +8,7 @@
 import { proseSentences } from './digestCheck.ts'
 
 export type NextAskIssueCode =
-  // エージェントの宣言の形（「〜します」「〜しました」）。人がエージェントに向かって言う文ではない
+  // エージェントの宣言の形（「〜します」。「〜しました」は本文の報告を写したときだけ）。人がエージェントに向かって言う文ではない
   | 'declaration'
   // エージェントから人への問いの形（「〜しますか？」）か、本文の問いをそのまま聞き返している
   | 'question_back'
@@ -48,9 +48,19 @@ function isQuestion(text: string): boolean {
  * 人がエージェントに聞く問い（「なぜ落ちた？」「原因は何ですか」）は当てない
  */
 const OFFER = /(?:ますか|ましょうか|でしょうか|よろしいですか|いいですか)$/
+/**
+ * 「〜ますか」で終わるが、人がエージェントに言う文: 丁寧な頼み（「〜してもらえますか」）と、有無・可否を聞く問い（「〜はありますか」）。
+ * 伺いの形とは数えない（本文の頼み・問いを写していないかだけを見る。#736 のレビュー）
+ */
+const POLITE_ASK = /(?:[てで](?:もらえ|いただけ|くれ)ますか|お願いできますか|ありますか|できますか|いますか|なりますか|[わ分]かりますか)$/
 
-/** 宣言の形（「〜します」「〜しました」「〜しましょう」） */
-const DECLARATION = /(?:ます|ました|ましょう|ますね|ますよ|ますので|予定です|ところです)$/
+/** 宣言の形（「〜します」）。エージェントが次にやることを言う形で、人がエージェントに向かって言う文ではない */
+const DECLARATION = /(?:ます|ますね|ますよ|ますので|予定です|ところです)$/
+/**
+ * 済んだことを言う形（「〜しました」）。**本文の文と近いときだけ**宣言と数える（エージェントの報告を写したもの）。
+ * 本文に無い「〜しました」は、頼まれたことを済ませた人の返事（「確認しました」「鍵を置きました」）なので通す（#736 のレビュー）
+ */
+const DONE = /(?:ました|ましたね|ましたよ)$/
 /**
  * 「〜ます」で終わるが、人がエージェントに言う文（頼み・礼・感想・**選択肢への答え**）。
  * 「〜を選びます」「〜にします」は、選択肢を示されたときの人の答えの形（比べたとき、選んだ案がここで落ちていた）
@@ -58,9 +68,15 @@ const DECLARATION = /(?:ます|ました|ましょう|ますね|ますよ|ます
 const DECLARATION_OK = /(?:お願い(?:いた)?します|お願いできます|頼みます|助かります|ありがとうございます|思います|気になります|困ります|任せます|選びます|選択します|にします)$/
 
 /** 頼みの形（「〜してください」「〜してもらえますか」「〜して」）。本文の頼みを写したかを見るときだけ使う */
-const REQUEST_FORM = /(?:[てで](?:ください|下さい)|[てで]もらえますか|[てで]いただけますか|お願い(?:いた)?します|お願いできますか|[てで])$/
+const REQUEST_FORM = /(?:[てで](?:ください|下さい)|[てで](?:もらえ|いただけ|くれ)ますか|お願い(?:いた)?します|お願いできますか|[てで])$/
 /** 本文の側の、人への頼みの文（「〜してください」「〜してもらえますか」）。「〜して」だけの文は頼みと数えない */
 const SOURCE_REQUEST = /(?:[てで](?:ください|下さい)|[てで]もらえ(?:ますか|れば)|[てで]いただけ|お願い(?:いた)?します|お願いできますか)/
+
+/** 箇条書き・番号つき・表の行（選択肢が並ぶ所）。ここの文言をそのまま選んだ答えは、写しと数えない */
+const LIST_LINE = /^\s*(?:[-*+]\s|\d+[.)]\s|\|)/
+
+/** 文末の頼みの言い回しを落としたもの（「実機で確認してもらえますか？」→「実機で確認し」） */
+const requestStem = (text: string): string => tailOf(text).replace(/(?:[てで](?:ください|下さい|(?:もらえ|いただけ|くれ)ますか)?|お願い(?:いた)?します|お願いできますか)$/, '')
 
 /** 比べる前に、空白と記号を落として揃える */
 const squash = (text: string): string => text.normalize('NFC').replace(/[\s\p{P}\p{S}]+/gu, '')
@@ -96,20 +112,29 @@ export function nextAskIssues(rawNextAsk: string, rawText: string): NextAskIssue
   if (!ask) return []
   const tail = tailOf(ask)
   const sentences = proseSentences(rawText ?? '')
+  const requests = sentences.filter((s) => SOURCE_REQUEST.test(s))
+  const QUESTION_BACK: NextAskIssue = { code: 'question_back', hint: 'これは**エージェントが人に聞く問い**の形です。問いを繰り返さず、**問いへの答えか、エージェントへの指示（「〜して」）**を書いてください' }
+  const REQUEST_BACK: NextAskIssue = { code: 'request_back', hint: 'これは**エージェントがあなたに頼んでいること**をそのまま返しています。頼まれたことをエージェントに頼み返さず、あなたからの返事か指示を書いてください' }
+  const DECLARED: NextAskIssue = { code: 'declaration', hint: 'これは**エージェントが言う宣言**（「〜します」「〜しました」）の形です。あなたは頼む側なので、**エージェントへの指示（「〜して」）**の形で書いてください' }
+  // 頼みの言い回し（「〜してください」「〜してもらえますか」）を外した中身で比べる（言い回しだけ変えた頼み返しを拾う）
+  const mirrorsRequest = REQUEST_FORM.test(tail) && closest(requestStem(ask), requests.map(requestStem)) >= NEXT_ASK_SAME_FORM
   if (isQuestion(ask)) {
-    const asked = sentences.filter(isQuestion)
-    if (OFFER.test(tail) || closest(ask, asked) >= NEXT_ASK_SAME_FORM) {
-      return [{ code: 'question_back', hint: 'これは**エージェントが人に聞く問い**の形です。問いを繰り返さず、**問いへの答えか、エージェントへの指示（「〜して」）**を書いてください' }]
-    }
-    return []
+    // 丁寧な頼みの形の問い（「〜してもらえますか」）は、本文の頼みを写したときだけ頼み返し
+    if (mirrorsRequest) return [REQUEST_BACK]
+    const offer = OFFER.test(tail) && !POLITE_ASK.test(tail)
+    return offer || closest(ask, sentences.filter(isQuestion)) >= NEXT_ASK_SAME_FORM ? [QUESTION_BACK] : []
   }
-  if (DECLARATION.test(tail) && !DECLARATION_OK.test(tail)) {
-    return [{ code: 'declaration', hint: 'これは**エージェントが言う宣言**（「〜します」「〜しました」）の形です。あなたは頼む側なので、**エージェントへの指示（「〜して」）**の形で書いてください' }]
-  }
-  if (REQUEST_FORM.test(tail) && closest(ask, sentences.filter((s) => SOURCE_REQUEST.test(s))) >= NEXT_ASK_SAME_FORM) {
-    return [{ code: 'request_back', hint: 'これは**エージェントがあなたに頼んでいること**をそのまま返しています。頼まれたことをエージェントに頼み返さず、あなたからの返事か指示を書いてください' }]
-  }
-  if (closest(ask, sentences) >= NEXT_ASK_COPY) {
+  if (DECLARATION.test(tail) && !DECLARATION_OK.test(tail)) return [DECLARED]
+  if (DONE.test(tail) && closest(ask, sentences) >= NEXT_ASK_SAME_FORM) return [DECLARED]
+  if (mirrorsRequest) return [REQUEST_BACK]
+  // 写しは、箇条書き・表の行（選択肢）を除いた文とだけ比べる（選択肢の文言をそのまま選んだ答えを落とさない。#736 のレビュー）
+  const prose = proseSentences(
+    (rawText ?? '')
+      .split('\n')
+      .filter((line) => !LIST_LINE.test(line))
+      .join('\n'),
+  )
+  if (closest(ask, prose) >= NEXT_ASK_COPY) {
     return [{ code: 'copy', hint: '本文の文をそのまま写しています。エージェントの文を写さず、**あなたが次に送る文**を書いてください' }]
   }
   return []

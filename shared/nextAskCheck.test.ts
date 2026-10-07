@@ -78,3 +78,28 @@ test('similarity: 同じ文は 1、関係ない文は 0 に近い。空白と記
   assert.equal(similarity('', 'あ'), 0)
   assert.equal(similarity('あ', 'あ'), 1)
 })
+
+// ---- #736 のレビュー
+test('丁寧な頼み・有無を聞く問いは、人がエージェントに言う文（伺いの形と数えない）', () => {
+  assert.deepEqual(codes('テストも回してもらえますか？', REPORT), [])
+  assert.deepEqual(codes('原因を教えていただけますか', REPORT), [])
+  assert.deepEqual(codes('他に直す所はありますか？', REPORT), [])
+  // 本文の頼みを丁寧な問いの形で返したものは頼み返し
+  assert.deepEqual(codes('実機で確認してもらえますか？', REQUEST), ['request_back'])
+})
+
+test('「〜しました」は本文の報告を写したときだけ宣言。頼まれたことを済ませた返事は通す', () => {
+  assert.deepEqual(codes('確認しました', REQUEST), [])
+  assert.deepEqual(codes('実機で見ました。問題ありませんでした', REQUEST), [])
+  assert.deepEqual(codes('それで進めましょう', DECLARATION), [])
+  assert.deepEqual(codes('余白を直しました', REQUEST), ['declaration'], '本文の「印刷用の余白を直しました」の写し')
+})
+
+test('選択肢の文言をそのまま選んだ答えは、写しと数えない（箇条書き・番号つき・表の行）', () => {
+  const choices = '片づけ方は 2 つあります。\n\n- A: 自動で消す\n- B: 印を付けて残す\n\n1. 今週やる\n2. 来週やる\n\n| 案 | 良い点 |\n| --- | --- |\n| 外の保管先 | 容量を気にしない |\n\nどれで進めますか？'
+  assert.deepEqual(codes('自動で消す', choices), [])
+  assert.deepEqual(codes('B: 印を付けて残す', choices), [])
+  assert.deepEqual(codes('今週やる', choices), [])
+  // 地の文の写しは拾う
+  assert.deepEqual(codes('片づけ方は 2 つある', '片づけ方は 2 つある。\n\n- A: 自動で消す'), ['copy'])
+})

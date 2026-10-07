@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { NEXT_ASK_MAX_CHARS, cleanNextAsk, composeNextAsk, nextAskPrompt, quotedNextAsk } from './nextAsk.ts'
+import { NEXT_ASK_MAX_CHARS, cleanNextAsk, composeNextAsk, nextAskPrompt, quotedNextAsk, tidyNextAsk } from './nextAsk.ts'
 import { nextAskIssues } from './nextAskCheck.ts'
 
 test('nextAskPrompt: 人の立場で 1 文。口調（性格）は足さない。直前の入力があれば添える', () => {
@@ -91,4 +91,37 @@ test('composeNextAsk: 空の案は作り直さない（作れなかっただけ�
   assert.deepEqual(await composeNextAsk('', '報告です。', async () => (calls++, '  ')), { next_ask: '', first: [], dropped: [] })
   assert.equal(calls, 1)
   assert.deepEqual(await composeNextAsk('', '次は修正に入ります。', async () => '修正に入ります', { check: false }), { next_ask: '修正に入ります', first: [], dropped: [] })
+})
+
+// ---- #736 のレビュー
+test('composeNextAsk: 作り直しが空・口の失敗で終わったら出さず、1 回目の理由を残す（投げない）', async () => {
+  const answers = ['修正に入ります', '  ']
+  assert.deepEqual(await composeNextAsk('', '次は修正に入ります。', async () => answers.shift()!), { next_ask: '', first: ['declaration'], dropped: ['declaration'] })
+  let calls = 0
+  const failing = async () => {
+    if (calls++ === 0) return '修正に入ります'
+    throw new Error('timeout')
+  }
+  assert.deepEqual(await composeNextAsk('', '次は修正に入ります。', failing), { next_ask: '', first: ['declaration'], dropped: ['declaration'] })
+  // 1 回目の失敗はそのまま投げる（口の失敗として数える）
+  await assert.rejects(composeNextAsk('', '報告です。', async () => Promise.reject(new Error('down'))), /down/)
+})
+
+test('composeNextAsk: 確かめるのは長さで切る前の文（長い宣言は、切ると文末が消えて素通りする）', async () => {
+  const long = `${'集計の単位を週から月に切り替える変更と、それに合わせた見出しの文言の直しと、古い設定の読み替えと、説明の文書の直しを'}まとめて進めます。`
+  assert.ok([...long].length > NEXT_ASK_MAX_CHARS)
+  assert.equal(tidyNextAsk(`案: 「${long}」`), long)
+  assert.equal(cleanNextAsk(long).length, NEXT_ASK_MAX_CHARS)
+  let calls = 0
+  // 切ったあとの文は宣言の形に見えない（ここを確かめに渡すと素通りする）
+  assert.deepEqual(nextAskIssues(cleanNextAsk(long), '報告です。'), [])
+  const r = await composeNextAsk('', '報告です。', async () => (calls++ === 0 ? long : 'まとめて進めて'))
+  assert.deepEqual(r, { next_ask: 'まとめて進めて', first: ['declaration'], dropped: [] })
+})
+
+test('composeNextAsk: 作り直す直前に、まだ要るかを聞く（要らなければ口を叩かない）', async () => {
+  let calls = 0
+  const r = await composeNextAsk('', '次は修正に入ります。', async () => (calls++, '修正に入ります'), { stillWanted: () => false })
+  assert.deepEqual(r, { next_ask: '', first: ['declaration'], dropped: [] })
+  assert.equal(calls, 1)
 })

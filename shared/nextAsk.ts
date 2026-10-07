@@ -66,6 +66,15 @@ const WRAPS: readonly (readonly [string, string])[] = [
  * （前置きや 2 つ目の案が続いても、1 つ目だけを使う）。作れていなければ空を返す（呼び出し側は「無いまま」にする）
  */
 export function cleanNextAsk(raw: string): string {
+  const body = tidyNextAsk(raw)
+  return body.length > NEXT_ASK_MAX_CHARS ? body.slice(0, NEXT_ASK_MAX_CHARS) : body
+}
+
+/**
+ * `cleanNextAsk()` の、長さで切る前のもの。**確かめ（`nextAskIssues()`）はこちらに当てる**
+ * （切ったあとだと文末の形が消えて、長い宣言・聞き返しが素通りする。#736 のレビュー）
+ */
+export function tidyNextAsk(raw: string): string {
   const line = (raw ?? '')
     .split('\n')
     .map((s) => s.trim())
@@ -81,7 +90,7 @@ export function cleanNextAsk(raw: string): string {
       break
     }
   }
-  return body.length > NEXT_ASK_MAX_CHARS ? body.slice(0, NEXT_ASK_MAX_CHARS) : body
+  return body
 }
 
 /**
@@ -100,30 +109,50 @@ export interface ComposedNextAsk {
   next_ask: string
   /** 1 回目の案に見つかった点（あれば作り直している） */
   first: NextAskIssueCode[]
-  /** 作り直しても残り、案を出さなかった理由。出したとき・作れなかっただけのときは空 */
+  /**
+   * 作り直しても駄目で、案を出さなかった理由。出したとき・1 回目が空だった（作れなかっただけ）ときは空。
+   * 作り直しが空・口の失敗で終わったときは、1 回目の理由をそのまま入れる（「作り直して出した」と取り違えない）
+   */
   dropped: NextAskIssueCode[]
 }
 
 export interface ComposeOptions {
-  /** プロンプトの作り方（比べる道具が前のプロンプトを渡す。既定は `nextAskPrompt()`） */
+  /** プロンプトの作り方（比べる道具が別のプロンプトを渡す。既定は `nextAskPrompt()`） */
   prompt?: (userText: string, text: string, opts?: { retry?: NextAskRetry }) => string
   /** 確かめるか（比べる道具が「確かめなし」を測るときだけ false） */
   check?: boolean
+  /**
+   * 作り直す直前に聞く。false なら口を叩かず、案なしで終わる（作っている間に画面から切られた・次のターンが来た。
+   * 1 回目の前の確かめだけだと、作り直しのぶんが素通りする。#736 のレビュー）
+   */
+  stillWanted?: () => boolean
 }
 
 /**
  * 口で案を 1 つ作る（#729）。出来上がりを `nextAskIssues()` で確かめ、人の返信として読めなければ **1 回だけ** 作り直す。
  * それでも駄目なら**出さない**（間違った案が入力欄に入るより、無いほうがよい）。`summarize` は口を 1 回呼ぶ。
+ * 1 回目の失敗はそのまま投げる（呼ぶ側が口の失敗として数える）。**作り直しの失敗は飲み込んで「出さない」にする**
+ * （1 回目は返っているので口は生きている。投げると同じ行を 2 呼び出しずつ叩き直す）。
  * 引用の頼み（`quotedNextAsk()`）は呼ぶ側が先に見る（口を呼ばない道なので、ここには入れない）
  */
 export async function composeNextAsk(userText: string, text: string, summarize: (prompt: string) => Promise<string>, opts: ComposeOptions = {}): Promise<ComposedNextAsk> {
   const prompt = opts.prompt ?? nextAskPrompt
-  const made = cleanNextAsk(await summarize(prompt(userText, text)))
+  const raw = await summarize(prompt(userText, text))
+  const made = cleanNextAsk(raw)
   if (opts.check === false) return { next_ask: made, first: [], dropped: [] }
-  const first = nextAskIssues(made, text)
+  // 確かめるのは長さで切る前の文（切ると文末の形が消える）
+  const first = nextAskIssues(tidyNextAsk(raw), text)
   if (first.length === 0) return { next_ask: made, first: [], dropped: [] }
   const codes = first.map((i) => i.code)
-  const again = cleanNextAsk(await summarize(prompt(userText, text, { retry: { nextAsk: made, issues: first } })))
-  const left = nextAskIssues(again, text)
+  if (opts.stillWanted && !opts.stillWanted()) return { next_ask: '', first: codes, dropped: [] }
+  let rawAgain: string
+  try {
+    rawAgain = await summarize(prompt(userText, text, { retry: { nextAsk: made, issues: first } }))
+  } catch {
+    return { next_ask: '', first: codes, dropped: codes }
+  }
+  const again = cleanNextAsk(rawAgain)
+  if (!again) return { next_ask: '', first: codes, dropped: codes }
+  const left = nextAskIssues(tidyNextAsk(rawAgain), text)
   return left.length === 0 ? { next_ask: again, first: codes, dropped: [] } : { next_ask: '', first: codes, dropped: left.map((i) => i.code) }
 }

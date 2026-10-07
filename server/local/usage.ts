@@ -14,7 +14,8 @@
 import { open, readdir, readFile, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { mergeClaudeUsage, parseClaudeUsage, parseCodexUsage, parseStatusLineUsage } from '../../shared/usage.ts'
+import { mergeClaudeUsage, mergeUsageWindows, parseClaudeUsage, parseCodexUsage, parseStatusLineUsage } from '../../shared/usage.ts'
+import { isReplyLimitsFile } from '../reply/claudeLimits.ts'
 import type { ClaudeUsage, CodexUsage, UsageResponse } from '../../shared/types.ts'
 
 /** ファイルの末尾から読む量。手元の rollout では 64KB で最後の token_count に届いた */
@@ -174,14 +175,11 @@ export async function readCodexUsage(sessionsDir: string): Promise<CodexUsage | 
   return best
 }
 
-/**
- * ステータスライン経由の割合。マシンごとに分かれていることがあるので全部読み、**一番新しいもの**を採る
- * （口座ごとの値なので、どのマシンで測ったかは問わない）。ファイルは小さいので丸ごと読む
- */
-export async function readStatusLineUsage(feedDir: string, now: number): Promise<ClaudeUsage | null> {
+/** feed dir の、名前が `match` に当たる使用率のファイルを全部読み、**一番新しいもの**を採る。ファイルは小さいので丸ごと読む */
+async function readUsageFiles(feedDir: string, match: (name: string) => boolean, now: number): Promise<ClaudeUsage | null> {
   let best: ClaudeUsage | null = null
   for (const name of await names(feedDir)) {
-    if (!isClaudeUsageFile(name)) continue
+    if (!match(name)) continue
     let parsed: unknown
     try {
       parsed = JSON.parse(await readFile(join(feedDir, name), 'utf-8'))
@@ -192,6 +190,18 @@ export async function readStatusLineUsage(feedDir: string, now: number): Promise
   }
   return best
 }
+
+/**
+ * ステータスライン経由の割合。マシンごとに分かれていることがあるので全部読み、一番新しいものを採る
+ * （口座ごとの値なので、どのマシンで測ったかは問わない）
+ */
+export const readStatusLineUsage = (feedDir: string, now: number): Promise<ClaudeUsage | null> => readUsageFiles(feedDir, isClaudeUsageFile, now)
+
+/**
+ * SAI から回した返信の出力から拾った割合（#694。`server/reply/claudeLimits.ts` が書く）。形は `usage-claude.json` と同じ。
+ * `at` は**届いた時刻**（ステータスラインのほうは割合が最後に変わった時刻）。こちらもマシンごとに分かれていることがある
+ */
+export const readReplyLimits = (feedDir: string, now: number): Promise<ClaudeUsage | null> => readUsageFiles(feedDir, isReplyLimitsFile, now)
 
 export async function readClaudeUsage(projectsDir: string, now: number): Promise<ClaudeUsage | null> {
   let best: ClaudeUsage | null = null
@@ -236,12 +246,14 @@ export class UsageStore {
 
   private async read(at: number): Promise<UsageResponse> {
     // 割合（ステータスライン）と「上限中」（transcript）は出どころが別なので、両方読んで重ねる
-    const [codex, windows, limited] = await Promise.all([
+    const [codex, statusLine, replies, limited] = await Promise.all([
       readCodexUsage(this.codexDir),
       readStatusLineUsage(this.feedDir, at),
+      readReplyLimits(this.feedDir, at),
       readClaudeUsage(this.claudeDir, at),
     ])
-    const claude = mergeClaudeUsage(windows, limited)
+    // 割合の出どころは 2 つ（端末のステータスライン・SAI から回した返信の出力。#694）。どちらも口座の値なので窓ごとにまとめる
+    const claude = mergeClaudeUsage(mergeUsageWindows(statusLine, replies), limited)
     const usage: UsageResponse = {}
     if (codex) usage.codex = codex
     if (claude) usage.claude = claude

@@ -220,7 +220,7 @@ printf '%s' "$input" | 今までのコマンド      # ここの出力がステ�
 exit 0
 ```
 
-設定したら Claude で1ターン回し、`~/.agent-feed/usage-claude.json` ができて `rate_limits` が入っていることを見る。**`rate_limits` は subscription のときだけ、かつ最初の API 応答の後に載る**（API キー利用では出ない）。
+設定したら Claude で1ターン回し、`~/.agent-feed/usage-claude.json` ができて `rate_limits` が入っていることを見る。SAI から Claude に返信していれば、ステータスラインを設定していなくても割合は出る（返信の出力から拾う。#694）。ステータスラインは、端末で使ったぶんもすぐ反映したいときに要る。**`rate_limits` は subscription のときだけ、かつ最初の API 応答の後に載る**（API キー利用では出ない）。
 
 - 割合は **Claude が動いている間しか更新されない**。枠の復帰時刻を過ぎたものは画面に出さない
 - `AGENT_FEED_HOST` を設定していればファイルもマシンごとに分かれる（`usage-claude.<host>.json`）。SAI は全部読んで一番新しいものを使う

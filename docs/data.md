@@ -154,6 +154,7 @@ SAIから開始したCodex turnの待機もJSONLにはせず、`CodexAppServer` 
 | `reply.log` | 追記の文字のログ | SAI が起こした子の stdout / stderr と、SAI が足す 1 行（`--- <時刻> <エンティティ ID> <何をしたか>`） |
 | `digest.log` | 追記の文字のログ | 一言を作る子の出力と、諦めた・作り直した理由 |
 | `usage-claude.json` | 1 つの JSON | `statusline.py` が書く Claude の使用率（`v`・`ts`・`host`・`session`・`model`・`rate_limits`） |
+| `usage-claude-replies.json`（`AGENT_FEED_HOST` があれば `usage-claude-replies.<host>.json`） | 1 つの JSON | SAI から回した Claude の返信の出力（`rate_limit_event`）から拾った使用率（#694。`v`・`ts` = 届いた時刻・`source`・`rate_limits`。形は `usage-claude.json` と同じ） |
 | `mcp-sends.json` / `opencode-serve.json` / `icon-history.json` / `agent-token` | — | tailnet の MCP から送った時刻・SAI が起こした `opencode serve` の居場所・アイコンの履歴・エージェント用の口のトークン（**中身を出力に写さない**） |
 | `attachments/` / `thumbs/` / `icon-history/` | ディレクトリ | 返信に添えたファイル・画像の軽い版・アイコンの履歴の画像 |
 

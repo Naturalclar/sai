@@ -102,6 +102,48 @@ function parseStatusWindow(value: unknown, minutes: number, now: number): UsageW
 
 const pad = (n: number) => String(n).padStart(2, '0')
 
+/** `usage-claude*.json` の `rate_limits` の形（`feed/statusline.py` が書くものと同じ） */
+export type RateLimitWindows = Partial<Record<'five_hour' | 'seven_day', { used_percentage: number; resets_at?: number }>>
+
+/**
+ * `claude -p --output-format stream-json` の出力の 1 行 → 使用率の窓（#694）。`rate_limit_event` の
+ * `rate_limit_info.unifiedWindows`（`utilization` は 0〜1、`resetsAt` は epoch 秒）だけを読む。
+ * 割合の載っていない知らせ（古い CLI・窓が無い）は null
+ */
+export function parseRateLimitEvent(line: unknown): RateLimitWindows | null {
+  if (!line || typeof line !== 'object') return null
+  const row = line as Record<string, unknown>
+  if (row.type !== 'rate_limit_event') return null
+  const info = row.rate_limit_info as Record<string, unknown> | undefined
+  const unified = info?.unifiedWindows as Record<string, unknown> | undefined
+  if (!unified || typeof unified !== 'object') return null
+  const out: RateLimitWindows = {}
+  for (const name of ['five_hour', 'seven_day'] as const) {
+    const w = unified[name] as Record<string, unknown> | undefined
+    const used = w && typeof w === 'object' ? num(w.utilization) : null
+    if (used === null || used < 0) continue
+    const resets = num(w!.resetsAt)
+    // 0〜1 を % に。浮動小数の端数（0.14 * 100 = 14.000000000000002）は落とす
+    out[name] = { used_percentage: Math.min(100, Math.round(used * 10000) / 100), ...(resets !== null && resets > 0 ? { resets_at: resets } : {}) }
+  }
+  return out.five_hour || out.seven_day ? out : null
+}
+
+/** 出力のかたまりの中の、最後の `rate_limit_event`。無ければ null（並行する返信の行が混ざっていても、口座の値なので区別しない） */
+export function lastRateLimitEvent(text: string): RateLimitWindows | null {
+  if (!text.includes('"rate_limit_event"')) return null
+  let found: RateLimitWindows | null = null
+  for (const line of text.split('\n')) {
+    if (!line.includes('"rate_limit_event"')) continue
+    try {
+      found = parseRateLimitEvent(JSON.parse(line)) ?? found
+    } catch {
+      // 書きかけの行
+    }
+  }
+  return found
+}
+
 /** `resets_at` の無い窓を信じる上限。ファイルが古いまま残っていても、いつまでも出さない */
 export const STATUS_MAX_AGE_MS = 8 * 24 * 60 * 60 * 1000
 
@@ -127,11 +169,12 @@ export function parseStatusLineUsage(file: unknown, now: number): ClaudeUsage | 
 }
 
 /**
- * Claude の割合を「古い」と見なすまでの時間（#694）。値が届くのは**端末の Claude Code がステータスラインを描いたとき**だけで、
- * SAI から回した返信（`claude -p`）は描かないので、SAI から回しているあいだは値が進まない。
- * **測るのは「割合が最後に変わってから」**（`usage-claude.json` の `ts`。#689）で、「最後に届いてから」ではない:
- * 届いているが変わっていない値（上限中の 100%・軽い利用）にも付くので、画面は「◯ 前から変わっていません」としか言わない。
- * 「最後に届いた時刻」は、API を叩いていない描き直しと区別が付かないうちは持たない（#719 のレビュー）。
+ * Claude の割合を「古い」と見なすまでの時間（#694）。値が届くのは Claude Code が API を呼んだときだけ:
+ * 端末ならステータスライン（`usage-claude.json`）、SAI から回した返信なら出力の `rate_limit_event`（`usage-claude-replies.json`）。
+ * どちらも動いていなければ値は進まない。
+ * 測る起点は `ClaudeUsage.at`。**返信の出力から拾った値は「届いた時刻」、ステータスラインの値は「割合が最後に変わった時刻」**（#689）
+ * なので、ステータスラインだけの人では届いているが変わっていない値（上限中の 100%・軽い利用）にも付く。画面は「◯ 前の値」としか言わない。
+ * ステータスラインの側に「最後に届いた時刻」を持たないのは、API を叩いていない描き直しと区別が付かないため（#719 のレビュー）。
  *
  * 30 分にした根拠: 実測（2026-10-05）で、並行して回していた 30 分に週の割合が 37% → 47% と 10 ポイント進んでいた。
  * 色が変わる境目（`USAGE_WARN` 80 と `USAGE_HIGH` 95）の間が 15 ポイントなので、これより長く黙っていると色を 1 段取り違えうる。
@@ -176,6 +219,41 @@ export function usageAtLabel(at: string | undefined, now: number): string {
   const sameDay = d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth() && d.getDate() === today.getDate()
   const clock = `${pad(d.getHours())}:${pad(d.getMinutes())}`
   return `${sameDay ? clock : `${d.getMonth() + 1}/${d.getDate()} ${clock}`} 時点`
+}
+
+/** `resets_at` の差がこの秒数以内なら同じ窓（`feed/statusline.py` の `SAME_WINDOW_SECONDS` と同じ） */
+export const SAME_WINDOW_SECONDS = 60
+
+/**
+ * 割合の 2 つの出どころ（端末のステータスライン・SAI から回した返信の出力。#694）を 1 つにする。どちらも口座の値。
+ *
+ * **2 つは時刻の意味が違う**: 返信の `at` は「届いた時刻」（その時点の口座の値そのもの）、ステータスラインの `at` は
+ * 「割合が最後に変わった時刻」で、古い値を持ち回っている端末が書いたものかもしれない。窓ごとに選ぶ:
+ * - 返信のほうが新しい（同じ時刻も）→ 返信の窓。高いステータスラインの値は混ぜない（枠が途中でリセットされて
+ *   下がったとき・端数の違いで、古い値が勝たないように）。**返信に無い窓だけ**ステータスラインから
+ * - ステータスラインのほうが新しい → ステータスラインの窓。ただし**同じ窓（`resets_at` の差が `SAME_WINDOW_SECONDS` 以内）で
+ *   返信より低い**ものは持ち回りの古い値なので返信のほう。ステータスラインに無い窓も返信から
+ * - `at` は、**出している窓のうち古いほうの出どころの時刻**（片方が古ければ古いと言う。新しく見せない）
+ */
+export function mergeUsageWindows(statusLine: ClaudeUsage | null, replies: ClaudeUsage | null): ClaudeUsage | null {
+  if (!statusLine || !replies) return statusLine ?? replies
+  const statusNewer = Date.parse(statusLine.at) > Date.parse(replies.at)
+  const carried = (s: UsageWindow, r: UsageWindow): boolean =>
+    s.resets_at !== undefined && r.resets_at !== undefined && Math.abs(s.resets_at - r.resets_at) <= SAME_WINDOW_SECONDS && s.used_percent < r.used_percent
+  // その窓をステータスラインから採るか
+  const fromStatus = (s: UsageWindow | undefined, r: UsageWindow | undefined): boolean => !!s && (!r || (statusNewer && !carried(s, r)))
+  const primaryStatus = fromStatus(statusLine.primary, replies.primary)
+  const secondaryStatus = fromStatus(statusLine.secondary, replies.secondary)
+  const primary = primaryStatus ? statusLine.primary : replies.primary
+  const secondary = secondaryStatus ? statusLine.secondary : replies.secondary
+  const usedStatus = primaryStatus || secondaryStatus
+  const usedReplies = (!primaryStatus && !!replies.primary) || (!secondaryStatus && !!replies.secondary)
+  if (!usedStatus) return replies
+  if (!usedReplies) return statusLine
+  const out: ClaudeUsage = { at: statusNewer ? replies.at : statusLine.at }
+  if (primary) out.primary = primary
+  if (secondary) out.secondary = secondary
+  return out
 }
 
 /**

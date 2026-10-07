@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, writeFile, utimes } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, writeFile, utimes } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -222,4 +222,36 @@ test('UsageStore: 割合（ステータスライン）と上限中（transcript�
   const usage = await new UsageStore(join(root, 'codex'), claude, feed, () => now).get()
   assert.equal(usage.claude?.primary?.used_percent, 42, 'ステータスラインから割合')
   assert.equal(usage.claude?.limited?.resets_at, resets, 'transcript から「いま上限中」')
+})
+
+test('UsageStore: SAI から回した返信の出力の割合を、ステータスラインの古い値より優先する（#694）', async () => {
+  const root = await tmp()
+  const feed = join(root, 'feed')
+  await mkdir(feed, { recursive: true })
+  const now = Date.parse('2026-10-06T14:00:00+09:00')
+  const week = Math.floor(now / 1000) + 3 * 86400
+  const five = Math.floor(now / 1000) + 3600
+  // 実測の形: ステータスラインは 27 時間前の週 37% だけ
+  await writeFile(join(feed, 'usage-claude.json'), JSON.stringify({ v: 1, ts: '2026-10-05T10:57:58+09:00', rate_limits: { seven_day: { used_percentage: 37, resets_at: week } } }))
+  const only = await new UsageStore(join(root, 'codex'), join(root, 'claude'), feed, () => now).get()
+  assert.deepEqual([only.claude?.primary, only.claude?.secondary?.used_percent, only.claude?.at], [undefined, 37, '2026-10-05T10:57:58+09:00'])
+
+  await writeFile(
+    join(feed, 'usage-claude-replies.json'),
+    JSON.stringify({ v: 1, ts: '2026-10-06T04:59:00.000Z', source: 'replies', rate_limits: { five_hour: { used_percentage: 2, resets_at: five }, seven_day: { used_percentage: 61, resets_at: week } } }),
+  )
+  const both = await new UsageStore(join(root, 'codex'), join(root, 'claude'), feed, () => now).get()
+  assert.deepEqual([both.claude?.primary?.used_percent, both.claude?.secondary?.used_percent, both.claude?.at], [2, 61, '2026-10-06T04:59:00.000Z'])
+
+  // マシンごとに分けたファイルも読み、届いたのが新しいほうを採る
+  await writeFile(
+    join(feed, 'usage-claude-replies.mbp.json'),
+    JSON.stringify({ v: 1, ts: '2026-10-06T04:59:30.000Z', source: 'replies', rate_limits: { five_hour: { used_percentage: 3, resets_at: five }, seven_day: { used_percentage: 61, resets_at: week } } }),
+  )
+  assert.equal((await new UsageStore(join(root, 'codex'), join(root, 'claude'), feed, () => now).get()).claude?.primary?.used_percent, 3)
+  await rm(join(feed, 'usage-claude-replies.mbp.json'))
+
+  // 壊れた・期限切れのファイルは無いのと同じ
+  await writeFile(join(feed, 'usage-claude-replies.json'), '{"v":1,"ts":')
+  assert.equal((await new UsageStore(join(root, 'codex'), join(root, 'claude'), feed, () => now).get()).claude?.secondary?.used_percent, 37)
 })

@@ -33,7 +33,7 @@ export function UsagePanel({ usage, now, onNavigate }: { usage: UsageResponse; n
             {fresh.at && (
               <span className={`usage-at${fresh.stale ? ' stale' : ''}`}>
                 {fresh.at}
-                {fresh.stale && ` · ${fresh.age}から変化なし`}
+                {fresh.stale && ` · ${fresh.age}の値`}
               </span>
             )}
           </h3>
@@ -60,7 +60,7 @@ export function UsagePanel({ usage, now, onNavigate }: { usage: UsageResponse; n
       {/* 割合が 1 つも取れないときだけ案内する（#347。週だけ取れている人に「設定すると出ます」は嘘になる） */}
       {!usage.claude?.primary && !usage.claude?.secondary && (
         <p className="usage-note">
-          Claude の使用率は、ステータスライン（<code>feed/statusline.py</code>）を設定すると出ます。API は叩きません。
+          Claude の使用率は、SAI から Claude に返信するか、ステータスライン（<code>feed/statusline.py</code>）を設定すると出ます。API は叩きません。
         </p>
       )}
       {/* トークンと費用の内訳（#602）。SAI から送った Claude の返信の合計を、セッション別・日別・モデル別に見る */}

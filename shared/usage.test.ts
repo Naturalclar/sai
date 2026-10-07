@@ -150,6 +150,9 @@ test('resetLabel: 1時間未満は残り、それより先は時刻。日をま�
   assert.equal(resetLabel(local(2026, 9, 9, 9, 55), now), 'まもなく戻る', '過ぎてちょうど 5 分')
   assert.equal(resetLabel(local(2026, 9, 9, 9, 0), now), '09:00 に戻った', '過ぎて 1 時間')
   assert.equal(resetLabel(local(2026, 9, 7, 15, 38), now), '9/7 15:38 に戻った', '過ぎて 2 日')
+  // 「更新待ち」の脇で使う言い方: 過ぎた直後でも「まもなく」と言わない
+  assert.equal(resetLabel(local(2026, 9, 9, 9, 58), now, { past: true }), '09:58 に戻った')
+  assert.equal(resetLabel(local(2026, 9, 9, 10, 42), now, { past: true }), 'あと42分', 'まだ先の時刻は変わらない')
   assert.equal(resetLabel(Number.NaN, now), '')
 })
 

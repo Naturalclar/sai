@@ -298,9 +298,10 @@ export function windowExpired(w: { resets_at?: number } | undefined, now: number
 /**
  * 戻る時刻の言い換え。`resets_at` は epoch 秒。1 時間を切ったら残り、それより先は時刻（同じ日でなければ日付も）。
  * 過ぎた時刻は、`RESET_SOON_MS` までは「まもなく戻る」、それより前は「10/5 15:38 に戻った」（#726。2 日前の時刻に「まもなく」と言わない）。
+ * `past` を付けると、過ぎた直後でも「戻った」と言う（「更新待ち」の脇で「まもなく戻る」と言わない。#730 のレビュー）。
  * now は呼ぶ側から渡す（描画中に Date.now() を呼ばない）
  */
-export function resetLabel(resetsAt: number, now: number): string {
+export function resetLabel(resetsAt: number, now: number, opts: { past?: boolean } = {}): string {
   const at = new Date(resetsAt * 1000)
   if (Number.isNaN(at.getTime())) return ''
   const left = at.getTime() - now
@@ -308,7 +309,7 @@ export function resetLabel(resetsAt: number, now: number): string {
   const sameDay = at.getFullYear() === today.getFullYear() && at.getMonth() === today.getMonth() && at.getDate() === today.getDate()
   const clock = `${pad(at.getHours())}:${pad(at.getMinutes())}`
   const when = sameDay ? clock : `${at.getMonth() + 1}/${at.getDate()} ${clock}`
-  if (left <= 0) return -left <= RESET_SOON_MS ? 'まもなく戻る' : `${when} に戻った`
+  if (left <= 0) return -left <= RESET_SOON_MS && !opts.past ? 'まもなく戻る' : `${when} に戻った`
   const minutes = Math.ceil(left / 60000)
   if (minutes < 60) return `あと${minutes}分`
   return `${when} に戻る`

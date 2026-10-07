@@ -289,7 +289,7 @@ test('dialogDecisions: 「今後も聞かない」は範囲が読めたときだ
   const dialog = parseCodexDialog(COMMAND_SCREEN)!
   assert.deepEqual(dialogDecisions(dialog), [
     { id: 'opt-1', label: 'Yes, proceed (y)', behavior: 'allow' },
-    { id: 'opt-2', label: '`git add` で始まるコマンドを今後聞かない', behavior: 'allow' },
+    { id: 'opt-2', label: '許可して、`git add` で始まるコマンドを今後聞かない', behavior: 'allow' },
     { id: 'opt-3', label: 'No, and tell Codex what to do differently (esc)', behavior: 'deny' },
   ])
   assert.deepEqual(dialogDecisions(null), [])
@@ -363,11 +363,11 @@ test('dontAskScope: 2 番が 1 行・2 行・3 行に折り返していても、
   // 範囲に引用符が入っていても、閉じるのは最後の引用符
   assert.equal(scopeOf('zzecho `date` now', [`${HEAD} \`zzecho \`date\`\` (p)`]), 'zzecho `date`')
   // ボタンの文言は範囲そのもの
-  assert.equal(dontAskLabel('zztool sync'), '`zztool sync` で始まるコマンドを今後聞かない')
+  assert.equal(dontAskLabel('zztool sync'), '許可して、`zztool sync` で始まるコマンドを今後聞かない')
   const decisions = dialogDecisions(parseCodexDialog(askScreen('zztool sync --all', [`${HEAD} \`zztool`, 'sync` (p)'])))
   assert.deepEqual(decisions.map((d) => [d.id, d.label, d.behavior]), [
     ['opt-1', 'Yes, proceed (y)', 'allow'],
-    ['opt-2', '`zztool sync` で始まるコマンドを今後聞かない', 'allow'],
+    ['opt-2', '許可して、`zztool sync` で始まるコマンドを今後聞かない', 'allow'],
     ['opt-3', 'No, and tell Codex what to do differently (esc)', 'deny'],
   ])
 })
@@ -394,9 +394,15 @@ test('dontAskScope: 読み切れていない・見出しのコマンドと合わ
     assert.equal(dialogAnswerable(dialog), true, `${why}: はい／いいえは今までどおり押せる`)
   }
   // コマンドが複数行・コマンドの無い質問・読めないダイアログ
-  const multi = parseCodexDialog(askScreen('zztool sync \\', [`${HEAD} \`zztool sync\` (p)`]).replace('  $ zztool sync \\', '  $ zztool sync \\\n      --all'))
-  assert.equal(multi?.command.includes('\n'), true)
-  assert.equal(dontAskScope(multi), null, 'コマンドが複数行')
+  // コマンドが幅で折り返している・複数行のときは 1 行目と突き合わせる（#744 のレビュー。長いコマンドこそ聞かれ続ける）
+  const wrapped = (first: string, rest: string, scope: string) =>
+    parseCodexDialog(askScreen('X', [`${HEAD} \`${scope}\` (p)`]).replace('  $ X', `  $ ${first}\n      ${rest}`))
+  const long = wrapped('zztool pr create --base main --body "とても長い', '本文の続き"', 'zztool pr create')
+  assert.equal(long?.command.includes('\n'), true)
+  assert.equal(dontAskScope(long)?.scope, 'zztool pr create', '範囲が 1 行目の途中の語の区切りまでに収まっている')
+  assert.equal(dontAskScope(wrapped('zztool sync', '--all', 'zztool sync')), null, '1 行目の終わりちょうど（次の行に語の続きがあるか分からない）')
+  assert.equal(dontAskScope(wrapped('zztool pr cre', 'ate --base main', 'zztool pr create')), null, '範囲が 2 行目にまたがる')
+  assert.equal(dontAskScope(wrapped('zzother pr create --base', 'main', 'zztool pr create')), null)
   const question = parseCodexDialog(['  どちらで進めますか？', '', '› 1. 案 A', "  2. Yes, and don't ask again for commands that start with `zztool` (p)", '', '  Press enter to confirm or esc to cancel'].join('\n'))
   assert.equal(question?.command, '')
   assert.equal(dontAskScope(question), null, 'コマンドの無いダイアログ')

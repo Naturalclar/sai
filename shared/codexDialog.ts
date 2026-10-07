@@ -204,9 +204,10 @@ const squash = (text: string): string => text.trim().replace(/\s+/g, ' ')
  *
  * - その選択肢がちょうど 1 つで、文が終わり（閉じる引用符と `(p)`）まで読めている
  * - 幅や長さで切れていない（`…` が入っていない。`MAX_LABEL` で切ったものも `…` が付く）
- * - **読めた範囲が、見出しのコマンド（`$ …`）の頭と語の区切りで一致する**（別のコマンドの規則・ネットワークの規則のような別の形の文、
- *   折り返しが語の途中に入って空白が紛れたもの、をここで落とす）
- * - 1 行で、ボタンに書ける長さ（`DONT_ASK_SCOPE_MAX`）に収まる
+ * - **読めた範囲が、見出しのコマンド（`$ …`）の 1 行目の頭と語の区切りで一致する**（別のコマンドの規則・ネットワークの規則のような
+ *   別の形の文、折り返しが語の途中に入って空白が紛れたもの、をここで落とす）。コマンドが幅で折り返している・複数行のときは、
+ *   範囲が 1 行目の途中の語の区切りまでに収まっているときだけ（1 行目の終わりちょうどだと、次の行に語の続きがあるか分からない）
+ * - ボタンに書ける長さ（`DONT_ASK_SCOPE_MAX`）に収まる
  *
  * **範囲が広すぎるか（`sudo` や `rm` の 1 語など）は見ない**: 範囲をそのままボタンに書いて、押すかは人が決める
  */
@@ -218,15 +219,19 @@ export function dontAskScope(dialog: TerminalDialog | null): { option: TerminalD
   if (option.label.includes('…')) return null
   const scope = DONT_ASK.exec(option.label)?.[1]
   if (!scope || scope !== scope.trim() || /\s{2,}/.test(scope) || scope.length > DONT_ASK_SCOPE_MAX) return null
-  // コマンドが複数行のときは、範囲と字面を突き合わせられない（改行の出方が違う）
-  if (!dialog.command.trim() || dialog.command.trim().includes('\n')) return null
-  const command = squash(dialog.command)
-  if (command !== scope && !command.startsWith(`${scope} `)) return null
+  // 突き合わせるのはコマンドの 1 行目（幅で折り返したコマンドも、ヒアドキュメントのような本当の複数行も、続きは次の行になる）
+  const lines = dialog.command.trim().split('\n')
+  const first = squash(lines[0] ?? '')
+  if (!first) return null
+  if (!first.startsWith(`${scope} `) && !(lines.length === 1 && first === scope)) return null
   return { option, scope }
 }
 
-/** 「今後も聞かない」のボタンの文言。**範囲そのもの**を書く（「常に許可」とだけ書かない。押した範囲が本人に見えるように） */
-export const dontAskLabel = (scope: string): string => `\`${scope}\` で始まるコマンドを今後聞かない`
+/**
+ * 「今後も聞かない」のボタンの文言。**範囲そのもの**を書く（「常に許可」とだけ書かない。押した範囲が本人に見えるように）。
+ * 頭の「許可して、」は元の文の `Yes, and`: 押すと**いまのコマンドも実行される**（規則を足すだけのボタンに見せない）
+ */
+export const dontAskLabel = (scope: string): string => `許可して、\`${scope}\` で始まるコマンドを今後聞かない`
 /** 「はい」ではない選択肢（ボタンの色と `behavior` を決めるだけ） */
 const DENY_OPTION = /^(?:no\b|don'?t\b|reject|cancel|いいえ)/i
 

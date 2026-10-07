@@ -217,7 +217,7 @@ test('「今後も聞かない」（#741）: 範囲が読めたときだけ、�
   const approval = (await dialogs.scan([session()]))['T1@repo']![0]!
   assert.deepEqual(approval.decisions, [
     { id: 'opt-1', label: 'Yes, proceed (y)', behavior: 'allow' },
-    { id: 'opt-2', label: '`git add` で始まるコマンドを今後聞かない', behavior: 'allow' },
+    { id: 'opt-2', label: '許可して、`git add` で始まるコマンドを今後聞かない', behavior: 'allow' },
     { id: 'opt-3', label: 'No, and tell Codex what to do differently (esc)', behavior: 'deny' },
   ])
   tmux.onKeys = (keys) => {
@@ -239,7 +239,7 @@ test('「今後も聞かない」（#741）: 読み直したら範囲が変わ�
   // 走査し直すと別の approval_id になり、ボタンの範囲も新しいものになる
   const next = (await dialogs.scan([session()]))['T1@repo']![0]!
   assert.notEqual(next.approval_id, approvalId)
-  assert.equal(next.decisions?.find((d) => d.id === 'opt-2')?.label, '`git` で始まるコマンドを今後聞かない')
+  assert.equal(next.decisions?.find((d) => d.id === 'opt-2')?.label, '許可して、`git` で始まるコマンドを今後聞かない')
 
   // 矢印のあとに範囲が変わった場合も Enter を送らない
   const tmux2 = new FakeTmux()

@@ -33,15 +33,16 @@ const QUOTED_HEREDOC = /"\$\(cat <<-?(['"])(\w+)\1\n[\s\S]*?\n[ \t]*\2\n?[ \t]*\
 
 /**
  * ルールを組めなかった理由の**種類**（#724）。`approvals.jsonl` に残して、どの形が多いかを数える。
- * **種類だけ**で、コマンドの文字・引数・パスは持たない。判定は変えず、今まで null を返していた所に名前を付けただけ
+ * **種類だけ**で、コマンドの文字・引数・パスは持たない。
  * **1 行に残るのは、頭から読んで最初に当たった 1 つ**（`echo $(x) > out` は `expansion` だけ）。
  * - `expansion`: `$(…)`・`$VAR`・バッククォート（引用符の中も）
- * - `redirect`: ファイルへのリダイレクト・`|&` / `heredoc`: ヒアドキュメント（`<<`） / `here_string`: `<<<` / `background`: `&`
+ * - `redirect`: ファイルへのリダイレクト・`|&` / `heredoc`: 組まないヒアドキュメント（`<<`。目印を囲んでいない・目印のあとに続きがある・
+ *   閉じの行が無い・本文を文章として受け取るコマンド（`gh` / `git`）でない） / `here_string`: `<<<` / `background`: `&`
  * - `subshell`: 引用符の外の `(` `)`（`<(…)` `>(…)` も） / `brace`: 引用符の外の `{` `}`（波括弧の組のほか `HEAD@{1}`・`-exec … {}` も）
  * - `comment`: 行の途中の `#` / `unclosed`: 閉じていない引用符・末尾の `\`
  * - `keyword`: `for` / `if` などの構文の語 / `assign_only`: 代入だけでコマンドが無い（`FOO=1`）
  * - `odd_command`: 先頭の語がコマンドの名前の形でない（`[`・`!`・`~/bin/x` など） / `env_value`: 代入の値に空白や記号
- * - `cd_form`: `cd` の形が読めない（引数が 1 つでない・`-`・`~`） / `cd_no_cwd`: `cwd` が分からない / `cd_outside`: 行き先が `cwd` の外
+ * - `cd_form`: `cd` の形が読めない（引数が 1 つでない・`-`・`~user`・ホームが分からないときの `~`） / `cd_no_cwd`: `cwd` が分からない / `cd_outside`: 行き先が `cwd` の外
  * - `cd_then_write`: `cd` と書き込み系・`git` のつなぎ / `empty`: 部品が無い
  */
 export const BASH_NO_RULE_REASONS = [
@@ -49,6 +50,20 @@ export const BASH_NO_RULE_REASONS = [
   'keyword', 'assign_only', 'odd_command', 'env_value', 'cd_form', 'cd_no_cwd', 'cd_outside', 'cd_then_write', 'empty',
 ] as const
 export type BashNoRuleReason = (typeof BASH_NO_RULE_REASONS)[number]
+
+/**
+ * 目印を引用符で囲んだヒアドキュメント（`<<'EOF'` / `<<"EOF"` / `<<-'EOF'`）で、**目印がその行の最後**のもの（#724）。
+ * 実機（Claude Code 2.1.292）で、この形はコマンドのルールだけで通った（本文は展開されないので、中の `$(…)` や `&&` は見られない）。
+ * 目印を囲んでいないもの（本文が展開される）・目印のあとに `| head` `2>&1` `&& x` が続くものは、ルールがあっても聞かれた
+ */
+const QUOTED_TAG_HEREDOC = /^\d*<<(-?)[ \t]*(['"])(\w+)\2[ \t]*(?=\n)/
+
+/**
+ * ヒアドキュメントを渡してもルールを組むコマンド（#724）。**本文を文章として受け取るものだけ**（`gh … --body-file -`・`git commit -F -`）。
+ * `python3 - <<'EOF'` や `bash <<'EOF'` も実機では通ったが、ルールにすると `Bash(python3:*)`（何でも実行できる）になり、
+ * 聞かれた 1 回の中身（本文）と書かれる範囲が釣り合わないので組まない。ここに無いコマンドは今までどおり `heredoc` で断る
+ */
+const HEREDOC_TEXT_COMMANDS = new Set(['gh', 'git'])
 
 /** 捨てられないリダイレクトの種類。`rest` はその記号から先（頭の fd の数字も含む） */
 function redirectReason(rest: string): BashNoRuleReason {
@@ -60,12 +75,19 @@ function redirectReason(rest: string): BashNoRuleReason {
   return 'redirect'
 }
 
+interface SplitParts {
+  parts: string[][]
+  /** ヒアドキュメントを受け取っている部品（`parts` の番号）。本文は読み飛ばしてある */
+  heredocs: Set<number>
+}
+
 /** 部品に分ける。語は引用符を外した文字。切れない・通らない形（展開・サブシェル・ファイルへのリダイレクト・`&`）は理由の種類を返す */
-function splitParts(command: string): string[][] | BashNoRuleReason {
+function splitParts(command: string): SplitParts | BashNoRuleReason {
   // 行の継続（`\` + 改行）は下で読み飛ばす。先に空白へ置き換えると、`\` で終わるコメント行の次の行まで捨ててしまう
   // （bash はコメントの中の `\` を継続にしない。#710 のレビュー）
   const text = command.replace(/\r\n/g, '\n').replace(QUOTED_HEREDOC, '""')
   const parts: string[][] = []
+  const heredocs = new Set<number>()
   let words: string[] = []
   let word: string | null = null
   const endWord = () => {
@@ -139,9 +161,18 @@ function splitParts(command: string): string[][] | BashNoRuleReason {
       continue
     }
     if (c === '>' || c === '<' || c === '&' || (/\d/.test(c) && word === null && /^\d+[<>]/.test(text.slice(i, i + 4)))) {
-      const m = HARMLESS_REDIRECT.exec(text.slice(i))
-      // ファイルへのリダイレクト・ヒアドキュメント・`&`（バックグラウンド）
-      if (!m) return redirectReason(text.slice(i))
+      const rest = text.slice(i)
+      const m = HARMLESS_REDIRECT.exec(rest)
+      if (!m) {
+        // 引用符つきの目印のヒアドキュメントは、本文ごと読み飛ばす（閉じの行が無ければ今までどおり断る）
+        const end = quotedHeredocEnd(rest)
+        if (end < 0) return redirectReason(rest) // ファイルへのリダイレクト・読めないヒアドキュメント・`&`（バックグラウンド）
+        endWord()
+        if (words.length === 0) return 'heredoc' // コマンドの無いヒアドキュメント
+        heredocs.add(parts.length)
+        i += end - 1 // 閉じの行の終わり。次の改行で部品が終わる
+        continue
+      }
       endWord()
       i += m[0].length - 1
       continue
@@ -153,7 +184,19 @@ function splitParts(command: string): string[][] | BashNoRuleReason {
     word = (word ?? '') + c
   }
   endPart()
-  return parts
+  return { parts, heredocs }
+}
+
+/**
+ * `rest`（`<<` から先）が引用符つきの目印のヒアドキュメントなら、閉じの行の終わりまでの長さを返す。違う・閉じの行が無いなら -1。
+ * `<<-` は閉じの行の頭のタブを許す（bash と同じ）
+ */
+function quotedHeredocEnd(rest: string): number {
+  const m = QUOTED_TAG_HEREDOC.exec(rest)
+  if (!m) return -1
+  const tag = m[3]!
+  const close = new RegExp(`\\n${m[1] ? '\\t*' : ''}${tag}(?=\\n|$)`).exec(rest.slice(m[0].length))
+  return close ? m[0].length + close.index + close[0].length : -1
 }
 
 /** `/a/b/../c` → `/a/c`。node:path は画面で使えないので文字で畳む */
@@ -179,8 +222,8 @@ const within = (dir: string, root: string) => dir === root || dir.startsWith(roo
  * - `cd` と書き込み系・`git` をつないだものは null（ルールが揃っていても聞かれた）
  * - 環境変数の代入はそのまま接頭辞に入れる（`FOO=1 touch x` は `Bash(touch:*)` では通らず、`Bash(FOO=1 touch:*)` で通った）
  */
-export function bashRulePrefixes(command: string, cwd: string): string[] | null {
-  const plan = bashRulePlan(command, cwd)
+export function bashRulePrefixes(command: string, cwd: string, home = ''): string[] | null {
+  const plan = bashRulePlan(command, cwd, home)
   return 'reason' in plan ? null : plan.prefixes
 }
 
@@ -188,10 +231,11 @@ export function bashRulePrefixes(command: string, cwd: string): string[] | null 
  * `bashRulePrefixes()` の中身（#724）。組めなかったときは null の代わりに**理由の種類**を返す。判定は同じ 1 つ
  * （`bashRulePrefixes()` はこれを呼ぶだけ）なので、[常に許可] を出すかと記録の理由がずれない
  */
-export function bashRulePlan(command: string, cwd: string): { prefixes: string[] } | { reason: BashNoRuleReason } {
+export function bashRulePlan(command: string, cwd: string, home = ''): { prefixes: string[] } | { reason: BashNoRuleReason } {
   const no = (reason: BashNoRuleReason) => ({ reason })
-  const parts = splitParts(command)
-  if (typeof parts === 'string') return no(parts)
+  const split = splitParts(command)
+  if (typeof split === 'string') return no(split)
+  const { parts, heredocs } = split
   if (parts.length === 0) return no('empty')
   const prefixes: string[] = []
   // 読むだけのコマンドの接頭辞。ほかに書くルールが無いときだけ使う（下）
@@ -199,7 +243,7 @@ export function bashRulePlan(command: string, cwd: string): { prefixes: string[]
   const names: string[] = []
   let dir = cwd ? normalize(cwd) : ''
   let cd = false
-  for (const words of parts) {
+  for (const [index, words] of parts.entries()) {
     const env: string[] = []
     let i = 0
     for (; i < words.length - 1 && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i]!); i++) {
@@ -211,10 +255,18 @@ export function bashRulePlan(command: string, cwd: string): { prefixes: string[]
     if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(first)) return no('assign_only')
     if (/[^\w./+-]/.test(first)) return no('odd_command')
     if (KEYWORDS.has(first)) return no('keyword')
+    // ヒアドキュメントを渡してよいのは、本文を文章として受け取るコマンドだけ（`python3 - <<'EOF'` にルールを書かない）
+    if (heredocs.has(index) && !HEREDOC_TEXT_COMMANDS.has(first)) return no('heredoc')
     names.push(first)
     if (first === 'cd') {
-      const target = words[i + 1]
-      if (env.length > 0 || words.length !== i + 2 || !target || target.startsWith('-') || target.startsWith('~')) return no('cd_form')
+      let target = words[i + 1]
+      if (env.length > 0 || words.length !== i + 2 || !target || target.startsWith('-')) return no('cd_form')
+      if (target.startsWith('~')) {
+        // `~` と `~/…` はホームに読み替える（実機で、プロジェクトの中へ行く `cd ~/…` は中への `cd` と同じく通った。#724）。
+        // ホームが分からない（画面から呼ばれた）・`~user` は今までどおり読めない形
+        if (!home || (target !== '~' && !target.startsWith('~/'))) return no('cd_form')
+        target = `${normalize(home)}${target.slice(1)}`
+      }
       if (!dir) return no('cd_no_cwd')
       dir = normalize(target.startsWith('/') ? target : `${dir}/${target}`)
       if (!within(dir, normalize(cwd))) return no('cd_outside')

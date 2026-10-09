@@ -48,7 +48,7 @@ test('bashRulePrefixes: cd の行き先がプロジェクトの外・分から�
   assert.equal(p('cd ../.. && node -v'), null)
   assert.equal(p('cd sub/../../x && node -v'), null)
   assert.equal(p('cd /w/repo-other && node -v'), null, '名前の前方一致で中と見なさない')
-  assert.equal(p('cd ~/x && node -v'), null)
+  assert.equal(p('cd ~/x && node -v'), null, 'ホームを渡さなければ ~ は読めない')
   assert.equal(p('cd - && node -v'), null)
   assert.equal(p('cd && node -v'), null)
   assert.equal(p('cd sub && node -v', ''), null, 'cwd が分からなければ確かめられない')
@@ -182,4 +182,93 @@ test('bashRulePlan: 組めなかった理由の種類を返す（#724）。判�
   assert.deepEqual(bashRulePlan('cd sub', CWD), { prefixes: [] })
   // 理由は種類だけ。コマンドの文字を混ぜない
   assert.deepEqual(bashRulePlan('echo $(cat /secret/path)', CWD), { reason: 'expansion' })
+})
+
+// ---- #724 の次の段: 記録で多かった理由のうち、実機（Claude Code 2.1.292）で通った形だけ組む
+const HOME = '/home/someone'
+const IN_HOME = '/home/someone/work/repo'
+const h = (command: string, cwd = IN_HOME, home = HOME) => bashRulePlan(command, cwd, home)
+
+test('cd ~/…: ホームに読み替えて、プロジェクトの中へ行くものは中への cd と同じに読む', () => {
+  assert.deepEqual(h('cd ~/work/repo && gh issue view 1'), { prefixes: ['gh issue'] })
+  assert.deepEqual(h('cd ~/work/repo/sub\nnode -v'), { prefixes: ['node'] })
+  assert.deepEqual(h('cd ~/work/repo/sub/..; node -v | tail -1'), { prefixes: ['node'] })
+  assert.deepEqual(h('cd ~/work/repo'), { prefixes: [] }, 'cd だけなら書くルールは無い')
+  // ホームの末尾の / は無視する
+  assert.deepEqual(h('cd ~/work/repo && node -v', IN_HOME, '/home/someone/'), { prefixes: ['node'] })
+})
+
+test('cd ~/…: 外へ行くものは cd_outside（外への cd はルールがあっても聞かれた）。書き込み系・git とのつなぎも今までどおり', () => {
+  assert.deepEqual(h('cd ~ && node -v'), { reason: 'cd_outside' })
+  assert.deepEqual(h('cd ~/work && node -v'), { reason: 'cd_outside' })
+  assert.deepEqual(h('cd ~/work/repo-other && node -v'), { reason: 'cd_outside' })
+  assert.deepEqual(h('cd ~/work/repo/../../.. && node -v'), { reason: 'cd_outside' })
+  assert.deepEqual(h('cd ~/work/repo && git status'), { reason: 'cd_then_write' })
+  assert.deepEqual(h('cd ~/work/repo && touch x'), { reason: 'cd_then_write' })
+})
+
+test('cd ~/…: ホームが分からない・~user・引用符つきの ~ は読めない形のまま', () => {
+  assert.deepEqual(bashRulePlan('cd ~/work/repo && node -v', IN_HOME), { reason: 'cd_form' }, 'ホームを渡さない呼び方（画面）')
+  assert.deepEqual(h('cd ~other/work && node -v'), { reason: 'cd_form' })
+  assert.deepEqual(h('cd ~+ && node -v'), { reason: 'cd_form' })
+  assert.deepEqual(h('cd ~/work/repo extra && node -v'), { reason: 'cd_form' })
+  assert.deepEqual(h('cd ~/work/repo && node -v', ''), { reason: 'cd_no_cwd' })
+})
+
+const doc = (head: string, body = 'title\n\n$(touch x) && rm y > z; (a) {b} `c` | d', tag = "'EOF'", close = 'EOF') => `${head} <<${tag}\n${body}\n${close}`
+
+test('引用符つきの目印のヒアドキュメント: 本文を文章として受け取るコマンド（gh / git）は、本文を読み飛ばして組む', () => {
+  assert.deepEqual(h(doc('gh issue comment 1 --body-file -')), { prefixes: ['gh issue'] })
+  assert.deepEqual(h(doc('git commit -q -F -')), { prefixes: ['git commit'] })
+  assert.deepEqual(h(doc('gh pr create --body-file -', 'x', '"EOF"')), { prefixes: ['gh pr'] }, '二重引用符の目印')
+  assert.deepEqual(h('gh pr comment 1 --body-file - <<-\'EOF\'\n\tbody\n\tEOF'), { prefixes: ['gh pr'] }, '<<- は閉じの行の頭のタブを許す')
+  // 前後に別のコマンドがあるもの（前は ; や改行、後ろは閉じの行の次の行）
+  assert.deepEqual(h(`git add -A; ${doc('git commit -F -')}\ngit push -q origin x`), { prefixes: ['git add', 'git commit', 'git push'] })
+  assert.deepEqual(h(`${doc('gh issue comment 1 --body-file -')}\n${doc('gh issue comment 2 --body-file -', 'y', "'MD'", 'MD')}`), { prefixes: ['gh issue'] }, '2 つ続けて')
+  // 本文に閉じの目印と同じ語が文の途中にあっても、行がその語だけのときにしか閉じない
+  assert.deepEqual(h(doc('gh issue comment 1 --body-file -', 'see EOF here\n EOF\nEOFX')), { prefixes: ['gh issue'] })
+})
+
+test('ヒアドキュメント: コードを受け取るコマンド（python3 / node / bash など）にはルールを書かない（実機では通るが、書かれる範囲が何でも実行できる形になる）', () => {
+  for (const head of ['python3 -', 'node -', 'bash', 'sh -s', 'ruby', 'psql', 'ssh host', 'tee out.txt', 'cat', 'FOO=1 gh-x']) {
+    assert.deepEqual(h(doc(head, 'print(1)')), { reason: 'heredoc' }, head)
+  }
+  assert.deepEqual(h(`gh issue list; ${doc('python3 -', 'print(1)')}`), { reason: 'heredoc' }, '前のコマンドが良くても')
+})
+
+test('ヒアドキュメント: 実機で聞かれた形は今までどおり断る（目印を囲まない・目印のあとに続きがある・閉じの行が無い）', () => {
+  assert.deepEqual(h('gh issue comment 1 --body-file - <<EOF\nbody\nEOF'), { reason: 'heredoc' }, '目印を囲まない（本文が展開される）')
+  assert.deepEqual(h("gh issue comment 1 --body-file - <<'EOF' | head -1\nbody\nEOF"), { reason: 'heredoc' })
+  assert.deepEqual(h("gh issue comment 1 --body-file - <<'EOF' 2>&1\nbody\nEOF"), { reason: 'heredoc' })
+  assert.deepEqual(h("gh issue comment 1 --body-file - <<'EOF' && gh issue list\nbody\nEOF"), { reason: 'heredoc' })
+  assert.deepEqual(h("gh issue comment 1 --body-file - <<'EOF'\nbody"), { reason: 'heredoc' }, '閉じの行が無い')
+  assert.deepEqual(h("gh issue comment 1 --body-file - <<'EOF'\nbody\n  EOF"), { reason: 'heredoc' }, '<< は閉じの行の字下げを許さない')
+  assert.deepEqual(h("<<'EOF'\nbody\nEOF"), { reason: 'heredoc' }, 'コマンドが無い')
+  assert.deepEqual(h("gh issue comment 1 --body-file - <<< 'body'"), { reason: 'here_string' })
+  // 閉じたあとの行は、ふつうのコマンドとして読む（組めない形なら断る）
+  assert.deepEqual(h(`${doc('gh issue comment 1 --body-file -')}\necho $HOME`), { reason: 'expansion' })
+  assert.deepEqual(h(`cd /tmp; ${doc('gh issue comment 1 --body-file -')}`), { reason: 'cd_outside' })
+  assert.deepEqual(h(`cd sub; ${doc('git commit -F -')}`), { reason: 'cd_then_write' })
+})
+
+test('記録で多かった形（作り物 12 個）: 前はどれも組めなかった。いまは実機で通った形の 5 個だけ組める', () => {
+  const cases: [string, boolean][] = [
+    // cd_form だったもの
+    ['cd ~/work/repo\ngh issue view 1 --json state', true],
+    ['cd ~/work/repo\ngh issue list --limit 30 | head -5', true],
+    ['cd ~/work/repo; ls | head -3; tail -2 notes.txt', true],
+    ['cd ~/work/repo && git log --oneline -3', false], // cd と git
+    ['cd ~/elsewhere; ls', false], // 外
+    // heredoc だったもの
+    [doc('cd ~/work/repo\ngh issue comment 1 --body-file -'), true],
+    [doc('gh pr create --title t --body-file -'), true],
+    [doc('python3 -', 'print(1)'), false],
+    [doc('cd ~/work/repo; python3 -', 'print(1)'), false],
+    // expansion / cd_outside / subshell（直していない）
+    ['S=src && sed -n 1,5p $S/a.ts', false],
+    ['cd /w/other && node -v', false],
+    ['(cd sub && node -v)', false],
+  ]
+  for (const [command, ok] of cases) assert.equal('prefixes' in h(command), ok, command)
+  assert.equal(cases.filter(([, ok]) => ok).length, 5)
 })

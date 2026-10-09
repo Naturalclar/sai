@@ -57,7 +57,7 @@ const QUOTED_HEREDOC_OPEN = /^"\$\(cat <<(-?)(['"])(\w+)\2\n/
  * **1 行に残るのは、頭から読んで最初に当たった 1 つ**（`echo $(x) > out` は `expansion` だけ）。
  * - `expansion`: `$(…)`・`$VAR`・バッククォート（引用符の中も）
  * - `redirect`: ファイルへのリダイレクト・`|&` / `heredoc`: 組まないヒアドキュメント（`<<`。目印を囲んでいない・目印のあとに続きがある・
- *   閉じの行が無い・本文を文章として受け取るコマンド（`gh` / `git`）でない） / `here_string`: `<<<` / `background`: `&`
+ *   閉じの行が無い・渡す先が組む形（`gh` / `git` の本文・`python3`）でない・前に `cd` 以外の部品がある） / `here_string`: `<<<` / `background`: `&`
  * - `subshell`: 引用符の外の `(` `)`（`<(…)` `>(…)` も） / `brace`: 引用符の外の `{` `}`（波括弧の組のほか `HEAD@{1}`・`-exec … {}` も）
  * - `comment`: 行の途中の `#` / `unclosed`: 閉じていない引用符・末尾の `\`
  * - `keyword`: `for` / `if` などの構文の語 / `assign_only`: 代入だけでコマンドが無い（`FOO=1`）
@@ -86,20 +86,46 @@ export type BashNoRuleReason = (typeof BASH_NO_RULE_REASONS)[number]
 const QUOTED_TAG_HEREDOC = /^0?<<(-?)[ \t]*(['"])(\w+)\2[ \t]*(?=\n)/
 
 /**
- * ヒアドキュメントを渡してもルールを組む形（#724）。**本文を文章として受け取ると分かっている形だけ**:
+ * ヒアドキュメントを渡してもルールを組む形（#724）。
+ *
+ * **本文を文章として受け取ると分かっている形**:
  * - `gh issue|pr|release create|comment|edit|review … --body-file -`（`-F -`・`--body-file=-` も）
  * - `git commit … -F -`（`--file -`・`--file=-` も）
- *
  * 先頭の語だけでは決めない（`git apply <<'EOF'`・`gh auth login --with-token <<'EOF'`・`git -c alias.x=!sh x <<'EOF'` は、
- * 本文を操作やコードとして受け取る。#751 のレビュー）。`python3 - <<'EOF'` や `bash <<'EOF'` も実機では通ったが、
- * ルールにすると `Bash(python3:*)`（何でも実行できる）になり、聞かれた 1 回の中身（本文）と書かれる範囲が釣り合わないので組まない。
- * `words` はその部品の語（代入は付いていないこと。代入つきは断る）
+ * 本文を操作やコードとして受け取る。#751 のレビュー）。
+ *
+ * **本文をコードとして走らせる `python3`**（人が決めた。#724 の 2026-10-09 のコメント）: ヒアドキュメントは受ける。
+ * どのルールを書くかは下の `python3HeredocRule()`（1 語のルールを書く例外はそこの 1 か所）。
+ * **`python3` だけ**（`python`・`python3.12`・`/usr/bin/python3`・`env python3`・`node`・`ruby`・`bash`・`sh` などは決まっていないので、
+ * 今までどおり `heredoc` で断る）。`words` はその部品の語（代入は付いていないこと。代入つきは断る）
  */
-function takesHeredocAsText(words: readonly string[]): boolean {
+function takesHeredoc(words: readonly string[]): boolean {
   const stdinFile = (flags: readonly string[]) => words.some((w, i) => (flags.includes(w) && words[i + 1] === '-') || flags.some((f) => f.startsWith('--') && w === `${f}=-`))
   if (words[0] === 'gh') return ['issue', 'pr', 'release'].includes(words[1] ?? '') && ['create', 'comment', 'edit', 'review'].includes(words[2] ?? '') && stdinFile(['--body-file', '-F'])
   if (words[0] === 'git') return words[1] === 'commit' && stdinFile(['--file', '-F'])
-  return false
+  return words[0] === 'python3'
+}
+
+/** 値を取らない `python3` のフラグ（1 文字のものを束ねた形も。`-u`・`-B`・`-Es`）。`-c`・`-m`・`-W`・`-X` は入れない */
+const PYTHON3_PLAIN_FLAGS = /^-[BbdEhiIOqsSuvVx]+$/
+
+/**
+ * **例外: ヒアドキュメントで渡したプログラムを走らせる `python3` には、1 語のルール `Bash(python3:*)` を書く**（#724 の 2026-10-09 の人の決定）。
+ *
+ * ほかの所では、サブコマンドを持つ CLI に 1 語のルールを書かない（`ruleHead()`。#755: `python3 -c '…'`・`python3 -`・`node -e '…'` は `bare_cli`）。
+ * ここだけ書くのは、記録で `heredoc` の 8 割がこの形で、**書かれるルールが python3 で始まるコマンド全部に効く**ことを分かったうえで
+ * 人が入れると決めたため。広さは [常に許可] の脇の文（`ruleScope()`:「python3」で始まるコマンド）にそのまま出る。
+ * **残る不揃い**: `python3 -c '…'` には [常に許可] が出ないのに、ヒアドキュメントで 1 回押すと `python3 -c` も通るようになる。
+ *
+ * 当てるのは「標準入力からプログラムを読む」形だけ: `python3`・`python3 -`・`python3 -u -`・`python3 - a b`（`-` のあとは引数）。
+ * `python3 -c '…' <<'EOF'`・`python3 -m x <<'EOF'`・`python3 tool.py <<'EOF'`（本文はプログラムでなく入力）には当てない
+ * （そちらは `ruleHead()` の読み方のまま: 狭い接頭辞か、組まない）。`words` は代入を除いたその部品の語
+ */
+function python3HeredocRule(words: readonly string[]): boolean {
+  if (words[0] !== 'python3') return false
+  let n = 1
+  while (n < words.length && PYTHON3_PLAIN_FLAGS.test(words[n]!)) n++
+  return n === words.length || words[n] === '-'
 }
 
 /** 捨てられないリダイレクトの種類。`rest` はその記号から先（頭の fd の数字も含む） */
@@ -121,6 +147,8 @@ interface SplitParts {
   quoted: Set<string>
   /** `"$(cat <<'EOF' … )"` を空として畳んだ語（同じ鍵）。中身を読んでいないので、`cd` の行き先・コマンドの名前には使わせない */
   folded: Set<string>
+  /** ヒアドキュメントを受けた部品（`parts` の番号）。`python3HeredocRule()` の例外を当てるかに使う */
+  heredocs: Set<number>
 }
 
 /** 部品に分ける。語は引用符を外した文字。切れない・通らない形（展開・サブシェル・ファイルへのリダイレクト・`&`）は理由の種類を返す */
@@ -134,6 +162,7 @@ function splitParts(command: string): SplitParts | BashNoRuleReason {
   const parts: string[][] = []
   const quoted = new Set<string>()
   const folded = new Set<string>()
+  const heredocs = new Set<number>()
   // いまの語・いまの部品に、畳んだ `"$(cat <<…)"` が混ざったか
   let wordFolded = false
   let partFolded = false
@@ -243,7 +272,8 @@ function splitParts(command: string): SplitParts | BashNoRuleReason {
         // 前にあるのが `cd` だけのときしか組まない: 前の部品が `gh` / `git` の実体を差し替えていても見抜けない
         // （`eval 'gh() { sh; }'`・`alias gh=sh`・`export PATH=…`・`source x.sh`。本文がコードとして走る。#751 のレビュー）。
         // 畳んだ語（中身を読んでいない）が混ざった部品も、見えている語と実際の語がずれるので組まない
-        if (partFolded || parts.some((p) => p[0] !== 'cd') || !takesHeredocAsText(words)) return 'heredoc'
+        if (partFolded || parts.some((p) => p[0] !== 'cd') || !takesHeredoc(words)) return 'heredoc'
+        heredocs.add(parts.length)
         i += end - 1 // 閉じの行の終わり。次の改行で部品が終わる
         continue
       }
@@ -258,7 +288,7 @@ function splitParts(command: string): SplitParts | BashNoRuleReason {
     word = (word ?? '') + c
   }
   endPart()
-  return { parts, quoted, folded }
+  return { parts, quoted, folded, heredocs }
 }
 
 /**
@@ -391,7 +421,7 @@ export function bashRulePlan(command: string, cwd: string, home: string): { pref
   const no = (reason: BashNoRuleReason) => ({ reason })
   const split = splitParts(command)
   if (typeof split === 'string') return no(split)
-  const { parts, quoted, folded } = split
+  const { parts, quoted, folded, heredocs } = split
   // 前の部品が `cd` の探し方を変えたかもしれない（`CDPATH` に触った・中身の見えない `source` / `.` / `eval`）。そのあとの相対の `cd` は行き先が読めない
   let cdPathTouched = false
   if (parts.length === 0) return no('empty')
@@ -455,7 +485,8 @@ export function bashRulePlan(command: string, cwd: string, home: string): { pref
       if (!unasked.includes(first)) unasked.push(first)
       continue
     }
-    const head = ruleHead(words.slice(i))
+    // 1 語のルールを書く例外は、ヒアドキュメントで渡したプログラムを走らせる `python3` だけ（`python3HeredocRule()`）
+    const head = heredocs.has(index) && python3HeredocRule(words.slice(i)) ? 'python3' : ruleHead(words.slice(i))
     if (head === null) return no('bare_cli')
     const prefix = [...env, head].join(' ')
     if (!prefixes.includes(prefix)) prefixes.push(prefix)

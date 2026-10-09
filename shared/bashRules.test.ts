@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { alwaysAllowRules, ruleLabel } from './approvals.ts'
 import { bashRulePlan, bashRulePrefixes } from './bashRules.ts'
 
 const CWD = '/w/repo'
@@ -242,11 +243,48 @@ test('引用符つきの目印のヒアドキュメント: 本文を文章とし
   assert.deepEqual(h(doc('gh issue comment 1 --body-file -', 'see EOF here\n EOF\nEOFX')), { prefixes: ['gh issue'] })
 })
 
-test('ヒアドキュメント: コードを受け取るコマンド（python3 / node / bash など）にはルールを書かない（実機では通るが、書かれる範囲が何でも実行できる形になる）', () => {
-  for (const head of ['python3 -', 'node -', 'bash', 'sh -s', 'ruby', 'psql', 'ssh host', 'tee out.txt', 'cat', 'FOO=1 gh-x']) {
+test('ヒアドキュメント: python3 に渡す形は組む（人が決めた。書かれるのは Bash(python3:*) = python3 で始まるコマンドは何でも通る広さ）', () => {
+  for (const head of ['python3 -', 'python3', 'python3 - a b', 'python3 -u -']) {
+    assert.deepEqual(h(doc(head, 'print(1)')), { prefixes: ['python3'] }, head)
+  }
+  // スクリプトに本文を渡す形は、今までの 2 語の読み方のまま（そのスクリプトだけのルール）
+  assert.deepEqual(h(doc('python3 tool.py --in -', 'x')), { prefixes: ['python3 tool.py'] })
+  // 中への cd のあと・閉じの行のあとの別のコマンド
+  assert.deepEqual(h(`cd ~/work/repo/sub\n${doc('python3 -', 'print(1)')}`), { prefixes: ['python3'] })
+  assert.deepEqual(h(`cd sub; ${doc('python3 -', 'print(1)')}\nnode -v | tail -1`), { prefixes: ['python3', 'node'] })
+  // ルールの表記は広さをそのまま言う（狭い形に見せない）
+  assert.deepEqual(alwaysAllowRules('Bash', { command: doc('python3 -', 'print(1)') }, IN_HOME, HOME).map(ruleLabel), ['Bash(python3:*)'])
+})
+
+test('ヒアドキュメント: python3 でも、#751 で塞いだ形は同じに断る', () => {
+  const py = doc('python3 -', 'print(1)')
+  // 前にあるのが cd だけでない（コマンドを差し替えていても見抜けない）
+  for (const before of ["eval 'python3() { sh; }'", 'alias python3=sh', 'export PATH=/tmp/x:/usr/bin', 'source ./x.sh', 'node -v', 'git add -A']) {
+    assert.deepEqual(h(`${before}\n${py}`), { reason: 'heredoc' }, before)
+  }
+  // 本文の外のコマンドを見落とさない（閉じの行のあとは、ふつうの部品として読む）
+  assert.deepEqual(h(`${py}\nrm -rf x`), { prefixes: ['python3', 'rm'] })
+  assert.deepEqual(h(`${py}\nzzrun x > out.txt`), { reason: 'redirect' })
+  assert.deepEqual(h(`${py}\necho $HOME`), { reason: 'expansion' })
+  assert.deepEqual(h(`${py}\n${py}`), { reason: 'heredoc' }, '2 つ目は前に cd 以外がある')
+  // 実機で聞かれた形・読めない形
+  assert.deepEqual(h('python3 - <<EOF\nprint(1)\nEOF'), { reason: 'heredoc' }, '目印を囲まない')
+  assert.deepEqual(h("python3 - <<'EOF' | tail -1\nprint(1)\nEOF"), { reason: 'heredoc' })
+  assert.deepEqual(h("python3 - <<'EOF' > out.txt\nprint(1)\nEOF"), { reason: 'heredoc' })
+  assert.deepEqual(h("python3 - 3<<'EOF'\nprint(1)\nEOF"), { reason: 'heredoc' })
+  assert.deepEqual(h("python3 - <<'EOF'\nprint(1)\nEOF\r\n"), { reason: 'odd_command' })
+  assert.deepEqual(h("python3 - <<'EOF'\nprint(1)"), { reason: 'heredoc' }, '閉じの行が無い')
+  assert.deepEqual(h(`cd /tmp; ${py}`), { reason: 'cd_outside' })
+  assert.deepEqual(h(`cd ~/elsewhere\n${py}`), { reason: 'cd_outside' })
+  assert.deepEqual(h(doc('FOO=1 python3 -', 'print(1)')), { reason: 'heredoc' }, '代入つき')
+  assert.deepEqual(h(doc('python3 -"$(cat <<\'X\'\nc\nX\n)"', 'print(1)')), { reason: 'heredoc' }, '畳んだ語が混ざる')
+})
+
+test('ヒアドキュメント: python3 以外のインタプリタ・シェルにはルールを書かない（決まっていない）', () => {
+  for (const head of ['python -', 'python3.12 -', 'node -', 'bash', 'sh -s', 'zsh', 'ruby', 'perl', 'deno run -', 'psql', 'ssh host', 'tee out.txt', 'cat', 'FOO=1 gh-x', '/usr/bin/python3 -', 'command python3 -', 'env python3 -', 'uv run python3 -']) {
     assert.deepEqual(h(doc(head, 'print(1)')), { reason: 'heredoc' }, head)
   }
-  assert.deepEqual(h(`gh issue list; ${doc('python3 -', 'print(1)')}`), { reason: 'heredoc' }, '前のコマンドが良くても')
+  assert.deepEqual(h(`gh issue list; ${doc('node -', 'print(1)')}`), { reason: 'heredoc' }, '前のコマンドが良くても')
 })
 
 test('ヒアドキュメント: gh / git でも、本文を文章として受け取ると分かっている形だけ（先頭の語では決めない。#751 のレビュー）', () => {
@@ -275,9 +313,9 @@ test('ヒアドキュメント: 本文の読み飛ばしで、本文の外のコ
 })
 
 test('記録に残る理由は、頭から読んで最初に当たった 1 つのまま（組まないヒアドキュメントは、あとの行の理由より先）', () => {
-  assert.deepEqual(h(`${doc('python3 -', 'print(1)')}\necho $(date)`), { reason: 'heredoc' })
-  assert.deepEqual(h(`${doc('python3 -', 'print(1)')}\nzzrun x > out`), { reason: 'heredoc' })
-  assert.deepEqual(h(`echo $(date)\n${doc('python3 -', 'print(1)')}`), { reason: 'expansion' })
+  assert.deepEqual(h(`${doc('node -', 'print(1)')}\necho $(date)`), { reason: 'heredoc' })
+  assert.deepEqual(h(`${doc('node -', 'print(1)')}\nzzrun x > out`), { reason: 'heredoc' })
+  assert.deepEqual(h(`echo $(date)\n${doc('node -', 'print(1)')}`), { reason: 'expansion' })
 })
 
 test('ヒアドキュメント: 実機で聞かれた形は今までどおり断る（目印を囲まない・目印のあとに続きがある・閉じの行が無い）', () => {
@@ -295,7 +333,7 @@ test('ヒアドキュメント: 実機で聞かれた形は今までどおり断
   assert.deepEqual(h(`cd sub; ${doc('git commit -F -')}`), { reason: 'cd_then_write' })
 })
 
-test('記録で多かった形（作り物 12 個）: 前はどれも組めなかった。いまは実機で通った形の 5 個だけ組める', () => {
+test('記録で多かった形（作り物 12 個）: 前はどれも組めなかった。いまは実機で通った形の 7 個が組める（python3 のヒアドキュメントを入れて 5 → 7）', () => {
   const cases: [string, boolean][] = [
     // cd_form だったもの
     ['cd ~/work/repo\ngh issue view 1 --json state', true],
@@ -306,15 +344,15 @@ test('記録で多かった形（作り物 12 個）: 前はどれも組めな�
     // heredoc だったもの
     [doc('cd ~/work/repo\ngh issue comment 1 --body-file -'), true],
     [doc('gh pr create --title t --body-file -'), true],
-    [doc('python3 -', 'print(1)'), false],
-    [doc('cd ~/work/repo; python3 -', 'print(1)'), false],
+    [doc('python3 -', 'print(1)'), true],
+    [doc('cd ~/work/repo; python3 -', 'print(1)'), true],
     // expansion / cd_outside / subshell（直していない）
     ['S=src && sed -n 1,5p $S/a.ts', false],
     ['cd /w/other && node -v', false],
     ['(cd sub && node -v)', false],
   ]
   for (const [command, ok] of cases) assert.equal('prefixes' in h(command), ok, command)
-  assert.equal(cases.filter(([, ok]) => ok).length, 5)
+  assert.equal(cases.filter(([, ok]) => ok).length, 7)
 })
 
 test('場所を変えるほかの形は読めない形にする: pushd / popd・command cd・CDPATH に触ったあとの相対の cd（#751 のレビュー）', () => {

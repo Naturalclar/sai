@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { answerAsk, answersReady, approvalText, askQuestions, joinAnswer, toolSummary, alwaysAllowPlan, alwaysAllowRules, ruleLabel } from './approvals.ts'
+import { answerAsk, answersReady, approvalText, askQuestions, joinAnswer, toolSummary, alwaysAllowPlan, alwaysAllowRules, ruleLabel, ruleScope } from './approvals.ts'
 import type { Approval } from './types.ts'
 
 test('approvalText は record.py の waiting_text と同じ接頭辞', () => {
@@ -101,4 +101,15 @@ test('alwaysAllowRules: Bash は部品ごとの前方一致、MCP はツール�
   for (const tool of ['Write', 'WebFetch', 'AskUserQuestion', 'ExitPlanMode']) assert.deepEqual(alwaysAllowRules(tool, {}, '/w', ''), [], tool)
   assert.equal(ruleLabel({ toolName: 'Bash', ruleContent: 'gh pr:*' }), 'Bash(gh pr:*)')
   assert.equal(ruleLabel({ toolName: 'mcp__github__create_issue' }), 'mcp__github__create_issue')
+})
+
+// ---- #724: ルールが効く範囲を言葉で出す（狭く見せない）
+test('ruleScope: Bash のルールは「その語で始まるコマンド」、MCP はそのツールの呼び出し', () => {
+  assert.equal(ruleScope('Bash(python3:*)'), '「python3」で始まるコマンド')
+  assert.equal(ruleScope('Bash(gh pr:*)'), '「gh pr」で始まるコマンド')
+  assert.equal(ruleScope('Bash(FOO=1 touch:*)'), '「FOO=1 touch」で始まるコマンド')
+  assert.equal(ruleScope('mcp__github__create_issue'), '「mcp__github__create_issue」の呼び出し')
+  // ヒアドキュメントを python3 に渡した 1 回でも、出るのは python3 全部の範囲
+  const [rule] = alwaysAllowRules('Bash', { command: "python3 - <<'EOF'\nprint(1)\nEOF" }, '/w', '')
+  assert.equal(ruleScope(ruleLabel(rule!)), '「python3」で始まるコマンド')
 })

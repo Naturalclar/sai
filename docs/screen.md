@@ -481,7 +481,7 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 | | |
 | --- | --- |
 | 書き方 | 語・引用符・`&&` `||` `;` `|`・サブシェル `( … )`・コマンド置換 `$( … )`・コメント・`2>&1` や `>/dev/null` だけ。**変数（`$X`）・バッククォート・ファイルへのリダイレクト・ヒアドキュメント・代入・`for` / `if`・バックスラッシュ・波括弧があれば通さない** |
-| コマンド | `echo` `pwd` `date` `cat` `head` `tail` `wc` `sort` `uniq` `cut` `tr` `ls` `grep` `find` `sed -n 'Np'` と、`git` / `gh` の読むサブコマンド（`git status` / `log` / `diff` / `show` / `rev-parse` …、`gh pr view` / `list` / `checks` / `diff`、GET の `gh api`）。**ここに無いコマンドは通さない**（`rm`・`git commit` / `push`・`gh pr merge` / `create`・`cd`・`printf`・`jq`・`rg`・シェル・`python3`・`pnpm`・`curl`・`tmux`・`env` / `printenv` など） |
+| コマンド | `echo` `pwd` `date` `cat` `head` `tail` `wc` `sort` `uniq` `cut` `tr` `ls` `grep` `find` `sed -n 'Np'` と、`git` / `gh` の読むサブコマンド（`git status` / `log` / `diff` / `show` / `rev-parse` …、`gh pr view` / `list` / `checks` / `diff`、決まった口への GET の `gh api`）。**ここに無いコマンドは通さない**（`rm`・`git commit` / `push`・`gh pr merge` / `create`・`cd`・`printf`・`jq`・`rg`・シェル・`python3`・`pnpm`・`curl`・`tmux`・`env` / `printenv` など） |
 | フラグ | コマンドごとに、読むだけと分かっているものを 1 語ずつ（`sort -o`・`tail -f`・`grep -r`・`find -exec` / `-delete`・`git diff --output`・`git -C`・`gh … --jq`・省略形・まとめた短いフラグは通さない） |
 | グロブと `~` | 引用符の外の `*` `?` `[` と、語の頭の `~` は通さない（シェルがファイルの名前に展開して、読む先やフラグになる）。`ls` の引数だけは受ける。パターンは引用符で囲む |
 | 読む先 | cwd の中だけ（`..` も通さない）。`.env`・鍵・トークンの類（返答に出てきたファイルを読む口と同じ判定を、階層ごとに）は通さない |

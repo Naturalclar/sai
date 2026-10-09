@@ -67,6 +67,8 @@ interface Word {
   glob: boolean
   /** 引用符の外の `~` で始まる（シェルがホームに展開する） */
   tilde: boolean
+  /** 引用符の外に `^` がある */
+  caret: boolean
   /** 二重引用符の外に `$( … )` がある（bash は結果を空白で割り、グロブとして展開する） */
   loose: boolean
   /** 引用符の外に `^` か、頭でない `~` がある（zsh の拡張グロブ。`extendedglob` が入っていると `^README.md` はほかの全部のファイルに展開される） */
@@ -96,8 +98,11 @@ const lit = (w: Word | undefined): string => {
   if (w.glob || w.tilde || w.xglob) return refuse('path')
   return w.text
 }
-/** git の語。リビジョンの `HEAD^`・`HEAD~2` は受ける（git が読むのは追跡しているものだけなので、展開されても読む先は広がらない） */
-const gitLit = (w: Word | undefined): string => (w && !w.opaque && !w.glob && !w.tilde && !(w.xglob && w.bare && w.text.startsWith('^')) ? w.text : lit(w))
+/**
+ * git の語。リビジョンの `HEAD~2` は受ける。**引用符の外の `^` は受けない**（zsh の拡張グロブでは語のどこにあっても否定で、
+ * `.e^` は `.env` に、`''^-x` は cwd のほぼ全部の名前に展開される）。`'HEAD^'` と引用符で囲めば字のまま
+ */
+const gitLit = (w: Word | undefined): string => (w && !w.opaque && !w.glob && !w.tilde && !w.caret ? w.text : lit(w))
 
 /** 読む先のパス。cwd の中で、秘密のファイルでないこと。`glob` はグロブを受けるか（中身を出すコマンドでは受けない） */
 function readPath(w: Word, place: Place, glob = false): string {
@@ -107,8 +112,8 @@ function readPath(w: Word, place: Place, glob = false): string {
   // 名前の字は ASCII だけ（大文字小文字を区別しないファイルシステムは、`ſecrets.yml` を `secrets.yml` として開く）
   // eslint-disable-next-line no-control-regex
   if (/[^\x20-\x7e]/.test(text)) return refuse('path')
-  // `.` で始まるグロブ（`ls .*`・`ls .?`）は、古い bash では `..` にも当たる
-  if (w.glob && text.split('/').some((seg) => /^\.[.*?[]/.test(seg))) return refuse('path')
+  // グロブの語は、`.` で始まる階層を受けない（`ls .*` は古い bash では `..` にも当たり、`ls .ss*` は `.ssh` の中の名前を並べる）
+  if (w.glob && text.split('/').some((seg) => seg.startsWith('.') && seg !== '.')) return refuse('path')
   // `..` はどこにあっても受けない（`link/../x` は、`link` が外へのシンボリックリンクなら外を読む）
   if (text.split('/').includes('..')) return refuse('path')
   const abs = normalize(text.startsWith('/') ? text : `${place.dir}/${text}`)
@@ -143,6 +148,8 @@ function takeFlags(args: readonly Word[], spec: FlagSpec, place: Place): Word[] 
       rest.push(w)
       continue
     }
+    // フラグは、フラグでない語より前だけ（`cut -f1 a.txt -d .env` は、macOS では `-d` と `.env` もファイルとして開く）
+    if (rest.length > 0) return refuse('flag')
     const text = lit(w)
     if (text === '--') {
       rest.push(...args.slice(i + 1))
@@ -259,14 +266,17 @@ const GIT_SHORT = /^-(?:[psqnwbrtvaz]|\d+|U\d+|n\d+)$/
 const gitArgs = (args: readonly Word[]): string[] => {
   /** フラグでない語（リビジョン・パス・フラグの値） */
   const plain: string[] = []
+  let afterDash = false
   for (const w of args) {
     const text = gitLit(w)
-    // 署名を確かめる書式（`%G?`・`%GS`・`%(signature)`）は `gpg` / `ssh-keygen` を起こす（どれを起こすかはコミットの中身で決まる）
-    if (/%G|%\(signature/.test(text)) refuse('flag')
+    // 署名を確かめる書式・並べ替え（`%G?`・`%GS`・`%(signature)`・`%(*signature)`・`--sort=signature`）は `gpg` / `ssh-keygen` を起こす（どれを起こすかはコミットの中身で決まる）
+    if (/%G|signature/i.test(text)) refuse('flag')
     if (text === '--') {
       plain.push(text)
+      afterDash = true
       continue
     }
+    if (afterDash && text.startsWith('-')) refuse('flag')
     if (text.startsWith('--')) {
       const eq = text.indexOf('=')
       if (!GIT_LONG.has(text.slice(2, eq < 0 ? undefined : eq))) refuse('flag')
@@ -279,11 +289,12 @@ const gitArgs = (args: readonly Word[]): string[] => {
     // フラグでない語（リビジョン・パス・フラグの値）: リポジトリの外を指す形（`git diff /etc/a /etc/b` は外のファイルを読む）と、
     // 秘密のファイルの名前（`HEAD:.env`・`-- .env`）は受けない
     // グロブの字を含む語（引用符で囲んだ pathspec `'.en*'`）も受けない: 名前で秘密と見分けられない
-    if (text.startsWith('/') || text.split(/[/:]/).includes('..') || /[*?[]/.test(text)) refuse('path')
+    // pathspec のマジック（`:(top)…`）とバックスラッシュ（ワイルドカード扱いになる）も、名前の検査を外すので受けない
+    if (text.startsWith('/') || text.startsWith(':') || text.split(/[/:]/).includes('..') || /[*?[\\(]/.test(text)) refuse('path')
     // 名前の字は ASCII だけ（大文字小文字を区別しないファイルシステムは、`ſecrets.yml` を `secrets.yml` として開く）
     // eslint-disable-next-line no-control-regex
     if (/[^\x20-\x7e]/.test(text)) refuse('path')
-    if (text.slice(text.lastIndexOf(':') + 1).split('/').some((seg) => seg && isSecretPath(seg))) refuse('secret')
+    if (text.split(/[/:]/).some((seg) => seg && isSecretPath(seg))) refuse('secret')
     plain.push(text)
   }
   return plain
@@ -310,11 +321,9 @@ const gitCheck: Check = (args) => {
   if (GIT_READS.has(sub)) {
     const plain = gitArgs(rest)
     if (sub === 'diff') {
-      // リポジトリの外では、パスを 2 つ渡した `git diff a b` が `diff -r`（ディレクトリの中のファイルの中身を全部出す）になる。
-      // フラグでない語は 1 つまで。2 つ以上は `<リビジョン> -- <パス…>` の形だけ（頭がリビジョンと分かる語）
-      const cut = plain.indexOf('--')
-      const words = plain.filter((t) => t !== '--')
-      if (words.length >= 2 && !(cut === 1 && /^HEAD\b|\.\.|[~^@]|^[0-9a-f]{7,40}$/.test(plain[0]!))) refuse('path')
+      // リポジトリの外では、パスを 2 つ渡した `git diff a b` が `diff -r`（ディレクトリの中のファイルの中身を全部出す）になる
+      // （`--` は捨てられるので、`git diff a -- b` も同じ）。フラグでない語は 1 つまで
+      if (plain.filter((t) => t !== '--').length >= 2) refuse('path')
     }
     return
   }
@@ -322,8 +331,9 @@ const gitCheck: Check = (args) => {
   if (!list) return refuse('command')
   // 一覧する形のフラグだけ。フラグでない語（ブランチの名前など）が来たら「作る・消す」かもしれないので通さない
   // （`stash list`・`worktree list`・`reflog show` は、その語そのものが形）
-  for (const w of rest) if (!list.test(lit(w)) || /%G|%\(signature/.test(w.text)) refuse('flag')
-  if ((sub === 'stash' || sub === 'worktree') && rest.length === 0) refuse('flag')
+  for (const w of rest) if (!list.test(lit(w)) || /%G|signature/i.test(w.text)) refuse('flag')
+  // `stash list`・`worktree list` はその 1 語だけ、`remote` は引数なしだけ
+  if (sub === 'stash' || sub === 'worktree' ? rest.length !== 1 : sub === 'remote' && rest.length !== 0) refuse('flag')
 }
 
 /** gh の読むサブコマンド（`gh pr view`）。`api` は下で別に見る */
@@ -344,8 +354,11 @@ const GH_BARE = new Set(['--comments', '--paginate', '--name-only', '--patch', '
 /** `--jq` / `-q` / `--template` は入れない（jq の式は環境変数を出せて、終わらない式も書ける。式の中身を読み切れない） */
 const GH_VALUE = new Set(['--json', '--limit', '-L', '--state', '-s', '--search', '-S', '--author', '-A', '--assignee', '--label', '-l', '--base', '-B', '--head', '-H', '--branch', '-b', '--workflow', '--user', '--event', '--status', '--commit', '--milestone'])
 const GH_REPO = /^[\w.-]+\/[\w.-]+$/
-/** `gh api` で読む先。GET だけ（メソッド・フィールド・入力・ヘッダのフラグは、受けるフラグに無いので通らない） */
-const GH_API_PATH = /^\/?(?:repos|users|orgs|rate_limit)(?:\/(?!\.\.?(?:\/|\?|$))[\w.@%+=:,-]+)*(?:\?[\w.@%+=:,&-]*)?$/
+/**
+ * `gh api` で読む先。GET だけ（メソッド・フィールド・入力・ヘッダのフラグは、受けるフラグに無いので通らない）。
+ * リポジトリの下の、決まった口だけ（`hooks`・`keys`・`secrets` のように URL や鍵の名前が出る口は入れない）。`%` と、`.` で始まる階層は受けない
+ */
+const GH_API_PATH = /^\/?(?:rate_limit|repos\/[\w-][\w.-]*\/[\w-][\w.-]*(?:\/(?:pulls|issues|commits|branches|tags|releases|compare|labels|milestones|contributors|languages|check-runs|statuses|actions\/runs)(?:\/[\w-][\w.+=:,-]*)*)?)(?:\?[\w.+=:,&-]*)?$/
 const ghCheck: Check = (args) => {
   const words = args.map(lit)
   let i = 0
@@ -439,36 +452,45 @@ class Reader {
       pipeline = []
     }
     let expectCommand = true
+    /** `&&` / `||` のあとで、まだコマンドが来ていない */
+    let dangling = false
+    /** この並びで読んだコマンドの数 */
+    let count = 0
     for (;;) {
       this.blanks(expectCommand)
       const c = this.text[this.i]
       if (c === undefined) {
-        if (close || (expectCommand && pipeline.length > 0)) refuse('syntax')
+        if (close || (expectCommand && (pipeline.length > 0 || dangling))) refuse('syntax')
         endPipeline()
         break
       }
       if (c === ')') {
-        if (!close || (expectCommand && pipeline.length > 0)) refuse('syntax')
+        // 空の括弧・区切り（`&&` `||` `|`）のあとにコマンドが無い形は、シェルでは構文エラー
+        if (!close || (expectCommand && (pipeline.length > 0 || dangling)) || count === 0) refuse('syntax')
         this.i++
         endPipeline()
         break
       }
       if (!expectCommand) {
         // コマンドのあとは区切りだけ
+        dangling = false
         if (c === '\n' || c === ';') {
           this.i++
           endPipeline()
         } else if (this.text.startsWith('&&', this.i) || this.text.startsWith('||', this.i)) {
           this.i += 2
           endPipeline()
+          dangling = true
         } else if (c === '|' && this.text[this.i + 1] !== '&') {
           this.i++
         } else refuse('syntax')
         expectCommand = true
         continue
       }
+      count++
       if (c === '(') {
-        // サブシェル。中の `cd` は外に効かないので、場所は写しを渡す
+        // サブシェル。`((` は算術なので受けない
+        if (this.text[this.i + 1] === '(') refuse('syntax')
         this.i++
         this.list({ ...place }, true)
         pipeline.push('(')
@@ -526,7 +548,7 @@ class Reader {
   /** 語 1 つ。素の字・`'…'`・`"…"`・`$( … )` だけでできていること */
   private word(place: Place): Word {
     const start = this.i
-    const w: Word = { text: '', opaque: false, bare: true, glob: false, tilde: this.text[start] === '~', xglob: false, loose: false }
+    const w: Word = { text: '', opaque: false, bare: true, glob: false, tilde: this.text[start] === '~', xglob: false, loose: false, caret: false }
     for (;;) {
       const c = this.text[this.i]
       if (c === undefined || c === ' ' || c === '\t' || c === '\n' || c === ';' || c === '|' || c === '&' || c === ')') break
@@ -564,13 +586,14 @@ class Reader {
       } else if (PLAIN.test(c!)) {
         if (c === '*' || c === '?' || c === '[') w.glob = true
         if (c === '^' || (c === '~' && this.i > start)) w.xglob = true
+        if (c === '^') w.caret = true
         w.text += c
         this.i++
       } else refuse('syntax')
     }
     if (this.i === start) refuse('syntax')
     // `=cmd`（zsh の展開）は、素の語の頭で意味が変わる。代入（`X=1 cmd`）は、コマンドの名前の形でないので下で断られる
-    if (this.text[start] === '=') refuse('syntax')
+    if (this.text[start] === '=' || w.text.startsWith('=')) refuse('syntax')
     return w
   }
 
@@ -600,7 +623,8 @@ export function notReadOnly(command: string, cwd: string): NotReadOnly | '' {
   // 字の種類を先に絞る: タブ・改行以外の制御文字（`\r` も）は読めない側
   // eslint-disable-next-line no-control-regex
   if (!command.trim() || command.length > READ_ONLY_MAX_CHARS || /[\u0000-\u0008\u000b-\u001f\u007f]/.test(command)) return 'syntax'
-  const root = cwd ? normalize(cwd) : ''
+  // cwd は絶対パスのときだけ信じる（相対・`~/…` は、どこを指すか分からない）
+  const root = cwd.startsWith('/') ? normalize(cwd) : ''
   try {
     const reader = new Reader(command)
     reader.list({ dir: root, root }, false)

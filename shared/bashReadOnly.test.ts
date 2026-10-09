@@ -22,7 +22,6 @@ test('notReadOnly: 読むだけと分かっているコマンドと構文だけ�
     'git log --oneline | head -5',
     'git diff --stat 2>/dev/null | tail -3',
     'git status # いまの状態',
-    'git diff HEAD~1 -- src/a.ts src/b.ts',
     'git diff main..HEAD --stat',
     'git diff --stat src',
     "git log --format='%h %s' -3",
@@ -497,10 +496,65 @@ test('notReadOnly: 入れていないコマンドと形は通さない（printf�
     '(git status # x\n)',
   ]
   assert.deepEqual(fourth.map((c) => [c, check(c)]).filter(([, got]) => got === ''), [])
+  // 5 回目のレビューで見つかった形（#754）
+  const fifth = [
+    'cut -f1 a.txt -d .env',
+    'cut -f 1 a.txt -d /etc/passwd',
+    'cut -f 1 a.txt -c /etc/passwd',
+    'sort a.txt -k /etc/passwd',
+    'grep x a.txt -e /etc/passwd',
+    "git log ''^-x",
+    'git log ""^main',
+    'git log -p -- .e^',
+    'git diff -- s^x',
+    'git show HEAD^',
+    "git for-each-ref '--format=%(*signature)'",
+    "git tag '--format=%(*signature)'",
+    "git branch '--format=%(*signature:grade)'",
+    'git branch --sort=signature',
+    'git tag --sort=signature',
+    'git for-each-ref --sort=signature',
+    'git for-each-ref --sort signature',
+    'git for-each-ref --sort=-signature:key',
+    'git diff node_modules/@scope -- config',
+    'git diff a..b -- config',
+    'git diff deadbeef -- config',
+    'git diff HEAD-old -- config',
+    'git diff HEAD~1 -- src/a.ts src/b.ts',
+    'git diff docs -- -s',
+    "git log -p -- ':(top)id_rsa'",
+    "git log -p -- ':(top).npmrc'",
+    "git diff -- ':(top).ssh/config'",
+    "git diff -- ':(literal).netrc'",
+    "git log -p -- '.\\env'",
+    "git diff -- 'id\\_rsa'",
+    "git show 'HEAD:.ssh/a:b'",
+    'ls .e*',
+    'ls .gi*',
+    'ls -la .ss*',
+    'ls &&',
+    'ls ||',
+    '()',
+    '( )',
+    '((true))',
+    '((git status))',
+    "git remote ''",
+    'git stash list list',
+    'gh api repos/o/r/%2e%2e/%2e%2e/user/emails',
+    'gh api repos/o/r/hooks',
+    'gh api repos/o/r/keys',
+    'gh api repos/o/r/actions/secrets',
+    'gh api users/x',
+    "cat ''=ls",
+  ]
+  assert.deepEqual(fifth.map((c) => [c, check(c)]).filter(([, got]) => got === ''), [])
+  // cwd が絶対パスでなければ、読む先のある形は通さない
+  assert.equal(check('cat a.txt', '~/repo'), 'path')
+  assert.equal(check('cat a.txt', 'repo'), 'path')
   // パイプの出力を読む形なら通る
   for (const c of ['git log --oneline | grep fix', 'git status --short | wc -l', 'ls | sort | uniq -c | head -5', 'git ls-files | tr a-z A-Z', "cat a.txt | sed -n '1,5p'", 'cat a.txt | cut -d: -f1 | sort -u']) assert.equal(check(c), '', c)
-  // git のリビジョンの `^` `~` は受ける（git が読むのは追跡しているものだけ）
-  for (const c of ['git show HEAD^', 'git log HEAD~3..HEAD', 'git diff HEAD~1 --stat']) assert.equal(check(c), '', c)
+  // git のリビジョンの `~` は受ける。`^` は引用符で囲んだときだけ
+  for (const c of ["git show 'HEAD^'", 'git log HEAD~3..HEAD', 'git diff HEAD~1 --stat', 'git diff main..HEAD', 'git diff -- src/a.ts', 'gh api repos/o/r/pulls/12/commits', 'gh api rate_limit']) assert.equal(check(c), '', c)
 })
 
 test('notReadOnly: コマンド置換の結果を渡してよいのは echo だけ', () => {

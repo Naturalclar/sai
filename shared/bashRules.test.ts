@@ -213,13 +213,13 @@ test('cd ~/…: ホームが分からない・~user・引用符つきの ~ は�
   for (const cd of ["cd '~/work/repo/sub'", 'cd "~/work/repo/sub"', 'cd \\~/work/repo/sub', "cd ~'/work/repo/sub'", 'cd ~/work/"repo"/sub']) {
     assert.deepEqual(h(`${cd} && node -v`), { reason: 'cd_form' }, cd)
   }
-  // 同じコマンドの中で HOME に触っていたら、行き先はサーバのホームと違いうる
-  for (const before of ['export HOME=/tmp/x', 'HOME=/tmp/x', 'unset HOME', 'declare -x HOME=/tmp/x', 'readonly HOME']) {
-    assert.deepEqual(h(`${before} && cd ~/work/repo && node -v`), { reason: before === 'HOME=/tmp/x' ? 'assign_only' : 'cd_form' }, before)
+  // 読み替えるのは最初の部品だけ。前に何かあると、そこで HOME が変わっていても見抜けない（#751 のレビュー）
+  for (const before of ['export HOME=/tmp/x', 'unset HOME', 'export HOME+=/else', 'command source ./env.sh', 'X=1 eval x', 'source ./env.sh', 'node -v', 'cd sub']) {
+    assert.deepEqual(h(`${before} && cd ~/work/repo && node -v`), { reason: 'cd_form' }, before)
   }
-  assert.deepEqual(h('HOME=/tmp/x node -v; cd ~/work/repo && node -v'), { reason: 'cd_form' }, '代入つきのコマンドのあと')
-  for (const before of ['source ./env.sh', '. ./env.sh', 'eval x']) assert.deepEqual(h(`${before}; cd ~/work/repo && node -v`), { reason: 'cd_form' }, before)
   assert.deepEqual(h('cd ~/work/repo && export HOME=/tmp/x && node -v'), { prefixes: ['export', 'node'] }, 'cd のあとで触るのは行き先に効かない')
+  // 行の継続のすぐあとの ~ は、引用符つきではない
+  assert.deepEqual(h('cd \\\n~/work/repo && node -v'), { prefixes: ['node'] })
   assert.deepEqual(bashRulePlan('cd ~/work/repo && node -v', IN_HOME, ''), { reason: 'cd_form' }, 'ホームが空')
   assert.deepEqual(h('cd ~other/work && node -v'), { reason: 'cd_form' })
   assert.deepEqual(h('cd ~+ && node -v'), { reason: 'cd_form' })
@@ -250,7 +250,7 @@ test('ヒアドキュメント: コードを受け取るコマンド（python3 /
 
 test('ヒアドキュメント: gh / git でも、本文を文章として受け取ると分かっている形だけ（先頭の語では決めない。#751 のレビュー）', () => {
   // 本文を操作・コード・鍵として受け取るサブコマンド
-  for (const head of ['git apply', 'git am', 'git update-ref --stdin', 'git fast-import', 'git -c alias.x=!sh x', 'git -c core.editor=x commit -F -', 'git hash-object -w --stdin', 'gh auth login --with-token', 'gh api --input - repos/o/r/issues', 'gh api -F - x', 'gh extension exec foo', 'gh secret set X', 'gh issue comment 1', 'gh issue comment 1 --body-file body.md', 'git commit -F msg.txt', 'git commit', 'git tag -F - v1', 'FOO=1 gh issue comment 1 --body-file -']) {
+  for (const head of ['git apply', 'git am', 'git update-ref --stdin', 'git fast-import', 'git -c alias.x=!sh x', 'git -c core.editor=x commit -F -', 'git hash-object -w --stdin', 'gh auth login --with-token', 'gh api --input - repos/o/r/issues', 'gh api -F - x', 'gh extension exec foo', 'gh secret set X', 'gh issue comment 1', 'gh issue comment 1 --body-file body.md', 'gh pr checkout 1 -F -', 'gh issue list -F -', 'gh release upload v1 -F -', 'git commit -F msg.txt', 'git commit', 'git tag -F - v1', 'FOO=1 gh issue comment 1 --body-file -']) {
     assert.deepEqual(h(doc(head, 'x')), { reason: 'heredoc' }, head)
   }
   for (const [head, prefix] of [['gh issue create --title t --body-file -', 'gh issue'], ['gh pr comment 1 -F -', 'gh pr'], ['gh release create v1 --notes-file x --body-file=-', 'gh release'], ['git commit -q --allow-empty --file -', 'git commit'], ['git commit --file=-', 'git commit']] as const) {
@@ -312,4 +312,29 @@ test('記録で多かった形（作り物 12 個）: 前はどれも組めな�
   ]
   for (const [command, ok] of cases) assert.equal('prefixes' in h(command), ok, command)
   assert.equal(cases.filter(([, ok]) => ok).length, 5)
+})
+
+test('場所を変えるほかの形は読めない形にする: pushd / popd・command cd・CDPATH に触ったあとの相対の cd（#751 のレビュー）', () => {
+  assert.deepEqual(h('pushd /tmp && node -v'), { reason: 'cd_form' })
+  assert.deepEqual(h('pushd sub && node -v && popd'), { reason: 'cd_form' })
+  assert.deepEqual(h('command cd /tmp && node -v'), { reason: 'cd_form' })
+  assert.deepEqual(h('builtin cd sub && node -v'), { reason: 'cd_form' })
+  for (const before of ['export CDPATH=/tmp', 'CDPATH=/tmp node -v', 'export CDPATH+=:/tmp', 'source ./env.sh', '. ./env.sh', 'eval x']) {
+    assert.deepEqual(h(`${before} && cd sub && node -v`), { reason: 'cd_form' }, before)
+  }
+  // 絶対パスの cd は CDPATH を見ない
+  assert.deepEqual(h('export CDPATH=/tmp && cd /home/someone/work/repo/sub && node -v'), { prefixes: ['export', 'node'] })
+  assert.deepEqual(h('command node -v'), { prefixes: ['command'] }, 'cd でない command は今までどおり')
+})
+
+test('"$(cat <<\'EOF\' … )" は、bash と同じ「目印だけの行」でしか閉じない（字下げした目印で閉じたことにしない。#751 のレビュー）', () => {
+  // 字下げした EOF は本文の続き。本物の EOF のあとの rm とリダイレクトが見えている
+  const sneaky = 'git commit -m "$(cat <<\'EOF\'\nmsg\n  EOF\n)" && echo \'\nEOF\n)"; rm -rf x > out.txt #\''
+  assert.deepEqual(h(sneaky), { reason: 'redirect' }, '本物の EOF のあとの `> out.txt` が見えている')
+  assert.deepEqual(h(sneaky.replace(' > out.txt', '')), { reason: 'comment' }, 'リダイレクトを外しても、ルールにはならない')
+  assert.deepEqual(h('git commit -m "$(cat <<\'EOF\'\nmsg\nEOF\n)"'), { prefixes: ['git commit'] })
+  assert.deepEqual(h('git commit -m "$(cat <<\'EOF\'\nmsg\nEOF\n  )"'), { prefixes: ['git commit'] }, '閉じ括弧の字下げは可')
+  assert.deepEqual(h('git commit -m "$(cat <<-\'EOF\'\n\tmsg\n\tEOF\n)"'), { prefixes: ['git commit'] }, '<<- は目印の頭のタブを許す')
+  assert.deepEqual(h('git commit -m "$(cat <<\'EOF\'\nmsg\n\tEOF\n)"'), { reason: 'expansion' }, '<< はタブも許さない')
+  assert.deepEqual(h('git commit -m "$(cat <<\'EOF\'\nmsg\nEOF)"'), { reason: 'expansion' }, '目印と同じ行の閉じ括弧')
 })

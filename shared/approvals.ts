@@ -162,7 +162,7 @@ export const NO_RULE_REASONS: readonly NoRuleReason[] = [...BASH_NO_RULE_REASONS
  * `alwaysAllowRules()` の中身（#724）。ルールが空のときは、**なぜ空か**の種類を一緒に返す（`approvals.jsonl` の `no_rule`）。
  * - Bash: 組めなかった形の種類（`shared/bashRules.ts` の `BashNoRuleReason`）。`cd` しか無くて書くものが無いときは `cd_only`
  * - Bash でも MCP でもないツール（Edit / Read / AskUserQuestion など）: `not_bash`
- * 種類だけで、コマンドの文字・引数・パスは返さない。`home` は `cd ~/…` を読むためのホーム（**省略不可**。本物を渡すのはサーバの `alwaysRules()` だけで、空を渡せば `~` は読めない形のまま。省略できると、あとから足した呼び手だけ別の判定になる）
+ * 種類だけで、コマンドの文字・引数・パスは返さない。`home` は `cd ~/…` を読むためのホーム（**省略不可**。本物を渡すのはサーバの `alwaysPlan()` だけで、空を渡せば `~` は読めない形のまま。省略できると、あとから足した呼び手だけ別の判定になる）
  */
 export function alwaysAllowPlan(toolName: string, input: Record<string, unknown>, cwd: string, home: string): { rules: PermissionRule[]; reason?: NoRuleReason } {
   if (toolName === 'Bash') {

@@ -33,7 +33,7 @@ const HARMLESS_REDIRECT = /^(?:\d*>&\d+|(?:\d*>>?|&>>?|<)\s*\/dev\/null(?![\w./-
  * **走査の中で、二重引用符に当たった位置でだけ**見る（全文に先に置換を掛けると、読み飛ばすヒアドキュメントの本文やコメントの中の
  * 同じ字面まで畳んで、その間のコマンドを見落とす。#751 のレビュー）
  */
-const QUOTED_HEREDOC_OPEN = /^"\$\(cat <<-?(['"])(\w+)\1\n/
+const QUOTED_HEREDOC_OPEN = /^"\$\(cat <<(-?)(['"])(\w+)\2\n/
 
 /**
  * ルールを組めなかった理由の**種類**（#724）。`approvals.jsonl` に残して、どの形が多いかを数える。
@@ -64,7 +64,7 @@ const QUOTED_TAG_HEREDOC = /^\d*<<(-?)[ \t]*(['"])(\w+)\2[ \t]*(?=\n)/
 
 /**
  * ヒアドキュメントを渡してもルールを組む形（#724）。**本文を文章として受け取ると分かっている形だけ**:
- * - `gh issue|pr|release … --body-file -`（`-F -`・`--body-file=-` も）
+ * - `gh issue|pr|release create|comment|edit|review … --body-file -`（`-F -`・`--body-file=-` も）
  * - `git commit … -F -`（`--file -`・`--file=-` も）
  *
  * 先頭の語だけでは決めない（`git apply <<'EOF'`・`gh auth login --with-token <<'EOF'`・`git -c alias.x=!sh x <<'EOF'` は、
@@ -74,7 +74,7 @@ const QUOTED_TAG_HEREDOC = /^\d*<<(-?)[ \t]*(['"])(\w+)\2[ \t]*(?=\n)/
  */
 function takesHeredocAsText(words: readonly string[]): boolean {
   const stdinFile = (flags: readonly string[]) => words.some((w, i) => (flags.includes(w) && words[i + 1] === '-') || flags.some((f) => f.startsWith('--') && w === `${f}=-`))
-  if (words[0] === 'gh') return ['issue', 'pr', 'release'].includes(words[1] ?? '') && stdinFile(['--body-file', '-F'])
+  if (words[0] === 'gh') return ['issue', 'pr', 'release'].includes(words[1] ?? '') && ['create', 'comment', 'edit', 'review'].includes(words[2] ?? '') && stdinFile(['--body-file', '-F'])
   if (words[0] === 'git') return words[1] === 'commit' && stdinFile(['--file', '-F'])
   return false
 }
@@ -134,7 +134,8 @@ function splitParts(command: string): SplitParts | BashNoRuleReason {
     }
     if (c === '\n') lineStart = true
     else if (c !== ' ' && c !== '\t' && c !== '\r') lineStart = false
-    if (c === "'" || c === '"' || c === '\\') wordQuoted = true
+    // 行の継続（`\\` + 改行）は語に何も足さないので数えない
+    if (c === "'" || c === '"' || (c === '\\' && text[i + 1] !== '\n')) wordQuoted = true
     if (c === "'") {
       const end = text.indexOf("'", i + 1)
       if (end < 0) return 'unclosed'
@@ -144,7 +145,8 @@ function splitParts(command: string): SplitParts | BashNoRuleReason {
     }
     if (c === '"') {
       // `"$(cat <<'EOF' … EOF)"` は中身ごと空の語として読む（この形だけは展開でも通った）
-      const wrapped = quotedCatHeredocEnd(text.slice(i))
+      // 頭の字面が合うときだけ残りを写して確かめる（引用符のたびに残り全部を写さない）
+      const wrapped = text.startsWith('"$(cat <<', i) ? quotedCatHeredocEnd(text.slice(i)) : -1
       if (wrapped > 0) {
         word = word ?? ''
         i += wrapped - 1
@@ -231,12 +233,15 @@ function quotedHeredocEnd(rest: string): number {
   return close ? m[0].length + close.index + close[0].length : -1
 }
 
-/** `rest` が `"$(cat <<'EOF'\n … \nEOF\n)"` なら、閉じの `"` までの長さを返す。違う・閉じが無いなら -1 */
+/**
+ * `rest` が `"$(cat <<'EOF'\n … \nEOF\n)"` なら、閉じの `"` までの長さを返す。違う・閉じが無いなら -1。
+ * **本文を閉じるのは bash と同じ「目印だけの行」**（`<<-` のときだけ頭のタブを許す）で、その次の行が `)"`。
+ * 字下げした目印の行（`  EOF`）で閉じたことにすると、bash はまだ本文の中なので、そのあとの読み方がずれて後ろのコマンドを見落とす（#751 のレビュー）
+ */
 function quotedCatHeredocEnd(rest: string): number {
   const m = QUOTED_HEREDOC_OPEN.exec(rest)
   if (!m) return -1
-  // 本文は目印だけの行で閉じる（頭の空白は許す。前の読み方と同じ）。そのすぐあとに `)"`
-  const close = new RegExp(`\\n[ \\t]*${m[2]}\\n?[ \\t]*\\)"`).exec(rest.slice(m[0].length - 1))
+  const close = new RegExp(`\\n${m[1] ? '\\t*' : ''}${m[3]}\\n[ \\t]*\\)"`).exec(rest.slice(m[0].length - 1))
   return close ? m[0].length - 1 + close.index + close[0].length : -1
 }
 
@@ -277,8 +282,8 @@ export function bashRulePlan(command: string, cwd: string, home: string): { pref
   const split = splitParts(command)
   if (typeof split === 'string') return no(split)
   const { parts, quoted } = split
-  // 同じコマンドの中で HOME に触っていたら、`~` の行き先はサーバのホームと違いうる（`export HOME=/x && cd ~/proj`。#751 のレビュー）
-  let homeTouched = false
+  // 前の部品が `cd` の探し方を変えたかもしれない（`CDPATH` に触った・中身の見えない `source` / `.` / `eval`）。そのあとの相対の `cd` は行き先が読めない
+  let cdPathTouched = false
   if (parts.length === 0) return no('empty')
   const prefixes: string[] = []
   // 読むだけのコマンドの接頭辞。ほかに書くルールが無いときだけ使う（下）
@@ -287,8 +292,6 @@ export function bashRulePlan(command: string, cwd: string, home: string): { pref
   let dir = cwd ? normalize(cwd) : ''
   let cd = false
   for (const [index, words] of parts.entries()) {
-    // HOME を名指しする語（代入・`export HOME=…`・`unset HOME`）と、中身の見えない読み込み（`source` / `.` / `eval`）
-    const touchesHome = words.some((w) => /^HOME(?:=|$)/.test(w)) || ['source', '.', 'eval'].includes(words[0] ?? '')
     const env: string[] = []
     let i = 0
     for (; i < words.length - 1 && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i]!); i++) {
@@ -301,14 +304,20 @@ export function bashRulePlan(command: string, cwd: string, home: string): { pref
     if (/[^\w./+-]/.test(first)) return no('odd_command')
     if (KEYWORDS.has(first)) return no('keyword')
     names.push(first)
+    // 場所を変えるほかの形（`pushd` / `popd`・`command cd`・`builtin cd`）は、行き先を追っていないので読めない形にする
+    if (first === 'pushd' || first === 'popd' || ((first === 'command' || first === 'builtin') && ['cd', 'pushd', 'popd'].includes(words[i + 1] ?? ''))) return no('cd_form')
     if (first === 'cd') {
       let target = words[i + 1]
       if (env.length > 0 || words.length !== i + 2 || !target || target.startsWith('-')) return no('cd_form')
       if (target.startsWith('~')) {
         // `~` と `~/…` はホームに読み替える（実機で、プロジェクトの中へ行く `cd ~/…` は中への `cd` と同じく通った。#724）。
-        // ホームが分からない・`~user`・引用符つきの `~`（bash は展開しない）・前の部品で HOME に触っている、は今までどおり読めない形
-        if (!home || homeTouched || quoted.has(`${index}:${i + 1}`) || (target !== '~' && !target.startsWith('~/'))) return no('cd_form')
+        // **コマンドの最初の部品のときだけ**: 前に何かあると、そこで HOME が変わっていても見抜けない
+        // （`export HOME=/x`・`HOME+=…`・`command source env.sh`・`X=1 eval …`。触り方を 1 つずつ追うのをやめた。#751 のレビュー）。
+        // ホームが分からない・`~user`・引用符つきの `~`（bash は展開しない）も、今までどおり読めない形
+        if (!home || index !== 0 || quoted.has(`${index}:${i + 1}`) || (target !== '~' && !target.startsWith('~/'))) return no('cd_form')
         target = `${normalize(home)}${target.slice(1)}`
+      } else if (!target.startsWith('/') && cdPathTouched) {
+        return no('cd_form')
       }
       if (!dir) return no('cd_no_cwd')
       dir = normalize(target.startsWith('/') ? target : `${dir}/${target}`)
@@ -316,7 +325,7 @@ export function bashRulePlan(command: string, cwd: string, home: string): { pref
       cd = true
       continue
     }
-    if (touchesHome) homeTouched = true
+    if (words.some((w) => /^CDPATH(?:\+?=|$)/.test(w)) || ['source', '.', 'eval'].includes(first)) cdPathTouched = true
     if (env.length === 0 && UNASKED.has(first)) {
       if (!unasked.includes(first)) unasked.push(first)
       continue

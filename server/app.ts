@@ -172,7 +172,7 @@ import { AGENT_MESSAGES_FILE, AGENT_TOKEN_FILE, AGENT_TOKEN_HEADER, AgentMessage
 import type { AgentMessage } from './reply/agentMessages.ts'
 import { LOOP_TICK_MS, LOOPS_FILE, LoopStore } from './reply/loops.ts'
 import { WAITS_FILE, WAIT_TICK_MS, WaitStore } from './reply/waits.ts'
-import { isWaitPrompt, WAIT_FAILING_MAX, WAIT_MAX_MS, WAIT_MAX_PER_SESSION, WAIT_POLL_MS, WAIT_READY_MAX_MS, WAIT_WAKES_PER_DAY, waitConfirmed, waitFinishedLate, waitFromRequest, waitLateReason, waitLimitRefusal, waitLive, waitOutcome, waitPrompt, waitPromptLabel, waitResultText, waitWakeable, wakesExhausted } from '../shared/waits.ts'
+import { isWaitPrompt, WAIT_FAILING_MAX, WAIT_MAX_MS, WAIT_MAX_PER_SESSION, WAIT_POLL_MS, WAIT_READY_MAX_MS, WAIT_WAKES_PER_DAY, waitConfirmed, waitFinishedLate, waitFromRequest, waitLateReason, waitLimitRefusal, waitLive, waitOutcome, waitPrompt, waitPromptLabel, waitReplaceable, waitResultText, waitWakeable, wakesExhausted } from '../shared/waits.ts'
 import type { WaitState } from '../shared/waits.ts'
 import { clampInterval, loopAfterRound, loopFromRequest, loopHalt, loopLive, LOOP_NOTE_MAX, loopPrompt, loopPromptLabel } from '../shared/loops.ts'
 import type { LoopState } from '../shared/loops.ts'
@@ -3737,18 +3737,18 @@ export function createApp(
     if (!w || w.status === 'waking' || !waitLive(w.status)) return
     const now = loopNow()
     if (w.status === 'waiting') {
-      const late = now >= Date.parse(w.deadline)
-      if (!late && w.next_check_at && Date.parse(w.next_check_at) > now) return
+      const pastDeadline = now >= Date.parse(w.deadline)
+      if (!pastDeadline && w.next_check_at && Date.parse(w.next_check_at) > now) return
       // 待てる時間を過ぎていても、最後に 1 回は読む（サーバが止まっていた・Mac が眠っていた間に終わっていることがある）
       const ci = prs.ci ? await prs.ci(w.repo, w.pr) : null
       if (waits.get(id, waitId) !== w) return
       const seen = ci ? waitOutcome(ci, Date.parse(w.since), now) : null
       // 「通った」「落ちた」は 1 回見ただけでは信じない（push・回し直しの直後は、前の結果や速いチェックだけが載っていることがある）。
       // 次に確かめたときも同じなら終わり。最後の 1 回（時間切れ）のときはそのまま信じる
-      const outcome = waitConfirmed(seen, w.seen_once, late)
+      const outcome = waitConfirmed(seen, w.seen_once, pastDeadline)
       const { reason: _reason, seen_once: _seen, next_check_at: _next, ...rest } = w
       if (!outcome) {
-        if (late) {
+        if (pastDeadline) {
           waits.set(id, { ...rest, status: 'expired', reason: `${Math.round(WAIT_MAX_MS / 60_000)} 分待ちましたが、CI が終わりませんでした` })
           await waitLog(id, `PR #${w.pr}: 待てる時間を過ぎた（起こしていない）`)
           return
@@ -3876,6 +3876,12 @@ export function createApp(
       next_check_at: waitIso(now + WAIT_POLL_MS),
       url,
       ...(outcome === 'success' || outcome === 'failure' ? { seen_once: outcome } : {}),
+    }
+    // 同じ PR の、自動では起こさないまま残っていた待ちは置き換える（結果は古くなっている）
+    for (const old of waits.of(id).filter((w) => waitReplaceable(w, repo, made.pr))) {
+      waits.remove(id, old.id)
+      waitRetryAt.delete(old.id)
+      waitHeldFor.delete(old.id)
     }
     waits.add(id, wait)
     await waitLog(id, `PR #${made.pr}（${repo}）の CI を待つ（${wait.deadline} まで）`)

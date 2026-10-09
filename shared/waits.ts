@@ -64,6 +64,11 @@ export function waitWakeable(status: WaitStatus): boolean {
   return status === 'waiting' || status === 'ready' || status === 'halted'
 }
 
+/** 同じ PR に預け直すときに置き換えてよい待ち: 終わっていて、自動では起こさないと決めたもの（人が押すのを待っているだけ） */
+export function waitReplaceable(w: Pick<Wait, 'pr' | 'repo' | 'status' | 'late'>, repo: string, pr: number): boolean {
+  return w.status === 'ready' && w.late === true && w.pr === pr && w.repo.toLowerCase() === repo.toLowerCase()
+}
+
 /** `sai_wait_for` の引数を検査する。PR 番号と、起きたときにやることの 1 文だけ（長さ・間隔・回数は受けない） */
 export function waitFromRequest(body: unknown): { pr: number; then: string } | { error: string } {
   const b = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>
@@ -76,8 +81,9 @@ export function waitFromRequest(body: unknown): { pr: number; then: string } | {
 }
 
 /** 預かれない理由（数の上限・同じ PR をもう待っている）。無ければ空 */
-export function waitLimitRefusal(own: readonly Pick<Wait, 'pr' | 'repo' | 'status'>[], repo: string, pr: number): string {
-  const live = own.filter((w) => waitLive(w.status))
+export function waitLimitRefusal(own: readonly Pick<Wait, 'pr' | 'repo' | 'status' | 'late'>[], repo: string, pr: number): string {
+  // 自動では起こさない待ち（`late`）が同じ PR に残っていても、預け直せる（預かるときに置き換える。「終わったら起こします」は嘘になる）
+  const live = own.filter((w) => waitLive(w.status) && !waitReplaceable(w, repo, pr))
   if (live.some((w) => w.pr === pr && w.repo.toLowerCase() === repo.toLowerCase())) return `PR #${pr} の CI はもう待っています（終わったら 1 回起こします）`
   if (live.length >= WAIT_MAX_PER_SESSION) return `同時に待てるのは ${WAIT_MAX_PER_SESSION} 件までです（いま ${live.length} 件）`
   return ''
@@ -132,11 +138,13 @@ export function waitResultText(result: WaitResult | undefined): string {
  * 起こすときに渡す本文。**結果の要点だけ**（状態・落ちたチェックの名前）で、ログは渡さない（#688。大きな出力を文脈に入れない）。
  * 頭は `WAIT_MARK`。起きたターンでやってよいのは結果を読んで報告するまで（マージはしない・別のセッションへ送らない・次の待ちを預けない）
  */
-export function waitPrompt(w: Pick<WaitState, 'pr' | 'repo' | 'then' | 'result' | 'failing'>): string {
+export function waitPrompt(w: Pick<WaitState, 'pr' | 'repo' | 'then' | 'result' | 'failing' | 'late'>): string {
   const failing = w.result === 'failure' && w.failing && w.failing.length > 0 ? [`落ちたチェック: ${w.failing.slice(0, WAIT_FAILING_MAX).join(' / ')}`] : []
   return [
     `${WAIT_MARK}PR #${w.pr}（${w.repo}）: ${waitResultText(w.result) || 'CI はまだ終わっていません（人がいま起こしました）'}`,
     ...failing,
+    // 自動では起こさなかった待ちは、人が押すまで時間が空いている
+    ...(w.late ? ['（この結果は、終わったときに確かめたものです。そのあと push・回し直しがあれば変わっているので、まずいまの状態を確かめてください）'] : []),
     '',
     `預けたときに書いたこと: ${w.then}`,
     '',

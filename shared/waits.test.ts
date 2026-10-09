@@ -90,6 +90,16 @@ test('waitView / waitStatusLine: サーバだけの項目は画面に出さな�
   assert.match(waitStatusLine({ ...base, status: 'halted' }, T0), /起こせませんでした/)
 })
 
+test('waitLimitRefusal / waitPrompt: 自動では起こさない待ちは、同じ PR の預け直しを止めず、数にも入れない。起こす本文には「いまの状態を確かめて」を足す', () => {
+  const lateOne = { pr: 12, repo: 'o/r', status: 'ready' as const, late: true as const }
+  assert.equal(waitLimitRefusal([lateOne], 'O/R', 12), '')
+  assert.match(waitLimitRefusal([{ ...lateOne, late: undefined }], 'o/r', 12), /もう待っています/)
+  assert.match(waitLimitRefusal([lateOne, { pr: 13, repo: 'o/r', status: 'waiting' }], 'o/r', 14), /件まで/, '別の PR の late は枠に数える')
+  assert.equal(waitLimitRefusal([lateOne, { pr: 13, repo: 'o/r', status: 'waiting' }], 'o/r', 12), '')
+  assert.match(waitPrompt({ ...base, result: 'failure', late: true }), /終わったときに確かめたものです/)
+  assert.doesNotMatch(waitPrompt({ ...base, result: 'failure' }), /終わったときに確かめたもの/)
+})
+
 test('waitFinishedLate: 待ち始めてから決めた時間を過ぎて終わったか。線の上までは自動で起こす側。預かった時刻が読めなければ起こさない側', () => {
   assert.equal(waitFinishedLate(base.since, T0), false)
   assert.equal(waitFinishedLate(base.since, T0 + WAIT_AUTO_WAKE_MS), false)

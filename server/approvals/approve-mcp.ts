@@ -22,7 +22,7 @@ import { fileURLToPath } from 'node:url'
 import { ACROSS_HEADING, ACROSS_NOTE, AGENT_REQUEST_MAX, AGENT_SEND_MAX, HELD_NOTE, SEND_COMPACT_ARG, SEND_COMPACT_NOTE, SEND_ITEMS_ARG, SEND_TO_ARG, sendHow, tokensLabel } from '../../shared/agentMessages.ts'
 import { holdingLabel } from '../../shared/holding.ts'
 import { LOOP_MAX_INTERVAL_S, LOOP_MIN_INTERVAL_S, LOOP_TOOL } from '../../shared/loops.ts'
-import { WAIT_FOR_TOOL, WAIT_MAX_MS, WAIT_MAX_PER_SESSION, waitResultText } from '../../shared/waits.ts'
+import { WAIT_AUTO_WAKE_MS, WAIT_FOR_TOOL, WAIT_MAX_MS, WAIT_MAX_PER_SESSION, waitResultText } from '../../shared/waits.ts'
 import type { LoopNextResponse, WaitForResponse } from '../../shared/types.ts'
 import type { AgentSendManyResponse, AgentSendResponse, AgentSessionEntry, AgentSessionsResponse, AgentWaitResponse, ApprovalAnswer, ApprovalRequest } from '../../shared/types.ts'
 
@@ -77,7 +77,7 @@ export const AGENT_TOOLS = [
   {
     name: WAIT_FOR_TOOL,
     description:
-      `「PR の CI が終わったら起こして」を SAI に預ける（#732）。**PR を出した・push したあと、CI の結果を見てから報告したいときに、ターンの終わりで 1 回呼ぶ**。呼んだら待たずにターンを終える（gh pr checks --watch や sleep で待たない。待っている間は SAI が gh で確かめ、あなたのターンは回らない）。CI が終わると（通っても落ちても）SAI がこのセッションを 1 回だけ起こし、結果の要点（通った・落ちたチェックの名前）を渡す。**起きたターンでやってよいのは、結果を確かめて報告するまで**（マージはしない。別のセッションへ送る・次の待ちを預けることもできない）。もうマージ・クローズされていれば預からずにそう返す（「通った」「落ちた」は 1 回では信じないので、預かって確かめてから起こす。全部のチェックが終わってから 1 回）。待てるのはこのセッションのリポジトリの PR だけで、同時に ${WAIT_MAX_PER_SESSION} 件まで、1 件は ${Math.round(WAIT_MAX_MS / 60_000)} 分まで。枠が少ないときは起こされず、人の画面に出る`,
+      `「PR の CI が終わったら起こして」を SAI に預ける（#732）。**PR を出した・push したあと、CI の結果を見てから報告したいときに、ターンの終わりで 1 回呼ぶ**。呼んだら待たずにターンを終える（gh pr checks --watch や sleep で待たない。待っている間は SAI が gh で確かめ、あなたのターンは回らない）。CI が終わると（通っても落ちても）SAI がこのセッションを 1 回だけ起こし、結果の要点（通った・落ちたチェックの名前）を渡す。**起きたターンでやってよいのは、結果を確かめて報告するまで**（マージはしない。別のセッションへ送る・次の待ちを預けることもできない）。もうマージ・クローズされていれば預からずにそう返す（「通った」「落ちた」は 1 回では信じないので、預かって確かめてから起こす。全部のチェックが終わってから 1 回）。待てるのはこのセッションのリポジトリの PR だけで、同時に ${WAIT_MAX_PER_SESSION} 件まで、1 件は ${Math.round(WAIT_MAX_MS / 60_000)} 分まで。枠が少ないときは起こされず、人の画面に出る。**預けてから ${Math.round(WAIT_AUTO_WAKE_MS / 60_000)} 分を過ぎて終わったときも自動では起こされない**（結果は人の画面に出て、人が押したら起きる）ので、人には「CI が長引いたら、画面から起こしてください」と伝えておく`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -234,7 +234,7 @@ export async function agentTool(
         const failing = body.failing && body.failing.length > 0 ? `（落ちたチェック: ${body.failing.join(' / ')}）` : ''
         return textResult(`預かっていません。もう終わっています: ${waitResultText(body.result)}${failing}。このターンで結果を確かめて報告してください`)
       }
-      return textResult(`預かりました。PR #${body.wait?.pr} の CI が終わったら（通っても落ちても）1 回だけ起こします。${body.wait?.deadline ?? ''} までに終わらなければ起こさず、人の画面に出します。待たずにこのターンを終えてください（あと ${body.left} 件預けられます）`)
+      return textResult(`預かりました。PR #${body.wait?.pr} の CI が終わったら（通っても落ちても）1 回だけ起こします。${Math.round(WAIT_AUTO_WAKE_MS / 60_000)} 分を過ぎて終わったときは自動では起こさず、結果を人の画面に出します（人が押したら起きます）。${body.wait?.deadline ?? ''} までに終わらなければ起こさず、人の画面に出します。待たずにこのターンを終えてください（あと ${body.left} 件預けられます）`)
     }
     if (name === LOOP_TOOL) {
       const action = typeof args.action === 'string' ? args.action : ''

@@ -610,8 +610,25 @@ test('待ち始めてから決めた時間のうちに終わった待ちは自�
   assert.equal((await act('W13', w.id, 'wake')).status, 200)
   assert.deepEqual(await poll('W13'), [])
   assert.equal(runner.sent(eid('W13')).length, sentBefore + 1)
-  assert.ok(runner.sent(eid('W13')).at(-1)!.cmd.text.startsWith(`${WAIT_MARK}PR #601（o/r）: CI が落ちました\n落ちたチェック: node (test)`))
+  const woke = runner.sent(eid('W13')).at(-1)!.cmd.text
+  assert.ok(woke.startsWith(`${WAIT_MARK}PR #601（o/r）: CI が落ちました\n落ちたチェック: node (test)`))
+  assert.match(woke, /終わったときに確かめたものです/, '時間が空いているので、いまの状態を確かめさせる')
   runner.finish(eid('W13'))
+  // 起こしたあとは、もう自動でも起きない（1 つの待ちで 1 回）
+  advance(WAIT_POLL_MS * 5)
+  await poll('W13')
+  assert.equal(runner.sent(eid('W13')).length, sentBefore + 1)
+
+  // 自動では起こさないまま残っている待ちがあっても、同じ PR に預け直せる（古いほうは置き換わる。枠も使わない）
+  const stale = await held('W13', 602)
+  advance(WAIT_AUTO_WAKE_MS)
+  await firstSeen(602, RED)
+  assert.equal((await poll('W13'))[0]!.late, true)
+  const redone = await held('W13', 602)
+  const left = await poll('W13')
+  assert.deepEqual(left.map((x) => [x.id, x.status, x.late]), [[redone.id, 'waiting', undefined]])
+  assert.notEqual(redone.id, stale.id)
+  assert.equal((await act('W13', redone.id, 'stop')).status, 200)
 })
 
 test('自動では起こさない待ちも、読み直す量が大きければ要約してから起こす。押されないまま長く経ったら見に行くのをやめる', async () => {

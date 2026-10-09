@@ -133,6 +133,11 @@ test('jevAutoDecision（#553）: この回が閾値未満は none、Bash 以外�
 
 test('jevLogged（#749）: 記録に残す形。届いた確率は小数 3 桁、届いていなければ理由の種類。分からないものを 0 や 1 にしない', () => {
   assert.deepEqual(jevLogged({ safe: 0.971234 }), { jev: 0.971 })
+  // 切り捨てる（丸めると、閾値に届いていなかったものが届いたように読める）
+  assert.deepEqual(jevLogged({ safe: 0.8996 }), { jev: 0.899 })
+  assert.deepEqual(jevLogged({ safe: 0.9996 }), { jev: 0.999 })
+  assert.deepEqual(jevLogged({ safe: 0.9 }), { jev: 0.9 })
+  assert.deepEqual(jevLogged({ safe: 0.97 }), { jev: 0.97 })
   assert.deepEqual(jevLogged({ safe: 0 }), { jev: 0 })
   assert.deepEqual(jevLogged({ safe: 1 }), { jev: 1 })
   assert.deepEqual(jevLogged(undefined), { jev_none: 'not_asked' })

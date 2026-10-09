@@ -128,12 +128,14 @@ export function isJevAuto(value: unknown): value is number {
 }
 
 /**
- * 記録（`approvals.jsonl`）に残す形（#749）。届いた確率は小数 3 桁に丸めて `jev`、届いていなければ理由を `jev_none`。
- * `entry` は Jev に聞いた控え（`JevRisk.peek()`。聞いていなければ undefined）。**分からないものを 0 や 1 にしない**
+ * 記録（`approvals.jsonl`）に残す形（#749）。届いた確率は小数 3 桁に**切り捨てて** `jev`、届いていなければ理由を `jev_none`。
+ * 切り捨てるのは、記録をあとで閾値と比べたときに、実際には閾値に届いていなかったものを「届いていた」と数えないため
+ * （0.8996 を 0.9 と書くと、閾値 0.9 で通ったように見える）。
+ * `entry` は Jev に聞いた控え（`JevRisk.peek()`。聞いていない・Jev を切っているなら undefined）。**分からないものを 0 や 1 にしない**
  */
 export function jevLogged(entry: { safe?: number; failed?: boolean } | undefined): { jev: number } | { jev_none: JevNone } {
   if (!entry) return { jev_none: 'not_asked' }
-  if (entry.safe !== undefined) return { jev: Math.round(entry.safe * 1000) / 1000 }
+  if (entry.safe !== undefined) return { jev: Math.floor(entry.safe * 1000 + 1e-9) / 1000 }
   return { jev_none: entry.failed ? 'failed' : 'pending' }
 }
 

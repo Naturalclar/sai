@@ -299,6 +299,20 @@ test('approvals.jsonl に、答えたときの Jev の確率を残す（#749）�
   // 質問は Jev に聞かない種類
   const question = await answered(base, 'AskUserQuestion', { questions: [{ question: 'どれにする?', options: [] }] })
   assert.deepEqual([question.jev, question.jev_none], [undefined, 'not_asked'])
+  // 確率が届いたあとで Jev を切ってから答えた: 画面にも出していないので、記録にも残さない（#750 のレビュー）
+  {
+    const had = (await rows()).length
+    const res = await fetch(`${base}/api/approvals`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: 'S1@r', tool_name: 'Bash', input: { command: 'zztool late' }, tool_use_id: 't' }) })
+    const id = ((await res.json()) as { approval_id: string }).approval_id
+    await sessions(base)
+    await drain()
+    assert.equal((await sessions(base)).approvals['S1@r']!.find((a) => a.approval_id === id)?.jev, 0.9712, '届いている')
+    await put(base, { jev: false })
+    assert.equal((await fetch(`${base}/api/approvals/${id}/answer`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ behavior: 'allow' }) })).status, 200)
+    for (let i = 0; i < 50 && (await rows()).length === had; i++) await settle()
+    const late = (await rows()).at(-1)!
+    assert.deepEqual([late.jev, late.jev_none], [undefined, 'not_asked'])
+  }
   // Jev を切っている
   await put(base, { jev: false })
   const off = await answered(base, 'Bash', { command: 'zztool other' })
@@ -312,7 +326,7 @@ test('approvals.jsonl に、答えたときの Jev の確率を残す（#749）�
 
   // コマンドの引数・質問の文は書かない（足したのは確率と理由の種類だけ。`rule` に出るルールの頭は今までどおり）
   const text = JSON.stringify(await rows())
-  for (const word of ['secret-flag', 'thing', 'nokey', 'other', 'どれにする']) assert.ok(!text.includes(word), word)
+  for (const word of ['secret-flag', 'thing', 'nokey', 'other', 'late', 'どれにする']) assert.ok(!text.includes(word), word)
 
   // Jev が自動で答えた行にも、その回の確率が残る
   const auto = new Approvals()

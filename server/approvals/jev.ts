@@ -78,8 +78,10 @@ export class JevRisk {
    * `enabled` が false なら聞かず、覚えている確率も付けない。聞いていないものは投げるだけで、今回は付かない
    */
   annotate(map: ApprovalMap, enabled: boolean): ApprovalMap {
-    this.prune()
-    if (!enabled || !this.judge) return map
+    if (!enabled || !this.judge) {
+      this.prune()
+      return map
+    }
     const out: ApprovalMap = {}
     for (const [id, list] of Object.entries(map)) {
       out[id] = list.map((approval) => {
@@ -94,6 +96,9 @@ export class JevRisk {
         return entry.safe === undefined ? approval : { ...approval, jev: entry.safe }
       })
     }
+    // 忘れるのは、いま出ている許可の時刻を進めたあと（#750 のレビュー）。先に忘れると、30 分以上だれも見なかった許可
+    // （タブを閉じていた）の確率を捨てて聞き直し、届く前に人が答えると記録に確率が残らない
+    this.prune()
     return out
   }
 

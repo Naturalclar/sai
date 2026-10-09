@@ -965,13 +965,14 @@ export function createApp(
   /**
    * 答えたことを記録に足す。cwd はセッションの行から（リクエストからは受けない）。コマンドの全文は書かない。`rule` は答える前に組んだ組。
    * `rule` が空なら、空だった理由の種類（`noRule`）を添える（#724）。
-   * その許可に Jev が付けていた確率（届いていなければ理由）も残す（#749。控えを見るだけで、ここからは聞かない）
+   * その許可に Jev が付けていた確率（届いていなければ理由）も残す（#749。控えを見るだけで、ここからは聞かない）。
+   * `jevOn` は答えたときの設定（`settings.json` の `jev`）: 切っていれば、前に聞いた控えが残っていても `not_asked`（画面にも出していない）
    */
-  const logAnswer = (a: Approval, cwd: string, rule: string, by: 'human' | 'jev', behavior: 'allow' | 'deny', remember: boolean, noRule?: NoRuleReason) => {
+  const logAnswer = (a: Approval, cwd: string, rule: string, by: 'human' | 'jev', behavior: 'allow' | 'deny', remember: boolean, jevOn: boolean, noRule?: NoRuleReason) => {
     try {
       const now = Date.now()
       const waited = Math.max(0, Math.round((now - Date.parse(a.since)) / 1000))
-      approvalLog.record({ ts: new Date(now).toISOString(), id: a.id, cwd, tool: a.tool_name, rule, by, behavior, remember, waited_s: Number.isFinite(waited) ? waited : 0, ...(!rule && noRule ? { no_rule: noRule } : {}), ...jevLogged(jevRisk.peek(a.approval_id)) })
+      approvalLog.record({ ts: new Date(now).toISOString(), id: a.id, cwd, tool: a.tool_name, rule, by, behavior, remember, waited_s: Number.isFinite(waited) ? waited : 0, ...(!rule && noRule ? { no_rule: noRule } : {}), ...jevLogged(jevOn ? jevRisk.peek(a.approval_id) : undefined) })
     } catch {
       // 記録できなくても答えは止めない
     }
@@ -1176,7 +1177,7 @@ export function createApp(
         }
         if (decision.kind !== 'allow' || rules.length === 0 || !lowest) continue
         if (!approvals.answer(a.approval_id, { behavior: 'allow', updatedInput: a.input, updatedPermissions: permissionsFor(rules) })) continue
-        logAnswer(a, cwd, rulesKey(labels), 'jev', 'allow', true)
+        logAnswer(a, cwd, rulesKey(labels), 'jev', 'allow', true, true)
         lines.push(`--- ${new Date().toISOString()} ${a.id} Jev が自動で常に許可（この回 ${jevPercent(a.jev!)}%、ルール ${jevPercent(lowest.safe)}%、閾値 ${jevPercent(s.jev_auto)}%）: ${rulesKey(labels)}\n`)
       }
     }
@@ -4317,7 +4318,7 @@ export function createApp(
     if (!approvals.answer(approvalId, answer)) return error(res, 409, 'already answered')
     // 回数に足してから返す（次のポーリングの「何回目」がずれない）。鍵は答える前に組んだ組（答えたあとは設定に書かれて空になる）
     const remembered = rulesKey(rules.map(ruleLabel))
-    logAnswer(current, cwd, remembered, 'human', answer.behavior, !!answer.updatedPermissions, noRule)
+    logAnswer(current, cwd, remembered, 'human', answer.behavior, !!answer.updatedPermissions, (await settingsStore.get()).jev, noRule)
     answered.add(current, answer.behavior, answer.updatedPermissions ? '常に許可' : '')
     return json(res, { ok: true, approval_id: approvalId, behavior: answer.behavior, remembered: answer.updatedPermissions ? remembered : undefined })
   }

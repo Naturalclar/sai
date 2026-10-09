@@ -131,7 +131,8 @@ test('annotate: 覚えた答えは時間が経ったら忘れる（投げてい�
   risk.annotate(mapOf(approval('fast'), approval('slow')), true)
   await settle()
   now = JEV_KEEP_MS + 1
-  // fast は忘れて聞き直す（jev は付かない）。slow は投げている最中なので聞き直さない
+  // 出ていない間に時間が経ったら忘れる（fast は聞き直しになり、jev は付かない）。slow は投げている最中なので忘れない
+  risk.annotate({}, true)
   assert.equal(risk.annotate(mapOf(approval('fast')), true)['S@sai']![0]!.jev, undefined)
   release(0.1)
   await settle()
@@ -196,5 +197,23 @@ test('peek（#749）: 聞いた控えを見るだけ。聞いていなければ 
   assert.equal(risk.peek('a'), undefined, '見なくなってから 30 分で忘れる')
   // 鍵が無ければ何も覚えていない
   assert.equal(new JevRisk(null).peek('a'), undefined)
+})
+
+test('annotate: 長く見られなかった許可でも、まだ出ていれば確率を忘れない（#750 のレビュー。忘れるのは時刻を進めたあと）', async () => {
+  let now = 0
+  const { judge, calls } = fakeJudge(() => 0.97)
+  const risk = new JevRisk(judge, () => now)
+  risk.annotate(mapOf(approval('a')), true)
+  await settle()
+  // 30 分以上だれも見なかった（タブを閉じていた）あとの最初の読み取り
+  now = JEV_KEEP_MS + 60_000
+  const back = risk.annotate(mapOf(approval('a')), true)
+  assert.equal(back['S@sai']![0]!.jev, 0.97, '覚えている')
+  assert.deepEqual(risk.peek('a'), { safe: 0.97 })
+  assert.equal(calls.length, 1, '聞き直さない')
+  // 出ていない許可は今までどおり忘れる
+  now += JEV_KEEP_MS + 1
+  risk.annotate({}, true)
+  assert.equal(risk.peek('a'), undefined)
 })
 

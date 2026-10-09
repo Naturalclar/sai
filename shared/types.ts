@@ -1414,6 +1414,12 @@ export interface ApprovalDecision {
   label: string
   /** 押した後の表示にだけ使う */
   behavior: 'allow' | 'deny'
+  /**
+   * 押すと、**セッションをまたいで残る**（#741。Codex の規則に足される候補 = 今後聞かない・今後も断る。app-server の道の規則の追加と、
+   * 端末のダイアログの「今後も聞かない」）。「セッション中許可」のようにセッションの中だけのものには付けない。
+   * 画面は今回だけのボタンと同じ見た目にしない（`web/src/approvalDecisionClass.ts`）
+   */
+  persists?: true
 }
 
 /** エンティティID → 答え待ちの承認（古い順）。無ければ空 */

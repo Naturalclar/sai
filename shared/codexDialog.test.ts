@@ -289,7 +289,7 @@ test('dialogDecisions: 「今後も聞かない」は範囲が読めたときだ
   const dialog = parseCodexDialog(COMMAND_SCREEN)!
   assert.deepEqual(dialogDecisions(dialog), [
     { id: 'opt-1', label: 'Yes, proceed (y)', behavior: 'allow' },
-    { id: 'opt-2', label: '許可して、`git add` で始まるコマンドを今後聞かない', behavior: 'allow' },
+    { id: 'opt-2', label: '許可して、`git add` で始まるコマンドを今後聞かない', behavior: 'allow', persists: true },
     { id: 'opt-3', label: 'No, and tell Codex what to do differently (esc)', behavior: 'deny' },
   ])
   assert.deepEqual(dialogDecisions(null), [])

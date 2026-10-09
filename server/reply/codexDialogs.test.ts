@@ -217,7 +217,7 @@ test('「今後も聞かない」（#741）: 範囲が読めたときだけ、�
   const approval = (await dialogs.scan([session()]))['T1@repo']![0]!
   assert.deepEqual(approval.decisions, [
     { id: 'opt-1', label: 'Yes, proceed (y)', behavior: 'allow' },
-    { id: 'opt-2', label: '許可して、`git add` で始まるコマンドを今後聞かない', behavior: 'allow' },
+    { id: 'opt-2', label: '許可して、`git add` で始まるコマンドを今後聞かない', behavior: 'allow', persists: true },
     { id: 'opt-3', label: 'No, and tell Codex what to do differently (esc)', behavior: 'deny' },
   ])
   tmux.onKeys = (keys) => {

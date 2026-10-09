@@ -3,6 +3,7 @@ import { answerAsk, askQuestions } from '../../shared/approvals.ts'
 import { countNote, rulesKey } from '../../shared/approvalCounts.ts'
 import { AlwaysRules } from './AlwaysRules'
 import { approvalAction, hotkeyApplies, REPLY_FOR_ATTR } from './approvalKeys'
+import { decisionClass } from './approvalDecisionClass'
 import { api, type Approval } from './api'
 import { AskQuestions } from './AskQuestions'
 import { DialogPreview } from './DialogPreview'
@@ -137,7 +138,8 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false, modeNote =
                 <button
                   type="button"
                   key={decision.id}
-                  className={decision.behavior === 'allow' ? 'allow' : 'deny'}
+                  // 残る候補（#741 の「今後聞かない」「今後も断る」）は、今回だけのボタンと同じ見た目にしない
+                  className={decisionClass(decision)}
                   disabled={busy || done !== null}
                   onClick={() => void send({ behavior: decision.behavior, decision: decision.id })}
                 >

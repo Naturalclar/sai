@@ -172,8 +172,9 @@ test('command approval: 範囲をボタンに書けない規則の追加は出�
   const approval = app.snapshot()['thread-1@repo']![0]!
   assert.deepEqual(approval.decisions, [
     { id: 'd0', label: '許可', behavior: 'allow' },
-    { id: 'd3', label: '「example.com」への通信を今後聞かない', behavior: 'allow' },
-    { id: 'd4', label: '「example.com」への通信を今後も断る', behavior: 'deny' },
+    // 残る候補には印を付ける（画面は「許可」と同じ塗りにしない）。今回かぎりの候補には付けない
+    { id: 'd3', label: '「example.com」への通信を今後聞かない', behavior: 'allow', persists: true },
+    { id: 'd4', label: '「example.com」への通信を今後も断る', behavior: 'deny', persists: true },
     { id: 'd6', label: 'ターンを中止', behavior: 'deny' },
   ])
   // 出していない候補の id は通らない（落とした規則の追加を、id を当てて押させない）

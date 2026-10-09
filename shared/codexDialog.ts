@@ -252,6 +252,8 @@ export function dialogDecisions(dialog: TerminalDialog | null): ApprovalDecision
       id: dialogDecisionId(o),
       label: o === dontAsk?.option ? dontAskLabel(dontAsk.scope) : o.label,
       behavior: DENY_OPTION.test(o.label) ? ('deny' as const) : ('allow' as const),
+      // 「今後も聞かない」は Codex の規則に残る（app-server の道の規則の追加と同じ印。画面は「許可」と同じ塗りにしない）
+      ...(o === dontAsk?.option ? { persists: true as const } : {}),
     }))
 }
 

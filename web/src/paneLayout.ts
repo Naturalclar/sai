@@ -2,10 +2,30 @@
 // DOM に依存しないので paneLayout.test.ts を node:test で回す。並びを持つのは App.tsx（localStorage の `sai.panes`）。
 //
 // **URL（hash）はフォーカスのあるペインの 1 つを指す**（`parseRoute()` は変えない）。並びは URL に載せないので、
-// 「戻る」で戻るのは見ているセッションだけで、並びは戻らない。
+// 「戻る」で戻るのは見ているものだけで、並びは戻らない。
 
-/** ペインに出すもの。種類つきで持つ（要対応もペインに出せるようにするため。フィードは入れない） */
-export type PaneItem = { kind: 'session'; id: string } | { kind: 'todo' }
+/**
+ * ペインに出すもの。種類つきで持つ。セッションのほかは 1 つずつしか無い固定の画面（#759）:
+ * 要対応・PR の一覧・フィード・新しいセッション。PR 1 本（差分とレビュー）と使用量は入れない（全幅のまま）
+ */
+export type PaneItem = { kind: 'session'; id: string } | { kind: PinnedKind }
+
+/** セッション以外の、ペインに出せる画面。**同じものは 2 つ並べない**（`sameItem()` が種類だけで比べる） */
+export const PINNED_KINDS = ['todo', 'prs', 'feed', 'new'] as const
+export type PinnedKind = (typeof PINNED_KINDS)[number]
+
+/** 固定の画面の URL。フォーカスのあるペインの 1 つを URL が指す、のまま（セッションは `sessionHash()`） */
+export const PINNED_HASH: Record<PinnedKind, string> = { todo: '#/todo', prs: '#/prs', feed: '#/feed', new: '#/new' }
+
+/**
+ * URL（route）が指す、ペインに出すもの。出せない画面（PR 1 本・使用量）は null（全幅で出し、戻れば並びも戻る）。
+ * `#/`（`list`）は広い画面ではフィードと同じ表示なので、フィードとして扱う
+ */
+export function routePaneItem(route: { name: string; id?: string }): PaneItem | null {
+  if (route.name === 'session') return route.id ? { kind: 'session', id: route.id } : null
+  if (route.name === 'list') return { kind: 'feed' }
+  return (PINNED_KINDS as readonly string[]).includes(route.name) ? { kind: route.name as PinnedKind } : null
+}
 
 /**
  * 並び。**列の配列で、各列が上から下への配列**（いまはどの列も 1 つ。上下に分けるのを後で足すための形）。
@@ -35,7 +55,8 @@ const nextKey = (keys: readonly number[]): number => keys.reduce((max, k) => Mat
 function itemOf(raw: unknown): PaneItem | null {
   if (typeof raw !== 'object' || raw === null) return null
   const { kind, id } = raw as { kind?: unknown; id?: unknown }
-  if (kind === 'todo') return { kind: 'todo' }
+  // 知らない種類は落とす（新しい種類を足したタブと localStorage を共有しても、古いタブが壊れない）
+  if (typeof kind === 'string' && (PINNED_KINDS as readonly string[]).includes(kind)) return { kind: kind as PinnedKind }
   if (kind === 'session' && typeof id === 'string' && id !== '') return { kind: 'session', id }
   return null
 }
@@ -115,12 +136,30 @@ export function closeColumn(layout: PaneLayout, index: number): PaneLayout {
   return { columns, focus, keys: layout.keys.filter((_, i) => i !== index) }
 }
 
+/**
+ * ペインの中身を、そのペインの中で起きたことで入れ替える（新しいセッションのペインが、起きたセッションになる。#759）。
+ * **フォーカスがどこにあっても `from` の列を入れ替える**（待っている間に隣へ移っていても、隣を潰さない）。フォーカスは入れ替えた列へ。
+ * - `to` がもう並びにあれば、`from` の列を閉じて `to` の列へフォーカスを移す（同じものを 2 つ並べない）
+ * - `from` が並びに無ければ、ふつうに置く（`placeItem()`）
+ */
+export function replaceItem(layout: PaneLayout, from: PaneItem, to: PaneItem): PaneLayout {
+  const at = columnOf(layout, from)
+  if (at < 0) return placeItem(layout, to)
+  const there = columnOf(layout, to)
+  if (there >= 0) {
+    if (there === at) return focusColumn(layout, at)
+    const closed = closeColumn(layout, at)
+    return focusColumn(closed, columnOf(closed, to))
+  }
+  return { ...layout, columns: layout.columns.map((c, i) => (i === at ? [to] : c)), focus: at }
+}
+
 /** ペインにフォーカスを移す（ペインの中を押した） */
 export function focusColumn(layout: PaneLayout, index: number): PaneLayout {
   return index === layout.focus || index < 0 || index >= layout.columns.length ? layout : { ...layout, focus: index }
 }
 
-/** 並んでいるセッションの ID（左から）。要対応のペインは含めない */
+/** 並んでいるセッションの ID（左から）。固定の画面（要対応・PR の一覧・フィード・新しいセッション）のペインは含めない */
 export function sessionIdsIn(layout: PaneLayout): string[] {
   return paneItems(layout).flatMap((item) => (item.kind === 'session' ? [item.id] : []))
 }

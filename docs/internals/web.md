@@ -12,14 +12,19 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 
 ### セッションを横に並べる（#633）
 
-- 並びの形と動かし方は `web/src/paneLayout.ts` の純粋関数（`paneLayout.test.ts`）。`PaneLayout` は **列の配列で、各列が上から下への配列**（いまはどの列も 1 つ。上下を足すための形）と `focus`（フォーカスのある列）、`keys`（列ごとの番号）。要素は種類つき（`session` / `todo`）で、上限は `MAX_COLUMNS` の 1 つ。
+- 並びの形と動かし方は `web/src/paneLayout.ts` の純粋関数（`paneLayout.test.ts`）。`PaneLayout` は **列の配列で、各列が上から下への配列**（いまはどの列も 1 つ。上下を足すための形）と `focus`（フォーカスのある列）、`keys`（列ごとの番号）。要素は種類つき（`session` と、固定の画面 `PINNED_KINDS` = `todo` / `prs` / `feed` / `new`。#759）で、上限は `MAX_COLUMNS` の 1 つ。固定の画面は種類だけで比べるので 2 つ並ばない（`sameItem()`）。`normalizeLayout()` は知らない種類を落とす。
 - 持つのは `App.tsx`（`useLocalState('sai.panes')`。読んだものは毎回 `normalizeLayout()` を通す）。**URL はフォーカスのあるペインの 1 つを指し、`parseRoute()` は変えていない。**
+- URL が指すペインの中身は `routePaneItem(route)`（`#/` はフィード。PR 1 本・使用量は null ＝全幅で、`.panes` には `ChatPane` 1 枚だけを描く。戻れば並びが戻る）。並び → URL の固定の画面の hash は `PINNED_HASH`。
 - URL → 並びは `placeItem()`。**route が変わったときだけ**描画中に合わせる（`placed` に前の route を覚える。effect の中で setState しない）。並び → URL は、操作（`openBeside()` / `focusColumn()` / `closeColumn()`）のあとに `location.hash` を書く。
 - 「いま開いているセッション」は `currentId`（route がセッションのとき、並びのフォーカスの ID）。題名・差分・`SessionView` の `focused` はこれを見る。**`route.id` を直接見るのは `focusTs` / `focusSide`（発言への飛び先）だけ。**
 - 描くのは `.panes` の中の `ChatPane`（`.pane`）で、並べているときだけ `.panes.split`。`ChatPane` の key は並びが持つ列の番号（`PaneLayout.keys`。列の位置ではない）: 中身を入れ替えても番号は変わらず（1 つのときは今までどおり同じ `SessionView` が `id` だけ変わる）、左を閉じた・間に足したときも残った列の番号は動かない。× は見出しでなく `ChatPane` に置く（読み込み中・取得に失敗したペインも閉じられる）。
 - `→` の当て先は `.pane.focused .reply textarea`。ヘッダの取得状況（`onStatus`）はフォーカスのあるペインにだけ本物を渡す。
 - キーボードは `paneKeys.ts` の `paneKey(e, typing)`（`paneKeys.test.ts`）を `App.tsx` の window の keydown が呼ぶ。`%` で入れるセッションは `nextUnshown()`（サイドバーの `visibleIds()` の並びで、いまの次の、まだ出していないもの）。`Ctrl+数字` は `focusPane()` のあと `focusLater` に入力欄を頼む（当て先の `.pane.focused` は描き直したあとに変わるので、その場では当てない）。
-- 要対応のペインは `ChatPane` の `onClickCapture` で `a[href^="#/s/"]` のクリックを先に見て、`openInNeighbor()`（押されたペインの列を起点に）で隣へ開く。`TodoRow` には何も渡していない。
+- 要対応・PR の一覧・フィードのペインは `ChatPane` の `onClickCapture` で `a[href^="#/s/"]` のクリックを先に見て、`openInNeighbor()`（押されたペインの列を起点に）で隣へ開く（`App.tsx` の `openFromPinned()`）。`TodoRow` などの中身には何も渡していない。
+- 新しいセッションのペインは、`NewSessionStarting` の `onArrived`（→ `App.tsx` の `startedInPane()`）が `replaceItem(layout, { kind: 'new' }, セッション)` で**そのペインの列**を入れ替える（フォーカスのある列ではない）。`onArrived` は並びが変わるたびに作り直されるので、effect の依存に入れず ref で持つ。
+- `PrListView` は取得を自分の mount のときと「更新」だけで持つ（ポーリングに乗せない）。ペインの key は列の番号なので、フォーカスを移しても作り直さない（`onStatus` が替わるだけ）。サイドバーの印の `useSessionPrs()` の取得とは別。
+- `FeedView` は `focused` を受けて、許可の `⌘Enter`（`ApprovalBubble` の `hotkey`）をフォーカスのあるときだけにする。フィードは 1 つしか並ばないので、`useGalleries()` / `useDiffSummaries()` の取得はペインの数で増えない。フィードから開いた差分は、フィードのペインが出ている間 `visibleDiff()` に `feed` の route を渡して残す。
+- サイドバーの固定の項目の印は `SessionList` の `pinnedShown`（フォーカスの無い方に出ている種類）。
 - ⌘K の `⌘Enter` は `CommandPalette` の `onOpenBeside(hash)`。許可のバブルの `⌘Enter`（window の capture）が先に拾わないよう、`hotkeyApplies()` の第 3 引数（`role="dialog"` の中で押されたか）で断る。
 - 差分は `visibleDiff()` の第 4 引数に並んでいる ID を渡す（並びのどれかなら出したまま）。モーダルにするかは `useNarrow()`（900px 以下）だけで決め、並べている数は見ない（#647）。
 

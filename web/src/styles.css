@@ -1438,6 +1438,11 @@
   .reply .target { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); min-width: 0; }
   .reply .target b { color: var(--ink); }
   .reply .target code, .mention code { font-family: var(--mono); font-size: 11px; background: var(--chip); padding: 1px 5px; border-radius: 4px; }
+  /* 幅の狭いペイン（フィードを 3 つ並びの 1 つに出したとき。#759）で、ブランチのチップが中で 2 行に割れないように幅で切る */
+  .reply .target code { min-width: 4em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* 先に縮むのはタイトル（ブランチの方が返信先の見分けに効く） */
+  .reply .target .title { flex: 0 100 auto; min-width: 0; }
+  .reply .target b, .reply .target .project, .reply .target .arrow { white-space: nowrap; flex: none; }
   .reply .target .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .reply .target .hint { color: var(--muted); opacity: .7; white-space: nowrap; }
   .reply .target .clear { background: none; border: 0; color: var(--muted); cursor: pointer; font: inherit; padding: 0 4px; line-height: 1; }

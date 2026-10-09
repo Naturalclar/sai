@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import type { PointerEvent } from 'react'
+import type { MouseEvent, PointerEvent } from 'react'
 import type { SessionFilters, SessionsResponse } from './api'
 import type { Polled } from './hooks'
 import { useMediaQuery } from './hooks'
@@ -10,7 +10,7 @@ import { SessionItem } from './SessionItem'
 import { prForSession } from '../../shared/prs.ts'
 import type { PrRepo } from '../../shared/types.ts'
 import type { NavTarget } from './sessionNav'
-import type { PaneItem } from './paneLayout'
+import type { PaneItem, PinnedKind } from './paneLayout'
 import { isCollapsed, type SessionGroup } from './sessionGroups'
 import { pendingItems, todoItems } from '../../shared/todoItems.ts'
 
@@ -37,18 +37,27 @@ interface Props {
   shown?: readonly string[]
   /** 横に並べて開く（#633）。並べられない幅では渡されない */
   onOpenBeside?: ((item: PaneItem) => void) | undefined
-  /** 要対応を、フォーカスの無い方も含めてペインに出している（#633） */
-  todoShown?: boolean
+  /** フォーカスの無い方のペインに出している固定の画面（要対応・PR の一覧・フィード・新しいセッション。#633 / #759） */
+  pinnedShown?: readonly PinnedKind[]
 }
 
+const NO_PINNED: readonly PinnedKind[] = []
+
 /** 左サイドバー。絞り込み、固定の「＋ 新しいセッション」「フィード」「要対応」、その下にセッション一覧（新しい順） */
-export function SessionList({ list, filters, setFilters, active, creating = false, groups, collapsed, onToggleGroup, prs = [], shown = [], onOpenBeside, todoShown = false }: Props) {
+export function SessionList({ list, filters, setFilters, active, creating = false, groups, collapsed, onToggleGroup, prs = [], shown = [], onOpenBeside, pinnedShown = NO_PINNED }: Props) {
   // キーボードで固定項目に移ったとき、サイドバーの一番上まで見えるようにする（SessionItem と同じ扱い）
   const pinnedRef = useRef<HTMLAnchorElement>(null)
   const pinned = active.kind === 'feed' || active.kind === 'todo' || active.kind === 'prs'
   useEffect(() => {
     if (pinned) pinnedRef.current?.scrollIntoView({ block: 'nearest' })
   }, [pinned])
+
+  // 固定の項目の ⌘ + クリック（Ctrl + クリック）は横に並べて開く（#633 / #759。セッションの項目と同じ）
+  const beside = (kind: PinnedKind) => (e: MouseEvent<HTMLAnchorElement>) => {
+    if (!onOpenBeside || !(e.metaKey || e.ctrlKey)) return
+    e.preventDefault()
+    onOpenBeside({ kind })
+  }
 
   const { data, error, updatedAt } = list
   const now = updatedAt?.getTime() ?? 0
@@ -104,30 +113,25 @@ export function SessionList({ list, filters, setFilters, active, creating = fals
       <nav className="channels" onPointerDownCapture={onPointerDownCapture}>
         {/* 新しいセッション（#314）。一番上に置く（フィードの上）。worktree は記録にあるものから選ぶ。
             キーボードで固定項目に移ったときは一番上まで見せたいので、pinnedRef はここ（一番上の項目）に付ける */}
-        <a ref={pinnedRef} className={`item new${creating ? ' active' : ''}`} href="#/new">
+        <a ref={pinnedRef} className={`item new${creating ? ' active' : pinnedShown.includes('new') ? ' beside' : ''}`} href="#/new" onClick={beside('new')}>
           <span className="t">＋ 新しいセッション</span>
           <span className="last">記録にある worktree で Claude / Codex を始める</span>
         </a>
-        <a className={`item feed${active.kind === 'feed' && !creating ? ' active' : ''}`} href="#/feed">
+        <a className={`item feed${active.kind === 'feed' && !creating ? ' active' : pinnedShown.includes('feed') ? ' beside' : ''}`} href="#/feed" onClick={beside('feed')}>
           <span className="t">フィード</span>
           <span className="last">{filters.repo ? `#${filters.repo}` : '全セッション'}を時系列に</span>
         </a>
         {/* 要対応（#224）。件数は一覧と同じ取得結果から数えるので、ここでも取りに行かない */}
         <a
-          className={`item todo${active.kind === 'todo' ? ' active' : todoShown ? ' beside' : ''}`}
+          className={`item todo${active.kind === 'todo' ? ' active' : pinnedShown.includes('todo') ? ' beside' : ''}`}
           href="#/todo"
-          // ⌘ + クリック（Ctrl + クリック）は横に並べて開く（#633。セッションの項目と同じ）
-          onClick={(e) => {
-            if (!onOpenBeside || !(e.metaKey || e.ctrlKey)) return
-            e.preventDefault()
-            onOpenBeside({ kind: 'todo' })
-          }}
+          onClick={beside('todo')}
         >
           <span className="t">要対応{todo > 0 && <span className="n">{todo}</span>}</span>
           <span className="last">{todo > 0 ? 'あなたを待っています' : '待っているものはありません'}</span>
         </a>
         {/* GitHub に出ている PR（#524）。読むだけ。件数は数えない（開いたときにだけ gh で読むので、ここでは取りに行かない） */}
-        <a className={`item prs${active.kind === 'prs' ? ' active' : ''}`} href="#/prs">
+        <a className={`item prs${active.kind === 'prs' ? ' active' : pinnedShown.includes('prs') ? ' beside' : ''}`} href="#/prs" onClick={beside('prs')}>
           <span className="t">PR</span>
           <span className="last">GitHub に出ている PR を見る</span>
         </a>

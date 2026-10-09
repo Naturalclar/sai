@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { HIDDEN_POLL_MS, parseRoute, sessionHash, useHashRoute, useLocalState, usePolling, type Route } from './hooks'
-import { closeColumn, EMPTY_LAYOUT, focusColumn, focusedItem, MAX_COLUMNS, nextUnshown, normalizeLayout, openBeside, openInNeighbor, placeItem, sessionIdsIn, type PaneItem, type PaneLayout } from './paneLayout'
+import { closeColumn, EMPTY_LAYOUT, focusColumn, focusedItem, MAX_COLUMNS, nextUnshown, normalizeLayout, openBeside, openInNeighbor, PINNED_HASH, placeItem, replaceItem, routePaneItem, sessionIdsIn, type PaneItem, type PaneLayout } from './paneLayout'
 import { paneKey } from './paneKeys'
 import { ChatPane } from './ChatPane'
 import { pendingItems, todoItems } from '../../shared/todoItems.ts'
@@ -98,10 +98,13 @@ const EMPTY_PROJECTS: never[] = []
 /** フォーカスの無いペインの取得状況はヘッダに出さない（#633。「更新 hh:mm」はフォーカスのあるペインの分だけ） */
 const NO_STATUS: StatusProps['onStatus'] = () => {}
 
+const FEED_ROUTE = { name: 'feed' }
+/** 並べていないとき、サイドバーに「横に出ている」印は付けない */
+const NO_PINNED: never[] = []
+
 /** フォーカスを移した・ペインを閉じたあと、URL をフォーカスのあるペインに合わせる */
 function goTo(item: PaneItem | null) {
-  if (item?.kind === 'session') location.hash = sessionHash(item.id)
-  else if (item?.kind === 'todo') location.hash = '#/todo'
+  if (item) location.hash = item.kind === 'session' ? sessionHash(item.id) : PINNED_HASH[item.kind]
 }
 
 /**
@@ -120,8 +123,9 @@ export function App() {
   const [storedPanes, setStoredPanes] = useLocalState<PaneLayout>('sai.panes', EMPTY_LAYOUT)
   const layout = useMemo(() => normalizeLayout(storedPanes), [storedPanes])
   const [placed, setPlaced] = useState<Route | null>(null)
-  // ペインに出せるのはセッションと要対応。フィード・PR・新しいセッションは全幅で、戻れば並びも戻る
-  const routeItem = useMemo<PaneItem | null>(() => (route.name === 'session' ? { kind: 'session', id: route.id } : route.name === 'todo' ? { kind: 'todo' } : null), [route])
+  // ペインに出せるのはセッションと、固定の画面（要対応・PR の一覧・フィード・新しいセッション。#759）。
+  // PR 1 本（差分とレビュー）と使用量は全幅で、戻れば並びも戻る
+  const routeItem = useMemo<PaneItem | null>(() => routePaneItem(route), [route])
   if (placed !== route) {
     setPlaced(route)
     if (routeItem) {
@@ -146,6 +150,8 @@ export function App() {
     [split, layout, current],
   )
   const paneIds = useMemo(() => panes.flatMap((p) => (p.item.kind === 'session' ? [p.item.id] : [])), [panes])
+  // 横に出ている固定の画面（サイドバーの印）。並べているときだけ
+  const pinnedShown = useMemo(() => (split ? panes.flatMap((p) => (p.item.kind === 'session' ? [] : [p.item.kind])) : NO_PINNED), [split, panes])
   // ヘッダの「更新 hh:mm」は右側（チャット）の分だけ。サイドバーは自分の失敗を自分の中に出す
   const [status, setStatus] = useState<{ at: Date | null; error: string | null }>({ at: null, error: null })
   // 子の useEffect の依存に入るので、毎回作り直すと無限に再描画する
@@ -186,7 +192,10 @@ export function App() {
   const [commentInsert, setCommentInsert] = useState<{ id: string; text: string; seq: number } | null>(null)
   // 出すのは、いま開いているセッションの分と、フィードのバブルから開いたものはフィードにいる間（#280）。
   // 別のセッションへ移っている間は出さない（戻ってくれば、また出る。閉じるまで覚えておく）。規則は feedDiff.ts
-  const diffOpen = visibleDiff(diff, route, narrow, paneIds)
+  // フィードがペインに出ている間は、フォーカスがほかのペインにあっても「フィードにいる」扱い（#759。フィードから開いた差分を残す）。
+  // 狭い画面の `#/` は一覧だけでフィードは見えていないので、今までどおり route で見る
+  const feedShown = panes.some((p) => p.item.kind === 'feed') && !(narrow && route.name === 'list')
+  const diffOpen = visibleDiff(diff, feedShown && route.name !== 'list' ? FEED_ROUTE : route, narrow, paneIds)
   // ボタンはトグル（出ていれば閉じる。#211）。「いま出ているか」で決めるので、セッションで開いたまま
   // フィードに来て同じセッションのバブルを押しても、閉じずに開く
   const toggleDiff = useCallback((id: string, origin: DiffOrigin = 'session') => setDiff(nextDiff(diffOpen, id, origin)), [diffOpen])
@@ -228,9 +237,9 @@ export function App() {
     },
     [openBesideItem],
   )
-  // 要対応のペインの中の、セッションへ飛ぶリンク（#633）。**要対応は残して、隣のペインに開く**。
-  // 修飾キー付き（新しいタブなど）はブラウザに残す。`index` は押された要対応のペインの列
-  const openFromTodo = useCallback(
+  // 要対応・PR の一覧・フィードのペインの中の、セッションへ飛ぶリンク（#633 / #759）。**元のペインは残して、隣のペインに開く**。
+  // 修飾キー付き（新しいタブなど）はブラウザに残す。`index` は押されたペインの列
+  const openFromPinned = useCallback(
     (e: ReactMouseEvent<HTMLDivElement>, index: number) => {
       if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
       const hash = e.target instanceof Element ? e.target.closest('a[href^="#/s/"]')?.getAttribute('href') : null
@@ -239,6 +248,15 @@ export function App() {
       e.preventDefault()
       setStoredPanes(openInNeighbor({ ...layout, focus: index }, { kind: 'session', id: to.id }))
       location.hash = hash
+    },
+    [layout, setStoredPanes],
+  )
+  // 新しいセッションのペインで始めたセッションの最初の行が届いた（#759）。**そのペインを**起きたセッションに入れ替える
+  // （待っている間にフォーカスを隣へ移していても、隣を潰さない）
+  const startedInPane = useCallback(
+    (id: string) => {
+      setStoredPanes(replaceItem(layout, { kind: 'new' }, { kind: 'session', id }))
+      location.hash = sessionHash(id)
     },
     [layout, setStoredPanes],
   )
@@ -513,7 +531,7 @@ export function App() {
         <aside className="sidebar">
           {/* 幅を固定した箱に入れる。開閉の遷移中に列だけが縮み、中身は折り返さない */}
           <div className="side-inner">
-            <SessionList list={list} filters={filters} setFilters={setFilters} active={active} creating={route.name === 'new'} groups={groups} collapsed={groupUi.collapsed} onToggleGroup={toggleGroup} prs={sessionPrs} shown={split ? paneIds : EMPTY_SESSIONS} todoShown={split && panes.some((p) => p.item.kind === 'todo')} onOpenBeside={narrow ? undefined : openBesideItem} />
+            <SessionList list={list} filters={filters} setFilters={setFilters} active={active} creating={route.name === 'new'} groups={groups} collapsed={groupUi.collapsed} onToggleGroup={toggleGroup} prs={sessionPrs} shown={split ? paneIds : EMPTY_SESSIONS} pinnedShown={pinnedShown} onOpenBeside={narrow ? undefined : openBesideItem} />
           </div>
         </aside>
         <div className={`panes${split ? ' split' : ''}`}>
@@ -530,11 +548,33 @@ export function App() {
                   focused={here}
                   onFocusPane={split ? () => focusPane(index) : undefined}
                   onClose={split ? () => closePane(index) : undefined}
-                  // 要対応の行からセッションへ飛ぶリンクは隣のペインに開く（狭い画面は今までどおり移るだけ）
-                  onClickCapture={item.kind === 'todo' && !narrow ? (e) => openFromTodo(e, index) : undefined}
+                  // 要対応・PR の一覧・フィードの中の、セッションへ飛ぶリンクは隣のペインに開く（狭い画面は今までどおり移るだけ）
+                  onClickCapture={(item.kind === 'todo' || item.kind === 'prs' || item.kind === 'feed') && !narrow ? (e) => openFromPinned(e, index) : undefined}
                 >
                   {item.kind === 'todo' ? (
                     <TodoView list={list} onStatus={here ? onStatus : NO_STATUS} onOpenSidebar={openSidebar} onLeaveToSidebar={focusSidebar} linear={linear} settings={settings} prs={sessionPrs} focused={here} shown={paneIds} onInsertToShown={insertToShown} />
+                  ) : item.kind === 'prs' ? (
+                    // 3 秒のポーリングには乗せない（開いたときと「更新」だけ）。PR 1 本を開くと全幅になり、戻ると並びが戻る
+                    <PrListView onStatus={here ? onStatus : NO_STATUS} onOpenSidebar={openSidebar} />
+                  ) : item.kind === 'new' ? (
+                    <NewSessionView replying={list.data?.replying} now={list.updatedAt?.getTime() ?? 0} onOpenSidebar={openSidebar} onStarted={startedInPane} />
+                  ) : item.kind === 'feed' ? (
+                    <FeedView
+                      selected={filters.projects}
+                      projects={list.data?.filters.projects ?? EMPTY_PROJECTS}
+                      onProjects={(projects) => setFilters({ projects })}
+                      sessions={list.data?.sessions}
+                      selfHost={list.data?.host ?? ''}
+                      openDiff={diffOpen}
+                      onToggleDiff={toggleFeedDiff}
+                      onStatus={here ? onStatus : NO_STATUS}
+                      onOpenSidebar={openSidebar}
+                      onLeaveToSidebar={focusSidebar}
+                      linear={linear}
+                      settings={settings}
+                      prs={sessionPrs}
+                      focused={here}
+                    />
                   ) : (
                     <SessionView
                       id={id}
@@ -557,31 +597,12 @@ export function App() {
               )
             })
           ) : (
+            // ペインに入れない画面（PR 1 本・使用量）は全幅。戻れば並びが戻る
             <ChatPane focused>
-            {route.name === 'prs' ? (
-              <PrListView onStatus={onStatus} onOpenSidebar={openSidebar} />
-            ) : route.name === 'pr' ? (
+            {route.name === 'pr' ? (
               <PrView key={`${route.repo}#${route.number}`} repo={route.repo} number={route.number} onStatus={onStatus} onInsertToSession={insertToSession} />
-            ) : route.name === 'usage' ? (
-              <UsageView onStatus={onStatus} onOpenSidebar={openSidebar} />
-            ) : route.name === 'new' ? (
-              <NewSessionView replying={list.data?.replying} now={list.updatedAt?.getTime() ?? 0} onOpenSidebar={openSidebar} />
             ) : (
-              <FeedView
-                selected={filters.projects}
-                projects={list.data?.filters.projects ?? EMPTY_PROJECTS}
-                onProjects={(projects) => setFilters({ projects })}
-                sessions={list.data?.sessions}
-                selfHost={list.data?.host ?? ''}
-                openDiff={diffOpen}
-                onToggleDiff={toggleFeedDiff}
-                onStatus={onStatus}
-                onOpenSidebar={openSidebar}
-                onLeaveToSidebar={focusSidebar}
-                linear={linear}
-                settings={settings}
-                prs={sessionPrs}
-              />
+              <UsageView onStatus={onStatus} onOpenSidebar={openSidebar} />
             )}
             </ChatPane>
           )}

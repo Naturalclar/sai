@@ -247,13 +247,36 @@ test('ヒアドキュメント: python3 に渡す形は組む（人が決めた�
   for (const head of ['python3 -', 'python3', 'python3 - a b', 'python3 -u -']) {
     assert.deepEqual(h(doc(head, 'print(1)')), { prefixes: ['python3'] }, head)
   }
-  // スクリプトに本文を渡す形は、今までの 2 語の読み方のまま（そのスクリプトだけのルール）
-  assert.deepEqual(h(doc('python3 tool.py --in -', 'x')), { prefixes: ['python3 tool.py'] })
   // 中への cd のあと・閉じの行のあとの別のコマンド
   assert.deepEqual(h(`cd ~/work/repo/sub\n${doc('python3 -', 'print(1)')}`), { prefixes: ['python3'] })
-  assert.deepEqual(h(`cd sub; ${doc('python3 -', 'print(1)')}\nnode -v | tail -1`), { prefixes: ['python3', 'node'] })
+  assert.deepEqual(h(`cd sub; ${doc('python3 -', 'print(1)')}\nnode -v | tail -1`), { prefixes: ['python3', 'node -v'] })
   // ルールの表記は広さをそのまま言う（狭い形に見せない）
   assert.deepEqual(alwaysAllowRules('Bash', { command: doc('python3 -', 'print(1)') }, IN_HOME, HOME).map(ruleLabel), ['Bash(python3:*)'])
+})
+
+test('1 語のルール Bash(python3:*) を書く例外は、ヒアドキュメントで渡したプログラムを走らせる python3 だけ（#755 の「1 語のルールは書かない」の例外）', () => {
+  // ヒアドキュメントが無ければ、#755 のとおり組まない
+  for (const command of ['python3 -', "python3 -c 'print(1)'", 'python3 - x', 'python3 -u -', 'python3']) {
+    const plan = h(command)
+    if (command === 'python3') assert.deepEqual(plan, { prefixes: ['python3'] }, '引数の無い python3 は前から 1 語')
+    else assert.deepEqual(plan, { reason: 'bare_cli' }, command)
+  }
+  // ヒアドキュメントがあっても、本文がプログラムでない形（-c・-m・スクリプトのファイル・値を取るフラグ）には当てない
+  assert.deepEqual(h(doc("python3 -c 'print(1)'", 'data')), { reason: 'bare_cli' })
+  assert.deepEqual(h(doc('python3 -W ignore -', 'print(1)')), { reason: 'bare_cli' })
+  assert.deepEqual(h(doc('python3 -X dev -', 'print(1)')), { reason: 'bare_cli' })
+  assert.deepEqual(h(doc('python3 -m json.tool', '{}')), { prefixes: ['python3 -m json.tool'] }, '狭い接頭辞を作れる形はそのまま')
+  assert.deepEqual(h(doc('python3 tool.py --in -', 'x')), { prefixes: ['python3 tool.py'] })
+  // 当てる形: 標準入力からプログラムを読む
+  for (const head of ['python3', 'python3 -', 'python3 -u -', 'python3 -Es', 'python3 - a b', 'python3 -B - --flag']) {
+    assert.deepEqual(h(doc(head, 'print(1)')), { prefixes: ['python3'] }, head)
+  }
+  // 別の部品のヒアドキュメントでは当てない（ヒアドキュメントを受けたのは gh で、python3 -c は別の部品）
+  assert.deepEqual(h(`${doc('cd sub; gh pr comment 1 -F -')}\npython3 -c 'print(1)'`), { reason: 'bare_cli' })
+  // python3 以外には漏れない（ヒアドキュメントの入口で断る）
+  for (const head of ['python -', 'python3.12 -', 'python3.13', '/usr/bin/python3 -', './python3 -', 'env python3 -', 'command python3 -', 'uv run python3 -', 'pipx run python3 -', 'node -', 'node', 'deno run -', 'bun -', 'ruby', 'perl', 'bash', 'sh', 'zsh', 'PYTHONPATH=x python3 -', 'python3x', 'Python3 -']) {
+    assert.deepEqual(h(doc(head, 'print(1)')), { reason: 'heredoc' }, head)
+  }
 })
 
 test('ヒアドキュメント: python3 でも、#751 で塞いだ形は同じに断る', () => {

@@ -74,5 +74,6 @@ jobs:
           git config --global user.email ci@example.com
           git config --global user.name ci
 
-      - name: unittest（feed/test_record.py, feed/test_statusline.py）
-        run: python3 -m unittest -v feed.test_record feed.test_statusline
+      # package.json の test:feed と同じ並びにする（前は test_digest_stats が抜けていて、CI では回っていなかった）
+      - name: unittest（feed/test_record.py, feed/test_statusline.py, feed/test_digest_stats.py）
+        run: python3 -m unittest -v feed.test_record feed.test_statusline feed.test_digest_stats

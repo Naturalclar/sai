@@ -31,10 +31,10 @@ pnpm build                  # typecheck → vite build web（web/dist/ へ）
 pnpm lint                   # oxlint web/src server shared
 pnpm typecheck              # tsc -p web && tsc -p web/tsconfig.test.json && tsc -p server
 pnpm test                   # node:test（server/、shared/、web/src/ の *.test.ts）
-pnpm test:feed              # python3 -m unittest feed.test_record
+pnpm test:feed              # python3 -m unittest（feed/ のテスト）
 ```
 
-コミット前の一式: `pnpm test && pnpm test:feed && pnpm lint && pnpm typecheck`。**エージェントは `bash scripts/suite.sh` で回す**（通れば 1 行ずつ、落ちたら落ちた所だけ。#688。大きな出力は以降の呼び出し全部に乗るので、issue・PR の一覧にも本文を付けない → `AGENTS.md`）。CI（`.github/workflows/ci.yml`）も同じ一式＋ `pnpm build` を `main` への push と PR で回す（Node 22 系の最新、Python 3.9 と最新）。**スクリプトを足したら CI にも足す。**
+コミット前の一式は **`bash scripts/suite.sh`**（`pnpm test` → `test:feed` → `lint` → `typecheck` を順に回す。`--build` で `build` も。通れば 1 行ずつ、落ちたら落ちた所だけ。#688）。大きな出力は以降の呼び出し全部に乗るので、**エージェントは素の `pnpm test` を回さず**、issue・PR の一覧にも本文を付けない → `AGENTS.md`。CI（`.github/workflows/ci.yml`）も同じ 4 つ＋ `pnpm build` を `main` への push と PR で回す（Node 22 系の最新、Python 3.9 と最新）。**スクリプトを足したら CI にも足す。**
 
 単体で回す（ほかの形は `docs/internals/tooling.md`）:
 

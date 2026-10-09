@@ -34,7 +34,7 @@ test('countNote: 2 回目から数字を出し、勧める回数からは一言�
   assert.equal(countNote({ count: 1 }, 'Bash(gh pr:*)'), '')
   assert.equal(countNote({}, 'Bash(gh pr:*)'), '')
   assert.equal(countNote({ count: 2 }, 'Bash(gh pr:*)'), '2 回目の許可（Bash(gh pr:*)）')
-  assert.equal(countNote({ count: 3, suggest: true }, 'Bash(gh pr:*)'), '3 回目の許可（Bash(gh pr:*)）。「常に許可」にすると、この形は聞かれなくなります')
+  assert.equal(countNote({ count: 3, suggest: true }, 'Bash(gh pr:*)'), '3 回目の許可（Bash(gh pr:*)）。「常に許可」にすると、下のルールの範囲は聞かれなくなります')
 })
 
 test('ruleCovered: 同じ表記・より広いルール・別の書き方は覆っている。狭いルールや別のコマンドは覆っていない（#621 のレビュー）', () => {

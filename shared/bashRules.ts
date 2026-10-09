@@ -57,7 +57,7 @@ const QUOTED_HEREDOC_OPEN = /^"\$\(cat <<(-?)(['"])(\w+)\2\n/
  * **1 行に残るのは、頭から読んで最初に当たった 1 つ**（`echo $(x) > out` は `expansion` だけ）。
  * - `expansion`: `$(…)`・`$VAR`・バッククォート（引用符の中も）
  * - `redirect`: ファイルへのリダイレクト・`|&` / `heredoc`: 組まないヒアドキュメント（`<<`。目印を囲んでいない・目印のあとに続きがある・
- *   閉じの行が無い・本文を文章として受け取るコマンド（`gh` / `git`）でない） / `here_string`: `<<<` / `background`: `&`
+ *   閉じの行が無い・渡す先が組む形（`gh` / `git` の本文・`python3`）でない・前に `cd` 以外の部品がある） / `here_string`: `<<<` / `background`: `&`
  * - `subshell`: 引用符の外の `(` `)`（`<(…)` `>(…)` も） / `brace`: 引用符の外の `{` `}`（波括弧の組のほか `HEAD@{1}`・`-exec … {}` も）
  * - `comment`: 行の途中の `#` / `unclosed`: 閉じていない引用符・末尾の `\`
  * - `keyword`: `for` / `if` などの構文の語 / `assign_only`: 代入だけでコマンドが無い（`FOO=1`）
@@ -86,20 +86,48 @@ export type BashNoRuleReason = (typeof BASH_NO_RULE_REASONS)[number]
 const QUOTED_TAG_HEREDOC = /^0?<<(-?)[ \t]*(['"])(\w+)\2[ \t]*(?=\n)/
 
 /**
- * ヒアドキュメントを渡してもルールを組む形（#724）。**本文を文章として受け取ると分かっている形だけ**:
+ * ヒアドキュメントを渡してもルールを組む形（#724）。
+ *
+ * **本文を文章として受け取ると分かっている形**:
  * - `gh issue|pr|release create|comment|edit|review … --body-file -`（`-F -`・`--body-file=-` も）
  * - `git commit … -F -`（`--file -`・`--file=-` も）
- *
  * 先頭の語だけでは決めない（`git apply <<'EOF'`・`gh auth login --with-token <<'EOF'`・`git -c alias.x=!sh x <<'EOF'` は、
- * 本文を操作やコードとして受け取る。#751 のレビュー）。`python3 - <<'EOF'` や `bash <<'EOF'` も実機では通ったが、
- * ルールにすると `Bash(python3:*)`（何でも実行できる）になり、聞かれた 1 回の中身（本文）と書かれる範囲が釣り合わないので組まない。
- * `words` はその部品の語（代入は付いていないこと。代入つきは断る）
+ * 本文を操作やコードとして受け取る。#751 のレビュー）。
+ *
+ * **本文をコードとして走らせる `python3`**（人が決めた。#724 の 2026-10-09 のコメント）: 受けるのは `python3HeredocRule()` の形だけ
+ * （`python3 - <<'EOF'`。実機で確かめた形）。`python3 tool.py <<'EOF'`・`python3 -m x <<'EOF'`・`python3 -W ignore <<'EOF'` は確かめていないので断る。
+ * **`python3` だけ**（`python`・`python3.12`・`/usr/bin/python3`・`env python3`・`node`・`ruby`・`bash`・`sh` などは決まっていないので、
+ * 今までどおり `heredoc` で断る）。`words` はその部品の語（代入は付いていないこと。代入つきは断る）
  */
-function takesHeredocAsText(words: readonly string[]): boolean {
+function takesHeredoc(words: readonly string[]): boolean {
   const stdinFile = (flags: readonly string[]) => words.some((w, i) => (flags.includes(w) && words[i + 1] === '-') || flags.some((f) => f.startsWith('--') && w === `${f}=-`))
   if (words[0] === 'gh') return ['issue', 'pr', 'release'].includes(words[1] ?? '') && ['create', 'comment', 'edit', 'review'].includes(words[2] ?? '') && stdinFile(['--body-file', '-F'])
   if (words[0] === 'git') return words[1] === 'commit' && stdinFile(['--file', '-F'])
-  return false
+  // `python3` は、1 語のルールを書く例外の形（標準入力からプログラムを読む）だけ受ける。受ける条件と書くルールの条件を分けない
+  return python3HeredocRule(words)
+}
+
+/** 値を取らない `python3` のフラグ（1 文字のものを束ねた形も。`-u`・`-B`・`-Es`）。`-c`・`-m`・`-W`・`-X` は入れない */
+const PYTHON3_PLAIN_FLAGS = /^-[BbdEhiIOqsSuvVx]+$/
+
+/**
+ * **例外: ヒアドキュメントで渡したプログラムを走らせる `python3` には、1 語のルール `Bash(python3:*)` を書く**（#724 の 2026-10-09 の人の決定）。
+ *
+ * ほかの所では、サブコマンドを持つ CLI に 1 語のルールを書かない（`ruleHead()`。#755: `python3 -c '…'`・`python3 -`・`node -e '…'` は `bare_cli`）。
+ * ここだけ書くのは、記録で `heredoc` の 8 割がこの形で、**書かれるルールが python3 で始まるコマンド全部に効く**ことを分かったうえで
+ * 人が入れると決めたため。広さは [常に許可] の脇の文（`ruleScope()`:「python3」で始まるコマンド）にそのまま出る。
+ * **残る不揃い**: `python3 -c '…'` には [常に許可] が出ないのに、ヒアドキュメントで 1 回押すと `python3 -c` も通るようになる。
+ *
+ * 当てるのは「標準入力からプログラムを読む」形だけ: `python3`・`python3 -`・`python3 -u -`・`python3 - a b`（`-` のあとは引数）。
+ * `python3 -c '…' <<'EOF'`・`python3 -m x <<'EOF'`・`python3 tool.py <<'EOF'`（本文はプログラムでなく入力）・値を取るフラグつきは、
+ * ヒアドキュメントごと断る（`takesHeredoc()` が同じこの関数で決める）。`words` は代入を除いたその部品の語。
+ * ヒアドキュメントの無い、引数の無い `python3`（`cat a.py | python3`）は、前から `ruleHead()` が 1 語のルールにしている（#755 でも変わっていない。ここの例外ではない）
+ */
+function python3HeredocRule(words: readonly string[]): boolean {
+  if (words[0] !== 'python3') return false
+  let n = 1
+  while (n < words.length && PYTHON3_PLAIN_FLAGS.test(words[n]!)) n++
+  return n === words.length || words[n] === '-'
 }
 
 /** 捨てられないリダイレクトの種類。`rest` はその記号から先（頭の fd の数字も含む） */
@@ -121,6 +149,8 @@ interface SplitParts {
   quoted: Set<string>
   /** `"$(cat <<'EOF' … )"` を空として畳んだ語（同じ鍵）。中身を読んでいないので、`cd` の行き先・コマンドの名前には使わせない */
   folded: Set<string>
+  /** ヒアドキュメントを受けた部品（`parts` の番号）。`python3HeredocRule()` の例外を当てるかに使う */
+  heredocs: Set<number>
 }
 
 /** 部品に分ける。語は引用符を外した文字。切れない・通らない形（展開・サブシェル・ファイルへのリダイレクト・`&`）は理由の種類を返す */
@@ -134,9 +164,12 @@ function splitParts(command: string): SplitParts | BashNoRuleReason {
   const parts: string[][] = []
   const quoted = new Set<string>()
   const folded = new Set<string>()
+  const heredocs = new Set<number>()
   // いまの語・いまの部品に、畳んだ `"$(cat <<…)"` が混ざったか
   let wordFolded = false
   let partFolded = false
+  // いまの部品で、捨てるリダイレクト（`2>&1`・`>/dev/null`）を読んだか
+  let partRedirected = false
   let words: string[] = []
   let word: string | null = null
   // いまの語に引用符・バックスラッシュが混ざったか
@@ -156,6 +189,7 @@ function splitParts(command: string): SplitParts | BashNoRuleReason {
     if (words.length > 0) parts.push(words)
     words = []
     partFolded = false
+    partRedirected = false
   }
   // 行の頭か（空白だけが前にある）。行ごとのコメントは通ったので読み飛ばし、行の途中の `#` は止める
   let lineStart = true
@@ -243,11 +277,14 @@ function splitParts(command: string): SplitParts | BashNoRuleReason {
         // 前にあるのが `cd` だけのときしか組まない: 前の部品が `gh` / `git` の実体を差し替えていても見抜けない
         // （`eval 'gh() { sh; }'`・`alias gh=sh`・`export PATH=…`・`source x.sh`。本文がコードとして走る。#751 のレビュー）。
         // 畳んだ語（中身を読んでいない）が混ざった部品も、見えている語と実際の語がずれるので組まない
-        if (partFolded || parts.some((p) => p[0] !== 'cd') || !takesHeredocAsText(words)) return 'heredoc'
+        // 目印の前に捨てるリダイレクトがある形（`python3 - 2>&1 <<'EOF'`）は、実機で確かめていない（目印のあとの `2>&1` は聞かれた）ので組まない
+        if (partFolded || partRedirected || parts.some((p) => p[0] !== 'cd') || !takesHeredoc(words)) return 'heredoc'
+        heredocs.add(parts.length)
         i += end - 1 // 閉じの行の終わり。次の改行で部品が終わる
         continue
       }
       endWord()
+      partRedirected = true
       i += m[0].length - 1
       continue
     }
@@ -258,7 +295,7 @@ function splitParts(command: string): SplitParts | BashNoRuleReason {
     word = (word ?? '') + c
   }
   endPart()
-  return { parts, quoted, folded }
+  return { parts, quoted, folded, heredocs }
 }
 
 /**
@@ -391,7 +428,7 @@ export function bashRulePlan(command: string, cwd: string, home: string): { pref
   const no = (reason: BashNoRuleReason) => ({ reason })
   const split = splitParts(command)
   if (typeof split === 'string') return no(split)
-  const { parts, quoted, folded } = split
+  const { parts, quoted, folded, heredocs } = split
   // 前の部品が `cd` の探し方を変えたかもしれない（`CDPATH` に触った・中身の見えない `source` / `.` / `eval`）。そのあとの相対の `cd` は行き先が読めない
   let cdPathTouched = false
   if (parts.length === 0) return no('empty')
@@ -455,12 +492,15 @@ export function bashRulePlan(command: string, cwd: string, home: string): { pref
       if (!unasked.includes(first)) unasked.push(first)
       continue
     }
-    const head = ruleHead(words.slice(i))
+    // 1 語のルールを書く例外は、ヒアドキュメントで渡したプログラムを走らせる `python3` だけ（`python3HeredocRule()`）
+    const head = heredocs.has(index) && first === 'python3' ? 'python3' : ruleHead(words.slice(i))
     if (head === null) return no('bare_cli')
     const prefix = [...env, head].join(' ')
     if (!prefixes.includes(prefix)) prefixes.push(prefix)
   }
   if (cd && names.some((n) => NOT_AFTER_CD.has(n))) return no('cd_then_write')
+  // 1 語の `python3` を書くなら、それに覆われる `python3 <何か>` は並べない（同じ範囲を 2 つ書かない・Jev に 2 回聞かない）
+  if (prefixes.includes('python3')) for (let k = prefixes.length - 1; k >= 0; k--) if (prefixes[k]!.startsWith('python3 ')) prefixes.splice(k, 1)
   // 読むだけのコマンドしか無いのに許可が来たなら、聞かれたのはその部品（`cat /etc/hosts` のように引数しだいで聞かれる）。
   // 書かないと、前は出ていた [常に許可] が消える（#710 のレビュー）
   return { prefixes: prefixes.length > 0 ? prefixes : unasked }

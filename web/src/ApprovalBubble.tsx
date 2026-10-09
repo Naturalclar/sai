@@ -163,7 +163,7 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false, modeNote =
                   type="button"
                   className={`always${suggest ? ' suggest' : ''}`}
                   disabled={busy || done !== null}
-                  title={`${rulesKey(always)} を返信先の .claude/settings.local.json に書く。以後この形は聞かれない（端末の「今後も許可」と同じ）${armed ? '。⌘⇧Enter / Ctrl+⇧Enter' : ''}`}
+                  title={`${rulesKey(always)} を返信先の .claude/settings.local.json に書く。以後、下に並んだルールの範囲は聞かれない（端末の「今後も許可」と同じ）${armed ? '。⌘⇧Enter / Ctrl+⇧Enter' : ''}`}
                   onClick={() => void send({ behavior: 'allow', remember: 'local' })}
                 >
                   {done === 'always' ? '常に許可した' : '常に許可'}

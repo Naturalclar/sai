@@ -214,6 +214,8 @@ export const api = {
   /** ループを止める・再開する・いま起こす。止めても回っている周のターンは止まらない */
   loopAction: (id: string, action: 'stop' | 'resume' | 'wake') => sendJSON<LoopResponse>('POST', `/api/sessions/${encodeURIComponent(id)}/loop/${action}`, {}),
   /** 預かっている待ち（#732）を止める（片付ける）・いま起こす */
+  /** 人が「このセッションのブランチの PR の CI を待つ」を置く（#732 の案 3）。PR はサーバが引く（番号は送らない） */
+  waitAdd: (id: string) => sendJSON<WaitActionResponse>('POST', `/api/sessions/${encodeURIComponent(id)}/wait/add`, {}),
   waitAction: (id: string, wait: string, action: 'stop' | 'wake') => sendJSON<WaitActionResponse>('POST', `/api/sessions/${encodeURIComponent(id)}/wait/${action}`, { wait }),
   /** 終わったループを片付ける */
   clearLoop: (id: string) => sendRaw<LoopResponse>('DELETE', `/api/sessions/${encodeURIComponent(id)}/loop`),

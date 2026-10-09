@@ -23,6 +23,7 @@ import { QueuedBubble } from './QueuedBubble'
 import { AgentActivityBar } from './AgentActivityBar'
 import { LoopBar } from './LoopBar'
 import { WaitBar } from './WaitBar'
+import { WaitUnsetBar } from './WaitUnsetBar'
 import { LoopForm } from './LoopForm'
 import { loopLive } from '../../shared/loops.ts'
 import { withAgentReplies } from './agentReplies'
@@ -440,6 +441,8 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
               {(data?.waits?.[id] ?? []).map((w) => (
                 <WaitBar key={`wait:${w.id}`} id={id} wait={w} now={now} />
               ))}
+              {/* 「待ちます」と言って終わったのに、起こす予定が無い（#732 の案 3）。返信中は出さない */}
+              {s?.wait_unset && !mine && <WaitUnsetBar key={`wait-unset:${id}`} id={id} pr={s.wait_unset.pr} blocked={s.wait_unset.blocked} />}
               {data.background && <BackgroundAttachBar background={data.background} />}
             </>
           }

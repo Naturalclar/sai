@@ -332,7 +332,11 @@ SAI が起こした Claude のターンは、使ったトークンと費用も�
 - **応答**: 一覧と詳細の `waits`（`WaitMap`）。`waits.key()` を rev に混ぜる。処理中の本文（`replying[].text`）は `waitPromptLabel()` で「待ちが終わった: PR #N」にする（`chatGroups.ts` の `promptArrived()` も同じ形で比べる）。`isHandedOnly()` が待ちの本文も真にするので、題名・「最後の入力」・↑ の履歴に使わない。
 - **画面**: `WaitBar`（チャットの末尾。待ち 1 件に 1 つ）。起きたターンの自分のバブルは本文のまま出し、`Utterance.wait` で「待ちが終わって SAI が送りました」の印を付ける（`chatGroups.ts` の `mineOf()`）。
 - 「送信を止める」（#311）で止めているセッションは、待ちも預かれない（もう預かっている待ちは消さない。止めるのは待ちの帯）。#727 の預かり（`agent-messages.json`）とは置き場を分けてある: あちらは相手に送る文で、止めると全部捨てる。待ちは 1 件ずつ止める。
-- テストは `server/waits.test.ts`（偽の Runner・偽の `PrBrowser`・進められる時計の `createApp`）・`shared/waits.test.ts`・`server/prs.test.ts`（`gh` の形）・`server/approvals/agentTools.test.ts`。
+- **「待ちます」と言って終わったのに預けていないターン**（案 3）: 判定は `shared/waitingSaid.ts`（純粋関数。LLM は呼ばない）。`saysWaiting()` は返答の末尾（`waitingTail()`。空でない行を後ろから 4 つ・400 字まで。コードブロックと引用は見ない）を文に分け、「待つ」の形（`WAITS`）があり、人を待つ手がかり（`HUMAN`）が無く、その文かすぐ前の文に機械が終わるもの（`MACHINE`）が出てくる文が 1 つでもあれば真。`waitingUnscheduled()` が、最後の行がターン完了・処理中でない・待ちが 0・PR がちょうど 1 つ・`WAITING_SAID_FRESH_MS`（12 時間）以内、を合わせて PR の番号を返す（**1 つでも分からなければ 0**）。
+  - 載せるのは一覧を組む所（`app.ts`。`stop_missing` の隣）: 行だけで候補を絞り（最後の行がターン完了・このマシンの Claude・アーカイブでない・待ちも処理中も預かりも無い・新しい）、文面を見てから `branchPrs(s, false)`（`prs.cached()`。**`gh` を待たない**。無ければ裏で読みに行き、今回は出さない）。`SessionSummary.wait_unset` = `{ pr, blocked? }`。`blocked` は `loopRefusal(s, 'wait')` か送信の停止の理由で、あっても印は出す。出しているものは rev に混ぜる。
+  - **人が置く口**は `POST /api/sessions/<id>/wait/add`（`addWaitByHuman()`。同一オリジンのみ）。PR は `branchPrs(session, true)`（`gh pr list` を読み直す）でちょうど 1 つに決まったときだけ。預かる所は `depositWait()` で、`sai_wait_for` と同じ道（同じ置き場・上限・最初の 1 回の読み）。断る線（`loopRefusal()`）と送信の停止は、どちらの口も先に見る。やることは `WAIT_HUMAN_THEN`（決まった文）。
+  - 画面: `headTags()` の `wait_unset`（`WaitUnsetTag`。返信中は出さない）と、チャットの末尾の `WaitUnsetBar`。`todoItems()` には渡さない（要対応に数えない）。
+- テストは `server/waits.test.ts`（偽の Runner・偽の `PrBrowser`・進められる時計の `createApp`）・`shared/waits.test.ts`・`server/prs.test.ts`（`gh` の形）・`server/approvals/agentTools.test.ts`・`shared/waitingSaid.test.ts`・`server/waiting-said.test.ts`。
 
 ## ループ（#634）
 

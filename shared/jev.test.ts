@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { isJevAuto, jevAsks, jevAutoAllows, jevAutoDecision, jevAutoEligible, jevLabel, jevLowestRule, jevLevel, jevPercent, jevRuleState, jevSafeOf, jevState, JEV_AUTO_MIN, JEV_STATE_MAX } from './jev.ts'
+import { isJevAuto, jevAsks, jevAutoAllows, jevAutoDecision, jevAutoEligible, jevLabel, jevLogged, jevLowestRule, jevLevel, jevPercent, jevRuleState, jevSafeOf, jevState, JEV_AUTO_MIN, JEV_STATE_MAX } from './jev.ts'
 import type { Approval } from './types.ts'
 
 const a = (over: Partial<Approval> = {}): Approval => ({
@@ -130,3 +130,18 @@ test('jevAutoDecision（#553）: この回が閾値未満は none、Bash 以外�
   assert.deepEqual(jevAutoDecision(bash, 0.8, 'Bash(git status:*)', 0.76), { kind: 'skip', reason: 'ルール Bash(git status:*) が 76%（閾値 80%）' })
   assert.deepEqual(jevAutoDecision(bash, 0.8, 'Bash(git status:*)', 0.8), { kind: 'allow' }, '閾値ちょうどは通す')
 })
+
+test('jevLogged（#749）: 記録に残す形。届いた確率は小数 3 桁、届いていなければ理由の種類。分からないものを 0 や 1 にしない', () => {
+  assert.deepEqual(jevLogged({ safe: 0.971234 }), { jev: 0.971 })
+  // 切り捨てる（丸めると、閾値に届いていなかったものが届いたように読める）
+  assert.deepEqual(jevLogged({ safe: 0.8996 }), { jev: 0.899 })
+  assert.deepEqual(jevLogged({ safe: 0.9996 }), { jev: 0.999 })
+  assert.deepEqual(jevLogged({ safe: 0.9 }), { jev: 0.9 })
+  assert.deepEqual(jevLogged({ safe: 0.97 }), { jev: 0.97 })
+  assert.deepEqual(jevLogged({ safe: 0 }), { jev: 0 })
+  assert.deepEqual(jevLogged({ safe: 1 }), { jev: 1 })
+  assert.deepEqual(jevLogged(undefined), { jev_none: 'not_asked' })
+  assert.deepEqual(jevLogged({}), { jev_none: 'pending' })
+  assert.deepEqual(jevLogged({ failed: true }), { jev_none: 'failed' })
+})
+

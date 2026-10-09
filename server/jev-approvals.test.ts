@@ -7,7 +7,7 @@ import type { Server } from 'node:http'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ReplyingMap, SessionsResponse, SettingsResponse } from '../shared/types.ts'
+import type { ApprovalLogRow, ReplyingMap, SessionsResponse, SettingsResponse } from '../shared/types.ts'
 import { createApp } from './app.ts'
 import type { JevJudge } from './approvals/jev.ts'
 import { Approvals } from './approvals/approvals.ts'
@@ -253,3 +253,90 @@ test('設定 paste_to_file（#609）: 既定は切。true / false だけ受け�
   assert.equal(JSON.parse(await readFile(join(feedDir, 'settings.json'), 'utf-8')).paste_to_file, true)
   assert.equal(((await (await put(base, { paste_to_file: false })).json()) as SettingsResponse).paste_to_file, false)
 })
+
+test('approvals.jsonl に、答えたときの Jev の確率を残す（#749）。聞いていない・届く前・聞けなかったを区別し、コマンドの文字は書かない', async () => {
+  const rows = async (): Promise<ApprovalLogRow[]> =>
+    (await readFile(join(feedDir, 'approvals.jsonl'), 'utf-8').catch(() => '')).split('\n').filter(Boolean).map((l) => JSON.parse(l) as ApprovalLogRow)
+  const drain = async () => {
+    for (let i = 0; i < 10; i++) await settle()
+  }
+  const busy: Runner = { ...runner, running: (id) => id === 'S1@r' }
+  /** 預けて、一覧を 1 回読ませて（Jev に聞くのは読んだとき）、人が許可する。足された行を返す */
+  const answered = async (base: string, tool_name: string, input: Record<string, unknown>, wait = true): Promise<ApprovalLogRow> => {
+    const had = (await rows()).length
+    const res = await fetch(`${base}/api/approvals`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: 'S1@r', tool_name, input, tool_use_id: 't' }) })
+    const id = ((await res.json()) as { approval_id: string }).approval_id
+    await sessions(base)
+    if (wait) await drain()
+    const ok = await fetch(`${base}/api/approvals/${id}/answer`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ behavior: 'allow' }) })
+    assert.equal(ok.status, 200, await ok.clone().text())
+    for (let i = 0; i < 50 && (await rows()).length === had; i++) await settle()
+    return (await rows()).at(-1)!
+  }
+
+  // 自動は切のまま（人が答える行を見る）。偽の Jev: 遅いもの・失敗するもの・ふつうのもの
+  let release: () => void = () => {}
+  const slow = new Promise<void>((r) => (release = r))
+  const fake: JevJudge = async (state) => {
+    if (state.includes('zzslow')) await slow
+    if (state.includes('zzbroken')) throw new Error('boom')
+    return state.includes('zzrisky') ? 0.123456 : 0.9712
+  }
+  const approvals = new Approvals()
+  const base = await start(approvals, fake, busy)
+  await put(base, { jev: true, jev_auto: 0 })
+
+  const got = await answered(base, 'Bash', { command: 'zztool sync --secret-flag' })
+  assert.deepEqual([got.by, got.jev, got.jev_none], ['human', 0.971, undefined], '届いていた確率（小数 3 桁）')
+  assert.equal((await answered(base, 'Bash', { command: 'zzrisky thing' })).jev, 0.123)
+  // 聞いたが、答えるまでに届かなかった
+  const pending = await answered(base, 'Bash', { command: 'zzslow thing' }, false)
+  assert.deepEqual([pending.jev, pending.jev_none], [undefined, 'pending'])
+  release()
+  // 聞けなかった
+  const failed = await answered(base, 'Bash', { command: 'zzbroken thing' })
+  assert.deepEqual([failed.jev, failed.jev_none], [undefined, 'failed'])
+  // 質問は Jev に聞かない種類
+  const question = await answered(base, 'AskUserQuestion', { questions: [{ question: 'どれにする?', options: [] }] })
+  assert.deepEqual([question.jev, question.jev_none], [undefined, 'not_asked'])
+  // 確率が届いたあとで Jev を切ってから答えた: 画面にも出していないので、記録にも残さない（#750 のレビュー）
+  {
+    const had = (await rows()).length
+    const res = await fetch(`${base}/api/approvals`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: 'S1@r', tool_name: 'Bash', input: { command: 'zztool late' }, tool_use_id: 't' }) })
+    const id = ((await res.json()) as { approval_id: string }).approval_id
+    await sessions(base)
+    await drain()
+    assert.equal((await sessions(base)).approvals['S1@r']!.find((a) => a.approval_id === id)?.jev, 0.9712, '届いている')
+    await put(base, { jev: false })
+    assert.equal((await fetch(`${base}/api/approvals/${id}/answer`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ behavior: 'allow' }) })).status, 200)
+    for (let i = 0; i < 50 && (await rows()).length === had; i++) await settle()
+    const late = (await rows()).at(-1)!
+    assert.deepEqual([late.jev, late.jev_none], [undefined, 'not_asked'])
+  }
+  // Jev を切っている
+  await put(base, { jev: false })
+  const off = await answered(base, 'Bash', { command: 'zztool other' })
+  assert.deepEqual([off.jev, off.jev_none], [undefined, 'not_asked'])
+
+  // 鍵が無い（createApp の既定）
+  const plain = new Approvals()
+  const base2 = await start(plain, undefined, busy)
+  const none = await answered(base2, 'Bash', { command: 'zztool nokey' })
+  assert.deepEqual([none.jev, none.jev_none], [undefined, 'not_asked'])
+
+  // コマンドの引数・質問の文は書かない（足したのは確率と理由の種類だけ。`rule` に出るルールの頭は今までどおり）
+  const text = JSON.stringify(await rows())
+  for (const word of ['secret-flag', 'thing', 'nokey', 'other', 'late', 'どれにする']) assert.ok(!text.includes(word), word)
+
+  // Jev が自動で答えた行にも、その回の確率が残る
+  const auto = new Approvals()
+  const base3 = await start(auto, judge, busy)
+  await put(base3, { jev: true, jev_auto: 0.9 })
+  const had = (await rows()).length
+  await fetch(`${base3}/api/approvals`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: 'S1@r', tool_name: 'Bash', input: { command: 'git status' }, tool_use_id: 't' }) })
+  for (let i = 0; i < 100 && (await rows()).length === had; i++) await settle()
+  const byJev = (await rows()).at(-1)!
+  assert.deepEqual([byJev.by, byJev.remember, byJev.jev, byJev.jev_none], ['jev', true, 0.97, undefined])
+  await put(base3, { jev_auto: 0 })
+})
+

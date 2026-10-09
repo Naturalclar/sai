@@ -37,7 +37,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 
 ## CI（`.github/workflows/ci.yml`）
 
-- コミット前の一式（`pnpm test && pnpm test:feed && pnpm lint && pnpm typecheck`）＋ `pnpm build` を `main` への push と PR で回す。Node 22 系の最新、Python 3.9 と最新。
+- コミット前の一式（`bash scripts/suite.sh` が回す `pnpm test` / `test:feed` / `lint` / `typecheck`）＋ `pnpm build` を `main` への push と PR で回す。Node 22 系の最新、Python 3.9 と最新。
 
 ## 子プロセスを数える（`scripts/count-spawns.mjs`。#592）
 

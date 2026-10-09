@@ -1021,6 +1021,11 @@ export interface Wait {
   result?: WaitResult
   /** まだ起こしていない・起こせなかった理由 */
   reason?: string
+  /**
+   * 待ち始めてから長く経って終わったので、自動では起こさない（`WAIT_AUTO_WAKE_MS`）。`ready` のまま結果を出し、
+   * 人の「いま起こす」だけが起こす。`true` があることが状態
+   */
+  late?: true
   /** 預かった時刻 */
   since: string
   /** これを過ぎたら待つのをやめる */

@@ -42,6 +42,7 @@ function stateFrom(v: unknown): WaitState | null {
     ...(Array.isArray(r.failing) ? { failing: r.failing.filter((x): x is string => typeof x === 'string') } : {}),
     ...(typeof r.url === 'string' ? { url: r.url } : {}),
     ...(r.seen_once === 'success' || r.seen_once === 'failure' ? { seen_once: r.seen_once } : {}),
+    ...(r.late === true ? { late: true as const } : {}),
   }
 }
 

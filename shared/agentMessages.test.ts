@@ -13,7 +13,9 @@ import {
   followupHead,
   followupReplyRows,
   replierName,
+  acrossEntry,
   agentTargets,
+  isAcross,
   budgetRefusal,
   clipReply,
   deliveredFromTailnet,
@@ -133,6 +135,15 @@ test('agentTargets: 同じ project・自分以外・アーカイブ済みでな�
     session('S1@r', { session_source: 'synth' }),
   ]
   assert.deepEqual(agentTargets(sessions, from, 'testmac').map((s) => s.id), ['B1@r'])
+  // 人が許した組の先のリポジトリ（#747）も相手になる。向きつきで、同じ project が先。素通しでも・別のマシンや合成 ID は今までどおり落ちる
+  const across = [{ from: 'o/r', to: 'o/other' }]
+  const more = [...sessions, session('E1@r', { project: 'o/other', host: 'mini' }), session('F1@r', { project: 'o/other', meta: { permission_mode: 'bypassPermissions' } }), session('G1@r', { project: 'o/third' })]
+  assert.deepEqual(agentTargets(more, from, 'testmac', across).map((s) => s.id), ['B1@r', 'C1@r', 'F1@r'])
+  assert.deepEqual(agentTargets(more, session('C1@r', { project: 'o/other' }), 'testmac', across).map((s) => s.id), ['F1@r'], '逆向き（o/other → o/r）は許していない')
+  assert.equal(isAcross(from, more[2]!, across), true)
+  assert.equal(isAcross(from, more[1]!, across), false, '同じ project は「またぐ」ではない')
+  assert.deepEqual(acrossEntry(session('C1@r', { project: 'o/other', branch: 'secret-branch', last_text: '中身' }), true, false), { id: 'C1@r', name: 'C1@r の題名', project: 'o/other', branch: '', agent: 'claude', busy: true, last_text: '', context_tokens: 0, overlap: [], overlap_more: 0, across: true }, '出すのは呼び名・エージェント・空いているか、まで')
+  assert.deepEqual(acrossEntry(session('C1@r', { project: 'o/other' }), false, true).holding, { free: true })
   assert.deepEqual(agentTargets(sessions, session('A1@r', { project: '' }), 'testmac'), [], 'どのリポジトリか分からない送り元からは送れない')
 })
 
@@ -357,4 +368,12 @@ test('requestRefusal: 依頼 1 つの件数と、読み直させる量の合計�
   assert.match(over, /合計が予算を超えます（これまで 約 200 万トークン、今回 約 450 万トークン＝甲 約 250 万トークン、乙 約 200 万トークン。予算は約 600 万トークン）/)
   assert.match(over, /1 件も預かっていません/)
   assert.equal(requestRefusal(0, 5_900_000, [{ name: '甲', tokens: 0 }]), '', '大きさの分からない相手は足さない')
+})
+
+test('targetRefusal: 送り元と違うリポジトリの候補には <リポジトリ> を添える（#747。呼び名がリポジトリをまたいで重なる）', () => {
+  const mk = (id: string, project: string) => ({ id, project, title: '', repo: 'r', meta: { name: '同じ名前' } }) as unknown as SessionSummary
+  const text = targetRefusal('同じ名前', { target: null, ambiguous: true, candidates: [mk('B1@r', 'o/r'), mk('C1@r', 'o/other')] }, '', 'o/r')
+  assert.match(text, /当たる相手が 2 つあります。送っていません/)
+  assert.ok(text.includes('- B1@r「同じ名前」\n- C1@r「同じ名前」（o/other）'), text)
+  assert.ok(!targetRefusal('x', { target: null, ambiguous: true, candidates: [mk('B1@r', 'o/r')] }, '').includes('（o/r）'), '送り元のリポジトリを渡さなければ今までどおり')
 })

@@ -36,6 +36,7 @@ import { JevControls } from './JevControls'
 import { PasteControls } from './PasteControls'
 import { PasteToFileContext } from './pasteSetting'
 import { ReplyModeControls } from './ReplyModeControls'
+import { SendAcrossControls } from './SendAcrossControls'
 import { DefaultReplyModeContext } from './replyModeSetting'
 import { useSettings } from './useSettings'
 import { useCommandPalette } from './useCommandPalette'
@@ -480,6 +481,8 @@ export function App() {
           {settings && <PasteControls settings={settings} busy={settingsBusy} onChange={(p) => void updateSettings(p)} />}
           {/* 返信の既定の許可モード（#582。既定は「決めない」。セッションごとに選んだものが勝つ） */}
           {settings && <ReplyModeControls settings={settings} busy={settingsBusy} onChange={(p) => void updateSettings(p)} />}
+          {/* エージェントの sai_send が、別のリポジトリへ送ってよい組（#747） */}
+          {settings && <SendAcrossControls settings={settings} busy={settingsBusy} onChange={(p) => void updateSettings(p)} />}
           {settings?.digest && narrow && (
             <DigestControls settings={settings} busy={settingsBusy} error="" onPersona={(p) => void setPersona(p)} onLinearWorkspace={(ws) => void setLinearWorkspace(ws)} />
           )}

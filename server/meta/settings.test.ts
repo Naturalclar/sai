@@ -74,3 +74,20 @@ test('SettingsStore: next_ask が無い settings.json は一言の入切に従�
     await rm(dir, { recursive: true, force: true })
   }
 })
+
+test('SettingsStore: send_across は読める組だけを拾い、既定は空（#747）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-settings-across-'))
+  try {
+    const path = join(dir, 'settings.json')
+    assert.deepEqual((await new SettingsStore(path).get()).send_across, [])
+    await writeFile(path, JSON.stringify({ send_across: [{ from: 'o/repo-a', to: 'o/repo-b' }, { from: 'o/repo-a' }, 'x'] }))
+    assert.deepEqual((await new SettingsStore(path).get()).send_across, [{ from: 'o/repo-a', to: 'o/repo-b' }])
+    await writeFile(path, JSON.stringify({ send_across: 'all' }))
+    assert.deepEqual((await new SettingsStore(path).get()).send_across, [], '「全部」のような一括の形は持たない')
+    const store = new SettingsStore(path)
+    await store.set({ send_across: [{ from: 'o/repo-b', to: 'o/repo-a' }] })
+    assert.deepEqual((await new SettingsStore(path).get()).send_across, [{ from: 'o/repo-b', to: 'o/repo-a' }])
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})

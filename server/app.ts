@@ -141,6 +141,7 @@ import { changedPaths, clampPatch, NotAGitRepo, RealGit, resolveBase, sessionDif
 import { prBrowserFromEnv } from './git/prs.ts'
 import type { PrBrowser } from './git/prs.ts'
 import { diffStats, githubRepoOf, isPrNumber, knownRepos, pickKnownRepo } from '../shared/prs.ts'
+import { cleanPairs } from '../shared/sendAcross.ts'
 import { holdingLabel, holdingOf } from '../shared/holding.ts'
 import { githubReview, parseReviewRequest } from '../shared/prReview.ts'
 import { fillRepo, ProjectResolver } from './git/project.ts'
@@ -182,7 +183,9 @@ import {
   requestRefusal,
   agentEntry,
   agentOverlap,
+  acrossEntry,
   agentReplyRows,
+  isAcross,
   deliveredId,
   deliveryMatcher,
   followupHead,
@@ -1396,7 +1399,14 @@ export function createApp(
       jev_auto: s.jev_auto,
       paste_to_file: s.paste_to_file,
       reply_mode: s.reply_mode,
+      send_across: s.send_across,
+      send_across_projects: await knownProjects(),
     }
+  }
+  /** 記録で知っているリポジトリ（#747。別のリポジトリへ送る組に選べるもの）。名前の順 */
+  const knownProjects = async (): Promise<string[]> => {
+    const { sessions } = await store.sessions(QUEUE_DAYS)
+    return [...new Set(sessions.map((x) => x.project).filter(Boolean))].sort()
   }
   /**
    * POST /api/prs/<owner>/<repo>/<番号>/review（#526）。**SAI が GitHub に書く唯一の口**。同一オリジンは呼ぶ側で確かめてある。
@@ -1545,11 +1555,17 @@ export function createApp(
       if (b.reply_mode !== '' && !isReplyPermissionMode(b.reply_mode)) return error(res, 400, `reply_mode に使えるのは ${REPLY_MODES.join(' / ')} だけです（空文字で「決めない」）`)
       patch.reply_mode = b.reply_mode
     }
+    if (b.send_across !== undefined) {
+      // 別のリポジトリへ送ってよい組（#747）。**記録で知っているリポジトリだけ**（任意の名前を持たせない）。丸ごと置き換える
+      const pairs = cleanPairs(b.send_across, await knownProjects())
+      if (typeof pairs === 'string') return error(res, 400, pairs)
+      patch.send_across = pairs
+    }
     if (b.jev_auto !== undefined) {
       if (!isJevAuto(b.jev_auto)) return error(res, 400, 'jev_auto は 0（しない）か 0.5〜1 の数で送ってください')
       patch.jev_auto = b.jev_auto
     }
-    if (Object.keys(patch).length === 0) return error(res, 400, 'persona / linear_workspace / digest / next_ask / digest_provider / digest_model / paste_to_file / reply_mode / jev / jev_auto のどれかを送ってください')
+    if (Object.keys(patch).length === 0) return error(res, 400, 'persona / linear_workspace / digest / next_ask / digest_provider / digest_model / paste_to_file / reply_mode / send_across / jev / jev_auto のどれかを送ってください')
     // 起動時の組み立て（settings.json の読み込み）が済んでから書く。後から古い値で組み直されないように
     await digestReady
     const saved = await settingsStore.set(patch)
@@ -2748,13 +2764,13 @@ export function createApp(
    * - 頼まれて未完の依頼は、`HOLDING_ASK_DAYS` 日以内に届けたメッセージのうち、返答（そのターンの完了の行）がまだ無いものと、
    *   まだ送っていない預かり。行は 1 回だけ舐める
    */
-  const holdingsOf = async (list: readonly SessionSummary[], occupied: (s: SessionSummary) => boolean, sendable: (s: SessionSummary) => boolean = () => true): Promise<Map<string, SessionHolding>> => {
+  const holdingsOf = async (list: readonly SessionSummary[], occupied: (s: SessionSummary) => boolean, sendable: (s: SessionSummary) => boolean = () => true, opts: { prs?: boolean } = {}): Promise<Map<string, SessionHolding>> => {
     // 同じリポジトリを書き方の違い（大文字小文字）で 2 回引かない（#533 と同じ。PR の画面が埋めたキャッシュとも揃う）
     const known = knownRepos(list)
     const repos = new Map<string, Promise<PrSummary[] | null | undefined>>()
     const prsOf = (asked: string): Promise<PrSummary[] | null | undefined> => {
       const repo = asked ? pickKnownRepo(known, asked) || asked : ''
-      if (!repo || !prs.available) return Promise.resolve(null)
+      if (!repo || !prs.available || opts.prs === false) return Promise.resolve(null)
       const before = repos.get(repo)
       if (before) return before
       const hit = prs.cached?.(repo, HOLDING_PR_STALE_MS)
@@ -2810,14 +2826,21 @@ export function createApp(
     return out
   }
 
-  /** GET /api/agent/sessions?from=。話しかけられる相手（同じ project の、返信できる別のセッション） */
+  /**
+   * GET /api/agent/sessions?from=。話しかけられる相手（同じ project の、返信できる別のセッション）。
+   * 人が許した組の先の、**別のリポジトリのセッション**（#747）も後ろに並べる。そちらは呼び名・エージェント・空いているか、まで
+   */
   const agentSessions = async (req: IncomingMessage, res: ServerResponse, q: URLSearchParams) => {
     const refusal = agentRefusal(req)
     if (refusal) return error(res, 403, refusal)
     const found = await agentFrom(q.get('from'))
     if (typeof found === 'string') return error(res, 409, found)
     const busy = (id: string) => run.running(id) || codexApp.running(id) || opencodeApp.running(id) || typed.running(id)
-    const targets = agentTargets(found.sessions, found.session, selfHost())
+    const across = (await settingsStore.get()).send_across
+    const everyone = agentTargets(found.sessions, found.session, selfHost(), across)
+    // 細かく出すのは同じリポジトリの相手だけ（読み直す量・同じファイル・持っているもの）
+    const targets = everyone.filter((s) => !isAcross(found.session, s, across))
+    const others = everyone.filter((s) => isAcross(found.session, s, across))
     // 相手が読み直す量（直近の呼び出しの入力）。transcript の末尾を読むだけで、(mtime, size) が同じなら組み直さない（#311）
     const progressOf = await Promise.all(targets.map((s) => progress.read(s)))
     const sizes = progressOf.map((p) => p.context_tokens)
@@ -2829,13 +2852,16 @@ export function createApp(
     const active = new Map(targets.map((s, i) => [s.id, Boolean(progressOf[i]?.active)]))
     const queued = queue.snapshot()
     const holdings = await holdingsOf(targets, (s) => busy(s.id) || Boolean(active.get(s.id)) || Boolean(s.waiting) || (queued[s.id]?.items.length ?? 0) > 0)
+    // 別のリポジトリの相手は、空いているかだけ（PR は引かない・走査も回さない）
+    const otherActive = new Map(await Promise.all(others.map(async (s) => [s.id, (await progress.read(s)).active] as const)))
+    const otherHoldings = await holdingsOf(others, (s) => busy(s.id) || Boolean(otherActive.get(s.id)) || Boolean(s.waiting) || (queued[s.id]?.items.length ?? 0) > 0, () => true, { prs: false })
     const payload: AgentSessionsResponse = {
       from: found.session.id,
-      sessions: targets.map((s, i) => {
+      sessions: [...targets.map((s, i) => {
         const entry = agentEntry(s, busy(s.id), sizes[i] ?? 0, agentOverlap(mine ?? { root: '', paths: [] }, theirs[i] ?? { root: '', paths: [] }))
         const holding = holdings.get(s.id)
         return holding && Object.keys(holding).length > 0 ? { ...entry, holding } : entry
-      }),
+      }), ...others.map((s) => acrossEntry(s, busy(s.id), Boolean(otherHoldings.get(s.id)?.free)))],
     }
     return json(res, payload)
   }
@@ -2903,9 +2929,11 @@ export function createApp(
     const barred = agents.refusal(from, found.turn, Infinity)
     if (barred) return error(res, 429, barred)
     // 宛先は id か呼び名（#625）。引くのは送ってよい相手の中からだけで、ちょうど 1 つに決まらなければ送らない
-    const targets = agentTargets(found.sessions, found.session, selfHost())
-    // 同じ project に居るが送れないセッション（別のマシンなど）。同じ名前がそこにも居れば、名前では当てない
-    const blocked = found.sessions.filter((s) => s.id !== from && s.project === found.session.project && !s.archived && !targets.includes(s))
+    // 送ってよい相手: 同じ project と、人が許した組の先の project（#747）。歯止めは下の同じ判定を通す
+    const across = (await settingsStore.get()).send_across
+    const targets = agentTargets(found.sessions, found.session, selfHost(), across)
+    // 同じ project（と、許した組の先の project）に居るが送れないセッション（別のマシンなど）。同じ名前がそこにも居れば、名前では当てない
+    const blocked = found.sessions.filter((s) => s.id !== from && (s.project === found.session.project || isAcross(found.session, s, across)) && !s.archived && !targets.includes(s))
     // **先に全部の宛先を確かめて数える**（#727）。1 つでも通らなければ、1 件も送らず・預からずに断る
     const usageNow = await usageStore.get()
     const planned: { target: SessionSummary; text: string; context: number; compact: boolean | undefined }[] = []
@@ -2913,7 +2941,7 @@ export function createApp(
       const asked = typeof a.to === 'string' ? a.to : ''
       const resolved = resolveTarget(targets, asked, blocked)
       if (!resolved.target) {
-        return error(res, resolved.ambiguous ? 409 : 403, nth(n) + targetRefusal(asked, resolved, 'その相手には送れません（同じリポジトリの、SAI から返信できる別のセッションだけ。sai_sessions で確かめてください）'))
+        return error(res, resolved.ambiguous ? 409 : 403, nth(n) + targetRefusal(asked, resolved, 'その相手には送れません（同じリポジトリか、人が許したリポジトリの、SAI から返信できる別のセッションだけ。sai_sessions で確かめてください）', found.session.project))
       }
       // 使用量の枠が残り少なければ送らない。見るのは相手のエージェントの枠（受け取って読み直すのは相手。#311）
       const overUsage = usageRefusal(usageNow, resolved.target.agent)
@@ -3039,7 +3067,8 @@ export function createApp(
             scheduleBacklog(from, AGENT_BACKLOG_ROUND_MS)
             continue
           }
-          const targets = agentTargets(sessions, sender, selfHost())
+          // 預かったあとに人が組を外していれば、その先へはもう送らない（#747）
+          const targets = agentTargets(sessions, sender, selfHost(), (await settingsStore.get()).send_across)
           let sentNow = 0
           let readNow = 0
           for (const h of agents.heldBy(from)) {

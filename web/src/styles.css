@@ -57,7 +57,7 @@
   header .user-menu .user { display: inline-flex; padding: 0; background: transparent; border: 0; border-radius: 20%; cursor: pointer; }
   header .user-menu .user .avatar { width: 28px; height: 28px; font-size: 12px; }
   header .user-menu .user:hover .avatar { outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent); }
-  header .user-menu .menu { position: absolute; top: calc(100% + 6px); right: 0; min-width: 12em; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, .18); padding: 6px 0; z-index: 15; }
+  header .user-menu .menu { position: absolute; top: calc(100% + 6px); right: 0; min-width: 12em; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, .18); padding: 6px 0; z-index: 15; max-height: calc(100vh - 64px); max-height: calc(100dvh - 64px); overflow-y: auto; }
   header .user-menu .menu .who { padding: 6px 12px 8px; font-weight: 700; border-bottom: 1px solid var(--line); margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 18em; }
   header .user-menu .menu .who .login { display: block; font-weight: 400; font-size: 11px; color: var(--muted); }
   header .user-menu .menu button { display: block; width: 100%; text-align: left; padding: 6px 12px; background: transparent; border: 0; color: var(--ink); font: inherit; cursor: pointer; }
@@ -79,6 +79,21 @@
   header .user-menu .menu .reply-mode-controls { margin-top: 4px; padding-top: 6px; border-top: 1px solid var(--line); }
   header .user-menu .menu .reply-mode-controls .reply-mode { display: flex; flex-direction: column; gap: 4px; padding: 2px 12px 6px; font-size: 12px; color: var(--muted); }
   header .user-menu .menu .reply-mode-controls .note { padding: 0 12px 6px; white-space: normal; }
+  /* 別のリポジトリへ送ってよい組（#747）。向きつきの組を、記録で知っているリポジトリから選ぶ */
+  header .user-menu .menu .send-across-controls { margin-top: 4px; padding: 6px 12px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  header .user-menu .menu .send-across-controls .send-across-title { color: var(--ink); }
+  header .user-menu .menu .send-across-controls .note { padding: 0; white-space: normal; }
+  header .user-menu .menu .send-across-controls .note.warn { color: var(--claude); }
+  header .user-menu .menu .send-across-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+  header .user-menu .menu .send-across-list li { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+  header .user-menu .menu .send-across-list .pair { flex: 1 1 auto; color: var(--ink); overflow-wrap: anywhere; min-width: 0; white-space: normal; }
+  /* メニューのボタンは幅いっぱい（上の決まり）なので、行の中のボタンは幅を戻す */
+  header .user-menu .menu .send-across-list .linkish { flex: none; display: inline; width: auto; padding: 0; color: var(--accent); font-size: 12px; }
+  header .user-menu .menu .send-across-list .linkish:hover { background: none; text-decoration: underline; }
+  header .user-menu .menu .send-across-add { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  header .user-menu .menu .send-across-add select { flex: 1 1 110px; min-width: 0; max-width: 100%; background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 6px; padding: 3px 6px; font: inherit; font-size: 12px; }
+  header .user-menu .menu .send-across-add button { flex: none; display: inline-block; width: auto; font: inherit; font-size: 12px; padding: 3px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); cursor: pointer; }
+  header .user-menu .menu .send-across-add button:disabled { opacity: .5; cursor: default; }
   header .user-menu .menu .jev-controls .jev-auto { display: flex; align-items: center; gap: 6px; padding: 2px 12px 6px; font-size: 12px; color: var(--muted); }
   /* 使用量（#216）。取れたエージェントの分だけ出る。Codex は割合、Claude は上限に当たっているときだけ */
   header .usage { position: relative; display: inline-flex; }
@@ -644,7 +659,7 @@
     /* 新しいセッションの画面（#314）。基本の指定（前の方）と同じ詳細度なので、後ろにあるこちらが勝つ */
     .new-session select, .new-session textarea, .new-session .workspace-picker input { font-size: 16px; min-height: 36px; }
     /* 一言の口とモデルの欄（#288）。前の方にある基本の指定と同じ詳細度にして、後ろにあるこちらを勝たせる */
-    header .user-menu .menu .digest-engine select, header .user-menu .menu .digest-engine .digest-model, header .user-menu .menu .jev-controls .jev-auto select, header .user-menu .menu .reply-mode-controls .reply-mode select { font-size: 16px; min-height: 36px; }
+    header .user-menu .menu .digest-engine select, header .user-menu .menu .digest-engine .digest-model, header .user-menu .menu .jev-controls .jev-auto select, header .user-menu .menu .reply-mode-controls .reply-mode select, header .user-menu .menu .send-across-add select { font-size: 16px; min-height: 36px; }
     /* 見出しの select と名前の入力欄は `.pane` を足して詳細度を上げる。この下（ファイルの後ろ）にある基本の
        `.chat-head .meta select { font-size: 12px }` / `.chat-head .session-name input { font: inherit }` と同じ詳細度だと
        後ろが勝ち、16px が効かずに iOS で押すと拡大していた（#274 で測って 12px / 14px だった） */

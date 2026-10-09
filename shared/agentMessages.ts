@@ -6,7 +6,8 @@ import { isLoopPrompt } from './loops.ts'
 import { isWaitPrompt } from './waits.ts'
 import { replyBlockedReason } from './reply.ts'
 import { promptTracker } from './turnPrompts.ts'
-import type { Agent, AgentSessionEntry, FeedRow, SessionSummary, UsageResponse, UsageWindow } from './types.ts'
+import { mayCross } from './sendAcross.ts'
+import type { Agent, AgentSessionEntry, FeedRow, SendAcrossPair, SessionSummary, UsageResponse, UsageWindow } from './types.ts'
 
 /**
  * 1 回のターンで sai_send を呼べる回数（#311 の往復の上限。仮の既定）。
@@ -216,13 +217,28 @@ export function sessionLabel(s: Pick<SessionSummary, 'id' | 'title' | 'meta'>): 
 }
 
 /**
- * 送ってよい相手（#310 の最初の PR）。**同じ project の中だけ**・自分以外・アーカイブ済みでない・返信できる
- * （別のマシン・合成 ID・エージェント不明は `replyBlockedReason()` で落ちる）。
- * 同じ project に絞るのは、素通し（bypassPermissions）のセッションに外から指示が入る範囲を狭めるため（#253）
+ * 送ってよい相手（#310 の最初の PR）。**同じ project の中**と、**人が許した組の先の project**（#747。`across`）・
+ * 自分以外・アーカイブ済みでない・返信できる（別のマシン・合成 ID・エージェント不明は `replyBlockedReason()` で落ちる）。
+ * 既定（`across` が空）で同じ project に絞るのは、素通し（bypassPermissions）のセッションに外から指示が入る範囲を狭めるため（#253）。
+ * またいだ先が素通しでも送れる（#747 で決めた。範囲は人が許した組で縛る）。並びは同じ project が先
  */
-export function agentTargets(sessions: readonly SessionSummary[], from: SessionSummary, serverHost: string): SessionSummary[] {
+export function agentTargets(sessions: readonly SessionSummary[], from: SessionSummary, serverHost: string, across: readonly SendAcrossPair[] = []): SessionSummary[] {
   if (!from.project) return []
-  return sessions.filter((s) => s.id !== from.id && s.project === from.project && !s.archived && !replyBlockedReason(s, serverHost))
+  const ok = (s: SessionSummary) => s.id !== from.id && !s.archived && !replyBlockedReason(s, serverHost)
+  return [...sessions.filter((s) => s.project === from.project && ok(s)), ...sessions.filter((s) => isAcross(from, s, across) && ok(s))]
+}
+
+/** `s` が、`from` から見て**別のリポジトリの、送ってよい組の先**のセッションか（#747） */
+export function isAcross(from: Pick<SessionSummary, 'project'>, s: Pick<SessionSummary, 'project'>, across: readonly SendAcrossPair[]): boolean {
+  return Boolean(s.project) && s.project !== from.project && mayCross(across, from.project, s.project)
+}
+
+/**
+ * sai_sessions が返す、**別のリポジトリのセッション**の 1 件（#747）。出すのは呼び名・エージェント・空いているか、まで
+ * （最後の発言・ブランチ・「同じファイル」・PR・読み直す量は載せない。別のリポジトリの記録を、頼んでいないのに送り元の文脈へ流さない）
+ */
+export function acrossEntry(s: SessionSummary, busy: boolean, free: boolean): AgentSessionEntry {
+  return { id: s.id, name: sessionLabel(s), project: s.project, branch: '', agent: s.agent, busy, last_text: '', context_tokens: 0, overlap: [], overlap_more: 0, across: true, ...(free ? { holding: { free: true as const } } : {}) }
 }
 
 /** 宛先の名前を比べる形（#625）。前後の空白と大文字小文字だけ無視する（前方一致・あいまいな一致はしない） */
@@ -256,8 +272,9 @@ export function resolveTarget(targets: readonly SessionSummary[], to: string, bl
 }
 
 /** 宛先が決まらなかったときに返す文（#625）。候補を id と呼び名で並べ、選び直させる */
-export function targetRefusal(to: string, resolved: Extract<ResolvedTarget, { target: null }>, none: string): string {
-  const list = resolved.candidates.map((s) => `- ${s.id}「${sessionLabel(s)}」`).join('\n')
+export function targetRefusal(to: string, resolved: Extract<ResolvedTarget, { target: null }>, none: string, home = ''): string {
+  // 送り元と違うリポジトリの候補には `<リポジトリ>` を添える（#747。同じ呼び名・同じ worktree 名がリポジトリをまたいで重なる）
+  const list = resolved.candidates.map((s) => `- ${s.id}「${sessionLabel(s)}」${home && s.project && s.project !== home ? `（${s.project}）` : ''}`).join('\n')
   if (resolved.ambiguous) {
     const total = resolved.candidates.length + (resolved.hidden ?? 0)
     const hidden = resolved.hidden ? `（うち ${resolved.hidden} つは送れないセッション。下には送れる方だけ）` : ''
@@ -449,6 +466,12 @@ export function splitHandedReplies(userText: string): { text: string; handed: nu
   return { text: userText.slice(end + HANDED_END.length).replace(/^\s+/, ''), handed }
 }
 
+
+/** sai_sessions の一覧で、別のリポジトリのセッション（#747）の前に置く見出し */
+export const ACROSS_HEADING = '別のリポジトリ（送れる。相手からは、あなたのリポジトリのファイルは読めません）:'
+
+/** `sai_send` の説明に足す、別のリポジトリへ送るときの書き方（#747） */
+export const ACROSS_NOTE = '**別のリポジトリのセッションに送るとき**（sai_sessions の「別のリポジトリ（送れる）」に並ぶ相手。人が許した組だけ）は、**宛先からは送り元のリポジトリのファイルが読めない前提で、本文だけで動けるように書く**（ファイルのパスではなく、要る中身・形・前提を本文に写す）。呼び名がリポジトリをまたいで重なるときは送られないので、id で選び直す。'
 
 /** 預かったことをエージェントに伝える文（#727）。**送り直させない**のが目的 */
 export const HELD_NOTE = `預かった分は、このターンが終わったあと SAI が順に送ります（1 巡 ${AGENT_SEND_MAX} 件まで、巡の間は約 ${Math.round(AGENT_BACKLOG_ROUND_MS / 1000)} 秒）。**同じものを送り直さないでください**。人が画面の「送信を止める」を押すと、残りは送られません。送る直前に相手が送れなくなっていた分は送らず、画面に理由を出します。預かった分は sai_wait では待てません（返答は画面と次のターンの頭に届きます）。`

@@ -15,7 +15,20 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 ### 送り元と送り先
 
 - 送り元は、SAI が起動していまターンを回しているセッションだけ（`run.snapshot()` にあって `failed` でない。MCP の `SAI_ENTITY`）。
-- 送り先は `shared/agentMessages.ts` の `agentTargets()`（同じ `project`・自分以外・アーカイブ済みでない・`replyBlockedReason()` が空）。
+- 送り先は `shared/agentMessages.ts` の `agentTargets()`（同じ `project`・自分以外・アーカイブ済みでない・`replyBlockedReason()` が空）。人が許した組の先の `project` も足す（下の「別のリポジトリへ送る」）。
+
+### 別のリポジトリへ送る（#747）
+
+- **既定は同じ `project` の中だけ。** 人が自分のメニューで許した組（`settings.json` の `send_across: [{ from, to }]`）だけ、`from` のリポジトリのセッションが `to` のリポジトリのセッションへ送れる。判定は `shared/sendAcross.ts` の `mayCross()` の 1 つ。
+- **組は向きつき**（A → B を許しても B → A は送れない）。一括で許す口（「全部」）は無い。**双方向にするなら変えるのは `mayCross()` だけ**（逆向きの組も通す 1 行）。組の数は `SEND_ACROSS_MAX`（30）まで。
+- 変える口は `PUT /api/settings` の `send_across`（**同一オリジンのみ**。丸ごと置き換え）。`cleanPairs()` が、**記録で知っているリポジトリ**（`knownProjects()` = 直近のセッションの `project`）の名前だけを通し、書き方をそれに揃える。エージェント用の口（`/api/agent/*`）と MCP の道具には、組を変える道が無い。`GET /api/settings` は `send_across` と、選べる名前 `send_across_projects` を返す。画面は `SendAcrossControls`（名前は打たせず、2 つの select から選ぶ）。
+- `agentTargets(sessions, from, host, across)` が、同じ `project` の相手の後ろに、組の先の `project` の相手を並べる。**またいだ先が素通し（Bypass / Auto）でも送れる**（同じリポジトリの中の `sai_send` と同じ扱い。tailnet の `/mcp` が素通しに送らない線は変えていない）。別のマシン・合成 ID・エージェント不明・アーカイブ済みは今までどおり落ちる。
+- `sai_sessions`（SAI が渡す口）は、別のリポジトリの相手を `acrossEntry()` で出す: **呼び名・エージェント・空いているか、まで**（`across: true`。`branch`・`last_text` は空、`context_tokens` は 0、`overlap` は空、`holding` は `free` だけ）。PR は引かず（`holdingsOf()` の `prs: false`）、変わっているファイルも読まない。道具の出力は「別のリポジトリ（送れる。…）:」（`ACROSS_HEADING`）の見出しの下に `- <id>「呼び名」<project> <agent>（処理中）（空き）`。
+- 宛先を名前で引くとき（#625）は、同じ `project` と組の先の `project` をまとめて `resolveTarget()` に渡す。リポジトリをまたいで同じ名前があれば当てず、`targetRefusal()` が送り元と違うリポジトリの候補に `（<project>）` を添えて選び直させる。
+- 歯止めは同じ道を通る（1 ターンの回数・読み直しの予算・相手の使用量・預かり・人が止める口・連鎖を作らない）。預かり（#727）を送る `drainBacklog()` も、送る直前に同じ `agentTargets()` で確かめるので、**預かったあとに人が組を外せば、その先へは送らず止めて残す**。
+- 見出し（`【SAI】#<project> の「<呼び名>」からのメッセージです`）は送り元の `project` を持っているので、宛先は別のリポジトリから来たと分かる。`cwd` は宛先のセッションの行から（リクエストからは受けない）。返答は今までどおり送り元の画面と次のターンの頭に入る。
+- 道具の説明（`ACROSS_NOTE`）に「宛先からは送り元のリポジトリのファイルが読めない前提で、本文だけで動けるように書く」を足してある。
+- `/manager`（`.mcp.json` の `sai-read`）は変えていない（送れるようにする件は、送れる範囲が決まっていない）。
 
 ### 同じファイルを触っているか（#564）
 

@@ -1414,6 +1414,11 @@ export interface ApprovalDecision {
   label: string
   /** 押した後の表示にだけ使う */
   behavior: 'allow' | 'deny'
+  /**
+   * 押すと、この 1 回を越えて残る（#741。Codex の規則の追加 = 今後も聞かない・今後も断る）。
+   * 画面は「許可」と同じ塗りのボタンにせず、枠だけで出す（今回だけの許可と取り違えて押さないように）
+   */
+  persists?: true
 }
 
 /** エンティティID → 答え待ちの承認（古い順）。無ければ空 */

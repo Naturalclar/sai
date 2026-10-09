@@ -146,6 +146,8 @@ interface Decision {
   label: string
   behavior: 'allow' | 'deny'
   result: JsonObject
+  /** 押すとこの 1 回を越えて残る（規則の追加） */
+  persists?: true
 }
 
 interface PendingApproval {
@@ -686,7 +688,7 @@ export class CodexAppServer implements CodexApp {
       text,
       agent: 'codex',
       answerable: !unanswerable,
-      ...(decisions.length ? { decisions: decisions.map(({ id, label, behavior }) => ({ id, label, behavior })) } : {}),
+      ...(decisions.length ? { decisions: decisions.map(({ id, label, behavior, persists }) => ({ id, label, behavior, ...(persists ? { persists } : {}) })) } : {}),
     }
     return { approval, requestId, requestKey: keyOf(requestId), threadId: turn.threadId, turnId, method, decisions }
   }
@@ -801,7 +803,7 @@ function plainDecision(index: number, name: keyof typeof PLAIN_DECISIONS & strin
 function decisionOf(index: number, value: unknown, result: JsonObject): Decision | null {
   const amendment = amendmentLabel(value)
   if (amendment === null) return null
-  if (amendment) return { id: `d${index}`, ...amendment, result }
+  if (amendment) return { id: `d${index}`, ...amendment, result, persists: true }
   const plain = typeof value === 'string' && Object.hasOwn(PLAIN_DECISIONS, value) ? PLAIN_DECISIONS[value] : undefined
   return plain ? { id: `d${index}`, ...plain, result } : null
 }

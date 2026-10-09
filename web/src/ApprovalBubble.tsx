@@ -137,7 +137,8 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false, modeNote =
                 <button
                   type="button"
                   key={decision.id}
-                  className={decision.behavior === 'allow' ? 'allow' : 'deny'}
+                  // 残る許可（#741 の「今後聞かない」）は、今回だけの「許可」と同じ塗りにしない（枠だけ）
+                  className={decision.persists && decision.behavior === 'allow' ? 'always' : decision.behavior === 'allow' ? 'allow' : 'deny'}
                   disabled={busy || done !== null}
                   onClick={() => void send({ behavior: decision.behavior, decision: decision.id })}
                 >

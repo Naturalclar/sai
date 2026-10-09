@@ -8,6 +8,7 @@ import { WaitingTag } from './WaitingTag'
 import { ReplyingTag } from './ReplyingTag'
 import { ArchivedTag } from './ArchivedTag'
 import { StopMissingTag } from './StopMissingTag'
+import { WaitUnsetTag } from './WaitUnsetTag'
 import { ReturnedTag } from './ReturnedTag'
 import { PermissionModeTag } from './PermissionModeTag'
 import { ContextTag } from './ContextTag'
@@ -30,6 +31,8 @@ function tagOf(tag: HeadTag, now: number): ReactNode {
       return <ReplyingTag since={tag.since} now={now} />
     case 'stop_missing':
       return <StopMissingTag />
+    case 'wait_unset':
+      return <WaitUnsetTag pr={tag.pr} />
     case 'archived':
       return <ArchivedTag />
     case 'returned':

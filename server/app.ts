@@ -141,6 +141,7 @@ import { changedPaths, clampPatch, NotAGitRepo, RealGit, resolveBase, sessionDif
 import { prBrowserFromEnv } from './git/prs.ts'
 import type { PrBrowser } from './git/prs.ts'
 import { diffStats, githubRepoOf, isPrNumber, knownRepos, pickKnownRepo } from '../shared/prs.ts'
+import { WAITING_SAID_FRESH_MS, WAIT_HUMAN_THEN, saysWaiting, waitingUnscheduled } from '../shared/waitingSaid.ts'
 import { holdingLabel, holdingOf } from '../shared/holding.ts'
 import { githubReview, parseReviewRequest } from '../shared/prReview.ts'
 import { fillRepo, ProjectResolver } from './git/project.ts'
@@ -357,7 +358,7 @@ const LOOP_SUFFIXES = ['/loop/stop', '/loop/resume', '/loop/wake', '/loop'] as c
 /** `sai_wait_for`（#732）。エージェントが「PR の CI が終わったら起こして」を預ける口 */
 const AGENT_WAIT_FOR_PATH = '/api/agent/wait-for'
 /** 人が待ちを止める・いま起こす（#732）。どの待ちかは body の `wait` */
-const WAIT_SUFFIXES = ['/wait/stop', '/wait/wake'] as const
+const WAIT_SUFFIXES = ['/wait/stop', '/wait/wake', '/wait/add'] as const
 /** sai_wait をサーバ側で待つ間、相手の返答の行が届いたかを見る間隔 */
 const AGENT_POLL_MS = 1000
 /** 処理中のターンを止める口（#384）。`POST /api/sessions/<id>/interrupt`。同一オリジンのみ */
@@ -1343,7 +1344,57 @@ export function createApp(
         missing.push(s.id)
       }
     }
-    return { rev: `${rev}-${meta.rev}-${icons.rev}-${reads.rev}-${[...live].map(([id, d]) => `${id}:${d.at}`).join(',')}-${missing.join(',')}-${shown.key}`, sessions: built }
+    // 「待ちます」と言って終わったのに、待ちが預けられていない（#732 の案 3）。行だけで候補を絞り（最後の行がターン完了・新しい・
+    // このマシンの Claude・待ちも処理中も無い）、末尾の文面を見てから、PR を前に読んだ一覧で引く（ここでは `gh` を待たない）。
+    // **分からなければ出さない**。時間と PR の一覧で変わる印なので、出しているものを rev に混ぜる
+    const unset: string[] = []
+    const maybe = new Map<string, SessionSummary>()
+    // 候補を安く絞る（行と文面を見る相手を減らすだけ。出すかどうかを決めるのは下の `waitingUnscheduled()`）。
+    // 端末で開いたセッションは、ターンの 60 秒あとに `入力待ち` の行が来るので、最後の行が idle でも候補にする
+    for (const s of built) {
+      if ((s.last_kind !== 'turn' && s.last_kind !== 'idle') || s.agent !== 'claude' || s.archived || isRemoteHost(s.host, selfHost())) continue
+      if (nowMs - rowMs(s.last_turn_ts || undefined) > WAITING_SAID_FRESH_MS) continue
+      maybe.set(s.id, s)
+    }
+    if (maybe.size > 0) {
+      // 候補ごとの最後のターン完了の行と、そのあとに「入力待ち」以外の行（人の入力・許可の待ち…）が来たか
+      const lastTurn = new Map<string, { row: FeedRow; clean: boolean }>()
+      for (const r of shown.rows) {
+        const id = entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? ''))
+        if (!maybe.has(id)) continue
+        const kind = eventKind(r.event, r.text)
+        if (kind === 'turn') lastTurn.set(id, { row: r, clean: true })
+        else if (kind !== 'idle') {
+          const cur = lastTurn.get(id)
+          if (cur) cur.clean = false
+        }
+      }
+      for (const [id, s] of maybe) {
+        const last = lastTurn.get(id)
+        const r = last?.row
+        // 文面が先（PR を引くのは言っているときだけ）
+        if (!last || !r?.text || !saysWaiting(r.text)) continue
+        const known = {
+          lastIsTurn: last.clean,
+          text: r.text,
+          endedMs: rowMs(r.ts),
+          now: nowMs,
+          busy: mcpBusy(id) || launching.has(id) || queue.size(id) > 0,
+          waits: waits.of(id).length,
+          // ループが組まれている（次の周で起きる）・このターンの印は人がもう片付けた（待ちを置いた・止めた）
+          handled: loopLive(loops.get(id)?.status ?? 'done') || waitUnsetHandled.has(`${id}\n${String(r.ts ?? '')}`),
+        }
+        // PR を引く（無ければ裏で `gh` を読みに行く）のは、ほかの条件が全部そろっているセッションだけ
+        if (!waitingUnscheduled({ ...known, prs: [1] })) continue
+        const number = waitingUnscheduled({ ...known, prs: (await branchPrs(s, false)) ?? [] })
+        if (!number) continue
+        // 置けない理由（素通し・端末で開いている・送信を止めている…）。印は出して、置く口だけ理由つきで押せなくする
+        const blocked = agents.isStopped(id) ? 'このセッションからの送信を止めているので、待ちも置けません' : await loopRefusal(s, 'wait')
+        s.wait_unset = { pr: number, ...(blocked ? { blocked } : {}) }
+        unset.push(`${id}:${number}:${blocked ? 1 : 0}`)
+      }
+    }
+    return { rev: `${rev}-${meta.rev}-${icons.rev}-${reads.rev}-${[...live].map(([id, d]) => `${id}:${d.at}`).join(',')}-${missing.join(',')}-${unset.join(',')}-${shown.key}`, sessions: built }
   }
 
   /**
@@ -3679,27 +3730,35 @@ export function createApp(
     if ('error' in made) return error(res, 400, made.error)
     const blocked = await loopRefusal(found.session, 'wait')
     if (blocked) return error(res, 400, blocked)
-    const repo = githubRepoOf(found.session.remote)
-    if (!repo) return error(res, 400, 'このセッションのリポジトリ（origin）が GitHub のものと分からないので、PR を確かめられません')
-    if (!prs.available || !prs.ci) return error(res, 400, 'gh を使わない設定（SAI_GH=0）なので、CI を確かめられません')
+    const placed = await depositWait(id, found.session, made, selfUrl(req))
+    if ('error' in placed) return error(res, placed.status, placed.error)
+    return json(res, placed)
+  }
+
+  /**
+   * 待ちを 1 件預かる（#732）。エージェントの口（`sai_wait_for`）と、人が画面から置く口（`/wait/add`）が同じ道を通る
+   * （同じ置き場・同じ上限）。**断る線（`loopRefusal()`）と送信の停止は呼ぶ側が先に見る**。
+   * リポジトリはセッションの行の remote から決める。預かる前に 1 回読み、もう終わっていれば預からずに結果を返す
+   */
+  const depositWait = async (id: string, session: SessionSummary, made: { pr: number; then: string }, url: string): Promise<WaitForResponse | { status: number; error: string }> => {
+    const repo = githubRepoOf(session.remote)
+    if (!repo) return { status: 400, error: 'このセッションのリポジトリ（origin）が GitHub のものと分からないので、PR を確かめられません' }
+    if (!prs.available || !prs.ci) return { status: 400, error: 'gh を使わない設定（SAI_GH=0）なので、CI を確かめられません' }
     const limit = waitLimitRefusal(waits.of(id), repo, made.pr)
-    if (limit) return error(res, 429, limit)
+    if (limit) return { status: 429, error: limit }
     // 預かる前に 1 回読む: 番号違い・gh が使えない、を黙って待たない。もう終わっていれば預からない
     const ci = await prs.ci(repo, made.pr)
-    if (!ci) return error(res, 400, `PR #${made.pr}（${repo}）を gh で読めませんでした（番号と gh のログインを確かめてください）`)
+    if (!ci) return { status: 400, error: `PR #${made.pr}（${repo}）を gh で読めませんでした（番号と gh のログインを確かめてください）` }
     const now = loopNow()
     const left = () => Math.max(0, WAIT_MAX_PER_SESSION - waits.of(id).filter((w) => waitLive(w.status)).length)
     // 預かった時刻を now にすると「チェックがまだ載っていない」の猶予が効くので、ここでは猶予を見ない（載っていなければ待つ）
     // **「通った」「落ちた」はここでは信じない**（push・回し直しの直後は、前の結果や速いチェックだけが載っていることがある）。
     // 預かって、次に確かめたときも同じなら起こす。マージ済み・クローズは、あとから変わらないのでその場で返す
     const outcome = waitOutcome(ci, now, now)
-    if (outcome === 'merged' || outcome === 'closed') {
-      const payload: WaitForResponse = { result: outcome, failing: ci.failing.slice(0, WAIT_FAILING_MAX), left: left() }
-      return json(res, payload)
-    }
+    if (outcome === 'merged' || outcome === 'closed') return { result: outcome, failing: ci.failing.slice(0, WAIT_FAILING_MAX), left: left() }
     // await を挟んだので、数の上限はもう一度見る（ツールを並べて呼ばれても超えない）
     const again = waitLimitRefusal(waits.of(id), repo, made.pr)
-    if (again) return error(res, 429, again)
+    if (again) return { status: 429, error: again }
     const wait: WaitState = {
       id: randomUUID().replace(/-/g, '').slice(0, 16),
       repo,
@@ -3710,13 +3769,64 @@ export function createApp(
       deadline: waitIso(now + WAIT_MAX_MS),
       checked_at: waitIso(now),
       next_check_at: waitIso(now + WAIT_POLL_MS),
-      url: selfUrl(req),
+      url,
       ...(outcome === 'success' || outcome === 'failure' ? { seen_once: outcome } : {}),
     }
     waits.add(id, wait)
     await waitLog(id, `PR #${made.pr}（${repo}）の CI を待つ（${wait.deadline} まで）`)
     syncWaitTimer()
-    const payload: WaitForResponse = { wait: waits.snapshot()[id]!.find((w) => w.id === wait.id)!, left: left() }
+    return { wait: waits.snapshot()[id]!.find((w) => w.id === wait.id)!, left: left() }
+  }
+
+  /**
+   * 「待つと言ったが予定なし」の印（#732 の案 3）を、そのターンについてはもう出さない（鍵はエンティティと最後のターン完了の時刻）。
+   * 人が待ちを置いた・止めたとき。メモリだけ（立て直すと、12 時間以内のターンには出し直る）
+   */
+  const waitUnsetHandled = new Set<string>()
+  const markWaitUnsetHandled = (session: Pick<SessionSummary, 'id' | 'last_turn_ts'>) => {
+    if (!session.last_turn_ts) return
+    if (waitUnsetHandled.size > 500) waitUnsetHandled.clear()
+    waitUnsetHandled.add(`${session.id}\n${session.last_turn_ts}`)
+  }
+
+  /**
+   * そのセッションのブランチから出ている open な PR の番号（#732 の案 3）。**リクエストからは受けず、セッションの行から引く**。
+   * `fresh` でなければ前に読んだ一覧だけを見る（無ければ裏で読みに行き、今回は「分からない」）。分からなければ `null`
+   */
+  const branchPrs = async (session: Pick<SessionSummary, 'remote' | 'branch'>, fresh: boolean): Promise<number[] | null> => {
+    const repo = githubRepoOf(session.remote)
+    if (!repo || !session.branch || !prs.available) return null
+    const list = fresh ? await prs.list(repo, true).catch(() => null) : prs.cached?.(repo, HOLDING_PR_STALE_MS)
+    if (!list) return null
+    // `prForSession()` と同じ線: fork のブランチから出た PR（同じ名前の他人のブランチ）と、既定のブランチにいるセッションは結ばない
+    return list.filter((one) => one.head === session.branch && one.base !== session.branch && !one.cross).map((one) => one.number)
+  }
+
+  /**
+   * 人が画面から「この PR の CI を待つ」を置く（`/wait/add`。#732 の案 3）。**PR はそのセッションのブランチの open な PR から機械で引く**
+   * （番号はリクエストから受けない。ちょうど 1 つに決まらなければ置かない）。置き場・上限・断る線はエージェントの口と同じ
+   */
+  const addWaitByHuman = async (req: IncomingMessage, res: ServerResponse, id: string) => {
+    const { sessions } = await sessionsWithMeta(QUEUE_DAYS)
+    const session = sessions.find((s) => s.id === id)
+    if (!session) return error(res, 404, 'session not found in window')
+    if (agents.isStopped(id)) return error(res, 409, 'このセッションからの送信を止めているので、待ちも置けません')
+    // ループが組まれているセッションは、次の周で起きる（待ちを重ねて起こさない。エージェントの口と同じ向き）
+    if (loopLive(loops.get(id)?.status ?? 'done')) return error(res, 409, 'ループが組まれているセッションには待ちを置けません（次の周で起きます）')
+    const blocked = await loopRefusal(session, 'wait')
+    if (blocked) return error(res, 400, blocked)
+    if (!githubRepoOf(session.remote)) return error(res, 400, 'このセッションのリポジトリ（origin）が GitHub のものと分からないので、PR を確かめられません')
+    if (!prs.available || !prs.ci) return error(res, 400, 'gh を使わない設定（SAI_GH=0）なので、CI を確かめられません')
+    if (!session.branch) return error(res, 400, 'このセッションのブランチが分からないので、PR を引けません')
+    const found = await branchPrs(session, true)
+    if (!found) return error(res, 400, 'このセッションのブランチの PR を gh で読めませんでした')
+    if (found.length !== 1) return error(res, 400, found.length === 0 ? `ブランチ ${session.branch} から出ている open な PR がありません` : `ブランチ ${session.branch} から出ている PR が ${found.length} 件あり、どれを待つか決められません`)
+    const placed = await depositWait(id, session, { pr: found[0]!, then: WAIT_HUMAN_THEN }, selfUrl(req))
+    if ('error' in placed) return error(res, placed.status, placed.error)
+    // もう終わっていた（マージ済み・クローズ）: 置くものが無い
+    if (!placed.wait) return error(res, 409, `PR #${found[0]} はもう${placed.result === 'merged' ? 'マージされています' : '閉じられています'}（待つものがありません）`)
+    markWaitUnsetHandled(session)
+    const payload: WaitActionResponse = { id, waits: waits.snapshot()[id] ?? [] }
     return json(res, payload)
   }
 
@@ -3728,6 +3838,7 @@ export function createApp(
   const waitAction = async (req: IncomingMessage, res: ServerResponse, id: string, suffix: (typeof WAIT_SUFFIXES)[number]) => {
     if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
     if ((req.method ?? 'GET') !== 'POST') return error(res, 405, 'method not allowed')
+    if (suffix === '/wait/add') return await addWaitByHuman(req, res, id)
     let body: unknown
     try {
       body = await readJson(req, MAX_REPLY_BYTES)
@@ -3738,6 +3849,10 @@ export function createApp(
     const cur = typeof waitId === 'string' ? waits.get(id, waitId) : undefined
     if (!cur) return error(res, 404, 'その待ちはありません（もう起こしたか、止めてあります）')
     if (suffix === '/wait/stop') {
+      // 止めたあとに「待つと言ったが予定なし」の印を出し直さない（人がいま要らないと決めた）
+      const { sessions } = await sessionsWithMeta(QUEUE_DAYS)
+      const stopped = sessions.find((s) => s.id === id)
+      if (stopped) markWaitUnsetHandled(stopped)
       waits.remove(id, cur.id)
       waitRetryAt.delete(cur.id)
       waitHeldFor.delete(cur.id)

@@ -245,6 +245,13 @@ export interface SessionSummary {
    */
   stop_missing?: true
   /**
+   * 返答の末尾が「〜を待ちます／届き次第／通ったら」の類なのに、待ち（`sai_wait_for`）が預けられていない（#732 の案 3）。
+   * `pr` はそのセッションのブランチから出ている open な PR（ちょうど 1 つに決まったときだけ）。画面は印を出し、
+   * 人が「この PR の CI を待つ」を置ける口を出す。`blocked` があれば置けない理由（印は出すが、口は押せない）。
+   * **分からなければ無い**（人が次に何か打った・もう回っている・PR が決まらない・古い）。要対応には数えない
+   */
+  wait_unset?: { pr: number; blocked?: string }
+  /**
    * Manager が置いた案（#565。`sai_suggest`）。**置いてから 24 時間以内で、そのあと人の入力が来ていない**（置いた時刻より後の行で決める）ときだけ
    * サーバが `suggestions.json` から載せる（`shared/managerDraft.ts`）。入力欄が空のとき、`next_ask` より先に出す
    */

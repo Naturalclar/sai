@@ -48,7 +48,7 @@ class FakePrs {
   lineComments = () => this.none.lineComments()
   viewer = () => this.none.viewer()
   postReview = () => this.none.postReview()
-  open: PrSummary[] = [pr(51, 'feat-a'), pr(55, 'feat-e'), pr(57, 'feat-g'), pr(58, 'feat-g'), pr(59, 'feat-h'), pr(60, 'feat-old')]
+  open: PrSummary[] = [pr(51, 'feat-a'), pr(55, 'feat-e'), pr(57, 'feat-g'), pr(58, 'feat-g'), pr(59, 'feat-h'), pr(60, 'feat-old'), pr(61, 'feat-i'), { ...pr(62, 'feat-fork'), cross: true }, { ...pr(63, 'main'), base: 'main' }]
   checks = new Map<number, PrCi | null>([[51, PENDING], [55, PENDING], [59, { state: 'MERGED', checks: 'success', failing: [], pending: false }]])
   loaded = false
   /** 待たずに裏で読みに行かせたリポジトリ */
@@ -99,6 +99,12 @@ before(async () => {
       s('G', 30, { branch: 'feat-g', text: WAITING }),
       // もうマージされている PR
       s('H', 30, { branch: 'feat-h', text: WAITING }),
+      // 端末で開いたセッション: ターンの 60 秒あとに「入力待ち」の行が来る（そのあとも印は残す）
+      s('I', 30, { branch: 'feat-i', text: WAITING }),
+      s('I', 29, { branch: 'feat-i', event: 'Notification', text: '入力待ち', user_text: '' }),
+      // 同じ名前のブランチから出た fork の PR・既定のブランチにいるセッション（結ばない）
+      s('J', 30, { branch: 'feat-fork', text: WAITING }),
+      s('K', 30, { branch: 'main', text: WAITING }),
       // Claude 以外
       s('X', 30, { branch: 'feat-a', text: WAITING, agent: 'codex' }),
     ]
@@ -129,10 +135,11 @@ test('印: 末尾が「待ちます」で待ちが無く、ブランチの PR �
   const first = await list()
   assert.deepEqual(marks(first), {}, 'PR の一覧をまだ読めていない間は出さない（分からないときは出さない）')
   assert.ok(prs.asked.length > 0 && prs.asked.every((repo) => repo === 'o/r') && prs.fresh === 0, '一覧のポーリングでは gh を待たない（裏で読みに行くだけ）')
-  assert.ok(prs.asked.length <= 5, '読みに行くのは「待ちます」と言っているセッションの分だけ')
+  assert.equal(prs.asked.length, 8, '読みに行くのは、ほかの条件が全部そろったセッションの分だけ（人が次に打った・人待ち・古い・Claude 以外の分は読まない）')
   prs.loaded = true
   const second = await list()
-  assert.deepEqual(Object.keys(marks(second)).sort(), [eid('A'), eid('E'), eid('H')], '人が次に打った・PR が無い・人を待っている・古い・PR が 2 つ・Claude 以外は出さない')
+  assert.deepEqual(Object.keys(marks(second)).sort(), [eid('A'), eid('E'), eid('H'), eid('I')], '人が次に打った・PR が無い・人を待っている・古い・PR が 2 つ・fork の PR・既定のブランチ・Claude 以外は出さない')
+  assert.deepEqual(marks(second)[eid('I')], { pr: 61 }, '「入力待ち」の行が後ろに来ても出す（端末で開いたセッション）')
   assert.deepEqual(marks(second)[eid('A')], { pr: 51 })
   assert.notEqual(first.rev, second.rev, '出たら画面が描き直る')
   assert.equal((await list()).rev, second.rev, '変わらなければ rev も同じ')
@@ -152,6 +159,12 @@ test('置く: PR はセッションのブランチから機械で引く（番号
   const again = await add('A')
   assert.equal(again.status, 429)
   assert.match(await errorOf(again), /PR #51 の CI はもう待っています/)
+  // 止めたあとに、同じターンの印を出し直さない（人がいま要らないと決めた）
+  const stop = await fetch(`${base}/api/sessions/${encodeURIComponent(eid('A'))}/wait/stop`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ wait: body.waits[0]!.id }) })
+  assert.equal(stop.status, 200)
+  const stopped = await list()
+  assert.equal(stopped.waits[eid('A')], undefined)
+  assert.equal(marks(stopped)[eid('A')], undefined)
 })
 
 test('置けないとき: 許可を聞かないモードは印だけ出て、口は理由つきで断る（線はエージェントの口と同じ）。PR が無い・2 つ・もうマージ済みも置かない', async () => {
@@ -177,4 +190,17 @@ test('置けないとき: 許可を聞かないモードは印だけ出て、口
   assert.equal(merged.status, 409)
   assert.match(await errorOf(merged), /PR #59 はもうマージされています/)
   assert.equal((await add('nope')).status, 404)
+  const fork = await add('J')
+  assert.equal(fork.status, 400)
+  assert.match(await errorOf(fork), /open な PR がありません/, 'fork の PR は結ばない')
+})
+
+test('ループが組まれているセッションには印を出さず、待ちも置かせない（次の周で起きる）', async () => {
+  assert.deepEqual(marks(await list())[eid('I')], { pr: 61 })
+  const loop = await fetch(`${base}/api/sessions/${encodeURIComponent(eid('I'))}/loop`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ goal: 'CI を見る', until: '緑になったら' }) })
+  assert.equal(loop.status, 200, await loop.clone().text())
+  assert.equal(marks(await list())[eid('I')], undefined)
+  const res = await add('I')
+  assert.equal(res.status, 409)
+  assert.match(await errorOf(res), /ループが組まれている/)
 })

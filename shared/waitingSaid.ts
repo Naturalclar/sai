@@ -9,6 +9,7 @@
 // - **機械が終わるもの**（CI・テスト・ビルド・レビュー・結果…）の話をしている文だけ数える（その文か、すぐ前の文に出てくること。
 //   「403 が出たら README を見ます」「返答が届いたら同じ並びに出します」のような、待ちではない「〜たら」を拾わない）
 // - コードブロックと引用の中は見ない
+// - 問いかけ・人への頼みの文は数えない（「通ったらマージしてよいですか？」「問題が出たら教えてください」）
 
 /** 末尾として見る行の数（空でない行）と、その字数の上限 */
 export const WAITING_TAIL_LINES = 4
@@ -44,10 +45,13 @@ const HUMAN = [
   // 「『…』と言ってもらえれば」「『…』で〜します」（人の一言が合図）
   /(言ってもらえ|言っていただけ|言ってくれ|伝えてもらえ|声をかけてもらえ)(れば|たら)/,
   /[「『][^」』]{1,40}[」』]\s*(で|なら|と(言|い)(われ|って|えば))/,
+  // 人への頼み・問いかけ（「問題が出たら教えてください」「通ったらマージしてよいですか」）
+  /(ください|下さい|お願いします|お願いいたします|いただけ|もらえますか|くれますか)/,
+  /(ですか|ますか|でしょうか|よいか|いいか|どうか)\s*$/,
 ]
 
-// 機械が終わるもの。待っている相手がこれの類のときだけ数える
-const MACHINE = /CI|チェック|テスト|ビルド|レビュー|結果|一式|ジョブ|ワークフロー|デプロイ|\b(checks?|builds?|reviews?|tests?|workflows?|jobs?|pipeline|suite|deploy(ment)?)\b/i
+// 機械が終わるもの。待っている相手がこれの類のときだけ数える（`CI` は語として。specific・decision の中の ci を拾わない）
+const MACHINE = /\bCI\b|チェック|テスト|ビルド|レビュー|結果|一式|ジョブ|ワークフロー|デプロイ|\b(checks?|builds?|reviews?|tests?|workflows?|jobs?|pipeline|suite|deploy(ment)?)\b/i
 
 /** コードブロックと引用の行を落とす */
 function prose(text: string): string[] {
@@ -78,8 +82,10 @@ export function waitingTail(text: string): string {
 export function saysWaiting(text: string): boolean {
   const tail = waitingTail(text)
   if (!tail) return false
-  const sentences = tail.split(/[。\n！？!?]|\.\s/).filter((x) => x.trim())
+  // 区切りの字を残して切る（問いかけの文は数えない）
+  const sentences = (tail.replace(/\.\s+/g, '.\n').match(/[^。\n！？!?]+[。！？!?]?/g) ?? []).map((x) => x.trim()).filter(Boolean)
   for (const [i, sentence] of sentences.entries()) {
+    if (/[？?]$/.test(sentence)) continue
     if (!WAITS.some((re) => re.test(sentence))) continue
     if (HUMAN.some((re) => re.test(sentence))) continue
     if (!MACHINE.test(sentence) && !MACHINE.test(sentences[i - 1] ?? '')) continue
@@ -101,6 +107,8 @@ export interface WaitingSaidInput {
   busy: boolean
   /** このセッションに置いてある待ちの数（状態は問わない。起こせなかった待ちが残っていても、人はそちらを見る） */
   waits: number
+  /** ほかに起こす予定がある（ループが組まれている）・このターンの印はもう片付けた（人が待ちを置いた・止めた） */
+  handled: boolean
   /** このセッションのブランチから出ている open な PR の番号。**ちょうど 1 つに決まったときだけ**（分からない・2 つ以上は空の配列か複数） */
   prs: readonly number[]
 }
@@ -110,7 +118,7 @@ export interface WaitingSaidInput {
  * **1 つでも分からなければ出さない**
  */
 export function waitingUnscheduled(input: WaitingSaidInput): number {
-  if (!input.lastIsTurn || input.busy || input.waits > 0) return 0
+  if (!input.lastIsTurn || input.busy || input.waits > 0 || input.handled) return 0
   if (!Number.isFinite(input.endedMs) || input.now - input.endedMs > WAITING_SAID_FRESH_MS || input.endedMs > input.now + 60_000) return 0
   if (input.prs.length !== 1) return 0
   return saysWaiting(input.text) ? input.prs[0]! : 0

@@ -35,6 +35,13 @@ const NOT_WAITING = [
   // 人の一言が合図
   'レビューが完了したら、「確認して」と言ってもらえれば指摘を見ます。',
   '「マージして」でレビューと CI を待ってからマージします。',
+  // 人への頼み・問いかけ
+  'テストで問題が出たら教えてください。',
+  'CI が通ったらマージしてよいですか？',
+  '結果が出たらどうしますか',
+  // ci を含むだけの語（specific・decision）は、機械が終わるものではない
+  'specific な指定が届いたら続けます。',
+  'We will continue once the decision lands.',
   '',
 ]
 
@@ -54,11 +61,12 @@ test('saysWaiting: 見るのは末尾だけ。途中の「待ちます」・コ�
 
 test('waitingUnscheduled: 1 つでも分からなければ出さない（人が次に打った・もう回っている・待ちがある・PR が決まらない・古い）', () => {
   const now = Date.parse('2026-10-09T03:00:00Z')
-  const base = { lastIsTurn: true, text: 'PR を出しました。CI の結果を待ちます。', endedMs: now - 5 * 60_000, now, busy: false, waits: 0, prs: [42] }
+  const base = { lastIsTurn: true, text: 'PR を出しました。CI の結果を待ちます。', endedMs: now - 5 * 60_000, now, busy: false, waits: 0, handled: false, prs: [42] }
   assert.equal(waitingUnscheduled(base), 42)
   assert.equal(waitingUnscheduled({ ...base, lastIsTurn: false }), 0, '人が次に何か打った・待ちの行が来た')
   assert.equal(waitingUnscheduled({ ...base, busy: true }), 0, 'もう次のターンが回っている')
   assert.equal(waitingUnscheduled({ ...base, waits: 1 }), 0, '待ちが預けてある')
+  assert.equal(waitingUnscheduled({ ...base, handled: true }), 0, 'ループが組まれている・このターンの印は片付けた')
   assert.equal(waitingUnscheduled({ ...base, prs: [] }), 0, 'PR が見つからない')
   assert.equal(waitingUnscheduled({ ...base, prs: [42, 43] }), 0, 'PR が 1 つに決まらない')
   assert.equal(waitingUnscheduled({ ...base, endedMs: now - WAITING_SAID_FRESH_MS - 1 }), 0, '古いターン')

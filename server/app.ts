@@ -1349,23 +1349,44 @@ export function createApp(
     // **分からなければ出さない**。時間と PR の一覧で変わる印なので、出しているものを rev に混ぜる
     const unset: string[] = []
     const maybe = new Map<string, SessionSummary>()
+    // 候補を安く絞る（行と文面を見る相手を減らすだけ。出すかどうかを決めるのは下の `waitingUnscheduled()`）。
+    // 端末で開いたセッションは、ターンの 60 秒あとに `入力待ち` の行が来るので、最後の行が idle でも候補にする
     for (const s of built) {
-      if (s.last_kind !== 'turn' || s.agent !== 'claude' || s.archived || isRemoteHost(s.host, selfHost())) continue
-      if (nowMs - rowMs(s.end) > WAITING_SAID_FRESH_MS || waits.of(s.id).length > 0 || mcpBusy(s.id) || launching.has(s.id) || queue.size(s.id) > 0) continue
+      if ((s.last_kind !== 'turn' && s.last_kind !== 'idle') || s.agent !== 'claude' || s.archived || isRemoteHost(s.host, selfHost())) continue
+      if (nowMs - rowMs(s.last_turn_ts || undefined) > WAITING_SAID_FRESH_MS) continue
       maybe.set(s.id, s)
     }
     if (maybe.size > 0) {
-      const lastTurn = new Map<string, FeedRow>()
+      // 候補ごとの最後のターン完了の行と、そのあとに「入力待ち」以外の行（人の入力・許可の待ち…）が来たか
+      const lastTurn = new Map<string, { row: FeedRow; clean: boolean }>()
       for (const r of shown.rows) {
-        if (eventKind(r.event, r.text) !== 'turn') continue
         const id = entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? ''))
-        if (maybe.has(id)) lastTurn.set(id, r)
+        if (!maybe.has(id)) continue
+        const kind = eventKind(r.event, r.text)
+        if (kind === 'turn') lastTurn.set(id, { row: r, clean: true })
+        else if (kind !== 'idle') {
+          const cur = lastTurn.get(id)
+          if (cur) cur.clean = false
+        }
       }
       for (const [id, s] of maybe) {
-        const r = lastTurn.get(id)
-        // 最後の行がそのターン完了の行のときだけ（補った返答・別の行が後ろにあるなら見ない）。文面が先（PR を引くのは言っているときだけ）
-        if (!r?.text || rowMs(r.ts) < rowMs(s.end) || !saysWaiting(r.text)) continue
-        const number = waitingUnscheduled({ lastIsTurn: true, text: r.text, endedMs: rowMs(r.ts), now: nowMs, busy: false, waits: 0, prs: (await branchPrs(s, false)) ?? [] })
+        const last = lastTurn.get(id)
+        const r = last?.row
+        // 文面が先（PR を引くのは言っているときだけ）
+        if (!last || !r?.text || !saysWaiting(r.text)) continue
+        const known = {
+          lastIsTurn: last.clean,
+          text: r.text,
+          endedMs: rowMs(r.ts),
+          now: nowMs,
+          busy: mcpBusy(id) || launching.has(id) || queue.size(id) > 0,
+          waits: waits.of(id).length,
+          // ループが組まれている（次の周で起きる）・このターンの印は人がもう片付けた（待ちを置いた・止めた）
+          handled: loopLive(loops.get(id)?.status ?? 'done') || waitUnsetHandled.has(`${id}\n${String(r.ts ?? '')}`),
+        }
+        // PR を引く（無ければ裏で `gh` を読みに行く）のは、ほかの条件が全部そろっているセッションだけ
+        if (!waitingUnscheduled({ ...known, prs: [1] })) continue
+        const number = waitingUnscheduled({ ...known, prs: (await branchPrs(s, false)) ?? [] })
         if (!number) continue
         // 置けない理由（素通し・端末で開いている・送信を止めている…）。印は出して、置く口だけ理由つきで押せなくする
         const blocked = agents.isStopped(id) ? 'このセッションからの送信を止めているので、待ちも置けません' : await loopRefusal(s, 'wait')
@@ -3758,6 +3779,17 @@ export function createApp(
   }
 
   /**
+   * 「待つと言ったが予定なし」の印（#732 の案 3）を、そのターンについてはもう出さない（鍵はエンティティと最後のターン完了の時刻）。
+   * 人が待ちを置いた・止めたとき。メモリだけ（立て直すと、12 時間以内のターンには出し直る）
+   */
+  const waitUnsetHandled = new Set<string>()
+  const markWaitUnsetHandled = (session: Pick<SessionSummary, 'id' | 'last_turn_ts'>) => {
+    if (!session.last_turn_ts) return
+    if (waitUnsetHandled.size > 500) waitUnsetHandled.clear()
+    waitUnsetHandled.add(`${session.id}\n${session.last_turn_ts}`)
+  }
+
+  /**
    * そのセッションのブランチから出ている open な PR の番号（#732 の案 3）。**リクエストからは受けず、セッションの行から引く**。
    * `fresh` でなければ前に読んだ一覧だけを見る（無ければ裏で読みに行き、今回は「分からない」）。分からなければ `null`
    */
@@ -3766,7 +3798,8 @@ export function createApp(
     if (!repo || !session.branch || !prs.available) return null
     const list = fresh ? await prs.list(repo, true).catch(() => null) : prs.cached?.(repo, HOLDING_PR_STALE_MS)
     if (!list) return null
-    return list.filter((one) => one.head === session.branch).map((one) => one.number)
+    // `prForSession()` と同じ線: fork のブランチから出た PR（同じ名前の他人のブランチ）と、既定のブランチにいるセッションは結ばない
+    return list.filter((one) => one.head === session.branch && one.base !== session.branch && !one.cross).map((one) => one.number)
   }
 
   /**
@@ -3778,8 +3811,13 @@ export function createApp(
     const session = sessions.find((s) => s.id === id)
     if (!session) return error(res, 404, 'session not found in window')
     if (agents.isStopped(id)) return error(res, 409, 'このセッションからの送信を止めているので、待ちも置けません')
+    // ループが組まれているセッションは、次の周で起きる（待ちを重ねて起こさない。エージェントの口と同じ向き）
+    if (loopLive(loops.get(id)?.status ?? 'done')) return error(res, 409, 'ループが組まれているセッションには待ちを置けません（次の周で起きます）')
     const blocked = await loopRefusal(session, 'wait')
     if (blocked) return error(res, 400, blocked)
+    if (!githubRepoOf(session.remote)) return error(res, 400, 'このセッションのリポジトリ（origin）が GitHub のものと分からないので、PR を確かめられません')
+    if (!prs.available || !prs.ci) return error(res, 400, 'gh を使わない設定（SAI_GH=0）なので、CI を確かめられません')
+    if (!session.branch) return error(res, 400, 'このセッションのブランチが分からないので、PR を引けません')
     const found = await branchPrs(session, true)
     if (!found) return error(res, 400, 'このセッションのブランチの PR を gh で読めませんでした')
     if (found.length !== 1) return error(res, 400, found.length === 0 ? `ブランチ ${session.branch} から出ている open な PR がありません` : `ブランチ ${session.branch} から出ている PR が ${found.length} 件あり、どれを待つか決められません`)
@@ -3787,6 +3825,7 @@ export function createApp(
     if ('error' in placed) return error(res, placed.status, placed.error)
     // もう終わっていた（マージ済み・クローズ）: 置くものが無い
     if (!placed.wait) return error(res, 409, `PR #${found[0]} はもう${placed.result === 'merged' ? 'マージされています' : '閉じられています'}（待つものがありません）`)
+    markWaitUnsetHandled(session)
     const payload: WaitActionResponse = { id, waits: waits.snapshot()[id] ?? [] }
     return json(res, payload)
   }
@@ -3810,6 +3849,10 @@ export function createApp(
     const cur = typeof waitId === 'string' ? waits.get(id, waitId) : undefined
     if (!cur) return error(res, 404, 'その待ちはありません（もう起こしたか、止めてあります）')
     if (suffix === '/wait/stop') {
+      // 止めたあとに「待つと言ったが予定なし」の印を出し直さない（人がいま要らないと決めた）
+      const { sessions } = await sessionsWithMeta(QUEUE_DAYS)
+      const stopped = sessions.find((s) => s.id === id)
+      if (stopped) markWaitUnsetHandled(stopped)
       waits.remove(id, cur.id)
       waitRetryAt.delete(cur.id)
       waitHeldFor.delete(cur.id)

@@ -18,11 +18,14 @@ interface Props {
 export function WaitUnsetBar({ id, pr, blocked }: Props) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  // 置けたあとは押せなくする（次のポーリングで帯ごと消えるまでの間に、もう 1 回押させない）
+  const [placed, setPlaced] = useState(false)
   const add = async () => {
     setBusy(true)
     setError('')
     try {
       await api.waitAdd(id)
+      setPlaced(true)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -36,7 +39,7 @@ export function WaitUnsetBar({ id, pr, blocked }: Props) {
         <span className="actions">
           <button
             type="button"
-            disabled={busy || Boolean(blocked)}
+            disabled={busy || placed || Boolean(blocked)}
             onClick={() => void add()}
             title={blocked ? blocked : `PR #${pr} の CI が終わったら、このセッションを 1 回起こす（結果を読んで報告させる。マージはしない。起こすと文脈を読み直すのでトークンを使う）`}
           >

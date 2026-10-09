@@ -482,7 +482,7 @@ export function App() {
           {/* 返信の既定の許可モード（#582。既定は「決めない」。セッションごとに選んだものが勝つ） */}
           {settings && <ReplyModeControls settings={settings} busy={settingsBusy} onChange={(p) => void updateSettings(p)} />}
           {/* エージェントの sai_send が、別のリポジトリへ送ってよい組（#747） */}
-          {settings && <SendAcrossControls settings={settings} busy={settingsBusy} onChange={(p) => void updateSettings(p)} />}
+          {settings && <SendAcrossControls settings={settings} busy={settingsBusy} error={settingsError} onChange={(p) => void updateSettings(p)} />}
           {settings?.digest && narrow && (
             <DigestControls settings={settings} busy={settingsBusy} error="" onPersona={(p) => void setPersona(p)} onLinearWorkspace={(ws) => void setLinearWorkspace(ws)} />
           )}

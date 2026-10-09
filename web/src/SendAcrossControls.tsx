@@ -5,6 +5,8 @@ import type { SettingsRequest, SettingsResponse } from './api'
 interface Props {
   settings: SettingsResponse
   busy: boolean
+  /** 直前の保存の失敗（サーバの文）。この欄の下にも出す（押しても何も起きないように見せない） */
+  error?: string
   onChange: (patch: SettingsRequest) => void
 }
 
@@ -13,7 +15,7 @@ interface Props {
  * 人が決める。**既定は空**（同じリポジトリの中だけ）。組は向きつきで、選べるのは記録で知っているリポジトリだけ（名前は打たせない）。
  * 変えられるのはここ（同一オリジンの PUT）だけで、エージェントの道具からは増やせない
  */
-export function SendAcrossControls({ settings, busy, onChange }: Props) {
+export function SendAcrossControls({ settings, busy, error = '', onChange }: Props) {
   // 古いサーバ（send_across を返さない）に当たったら、欄ごと出さない
   const pairs = settings.send_across
   const projects = settings.send_across_projects
@@ -31,7 +33,7 @@ export function SendAcrossControls({ settings, busy, onChange }: Props) {
           {pairs.map((p) => (
             <li key={`${p.from}\n${p.to}`}>
               <span className="pair">{pairLabel(p)}</span>
-              <button type="button" className="linkish" disabled={busy} onClick={() => onChange({ send_across: pairs.filter((x) => x !== p) })}>
+              <button type="button" className="linkish" disabled={busy} onClick={() => onChange({ send_across_remove: p })}>
                 やめる
               </button>
             </li>
@@ -57,7 +59,8 @@ export function SendAcrossControls({ settings, busy, onChange }: Props) {
             type="button"
             disabled={busy || !ready}
             onClick={() => {
-              onChange({ send_across: [...pairs, { from, to }] })
+              // 足す・外すは 1 つずつ送る（古い写しを持ったタブが、別の端末で外した組を戻さない）
+              onChange({ send_across_add: { from, to } })
               setTo('')
             }}
           >
@@ -65,6 +68,7 @@ export function SendAcrossControls({ settings, busy, onChange }: Props) {
           </button>
         </div>
       )}
+      {error && <div className="note warn">{error}</div>}
       <div className="note warn">
         許した向きにだけ送れます（逆向きは別に許す）。宛先が許可を聞かないモード（Bypass / Auto）でも送れるので、送り元のエージェントが読んだ文に指示が混ざっていると、宛先のリポジトリまで届きます
       </div>

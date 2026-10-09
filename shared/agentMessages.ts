@@ -234,11 +234,28 @@ export function isAcross(from: Pick<SessionSummary, 'project'>, s: Pick<SessionS
 }
 
 /**
+ * 別のリポジトリのセッションの呼び名（#747）。**人が付けた表示名だけ**で、無ければ `#<worktree 名>`。
+ * `sessionLabel()` は表示名が無いと題名（相手のリポジトリの人の入力の 1 行目）に落ちるので、またいだ相手には使わない
+ * （頼んでいない中身が、送り元のエージェントの文脈へ流れる）
+ */
+export function acrossLabel(s: Pick<SessionSummary, 'id' | 'repo' | 'meta'>): string {
+  return s.meta?.name || (s.repo ? `#${s.repo}` : s.id)
+}
+
+/**
+ * 別のリポジトリのセッションを宛先として書ける名前（#747）: **id と、人が付けた表示名だけ**。worktree 名と題名では当てない
+ * （`main` のような worktree 名はどのリポジトリにもあり、送り元の側に同じ名前のセッションが居ないだけで、別のリポジトリへ黙って届く）
+ */
+export function acrossNames(s: Pick<SessionSummary, 'id' | 'meta'>): string[] {
+  return [...new Set([s.id, s.meta?.name ?? ''].map(targetKey).filter(Boolean))]
+}
+
+/**
  * sai_sessions が返す、**別のリポジトリのセッション**の 1 件（#747）。出すのは呼び名・エージェント・空いているか、まで
  * （最後の発言・ブランチ・「同じファイル」・PR・読み直す量は載せない。別のリポジトリの記録を、頼んでいないのに送り元の文脈へ流さない）
  */
 export function acrossEntry(s: SessionSummary, busy: boolean, free: boolean): AgentSessionEntry {
-  return { id: s.id, name: sessionLabel(s), project: s.project, branch: '', agent: s.agent, busy, last_text: '', context_tokens: 0, overlap: [], overlap_more: 0, across: true, ...(free ? { holding: { free: true as const } } : {}) }
+  return { id: s.id, name: acrossLabel(s), project: s.project, branch: '', agent: s.agent, busy, last_text: '', context_tokens: 0, overlap: [], overlap_more: 0, across: true, ...(free ? { holding: { free: true as const } } : {}) }
 }
 
 /** 宛先の名前を比べる形（#625）。前後の空白と大文字小文字だけ無視する（前方一致・あいまいな一致はしない） */
@@ -260,11 +277,18 @@ export type ResolvedTarget = { target: SessionSummary } | { target: null; ambigu
  * `blocked` は、送れないが居るセッション（素通し・別のマシンなど。アーカイブ済みは渡さない）。**同じ名前がそこにも居れば当てない**:
  * 送れる相手だけで数えると、人が指していた方が送れないセッションのとき、同じ名前の別のセッションに黙って届く（#662 のレビュー）
  */
-export function resolveTarget(targets: readonly SessionSummary[], to: string, blocked: readonly SessionSummary[] = []): ResolvedTarget {
+export function resolveTarget(
+  targets: readonly SessionSummary[],
+  to: string,
+  blocked: readonly SessionSummary[] = [],
+  /** そのセッションを指せる名前。既定は `targetNames()`。別のリポジトリの相手には `acrossNames()` を返させる（#747） */
+  namesOf: (s: SessionSummary) => string[] = targetNames,
+): ResolvedTarget {
   const byId = targets.find((s) => s.id === to)
   if (byId) return { target: byId }
   const key = targetKey(to)
-  const hits = key ? targets.filter((s) => targetNames(s).includes(key)) : []
+  const hits = key ? targets.filter((s) => namesOf(s).includes(key)) : []
+  // 送れないが居るセッションは、いつもの名前（表示名・worktree 名・題名）で数える（どの名前で人が指していたか分からないので広く取る）
   const hidden = hits.length > 0 ? blocked.filter((s) => targetNames(s).includes(key)).length : 0
   if (hits.length === 1 && hidden === 0) return { target: hits[0]! }
   if (hits.length > 0) return { target: null, ambiguous: true, candidates: hits, ...(hidden ? { hidden } : {}) }
@@ -274,7 +298,9 @@ export function resolveTarget(targets: readonly SessionSummary[], to: string, bl
 /** 宛先が決まらなかったときに返す文（#625）。候補を id と呼び名で並べ、選び直させる */
 export function targetRefusal(to: string, resolved: Extract<ResolvedTarget, { target: null }>, none: string, home = ''): string {
   // 送り元と違うリポジトリの候補には `<リポジトリ>` を添える（#747。同じ呼び名・同じ worktree 名がリポジトリをまたいで重なる）
-  const list = resolved.candidates.map((s) => `- ${s.id}「${sessionLabel(s)}」${home && s.project && s.project !== home ? `（${s.project}）` : ''}`).join('\n')
+  // 別のリポジトリの候補は、題名に落ちない呼び名で出す（`acrossLabel()`）
+  const far = (s: SessionSummary) => Boolean(home && s.project && s.project !== home)
+  const list = resolved.candidates.map((s) => `- ${s.id}「${far(s) ? acrossLabel(s) : sessionLabel(s)}」${far(s) ? `（${s.project}）` : ''}`).join('\n')
   if (resolved.ambiguous) {
     const total = resolved.candidates.length + (resolved.hidden ?? 0)
     const hidden = resolved.hidden ? `（うち ${resolved.hidden} つは送れないセッション。下には送れる方だけ）` : ''
@@ -379,13 +405,15 @@ export function budgetRefusal(spent: number, next: number, budget: number = AGEN
  * 依頼 1 つの上限（#727）に収まるか。収まれば空、収まらなければ理由。**預かる前に、依頼の全部について**呼ぶ
  * （`sizes` はこれから足す宛先ごとの読み直す量、`count` / `read` はその依頼でもう送った分と預かっている分）
  */
-export function requestRefusal(count: number, read: number, sizes: readonly { name: string; tokens: number }[]): string {
+export function requestRefusal(count: number, read: number, sizes: readonly { name: string; tokens: number; hidden?: boolean }[]): string {
   const total = count + sizes.length
   if (total > AGENT_REQUEST_MAX) {
     return `1 つの依頼で送れるのは ${AGENT_REQUEST_MAX} 件までです（もう ${count} 件、今回 ${sizes.length} 件）。1 件も預かっていません。宛先を減らすか、人に確かめてください`
   }
   const adding = sizes.reduce((sum, s) => sum + (s.tokens > 0 ? s.tokens : 0), 0)
   if (adding > 0 && read + adding > AGENT_REQUEST_READ_BUDGET) {
+    // 別のリポジトリの相手（`hidden`。#747）が混ざる依頼では、相手ごとの量も合計も出さない（一覧で伏せた量を、断りの文から出さない）
+    if (sizes.some((s) => s.hidden)) return `この依頼で相手に読み直させる量の合計が予算を超えます（予算は${tokensLabel(AGENT_REQUEST_READ_BUDGET)}。別のリポジトリの相手の量は出しません）。1 件も預かっていません。相手を減らすか、人に確かめてください`
     const each = sizes.filter((s) => s.tokens > 0).map((s) => `${s.name} ${tokensLabel(s.tokens).trim()}`).join('、')
     return `この依頼で相手に読み直させる量の合計が予算を超えます（これまで ${read > 0 ? tokensLabel(read).trim() : '0'}、今回 ${tokensLabel(adding).trim()}＝${each}。予算は${tokensLabel(AGENT_REQUEST_READ_BUDGET)}）。1 件も預かっていません。小さい相手に絞るか、人に確かめてください`
   }

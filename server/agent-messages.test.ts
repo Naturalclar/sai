@@ -1304,22 +1304,26 @@ const sessionsOf = async (from: string) => {
   }
 }
 
-test('別のリポジトリへ送る組は、同一オリジンの設定の口だけで変えられる。記録で知っているリポジトリだけ・向きつき（#747）', async () => {
+test('別のリポジトリへ送る組は、同一オリジンの設定の口だけで、1 つずつ足す・外す。記録で知っているリポジトリだけ・向きつき（#747）', async () => {
   const settings = async () => (await (await fetch(`${base}/api/settings`)).json()) as SettingsResponse
   const first = await settings()
   assert.deepEqual(first.send_across, [], '既定は空（同じリポジトリの中だけ）')
   assert.ok(first.send_across_projects.includes('o/r') && first.send_across_projects.includes('o/other'), '選べるのは記録で知っているリポジトリ')
-  assert.equal((await putSettings({ send_across: [{ from: 'o/r', to: 'o/other' }] }, 'http://evil.example')).status, 403, '別オリジンからは変えられない')
-  assert.equal((await putSettings({ send_across: [{ from: 'o/r', to: 'o/unknown' }] })).status, 400, '任意の名前は持たせない')
-  assert.equal((await putSettings({ send_across: [{ from: 'o/r', to: 'o/r' }] })).status, 400)
-  assert.equal((await putSettings({ send_across: 'o/other' })).status, 400)
+  const pair = { from: 'o/r', to: 'o/other' }
+  assert.equal((await putSettings({ send_across_add: pair }, 'http://evil.example')).status, 403, '別オリジンからは変えられない')
+  assert.equal((await putSettings({ send_across_add: { from: 'o/r', to: 'o/unknown' } })).status, 400, '任意の名前は持たせない')
+  assert.equal((await putSettings({ send_across_add: { from: 'o/r', to: 'o/r' } })).status, 400)
+  assert.equal((await putSettings({ send_across_add: 'o/other' })).status, 400)
+  assert.equal((await putSettings({ send_across: [pair] })).status, 400, '丸ごと置き換える形は受けない（古い写しが、外した組を戻さないように）')
   // エージェント用の口（/api/agent/*）には、組を変える道が無い
-  assert.equal((await agent('/api/agent/settings', { method: 'PUT', body: JSON.stringify({ send_across: [{ from: 'o/r', to: 'o/other' }] }) })).ok, false)
-  assert.equal((await agent('/api/agent/send', { method: 'POST', body: JSON.stringify({ from: 'A1@r', to: 'C1@r', text: 'x', send_across: [{ from: 'o/r', to: 'o/other' }] }) })).status, 409, '送信に混ぜても無視される（A1 はターンを回していないので 409）')
+  assert.equal((await agent('/api/agent/settings', { method: 'PUT', body: JSON.stringify({ send_across_add: pair }) })).ok, false)
   assert.deepEqual((await settings()).send_across, [], '断ったものは残らない')
-  const ok = await putSettings({ send_across: [{ from: 'O/R', to: 'o/other' }] })
+  const ok = await putSettings({ send_across_add: { from: 'O/R', to: 'o/other' } })
   assert.equal(ok.status, 200)
-  assert.deepEqual(((await ok.json()) as SettingsResponse).send_across, [{ from: 'o/r', to: 'o/other' }], '名前は記録の書き方に揃える')
+  assert.deepEqual(((await ok.json()) as SettingsResponse).send_across, [pair], '名前は記録の書き方に揃える')
+  // もう 1 回足しても増えない。外すのは 1 つずつ（無い組を外しても何も起きない）
+  assert.deepEqual(((await (await putSettings({ send_across_add: pair })).json()) as SettingsResponse).send_across, [pair])
+  assert.deepEqual(((await (await putSettings({ send_across_remove: { from: 'o/other', to: 'o/r' } })).json()) as SettingsResponse).send_across, [pair])
 })
 
 test('許した組では、別のリポジトリのセッションが一覧に分けて出て（呼び名・エージェント・空いているかまで）、送れる。逆向きは送れない（#747）', async () => {
@@ -1327,7 +1331,7 @@ test('許した組では、別のリポジトリのセッションが一覧に�
   idle('A1@r')
   const list = await sessionsOf('A1@r')
   const c = list.find((s) => s.id === 'C1@r')
-  assert.deepEqual(c, { id: 'C1@r', name: c!.name, project: 'o/other', branch: '', agent: 'claude', busy: false, last_text: '', context_tokens: 0, overlap: [], overlap_more: 0, across: true, holding: { free: true } }, 'ブランチ・最後の発言・同じファイル・読み直す量・PR は載せない')
+  assert.deepEqual(c, { id: 'C1@r', name: '#r', project: 'o/other', branch: '', agent: 'claude', busy: false, last_text: '', context_tokens: 0, overlap: [], overlap_more: 0, across: true, holding: { free: true } }, 'ブランチ・最後の発言・同じファイル・読み直す量・PR は載せない')
   assert.equal(list.at(-1)?.id, 'C1@r', '同じリポジトリの相手が先')
   assert.equal(list.find((s) => s.id === 'B1@r')?.across, undefined)
   // 逆向き（o/other → o/r）は許していないので、見えも送れもしない
@@ -1346,7 +1350,7 @@ test('許した組では、別のリポジトリのセッションが一覧に�
     const res = await send('A1@r', 'C1@r', 'この形に合わせて')
     assert.equal(res.status, 202)
     const body = (await res.json()) as AgentSendResponse
-    assert.deepEqual([body.to, body.context_tokens, body.read_tokens], ['C1@r', 200_000, 200_000], '読み直しの予算は同じ数え方')
+    assert.deepEqual([body.to, body.to_name, body.context_tokens, body.read_tokens], ['C1@r', '#r', 0, 200_000], '読み直しの予算には数えるが、別のリポジトリの相手の量と題名は返さない')
     assert.deepEqual(runner.started.map((s) => s.id), ['C1@r'])
     assert.match(runner.started[0]!.cmd.text, /^【SAI】#o\/r の「/)
     assert.equal(runner.started[0]!.cmd.cwd, work, 'cwd は宛先のセッションの行から')
@@ -1369,7 +1373,7 @@ test('許した組では、別のリポジトリのセッションが一覧に�
   } finally {
     idle('B1@r')
   }
-  assert.equal((await putSettings({ send_across: [] })).status, 200)
+  assert.equal((await putSettings({ send_across_remove: { from: 'o/r', to: 'o/other' } })).status, 200)
   const startedBefore = runner.started.length
   await poll()
   assert.equal(runner.started.length, startedBefore, '外した先には送らない')
@@ -1393,7 +1397,7 @@ test('許した組では、別のリポジトリのセッションが一覧に�
 test('呼び名がリポジトリをまたいで重なるときは送らず、<リポジトリ> 付きで選び直させる（#747）', async () => {
   await freshTurn()
   idle('A1@r')
-  assert.equal((await putSettings({ send_across: [{ from: 'o/r', to: 'o/other' }] })).status, 200)
+  assert.equal((await putSettings({ send_across_add: { from: 'o/r', to: 'o/other' } })).status, 200)
   const name = (id: string, value: string) => fetch(`${base}/api/sessions/${encodeURIComponent(id)}/meta`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ name: value }) })
   const nameBefore = (await (await fetch(`${base}/api/sessions/B1%40r/meta`)).json()) as { meta?: { name?: string } }
   assert.equal((await name('B1@r', '担当')).status, 200)
@@ -1409,13 +1413,51 @@ test('呼び名がリポジトリをまたいで重なるときは送らず、<�
     assert.equal(runner.started.length, 0)
     // id なら決まる
     assert.equal(((await (await send('A1@r', 'C1@r', '見て')).json()) as AgentSendResponse).to, 'C1@r')
+    // 表示名で別のリポジトリの相手に決まっても、送り元のリポジトリに同じ名前のセッションが居れば（アーカイブ済みでも）送らない
+    assert.equal((await name('B1@r', '担当')).status, 200)
+    const archive = (on: boolean) => fetch(`${base}/api/sessions/B1%40r/meta`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ archived_at: on ? new Date(Date.now() + 3_600_000).toISOString() : null }) })
+    assert.equal((await archive(true)).status, 200)
+    const startedBefore = runner.started.length
+    const hidden = await send('A1@r', '担当', '見て')
+    assert.equal(hidden.status, 409)
+    assert.match(((await hidden.json()) as { error: string }).error, /「担当」に当たる相手が 2 つあります（うち 1 つは送れないセッション/)
+    assert.equal(runner.started.length, startedBefore, '別のリポジトリへ黙って届かせない')
+    assert.equal((await archive(false)).status, 200)
   } finally {
     idle('A1@r')
   }
   await name('B1@r', nameBefore.meta?.name ?? '')
   await name('C1@r', '')
-  assert.equal((await putSettings({ send_across: [] })).status, 200)
+  assert.equal((await putSettings({ send_across_remove: { from: 'o/r', to: 'o/other' } })).status, 200)
   await clearQueue('C1@r')
   await humanReply('C1@r')
   idle('C1@r')
+})
+
+test('組を外すと、相手の預かりに並んでいた、その向きのメッセージも取り消す（外したあとに相手で回り出さない。#747）', async () => {
+  await freshTurn()
+  idle('A1@r')
+  await clearQueue('C1@r')
+  assert.equal((await putSettings({ send_across_add: { from: 'o/r', to: 'o/other' } })).status, 200)
+  turn('C1@r')
+  turn('A1@r')
+  try {
+    const res = await send('A1@r', 'C1@r', '終わったら見て')
+    assert.equal(((await res.json()) as AgentSendResponse).via, 'queued', '相手が処理中なので、相手の預かりに並ぶ')
+    // 同じリポジトリの相手の預かりは触らない
+    turn('B1@r')
+    assert.equal(((await (await send('A1@r', 'B1@r', '同じリポジトリ')).json()) as AgentSendResponse).via, 'queued')
+  } finally {
+    idle('A1@r')
+  }
+  const queuedOf = async (id: string) => ((await (await poll()).json()) as SessionsResponse).queued[id]?.items.length ?? 0
+  assert.equal(await queuedOf('C1@r'), 1)
+  assert.equal((await putSettings({ send_across_remove: { from: 'o/r', to: 'o/other' } })).status, 200)
+  assert.equal(await queuedOf('C1@r'), 0, '外した向きの分は取り消す')
+  assert.equal(await queuedOf('B1@r'), 1, '同じリポジトリの分は残る')
+  idle('C1@r')
+  await clearQueue('B1@r')
+  idle('B1@r')
+  await humanReply('B1@r')
+  idle('B1@r')
 })

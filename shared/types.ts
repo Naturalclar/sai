@@ -1120,7 +1120,8 @@ export interface AgentSessionEntry {
   holding?: SessionHolding
   /**
    * **別のリポジトリのセッション**（#747。人が許した組で送れる相手）。出すのは呼び名・エージェント・空いているか、まで:
-   * `branch`・`last_text` は空、`context_tokens` は 0、`overlap` は空、`holding` は `free` だけ
+   * `name` は人が付けた表示名（無ければ `#<worktree 名>`。題名には落とさない）、`branch`・`last_text` は空、`context_tokens` は 0、
+   * `overlap` は空、`holding` は `free` だけ
    */
   across?: true
 }
@@ -1958,8 +1959,13 @@ export interface SettingsRequest {
   paste_to_file?: boolean
   /** 返信の既定の許可モード（#582）。`REPLY_MODES` のどれか。空文字で「決めない」 */
   reply_mode?: ReplyPermissionMode | ''
-  /** 別のリポジトリへ送ってよい組（#747）。**送った並びで丸ごと置き換える**（空の配列で全部やめる）。記録で知っているリポジトリだけ */
-  send_across?: SendAcrossPair[]
+  /**
+   * 別のリポジトリへ送ってよい組（#747）を **1 つ足す**。記録で知っているリポジトリだけ。丸ごと置き換える形は無い
+   * （古い写しを持ったタブが、別の端末で外した組を戻さないように、足す・外すを 1 つずつ送る）
+   */
+  send_across_add?: SendAcrossPair
+  /** 組を 1 つ外す（#747）。無ければ何もしない。もう記録に無いリポジトリの組でも外せる */
+  send_across_remove?: SendAcrossPair
 }
 
 export interface SessionFilters {

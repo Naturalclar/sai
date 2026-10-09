@@ -57,3 +57,30 @@ export function readPairs(raw: unknown): SendAcrossPair[] {
 export function pairLabel(p: SendAcrossPair): string {
   return `${p.from} → ${p.to}`
 }
+
+/** 同じ組か（名前は大文字小文字を見ない） */
+export function samePair(a: SendAcrossPair, b: SendAcrossPair): boolean {
+  return a.from.toLowerCase() === b.from.toLowerCase() && a.to.toLowerCase() === b.to.toLowerCase()
+}
+
+/**
+ * いまの組に 1 つ足す（#747）。足す組は `cleanPairs()` と同じ検査を通す（`known` の名前だけ・自分から自分は不可）。
+ * もうあれば何も変えない。上限を超えるなら文で返す。**いま持っている組は検査し直さない**
+ * （前に許した組の片方が記録の窓から出ても、ほかの組を足す・外すのを止めない）
+ */
+export function addPair(pairs: readonly SendAcrossPair[], raw: unknown, known: readonly string[]): SendAcrossPair[] | string {
+  const one = cleanPairs([raw], known)
+  if (typeof one === 'string') return one === 'send_across は { from, to } の配列で送ってください' ? 'send_across_add は { from, to } で送ってください' : one
+  const pair = one[0]!
+  if (pairs.some((p) => samePair(p, pair))) return [...pairs]
+  if (pairs.length >= SEND_ACROSS_MAX) return `send_across に持てるのは ${SEND_ACROSS_MAX} 組までです`
+  return [...pairs, pair]
+}
+
+/** いまの組から 1 つ外す（#747）。名前が記録に無くても外せる。形が違えば文で返す */
+export function removePair(pairs: readonly SendAcrossPair[], raw: unknown): SendAcrossPair[] | string {
+  const v = (raw ?? {}) as { from?: unknown; to?: unknown }
+  if (!raw || typeof raw !== 'object' || typeof v.from !== 'string' || typeof v.to !== 'string') return 'send_across_remove は { from, to } で送ってください'
+  const pair = { from: v.from.trim(), to: v.to.trim() }
+  return pairs.filter((p) => !samePair(p, pair))
+}

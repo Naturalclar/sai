@@ -72,5 +72,9 @@ test('分岐して送る（#405）: Codex で分岐できるときだけ、そ�
   assert.deepEqual(sendModes(codex, CONTEXT_WARN_TOKENS), { mode: 'plain', choices: [] }, '分岐できなければ今までどおり何も出さない')
   assert.deepEqual(sendModes({ ...codex, forkable: true, terminal: true }, CONTEXT_WARN_TOKENS).choices, [], '端末で開いているものには出さない')
   assert.deepEqual(sendModes({ ...codex, agent: 'claude', forkable: true }, CONTEXT_WARN_TOKENS).choices, [], 'Claude には出さない')
+  // OpenCode も同じ口（#398）
+  assert.deepEqual(sendModes({ ...codex, agent: 'opencode', forkable: true }, CONTEXT_WARN_TOKENS), { mode: 'plain', choices: ['plain', 'fork'] })
+  assert.deepEqual(sendModes({ ...codex, agent: 'opencode' }, CONTEXT_WARN_TOKENS).choices, [])
+  assert.deepEqual(sendModes({ ...codex, agent: 'opencode', forkable: true, terminal: true }, CONTEXT_WARN_TOKENS).choices, [])
   assert.equal(SEND_MODE_LABEL.fork, '分岐して送る')
 })

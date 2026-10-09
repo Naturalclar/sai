@@ -118,6 +118,19 @@ export interface OpencodeApp {
    * 外を触ろうとしただけでターンが丸ごと無駄になり、#421 の「画面から答える」も当たらない
    */
   startSession?(cwd: string): Promise<string>
+  /**
+   * セッションを会話ごと分岐して、新しい id（`ses_…`）を返す（#398。`POST /session/<id>/fork?directory=<cwd>`）。
+   * **末尾から**（そこまでの会話を全部持った分岐。`messageID` は渡さない）。元のセッションは変わらない。
+   * 作っただけでは行は 1 本も書かれない（`startSession` と同じ。ターンを回して初めて一覧に出る）。
+   * 偽物は持たなくてよい（持たなければ OpenCode では分岐できないだけ）
+   */
+  fork?(session: string, cwd: string): Promise<string>
+  /**
+   * そのセッションのターンが、serve の上でいま回っているか（#398。`GET /session/status?directory=<cwd>`）。
+   * SAI が数えていないターン（立て直す前に起こした、など）を見るために使う。**立っているサーバにだけ聞く**
+   * （このために `opencode serve` を起こさない）。立っていない・聞けなければ false
+   */
+  turnRunning?(session: string, cwd: string): Promise<boolean>
   /** 行が届いたターンを終わりにする（#375 と同じ判定）。終わった id を返す（預かりを回すのに使う） */
   settle(lastTurn: (id: string) => string | undefined): string[]
   /**
@@ -365,6 +378,42 @@ export class OpencodeServer implements OpencodeApp {
     const session = typeof body?.id === 'string' ? body.id : ''
     if (!session) throw new Error('opencode serve がセッションIDを返しませんでした')
     return session
+  }
+
+  /**
+   * serve の上で、そのセッションのターンが回っているか（#398）。`GET /session/status` は `directory` ごとで、回っている
+   * セッションの id が鍵のオブジェクトを返す（`verifyAdopted()` と同じ読み方。1.18.30 で実測）。立っていない・聞けなければ false
+   */
+  async turnRunning(session: string, cwd: string): Promise<boolean> {
+    try {
+      const ready = await this.live()
+      if (!ready) return false
+      const res = await this.fetchFn(`${ready.url}/session/status?directory=${encodeURIComponent(cwd)}`, { headers: { authorization: ready.auth } })
+      if (!res.ok) return false
+      const status = (await res.json().catch(() => null)) as Record<string, unknown> | null
+      return Boolean(status && typeof status === 'object' && session in status)
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * セッションを分岐する（#398）。`POST /session/<id>/fork?directory=<cwd>` が、分岐先のセッションを JSON で返す
+   * （実測 1.18.30: `{"id":"ses_…","directory":"…","title":"<元の題名> (fork #1)", …}`。`parentID` は付かない＝サブセッションではない）。
+   * 本文は `{}`（`messageID` を渡すとそこまでで切れるが、SAI は末尾からしか分けない）。知らない id は 404
+   */
+  async fork(session: string, cwd: string): Promise<string> {
+    const { url, auth } = await this.serve()
+    const res = await this.fetchFn(`${url}/session/${encodeURIComponent(session)}/fork?directory=${encodeURIComponent(cwd)}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: auth },
+      body: '{}',
+    })
+    if (!res.ok) throw new Error(`opencode serve が ${res.status} を返しました: ${(await res.text().catch(() => '')).slice(0, 200)}`)
+    const body = (await res.json().catch(() => null)) as { id?: unknown } | null
+    const forked = typeof body?.id === 'string' ? body.id : ''
+    if (!forked || forked === session) throw new Error('opencode serve が分岐先のセッションIDを返しませんでした')
+    return forked
   }
 
   async start(input: OpencodeTurnInput): Promise<void> {

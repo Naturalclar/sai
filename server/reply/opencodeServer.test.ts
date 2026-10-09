@@ -314,6 +314,72 @@ test('startSession: POST /session に directory を付けて作り、返る id �
   }
 })
 
+test('fork: POST /session/<id>/fork に directory を付けて分岐し、返る id を使う（#398）', async () => {
+  const seen: { method: string; url: string; auth: string; body: unknown }[] = []
+  let reply: { status: number; body: string } = { status: 200, body: JSON.stringify({ id: 'ses_fork1', directory: '/work', title: 'x (fork #1)' }) }
+  const server: Server = createServer((req, res) => {
+    let raw = ''
+    req.on('data', (c) => (raw += c))
+    req.on('end', () => {
+      seen.push({ method: req.method ?? '', url: req.url ?? '', auth: req.headers.authorization ?? '', body: raw ? JSON.parse(raw) : null })
+      res.writeHead(reply.status, { 'content-type': 'application/json' })
+      res.end(reply.body)
+    })
+  })
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+  const addr = server.address()
+  const base = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`
+  try {
+    const app = new OpencodeServer(fetch, Date.now, async () => ({ url: base, auth: 'Basic dGVzdA==' }))
+    assert.equal(await app.fork('ses_src', '/work/dir one'), 'ses_fork1')
+    assert.deepEqual([seen[0]!.method, seen[0]!.url, seen[0]!.auth], ['POST', '/session/ses_src/fork?directory=%2Fwork%2Fdir%20one', 'Basic dGVzdA=='])
+    assert.deepEqual(seen[0]!.body, {}, '末尾から分ける（messageID は渡さない）')
+    // 知らないセッションは 404（呼び出し側が 500 で理由を出す）
+    reply = { status: 404, body: JSON.stringify({ name: 'NotFoundError', data: { message: 'Session not found: ses_src' } }) }
+    await assert.rejects(app.fork('ses_src', '/work'), /404.*Session not found/)
+    // id を返さない・元と同じ id を返す応答は投げる（分岐できていないのに、元のセッションに送らない）
+    reply = { status: 200, body: JSON.stringify({ title: 'no id' }) }
+    await assert.rejects(app.fork('ses_src', '/work'), /分岐先のセッションID/)
+    reply = { status: 200, body: JSON.stringify({ id: 'ses_src' }) }
+    await assert.rejects(app.fork('ses_src', '/work'), /分岐先のセッションID/)
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()))
+  }
+})
+
+test('turnRunning: 立っている serve に、そのセッションのターンが回っているかを directory 付きで聞く。聞けなければ false（#398）', async () => {
+  const seen: string[] = []
+  let reply: { status: number; body: string } = { status: 200, body: JSON.stringify({ ses_run: { type: 'busy' } }) }
+  const server: Server = createServer((req, res) => {
+    seen.push(`${req.method} ${req.url} ${req.headers.authorization ?? ''}`)
+    res.writeHead(reply.status, { 'content-type': 'application/json' })
+    res.end(reply.body)
+  })
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+  const addr = server.address()
+  const base = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`
+  try {
+    const app = new OpencodeServer(fetch, Date.now, async () => ({ url: base, auth: 'Basic dGVzdA==' }))
+    assert.equal(await app.turnRunning('ses_run', '/work/dir one'), true)
+    assert.equal(await app.turnRunning('ses_idle', '/work/dir one'), false)
+    assert.equal(seen[0], 'GET /session/status?directory=%2Fwork%2Fdir%20one Basic dGVzdA==')
+    reply = { status: 500, body: 'boom' }
+    assert.equal(await app.turnRunning('ses_run', '/work'), false, '聞けなければ「回っていない」（分岐を永久に断らない）')
+    reply = { status: 200, body: 'not json' }
+    assert.equal(await app.turnRunning('ses_run', '/work'), false)
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()))
+  }
+  // serve が立っていなければ聞かない（このために起こさない）
+  let asked = 0
+  const down = new OpencodeServer(async () => {
+    asked++
+    return new Response('{}')
+  })
+  assert.equal(await down.turnRunning('ses_run', '/work'), false)
+  assert.equal(asked, 0)
+})
+
 test('stop: 止めたあとは serve を起こさない（C-c のあとに来たリクエストで孤児を作らない。#457）', async () => {
   let spawned = 0
   const app = new OpencodeServer(fetch, Date.now, async () => {
@@ -325,6 +391,7 @@ test('stop: 止めたあとは serve を起こさない（C-c のあとに来た
   await assert.rejects(app.skills('/work'), /起こしません/)
   await assert.rejects(app.models('/work'), /起こしません/)
   await assert.rejects(app.startSession('/work'), /起こしません/)
+  await assert.rejects(app.fork('ses_abc', '/work'), /起こしません/)
   assert.equal(spawned, 0, 'serve を起こしていない')
   assert.equal(app.running('S1@r'), false)
 })

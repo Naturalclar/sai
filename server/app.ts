@@ -1683,10 +1683,10 @@ export function createApp(
   }
 
   /**
-   * Codex のセッションを会話ごと分岐して、分岐先で最初の 1 ターンを回す（#405。`POST /api/sessions/<id>/fork`）。
+   * Codex / OpenCode のセッションを会話ごと分岐して、分岐先で最初の 1 ターンを回す（#405 / #398。`POST /api/sessions/<id>/fork`）。
    * **同一オリジンのみ**。受け取るのは最初の指示だけで、**`cwd`・モデル・権限はリクエストから受けない**（cwd は元のセッションの行から、
-   * モデルは元のセッションのメタから）。新しい ID は app-server（`thread/fork`）が決め、SAI は行を起こさない
-   * （分岐先の行は、回した 1 ターンの `notify` が書く）。git も worktree も触らない。
+   * モデルは元のセッションのメタから）。新しい ID は app-server（`thread/fork`）か `opencode serve`（`/session/<id>/fork`）が決め、
+   * SAI は行を起こさない（分岐先の行は、回した 1 ターンの `notify` / プラグインが書く）。git も worktree も触らない。
    * 元のセッションが動いている・ほかで開かれているあいだは断る（同じ作業ディレクトリで 2 本が同時に動く）
    */
   const fork = async (req: IncomingMessage, res: ServerResponse, id: string, days: number) => {
@@ -1703,10 +1703,17 @@ export function createApp(
     const { sessions } = await store.sessions(days)
     const session = sessions.find((s) => s.id === id)
     if (!session) return error(res, 404, 'session not found in window')
-    // 会話の分岐を持っているのは Codex だけ（Claude の `--fork-session` は別の話）
-    if (session.agent !== 'codex') return error(res, 400, '分岐できるのは Codex のセッションだけです')
-    if (!codexAppEnabled) return error(res, 400, 'SAI_CODEX_APP_SERVER=0 のときは分岐できません')
-    if (!codexApp.fork) return error(res, 400, 'この SAI では分岐できません')
+    // 会話の分岐を持っているのは Codex と OpenCode（#398）だけ（Claude の `--fork-session` は別の話）
+    const opencode = session.agent === 'opencode'
+    if (session.agent !== 'codex' && !opencode) return error(res, 400, '分岐できるのは Codex と OpenCode のセッションだけです')
+    if (opencode) {
+      // OpenCode は長寿命の serve の中でだけ分ける（新しいセッションと同じ。一発の `opencode run` には落とさない）
+      if (!opencodeServerEnabled) return error(res, 400, 'SAI_OPENCODE_SERVER=0 のときは分岐できません')
+      if (!opencodeApp.fork) return error(res, 400, 'この SAI では分岐できません')
+    } else {
+      if (!codexAppEnabled) return error(res, 400, 'SAI_CODEX_APP_SERVER=0 のときは分岐できません')
+      if (!codexApp.fork) return error(res, 400, 'この SAI では分岐できません')
+    }
     const blocked = replyBlockedReason(session, selfHost())
     if (blocked) return error(res, 400, blocked)
     const rows = (await rowsNow(days)).filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
@@ -1724,18 +1731,23 @@ export function createApp(
     }
     // ほかで開いているスレッドも同じ理由で断る（レビュー・返信の振り分けと同じ 2 つを見る。#430）
     if (await terminalOf(session)) return error(res, 400, '端末で開いているセッションは分岐できません（端末を閉じてから分岐してください）')
-    if (await codexHeldElsewhere(session, raw)) return error(res, 400, 'ほかのところ（端末・ほかのアプリ）で開いているセッションは分岐できません')
+    if (!opencode && (await codexHeldElsewhere(session, raw))) return error(res, 400, 'ほかのところ（端末・ほかのアプリ）で開いているセッションは分岐できません')
     // 分岐を始めているあいだは、元のセッションを「起動中」にしておく（返信・レビュー・メッセージと同じ `launching`）。
     // `thread/fork` と最初の `turn/start` を待っている間に元へ返信が来ても、同じ作業ディレクトリで 2 本を同時に始めない。
     // 上の検査（`launching.has`）からここまで await を挟まないので、押し直し・2 枚の画面から同時に来ても 2 つは作らない
     launching.add(id)
     try {
+      // OpenCode は、SAI が数えていないターン（立て直す前に起こした・serve の側で回っている）も見る（#398 のレビュー）。
+      // 立っている serve に聞くだけで、このために serve は起こさない。**自分の端末で開いた TUI（別のプロセス）のターンは見えない**。
+      // `launching` に入れてから聞く（待っている間に来た 2 本目の分岐・返信を、上の検査で止める）
+      if (opencode && (await opencodeApp.turnRunning?.(raw, cwd))) return error(res, 409, '元のセッションがまだ処理中です。終わってから分岐してください')
       // 分岐先のメタ: 分岐元を残し、モデルと表示名（付いていれば「（分岐）」を足して）を引き継ぐ。値は保存済みなので検査は済んでいる
       const old = await metaStore.get(id)
       const meta: SessionMeta = { forked_from: id }
       if (old?.model) meta.model = old.model
       // 長い表示名は元の名前のほうを切る（印が切れると元と見分けが付かない）。サロゲートペアの途中では切らない
       if (old?.name) meta.name = `${old.name.slice(0, META_NAME_MAX - FORK_NAME_SUFFIX.length).replace(/[\uD800-\uDBFF]$/, '')}${FORK_NAME_SUFFIX}`
+      if (opencode) return await startOpencodeSession(res, session, cwd, text, meta, { session: () => opencodeApp.fork!(raw, cwd), label: `OpenCode のセッションを分岐（POST /session/${raw}/fork → prompt_async）`, what: 'OpenCode のセッションを分岐できませんでした' })
       return await startCodexSession(res, session, cwd, text, meta, { thread: () => codexApp.fork!(raw), label: `Codex のセッションを分岐（thread/fork ${raw} → turn/start）` })
     } finally {
       launching.delete(id)
@@ -2094,24 +2106,34 @@ export function createApp(
     cwd: string,
     text: string,
     meta: SessionMeta,
+    /** セッションの作り方。省略なら新しいセッション（`POST /session`）。分岐（#398）は `POST /session/<id>/fork` を渡す */
+    make: { session: () => Promise<string>; label: string; what: string } = {
+      session: () => opencodeApp.startSession!(cwd),
+      label: 'OpenCode の新しいセッション（POST /session → prompt_async）',
+      what: 'OpenCode の新しいセッションを作れませんでした',
+    },
   ) => {
     const log = join(store.directory, 'reply.log')
     let session: string
     try {
-      session = await opencodeApp.startSession!(cwd)
+      session = await make.session()
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code
       const hint = code === 'ENOENT' ? 'opencode が見つかりません（サーバを起動した環境の PATH に opencode があるか確かめてください）' : ''
-      return error(res, 500, hint || `OpenCode の新しいセッションを作れませんでした: ${err instanceof Error ? err.message : String(err)}`)
+      return error(res, 500, hint || `${make.what}: ${err instanceof Error ? err.message : String(err)}`)
     }
     const id = entityId(session, from.repo, '')
     if (Object.keys(meta).length > 0) await metaStore.set(id, meta)
-    await appendFile(log, `--- ${new Date().toISOString()} ${id} OpenCode の新しいセッション（POST /session → prompt_async） (cwd ${cwd})\n`).catch(() => {})
+    await appendFile(log, `--- ${new Date().toISOString()} ${id} ${make.label} (cwd ${cwd})\n`).catch(() => {})
     try {
       await opencodeApp.start({ id, session, text, model: meta.model })
     } catch (err) {
       const message = `OpenCode のセッションを始められませんでした: ${err instanceof Error ? err.message : String(err)}`
       await appendFile(log, `${message}\n`).catch(() => {})
+      // 始まらなかったセッションのメタは残さない（行が無いので、画面からは消せない。Codex の `startCodexSession()` と同じ。
+      // 新しいセッションでも分岐でも）。**OpenCode の側に出来たセッションは消さない**（消す口を足していない。ターンが実は
+      // 始まっていた場合に会話ごと消すことになる。分岐先は opencode の一覧に「(fork #N)」として残る）
+      if (Object.keys(meta).length > 0) await metaStore.set(id, {}).catch(() => {})
       return error(res, 500, message)
     }
     // 人が始めたターン（メッセージの連鎖ではない。#311）

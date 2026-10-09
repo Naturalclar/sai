@@ -9,7 +9,7 @@ export const COMPACT_MIN_TOKENS = 150_000
 
 /**
  * 返信の送り方。`compact` = 要約してから送る、`plain` = そのまま、`new` = 新しいセッションで送る、
- * `fork` = 会話ごと分岐して、分岐先に送る（#405。Codex だけ）
+ * `fork` = 会話ごと分岐して、分岐先に送る（#405 の Codex、#398 の OpenCode）
  */
 export type SendMode = 'compact' | 'plain' | 'new' | 'fork'
 
@@ -70,8 +70,8 @@ export function sendModes(input: SendModeInput, warnTokens: number): { mode: Sen
   const offerCompact = compactable && (work || input.contextTokens >= warnTokens)
   const choices: SendMode[] = offerCompact ? ['compact', 'plain'] : ['plain']
   if (claude && (offerCompact || work)) choices.push('new')
-  // 分岐（#405）は既定にしない。Codex で分岐できるときに、そのままの横に出すだけ
-  if (input.agent === 'codex' && input.forkable && !input.terminal) choices.push('fork')
+  // 分岐（#405 / #398）は既定にしない。Codex・OpenCode で分岐できるときに、そのままの横に出すだけ
+  if ((input.agent === 'codex' || input.agent === 'opencode') && input.forkable && !input.terminal) choices.push('fork')
   return { mode: offerCompact && work ? 'compact' : 'plain', choices: choices.length > 1 ? choices : [] }
 }
 

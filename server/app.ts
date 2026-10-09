@@ -956,7 +956,7 @@ export function createApp(
   const alwaysPlan = async (a: Approval, cwd: string): Promise<{ rules: PermissionRule[]; reason?: NoRuleReason }> => {
     // Claude の許可でない・画面から答えられない預かりは記録に足さない（`logAnswer()` に来ない）ので、理由も付けない
     if ((a.agent ?? 'claude') !== 'claude' || a.answerable === false) return { rules: [] }
-    const plan = alwaysAllowPlan(a.tool_name, a.input, cwd)
+    const plan = alwaysAllowPlan(a.tool_name, a.input, cwd, homedir())
     if (plan.rules.length === 0 || !cwd) return plan
     const allowed = await allowedRules(cwd).catch(() => [] as string[])
     const rules = plan.rules.filter((rule) => !ruleCovered(ruleLabel(rule), allowed))

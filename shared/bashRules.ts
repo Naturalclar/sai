@@ -45,8 +45,9 @@ const QUOTED_HEREDOC_OPEN = /^"\$\(cat <<(-?)(['"])(\w+)\2\n/
  * - `subshell`: 引用符の外の `(` `)`（`<(…)` `>(…)` も） / `brace`: 引用符の外の `{` `}`（波括弧の組のほか `HEAD@{1}`・`-exec … {}` も）
  * - `comment`: 行の途中の `#` / `unclosed`: 閉じていない引用符・末尾の `\`
  * - `keyword`: `for` / `if` などの構文の語 / `assign_only`: 代入だけでコマンドが無い（`FOO=1`）
- * - `odd_command`: 先頭の語がコマンドの名前の形でない（`[`・`!`・`~/bin/x` など） / `env_value`: 代入の値に空白や記号
- * - `cd_form`: `cd` の形が読めない（引数が 1 つでない・`-`・`~user`・ホームが分からないときの `~`） / `cd_no_cwd`: `cwd` が分からない / `cd_outside`: 行き先が `cwd` の外
+ * - `odd_command`: 先頭の語がコマンドの名前の形でない（`[`・`!`・`~/bin/x` など）。`\r` の混ざったコマンドもここ / `env_value`: 代入の値に空白や記号
+ * - `cd_form`: `cd` の行き先が読めない（引数が 1 つでない・`-`・`*` `?` `[` を含む・`~user`・引用符つきの `~`・ホームが分からないときの `~`・
+ *   最初の部品でない `cd ~/…`・`pushd` / `popd`・`command cd` / `builtin cd`・`CDPATH` に触った部品や `source` / `.` / `eval` のあとの相対の `cd`） / `cd_no_cwd`: `cwd` が分からない / `cd_outside`: 行き先が `cwd` の外
  * - `cd_then_write`: `cd` と書き込み系・`git` のつなぎ / `empty`: 部品が無い
  */
 export const BASH_NO_RULE_REASONS = [
@@ -58,9 +59,10 @@ export type BashNoRuleReason = (typeof BASH_NO_RULE_REASONS)[number]
 /**
  * 目印を引用符で囲んだヒアドキュメント（`<<'EOF'` / `<<"EOF"` / `<<-'EOF'`）で、**目印がその行の最後**のもの（#724）。
  * 実機（Claude Code 2.1.292）で、この形はコマンドのルールだけで通った（本文は展開されないので、中の `$(…)` や `&&` は見られない）。
- * 目印を囲んでいないもの（本文が展開される）・目印のあとに `| head` `2>&1` `&& x` が続くものは、ルールがあっても聞かれた
+ * 目印を囲んでいないもの（本文が展開される）・目印のあとに `| head` `2>&1` `&& x` が続くものは、ルールがあっても聞かれた。
+ * 受けるのは標準入力（fd なしか `0`）だけ（`3<<'EOF'` は本文が `--body-file -` に渡らない）
  */
-const QUOTED_TAG_HEREDOC = /^\d*<<(-?)[ \t]*(['"])(\w+)\2[ \t]*(?=\n)/
+const QUOTED_TAG_HEREDOC = /^0?<<(-?)[ \t]*(['"])(\w+)\2[ \t]*(?=\n)/
 
 /**
  * ヒアドキュメントを渡してもルールを組む形（#724）。**本文を文章として受け取ると分かっている形だけ**:
@@ -102,7 +104,10 @@ interface SplitParts {
 function splitParts(command: string): SplitParts | BashNoRuleReason {
   // 行の継続（`\` + 改行）は下で読み飛ばす。先に空白へ置き換えると、`\` で終わるコメント行の次の行まで捨ててしまう
   // （bash はコメントの中の `\` を継続にしない。#710 のレビュー）
-  const text = command.replace(/\r\n/g, '\n')
+  // `\r` の混ざったコマンドは組まない。bash は `\r` を語の文字として読むので（`EOF\r` の行はヒアドキュメントを閉じない・`a\rb` は 1 語）、
+  // 空白や改行として読むと、本文の中の文字をコマンドとして拾う（#751 のレビュー）
+  if (command.includes('\r')) return 'odd_command'
+  const text = command
   const parts: string[][] = []
   const quoted = new Set<string>()
   let words: string[] = []
@@ -133,7 +138,7 @@ function splitParts(command: string): SplitParts | BashNoRuleReason {
       continue
     }
     if (c === '\n') lineStart = true
-    else if (c !== ' ' && c !== '\t' && c !== '\r') lineStart = false
+    else if (c !== ' ' && c !== '\t') lineStart = false
     // 行の継続（`\\` + 改行）は語に何も足さないので数えない
     if (c === "'" || c === '"' || (c === '\\' && text[i + 1] !== '\n')) wordQuoted = true
     if (c === "'") {
@@ -174,7 +179,7 @@ function splitParts(command: string): SplitParts | BashNoRuleReason {
       word = (word ?? '') + text[++i]!
       continue
     }
-    if (c === ' ' || c === '\t' || c === '\r') {
+    if (c === ' ' || c === '\t') {
       endWord()
       continue
     }
@@ -222,27 +227,36 @@ function splitParts(command: string): SplitParts | BashNoRuleReason {
 }
 
 /**
- * `rest`（`<<` から先）が引用符つきの目印のヒアドキュメントなら、閉じの行の終わりまでの長さを返す。違う・閉じの行が無いなら -1。
- * `<<-` は閉じの行の頭のタブを許す（bash と同じ）
+ * ヒアドキュメントの本文が終わる所（閉じの行の終わり）を、`from`（本文の頭の直前の改行）から探す。無ければ -1。
+ * 閉じるのは bash と同じ **最初の「目印だけの行」**（`<<-` のときだけ頭のタブを許す）。探し方はこの 1 つだけ
+ * （2 つの読み方が別々に持つと、片方だけ直してずれる。#751 のレビュー）
+ */
+function heredocBodyEnd(rest: string, from: number, dash: boolean, tag: string): number {
+  const close = new RegExp(`\\n${dash ? '\\t*' : ''}${tag}(?=\\n|$)`).exec(rest.slice(from))
+  return close ? from + close.index + close[0].length : -1
+}
+
+/**
+ * `rest`（`<<` から先）が引用符つきの目印のヒアドキュメントなら、閉じの行の終わりまでの長さを返す。違う・閉じの行が無いなら -1
  */
 function quotedHeredocEnd(rest: string): number {
   const m = QUOTED_TAG_HEREDOC.exec(rest)
-  if (!m) return -1
-  const tag = m[3]!
-  const close = new RegExp(`\\n${m[1] ? '\\t*' : ''}${tag}(?=\\n|$)`).exec(rest.slice(m[0].length))
-  return close ? m[0].length + close.index + close[0].length : -1
+  return m ? heredocBodyEnd(rest, m[0].length, m[1] === '-', m[3]!) : -1
 }
 
 /**
  * `rest` が `"$(cat <<'EOF'\n … \nEOF\n)"` なら、閉じの `"` までの長さを返す。違う・閉じが無いなら -1。
- * **本文を閉じるのは bash と同じ「目印だけの行」**（`<<-` のときだけ頭のタブを許す）で、その次の行が `)"`。
- * 字下げした目印の行（`  EOF`）で閉じたことにすると、bash はまだ本文の中なので、そのあとの読み方がずれて後ろのコマンドを見落とす（#751 のレビュー）
+ * **本文は最初の「目印だけの行」で閉じ、そのすぐ次が `)"`**（頭の空白は可）のときだけ。
+ * 字下げした目印の行で閉じたことにしたり、最初の目印の行のあとに別のコマンドが続くもの（`$(…)` の中でまだ何か走る）まで畳んだりすると、
+ * そのコマンドを見落とす（#751 のレビュー）
  */
 function quotedCatHeredocEnd(rest: string): number {
   const m = QUOTED_HEREDOC_OPEN.exec(rest)
   if (!m) return -1
-  const close = new RegExp(`\\n${m[1] ? '\\t*' : ''}${m[3]}\\n[ \\t]*\\)"`).exec(rest.slice(m[0].length - 1))
-  return close ? m[0].length - 1 + close.index + close[0].length : -1
+  const end = heredocBodyEnd(rest, m[0].length - 1, m[1] === '-', m[3]!)
+  if (end < 0) return -1
+  const tail = /^\n[ \t]*\)"/.exec(rest.slice(end))
+  return tail ? end + tail[0].length : -1
 }
 
 /** `/a/b/../c` → `/a/c`。node:path は画面で使えないので文字で畳む */
@@ -308,7 +322,8 @@ export function bashRulePlan(command: string, cwd: string, home: string): { pref
     if (first === 'pushd' || first === 'popd' || ((first === 'command' || first === 'builtin') && ['cd', 'pushd', 'popd'].includes(words[i + 1] ?? ''))) return no('cd_form')
     if (first === 'cd') {
       let target = words[i + 1]
-      if (env.length > 0 || words.length !== i + 2 || !target || target.startsWith('-')) return no('cd_form')
+      // 行き先に `*` `?` `[` があると、シェルが別のパスに開く（字面で中か外かを決められない）
+      if (env.length > 0 || words.length !== i + 2 || !target || target.startsWith('-') || /[*?[]/.test(target)) return no('cd_form')
       if (target.startsWith('~')) {
         // `~` と `~/…` はホームに読み替える（実機で、プロジェクトの中へ行く `cd ~/…` は中への `cd` と同じく通った。#724）。
         // **コマンドの最初の部品のときだけ**: 前に何かあると、そこで HOME が変わっていても見抜けない

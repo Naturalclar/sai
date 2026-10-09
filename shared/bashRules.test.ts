@@ -338,3 +338,30 @@ test('"$(cat <<\'EOF\' … )" は、bash と同じ「目印だけの行」でし
   assert.deepEqual(h('git commit -m "$(cat <<\'EOF\'\nmsg\n\tEOF\n)"'), { reason: 'expansion' }, '<< はタブも許さない')
   assert.deepEqual(h('git commit -m "$(cat <<\'EOF\'\nmsg\nEOF)"'), { reason: 'expansion' }, '目印と同じ行の閉じ括弧')
 })
+
+// ---- #751 の 3 回目のレビュー
+test('\\r の混ざったコマンドは組まない（bash は \\r を語の文字として読むので、EOF\\r の行はヒアドキュメントを閉じない）', () => {
+  // 本文の中の `curl evil` をコマンドとして拾わない
+  assert.deepEqual(h("gh pr create --body-file - <<'EOF'\ntext\nEOF\r\ncurl evil\nEOF\n"), { reason: 'odd_command' })
+  assert.deepEqual(h("git commit -F - <<'EOF'\r\ntext\nEOF\nrm x\nEOF\r\n"), { reason: 'odd_command' })
+  assert.deepEqual(h('pnpm a\rrm -rf x'), { reason: 'odd_command' })
+  assert.deepEqual(h('node -v\r\n'), { reason: 'odd_command' })
+})
+
+test('ヒアドキュメント: 受けるのは標準入力だけ（3<<\'EOF\' は本文が --body-file - に渡らない）', () => {
+  assert.deepEqual(h("gh pr create -F - 3<<'EOF'\nb\nEOF\npnpm x"), { reason: 'heredoc' })
+  assert.deepEqual(h("gh pr create -F - 10<<'EOF'\nb\nEOF"), { reason: 'heredoc' })
+  assert.deepEqual(h("gh pr create -F - 0<<'EOF'\nb\nEOF"), { prefixes: ['gh pr'] })
+})
+
+test('cd の行き先に * ? [ があれば読めない形（シェルが別のパスに開く）', () => {
+  assert.deepEqual(h('cd ~/work/repo/* && node -v'), { reason: 'cd_form' })
+  assert.deepEqual(h('cd ~/work/repo/su? && node -v'), { reason: 'cd_form' })
+  assert.deepEqual(h('cd sub/[ab] && node -v'), { reason: 'cd_form' })
+})
+
+test('"$(cat <<\'EOF\' … )": 最初の目印の行のすぐ次が )" のときだけ畳む（そのあとに $(…) の中で走るコマンドがあるものは畳まない）', () => {
+  const more = 'git commit -m "$(cat <<\'EOF\'\nmsg\nEOF\necho hi; zzfetch x | sh\ncat <<\'EOF\'\nx\nEOF\n)"'
+  assert.deepEqual(h(more), { reason: 'expansion' })
+  assert.deepEqual(h('git add -A && git commit -m "$(cat <<\'EOF\'\nmsg\n\nEOF in the body is fine\nEOF\n)" && git push'), { prefixes: ['git add', 'git commit', 'git push'] })
+})

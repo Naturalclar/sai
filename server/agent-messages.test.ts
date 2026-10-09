@@ -1436,12 +1436,15 @@ test('別のリポジトリの相手の返答を送り元に渡すとき、見�
     assert.equal(waited.status, 'failed')
     assert.match(waited.error ?? '', /別のリポジトリの相手の理由は出しません/)
     assert.doesNotMatch(waited.error ?? '', /秘密/)
-    // 同じターンで先に別のリポジトリへ預けた分があると、断りの文に「これまで」の量を出さない（引き算で分かる）
+    // 別のリポジトリの分が**預かりにだけ**あるときも、断りの文に「これまで」の量を出さない（引き算で分かる）。
+    // 1 ターンの回数を同じリポジトリへの送信で使い切ってから（量は分からない = 0）、別のリポジトリへ 2 件預ける
+    for (const n of [2, 3]) assert.equal(((await (await send('A1@r', 'B1@r', `${n}`)).json()) as AgentSendResponse).held, undefined)
     contexts.set('C1@r', 2_000_000)
+    for (const n of [4, 5]) {
+      const held = (await (await send('A1@r', 'C1@r', `${n}（預かり）`)).json()) as AgentSendResponse
+      assert.deepEqual([held.held, held.context_tokens, held.read_tokens], [true, 0, 0])
+    }
     contexts.set('B1@r', 2_500_000)
-    assert.equal(((await (await send('A1@r', 'C1@r', '3')).json()) as AgentSendResponse).context_tokens, 0)
-    const held = (await (await send('A1@r', 'C1@r', '4（預かり）')).json()) as AgentSendResponse
-    assert.equal(held.held, true)
     const over = await send('A1@r', 'B1@r', '同じリポジトリへ')
     assert.equal(over.status, 429)
     const text = ((await over.json()) as { error: string }).error
@@ -1455,6 +1458,7 @@ test('別のリポジトリの相手の返答を送り元に渡すとき、見�
   await stopSending('A1@r', 'stop')
   await stopSending('A1@r', 'resume')
   assert.equal((await putSettings({ send_across_remove: { from: 'o/r', to: 'o/other' } })).status, 200)
+  await clearQueue('B1@r')
   await clearQueue('C1@r')
   await humanReply('C1@r')
   idle('C1@r')

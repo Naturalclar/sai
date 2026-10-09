@@ -20,6 +20,21 @@ const KEYWORDS = new Set(['for', 'while', 'until', 'if', 'then', 'else', 'elif',
 const UNASKED = new Set(['head', 'tail', 'grep', 'wc', 'sort', 'uniq', 'cat', 'cut', 'tr', 'echo', 'pwd', 'ls', 'true', 'sleep', 'date', 'which', 'jq'])
 
 /**
+ * 前に付くだけの語。次の語が本当のコマンド（`time rm x`・`command rm x`・`env FOO=1 rm x`）。
+ * ルールにすると、その語で始まれば何でも通る（実機で `Bash(env:*)` は `env touch x` を、`Bash(nice:*)` は `nice touch x` を通した。#755）か、
+ * 書いても効かない（`Bash(command:*)` があっても `command touch x` は聞かれた）。どちらでもルールを組まない。
+ * 自動の「今回だけ許可」で通さない形（#749）も**この 1 つを使う**（一覧を 2 つ持たない）
+ */
+const WRAPPERS = new Set(['time', 'command', 'builtin', 'exec', 'env', 'nice', 'ionice', 'caffeinate', 'stdbuf', 'timeout', 'setsid', 'unbuffer', 'arch', 'chronic', 'watch', 'noglob', 'nocorrect', '!'])
+/** 前に付く語ではないが、引数をコマンドとして走らせる語。実機で `Bash(nohup:*)`・`Bash(xargs:*)` は後ろの `touch` を通した（#755） */
+const ARG_RUNNERS = new Set(['nohup', 'xargs'])
+/**
+ * 走る場所を変えるフラグ（`git -C dir`・`env -C dir`・`make -C dir`・`pnpm -C dir` / `--dir`・`npm --prefix`。#755）。
+ * 次の語（か `=` のあと）が行き先。`cd` と同じ線で見る
+ */
+const PLACE_FLAGS = new Set(['-C', '--dir', '--directory', '--prefix', '--cwd', '--git-dir', '--work-tree', '--manifest-path', '--chdir', '--project', '--workdir', '--filter-dir'])
+
+/**
  * `cd` と一緒につなぐと、ルールが揃っていても必ず聞かれるコマンド（Claude Code が「cd のあとはパスを確かめられない」として止める。
  * 書き込み系と `git`。本体の分類と同じ並び）。`chmod` / `ln` / `node` / `pnpm` は通った
  */
@@ -49,10 +64,15 @@ const QUOTED_HEREDOC_OPEN = /^"\$\(cat <<(-?)(['"])(\w+)\2\n/
  * - `cd_form`: `cd` の行き先が読めない（引数が 1 つでない・`-`・`*` `?` `[` を含む・`~user`・引用符つきの `~`・ホームが分からないときの `~`・
  *   最初の部品でない `cd ~/…`・`pushd` / `popd`・`command cd` / `builtin cd`・`CDPATH` に触った部品や `source` / `.` / `eval` のあとの相対の `cd`） / `cd_no_cwd`: `cwd` が分からない / `cd_outside`: 行き先が `cwd` の外
  * - `cd_then_write`: `cd` と書き込み系・`git` のつなぎ / `empty`: 部品が無い
+ * - `wrapper`: 前に付くだけの語・引数をコマンドとして走らせる語で始まる（`env`・`nice`・`command`・`exec`・`nohup`・`xargs` など。#755）
+ * - `place_flag`: 場所を変えるフラグ（`-C`・`--dir`・`--prefix` など）の行き先が `cwd` の外か、読めない（#755）
+ * - `bare_cli`: サブコマンドを持つ CLI の 2 語目がフラグや記号で、フラグごとの狭い接頭辞も作れない（`python3 -c '…'`・`git -c a.b=c …`・
+ *   `git -C sub status`・`python3 -`。1 語のルールは CLI の全部を通すので書かない。#755）
  */
 export const BASH_NO_RULE_REASONS = [
   'expansion', 'redirect', 'heredoc', 'here_string', 'background', 'subshell', 'brace', 'comment', 'unclosed',
   'keyword', 'assign_only', 'odd_command', 'env_value', 'cd_form', 'cd_no_cwd', 'cd_outside', 'cd_then_write', 'empty',
+  'wrapper', 'place_flag', 'bare_cli',
 ] as const
 export type BashNoRuleReason = (typeof BASH_NO_RULE_REASONS)[number]
 
@@ -287,6 +307,61 @@ function normalize(path: string): string {
 const within = (dir: string, root: string) => dir === root || dir.startsWith(root === '/' ? '/' : `${root}/`)
 
 /**
+ * 部品の語（`from` から後ろ）にある、場所を変えるフラグの行き先（`-C dir`・`--dir=dir`・くっつけた `-Cdir`）。無ければ空の配列。
+ * 行き先の語が無いもの（`make -C` で終わる）は null（読めない）
+ */
+function placeTargets(words: readonly string[], from: number): { target: string; at: number }[] | null {
+  const out: { target: string; at: number }[] = []
+  for (let j = from; j < words.length; j++) {
+    const w = words[j]!
+    const eq = w.indexOf('=')
+    if (PLACE_FLAGS.has(w)) {
+      if (j + 1 >= words.length) return null
+      out.push({ target: words[j + 1]!, at: j + 1 })
+    } else if (eq > 0 && PLACE_FLAGS.has(w.slice(0, eq))) {
+      out.push({ target: w.slice(eq + 1), at: j })
+    } else if (/^-C./.test(w)) {
+      out.push({ target: w.slice(2), at: j })
+    }
+  }
+  return out
+}
+
+/**
+ * コマンドの接頭辞の頭（#705）。サブコマンドを持つ CLI は 2 語（`gh pr`）、ほかは 1 語。`words` は代入を除いたその部品の語。
+ *
+ * **サブコマンドを持つ CLI で 2 語目がフラグのときは、1 語のルールにしない（#755）**: 1 語のルール（`Bash(git:*)`）は、実機で
+ * `git tag`・`git -C <外> tag` まで通した。聞かれた 1 回（`git --no-pager log`）と書かれる範囲が釣り合わない。
+ * 代わりに**頭のフラグごと、そのあとの語を 2 つまで**（間のフラグも入れて）接頭辞にする: `git --no-pager log --oneline`・`pnpm -s exec tsc`・
+ * `node --test x.test.ts`・`node -v`。実機で、`Bash(git --no-pager log:*)` は `git --no-pager log …` を通し、`git --no-pager tag` は聞かれた。
+ * 語を 2 つ取るのは、フラグが値を取るのかを知らないため（`gh --repo o/r pr list` の 1 つ目の語は値で、サブコマンドは 2 つ目。
+ * 1 つで止めると `gh --repo o/r` = そのリポジトリへの gh の全部になる）。前の 1 語より必ず狭い。次の形は null（組まない）:
+ * - 途中にコマンドの名前・パス・フラグの形でない語がある（`python3 -c '…'`・`node -e '…'` のコード、`git -c a.b=c …`、`python3 -`）
+ * - 場所を変えるフラグが頭にある（`git -C sub status`。`git -C sub` は、そこでの git の全部を通す）
+ */
+function ruleHead(words: readonly string[]): string | null {
+  const first = words[0]!
+  if (!SUBCOMMAND_CLIS.has(first) || words.length < 2) return first
+  // サブコマンドの名前の形。`:` 入りのスクリプト名（`pnpm test:feed`）も 2 語にする（実機で `Bash(pnpm a:b:*)` は `pnpm a:b` を通し、`pnpm a:c` は聞かれた）
+  if (/^[\w.](?:[\w.:-]*[\w.-])?$/.test(words[1]!)) return `${first} ${words[1]}`
+  const flag = /^--?[A-Za-z][\w.-]*(?:=[\w./:@%+,-]*)?$/
+  if (!flag.test(words[1]!)) return null
+  let named = 0
+  let n = 1
+  for (; n < words.length && named < 2; n++) {
+    const w = words[n]!
+    if (flag.test(w)) {
+      if (PLACE_FLAGS.has(w.split('=')[0]!) || /^-C./.test(w)) return null
+    } else if (/^[\w.][\w./:-]*$/.test(w)) {
+      named++
+    } else {
+      return null
+    }
+  }
+  return words.slice(0, n).join(' ')
+}
+
+/**
  * つないだコマンドの、部品ごとの接頭辞（`pnpm test` / `FOO=1 touch`）。重複は 1 つにまとめ、出てきた順。
  * **null は「このコマンドには [常に許可] を出さない」**: 1 つでもルールを作れない部品がある・全部の部品が通る見込みが無い。
  * 空の配列は「書くルールが無い」（`cd` しか無い）。
@@ -356,13 +431,23 @@ export function bashRulePlan(command: string, cwd: string, home: string): { pref
       continue
     }
     if (words.some((w) => /^CDPATH(?:\+?=|$)/.test(w)) || ['source', '.', 'eval'].includes(first)) cdPathTouched = true
+    // 前に付くだけの語・引数をコマンドとして走らせる語には組まない（その語で始まれば何でも通るルールになる。#755）
+    if (WRAPPERS.has(first) || ARG_RUNNERS.has(first)) return no('wrapper')
+    // 場所を変えるフラグは `cd` と同じ線で見る（実機で `Bash(git:*)` は `git -C <外> tag` を、`Bash(pnpm run:*)` は
+    // `pnpm run --dir <外> x` を通した。#755）。行き先が外・読めない（語が無い・`~`・`*` `?` `[`・畳んだ語・`cwd` が分からない）なら組まない。
+    // 中なら今までどおり（`dir` は動かさない。場所が変わるのはそのコマンドだけ）
+    const places = placeTargets(words, i + 1)
+    if (places === null) return no('place_flag')
+    for (const { target, at } of places) {
+      if (!dir || !target || target.startsWith('~') || /[*?[]/.test(target) || folded.has(`${index}:${at}`)) return no('place_flag')
+      if (!within(normalize(target.startsWith('/') ? target : `${dir}/${target}`), normalize(cwd))) return no('place_flag')
+    }
     if (env.length === 0 && UNASKED.has(first)) {
       if (!unasked.includes(first)) unasked.push(first)
       continue
     }
-    const second = words[i + 1]
-    // 2 語目がフラグ（-x / --long）や記号なら 1 語で止める
-    const head = SUBCOMMAND_CLIS.has(first) && second && /^[\w.][\w.-]*$/.test(second) ? `${first} ${second}` : first
+    const head = ruleHead(words.slice(i))
+    if (head === null) return no('bare_cli')
     const prefix = [...env, head].join(' ')
     if (!prefixes.includes(prefix)) prefixes.push(prefix)
   }

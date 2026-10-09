@@ -98,6 +98,8 @@ interface SplitParts {
    * `cd '~/x'` をホームに読み替えない（語は引用符を外した文字で持つので、ここで覚えておく。#751 のレビュー）
    */
   quoted: Set<string>
+  /** `"$(cat <<'EOF' … )"` を空として畳んだ語（同じ鍵）。中身を読んでいないので、`cd` の行き先・コマンドの名前には使わせない */
+  folded: Set<string>
 }
 
 /** 部品に分ける。語は引用符を外した文字。切れない・通らない形（展開・サブシェル・ファイルへのリダイレクト・`&`）は理由の種類を返す */
@@ -110,6 +112,10 @@ function splitParts(command: string): SplitParts | BashNoRuleReason {
   const text = command
   const parts: string[][] = []
   const quoted = new Set<string>()
+  const folded = new Set<string>()
+  // いまの語・いまの部品に、畳んだ `"$(cat <<…)"` が混ざったか
+  let wordFolded = false
+  let partFolded = false
   let words: string[] = []
   let word: string | null = null
   // いまの語に引用符・バックスラッシュが混ざったか
@@ -117,15 +123,18 @@ function splitParts(command: string): SplitParts | BashNoRuleReason {
   const endWord = () => {
     if (word !== null) {
       if (wordQuoted) quoted.add(`${parts.length}:${words.length}`)
+      if (wordFolded) folded.add(`${parts.length}:${words.length}`)
       words.push(word)
     }
     word = null
     wordQuoted = false
+    wordFolded = false
   }
   const endPart = () => {
     endWord()
     if (words.length > 0) parts.push(words)
     words = []
+    partFolded = false
   }
   // 行の頭か（空白だけが前にある）。行ごとのコメントは通ったので読み飛ばし、行の途中の `#` は止める
   let lineStart = true
@@ -154,6 +163,8 @@ function splitParts(command: string): SplitParts | BashNoRuleReason {
       const wrapped = text.startsWith('"$(cat <<', i) ? quotedCatHeredocEnd(text.slice(i)) : -1
       if (wrapped > 0) {
         word = word ?? ''
+        wordFolded = true
+        partFolded = true
         i += wrapped - 1
         continue
       }
@@ -208,7 +219,10 @@ function splitParts(command: string): SplitParts | BashNoRuleReason {
         endWord()
         // 渡してよい形かは**ここで**決める（目印のあとに語は続かないので、部品の語はもう全部読めている）。
         // あとで決めると、閉じたあとの行の別の理由が先に返って、記録の「頭から読んで最初に当たった 1 つ」が崩れる（#751 のレビュー）
-        if (!takesHeredocAsText(words)) return 'heredoc'
+        // 前にあるのが `cd` だけのときしか組まない: 前の部品が `gh` / `git` の実体を差し替えていても見抜けない
+        // （`eval 'gh() { sh; }'`・`alias gh=sh`・`export PATH=…`・`source x.sh`。本文がコードとして走る。#751 のレビュー）。
+        // 畳んだ語（中身を読んでいない）が混ざった部品も、見えている語と実際の語がずれるので組まない
+        if (partFolded || parts.some((p) => p[0] !== 'cd') || !takesHeredocAsText(words)) return 'heredoc'
         i += end - 1 // 閉じの行の終わり。次の改行で部品が終わる
         continue
       }
@@ -223,7 +237,7 @@ function splitParts(command: string): SplitParts | BashNoRuleReason {
     word = (word ?? '') + c
   }
   endPart()
-  return { parts, quoted }
+  return { parts, quoted, folded }
 }
 
 /**
@@ -295,7 +309,7 @@ export function bashRulePlan(command: string, cwd: string, home: string): { pref
   const no = (reason: BashNoRuleReason) => ({ reason })
   const split = splitParts(command)
   if (typeof split === 'string') return no(split)
-  const { parts, quoted } = split
+  const { parts, quoted, folded } = split
   // 前の部品が `cd` の探し方を変えたかもしれない（`CDPATH` に触った・中身の見えない `source` / `.` / `eval`）。そのあとの相対の `cd` は行き先が読めない
   let cdPathTouched = false
   if (parts.length === 0) return no('empty')
@@ -315,7 +329,8 @@ export function bashRulePlan(command: string, cwd: string, home: string): { pref
     }
     const first = words[i]!
     if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(first)) return no('assign_only')
-    if (/[^\w./+-]/.test(first)) return no('odd_command')
+    // 空の語（`""`）・中身を読んでいない畳んだ語は、コマンドの名前として読まない（空の接頭辞のルールを書かない。#751 のレビュー）
+    if (!first || folded.has(`${index}:${i}`) || /[^\w./+-]/.test(first)) return no('odd_command')
     if (KEYWORDS.has(first)) return no('keyword')
     names.push(first)
     // 場所を変えるほかの形（`pushd` / `popd`・`command cd`・`builtin cd`）は、行き先を追っていないので読めない形にする
@@ -323,7 +338,7 @@ export function bashRulePlan(command: string, cwd: string, home: string): { pref
     if (first === 'cd') {
       let target = words[i + 1]
       // 行き先に `*` `?` `[` があると、シェルが別のパスに開く（字面で中か外かを決められない）
-      if (env.length > 0 || words.length !== i + 2 || !target || target.startsWith('-') || /[*?[]/.test(target)) return no('cd_form')
+      if (env.length > 0 || words.length !== i + 2 || !target || target.startsWith('-') || /[*?[]/.test(target) || folded.has(`${index}:${i + 1}`)) return no('cd_form')
       if (target.startsWith('~')) {
         // `~` と `~/…` はホームに読み替える（実機で、プロジェクトの中へ行く `cd ~/…` は中への `cd` と同じく通った。#724）。
         // **コマンドの最初の部品のときだけ**: 前に何かあると、そこで HOME が変わっていても見抜けない

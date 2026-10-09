@@ -235,8 +235,9 @@ test('引用符つきの目印のヒアドキュメント: 本文を文章とし
   assert.deepEqual(h(doc('gh pr create --body-file -', 'x', '"EOF"')), { prefixes: ['gh pr'] }, '二重引用符の目印')
   assert.deepEqual(h('gh pr comment 1 --body-file - <<-\'EOF\'\n\tbody\n\tEOF'), { prefixes: ['gh pr'] }, '<<- は閉じの行の頭のタブを許す')
   // 前後に別のコマンドがあるもの（前は ; や改行、後ろは閉じの行の次の行）
-  assert.deepEqual(h(`git add -A; ${doc('git commit -F -')}\ngit push -q origin x`), { prefixes: ['git add', 'git commit', 'git push'] })
-  assert.deepEqual(h(`${doc('gh issue comment 1 --body-file -')}\n${doc('gh issue comment 2 --body-file -', 'y', "'MD'", 'MD')}`), { prefixes: ['gh issue'] }, '2 つ続けて')
+  assert.deepEqual(h(`cd sub; ${doc('gh pr comment 1 -F -')}\ngh pr view 1`), { prefixes: ['gh pr'] })
+  // 2 つ目のヒアドキュメントは、前に cd 以外の部品があるので組まない（4 回目のレビュー）
+  assert.deepEqual(h(`${doc('gh issue comment 1 --body-file -')}\n${doc('gh issue comment 2 --body-file -', 'y', "'MD'", 'MD')}`), { reason: 'heredoc' })
   // 本文に閉じの目印と同じ語が文の途中にあっても、行がその語だけのときにしか閉じない
   assert.deepEqual(h(doc('gh issue comment 1 --body-file -', 'see EOF here\n EOF\nEOFX')), { prefixes: ['gh issue'] })
 })
@@ -262,7 +263,9 @@ test('ヒアドキュメント: 本文の読み飛ばしで、本文の外のコ
   // 外側の本文の中に `"$(cat <<'B'` の字面があっても、外側は自分の閉じの行で終わり、そのあとの行はコマンドとして読む
   const nested = ["gh issue comment 1 --body-file - <<'A'", 'see "$(cat <<\'B\'', 'A', 'rm -rf x', 'zzfetch y > out', "gh issue comment 2 --body-file - <<'A'", 'B', ')"', 'A'].join('\n')
   assert.deepEqual(h(nested), { reason: 'redirect' })
-  assert.deepEqual(h(nested.replace('zzfetch y > out\n', '')), { prefixes: ['gh issue', 'rm'] }, 'rm が部品として見えている')
+  // リダイレクトの行を外すと、rm は部品として読まれ、そのあとの 2 つ目のヒアドキュメントで断る（どちらにしてもルールにはならない）
+  assert.deepEqual(h(nested.replace('zzfetch y > out\n', '')), { reason: 'heredoc' })
+  assert.deepEqual(h(nested.split('\n').slice(0, 4).join('\n')), { prefixes: ['gh issue', 'rm'] }, '外側の閉じの行のあとの rm が部品として見えている')
   // コメント行の中の同じ字面でも、次の行からを畳まない
   assert.deepEqual(h('# "$(cat <<\'B\'\nrm -rf x > y\nB\n)"\ngh pr view 1'), { reason: 'redirect' })
   // 引用符の外の `$(cat <<'B'` は今までどおり展開
@@ -364,4 +367,24 @@ test('"$(cat <<\'EOF\' … )": 最初の目印の行のすぐ次が )" のとき
   const more = 'git commit -m "$(cat <<\'EOF\'\nmsg\nEOF\necho hi; zzfetch x | sh\ncat <<\'EOF\'\nx\nEOF\n)"'
   assert.deepEqual(h(more), { reason: 'expansion' })
   assert.deepEqual(h('git add -A && git commit -m "$(cat <<\'EOF\'\nmsg\n\nEOF in the body is fine\nEOF\n)" && git push'), { prefixes: ['git add', 'git commit', 'git push'] })
+})
+
+// ---- #751 の 4 回目のレビュー
+test('ヒアドキュメント: 前にあるのが cd だけのときしか組まない（前の部品が gh / git を差し替えていても見抜けない）', () => {
+  const body = "gh pr create --body-file - <<'EOF'\nrm -rf x\nEOF"
+  for (const before of ["eval 'gh() { sh; }'", 'alias gh=sh', 'export PATH=/tmp/x:/usr/bin', 'source ./x.sh', 'git add -A', 'node -v']) {
+    assert.deepEqual(h(`${before}\n${body}`), { reason: 'heredoc' }, before)
+  }
+  assert.deepEqual(h(`cd ~/work/repo\n${body}`), { prefixes: ['gh pr'] }, 'cd のあとは組む')
+  assert.deepEqual(h(`cd ~/work/repo; cd sub\n${body}`), { prefixes: ['gh pr'] }, 'cd が 2 つ続いても、前にあるのは cd だけ')
+})
+
+test('畳んだ "$(cat <<…)" の語は、コマンドの名前・cd の行き先・ヒアドキュメントの判定に使わない', () => {
+  const fold = (inner: string) => `"$(cat <<'X'\n${inner}\nX\n)"`
+  assert.deepEqual(h(`${fold('rm')} -rf x`), { reason: 'odd_command' })
+  assert.deepEqual(h('"" foo'), { reason: 'odd_command' })
+  assert.deepEqual(h(`cd sub${fold('/../../..')} && node -v`), { reason: 'cd_form' })
+  assert.deepEqual(h(`gh pr create -F -${fold('foo')} <<'EOF'\nbody\nEOF`), { reason: 'heredoc' })
+  // 引数として渡すだけなら今までどおり
+  assert.deepEqual(h(`git commit -m ${fold('msg')}`), { prefixes: ['git commit'] })
 })

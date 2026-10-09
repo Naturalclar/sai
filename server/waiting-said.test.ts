@@ -91,8 +91,10 @@ before(async () => {
       s('C', 30, { branch: 'feat-c', text: WAITING }),
       // 人を待っている
       s('D', 30, { branch: 'feat-a', text: 'PR を出しました。マージは「マージして」を待ちます。' }),
-      // 許可を聞かないモード（置けない。印は出る）
+      // 許可を聞かないモードにする（#732: それでも置ける）
       s('E', 30, { branch: 'feat-e', text: WAITING }),
+      // 送信を止めたセッション（置けない。印は出る）
+      s('S', 30, { branch: 'feat-e', text: WAITING }),
       // 古い
       s('F', Math.round(WAITING_SAID_FRESH_MS / 60_000) + 30, { branch: 'feat-old', text: WAITING }),
       // 同じブランチから PR が 2 つ
@@ -135,10 +137,10 @@ test('印: 末尾が「待ちます」で待ちが無く、ブランチの PR �
   const first = await list()
   assert.deepEqual(marks(first), {}, 'PR の一覧をまだ読めていない間は出さない（分からないときは出さない）')
   assert.ok(prs.asked.length > 0 && prs.asked.every((repo) => repo === 'o/r') && prs.fresh === 0, '一覧のポーリングでは gh を待たない（裏で読みに行くだけ）')
-  assert.equal(prs.asked.length, 8, '読みに行くのは、ほかの条件が全部そろったセッションの分だけ（人が次に打った・人待ち・古い・Claude 以外の分は読まない）')
+  assert.equal(prs.asked.length, 9, '読みに行くのは、ほかの条件が全部そろったセッションの分だけ（人が次に打った・人待ち・古い・Claude 以外の分は読まない）')
   prs.loaded = true
   const second = await list()
-  assert.deepEqual(Object.keys(marks(second)).sort(), [eid('A'), eid('E'), eid('H'), eid('I')], '人が次に打った・PR が無い・人を待っている・古い・PR が 2 つ・fork の PR・既定のブランチ・Claude 以外は出さない')
+  assert.deepEqual(Object.keys(marks(second)).sort(), [eid('A'), eid('E'), eid('H'), eid('I'), eid('S')], '人が次に打った・PR が無い・人を待っている・古い・PR が 2 つ・fork の PR・既定のブランチ・Claude 以外は出さない')
   assert.deepEqual(marks(second)[eid('I')], { pr: 61 }, '「入力待ち」の行が後ろに来ても出す（端末で開いたセッション）')
   assert.deepEqual(marks(second)[eid('A')], { pr: 51 })
   assert.notEqual(first.rev, second.rev, '出たら画面が描き直る')
@@ -167,18 +169,30 @@ test('置く: PR はセッションのブランチから機械で引く（番号
   assert.equal(marks(stopped)[eid('A')], undefined)
 })
 
-test('置けないとき: 許可を聞かないモードは印だけ出て、口は理由つきで断る（線はエージェントの口と同じ）。PR が無い・2 つ・もうマージ済みも置かない', async () => {
+test('許可を聞かないモード（Bypass / Auto）のセッションにも置ける（#732: 待ちは 1 回しか起こさない）。置けないとき: 送信を止めたセッションは印だけ出て、口は理由つきで断る。PR が無い・2 つ・もうマージ済みも置かない', async () => {
   const put = (id: string, permission_mode: string) => fetch(`${base}/api/sessions/${encodeURIComponent(eid(id))}/meta`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ permission_mode }) })
-  assert.equal((await put('E', 'bypassPermissions')).status, 200)
-  const blocked = marks(await list())[eid('E')]
-  assert.equal(blocked?.pr, 55)
-  assert.match(blocked?.blocked ?? '', /許可を聞かないモード（.+）のセッションには待ちを預かれません/)
-  const res = await add('E')
-  assert.equal(res.status, 400)
-  assert.match(await errorOf(res), /許可を聞かないモード/)
-  assert.equal((await list()).waits[eid('E')], undefined)
+  for (const mode of ['bypassPermissions', 'auto']) {
+    assert.equal((await put('E', mode)).status, 200)
+    assert.deepEqual(marks(await list())[eid('E')], { pr: 55 }, `${mode}: 断りの理由は付かない`)
+  }
+  const placed = await add('E')
+  assert.equal(placed.status, 200, await placed.clone().text())
+  const [w] = (await list()).waits[eid('E')] ?? []
+  assert.deepEqual([w?.pr, w?.status], [55, 'waiting'])
+  assert.equal((await fetch(`${base}/api/sessions/${encodeURIComponent(eid('E'))}/wait/stop`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ wait: w!.id }) })).status, 200)
   assert.equal((await put('E', '')).status, 200)
-  assert.deepEqual(marks(await list())[eid('E')], { pr: 55 }, '戻せば置ける')
+
+  const agentAct = (what: 'stop' | 'resume') => fetch(`${base}/api/sessions/${encodeURIComponent(eid('S'))}/agent/${what}`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: '{}' })
+  assert.equal((await agentAct('stop')).status, 200)
+  const blocked = marks(await list())[eid('S')]
+  assert.equal(blocked?.pr, 55)
+  assert.match(blocked?.blocked ?? '', /送信を止めているので、待ちも置けません/)
+  const res = await add('S')
+  assert.equal(res.status, 409)
+  assert.match(await errorOf(res), /送信を止めている/)
+  assert.equal((await list()).waits[eid('S')], undefined)
+  assert.equal((await agentAct('resume')).status, 200)
+  assert.deepEqual(marks(await list())[eid('S')], { pr: 55 }, '戻せば置ける')
 
   const none = await add('C')
   assert.equal(none.status, 400)

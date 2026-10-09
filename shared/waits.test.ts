@@ -5,7 +5,7 @@ import { failingChecks, parsePrCi } from './prs.ts'
 import type { Wait } from './types.ts'
 import {
   isWaitPrompt, WAIT_DAY_MS, WAIT_EMPTY_GRACE_MS, WAIT_FAILING_MAX, WAIT_MARK, WAIT_MAX_PER_SESSION, WAIT_THEN_MAX, WAIT_WAKES_PER_DAY,
-  waitConfirmed, waitFromRequest, waitLimitRefusal, waitLive, waitOutcome, waitPrompt, waitPromptLabel, waitStatusLine, waitView, waitWakeable, wakesExhausted,
+  WAIT_AUTO_WAKE_MS, WAIT_MAX_MS, waitConfirmed, waitFinishedLate, waitFromRequest, waitLateReason, waitLimitRefusal, waitLive, waitOutcome, waitPrompt, waitPromptLabel, waitStatusLine, waitView, waitWakeable, wakesExhausted,
 } from './waits.ts'
 import type { WaitState } from './waits.ts'
 
@@ -84,8 +84,30 @@ test('waitView / waitStatusLine: サーバだけの項目は画面に出さな�
   assert.equal(waitStatusLine(base, T0 + 40 * 60_000), 'PR #12 の CI を待っています（あと 1 時間 20 分で諦めます）')
   assert.equal(waitStatusLine(base, T0 + 100 * 60_000), 'PR #12 の CI を待っています（あと 20 分で諦めます）')
   assert.equal(waitStatusLine({ ...base, status: 'ready', result: 'success' }, T0), 'PR #12 の CI: CI は全部通りました。まだ起こしていません')
+  assert.equal(waitStatusLine({ ...base, status: 'ready', result: 'failure', late: true }, T0), 'PR #12 の CI は終わっています（CI が落ちました）。自動では起こしません')
+  assert.equal(waitView({ ...base, status: 'ready', late: true }).late, true, '自動では起こさない印は画面に渡す')
   assert.match(waitStatusLine({ ...base, status: 'expired' }, T0), /終わりませんでした（起こしていません）/)
   assert.match(waitStatusLine({ ...base, status: 'halted' }, T0), /起こせませんでした/)
+})
+
+test('waitLimitRefusal / waitPrompt: 自動では起こさない待ちは、同じ PR の預け直しを止めず、数にも入れない。起こす本文には「いまの状態を確かめて」を足す', () => {
+  const lateOne = { pr: 12, repo: 'o/r', status: 'ready' as const, late: true as const }
+  assert.equal(waitLimitRefusal([lateOne], 'O/R', 12), '')
+  assert.match(waitLimitRefusal([{ ...lateOne, late: undefined }], 'o/r', 12), /もう待っています/)
+  assert.match(waitLimitRefusal([lateOne, { pr: 13, repo: 'o/r', status: 'waiting' }], 'o/r', 14), /件まで/, '別の PR の late は枠に数える')
+  assert.equal(waitLimitRefusal([lateOne, { pr: 13, repo: 'o/r', status: 'waiting' }], 'o/r', 12), '')
+  assert.match(waitPrompt({ ...base, result: 'failure', late: true }), /終わったときに確かめたものです/)
+  assert.doesNotMatch(waitPrompt({ ...base, result: 'failure' }), /終わったときに確かめたもの/)
+})
+
+test('waitFinishedLate: 待ち始めてから決めた時間を過ぎて終わったか。線の上までは自動で起こす側。預かった時刻が読めなければ起こさない側', () => {
+  assert.equal(waitFinishedLate(base.since, T0), false)
+  assert.equal(waitFinishedLate(base.since, T0 + WAIT_AUTO_WAKE_MS), false)
+  assert.equal(waitFinishedLate(base.since, T0 + WAIT_AUTO_WAKE_MS + 1), true)
+  assert.equal(waitFinishedLate('', T0), true)
+  // 境目（キャッシュの寿命の 1 時間）より手前に置く。待てる長さより短くないと、過ぎて終わる待ちが無い
+  assert.ok(WAIT_AUTO_WAKE_MS < 60 * 60_000 && WAIT_AUTO_WAKE_MS < WAIT_MAX_MS)
+  assert.match(waitLateReason(), /50 分を過ぎて終わったので、自動では起こしません/)
 })
 
 test('parsePrCi / failingChecks: gh pr view --json state,statusCheckRollup を読む。落ちたチェックの名前だけ拾う', () => {

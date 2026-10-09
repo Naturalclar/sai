@@ -193,9 +193,8 @@ export function App() {
   // 出すのは、いま開いているセッションの分と、フィードのバブルから開いたものはフィードにいる間（#280）。
   // 別のセッションへ移っている間は出さない（戻ってくれば、また出る。閉じるまで覚えておく）。規則は feedDiff.ts
   // フィードがペインに出ている間は、フォーカスがほかのペインにあっても「フィードにいる」扱い（#759。フィードから開いた差分を残す）。
-  // 狭い画面の `#/` は一覧だけでフィードは見えていないので、今までどおり route で見る
-  const feedShown = panes.some((p) => p.item.kind === 'feed') && !(narrow && route.name === 'list')
-  const diffOpen = visibleDiff(diff, feedShown && route.name !== 'list' ? FEED_ROUTE : route, narrow, paneIds)
+  // `#/` はペインを描かない（`routeItem` が null）ので、今までどおり `visibleDiff()` が route で見る
+  const diffOpen = visibleDiff(diff, panes.some((p) => p.item.kind === 'feed') ? FEED_ROUTE : route, narrow, paneIds)
   // ボタンはトグル（出ていれば閉じる。#211）。「いま出ているか」で決めるので、セッションで開いたまま
   // フィードに来て同じセッションのバブルを押しても、閉じずに開く
   const toggleDiff = useCallback((id: string, origin: DiffOrigin = 'session') => setDiff(nextDiff(diffOpen, id, origin)), [diffOpen])
@@ -252,11 +251,13 @@ export function App() {
     [layout, setStoredPanes],
   )
   // 新しいセッションのペインで始めたセッションの最初の行が届いた（#759）。**そのペインを**起きたセッションに入れ替える
-  // （待っている間にフォーカスを隣へ移していても、隣を潰さない）
+  // （待っている間にフォーカスを隣へ移していても、隣を潰さず、フォーカスも奪わない）
   const startedInPane = useCallback(
     (id: string) => {
-      setStoredPanes(replaceItem(layout, { kind: 'new' }, { kind: 'session', id }))
-      location.hash = sessionHash(id)
+      const next = replaceItem(layout, { kind: 'new' }, { kind: 'session', id })
+      if (next !== layout) setStoredPanes(next)
+      // URL はフォーカスのあるペインのもの。隣へ移って打っている間に届いたときは、フォーカスも URL も動かさない
+      goTo(focusedItem(next))
     },
     [layout, setStoredPanes],
   )
@@ -276,6 +277,8 @@ export function App() {
       if (next === layout) return
       const closed = layout.columns[index]?.[0]
       if (closed?.kind === 'session' && diff?.id === closed.id) setDiff(null)
+      // フィードのペインを閉じたら、フィードから開いた差分も閉じる（同じ理由）
+      if (closed?.kind === 'feed' && diff?.origin === 'feed') setDiff(null)
       setStoredPanes(next)
       goTo(focusedItem(next))
     },
@@ -371,7 +374,10 @@ export function App() {
         const name = parseRoute(location.hash).name
         if (name !== 'session' && name !== 'todo' && name !== 'new' && name !== 'prs' && name !== 'pr' && name !== 'usage') return
         e.preventDefault()
-        location.hash = '#/feed'
+        // 全幅の画面（PR 1 本・使用量）からは、並びのフォーカスのあるペインへ戻る（並べておいたペインをフィードに入れ替えない。#759）
+        const back = name === 'pr' || name === 'usage' ? focusedItem(layout) : null
+        if (back) goTo(back)
+        else location.hash = '#/feed'
         return
       }
       // 起点は「押した瞬間の URL」。state（selectedId）だと、連打したとき再描画が追いつかず
@@ -386,7 +392,7 @@ export function App() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [sessionIds, diffOpen, narrow, focusSoon])
+  }, [sessionIds, diffOpen, narrow, focusSoon, layout])
 
   // ペインをキーボードで分ける・移る・閉じる（#633。判定は paneKeys.ts）。`%` `h` `l` `x` は入力欄で打っている間は効かず、
   // `Ctrl+1〜3` だけは入力中でも効く（そのペインの入力欄へ）。狭い画面・モーダルを出している間・全幅の画面では何もしない
@@ -452,6 +458,26 @@ export function App() {
 
   // ⌘K でフィードとセッションを名前で探して移動する（#197）。開いたときに絞り込み無しで取り直す
   const palette = useCommandPalette()
+
+  // フィードは 2 か所で描く: ペインの 1 つ（`#/feed`）と、`#/` の全幅。`here` はフォーカスのあるペインか
+  const feedView = (here: boolean) => (
+    <FeedView
+        selected={filters.projects}
+        projects={list.data?.filters.projects ?? EMPTY_PROJECTS}
+        onProjects={(projects) => setFilters({ projects })}
+        sessions={list.data?.sessions}
+        selfHost={list.data?.host ?? ''}
+        openDiff={diffOpen}
+        onToggleDiff={toggleFeedDiff}
+        onStatus={here ? onStatus : NO_STATUS}
+        onOpenSidebar={openSidebar}
+        onLeaveToSidebar={focusSidebar}
+        linear={linear}
+        settings={settings}
+        prs={sessionPrs}
+        focused={here}
+      />
+  )
 
   return (
     <PasteToFileContext value={settings?.paste_to_file === true}>
@@ -559,22 +585,7 @@ export function App() {
                   ) : item.kind === 'new' ? (
                     <NewSessionView replying={list.data?.replying} now={list.updatedAt?.getTime() ?? 0} onOpenSidebar={openSidebar} onStarted={startedInPane} />
                   ) : item.kind === 'feed' ? (
-                    <FeedView
-                      selected={filters.projects}
-                      projects={list.data?.filters.projects ?? EMPTY_PROJECTS}
-                      onProjects={(projects) => setFilters({ projects })}
-                      sessions={list.data?.sessions}
-                      selfHost={list.data?.host ?? ''}
-                      openDiff={diffOpen}
-                      onToggleDiff={toggleFeedDiff}
-                      onStatus={here ? onStatus : NO_STATUS}
-                      onOpenSidebar={openSidebar}
-                      onLeaveToSidebar={focusSidebar}
-                      linear={linear}
-                      settings={settings}
-                      prs={sessionPrs}
-                      focused={here}
-                    />
+                    feedView(here)
                   ) : (
                     <SessionView
                       id={id}
@@ -597,12 +608,14 @@ export function App() {
               )
             })
           ) : (
-            // ペインに入れない画面（PR 1 本・使用量）は全幅。戻れば並びが戻る
+            // ペインに入れない画面（PR 1 本・使用量）と `#/`（フィード）は全幅。並びには触らないので、戻れば並びが戻る
             <ChatPane focused>
             {route.name === 'pr' ? (
               <PrView key={`${route.repo}#${route.number}`} repo={route.repo} number={route.number} onStatus={onStatus} onInsertToSession={insertToSession} />
-            ) : (
+            ) : route.name === 'usage' ? (
               <UsageView onStatus={onStatus} onOpenSidebar={openSidebar} />
+            ) : (
+              feedView(true)
             )}
             </ChatPane>
           )}

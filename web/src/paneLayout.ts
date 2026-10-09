@@ -19,11 +19,11 @@ export const PINNED_HASH: Record<PinnedKind, string> = { todo: '#/todo', prs: '#
 
 /**
  * URL（route）が指す、ペインに出すもの。出せない画面（PR 1 本・使用量）は null（全幅で出し、戻れば並びも戻る）。
- * `#/`（`list`）は広い画面ではフィードと同じ表示なので、フィードとして扱う
+ * **`#/`（`list`）も null**: 広い画面ではフィードを全幅で出すが、並びには触らない（ルートの URL を開いただけ・狭い画面の
+ * 「← 一覧」で、並べておいたペインをフィードに入れ替えない）。フィードをペインに入れるのは `#/feed`
  */
 export function routePaneItem(route: { name: string; id?: string }): PaneItem | null {
   if (route.name === 'session') return route.id ? { kind: 'session', id: route.id } : null
-  if (route.name === 'list') return { kind: 'feed' }
   return (PINNED_KINDS as readonly string[]).includes(route.name) ? { kind: route.name as PinnedKind } : null
 }
 
@@ -138,20 +138,19 @@ export function closeColumn(layout: PaneLayout, index: number): PaneLayout {
 
 /**
  * ペインの中身を、そのペインの中で起きたことで入れ替える（新しいセッションのペインが、起きたセッションになる。#759）。
- * **フォーカスがどこにあっても `from` の列を入れ替える**（待っている間に隣へ移っていても、隣を潰さない）。フォーカスは入れ替えた列へ。
- * - `to` がもう並びにあれば、`from` の列を閉じて `to` の列へフォーカスを移す（同じものを 2 つ並べない）
- * - `from` が並びに無ければ、ふつうに置く（`placeItem()`）
+ * **フォーカスがどこにあっても `from` の列を入れ替え、フォーカスは動かさない**（待っている間に隣へ移って打っていても、
+ * 隣を潰さず、フォーカスも奪わない。`from` にフォーカスがあれば、そのまま入れ替えた中身を指す）。
+ * - `to` がもう並びにあれば、`from` の列を閉じる（同じものを 2 つ並べない）。`from` にフォーカスがあったときだけ `to` の列へ移す
+ * - `from` が並びに無ければ何もしない（待っている間に閉じた・入れ替えた。人が選んだ並びを変えない）
  */
 export function replaceItem(layout: PaneLayout, from: PaneItem, to: PaneItem): PaneLayout {
   const at = columnOf(layout, from)
-  if (at < 0) return placeItem(layout, to)
-  const there = columnOf(layout, to)
-  if (there >= 0) {
-    if (there === at) return focusColumn(layout, at)
+  if (at < 0) return layout
+  if (columnOf(layout, to) >= 0) {
     const closed = closeColumn(layout, at)
-    return focusColumn(closed, columnOf(closed, to))
+    return at === layout.focus ? focusColumn(closed, columnOf(closed, to)) : closed
   }
-  return { ...layout, columns: layout.columns.map((c, i) => (i === at ? [to] : c)), focus: at }
+  return { ...layout, columns: layout.columns.map((c, i) => (i === at ? [to] : c)) }
 }
 
 /** ペインにフォーカスを移す（ペインの中を押した） */

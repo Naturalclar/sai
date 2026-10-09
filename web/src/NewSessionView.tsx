@@ -21,7 +21,7 @@ interface Props {
    * 始めたセッションの最初の行が届いた（#759）。App が**このペインを**そのセッションに入れ替える
    * （待っている間にフォーカスを隣へ移していても、隣のペインを潰さない）
    */
-  onStarted?: (id: string) => void
+  onStarted: (id: string) => void
 }
 
 interface Started {
@@ -148,7 +148,7 @@ export function NewSessionView({ replying, now, onOpenSidebar, onStarted }: Prop
           replying={replying?.[started.id]}
           now={now}
           {...(started.attach ? { attach: started.attach } : {})}
-          {...(onStarted ? { onArrived: onStarted } : {})}
+          onArrived={onStarted}
           onRetry={() => setStarted(null)}
         />
       ) : (

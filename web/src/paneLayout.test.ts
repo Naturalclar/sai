@@ -239,27 +239,32 @@ test('openInNeighbor: PR の一覧・フィードのペインからセッショ�
   }
 })
 
-test('replaceItem: 新しいセッションのペインが、起きたセッションに入れ替わる。フォーカスが隣に移っていても隣は潰さない', () => {
+test('replaceItem: 新しいセッションのペインが、起きたセッションに入れ替わる。フォーカスが隣に移っていても隣は潰さず、フォーカスも奪わない', () => {
   const waiting: PaneLayout = { columns: [[s('a')], [k('new')], [s('b')]], focus: 2, keys: [0, 1, 2] }
   const next = replaceItem(waiting, k('new'), s('c'))
-  assert.deepEqual([items(next), next.focus], [['a', 'c', 'b'], 1])
+  assert.deepEqual([items(next), next.focus], [['a', 'c', 'b'], 2], 'フォーカスは隣のまま')
   assert.deepEqual(next.keys, [0, 1, 2], '列の番号は変わらない（隣のペインを作り直さない）')
-  // 起きたセッションがもう並んでいれば、新しいセッションのペインを閉じてそちらへ
-  const dup = replaceItem(waiting, k('new'), s('b'))
-  assert.deepEqual([items(dup), dup.focus, dup.keys], [['a', 'b'], 1, [0, 2]])
+  // 新しいセッションのペインにフォーカスがあれば、そのまま起きたセッションを指す
+  const here = replaceItem({ ...waiting, focus: 1 }, k('new'), s('c'))
+  assert.deepEqual([items(here), here.focus], [['a', 'c', 'b'], 1])
+  // 起きたセッションがもう並んでいれば、新しいセッションのペインを閉じる。フォーカスは、そこにあったときだけ移す
+  const dup = replaceItem(waiting, k('new'), s('a'))
+  assert.deepEqual([items(dup), dup.focus, dup.keys], [['a', 'b'], 1, [0, 2]], 'フォーカスは b のまま')
+  const dupHere = replaceItem({ ...waiting, focus: 1 }, k('new'), s('b'))
+  assert.deepEqual([items(dupHere), dupHere.focus], [['a', 'b'], 1])
   // 1 つだけのとき
   const single = replaceItem({ columns: [[k('new')]], focus: 0, keys: [0] }, k('new'), s('c'))
   assert.deepEqual([items(single), single.focus], [['c'], 0])
-  // もう並びに無い（待っている間に閉じた・入れ替えた）ならふつうに置く
-  const gone = replaceItem(full(['a', 'b'], 1), k('new'), s('c'))
-  assert.deepEqual([items(gone), gone.focus], [['a', 'c'], 1])
+  // もう並びに無い（待っている間に閉じた・入れ替えた）なら何もしない
+  const gone = full(['a', 'b'], 1)
+  assert.equal(replaceItem(gone, k('new'), s('c')), gone)
 })
 
 test('routePaneItem / PINNED_HASH: URL が指すのはフォーカスのあるペインの 1 つ。PR 1 本と使用量はペインに入れない（全幅）', () => {
   assert.deepEqual(routePaneItem({ name: 'session', id: 'a' }), s('a'))
   for (const kind of PINNED_KINDS) assert.deepEqual(routePaneItem({ name: kind }), k(kind))
-  assert.deepEqual(routePaneItem({ name: 'list' }), k('feed'), '#/ は広い画面ではフィード')
-  for (const name of ['pr', 'usage', 'gone']) assert.equal(routePaneItem({ name }), null)
+  // `#/` は並びに触らない（ルートの URL を開いただけで、並べておいたペインを入れ替えない）
+  for (const name of ['list', 'pr', 'usage', 'gone']) assert.equal(routePaneItem({ name }), null)
   assert.deepEqual(PINNED_HASH, { todo: '#/todo', prs: '#/prs', feed: '#/feed', new: '#/new' })
 })
 

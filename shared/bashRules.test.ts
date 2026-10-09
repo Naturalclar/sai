@@ -3,7 +3,8 @@ import assert from 'node:assert/strict'
 import { bashRulePlan, bashRulePrefixes } from './bashRules.ts'
 
 const CWD = '/w/repo'
-const p = (command: string, cwd = CWD) => bashRulePrefixes(command, cwd)
+// ホームは渡さない（`~` は読めない形のまま。渡したときの読み方は下の #724 の節）
+const p = (command: string, cwd = CWD) => bashRulePrefixes(command, cwd, '')
 
 test('bashRulePrefixes: 1 つのコマンドは先頭 1 語（サブコマンドを持つ CLI は 2 語）', () => {
   assert.deepEqual(p('gh pr create --title x'), ['gh pr'])
@@ -128,7 +129,7 @@ test('bashRulePrefixes: fd の付け替え・/dev/null・行ごとのコメン�
 
 test('bashRulePlan: 組めなかった理由の種類を返す（#724）。判定は bashRulePrefixes と同じ 1 つ', () => {
   const reason = (command: string, cwd = CWD) => {
-    const plan = bashRulePlan(command, cwd)
+    const plan = bashRulePlan(command, cwd, '')
     return 'reason' in plan ? plan.reason : plan.prefixes
   }
   const cases: [string, string][] = [
@@ -178,10 +179,10 @@ test('bashRulePlan: 組めなかった理由の種類を返す（#724）。判�
   }
   assert.equal(reason('cd sub && pnpm test', ''), 'cd_no_cwd')
   // 組めたときは理由を持たない。cd しか無いときは空の配列（理由 cd_only は呼ぶ側が付ける）
-  assert.deepEqual(bashRulePlan('cd sub && pnpm test | tail -5', CWD), { prefixes: ['pnpm test'] })
-  assert.deepEqual(bashRulePlan('cd sub', CWD), { prefixes: [] })
+  assert.deepEqual(bashRulePlan('cd sub && pnpm test | tail -5', CWD, ''), { prefixes: ['pnpm test'] })
+  assert.deepEqual(bashRulePlan('cd sub', CWD, ''), { prefixes: [] })
   // 理由は種類だけ。コマンドの文字を混ぜない
-  assert.deepEqual(bashRulePlan('echo $(cat /secret/path)', CWD), { reason: 'expansion' })
+  assert.deepEqual(bashRulePlan('echo $(cat /secret/path)', CWD, ''), { reason: 'expansion' })
 })
 
 // ---- #724 の次の段: 記録で多かった理由のうち、実機（Claude Code 2.1.292）で通った形だけ組む
@@ -208,7 +209,18 @@ test('cd ~/…: 外へ行くものは cd_outside（外への cd はルールが�
 })
 
 test('cd ~/…: ホームが分からない・~user・引用符つきの ~ は読めない形のまま', () => {
-  assert.deepEqual(bashRulePlan('cd ~/work/repo && node -v', IN_HOME), { reason: 'cd_form' }, 'ホームを渡さない呼び方（画面）')
+  // 引用符・バックスラッシュの付いた ~ は、bash が展開しない（./~/… という相対パス）。読み替えない（#751 のレビュー）
+  for (const cd of ["cd '~/work/repo/sub'", 'cd "~/work/repo/sub"', 'cd \\~/work/repo/sub', "cd ~'/work/repo/sub'", 'cd ~/work/"repo"/sub']) {
+    assert.deepEqual(h(`${cd} && node -v`), { reason: 'cd_form' }, cd)
+  }
+  // 同じコマンドの中で HOME に触っていたら、行き先はサーバのホームと違いうる
+  for (const before of ['export HOME=/tmp/x', 'HOME=/tmp/x', 'unset HOME', 'declare -x HOME=/tmp/x', 'readonly HOME']) {
+    assert.deepEqual(h(`${before} && cd ~/work/repo && node -v`), { reason: before === 'HOME=/tmp/x' ? 'assign_only' : 'cd_form' }, before)
+  }
+  assert.deepEqual(h('HOME=/tmp/x node -v; cd ~/work/repo && node -v'), { reason: 'cd_form' }, '代入つきのコマンドのあと')
+  for (const before of ['source ./env.sh', '. ./env.sh', 'eval x']) assert.deepEqual(h(`${before}; cd ~/work/repo && node -v`), { reason: 'cd_form' }, before)
+  assert.deepEqual(h('cd ~/work/repo && export HOME=/tmp/x && node -v'), { prefixes: ['export', 'node'] }, 'cd のあとで触るのは行き先に効かない')
+  assert.deepEqual(bashRulePlan('cd ~/work/repo && node -v', IN_HOME, ''), { reason: 'cd_form' }, 'ホームが空')
   assert.deepEqual(h('cd ~other/work && node -v'), { reason: 'cd_form' })
   assert.deepEqual(h('cd ~+ && node -v'), { reason: 'cd_form' })
   assert.deepEqual(h('cd ~/work/repo extra && node -v'), { reason: 'cd_form' })
@@ -234,6 +246,35 @@ test('ヒアドキュメント: コードを受け取るコマンド（python3 /
     assert.deepEqual(h(doc(head, 'print(1)')), { reason: 'heredoc' }, head)
   }
   assert.deepEqual(h(`gh issue list; ${doc('python3 -', 'print(1)')}`), { reason: 'heredoc' }, '前のコマンドが良くても')
+})
+
+test('ヒアドキュメント: gh / git でも、本文を文章として受け取ると分かっている形だけ（先頭の語では決めない。#751 のレビュー）', () => {
+  // 本文を操作・コード・鍵として受け取るサブコマンド
+  for (const head of ['git apply', 'git am', 'git update-ref --stdin', 'git fast-import', 'git -c alias.x=!sh x', 'git -c core.editor=x commit -F -', 'git hash-object -w --stdin', 'gh auth login --with-token', 'gh api --input - repos/o/r/issues', 'gh api -F - x', 'gh extension exec foo', 'gh secret set X', 'gh issue comment 1', 'gh issue comment 1 --body-file body.md', 'git commit -F msg.txt', 'git commit', 'git tag -F - v1', 'FOO=1 gh issue comment 1 --body-file -']) {
+    assert.deepEqual(h(doc(head, 'x')), { reason: 'heredoc' }, head)
+  }
+  for (const [head, prefix] of [['gh issue create --title t --body-file -', 'gh issue'], ['gh pr comment 1 -F -', 'gh pr'], ['gh release create v1 --notes-file x --body-file=-', 'gh release'], ['git commit -q --allow-empty --file -', 'git commit'], ['git commit --file=-', 'git commit']] as const) {
+    assert.deepEqual(h(doc(head, 'x')), { prefixes: [prefix] }, head)
+  }
+})
+
+test('ヒアドキュメント: 本文の読み飛ばしで、本文の外のコマンドを見落とさない（#751 のレビュー）', () => {
+  // 外側の本文の中に `"$(cat <<'B'` の字面があっても、外側は自分の閉じの行で終わり、そのあとの行はコマンドとして読む
+  const nested = ["gh issue comment 1 --body-file - <<'A'", 'see "$(cat <<\'B\'', 'A', 'rm -rf x', 'zzfetch y > out', "gh issue comment 2 --body-file - <<'A'", 'B', ')"', 'A'].join('\n')
+  assert.deepEqual(h(nested), { reason: 'redirect' })
+  assert.deepEqual(h(nested.replace('zzfetch y > out\n', '')), { prefixes: ['gh issue', 'rm'] }, 'rm が部品として見えている')
+  // コメント行の中の同じ字面でも、次の行からを畳まない
+  assert.deepEqual(h('# "$(cat <<\'B\'\nrm -rf x > y\nB\n)"\ngh pr view 1'), { reason: 'redirect' })
+  // 引用符の外の `$(cat <<'B'` は今までどおり展開
+  assert.deepEqual(h("git commit -m $(cat <<'B'\nmsg\nB\n)"), { reason: 'expansion' })
+  // 閉じが無い `"$(cat <<'B'` は、ふつうの二重引用符として読んで展開で断る
+  assert.deepEqual(h('git commit -m "$(cat <<\'B\'\nmsg\n)"'), { reason: 'expansion' })
+})
+
+test('記録に残る理由は、頭から読んで最初に当たった 1 つのまま（組まないヒアドキュメントは、あとの行の理由より先）', () => {
+  assert.deepEqual(h(`${doc('python3 -', 'print(1)')}\necho $(date)`), { reason: 'heredoc' })
+  assert.deepEqual(h(`${doc('python3 -', 'print(1)')}\nzzrun x > out`), { reason: 'heredoc' })
+  assert.deepEqual(h(`echo $(date)\n${doc('python3 -', 'print(1)')}`), { reason: 'expansion' })
 })
 
 test('ヒアドキュメント: 実機で聞かれた形は今までどおり断る（目印を囲まない・目印のあとに続きがある・閉じの行が無い）', () => {

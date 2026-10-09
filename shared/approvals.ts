@@ -151,7 +151,7 @@ export function answerAsk(approval: Approval, answers: Record<string, string>): 
  *   （ファイル系の「全部許す」は端末でもセッション限定なので、設定に焼くのは広すぎる）
  * もう設定にあるルールを除くのはサーバ（`ruleCovered()`。設定を読めるのがサーバだけなので）
  */
-export function alwaysAllowRules(toolName: string, input: Record<string, unknown>, cwd: string, home = ''): PermissionRule[] {
+export function alwaysAllowRules(toolName: string, input: Record<string, unknown>, cwd: string, home: string): PermissionRule[] {
   return alwaysAllowPlan(toolName, input, cwd, home).rules
 }
 
@@ -162,9 +162,9 @@ export const NO_RULE_REASONS: readonly NoRuleReason[] = [...BASH_NO_RULE_REASONS
  * `alwaysAllowRules()` の中身（#724）。ルールが空のときは、**なぜ空か**の種類を一緒に返す（`approvals.jsonl` の `no_rule`）。
  * - Bash: 組めなかった形の種類（`shared/bashRules.ts` の `BashNoRuleReason`）。`cd` しか無くて書くものが無いときは `cd_only`
  * - Bash でも MCP でもないツール（Edit / Read / AskUserQuestion など）: `not_bash`
- * 種類だけで、コマンドの文字・引数・パスは返さない。`home` は `cd ~/…` を読むためのホーム（サーバだけが渡す。無ければ `~` は読めない形のまま）
+ * 種類だけで、コマンドの文字・引数・パスは返さない。`home` は `cd ~/…` を読むためのホーム（**省略不可**。本物を渡すのはサーバの `alwaysRules()` だけで、空を渡せば `~` は読めない形のまま。省略できると、あとから足した呼び手だけ別の判定になる）
  */
-export function alwaysAllowPlan(toolName: string, input: Record<string, unknown>, cwd: string, home = ''): { rules: PermissionRule[]; reason?: NoRuleReason } {
+export function alwaysAllowPlan(toolName: string, input: Record<string, unknown>, cwd: string, home: string): { rules: PermissionRule[]; reason?: NoRuleReason } {
   if (toolName === 'Bash') {
     const plan = bashRulePlan(typeof input.command === 'string' ? input.command : '', cwd, home)
     if ('reason' in plan) return { rules: [], reason: plan.reason }

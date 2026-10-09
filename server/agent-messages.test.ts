@@ -1423,6 +1423,37 @@ test('別のリポジトリの相手の返答を送り元に渡すとき、見�
   assert.match(handed, /「#r」/, '表示名が無ければ worktree 名')
   assert.doesNotMatch(handed, /秘密の題名/)
   idle('A1@r')
+  // 相手のターンがあとから失敗したときの理由（reply.log の末尾＝相手の CLI の出力）も、送り元のエージェントに渡さない
+  await humanReply('C1@r')
+  idle('C1@r')
+  turn('A1@r')
+  let failedId = ''
+  try {
+    runner.started.length = 0
+    failedId = ((await (await send('A1@r', 'C1@r', '失敗する依頼')).json()) as AgentSendResponse).message_id
+    turn('C1@r', 'x', { text: runner.started.at(-1)!.cmd.text, failed: { code: 1, tail: '/秘密/の/パス が開けません' } })
+    const waited = (await (await agent(`/api/agent/wait?from=A1%40r&message_id=${failedId}`)).json()) as { status: string; error?: string }
+    assert.equal(waited.status, 'failed')
+    assert.match(waited.error ?? '', /別のリポジトリの相手の理由は出しません/)
+    assert.doesNotMatch(waited.error ?? '', /秘密/)
+    // 同じターンで先に別のリポジトリへ預けた分があると、断りの文に「これまで」の量を出さない（引き算で分かる）
+    contexts.set('C1@r', 2_000_000)
+    contexts.set('B1@r', 2_500_000)
+    assert.equal(((await (await send('A1@r', 'C1@r', '3')).json()) as AgentSendResponse).context_tokens, 0)
+    const held = (await (await send('A1@r', 'C1@r', '4（預かり）')).json()) as AgentSendResponse
+    assert.equal(held.held, true)
+    const over = await send('A1@r', 'B1@r', '同じリポジトリへ')
+    assert.equal(over.status, 429)
+    const text = ((await over.json()) as { error: string }).error
+    assert.match(text, /別のリポジトリの相手の量は出しません/)
+    assert.doesNotMatch(text, /これまで|200 万|400 万/)
+  } finally {
+    idle('C1@r')
+    idle('A1@r')
+    contexts.clear()
+  }
+  await stopSending('A1@r', 'stop')
+  await stopSending('A1@r', 'resume')
   assert.equal((await putSettings({ send_across_remove: { from: 'o/r', to: 'o/other' } })).status, 200)
   await clearQueue('C1@r')
   await humanReply('C1@r')

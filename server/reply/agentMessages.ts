@@ -46,6 +46,8 @@ export interface HeldSend {
   wake?: true
   /** エージェントが渡した `compact`（省略なら送るときに判定する） */
   compact?: boolean
+  /** 別のリポジトリの相手（#747）。量・失敗の理由・題名を送り元のエージェントに出さない */
+  far?: true
   /** 送りかけの印（送る直前に書く）。付いたまま立て直されたら送り直さない */
   sending?: string
   /** 止まった理由。付いているものは自動では送らない（人が「送信を止める」で捨てる） */
@@ -88,6 +90,11 @@ export interface AgentMessage {
   turn?: string
   /** 起こすときに使う、このサーバ自身の宛先（許可・質問を画面で答える MCP の宛先。`selfUrl()`） */
   url?: string
+  /**
+   * 送ったときに別のリポジトリの相手だった（#747）。**送ったときに決めて覚える**（あとで組を外しても、行の `project` の埋まり方が
+   * 変わっても、返答の見出し・失敗の理由・読み直す量を送り元のエージェントに出さない）
+   */
+  far?: true
 }
 
 /**
@@ -232,13 +239,13 @@ export class AgentMessages {
 
   /**
    * 送れた（相手のターンを起動した・預けた）ので記録し、そのターンの回数を 1 増やす。
-   * `read` はその相手が読み直す量（分からなければ 0）で、ターンの合計に足す。`hidden` なら、その量は見せない分にも足す（#747）
+   * `read` はその相手が読み直す量（分からなければ 0）で、ターンの合計に足す。別のリポジトリの相手（`message.far`）なら、その量は見せない分にも足す（#747）
    */
-  record(message: AgentMessage, turn: string, read = 0, hidden = false): void {
+  record(message: AgentMessage, turn: string, read = 0): void {
     this.messages.set(message.message_id, message)
     const count = this.sentInTurn(message.from, turn)
     const total = this.readInTurn(message.from, turn)
-    const kept = this.hiddenInTurn(message.from, turn) + (hidden ? read : 0)
+    const kept = this.hiddenInTurn(message.from, turn) + (message.far ? read : 0)
     this.sends.set(message.from, { turn, count: count + 1, read: total + read, ...(kept > 0 ? { hidden: kept } : {}) })
     this.version++
     this.persist()
@@ -322,10 +329,10 @@ export class AgentMessages {
     return [...new Set(this.backlog.map((h) => h.from))]
   }
 
-  /** その依頼（送り元のそのターン）で預かっている数と、読み直させる量の合計 */
-  heldInTurn(from: string, turn: string): { count: number; read: number } {
+  /** その依頼（送り元のそのターン）で預かっている数と、読み直させる量の合計。`hidden` はそのうちエージェントに見せない分（#747） */
+  heldInTurn(from: string, turn: string): { count: number; read: number; hidden: number } {
     const list = this.backlog.filter((h) => h.from === from && h.turn === turn)
-    return { count: list.length, read: list.reduce((sum, h) => sum + h.context, 0) }
+    return { count: list.length, read: list.reduce((sum, h) => sum + h.context, 0), hidden: list.reduce((sum, h) => sum + (h.far ? h.context : 0), 0) }
   }
 
   /**

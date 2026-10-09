@@ -78,12 +78,18 @@ test('AgentMessages: エージェントに見せない量（別のリポジト�
     const message = () => ({ message_id: agents.newId(), from: 'A1@r', to: 'B1@r', text: 'x', since: '' })
     agents.record(message(), 't1', 900_000)
     assert.equal(agents.hiddenInTurn('A1@r', 't1'), 0)
-    agents.record(message(), 't1', 200_000, true)
+    agents.record({ ...message(), far: true }, 't1', 200_000)
     agents.record(message(), 't1', 100_000)
     assert.deepEqual([agents.readInTurn('A1@r', 't1'), agents.hiddenInTurn('A1@r', 't1')], [1_200_000, 200_000])
     assert.equal(agents.hiddenInTurn('A1@r', 't2'), 0, 'ターンが変われば 0 から')
+    // 預かっている分も、見せない分を別に数える（断りの文の「これまで」に混ぜない）
+    agents.hold({ message_id: 'h1', from: 'A1@r', to: 'C1@x', text: 'x', turn: 't1', at: '', context: 300_000, url: '', far: true })
+    agents.hold({ message_id: 'h2', from: 'A1@r', to: 'B1@r', text: 'x', turn: 't1', at: '', context: 50_000, url: '' })
+    assert.deepEqual(agents.heldInTurn('A1@r', 't1'), { count: 2, read: 350_000, hidden: 300_000 })
     const after = new AgentMessages(path)
     assert.equal(after.hiddenInTurn('A1@r', 't1'), 200_000)
+    assert.equal(after.heldInTurn('A1@r', 't1').hidden, 300_000)
+    assert.equal(after.sentBy('A1@r').filter((m) => m.far).length, 1, '別のリポジトリへ送った印も残る')
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -195,7 +201,7 @@ test('AgentMessages の預かり: 送る前に印を書き、印が付いたま�
     before.hold(held('x1', { from: 'C@r' }))
     assert.notEqual(before.key(), key, '預かったら画面が描き直す')
     assert.equal(before.hasActivity('A@r'), true, '送ったことが無くても、預かりがあれば枠を出す')
-    assert.deepEqual(before.heldInTurn('A@r', 'turn-1'), { count: 2, read: 200 })
+    assert.deepEqual(before.heldInTurn('A@r', 'turn-1'), { count: 2, read: 200, hidden: 0 })
     assert.deepEqual(before.heldFroms(), ['A@r', 'C@r'])
     // 人が止めている・連鎖のターンは、回数を見なくても断る
     before.launched('Z@r', 'm0')

@@ -3016,7 +3016,7 @@ export function createApp(
       direct++
     }
     if (direct < planned.length) {
-      const over = requestRefusal(sentBefore + heldBefore.count, agents.readInTurn(from, found.turn) + heldBefore.read, planned.map((p) => ({ name: sessionLabel(p.target), tokens: p.context, ...(p.far ? { hidden: true } : {}) })), agents.hiddenInTurn(from, found.turn) > 0)
+      const over = requestRefusal(sentBefore + heldBefore.count, agents.readInTurn(from, found.turn) + heldBefore.read, planned.map((p) => ({ name: sessionLabel(p.target), tokens: p.context, ...(p.far ? { hidden: true } : {}) })), agents.hiddenInTurn(from, found.turn) + heldBefore.hidden > 0)
       if (over) return error(res, 429, over)
     }
     const results: AgentSendResult[] = []
@@ -3027,7 +3027,7 @@ export function createApp(
       const base = { message_id: messageId, to, to_name: p.far ? acrossLabel(p.target) : sessionLabel(p.target), context_tokens: p.far ? 0 : p.context }
       if (n >= direct) {
         // 預かる（#727）。送るのは送り元のターンが終わってから（`drainBacklog()`）
-        agents.hold({ message_id: messageId, from, to, text: p.text, turn: found.turn, at: new Date().toISOString(), context: p.context, url: selfUrl(req), ...(b.wake === true ? { wake: true as const } : {}), ...(p.compact !== undefined ? { compact: p.compact } : {}) })
+        agents.hold({ message_id: messageId, from, to, text: p.text, turn: found.turn, at: new Date().toISOString(), context: p.context, url: selfUrl(req), ...(p.far ? { far: true as const } : {}), ...(b.wake === true ? { wake: true as const } : {}), ...(p.compact !== undefined ? { compact: p.compact } : {}) })
         await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${from} → ${to} メッセージ ${messageId} を預かった（1 ターンの上限を超えた分。ターンが終わってから送る）\n`).catch(() => {})
         results.push({ ...base, held: true })
         continue
@@ -3045,10 +3045,9 @@ export function createApp(
       }
       const via = (out.body as ReplyResponse).via
       agents.record(
-        { message_id: messageId, from, to, text: p.text, since: new Date().toISOString(), turn: found.turn, ...(b.wake === true ? { wake: true as const, url: selfUrl(req) } : {}) },
+        { message_id: messageId, from, to, text: p.text, since: new Date().toISOString(), turn: found.turn, ...(p.far ? { far: true as const } : {}), ...(b.wake === true ? { wake: true as const, url: selfUrl(req) } : {}) },
         found.turn,
         p.context,
-        p.far,
       )
       await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${from} → ${to} メッセージ ${messageId}（${via}）\n`).catch(() => {})
       results.push({ ...base, via })
@@ -3172,7 +3171,7 @@ export function createApp(
               }
               // 記録してから預かりを外す（どちらも同じファイル。記録の済んだ預かりは、読み込むときにも捨てる）。
               // 1 ターンの回数・量（`sends`）には足さない（送り元がいま回している別のターンの数を潰さない）
-              agents.recordHeld({ message_id: h.message_id, from, to: h.to, text: h.text, since: new Date().toISOString(), turn: h.turn, ...(h.wake ? { wake: true as const, url: h.url } : {}) })
+              agents.recordHeld({ message_id: h.message_id, from, to: h.to, text: h.text, since: new Date().toISOString(), turn: h.turn, ...(h.far ? { far: true as const } : {}), ...(h.wake ? { wake: true as const, url: h.url } : {}) })
               agents.dropHeld(h.message_id)
               sentNow++
               readNow += context
@@ -3211,41 +3210,44 @@ export function createApp(
    * 送り元（`from`）にまだ渡していない返答（#594）。送ってから `HANDED_KEEP_DAYS` 以内で、相手のターンが終わった・失敗したものだけ（古い順）。
    * まだ返っていない依頼は足さない
    */
+  const AGENT_FAR_FAILED = '相手のセッションで失敗しました（別のリポジトリの相手の理由は出しません。人に確かめてください）'
   const pendingRepliesOf = async (from: string, skip?: (messageId: string) => boolean): Promise<{ replies: PendingReply[]; ids: string[] }> => {
     const waiting = agents.unhanded(from, Date.now() - HANDED_KEEP_DAYS * 86_400_000).filter((m) => !skip?.(m.message_id))
     if (waiting.length === 0) return { replies: [], ids: [] }
     // 相手の呼び名。**別のリポジトリの相手は、人が付けた表示名か `#<worktree 名>` だけ**（#747。題名＝相手のリポジトリの人の入力を、
     // 返答の見出しから送り元の文脈へ流さない）。表示名はメタを重ねた一覧から引く（同じリポジトリの相手は今までどおり）
+    // 別のリポジトリだったかは送ったときの印（`far`）で見る（いまの行や組から決め直さない）
     const { sessions } = await store.sessions(QUEUE_DAYS)
-    const home = sessions.find((s) => s.id === from)?.project ?? ''
-    const isFar = (s: SessionSummary) => Boolean(home && s.project && s.project !== home)
-    const named = sessions.some((s) => s.id !== from && isFar(s)) ? (await sessionsWithMeta(QUEUE_DAYS).catch(() => ({ sessions: [] as SessionSummary[] }))).sessions : []
-    const nameOf = (to: string) => {
-      const target = sessions.find((s) => s.id === to)
-      if (!target) return to
-      return isFar(target) ? acrossLabel(named.find((s) => s.id === to) ?? { ...target, meta: undefined }) : replierName(target)
+    const named = waiting.some((m) => m.far) ? (await sessionsWithMeta(QUEUE_DAYS).catch(() => ({ sessions: [] as SessionSummary[] }))).sessions : []
+    const nameOf = (m: AgentMessage) => {
+      const target = sessions.find((s) => s.id === m.to)
+      if (!target) return m.to
+      return m.far ? acrossLabel(named.find((s) => s.id === m.to) ?? { ...target, meta: undefined }) : replierName(target)
     }
     const replies: PendingReply[] = []
     for (const m of waiting) {
       const r = await agentResult(m)
       if (!r || r.status === 'pending') continue
-      replies.push({ message_id: m.message_id, to_name: nameOf(m.to), status: r.status, ...(r.text !== undefined ? { text: r.text } : {}), ...(r.error !== undefined ? { error: r.error } : {}) })
+      replies.push({ message_id: m.message_id, to_name: nameOf(m), status: r.status, ...(r.text !== undefined ? { text: r.text } : {}), ...(r.error !== undefined ? { error: r.error } : {}) })
     }
     return { replies, ids: replies.map((r) => r.message_id) }
   }
 
-  /** 送ったメッセージの結果。相手のそのターンが終わっていれば返答、失敗・止まっていれば理由。まだなら null */
+  /**
+   * 送ったメッセージの結果。相手のそのターンが終わっていれば返答、失敗・止まっていれば理由。まだなら null。
+   * 別のリポジトリの相手（`far`。#747）の失敗の理由は出さない（reply.log の末尾＝相手の CLI の出力や、相手の cwd が入る）
+   */
   const agentResult = async (message: AgentMessage): Promise<AgentWaitResponse | null> => {
     const base = { message_id: message.message_id, to: message.to }
     const answered = replyOf(await rowsNow(QUEUE_DAYS), message.to, message.message_id)
     if (answered) return { ...base, status: 'done', text: clipReply(answered.text ?? '') }
     const turn = run.snapshot()[message.to]
     if (turn?.failed && isDeliveryOf(turn.text, message.message_id)) {
-      return { ...base, status: 'failed', error: replyFailureText(turn.failed) }
+      return { ...base, status: 'failed', error: message.far ? AGENT_FAR_FAILED : replyFailureText(turn.failed) }
     }
     // 預かりの先頭のまま止まった（前の返信が失敗した・起動できなかった）
     const paused = queue.paused(message.to)
-    if (paused && isDeliveryOf(queue.peek(message.to)?.text, message.message_id)) return { ...base, status: 'failed', error: paused }
+    if (paused && isDeliveryOf(queue.peek(message.to)?.text, message.message_id)) return { ...base, status: 'failed', error: message.far ? AGENT_FAR_FAILED : paused }
     return null
   }
 

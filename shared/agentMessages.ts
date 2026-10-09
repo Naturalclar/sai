@@ -405,7 +405,7 @@ export function budgetRefusal(spent: number, next: number, budget: number = AGEN
  * 依頼 1 つの上限（#727）に収まるか。収まれば空、収まらなければ理由。**預かる前に、依頼の全部について**呼ぶ
  * （`sizes` はこれから足す宛先ごとの読み直す量、`count` / `read` はその依頼でもう送った分と預かっている分）
  */
-export function requestRefusal(count: number, read: number, sizes: readonly { name: string; tokens: number; hidden?: boolean }[]): string {
+export function requestRefusal(count: number, read: number, sizes: readonly { name: string; tokens: number; hidden?: boolean }[], hideRead = false): string {
   const total = count + sizes.length
   if (total > AGENT_REQUEST_MAX) {
     return `1 つの依頼で送れるのは ${AGENT_REQUEST_MAX} 件までです（もう ${count} 件、今回 ${sizes.length} 件）。1 件も預かっていません。宛先を減らすか、人に確かめてください`
@@ -413,7 +413,8 @@ export function requestRefusal(count: number, read: number, sizes: readonly { na
   const adding = sizes.reduce((sum, s) => sum + (s.tokens > 0 ? s.tokens : 0), 0)
   if (adding > 0 && read + adding > AGENT_REQUEST_READ_BUDGET) {
     // 別のリポジトリの相手（`hidden`。#747）が混ざる依頼では、相手ごとの量も合計も出さない（一覧で伏せた量を、断りの文から出さない）
-    if (sizes.some((s) => s.hidden)) return `この依頼で相手に読み直させる量の合計が予算を超えます（予算は${tokensLabel(AGENT_REQUEST_READ_BUDGET)}。別のリポジトリの相手の量は出しません）。1 件も預かっていません。相手を減らすか、人に確かめてください`
+    // これまでの合計に伏せた分が入っているとき（`hideRead`）も同じ（引き算で分かる）
+    if (hideRead || sizes.some((s) => s.hidden)) return `この依頼で相手に読み直させる量の合計が予算を超えます（予算は${tokensLabel(AGENT_REQUEST_READ_BUDGET)}。別のリポジトリの相手の量は出しません）。1 件も預かっていません。相手を減らすか、人に確かめてください`
     const each = sizes.filter((s) => s.tokens > 0).map((s) => `${s.name} ${tokensLabel(s.tokens).trim()}`).join('、')
     return `この依頼で相手に読み直させる量の合計が予算を超えます（これまで ${read > 0 ? tokensLabel(read).trim() : '0'}、今回 ${tokensLabel(adding).trim()}＝${each}。予算は${tokensLabel(AGENT_REQUEST_READ_BUDGET)}）。1 件も預かっていません。小さい相手に絞るか、人に確かめてください`
   }

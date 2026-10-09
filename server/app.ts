@@ -3016,7 +3016,7 @@ export function createApp(
       direct++
     }
     if (direct < planned.length) {
-      const over = requestRefusal(sentBefore + heldBefore.count, agents.readInTurn(from, found.turn) + heldBefore.read, planned.map((p) => ({ name: sessionLabel(p.target), tokens: p.context, ...(p.far ? { hidden: true } : {}) })))
+      const over = requestRefusal(sentBefore + heldBefore.count, agents.readInTurn(from, found.turn) + heldBefore.read, planned.map((p) => ({ name: sessionLabel(p.target), tokens: p.context, ...(p.far ? { hidden: true } : {}) })), agents.hiddenInTurn(from, found.turn) > 0)
       if (over) return error(res, 429, over)
     }
     const results: AgentSendResult[] = []
@@ -3036,8 +3036,11 @@ export function createApp(
       const compact = messageCompactOf(p.target, p.text, p.context, p.compact)
       const out = await launch(to, delivered, [], { days: QUEUE_DAYS, replaceTyped: false, forceProcess: false, url: selfUrl(req), queue: true, origin: messageId, ...compact })
       if (out.status !== 202) {
-        if (!many) return json(res, out.body, out.status)
-        results.push({ ...base, error: (out.body as ReplyError).error })
+        // 別のリポジトリの相手（#747）の起動の失敗は、理由を返さない（相手の作業ディレクトリのパスなどが文に入る）。理由は reply.log に残る
+        const why = p.far ? '相手のセッションを始められませんでした（別のリポジトリの相手の理由は出しません。人に確かめてください）' : (out.body as ReplyError).error
+        if (p.far) await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${from} → ${to} 別のリポジトリへのメッセージを送れなかった: ${(out.body as ReplyError).error}\n`).catch(() => {})
+        if (!many) return p.far ? error(res, out.status, why) : json(res, out.body, out.status)
+        results.push({ ...base, error: why })
         continue
       }
       const via = (out.body as ReplyResponse).via
@@ -3045,6 +3048,7 @@ export function createApp(
         { message_id: messageId, from, to, text: p.text, since: new Date().toISOString(), turn: found.turn, ...(b.wake === true ? { wake: true as const, url: selfUrl(req) } : {}) },
         found.turn,
         p.context,
+        p.far,
       )
       await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${from} → ${to} メッセージ ${messageId}（${via}）\n`).catch(() => {})
       results.push({ ...base, via })
@@ -3052,7 +3056,8 @@ export function createApp(
     const counts = {
       sent: agents.sentInTurn(from, found.turn),
       limit: AGENT_SEND_MAX,
-      read_tokens: agents.readInTurn(from, found.turn),
+      // 別のリポジトリの相手の分（#747）は、合計からも引いて返す（引き算で相手の量が分からないように。予算には数えている）
+      read_tokens: agents.readInTurn(from, found.turn) - agents.hiddenInTurn(from, found.turn),
       read_budget: AGENT_TURN_READ_BUDGET,
     }
     const heldCount = agents.heldBy(from).length
@@ -3209,10 +3214,16 @@ export function createApp(
   const pendingRepliesOf = async (from: string, skip?: (messageId: string) => boolean): Promise<{ replies: PendingReply[]; ids: string[] }> => {
     const waiting = agents.unhanded(from, Date.now() - HANDED_KEEP_DAYS * 86_400_000).filter((m) => !skip?.(m.message_id))
     if (waiting.length === 0) return { replies: [], ids: [] }
+    // 相手の呼び名。**別のリポジトリの相手は、人が付けた表示名か `#<worktree 名>` だけ**（#747。題名＝相手のリポジトリの人の入力を、
+    // 返答の見出しから送り元の文脈へ流さない）。表示名はメタを重ねた一覧から引く（同じリポジトリの相手は今までどおり）
     const { sessions } = await store.sessions(QUEUE_DAYS)
+    const home = sessions.find((s) => s.id === from)?.project ?? ''
+    const isFar = (s: SessionSummary) => Boolean(home && s.project && s.project !== home)
+    const named = sessions.some((s) => s.id !== from && isFar(s)) ? (await sessionsWithMeta(QUEUE_DAYS).catch(() => ({ sessions: [] as SessionSummary[] }))).sessions : []
     const nameOf = (to: string) => {
       const target = sessions.find((s) => s.id === to)
-      return target ? replierName(target) : to
+      if (!target) return to
+      return isFar(target) ? acrossLabel(named.find((s) => s.id === to) ?? { ...target, meta: undefined }) : replierName(target)
     }
     const replies: PendingReply[] = []
     for (const m of waiting) {

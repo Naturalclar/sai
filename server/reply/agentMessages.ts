@@ -122,7 +122,7 @@ export function tokenMatches(expected: string, got: unknown): boolean {
 export class AgentMessages {
   private messages = new Map<string, AgentMessage>()
   /** 送り元 → そのターン（`Replying.since`）と、そのターンで送った回数・相手に読み直させた量 */
-  private sends = new Map<string, { turn: string; count: number; read: number }>()
+  private sends = new Map<string, { turn: string; count: number; read: number; hidden?: number }>()
   /** メッセージで起動したターンを回しているセッション → そのメッセージの id */
   private origins = new Map<string, string>()
   /** 人が画面で「送信を止める」を押したセッション（送り元）。「再開する」を押すまで送らせない（#311） */
@@ -158,7 +158,7 @@ export class AgentMessages {
     if (r.sends && typeof r.sends === 'object') {
       for (const [from, v] of Object.entries(r.sends as Record<string, unknown>)) {
         const t = v as { turn?: unknown; count?: unknown; read?: unknown }
-        if (typeof t?.turn === 'string' && typeof t.count === 'number' && typeof t.read === 'number') this.sends.set(from, { turn: t.turn, count: t.count, read: t.read })
+        if (typeof t?.turn === 'string' && typeof t.count === 'number' && typeof t.read === 'number') this.sends.set(from, { turn: t.turn, count: t.count, read: t.read, ...(typeof (t as { hidden?: unknown }).hidden === 'number' ? { hidden: (t as { hidden: number }).hidden } : {}) })
       }
     }
     if (r.origins && typeof r.origins === 'object') {
@@ -222,14 +222,24 @@ export class AgentMessages {
   }
 
   /**
-   * 送れた（相手のターンを起動した・預けた）ので記録し、そのターンの回数を 1 増やす。
-   * `read` はその相手が読み直す量（分からなければ 0）で、ターンの合計に足す
+   * そのターンの合計のうち、**エージェントには見せない分**（#747。別のリポジトリの相手が読み直す量）。予算には数えるが、
+   * 送信の応答・断りの文には出さない（合計から引き算して、一覧で伏せた相手の量が分かってしまうため）
    */
-  record(message: AgentMessage, turn: string, read = 0): void {
+  hiddenInTurn(from: string, turn: string): number {
+    const s = this.sends.get(from)
+    return s && s.turn === turn ? (s.hidden ?? 0) : 0
+  }
+
+  /**
+   * 送れた（相手のターンを起動した・預けた）ので記録し、そのターンの回数を 1 増やす。
+   * `read` はその相手が読み直す量（分からなければ 0）で、ターンの合計に足す。`hidden` なら、その量は見せない分にも足す（#747）
+   */
+  record(message: AgentMessage, turn: string, read = 0, hidden = false): void {
     this.messages.set(message.message_id, message)
     const count = this.sentInTurn(message.from, turn)
     const total = this.readInTurn(message.from, turn)
-    this.sends.set(message.from, { turn, count: count + 1, read: total + read })
+    const kept = this.hiddenInTurn(message.from, turn) + (hidden ? read : 0)
+    this.sends.set(message.from, { turn, count: count + 1, read: total + read, ...(kept > 0 ? { hidden: kept } : {}) })
     this.version++
     this.persist()
   }

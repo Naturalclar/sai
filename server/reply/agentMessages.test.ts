@@ -70,6 +70,25 @@ test('AgentMessages: 1 ターンで相手に読み直させた量を足してい
   assert.equal(agents.readInTurn('C1@r', 't1'), 0, '送り元ごと')
 })
 
+test('AgentMessages: エージェントに見せない量（別のリポジトリの相手の分）は、合計に数えたうえで別にも覚える。立て直しても残る（#747）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-agents-'))
+  const path = join(dir, 'agent-messages.json')
+  try {
+    const agents = new AgentMessages(path)
+    const message = () => ({ message_id: agents.newId(), from: 'A1@r', to: 'B1@r', text: 'x', since: '' })
+    agents.record(message(), 't1', 900_000)
+    assert.equal(agents.hiddenInTurn('A1@r', 't1'), 0)
+    agents.record(message(), 't1', 200_000, true)
+    agents.record(message(), 't1', 100_000)
+    assert.deepEqual([agents.readInTurn('A1@r', 't1'), agents.hiddenInTurn('A1@r', 't1')], [1_200_000, 200_000])
+    assert.equal(agents.hiddenInTurn('A1@r', 't2'), 0, 'ターンが変われば 0 から')
+    const after = new AgentMessages(path)
+    assert.equal(after.hiddenInTurn('A1@r', 't1'), 200_000)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 test('AgentMessages: 人が止めたら送らせず、再開したら送れる。送った記録は新しい順に出す（#311）', () => {
   const agents = new AgentMessages()
   const k0 = agents.key()

@@ -393,6 +393,10 @@ test('requestRefusal: 別のリポジトリの相手が混ざる依頼では、�
   const text = requestRefusal(0, 0, [{ name: '甲', tokens: 4_000_000 }, { name: '別のリポジトリの相手', tokens: 3_000_000, hidden: true }])
   assert.match(text, /合計が予算を超えます（予算は約 600 万トークン。別のリポジトリの相手の量は出しません）/)
   assert.doesNotMatch(text, /400 万|300 万|700 万|甲/)
+  // これまでの合計に伏せた分が入っているとき（同じターンで先に別のリポジトリへ送った）も、合計を出さない（引き算で分かる）
+  const later = requestRefusal(1, 3_000_000, [{ name: '甲', tokens: 4_000_000 }], true)
+  assert.match(later, /別のリポジトリの相手の量は出しません/)
+  assert.doesNotMatch(later, /これまで|300 万|400 万/)
 })
 
 test('resolveTarget: 名前の引き方を相手ごとに変えられる（別のリポジトリの相手は id と表示名だけ。#747）', () => {

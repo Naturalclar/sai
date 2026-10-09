@@ -1350,7 +1350,8 @@ test('許した組では、別のリポジトリのセッションが一覧に�
     const res = await send('A1@r', 'C1@r', 'この形に合わせて')
     assert.equal(res.status, 202)
     const body = (await res.json()) as AgentSendResponse
-    assert.deepEqual([body.to, body.to_name, body.context_tokens, body.read_tokens], ['C1@r', '#r', 0, 200_000], '読み直しの予算には数えるが、別のリポジトリの相手の量と題名は返さない')
+    assert.deepEqual([body.to, body.to_name, body.context_tokens, body.read_tokens], ['C1@r', '#r', 0, 0], '読み直しの予算には数えるが、別のリポジトリの相手の量と題名は返さない（合計からも引く。引き算で分からないように）')
+    assert.equal((await agentOf('A1@r'))?.read_tokens, 200_000, '人の画面には実際の量（予算に数えている）')
     assert.deepEqual(runner.started.map((s) => s.id), ['C1@r'])
     assert.match(runner.started[0]!.cmd.text, /^【SAI】#o\/r の「/)
     assert.equal(runner.started[0]!.cmd.cwd, work, 'cwd は宛先のセッションの行から')
@@ -1389,6 +1390,40 @@ test('許した組では、別のリポジトリのセッションが一覧に�
   }
   assert.equal((await sessionsOf('A1@r')).some((s) => s.id === 'C1@r'), false)
   contexts.clear()
+  await clearQueue('C1@r')
+  await humanReply('C1@r')
+  idle('C1@r')
+})
+
+test('別のリポジトリの相手の返答を送り元に渡すとき、見出しに相手の題名を出さない（#747）', async () => {
+  await freshTurn()
+  assert.equal((await putSettings({ send_across_add: { from: 'o/r', to: 'o/other' } })).status, 200)
+  await humanReply('C1@r')
+  idle('C1@r')
+  idle('A1@r')
+  turn('A1@r')
+  let messageId = ''
+  let delivered = ''
+  try {
+    runner.started.length = 0
+    messageId = ((await (await send('A1@r', 'C1@r', '形を教えて')).json()) as AgentSendResponse).message_id
+    delivered = runner.started.at(-1)!.cmd.text
+  } finally {
+    idle('A1@r')
+  }
+  // 相手が返答し、そのあと相手のリポジトリの人が別の入力をした（題名がその入力になる）
+  const now = Date.now()
+  await appendFile(feedFile, JSON.stringify(row(new Date(now), 'C1', { repo: 'r', cwd: work, project: 'o/other', user_text: delivered, text: '形はこうです' })) + '\n')
+  await appendFile(feedFile, JSON.stringify(row(new Date(now + 1000), 'C1', { repo: 'r', cwd: work, project: 'o/other', user_text: '相手のリポジトリの秘密の題名', text: '別の用事' })) + '\n')
+  runner.started.length = 0
+  await humanReply('A1@r')
+  const handed = runner.started.at(-1)!.cmd.text
+  assert.match(handed, new RegExp(`message_id: ${messageId}`))
+  assert.match(handed, /形はこうです/)
+  assert.match(handed, /「#r」/, '表示名が無ければ worktree 名')
+  assert.doesNotMatch(handed, /秘密の題名/)
+  idle('A1@r')
+  assert.equal((await putSettings({ send_across_remove: { from: 'o/r', to: 'o/other' } })).status, 200)
   await clearQueue('C1@r')
   await humanReply('C1@r')
   idle('C1@r')

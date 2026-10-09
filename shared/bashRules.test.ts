@@ -402,6 +402,9 @@ test('前に付くだけの語・引数をコマンドとして走らせる語�
   assert.deepEqual(h('command cd /tmp && node -v'), { reason: 'cd_form' })
   // 名前が似ているだけのコマンドは別（`envsubst`・`execute`）
   assert.deepEqual(h('envsubst x'), { prefixes: ['envsubst'] })
+  // パスで書いても同じ（レビューの指摘）
+  assert.deepEqual(h('/usr/bin/env node x.js'), { reason: 'wrapper' })
+  assert.deepEqual(h('./nohup node x.js'), { reason: 'wrapper' })
 })
 
 test('場所を変えるフラグは cd と同じ線で見る: 行き先が外・読めないなら組まない（実機で Bash(pnpm run:*) は pnpm run --dir <外> x を通した。#755）', () => {
@@ -427,11 +430,23 @@ test('場所を変えるフラグは cd と同じ線で見る: 行き先が外�
   assert.deepEqual(h('pnpm run --dir sub mark'), { prefixes: ['pnpm run'] })
   assert.deepEqual(h('pnpm run --dir=/home/someone/work/repo/sub mark'), { prefixes: ['pnpm run'] })
   assert.deepEqual(h('cd sub && pnpm run --dir .. mark'), { prefixes: ['pnpm run'] }, 'cd のあとは、移った先から数える')
-  assert.deepEqual(h('grep -C 3 x a.txt'), { prefixes: ['grep'] }, '-C が場所でないコマンドは、数字を相対のパスとして読んで中になる')
+  // 読むだけのコマンドの同じ字のフラグは場所ではない（レビューの指摘）
+  assert.deepEqual(h('grep -C 3 x a.txt'), { prefixes: ['grep'] })
+  assert.deepEqual(h('ls -C'), { prefixes: ['ls'] })
+  assert.deepEqual(h('pnpm test | jq -C'), { prefixes: ['pnpm test'] })
 })
 
 test('サブコマンドを持つ CLI で 2 語目がフラグのときは、1 語のルールにしない: フラグごと狭く組むか、組まない（実機で Bash(git:*) は git tag を通した。#755）', () => {
-  // 頭のフラグごと、そのあとの語を 2 つまで（フラグが値を取るのかを知らないので、1 つでは止めない）
+  // 頭のフラグごと、「フラグの値ではないと分かる語」まで（`=` の付かないフラグのすぐ後ろの語は、値かもしれないので読み進める）
+  for (const [cmd, prefix] of [
+    ['aws --profile p --region r s3 ls', 'aws --profile p --region r s3'],
+    ['kubectl --context c -n ns get pods', 'kubectl --context c -n ns get'],
+    ['gh -R o/r --hostname h.example.com pr list', 'gh -R o/r --hostname h.example.com pr'],
+    ['git --no-pager log --oneline -5', 'git --no-pager log --oneline -5'],
+    ['node --test --disable-warning=ExperimentalWarning a.test.ts b.test.ts', 'node --test --disable-warning=ExperimentalWarning a.test.ts'],
+  ] as const) {
+    assert.deepEqual(h(cmd), { prefixes: [prefix] }, cmd)
+  }
   assert.deepEqual(h('gh --repo o/r pr list --json number'), { prefixes: ['gh --repo o/r pr'] }, '1 つで止めると、そのリポジトリへの gh の全部になる')
   assert.deepEqual(h('pnpm --filter web test --watch'), { prefixes: ['pnpm --filter web test'] })
   assert.deepEqual(h('git --no-pager log --oneline'), { prefixes: ['git --no-pager log --oneline'] })
@@ -452,11 +467,19 @@ test('サブコマンドを持つ CLI で 2 語目がフラグのときは、1 �
     'git -C sub status',
     'node --test --test-name-pattern="a b" x.test.ts',
     'python3 - x',
+    'git --no-pager diff HEAD~1',
+    'node ~/x.mjs',
+    'git --',
     'git --no-pager log --format="%h %s"',
     'pnpm a: b',
   ]) {
     assert.deepEqual(h(cmd), { reason: 'bare_cli' }, cmd)
   }
+  // 2 語目がパスの形（スクリプト）なら 2 語（前は 1 語の node。レビューの指摘: はじめ組まなくしていた）
+  assert.deepEqual(h('node scripts/x.mjs --flag'), { prefixes: ['node scripts/x.mjs'] })
+  assert.deepEqual(h('python3 ./tools/x.py a b'), { prefixes: ['python3 ./tools/x.py'] })
+  assert.deepEqual(h('FOO=1 node /tmp/x.mjs'), { prefixes: ['FOO=1 node /tmp/x.mjs'] })
+  assert.deepEqual(h('npx @scope/pkg run'), { prefixes: ['npx @scope/pkg'] })
   // 2 語目が名前なら今までどおり 2 語、2 語目が無ければ 1 語、サブコマンドを持たないコマンドは 1 語
   assert.deepEqual(h('git status -s'), { prefixes: ['git status'] })
   assert.deepEqual(h('make'), { prefixes: ['make'] })

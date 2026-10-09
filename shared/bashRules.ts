@@ -23,7 +23,8 @@ const UNASKED = new Set(['head', 'tail', 'grep', 'wc', 'sort', 'uniq', 'cat', 'c
  * 前に付くだけの語。次の語が本当のコマンド（`time rm x`・`command rm x`・`env FOO=1 rm x`）。
  * ルールにすると、その語で始まれば何でも通る（実機で `Bash(env:*)` は `env touch x` を、`Bash(nice:*)` は `nice touch x` を通した。#755）か、
  * 書いても効かない（`Bash(command:*)` があっても `command touch x` は聞かれた）。どちらでもルールを組まない。
- * 自動の「今回だけ許可」で通さない形（#749）も**この 1 つを使う**（一覧を 2 つ持たない）
+ * 自動の「今回だけ許可」で通さない形（#749 の PR）が同じ名前・同じ中身の一覧を足すので、入るときに**この 1 つに揃える**（一覧を 2 つ持たない）。
+ * パスで書いたもの（`/usr/bin/env`）も同じに読む（下で basename を見る）
  */
 const WRAPPERS = new Set(['time', 'command', 'builtin', 'exec', 'env', 'nice', 'ionice', 'caffeinate', 'stdbuf', 'timeout', 'setsid', 'unbuffer', 'arch', 'chronic', 'watch', 'noglob', 'nocorrect', '!'])
 /** 前に付く語ではないが、引数をコマンドとして走らせる語。実機で `Bash(nohup:*)`・`Bash(xargs:*)` は後ろの `touch` を通した（#755） */
@@ -328,37 +329,43 @@ function placeTargets(words: readonly string[], from: number): { target: string;
 }
 
 /**
- * コマンドの接頭辞の頭（#705）。サブコマンドを持つ CLI は 2 語（`gh pr`）、ほかは 1 語。`words` は代入を除いたその部品の語。
+ * コマンドの接頭辞の頭（#705）。サブコマンドを持つ CLI は 2 語（`gh pr`・`node scripts/x.mjs`）、ほかは 1 語。`words` は代入を除いたその部品の語。
  *
  * **サブコマンドを持つ CLI で 2 語目がフラグのときは、1 語のルールにしない（#755）**: 1 語のルール（`Bash(git:*)`）は、実機で
  * `git tag`・`git -C <外> tag` まで通した。聞かれた 1 回（`git --no-pager log`）と書かれる範囲が釣り合わない。
- * 代わりに**頭のフラグごと、そのあとの語を 2 つまで**（間のフラグも入れて）接頭辞にする: `git --no-pager log --oneline`・`pnpm -s exec tsc`・
+ * 代わりに**頭のフラグごと、「フラグの値ではないと分かる語」まで**を接頭辞にする: `git --no-pager log --oneline`・`pnpm -s exec tsc`・
  * `node --test x.test.ts`・`node -v`。実機で、`Bash(git --no-pager log:*)` は `git --no-pager log …` を通し、`git --no-pager tag` は聞かれた。
- * 語を 2 つ取るのは、フラグが値を取るのかを知らないため（`gh --repo o/r pr list` の 1 つ目の語は値で、サブコマンドは 2 つ目。
- * 1 つで止めると `gh --repo o/r` = そのリポジトリへの gh の全部になる）。前の 1 語より必ず狭い。次の形は null（組まない）:
+ * フラグが値を取るのかは知らないので、**`=` の付かないフラグのすぐ後ろの語は、値かもしれないものとして読み進める**
+ * （`gh --repo o/r pr list` → `gh --repo o/r pr`。`o/r` で止めると、そのリポジトリへの gh の全部になる。
+ * `aws --profile p --region r s3 rm …` → `… s3` まで）。止まるのは、語か `--x=値` のすぐ後ろの語（値ではない）か、部品の終わり。
+ * 前の 1 語より必ず狭い。次の形は null（組まない）:
  * - 途中にコマンドの名前・パス・フラグの形でない語がある（`python3 -c '…'`・`node -e '…'` のコード、`git -c a.b=c …`、`python3 -`）
  * - 場所を変えるフラグが頭にある（`git -C sub status`。`git -C sub` は、そこでの git の全部を通す）
  */
 function ruleHead(words: readonly string[]): string | null {
   const first = words[0]!
   if (!SUBCOMMAND_CLIS.has(first) || words.length < 2) return first
-  // サブコマンドの名前の形。`:` 入りのスクリプト名（`pnpm test:feed`）も 2 語にする（実機で `Bash(pnpm a:b:*)` は `pnpm a:b` を通し、`pnpm a:c` は聞かれた）
-  if (/^[\w.](?:[\w.:-]*[\w.-])?$/.test(words[1]!)) return `${first} ${words[1]}`
-  const flag = /^--?[A-Za-z][\w.-]*(?:=[\w./:@%+,-]*)?$/
-  if (!flag.test(words[1]!)) return null
-  let named = 0
-  let n = 1
-  for (; n < words.length && named < 2; n++) {
+  // サブコマンド・スクリプトの形: 名前（`:` 入りのスクリプト名も。実機で `Bash(pnpm a:b:*)` は `pnpm a:b` を通し、`pnpm a:c` は聞かれた）と
+  // パス（`node scripts/x.mjs`・`npx @scope/pkg`）。前はパスの形を 1 語（`Bash(node:*)`）にしていた
+  const named = /^[\w.@/](?:[\w.@/:-]*[\w.-])?$/
+  if (named.test(words[1]!)) return `${first} ${words[1]}`
+  // フラグ。`-5` のような数字も（`git --no-pager log --oneline -5`）
+  const flag = /^--?[A-Za-z0-9][\w.-]*(?:=[\w./:@%+,-]*)?$/
+  // すぐ前が `=` の付かないフラグか（次の語はその値かもしれない）
+  let maybeValue = false
+  for (let n = 1; n < words.length; n++) {
     const w = words[n]!
     if (flag.test(w)) {
       if (PLACE_FLAGS.has(w.split('=')[0]!) || /^-C./.test(w)) return null
-    } else if (/^[\w.][\w./:-]*$/.test(w)) {
-      named++
+      maybeValue = !w.includes('=')
+    } else if (named.test(w)) {
+      if (!maybeValue) return words.slice(0, n + 1).join(' ')
+      maybeValue = false
     } else {
       return null
     }
   }
-  return words.slice(0, n).join(' ')
+  return words.join(' ')
 }
 
 /**
@@ -432,11 +439,13 @@ export function bashRulePlan(command: string, cwd: string, home: string): { pref
     }
     if (words.some((w) => /^CDPATH(?:\+?=|$)/.test(w)) || ['source', '.', 'eval'].includes(first)) cdPathTouched = true
     // 前に付くだけの語・引数をコマンドとして走らせる語には組まない（その語で始まれば何でも通るルールになる。#755）
-    if (WRAPPERS.has(first) || ARG_RUNNERS.has(first)) return no('wrapper')
+    const base = first.slice(first.lastIndexOf('/') + 1)
+    if (WRAPPERS.has(base) || ARG_RUNNERS.has(base)) return no('wrapper')
     // 場所を変えるフラグは `cd` と同じ線で見る（実機で `Bash(git:*)` は `git -C <外> tag` を、`Bash(pnpm run:*)` は
     // `pnpm run --dir <外> x` を通した。#755）。行き先が外・読めない（語が無い・`~`・`*` `?` `[`・畳んだ語・`cwd` が分からない）なら組まない。
     // 中なら今までどおり（`dir` は動かさない。場所が変わるのはそのコマンドだけ）
-    const places = placeTargets(words, i + 1)
+    // 読むだけのコマンド（`ls -C`・`jq -C`・`grep -C 3`）の同じ字のフラグは場所ではないので見ない
+    const places = UNASKED.has(first) ? [] : placeTargets(words, i + 1)
     if (places === null) return no('place_flag')
     for (const { target, at } of places) {
       if (!dir || !target || target.startsWith('~') || /[*?[]/.test(target) || folded.has(`${index}:${at}`)) return no('place_flag')

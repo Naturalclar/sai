@@ -332,7 +332,7 @@ function quotedCatHeredocEnd(rest: string): number {
 }
 
 /** `/a/b/../c` → `/a/c`。node:path は画面で使えないので文字で畳む */
-function normalize(path: string): string {
+export function normalize(path: string): string {
   const out: string[] = []
   for (const seg of path.split('/')) {
     if (!seg || seg === '.') continue
@@ -342,7 +342,7 @@ function normalize(path: string): string {
   return `/${out.join('/')}`
 }
 
-const within = (dir: string, root: string) => dir === root || dir.startsWith(root === '/' ? '/' : `${root}/`)
+export const within = (dir: string, root: string) => dir === root || dir.startsWith(root === '/' ? '/' : `${root}/`)
 
 /**
  * 部品の語（`from` から後ろ）にある、場所を変えるフラグの行き先（`-C dir`・`--dir=dir`・くっつけた `-Cdir`）。無ければ空の配列。

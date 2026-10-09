@@ -100,6 +100,21 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 流れ: `approvals.snapshot()`（Claude の `-p` の許可だけ）を `annotate()` し、`jevAutoEligible()`（Bash だけ）で絞り、この回のコマンドとルールの両方が閾値以上のものだけを画面の [常に許可] と同じ答え（`permissionsFor()`）で `approvals.answer()` し、`reply.log` に残す。
 - ルールは `JevRisk.ruleSafe()` が `JEV_RULE_STATEMENT`（`jevRuleState()`）で別に聞く（`Bash(rm:*)` のような前方一致は Jev が見た 1 回より広い）。`JEV_RULE_STATEMENT` は「普段の作業（調べる・ビルド・テスト）の範囲として許してよいか」を聞く文。
 - つないだコマンドは `alwaysRules()` の**部品ごとに** `ruleSafe()` で聞き、`jevLowestRule()`（一番低いもの。1 つでも届いていなければ待つ）で判定する（#705）。`Approval.jev_rule` も一番低いルール。
-- 答えるか・なぜ答えないかは `shared/jev.ts` の `jevAutoDecision()` の 1 つで決める（#553）。この回が閾値以上なのに答えないもの（Bash 以外・ルールを作れない・ルールの確率が閾値未満）は、理由を `reply.log` に同じ許可に 1 行だけ残す。
+- 答えるか・なぜ答えないかは `shared/jev.ts` の `jevAutoDecision()` の 1 つで決める（#553）。この回が閾値以上なのに答えないもの（Bash 以外・ルールの確率が閾値未満・ルールを作れない形のうち読むだけと分からないもの）は、理由を `reply.log` に同じ許可に 1 行だけ残す。
+- **ルールを作れない Bash は、読むだけと分かっているコマンドなら今回だけ許可する**（#749。`jevAutoDecision()` の `once`）。この回の確率が閾値以上で、ルールが空だった理由が `covered` / `not_bash` でなく、`shared/bashReadOnly.ts` の `notReadOnly()` が空を返したときだけ。答えは画面の [許可] と同じ（`updatedPermissions` を付けない＝覚えない）で、ルールの確率は聞かない（書かれるルールが無い）。記録は `by: jev`・`remember: false`・`no_rule`・`jev`、画面には「答えた許可」（#693）として「Jev が自動で許可（N%）」が残る。ルールを作れる形は今までどおり [常に許可]（ルールの確率が低くても「今回だけ」には落とさない）
+- **`notReadOnly()` は「知っているものだけ受ける」読み取り**（拒否の一覧ではない）。分からないものは全部、理由の種類（`NotReadOnly`: `syntax` / `command` / `flag` / `path` / `secret` / `opaque`）を返して人に回す:
+  - 構文（`Reader`）: 受けるのは、語（素の字・`'…'`・`"…"`）、`&&` `||` `;` 改行 `|`、サブシェル `( … )`、コマンド置換 `$( … )`、空白のあとの `#` のコメント、捨てるだけのリダイレクト（`2>&1`・`>/dev/null` の類）。**それ以外の字に当たったらその場で `syntax`**（`$X`・`${…}`・`$'…'`・`$(( ))`・バッククォート・バックスラッシュ・`{` `}`・`<` `>`・ヒアドキュメント・`&`・`|&`・引用符の外の非 ASCII・`\r`）。二重引用符の中のバックスラッシュは英数字の前（`\n`）だけ受ける
+  - コマンドの名前: 引用符も展開もグロブもパスも無い素の語で、`COMMANDS` にあるものだけ。**多機能なコマンドは入れない**: `printf`（`-v` が変数に書く）・`jq`（式が環境変数を出せる・終わらない）・`rg`（下へ潜る）・`cd`（`CDPATH`・別名）・`diff`（ディレクトリの中身を出す）・`sleep` / `seq`・`env` / `printenv`・シェル・インタプリタ・`xargs`・`awk`・`curl`・`tmux`・前に付く語（`command` / `env` / `exec` / `time`）
+  - フラグ: コマンドごとに、値を取らないもの・次の語を値に取るもの・`--name=value` の形を 1 つずつ書く（`takeFlags()`）。知らないフラグは `flag`
+  - **シェルが展開する語（引用符の外のグロブ・`~`・zsh の拡張グロブの `^`）は、どの引数でも受けない**（`lit()`。`grep -v .e*` はパターンのつもりの語が `.env` に展開されて読む先になる）。受けるのは名前を並べるだけの `ls` の引数と、git のリビジョンの `^` `~` だけ
+  - 読む先（`readPath()`）: 中身の分かる語で、cwd の中で、`..` を含まず、**階層ごとに** `shared/files.ts` の `isSecretPath()` に当たらないもの（`secrets/db.yml`・`.envs/prod`）
+  - 読む先の無い形（`cat`・`grep foo`・`wc -l`）は、パイプの 2 つ目以降だけ（`Check` の `piped`。先頭だと標準入力を待って止まる）
+  - `git`: 読むサブコマンドだけ（`GIT_READS`・一覧する形だけの `GIT_LISTS`）。フラグは知っている長いフラグ（`GIT_LONG`）と、**値を取らない 1 字の短いフラグ**（`GIT_SHORT`）だけ。git は長いフラグの省略形を受け、まとめた短いフラグを 1 字ずつ読む（`git grep -GOrm` は `-O rm`）ので、拒否の一覧でも「フラグの形なら通す」でも止まらない。フラグでない語が外のパス・グロブ・秘密の名前なら断る。サブコマンドの前に受けるのは `--no-pager` だけ
+  - `gh`: 形は `gh [-R owner/repo] <まとまり> <サブコマンド> …` だけ（`GH_READS` と、GET の `gh api <読む先>`）。フラグは `GH_BARE` / `GH_VALUE` を 1 語ずつ。知らないフラグを 1 つでも受けると、gh はその次の語を値として読み飛ばす（`gh pr --body view merge 5` が `pr merge` になる）。`--jq` / `--template` は入れない。値が `-` で始まるものは受けない
+  - `$( … )` の結果（`Word.opaque`）を渡してよいのは `echo` だけで、二重引用符の中に書いたもの（`Word.loose` でない）だけ（bash は引用符の外の結果をグロブとして展開する）。コメントはいちばん外の並びでだけ受ける
+  - git の語は、署名を確かめる書式（`%G?`・`%(signature)`。`gpg` を起こす）を含めば断る。`git diff` のフラグでない語は 1 つまで（リポジトリの外では `git diff a b` が `diff -r` になる）。`<リビジョン> -- <パス…>` の形は受ける。gh のフラグでない語は URL・`host/owner/repo` を受けない。読む先と git の語の字は ASCII だけ
+  - `READ_ONLY_MAX_CHARS`（1000 字）より長いコマンドは通さない（`jevState()` がコマンドをその長さで切るので、Jev が全部を見ていない）
+- **残っている限界**: セッションの cwd と実際の場所のずれ（人が前に許可した `cd`。判定は行の cwd で行う）・cwd の中のシンボリックリンク・`isSecretPath()` が見ない名前（`token`・`kubeconfig`・`.mcp.json`）・追跡されている秘密（`git log -p`）・git 自身の設定で走るもの（`diff.external`・`core.fsmonitor`）
+- **テストと調査は、文字列を `notReadOnly()` に渡すだけ**（コマンドを実行しない）
 - ルールの確率は `Approval.jev_rule` として許可のバブルにも出す。`approvalsNow()` は `JevRisk.peekRule()` で覚えているものを見るだけで、読む経路から外へは送らない。
 - Codex / OpenCode の許可には「常に許可」が無いので触らない。

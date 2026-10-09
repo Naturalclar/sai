@@ -340,3 +340,92 @@ test('approvals.jsonl に、答えたときの Jev の確率を残す（#749）�
   await put(base3, { jev_auto: 0 })
 })
 
+test('自動で今回だけ許可（#749）: ルールを作れない Bash は、この回が閾値以上で、読むだけと分かっているコマンドなら、覚えずに 1 回だけ通す。それ以外・閾値未満・切のときは人に残る', async () => {
+  const rows = async (): Promise<ApprovalLogRow[]> =>
+    (await readFile(join(feedDir, 'approvals.jsonl'), 'utf-8').catch(() => '')).split('\n').filter(Boolean).map((l) => JSON.parse(l) as ApprovalLogRow)
+  const drain = async () => {
+    for (let i = 0; i < 20; i++) await settle()
+  }
+  const busy: Runner = { ...runner, running: (id) => id === 'S1@r' }
+  const seen: string[] = []
+  // 偽の Jev: `zzlow` を含むコマンドだけ低く、ほかは高い。ルールを聞かれたら数える（今回だけ許可では聞かないはず）
+  const fake: JevJudge = async (state, statement) => {
+    seen.push(statement === JEV_RULE_STATEMENT ? 'rule' : 'safe')
+    return state.includes('zzlow') ? 0.4 : 0.95
+  }
+  const approvals = new Approvals()
+  const base = await start(approvals, fake, busy)
+  const post = async (command: string) => {
+    const res = await fetch(`${base}/api/approvals`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: 'S1@r', tool_name: 'Bash', input: { command }, tool_use_id: 't' }) })
+    return ((await res.json()) as { approval_id: string }).approval_id
+  }
+  const logBefore = (await readFile(join(feedDir, 'reply.log'), 'utf-8').catch(() => '')).length
+  const had = (await rows()).length
+
+  // 自動が切（閾値 0）なら、ルールを作れない形も今までどおり人に残る
+  await put(base, { jev: true, jev_auto: 0 })
+  const off = await post('echo "zzfirst at $(git rev-parse HEAD)"')
+  await drain()
+  assert.equal(await approvals.wait(off, 10), null)
+
+  // 入にすると、預かっていた分にも効く: 今回だけ許可（ルールは書かない）
+  await put(base, { jev_auto: 0.9 })
+  await drain()
+  const first = await approvals.wait(off, 10)
+  assert.equal(first?.behavior, 'allow')
+  assert.equal(first?.updatedPermissions, undefined, '覚えない（画面の [許可] と同じ答え）')
+  assert.deepEqual(first?.updatedInput, { command: 'echo "zzfirst at $(git rev-parse HEAD)"' })
+
+  // 預かった時にも動く。サブシェルの中の読むだけのコマンドも通る
+  const sub = await post('(git status; git log --oneline -3) # zzcomment')
+  // 読むだけと分かっていないもの・閾値未満は人に残る
+  const del = await post('echo $(rm -rf zzgone)')
+  const commit = await post('git commit -m "zzmsg $(date)"')
+  const variable = await post('echo "$ZZVAR"')
+  const outside = await post('(ls /tmp/zzout)')
+  const secret = await post('(cat .env) # zzenv')
+  const opaque = await post('git diff --stat $(git merge-base HEAD zzmain)')
+  const low = await post('echo "$(git log -1 --format=zzlow)"')
+  await drain()
+  assert.equal((await approvals.wait(sub, 10))?.behavior, 'allow')
+  for (const [id, why] of [[del, '消す'], [commit, '書く'], [variable, '変数'], [outside, 'cwd の外'], [secret, '秘密'], [opaque, '結果を git に渡す'], [low, '閾値未満']] as const) {
+    assert.equal(await approvals.wait(id, 10), null, `${why}: 人に残る`)
+  }
+  assert.ok(!seen.includes('rule'), '今回だけ許可では、ルールの確率を聞かない（書かれるルールが無い）')
+
+  // 記録: by jev・remember false・確率と、ルールを作れなかった理由の種類。コマンドの引数は書かない
+  for (let i = 0; i < 50 && (await rows()).length < had + 2; i++) await settle()
+  const mine = (await rows()).slice(had)
+  assert.deepEqual(mine.map((r) => [r.by, r.behavior, r.remember, r.rule, r.jev, r.no_rule]), [
+    ['jev', 'allow', false, '', 0.95, 'expansion'],
+    ['jev', 'allow', false, '', 0.95, 'subshell'],
+  ])
+  for (const word of ['zzfirst', 'zzcomment']) assert.ok(!JSON.stringify(mine).includes(word), word)
+
+  // reply.log: 通した 2 行と、閾値以上なのに通さなかった理由（1 つの許可に 1 行。閾値未満は書かない）。コマンドの文字は入れない
+  const log = (await readFile(join(feedDir, 'reply.log'), 'utf-8')).slice(logBefore).split('\n').filter(Boolean).map((l) => l.replace(/^--- \S+ /, ''))
+  assert.equal(log.filter((l) => l.startsWith('S1@r Jev が自動で今回だけ許可（この回 95%、閾値 90%。ルールを作れない形: ')).length, 2)
+  const skipped = log.filter((l) => l.includes('見送り'))
+  assert.deepEqual(skipped.map((l) => l.replace(/^.*見送り（この回 95%）: 今回だけの自動の許可も見送り: /, '')).sort(), [
+    '読むだけと分かっているコマンドでない',
+    'コマンド置換の結果を、echo 以外に渡している',
+    '読める構文だけで書かれていない（変数・バッククォート・ファイルへのリダイレクト・ヒアドキュメント・代入・構文の語など）',
+    '読む先・行き先が cwd の外か、読めない形',
+    '秘密が入っていそうなファイル（.env・鍵・トークンの類）を読む形',
+    'コマンド置換の結果を、echo 以外に渡している',
+  ].sort())
+  for (let i = 0; i < 3; i++) await put(base, { jev_auto: 0.9 })
+  await drain()
+  const again = (await readFile(join(feedDir, 'reply.log'), 'utf-8')).slice(logBefore).split('\n').filter((l) => l.includes('見送り'))
+  assert.equal(again.length, 6, '同じ許可には 1 行だけ')
+  for (const word of ['zzgone', 'zzmsg', 'ZZVAR', 'zzout', 'zzenv', 'zzmain']) assert.ok(!again.join('\n').includes(word), word)
+
+  // 画面: 通さなかったものは待ちのまま出ている
+  const list = await sessions(base)
+  assert.deepEqual(list.approvals['S1@r']!.map((a) => a.approval_id).sort(), [del, commit, variable, outside, secret, opaque, low].sort())
+
+  // 人が残りに答えられる（自動で通さなかっただけで、止めてはいない）
+  const ok = await fetch(`${base}/api/approvals/${commit}/answer`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ behavior: 'allow' }) })
+  assert.equal(ok.status, 200)
+  await put(base, { jev_auto: 0 })
+})

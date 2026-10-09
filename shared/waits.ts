@@ -17,12 +17,18 @@ export const WAIT_MAX_MS = 2 * 60 * 60_000
 /** 1 つのセッションを、待ちで自動で起こす回数（直近 24 時間）。超えたら起こさず画面に出す（人の「いま起こす」は数えない） */
 export const WAIT_WAKES_PER_DAY = 6
 export const WAIT_DAY_MS = 24 * 60 * 60_000
+/**
+ * 待ち始めてからこれを過ぎて終わった待ちは、**自動では起こさない**（画面に結果を出し、人の「いま起こす」で起こす）。
+ * 前のターンから 1 時間あくとプロンプトキャッシュが切れ、起こしたターンが文脈をほぼ全部書き直す（実測は docs/history/reply.md）。
+ * 境目は 60 分で、確かめ（2 回見る）・起動・要約にかかる分を引いて手前に置く。**線を変えるならここ**
+ */
+export const WAIT_AUTO_WAKE_MS = 50 * 60_000
 /** サーバが `gh` で確かめる間隔 */
 export const WAIT_POLL_MS = 60_000
 /** PR を出した直後はチェックがまだ載っていない。預かってからこの間は「チェックなし」を「まだ」と読む */
 export const WAIT_EMPTY_GRACE_MS = 3 * 60_000
 /**
- * 終わったのに起こせないまま（処理中・枠が少ない・許可を聞かないモードにした など）待つ長さ。過ぎたら見に行くのをやめて画面に残す
+ * 終わったのに起こせないまま（処理中・枠が少ない・端末で開いた・自動では起こさない待ちが押されない など）待つ長さ。過ぎたら見に行くのをやめて画面に残す
  * （起こせない待ちが、いつまでも同時の数の枠を使わないように）
  */
 export const WAIT_READY_MAX_MS = 6 * 60 * 60_000
@@ -168,6 +174,18 @@ export function waitView(w: WaitState): Wait {
   return view
 }
 
+/** 待ち始めてから `WAIT_AUTO_WAKE_MS` を過ぎて終わったか（過ぎていれば自動では起こさない） */
+export function waitFinishedLate(since: string, now: number): boolean {
+  const from = Date.parse(since)
+  // 預かった時刻が読めない待ちは、自動では起こさない側に倒す
+  return !Number.isFinite(from) || now - from > WAIT_AUTO_WAKE_MS
+}
+
+/** 自動では起こさないと決めた待ちに残す理由 */
+export function waitLateReason(): string {
+  return `待ち始めてから ${Math.round(WAIT_AUTO_WAKE_MS / 60_000)} 分を過ぎて終わったので、自動では起こしません（キャッシュが切れていて、起こすと文脈を読み直します。「いま起こす」で起こせます）`
+}
+
 /** 画面の 1 行（`PR #12 の CI を待っています（あと 1 時間 20 分で諦めます）`） */
 export function waitStatusLine(w: Wait, now: number): string {
   const head = `PR #${w.pr} の CI`
@@ -176,6 +194,7 @@ export function waitStatusLine(w: Wait, now: number): string {
     const span = left >= 60 ? `${Math.floor(left / 60)} 時間${left % 60 ? ` ${left % 60} 分` : ''}` : `${left} 分`
     return `${head} を待っています（あと ${span}で諦めます）`
   }
+  if (w.status === 'ready' && w.late) return `${head} は終わっています（${waitResultText(w.result)}）。自動では起こしません`
   if (w.status === 'ready') return `${head}: ${waitResultText(w.result)}。まだ起こしていません`
   if (w.status === 'waking') return `${head}: ${waitResultText(w.result) || '人がいま起こしました'}。起こしています`
   if (w.status === 'expired') return `${head} は、待てる時間のうちに終わりませんでした（起こしていません）`

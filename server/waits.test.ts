@@ -9,7 +9,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { PrCi } from '../shared/waits.ts'
-import { WAIT_EMPTY_GRACE_MS, WAIT_MARK, WAIT_MAX_MS, WAIT_MAX_PER_SESSION, WAIT_POLL_MS, WAIT_READY_MAX_MS, WAIT_WAKES_PER_DAY } from '../shared/waits.ts'
+import { WAIT_AUTO_WAKE_MS, WAIT_EMPTY_GRACE_MS, WAIT_MARK, WAIT_MAX_MS, WAIT_MAX_PER_SESSION, WAIT_POLL_MS, WAIT_READY_MAX_MS, WAIT_WAKES_PER_DAY } from '../shared/waits.ts'
 import type { Replying, SessionDetailResponse, SessionsResponse, SessionSummary, SessionProgressResponse, UsageResponse, Wait, WaitActionResponse, WaitForResponse } from '../shared/types.ts'
 import { createApp } from './app.ts'
 import type { App } from './app.ts'
@@ -96,7 +96,7 @@ const deps = () => ({ tmux: { run: async () => { throw new Error('unused') } }, 
 const make = (r: Runner) =>
   createApp(new FeedStore(dir), join(dir, 'dist'), r, new Approvals(), new BuildFreshness(join(dir, 'dist'), [], 0), undefined, new Authenticator(async () => null), deps(), undefined, undefined, undefined, usage as unknown as UsageStore, progress as unknown as ProgressReader, undefined, prs)
 
-const IDS = ['W1', 'W2', 'W3', 'W4', 'W5', 'W6', 'W7', 'W8', 'W9', 'W10', 'W11', 'W12']
+const IDS = ['W1', 'W2', 'W3', 'W4', 'W5', 'W6', 'W7', 'W8', 'W9', 'W10', 'W11', 'W12', 'W13', 'W14', 'W15']
 const REMOTE = 'https://github.com/o/r'
 
 before(async () => {
@@ -247,7 +247,7 @@ test('預かれない形: 検査・もう終わっている・同じ PR・数の
   runner.finish(eid('N1'))
 })
 
-test('預けられるのは、SAI が起こしていま回しているターンの自分のセッションだけ。ブラウザ・トークン無しは断る。素通し・端末・Claude 以外はループと同じ線', async () => {
+test('預けられるのは、SAI が起こしていま回しているターンの自分のセッションだけ。ブラウザ・トークン無しは断る。端末・Claude 以外はループと同じ線で、素通し（Bypass / Auto）は預かる', async () => {
   prs.state.set(40, PENDING)
   // ターンを回していないセッション
   assert.equal((await waitFor('W4', 40)).status, 409)
@@ -256,39 +256,45 @@ test('預けられるのは、SAI が起こしていま回しているターン�
   assert.equal((await post(`${base}/api/agent/wait-for`, { from: eid('W4'), pr: 40, then: 'x' })).status, 403, 'トークンが要る')
   assert.equal((await fetch(`${base}/api/agent/wait-for`)).status, 405)
   runner.finish(eid('W4'))
-  // 許可を聞かないモード（メタ・設定の既定）のセッションは預かれない
+  // 許可を聞かないモードのセッションも預かれる（#732: 1 つの待ちで起こすのは 1 回で、起きたターンから次は預けられない）
   const putMeta = (id: string, permission_mode: string) => fetch(`${base}/api/sessions/${encodeURIComponent(eid(id))}/meta`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ permission_mode }) })
-  for (const mode of ['bypassPermissions', 'auto']) {
+  for (const [n, mode] of ['bypassPermissions', 'auto'].entries()) {
+    prs.state.set(41 + n, PENDING)
     assert.equal((await putMeta('P1', mode)).status, 200)
     await turn('P1')
-    const res = await waitFor('P1', 40)
-    assert.equal(res.status, 400)
-    assert.match(await errorOf(res), /許可を聞かないモード（.+）のセッションには待ちを預かれません/)
+    const res = await waitFor('P1', 41 + n)
+    assert.equal(res.status, 200, `${mode}: ${await res.clone().text()}`)
+    const w = ((await res.json()) as WaitForResponse).wait!
+    assert.equal(w.status, 'waiting')
     runner.finish(eid('P1'))
+    assert.equal((await act('P1', w.id, 'stop')).status, 200)
   }
   assert.equal((await putMeta('P1', '')).status, 200)
   assert.deepEqual(await poll('P1'), [])
+  // ループの線は変えない: 同じモードのセッションにループは組めない
+  assert.equal((await putMeta('P1', 'bypassPermissions')).status, 200)
+  const loop = await post(`${base}/api/sessions/${encodeURIComponent(eid('P1'))}/loop`, { goal: 'PR を片付ける', until: 'PR が 0 件', max_rounds: 2 })
+  assert.match(await errorOf(loop), /許可を聞かないモード（.+）のセッションにはループを組めません/)
+  assert.equal((await putMeta('P1', '')).status, 200)
 })
 
-test('預けたあとに素通しにしたセッションは、終わっても起こさない（理由が画面に出る）。戻せば起きる', async () => {
-  const w = await held('W5', 50)
+test('素通しのセッションも、終わったら 1 回だけ起こす。SAI は権限のフラグを足さない（モードは返信と同じ道で渡る）。起きたターンからは次を預けられない', async () => {
   const putMeta = (permission_mode: string) => fetch(`${base}/api/sessions/${encodeURIComponent(eid('W5'))}/meta`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ permission_mode }) })
   assert.equal((await putMeta('bypassPermissions')).status, 200)
+  await held('W5', 50)
   const sentBefore = runner.sent(eid('W5')).length
   await firstSeen(50, GREEN)
-  const [ready] = await poll('W5')
-  assert.deepEqual([ready!.status, ready!.result], ['ready', 'success'])
-  assert.match(ready!.reason!, /許可を聞かないモード/)
-  assert.equal(runner.sent(eid('W5')).length, sentBefore)
-  // 人の「いま起こす」でも、この線は越えない
-  const forced = await act('W5', w.id, 'wake')
-  assert.equal(forced.status, 409)
-  assert.equal(runner.sent(eid('W5')).length, sentBefore)
-  assert.equal((await putMeta('')).status, 200)
-  advance(60_000)
   assert.deepEqual(await poll('W5'), [])
   assert.equal(runner.sent(eid('W5')).length, sentBefore + 1)
+  assert.ok(runner.sent(eid('W5')).at(-1)!.cmd.text.startsWith(`${WAIT_MARK}PR #50（o/r）: CI は全部通りました`))
+  // 起きたターンから次の待ちは預けられない（素通しでも連鎖しない）
+  prs.state.set(51, PENDING)
+  assert.equal((await waitFor('W5', 51)).status, 409)
   runner.finish(eid('W5'))
+  advance(WAIT_POLL_MS * 3)
+  await poll('W5')
+  assert.equal(runner.sent(eid('W5')).length, sentBefore + 1, '同じ待ちで 2 回は起きない')
+  assert.equal((await putMeta('')).status, 200)
 })
 
 test('枠が残り少ないときは起こさず、画面に出る。「いま起こす」で起きる。別オリジンからは止めることも起こすこともできない', async () => {
@@ -485,12 +491,15 @@ test('「全部通った」は 1 回見ただけでは信じない: 次も通っ
   runner.finish(eid('W1'))
 })
 
-test('待てる時間を過ぎていても、最後に 1 回は読む（サーバが止まっていた間に終わっていれば起こす）。終わったのに起こせないまま長く経った待ちは、見に行くのをやめる', async () => {
-  await held('W2', 410)
+test('待てる時間を過ぎていても、最後に 1 回は読む（サーバが止まっていた間に終わっていれば、結果を出す。待ち始めてから長いので自動では起こさない）。終わったのに起こせないまま長く経った待ちは、見に行くのをやめる', async () => {
+  const late = await held('W2', 410)
   const sentBefore = runner.sent(eid('W2')).length
   prs.state.set(410, RED)
   advance(WAIT_MAX_MS + 60_000)
-  assert.deepEqual(await poll('W2'), [], '時間切れの前に終わっていたので起こす')
+  const [shown] = await poll('W2')
+  assert.deepEqual([shown!.status, shown!.result, shown!.late], ['ready', 'failure', true], '時間切れの前に終わっていたので、諦めずに結果を出す')
+  assert.equal(runner.sent(eid('W2')).length, sentBefore)
+  assert.equal((await act('W2', late.id, 'wake')).status, 200)
   assert.equal(runner.sent(eid('W2')).length, sentBefore + 1)
   assert.ok(runner.sent(eid('W2')).at(-1)!.cmd.text.includes('CI が落ちました'))
   runner.finish(eid('W2'))
@@ -558,3 +567,76 @@ test('確かめるだけの書き込みでは rev を進めない（毎分の確
   assert.equal((await act('W6', w!.id, 'stop')).status, 200)
 })
 
+
+test('待ち始めてから決めた時間のうちに終わった待ちは自動で 1 回起こす。過ぎて終わった待ちは起こさず、結果を出して人の「いま起こす」を待つ', async () => {
+  // ぎりぎり間に合った: 2 回目に見たときが線の上
+  await held('W13', 600)
+  let sentBefore = runner.sent(eid('W13')).length
+  advance(WAIT_AUTO_WAKE_MS - WAIT_POLL_MS * 2)
+  await firstSeen(600, GREEN)
+  assert.deepEqual(await poll('W13'), [])
+  assert.equal(runner.sent(eid('W13')).length, sentBefore + 1, '線のうちなら今までどおり起こす')
+  runner.finish(eid('W13'))
+
+  // 線を過ぎて終わった: 起こさない。何度見に行っても起こさない
+  const w = await held('W13', 601)
+  sentBefore = runner.sent(eid('W13')).length
+  advance(WAIT_AUTO_WAKE_MS - WAIT_POLL_MS)
+  await firstSeen(601, RED)
+  const [shown] = await poll('W13')
+  assert.deepEqual([shown!.status, shown!.result, shown!.late], ['ready', 'failure', true])
+  assert.match(shown!.reason!, new RegExp(`${WAIT_AUTO_WAKE_MS / 60_000} 分を過ぎて終わったので、自動では起こしません`))
+  for (let n = 0; n < 3; n++) {
+    advance(WAIT_POLL_MS * 10)
+    assert.equal((await poll('W13'))[0]!.late, true)
+  }
+  assert.equal(runner.sent(eid('W13')).length, sentBefore, '自動では起こさない')
+  // 立て直しても、自動では起こさないまま
+  const again = make(runner)
+  const s2 = createServer((req, res) => void again(req, res))
+  await new Promise<void>((resolve) => s2.listen(0, '127.0.0.1', resolve))
+  try {
+    const a2 = s2.address()
+    const at = `http://127.0.0.1:${typeof a2 === 'object' && a2 ? a2.port : 0}`
+    advance(WAIT_POLL_MS)
+    const kept = ((await (await fetch(`${at}/api/sessions`)).json()) as SessionsResponse).waits[eid('W13')] ?? []
+    assert.deepEqual([kept[0]?.status, kept[0]?.late], ['ready', true])
+    assert.equal(runner.sent(eid('W13')).length, sentBefore)
+  } finally {
+    again.dispose()
+    await new Promise<void>((resolve) => s2.close(() => resolve()))
+  }
+  // 人の「いま起こす」で起きる。結果と落ちたチェックの名前はそのまま渡る。待ちは消える（1 回だけ）
+  assert.equal((await act('W13', w.id, 'wake')).status, 200)
+  assert.deepEqual(await poll('W13'), [])
+  assert.equal(runner.sent(eid('W13')).length, sentBefore + 1)
+  assert.ok(runner.sent(eid('W13')).at(-1)!.cmd.text.startsWith(`${WAIT_MARK}PR #601（o/r）: CI が落ちました\n落ちたチェック: node (test)`))
+  runner.finish(eid('W13'))
+})
+
+test('自動では起こさない待ちも、読み直す量が大きければ要約してから起こす。押されないまま長く経ったら見に行くのをやめる', async () => {
+  const w = await held('W14', 610)
+  advance(WAIT_AUTO_WAKE_MS)
+  await firstSeen(610, GREEN)
+  assert.equal((await poll('W14'))[0]!.late, true)
+  contexts.set(eid('W14'), 500_000)
+  try {
+    assert.equal((await act('W14', w.id, 'wake')).status, 200)
+    assert.ok(runner.sent(eid('W14')).at(-1)!.cmd.text.startsWith('/compact'), '先に要約を回す')
+  } finally {
+    contexts.delete(eid('W14'))
+    runner.finish(eid('W14'))
+  }
+  await poll('W14')
+  runner.finish(eid('W14'))
+
+  const idle = await held('W15', 611)
+  advance(WAIT_AUTO_WAKE_MS)
+  await firstSeen(611, GREEN)
+  assert.equal((await poll('W15'))[0]!.late, true)
+  advance(WAIT_READY_MAX_MS)
+  const [given] = await poll('W15')
+  assert.equal(given!.status, 'halted')
+  assert.match(given!.reason!, /起こされませんでした/)
+  assert.equal((await act('W15', idle.id, 'stop')).status, 200)
+})

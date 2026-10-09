@@ -172,7 +172,7 @@ import { AGENT_MESSAGES_FILE, AGENT_TOKEN_FILE, AGENT_TOKEN_HEADER, AgentMessage
 import type { AgentMessage } from './reply/agentMessages.ts'
 import { LOOP_TICK_MS, LOOPS_FILE, LoopStore } from './reply/loops.ts'
 import { WAITS_FILE, WAIT_TICK_MS, WaitStore } from './reply/waits.ts'
-import { isWaitPrompt, WAIT_FAILING_MAX, WAIT_MAX_MS, WAIT_MAX_PER_SESSION, WAIT_POLL_MS, WAIT_READY_MAX_MS, WAIT_WAKES_PER_DAY, waitConfirmed, waitFromRequest, waitLimitRefusal, waitLive, waitOutcome, waitPrompt, waitPromptLabel, waitResultText, waitWakeable, wakesExhausted } from '../shared/waits.ts'
+import { isWaitPrompt, WAIT_FAILING_MAX, WAIT_MAX_MS, WAIT_MAX_PER_SESSION, WAIT_POLL_MS, WAIT_READY_MAX_MS, WAIT_WAKES_PER_DAY, waitConfirmed, waitFinishedLate, waitFromRequest, waitLateReason, waitLimitRefusal, waitLive, waitOutcome, waitPrompt, waitPromptLabel, waitResultText, waitWakeable, wakesExhausted } from '../shared/waits.ts'
 import type { WaitState } from '../shared/waits.ts'
 import { clampInterval, loopAfterRound, loopFromRequest, loopHalt, loopLive, LOOP_NOTE_MAX, loopPrompt, loopPromptLabel } from '../shared/loops.ts'
 import type { LoopState } from '../shared/loops.ts'
@@ -1397,7 +1397,7 @@ export function createApp(
         if (!waitingUnscheduled({ ...known, prs: [1] })) continue
         const number = waitingUnscheduled({ ...known, prs: (await branchPrs(s, false)) ?? [] })
         if (!number) continue
-        // 置けない理由（素通し・端末で開いている・送信を止めている…）。印は出して、置く口だけ理由つきで押せなくする
+        // 置けない理由（端末で開いている・送信を止めている…）。印は出して、置く口だけ理由つきで押せなくする
         const blocked = agents.isStopped(id) ? 'このセッションからの送信を止めているので、待ちも置けません' : await loopRefusal(s, 'wait')
         s.wait_unset = { pr: number, ...(blocked ? { blocked } : {}) }
         unset.push(`${id}:${number}:${blocked ? 1 : 0}`)
@@ -3404,9 +3404,10 @@ export function createApp(
    * - **端末で開いているセッションには組まない**: 打ち込む経路には MCP が無く、端末の `/loop` と二重に回るのを見分けられない
    * - **ルールに関係なく通るモード（`bypassPermissions` / `auto`。#691）には組まない**: 人が見ていない間に、何も聞かれずに回り続ける。
    *   運用者が `SAI_CLAUDE_ARGS` で渡しているときも同じ（`skipModeInArgs()`。1 語の形も見る）。判定は `modeSkipsRules()` の 1 つ
+   *   **待ち（`kind: 'wait'`）はここを見ない**: 回り続けるループと違い、1 つの待ちで起こすのは 1 回で、次も預けられない
    */
   const loopRefusal = async (session: SessionSummary, kind: 'loop' | 'wait' = 'loop'): Promise<string> => {
-    // 待ち（#732）も同じ線を引く（人が見ていない間に SAI が起こすターン）。言い回しだけ変える
+    // 待ち（#732）も同じ線を引く（人が見ていない間に SAI が起こすターン）。**許可を聞かないモードだけは待ちでは断らない**
     const cannot = kind === 'loop' ? 'ループを組めません' : '待ちを預かれません'
     if (session.archived) return `アーカイブ済みのセッションには${cannot}`
     const blocked = replyBlockedReason(session, selfHost())
@@ -3414,9 +3415,12 @@ export function createApp(
     if (session.agent !== 'claude') return kind === 'loop' ? 'ループを組めるのは、いまは Claude のセッションだけです' : '待ちを預かれるのは、いまは Claude のセッションだけです'
     const extra = splitArgs(process.env.SAI_CLAUDE_ARGS)
     if (process.env.SAI_APPROVE === '0' || extra.includes('--permission-prompt-tool')) return kind === 'loop' ? 'SAI の MCP を渡していない（SAI_APPROVE=0 など）ので、エージェントが次を言う口がありません' : 'SAI の MCP を渡していない（SAI_APPROVE=0 など）ので、待ちを預かれません'
-    const mode = await replyMode(await metaStore.get(session.id))
-    const skips = modeSkipsRules(mode) ? mode : skipModeInArgs(extra)
-    if (skips) return `許可を聞かないモード（${modeName(skips)}）のセッションには${cannot}`
+    // 待ちは 1 つで 1 回しか起こさず、起きたターンから先へ送る・次を預けることもできないので、ここは見ない
+    if (kind === 'loop') {
+      const mode = await replyMode(await metaStore.get(session.id))
+      const skips = modeSkipsRules(mode) ? mode : skipModeInArgs(extra)
+      if (skips) return `許可を聞かないモード（${modeName(skips)}）のセッションには${cannot}`
+    }
     if (await terminalOf(session)) return kind === 'loop' ? '端末で開いているセッションにはループを組めません（端末の /loop と二重に回るのを避けるため）' : '端末で開いているセッションには待ちを預かれません（起こすときに端末へ打ち込むことになるため）'
     return ''
   }
@@ -3631,7 +3635,7 @@ export function createApp(
   /**
    * 終わった待ちでセッションを起こす。起こせたら空、起こさなかったら理由（待ちに `reason` として残る）。
    *
-   * - 起こす経路は返信・ループと同じ `launch()`（**SAI は権限のフラグを足さず、許可も自動で返さない**）。断る線もループと同じ `loopRefusal()`
+   * - 起こす経路は返信・ループと同じ `launch()`（**SAI は権限のフラグを足さず、許可も自動で返さない**）。断る線は `loopRefusal(session, 'wait')`（許可を聞かないモードは断らない）
    * - 処理中・預かりが残っている・前の返信が失敗しているセッションは追い越さない（終わる・片付くまで `ready` のまま待つ）
    * - 使用量の枠が残り少ない・1 日の回数を超えたときは起こさない。**人の「いま起こす」（`forced`）だけがこの 2 つを越える**
    * - 読み直す量が大きければ要約してから起こす（#579 と同じ `canCompact()`。本文は預かりの先頭に置かれ、要約のあとに回る）
@@ -3725,7 +3729,8 @@ export function createApp(
 
   /**
    * 待ちを 1 つ進める。確かめる時刻が来ていれば `gh` で読み（**決まった形の 1 本だけ**。エージェントのターンは回さない）、
-   * 終わっていれば（緑でも赤でも）起こしに行く。待てる時間を過ぎたら起こさずに `expired` にして画面に残す
+   * 終わっていれば（緑でも赤でも）起こしに行く。待てる時間を過ぎたら起こさずに `expired` にして画面に残す。
+   * 待ち始めてから `WAIT_AUTO_WAKE_MS` を過ぎて終わったときは、結果を出すだけで起こさない（`late`。人の「いま起こす」を待つ）
    */
   const tickWait = async (id: string, waitId: string): Promise<void> => {
     const w = waits.get(id, waitId)
@@ -3756,15 +3761,21 @@ export function createApp(
         })
         return
       }
-      waits.set(id, { ...rest, status: 'ready', result: outcome, failing: ci!.failing.slice(0, WAIT_FAILING_MAX), checked_at: waitIso(now) })
-      await waitLog(id, `PR #${w.pr}: ${waitResultText(outcome)}`)
+      // 待ち始めてから長く経って終わった: キャッシュが切れていて、起こすと文脈を読み直す。結果だけ出して、人の「いま起こす」に任せる
+      const manual = waitFinishedLate(w.since, now)
+      waits.set(id, { ...rest, status: 'ready', result: outcome, failing: ci!.failing.slice(0, WAIT_FAILING_MAX), checked_at: waitIso(now), ...(manual ? { late: true as const, reason: waitLateReason() } : {}) })
+      await waitLog(id, `PR #${w.pr}: ${waitResultText(outcome)}${manual ? '（待ち始めてから長いので、自動では起こさない）' : ''}`)
+      if (manual) return
     } else {
       // 終わったのに起こせないまま長く経ったら、見に行くのをやめる（起こせない待ちが同時の数の枠を使い続けない）
       if (now - Date.parse(w.checked_at ?? w.since) >= WAIT_READY_MAX_MS) {
-        waits.set(id, { ...w, status: 'halted', reason: `終わってから ${Math.round(WAIT_READY_MAX_MS / 3_600_000)} 時間、起こせませんでした（${w.reason ?? '理由は分かりません'}）` })
+        const hours = Math.round(WAIT_READY_MAX_MS / 3_600_000)
+        waits.set(id, { ...w, status: 'halted', reason: w.late ? `終わってから ${hours} 時間、起こされませんでした（自動では起こさない待ちでした）` : `終わってから ${hours} 時間、起こせませんでした（${w.reason ?? '理由は分かりません'}）` })
         await waitLog(id, `PR #${w.pr}: 終わってから起こせないまま時間切れ`)
         return
       }
+      // 自動では起こさないと決めた待ちは、人の「いま起こす」だけが起こす（立て直したあとも同じ）
+      if (w.late) return
       if ((waitRetryAt.get(waitId) ?? 0) > now) return
     }
     await wakeWait(id, waitId, false)
@@ -3927,7 +3938,8 @@ export function createApp(
   /**
    * 人が待ちを止める（`/wait/stop`）・いま起こす（`/wait/wake`）（#732）。**同一オリジンのみ**（起こすと CLI が動く）。
    * 止めるは、状態に関係なくその待ちを消す（終わった・起こせなかった待ちの片付けも同じ口）。
-   * いま起こすは、使用量の枠と 1 日の回数だけを越える。処理中・前の返信の失敗・許可を聞かないモードは越えない
+   * いま起こすは、使用量の枠と 1 日の回数だけを越える。処理中・前の返信の失敗・端末で開いているは越えない。
+   * 待ち始めてから長く経って終わった待ち（`late`）を起こすのはこの口だけ
    */
   const waitAction = async (req: IncomingMessage, res: ServerResponse, id: string, suffix: (typeof WAIT_SUFFIXES)[number]) => {
     if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')

@@ -1219,6 +1219,9 @@
   .group.approval .actions button { font: inherit; font-size: 13px; padding: 4px 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; }
   .group.approval .actions button.allow { background: var(--accent); border-color: var(--accent); color: #fff; }
   .group.approval .actions button.always { border-color: var(--accent); color: var(--accent); }
+  /* 押すとこの 1 回を越えて残る候補（#741。Codex の規則の追加）。今回だけの「許可」（塗り）・「拒否」（灰色の枠）と見分ける。`.allow` より後ろに置いて塗りを消す */
+  .group.approval .actions button.persist.allow { background: var(--panel); border-color: var(--accent); color: var(--accent); }
+  .group.approval .actions button.persist.deny { border-color: var(--claude); color: var(--claude); }
   /* 同じルールを何度も許可しているとき（#445）。「常に許可」を勧める見た目にする（押すのは人） */
   .group.approval .actions button.always.suggest { background: var(--accent); color: #fff; font-weight: 600; }
   .group.approval .count-note { color: var(--muted); font-size: 12px; margin: 6px 0 0; }

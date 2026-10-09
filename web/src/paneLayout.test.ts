@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { closeColumn, EMPTY_LAYOUT, focusColumn, focusedItem, MAX_COLUMNS, nextUnshown, normalizeLayout, openBeside, openInNeighbor, placeItem, sessionIdsIn, type PaneItem, type PaneLayout } from './paneLayout.ts'
+import { closeColumn, EMPTY_LAYOUT, focusColumn, focusedItem, MAX_COLUMNS, nextUnshown, normalizeLayout, openBeside, openInNeighbor, PINNED_HASH, PINNED_KINDS, placeItem, replaceItem, routePaneItem, sessionIdsIn, type PaneItem, type PaneLayout } from './paneLayout.ts'
 
 const s = (id: string): PaneItem => ({ kind: 'session', id })
 /** 番号は見ずに並びとフォーカスだけを比べる形（番号は下の「列の番号」のテストで見る） */
@@ -11,7 +11,7 @@ const shape = (layout: PaneLayout) => ({ columns: layout.columns, focus: layout.
 const slots = (layout: PaneLayout) => Object.fromEntries(layout.columns.map((c, i) => [(c[0] as { id: string }).id, layout.keys[i]]))
 
 test('normalizeLayout: 壊れた値は空の並びにする', () => {
-  for (const raw of [null, undefined, 'x', 3, {}, { columns: 'x' }, { columns: [null, 'a', [], [{}], [{ kind: 'feed' }], [{ kind: 'session' }], [{ kind: 'session', id: '' }]] }]) {
+  for (const raw of [null, undefined, 'x', 3, {}, { columns: 'x' }, { columns: [null, 'a', [], [{}], [{ kind: 'gone' }], [{ kind: 'pr', repo: 'o/r', number: 1 }], [{ kind: 'usage' }], [{ kind: 'session' }], [{ kind: 'session', id: '' }]] }]) {
     assert.deepEqual(normalizeLayout(raw), EMPTY_LAYOUT)
   }
 })
@@ -191,4 +191,83 @@ test('nextUnshown: いまが要対応・並びに無いセッションなら先�
 test('nextUnshown: 出していないものが無ければ null（分けない）', () => {
   assert.equal(nextUnshown(['a', 'b'], ['a', 'b'], 'a'), null)
   assert.equal(nextUnshown([], [], ''), null)
+})
+
+// ---- PR の一覧・フィード・新しいセッションもペインに出す（#759）
+const k = (kind: 'todo' | 'prs' | 'feed' | 'new'): PaneItem => ({ kind })
+const items = (layout: PaneLayout) => layout.columns.map((c) => (c[0]!.kind === 'session' ? c[0]!.id : c[0]!.kind))
+
+test('normalizeLayout: PR の一覧・フィード・新しいセッションを読む。知らない種類は落とし、同じ種類の 2 つ目も落とす', () => {
+  const read = normalizeLayout({ columns: [[k('prs')], [{ kind: 'gone' }], [k('feed')], [k('prs')], [k('new')]], focus: 2 })
+  assert.deepEqual(items(read), ['prs', 'feed', 'new'])
+  assert.equal(read.focus, 2)
+  // 余分な項目が付いていても種類だけを取る（PR 1 本をペインに入れる形は無い）
+  assert.deepEqual(normalizeLayout({ columns: [[{ kind: 'prs', repo: 'o/r', number: 3 }]] }).columns, [[{ kind: 'prs' }]])
+})
+
+test('固定の画面は 2 つ並べない: 置く・横に開く・隣に開くのどれも、もうあればフォーカスを移すだけ', () => {
+  for (const kind of PINNED_KINDS) {
+    const base: PaneLayout = { columns: [[s('a')], [k(kind)]], focus: 0, keys: [0, 1] }
+    for (const move of [placeItem, openBeside, openInNeighbor]) {
+      const next = move(base, k(kind))
+      assert.deepEqual(items(next), ['a', kind], kind)
+      assert.equal(next.focus, 1)
+    }
+  }
+})
+
+test('固定の画面: ふつうに開くとフォーカスのあるペインが入れ替わり、横に開くと右に足す。上限は 3 つのまま', () => {
+  const one = full(['a'])
+  assert.deepEqual(items(placeItem(one, k('prs'))), ['prs'])
+  const two = openBeside(one, k('prs'))
+  assert.deepEqual([items(two), two.focus], [['a', 'prs'], 1])
+  const three = openBeside(two, k('feed'))
+  assert.deepEqual([items(three), three.focus], [['a', 'prs', 'feed'], 2])
+  const capped = openBeside(three, k('new'))
+  assert.equal(capped.columns.length, MAX_COLUMNS)
+  assert.deepEqual([items(capped), capped.focus], [['a', 'new', 'feed'], 1], '右端にいれば左隣を入れ替える')
+  assert.deepEqual(items(closeColumn(three, 1)), ['a', 'feed'])
+  assert.deepEqual(sessionIdsIn(three), ['a'])
+})
+
+test('openInNeighbor: PR の一覧・フィードのペインからセッションを開くと隣に出て、元のペインは残る', () => {
+  for (const kind of ['prs', 'feed'] as const) {
+    const next = openInNeighbor({ columns: [[k(kind)]], focus: 0, keys: [0] }, s('a'))
+    assert.deepEqual([items(next), next.focus], [[kind, 'a'], 1])
+    const again = openInNeighbor({ ...next, focus: 0 }, s('b'))
+    assert.deepEqual([items(again), again.focus], [[kind, 'b'], 1], '行を順に開いてもペインが増えない')
+  }
+})
+
+test('replaceItem: 新しいセッションのペインが、起きたセッションに入れ替わる。フォーカスが隣に移っていても隣は潰さず、フォーカスも奪わない', () => {
+  const waiting: PaneLayout = { columns: [[s('a')], [k('new')], [s('b')]], focus: 2, keys: [0, 1, 2] }
+  const next = replaceItem(waiting, k('new'), s('c'))
+  assert.deepEqual([items(next), next.focus], [['a', 'c', 'b'], 2], 'フォーカスは隣のまま')
+  assert.deepEqual(next.keys, [0, 1, 2], '列の番号は変わらない（隣のペインを作り直さない）')
+  // 新しいセッションのペインにフォーカスがあれば、そのまま起きたセッションを指す
+  const here = replaceItem({ ...waiting, focus: 1 }, k('new'), s('c'))
+  assert.deepEqual([items(here), here.focus], [['a', 'c', 'b'], 1])
+  // 起きたセッションがもう並んでいれば、新しいセッションのペインを閉じる。フォーカスは、そこにあったときだけ移す
+  const dup = replaceItem(waiting, k('new'), s('a'))
+  assert.deepEqual([items(dup), dup.focus, dup.keys], [['a', 'b'], 1, [0, 2]], 'フォーカスは b のまま')
+  const dupHere = replaceItem({ ...waiting, focus: 1 }, k('new'), s('b'))
+  assert.deepEqual([items(dupHere), dupHere.focus], [['a', 'b'], 1])
+  // 1 つだけのとき
+  const single = replaceItem({ columns: [[k('new')]], focus: 0, keys: [0] }, k('new'), s('c'))
+  assert.deepEqual([items(single), single.focus], [['c'], 0])
+  // もう並びに無い（待っている間に閉じた・入れ替えた）なら何もしない
+  const gone = full(['a', 'b'], 1)
+  assert.equal(replaceItem(gone, k('new'), s('c')), gone)
+})
+
+test('routePaneItem / PINNED_HASH: URL が指すのはフォーカスのあるペインの 1 つ。PR 1 本と使用量はペインに入れない（全幅）', () => {
+  assert.deepEqual(routePaneItem({ name: 'session', id: 'a' }), s('a'))
+  for (const kind of PINNED_KINDS) assert.deepEqual(routePaneItem({ name: kind }), k(kind))
+  // `#/` は並びに触らない（ルートの URL を開いただけで、並べておいたペインを入れ替えない）
+  for (const name of ['list', 'pr', 'usage', 'gone']) assert.equal(routePaneItem({ name }), null)
+  assert.deepEqual(PINNED_HASH, { todo: '#/todo', prs: '#/prs', feed: '#/feed', new: '#/new' })
+})
+
+test('nextUnshown: 固定の画面から分けるときは、サイドバーの先頭から探す', () => {
+  assert.equal(nextUnshown(['a', 'b'], ['a'], ''), 'b')
 })

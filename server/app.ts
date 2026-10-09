@@ -1709,7 +1709,7 @@ export function createApp(
     if (opencode) {
       // OpenCode は長寿命の serve の中でだけ分ける（新しいセッションと同じ。一発の `opencode run` には落とさない）
       if (!opencodeServerEnabled) return error(res, 400, 'SAI_OPENCODE_SERVER=0 のときは分岐できません')
-      if (!opencodeApp.fork || !opencodeApp.startSession) return error(res, 400, 'この SAI では分岐できません')
+      if (!opencodeApp.fork) return error(res, 400, 'この SAI では分岐できません')
     } else {
       if (!codexAppEnabled) return error(res, 400, 'SAI_CODEX_APP_SERVER=0 のときは分岐できません')
       if (!codexApp.fork) return error(res, 400, 'この SAI では分岐できません')
@@ -1732,6 +1732,11 @@ export function createApp(
     // ほかで開いているスレッドも同じ理由で断る（レビュー・返信の振り分けと同じ 2 つを見る。#430）
     if (await terminalOf(session)) return error(res, 400, '端末で開いているセッションは分岐できません（端末を閉じてから分岐してください）')
     if (!opencode && (await codexHeldElsewhere(session, raw))) return error(res, 400, 'ほかのところ（端末・ほかのアプリ）で開いているセッションは分岐できません')
+    // OpenCode は、SAI が数えていないターン（立て直す前に起こした・serve の側で回っている）も見る（#398 のレビュー）。
+    // 立っている serve に聞くだけで、このために serve は起こさない。**自分の端末で開いた TUI（別のプロセス）のターンは見えない**
+    if (opencode && (await progress.read(session).then((p) => p.active, () => false))) {
+      return error(res, 409, '元のセッションがまだ処理中です。終わってから分岐してください')
+    }
     // 分岐を始めているあいだは、元のセッションを「起動中」にしておく（返信・レビュー・メッセージと同じ `launching`）。
     // `thread/fork` と最初の `turn/start` を待っている間に元へ返信が来ても、同じ作業ディレクトリで 2 本を同時に始めない。
     // 上の検査（`launching.has`）からここまで await を挟まないので、押し直し・2 枚の画面から同時に来ても 2 つは作らない
@@ -2103,7 +2108,7 @@ export function createApp(
     text: string,
     meta: SessionMeta,
     /** セッションの作り方。省略なら新しいセッション（`POST /session`）。分岐（#398）は `POST /session/<id>/fork` を渡す */
-    make: { session: () => Promise<string>; label: string; what: string; forked?: boolean } = {
+    make: { session: () => Promise<string>; label: string; what: string } = {
       session: () => opencodeApp.startSession!(cwd),
       label: 'OpenCode の新しいセッション（POST /session → prompt_async）',
       what: 'OpenCode の新しいセッションを作れませんでした',
@@ -2126,9 +2131,10 @@ export function createApp(
     } catch (err) {
       const message = `OpenCode のセッションを始められませんでした: ${err instanceof Error ? err.message : String(err)}`
       await appendFile(log, `${message}\n`).catch(() => {})
-      // 分岐（#398）で始まらなかったセッションのメタは残さない（行が無いので、画面からは消せない。Codex の分岐と同じ）。
-      // 新しいセッション（#452）の側は今までどおり（挙動を変えない）
-      if (meta.forked_from && Object.keys(meta).length > 0) await metaStore.set(id, {}).catch(() => {})
+      // 始まらなかったセッションのメタは残さない（行が無いので、画面からは消せない。Codex の `startCodexSession()` と同じ。
+      // 新しいセッションでも分岐でも）。**OpenCode の側に出来たセッションは消さない**（消す口を足していない。ターンが実は
+      // 始まっていた場合に会話ごと消すことになる。分岐先は opencode の一覧に「(fork #N)」として残る）
+      if (Object.keys(meta).length > 0) await metaStore.set(id, {}).catch(() => {})
       return error(res, 500, message)
     }
     // 人が始めたターン（メッセージの連鎖ではない。#311）

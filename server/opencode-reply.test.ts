@@ -23,6 +23,7 @@ import { parsePermissions, permissionApprovalId } from '../shared/opencodePermis
 import type { OpencodePermission } from '../shared/opencodePermissions.ts'
 import { REAL_PERMISSION, REAL_PERMISSION_TEXT } from '../shared/opencodePermissions.test.ts'
 import type { NewSessionResponse, SessionsResponse } from '../shared/types.ts'
+import { ProgressReader } from './local/progress.ts'
 
 let dir: string
 let work: string
@@ -62,7 +63,8 @@ const opencodeApp: OpencodeApp = {
   },
   replying: () => ({}),
   async start(input: OpencodeTurnInput) {
-    if (input.session === 'ses_ng') throw new Error('opencode serve が 404 を返しました')
+    // `ses_fail` は、分岐はできたが 1 ターン目を始められない分岐先（#398）
+    if (input.session === 'ses_ng' || input.session === 'ses_fail') throw new Error('opencode serve が 404 を返しました')
     sent.push(input)
   },
   settle: () => [],
@@ -120,6 +122,16 @@ const opencodeApp: OpencodeApp = {
   stop: () => {},
 } as OpencodeApp & { busy: boolean }
 
+/** transcript / serve の上で「いま動いている」と見せるセッション（#398。SAI が数えていないターン） */
+const active = new Set<string>()
+/** 処理中の手順を読む口。読む先は空（この Mac の記録を読まない）で、`active` だけ上のとおりに見せる */
+const progress = new ProgressReader(join(tmpdir(), 'sai-oc-none-a'), join(tmpdir(), 'sai-oc-none-b'))
+const readProgress = progress.read.bind(progress)
+progress.read = async (s) => {
+  const out = await readProgress(s)
+  return active.has(s.id) ? { ...out, active: true } : out
+}
+
 const saved = process.env.AGENT_FEED_HOST
 const now = new Date()
 
@@ -133,6 +145,11 @@ const app = (): ReturnType<typeof createApp> =>
     undefined,
     new Authenticator(async () => null),
     { tmux: { run: async () => { throw new Error('no tmux') } }, ps: async () => '', replies: new TerminalReplies(), opencodeApp },
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    progress,
   )
 
 const post = (path: string, body: unknown) =>
@@ -511,6 +528,14 @@ test('POST /api/sessions/<id>/fork: 別オリジン・本文なし・処理中�
     ;(opencodeApp as OpencodeApp & { busy: boolean }).busy = false
   }
   assert.deepEqual(forks, [], 'ここまで 1 回も分岐していない')
+  // SAI が数えていないターン（serve の側で回っている）も処理中として断る
+  active.add('ses_ng@r')
+  try {
+    assert.equal((await post('/api/sessions/ses_ng%40r/fork', { text: 'x' })).status, 409)
+    assert.deepEqual(forks, [])
+  } finally {
+    active.delete('ses_ng@r')
+  }
   // serve が断った（知らないセッション、など）→ 500 で理由。何も送らない
   forkFails = true
   try {
@@ -520,12 +545,15 @@ test('POST /api/sessions/<id>/fork: 別オリジン・本文なし・処理中�
   } finally {
     forkFails = false
   }
-  // 分岐はできたが 1 ターン目を始められなかった → 書いたメタは消す（行が無いので、画面からは消せない）
-  nextFork = 'ses_ng'
+  // 分岐はできたが 1 ターン目を始められなかった → 500。書いたメタは消す（行が無いので、画面からは消せない）
+  nextFork = 'ses_fail'
   try {
-    const notStarted = await post('/api/sessions/ses_1%40r/fork', { text: 'x' })
-    // ses_1 に前のテストの預かりが残っていれば 409（そのときはメタも書かれていない）
-    assert.ok(notStarted.status === 500 || notStarted.status === 409)
+    const notStarted = await post('/api/sessions/ses_ng%40r/fork', { text: 'x' })
+    assert.equal(notStarted.status, 500)
+    assert.match(await notStarted.text(), /OpenCode のセッションを始められませんでした/)
+    assert.deepEqual(forks.at(-1), { session: 'ses_ng', cwd: work }, '分岐までは進んでいる')
+    const left = (await (await fetch(`${base}/api/sessions/ses_fail%40r/meta`)).json()) as { meta?: Record<string, unknown> }
+    assert.deepEqual(left.meta ?? {}, {}, '分岐元・表示名・モデルを書いたメタが残っていない')
   } finally {
     nextFork = 'ses_forked'
   }

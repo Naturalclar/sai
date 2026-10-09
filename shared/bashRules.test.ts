@@ -262,11 +262,16 @@ test('1 語のルール Bash(python3:*) を書く例外は、ヒアドキュメ�
     else assert.deepEqual(plan, { reason: 'bare_cli' }, command)
   }
   // ヒアドキュメントがあっても、本文がプログラムでない形（-c・-m・スクリプトのファイル・値を取るフラグ）には当てない
-  assert.deepEqual(h(doc("python3 -c 'print(1)'", 'data')), { reason: 'bare_cli' })
-  assert.deepEqual(h(doc('python3 -W ignore -', 'print(1)')), { reason: 'bare_cli' })
-  assert.deepEqual(h(doc('python3 -X dev -', 'print(1)')), { reason: 'bare_cli' })
-  assert.deepEqual(h(doc('python3 -m json.tool', '{}')), { prefixes: ['python3 -m json.tool'] }, '狭い接頭辞を作れる形はそのまま')
-  assert.deepEqual(h(doc('python3 tool.py --in -', 'x')), { prefixes: ['python3 tool.py'] })
+  assert.deepEqual(h(doc("python3 -c 'print(1)'", 'data')), { reason: 'heredoc' })
+  for (const head of ['python3 -W ignore -', 'python3 -W ignore', 'python3 -X dev -', 'python3 -X dev', 'python3 -c pass', 'python3 -uc pass', 'python3 -m json.tool', 'python3 tool.py --in -', 'python3 tool.py']) {
+    assert.deepEqual(h(doc(head, 'print(1)')), { reason: 'heredoc' }, `${head}（確かめていない形は、ヒアドキュメントごと断る）`)
+  }
+  // 目印の前のリダイレクトも確かめていないので断る（gh / git の形も同じ）
+  assert.deepEqual(h("python3 - 2>&1 <<'EOF'\nprint(1)\nEOF"), { reason: 'heredoc' })
+  assert.deepEqual(h("python3 2>/dev/null - <<'EOF'\nprint(1)\nEOF"), { reason: 'heredoc' })
+  assert.deepEqual(h("gh pr comment 1 -F - 2>&1 <<'EOF'\nb\nEOF"), { reason: 'heredoc' })
+  // 1 語の python3 に覆われる狭いルールは並べない
+  assert.deepEqual(h(`${doc('python3 -', 'print(1)')}\npython3 tool.py\nnode -v`), { prefixes: ['python3', 'node -v'] })
   // 当てる形: 標準入力からプログラムを読む
   for (const head of ['python3', 'python3 -', 'python3 -u -', 'python3 -Es', 'python3 - a b', 'python3 -B - --flag']) {
     assert.deepEqual(h(doc(head, 'print(1)')), { prefixes: ['python3'] }, head)
@@ -304,7 +309,8 @@ test('ヒアドキュメント: python3 でも、#751 で塞いだ形は同じ�
 })
 
 test('ヒアドキュメント: python3 以外のインタプリタ・シェルにはルールを書かない（決まっていない）', () => {
-  for (const head of ['python -', 'python3.12 -', 'node -', 'bash', 'sh -s', 'zsh', 'ruby', 'perl', 'deno run -', 'psql', 'ssh host', 'tee out.txt', 'cat', 'FOO=1 gh-x', '/usr/bin/python3 -', 'command python3 -', 'env python3 -', 'uv run python3 -']) {
+  // インタプリタ・シェルの一覧は上の「例外は…」のテストに置く。ここは、コードではないが本文を受け取るほかのコマンド
+  for (const head of ['sh -s', 'psql', 'ssh host', 'tee out.txt', 'cat', 'FOO=1 gh-x']) {
     assert.deepEqual(h(doc(head, 'print(1)')), { reason: 'heredoc' }, head)
   }
   assert.deepEqual(h(`gh issue list; ${doc('node -', 'print(1)')}`), { reason: 'heredoc' }, '前のコマンドが良くても')

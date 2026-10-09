@@ -178,7 +178,8 @@ export function alwaysAllowPlan(toolName: string, input: Record<string, unknown>
 /**
  * ルールの表記を、**何が通るようになるか**の言葉にする（`Bash(python3:*)` → 「python3」で始まるコマンド）。
  * [常に許可] の脇に並べる（#724。聞かれたのは 1 つのコマンドでも、書かれるルールはその語で始まる全部に効く。狭く見せない）。
- * Bash の前方一致でない表記（MCP のツール名など）は、そのツールの呼び出し
+ * Bash の前方一致でない表記（MCP のツール名など）は、そのツールの呼び出し。
+ * つないだコマンドの途中の部品にも効くことは、並べる側（`AlwaysRules`）が 1 回だけ足す
  */
 export function ruleScope(label: string): string {
   const m = /^Bash\((.+):\*\)$/.exec(label)

@@ -94,8 +94,8 @@ const QUOTED_TAG_HEREDOC = /^0?<<(-?)[ \t]*(['"])(\w+)\2[ \t]*(?=\n)/
  * 先頭の語だけでは決めない（`git apply <<'EOF'`・`gh auth login --with-token <<'EOF'`・`git -c alias.x=!sh x <<'EOF'` は、
  * 本文を操作やコードとして受け取る。#751 のレビュー）。
  *
- * **本文をコードとして走らせる `python3`**（人が決めた。#724 の 2026-10-09 のコメント）: ヒアドキュメントは受ける。
- * どのルールを書くかは下の `python3HeredocRule()`（1 語のルールを書く例外はそこの 1 か所）。
+ * **本文をコードとして走らせる `python3`**（人が決めた。#724 の 2026-10-09 のコメント）: 受けるのは `python3HeredocRule()` の形だけ
+ * （`python3 - <<'EOF'`。実機で確かめた形）。`python3 tool.py <<'EOF'`・`python3 -m x <<'EOF'`・`python3 -W ignore <<'EOF'` は確かめていないので断る。
  * **`python3` だけ**（`python`・`python3.12`・`/usr/bin/python3`・`env python3`・`node`・`ruby`・`bash`・`sh` などは決まっていないので、
  * 今までどおり `heredoc` で断る）。`words` はその部品の語（代入は付いていないこと。代入つきは断る）
  */
@@ -103,7 +103,8 @@ function takesHeredoc(words: readonly string[]): boolean {
   const stdinFile = (flags: readonly string[]) => words.some((w, i) => (flags.includes(w) && words[i + 1] === '-') || flags.some((f) => f.startsWith('--') && w === `${f}=-`))
   if (words[0] === 'gh') return ['issue', 'pr', 'release'].includes(words[1] ?? '') && ['create', 'comment', 'edit', 'review'].includes(words[2] ?? '') && stdinFile(['--body-file', '-F'])
   if (words[0] === 'git') return words[1] === 'commit' && stdinFile(['--file', '-F'])
-  return words[0] === 'python3'
+  // `python3` は、1 語のルールを書く例外の形（標準入力からプログラムを読む）だけ受ける。受ける条件と書くルールの条件を分けない
+  return python3HeredocRule(words)
 }
 
 /** 値を取らない `python3` のフラグ（1 文字のものを束ねた形も。`-u`・`-B`・`-Es`）。`-c`・`-m`・`-W`・`-X` は入れない */
@@ -118,8 +119,9 @@ const PYTHON3_PLAIN_FLAGS = /^-[BbdEhiIOqsSuvVx]+$/
  * **残る不揃い**: `python3 -c '…'` には [常に許可] が出ないのに、ヒアドキュメントで 1 回押すと `python3 -c` も通るようになる。
  *
  * 当てるのは「標準入力からプログラムを読む」形だけ: `python3`・`python3 -`・`python3 -u -`・`python3 - a b`（`-` のあとは引数）。
- * `python3 -c '…' <<'EOF'`・`python3 -m x <<'EOF'`・`python3 tool.py <<'EOF'`（本文はプログラムでなく入力）には当てない
- * （そちらは `ruleHead()` の読み方のまま: 狭い接頭辞か、組まない）。`words` は代入を除いたその部品の語
+ * `python3 -c '…' <<'EOF'`・`python3 -m x <<'EOF'`・`python3 tool.py <<'EOF'`（本文はプログラムでなく入力）・値を取るフラグつきは、
+ * ヒアドキュメントごと断る（`takesHeredoc()` が同じこの関数で決める）。`words` は代入を除いたその部品の語。
+ * ヒアドキュメントの無い、引数の無い `python3`（`cat a.py | python3`）は、前から `ruleHead()` が 1 語のルールにしている（#755 でも変わっていない。ここの例外ではない）
  */
 function python3HeredocRule(words: readonly string[]): boolean {
   if (words[0] !== 'python3') return false
@@ -166,6 +168,8 @@ function splitParts(command: string): SplitParts | BashNoRuleReason {
   // いまの語・いまの部品に、畳んだ `"$(cat <<…)"` が混ざったか
   let wordFolded = false
   let partFolded = false
+  // いまの部品で、捨てるリダイレクト（`2>&1`・`>/dev/null`）を読んだか
+  let partRedirected = false
   let words: string[] = []
   let word: string | null = null
   // いまの語に引用符・バックスラッシュが混ざったか
@@ -185,6 +189,7 @@ function splitParts(command: string): SplitParts | BashNoRuleReason {
     if (words.length > 0) parts.push(words)
     words = []
     partFolded = false
+    partRedirected = false
   }
   // 行の頭か（空白だけが前にある）。行ごとのコメントは通ったので読み飛ばし、行の途中の `#` は止める
   let lineStart = true
@@ -272,12 +277,14 @@ function splitParts(command: string): SplitParts | BashNoRuleReason {
         // 前にあるのが `cd` だけのときしか組まない: 前の部品が `gh` / `git` の実体を差し替えていても見抜けない
         // （`eval 'gh() { sh; }'`・`alias gh=sh`・`export PATH=…`・`source x.sh`。本文がコードとして走る。#751 のレビュー）。
         // 畳んだ語（中身を読んでいない）が混ざった部品も、見えている語と実際の語がずれるので組まない
-        if (partFolded || parts.some((p) => p[0] !== 'cd') || !takesHeredoc(words)) return 'heredoc'
+        // 目印の前に捨てるリダイレクトがある形（`python3 - 2>&1 <<'EOF'`）は、実機で確かめていない（目印のあとの `2>&1` は聞かれた）ので組まない
+        if (partFolded || partRedirected || parts.some((p) => p[0] !== 'cd') || !takesHeredoc(words)) return 'heredoc'
         heredocs.add(parts.length)
         i += end - 1 // 閉じの行の終わり。次の改行で部品が終わる
         continue
       }
       endWord()
+      partRedirected = true
       i += m[0].length - 1
       continue
     }
@@ -486,12 +493,14 @@ export function bashRulePlan(command: string, cwd: string, home: string): { pref
       continue
     }
     // 1 語のルールを書く例外は、ヒアドキュメントで渡したプログラムを走らせる `python3` だけ（`python3HeredocRule()`）
-    const head = heredocs.has(index) && python3HeredocRule(words.slice(i)) ? 'python3' : ruleHead(words.slice(i))
+    const head = heredocs.has(index) && first === 'python3' ? 'python3' : ruleHead(words.slice(i))
     if (head === null) return no('bare_cli')
     const prefix = [...env, head].join(' ')
     if (!prefixes.includes(prefix)) prefixes.push(prefix)
   }
   if (cd && names.some((n) => NOT_AFTER_CD.has(n))) return no('cd_then_write')
+  // 1 語の `python3` を書くなら、それに覆われる `python3 <何か>` は並べない（同じ範囲を 2 つ書かない・Jev に 2 回聞かない）
+  if (prefixes.includes('python3')) for (let k = prefixes.length - 1; k >= 0; k--) if (prefixes[k]!.startsWith('python3 ')) prefixes.splice(k, 1)
   // 読むだけのコマンドしか無いのに許可が来たなら、聞かれたのはその部品（`cat /etc/hosts` のように引数しだいで聞かれる）。
   // 書かないと、前は出ていた [常に許可] が消える（#710 のレビュー）
   return { prefixes: prefixes.length > 0 ? prefixes : unasked }

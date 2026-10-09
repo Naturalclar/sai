@@ -21,7 +21,7 @@ export function AlwaysRules({ rules, done }: Props) {
         <code key={`always:${rule}`}>{rule}</code>
       ))}
       {/* 効く範囲を言葉でも書く（#724）。「この形」とだけ書くと、いま聞かれた 1 つのコマンドの話に読める */}
-      {!done && <span className="tail">このディレクトリでは、{rules.map(ruleScope).join('・')}を今後聞かれなくなります</span>}
+      {!done && <span className="tail">このディレクトリでは、{rules.map(ruleScope).join('・')}を今後聞かれなくなります（{'&&'} や | でつないだ途中にあっても）</span>}
     </div>
   )
 }

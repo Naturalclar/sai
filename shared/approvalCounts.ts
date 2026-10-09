@@ -44,7 +44,7 @@ export function countsTowardSuggest(row: ApprovalLogRow): boolean {
 /** バブルに出す 1 行（`3 回目の許可（Bash(gh pr:*)）`）。初めてなら空（1 回目に数字は要らない） */
 export function countNote(a: Pick<Approval, 'count' | 'suggest'>, label: string): string {
   if (!a.count || a.count < 2 || !label) return ''
-  return `${a.count} 回目の許可（${label}）${a.suggest ? '。「常に許可」にすると、この形は聞かれなくなります' : ''}`
+  return `${a.count} 回目の許可（${label}）${a.suggest ? '。「常に許可」にすると、下のルールの範囲は聞かれなくなります' : ''}`
 }
 
 /** `Bash(gh pr:*)` / `Bash(gh pr *)` の前方一致の頭（`gh pr`）。前方一致の Bash のルールでなければ null */

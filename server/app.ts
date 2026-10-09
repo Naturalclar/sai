@@ -1732,16 +1732,15 @@ export function createApp(
     // ほかで開いているスレッドも同じ理由で断る（レビュー・返信の振り分けと同じ 2 つを見る。#430）
     if (await terminalOf(session)) return error(res, 400, '端末で開いているセッションは分岐できません（端末を閉じてから分岐してください）')
     if (!opencode && (await codexHeldElsewhere(session, raw))) return error(res, 400, 'ほかのところ（端末・ほかのアプリ）で開いているセッションは分岐できません')
-    // OpenCode は、SAI が数えていないターン（立て直す前に起こした・serve の側で回っている）も見る（#398 のレビュー）。
-    // 立っている serve に聞くだけで、このために serve は起こさない。**自分の端末で開いた TUI（別のプロセス）のターンは見えない**
-    if (opencode && (await progress.read(session).then((p) => p.active, () => false))) {
-      return error(res, 409, '元のセッションがまだ処理中です。終わってから分岐してください')
-    }
     // 分岐を始めているあいだは、元のセッションを「起動中」にしておく（返信・レビュー・メッセージと同じ `launching`）。
     // `thread/fork` と最初の `turn/start` を待っている間に元へ返信が来ても、同じ作業ディレクトリで 2 本を同時に始めない。
     // 上の検査（`launching.has`）からここまで await を挟まないので、押し直し・2 枚の画面から同時に来ても 2 つは作らない
     launching.add(id)
     try {
+      // OpenCode は、SAI が数えていないターン（立て直す前に起こした・serve の側で回っている）も見る（#398 のレビュー）。
+      // 立っている serve に聞くだけで、このために serve は起こさない。**自分の端末で開いた TUI（別のプロセス）のターンは見えない**。
+      // `launching` に入れてから聞く（待っている間に来た 2 本目の分岐・返信を、上の検査で止める）
+      if (opencode && (await opencodeApp.turnRunning?.(raw, cwd))) return error(res, 409, '元のセッションがまだ処理中です。終わってから分岐してください')
       // 分岐先のメタ: 分岐元を残し、モデルと表示名（付いていれば「（分岐）」を足して）を引き継ぐ。値は保存済みなので検査は済んでいる
       const old = await metaStore.get(id)
       const meta: SessionMeta = { forked_from: id }

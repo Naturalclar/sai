@@ -347,6 +347,39 @@ test('fork: POST /session/<id>/fork に directory を付けて分岐し、返る
   }
 })
 
+test('turnRunning: 立っている serve に、そのセッションのターンが回っているかを directory 付きで聞く。聞けなければ false（#398）', async () => {
+  const seen: string[] = []
+  let reply: { status: number; body: string } = { status: 200, body: JSON.stringify({ ses_run: { type: 'busy' } }) }
+  const server: Server = createServer((req, res) => {
+    seen.push(`${req.method} ${req.url} ${req.headers.authorization ?? ''}`)
+    res.writeHead(reply.status, { 'content-type': 'application/json' })
+    res.end(reply.body)
+  })
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+  const addr = server.address()
+  const base = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`
+  try {
+    const app = new OpencodeServer(fetch, Date.now, async () => ({ url: base, auth: 'Basic dGVzdA==' }))
+    assert.equal(await app.turnRunning('ses_run', '/work/dir one'), true)
+    assert.equal(await app.turnRunning('ses_idle', '/work/dir one'), false)
+    assert.equal(seen[0], 'GET /session/status?directory=%2Fwork%2Fdir%20one Basic dGVzdA==')
+    reply = { status: 500, body: 'boom' }
+    assert.equal(await app.turnRunning('ses_run', '/work'), false, '聞けなければ「回っていない」（分岐を永久に断らない）')
+    reply = { status: 200, body: 'not json' }
+    assert.equal(await app.turnRunning('ses_run', '/work'), false)
+  } finally {
+    await new Promise<void>((r) => server.close(() => r()))
+  }
+  // serve が立っていなければ聞かない（このために起こさない）
+  let asked = 0
+  const down = new OpencodeServer(async () => {
+    asked++
+    return new Response('{}')
+  })
+  assert.equal(await down.turnRunning('ses_run', '/work'), false)
+  assert.equal(asked, 0)
+})
+
 test('stop: 止めたあとは serve を起こさない（C-c のあとに来たリクエストで孤児を作らない。#457）', async () => {
   let spawned = 0
   const app = new OpencodeServer(fetch, Date.now, async () => {

@@ -23,7 +23,6 @@ import { parsePermissions, permissionApprovalId } from '../shared/opencodePermis
 import type { OpencodePermission } from '../shared/opencodePermissions.ts'
 import { REAL_PERMISSION, REAL_PERMISSION_TEXT } from '../shared/opencodePermissions.test.ts'
 import type { NewSessionResponse, SessionsResponse } from '../shared/types.ts'
-import { ProgressReader } from './local/progress.ts'
 
 let dir: string
 let work: string
@@ -99,6 +98,10 @@ const opencodeApp: OpencodeApp = {
     if (cwd === '/bad') throw new Error('opencode serve が 500 を返しました')
     return 'ses_new'
   },
+  async turnRunning(session: string, cwd: string) {
+    busyAsked.push({ session, cwd })
+    return busyOnServe.has(session)
+  },
   async fork(session: string, cwd: string) {
     forks.push({ session, cwd })
     if (forkFails) throw new Error('opencode serve が 404 を返しました')
@@ -122,15 +125,10 @@ const opencodeApp: OpencodeApp = {
   stop: () => {},
 } as OpencodeApp & { busy: boolean }
 
-/** transcript / serve の上で「いま動いている」と見せるセッション（#398。SAI が数えていないターン） */
-const active = new Set<string>()
-/** 処理中の手順を読む口。読む先は空（この Mac の記録を読まない）で、`active` だけ上のとおりに見せる */
-const progress = new ProgressReader(join(tmpdir(), 'sai-oc-none-a'), join(tmpdir(), 'sai-oc-none-b'))
-const readProgress = progress.read.bind(progress)
-progress.read = async (s) => {
-  const out = await readProgress(s)
-  return active.has(s.id) ? { ...out, active: true } : out
-}
+/** serve の上で「いま回っている」と見せる OpenCode のセッション（#398。SAI が数えていないターン） */
+const busyOnServe = new Set<string>()
+/** `GET /session/status` を聞いたセッションと cwd */
+const busyAsked: { session: string; cwd: string }[] = []
 
 const saved = process.env.AGENT_FEED_HOST
 const now = new Date()
@@ -145,11 +143,6 @@ const app = (): ReturnType<typeof createApp> =>
     undefined,
     new Authenticator(async () => null),
     { tmux: { run: async () => { throw new Error('no tmux') } }, ps: async () => '', replies: new TerminalReplies(), opencodeApp },
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    progress,
   )
 
 const post = (path: string, body: unknown) =>
@@ -529,13 +522,15 @@ test('POST /api/sessions/<id>/fork: 別オリジン・本文なし・処理中�
   }
   assert.deepEqual(forks, [], 'ここまで 1 回も分岐していない')
   // SAI が数えていないターン（serve の側で回っている）も処理中として断る
-  active.add('ses_ng@r')
+  busyOnServe.add('ses_ng')
   try {
     assert.equal((await post('/api/sessions/ses_ng%40r/fork', { text: 'x' })).status, 409)
     assert.deepEqual(forks, [])
+    assert.deepEqual(busyAsked.at(-1), { session: 'ses_ng', cwd: work }, '行から引いた元のセッションを、その cwd で聞く')
   } finally {
-    active.delete('ses_ng@r')
+    busyOnServe.delete('ses_ng')
   }
+  // 断ったあとは「起動中」から外れている（次の分岐・返信を止めない）
   // serve が断った（知らないセッション、など）→ 500 で理由。何も送らない
   forkFails = true
   try {

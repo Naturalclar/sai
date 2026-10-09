@@ -125,6 +125,12 @@ export interface OpencodeApp {
    * 偽物は持たなくてよい（持たなければ OpenCode では分岐できないだけ）
    */
   fork?(session: string, cwd: string): Promise<string>
+  /**
+   * そのセッションのターンが、serve の上でいま回っているか（#398。`GET /session/status?directory=<cwd>`）。
+   * SAI が数えていないターン（立て直す前に起こした、など）を見るために使う。**立っているサーバにだけ聞く**
+   * （このために `opencode serve` を起こさない）。立っていない・聞けなければ false
+   */
+  turnRunning?(session: string, cwd: string): Promise<boolean>
   /** 行が届いたターンを終わりにする（#375 と同じ判定）。終わった id を返す（預かりを回すのに使う） */
   settle(lastTurn: (id: string) => string | undefined): string[]
   /**
@@ -372,6 +378,23 @@ export class OpencodeServer implements OpencodeApp {
     const session = typeof body?.id === 'string' ? body.id : ''
     if (!session) throw new Error('opencode serve がセッションIDを返しませんでした')
     return session
+  }
+
+  /**
+   * serve の上で、そのセッションのターンが回っているか（#398）。`GET /session/status` は `directory` ごとで、回っている
+   * セッションの id が鍵のオブジェクトを返す（`verifyAdopted()` と同じ読み方。1.18.30 で実測）。立っていない・聞けなければ false
+   */
+  async turnRunning(session: string, cwd: string): Promise<boolean> {
+    try {
+      const ready = await this.live()
+      if (!ready) return false
+      const res = await this.fetchFn(`${ready.url}/session/status?directory=${encodeURIComponent(cwd)}`, { headers: { authorization: ready.auth } })
+      if (!res.ok) return false
+      const status = (await res.json().catch(() => null)) as Record<string, unknown> | null
+      return Boolean(status && typeof status === 'object' && session in status)
+    } catch {
+      return false
+    }
   }
 
   /**

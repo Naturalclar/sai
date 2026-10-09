@@ -97,6 +97,15 @@ export class JevRisk {
     return out
   }
 
+  /**
+   * その許可に聞いた控えを見るだけ（#749。記録に残すため）。**聞かない・時刻も進めない**（答えたあとに呼ぶので、覚えを延ばさない）。
+   * 聞いていなければ undefined、聞いて届いていなければ `safe` も `failed` も無い
+   */
+  peek(approvalId: string): { safe?: number; failed?: boolean } | undefined {
+    const entry = this.entries.get(approvalId)
+    return entry ? { ...(entry.safe !== undefined ? { safe: entry.safe } : {}), ...(entry.failed ? { failed: true } : {}) } : undefined
+  }
+
   /** rev に混ぜる（答えが届いたら画面のポーリングが拾う） */
   key(): string {
     return String(this.version)

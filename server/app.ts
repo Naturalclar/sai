@@ -120,7 +120,7 @@ import type { OpencodeApp } from './reply/opencodeServer.ts'
 import { OpencodePermissions } from './reply/opencodePermissions.ts'
 import { approvalMapKey, CodexDialogs, DIALOG_SCAN_TTL_MS, mergeApprovalMaps } from './reply/codexDialogs.ts'
 import { JevRisk } from './approvals/jev.ts'
-import { isJevAuto, jevAutoAllows, jevAutoDecision, jevAutoEligible, jevLowestRule, jevPercent, jevRuleState } from '../shared/jev.ts'
+import { isJevAuto, jevAutoAllows, jevAutoDecision, jevAutoEligible, jevLogged, jevLowestRule, jevPercent, jevRuleState } from '../shared/jev.ts'
 import type { JevJudge } from './approvals/jev.ts'
 import { CodexTerminals, type CodexTerminalSource } from './reply/codexTerminal.ts'
 import { CodexPanes, codexAppServer, type AppServerProbe, type CodexPaneSource } from './reply/codexPanes.ts'
@@ -964,13 +964,14 @@ export function createApp(
   }
   /**
    * 答えたことを記録に足す。cwd はセッションの行から（リクエストからは受けない）。コマンドの全文は書かない。`rule` は答える前に組んだ組。
-   * `rule` が空なら、空だった理由の種類（`noRule`）を添える（#724）
+   * `rule` が空なら、空だった理由の種類（`noRule`）を添える（#724）。
+   * その許可に Jev が付けていた確率（届いていなければ理由）も残す（#749。控えを見るだけで、ここからは聞かない）
    */
   const logAnswer = (a: Approval, cwd: string, rule: string, by: 'human' | 'jev', behavior: 'allow' | 'deny', remember: boolean, noRule?: NoRuleReason) => {
     try {
       const now = Date.now()
       const waited = Math.max(0, Math.round((now - Date.parse(a.since)) / 1000))
-      approvalLog.record({ ts: new Date(now).toISOString(), id: a.id, cwd, tool: a.tool_name, rule, by, behavior, remember, waited_s: Number.isFinite(waited) ? waited : 0, ...(!rule && noRule ? { no_rule: noRule } : {}) })
+      approvalLog.record({ ts: new Date(now).toISOString(), id: a.id, cwd, tool: a.tool_name, rule, by, behavior, remember, waited_s: Number.isFinite(waited) ? waited : 0, ...(!rule && noRule ? { no_rule: noRule } : {}), ...jevLogged(jevRisk.peek(a.approval_id)) })
     } catch {
       // 記録できなくても答えは止めない
     }

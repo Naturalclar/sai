@@ -4,7 +4,7 @@
 // **Jev は外部 API なので、ここで組み立てた文が外に出る**（「SAI は外に出さない」の例外。入切できて既定は入、
 // 鍵 JEV_API_KEY が無ければ何も送らない）。そのため送るものを絞る: ツール名・コマンド・パス・理由・Codex のダイアログの中身まで。
 // **ファイルの中身（Write / Edit の本文）・メッセージの本文と cwd は送らない**（input は丸ごと送らず、拾う項目を名指しする）
-import type { Approval } from './types.ts'
+import type { Approval, JevNone } from './types.ts'
 
 /**
  * Jev に聞く文。**状態について書いた 1 つの主張**にする（Jev は「この文がどれだけ本当か」を 0..1 で返す）。
@@ -125,6 +125,16 @@ export const JEV_AUTO_CHOICES = [0.8, 0.9, 0.95, 0.99] as const
 /** settings の `jev_auto` として受ける値か: 0（しない）か JEV_AUTO_MIN〜1 の数 */
 export function isJevAuto(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && (value === 0 || (value >= JEV_AUTO_MIN && value <= 1))
+}
+
+/**
+ * 記録（`approvals.jsonl`）に残す形（#749）。届いた確率は小数 3 桁に丸めて `jev`、届いていなければ理由を `jev_none`。
+ * `entry` は Jev に聞いた控え（`JevRisk.peek()`。聞いていなければ undefined）。**分からないものを 0 や 1 にしない**
+ */
+export function jevLogged(entry: { safe?: number; failed?: boolean } | undefined): { jev: number } | { jev_none: JevNone } {
+  if (!entry) return { jev_none: 'not_asked' }
+  if (entry.safe !== undefined) return { jev: Math.round(entry.safe * 1000) / 1000 }
+  return { jev_none: entry.failed ? 'failed' : 'pending' }
 }
 
 /** 確率が閾値以上か。閾値が 0（しない）・確率が届いていない・閾値未満なら false */

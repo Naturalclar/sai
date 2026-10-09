@@ -176,3 +176,25 @@ test('peekRule（#556 のレビュー）: 聞かずに覚えている確率を�
   }
   assert.equal(asked.length, 2, '聞き直していない')
 })
+
+test('peek（#749）: 聞いた控えを見るだけ。聞いていなければ undefined、届く前は空、失敗は failed。聞かないし、覚えも延ばさない', async () => {
+  let now = 0
+  const { judge, calls } = fakeJudge((state) => (state.includes('cmd-bad') ? new Error('boom') : 0.97))
+  const risk = new JevRisk(judge, () => now)
+  assert.equal(risk.peek('a'), undefined, '聞いていない')
+  assert.equal(calls.length, 0, '見るだけでは聞かない')
+  risk.annotate(mapOf(approval('a'), approval('bad')), true)
+  assert.deepEqual(risk.peek('a'), {}, '聞いたが届いていない')
+  await settle()
+  assert.deepEqual(risk.peek('a'), { safe: 0.97 })
+  assert.deepEqual(risk.peek('bad'), { failed: true })
+  // 見ても時刻は進めない（答えたあとの許可を覚え続けない）
+  now = JEV_KEEP_MS - 1
+  risk.peek('a')
+  now = JEV_KEEP_MS + 1
+  risk.annotate({}, true)
+  assert.equal(risk.peek('a'), undefined, '見なくなってから 30 分で忘れる')
+  // 鍵が無ければ何も覚えていない
+  assert.equal(new JevRisk(null).peek('a'), undefined)
+})
+

@@ -18,6 +18,7 @@ import type { SessionTurnResponse, TurnStepsResponse,
   AgentActivity,
   AgentFollowupLine,
   AgentHeldMessage,
+  SendAcrossPair,
   PrSummary,
   SessionHolding,
   AgentSendManyResponse,
@@ -141,6 +142,7 @@ import { changedPaths, clampPatch, NotAGitRepo, RealGit, resolveBase, sessionDif
 import { prBrowserFromEnv } from './git/prs.ts'
 import type { PrBrowser } from './git/prs.ts'
 import { diffStats, githubRepoOf, isPrNumber, knownRepos, pickKnownRepo } from '../shared/prs.ts'
+import { addPair, mayCross, removePair } from '../shared/sendAcross.ts'
 import { WAITING_SAID_FRESH_MS, WAIT_HUMAN_THEN, saysWaiting, waitingUnscheduled } from '../shared/waitingSaid.ts'
 import { holdingLabel, holdingOf } from '../shared/holding.ts'
 import { githubReview, parseReviewRequest } from '../shared/prReview.ts'
@@ -183,7 +185,12 @@ import {
   requestRefusal,
   agentEntry,
   agentOverlap,
+  acrossEntry,
+  acrossLabel,
+  acrossNames,
+  targetNames,
   agentReplyRows,
+  isAcross,
   deliveredId,
   deliveryMatcher,
   followupHead,
@@ -1447,8 +1454,23 @@ export function createApp(
       jev_auto: s.jev_auto,
       paste_to_file: s.paste_to_file,
       reply_mode: s.reply_mode,
+      send_across: s.send_across,
+      send_across_projects: await knownProjects(),
     }
   }
+  /**
+   * 記録で知っているリポジトリ（#747。別のリポジトリへ送る組に選べるもの）。名前の順。送信の判定（`agentFrom()`）と同じ
+   * `sessionsWithMeta()` の `project`（古い行は cwd から埋めたもの）を使う。**読めなくても設定の応答は落とさない**（空で返す）
+   */
+  const knownProjects = async (): Promise<string[]> => {
+    try {
+      const { sessions } = await sessionsWithMeta(QUEUE_DAYS)
+      return [...new Set(sessions.map((x) => x.project).filter(Boolean))].sort()
+    } catch {
+      return []
+    }
+  }
+
   /**
    * POST /api/prs/<owner>/<repo>/<番号>/review（#526）。**SAI が GitHub に書く唯一の口**。同一オリジンは呼ぶ側で確かめてある。
    * 宛先は記録で知っているリポジトリから引き、**いまの PR を読み直して** head が画面の読んだ SHA と同じか・行コメントの行が
@@ -1596,18 +1618,51 @@ export function createApp(
       if (b.reply_mode !== '' && !isReplyPermissionMode(b.reply_mode)) return error(res, 400, `reply_mode に使えるのは ${REPLY_MODES.join(' / ')} だけです（空文字で「決めない」）`)
       patch.reply_mode = b.reply_mode
     }
+    if (b.send_across_add !== undefined || b.send_across_remove !== undefined) {
+      // 別のリポジトリへ送ってよい組（#747）。**1 つずつ足す・外す**（丸ごと置き換える形は受けない）。足せるのは記録で知っているリポジトリだけ。
+      // いま持っている組は検査し直さない（片方が記録の窓から出た古い組があっても、ほかの組を足す・外すのを止めない）
+      let pairs: SendAcrossPair[] | string = (await settingsStore.get()).send_across
+      if (b.send_across_remove !== undefined) pairs = removePair(pairs, b.send_across_remove)
+      if (typeof pairs !== 'string' && b.send_across_add !== undefined) pairs = addPair(pairs, b.send_across_add, await knownProjects())
+      if (typeof pairs === 'string') return error(res, 400, pairs)
+      patch.send_across = pairs
+    }
     if (b.jev_auto !== undefined) {
       if (!isJevAuto(b.jev_auto)) return error(res, 400, 'jev_auto は 0（しない）か 0.5〜1 の数で送ってください')
       patch.jev_auto = b.jev_auto
     }
-    if (Object.keys(patch).length === 0) return error(res, 400, 'persona / linear_workspace / digest / next_ask / digest_provider / digest_model / paste_to_file / reply_mode / jev / jev_auto のどれかを送ってください')
+    if (Object.keys(patch).length === 0) return error(res, 400, 'persona / linear_workspace / digest / next_ask / digest_provider / digest_model / paste_to_file / reply_mode / send_across_add / send_across_remove / jev / jev_auto のどれかを送ってください')
     // 起動時の組み立て（settings.json の読み込み）が済んでから書く。後から古い値で組み直されないように
     await digestReady
     const saved = await settingsStore.set(patch)
+    // 組を外したら、もう相手の預かりに並んでいる、その向きのメッセージも取り消す（#747。外したあとに相手で回り出さない）
+    if (patch.send_across !== undefined) await cancelCrossQueued(saved.send_across)
     if (patch.digest !== undefined || patch.next_ask !== undefined || patch.digest_provider !== undefined || patch.digest_model !== undefined) digest.configure(saved)
     // 閾値を入れた・下げたら、預かっている分にすぐ効かせる
     if (patch.jev_auto !== undefined || patch.jev !== undefined) void jevAutoTick()
     return json(res, await settingsPayload())
+  }
+
+  /**
+   * 相手の預かり（#305）に並んでいる `sai_send` のうち、**もう許されていない向きでリポジトリをまたぐもの**を取り消す（#747）。
+   * 組を外した直後に呼ぶ。相手でもう回っているターンは止めない（#311 と同じ線）。送り元の側の預かり（#727）は `drainBacklog()` が
+   * 送る直前に同じ判定で止める
+   */
+  const cancelCrossQueued = async (pairs: readonly SendAcrossPair[]): Promise<void> => {
+    try {
+      const { sessions } = await sessionsWithMeta(QUEUE_DAYS)
+      const projectOf = new Map(sessions.map((x) => [x.id, x.project]))
+      const cancelled = queue.removeWhere((to, item) => {
+        const message = item.origin ? agents.get(item.origin) : undefined
+        if (!message) return false
+        const from = projectOf.get(message.from) ?? ''
+        const dest = projectOf.get(to) ?? ''
+        return Boolean(from && dest && from !== dest && !mayCross(pairs, from, dest))
+      })
+      if (cancelled > 0) await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} 別のリポジトリへ送る組を外したので、相手の預かりに並んでいたメッセージ ${cancelled} 件を取り消した\n`).catch(() => {})
+    } catch {
+      // 一覧が読めなければ何もしない（組はもう外れているので、新しい送信は通らない）
+    }
   }
 
   const send = (res: ServerResponse, status: number, body: Buffer | string, type: string) => {
@@ -2799,13 +2854,13 @@ export function createApp(
    * - 頼まれて未完の依頼は、`HOLDING_ASK_DAYS` 日以内に届けたメッセージのうち、返答（そのターンの完了の行）がまだ無いものと、
    *   まだ送っていない預かり。行は 1 回だけ舐める
    */
-  const holdingsOf = async (list: readonly SessionSummary[], occupied: (s: SessionSummary) => boolean, sendable: (s: SessionSummary) => boolean = () => true): Promise<Map<string, SessionHolding>> => {
+  const holdingsOf = async (list: readonly SessionSummary[], occupied: (s: SessionSummary) => boolean, sendable: (s: SessionSummary) => boolean = () => true, opts: { prs?: boolean } = {}): Promise<Map<string, SessionHolding>> => {
     // 同じリポジトリを書き方の違い（大文字小文字）で 2 回引かない（#533 と同じ。PR の画面が埋めたキャッシュとも揃う）
     const known = knownRepos(list)
     const repos = new Map<string, Promise<PrSummary[] | null | undefined>>()
     const prsOf = (asked: string): Promise<PrSummary[] | null | undefined> => {
       const repo = asked ? pickKnownRepo(known, asked) || asked : ''
-      if (!repo || !prs.available) return Promise.resolve(null)
+      if (!repo || !prs.available || opts.prs === false) return Promise.resolve(null)
       const before = repos.get(repo)
       if (before) return before
       const hit = prs.cached?.(repo, HOLDING_PR_STALE_MS)
@@ -2861,14 +2916,21 @@ export function createApp(
     return out
   }
 
-  /** GET /api/agent/sessions?from=。話しかけられる相手（同じ project の、返信できる別のセッション） */
+  /**
+   * GET /api/agent/sessions?from=。話しかけられる相手（同じ project の、返信できる別のセッション）。
+   * 人が許した組の先の、**別のリポジトリのセッション**（#747）も後ろに並べる。そちらは呼び名・エージェント・空いているか、まで
+   */
   const agentSessions = async (req: IncomingMessage, res: ServerResponse, q: URLSearchParams) => {
     const refusal = agentRefusal(req)
     if (refusal) return error(res, 403, refusal)
     const found = await agentFrom(q.get('from'))
     if (typeof found === 'string') return error(res, 409, found)
     const busy = (id: string) => run.running(id) || codexApp.running(id) || opencodeApp.running(id) || typed.running(id)
-    const targets = agentTargets(found.sessions, found.session, selfHost())
+    const across = (await settingsStore.get()).send_across
+    const everyone = agentTargets(found.sessions, found.session, selfHost(), across)
+    // 細かく出すのは同じリポジトリの相手だけ（読み直す量・同じファイル・持っているもの）
+    const targets = everyone.filter((s) => !isAcross(found.session, s, across))
+    const others = everyone.filter((s) => isAcross(found.session, s, across))
     // 相手が読み直す量（直近の呼び出しの入力）。transcript の末尾を読むだけで、(mtime, size) が同じなら組み直さない（#311）
     const progressOf = await Promise.all(targets.map((s) => progress.read(s)))
     const sizes = progressOf.map((p) => p.context_tokens)
@@ -2880,13 +2942,16 @@ export function createApp(
     const active = new Map(targets.map((s, i) => [s.id, Boolean(progressOf[i]?.active)]))
     const queued = queue.snapshot()
     const holdings = await holdingsOf(targets, (s) => busy(s.id) || Boolean(active.get(s.id)) || Boolean(s.waiting) || (queued[s.id]?.items.length ?? 0) > 0)
+    // 別のリポジトリの相手は、空いているかだけ（PR は引かない・走査も回さない）
+    const otherActive = new Map(await Promise.all(others.map(async (s) => [s.id, (await progress.read(s)).active] as const)))
+    const otherHoldings = await holdingsOf(others, (s) => busy(s.id) || Boolean(otherActive.get(s.id)) || Boolean(s.waiting) || (queued[s.id]?.items.length ?? 0) > 0, () => true, { prs: false })
     const payload: AgentSessionsResponse = {
       from: found.session.id,
-      sessions: targets.map((s, i) => {
+      sessions: [...targets.map((s, i) => {
         const entry = agentEntry(s, busy(s.id), sizes[i] ?? 0, agentOverlap(mine ?? { root: '', paths: [] }, theirs[i] ?? { root: '', paths: [] }))
         const holding = holdings.get(s.id)
         return holding && Object.keys(holding).length > 0 ? { ...entry, holding } : entry
-      }),
+      }), ...others.map((s) => acrossEntry(s, busy(s.id), Boolean(otherHoldings.get(s.id)?.free)))],
     }
     return json(res, payload)
   }
@@ -2954,17 +3019,27 @@ export function createApp(
     const barred = agents.refusal(from, found.turn, Infinity)
     if (barred) return error(res, 429, barred)
     // 宛先は id か呼び名（#625）。引くのは送ってよい相手の中からだけで、ちょうど 1 つに決まらなければ送らない
-    const targets = agentTargets(found.sessions, found.session, selfHost())
-    // 同じ project に居るが送れないセッション（別のマシンなど）。同じ名前がそこにも居れば、名前では当てない
-    const blocked = found.sessions.filter((s) => s.id !== from && s.project === found.session.project && !s.archived && !targets.includes(s))
+    // 送ってよい相手: 同じ project と、人が許した組の先の project（#747）。歯止めは下の同じ判定を通す
+    const across = (await settingsStore.get()).send_across
+    const targets = agentTargets(found.sessions, found.session, selfHost(), across)
+    // 同じ project（と、許した組の先の project）に居るが送れないセッション（別のマシンなど）。同じ名前がそこにも居れば、名前では当てない
+    const blocked = found.sessions.filter((s) => s.id !== from && (s.project === found.session.project || isAcross(found.session, s, across)) && !s.archived && !targets.includes(s))
     // **先に全部の宛先を確かめて数える**（#727）。1 つでも通らなければ、1 件も送らず・預からずに断る
     const usageNow = await usageStore.get()
-    const planned: { target: SessionSummary; text: string; context: number; compact: boolean | undefined }[] = []
+    const planned: { target: SessionSummary; far: boolean; text: string; context: number; compact: boolean | undefined }[] = []
     for (const [n, a] of asks.entries()) {
       const asked = typeof a.to === 'string' ? a.to : ''
-      const resolved = resolveTarget(targets, asked, blocked)
+      // 別のリポジトリの相手は、id か人が付けた表示名でだけ引く（worktree 名・題名では当てない。#747）
+      let resolved = resolveTarget(targets, asked, blocked, (s) => (isAcross(found.session, s, across) ? acrossNames(s) : targetNames(s)))
+      // 名前で引いて別のリポジトリの相手に決まったとき、**送り元のリポジトリに同じ名前のセッションが居れば送らない**
+      // （アーカイブ済みでも。人が指していたのがそちらかもしれないのに、別のリポジトリへ黙って届かせない）
+      if (resolved.target && resolved.target.id !== asked && isAcross(found.session, resolved.target, across)) {
+        const key = asked.trim().toLowerCase()
+        const local = found.sessions.filter((s) => s.id !== from && s.project === found.session.project && targetNames(s).includes(key)).length
+        if (local > 0) resolved = { target: null, ambiguous: true, candidates: [resolved.target], hidden: local }
+      }
       if (!resolved.target) {
-        return error(res, resolved.ambiguous ? 409 : 403, nth(n) + targetRefusal(asked, resolved, 'その相手には送れません（同じリポジトリの、SAI から返信できる別のセッションだけ。sai_sessions で確かめてください）'))
+        return error(res, resolved.ambiguous ? 409 : 403, nth(n) + targetRefusal(asked, resolved, 'その相手には送れません（同じリポジトリか、人が許したリポジトリの、SAI から返信できる別のセッションだけ。sai_sessions で確かめてください）', found.session.project))
       }
       // 使用量の枠が残り少なければ送らない。見るのは相手のエージェントの枠（受け取って読み直すのは相手。#311）
       const overUsage = usageRefusal(usageNow, resolved.target.agent)
@@ -2972,9 +3047,11 @@ export function createApp(
       // 相手の大きさは transcript / rollout の直近の呼び出しの入力
       const context = (await progress.read(resolved.target)).context_tokens
       // 1 件だけで 1 ターンの読み直しの予算を超える相手には、預かっても送れない（1 巡の予算は同じ）。今までどおり断る（#311）
+      const far = isAcross(found.session, resolved.target, across)
       const tooBig = budgetRefusal(0, context)
-      if (tooBig) return error(res, 429, nth(n) + tooBig)
-      planned.push({ target: resolved.target, text: (a.text as string).trim(), context, compact: typeof a.compact === 'boolean' ? a.compact : undefined })
+      // 別のリポジトリの相手の量は、断りの文にも出さない（一覧で伏せている。#747）
+      if (tooBig) return error(res, 429, nth(n) + (far ? 'この相手は、1 件で 1 ターンの読み直しの予算を超えます（別のリポジトリの相手の量は出しません）。人に確かめてください' : tooBig))
+      planned.push({ far, target: resolved.target, text: (a.text as string).trim(), context, compact: typeof a.compact === 'boolean' ? a.compact : undefined })
     }
     const heldBefore = agents.heldInTurn(from, found.turn)
     const sentBefore = agents.sentInTurn(from, found.turn)
@@ -2990,17 +3067,18 @@ export function createApp(
       direct++
     }
     if (direct < planned.length) {
-      const over = requestRefusal(sentBefore + heldBefore.count, agents.readInTurn(from, found.turn) + heldBefore.read, planned.map((p) => ({ name: sessionLabel(p.target), tokens: p.context })))
+      const over = requestRefusal(sentBefore + heldBefore.count, agents.readInTurn(from, found.turn) + heldBefore.read, planned.map((p) => ({ name: sessionLabel(p.target), tokens: p.context, ...(p.far ? { hidden: true } : {}) })), agents.hiddenInTurn(from, found.turn) + heldBefore.hidden > 0)
       if (over) return error(res, 429, over)
     }
     const results: AgentSendResult[] = []
     for (const [n, p] of planned.entries()) {
       const to = p.target.id
       const messageId = agents.newId()
-      const base = { message_id: messageId, to, to_name: sessionLabel(p.target), context_tokens: p.context }
+      // 別のリポジトリの相手（#747）は、呼び名を題名に落とさず、読み直す量も返さない（予算には数えている）
+      const base = { message_id: messageId, to, to_name: p.far ? acrossLabel(p.target) : sessionLabel(p.target), context_tokens: p.far ? 0 : p.context }
       if (n >= direct) {
         // 預かる（#727）。送るのは送り元のターンが終わってから（`drainBacklog()`）
-        agents.hold({ message_id: messageId, from, to, text: p.text, turn: found.turn, at: new Date().toISOString(), context: p.context, url: selfUrl(req), ...(b.wake === true ? { wake: true as const } : {}), ...(p.compact !== undefined ? { compact: p.compact } : {}) })
+        agents.hold({ message_id: messageId, from, to, text: p.text, turn: found.turn, at: new Date().toISOString(), context: p.context, url: selfUrl(req), ...(p.far ? { far: true as const } : {}), ...(b.wake === true ? { wake: true as const } : {}), ...(p.compact !== undefined ? { compact: p.compact } : {}) })
         await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${from} → ${to} メッセージ ${messageId} を預かった（1 ターンの上限を超えた分。ターンが終わってから送る）\n`).catch(() => {})
         results.push({ ...base, held: true })
         continue
@@ -3009,13 +3087,16 @@ export function createApp(
       const compact = messageCompactOf(p.target, p.text, p.context, p.compact)
       const out = await launch(to, delivered, [], { days: QUEUE_DAYS, replaceTyped: false, forceProcess: false, url: selfUrl(req), queue: true, origin: messageId, ...compact })
       if (out.status !== 202) {
-        if (!many) return json(res, out.body, out.status)
-        results.push({ ...base, error: (out.body as ReplyError).error })
+        // 別のリポジトリの相手（#747）の起動の失敗は、理由を返さない（相手の作業ディレクトリのパスなどが文に入る）。理由は reply.log に残る
+        const why = p.far ? '相手のセッションを始められませんでした（別のリポジトリの相手の理由は出しません。人に確かめてください）' : (out.body as ReplyError).error
+        if (p.far) await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${from} → ${to} 別のリポジトリへのメッセージを送れなかった: ${(out.body as ReplyError).error}\n`).catch(() => {})
+        if (!many) return p.far ? error(res, out.status, why) : json(res, out.body, out.status)
+        results.push({ ...base, error: why })
         continue
       }
       const via = (out.body as ReplyResponse).via
       agents.record(
-        { message_id: messageId, from, to, text: p.text, since: new Date().toISOString(), turn: found.turn, ...(b.wake === true ? { wake: true as const, url: selfUrl(req) } : {}) },
+        { message_id: messageId, from, to, text: p.text, since: new Date().toISOString(), turn: found.turn, ...(p.far ? { far: true as const } : {}), ...(b.wake === true ? { wake: true as const, url: selfUrl(req) } : {}) },
         found.turn,
         p.context,
       )
@@ -3025,7 +3106,8 @@ export function createApp(
     const counts = {
       sent: agents.sentInTurn(from, found.turn),
       limit: AGENT_SEND_MAX,
-      read_tokens: agents.readInTurn(from, found.turn),
+      // 別のリポジトリの相手の分（#747）は、合計からも引いて返す（引き算で相手の量が分からないように。予算には数えている）
+      read_tokens: agents.readInTurn(from, found.turn) - agents.hiddenInTurn(from, found.turn),
       read_budget: AGENT_TURN_READ_BUDGET,
     }
     const heldCount = agents.heldBy(from).length
@@ -3090,7 +3172,8 @@ export function createApp(
             scheduleBacklog(from, AGENT_BACKLOG_ROUND_MS)
             continue
           }
-          const targets = agentTargets(sessions, sender, selfHost())
+          // 預かったあとに人が組を外していれば、その先へはもう送らない（#747）
+          const targets = agentTargets(sessions, sender, selfHost(), (await settingsStore.get()).send_across)
           let sentNow = 0
           let readNow = 0
           for (const h of agents.heldBy(from)) {
@@ -3139,7 +3222,7 @@ export function createApp(
               }
               // 記録してから預かりを外す（どちらも同じファイル。記録の済んだ預かりは、読み込むときにも捨てる）。
               // 1 ターンの回数・量（`sends`）には足さない（送り元がいま回している別のターンの数を潰さない）
-              agents.recordHeld({ message_id: h.message_id, from, to: h.to, text: h.text, since: new Date().toISOString(), turn: h.turn, ...(h.wake ? { wake: true as const, url: h.url } : {}) })
+              agents.recordHeld({ message_id: h.message_id, from, to: h.to, text: h.text, since: new Date().toISOString(), turn: h.turn, ...(h.far ? { far: true as const } : {}), ...(h.wake ? { wake: true as const, url: h.url } : {}) })
               agents.dropHeld(h.message_id)
               sentNow++
               readNow += context
@@ -3178,35 +3261,44 @@ export function createApp(
    * 送り元（`from`）にまだ渡していない返答（#594）。送ってから `HANDED_KEEP_DAYS` 以内で、相手のターンが終わった・失敗したものだけ（古い順）。
    * まだ返っていない依頼は足さない
    */
+  const AGENT_FAR_FAILED = '相手のセッションで失敗しました（別のリポジトリの相手の理由は出しません。人に確かめてください）'
   const pendingRepliesOf = async (from: string, skip?: (messageId: string) => boolean): Promise<{ replies: PendingReply[]; ids: string[] }> => {
     const waiting = agents.unhanded(from, Date.now() - HANDED_KEEP_DAYS * 86_400_000).filter((m) => !skip?.(m.message_id))
     if (waiting.length === 0) return { replies: [], ids: [] }
+    // 相手の呼び名。**別のリポジトリの相手は、人が付けた表示名か `#<worktree 名>` だけ**（#747。題名＝相手のリポジトリの人の入力を、
+    // 返答の見出しから送り元の文脈へ流さない）。表示名はメタを重ねた一覧から引く（同じリポジトリの相手は今までどおり）
+    // 別のリポジトリだったかは送ったときの印（`far`）で見る（いまの行や組から決め直さない）
     const { sessions } = await store.sessions(QUEUE_DAYS)
-    const nameOf = (to: string) => {
-      const target = sessions.find((s) => s.id === to)
-      return target ? replierName(target) : to
+    const named = waiting.some((m) => m.far) ? (await sessionsWithMeta(QUEUE_DAYS).catch(() => ({ sessions: [] as SessionSummary[] }))).sessions : []
+    const nameOf = (m: AgentMessage) => {
+      const target = sessions.find((s) => s.id === m.to)
+      if (!target) return m.to
+      return m.far ? acrossLabel(named.find((s) => s.id === m.to) ?? { ...target, meta: undefined }) : replierName(target)
     }
     const replies: PendingReply[] = []
     for (const m of waiting) {
       const r = await agentResult(m)
       if (!r || r.status === 'pending') continue
-      replies.push({ message_id: m.message_id, to_name: nameOf(m.to), status: r.status, ...(r.text !== undefined ? { text: r.text } : {}), ...(r.error !== undefined ? { error: r.error } : {}) })
+      replies.push({ message_id: m.message_id, to_name: nameOf(m), status: r.status, ...(r.text !== undefined ? { text: r.text } : {}), ...(r.error !== undefined ? { error: r.error } : {}) })
     }
     return { replies, ids: replies.map((r) => r.message_id) }
   }
 
-  /** 送ったメッセージの結果。相手のそのターンが終わっていれば返答、失敗・止まっていれば理由。まだなら null */
+  /**
+   * 送ったメッセージの結果。相手のそのターンが終わっていれば返答、失敗・止まっていれば理由。まだなら null。
+   * 別のリポジトリの相手（`far`。#747）の失敗の理由は出さない（reply.log の末尾＝相手の CLI の出力や、相手の cwd が入る）
+   */
   const agentResult = async (message: AgentMessage): Promise<AgentWaitResponse | null> => {
     const base = { message_id: message.message_id, to: message.to }
     const answered = replyOf(await rowsNow(QUEUE_DAYS), message.to, message.message_id)
     if (answered) return { ...base, status: 'done', text: clipReply(answered.text ?? '') }
     const turn = run.snapshot()[message.to]
     if (turn?.failed && isDeliveryOf(turn.text, message.message_id)) {
-      return { ...base, status: 'failed', error: replyFailureText(turn.failed) }
+      return { ...base, status: 'failed', error: message.far ? AGENT_FAR_FAILED : replyFailureText(turn.failed) }
     }
     // 預かりの先頭のまま止まった（前の返信が失敗した・起動できなかった）
     const paused = queue.paused(message.to)
-    if (paused && isDeliveryOf(queue.peek(message.to)?.text, message.message_id)) return { ...base, status: 'failed', error: paused }
+    if (paused && isDeliveryOf(queue.peek(message.to)?.text, message.message_id)) return { ...base, status: 'failed', error: message.far ? AGENT_FAR_FAILED : paused }
     return null
   }
 

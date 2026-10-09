@@ -15,7 +15,23 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 ### 送り元と送り先
 
 - 送り元は、SAI が起動していまターンを回しているセッションだけ（`run.snapshot()` にあって `failed` でない。MCP の `SAI_ENTITY`）。
-- 送り先は `shared/agentMessages.ts` の `agentTargets()`（同じ `project`・自分以外・アーカイブ済みでない・`replyBlockedReason()` が空）。
+- 送り先は `shared/agentMessages.ts` の `agentTargets()`（同じ `project`・自分以外・アーカイブ済みでない・`replyBlockedReason()` が空）。人が許した組の先の `project` も足す（下の「別のリポジトリへ送る」）。
+
+### 別のリポジトリへ送る（#747）
+
+- **既定は同じ `project` の中だけ。** 人が自分のメニューで許した組（`settings.json` の `send_across: [{ from, to }]`）だけ、`from` のリポジトリのセッションが `to` のリポジトリのセッションへ送れる。判定は `shared/sendAcross.ts` の `mayCross()` の 1 つ。
+- **組は向きつき**（A → B を許しても B → A は送れない）。一括で許す口（「全部」）は無い。**双方向にするなら変えるのは `mayCross()` だけ**（逆向きの組も通す 1 行）。組の数は `SEND_ACROSS_MAX`（30）まで。
+- 変える口は `PUT /api/settings` の `send_across_add` / `send_across_remove`（**同一オリジンのみ**。**1 つずつ足す・外す**。丸ごと置き換える形は受けない＝古い写しを持ったタブが、別の端末で外した組を戻さない）。`addPair()` が、**記録で知っているリポジトリ**（`knownProjects()` = `sessionsWithMeta()` の `project`。送信の判定と同じ一覧。読めなければ空）の名前だけを通し、書き方をそれに揃える。**いま持っている組は検査し直さない**（片方が記録の窓から出た古い組があっても、ほかの組を足す・外すのを止めない）。`removePair()` は名前が記録に無くても外せる。組を外したら `cancelCrossQueued()` が、相手の預かり（#305）に並んでいたその向きのメッセージを取り消す（相手でもう回っているターンは止めない）。エージェント用の口（`/api/agent/*`）と MCP の道具には、組を変える道が無い。`GET /api/settings` は `send_across` と、選べる名前 `send_across_projects` を返す。画面は `SendAcrossControls`（名前は打たせず、2 つの select から選ぶ）。
+- `agentTargets(sessions, from, host, across)` が、同じ `project` の相手の後ろに、組の先の `project` の相手を並べる。**またいだ先が素通し（Bypass / Auto）でも送れる**（同じリポジトリの中の `sai_send` と同じ扱い。tailnet の `/mcp` が素通しに送らない線は変えていない）。別のマシン・合成 ID・エージェント不明・アーカイブ済みは今までどおり落ちる。
+- `sai_sessions`（SAI が渡す口）は、別のリポジトリの相手を `acrossEntry()` で出す: **呼び名・エージェント・空いているか、まで**（`across: true`。呼び名は `acrossLabel()` = 人が付けた表示名、無ければ `#<worktree 名>`。`sessionLabel()` のように題名（相手のリポジトリの人の入力の 1 行目）には落とさない。`branch`・`last_text` は空、`context_tokens` は 0、`overlap` は空、`holding` は `free` だけ）。PR は引かず（`holdingsOf()` の `prs: false`）、変わっているファイルも読まない。道具の出力は「別のリポジトリ（送れる。…）:」（`ACROSS_HEADING`）の見出しの下に `- <id>「呼び名」<project> <agent>（処理中）（空き）`。
+- 宛先を名前で引くとき（#625）は、同じ `project` と組の先の `project` をまとめて `resolveTarget()` に渡す。**別のリポジトリの相手は、id か人が付けた表示名でだけ当たる**（`acrossNames()`。worktree 名・題名では当てない。`main` のような名前はどのリポジトリにもある）。リポジトリをまたいで同じ名前があれば当てず、`targetRefusal()` が送り元と違うリポジトリの候補に `（<project>）` を添えて選び直させる。**名前で別のリポジトリの相手に決まっても、送り元のリポジトリに同じ名前のセッションが居れば（アーカイブ済みでも）送らない**（人が指していたのがそちらかもしれない）。
+- 別のリポジトリの相手の読み直す量は、送信の応答（`context_tokens` は 0）にも断りの文にも出さない（`requestRefusal()` の `hidden`）。予算には数えるが、エージェントに返す `read_tokens` からは引く（別のリポジトリだったかは**送ったときに決めて** `AgentMessage.far` / `HeldSend.far` に覚える。`record()` が見せない分を別に数え、`hiddenInTurn()` で引く。そのターンに送った分・預かっている分に見せない分があれば、断りの文の「これまで…」も出さない）。人の画面（`agent.read_tokens`）は実際の量のまま。送れたか預かりになったか（予算に収まったか）からおおよその大きさが分かるのは残る。
+- 返答を送り元の会話に渡すときの見出し（`pendingRepliesOf()`）も、別のリポジトリの相手は `acrossLabel()`（表示名か `#<worktree 名>`）で、題名には落とさない。
+- 別のリポジトリの相手を起動できなかったときは、理由（相手の cwd のパスなどが入る）を応答に返さず、`reply.log` にだけ残す。あとから失敗した・預かりの先頭で止まったとき（`agentResult()`。`sai_wait` と返答の塊）も、`far` の印のあるメッセージには理由を出さない。見出しの出し分けも同じ印で決める（いまの行の `project` や組から決め直さない）。
+- 歯止めは同じ道を通る（1 ターンの回数・読み直しの予算・相手の使用量・預かり・人が止める口・連鎖を作らない）。預かり（#727）を送る `drainBacklog()` も、送る直前に同じ `agentTargets()` で確かめるので、**預かったあとに人が組を外せば、その先へは送らず止めて残す**。
+- 見出し（`【SAI】#<project> の「<呼び名>」からのメッセージです`）は送り元の `project` を持っているので、宛先は別のリポジトリから来たと分かる。`cwd` は宛先のセッションの行から（リクエストからは受けない）。返答は今までどおり送り元の画面と次のターンの頭に入る。
+- 道具の説明（`ACROSS_NOTE`）に「宛先からは送り元のリポジトリのファイルが読めない前提で、本文だけで動けるように書く」を足してある。
+- `/manager`（`.mcp.json` の `sai-read`）は変えていない（送れるようにする件は、送れる範囲が決まっていない）。
 
 ### 同じファイルを触っているか（#564）
 

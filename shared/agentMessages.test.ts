@@ -13,7 +13,11 @@ import {
   followupHead,
   followupReplyRows,
   replierName,
+  acrossEntry,
+  acrossLabel,
+  acrossNames,
   agentTargets,
+  isAcross,
   budgetRefusal,
   clipReply,
   deliveredFromTailnet,
@@ -133,6 +137,21 @@ test('agentTargets: 同じ project・自分以外・アーカイブ済みでな�
     session('S1@r', { session_source: 'synth' }),
   ]
   assert.deepEqual(agentTargets(sessions, from, 'testmac').map((s) => s.id), ['B1@r'])
+  // 人が許した組の先のリポジトリ（#747）も相手になる。向きつきで、同じ project が先。素通しでも・別のマシンや合成 ID は今までどおり落ちる
+  const across = [{ from: 'o/r', to: 'o/other' }]
+  const more = [...sessions, session('E1@r', { project: 'o/other', host: 'mini' }), session('F1@r', { project: 'o/other', meta: { permission_mode: 'bypassPermissions' } }), session('G1@r', { project: 'o/third' })]
+  assert.deepEqual(agentTargets(more, from, 'testmac', across).map((s) => s.id), ['B1@r', 'C1@r', 'F1@r'])
+  assert.deepEqual(agentTargets(more, session('C1@r', { project: 'o/other' }), 'testmac', across).map((s) => s.id), ['F1@r'], '逆向き（o/other → o/r）は許していない')
+  assert.equal(isAcross(from, more[2]!, across), true)
+  assert.equal(isAcross(from, more[1]!, across), false, '同じ project は「またぐ」ではない')
+  assert.deepEqual(acrossEntry(session('C1@r', { project: 'o/other', repo: 'r', branch: 'secret-branch', last_text: '中身' }), true, false), { id: 'C1@r', name: '#r', project: 'o/other', branch: '', agent: 'claude', busy: true, last_text: '', context_tokens: 0, overlap: [], overlap_more: 0, across: true }, '出すのは呼び名・エージェント・空いているか、まで')
+  assert.deepEqual(acrossEntry(session('C1@r', { project: 'o/other' }), false, true).holding, { free: true })
+  // 呼び名は人が付けた表示名だけ。無ければ #<worktree 名>（題名＝相手のリポジトリの人の入力には落とさない）
+  assert.equal(acrossLabel(session('C1@r', { meta: { name: '担当' } })), '担当')
+  assert.equal(acrossLabel(session('C1@r', { repo: 'r' })), '#r')
+  assert.equal(acrossLabel(session('C1@r', { repo: '' })), 'C1@r', 'worktree 名も無ければ id')
+  assert.deepEqual(acrossNames(session('C1@r', { meta: { name: '担当' } })), ['c1@r', '担当'], 'worktree 名と題名では指せない')
+  assert.deepEqual(acrossNames(session('C1@r')), ['c1@r'])
   assert.deepEqual(agentTargets(sessions, session('A1@r', { project: '' }), 'testmac'), [], 'どのリポジトリか分からない送り元からは送れない')
 })
 
@@ -357,4 +376,34 @@ test('requestRefusal: 依頼 1 つの件数と、読み直させる量の合計�
   assert.match(over, /合計が予算を超えます（これまで 約 200 万トークン、今回 約 450 万トークン＝甲 約 250 万トークン、乙 約 200 万トークン。予算は約 600 万トークン）/)
   assert.match(over, /1 件も預かっていません/)
   assert.equal(requestRefusal(0, 5_900_000, [{ name: '甲', tokens: 0 }]), '', '大きさの分からない相手は足さない')
+})
+
+test('targetRefusal: 送り元と違うリポジトリの候補には <リポジトリ> を添える（#747。呼び名がリポジトリをまたいで重なる）', () => {
+  const mk = (id: string, project: string) => ({ id, project, title: '', repo: 'r', meta: { name: '同じ名前' } }) as unknown as SessionSummary
+  const text = targetRefusal('同じ名前', { target: null, ambiguous: true, candidates: [mk('B1@r', 'o/r'), mk('C1@r', 'o/other')] }, '', 'o/r')
+  assert.match(text, /当たる相手が 2 つあります。送っていません/)
+  assert.ok(text.includes('- B1@r「同じ名前」\n- C1@r「同じ名前」（o/other）'), text)
+  // 別のリポジトリの候補に表示名が無ければ、題名ではなく #<worktree 名>
+  const untitled = { id: 'C2@x', project: 'o/other', title: '相手のリポジトリの人の入力', repo: 'x' } as unknown as SessionSummary
+  assert.ok(targetRefusal('x', { target: null, ambiguous: false, candidates: [untitled] }, '送れません', 'o/r').includes('- C2@x「#x」（o/other）'))
+  assert.ok(!targetRefusal('x', { target: null, ambiguous: true, candidates: [mk('B1@r', 'o/r')] }, '').includes('（o/r）'), '送り元のリポジトリを渡さなければ今までどおり')
+})
+
+test('requestRefusal: 別のリポジトリの相手が混ざる依頼では、相手ごとの量も合計も出さない（#747）', () => {
+  const text = requestRefusal(0, 0, [{ name: '甲', tokens: 4_000_000 }, { name: '別のリポジトリの相手', tokens: 3_000_000, hidden: true }])
+  assert.match(text, /合計が予算を超えます（予算は約 600 万トークン。別のリポジトリの相手の量は出しません）/)
+  assert.doesNotMatch(text, /400 万|300 万|700 万|甲/)
+  // これまでの合計に伏せた分が入っているとき（同じターンで先に別のリポジトリへ送った）も、合計を出さない（引き算で分かる）
+  const later = requestRefusal(1, 3_000_000, [{ name: '甲', tokens: 4_000_000 }], true)
+  assert.match(later, /別のリポジトリの相手の量は出しません/)
+  assert.doesNotMatch(later, /これまで|300 万|400 万/)
+})
+
+test('resolveTarget: 名前の引き方を相手ごとに変えられる（別のリポジトリの相手は id と表示名だけ。#747）', () => {
+  const near = session('B1@r', { repo: 'main' })
+  const far = session('C1@x', { project: 'o/other', repo: 'main', meta: { name: '担当' } })
+  const namesOf = (s: SessionSummary) => (s.project === 'o/other' ? acrossNames(s) : targetNames(s))
+  assert.equal((resolveTarget([near, far], 'main', [], namesOf) as { target: SessionSummary }).target.id, 'B1@r', 'worktree 名は同じリポジトリの相手にだけ当たる')
+  assert.equal(resolveTarget([far], 'main', [], namesOf).target, null, '別のリポジトリの相手しか居なければ、worktree 名では当てない')
+  assert.equal((resolveTarget([near, far], '担当', [], namesOf) as { target: SessionSummary }).target.id, 'C1@x')
 })

@@ -14,6 +14,7 @@ import type {
   AgentSessionsResponse,
   AgentStopResponse,
   AgentWaitResponse,
+  SettingsResponse,
   Replying,
   SessionDetailResponse,
   SessionProgressResponse,
@@ -1286,4 +1287,247 @@ test('並べて呼ばれた sai_send も 1 つずつ数える。1 件で 1 タ�
     contexts.clear()
   }
   await clearQueue('B1@r')
+})
+
+// ---- #747: 人が許した組だけ、別のリポジトリのセッションにも送れる
+
+const putSettings = (body: unknown, origin: string = base) =>
+  fetch(`${base}/api/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Origin: origin }, body: JSON.stringify(body) })
+const sessionsOf = async (from: string) => {
+  turn(from)
+  try {
+    const res = await agent(`/api/agent/sessions?from=${encodeURIComponent(from)}`)
+    assert.equal(res.status, 200)
+    return ((await res.json()) as AgentSessionsResponse).sessions
+  } finally {
+    idle(from)
+  }
+}
+
+test('別のリポジトリへ送る組は、同一オリジンの設定の口だけで、1 つずつ足す・外す。記録で知っているリポジトリだけ・向きつき（#747）', async () => {
+  const settings = async () => (await (await fetch(`${base}/api/settings`)).json()) as SettingsResponse
+  const first = await settings()
+  assert.deepEqual(first.send_across, [], '既定は空（同じリポジトリの中だけ）')
+  assert.ok(first.send_across_projects.includes('o/r') && first.send_across_projects.includes('o/other'), '選べるのは記録で知っているリポジトリ')
+  const pair = { from: 'o/r', to: 'o/other' }
+  assert.equal((await putSettings({ send_across_add: pair }, 'http://evil.example')).status, 403, '別オリジンからは変えられない')
+  assert.equal((await putSettings({ send_across_add: { from: 'o/r', to: 'o/unknown' } })).status, 400, '任意の名前は持たせない')
+  assert.equal((await putSettings({ send_across_add: { from: 'o/r', to: 'o/r' } })).status, 400)
+  assert.equal((await putSettings({ send_across_add: 'o/other' })).status, 400)
+  assert.equal((await putSettings({ send_across: [pair] })).status, 400, '丸ごと置き換える形は受けない（古い写しが、外した組を戻さないように）')
+  // エージェント用の口（/api/agent/*）には、組を変える道が無い
+  assert.equal((await agent('/api/agent/settings', { method: 'PUT', body: JSON.stringify({ send_across_add: pair }) })).ok, false)
+  assert.deepEqual((await settings()).send_across, [], '断ったものは残らない')
+  const ok = await putSettings({ send_across_add: { from: 'O/R', to: 'o/other' } })
+  assert.equal(ok.status, 200)
+  assert.deepEqual(((await ok.json()) as SettingsResponse).send_across, [pair], '名前は記録の書き方に揃える')
+  // もう 1 回足しても増えない。外すのは 1 つずつ（無い組を外しても何も起きない）
+  assert.deepEqual(((await (await putSettings({ send_across_add: pair })).json()) as SettingsResponse).send_across, [pair])
+  assert.deepEqual(((await (await putSettings({ send_across_remove: { from: 'o/other', to: 'o/r' } })).json()) as SettingsResponse).send_across, [pair])
+})
+
+test('許した組では、別のリポジトリのセッションが一覧に分けて出て（呼び名・エージェント・空いているかまで）、送れる。逆向きは送れない（#747）', async () => {
+  await freshTurn()
+  idle('A1@r')
+  const list = await sessionsOf('A1@r')
+  const c = list.find((s) => s.id === 'C1@r')
+  assert.deepEqual(c, { id: 'C1@r', name: '#r', project: 'o/other', branch: '', agent: 'claude', busy: false, last_text: '', context_tokens: 0, overlap: [], overlap_more: 0, across: true, holding: { free: true } }, 'ブランチ・最後の発言・同じファイル・読み直す量・PR は載せない')
+  assert.equal(list.at(-1)?.id, 'C1@r', '同じリポジトリの相手が先')
+  assert.equal(list.find((s) => s.id === 'B1@r')?.across, undefined)
+  // 逆向き（o/other → o/r）は許していないので、見えも送れもしない
+  assert.deepEqual((await sessionsOf('C1@r')).map((s) => s.id), [])
+  turn('C1@r')
+  try {
+    assert.equal((await send('C1@r', 'A1@r', '逆向き')).status, 403)
+  } finally {
+    idle('C1@r')
+  }
+  // 送れる。見出しに送り元のリポジトリが入る（宛先が「別のリポジトリから来た」と分かる）
+  runner.started.length = 0
+  contexts.set('C1@r', 200_000)
+  turn('A1@r')
+  try {
+    const res = await send('A1@r', 'C1@r', 'この形に合わせて')
+    assert.equal(res.status, 202)
+    const body = (await res.json()) as AgentSendResponse
+    assert.deepEqual([body.to, body.to_name, body.context_tokens, body.read_tokens], ['C1@r', '#r', 0, 0], '読み直しの予算には数えるが、別のリポジトリの相手の量と題名は返さない（合計からも引く。引き算で分からないように）')
+    assert.equal((await agentOf('A1@r'))?.read_tokens, 200_000, '人の画面には実際の量（予算に数えている）')
+    assert.deepEqual(runner.started.map((s) => s.id), ['C1@r'])
+    assert.match(runner.started[0]!.cmd.text, /^【SAI】#o\/r の「/)
+    assert.equal(runner.started[0]!.cmd.cwd, work, 'cwd は宛先のセッションの行から')
+    // 歯止めも同じ判定: 1 ターンの回数を超えた分は預かり、人が止めると捨てる
+    assert.equal(((await (await send('A1@r', 'C1@r', '2')).json()) as AgentSendResponse).held, undefined)
+    assert.equal(((await (await send('A1@r', 'C1@r', '3')).json()) as AgentSendResponse).held, undefined)
+    assert.equal(((await (await send('A1@r', 'C1@r', '4 件目は預かる')).json()) as AgentSendResponse).held, true)
+  } finally {
+    idle('A1@r')
+  }
+  await stopSending('A1@r', 'stop')
+  await stopSending('A1@r', 'resume')
+  // 預かったあとに人が組を外したら、その先へはもう送らない（止めて画面に残す）。巡の間隔に掛からないよう、まだ預かりを送ったことのない送り元で見る
+  await humanReply('B1@r')
+  idle('B1@r')
+  turn('B1@r')
+  try {
+    for (const n of [1, 2, 3]) assert.equal(((await (await send('B1@r', 'C1@r', `${n}`)).json()) as AgentSendResponse).held, undefined)
+    assert.equal(((await (await send('B1@r', 'C1@r', '預かる')).json()) as AgentSendResponse).held, true)
+  } finally {
+    idle('B1@r')
+  }
+  assert.equal((await putSettings({ send_across_remove: { from: 'o/r', to: 'o/other' } })).status, 200)
+  const startedBefore = runner.started.length
+  await poll()
+  assert.equal(runner.started.length, startedBefore, '外した先には送らない')
+  assert.match((await agentOf('B1@r'))?.held?.[0]?.halted ?? '', /もう送れるセッションではありません/)
+  await stopSending('B1@r', 'stop')
+  await stopSending('B1@r', 'resume')
+  // 外したあとは、また同じリポジトリの中だけ
+  turn('A1@r')
+  try {
+    assert.equal((await send('A1@r', 'C1@r', 'x')).status, 403)
+  } finally {
+    idle('A1@r')
+  }
+  assert.equal((await sessionsOf('A1@r')).some((s) => s.id === 'C1@r'), false)
+  contexts.clear()
+  await clearQueue('C1@r')
+  await humanReply('C1@r')
+  idle('C1@r')
+})
+
+test('別のリポジトリの相手の返答を送り元に渡すとき、見出しに相手の題名を出さない（#747）', async () => {
+  await freshTurn()
+  assert.equal((await putSettings({ send_across_add: { from: 'o/r', to: 'o/other' } })).status, 200)
+  await humanReply('C1@r')
+  idle('C1@r')
+  idle('A1@r')
+  turn('A1@r')
+  let messageId = ''
+  let delivered = ''
+  try {
+    runner.started.length = 0
+    messageId = ((await (await send('A1@r', 'C1@r', '形を教えて')).json()) as AgentSendResponse).message_id
+    delivered = runner.started.at(-1)!.cmd.text
+  } finally {
+    idle('A1@r')
+  }
+  // 相手が返答し、そのあと相手のリポジトリの人が別の入力をした（題名がその入力になる）
+  const now = Date.now()
+  await appendFile(feedFile, JSON.stringify(row(new Date(now), 'C1', { repo: 'r', cwd: work, project: 'o/other', user_text: delivered, text: '形はこうです' })) + '\n')
+  await appendFile(feedFile, JSON.stringify(row(new Date(now + 1000), 'C1', { repo: 'r', cwd: work, project: 'o/other', user_text: '相手のリポジトリの秘密の題名', text: '別の用事' })) + '\n')
+  runner.started.length = 0
+  await humanReply('A1@r')
+  const handed = runner.started.at(-1)!.cmd.text
+  assert.match(handed, new RegExp(`message_id: ${messageId}`))
+  assert.match(handed, /形はこうです/)
+  assert.match(handed, /「#r」/, '表示名が無ければ worktree 名')
+  assert.doesNotMatch(handed, /秘密の題名/)
+  idle('A1@r')
+  // 相手のターンがあとから失敗したときの理由（reply.log の末尾＝相手の CLI の出力）も、送り元のエージェントに渡さない
+  await humanReply('C1@r')
+  idle('C1@r')
+  turn('A1@r')
+  let failedId = ''
+  try {
+    runner.started.length = 0
+    failedId = ((await (await send('A1@r', 'C1@r', '失敗する依頼')).json()) as AgentSendResponse).message_id
+    turn('C1@r', 'x', { text: runner.started.at(-1)!.cmd.text, failed: { code: 1, tail: '/秘密/の/パス が開けません' } })
+    const waited = (await (await agent(`/api/agent/wait?from=A1%40r&message_id=${failedId}`)).json()) as { status: string; error?: string }
+    assert.equal(waited.status, 'failed')
+    assert.match(waited.error ?? '', /別のリポジトリの相手の理由は出しません/)
+    assert.doesNotMatch(waited.error ?? '', /秘密/)
+    // 別のリポジトリの分が**預かりにだけ**あるときも、断りの文に「これまで」の量を出さない（引き算で分かる）。
+    // 1 ターンの回数を同じリポジトリへの送信で使い切ってから（量は分からない = 0）、別のリポジトリへ 2 件預ける
+    for (const n of [2, 3]) assert.equal(((await (await send('A1@r', 'B1@r', `${n}`)).json()) as AgentSendResponse).held, undefined)
+    contexts.set('C1@r', 2_000_000)
+    for (const n of [4, 5]) {
+      const held = (await (await send('A1@r', 'C1@r', `${n}（預かり）`)).json()) as AgentSendResponse
+      assert.deepEqual([held.held, held.context_tokens, held.read_tokens], [true, 0, 0])
+    }
+    contexts.set('B1@r', 2_500_000)
+    const over = await send('A1@r', 'B1@r', '同じリポジトリへ')
+    assert.equal(over.status, 429)
+    const text = ((await over.json()) as { error: string }).error
+    assert.match(text, /別のリポジトリの相手の量は出しません/)
+    assert.doesNotMatch(text, /これまで|200 万|400 万/)
+  } finally {
+    idle('C1@r')
+    idle('A1@r')
+    contexts.clear()
+  }
+  await stopSending('A1@r', 'stop')
+  await stopSending('A1@r', 'resume')
+  assert.equal((await putSettings({ send_across_remove: { from: 'o/r', to: 'o/other' } })).status, 200)
+  await clearQueue('B1@r')
+  await clearQueue('C1@r')
+  await humanReply('C1@r')
+  idle('C1@r')
+})
+
+test('呼び名がリポジトリをまたいで重なるときは送らず、<リポジトリ> 付きで選び直させる（#747）', async () => {
+  await freshTurn()
+  idle('A1@r')
+  assert.equal((await putSettings({ send_across_add: { from: 'o/r', to: 'o/other' } })).status, 200)
+  const name = (id: string, value: string) => fetch(`${base}/api/sessions/${encodeURIComponent(id)}/meta`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ name: value }) })
+  const nameBefore = (await (await fetch(`${base}/api/sessions/B1%40r/meta`)).json()) as { meta?: { name?: string } }
+  assert.equal((await name('B1@r', '担当')).status, 200)
+  assert.equal((await name('C1@r', '担当')).status, 200)
+  runner.started.length = 0
+  turn('A1@r')
+  try {
+    const res = await send('A1@r', '担当', '見て')
+    assert.equal(res.status, 409)
+    const text = ((await res.json()) as { error: string }).error
+    assert.match(text, /「担当」に当たる相手が 2 つあります。送っていません/)
+    assert.ok(text.includes('- B1@r「担当」\n- C1@r「担当」（o/other）'), text)
+    assert.equal(runner.started.length, 0)
+    // id なら決まる
+    assert.equal(((await (await send('A1@r', 'C1@r', '見て')).json()) as AgentSendResponse).to, 'C1@r')
+    // 表示名で別のリポジトリの相手に決まっても、送り元のリポジトリに同じ名前のセッションが居れば（アーカイブ済みでも）送らない
+    assert.equal((await name('B1@r', '担当')).status, 200)
+    const archive = (on: boolean) => fetch(`${base}/api/sessions/B1%40r/meta`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ archived_at: on ? new Date(Date.now() + 3_600_000).toISOString() : null }) })
+    assert.equal((await archive(true)).status, 200)
+    const startedBefore = runner.started.length
+    const hidden = await send('A1@r', '担当', '見て')
+    assert.equal(hidden.status, 409)
+    assert.match(((await hidden.json()) as { error: string }).error, /「担当」に当たる相手が 2 つあります（うち 1 つは送れないセッション/)
+    assert.equal(runner.started.length, startedBefore, '別のリポジトリへ黙って届かせない')
+    assert.equal((await archive(false)).status, 200)
+  } finally {
+    idle('A1@r')
+  }
+  await name('B1@r', nameBefore.meta?.name ?? '')
+  await name('C1@r', '')
+  assert.equal((await putSettings({ send_across_remove: { from: 'o/r', to: 'o/other' } })).status, 200)
+  await clearQueue('C1@r')
+  await humanReply('C1@r')
+  idle('C1@r')
+})
+
+test('組を外すと、相手の預かりに並んでいた、その向きのメッセージも取り消す（外したあとに相手で回り出さない。#747）', async () => {
+  await freshTurn()
+  idle('A1@r')
+  await clearQueue('C1@r')
+  assert.equal((await putSettings({ send_across_add: { from: 'o/r', to: 'o/other' } })).status, 200)
+  turn('C1@r')
+  turn('A1@r')
+  try {
+    const res = await send('A1@r', 'C1@r', '終わったら見て')
+    assert.equal(((await res.json()) as AgentSendResponse).via, 'queued', '相手が処理中なので、相手の預かりに並ぶ')
+    // 同じリポジトリの相手の預かりは触らない
+    turn('B1@r')
+    assert.equal(((await (await send('A1@r', 'B1@r', '同じリポジトリ')).json()) as AgentSendResponse).via, 'queued')
+  } finally {
+    idle('A1@r')
+  }
+  const queuedOf = async (id: string) => ((await (await poll()).json()) as SessionsResponse).queued[id]?.items.length ?? 0
+  assert.equal(await queuedOf('C1@r'), 1)
+  assert.equal((await putSettings({ send_across_remove: { from: 'o/r', to: 'o/other' } })).status, 200)
+  assert.equal(await queuedOf('C1@r'), 0, '外した向きの分は取り消す')
+  assert.equal(await queuedOf('B1@r'), 1, '同じリポジトリの分は残る')
+  idle('C1@r')
+  await clearQueue('B1@r')
+  idle('B1@r')
+  await humanReply('B1@r')
+  idle('B1@r')
 })

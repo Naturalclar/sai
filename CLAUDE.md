@@ -147,7 +147,7 @@ OpenCode (feed/opencode/sai.js) ─┘                           │
 - **返信中の許可・質問**: 答え（`POST /api/approvals/<id>/answer`）は同一オリジンのみ。預ける側は返信を処理中のエンティティだけ受ける。専用の要約が無いツールの JSON は `JSON.stringify` でなく `dumpsLikePython()`（`record.py` と同じ文字列。両方のテストに同じ期待文字列）。「常に許可」のルールはサーバが組み、画面は送らない → docs/internals/approvals.md#返信中の許可質問
 - **効いている許可**: 読むだけ（書くのは「常に許可」の 2 経路だけ）。パスは cwd から固定で、リクエストから受けない → docs/internals/approvals.md#セッションに効いている許可
 - **Jev**: 「SAI は外に出さない」の例外の 1 つ（もう 1 つは PR のレビューの投稿）。鍵が無ければ送らない・`settings.json` の `jev` で切れる・送り先固定でリダイレクトを追わない。環境から口を組むのは `main.ts` だけで `createApp` の既定は送らない。本文・cwd・Claude の要約は送らない。読む経路（`approvalsNow()`）から自動で答えない。自動の「常に許可」は Bash だけ、判定は `jevAutoDecision()` の 1 つ → docs/internals/approvals.md#jev
-- **セッション同士のメッセージ**: `/api/agent/*` は `Origin` 付きを断り `agent-token` を要る。MCP にはトークンの場所だけ渡す。停止は同一オリジン。相手で回っているターンは止めない → docs/internals/agents.md#セッション同士のメッセージ
+- **セッション同士のメッセージ**: `/api/agent/*` は `Origin` 付きを断り `agent-token` を要る。MCP にはトークンの場所だけ渡す。停止は同一オリジン。相手で回っているターンは止めない。送れるのは同じ `project` と、**人が設定で許した組の先だけ**（#747。判定は `mayCross()` の 1 つ。組を変える道をエージェントの口・道具に足さない。別のリポジトリの相手について一覧に出すのは呼び名・エージェント・空きまで） → docs/internals/agents.md#セッション同士のメッセージ
 - **`/mcp`**: 許可は whois の capability だけで決める（Serve のヘッダは見ない）。ループバックと tailnet のユーザーの既定は `read` と `draft`（入力欄に案を置くだけ。ターンを起こさない）で、`send` は capability。`Origin` は必ず検査し `isCrossOrigin()` は使わない。素通しのセッションには送らない。ツール名を変えたらスキルと `.mcp.json` も直す → docs/internals/agents.md#tailnet-から-mcp-で呼ぶ口
 
 ### 差分・PR・メタ・未読・スキル

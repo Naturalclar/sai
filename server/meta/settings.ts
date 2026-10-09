@@ -9,7 +9,8 @@ import { DEFAULT_PERSONA, isPersonaId } from '../../shared/persona.ts'
 import { isJevAuto } from '../../shared/jev.ts'
 import { isReplyPermissionMode } from '../../shared/permissions.ts'
 import { isLinearWorkspace } from '../../shared/refs.ts'
-import type { DigestProvider, PersonaId, ReplyPermissionMode } from '../../shared/types.ts'
+import { readPairs } from '../../shared/sendAcross.ts'
+import type { DigestProvider, PersonaId, ReplyPermissionMode, SendAcrossPair } from '../../shared/types.ts'
 
 export const SETTINGS_FILE = 'settings.json'
 
@@ -50,10 +51,15 @@ export interface Settings {
    * `shared/permissions.ts` の `replyModeOf()`）。選べるのは `REPLY_MODES` の中だけで、空は「決めない」（**既定**。CLI の既定に従う）
    */
   reply_mode: ReplyPermissionMode | ''
+  /**
+   * 別のリポジトリのセッションへ `sai_send` で送ってよい組（#747。`shared/sendAcross.ts`）。**既定は空**（同じリポジトリの中だけ）。
+   * 向きつき。書けるのは同一オリジンの PUT だけ（エージェント用の口・MCP からは触れない）
+   */
+  send_across: SendAcrossPair[]
 }
 
 /** 既定。テストもこれを使う（キーを足したらここ 1 か所） */
-export const DEFAULT_SETTINGS: Settings = { persona: DEFAULT_PERSONA, linear_workspace: '', digest: false, digest_provider: 'claude', digest_model: '', jev: true, jev_auto: 0, paste_to_file: false, reply_mode: '' }
+export const DEFAULT_SETTINGS: Settings = { persona: DEFAULT_PERSONA, linear_workspace: '', digest: false, digest_provider: 'claude', digest_model: '', jev: true, jev_auto: 0, paste_to_file: false, reply_mode: '', send_across: [] }
 
 export class SettingsStore {
   readonly path: string
@@ -79,6 +85,7 @@ export class SettingsStore {
       if (isJevAuto(raw?.jev_auto)) settings.jev_auto = raw.jev_auto
       if (raw?.paste_to_file === true) settings.paste_to_file = true
       if (isReplyPermissionMode(raw?.reply_mode)) settings.reply_mode = raw.reply_mode
+      settings.send_across = readPairs(raw?.send_across)
       // Jev を切っていれば自動も切（切っている間に隠れて残った閾値で、入に戻した瞬間に自動で答えない。#499 のレビュー）
       if (!settings.jev) settings.jev_auto = 0
     } catch {

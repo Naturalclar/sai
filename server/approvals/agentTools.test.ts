@@ -22,6 +22,8 @@ let loopReply: { status: number; body: unknown } = { status: 200, body: {} }
 let waitForReply: { status: number; body: unknown } = { status: 200, body: {} }
 /** /api/agent/send が次に返すもの（無ければいつもの 1 件ぶん）。1 回使ったら戻る */
 let sendReply: { status: number; body: unknown } | null = null
+/** /api/agent/sessions が次に返す一覧（無ければいつもの 1 件）。1 回使ったら戻る */
+let sessionsReply: unknown[] | null = null
 /** /api/agent/wait が順に返すもの */
 let waits: { status: number; body: unknown }[] = []
 
@@ -44,6 +46,11 @@ before(async () => {
         res.end(JSON.stringify(payload))
       }
       if (req.url?.startsWith('/api/agent/sessions')) {
+        if (sessionsReply) {
+          const list = sessionsReply
+          sessionsReply = null
+          return reply(200, { from: 'A1@r', sessions: list })
+        }
         return reply(200, { from: 'A1@r', sessions: [{ id: 'B1@r', name: 'レビュー', project: 'o/r', branch: 'main', agent: 'claude', busy: true, last_text: '見ました', context_tokens: 120_000 }] })
       }
       if (req.url === '/api/agent/send') {
@@ -80,6 +87,22 @@ test('agentTool: トークンをファイルから読んでヘッダに載せ、
   assert.equal(result.content[0]!.text, '- B1@r「レビュー」claude main（処理中） 読み直す量: 約 12 万トークン 最後の発言: 見ました')
   assert.equal(seen[0]!.token, 'secret-token', 'トークンは env ではなくファイルから読む')
   assert.equal(seen[0]!.url, '/api/agent/sessions?from=A1%40r')
+})
+
+test('agentTool: sai_sessions は別のリポジトリのセッションを分けて出す。出すのは呼び名・エージェント・空いているか、まで（#747）', async () => {
+  const here = { id: 'B1@r', name: 'レビュー', project: 'o/r', branch: 'main', agent: 'claude', busy: false, last_text: '見ました', context_tokens: 0, overlap: [], overlap_more: 0 }
+  const across = { id: 'C1@x', name: '実装', project: 'o/other', branch: '', agent: 'codex', busy: false, last_text: '', context_tokens: 0, overlap: [], overlap_more: 0, across: true, holding: { free: true } }
+  sessionsReply = [here, across, { ...across, id: 'D1@x', name: '調査', busy: true, holding: undefined }]
+  const text = (await agentTool('sai_sessions', {}, base, 'A1@r', tokenFile)).content[0]!.text
+  assert.equal(
+    text,
+    ['- B1@r「レビュー」claude main 最後の発言: 見ました', '', '別のリポジトリ（送れる。相手からは、あなたのリポジトリのファイルは読めません）:', '- C1@x「実装」o/other codex （空き）', '- D1@x「調査」o/other codex（処理中）'].join('\n'),
+  )
+  // 別のリポジトリの相手だけのときは、見出しから始まる
+  sessionsReply = [across]
+  assert.ok((await agentTool('sai_sessions', {}, base, 'A1@r', tokenFile)).content[0]!.text.startsWith('別のリポジトリ（送れる。'))
+  const send = AGENT_TOOLS.find((t) => t.name === 'sai_send')!.description
+  assert.match(send, /宛先からは送り元のリポジトリのファイルが読めない前提で、本文だけで動けるように書く/)
 })
 
 test('agentTool: sai_send は送り元・送り先・本文を送り、預けたか・あと何回送れるかを返す', async () => {

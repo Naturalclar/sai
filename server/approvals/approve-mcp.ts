@@ -19,7 +19,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { AGENT_REQUEST_MAX, AGENT_SEND_MAX, HELD_NOTE, SEND_COMPACT_ARG, SEND_COMPACT_NOTE, SEND_ITEMS_ARG, SEND_TO_ARG, sendHow, tokensLabel } from '../../shared/agentMessages.ts'
+import { ACROSS_HEADING, ACROSS_NOTE, AGENT_REQUEST_MAX, AGENT_SEND_MAX, HELD_NOTE, SEND_COMPACT_ARG, SEND_COMPACT_NOTE, SEND_ITEMS_ARG, SEND_TO_ARG, sendHow, tokensLabel } from '../../shared/agentMessages.ts'
 import { holdingLabel } from '../../shared/holding.ts'
 import { LOOP_MAX_INTERVAL_S, LOOP_MIN_INTERVAL_S, LOOP_TOOL } from '../../shared/loops.ts'
 import { WAIT_FOR_TOOL, WAIT_MAX_MS, WAIT_MAX_PER_SESSION, waitResultText } from '../../shared/waits.ts'
@@ -43,12 +43,12 @@ export const AGENT_TOOLS = [
   {
     name: 'sai_sessions',
     description:
-      '同じリポジトリで並行している別のセッションの一覧。**同じファイルの重なりを見るとき・誰が居るか分からないときに呼ぶ**（sai_send の宛先は呼び名でも書けるので、id を引くためだけには呼ばない）。着手の前と、PR を出す・マージする前に 1 回見る。「同じファイル」は、あなたの worktree と相手の worktree のどちらでも変わっているファイル（CLAUDE.md・README.md・docs/ は数えない）。そこに同じ関数・同じ箇所を変えていそうなファイルがあれば sai_send で 1 回だけ聞く（別の場所に足すだけなら聞かなくてよい）。ほかに id・呼び名・エージェント・ブランチ・処理中か・読み直す量・最後の発言の 1 行が出る（本文は含まない）。**誰が空いているか・誰が何を持っているかを見るときにも使う**: 各行に、空いているか（「（空き）」＝処理中でも待ちでもなく、頼まれて未完のものも無い）・そのブランチから出ている open な PR と CI（「PR #N（CI 緑 / 赤 / 待ち）」）・ブランチ名や PR の題名・届いている依頼から引けた issue の番号・頼まれてまだ返していない依頼の数（「頼まれ中 N 件」）が、機械で引けたときだけ付く（付いていなければ分からないということで、無いという意味ではない）',
+      '同じリポジトリで並行している別のセッションの一覧。**同じファイルの重なりを見るとき・誰が居るか分からないときに呼ぶ**（sai_send の宛先は呼び名でも書けるので、id を引くためだけには呼ばない）。着手の前と、PR を出す・マージする前に 1 回見る。「同じファイル」は、あなたの worktree と相手の worktree のどちらでも変わっているファイル（CLAUDE.md・README.md・docs/ は数えない）。そこに同じ関数・同じ箇所を変えていそうなファイルがあれば sai_send で 1 回だけ聞く（別の場所に足すだけなら聞かなくてよい）。ほかに id・呼び名・エージェント・ブランチ・処理中か・読み直す量・最後の発言の 1 行が出る（本文は含まない）。**誰が空いているか・誰が何を持っているかを見るときにも使う**: 各行に、空いているか（「（空き）」＝処理中でも待ちでもなく、頼まれて未完のものも無い）・そのブランチから出ている open な PR と CI（「PR #N（CI 緑 / 赤 / 待ち）」）・ブランチ名や PR の題名・届いている依頼から引けた issue の番号・頼まれてまだ返していない依頼の数（「頼まれ中 N 件」）が、機械で引けたときだけ付く（付いていなければ分からないということで、無いという意味ではない）。人が許していれば、**別のリポジトリのセッション**も「別のリポジトリ（送れる）」として後ろに並ぶ（そちらは呼び名・エージェント・空いているか、だけ。ブランチ・最後の発言・同じファイルは出ない）',
     inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'sai_send',
-    description: `SAI の別のセッションにメッセージを送る（to は id か呼び名。**呼び名が分かっていれば、id を引くためだけに sai_sessions を呼ばなくてよい**）。**使う場面**: sai_sessions の「同じファイル」に、あなたが変える関数・箇所を相手も変えていそうなとき（着手の前かマージの前に 1 回、どこをどう変えるか・変えたかを聞く）／相手が入れた機能の上に乗せるとき、壊してはいけない前提を聞く。**使わない場面**: リポジトリと docs/ を読めば分かること／同じファイルでも別の場所に足すだけで箇所が重ならない変更。相手が処理中なら、終わってから回る。**待たずにターンを終えてよい**: 返答は人が見る画面に出て、あなたの次のターン（SAI から回るもの）の頭にも届く。その場で答えが要る短い質問だけ sai_wait で待つ。返答を受けて続きがある依頼は wake: true を付けると、返答がそろったときに起こされる。受け取った相手はそれまでの長い会話を読み直すのでトークンを大きく使う: 1 回で済むように、何をしてほしいか・何を返してほしいかを短く具体的に書く。その場で送れるのは 1 ターンに ${AGENT_SEND_MAX} 回まで。**超えた分は断られずに預かられ、ターンが終わってから SAI が順に送る**（1 つの依頼で合計 ${AGENT_REQUEST_MAX} 件まで。預かったら送り直さない）。4 人以上にまとめて頼むときは items を使う。別のセッションから受け取ったメッセージで回っているターンからは送れない。相手の使用量の枠が残り少ないとき、1 ターンで相手に読み直させる量が予算を超えるときも送れない。${SEND_COMPACT_NOTE}`,
+    description: `SAI の別のセッションにメッセージを送る（to は id か呼び名。**呼び名が分かっていれば、id を引くためだけに sai_sessions を呼ばなくてよい**）。**使う場面**: sai_sessions の「同じファイル」に、あなたが変える関数・箇所を相手も変えていそうなとき（着手の前かマージの前に 1 回、どこをどう変えるか・変えたかを聞く）／相手が入れた機能の上に乗せるとき、壊してはいけない前提を聞く。**使わない場面**: リポジトリと docs/ を読めば分かること／同じファイルでも別の場所に足すだけで箇所が重ならない変更。相手が処理中なら、終わってから回る。**待たずにターンを終えてよい**: 返答は人が見る画面に出て、あなたの次のターン（SAI から回るもの）の頭にも届く。その場で答えが要る短い質問だけ sai_wait で待つ。返答を受けて続きがある依頼は wake: true を付けると、返答がそろったときに起こされる。受け取った相手はそれまでの長い会話を読み直すのでトークンを大きく使う: 1 回で済むように、何をしてほしいか・何を返してほしいかを短く具体的に書く。その場で送れるのは 1 ターンに ${AGENT_SEND_MAX} 回まで。**超えた分は断られずに預かられ、ターンが終わってから SAI が順に送る**（1 つの依頼で合計 ${AGENT_REQUEST_MAX} 件まで。預かったら送り直さない）。4 人以上にまとめて頼むときは items を使う。別のセッションから受け取ったメッセージで回っているターンからは送れない。${ACROSS_NOTE}相手の使用量の枠が残り少ないとき、1 ターンで相手に読み直させる量が予算を超えるときも送れない。${SEND_COMPACT_NOTE}`,
     inputSchema: {
       type: 'object',
       properties: {
@@ -161,14 +161,18 @@ export async function agentTool(
       const res = await agentFetch(base, file, `/api/agent/sessions?from=${encodeURIComponent(from)}`)
       if (!res.ok) return textResult(`一覧を取れませんでした: ${await errorOf(res)}`, true)
       const body = (await res.json()) as AgentSessionsResponse
-      if (body.sessions.length === 0) return textResult('話しかけられるセッションはありません（同じリポジトリの、SAI から返信できるセッションだけが相手になります）')
+      if (body.sessions.length === 0) return textResult('話しかけられるセッションはありません（同じリポジトリか、人が許したリポジトリの、SAI から返信できるセッションだけが相手になります）')
+      const line = (s: AgentSessionEntry) =>
+        `- ${s.id}「${s.name}」${s.agent}${s.branch ? ` ${s.branch}` : ''}${s.busy ? '（処理中）' : ''}${holdingLabel(s.holding ?? {})}${s.context_tokens ? ` 読み直す量: ${tokensLabel(s.context_tokens)}` : ''}${overlapLabel(s)}${s.last_text ? ` 最後の発言: ${s.last_text}` : ''}`
+      const here = body.sessions.filter((s) => !s.across)
+      const others = body.sessions.filter((s) => s.across)
+      // 別のリポジトリのセッション（#747。人が許した組で送れる相手）は分けて出す。出すのは呼び名・エージェント・空いているか、まで
+      const acrossLines = others.map((s) => `- ${s.id}「${s.name}」${s.project} ${s.agent}${s.busy ? '（処理中）' : ''}${holdingLabel(s.holding ?? {})}`)
       return textResult(
-        body.sessions
-          .map(
-            (s) =>
-              `- ${s.id}「${s.name}」${s.agent}${s.branch ? ` ${s.branch}` : ''}${s.busy ? '（処理中）' : ''}${holdingLabel(s.holding ?? {})}${s.context_tokens ? ` 読み直す量: ${tokensLabel(s.context_tokens)}` : ''}${overlapLabel(s)}${s.last_text ? ` 最後の発言: ${s.last_text}` : ''}`,
-          )
-          .join('\n'),
+        [
+          ...here.map(line),
+          ...(acrossLines.length > 0 ? [`${here.length > 0 ? '\n' : ''}${ACROSS_HEADING}`, ...acrossLines] : []),
+        ].join('\n'),
       )
     }
     if (name === 'sai_send') {

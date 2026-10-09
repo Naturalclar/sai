@@ -1125,6 +1125,12 @@ export interface AgentSessionEntry {
    * `free` = 空いている、`asked` = 頼まれてまだ返していないメッセージの数。本文は載せない
    */
   holding?: SessionHolding
+  /**
+   * **別のリポジトリのセッション**（#747。人が許した組で送れる相手）。出すのは呼び名・エージェント・空いているか、まで:
+   * `name` は人が付けた表示名（無ければ `#<worktree 名>`。題名には落とさない）、`branch`・`last_text` は空、`context_tokens` は 0、
+   * `overlap` は空、`holding` は `free` だけ
+   */
+  across?: true
 }
 
 /** `sai_sessions` の 1 行に足す「いま持っているもの」（#727。組み立ては `shared/holding.ts`）。どれも分かるときだけ */
@@ -1921,6 +1927,19 @@ export interface SettingsResponse {
    * `REPLY_MODES` のどれかで、空は「決めない」（CLI の既定）
    */
   reply_mode: ReplyPermissionMode | ''
+  /**
+   * 別のリポジトリのセッションへ `sai_send` で送ってよい組（#747。settings.json の `send_across`）。**向きつき**（`from` のリポジトリの
+   * セッションが、`to` のリポジトリのセッションへ送れる）。既定は空（同じリポジトリの中だけ）
+   */
+  send_across: SendAcrossPair[]
+  /** 組に選べるリポジトリ（記録で知っているもの。#747）。画面はここから選ばせる（任意の名前を打たせない） */
+  send_across_projects: string[]
+}
+
+/** 別のリポジトリへ送ってよい組（#747）。`from` のリポジトリのセッションが、`to` のリポジトリのセッションへ送れる */
+export interface SendAcrossPair {
+  from: string
+  to: string
 }
 
 /** 一言を作る口。`claude`（`claude -p`。既定）か `openai`（OpenAI 互換の `/v1/chat/completions`。ローカルの LLM はこちら） */
@@ -1947,6 +1966,13 @@ export interface SettingsRequest {
   paste_to_file?: boolean
   /** 返信の既定の許可モード（#582）。`REPLY_MODES` のどれか。空文字で「決めない」 */
   reply_mode?: ReplyPermissionMode | ''
+  /**
+   * 別のリポジトリへ送ってよい組（#747）を **1 つ足す**。記録で知っているリポジトリだけ。丸ごと置き換える形は無い
+   * （古い写しを持ったタブが、別の端末で外した組を戻さないように、足す・外すを 1 つずつ送る）
+   */
+  send_across_add?: SendAcrossPair
+  /** 組を 1 つ外す（#747）。無ければ何もしない。もう記録に無いリポジトリの組でも外せる */
+  send_across_remove?: SendAcrossPair
 }
 
 export interface SessionFilters {

@@ -777,6 +777,7 @@
   .turn-steps .list .said .body > :last-child { margin-bottom: 0; }
   .tag.recovered { background: color-mix(in srgb, var(--muted) 18%, transparent); color: var(--muted); }
   .tag.recovered.auth-failed { background: color-mix(in srgb, var(--synth) 16%, transparent); color: var(--synth); }
+  .tag.wait-unset { background: color-mix(in srgb, var(--claude) 14%, transparent); color: var(--claude); }
   .tag.stop-missing { background: color-mix(in srgb, var(--synth) 18%, transparent); color: var(--synth); font-weight: 600; }
   .tag.archived { background: color-mix(in srgb, var(--muted) 18%, transparent); color: var(--muted); font-weight: 600; }
   /* アーカイブしたのに返信が続いている（#583）。アーカイブの印より目立たせる */
@@ -1173,6 +1174,8 @@
   .loop-bar.done { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
   .loop-bar .actions { margin-left: auto; display: flex; gap: 6px; }
   .wait-bar.ready, .wait-bar.expired, .wait-bar.halted { border-color: color-mix(in srgb, var(--claude) 45%, var(--line)); }
+  /* 「待ちます」と言ったのに起こす予定が無い（#732）。置く口 1 つだけの帯。控えめに（点線）*/
+  .wait-bar.wait-unset { border-style: dashed; }
   .loop-bar .head .actions button { margin-left: 0; }
   .loop-fields { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 2px 10px; margin: 6px 0 0; }
   .loop-fields dt { color: var(--muted); }

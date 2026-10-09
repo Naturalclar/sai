@@ -19,10 +19,11 @@ export type HeadTag =
   | { kind: 'archived' }
   | { kind: 'returned'; at: string }
   | { kind: 'stop_missing' }
+  | { kind: 'wait_unset'; pr: number }
   | { kind: 'mode'; mode: string }
   | { kind: 'context'; tokens: number }
 
-export type HeadTagSession = Pick<SessionSummary, 'host' | 'session_source' | 'terminal' | 'waiting' | 'archived' | 'permission_mode' | 'meta'> & Partial<Pick<SessionSummary, 'last_kind' | 'last_turn_ts' | 'stop_missing'>>
+export type HeadTagSession = Pick<SessionSummary, 'host' | 'session_source' | 'terminal' | 'waiting' | 'archived' | 'permission_mode' | 'meta'> & Partial<Pick<SessionSummary, 'last_kind' | 'last_turn_ts' | 'wait_unset' | 'stop_missing'>>
 
 export interface HeadTagInput {
   /** サーバのマシン名（応答の host）。行の host と違えば別のマシンの印 */
@@ -51,6 +52,8 @@ export function headTags(s: HeadTagSession, input: HeadTagInput): HeadTag[] {
   if (input.replyingSince) tags.push({ kind: 'replying', since: input.replyingSince })
   // ターン完了の行が落ちた（#614）。返信中の印とは同時に出ない（サーバが回しているあいだは載せない）。狭い画面の 1 行目にも残す
   if (s.stop_missing && !input.replyingSince) tags.push({ kind: 'stop_missing' })
+  // 「待ちます」と言って終わったのに、起こす予定が無い（#732）。返信中は出さない（もう次が回っている）。狭い画面の 1 行目にも残す
+  if (s.wait_unset && !input.replyingSince) tags.push({ kind: 'wait_unset', pr: s.wait_unset.pr })
   if (s.archived) tags.push({ kind: 'archived' })
   // アーカイブしたのに行が増えて戻ってきた（#583）。狭い画面の 1 行目にも残す（片付けたはずの方に送り続けるのを止めたい）
   const returned = returnedFromArchive(s)

@@ -10,7 +10,7 @@ test('bashRulePrefixes: 1 つのコマンドは先頭 1 語（サブコマンド
   assert.deepEqual(p('gh pr create --title x'), ['gh pr'])
   assert.deepEqual(p('git push origin main'), ['git push'])
   assert.deepEqual(p('mkdir -p x/y'), ['mkdir'])
-  assert.deepEqual(p('gh --version'), ['gh'], '2 語目がフラグなら 1 語')
+  assert.deepEqual(p('gh --version'), ['gh --version'], '2 語目がフラグなら 1 語にせず、フラグごと（#755）')
   assert.deepEqual(p('./scripts/run.sh'), ['./scripts/run.sh'])
   assert.equal(p(''), null)
   assert.equal(p('"quoted cmd"'), null, '空白の入った先頭は当てにしない')
@@ -22,7 +22,7 @@ test('bashRulePrefixes: つないだコマンドは部品ごと（&& / || / ; / 
   assert.deepEqual(p('touch a && mkdir b || rm -f c'), ['touch', 'mkdir', 'rm'])
   assert.deepEqual(p('touch a\nmkdir b'), ['touch', 'mkdir'])
   assert.deepEqual(p('touch a || touch b'), ['touch'])
-  assert.deepEqual(p('node -v | tee v.txt'), ['node', 'tee'], 'パイプの後ろも部品（tee のルールが無いと聞かれた）')
+  assert.deepEqual(p('node -v | tee v.txt'), ['node -v', 'tee'], 'パイプの後ろも部品（tee のルールが無いと聞かれた）')
   assert.deepEqual(p('gh pr list && rm -rf x'), ['gh pr', 'rm'], '前は && の手前だけ見て gh pr のルールしか書かなかった')
   assert.deepEqual(p('touch "a && b"'), ['touch'], '引用符の中の && では切らない')
   assert.deepEqual(p("touch 'a | b'; mkdir c"), ['touch', 'mkdir'])
@@ -30,17 +30,17 @@ test('bashRulePrefixes: つないだコマンドは部品ごと（&& / || / ; / 
 
 test('bashRulePrefixes: 読むだけのコマンドと cd にはルールを書かない（ルール無しで通った）', () => {
   assert.deepEqual(p('pnpm test 2>&1 | tail -20'), ['pnpm test'])
-  assert.deepEqual(p('node -v | grep v | sort | uniq | wc -l'), ['node'])
-  assert.deepEqual(p('node -v && echo done; pwd; ls'), ['node'])
-  assert.deepEqual(p('node -v | awk "{print}"'), ['node', 'awk'], 'awk は聞かれた（引用符の中の波括弧は文字）')
+  assert.deepEqual(p('node -v | grep v | sort | uniq | wc -l'), ['node -v'])
+  assert.deepEqual(p('node -v && echo done; pwd; ls'), ['node -v'])
+  assert.deepEqual(p('node -v | awk "{print}"'), ['node -v', 'awk'], 'awk は聞かれた（引用符の中の波括弧は文字）')
   assert.deepEqual(p('ls -la | head'), ['ls', 'head'], '読むだけのコマンドしか無いのに聞かれたなら、その部品に書く（#710 のレビュー）')
   assert.deepEqual(p('cat /etc/hosts'), ['cat'], '引数しだいで聞かれる。前は出ていた [常に許可] を消さない')
   assert.deepEqual(p('cd sub && cat ../../x | head'), ['cat', 'head'])
   assert.deepEqual(p('cd sub && grep -r x . | wc -l'), ['grep', 'wc'])
   assert.deepEqual(p('cd sub'), [], 'cd だけなら書くルールが無い（Bash(cd:*) は一度も効かない）')
   assert.deepEqual(p('cd sub && pnpm test'), ['pnpm test'])
-  assert.deepEqual(p('cd /w/repo/sub && pnpm -v | tail -5'), ['pnpm'])
-  assert.deepEqual(p('cd sub && cd .. && node -v'), ['node'])
+  assert.deepEqual(p('cd /w/repo/sub && pnpm -v | tail -5'), ['pnpm -v'])
+  assert.deepEqual(p('cd sub && cd .. && node -v'), ['node -v'])
   assert.deepEqual(p('cd sub && chmod +x f && ln -s a b'), ['chmod', 'ln'], 'chmod / ln は cd のあとでも通った')
 })
 
@@ -53,7 +53,7 @@ test('bashRulePrefixes: cd の行き先がプロジェクトの外・分から�
   assert.equal(p('cd - && node -v'), null)
   assert.equal(p('cd && node -v'), null)
   assert.equal(p('cd sub && node -v', ''), null, 'cwd が分からなければ確かめられない')
-  assert.deepEqual(p('node -v', ''), ['node'], 'cd が無ければ cwd は要らない')
+  assert.deepEqual(p('node -v', ''), ['node -v'], 'cd が無ければ cwd は要らない')
 })
 
 test('bashRulePrefixes: cd と書き込み系・git をつないだものは出さない（ルールが揃っていても聞かれた）', () => {
@@ -71,7 +71,7 @@ test('bashRulePrefixes: 環境変数の代入は接頭辞に入れる（Bash(tou
   assert.deepEqual(p('FOO=1 touch x'), ['FOO=1 touch'])
   assert.deepEqual(p('FOO=1 BAR=2 touch x'), ['FOO=1 BAR=2 touch'])
   assert.deepEqual(p('ASDF_NODEJS_VERSION=22.23.1 pnpm test && pnpm lint'), ['ASDF_NODEJS_VERSION=22.23.1 pnpm test', 'pnpm lint'])
-  assert.deepEqual(p('cd sub && FOO=1 pnpm -v'), ['FOO=1 pnpm'])
+  assert.deepEqual(p('cd sub && FOO=1 pnpm -v'), ['FOO=1 pnpm -v'])
   assert.deepEqual(p('FOO=1 grep x f'), ['FOO=1 grep'], '代入が付くと読むだけのコマンドでも聞かれうるので書く')
   assert.equal(p('FOO="a b" touch x'), null, '値に空白があると表記が揃わない')
   assert.equal(p('FOO=1'), null, '代入だけ')
@@ -109,11 +109,11 @@ test('bashRulePrefixes: 展開・構文・ファイルへのリダイレクト�
 })
 
 test('bashRulePrefixes: fd の付け替え・/dev/null・行ごとのコメント・コミットメッセージのヒアドキュメントは通った', () => {
-  assert.deepEqual(p('node -v 2>&1'), ['node'])
-  assert.deepEqual(p('node -v 2>/dev/null'), ['node'])
-  assert.deepEqual(p('node -v >/dev/null 2>&1'), ['node'])
-  assert.deepEqual(p('node -v > /dev/null'), ['node'])
-  assert.deepEqual(p('node -v &>/dev/null'), ['node'])
+  assert.deepEqual(p('node -v 2>&1'), ['node -v'])
+  assert.deepEqual(p('node -v 2>/dev/null'), ['node -v'])
+  assert.deepEqual(p('node -v >/dev/null 2>&1'), ['node -v'])
+  assert.deepEqual(p('node -v > /dev/null'), ['node -v'])
+  assert.deepEqual(p('node -v &>/dev/null'), ['node -v'])
   assert.deepEqual(p('touch x < /dev/null'), ['touch'])
   assert.equal(p('node -v > /dev/nullx'), null)
   assert.deepEqual(p('touch a 2>&1 | tee -a log; mkdir b'), ['touch', 'tee', 'mkdir'])
@@ -192,11 +192,11 @@ const h = (command: string, cwd = IN_HOME, home = HOME) => bashRulePlan(command,
 
 test('cd ~/…: ホームに読み替えて、プロジェクトの中へ行くものは中への cd と同じに読む', () => {
   assert.deepEqual(h('cd ~/work/repo && gh issue view 1'), { prefixes: ['gh issue'] })
-  assert.deepEqual(h('cd ~/work/repo/sub\nnode -v'), { prefixes: ['node'] })
-  assert.deepEqual(h('cd ~/work/repo/sub/..; node -v | tail -1'), { prefixes: ['node'] })
+  assert.deepEqual(h('cd ~/work/repo/sub\nnode -v'), { prefixes: ['node -v'] })
+  assert.deepEqual(h('cd ~/work/repo/sub/..; node -v | tail -1'), { prefixes: ['node -v'] })
   assert.deepEqual(h('cd ~/work/repo'), { prefixes: [] }, 'cd だけなら書くルールは無い')
   // ホームの末尾の / は無視する
-  assert.deepEqual(h('cd ~/work/repo && node -v', IN_HOME, '/home/someone/'), { prefixes: ['node'] })
+  assert.deepEqual(h('cd ~/work/repo && node -v', IN_HOME, '/home/someone/'), { prefixes: ['node -v'] })
 })
 
 test('cd ~/…: 外へ行くものは cd_outside（外への cd はルールがあっても聞かれた）。書き込み系・git とのつなぎも今までどおり', () => {
@@ -214,12 +214,12 @@ test('cd ~/…: ホームが分からない・~user・引用符つきの ~ は�
     assert.deepEqual(h(`${cd} && node -v`), { reason: 'cd_form' }, cd)
   }
   // 読み替えるのは最初の部品だけ。前に何かあると、そこで HOME が変わっていても見抜けない（#751 のレビュー）
-  for (const before of ['export HOME=/tmp/x', 'unset HOME', 'export HOME+=/else', 'command source ./env.sh', 'X=1 eval x', 'source ./env.sh', 'node -v', 'cd sub']) {
+  for (const before of ['export HOME=/tmp/x', 'unset HOME', 'export HOME+=/else', 'X=1 eval x', 'source ./env.sh', 'node -v', 'cd sub']) {
     assert.deepEqual(h(`${before} && cd ~/work/repo && node -v`), { reason: 'cd_form' }, before)
   }
-  assert.deepEqual(h('cd ~/work/repo && export HOME=/tmp/x && node -v'), { prefixes: ['export', 'node'] }, 'cd のあとで触るのは行き先に効かない')
+  assert.deepEqual(h('cd ~/work/repo && export HOME=/tmp/x && node -v'), { prefixes: ['export', 'node -v'] }, 'cd のあとで触るのは行き先に効かない')
   // 行の継続のすぐあとの ~ は、引用符つきではない
-  assert.deepEqual(h('cd \\\n~/work/repo && node -v'), { prefixes: ['node'] })
+  assert.deepEqual(h('cd \\\n~/work/repo && node -v'), { prefixes: ['node -v'] })
   assert.deepEqual(bashRulePlan('cd ~/work/repo && node -v', IN_HOME, ''), { reason: 'cd_form' }, 'ホームが空')
   assert.deepEqual(h('cd ~other/work && node -v'), { reason: 'cd_form' })
   assert.deepEqual(h('cd ~+ && node -v'), { reason: 'cd_form' })
@@ -326,8 +326,8 @@ test('場所を変えるほかの形は読めない形にする: pushd / popd・
     assert.deepEqual(h(`${before} && cd sub && node -v`), { reason: 'cd_form' }, before)
   }
   // 絶対パスの cd は CDPATH を見ない
-  assert.deepEqual(h('export CDPATH=/tmp && cd /home/someone/work/repo/sub && node -v'), { prefixes: ['export', 'node'] })
-  assert.deepEqual(h('command node -v'), { prefixes: ['command'] }, 'cd でない command は今までどおり')
+  assert.deepEqual(h('export CDPATH=/tmp && cd /home/someone/work/repo/sub && node -v'), { prefixes: ['export', 'node -v'] })
+  assert.deepEqual(h('command node -v'), { reason: 'wrapper' }, 'cd でない command は、前に付くだけの語として組まない（#755）')
 })
 
 test('"$(cat <<\'EOF\' … )" は、bash と同じ「目印だけの行」でしか閉じない（字下げした目印で閉じたことにしない。#751 のレビュー）', () => {
@@ -387,4 +387,101 @@ test('畳んだ "$(cat <<…)" の語は、コマンドの名前・cd の行き�
   assert.deepEqual(h(`gh pr create -F -${fold('foo')} <<'EOF'\nbody\nEOF`), { reason: 'heredoc' })
   // 引数として渡すだけなら今までどおり
   assert.deepEqual(h(`git commit -m ${fold('msg')}`), { prefixes: ['git commit'] })
+})
+
+// ---- #755: 見えているのと違う範囲・違う場所でルールが組まれる形は、組まないか、狭く組む
+
+test('前に付くだけの語・引数をコマンドとして走らせる語で始まる部品には組まない（実機で Bash(env:*) は env touch x を通した。#755）', () => {
+  for (const cmd of ['env FOO=1 node x.js', 'env node x.js', 'exec node x.js', 'nice node x.js', 'command -p node x.js', 'builtin echo x', 'timeout 5 node x.js', 'arch -arm64 node x.js', 'nohup node x.js', 'caffeinate node x.js']) {
+    assert.deepEqual(h(cmd), { reason: 'wrapper' }, cmd)
+  }
+  assert.deepEqual(h('echo a | xargs touch'), { reason: 'wrapper' }, 'パイプの後ろでも')
+  assert.deepEqual(h('pnpm test && FOO=1 env node x.js'), { reason: 'wrapper' }, '代入つきでも')
+  assert.deepEqual(h('command source ./env.sh && cd ~/work/repo && node -v'), { reason: 'wrapper' })
+  // 場所を変える command cd / builtin cd は、今までどおり「読めない cd」（理由の種類を変えない）
+  assert.deepEqual(h('command cd /tmp && node -v'), { reason: 'cd_form' })
+  // 名前が似ているだけのコマンドは別（`envsubst`・`execute`）
+  assert.deepEqual(h('envsubst x'), { prefixes: ['envsubst'] })
+  // パスで書いても同じ（レビューの指摘）
+  assert.deepEqual(h('/usr/bin/env node x.js'), { reason: 'wrapper' })
+  assert.deepEqual(h('./nohup node x.js'), { reason: 'wrapper' })
+})
+
+test('場所を変えるフラグは cd と同じ線で見る: 行き先が外・読めないなら組まない（実機で Bash(pnpm run:*) は pnpm run --dir <外> x を通した。#755）', () => {
+  for (const cmd of [
+    'git -C /elsewhere status',
+    'make -C /tmp mark',
+    'make -C/tmp mark',
+    'npm --prefix /tmp run mark',
+    'npm --prefix=/tmp run mark',
+    'pnpm run --dir /tmp mark',
+    'pnpm run --dir ../other mark',
+    'pnpm run --dir ~/x mark',
+    'pnpm run --dir sub/* mark',
+    'pnpm run mark --dir',
+    'tar -C /tmp -xf a.tar',
+    'cargo build --manifest-path /tmp/Cargo.toml',
+    'cd sub && pnpm run --dir ../.. mark',
+  ]) {
+    assert.deepEqual(h(cmd), { reason: 'place_flag' }, cmd)
+  }
+  assert.deepEqual(bashRulePlan('pnpm run --dir sub mark', '', '/home/someone'), { reason: 'place_flag' }, 'cwd が分からなければ確かめられない')
+  // 中へ行くものは今までどおり
+  assert.deepEqual(h('pnpm run --dir sub mark'), { prefixes: ['pnpm run'] })
+  assert.deepEqual(h('pnpm run --dir=/home/someone/work/repo/sub mark'), { prefixes: ['pnpm run'] })
+  assert.deepEqual(h('cd sub && pnpm run --dir .. mark'), { prefixes: ['pnpm run'] }, 'cd のあとは、移った先から数える')
+  // 読むだけのコマンドの同じ字のフラグは場所ではない（レビューの指摘）
+  assert.deepEqual(h('grep -C 3 x a.txt'), { prefixes: ['grep'] })
+  assert.deepEqual(h('ls -C'), { prefixes: ['ls'] })
+  assert.deepEqual(h('pnpm test | jq -C'), { prefixes: ['pnpm test'] })
+})
+
+test('サブコマンドを持つ CLI で 2 語目がフラグのときは、1 語のルールにしない: フラグごと狭く組むか、組まない（実機で Bash(git:*) は git tag を通した。#755）', () => {
+  // 頭のフラグごと、「フラグの値ではないと分かる語」まで（`=` の付かないフラグのすぐ後ろの語は、値かもしれないので読み進める）
+  for (const [cmd, prefix] of [
+    ['aws --profile p --region r s3 ls', 'aws --profile p --region r s3'],
+    ['kubectl --context c -n ns get pods', 'kubectl --context c -n ns get'],
+    ['gh -R o/r --hostname h.example.com pr list', 'gh -R o/r --hostname h.example.com pr'],
+    ['git --no-pager log --oneline -5', 'git --no-pager log --oneline -5'],
+    ['node --test --disable-warning=ExperimentalWarning a.test.ts b.test.ts', 'node --test --disable-warning=ExperimentalWarning a.test.ts'],
+  ] as const) {
+    assert.deepEqual(h(cmd), { prefixes: [prefix] }, cmd)
+  }
+  assert.deepEqual(h('gh --repo o/r pr list --json number'), { prefixes: ['gh --repo o/r pr'] }, '1 つで止めると、そのリポジトリへの gh の全部になる')
+  assert.deepEqual(h('pnpm --filter web test --watch'), { prefixes: ['pnpm --filter web test'] })
+  assert.deepEqual(h('git --no-pager log --oneline'), { prefixes: ['git --no-pager log --oneline'] })
+  assert.deepEqual(h('pnpm -s exec tsc -p server'), { prefixes: ['pnpm -s exec tsc'] })
+  assert.deepEqual(h('node --test --disable-warning=ExperimentalWarning server/x.test.ts'), { prefixes: ['node --test --disable-warning=ExperimentalWarning server/x.test.ts'] })
+  assert.deepEqual(h('FOO=1 npm --silent run mark'), { prefixes: ['FOO=1 npm --silent run mark'] })
+  // フラグしか無ければその全部
+  assert.deepEqual(h('node -v'), { prefixes: ['node -v'] })
+  assert.deepEqual(h('gh --version | head -1'), { prefixes: ['gh --version'] })
+  // `:` 入りのスクリプト名も 2 語（前は 1 語の pnpm になっていた）
+  assert.deepEqual(h('pnpm test:feed'), { prefixes: ['pnpm test:feed'] })
+  // 狭い接頭辞を作れない形は組まない
+  for (const cmd of [
+    "python3 -c 'print(1)'",
+    "node -e 'console.log(1)'",
+    'git -c alias.x=!sh x',
+    'git -c user.name=x commit -m y',
+    'git -C sub status',
+    'node --test --test-name-pattern="a b" x.test.ts',
+    'python3 - x',
+    'git --no-pager diff HEAD~1',
+    'node ~/x.mjs',
+    'git --',
+    'git --no-pager log --format="%h %s"',
+    'pnpm a: b',
+  ]) {
+    assert.deepEqual(h(cmd), { reason: 'bare_cli' }, cmd)
+  }
+  // 2 語目がパスの形（スクリプト）なら 2 語（前は 1 語の node。レビューの指摘: はじめ組まなくしていた）
+  assert.deepEqual(h('node scripts/x.mjs --flag'), { prefixes: ['node scripts/x.mjs'] })
+  assert.deepEqual(h('python3 ./tools/x.py a b'), { prefixes: ['python3 ./tools/x.py'] })
+  assert.deepEqual(h('FOO=1 node /tmp/x.mjs'), { prefixes: ['FOO=1 node /tmp/x.mjs'] })
+  assert.deepEqual(h('npx @scope/pkg run'), { prefixes: ['npx @scope/pkg'] })
+  // 2 語目が名前なら今までどおり 2 語、2 語目が無ければ 1 語、サブコマンドを持たないコマンドは 1 語
+  assert.deepEqual(h('git status -s'), { prefixes: ['git status'] })
+  assert.deepEqual(h('make'), { prefixes: ['make'] })
+  assert.deepEqual(h('touch -c x'), { prefixes: ['touch'] })
 })

@@ -1,17 +1,20 @@
 // 「要対応」（#224）に並べるものを組み立てる。DOM に依存しないので todoItems.test.ts を node:test で回す。
 import { stripMarkdown } from './markdown.ts'
 import { replyBlockedReason } from './reply.ts'
-import type { Approval, ApprovalMap, LoopMap, ReplyingMap, SessionSummary } from './types.ts'
+import type { Approval, ApprovalMap, LoopMap, ReplyingMap, SessionSummary, Wait, WaitMap } from './types.ts'
+import { waitDoneText, waitNeedsHuman } from './waits.ts'
 
 /**
  * - `answer`: エージェントが答えを待っていて、SAI がその口を持っている。**この画面から答えられる**
  * - `watch`: 記録の行から見た待ち（`SessionSummary.waiting`）。SAI に選択肢が届いていないので
  *   ボタンは出せないが、**返信欄からは打てることが多い**（`replyable`）
+ * - `wait`: 預かった待ち（#732）が終わっているが、**自動では起こさないと決めたもの**（`waitNeedsHuman()`）。人が「いま起こす」か
+ *   「片付ける」を押すまで何も起きないので、`answer` / `watch` と同じく数える。1 つの待ち = 1 行（同じセッションに 2 行あることがある）
  * - `done`: **詰まってはいない。ターンが終わって次の指示を待っているだけ**（#438 / #513。判定は `awaitsNext()`）。
  *   `answer` / `watch` と同じ重さで出すと、本当に答えを待っているものが埋もれるので、
  *   画面では下段に置き、**バッジ・タブの題名・通知には数えない**（`pendingItems()`）
  */
-export type TodoKind = 'answer' | 'watch' | 'done'
+export type TodoKind = 'answer' | 'watch' | 'wait' | 'done'
 
 export interface TodoItem {
   /** エンティティID */
@@ -36,6 +39,8 @@ export interface TodoItem {
    * `text` が「人が次にすること」、こちらが「何が起きたか」。無ければ今までどおり `text` だけ
    */
   sub?: string
+  /** kind === 'wait' のときだけ。どの待ちか（行のボタンが名指しする） */
+  wait?: Wait
 }
 
 /**
@@ -57,10 +62,13 @@ export interface TodoItem {
  * **`done`（終わって次を待っているだけ）も同じ条件で落とす**（#438）: 答え待ちが出ていれば `answer` が勝ち、
  * アーカイブ済みは出さない。**返信が処理中なら経路を問わず落とす**（端末に打ち込んだ返信も、ターンが回っている）。
  *
+ * **`wait` も絞り込みに関わらず全部出す**（`waits` は `WaitStore.snapshot()` そのもの）。セッションのほかの行（`watch` / `done`）とは別に並ぶ:
+ * 待ちの行は「起こすか片付けるか」、`done` の行は「次の指示を送る」で、できることが違う。アーカイブ済みでも出す（片付ける口が要る）
+ *
  * `selfHost` はこのサーバのマシン名（応答の `host`。#114）。別のマシンのセッションは項目としては出すが
  * （待っていることに変わりはない）、ここからは答えられないので `replyable` は false になる。
  */
-export function todoItems(sessions: readonly SessionSummary[], approvals: ApprovalMap, selfHost: string, replying: ReplyingMap = {}, loops: LoopMap = {}): TodoItem[] {
+export function todoItems(sessions: readonly SessionSummary[], approvals: ApprovalMap, selfHost: string, replying: ReplyingMap = {}, loops: LoopMap = {}, waits: WaitMap = {}): TodoItem[] {
   const byId = new Map(sessions.map((s) => [s.id, s]))
   const out: TodoItem[] = []
   for (const [id, list] of Object.entries(approvals)) {
@@ -69,6 +77,12 @@ export function todoItems(sessions: readonly SessionSummary[], approvals: Approv
     out.push({ id, kind: 'answer', text: first.text, since: first.since, session: byId.get(id) ?? null, approval: first, replyable: false })
   }
   const answering = new Set(out.map((t) => t.id))
+  for (const [id, list] of Object.entries(waits)) {
+    for (const w of list ?? []) {
+      if (!waitNeedsHuman(w)) continue
+      out.push({ id, kind: 'wait', text: waitDoneText(w), since: w.finished_at ?? w.since, session: byId.get(id) ?? null, approval: null, replyable: false, wait: w })
+    }
+  }
   for (const s of sessions) {
     // 答え待ちが出ているセッションは上で入れてある（そちらの方が新しくて具体的）
     if (answering.has(s.id) || s.archived) continue
@@ -91,7 +105,16 @@ export function todoItems(sessions: readonly SessionSummary[], approvals: Approv
     const text = s.idle || next || what || '（本文なし）'
     out.push({ id: s.id, kind: 'done', text, since: s.idle ? s.end : s.last_turn_ts || s.end, session: s, approval: null, replyable: watchReplyable(s, selfHost), ...(next && what ? { sub: what } : {}) })
   }
-  return out.sort((a, b) => (a.since === b.since ? a.id.localeCompare(b.id) : a.since < b.since ? -1 : 1))
+  return out.sort((a, b) => (a.since === b.since ? todoKey(a).localeCompare(todoKey(b)) : a.since < b.since ? -1 : 1))
+}
+
+/**
+ * 行 1 つの鍵（画面の key・並びの同時刻の決め手）。同じセッションに `wait` と `done`、`wait` が 2 つ、が並びうるので ID だけにしない。
+ * `answer` / `watch` は今までどおり ID のまま（待機中から答え待ちに変わっても行を作り直さない）
+ */
+export function todoKey(t: Pick<TodoItem, 'id' | 'kind' | 'wait'>): string {
+  if (t.kind === 'wait') return `wait:${t.id}:${t.wait?.id ?? ''}`
+  return t.kind === 'done' ? `done:${t.id}` : t.id
 }
 
 /**
@@ -144,10 +167,12 @@ export function doneItems(items: readonly TodoItem[]): TodoItem[] {
   return items.filter((t) => t.kind === 'done')
 }
 
-/** 要対応の画面の段（#551）。上から `answer` → `unread` → `watch` → `done` の順に出す */
+/** 要対応の画面の段（#551）。上から `answer` → `wait` → `unread` → `watch` → `done` の順に出す */
 export interface TodoSections {
   /** 答え待ち。この画面から答えられるので、未読かどうかに関わらず一番上 */
   answer: TodoItem[]
+  /** 終わっていて、自動では起こさない待ち（#732）。押すだけで済むので答え待ちのすぐ下 */
+  wait: TodoItem[]
   /** 未読の返答があるセッション（`watch` も `done` も）。読んでいない返答が下段の奥に埋もれないように上げる */
   unread: TodoItem[]
   /** 未読の無い待機中 */
@@ -164,9 +189,10 @@ export interface TodoSections {
  * 今までどおり `done` の行だけ（#522）
  */
 export function todoSections(items: readonly TodoItem[]): TodoSections {
-  const out: TodoSections = { answer: [], unread: [], watch: [], done: [] }
+  const out: TodoSections = { answer: [], wait: [], unread: [], watch: [], done: [] }
   for (const t of items) {
     if (t.kind === 'answer') out.answer.push(t)
+    else if (t.kind === 'wait') out.wait.push(t)
     else if ((t.session?.unread ?? 0) > 0) out.unread.push(t)
     else out[t.kind].push(t)
   }

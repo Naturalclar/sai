@@ -18,11 +18,24 @@ export function titleWith(count: number, suffix = ''): string {
   return count > 0 ? `(${count}) ${base}` : base
 }
 
+const WAIT_KEY = 'wait:'
+
+/**
+ * 知らせたあとに覚えておく鍵。いま並んでいるものに、**前に覚えた「終わった待ち」の鍵を残す**（#732）:
+ * ほかの待ちは並びから消えて戻れば「また待ちに入った」だが、終わった待ちは同じ 1 件なので、
+ * 取得が 1 回空になって戻っても（サーバの立て直しなど）鳴り直さない
+ */
+export function seenAfter(prev: ReadonlySet<string>, items: readonly TodoItem[]): Set<string> {
+  return new Set([...items.map(notifyKey), ...[...prev].filter((k) => k.startsWith(WAIT_KEY))])
+}
+
 /**
  * 待ち 1 件の見分け。`since`（いつから待っているか）を混ぜるので、**同じセッションが答えたあとに
  * また待ちに入れば別物**として扱える。逆に待ち続けている間は同じ鍵なので鳴り続けない
  */
 export function notifyKey(item: TodoItem): string {
+  // 終わった待ち（#732）は待ちの id で見分ける（1 つの待ちにつき 1 回。サーバを立て直しても id は変わらない）
+  if (item.kind === 'wait') return `${WAIT_KEY}${item.id}:${item.wait?.id ?? ''}`
   return `${item.kind}:${item.id}:${item.since}`
 }
 
@@ -65,7 +78,7 @@ export function notifyPlan(items: readonly TodoItem[]): NotifyPlan | null {
   if (items.length === 1) {
     const item = items[0]!
     return {
-      title: item.kind === 'answer' ? `答え待ち: ${labelOf(item)}` : `待機中: ${labelOf(item)}`,
+      title: item.kind === 'answer' ? `答え待ち: ${labelOf(item)}` : item.kind === 'wait' ? `待ちが終わった: ${labelOf(item)}` : `待機中: ${labelOf(item)}`,
       body: item.text,
       hash: '#/todo',
       tag: notifyKey(item),

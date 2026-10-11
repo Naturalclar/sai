@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocalState } from './hooks'
-import { appeared, notifyKey, notifyPlan } from '../../shared/notify.ts'
+import { appeared, notifyPlan, seenAfter } from '../../shared/notify.ts'
 import type { TodoItem } from '../../shared/todoItems.ts'
 
 /** 通知を出せるか。`Notification` が無い（古い環境、保護されていない文脈）なら unsupported */
@@ -18,6 +18,7 @@ function currentState(): NotifyState {
  * - 鳴らすのは**タブが隠れている間だけ**。見ているなら要対応のバッジがそこにあるので邪魔なだけ
  * - 鳴らすのは**新しく待ちに入ったものだけ**（`notifyKey` に待ち始めた時刻が入っている）。
  *   最初の 1 回は覚えるだけで鳴らさない（開いた瞬間に溜まっていた分が一斉に鳴るのを防ぐ）
+ * - 終わったのに自動では起こさない待ち（#732）は、**1 つの待ちにつき 1 回**（並びから消えて戻っても鳴り直さない）
  * - 押したらそのタブへ来て要対応を開く
  */
 export function useNotify(items: readonly TodoItem[] | null) {
@@ -30,16 +31,15 @@ export function useNotify(items: readonly TodoItem[] | null) {
 
   useEffect(() => {
     if (!items) return
-    const keys = new Set(items.map(notifyKey))
-
     // 最初の 1 回は覚えるだけ。開いた時点で待っていたものは「今きた」ではない
     if (seen.current === null) {
-      seen.current = keys
+      seen.current = seenAfter(new Set(), items)
       return
     }
 
     const fresh = appeared(seen.current, items)
-    seen.current = keys
+    // 終わった待ち（#732）の鍵は並びから消えても忘れない（1 つの待ちにつき 1 回）
+    seen.current = seenAfter(seen.current, items)
     // 見ているときは鳴らさない。切っているとき・許可が無いときも同じ（覚えるのは続ける）
     if (!enabled || !document.hidden) return
 

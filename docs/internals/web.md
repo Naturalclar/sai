@@ -44,8 +44,9 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - いま自分を待っているものだけを待たせている順に出す画面で、サイドバーの固定項目「フィード」の下に件数のバッジ付きで並ぶ。
 - 組み立ては `shared/todoItems.ts` の `todoItems()`（`todoItems.test.ts`）。`web/src/` ではなく `shared/` に置く（#340。サーバからも同じ判定を呼べるようにするため）。`Notification` を触る `web/src/useNotify.ts` だけが画面側に残る。
 - `approvals`（サーバの `Approvals.snapshot()` そのもので絞り込みを通っていないので、一覧から消えていても出す＝ここで答えられる）と `SessionSummary.waiting`（行から見た待ち。絞り込みに従う）の 2 種類に分ける。
+- 終わったのに自動では起こさない待ち（#732）は区分 `wait`。`todoItems()` の 6 つ目の引数 `waits`（応答の `waits`＝`WaitStore.snapshot()` そのもの。絞り込みを通っていないので一覧から消えていても出す）から、`shared/waits.ts` の `waitNeedsHuman()`（`ready` かつ `late`）に当たるものを 1 つの待ち = 1 行で足す。**枠・回数・処理中で起こせていない `ready` は SAI がまた見に行くので足さない。** `pendingItems()` は `done` 以外を数えるので、足した行はバッジ・題名・通知にそのまま入る（数え方は増やしていない）。同じセッションに `wait` と `done`、`wait` が 2 つ、が並ぶので、行の key と並びの決め手は `todoKey()`。行は `web/src/TodoWaitRow.tsx`、押す口は帯（`WaitBar`）と同じ `useWaitAction()`。`since` は応答の `finished_at`（`waitView()` が `ready` のあいだだけ `checked_at` から出す。確かめている間は毎分動くので出さない）。通知の鍵は待ちの id（`notifyKey()`）で、`seenAfter()` が終わった待ちの鍵だけは並びから消えても覚えておく（1 つの待ちにつき 1 回）。サイドバーの印は `WaitDoneTag`（`SessionList` が同じ `waitNeedsHuman()` で引く）。
 - 「終わって次を待っているだけ」は別の区分 `done`（#438）。判定は `todoItems.ts` の `awaitsNext()`＝`SessionSummary.idle` か、最後の行がターン完了（集計の `SessionSummary.last_kind === 'turn'`。#513）。**時刻 `end === last_turn_ts` では比べない**（行の `ts` は秒までなので、同じ秒に届いた次の入力や `/clear` を見分けられない）。返信が処理中なら経路を問わず外す。文言は一言か最後の発言。
-- 画面は上段（`answer` / `watch`）と下段（`done`）に分ける（`web/src/TodoRow.tsx` が両方の 1 行を描く）。未読の返答があるもの（`SessionSummary.unread`）は答え待ちの次の「未読」の段に上げる（#551。`todoSections()`。答え待ち → 未読 → 待機中 → 終了、段の中は待たせている順。並べ替えるだけで区分と数えるぶんは変えない）。
+- 画面は上段（`answer` / `watch`）と下段（`done`）に分ける（`web/src/TodoRow.tsx` が両方の 1 行を描く）。未読の返答があるもの（`SessionSummary.unread`）は答え待ちの次の「未読」の段に上げる（#551。`todoSections()`。答え待ち → 終わった待ち（#732）→ 未読 → 待機中 → 終了、段の中は待たせている順。並べ替えるだけで区分と数えるぶんは変えない）。
 - `done` はバッジ・タブの題名・通知には数えない。数えるぶんの判定は `shared/todoItems.ts` の `pendingItems()` 1 つに置く。
 - `chatGroups.ts` は `idle` の行をバブルにしない（ターンが終わったことは直前の返答のバブルで分かる）。
 - `replying[].failed` は出さない（2 分で消えるので取りこぼす）。

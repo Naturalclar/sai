@@ -10,6 +10,14 @@ export function rowReplyable(t: Pick<TodoItem, 'kind' | 'replyable' | 'session'>
 }
 
 /**
+ * そのセッションの、返信に関わる行（`watch` / `done`）。**ID だけで引かない**: 終わった待ち（`wait`。#732）の行が同じ ID で並ぶので、
+ * 送信失敗を戻す先・「行がまだ並んでいるか」を ID だけで見ると、待ちの行を拾ってしまう（PR #778 のレビュー）
+ */
+export function replyRowOf<T extends Pick<TodoItem, 'id' | 'kind'>>(items: readonly T[], id: string): T | undefined {
+  return items.find((t) => t.id === id && t.kind !== 'wait')
+}
+
+/**
  * 何もしなければ返信欄を開いておくか。**終わって次を待っている行（`done`）は最初から開く**（すぐ次を打てるように）。
  * 待機中（`watch`）は答えを待っている段で、下段より数が少なく中身も長いので、押したときだけ開く
  */

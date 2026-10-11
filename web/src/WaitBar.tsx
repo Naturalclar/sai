@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { api, type Wait } from './api'
+import type { Wait } from './api'
+import { useWaitAction } from './useWaitAction'
 import { waitLive, waitStatusLine, waitWakeable } from '../../shared/waits.ts'
 
 interface Props {
@@ -16,19 +16,7 @@ interface Props {
  * 起こせた待ちは消える（起きたターンがチャットに出る）
  */
 export function WaitBar({ id, wait, now }: Props) {
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-  const act = async (work: () => Promise<unknown>) => {
-    setBusy(true)
-    setError('')
-    try {
-      await work()
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setBusy(false)
-    }
-  }
+  const { busy, error, wake, stop } = useWaitAction(id, wait.id)
   const live = waitLive(wait.status)
   return (
     <div className={`agent-activity loop-bar wait-bar ${wait.status}`}>
@@ -39,13 +27,13 @@ export function WaitBar({ id, wait, now }: Props) {
             <button
               type="button"
               disabled={busy}
-              onClick={() => void act(() => api.waitAction(id, wait.id, 'wake'))}
+              onClick={wake}
               title={wait.status === 'waiting' ? 'CI が終わるのを待たずに、いまこのセッションを起こす（文脈を読み直すのでトークンを使う）' : wait.late ? '結果を渡して、いまこのセッションを起こす（キャッシュが切れているので、文脈を読み直す。大きければ要約してから）' : '使用量の枠・1 日の回数に関係なく、いまこのセッションを起こす（文脈を読み直すのでトークンを使う）'}
             >
               いま起こす
             </button>
           )}
-          <button type="button" disabled={busy} onClick={() => void act(() => api.waitAction(id, wait.id, 'stop'))} title={live ? 'この待ちをやめる（起こさない）' : 'この表示を消す'}>
+          <button type="button" disabled={busy} onClick={stop} title={live ? 'この待ちをやめる（起こさない）' : 'この表示を消す'}>
             {live ? '止める' : '片付ける'}
           </button>
         </span>

@@ -425,6 +425,13 @@
   .todo { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--panel); }
   .todo.answer { border-left: 3px solid var(--accent); }
   .todo.watch { border-left: 3px solid var(--synth); }
+  /* 終わったのに自動では起こさない待ち（#732）。行から起こす・片付ける */
+  .todo.wait { border-left: 3px solid var(--claude); }
+  .todo .wait-actions { flex: none; display: flex; gap: 6px; margin-top: 4px; }
+  .todo .wait-actions button { font: inherit; font-size: 12px; padding: 3px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); cursor: pointer; white-space: nowrap; }
+  .todo .wait-actions button.primary { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .todo .wait-actions button:disabled { opacity: .5; cursor: default; }
+  @media (max-width: 640px) { .todo.wait .why-row { flex-wrap: wrap; } }
   /* 下段（#438）。答えを待っている上段より控えめに出す */
   .todo.done { border-left: 3px solid var(--line); opacity: 0.75; }
   .todo.done:hover { opacity: 1; }
@@ -777,7 +784,7 @@
   .turn-steps .list .said .body > :last-child { margin-bottom: 0; }
   .tag.recovered { background: color-mix(in srgb, var(--muted) 18%, transparent); color: var(--muted); }
   .tag.recovered.auth-failed { background: color-mix(in srgb, var(--synth) 16%, transparent); color: var(--synth); }
-  .tag.wait-unset { background: color-mix(in srgb, var(--claude) 14%, transparent); color: var(--claude); }
+  .tag.wait-unset, .tag.wait-done { background: color-mix(in srgb, var(--claude) 14%, transparent); color: var(--claude); }
   .tag.stop-missing { background: color-mix(in srgb, var(--synth) 18%, transparent); color: var(--synth); font-weight: 600; }
   .tag.archived { background: color-mix(in srgb, var(--muted) 18%, transparent); color: var(--muted); font-weight: 600; }
   /* アーカイブしたのに返信が続いている（#583）。アーカイブの印より目立たせる */

@@ -1,7 +1,8 @@
 import { useEffect, useRef } from 'react'
 import type { MouseEvent } from 'react'
 import type { Approval, Profile, Replying, SessionSummary } from './api'
-import type { Loop } from '../../shared/types.ts'
+import type { Loop, Wait } from '../../shared/types.ts'
+import { WaitDoneTag } from './WaitDoneTag'
 import { LoopTag } from './LoopTag'
 import { hm, md } from './format'
 import { SynthTag } from './SynthTag'
@@ -50,6 +51,8 @@ interface Props {
   pr?: PrSummary | null
   /** このセッションに組んであるループ（#634）。回っている・一時停止のあいだだけ印を出す */
   loop?: Loop | null
+  /** 終わったのに自動では起こさない待ち（#732。`waitNeedsHuman()`）の先頭。あるあいだだけ印を出す */
+  doneWait?: Wait | null
   /** フォーカスの無い方のペインに出ている（#633）。選ばれている項目より薄い印を付ける */
   beside?: boolean
   /** 横に並べて開く（#633。⌘ + クリックと項目のボタン）。並べられない幅では渡されない（⌘ + クリックはブラウザに残す） */
@@ -61,7 +64,7 @@ interface Props {
  * （<a> の中に <button> は置けない。押してもページを動かさない）。
  * タッチ端末では <a> を左にずらして、下のレール（アーカイブ / 戻す）を見せる
  */
-export function SessionItem({ s, active, replying, profile, approval, now, swipe, reduced, selfHost, open, onOpenChange, pr = null, loop = null, beside = false, onOpenBeside }: Props) {
+export function SessionItem({ s, active, replying, profile, approval, now, swipe, reduced, selfHost, open, onOpenChange, pr = null, loop = null, doneWait = null, beside = false, onOpenBeside }: Props) {
   // 選ばれたら見えるところまでサイドバーをスクロールする（キーボードで移動したとき用。見えていれば動かない）
   const ref = useRef<HTMLAnchorElement>(null)
   useEffect(() => {
@@ -153,6 +156,7 @@ export function SessionItem({ s, active, replying, profile, approval, now, swipe
           {!s.waiting && approval && <WaitingTag text={approval.text} />}
           {replying && <ReplyingTag since={replying.since} now={now} />}
           {loop && <LoopTag loop={loop} now={now} />}
+          {doneWait && <WaitDoneTag wait={doneWait} />}
           {/* ターン完了の行が落ちた（#614。見出しと同じ `stop_missing`） */}
           {s.stop_missing && !replying && <StopMissingTag />}
           {!!s.unread && <UnreadTag n={s.unread} />}

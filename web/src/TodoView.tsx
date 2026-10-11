@@ -4,6 +4,7 @@ import type { ReplyingMap, SessionsResponse } from './api'
 import type { Polled } from './hooks'
 import { BackLink } from './BackLink'
 import { TodoRow } from './TodoRow'
+import { TodoWaitRow } from './TodoWaitRow'
 import type { PrRepo } from '../../shared/types.ts'
 import { TodoReplyBox } from './TodoReplyBox'
 import { ReplaceConfirm } from './ReplaceConfirm'
@@ -12,8 +13,8 @@ import { useNarrow } from './useNarrow'
 import { shouldQueue } from './replyQueue.ts'
 import { loadDraft, saveDraft } from './replyDrafts'
 import { restoresText, type RestoreRequest } from './replyRestore'
-import { ownReplying, pruneToggled, rowOpen, rowReplyable, toggleKey } from './todoReply'
-import { pendingItems, todoItems, todoSections, type TodoItem } from '../../shared/todoItems.ts'
+import { ownReplying, pruneToggled, replyRowOf, rowOpen, rowReplyable, toggleKey } from './todoReply'
+import { pendingItems, todoItems, todoKey, todoSections, type TodoItem } from '../../shared/todoItems.ts'
 import type { PaneProps } from './App'
 import { DefaultReplyModeContext } from './replyModeSetting'
 import { withSuffix } from '../../shared/sessionLabels.ts'
@@ -36,10 +37,11 @@ interface Props extends PaneProps {
  * 「要対応」（#224）。**いま自分を待っているものだけ**を待たせている順に並べる。
  * セッションが増えるとサイドバーの「待機中」を目で探すことになり、狭い画面ではなおさら見落とすため。
  *
- * 3 種類あって、見た目で分けている:
+ * 4 種類あって、見た目で分けている:
  * - **答え待ち**（`answer`）は SAI が口を持っているもので、`ApprovalBubble` をそのまま置くので**ここで答えられる**
  * - **待機中**（`watch`）は記録の行から見た待ち。選択肢が SAI に届いていないのでボタンは出せないが、
  *   **返信欄からは打てることが多い**ので、その会話でできることを出す（`replyable`。#232）
+ * - **待ちが終わっている**（`wait`。#732）は、預かった待ちが終わったが自動では起こさないと決めたもの。行から「いま起こす」「片付ける」を押せる
  * - **終わって次を待っている**（`done`。#438）は詰まっていない。同じ段に混ぜると、本当に答えを待っている
  *   ものが埋もれるので**下段に分ける**（バッジ・タブの題名・通知にも数えない）
  *
@@ -57,7 +59,7 @@ export function TodoView({ list, onStatus, onOpenSidebar, onLeaveToSidebar, prs,
   useEffect(() => onStatus(updatedAt, error), [updatedAt, error, onStatus])
 
   // replying を渡すのは、別プロセスの返信を処理中なら「待っている」ではなく「動いている」ため（#232）
-  const items = data ? todoItems(data.sessions, data.approvals, data.host, data.replying, data.loops) : []
+  const items = data ? todoItems(data.sessions, data.approvals, data.host, data.replying, data.loops, data.waits) : []
   // 数えるのは答えを待っているものだけ（#438）。並びは 答え待ち → 未読 → 待機中 → 終わっているもの（#551）
   const pending = pendingItems(items)
   const sections = todoSections(items)
@@ -120,7 +122,7 @@ export function TodoView({ list, onStatus, onOpenSidebar, onLeaveToSidebar, prs,
   // 失敗した本文を入力欄に戻す（#350）。開いていればその場で、閉じていれば打ちかけに書いてから開く
   // （ReplyBox は作ったときの restore を「当てた」ことにするので、開くのと同時に頼んでも入らない）
   const restoreFailed = (f: ReplyFailed) => {
-    const t = items.find((x) => x.id === f.id)
+    const t = replyRowOf(items, f.id)
     if (!t) return
     if (isOpen(t)) {
       setRestore((r) => ({ id: f.id, text: f.text, seq: (r?.seq ?? 0) + 1 }))
@@ -186,7 +188,6 @@ export function TodoView({ list, onStatus, onOpenSidebar, onLeaveToSidebar, prs,
   }
   const modeNoteOf = (t: TodoItem) =>
     t.kind !== 'done' && t.session ? launchedModeNote(data?.replying[t.id], replyModeOf(t.session.meta?.permission_mode, defaultReplyMode)) : ''
-  const keyOf = (t: TodoItem) => (t.kind === 'done' ? `done:${t.id}` : t.id)
   // 段の見出しも行も、1 本の平らな並びにして出す（#551 のレビュー）。段ごとに Fragment で包むと、別の端末で読んで
   // 未読の段から外れた行が別の親に移ったことになり、作り直されて開いていた返信欄のフォーカスと変換中の文字を失う
   const rowsInOrder = (): ReactNode[] => {
@@ -194,15 +195,18 @@ export function TodoView({ list, onStatus, onOpenSidebar, onLeaveToSidebar, prs,
     const heading = (id: string, label: string) => out.push(<h2 key={id} className="todo-section">{label}</h2>)
     // ⌘Enter が効くのは一番上の答え待ちだけ（フィードと同じ扱い）
     sections.answer.forEach((t, i) => out.push(rowOf(t, t.id, i === 0 && focused, modeNoteOf(t))))
+    // 終わったのに自動では起こさない待ち（#732）。押すだけで済むので、答え待ちのすぐ下
+    if (sections.wait.length > 0) heading('section:wait', `待ちが終わっている（${sections.wait.length}）`)
+    for (const t of sections.wait) if (t.wait) out.push(<TodoWaitRow key={todoKey(t)} item={t} wait={t.wait} now={now} />)
     // 読んでいない返答があるもの（#551）。終わっているものも、下段の奥に埋もれないようにここへ上げる
     if (sections.unread.length > 0) heading('section:unread', `未読（${sections.unread.length}）`)
-    for (const t of sections.unread) out.push(rowOf(t, keyOf(t), false, modeNoteOf(t)))
+    for (const t of sections.unread) out.push(rowOf(t, todoKey(t), false, modeNoteOf(t)))
     // 未読の段があるときだけ見出しを付ける（無いと未読の段の続きに見える）
     if (sections.watch.length > 0 && sections.unread.length > 0) heading('section:watch', `待機中（${sections.watch.length}）`)
-    for (const t of sections.watch) out.push(rowOf(t, keyOf(t), false, modeNoteOf(t)))
+    for (const t of sections.watch) out.push(rowOf(t, todoKey(t), false, modeNoteOf(t)))
     // 下段。詰まってはいないので、上段と混ぜない（#438）
     if (sections.done.length > 0) heading('section:done', `終わって次を待っている（${sections.done.length}）`)
-    for (const t of sections.done) out.push(rowOf(t, keyOf(t), false, ''))
+    for (const t of sections.done) out.push(rowOf(t, todoKey(t), false, ''))
     return out
   }
   const sentHere = sentTo && sending.some((p) => p.id === sentTo.id) ? sentTo : null
@@ -218,7 +222,7 @@ export function TodoView({ list, onStatus, onOpenSidebar, onLeaveToSidebar, prs,
       {/* 送った行は「処理中」になって並びから消えるので、どこに送ったかはここに出す（終われば下段に戻る） */}
       {sentHere && <div className="notice">「{sentHere.label}」に送りました。終わるとまた下に並びます</div>}
       {/* 行が消えたあとに届いた失敗（送って処理中になった行は並びに無い） */}
-      {failed && !items.some((t) => t.id === failed.id) && failedNotice(failed)}
+      {failed && !replyRowOf(items, failed.id) && failedNotice(failed)}
       {data && items.length === 0 && <div className="empty">エージェントはどれも動いているか、終わっています</div>}
       <div className="todo-list">
         {rowsInOrder()}

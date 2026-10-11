@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import type { Approval, ApprovalMap, Loop, LoopMap, ReplyingMap, SessionSummary } from './types.ts'
-import { awaitsNext, doneItems, pendingItems, todoItems, todoSections } from './todoItems.ts'
+import type { Approval, ApprovalMap, Loop, LoopMap, ReplyingMap, SessionSummary, Wait } from './types.ts'
+import { awaitsNext, doneItems, pendingItems, todoItems, todoKey, todoSections } from './todoItems.ts'
 
 /** このサーバが動いているマシン（#114）。行の host が違えば「別のマシン」 */
 const SELF = 'mac'
@@ -344,4 +344,65 @@ test('todoSections: 未読が 0 なら今までの段のまま', () => {
   )
   const s = todoSections(items)
   assert.deepEqual([s.unread.length, s.watch.length, s.done.length], [0, 1, 1])
+})
+
+// ---- #732: 終わったのに自動では起こさない待ち
+
+function wait(over: Partial<Wait>): Wait {
+  return { id: 'w1', repo: 'owner-a/repo-a', pr: 12, then: '結果を読んで報告する', status: 'ready', result: 'success', late: true, since: '2026-09-02T09:00:00+09:00', deadline: '2026-09-02T11:00:00+09:00', finished_at: '2026-09-02T10:15:00+09:00', ...over }
+}
+
+test('todoItems: 終わったのに自動では起こさない待ち（late）は wait の行になり、数える。1 つの待ち = 1 行', () => {
+  const sessions = [summary({ id: 'a@sai', last_kind: 'turn', last_turn_ts: '2026-09-02T09:01:00+09:00' })]
+  const items = todoItems(sessions, {}, SELF, {}, {}, { 'a@sai': [wait({}), wait({ id: 'w2', pr: 13, result: 'failure', finished_at: '2026-09-02T10:20:00+09:00' })] })
+  assert.deepEqual(
+    items.map((t) => [t.id, t.kind, t.text, t.since, t.wait?.id]),
+    [
+      ['a@sai', 'done', '返答', '2026-09-02T09:01:00+09:00', undefined],
+      ['a@sai', 'wait', 'PR #12 の CI は終わっています（CI は全部通りました）', '2026-09-02T10:15:00+09:00', 'w1'],
+      ['a@sai', 'wait', 'PR #13 の CI は終わっています（CI が落ちました）', '2026-09-02T10:20:00+09:00', 'w2'],
+    ],
+  )
+  // 数えるのは pendingItems() の 1 つ（バッジ・題名・通知）。終わって次を待っているだけの行は今までどおり数えない
+  assert.deepEqual(pendingItems(items).map((t) => t.wait?.id), ['w1', 'w2'])
+  // 行の鍵は待ちごとに違う（同じセッションに並んでもぶつからない）
+  assert.equal(new Set(items.map(todoKey)).size, 3)
+  // 行の返信欄は出さない（押すのは「いま起こす」「片付ける」）
+  assert.ok(items.filter((t) => t.kind === 'wait').every((t) => !t.replyable && t.session?.id === 'a@sai'))
+})
+
+test('todoItems: SAI がまた見に行く待ち（確かめている・枠や処理中で起こせていない・起こしている）と、終わった待ち（諦めた・起こせなかった）は行にしない', () => {
+  const list: Wait[] = [
+    wait({ id: 'waiting', status: 'waiting', result: undefined, late: undefined }),
+    wait({ id: 'held', late: undefined, reason: 'セッションが処理中です（終わったら起こします）' }),
+    wait({ id: 'waking', status: 'waking' }),
+    wait({ id: 'expired', status: 'expired', late: undefined }),
+    wait({ id: 'halted', status: 'halted' }),
+  ]
+  assert.deepEqual(todoItems([summary({ id: 'a@sai' })], {}, SELF, {}, {}, { 'a@sai': list }), [])
+  // 待ちを渡さない呼び方（古いサーバの応答）でも今までどおり
+  assert.deepEqual(todoItems([summary({ id: 'a@sai' })], {}, SELF), [])
+})
+
+test('todoItems: wait は絞り込みで一覧から消えたセッションの分も出す（session は null）。答え待ち・アーカイブ済みのセッションでも出す', () => {
+  const sessions = [summary({ id: 'a@sai', archived: true }), summary({ id: 'c@sai' })]
+  const approvals: ApprovalMap = { 'c@sai': [approval({ id: 'c@sai', since: '2026-09-02T10:00:00+09:00' })] }
+  const items = todoItems(sessions, approvals, SELF, {}, {}, { 'a@sai': [wait({})], 'gone@sai': [wait({ id: 'w3' })], 'c@sai': [wait({ id: 'w4' })] })
+  assert.deepEqual(
+    items.map((t) => [t.id, t.kind, t.session?.id ?? null]),
+    [
+      ['c@sai', 'answer', 'c@sai'],
+      ['a@sai', 'wait', 'a@sai'],
+      ['c@sai', 'wait', 'c@sai'],
+      ['gone@sai', 'wait', null],
+    ],
+  )
+  // 終わった時刻が出ない応答では、預かった時刻で並べる
+  assert.equal(todoItems([], {}, SELF, {}, {}, { 'a@sai': [wait({ finished_at: undefined })] })[0]!.since, '2026-09-02T09:00:00+09:00')
+})
+
+test('todoSections: 終わった待ちは答え待ちのすぐ下の段（未読があっても未読の段には入れない）', () => {
+  const sessions = [summary({ id: 'a@sai', last_kind: 'turn', last_turn_ts: END, unread: 2 })]
+  const s = todoSections(todoItems(sessions, {}, SELF, {}, {}, { 'a@sai': [wait({})] }))
+  assert.deepEqual([s.answer.length, s.wait.map((t) => t.wait?.id), s.unread.map((t) => t.kind), s.watch.length, s.done.length], [0, ['w1'], ['done'], 0, 0])
 })

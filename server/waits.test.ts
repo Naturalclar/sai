@@ -504,9 +504,17 @@ test('待てる時間を過ぎていても、最後に 1 回は読む（サー�
   advance(WAIT_MAX_MS + 60_000)
   const [shown] = await poll('W2')
   assert.deepEqual([shown!.status, shown!.result, shown!.late], ['ready', 'failure', true], '時間切れの前に終わっていたので、諦めずに結果を出す')
+  // 要対応の行（終わってから N 分）のために、終わったと分かった時刻を渡す。見に行き直しても動かない
+  assert.ok(Number.isFinite(Date.parse(shown!.finished_at ?? '')))
+  advance(WAIT_POLL_MS * 3)
+  assert.equal((await poll('W2'))[0]!.finished_at, shown!.finished_at)
   assert.equal(runner.sent(eid('W2')).length, sentBefore)
   assert.equal((await act('W2', late.id, 'wake')).status, 200)
   assert.equal(runner.sent(eid('W2')).length, sentBefore + 1)
+  // 1 つの待ちで起こすのは 1 回: 要対応の行から起こしたあと、帯からもう一度は起こせない（待ちはもう無い）
+  assert.equal((await act('W2', late.id, 'wake')).status, 404)
+  assert.equal(runner.sent(eid('W2')).length, sentBefore + 1)
+  assert.deepEqual(await poll('W2'), [])
   assert.ok(runner.sent(eid('W2')).at(-1)!.cmd.text.includes('CI が落ちました'))
   runner.finish(eid('W2'))
   // 前の返信が失敗したまま、次の待ちが終わる → 起こせない。長く経ったら halted にして枠を空ける

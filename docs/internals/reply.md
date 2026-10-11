@@ -318,7 +318,7 @@ SAI が起こした Claude のターンは、使ったトークンと費用も�
 
 「PR の CI が終わったら、そのセッションを 1 回起こす」。形はループに寄せてある（置き場・時計・タイマー・断る線）。**断る線は `loopRefusal(session, 'wait')` で、許可を聞かないモード（`bypassPermissions` / `auto`）だけは待ちでは見ない**（ループは見る。エージェントの口・人が置く口・起こす直前・印の `blocked` の 4 か所とも同じ）。
 
-- **決まりごとは `shared/waits.ts`**（純粋関数。`waits.test.ts`）: 引数の検査 `waitFromRequest()`、数の上限 `waitLimitRefusal()` / `wakesExhausted()`、終わったかの判定 `waitOutcome()`、起こすときの本文 `waitPrompt()`（頭は `WAIT_MARK`＝`【SAI 待ち】`）、画面に出す形 `waitView()` と 1 行 `waitStatusLine()`。
+- **決まりごとは `shared/waits.ts`**（純粋関数。`waits.test.ts`）: 引数の検査 `waitFromRequest()`、数の上限 `waitLimitRefusal()` / `wakesExhausted()`、終わったかの判定 `waitOutcome()`、起こすときの本文 `waitPrompt()`（頭は `WAIT_MARK`＝`【SAI 待ち】`）、画面に出す形 `waitView()` と 1 行 `waitStatusLine()`、人が押すまで何も起きない待ちか `waitNeedsHuman()`（`ready` かつ `late`。要対応・通知・サイドバーに出すのはこれだけ → docs/internals/web.md の「要対応」）。
 - **上限は仮の値で、変えるなら `shared/waits.ts` の定数**: `WAIT_MAX_PER_SESSION`（2）・`WAIT_MAX_MS`（2 時間）・`WAIT_WAKES_PER_DAY`（6）・`WAIT_POLL_MS`（60 秒）・`WAIT_EMPTY_GRACE_MS`（3 分。PR を出した直後の「チェックなし」を「まだ載っていない」と読む間）・`WAIT_AUTO_WAKE_MS`（50 分。待ち始めてからこれを過ぎて終わった待ちは自動では起こさない）。
 - **置き場は `server/reply/waits.ts` の `WaitStore`**（`<feed dir>/waits.json`。tmp → rename、0600）。エンティティごとの `WaitState[]` と、自動で起こした時刻。読み込むときに `waking` のまま残っていたものを `halted` にする（送り直さない）。終わったまま片付けられなかった待ち（`WAIT_KEEP_MS` = 7 日）と 1 日より前の起こした時刻は、読み込むときに落とす。
 - **確かめるのは `server/git/prs.ts` の `PrBrowser.ci()`**: `gh pr view <n> --repo <repo> --json state,statusCheckRollup` の 1 本だけ（`shared/prs.ts` の `parsePrCi()` / `failingChecks()`）。リポジトリは `githubRepoOf(session.remote)`（セッションの行のもの。リクエストからは受けない）。

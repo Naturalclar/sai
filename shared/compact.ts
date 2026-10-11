@@ -26,6 +26,14 @@ export function idleMsSince(lastTurnTs: string | undefined, now: number): number
   return Number.isFinite(at) ? Math.max(0, now - at) : undefined
 }
 
+/**
+ * 入力欄で使う間（#761）。**時計を渡されていない（`now` が 0）・処理中か預かりがある（`queueing`）ときは分からない扱い**
+ * （いま回っているので、前のターンからの間に意味が無い）。入力欄の 1 行と、送り方の既定の両方がこれを見る
+ */
+export function replyIdleMs(input: { lastTurnAt: string | undefined; now: number; queueing: boolean }): number | undefined {
+  return input.now > 0 && !input.queueing ? idleMsSince(input.lastTurnAt, input.now) : undefined
+}
+
 /** キャッシュが切れている見込みか。**間が分からなければ切れていない側**（分からないのに要約を挟まない） */
 export function cacheCold(idleMs: number | undefined): boolean {
   return idleMs !== undefined && idleMs > CACHE_COLD_MS

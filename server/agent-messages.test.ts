@@ -81,9 +81,11 @@ const codexApp: CodexApp = {
 const usage = { value: {} as UsageResponse, async get() { return this.value } }
 /** 処理中の手順の偽物。相手が読み直す量だけを返す（既定は分からない = 0） */
 const contexts = new Map<string, number>()
+/** transcript の上でターンが回っている（端末で人が回している）ことにするセッション */
+const activeIds = new Set<string>()
 const progress = {
   async read(s: Pick<SessionSummary, 'id'>): Promise<SessionProgressResponse> {
-    return { rev: '', id: s.id, active: false, steps: [], total: 0, updated_at: '', context_tokens: contexts.get(s.id) ?? 0 }
+    return { rev: '', id: s.id, active: activeIds.has(s.id), steps: [], total: 0, updated_at: '', context_tokens: contexts.get(s.id) ?? 0 }
   },
 }
 /**
@@ -222,7 +224,12 @@ test('sai_sessions: 同じ project の、返信できる別のセッションだ
     const rested = (await (await agent('/api/agent/sessions?from=A1%40r')).json()) as AgentSessionsResponse
     const idleMs = rested.sessions[0]!.idle_ms ?? -1
     assert.ok(idleMs >= 7 * 60_000 && idleMs < 10 * 60_000, `最後のターン完了（8 分前）から数える: ${idleMs}`)
+    // SAI からは回していなくても、端末でターンが回っている相手には付けない（温かく、空いてもいない）
+    activeIds.add('B1@r')
+    const running = (await (await agent('/api/agent/sessions?from=A1%40r')).json()) as AgentSessionsResponse
+    assert.equal(running.sessions[0]!.idle_ms, undefined)
   } finally {
+    activeIds.delete('B1@r')
     idle('A1@r')
     idle('B1@r')
   }

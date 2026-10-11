@@ -16,7 +16,7 @@ import { leavesToSidebar } from './replyFocus'
 import { DiffButton, type DiffButtonProps } from './DiffButton'
 import { acceptsSuggestion, suggestionFor, suggestionLabel } from './replySuggest'
 import { NEXT_ASK_MAX_CHARS } from '../../shared/nextAsk.ts'
-import { idleMsSince, sendCost, sendModes, type SendMode } from '../../shared/compact.ts'
+import { replyIdleMs, sendCost, sendModes, type SendMode } from '../../shared/compact.ts'
 import { ReplySendCost } from './ReplySendCost'
 import { SendModePicker } from './SendModePicker'
 import { CONTEXT_WARN_TOKENS, contextLabel } from '../../shared/contextSize.ts'
@@ -252,7 +252,7 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
   // 画像を添えているときは新しいセッションを出さない（新しいセッションの口は画像を受けない）
   const [modePicked, setModePicked] = useState<SendMode | null>(null)
   // 最後のターンからの間（#761）。処理中・預かりがあるあいだは出さない（いま回っているので、前のターンからの間に意味が無い）
-  const idleMs = warmth && now > 0 && !queueing ? idleMsSince(warmth.lastTurnAt, now) : undefined
+  const idleMs = warmth ? replyIdleMs({ lastTurnAt: warmth.lastTurnAt, now, queueing }) : undefined
   const cost = warmth && !queueing ? sendCost({ agent: warmth.agent, context: contextLabel(warmth.contextTokens), idleMs }) : null
   const offered = sendMode && !queueing ? sendModes({ ...sendMode, text, ...(idleMs !== undefined ? { idleMs } : {}) }, CONTEXT_WARN_TOKENS) : null
   // 新しいセッション・分岐（#405）は本文だけを送る口なので、画像を添えているあいだは出さない

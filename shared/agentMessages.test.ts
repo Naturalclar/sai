@@ -163,12 +163,13 @@ test('agentEntry / idleNote: 最後のターンからの時間（#761）。処�
   assert.equal(agentEntry(session('B1@r', { last_turn_ts: '2026-01-01T11:48:00+09:00' }), true, 0, undefined, now).idle_ms, undefined, '処理中')
   assert.equal(agentEntry(session('B1@r', { last_turn_ts: '' }), false, 0, undefined, now).idle_ms, undefined, 'ターン完了が無い')
   assert.equal(agentEntry(session('B1@r', { last_turn_ts: '2026-01-01T11:48:00+09:00' }), false).idle_ms, undefined, '時計を渡さない')
-  assert.equal(idleNote(12 * 60_000), ' 最後のターン: 12 分前')
-  assert.equal(idleNote(72 * 60_000), ' 最後のターン: 1 時間 12 分前（キャッシュ切れの見込み）')
-  assert.equal(idleNote(undefined), '')
+  assert.equal(idleNote(12 * 60_000, 'claude'), ' 最後のターン: 12 分前')
+  assert.equal(idleNote(72 * 60_000, 'claude'), ' 最後のターン: 1 時間 12 分前（キャッシュ切れの見込み）')
+  assert.equal(idleNote(72 * 60_000, 'codex'), ' 最後のターン: 1 時間 12 分前', 'キャッシュの印は Claude だけ')
+  assert.equal(idleNote(undefined, 'claude'), '')
   // 一覧の 1 行が長くなりすぎないこと（#688）。温かい相手で 14 字、切れている見込みの相手で 33 字まで
-  assert.ok(idleNote(12 * 60_000).length <= 14)
-  assert.ok(idleNote(23 * 60 * 60_000 + 59 * 60_000).length <= 33)
+  assert.ok(idleNote(12 * 60_000, 'claude').length <= 14)
+  assert.ok(idleNote(23 * 60 * 60_000 + 59 * 60_000, 'claude').length <= 33)
 })
 
 test('agentEntry / sessionLabel: 呼び名は表示名 → 題名 → ID。最後の発言は 1 行目だけで、長ければ切る', () => {

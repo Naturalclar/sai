@@ -2960,7 +2960,7 @@ export function createApp(
     const payload: AgentSessionsResponse = {
       from: found.session.id,
       sessions: [...targets.map((s, i) => {
-        const entry = agentEntry(s, busy(s.id), sizes[i] ?? 0, agentOverlap(mine ?? { root: '', paths: [] }, theirs[i] ?? { root: '', paths: [] }), loopNow())
+        const entry = agentEntry(s, busy(s.id), sizes[i] ?? 0, agentOverlap(mine ?? { root: '', paths: [] }, theirs[i] ?? { root: '', paths: [] }), active.get(s.id) || s.waiting ? undefined : loopNow())
         const holding = holdings.get(s.id)
         return holding && Object.keys(holding).length > 0 ? { ...entry, holding } : entry
       }), ...others.map((s) => acrossEntry(s, busy(s.id), Boolean(otherHoldings.get(s.id)?.free)))],
@@ -4077,7 +4077,7 @@ export function createApp(
               const waiting = clipReply((s.waiting || pending[s.id]?.[0]?.text || '').split('\n')[0] ?? '', 120)
               // 読み直す量と間（#761）。割り振る側が、小さくて温かい相手を選べるように。間は、このマシンの、回っても待ってもいないセッションにだけ
               const e = agentEntry(s, mcpBusy(s.id), read.get(s.id)?.context_tokens ?? 0, undefined, read.has(s.id) && !active.get(s.id) && !waiting ? loopNow() : undefined)
-              return `- ${e.id}「${e.name}」${e.project} ${e.agent}${e.branch ? ` ${e.branch}` : ''}${e.busy ? '（処理中）' : ''}${holdingLabel(holdings.get(s.id) ?? {})}${waiting ? `（待ち: ${waiting}）` : ''}${why ? `（送れない: ${why}）` : ''}${s.manager_draft ? '（案を置いてある）' : ''}${e.context_tokens ? ` 読み直す量: ${tokensLabel(e.context_tokens)}` : ''}${idleNote(e.idle_ms)} 最後の記録: ${s.end}${e.last_text ? ` 最後の発言: ${e.last_text}` : ''}`
+              return `- ${e.id}「${e.name}」${e.project} ${e.agent}${e.branch ? ` ${e.branch}` : ''}${e.busy ? '（処理中）' : ''}${holdingLabel(holdings.get(s.id) ?? {})}${waiting ? `（待ち: ${waiting}）` : ''}${why ? `（送れない: ${why}）` : ''}${s.manager_draft ? '（案を置いてある）' : ''}${e.context_tokens ? ` 読み直す量: ${tokensLabel(e.context_tokens)}` : ''}${idleNote(e.idle_ms, e.agent)} 最後の記録: ${s.end}${e.last_text ? ` 最後の発言: ${e.last_text}` : ''}`
             })
             .join('\n'),
         )

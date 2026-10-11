@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { CACHE_COLD_MS, COLD_COMPACT_TOKENS, cacheCold, canCompact, COMPACT_MIN_TOKENS, coldAndLarge, compactPrompt, idleLabel, idleMsSince, messageCompacts, SEND_MODE_LABEL, SEND_MODE_SHORT, sendCost, sendModes, startsNewWork } from './compact.ts'
+import { CACHE_COLD_MS, COLD_COMPACT_TOKENS, cacheCold, canCompact, COMPACT_MIN_TOKENS, coldAndLarge, compactPrompt, idleLabel, idleMsSince, messageCompacts, replyIdleMs, SEND_MODE_LABEL, SEND_MODE_SHORT, sendCost, sendModes, startsNewWork } from './compact.ts'
 import { WAIT_AUTO_WAKE_MS } from './waits.ts'
 import { CONTEXT_WARN_TOKENS } from './contextSize.ts'
 
@@ -124,6 +124,15 @@ test('messageCompacts: 着手の形でなくても、間があいて大きい相
   assert.equal(messageCompacts({ ...cold, idleMs: 5 * 60_000 }, CONTEXT_WARN_TOKENS), false, '温かい相手はそのまま')
   assert.equal(messageCompacts({ ...cold, terminal: true }, CONTEXT_WARN_TOKENS), false)
   assert.equal(messageCompacts({ ...cold, agent: 'codex' }, CONTEXT_WARN_TOKENS, true), false)
+})
+
+test('replyIdleMs: 入力欄の間は、時計が無い・処理中か預かりがあるときは分からない扱い（送り方の既定も変えない。#761）', () => {
+  const now = Date.parse('2026-01-01T12:00:00+09:00')
+  const lastTurnAt = '2026-01-01T10:00:00+09:00'
+  assert.equal(replyIdleMs({ lastTurnAt, now, queueing: false }), 2 * 60 * 60_000)
+  assert.equal(replyIdleMs({ lastTurnAt, now: 0, queueing: false }), undefined, '時計を渡していない')
+  assert.equal(replyIdleMs({ lastTurnAt, now, queueing: true }), undefined, '処理中・預かりがある')
+  assert.equal(replyIdleMs({ lastTurnAt: undefined, now, queueing: false }), undefined)
 })
 
 test('idleLabel / sendCost: 入力欄に出す 1 行。キャッシュの印は Claude だけ、どちらも分からなければ出さない（#761）', () => {

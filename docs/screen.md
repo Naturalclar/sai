@@ -497,7 +497,8 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 | `git` | **決まった形だけ**: `status`・`log`・`diff`・`show`・`rev-parse` / `rev-list --count`（`HEAD` だけ）・`ls-files`・`branch` / `tag` の一覧・`remote`・`stash list`・`worktree list` に、決まったフラグ（`--oneline`・`--stat`・`--name-only`・`--cached`・`-3`・`--format='%h %s'` など）を付けた形。**リビジョン・範囲・パスを付けた形は通さない**（`git diff main..HEAD`・`git show HEAD~1`・`git log -- src`・`git log -p`・`git blame` は人に来る） |
 | フラグ | コマンドごとに、読むだけと分かっているものを 1 語ずつ（`sort -o`・`tail -f`・`grep -r`・`find -exec` / `-delete`・`git diff --output`・`git -C`・`gh … --jq`・省略形・まとめた短いフラグは通さない） |
 | グロブと `~` | 引用符の外の `*` `?` `[` と、語の頭の `~` は通さない（シェルがファイルの名前に展開して、読む先やフラグになる）。`ls` の引数だけは受ける。パターンは引用符で囲む |
-| 読む先 | cwd の中だけ（`..` も通さない）。`.env`・鍵・トークンの類（返答に出てきたファイルを読む口と同じ判定を、階層ごとに）は通さない |
+| 作業ディレクトリ | そのセッションのリポジトリの中（同じリポジトリのほかの worktree も）のときだけ。git の作業ツリーでない場所（`/tmp/x` など）・git から引けないときは、ファイルに触るコマンドは 1 つも通さない（#783） |
+| 読む先 | 作業ディレクトリの中と、同じリポジトリの worktree の中だけ（`..` も通さない）。`.env`・鍵・トークンの類（返答に出てきたファイルを読む口と同じ判定を、階層ごとに）は通さない |
 | コマンド置換の結果 | 渡してよいのは `echo` だけ（`echo "branch: $(git rev-parse HEAD)"` は通り、`git diff $(git rev-parse HEAD)` は人に来る） |
 
 例: `echo "at $(git rev-parse HEAD)"`・`(git status; git log --oneline -3)`・`git log --oneline | head -5` は通る。`git commit -m "$(cat <<'EOF' …)"`・`N=$(…) && …`・`cat .env`・`cd sub && ls`・コメントを付けた `git status # 状態` は人に来る。作業ディレクトリがホームそのもの・ホームの直下の置き場（`~/.claude`・`~/.ssh` など）のセッションでは、`echo`・`date` のようにファイルに触らないもの以外は通らない。`gh` は、そのセッションのリポジトリを読む形だけが通る（`-R` でほかのリポジトリを名指しした形は人に来る）。1000 字より長いコマンドも人に来る（Jev が全部を見ていないため）。**分からないことも残る**: セッションの場所と実際にシェルが居る場所がずれているとき（前に `cd` を許可したあと）・cwd の中のシンボリックリンク・名前では秘密と分からないファイル。通さなかった理由は `reply.log` に 1 回だけ残る。Jev を切るか「自動で常に許可」を「しない」にすれば、今までどおり全部人に来る。

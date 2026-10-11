@@ -4,13 +4,14 @@ import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ApprovalLogRow, ReplyingMap, SessionsResponse, SettingsResponse } from '../shared/types.ts'
 import { createApp } from './app.ts'
 import type { JevJudge } from './approvals/jev.ts'
 import { Approvals } from './approvals/approvals.ts'
+import type { Git } from './git/diff.ts'
 import { FeedStore } from './rows/store.ts'
 import { localDate } from './rows/aggregate.ts'
 import { row } from './rows/aggregate.test.ts'
@@ -26,18 +27,36 @@ const judge: JevJudge = async (state, statement) => {
   return state.includes('rm -rf') ? 0.01 : 0.97
 }
 
+/** 偽の git: どこも git の作業ツリーではない */
+const noGit: Git = { run: async () => Promise.reject(new Error('not a git repository')) }
+/** 偽の git: セッションの cwd（`dir`）が worktree のトップ。答えるのは `worktree list` だけ */
+const repoGit: Git = {
+  run: async (_cwd, args) => (args[0] === 'worktree' ? `worktree ${await realpath(dir)}\nHEAD 0000000\nbranch refs/heads/main\n` : Promise.reject(new Error('no'))),
+}
+
 let dir: string
 let feedDir: string
 const servers: Server[] = []
 const saved: Record<string, string | undefined> = {}
 
 /** createApp を立てて base URL を返す。`jev` を省略すると「送らない」既定のまま */
-async function start(approvals: Approvals, jev?: JevJudge | null, run: Runner = runner): Promise<string> {
-  const app = createApp(new FeedStore(feedDir), join(dir, 'dist'), run, approvals, undefined, undefined, undefined, {
-    tmux: { run: async () => '' },
-    ps: async () => '',
-    ...(jev === undefined ? {} : { jev }),
-  })
+async function start(approvals: Approvals, jev?: JevJudge | null, run: Runner = runner, git: Git = noGit): Promise<string> {
+  const app = createApp(
+    new FeedStore(feedDir),
+    join(dir, 'dist'),
+    run,
+    approvals,
+    undefined,
+    undefined,
+    undefined,
+    {
+      tmux: { run: async () => '' },
+      ps: async () => '',
+      ...(jev === undefined ? {} : { jev }),
+    },
+    undefined,
+    git,
+  )
   const server = createServer((req, res) => void app(req, res))
   servers.push(server)
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -354,7 +373,7 @@ test('自動で今回だけ許可（#749）: ルールを作れない Bash は�
     return state.includes('zzlow') ? 0.4 : 0.95
   }
   const approvals = new Approvals()
-  const base = await start(approvals, fake, busy)
+  const base = await start(approvals, fake, busy, repoGit)
   const post = async (command: string) => {
     const res = await fetch(`${base}/api/approvals`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: 'S1@r', tool_name: 'Bash', input: { command }, tool_use_id: 't' }) })
     return ((await res.json()) as { approval_id: string }).approval_id
@@ -410,7 +429,7 @@ test('自動で今回だけ許可（#749）: ルールを作れない Bash は�
     '読むだけと分かっているコマンドでない',
     'コマンド置換の結果を、echo 以外に渡している',
     '読める構文だけで書かれていない（変数・バッククォート・ファイルへのリダイレクト・ヒアドキュメント・代入・構文の語など）',
-    '読む先・行き先が cwd の外か、読めない形',
+    '読む先・行き先がそのセッションのリポジトリの外か、読めない形',
     '秘密が入っていそうなファイル（.env・鍵・トークンの類）を読む形',
     'コマンド置換の結果を、echo 以外に渡している',
   ].sort())
@@ -428,4 +447,19 @@ test('自動で今回だけ許可（#749）: ルールを作れない Bash は�
   const ok = await fetch(`${base}/api/approvals/${commit}/answer`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ behavior: 'allow' }) })
   assert.equal(ok.status, 200)
   await put(base, { jev_auto: 0 })
+
+  // worktree を引けない（cwd が git の作業ツリーの中でない）なら、同じコマンドも通さない（#783）。ファイルに触らない形は通る
+  const bare = new Approvals()
+  const base2 = await start(bare, fake, busy, noGit)
+  const post2 = async (command: string) => {
+    const res = await fetch(`${base2}/api/approvals`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: 'S1@r', tool_name: 'Bash', input: { command }, tool_use_id: 't' }) })
+    return ((await res.json()) as { approval_id: string }).approval_id
+  }
+  await put(base2, { jev: true, jev_auto: 0.9 })
+  const noTree = await post2('(git status; git log -3 --format=zzcomment%h)')
+  const noFiles = await post2('echo "zzclock $(date +%s)"')
+  await drain()
+  assert.equal(await bare.wait(noTree, 10), null, 'worktree が分からなければ人に残る')
+  assert.equal((await bare.wait(noFiles, 10))?.behavior, 'allow')
+  await put(base2, { jev_auto: 0 })
 })

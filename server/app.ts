@@ -1184,6 +1184,17 @@ export function createApp(
       })
     return jevAutoRunning
   }
+  /**
+   * 「今回だけ」の判定に渡す置き場（#783）: そのセッションの cwd（realpath）と、同じリポジトリの worktree のトップ。
+   * **リクエストからは受けない**（セッションの行の cwd から、`git worktree list` を読むだけ）。cwd が git の作業ツリーの中でない・
+   * git が読めないなら空を返し、判定はファイルに触るコマンドを 1 つも受けない
+   */
+  const readRoots = async (cwd: string): Promise<{ cwd: string; roots: string[] }> => {
+    const real = cwd ? await realpath(cwd).catch(() => '') : ''
+    const trees = real ? await worktrees.usable(real) : null
+    if (!trees || !treeOf(real, trees)) return { cwd: '', roots: [] }
+    return { cwd: real, roots: trees.map((t) => t.path) }
+  }
   const jevAutoOnce = async (): Promise<void> => {
     const s = await settingsStore.get()
     if (!s.jev || s.jev_auto <= 0 || !jevRisk.ready) return
@@ -1201,7 +1212,9 @@ export function createApp(
         const asked = jevAutoAllows(a.jev, s.jev_auto) ? labels.map((label) => ({ label, safe: jevRisk.ruleSafe(label, jevRuleState(a, label)) })) : []
         const failed = asked.find((r) => r.safe === undefined && jevRisk.ruleFailed(r.label))?.label
         const lowest = jevLowestRule(asked)
-        const decision = jevAutoDecision(a, s.jev_auto, labels.length > 0 ? (failed ?? lowest?.label ?? rulesKey(labels)) : null, failed ? 'failed' : lowest?.safe, { noRule: plan.reason, cwd, repo: githubRepoOf(owner?.remote) })
+        // git を読むのは「今回だけ」を決めるときだけ（ルールを作れない形で、この回が閾値以上）
+        const place = labels.length === 0 && plan.reason && jevAutoAllows(a.jev, s.jev_auto) ? await readRoots(cwd) : { cwd: '', roots: [] }
+        const decision = jevAutoDecision(a, s.jev_auto, labels.length > 0 ? (failed ?? lowest?.label ?? rulesKey(labels)) : null, failed ? 'failed' : lowest?.safe, { noRule: plan.reason, cwd: place.cwd, roots: place.roots, repo: githubRepoOf(owner?.remote) })
         if (decision.kind === 'skip') {
           // 答えない理由（#553）。同じ許可には 1 回だけ（届くたびに呼ばれるので、覚えないと同じ行が何本も並ぶ）
           if (!jevSkipLogged.has(a.approval_id)) {

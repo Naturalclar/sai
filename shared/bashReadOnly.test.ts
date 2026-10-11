@@ -6,7 +6,9 @@ import { inHomeZone, NOT_READ_ONLY_TEXT, notReadOnly, READ_ONLY_COMMANDS, READ_O
 const CWD = '/work/repo'
 /** そのセッションのリポジトリ（作り物） */
 const REPO = 'o/r'
-const check = (command: string, cwd = CWD, repo = REPO) => notReadOnly(command, cwd, repo)
+/** そのリポジトリの worktree のトップ（作り物）。既定は cwd と、隣の worktree 1 つ */
+const TREES = [CWD, '/work/repo-b']
+const check = (command: string, cwd = CWD, repo = REPO, roots: readonly string[] = cwd === CWD ? TREES : [cwd]) => notReadOnly(command, cwd, repo, roots)
 
 test('notReadOnly: 読むだけと分かっているコマンドと構文だけでできていれば通す（#749）', () => {
   const ok = [
@@ -717,7 +719,7 @@ test('notReadOnly: gh が読んでよいのは、そのセッションのリポ�
   for (const c of ['gh -R o/r pr view 12', 'gh pr view 12 --repo o/r', 'gh api repos/o/r/pulls/12']) {
     assert.equal(check(c, CWD, ''), 'flag', c)
     assert.equal(check(c, CWD, 'not a repo'), 'flag', c)
-    assert.equal(notReadOnly(c, CWD), 'flag', c)
+    assert.equal(notReadOnly(c, CWD, '', TREES), 'flag', c)
   }
   assert.equal(check('gh pr view 12', CWD, ''), '')
   assert.equal(check('gh api rate_limit', CWD, ''), '')
@@ -891,6 +893,85 @@ test('notReadOnly: 前のレビューで見つかった、拒否の一覧をす�
     'date 010100002030',
   ]
   assert.deepEqual(second.map((c) => [c, check(c)]).filter(([, got]) => got === ''), [])
+})
+
+test('notReadOnly: ファイルに触るコマンドを受けるのは、cwd がそのセッションのリポジトリの worktree の中のときだけ（#783。`/` の書き方を数え上げない）', () => {
+  const at = (command: string, cwd: string, roots: readonly string[]) => notReadOnly(command, cwd, REPO, roots)
+  // worktree のトップ・その下の階層・隣の worktree が cwd なら受ける
+  for (const cwd of ['/work/repo', '/work/repo/server/git', '/work/repo-b']) {
+    for (const c of ['ls', 'cat src/a.ts', 'git status', "find . -name '*.ts'", 'gh pr view 5', 'grep -n TODO src/a.ts']) assert.equal(at(c, cwd, TREES), '', `${cwd}: ${c}`)
+  }
+  // worktree が引けていない・cwd がどの worktree にも入っていない（上の階層・名前が前方一致するだけの隣・別の場所）なら、1 つも受けない
+  const outside: [string, readonly string[]][] = [
+    ['/work/repo', []],
+    ['/work', TREES],
+    ['/', TREES],
+    ['/work/repo-c', TREES],
+    ['/work/repository', TREES],
+    ['/srv/app', TREES],
+    ['/tmp/x', TREES],
+    // `/` の別の書き方とその上の階層・重ね書き（#777 の 3 回目のレビュー）
+    ['/Volumes', TREES],
+    ['/System', TREES],
+    ['/System/Volumes', TREES],
+    ['/Volumes/D/System/Volumes/Data', TREES],
+    ['/System/Volumes/Data/Volumes/D', TREES],
+    ['/proc/1/root', TREES],
+    ['/mnt', TREES],
+    // 相対の置き場・相対の cwd は信じない
+    ['/work/repo', ['work/repo', 'repo', '.', '']],
+    ['work/repo', TREES],
+    ['', TREES],
+  ]
+  for (const [cwd, roots] of outside) {
+    for (const c of ['ls', 'cat src/a.ts', 'cat D/Users/x/.zsh_history', 'cat home/x/.bash_history', 'git status', 'find .', 'grep -rn password .', 'gh pr view 5', 'echo "$(git rev-parse HEAD)"']) {
+      assert.equal(at(c, cwd, roots), 'path', `${cwd} [${roots.join(',')}]: ${c}`)
+    }
+    // ファイルに触らないコマンドは、置き場に関係なく受ける
+    assert.equal(at('echo "at $(date +%s)"', cwd, roots), '', cwd)
+  }
+  // ホームのあたりそのものが worktree のトップ（ホームを git で持つ形・`/` の下に `.git` がある形）でも、置き場に数えない
+  for (const top of ['/', '/Users/x', '/home/x', '/Users/x/.config', '/Users/x/.claude/projects', '/System/Volumes/Data', '/Volumes/D']) {
+    for (const cwd of [top, `${top === '/' ? '' : top}/Users/x`, `${top === '/' ? '' : top}/sub`]) {
+      if (inHomeZone(cwd) || top === cwd) assert.equal(at('ls', cwd, [top]), 'path', `${top} → ${cwd}`)
+    }
+    assert.equal(at('cat a.ts', top, [top]), 'path', top)
+  }
+  assert.equal(at('cat .zsh_history', '/Users/x/work/app', ['/Users/x', '/Users/x/work/app']), '', '受ける置き場の中の、名前で秘密と分からないファイルは今までどおり')
+  assert.equal(at('cat /Users/x/.zsh_history', '/Users/x/work/app', ['/Users/x', '/Users/x/work/app']), 'path', 'ホームを指す置き場は数えないので、cwd の外のホームは読めない')
+})
+
+test('notReadOnly: 読む先が隣の worktree を指す形は、同じリポジトリの worktree の中と分かるものだけ受ける（#783）', () => {
+  const at = (command: string, cwd = '/work/repo/server') => notReadOnly(command, cwd, REPO, TREES)
+  const ok = [
+    'cat /work/repo-b/src/a.ts',
+    'ls /work/repo-b',
+    'grep -n TODO /work/repo-b/src/a.ts',
+    'wc -l /work/repo/src/a.ts /work/repo-b/src/a.ts',
+    // cwd より上でも、同じ worktree の中
+    'cat /work/repo/README.md',
+    'head -5 /work/repo/shared/types.ts',
+  ]
+  assert.deepEqual(ok.map((c) => [c, at(c)]).filter(([, got]) => got !== ''), [])
+  const no: [string, string][] = [
+    // worktree の外・上の階層・名前が前方一致するだけの隣
+    ['cat /work/other/src/a.ts', 'path'],
+    ['ls /work', 'path'],
+    ['cat /work/repo-bb/a.ts', 'path'],
+    ['cat /work/repo-b/../other/a.ts', 'path'],
+    ['cat ../../repo-b/src/a.ts', 'path'],
+    ['cat /etc/hosts', 'path'],
+    ['cat ~/work/repo-b/a.ts', 'path'],
+    // 隣の worktree でも、秘密は階層ごとに名前を見る（worktree のトップから下）
+    ['cat /work/repo-b/.env', 'secret'],
+    ['cat /work/repo-b/secrets/db.yml', 'secret'],
+    ['ls /work/repo-b/.ssh', 'secret'],
+    ['cat /work/repo/.env', 'secret'],
+    ['cat /work/repo/secrets/db.yml', 'secret'],
+  ]
+  for (const [c, want] of no) assert.equal(at(c), want, c)
+  // 置き場を渡さなければ、cwd の中も読めない
+  assert.equal(notReadOnly('cat a.ts', '/work/repo/server', REPO), 'path')
 })
 
 test('notReadOnly: Jev が全部を見ていない長さのコマンドは通さない。理由には人に見せる文がある', () => {

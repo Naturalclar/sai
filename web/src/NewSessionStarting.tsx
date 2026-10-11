@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import type { Replying } from '../../shared/types.ts'
 import { api } from './api'
 import { sessionHash, usePolling } from './hooks'
@@ -19,18 +19,30 @@ interface Props {
   onRetry: () => void
   /** `claude --bg` で始めたときの短い ID（#462） */
   attach?: string
+  /**
+   * 最初の行が届いたとき（新しいセッションのペイン: App がそのペインをそのセッションに入れ替える）。
+   * 渡されなければ、そのセッションの画面へ移るだけ（セッションの画面の「引き継いで新しいセッション」）
+   */
+  onArrived?: (id: string) => void
 }
 
 /**
  * 始めたセッションの最初の行を待ち、届いたらそのセッションの画面へ移る（#314）。
  * 詳細（`GET /api/sessions/<id>`）は行が届くまで 404 なので、**ここで待ってから移る**（先に移ると SessionView がエラーを出すだけ）
  */
-export function NewSessionStarting({ id, text, since, replying, now, onRetry, attach }: Props) {
+export function NewSessionStarting({ id, text, since, replying, now, onRetry, attach, onArrived }: Props) {
   const { data } = usePolling(() => api.session(id), [id])
   const status = startStatus(data !== null, replying, since, now)
   const arrived = status.kind === 'arrived'
+  // 届いたら 1 回だけ（`onArrived` は並びが変わるたびに作り直されるので、依存に入れずに ref で持つ）
+  const arrive = useRef(onArrived)
   useEffect(() => {
-    if (arrived) location.hash = sessionHash(id)
+    arrive.current = onArrived
+  })
+  useEffect(() => {
+    if (!arrived) return
+    if (arrive.current) arrive.current(id)
+    else location.hash = sessionHash(id)
   }, [arrived, id])
 
   return (

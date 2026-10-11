@@ -12,20 +12,26 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 
 ### セッションを横に並べる（#633）
 
-- 並びの形と動かし方は `web/src/paneLayout.ts` の純粋関数（`paneLayout.test.ts`）。`PaneLayout` は **列の配列で、各列が上から下への配列**（いまはどの列も 1 つ。上下を足すための形）と `focus`（フォーカスのある列）、`keys`（列ごとの番号）。要素は種類つき（`session` / `todo`）で、上限は `MAX_COLUMNS` の 1 つ。
+- 並びの形と動かし方は `web/src/paneLayout.ts` の純粋関数（`paneLayout.test.ts`）。`PaneLayout` は **列の配列で、各列が上から下への配列**（いまはどの列も 1 つ。上下を足すための形）と `focus`（フォーカスのある列）、`keys`（列ごとの番号）。要素は種類つき（`session` と、固定の画面 `PINNED_KINDS` = `todo` / `prs` / `feed` / `new`。#759）で、上限は `MAX_COLUMNS` の 1 つ。固定の画面は種類だけで比べるので 2 つ並ばない（`sameItem()`）。`normalizeLayout()` は知らない種類を落とす。
 - 持つのは `App.tsx`（`useLocalState('sai.panes')`。読んだものは毎回 `normalizeLayout()` を通す）。**URL はフォーカスのあるペインの 1 つを指し、`parseRoute()` は変えていない。**
+- URL が指すペインの中身は `routePaneItem(route)`（PR 1 本・使用量・`#/` は null ＝全幅で、並びに触らない。`#/` の全幅のフィードとペインのフィードは `App.tsx` の `feedView()` の 1 つ。`.panes` には `ChatPane` 1 枚だけを描く。戻れば並びが戻る）。並び → URL の固定の画面の hash は `PINNED_HASH`。
 - URL → 並びは `placeItem()`。**route が変わったときだけ**描画中に合わせる（`placed` に前の route を覚える。effect の中で setState しない）。並び → URL は、操作（`openBeside()` / `focusColumn()` / `closeColumn()`）のあとに `location.hash` を書く。
 - 「いま開いているセッション」は `currentId`（route がセッションのとき、並びのフォーカスの ID）。題名・差分・`SessionView` の `focused` はこれを見る。**`route.id` を直接見るのは `focusTs` / `focusSide`（発言への飛び先）だけ。**
 - 描くのは `.panes` の中の `ChatPane`（`.pane`）で、並べているときだけ `.panes.split`。`ChatPane` の key は並びが持つ列の番号（`PaneLayout.keys`。列の位置ではない）: 中身を入れ替えても番号は変わらず（1 つのときは今までどおり同じ `SessionView` が `id` だけ変わる）、左を閉じた・間に足したときも残った列の番号は動かない。× は見出しでなく `ChatPane` に置く（読み込み中・取得に失敗したペインも閉じられる）。
 - `→` の当て先は `.pane.focused .reply textarea`。ヘッダの取得状況（`onStatus`）はフォーカスのあるペインにだけ本物を渡す。
 - キーボードは `paneKeys.ts` の `paneKey(e, typing)`（`paneKeys.test.ts`）を `App.tsx` の window の keydown が呼ぶ。`%` で入れるセッションは `nextUnshown()`（サイドバーの `visibleIds()` の並びで、いまの次の、まだ出していないもの）。`Ctrl+数字` は `focusPane()` のあと `focusLater` に入力欄を頼む（当て先の `.pane.focused` は描き直したあとに変わるので、その場では当てない）。
-- 要対応のペインは `ChatPane` の `onClickCapture` で `a[href^="#/s/"]` のクリックを先に見て、`openInNeighbor()`（押されたペインの列を起点に）で隣へ開く。`TodoRow` には何も渡していない。
+- 要対応・PR の一覧・フィードのペインは `ChatPane` の `onClickCapture` で `a[href^="#/s/"]` のクリックを先に見て、`openInNeighbor()`（押されたペインの列を起点に）で隣へ開く（`App.tsx` の `openFromPinned()`）。`TodoRow` などの中身には何も渡していない。
+- 新しいセッションのペインは、`NewSessionStarting` の `onArrived`（→ `App.tsx` の `startedInPane()`）が `replaceItem(layout, { kind: 'new' }, セッション)` で**そのペインの列**を入れ替える（フォーカスのある列ではない。フォーカスは動かさず、URL はフォーカスのあるペインに合わせ直すだけ）。`onArrived` は並びが変わるたびに作り直されるので、effect の依存に入れず ref で持つ。
+- `PrListView` は取得を自分の mount のときと「更新」だけで持つ（ポーリングに乗せない）。ペインの key は列の番号なので、フォーカスを移しても作り直さない（`onStatus` が替わるだけ）。サイドバーの印の `useSessionPrs()` の取得とは別。
+- `FeedView` は `focused` を受けて、許可の `⌘Enter`（`ApprovalBubble` の `hotkey`）をフォーカスのあるときだけにする。フィードは 1 つしか並ばないので、`useGalleries()` / `useDiffSummaries()` の取得はペインの数で増えない。フィードから開いた差分は、フィードのペインが出ている間 `visibleDiff()` に `feed` の route を渡して残す。
+- サイドバーの固定の項目の印は `SessionList` の `pinnedShown`（フォーカスの無い方に出ている種類）。
 - ⌘K の `⌘Enter` は `CommandPalette` の `onOpenBeside(hash)`。許可のバブルの `⌘Enter`（window の capture）が先に拾わないよう、`hotkeyApplies()` の第 3 引数（`role="dialog"` の中で押されたか）で断る。
 - 差分は `visibleDiff()` の第 4 引数に並んでいる ID を渡す（並びのどれかなら出したまま）。モーダルにするかは `useNarrow()`（900px 以下）だけで決め、並べている数は見ない（#647）。
 
 ## データ取得（usePolling）
 
 - `hooks.ts` の `usePolling` がデータ取得の中心で、`rev` が変わらない限り state を触らず、タブが隠れている間は止まる。
+- **間隔は「前の要求が返ってから 3 秒」**（#765。`pollLoop.ts` の `pollLoop(run, intervalMs, { stallMs })`）。`setInterval` で投げない: 返る前に次を投げると、サーバが 3 秒より遅れたときに未返答の要求が積み上がり、サーバは 1 本ごとに集計をやり直してさらに遅れる循環に入る。走っている要求は 1 本までで、走っている間の `kick()`（タブに戻ったとき）は終わった直後に 1 回だけ回す。`rearm()` は表と裏で間隔を取り直す（`intervalMs()` が 0 なら張らない）。`stallMs`（`POLL_STALL_MS` = 60 秒）を過ぎても返らない要求は見切って次を回す（`fetch` に時間切れが無いので、切れた回線に掴まれた 1 本で止まったままにしない。見切った要求があとで返っても次は張らない）。`useProgress`（処理中の手順の 3 秒）と `ClaudeLoginPanel`（ログイン中の 2 秒）も同じループに乗せる。60 秒の `useSessionPrs` と 5 分の `useUsage` は間隔が長いので `setInterval` のまま。
 - `hiddenMs` を渡された時だけ裏でも回る（`HIDDEN_POLL_MS` = 20 秒）。渡すのは `App` の一覧だけで、チャットとフィードは今までどおり止まる（通知のため。下の「タブの題名と通知」）。
 - `rev` が同じでも `updatedAt` のために 3 秒ごとに state を更新する（最下部追従が高さで見る理由。下の「最下部追従」）。
 - **一覧・詳細・フィードは、変わっていなければ本文を受け取らない**（#592。`revCache.ts` の `fetchByRev()`）。前の本文を URL ごとに 8 個まで覚え、`If-None-Match` を付けて聞く。304 なら覚えた本文（同じオブジェクト）を返すので、`usePolling` から見ると今までどおり「rev が同じ」。ブラウザのキャッシュには任せない（`no-store` のまま）。

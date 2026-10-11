@@ -56,10 +56,12 @@ interface Props extends PaneProps {
   onToggleDiff: (id: string) => void
   /** GitHub の open な PR（#554。App の `useSessionPrs()`）。見出しのセッションに紐づくものにリンクを出す */
   prs?: readonly PrRepo[]
+  /** フォーカスのあるペインか（#759）。許可の ⌘Enter はフォーカスのあるペインだけに効かせる。並べていなければ true */
+  focused?: boolean
 }
 
 /** 全チャンネルを時系列に流す。リポジトリと日数を見出しで選ぶ（リポジトリはサイドバーの絞り込みと同じ値） */
-export function FeedView({ selected, projects, onProjects, sessions = NO_SESSIONS, selfHost, openDiff, onToggleDiff, onStatus, onOpenSidebar, onLeaveToSidebar, linear, prs }: Props) {
+export function FeedView({ selected, projects, onProjects, sessions = NO_SESSIONS, selfHost, openDiff, onToggleDiff, onStatus, onOpenSidebar, onLeaveToSidebar, linear, prs, focused = true }: Props) {
   // 許可モードを選んでいないセッションは設定の既定で回る（#582）
   const defaultReplyMode = useContext(DefaultReplyModeContext)
   const [local, setLocal] = useLocalState<{ days: string }>('sai.feed', { days: '3' })
@@ -190,7 +192,7 @@ export function FeedView({ selected, projects, onProjects, sessions = NO_SESSION
                 ))}
                 {/* ショートカット（⌘Enter）が効くのは一番上の 1 つだけ。複数出るので、どれに効いたか分からなくならないように */}
                 {approvals.map((a, i) => (
-                  <ApprovalBubble key={a.approval_id} approval={a} now={now} repo={repoOf(a.id)} hotkey={i === 0} modeNote={modeNoteOf(a.id)} icon={iconOf(a.id)} />
+                  <ApprovalBubble key={a.approval_id} approval={a} now={now} repo={repoOf(a.id)} hotkey={focused && i === 0} modeNote={modeNoteOf(a.id)} icon={iconOf(a.id)} />
                 ))}
                 {queuedShown.flatMap(([qid, q]) =>
                   q.items.map((item, i) => (

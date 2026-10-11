@@ -17,6 +17,11 @@ interface Props {
   /** 一覧を取った時刻（ms） */
   now: number
   onOpenSidebar: () => void
+  /**
+   * 始めたセッションの最初の行が届いた（#759）。App が**このペインを**そのセッションに入れ替える
+   * （待っている間にフォーカスを隣へ移していても、隣のペインを潰さない）
+   */
+  onStarted: (id: string) => void
 }
 
 interface Started {
@@ -48,7 +53,7 @@ const isNewAgent = (value: string): value is NewAgent => AGENTS.some((a) => a.id
  * サーバには選んだ worktree の一番新しいセッション（`from`）を渡し、サーバがその `cwd` を使う（パスは送らない）。
  * 送ったら `NewSessionStarting` が最初の行を待って、そのセッションの画面へ移る
  */
-export function NewSessionView({ replying, now, onOpenSidebar }: Props) {
+export function NewSessionView({ replying, now, onOpenSidebar, onStarted }: Props) {
   const [all, setAll] = useState<{ sessions: SessionSummary[]; host: string; places: WorkspacesResponse | null } | null>(null)
   const [loadError, setLoadError] = useState('')
   // 選んでいる worktree の `key`（記録にあるものは `from`、兄弟 worktree は `from#worktree`）
@@ -143,6 +148,7 @@ export function NewSessionView({ replying, now, onOpenSidebar }: Props) {
           replying={replying?.[started.id]}
           now={now}
           {...(started.attach ? { attach: started.attach } : {})}
+          onArrived={onStarted}
           onRetry={() => setStarted(null)}
         />
       ) : (

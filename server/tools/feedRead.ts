@@ -254,6 +254,39 @@ export function usageTotals(rows: readonly UsageRow[], by: 'session' | 'day'): U
   return by === 'day' ? out.sort((a, b) => (a.key < b.key ? -1 : 1)) : out.sort((a, b) => b.cost_usd - a.cost_usd)
 }
 
+/** 「文脈が大きい」と数える線（1 回の呼び出しで読む量。#761 の実測と同じ） */
+export const SHARE_CONTEXT_TOKENS = 500_000
+/** 「キャッシュを書き直した」と数える線（そのターンでキャッシュに書いた量。#761 の実測と同じ） */
+export const SHARE_REWRITE_TOKENS = 200_000
+
+export interface UsageShares {
+  turns: number
+  cost_usd: number
+  /** 1 回の呼び出しで読む量（入力 3 つの和 ÷ CLI の中で回った呼び出しの数）が `SHARE_CONTEXT_TOKENS` 以上のターン */
+  large: { turns: number; cost_usd: number }
+  /** キャッシュに書いた量が `SHARE_REWRITE_TOKENS` 以上のターン */
+  rewritten: { turns: number; cost_usd: number }
+}
+
+/**
+ * 読み直しに使った分の目安（#761）。大きくなったセッション・間のあいたセッションへの送信を減らす変更の前後を、
+ * **同じ数え方で**比べるためのもの。範囲で絞ったあとの行を渡す
+ */
+export function usageShares(rows: readonly UsageRow[]): UsageShares {
+  const out: UsageShares = { turns: 0, cost_usd: 0, large: { turns: 0, cost_usd: 0 }, rewritten: { turns: 0, cost_usd: 0 } }
+  const add = (t: { turns: number; cost_usd: number }, cost: number) => {
+    t.turns += 1
+    t.cost_usd = Math.round((t.cost_usd + cost) * 1e8) / 1e8
+  }
+  for (const r of rows) {
+    add(out, r.turn_cost_usd)
+    const perCall = (num(r.input_tokens) + num(r.cache_read_input_tokens) + num(r.cache_creation_input_tokens)) / Math.max(1, num(r.num_turns))
+    if (perCall >= SHARE_CONTEXT_TOKENS) add(out.large, r.turn_cost_usd)
+    if (num(r.cache_creation_input_tokens) >= SHARE_REWRITE_TOKENS) add(out.rewritten, r.turn_cost_usd)
+  }
+  return out
+}
+
 /** `agent-messages.json` の送った記録を古い順に（サーバと同じ `isMessage()` の検査）。無い・壊れていれば空 */
 export async function readAgentMessages(dir: string): Promise<AgentMessage[]> {
   let raw: unknown

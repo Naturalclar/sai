@@ -6,6 +6,7 @@ import {
   AGENT_WEEKLY_STOP_PERCENT,
   AGENT_OVERLAP_SHOW,
   agentEntry,
+  idleNote,
   agentOverlap,
   AGENT_REQUEST_MAX,
   agentReplyRows,
@@ -153,6 +154,22 @@ test('agentTargets: 同じ project・自分以外・アーカイブ済みでな�
   assert.deepEqual(acrossNames(session('C1@r', { meta: { name: '担当' } })), ['c1@r', '担当'], 'worktree 名と題名では指せない')
   assert.deepEqual(acrossNames(session('C1@r')), ['c1@r'])
   assert.deepEqual(agentTargets(sessions, session('A1@r', { project: '' }), 'testmac'), [], 'どのリポジトリか分からない送り元からは送れない')
+})
+
+test('agentEntry / idleNote: 最後のターンからの時間（#761）。処理中・ターン完了の無い相手・時計を渡さないときは付けない。1 行に足すのは 20 字ほど', () => {
+  const now = Date.parse('2026-01-01T12:00:00+09:00')
+  const rested = agentEntry(session('B1@r', { last_turn_ts: '2026-01-01T11:48:00+09:00' }), false, 0, undefined, now)
+  assert.equal(rested.idle_ms, 12 * 60_000)
+  assert.equal(agentEntry(session('B1@r', { last_turn_ts: '2026-01-01T11:48:00+09:00' }), true, 0, undefined, now).idle_ms, undefined, '処理中')
+  assert.equal(agentEntry(session('B1@r', { last_turn_ts: '' }), false, 0, undefined, now).idle_ms, undefined, 'ターン完了が無い')
+  assert.equal(agentEntry(session('B1@r', { last_turn_ts: '2026-01-01T11:48:00+09:00' }), false).idle_ms, undefined, '時計を渡さない')
+  assert.equal(idleNote(12 * 60_000, 'claude'), ' 最後のターン: 12 分前')
+  assert.equal(idleNote(72 * 60_000, 'claude'), ' 最後のターン: 1 時間 12 分前（キャッシュ切れの見込み）')
+  assert.equal(idleNote(72 * 60_000, 'codex'), ' 最後のターン: 1 時間 12 分前', 'キャッシュの印は Claude だけ')
+  assert.equal(idleNote(undefined, 'claude'), '')
+  // 一覧の 1 行が長くなりすぎないこと（#688）。温かい相手で 14 字、切れている見込みの相手で 33 字まで
+  assert.ok(idleNote(12 * 60_000, 'claude').length <= 14)
+  assert.ok(idleNote(23 * 60 * 60_000 + 59 * 60_000, 'claude').length <= 33)
 })
 
 test('agentEntry / sessionLabel: 呼び名は表示名 → 題名 → ID。最後の発言は 1 行目だけで、長ければ切る', () => {

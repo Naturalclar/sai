@@ -2,6 +2,7 @@
 // そのセッションを **1 回だけ**起こす。いま待てるのは PR の CI だけ。
 // 確かめるのはサーバ（`gh` の決まった形）で、待っている間はエージェントのターンを回さない（usage を使わない）。
 // 置き場は `server/reply/waits.ts`、確かめる・起こすのは app.ts の `tickWaits()`。ここは純粋関数だけ（waits.test.ts）
+import { CACHE_COLD_MS } from './compact.ts'
 import type { PrCheckState, Wait, WaitResult, WaitStatus } from './types.ts'
 
 /** SAI が起こしたターンの本文の頭。人が打った文と見分ける（題名・「最後の入力」・↑ の履歴に使わない） */
@@ -20,9 +21,10 @@ export const WAIT_DAY_MS = 24 * 60 * 60_000
 /**
  * 待ち始めてからこれを過ぎて終わった待ちは、**自動では起こさない**（画面に結果を出し、人の「いま起こす」で起こす）。
  * 前のターンから 1 時間あくとプロンプトキャッシュが切れ、起こしたターンが文脈をほぼ全部書き直す（実測は docs/history/reply.md）。
- * 境目は 60 分で、確かめ（2 回見る）・起動・要約にかかる分を引いて手前に置く。**線を変えるならここ**
+ * 境目は 60 分で、確かめ（2 回見る）・起動・要約にかかる分を引いて手前に置く。**値は `shared/compact.ts` の `CACHE_COLD_MS` の 1 つ**
+ * （入力欄の印・送るときの要約の既定と同じ線。#761）
  */
-export const WAIT_AUTO_WAKE_MS = 50 * 60_000
+export const WAIT_AUTO_WAKE_MS = CACHE_COLD_MS
 /** サーバが `gh` で確かめる間隔 */
 export const WAIT_POLL_MS = 60_000
 /** PR を出した直後はチェックがまだ載っていない。預かってからこの間は「チェックなし」を「まだ」と読む */

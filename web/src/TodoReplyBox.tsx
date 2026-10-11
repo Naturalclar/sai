@@ -18,6 +18,8 @@ interface Props {
   onLeaveToSidebar?: () => void
   /** 人がボタンで開いたので、入力欄にフォーカスする */
   focusOnOpen?: boolean
+  /** ポーリングの時刻。渡せば、最後のターンからの時間を入力欄に出す（#761） */
+  now?: number
 }
 
 /**
@@ -27,7 +29,7 @@ interface Props {
  * 続きから打てる（逆も）。↑ の履歴は出さない（行を取っていないので作る材料が無い。取りに行くと要対応が
  * 「データを取りに行かない画面」でなくなる）。
  */
-export function TodoReplyBox({ session: s, replying, queued, onSend, sentFromConfirm, restore, onLeaveToSidebar, focusOnOpen = false }: Props) {
+export function TodoReplyBox({ session: s, replying, queued, onSend, sentFromConfirm, restore, onLeaveToSidebar, focusOnOpen = false, now = 0 }: Props) {
   return (
     // どのセッションの入力欄かを印にする。上の段の許可の ⌘Enter が、ここで押したキーを横取りしないように
     <div className="todo-reply" {...{ [REPLY_FOR_ATTR]: s.id }}>
@@ -47,6 +49,9 @@ export function TodoReplyBox({ session: s, replying, queued, onSend, sentFromCon
         attachId={s.id}
         terminal={Boolean(s.terminal)}
         busy={false}
+        now={now}
+        // 読み直す量は一覧に載っていないので、ここでは間だけ（#761）
+        warmth={{ agent: s.agent, lastTurnAt: s.last_turn_ts }}
         model={{ id: s.id, agent: s.agent, models: s.models, value: s.meta?.model }}
         permission={s.agent === 'claude' ? { id: s.id, value: s.meta?.permission_mode, terminal: Boolean(s.terminal), replying } : undefined}
         queued={queued}

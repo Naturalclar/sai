@@ -5,9 +5,10 @@ import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { COLD_COMPACT_TOKENS } from '../shared/compact.ts'
 import type { PrCi } from '../shared/waits.ts'
 import { WAIT_AUTO_WAKE_MS, WAIT_EMPTY_GRACE_MS, WAIT_MARK, WAIT_MAX_MS, WAIT_MAX_PER_SESSION, WAIT_POLL_MS, WAIT_READY_MAX_MS, WAIT_WAKES_PER_DAY } from '../shared/waits.ts'
 import type { Replying, SessionDetailResponse, SessionsResponse, SessionSummary, SessionProgressResponse, UsageResponse, Wait, WaitActionResponse, WaitForResponse } from '../shared/types.ts'
@@ -406,17 +407,22 @@ test('待ちで起きたターンからは、次の待ちも、別のセッシ�
   runner.finish(eid('W9'))
 })
 
-test('読み直す量が大きいセッションは、要約してから起こす（#579 と同じ判定）。本文は預かりの先頭に置かれる', async () => {
+/** そのセッションの最後のターン完了を「いま」（偽の時計）にする。間（#761）はこの行から数える */
+const turnEndedNow = async (id: string) => {
+  await appendFile(join(dir, `${localDate(realNow.toISOString())}.jsonl`), `${JSON.stringify(row(new Date(clock), id, { repo: 'r', cwd: work, project: 'o/r', remote: REMOTE }))}\n`)
+}
+
+test('間のあいていないセッションは、読み直す量が大きくても要約せずに起こす（キャッシュが残っている。画面・sai_send と同じ判定。#761）', async () => {
+  await turnEndedNow('W10')
   await held('W10', 100)
-  contexts.set(eid('W10'), 400_000)
+  contexts.set(eid('W10'), 800_000)
   const sentBefore = runner.sent(eid('W10')).length
   await firstSeen(100, GREEN)
   assert.deepEqual(await poll('W10'), [])
   const sent = runner.sent(eid('W10'))
   assert.equal(sent.length, sentBefore + 1)
-  assert.ok(sent.at(-1)!.cmd.text.startsWith('/compact'), '先に要約のターン')
-  const list = (await (await fetch(`${base}/api/sessions`)).json()) as SessionsResponse
-  assert.ok(list.queued[eid('W10')]!.items[0]!.text.startsWith(WAIT_MARK), '本文は預かりの先頭')
+  assert.ok(sent.at(-1)!.cmd.text.startsWith(WAIT_MARK), '要約は挟まず、本文のターン')
+  runner.finish(eid('W10'))
   contexts.delete(eid('W10'))
 })
 
@@ -631,15 +637,18 @@ test('待ち始めてから決めた時間のうちに終わった待ちは自�
   assert.equal((await act('W13', redone.id, 'stop')).status, 200)
 })
 
-test('自動では起こさない待ちも、読み直す量が大きければ要約してから起こす。押されないまま長く経ったら見に行くのをやめる', async () => {
+test('自動では起こさない待ちは、間があいているので、読み直す量が大きければ要約してから起こす（#761）。本文は預かりの先頭に置かれる。押されないまま長く経ったら見に行くのをやめる', async () => {
+  await turnEndedNow('W14')
   const w = await held('W14', 610)
   advance(WAIT_AUTO_WAKE_MS)
   await firstSeen(610, GREEN)
   assert.equal((await poll('W14'))[0]!.late, true)
-  contexts.set(eid('W14'), 500_000)
+  contexts.set(eid('W14'), COLD_COMPACT_TOKENS)
   try {
     assert.equal((await act('W14', w.id, 'wake')).status, 200)
     assert.ok(runner.sent(eid('W14')).at(-1)!.cmd.text.startsWith('/compact'), '先に要約を回す')
+    const list = (await (await fetch(`${base}/api/sessions`)).json()) as SessionsResponse
+    assert.ok(list.queued[eid('W14')]!.items[0]!.text.startsWith(WAIT_MARK), '本文は預かりの先頭')
   } finally {
     contexts.delete(eid('W14'))
     runner.finish(eid('W14'))

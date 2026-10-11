@@ -28,6 +28,7 @@ import {
   rowEntity,
   sessionsOf,
   usageRows,
+  usageShares,
   usageTotals,
 } from './feedRead.ts'
 
@@ -298,6 +299,20 @@ test('messages: 返答の行があるか・行は無いが渡してあるか・�
   ])
 })
 
+test('usageShares: 1 回の呼び出しで読む量が大きいターン・キャッシュを書き直したターンの数と費用（#761）', () => {
+  const base = { model: 'm', output_tokens: 0, duration_ms: 0, denials: 0, is_error: false, id: 'a@r', ts: '2026-10-05T00:00:00Z', cost_usd: 0 }
+  const shares = usageShares([
+    // 60 万を 1 回で読む（大きい）。キャッシュは読んだだけ
+    { ...base, input_tokens: 0, cache_read_input_tokens: 600_000, cache_creation_input_tokens: 0, num_turns: 1, turn_cost_usd: 1 },
+    // 合計 120 万でも 4 回の呼び出しに分かれていれば 1 回あたり 30 万（大きくない）。25 万を書き直した
+    { ...base, input_tokens: 0, cache_read_input_tokens: 950_000, cache_creation_input_tokens: 250_000, num_turns: 4, turn_cost_usd: 3 },
+    // 小さい
+    { ...base, input_tokens: 1000, cache_read_input_tokens: 50_000, cache_creation_input_tokens: 0, num_turns: 1, turn_cost_usd: 0.5 },
+  ])
+  assert.deepEqual(shares, { turns: 3, cost_usd: 4.5, large: { turns: 1, cost_usd: 1 }, rewritten: { turns: 1, cost_usd: 3 } })
+  assert.equal(usageShares([]).turns, 0)
+})
+
 test('usage: セッション別・日別に、差で数えた費用を出す。範囲で絞っても積み上げは乗らない', async () => {
   const { code, out } = await cli('usage', '--days', '2')
   assert.equal(code, 0)
@@ -307,10 +322,12 @@ test('usage: セッション別・日別に、差で数えた費用を出す。�
     ['alpha', '3', '300', '6k', '0', '0', '6.00'],
     ['beta', '1', '100', '2k', '0', '0', '0.50'],
     ['合計（全 2 セッション）', '4', '400', '8k', '0', '0', '6.50'],
+    // 読み直しの大きいターンの割合（#761）。作り物はどれも小さい
+    ['読み直し: 1 回の呼び出しで読む量が 500k 以上 0/4 ターン（0%）・費用の 0%／キャッシュに 200k 以上書いた 0/4 ターン（0%）・費用の 0%'],
   ])
   // 絞ったときは、出した行の小計と範囲の全部の合計を分けて出す（合計が出ている行の和に見えないように）
   const top = await cli('usage', '--days', '2', '-n', '1')
-  assert.deepEqual(top.out.slice(2).map((l) => [l.split(/\s{2,}/)[0], l.split(/\s{2,}/).at(-1)]), [
+  assert.deepEqual(top.out.slice(2, -1).map((l) => [l.split(/\s{2,}/)[0], l.split(/\s{2,}/).at(-1)]), [
     ['alpha', '6.00'],
     ['小計（上の 1 セッション）', '6.00'],
     ['合計（全 2 セッション）', '6.50'],

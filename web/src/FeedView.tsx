@@ -218,6 +218,8 @@ export function FeedView({ selected, projects, onProjects, sessions = NO_SESSION
             busy={pending.some((p) => p.id === target.id)}
             busySince={pending.find((p) => p.id === target.id)?.since}
             now={now}
+            // 読み直す量は一覧に載っていないので、ここでは間だけ（#761）
+            warmth={{ agent: target.agent, lastTurnAt: sessions.find((x) => x.id === target.id)?.last_turn_ts }}
             queued={queued[target.id]?.items.length ?? 0}
             // 前の返信を処理中か、預かりが残っていれば預ける（#305。先に預けたものを追い越さない）
             {...(restore ? { restore } : {})}

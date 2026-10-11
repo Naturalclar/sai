@@ -203,11 +203,16 @@ test('pendingOf: 「決めたこと」の中で番号に触れただけでは消
   // 見出しにしていない「まだ決めていないこと」（太字の行）から下も、決まったと読まない
   assert.deepEqual(decidedWith('- 決めること 1: 青\n\n**まだ決めていないこと**\n- 決めること 2: 上限は保留\n- 決めること 3（置き場）'), ['body2', 'body3'])
   assert.deepEqual(decidedWith('- 決めること 1: 青\n- まだ決めていないこと:\n  - 決めること 2: 保留'), ['body2', 'body3'])
-  for (const mark of ['> まだ決めていないこと', '*まだ決めていないこと*', '_まだ決めていないこと_', '【まだ決めていないこと】', 'まだ決めていない:', '- [ ] まだ決めていないこと', '~~まだ決めていないこと~~', '以下はまだ決めていないこと:', '<summary>まだ決めていないこと</summary>']) assert.deepEqual(decidedWith(`- 決めること 1: 青\n\n${mark}\n- 決めること 2: 保留`), ['body2', 'body3'], mark)
-  // 「未決」「まだ決めていない」を文に含むだけの決定は、決まったと読む。名指しした項目そのものが「まだ決めていない」なら、その項目だけ読まない
-  assert.deepEqual(decidedWith('- 決めること 1: 未決の項目は灰色で出す\n- 決めること 2: 8 にする'), ['body3'])
-  assert.deepEqual(decidedWith('未決だった 3 点を決めた。\n- 決めること 1: 青\n- 決めること 2: 8\n- 決めること 3: A'), [])
-  assert.deepEqual(decidedWith('- 決めること 1: まだ決めていない\n- 決めること 2: 8 にする'), ['body1', 'body3'])
+  for (const mark of ['> まだ決めていないこと', '*まだ決めていないこと*', '_まだ決めていないこと_', '【まだ決めていないこと】', 'まだ決めていない:', '- [ ] まだ決めていないこと', '~~まだ決めていないこと~~', '以下はまだ決めていないこと:', '<summary>まだ決めていないこと</summary>', '未決:']) assert.deepEqual(decidedWith(`- 決めること 1: 青\n\n${mark}\n- 決めること 2: 保留`), ['body2', 'body3'], mark)
+  // 「未決」「まだ決めていない」と書いた行から下は、名指しした項目の行でも決まったと読まない（出しすぎる側）
+  assert.deepEqual(decidedWith('- 決めること 1: 青\n\n**未決**\n- 決めること 2: 保留'), ['body2', 'body3'])
+  assert.deepEqual(decidedWith('- 決めること 1: 青\n- 未決:\n- 決めること 2: 保留'), ['body2', 'body3'])
+  assert.deepEqual(decidedWith('- 決めること 1: 青\n- 決めること 2: まだ決めていないこと\n- 決めること 3: これも保留'), ['body2', 'body3'])
+  assert.deepEqual(decidedWith('- 決めること 1: 青\n- まだ決めていないこと（決めること 2）\n- 決めること 3: 保留'), ['body2', 'body3'])
+  assert.deepEqual(decidedWith('- 決めること 1: 未決の項目は灰色で出す\n- 決めること 2: 8 にする'), ['body1', 'body2', 'body3'])
+  // 続きの行に書いた「まだ決めていない」は、その項目ごと読まない
+  assert.deepEqual(decidedWith('- 決めること 1: 青\n- 決めること 2:\n  まだ決めていない\n- 決めること 3: A'), ['body2', 'body3'])
+  assert.deepEqual(decidedWith('- 決めること 1: 青\n- 決めること 2:\nまだ決めていない'), ['body2', 'body3'])
   // コメントの中の `<!--` で「まだ決めていないこと」が消えない
   assert.deepEqual(brief(issue({ body: BODY, comments: [{ createdAt: '2026-10-02T00:00:00Z', body: '## 決めたこと（決めること 1〜3）\n雛形の `<!--` は消した\n### まだ決めていないこと\n- 決めること 3: 保留\n- 新しい話' }] })), ['body3', 'remaining'])
   // ほかの issue の番号

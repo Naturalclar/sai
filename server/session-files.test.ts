@@ -12,6 +12,7 @@ import { join } from 'node:path'
 import type { SessionFileResponse } from '../shared/types.ts'
 import { createApp } from './app.ts'
 import { Authenticator, WhoisUnavailable } from './auth.ts'
+import type { WhoisInfo } from './auth.ts'
 import { MCP_CAP } from './mcp/access.ts'
 import { FeedStore } from './rows/store.ts'
 import { localDate } from './rows/aggregate.ts'
@@ -74,7 +75,7 @@ before(async () => {
   ]
   await writeFile(join(feedDir, `${localDate(now.toISOString())}.jsonl`), lines.map((l) => JSON.stringify(l)).join('\n') + '\n')
 
-  const auth = new Authenticator(async (addr) => {
+  const auth = new Authenticator(async (addr): Promise<WhoisInfo | null> => {
     if (addr === DOWN_ADDR) throw new WhoisUnavailable('timeout')
     if (addr === TAGGED_ADDR) return { login: 'tagged-devices', tagged: true, node: 'bot', caps: { [MCP_CAP]: [{ tools: ['read'] }] } }
     return addr === '100.64.0.1' ? { login: 'me@example.com', tagged: false, node: 'laptop', caps: {} } : null

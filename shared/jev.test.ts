@@ -169,7 +169,7 @@ test('jevAutoDecision（#749）: ルールを作れない Bash は、この回�
   assert.match(reasonOf('cat .env | head -1 # $(date)'), /秘密が入っていそう/)
   assert.match(reasonOf('(cat /etc/hosts) # x'), /cwd の外か、読めない形/)
   assert.match(reasonOf('cd /tmp && ls', 'cd_outside'), /読むだけと分かっているコマンドでない/, 'cd は受けない')
-  assert.match(reasonOf('git diff $(git merge-base HEAD main)'), /echo 以外に渡している/)
+  assert.match(reasonOf('git diff $(git rev-parse HEAD)'), /echo 以外に渡している/)
   // ルールがもう設定にあるのに聞かれている形・理由が分からないものは、中身に関係なく人に回す
   assert.match(reasonOf(READ, 'covered'), /ルールを作れない理由が covered/)
   assert.match((jevAutoDecision(bash(READ, 0.99), 0.9, null, undefined, { cwd: '/work/repo', noRule: undefined }) as { reason: string }).reason, /ルールを作れない理由が 分からない/)

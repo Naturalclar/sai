@@ -109,12 +109,12 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
   - **シェルが展開する語（引用符の外のグロブ・`~`・zsh の拡張グロブの `^`）は、どの引数でも受けない**（`lit()`。`grep -v .e*` はパターンのつもりの語が `.env` に展開されて読む先になる）。受けるのは名前を並べるだけの `ls` の引数と、git のリビジョンの `^` `~` だけ
   - 読む先（`readPath()`）: 中身の分かる語で、cwd の中で、`..` を含まず、**階層ごとに** `shared/files.ts` の `isSecretPath()` に当たらないもの（`secrets/db.yml`・`.envs/prod`）
   - 読む先の無い形（`cat`・`grep foo`・`wc -l`）は、パイプの 2 つ目以降だけ（`Check` の `piped`。先頭だと標準入力を待って止まる）
-  - `git`: 読むサブコマンドだけ（`GIT_READS`・一覧する形だけの `GIT_LISTS`）。フラグは知っている長いフラグ（`GIT_LONG`）と、**値を取らない 1 字の短いフラグ**（`GIT_SHORT`）だけ。git は長いフラグの省略形を受け、まとめた短いフラグを 1 字ずつ読む（`git grep -GOrm` は `-O rm`）ので、拒否の一覧でも「フラグの形なら通す」でも止まらない。フラグでない語が外のパス・グロブ・秘密の名前なら断る。サブコマンドの前に受けるのは `--no-pager` だけ
+  - `git`: **決まった形だけ**（`GIT_FORMS`）。サブコマンドごとに受けるフラグを 1 語ずつ書き（`status`・`log`・`diff`・`show`・`rev-parse`・`rev-list`・`ls-files`・`branch`・`tag`・`remote`・`stash list`・`worktree list`）、数（`GIT_COUNT`: `-3`・`-n3`・`--max-count=3`）と書式（`GIT_FORMAT`: 名前の付いた形か、決まった穴 `%h` `%s` `%an` … と字だけ。穴が 1 つも無い値は利用者の設定の名前として引かれるので受けない）のほかは値を取るフラグを受けない。**フラグでない語は `rev-parse` / `rev-list` の `HEAD` 1 つだけ**で、リビジョン・範囲・パス・pathspec・`--` は受けない。サブコマンドの前に受けるのは `--no-pager` だけ。リビジョンとパスを受けていた形は、5 回のレビューで毎回すり抜けが出たので受ける範囲ごと削った（→ `docs/history/approvals.md`）
   - `gh`: 形は `gh [-R owner/repo] <まとまり> <サブコマンド> …` だけ（`GH_READS` と、GET の `gh api <読む先>`）。フラグは `GH_BARE` / `GH_VALUE` を 1 語ずつ。知らないフラグを 1 つでも受けると、gh はその次の語を値として読み飛ばす（`gh pr --body view merge 5` が `pr merge` になる）。`--jq` / `--template` は入れない。値が `-` で始まるものは受けない
   - `$( … )` の結果（`Word.opaque`）を渡してよいのは `echo` だけで、二重引用符の中に書いたもの（`Word.loose` でない）だけ（bash は引用符の外の結果をグロブとして展開する）。コメントはいちばん外の並びでだけ受ける
-  - git の語は、署名を確かめる書式（`%G?`・`%(signature)`。`gpg` を起こす）を含めば断る。`git diff` のフラグでない語は 1 つまで（リポジトリの外では `git diff a b` も `git diff a -- b` も `diff -r` になる）。git の語の `^` は引用符の中だけ・`:` 始まり（pathspec のマジック）とバックスラッシュは受けない・`signature` を含む語は受けない。`gh api` の読む先は、リポジトリの下の決まった口だけ。gh のフラグでない語は URL・`host/owner/repo` を受けない。読む先と git の語の字は ASCII だけ
+  - `gh api` の読む先は、リポジトリの下の決まった口だけ。gh のフラグでない語は URL・`host/owner/repo` を受けない。読む先の字は ASCII だけ
   - `READ_ONLY_MAX_CHARS`（1000 字）より長いコマンドは通さない（`jevState()` がコマンドをその長さで切るので、Jev が全部を見ていない）
-- **残っている限界**: セッションの cwd と実際の場所のずれ（人が前に許可した `cd`。判定は行の cwd で行う）・cwd の中のシンボリックリンク・`isSecretPath()` が見ない名前（`token`・`kubeconfig`・`.mcp.json`）・追跡されている秘密（`git log -p`）・git 自身の設定で走るもの（`diff.external`・`core.fsmonitor`）
+- **残っている限界**: セッションの cwd と実際の場所のずれ（人が前に許可した `cd`。判定は行の cwd で行う）・cwd の中のシンボリックリンク・`isSecretPath()` が見ない名前（`token`・`kubeconfig`・`.mcp.json`）・追跡されている秘密（`git show`・`git diff` の出力に出る）・git 自身の設定で走るもの（`diff.external`・`core.fsmonitor`）
 - **テストと調査は、文字列を `notReadOnly()` に渡すだけ**（コマンドを実行しない）
 - ルールの確率は `Approval.jev_rule` として許可のバブルにも出す。`approvalsNow()` は `JevRisk.peekRule()` で覚えているものを見るだけで、読む経路から外へは送らない。
 - Codex / OpenCode の許可には「常に許可」が無いので触らない。

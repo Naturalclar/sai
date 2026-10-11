@@ -481,11 +481,12 @@ approve-mcp.ts ──POST /api/approvals──▶ SAI サーバ ◀──POST /a
 | | |
 | --- | --- |
 | 書き方 | 語・引用符・`&&` `||` `;` `|`・サブシェル `( … )`・コマンド置換 `$( … )`・コメント・`2>&1` や `>/dev/null` だけ。**変数（`$X`）・バッククォート・ファイルへのリダイレクト・ヒアドキュメント・代入・`for` / `if`・バックスラッシュ・波括弧があれば通さない** |
-| コマンド | `echo` `pwd` `date` `cat` `head` `tail` `wc` `sort` `uniq` `cut` `tr` `ls` `grep` `find` `sed -n 'Np'` と、`git` / `gh` の読むサブコマンド（`git status` / `log` / `diff` / `show` / `rev-parse` …、`gh pr view` / `list` / `checks` / `diff`、決まった口への GET の `gh api`）。**ここに無いコマンドは通さない**（`rm`・`git commit` / `push`・`gh pr merge` / `create`・`cd`・`printf`・`jq`・`rg`・シェル・`python3`・`pnpm`・`curl`・`tmux`・`env` / `printenv` など） |
+| コマンド | `echo` `pwd` `date` `cat` `head` `tail` `wc` `sort` `uniq` `cut` `tr` `ls` `grep` `find` `sed -n 'Np'` と、`git` の決まった形（下の行）、`gh` の読むサブコマンド（`gh pr view` / `list` / `checks` / `diff`、決まった口への GET の `gh api`）。**ここに無いコマンドは通さない**（`rm`・`git commit` / `push`・`gh pr merge` / `create`・`cd`・`printf`・`jq`・`rg`・シェル・`python3`・`pnpm`・`curl`・`tmux`・`env` / `printenv` など） |
+| `git` | **決まった形だけ**: `status`・`log`・`diff`・`show`・`rev-parse` / `rev-list --count`（`HEAD` だけ）・`ls-files`・`branch` / `tag` の一覧・`remote`・`stash list`・`worktree list` に、決まったフラグ（`--oneline`・`--stat`・`--name-only`・`--cached`・`-3`・`--format='%h %s'` など）を付けた形。**リビジョン・範囲・パスを付けた形は通さない**（`git diff main..HEAD`・`git show HEAD~1`・`git log -- src`・`git log -p`・`git blame` は人に来る） |
 | フラグ | コマンドごとに、読むだけと分かっているものを 1 語ずつ（`sort -o`・`tail -f`・`grep -r`・`find -exec` / `-delete`・`git diff --output`・`git -C`・`gh … --jq`・省略形・まとめた短いフラグは通さない） |
 | グロブと `~` | 引用符の外の `*` `?` `[` と、語の頭の `~` は通さない（シェルがファイルの名前に展開して、読む先やフラグになる）。`ls` の引数だけは受ける。パターンは引用符で囲む |
 | 読む先 | cwd の中だけ（`..` も通さない）。`.env`・鍵・トークンの類（返答に出てきたファイルを読む口と同じ判定を、階層ごとに）は通さない |
-| コマンド置換の結果 | 渡してよいのは `echo` だけ（`echo "branch: $(git rev-parse HEAD)"` は通り、`git diff $(git merge-base …)` は人に来る） |
+| コマンド置換の結果 | 渡してよいのは `echo` だけ（`echo "branch: $(git rev-parse HEAD)"` は通り、`git diff $(git rev-parse HEAD)` は人に来る） |
 
 例: `echo "at $(git rev-parse HEAD)"`・`(git status; git log --oneline -3)`・`git log --oneline | head -5 # 直近` は通る。`git commit -m "$(cat <<'EOF' …)"`・`N=$(…) && …`・`cat .env`・`cd sub && ls` は人に来る。1000 字より長いコマンドも人に来る（Jev が全部を見ていないため）。**分からないことも残る**: セッションの場所と実際にシェルが居る場所がずれているとき（前に `cd` を許可したあと）・cwd の中のシンボリックリンク・名前では秘密と分からないファイル。通さなかった理由は `reply.log` に 1 回だけ残る。Jev を切るか「自動で常に許可」を「しない」にすれば、今までどおり全部人に来る。
 

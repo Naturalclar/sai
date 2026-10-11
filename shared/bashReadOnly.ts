@@ -67,8 +67,6 @@ interface Word {
   glob: boolean
   /** 引用符の外の `~` で始まる（シェルがホームに展開する） */
   tilde: boolean
-  /** 引用符の外に `^` がある */
-  caret: boolean
   /** 二重引用符の外に `$( … )` がある（bash は結果を空白で割り、グロブとして展開する） */
   loose: boolean
   /** 引用符の外に `^` か、頭でない `~` がある（zsh の拡張グロブ。`extendedglob` が入っていると `^README.md` はほかの全部のファイルに展開される） */
@@ -98,12 +96,6 @@ const lit = (w: Word | undefined): string => {
   if (w.glob || w.tilde || w.xglob) return refuse('path')
   return w.text
 }
-/**
- * git の語。リビジョンの `HEAD~2` は受ける。**引用符の外の `^` は受けない**（zsh の拡張グロブでは語のどこにあっても否定で、
- * `.e^` は `.env` に、`''^-x` は cwd のほぼ全部の名前に展開される）。`'HEAD^'` と引用符で囲めば字のまま
- */
-const gitLit = (w: Word | undefined): string => (w && !w.opaque && !w.glob && !w.tilde && !w.caret ? w.text : lit(w))
-
 /** 読む先のパス。cwd の中で、秘密のファイルでないこと。`glob` はグロブを受けるか（中身を出すコマンドでは受けない） */
 function readPath(w: Word, place: Place, glob = false): string {
   // 名前を並べるだけのコマンド（`ls`）だけ、グロブを受ける
@@ -243,73 +235,35 @@ const literals = (spec: FlagSpec = {}, max = Infinity): Check => (args, place) =
 // ---- git / gh（読むサブコマンドだけ）
 
 /**
- * git の読むサブコマンドで受けるフラグ。**知っているものだけ**（git は長いフラグの省略形を受けるので、拒否の一覧では
- * `--open-files-in-pag=…` のような省略を止められない。#754 のレビュー）。`--name` と `--name=value` の両方を受ける。
- * 書く・別のコマンドを走らせる・リポジトリの外や追跡外を読むフラグ（`--output`・`-O`・`--open-files-in-pager`・`--ext-diff`・
- * `--textconv`・`--no-index`・`--untracked`・`--no-exclude-standard`・`--contents`・`-f`）は入れない
+ * git は**決まった形だけ**（#754）。サブコマンドごとに、受けるフラグを 1 語ずつ書き、フラグでない語（リビジョン・パス・pathspec）は
+ * `rev-parse` / `rev-list` の `HEAD` のほかは 1 つも受けない。リビジョンとパスを受けていた形は、5 回のレビューで毎回すり抜けが見つかった
+ * （リポジトリの外で `diff -r` になる・pathspec のマジック・`^`・署名を確かめる書式・省略形・まとめた短いフラグ）ので、受ける範囲ごと削った。
+ * 入れていないサブコマンド（`blame`・`cat-file`・`ls-tree`・`describe`・`for-each-ref`・`reflog` …）と、ここに無い語は人に回る
  */
-const GIT_LONG = new Set([
-  'oneline', 'stat', 'shortstat', 'numstat', 'name-only', 'name-status', 'summary', 'format', 'pretty', 'abbrev-commit', 'abbrev', 'graph', 'decorate', 'no-decorate',
-  'all', 'branches', 'tags', 'remotes', 'no-merges', 'merges', 'first-parent', 'since', 'until', 'after', 'before', 'author', 'committer', 'grep', 'follow', 'reverse',
-  'max-count', 'skip', 'cached', 'staged', 'patch', 'no-patch', 'unified', 'color', 'no-color', 'word-diff', 'ignore-all-space', 'ignore-space-change', 'ignore-blank-lines',
-  'short', 'porcelain', 'branch', 'show-toplevel', 'show-prefix', 'abbrev-ref', 'verify', 'quiet', 'count', 'left-right', 'is-inside-work-tree', 'git-common-dir',
-  'absolute-git-dir', 'show-current', 'diff-filter', 'date', 'always', 'dirty', 'contains', 'merged', 'no-merged', 'sort', 'points-at', 'others', 'exclude-standard',
-  'modified', 'deleted', 'full-name', 'line-number', 'ignore-case', 'fixed-strings', 'extended-regexp', 'word-regexp', 'files-with-matches', 'heading', 'break',
-  'no-renames', 'find-renames', 'cc', 'root', 'topo-order', 'date-order', 'no-walk', 'symbolic', 'symbolic-full-name', 'is-ancestor', 'octopus',
-  'long', 'exact-match', 'pickaxe-all', 'stat-width', 'relative', 'no-prefix', 'minimal', 'histogram', 'patience', 'raw', 'check', 'exit-code', 'ignored', 'null',
-])
+const GIT_COUNT = /^(?:-\d{1,4}|-n\d{1,4}|--max-count=\d{1,4})$/
 /**
- * 短いフラグ。**値を取らない 1 字と、数字の付いた決まった形だけ**。まとめた形（`-pO`）・値を付けた形（`-Sx`・`-L1,5:f`・`-GOrm`）は受けない:
- * git はまとめた短いフラグを 1 字ずつ読むので、`git grep -GOrm` は `-G -Orm`（一致したファイルを `rm` に渡す）になる。#754 の 3 回目のレビュー
+ * `--format=` / `--pretty=` の値。名前の付いた形か、決まった穴（`%h` `%H` `%s` `%d` `%D`、`%an` `%ae` `%ad` `%ar` `%as`、`%cn` …）と
+ * 字・数字・空白・少しの記号だけ（`%` の無い値は名前として引かれるので、利用者の設定の `pretty.<名前>` に当たる。穴が 1 つは要る）。`%G?`（署名を確かめる。`gpg` を起こす）・`%(…)`・`%x00`・`%<(…)` は形に無いので通らない
  */
-const GIT_SHORT = /^-(?:[psqnwbrtvaz]|\d+|U\d+|n\d+)$/
-const gitArgs = (args: readonly Word[]): string[] => {
-  /** フラグでない語（リビジョン・パス・フラグの値） */
-  const plain: string[] = []
-  let afterDash = false
-  for (const w of args) {
-    const text = gitLit(w)
-    // 署名を確かめる書式・並べ替え（`%G?`・`%GS`・`%(signature)`・`%(*signature)`・`--sort=signature`）は `gpg` / `ssh-keygen` を起こす（どれを起こすかはコミットの中身で決まる）
-    if (/%G|signature/i.test(text)) refuse('flag')
-    if (text === '--') {
-      plain.push(text)
-      afterDash = true
-      continue
-    }
-    if (afterDash && text.startsWith('-')) refuse('flag')
-    if (text.startsWith('--')) {
-      const eq = text.indexOf('=')
-      if (!GIT_LONG.has(text.slice(2, eq < 0 ? undefined : eq))) refuse('flag')
-      continue
-    }
-    if (text.startsWith('-')) {
-      if (!GIT_SHORT.test(text)) refuse('flag')
-      continue
-    }
-    // フラグでない語（リビジョン・パス・フラグの値）: リポジトリの外を指す形（`git diff /etc/a /etc/b` は外のファイルを読む）と、
-    // 秘密のファイルの名前（`HEAD:.env`・`-- .env`）は受けない
-    // グロブの字を含む語（引用符で囲んだ pathspec `'.en*'`）も受けない: 名前で秘密と見分けられない
-    // pathspec のマジック（`:(top)…`）とバックスラッシュ（ワイルドカード扱いになる）も、名前の検査を外すので受けない
-    if (text.startsWith('/') || text.startsWith(':') || text.split(/[/:]/).includes('..') || /[*?[\\(]/.test(text)) refuse('path')
-    // 名前の字は ASCII だけ（大文字小文字を区別しないファイルシステムは、`ſecrets.yml` を `secrets.yml` として開く）
-    // eslint-disable-next-line no-control-regex
-    if (/[^\x20-\x7e]/.test(text)) refuse('path')
-    if (text.split(/[/:]/).some((seg) => seg && isSecretPath(seg))) refuse('secret')
-    plain.push(text)
-  }
-  return plain
-}
-/** 引数が何でも読むだけの git のサブコマンド */
-const GIT_READS = new Set(['status', 'log', 'diff', 'show', 'rev-parse', 'rev-list', 'ls-files', 'ls-tree', 'cat-file', 'merge-base', 'describe', 'blame', 'name-rev', 'for-each-ref', 'show-ref', 'count-objects', 'diff-tree'])
-/** 引数によっては書くサブコマンド → 読むだけの形 */
-const GIT_LISTS: Record<string, RegExp> = {
-  branch: /^(?:-a|-r|-v|-vv|--all|--remotes|--list|--show-current|--verbose|--no-color|--contains(?:=.*)?|--merged(?:=.*)?|--no-merged(?:=.*)?|--format=.*|--sort=.*)$/,
-  tag: /^(?:-l|--list|-n\d*|--contains(?:=.*)?|--sort=.*|--format=.*)$/,
+const GIT_FORMAT = /^--(?:format|pretty)=(?:oneline|short|medium|full|fuller|(?=.*%)(?:%(?:[hHsdD]|[ac][ndrs])|[A-Za-z0-9 :|,._/#()[\]-])*)$/
+const GIT_FORMS: Record<string, { flags: Set<string>; shapes?: RegExp[]; head?: boolean; only?: boolean }> = {
+  status: { flags: new Set(['-s', '--short', '-b', '--branch', '-sb', '--porcelain']) },
+  log: {
+    flags: new Set(['--oneline', '--stat', '--shortstat', '--name-only', '--name-status', '--graph', '--decorate', '--no-decorate', '--no-merges', '--merges', '--first-parent', '--reverse', '--abbrev-commit', '--no-color']),
+    shapes: [GIT_COUNT, GIT_FORMAT],
+  },
+  diff: { flags: new Set(['--stat', '--shortstat', '--numstat', '--name-only', '--name-status', '--cached', '--staged', '--no-color']) },
+  show: { flags: new Set(['--stat', '--shortstat', '--name-only', '--name-status', '--oneline', '--no-patch', '-s', '--no-color']), shapes: [GIT_FORMAT] },
+  'rev-parse': { flags: new Set(['--abbrev-ref', '--short', '--show-toplevel', '--show-prefix', '--is-inside-work-tree']), head: true },
+  'rev-list': { flags: new Set(['--count']), head: true },
+  'ls-files': { flags: new Set() },
+  branch: { flags: new Set(['--show-current', '-a', '--all', '-r', '--remotes', '-v', '-vv', '--list', '--no-color']) },
+  tag: { flags: new Set(['-l', '--list']) },
   // `git remote -v` は URL を出す（`https://user:token@…` の形で鍵が入っていることがある）。名前だけの形を受ける
-  remote: /^$/,
-  stash: /^list$/,
-  worktree: /^list$/,
-  reflog: /^(?:show|-\d+|-n\d*|--format=.*|--date=.*)$/,
+  remote: { flags: new Set() },
+  // その 1 語だけ（`stash list -p` は中身を出し、`stash` だけだと退避する）
+  stash: { flags: new Set(['list']), only: true },
+  worktree: { flags: new Set(['list']), only: true },
 }
 const gitCheck: Check = (args) => {
   // サブコマンドの前に受けるのは `--no-pager` だけ（`-C <dir>` は受けない: 下の階層に別のリポジトリがあれば、その設定で動く）
@@ -317,23 +271,18 @@ const gitCheck: Check = (args) => {
   const sub = lit(args[i])
   // サブコマンドの前の、知らないフラグ（`-c`・`-p`・`--git-dir`・`--config-env` …）
   if (sub.startsWith('-')) return refuse('flag')
+  const form = Object.hasOwn(GIT_FORMS, sub) ? GIT_FORMS[sub] : undefined
+  if (!form) return refuse('command')
   const rest = args.slice(i + 1)
-  if (GIT_READS.has(sub)) {
-    const plain = gitArgs(rest)
-    if (sub === 'diff') {
-      // リポジトリの外では、パスを 2 つ渡した `git diff a b` が `diff -r`（ディレクトリの中のファイルの中身を全部出す）になる
-      // （`--` は捨てられるので、`git diff a -- b` も同じ）。フラグでない語は 1 つまで
-      if (plain.filter((t) => t !== '--').length >= 2) refuse('path')
-    }
-    return
+  if (form.only && rest.length !== 1) refuse('flag')
+  let heads = 0
+  for (const w of rest) {
+    const text = lit(w)
+    if (form.flags.has(text) || form.shapes?.some((re) => re.test(text))) continue
+    // フラグでない語は `HEAD` だけ・1 つだけ（ブランチの名前・パス・`HEAD:path`・`a..b`・`--` は受けない）
+    if (form.head && text === 'HEAD' && ++heads === 1) continue
+    refuse('flag')
   }
-  const list = Object.hasOwn(GIT_LISTS, sub) ? GIT_LISTS[sub] : undefined
-  if (!list) return refuse('command')
-  // 一覧する形のフラグだけ。フラグでない語（ブランチの名前など）が来たら「作る・消す」かもしれないので通さない
-  // （`stash list`・`worktree list`・`reflog show` は、その語そのものが形）
-  for (const w of rest) if (!list.test(lit(w)) || /%G|signature/i.test(w.text)) refuse('flag')
-  // `stash list`・`worktree list` はその 1 語だけ、`remote` は引数なしだけ
-  if (sub === 'stash' || sub === 'worktree' ? rest.length !== 1 : sub === 'remote' && rest.length !== 0) refuse('flag')
 }
 
 /** gh の読むサブコマンド（`gh pr view`）。`api` は下で別に見る */
@@ -548,7 +497,7 @@ class Reader {
   /** 語 1 つ。素の字・`'…'`・`"…"`・`$( … )` だけでできていること */
   private word(place: Place): Word {
     const start = this.i
-    const w: Word = { text: '', opaque: false, bare: true, glob: false, tilde: this.text[start] === '~', xglob: false, loose: false, caret: false }
+    const w: Word = { text: '', opaque: false, bare: true, glob: false, tilde: this.text[start] === '~', xglob: false, loose: false }
     for (;;) {
       const c = this.text[this.i]
       if (c === undefined || c === ' ' || c === '\t' || c === '\n' || c === ';' || c === '|' || c === '&' || c === ')') break
@@ -586,7 +535,6 @@ class Reader {
       } else if (PLAIN.test(c!)) {
         if (c === '*' || c === '?' || c === '[') w.glob = true
         if (c === '^' || (c === '~' && this.i > start)) w.xglob = true
-        if (c === '^') w.caret = true
         w.text += c
         this.i++
       } else refuse('syntax')

@@ -384,7 +384,7 @@ test('自動で今回だけ許可（#749）: ルールを作れない Bash は�
   const variable = await post('echo "$ZZVAR"')
   const outside = await post('(ls /tmp/zzout)')
   const secret = await post('(cat .env) # zzenv')
-  const opaque = await post('git diff --stat $(git merge-base HEAD zzmain)')
+  const opaque = await post('git diff --stat $(git rev-parse HEAD)')
   const low = await post('echo "$(git log -1 --format=zzlow)"')
   await drain()
   assert.equal((await approvals.wait(sub, 10))?.behavior, 'allow')
@@ -418,7 +418,7 @@ test('自動で今回だけ許可（#749）: ルールを作れない Bash は�
   await drain()
   const again = (await readFile(join(feedDir, 'reply.log'), 'utf-8')).slice(logBefore).split('\n').filter((l) => l.includes('見送り'))
   assert.equal(again.length, 6, '同じ許可には 1 行だけ')
-  for (const word of ['zzgone', 'zzmsg', 'ZZVAR', 'zzout', 'zzenv', 'zzmain']) assert.ok(!again.join('\n').includes(word), word)
+  for (const word of ['zzgone', 'zzmsg', 'ZZVAR', 'zzout', 'zzenv']) assert.ok(!again.join('\n').includes(word), word)
 
   // 画面: 通さなかったものは待ちのまま出ている
   const list = await sessions(base)

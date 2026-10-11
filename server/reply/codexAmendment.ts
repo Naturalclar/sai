@@ -4,6 +4,9 @@
 //   { acceptWithExecpolicyAmendment: { execpolicy_amendment: ["git", "status"] } }      … その語の並びのコマンド
 //   { applyNetworkPolicyAmendment: { network_policy_amendment: { host, action } } }      … そのホストへの通信（allow / deny）
 // 前は「同種のコマンドを許可」とだけ出していて、何が覚えられるかがボタンから読めなかった（実測では提案は「そのコマンドそのもの」だった）。
+// 押すと Codex は `prefix_rule(pattern=[語の並び], decision="allow")` を自分の `default.rules` に書き、**その語の並びで始まるコマンド**
+// （後ろに引数を足したものも）を聞かなくなる（#773 で押して確かめた。並びの途中の語が違うものは聞かれる）。文言はその範囲のまま
+// 「〜で始まるコマンドを今後聞かない」と書く。
 // **範囲が読めて、ボタンに書き切れるときだけ**文言を返す。読めない・長すぎるものは null（その候補はボタンにしない）。
 // 範囲は**候補そのものの中身**から読む（押したときに Codex へ返すのがそれなので、別の欄の `proposedExecpolicyAmendment` は当てにしない）。
 // 規則を書くのは Codex 自身で、SAI は `default.rules` を読まないし書かない。
@@ -81,8 +84,9 @@ export function amendmentLabel(decision: unknown): AmendmentLabel | null | undef
     const body = decision.acceptWithExecpolicyAmendment
     if (!isObject(body) || Object.keys(body).length !== 1) return null
     const range = execAmendmentRange(body.execpolicy_amendment)
-    // 「で始まる」とは書かない: 規則がどう照合されるか（前方一致か）は、押して確かめていない
-    return range === null ? null : { label: `「${range}」を今後聞かない`, behavior: 'allow' }
+    // 「で始まる」: 書かれる規則は語の並びの前方一致（`prefix_rule`。#773 で押して確かめた。端末のダイアログの
+    // `don't ask again for commands that start with …` と同じ効き方）
+    return range === null ? null : { label: `「${range}」で始まるコマンドを今後聞かない`, behavior: 'allow' }
   }
   const body = decision.applyNetworkPolicyAmendment
   if (!isObject(body) || Object.keys(body).length !== 1) return null

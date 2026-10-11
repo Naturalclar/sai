@@ -150,7 +150,7 @@ test('command approval: availableDecisionsだけを出し、選んだ実値を�
   const approval = app.snapshot()['thread-1@repo']![0]!
   assert.deepEqual(approval.decisions?.map(({ label, behavior }) => ({ label, behavior })), [
     { label: '拒否', behavior: 'deny' },
-    { label: '「git status」で始まるコマンドを今後聞かない', behavior: 'allow' },
+    { label: '許可して、「git status」で始まるコマンドを今後聞かない', behavior: 'allow' },
   ])
   assert.deepEqual(app.answer(approval.approval_id, { behavior: 'allow', decision: 'd0' }), { ok: false, status: 400, error: '提示されていないdecisionです' }, 'behaviorの改ざんも拒否')
   assert.deepEqual(app.answer(approval.approval_id, { behavior: 'allow', decision: 'not-offered' }), { ok: false, status: 400, error: '提示されていないdecisionです' })

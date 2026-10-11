@@ -7,7 +7,7 @@ const exec = (words: unknown) => ({ acceptWithExecpolicyAmendment: { execpolicy_
 const network = (rule: unknown) => ({ applyNetworkPolicyAmendment: { network_policy_amendment: rule } })
 
 test('コマンドの規則: 語の並びをそのままボタンに書く', () => {
-  assert.deepEqual(amendmentLabel(exec(['git', 'status'])), { label: '「git status」で始まるコマンドを今後聞かない', behavior: 'allow' })
+  assert.deepEqual(amendmentLabel(exec(['git', 'status'])), { label: '許可して、「git status」で始まるコマンドを今後聞かない', behavior: 'allow' })
   assert.equal(execAmendmentRange(['curl', '-sI', 'https://example.com']), 'curl -sI https://example.com')
 })
 

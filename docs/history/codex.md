@@ -93,6 +93,7 @@
 
 - #741 では文言を「〜を今後聞かない」に戻していた（前方一致かを押して確かめていなかった）。2026-10-11、Codex CLI 0.162.1 で押した。`CODEX_HOME` を一時ディレクトリに向け（ログインのファイルだけ写して、終わってから消した）、作り物の git リポジトリと行ごと作り物の記録の置き場で、捨ての SAI から新しいスレッドを起こし、権限を上げた `ls -la src` を頼んで、SAI の API から規則の追加のボタンを押した。
 - 書かれたもの: 捨ての `rules/default.rules` に `prefix_rule(pattern=["ls", "-la", "src"], decision="allow")` の 1 行。本物の `default.rules` のハッシュは前後で同じ。
-- 効いた範囲（同じスレッドで、どれも `sandbox_permissions: "require_escalated"` で実行）: `ls -la src .git`（後ろに足した）は聞かれない。`ls -la README.md`（並びの途中が違う）は聞かれる。`ls -la src`（同じ）は聞かれない。つまり**語の並びの前方一致**で、端末のダイアログの `don't ask again for commands that start with …` と同じ効き方。
-- 文言を「〜で始まるコマンドを今後聞かない」に直した（issue のおすすめ）。ボタンを出さない側に倒すなら `amendmentLabel()` で `null` を返すだけ。端末の道（`dontAskLabel()` の「`…` で始まるコマンドを今後聞かない」）は Codex 自身の文 `commands that start with` をそのまま写しているので食い違いは無い（端末では押していない）。
+- 効いた範囲（同じスレッドで、どれも `sandbox_permissions: "require_escalated"` で実行）: `ls -la src .git`（後ろに語を足した）は聞かれない。`ls -la README.md`（3 語目が違う）は聞かれる。`ls -la src`（同じ）は聞かれない。規則の形が語の配列（`pattern=[…]`）なので**語の単位の前方一致**で、端末のダイアログの `don't ask again for commands that start with …` と同じ効き方。シェルに包まれた提案（`/bin/zsh -lc "<本文>"`。#741 の実測ではこの形が多い）は本文が 1 語なので、本文に引数を足したものは別のコマンドとして聞かれる（この形では押していない）。
+- 文言を「許可して、〜で始まるコマンドを今後聞かない」に直した（issue のおすすめ）。ボタンを出さない側に倒すなら `amendmentLabel()` で `null` を返すだけ。端末の道（`dontAskLabel()` の「許可して、`…` で始まるコマンドを今後聞かない」）は Codex 自身の文 `Yes, and don't ask again for commands that start with …` をそのまま写しているので食い違いは無い（端末では押していない）。
+- #775 のレビュー: 頭の「許可して、」が無く、規則を足すだけのボタンに読めた（押すといまのコマンドも実行される）ので端末の道と同じ頭を付けた。「後ろに引数を足したものも通る」は素の語の並びでしか確かめていないので、シェルに包まれた形の注意を添えた。
 - `approval_policy = "untrusted"` は 0.162.1 で消えている（設定に書くと起動時に落ちる）。読むだけのコマンドで許可を出させるには、`sandbox_mode = "read-only"` のまま「権限を上げて実行して」と頼めば `require_escalated` で聞いてくる。

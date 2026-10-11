@@ -171,6 +171,7 @@ pnpm typecheck   # tsc（web と server の両方）
 pnpm test        # node:test（server/、shared/、web/src/）
 pnpm test:feed   # python3 -m unittest（feed/）
 pnpm feed rows <セッション>   # ~/.agent-feed を調べる（読むだけ。messages / usage も。docs/internals/tooling.md）
+pnpm decisions   # 人の判断待ち（「決めること」）を issue と PR から拾って並べる（gh で読むだけ。docs/internals/tooling.md）
 pnpm digest:eval # 一言のプロンプトの案を、決まった事例で比べる（手元の口を叩く。docs/internals/digest.md）
 pnpm build       # typecheck してから vite build
 pnpm start:watch # server/ shared/ が変わったら自動で再起動（node --watch）

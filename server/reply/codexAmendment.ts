@@ -1,9 +1,14 @@
 // Codex が許可の候補に入れてくる「規則の追加」（今後も聞かない）を、**覚えられる範囲をそのままボタンに書ける形**にする（#741）。
 //
 // app-server の `availableDecisions` には、今回だけの許可のほかに、押すと Codex の規則（セッションをまたいで残る許可）が足される候補が来る:
-//   { acceptWithExecpolicyAmendment: { execpolicy_amendment: ["git", "status"] } }      … その語の並びのコマンド
+//   { acceptWithExecpolicyAmendment: { execpolicy_amendment: ["git", "status"] } }      … その語の並びで始まるコマンド
 //   { applyNetworkPolicyAmendment: { network_policy_amendment: { host, action } } }      … そのホストへの通信（allow / deny）
 // 前は「同種のコマンドを許可」とだけ出していて、何が覚えられるかがボタンから読めなかった（実測では提案は「そのコマンドそのもの」だった）。
+// 押すと**いまのコマンドも実行され**（`accept` の仲間）、Codex は `prefix_rule(pattern=[語の並び], decision="allow")` を自分の `default.rules` に
+// 書く。効くのは**語の単位の前方一致**（#773 で押して確かめた。経緯は docs/history/codex.md）: 後ろに語を足したものは聞かれず、並びの中の語が
+// 違うものは聞かれる。シェルに包まれた提案（`/bin/zsh -lc "<本文>"`）では本文が 1 語なので、本文に引数を足したものは別のコマンドになる。
+// 文言はその範囲のまま「許可して、〜で始まるコマンドを今後聞かない」（頭の「許可して、」は端末の `dontAskLabel()` と同じで、規則を足すだけの
+// ボタンに見せない）。
 // **範囲が読めて、ボタンに書き切れるときだけ**文言を返す。読めない・長すぎるものは null（その候補はボタンにしない）。
 // 範囲は**候補そのものの中身**から読む（押したときに Codex へ返すのがそれなので、別の欄の `proposedExecpolicyAmendment` は当てにしない）。
 // 規則を書くのは Codex 自身で、SAI は `default.rules` を読まないし書かない。
@@ -81,8 +86,8 @@ export function amendmentLabel(decision: unknown): AmendmentLabel | null | undef
     const body = decision.acceptWithExecpolicyAmendment
     if (!isObject(body) || Object.keys(body).length !== 1) return null
     const range = execAmendmentRange(body.execpolicy_amendment)
-    // 「で始まる」とは書かない: 規則がどう照合されるか（前方一致か）は、押して確かめていない
-    return range === null ? null : { label: `「${range}」を今後聞かない`, behavior: 'allow' }
+    // 「で始まる」の根拠と「許可して、」の理由は冒頭のコメント
+    return range === null ? null : { label: `許可して、「${range}」で始まるコマンドを今後聞かない`, behavior: 'allow' }
   }
   const body = decision.applyNetworkPolicyAmendment
   if (!isObject(body) || Object.keys(body).length !== 1) return null

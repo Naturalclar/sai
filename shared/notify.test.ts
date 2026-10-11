@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { appeared, notifyKey, notifyPlan, titleWith } from './notify.ts'
+import { appeared, notifyKey, notifyPlan, seenAfter, titleWith } from './notify.ts'
 import type { TodoItem } from './todoItems.ts'
 import type { SessionSummary } from './types.ts'
 
@@ -78,4 +78,32 @@ test('appeared: 終わって次を待っているだけ（done）では鳴らさ
 test('notifyPlan: done しか無ければ通知は組み立たない（#438）', () => {
   const done = item({ id: 'A@dev', kind: 'done', text: '入力待ち' })
   assert.equal(notifyPlan(appeared(new Set(), [done])), null)
+})
+
+// ---- #732: 終わったのに自動では起こさない待ち
+
+const lateWait = (id: string, over: Partial<TodoItem> = {}): TodoItem =>
+  item({ kind: 'wait', text: 'PR #12 の CI は終わっています（CI は全部通りました）', replyable: false, wait: { id, repo: 'owner-a/repo-a', pr: 12, then: '報告する', status: 'ready', result: 'success', late: true, since: '2026-09-09T09:00:00+09:00', deadline: '2026-09-09T11:00:00+09:00' }, ...over })
+
+test('notifyKey / seenAfter: 終わった待ちは 1 つの待ちにつき 1 回。並びから消えて戻っても（サーバの立て直しなど）鳴り直さない', () => {
+  const a = lateWait('w1')
+  // 鍵は待ちの id。終わった時刻の出方が変わっても同じ待ち
+  assert.equal(notifyKey(a), notifyKey(lateWait('w1', { since: '2026-09-09T12:00:00+09:00' })))
+  assert.notEqual(notifyKey(a), notifyKey(lateWait('w2')), '同じセッションの別の待ちは別に知らせる')
+  let seen = seenAfter(new Set(), [])
+  assert.deepEqual(appeared(seen, [a]).map(notifyKey), [notifyKey(a)], '終わったら 1 回知らせる')
+  seen = seenAfter(seen, [a])
+  assert.deepEqual(appeared(seen, [a]), [])
+  // 取得が 1 回空になって戻る
+  seen = seenAfter(seen, [])
+  assert.deepEqual(appeared(seen, [a]), [], '同じ待ちでは鳴り直さない')
+  // ほかの待ちは今までどおり、消えて戻れば新しい待ち（覚えるのは並んでいる間だけ）
+  const w = item()
+  seen = seenAfter(seenAfter(seenAfter(seen, [w]), []), [])
+  assert.deepEqual(appeared(seen, [w, a]).map(notifyKey), [notifyKey(w)])
+})
+
+test('notifyPlan: 終わった待ち 1 件は「待ちが終わった」と結果を出す。行き先は要対応', () => {
+  const plan = notifyPlan([lateWait('w1')])!
+  assert.deepEqual([plan.title, plan.body, plan.hash], ['待ちが終わった: CI の整備', 'PR #12 の CI は終わっています（CI は全部通りました）', '#/todo'])
 })

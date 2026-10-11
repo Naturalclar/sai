@@ -5,7 +5,7 @@ import { failingChecks, parsePrCi } from './prs.ts'
 import type { Wait } from './types.ts'
 import {
   isWaitPrompt, WAIT_DAY_MS, WAIT_EMPTY_GRACE_MS, WAIT_FAILING_MAX, WAIT_MARK, WAIT_MAX_PER_SESSION, WAIT_THEN_MAX, WAIT_WAKES_PER_DAY,
-  WAIT_AUTO_WAKE_MS, WAIT_MAX_MS, waitConfirmed, waitFinishedLate, waitFromRequest, waitLateReason, waitLimitRefusal, waitLive, waitOutcome, waitPrompt, waitPromptLabel, waitStatusLine, waitView, waitWakeable, wakesExhausted,
+  WAIT_AUTO_WAKE_MS, WAIT_MAX_MS, waitConfirmed, waitFinishedLate, waitFromRequest, waitLateReason, waitLimitRefusal, waitDoneText, waitLive, waitNeedsHuman, waitOutcome, waitPrompt, waitPromptLabel, waitStatusLine, waitView, waitWakeable, wakesExhausted,
 } from './waits.ts'
 import type { WaitState } from './waits.ts'
 
@@ -86,6 +86,16 @@ test('waitView / waitStatusLine: サーバだけの項目は画面に出さな�
   assert.equal(waitStatusLine({ ...base, status: 'ready', result: 'success' }, T0), 'PR #12 の CI: CI は全部通りました。まだ起こしていません')
   assert.equal(waitStatusLine({ ...base, status: 'ready', result: 'failure', late: true }, T0), 'PR #12 の CI は終わっています（CI が落ちました）。自動では起こしません')
   assert.equal(waitView({ ...base, status: 'ready', late: true }).late, true, '自動では起こさない印は画面に渡す')
+  // 終わったと分かった時刻は、終わったあとだけ渡す（確かめている間は毎分動くので渡さない。渡すと画面を描き直し続ける）
+  assert.equal(waitView({ ...base, status: 'ready', late: true, checked_at: 'y' }).finished_at, 'y')
+  assert.equal('finished_at' in waitView({ ...base, checked_at: 'y' }), false)
+  assert.equal('checked_at' in waitView({ ...base, status: 'ready', checked_at: 'y' }), false)
+  // 人が押すまで何も起きない待ち（要対応・通知・サイドバーに出す）は、終わっていて自動では起こさないものだけ
+  assert.deepEqual(
+    [waitNeedsHuman({ status: 'ready', late: true }), waitNeedsHuman({ status: 'ready' }), waitNeedsHuman({ status: 'waiting' }), waitNeedsHuman({ status: 'waking', late: true }), waitNeedsHuman({ status: 'halted', late: true })],
+    [true, false, false, false, false],
+  )
+  assert.equal(waitDoneText({ pr: 12, result: 'failure' }), 'PR #12 の CI は終わっています（CI が落ちました）')
   assert.match(waitStatusLine({ ...base, status: 'expired' }, T0), /終わりませんでした（起こしていません）/)
   assert.match(waitStatusLine({ ...base, status: 'halted' }, T0), /起こせませんでした/)
 })

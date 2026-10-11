@@ -1030,6 +1030,8 @@ export interface Wait {
   since: string
   /** これを過ぎたら待つのをやめる */
   deadline: string
+  /** 終わったと分かった時刻（`ready` のあいだだけ）。要対応の行の「終わってから N 分」と並べ替えに使う */
+  finished_at?: string
 }
 
 /** エンティティID → 待ち（古い順）。無ければキーが無い */

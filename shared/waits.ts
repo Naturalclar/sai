@@ -180,8 +180,22 @@ export const WAIT_KEEP_MS = 7 * 24 * 60 * 60_000
 
 /** 画面に出す形（サーバだけが使う項目を落とす） */
 export function waitView(w: WaitState): Wait {
-  const { next_check_at: _next, failing: _failing, url: _url, seen_once: _seen, checked_at: _checked, ...view } = w
-  return view
+  const { next_check_at: _next, failing: _failing, url: _url, seen_once: _seen, checked_at, ...view } = w
+  // `checked_at` は確かめるたびに動くので、終わったあと（動かなくなってから）だけ出す
+  return w.status === 'ready' && checked_at ? { ...view, finished_at: checked_at } : view
+}
+
+/**
+ * 終わっているが、自動では起こさないと決めた待ちか（`late`）。**人が押すまで何も起きない**ので、そのセッションの帯だけでなく
+ * 要対応・通知・サイドバーにも出す（`shared/todoItems.ts` の `wait`）。枠・回数・処理中で起こせていない `ready` は、SAI がまた見に行くので数えない
+ */
+export function waitNeedsHuman(w: Pick<Wait, 'status' | 'late'>): boolean {
+  return w.status === 'ready' && w.late === true
+}
+
+/** 要対応の行・通知の 1 行（`PR #12 の CI は終わっています（CI は全部通りました）`） */
+export function waitDoneText(w: Pick<Wait, 'pr' | 'result'>): string {
+  return `PR #${w.pr} の CI は終わっています（${waitResultText(w.result)}）`
 }
 
 /** 待ち始めてから `WAIT_AUTO_WAKE_MS` を過ぎて終わったか（過ぎていれば自動では起こさない） */
@@ -204,7 +218,7 @@ export function waitStatusLine(w: Wait, now: number): string {
     const span = left >= 60 ? `${Math.floor(left / 60)} 時間${left % 60 ? ` ${left % 60} 分` : ''}` : `${left} 分`
     return `${head} を待っています（あと ${span}で諦めます）`
   }
-  if (w.status === 'ready' && w.late) return `${head} は終わっています（${waitResultText(w.result)}）。自動では起こしません`
+  if (waitNeedsHuman(w)) return `${waitDoneText(w)}。自動では起こしません`
   if (w.status === 'ready') return `${head}: ${waitResultText(w.result)}。まだ起こしていません`
   if (w.status === 'waking') return `${head}: ${waitResultText(w.result) || '人がいま起こしました'}。起こしています`
   if (w.status === 'expired') return `${head} は、待てる時間のうちに終わりませんでした（起こしていません）`

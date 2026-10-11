@@ -169,3 +169,51 @@ test('pollLoop: run が投げても次を張る', async () => {
   assert.equal(calls, 2)
   loop.stop()
 })
+
+test('pollLoop: stallMs を過ぎても返らない run は見切って次を回し、あとで返っても次を張らない', async () => {
+  const runs: ReturnType<typeof deferred>[] = []
+  const loop = pollLoop(
+    () => {
+      const d = deferred()
+      runs.push(d)
+      return d.promise
+    },
+    () => 3000,
+    { stallMs: 60_000 },
+  )
+  assert.equal(runs.length, 1)
+  mock.timers.tick(59_999)
+  assert.equal(runs.length, 1)
+  mock.timers.tick(1)
+  assert.equal(runs.length, 2, '60 秒で見切って次を回す')
+  // 見切った 1 本目があとで返っても、2 本目が走っている間は何も張らない
+  runs[0]!.resolve()
+  await flush()
+  mock.timers.tick(3000)
+  assert.equal(runs.length, 2, '古い run の戻りで次を張った')
+  runs[1]!.resolve()
+  await flush()
+  mock.timers.tick(3000)
+  assert.equal(runs.length, 3, '2 本目が返ってから 3 秒で次')
+  loop.stop()
+})
+
+test('pollLoop: 間に合って返れば見切りは消える（stallMs のあとに二重に回らない）', async () => {
+  const runs: ReturnType<typeof deferred>[] = []
+  const loop = pollLoop(
+    () => {
+      const d = deferred()
+      runs.push(d)
+      return d.promise
+    },
+    () => 3000,
+    { stallMs: 60_000 },
+  )
+  runs[0]!.resolve()
+  await flush()
+  mock.timers.tick(3000)
+  assert.equal(runs.length, 2)
+  mock.timers.tick(57_000)
+  assert.equal(runs.length, 2, '返った run の見切りが残っていた')
+  loop.stop()
+})

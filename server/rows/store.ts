@@ -13,6 +13,13 @@ interface CachedFile {
 
 type Signature = [name: string, mtimeMs: number, size: number][]
 
+/** 1 回の読み（日付の組ぶん）。`key` は読んだときの署名、`rev` はそのハッシュ */
+interface Read {
+  key: string
+  rev: string
+  rows: FeedRow[]
+}
+
 export function rev(signature: Signature): string {
   return createHash('sha1').update(JSON.stringify(signature)).digest('hex').slice(0, 12)
 }
@@ -65,6 +72,8 @@ export function parseRows(text: string): FeedRow[] {
 export class FeedStore {
   private files = new Map<string, CachedFile>()
   private sessionsCache = new Map<number, { key: string; rev: string; sessions: SessionSummary[] }>()
+  /** 日付の組 → 最後に組んだ行（#765 のレビュー。署名が同じ間は、ファイルごとの行を繋ぎ直して並べ直さない） */
+  private rowsCache = new Map<string, Read>()
   /** いま読んでいる途中のもの（#765）。同じ鍵で同時に来た呼び出しは、この 1 つを待つ */
   private pending = new Map<string, Promise<unknown>>()
 
@@ -101,11 +110,8 @@ export class FeedStore {
     return p
   }
 
-  signature(days: number): Promise<Signature> {
-    return this.share(`signature:${days}`, () => this.readSignature(days))
-  }
-
-  private async readSignature(days: number): Promise<Signature> {
+  /** 窓のファイルの (name, mtime, size)。行を読まずに「変わったか」だけ見る（テスト用。集計は `load()` が読んだときの署名を使う） */
+  async signature(days: number): Promise<Signature> {
     const parts: Signature = []
     for (const name of await this.names(recentDates(days))) {
       try {
@@ -118,24 +124,25 @@ export class FeedStore {
     return parts
   }
 
-  private async readFile(path: string): Promise<FeedRow[]> {
+  private async readFile(path: string): Promise<CachedFile | null> {
     let st
     try {
       st = await stat(path)
     } catch {
       this.files.delete(path)
-      return []
+      return null
     }
     const cached = this.files.get(path)
-    if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) return cached.rows
+    if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) return cached
     let rows: FeedRow[] = []
     try {
       rows = parseRows(await readFile(path, 'utf-8'))
     } catch {
       rows = []
     }
-    this.files.set(path, { mtimeMs: st.mtimeMs, size: st.size, rows })
-    return rows
+    const entry = { mtimeMs: st.mtimeMs, size: st.size, rows }
+    this.files.set(path, entry)
+    return entry
   }
 
   /**
@@ -155,17 +162,39 @@ export class FeedStore {
 
   /** その日付（`YYYY-MM-DD`）ぶんの行。記録を調べる道具（`server/tools/feedRead.ts`。#703）が日付の範囲で読む */
   rowsOn(dates: readonly string[]): Promise<FeedRow[]> {
-    return this.share(`rows:${dates.join(',')}`, () => this.readRowsOn(dates))
+    const key = dates.join(',')
+    return this.share(`rows:${key}`, () => this.load(dates).then((r) => r.rows))
   }
 
-  private async readRowsOn(dates: readonly string[]): Promise<FeedRow[]> {
-    const rows: FeedRow[] = []
+  /**
+   * 行と、読んだときの署名を一緒に返す（#765 のレビュー）。集計の鍵は**この読みが stat した値**から作る。署名を別に取ってから
+   * 行を読むと、読みかけの古い読み（別の要求のもの）に相乗りして、古い行の集計を新しい署名で覚えてしまう
+   * （その後ファイルが変わるまで、rev は新しいのに中身は古いまま）
+   */
+  private load(dates: readonly string[]): Promise<Read> {
+    return this.share(`read:${dates.join(',')}`, () => this.readRowsOn(dates))
+  }
+
+  private async readRowsOn(dates: readonly string[]): Promise<Read> {
+    const key = dates.join(',')
+    const signature: Signature = []
+    const parts: FeedRow[][] = []
     for (const name of await this.names(dates)) {
-      for (const r of await this.readFile(join(this.directory, name))) if (!this.isOwnNoise(r)) rows.push(r)
+      const file = await this.readFile(join(this.directory, name))
+      if (!file) continue
+      signature.push([name, file.mtimeMs, file.size])
+      parts.push(file.rows)
     }
+    const sig = JSON.stringify(signature)
+    const cached = this.rowsCache.get(key)
+    if (cached && cached.key === sig) return cached
+    const rows: FeedRow[] = []
+    for (const part of parts) for (const r of part) if (!this.isOwnNoise(r)) rows.push(r)
     // 別マシンのファイルは日付ごとに丸ごと後ろに付くので、ここで ts に並べ直す（sort は安定なので同じ ts は読んだ順）
     rows.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0))
-    return rows
+    const read: Read = { key: sig, rev: rev(signature), rows }
+    this.rowsCache.set(key, read)
+    return read
   }
 
   /** セッション一覧。days ごとに最新の1つだけキャッシュする。同時に来たぶんは 1 回の集計を待つ（#765） */
@@ -174,12 +203,11 @@ export class FeedStore {
   }
 
   private async readSessions(days: number): Promise<{ rev: string; sessions: SessionSummary[] }> {
-    const signature = await this.signature(days)
-    const key = JSON.stringify(signature)
+    const read = await this.load(recentDates(days))
     const cached = this.sessionsCache.get(days)
-    if (cached && cached.key === key) return { rev: cached.rev, sessions: cached.sessions }
-    const sessions = aggregate(await this.rows(days))
-    const entry = { key, rev: rev(signature), sessions }
+    if (cached && cached.key === read.key) return { rev: cached.rev, sessions: cached.sessions }
+    const sessions = aggregate(read.rows)
+    const entry = { key: read.key, rev: read.rev, sessions }
     this.sessionsCache.set(days, entry)
     return { rev: entry.rev, sessions }
   }

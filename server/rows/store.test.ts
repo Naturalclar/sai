@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { appendFileSync, statSync } from 'node:fs'
 import { appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -118,6 +119,51 @@ test('FeedStore: 同時に来た同じ読みは 1 回にまとめ、終わった
     assert.notEqual(later, first, '終わった読みを使い回した')
     assert.equal((await later).sessions.length, 2)
     assert.equal((await store.rows(1)).length, 2)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('FeedStore: 読みかけの間に記録が伸びても、古い行の集計を新しい rev で覚えない（#765 のレビュー）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-store-'))
+  try {
+    // 今日 + 古い日付 19 つ。読みは今日から順に 1 ファイルずつ（stat → 読む）進む。まだ何も覚えていない store で始める
+    // （覚えていると古い日付は stat だけで済み、署名を取る側より先に読み終わってしまう）
+    const days = 20
+    const dates = recentDates(days)
+    for (const d of dates) await writeFile(join(dir, `${d}.jsonl`), row(`${d}T09:00:00+09:00`, { session: `s-${d}` }))
+    const store = new FeedStore(dir)
+
+    // 別の要求の rows() が今日のぶんを読み終えて古い日付を読んでいる最中に追記が入り、そのあとに sessions() が来る
+    const todayPath = join(dir, `${today}.jsonl`)
+    const grown = statSync(todayPath).size
+    const reading = store.rows(days)
+    const files = (store as unknown as { files: Map<string, { size: number }> }).files
+    for (let i = 0; i < 10_000 && (files.get(todayPath)?.size ?? 0) < grown; i++) await new Promise((r) => setImmediate(r))
+    assert.equal(files.get(todayPath)?.size, grown, '今日のぶんを読み終える前に抜けた')
+    appendFileSync(todayPath, row(`${today}T10:00:00+09:00`, { session: 'late' }))
+    const joined = store.sessions(days)
+    await Promise.all([reading, joined])
+
+    // 落ち着いたあとの sessions() は追記を含む（前は、新しい署名の鍵に古い集計を覚えて、ファイルが次に変わるまで出なかった）
+    const after = await store.sessions(days)
+    assert.ok(after.sessions.some((x) => x.id === 'late'), '古い集計が新しい署名で残っている')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('FeedStore: 署名が同じ間は、繋ぎ直した行の配列を使い回す（#765 のレビュー。1 リクエストの中の続けざまの rows()）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-store-'))
+  try {
+    await writeFile(join(dir, `${today}.jsonl`), row(`${today}T09:00:00+09:00`, { session: 'a' }))
+    const store = new FeedStore(dir)
+    const first = await store.rows(1)
+    assert.equal(await store.rows(1), first, '変わっていないのに繋ぎ直した')
+    await appendFile(join(dir, `${today}.jsonl`), row(`${today}T10:00:00+09:00`, { session: 'b' }))
+    const second = await store.rows(1)
+    assert.notEqual(second, first)
+    assert.equal(second.length, 2)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

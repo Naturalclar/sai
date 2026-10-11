@@ -9,7 +9,7 @@ export const PROGRESS_POLL_MS = 3000
  * 処理中のターンの手順（#302）。**処理中のセッションを出している間だけ**、そのセッションの分を 3 秒おきに取る
  * （一覧のポーリングには載せない。transcript を読むので、全セッションぶんを毎回は読まない）。
  * タブが隠れている間は取らない。rev が同じなら state を触らない。取れなければ null（手順が出ないだけで、「処理中」はそのまま）。
- * 間隔は前の要求が返ってから 3 秒（`pollLoop`。#765。transcript を読むので、返る前に次を重ねない）
+ * 間隔は前の要求が返ってから 3 秒（`pollLoop`。#765）
  */
 export function useProgress(id: string, enabled: boolean): SessionProgressResponse | null {
   const [loaded, setLoaded] = useState<{ key: string; data: SessionProgressResponse } | null>(null)

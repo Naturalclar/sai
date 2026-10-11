@@ -55,6 +55,7 @@ node --test --disable-warning=ExperimentalWarning --test-name-pattern="clip" ser
 - PR のベースは **必ず `main`**。積み重ねた PR は下が入ってからリベースしてベースを `main` に付け替える
 - マージは **squash マージ**。`main` は PR 1 つ = コミット 1 つ
 - **マージの前に、書いた本人とは別の目で 1 回レビューする**（#449）。自分で読み直すのは代わりにならない。レビューからマージ・後始末までの手順は `/merge` が正本で、飛ばさない
+- **マージは人の「マージして」を待つ。待たずに進めてよいのは、依頼に「マージまで」と書かれているときだけ**（#581）。そのときも、許可・送信・外に出る口に触る PR は待つ（`bash scripts/merge-scope.sh <番号>` が `scope=hold` なら待つ。迷ったら待つ）。条件は `/merge`
 
 ### Node と pnpm のバージョン
 

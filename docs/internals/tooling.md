@@ -31,6 +31,11 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 
 - 別の目でのレビュー → 直す → PR のコメント → レビューした SHA で squash マージ → `merged: true` を見てから後始末。文書の置き場（#444）もここで見る。
 - 後始末の最後に `/sync-main` を呼ぶ（#580）。手順は `/sync-main` の側にだけ置き、`/merge` には写さない。
+- **人の「マージして」を待たずに進めてよいのは、依頼に「マージまで」と書かれているときだけ**（#581）。進める条件（直したあとの読ませ直し）・止めて人に返す 4 つ・対象から外す PR の一覧は SKILL.md が正本。
+- `scripts/merge-scope.sh <PR 番号>`（`-` なら stdin からパス）が、触ったファイルのパスで「対象から外す PR」かを出す。当たれば `scope=hold hits=<数>` と当たったパス・理由（20 行まで）で exit 1、当たらなければ `scope=none files=<数>` で exit 0。**止まる側に倒してある**: 一覧が引けない・空・使い方が違うときも `scope=hold reason=…` で exit 1。`scope=none` は「パスでは当たらなかった」だけで、中身が一覧に当たれば外す。
+  - 当てるパス（スクリプトの `rules`）: 許可（`server/approvals/`・`shared/` の許可とルールの判定・`feed/record.py`・`feed/opencode/`）、送信（`server/mcp/`・`feed/mcp/`・`.mcp.json`・`shared/` のメッセージ・待ち・ループ・預かり）、認証（`server/auth` / `app` / `main` / `host`・`server/meta/settings`）、外に出る口（`server/git/`・`server/digest/`・`shared/` の PR まわり）、起こすコマンド（`server/reply/`・`server/local/claude{Login,Auth,Agents}`）、決まりそのもの（`.claude/`・`.github/`・`CLAUDE.md`・`AGENTS.md`・`scripts/`）。`web/src/` と `docs/` は当てていない。
+  - テストは `server/mergeScope.test.ts`（stdin から渡す。`gh` は呼ばせない）。
+- レビューを `/code-review` 以外（サブエージェント・別プロセス）に頼むときの文は、SKILL.md の「レビューを頼む文のひな形」から始める。
 
 - 積み重ねた PR のベースを `main` に付け替えるとき、`gh pr edit --base` が GraphQL の非推奨エラーで落ちたら `gh api -X PATCH repos/<owner>/<repo>/pulls/<番号> -f base=main`。
 - マージは `gh api -X PUT repos/<owner>/<repo>/pulls/<番号>/merge -f merge_method=squash -f sha=<40 桁>`（HEAD が動いていれば `405`）。`/code-review <番号>` は別プロセスで動く。

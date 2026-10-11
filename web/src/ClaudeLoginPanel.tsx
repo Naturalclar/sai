@@ -3,6 +3,10 @@ import type { ClaudeLoginRequest, ClaudeLoginResponse } from '../../shared/types
 import { api } from './api'
 import { LOGIN_LOST_NOTE, loginAcceptsCode, loginActive, loginNote } from './claudeLoginNote.ts'
 import { rememberLoginPanel } from './claudeLoginOpen.ts'
+import { pollLoop } from './pollLoop.ts'
+
+/** ログインの状態を聞く間隔（走っている間だけ） */
+const LOGIN_POLL_MS = 2000
 
 /**
  * SAI から Claude にログインし直す手順（#577）。バナーの「SAI からログインする」で開く。
@@ -49,25 +53,26 @@ export function ClaudeLoginPanel({ resume, onClose, onDone }: { resume: boolean;
       alive = false
     }
   }, [resume, onClose])
-  // 走っている間だけ 2 秒ごとに状態を聞く（一覧の 3 秒のポーリングには載せない）
+  // 走っている間だけ、返ってから 2 秒ごとに状態を聞く（一覧の 3 秒のポーリングには載せない。`pollLoop`。#765）
   const active = started && loginActive(state)
   useEffect(() => {
     if (!active) return
     let alive = true
-    const timer = setInterval(() => {
+    const tick = async () => {
       const mine = seq.current
-      api
-        .claudeLoginState()
-        .then((s) => {
-          if (!alive || mine !== seq.current) return
-          if (s.status === 'idle') setLost(true)
-          setState(s)
-        })
-        .catch(() => {})
-    }, 2000)
+      try {
+        const s = await api.claudeLoginState()
+        if (!alive || mine !== seq.current) return
+        if (s.status === 'idle') setLost(true)
+        setState(s)
+      } catch {
+        // 聞けなければ次の周期でもう一度
+      }
+    }
+    const loop = pollLoop(tick, () => LOGIN_POLL_MS)
     return () => {
       alive = false
-      clearInterval(timer)
+      loop.stop()
     }
   }, [active])
   // ログインできたら、開いていたことを忘れる（次に切れたとき勝手に始めない）

@@ -1237,14 +1237,22 @@ export function createApp(
    * 両方の rev が同じなら覚えたものを返す（3 秒のポーリングで組み直さない。実データの 90 日ぶんで 1 回 40ms ほど）
    */
   let labelMemo: { key: string; suffixes: Map<string, string> } | null = null
-  const labelSuffixesNow = async (meta: { rev: string; entries: Record<string, SessionMeta> }): Promise<Map<string, string>> => {
+  /** 呼び出しの窓（days）ごとに、最後に広い窓を見たときの狭い窓の rev と meta の rev */
+  const labelSeen = new Map<number, string>()
+  const labelSuffixesNow = async (meta: { rev: string; entries: Record<string, SessionMeta> }, narrow: { days: number; rev: string }): Promise<Map<string, string>> => {
+    // 広い窓を読む（readdir + 90 日ぶんの stat）のは、呼び出しの窓か表示名が変わったときだけ（#765 のレビュー。3 秒のポーリングの
+    // たびに 90 日ぶんを stat していた）。今日のファイルはどの窓にも入るので、新しい行は狭い窓の rev で分かる。古い日付のファイル
+    // だけが変わったとき（別マシンの同期）は、次に狭い窓が変わるまで添え字が古いままになるが、添え字は見分けるためのものなので待てる
+    const seen = `${narrow.rev}-${meta.rev}`
+    if (labelMemo && labelSeen.get(narrow.days) === seen) return labelMemo.suffixes
     const wide = await store.sessions(LABEL_START_DAYS)
     const key = `${wide.rev}-${meta.rev}`
-    if (labelMemo?.key === key) return labelMemo.suffixes
-    const named = wide.sessions.map((s) => (meta.entries[s.id] ? { ...s, meta: meta.entries[s.id] } : s))
-    const suffixes = labelSuffixes(named)
-    labelMemo = { key, suffixes }
-    return suffixes
+    if (labelMemo?.key !== key) {
+      const named = wide.sessions.map((s) => (meta.entries[s.id] ? { ...s, meta: meta.entries[s.id] } : s))
+      labelMemo = { key, suffixes: labelSuffixes(named) }
+    }
+    labelSeen.set(narrow.days, seen)
+    return labelMemo.suffixes
   }
 
   // ターン完了の行が落ちた・本文が空だったターンの返答を transcript から補う（#614）。JSONL には書かず、応答の行に重ねるだけ
@@ -1305,7 +1313,7 @@ export function createApp(
     // 同じ名前のセッションを見分ける添え字（#572）。**どの口でも同じ添え字にするため、呼び出しの窓ではなく LABEL_START_DAYS の
     // 決まった窓で決める**（#578 のレビュー。一覧は 7 日・詳細は 30 日・フィードは 3 日なので、窓ごとに決めると同じセッションが
     // 見出しでは ID の頭、サイドバーでは日付になった）。start も窓の中の最初の行なので、広い窓で引くと本当の始まりになる
-    const suffixes = await labelSuffixesNow(meta)
+    const suffixes = await labelSuffixesNow(meta, { days, rev })
     for (const s of built) {
       const suffix = suffixes.get(s.id)
       if (suffix) s.label_suffix = suffix

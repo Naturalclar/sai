@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { pollLoop } from './pollLoop.ts'
 
 export const POLL_MS = 3000
 
@@ -133,6 +134,7 @@ export interface PollOptions {
  * 3秒ごとに fetcher を叩く。レスポンスの rev が前と同じなら state を更新しない（= 再描画しない）。
  * タブが隠れている間は止まり、戻ったら即1回叩く。
  * **`hiddenMs` を渡したときだけ**、隠れている間もその間隔で叩き続ける。
+ * 間隔は「前の要求が返ってから 3 秒」（`pollLoop`。#765。走っている要求は 1 本まで）
  */
 export function usePolling<T extends { rev: string }>(fetcher: () => Promise<T>, deps: unknown[], options: PollOptions = {}): Polled<T> {
   const [state, setState] = useState<Polled<T>>({ data: null, error: null, updatedAt: null })
@@ -166,25 +168,17 @@ export function usePolling<T extends { rev: string }>(fetcher: () => Promise<T>,
       }
     }
 
-    // 表と裏で間隔が違うので、切り替わるたびにタイマーを張り直す
-    let timer: ReturnType<typeof setInterval> | undefined
-    const arm = () => {
-      clearInterval(timer)
-      const ms = document.hidden ? hiddenMs : POLL_MS
-      if (ms) timer = setInterval(() => void tick(), ms)
-    }
-
-    void tick()
-    arm()
+    // 表と裏で間隔が違う（裏は hiddenMs。渡されていなければ張らない）。切り替わるたびに取り直す
+    const loop = pollLoop(tick, () => (document.hidden ? (hiddenMs ?? 0) : POLL_MS))
     const onVisible = () => {
-      arm()
+      loop.rearm()
       // 表に戻ったら待たずに 1 回。裏へ回ったときは次の周期でよい
-      if (!document.hidden) void tick()
+      if (!document.hidden) loop.kick()
     }
     document.addEventListener('visibilitychange', onVisible)
     return () => {
       alive = false
-      clearInterval(timer)
+      loop.stop()
       document.removeEventListener('visibilitychange', onVisible)
     }
   }, [load, hiddenMs, resetKey])

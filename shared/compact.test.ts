@@ -52,6 +52,8 @@ test('compactPrompt: 着手の形でない本文には、直近の作業の中�
   assert.match(p, /直近の作業で変えた箇所・決めたこと・分かったこと）と、リポジトリの決まり・ユーザーの好み・まだ終わっていない約束は残す/)
   assert.doesNotMatch(p, /に取りかかる/, '着手の指示（前の作業の細部は捨てる）は当てない')
   assert.ok(compactPrompt('あ'.repeat(1000)).length < COMPACT_HEAD_CHARS + 200, '長い本文は頭だけ')
+  // 境目に絵文字が来ても、片割れを残さない
+  assert.match(compactPrompt(`${'x'.repeat(COMPACT_HEAD_CHARS - 1)}😀続き`), /x😀」というメッセージが届く/)
   // 待ちで起こす本文（#732）も着手の形ではない
   assert.match(compactPrompt('【SAI 待ち】PR #12（o/r）: CI は全部通りました\n\n預けたときに書いたこと: 結果を読んで報告する'), /^\/compact このあと「【SAI 待ち】PR #12（o\/r）: CI は全部通りました 預けたときに書いたこと/)
 })

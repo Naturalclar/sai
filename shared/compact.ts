@@ -181,6 +181,7 @@ export function compactPrompt(text: string): string {
     const next = (text.split('\n')[0] ?? '').trim().slice(0, 200)
     return `/compact 次は「${next}」に取りかかる。終わった作業の細部（差分・ログ・やりとり）は捨て、${keep}だけを残す`
   }
-  const head = text.trim().replace(/\s+/g, ' ').slice(0, COMPACT_HEAD_CHARS)
+  // 文字（コードポイント）で切る。`slice()` だと絵文字の途中で切れて、片割れだけが指示に残る
+  const head = Array.from(text.trim().replace(/\s+/g, ' ')).slice(0, COMPACT_HEAD_CHARS).join('')
   return `/compact このあと「${head}」というメッセージが届く。それに答える・続けるのに要るもの（直近の作業で変えた箇所・決めたこと・分かったこと）と、${keep}は残す。それより前の作業の細部（差分・ログ・やりとり）は捨てる`
 }

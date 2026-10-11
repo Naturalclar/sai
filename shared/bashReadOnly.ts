@@ -111,7 +111,7 @@ const lit = (w: Word | undefined): string => {
  */
 const HOME = String.raw`(?:^|\/)(?:users|home)\/[^/]+|^\/root|^(?:\/private)?\/var\/root`
 const HOME_STORES = String.raw`\.(?:claude|codex|ssh|aws|gnupg|config|agent-feed|kube|docker|npm|cache|local|zsh_sessions|opencode|gemini|azure|gcloud)|library`
-const HOME_ZONE = new RegExp(String.raw`^\/?$|^\/(?:users|home)\/?$|(?:${HOME})\/?$|(?:${HOME})\/(?:${HOME_STORES})(?:\/|$)|(?:${HOME})\/\.[^/]+(?:\/[^/]+)?\/?$`, 'i')
+const HOME_ZONE = new RegExp(String.raw`^\/?$|(?:^|\/)(?:users|home)\/?$|(?:${HOME})\/?$|(?:${HOME})\/(?:${HOME_STORES})(?:\/|$)|(?:${HOME})\/\.[^/]+(?:\/[^/]+)?\/?$`, 'i')
 /** cwd がホームのあたりか */
 export const inHomeZone = (root: string): boolean => HOME_ZONE.test(root)
 
@@ -321,8 +321,11 @@ const GH_READS: Record<string, Set<string>> = {
  * 知らないフラグを 1 つでも受けると、gh は「その次の語」を値として読み飛ばすので、`gh pr --body view merge 5` が `pr merge` になる。#754 のレビュー）
  */
 const GH_BARE = new Set(['--comments', '--paginate', '--name-only', '--patch', '--required'])
-/** `--jq` / `-q` / `--template` は入れない（jq の式は環境変数を出せて、終わらない式も書ける。式の中身を読み切れない） */
-const GH_VALUE = new Set(['--json', '--limit', '-L', '--state', '-s', '--search', '-S', '--author', '-A', '--assignee', '--label', '-l', '--base', '-B', '--head', '-H', '--branch', '-b', '--workflow', '--user', '--event', '--status', '--commit', '--milestone'])
+/**
+ * `--jq` / `-q` / `--template` は入れない（jq の式は環境変数を出せて、終わらない式も書ける。式の中身を読み切れない）。
+ * `--search` / `-S` も入れない（値に `repo:a/b` と書けば、ほかのリポジトリの issue・PR が並ぶ）
+ */
+const GH_VALUE = new Set(['--json', '--limit', '-L', '--state', '-s', '--author', '-A', '--assignee', '--label', '-l', '--base', '-B', '--head', '-H', '--branch', '-b', '--workflow', '--user', '--event', '--status', '--commit', '--milestone'])
 const GH_REPO = /^[\w.-]+\/[\w.-]+$/
 /**
  * `gh api` で読む先。GET だけ（メソッド・フィールド・入力・ヘッダのフラグは、受けるフラグに無いので通らない）。
@@ -355,7 +358,9 @@ const ghCheck: Check = (args, place) => {
     const text = words[k]!
     if (!text.startsWith('-')) {
       // フラグでない語（番号・ブランチ）。`gh api` は読む先 1 つだけ。URL や `host/owner/repo` は受けない（問い合わせる先のホストを選べる）
-      if (api || text.includes('://') || text.includes('@') || text.split('/').length > 2) return refuse('flag')
+      // 受けるのは番号・タグ・`/` の無い名前だけ: `a/b`（`gh repo view a/b`）・`a/b#5`・URL は、ほかのリポジトリを名指しできる。
+      // `gh repo view` は語を 1 つも受けない（その位置の語はリポジトリの名前そのもの）
+      if (api || group === 'repo' || !/^[\w.-]+$/.test(text)) return refuse('flag')
       continue
     }
     const eq = text.startsWith('--') ? text.indexOf('=') : -1

@@ -347,7 +347,7 @@ test('notReadOnly: 読む先・行き先は cwd の中だけ。秘密が入っ�
   const HOMES = [
     '/Users/x', '/Users/x/', '/home/x', '/root', '/var/root', '/', '/Users', '/home',
     // 同じホームを指す別の書き方・大文字小文字違い
-    '/users/x', '/USERS/x', '/private/var/root', '/System/Volumes/Data/Users/x', '/Volumes/D/Users/x', '/Volumes/D/home/x',
+    '/users/x', '/USERS/x', '/private/var/root', '/System/Volumes/Data/Users', '/Volumes/D/home/', '/System/Volumes/Data/Users/x', '/Volumes/D/Users/x', '/Volumes/D/home/x',
     // ホームの直下の置き場と、その中
     '/Users/x/.claude', '/Users/x/.claude/projects/p', '/Users/x/.ssh', '/Users/x/.config/gh', '/Users/x/.agent-feed', '/Users/x/Library/Cookies', '/home/x/.aws',
     '/Users/x/.other', '/Users/x/.other/sub',
@@ -702,6 +702,12 @@ test('notReadOnly: git は決まった形だけ。リビジョン・パス・pat
 test('notReadOnly: gh が読んでよいのは、そのセッションのリポジトリだけ（ほかのリポジトリの issue・コメントを、人の目を通さずに文脈へ入れない）', () => {
   const own = ['gh pr view 12', 'gh -R o/r pr view 12', 'gh pr view 12 --repo o/r', 'gh pr view 12 --repo=O/R', 'gh issue view 5 -R o/r --comments', 'gh api repos/o/r/pulls/12', 'gh api /repos/O/R/issues/5/comments', 'gh api rate_limit', 'echo "$(gh api repos/o/r/issues/5/comments)"']
   for (const c of own) assert.equal(check(c), '', c)
+  // 位置の語・検索の値でほかのリポジトリを名指しする形も通さない
+  for (const c of ['gh repo view a/b', 'gh repo view b', 'gh repo view a/b --json description', 'gh repo view o/r', "gh pr view 'a/b#5'", "gh issue view 'a/b#5'", 'gh pr view feature/x', 'gh pr view https://github.com/a/b/pull/5', "gh pr list --search 'repo:a/b'", "gh issue list --search 'repo:a/b' --json title,body", 'gh pr list --search=repo:a/b', 'gh issue list -S x']) {
+    assert.equal(check(c), 'flag', c)
+    assert.equal(check(c, CWD, ''), 'flag', c)
+  }
+  for (const c of ['gh repo view', 'gh repo view --json description', 'gh pr view my-branch', 'gh release view v1.2.3', 'gh run view 123456']) assert.equal(check(c), '', c)
   const other = ['gh -R a/b pr view 12', 'gh pr view 12 --repo a/b', 'gh pr view 12 --repo=a/b', 'gh issue view 5 -R a/b --comments', 'gh pr list -R o/rr', 'gh api repos/a/b/issues/5/comments', 'gh api /repos/a/b/pulls', 'gh api repos/o/r2/pulls', 'gh api repos/oo/r/pulls', 'echo "$(gh api repos/a/b/issues/5/comments)"', 'gh pr view 12 -R o/r -R a/b']
   for (const c of other) assert.equal(check(c), 'flag', c)
   // セッションのリポジトリが分からなければ、名指しした形は全部通さない（名指ししない形は、gh が cwd から引く）

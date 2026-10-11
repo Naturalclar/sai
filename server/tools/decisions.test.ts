@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { GhIssues, ISSUES_CLOSED_LIMIT, ISSUES_OPEN_LIMIT } from '../git/issues.ts'
+import { GhIssues, ISSUES_CLOSED_LIMIT, ISSUES_OPEN_LIMIT, issuesFromEnv } from '../git/issues.ts'
 import type { GhRun } from '../git/prs.ts'
 import { render, run } from './decisions.ts'
-import { DECISION_LINE_CHARS, listItems, namedNumbers, parseSources, pendingAll, pendingOf, recommendOf, sections } from './decisionsRead.ts'
+import { DECISION_LINE_CHARS, listItems, mentionedNumbers, namedAtHead, namedInTitle, parseSources, pendingAll, pendingOf, recommendOf, sections } from './decisionsRead.ts'
 import type { DecisionSource } from './decisionsRead.ts'
 
 // 事例は全部作り物の文（実際の issue の文は貼らない）
@@ -55,18 +55,40 @@ test('listItems: いちばん上の階層の箇条書きだけが項目。続き
   assert.deepEqual(listItems(['', '  ']), [])
   // 箇条書きが無ければ、最初の段落の 1 行目
   assert.deepEqual(listItems(['色をどうするか。', '続きの説明']).map((i) => i.head), ['色をどうするか。'])
+  // いちばん上の階層が字下げされていても（3 字まで）全部拾う。入れ子は項目にしない
+  assert.deepEqual(listItems(['  1. a', '     - 入れ子', '  2. b']).map((i) => [i.n, i.head]), [[1, 'a'], [2, 'b']])
+  // 長さの違うフェンス・別の字のフェンスでは閉じない
+  assert.deepEqual(listItems(['````', '```', '1. コードの中', '```', '````', '1. 外']).map((i) => i.head), ['外'])
+  assert.deepEqual(listItems(['```', '~~~', '1. コードの中', '```', '1. 外']).map((i) => i.head), ['外'])
 })
 
-test('namedNumbers: 「決めること」の番号を名指しした書き方だけを読む（並べた形・範囲・全角・かぎ括弧）', () => {
-  assert.deepEqual(namedNumbers('決めること 2: 青にする'), [2])
-  assert.deepEqual(namedNumbers('（2026-10-02。本文の「決めること」1・2）'), [1, 2])
-  assert.deepEqual(namedNumbers('「決めること」1〜4 は案のとおり'), [1, 2, 3, 4])
-  assert.deepEqual(namedNumbers('決めること１、３'), [1, 3])
-  assert.deepEqual(namedNumbers('決めること 5 と、決めること 2'), [2, 5])
-  // 番号の無い書き方・ただの数字は読まない
-  assert.deepEqual(namedNumbers('決めることは無い。3 つ直した'), [])
-  assert.deepEqual(namedNumbers('1. 青にする'), [])
-  assert.deepEqual(namedNumbers(''), [])
+test('namedAtHead / namedInTitle: 決まったと読むのは、項目の頭か見出しで番号を名指しした書き方だけ', () => {
+  assert.deepEqual(namedAtHead('決めること 2: 青にする'), [2])
+  assert.deepEqual(namedAtHead('**決めること 2（URL）: 案のとおり。**'), [2])
+  assert.deepEqual(namedAtHead('「決めること」1・3'), [1, 3])
+  assert.deepEqual(namedAtHead('決めること 1〜4: 案のとおり'), [1, 2, 3, 4])
+  assert.deepEqual(namedAtHead('決めること１、３：案のとおり'), [1, 3])
+  // 文の途中で触れただけ・保留・助数詞・ハイフン・数字の続きは、決まったと読まない
+  assert.deepEqual(namedAtHead('色は青にする（決めること 2）'), [2], '終わりに番号だけを括弧で添えた形')
+  assert.deepEqual(namedAtHead('色は青（`a`。b）。数も同じ（決めること 2・3）。'), [2, 3])
+  for (const text of ['決めること 1: 青にする（決めること 2 が決まるまでの仮）', '色は青（決めること 2）にして、あとは任せる', '色は青（決めること 2 は別）', '決めること 3 はまだ決めない', '決めること 4 を人に聞く', '決めること 2 - 8 色にする', '決めること 2、8 色にする', '本文の決めること 3 つのうち 1 つだけ決めた', '決めることは無い。3 つ直した', '1. 青にする', '']) {
+    assert.deepEqual(namedAtHead(text).filter((n) => n !== 1), [], text)
+  }
+  assert.deepEqual(namedAtHead('決めること 1: 青にする（決めること 2 が決まるまでの仮）'), [1])
+  assert.deepEqual(namedInTitle('決めたこと（2026-10-02。本文の「決めること」1・2）'), [1, 2])
+  assert.deepEqual(namedInTitle('決めたこと: 色（2026-10-09。決めること 2）'), [2])
+  assert.deepEqual(namedInTitle('決めたこと（決めること 1〜3）'), [1, 2, 3])
+  assert.deepEqual(namedInTitle('決めたこと（2026-10-09）'), [])
+  assert.deepEqual(namedInTitle('決めたこと（決めること 3 つのうち 1 つ）'), [])
+  assert.deepEqual(namedInTitle('決めたこと（決めること 2 は保留）'), [])
+})
+
+test('mentionedNumbers: 決まっていない側に戻すときは、触れているだけの番号も読む', () => {
+  assert.deepEqual(mentionedNumbers('上限（決めること 2）'), [2])
+  assert.deepEqual(mentionedNumbers('決めること 5 と、決めること 2 は決め直す'), [2, 5])
+  assert.deepEqual(mentionedNumbers('「決めること」1〜3 は持ち越し'), [1, 2, 3])
+  assert.deepEqual(mentionedNumbers('決めること 2 - 8 色にする'), [2], 'ハイフンは範囲にしない')
+  assert.deepEqual(mentionedNumbers('決めることは無い'), [])
 })
 
 test('recommendOf: 項目の中の「おすすめ」の 1 文だけ', () => {
@@ -74,6 +96,10 @@ test('recommendOf: 項目の中の「おすすめ」の 1 文だけ', () => {
   assert.equal(recommendOf('色の数（おすすめ: 8）'), 'おすすめ: 8')
   assert.equal(recommendOf('色の数'), undefined)
   assert.ok([...recommendOf(`おすすめは${'あ'.repeat(300)}`)!].length <= 80)
+  // 前にある括弧の中身（選択肢）を、おすすめとして出さない
+  assert.equal(recommendOf('上限の数（8 か 16）— おすすめは 8'), 'おすすめは 8')
+  assert.equal(recommendOf('既定の色(青か緑)はどちらか、おすすめは青'), 'おすすめは青')
+  assert.equal(recommendOf('色の数（8 か 16。おすすめは 8（軽い）にする）を決める'), 'おすすめは 8（軽い）にする')
 })
 
 test('pendingOf: 本文の「決めること」を番号つきで拾う。ほかの見出しの箇条書きは拾わない', () => {
@@ -131,9 +157,34 @@ test('pendingOf: 「まだ決めていないこと」に挙がった番号は決
       { createdAt: '2026-10-03T00:00:00Z', body: '## 決めたこと（2026-10-03）\n\n### まだ決めていないこと\n- 決めること 2 は決め直す' },
     ],
   })
-  assert.deepEqual(brief(back), ['body2'])
+  assert.deepEqual(brief(back), ['body2', 'remaining'], '本文の項目を指すだけの書き方でなければ、その項目も出す')
   // コメントは時刻の順に読む（並びが逆でも同じ）
-  assert.deepEqual(brief({ ...back, comments: [...parseSources(JSON.stringify([{ number: 10, comments: [...back.comments].reverse() }]), 'issue', 'open')![0]!.comments] }), ['body2'])
+  assert.deepEqual(brief({ ...back, comments: [...parseSources(JSON.stringify([{ number: 10, comments: [...back.comments].reverse() }]), 'issue', 'open')![0]!.comments] }), ['body2', 'remaining'])
+})
+
+test('pendingOf: 「決めたこと」の中で番号に触れただけでは消さない（仮・保留・小見出しの下・引用・コードブロック）', () => {
+  const decidedWith = (text: string) => brief(issue({ body: BODY, comments: [{ createdAt: '2026-10-02T00:00:00Z', body: `## 決めたこと（2026-10-02）\n\n${text}\n` }] }))
+  assert.deepEqual(decidedWith('- 決めること 1: 青にする（決めること 2 が決まるまでの仮）'), ['body2', 'body3'])
+  assert.deepEqual(decidedWith('- 決めること 3 はまだ決めない'), ['body1', 'body2', 'body3'])
+  assert.deepEqual(decidedWith('- 決めること 1: 青\n\n### 次にやること\n- 決めること 3: 人に聞く'), ['body2', 'body3'])
+  assert.deepEqual(decidedWith('> 決めること 3: どうしますか'), ['body1', 'body2', 'body3'])
+  assert.deepEqual(decidedWith('```\n- 決めること 3: x\n```'), ['body1', 'body2', 'body3'])
+  assert.deepEqual(decidedWith('- 決めること 2 - 3 色にする'), ['body1', 'body2', 'body3'])
+  assert.deepEqual(decidedWith('本文の決めること 3 つのうち 1 つだけ決めた'), ['body1', 'body2', 'body3'])
+})
+
+test('pendingOf: 本文で同じ番号が 2 回出てくるなら突き合わせない。「まだ決めていないこと」が本文に無い番号に触れていれば、その項目も出す', () => {
+  const same = issue({ body: '## 決めること\n1. 色\n1. 数\n1. 置き場\n', comments: [{ createdAt: '2026-10-02T00:00:00Z', body: '## 決めたこと\n- 決めること 1: 青' }] })
+  assert.deepEqual(brief(same), ['body1', 'body1', 'body1'])
+  const two = issue({ body: '## 決めること\n1. 色\n2. 数\n\n## 決めること（追加）\n1. 置き場\n', comments: [{ createdAt: '2026-10-02T00:00:00Z', body: '## 決めたこと（決めること 1・2）' }] })
+  assert.deepEqual(brief(two), ['body1', 'body1'])
+  const remainingWith = (text: string, over: Partial<DecisionSource> = {}) => brief(issue({ body: BODY, ...over, comments: [{ createdAt: '2026-10-02T00:00:00Z', body: `## 決めたこと（決めること 1〜3）\n\n### まだ決めていないこと\n${text}\n` }] }))
+  assert.deepEqual(remainingWith('- 暗い画面の色（決めること 6 として足す）'), ['remaining'])
+  assert.deepEqual(remainingWith('- 色の名前を付けるか（決めること 1 とは別の話）'), ['body1', 'remaining'])
+  assert.deepEqual(remainingWith('- 暗い画面（決めること 9）', { state: 'closed' }), ['remaining'])
+  assert.deepEqual(remainingWith('- 決めること 2 の数は未定', { state: 'closed', body: '## 決めること\n- 色\n- 数\n' }), ['remaining'])
+  // 同じコメントの中に節が 2 つあれば足し合わせる
+  assert.deepEqual(remainingWith('- 件 A\n\n## 別\n\n### まだ決めていないこと（追加）\n- 置き場（決めること 3）'), ['body3', 'remaining'])
 })
 
 test('pendingOf: 閉じた issue は「決めないまま閉じること」だけ。無ければ「まだ決めていないこと」だけで、本文の決めることは出さない', () => {
@@ -257,11 +308,28 @@ test('decisions: SAI_GH=0 なら何も引かない。引けなかったものは
   assert.equal(partial.code, 1)
   assert.match(partial.err[0]!, /引けませんでした: 閉じた issue/)
   assert.match(partial.out[0]!, /2 件/)
-  for (const bad of [['--days', 'x'], ['--days', '-1'], ['--repo', 'other/repo'], ['extra']]) {
+  for (const bad of [['--days', 'x'], ['--days', '-1'], ['--days', ''], ['--days=1e1'], ['--days', '0x10'], ['--days', '366'], ['--repo', 'other/repo'], ['extra']]) {
     const r = await cli(bad, answers)
     assert.deepEqual([r.code, r.calls.length], [2, 0], bad.join(' '))
   }
   // 切れているかもしれないときは知らせる
   const many = await cli([], (args) => (args.includes('closed') ? JSON.stringify(Array.from({ length: ISSUES_CLOSED_LIMIT }, (_, i) => ({ number: i + 1 }))) : '[]'))
-  assert.match(many.err.join('\n'), /切れているかもしれません/)
+  assert.match(many.err.join('\n'), /閉じた issue が \d+ 件に届いた/)
+  const full = JSON.stringify(Array.from({ length: ISSUES_OPEN_LIMIT }, (_, i) => ({ number: i + 1 })))
+  const wide = await cli([], (args) => (args.includes('closed') ? '[]' : full))
+  assert.match(wide.err.join('\n'), /open な issue が \d+ 件に届いた/)
+  assert.match(wide.err.join('\n'), /open な PR が \d+ 件に届いた/)
+})
+
+test('issuesFromEnv: SAI_GH=0 なら口を組まない（gh を起こすものが無い）', () => {
+  const before = process.env.SAI_GH
+  try {
+    process.env.SAI_GH = '0'
+    assert.equal(issuesFromEnv(), null)
+    delete process.env.SAI_GH
+    assert.ok(issuesFromEnv() instanceof GhIssues)
+  } finally {
+    if (before === undefined) delete process.env.SAI_GH
+    else process.env.SAI_GH = before
+  }
 })

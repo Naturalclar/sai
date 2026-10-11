@@ -9,11 +9,10 @@
 import { realpathSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
-import { localDate } from '../../shared/entity.ts'
 import { RealGit } from '../git/diff.ts'
-import { ISSUES_CLOSED_LIMIT, issuesFromEnv } from '../git/issues.ts'
+import { ISSUES_CLOSED_LIMIT, ISSUES_OPEN_LIMIT, issuesFromEnv } from '../git/issues.ts'
 import type { GhIssues } from '../git/issues.ts'
-import { ProjectResolver } from '../git/project.ts'
+import { githubRepoOf } from '../../shared/prs.ts'
 import { parseSources, pendingAll } from './decisionsRead.ts'
 import type { DecisionSource, Pending } from './decisionsRead.ts'
 
@@ -69,8 +68,9 @@ export async function run(argv: string[], env: Env): Promise<number> {
     env.out(USAGE)
     return 0
   }
-  const days = values.days === undefined ? DECISIONS_CLOSED_DAYS : Number(values.days)
-  if (!Number.isInteger(days) || days < 0 || days > 365) {
+  // 数字だけ（空・`1e1`・`0x10` は受けない）
+  const days = values.days === undefined ? DECISIONS_CLOSED_DAYS : /^\d{1,3}$/.test(values.days) ? Number(values.days) : -1
+  if (days < 0 || days > 365) {
     env.err(USAGE)
     return 2
   }
@@ -82,7 +82,8 @@ export async function run(argv: string[], env: Env): Promise<number> {
     env.err('このディレクトリのリポジトリ（origin の owner/repo）が分かりません')
     return 1
   }
-  const since = localDate(new Date(env.now.getTime() - days * 86_400_000).toISOString())
+  // GitHub の検索は日付を UTC で読むので、UTC の日付で切る（Asia/Tokyo の日付だと、古い側が 9 時間ぶん欠ける）
+  const since = new Date(env.now.getTime() - days * 86_400_000).toISOString().slice(0, 10)
   const [open, closed, prs] = await Promise.all([
     env.gh.open(env.repo).then((s) => parseSources(s, 'issue', 'open')),
     days > 0 ? env.gh.closed(env.repo, since).then((s) => parseSources(s, 'issue', 'closed')) : Promise.resolve([] as DecisionSource[]),
@@ -100,7 +101,10 @@ export async function run(argv: string[], env: Env): Promise<number> {
     env.out(`まだ決まっていないこと: ${pending.length} 件（${where} か所。open な issue ${count('issue', 'open')}・閉じた issue ${count('issue', 'closed')}・PR ${count('pr', 'open')}。閉じた issue は ${since} 以降）`)
     for (const line of render(pending)) env.out(line)
   }
+  // 上限に届いたら、切れているかもしれないと知らせる（黙って古い側を落とさない）
   if (closed && closed.length >= ISSUES_CLOSED_LIMIT) env.err(`閉じた issue が ${ISSUES_CLOSED_LIMIT} 件に届いたので、古い側が切れているかもしれません（--days を小さく）`)
+  if (open && open.length >= ISSUES_OPEN_LIMIT) env.err(`open な issue が ${ISSUES_OPEN_LIMIT} 件に届いたので、古い側が切れているかもしれません`)
+  if (prs && prs.length >= ISSUES_OPEN_LIMIT) env.err(`open な PR が ${ISSUES_OPEN_LIMIT} 件に届いたので、古い側が切れているかもしれません`)
   return missed.length ? 1 : 0
 }
 
@@ -115,9 +119,10 @@ function isMain(): boolean {
 }
 
 if (isMain()) {
-  const { project } = await new ProjectResolver(new RealGit()).resolve(process.cwd())
+  // このリポジトリ = cwd の origin。GitHub のものだけ（ほかのホストの origin から、github.com の同じ名前を引きに行かない）
+  const remote = await new RealGit().run(process.cwd(), ['remote', 'get-url', 'origin']).catch(() => '')
   process.exitCode = await run(process.argv.slice(2), {
-    repo: project.includes('/') ? project : '',
+    repo: githubRepoOf(remote.trim()),
     gh: issuesFromEnv(),
     now: new Date(),
     out: (line) => console.log(line),

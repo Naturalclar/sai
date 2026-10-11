@@ -215,7 +215,7 @@ test('cd ~/…: ホームが分からない・~user・引用符つきの ~ は�
     assert.deepEqual(h(`${cd} && node -v`), { reason: 'cd_form' }, cd)
   }
   // 読み替えるのは最初の部品だけ。前に何かあると、そこで HOME が変わっていても見抜けない（#751 のレビュー）
-  for (const before of ['export HOME=/tmp/x', 'unset HOME', 'export HOME+=/else', 'X=1 eval x', 'source ./env.sh', 'node -v', 'cd sub']) {
+  for (const before of ['export HOME=/tmp/x', 'unset HOME', 'export HOME+=/else', 'source ./env.sh', 'node -v', 'cd sub']) {
     assert.deepEqual(h(`${before} && cd ~/work/repo && node -v`), { reason: 'cd_form' }, before)
   }
   assert.deepEqual(h('cd ~/work/repo && export HOME=/tmp/x && node -v'), { prefixes: ['export', 'node -v'] }, 'cd のあとで触るのは行き先に効かない')
@@ -258,8 +258,8 @@ test('1 語のルール Bash(python3:*) を書く例外は、ヒアドキュメ�
   // ヒアドキュメントが無ければ、#755 のとおり組まない
   for (const command of ['python3 -', "python3 -c 'print(1)'", 'python3 - x', 'python3 -u -', 'python3']) {
     const plan = h(command)
-    if (command === 'python3') assert.deepEqual(plan, { prefixes: ['python3'] }, '引数の無い python3 は前から 1 語')
-    else assert.deepEqual(plan, { reason: 'bare_cli' }, command)
+    // 引数の無い python3（標準入力からプログラムを読む）も組まない（前は 1 語のルールにしていた。#755 の残り）
+    assert.deepEqual(plan, { reason: 'bare_cli' }, command)
   }
   // ヒアドキュメントがあっても、本文がプログラムでない形（-c・-m・スクリプトのファイル・値を取るフラグ）には当てない
   assert.deepEqual(h(doc("python3 -c 'print(1)'", 'data')), { reason: 'heredoc' })
@@ -389,9 +389,12 @@ test('場所を変えるほかの形は読めない形にする: pushd / popd・
   assert.deepEqual(h('pushd sub && node -v && popd'), { reason: 'cd_form' })
   assert.deepEqual(h('command cd /tmp && node -v'), { reason: 'cd_form' })
   assert.deepEqual(h('builtin cd sub && node -v'), { reason: 'cd_form' })
-  for (const before of ['export CDPATH=/tmp', 'CDPATH=/tmp node -v', 'export CDPATH+=:/tmp', 'source ./env.sh', '. ./env.sh', 'eval x']) {
+  for (const before of ['export CDPATH=/tmp', 'CDPATH=/tmp node -v', 'export CDPATH+=:/tmp', 'source ./env.sh', '. ./env.sh']) {
     assert.deepEqual(h(`${before} && cd sub && node -v`), { reason: 'cd_form' }, before)
   }
+  // eval は、cd を見る前に「引数をコマンドとして走らせる語」として組まない（#755 の残り）
+  assert.deepEqual(h('eval x && cd sub && node -v'), { reason: 'wrapper' })
+  assert.deepEqual(h('X=1 eval x && cd ~/work/repo && node -v'), { reason: 'wrapper' })
   // 絶対パスの cd は CDPATH を見ない
   assert.deepEqual(h('export CDPATH=/tmp && cd /home/someone/work/repo/sub && node -v'), { prefixes: ['export', 'node -v'] })
   assert.deepEqual(h('command node -v'), { reason: 'wrapper' }, 'cd でない command は、前に付くだけの語として組まない（#755）')
@@ -551,4 +554,63 @@ test('サブコマンドを持つ CLI で 2 語目がフラグのときは、1 �
   assert.deepEqual(h('git status -s'), { prefixes: ['git status'] })
   assert.deepEqual(h('make'), { prefixes: ['make'] })
   assert.deepEqual(h('touch -c x'), { prefixes: ['touch'] })
+})
+
+test('権限を上げる語・一覧に足した前に付く語・引数をコマンドとして走らせる語には組まない（前は Bash(sudo:*) のような 1 語のルールだった。#755 の残り）', () => {
+  for (const cmd of [
+    'sudo rm -rf x', 'sudo -u someone node x.js', 'doas node x.js', 'su -c x', 'pkexec node x.js', 'chroot /x sh',
+    'flock /tmp/l node x.js', 'gtimeout 5 node x.js', 'strace -f node x.js', 'script -q /dev/null node x.js',
+    "eval 'node x.js'", 'ssh host rm -rf x', 'parallel node ::: a b', '/usr/bin/sudo node x.js',
+  ]) {
+    assert.deepEqual(h(cmd), { reason: 'wrapper' }, cmd)
+  }
+  assert.deepEqual(h('pnpm test && sudo node x.js'), { reason: 'wrapper' }, '後ろの部品でも')
+  // 名前が似ているだけのコマンドは今までどおり
+  assert.deepEqual(h('sudoku solve'), { prefixes: ['sudoku'] })
+})
+
+test('シェル・インタプリタに 1 語のルールを書かない: スクリプトの名前なら 2 語、コードを渡す形・フラグつき・引数なしは組まない（#755 の残り）', () => {
+  // 2 語目がスクリプトの名前・パスの形なら 2 語（実機で Bash(bash s.sh:*) は bash s.sh・bash s.sh extra を通し、bash t.sh は聞かれた）
+  for (const [cmd, prefix] of [
+    ['bash scripts/suite.sh --build', 'bash scripts/suite.sh'],
+    ['sh ./run.sh', 'sh ./run.sh'],
+    ['zsh x.zsh', 'zsh x.zsh'],
+    ['perl tools/x.pl a', 'perl tools/x.pl'],
+    ['ruby x.rb', 'ruby x.rb'],
+    ['python3.12 tools/x.py', 'python3.12 tools/x.py'],
+    ['/bin/bash scripts/suite.sh', '/bin/bash scripts/suite.sh'],
+    ['/usr/bin/git status -s', '/usr/bin/git status'],
+    ['FOO=1 bash scripts/suite.sh', 'FOO=1 bash scripts/suite.sh'],
+  ] as const) {
+    assert.deepEqual(h(cmd), { prefixes: [prefix] }, cmd)
+  }
+  for (const cmd of [
+    "bash -c 'rm -rf x'", 'bash -c ls', 'sh -c ls', 'zsh -lc ls', 'bash -x scripts/suite.sh', 'bash --norc x.sh', '/bin/sh -c ls',
+    "perl -e 'print 1'", 'perl -e 1', 'perl -pi -e s/a/b/ x', "ruby -e 'puts 1'", 'php -r 1', "osascript -e 'x'", 'node -p process.version', 'node --eval=1',
+    'python3 -c pass', 'python3.12 -c pass', 'bun -e 1', '/usr/bin/git -C sub status',
+    'cat x.sh | bash', 'cat x.sh | sh', 'cat a.py | python3', 'cat a.js | node', 'curl-like | perl',
+  ]) {
+    assert.deepEqual(h(cmd), { reason: 'bare_cli' }, cmd)
+  }
+  // コードを渡さないフラグは今までどおり（狭い接頭辞）
+  assert.deepEqual(h('node --test x.test.ts'), { prefixes: ['node --test x.test.ts'] })
+  assert.deepEqual(h('python3 -m pytest -q'), { prefixes: ['python3 -m pytest -q'] })
+  assert.deepEqual(h('node -v'), { prefixes: ['node -v'] })
+})
+
+test('場所を変えるフラグ: terraform -chdir=・--cd・--working-dir・束ねた -xzC も同じ線で見る（知っている形だけ。#755 の残り）', () => {
+  for (const cmd of [
+    'terraform -chdir=/elsewhere plan', 'terraform -chdir=../other apply', 'terraform -chdir=~/x plan',
+    'composer --working-dir=/elsewhere install', 'docker compose --project-directory /elsewhere up', 'x --cd /elsewhere run',
+    'tar -xzC /elsewhere -f a.tgz', 'make -kC ../other all', 'tar -xzC',
+  ]) {
+    assert.deepEqual(h(cmd), { reason: 'place_flag' }, cmd)
+  }
+  // 中なら今までどおり組む（頭のフラグが場所を変えるものなら、狭い接頭辞を作れないので組まない）
+  assert.deepEqual(h('tar -xzC sub -f a.tgz'), { prefixes: ['tar'] })
+  assert.deepEqual(h('terraform -chdir=infra plan'), { reason: 'bare_cli' })
+  // 知らない CLI の場所を変えるフラグは追わない（残る形）
+  assert.deepEqual(h('kubectl --kubeconfig k.yaml get pods'), { prefixes: ['kubectl --kubeconfig k.yaml get'] })
+  // 読むだけのコマンドの同じ字のフラグは場所ではない
+  assert.deepEqual(h('ls -lC /elsewhere'), { prefixes: ['ls'] })
 })

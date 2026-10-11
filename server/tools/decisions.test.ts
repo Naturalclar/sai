@@ -49,6 +49,13 @@ test('sections: 見出しの下を、同じか上の階層の見出しまで拾�
   assert.deepEqual(sections('  ## 決めること ##\n1. a', ask).map((s) => [s.title, s.lines]), [['決めること', ['1. a']]])
   assert.equal(sections('<!--\n## 決めること\n1. 雛形\n-->\n本文', ask).length, 0)
   assert.equal(sections('<!-- ## 決めること', ask).length, 0)
+  assert.equal(sections('<!-- 雛形 -->\n## 決めること\n1. a', ask).length, 1, '1 行で閉じたコメントのあとは読む')
+  assert.equal(sections('<!--->\n## 決めること\n1. a', ask).length, 1)
+  // 行の途中・コードの中の `<!--` はコメントにしない（あとの節を消さない）
+  assert.equal(sections('雛形の `<!--` は消す\n\n## 決めること\n1. a', ask).length, 1)
+  assert.equal(sections("```\nindexOf('<!--')\n```\n## 決めること\n1. a\n```\n<!--\n```\n", ask).length, 1)
+  // 項目の中に字下げして書いた `#` の行は、節を閉じない
+  assert.deepEqual(sections('## 決めること\n- 上限\n  # 8 か 16\n- 置き場\n## 次\n- x', ask).map((s) => s.lines), [['- 上限', '  # 8 か 16', '- 置き場']])
   assert.deepEqual(sections('## 決めること\n1. a\n### 決めること（補足）\n2. b', ask).map((s) => s.lines), [['1. a', '### 決めること（補足）', '2. b']])
   // 長い 1 行で止まらない（見出しにも見ない）
   const started = Date.now()
@@ -67,6 +74,9 @@ test('listItems: いちばん上の階層の箇条書きだけが項目。続き
   assert.deepEqual(listItems(['色をどうするか。', '続きの説明']).map((i) => i.head), ['色をどうするか。'])
   // いちばん上の階層が字下げされていても（3 字まで）全部拾う。入れ子は項目にしない
   assert.deepEqual(listItems(['  1. a', '     - 入れ子', '  2. b']).map((i) => [i.n, i.head]), [[1, 'a'], [2, 'b']])
+  assert.deepEqual(listItems(['- 上限', '  # 8 か 16', '- 置き場', '1. 色', '   ## メモ', '2. 数']).map((i) => i.head), ['上限', '置き場', '色', '数'])
+  // 長い 1 行の項目も落とさない
+  assert.deepEqual(listItems(['1. 色', `2. ${'長'.repeat(3000)}`, '3. 置き場']).map((i) => i.n), [1, 2, 3])
   // 長さの違うフェンス・別の字のフェンスでは閉じない
   assert.deepEqual(listItems(['````', '```', '1. コードの中', '```', '````', '1. 外']).map((i) => i.head), ['外'])
   assert.deepEqual(listItems(['```', '~~~', '1. コードの中', '```', '1. 外']).map((i) => i.head), ['外'])
@@ -95,6 +105,7 @@ test('namedAtHead / namedInTitle: 決まったと読むのは、項目の頭か�
   // ほかの issue の「決めること」は、この issue の番号にしない
   assert.deepEqual(namedInTitle('決めたこと（2026-10-09。#12 の決めること 2）'), [])
   assert.deepEqual(namedInTitle('決めたこと（#12 の「決めること」1・2）'), [])
+  for (const t of ['決めたこと（#12 の本文の「決めること」2）', '決めたこと（#12 の『決めること』2）', '決めたこと（#12 の  決めること 2）', '決めたこと（#12 にある決めること 2）', '決めたこと（issue 12 の決めること 2）']) assert.deepEqual(namedInTitle(t), [], t)
 })
 
 test('mentionedNumbers: 決まっていない側に戻すときは、触れているだけの番号も読む', () => {
@@ -118,6 +129,7 @@ test('recommendOf: 項目の中の「おすすめ」の 1 文だけ', () => {
   assert.equal(recommendOf('青（おすすめ）か緑'), '青（おすすめ）')
   assert.equal(recommendOf('候補: 青、緑（おすすめ）、赤'), '緑（おすすめ）')
   assert.equal(recommendOf('（おすすめ）'), undefined)
+  assert.equal(recommendOf('青 （おすすめ）か緑'), '青（おすすめ）')
 })
 
 test('pendingOf: 本文の「決めること」を番号つきで拾う。ほかの見出しの箇条書きは拾わない', () => {
@@ -192,6 +204,9 @@ test('pendingOf: 「決めたこと」の中で番号に触れただけでは消
   // 見出しにしていない「まだ決めていないこと」（太字の行）から下も、決まったと読まない
   assert.deepEqual(decidedWith('- 決めること 1: 青\n\n**まだ決めていないこと**\n- 決めること 2: 上限は保留\n- 決めること 3（置き場）'), ['body2', 'body3'])
   assert.deepEqual(decidedWith('- 決めること 1: 青\n- まだ決めていないこと:\n  - 決めること 2: 保留'), ['body2', 'body3'])
+  for (const mark of ['> まだ決めていないこと', '*まだ決めていないこと*', '_まだ決めていないこと_', '【まだ決めていないこと】', 'まだ決めていない:']) assert.deepEqual(decidedWith(`- 決めること 1: 青\n\n${mark}\n- 決めること 2: 保留`), ['body2', 'body3'], mark)
+  // コメントの中の `<!--` で「まだ決めていないこと」が消えない
+  assert.deepEqual(brief(issue({ body: BODY, comments: [{ createdAt: '2026-10-02T00:00:00Z', body: '## 決めたこと（決めること 1〜3）\n雛形の `<!--` は消した\n### まだ決めていないこと\n- 決めること 3: 保留\n- 新しい話' }] })), ['body3', 'remaining'])
   // ほかの issue の番号・HTML コメントの中
   assert.deepEqual(brief(issue({ body: BODY, comments: [{ createdAt: '2026-10-02T00:00:00Z', body: '## 決めたこと（#12 の決めること 2）\n- 向こうは青' }] })), ['body1', 'body2', 'body3'])
   assert.deepEqual(brief(issue({ body: BODY, comments: [{ createdAt: '2026-10-02T00:00:00Z', body: '<!-- ## 決めたこと（決めること 1〜3） -->\nまだです' }] })), ['body1', 'body2', 'body3'])

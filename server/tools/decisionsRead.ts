@@ -62,10 +62,10 @@ interface Item {
 
 /** 見出しの行（3 字までの字下げは見出し）。終わりの空白と閉じの `#` は `heading()` が文字列として外す（正規表現で外すと、長い行で止まる） */
 const HEADING = /^ {0,3}(#{1,6})[ \t]+(.*)$/
-/** 1 行がこれより長ければ見出しにも箇条書きにも見ない（本文は 65536 字まで 1 行に書ける） */
+/** 1 行がこれより長ければ見出しに見ない（本文は 65536 字まで 1 行に書ける。箇条書きは長くても項目にする） */
 const LINE_MAX = 2000
 
-function heading(line: string): { level: number; title: string } | null {
+function heading(line: string): { level: number; title: string; indent: number } | null {
   if (line.length > LINE_MAX) return null
   const m = HEADING.exec(line)
   if (!m) return null
@@ -74,24 +74,9 @@ function heading(line: string): { level: number; title: string } | null {
   let end = title.length
   while (end > 0 && title[end - 1] === '#') end--
   if (end < title.length && (end === 0 || title[end - 1] === ' ' || title[end - 1] === '\t')) title = title.slice(0, end).trimEnd()
-  return { level: m[1]!.length, title }
+  return { level: m[1]!.length, title, indent: line.length - line.trimStart().length }
 }
 
-/** `<!-- … -->` を消す（雛形の見出し・消したつもりの「決めたこと」を読まない）。閉じていなければ残りを全部消す */
-function stripComments(markdown: string): string {
-  let out = ''
-  let i = 0
-  for (;;) {
-    const open = markdown.indexOf('<!--', i)
-    if (open < 0) return out + markdown.slice(i)
-    out += markdown.slice(i, open)
-    const close = markdown.indexOf('-->', open + 4)
-    if (close < 0) return out
-    // 行の数は保つ
-    out += markdown.slice(open, close).replace(/[^\n]/g, '')
-    i = close + 3
-  }
-}
 const FENCE = /^ {0,3}(`{3,}|~{3,})/
 
 /** コードブロックの開け閉めを追う。閉じるのは、開けたのと同じ字で、同じ長さ以上の行だけ（```` の中の ``` や ~~~ では閉じない） */
@@ -112,18 +97,28 @@ function fences(): (line: string) => boolean {
 
 /**
  * 見出しが `match` に当たる節を、出てきた順に返す。節は、同じか上の階層の見出しまで（下の階層の見出しは節の中）。
- * コードブロックの中の `#` は見出しにしない。当たった節の中の、当たる小見出しは節を分けない（同じ項目を 2 回数えない）
+ * コードブロックの中の `#` は見出しにしない。当たった節の中の、当たる小見出しは節を分けない（同じ項目を 2 回数えない）。
+ * 字下げした見出し（項目の中に書いた `# メモ`）は、節を開くことはあっても閉じない。
+ * 行の頭から始まる HTML コメント（`<!-- … -->`。雛形）の中は読まない。行の途中・コードの中の `<!--` はただの字
  */
 export function sections(markdown: string, match: (title: string) => boolean): Section[] {
   const found: Section[] = []
   const open: Section[] = []
   const inCode = fences()
-  for (const line of stripComments(markdown ?? '').split(/\r?\n/)) {
-    const h = inCode(line) ? null : heading(line)
+  let commented = false
+  for (const line of (markdown ?? '').split(/\r?\n/)) {
+    const code = inCode(line)
+    if (!code && !commented && /^ {0,3}<!--/.test(line)) commented = true
+    if (commented) {
+      // 閉じの `-->` がある行まで（開けた行で閉じていれば、その 1 行だけ）
+      if (line.indexOf('-->', line.indexOf('<!--') + 2) >= 0 || (!line.includes('<!--') && line.includes('-->'))) commented = false
+      continue
+    }
+    const h = code ? null : heading(line)
     if (h) {
       const level = h.level
-      // 同じか上の階層の見出しで、開いている節を閉じる
-      while (open.length && open[open.length - 1]!.level >= level) open.pop()
+      // 同じか上の階層の、字下げの無い見出しで、開いている節を閉じる
+      if (h.indent === 0) while (open.length && open[open.length - 1]!.level >= level) open.pop()
       for (const s of open) s.lines.push(line)
       if (!open.length && match(h.title)) {
         const s: Section = { title: h.title, level, lines: [] }
@@ -137,8 +132,9 @@ export function sections(markdown: string, match: (title: string) => boolean): S
   return found
 }
 
-const NUMBERED = /^( *)(\d{1,3})[.)]\s+(.*)$/
-const BULLET = /^( *)[-*+]\s+(.*)$/
+// 頭だけを見る（`(.*)$` を付けない。長い 1 行でも止まらず、長い項目も落とさない）
+const NUMBERED = /^( *)(\d{1,3})[.)][ \t]+/
+const BULLET = /^( *)[-*+][ \t]+/
 /** 「決めることは無い」と書いただけの行 */
 const NOTHING = /^(?:\*\*)?(?:なし|無し|ない|ありません|特になし|特に無し|なし。|\(なし\)|（なし）|none|n\/a)(?:\*\*)?[。.]?$/i
 
@@ -156,17 +152,19 @@ export function listItems(lines: readonly string[]): Item[] {
   const loose: string[] = []
   for (const line of lines) {
     if (inCode(line)) continue
-    // 節の中の小見出しは項目にしない（項目の続きにも入れない）
-    if (heading(line)) {
-      cur = null
+    // 節の中の小見出しは項目にしない。字下げの無い小見出しは、前の項目の続きも切る
+    const h = heading(line)
+    if (h) {
+      if (h.indent === 0) cur = null
+      else if (cur) cur.whole += `\n${line.trim()}`
       continue
     }
-    const num = line.length > LINE_MAX ? null : NUMBERED.exec(line)
-    const dot = num || line.length > LINE_MAX ? null : BULLET.exec(line)
+    const num = NUMBERED.exec(line)
+    const dot = num ? null : BULLET.exec(line)
     const indent = (num ?? dot)?.[1]!.length ?? 0
     if ((num || dot) && base < 0 && indent <= 3) base = indent
     if ((num || dot) && base >= 0 && indent <= base + 1) {
-      const head = (num ? num[3]! : dot![2]!).trim()
+      const head = line.slice((num ?? dot)![0].length).trim()
       cur = { ...(num ? { n: Number(num[2]) } : {}), head, whole: head }
       items.push(cur)
       continue
@@ -219,7 +217,12 @@ const NAMED_END = String.raw`\s*(?:[）)。]|$)`
  */
 export function namedInTitle(title: string): number[] {
   const out = new Set<number>()
-  for (const m of half(title ?? '').matchAll(new RegExp(String.raw`(?<!#\d{1,7}\s?の\s?「?)決めること[」』]?\s*(${NUMBER_LIST})(?=${NAMED_END})`, 'g'))) expand(m[1]!, out)
+  const text = half(title ?? '')
+  for (const m of text.matchAll(new RegExp(String.raw`決めること[」』]?\s*(${NUMBER_LIST})(?=${NAMED_END})`, 'g'))) {
+    // 手前でほかの issue / PR を指していれば（`#12 の本文の「決めること」2`・`issue 12 の決めること 2`）、この issue の番号にしない
+    if (/#\d|(?:issue|pr)\s*\d/i.test(text.slice(0, m.index))) continue
+    expand(m[1]!, out)
+  }
   return [...out].sort((a, b) => a - b)
 }
 
@@ -276,7 +279,7 @@ export function recommendOf(whole: string): string | undefined {
   sentence = sentence.replace(/^[\s—–\-:：]+/, '').trim()
   // 括弧の中が「おすすめ」だけ（`青（おすすめ）か緑`）なら、括弧の前の語ごと（`青（おすすめ）`）
   if (inside && /^おすすめ[!！]?$/.test(sentence)) {
-    const lead = before.slice(0, opener)
+    const lead = before.slice(0, opener).trimEnd()
     const start = Math.max(lead.lastIndexOf('。'), lead.lastIndexOf('、'), lead.lastIndexOf(' '), lead.lastIndexOf('：'), lead.lastIndexOf(':')) + 1
     const word = lead.slice(start).trim()
     if (!word) return undefined
@@ -286,7 +289,7 @@ export function recommendOf(whole: string): string | undefined {
 }
 
 /** 見出しにせずに書いた「まだ決めていないこと」「決めないまま閉じること」の行（`**まだ決めていないこと**`・`- まだ決めていないこと:`） */
-const NOT_YET = /^(?:[-*+]\s+|\d{1,3}[.)]\s+)?(?:まだ決めていないこと|決めないまま閉じること)/
+const NOT_YET = /^(?:[-*+>]\s*|\d{1,3}[.)]\s+)?[*_【\[（(「『\s]*(?:まだ決めていない|決めないまま閉じる)/
 
 const starts = (word: string) => (title: string): boolean => plain(title).startsWith(word)
 const isAsk = starts('決めること')

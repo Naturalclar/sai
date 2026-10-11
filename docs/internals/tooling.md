@@ -75,6 +75,27 @@ node --disable-warning=ExperimentalWarning server/tools/feed.ts rows <セッシ�
 - **読み方を新しく決めない・写さない**。判定は `shared/` のもの（`entityId()`・`eventKind()`・`localDate()`・`isCompactSummaryText()`・`turnCosts()`・`agentReplyRows()`・`resolveTarget()`・`isArchivedAt()`・入力の行を辿る `promptTracker()`）、ファイルの読み方はサーバのもの（`FeedStore.rowsOn()`・`MetaStore`・`parseTurnUsageLog()`・`isMessage()`）をそのまま呼ぶ。正本を TypeScript に置いたのはこのため（→ [経緯](../history/tooling.md#記録を調べる道具を-typescript-に置いた703)）。
 - テストは `server/tools/feed.test.ts`（`pnpm test` に入る。一時ディレクトリの記録で回し、本物の置き場は触らない）。「費用を積み上げのまま足す」「要約の文を人の入力に数える」の 2 つを、間違えない例として入れてある。
 
+## 人の判断待ちを拾う（`pnpm decisions`。#762）
+
+issue と PR に散っている「決めること」を、見出しから機械で拾って 1 つの一覧にする道具。**読むだけ**で、LLM は呼ばない。書き方の決まりは `AGENTS.md` の「決めることの書き方」。
+
+```
+pnpm -s decisions              # open な issue と PR、直近 14 日に閉じた issue の、まだ決まっていない項目
+pnpm -s decisions --days 30    # 閉じた issue を遡る日数（0 で閉じた issue を引かない）
+pnpm -s decisions --json       # 1 行 1 項目の JSON
+```
+
+- 出すのは、issue / PR の番号と題名・項目の 1 行（`DECISION_LINE_CHARS`）・書かれた日・おすすめの 1 文だけ。**本文は載せない**（#688）
+- **`gh` の形は `server/git/issues.ts` の決め打ちの 3 つ**（`gh issue list --state open`・`gh issue list --state closed --search closed:>=<日付>`・`gh pr list --state open`。どれも `--repo <owner/repo>` と `--json` の決まった項目）。リポジトリは cwd の origin から引いたこのリポジトリだけで、引数では変えられない。書く形は組まない。`SAI_GH=0` なら何も引かない
+- 拾い方（`server/tools/decisionsRead.ts` の `pendingOf()`。純粋関数）:
+  - **open な issue**: 本文の `## 決めること` の項目のうち、あとのコメントの `## 決めたこと` で**番号を名指しされていないもの**（`namedNumbers()`: 「決めること 2」「「決めること」1・2」「決めること 1〜5」。見出しに書いた番号も読む）。`### まだ決めていないこと` に番号が挙がっていれば決まっていない側に戻す（あとに書かれたほうが勝つ）。番号の無い「まだ決めていないこと」の項目は、**いちばん新しい節のもの**をそのまま出す
+  - **番号で突き合わせられないときは、決まったと見なさない**（出しすぎる側）。「決めたこと」に番号が無い・本文の項目が番号つきでない、のどちらでも残る
+  - **閉じた issue**: `### 決めないまま閉じること` があればそれだけ。無ければ、いちばん新しい `### まだ決めていないこと`（番号を名指しされた本文の項目も）。それ以外の本文の「決めること」は出さない（閉じた issue の大半は、PR の仮置きのまま決まったものとして閉じているので、全部出すと一覧が埋まる）
+  - **PR**: 本文の `## 人が決めること` を全部（open な間）。「変えるならここ」は拾わない
+  - 見出しは「〜で始まる」で見る（`## 決めること（ここが本題）` も拾い、`## 人が決めること` や `### 3. …（決めること 1）` は「決めること」に数えない）。コードブロックの中は読まない。「なし」と書いただけの節は 0 件
+- 引けなかったもの（`gh` が無い・未ログイン・時間切れ）は「0 件」と混ぜずに stderr に出し、終了コードを 1 にする。閉じた issue が上限（`ISSUES_CLOSED_LIMIT`）に届いたら、切れているかもしれないと出す
+- テストは `server/tools/decisions.test.ts`（`pnpm test` に入る。**事例は作り物の文だけ**で、偽の `gh` を渡す）。CI に足すスクリプトは無い（道具は検査ではないので、`pnpm test` が拾うテストだけ）
+
 ## 一式を短い出力で回す（`scripts/suite.sh`。#688）
 
 - `bash scripts/suite.sh` が `pnpm -s test` / `test:feed` / `lint` / `typecheck`（`--build` で `build` も）を順に回し、1 つにつき 1 行（`test=ok tests=… pass=… fail=…`、`lint=ok warnings=… errors=…`）と、最後に `status=ok` か `status=fail log=<置き場>` を出す。

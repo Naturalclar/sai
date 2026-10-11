@@ -35,6 +35,16 @@ export function isLoopbackHostHeader(host: string | undefined): boolean {
   return name === '127.0.0.1' || name === 'localhost' || name === '[::1]'
 }
 
+/**
+ * `Host` が Serve の名前か（MagicDNS の `<端末>.<tailnet>.ts.net`。ポートは問わない）。#768
+ * Serve は `Host` をそのまま渡す。外のページがホスト名を tailnet のアドレスに向け直しても `Host` は外の名前のままなので、ここで見分けられる。
+ * **見るのは返答のファイルの口だけ**（ほかの口は Serve 越しの `Host` を見ていない。whois で本人を確かめるだけ）
+ */
+export function isServeHostHeader(host: string | undefined): boolean {
+  if (!host) return false
+  return /^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+ts\.net$/.test(host.trim().toLowerCase().replace(/:\d+$/, ''))
+}
+
 /** `tailscale whois` で引けた相手 */
 export interface WhoisInfo {
   /** ログイン名。タグ付きの端末は持ち主のユーザーがいないので、tailscale が付けた名前（`tagged-devices`）になる */

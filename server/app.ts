@@ -255,7 +255,7 @@ import { codexTurnErrorReason, queuedTurnError } from '../shared/codexTurnError.
 import { alive, isDescendant, parsePs, RealTmux, realPs, TerminalBusy, TerminalGone, TerminalReplies, typeInto } from './reply/terminal.ts'
 import type { DeliveryAnswer, DeliveryQuery, PsFn, Tmux } from './reply/terminal.ts'
 import type { Runner } from './reply/runner.ts'
-import { Authenticator, isLoopbackHostHeader, tailscaleWhois } from './auth.ts'
+import { Authenticator, isLoopbackHostHeader, isServeHostHeader, tailscaleWhois } from './auth.ts'
 import type { Identity } from './auth.ts'
 import type { FeedStore } from './rows/store.ts'
 
@@ -267,6 +267,8 @@ export const MAX_REPLY_BYTES = 64 * 1024
 export const MAX_META_BYTES = 4 * 1024
 
 const SESSIONS_PREFIX = '/api/sessions/'
+/** 返答のファイル（#603 / #768）を出さない相手への断り。**ファイルの有無・名前に触れない**（引く前に返す） */
+const FILE_DEVICE_REFUSAL = 'この端末からは読めません（返答のファイルを開けるのは、SAI を動かしているマシンのブラウザと、tailnet の本人の端末だけです）'
 /** 新しいセッションを始める（#314）。エンティティID は必ず `@` を含むので、`/api/sessions/<id>` と取り違えない */
 const NEW_SESSION_PATH = '/api/sessions/new'
 /** 新しいセッションを始められる場所（#319） */
@@ -5123,10 +5125,13 @@ export function createApp(
         return json(res, { id, items: mergeGallery([...galleryFromRows(id, own), ...fromTranscript, ...generated]) } satisfies GalleryResponse)
       }
       // 返答に出てきたファイル（#603）。画像と同じく `<key>` は本文から拾った参照の鍵で、表に無ければ 404（パスはリクエストから受けない）。
-      // **当面ループバックだけ**（tailnet 越しには出さない。名前で断る一覧をすり抜けた秘密が、手元の外に出ないように）
+      // **出すのはループバックと、whois で本人と分かった tailnet のユーザーの端末だけ**（#768。タグ付きの端末は手前で 401、
+      // whois が聞けなかった・合わなかった要求は入口で 401、`/mcp` にこの口は無い）。Serve 越しは `Host` が Serve の名前のときだけ
+      // （ループバックの `Host` は入口で見ている）。**断るのはセッションもファイルも引く前**（有無を漏らさない）
       const filesAt = path.startsWith(SESSIONS_PREFIX) ? path.indexOf(FILES_SEGMENT, SESSIONS_PREFIX.length) : -1
       if (filesAt > 0) {
-        if (who.kind !== 'local') return error(res, 403, '返答のファイルは、SAI を動かしているマシンのブラウザからだけ開けます（tailnet 越しには出していません）')
+        if (who.kind !== 'local' && who.kind !== 'tailnet') return error(res, 403, FILE_DEVICE_REFUSAL)
+        if (who.kind === 'tailnet' && !isServeHostHeader(req.headers.host)) return error(res, 403, `${FILE_DEVICE_REFUSAL}。tailnet からは Serve の名前（https://<このマシン>.<tailnet>.ts.net）で開いてください`)
         const id = sessionIdFrom(path, path.slice(filesAt))
         if (id === null) return error(res, 400, 'bad session id')
         const days = parseDays(q.get('days'), 90)

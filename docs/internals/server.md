@@ -146,9 +146,9 @@ C-c / SIGTERM では必ず終わる（#296。`main.ts` の `shutdown()`）。
 
 - `GET /api/sessions/<id>/files/<key>`。画像（`local/images.ts`）と同じ作りで、**パスはリクエストから受けない**。`fileTable()` がそのセッションのターン完了の行の本文から `shared/files.ts` の `fileRefs()`（`` `コード` `` のうち `fileRefOf()` がパスの形と見たもの。拡張子は `TEXT_EXT` の一覧）で拾い、`fileKey()`（`imageKey()` と同じ）の鍵で引く。自分の入力・待ちの行・`thinking` は見ない
 - `readSessionFile()` の順: 書かれた名前が `isSecretPath()` に当たれば 403 → cwd と対象を `realpath` → cwd の外は 403 → **リンクを解いた先の相対パスでももう一度 `isSecretPath()`** → `O_NOFOLLOW` で開く → ファイルでなければ 404 → `FILE_MAX_BYTES`（1MB）超は 413 → `decodeText()`（NUL を含む・UTF-8 として読めないものは 415）。返すのは文字と名前だけ
-- **出す相手は `app.ts` が決める**: `who.kind !== 'local'`（Serve のヘッダ付き）は 403、`Host` がループバックの名前でない（`isLoopbackHostHeader()`。DNS の付け替えへの備え）も 403、別のマシンのセッションは 404。応答は JSON（`SessionFileResponse`）で、ファイルそのものを `text/html` などで配る口は無い
+- **出す相手は `app.ts` が決める**（#768）: ループバック（`who.kind === 'local'`）と、whois で本人と分かった tailnet のユーザー（`'tailnet'`）だけ。タグ付きの端末は手前で 401、whois が聞けなかった・合わなかった要求は入口の `identify()` で 401（直前に確かめた本人を `WHOIS_STALE_MS` だけ使い続けるのは、ほかの口と同じ）、`/mcp` にこの口の道具は無い。`Host` は、ループバックなら入口の `isLoopbackHostHeader()`、Serve 越しなら **この口だけ** `isServeHostHeader()`（`*.ts.net`。DNS の付け替えへの備え）で見て、合わなければ 403（`FILE_DEVICE_REFUSAL`）。**断るのはセッションも表もファイルも引く前**（ある鍵と無い鍵で同じ応答）。別のマシンのセッションは 404。応答は JSON（`SessionFileResponse`）で、ファイルそのものを `text/html` などで配る口は無い
 - 画面: `Inlines` の `code` は `CodeSpan`。`FileSessionContext`（`Chat` がバブルごとに渡すセッション ID。自分の入力・別のマシン・一言の行・ビューアの中は null）と `FileOpenContext`（`FileViewerProvider`）があり、`fileRefOf()` が当たるときだけボタンにする。ビューアは `FileViewer`（開いたときに 1 回読む。別のファイルは `key` で作り直す）。元の文字は行番号と本文の 2 つの `<pre>`（行ごとに要素を作らない）で、行の高さは `FILE_LINE_H`（18px。CSS の `--file-line-h` と揃える）に固定し、飛び先の印とスクロール位置を行番号から決める。出し方・行の分け方は `web/src/fileView.ts`
-- テスト: `shared/files.test.ts` / `server/local/files.test.ts` / `server/session-files.test.ts`（本物の `createApp`。tailnet 越し・名前で断るもの・パスそのものを渡したもの）/ `web/src/fileView.test.ts`
+- テスト: `shared/files.test.ts` / `server/local/files.test.ts` / `server/session-files.test.ts`（本物の `createApp` と偽の whois。ループバック・tailnet の本人・タグ付き・whois が聞けなかった・`/mcp`・`Host` の食い違い・名前で断るもの・パスそのものを渡したもの）/ `web/src/fileView.test.ts`
 
 ## 画像の軽い版（local/thumbnails.ts）
 

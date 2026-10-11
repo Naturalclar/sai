@@ -165,10 +165,22 @@ export function messageCompacts(input: SendModeInput, warnTokens: number, asked?
   return sendModes(input, warnTokens).mode === 'compact'
 }
 
+/** 着手の形でない本文を `/compact` の指示に写す長さ（頭から。改行は空白に畳む） */
+export const COMPACT_HEAD_CHARS = 200
+
 /**
- * `/compact` に添える指示（サーバが 1 か所で持つ）。次に取りかかることは本文の 1 行目から
+ * `/compact` に添える指示（サーバが 1 か所で持つ）。
+ * - **着手の形**（`startsNewWork()`）: 次に取りかかることは本文の 1 行目から。前の作業の細部は捨てさせる（新しい作業に要らない）
+ * - **着手の形でない本文**（質問・「マージして」・待ちの結果。#761 で、間があいて大きい相手にはこれも要約が既定になった）:
+ *   このあと届くのはいまの作業の続きなので、**直近の作業で変えた箇所・決めたこと・分かったことは残させる**
+ *   （着手の指示のまま当てると、「どこをどう変えたか」と聞く前に、答えに要る細部を捨てさせてしまう）
  */
 export function compactPrompt(text: string): string {
-  const next = (text.split('\n')[0] ?? '').trim().slice(0, 200)
-  return `/compact 次は「${next}」に取りかかる。終わった作業の細部（差分・ログ・やりとり）は捨て、リポジトリの決まり・ユーザーの好み・まだ終わっていない約束だけを残す`
+  const keep = 'リポジトリの決まり・ユーザーの好み・まだ終わっていない約束'
+  if (startsNewWork(text)) {
+    const next = (text.split('\n')[0] ?? '').trim().slice(0, 200)
+    return `/compact 次は「${next}」に取りかかる。終わった作業の細部（差分・ログ・やりとり）は捨て、${keep}だけを残す`
+  }
+  const head = text.trim().replace(/\s+/g, ' ').slice(0, COMPACT_HEAD_CHARS)
+  return `/compact このあと「${head}」というメッセージが届く。それに答える・続けるのに要るもの（直近の作業で変えた箇所・決めたこと・分かったこと）と、${keep}は残す。それより前の作業の細部（差分・ログ・やりとり）は捨てる`
 }

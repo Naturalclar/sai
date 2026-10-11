@@ -528,7 +528,7 @@ export const SEND_COMPACT_NOTE =
  * `sai_send` の説明に足す、割り振りの決まり（#761）。費用の大半は仕事の中身ではなく文脈の読み直しなので、
  * 「どのセッションに・いつ送るか」をエージェントが選べるように書く。`AGENTS.md` と `/manager` の手順にも同じ 3 つを置く
  */
-export const ASSIGN_NOTE = `**割り振るとき**: (1) 空いている中で、読み直す量が小さく、最後のターンから間のあいていない相手を選ぶ（sai_sessions に出る）。(2) 前と別の issue を渡すなら要約を挟む（1 行目を着手の形にするか compact: true）。(3) 同じ相手への頼みごとはまとめて 1 回で送る（送るたびに相手は文脈を読み直す）。最後のターンから約 ${Math.round(CACHE_COLD_MS / 60_000)} 分を過ぎて（キャッシュが切れている見込み）文脈が約 ${Math.round(COLD_COMPACT_TOKENS / 10_000)} 万トークン以上の相手には、着手の形でなくても要約してから始めさせる（要らなければ compact: false。**相手のこれまでの作業について聞くとき**は、要約で細部が落ちるので compact: false を付ける）`
+export const ASSIGN_NOTE = `**割り振るとき**: (1) 空いている中で、読み直す量が小さく、最後のターンから間のあいていない相手を選ぶ（sai_sessions に出る）。(2) 前と別の issue を渡すなら要約を挟む（1 行目を着手の形にするか compact: true）。(3) 同じ相手への頼みごとはまとめて 1 回で送る（送るたびに相手は文脈を読み直す）。最後のターンから約 ${Math.round(CACHE_COLD_MS / 60_000)} 分を過ぎて（キャッシュが切れている見込み）文脈が約 ${Math.round(COLD_COMPACT_TOKENS / 10_000)} 万トークン以上の相手には、着手の形でなくても要約してから始めさせる（そのときの要約は直近の作業の中身を残す指示で回る。要らなければ compact: false）`
 
 /** `sai_send` の `compact` の説明（#624） */
 export const SEND_COMPACT_ARG =

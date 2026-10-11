@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { CACHE_COLD_MS, COLD_COMPACT_TOKENS, cacheCold, canCompact, COMPACT_MIN_TOKENS, coldAndLarge, compactPrompt, idleLabel, idleMsSince, messageCompacts, replyIdleMs, SEND_MODE_LABEL, SEND_MODE_SHORT, sendCost, sendModes, startsNewWork } from './compact.ts'
+import { CACHE_COLD_MS, COLD_COMPACT_TOKENS, COMPACT_HEAD_CHARS, cacheCold, canCompact, COMPACT_MIN_TOKENS, coldAndLarge, compactPrompt, idleLabel, idleMsSince, messageCompacts, replyIdleMs, SEND_MODE_LABEL, SEND_MODE_SHORT, sendCost, sendModes, startsNewWork } from './compact.ts'
 import { WAIT_AUTO_WAKE_MS } from './waits.ts'
 import { CONTEXT_WARN_TOKENS } from './contextSize.ts'
 
@@ -40,11 +40,20 @@ test('canCompact', () => {
   assert.equal(canCompact({ agent: 'claude', terminal: true, contextTokens: COMPACT_MIN_TOKENS }), false)
 })
 
-test('compactPrompt: /compact に次に取りかかることを添える（1 行目だけ）', () => {
+test('compactPrompt: 着手の形なら、/compact に次に取りかかることを添える（1 行目だけ）。指示の形は今までどおり', () => {
   const p = compactPrompt('579着手して\n詳しくは本文')
-  assert.match(p, /^\/compact /)
-  assert.match(p, /「579着手して」/)
+  assert.equal(p, '/compact 次は「579着手して」に取りかかる。終わった作業の細部（差分・ログ・やりとり）は捨て、リポジトリの決まり・ユーザーの好み・まだ終わっていない約束だけを残す')
   assert.doesNotMatch(p, /詳しくは本文/)
+})
+
+test('compactPrompt: 着手の形でない本文には、直近の作業の中身を残させる指示にする（聞かれる前に答えの材料を捨てさせない。#761）', () => {
+  const p = compactPrompt('お疲れさまです。\nさっきの変更で launch() の引数をどう変えたか教えてください')
+  assert.match(p, /^\/compact このあと「お疲れさまです。 さっきの変更で launch\(\) の引数をどう変えたか教えてください」というメッセージが届く/, '1 行目だけでなく本文の頭を渡す（改行は畳む）')
+  assert.match(p, /直近の作業で変えた箇所・決めたこと・分かったこと）と、リポジトリの決まり・ユーザーの好み・まだ終わっていない約束は残す/)
+  assert.doesNotMatch(p, /に取りかかる/, '着手の指示（前の作業の細部は捨てる）は当てない')
+  assert.ok(compactPrompt('あ'.repeat(1000)).length < COMPACT_HEAD_CHARS + 200, '長い本文は頭だけ')
+  // 待ちで起こす本文（#732）も着手の形ではない
+  assert.match(compactPrompt('【SAI 待ち】PR #12（o/r）: CI は全部通りました\n\n預けたときに書いたこと: 結果を読んで報告する'), /^\/compact このあと「【SAI 待ち】PR #12（o\/r）: CI は全部通りました 預けたときに書いたこと/)
 })
 
 test('SEND_MODE_SHORT: どの送り方にも短い表記があり、正式な名前より短い（#629）', () => {

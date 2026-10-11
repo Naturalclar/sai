@@ -302,3 +302,31 @@ test('requestSentence / stripAsks: URL の直後に日本語が続いても後�
   assert.equal(stripAsks('テストを直した。PRを出して https://example.com/a/b/pull/1'), 'テストを直した。PRを出して https://example.com/a/b/pull/1')
   assert.equal(requestSentence('「確認してください」と書いた行を消しました。'), '', '引用の中の頼みの形は頼みではない')
 })
+
+test('日本語で使わない字（簡体字・ハングル）が混ざったら見つける（#780）', () => {
+  // 専門語のところだけが訓練言語の語になる形（マージ・レビュー・実装・応答・検査）
+  assert.deepEqual(codes('PR を squash マージしました。', 'PR 合并完了！CI も通ったよ'), ['foreign_script'])
+  assert.deepEqual(codes('レビューが終わりました。', 'リ뷰終了！指摘は無かったよ'), ['foreign_script'])
+  assert.deepEqual(codes('選択肢 1 を実装しています。', '選択肢 1 を实装中だよ'), ['foreign_script'])
+  assert.deepEqual(codes('API の応答が速くなりました。', 'API 响应 が速くなったよ'), ['foreign_script'])
+  assert.deepEqual(codes('CI の検査中です。', 'CI 检査中だよ'), ['foreign_script'])
+  const got = digestIssues('レビューして PR をマージしました。', 'リ뷰して合并、合并完了！')
+  assert.match(got[0]!.hint, /（뷰, 并）/, '混ざった字を理由に入れる（同じ字は 1 つ・出てきた順）')
+})
+
+test('日本語でも使う漢字には当たらない（#780。一覧に 1 字混ざるだけでほぼ全件に当たる）', () => {
+  for (const s of ['区切りを直したよ', '台の上に置いたよ', '通知が届いた', '設定を参照するようにした', '番号を振り直した', '声をかけて確かめた', '担当を決めた', '当たり判定を直した']) {
+    assert.deepEqual(codes('直しました。', s), [], s)
+  }
+  // 新字体と簡体字で形が同じ字・JIS の表にある字・旧字体・記号と絵文字
+  assert.deepEqual(codes('直しました。', '国会図書館の写真と医学の辞書、旧い条件を点検した'), [])
+  assert.deepEqual(codes('直しました。', '髙橋さんと步く、每日の涉外。呑む・倶楽部・比喩'), [])
+  assert.deepEqual(codes('直しました。', 'ｶﾀｶﾅと全角ＡＢＣ、「」・…—→✅🚀 も使える'), [])
+})
+
+test('本文にある字は咎めない（#780。本文の言葉のまま、が元の規則）', () => {
+  assert.deepEqual(codes('画面の「设置」というボタンを押すと開きます。', '「设置」のボタンで開くよ'), [])
+  assert.deepEqual(codes('韓国語の表記は 리뷰 です。', '韓国語では 리뷰 と書くよ'), [])
+  assert.deepEqual(codes('画面の「设置」というボタンを押すと開きます。', '「设置」のボタンで开くよ').length, 0, '开 は JIS X 0213 にあるので一覧に入れていない')
+  assert.deepEqual(codes('画面の「设置」というボタンを押すと開きます。', '「设置」を押して确认したよ'), ['foreign_script'], '本文に無い字は別')
+})

@@ -9,7 +9,7 @@ const SCRIPT = fileURLToPath(new URL('../scripts/merge-scope.sh', import.meta.ur
 
 function run(args: string[], stdin = ''): Promise<{ code: number; out: string }> {
   return new Promise((resolve) => {
-    // gh を呼ぶ道は PATH を空にして塞ぐ（テストから外に問い合わせない）
+    // gh を呼ぶ道は、PATH を絞り・行き先を届かないホストにして失敗させる（テストから外に問い合わせない）
     const child = spawn('/bin/bash', [SCRIPT, ...args], { env: { PATH: '/usr/bin:/bin', GH_TOKEN: '', GH_HOST: 'invalid.invalid' } })
     let out = ''
     child.stdout.on('data', (b: Buffer) => (out += b.toString()))
@@ -49,6 +49,12 @@ test('許可・送信・外に出る口・決まりそのものは、1 つでも
     'CLAUDE.md',
     'AGENTS.md',
     'scripts/merge-scope.sh',
+    'package.json',
+    'pnpm-workspace.yaml',
+    'server/local/thumbnails.ts',
+    'shared/digestSettings.ts',
+    'server/jev-approvals.test.ts',
+    'Server/Auth.ts',
   ]
   for (const path of guarded) {
     const got = await run(['-'], `web/src/App.tsx\n${path}\n`)
@@ -62,6 +68,12 @@ test('当たった数と、当たったパスだけを出す', async () => {
   const got = await run(['-'], 'server/auth.ts\nweb/src/App.tsx\nserver/mcp/protocol.ts\n')
   assert.equal(got.code, 1)
   assert.equal(got.out, 'scope=hold hits=2\nserver/auth.ts — 認証・同一オリジン・tailnet\nserver/mcp/protocol.ts — セッション同士のメッセージ・/mcp・預かり・待ち・ループ\n')
+})
+
+test('行末の CR・先頭の ./・前後の空白があっても当たる', async () => {
+  const got = await run(['-'], 'CLAUDE.md\r\n./server/auth.ts\r\n  .mcp.json  \r\nweb/src/App.tsx\r\n')
+  assert.equal(got.code, 1)
+  assert.match(got.out, /^scope=hold hits=3\n/)
 })
 
 test('分からないときは止まる側に倒す（一覧が空・引けない・使い方が違う）', async () => {

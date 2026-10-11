@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # PR が触ったファイルのパスから、「依頼に『マージまで』と書かれていても、人の『マージして』を待つ PR」（#581）かを出す。
-#   bash scripts/merge-scope.sh <PR 番号>     gh でファイルの一覧を引く
+#   bash scripts/merge-scope.sh <PR 番号>     gh でファイルの一覧を引く（改名は前の名前も見る）
 #   bash scripts/merge-scope.sh -             パスを stdin から読む（1 行に 1 つ）
 # 当たれば `scope=hold hits=<数>` と当たったパス・理由を出して exit 1。当たらなければ `scope=none files=<数>` で exit 0。
 # **止まる側に倒す**: 一覧が引けない・1 つも無い・使い方が違うときも hold にする。
@@ -11,10 +11,10 @@ set -u
 rules=(
   '許可の判定とルール|^server/approvals/|^shared/(approvals|approvalCounts|bashRules|permissions|jev|opencodePermissions|codexDialog|pyjson|reply)\.|^feed/(record\.py|opencode/)'
   'セッション同士のメッセージ・/mcp・預かり・待ち・ループ|^server/mcp/|^feed/mcp/|^\.mcp\.json$|^shared/(agentMessages|sendAcross|loops|waits|waitingSaid|holding|handoff|managerDraft|codexQueue)\.'
-  '認証・同一オリジン・tailnet|^server/(auth|app|main|host)\.|^shared/host\.|^server/meta/settings\.'
-  '外に問い合わせる・書く口|^server/git/|^server/digest/|^shared/(prs|prReview|prComments|prLineComments)\.'
-  'SAI が起こすコマンドの組み方|^server/reply/|^server/local/claude(Login|Auth|Agents)\.'
-  'マージの決まりそのもの|^\.claude/|^\.github/|^(CLAUDE|AGENTS)\.md$|^scripts/'
+  '認証・同一オリジン・tailnet|^server/[^/]+$|^shared/host\.|^server/meta/settings\.'
+  '外に問い合わせる・書く口|^server/git/|^server/digest/|^shared/(digestSettings|prs|prReview|prComments|prLineComments)\.'
+  'SAI が起こすコマンドの組み方|^server/reply/|^server/local/(claude(Login|Auth|Agents)|thumbnails)\.'
+  'マージの決まりそのもの|^\.claude/|^\.github/|^(CLAUDE|AGENTS)\.md$|^scripts/|^(package\.json|pnpm-workspace\.yaml|pnpm-lock\.yaml)$'
 )
 
 hold() { echo "scope=hold $1"; exit 1; }
@@ -25,15 +25,18 @@ if [ "$1" = - ]; then
 else
   case "$1" in *[!0-9]*|'') hold 'reason=usage' ;; esac
   repo=$(git remote get-url origin 2>/dev/null | sed -E 's#^[^@]*@[^:/]+[:/]##; s#^[a-z]+://[^/]+/##; s#\.git$##')
-  files=$(gh pr diff "$1" --repo "$repo" --name-only 2>/dev/null) || hold 'reason=unreadable'
+  [ -n "$repo" ] || hold 'reason=unreadable'
+  # --name-only は改名の後ろの名前しか出さないので、API から前の名前も引く（守っているファイルを外へ移す PR を落とさない）
+  files=$(gh api "repos/$repo/pulls/$1/files" --paginate -q '.[] | .filename, (.previous_filename // empty)' 2>/dev/null) || hold 'reason=unreadable'
 fi
-files=$(printf '%s\n' "$files" | sed '/^[[:space:]]*$/d')
+# 行末の CR・前後の空白・先頭の ./ は落としてから比べる
+files=$(printf '%s\n' "$files" | sed -e 's/\r$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's#^\./##' -e '/^$/d')
 [ -n "$files" ] || hold 'reason=unreadable'
 
 hits=
 while IFS= read -r f; do
   for rule in "${rules[@]}"; do
-    if printf '%s\n' "$f" | grep -Eq -- "${rule#*|}"; then
+    if printf '%s\n' "$f" | grep -Eiq -- "${rule#*|}"; then
       hits+="$f — ${rule%%|*}"$'\n'
       break
     fi

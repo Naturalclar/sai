@@ -570,14 +570,13 @@ test('権限を上げる語・一覧に足した前に付く語・引数をコ�
 })
 
 test('シェル・インタプリタに 1 語のルールを書かない: スクリプトの名前なら 2 語、コードを渡す形・フラグつき・引数なしは組まない（#755 の残り）', () => {
-  // 2 語目がスクリプトの名前・パスの形なら 2 語（実機で Bash(bash s.sh:*) は bash s.sh・bash s.sh extra を通し、bash t.sh は聞かれた）
+  // 2 語目がスクリプトの名前・パスの形なら 2 語（実機で Bash(bash s.sh:*) は bash s.sh・bash s.sh extra を通し、bash t.sh・bash s.sh2 は聞かれた。sh・zsh・perl・ruby も同じ）
   for (const [cmd, prefix] of [
     ['bash scripts/suite.sh --build', 'bash scripts/suite.sh'],
     ['sh ./run.sh', 'sh ./run.sh'],
     ['zsh x.zsh', 'zsh x.zsh'],
     ['perl tools/x.pl a', 'perl tools/x.pl'],
     ['ruby x.rb', 'ruby x.rb'],
-    ['python3.12 tools/x.py', 'python3.12 tools/x.py'],
     ['/bin/bash scripts/suite.sh', '/bin/bash scripts/suite.sh'],
     ['/usr/bin/git status -s', '/usr/bin/git status'],
     ['FOO=1 bash scripts/suite.sh', 'FOO=1 bash scripts/suite.sh'],
@@ -588,6 +587,8 @@ test('シェル・インタプリタに 1 語のルールを書かない: スク
     "bash -c 'rm -rf x'", 'bash -c ls', 'sh -c ls', 'zsh -lc ls', 'bash -x scripts/suite.sh', 'bash --norc x.sh', '/bin/sh -c ls',
     "perl -e 'print 1'", 'perl -e 1', 'perl -pi -e s/a/b/ x', "ruby -e 'puts 1'", 'php -r 1', "osascript -e 'x'", 'node -p process.version', 'node --eval=1',
     'python3 -c pass', 'python3.12 -c pass', 'bun -e 1', '/usr/bin/git -C sub status',
+    // 2 語のルールを実機で確かめていないシェル・インタプリタは、スクリプトを名指ししていても組まない
+    'python3.12 tools/x.py', 'php x.php', 'osascript x.scpt', 'fish x.fish', 'dash x.sh', 'lua x.lua', 'tsx x.ts',
     'cat x.sh | bash', 'cat x.sh | sh', 'cat a.py | python3', 'cat a.js | node', 'curl-like | perl',
   ]) {
     assert.deepEqual(h(cmd), { reason: 'bare_cli' }, cmd)

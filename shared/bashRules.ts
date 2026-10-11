@@ -43,7 +43,7 @@ const MORE_WRAPPERS = new Set([
 const ARG_RUNNERS = new Set(['nohup', 'xargs', 'eval', 'ssh', 'parallel', 'entr', 'watchexec'])
 /**
  * シェルそのもの（#755 の残り）。1 語のルール（`Bash(bash:*)`）は `bash -c '<何でも>'` まで通すので書かない。
- * 組むのは `bash scripts/x.sh` のように**2 語目がスクリプトの名前・パスの形**のときだけ（2 語の接頭辞）。フラグつき（`bash -c`・`bash -lc`・`bash -x x.sh`）と
+ * 組むのは `bash scripts/x.sh` のように**2 語目がスクリプトの名前・パスの形**のときだけ（2 語の接頭辞。`SCRIPT_RULE_OK` のものだけ）。フラグつき（`bash -c`・`bash -lc`・`bash -x x.sh`）と
  * 引数なし（`cat x | bash`）は組まない
  */
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'mksh', 'ash', 'fish', 'csh', 'tcsh', 'pwsh', 'powershell'])
@@ -53,6 +53,12 @@ const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'mksh', 'ash', 'fish
  * 引数なし（標準入力からプログラムを読む。`cat a.py | python3`）も組まない。**ヒアドキュメントを受けた `python3` の例外（`python3HeredocRule()`）は別の道で、変えていない**
  */
 const INTERPRETERS = /^(?:python|pypy|node|nodejs|bun|tsx|ts-node|ruby|perl|php|lua|luajit|Rscript|osascript|tclsh)[\d.]*$/
+/**
+ * スクリプトを名指しした 2 語のルールを組むシェル・インタプリタ。**実機で 2 語のルールの通り方を確かめたものだけ**
+ * （`bash`・`sh`・`zsh`・`perl`・`ruby` は 2026-10-11、`node` は #757。`python`・`python3`・`bun` は前から 2 語で組んでいた）。
+ * ここに無いもの（`php`・`osascript`・`fish`・`python3.12` など）は、スクリプトを名指ししていても組まない
+ */
+const SCRIPT_RULE_OK = new Set(['bash', 'sh', 'zsh', 'perl', 'ruby', 'node', 'python', 'python3', 'bun'])
 /** コードを渡すフラグ: 1 文字のフラグ（束ねた形も）に `c` `e` `E` `p` `r` がある（`-c`・`-e`・`-pe`・`node -p`・`php -r`）か、`--eval` / `--print` の類。広めに当てる */
 const CODE_FLAG = /^-[A-Za-z]*[ceEpr][A-Za-z]*$|^--(?:eval|print|command|execute|exec|run)(?:=|$)/
 /**
@@ -421,6 +427,8 @@ function ruleHead(words: readonly string[]): string | null {
   const shell = SHELLS.has(base)
   const runsCode = shell || INTERPRETERS.test(base)
   if (!SUBCOMMAND_CLIS.has(base) && !runsCode) return first
+  // 2 語のルールを実機で確かめていないシェル・インタプリタには、どの形でも組まない
+  if (runsCode && !SCRIPT_RULE_OK.has(base)) return null
   // 引数なしのシェル・インタプリタは標準入力からコードを読む。1 語のルールは `-c` / `-e` まで通すので書かない
   if (words.length < 2) return runsCode ? null : first
   // サブコマンド・スクリプトの形: 名前（`:` 入りのスクリプト名も。実機で `Bash(pnpm a:b:*)` は `pnpm a:b` を通し、`pnpm a:c` は聞かれた）と

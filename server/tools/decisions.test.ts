@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { GhIssues, ISSUES_CLOSED_LIMIT, ISSUES_OPEN_LIMIT, issuesFromEnv } from '../git/issues.ts'
 import type { GhRun } from '../git/prs.ts'
-import { render, run } from './decisions.ts'
+import { NOTE, render, run } from './decisions.ts'
 import { DECISION_LINE_CHARS, listItems, mentionedNumbers, namedAtHead, namedInTitle, parseSources, pendingAll, pendingOf, recommendOf, sections } from './decisionsRead.ts'
 import type { DecisionSource } from './decisionsRead.ts'
 
@@ -357,7 +357,9 @@ test('decisions: open な issue・PR と、14 日までに閉じた issue の未
     '  2026-10-01 決めること 3: 設定の置き場',
     '#7（閉じた） 閉じたもの',
     '  2026-10-05 決めないまま閉じること: 残り',
+    NOTE,
   ])
+  assert.match(NOTE, /決まった見出しで書かれていない項目は拾えません/)
   assert.deepEqual(r.err, [])
   assert.ok(r.calls.some((c) => c.includes('closed:>=2026-09-27')), '14 日前から')
   // 日付は UTC で切る（東京では 10-11 でも、UTC の 10-10 から 14 日前）

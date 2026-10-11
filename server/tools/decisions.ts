@@ -21,6 +21,9 @@ export const USAGE = `usage: pnpm decisions [--days <n>] [--json]   （このリ
   --days <n>   閉じた issue を何日まで遡るか（既定 14。0 で閉じた issue を引かない）
   --json       1 行 1 項目の JSON で出す`
 
+/** 一覧の終わりに付ける注記（見出しを読むだけなので、決まりから外れた書き方は拾えない・決まったと読み違えることがある。#763） */
+export const NOTE = '※ 決まった見出しで書かれていない項目は拾えません（書き方は AGENTS.md の「決めることの書き方」）'
+
 /** 閉じた issue を遡る日数の既定 */
 export const DECISIONS_CLOSED_DAYS = 14
 /** 題名をどこまで出すか */
@@ -100,6 +103,7 @@ export async function run(argv: string[], env: Env): Promise<number> {
     const where = new Set(pending.map((p) => `${p.kind}#${p.number}`)).size
     env.out(`まだ決まっていないこと: ${pending.length} 件（${where} か所。open な issue ${count('issue', 'open')}・閉じた issue ${count('issue', 'closed')}・PR ${count('pr', 'open')}。${days > 0 ? `閉じた issue は ${since}（UTC）以降` : '閉じた issue は引いていない'}）`)
     for (const line of render(pending)) env.out(line)
+    env.out(NOTE)
   }
   // 上限に届いたら、切れているかもしれないと知らせる（黙って古い側を落とさない）
   if (closed && closed.length >= ISSUES_CLOSED_LIMIT) env.err(`閉じた issue が ${ISSUES_CLOSED_LIMIT} 件に届いたので、古い側が切れているかもしれません（--days を小さく）`)

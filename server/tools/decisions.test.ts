@@ -213,6 +213,10 @@ test('pendingOf: 「決めたこと」の中で番号に触れただけでは消
     '- 決めること 1: 青\n- 決めること 2: 緑\n\t- 未定',
     '- 決めること 1: 未決の項目は灰色で出す\n- 決めること 2: 8 にする',
     '> 決めること 2 は保留\n\n- 決めること 1: 青',
+    '- 決めること 2: 青\n\n```sh\n# メモ\nls\n```\n\n決めること 2 は保留に戻す。',
+    '- 決めること 1: 青\n\n### 補足\n決めること 2 は保留',
+    '- 決めること 2: 未*決*',
+    '- 決めること 2: 保<b>留</b>',
   ]) assert.deepEqual(decidedWith(text), ALL, text)
   // 見出しで名指ししていても同じ
   const titled = (title: string, text: string) => brief(issue({ body: BODY, comments: [{ createdAt: '2026-10-02T00:00:00Z', body: `## ${title}\n${text}` }] }))
@@ -221,6 +225,11 @@ test('pendingOf: 「決めたこと」の中で番号に触れただけでは消
   // あとの「決めたこと」が「決まっていない」と言えば、前に決まった番号も戻る
   const reverted = issue({ body: BODY, comments: [{ createdAt: '2026-10-02T00:00:00Z', body: '## 決めたこと（決めること 1〜3）' }, { createdAt: '2026-10-03T00:00:00Z', body: '## 決めたこと（2026-10-03）\n- 決めること 2: 未決に戻す' }] })
   assert.deepEqual(brief(reverted), ['body2'])
+  for (const text of ['- **決めること** 2: 保留に戻す', '- 決めること **2** は保留に戻す', '- 決めること 1: 青\n\n```sh\n# メモ\n```\n\n- 決めること 2 は保留に戻す']) {
+    const again = issue({ body: BODY, comments: [{ createdAt: '2026-10-02T00:00:00Z', body: '## 決めたこと（決めること 2）' }, { createdAt: '2026-10-03T00:00:00Z', body: `## 決めたこと\n${text}` }] })
+    assert.deepEqual(brief(again), ALL, text)
+  }
+  assert.deepEqual(mentionedNumbers('**決めること** 2・`3`'), [2, 3])
   // 決まりどおり、小見出し「まだ決めていないこと」の下に書けば、上の決定は読める
   assert.deepEqual(decidedWith('- 決めること 1: 青\n- 決めること 2: 8\n\n### まだ決めていないこと\n- 決めること 3: 置き場'), ['body3'])
   // コメントの中の `<!--` で「まだ決めていないこと」が消えない

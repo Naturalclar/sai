@@ -204,7 +204,8 @@ function expand(list: string, out: Set<number>): void {
  */
 export function mentionedNumbers(text: string): number[] {
   const out = new Set<number>()
-  for (const m of half(text ?? '').matchAll(new RegExp(String.raw`決めること[」』]?\s*(${NUMBER_LIST})`, 'g'))) expand(m[1]!, out)
+  // 飾りの印を外してから読む（`**決めること** 2`・`決めること **2**`）
+  for (const m of half(bare(text ?? '')).matchAll(new RegExp(String.raw`決めること[」』]?\s*(${NUMBER_LIST})`, 'g'))) expand(m[1]!, out)
   return [...out].sort((a, b) => a - b)
 }
 
@@ -249,6 +250,8 @@ const clip = (s: string, max: number): string => {
   const chars = [...s]
   return chars.length > max ? `${chars.slice(0, max - 1).join('')}…` : s
 }
+/** 飾りの印（`*` `_` `~` `` ` ``）と短い HTML のタグを外す。語が印で割れていても（`未*決*`・`保<b>留</b>`）読めるように */
+const bare = (s: string): string => s.replace(/<\/?[A-Za-z][^<>\n]{0,40}>/g, '').replace(/[*_~`]/g, '')
 /** 太字・斜体の印と前後の空白を外して 1 行に */
 const plain = (s: string): string => s.replace(/\*\*|__/g, '').replace(/\s+/g, ' ').trim()
 
@@ -291,10 +294,10 @@ export function recommendOf(whole: string): string | undefined {
 }
 
 /**
- * 「決まっていない」と言っている語。**「決めたこと」の節（見出しの文と、最初の字下げの無い小見出しまでの文）のどこかにこれがあれば、
+ * 「決まっていない」と言っている語。**「決めたこと」の節（見出しの文と、`### まだ決めていないこと` / `### 決めないまま閉じること` の小見出しの下を除いた全部）のどこかにこれがあれば、
  * その節からは何も決まったと読まず、節が触れた番号は決まっていない側に戻す**（#763 のレビュー）。
  * 行や項目ごとに「ここから下は読まない」と切り分けると、入れ子・続きの段落・字下げした見出し・見出しの名指し、と抜け道が続いたので、節ごと読まない。
- * 保留を書く場所は `### まだ決めていないこと` の小見出しの下（そこは節の「最初の小見出しまで」の外なので、上の決定は読める）
+ * 保留を書く場所は `### まだ決めていないこと` の小見出しの下（そこだけは見ないので、上の決定は読める）
  */
 const NOT_YET = /まだ決めて|決めていな|決めないまま|未決|未定|保留|持ち越|決め直/
 
@@ -348,15 +351,27 @@ export function pendingOf(src: DecisionSource): Pending[] {
   for (const doc of docs) {
     for (const s of sections(doc.body, isDecided)) {
       // 決まった番号を読むのは、「決めたこと」の見出しの文と、そのすぐ下（最初の字下げの無い小見出しまで）の項目の頭だけ。
-      // 小見出しの下（「まだ決めていないこと」「次にやること」…）・引用・コードブロック・文の途中で触れた番号は読まない
-      const sub = s.lines.findIndex((l) => heading(l)?.indent === 0)
-      const direct = sub < 0 ? s.lines : s.lines.slice(0, sub)
-      const own = [s.title, ...direct]
-      if (own.some((l) => NOT_YET.test(plain(l)))) {
+      // 小見出しの下（「次にやること」…）・引用・コードブロック・文の途中で触れた番号は読まない
+      const inCode = fences()
+      /** 節の文: `### まだ決めていないこと` / `### 決めないまま閉じること` の小見出しの下を除いた全部（ほかの小見出しの下も入る） */
+      const own: string[] = [s.title]
+      let firstSub = -1
+      let skip = 0
+      s.lines.forEach((l, i) => {
+        const h = inCode(l) ? null : heading(l)
+        if (h && h.indent === 0) {
+          if (firstSub < 0) firstSub = i
+          if (skip && h.level <= skip) skip = 0
+          if (!skip && (isRemaining(h.title) || isClosing(h.title))) skip = h.level
+        }
+        if (!skip) own.push(l)
+      })
+      if (own.some((l) => NOT_YET.test(bare(l)))) {
         // 「決まっていない」と言っている節: 何も決まったと読まず、触れた番号は決まっていない側に戻す
         for (const n of mentionedNumbers(own.join('\n'))) decided.set(n, false)
         continue
       }
+      const direct = firstSub < 0 ? s.lines : s.lines.slice(0, firstSub)
       for (const n of namedInTitle(s.title)) decided.set(n, true)
       for (const item of listItems(direct)) for (const n of namedAtHead(item.head)) decided.set(n, true)
     }

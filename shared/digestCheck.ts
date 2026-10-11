@@ -392,11 +392,41 @@ export function proseSentences(rawSource: string): string[] {
  */
 export function requestSentence(rawSource: string, max: number = DIGEST_MAX_CHARS): string {
   const found = proseSentences(rawSource)
-    .filter((t) => [...t].length <= max && !/[?？]$/.test(t))
+    .filter((t) => !/[?？]$/.test(t))
+    .map((t) => ([...t].length <= max ? t : requestClause(t, max)))
+    .filter((t): t is string => t !== '')
     .map((t) => ({ t, quoted: new RegExp(QUOTED_ASK.source).test(t), asks: REQUEST.test(masked(t)) }))
     .filter((x) => x.quoted || x.asks)
   const pick = found.filter((x) => x.quoted).at(-1) ?? found.at(-1)
   return pick?.t ?? ''
+}
+
+/**
+ * 理由・前置きと頼みを繋ぐ接続（「…ので、」「…から、」「…ため、」「…ですが、」）。この後ろは頼みの節だけで、前は落としても頼みの意味が変わらない。
+ * 読点で切るだけだと「A を、B に送ってください」の A が落ちて意味が変わるので、**これらの接続の後ろだけ**を採る（#779）
+ */
+const REASON_CONNECTOR = /(?:ので|から|ため|ために|ですが|ますが|でしたが|ましたが)、/g
+
+/** 採る節の最短（これより短いものは頼みとして読めない） */
+const REQUEST_CLAUSE_MIN = 6
+
+/**
+ * `max` を超える文から、**最後の理由の接続の後ろの節**を返す（#779）。直近 30 日の記録では、頼みの文が長くて丸ごと捨てられていた
+ * 13 件のうち 6 件がこの形（理由を長く書いてから「…ので、〜してください」）だった。節が頼みの形（`REQUEST`）でない・短すぎる・
+ * それでも長い・接続が無いなら空（切ると意味が変わるものは採らない）
+ */
+function requestClause(sentence: string, max: number): string {
+  // 接続は URL・コード・引用の外にあるものだけ（`splitKeeping()` と同じく、その中では切らない）
+  let at = -1
+  const opaque = [...sentence.matchAll(OPAQUE)].map((m) => [m.index ?? 0, (m.index ?? 0) + m[0].length] as const)
+  for (const m of sentence.matchAll(REASON_CONNECTOR)) {
+    const end = (m.index ?? 0) + m[0].length
+    if (!opaque.some(([from, to]) => (m.index ?? 0) >= from && end <= to)) at = end
+  }
+  if (at < 0) return ''
+  const clause = sentence.slice(at).trim()
+  const length = [...clause].length
+  return length >= REQUEST_CLAUSE_MIN && length <= max && REQUEST.test(masked(clause)) ? clause : ''
 }
 
 /**

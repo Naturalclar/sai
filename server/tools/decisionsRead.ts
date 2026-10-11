@@ -290,8 +290,11 @@ export function recommendOf(whole: string): string | undefined {
   return sentence ? clip(sentence, DECISION_RECOMMEND_CHARS) : undefined
 }
 
-/** 見出しにせずに書いた「まだ決めていないこと」「決めないまま閉じること」の行（`**まだ決めていないこと**`・`- まだ決めていないこと:`）。行のどこかにあれば、そこから下は決まったと読まない */
-const NOT_YET = /まだ決めていない|決めないまま閉じる|未決/
+/** 見出しにせずに書いた「まだ決めていないこと」「決めないまま閉じること」の行（`**まだ決めていないこと**`・`- まだ決めていないこと:`）。
+ * 行のどこかにあれば、そこから下は決まったと読まない。ただし「決めること 2: …」と番号を名指しした項目の行では切らず、その項目だけを決まったと読まない
+ * （`決めること 1: まだ決めていない項目は灰色で出す` のあとの決定を落とさない）
+ */
+const NOT_YET = /まだ決めていない|決めないまま閉じる/
 
 const starts = (word: string) => (title: string): boolean => plain(title).startsWith(word)
 const isAsk = starts('決めること')
@@ -345,10 +348,14 @@ export function pendingOf(src: DecisionSource): Pending[] {
       // 決まった番号を読むのは、「決めたこと」の見出しの文と、そのすぐ下（最初の小見出しまで）の項目の頭だけ。
       // 小見出しの下（「まだ決めていないこと」「次にやること」…）・引用・コードブロック・文の途中で触れた番号は読まない
       // 見出しにしていない「まだ決めていないこと」（太字の行・箇条書きの親）から下も読まない
-      const sub = s.lines.findIndex((l) => heading(l) !== null || NOT_YET.test(plain(l)))
+      const namesAtHead = (l: string): boolean => {
+        const m = NUMBERED.exec(l) ?? BULLET.exec(l)
+        return m !== null && namedAtHead(l.slice(m[0].length)).length > 0
+      }
+      const sub = s.lines.findIndex((l) => heading(l) !== null || (NOT_YET.test(plain(l)) && !namesAtHead(l)))
       const direct = sub < 0 ? s.lines : s.lines.slice(0, sub)
       for (const n of namedInTitle(s.title)) decided.set(n, true)
-      for (const item of listItems(direct)) for (const n of namedAtHead(item.head)) decided.set(n, true)
+      for (const item of listItems(direct)) if (!NOT_YET.test(plain(item.head))) for (const n of namedAtHead(item.head)) decided.set(n, true)
     }
     // 番号の無い項目は、いちばん新しいコメントのものだけ（同じコメントの中に節が 2 つあれば足し合わせる）
     let loose: Pending[] | null = null

@@ -20,13 +20,12 @@ test('notReadOnly: 読むだけと分かっているコマンドと構文だけ�
     'git status; git diff --stat',
     'git log --oneline | head -5',
     'git diff --stat 2>/dev/null | tail -3',
-    'git status # いまの状態',
     'git diff --cached --name-only',
     'git status -sb',
     "git log --format='%h %s' -3",
     'gh pr view 12 --repo o/r',
     'gh pr list --head my/branch',
-    '# 先に見る\ngit status\ngit diff --stat',
+    'git status\ngit diff --stat',
     'ls -la src 2>&1 | head -20',
     // cwd の中のファイルを読む
     'cat src/index.ts',
@@ -115,6 +114,12 @@ test('notReadOnly: 読めない構文は通さない（変数・バッククォ�
     'echo x &> all.txt',
     'ls *(e:\'echo\':)',
     'echo a#b{',
+    // コメントは受けない（シェルがコメントとして読まなければ、後ろがそのまま走る）
+    'git status # いまの状態',
+    '# 先に見る\ngit status',
+    'ls # ; rm -rf x',
+    'ls #',
+    '(git status) # x',
   ]
   assert.deepEqual(syntax.map((c) => [c, check(c)]).filter(([, got]) => got !== 'syntax'), [])
   // 引用符の中の非 ASCII・記号は字のまま（パターンや表示の文として受ける）
@@ -335,6 +340,12 @@ test('notReadOnly: 読む先・行き先は cwd の中だけ。秘密が入っ�
   assert.equal(check('echo "$(git rev-parse HEAD)"', ''), '')
   // cwd より上の階層の名前では秘密と見ない（`secrets-app/` の中の普通のファイル）
   assert.equal(check('cat src/a.ts', '/work/secrets-app'), '')
+  // cwd がホームそのもの・その上なら、ファイルを読む形は通さない（履歴・シェルの設定・ほかの記録まで「cwd の中」になる）
+  for (const home of ['/Users/x', '/Users/x/', '/home/x', '/root', '/var/root', '/', '/Users', '/home']) {
+    for (const c of ['cat .zsh_history', 'cat notes.txt', 'ls Library', 'grep x .zshrc', 'head -1 work/a.txt']) assert.equal(check(c, home), 'path', `${c} @ ${home}`)
+    assert.equal(check('git status', home), '', home)
+  }
+  assert.equal(check('cat a.txt', '/Users/x/work'), '')
   // cwd の中の、秘密でない名前
   assert.equal(check('cat .env.example.md'), 'secret', '`.env` で始まる名前は例でも通さない側')
   assert.equal(check('cat environment.ts'), '')

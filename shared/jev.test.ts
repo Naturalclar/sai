@@ -164,7 +164,8 @@ test('jevAutoDecision（#749）: ルールを作れない Bash は、この回�
     (jevAutoDecision(bash(command, 0.99), 0.9, null, undefined, { cwd: '/work/repo', noRule }) as { kind: string; reason?: string }).reason ?? ''
   assert.match(reasonOf('echo $(rm -rf zzsecret)'), /今回だけの自動の許可も見送り: 読むだけと分かっているコマンドでない/)
   assert.ok(!reasonOf('echo $(rm -rf zzsecret)').includes('zzsecret'))
-  assert.match(reasonOf('git commit -m x # $(date)'), /読むだけと分かっているコマンドでない/)
+  assert.match(reasonOf('git commit -m x'), /読むだけと分かっているコマンドでない/)
+  assert.match(reasonOf('git status # $(date)'), /読める構文だけで書かれていない/)
   assert.match(reasonOf('N=$(date) && echo x'), /読める構文だけで書かれていない/)
   assert.match(reasonOf('cat .env | head -1 # $(date)'), /秘密が入っていそう/)
   assert.match(reasonOf('(cat /etc/hosts) # x'), /cwd の外か、読めない形/)

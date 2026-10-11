@@ -6,9 +6,9 @@
 // ここは逆向き: **知っている構文と、知っているコマンド・フラグだけを受ける。それ以外は全部「人に回す」。**
 //
 // - 読めない字が 1 つでもあれば通さない（変数 `$X`・`${…}`・`$'…'`・バッククォート・バックスラッシュ・波括弧・ヒアドキュメント・
-//   ファイルへのリダイレクト・`&`・代入・関数・`for` / `if`・プロセス置換・引用符の外の非 ASCII・`\r`）
+//   ファイルへのリダイレクト・`&`・代入・関数・`for` / `if`・プロセス置換・引用符の外の非 ASCII・`\r`・コメントの `#`）
 // - 受ける構文: 語（素の字・`'…'`・`"…"`）、`&&` `||` `;` 改行 `|`、サブシェル `( … )`、コマンド置換 `$( … )`、
-//   行のコメント（空白のあとの `#`）、捨てるだけのリダイレクト（`2>&1`・`>/dev/null`・`2>/dev/null`・`&>/dev/null`）
+//   捨てるだけのリダイレクト（`2>&1`・`>/dev/null`・`2>/dev/null`・`&>/dev/null`）
 // - 受けるコマンド: 下の `COMMANDS` にあるものだけ。フラグも 1 つずつ「知っているもの」だけ
 // - ファイルを読むコマンドの引数は、cwd の中で、秘密のファイル（`shared/files.ts` の `isSecretPath()`）でないものだけ
 // - `$( … )` の結果（中身が分からない語）を渡してよいのは `echo` だけで、二重引用符の中に書いたもの（`echo "$(…)"`）だけ
@@ -96,11 +96,17 @@ const lit = (w: Word | undefined): string => {
   if (w.glob || w.tilde || w.xglob) return refuse('path')
   return w.text
 }
+/** ホームそのものか、その上の階層（`/`・`/Users`・`/home/x`・`/root`・`/var/root`） */
+const HOME_OR_ABOVE = /^(?:\/|\/(?:Users|home)(?:\/[^/]+)?|\/root|\/var\/root)\/?$/
+
 /** 読む先のパス。cwd の中で、秘密のファイルでないこと。`glob` はグロブを受けるか（中身を出すコマンドでは受けない） */
 function readPath(w: Word, place: Place, glob = false): string {
   // 名前を並べるだけのコマンド（`ls`）だけ、グロブを受ける
   const text = glob && w.glob && !w.opaque && !w.tilde && !w.xglob ? w.text : lit(w)
   if (!place.root || !text || text.startsWith('~') || text.startsWith('-')) return refuse('path')
+  // cwd がホームそのもの・その上（`/`・`/Users`・`/home`）のときは、ファイルを読む形を受けない: 「cwd の中」が履歴・シェルの設定・
+  // ほかのセッションの記録・ブラウザの置き場まで広がり、名前では秘密と見分けられない（#754 のレビュー）
+  if (HOME_OR_ABOVE.test(place.root)) return refuse('path')
   // 名前の字は ASCII だけ（大文字小文字を区別しないファイルシステムは、`ſecrets.yml` を `secrets.yml` として開く）
   // eslint-disable-next-line no-control-regex
   if (/[^\x20-\x7e]/.test(text)) return refuse('path')
@@ -451,17 +457,15 @@ class Reader {
     this.depth--
   }
 
-  /** 空白と行のコメントを読み飛ばす。`newlines` はコマンドの前（空行・コメントの行）だけ */
+  /** 空白を読み飛ばす（コメントの `#` に当たったら断る）。`newlines` はコマンドの前（空行）だけ */
   private blanks(newlines: boolean): void {
     for (;;) {
       const c = this.text[this.i]
       if (c === ' ' || c === '\t' || (newlines && c === '\n')) this.i++
       else if (c === '#' && (this.i === 0 || /[ \t\n]/.test(this.text[this.i - 1]!))) {
-        // コメントは、いちばん外の並びでだけ受ける（古い bash / zsh は、`$( … )` の閉じ括弧を探すときにコメントを見ない）
-        if (this.depth > 1) refuse('syntax')
-        // コメントは空白か行頭のあとの `#` だけ。行の終わりまで（改行は区切りとして残す）
-        const end = this.text.indexOf('\n', this.i)
-        this.i = end < 0 ? this.text.length : end
+        // コメントは受けない: `ls # ; rm -rf x` の `#` から後ろを読み飛ばしてよいのは、走らせるシェルがコメントとして読むときだけで、
+        // 対話のシェル（zsh は既定でコメントを読まない）・古い bash の `$( … )` の中では、後ろがそのまま走る（#754 のレビュー）
+        refuse('syntax')
       } else break
     }
   }

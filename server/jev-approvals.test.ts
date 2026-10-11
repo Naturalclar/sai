@@ -377,13 +377,13 @@ test('自動で今回だけ許可（#749）: ルールを作れない Bash は�
   assert.deepEqual(first?.updatedInput, { command: 'echo "zzfirst at $(git rev-parse HEAD)"' })
 
   // 預かった時にも動く。サブシェルの中の読むだけのコマンドも通る
-  const sub = await post('(git status; git log --oneline -3) # zzcomment')
+  const sub = await post('(git status; git log -3 --format=zzcomment%h)')
   // 読むだけと分かっていないもの・閾値未満は人に残る
   const del = await post('echo $(rm -rf zzgone)')
   const commit = await post('git commit -m "zzmsg $(date)"')
   const variable = await post('echo "$ZZVAR"')
   const outside = await post('(ls /tmp/zzout)')
-  const secret = await post('(cat .env) # zzenv')
+  const secret = await post('(cat zzenv/.env)')
   const opaque = await post('git diff --stat $(git rev-parse HEAD)')
   const low = await post('echo "$(git log -1 --format=zzlow)"')
   await drain()

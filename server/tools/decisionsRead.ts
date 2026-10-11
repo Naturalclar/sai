@@ -289,7 +289,7 @@ export function recommendOf(whole: string): string | undefined {
 }
 
 /** 見出しにせずに書いた「まだ決めていないこと」「決めないまま閉じること」の行（`**まだ決めていないこと**`・`- まだ決めていないこと:`） */
-const NOT_YET = /^(?:[-*+>]\s*|\d{1,3}[.)]\s+)?[*_【\[（(「『\s]*(?:まだ決めていない|決めないまま閉じる)/
+const NOT_YET = /^(?:[-*+>]\s*|\d{1,3}[.)]\s+)?[*_【[（(「『\s]*(?:まだ決めていない|決めないまま閉じる)/
 
 const starts = (word: string) => (title: string): boolean => plain(title).startsWith(word)
 const isAsk = starts('決めること')

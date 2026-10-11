@@ -250,8 +250,11 @@ const clip = (s: string, max: number): string => {
   const chars = [...s]
   return chars.length > max ? `${chars.slice(0, max - 1).join('')}…` : s
 }
-/** 飾りの印（`*` `_` `~` `` ` ``）と短い HTML のタグを外す。語が印で割れていても（`未*決*`・`保<b>留</b>`）読めるように */
-const bare = (s: string): string => s.replace(/<\/?[A-Za-z][^<>\n]{0,40}>/g, '').replace(/[*_~`]/g, '')
+/**
+ * 飾りの印（`*` `_` `` ` ``）を外す。語や番号が印で割れていても（`未*決*`・`**決めること** 2`）読めるように。
+ * `~` は外さない（範囲の `1~3` が `13` になる）。HTML のタグも外さない（`<TBD: 未定>` のような地の文ごと消える）
+ */
+const bare = (s: string): string => s.replace(/[*_`]/g, '')
 /** 太字・斜体の印と前後の空白を外して 1 行に */
 const plain = (s: string): string => s.replace(/\*\*|__/g, '').replace(/\s+/g, ' ').trim()
 

@@ -216,7 +216,8 @@ test('pendingOf: 「決めたこと」の中で番号に触れただけでは消
     '- 決めること 2: 青\n\n```sh\n# メモ\nls\n```\n\n決めること 2 は保留に戻す。',
     '- 決めること 1: 青\n\n### 補足\n決めること 2 は保留',
     '- 決めること 2: 未*決*',
-    '- 決めること 2: 保<b>留</b>',
+    '- 決めること 1: 青\n- 決めること 2: <TBD: 未定>',
+    '- 決めること 2: 幅<W のときは保留、W>3 なら 8',
   ]) assert.deepEqual(decidedWith(text), ALL, text)
   // 見出しで名指ししていても同じ
   const titled = (title: string, text: string) => brief(issue({ body: BODY, comments: [{ createdAt: '2026-10-02T00:00:00Z', body: `## ${title}\n${text}` }] }))
@@ -230,6 +231,9 @@ test('pendingOf: 「決めたこと」の中で番号に触れただけでは消
     assert.deepEqual(brief(again), ALL, text)
   }
   assert.deepEqual(mentionedNumbers('**決めること** 2・`3`'), [2, 3])
+  assert.deepEqual(mentionedNumbers('決めること 1~3'), [1, 2, 3])
+  assert.deepEqual(mentionedNumbers('決めること 1 ~ 3'), [1, 2, 3])
+  assert.deepEqual(brief(issue({ body: BODY, comments: [{ createdAt: '2026-10-02T00:00:00Z', body: '## 決めたこと（決めること 1〜3）' }, { createdAt: '2026-10-03T00:00:00Z', body: '## 決めたこと\n決めること 1~3 は保留に戻す' }] })), ALL)
   // 決まりどおり、小見出し「まだ決めていないこと」の下に書けば、上の決定は読める
   assert.deepEqual(decidedWith('- 決めること 1: 青\n- 決めること 2: 8\n\n### まだ決めていないこと\n- 決めること 3: 置き場'), ['body3'])
   // コメントの中の `<!--` で「まだ決めていないこと」が消えない

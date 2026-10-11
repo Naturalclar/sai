@@ -255,6 +255,9 @@ test('/mcp: sai_sessions / sai_session / sai_progress', async () => {
   assert.ok(!r.text.includes('2 行目'))
   assert.match(r.text, /A1@r.* 最後の記録: \S+ 最後の発言: 実装しました/)
   assert.doesNotMatch(r.text.split('\n').find((l) => l.includes('A1@r')) ?? '', /待ち:/, '待っていないセッションには付けない')
+  // 最後のターンからの時間（#761）。このマシンの、回っても待ってもいないセッションにだけ
+  assert.match(r.text, /B1@r.* 最後のターン: \d+ 分前 最後の記録: /)
+  assert.doesNotMatch(r.text.split('\n').find((l) => l.includes('R1@r')) ?? '', /最後のターン:/, '別のマシンのセッションには付けない')
   r = await call('sai_sessions', { project: 'o/other' })
   assert.ok(r.text.includes('C1@r'))
   assert.ok(!r.text.includes('A1@r'))

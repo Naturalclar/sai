@@ -170,6 +170,7 @@ export function TodoView({ list, onStatus, onOpenSidebar, onLeaveToSidebar, prs,
         {open && s && (
           <TodoReplyBox
             session={s}
+            now={now}
             focusOnOpen={pressedOpen === toggleKey(t)}
             replying={replying[t.id]}
             queued={data?.queued[t.id]?.items.length ?? 0}

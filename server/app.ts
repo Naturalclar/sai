@@ -11,7 +11,7 @@ import { isArchivedAt, mergeMeta, META_NAME_MAX } from '../shared/meta.ts'
 import { mergeProfile, PROFILE_ICON_ID, profileIconUrl } from '../shared/profile.ts'
 import { isPersonaId } from '../shared/persona.ts'
 import { canSteer, replyBlockedReason, replyFailureText } from '../shared/reply.ts'
-import { canCompact, compactPrompt, messageCompacts } from '../shared/compact.ts'
+import { compactPrompt, idleMsSince, messageCompacts } from '../shared/compact.ts'
 import { handoffFirstText, handoffReady } from '../shared/handoff.ts'
 import { selfHost } from './host.ts'
 import type { SessionTurnResponse, TurnStepsResponse,
@@ -214,6 +214,8 @@ import {
   SEND_TO_ARG,
   SEND_COMPACT_ARG,
   SEND_COMPACT_NOTE,
+  ASSIGN_NOTE,
+  idleNote,
   sessionLabel,
   tokensLabel,
   usageRefusal,
@@ -2967,7 +2969,7 @@ export function createApp(
     const payload: AgentSessionsResponse = {
       from: found.session.id,
       sessions: [...targets.map((s, i) => {
-        const entry = agentEntry(s, busy(s.id), sizes[i] ?? 0, agentOverlap(mine ?? { root: '', paths: [] }, theirs[i] ?? { root: '', paths: [] }))
+        const entry = agentEntry(s, busy(s.id), sizes[i] ?? 0, agentOverlap(mine ?? { root: '', paths: [] }, theirs[i] ?? { root: '', paths: [] }), active.get(s.id) || s.waiting ? undefined : loopNow())
         const holding = holdings.get(s.id)
         return holding && Object.keys(holding).length > 0 ? { ...entry, holding } : entry
       }), ...others.map((s) => acrossEntry(s, busy(s.id), Boolean(otherHoldings.get(s.id)?.free)))],
@@ -2977,11 +2979,11 @@ export function createApp(
 
   /**
    * メッセージを要約（`/compact`）してから始めさせるか（#624）。画面からの送信と同じ判定で、渡すのは**見出しを付ける前の文**
-   * （着手の形かの判定も、`/compact` に添える指示もそこから作る）。相手が処理中・預かりがあるときは `launch()` が今までどおり
+   * （着手の形かの判定も、`/compact` に添える指示もそこから作る）。間（#761）は相手の最後のターン完了の行から数える。相手が処理中・預かりがあるときは `launch()` が今までどおり
    * 預かりに並べる（画面からの送信と同じ。並んだものの前に要約は挟まない）
    */
   const messageCompactOf = (target: SessionSummary, text: string, contextTokens: number, asked: unknown): { compact?: true; compactFrom?: string } =>
-    messageCompacts({ text, agent: target.agent, contextTokens, terminal: Boolean(target.terminal) }, CONTEXT_WARN_TOKENS, typeof asked === 'boolean' ? asked : undefined)
+    messageCompacts({ text, agent: target.agent, contextTokens, terminal: Boolean(target.terminal), idleMs: idleMsSince(target.last_turn_ts, loopNow()) }, CONTEXT_WARN_TOKENS, typeof asked === 'boolean' ? asked : undefined)
       ? { compact: true, compactFrom: text }
       : {}
 
@@ -3655,7 +3657,7 @@ export function createApp(
    * - 起こす経路は返信・ループと同じ `launch()`（**SAI は権限のフラグを足さず、許可も自動で返さない**）。断る線は `loopRefusal(session, 'wait')`（許可を聞かないモードは断らない）
    * - 処理中・預かりが残っている・前の返信が失敗しているセッションは追い越さない（終わる・片付くまで `ready` のまま待つ）
    * - 使用量の枠が残り少ない・1 日の回数を超えたときは起こさない。**人の「いま起こす」（`forced`）だけがこの 2 つを越える**
-   * - 読み直す量が大きければ要約してから起こす（#579 と同じ `canCompact()`。本文は預かりの先頭に置かれ、要約のあとに回る）
+   * - 間があいて読み直す量が大きければ要約してから起こす（画面からの送信・`sai_send` と同じ `messageCompacts()`。#761。本文は預かりの先頭に置かれ、要約のあとに回る）
    * - **起こす前に `waking` を書く**。その途中で立て直されたら、届いたか分からないので送り直さない（`WaitStore` が `halted` にする）。
    *   起こせた待ちは消す（1 つの待ちで起こすのは 1 回）
    */
@@ -3702,7 +3704,7 @@ export function createApp(
     const sending: WaitState = { ...rest, status: 'waking' }
     waits.set(id, sending)
     const text = waitPrompt(sending)
-    const compact = canCompact({ agent: session.agent, contextTokens: context, terminal: Boolean(session.terminal) })
+    const compact = Boolean(messageCompactOf(session, text, context, undefined).compact)
     let out: Launched
     try {
       out = await launch(id, text, [], { days: QUEUE_DAYS, replaceTyped: false, forceProcess: true, url: w.url ?? '', queue: false, ...(compact ? { compact: true, compactFrom: text } : {}) })
@@ -4054,7 +4056,7 @@ export function createApp(
     {
       name: 'sai_sessions',
       scope: 'read',
-      description: `SAI に並んでいるセッションの一覧（直近 ${MCP_LIST_DAYS} 日、アーカイブ済みを除く）。id・呼び名・リポジトリ・エージェント・ブランチ・処理中か・**いま持っているもの**（空いているか・ブランチから出ている open な PR と CI・ブランチ名や PR の題名・届いている依頼から引けた issue の番号・頼まれてまだ返していない依頼の数。機械で引けたものだけで、無ければ出ない）・待ち（許可・質問）・送れない理由・最後の記録の時刻・最後の発言の 1 行目`,
+      description: `SAI に並んでいるセッションの一覧（直近 ${MCP_LIST_DAYS} 日、アーカイブ済みを除く）。id・呼び名・リポジトリ・エージェント・ブランチ・処理中か・**いま持っているもの**（空いているか・ブランチから出ている open な PR と CI・ブランチ名や PR の題名・届いている依頼から引けた issue の番号・頼まれてまだ返していない依頼の数。機械で引けたものだけで、無ければ出ない）・待ち（許可・質問）・送れない理由・読み直す量と最後のターンからの時間（このマシンのセッションだけ。時間は処理中・待ちのセッションには出ない。「キャッシュ切れの見込み」と付いた相手は、送ると文脈をほぼ全部書き直す）・最後の記録の時刻・最後の発言の 1 行目`,
       inputSchema: { type: 'object', properties: { project: { type: 'string', description: 'リポジトリ（owner/repo）で絞る' } } },
       run: async (args) => {
         const project = mcpStr(args.project)
@@ -4070,7 +4072,8 @@ export function createApp(
         // 送れない相手（別のマシン・素通し・合成 ID など）に「空き」は付けない
         const queued = queue.snapshot()
         const here = sessions.filter((s) => !isRemoteHost(s.host, selfHost()))
-        const active = new Map(await Promise.all(here.map(async (s) => [s.id, (await progress.read(s)).active] as const)))
+        const read = new Map(await Promise.all(here.map(async (s) => [s.id, await progress.read(s)] as const)))
+        const active = new Map([...read].map(([id, p]) => [id, p.active] as const))
         const holdings = await holdingsOf(
           sessions,
           (s) => mcpBusy(s.id) || Boolean(active.get(s.id)) || Boolean(s.waiting) || (pending[s.id]?.length ?? 0) > 0 || (queued[s.id]?.items.length ?? 0) > 0,
@@ -4079,10 +4082,11 @@ export function createApp(
         return textResult(
           sessions
             .map((s) => {
-              const e = agentEntry(s, mcpBusy(s.id))
               const why = mcpSendRefusal(s, byDefault)
               const waiting = clipReply((s.waiting || pending[s.id]?.[0]?.text || '').split('\n')[0] ?? '', 120)
-              return `- ${e.id}「${e.name}」${e.project} ${e.agent}${e.branch ? ` ${e.branch}` : ''}${e.busy ? '（処理中）' : ''}${holdingLabel(holdings.get(s.id) ?? {})}${waiting ? `（待ち: ${waiting}）` : ''}${why ? `（送れない: ${why}）` : ''}${s.manager_draft ? '（案を置いてある）' : ''} 最後の記録: ${s.end}${e.last_text ? ` 最後の発言: ${e.last_text}` : ''}`
+              // 読み直す量と間（#761）。割り振る側が、小さくて温かい相手を選べるように。間は、このマシンの、回っても待ってもいないセッションにだけ
+              const e = agentEntry(s, mcpBusy(s.id), read.get(s.id)?.context_tokens ?? 0, undefined, read.has(s.id) && !active.get(s.id) && !waiting ? loopNow() : undefined)
+              return `- ${e.id}「${e.name}」${e.project} ${e.agent}${e.branch ? ` ${e.branch}` : ''}${e.busy ? '（処理中）' : ''}${holdingLabel(holdings.get(s.id) ?? {})}${waiting ? `（待ち: ${waiting}）` : ''}${why ? `（送れない: ${why}）` : ''}${s.manager_draft ? '（案を置いてある）' : ''}${e.context_tokens ? ` 読み直す量: ${tokensLabel(e.context_tokens)}` : ''}${idleNote(e.idle_ms, e.agent)} 最後の記録: ${s.end}${e.last_text ? ` 最後の発言: ${e.last_text}` : ''}`
             })
             .join('\n'),
         )
@@ -4154,7 +4158,7 @@ export function createApp(
     {
       name: 'sai_send',
       scope: 'send',
-      description: `別のセッションに頼む・聞く。相手が処理中なら終わってから回る。返答は sai_wait で受け取る。本文は ${AGENT_TEXT_MAX_CHARS} 字まで。${SEND_COMPACT_NOTE}`,
+      description: `別のセッションに頼む・聞く。相手が処理中なら終わってから回る。返答は sai_wait で受け取る。本文は ${AGENT_TEXT_MAX_CHARS} 字まで。${SEND_COMPACT_NOTE}。${ASSIGN_NOTE}`,
       inputSchema: {
         type: 'object',
         properties: { to: { type: 'string', description: SEND_TO_ARG }, text: { type: 'string' }, compact: { type: 'boolean', description: SEND_COMPACT_ARG } },

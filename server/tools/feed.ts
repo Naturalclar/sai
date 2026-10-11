@@ -2,7 +2,7 @@
 //
 //   pnpm feed rows <セッション>      あるセッションの最近の行（時刻・種類・入力と返答の頭）
 //   pnpm feed messages               送ったメッセージと、返答が届いたか
-//   pnpm feed usage                  セッション別・日別の使用量（費用は前の行との差）
+//   pnpm feed usage                  セッション別・日別の使用量（費用は前の行との差）。末尾に、読み直しの大きいターンの割合（#761）
 //
 // 出力は既定で数行の表に絞る（結果は呼んだ側の文脈に残り続けるので）。全部出すのは `--all` を付けたときだけ。
 // 置き場は `AGENT_FEED_DIR`（無ければ `~/.agent-feed`）。
@@ -27,7 +27,10 @@ import {
   resolveSession,
   rowEntity,
   sessionsOf,
+  SHARE_CONTEXT_TOKENS,
+  SHARE_REWRITE_TOKENS,
   usageRows,
+  usageShares,
   usageTotals,
 } from './feedRead.ts'
 import type { DateRange, PromptKind, ReplyState, UsageRow, UsageTotal } from './feedRead.ts'
@@ -330,7 +333,7 @@ async function usageCommand(o: Options, io: Io): Promise<number> {
   const sum = sumOf(inWindow)
   const shownSum = picked.length < totals.length ? sumOf(inWindow.filter((r) => keys.has(o.by === 'day' ? localDate(r.ts) : r.id))) : sum
   if (o.json) {
-    io.out(JSON.stringify({ range: o.range, by: o.by, total: totals.length, sum, shown_sum: shownSum, rows: picked }))
+    io.out(JSON.stringify({ range: o.range, by: o.by, total: totals.length, sum, shown_sum: shownSum, shares: usageShares(inWindow), rows: picked }))
     return 0
   }
   const unit = o.by === 'day' ? '日' : 'セッション'
@@ -345,6 +348,13 @@ async function usageCommand(o: Options, io: Io): Promise<number> {
   if (picked.length < totals.length && shownSum) body.push(cells(shownSum, `小計（上の ${picked.length} ${unit}）`))
   if (sum) body.push(cells(sum, `合計（全 ${totals.length} ${unit}）`))
   for (const line of table([o.by === 'day' ? '日付' : 'セッション', 'ターン', '入力', '出力', 'キャッシュ読', 'キャッシュ書', '費用$'], body)) io.out(line)
+  // 読み直しに使った分の目安（#761。範囲の全部。前後を同じ数え方で比べる）
+  const shares = usageShares(inWindow)
+  if (shares.turns > 0) {
+    const pct = (n: number, of: number) => (of > 0 ? `${Math.round((n / of) * 100)}%` : '0%')
+    const part = (t: { turns: number; cost_usd: number }) => `${t.turns}/${shares.turns} ターン（${pct(t.turns, shares.turns)}）・費用の ${pct(t.cost_usd, shares.cost_usd)}`
+    io.out(`読み直し: 1 回の呼び出しで読む量が ${tokens(SHARE_CONTEXT_TOKENS)} 以上 ${part(shares.large)}／キャッシュに ${tokens(SHARE_REWRITE_TOKENS)} 以上書いた ${part(shares.rewritten)}`)
+  }
   return 0
 }
 

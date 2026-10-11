@@ -323,7 +323,8 @@ function withoutAsks(sentence: string): string {
   const clauses = splitKeeping(sentence, /[、,，]/)
   const kept = clauses.filter((c, n) => (n === clauses.length - 1 ? !asksPerson(masked(c)) : !INVENTED_ASK.test(masked(c))))
   if (kept.length === 0 || kept.length === clauses.length) return kept.length === 0 ? '' : sentence
-  const rest = kept.join('').replace(/[、,，\s]+$/u, '')
+  // 頼みの節を落とすと「…決まるので」「…ましたが」のように接続で終わる。接続は落として文にする（#785 のレビュー）
+  const rest = kept.join('').replace(/[、,，\s]+$/u, '').replace(/(?:ので|ため|ために|から|が)$/u, '')
   return /[。！!？?]$/u.test(rest) ? rest : `${rest}。`
 }
 
@@ -388,45 +389,44 @@ export function proseSentences(rawSource: string): string[] {
  *   （「〜したほうが確実です」まで拾うと、頼みでない文を人への頼みとして出してしまう）。質問は拾わない
  *   （人に聞いている返答は一言にしない。#638）
  * - 引用された依頼のある文を先に、同じなら**後ろにある文**を選ぶ（頼みは最後の段落に多い）
- * - コードブロックの中は見ない。`max` 文字を超える文は返さない（切ると意味が変わる）
+ * - コードブロックの中は見ない。`max` 文字を超える文は丸ごとは返さない（切ると意味が変わる）。**上限以内の頼みの文が 1 つも無いときだけ**、
+ *   超える文から理由の接続の後ろの節を採る（`requestClause()`。#779）
  */
 export function requestSentence(rawSource: string, max: number = DIGEST_MAX_CHARS): string {
-  const found = proseSentences(rawSource)
-    .filter((t) => !/[?？]$/.test(t))
-    .map((t) => ([...t].length <= max ? t : requestClause(t, max)))
-    .filter((t): t is string => t !== '')
-    .map((t) => ({ t, quoted: new RegExp(QUOTED_ASK.source).test(t), asks: REQUEST.test(masked(t)) }))
+  const sentences = proseSentences(rawSource).filter((t) => !/[?？]$/.test(t))
+  const mark = (t: string) => ({ t, quoted: new RegExp(QUOTED_ASK.source).test(t), asks: REQUEST.test(masked(t)) })
+  const whole = sentences
+    .filter((t) => [...t].length <= max)
+    .map(mark)
     .filter((x) => x.quoted || x.asks)
+  const found = whole.length > 0 ? whole : sentences.filter((t) => [...t].length > max).map((t) => requestClause(t, max)).filter(Boolean).map(mark)
   const pick = found.filter((x) => x.quoted).at(-1) ?? found.at(-1)
   return pick?.t ?? ''
 }
 
 /**
- * 理由・前置きと頼みを繋ぐ接続（「…ので、」「…から、」「…ため、」「…ですが、」）。この後ろは頼みの節だけで、前は落としても頼みの意味が変わらない。
- * 読点で切るだけだと「A を、B に送ってください」の A が落ちて意味が変わるので、**これらの接続の後ろだけ**を採る（#779）
+ * 理由・逆接の接続（「…ので、」「…ため、」「…ですが、」など）。この後ろは頼みの節だけで、前は「何が起きたか」（口が書く側）なので
+ * 落としても頼みの意味が変わらない。読点で切るだけだと「A を、B に送ってください」の A が落ちるので、**これらの接続の後ろだけ**を採る（#779）。
+ * 「から、」は入れない（「確認してから、マージしてください」の前提、「〜から、main に」の起点が落ちる。#785 のレビュー）
  */
-const REASON_CONNECTOR = /(?:ので|から|ため|ために|ですが|ますが|でしたが|ましたが)、/g
+const REASON_CONNECTOR = /(?:ので|ため|ために|ですが|ますが|でしたが|ましたが)、/g
 
-/** 採る節の最短（これより短いものは頼みとして読めない） */
-const REQUEST_CLAUSE_MIN = 6
+/** 接続か、切ってはいけない塊（URL・コード・「」『」の引用）か。塊の中の接続は `m[1]` に入らない */
+const CONNECTOR_OR_OPAQUE = new RegExp(`${OPAQUE.source}|(${REASON_CONNECTOR.source})`, 'g')
 
 /**
  * `max` を超える文から、**最後の理由の接続の後ろの節**を返す（#779）。直近 30 日の記録では、頼みの文が長くて丸ごと捨てられていた
- * 13 件のうち 6 件がこの形（理由を長く書いてから「…ので、〜してください」）だった。節が頼みの形（`REQUEST`）でない・短すぎる・
- * それでも長い・接続が無いなら空（切ると意味が変わるものは採らない）
+ * 13 件のうち 6 件がこの形（理由を長く書いてから「…ので、〜してください」）だった。
+ * 節が頼みの形（`REQUEST`）でない・それでも長い・接続が無いなら空。**落とす前半に人に言ってほしい言葉の引用（`QUOTED_ASK`）があるときも空**
+ * （口には「人への頼みは書かない」と言うので、引用された依頼がどこにも出なくなる。#785 のレビュー）
  */
 function requestClause(sentence: string, max: number): string {
-  // 接続は URL・コード・引用の外にあるものだけ（`splitKeeping()` と同じく、その中では切らない）
   let at = -1
-  const opaque = [...sentence.matchAll(OPAQUE)].map((m) => [m.index ?? 0, (m.index ?? 0) + m[0].length] as const)
-  for (const m of sentence.matchAll(REASON_CONNECTOR)) {
-    const end = (m.index ?? 0) + m[0].length
-    if (!opaque.some(([from, to]) => (m.index ?? 0) >= from && end <= to)) at = end
-  }
+  for (const m of sentence.matchAll(CONNECTOR_OR_OPAQUE)) if (m[1]) at = (m.index ?? 0) + m[0].length
   if (at < 0) return ''
   const clause = sentence.slice(at).trim()
-  const length = [...clause].length
-  return length >= REQUEST_CLAUSE_MIN && length <= max && REQUEST.test(masked(clause)) ? clause : ''
+  if (new RegExp(QUOTED_ASK.source).test(sentence.slice(0, at))) return ''
+  return [...clause].length <= max && REQUEST.test(masked(clause)) ? clause : ''
 }
 
 /**

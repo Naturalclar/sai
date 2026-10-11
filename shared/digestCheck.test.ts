@@ -339,5 +339,13 @@ test('requestSentence: 長い文でも、理由の接続の後ろの節が頼み
   assert.equal(requestSentence(`${reason}ので、${'い'.repeat(80)}してください。`), '', '節がまだ長ければ返さない')
   assert.equal(requestSentence(`${reason}ので、通ります。`), '', '節が頼みの形でなければ返さない')
   assert.equal(requestSentence(`${reason}ので、どうしますか？`), '', '質問は拾わない')
-  assert.equal(requestSentence(`「${'う'.repeat(70)}ので、やめて」と言われた件を直しました。結果を見てください。`), '結果を見てください。', '引用の中の接続では切らない')
+  assert.equal(requestSentence(`「${'う'.repeat(70)}ので、確認してください」と言われた件を直しました。`), '', '引用の中の接続では切らない（切ると引用の途中からの節になる）')
+  assert.equal(requestSentence(`${reason}を入れたので CI が通ったのを確認してから、マージしてください。`), '', '「〜してから、」では切らない（前提が落ちる。#785 のレビュー）')
+  assert.equal(requestSentence(`${reason}のレビューが済んで「マージして」と言ってもらえれば私がマージしますので、先に差分を確認してください。`), '', '落とす前半に引用された依頼があれば採らない（口は頼みを書かないので、どこにも出なくなる）')
+  assert.equal(requestSentence(`設定を確認してください。${reason}ので、聞けたら教えてください。`), '設定を確認してください。', '上限以内の頼みの文があれば、切った節より先に選ぶ')
+})
+
+test('stripAsks: 頼みの節を落として接続で終わる文は、接続も落とす（#785 のレビュー）', () => {
+  assert.equal(stripAsks('それが分かれば表のどこに入るか決まるので、聞けたら教えてね！'), 'それが分かれば表のどこに入るか決まる。')
+  assert.equal(stripAsks('テストは通りましたが、レビューしてください。'), 'テストは通りました。')
 })

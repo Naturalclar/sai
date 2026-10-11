@@ -1413,6 +1413,27 @@ export interface ApprovalLogRow {
   jev?: number
   /** `jev` が無い理由（#749）: `not_asked` = 聞いていない、`pending` = 聞いたが答える前に届かなかった、`failed` = 聞けなかった */
   jev_none?: JevNone
+  /**
+   * Codex の「今後も聞かない」「今後も断る」を SAI の画面から押した行（#772）。**この欄がある行は Claude の許可の行ではない**:
+   * `rule` は空・`remember` は false（規則を書くのは Codex で、SAI は書いていない）で、[常に許可] を勧める回数にも数えない
+   */
+  codex_kept?: CodexKeptLogged
+}
+
+/**
+ * Codex の規則に残る選択肢を押したときに、**ボタンに書いていた範囲**（#772）。SAI が見せて人が押したものの控えで、
+ * Codex の `default.rules` を読んだものではない（実際に書かれたかは見ていない）
+ * - `command`: `scope` で始まるコマンド（語の並び。ボタンの「〜で始まるコマンド」の「〜」のまま）
+ * - `network`: `scope` のホストへの通信（許可したか断ったかは行の `behavior`）
+ */
+export interface CodexKept {
+  kind: 'command' | 'network'
+  scope: string
+}
+
+/** 記録に書く形。どちらの道で押したか（`terminal` = 端末のダイアログ、`app-server` = SAI が回しているターン）を添える */
+export interface CodexKeptLogged extends CodexKept {
+  via: 'terminal' | 'app-server'
 }
 
 /**

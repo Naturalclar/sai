@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { IconHistoryResponse } from '../shared/types.ts'
 import { handoffFirstText, HANDOFF_PROMPT } from '../shared/handoff.ts'
-import type { ApprovalAnswer, ApprovalMap, NewSessionResponse, Replying, ReplyQueueResponse, ReplyResponse,SessionsResponse, SessionDetailResponse, SessionIconResponse, SessionMetaResponse, FeedResponse, SettingsResponse, HealthResponse, SessionSkillsResponse, SessionPermissionsResponse, SearchResponse, UsageReportResponse, UsageResponse } from '../shared/types.ts'
+import type { ApprovalAnswer, ApprovalLogRow, ApprovalMap, CodexKept, NewSessionResponse, Replying, ReplyQueueResponse, ReplyResponse,SessionsResponse, SessionDetailResponse, SessionIconResponse, SessionMetaResponse, FeedResponse, SettingsResponse, HealthResponse, SessionSkillsResponse, SessionPermissionsResponse, SearchResponse, UsageReportResponse, UsageResponse } from '../shared/types.ts'
 import { DEFAULT_SETTINGS } from './meta/settings.ts'
 import { createApp, parseDays, revWith, selfUrl, sessionIdFrom, stripThinking } from './app.ts'
 import { BuildFreshness } from './local/buildFreshness.ts'
@@ -81,6 +81,8 @@ class FakeCodexDialogs implements CodexDialogSource {
   /** 画面から答えたぶん（#450）。`fail` を入れておくと、そのまま 409 を返す */
   answered: { approvalId: string; answer: ApprovalAnswer }[] = []
   fail: { status: number; error: string } | null = null
+  /** 次の答えが「今後も聞かない」だったことにする範囲（#772）。1 回使ったら消える */
+  keptNext: CodexKept | null = null
   async scan(sessions: { id: string }[]) {
     const ids = new Set(sessions.map((s) => s.id))
     return Object.fromEntries(Object.entries(this.active).filter(([id]) => ids.has(id)))
@@ -91,7 +93,9 @@ class FakeCodexDialogs implements CodexDialogSource {
   async answer(approvalId: string, answer: ApprovalAnswer) {
     if (this.fail) return { ok: false as const, ...this.fail }
     this.answered.push({ approvalId, answer })
-    return { ok: true as const }
+    const kept = this.keptNext
+    this.keptNext = null
+    return kept ? { ok: true as const, kept } : { ok: true as const }
   }
 }
 const codexDialogs = new FakeCodexDialogs()
@@ -102,6 +106,8 @@ class FakeCodexApp implements CodexApp {
   active: ApprovalMap = {}
   answered: { id: string; answer: ApprovalAnswer }[] = []
   fail: Error | null = null
+  /** 次の答えが規則の追加だったことにする範囲（#772）。1 回使ったら消える */
+  keptNext: CodexKept | null = null
   /** エラーで終わったターン（#475）。処理中ではないが replying には載る */
   failures = new Map<string, Replying>()
   cleared: string[] = []
@@ -166,7 +172,9 @@ class FakeCodexApp implements CodexApp {
       if (remaining.length) this.active[id] = remaining
       else delete this.active[id]
     }
-    return { ok: true as const }
+    const kept = this.keptNext
+    this.keptNext = null
+    return kept ? { ok: true as const, kept } : { ok: true as const }
   }
 }
 const codexApp = new FakeCodexApp()
@@ -2742,6 +2750,83 @@ test('端末の Codex のダイアログに画面から答える（#450。同一
   } finally {
     codexDialogs.fail = null
     codexDialogs.active = {}
+  }
+})
+
+test('Codex の「今後も聞かない」を押すと、ボタンに書いた範囲を approvals.jsonl に 1 行残す。今回だけの答えは残さない（#772）', async () => {
+  const logPath = join(feedDir, 'approvals.jsonl')
+  const keptRows = async (): Promise<ApprovalLogRow[]> => {
+    // 記録は投げっぱなしで足すので、書かれるまで少し待つ
+    await new Promise((r) => setTimeout(r, 30))
+    return (await readFile(logPath, 'utf-8').catch(() => '')).split('\n').filter(Boolean).map((l) => JSON.parse(l) as ApprovalLogRow).filter((r) => r.codex_kept)
+  }
+  const dialog = (approvalId: string): ApprovalMap => ({
+    'S1@repo-a': [
+      {
+        approval_id: approvalId,
+        id: 'S1@repo-a',
+        since: new Date().toISOString(),
+        tool_name: 'CodexDialog',
+        input: {},
+        tool_use_id: '',
+        // 記録に入ってはいけない全文（範囲より後ろの語）
+        text: 'Codex の許可待ち: zzsai add --secret-flag',
+        agent: 'codex',
+        answerable: true,
+        decisions: [
+          { id: 'opt-1', label: 'Yes, proceed (y)', behavior: 'allow' },
+          { id: 'opt-2', label: '許可して、`zzsai add` で始まるコマンドを今後聞かない', behavior: 'allow', persists: true },
+        ],
+      },
+    ],
+  })
+  const before = (await keptRows()).length
+  const cwd = ((await (await get('/api/sessions')).json()) as SessionsResponse).sessions.find((s) => s.id === 'S1@repo-a')?.cwd ?? ''
+  try {
+    // 端末の道: 今回だけ → 残さない
+    codexDialogs.active = dialog('codex-dialog-kept-1')
+    await get('/api/sessions')
+    assert.equal((await postJson('/api/approvals/codex-dialog-kept-1/answer', { behavior: 'allow', decision: 'opt-1' })).status, 200)
+    assert.equal((await keptRows()).length, before, '今回だけの許可は足さない')
+
+    // 端末の道: 今後も聞かない → 範囲までを残す
+    codexDialogs.active = dialog('codex-dialog-kept-2')
+    codexDialogs.keptNext = { kind: 'command', scope: 'zzsai add' }
+    await get('/api/sessions')
+    assert.equal((await postJson('/api/approvals/codex-dialog-kept-2/answer', { behavior: 'allow', decision: 'opt-2' })).status, 200)
+    const afterDialog = await keptRows()
+    assert.equal(afterDialog.length, before + 1)
+    const row = afterDialog.at(-1)!
+    assert.deepEqual(row.codex_kept, { via: 'terminal', kind: 'command', scope: 'zzsai add' })
+    assert.deepEqual([row.id, row.cwd, row.tool, row.rule, row.by, row.behavior, row.remember], ['S1@repo-a', cwd, 'CodexDialog', '', 'human', 'allow', false], 'rule は空・remember は false（SAI はルールを書いていない）')
+    assert.ok(!JSON.stringify(row).includes('--secret-flag'), 'コマンドの全文は書かない')
+
+    // 送れなかったとき（画面が変わった）は残さない
+    codexDialogs.active = dialog('codex-dialog-kept-3')
+    codexDialogs.keptNext = { kind: 'command', scope: 'zzsai add' }
+    codexDialogs.fail = { status: 409, error: '画面が変わりました（もう一度確かめてください）' }
+    await get('/api/sessions')
+    assert.equal((await postJson('/api/approvals/codex-dialog-kept-3/answer', { behavior: 'allow', decision: 'opt-2' })).status, 409)
+    assert.equal((await keptRows()).length, before + 1, '届かなかった答えは足さない')
+    codexDialogs.fail = null
+    codexDialogs.keptNext = null
+    codexDialogs.active = {}
+
+    // app-server の道: 「今後も断る」（ネットワーク）→ behavior は deny
+    codexApp.active = {
+      'S1@repo-a': [{ approval_id: 'codex-rpc-kept', id: 'S1@repo-a', since: new Date().toISOString(), tool_name: 'Bash', input: {}, tool_use_id: '', text: '', agent: 'codex', decisions: [{ id: 'd4', label: '「example.com」への通信を今後も断る', behavior: 'deny', persists: true }] }],
+    }
+    codexApp.keptNext = { kind: 'network', scope: 'example.com' }
+    assert.equal((await postJson('/api/approvals/codex-rpc-kept/answer', { behavior: 'deny', decision: 'd4' })).status, 200)
+    const afterApp = await keptRows()
+    assert.equal(afterApp.length, before + 2)
+    assert.deepEqual([afterApp.at(-1)!.codex_kept, afterApp.at(-1)!.behavior, afterApp.at(-1)!.rule], [{ via: 'app-server', kind: 'network', scope: 'example.com' }, 'deny', ''])
+  } finally {
+    codexDialogs.fail = null
+    codexDialogs.keptNext = null
+    codexDialogs.active = {}
+    codexApp.keptNext = null
+    codexApp.active = {}
   }
 })
 

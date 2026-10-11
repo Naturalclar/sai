@@ -12,6 +12,7 @@
 // **範囲が読めて、ボタンに書き切れるときだけ**文言を返す。読めない・長すぎるものは null（その候補はボタンにしない）。
 // 範囲は**候補そのものの中身**から読む（押したときに Codex へ返すのがそれなので、別の欄の `proposedExecpolicyAmendment` は当てにしない）。
 // 規則を書くのは Codex 自身で、SAI は `default.rules` を読まないし書かない。
+import type { CodexKept } from '../../shared/types.ts'
 
 /** ボタンに書く範囲の上限（文字）。超えるものは切らずに出さない（途中までの範囲を見せて押させない） */
 export const AMENDMENT_RANGE_MAX = 80
@@ -65,6 +66,8 @@ export function networkAmendmentRange(raw: unknown): { host: string; action: 'al
 export interface AmendmentLabel {
   label: string
   behavior: 'allow' | 'deny'
+  /** ボタンに書いた範囲（#772。押したことを記録に残すのに使う。画面には渡さない） */
+  kept: CodexKept
 }
 
 /**
@@ -87,7 +90,7 @@ export function amendmentLabel(decision: unknown): AmendmentLabel | null | undef
     if (!isObject(body) || Object.keys(body).length !== 1) return null
     const range = execAmendmentRange(body.execpolicy_amendment)
     // 「で始まる」の根拠と「許可して、」の理由は冒頭のコメント
-    return range === null ? null : { label: `許可して、「${range}」で始まるコマンドを今後聞かない`, behavior: 'allow' }
+    return range === null ? null : { label: `許可して、「${range}」で始まるコマンドを今後聞かない`, behavior: 'allow', kept: { kind: 'command', scope: range } }
   }
   const body = decision.applyNetworkPolicyAmendment
   if (!isObject(body) || Object.keys(body).length !== 1) return null
@@ -95,5 +98,6 @@ export function amendmentLabel(decision: unknown): AmendmentLabel | null | undef
   if (!isObject(ruleRaw) || Object.keys(ruleRaw).length !== 2) return null
   const rule = networkAmendmentRange(ruleRaw)
   if (!rule) return null
-  return rule.action === 'allow' ? { label: `「${rule.host}」への通信を今後聞かない`, behavior: 'allow' } : { label: `「${rule.host}」への通信を今後も断る`, behavior: 'deny' }
+  const kept: CodexKept = { kind: 'network', scope: rule.host }
+  return rule.action === 'allow' ? { label: `「${rule.host}」への通信を今後聞かない`, behavior: 'allow', kept } : { label: `「${rule.host}」への通信を今後も断る`, behavior: 'deny', kept }
 }

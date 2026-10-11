@@ -3,7 +3,7 @@
 import { randomBytes } from 'node:crypto'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createInterface } from 'node:readline'
-import type { Approval, ApprovalAnswer, ApprovalMap, Replying, ReplyingMap, ReviewTarget } from '../../shared/types.ts'
+import type { Approval, ApprovalAnswer, ApprovalMap, CodexKept, Replying, ReplyingMap, ReviewTarget } from '../../shared/types.ts'
 import { codexErrorText, codexTurnErrorReason } from '../../shared/codexTurnError.ts'
 import { parseCodexSkills, type Skill } from '../../shared/skills.ts'
 import { amendmentLabel } from './codexAmendment.ts'
@@ -53,7 +53,8 @@ export interface CodexReviewInput {
 }
 
 export type CodexAnswerResult =
-  | { ok: true }
+  /** `kept` は、押したのが規則の追加（今後も聞かない・今後も断る）だったときの、ボタンに書いていた範囲（#772） */
+  | { ok: true; kept?: CodexKept }
   | { ok: false; status: 400 | 404 | 409; error: string }
 
 /** app.tsが使う境界。テストではプロセスを立てない偽物へ差し替える */
@@ -148,6 +149,8 @@ interface Decision {
   result: JsonObject
   /** 押すとこの 1 回を越えて残る（規則の追加） */
   persists?: true
+  /** 規則の追加のとき、ボタンに書いた範囲（#772。答えの結果に載せて記録に残す。画面には渡さない） */
+  kept?: CodexKept
 }
 
 interface PendingApproval {
@@ -517,7 +520,8 @@ export class CodexAppServer implements CodexApp {
     }
     // responseは1回だけ。同じapproval idの二重回答は以後404になる
     this.approvals.delete(approvalId)
-    return { ok: true }
+    const kept = entry.method === 'item/tool/requestUserInput' ? undefined : entry.decisions.find((item) => item.id === answer.decision)?.kept
+    return kept ? { ok: true, kept } : { ok: true }
   }
 
   private userInputResult(entry: PendingApproval, answer: ApprovalAnswer): JsonObject | null {

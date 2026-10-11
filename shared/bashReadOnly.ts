@@ -77,6 +77,8 @@ interface Word {
 interface Place {
   dir: string
   root: string
+  /** そのセッションのリポジトリ（GitHub の `owner/repo`。小文字）。分からなければ空 */
+  repo: string
 }
 
 /** 引用符の外で、語の字として受けるもの。これ以外（`{` `}` `\` `` ` `` `$` `!` 非 ASCII 制御文字…）は読めない */
@@ -96,17 +98,32 @@ const lit = (w: Word | undefined): string => {
   if (w.glob || w.tilde || w.xglob) return refuse('path')
   return w.text
 }
-/** ホームそのものか、その上の階層（`/`・`/Users`・`/home/x`・`/root`・`/var/root`） */
-const HOME_OR_ABOVE = /^(?:\/|\/(?:Users|home)(?:\/[^/]+)?|\/root|\/var\/root)\/?$/
+/**
+ * ホームのあたり: ホームそのもの・その上の階層（`/`・`/Users`・`/home/x`・`/root`・`/var/root`）と、ホームの直下の置き場
+ * （`~/.claude`・`~/.ssh`・`~/.config`・`~/.agent-feed`・`~/Library` … とその中）。**ここが cwd のときは、ファイルに触るコマンドを 1 つも受けない**
+ * （履歴・シェルの設定・ほかのセッションの記録・鍵まで「cwd の中」になり、名前では秘密と見分けられない）。
+ * - 大文字小文字は見ない（macOS は区別しない: `/users/x`）。同じホームを指す別の書き方（`/private/var/root`・
+ *   `/System/Volumes/Data/Users/x`・`/Volumes/D/Users/x`）は、**終わりが `Users/<名前>` / `home/<名前>` の形**で見る
+ * - ホームの直下で受けるのは、名前が `.` で始まらず `Library` でもない階層の中だけ（`~/work/app`）。`.` で始まる置き場は、
+ *   その 2 つ下から先だけ（`~/.ghq/github.com/o/r` のように、リポジトリを `.` で始まる置き場の下に持つ形）で、
+ *   道具の置き場と分かっている名前（`HOME_STORES`）はどこまで下でも受けない
+ * - `/home/<組織>/<人>` のような、形で分からないホームは見分けられない（→ 残っている限界）
+ */
+/** `/` の別の書き方（macOS のデータのボリューム・マウントしたボリューム） */
+const ROOT = String.raw`(?:\/System\/Volumes\/Data|\/Volumes\/[^/]+)?`
+const HOME = String.raw`(?:^|\/)(?:users|home)\/[^/]+|^${ROOT}\/root|^${ROOT}(?:\/private)?\/var\/root`
+const HOME_STORES = String.raw`\.(?:claude|codex|ssh|aws|gnupg|config|agent-feed|kube|docker|npm|cache|local|zsh_sessions|opencode|gemini|azure|gcloud)|library`
+const HOME_ZONE = new RegExp(String.raw`^${ROOT}\/?$|(?:^|\/)(?:users|home)\/?$|(?:${HOME})\/?$|(?:${HOME})\/(?:${HOME_STORES})(?:\/|$)|(?:${HOME})\/\.[^/]+(?:\/[^/]+)?\/?$`, 'i')
+/** cwd がホームのあたりか */
+export const inHomeZone = (root: string): boolean => HOME_ZONE.test(root)
 
 /** 読む先のパス。cwd の中で、秘密のファイルでないこと。`glob` はグロブを受けるか（中身を出すコマンドでは受けない） */
 function readPath(w: Word, place: Place, glob = false): string {
   // 名前を並べるだけのコマンド（`ls`）だけ、グロブを受ける
   const text = glob && w.glob && !w.opaque && !w.tilde && !w.xglob ? w.text : lit(w)
   if (!place.root || !text || text.startsWith('~') || text.startsWith('-')) return refuse('path')
-  // cwd がホームそのもの・その上（`/`・`/Users`・`/home`）のときは、ファイルを読む形を受けない: 「cwd の中」が履歴・シェルの設定・
-  // ほかのセッションの記録・ブラウザの置き場まで広がり、名前では秘密と見分けられない（#754 のレビュー）
-  if (HOME_OR_ABOVE.test(place.root)) return refuse('path')
+  // cwd がホームのあたりのときは、ファイルを読む形を受けない（`HOME_ZONE`。#754 のレビュー）
+  if (inHomeZone(place.root)) return refuse('path')
   // 名前の字は ASCII だけ（大文字小文字を区別しないファイルシステムは、`ſecrets.yml` を `secrets.yml` として開く）
   // eslint-disable-next-line no-control-regex
   if (/[^\x20-\x7e]/.test(text)) return refuse('path')
@@ -306,44 +323,60 @@ const GH_READS: Record<string, Set<string>> = {
  * 知らないフラグを 1 つでも受けると、gh は「その次の語」を値として読み飛ばすので、`gh pr --body view merge 5` が `pr merge` になる。#754 のレビュー）
  */
 const GH_BARE = new Set(['--comments', '--paginate', '--name-only', '--patch', '--required'])
-/** `--jq` / `-q` / `--template` は入れない（jq の式は環境変数を出せて、終わらない式も書ける。式の中身を読み切れない） */
-const GH_VALUE = new Set(['--json', '--limit', '-L', '--state', '-s', '--search', '-S', '--author', '-A', '--assignee', '--label', '-l', '--base', '-B', '--head', '-H', '--branch', '-b', '--workflow', '--user', '--event', '--status', '--commit', '--milestone'])
+/**
+ * `--jq` / `-q` / `--template` は入れない（jq の式は環境変数を出せて、終わらない式も書ける。式の中身を読み切れない）。
+ * `--search` / `-S` も入れない（値に `repo:a/b` と書けば、ほかのリポジトリの issue・PR が並ぶ）
+ */
+const GH_VALUE = new Set(['--json', '--limit', '-L', '--state', '-s', '--author', '-A', '--assignee', '--label', '-l', '--base', '-B', '--head', '-H', '--branch', '-b', '--workflow', '--user', '--event', '--status', '--commit', '--milestone'])
 const GH_REPO = /^[\w.-]+\/[\w.-]+$/
 /**
  * `gh api` で読む先。GET だけ（メソッド・フィールド・入力・ヘッダのフラグは、受けるフラグに無いので通らない）。
  * リポジトリの下の、決まった口だけ（`hooks`・`keys`・`secrets` のように URL や鍵の名前が出る口は入れない）。`%` と、`.` で始まる階層は受けない
  */
 const GH_API_PATH = /^\/?(?:rate_limit|repos\/[\w-][\w.-]*\/[\w-][\w.-]*(?:\/(?:pulls|issues|commits|branches|tags|releases|compare|labels|milestones|contributors|languages|check-runs|statuses|actions\/runs)(?:\/[\w-][\w.+=:,-]*)*)?)(?:\?[\w.+=:,&-]*)?$/
-const ghCheck: Check = (args) => {
+/**
+ * gh が読んでよいリポジトリは、**そのセッションのリポジトリだけ**（`place.repo`）。`-R a/b`・`gh api repos/a/b/…` でほかのリポジトリを
+ * 名指しすると、第三者が書いた文（issue・コメント）が人の目を通らずにエージェントの文脈に入る（#754 のレビュー）。
+ * セッションのリポジトリが分からなければ、名指しした形は全部受けない
+ */
+const ownRepo = (named: string, place: Place): boolean => place.repo !== '' && named.toLowerCase() === place.repo
+const ghCheck: Check = (args, place) => {
   const words = args.map(lit)
   let i = 0
   // 形は `gh [-R owner/repo] <まとまり> <サブコマンド> …` だけ。まとまりとサブコマンドの間にフラグは受けない
   if (words[i] === '-R' || words[i] === '--repo') {
-    if (!GH_REPO.test(words[i + 1] ?? '')) return refuse('flag')
+    if (!GH_REPO.test(words[i + 1] ?? '') || !ownRepo(words[i + 1]!, place)) return refuse('flag')
     i += 2
   }
   const group = words[i] ?? ''
   const sub = words[i + 1] ?? ''
   const api = group === 'api'
   if (api) {
-    if (!GH_API_PATH.test(sub)) return refuse('flag')
+    // `:` は受けない（`repos/o/r/compare/main...a:feature` は、fork の持ち主のブランチとの差分を返す）
+    if (!GH_API_PATH.test(sub) || sub.includes(':')) return refuse('flag')
+    const named = /^\/?repos\/([^/]+\/[^/]+)/.exec(sub)
+    if (named && !ownRepo(named[1]!, place)) return refuse('flag')
   } else if (!Object.hasOwn(GH_READS, group) || !GH_READS[group]!.has(sub)) return refuse('command')
   for (let k = i + 2; k < words.length; k++) {
     const text = words[k]!
     if (!text.startsWith('-')) {
       // フラグでない語（番号・ブランチ）。`gh api` は読む先 1 つだけ。URL や `host/owner/repo` は受けない（問い合わせる先のホストを選べる）
-      if (api || text.includes('://') || text.includes('@') || text.split('/').length > 2) return refuse('flag')
+      // 受けるのは番号・タグ・`/` の無い名前だけ: `a/b`（`gh repo view a/b`）・`a/b#5`・URL は、ほかのリポジトリを名指しできる。
+      // `gh repo view` は語を 1 つも受けない（その位置の語はリポジトリの名前そのもの）
+      if (api || group === 'repo' || !/^[\w.-]+$/.test(text)) return refuse('flag')
       continue
     }
     const eq = text.startsWith('--') ? text.indexOf('=') : -1
     const name = eq < 0 ? text : text.slice(0, eq)
     if (api && name !== '--paginate') return refuse('flag')
     if (name === '-R' || name === '--repo') {
-      if (!GH_REPO.test(eq < 0 ? (words[++k] ?? '') : text.slice(eq + 1))) return refuse('flag')
+      const named = eq < 0 ? (words[++k] ?? '') : text.slice(eq + 1)
+      if (!GH_REPO.test(named) || !ownRepo(named, place)) return refuse('flag')
     } else if (GH_VALUE.has(name)) {
       // 値が `-` で始まるものは受けない（サブコマンドによって値を取る・取らないが違うフラグで、読み方が gh とずれない）
       const value = eq < 0 ? words[++k] : text.slice(eq + 1)
-      if (value === undefined || value.startsWith('-')) return refuse('flag')
+      // 値の字も絞る: 空白・引用符・`:` を含む値は、gh が検索の問い合わせに組み込むときに別の条件（`repo:a/b`）として読まれかねない
+      if (value === undefined || value.startsWith('-') || !/^[\w.@/,-]+$/.test(value)) return refuse('flag')
     } else if (!GH_BARE.has(text)) return refuse('flag')
   }
 }
@@ -383,6 +416,9 @@ const COMMANDS: Record<string, Check> = {
   git: gitCheck,
   gh: ghCheck,
 }
+
+/** ファイルにも cwd にも触らないコマンド（cwd がホームのあたりでも受ける）。`gh` は cwd のリポジトリを引くので入れない */
+const NO_FILES = new Set(['echo', 'true', 'false', 'date', 'uname', 'whoami', 'which', 'basename', 'dirname', 'pwd'])
 
 /** 読むだけと分かっているコマンドの名前（文書・テスト用） */
 export const READ_ONLY_COMMANDS: readonly string[] = Object.keys(COMMANDS)
@@ -492,6 +528,8 @@ class Reader {
     const args = words.slice(1)
     const check = Object.hasOwn(COMMANDS, name) ? COMMANDS[name] : undefined
     if (!check) return refuse('command')
+    // cwd がホームのあたりなら、ファイルに触るコマンドは引数が無くても受けない（`ls`・始点の無い `find`・`git diff` は cwd を読む）
+    if (!NO_FILES.has(name) && inHomeZone(place.root)) return refuse('path')
     // `$( … )` の結果を受けてよいのは、出すだけのコマンドだけ
     if (check !== prints && args.some((w) => w.opaque)) return refuse('opaque')
     check(args, place, piped)
@@ -571,7 +609,7 @@ export const READ_ONLY_MAX_CHARS = 1000
  * 読むだけと分かっているコマンドか（#749）。そうなら空、違えば理由の種類。**分からないものは全部「違う」**。
  * `cwd` はセッションの行のもの（分からなければ、ファイルを読む形・`cd` は通さない）
  */
-export function notReadOnly(command: string, cwd: string): NotReadOnly | '' {
+export function notReadOnly(command: string, cwd: string, repo = ''): NotReadOnly | '' {
   // 字の種類を先に絞る: タブ・改行以外の制御文字（`\r` も）は読めない側
   // eslint-disable-next-line no-control-regex
   if (!command.trim() || command.length > READ_ONLY_MAX_CHARS || /[\u0000-\u0008\u000b-\u001f\u007f]/.test(command)) return 'syntax'
@@ -579,7 +617,7 @@ export function notReadOnly(command: string, cwd: string): NotReadOnly | '' {
   const root = cwd.startsWith('/') ? normalize(cwd) : ''
   try {
     const reader = new Reader(command)
-    reader.list({ dir: root, root }, false)
+    reader.list({ dir: root, root, repo: /^[\w.-]+\/[\w.-]+$/.test(repo) ? repo.toLowerCase() : '' }, false)
     return reader.done() ? '' : 'syntax'
   } catch (err) {
     if (err instanceof Refused) return err.kind

@@ -1,10 +1,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { NOT_READ_ONLY_TEXT, notReadOnly, READ_ONLY_COMMANDS, READ_ONLY_MAX_CHARS } from './bashReadOnly.ts'
+import { inHomeZone, NOT_READ_ONLY_TEXT, notReadOnly, READ_ONLY_COMMANDS, READ_ONLY_MAX_CHARS } from './bashReadOnly.ts'
 
 // コマンドは全部作り物。**このテストはコマンドを 1 つも実行しない**（文字列を判定の関数に渡すだけ）
 const CWD = '/work/repo'
-const check = (command: string, cwd = CWD) => notReadOnly(command, cwd)
+/** そのセッションのリポジトリ（作り物） */
+const REPO = 'o/r'
+const check = (command: string, cwd = CWD, repo = REPO) => notReadOnly(command, cwd, repo)
 
 test('notReadOnly: 読むだけと分かっているコマンドと構文だけでできていれば通す（#749）', () => {
   const ok = [
@@ -333,17 +335,36 @@ test('notReadOnly: 読む先・行き先は cwd の中だけ。秘密が入っ�
     'cat sub/.aws/credentials',
   ]
   assert.deepEqual(secret.map((c) => [c, check(c)]).filter(([, got]) => got !== 'secret'), [])
-  // cwd が分からなければ、ファイルを読む形・cd は通さない。読まないコマンドは通す
+  // cwd が分からなければ、ファイルや cwd に触るコマンドは通さない。触らないコマンドは通す
   assert.equal(check('cat a.txt', ''), 'path')
   assert.equal(check('ls sub', ''), 'path')
-  assert.equal(check('git status', ''), '')
-  assert.equal(check('echo "$(git rev-parse HEAD)"', ''), '')
+  assert.equal(check('git status', ''), 'path', 'cwd が分からなければ、ホームかもしれないので cwd を読むコマンドも通さない')
+  assert.equal(check('echo "$(git rev-parse HEAD)"', ''), 'path')
+  assert.equal(check('echo "$(date)"', ''), '')
   // cwd より上の階層の名前では秘密と見ない（`secrets-app/` の中の普通のファイル）
   assert.equal(check('cat src/a.ts', '/work/secrets-app'), '')
-  // cwd がホームそのもの・その上なら、ファイルを読む形は通さない（履歴・シェルの設定・ほかの記録まで「cwd の中」になる）
-  for (const home of ['/Users/x', '/Users/x/', '/home/x', '/root', '/var/root', '/', '/Users', '/home']) {
-    for (const c of ['cat .zsh_history', 'cat notes.txt', 'ls Library', 'grep x .zshrc', 'head -1 work/a.txt']) assert.equal(check(c, home), 'path', `${c} @ ${home}`)
-    assert.equal(check('git status', home), '', home)
+  // cwd がホームのあたりなら、ファイルに触るコマンドは引数が無くても通さない（履歴・シェルの設定・ほかの記録まで「cwd の中」になる）
+  const HOMES = [
+    '/Users/x', '/Users/x/', '/home/x', '/root', '/var/root', '/', '/Users', '/home',
+    // 同じホームを指す別の書き方・大文字小文字違い
+    '/users/x', '/USERS/x', '/private/var/root', '/System/Volumes/Data/Users', '/Volumes/D/home/',
+    '/System/Volumes/Data', '/System/Volumes/Data/', '/Volumes/Macintosh HD', '/System/Volumes/Data/private/var/root', '/System/Volumes/Data/root', '/Volumes/D/var/root/.ssh', '/System/Volumes/Data/Users/x', '/Volumes/D/Users/x', '/Volumes/D/home/x',
+    // ホームの直下の置き場と、その中
+    '/Users/x/.claude', '/Users/x/.claude/projects/p', '/Users/x/.ssh', '/Users/x/.config/gh', '/Users/x/.agent-feed', '/Users/x/Library/Cookies', '/home/x/.aws',
+    '/Users/x/.other', '/Users/x/.other/sub',
+  ]
+  for (const home of HOMES) {
+    for (const c of ['cat .zsh_history', 'cat notes.txt', 'cat history.jsonl', 'cat config', 'ls Library', 'grep x .zshrc', 'head -1 work/a.txt', 'ls', 'ls -laR', 'find', "find -name '*hist*'", 'find . -type f', 'git diff', 'git show', 'git log --stat', 'git ls-files', 'git status', 'echo "$(git status)"', 'ls | wc -l', 'gh pr view 12']) {
+      assert.equal(check(c, home), 'path', `${c} @ ${home}`)
+    }
+    for (const c of ['echo hi', 'pwd', 'date +%s', 'echo "$(date)"']) assert.equal(check(c, home), '', `${c} @ ${home}`)
+    assert.equal(inHomeZone(home), true, home)
+  }
+  // ホームの下の作業ディレクトリは受ける（`.` で始まる置き場の下に持つリポジトリも）
+  for (const work of ['/Users/x/work', '/Users/x/work/app', '/home/x/src/app', '/Users/x/.ghq/github.com/o/r', '/Users/x/.ghq/github.com/o/r.git/dev', '/work/repo', '/srv/app']) {
+    assert.equal(inHomeZone(work), false, work)
+    assert.equal(check('cat a.txt', work), '', work)
+    assert.equal(check('git status', work), '', work)
   }
   assert.equal(check('cat a.txt', '/Users/x/work'), '')
   // cwd の中の、秘密でない名前
@@ -677,6 +698,29 @@ test('notReadOnly: git は決まった形だけ。リビジョン・パス・pat
   assert.equal(check('git blame src/index.ts'), 'command')
   // フラグの順は問わない。引用符で囲んでも同じ語
   for (const c of ['git log -3 --oneline', "git log '--oneline'", 'git --no-pager diff --stat', 'git rev-parse HEAD --abbrev-ref', 'git tag', 'git branch', 'git show', 'git diff', 'git log', "git log --format='%h %an: %s [%cr]'"]) assert.equal(check(c), '', c)
+})
+
+test('notReadOnly: gh が読んでよいのは、そのセッションのリポジトリだけ（ほかのリポジトリの issue・コメントを、人の目を通さずに文脈へ入れない）', () => {
+  const own = ['gh pr view 12', 'gh -R o/r pr view 12', 'gh pr view 12 --repo o/r', 'gh pr view 12 --repo=O/R', 'gh issue view 5 -R o/r --comments', 'gh api repos/o/r/pulls/12', 'gh api /repos/O/R/issues/5/comments', 'gh api rate_limit', 'echo "$(gh api repos/o/r/issues/5/comments)"']
+  for (const c of own) assert.equal(check(c), '', c)
+  // 位置の語・検索の値でほかのリポジトリを名指しする形も通さない
+  for (const c of ['gh repo view a/b', 'gh repo view b', 'gh repo view a/b --json description', 'gh repo view o/r', "gh pr view 'a/b#5'", "gh issue view 'a/b#5'", 'gh pr view feature/x', 'gh pr view https://github.com/a/b/pull/5', "gh pr list --search 'repo:a/b'", "gh issue list --search 'repo:a/b' --json title,body", 'gh pr list --search=repo:a/b', 'gh issue list -S x']) {
+    assert.equal(check(c), 'flag', c)
+    assert.equal(check(c, CWD, ''), 'flag', c)
+  }
+  for (const c of ['gh api repos/o/r/compare/main...a:feature', 'gh api repos/o/r/compare/main...a:r2:feature', "gh pr list --author 'x\" repo:a/b \"'", "gh issue list --label 'x repo:a/b'", 'gh pr list --label repo:a/b', 'gh pr list --head a:branch', "gh pr list --author ''"]) assert.equal(check(c), 'flag', c)
+  for (const c of ['gh api repos/o/r/compare/main...feature', 'gh pr list --author octocat --label bug,ui --base main --head my/branch --json number,title --limit 5']) assert.equal(check(c), '', c)
+  for (const c of ['gh repo view', 'gh repo view --json description', 'gh pr view my-branch', 'gh release view v1.2.3', 'gh run view 123456']) assert.equal(check(c), '', c)
+  const other = ['gh -R a/b pr view 12', 'gh pr view 12 --repo a/b', 'gh pr view 12 --repo=a/b', 'gh issue view 5 -R a/b --comments', 'gh pr list -R o/rr', 'gh api repos/a/b/issues/5/comments', 'gh api /repos/a/b/pulls', 'gh api repos/o/r2/pulls', 'gh api repos/oo/r/pulls', 'echo "$(gh api repos/a/b/issues/5/comments)"', 'gh pr view 12 -R o/r -R a/b']
+  for (const c of other) assert.equal(check(c), 'flag', c)
+  // セッションのリポジトリが分からなければ、名指しした形は全部通さない（名指ししない形は、gh が cwd から引く）
+  for (const c of ['gh -R o/r pr view 12', 'gh pr view 12 --repo o/r', 'gh api repos/o/r/pulls/12']) {
+    assert.equal(check(c, CWD, ''), 'flag', c)
+    assert.equal(check(c, CWD, 'not a repo'), 'flag', c)
+    assert.equal(notReadOnly(c, CWD), 'flag', c)
+  }
+  assert.equal(check('gh pr view 12', CWD, ''), '')
+  assert.equal(check('gh api rate_limit', CWD, ''), '')
 })
 
 test('notReadOnly: コマンド置換の結果を渡してよいのは echo だけ', () => {

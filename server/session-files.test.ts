@@ -174,7 +174,7 @@ test('タグ付きの端末・whois が聞けなかった要求・whois と合�
   }
 })
 
-test('/mcp からは読めない（ファイルを読む道具が無く、口のパスも通らない）', async () => {
+test('/mcp からは読めない（ファイルを読む道具が無い。`/mcp` の下のパスは REST の線に落ちて、タグ付きは 401）', async () => {
   const headers = { 'X-Forwarded-For': TAGGED_ADDR, 'X-Forwarded-Proto': 'https', Host: SERVE_HOST, 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' }
   const list = await send('/mcp', headers, JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }))
   assert.equal(list.status, 200, list.body)

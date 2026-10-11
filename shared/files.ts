@@ -99,7 +99,7 @@ const DATA_EXT = new Set(['json', 'jsonc', 'json5', 'yml', 'yaml', 'toml', 'ini'
  * **名前で断るファイル**（秘密が入っていそうなもの。#603 の決めること 1）。パスのどこかの階層が鍵の置き場、または
  * ファイル名が `.env*`・`*.env`・`id_*`・`*credential*`・`*secret*`・`*.pem`・`*.key`・`token.json`・`auth.json` などに当たれば true。
  * **中身は見ない**（読む前に断るためのもの）。大文字小文字は区別しない。
- * 名前だけで決めるので、すり抜ける名前は必ず残る（`settings.json` に鍵が書かれている、など）。そのために口はループバックだけにしてある
+ * 名前だけで決めるので、すり抜ける名前は必ず残る（`settings.json` に鍵が書かれている、など）。すり抜けたものは、口を出す相手（ループバックと、whois で本人と分かった tailnet のユーザーの端末。#768）には読める
  */
 export function isSecretPath(path: string): boolean {
   const parts = path.split(/[\\/]+/).filter(Boolean).map((p) => p.toLowerCase())

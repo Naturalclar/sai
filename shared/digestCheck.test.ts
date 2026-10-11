@@ -330,3 +330,22 @@ test('本文にある字は咎めない（#780。本文の言葉のまま、が�
   assert.deepEqual(codes('画面の「设置」というボタンを押すと開きます。', '「设置」のボタンで开くよ').length, 0, '开 は JIS X 0213 にあるので一覧に入れていない')
   assert.deepEqual(codes('画面の「设置」というボタンを押すと開きます。', '「设置」を押して确认したよ'), ['foreign_script'], '本文に無い字は別')
 })
+
+test('requestSentence: 長い文でも、理由の接続の後ろの節が頼みの形なら、その節だけを返す（#779）', () => {
+  const reason = 'あ'.repeat(85)
+  assert.equal(requestSentence(`${reason}が分かれば表のどこに入るか決まるので、聞けたら教えてください。`), '聞けたら教えてください。')
+  assert.equal(requestSentence(`${reason}を直しましたが、設定を確認してください(未確認です)。`), '設定を確認してください(未確認です)。')
+  assert.equal(requestSentence(`${reason}、確認してください。`), '', '読点だけでは切らない（目的語が落ちて意味が変わる）')
+  assert.equal(requestSentence(`${reason}ので、${'い'.repeat(80)}してください。`), '', '節がまだ長ければ返さない')
+  assert.equal(requestSentence(`${reason}ので、通ります。`), '', '節が頼みの形でなければ返さない')
+  assert.equal(requestSentence(`${reason}ので、どうしますか？`), '', '質問は拾わない')
+  assert.equal(requestSentence(`「${'う'.repeat(70)}ので、確認してください」と言われた件を直しました。`), '', '引用の中の接続では切らない（切ると引用の途中からの節になる）')
+  assert.equal(requestSentence(`${reason}を入れたので CI が通ったのを確認してから、マージしてください。`), '', '「〜してから、」では切らない（前提が落ちる。#785 のレビュー）')
+  assert.equal(requestSentence(`${reason}のレビューが済んで「マージして」と言ってもらえれば私がマージしますので、先に差分を確認してください。`), '', '落とす前半に引用された依頼があれば採らない（口は頼みを書かないので、どこにも出なくなる）')
+  assert.equal(requestSentence(`設定を確認してください。${reason}ので、聞けたら教えてください。`), '設定を確認してください。', '上限以内の頼みの文があれば、切った節より先に選ぶ')
+})
+
+test('stripAsks: 頼みの節を落として接続で終わる文は、接続も落とす（#785 のレビュー）', () => {
+  assert.equal(stripAsks('それが分かれば表のどこに入るか決まるので、聞けたら教えてね！'), 'それが分かれば表のどこに入るか決まる。')
+  assert.equal(stripAsks('テストは通りましたが、レビューしてください。'), 'テストは通りました。')
+})

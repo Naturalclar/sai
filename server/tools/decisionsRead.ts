@@ -99,21 +99,14 @@ function fences(): (line: string) => boolean {
  * 見出しが `match` に当たる節を、出てきた順に返す。節は、同じか上の階層の見出しまで（下の階層の見出しは節の中）。
  * コードブロックの中の `#` は見出しにしない。当たった節の中の、当たる小見出しは節を分けない（同じ項目を 2 回数えない）。
  * 字下げした見出し（項目の中に書いた `# メモ`）は、節を開くことはあっても閉じない。
- * 行の頭から始まる HTML コメント（`<!-- … -->`。雛形）の中は読まない。行の途中・コードの中の `<!--` はただの字
+ * HTML コメント（`<!-- … -->`）は特別扱いしない（中の見出しも読む。コメントの開け閉めを追うと、閉じ損ねたときにあとの本文が全部消える）
  */
 export function sections(markdown: string, match: (title: string) => boolean): Section[] {
   const found: Section[] = []
   const open: Section[] = []
   const inCode = fences()
-  let commented = false
   for (const line of (markdown ?? '').split(/\r?\n/)) {
     const code = inCode(line)
-    if (!code && !commented && /^ {0,3}<!--/.test(line)) commented = true
-    if (commented) {
-      // 閉じの `-->` がある行まで（開けた行で閉じていれば、その 1 行だけ）
-      if (line.indexOf('-->', line.indexOf('<!--') + 2) >= 0 || (!line.includes('<!--') && line.includes('-->'))) commented = false
-      continue
-    }
     const h = code ? null : heading(line)
     if (h) {
       const level = h.level
@@ -133,8 +126,11 @@ export function sections(markdown: string, match: (title: string) => boolean): S
 }
 
 // 頭だけを見る（`(.*)$` を付けない。長い 1 行でも止まらず、長い項目も落とさない）
-const NUMBERED = /^( *)(\d{1,3})[.)][ \t]+/
-const BULLET = /^( *)[-*+][ \t]+/
+// 印のあとは空白（全角・NBSP も）か行の終わり（`1.` だけの行の次に文を書いた形）
+const NUMBERED = /^( *)(\d{1,3})[.)](?:[ \t\u00a0\u3000]+|$)/
+const BULLET = /^( *)[-*+](?:[ \t\u00a0\u3000]+|$)/
+/** 罫線（`* * *`・`- - -`・`---`） */
+const RULE = /^ {0,3}([-*_])(?: *\1){2,} *$/
 /** 「決めることは無い」と書いただけの行 */
 const NOTHING = /^(?:\*\*)?(?:なし|無し|ない|ありません|特になし|特に無し|なし。|\(なし\)|（なし）|none|n\/a)(?:\*\*)?[。.]?$/i
 
@@ -159,6 +155,7 @@ export function listItems(lines: readonly string[]): Item[] {
       else if (cur) cur.whole += `\n${line.trim()}`
       continue
     }
+    if (RULE.test(line)) continue
     const num = NUMBERED.exec(line)
     const dot = num ? null : BULLET.exec(line)
     const indent = (num ?? dot)?.[1]!.length ?? 0
@@ -170,8 +167,11 @@ export function listItems(lines: readonly string[]): Item[] {
       continue
     }
     if (!line.trim()) continue
-    if (cur) cur.whole += `\n${line.trim()}`
-    else loose.push(line.trim())
+    if (cur) {
+      // 印だけの行（`1.`）の次に書いた文は、その項目の 1 行目
+      if (!cur.head) cur.head = line.trim()
+      cur.whole = cur.whole ? `${cur.whole}\n${line.trim()}` : line.trim()
+    } else loose.push(line.trim())
   }
   const real = items.filter((i) => !NOTHING.test(i.head))
   if (real.length || items.length) return real
@@ -219,8 +219,10 @@ export function namedInTitle(title: string): number[] {
   const out = new Set<number>()
   const text = half(title ?? '')
   for (const m of text.matchAll(new RegExp(String.raw`決めること[」』]?\s*(${NUMBER_LIST})(?=${NAMED_END})`, 'g'))) {
-    // 手前でほかの issue / PR を指していれば（`#12 の本文の「決めること」2`・`issue 12 の決めること 2`）、この issue の番号にしない
-    if (/#\d|(?:issue|pr)\s*\d/i.test(text.slice(0, m.index))) continue
+    // ほかの issue / PR の「決めること」（`#12 の本文の「決めること」2`・`issues/12 の決めること 2`・`別の issue にある決めること 2`）は、
+    // この issue の番号にしない: 手前に `#12` の形があるか、「決めること」のすぐ前が「…の」「…にある」で終わっている（「本文の」は自分の本文）
+    const lead = text.slice(0, m.index).replace(/[「『\s]+$/, '').replace(/本文の$/, '').trimEnd()
+    if (/#\d/.test(lead) || /(?:の|にある|での|にある「)$/.test(lead)) continue
     expand(m[1]!, out)
   }
   return [...out].sort((a, b) => a - b)
@@ -288,8 +290,8 @@ export function recommendOf(whole: string): string | undefined {
   return sentence ? clip(sentence, DECISION_RECOMMEND_CHARS) : undefined
 }
 
-/** 見出しにせずに書いた「まだ決めていないこと」「決めないまま閉じること」の行（`**まだ決めていないこと**`・`- まだ決めていないこと:`） */
-const NOT_YET = /^(?:[-*+>]\s*|\d{1,3}[.)]\s+)?[*_【[（(「『\s]*(?:まだ決めていない|決めないまま閉じる)/
+/** 見出しにせずに書いた「まだ決めていないこと」「決めないまま閉じること」の行（`**まだ決めていないこと**`・`- まだ決めていないこと:`）。行のどこかにあれば、そこから下は決まったと読まない */
+const NOT_YET = /まだ決めていない|決めないまま閉じる|未決/
 
 const starts = (word: string) => (title: string): boolean => plain(title).startsWith(word)
 const isAsk = starts('決めること')

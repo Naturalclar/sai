@@ -27,13 +27,60 @@ const UNASKED = new Set(['head', 'tail', 'grep', 'wc', 'sort', 'uniq', 'cat', 'c
  * パスで書いたもの（`/usr/bin/env`）も同じに読む（下で basename を見る）
  */
 const WRAPPERS = new Set(['time', 'command', 'builtin', 'exec', 'env', 'nice', 'ionice', 'caffeinate', 'stdbuf', 'timeout', 'setsid', 'unbuffer', 'arch', 'chronic', 'watch', 'noglob', 'nocorrect', '!'])
-/** 前に付く語ではないが、引数をコマンドとして走らせる語。実機で `Bash(nohup:*)`・`Bash(xargs:*)` は後ろの `touch` を通した（#755） */
-const ARG_RUNNERS = new Set(['nohup', 'xargs'])
+/**
+ * 一覧に足した前に付く語（#755 の残り）: 権限を上げる・別の利用者や別の根で走らせる語と、ほかの前に付く語。
+ * 1 語のルール（`Bash(sudo:*)`）は、その語で始まれば何でも通す形なので組まない。実機では確かめていない（組まない側に倒すだけ）。
+ * **拒否の一覧なので、ここに無い前に付く語は 1 語のルールのまま残る**（`sg` は ast-grep の実行名と同じなので入れていない）
+ */
+const MORE_WRAPPERS = new Set([
+  'sudo', 'doas', 'su', 'pkexec', 'run0', 'runuser', 'newgrp', 'chroot', 'fakeroot', 'unshare', 'nsenter', 'sandbox-exec', 'systemd-run',
+  'flock', 'gtimeout', 'gnice', 'gstdbuf', 'gtime', 'chrt', 'taskset', 'numactl', 'setarch', 'strace', 'ltrace', 'dtruss', 'rlwrap', 'script', 'faketime', 'torsocks', 'proxychains', 'proxychains4',
+])
+/**
+ * 前に付く語ではないが、引数をコマンドとして走らせる語。実機で `Bash(nohup:*)`・`Bash(xargs:*)` は後ろの `touch` を通した（#755）。
+ * `eval`・`ssh`・`parallel`・`entr`・`watchexec` は確かめていないが、引数がそのままコマンドになるので同じに倒す
+ */
+const ARG_RUNNERS = new Set(['nohup', 'xargs', 'eval', 'ssh', 'parallel', 'entr', 'watchexec'])
+/**
+ * シェルそのもの（#755 の残り）。1 語のルール（`Bash(bash:*)`）は `bash -c '<何でも>'` まで通すので書かない。
+ * 組むのは `bash scripts/x.sh` のように**2 語目がスクリプトの名前・パスの形**のときだけ（2 語の接頭辞。`SCRIPT_RULE_OK` のものだけ）。フラグつき（`bash -c`・`bash -lc`・`bash -x x.sh`）と
+ * 引数なし（`cat x | bash`）は組まない
+ */
+const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'ksh', 'mksh', 'ash', 'fish', 'csh', 'tcsh', 'pwsh', 'powershell'])
+/**
+ * コードをその場で受け取るインタプリタ（#755 の残り）。シェルと同じく 1 語のルールは書かず、2 語目がスクリプトの形のときだけ 2 語で組む。
+ * 版の付いた名前（`python3.12`・`ruby3.3`）も同じに読む。コードを渡すフラグ（`CODE_FLAG`）が頭にあれば組まない。
+ * 引数なし（標準入力からプログラムを読む。`cat a.py | python3`）も組まない。**ヒアドキュメントを受けた `python3` の例外（`python3HeredocRule()`）は別の道で、変えていない**
+ */
+const INTERPRETERS = /^(?:python|pypy|node|nodejs|bun|tsx|ts-node|ruby|perl|php|lua|luajit|Rscript|osascript|tclsh)[\d.]*$/
+/**
+ * スクリプトを名指しした 2 語のルールを組むシェル・インタプリタ。**実機で 2 語のルールの通り方を確かめたものだけ**
+ * （`bash`・`sh`・`zsh`・`perl`・`ruby` は 2026-10-11、`node` は #757。`python`・`python3`・`bun` は前から 2 語で組んでいた）。
+ * ここに無いもの（`php`・`osascript`・`fish`・`python3.12` など）は、スクリプトを名指ししていても組まない
+ */
+const SCRIPT_RULE_OK = new Set(['bash', 'sh', 'zsh', 'perl', 'ruby', 'node', 'python', 'python3', 'bun'])
+/**
+ * コードを渡すフラグ: `-` 1 つのフラグのどこかに `c` `e` `E` `p` `r` がある（`-c`・`-e`・`-pe`・`-0pe`・`-e1`・`node -p`・`php -r`。
+ * 数字や値がくっついた束も）か、`--eval` / `--print` の類。広めに当てる（`ruby -rjson x.rb` も断る）
+ */
+const CODE_FLAG = /^-[^-=]*[ceEpr]|^--(?:eval|print|command|execute|exec|run)(?:=|$)/
 /**
  * 走る場所を変えるフラグ（`git -C dir`・`env -C dir`・`make -C dir`・`pnpm -C dir` / `--dir`・`npm --prefix`。#755）。
- * 次の語（か `=` のあと）が行き先。`cd` と同じ線で見る
+ * 次の語（か `=` のあと）が行き先。`cd` と同じ線で見る。
+ * **知っている形の一覧**で、知らない CLI の場所を変えるフラグ（`-f <外のファイル>`・`--kubeconfig`・設定ファイルの中の行き先など）は追わない
  */
-const PLACE_FLAGS = new Set(['-C', '--dir', '--directory', '--prefix', '--cwd', '--git-dir', '--work-tree', '--manifest-path', '--chdir', '--project', '--workdir', '--filter-dir'])
+const PLACE_FLAGS = new Set([
+  '-C', '--dir', '--directory', '--prefix', '--cwd', '--git-dir', '--work-tree', '--manifest-path', '--chdir', '--project', '--workdir', '--filter-dir',
+  // #755 の残り: `terraform -chdir=dir`・`wsl --cd dir`・`composer --working-dir`・`docker compose --project-directory` など
+  '-chdir', '--cd', '--working-dir', '--working-directory', '--project-directory', '--project-dir',
+])
+/**
+ * 束ねた短いフラグの最後が `-C`（`tar -xzC dir`・`make -kC dir`）。次の語が行き先。
+ * **`tar` と `make` の仲間だけ**で見る（`tree -aC`・`rg -nC 3`・`git diff -MC`・`hexdump -vC x` の `C` は場所ではない）
+ */
+const BUNDLED_PLACE = /^-[A-Za-z]+C$/
+const BUNDLES_PLACE = new Set(['tar', 'gtar', 'bsdtar', 'make', 'gmake'])
+const bundledPlace = (base: string, w: string) => BUNDLES_PLACE.has(base) && BUNDLED_PLACE.test(w)
 
 /**
  * `cd` と一緒につなぐと、ルールが揃っていても必ず聞かれるコマンド（Claude Code が「cd のあとはパスを確かめられない」として止める。
@@ -63,12 +110,14 @@ const QUOTED_HEREDOC_OPEN = /^"\$\(cat <<(-?)(['"])(\w+)\2\n/
  * - `keyword`: `for` / `if` などの構文の語 / `assign_only`: 代入だけでコマンドが無い（`FOO=1`）
  * - `odd_command`: 先頭の語がコマンドの名前の形でない（`[`・`!`・`~/bin/x` など）。`\r` の混ざったコマンドもここ / `env_value`: 代入の値に空白や記号
  * - `cd_form`: `cd` の行き先が読めない（引数が 1 つでない・`-`・`*` `?` `[` を含む・`~user`・引用符つきの `~`・ホームが分からないときの `~`・
- *   最初の部品でない `cd ~/…`・`pushd` / `popd`・`command cd` / `builtin cd`・`CDPATH` に触った部品や `source` / `.` / `eval` のあとの相対の `cd`） / `cd_no_cwd`: `cwd` が分からない / `cd_outside`: 行き先が `cwd` の外
+ *   最初の部品でない `cd ~/…`・`pushd` / `popd`・`command cd` / `builtin cd`・`CDPATH` に触った部品や `source` / `.` のあとの相対の `cd`） / `cd_no_cwd`: `cwd` が分からない / `cd_outside`: 行き先が `cwd` の外
  * - `cd_then_write`: `cd` と書き込み系・`git` のつなぎ / `empty`: 部品が無い
- * - `wrapper`: 前に付くだけの語・引数をコマンドとして走らせる語で始まる（`env`・`nice`・`command`・`exec`・`nohup`・`xargs` など。#755）
+ * - `wrapper`: 前に付くだけの語・権限を上げる語・引数をコマンドとして走らせる語で始まる（`env`・`nice`・`command`・`exec`・`sudo`・`flock`・`nohup`・`xargs`・`eval`・`ssh` など。#755）
  * - `place_flag`: 場所を変えるフラグ（`-C`・`--dir`・`--prefix` など）の行き先が `cwd` の外か、読めない（#755）
  * - `bare_cli`: サブコマンドを持つ CLI の 2 語目がフラグや記号で、フラグごとの狭い接頭辞も作れない（`python3 -c '…'`・`git -c a.b=c …`・
- *   `git -C sub status`・`python3 -`。1 語のルールは CLI の全部を通すので書かない。#755）
+ *   `git -C sub status`・`python3 -`。1 語のルールは CLI の全部を通すので書かない。#755）。シェル・インタプリタの、フラグつき（`bash -c '…'`）・
+ *   コードを渡すフラグつき（`perl -e '…'`・`node -p x`）・引数なしやフラグだけ（`cat x | sh`・`cat a.py | python3 -u`）・標準入力の名指し（`bash /dev/stdin`）・
+ *   2 語のルールを確かめていないもの（`php x.php`・`python3.12 x.py`）もここ
  */
 export const BASH_NO_RULE_REASONS = [
   'expansion', 'redirect', 'heredoc', 'here_string', 'background', 'subshell', 'brace', 'comment', 'unclosed',
@@ -121,7 +170,7 @@ const PYTHON3_PLAIN_FLAGS = /^-[BbdEhiIOqsSuvVx]+$/
  * 当てるのは「標準入力からプログラムを読む」形だけ: `python3`・`python3 -`・`python3 -u -`・`python3 - a b`（`-` のあとは引数）。
  * `python3 -c '…' <<'EOF'`・`python3 -m x <<'EOF'`・`python3 tool.py <<'EOF'`（本文はプログラムでなく入力）・値を取るフラグつきは、
  * ヒアドキュメントごと断る（`takesHeredoc()` が同じこの関数で決める）。`words` は代入を除いたその部品の語。
- * ヒアドキュメントの無い、引数の無い `python3`（`cat a.py | python3`）は、前から `ruleHead()` が 1 語のルールにしている（#755 でも変わっていない。ここの例外ではない）
+ * ヒアドキュメントの無い、引数の無い `python3`（`cat a.py | python3`）は組まない（`bare_cli`。前は `ruleHead()` が 1 語のルールにしていた。#755 の残り）
  */
 function python3HeredocRule(words: readonly string[]): boolean {
   if (words[0] !== 'python3') return false
@@ -348,12 +397,12 @@ export const within = (dir: string, root: string) => dir === root || dir.startsW
  * 部品の語（`from` から後ろ）にある、場所を変えるフラグの行き先（`-C dir`・`--dir=dir`・くっつけた `-Cdir`）。無ければ空の配列。
  * 行き先の語が無いもの（`make -C` で終わる）は null（読めない）
  */
-function placeTargets(words: readonly string[], from: number): { target: string; at: number }[] | null {
+function placeTargets(words: readonly string[], from: number, base: string): { target: string; at: number }[] | null {
   const out: { target: string; at: number }[] = []
   for (let j = from; j < words.length; j++) {
     const w = words[j]!
     const eq = w.indexOf('=')
-    if (PLACE_FLAGS.has(w)) {
+    if (PLACE_FLAGS.has(w) || bundledPlace(base, w)) {
       if (j + 1 >= words.length) return null
       out.push({ target: words[j + 1]!, at: j + 1 })
     } else if (eq > 0 && PLACE_FLAGS.has(w.slice(0, eq))) {
@@ -378,14 +427,30 @@ function placeTargets(words: readonly string[], from: number): { target: string;
  * 前の 1 語より必ず狭い。次の形は null（組まない）:
  * - 途中にコマンドの名前・パス・フラグの形でない語がある（`python3 -c '…'`・`node -e '…'` のコード、`git -c a.b=c …`、`python3 -`）
  * - 場所を変えるフラグが頭にある（`git -C sub status`。`git -C sub` は、そこでの git の全部を通す）
+ * - シェル・インタプリタ（`SHELLS`・`INTERPRETERS`）の、フラグつき・コードを渡すフラグつき・引数なし・インタプリタのフラグだけ（版・使い方を出して終わる `--version`・`--help`・`node -v` などだけは組む。シェルはフラグつきを全部断る）・標準入力の名指し・
+ *   `SCRIPT_RULE_OK` に無いもの（#755 の残り。`bash -c '…'`・`perl -e '…'`・`cat x | sh`・`cat a.py | python3 -u`・`bash /dev/stdin`・`php x.php`）
  */
 function ruleHead(words: readonly string[]): string | null {
   const first = words[0]!
-  if (!SUBCOMMAND_CLIS.has(first) || words.length < 2) return first
+  // パスで書いたもの（`/usr/bin/git`）も同じに読む。接頭辞は書かれた字のまま
+  const base = first.slice(first.lastIndexOf('/') + 1)
+  const shell = SHELLS.has(base)
+  const runsCode = shell || INTERPRETERS.test(base)
+  if (!SUBCOMMAND_CLIS.has(base) && !runsCode) return first
+  // 2 語のルールを実機で確かめていないシェル・インタプリタには、どの形でも組まない
+  if (runsCode && !SCRIPT_RULE_OK.has(base)) return null
+  // 引数なしのシェル・インタプリタは標準入力からコードを読む。1 語のルールは `-c` / `-e` まで通すので書かない
+  if (words.length < 2) return runsCode ? null : first
   // サブコマンド・スクリプトの形: 名前（`:` 入りのスクリプト名も。実機で `Bash(pnpm a:b:*)` は `pnpm a:b` を通し、`pnpm a:c` は聞かれた）と
   // パス（`node scripts/x.mjs`・`npx @scope/pkg`）。前はパスの形を 1 語（`Bash(node:*)`）にしていた
   const named = /^[\w.@/](?:[\w.@/:-]*[\w.-])?$/
-  if (named.test(words[1]!)) return `${first} ${words[1]}`
+  // 標準入力を名指しした形（`bash /dev/stdin`・`sh /dev/fd/0`）は、引数なしと同じ（コードはパイプの前から来る）
+  // 別の綴り（`//dev/stdin`・`/tmp/../dev/stdin`・`../../dev/stdin`）も: 絶対パスは畳んでから見て、`..` を含む相対パスは `dev` / `proc` の階層があれば当てる
+  // （`node ../dev/tools/x.mjs` のようなふつうのスクリプトも断る側に倒れる。cwd を見ずに決めるため）。大文字小文字は区別しない（Mac では `/DEV/stdin` も開ける）
+  const stdinPath = (w: string) => (w.startsWith('/') ? /^\/(?:dev|proc)\//i.test(normalize(w)) : w.split('/').includes('..') && /(?:^|\/)(?:dev|proc)\//i.test(w))
+  if (named.test(words[1]!)) return runsCode && stdinPath(words[1]!) ? null : `${first} ${words[1]}`
+  // シェル・インタプリタで、名前・パスの形の語（スクリプト）を 1 つも見ていないか
+  let scriptless = runsCode
   // フラグ。`-5` のような数字も（`git --no-pager log --oneline -5`）
   const flag = /^--?[A-Za-z0-9][\w.-]*(?:=[\w./:@%+,-]*)?$/
   // すぐ前が `=` の付かないフラグか（次の語はその値かもしれない）
@@ -393,15 +458,25 @@ function ruleHead(words: readonly string[]): string | null {
   for (let n = 1; n < words.length; n++) {
     const w = words[n]!
     if (flag.test(w)) {
-      if (PLACE_FLAGS.has(w.split('=')[0]!) || /^-C./.test(w)) return null
+      if (PLACE_FLAGS.has(w.split('=')[0]!) || /^-C./.test(w) || bundledPlace(base, w)) return null
+      // シェルはフラグつきを全部、インタプリタはコードを渡すフラグを組まない（`bash -c ls`・`node -p x` のように後ろが名前の形でも）
+      if (shell || (runsCode && CODE_FLAG.test(w))) return null
       maybeValue = !w.includes('=')
     } else if (named.test(w)) {
+      if (runsCode && stdinPath(w)) return null
       if (!maybeValue) return words.slice(0, n + 1).join(' ')
+      scriptless = false
       maybeValue = false
     } else {
       return null
     }
   }
+  // フラグだけのインタプリタは標準入力からコードを読む（`cat a.py | python3 -u`）。`Bash(python3 -u:*)` は後ろに `-c '…'` を足した形まで覆う。
+  // 版・使い方を出して終わる形だけは組む: `--version`・`--help`・`-h`、`node -v`（#757 で実機で通した形）・`perl -v`・`python3 -V`。
+  // ほかの `-v` は入れない（`ruby -v`・`python3 -v` は続けて走る）。**ほかのフラグだけの形は、標準入力を読まないもの（`node --test`）も断る**
+  // （フラグの意味を知らないので見分けない。スクリプトを名指しした `node --test x.test.ts` は組む）
+  const exits = (w: string) => w === '--version' || w === '--help' || w === '-h' || (w === '-v' && ['node', 'bun', 'perl'].includes(base)) || (w === '-V' && /^python/.test(base))
+  if (scriptless && !words.slice(1).every(exits)) return null
   return words.join(' ')
 }
 
@@ -429,7 +504,7 @@ export function bashRulePlan(command: string, cwd: string, home: string): { pref
   const split = splitParts(command)
   if (typeof split === 'string') return no(split)
   const { parts, quoted, folded, heredocs } = split
-  // 前の部品が `cd` の探し方を変えたかもしれない（`CDPATH` に触った・中身の見えない `source` / `.` / `eval`）。そのあとの相対の `cd` は行き先が読めない
+  // 前の部品が `cd` の探し方を変えたかもしれない（`CDPATH` に触った・中身の見えない `source` / `.`）。そのあとの相対の `cd` は行き先が読めない（`eval` は下で先に `wrapper` で返る）
   let cdPathTouched = false
   if (parts.length === 0) return no('empty')
   const prefixes: string[] = []
@@ -474,15 +549,15 @@ export function bashRulePlan(command: string, cwd: string, home: string): { pref
       cd = true
       continue
     }
-    if (words.some((w) => /^CDPATH(?:\+?=|$)/.test(w)) || ['source', '.', 'eval'].includes(first)) cdPathTouched = true
+    if (words.some((w) => /^CDPATH(?:\+?=|$)/.test(w)) || ['source', '.'].includes(first)) cdPathTouched = true
     // 前に付くだけの語・引数をコマンドとして走らせる語には組まない（その語で始まれば何でも通るルールになる。#755）
     const base = first.slice(first.lastIndexOf('/') + 1)
-    if (WRAPPERS.has(base) || ARG_RUNNERS.has(base)) return no('wrapper')
+    if (WRAPPERS.has(base) || MORE_WRAPPERS.has(base) || ARG_RUNNERS.has(base)) return no('wrapper')
     // 場所を変えるフラグは `cd` と同じ線で見る（実機で `Bash(git:*)` は `git -C <外> tag` を、`Bash(pnpm run:*)` は
     // `pnpm run --dir <外> x` を通した。#755）。行き先が外・読めない（語が無い・`~`・`*` `?` `[`・畳んだ語・`cwd` が分からない）なら組まない。
     // 中なら今までどおり（`dir` は動かさない。場所が変わるのはそのコマンドだけ）
     // 読むだけのコマンド（`ls -C`・`jq -C`・`grep -C 3`）の同じ字のフラグは場所ではないので見ない
-    const places = UNASKED.has(first) ? [] : placeTargets(words, i + 1)
+    const places = UNASKED.has(first) ? [] : placeTargets(words, i + 1, base)
     if (places === null) return no('place_flag')
     for (const { target, at } of places) {
       if (!dir || !target || target.startsWith('~') || /[*?[]/.test(target) || folded.has(`${index}:${at}`)) return no('place_flag')

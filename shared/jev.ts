@@ -4,7 +4,8 @@
 // **Jev は外部 API なので、ここで組み立てた文が外に出る**（「SAI は外に出さない」の例外。入切できて既定は入、
 // 鍵 JEV_API_KEY が無ければ何も送らない）。そのため送るものを絞る: ツール名・コマンド・パス・理由・Codex のダイアログの中身まで。
 // **ファイルの中身（Write / Edit の本文）・メッセージの本文と cwd は送らない**（input は丸ごと送らず、拾う項目を名指しする）
-import type { Approval, JevNone } from './types.ts'
+import { NOT_READ_ONLY_TEXT, notReadOnly } from './bashReadOnly.ts'
+import type { Approval, JevNone, NoRuleReason } from './types.ts'
 
 /**
  * Jev に聞く文。**状態について書いた 1 つの主張**にする（Jev は「この文がどれだけ本当か」を 0..1 で返す）。
@@ -167,21 +168,47 @@ export function jevAutoEligible(approval: Pick<Approval, 'tool_name' | 'agent' |
  * - `none`: この回の確率が閾値に届いていない（人が見て決める。自動を期待する回ではないので理由も残さない）
  * - `skip`: この回は閾値以上なのに自動では答えない（Bash 以外・ルールを作れない・ルールの確率が低い）
  * - `wait`: ルールの確率がまだ届いていない
- * - `allow`: 答える
+ * - `allow`: [常に許可] で答える（ルールを書く）
+ * - `once`: **今回だけ許可**で答える（#749。ルールを作れない形。覚えない）
  * `rule` は書かれるルールのうち**確率が一番低いもの**の表記（#705。部品ごとに聞く。作れなければ null）、`ruleSafe` はその確率（1 つでもまだなら undefined、
  * 聞いて失敗したら `'failed'`。失敗は聞き直さないので `wait` のままにすると理由が永久に残らない。#556 のレビュー）
  */
-export type JevAutoDecision = { kind: 'none' } | { kind: 'wait' } | { kind: 'allow' } | { kind: 'skip'; reason: string }
+export type JevAutoDecision = { kind: 'none' } | { kind: 'wait' } | { kind: 'allow' } | { kind: 'once' } | { kind: 'skip'; reason: string }
+
+/**
+ * ルールを作れない形を「今回だけ許可」に回すための材料（#749）。渡さなければ今までどおり、ルールを作れない形には答えない。
+ * `noRule` はルールが空だった理由、`cwd` はセッションの行のもの
+ */
+export interface JevOnce {
+  noRule: NoRuleReason | undefined
+  cwd: string
+}
+
+/**
+ * ルールが空だった理由のうち、「今回だけ許可」に回さないもの（#749）。
+ * `covered` はルールがもう設定にあるのに聞かれている形（Claude の側が当てていない何かがある）、`not_bash` は Bash でない。
+ * ほかの理由（展開・サブシェル・cwd の外への `cd` …）は、コマンドそのものを `notReadOnly()` が読んで決める
+ */
+const ONCE_NEVER = new Set<string>(['covered', 'not_bash'])
 
 export function jevAutoDecision(
-  approval: Pick<Approval, 'tool_name' | 'agent' | 'answerable' | 'jev'>,
+  approval: Pick<Approval, 'tool_name' | 'agent' | 'answerable' | 'jev'> & Partial<Pick<Approval, 'input'>>,
   threshold: number,
   rule: string | null,
   ruleSafe: number | 'failed' | undefined,
+  once?: JevOnce,
 ): JevAutoDecision {
   if (!jevAutoAllows(approval.jev, threshold)) return { kind: 'none' }
   if (!jevAutoEligible(approval)) return { kind: 'skip', reason: `Bash 以外（${approval.tool_name}）は自動で答えない` }
-  if (!rule) return { kind: 'skip', reason: '「常に許可」のルールを作れないコマンド（展開・構文・ファイルへのリダイレクト・cd のあとの書き込みなど）か、もう設定にある' }
+  if (!rule) {
+    if (!once) return { kind: 'skip', reason: '「常に許可」のルールを作れないコマンド（展開・構文・ファイルへのリダイレクト・cd のあとの書き込みなど）か、もう設定にある' }
+    // ルールを作れない形（#749）: この回の確率が閾値以上で、**読むだけと分かっているコマンド**（`notReadOnly()` が空）なら、
+    // 今回だけ許可する。覚えないので、ルールの確率は聞かない（書かれるルールが無い）
+    const command = typeof approval.input?.command === 'string' ? approval.input.command : ''
+    if (!once.noRule || ONCE_NEVER.has(once.noRule)) return { kind: 'skip', reason: `今回だけの自動の許可も見送り: ルールを作れない理由が ${once.noRule ?? '分からない'}` }
+    const why = command ? notReadOnly(command, once.cwd) : 'syntax'
+    return why ? { kind: 'skip', reason: `今回だけの自動の許可も見送り: ${NOT_READ_ONLY_TEXT[why]}` } : { kind: 'once' }
+  }
   if (ruleSafe === undefined) return { kind: 'wait' }
   if (ruleSafe === 'failed') return { kind: 'skip', reason: `ルール ${rule} の確率を Jev に聞けなかった` }
   if (!jevAutoAllows(ruleSafe, threshold)) return { kind: 'skip', reason: `ルール ${rule} が ${jevPercent(ruleSafe)}%（閾値 ${jevPercent(threshold)}%）` }

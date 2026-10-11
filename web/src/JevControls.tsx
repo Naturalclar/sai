@@ -40,7 +40,7 @@ export function JevControls({ settings, busy, onChange }: Props) {
           </label>
           {auto > 0 && (
             <div className="note">
-              Claude の返信の Bash の許可で、この回のコマンドと書かれるルール（`Bash(git status:*)` など）の両方が {jevPercent(auto)}% 以上なら、人を待たずに [常に許可] を返します。ルールは cwd の .claude/settings.local.json に書かれます（端末の「今後も許可」と同じ）。Edit / Write / MCP ツール・Codex / OpenCode は対象外で、今までどおり人が答えます
+              Claude の返信の Bash の許可で、この回のコマンドと書かれるルール（`Bash(git status:*)` など）の両方が {jevPercent(auto)}% 以上なら、人を待たずに [常に許可] を返します。ルールは cwd の .claude/settings.local.json に書かれます（端末の「今後も許可」と同じ）。ルールを作れない形（$(…) やサブシェルなど）のうち、読むだけと分かっているコマンド（git status / log / diff・gh pr view・cat・ls・echo の類だけ）は、この回が {jevPercent(auto)}% 以上なら今回だけ許可します（覚えません。それ以外は今までどおり人が答えます）。Edit / Write / MCP ツール・Codex / OpenCode は対象外で、今までどおり人が答えます
             </div>
           )}
         </>

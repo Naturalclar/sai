@@ -109,9 +109,11 @@ const lit = (w: Word | undefined): string => {
  *   道具の置き場と分かっている名前（`HOME_STORES`）はどこまで下でも受けない
  * - `/home/<組織>/<人>` のような、形で分からないホームは見分けられない（→ 残っている限界）
  */
-const HOME = String.raw`(?:^|\/)(?:users|home)\/[^/]+|^\/root|^(?:\/private)?\/var\/root`
+/** `/` の別の書き方（macOS のデータのボリューム・マウントしたボリューム） */
+const ROOT = String.raw`(?:\/System\/Volumes\/Data|\/Volumes\/[^/]+)?`
+const HOME = String.raw`(?:^|\/)(?:users|home)\/[^/]+|^${ROOT}\/root|^${ROOT}(?:\/private)?\/var\/root`
 const HOME_STORES = String.raw`\.(?:claude|codex|ssh|aws|gnupg|config|agent-feed|kube|docker|npm|cache|local|zsh_sessions|opencode|gemini|azure|gcloud)|library`
-const HOME_ZONE = new RegExp(String.raw`^\/?$|(?:^|\/)(?:users|home)\/?$|(?:${HOME})\/?$|(?:${HOME})\/(?:${HOME_STORES})(?:\/|$)|(?:${HOME})\/\.[^/]+(?:\/[^/]+)?\/?$`, 'i')
+const HOME_ZONE = new RegExp(String.raw`^${ROOT}\/?$|(?:^|\/)(?:users|home)\/?$|(?:${HOME})\/?$|(?:${HOME})\/(?:${HOME_STORES})(?:\/|$)|(?:${HOME})\/\.[^/]+(?:\/[^/]+)?\/?$`, 'i')
 /** cwd がホームのあたりか */
 export const inHomeZone = (root: string): boolean => HOME_ZONE.test(root)
 
@@ -350,7 +352,8 @@ const ghCheck: Check = (args, place) => {
   const sub = words[i + 1] ?? ''
   const api = group === 'api'
   if (api) {
-    if (!GH_API_PATH.test(sub)) return refuse('flag')
+    // `:` は受けない（`repos/o/r/compare/main...a:feature` は、fork の持ち主のブランチとの差分を返す）
+    if (!GH_API_PATH.test(sub) || sub.includes(':')) return refuse('flag')
     const named = /^\/?repos\/([^/]+\/[^/]+)/.exec(sub)
     if (named && !ownRepo(named[1]!, place)) return refuse('flag')
   } else if (!Object.hasOwn(GH_READS, group) || !GH_READS[group]!.has(sub)) return refuse('command')
@@ -372,7 +375,8 @@ const ghCheck: Check = (args, place) => {
     } else if (GH_VALUE.has(name)) {
       // 値が `-` で始まるものは受けない（サブコマンドによって値を取る・取らないが違うフラグで、読み方が gh とずれない）
       const value = eq < 0 ? words[++k] : text.slice(eq + 1)
-      if (value === undefined || value.startsWith('-')) return refuse('flag')
+      // 値の字も絞る: 空白・引用符・`:` を含む値は、gh が検索の問い合わせに組み込むときに別の条件（`repo:a/b`）として読まれかねない
+      if (value === undefined || value.startsWith('-') || !/^[\w.@/,-]+$/.test(value)) return refuse('flag')
     } else if (!GH_BARE.has(text)) return refuse('flag')
   }
 }

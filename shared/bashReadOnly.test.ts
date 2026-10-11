@@ -347,7 +347,8 @@ test('notReadOnly: 読む先・行き先は cwd の中だけ。秘密が入っ�
   const HOMES = [
     '/Users/x', '/Users/x/', '/home/x', '/root', '/var/root', '/', '/Users', '/home',
     // 同じホームを指す別の書き方・大文字小文字違い
-    '/users/x', '/USERS/x', '/private/var/root', '/System/Volumes/Data/Users', '/Volumes/D/home/', '/System/Volumes/Data/Users/x', '/Volumes/D/Users/x', '/Volumes/D/home/x',
+    '/users/x', '/USERS/x', '/private/var/root', '/System/Volumes/Data/Users', '/Volumes/D/home/',
+    '/System/Volumes/Data', '/System/Volumes/Data/', '/Volumes/Macintosh HD', '/System/Volumes/Data/private/var/root', '/System/Volumes/Data/root', '/Volumes/D/var/root/.ssh', '/System/Volumes/Data/Users/x', '/Volumes/D/Users/x', '/Volumes/D/home/x',
     // ホームの直下の置き場と、その中
     '/Users/x/.claude', '/Users/x/.claude/projects/p', '/Users/x/.ssh', '/Users/x/.config/gh', '/Users/x/.agent-feed', '/Users/x/Library/Cookies', '/home/x/.aws',
     '/Users/x/.other', '/Users/x/.other/sub',
@@ -707,6 +708,8 @@ test('notReadOnly: gh が読んでよいのは、そのセッションのリポ�
     assert.equal(check(c), 'flag', c)
     assert.equal(check(c, CWD, ''), 'flag', c)
   }
+  for (const c of ['gh api repos/o/r/compare/main...a:feature', 'gh api repos/o/r/compare/main...a:r2:feature', "gh pr list --author 'x\" repo:a/b \"'", "gh issue list --label 'x repo:a/b'", 'gh pr list --label repo:a/b', 'gh pr list --head a:branch', "gh pr list --author ''"]) assert.equal(check(c), 'flag', c)
+  for (const c of ['gh api repos/o/r/compare/main...feature', 'gh pr list --author octocat --label bug,ui --base main --head my/branch --json number,title --limit 5']) assert.equal(check(c), '', c)
   for (const c of ['gh repo view', 'gh repo view --json description', 'gh pr view my-branch', 'gh release view v1.2.3', 'gh run view 123456']) assert.equal(check(c), '', c)
   const other = ['gh -R a/b pr view 12', 'gh pr view 12 --repo a/b', 'gh pr view 12 --repo=a/b', 'gh issue view 5 -R a/b --comments', 'gh pr list -R o/rr', 'gh api repos/a/b/issues/5/comments', 'gh api /repos/a/b/pulls', 'gh api repos/o/r2/pulls', 'gh api repos/oo/r/pulls', 'echo "$(gh api repos/a/b/issues/5/comments)"', 'gh pr view 12 -R o/r -R a/b']
   for (const c of other) assert.equal(check(c), 'flag', c)

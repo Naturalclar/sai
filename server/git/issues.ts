@@ -6,7 +6,7 @@
 //     gh pr list    --repo <owner/repo> --state open   --limit <n> --json number,title,body,createdAt
 //   書く形（`comment` / `edit` / `close` / `api -X POST`）は組まない。`<owner/repo>` は `isRepoName()`、日付は `isDate` の形だけ
 // - 認証は `gh` に任せる。`gh` が無い・未ログイン・時間切れ・大きすぎは null
-// - `SAI_GH=0` なら引かない（呼ぶ側が `decisionsFromEnv()` で見る）。実行ファイルは PATH の `gh`（#288）
+// - `SAI_GH=0` なら引かない（呼ぶ側が `issuesFromEnv()` で見る）。実行ファイルは PATH の `gh`（#288）
 import { isRepoName } from '../../shared/prs.ts'
 import { spawnGh } from './prs.ts'
 import type { GhRun } from './prs.ts'

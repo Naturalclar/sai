@@ -98,7 +98,7 @@ export async function run(argv: string[], env: Env): Promise<number> {
   } else {
     const count = (kind: Pending['kind'], state: Pending['state']) => pending.filter((p) => p.kind === kind && p.state === state).length
     const where = new Set(pending.map((p) => `${p.kind}#${p.number}`)).size
-    env.out(`まだ決まっていないこと: ${pending.length} 件（${where} か所。open な issue ${count('issue', 'open')}・閉じた issue ${count('issue', 'closed')}・PR ${count('pr', 'open')}。閉じた issue は ${since} 以降）`)
+    env.out(`まだ決まっていないこと: ${pending.length} 件（${where} か所。open な issue ${count('issue', 'open')}・閉じた issue ${count('issue', 'closed')}・PR ${count('pr', 'open')}。${days > 0 ? `閉じた issue は ${since}（UTC）以降` : '閉じた issue は引いていない'}）`)
     for (const line of render(pending)) env.out(line)
   }
   // 上限に届いたら、切れているかもしれないと知らせる（黙って古い側を落とさない）

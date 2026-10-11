@@ -60,7 +60,38 @@ interface Item {
   whole: string
 }
 
-const HEADING = /^(#{1,6})\s+(.*?)\s*#*\s*$/
+/** 見出しの行（3 字までの字下げは見出し）。終わりの空白と閉じの `#` は `heading()` が文字列として外す（正規表現で外すと、長い行で止まる） */
+const HEADING = /^ {0,3}(#{1,6})[ \t]+(.*)$/
+/** 1 行がこれより長ければ見出しにも箇条書きにも見ない（本文は 65536 字まで 1 行に書ける） */
+const LINE_MAX = 2000
+
+function heading(line: string): { level: number; title: string } | null {
+  if (line.length > LINE_MAX) return null
+  const m = HEADING.exec(line)
+  if (!m) return null
+  let title = m[2]!.trimEnd()
+  // 閉じの `#`（`## 題 ##`）
+  let end = title.length
+  while (end > 0 && title[end - 1] === '#') end--
+  if (end < title.length && (end === 0 || title[end - 1] === ' ' || title[end - 1] === '\t')) title = title.slice(0, end).trimEnd()
+  return { level: m[1]!.length, title }
+}
+
+/** `<!-- … -->` を消す（雛形の見出し・消したつもりの「決めたこと」を読まない）。閉じていなければ残りを全部消す */
+function stripComments(markdown: string): string {
+  let out = ''
+  let i = 0
+  for (;;) {
+    const open = markdown.indexOf('<!--', i)
+    if (open < 0) return out + markdown.slice(i)
+    out += markdown.slice(i, open)
+    const close = markdown.indexOf('-->', open + 4)
+    if (close < 0) return out
+    // 行の数は保つ
+    out += markdown.slice(open, close).replace(/[^\n]/g, '')
+    i = close + 3
+  }
+}
 const FENCE = /^ {0,3}(`{3,}|~{3,})/
 
 /** コードブロックの開け閉めを追う。閉じるのは、開けたのと同じ字で、同じ長さ以上の行だけ（```` の中の ``` や ~~~ では閉じない） */
@@ -81,21 +112,21 @@ function fences(): (line: string) => boolean {
 
 /**
  * 見出しが `match` に当たる節を、出てきた順に返す。節は、同じか上の階層の見出しまで（下の階層の見出しは節の中）。
- * コードブロックの中の `#` は見出しにしない
+ * コードブロックの中の `#` は見出しにしない。当たった節の中の、当たる小見出しは節を分けない（同じ項目を 2 回数えない）
  */
 export function sections(markdown: string, match: (title: string) => boolean): Section[] {
   const found: Section[] = []
   const open: Section[] = []
   const inCode = fences()
-  for (const line of (markdown ?? '').split(/\r?\n/)) {
-    const h = inCode(line) ? null : HEADING.exec(line)
+  for (const line of stripComments(markdown ?? '').split(/\r?\n/)) {
+    const h = inCode(line) ? null : heading(line)
     if (h) {
-      const level = h[1]!.length
+      const level = h.level
       // 同じか上の階層の見出しで、開いている節を閉じる
       while (open.length && open[open.length - 1]!.level >= level) open.pop()
       for (const s of open) s.lines.push(line)
-      if (match(h[2]!)) {
-        const s: Section = { title: h[2]!, level, lines: [] }
+      if (!open.length && match(h.title)) {
+        const s: Section = { title: h.title, level, lines: [] }
         found.push(s)
         open.push(s)
       }
@@ -126,12 +157,12 @@ export function listItems(lines: readonly string[]): Item[] {
   for (const line of lines) {
     if (inCode(line)) continue
     // 節の中の小見出しは項目にしない（項目の続きにも入れない）
-    if (HEADING.test(line)) {
+    if (heading(line)) {
       cur = null
       continue
     }
-    const num = NUMBERED.exec(line)
-    const dot = num ? null : BULLET.exec(line)
+    const num = line.length > LINE_MAX ? null : NUMBERED.exec(line)
+    const dot = num || line.length > LINE_MAX ? null : BULLET.exec(line)
     const indent = (num ?? dot)?.[1]!.length ?? 0
     if ((num || dot) && base < 0 && indent <= 3) base = indent
     if ((num || dot) && base >= 0 && indent <= base + 1) {
@@ -179,16 +210,16 @@ export function mentionedNumbers(text: string): number[] {
   return [...out].sort((a, b) => a - b)
 }
 
-/** 番号の並びのすぐあとに来てよいもの: 区切り（`:` `（` `）` `。`）か、行の終わり。`3 つのうち`・`2 はまだ`・`2、8 色` は名指しにしない */
-const NAMED_END = String.raw`\s*(?:[:：（(）)。]|$)`
+/** 見出しで、番号の並びのすぐあとに来てよいもの: 閉じ括弧・`。`・行の終わり。`3 つのうち`・`2 はまだ`・`2: 保留`・`2、8 色` は名指しにしない */
+const NAMED_END = String.raw`\s*(?:[）)。]|$)`
 
 /**
  * 「決めたこと」の見出しの文で名指しされた番号（`決めたこと（2026-10-09。決めること 2）`・`（本文の「決めること」1・2）`）。
- * 番号の並びのすぐあとが区切りか行の終わりのものだけ
+ * 番号の並びのすぐあとが閉じ括弧・`。`・行の終わりのものだけ。ほかの issue の「決めること」（`#12 の決めること 2`）は読まない
  */
 export function namedInTitle(title: string): number[] {
   const out = new Set<number>()
-  for (const m of half(title ?? '').matchAll(new RegExp(String.raw`決めること[」』]?\s*(${NUMBER_LIST})(?=${NAMED_END})`, 'g'))) expand(m[1]!, out)
+  for (const m of half(title ?? '').matchAll(new RegExp(String.raw`(?<!#\d{1,7}\s?の\s?「?)決めること[」』]?\s*(${NUMBER_LIST})(?=${NAMED_END})`, 'g'))) expand(m[1]!, out)
   return [...out].sort((a, b) => a - b)
 }
 
@@ -243,8 +274,19 @@ export function recommendOf(whole: string): string | undefined {
     }
   }
   sentence = sentence.replace(/^[\s—–\-:：]+/, '').trim()
+  // 括弧の中が「おすすめ」だけ（`青（おすすめ）か緑`）なら、括弧の前の語ごと（`青（おすすめ）`）
+  if (inside && /^おすすめ[!！]?$/.test(sentence)) {
+    const lead = before.slice(0, opener)
+    const start = Math.max(lead.lastIndexOf('。'), lead.lastIndexOf('、'), lead.lastIndexOf(' '), lead.lastIndexOf('：'), lead.lastIndexOf(':')) + 1
+    const word = lead.slice(start).trim()
+    if (!word) return undefined
+    sentence = `${word}（おすすめ）`
+  }
   return sentence ? clip(sentence, DECISION_RECOMMEND_CHARS) : undefined
 }
+
+/** 見出しにせずに書いた「まだ決めていないこと」「決めないまま閉じること」の行（`**まだ決めていないこと**`・`- まだ決めていないこと:`） */
+const NOT_YET = /^(?:[-*+]\s+|\d{1,3}[.)]\s+)?(?:まだ決めていないこと|決めないまま閉じること)/
 
 const starts = (word: string) => (title: string): boolean => plain(title).startsWith(word)
 const isAsk = starts('決めること')
@@ -275,11 +317,19 @@ export function pendingOf(src: DecisionSource): Pending[] {
   if (src.kind === 'pr') return sections(src.body, isPrAsk).flatMap((s) => listItems(s.lines).map((i) => make(i, 'pr', src.createdAt)))
 
   const docs = [{ body: src.body, createdAt: src.createdAt }, ...src.comments]
-  const asked = sections(src.body, isAsk).flatMap((s) => listItems(s.lines))
-  /** 本文の番号つきの項目。同じ番号が 2 回出てくる（`1.` を並べた・節が 2 つある）ものは、突き合わせられないので入れない */
+  const askedBy = sections(src.body, isAsk).map((s) => listItems(s.lines))
+  const asked = askedBy.flat()
+  /**
+   * 本文の番号つきの項目のうち、突き合わせられるもの。同じ番号が 2 回出てくる（`1.` を並べた・節が 2 つある）ものと、
+   * 続き番号になっていない節の番号（`1.` `3.` `4.` は、GitHub の表示では 1・2・3 になる）は入れない
+   */
   const numbered = new Set<number>()
   const twice = new Set<number>()
-  for (const i of asked) if (i.n !== undefined) (numbered.has(i.n) ? twice : numbered).add(i.n)
+  for (const items of askedBy) {
+    const ns = items.flatMap((i) => (i.n === undefined ? [] : [i.n]))
+    const sequential = ns.every((n, k) => n === ns[0]! + k)
+    for (const n of ns) (numbered.has(n) || !sequential ? twice : numbered).add(n)
+  }
   for (const n of twice) numbered.delete(n)
   /** 番号 → 決まったか（あとに書かれたほうが勝つ） */
   const decided = new Map<number, boolean>()
@@ -289,7 +339,8 @@ export function pendingOf(src: DecisionSource): Pending[] {
     for (const s of sections(doc.body, isDecided)) {
       // 決まった番号を読むのは、「決めたこと」の見出しの文と、そのすぐ下（最初の小見出しまで）の項目の頭だけ。
       // 小見出しの下（「まだ決めていないこと」「次にやること」…）・引用・コードブロック・文の途中で触れた番号は読まない
-      const sub = s.lines.findIndex((l) => HEADING.test(l))
+      // 見出しにしていない「まだ決めていないこと」（太字の行・箇条書きの親）から下も読まない
+      const sub = s.lines.findIndex((l) => heading(l) !== null || NOT_YET.test(plain(l)))
       const direct = sub < 0 ? s.lines : s.lines.slice(0, sub)
       for (const n of namedInTitle(s.title)) decided.set(n, true)
       for (const item of listItems(direct)) for (const n of namedAtHead(item.head)) decided.set(n, true)

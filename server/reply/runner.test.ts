@@ -160,6 +160,26 @@ test('newSessionCommand: 前半は返信と同じ（SAI_CLAUDE_ARGS が先頭・
   assert.equal(newSessionCommand('U', 'hi', '/w', {}).permissionMode, '', 'フラグを付けていない = CLI の既定')
 })
 
+// ---- #388: 別のセッション・tailnet から起こすターンの費用の上限
+
+test('replyCommand: 費用の上限は渡されたときだけ --max-budget-usd で付ける。運用者が自分の額を書いていれば足さない。Claude だけ', () => {
+  const capped = replyCommand('claude', 'S', 'hi', '/w', {}, undefined, undefined, undefined, [], undefined, 50)!.args
+  const at = capped.indexOf('--max-budget-usd')
+  assert.equal(capped[at + 1], '50')
+  assert.ok(at >= 0 && at < capped.indexOf('-p'), '-p より前（本文の後ろに置かない）')
+  // 渡さなければ付かない（人が画面から押した返信・新しいセッション）
+  assert.equal(replyCommand('claude', 'S', 'hi', '/w', {})!.args.includes('--max-budget-usd'), false)
+  assert.equal(newSessionCommand('U', 'hi', '/w', {}).args.includes('--max-budget-usd'), false)
+  assert.equal(replyCommand('claude', 'S', 'hi', '/w', {}, undefined, undefined, undefined, [], undefined, 0)!.args.includes('--max-budget-usd'), false, '0 以下は付けない')
+  // 運用者の額を尊重する（2 つ並べない）
+  const own = replyCommand('claude', 'S', 'hi', '/w', { SAI_CLAUDE_ARGS: '--max-budget-usd 5' }, undefined, undefined, undefined, [], undefined, 50)!.args
+  assert.deepEqual(own.filter((a) => a === '--max-budget-usd').length, 1)
+  assert.equal(own[own.indexOf('--max-budget-usd') + 1], '5')
+  // Codex / OpenCode に同等のフラグは無い
+  assert.equal(replyCommand('codex', 'S', 'hi', '/w', {}, undefined, undefined, undefined, [], undefined, 50)!.args.includes('--max-budget-usd'), false)
+  assert.equal(replyCommand('opencode', 'S', 'hi', '/w', {}, undefined, undefined, undefined, [], undefined, 50)!.args.includes('--max-budget-usd'), false)
+})
+
 // ---- #391: セッションの表示名を CLI にも渡す（端末のタイトルと /resume のピッカー）
 
 test('replyCommand / newSessionCommand: 表示名があれば -n で渡す。無ければ渡さない', () => {

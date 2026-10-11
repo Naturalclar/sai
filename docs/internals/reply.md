@@ -48,7 +48,7 @@ SAI が起こした Claude のターンは、使ったトークンと費用も�
 - 子の stdout はログの fd に直接書かせたまま（pipe にしない）。
 - result が無ければ何も書かない（Codex / OpenCode はこの形を返さない。引き取った子は exit を受け取れないので残らない）。
 - 記録（`YYYY-MM-DD.jsonl`）は触らない（digest.jsonl と同じ派生データ）。
-- 失敗の理由（`ReplyFailure.tail`）は JSON の切れ端ではなく CLI の本文にする（`failureTail()`）。
+- 失敗の理由（`ReplyFailure.tail`）は JSON の切れ端ではなく CLI の本文にする（`failureTail()`）。費用の上限（`--max-budget-usd`。#388）で止まったターンは本文が無いので、`subtype` から 1 行を作る（→ [agents.md](agents.md#トークンの歯止め311)）。
 - 画面は `web/src/TurnUsageTag.tsx`（#411）。
 - どの行のぶんかは `shared/turnUsage.ts` の `usageByRow()`: その使用量の `ts` 以前で一番新しい、同じエンティティのターン完了の行で、差が `USAGE_MATCH_MS`（2 分）以内のものだけ。向きは「行 → 使用量」で、後ろの行は見ない。行の `ts` は `+09:00`・使用量は `Z` なので文字列ではなく時刻で比べる。
 - 読む側は `TurnUsageLog` 自身（書く側と同じ 1 つを `createApp` が持つので、追記した分はそのままメモリに載り、3 秒のポーリングでファイルを読み直さない）。起動時に読み返すのは `TURN_USAGE_KEEP_DAYS`（90 日）ぶんだけで、ファイルは切り詰めない。

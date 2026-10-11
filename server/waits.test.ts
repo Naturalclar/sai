@@ -188,6 +188,8 @@ test('預かると、サーバが間隔を置いて gh で確かめる（エー�
   await firstSeen(11, GREEN)
   assert.deepEqual(await poll('W1'), [])
   const sent = runner.sent(eid('W1'))
+  // 待ちで起こすターンには費用の上限を付けない（#388）
+  assert.equal(sent.at(-1)!.cmd.args.includes('--max-budget-usd'), false)
   assert.equal(sent.length, sentBefore + 1)
   const text = sent.at(-1)!.cmd.text
   assert.ok(text.startsWith(`${WAIT_MARK}PR #11（o/r）: CI は全部通りました`))

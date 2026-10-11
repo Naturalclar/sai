@@ -7,7 +7,7 @@ import type { Server } from 'node:http'
 import { appendFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { AGENT_TEXT_MAX_CHARS, deliveredFromTailnet } from '../../shared/agentMessages.ts'
+import { AGENT_TEXT_MAX_CHARS, AGENT_TURN_MAX_BUDGET_USD, deliveredFromTailnet } from '../../shared/agentMessages.ts'
 import { DEFAULT_PORT } from '../../shared/port.ts'
 import type { Replying } from '../../shared/types.ts'
 import { createApp } from '../app.ts'
@@ -299,6 +299,8 @@ test('/mcp: sai_send は見出し付きで相手のターンを起動し、sai_w
   const launched = runner.started[runner.started.length - 1]!
   assert.equal(launched.id, 'B1@r')
   assert.ok(launched.cmd.text.startsWith(deliveredFromTailnet('me@example.com', messageId, 'レビューして').split('\n')[0]!), '人の入力と見分けられる見出し')
+  // tailnet から起こすターンにも費用の上限が付く（#388）
+  assert.equal(launched.cmd.args[launched.cmd.args.indexOf('--max-budget-usd') + 1], String(AGENT_TURN_MAX_BUDGET_USD))
 
   assert.match((await call('sai_send', { to: 'P1@r', text: 'やって' }, SENDER)).text, /Bypass permissions/)
   // Auto mode（#691）を選んだセッションにも tailnet からは送れない（素通しと同じ扱い）

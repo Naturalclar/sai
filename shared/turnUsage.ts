@@ -106,6 +106,19 @@ export const totalTokens = (u: TurnUsage): number =>
 
 const TAIL_CHARS = 300
 
+/** CLI が費用の上限で止まったときの `result` の `subtype`（#388。2.1.296 で実測） */
+export const MAX_BUDGET_SUBTYPE = 'error_max_budget_usd'
+
+/**
+ * 費用の上限で止まったターンの 1 行（#388）。額は CLI が `errors` に書いた文（`Reached maximum budget ($50)`）から拾い、
+ * 読めなければ額なしで出す（SAI の定数を当てない。運用者が自分の額を渡していることがある）
+ */
+export function maxBudgetText(errors: unknown): string {
+  const first = Array.isArray(errors) ? errors.find((e): e is string => typeof e === 'string') ?? '' : ''
+  const amount = /\(\$([0-9]+(?:\.[0-9]+)?)\)/.exec(first)?.[1]
+  return `費用の上限${amount ? `（${amount} ドル）` : ''}に達したので、CLI がターンを途中で止めました`
+}
+
 /**
  * 失敗したときに画面へ出す 1 行（#172 の `ReplyFailure.tail`）。
  *
@@ -117,6 +130,8 @@ export function failureTail(raw: string): string {
   for (let i = lines.length - 1; i >= 0; i--) {
     const o = parseLine(lines[i] ?? '')
     if (!o || (!o.usage && typeof o.total_cost_usd !== 'number')) continue
+    // 費用の上限で止まったとき（#388）は `result` が無く、`subtype` と `errors` だけが来る（実測）。JSON の切れ端を出さない
+    if (o.subtype === MAX_BUDGET_SUBTYPE) return maxBudgetText(o.errors)
     const body = typeof o.result === 'string' ? o.result.trim() : ''
     const denials = Array.isArray(o.permission_denials) ? o.permission_denials.length : 0
     const note = denials > 0 ? `（未許可で断られたツール ${denials} 件）` : ''

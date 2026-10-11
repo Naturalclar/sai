@@ -128,6 +128,8 @@ test('組むとすぐ 1 周目を送る。エージェントが「続ける（N 
   const first = runner.sent('L1@r')
   assert.equal(first.length, 1)
   assert.ok(first[0]!.cmd.text.startsWith(`${LOOP_MARK}1 周目 / 上限 10 周`))
+  // ループの周には費用の上限を付けない（#388。付けるのはセッション同士・tailnet のメッセージで起こすターンだけ）
+  assert.equal(first[0]!.cmd.args.includes('--max-budget-usd'), false)
   assert.match(first[0]!.cmd.text, /目的: open な PR を片付ける\n終わりの条件: open な PR が 0 件\n前の周の申し送り: （まだありません）/)
   assert.ok(first[0]!.cmd.args.join(' ').includes('SAI_LOOP'), '周のターンにだけ sai_loop_next を出す合図を MCP に渡す')
 

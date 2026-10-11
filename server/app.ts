@@ -179,6 +179,7 @@ import type { LoopState } from '../shared/loops.ts'
 import {
   AGENT_SEND_MAX,
   AGENT_TEXT_MAX_CHARS,
+  AGENT_TURN_MAX_BUDGET_USD,
   AGENT_TURN_READ_BUDGET,
   AGENT_BACKLOG_ROUND_MS,
   AGENT_REQUEST_MAX,
@@ -2550,7 +2551,8 @@ export function createApp(
     const via = { url: o.url, entity: id, tokenFile: agentTokenPath, ...(o.loop ? { loop: true } : {}) }
     // セッションに返信のモデルが設定されていれば（PUT /api/sessions/<id>/meta の model）それで回す
     // 表示名も渡すと、端末のタイトルと `/resume` のピッカーに SAI と同じ名前が出る（#391）
-    const cmd = replyCommand(session.agent, raw, text, cwd, process.env, via, model, mode || undefined, attachments, own?.name)
+    // 別のセッション・tailnet の MCP から届いたメッセージで起こすターンには、費用の上限を付ける（#388）。人が押した返信・ループ・待ちには付けない
+    const cmd = replyCommand(session.agent, raw, text, cwd, process.env, via, model, mode || undefined, attachments, own?.name, o.origin ? AGENT_TURN_MAX_BUDGET_USD : undefined)
     if (!cmd) return refuse(400, replyBlockedReason(session, selfHost()) || 'unsupported agent')
     if (o.compact) cmd.compact = true
     try {

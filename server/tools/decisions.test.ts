@@ -200,19 +200,29 @@ test('pendingOf: 「決めたこと」の中で番号に触れただけでは消
   assert.deepEqual(decidedWith('```\n- 決めること 3: x\n```'), ['body1', 'body2', 'body3'])
   assert.deepEqual(decidedWith('- 決めること 2 - 3 色にする'), ['body1', 'body2', 'body3'])
   assert.deepEqual(decidedWith('本文の決めること 3 つのうち 1 つだけ決めた'), ['body1', 'body2', 'body3'])
-  // 見出しにしていない「まだ決めていないこと」（太字の行）から下も、決まったと読まない
-  assert.deepEqual(decidedWith('- 決めること 1: 青\n\n**まだ決めていないこと**\n- 決めること 2: 上限は保留\n- 決めること 3（置き場）'), ['body2', 'body3'])
-  assert.deepEqual(decidedWith('- 決めること 1: 青\n- まだ決めていないこと:\n  - 決めること 2: 保留'), ['body2', 'body3'])
-  for (const mark of ['> まだ決めていないこと', '*まだ決めていないこと*', '_まだ決めていないこと_', '【まだ決めていないこと】', 'まだ決めていない:', '- [ ] まだ決めていないこと', '~~まだ決めていないこと~~', '以下はまだ決めていないこと:', '<summary>まだ決めていないこと</summary>', '未決:']) assert.deepEqual(decidedWith(`- 決めること 1: 青\n\n${mark}\n- 決めること 2: 保留`), ['body2', 'body3'], mark)
-  // 「未決」「まだ決めていない」と書いた行から下は、名指しした項目の行でも決まったと読まない（出しすぎる側）
-  assert.deepEqual(decidedWith('- 決めること 1: 青\n\n**未決**\n- 決めること 2: 保留'), ['body2', 'body3'])
-  assert.deepEqual(decidedWith('- 決めること 1: 青\n- 未決:\n- 決めること 2: 保留'), ['body2', 'body3'])
-  assert.deepEqual(decidedWith('- 決めること 1: 青\n- 決めること 2: まだ決めていないこと\n- 決めること 3: これも保留'), ['body2', 'body3'])
-  assert.deepEqual(decidedWith('- 決めること 1: 青\n- まだ決めていないこと（決めること 2）\n- 決めること 3: 保留'), ['body2', 'body3'])
-  assert.deepEqual(decidedWith('- 決めること 1: 未決の項目は灰色で出す\n- 決めること 2: 8 にする'), ['body1', 'body2', 'body3'])
-  // 続きの行に書いた「まだ決めていない」は、その項目ごと読まない
-  assert.deepEqual(decidedWith('- 決めること 1: 青\n- 決めること 2:\n  まだ決めていない\n- 決めること 3: A'), ['body2', 'body3'])
-  assert.deepEqual(decidedWith('- 決めること 1: 青\n- 決めること 2:\nまだ決めていない'), ['body2', 'body3'])
+  // 「決めたこと」の節（最初の小見出しまで）のどこかに「決まっていない」と言う語があれば、その節からは何も決まったと読まない（出しすぎる側）
+  const ALL = ['body1', 'body2', 'body3']
+  for (const text of [
+    '- 決めること 1: 青\n\n**まだ決めていないこと**\n- 決めること 2: 上限は保留\n- 決めること 3（置き場）',
+    '- 決めること 1: 青\n- まだ決めていないこと:\n  - 決めること 2: x',
+    '- 決めること 1: 青\n\n**未決**\n- 決めること 2: x',
+    '- 決めること 1: 青\n- 決めること 2: まだ決めていないこと\n- 決めること 3: x',
+    '- 決めること 1: 青\n- 決めること 2:\n  - まだ決めていない',
+    '- 決めること 1: 青\n- 決めること 2: 緑\n\n  まだ決めていません',
+    '- 決めること 1: 青\n- 決めること 2: 緑\n  ### 未決',
+    '- 決めること 1: 青\n- 決めること 2: 緑\n\t- 未定',
+    '- 決めること 1: 未決の項目は灰色で出す\n- 決めること 2: 8 にする',
+    '> 決めること 2 は保留\n\n- 決めること 1: 青',
+  ]) assert.deepEqual(decidedWith(text), ALL, text)
+  // 見出しで名指ししていても同じ
+  const titled = (title: string, text: string) => brief(issue({ body: BODY, comments: [{ createdAt: '2026-10-02T00:00:00Z', body: `## ${title}\n${text}` }] }))
+  assert.deepEqual(titled('決めたこと（決めること 1〜3）', '- 決めること 2: 未決'), ALL)
+  assert.deepEqual(titled('決めたこと（未決あり。決めること 2）', '- 青にする'), ALL)
+  // あとの「決めたこと」が「決まっていない」と言えば、前に決まった番号も戻る
+  const reverted = issue({ body: BODY, comments: [{ createdAt: '2026-10-02T00:00:00Z', body: '## 決めたこと（決めること 1〜3）' }, { createdAt: '2026-10-03T00:00:00Z', body: '## 決めたこと（2026-10-03）\n- 決めること 2: 未決に戻す' }] })
+  assert.deepEqual(brief(reverted), ['body2'])
+  // 決まりどおり、小見出し「まだ決めていないこと」の下に書けば、上の決定は読める
+  assert.deepEqual(decidedWith('- 決めること 1: 青\n- 決めること 2: 8\n\n### まだ決めていないこと\n- 決めること 3: 置き場'), ['body3'])
   // コメントの中の `<!--` で「まだ決めていないこと」が消えない
   assert.deepEqual(brief(issue({ body: BODY, comments: [{ createdAt: '2026-10-02T00:00:00Z', body: '## 決めたこと（決めること 1〜3）\n雛形の `<!--` は消した\n### まだ決めていないこと\n- 決めること 3: 保留\n- 新しい話' }] })), ['body3', 'remaining'])
   // ほかの issue の番号

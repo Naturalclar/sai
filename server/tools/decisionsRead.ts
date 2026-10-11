@@ -291,11 +291,12 @@ export function recommendOf(whole: string): string | undefined {
 }
 
 /**
- * 見出しにせずに書いた「まだ決めていないこと」「決めないまま閉じること」「未決」の行（`**まだ決めていないこと**`・`- 未決:`）。
- * **行のどこかにあれば、その行から下は決まったと読まない**（決定の文に「未決の項目は…」と書いただけでも切る。出しすぎる側。
- * 名指しした行だけ切らない、にすると、その行を見出し代わりにした書き方で下の項目が決まった扱いになる）
+ * 「決まっていない」と言っている語。**「決めたこと」の節（見出しの文と、最初の字下げの無い小見出しまでの文）のどこかにこれがあれば、
+ * その節からは何も決まったと読まず、節が触れた番号は決まっていない側に戻す**（#763 のレビュー）。
+ * 行や項目ごとに「ここから下は読まない」と切り分けると、入れ子・続きの段落・字下げした見出し・見出しの名指し、と抜け道が続いたので、節ごと読まない。
+ * 保留を書く場所は `### まだ決めていないこと` の小見出しの下（そこは節の「最初の小見出しまで」の外なので、上の決定は読める）
  */
-const NOT_YET = /まだ決めていない|決めないまま閉じる|未決/
+const NOT_YET = /まだ決めて|決めていな|決めないまま|未決|未定|保留|持ち越|決め直/
 
 const starts = (word: string) => (title: string): boolean => plain(title).startsWith(word)
 const isAsk = starts('決めること')
@@ -346,16 +347,18 @@ export function pendingOf(src: DecisionSource): Pending[] {
   let closing: Pending[] | null = null
   for (const doc of docs) {
     for (const s of sections(doc.body, isDecided)) {
-      // 決まった番号を読むのは、「決めたこと」の見出しの文と、そのすぐ下（最初の小見出しまで）の項目の頭だけ。
+      // 決まった番号を読むのは、「決めたこと」の見出しの文と、そのすぐ下（最初の字下げの無い小見出しまで）の項目の頭だけ。
       // 小見出しの下（「まだ決めていないこと」「次にやること」…）・引用・コードブロック・文の途中で触れた番号は読まない
-      // 見出しにしていない「まだ決めていないこと」（太字の行・箇条書きの親）から下も読まない
-      const sub = s.lines.findIndex((l) => heading(l) !== null || NOT_YET.test(plain(l)))
-      const direct = listItems(sub < 0 ? s.lines : s.lines.slice(0, sub))
-      // 切った行が、すぐ上の項目の続き（空行を挟まず、それ自身は箇条書きでない行。`決めること 2:` の次の行の「まだ決めていない」）なら、その項目も読まない
-      const cut = sub < 0 ? '' : s.lines[sub]!
-      if (sub > 0 && !heading(cut) && !NUMBERED.test(cut) && !BULLET.test(cut) && s.lines[sub - 1]!.trim()) direct.pop()
+      const sub = s.lines.findIndex((l) => heading(l)?.indent === 0)
+      const direct = sub < 0 ? s.lines : s.lines.slice(0, sub)
+      const own = [s.title, ...direct]
+      if (own.some((l) => NOT_YET.test(plain(l)))) {
+        // 「決まっていない」と言っている節: 何も決まったと読まず、触れた番号は決まっていない側に戻す
+        for (const n of mentionedNumbers(own.join('\n'))) decided.set(n, false)
+        continue
+      }
       for (const n of namedInTitle(s.title)) decided.set(n, true)
-      for (const item of direct) for (const n of namedAtHead(item.head)) decided.set(n, true)
+      for (const item of listItems(direct)) for (const n of namedAtHead(item.head)) decided.set(n, true)
     }
     // 番号の無い項目は、いちばん新しいコメントのものだけ（同じコメントの中に節が 2 つあれば足し合わせる）
     let loose: Pending[] | null = null

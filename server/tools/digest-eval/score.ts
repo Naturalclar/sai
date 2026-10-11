@@ -74,6 +74,7 @@ export const SCORE_LABELS: Record<ScoreCode, string> = {
   'expect:number_missing': '出るはずの番号が無い（事例）',
   'expect:action_missing': '動作の語が無い（事例）',
   meta_reply: '要約せず答えた',
+  foreign_script: '簡体字・ハングルが混ざった',
   prefix: '前置き・引用符',
   too_long: '長さ超過',
   empty: '空',

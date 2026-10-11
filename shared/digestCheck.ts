@@ -3,6 +3,7 @@
 //
 // 見るのは「元の本文と突き合わせれば分かる食い違い」だけで、良し悪しは判定しない。
 // 手元の実データ（一言 667 件）では 13.8% が引っかかった（口が qwen3:8b なら 17.6%、haiku なら 6.2%）。
+import { CHINESE_ONLY_EXTRA, CHINESE_ONLY_HAN } from './chineseOnlyHan.ts'
 import { DIGEST_MAX_CHARS } from './persona.ts'
 
 export type DigestIssueCode =
@@ -22,6 +23,8 @@ export type DigestIssueCode =
   | 'dropped_request'
   | 'waiting_without_next'
   | 'bare_number'
+  // 日本語の文で使わない字（簡体字・ハングル）が混ざったもの（#780）。「合并」「リ뷰」の形
+  | 'foreign_script'
 
 export interface DigestIssue {
   code: DigestIssueCode
@@ -450,6 +453,24 @@ function inventedNumbers(source: string, summary: string, ask: string): string[]
   return [...out]
 }
 
+/** 日本語の文で使わない漢字（簡体字）。一覧は `chineseOnlyHan.ts`（手で足さない） */
+const CHINESE_ONLY = new Set(CHINESE_ONLY_HAN + CHINESE_ONLY_EXTRA)
+
+/** ハングル（音節・字母・互換字母・字母の拡張） */
+const HANGUL = /^[\u1100-\u11ff\u3130-\u318f\ua960-\ua97f\uac00-\ud7ff]$/
+
+/**
+ * 一言に混ざった、日本語の文で使わない字（#780）。出てきた順・同じ字は 1 つ。
+ * 口（小さいモデル）が専門語のところで訓練言語の語に手を伸ばす形で、実データでは「マージ」が「合并」、
+ * 「レビュー」が「リ뷰」になっていた（1,877 件中 9 件。すべて qwen3:8b）。
+ * **本文にある字は咎めない**（本文の言葉のまま、が元の規則。本文が中国語・韓国語の語を引いている回）
+ */
+export function foreignChars(source: string, summary: string): string[] {
+  const out = new Set<string>()
+  for (const c of summary) if ((CHINESE_ONLY.has(c) || HANGUL.test(c)) && !source.includes(c)) out.add(c)
+  return [...out]
+}
+
 /**
  * 一言と元の本文を突き合わせて、直すべき点を返す。空なら文句なし。
  * 並びは直してほしい順（意味が変わるもの → 形の問題）
@@ -528,6 +549,14 @@ export function digestIssues(rawSource: string, rawSummary: string, rawAsk = '')
   }
   if (META_REPLY.test(text)) {
     out.push({ code: 'meta_reply', hint: '本文を言い換えた一言だけを書いてください（本文を要求したり、やり方を説明したりしない）' })
+  }
+  // 簡体字・ハングルが混ざった（#780）
+  const foreign = foreignChars(source, text)
+  if (foreign.length > 0) {
+    out.push({
+      code: 'foreign_script',
+      hint: `日本語で使わない字（${foreign.join(', ')}）が混ざっています。**本文の言葉のまま**、日本語の語に直してください`,
+    })
   }
   if (PREFIX.test(text) || (QUOTES.includes(text.charAt(0)) && QUOTES.includes(text.charAt(text.length - 1)))) {
     out.push({ code: 'prefix', hint: '「一言:」のような前置きや、全体を囲む引用符を付けないでください' })

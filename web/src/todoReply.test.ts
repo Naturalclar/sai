@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { opensByDefault, ownReplying, pruneToggled, rowOpen, rowReplyable, toggleKey } from './todoReply.ts'
+import { opensByDefault, ownReplying, pruneToggled, rowOpen, rowReplyable, toggleKey, replyRowOf } from './todoReply.ts'
 import type { TodoItem } from '../../shared/todoItems.ts'
 
 const session = {} as NonNullable<TodoItem['session']>
@@ -47,4 +47,19 @@ test('ownReplying: この画面から送ったセッションの返信だけを�
   // 送ったが、もうサーバに無い（終わった）
   assert.deepEqual(ownReplying(replying, new Set(['x'])), {})
   assert.deepEqual(ownReplying(replying, new Set()), {})
+})
+
+test('replyRowOf: 同じセッションに終わった待ち（wait。#732）の行が並んでいても、返信に関わる行だけを引く', () => {
+  const items = [
+    { id: 'a@sai', kind: 'wait' as const },
+    { id: 'a@sai', kind: 'done' as const },
+    { id: 'b@sai', kind: 'wait' as const },
+    { id: 'c@sai', kind: 'answer' as const },
+  ]
+  // 待ちの行が先に並んでいても、送信失敗を戻す先は done の行
+  assert.equal(replyRowOf(items, 'a@sai')?.kind, 'done')
+  // 待ちの行しか残っていないセッションは「行がもう並んでいない」（失敗は画面の上に出す）
+  assert.equal(replyRowOf(items, 'b@sai'), undefined)
+  assert.equal(replyRowOf(items, 'c@sai')?.kind, 'answer')
+  assert.equal(replyRowOf(items, 'x@sai'), undefined)
 })

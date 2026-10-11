@@ -13,7 +13,7 @@ import { useNarrow } from './useNarrow'
 import { shouldQueue } from './replyQueue.ts'
 import { loadDraft, saveDraft } from './replyDrafts'
 import { restoresText, type RestoreRequest } from './replyRestore'
-import { ownReplying, pruneToggled, rowOpen, rowReplyable, toggleKey } from './todoReply'
+import { ownReplying, pruneToggled, replyRowOf, rowOpen, rowReplyable, toggleKey } from './todoReply'
 import { pendingItems, todoItems, todoKey, todoSections, type TodoItem } from '../../shared/todoItems.ts'
 import type { PaneProps } from './App'
 import { DefaultReplyModeContext } from './replyModeSetting'
@@ -122,7 +122,7 @@ export function TodoView({ list, onStatus, onOpenSidebar, onLeaveToSidebar, prs,
   // 失敗した本文を入力欄に戻す（#350）。開いていればその場で、閉じていれば打ちかけに書いてから開く
   // （ReplyBox は作ったときの restore を「当てた」ことにするので、開くのと同時に頼んでも入らない）
   const restoreFailed = (f: ReplyFailed) => {
-    const t = items.find((x) => x.id === f.id)
+    const t = replyRowOf(items, f.id)
     if (!t) return
     if (isOpen(t)) {
       setRestore((r) => ({ id: f.id, text: f.text, seq: (r?.seq ?? 0) + 1 }))
@@ -222,7 +222,7 @@ export function TodoView({ list, onStatus, onOpenSidebar, onLeaveToSidebar, prs,
       {/* 送った行は「処理中」になって並びから消えるので、どこに送ったかはここに出す（終われば下段に戻る） */}
       {sentHere && <div className="notice">「{sentHere.label}」に送りました。終わるとまた下に並びます</div>}
       {/* 行が消えたあとに届いた失敗（送って処理中になった行は並びに無い） */}
-      {failed && !items.some((t) => t.id === failed.id) && failedNotice(failed)}
+      {failed && !replyRowOf(items, failed.id) && failedNotice(failed)}
       {data && items.length === 0 && <div className="empty">エージェントはどれも動いているか、終わっています</div>}
       <div className="todo-list">
         {rowsInOrder()}

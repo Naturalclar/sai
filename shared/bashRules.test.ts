@@ -591,6 +591,9 @@ test('シェル・インタプリタに 1 語のルールを書かない: スク
     'python3.12 tools/x.py', 'php x.php', 'osascript x.scpt', 'fish x.fish', 'dash x.sh', 'lua x.lua', 'tsx x.ts',
     // フラグだけ（標準入力からコードを読む）・標準入力の名指し・数字や値がくっついたコードのフラグ（レビューの指摘）
     'cat a.py | python3 -u', 'cat a.py | python3 -q -u', 'cat a.js | node -i', 'cat a.js | node --input-type=module', 'cat x | perl -w', 'cat x | ruby -w', 'ruby -v',
+    'cat x | bash //dev/stdin', 'cat x | bash /./dev/stdin', 'cat x | bash /tmp/../dev/stdin', 'cat x | bash ../../dev/stdin', 'cat a.py | python3 //dev/stdin',
+    // フラグだけの形は、標準入力を読まないものも断る（フラグの意味は見分けない）。シェルは --version も
+    'node --test', 'node --watch', 'bash --version', 'python3 -v',
     'cat x | bash /dev/stdin', 'cat x | sh /dev/fd/0', 'cat a.py | python3 /dev/stdin', 'cat a.js | node --no-warnings /dev/stdin', 'cat x | bash /proc/self/fd/0',
     'perl -0pe 1', 'perl -e1', 'perl -E1', 'perl -0777ne 1 x', 'perl -l -0pe 1', 'ruby -0777ne 1', 'perl -0pe s/a/b/g x', 'ruby -rjson x.rb',
     'cat x.sh | bash', 'cat x.sh | sh', 'cat a.py | python3', 'cat a.js | node', 'curl-like | perl',
@@ -604,6 +607,12 @@ test('シェル・インタプリタに 1 語のルールを書かない: スク
   assert.deepEqual(h('perl -w tools/x.pl'), { prefixes: ['perl -w tools/x.pl'] })
   // 版を出して終わる形は組む
   assert.deepEqual(h('python3 --version'), { prefixes: ['python3 --version'] })
+  assert.deepEqual(h('python3 -V'), { prefixes: ['python3 -V'] })
+  assert.deepEqual(h('perl -v'), { prefixes: ['perl -v'] })
+  assert.deepEqual(h('node --help'), { prefixes: ['node --help'] })
+  // 名前に dev が入っているだけのスクリプトは標準入力ではない
+  assert.deepEqual(h('bash scripts/dev/x.sh'), { prefixes: ['bash scripts/dev/x.sh'] })
+  assert.deepEqual(h('node /w/dev/x.mjs'), { prefixes: ['node /w/dev/x.mjs'] })
   assert.deepEqual(h('node -v -e 1'), { reason: 'bare_cli' })
   assert.deepEqual(h('node -v'), { prefixes: ['node -v'] })
 })

@@ -427,7 +427,7 @@ function placeTargets(words: readonly string[], from: number, base: string): { t
  * 前の 1 語より必ず狭い。次の形は null（組まない）:
  * - 途中にコマンドの名前・パス・フラグの形でない語がある（`python3 -c '…'`・`node -e '…'` のコード、`git -c a.b=c …`、`python3 -`）
  * - 場所を変えるフラグが頭にある（`git -C sub status`。`git -C sub` は、そこでの git の全部を通す）
- * - シェル・インタプリタ（`SHELLS`・`INTERPRETERS`）の、フラグつき・コードを渡すフラグつき・引数なし・フラグだけ（`--version` と `node -v` だけは組む）・標準入力の名指し・
+ * - シェル・インタプリタ（`SHELLS`・`INTERPRETERS`）の、フラグつき・コードを渡すフラグつき・引数なし・インタプリタのフラグだけ（版・使い方を出して終わる `--version`・`--help`・`node -v` などだけは組む。シェルはフラグつきを全部断る）・標準入力の名指し・
  *   `SCRIPT_RULE_OK` に無いもの（#755 の残り。`bash -c '…'`・`perl -e '…'`・`cat x | sh`・`cat a.py | python3 -u`・`bash /dev/stdin`・`php x.php`）
  */
 function ruleHead(words: readonly string[]): string | null {
@@ -445,7 +445,8 @@ function ruleHead(words: readonly string[]): string | null {
   // パス（`node scripts/x.mjs`・`npx @scope/pkg`）。前はパスの形を 1 語（`Bash(node:*)`）にしていた
   const named = /^[\w.@/](?:[\w.@/:-]*[\w.-])?$/
   // 標準入力を名指しした形（`bash /dev/stdin`・`sh /dev/fd/0`）は、引数なしと同じ（コードはパイプの前から来る）
-  const stdinPath = (w: string) => /^\/(?:dev|proc)\//.test(w)
+  // 別の綴り（`//dev/stdin`・`/tmp/../dev/stdin`・`../../dev/stdin`）も: 絶対パスは畳んでから見て、`..` を含む相対パスは `dev` / `proc` の階層があれば当てる
+  const stdinPath = (w: string) => (w.startsWith('/') ? /^\/(?:dev|proc)\//.test(normalize(w)) : w.split('/').includes('..') && /(?:^|\/)(?:dev|proc)\//.test(w))
   if (named.test(words[1]!)) return runsCode && stdinPath(words[1]!) ? null : `${first} ${words[1]}`
   // シェル・インタプリタで、名前・パスの形の語（スクリプト）を 1 つも見ていないか
   let scriptless = runsCode
@@ -470,9 +471,11 @@ function ruleHead(words: readonly string[]): string | null {
     }
   }
   // フラグだけのインタプリタは標準入力からコードを読む（`cat a.py | python3 -u`）。`Bash(python3 -u:*)` は後ろに `-c '…'` を足した形まで覆う。
-  // 版を出して終わる形だけは組む: `--version` と、`node -v`（#757 で実機で通した形。`node -v -e '…'` も版を出して終わる）。
-  // ほかの `-v` は入れない（`ruby -v`・`python3 -v` は続けて走る）
-  if (scriptless && !words.slice(1).every((w) => w === '--version' || (w === '-v' && (base === 'node' || base === 'bun')))) return null
+  // 版・使い方を出して終わる形だけは組む: `--version`・`--help`・`-h`、`node -v`（#757 で実機で通した形）・`perl -v`・`python3 -V`。
+  // ほかの `-v` は入れない（`ruby -v`・`python3 -v` は続けて走る）。**ほかのフラグだけの形は、標準入力を読まないもの（`node --test`）も断る**
+  // （フラグの意味を知らないので見分けない。スクリプトを名指しした `node --test x.test.ts` は組む）
+  const exits = (w: string) => w === '--version' || w === '--help' || w === '-h' || (w === '-v' && ['node', 'bun', 'perl'].includes(base)) || (w === '-V' && /^python/.test(base))
+  if (scriptless && !words.slice(1).every(exits)) return null
   return words.join(' ')
 }
 

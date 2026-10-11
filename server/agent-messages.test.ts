@@ -3,6 +3,7 @@
 import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
+import { CACHE_COLD_MS, COLD_COMPACT_TOKENS } from '../shared/compact.ts'
 import type { Server } from 'node:http'
 import { appendFile, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -98,6 +99,8 @@ const changed = {
   },
 }
 const now = new Date()
+/** サーバの時計を進める分（#761。最後のターンからの間を作る）。使ったテストが 0 に戻す */
+let skew = 0
 const minutesAgo = (n: number) => new Date(now.getTime() - n * 60_000)
 
 before(async () => {
@@ -130,7 +133,7 @@ before(async () => {
     new BuildFreshness(join(dir, 'dist'), [], 0),
     undefined,
     new Authenticator(async () => null),
-    { tmux: { run: async () => { throw new Error('unused') } }, ps: async () => '', codexApp },
+    { tmux: { run: async () => { throw new Error('unused') } }, ps: async () => '', codexApp, loopNow: () => Date.now() + skew },
     undefined,
     changed,
     undefined,
@@ -214,6 +217,11 @@ test('sai_sessions: 同じ project の、返信できる別のセッションだ
     const sized = (await (await agent('/api/agent/sessions?from=A1%40r')).json()) as AgentSessionsResponse
     assert.equal(sized.sessions[0]!.context_tokens, 120_000, '相手が読み直す量（直近の呼び出しの入力。#311）')
     contexts.delete('B1@r')
+    // 最後のターンからの時間（#761）。処理中の相手には付かない（上の形に `idle_ms` が無い）。空いていれば付く
+    idle('B1@r')
+    const rested = (await (await agent('/api/agent/sessions?from=A1%40r')).json()) as AgentSessionsResponse
+    const idleMs = rested.sessions[0]!.idle_ms ?? -1
+    assert.ok(idleMs >= 7 * 60_000 && idleMs < 10 * 60_000, `最後のターン完了（8 分前）から数える: ${idleMs}`)
   } finally {
     idle('A1@r')
     idle('B1@r')
@@ -915,7 +923,7 @@ test('sai_send: 1 行目が着手の形で相手が要約できるなら、/comp
   idle('B1@r')
 })
 
-test('sai_send: 着手の形でない本文・1 行目に続きを書いた依頼・小さい相手は要約しない。指定（compact）があれば指定が勝つ（#624）', async () => {
+test('sai_send: 着手の形でない本文・1 行目に続きを書いた依頼・小さい相手は要約しない。指定（compact）があれば指定が勝つ（#624）。間があいて大きい相手には、着手の形でなくても要約を挟む（#761）', async () => {
   contexts.set('B1@r', 500_000)
   const viaOf = async (text: string, over: Record<string, unknown> = {}) => {
     runner.started.length = 0
@@ -940,10 +948,20 @@ test('sai_send: 着手の形でない本文・1 行目に続きを書いた依�
     assert.equal(asked.via, 'compact', '着手の形でなくても、true なら要約する')
     assert.match(asked.cmd.text, /^\/compact 次は「#592 の調査を進めてください」/)
     assert.equal((await viaOf('#624 に着手してください。', { compact: 'yes' })).via, 'compact', '真偽値でない指定は無いものとして、判定に任せる')
+    // 間があいて大きい相手（#761）。B1 の最後のターンは 8 分前なので、時計を境目のぶん進める
+    skew = CACHE_COLD_MS
+    const cold = await viaOf('PR をレビューしてマージしてください')
+    assert.equal(cold.via, 'compact', '着手の形でなくても、間があいて大きければ要約する')
+    assert.match(cold.cmd.text, /^\/compact 次は「PR をレビューしてマージしてください」/)
+    assert.equal((await viaOf('PR をレビューしてマージしてください', { compact: false })).via, 'process', 'false なら要約しない')
+    contexts.set('B1@r', COLD_COMPACT_TOKENS - 1)
+    assert.equal((await viaOf('PR をレビューしてマージしてください')).via, 'process', '間があいていても、閾値より小さければそのまま')
+    skew = 0
     contexts.set('B1@r', 100_000)
     assert.equal((await viaOf('#624 に着手してください。')).via, 'process', '文脈が小さい相手は要約しない')
     assert.equal((await viaOf('#624 に着手してください。', { compact: true })).via, 'process', '要約できない相手は、指定してもそのまま')
   } finally {
+    skew = 0
     contexts.delete('B1@r')
   }
 })

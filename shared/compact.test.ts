@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { canCompact, COMPACT_MIN_TOKENS, compactPrompt, messageCompacts, SEND_MODE_LABEL, SEND_MODE_SHORT, sendModes, startsNewWork } from './compact.ts'
+import { CACHE_COLD_MS, COLD_COMPACT_TOKENS, cacheCold, canCompact, COMPACT_MIN_TOKENS, coldAndLarge, compactPrompt, idleLabel, idleMsSince, messageCompacts, SEND_MODE_LABEL, SEND_MODE_SHORT, sendCost, sendModes, startsNewWork } from './compact.ts'
+import { WAIT_AUTO_WAKE_MS } from './waits.ts'
 import { CONTEXT_WARN_TOKENS } from './contextSize.ts'
 
 test('startsNewWork: 実データの着手の形は当たる（#579）', () => {
@@ -77,4 +78,68 @@ test('分岐して送る（#405）: Codex で分岐できるときだけ、そ�
   assert.deepEqual(sendModes({ ...codex, agent: 'opencode' }, CONTEXT_WARN_TOKENS).choices, [])
   assert.deepEqual(sendModes({ ...codex, agent: 'opencode', forkable: true, terminal: true }, CONTEXT_WARN_TOKENS).choices, [])
   assert.equal(SEND_MODE_LABEL.fork, '分岐して送る')
+})
+
+// ---- 間があいて大きいセッション（#761）
+
+const COLD = CACHE_COLD_MS + 60_000
+
+test('境目は 1 つ: 待ち（#732）の「自動では起こさない」線と、キャッシュが切れている見込みの線は同じ値（#761）', () => {
+  assert.equal(WAIT_AUTO_WAKE_MS, CACHE_COLD_MS)
+  assert.equal(COLD_COMPACT_TOKENS, CONTEXT_WARN_TOKENS, '仮の閾値は見出しの警告と同じ区切り')
+})
+
+test('idleMsSince / cacheCold: 間が分からなければ切れていない側。境目ちょうどは切れていない（#761）', () => {
+  const now = Date.parse('2026-01-01T10:00:00+09:00')
+  assert.equal(idleMsSince('2026-01-01T09:00:00+09:00', now), 60 * 60_000)
+  assert.equal(idleMsSince('2026-01-01T10:00:05+09:00', now), 0, '先の時刻は 0')
+  assert.equal(idleMsSince('', now), undefined)
+  assert.equal(idleMsSince(undefined, now), undefined)
+  assert.equal(idleMsSince('読めない', now), undefined)
+  assert.equal(cacheCold(undefined), false)
+  assert.equal(cacheCold(CACHE_COLD_MS), false)
+  assert.equal(cacheCold(CACHE_COLD_MS + 1), true)
+})
+
+test('sendModes: 間があいて大きい Claude のセッションは、着手の形でなくても要約が既定。人は「そのまま」を選べる（#761）', () => {
+  const cold = { ...claude, text: 'マージして', contextTokens: COLD_COMPACT_TOKENS, idleMs: COLD }
+  assert.deepEqual(sendModes(cold, CONTEXT_WARN_TOKENS), { mode: 'compact', choices: ['compact', 'plain', 'new'] })
+  assert.equal(sendModes({ ...cold, idleMs: CACHE_COLD_MS }, CONTEXT_WARN_TOKENS).mode, 'plain', '温かければそのまま（選べるのは今までどおり）')
+  assert.equal(sendModes({ ...cold, contextTokens: COLD_COMPACT_TOKENS - 1 }, CONTEXT_WARN_TOKENS).mode, 'plain', '小さければそのまま')
+  const { idleMs: _idle, ...unknown } = cold
+  assert.equal(sendModes(unknown, CONTEXT_WARN_TOKENS).mode, 'plain', '間が分からなければそのまま')
+  assert.equal(coldAndLarge(cold), true)
+})
+
+test('sendModes: 間があいて大きくても、要約できない相手（端末で開いている・Claude 以外）には何もしない（#761）', () => {
+  assert.equal(sendModes({ ...claude, terminal: true, text: 'マージして', contextTokens: 800_000, idleMs: COLD }, CONTEXT_WARN_TOKENS).mode, 'plain')
+  assert.deepEqual(sendModes({ agent: 'codex', terminal: false, text: 'マージして', contextTokens: 800_000, idleMs: COLD }, CONTEXT_WARN_TOKENS), { mode: 'plain', choices: [] })
+  assert.deepEqual(sendModes({ agent: 'opencode', terminal: false, text: 'マージして', contextTokens: 800_000, idleMs: COLD }, CONTEXT_WARN_TOKENS), { mode: 'plain', choices: [] })
+})
+
+test('messageCompacts: 着手の形でなくても、間があいて大きい相手には要約を挟む。compact: false で外せる（#761）', () => {
+  const cold = { agent: 'claude', terminal: false, contextTokens: 800_000, idleMs: COLD, text: 'PR をレビューしてマージしてください' }
+  assert.equal(messageCompacts(cold, CONTEXT_WARN_TOKENS), true)
+  assert.equal(messageCompacts(cold, CONTEXT_WARN_TOKENS, false), false)
+  assert.equal(messageCompacts({ ...cold, idleMs: 5 * 60_000 }, CONTEXT_WARN_TOKENS), false, '温かい相手はそのまま')
+  assert.equal(messageCompacts({ ...cold, terminal: true }, CONTEXT_WARN_TOKENS), false)
+  assert.equal(messageCompacts({ ...cold, agent: 'codex' }, CONTEXT_WARN_TOKENS, true), false)
+})
+
+test('idleLabel / sendCost: 入力欄に出す 1 行。キャッシュの印は Claude だけ、どちらも分からなければ出さない（#761）', () => {
+  assert.equal(idleLabel(0), '0 分')
+  assert.equal(idleLabel(59 * 60_000), '59 分')
+  assert.equal(idleLabel(72 * 60_000), '1 時間 12 分')
+  assert.equal(idleLabel(120 * 60_000), '2 時間')
+  assert.equal(idleLabel(49 * 60 * 60_000), '2 日')
+  assert.equal(idleLabel(undefined), '')
+  assert.equal(sendCost({ agent: 'claude', context: '', idleMs: undefined }), null)
+  const warm = sendCost({ agent: 'claude', context: '810k', idleMs: 12 * 60_000 })
+  assert.equal(warm?.text, 'いま 810k ・ 最後のターンから 12 分')
+  assert.equal(warm?.cold, false)
+  const cold = sendCost({ agent: 'claude', context: '810k', idleMs: COLD })
+  assert.equal(cold?.cold, true)
+  assert.match(cold?.title ?? '', /キャッシュが切れている見込み/)
+  assert.equal(sendCost({ agent: 'codex', context: '', idleMs: COLD })?.cold, false, 'Claude 以外には印を付けない')
+  assert.equal(sendCost({ agent: 'claude', context: '', idleMs: COLD })?.text, `最後のターンから ${idleLabel(COLD)}`)
 })

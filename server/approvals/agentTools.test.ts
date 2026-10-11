@@ -263,6 +263,10 @@ test('AGENT_TOOLS: 説明を書き直しても、ツールの名前と引数は�
   const send = AGENT_TOOLS.find((t) => t.name === 'sai_send')!.description
   assert.ok(send.indexOf('使う場面') < send.indexOf('1 ターンに'), '使う場面を先に、制限は後ろに書く')
   assert.match(send, /1 行目を「#N に着手してください。」だけ/, '着手の頼み方（#624。1 行目がこの形のときだけ要約される）')
+  // 割り振りの決まり（#761）: 小さくて温かい相手を選ぶ・別の issue なら要約を挟む・まとめて 1 回で送る
+  assert.match(send, /割り振るとき.*読み直す量が小さく.*要約を挟む.*まとめて 1 回で送る/)
+  const sessions = AGENT_TOOLS.find((t) => t.name === 'sai_sessions')!.description
+  assert.match(sessions, /最後のターンからの時間/)
 })
 
 test('sai_loop_next: 送り元・action・秒・申し送りを送り、次にどうなるかを言葉で返す。上限や目的は引数に無い（#634）', async () => {

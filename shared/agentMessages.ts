@@ -1,5 +1,6 @@
 // セッション同士のメッセージ（#310 / #311）。SAI の MCP サーバのツール（sai_sessions / sai_send / sai_wait）と
 // SAI サーバが同じ規則を見る。DOM にもファイルにも触らないので shared/agentMessages.test.ts で回す
+import { CACHE_COLD_MS, COLD_COMPACT_TOKENS, cacheCold, idleLabel, idleMsSince } from './compact.ts'
 import { isCompactSummaryText } from './compactSummary.ts'
 import { entityId } from './entity.ts'
 import { isLoopPrompt } from './loops.ts'
@@ -343,8 +344,11 @@ export function agentEntry(
   busy: boolean,
   contextTokens = 0,
   overlap: { overlap: string[]; overlap_more: number } = { overlap: [], overlap_more: 0 },
+  now?: number,
 ): AgentSessionEntry {
   const last = (s.last_text ?? '').split('\n')[0] ?? ''
+  // 最後のターン完了からの時間（#761）。処理中の相手には出さない（いま回っているので、前のターンからの間に意味が無い）
+  const idle = now === undefined || busy ? undefined : idleMsSince(s.last_turn_ts, now)
   return {
     id: s.id,
     name: sessionLabel(s),
@@ -356,7 +360,14 @@ export function agentEntry(
     context_tokens: contextTokens,
     overlap: overlap.overlap,
     overlap_more: overlap.overlap_more,
+    ...(idle !== undefined ? { idle_ms: idle } : {}),
   }
+}
+
+/** sai_sessions の 1 行に足す「最後のターンから」（#761）。キャッシュが切れている見込みなら、そう書く。分からなければ空 */
+export function idleNote(idleMs: number | undefined): string {
+  if (idleMs === undefined) return ''
+  return ` 最後のターン: ${idleLabel(idleMs)}前${cacheCold(idleMs) ? '（キャッシュ切れの見込み）' : ''}`
 }
 
 /** トークン数を「約 12 万トークン」の形に。0（分からない）は空 */
@@ -512,9 +523,15 @@ export const SEND_ITEMS_ARG = `複数の相手に 1 つの依頼としてまと�
 export const SEND_COMPACT_NOTE =
   '**着手を頼むときは、1 行目を「#N に着手してください。」だけにして、説明は 2 行目から書く**（1 行目がその形なら、相手は要約（/compact）してから始めるので読み直す量が減る。1 行目に続きを書くと要約されない）'
 
+/**
+ * `sai_send` の説明に足す、割り振りの決まり（#761）。費用の大半は仕事の中身ではなく文脈の読み直しなので、
+ * 「どのセッションに・いつ送るか」をエージェントが選べるように書く。`AGENTS.md` と `/manager` の手順にも同じ 3 つを置く
+ */
+export const ASSIGN_NOTE = `**割り振るとき**: (1) 空いている中で、読み直す量が小さく、最後のターンから間のあいていない相手を選ぶ（sai_sessions に出る）。(2) 前と別の issue を渡すなら要約を挟む（1 行目を着手の形にするか compact: true）。(3) 同じ相手への頼みごとはまとめて 1 回で送る（送るたびに相手は文脈を読み直す）。最後のターンから約 ${Math.round(CACHE_COLD_MS / 60_000)} 分を過ぎて（キャッシュが切れている見込み）文脈が約 ${Math.round(COLD_COMPACT_TOKENS / 10_000)} 万トークン以上の相手には、着手の形でなくても要約してから始めさせる（要らなければ compact: false）`
+
 /** `sai_send` の `compact` の説明（#624） */
 export const SEND_COMPACT_ARG =
-  '相手に要約（/compact）してから始めさせるか。省略すれば 1 行目が着手の形のときだけ要約する。調査のような着手の形でない依頼でも要約させたいときは true、着手の形でも要約させたくないときは false。要約できない相手（端末で開いている・Claude でない・文脈が小さい）はそのまま始める'
+  '相手に要約（/compact）してから始めさせるか。省略すれば、1 行目が着手の形のときか、相手の間があいて文脈が大きいときだけ要約する。調査のような着手の形でない依頼でも要約させたいときは true、要約させたくないときは false。要約できない相手（端末で開いている・Claude でない・文脈が小さい）はそのまま始める'
 
 /** 宛先（`to`）の説明（#625）。セッション同士の口と tailnet の `/mcp` で同じ文 */
 export const SEND_TO_ARG =

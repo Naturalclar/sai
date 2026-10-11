@@ -8,6 +8,64 @@
 export const COMPACT_MIN_TOKENS = 150_000
 
 /**
+ * 前のターンが終わってからこれを過ぎたセッションは、**プロンプトキャッシュが切れている見込み**として扱う（#761）。
+ * 切れるのは 60 分で（実測は docs/history/reply.md の #732 の節）、起動・要約にかかる分を引いて手前に置く。
+ * 待ち（#732）の「自動では起こさない」線（`shared/waits.ts` の `WAIT_AUTO_WAKE_MS`）もこの値。**線を変えるならここ**
+ */
+export const CACHE_COLD_MS = 50 * 60_000
+
+/**
+ * キャッシュが切れている見込みで、文脈がこれ以上なら、本文が着手の形でなくても「要約してから送る」を既定にする（#761）。
+ * **仮の値**（見出しの警告 `CONTEXT_WARN_TOKENS` と同じ区切り）。変えるならここ
+ */
+export const COLD_COMPACT_TOKENS = 400_000
+
+/** 最後のターン完了（`SessionSummary.last_turn_ts`）からの時間。分からなければ undefined（先の時刻は 0） */
+export function idleMsSince(lastTurnTs: string | undefined, now: number): number | undefined {
+  const at = lastTurnTs ? Date.parse(lastTurnTs) : NaN
+  return Number.isFinite(at) ? Math.max(0, now - at) : undefined
+}
+
+/** キャッシュが切れている見込みか。**間が分からなければ切れていない側**（分からないのに要約を挟まない） */
+export function cacheCold(idleMs: number | undefined): boolean {
+  return idleMs !== undefined && idleMs > CACHE_COLD_MS
+}
+
+/** `12 分` / `1 時間 20 分` / `3 日`。分からなければ空 */
+export function idleLabel(idleMs: number | undefined): string {
+  if (idleMs === undefined) return ''
+  const min = Math.floor(idleMs / 60_000)
+  if (min < 60) return `${min} 分`
+  if (min < 24 * 60) return `${Math.floor(min / 60)} 時間${min % 60 ? ` ${min % 60} 分` : ''}`
+  return `${Math.floor(min / (24 * 60))} 日`
+}
+
+/** 入力欄に出す、送る前の大きさと間（#761）。`cold` はキャッシュが切れている見込み */
+export interface SendCost {
+  /** `いま 810k ・ 最後のターンから 1 時間 12 分` */
+  text: string
+  cold: boolean
+  title: string
+}
+
+/**
+ * 入力欄に出す 1 行（#761）。読み直す量（分かれば）と最後のターンからの時間（分かれば）。どちらも分からなければ null。
+ * **キャッシュの印は Claude だけ**（60 分で切れるのを確かめたのは Claude の記録。ほかは分からないので出さない）。
+ * `context` は `contextLabel()` を通した文字（`810k`。分からなければ空）
+ */
+export function sendCost(input: { agent: string; context: string; idleMs: number | undefined }): SendCost | null {
+  const idle = idleLabel(input.idleMs)
+  if (!input.context && !idle) return null
+  const cold = input.agent === 'claude' && cacheCold(input.idleMs)
+  const parts = [...(input.context ? [`いま ${input.context}`] : []), ...(idle ? [`最後のターンから ${idle}`] : [])]
+  const reads = input.context ? `送ると、この量（${input.context} トークン）を読み直します` : ''
+  const why = cold
+    ? `最後のターンから ${Math.round(CACHE_COLD_MS / 60_000)} 分を過ぎているので、キャッシュが切れている見込みです。短い返信でも文脈をほぼ全部書き直します`
+    : ''
+  return { text: parts.join(' ・ '), cold, title: [reads, why].filter(Boolean).join('\n') }
+}
+
+/**
  * 返信の送り方。`compact` = 要約してから送る、`plain` = そのまま、`new` = 新しいセッションで送る、
  * `fork` = 会話ごと分岐して、分岐先に送る（#405 の Codex、#398 の OpenCode）
  */
@@ -51,6 +109,8 @@ export interface SendModeInput {
    * 端末で開いているものには出さない（サーバも `codexHeldElsewhere()` で断る）
    */
   forkable?: boolean
+  /** 最後のターン完了からの時間（`idleMsSince()`。#761）。分からなければ省略 */
+  idleMs?: number
 }
 
 /** 要約を選べるか。Claude で、端末で開いておらず、下限以上のとき（量が分からなければ出さない） */
@@ -59,25 +119,36 @@ export function canCompact(input: Pick<SendModeInput, 'agent' | 'contextTokens' 
 }
 
 /**
- * 既定の送り方と、出す選択肢。**着手の形で要約できるなら要約が既定**、それ以外はそのまま。
- * 着手でなくても `warnTokens`（#441 の警告の区切り）を超えていれば要約を横に出す（既定はそのまま）。
- * 新しいセッションは既定にしない（Claude のときだけ出す。まっさらが要るときに人が選ぶ）
+ * 間があいて大きいか（#761）: キャッシュが切れている見込みで、文脈が `COLD_COMPACT_TOKENS` 以上。
+ * 短い返信でも文脈をほぼ全部書き直すので、要約できる相手なら要約が既定になる
+ */
+export function coldAndLarge(input: Pick<SendModeInput, 'contextTokens' | 'idleMs'>): boolean {
+  return cacheCold(input.idleMs) && input.contextTokens >= COLD_COMPACT_TOKENS
+}
+
+/**
+ * 既定の送り方と、出す選択肢。**着手の形か、間があいて大きい（`coldAndLarge()`。#761）ときに、要約できるなら要約が既定**、
+ * それ以外はそのまま。どちらでもなくても `warnTokens`（#441 の警告の区切り）を超えていれば要約を横に出す（既定はそのまま）。
+ * 新しいセッションは既定にしない（Claude のときだけ出す。まっさらが要るときに人が選ぶ）。
+ * **画面からの送信・`sai_send`・待ちで起こすとき（#732）の 3 つが、この 1 つを見る**
  */
 export function sendModes(input: SendModeInput, warnTokens: number): { mode: SendMode; choices: SendMode[] } {
   const claude = input.agent === 'claude'
   const compactable = canCompact(input)
   const work = startsNewWork(input.text)
-  const offerCompact = compactable && (work || input.contextTokens >= warnTokens)
+  const cold = coldAndLarge(input)
+  const offerCompact = compactable && (work || cold || input.contextTokens >= warnTokens)
   const choices: SendMode[] = offerCompact ? ['compact', 'plain'] : ['plain']
   if (claude && (offerCompact || work)) choices.push('new')
   // 分岐（#405 / #398）は既定にしない。Codex・OpenCode で分岐できるときに、そのままの横に出すだけ
   if ((input.agent === 'codex' || input.agent === 'opencode') && input.forkable && !input.terminal) choices.push('fork')
-  return { mode: offerCompact && work ? 'compact' : 'plain', choices: choices.length > 1 ? choices : [] }
+  return { mode: offerCompact && (work || cold) ? 'compact' : 'plain', choices: choices.length > 1 ? choices : [] }
 }
 
 /**
- * 別のセッションからのメッセージ（`sai_send`。#624）を、要約してから始めるか。**画面からの送信と同じ判定**（`sendModes()`）で、
- * 着手の形の本文を、要約できる相手に送るときだけ。`input.text` は**送り元が書いた文そのもの**（見出しを付ける前）を渡す。
+ * 別のセッションからのメッセージ（`sai_send`。#624）・待ちで起こすターン（#732）を、要約してから始めるか。
+ * **画面からの送信と同じ判定**（`sendModes()`）で、着手の形の本文か、間があいて大きい相手（#761）で、要約できるときだけ。
+ * `input.text` は**送り元が書いた文そのもの**（見出しを付ける前）を渡す。
  * 送る側の指定（`asked`）があれば指定が勝つが、要約できない相手（端末で開いている・Claude でない・文脈が小さい）は指定しても要約しない
  */
 export function messageCompacts(input: SendModeInput, warnTokens: number, asked?: boolean): boolean {

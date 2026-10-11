@@ -365,6 +365,7 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
                 {open && session && footer.canReply && (
                   <TodoReplyBox
                     session={session}
+                    now={now}
                     // 押して開いた塊のままのときだけ。同じ塊に次の返答が届くと footer ごと作り直されるので、常に付けると打っている別の欄からフォーカスを奪う
                     focusOnOpen={acrossHere.open?.anchor === anchor}
                     replying={data.replying[target]}
@@ -501,6 +502,7 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
             // 送れなかった（確認待ち・送信失敗）ら ReplyBox が本文・画像・返信先を戻す（#350）
             // 送り方（#579）。着手の指示なら「要約してから送る」が既定。量は詳細の context_tokens（#441）
             sendMode={{ agent: s.agent, contextTokens, terminal: Boolean(s.terminal), forkable: (s.agent === 'codex' || s.agent === 'opencode') && !blocked }}
+            warmth={{ agent: s.agent, lastTurnAt: s.last_turn_ts, contextTokens }}
             onSend={async (text, attachments, { steer, mode }) => {
               if (mode === 'new') return await startFresh(text)
               if (mode === 'fork') return await startFork(text)

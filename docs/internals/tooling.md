@@ -54,7 +54,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 ```
 pnpm -s feed rows <セッション>           # あるセッションの最近の行（時刻・種類・入力と返答の頭）
 pnpm -s feed messages                    # 送ったメッセージと、返答が届いたか（--session で送り元・宛先を絞る）
-pnpm -s feed usage                       # セッション別の使用量。--by day で日別。費用は前の行との差
+pnpm -s feed usage                       # セッション別の使用量。--by day で日別。費用は前の行との差。末尾に読み直しの大きいターンの割合（#761）
 node --disable-warning=ExperimentalWarning server/tools/feed.ts rows <セッション>   # pnpm を通さない形（別の cwd からはこのパスを絶対で）
 ```
 

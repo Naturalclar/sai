@@ -153,9 +153,9 @@ test('sai_sessions: ブランチから出ている open な PR と CI・ブラ�
   assert.deepEqual(prs.asked, [], '前の結果があれば gh を待たない')
   // tailnet の口も同じ印
   const line = await mcpLine('B1@r')
-  assert.match(line, /issue-9100-stock-filter （空き） PR #9101（CI 赤） issue #9100 最後の記録: /)
+  assert.match(line, /issue-9100-stock-filter （空き） PR #9101（CI 赤） issue #9100 最後のターン: \d+ 分前 最後の記録: /)
   assert.doesNotMatch(line, /題名は出さない/)
-  assert.match(await mcpLine('C1@r'), /dev-worktree-c （空き） 最後の記録: /)
+  assert.match(await mcpLine('C1@r'), /dev-worktree-c （空き） 最後のターン: \d+ 分前 最後の記録: /)
 })
 
 test('sai_sessions: 処理中・待ち・預かりがあれば空きではない。頼まれてまだ返していない依頼を数え、その 1 行目の番号も引く（#727）', async () => {

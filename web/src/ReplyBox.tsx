@@ -16,9 +16,10 @@ import { leavesToSidebar } from './replyFocus'
 import { DiffButton, type DiffButtonProps } from './DiffButton'
 import { acceptsSuggestion, suggestionFor, suggestionLabel } from './replySuggest'
 import { NEXT_ASK_MAX_CHARS } from '../../shared/nextAsk.ts'
-import { sendModes, type SendMode } from '../../shared/compact.ts'
+import { idleMsSince, sendCost, sendModes, type SendMode } from '../../shared/compact.ts'
+import { ReplySendCost } from './ReplySendCost'
 import { SendModePicker } from './SendModePicker'
-import { CONTEXT_WARN_TOKENS } from '../../shared/contextSize.ts'
+import { CONTEXT_WARN_TOKENS, contextLabel } from '../../shared/contextSize.ts'
 import { SuggestionChip } from './SuggestionChip'
 import { reportDigestUsage } from './digestUsage'
 import { ManagerDraftCard } from './ManagerDraftCard'
@@ -93,6 +94,11 @@ interface Props {
    * フィードには渡さない（返信先が `@` で動く）。判定は `shared/compact.ts` の `sendModes()`
    */
   sendMode?: { agent: string; contextTokens: number; terminal: boolean; forkable?: boolean }
+  /**
+   * 送る前に見せる大きさと間（#761）。最後のターン完了の時刻（`SessionSummary.last_turn_ts`）と、分かっていれば読み直す量。
+   * 間は `now` から数えるので、`now` を渡していないと出ない。**送り方の既定（間があいて大きければ要約）にも同じ間を使う**
+   */
+  warmth?: { agent: string; lastTurnAt: string | undefined; contextTokens?: number }
   /** 本文が空でないかが変わったら知らせる。FeedView は入力中に既定の返信先を動かさないために使う */
   onDraft?: (drafting: boolean) => void
   /** モデルの右に出す許可モードの選択。渡さなければ出さない（Claude 以外と、返信先が一覧に無いとき） */
@@ -168,7 +174,7 @@ const NO_HISTORY: readonly string[] = []
 const keyOf = (e: KeyboardEvent<HTMLTextAreaElement>) => ({ key: e.key, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, shiftKey: e.shiftKey })
 
 /** 入力欄。Enter で送信、Shift+Enter で改行。IME 変換中の Enter は送らない */
-export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerable = false, now = 0, onSend, sendMode, onDraft, model, permission, diff, skillsId, skillsAgent, attachId, draftKey, sentFromConfirm = 0, restore, insert, quote, history = NO_HISTORY, nextAsk, nextAskKey, managerDraft, onManagerDraft, onLeaveToSidebar, mention, focusOnOpen = false }: Props) {
+export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerable = false, now = 0, onSend, sendMode, warmth, onDraft, model, permission, diff, skillsId, skillsAgent, attachId, draftKey, sentFromConfirm = 0, restore, insert, quote, history = NO_HISTORY, nextAsk, nextAskKey, managerDraft, onManagerDraft, onLeaveToSidebar, mention, focusOnOpen = false }: Props) {
   // 前に打ちかけて離れた分（#306）。作ったときに 1 回だけ読む
   const [initial] = useState(() => (draftKey ? loadDraft(draftKey) : EMPTY_DRAFT))
   const [text, setText] = useState(initial.text)
@@ -245,7 +251,10 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
   // **切り替えたことは覚えない**（送ったら戻す）。処理中・預かりがあるときは出さない（サーバも要約を回さない）。
   // 画像を添えているときは新しいセッションを出さない（新しいセッションの口は画像を受けない）
   const [modePicked, setModePicked] = useState<SendMode | null>(null)
-  const offered = sendMode && !queueing ? sendModes({ ...sendMode, text }, CONTEXT_WARN_TOKENS) : null
+  // 最後のターンからの間（#761）。処理中・預かりがあるあいだは出さない（いま回っているので、前のターンからの間に意味が無い）
+  const idleMs = warmth && now > 0 && !queueing ? idleMsSince(warmth.lastTurnAt, now) : undefined
+  const cost = warmth && !queueing ? sendCost({ agent: warmth.agent, context: contextLabel(warmth.contextTokens), idleMs }) : null
+  const offered = sendMode && !queueing ? sendModes({ ...sendMode, text, ...(idleMs !== undefined ? { idleMs } : {}) }, CONTEXT_WARN_TOKENS) : null
   // 新しいセッション・分岐（#405）は本文だけを送る口なので、画像を添えているあいだは出さない
   const choices = (offered?.choices ?? []).filter((m) => (m !== 'new' && m !== 'fork') || attach.items.length === 0)
   const sendModeNow: SendMode = modePicked && choices.includes(modePicked) ? modePicked : choices.includes(offered?.mode ?? 'plain') ? (offered?.mode ?? 'plain') : 'plain'
@@ -777,6 +786,7 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
           )}
         </button>
       </div>
+      {cost && <ReplySendCost cost={cost} />}
       {skillOpen && (
         <ul className="mention skills" role="listbox" aria-label="スキル">
           {shownSkills.map((s) => (

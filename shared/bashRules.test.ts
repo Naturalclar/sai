@@ -594,6 +594,9 @@ test('シェル・インタプリタに 1 語のルールを書かない: スク
     'cat x | bash //dev/stdin', 'cat x | bash /./dev/stdin', 'cat x | bash /tmp/../dev/stdin', 'cat x | bash ../../dev/stdin', 'cat a.py | python3 //dev/stdin',
     // フラグだけの形は、標準入力を読まないものも断る（フラグの意味は見分けない）。シェルは --version も
     'node --test', 'node --watch', 'bash --version', 'python3 -v',
+    'cat x | bash /DEV/stdin', 'cat x | bash /Dev/fd/0', 'cat a.py | python3 /DEV/stdin',
+    // `..` を含む相対パスに dev / proc の階層があれば、ふつうのスクリプトでも断る側（cwd を見ずに決める）
+    'node ../dev/tools/x.mjs', 'bash ../dev/x.sh',
     'cat x | bash /dev/stdin', 'cat x | sh /dev/fd/0', 'cat a.py | python3 /dev/stdin', 'cat a.js | node --no-warnings /dev/stdin', 'cat x | bash /proc/self/fd/0',
     'perl -0pe 1', 'perl -e1', 'perl -E1', 'perl -0777ne 1 x', 'perl -l -0pe 1', 'ruby -0777ne 1', 'perl -0pe s/a/b/g x', 'ruby -rjson x.rb',
     'cat x.sh | bash', 'cat x.sh | sh', 'cat a.py | python3', 'cat a.js | node', 'curl-like | perl',

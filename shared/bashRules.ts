@@ -446,7 +446,8 @@ function ruleHead(words: readonly string[]): string | null {
   const named = /^[\w.@/](?:[\w.@/:-]*[\w.-])?$/
   // 標準入力を名指しした形（`bash /dev/stdin`・`sh /dev/fd/0`）は、引数なしと同じ（コードはパイプの前から来る）
   // 別の綴り（`//dev/stdin`・`/tmp/../dev/stdin`・`../../dev/stdin`）も: 絶対パスは畳んでから見て、`..` を含む相対パスは `dev` / `proc` の階層があれば当てる
-  const stdinPath = (w: string) => (w.startsWith('/') ? /^\/(?:dev|proc)\//.test(normalize(w)) : w.split('/').includes('..') && /(?:^|\/)(?:dev|proc)\//.test(w))
+  // （`node ../dev/tools/x.mjs` のようなふつうのスクリプトも断る側に倒れる。cwd を見ずに決めるため）。大文字小文字は区別しない（Mac では `/DEV/stdin` も開ける）
+  const stdinPath = (w: string) => (w.startsWith('/') ? /^\/(?:dev|proc)\//i.test(normalize(w)) : w.split('/').includes('..') && /(?:^|\/)(?:dev|proc)\//i.test(w))
   if (named.test(words[1]!)) return runsCode && stdinPath(words[1]!) ? null : `${first} ${words[1]}`
   // シェル・インタプリタで、名前・パスの形の語（スクリプト）を 1 つも見ていないか
   let scriptless = runsCode

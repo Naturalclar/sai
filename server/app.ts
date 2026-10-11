@@ -1162,7 +1162,8 @@ export function createApp(
     const { sessions } = await store.sessions(90)
     for (const list of Object.values(jevRisk.annotate(approvals.snapshot(), true))) {
       for (const a of list) {
-        const cwd = sessions.find((session) => session.id === a.id)?.cwd ?? ''
+        const owner = sessions.find((session) => session.id === a.id)
+        const cwd = owner?.cwd ?? ''
         const plan = jevAutoEligible(a) ? await alwaysPlan(a, cwd) : { rules: [] }
         const rules = plan.rules
         const labels = rules.map(ruleLabel)
@@ -1170,7 +1171,7 @@ export function createApp(
         const asked = jevAutoAllows(a.jev, s.jev_auto) ? labels.map((label) => ({ label, safe: jevRisk.ruleSafe(label, jevRuleState(a, label)) })) : []
         const failed = asked.find((r) => r.safe === undefined && jevRisk.ruleFailed(r.label))?.label
         const lowest = jevLowestRule(asked)
-        const decision = jevAutoDecision(a, s.jev_auto, labels.length > 0 ? (failed ?? lowest?.label ?? rulesKey(labels)) : null, failed ? 'failed' : lowest?.safe, { noRule: plan.reason, cwd })
+        const decision = jevAutoDecision(a, s.jev_auto, labels.length > 0 ? (failed ?? lowest?.label ?? rulesKey(labels)) : null, failed ? 'failed' : lowest?.safe, { noRule: plan.reason, cwd, repo: githubRepoOf(owner?.remote) })
         if (decision.kind === 'skip') {
           // 答えない理由（#553）。同じ許可には 1 回だけ（届くたびに呼ばれるので、覚えないと同じ行が何本も並ぶ）
           if (!jevSkipLogged.has(a.approval_id)) {

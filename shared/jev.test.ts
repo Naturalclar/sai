@@ -167,6 +167,9 @@ test('jevAutoDecision（#749）: ルールを作れない Bash は、この回�
   assert.match(reasonOf('git commit -m x'), /読むだけと分かっているコマンドでない/)
   assert.match(reasonOf('git status # $(date)'), /読める構文だけで書かれていない/)
   assert.match(reasonOf('N=$(date) && echo x'), /読める構文だけで書かれていない/)
+  // gh が読んでよいのは、渡されたセッションのリポジトリだけ（渡さなければ、名指しした形は通さない）
+  const ghOnce = (repo?: string) => jevAutoDecision(bash('echo "$(gh api repos/o/r/pulls/12)"', 0.99), 0.9, null, undefined, { ...once, ...(repo ? { repo } : {}) }).kind
+  assert.deepEqual([ghOnce('o/r'), ghOnce('O/R'), ghOnce('a/b'), ghOnce()], ['once', 'once', 'skip', 'skip'])
   assert.match(reasonOf('cat .env | head -1 # $(date)'), /秘密が入っていそう/)
   assert.match(reasonOf('(cat /etc/hosts) # x'), /cwd の外か、読めない形/)
   assert.match(reasonOf('cd /tmp && ls', 'cd_outside'), /読むだけと分かっているコマンドでない/, 'cd は受けない')

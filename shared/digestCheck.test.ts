@@ -348,4 +348,43 @@ test('requestSentence: 長い文でも、理由の接続の後ろの節が頼み
 test('stripAsks: 頼みの節を落として接続で終わる文は、接続も落とす（#785 のレビュー）', () => {
   assert.equal(stripAsks('それが分かれば表のどこに入るか決まるので、聞けたら教えてね！'), 'それが分かれば表のどこに入るか決まる。')
   assert.equal(stripAsks('テストは通りましたが、レビューしてください。'), 'テストは通りました。')
+
+})
+
+test('本文に無い「できるようになった」を一言が言ったら見つける（#782）', () => {
+  const plain = 'PR #9325 を squash マージしました。CI は 3 つとも緑で、ブランチは消してあります。'
+  assert.deepEqual(codes(plain, 'PR #9325 マージ！これで一覧が携帯から開けるようになったよ'), ['invented_effect'])
+  assert.deepEqual(codes(plain, 'PR #9325 マージ完了、これで安心して使えるね'), ['invented_effect'], '「これで〜できる」の形')
+  assert.deepEqual(codes(plain, 'PR #9325 マージ、エラーが出なくなりました'), ['invented_effect'])
+  assert.deepEqual(codes(plain, 'PR #9325 マージしたよ、CI も緑！'), [], '済んだことだけなら言わない')
+  assert.deepEqual(codes(plain, 'PR #9325 マージ、これで完了！'), [], '「これで」だけでは言わない')
+  assert.match(digestIssues(plain, 'PR #9325 マージ、検索できるようになった')[0]!.hint, /「検索できるようになった」に当たること.*書かれていません/, '作った節を理由に入れる')
+})
+
+test('本文に変わったことが書いてあれば咎めない。言い方が違っても咎めない（#782）', () => {
+  const source = 'PR #9301 を squash マージしました。これで、予約の一覧を携帯からも開けるようになりました。'
+  assert.deepEqual(codes(source, 'PR #9301 マージ！携帯からも予約の一覧を開けるようになったよ'), [])
+  // 言い方の形が違っても、節の語が本文にあれば言い換えの範囲（足した → できるようになった、可能の形、漢字の「無く」）
+  assert.deepEqual(codes('在庫の一覧に「残りわずか」の絞り込みを足しました。', '在庫一覧で「残りわずか」の絞り込みができるようになったー！'), [])
+  assert.deepEqual(codes('在庫の検索を直しました。1 万件を超えても 1 秒以内に結果を出せます。', '検索を直したよ、1万件でもすぐ出るようになった'), [])
+  assert.deepEqual(codes('催促のメールが二重に届くことは無くなりました。', 'メールが二重に届かなくなったよ'), [])
+  assert.deepEqual(codes('月末をまたぐ日付を、設定のタイムゾーンで切るようにしました。', '月末の集計がずれなくなったよ'), [])
+  // 語の無い節（ひらがなだけ）は見ない
+  assert.deepEqual(codes('PR をマージしました。', 'マージしたよ、これでできるようになったね'), [])
+  // 済んだことの語が同じ文にあっても、節の語が本文に無ければ言う（文ではなく節で見る）
+  assert.deepEqual(codes('PR をマージしました。指摘は直してあります。', 'PR をマージしたよ、検索が速くできるようになった'), ['invented_effect'])
+  // 日本語でない本文は見ない
+  assert.deepEqual(codes('Merged. The export job no longer fails on a single timeout.', 'マージ済み、タイムアウトで落ちなくなったよ'), [])
+  // コードの中の言葉は本文に数えない
+  assert.deepEqual(codes('設定を足しました。\n```\n// これで開けるようになった\n```', '設定を足して、開けるようになったよ'), ['invented_effect'])
+})
+
+test('まだ入っていないものを、済んだことにしたら見つける（#782）', () => {
+  const source = 'PR #9318 を作成しました。まだマージしていません。入ると、貸出の履歴を CSV で書き出せるようになります。'
+  const got = digestIssues(source, 'PR #9318 作成、履歴を CSV で書き出せるようになったよ')
+  assert.deepEqual(got.map((i) => i.code), ['invented_effect'])
+  assert.match(got[0]!.hint, /まだ入っていません/)
+  assert.deepEqual(codes(source, 'PR #9318 作成、入ると履歴を CSV で書き出せるようになるよ'), [], '本文の言い方のままならよい')
+  // 本文に済んだ形もあれば言わない（どちらを書いても嘘ではない）
+  assert.deepEqual(codes(`${source} 先に入れた分で、一覧は開けるようになりました。`, '一覧は開けるようになったよ、CSV の分は PR #9318 を作成したところ'), [])
 })

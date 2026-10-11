@@ -69,6 +69,11 @@ export interface DigestOptions {
    */
   ask?: string
   retry?: DigestRetry
+  /**
+   * 済んだことの報告で「それで何が変わったか」を先に言わせる行（#782）を入れるか。既定は入れる。
+   * `false` は `pnpm digest:eval` で前の形と比べるためだけに使う（`digestWhatPrompt()` だけが見る）
+   */
+  effect?: boolean
 }
 
 /**
@@ -141,7 +146,7 @@ const NUMBER_TALK = /#\d|(?<![A-Za-z])(?:PRs?|issues?|pull)(?![A-Za-z])|プル�
  */
 export function digestWhatPrompt(persona: PersonaId | string | undefined, text: string, opts: DigestOptions = {}): string {
   const p = personaOf(persona)
-  const { ask, retry } = opts
+  const { ask, retry, effect = true } = opts
   const asked = clipAsk(ask ?? '')
   const fix = retry
     ? ['', `前に作った一言: ${retry.summary}`, 'この一言には次の点がありました。直して作り直してください:', ...retry.issues.map((i) => `- ${i.hint}`)]
@@ -154,6 +159,14 @@ export function digestWhatPrompt(persona: PersonaId | string | undefined, text: 
     // 失敗の報告が明るい口調で書かれると、うまくいったように読める（#713）
     '- **うまくいかなかったことを書く文には口調の飾りを付けない**（「！」「〜」・絵文字を足さず、本文の言い方のまま落ち着いて書く）',
     '- **本文に書いてあるものだけ**を使う。書かれていない理由・次の一手は書かない。推測で補わない',
+    // 一言が「マージした」で止まり、それで何ができるようになったかを言わなかった（#782。マージを言う一言 18 本中 0 本）。
+    // **本文にあるときだけ**言わせる（材料が無い本文のほうが多い。無いのに言わせると作り話になる）。
+    // ここにも具体的な中身の語は置かない（作例を書き写す。#268）
+    ...(effect
+      ? [
+          '- **済んだことの報告で、それで何が変わったか（できるようになったこと・直ったこと・出なくなったこと）が本文に書いてあれば、それを先に書く。** 収まらなければ、コミットの ID・CI・後始末の話のほうを落とす。**本文に書いていなければ足さない**（済んだことだけを書く）。まだ入っていないもの（「入ると〜になる」）は本文の言い方のまま書き、済んだことにしない',
+        ]
+      : []),
     '- 手順の細かい説明・言い訳・前置きは省く',
     '- URL、ファイル名は**渡された文にあるものだけ**残す',
     ...(numbers

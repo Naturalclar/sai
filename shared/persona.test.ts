@@ -156,3 +156,15 @@ test('digestWhatPrompt: 作り直しは前の一言と直してほしい点を�
   assert.match(p, /前に作った一言: 直したよ！/)
   assert.match(p, /- 短くしてください/)
 })
+
+test('digestWhatPrompt: 済んだことの報告では、本文にあるときだけ「何が変わったか」を先に言わせる（#782）', () => {
+  const head = digestWhatPrompt('ESFP', '一覧の絞り込みを直しました。').split('\n---\n')[0]!
+  assert.match(head, /それで何が変わったか（できるようになったこと・直ったこと・出なくなったこと）が本文に書いてあれば、それを先に書く/)
+  assert.match(head, /本文に書いていなければ足さない/)
+  assert.match(head, /まだ入っていないもの（「入ると〜になる」）は本文の言い方のまま書き、済んだことにしない/)
+  assert.doesNotMatch(head, /#\d|例:/, '番号・作例は置かない（書き写される）')
+  // 前の形と比べるための切り口（pnpm digest:eval の two-part-plain）
+  assert.doesNotMatch(digestWhatPrompt('ESFP', '一覧の絞り込みを直しました。', { effect: false }), /何が変わったか/)
+  // 1 回で全部を書かせる側（人への頼みを抜けない本文）は変えていない
+  assert.doesNotMatch(digestPrompt('ESFP', '一覧の絞り込みを直しました。').split('\n---\n')[0]!, /何が変わったか/)
+})

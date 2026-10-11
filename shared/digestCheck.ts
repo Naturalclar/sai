@@ -19,6 +19,8 @@ export type DigestIssueCode =
   | 'kind_swap'
   // 本文に無いことを足したもの（#363）。#268 / #346 と同じ「本文に書いてあることだけ」の系列
   | 'invented_request'
+  // 本文に無い「できるようになった」を足したもの（#782）。済んだことの先（何が変わったか）を作る形
+  | 'invented_effect'
   // 落ちているもの（#359）。意味は変わっていないが、読んだ人が次に何をすればよいか分からなくなる
   | 'dropped_request'
   | 'waiting_without_next'
@@ -262,6 +264,76 @@ function swappedKinds(source: string, summary: string, ask: string): string[] {
     if (said === 'issue' && src.pr && !src.issue) out.add(`本文では #${n} は PR です`)
   }
   return [...out]
+}
+
+/** 本文の文字（記号・空白・コードを除く）のうち、かな・漢字が 3 割以上か。文字が無ければ日本語の扱い */
+export function mostlyJapanese(text: string): boolean {
+  const letters = text.replace(/```[\s\S]*?(?:```|$)/g, '').replace(/`[^`\n]*`/g, '').match(/[\p{L}]/gu) ?? []
+  if (letters.length === 0) return true
+  const japanese = letters.filter((c) => /[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}]/u.test(c)).length
+  return japanese / letters.length >= 0.3
+}
+
+/**
+ * 一言が「それで何が変わったか」を言っている形（#782）。済んだ形（`〜できるようになった`・`出なくなった`・
+ * `見やすくなった`）と、`これで〜できる`。**狭く取る**（当たると作り直すので、普通の報告に当てない）
+ */
+const EFFECT_DONE = /(?:ように|なく|無く|可能に|やすく)な(?:っ[たて]|りまし)/
+const EFFECT_NOW = /これで[^。！!？?\n]{0,30}(?:できる|使える|見られる|見える|開ける|読める|送れる|選べる)/
+const EFFECT_ANY = new RegExp(`${EFFECT_DONE.source}|${EFFECT_NOW.source}`, 'g')
+
+/** 本文が「まだ入っていない」と言っている形（`入ると〜`・`マージされれば〜`・`マージ後は〜`）。#378 の「済んだことにしない」と同じ線 */
+const SOURCE_NOT_YET = /(?:入る|入った|入れる|マージする|マージされる|マージした|反映される|反映した)(?:と|ら)|(?:入れ|マージすれ|マージされれ|反映されれ)ば|(?:マージ|反映)(?:後|のあと)/
+
+/** 一言の中で「変わったこと」を言っている節（前の区切りから、その形の終わりまで） */
+function effectClauses(summary: string): string[] {
+  const out: string[] = []
+  for (const m of summary.matchAll(EFFECT_ANY)) {
+    const end = (m.index ?? 0) + m[0].length
+    const head = summary.slice(0, end)
+    const start = Math.max(...['、', '。', '！', '!', '？', '?', '\n', ','].map((d) => head.lastIndexOf(d, (m.index ?? 0) - 1))) + 1
+    out.push(head.slice(start).trim())
+  }
+  return out
+}
+
+/**
+ * 節の中身の語。漢字の並びは 2 字ずつ（`予約一覧` を本文の `予約の一覧` に当てるため。1 字だけの並びはその 1 字）、
+ * カタカナは 2 字以上の並びをそのまま。ひらがな・英数字・記号は語に数えない（どの本文にもある）
+ */
+function contentWords(clause: string): string[] {
+  const out: string[] = []
+  for (const m of clause.matchAll(/\p{Script=Han}+|[\p{Script=Katakana}ー]{2,}/gu)) {
+    const run = m[0]
+    if (!/^\p{Script=Han}/u.test(run) || [...run].length === 1) out.push(run)
+    else for (let i = 0; i + 1 < [...run].length; i++) out.push([...run].slice(i, i + 2).join(''))
+  }
+  return out
+}
+
+/**
+ * 本文に無い「変わったこと」を一言が言っていないか（#782）。理由（作り直しに渡す文）を返す。無ければ空。
+ *
+ * - 一言の「変わったこと」の節（`〜できるようになった`・`これで〜できる`）の中身の語が、**本文に 1 つも無い**。
+ *   言い方の形ではなく語で見る（比べたときに、形で見ていて「〜を足しました」を「〜できるようになった」と言った
+ *   正しい一言に当たった）。語が 1 つでも本文にあれば言い換えの範囲とみなす。語の無い節（ひらがなだけ）は見ない
+ * - 本文は「入ると〜になる」（まだ入っていない）なのに、一言が済んだ形で言う。本文に済んだ形もあれば言わない
+ * - 日本語でない本文は見ない（語を突き合わせられない。`digestPlan()` と同じ線）
+ */
+export function inventedEffect(source: string, summary: string): string {
+  const clauses = effectClauses(summary)
+  if (clauses.length === 0 || !mostlyJapanese(source)) return ''
+  const body = plain(source)
+  for (const clause of clauses) {
+    const words = contentWords(clause)
+    if (words.length > 0 && !words.some((w) => body.includes(w))) {
+      return `本文には「${clause}」に当たること（**それで何が変わったか**）は書かれていません。本文に無いことを足さず、済んだことだけを書いてください`
+    }
+  }
+  if (EFFECT_DONE.test(summary) && SOURCE_NOT_YET.test(body) && !EFFECT_DONE.test(body)) {
+    return '本文では**まだ入っていません**（「入ると〜になる」の形）。「〜できるようになった」と済んだことにせず、本文の言い方のまま書いてください'
+  }
+  return ''
 }
 
 /** 本文の中の引用された依頼を、出てきた順に返す（同じものは 1 つ） */
@@ -553,6 +625,9 @@ export function digestIssues(rawSource: string, rawSummary: string, rawAsk = '')
       hint: '本文には**人にしてほしいことも、人への質問も書かれていません**。「〜して？」「〜していい？」のような頼み・問いかけを足さず、何をしたかだけで終えてください',
     })
   }
+  // 本文に無い「できるようになった」を足した・まだ入っていないものを済んだことにした（#782）
+  const effect = inventedEffect(source, text)
+  if (effect) out.push({ code: 'invented_effect', hint: effect })
   // 本文が人に何かを頼んでいるのに、一言がそれを落とした（#359。実測 203 件中 45 件）
   if (REQUEST.test(body) && !hasNextAction(text)) {
     out.push({

@@ -7,7 +7,7 @@ import { asksPerson, digestIssues, hasNextAction } from '../../../shared/digestC
 import type { DigestIssueCode } from '../../../shared/digestCheck.ts'
 
 /** 事例の形（返答がどう終わるか・何が入っているか）。偏らないように、形ごとに数を揃える */
-export const SHAPES = ['done', 'merge_wait', 'question', 'failure', 'multi_number', 'no_number', 'english', 'long'] as const
+export const SHAPES = ['done', 'merge_wait', 'question', 'failure', 'multi_number', 'no_number', 'english', 'long', 'effect', 'plain_done'] as const
 export type Shape = (typeof SHAPES)[number]
 
 export const SHAPE_LABELS: Record<Shape, string> = {
@@ -19,6 +19,9 @@ export const SHAPE_LABELS: Record<Shape, string> = {
   no_number: '番号なし',
   english: '英語の本文',
   long: '長い本文',
+  // 済んだことの報告（#782）。本文に「それで何が変わったか」がある・無い
+  effect: '済んだ報告（変わったことあり）',
+  plain_done: '済んだ報告（変わったことなし）',
 }
 
 /**
@@ -69,6 +72,7 @@ export const SCORE_LABELS: Record<ScoreCode, string> = {
   quoted_request: '引用の頼みが問いかけに化けた',
   invented_request: '頼みを作った',
   'expect:request_invented': '頼みを作った（事例）',
+  invented_effect: '変わったことを作った',
   waiting_without_next: '待ちで終わる',
   bare_number: '番号だけ（題名なし）',
   'expect:number_missing': '出るはずの番号が無い（事例）',

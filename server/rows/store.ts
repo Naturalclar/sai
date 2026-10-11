@@ -65,6 +65,8 @@ export function parseRows(text: string): FeedRow[] {
 export class FeedStore {
   private files = new Map<string, CachedFile>()
   private sessionsCache = new Map<number, { key: string; rev: string; sessions: SessionSummary[] }>()
+  /** いま読んでいる途中のもの（#765）。同じ鍵で同時に来た呼び出しは、この 1 つを待つ */
+  private pending = new Map<string, Promise<unknown>>()
 
   readonly directory: string
 
@@ -86,7 +88,24 @@ export class FeedStore {
     return feedFiles(entries, dates)
   }
 
-  async signature(days: number): Promise<Signature> {
+  /**
+   * 同時に来た同じ読みを 1 回にまとめる（#765）。3 秒のポーリングはタブ・端末・MCP の数だけ来るので、サーバが遅れると
+   * 同じ `days` の `stat` と集計が要求の数だけ並んで走り、さらに遅れる循環に入っていた。終わったら忘れる（次は読み直す）。
+   * 待っている間に記録が伸びても、返すのは読み始めたときのもの（次のポーリングが拾う。キャッシュと同じ扱い）
+   */
+  private share<T>(key: string, make: () => Promise<T>): Promise<T> {
+    const found = this.pending.get(key)
+    if (found) return found as Promise<T>
+    const p = make().finally(() => this.pending.delete(key))
+    this.pending.set(key, p)
+    return p
+  }
+
+  signature(days: number): Promise<Signature> {
+    return this.share(`signature:${days}`, () => this.readSignature(days))
+  }
+
+  private async readSignature(days: number): Promise<Signature> {
     const parts: Signature = []
     for (const name of await this.names(recentDates(days))) {
       try {
@@ -129,12 +148,17 @@ export class FeedStore {
     return cwd === this.directory || cwd.startsWith(this.directory + sep)
   }
 
-  async rows(days: number): Promise<FeedRow[]> {
+  /** `async` にしない（同時の呼び出しが同じ Promise を受け取れるように。#765） */
+  rows(days: number): Promise<FeedRow[]> {
     return this.rowsOn(recentDates(days))
   }
 
   /** その日付（`YYYY-MM-DD`）ぶんの行。記録を調べる道具（`server/tools/feedRead.ts`。#703）が日付の範囲で読む */
-  async rowsOn(dates: readonly string[]): Promise<FeedRow[]> {
+  rowsOn(dates: readonly string[]): Promise<FeedRow[]> {
+    return this.share(`rows:${dates.join(',')}`, () => this.readRowsOn(dates))
+  }
+
+  private async readRowsOn(dates: readonly string[]): Promise<FeedRow[]> {
     const rows: FeedRow[] = []
     for (const name of await this.names(dates)) {
       for (const r of await this.readFile(join(this.directory, name))) if (!this.isOwnNoise(r)) rows.push(r)
@@ -144,8 +168,12 @@ export class FeedStore {
     return rows
   }
 
-  /** セッション一覧。days ごとに最新の1つだけキャッシュする */
-  async sessions(days: number): Promise<{ rev: string; sessions: SessionSummary[] }> {
+  /** セッション一覧。days ごとに最新の1つだけキャッシュする。同時に来たぶんは 1 回の集計を待つ（#765） */
+  sessions(days: number): Promise<{ rev: string; sessions: SessionSummary[] }> {
+    return this.share(`sessions:${days}`, () => this.readSessions(days))
+  }
+
+  private async readSessions(days: number): Promise<{ rev: string; sessions: SessionSummary[] }> {
     const signature = await this.signature(days)
     const key = JSON.stringify(signature)
     const cached = this.sessionsCache.get(days)

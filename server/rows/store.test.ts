@@ -94,3 +94,31 @@ test('FeedStore: 置き場がまだ無くても落ちない', async () => {
   assert.deepEqual(await store.rows(2), [])
   assert.deepEqual(await store.signature(2), [])
 })
+
+test('FeedStore: 同時に来た同じ読みは 1 回にまとめ、終わったら読み直す（#765）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-store-'))
+  try {
+    await writeFile(join(dir, `${today}.jsonl`), row(`${today}T09:00:00+09:00`, { session: 'a' }))
+    const store = new FeedStore(dir)
+
+    // 返る前に重ねた呼び出しは同じ Promise（stat も集計も 1 回）
+    const first = store.sessions(1)
+    const second = store.sessions(1)
+    assert.equal(second, first, '同時の sessions(1) が別々に走った')
+    const rowsA = store.rows(1)
+    const rowsB = store.rows(1)
+    assert.equal(rowsB, rowsA, '同時の rows(1) が別々に走った')
+    assert.notEqual(store.sessions(2) as unknown, first, 'days が違えば別')
+    assert.equal((await first).sessions.length, 1)
+    assert.equal((await rowsA).length, 1)
+
+    // 終わったあとは忘れる。記録が伸びていれば読み直す
+    await appendFile(join(dir, `${today}.jsonl`), row(`${today}T10:00:00+09:00`, { session: 'b' }))
+    const later = store.sessions(1)
+    assert.notEqual(later, first, '終わった読みを使い回した')
+    assert.equal((await later).sessions.length, 2)
+    assert.equal((await store.rows(1)).length, 2)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})

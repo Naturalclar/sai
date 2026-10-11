@@ -114,6 +114,7 @@ OpenCode (feed/opencode/sai.js) ─┘                           │
 - **入力欄**: `ReplyBox` は打ちかけを作ったとき 1 回だけ読むので `key={`reply:${id}`}` でセッションごとに作り直す。フィードには `draftKey` を渡さない。字送りに関わる CSS は textarea と `.ghost` の両方に当てる → docs/internals/web.md#入力欄replybox
 - **チャット**: 発言は `ts` と側（`me` / `agent`）で名指しし、フィードの飛び先は `Utterance.key`。最下部追従は高さが変わったときだけ。返信の終わりは描いた行でなく `session.turns` で見る。検索の飛び先は 7 日の窓の外でも含める → docs/internals/web.md#セッション画面の-7-日の窓477
 - **Markdown・画像**: HTML 文字列は作らない。外の URL の画像は読み込まない。画像のパスはリクエストから受けず鍵で引き、SVG は配らない（Codex の生成画像はそのスレッドの置き場の直下、`view_image` で見せた画像は realpath が行の `cwd` の中のものだけ）。表のセルに `overflow-wrap: anywhere` を継がせない。ライトボックスのキーは capture で止める → docs/internals/web.md#画像
+- **ポーリング**: 3 秒の取り直しは `pollLoop()`（前の要求が返ってから次を張る）。`setInterval` で投げない。サーバ側は `FeedStore` が同時の同じ読みを 1 つにまとめる（`rows()` を `async` にしない） → docs/internals/web.md#データ取得usepolling
 - **型検査**: web の `tsconfig.json` はテストを除外し、`web/tsconfig.test.json` が `src/**/*.test.ts`、shared のテストは `server/tsconfig.json` が拾う → docs/internals/web.md#テストと型検査
 
 ### 返信

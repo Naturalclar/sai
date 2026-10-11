@@ -28,6 +28,7 @@ C-c / SIGTERM では必ず終わる（#296。`main.ts` の `shutdown()`）。
 
 - 日付ファイルを `(mtime, size)` で覚えて、変わらなければ再パースしない。そのシグネチャのハッシュを `rev` として返す。
 - 読む先は日付から組み立てず、`readdir` して `feedFiles()` で拾う（#113）。`YYYY-MM-DD.jsonl` に加えて、マシンごとに分けた `YYYY-MM-DD.<host>.jsonl` も全部読む。並びは日付 → `host` 名で固定し、行は `ts` で並べ直す。
+- **同時に来た同じ読みは 1 回にまとめる**（#765。`share(key, make)`）。`signature(days)` / `rowsOn(dates)` / `sessions(days)` は、同じ鍵で読んでいる途中のものがあればその Promise を返す（`rows()` を `async` にしないのはこのため）。終わったら忘れるので、次の呼び出しは読み直す。待っている間に記録が伸びても返すのは読み始めたときのもので、次のポーリングが拾う（キャッシュと同じ扱い）。
 
 ## 本文の検索（rows/search.ts）
 

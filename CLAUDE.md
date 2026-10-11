@@ -93,7 +93,7 @@ OpenCode (feed/opencode/sai.js) ─┘                           │
 ### サーバ（server/）
 
 - **`server/`** は node:http 直書きで依存ゼロを保つ（検索も索引を持たない）。ルーティングは `createApp()` にあり、テストはこれを直接叩く。C-c / SIGTERM では必ず終わる（`shutdown()`）。SAI が起こした `opencode serve` は回していなければ落とし、回していれば次のサーバへ渡す。`codex app-server --stdio` は触らない → docs/internals/server.md#終わり方shutdown
-- **`server/rows/store.ts`** の読む先は日付から組み立てず `readdir` + `feedFiles()` で拾う（`<host>` 付きも読む） → docs/internals/server.md#行の読み込みstorets
+- **`server/rows/store.ts`** の読む先は日付から組み立てず `readdir` + `feedFiles()` で拾う（`<host>` 付きも読む）。同時の同じ読みは 1 つにまとめる（`rows()` / `sessions()` を `async` にしない。集計の鍵は行を読んだときの署名から作り、別に取らない） → docs/internals/server.md#行の読み込みstorets
 - **`server/rows/search.ts`** は `thinking` と待ちの行を見ず、アーカイブ済みも出す。判定と抜粋は `shared/search.ts` を画面と共用する → docs/internals/server.md#本文の検索rowssearchts
 - **`server/local/usage.ts`** は API を叩かない（読むのはローカルのファイルだけ）。`UsageStore` のコンストラクタは置き場に既定値を持たせない。チップの出し方は `web/src/usageChips.ts` の 1 か所だけ → docs/internals/server.md#使用量localusagets
 - **ビルド追従・`buildFreshness.ts`** は `X-SAI-Build` と `build_stale` で知らせる。git は叩かない → docs/internals/server.md#ビルドが古いことの判定localbuildfreshnessts
@@ -114,6 +114,7 @@ OpenCode (feed/opencode/sai.js) ─┘                           │
 - **入力欄**: `ReplyBox` は打ちかけを作ったとき 1 回だけ読むので `key={`reply:${id}`}` でセッションごとに作り直す。フィードには `draftKey` を渡さない。字送りに関わる CSS は textarea と `.ghost` の両方に当てる → docs/internals/web.md#入力欄replybox
 - **チャット**: 発言は `ts` と側（`me` / `agent`）で名指しし、フィードの飛び先は `Utterance.key`。最下部追従は高さが変わったときだけ。返信の終わりは描いた行でなく `session.turns` で見る。検索の飛び先は 7 日の窓の外でも含める → docs/internals/web.md#セッション画面の-7-日の窓477
 - **Markdown・画像**: HTML 文字列は作らない。外の URL の画像は読み込まない。画像のパスはリクエストから受けず鍵で引き、SVG は配らない（Codex の生成画像はそのスレッドの置き場の直下、`view_image` で見せた画像は realpath が行の `cwd` の中のものだけ）。表のセルに `overflow-wrap: anywhere` を継がせない。ライトボックスのキーは capture で止める → docs/internals/web.md#画像
+- **ポーリング**: 数秒の取り直しは `pollLoop()`（前の要求が返ってから次を張る・返らなければ見切る）。`setInterval` で投げない → docs/internals/web.md#データ取得usepolling
 - **型検査**: web の `tsconfig.json` はテストを除外し、`web/tsconfig.test.json` が `src/**/*.test.ts`、shared のテストは `server/tsconfig.json` が拾う → docs/internals/web.md#テストと型検査
 
 ### 返信

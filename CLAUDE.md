@@ -103,7 +103,7 @@ OpenCode (feed/opencode/sai.js) ─┘                           │
 - **Claude のログイン切れ・`local/claudeAuth.ts`**（#685）は `claude auth status --json` を読むだけ（`login` / `logout` / `setup-token` を起こさない）。ポーリングでは聞かない。本物を聞くのは `main.ts` だけ、分からないときは出さない、メール・組織は画面に渡さない → docs/internals/server.md#claude-のログイン切れlocalclaudeauthts685
 - **SAI からのログイン・`local/claudeLogin.ts`**（#577）が起こすのは `claude auth login` の 1 形だけ（`logout` / `setup-token` は起こさない）。**切れていると分かっているときしか始めない**（いまのログインを差し替えない）。口は同一オリジンのみ。URL とコードは残さない（ログは数だけ）。子は 1 本・時間切れで落とす。子にだけ何もしない `open` を PATH の先頭に置く（Mac のブラウザを開かせない。PATH を差し替える例外はここだけ）。本物を組むのは `main.ts` だけ → docs/internals/server.md#sai-からログインし直すlocalclaudelogints577
 - **`server/auth.ts`**（tailnet の認証）→ docs/internals/auth.md
-- **返答に出てきたファイル・`local/files.ts`**（#603）はパスを受けず鍵で引く。cwd の中の文字のファイルだけで、`isSecretPath()` を外さない。**ループバックだけ**、HTML は描かない → docs/internals/server.md#返答に出てきたファイルを読むlocalfilests603
+- **返答に出てきたファイル・`local/files.ts`**（#603）はパスを受けず鍵で引く。cwd の中の文字のファイルだけで、`isSecretPath()` を外さない。**出すのはループバックと whois で本人と分かった tailnet のユーザーだけ**（Serve 越しは `Host` も見る。#768）、HTML は描かない → docs/internals/server.md#返答に出てきたファイルを読むlocalfilests603
 - **画像の軽い版・`local/thumbnails.ts`** は `sips` に**置き場に書き直したファイルだけ**を渡す（元のパス・リクエストの文字列は渡さない）。作れなければ 503。ライトボックスとダウンロードは元のまま → docs/internals/server.md#画像の軽い版localthumbnailsts
 
 ### 画面（web/src/）

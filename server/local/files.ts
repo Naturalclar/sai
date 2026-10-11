@@ -7,7 +7,7 @@
 //   - FILE_MAX_BYTES 以下
 //   - 中身が文字（UTF-8 として読め、NUL を含まない）。拡張子は信じない
 // 返すのは文字だけで、画面も文字として見せる（HTML を描かない。同じオリジンでスクリプトが動くため）。
-// **出す相手（当面ループバックだけ）は呼ぶ側の app.ts が決める。**
+// **出す相手（ループバックと、whois で本人と分かった tailnet のユーザーの端末。#768）は呼ぶ側の app.ts が決める。**
 import { constants } from 'node:fs'
 import { open, realpath } from 'node:fs/promises'
 import type { FileHandle } from 'node:fs/promises'

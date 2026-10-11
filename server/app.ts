@@ -1159,13 +1159,14 @@ export function createApp(
     for (const list of Object.values(jevRisk.annotate(approvals.snapshot(), true))) {
       for (const a of list) {
         const cwd = sessions.find((session) => session.id === a.id)?.cwd ?? ''
-        const rules = jevAutoEligible(a) ? await alwaysRules(a, cwd) : []
+        const plan = jevAutoEligible(a) ? await alwaysPlan(a, cwd) : { rules: [] }
+        const rules = plan.rules
         const labels = rules.map(ruleLabel)
         // ルールはこの回が閾値以上のときだけ聞く（聞くだけで外に出るので、自動を期待しない回には送らない）
         const asked = jevAutoAllows(a.jev, s.jev_auto) ? labels.map((label) => ({ label, safe: jevRisk.ruleSafe(label, jevRuleState(a, label)) })) : []
         const failed = asked.find((r) => r.safe === undefined && jevRisk.ruleFailed(r.label))?.label
         const lowest = jevLowestRule(asked)
-        const decision = jevAutoDecision(a, s.jev_auto, labels.length > 0 ? (failed ?? lowest?.label ?? rulesKey(labels)) : null, failed ? 'failed' : lowest?.safe)
+        const decision = jevAutoDecision(a, s.jev_auto, labels.length > 0 ? (failed ?? lowest?.label ?? rulesKey(labels)) : null, failed ? 'failed' : lowest?.safe, { noRule: plan.reason, cwd })
         if (decision.kind === 'skip') {
           // 答えない理由（#553）。同じ許可には 1 回だけ（届くたびに呼ばれるので、覚えないと同じ行が何本も並ぶ）
           if (!jevSkipLogged.has(a.approval_id)) {
@@ -1173,6 +1174,14 @@ export function createApp(
             jevSkipLogged.add(a.approval_id)
             lines.push(`--- ${new Date().toISOString()} ${a.id} Jev の自動の常に許可を見送り（この回 ${jevPercent(a.jev!)}%）: ${decision.reason}\n`)
           }
+          continue
+        }
+        if (decision.kind === 'once') {
+          // ルールを作れない形を、今回だけ許可する（#749。覚えない＝`updatedPermissions` を付けない。画面の [許可] と同じ答え）
+          if (rules.length > 0 || !approvals.answer(a.approval_id, { behavior: 'allow', updatedInput: a.input })) continue
+          logAnswer(a, cwd, '', 'jev', 'allow', false, true, plan.reason)
+          answered.add(a, 'allow', `Jev が自動で許可（${jevPercent(a.jev!)}%）`)
+          lines.push(`--- ${new Date().toISOString()} ${a.id} Jev が自動で今回だけ許可（この回 ${jevPercent(a.jev!)}%、閾値 ${jevPercent(s.jev_auto)}%。ルールを作れない形: ${plan.reason ?? '?'}）\n`)
           continue
         }
         if (decision.kind !== 'allow' || rules.length === 0 || !lowest) continue

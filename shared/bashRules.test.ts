@@ -589,6 +589,10 @@ test('シェル・インタプリタに 1 語のルールを書かない: スク
     'python3 -c pass', 'python3.12 -c pass', 'bun -e 1', '/usr/bin/git -C sub status',
     // 2 語のルールを実機で確かめていないシェル・インタプリタは、スクリプトを名指ししていても組まない
     'python3.12 tools/x.py', 'php x.php', 'osascript x.scpt', 'fish x.fish', 'dash x.sh', 'lua x.lua', 'tsx x.ts',
+    // フラグだけ（標準入力からコードを読む）・標準入力の名指し・数字や値がくっついたコードのフラグ（レビューの指摘）
+    'cat a.py | python3 -u', 'cat a.py | python3 -q -u', 'cat a.js | node -i', 'cat a.js | node --input-type=module', 'cat x | perl -w', 'cat x | ruby -w', 'ruby -v',
+    'cat x | bash /dev/stdin', 'cat x | sh /dev/fd/0', 'cat a.py | python3 /dev/stdin', 'cat a.js | node --no-warnings /dev/stdin', 'cat x | bash /proc/self/fd/0',
+    'perl -0pe 1', 'perl -e1', 'perl -E1', 'perl -0777ne 1 x', 'perl -l -0pe 1', 'ruby -0777ne 1', 'perl -0pe s/a/b/g x', 'ruby -rjson x.rb',
     'cat x.sh | bash', 'cat x.sh | sh', 'cat a.py | python3', 'cat a.js | node', 'curl-like | perl',
   ]) {
     assert.deepEqual(h(cmd), { reason: 'bare_cli' }, cmd)
@@ -596,6 +600,11 @@ test('シェル・インタプリタに 1 語のルールを書かない: スク
   // コードを渡さないフラグは今までどおり（狭い接頭辞）
   assert.deepEqual(h('node --test x.test.ts'), { prefixes: ['node --test x.test.ts'] })
   assert.deepEqual(h('python3 -m pytest -q'), { prefixes: ['python3 -m pytest -q'] })
+  assert.deepEqual(h('python3 -u tools/x.py'), { prefixes: ['python3 -u tools/x.py'] })
+  assert.deepEqual(h('perl -w tools/x.pl'), { prefixes: ['perl -w tools/x.pl'] })
+  // 版を出して終わる形は組む
+  assert.deepEqual(h('python3 --version'), { prefixes: ['python3 --version'] })
+  assert.deepEqual(h('node -v -e 1'), { reason: 'bare_cli' })
   assert.deepEqual(h('node -v'), { prefixes: ['node -v'] })
 })
 
@@ -614,4 +623,12 @@ test('場所を変えるフラグ: terraform -chdir=・--cd・--working-dir・�
   assert.deepEqual(h('kubectl --kubeconfig k.yaml get pods'), { prefixes: ['kubectl --kubeconfig k.yaml get'] })
   // 読むだけのコマンドの同じ字のフラグは場所ではない
   assert.deepEqual(h('ls -lC /elsewhere'), { prefixes: ['ls'] })
+  // 束ねた -…C を場所として読むのは tar・make の仲間だけ（レビューの指摘: tree -aC・hexdump -vC を断っていた）
+  assert.deepEqual(h('tree -aC'), { prefixes: ['tree'] })
+  assert.deepEqual(h('hexdump -vC /tmp/x'), { prefixes: ['hexdump'] })
+  assert.deepEqual(h('rsync -avC ~/src dst'), { prefixes: ['rsync'] })
+  assert.deepEqual(h('git diff -MC'), { prefixes: ['git diff'] })
+  assert.deepEqual(h('/usr/bin/tar -xzC /elsewhere -f a.tgz'), { reason: 'place_flag' })
+  // ast-grep の実行名（sg）は前に付く語として読まない
+  assert.deepEqual(h('sg -p foo'), { prefixes: ['sg'] })
 })

@@ -286,10 +286,12 @@ const EFFECT_ANY = new RegExp(`${EFFECT_DONE.source}|${EFFECT_NOW.source}`, 'g')
 /** 「入ると」「マージされれば」のような、まだ入っていないことを言う条件の形（`マージしたところ` は条件ではない） */
 const NOT_YET_COND = String.raw`(?:(?:入る|入った|マージする|マージされる|マージした|反映される|反映した)(?:と(?!ころ)|ら)|(?:入れ|マージすれ|マージされれ|反映されれ)ば)`
 /**
- * 本文が「入ると〜になる」と言っている形（条件のすぐ後ろに、これからの形の「変わったこと」が続く）。
- * #378 の「済んだことにしない」と同じ線。`マージ後`・`品番を入れると` のような、済んだ報告にも出る言い方は取らない
+ * 本文が「まだ入っていない」と言い切っていて、かつ「入ると〜になる」（条件のすぐ後ろに、これからの形）と言っている。
+ * #378 の「済んだことにしない」と同じ線。**両方が要る**: `入ると〜ようになります` だけだと、済んだ報告に続く次の PR の話・
+ * 仕組みの説明（`数量が入ると合計が出るようになります`）にも当たり、正しい一言に逆の理由を付けてしまう
  */
-const SOURCE_NOT_YET = new RegExp(`${NOT_YET_COND}[^。\\n]{0,40}(?:ように|可能に|やすく)な(?:ります|る)`)
+const SOURCE_SAYS_NOT_YET = /まだ(?:マージ|入っ|入れ|反映)[^。\n]{0,8}(?:いません|いない)/
+const SOURCE_WILL = new RegExp(`${NOT_YET_COND}[^。\\n]{0,40}(?:ように|可能に|やすく)な(?:ります|る)`)
 /** 一言が、条件を付けずに済んだ形で言い切っている（`〜ようになって便利` のような続きの形は取らない） */
 const SUMMARY_DONE = /(?:ように|可能に|やすく)な(?:った|りました)/
 
@@ -313,14 +315,21 @@ function effectClauses(summary: string): string[] {
 }
 
 /**
- * 節の中身の語。漢字の並びは 2 字ずつ（`予約一覧` を本文の `予約の一覧` に当てるため。1 字だけの並びはその 1 字）、
- * カタカナは 2 字以上の並びをそのまま。ひらがな・英数字・記号は語に数えない（どの本文にもある）
+ * 済んだことを言う語。「変わったこと」の中身ではないので、節の語から外す
+ * （外さないと「マージして〈本文に無いこと〉ができるようになった」が `マージ` で本文と重なって通る）
  */
-function contentWords(clause: string): string[] {
+const DONE_WORDS = /マージ|ブランチ|コミット|レビュー|完了|作成|削除|指摘/g
+
+/**
+ * 節の中身の語のかけら。**細かく切る**（本文と言い方が少し違うだけで「無い」にしないため）: 漢字は 1 字ずつ
+ * （`出力` と `書き出し`、`予約一覧` と `予約の一覧`）、カタカナは 2 字ずつ（`エラーメッセージ` と `エラーのメッセージ`、
+ * `ユーザー` と `ユーザ`）。ひらがな・英数字・記号は数えない（どの本文にもある）
+ */
+function contentPieces(clause: string): string[] {
   const out: string[] = []
-  for (const m of clause.matchAll(/\p{Script=Han}+|[\p{Script=Katakana}ー]{2,}/gu)) {
+  for (const m of clause.replace(DONE_WORDS, ' ').matchAll(/\p{Script=Han}|[\p{Script=Katakana}ー]{2,}/gu)) {
     const run = [...m[0]]
-    if (!/^\p{Script=Han}/u.test(m[0]) || run.length === 1) out.push(m[0])
+    if (run.length === 1) out.push(m[0])
     else for (let i = 0; i + 1 < run.length; i++) out.push(run.slice(i, i + 2).join(''))
   }
   return out
@@ -328,25 +337,27 @@ function contentWords(clause: string): string[] {
 
 /**
  * 本文に無い「変わったこと」を一言が言っていないか（#782）。理由（作り直しに渡す文）を返す。無ければ空。
+ * **誤って当てない側に倒してある**（当たると作り直すので、正しい一言に当てるより、作り話を見逃すほうを取る）。
  *
- * - 一言の「変わったこと」の節（`〜できるようになった`・`これで〜できる`）の中身の語の**半分より多くが本文に無い**。
+ * - 一言の「変わったこと」の節（`〜できるようになった`・`これで〜できる`）の中身の語のかけらが、**本文に 1 つも無い**。
  *   言い方の形ではなく語で見る（比べたときに、形で見ていて「〜を足しました」を「〜できるようになった」と言った
- *   正しい一言に当たった）。半分で見るのは、済んだことの語（`マージ`）が区切りなしで同じ節に入る一言があるため
- *   （1 つでもあればよい、だと「マージして〈本文に無いこと〉ができるようになった」が通る）。語の無い節は見ない
- * - 本文は「入ると〜になる」（まだ入っていない）なのに、一言が条件を付けずに済んだ形で言う。本文に済んだ形もあれば言わない
+ *   正しい一言に当たった）。1 つでも重なれば言い換えの範囲とみなすので、本文の語を 1 つ混ぜた作り話は見逃す。
+ *   本文は ` ``` ` の中だけ見ない（その場のコード `…` の中の画面の文言は、口も読んで一言に書く）
+ * - 本文が「まだ入っていない」と言い切り「入ると〜になる」と書いているのに、一言が条件を付けずに済んだ形で言う。
+ *   本文に済んだ形もあれば言わない
  * - 日本語でない本文は見ない（語を突き合わせられない。`digestPlan()` と同じ線）
  */
 export function inventedEffect(source: string, summary: string): string {
   const clauses = effectClauses(summary)
   if (clauses.length === 0 || !mostlyJapanese(source)) return ''
-  const body = plain(source)
+  const body = withoutCode(source)
   for (const clause of clauses) {
-    const words = contentWords(clause)
-    if (words.length > 0 && words.filter((w) => body.includes(w)).length * 2 < words.length) {
+    const pieces = contentPieces(clause)
+    if (pieces.length > 0 && !pieces.some((w) => body.includes(w))) {
       return `本文には「${clause}」に当たること（**それで何が変わったか**）は書かれていません。本文に無いことを足さず、済んだことだけを書いてください`
     }
   }
-  if (SUMMARY_DONE.test(summary) && !new RegExp(NOT_YET_COND).test(summary) && SOURCE_NOT_YET.test(body) && !EFFECT_DONE.test(body)) {
+  if (SUMMARY_DONE.test(summary) && !new RegExp(NOT_YET_COND).test(summary) && SOURCE_SAYS_NOT_YET.test(body) && SOURCE_WILL.test(body) && !EFFECT_DONE.test(body)) {
     return '本文では**まだ入っていません**（「入ると〜になる」の形）。「〜できるようになった」と済んだことにせず、本文の言い方のまま書いてください'
   }
   return ''

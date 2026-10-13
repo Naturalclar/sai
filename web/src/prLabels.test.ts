@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { agoLabel, checkLabel, filterRepos, requestedCount, reviewLabel, isApproved, isStaleApproval } from './prLabels.ts'
+import { agoLabel, checkLabel, filterRepos, requestedCount, reviewLabel, reviewTitle, isApproved, isStaleApproval } from './prLabels.ts'
 import type { PrRepo, PrSummary } from '../../shared/types.ts'
 
 test('checkLabel: 通った・落ちた・走っている。チェックが無ければ出さない', () => {
@@ -22,6 +22,12 @@ test('isStaleApproval: APPROVED_STALE だけ。承認済み（isApproved）に�
   assert.equal(isApproved('APPROVED_STALE'), false)
   assert.equal(isStaleApproval('APPROVED'), false)
   assert.equal(isStaleApproval(undefined), false)
+})
+
+test('reviewTitle: 承認のあとに更新あり、だけ補足を持つ（head が違うことしか分からない、と書く）', () => {
+  assert.match(reviewTitle('APPROVED_STALE'), /head が違います/)
+  assert.match(reviewTitle('APPROVED_STALE'), /rebase でも付く/)
+  for (const d of ['APPROVED', 'CHANGES_REQUESTED', 'REVIEW_REQUIRED', '', 'X']) assert.equal(reviewTitle(d), '', d)
 })
 
 test('reviewLabel: 知らない値は空', () => {

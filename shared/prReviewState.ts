@@ -19,8 +19,11 @@
 //
 // 純粋関数。サーバ（server/git/prs.ts・pr.ts）が `gh` の出力を読むときに通し、画面の 3 か所（一覧の行・PR 1 本の見出し・
 // セッションの PR バッジ）は出来上がった `review_decision` を見るだけ（判定を別々に組まない）。
-// レビューした人の名前は人ごとに畳むのに使うだけで、ここから外に出さない。`gh` には `--jq` で要る項目だけに絞らせる
-// （本文は読まない。出力の上限にも乗らない）。
+// レビューした人の名前は人ごとに畳むのと、ボット（`isBotLogin()`）を落とすのに使うだけで、ここから外に出さない。
+// `gh` には `--jq` で要る項目・要る件だけに絞らせる（本文は読まない。出力の上限にも乗らない）。
+// 一覧（`gh pr list`）の `reviews` は先頭 100 件までなので、ちょうど 100 件なら「分からない」として空にする（承認を作らない）。
+
+import { isBotLogin } from './prComments.ts'
 
 /** `review_decision` に入る値。前からの 3 つ + SAI が組む `APPROVED_STALE`。無ければ空 */
 export type ReviewDecision = 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED' | 'APPROVED_STALE' | ''
@@ -28,11 +31,20 @@ export type ReviewDecision = 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED
 /** 数える承認・修正の依頼（`authorAssociation`）。外部の人（CONTRIBUTOR / FIRST_TIME_CONTRIBUTOR / NONE）とボットは数えない */
 export const COUNTED_ASSOCIATIONS: ReadonlySet<string> = new Set(['MEMBER', 'OWNER', 'COLLABORATOR'])
 
-/** `gh … --json reviews` の 1 件を、判定に要る項目だけに絞る jq（本文・リアクション・id は読まない） */
-export const REVIEW_ITEM_JQ = '{state, authorAssociation, submittedAt, author: {login: .author.login}, commit: {oid: .commit.oid}}'
-/** `gh pr list --json …,reviews,…` の出力（配列）の `reviews` を絞る */
-export const PR_LIST_REVIEWS_JQ = `[.[] | .reviews = [(.reviews // [])[] | ${REVIEW_ITEM_JQ}]]`
-/** `gh pr view --json …,reviews,…` の出力（1 件）の `reviews` を絞る */
+/**
+ * `gh … --json reviews` の 1 件を、判定に要る項目だけに絞る jq（本文・リアクション・id は読まない）。
+ * 判定に関わらないもの（COMMENTED / PENDING、外部の人）は gh の側で落とし、出力の大きさをレビューの数に比例させない
+ */
+export const REVIEW_ITEM_JQ =
+  'select(.state | IN("APPROVED", "CHANGES_REQUESTED", "DISMISSED")) | select(.authorAssociation | IN("MEMBER", "OWNER", "COLLABORATOR")) | {state, authorAssociation, submittedAt, author: {login: .author.login}, commit: {oid: .commit.oid}}'
+/**
+ * `gh pr list` は `reviews` を先頭 100 件までしか取らない（gh 2.66 の一覧の GraphQL は `reviews(first: 100)` で、続きを引かない）。
+ * ちょうど 100 件来たら、それより新しいレビューがあるかもしれない＝判定できない。`reviews_page_full` で知らせる
+ */
+export const GH_LIST_REVIEWS_PAGE = 100
+/** `gh pr list --json …,reviews,…` の出力（配列）の `reviews` を絞る。絞る前の数が 1 ページぶんなら `reviews_page_full` を付ける */
+export const PR_LIST_REVIEWS_JQ = `[.[] | .reviews_page_full = ((.reviews // []) | length >= ${GH_LIST_REVIEWS_PAGE}) | .reviews = [(.reviews // [])[] | ${REVIEW_ITEM_JQ}]]`
+/** `gh pr view --json …,reviews,…` の出力（1 件）の `reviews` を絞る（`pr view` は続きまで引くので、ページの印は付けない） */
 export const PR_VIEW_REVIEWS_JQ = `.reviews = [(.reviews // [])[] | ${REVIEW_ITEM_JQ}]`
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '')
@@ -82,11 +94,12 @@ export function latestOpinionated(reviews: readonly Review[]): Review[] {
  * `gh pr list` / `gh pr view` の 1 件（`reviewDecision` / `reviews` / `headRefOid`）から判定。
  * 知らない `reviewDecision` の値は空にする（画面に知らない文字を出さず、GitHub の判定を SAI が上書きしない）
  */
-export function reviewDecisionOf(o: { reviewDecision?: unknown; reviews?: unknown; headRefOid?: unknown }): ReviewDecision {
+export function reviewDecisionOf(o: { reviewDecision?: unknown; reviews?: unknown; headRefOid?: unknown; reviews_page_full?: unknown }): ReviewDecision {
   const given = str(o.reviewDecision).toUpperCase()
   if (given === 'APPROVED' || given === 'CHANGES_REQUESTED' || given === 'REVIEW_REQUIRED') return given
   if (given) return ''
-  const counted = latestOpinionated(reviewsOf(o.reviews)).filter((r) => COUNTED_ASSOCIATIONS.has(r.association))
+  if (o.reviews_page_full === true) return '' // 一覧は先頭 100 件まで。続きがあるかもしれないので判定しない
+  const counted = latestOpinionated(reviewsOf(o.reviews)).filter((r) => COUNTED_ASSOCIATIONS.has(r.association) && !isBotLogin(r.login))
   if (counted.some((r) => r.state === 'CHANGES_REQUESTED')) return 'CHANGES_REQUESTED'
   const approvals = counted.filter((r) => r.state === 'APPROVED')
   if (approvals.length === 0) return ''

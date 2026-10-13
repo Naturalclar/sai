@@ -12,7 +12,10 @@ import type { DiffPr } from '../../shared/types.ts'
 import { PR_VIEW_REVIEWS_JQ, reviewDecisionOf } from '../../shared/prReviewState.ts'
 
 /** 引くのを諦めるまで。差分の要約はこれを待たせるので短く */
-export const PR_TIMEOUT_MS = 4000
+/** `gh pr view` を諦めるまで。#793 で `reviews` を引くようになり、gh はレビューを続きまで引く（1 ページ 100 件ごとに 1 往復）ので少し長めに */
+export const PR_TIMEOUT_MS = 8000
+/** `gh pr view` の出力をどこまで受けるか。超えたら読めなかった扱い */
+export const PR_VIEW_MAX_BYTES = 1024 * 1024
 /** 同じ (cwd, ブランチ) を引き直さない時間。PR 番号はそう変わらないが、新しく出した PR は出したい */
 export const PR_CACHE_MS = 60_000
 
@@ -118,10 +121,14 @@ export class GhPr implements PrLookup {
         child.kill('SIGKILL')
         finish('')
       }, this.timeout)
-      // 応答が大きくなることは無いが、念のため頭だけ見る
-      child.stdout.on('data', (c: Buffer) => (out.length < 64 * 1024 ? (out += c.toString()) : undefined))
+      // 上限を超えたら「読めなかった」（切れた JSON を返して PR 無しと取り違えない）。`--jq` で判定に要る件だけに絞るので、ふつうは数 KB
+      let truncated = false
+      child.stdout.on('data', (c: Buffer) => {
+        if (out.length < PR_VIEW_MAX_BYTES) out += c.toString()
+        else truncated = true
+      })
       child.once('error', () => finish(''))
-      child.once('close', (code) => finish(code === 0 ? out : ''))
+      child.once('close', (code) => finish(code === 0 && !truncated ? out : ''))
     })
   }
 }

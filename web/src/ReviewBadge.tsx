@@ -1,5 +1,5 @@
 import { ApprovedMark } from './ApprovedMark'
-import { isApproved, isStaleApproval, reviewLabel } from './prLabels'
+import { isApproved, isStaleApproval, reviewLabel, reviewTitle } from './prLabels'
 
 /**
  * PR 一覧の行と PR 画面に出すレビューの判定（#524）。承認済みならチェックの印（#636）。
@@ -10,7 +10,7 @@ export function ReviewBadge({ decision, size = 12 }: { decision: string; size?: 
   if (!label) return null
   const stale = isStaleApproval(decision)
   return (
-    <span className={`review ${decision.toLowerCase()}`} title={stale ? '承認のあとにコミットが積まれています（承認した時の head と違う）' : undefined}>
+    <span className={`review ${decision.toLowerCase()}`} title={reviewTitle(decision) || undefined}>
       {(isApproved(decision) || stale) && <ApprovedMark size={size} stale={stale} />}
       {label}
     </span>

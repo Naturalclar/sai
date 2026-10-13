@@ -4,6 +4,7 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { GhPr, NoPr, parsePr, validBranch } from './pr.ts'
+import { PR_VIEW_REVIEWS_JQ } from '../../shared/prReviewState.ts'
 
 /** `gh` の代わりに置く shell スクリプト。呼ばれた引数を記録し、決めた stdout と終了コードを返す */
 async function fakeGh(dir: string, body: string): Promise<string> {
@@ -56,7 +57,7 @@ test('GhPr: gh の出力から PR を引き、同じブランチは引き直さ�
     await gh.find(dir, 'feat/x')
     const log = await readFile(join(dir, 'calls'), 'utf8')
     assert.equal(log.trim().split('\n').length, 1, '2 回目はキャッシュから返すので gh は 1 回だけ')
-    assert.match(log, /^pr view feat\/x --json number,url,state,isDraft,reviewDecision,reviews,headRefOid --jq \.reviews = /m, '組み立てるのは pr view の 1 形だけ（#636 で reviewDecision、#793 で reviews / headRefOid と絞る --jq を足した）')
+    assert.equal(log.trim(), ['pr', 'view', 'feat/x', '--json', 'number,url,state,isDraft,reviewDecision,reviews,headRefOid', '--jq', PR_VIEW_REVIEWS_JQ].join(' '), '組み立てるのは pr view の 1 形だけ（#636 で reviewDecision、#793 で reviews / headRefOid と絞る --jq を足した）')
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

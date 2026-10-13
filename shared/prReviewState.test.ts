@@ -60,6 +60,27 @@ test('reviewDecisionOf: 承認した時のコミットが今の head と違え�
   assert.equal(reviewDecisionOf({ reviewDecision: '', reviews: [review('APPROVED', 'MEMBER', OLD, 'reviewer-a'), review('CHANGES_REQUESTED', 'OWNER', HEAD, 'reviewer-b')], headRefOid: HEAD }), 'CHANGES_REQUESTED', '修正の依頼が先')
 })
 
+test('reviewDecisionOf: 一覧の reviews が 1 ページ（100 件）ぶん来ていたら判定しない（続きがあるかもしれない）。reviewDecision があれば関係ない', () => {
+  assert.equal(reviewDecisionOf({ reviewDecision: '', reviews: [review('APPROVED')], reviews_page_full: true }), '')
+  assert.equal(reviewDecisionOf({ reviewDecision: '', reviews: [review('APPROVED')], reviews_page_full: false }), 'APPROVED')
+  assert.equal(reviewDecisionOf({ reviewDecision: 'APPROVED', reviews_page_full: true }), 'APPROVED')
+})
+
+test('reviewDecisionOf: ボットのログイン名（isBotLogin）は、メンバーの印が付いていても数えない', () => {
+  assert.equal(reviewDecisionOf({ reviewDecision: '', reviews: [review('APPROVED', 'MEMBER', undefined, 'release[bot]')] }), '')
+  assert.equal(reviewDecisionOf({ reviewDecision: '', reviews: [review('APPROVED', 'MEMBER', undefined, 'app/some-app')] }), '')
+  assert.equal(reviewDecisionOf({ reviewDecision: '', reviews: [review('CHANGES_REQUESTED', 'MEMBER', undefined, 'release[bot]'), review('APPROVED', 'MEMBER', undefined, 'reviewer-a')] }), 'APPROVED', 'ボットの修正の依頼も数えない')
+})
+
+test('jq: 判定に関わらないレビュー（COMMENTED・外部の人）は gh の側で落とし、一覧にはページの印を付ける', () => {
+  assert.match(PR_LIST_REVIEWS_JQ, /reviews_page_full = \(\(\.reviews \/\/ \[\]\) \| length >= 100\)/)
+  assert.doesNotMatch(PR_VIEW_REVIEWS_JQ, /reviews_page_full/, 'pr view は続きまで引くので印は付けない')
+  for (const jq of [PR_LIST_REVIEWS_JQ, PR_VIEW_REVIEWS_JQ]) {
+    assert.match(jq, /IN\("APPROVED", "CHANGES_REQUESTED", "DISMISSED"\)/)
+    assert.match(jq, /IN\("MEMBER", "OWNER", "COLLABORATOR"\)/)
+  }
+})
+
 test('latestOpinionated: 人ごとに最新、submittedAt の順（無ければ並び順）。名前の無いレビューは別々に数える', () => {
   const a1 = { ...reviewsOf([review('APPROVED', 'MEMBER', OLD)])[0]!, submittedAt: '2026-01-02T00:00:00Z' }
   const a2 = { ...reviewsOf([review('CHANGES_REQUESTED', 'MEMBER', HEAD)])[0]!, submittedAt: '2026-01-01T00:00:00Z' }

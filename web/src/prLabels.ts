@@ -22,6 +22,12 @@ export function isStaleApproval(decision: string | undefined): boolean {
   return decision === 'APPROVED_STALE'
 }
 
+/** レビューの判定の補足（マウスを乗せたときの title）。無ければ空。「承認のあとに更新あり」は head が違うことしか分からない（中身が同じ rebase でも付く） */
+export function reviewTitle(decision: string): string {
+  if (decision === 'APPROVED_STALE') return '承認した時のコミットと今の head が違います（承認のあとに push があった。中身が同じ rebase でも付く）'
+  return ''
+}
+
 /** レビューの判定の文言。`review_decision`（サーバが `shared/prReviewState.ts` で組んだもの）。無い・知らない値は空 */
 export function reviewLabel(decision: string): string {
   if (decision === 'APPROVED') return '承認済み'

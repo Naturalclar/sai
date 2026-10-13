@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { COST_CUMULATIVE_SINCE_MS, USAGE_MATCH_MS, costIsCumulative, failureTail, parseTurnUsage, totalTokens, turnCost, turnCosts, usageByRow } from './turnUsage.ts'
+import { COST_CUMULATIVE_SINCE_MS, USAGE_MATCH_MS, costIsCumulative, failureTail, maxBudgetText, parseTurnUsage, totalTokens, turnCost, turnCosts, usageByRow } from './turnUsage.ts'
 import type { TurnUsageEntry } from './turnUsage.ts'
 import type { FeedRow } from './types.ts'
 
@@ -67,6 +67,18 @@ test('parseTurnUsage: 断られたツールの数を数える', () => {
 test('failureTail: JSON をそのまま出さず、CLI の本文（と断られた数）を出す', () => {
   const denied = JSON.stringify({ ...JSON.parse(RESULT), result: '許可されていないため実行できませんでした', permission_denials: [{ tool_name: 'Bash' }] })
   assert.equal(failureTail(denied), '許可されていないため実行できませんでした（未許可で断られたツール 1 件）')
+})
+
+test('failureTail: 費用の上限で止まったターンは、JSON の切れ端でなく止まった理由と額を出す（#388）', () => {
+  // 2.1.296 で実測した形: `result` が無く、`subtype` と `errors` だけが来る（終了コードは 1）
+  const { result: _dropped, ...rest } = JSON.parse(RESULT) as Record<string, unknown>
+  const capped = JSON.stringify({ ...rest, subtype: 'error_max_budget_usd', is_error: true, errors: ['Reached maximum budget ($50)'], terminal_reason: 'budget_exhausted' })
+  assert.equal(failureTail(capped), '費用の上限（50 ドル）に達したので、CLI がターンを途中で止めました')
+  // 途中の発言の行が前にあっても、最後の result を読む
+  assert.equal(failureTail(`${JSON.stringify({ type: 'assistant', message: { content: [] } })}\n${capped}\n`), '費用の上限（50 ドル）に達したので、CLI がターンを途中で止めました')
+  // 額が読めなければ額なしで出す（SAI の定数を当てない）
+  assert.equal(maxBudgetText(undefined), '費用の上限に達したので、CLI がターンを途中で止めました')
+  assert.equal(maxBudgetText(['Reached maximum budget ($0.0001)']), '費用の上限（0.0001 ドル）に達したので、CLI がターンを途中で止めました')
 })
 
 test('failureTail: result が読めなければ元の文字列のまま（呼び出し側が末尾を切る）', () => {

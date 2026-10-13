@@ -186,6 +186,9 @@ export function splitArgs(raw: string | undefined): string[] {
   return out
 }
 
+/** そのターンの費用の上限（#388。`--print` のときだけ効く） */
+const MAX_BUDGET_FLAG = '--max-budget-usd'
+
 /** 入力の口を開けておく引数（#386） */
 const CLAUDE_STREAM_ARGS = ['--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose']
 
@@ -210,7 +213,7 @@ function claudeStreams(env: NodeJS.ProcessEnv): boolean {
  * Claude の起動引数のうち、返信と新しいセッション（#314）で共通の前半。運用者の `SAI_CLAUDE_ARGS` を先頭に、
  * 許可・質問を画面で答える配線、モデル、許可モードの順（後ろほど勝つ）。2 つの経路でずれないように 1 か所で組む
  */
-function claudeHead(env: NodeJS.ProcessEnv, approve: ApproveVia | undefined, model: string | undefined, permissionMode: string | undefined, name?: string): string[] {
+function claudeHead(env: NodeJS.ProcessEnv, approve: ApproveVia | undefined, model: string | undefined, permissionMode: string | undefined, name?: string, maxBudgetUsd?: number): string[] {
   const extra = splitArgs(env.SAI_CLAUDE_ARGS)
   // 許可・質問を画面で答える配線（Claude だけ。Codex に同等の口は無い）。
   // SAI_APPROVE=0 で外せる。運用者が自分の --permission-prompt-tool を足していればそちらを尊重する。
@@ -229,7 +232,11 @@ function claudeHead(env: NodeJS.ProcessEnv, approve: ApproveVia | undefined, mod
   // `{"type":"custom-title",…}` が入り、次に `-n` 無しで resume しても消えない）ので、
   // 付いていないセッションには渡さない（端末で付けた名前を空で上書きしない）
   const named = (name ?? '').trim() ? ['-n', (name ?? '').trim()] : []
-  return [...extra, ...wire, ...(model ? ['--model', model] : []), ...(permissionMode ? ['--permission-mode', permissionMode] : []), ...named, ...format]
+  // 費用の上限（#388）。**できることを減らす側のフラグ**で、権限は足さない。運用者が自分の額を書いていればそちらを尊重する
+  // （`--max-budget-usd 5` でも `--max-budget-usd=5` でも。見落として後ろに並べると、メッセージで起こすターンだけ額が上がる）
+  const ownBudget = extra.some((a) => a === MAX_BUDGET_FLAG || a.startsWith(`${MAX_BUDGET_FLAG}=`))
+  const budget = maxBudgetUsd !== undefined && maxBudgetUsd > 0 && !ownBudget ? [MAX_BUDGET_FLAG, String(maxBudgetUsd)] : []
+  return [...extra, ...wire, ...(model ? ['--model', model] : []), ...(permissionMode ? ['--permission-mode', permissionMode] : []), ...named, ...budget, ...format]
 }
 
 /**
@@ -320,6 +327,11 @@ export function replyCommand(
    * 名前はセッションに残るので、SAI で付け替えると次の返信から端末側の名前も変わる
    */
   name?: string,
+  /**
+   * そのターンの費用の上限（ドル。#388）。**別のセッション・tailnet の MCP から届いたメッセージで起こすターンにだけ**呼び出し側が渡す
+   * （人が画面から押した返信には渡さない）。Claude だけ（`codex exec resume` / `opencode run` に同等のフラグは無い）
+   */
+  maxBudgetUsd?: number,
 ): ReplyCommand | null {
   // 運用者の SAI_*_ARGS に -m があっても、セッションの設定を後ろに置いてそちらを勝たせる（後勝ち。Claude は claudeHead() の中）
   const pick = model ? ['-m', model] : []
@@ -327,7 +339,7 @@ export function replyCommand(
   // ターンが回らない（`--dangerously-skip-permissions` ならフラグとして効いてしまう）。両 CLI とも `--` を受け付ける
   if (agent === 'claude') {
     // 許可モードは Claude だけ（codex exec resume に同等のフラグは無い）
-    return { bin: 'claude', ...claudeTail(env, [...claudeHead(env, approve, model, permissionMode, name), '-p', '--resume', session], text, session), cwd, text, permissionMode: permissionMode || '' }
+    return { bin: 'claude', ...claudeTail(env, [...claudeHead(env, approve, model, permissionMode, name, maxBudgetUsd), '-p', '--resume', session], text, session), cwd, text, permissionMode: permissionMode || '' }
   }
   if (agent === 'codex') {
     // Codex は画像を受ける口がある（`-i, --image <FILE>  Optional image(s) to attach to the prompt sent after resuming`）

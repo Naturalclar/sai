@@ -110,6 +110,14 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
   - 相手の大きさは `ProgressReader.read()` の `context_tokens`。`shared/progress.ts` が transcript の assistant の `usage` の入力 3 つの和 / rollout の `token_count` の `last_token_usage.input_tokens` を拾う（`total_token_usage` は積算なので使わない）。
   - `AgentMessages.readInTurn()` に足していき、`budgetRefusal()` が超えるなら `429`。大きさが分からない相手は足さない。
   - `sai_sessions` と `sai_send` の返事にも出す（エージェントが小さい相手を選べるように）。
+- 走り出したターンの費用の上限 `AGENT_TURN_MAX_BUDGET_USD`（50 ドル。#388）:
+  - `launch()` の続き（`startTurn()`）が、`LaunchOptions.origin` があるときだけ `replyCommand()` の最後の引数に渡し、`claudeHead()` が `--max-budget-usd 50` を足す。`origin` が付くのは `sai_send`・預かった送信（`drainBacklog()`）・`/mcp` の `sai_send`・返答がそろって送り元を起こすターン・それらが預かりから回るとき。要約を挟むとき（#624）は要約のターンにも本文のターンにも付く。**人の返信（`POST …/reply`）・ループ・待ち・新しいセッションは `origin` を持たないので付かない**。
+  - **「SAI 自身は起動するコマンドに権限のフラグを付けない」との関係**: あの決まりが止めているのは、できることを**増やす**フラグ（`--dangerously-skip-permissions`・`--allowedTools`・`--permission-mode` を SAI の判断で足すこと）。`--max-budget-usd` は許可にも道具にも触らず、ターンを**早く終わらせる側**にしか働かないので、決まりの外に置いている（一言の `claude -p` が道具・MCP を外して起こす #740 と同じ「足すのは減らす側だけ」）。
+  - 運用者が `SAI_CLAUDE_ARGS` に自分の `--max-budget-usd` を書いていれば足さない（2 つ並べない。`--max-budget-usd=5` の形も見る）。その額は人の返信にも効く。
+  - 上限は起動 1 回ぶんなので、メッセージで起きたターンに人がその場で足した指示（steer）や、そこへ足された返答も同じ上限の内側で走る。
+  - 付くのは Claude の別プロセスの経路だけ。端末（tmux）に打ち込む経路・Codex（app-server / queue / `exec resume`）・OpenCode には同じ口が無い。
+  - 当たったときの形（2.1.296 で実測）: 終了コード 1、`result` の行は `subtype: "error_max_budget_usd"`・`is_error: true`・`errors: ["Reached maximum budget ($<額>)"]`（当てたのは 0.0001 ドル。50 ドルのときの額の書き方は見ていない）・`terminal_reason: "budget_exhausted"` で、**`result`（本文）は無い**。`failureTail()` がこの `subtype` を見て `maxBudgetText()` の 1 行にする（額は `errors` の文から拾う。読めなければ額なし）。失敗は今までどおり `Replying.failed` に載り、送り元には `agentResult()` が `failed` で返す。
+  - 比べられるのは**その 1 回の起動で使った分**で、`total_cost_usd`（セッションの積み上げ。#602）とではない。検査は API の呼び出しのあとなので、最後の 1 回ぶんは超える。**止まったターンでは Stop のフックが動かない**（記録には `UserPromptSubmit` の行だけが残る）。
 - テストは `createApp` に偽の `UsageStore` / `ProgressReader` を渡す（本物は ~/.claude と ~/.codex を読む）。
 - **宛先は id か呼び名**（#625）: `shared/agentMessages.ts` の `resolveTarget(targets, to)` が、id がそのまま当たればそれ、当たらなければ `targetNames()`（id・表示名・worktree 名 `repo`・`sessionLabel()`。前後の空白と大文字小文字だけ無視）の完全一致で探し、**ちょうど 1 つのときだけ**返す。引く範囲は今までどおり `agentTargets()` の中だけ。**送れないが居るセッション（素通し・別のマシンなど。アーカイブ済みは除く）に同じ名前があれば、送れる方が 1 つでも当てない**（第 3 引数 `blocked`。送れる相手だけで数えると、指していた方が送れないときに別の相手へ黙って届く。#662 のレビュー）。決まらなければ `targetRefusal()` が候補を並べた文を返す（複数 `409`・無し `403`）。`/mcp` の `sai_send` / `sai_suggest` は `mcpTarget()`（id は今までどおり全セッションから、名前は送れる・置ける相手の中からだけ。無いときに全リポジトリの一覧は並べない）。宛先の説明は `SEND_TO_ARG`。
 - **着手の依頼は要約してから始める**（#624）: `agentSend` と `/mcp` の `sai_send` が `messageCompactOf()` → `shared/compact.ts` の `messageCompacts()`（画面と同じ `sendModes()`。着手の形か、相手の間があいて大きいとき（#761。間は相手の `last_turn_ts` から）。指定 `AgentSendRequest.compact` があれば指定、ただし `canCompact()` でなければ要約しない）で決め、`launch()` に `compact` と `compactFrom`（**見出しを付ける前の文**。`compactPrompt()` はここから作る）を渡す。
@@ -162,6 +170,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 回数は `server/mcp/sendLimit.ts` の `McpSendLimiter`（呼んだ人ごとに 10 分 5 回。`mcp-sends.json` に残る）。
 - 使用量の枠（`usageRefusal()`）と読み直させる量の予算（`budgetRefusal()`）は #311 の口と同じものを見る。予算の「1 ターン」の代わりは `McpSendLimiter.windowKey()`（10 分の区切り）で、`AgentMessages.record()` / `readInTurn()` にその鍵で載せる。
 - 許可を聞かないモード（`bypassPermissions` / `auto`。判定は `modeSkipsRules()`）のセッションには送らない（`mcpSendRefusal()`。断りの文にモードの名前を出す）。
+- 起こすターンには #311 の口と同じ費用の上限（`AGENT_TURN_MAX_BUDGET_USD`。#388）が付く（`origin` があるので）。
 - `sai_wait` は最大 120 秒で返し、まだならもう一度呼ばせる。
 - 返答を引く行は `rowsNow()`（#614。ターン完了の行が落ちた・本文が空だったターンは、transcript から補った行が返答になる。→ [progress.md](progress.md#落ちた返答を-transcript-から補う614)）。
 - 送り元は `mcp:<ログイン名>` として記録し、本人だけが待てる。

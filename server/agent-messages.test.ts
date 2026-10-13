@@ -8,7 +8,7 @@ import type { Server } from 'node:http'
 import { appendFile, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { AGENT_SEND_MAX, HANDED_MARK, splitHandedReplies, STEERED_NOTE, WAKE_NOTE } from '../shared/agentMessages.ts'
+import { AGENT_SEND_MAX, AGENT_TURN_MAX_BUDGET_USD, HANDED_MARK, splitHandedReplies, STEERED_NOTE, WAKE_NOTE } from '../shared/agentMessages.ts'
 import type {
   AgentSendManyResponse,
   AgentSendResponse,
@@ -171,6 +171,8 @@ const humanReply = async (id: string) => {
   idle(id)
   const res = await fetch(`${base}/api/sessions/${encodeURIComponent(id)}/reply`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: '人から' }) })
   assert.equal(res.status, 202)
+  // 人が画面から押した返信には費用の上限を付けない（#388）
+  assert.equal(runner.started.at(-1)!.cmd.args.includes('--max-budget-usd'), false)
 }
 
 test('エージェント用の口: トークンが無い・違う・ブラウザから（Origin 付き）は 403。トークンは 0600 のファイル（#310）', async () => {
@@ -249,6 +251,8 @@ test('sai_send: 相手のターンを見出し付きで起動する。送れな�
     assert.equal(id, 'B1@r')
     assert.match(cmd.text, new RegExp(`^【SAI】#o/r の「実装して」からのメッセージです（id: ${body.message_id}）`))
     assert.ok(cmd.text.endsWith('\n\nテストを見て'))
+    // メッセージで起こすターンには費用の上限が付く（#388）
+    assert.equal(cmd.args[cmd.args.indexOf('--max-budget-usd') + 1], String(AGENT_TURN_MAX_BUDGET_USD))
 
     assert.equal((await send('A1@r', 'C1@r', 'x')).status, 403, '別の project')
     assert.equal((await send('A1@r', 'A1@r', 'x')).status, 403, '自分')
@@ -748,6 +752,7 @@ test('wake を付けて送ると、返答がそろったときに送り元を 1 
   assert.ok(woke.cmd.text.startsWith(HANDED_MARK))
   assert.match(woke.cmd.text, new RegExp(`message_id: ${messageId}`))
   assert.ok(woke.cmd.text.endsWith(WAKE_NOTE))
+  assert.ok(woke.cmd.args.includes('--max-budget-usd'), '返答がそろって起こすターンにも費用の上限が付く（#388）')
   await poll()
   assert.equal(runner.started.length, 1, 'ポーリングのたびに起こさない')
   // 起こしたターンからは送れない（連鎖 1 段）
@@ -899,6 +904,7 @@ test('sai_send: 1 行目が着手の形で相手が要約できるなら、/comp
     assert.equal(first.compact, true)
     assert.match(first.text, /^\/compact 次は「#624 に着手してください。」に取りかかる/, '指示は見出しを付ける前の、送り元が書いた 1 行目から')
     assert.ok(!first.text.includes('【SAI】'))
+    assert.ok(first.args.includes('--max-budget-usd'), '要約のターンにも費用の上限が付く（#388）')
   } finally {
     idle('A1@r')
   }
@@ -914,6 +920,7 @@ test('sai_send: 1 行目が着手の形で相手が要約できるなら、/comp
   assert.match(delivered, new RegExp(`^【SAI】#o/r の「実装して」からのメッセージです（id: ${messageId}）`))
   assert.ok(delivered.endsWith('#624 に着手してください。\nissue の本文とコメントが正本です。'))
   assert.equal(runner.started[1]!.cmd.compact, undefined)
+  assert.ok(runner.started[1]!.cmd.args.includes('--max-budget-usd'), '預かりから回る本文のターンにも付く（#388）')
   // 本文のターンも、メッセージで起動したターン（連鎖は 1 段まで）
   turn('B1@r')
   try {

@@ -253,7 +253,7 @@ import { FILES_SEGMENT } from '../shared/files.ts'
 import { TranscriptImages } from './local/transcriptImages.ts'
 import { labelSuffixes } from '../shared/sessionLabels.ts'
 import { CodexImages } from './local/codexImages.ts'
-import { THUMB_MIN_BYTES, Thumbnails } from './local/thumbnails.ts'
+import { Thumbnails } from './local/thumbnails.ts'
 import type { ThumbMaker } from './local/thumbnails.ts'
 import { galleryFromRows, mergeGallery, rowTsAtOrAfter } from '../shared/gallery.ts'
 import { searchRows } from './rows/search.ts'
@@ -1902,8 +1902,9 @@ export function createApp(
     // （受けないと元の画像を枠に読む。URL の版はブラウザのキャッシュを分けるためだけ）
     const wantThumb = wantsThumb(q) && !download
     // 軽い版の ETag は元の ETag から作る（元が変われば軽い版も変わる）。`t2` は帯の軽い版の大きさを変えたとき（#709）、
-    // `t3` は EXIF を落とすようにしたとき（#791）に上げた（上げないと、ブラウザが持っている古い軽い版が 304 でそのまま使われる）
-    const etag = wantThumb && img.bytes.length >= THUMB_MIN_BYTES ? img.etag.replace(/^"/, '"t3-') : img.etag
+    // `t3` は EXIF を落とすようにしたとき（#791）に上げた（上げないと、ブラウザが持っている古い軽い版が 304 でそのまま使われる）。
+    // 枠に出すものはしきい値未満でも落とすので、`thumb=` が付いていれば大きさに関わらず付ける（付けないと、前に持った GPS 入りが 304 で残る）
+    const etag = wantThumb ? img.etag.replace(/^"/, '"t3-') : img.etag
     if (req.headers['if-none-match'] === etag) {
       res.writeHead(304, { ETag: etag, 'Cache-Control': 'private, no-cache' })
       res.end()
@@ -4851,6 +4852,8 @@ export function createApp(
     } catch {
       return error(res, 404, 'icon not found')
     }
+    // 前から置いてあって形が読めず落とせなかったものは配らない（#791。置く口は断る。アイコンは小さいので毎回通してよい）
+    if (stripImageMetadata(body, icon.type).unreadable) return error(res, 415, UNREADABLE_IMAGE_REASON)
     res.writeHead(200, {
       'Content-Type': icon.mime,
       'Content-Length': body.length,
@@ -4967,6 +4970,7 @@ export function createApp(
     const entry = await iconHistory.get(key)
     const body = entry ? await iconHistory.read(key) : null
     if (!entry || !body) return error(res, 404, 'icon not found')
+    if (stripImageMetadata(Buffer.from(body), entry.type).unreadable) return error(res, 415, UNREADABLE_IMAGE_REASON)
     res.writeHead(200, {
       'Content-Type': entry.mime,
       'Content-Length': body.length,

@@ -11,6 +11,10 @@ export const ICONS_DIR = 'session-icons'
 /** 前からあるアイコンからメタデータを落とし終えた印（#791。添付と同じ名前） */
 export const ICONS_STRIPPED_MARK = STRIPPED_MARK
 const NAME_RE = /^([0-9a-f]{16})\.(png|jpeg|gif|webp)$/
+/** `put()` と一括処理の tmp（`<名前>.<pid>[.<連番>.strip].tmp`）。途中で止められた残骸は起動時に消す */
+const WORK_RE = /^[0-9a-f]{16}\.(png|jpeg|gif|webp)\.\d+(\.\d+\.strip)?\.tmp$/
+/** これより古い tmp は残骸として消す */
+export const ICONS_WORK_STALE_MS = 10 * 60_000
 
 export interface IconInfo {
   /** ファイルの絶対パス */
@@ -58,21 +62,31 @@ export class IconStore {
   private async stripStored(): Promise<{ checked: number; changed: number; marked: boolean }> {
     const out = { checked: 0, changed: 0, marked: false }
     const mark = join(this.dir, ICONS_STRIPPED_MARK)
+    let marked = false
     try {
       await stat(mark)
-      return { ...out, marked: true }
+      marked = true
     } catch {
       // まだ
     }
     let names: string[]
     try {
-      names = (await readdir(this.dir)).filter((n) => NAME_RE.test(n))
+      names = await readdir(this.dir)
     } catch {
       return out // 置き場がまだ無い（最初の put が作る。そのときの中身は落とした後のもの）
     }
     let seq = 0
     for (const n of names) {
       const path = join(this.dir, n)
+      if (WORK_RE.test(n)) {
+        try {
+          if (Date.now() - (await stat(path)).mtimeMs >= ICONS_WORK_STALE_MS) await rm(path, { force: true })
+        } catch {
+          // 消えていた・消せない
+        }
+        continue
+      }
+      if (marked || !NAME_RE.test(n)) continue
       const tmp = `${path}.${process.pid}.${++seq}.strip.tmp`
       try {
         const before = await stat(path)
@@ -91,7 +105,7 @@ export class IconStore {
         await rm(tmp, { force: true })
       }
     }
-    await writeFile(mark, '')
+    if (!marked) await writeFile(mark, '')
     out.marked = true
     this.cache = null
     return out

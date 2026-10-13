@@ -233,11 +233,16 @@ export class Thumbnails implements ThumbMaker {
       // 置いてあるものにも落とす（#791。古い SAI が同じ置き場に書いた軽い版が残りうる）。落ちたら置き直す。
       // tmp の名前はプロセスと連番で分ける（同じ軽い版を同時に 2 本が置き直しても、途中の tmp を rename しない）
       const r = stripImageMetadata(stored, format)
-      if (r.changed) {
-        const tmp = `${out}.${process.pid}.${++this.seq}.tmp`
-        await writeFile(tmp, r.bytes).then(() => rename(tmp, out)).catch(() => rm(tmp, { force: true }))
+      if (r.unreadable) {
+        // 形が読めず落とせたか分からない軽い版は配らない。消して、作り直せるなら作り直す（古い SAI が置いた壊れたもの）
+        await rm(out, { force: true })
+      } else {
+        if (r.changed) {
+          const tmp = `${out}.${process.pid}.${++this.seq}.tmp`
+          await writeFile(tmp, r.bytes).then(() => rename(tmp, out)).catch(() => rm(tmp, { force: true }))
+        }
+        return this.result(r.bytes, format, img.bytes.length)
       }
-      return this.result(r.bytes, format, img.bytes.length)
     }
     if (this.missing) return { kind: 'unavailable' }
     const failedAt = this.failed.get(hash)
@@ -264,6 +269,7 @@ export class Thumbnails implements ThumbMaker {
       await this.shrink(src, tmp, format, edge)
       // `sips -Z` は EXIF を落とさない（GPS が残る。#791）。書いたバイト列から落としてから置く（ICC と向きは残る）
       const r = stripImageMetadata(await readFile(tmp), format)
+      if (r.unreadable) throw new Error('sips の出力の形が読めない') // 落とせたか分からないものは置かない（作れなかった扱い）
       if (r.changed) await writeFile(tmp, r.bytes)
       await rename(tmp, out)
       if (++this.made % 50 === 1) void this.trim()

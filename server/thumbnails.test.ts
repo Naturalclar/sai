@@ -16,16 +16,26 @@ import { row } from './rows/aggregate.test.ts'
 import { hasAlpha, imageSize, noThumbs, THUMB_BAND_EDGE_MAX, THUMB_BAND_SHORT, THUMB_EDGE, THUMB_EDGE_ALPHA, THUMB_FAILED_TTL_MS, THUMB_MIN_BYTES, THUMB_STRIPPED_MARK, thumbTarget, Thumbnails } from './local/thumbnails.ts'
 import type { Shrinker, ThumbFormat } from './local/thumbnails.ts'
 import { IMAGE_MAX_BYTES, sessionImageUrl, THUMB_VERSION, thumbUrl } from '../shared/images.ts'
-import { JPEG_STRIPPED, JPEG_WITH_EXIF } from './local/imageMetadata.test.ts'
+import { JPEG_STRIPPED, JPEG_UNREADABLE, JPEG_WITH_EXIF } from './local/imageMetadata.test.ts'
+import { jpegSegment } from './local/imageMetadata.ts'
 
-/** IHDR の色の種類（2 = RGB、6 = RGBA）を持つ PNG に見えるもの。中身の判定は先頭の印だけを見る */
+/**
+ * IHDR の色の種類（2 = RGB、6 = RGBA）を持つ PNG に見えるもの。中身の判定は先頭の印だけを見る。
+ * 残りは 1 つの IDAT チャンクにする（メタデータを落とす側がチャンクを歩いても「読めない」にならない。#791）
+ */
 const png = (size: number, colorType = 2) => {
   const b = Buffer.alloc(size)
   Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]).copy(b)
   b[25] = colorType
+  if (size >= 45) {
+    b.writeUInt32BE(size - 33 - 12, 33)
+    b.write('IDAT', 37, 'latin1')
+  }
   return b
 }
-const JPEG_THUMB = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3])
+/** 読める JPEG で、だいたい size バイト（SOI + SOS + 画素 + EOI。落とす物は無い。#791） */
+const jpegOf = (size: number) => Buffer.concat([Buffer.from([0xff, 0xd8]), jpegSegment(0xda, Buffer.alloc(10)), Buffer.alloc(Math.max(0, size - 18), 0x12), Buffer.from([0xff, 0xd9])])
+const JPEG_THUMB = Buffer.from([0xff, 0xd8, 0xff, 0xd9]) // 形が読める最小のもの（読めないものは置かない。#791）
 const PNG_THUMB = png(64, 6)
 
 let dir: string
@@ -152,7 +162,7 @@ test('Thumbnails: 失敗・締切は unavailable。sips が無ければ以後は
     assert.deepEqual(await missing.thumb(big), { kind: 'unavailable' })
     assert.deepEqual(await missing.thumb({ bytes: png(THUMB_MIN_BYTES + 20), type: 'png' }), { kind: 'unavailable' })
     assert.equal(n, 1)
-    const heavier = new Thumbnails(d, async (_i, o) => writeFile(o, png(THUMB_MIN_BYTES + 100)))
+    const heavier = new Thumbnails(d, async (_i, o) => writeFile(o, jpegOf(THUMB_MIN_BYTES + 100)))
     assert.deepEqual(await heavier.thumb({ bytes: png(THUMB_MIN_BYTES + 30), type: 'png' }), { kind: 'original' })
     // 同じ中身を同時に頼まれても 1 回だけ縮める
     let m = 0
@@ -363,7 +373,30 @@ test('hasAlpha: PNG は IHDR の色の種類か IDAT より前の tRNS、JPEG �
 test('cwd の画像を枠に出すとき、軽い版を作らず元のまま配る道でも EXIF は落とす。ライトボックス・ダウンロードは元のまま（#791 の 4 回目のレビュー）', async () => {
   const frame = await fetch(base + thumbUrl(url('exif.jpg')))
   assert.equal(frame.status, 200)
+  assert.match(frame.headers.get('etag') ?? '', /^"t3-/, 'しきい値未満でも落としたものの印（元の ETag のままだと前に持った GPS 入りが 304 で残る）')
   assert.deepEqual(Buffer.from(await frame.arrayBuffer()), JPEG_STRIPPED)
   assert.deepEqual(Buffer.from(await (await fetch(base + url('exif.jpg'))).arrayBuffer()), JPEG_WITH_EXIF)
   assert.deepEqual(Buffer.from(await (await fetch(`${base}${url('exif.jpg')}?download=1&thumb=${THUMB_VERSION}`)).arrayBuffer()), JPEG_WITH_EXIF)
+})
+
+test('Thumbnails: 形が読めず落とせたか分からないものは、sips の出力なら作れなかった扱い、置いてあるものなら消して配らない（4 回目のレビュー）', async () => {
+  const d = await mkdtemp(join(tmpdir(), 'sai-thumbs-unreadable-'))
+  try {
+    const th = new Thumbnails(d, async (_i, o) => writeFile(o, JPEG_UNREADABLE))
+    await th.ready()
+    const big = { bytes: png(THUMB_MIN_BYTES + 10), type: 'png' as const }
+    assert.deepEqual(await th.thumb(big), { kind: 'unavailable' })
+    assert.ok(!(await readdir(d)).some((n) => n.endsWith('.jpg')), '置かない')
+    const hash = createHash('sha256').update(big.bytes).digest('hex').slice(0, 32)
+    const stored = join(d, `${hash}.jpg`)
+    await writeFile(stored, JPEG_UNREADABLE)
+    const again = new Thumbnails(d, async (_i, o) => writeFile(o, JPEG_THUMB))
+    await again.ready()
+    await writeFile(stored, JPEG_UNREADABLE) // 起動時の掃除（印の無い置き場は全部消す）のあとに置く＝古い SAI が後から書いたもの
+    const r = await again.thumb(big)
+    assert.equal(r.kind, 'thumb', '消して作り直す')
+    assert.deepEqual(await readFile(stored), JPEG_THUMB)
+  } finally {
+    await rm(d, { recursive: true, force: true })
+  }
 })

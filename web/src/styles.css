@@ -493,6 +493,9 @@
   /* 承認済みの印（#636）。4 か所（一覧・PR 画面・サイドバー・差分ボタン横）で同じ色。置く場所の svg の色より優先させる */
   svg.approved-mark { flex: none; color: var(--codex) !important; }
   .pr-meta .review.approved { color: var(--codex); }
+  /* 承認のあとに更新あり（#793）。承認済みの緑とは別の色（待ちと同じ黄） */
+  svg.approved-mark.stale { color: var(--synth) !important; }
+  .pr-meta .review.approved_stale { color: var(--synth); }
   .tag.requested { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); font-weight: 600; }
   .tag.state.open { background: color-mix(in srgb, var(--codex) 16%, transparent); color: var(--codex); font-weight: 600; }
   .tag.state.merged { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); font-weight: 600; }

@@ -4,6 +4,7 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { GhPr, NoPr, parsePr, validBranch } from './pr.ts'
+import { PR_VIEW_REVIEWS_JQ } from '../../shared/prReviewState.ts'
 
 /** `gh` の代わりに置く shell スクリプト。呼ばれた引数を記録し、決めた stdout と終了コードを返す */
 async function fakeGh(dir: string, body: string): Promise<string> {
@@ -34,6 +35,11 @@ test('parsePr: gh の JSON を読む。番号が無ければ null', () => {
   assert.equal(parsePr('{"isDraft":true,"number":7,"state":"OPEN","url":""}')?.draft, true)
   assert.equal(parsePr('{"isDraft":false,"number":7,"state":"OPEN","url":"","reviewDecision":"APPROVED"}')?.review_decision, 'APPROVED', '#636')
   assert.equal(parsePr('{"isDraft":false,"number":7,"state":"OPEN","url":"","reviewDecision":null}')?.review_decision, '', '文字列でなければ空')
+  // reviewDecision が空なら reviews から組む（#793）。承認した時のコミットが head と違えば APPROVED_STALE
+  const head = 'a'.repeat(40)
+  const withReview = (commit: string) => JSON.stringify({ isDraft: false, number: 7, state: 'OPEN', url: '', reviewDecision: '', headRefOid: head, reviews: [{ state: 'APPROVED', authorAssociation: 'MEMBER', author: { login: 'reviewer-a' }, commit: { oid: commit } }] })
+  assert.equal(parsePr(withReview(head))?.review_decision, 'APPROVED')
+  assert.equal(parsePr(withReview('b'.repeat(40)))?.review_decision, 'APPROVED_STALE')
   assert.equal(parsePr(''), null, 'gh が失敗したときの空')
   assert.equal(parsePr('no pull requests found for branch "x"'), null, 'JSON でない')
   assert.equal(parsePr('{}'), null, '番号が無い')
@@ -51,7 +57,7 @@ test('GhPr: gh の出力から PR を引き、同じブランチは引き直さ�
     await gh.find(dir, 'feat/x')
     const log = await readFile(join(dir, 'calls'), 'utf8')
     assert.equal(log.trim().split('\n').length, 1, '2 回目はキャッシュから返すので gh は 1 回だけ')
-    assert.match(log, /^pr view feat\/x --json number,url,state,isDraft,reviewDecision$/m, '組み立てるのは pr view の 1 形だけ（#636 で reviewDecision を足した）')
+    assert.equal(log.trim(), ['pr', 'view', 'feat/x', '--json', 'number,url,state,isDraft,reviewDecision,reviews,headRefOid', '--jq', PR_VIEW_REVIEWS_JQ].join(' '), '組み立てるのは pr view の 1 形だけ（#636 で reviewDecision、#793 で reviews / headRefOid と絞る --jq を足した）')
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

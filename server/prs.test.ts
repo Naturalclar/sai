@@ -17,7 +17,8 @@ import { createApp } from './app.ts'
 import { FeedStore } from './rows/store.ts'
 import { localDate } from './rows/aggregate.ts'
 import { row } from './rows/aggregate.test.ts'
-import { GhPrs, MERGED_LIMIT, mergedKey, parseMergedHeads } from './git/prs.ts'
+import { PR_LIST_REVIEWS_JQ, PR_VIEW_REVIEWS_JQ } from '../shared/prReviewState.ts'
+import { GhPrs, LIST_FIELDS, MERGED_LIMIT, mergedKey, parseMergedHeads } from './git/prs.ts'
 import type { GhRun, GhSend, PrBrowser, PrView } from './git/prs.ts'
 
 const summary = (number: number, extra: Partial<PrSummary> = {}): PrSummary => ({
@@ -400,6 +401,9 @@ test('GhPrs: 組み立てる gh の引数は読むサブコマンドだけ。頼
   // フォークから出た PR か（#525 の書いたセッションを探さない）
   assert.equal(view?.pr.cross_repo, true)
   assert.equal(view?.patch, PATCH)
+  // 一覧と 1 本は `--jq` 付きの決まった形（#793。reviews を判定に要る件だけに絞る。無いと本文ごと流れて上限に乗る）
+  assert.deepEqual(calls[0], ['pr', 'list', '--repo', 'o/r', '--state', 'open', '--limit', '50', '--json', LIST_FIELDS, '--jq', PR_LIST_REVIEWS_JQ])
+  assert.deepEqual(calls.find((a) => a[1] === 'view'), ['pr', 'view', '2', '--repo', 'o/r', '--json', `${LIST_FIELDS},body,state`, '--jq', PR_VIEW_REVIEWS_JQ])
   // 呼んだのは pr list / pr view / pr diff だけで、どれも --repo で名指し
   for (const args of calls) {
     assert.equal(args[0], 'pr')

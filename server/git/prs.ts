@@ -16,6 +16,7 @@
 // - チェックアウトも fetch もしない（`RealGit` の「読むだけ」の外に出ない）
 import { spawn } from 'node:child_process'
 import { isPrNumber, isRepoName, parsePrCi, parsePrList, parseRequested, prFromGh, sortPrs } from '../../shared/prs.ts'
+import { PR_LIST_REVIEWS_JQ, PR_VIEW_REVIEWS_JQ } from '../../shared/prReviewState.ts'
 import type { PrCi } from '../../shared/waits.ts'
 import type { GithubReview } from '../../shared/prReview.ts'
 import { githubErrorText } from '../../shared/prReview.ts'
@@ -66,8 +67,13 @@ export const VIEWER_MISS_CACHE_MS = 60_000
 /** レビューの投稿を諦めるまで。読むより長く取る（投稿は 1 回きりなので、時間切れで結果が分からなくなるのを避けたい） */
 export const REVIEW_POST_TIMEOUT_MS = 30_000
 
-const LIST_FIELDS = 'number,title,author,headRefName,baseRefName,isDraft,updatedAt,url,additions,deletions,changedFiles,reviewDecision,statusCheckRollup,isCrossRepository'
-const VIEW_FIELDS = `${LIST_FIELDS},body,state,headRefOid`
+/**
+ * `reviews` と `headRefOid` は、`reviewDecision` が空のリポジトリで承認を組むため（#793）。`reviews` は `--jq` で判定に要る項目
+ * （state / authorAssociation / submittedAt / author.login / commit.oid）だけに絞る: 本文を読まない（出力の上限に乗らない）し、
+ * レビューした人の名前は API に出さない（人ごとに畳むのに使うだけ）
+ */
+export const LIST_FIELDS = 'number,title,author,headRefName,baseRefName,isDraft,updatedAt,url,additions,deletions,changedFiles,reviewDecision,reviews,headRefOid,statusCheckRollup,isCrossRepository'
+const VIEW_FIELDS = `${LIST_FIELDS},body,state`
 /** CI が終わったかを確かめるときに読む分だけ（#732。差分も本文も引かない） */
 const CI_FIELDS = 'state,statusCheckRollup'
 /** 会話のコメントとレビュー（#600）。**中身の `gh pr view` とは別に引く**（コメントが大きすぎて上限を超えても、本文と差分は落とさない） */
@@ -140,13 +146,13 @@ export class NoPrs implements PrBrowser {
 /** `gh` を 1 回走らせる。失敗・時間切れ・上限超えは null。テストは偽物を渡す */
 export type GhRun = (args: string[], maxBytes: number) => Promise<string | null>
 
-export function spawnGh(bin: string, timeout = PRS_TIMEOUT_MS): GhRun {
+export function spawnGh(bin: string, timeout = PRS_TIMEOUT_MS, cwd?: string): GhRun {
   return (args, maxBytes) =>
     new Promise((resolve) => {
       let child
       try {
-        // cwd は触らない（--repo で名指しするので、どこで走らせても同じ答え）
-        child = spawn(bin, args, { stdio: ['ignore', 'pipe', 'ignore'] })
+        // 一覧は cwd を触らない（--repo で名指しするので、どこで走らせても同じ答え）。`pr.ts` だけブランチ名から引くので cwd を渡す
+        child = spawn(bin, args, { stdio: ['ignore', 'pipe', 'ignore'], ...(cwd ? { cwd } : {}) })
       } catch {
         return resolve(null)
       }
@@ -308,7 +314,7 @@ export class GhPrs implements PrBrowser {
 
   private async fetchList(repo: string): Promise<PrSummary[] | null> {
     const [listOut, requestedOut] = await Promise.all([
-      this.run(['pr', 'list', '--repo', repo, '--state', 'open', '--limit', String(PRS_LIMIT), '--json', LIST_FIELDS], 4 * 1024 * 1024),
+      this.run(['pr', 'list', '--repo', repo, '--state', 'open', '--limit', String(PRS_LIMIT), '--json', LIST_FIELDS, '--jq', PR_LIST_REVIEWS_JQ], 4 * 1024 * 1024),
       // 自分に頼まれているもの（チームに頼まれたものも GitHub の検索が拾う）。引けなくても一覧は出す
       this.run(['pr', 'list', '--repo', repo, '--state', 'open', '--limit', String(PRS_LIMIT), '--search', 'review-requested:@me', '--json', 'number'], 256 * 1024),
     ])
@@ -341,7 +347,7 @@ export class GhPrs implements PrBrowser {
     const n = String(number)
     // 1 本の画面は開いたときに取り直す（キャッシュしない。読み直しを押せば最新になる）
     const [viewOut, patch] = await Promise.all([
-      this.run(['pr', 'view', n, '--repo', repo, '--json', VIEW_FIELDS], 4 * 1024 * 1024),
+      this.run(['pr', 'view', n, '--repo', repo, '--json', VIEW_FIELDS, '--jq', PR_VIEW_REVIEWS_JQ], 4 * 1024 * 1024),
       this.run(['pr', 'diff', n, '--repo', repo], PR_DIFF_MAX_BYTES),
     ])
     if (viewOut === null) return null

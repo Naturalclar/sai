@@ -18,6 +18,10 @@ test('色は 下書き → チェックが落ちている → 承認済み → �
   assert.equal(sessionPrTag(pr({ draft: true, review_decision: 'APPROVED' })).approved, true)
   assert.equal(sessionPrTag(pr({ checks: 'failure', review_decision: 'APPROVED' })).approved, true)
   assert.equal(sessionPrTag(pr({ review_decision: 'CHANGES_REQUESTED' })).approved, false)
+  // 承認のあとに更新あり（#793）: サイドバーのバッジにはチェックを出さず、色も承認の緑にしない。title には言葉で出る
+  assert.equal(sessionPrTag(pr({ review_decision: 'APPROVED_STALE' })).approved, false)
+  assert.equal(sessionPrTag(pr({ review_decision: 'APPROVED_STALE' })).state, 'open')
+  assert.match(sessionPrTag(pr({ review_decision: 'APPROVED_STALE' })).title, /承認のあとに更新あり/)
 })
 
 test('title は題名と分かるぶんの状態', () => {

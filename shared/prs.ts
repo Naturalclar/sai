@@ -4,6 +4,7 @@
 // **読むだけ**で、GitHub には何も書かない（書く口は #526 で、別に縛る）。
 import { parseUnifiedDiff } from './diff.ts'
 import { normalizeRemote, projectFromRemote, remoteHost } from './project.ts'
+import { reviewDecisionOf } from './prReviewState.ts'
 import type { DiffFileStat, PrCheckState, PrRepo, PrSummary } from './types.ts'
 import type { PrCi } from './waits.ts'
 
@@ -118,7 +119,8 @@ export function prFromGh(obj: unknown): PrSummary | null {
     additions: num(o.additions),
     deletions: num(o.deletions),
     changed_files: num(o.changedFiles),
-    review_decision: str(o.reviewDecision),
+    // reviewDecision が空（レビューを必須にしていないリポジトリ）なら reviews から組む（#793。判定はここ 1 か所）
+    review_decision: reviewDecisionOf(o),
     checks: checkState(o.statusCheckRollup),
     requested: false,
     ...(o.isCrossRepository === true ? { cross: true } : {}),

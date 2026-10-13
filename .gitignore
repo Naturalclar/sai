@@ -9,5 +9,6 @@ attachments/
 __pycache__/
 *.pyc
 
-node_modules/
+# 末尾の / を付けない: シンボリックリンク（別の worktree の node_modules を指すもの）も無視する
+node_modules
 web/dist/

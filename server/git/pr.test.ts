@@ -34,9 +34,9 @@ test('parsePr: gh の JSON を読む。番号が無ければ null', () => {
   assert.equal(parsePr('{"isDraft":true,"number":7,"state":"OPEN","url":""}')?.draft, true)
   assert.equal(parsePr('{"isDraft":false,"number":7,"state":"OPEN","url":"","reviewDecision":"APPROVED"}')?.review_decision, 'APPROVED', '#636')
   assert.equal(parsePr('{"isDraft":false,"number":7,"state":"OPEN","url":"","reviewDecision":null}')?.review_decision, '', '文字列でなければ空')
-  // reviewDecision が空なら latestReviews から組む（#793）。承認した時のコミットが head と違えば APPROVED_STALE
+  // reviewDecision が空なら reviews から組む（#793）。承認した時のコミットが head と違えば APPROVED_STALE
   const head = 'a'.repeat(40)
-  const withReview = (commit: string) => JSON.stringify({ isDraft: false, number: 7, state: 'OPEN', url: '', reviewDecision: '', headRefOid: head, latestReviews: [{ state: 'APPROVED', authorAssociation: 'MEMBER', author: { login: 'reviewer-a' }, commit: { oid: commit } }] })
+  const withReview = (commit: string) => JSON.stringify({ isDraft: false, number: 7, state: 'OPEN', url: '', reviewDecision: '', headRefOid: head, reviews: [{ state: 'APPROVED', authorAssociation: 'MEMBER', author: { login: 'reviewer-a' }, commit: { oid: commit } }] })
   assert.equal(parsePr(withReview(head))?.review_decision, 'APPROVED')
   assert.equal(parsePr(withReview('b'.repeat(40)))?.review_decision, 'APPROVED_STALE')
   assert.equal(parsePr(''), null, 'gh が失敗したときの空')
@@ -56,7 +56,7 @@ test('GhPr: gh の出力から PR を引き、同じブランチは引き直さ�
     await gh.find(dir, 'feat/x')
     const log = await readFile(join(dir, 'calls'), 'utf8')
     assert.equal(log.trim().split('\n').length, 1, '2 回目はキャッシュから返すので gh は 1 回だけ')
-    assert.match(log, /^pr view feat\/x --json number,url,state,isDraft,reviewDecision,latestReviews,headRefOid$/m, '組み立てるのは pr view の 1 形だけ（#636 で reviewDecision、#793 で latestReviews / headRefOid を足した）')
+    assert.match(log, /^pr view feat\/x --json number,url,state,isDraft,reviewDecision,reviews,headRefOid --jq \.reviews = /m, '組み立てるのは pr view の 1 形だけ（#636 で reviewDecision、#793 で reviews / headRefOid と絞る --jq を足した）')
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

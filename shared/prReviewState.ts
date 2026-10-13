@@ -1,18 +1,26 @@
 // PR のレビューの判定を 1 か所で組む（#793）。
 //
 // GitHub の `reviewDecision` は、ブランチの保護でレビューを必須にしているときだけ値が入る。必須でないリポジトリでは
-// 承認があっても空で返るので、SAI の「承認済み」の印が 1 本も出なかった。空のときは `latestReviews`（レビューした人ごとの
-// 最新の判定）から SAI が判定を組む。
+// 承認があっても空で返るので、SAI の「承認済み」の印が 1 本も出なかった。空のときは `reviews`（レビューの全部）から
+// SAI が判定を組む。
 //
-// - `reviewDecision` に値があればそのまま（レビュー必須のリポジトリは GitHub の判定に従う。古い承認の扱いもそちら）
-// - 空のとき: 数える人（メンバー・オーナー・コラボレーター）の最新の判定に CHANGES_REQUESTED が 1 件でもあれば「修正の依頼あり」。
-//   無くて APPROVED が 1 件でもあれば「承認済み」。ただし、承認した時のコミットが分かっていて今の head と全部違えば
-//   「承認のあとに更新あり」（APPROVED_STALE）。コメントだけ・レビュー無し・外部の人やボットの承認だけなら空
+// `latestReviews` は使わない: gh 2.66 では `latestReviews[].commit.oid` が常に空（`reviews[].commit.oid` には入る。
+// 記録で知っているリポジトリで実測）で「承認のあとに更新あり」が出せず、人ごとの最新が COMMENTED（承認した人が
+// あとでコメントだけのレビューを返した）になると承認が消える。GitHub 自身の判定は「意見のあるレビュー」
+// （APPROVED / CHANGES_REQUESTED）の最新だけを見るので、同じ畳み方をする。
+//
+// - `reviewDecision` に値があればそのまま（レビュー必須のリポジトリは GitHub の判定に従う。古い承認の扱いもそちら）。
+//   知らない値は空（GitHub の判定を SAI が上書きしない）
+// - 空のとき: 人ごとに最新の意見のあるレビュー（APPROVED / CHANGES_REQUESTED。DISMISSED は取り消し。COMMENTED は意見を
+//   変えない）を取り、数える人（メンバー・オーナー・コラボレーター）のものだけで、CHANGES_REQUESTED が 1 件でもあれば
+//   「修正の依頼あり」。無くて APPROVED が 1 件でもあれば「承認済み」。ただし承認した時のコミットが分かっていて今の head と
+//   全部違えば「承認のあとに更新あり」（APPROVED_STALE）。コメントだけ・レビュー無し・外部の人やボットの承認だけなら空
 // - 承認した時のコミットが取れない（古い gh・項目が無い）ときは時刻で代えず、「承認済み」のまま
 //
 // 純粋関数。サーバ（server/git/prs.ts・pr.ts）が `gh` の出力を読むときに通し、画面の 3 か所（一覧の行・PR 1 本の見出し・
 // セッションの PR バッジ）は出来上がった `review_decision` を見るだけ（判定を別々に組まない）。
-// レビューした人の名前はここから外に出さない（数えるのに使うだけ）。
+// レビューした人の名前は人ごとに畳むのに使うだけで、ここから外に出さない。`gh` には `--jq` で要る項目だけに絞らせる
+// （本文は読まない。出力の上限にも乗らない）。
 
 /** `review_decision` に入る値。前からの 3 つ + SAI が組む `APPROVED_STALE`。無ければ空 */
 export type ReviewDecision = 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED' | 'APPROVED_STALE' | ''
@@ -20,36 +28,65 @@ export type ReviewDecision = 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED
 /** 数える承認・修正の依頼（`authorAssociation`）。外部の人（CONTRIBUTOR / FIRST_TIME_CONTRIBUTOR / NONE）とボットは数えない */
 export const COUNTED_ASSOCIATIONS: ReadonlySet<string> = new Set(['MEMBER', 'OWNER', 'COLLABORATOR'])
 
+/** `gh … --json reviews` の 1 件を、判定に要る項目だけに絞る jq（本文・リアクション・id は読まない） */
+export const REVIEW_ITEM_JQ = '{state, authorAssociation, submittedAt, author: {login: .author.login}, commit: {oid: .commit.oid}}'
+/** `gh pr list --json …,reviews,…` の出力（配列）の `reviews` を絞る */
+export const PR_LIST_REVIEWS_JQ = `[.[] | .reviews = [(.reviews // [])[] | ${REVIEW_ITEM_JQ}]]`
+/** `gh pr view --json …,reviews,…` の出力（1 件）の `reviews` を絞る */
+export const PR_VIEW_REVIEWS_JQ = `.reviews = [(.reviews // [])[] | ${REVIEW_ITEM_JQ}]`
+
 const str = (v: unknown): string => (typeof v === 'string' ? v : '')
 
-/** `gh` の `latestReviews` の 1 件から、判定に要る分だけ */
-interface LatestReview {
+/** `reviews` の 1 件から、判定に要る分だけ */
+export interface Review {
+  login: string
   state: string
   association: string
+  submittedAt: string
   /** レビューした時のコミット（`commit.oid`）。項目が無い gh では空 */
   commit: string
 }
 
-function latestReviewsOf(raw: unknown): LatestReview[] {
+export function reviewsOf(raw: unknown): Review[] {
   if (!Array.isArray(raw)) return []
-  const out: LatestReview[] = []
+  const out: Review[] = []
   for (const r of raw) {
     if (!r || typeof r !== 'object') continue
     const o = r as Record<string, unknown>
+    const author = o.author && typeof o.author === 'object' ? (o.author as Record<string, unknown>) : {}
     const commit = o.commit && typeof o.commit === 'object' ? str((o.commit as Record<string, unknown>).oid) : ''
-    out.push({ state: str(o.state).toUpperCase(), association: str(o.authorAssociation).toUpperCase(), commit })
+    out.push({ login: str(author.login), state: str(o.state).toUpperCase(), association: str(o.authorAssociation).toUpperCase(), submittedAt: str(o.submittedAt), commit })
   }
   return out
 }
 
+const OPINIONATED = new Set(['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'])
+
 /**
- * `gh pr list` / `gh pr view` の 1 件（`reviewDecision` / `latestReviews` / `headRefOid`）から判定。
- * 知らない `reviewDecision` の値は空にする（画面に知らない文字を出さない）
+ * 人ごとに最新の意見のあるレビュー（APPROVED / CHANGES_REQUESTED）。DISMISSED はその人の意見の取り消し、
+ * COMMENTED / PENDING は意見を変えない。順は `submittedAt`（無ければ並び順）
  */
-export function reviewDecisionOf(o: { reviewDecision?: unknown; latestReviews?: unknown; headRefOid?: unknown }): ReviewDecision {
+export function latestOpinionated(reviews: readonly Review[]): Review[] {
+  const sorted = reviews.map((r, i) => ({ r, i })).sort((a, b) => a.r.submittedAt.localeCompare(b.r.submittedAt) || a.i - b.i)
+  const latest = new Map<string, Review>()
+  for (const { r } of sorted) {
+    if (!OPINIONATED.has(r.state)) continue
+    const key = r.login || `#${latest.size}`
+    if (r.state === 'DISMISSED') latest.delete(key)
+    else latest.set(key, r)
+  }
+  return [...latest.values()]
+}
+
+/**
+ * `gh pr list` / `gh pr view` の 1 件（`reviewDecision` / `reviews` / `headRefOid`）から判定。
+ * 知らない `reviewDecision` の値は空にする（画面に知らない文字を出さず、GitHub の判定を SAI が上書きしない）
+ */
+export function reviewDecisionOf(o: { reviewDecision?: unknown; reviews?: unknown; headRefOid?: unknown }): ReviewDecision {
   const given = str(o.reviewDecision).toUpperCase()
   if (given === 'APPROVED' || given === 'CHANGES_REQUESTED' || given === 'REVIEW_REQUIRED') return given
-  const counted = latestReviewsOf(o.latestReviews).filter((r) => COUNTED_ASSOCIATIONS.has(r.association))
+  if (given) return ''
+  const counted = latestOpinionated(reviewsOf(o.reviews)).filter((r) => COUNTED_ASSOCIATIONS.has(r.association))
   if (counted.some((r) => r.state === 'CHANGES_REQUESTED')) return 'CHANGES_REQUESTED'
   const approvals = counted.filter((r) => r.state === 'APPROVED')
   if (approvals.length === 0) return ''

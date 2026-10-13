@@ -119,7 +119,7 @@ export function prFromGh(obj: unknown): PrSummary | null {
     additions: num(o.additions),
     deletions: num(o.deletions),
     changed_files: num(o.changedFiles),
-    // reviewDecision が空（レビューを必須にしていないリポジトリ）なら latestReviews から組む（#793。判定はここ 1 か所）
+    // reviewDecision が空（レビューを必須にしていないリポジトリ）なら reviews から組む（#793。判定はここ 1 か所）
     review_decision: reviewDecisionOf(o),
     checks: checkState(o.statusCheckRollup),
     requested: false,

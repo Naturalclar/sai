@@ -6,6 +6,8 @@ import type { EventKind } from './events.ts'
 import type { Skill } from './skills.ts'
 import type { TurnUsage } from './turnUsage.ts'
 
+import type { ReviewDecision } from './prReviewState.ts'
+
 export type Agent = 'claude' | 'codex' | 'opencode' | 'grok' | 'unknown'
 export type SessionSource = 'payload' | 'rollout' | 'synth' | ''
 
@@ -413,10 +415,10 @@ export interface DiffPr {
   draft: boolean
   /**
    * `APPROVED` / `CHANGES_REQUESTED` / `REVIEW_REQUIRED`、無ければ空（#636。承認済みならチェックの印）。古いサーバの応答には無い。
-   * GitHub の `reviewDecision` が空（レビューを必須にしていないリポジトリ）なら `latestReviews` から組んだ値で、
+   * GitHub の `reviewDecision` が空（レビューを必須にしていないリポジトリ）なら `reviews` から組んだ値で、
    * 承認のあとに head が進んでいれば `APPROVED_STALE`（#793。`shared/prReviewState.ts`）
    */
-  review_decision?: string
+  review_decision?: ReviewDecision
 }
 
 /**
@@ -454,7 +456,7 @@ export interface PrSummary {
   deletions: number
   changed_files: number
   /** `APPROVED` / `CHANGES_REQUESTED` / `REVIEW_REQUIRED` / `APPROVED_STALE`（承認のあとに更新あり。#793）、無ければ空。組み方は `shared/prReviewState.ts` */
-  review_decision: string
+  review_decision: ReviewDecision
   checks: PrCheckState
   /** 自分（`gh` でログインしている人）にレビューが頼まれている */
   requested: boolean

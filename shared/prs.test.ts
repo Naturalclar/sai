@@ -190,15 +190,15 @@ test('セッションに紐づく PR は、リポジトリと head のブラン�
   assert.equal(prForSession({ remote: 'https://github.com/x/y', branch: 'feat-a' }, repos), null)
 })
 
-test('prFromGh: reviewDecision が空なら latestReviews から承認を組み、名前は API に出さない（#793）', () => {
+test('prFromGh: reviewDecision が空なら reviews から承認を組み、名前は API に出さない（#793）', () => {
   const head = 'a'.repeat(40)
   const base = { number: 5, reviewDecision: '', headRefOid: head }
-  const pr = prFromGh({ ...base, latestReviews: [{ state: 'APPROVED', authorAssociation: 'MEMBER', author: { login: 'reviewer-a' }, commit: { oid: head } }] })!
+  const pr = prFromGh({ ...base, reviews: [{ state: 'APPROVED', authorAssociation: 'MEMBER', author: { login: 'reviewer-a' }, commit: { oid: head } }] })!
   assert.equal(pr.review_decision, 'APPROVED')
   assert.equal(JSON.stringify(pr).includes('reviewer-a'), false, 'レビューした人の名前は PrSummary に入れない')
-  assert.equal(prFromGh({ ...base, latestReviews: [{ state: 'APPROVED', authorAssociation: 'MEMBER', commit: { oid: 'b'.repeat(40) } }] })!.review_decision, 'APPROVED_STALE')
-  assert.equal(prFromGh({ ...base, latestReviews: [{ state: 'APPROVED', authorAssociation: 'NONE' }] })!.review_decision, '', '外部の人の承認は数えない')
-  assert.equal(prFromGh({ ...base, reviewDecision: 'REVIEW_REQUIRED', latestReviews: [{ state: 'APPROVED', authorAssociation: 'MEMBER' }] })!.review_decision, 'REVIEW_REQUIRED', '値があればそのまま')
+  assert.equal(prFromGh({ ...base, reviews: [{ state: 'APPROVED', authorAssociation: 'MEMBER', commit: { oid: 'b'.repeat(40) } }] })!.review_decision, 'APPROVED_STALE')
+  assert.equal(prFromGh({ ...base, reviews: [{ state: 'APPROVED', authorAssociation: 'NONE' }] })!.review_decision, '', '外部の人の承認は数えない')
+  assert.equal(prFromGh({ ...base, reviewDecision: 'REVIEW_REQUIRED', reviews: [{ state: 'APPROVED', authorAssociation: 'MEMBER' }] })!.review_decision, 'REVIEW_REQUIRED', '値があればそのまま')
   assert.equal(prFromGh({ number: 5 })!.review_decision, '', '項目の無い古い形でも落ちない')
 })
 

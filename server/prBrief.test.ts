@@ -1,4 +1,4 @@
-// POST /api/prs/<owner>/<repo>/<番号>/brief（#790）。PR の要約を作る口。PR を読む口と一言の口は差し替えるので、
+// POST /api/prs/<owner>/<repo>/<番号>/summary（#790）。PR の要約を作る口。PR を読む口と一言の口は差し替えるので、
 // ネットワークにも gh にも LLM にも触らない。**押さなければ作らない・同じ材料で 2 回作らない・GitHub に書かない・
 // 別オリジンと知らないリポジトリは断る**を見る。中身は作り物だけ。
 import { after, before, test } from 'node:test'
@@ -141,28 +141,28 @@ const detail = async (b: Booted, n: number) => (await (await fetch(`${b.base}/ap
 test('開いただけでは作らない。送り先は出す', async () => {
   fake.prompts = []
   const body = await detail(on, 7)
-  assert.equal(body.brief, undefined)
-  assert.equal(body.brief_via, 'http://127.0.0.1:1/v1')
+  assert.equal(body.summary, undefined)
+  assert.equal(body.summary_via, 'http://127.0.0.1:1/v1')
   assert.equal(fake.prompts.length, 0)
 })
 
 test('押すと作って覚える。材料は題名・本文・差分で、秘密に見えるパスの中身は渡さない。GitHub には書かない', async () => {
   fake.prompts = []
-  const res = await post(on, '/api/prs/o/known/7/brief')
+  const res = await post(on, '/api/prs/o/known/7/summary')
   assert.equal(res.status, 200)
   const body = (await res.json()) as PrBriefResponse
   assert.equal(body.made, true)
-  assert.equal(body.brief.text, '何を変える PR か\n作り物の要約')
-  assert.equal(body.brief.head_sha, prs.headSha)
-  assert.equal(body.brief.via, 'http://127.0.0.1:1/v1')
-  assert.deepEqual(body.brief.notes, ['秘密に見える名前のファイル 1 個は渡していません'])
+  assert.equal(body.summary.text, '何を変える PR か\n作り物の要約')
+  assert.equal(body.summary.head_sha, prs.headSha)
+  assert.equal(body.summary.via, 'http://127.0.0.1:1/v1')
+  assert.deepEqual(body.summary.notes, ['秘密に見える名前のファイル 1 個は渡していません'])
   assert.equal(fake.prompts.length, 1)
   const prompt = fake.prompts[0] ?? ''
   for (const shown of ['作り物の題名 7', '作り物の本文', '+見せる行']) assert.ok(prompt.includes(shown), shown)
   assert.ok(!prompt.includes('ひみつの値'))
   assert.equal(prs.posted, 0)
   // 覚えたものは次に開いたときに出る。置き場は記録の隣で、一言の digest.jsonl には書かない
-  assert.equal((await detail(on, 7)).brief?.text, body.brief.text)
+  assert.equal((await detail(on, 7)).summary?.text, body.summary.text)
   const saved = JSON.parse(await readFile(join(on.feedDir, PR_BRIEFS_FILE), 'utf-8')) as Record<string, unknown>
   assert.deepEqual(Object.keys(saved), ['o/known#7'])
   await assert.rejects(readFile(join(on.feedDir, DIGEST_FILE), 'utf-8'))
@@ -170,7 +170,7 @@ test('押すと作って覚える。材料は題名・本文・差分で、秘�
 
 test('同じ head・同じコメントの数なら、口を呼ばずに覚えたものを返す', async () => {
   fake.prompts = []
-  const res = await post(on, '/api/prs/o/known/7/brief')
+  const res = await post(on, '/api/prs/o/known/7/summary')
   const body = (await res.json()) as PrBriefResponse
   assert.equal(body.made, false)
   assert.equal(fake.prompts.length, 0)
@@ -182,12 +182,12 @@ test('push で head が変われば作り直す。開いたときは古い SHA �
   prs.headSha = 'b'.repeat(40)
   try {
     const opened = await detail(on, 7)
-    assert.equal(opened.brief?.head_sha, prev)
+    assert.equal(opened.summary?.head_sha, prev)
     assert.equal(opened.pr.head_sha, prs.headSha)
     assert.equal(fake.prompts.length, 0)
-    const body = (await (await post(on, '/api/prs/o/known/7/brief')).json()) as PrBriefResponse
+    const body = (await (await post(on, '/api/prs/o/known/7/summary')).json()) as PrBriefResponse
     assert.equal(body.made, true)
-    assert.equal(body.brief.head_sha, prs.headSha)
+    assert.equal(body.summary.head_sha, prs.headSha)
     assert.equal(fake.prompts.length, 1)
   } finally {
     prs.headSha = prev
@@ -195,13 +195,13 @@ test('push で head が変われば作り直す。開いたときは古い SHA �
 })
 
 test('コメントが増えていれば作り直し、コメントを材料に入れる', async () => {
-  await post(on, '/api/prs/o/known/8/brief')
+  await post(on, '/api/prs/o/known/8/summary')
   fake.prompts = []
   prs.commentList = { comments: [{ id: 'c1', kind: 'comment', author: 'reviewer-a', at: '2026-01-01T00:00:00Z', body: '作り物の指摘', url: '' }], omitted: 0 }
   try {
-    const body = (await (await post(on, '/api/prs/o/known/8/brief')).json()) as PrBriefResponse
+    const body = (await (await post(on, '/api/prs/o/known/8/summary')).json()) as PrBriefResponse
     assert.equal(body.made, true)
-    assert.equal(body.brief.comments, 1)
+    assert.equal(body.summary.comments, 1)
     assert.ok(fake.prompts[0]?.includes('[コメント] reviewer-a: 作り物の指摘'))
   } finally {
     prs.commentList = { comments: [], omitted: 0 }
@@ -213,8 +213,8 @@ test('同時に 2 回押しても、口を呼ぶのは 1 回', async () => {
   let release = () => {}
   fake.gate = new Promise<void>((resolve) => (release = resolve))
   try {
-    const a = post(on, '/api/prs/o/known/9/brief')
-    const b = post(on, '/api/prs/o/known/9/brief')
+    const a = post(on, '/api/prs/o/known/9/summary')
+    const b = post(on, '/api/prs/o/known/9/summary')
     // 2 本目がサーバに届くまで待ってから放す
     while (fake.prompts.length === 0) await new Promise((resolve) => setTimeout(resolve, 5))
     await new Promise((resolve) => setTimeout(resolve, 50))
@@ -231,32 +231,32 @@ test('同時に 2 回押しても、口を呼ぶのは 1 回', async () => {
 test('口が落ちた・答えが空なら 502 で、覚えない。PR の画面は今までどおり出る', async () => {
   fake.answer = new Error('connect ECONNREFUSED')
   try {
-    const res = await post(on, '/api/prs/o/known/10/brief')
+    const res = await post(on, '/api/prs/o/known/10/summary')
     assert.equal(res.status, 502)
     assert.match(((await res.json()) as ReplyError).error, /要約を作れませんでした/)
     fake.answer = '   '
-    assert.equal((await post(on, '/api/prs/o/known/10/brief')).status, 502)
+    assert.equal((await post(on, '/api/prs/o/known/10/summary')).status, 502)
   } finally {
     fake.answer = '何を変える PR か\n作り物の要約'
   }
   const body = await detail(on, 10)
-  assert.equal(body.brief, undefined)
+  assert.equal(body.summary, undefined)
   assert.equal(body.pr.body, '作り物の本文')
   assert.equal(body.diff.files.length, 2)
 })
 
 test('別オリジンは断る。GET では作れない', async () => {
   fake.prompts = []
-  const res = await post(on, '/api/prs/o/known/11/brief', { Origin: 'https://evil.example' })
+  const res = await post(on, '/api/prs/o/known/11/summary', { Origin: 'https://evil.example' })
   assert.equal(res.status, 403)
-  assert.equal((await fetch(`${on.base}/api/prs/o/known/11/brief`)).status, 405)
+  assert.equal((await fetch(`${on.base}/api/prs/o/known/11/summary`)).status, 405)
   assert.equal(fake.prompts.length, 0)
 })
 
 test('知らないリポジトリ・番号の形でないものは断り、gh も口も呼ばない', async () => {
   fake.prompts = []
   prs.viewed = []
-  for (const path of ['/api/prs/o/unknown/7/brief', '/api/prs/o/known/abc/brief', '/api/prs/o/known/7/x/brief', '/api/prs/o/known/-1/brief']) {
+  for (const path of ['/api/prs/o/unknown/7/summary', '/api/prs/o/known/abc/summary', '/api/prs/o/known/7/x/summary', '/api/prs/o/known/-1/summary']) {
     assert.equal((await post(on, path)).status, 404, path)
   }
   assert.deepEqual(prs.viewed, [])
@@ -266,8 +266,8 @@ test('知らないリポジトリ・番号の形でないものは断り、gh �
 test('一言を切っている（口が無い）ときは送り先を出さず、押されても作らない', async () => {
   fake.prompts = []
   const body = await detail(off, 7)
-  assert.equal(body.brief_via, undefined)
-  const res = await post(off, '/api/prs/o/known/7/brief')
+  assert.equal(body.summary_via, undefined)
+  const res = await post(off, '/api/prs/o/known/7/summary')
   assert.equal(res.status, 409)
   assert.equal(fake.prompts.length, 0)
 })
@@ -293,47 +293,47 @@ const putSettings = async (b: Booted, body: object) => fetch(`${b.base}/api/sett
 test('設定で PR の要約の口を選ぶと、一言を切っていてもその口で作る。一言の口は呼ばない。空に戻すと一言と同じ口に戻る', async () => {
   fake.prompts = []
   built.length = 0
-  let res = await putSettings(off, { pr_brief_provider: 'claude' })
+  let res = await putSettings(off, { pr_summary_provider: 'claude' })
   assert.equal(res.status, 200)
-  assert.equal(((await res.json()) as SettingsResponse).pr_brief_provider, 'claude')
+  assert.equal(((await res.json()) as SettingsResponse).pr_summary_provider, 'claude')
   try {
     // モデルが空なら口の既定
-    assert.equal((await detail(off, 20)).brief_via, 'fake claude haiku')
-    const body = (await (await post(off, '/api/prs/o/known/20/brief')).json()) as PrBriefResponse
+    assert.equal((await detail(off, 20)).summary_via, 'fake claude haiku')
+    const body = (await (await post(off, '/api/prs/o/known/20/summary')).json()) as PrBriefResponse
     assert.equal(body.made, true)
-    assert.equal(body.brief.via, 'fake claude haiku')
+    assert.equal(body.summary.via, 'fake claude haiku')
     assert.deepEqual(built.map((b) => [b.provider, b.model, b.mouth.prompts.length]), [['claude', 'haiku', 1]])
     assert.equal(fake.prompts.length, 0)
     // 同じ口・同じモデルの間は組み直さない。モデルを変えたら組み直す
-    await post(off, '/api/prs/o/known/21/brief')
+    await post(off, '/api/prs/o/known/21/summary')
     assert.equal(built.length, 1)
-    res = await putSettings(off, { pr_brief_model: ' sonnet ' })
-    assert.equal(((await res.json()) as SettingsResponse).pr_brief_model, 'sonnet')
-    assert.equal((await detail(off, 20)).brief_via, 'fake claude sonnet')
+    res = await putSettings(off, { pr_summary_model: ' sonnet ' })
+    assert.equal(((await res.json()) as SettingsResponse).pr_summary_model, 'sonnet')
+    assert.equal((await detail(off, 20)).summary_via, 'fake claude sonnet')
     assert.equal(built.length, 2)
     // openai の口はモデルが無ければ作れない
-    await putSettings(off, { pr_brief_provider: 'openai', pr_brief_model: '' })
-    assert.equal((await detail(off, 22)).brief_via, undefined)
-    assert.equal((await post(off, '/api/prs/o/known/22/brief')).status, 409)
+    await putSettings(off, { pr_summary_provider: 'openai', pr_summary_model: '' })
+    assert.equal((await detail(off, 22)).summary_via, undefined)
+    assert.equal((await post(off, '/api/prs/o/known/22/summary')).status, 409)
     // 形の違う値は断る
-    assert.equal((await putSettings(off, { pr_brief_provider: 'gemini' })).status, 400)
-    assert.equal((await putSettings(off, { pr_brief_model: '--dangerously-skip-permissions' })).status, 400)
+    assert.equal((await putSettings(off, { pr_summary_provider: 'gemini' })).status, 400)
+    assert.equal((await putSettings(off, { pr_summary_model: '--dangerously-skip-permissions' })).status, 400)
   } finally {
-    await putSettings(off, { pr_brief_provider: '', pr_brief_model: '' })
+    await putSettings(off, { pr_summary_provider: '', pr_summary_model: '' })
   }
-  assert.equal((await detail(off, 23)).brief_via, undefined)
+  assert.equal((await detail(off, 23)).summary_via, undefined)
 })
 
 test('一言を入にしていても、PR の要約の口を選んでいればそちらで作る', async () => {
   fake.prompts = []
   built.length = 0
-  await putSettings(on, { pr_brief_provider: 'claude', pr_brief_model: 'opus' })
+  await putSettings(on, { pr_summary_provider: 'claude', pr_summary_model: 'opus' })
   try {
-    const body = (await (await post(on, '/api/prs/o/known/30/brief')).json()) as PrBriefResponse
-    assert.equal(body.brief.via, 'fake claude opus')
+    const body = (await (await post(on, '/api/prs/o/known/30/summary')).json()) as PrBriefResponse
+    assert.equal(body.summary.via, 'fake claude opus')
     assert.equal(fake.prompts.length, 0)
   } finally {
-    await putSettings(on, { pr_brief_provider: '', pr_brief_model: '' })
+    await putSettings(on, { pr_summary_provider: '', pr_summary_model: '' })
   }
-  assert.equal((await detail(on, 31)).brief_via, 'http://127.0.0.1:1/v1')
+  assert.equal((await detail(on, 31)).summary_via, 'http://127.0.0.1:1/v1')
 })

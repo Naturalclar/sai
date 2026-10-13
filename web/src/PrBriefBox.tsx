@@ -7,7 +7,7 @@ import { briefButtonLabel, newerBrief } from './prBriefLabels'
 /**
  * PR の要約（#790）。見出しの下・本文の上の畳める欄。**押したときだけ作る**（開いただけでは作らない）。
  *
- * - ボタンの近くに、材料（本文・差分・コメント）をどこへ送るかを書く（`brief_via`。一言と同じ口）。口が無ければボタンは出さず、
+ * - ボタンの近くに、材料（本文・差分・コメント）をどこへ送るかを書く（`summary_via`。一言と同じ口）。口が無ければボタンは出さず、
  *   覚えた要約も無ければ欄ごと出さない
  * - 要約は**文字として描く**（Markdown にしない。他人が書いた文から作ったものなので、リンクや画像にしない）
  * - 作ったあとに push があれば「古い要約」、コメントが増えていればその数を添える
@@ -16,8 +16,8 @@ export function PrBriefBox({ repo, number, data, now }: { repo: string; number: 
   const [made, setMade] = useState<PrBrief | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const brief = newerBrief(made, data.brief ?? null)
-  const via = data.brief_via ?? ''
+  const brief = newerBrief(made, data.summary ?? null)
+  const via = data.summary_via ?? ''
   if (!brief && !via) return null
   const state = brief ? briefState(brief, data.pr.head_sha, prCommentCount(data)) : null
   const label = briefButtonLabel(brief !== null, state)
@@ -26,7 +26,7 @@ export function PrBriefBox({ repo, number, data, now }: { repo: string; number: 
     setError('')
     api.makePrBrief(repo, number).then(
       (r) => {
-        setMade(r.brief)
+        setMade(r.summary)
         setBusy(false)
       },
       (err: unknown) => {

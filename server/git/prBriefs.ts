@@ -1,4 +1,4 @@
-// PR 1 本の要約（#790）を覚える。`~/.agent-feed/pr-briefs.json` に PR ごと 1 つ（作り直したら置き換える）。
+// PR 1 本の要約（#790）を覚える。`~/.agent-feed/pr-summaries.json` に PR ごと 1 つ（作り直したら置き換える）。
 //
 // - **派生データ**。消しても記録（JSONL）は壊れず、次に押したときに作り直すだけ
 // - 一言（`digest.jsonl`・「変？」）とは別の置き場で、混ぜない
@@ -6,7 +6,7 @@
 import { readFile, rename, writeFile } from 'node:fs/promises'
 import type { PrBrief } from '../../shared/types.ts'
 
-export const PR_BRIEFS_FILE = 'pr-briefs.json'
+export const PR_BRIEFS_FILE = 'pr-summaries.json'
 /** 覚える PR の数の上限。超えたら作った時刻の古いものから落とす */
 export const PR_BRIEFS_MAX = 200
 

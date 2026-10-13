@@ -14,7 +14,7 @@ const PROVIDER_LABEL: Record<DigestProvider, string> = {
  * openai 互換の送り先（SAI_DIGEST_URL）は一言と同じで、ここでは変えられない
  */
 export function PrBriefEngineControls({ settings, busy, onChange }: { settings: SettingsResponse; busy: boolean; onChange: (patch: SettingsRequest) => void }) {
-  const provider = settings.pr_brief_provider
+  const provider = settings.pr_summary_provider
   return (
     <div className="digest-engine pr-brief-engine">
       <div className="label">PR の要約を作る口</div>
@@ -25,7 +25,7 @@ export function PrBriefEngineControls({ settings, busy, onChange }: { settings: 
           aria-label="PR の要約を作る口"
           title="PR の要約を作る口。押したときだけ、その PR の本文・差分・コメントがこの口に渡る。claude は claude -p（Anthropic に送られる）、OpenAI 互換はサーバの SAI_DIGEST_URL（既定は手元の Ollama）"
           // 口を変えたらモデルは空（口の既定）に戻す（一言の口と同じ理由）
-          onChange={(e) => onChange({ pr_brief_provider: e.target.value as DigestProvider | '', pr_brief_model: '' })}
+          onChange={(e) => onChange({ pr_summary_provider: e.target.value as DigestProvider | '', pr_summary_model: '' })}
         >
           <option value="">一言と同じ口</option>
           {DIGEST_PROVIDERS.map((p) => (
@@ -34,14 +34,14 @@ export function PrBriefEngineControls({ settings, busy, onChange }: { settings: 
         </select>
         {provider !== '' && (
           <DigestModelInput
-            value={settings.pr_brief_model}
+            value={settings.pr_summary_model}
             placeholder={provider === 'claude' ? 'haiku（既定）' : 'モデル名（例 qwen3:8b）'}
             busy={busy}
             label="PR の要約を作るモデル"
-            onChange={(pr_brief_model) => onChange({ pr_brief_model })}
+            onChange={(pr_summary_model) => onChange({ pr_summary_model })}
           />
         )}
-        {provider === 'openai' && !settings.pr_brief_model && <div className="note error">openai の口にはモデル名が要ります</div>}
+        {provider === 'openai' && !settings.pr_summary_model && <div className="note error">openai の口にはモデル名が要ります</div>}
       </div>
     </div>
   )

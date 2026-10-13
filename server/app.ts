@@ -307,8 +307,8 @@ const PRS_PATH = '/api/prs'
 const PRS_REPO_DAYS = 30
 /** `/api/prs/<owner>/<repo>/<番号>/review`（#526）。GitHub にレビューを投稿する */
 const PR_REVIEW_SUFFIX = '/review'
-/** `/api/prs/<owner>/<repo>/<番号>/brief`（#790）。PR の要約を作る。GitHub には書かない */
-const PR_BRIEF_SUFFIX = '/brief'
+/** `/api/prs/<owner>/<repo>/<番号>/summary`（#790）。PR の要約を作る。GitHub には書かない */
+const PR_BRIEF_SUFFIX = '/summary'
 /** 設定 body の上限 */
 export const MAX_SETTINGS_BYTES = 4 * 1024
 /** レビューの投稿（#526）の body の上限。文字数の上限（shared/prReview.ts）は parseReviewRequest() が見る */
@@ -629,7 +629,7 @@ export interface TerminalDeps {
   /** 画像の軽い版を作る口（#589）。テストでは偽の縮める口を渡した Thumbnails か noThumbs */
   thumbs?: ThumbMaker
   /**
-   * PR の要約（#790）のために、一言とは別の口を組む関数（設定の `pr_brief_provider` を選んだときだけ呼ぶ）。
+   * PR の要約（#790）のために、一言とは別の口を組む関数（設定の `pr_summary_provider` を選んだときだけ呼ぶ）。
    * 既定は一言と同じ作り方（`summarizerFactory()`。送り先と鍵は環境変数）。テストは偽物を渡す
    */
   briefMouth?: SummarizerFactory
@@ -1503,8 +1503,8 @@ export function createApp(
       provider: digest.provider,
       digest_model: s.digest_model,
       model: digest.model,
-      pr_brief_provider: s.pr_brief_provider,
-      pr_brief_model: s.pr_brief_model,
+      pr_summary_provider: s.pr_summary_provider,
+      pr_summary_model: s.pr_summary_model,
       jev_on: s.jev,
       jev_ready: jevRisk.ready,
       jev_auto: s.jev_auto,
@@ -1528,33 +1528,33 @@ export function createApp(
   }
 
   // PR の要約（#790）。覚える置き場は記録の隣（派生データ。一言の digest.jsonl とは別）
-  const makeBriefMouth: SummarizerFactory = terminal.briefMouth ?? summarizerFactory(store.directory, process.env, (line) => console.error(line.replace(/^digest:/, 'pr-brief:')))
+  const makeBriefMouth: SummarizerFactory = terminal.briefMouth ?? summarizerFactory(store.directory, process.env, (line) => console.error(line.replace(/^digest:/, 'pr-summary:')))
   const briefs = new PrBriefStore(join(store.directory, PR_BRIEFS_FILE))
   /** 同じ PR の要約を同時に 2 本作らない（押した直後の二重の要求など）。鍵は repo#番号 */
   const briefJobs = new Map<string, Promise<{ status: number; error: string } | PrBriefResponse>>()
-  /** 要約のために別に組んだ口（設定の `pr_brief_provider` を選んだとき）。口とモデルが同じ間は使い回す */
+  /** 要約のために別に組んだ口（設定の `pr_summary_provider` を選んだとき）。口とモデルが同じ間は使い回す */
   let briefOwn: { key: string; mouth: Summarizer } | null = null
   /**
    * 要約を作る口と、材料の送り先（画面に書く）。**既定は一言と同じ口**（`digest.mouth`。一言も案も切っていれば無い）。
-   * 設定で `pr_brief_provider` を選んでいれば、一言の入切に依らずその口（モデルが空なら口の既定。openai は既定が無いので無い）。
+   * 設定で `pr_summary_provider` を選んでいれば、一言の入切に依らずその口（モデルが空なら口の既定。openai は既定が無いので無い）。
    * 口が無ければ null
    */
   const briefMouth = async (): Promise<{ mouth: Summarizer; via: string } | null> => {
     await digestReady
     const s = await settingsStore.get()
-    if (!s.pr_brief_provider) {
+    if (!s.pr_summary_provider) {
       const mouth = digest.mouth
       return mouth ? { mouth, via: mouth.where || `${digest.provider} ${digest.model}`.trim() } : null
     }
-    const model = s.pr_brief_model || (s.pr_brief_provider === 'claude' ? DEFAULT_DIGEST_MODEL : '')
+    const model = s.pr_summary_model || (s.pr_summary_provider === 'claude' ? DEFAULT_DIGEST_MODEL : '')
     if (!model) return null
-    const key = `${s.pr_brief_provider}|${model}`
-    if (briefOwn?.key !== key) briefOwn = { key, mouth: makeBriefMouth(s.pr_brief_provider, model) }
-    return { mouth: briefOwn.mouth, via: briefOwn.mouth.where || `${s.pr_brief_provider} ${model}` }
+    const key = `${s.pr_summary_provider}|${model}`
+    if (briefOwn?.key !== key) briefOwn = { key, mouth: makeBriefMouth(s.pr_summary_provider, model) }
+    return { mouth: briefOwn.mouth, via: briefOwn.mouth.where || `${s.pr_summary_provider} ${model}` }
   }
 
   /**
-   * POST /api/prs/<owner>/<repo>/<番号>/brief（#790）。PR の題名・本文・差分・コメントから要約を作って覚える。
+   * POST /api/prs/<owner>/<repo>/<番号>/summary（#790）。PR の題名・本文・差分・コメントから要約を作って覚える。
    * 同一オリジンは呼ぶ側で確かめてある。**GitHub には書かない**（読むのは画面と同じ `gh` の形だけ。新しい形は足さない）。
    * 宛先は記録で知っているリポジトリから引き、body は読まない（材料も送り先もリクエストから受けない）。
    * 口は一言と同じ（`digest.mouth`）だが、列・失敗の数え・`digest.jsonl` には混ぜない。
@@ -1590,7 +1590,7 @@ export function createApp(
     if (!view.pr.head_sha) return { status: 502, error: 'PR の head を読めませんでした' }
     const count = (comments ? comments.comments.length + comments.omitted : 0) + (lineComments ? lineComments.comments.length + lineComments.omitted : 0)
     const had = await briefs.get(repo, number).catch(() => undefined)
-    if (had && had.head_sha === view.pr.head_sha && had.comments === count) return { brief: had, made: false }
+    if (had && had.head_sha === view.pr.head_sha && had.comments === count) return { summary: had, made: false }
     const { prompt, trim } = prBriefPrompt({
       title: view.pr.title,
       body: view.pr.body,
@@ -1609,7 +1609,7 @@ export function createApp(
     const brief: PrBrief = { text, head_sha: view.pr.head_sha, at: new Date().toISOString(), comments: count, notes: briefNotes(trim), via }
     // 覚えられなくても、作ったものは返す（次に開いたときに無いだけ）
     await briefs.set(repo, number, brief).catch(() => {})
-    return { brief, made: true }
+    return { summary: brief, made: true }
   }
 
   /**
@@ -1740,14 +1740,14 @@ export function createApp(
       if (!isDigestModel(model)) return error(res, 400, 'digest_model はモデル名（英数字で始まり、英数字と . _ : / - [ ] だけ、64 文字まで。空なら口の既定）で送ってください')
       patch.digest_model = model
     }
-    if (b.pr_brief_provider !== undefined) {
-      if (b.pr_brief_provider !== '' && !isDigestProvider(b.pr_brief_provider)) return error(res, 400, 'pr_brief_provider は claude か openai、または空（一言と同じ口）で送ってください')
-      patch.pr_brief_provider = b.pr_brief_provider
+    if (b.pr_summary_provider !== undefined) {
+      if (b.pr_summary_provider !== '' && !isDigestProvider(b.pr_summary_provider)) return error(res, 400, 'pr_summary_provider は claude か openai、または空（一言と同じ口）で送ってください')
+      patch.pr_summary_provider = b.pr_summary_provider
     }
-    if (b.pr_brief_model !== undefined) {
-      const model = typeof b.pr_brief_model === 'string' ? b.pr_brief_model.trim() : b.pr_brief_model
-      if (!isDigestModel(model)) return error(res, 400, 'pr_brief_model はモデル名（英数字で始まり、英数字と . _ : / - [ ] だけ、64 文字まで。空なら口の既定）で送ってください')
-      patch.pr_brief_model = model
+    if (b.pr_summary_model !== undefined) {
+      const model = typeof b.pr_summary_model === 'string' ? b.pr_summary_model.trim() : b.pr_summary_model
+      if (!isDigestModel(model)) return error(res, 400, 'pr_summary_model はモデル名（英数字で始まり、英数字と . _ : / - [ ] だけ、64 文字まで。空なら口の既定）で送ってください')
+      patch.pr_summary_model = model
     }
     if (b.next_ask !== undefined) {
       if (typeof b.next_ask !== 'boolean') return error(res, 400, 'next_ask は true か false で送ってください')
@@ -1781,7 +1781,7 @@ export function createApp(
       if (!isJevAuto(b.jev_auto)) return error(res, 400, 'jev_auto は 0（しない）か 0.5〜1 の数で送ってください')
       patch.jev_auto = b.jev_auto
     }
-    if (Object.keys(patch).length === 0) return error(res, 400, 'persona / linear_workspace / digest / next_ask / digest_provider / digest_model / pr_brief_provider / pr_brief_model / paste_to_file / reply_mode / send_across_add / send_across_remove / jev / jev_auto のどれかを送ってください')
+    if (Object.keys(patch).length === 0) return error(res, 400, 'persona / linear_workspace / digest / next_ask / digest_provider / digest_model / pr_summary_provider / pr_summary_model / paste_to_file / reply_mode / send_across_add / send_across_remove / jev / jev_auto のどれかを送ってください')
     // 起動時の組み立て（settings.json の読み込み）が済んでから書く。後から古い値で組み直されないように
     await digestReady
     const saved = await settingsStore.set(patch)
@@ -5468,14 +5468,14 @@ export function createApp(
           prs.available ? prs.viewer() : Promise.resolve(null),
           prs.comments(repo, Number(n)).catch(() => null),
           prs.lineComments(repo, Number(n)).catch(() => null),
-          // 覚えている要約（#790）。**ここでは作らない**（読むだけ。作るのは POST …/brief）
+          // 覚えている要約（#790）。**ここでは作らない**（読むだけ。作るのは POST …/summary）
           briefs.get(repo, Number(n)).catch(() => undefined),
         ])
         if (!view) return error(res, 502, 'gh で PR を読めませんでした')
         const out: PrDetailResponse = { repo, pr: view.pr, diff: { files: [], patch: '', truncated: false } }
         const via = (await briefMouth())?.via
-        if (via) out.brief_via = via
-        if (brief) out.brief = brief
+        if (via) out.summary_via = via
+        if (brief) out.summary = brief
         if (comments) {
           out.comments = comments.comments
           if (comments.omitted) out.comments_omitted = comments.omitted

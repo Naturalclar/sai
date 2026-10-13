@@ -568,13 +568,13 @@ export interface PrDetailResponse {
    * 要約（#790）を作れるとき、材料をどこへ送るか（一言と同じ口。例 `claude -p --model …` / 手元のモデルの URL）。
    * 口が組まれていない（一言も案も切っている・組めなかった）なら省略で、画面は作るボタンを出さない
    */
-  brief_via?: string
+  summary_via?: string
   /** 覚えている要約（#790）。まだ作っていなければ省略。開いただけでは作らない */
-  brief?: PrBrief
+  summary?: PrBrief
 }
 
 /**
- * PR 1 本の要約（#790）。押したときだけ作り、手元の `pr-briefs.json` に覚える（派生データ。GitHub には書かない）。
+ * PR 1 本の要約（#790）。押したときだけ作り、手元の `pr-summaries.json` に覚える（派生データ。GitHub には書かない）。
  * 一言（`digest.jsonl`）とは別の置き場で、口調は付けない
  */
 export interface PrBrief {
@@ -592,9 +592,9 @@ export interface PrBrief {
   via: string
 }
 
-/** POST /api/prs/<owner>/<repo>/<番号>/brief（#790）の応答。`made` は今回口を呼んだか（同じ材料なら覚えたものを返す） */
+/** POST /api/prs/<owner>/<repo>/<番号>/summary（#790）の応答。`made` は今回口を呼んだか（同じ材料なら覚えたものを返す） */
 export interface PrBriefResponse {
-  brief: PrBrief
+  summary: PrBrief
   made: boolean
 }
 
@@ -1997,9 +1997,9 @@ export interface SettingsResponse {
    * PR の要約（#790）を作る口。空は「一言と同じ口」（既定）。`claude` / `openai` を選ぶと、一言の入切・口とは別に、要約だけその口で作る
    * （送り先 `SAI_DIGEST_URL` と鍵は一言と同じ環境変数のまま）
    */
-  pr_brief_provider: DigestProvider | ''
-  /** PR の要約を作るモデル。空は口の既定（claude は haiku。openai は既定が無いので作らない）。`pr_brief_provider` が空なら使わない */
-  pr_brief_model: string
+  pr_summary_provider: DigestProvider | ''
+  /** PR の要約を作るモデル。空は口の既定（claude は haiku。openai は既定が無いので作らない）。`pr_summary_provider` が空なら使わない */
+  pr_summary_model: string
   /** Linear の workspace（URL の linear.app/<workspace>/ の部分）。一言の中の ABC-123 のような識別子のリンク先。空なら組まない */
   linear_workspace: string
   /** 許可を Jev で予想するか（#491。settings.json の `jev`。既定は入） */
@@ -2047,9 +2047,9 @@ export interface SettingsRequest {
   /** 一言を作るモデル。空文字で「口の既定」 */
   digest_model?: string
   /** PR の要約（#790）を作る口。空文字で「一言と同じ口」 */
-  pr_brief_provider?: DigestProvider | ''
+  pr_summary_provider?: DigestProvider | ''
   /** PR の要約を作るモデル。空文字で「口の既定」 */
-  pr_brief_model?: string
+  pr_summary_model?: string
   /** 許可を Jev で予想するか（#491） */
   jev?: boolean
   /** 自動で常に許可する閾値（#499）。0 で「しない」、それ以外は 0.5〜1 */

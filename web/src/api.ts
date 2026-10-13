@@ -303,7 +303,7 @@ export const api = {
     sendJSON<PrReviewResponse>('POST', `/api/prs/${repo.split('/').map(encodeURIComponent).join('/')}/${number}/review`, body),
   /** PR の要約を作る（#790）。押したときだけ。材料も送り先もサーバが決めるので body は空 */
   makePrBrief: (repo: string, number: number) =>
-    sendJSON<PrBriefResponse>('POST', `/api/prs/${repo.split('/').map(encodeURIComponent).join('/')}/${number}/brief`, {}),
+    sendJSON<PrBriefResponse>('POST', `/api/prs/${repo.split('/').map(encodeURIComponent).join('/')}/${number}/summary`, {}),
   /** サーバ側の設定（一言の性格。digest が有効か） */
   settings: () => getJSON<SettingsResponse>('/api/settings'),
   setSettings: (body: SettingsRequest) => sendJSON<SettingsResponse>('PUT', '/api/settings', body),

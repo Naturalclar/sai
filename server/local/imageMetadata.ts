@@ -4,43 +4,81 @@
 // `~/.agent-feed` は rsync で別のマシンへ持っていく前提なので、撮った場所が溜まったまま広がる。
 //
 // Node だけで書く（画像のコーデックは要らない。`shared/icon.ts` が PNG の IHDR を読むのと同じ層）:
-// - JPEG: SOI の後のセグメントを順に見て、APP1（EXIF / XMP）・APP13（IPTC）・COM を出力しない。SOS からは画素なのでそのまま。
-//   **APP2（ICC プロファイル）は残す**（落とすと Display P3 の写真の色が変わる）。
+// - JPEG: SOI の後のセグメントを順に見て、残すのは JFIF（APP0）・ICC（APP2 の `ICC_PROFILE`）・Adobe（APP14。CMYK の色変換に要る）だけ。
+//   ほかの APPn（APP1 の EXIF / XMP、APP2 の MPF、APP13 の IPTC …）と COM は出力しない。SOS からは画素なのでそのまま。
+//   **ICC を残す**のは、落とすと Display P3 の写真の色が変わるため。
 //   **向き（EXIF の Orientation）だけは残す**: 落とすと縦に撮った写真が横に出る。向き 1 つだけの最小の APP1 を SOI の直後に置く。
-// - PNG: `eXIf` / `tEXt` / `zTXt` / `iTXt` のチャンクを出力しない（`iCCP` などは残す）。
+//   **EOI の後ろは落とす**（MPF の副画像・Motion Photo の動画など。副画像の EXIF や動画の位置情報が残るため）。
+// - PNG: `eXIf` / `tEXt` / `zTXt` / `iTXt` のチャンクと IEND の後ろを出力しない（`iCCP` などは残す）。`eXIf` に向きがあれば
+//   向きだけの `eXIf` を置き直す（ブラウザは PNG の `eXIf` の向きも見る）。
+// - WebP: RIFF の `EXIF` / `XMP ` チャンクを出力しない（`ICCP` / `ALPH` / `ANIM` は残す）。VP8X の印も消し、RIFF の長さを直す。
+// - GIF: 触らない（EXIF を持たない。コメント拡張は落とさない）。
 // 形が読めない（壊れている）ときは触らずに元のまま返す（壊す方が悪い）。
-
-export type MetadataFormat = 'jpeg' | 'png'
+import type { IconType } from '../../shared/icon.ts'
 
 export interface StripResult {
   bytes: Buffer
   /** 何かを落とした（か、向きを置き直した）。false なら bytes は入力そのもの */
   changed: boolean
-  /** EXIF の Orientation（1〜8）。無ければ undefined */
-  orientation?: number
 }
 
-/** 落とす JPEG のセグメント: APP1（EXIF / XMP）・APP13（IPTC）・COM */
-const DROP_JPEG = new Set([0xe1, 0xed, 0xfe])
+const ICC_HEAD = Buffer.from('ICC_PROFILE\0', 'latin1')
+
+/** 残す JPEG のセグメントか。APP0（JFIF）・APP2 の ICC・APP14（Adobe）は残し、ほかの APPn と COM（0xFE）は落とす */
+function keepJpegSegment(marker: number, payload: Buffer): boolean {
+  if (marker === 0xfe) return false
+  if (marker < 0xe0 || marker > 0xef) return true // DQT / SOF / DHT など、画像そのもの
+  if (marker === 0xe0 || marker === 0xee) return true
+  return marker === 0xe2 && payload.subarray(0, ICC_HEAD.length).equals(ICC_HEAD)
+}
 /** 落とす PNG のチャンク */
 const DROP_PNG = new Set(['eXIf', 'tEXt', 'zTXt', 'iTXt'])
+/** 落とす WebP（RIFF）のチャンク */
+const DROP_WEBP = new Set(['EXIF', 'XMP '])
 
 const EXIF_HEAD = Buffer.from('Exif\0\0', 'latin1')
+export const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 
-/** 種類に応じて落とす。JPEG / PNG 以外（GIF / WebP）は触らない */
-export function stripImageMetadata(bytes: Buffer, format: MetadataFormat | string): StripResult {
-  if (format === 'jpeg') return stripJpeg(bytes)
-  if (format === 'png') return stripPng(bytes)
-  return { bytes, changed: false }
+/** 種類に応じて落とす。知らない種類が増えたら、ここで「触らない」と決めるまで型検査が通らない */
+export function stripImageMetadata(bytes: Buffer, format: IconType): StripResult {
+  switch (format) {
+    case 'jpeg':
+      return stripJpeg(bytes)
+    case 'png':
+      return stripPng(bytes)
+    case 'webp':
+      return stripWebp(bytes)
+    case 'gif':
+      return { bytes, changed: false }
+    default: {
+      const never: never = format
+      return { bytes, changed: false, ...(never as object) }
+    }
+  }
+}
+
+/** JPEG のセグメント（マーカー + 長さ（自分を含む）+ 中身）。テストの作り物も同じ形で作る */
+export function jpegSegment(marker: number, payload: Buffer): Buffer {
+  const seg = Buffer.alloc(4 + payload.length)
+  seg[0] = 0xff
+  seg[1] = marker
+  seg.writeUInt16BE(payload.length + 2, 2)
+  payload.copy(seg, 4)
+  return seg
+}
+
+/** APP1 の EXIF（`Exif\0\0` + TIFF）から Orientation。無い・読めないなら undefined */
+export function exifOrientation(payload: Buffer): number | undefined {
+  if (payload.length < 14 || !payload.subarray(0, 6).equals(EXIF_HEAD)) return undefined
+  return tiffOrientation(payload.subarray(6))
 }
 
 /**
- * APP1 の EXIF（TIFF）から Orientation（tag 0x0112）を読む。無い・読めないなら undefined。
- * 見るのは IFD0 だけ（Orientation はそこにある）
+ * TIFF から Orientation（tag 0x0112。SHORT か LONG）を読む。無い・読めないなら undefined。
+ * 見るのは IFD0 だけ（Orientation はそこにある）。PNG の `eXIf` の中身も同じ形
  */
-export function exifOrientation(payload: Buffer): number | undefined {
-  if (payload.length < 14 || !payload.subarray(0, 6).equals(EXIF_HEAD)) return undefined
-  const tiff = payload.subarray(6)
+export function tiffOrientation(tiff: Buffer): number | undefined {
+  if (tiff.length < 8) return undefined
   const order = tiff.toString('latin1', 0, 2)
   const le = order === 'II'
   if (!le && order !== 'MM') return undefined
@@ -52,20 +90,20 @@ export function exifOrientation(payload: Buffer): number | undefined {
     const count = u16(ifd)
     for (let i = 0; i < count; i++) {
       const e = ifd + 2 + i * 12
-      if (e + 12 > tiff.length) return undefined
-      if (u16(e) === 0x0112 && u16(e + 2) === 3) {
-        const v = u16(e + 8)
-        return v >= 1 && v <= 8 ? v : undefined
-      }
+      if (u16(e) !== 0x0112) continue
+      const type = u16(e + 2)
+      // 値は 4 バイトの欄の先頭に入る（SHORT は 2 バイト、LONG は 4 バイト。書き手によってどちらもある）
+      const v = type === 3 ? u16(e + 8) : type === 4 ? u32(e + 8) : 0
+      return v >= 1 && v <= 8 ? v : undefined
     }
   } catch {
-    return undefined
+    return undefined // 欄がファイルの外を指す（Buffer の読みが RangeError）
   }
   return undefined
 }
 
-/** 向きだけを持つ最小の APP1（Exif + TIFF の IFD0 に Orientation 1 つ）。マーカーと長さを含めて 36 バイト */
-export function orientationSegment(orientation: number): Buffer {
+/** 向きだけを持つ最小の TIFF（IFD0 に Orientation 1 つ。26 バイト） */
+export function orientationTiff(orientation: number): Buffer {
   const tiff = Buffer.alloc(26)
   tiff.write('II', 0, 'latin1')
   tiff.writeUInt16LE(42, 2)
@@ -76,13 +114,47 @@ export function orientationSegment(orientation: number): Buffer {
   tiff.writeUInt32LE(1, 14)
   tiff.writeUInt16LE(orientation, 18)
   tiff.writeUInt32LE(0, 22) // 次の IFD は無い
-  const payload = Buffer.concat([EXIF_HEAD, tiff])
-  const seg = Buffer.alloc(4 + payload.length)
-  seg[0] = 0xff
-  seg[1] = 0xe1
-  seg.writeUInt16BE(payload.length + 2, 2)
-  payload.copy(seg, 4)
-  return seg
+  return tiff
+}
+
+/** 向きだけを持つ最小の APP1。マーカーと長さを含めて 36 バイト */
+export function orientationSegment(orientation: number): Buffer {
+  return jpegSegment(0xe1, Buffer.concat([EXIF_HEAD, orientationTiff(orientation)]))
+}
+
+/** PNG のチャンク（長さ + 種類 + 中身 + CRC）。テストの作り物も同じ形で作る */
+export function pngChunk(type: string, data: Buffer): Buffer {
+  const out = Buffer.alloc(12 + data.length)
+  out.writeUInt32BE(data.length, 0)
+  out.write(type, 4, 'latin1')
+  data.copy(out, 8)
+  out.writeUInt32BE(crc32(out.subarray(4, 8 + data.length)), 8 + data.length)
+  return out
+}
+
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256)
+  for (let n = 0; n < 256; n++) {
+    let c = n
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
+    t[n] = c >>> 0
+  }
+  return t
+})()
+
+/** PNG のチャンクの CRC（zlib と同じ CRC-32） */
+export function crc32(b: Buffer): number {
+  let c = 0xffffffff
+  for (let i = 0; i < b.length; i++) c = (CRC_TABLE[(c ^ (b[i] ?? 0)) & 0xff] ?? 0) ^ (c >>> 8)
+  return (c ^ 0xffffffff) >>> 0
+}
+
+/** EOI（FFD9）の位置を探す（SOS の後ろから。画素の中の FFD9 は FF00 の詰め物で現れないので最初の FFD9 でよい） */
+function eoiAfter(b: Buffer, from: number): number {
+  for (let i = from; i + 1 < b.length; i++) {
+    if (b[i] === 0xff && b[i + 1] === 0xd9) return i + 2
+  }
+  return b.length
 }
 
 function stripJpeg(b: Buffer): StripResult {
@@ -90,7 +162,7 @@ function stripJpeg(b: Buffer): StripResult {
   if (b.length < 4 || b[0] !== 0xff || b[1] !== 0xd8) return same
   const parts: Buffer[] = [b.subarray(0, 2)]
   let orientation: number | undefined
-  let dropped = false
+  let changed = false
   let i = 2
   while (i < b.length) {
     if (b[i] !== 0xff) return same // 形が読めない。触らない
@@ -103,7 +175,10 @@ function stripJpeg(b: Buffer): StripResult {
     const marker = b[i + 1]
     if (marker === undefined) return same
     if (marker === 0xda || marker === 0xd9) {
-      parts.push(b.subarray(i)) // SOS からは画素（RST を含む）なのでそのまま。EOI も同じ
+      // SOS からは画素（RST を含む）なので EOI までそのまま。EOI の後ろ（MPF の副画像・Motion Photo の動画）は落とす
+      const end = marker === 0xd9 ? i + 2 : eoiAfter(b, i + 2)
+      parts.push(b.subarray(i, end))
+      if (end < b.length) changed = true
       break
     }
     if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) {
@@ -115,38 +190,83 @@ function stripJpeg(b: Buffer): StripResult {
     const len = b.readUInt16BE(i + 2)
     if (len < 2 || i + 2 + len > b.length) return same
     const seg = b.subarray(i, i + 2 + len)
-    if (DROP_JPEG.has(marker)) {
-      if (marker === 0xe1 && orientation === undefined) orientation = exifOrientation(seg.subarray(4))
-      dropped = true
-    } else {
+    if (keepJpegSegment(marker, seg.subarray(4))) {
       parts.push(seg)
+    } else {
+      if (marker === 0xe1 && orientation === undefined) orientation = exifOrientation(seg.subarray(4))
+      changed = true
     }
     i += 2 + len
   }
-  if (!dropped) return same
+  if (!changed) return same
   if (orientation !== undefined && orientation !== 1) parts.splice(1, 0, orientationSegment(orientation))
-  return { bytes: Buffer.concat(parts), changed: true, ...(orientation !== undefined ? { orientation } : {}) }
+  return { bytes: Buffer.concat(parts), changed: true }
 }
-
-const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 
 function stripPng(b: Buffer): StripResult {
   const same = { bytes: b, changed: false }
   if (b.length < 8 || !b.subarray(0, 8).equals(PNG_SIG)) return same
   const parts: Buffer[] = [b.subarray(0, 8)]
-  let dropped = false
+  let changed = false
+  let orientation: number | undefined
+  let ended = false
   let i = 8
   while (i + 8 <= b.length) {
     const len = b.readUInt32BE(i)
     const type = b.toString('latin1', i + 4, i + 8)
     const end = i + 12 + len
     if (end > b.length) return same // 壊れている
-    const chunk = b.subarray(i, end)
-    if (DROP_PNG.has(type)) dropped = true
-    else parts.push(chunk)
+    if (DROP_PNG.has(type)) {
+      if (type === 'eXIf' && orientation === undefined) orientation = tiffOrientation(b.subarray(i + 8, i + 8 + len))
+      changed = true
+    } else {
+      parts.push(b.subarray(i, end))
+    }
     i = end
-    if (type === 'IEND') break
+    if (type === 'IEND') {
+      ended = true
+      break
+    }
   }
-  if (i < b.length) parts.push(b.subarray(i)) // IEND の後ろに何かあればそのまま
-  return dropped ? { bytes: Buffer.concat(parts), changed: true } : same
+  // IEND の後ろは落とす。IEND が無い（壊れた・作り物）なら残りはそのまま
+  if (i < b.length) {
+    if (ended) changed = true
+    else parts.push(b.subarray(i))
+  }
+  if (!changed) return same
+  // 向きだけの eXIf を IHDR の直後に置き直す（ブラウザは PNG の eXIf の向きも見る）
+  if (orientation !== undefined && orientation !== 1 && parts.length > 1) parts.splice(2, 0, pngChunk('eXIf', orientationTiff(orientation)))
+  return { bytes: Buffer.concat(parts), changed: true }
+}
+
+/** WebP（RIFF）。`RIFF` + 長さ + `WEBP` + チャンク（fourcc + 長さ LE + 中身 + 偶数詰め） */
+function stripWebp(b: Buffer): StripResult {
+  const same = { bytes: b, changed: false }
+  if (b.length < 12 || b.toString('latin1', 0, 4) !== 'RIFF' || b.toString('latin1', 8, 12) !== 'WEBP') return same
+  const chunks: Buffer[] = []
+  let changed = false
+  let i = 12
+  while (i + 8 <= b.length) {
+    const fourcc = b.toString('latin1', i, i + 4)
+    const len = b.readUInt32LE(i + 4)
+    const end = i + 8 + len + (len % 2)
+    if (i + 8 + len > b.length) return same // 壊れている
+    if (DROP_WEBP.has(fourcc)) changed = true
+    else chunks.push(b.subarray(i, Math.min(end, b.length)))
+    i = end
+  }
+  if (!changed) return same
+  // VP8X の印（EXIF = 0x08、XMP = 0x04）を消す
+  const first = chunks[0]
+  if (first && first.toString('latin1', 0, 4) === 'VP8X' && first.length >= 9) {
+    const copy = Buffer.from(first)
+    copy[8] = (copy[8] ?? 0) & ~0x0c
+    chunks[0] = copy
+  }
+  const body = Buffer.concat(chunks)
+  const head = Buffer.alloc(12)
+  head.write('RIFF', 0, 'latin1')
+  head.writeUInt32LE(4 + body.length, 4)
+  head.write('WEBP', 8, 'latin1')
+  return { bytes: Buffer.concat([head, body]), changed: true }
 }

@@ -4,7 +4,7 @@
 // **返信の attachments は CLI に渡って読まれる**ので、画面から来た絶対パスをそのまま信じない。
 // resolvePath() が「このセッションの置き場の、この形の名前」だけを通す（他のファイルを読ませない）。
 import { createHash } from 'node:crypto'
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { stripImageMetadata } from '../local/imageMetadata.ts'
 import { ATTACHMENT_FILE_NAME_RE, ATTACHMENT_NAME_RE, ATTACHMENT_DIR_RE, attachmentLabel, attachmentUrl, isUtf8Text, sniffPdf } from '../../shared/attachments.ts'
@@ -34,11 +34,78 @@ export function attachmentDir(id: string): string {
   return createHash('sha1').update(id).digest('hex').slice(0, 16)
 }
 
+/** 前からある添付の画像からメタデータを落とし終えた印（#791）。落とし方を変えたら名前の数字を上げる */
+export const ATTACHMENTS_STRIPPED_MARK = '.metadata-stripped-1'
+
 export class AttachmentStore {
   readonly dir: string
+  /** 起動時の一括処理（作られたときに始める）。置くときと配るときはこれを待たない（原本の名前は変わらない） */
+  private readonly cleaned: Promise<{ checked: number; changed: number; marked: boolean }>
 
   constructor(dir: string) {
     this.dir = dir
+    this.cleaned = this.stripStored().catch(() => ({ checked: 0, changed: 0, marked: false }))
+  }
+
+  /** 起動時の一括処理の結果（テスト用） */
+  ready(): Promise<{ checked: number; changed: number; marked: boolean }> {
+    return this.cleaned
+  }
+
+  /**
+   * 前からある添付の画像（この版より前に置いたもの。EXIF がそのまま）から一度だけメタデータを落とす（#791）。
+   * 印があれば何もしない。1 枚ずつ読んで、落ちたものだけ tmp に書いて rename（名前は変えない。本文の行が指している）。
+   * 読めない・書けないものがあれば印は置かず、次の起動でまた。無くなっていたもの（ENOENT）は失敗に数えない
+   */
+  private async stripStored(): Promise<{ checked: number; changed: number; marked: boolean }> {
+    const out = { checked: 0, changed: 0, marked: false }
+    const mark = join(this.dir, ATTACHMENTS_STRIPPED_MARK)
+    try {
+      await stat(mark)
+      return { ...out, marked: true }
+    } catch {
+      // まだ
+    }
+    let dirs: string[]
+    try {
+      dirs = (await readdir(this.dir)).filter((d) => ATTACHMENT_DIR_RE.test(d))
+    } catch {
+      return out // 置き場がまだ無い（最初の put が作る。そのときの中身は落とした後のもの）
+    }
+    let failed = 0
+    for (const d of dirs) {
+      let names: string[]
+      try {
+        names = (await readdir(join(this.dir, d))).filter((n) => ATTACHMENT_NAME_RE.test(n))
+      } catch {
+        failed++
+        continue
+      }
+      for (const n of names) {
+        const path = join(this.dir, d, n)
+        const tmp = `${path}.strip.tmp`
+        try {
+          const bytes = await readFile(path)
+          const type = sniffImageType(bytes)
+          if (!type) continue
+          out.checked++
+          const r = stripImageMetadata(bytes, type)
+          if (!r.changed) continue
+          await writeFile(tmp, r.bytes)
+          await rename(tmp, path)
+          out.changed++
+        } catch (err) {
+          await rm(tmp, { force: true })
+          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') failed++
+        }
+      }
+    }
+    if (failed === 0) {
+      await mkdir(this.dir, { recursive: true })
+      await writeFile(mark, '')
+      out.marked = true
+    }
+    return out
   }
 
   /**
@@ -49,7 +116,7 @@ export class AttachmentStore {
    */
   async put(id: string, input: Buffer, originalName = ''): Promise<{ attachment?: Attachment; error: string }> {
     const image = sniffImageType(input)
-    // 写真の EXIF（GPS など）は置く前に落とす（#791。JPEG / PNG だけ。ICC と向きは残る）。名前のハッシュも落とした後の中身から
+    // 写真の EXIF（GPS など）は置く前に落とす（#791。ICC と向きは残る）。名前のハッシュも落とした後の中身から
     const bytes = image ? stripImageMetadata(input, image).bytes : input
     const kind: AttachmentKind | null = image ? 'image' : sniffPdf(bytes) ? 'pdf' : isUtf8Text(bytes) ? 'text' : null
     if (!kind) return { error: '添えられるのは画像（PNG / JPEG / GIF / WebP）・文字のファイル（UTF-8）・PDF だけです' }

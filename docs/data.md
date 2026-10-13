@@ -162,7 +162,7 @@ SAIから開始したCodex turnの待機もJSONLにはせず、`CodexAppServer` 
 | `usage-claude.json` | 1 つの JSON | `statusline.py` が書く Claude の使用率（`v`・`ts`・`host`・`session`・`model`・`rate_limits`） |
 | `usage-claude-replies.json`（`AGENT_FEED_HOST` があれば `usage-claude-replies.<host>.json`） | 1 つの JSON | SAI から回した Claude の返信の出力（`rate_limit_event`）から拾った使用率（#694。`v`・`ts` = 届いた時刻・`source`・`rate_limits`。形は `usage-claude.json` と同じ） |
 | `mcp-sends.json` / `opencode-serve.json` / `icon-history.json` / `agent-token` | — | tailnet の MCP から送った時刻・SAI が起こした `opencode serve` の居場所・アイコンの履歴・エージェント用の口のトークン（**中身を出力に写さない**） |
-| `attachments/` / `thumbs/` / `icon-history/` | ディレクトリ | 返信に添えたファイル・画像の軽い版・アイコンの履歴の画像。添えた画像と軽い版は **EXIF（GPS など）・XMP・IPTC・コメントを落として置く**（ICC と向きは残す。#791）。`thumbs/.metadata-stripped-1` は前からある軽い版にも落とし終えた印 |
+| `attachments/` / `thumbs/` / `icon-history/` | ディレクトリ | 返信に添えたファイル・画像の軽い版・アイコンの履歴の画像。添えた画像（JPEG / PNG / WebP）・軽い版・アイコンは **EXIF（GPS など）・XMP・IPTC・コメントを落として置く**（ICC と向きは残す。GIF は触らない。#791）。`thumbs/.metadata-stripped-1` は前からある軽い版を消した印、`attachments/.metadata-stripped-1` は前からある添付の画像にも落とし終えた印 |
 
 **`approvals.jsonl` の `codex_kept` のある行は、Claude の許可の行とは別物**（#772。Codex の「今後も聞かない」「今後も断る」を SAI の画面から押した 1 回）: `codex_kept` は `{ via, kind, scope }` で、`via` は押した道（`terminal` = 端末のダイアログ／`app-server` = SAI が回しているターン）、`kind` は `command`（`scope` の語の並びで始まるコマンド）か `network`（`scope` のホストへの通信。許したか断ったかは `behavior`）、`scope` は**ボタンに書いていた範囲のまま**（端末は 120 字まで、app-server は 80 字・12 語まで。それより後ろの引数は入らないが、**範囲がコマンド全体のとき**——1 語に包まれたコマンドの提案・引数の無いコマンド——はその全体が入る）。この行は `rule` が空・`remember` が `false`（規則を書くのは Codex で、SAI は書いていない。`default.rules` を読んで確かめてもいない）・`by` は `human`・`tool` はその許可のツール名（端末は `CodexDialog`）で、`no_rule` / `jev` / `jev_none` は載らない。[常に許可] を勧める回数にも数えない。Codex の**今回だけ**の答え・OpenCode の答えは今までどおり足さない
 

@@ -244,7 +244,7 @@ import { QUEUE_ROLLOUT_TAIL_BYTES, queuedTextArrived, turnInProgress } from '../
 import { ProgressReader, sessionOf } from './local/progress.ts'
 import { agentListFromEnv, backgroundLive, type AgentList, type ClaudeAgent } from './local/claudeAgents.ts'
 import { isRemoteHost } from '../shared/host.ts'
-import { IMAGES_SEGMENT } from '../shared/images.ts'
+import { IMAGES_SEGMENT, THUMB_VERSION } from '../shared/images.ts'
 import { imageHeaders, imageTable, readSessionImage, realImagePath } from './local/images.ts'
 import { AnsweredApprovals, answeredAfter } from './approvals/answered.ts'
 import { fileTable, readSessionFile } from './local/files.ts'
@@ -1891,10 +1891,10 @@ export function createApp(
    */
   const sendImage = async (req: IncomingMessage, res: ServerResponse, img: { bytes: Buffer; type: IconType; name: string; etag: string }, q: URLSearchParams) => {
     const download = q.get('download') === '1'
-    const wantThumb = q.get('thumb') === '1' && !download
-    // 軽い版の ETag は元の ETag から作る（元が変われば軽い版も変わる）。`t2` は帯の軽い版の大きさを変えたとき（#709）に上げた
-    // （上げないと、ブラウザが持っている長辺 512px の帯が 304 でそのまま使われる）
-    const etag = wantThumb && img.bytes.length >= THUMB_MIN_BYTES ? img.etag.replace(/^"/, '"t2-') : img.etag
+    const wantThumb = q.get('thumb') === THUMB_VERSION && !download
+    // 軽い版の ETag は元の ETag から作る（元が変われば軽い版も変わる）。`t2` は帯の軽い版の大きさを変えたとき（#709）、
+    // `t3` は EXIF を落とすようにしたとき（#791）に上げた（上げないと、ブラウザが持っている古い軽い版が 304 でそのまま使われる）
+    const etag = wantThumb && img.bytes.length >= THUMB_MIN_BYTES ? img.etag.replace(/^"/, '"t3-') : img.etag
     if (req.headers['if-none-match'] === etag) {
       res.writeHead(304, { ETag: etag, 'Cache-Control': 'private, no-cache' })
       res.end()
@@ -5235,7 +5235,7 @@ export function createApp(
           return error(res, 404, 'attachment not found')
         }
         // 軽い版（#589）。添付は画像だけ受けているが、種類は中身で見る
-        const type = q.get('thumb') === '1' ? sniffImageType(body) : null
+        const type = q.get('thumb') === THUMB_VERSION ? sniffImageType(body) : null
         const t = type ? await thumbs.thumb({ bytes: body, type }) : ({ kind: 'original' } as const)
         if (t.kind === 'unavailable') {
           res.writeHead(503, { 'Cache-Control': 'no-store', 'X-SAI-Thumb': 'unavailable', 'X-SAI-Image-Bytes': body.length, 'Content-Length': 0 })

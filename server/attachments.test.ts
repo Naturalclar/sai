@@ -5,7 +5,7 @@ import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
-import { mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AttachmentResponse, Replying } from '../shared/types.ts'
@@ -18,6 +18,7 @@ import { ProgressReader } from './local/progress.ts'
 import type { CodexApp } from './reply/codexAppServer.ts'
 import type { ReplyCommand, Runner } from './reply/runner.ts'
 import { AttachmentStore, attachmentDir } from './reply/attachments.ts'
+import { JPEG_STRIPPED, JPEG_WITH_EXIF, PNG_STRIPPED, WEBP_STRIPPED, WEBP_WITH_EXIF } from './local/imageMetadata.test.ts'
 import { localDate } from './rows/aggregate.ts'
 import { row } from './rows/aggregate.test.ts'
 import { FeedStore } from './rows/store.ts'
@@ -121,18 +122,37 @@ test('預ける: 中身で判定する。画像・文字のファイル・PDF �
 })
 
 test('預ける: 写真の EXIF は置く前に落とす（#791）。名前のハッシュは落とした後の中身から', async () => {
-  const exif = Buffer.from('Exif\0\0MM\0\x2a\0\0\0\x08\0\x01\x88\x25\0\x04\0\0\0\x01\0\0\0\x1a\0\0\0\0GPS', 'latin1')
-  const app1 = Buffer.concat([Buffer.from([0xff, 0xe1, 0, 0]), exif])
-  app1.writeUInt16BE(exif.length + 2, 2)
-  const stripped = Buffer.concat([Buffer.from([0xff, 0xd8]), Buffer.from([0xff, 0xe0, 0, 4, 1, 2]), Buffer.from([0xff, 0xda, 0, 2, 7, 0xff, 0xd9])])
-  const withExif = Buffer.concat([Buffer.from([0xff, 0xd8]), app1, stripped.subarray(2)])
-  const res = await upload('A1@r', withExif, 'photo.jpg')
+  const res = await upload('A1@r', JPEG_WITH_EXIF, 'photo.jpg')
   assert.equal(res.status, 200)
-  assert.deepEqual(await readFile(res.body.path), stripped, '置いたものに EXIF は無い')
-  assert.equal(res.body.size, stripped.length)
+  assert.deepEqual(await readFile(res.body.path), JPEG_STRIPPED, '置いたものに EXIF は無い')
+  assert.equal(res.body.size, JPEG_STRIPPED.length)
   assert.equal(res.body.name, '')
-  const again = await upload('A1@r', stripped, 'photo.jpg')
+  const again = await upload('A1@r', JPEG_STRIPPED, 'photo.jpg')
   assert.equal(again.body.path, res.body.path, '落とした後と同じ中身なら同じ名前（重複を作らない）')
+  const webp = await upload('A1@r', WEBP_WITH_EXIF, 'photo.webp')
+  assert.deepEqual(await readFile(webp.body.path), WEBP_STRIPPED, 'WebP も')
+})
+
+test('AttachmentStore: 前からある添付の画像から起動時に一度だけ落とす。印があれば読み直さない（#791）', async () => {
+  const d = await mkdtemp(join(tmpdir(), 'sai-att-strip-'))
+  try {
+    const sub = join(d, attachmentDir('S1@r'))
+    await mkdir(sub, { recursive: true })
+    const gps = join(sub, `${'a'.repeat(16)}.jpeg`)
+    const clean = join(sub, `${'b'.repeat(16)}.png`)
+    await writeFile(gps, JPEG_WITH_EXIF)
+    await writeFile(clean, PNG_STRIPPED)
+    await writeFile(join(sub, `${'c'.repeat(16)}.txt`), 'not an image')
+    assert.deepEqual(await new AttachmentStore(d).ready(), { checked: 2, changed: 1, marked: true })
+    assert.deepEqual(await readFile(gps), JPEG_STRIPPED, '名前はそのまま、中身だけ落ちる')
+    assert.deepEqual(await readFile(clean), PNG_STRIPPED)
+    assert.ok(!(await readdir(sub)).some((n) => n.endsWith('.tmp')), 'tmp は残らない')
+    await writeFile(gps, JPEG_WITH_EXIF)
+    assert.deepEqual(await new AttachmentStore(d).ready(), { checked: 0, changed: 0, marked: true }, '印があれば何もしない')
+    assert.deepEqual(await new AttachmentStore(join(d, 'none')).ready(), { checked: 0, changed: 0, marked: false }, '置き場が無ければ何もしない（最初の put が作る）')
+  } finally {
+    await rm(d, { recursive: true, force: true })
+  }
 })
 
 test('配る口は画像だけ（文字のファイル・PDF・元の名前のファイルは返さない）', async () => {

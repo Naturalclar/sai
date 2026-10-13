@@ -270,7 +270,7 @@ SAI が起こした Claude のターンは、使ったトークンと費用も�
 
 返信に添える画像と、画像以外のファイル（#608。文字のファイルと PDF）。
 
-- `server/reply/attachments.ts` の `AttachmentStore` が `~/.agent-feed/attachments/<sha1(ID) の先頭16桁>/<sha1(中身) の先頭16桁>.<ext>` に置く（JSONL には書かない。ID からパスを組み立てない）。画像（JPEG / PNG）は置く前に `local/imageMetadata.ts` の `stripImageMetadata()` で EXIF（GPS など）・XMP・IPTC・コメントを落とす（ICC と向きは残す。#791。名前のハッシュは落とした後の中身から）。GIF / WebP は触らない。
+- `server/reply/attachments.ts` の `AttachmentStore` が `~/.agent-feed/attachments/<sha1(ID) の先頭16桁>/<sha1(中身) の先頭16桁>.<ext>` に置く（JSONL には書かない。ID からパスを組み立てない）。画像は置く前に `local/imageMetadata.ts` の `stripImageMetadata()` で EXIF（GPS など）・XMP・IPTC・コメント（JPEG / PNG / WebP。GIF は触らない）を落とす（ICC と向きは残す。#791。名前のハッシュは落とした後の中身から）。前からある添付の画像は起動時に一度だけ落とす（`docs/internals/server.md` の「画像の軽い版」）。
 - `ReplyRequest.attachments` の絶対パスは信じず、`resolvePath()` がそのセッションの置き場のものだけを通す（CLI に渡って読まれるため）。
 - 受け付け条件と本文への足し方・取り出し方（`withAttachments` / `splitAttachments`）は `shared/attachments.ts`（`shared/attachments.test.ts`）。
 - 種類は `AttachmentStore.put()` が**中身で**決める: `sniffImageType()` → `sniffPdf()`（`%PDF-`）→ `isUtf8Text()`（全部を UTF-8 として読め、NUL などの制御文字が無い）。どれでもなければ断る。画面（`useAttachments`）は頭の 4KB で先に弾くが、決めるのはサーバ。

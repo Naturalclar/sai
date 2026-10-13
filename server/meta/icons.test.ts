@@ -4,6 +4,8 @@ import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { IconStore, iconKey } from './icons.ts'
+import { JPEG_STRIPPED, JPEG_WITH_EXIF } from '../local/imageMetadata.test.ts'
+import { readFile } from 'node:fs/promises'
 
 export const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3])
 export const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46])
@@ -54,6 +56,19 @@ test('IconStore: 無ければ空、put で置け、種類を変えると前の�
     await store.remove('nope') // 無くても失敗しない
     await store.remove('b')
     assert.deepEqual((await store.all()).rev, '', '全部消えれば rev は空')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('IconStore: 写真の EXIF は置く前に落とす（#791）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-icons-exif-'))
+  try {
+    const store = new IconStore(join(dir, 'session-icons'))
+    const put = await store.put('a', new Uint8Array(JPEG_WITH_EXIF))
+    assert.equal(put.error, '')
+    assert.equal(put.icon?.size, JPEG_STRIPPED.length)
+    assert.deepEqual(await readFile(join(dir, 'session-icons', `${iconKey('a')}.jpeg`)), JPEG_STRIPPED)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

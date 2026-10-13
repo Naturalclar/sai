@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto'
 import { mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { ICON_MIME, sniffImageType, type IconType } from '../../shared/icon.ts'
+import { stripImageMetadata } from '../local/imageMetadata.ts'
 
 export const ICONS_DIR = 'session-icons'
 
@@ -84,9 +85,11 @@ export class IconStore {
    * 置く。中身で種類を見て、画像でなければ error。同じ ID の別の種類のファイルは消す（PNG → JPEG に差し替えたとき）。
    * tmp に書いて rename するので、途中で落ちても壊れたファイルは残らない
    */
-  async put(id: string, bytes: Uint8Array): Promise<{ icon: IconInfo | null; error: string }> {
-    const type = sniffImageType(bytes)
+  async put(id: string, input: Uint8Array): Promise<{ icon: IconInfo | null; error: string }> {
+    const type = sniffImageType(input)
     if (!type) return { icon: null, error: '画像ファイル（PNG / JPEG / GIF / WebP）を選んでください' }
+    // 写真の EXIF（GPS など）は置く前に落とす（#791。画面は加工後の PNG を送ってくるが、口は何でも受けるので）
+    const bytes = stripImageMetadata(Buffer.from(input), type).bytes
     const key = iconKey(id)
     await mkdir(this.dir, { recursive: true })
     const target = join(this.dir, `${key}.${type}`)

@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { IconStore, iconKey } from './icons.ts'
 import { IconHistory, historyKey, isHistoryKey } from './iconHistory.ts'
+import { JPEG_STRIPPED, JPEG_WITH_EXIF } from '../local/imageMetadata.test.ts'
 
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64')
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46, 0x49, 0x46])
@@ -67,4 +68,11 @@ test('IconHistory: json が壊れていても、ファイルがあれば出す',
   await mkdir(join(dir, 'icon-history'), { recursive: true })
   assert.ok((await readdir(join(dir, 'icon-history'))).some((n) => n.startsWith(key)))
   assert.equal((await history.list())[0]?.key, key)
+})
+
+test('IconHistory: 写真の EXIF は落として残す。鍵は落とした後の中身から（#791）', async () => {
+  const { history } = await setup()
+  const key = await history.add(JPEG_WITH_EXIF)
+  assert.equal(key, historyKey(JPEG_STRIPPED))
+  assert.deepEqual(Buffer.from((await history.read(key))!), JPEG_STRIPPED)
 })

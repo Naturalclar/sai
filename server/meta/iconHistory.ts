@@ -11,6 +11,7 @@ import { createHash } from 'node:crypto'
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { ICON_MIME, sniffImageType, type IconType } from '../../shared/icon.ts'
+import { stripImageMetadata } from '../local/imageMetadata.ts'
 import type { IconStore } from './icons.ts'
 
 export const ICON_HISTORY_DIR = 'icon-history'
@@ -154,9 +155,11 @@ export class IconHistory {
   }
 
   /** 1 件書く（serial の中から呼ぶ）。`keepNewer` なら、すでにもっと新しい時刻があるときは上書きしない */
-  private async write(bytes: Uint8Array, usedAt: string, keepNewer = false): Promise<string> {
-    const type = sniffImageType(bytes)
+  private async write(input: Uint8Array, usedAt: string, keepNewer = false): Promise<string> {
+    const type = sniffImageType(input)
     if (!type) return ''
+    // 履歴は消しても残るので、写真の EXIF（GPS など）はここでも落とす（#791）。鍵は落とした後の中身から
+    const bytes = stripImageMetadata(Buffer.from(input), type).bytes
     const key = historyKey(bytes)
     const target = join(this.dir, `${key}.${type}`)
     await mkdir(this.dir, { recursive: true })

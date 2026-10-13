@@ -17,6 +17,7 @@ import type { PrReviewEvent } from './api'
 import { newestFirst, prAuthorSession, prCommentKey } from './prSession'
 import { Markdown } from './Markdown'
 import { PrComments } from './PrComments'
+import { PrBriefBox } from './PrBriefBox'
 import { PrLineThreadNote } from './PrLineThreadNote'
 import { placeLineThreads, threadLineComments } from '../../shared/prLineComments.ts'
 import type { PrLineThread } from '../../shared/prLineComments.ts'
@@ -191,6 +192,7 @@ export function PrView({ repo, number, onStatus, onInsertToSession }: { repo: st
             <span className="ago">{agoLabel(pr.updated_at, loaded.at.getTime())}に更新</span>
             <span className="repo">{loaded.data.repo}</span>
           </div>
+          <PrBriefBox repo={knownRepo || repo} number={number} data={loaded.data} now={loaded.at.getTime()} />
           <div className="pr-description body">{pr.body.trim() ? <Markdown text={pr.body} /> : <span className="none">本文はありません</span>}</div>
           <PrComments data={loaded.data} now={loaded.at.getTime()} {...(quoteTo ? { onQuote: quoteComment } : {})} />
           {loaded.data.diff_error && <div className="warn">{loaded.data.diff_error}</div>}

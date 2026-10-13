@@ -82,6 +82,8 @@ import type { SessionTurnResponse, TurnStepsResponse,
   SessionModelsResponse,
   SessionSkillsResponse,
   SearchResponse,
+  PrBrief,
+  PrBriefResponse,
   PrDetailResponse,
   PrReviewResponse,
   PrRepo,
@@ -130,7 +132,7 @@ import { screenWait } from './reply/softWait.ts'
 import { clearSettled, settledKey, WaitingSettle } from './reply/waitingSettle.ts'
 import type { WaitingSettleSource } from './reply/waitingSettle.ts'
 import type { CodexDialogSource, DialogTarget } from './reply/codexDialogs.ts'
-import { DIGEST_FILE, DigestStore, createDigester } from './digest/digest.ts'
+import { DIGEST_FILE, DigestStore, createDigester, isTimeout } from './digest/digest.ts'
 import { FEEDBACK_FILE, FeedbackStore } from './digest/feedback.ts'
 import { DIGEST_NOTE_MAX, isDigestFeedbackReason, isDigestUsageReason } from '../shared/digestFeedback.ts'
 import type { DigestFeedbackRequest, DigestFeedbackResponse } from '../shared/digestFeedback.ts'
@@ -143,6 +145,8 @@ import { compareUrl, parseUnifiedDiff } from '../shared/diff.ts'
 import { changedPaths, clampPatch, NotAGitRepo, RealGit, resolveBase, sessionDiff, sessionDiffSummary } from './git/diff.ts'
 import { prBrowserFromEnv } from './git/prs.ts'
 import type { PrBrowser } from './git/prs.ts'
+import { PR_BRIEFS_FILE, PrBriefStore } from './git/prBriefs.ts'
+import { briefNotes, cleanBrief, prBriefPrompt } from '../shared/prBrief.ts'
 import { diffStats, githubRepoOf, isPrNumber, knownRepos, pickKnownRepo } from '../shared/prs.ts'
 import { addPair, mayCross, removePair } from '../shared/sendAcross.ts'
 import { WAITING_SAID_FRESH_MS, WAIT_HUMAN_THEN, saysWaiting, waitingUnscheduled } from '../shared/waitingSaid.ts'
@@ -303,6 +307,8 @@ const PRS_PATH = '/api/prs'
 const PRS_REPO_DAYS = 30
 /** `/api/prs/<owner>/<repo>/<番号>/review`（#526）。GitHub にレビューを投稿する */
 const PR_REVIEW_SUFFIX = '/review'
+/** `/api/prs/<owner>/<repo>/<番号>/brief`（#790）。PR の要約を作る。GitHub には書かない */
+const PR_BRIEF_SUFFIX = '/brief'
 /** 設定 body の上限 */
 export const MAX_SETTINGS_BYTES = 4 * 1024
 /** レビューの投稿（#526）の body の上限。文字数の上限（shared/prReview.ts）は parseReviewRequest() が見る */
@@ -1512,6 +1518,76 @@ export function createApp(
     } catch {
       return []
     }
+  }
+
+  // PR の要約（#790）。覚える置き場は記録の隣（派生データ。一言の digest.jsonl とは別）
+  const briefs = new PrBriefStore(join(store.directory, PR_BRIEFS_FILE))
+  /** 同じ PR の要約を同時に 2 本作らない（押した直後の二重の要求など）。鍵は repo#番号 */
+  const briefJobs = new Map<string, Promise<{ status: number; error: string } | PrBriefResponse>>()
+  /** 要約の材料の送り先（一言と同じ口）。口が無ければ空。`digestReady` を待ってから呼ぶ */
+  const briefVia = (): string => {
+    const mouth = digest.mouth
+    return mouth ? mouth.where || `${digest.provider} ${digest.model}`.trim() : ''
+  }
+
+  /**
+   * POST /api/prs/<owner>/<repo>/<番号>/brief（#790）。PR の題名・本文・差分・コメントから要約を作って覚える。
+   * 同一オリジンは呼ぶ側で確かめてある。**GitHub には書かない**（読むのは画面と同じ `gh` の形だけ。新しい形は足さない）。
+   * 宛先は記録で知っているリポジトリから引き、body は読まない（材料も送り先もリクエストから受けない）。
+   * 口は一言と同じ（`digest.mouth`）だが、列・失敗の数え・`digest.jsonl` には混ぜない。
+   * 同じ head・同じコメントの数で覚えていれば、口を呼ばずにそれを返す
+   */
+  const postPrBrief = async (res: ServerResponse, known: string[], rest: string) => {
+    const parts = rest.split('/')
+    const [owner = '', name = '', n = ''] = parts
+    const repo = parts.length === 3 ? pickKnownRepo(known, `${owner}/${name}`) : ''
+    if (!repo || !isPrNumber(n)) return error(res, 404, 'not found')
+    if (!prs.available) return error(res, 404, 'gh を使わない設定です（SAI_GH=0）')
+    await digestReady
+    const key = `${repo}#${n}`
+    let job = briefJobs.get(key)
+    if (!job) {
+      job = makePrBrief(repo, Number(n)).finally(() => briefJobs.delete(key))
+      briefJobs.set(key, job)
+    }
+    const result = await job
+    if ('error' in result) return error(res, result.status, result.error)
+    return json(res, result satisfies PrBriefResponse)
+  }
+
+  const makePrBrief = async (repo: string, number: number): Promise<{ status: number; error: string } | PrBriefResponse> => {
+    const mouth = digest.mouth
+    const via = briefVia()
+    if (!mouth) return { status: 409, error: '要約を作る口がありません（設定で一言を入にすると、同じ口で作ります）' }
+    const [view, comments, lineComments] = await Promise.all([
+      prs.view(repo, number),
+      prs.comments(repo, number).catch(() => null),
+      prs.lineComments(repo, number).catch(() => null),
+    ])
+    if (!view) return { status: 502, error: 'gh で PR を読めませんでした' }
+    if (!view.pr.head_sha) return { status: 502, error: 'PR の head を読めませんでした' }
+    const count = (comments ? comments.comments.length + comments.omitted : 0) + (lineComments ? lineComments.comments.length + lineComments.omitted : 0)
+    const had = await briefs.get(repo, number).catch(() => undefined)
+    if (had && had.head_sha === view.pr.head_sha && had.comments === count) return { brief: had, made: false }
+    const { prompt, trim } = prBriefPrompt({
+      title: view.pr.title,
+      body: view.pr.body,
+      patch: view.patch,
+      comments: comments ? comments.comments : null,
+      lineComments: lineComments ? lineComments.comments : null,
+    })
+    let text: string
+    try {
+      text = cleanBrief(await mouth.summarize(prompt))
+    } catch (err) {
+      const why = isTimeout(err) ? '時間切れ' : (err instanceof Error ? err.message : String(err)).slice(0, 120)
+      return { status: 502, error: `要約を作れませんでした（${why}）` }
+    }
+    if (!text) return { status: 502, error: '要約を作れませんでした（口の答えが空でした）' }
+    const brief: PrBrief = { text, head_sha: view.pr.head_sha, at: new Date().toISOString(), comments: count, notes: briefNotes(trim), via }
+    // 覚えられなくても、作ったものは返す（次に開いたときに無いだけ）
+    await briefs.set(repo, number, brief).catch(() => {})
+    return { brief, made: true }
   }
 
   /**
@@ -4909,6 +4985,8 @@ export function createApp(
     const isNewSession = path === NEW_SESSION_PATH
     // GitHub へのレビューの投稿（#526）。SAI が GitHub に書く唯一の口
     const isPrReview = path.startsWith(`${PRS_PATH}/`) && path.endsWith(PR_REVIEW_SUFFIX)
+    // PR の要約を作る（#790）。材料が一言の口に渡る（口が外を向いていれば外に出る）ので、押したときの POST だけ
+    const isPrBrief = path.startsWith(`${PRS_PATH}/`) && path.endsWith(PR_BRIEF_SUFFIX)
     const method = req.method ?? 'GET'
     // tailnet から MCP で呼ぶ口（#312）。POST / OPTIONS（CORS）を受けるので、下の書き込みの判定より先に分ける
     if (path === MCP_PATH) {
@@ -4924,7 +5002,7 @@ export function createApp(
     // 「設定は PUT」「預かった返信の再開は POST、取り消しは DELETE」だけ。それ以外は GET / HEAD のみ
     const writable =
       (method === 'POST' &&
-        (isNewSession || isAuthCheck || isAuthLogin || isReply || isReview || isFork || isPrReview || isAsk || isAnswer || isAttachUpload || isQueue || isDigestFeedback || isSuggestion || path === AGENT_SEND_PATH || path === AGENT_LOOP_PATH || path === AGENT_WAIT_FOR_PATH || isAgentStop || isInterrupt || loopSuffix !== undefined || waitSuffix !== undefined)) ||
+        (isNewSession || isAuthCheck || isAuthLogin || isReply || isReview || isFork || isPrReview || isPrBrief || isAsk || isAnswer || isAttachUpload || isQueue || isDigestFeedback || isSuggestion || path === AGENT_SEND_PATH || path === AGENT_LOOP_PATH || path === AGENT_WAIT_FOR_PATH || isAgentStop || isInterrupt || loopSuffix !== undefined || waitSuffix !== undefined)) ||
       (method === 'DELETE' && (isQueue || isHistoryIcon || loopSuffix === '/loop')) ||
       (method === 'PUT' && (isMeta || isRead || isProfile || isSettings)) ||
       ((method === 'PUT' || method === 'DELETE') && (isIcon || isProfileIcon))
@@ -5330,12 +5408,13 @@ export function createApp(
       // GitHub に出ている PR（#524）。**読むだけ**で、並べるのは記録で知っているリポジトリ（セッションの remote）だけ。
       // 3 秒のポーリングには乗せない（開いたとき・「読み直す」のときだけ）
       if (path === PRS_PATH || path.startsWith(`${PRS_PATH}/`)) {
-        if (isPrReview ? method !== 'POST' : method !== 'GET') return error(res, 405, 'method not allowed')
-        // GitHub に書く唯一の口（#526）。ほかの検査より先に、同一オリジンだけに絞る
-        if (isPrReview && isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
+        if (isPrReview || isPrBrief ? method !== 'POST' : method !== 'GET') return error(res, 405, 'method not allowed')
+        // GitHub に書く唯一の口（#526）と、材料を一言の口に渡す要約（#790）。ほかの検査より先に、同一オリジンだけに絞る
+        if ((isPrReview || isPrBrief) && isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
         const { sessions: raw } = await store.sessions(PRS_REPO_DAYS)
         const known = knownRepos(await fillRepo(projects, raw))
         if (isPrReview) return await postPrReview(req, res, known, path.slice(PRS_PATH.length + 1, -PR_REVIEW_SUFFIX.length))
+        if (isPrBrief) return await postPrBrief(res, known, path.slice(PRS_PATH.length + 1, -PR_BRIEF_SUFFIX.length))
         if (path === PRS_PATH) {
           const fresh = q.get('fresh') === '1'
           const repos: PrRepo[] = await Promise.all(
@@ -5353,14 +5432,20 @@ export function createApp(
         const repo = parts.length === 3 ? pickKnownRepo(known, `${owner}/${name}`) : ''
         if (!repo || !isPrNumber(n)) return error(res, 404, 'not found')
         // コメント（#600）は中身と並べて引く。読めなくても本文と差分は落とさない
-        const [view, login, comments, lineComments] = await Promise.all([
+        const [view, login, comments, lineComments, brief] = await Promise.all([
           prs.view(repo, Number(n)),
           prs.available ? prs.viewer() : Promise.resolve(null),
           prs.comments(repo, Number(n)).catch(() => null),
           prs.lineComments(repo, Number(n)).catch(() => null),
+          // 覚えている要約（#790）。**ここでは作らない**（読むだけ。作るのは POST …/brief）
+          briefs.get(repo, Number(n)).catch(() => undefined),
+          digestReady,
         ])
         if (!view) return error(res, 502, 'gh で PR を読めませんでした')
         const out: PrDetailResponse = { repo, pr: view.pr, diff: { files: [], patch: '', truncated: false } }
+        const via = briefVia()
+        if (via) out.brief_via = via
+        if (brief) out.brief = brief
         if (comments) {
           out.comments = comments.comments
           if (comments.omitted) out.comments_omitted = comments.omitted

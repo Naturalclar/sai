@@ -564,6 +564,38 @@ export interface PrDetailResponse {
   line_comments_omitted?: number
   /** 行コメントだけ読めなかった理由（ほかは出す） */
   line_comments_error?: string
+  /**
+   * 要約（#790）を作れるとき、材料をどこへ送るか（一言と同じ口。例 `claude -p --model …` / 手元のモデルの URL）。
+   * 口が組まれていない（一言も案も切っている・組めなかった）なら省略で、画面は作るボタンを出さない
+   */
+  brief_via?: string
+  /** 覚えている要約（#790）。まだ作っていなければ省略。開いただけでは作らない */
+  brief?: PrBrief
+}
+
+/**
+ * PR 1 本の要約（#790）。押したときだけ作り、手元の `pr-briefs.json` に覚える（派生データ。GitHub には書かない）。
+ * 一言（`digest.jsonl`）とは別の置き場で、口調は付けない
+ */
+export interface PrBrief {
+  /** 要約の本文。**文字として描く**（Markdown にも HTML にもしない） */
+  text: string
+  /** 作ったときの head のコミット。いまの head と違えば、画面は「古い要約」と出す */
+  head_sha: string
+  /** 作った時刻（ISO） */
+  at: string
+  /** 作ったときに付いていたコメントの数（会話・レビュー・行のコメント）。画面はいまの数との差を「増えたコメント」として添える */
+  comments: number
+  /** 削ったこと（差分の一部だけを読んだ、など）。要約の下に出す。削っていなければ空 */
+  notes: string[]
+  /** 作ったときの送り先 */
+  via: string
+}
+
+/** POST /api/prs/<owner>/<repo>/<番号>/brief（#790）の応答。`made` は今回口を呼んだか（同じ材料なら覚えたものを返す） */
+export interface PrBriefResponse {
+  brief: PrBrief
+  made: boolean
 }
 
 /** GitHub のレビューの種類（#526）。既定は COMMENT で、ほかは人が明示的に選んだときだけ */

@@ -72,7 +72,6 @@ export const SCORE_LABELS: Record<ScoreCode, string> = {
   quoted_request: '引用の頼みが問いかけに化けた',
   invented_request: '頼みを作った',
   'expect:request_invented': '頼みを作った（事例）',
-  invented_effect: '変わったことを作った',
   waiting_without_next: '待ちで終わる',
   bare_number: '番号だけ（題名なし）',
   'expect:number_missing': '出るはずの番号が無い（事例）',

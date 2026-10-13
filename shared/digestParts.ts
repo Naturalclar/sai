@@ -3,7 +3,7 @@
 //
 // 比べた結果（#713 のコメント。作り物 28 件 × 2 回、qwen3:8b）: 2 つの欄を 1 回で答えさせる形は、頼みを作る回が増えた。
 // 「人が次にすること」を本文の文そのままにし、言い換えさせるのを「何が起きたか」だけにした形が、性格を残す案の中で一番引っかからなかった
-import { mentionsNext, mostlyJapanese, requestSentence, stripAsks } from './digestCheck.ts'
+import { mentionsNext, requestSentence, stripAsks } from './digestCheck.ts'
 
 /**
  * 一言の作り方。
@@ -20,6 +20,14 @@ export function digestPlan(text: string): DigestPlan {
   // 頼みを見つける規則は日本語の言い回しだけを見ている。日本語でない本文は「報告だけ」と決めつけない
   // （英語の本文の頼みを「人への頼みは書かない」で落としてしまう。比べたときに実際に落ちた）
   return mentionsNext(text) || !mostlyJapanese(text) ? { kind: 'full' } : { kind: 'report' }
+}
+
+/** 本文の文字（記号・空白・コードを除く）のうち、かな・漢字が 3 割以上か */
+function mostlyJapanese(text: string): boolean {
+  const letters = text.replace(/```[\s\S]*?(?:```|$)/g, '').replace(/`[^`\n]*`/g, '').match(/[\p{L}]/gu) ?? []
+  if (letters.length === 0) return true
+  const japanese = letters.filter((c) => /[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}]/u.test(c)).length
+  return japanese / letters.length >= 0.3
 }
 
 /**

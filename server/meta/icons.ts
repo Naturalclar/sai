@@ -2,11 +2,19 @@
 // エンティティ ID には `@` や `/` が入るのでファイル名には使わず、ID からパスを組み立てない。
 // session-meta.json には書かない（ファイルの有無が正）。ディレクトリを (mtime) で覚えて変わらなければ読み直さない
 import { createHash } from 'node:crypto'
-import { mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { ICON_MIME, sniffImageType, type IconType } from '../../shared/icon.ts'
+import { STRIPPED_MARK, stripImageMetadata, UNREADABLE_IMAGE_REASON } from '../local/imageMetadata.ts'
 
 export const ICONS_DIR = 'session-icons'
+/** 前からあるアイコンからメタデータを落とし終えた印（#791。添付と同じ名前） */
+export const ICONS_STRIPPED_MARK = STRIPPED_MARK
+const NAME_RE = /^([0-9a-f]{16})\.(png|jpeg|gif|webp)$/
+/** `put()` と一括処理の tmp（`<名前>.<pid>[.<連番>.strip].tmp`）。途中で止められた残骸は起動時に消す */
+const WORK_RE = /^[0-9a-f]{16}\.(png|jpeg|gif|webp)\.\d+(\.\d+\.strip)?\.tmp$/
+/** これより古い tmp は残骸として消す */
+export const ICONS_WORK_STALE_MS = 10 * 60_000
 
 export interface IconInfo {
   /** ファイルの絶対パス */
@@ -33,9 +41,74 @@ export function iconKey(id: string): string {
 export class IconStore {
   readonly dir: string
   private cache: Cached | null = null
+  /** 起動時の一括処理（作られたときに始める）。読む・置く前に待つ（落とす前のアイコンを配らない） */
+  private readonly cleaned: Promise<{ checked: number; changed: number; marked: boolean }>
 
   constructor(dir: string) {
     this.dir = dir
+    this.cleaned = this.stripStored().catch(() => ({ checked: 0, changed: 0, marked: false }))
+  }
+
+  /** 起動時の一括処理の結果（テスト用） */
+  ready(): Promise<{ checked: number; changed: number; marked: boolean }> {
+    return this.cleaned
+  }
+
+  /**
+   * 前からあるアイコン（この版より前に置いたもの。EXIF がそのまま）から一度だけメタデータを落とす（#791 の 4 回目のレビュー）。
+   * 印があれば読まない。名前は ID から決まるので変えず、中身だけ tmp に書いて rename。読む前と置く直前の stat が違えば置かない。
+   * 読めないものが残っても印は置く（1 枚のせいで起動のたびに全部を読み直さない）
+   */
+  private async stripStored(): Promise<{ checked: number; changed: number; marked: boolean }> {
+    const out = { checked: 0, changed: 0, marked: false }
+    const mark = join(this.dir, ICONS_STRIPPED_MARK)
+    let marked = false
+    try {
+      await stat(mark)
+      marked = true
+    } catch {
+      // まだ
+    }
+    let names: string[]
+    try {
+      names = await readdir(this.dir)
+    } catch {
+      return out // 置き場がまだ無い（最初の put が作る。そのときの中身は落とした後のもの）
+    }
+    let seq = 0
+    for (const n of names) {
+      const path = join(this.dir, n)
+      if (WORK_RE.test(n)) {
+        try {
+          if (Date.now() - (await stat(path)).mtimeMs >= ICONS_WORK_STALE_MS) await rm(path, { force: true })
+        } catch {
+          // 消えていた・消せない
+        }
+        continue
+      }
+      if (marked || !NAME_RE.test(n)) continue
+      const tmp = `${path}.${process.pid}.${++seq}.strip.tmp`
+      try {
+        const before = await stat(path)
+        const bytes = await readFile(path)
+        const type = sniffImageType(bytes)
+        if (!type) continue
+        out.checked++
+        const r = stripImageMetadata(bytes, type)
+        if (!r.changed) continue
+        await writeFile(tmp, r.bytes)
+        const after = await stat(path)
+        if (after.size !== before.size || after.mtimeMs !== before.mtimeMs) throw new Error('書かれている最中')
+        await rename(tmp, path)
+        out.changed++
+      } catch {
+        await rm(tmp, { force: true })
+      }
+    }
+    if (!marked) await writeFile(mark, '')
+    out.marked = true
+    this.cache = null
+    return out
   }
 
   /**
@@ -43,6 +116,7 @@ export class IconStore {
    * rev は中身（名前・mtime・サイズ）のハッシュで、どれか1つ差し替えても変わる。空なら ''
    */
   async all(): Promise<{ rev: string; entries: Map<string, IconInfo> }> {
+    await this.cleaned
     let st
     try {
       st = await stat(this.dir)
@@ -53,7 +127,7 @@ export class IconStore {
     if (!this.cache || this.cache.mtimeMs !== st.mtimeMs) {
       const entries = new Map<string, IconInfo>()
       for (const name of await readdir(this.dir)) {
-        const m = name.match(/^([0-9a-f]{16})\.(png|jpeg|gif|webp)$/)
+        const m = name.match(NAME_RE)
         if (!m) continue
         const type = m[2] as IconType
         try {
@@ -84,9 +158,15 @@ export class IconStore {
    * 置く。中身で種類を見て、画像でなければ error。同じ ID の別の種類のファイルは消す（PNG → JPEG に差し替えたとき）。
    * tmp に書いて rename するので、途中で落ちても壊れたファイルは残らない
    */
-  async put(id: string, bytes: Uint8Array): Promise<{ icon: IconInfo | null; error: string }> {
-    const type = sniffImageType(bytes)
+  async put(id: string, input: Uint8Array): Promise<{ icon: IconInfo | null; error: string }> {
+    const type = sniffImageType(input)
     if (!type) return { icon: null, error: '画像ファイル（PNG / JPEG / GIF / WebP）を選んでください' }
+    // 写真の EXIF（GPS など）は置く前に落とす（#791。画面は加工後の PNG を送ってくるが、口は何でも受けるので）。
+    // 形が読めず落とせたか分からないものは置かない
+    const r = stripImageMetadata(Buffer.from(input), type)
+    if (r.unreadable) return { icon: null, error: UNREADABLE_IMAGE_REASON }
+    const bytes = r.bytes
+    await this.cleaned
     const key = iconKey(id)
     await mkdir(this.dir, { recursive: true })
     const target = join(this.dir, `${key}.${type}`)

@@ -11,6 +11,7 @@ import { createHash } from 'node:crypto'
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { ICON_MIME, sniffImageType, type IconType } from '../../shared/icon.ts'
+import { METADATA_STRIP_VERSION, stripImageMetadata } from '../local/imageMetadata.ts'
 import type { IconStore } from './icons.ts'
 
 export const ICON_HISTORY_DIR = 'icon-history'
@@ -42,6 +43,8 @@ export interface HistoryEntry {
 
 interface State {
   seeded: boolean
+  /** 前からある履歴からメタデータを落とし終えた版（`METADATA_STRIP_VERSION`）。無い・古ければもう一度かける */
+  stripped: number
   used: Record<string, string>
 }
 
@@ -58,9 +61,10 @@ export class IconHistory {
     this.icons = icons
   }
 
-  /** 新しく使った順。取り込みがまだなら先に取り込む */
+  /** 新しく使った順。取り込み・前からあるものの落とし直しがまだなら先に済ませる */
   async list(): Promise<HistoryEntry[]> {
     await this.seed()
+    await this.stripStored()
     const state = await this.state()
     const out: HistoryEntry[] = []
     let names: string[]
@@ -105,6 +109,7 @@ export class IconHistory {
   /** 置く（あれば「使った時刻」を今にするだけ）。画像でなければ空の鍵 */
   async add(bytes: Uint8Array, at = new Date()): Promise<string> {
     await this.seed()
+    await this.stripStored()
     return this.serial(() => this.write(bytes, at.toISOString()))
   }
 
@@ -153,10 +158,68 @@ export class IconHistory {
     })
   }
 
+  /**
+   * 前からある履歴（この版より前に置いたもの。EXIF がそのまま）から一度だけメタデータを落とす（#791 の 4 回目のレビュー）。
+   * 鍵は中身のハッシュなので、落ちたものは新しい鍵の名前に置き直して古いファイルを消し、使った時刻も新しい鍵へ移す
+   * （残すと、同じ絵を選び直したときに落とした後の鍵で 2 つ目ができ、GPS 入りの方が履歴に残る）。json に版を覚えて 1 度だけ
+   */
+  private async stripStored(): Promise<void> {
+    if ((await this.state()).stripped >= METADATA_STRIP_VERSION) return
+    await this.serial(async () => {
+      const state = await this.state()
+      if (state.stripped >= METADATA_STRIP_VERSION) return
+      let names: string[] = []
+      try {
+        names = await readdir(this.dir)
+      } catch {
+        // 置き場がまだ無い
+      }
+      let seq = 0
+      for (const name of names) {
+        const m = name.match(/^([0-9a-f]{16})\.(png|jpeg|gif|webp)$/)
+        if (!m) continue
+        const path = join(this.dir, name)
+        let r: ReturnType<typeof stripImageMetadata>
+        let type: IconType | null
+        try {
+          const bytes = await readFile(path)
+          type = sniffImageType(bytes)
+          if (!type) continue
+          r = stripImageMetadata(bytes, type)
+        } catch {
+          continue
+        }
+        if (!r.changed) continue
+        const key = historyKey(r.bytes)
+        const target = join(this.dir, `${key}.${type}`)
+        const tmp = `${target}.${process.pid}.${++seq}.strip.tmp`
+        try {
+          await writeFile(tmp, r.bytes)
+          await rename(tmp, target)
+          if (target !== path) await rm(path, { force: true })
+        } catch {
+          await rm(tmp, { force: true })
+          continue
+        }
+        const prev = state.used[m[1]!]
+        if (prev !== undefined) {
+          delete state.used[m[1]!]
+          if (!(state.used[key] && state.used[key] > prev)) state.used[key] = prev
+        }
+      }
+      state.stripped = METADATA_STRIP_VERSION
+      await this.save(state)
+    })
+  }
+
   /** 1 件書く（serial の中から呼ぶ）。`keepNewer` なら、すでにもっと新しい時刻があるときは上書きしない */
-  private async write(bytes: Uint8Array, usedAt: string, keepNewer = false): Promise<string> {
-    const type = sniffImageType(bytes)
+  private async write(input: Uint8Array, usedAt: string, keepNewer = false): Promise<string> {
+    const type = sniffImageType(input)
     if (!type) return ''
+    // 履歴は消しても残るので、写真の EXIF（GPS など）はここでも落とす（#791）。鍵は落とした後の中身から。読めないものは残さない
+    const r = stripImageMetadata(Buffer.from(input), type)
+    if (r.unreadable) return ''
+    const bytes = r.bytes
     const key = historyKey(bytes)
     const target = join(this.dir, `${key}.${type}`)
     await mkdir(this.dir, { recursive: true })
@@ -178,21 +241,21 @@ export class IconHistory {
     try {
       const raw = JSON.parse(await readFile(this.file, 'utf-8')) as unknown
       if (!raw || typeof raw !== 'object') throw new Error('bad')
-      const o = raw as { seeded?: unknown; used?: unknown }
+      const o = raw as { seeded?: unknown; stripped?: unknown; used?: unknown }
       const used: Record<string, string> = {}
       if (o.used && typeof o.used === 'object') {
         for (const [k, v] of Object.entries(o.used as Record<string, unknown>)) if (isHistoryKey(k) && typeof v === 'string') used[k] = v
       }
-      return { seeded: o.seeded === true, used }
+      return { seeded: o.seeded === true, stripped: typeof o.stripped === 'number' ? o.stripped : 0, used }
     } catch {
-      return { seeded: false, used: {} }
+      return { seeded: false, stripped: 0, used: {} }
     }
   }
 
   private async save(state: State): Promise<void> {
     await mkdir(join(this.file, '..'), { recursive: true })
     const tmp = `${this.file}.${process.pid}.tmp`
-    await writeFile(tmp, `${JSON.stringify({ seeded: state.seeded, used: state.used }, null, 2)}\n`)
+    await writeFile(tmp, `${JSON.stringify({ seeded: state.seeded, stripped: state.stripped, used: state.used }, null, 2)}\n`)
     await rename(tmp, this.file)
   }
 

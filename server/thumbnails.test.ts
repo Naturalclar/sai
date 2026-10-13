@@ -1,11 +1,11 @@
 // 画像の軽い版（#589）。本物の createApp に一時の feed dir・作業ディレクトリ・偽の縮める口を渡して、
-// `?thumb=1` が軽い版を返し、付けなければ・ダウンロードなら元のまま、縮められなければ 503 で「押すまで読まない」形になること、
+// `?thumb=<版>` が軽い版を返し、付けなければ・ダウンロードなら元のまま、縮められなければ 503 で「押すまで読まない」形になること、
 // 縮める口に渡るのが置き場に書いたファイルだけで、cwd の外・シンボリックリンク・SVG・上限超えでは呼ばれないことを見る
 import { after, before, beforeEach, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
-import { mkdir, mkdtemp, readdir, rm, symlink, truncate, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, truncate, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
 import { dirname, join } from 'node:path'
@@ -13,18 +13,29 @@ import { createApp } from './app.ts'
 import { FeedStore } from './rows/store.ts'
 import { localDate } from './rows/aggregate.ts'
 import { row } from './rows/aggregate.test.ts'
-import { hasAlpha, imageSize, noThumbs, THUMB_BAND_EDGE_MAX, THUMB_BAND_SHORT, THUMB_EDGE, THUMB_EDGE_ALPHA, THUMB_FAILED_TTL_MS, THUMB_MIN_BYTES, thumbTarget, Thumbnails } from './local/thumbnails.ts'
+import { hasAlpha, imageSize, noThumbs, THUMB_BAND_EDGE_MAX, THUMB_BAND_SHORT, THUMB_EDGE, THUMB_EDGE_ALPHA, THUMB_FAILED_TTL_MS, THUMB_MIN_BYTES, THUMB_STRIPPED_MARK, thumbTarget, Thumbnails } from './local/thumbnails.ts'
 import type { Shrinker, ThumbFormat } from './local/thumbnails.ts'
-import { IMAGE_MAX_BYTES, sessionImageUrl, thumbUrl } from '../shared/images.ts'
+import { IMAGE_MAX_BYTES, sessionImageUrl, THUMB_VERSION, thumbUrl } from '../shared/images.ts'
+import { JPEG_STRIPPED, JPEG_UNREADABLE, JPEG_WITH_EXIF } from './local/imageMetadata.test.ts'
+import { jpegSegment } from './local/imageMetadata.ts'
 
-/** IHDR の色の種類（2 = RGB、6 = RGBA）を持つ PNG に見えるもの。中身の判定は先頭の印だけを見る */
+/**
+ * IHDR の色の種類（2 = RGB、6 = RGBA）を持つ PNG に見えるもの。中身の判定は先頭の印だけを見る。
+ * 残りは 1 つの IDAT チャンクにする（メタデータを落とす側がチャンクを歩いても「読めない」にならない。#791）
+ */
 const png = (size: number, colorType = 2) => {
   const b = Buffer.alloc(size)
   Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]).copy(b)
   b[25] = colorType
+  if (size >= 45) {
+    b.writeUInt32BE(size - 33 - 12, 33)
+    b.write('IDAT', 37, 'latin1')
+  }
   return b
 }
-const JPEG_THUMB = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3])
+/** 読める JPEG で、だいたい size バイト（SOI + SOS + 画素 + EOI。落とす物は無い。#791） */
+const jpegOf = (size: number) => Buffer.concat([Buffer.from([0xff, 0xd8]), jpegSegment(0xda, Buffer.alloc(10)), Buffer.alloc(Math.max(0, size - 18), 0x12), Buffer.from([0xff, 0xd9])])
+const JPEG_THUMB = Buffer.from([0xff, 0xd8, 0xff, 0xd9]) // 形が読める最小のもの（読めないものは置かない。#791）
 const PNG_THUMB = png(64, 6)
 
 let dir: string
@@ -59,13 +70,14 @@ before(async () => {
   await writeFile(join(cwd, 'big.png'), png(THUMB_MIN_BYTES + 1))
   await writeFile(join(cwd, 'alpha.png'), png(THUMB_MIN_BYTES + 1, 6))
   await writeFile(join(cwd, 'small.png'), png(1024))
+  await writeFile(join(cwd, 'exif.jpg'), JPEG_WITH_EXIF) // しきい値未満。枠に出すときも落とす（#791 の 4 回目のレビュー）
   await writeFile(join(cwd, 'fake.png'), `<svg xmlns="http://www.w3.org/2000/svg">${' '.repeat(THUMB_MIN_BYTES)}</svg>`)
   await writeFile(join(cwd, 'huge.png'), png(16))
   await truncate(join(cwd, 'huge.png'), IMAGE_MAX_BYTES + 1)
   await writeFile(join(dir, 'elsewhere', 'secret.png'), png(THUMB_MIN_BYTES + 1))
   await symlink(join(dir, 'elsewhere', 'secret.png'), join(cwd, 'link.png'))
   const now = new Date()
-  const text = ['big', 'alpha', 'small', 'fake', 'huge', 'link'].map((n) => `![${n}](${n}.png)`).join('\n') + `\n![s](${join(dir, 'elsewhere', 'secret.png')})`
+  const text = ['big', 'alpha', 'small', 'fake', 'huge', 'link'].map((n) => `![${n}](${n}.png)`).join('\n') + `\n![s](${join(dir, 'elsewhere', 'secret.png')})\n![e](exif.jpg)`
   await writeFile(join(feedDir, `${localDate(now.toISOString())}.jsonl`), JSON.stringify(row(now, 'S1', { repo: 'repo', cwd, text })) + '\n')
 
   const a = await listen(createApp(new FeedStore(feedDir), join(dir, 'dist'), undefined, undefined, undefined, undefined, undefined, { tmux: { run: async () => '' }, ps: async () => '', thumbs: new Thumbnails(thumbsDir, fake) }))
@@ -86,7 +98,7 @@ after(async () => {
   await rm(dir, { recursive: true, force: true })
 })
 
-test('?thumb=1 は元より小さい JPEG を返し、付けなければ・ダウンロードなら元のまま', async () => {
+test('?thumb=<版> は元より小さい JPEG を返し、付けなければ・ダウンロードなら元のまま', async () => {
   const thumb = await fetch(base + thumbUrl(url('big.png')))
   assert.equal(thumb.status, 200)
   assert.equal(thumb.headers.get('content-type'), 'image/jpeg')
@@ -99,7 +111,7 @@ test('?thumb=1 は元より小さい JPEG を返し、付けなければ・ダ�
   const original = await fetch(base + url('big.png'))
   assert.equal(original.headers.get('content-type'), 'image/png')
   assert.equal(Buffer.from(await original.arrayBuffer()).length, THUMB_MIN_BYTES + 1)
-  const dl = await fetch(`${base}${url('big.png')}?download=1&thumb=1`)
+  const dl = await fetch(`${base}${url('big.png')}?download=1&thumb=${THUMB_VERSION}`)
   assert.equal(Buffer.from(await dl.arrayBuffer()).length, THUMB_MIN_BYTES + 1, 'ダウンロードは元の画像')
   assert.notEqual(thumb.headers.get('etag'), original.headers.get('etag'), '軽い版と元は別の ETag')
 
@@ -110,7 +122,7 @@ test('?thumb=1 は元より小さい JPEG を返し、付けなければ・ダ�
   assert.equal(calls.length, 1, '同じ中身は縮め直さない')
 })
 
-test('?thumb=1: しきい値未満は元のまま（縮めない）。透過のある PNG は PNG のまま縮める', async () => {
+test('?thumb=<版>: しきい値未満は元のまま（縮めない）。透過のある PNG は PNG のまま縮める', async () => {
   const small = await fetch(base + thumbUrl(url('small.png')))
   assert.equal(small.status, 200)
   assert.equal(Buffer.from(await small.arrayBuffer()).length, 1024)
@@ -120,7 +132,7 @@ test('?thumb=1: しきい値未満は元のまま（縮めない）。透過の�
   assert.deepEqual(calls.map((c) => c.format), ['png'])
 })
 
-test('?thumb=1: cwd の外・シンボリックリンク・SVG・上限超えでは縮める口を呼ばない', async () => {
+test('?thumb=<版>: cwd の外・シンボリックリンク・SVG・上限超えでは縮める口を呼ばない', async () => {
   assert.equal((await fetch(base + thumbUrl(url(join(dir, 'elsewhere', 'secret.png'))))).status, 403)
   assert.equal((await fetch(base + thumbUrl(url('link.png')))).status, 403)
   assert.equal((await fetch(base + thumbUrl(url('fake.png')))).status, 415)
@@ -128,7 +140,7 @@ test('?thumb=1: cwd の外・シンボリックリンク・SVG・上限超えで
   assert.deepEqual(calls, [])
 })
 
-test('?thumb=1: 縮められなければ 503 と元の大きさ（画面は押すまで元を読まない）。元の URL はそのまま配る', async () => {
+test('?thumb=<版>: 縮められなければ 503 と元の大きさ（画面は押すまで元を読まない）。元の URL はそのまま配る', async () => {
   const res = await fetch(baseNoSips + thumbUrl(url('big.png')))
   assert.equal(res.status, 503)
   assert.equal(res.headers.get('x-sai-thumb'), 'unavailable')
@@ -150,7 +162,7 @@ test('Thumbnails: 失敗・締切は unavailable。sips が無ければ以後は
     assert.deepEqual(await missing.thumb(big), { kind: 'unavailable' })
     assert.deepEqual(await missing.thumb({ bytes: png(THUMB_MIN_BYTES + 20), type: 'png' }), { kind: 'unavailable' })
     assert.equal(n, 1)
-    const heavier = new Thumbnails(d, async (_i, o) => writeFile(o, png(THUMB_MIN_BYTES + 100)))
+    const heavier = new Thumbnails(d, async (_i, o) => writeFile(o, jpegOf(THUMB_MIN_BYTES + 100)))
     assert.deepEqual(await heavier.thumb({ bytes: png(THUMB_MIN_BYTES + 30), type: 'png' }), { kind: 'original' })
     // 同じ中身を同時に頼まれても 1 回だけ縮める
     let m = 0
@@ -242,6 +254,88 @@ test('Thumbnails: 横に細長い画像（帯）は短辺を保って長辺を�
   }
 })
 
+test('?thumb=1（古い画面）でも軽い版を返す（#791 のレビュー。受けないと元の画像を枠に読む）', async () => {
+  const res = await fetch(`${base}${url('big.png')}?thumb=1`)
+  assert.equal(res.status, 200)
+  assert.deepEqual(Buffer.from(await res.arrayBuffer()), JPEG_THUMB)
+  const off = await fetch(`${base}${url('big.png')}?thumb=0`)
+  assert.equal(Buffer.from(await off.arrayBuffer()).length, THUMB_MIN_BYTES + 1, 'thumb=0 は付いていない扱い')
+})
+
+test('Thumbnails: sips が残した EXIF は置く前に落とす（#791）', async () => {
+  const d = await mkdtemp(join(tmpdir(), 'sai-th-exif-'))
+  try {
+    const th = new Thumbnails(d, async (_i, o) => writeFile(o, JPEG_WITH_EXIF))
+    const r = await th.thumb({ bytes: png(THUMB_MIN_BYTES + 1), type: 'png' })
+    assert.equal(r.kind, 'thumb')
+    assert.deepEqual(r.kind === 'thumb' && r.bytes, JPEG_STRIPPED, '返すものにも EXIF は無い')
+    const stored = (await readdir(d)).filter((n) => n.endsWith('.jpg'))
+    assert.equal(stored.length, 1)
+    assert.deepEqual(await readFile(join(d, stored[0]!)), JPEG_STRIPPED, '置いたものにも無い')
+    await stat(join(d, THUMB_STRIPPED_MARK)) // 置き場を作ったときに印も置く（古い軽い版は無い）
+  } finally {
+    await rm(d, { recursive: true, force: true })
+  }
+})
+
+test('Thumbnails: 前からある軽い版と作りかけは起動時に消して印を置く。印があれば軽い版は消さない（#791）', async () => {
+  const d = await mkdtemp(join(tmpdir(), 'sai-th-clean-'))
+  try {
+    const gps = `${'a'.repeat(32)}.jpg`
+    const band = `${'b'.repeat(32)}-1728.jpg`
+    const src = `${'c'.repeat(32)}.src`
+    const work = `${'c'.repeat(32)}.tmp.jpg`
+    await writeFile(join(d, gps), JPEG_WITH_EXIF)
+    await writeFile(join(d, band), JPEG_WITH_EXIF)
+    await writeFile(join(d, src), JPEG_WITH_EXIF)
+    await writeFile(join(d, work), JPEG_WITH_EXIF)
+    await writeFile(join(d, 'notes.txt'), 'x')
+    const stale = new Date(Date.now() - 60_000)
+    await utimes(join(d, src), stale, stale)
+    await utimes(join(d, work), stale, stale)
+    assert.deepEqual(await new Thumbnails(d, fake).ready(), { removed: 4, marked: true })
+    assert.deepEqual((await readdir(d)).sort(), [THUMB_STRIPPED_MARK, 'notes.txt'], '軽い版・作りかけは消え、ほかは触らない')
+    // 印があれば軽い版は消さない。作りかけ（前の SAI が落ちたもの）は毎回消す。ただし sips の締切より新しいもの（別の SAI が作っている最中）は残す
+    await writeFile(join(d, gps), JPEG_WITH_EXIF)
+    await writeFile(join(d, src), JPEG_WITH_EXIF)
+    await writeFile(join(d, work), JPEG_WITH_EXIF)
+    const old = new Date(Date.now() - 60_000)
+    await utimes(join(d, src), old, old)
+    assert.deepEqual(await new Thumbnails(d, fake).ready(), { removed: 1, marked: true })
+    assert.deepEqual((await readdir(d)).sort(), [THUMB_STRIPPED_MARK, gps, work, 'notes.txt'])
+  } finally {
+    await rm(d, { recursive: true, force: true })
+  }
+})
+
+test('Thumbnails: 置いてある軽い版を読むときにも落とし、落ちたら置き直す（古い SAI が同じ置き場に書いた分。#791）', async () => {
+  const d = await mkdtemp(join(tmpdir(), 'sai-th-lazy-'))
+  try {
+    const img = { bytes: png(THUMB_MIN_BYTES + 1), type: 'png' as const }
+    const th = new Thumbnails(d, async (_i, o) => writeFile(o, JPEG_STRIPPED))
+    await th.thumb(img)
+    const [name] = (await readdir(d)).filter((n) => n.endsWith('.jpg'))
+    await writeFile(join(d, name!), JPEG_WITH_EXIF) // 印の後に、古い SAI が GPS 付きを書いたのと同じ状態
+    const r = await new Thumbnails(d, fake).thumb(img)
+    assert.deepEqual(r.kind === 'thumb' && r.bytes, JPEG_STRIPPED, '配るものには無い')
+    assert.deepEqual(await readFile(join(d, name!)), JPEG_STRIPPED, '置いてあるものも直る')
+    assert.ok(!(await readdir(d)).some((n) => n.endsWith('.tmp')), 'tmp は残らない')
+  } finally {
+    await rm(d, { recursive: true, force: true })
+  }
+})
+
+test('Thumbnails: 置き場がまだ無ければ作って印だけ置き、最初の thumb() はそれを待ってから進む（#791）', async () => {
+  const d = join(await mkdtemp(join(tmpdir(), 'sai-th-none-')), 'thumbs')
+  try {
+    const th = new Thumbnails(d, fake)
+    assert.deepEqual(await th.ready(), { removed: 0, marked: true })
+    assert.equal((await th.thumb({ bytes: png(THUMB_MIN_BYTES + 1), type: 'png' })).kind, 'thumb')
+  } finally {
+    await rm(dirname(d), { recursive: true, force: true })
+  }
+})
+
 test('thumbTarget: 帯だけ長辺を伸ばす。上限と、ふつうの画像の長辺を下回らないこと（#709）', () => {
   assert.equal(thumbTarget({ width: 2000, height: 1000 }, THUMB_EDGE), THUMB_EDGE)
   assert.equal(thumbTarget(null, THUMB_EDGE), THUMB_EDGE, '大きさが読めなければ今までどおり')
@@ -274,4 +368,35 @@ test('hasAlpha: PNG は IHDR の色の種類か IDAT より前の tRNS、JPEG �
   trns.write('IDAT', 50)
   assert.equal(hasAlpha(trns, 'png'), true)
   assert.equal(hasAlpha(Buffer.from([0xff, 0xd8, 0xff]), 'jpeg'), false)
+})
+
+test('cwd の画像を枠に出すとき、軽い版を作らず元のまま配る道でも EXIF は落とす。ライトボックス・ダウンロードは元のまま（#791 の 4 回目のレビュー）', async () => {
+  const frame = await fetch(base + thumbUrl(url('exif.jpg')))
+  assert.equal(frame.status, 200)
+  assert.match(frame.headers.get('etag') ?? '', /^"t3-/, 'しきい値未満でも落としたものの印（元の ETag のままだと前に持った GPS 入りが 304 で残る）')
+  assert.deepEqual(Buffer.from(await frame.arrayBuffer()), JPEG_STRIPPED)
+  assert.deepEqual(Buffer.from(await (await fetch(base + url('exif.jpg'))).arrayBuffer()), JPEG_WITH_EXIF)
+  assert.deepEqual(Buffer.from(await (await fetch(`${base}${url('exif.jpg')}?download=1&thumb=${THUMB_VERSION}`)).arrayBuffer()), JPEG_WITH_EXIF)
+})
+
+test('Thumbnails: 形が読めず落とせたか分からないものは、sips の出力なら作れなかった扱い、置いてあるものなら消して配らない（4 回目のレビュー）', async () => {
+  const d = await mkdtemp(join(tmpdir(), 'sai-thumbs-unreadable-'))
+  try {
+    const th = new Thumbnails(d, async (_i, o) => writeFile(o, JPEG_UNREADABLE))
+    await th.ready()
+    const big = { bytes: png(THUMB_MIN_BYTES + 10), type: 'png' as const }
+    assert.deepEqual(await th.thumb(big), { kind: 'unavailable' })
+    assert.ok(!(await readdir(d)).some((n) => n.endsWith('.jpg')), '置かない')
+    const hash = createHash('sha256').update(big.bytes).digest('hex').slice(0, 32)
+    const stored = join(d, `${hash}.jpg`)
+    await writeFile(stored, JPEG_UNREADABLE)
+    const again = new Thumbnails(d, async (_i, o) => writeFile(o, JPEG_THUMB))
+    await again.ready()
+    await writeFile(stored, JPEG_UNREADABLE) // 起動時の掃除（印の無い置き場は全部消す）のあとに置く＝古い SAI が後から書いたもの
+    const r = await again.thumb(big)
+    assert.equal(r.kind, 'thumb', '消して作り直す')
+    assert.deepEqual(await readFile(stored), JPEG_THUMB)
+  } finally {
+    await rm(d, { recursive: true, force: true })
+  }
 })

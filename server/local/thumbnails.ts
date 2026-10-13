@@ -13,6 +13,7 @@ import { mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from 'n
 import { join } from 'node:path'
 import type { IconType } from '../../shared/icon.ts'
 import { isBandImage } from '../../shared/images.ts'
+import { STRIPPED_MARK, stripImageMetadata } from './imageMetadata.ts'
 
 /** これより軽い画像は縮めずに元のまま返す（実測: 100KB 未満が 306 枚中 131 枚。縮める 0.1〜0.5 秒のほうが高い） */
 export const THUMB_MIN_BYTES = 200 * 1024
@@ -40,6 +41,16 @@ export const THUMB_CONCURRENCY = 2
 export const THUMB_FAILED_TTL_MS = 10 * 60_000
 /** 置き場に残す軽い版の数。超えたら古いものから捨てる（1 枚 30〜80KB なので 1000 枚で 50MB 前後） */
 export const THUMB_KEEP = 1000
+/**
+ * 「前からある軽い版は消した」印（#791）。`sips -Z` は EXIF を落とさないので、この版より前に作った軽い版には元の写真の
+ * GPS が残っている。解析して書き直さず、**消して次に求められたときに作り直す**（派生なので消してよい。解析で壊す心配が無い）。
+ * 消し終えたらこの名前の空ファイルを置き、次の起動では見ない。名前の数字は `METADATA_STRIP_VERSION`（落とし方を変えたら上げる＝もう一度消える）
+ */
+export const THUMB_STRIPPED_MARK = STRIPPED_MARK
+/** 軽い版のファイル名の形 */
+const THUMB_NAME_RE = /^[0-9a-f]{32}(-\d+)?\.(jpg|png)$/
+/** 作っている最中のファイル（`make()` の `.src` / `.tmp.*`）。起動時に残っていれば、前の SAI が途中で落ちたもの */
+const THUMB_WORK_RE = /^[0-9a-f]{32}(\.(src|tmp\.(jpg|png))|(-\d+)?\.(jpg|png)\.\d+\.\d+\.tmp)$/
 
 export type ThumbFormat = 'jpeg' | 'png'
 
@@ -136,16 +147,71 @@ export class Thumbnails implements ThumbMaker {
   private made = 0
   /** 縮められなかった中身 → 覚えた時刻 */
   private readonly failed = new Map<string, number>()
+  /** 置き直しの tmp の連番 */
+  private seq = 0
   private readonly now: () => number
+
+  /** 起動時の掃除（作られたときに始める）。最初の `thumb()` がこれを待つ（消す前の古い軽い版を配らない） */
+  private readonly cleaned: Promise<{ removed: number; marked: boolean }>
 
   constructor(dir: string, shrink: Shrinker = sipsShrink, now: () => number = Date.now) {
     this.dir = dir
     this.shrink = shrink
     this.now = now
+    this.cleaned = this.cleanStored().catch(() => ({ removed: 0, marked: false }))
+  }
+
+  /** 起動時の掃除の結果（テスト用）。`removed` は消した数、`marked` は印を置いた（か、もう置いてあった）か */
+  ready(): Promise<{ removed: number; marked: boolean }> {
+    return this.cleaned
+  }
+
+  /**
+   * 起動時の掃除（#791）。
+   * 1. 作りかけ（`.src` = 元の画像そのもの、`.tmp.*`）が残っていれば消す（前の SAI が途中で落ちたもの。元の画像に GPS が入っている）。
+   *    ただし `sips` の締切より新しいものは、同じ置き場を使う別の SAI がいま作っている最中かもしれないので触らない
+   * 2. 印（`THUMB_STRIPPED_MARK`）が無ければ、前からある軽い版を全部消して印を置く。消せなかったものが残っても印は置く
+   *    （置いてあるものは読むときにも落とすので配るものは清い。印を置かないと、消せない 1 枚のせいで毎回全部を消し直す）
+   * 置き場が無ければ作って印だけ置く（新しい置き場に古い軽い版は無い）
+   */
+  private async cleanStored(): Promise<{ removed: number; marked: boolean }> {
+    await mkdir(this.dir, { recursive: true })
+    const mark = join(this.dir, THUMB_STRIPPED_MARK)
+    let marked = false
+    try {
+      await stat(mark)
+      marked = true
+    } catch {
+      // まだ
+    }
+    const names = await readdir(this.dir)
+    let removed = 0
+    const now = this.now()
+    for (const n of names) {
+      const work = THUMB_WORK_RE.test(n)
+      if (!work && (marked || !THUMB_NAME_RE.test(n))) continue
+      const path = join(this.dir, n)
+      try {
+        if (work) {
+          const st = await stat(path)
+          if (now - st.mtimeMs < THUMB_TIMEOUT_MS * 2) continue // 別の SAI が作っている最中かもしれない
+        }
+        await unlink(path)
+        removed++
+      } catch {
+        // 無いなら消えている。消せないものは残す（読むときに落とすので配るものは清い）
+      }
+    }
+    if (!marked) {
+      await writeFile(mark, '')
+      marked = true
+    }
+    return { removed, marked }
   }
 
   async thumb(img: { bytes: Buffer; type: IconType }): Promise<ThumbResult> {
     if (img.bytes.length < THUMB_MIN_BYTES) return { kind: 'original' }
+    await this.cleaned
     const format: ThumbFormat = hasAlpha(img.bytes, img.type) ? 'png' : 'jpeg'
     const base = format === 'jpeg' ? THUMB_EDGE : THUMB_EDGE_ALPHA
     const size = imageSize(img.bytes, img.type)
@@ -157,10 +223,26 @@ export class Thumbnails implements ThumbMaker {
     const hash = createHash('sha256').update(img.bytes).digest('hex').slice(0, 32)
     // 帯は長辺が違うので名前を分ける（前に長辺 512px で作った帯の軽い版を返さない。#709）
     const out = join(this.dir, `${hash}${target === base ? '' : `-${target}`}.${format === 'jpeg' ? 'jpg' : 'png'}`)
+    let stored: Buffer | null = null
     try {
-      return this.result(await readFile(out), format, img.bytes.length)
+      stored = await readFile(out)
     } catch {
       // まだ無い
+    }
+    if (stored) {
+      // 置いてあるものにも落とす（#791。古い SAI が同じ置き場に書いた軽い版が残りうる）。落ちたら置き直す。
+      // tmp の名前はプロセスと連番で分ける（同じ軽い版を同時に 2 本が置き直しても、途中の tmp を rename しない）
+      const r = stripImageMetadata(stored, format)
+      if (r.unreadable) {
+        // 形が読めず落とせたか分からない軽い版は配らない。消して、作り直せるなら作り直す（古い SAI が置いた壊れたもの）
+        await rm(out, { force: true })
+      } else {
+        if (r.changed) {
+          const tmp = `${out}.${process.pid}.${++this.seq}.tmp`
+          await writeFile(tmp, r.bytes).then(() => rename(tmp, out)).catch(() => rm(tmp, { force: true }))
+        }
+        return this.result(r.bytes, format, img.bytes.length)
+      }
     }
     if (this.missing) return { kind: 'unavailable' }
     const failedAt = this.failed.get(hash)
@@ -185,10 +267,13 @@ export class Thumbnails implements ThumbMaker {
       await mkdir(this.dir, { recursive: true })
       await writeFile(src, bytes)
       await this.shrink(src, tmp, format, edge)
-      const made = await readFile(tmp)
+      // `sips -Z` は EXIF を落とさない（GPS が残る。#791）。書いたバイト列から落としてから置く（ICC と向きは残る）
+      const r = stripImageMetadata(await readFile(tmp), format)
+      if (r.unreadable) throw new Error('sips の出力の形が読めない') // 落とせたか分からないものは置かない（作れなかった扱い）
+      if (r.changed) await writeFile(tmp, r.bytes)
       await rename(tmp, out)
       if (++this.made % 50 === 1) void this.trim()
-      return this.result(made, format, bytes.length)
+      return this.result(r.bytes, format, bytes.length)
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT' && (err as { path?: string }).path === 'sips') this.missing = true
       if (this.failed.size > 1000) this.failed.clear()
@@ -217,7 +302,7 @@ export class Thumbnails implements ThumbMaker {
   /** 置き場が THUMB_KEEP を超えたら古いもの（mtime）から捨てる。失敗しても黙って諦める */
   private async trim(): Promise<void> {
     try {
-      const names = (await readdir(this.dir)).filter((n) => /^[0-9a-f]{32}(-\d+)?\.(jpg|png)$/.test(n))
+      const names = (await readdir(this.dir)).filter((n) => THUMB_NAME_RE.test(n))
       if (names.length <= THUMB_KEEP) return
       const aged = await Promise.all(names.map(async (n) => ({ n, t: (await stat(join(this.dir, n))).mtimeMs })))
       aged.sort((a, b) => a.t - b.t)

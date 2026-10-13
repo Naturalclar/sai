@@ -38,6 +38,8 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 
 ## アイコン画像（server/meta/icons.ts）
 
+- 画像は置く前に `local/imageMetadata.ts` の `stripImageMetadata()` で EXIF（GPS など）を落とす（#791。`IconStore.put()` と `IconHistory.write()`。画面は加工後の PNG を送ってくるが、口は何でも受けるので）。履歴の鍵は落とした後の中身から。形が読めないものは置かない（`put()` は `UNREADABLE_IMAGE_REASON`、`write()` は空の鍵）。前からあるものも一度だけ落とす: `session-icons/` は `IconStore` が作られたとき（印 `ICONS_STRIPPED_MARK`。`all()` / `put()` はこれを待つ）、`icon-history/` は最初の `list()` / `add()`（新しい鍵に置き直して古いファイルを消し、`used` の時刻も移す。`icon-history.json` の `stripped` に版）。
+
 - `GET/PUT/DELETE /api/sessions/<id>/icon`。`IconStore` が `~/.agent-feed/session-icons/<sha1(ID) の先頭16桁>.<ext>` にファイルで持つ（`session-meta.json` には書かない。ID からパスを組み立てない）。`SessionSummary.icon` に `?v=<mtime>` 付きの URL として載せる。
 - 受け付ける種類・上限・中身の判定（`sniffImageType`）は `shared/icon.ts` にあり、サーバの受付と画面の「画像を選ぶ」（`MetaEditor`）が同じ値を見る。
 - 絵文字のアイコンは廃止済みで、古い `icon` キーは `mergeMeta()` が知らないキーとして捨てる。

@@ -4,9 +4,15 @@ import { mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { IconStore, iconKey } from './icons.ts'
+import { JPEG_STRIPPED, JPEG_UNREADABLE, JPEG_WITH_EXIF } from '../local/imageMetadata.test.ts'
+import { UNREADABLE_IMAGE_REASON } from '../local/imageMetadata.ts'
+import { ICONS_STRIPPED_MARK } from './icons.ts'
+import { writeFile, mkdir } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 
-export const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3])
-export const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46])
+// 形が読めない作り物は put が断る（#791）ので、読める最小のもの
+export const PNG = new Uint8Array(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64'))
+export const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xd9])
 
 test('iconKey: ID から一定の幹。ID の文字はファイル名に出ない', () => {
   assert.match(iconKey('s1@sai'), /^[0-9a-f]{16}$/)
@@ -54,6 +60,42 @@ test('IconStore: 無ければ空、put で置け、種類を変えると前の�
     await store.remove('nope') // 無くても失敗しない
     await store.remove('b')
     assert.deepEqual((await store.all()).rev, '', '全部消えれば rev は空')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('IconStore: 写真の EXIF は置く前に落とす（#791）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-icons-exif-'))
+  try {
+    const store = new IconStore(join(dir, 'session-icons'))
+    const put = await store.put('a', new Uint8Array(JPEG_WITH_EXIF))
+    assert.equal(put.error, '')
+    assert.equal(put.icon?.size, JPEG_STRIPPED.length)
+    assert.deepEqual(await readFile(join(dir, 'session-icons', `${iconKey('a')}.jpeg`)), JPEG_STRIPPED)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('IconStore: 形が読めず落とせたか分からない画像は置かない。前からあるアイコンは起動時に一度だけ落として印を置く（4 回目のレビュー）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-icons-strip-'))
+  try {
+    const d = join(dir, 'session-icons')
+    await mkdir(d)
+    await writeFile(join(d, `${iconKey('a')}.jpeg`), JPEG_WITH_EXIF)
+    await writeFile(join(d, `${iconKey('b')}.jpeg`), JPEG_STRIPPED)
+    const store = new IconStore(d)
+    assert.deepEqual(await store.ready(), { checked: 2, changed: 1, marked: true })
+    assert.deepEqual(await readFile(join(d, `${iconKey('a')}.jpeg`)), JPEG_STRIPPED, '名前はそのまま、中身だけ落ちる')
+    assert.equal((await store.get('a'))?.size, JPEG_STRIPPED.length, '読む口も落とした後のもの')
+    assert.ok((await readdir(d)).includes(ICONS_STRIPPED_MARK))
+    assert.ok(!(await readdir(d)).some((n) => n.endsWith('.tmp')))
+    await writeFile(join(d, `${iconKey('a')}.jpeg`), JPEG_WITH_EXIF)
+    assert.deepEqual(await new IconStore(d).ready(), { checked: 0, changed: 0, marked: true }, '印があれば読まない')
+    const bad = await store.put('c', new Uint8Array(JPEG_UNREADABLE))
+    assert.deepEqual(bad, { icon: null, error: UNREADABLE_IMAGE_REASON })
+    assert.equal(await store.get('c'), undefined)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

@@ -246,6 +246,7 @@ import { ProgressReader, sessionOf } from './local/progress.ts'
 import { agentListFromEnv, backgroundLive, type AgentList, type ClaudeAgent } from './local/claudeAgents.ts'
 import { isRemoteHost } from '../shared/host.ts'
 import { IMAGES_SEGMENT } from '../shared/images.ts'
+import { METADATA_STRIP_VERSION, stripImageMetadata, UNREADABLE_IMAGE_REASON } from './local/imageMetadata.ts'
 import { imageHeaders, imageTable, readSessionImage, realImagePath } from './local/images.ts'
 import { AnsweredApprovals, answeredAfter } from './approvals/answered.ts'
 import { fileTable, readSessionFile } from './local/files.ts'
@@ -253,7 +254,7 @@ import { FILES_SEGMENT } from '../shared/files.ts'
 import { TranscriptImages } from './local/transcriptImages.ts'
 import { labelSuffixes } from '../shared/sessionLabels.ts'
 import { CodexImages } from './local/codexImages.ts'
-import { THUMB_MIN_BYTES, Thumbnails } from './local/thumbnails.ts'
+import { Thumbnails } from './local/thumbnails.ts'
 import type { ThumbMaker } from './local/thumbnails.ts'
 import { galleryFromRows, mergeGallery, rowTsAtOrAfter } from '../shared/gallery.ts'
 import { searchRows } from './rows/search.ts'
@@ -469,6 +470,12 @@ const NO_DIST =
   '<h1>SAI</h1><p><code>web/dist/</code> がありません。先にビルドしてください:</p>' +
   '<pre>pnpm install &amp;&amp; pnpm build</pre>' +
   '<p>開発中は <code>pnpm dev</code> で Vite を立てると、このサーバの API に流れます。</p>'
+
+/** `?thumb=` が付いているか。値は URL の版（`THUMB_VERSION`）だが、古い画面の `thumb=1` も受ける（`0` と空は付いていない扱い） */
+export function wantsThumb(q: URLSearchParams): boolean {
+  const v = q.get('thumb')
+  return v !== null && v !== '' && v !== '0'
+}
 
 export function parseDays(raw: string | null, fallback: number): number {
   const n = Number.parseInt(raw ?? '', 10)
@@ -1886,16 +1893,19 @@ export function createApp(
   }
 
   /**
-   * 読み終えた画像を配る（本文のパス・transcript・Codex の生成画像の 3 つの口）。`?thumb=1` なら軽い版（#589）: しきい値未満は元のまま、
+   * 読み終えた画像を配る（本文のパス・transcript・Codex の生成画像の 3 つの口）。`?thumb=<版>` なら軽い版（#589）: しきい値未満は元のまま、
    * 縮めたら JPEG（透過があれば PNG）、縮められなければ 503 と `X-SAI-Thumb: unavailable`（画面は押すまで元を読まない）。
-   * ライトボックスとダウンロードは `?thumb=1` を付けないので元の画像のまま
+   * ライトボックスとダウンロードは `?thumb=` を付けないので元の画像のまま
    */
   const sendImage = async (req: IncomingMessage, res: ServerResponse, img: { bytes: Buffer; type: IconType; name: string; etag: string }, q: URLSearchParams) => {
     const download = q.get('download') === '1'
-    const wantThumb = q.get('thumb') === '1' && !download
-    // 軽い版の ETag は元の ETag から作る（元が変われば軽い版も変わる）。`t2` は帯の軽い版の大きさを変えたとき（#709）に上げた
-    // （上げないと、ブラウザが持っている長辺 512px の帯が 304 でそのまま使われる）
-    const etag = wantThumb && img.bytes.length >= THUMB_MIN_BYTES ? img.etag.replace(/^"/, '"t2-') : img.etag
+    // `thumb` は版（`THUMB_VERSION`）が付いた URL で来るが、古い画面（ビルドし直す前の dist・隠れていたタブ）の `thumb=1` も軽い版として受ける
+    // （受けないと元の画像を枠に読む。URL の版はブラウザのキャッシュを分けるためだけ）
+    const wantThumb = wantsThumb(q) && !download
+    // 軽い版の ETag は元の ETag から作る（元が変われば軽い版も変わる）。`t2` は帯の軽い版の大きさを変えたとき（#709）、
+    // `t3` は EXIF を落とすようにしたとき（#791）に上げた（上げないと、ブラウザが持っている古い軽い版が 304 でそのまま使われる）。
+    // 枠に出すものはしきい値未満でも落とすので、`thumb=` が付いていれば大きさに関わらず付ける（付けないと、前に持った GPS 入りが 304 で残る）
+    const etag = wantThumb ? img.etag.replace(/^"/, '"t3-') : img.etag
     if (req.headers['if-none-match'] === etag) {
       res.writeHead(304, { ETag: etag, 'Cache-Control': 'private, no-cache' })
       res.end()
@@ -1907,7 +1917,10 @@ export function createApp(
       res.end()
       return
     }
-    const out = t.kind === 'thumb' ? { ...img, bytes: t.bytes, type: t.type, etag } : img
+    // 枠に出すのに元のまま配るとき（しきい値未満・縮めても小さくならない）も EXIF は落とす（#791。`t3-` の ETag は「落としたもの」の印なので、
+    // 元のまま配る道でも合わせる）。読めなければ元のまま（cwd の画像はライトボックスとダウンロードが元のままなので、ここだけ断っても隠せない）。
+    // ライトボックスとダウンロード（`?thumb=` 無し）は元のまま
+    const out = t.kind === 'thumb' ? { ...img, bytes: t.bytes, type: t.type, etag } : wantThumb ? { ...img, bytes: stripImageMetadata(img.bytes, img.type).bytes, etag } : img
     res.writeHead(200, imageHeaders(out, download))
     res.end(req.method === 'HEAD' ? undefined : out.bytes)
   }
@@ -4963,6 +4976,8 @@ export function createApp(
     } catch {
       return error(res, 404, 'icon not found')
     }
+    // 前から置いてあって形が読めず落とせなかったものは配らない（#791。置く口は断る。アイコンは小さいので毎回通してよい）
+    if (stripImageMetadata(body, icon.type).unreadable) return error(res, 415, UNREADABLE_IMAGE_REASON)
     res.writeHead(200, {
       'Content-Type': icon.mime,
       'Content-Length': body.length,
@@ -5061,8 +5076,13 @@ export function createApp(
     const icon = target ? await iconStore.get(target) : undefined
     if (icon) {
       try {
-        const key = historyKey(await readFile(icon.path))
-        if (entries.some((e) => e.key === key)) payload.current = key
+        // 履歴の鍵は EXIF を落とした後の中身から（#791）。前から置いてある（落としていない）アイコンでも同じ鍵になるよう、ここでも落としてから
+        const raw = await readFile(icon.path)
+        const rawKind = sniffImageType(raw)
+        // 前からある履歴は落とす前の鍵のまま残っているので、落とす前・後のどちらの鍵でも引く
+        const keys = [historyKey(raw), historyKey(rawKind ? stripImageMetadata(raw, rawKind).bytes : raw)]
+        const current = entries.find((e) => keys.includes(e.key))
+        if (current) payload.current = current.key
       } catch {
         // 読めなければ印を付けないだけ
       }
@@ -5074,6 +5094,7 @@ export function createApp(
     const entry = await iconHistory.get(key)
     const body = entry ? await iconHistory.read(key) : null
     if (!entry || !body) return error(res, 404, 'icon not found')
+    if (stripImageMetadata(Buffer.from(body), entry.type).unreadable) return error(res, 415, UNREADABLE_IMAGE_REASON)
     res.writeHead(200, {
       'Content-Type': entry.mime,
       'Content-Length': body.length,
@@ -5352,6 +5373,13 @@ export function createApp(
         const [dir = '', name = '', ...rest] = path.slice(ATTACHMENTS_PREFIX.length).split('/')
         const found = rest.length > 0 ? null : await attachmentStore.find(dir, name)
         if (!found) return error(res, 404, 'attachment not found')
+        // 元のまま配る口の ETag は名前と落とし方の版から決まるので、304 で済むなら読まない
+        const etag = `"a${METADATA_STRIP_VERSION}-${name.slice(0, 16)}"`
+        if (!wantsThumb(q) && req.headers['if-none-match'] === etag) {
+          res.writeHead(304, { ETag: etag, 'Cache-Control': 'private, no-cache' })
+          res.end()
+          return
+        }
         let body: Buffer
         try {
           body = await readFile(found.path)
@@ -5359,17 +5387,30 @@ export function createApp(
           return error(res, 404, 'attachment not found')
         }
         // 軽い版（#589）。添付は画像だけ受けているが、種類は中身で見る
-        const type = q.get('thumb') === '1' ? sniffImageType(body) : null
+        const kind = sniffImageType(body)
+        const type = wantsThumb(q) ? kind : null
         const t = type ? await thumbs.thumb({ bytes: body, type }) : ({ kind: 'original' } as const)
         if (t.kind === 'unavailable') {
           res.writeHead(503, { 'Cache-Control': 'no-store', 'X-SAI-Thumb': 'unavailable', 'X-SAI-Image-Bytes': body.length, 'Content-Length': 0 })
           res.end()
           return
         }
-        const out = t.kind === 'thumb' ? { bytes: t.bytes, mime: ICON_MIME[t.type] } : { bytes: body, mime: found.mime }
-        // 名前が中身のハッシュなので、同じ URL の中身は変わらない
-        res.writeHead(200, { 'Content-Type': out.mime, 'Content-Length': out.bytes.length, 'Cache-Control': 'private, max-age=31536000, immutable' })
-        res.end(req.method === 'HEAD' ? undefined : out.bytes)
+        if (t.kind === 'thumb') {
+          // 軽い版の URL は版（THUMB_VERSION）付きで、名前が中身のハッシュなので、同じ URL の中身は変わらない
+          res.writeHead(200, { 'Content-Type': ICON_MIME[t.type], 'Content-Length': t.bytes.length, 'Cache-Control': 'private, max-age=31536000, immutable' })
+          res.end(req.method === 'HEAD' ? undefined : t.bytes)
+          return
+        }
+        // 元のまま配るとき（しきい値未満・ライトボックス・ダウンロード）も EXIF は落とす（#791。前からある原本を起動時の一括処理が
+        // まだ通していない間や、置き直せなかったものでも、配るものは清い）。形が読めず落とせたか分からないものは配らない（415）。
+        // no-cache + ETag: 名前は変わらないのに中身は変わりうる（前からある原本から EXIF を落とした）ので、ブラウザが前に持った
+        // GPS 入りの原本をそのまま使わせない。ETag は名前（元の中身のハッシュ）と落とし方の版から作る（落とし方が決まれば配るものも
+        // 決まる。中身を読んで落としてハッシュを取るのを、304 で済む要求のたびにはしない）
+        const stripped = kind ? stripImageMetadata(body, kind) : null
+        if (stripped?.unreadable) return error(res, 415, UNREADABLE_IMAGE_REASON)
+        const original = stripped ? stripped.bytes : body
+        res.writeHead(200, { 'Content-Type': found.mime, 'Content-Length': original.length, 'Cache-Control': 'private, no-cache', ETag: etag })
+        res.end(req.method === 'HEAD' ? undefined : original)
         return
       }
       // セッションに出てきた画像の一覧と、Claude の transcript の画像（#504）。どちらもパスはリクエストから受けない

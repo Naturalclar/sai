@@ -73,12 +73,18 @@ export function isBandImage(width: number, height: number): boolean {
 }
 
 /**
- * 枠に出す軽い版の URL（#589。`?thumb=1`）。ライトボックスとダウンロードは元の URL のまま。
- * 本文のパス・transcript・Codex の生成画像・添付の 4 つの口が同じ `?thumb=1` を受ける
+ * 枠に出す軽い版の URL（#589。`?thumb=<版>`）。ライトボックスとダウンロードは元の URL のまま。
+ * 本文のパス・transcript・Codex の生成画像・添付の 4 つの口が同じ `?thumb=<版>` を受ける
  */
 export function thumbUrl(url: string): string {
-  return `${url}${url.includes('?') ? '&' : '?'}thumb=1`
+  return `${url}${url.includes('?') ? '&' : '?'}thumb=${THUMB_VERSION}`
 }
+
+/**
+ * 軽い版の URL の版（`?thumb=<版>`）。軽い版の中身の作り方を変えたら上げる（#791 で 1 → 2: EXIF を落とすようになった）。
+ * 添付の軽い版は `immutable` で 1 年キャッシュさせているので、URL を変えないとブラウザの持っている古い軽い版が使われ続ける
+ */
+export const THUMB_VERSION = '2'
 
 /** 押すまで読まない画像の大きさ（`2.3MB` / `480KB`） */
 export function formatImageBytes(n: number): string {

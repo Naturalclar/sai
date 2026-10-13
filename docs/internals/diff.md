@@ -84,7 +84,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 ## GitHub の PR を読む
 
 - `GET /api/prs` と `/api/prs/<owner>/<repo>/<番号>`、画面は `#/prs` の `PrListView` と `#/pr/<owner>/<repo>/<番号>` の `PrView`。
-- `GhPrs` が `gh pr list` / `gh pr list --search review-requested:@me` / `gh pr view` / `gh pr diff` の 4 形と、投稿の口を出すかのための `gh api user`、行コメントの `gh api -X GET …/pulls/<番号>/comments`（#600）を組み立てる（チェックアウトも fetch もしない）。
+- `GhPrs` が `gh pr list` / `gh pr list --search review-requested:@me` / `gh pr list --state merged`（#795。ブランチ名と head の SHA だけ。「空き」の判定に使う → [agents.md](agents.md#いま何を持っているか727-の案-d-の読む側)）/ `gh pr view` / `gh pr diff` の 5 形と、投稿の口を出すかのための `gh api user`、行コメントの `gh api -X GET …/pulls/<番号>/comments`（#600）を組み立てる（チェックアウトも fetch もしない）。
 - 並べるリポジトリは `shared/prs.ts` の `knownRepos()`（直近 30 日のセッションの remote が GitHub のもの）。URL の `owner/repo` も `pickKnownRepo()` で知っているものから引く。
 - 3 秒のポーリングには乗せず（開いたときと「更新」だけ。ボタンは `web/src/RefreshButton.tsx`＝`RefreshMark` ＋文字で、取っている間は CSS でアイコンを回す。#601）、一覧は 60 秒覚える（失敗も覚える）。
 - 差分は `gh pr diff` の本文から `diffStats()` で見出しを数え（切る前に数える）、`clampPatch()` で #171 と同じ上限に切り、画面はセッションと同じ `DiffView` で出す。

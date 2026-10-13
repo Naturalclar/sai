@@ -17,7 +17,7 @@ import { createApp } from './app.ts'
 import { FeedStore } from './rows/store.ts'
 import { localDate } from './rows/aggregate.ts'
 import { row } from './rows/aggregate.test.ts'
-import { GhPrs } from './git/prs.ts'
+import { GhPrs, MERGED_LIMIT, mergedKey, parseMergedHeads } from './git/prs.ts'
 import type { GhRun, GhSend, PrBrowser, PrView } from './git/prs.ts'
 
 const summary = (number: number, extra: Partial<PrSummary> = {}): PrSummary => ({
@@ -518,3 +518,31 @@ test('GhPrs.ci（#732）: gh は決まった形の 1 本だけ。リポジトリ
   assert.equal(await new GhPrs(async () => 'not json').ci('o/r', 12), null)
 })
 
+
+// ---- #795: マージ済みの PR の head（「マージ済みのブランチが残っているだけ」を見分ける）
+
+test('GhPrs.mergedHeads: 決まった形の gh pr list --state merged を 1 本だけ。ブランチ名と head の SHA の組を返し、fork のブランチは入れない。少しの間は引き直さない（#795）', async () => {
+  const sha = 'c'.repeat(40)
+  const calls: string[][] = []
+  let out: string | null = JSON.stringify([
+    { headRefName: 'issue-9100-stock-filter', headRefOid: sha, isCrossRepository: false },
+    { headRefName: 'issue-9100-stock-filter', headRefOid: 'd'.repeat(40), isCrossRepository: true },
+    { headRefName: 'short', headRefOid: 'abc', isCrossRepository: false },
+  ])
+  const gh = new GhPrs(async (args) => {
+    calls.push(args)
+    return out
+  })
+  const heads = await gh.mergedHeads('o/r')
+  assert.deepEqual([...(heads ?? [])], [mergedKey('issue-9100-stock-filter', sha)])
+  assert.deepEqual(calls, [['pr', 'list', '--repo', 'o/r', '--state', 'merged', '--limit', String(MERGED_LIMIT), '--json', 'headRefName,headRefOid,isCrossRepository']])
+  await gh.mergedHeads('o/r')
+  assert.equal(calls.length, 1, '少しの間は覚える')
+  // 形の悪い名前は gh を起こさない。読めない出力・失敗は null
+  assert.equal(await gh.mergedHeads('-x/y'), null)
+  assert.equal(calls.length, 1)
+  out = null
+  assert.equal(await new GhPrs(async () => out).mergedHeads('o/r'), null)
+  assert.equal(parseMergedHeads('{'), null)
+  assert.equal(parseMergedHeads('{}'), null)
+})

@@ -49,8 +49,15 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - **応答を `gh` に待たせない**: `PrBrowser.cached()` が前に引いた一覧をそのまま返し、古ければ（`PRS_CACHE_MS`）裏で引き直す。まだ 1 回も引いていない・前の結果が `HOLDING_PR_STALE_MS`（10 分）より古いリポジトリだけ `HOLDING_PR_WAIT_MS`（1.5 秒）待ち（何時間も前の CI を今の状態として出さない）、間に合わなければ PR の印を付けずに返す（行は落とさない）。同じリポジトリは 1 回の呼び出しで 1 回しか聞かない（書き方の違いは `knownRepos()` / `pickKnownRepo()` で揃える）。`SAI_GH=0` では引かない。
 - `issues`: `issueNumbers()` が、ブランチ名の `issue-<番号>`・PR の題名の**括弧の中**の `#<番号>`（`… (#727)`。その PR 自身の番号・括弧の外の番号・`PR #N` は除く）・届いていてまだ返していない依頼の 1 行目の、**行の頭の `#<番号>`** か **`issue #<番号>`** から引く（`HOLDING_ISSUES_MAX` = 3 件まで）。`PR #734 をレビューして` の番号や、本文の途中の番号は拾わない。
 - `asked`: 別のセッションから頼まれて、まだ返していないメッセージの数。`AgentMessages.sentTo()` の `HOLDING_ASK_DAYS`（2 日）以内のもののうち、返答（そのメッセージで回ったターンの完了の行。見出しの id）がまだ無く、**まだ生きている**もの（相手の預かりに並んでいる = `ReplyQueueStore.origins()`、か相手の**いまのターンがその依頼のもの** = どの経路でも、いまのターンの入力がその依頼の見出しを持つ。相手が別のターンを回しているだけでは数えない）と、まだ送っていない預かり（`heldFor()`）。失敗した・人が止めた・預かりから取り消された依頼は数えない。行は 1 回だけ舐める（`HOLDING_ASK_DAYS + 1` 日ぶん）。
-- `free`: 処理中でない（SAI が回しているターン・起動中・**端末で人が回しているターン** = `progress.read().active`）・待ちが無い・預かりが無い・`asked` が無い。`/mcp` では、送れない相手（別のマシン・素通し・合成 ID など）には付けない。SAI が渡す口では端末と許可の走査を回さない（画面の走査の結果を、同じリポジトリの相手だけの結果で上書きしないため）ので、待ちは行の `waiting` のまま見る（端末で答えた直後は少しの間「空きではない」側に倒れる）。`claude --bg` が掴んでいるセッションは見ていない。
-- 1 行の印は `holdingLabel()`: `（空き） PR #728（CI 緑） issue #727 頼まれ中 1 件`。題名・本文は載せない（#688）。増える字数は 1 行あたり 0〜56 字（空きだけなら 5 字、PR と issue が 1 つずつで 25 字、空き + PR + issue で 31 字。下書きの 5 桁の PR・issue 3 つ・頼まれ中が全部付いて 56 字）。
+- `free` / `why`（#795）: **空きはここ 1 か所で決める**（`shared/holding.ts` の `notFreeWhy()` を `holdingOf()` が呼ぶ。一覧の印も、送る時点の確かめも、この答えを読む）。空きでなければ理由 `why`（`HoldingWhy`）を 1 つ、上から順に見て最初に当たったもの:
+  - `busy`（SAI が回しているターン・起動中）→ `terminal`（**端末で人が回しているターン** = `progress.read().active`）→ `waiting`（待ち）→ `queued`（預かり）: 呼び出し側（`agentHoldingsOf()` / `mcpHoldingsOf()`）が渡す。
+  - `asked`: 頼まれて返していない依頼がある。
+  - `background`: 生きている `claude --bg` が掴んでいて止められない（`backgroundHeld()`。attach している端末がある・ターンが回っている。判定は `launch()` と同じ `backgroundLive()` / `backgroundHold()`）。止められる bg は空きのまま。`claude agents` に聞けなかったときも空きのまま（`launch()` もそのとき bg として扱わない）。
+  - `dirty` / `unpushed` / `unknown`: worktree の作りかけ。`server/git/diff.ts` の `workState()` が読むだけのサブコマンド（`rev-parse` / `status --porcelain` / `merge-base --is-ancestor` / `diff --numstat`）で見る。`dirty` = コミットしていない変更・追跡外のファイル（`.gitignore` 済みは数えない。PR が出ていても空きにしない）。`ahead` = base（`resolveBase()`）に入っていないコミットがあり、その中身が base に無い → そのブランチから open な PR（`prOfBranch()`）が出ていなければ `unpushed`（PR の一覧が引けなかったときも PR が無いのと同じ扱い）。**squash マージ済みのブランチが残っているだけは空き**。見分け方は 2 段: (1) `workState()` が、ブランチが触ったファイルが base と同じ中身なら `clean` にする（`gh` が無くても分かるが、あとから base がそのファイルを変えると `ahead` 側に倒れる）。(2) `ahead` で open な PR も無いとき、`holdingsOf()` の `mergedLeftover()` が、**マージ済みの PR の head の SHA がいまの HEAD（`git rev-parse HEAD`）そのもの**なら `clean` に直す（`PrBrowser.mergedHeads()` = `gh pr list --repo <repo> --state merged --limit 200 --json headRefName,headRefOid,isCrossRepository` の決まった形の 1 本。`PRS_CACHE_MS` 覚え、待つのは `HOLDING_PR_WAIT_MS` まで。fork の同じ名前のブランチは入れない）。マージのあとにコミットを足していれば head が違うので作りかけのまま。引けなければ作りかけの側。git のリポジトリでない cwd は `none`（作りかけを見ない）。git が落ちた・cwd が消えた・base が決まらないは `unknown` で、**空きにしない**。
+  - git と `claude agents` を読むのは、ほかの理由が無い、このマシンの頼める相手だけ（理由は 1 つしか出さない）。結果は覚えない（送る時点の確かめが古い答えを読まないように）。
+  - `/mcp` では、送れない相手（別のマシン・素通し・合成 ID など）には `free` も `why` も付けない。SAI が渡す口では端末と許可の走査を回さない（画面の走査の結果を、同じリポジトリの相手だけの結果で上書きしないため）ので、待ちは行の `waiting` のまま見る（端末で答えた直後は少しの間「空きではない」側に倒れる）。
+  - 別のリポジトリの相手（#747）は `free` だけを `acrossEntry()` に渡し、`why` も PR も載せない。**空きを決めるために、相手のリポジトリの PR の一覧（open とマージ済み）は読む**（#795 から。読まないと、PR を出している・マージ済みのブランチが残っている相手が全部「空きでない」になる。読むのは記録で知っているリポジトリだけで、中身は返さない）。
+- 1 行の印は `holdingLabel()`: `（空き） PR #728（CI 緑） issue #727 頼まれ中 1 件`。題名・本文は載せない（#688）。空きでない理由は `WHY_LABEL` の短い語を括弧で足す（`（端末で作業中）`。10 字まで。`busy` と `asked` は行にもう出ているので重ねない。`/mcp` の行で待ちの中身を別に出すときは `（待ち）` も重ねない）。増える字数は 1 行あたり 0〜56 字（空きだけなら 5 字、PR と issue が 1 つずつで 25 字、空き + PR + issue で 31 字。下書きの 5 桁の PR・issue 3 つ・頼まれ中が全部付いて 56 字）。
 - エージェント用の応答では `AgentSessionEntry.holding`（`shared/types.ts` の `SessionHolding`。何も分からなければ省略）。
 
 ### 送る・待つ
@@ -61,6 +68,17 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 待つのはサーバ側（`wait=1` で `WAIT_MS`、MCP サーバが最長 30 分繰り返す）。
 - 受け取った側の目印は見出しそのもの（画面は触っていない）。
 - 見出しの「返答はどこへ行くか」は `REPLY_NOTE`（「このターンの最後の発言が返答として送り元の画面に出ます（送り元が sai_wait で待っていれば、そのまま受け取ります）」）。送り元が待たないこともあるので「送り元に返ります」とは言い切らない（#588）。
+
+### 着手の依頼は送る時点で確かめる（#795）
+
+- `agentSendOne()`（`POST /api/agent/send`）と `/mcp` の `sai_send` は、本文が**着手の形**（`shared/compact.ts` の `startsNewWork()`。要約の判定と同じ関数）のとき、送る前に `startAskRefusal()` を通す。空きでなければ `409`（`/mcp` は `isError`）で `startRefusal(why)` の文を返し、**相手には何もしない**（`launch()` を呼ばない・預かりにも並べない・記録にも数えない）。複数の宛先（`items`）は、1 つでも当たれば 1 件も送らない（ほかの検査と同じ）。
+- 材料は一覧と同じ道: セッション同士の口は `agentHoldingsOf()`、`/mcp` は `mcpHoldingsOf()`（一覧と同じ範囲のセッションで走査する）。どちらも `holdingsOf()` → `holdingOf()` で、`free` が無ければ断る。組めなかった（走査が落ちた・一覧の窓の外）ときも断る（`unknown`）。
+- **読み直す量の差**: `seenContext`（送り元 → 相手 → トークン。`sai_sessions` を返すたびに覚える。メモリだけ）と、いまの `context_tokens` を `grownSinceSeen()` で比べる。`SEEN_CONTEXT_FACTOR`（2 倍）を超え、かつ `SEEN_CONTEXT_MIN_TOKENS`（30 万）を超えていれば `grownRefusal()` で返す。見ていない（立て直しで忘れた）相手は比べない。別のリポジトリの相手は量を出していないので覚えず、比べない。
+- 預かった送信（#727）も、送る直前に同じ確かめを通す（`drainBacklog()`。当たれば `haltHeld()` で止めて理由を画面に残す）。
+- 別のリポジトリの相手には、理由の中身を返さない（`startRefusal(why, true)`）。
+- 着手の形でない本文は通さない。無理に送る引数は作っていない。人が画面から送る返信（`POST …/reply`）はこの道を通らない。
+- 道具の説明に足す文は `FREE_NOTE` / `START_ASK_NOTE`（セッション同士の口と `/mcp` で同じ文）。
+- テストは `server/git/workStateFake.ts` の `FakeWorkGit`（cwd ごとの状態で `workState()` のコマンドに答える）を渡す。`workState()` 自体は `server/git/diff.test.ts` が一時ディレクトリの実物の git で見る。
 
 ### 送り元の画面に返答を出す（#588）
 

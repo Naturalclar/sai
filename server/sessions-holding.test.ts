@@ -19,6 +19,10 @@ import type { ReplyCommand, Runner } from './reply/runner.ts'
 import { localDate } from './rows/aggregate.ts'
 import { row } from './rows/aggregate.test.ts'
 import { FeedStore } from './rows/store.ts'
+import { FAKE_HEAD, FakeWorkGit } from './git/workStateFake.ts'
+import { mergedKey } from './git/prs.ts'
+import type { AgentList, ClaudeAgent } from './local/claudeAgents.ts'
+import { startRefusal } from '../shared/holding.ts'
 
 let dir: string
 /** セッションの cwd（置き場の下にすると、SAI 自身の雑音として読み飛ばされる） */
@@ -59,12 +63,22 @@ class FakePrs extends NoPrs {
   cached(repo: string, maxAgeMs = Infinity): PrSummary[] | null | undefined {
     return this.age <= maxAgeMs ? this.lists.get(repo) : undefined
   }
+  /** マージ済みの PR の head（#795。`mergedKey()` の集合）。null は引けない */
+  merged: Set<string> | null = new Set()
+  mergedHeads(): Promise<ReadonlySet<string> | null> {
+    return Promise.resolve(this.merged)
+  }
   override list(repo?: string): Promise<PrSummary[] | null> {
     this.asked.push(repo ?? '')
     return this.slow ? new Promise(() => {}) : Promise.resolve(this.lists.get(repo ?? '') ?? null)
   }
 }
 const prs = new FakePrs()
+/** `claude --bg` の行の偽物（#795）。セッションの生の ID → 行。この Mac の `claude agents` は起こさない */
+const bgRows = new Map<string, ClaudeAgent>()
+const claudeAgents: AgentList = { busy: async () => undefined, background: async (id) => bgRows.get(id) ?? null }
+/** worktree の作りかけ（#795）。置いていない cwd は git のリポジトリでない扱い */
+const git = new FakeWorkGit()
 
 const now = new Date()
 const minutesAgo = (n: number) => new Date(now.getTime() - n * 60_000)
@@ -98,11 +112,11 @@ before(async () => {
     new Authenticator(async () => null),
     { tmux: { run: async () => { throw new Error('unused') } }, ps: async () => '' },
     undefined,
-    { run: async () => { throw new Error('unused') } },
+    git,
     undefined,
     undefined,
     undefined,
-    undefined,
+    claudeAgents,
     prs,
   )
   token = (await readFile(join(dir, AGENT_TOKEN_FILE), 'utf-8')).trim()
@@ -172,7 +186,7 @@ test('sai_sessions: 処理中・待ち・預かりがあれば空きではない
   // C1 はその依頼のターンを回している（いまのターンの入力が、依頼の見出しを持つ）
   runner.busy.set('C1@r', { since: 'turn-c', text: runner.started.at(-1)!.cmd.text })
   let c = (await sessionsFor()).find((s) => s.id === 'C1@r')
-  assert.deepEqual(c?.holding, { issues: [9200], asked: 1 }, '処理中で、頼まれて未完。空きではない')
+  assert.deepEqual(c?.holding, { issues: [9200], asked: 1, why: 'busy' }, '処理中で、頼まれて未完。空きではない')
   assert.match(await mcpLine('C1@r'), /（処理中） issue #9200 頼まれ中 1 件 最後の記録: /)
   // 相手のターンが終わった（返答の行が届いた）→ 未完ではなくなり、空きに戻る
   runner.busy.delete('C1@r')
@@ -221,3 +235,86 @@ test('sai_sessions: 失敗した・止められた依頼（返答が来ないま
   assert.deepEqual([busy?.holding?.issues, busy?.holding?.asked, busy?.holding?.free], [[9100], undefined, undefined])
 })
 
+
+// ---- #795: 作りかけのある相手を空きにしない・送る時点で確かめる
+
+const sendStart = async (to: string, text: string) => {
+  runner.busy.set('A1@r', { since: `turn-${Math.random()}`, text: 'やって' })
+  try {
+    return await agent('/api/agent/send', { method: 'POST', body: JSON.stringify({ from: 'A1@r', to, text }) })
+  } finally {
+    runner.busy.delete('A1@r')
+  }
+}
+
+test('sai_sessions: コミットしていない変更・PR になっていないコミットがあれば空きにしない。マージ済みのブランチが残っているだけは空き。git が読めなければ空きにしない（#795）', async () => {
+  prs.lists.set('o/repo-x', [pr(9101, 'issue-9100-stock-filter')])
+  const holdingOfId = async (id: string) => (await sessionsFor()).find((s) => s.id === id)?.holding
+  try {
+    git.states.set(work, 'dirty')
+    assert.deepEqual(await holdingOfId('B1@r'), { pr: { number: 9101, checks: 'success' }, issues: [9100], why: 'dirty' }, 'PR が出ていても、未コミットの変更があれば空きではない')
+    assert.match(await mcpLine('C1@r'), /dev-worktree-c （未コミットの変更） /)
+    git.states.set(work, 'ahead')
+    assert.equal((await holdingOfId('B1@r'))?.free, true, 'open な PR になっているコミットは作りかけに数えない')
+    assert.deepEqual(await holdingOfId('C1@r'), { why: 'unpushed' })
+    assert.match(await mcpLine('C1@r'), /dev-worktree-c （PR 前のコミット） /)
+    // マージ済みの PR の head がいまの HEAD そのものなら、残っているだけのブランチ（main がそのファイルをあとで変えていても）
+    prs.merged = new Set([mergedKey('dev-worktree-c', FAKE_HEAD)])
+    assert.deepEqual(await holdingOfId('C1@r'), { free: true }, 'マージ済みのブランチが残っているだけ（PR の head と同じ）')
+    prs.merged = new Set([mergedKey('dev-worktree-c', 'b'.repeat(40))])
+    assert.deepEqual(await holdingOfId('C1@r'), { why: 'unpushed' }, 'マージのあとにコミットが足されている')
+    prs.merged = null
+    assert.deepEqual(await holdingOfId('C1@r'), { why: 'unpushed' }, 'マージ済みの一覧が引けなければ、空きにしない')
+    prs.merged = new Set()
+    git.states.set(work, 'merged')
+    assert.deepEqual(await holdingOfId('C1@r'), { free: true }, 'マージ済みのブランチが残っているだけ（中身が base と同じ。gh が無くても分かる）')
+    git.states.set(work, 'unknown')
+    assert.deepEqual(await holdingOfId('C1@r'), { why: 'unknown' })
+    assert.match(await mcpLine('C1@r'), /（状態不明）/)
+    git.states.set(work, 'clean')
+    assert.deepEqual(await holdingOfId('C1@r'), { free: true })
+  } finally {
+    git.states.delete(work)
+    prs.lists.clear()
+  }
+})
+
+test('sai_send: 着手の形の依頼は、送る時点で相手が空きでなければ送らずに理由を返す。一覧の印と同じ答え。着手の形でなければ今までどおり送る（#795）', async () => {
+  try {
+    for (const state of ['dirty', 'ahead', 'unknown'] as const) {
+      git.states.set(work, state)
+      const why = (await sessionsFor()).find((s) => s.id === 'C1@r')?.holding?.why
+      assert.ok(why, state)
+      const runs = runner.started.length
+      const res = await sendStart('C1@r', '#9600 に着手してください。\n本文と全コメントが正本です。')
+      assert.equal(res.status, 409, state)
+      assert.equal(((await res.json()) as { error: string }).error, startRefusal(why), '一覧に出した理由と、断りの文の理由が同じ')
+      assert.equal(runner.started.length, runs, '相手には何もしない')
+    }
+    // 着手の形でない依頼は確かめない（今までどおり）
+    git.states.set(work, 'dirty')
+    const runs = runner.started.length
+    assert.equal((await sendStart('C1@r', 'いまの PR の状況を教えてください。')).status, 202)
+    assert.equal(runner.started.length, runs + 1)
+  } finally {
+    git.states.delete(work)
+  }
+})
+
+test('sai_sessions: 止められない claude --bg（ターン中）が掴んでいるセッションは空きにしない。止まった bg は空きのまま（#795）', async () => {
+  const row0 = { sessionId: 'C1', id: 'abcd1234', kind: 'background', status: 'busy', state: '', cwd: work, pid: 0, name: '' }
+  try {
+    bgRows.set('C1', row0)
+    const held = (await sessionsFor()).find((s) => s.id === 'C1@r')?.holding
+    assert.deepEqual(held, { why: 'background' })
+    assert.match(await mcpLine('C1@r'), /（裏で動作中）/)
+    const res = await sendStart('C1@r', '#9700 に着手してください。')
+    assert.equal(res.status, 409)
+    assert.equal(((await res.json()) as { error: string }).error, startRefusal('background'))
+    // 止まった bg（誰も開いておらず、ターンも回っていない）は、送るときに SAI が止めて続けられるので空き
+    bgRows.set('C1', { ...row0, status: '', state: 'stopped' })
+    assert.deepEqual((await sessionsFor()).find((s) => s.id === 'C1@r')?.holding, { free: true })
+  } finally {
+    bgRows.clear()
+  }
+})

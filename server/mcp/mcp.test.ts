@@ -7,6 +7,8 @@ import type { Server } from 'node:http'
 import { appendFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { startRefusal } from '../../shared/holding.ts'
+import { FakeWorkGit } from '../git/workStateFake.ts'
 import { AGENT_TEXT_MAX_CHARS, AGENT_TURN_MAX_BUDGET_USD, deliveredFromTailnet } from '../../shared/agentMessages.ts'
 import { DEFAULT_PORT } from '../../shared/port.ts'
 import type { Replying } from '../../shared/types.ts'
@@ -69,6 +71,9 @@ const SENDER = { 'Tailscale-User-Login': 'me@example.com', 'X-Forwarded-For': '1
 const CI = { 'X-Forwarded-For': '100.64.0.3' }
 const CI_READ = { 'X-Forwarded-For': '100.64.0.4' }
 
+/** worktree の作りかけ（#795）。置いていない cwd は git のリポジトリでない扱い */
+const git = new FakeWorkGit()
+
 const now = new Date()
 const minutesAgo = (n: number) => new Date(now.getTime() - n * 60_000)
 
@@ -103,7 +108,7 @@ before(async () => {
     new Authenticator(async (addr) => whois[addr] ?? null),
     { tmux: { run: async () => { throw new Error('unused') } }, ps: async () => '', codexApp },
     undefined,
-    undefined,
+    git,
     undefined,
     // 使用量も、この Mac の ~/.claude / ~/.codex は読まない（読むと手元の枠の使い方で送れたり送れなかったりする。#275）
     usage as never,
@@ -220,6 +225,24 @@ test('/mcp: sai_send は、相手のエージェントの使用量の枠が残�
   } finally {
     usage.value = {}
   }
+})
+
+test('/mcp: 着手の形の sai_send は、相手が空きでなければ送らずに理由を返す。一覧の印と同じ理由（#795）', async () => {
+  git.states.set(work, 'dirty')
+  try {
+    const list = await call('sai_sessions', {}, SENDER)
+    const line = list.text.split('\n').find((l) => l.startsWith('- B1@r')) ?? ''
+    assert.match(line, /（未コミットの変更）/)
+    assert.doesNotMatch(line, /（空き）/)
+    const runs = runner.started.length
+    const refused = await call('sai_send', { to: 'B1@r', text: '#795 に着手してください。' }, SENDER)
+    assert.equal(refused.isError, true)
+    assert.equal(refused.text, startRefusal('dirty'))
+    assert.equal(runner.started.length, runs, '送っていない')
+  } finally {
+    git.states.delete(work)
+  }
+  assert.match((await call('sai_sessions', {}, SENDER)).text.split('\n').find((l) => l.startsWith('- B1@r')) ?? '', /（空き）/)
 })
 
 test('/mcp: 設定の既定の許可モード（#582）が素通しなら、何も選んでいないセッションにも tailnet から送れない', async () => {

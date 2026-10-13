@@ -71,6 +71,8 @@
   header .user-menu .menu .digest-engine .digest-model:focus { outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent); border-color: var(--accent); }
   header .user-menu .menu .digest-engine .note { padding: 0; white-space: normal; }
   header .user-menu .menu .digest-engine .note.error { color: var(--claude); }
+  /* PR の要約を作る口（PrBriefEngineControls。#790）。一言の口の欄と同じ形に、見出しを 1 行足す */
+  header .user-menu .menu .pr-brief-engine .label { padding: 6px 12px 2px; font-size: 11px; color: var(--muted); }
   /* 許可を Jev で予想するかの入切（#491） */
   header .user-menu .menu .jev-controls { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--line); }
   header .user-menu .menu .jev-controls .note { padding: 0 12px 6px; white-space: normal; }

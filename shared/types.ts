@@ -1993,6 +1993,13 @@ export interface SettingsResponse {
   digest_model: string
   /** 実際に使うモデル（`digest_model` が空なら口の既定。openai には既定が無いので空） */
   model: string
+  /**
+   * PR の要約（#790）を作る口。空は「一言と同じ口」（既定）。`claude` / `openai` を選ぶと、一言の入切・口とは別に、要約だけその口で作る
+   * （送り先 `SAI_DIGEST_URL` と鍵は一言と同じ環境変数のまま）
+   */
+  pr_brief_provider: DigestProvider | ''
+  /** PR の要約を作るモデル。空は口の既定（claude は haiku。openai は既定が無いので作らない）。`pr_brief_provider` が空なら使わない */
+  pr_brief_model: string
   /** Linear の workspace（URL の linear.app/<workspace>/ の部分）。一言の中の ABC-123 のような識別子のリンク先。空なら組まない */
   linear_workspace: string
   /** 許可を Jev で予想するか（#491。settings.json の `jev`。既定は入） */
@@ -2039,6 +2046,10 @@ export interface SettingsRequest {
   digest_provider?: DigestProvider
   /** 一言を作るモデル。空文字で「口の既定」 */
   digest_model?: string
+  /** PR の要約（#790）を作る口。空文字で「一言と同じ口」 */
+  pr_brief_provider?: DigestProvider | ''
+  /** PR の要約を作るモデル。空文字で「口の既定」 */
+  pr_brief_model?: string
   /** 許可を Jev で予想するか（#491） */
   jev?: boolean
   /** 自動で常に許可する閾値（#499）。0 で「しない」、それ以外は 0.5〜1 */

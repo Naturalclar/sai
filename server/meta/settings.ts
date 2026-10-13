@@ -33,6 +33,13 @@ export interface Settings {
   /** 一言を作るモデル。空なら口の既定（claude は haiku、openai は既定が無いので作らない） */
   digest_model: string
   /**
+   * PR の要約（#790）を作る口。**空（既定）は「一言と同じ口」**（一言も案も切っていれば作れない）。`claude` / `openai` を選ぶと、
+   * 一言の入切・口とは別に、要約だけその口で作る（手元のモデルで一言を作りながら、要約だけ `claude -p` に回す、など）
+   */
+  pr_brief_provider: DigestProvider | ''
+  /** PR の要約を作るモデル。空なら口の既定（claude は haiku、openai は既定が無いので作らない） */
+  pr_brief_model: string
+  /**
    * 許可を Jev で予想するか（#491）。**既定は入**（鍵 JEV_API_KEY が無ければ入でも何も送らないので、鍵を置いた人だけに効く）。
    * 切ったことだけを覚える（`false` を書く）
    */
@@ -59,7 +66,7 @@ export interface Settings {
 }
 
 /** 既定。テストもこれを使う（キーを足したらここ 1 か所） */
-export const DEFAULT_SETTINGS: Settings = { persona: DEFAULT_PERSONA, linear_workspace: '', digest: false, digest_provider: 'claude', digest_model: '', jev: true, jev_auto: 0, paste_to_file: false, reply_mode: '', send_across: [] }
+export const DEFAULT_SETTINGS: Settings = { persona: DEFAULT_PERSONA, linear_workspace: '', digest: false, digest_provider: 'claude', digest_model: '', pr_brief_provider: '', pr_brief_model: '', jev: true, jev_auto: 0, paste_to_file: false, reply_mode: '', send_across: [] }
 
 export class SettingsStore {
   readonly path: string
@@ -81,6 +88,8 @@ export class SettingsStore {
       if (typeof raw?.next_ask === 'boolean') settings.next_ask = raw.next_ask
       if (isDigestProvider(raw?.digest_provider)) settings.digest_provider = raw.digest_provider
       if (isDigestModel(raw?.digest_model)) settings.digest_model = raw.digest_model
+      if (isDigestProvider(raw?.pr_brief_provider)) settings.pr_brief_provider = raw.pr_brief_provider
+      if (isDigestModel(raw?.pr_brief_model)) settings.pr_brief_model = raw.pr_brief_model
       if (raw?.jev === false) settings.jev = false
       if (isJevAuto(raw?.jev_auto)) settings.jev_auto = raw.jev_auto
       if (raw?.paste_to_file === true) settings.paste_to_file = true

@@ -132,12 +132,12 @@ import { screenWait } from './reply/softWait.ts'
 import { clearSettled, settledKey, WaitingSettle } from './reply/waitingSettle.ts'
 import type { WaitingSettleSource } from './reply/waitingSettle.ts'
 import type { CodexDialogSource, DialogTarget } from './reply/codexDialogs.ts'
-import { DIGEST_FILE, DigestStore, createDigester, isTimeout } from './digest/digest.ts'
+import { DEFAULT_DIGEST_MODEL, DIGEST_FILE, DigestStore, createDigester, isTimeout, summarizerFactory } from './digest/digest.ts'
 import { FEEDBACK_FILE, FeedbackStore } from './digest/feedback.ts'
 import { DIGEST_NOTE_MAX, isDigestFeedbackReason, isDigestUsageReason } from '../shared/digestFeedback.ts'
 import type { DigestFeedbackRequest, DigestFeedbackResponse } from '../shared/digestFeedback.ts'
 import { isDigestModel, isDigestProvider } from '../shared/digestSettings.ts'
-import type { Digester } from './digest/digest.ts'
+import type { Digester, Summarizer, SummarizerFactory } from './digest/digest.ts'
 import { META_FILE, MetaStore } from './meta/meta.ts'
 import { collectPermissions } from './approvals/permissions.ts'
 import { isReplyPermissionMode, modeName, modeSkipsRules, REPLY_MODES, replyModeOf, skipModeInArgs } from '../shared/permissions.ts'
@@ -628,6 +628,11 @@ export interface TerminalDeps {
   codexImages?: CodexImages
   /** 画像の軽い版を作る口（#589）。テストでは偽の縮める口を渡した Thumbnails か noThumbs */
   thumbs?: ThumbMaker
+  /**
+   * PR の要約（#790）のために、一言とは別の口を組む関数（設定の `pr_brief_provider` を選んだときだけ呼ぶ）。
+   * 既定は一言と同じ作り方（`summarizerFactory()`。送り先と鍵は環境変数）。テストは偽物を渡す
+   */
+  briefMouth?: SummarizerFactory
   /** ループ（#634）が見る時計。テストでは進める */
   loopNow?: () => number
   /** ループを見に行く間隔（既定 `LOOP_TICK_MS`）。テストは 0 にしてタイマーを立てず、ポーリングのついでだけで回す */
@@ -1498,6 +1503,8 @@ export function createApp(
       provider: digest.provider,
       digest_model: s.digest_model,
       model: digest.model,
+      pr_brief_provider: s.pr_brief_provider,
+      pr_brief_model: s.pr_brief_model,
       jev_on: s.jev,
       jev_ready: jevRisk.ready,
       jev_auto: s.jev_auto,
@@ -1521,13 +1528,29 @@ export function createApp(
   }
 
   // PR の要約（#790）。覚える置き場は記録の隣（派生データ。一言の digest.jsonl とは別）
+  const makeBriefMouth: SummarizerFactory = terminal.briefMouth ?? summarizerFactory(store.directory, process.env, (line) => console.error(line.replace(/^digest:/, 'pr-brief:')))
   const briefs = new PrBriefStore(join(store.directory, PR_BRIEFS_FILE))
   /** 同じ PR の要約を同時に 2 本作らない（押した直後の二重の要求など）。鍵は repo#番号 */
   const briefJobs = new Map<string, Promise<{ status: number; error: string } | PrBriefResponse>>()
-  /** 要約の材料の送り先（一言と同じ口）。口が無ければ空。`digestReady` を待ってから呼ぶ */
-  const briefVia = (): string => {
-    const mouth = digest.mouth
-    return mouth ? mouth.where || `${digest.provider} ${digest.model}`.trim() : ''
+  /** 要約のために別に組んだ口（設定の `pr_brief_provider` を選んだとき）。口とモデルが同じ間は使い回す */
+  let briefOwn: { key: string; mouth: Summarizer } | null = null
+  /**
+   * 要約を作る口と、材料の送り先（画面に書く）。**既定は一言と同じ口**（`digest.mouth`。一言も案も切っていれば無い）。
+   * 設定で `pr_brief_provider` を選んでいれば、一言の入切に依らずその口（モデルが空なら口の既定。openai は既定が無いので無い）。
+   * 口が無ければ null
+   */
+  const briefMouth = async (): Promise<{ mouth: Summarizer; via: string } | null> => {
+    await digestReady
+    const s = await settingsStore.get()
+    if (!s.pr_brief_provider) {
+      const mouth = digest.mouth
+      return mouth ? { mouth, via: mouth.where || `${digest.provider} ${digest.model}`.trim() } : null
+    }
+    const model = s.pr_brief_model || (s.pr_brief_provider === 'claude' ? DEFAULT_DIGEST_MODEL : '')
+    if (!model) return null
+    const key = `${s.pr_brief_provider}|${model}`
+    if (briefOwn?.key !== key) briefOwn = { key, mouth: makeBriefMouth(s.pr_brief_provider, model) }
+    return { mouth: briefOwn.mouth, via: briefOwn.mouth.where || `${s.pr_brief_provider} ${model}` }
   }
 
   /**
@@ -1543,7 +1566,6 @@ export function createApp(
     const repo = parts.length === 3 ? pickKnownRepo(known, `${owner}/${name}`) : ''
     if (!repo || !isPrNumber(n)) return error(res, 404, 'not found')
     if (!prs.available) return error(res, 404, 'gh を使わない設定です（SAI_GH=0）')
-    await digestReady
     const key = `${repo}#${n}`
     let job = briefJobs.get(key)
     if (!job) {
@@ -1556,9 +1578,9 @@ export function createApp(
   }
 
   const makePrBrief = async (repo: string, number: number): Promise<{ status: number; error: string } | PrBriefResponse> => {
-    const mouth = digest.mouth
-    const via = briefVia()
-    if (!mouth) return { status: 409, error: '要約を作る口がありません（設定で一言を入にすると、同じ口で作ります）' }
+    const found = await briefMouth()
+    if (!found) return { status: 409, error: '要約を作る口がありません（設定で一言を入にするか、PR の要約を作る口を選んでください）' }
+    const { mouth, via } = found
     const [view, comments, lineComments] = await Promise.all([
       prs.view(repo, number),
       prs.comments(repo, number).catch(() => null),
@@ -1718,6 +1740,15 @@ export function createApp(
       if (!isDigestModel(model)) return error(res, 400, 'digest_model はモデル名（英数字で始まり、英数字と . _ : / - [ ] だけ、64 文字まで。空なら口の既定）で送ってください')
       patch.digest_model = model
     }
+    if (b.pr_brief_provider !== undefined) {
+      if (b.pr_brief_provider !== '' && !isDigestProvider(b.pr_brief_provider)) return error(res, 400, 'pr_brief_provider は claude か openai、または空（一言と同じ口）で送ってください')
+      patch.pr_brief_provider = b.pr_brief_provider
+    }
+    if (b.pr_brief_model !== undefined) {
+      const model = typeof b.pr_brief_model === 'string' ? b.pr_brief_model.trim() : b.pr_brief_model
+      if (!isDigestModel(model)) return error(res, 400, 'pr_brief_model はモデル名（英数字で始まり、英数字と . _ : / - [ ] だけ、64 文字まで。空なら口の既定）で送ってください')
+      patch.pr_brief_model = model
+    }
     if (b.next_ask !== undefined) {
       if (typeof b.next_ask !== 'boolean') return error(res, 400, 'next_ask は true か false で送ってください')
       patch.next_ask = b.next_ask
@@ -1750,7 +1781,7 @@ export function createApp(
       if (!isJevAuto(b.jev_auto)) return error(res, 400, 'jev_auto は 0（しない）か 0.5〜1 の数で送ってください')
       patch.jev_auto = b.jev_auto
     }
-    if (Object.keys(patch).length === 0) return error(res, 400, 'persona / linear_workspace / digest / next_ask / digest_provider / digest_model / paste_to_file / reply_mode / send_across_add / send_across_remove / jev / jev_auto のどれかを送ってください')
+    if (Object.keys(patch).length === 0) return error(res, 400, 'persona / linear_workspace / digest / next_ask / digest_provider / digest_model / pr_brief_provider / pr_brief_model / paste_to_file / reply_mode / send_across_add / send_across_remove / jev / jev_auto のどれかを送ってください')
     // 起動時の組み立て（settings.json の読み込み）が済んでから書く。後から古い値で組み直されないように
     await digestReady
     const saved = await settingsStore.set(patch)
@@ -5439,11 +5470,10 @@ export function createApp(
           prs.lineComments(repo, Number(n)).catch(() => null),
           // 覚えている要約（#790）。**ここでは作らない**（読むだけ。作るのは POST …/brief）
           briefs.get(repo, Number(n)).catch(() => undefined),
-          digestReady,
         ])
         if (!view) return error(res, 502, 'gh で PR を読めませんでした')
         const out: PrDetailResponse = { repo, pr: view.pr, diff: { files: [], patch: '', truncated: false } }
-        const via = briefVia()
+        const via = (await briefMouth())?.via
         if (via) out.brief_via = via
         if (brief) out.brief = brief
         if (comments) {

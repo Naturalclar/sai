@@ -17,6 +17,7 @@ import { localDate } from './rows/aggregate.ts'
 import { row } from './rows/aggregate.test.ts'
 import { DIGEST_FILE, DigestStore, Digester } from './digest/digest.ts'
 import type { Summarizer } from './digest/digest.ts'
+import type { DigestProvider, SettingsResponse } from '../shared/types.ts'
 import { PR_BRIEFS_FILE, PR_BRIEFS_MAX, PrBriefStore, briefFrom } from './git/prBriefs.ts'
 import type { PrBrowser, PrView } from './git/prs.ts'
 
@@ -70,7 +71,10 @@ class FakePrs implements PrBrowser {
 }
 
 class FakeSummarizer implements Summarizer {
-  readonly where = 'http://127.0.0.1:1/v1'
+  readonly where: string
+  constructor(where = 'http://127.0.0.1:1/v1') {
+    this.where = where
+  }
   prompts: string[] = []
   answer: string | Error = '何を変える PR か\n作り物の要約'
   /** 立てると、放すまで答えない（同時の要求を見る） */
@@ -94,6 +98,8 @@ const prs = new FakePrs()
 const fake = new FakeSummarizer()
 let on: Booted
 let off: Booted
+/** 設定で PR の要約の口を選んだときに組まれた口（口とモデルを覚える） */
+const built: { provider: DigestProvider; model: string; mouth: FakeSummarizer }[] = []
 
 async function boot(name: string, enabled: boolean): Promise<Booted> {
   const feedDir = join(dir, name)
@@ -102,7 +108,16 @@ async function boot(name: string, enabled: boolean): Promise<Booted> {
   await writeFile(join(feedDir, `${localDate(now.toISOString())}.jsonl`), `${JSON.stringify(row(now, 'S1', { repo: 'known', cwd: '/w/known', project: 'o/known', remote: 'https://github.com/o/known' }))}\n`)
   const store = new FeedStore(feedDir)
   const digester = new Digester(new DigestStore(join(feedDir, DIGEST_FILE)), fake, { enabled, model: 'm', persona: async () => 'none' })
-  const app = createApp(store, join(dir, 'dist'), undefined, undefined, undefined, digester, undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, prs)
+  const terminal = {
+    tmux: { run: async () => { throw new Error('unused') } },
+    ps: async () => '',
+    briefMouth: (provider: DigestProvider, model: string) => {
+      const mouth = new FakeSummarizer(`fake ${provider} ${model}`)
+      built.push({ provider, model, mouth })
+      return mouth
+    },
+  }
+  const app = createApp(store, join(dir, 'dist'), undefined, undefined, undefined, digester, undefined, terminal, undefined, undefined, undefined, undefined, undefined, undefined, prs)
   const server = createServer((req, res) => void app(req, res))
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const addr = server.address()
@@ -271,4 +286,54 @@ test('置き場: 形の違うものは読まない。上限を超えたら古い
   assert.equal((await store.get('o/known', PR_BRIEFS_MAX))?.text, `t${PR_BRIEFS_MAX}`)
   // 別のインスタンスで読み直しても同じ
   assert.equal((await new PrBriefStore(path).get('o/known', 1))?.text, 't1')
+})
+
+const putSettings = async (b: Booted, body: object) => fetch(`${b.base}/api/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+
+test('設定で PR の要約の口を選ぶと、一言を切っていてもその口で作る。一言の口は呼ばない。空に戻すと一言と同じ口に戻る', async () => {
+  fake.prompts = []
+  built.length = 0
+  let res = await putSettings(off, { pr_brief_provider: 'claude' })
+  assert.equal(res.status, 200)
+  assert.equal(((await res.json()) as SettingsResponse).pr_brief_provider, 'claude')
+  try {
+    // モデルが空なら口の既定
+    assert.equal((await detail(off, 20)).brief_via, 'fake claude haiku')
+    const body = (await (await post(off, '/api/prs/o/known/20/brief')).json()) as PrBriefResponse
+    assert.equal(body.made, true)
+    assert.equal(body.brief.via, 'fake claude haiku')
+    assert.deepEqual(built.map((b) => [b.provider, b.model, b.mouth.prompts.length]), [['claude', 'haiku', 1]])
+    assert.equal(fake.prompts.length, 0)
+    // 同じ口・同じモデルの間は組み直さない。モデルを変えたら組み直す
+    await post(off, '/api/prs/o/known/21/brief')
+    assert.equal(built.length, 1)
+    res = await putSettings(off, { pr_brief_model: ' sonnet ' })
+    assert.equal(((await res.json()) as SettingsResponse).pr_brief_model, 'sonnet')
+    assert.equal((await detail(off, 20)).brief_via, 'fake claude sonnet')
+    assert.equal(built.length, 2)
+    // openai の口はモデルが無ければ作れない
+    await putSettings(off, { pr_brief_provider: 'openai', pr_brief_model: '' })
+    assert.equal((await detail(off, 22)).brief_via, undefined)
+    assert.equal((await post(off, '/api/prs/o/known/22/brief')).status, 409)
+    // 形の違う値は断る
+    assert.equal((await putSettings(off, { pr_brief_provider: 'gemini' })).status, 400)
+    assert.equal((await putSettings(off, { pr_brief_model: '--dangerously-skip-permissions' })).status, 400)
+  } finally {
+    await putSettings(off, { pr_brief_provider: '', pr_brief_model: '' })
+  }
+  assert.equal((await detail(off, 23)).brief_via, undefined)
+})
+
+test('一言を入にしていても、PR の要約の口を選んでいればそちらで作る', async () => {
+  fake.prompts = []
+  built.length = 0
+  await putSettings(on, { pr_brief_provider: 'claude', pr_brief_model: 'opus' })
+  try {
+    const body = (await (await post(on, '/api/prs/o/known/30/brief')).json()) as PrBriefResponse
+    assert.equal(body.brief.via, 'fake claude opus')
+    assert.equal(fake.prompts.length, 0)
+  } finally {
+    await putSettings(on, { pr_brief_provider: '', pr_brief_model: '' })
+  }
+  assert.equal((await detail(on, 31)).brief_via, 'http://127.0.0.1:1/v1')
 })

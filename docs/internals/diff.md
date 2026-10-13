@@ -123,6 +123,8 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
   - 設定の欄は `web/src/PrBriefEngineControls.tsx`（自分のメニュー）。値の検査は一言と同じ `isDigestProvider()` / `isDigestModel()`。
 - 返ってきた文は `cleanBrief()`（コードの囲みと行末の空白を外し、`PR_BRIEF_MAX_CHARS` で切る）。画面は `white-space: pre-wrap` の文字として描く。
 - 覚えるのは `server/git/prBriefs.ts` の `PrBriefStore`（`pr-summaries.json`）。鍵は repo と番号で、head の SHA は値の側（古い要約も「古い」と添えて出すため）。同じ head・同じコメントの数・同じ送り先（`via`）なら口を呼ばない。同じ PR への同時の要求は 1 本にまとめる（`briefJobs`）。
+- 送り先の文字（`via`）は口の `where` に、入っていなければモデルの名前を添えたもの（openai の口の `where` は URL だけなので、モデルだけ替えたときにも変わるように）。
+- `PrBriefBox` は、この画面で作った要約を、同じ中身を見ている間は古いと言わない（サーバは押したときに PR を読み直すので、開いたあとの push で head が画面より新しくなる）。
 - 画面は押すときに、出していた送り先を body の `via` で送る。いまの口（`briefMouth()`）と違えば 409（PR を開いたまま設定で口を替えた画面から、表示と違う口へ渡さない）。
 - 古いか・増えたコメントの数は画面が `briefState()` で出す（コメントの数は `prCommentCount()`。サーバが覚えるときの数え方と同じ）。
 

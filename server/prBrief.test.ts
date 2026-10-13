@@ -112,7 +112,8 @@ async function boot(name: string, enabled: boolean): Promise<Booted> {
     tmux: { run: async () => { throw new Error('unused') } },
     ps: async () => '',
     briefMouth: (provider: DigestProvider, model: string) => {
-      const mouth = new FakeSummarizer(`fake ${provider} ${model}`)
+      // 本物と同じく、openai の口の where は URL だけ（モデルの名前が入らない）
+      const mouth = new FakeSummarizer(provider === 'openai' ? 'http://fake.invalid/v1' : `fake ${provider} ${model}`)
       built.push({ provider, model, mouth })
       return mouth
     },
@@ -142,7 +143,7 @@ test('開いただけでは作らない。送り先は出す', async () => {
   fake.prompts = []
   const body = await detail(on, 7)
   assert.equal(body.summary, undefined)
-  assert.equal(body.summary_via, 'http://127.0.0.1:1/v1')
+  assert.equal(body.summary_via, 'http://127.0.0.1:1/v1（m）')
   assert.equal(fake.prompts.length, 0)
 })
 
@@ -154,7 +155,7 @@ test('押すと作って覚える。材料は題名・本文・差分で、秘�
   assert.equal(body.made, true)
   assert.equal(body.summary.text, '何を変える PR か\n作り物の要約')
   assert.equal(body.summary.head_sha, prs.headSha)
-  assert.equal(body.summary.via, 'http://127.0.0.1:1/v1')
+  assert.equal(body.summary.via, 'http://127.0.0.1:1/v1（m）')
   assert.deepEqual(body.summary.notes, ['秘密に見える名前のファイル 1 個は渡していません'])
   assert.equal(fake.prompts.length, 1)
   const prompt = fake.prompts[0] ?? ''
@@ -324,6 +325,14 @@ test('設定で PR の要約の口を選ぶと、一言を切っていてもそ�
     await putSettings(off, { pr_summary_provider: 'openai', pr_summary_model: '' })
     assert.equal((await detail(off, 22)).summary_via, undefined)
     assert.equal((await post(off, '/api/prs/o/known/22/summary')).status, 409)
+    // openai の口はモデルだけ替えても送り先の文字が変わり、作り直す（where は URL だけなので、モデルの名前を添える）
+    await putSettings(off, { pr_summary_model: 'model-a' })
+    assert.equal((await detail(off, 20)).summary_via, 'http://fake.invalid/v1（model-a）')
+    assert.equal(((await (await post(off, '/api/prs/o/known/20/summary')).json()) as PrBriefResponse).made, true)
+    await putSettings(off, { pr_summary_model: 'model-b' })
+    const swapped = (await (await post(off, '/api/prs/o/known/20/summary')).json()) as PrBriefResponse
+    assert.equal(swapped.made, true)
+    assert.equal(swapped.summary.via, 'http://fake.invalid/v1（model-b）')
     // 形の違う値は断る
     assert.equal((await putSettings(off, { pr_summary_provider: 'gemini' })).status, 400)
     assert.equal((await putSettings(off, { pr_summary_model: '--dangerously-skip-permissions' })).status, 400)
@@ -344,5 +353,5 @@ test('一言を入にしていても、PR の要約の口を選んでいれば�
   } finally {
     await putSettings(on, { pr_summary_provider: '', pr_summary_model: '' })
   }
-  assert.equal((await detail(on, 31)).summary_via, 'http://127.0.0.1:1/v1')
+  assert.equal((await detail(on, 31)).summary_via, 'http://127.0.0.1:1/v1（m）')
 })

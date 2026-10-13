@@ -13,20 +13,23 @@ import { briefButtonLabel, newerBrief } from './prBriefLabels'
  * - 作ったあとに push があれば「古い要約」、コメントが増えていればその数を添える
  */
 export function PrBriefBox({ repo, number, data, now }: { repo: string; number: number; data: PrDetailResponse; now: number }) {
-  const [made, setMade] = useState<PrBrief | null>(null)
+  // この画面で作った要約と、そのとき見えていた PR の中身。**同じ中身を見ている間は、作ったばかりの要約を古いと言わない**
+  // （サーバは押したときに PR を読み直すので、開いたあとに push があると head が画面より新しい。#794 のレビュー）。「更新」で中身が変われば比べ直す
+  const [made, setMade] = useState<{ brief: PrBrief; data: PrDetailResponse } | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const brief = newerBrief(made, data.summary ?? null)
+  const brief = newerBrief(made?.brief ?? null, data.summary ?? null)
   const via = data.summary_via ?? ''
   if (!brief && !via) return null
-  const state = brief ? briefState(brief, data.pr.head_sha, prCommentCount(data)) : null
+  const fresh = made !== null && made.brief === brief && made.data === data
+  const state = brief ? (fresh ? { stale: false, added: 0 } : briefState(brief, data.pr.head_sha, prCommentCount(data))) : null
   const label = briefButtonLabel(brief !== null, state, Boolean(brief && via && brief.via !== via))
   const make = () => {
     setBusy(true)
     setError('')
     api.makePrBrief(repo, number, via).then(
       (r) => {
-        setMade(r.summary)
+        setMade({ brief: r.summary, data })
         setBusy(false)
       },
       (err: unknown) => {

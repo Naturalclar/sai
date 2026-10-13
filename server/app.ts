@@ -1542,15 +1542,21 @@ export function createApp(
   const briefMouth = async (): Promise<{ mouth: Summarizer; via: string } | null> => {
     await digestReady
     const s = await settingsStore.get()
+    // 送り先の文字にはモデルの名前も入れる（openai の口の `where` は URL だけ。モデルだけ替えたときに、画面の送り先も
+    // 「作り直すか」の判定も変わらなかった。#794 の再レビュー）
+    const viaOf = (mouth: Summarizer, provider: string, model: string): string => {
+      const where = mouth.where || provider
+      return !model || where.includes(model) ? where : `${where}（${model}）`
+    }
     if (!s.pr_summary_provider) {
       const mouth = digest.mouth
-      return mouth ? { mouth, via: mouth.where || `${digest.provider} ${digest.model}`.trim() } : null
+      return mouth ? { mouth, via: viaOf(mouth, digest.provider, digest.model) } : null
     }
     const model = s.pr_summary_model || (s.pr_summary_provider === 'claude' ? DEFAULT_DIGEST_MODEL : '')
     if (!model) return null
     const key = `${s.pr_summary_provider}|${model}`
     if (briefOwn?.key !== key) briefOwn = { key, mouth: makeBriefMouth(s.pr_summary_provider, model) }
-    return { mouth: briefOwn.mouth, via: briefOwn.mouth.where || `${s.pr_summary_provider} ${model}` }
+    return { mouth: briefOwn.mouth, via: viaOf(briefOwn.mouth, s.pr_summary_provider, model) }
   }
 
   /**

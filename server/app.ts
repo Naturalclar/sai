@@ -1556,16 +1556,25 @@ export function createApp(
   /**
    * POST /api/prs/<owner>/<repo>/<番号>/summary（#790）。PR の題名・本文・差分・コメントから要約を作って覚える。
    * 同一オリジンは呼ぶ側で確かめてある。**GitHub には書かない**（読むのは画面と同じ `gh` の形だけ。新しい形は足さない）。
-   * 宛先は記録で知っているリポジトリから引き、body は読まない（材料も送り先もリクエストから受けない）。
+   * 宛先は記録で知っているリポジトリから引き、材料も送り先もリクエストから受けない（body の `via` は、画面が出していた送り先との突き合わせにだけ使う）。
    * 口は一言と同じ（`digest.mouth`）だが、列・失敗の数え・`digest.jsonl` には混ぜない。
-   * 同じ head・同じコメントの数で覚えていれば、口を呼ばずにそれを返す
+   * 同じ head・同じコメントの数・同じ送り先で覚えていれば、口を呼ばずにそれを返す
    */
-  const postPrBrief = async (res: ServerResponse, known: string[], rest: string) => {
+  const postPrBrief = async (req: IncomingMessage, res: ServerResponse, known: string[], rest: string) => {
     const parts = rest.split('/')
     const [owner = '', name = '', n = ''] = parts
     const repo = parts.length === 3 ? pickKnownRepo(known, `${owner}/${name}`) : ''
     if (!repo || !isPrNumber(n)) return error(res, 404, 'not found')
     if (!prs.available) return error(res, 404, 'gh を使わない設定です（SAI_GH=0）')
+    // 画面がボタンの横に出していた送り先。**いまの口と違えば作らない**（PR を開いたまま設定で口を替えると、画面の送り先が古いまま
+    // 別の口へ材料が渡る。#794 のレビュー）。body のほかの項目は読まない
+    let shown: unknown
+    try {
+      shown = ((await readJson(req, 4096)) as { via?: unknown } | null)?.via
+    } catch {
+      return error(res, 400, 'invalid JSON body')
+    }
+    if (typeof shown === 'string' && shown !== ((await briefMouth())?.via ?? '')) return error(res, 409, '要約の送り先が変わっています。「更新」で読み直してから押してください')
     const key = `${repo}#${n}`
     let job = briefJobs.get(key)
     if (!job) {
@@ -1590,7 +1599,8 @@ export function createApp(
     if (!view.pr.head_sha) return { status: 502, error: 'PR の head を読めませんでした' }
     const count = (comments ? comments.comments.length + comments.omitted : 0) + (lineComments ? lineComments.comments.length + lineComments.omitted : 0)
     const had = await briefs.get(repo, number).catch(() => undefined)
-    if (had && had.head_sha === view.pr.head_sha && had.comments === count) return { summary: had, made: false }
+    // 口を替えたあとは、同じ材料でも新しい口で作り直す（前の口の出来が悪くて替えたときに、作り直せるように）
+    if (had && had.head_sha === view.pr.head_sha && had.comments === count && had.via === via) return { summary: had, made: false }
     const { prompt, trim } = prBriefPrompt({
       title: view.pr.title,
       body: view.pr.body,
@@ -5445,7 +5455,7 @@ export function createApp(
         const { sessions: raw } = await store.sessions(PRS_REPO_DAYS)
         const known = knownRepos(await fillRepo(projects, raw))
         if (isPrReview) return await postPrReview(req, res, known, path.slice(PRS_PATH.length + 1, -PR_REVIEW_SUFFIX.length))
-        if (isPrBrief) return await postPrBrief(res, known, path.slice(PRS_PATH.length + 1, -PR_BRIEF_SUFFIX.length))
+        if (isPrBrief) return await postPrBrief(req, res, known, path.slice(PRS_PATH.length + 1, -PR_BRIEF_SUFFIX.length))
         if (path === PRS_PATH) {
           const fresh = q.get('fresh') === '1'
           const repos: PrRepo[] = await Promise.all(

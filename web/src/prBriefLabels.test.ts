@@ -10,6 +10,7 @@ test('ボタン: まだ無ければ「作る」、古い・コメントが増え
   assert.equal(briefButtonLabel(true, { stale: true, added: 0 }), '要約を作り直す')
   assert.equal(briefButtonLabel(true, { stale: false, added: 2 }), '要約を作り直す')
   assert.equal(briefButtonLabel(true, { stale: false, added: 0 }), '')
+  assert.equal(briefButtonLabel(true, { stale: false, added: 0 }, true), '要約を作り直す', '作ったときと口が違う')
 })
 
 test('この画面で作ったものとサーバが覚えていたもののうち、新しい方を出す', () => {

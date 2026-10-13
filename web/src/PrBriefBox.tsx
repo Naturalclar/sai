@@ -20,11 +20,11 @@ export function PrBriefBox({ repo, number, data, now }: { repo: string; number: 
   const via = data.summary_via ?? ''
   if (!brief && !via) return null
   const state = brief ? briefState(brief, data.pr.head_sha, prCommentCount(data)) : null
-  const label = briefButtonLabel(brief !== null, state)
+  const label = briefButtonLabel(brief !== null, state, Boolean(brief && via && brief.via !== via))
   const make = () => {
     setBusy(true)
     setError('')
-    api.makePrBrief(repo, number).then(
+    api.makePrBrief(repo, number, via).then(
       (r) => {
         setMade(r.summary)
         setBusy(false)

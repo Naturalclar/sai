@@ -8,9 +8,10 @@ export function newerBrief(a: PrBrief | null, b: PrBrief | null): PrBrief | null
 }
 
 /**
- * 作るボタンの文字。**いまの head・いまのコメントの数で作ってあれば空**（押しても同じものが返るだけなので出さない）
+ * 作るボタンの文字。**いまの head・いまのコメントの数で作ってあれば空**（押しても同じものが返るだけなので出さない）。
+ * **作ったときと口が違えば出す**（設定で要約の口を替えたあと、新しい口で作り直せるように。#794 のレビュー）
  */
-export function briefButtonLabel(has: boolean, state: { stale: boolean; added: number } | null): string {
+export function briefButtonLabel(has: boolean, state: { stale: boolean; added: number } | null, otherMouth = false): string {
   if (!has || !state) return '要約を作る'
-  return state.stale || state.added > 0 ? '要約を作り直す' : ''
+  return state.stale || state.added > 0 || otherMouth ? '要約を作り直す' : ''
 }

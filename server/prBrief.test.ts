@@ -304,6 +304,11 @@ test('設定で PR の要約の口を選ぶと、一言を切っていてもそ�
     assert.equal(body.summary.via, 'fake claude haiku')
     assert.deepEqual(built.map((b) => [b.provider, b.model, b.mouth.prompts.length]), [['claude', 'haiku', 1]])
     assert.equal(fake.prompts.length, 0)
+    // 画面が出していた送り先がいまの口と違えば作らない（開いたまま設定を替えた画面）。合っていれば通る
+    const stale = await fetch(`${off.base}/api/prs/o/known/20/summary`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ via: 'http://127.0.0.1:1/v1' }) })
+    assert.equal(stale.status, 409)
+    const same = await fetch(`${off.base}/api/prs/o/known/20/summary`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ via: 'fake claude haiku' }) })
+    assert.equal(((await same.json()) as PrBriefResponse).made, false)
     // 同じ口・同じモデルの間は組み直さない。モデルを変えたら組み直す
     await post(off, '/api/prs/o/known/21/summary')
     assert.equal(built.length, 1)
@@ -311,6 +316,10 @@ test('設定で PR の要約の口を選ぶと、一言を切っていてもそ�
     assert.equal(((await res.json()) as SettingsResponse).pr_summary_model, 'sonnet')
     assert.equal((await detail(off, 20)).summary_via, 'fake claude sonnet')
     assert.equal(built.length, 2)
+    // 口を替えたら、同じ head・同じコメントの数でも新しい口で作り直す
+    const again = (await (await post(off, '/api/prs/o/known/20/summary')).json()) as PrBriefResponse
+    assert.equal(again.made, true)
+    assert.equal(again.summary.via, 'fake claude sonnet')
     // openai の口はモデルが無ければ作れない
     await putSettings(off, { pr_summary_provider: 'openai', pr_summary_model: '' })
     assert.equal((await detail(off, 22)).summary_via, undefined)

@@ -44,6 +44,16 @@ test('秘密に見える名前から別の名前へ移した差分も渡さな�
   assert.equal(trim.files_secret, 1)
 })
 
+test('中身に ファイル名の行に見える行（`--- ` / `+++ `）があっても、秘密に見えるパスは見出しの名前で落とす', () => {
+  const added = ['diff --git a/.env b/.env', 'new file mode 100644', '--- /dev/null', '+++ b/.env', '@@ -0,0 +1,2 @@', '+KEY=ひみつの値', '+++ note', ''].join('\n')
+  const changed = ['diff --git a/db/secrets.sql b/db/secrets.sql', '--- a/db/secrets.sql', '+++ b/db/secrets.sql', '@@ -1,2 +1,2 @@', '--- old comment', '+++ x', '-pw=前の値', '+pw=後の値', ''].join('\n')
+  const { prompt, trim } = prBriefPrompt(input({ patch: added + changed + file('src/a.ts', ['+見せる行']) }))
+  assert.deepEqual(briefFiles(added + changed).map((f) => [f.path, f.skip]), [['.env', 'secret'], ['db/secrets.sql', 'secret']])
+  for (const hidden of ['ひみつの値', '後の値', 'note', 'old comment']) assert.ok(!prompt.includes(hidden), hidden)
+  assert.ok(prompt.includes('+見せる行'))
+  assert.equal(trim.files_secret, 2)
+})
+
 test('大きい差分は頭から決まった字数まで。行の途中では切らず、切ったことを残す', () => {
   const lines = Array.from({ length: 2000 }, (_, i) => `+行${String(i).padStart(4, '0')}のなかみ`)
   const { prompt, trim } = prBriefPrompt(input({ patch: file('src/big.ts', lines) }))

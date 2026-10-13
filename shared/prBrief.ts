@@ -115,7 +115,10 @@ export function briefFiles(patch: string): FilePart[] {
     if (!chunk.startsWith('diff --git ')) continue
     const f = parseUnifiedDiff(chunk)[0]
     if (!f) continue
-    const paths = [f.path, f.oldPath].filter(Boolean)
+    // パスは最初の `@@` より前の見出しからも取る。中身に `--- ` / `+++ ` で始まる行（`-- ` や `++ ` で始まる行の削除・追加）が
+    // あると、差分の読み手がそれをファイル名の行として読んでパスを上書きし、秘密のファイルが名前の検査をすり抜ける（#794 のレビュー）
+    const head = parseUnifiedDiff(chunk.split(/^@@ /m)[0] ?? '')[0]
+    const paths = [head?.path, head?.oldPath, f.path, f.oldPath].filter((p): p is string => Boolean(p))
     let added = 0
     let removed = 0
     for (const h of f.hunks) {
@@ -126,7 +129,7 @@ export function briefFiles(patch: string): FilePart[] {
     }
     // 名前を変えた差分は、前の名前でも見る（秘密のファイルを別の名前に移す差分）
     const skip: FilePart['skip'] = paths.some(isSecretPath) ? 'secret' : f.binary ? 'binary' : paths.some(isGeneratedPath) ? 'generated' : ''
-    out.push({ path: f.path || f.oldPath, added, removed, skip, text: chunk })
+    out.push({ path: head?.path || head?.oldPath || f.path || f.oldPath, added, removed, skip, text: chunk })
   }
   return out
 }

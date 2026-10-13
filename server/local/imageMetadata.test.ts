@@ -56,6 +56,8 @@ export const jpeg = (...middle: Buffer[]) => Buffer.concat([SOI, ...middle, TAIL
 /** GPS 入りの EXIF が付いた JPEG と、落とした後の形（thumbnails / attachments / icons のテストが使う） */
 export const JPEG_WITH_EXIF = jpeg(seg(0xe1, exif(1)), APP0, DQT, SOF)
 export const JPEG_STRIPPED = jpeg(APP0, DQT, SOF)
+/** 形が読めない（セグメントの間に余計な 1 バイト。ブラウザは描ける）。EXIF の GPS が入ったまま */
+export const JPEG_UNREADABLE = Buffer.concat([SOI, seg(0xe1, Buffer.from('Exif\0\0GPSDATA', 'latin1')), Buffer.from([0]), APP0, DQT, SOF, TAIL])
 
 test('JPEG: EXIF / XMP / MPF / IPTC / COM を落とし、JFIF・ICC・Adobe・DQT・SOF・画素は残す。向き 1 なら APP1 は残らない', () => {
   const src = jpeg(APP0, seg(0xe1, exif(1)), ICC, MPF, XMP, IPTC, ADOBE, COM, DQT, SOF)
@@ -203,4 +205,24 @@ test('JPEG: プログレッシブ（SOS の間に DQT / DHT）で、セグメン
   const src = Buffer.concat([SOI, APP0, COM, DQT, SOF, sos(1), scan, dqtWithFfd9, sos(2), scan, Buffer.from([0xff, 0xd9]), Buffer.from('trailer')])
   const r = stripImageMetadata(src, 'jpeg')
   assert.deepEqual(r.bytes, Buffer.concat([SOI, APP0, DQT, SOF, sos(1), scan, dqtWithFfd9, sos(2), scan, Buffer.from([0xff, 0xd9])]), 'COM と末尾の trailer だけが落ち、2 つ目の走査は残る')
+})
+
+test('JPEG: 画素の中の TEM（FF01）は長さ無しとして飛ばし、予約のマーカー・2 つ目の SOI に当たれば読めない扱い（EOI を飛び越して後ろを残さない。4 回目のレビュー）', () => {
+  const pixels = (...bytes: number[]) => Buffer.concat([seg(0xda, Buffer.from([3, 1, 0, 2, 0x11, 3, 0x11, 0, 63, 0])), Buffer.from(bytes), Buffer.from([0xff, 0xd9])])
+  const second = Buffer.concat([SOI, seg(0xe1, Buffer.from('Exif\0\0GPSDATA', 'latin1')), TAIL])
+  const tem = Buffer.concat([SOI, APP0, DQT, SOF, pixels(0x12, 0xff, 0x01, 0x7f, 0xff, 0x00, 0x34), second])
+  const r = stripImageMetadata(tem, 'jpeg')
+  assert.equal(r.changed, true)
+  assert.equal(r.bytes.includes(Buffer.from('GPSDATA')), false, 'TEM をまたいで EOI を見つけ、後ろの副画像を落とす')
+  for (const [name, m] of [['予約 FF02', 0x02], ['予約 FFBF', 0xbf], ['2 つ目の SOI', 0xd8]] as const) {
+    const bad = Buffer.concat([SOI, APP0, DQT, SOF, pixels(0x12, 0xff, m, 0x7f, 0xff, 0x00, 0x34), second])
+    assert.deepEqual(stripImageMetadata(bad, 'jpeg'), { bytes: bad, changed: false, unreadable: true }, name)
+  }
+})
+
+test('PNG: eXIf が規格外の `Exif\\0\\0` 前置き付きでも向きを取って置き直す（4 回目のレビュー）', () => {
+  const prefixed = Buffer.concat([PNG_SIG, IHDR, pngChunk('eXIf', Buffer.concat([Buffer.from('Exif\0\0', 'latin1'), exif(6).subarray(6)])), IDAT, IEND])
+  const r = stripImageMetadata(prefixed, 'png')
+  assert.equal(r.changed, true)
+  assert.deepEqual(r.bytes, Buffer.concat([PNG_SIG, IHDR, pngChunk('eXIf', orientationTiff(6)), IDAT, IEND]))
 })

@@ -60,13 +60,14 @@ before(async () => {
   await writeFile(join(cwd, 'big.png'), png(THUMB_MIN_BYTES + 1))
   await writeFile(join(cwd, 'alpha.png'), png(THUMB_MIN_BYTES + 1, 6))
   await writeFile(join(cwd, 'small.png'), png(1024))
+  await writeFile(join(cwd, 'exif.jpg'), JPEG_WITH_EXIF) // しきい値未満。枠に出すときも落とす（#791 の 4 回目のレビュー）
   await writeFile(join(cwd, 'fake.png'), `<svg xmlns="http://www.w3.org/2000/svg">${' '.repeat(THUMB_MIN_BYTES)}</svg>`)
   await writeFile(join(cwd, 'huge.png'), png(16))
   await truncate(join(cwd, 'huge.png'), IMAGE_MAX_BYTES + 1)
   await writeFile(join(dir, 'elsewhere', 'secret.png'), png(THUMB_MIN_BYTES + 1))
   await symlink(join(dir, 'elsewhere', 'secret.png'), join(cwd, 'link.png'))
   const now = new Date()
-  const text = ['big', 'alpha', 'small', 'fake', 'huge', 'link'].map((n) => `![${n}](${n}.png)`).join('\n') + `\n![s](${join(dir, 'elsewhere', 'secret.png')})`
+  const text = ['big', 'alpha', 'small', 'fake', 'huge', 'link'].map((n) => `![${n}](${n}.png)`).join('\n') + `\n![s](${join(dir, 'elsewhere', 'secret.png')})\n![e](exif.jpg)`
   await writeFile(join(feedDir, `${localDate(now.toISOString())}.jsonl`), JSON.stringify(row(now, 'S1', { repo: 'repo', cwd, text })) + '\n')
 
   const a = await listen(createApp(new FeedStore(feedDir), join(dir, 'dist'), undefined, undefined, undefined, undefined, undefined, { tmux: { run: async () => '' }, ps: async () => '', thumbs: new Thumbnails(thumbsDir, fake) }))
@@ -357,4 +358,12 @@ test('hasAlpha: PNG は IHDR の色の種類か IDAT より前の tRNS、JPEG �
   trns.write('IDAT', 50)
   assert.equal(hasAlpha(trns, 'png'), true)
   assert.equal(hasAlpha(Buffer.from([0xff, 0xd8, 0xff]), 'jpeg'), false)
+})
+
+test('cwd の画像を枠に出すとき、軽い版を作らず元のまま配る道でも EXIF は落とす。ライトボックス・ダウンロードは元のまま（#791 の 4 回目のレビュー）', async () => {
+  const frame = await fetch(base + thumbUrl(url('exif.jpg')))
+  assert.equal(frame.status, 200)
+  assert.deepEqual(Buffer.from(await frame.arrayBuffer()), JPEG_STRIPPED)
+  assert.deepEqual(Buffer.from(await (await fetch(base + url('exif.jpg'))).arrayBuffer()), JPEG_WITH_EXIF)
+  assert.deepEqual(Buffer.from(await (await fetch(`${base}${url('exif.jpg')}?download=1&thumb=${THUMB_VERSION}`)).arrayBuffer()), JPEG_WITH_EXIF)
 })

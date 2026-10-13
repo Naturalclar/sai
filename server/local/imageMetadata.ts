@@ -12,8 +12,10 @@
 // - PNG: `eXIf` / `tEXt` / `zTXt` / `iTXt` のチャンクと IEND の後ろを出力しない（`iCCP` などは残す）。`eXIf` に向きがあれば
 //   向きだけの `eXIf` を置き直す（ブラウザは PNG の `eXIf` の向きも見る）。
 // - WebP: RIFF の `EXIF` / `XMP ` チャンクを出力しない（`ICCP` / `ALPH` / `ANIM` は残す）。VP8X の印も消し、RIFF の長さを直す。
-// - GIF: 触らない（EXIF を持たない。コメント拡張は落とさない）。
-// 形が読めない（壊れている）ときは触らずに元のまま返す（壊す方が悪い）。
+// - GIF: 触らない。EXIF は持たないが、アプリケーション拡張に XMP（GPS を含みうる）を持てる。それを落とすには画像ブロックの
+//   サブブロックまで歩く必要があり、写真を GIF で添える場面はまれなので範囲外にした（分かった上で触らない）。
+// 形が読めない（壊れている）ときは触らずに元のまま返し、`unreadable` を立てる。**呼び手は `unreadable` を見る**: 置く口（添付・アイコン）は
+// 断り、配る口は 415 にする（落とせたか分からないものを「清い」として置かない・配らない。4 回目のレビュー）。
 import { crc32 } from 'node:zlib'
 import type { IconType } from '../../shared/icon.ts'
 
@@ -27,11 +29,14 @@ export const METADATA_STRIP_VERSION = 1
 /** 置き場（thumbs/・attachments/）に置く「前からあるものにかけ終えた」印のファイル名 */
 export const STRIPPED_MARK = `.metadata-stripped-${METADATA_STRIP_VERSION}`
 
+/** `unreadable` のときに置く口が返す理由（添付・アイコンで同じ文） */
+export const UNREADABLE_IMAGE_REASON = '画像の形が読めず、メタデータ（EXIF など）を落とせません。別の形式で保存し直してください'
+
 export interface StripResult {
   bytes: Buffer
   /** 何かを落とした（か、向きを置き直した）。false なら bytes は入力そのもの */
   changed: boolean
-  /** 形が読めず諦めた（bytes は入力そのもので、メタデータが残っているかもしれない）。「落とす物が無かった」とは別 */
+  /** 形が読めず諦めた（bytes は入力そのもので、メタデータが残っているかもしれない）。「落とす物が無かった」とは別。呼び手はこれを見て断る */
   unreadable?: true
 }
 
@@ -63,7 +68,7 @@ export function stripImageMetadata(bytes: Buffer, format: IconType): StripResult
     case 'webp':
       return stripWebp(bytes)
     case 'gif':
-      return { bytes, changed: false }
+      return { bytes, changed: false } // 触らない（上の注記）
     default:
       return assertNever(format)
   }
@@ -162,7 +167,9 @@ export function pngChunk(type: string, data: Buffer): Buffer {
 /**
  * SOS の見出しの後ろから EOI（FFD9）の次の位置を探す。画素（エントロピー符号）の中の FF は FF00 の詰め物か RST（FFD0〜D7）
  * なので飛ばし、それ以外のマーカー（プログレッシブの DQT / DHT / 次の SOS など）は長さぶん飛ばす（セグメントの中身に FFD9 が
- * あっても EOI と取り違えない）。見つからなければ末尾
+ * あっても EOI と取り違えない）。見つからなければ末尾。
+ * 長さを持たない TEM（FF01）は 2 バイト飛ばす。画素の中にあってはならないもの（予約の FF02〜BF・2 つ目の SOI）に当たったら
+ * -1（形が読めない。長さ付きと読んで EOI を飛び越し、後ろの副画像を「落とす物が無い」と残さないため。4 回目のレビュー）
  */
 function eoiAfter(b: Buffer, from: number): number {
   let i = from
@@ -174,7 +181,12 @@ function eoiAfter(b: Buffer, from: number): number {
       i += m === 0xff ? 1 : 2
       continue
     }
+    if (m === 0x01) {
+      i += 2
+      continue
+    }
     if (m === 0xd9) return i + 2
+    if (m < 0xc0 || m === 0xd8) return -1
     if (i + 4 > b.length) return b.length
     i += 2 + b.readUInt16BE(i + 2) // 長さを持つセグメント（SOS なら見出しの後ろから画素が続く）
   }
@@ -205,6 +217,7 @@ function stripJpeg(b: Buffer): StripResult {
       if (marker === 0xda) {
         if (i + 4 > b.length) return unreadable
         end = eoiAfter(b, i + 2 + b.readUInt16BE(i + 2))
+        if (end < 0) return unreadable
       }
       parts.push(b.subarray(i, end))
       if (end < b.length) changed = true
@@ -252,7 +265,8 @@ function stripPng(b: Buffer): StripResult {
       parts.push(b.subarray(i, end)) // 自分で置いた向きだけの eXIf。落として置き直さない
       if (orientation === undefined) orientation = 1
     } else if (DROP_PNG.has(type)) {
-      if (type === 'eXIf' && orientation === undefined) orientation = tiffOrientation(data)
+      // 規格では TIFF が直に入るが、`Exif\0\0` を前置きする書き手もある（exiftool / ImageMagick は読める）。JPEG と同じく剥がして向きを取る
+      if (type === 'eXIf' && orientation === undefined) orientation = tiffOrientation(data.subarray(0, 6).equals(EXIF_HEAD) ? data.subarray(6) : data)
       changed = true
     } else {
       parts.push(b.subarray(i, end))

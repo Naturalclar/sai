@@ -6,10 +6,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { IconStore, iconKey } from './icons.ts'
 import { IconHistory, historyKey, isHistoryKey } from './iconHistory.ts'
-import { JPEG_STRIPPED, JPEG_WITH_EXIF } from '../local/imageMetadata.test.ts'
+import { JPEG_STRIPPED, JPEG_UNREADABLE, JPEG_WITH_EXIF } from '../local/imageMetadata.test.ts'
+import { readFile } from 'node:fs/promises'
 
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64')
-const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46, 0x49, 0x46])
+const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xd9]) // 形が読めない作り物は入れない（#791）
 
 async function setup() {
   const dir = await mkdtemp(join(tmpdir(), 'sai-icon-history-'))
@@ -75,4 +76,26 @@ test('IconHistory: 写真の EXIF は落として残す。鍵は落とした後�
   const key = await history.add(JPEG_WITH_EXIF)
   assert.equal(key, historyKey(JPEG_STRIPPED))
   assert.deepEqual(Buffer.from((await history.read(key))!), JPEG_STRIPPED)
+})
+
+test('IconHistory: 前からある履歴（EXIF 入り）は一度だけ落として新しい鍵に置き直し、使った時刻も移す。同じ絵を選び直しても 2 つにならない（4 回目のレビュー）', async () => {
+  const { dir, history } = await setup()
+  const hd = join(dir, 'icon-history')
+  await mkdir(hd)
+  const rawKey = historyKey(JPEG_WITH_EXIF)
+  await writeFile(join(hd, `${rawKey}.jpeg`), JPEG_WITH_EXIF)
+  await writeFile(join(hd, `${historyKey(PNG)}.png`), PNG)
+  await writeFile(join(dir, 'icon-history.json'), JSON.stringify({ seeded: true, used: { [rawKey]: '2026-09-05T00:00:00.000Z', [historyKey(PNG)]: '2026-09-01T00:00:00.000Z' } }))
+  const list = await history.list()
+  const key = historyKey(JPEG_STRIPPED)
+  assert.deepEqual(list.map((e) => [e.key, e.used_at]), [[key, '2026-09-05T00:00:00.000Z'], [historyKey(PNG), '2026-09-01T00:00:00.000Z']])
+  assert.deepEqual(Buffer.from((await history.read(key))!), JPEG_STRIPPED)
+  assert.equal(await history.read(rawKey), null, 'GPS 入りの方は残らない')
+  assert.equal(await history.add(JPEG_WITH_EXIF, new Date('2026-09-06T00:00:00Z')), key, '選び直しても同じ鍵')
+  assert.equal((await history.list()).length, 2)
+  assert.ok(!(await readdir(hd)).some((n) => n.endsWith('.tmp')))
+  const state = JSON.parse(await readFile(join(dir, 'icon-history.json'), 'utf-8')) as { stripped: number; used: Record<string, string> }
+  assert.equal(state.stripped, 1)
+  assert.equal(state.used[rawKey], undefined)
+  assert.equal(await history.add(JPEG_UNREADABLE), '', '形が読めないものは入れない')
 })

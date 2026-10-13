@@ -6,7 +6,7 @@
 import { createHash } from 'node:crypto'
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { STRIPPED_MARK, stripImageMetadata } from '../local/imageMetadata.ts'
+import { STRIPPED_MARK, stripImageMetadata, UNREADABLE_IMAGE_REASON } from '../local/imageMetadata.ts'
 import { ATTACHMENT_FILE_NAME_RE, ATTACHMENT_NAME_RE, ATTACHMENT_DIR_RE, attachmentLabel, attachmentUrl, isUtf8Text, sniffPdf } from '../../shared/attachments.ts'
 import type { AttachmentKind } from '../../shared/attachments.ts'
 import { ICON_MIME, sniffImageType } from '../../shared/icon.ts'
@@ -36,35 +36,55 @@ export function attachmentDir(id: string): string {
 
 /** 前からある添付の画像からメタデータを落とし終えた印（#791）。名前は `METADATA_STRIP_VERSION` から（落とし方を変えたら上がる） */
 export const ATTACHMENTS_STRIPPED_MARK = STRIPPED_MARK
+/** `put()` と一括処理が書く tmp の形（`<名前>.<pid>.<連番>[.strip].tmp`）。起動時に古いものを消す */
+export const ATTACHMENT_WORK_RE = /^[0-9a-f]{16}\.(png|jpeg|gif|webp|pdf|txt)\.\d+\.\d+(\.strip)?\.tmp$/
+/** これより古い tmp は残骸として消す（別の SAI が書いている最中のものは、これより新しい） */
+export const ATTACHMENT_WORK_STALE_MS = 10 * 60_000
+
+export interface CleanResult {
+  /** 読んだ画像の数（印があれば 0） */
+  checked: number
+  /** 落として置き直した数 */
+  changed: number
+  /** 消した残骸の tmp の数 */
+  removed: number
+  marked: boolean
+}
 
 export class AttachmentStore {
   readonly dir: string
   /** 起動時の一括処理（作られたときに始める）。置くときと配るときはこれを待たない（原本の名前は変わらない） */
-  private readonly cleaned: Promise<{ checked: number; changed: number; marked: boolean }>
+  private readonly cleaned: Promise<CleanResult>
   /** tmp の連番（同じ中身を同時に置いても、同じ置き場を使う別の SAI と重なっても、tmp の名前が被らない） */
   private seq = 0
+  private readonly now: () => number
 
-  constructor(dir: string) {
+  constructor(dir: string, now: () => number = Date.now) {
     this.dir = dir
-    this.cleaned = this.stripStored().catch(() => ({ checked: 0, changed: 0, marked: false }))
+    this.now = now
+    this.cleaned = this.cleanStored().catch(() => ({ checked: 0, changed: 0, removed: 0, marked: false }))
   }
 
   /** 起動時の一括処理の結果（テスト用） */
-  ready(): Promise<{ checked: number; changed: number; marked: boolean }> {
+  ready(): Promise<CleanResult> {
     return this.cleaned
   }
 
   /**
-   * 前からある添付の画像（この版より前に置いたもの。EXIF がそのまま）から一度だけメタデータを落とす（#791）。
-   * 印があれば何もしない。1 枚ずつ読んで、落ちたものだけ tmp に書いて rename（名前は変えない。本文の行が指している）。
-   * 読めない・書けないものが残っても印は置く（配る口でも落とすので配るものは清い。置かないと、1 枚のせいで起動のたびに全部を読み直す）
+   * 起動時の一括処理（#791）。
+   * - 残骸の tmp（`ATTACHMENT_WORK_RE`。書けずに落ちた・途中で止められた）は、古ければ消す。印があっても毎回
+   * - 前からある添付の画像（この版より前に置いたもの。EXIF がそのまま）から一度だけメタデータを落とす。印があれば読まない。
+   *   1 枚ずつ読んで、落ちたものだけ tmp に書いて rename（名前は変えない。本文の行が指している）。読む前と置く直前の stat が
+   *   違えば置かない（古い SAI が同じ置き場に書いている最中の原本を、途中のまま置き直さない）。
+   *   読めない・書けないものが残っても印は置く（配る口は読めないものを配らないので配るものは清い。置かないと、1 枚のせいで起動のたびに全部を読み直す）
    */
-  private async stripStored(): Promise<{ checked: number; changed: number; marked: boolean }> {
-    const out = { checked: 0, changed: 0, marked: false }
+  private async cleanStored(): Promise<CleanResult> {
+    const out: CleanResult = { checked: 0, changed: 0, removed: 0, marked: false }
     const mark = join(this.dir, ATTACHMENTS_STRIPPED_MARK)
+    let marked = false
     try {
       await stat(mark)
-      return { ...out, marked: true }
+      marked = true
     } catch {
       // まだ
     }
@@ -77,14 +97,27 @@ export class AttachmentStore {
     for (const d of dirs) {
       let names: string[]
       try {
-        names = (await readdir(join(this.dir, d))).filter((n) => ATTACHMENT_NAME_RE.test(n))
+        names = await readdir(join(this.dir, d))
       } catch {
         continue
       }
       for (const n of names) {
         const path = join(this.dir, d, n)
+        if (ATTACHMENT_WORK_RE.test(n)) {
+          try {
+            if (this.now() - (await stat(path)).mtimeMs >= ATTACHMENT_WORK_STALE_MS) {
+              await rm(path, { force: true })
+              out.removed++
+            }
+          } catch {
+            // 消えていた・消せない
+          }
+          continue
+        }
+        if (marked || !ATTACHMENT_NAME_RE.test(n)) continue
         const tmp = `${path}.${process.pid}.${++this.seq}.strip.tmp`
         try {
+          const before = await stat(path)
           const bytes = await readFile(path)
           const type = sniffImageType(bytes)
           if (!type) continue
@@ -92,15 +125,20 @@ export class AttachmentStore {
           const r = stripImageMetadata(bytes, type)
           if (!r.changed) continue
           await writeFile(tmp, r.bytes)
+          const after = await stat(path)
+          if (after.size !== before.size || after.mtimeMs !== before.mtimeMs) throw new Error('書かれている最中')
           await rename(tmp, path)
           out.changed++
         } catch {
-          await rm(tmp, { force: true }) // 読めない・書けないものは残す（配る口で落とす）
+          await rm(tmp, { force: true }) // 読めない・書けない・書かれている最中のものは残す（配る口は読めないものを配らない）
         }
       }
     }
-    await writeFile(mark, '')
-    out.marked = true
+    if (!marked) {
+      await writeFile(mark, '')
+      marked = true
+    }
+    out.marked = marked
     return out
   }
 
@@ -112,8 +150,11 @@ export class AttachmentStore {
    */
   async put(id: string, input: Buffer, originalName = ''): Promise<{ attachment?: Attachment; error: string }> {
     const image = sniffImageType(input)
-    // 写真の EXIF（GPS など）は置く前に落とす（#791。ICC と向きは残る）。名前のハッシュも落とした後の中身から
-    const bytes = image ? stripImageMetadata(input, image).bytes : input
+    // 写真の EXIF（GPS など）は置く前に落とす（#791。ICC と向きは残る）。名前のハッシュも落とした後の中身から。
+    // 形が読めず落とせたか分からないものは置かない（置いて配ると、落としたものとして扱われる）
+    const stripped = image ? stripImageMetadata(input, image) : null
+    if (stripped?.unreadable) return { error: UNREADABLE_IMAGE_REASON }
+    const bytes = stripped ? stripped.bytes : input
     const kind: AttachmentKind | null = image ? 'image' : sniffPdf(bytes) ? 'pdf' : isUtf8Text(bytes) ? 'text' : null
     if (!kind) return { error: '添えられるのは画像（PNG / JPEG / GIF / WebP）・文字のファイル（UTF-8）・PDF だけです' }
     const ext = image ?? (kind === 'pdf' ? 'pdf' : 'txt')
@@ -127,11 +168,11 @@ export class AttachmentStore {
       // 同じ中身を同時に 2 回置くと後の rename が ENOENT になりうるが、名前が中身のハッシュなので「もう置いてある」なら成功
       const target = join(dirPath, name)
       const tmp = join(dirPath, `${name}.${process.pid}.${++this.seq}.tmp`)
-      await writeFile(tmp, bytes)
       try {
+        await writeFile(tmp, bytes)
         await rename(tmp, target)
       } catch (err) {
-        await rm(tmp, { force: true })
+        await rm(tmp, { force: true }) // 書けなかった（ENOSPC など）・rename できなかった tmp を残さない
         if (!(await stat(target).catch(() => null))) throw err
       }
       // 名前なしで同じ中身を置き直したら、前の名前は消す（#667 のレビュー。残すと、画面は名前なしなのに本文には前の名前が載る）

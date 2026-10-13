@@ -123,7 +123,7 @@ test('開いている Codex への queue に画像を添えても -i は付け�
   const up = await fetch(`${base}/api/sessions/X2%40r/attachments`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/octet-stream', Origin: base },
-    body: Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex'),
+    body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64'), // 1x1 の PNG（形が読めない作り物は断られる。#791）
   })
   assert.equal(up.status, 200)
   const { path } = (await up.json()) as AttachmentResponse

@@ -245,7 +245,7 @@ import { ProgressReader, sessionOf } from './local/progress.ts'
 import { agentListFromEnv, backgroundLive, type AgentList, type ClaudeAgent } from './local/claudeAgents.ts'
 import { isRemoteHost } from '../shared/host.ts'
 import { IMAGES_SEGMENT } from '../shared/images.ts'
-import { stripImageMetadata } from './local/imageMetadata.ts'
+import { METADATA_STRIP_VERSION, stripImageMetadata, UNREADABLE_IMAGE_REASON } from './local/imageMetadata.ts'
 import { imageHeaders, imageTable, readSessionImage, realImagePath } from './local/images.ts'
 import { AnsweredApprovals, answeredAfter } from './approvals/answered.ts'
 import { fileTable, readSessionFile } from './local/files.ts'
@@ -1915,7 +1915,10 @@ export function createApp(
       res.end()
       return
     }
-    const out = t.kind === 'thumb' ? { ...img, bytes: t.bytes, type: t.type, etag } : img
+    // 枠に出すのに元のまま配るとき（しきい値未満・縮めても小さくならない）も EXIF は落とす（#791。`t3-` の ETag は「落としたもの」の印なので、
+    // 元のまま配る道でも合わせる）。読めなければ元のまま（cwd の画像はライトボックスとダウンロードが元のままなので、ここだけ断っても隠せない）。
+    // ライトボックスとダウンロード（`?thumb=` 無し）は元のまま
+    const out = t.kind === 'thumb' ? { ...img, bytes: t.bytes, type: t.type, etag } : wantThumb ? { ...img, bytes: stripImageMetadata(img.bytes, img.type).bytes, etag } : img
     res.writeHead(200, imageHeaders(out, download))
     res.end(req.method === 'HEAD' ? undefined : out.bytes)
   }
@@ -5242,6 +5245,13 @@ export function createApp(
         const [dir = '', name = '', ...rest] = path.slice(ATTACHMENTS_PREFIX.length).split('/')
         const found = rest.length > 0 ? null : await attachmentStore.find(dir, name)
         if (!found) return error(res, 404, 'attachment not found')
+        // 元のまま配る口の ETag は名前と落とし方の版から決まるので、304 で済むなら読まない
+        const etag = `"a${METADATA_STRIP_VERSION}-${name.slice(0, 16)}"`
+        if (!wantsThumb(q) && req.headers['if-none-match'] === etag) {
+          res.writeHead(304, { ETag: etag, 'Cache-Control': 'private, no-cache' })
+          res.end()
+          return
+        }
         let body: Buffer
         try {
           body = await readFile(found.path)
@@ -5257,23 +5267,20 @@ export function createApp(
           res.end()
           return
         }
-        // 元のまま配るとき（しきい値未満・ライトボックス・ダウンロード）も EXIF は落とす（#791。前からある原本を起動時の一括処理が
-        // まだ通していない間や、置き直せなかったものでも、配るものは清い。落とす物が無ければ同じ Buffer）
         if (t.kind === 'thumb') {
           // 軽い版の URL は版（THUMB_VERSION）付きで、名前が中身のハッシュなので、同じ URL の中身は変わらない
           res.writeHead(200, { 'Content-Type': ICON_MIME[t.type], 'Content-Length': t.bytes.length, 'Cache-Control': 'private, max-age=31536000, immutable' })
           res.end(req.method === 'HEAD' ? undefined : t.bytes)
           return
         }
-        // 元のまま配るときは no-cache + ETag。名前は変わらないのに中身は変わりうる（#791 で前からある原本から EXIF を落とした）ので、
-        // ブラウザが前に持った GPS 入りの原本をそのまま使わせない
-        const original = kind ? stripImageMetadata(body, kind).bytes : body
-        const etag = `"a-${createHash('sha1').update(original).digest('hex').slice(0, 16)}"`
-        if (req.headers['if-none-match'] === etag) {
-          res.writeHead(304, { ETag: etag, 'Cache-Control': 'private, no-cache' })
-          res.end()
-          return
-        }
+        // 元のまま配るとき（しきい値未満・ライトボックス・ダウンロード）も EXIF は落とす（#791。前からある原本を起動時の一括処理が
+        // まだ通していない間や、置き直せなかったものでも、配るものは清い）。形が読めず落とせたか分からないものは配らない（415）。
+        // no-cache + ETag: 名前は変わらないのに中身は変わりうる（前からある原本から EXIF を落とした）ので、ブラウザが前に持った
+        // GPS 入りの原本をそのまま使わせない。ETag は名前（元の中身のハッシュ）と落とし方の版から作る（落とし方が決まれば配るものも
+        // 決まる。中身を読んで落としてハッシュを取るのを、304 で済む要求のたびにはしない）
+        const stripped = kind ? stripImageMetadata(body, kind) : null
+        if (stripped?.unreadable) return error(res, 415, UNREADABLE_IMAGE_REASON)
+        const original = stripped ? stripped.bytes : body
         res.writeHead(200, { 'Content-Type': found.mime, 'Content-Length': original.length, 'Cache-Control': 'private, no-cache', ETag: etag })
         res.end(req.method === 'HEAD' ? undefined : original)
         return

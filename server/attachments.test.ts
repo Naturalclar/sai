@@ -5,7 +5,7 @@ import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AttachmentResponse, Replying } from '../shared/types.ts'
@@ -17,8 +17,10 @@ import { BuildFreshness } from './local/buildFreshness.ts'
 import { ProgressReader } from './local/progress.ts'
 import type { CodexApp } from './reply/codexAppServer.ts'
 import type { ReplyCommand, Runner } from './reply/runner.ts'
-import { AttachmentStore, attachmentDir } from './reply/attachments.ts'
-import { JPEG_STRIPPED, JPEG_WITH_EXIF, PNG_STRIPPED, WEBP_STRIPPED, WEBP_WITH_EXIF } from './local/imageMetadata.test.ts'
+import { ATTACHMENTS_STRIPPED_MARK, AttachmentStore, attachmentDir } from './reply/attachments.ts'
+import { JPEG_STRIPPED, JPEG_UNREADABLE, JPEG_WITH_EXIF, PNG_STRIPPED, WEBP_STRIPPED, WEBP_WITH_EXIF } from './local/imageMetadata.test.ts'
+import { UNREADABLE_IMAGE_REASON } from './local/imageMetadata.ts'
+import { ATTACHMENT_WORK_STALE_MS } from './reply/attachments.ts'
 import { localDate } from './rows/aggregate.ts'
 import { row } from './rows/aggregate.test.ts'
 import { FeedStore } from './rows/store.ts'
@@ -54,7 +56,7 @@ const codexApp: CodexApp = {
   answer: () => ({ ok: false, status: 404, error: 'approval not found' }),
 } as unknown as CodexApp
 
-const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex')
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64') // 1x1。形が読めない作り物は put が断る（#791）
 const PDF = Buffer.from('%PDF-1.7\n1 0 obj\n<<>>\nendobj\n')
 const LOG = Buffer.from('2026-10-02 ERROR 落ちました\n\tat main\n')
 const HTML = Buffer.from('<html><script>alert(1)</script></html>')
@@ -149,6 +151,7 @@ test('預ける: 同じ中身を同時に置いても全部成功し、tmp は�
   const results = await Promise.all([1, 2, 3].map(() => store.put('A1@r', JPEG_WITH_EXIF, 'same.jpg')))
   assert.deepEqual(results.map((r) => r.error), ['', '', ''])
   assert.equal(new Set(results.map((r) => r.attachment?.path)).size, 1, '同じ名前')
+  await store.ready() // 起動時の一括処理（前のテストが置いた落としていない原本を置き直す）の tmp と混ぜない
   const names = await readdir(join(dir, 'attachments', attachmentDir('A1@r')))
   assert.ok(!names.some((n) => n.endsWith('.tmp')), 'tmp は残らない')
 })
@@ -162,7 +165,7 @@ test('配る口: 元のまま配るときは no-cache + ETag（前に持った G
   const res = await fetch(url)
   assert.equal(res.headers.get('cache-control'), 'private, no-cache')
   const etag = res.headers.get('etag')
-  assert.match(etag ?? '', /^"a-[0-9a-f]{16}"$/)
+  assert.match(etag ?? '', /^"a1-e{16}"$/, '名前と落とし方の版から')
   assert.deepEqual(Buffer.from(await res.arrayBuffer()), JPEG_STRIPPED)
   assert.equal((await fetch(url, { headers: { 'If-None-Match': etag! } })).status, 304)
   await writeFile(join(sub, name), JPEG_STRIPPED)
@@ -179,13 +182,13 @@ test('AttachmentStore: 前からある添付の画像から起動時に一度だ
     await writeFile(gps, JPEG_WITH_EXIF)
     await writeFile(clean, PNG_STRIPPED)
     await writeFile(join(sub, `${'c'.repeat(16)}.txt`), 'not an image')
-    assert.deepEqual(await new AttachmentStore(d).ready(), { checked: 2, changed: 1, marked: true })
+    assert.deepEqual(await new AttachmentStore(d).ready(), { checked: 2, changed: 1, removed: 0, marked: true })
     assert.deepEqual(await readFile(gps), JPEG_STRIPPED, '名前はそのまま、中身だけ落ちる')
     assert.deepEqual(await readFile(clean), PNG_STRIPPED)
     assert.ok(!(await readdir(sub)).some((n) => n.endsWith('.tmp')), 'tmp は残らない')
     await writeFile(gps, JPEG_WITH_EXIF)
-    assert.deepEqual(await new AttachmentStore(d).ready(), { checked: 0, changed: 0, marked: true }, '印があれば何もしない')
-    assert.deepEqual(await new AttachmentStore(join(d, 'none')).ready(), { checked: 0, changed: 0, marked: false }, '置き場が無ければ何もしない（最初の put が作る）')
+    assert.deepEqual(await new AttachmentStore(d).ready(), { checked: 0, changed: 0, removed: 0, marked: true }, '印があれば何もしない')
+    assert.deepEqual(await new AttachmentStore(join(d, 'none')).ready(), { checked: 0, changed: 0, removed: 0, marked: false }, '置き場が無ければ何もしない（最初の put が作る）')
   } finally {
     await rm(d, { recursive: true, force: true })
   }
@@ -243,4 +246,39 @@ test('AttachmentStore.labelOf: 元の名前は隣のファイルから読み、�
   assert.equal(await store.labelOf(bare.attachment!.path), '')
   assert.equal(store.resolvePath('A1@r', put.attachment!.path), put.attachment!.path)
   assert.equal(store.resolvePath('B1@r', put.attachment!.path), null)
+})
+
+test('預ける・配る: 形が読めず落とせたか分からない画像は、置く口が断り、前から置いてあるものは 415 で配らない（4 回目のレビュー）', async () => {
+  const res = await upload('A1@r', JPEG_UNREADABLE, 'odd.jpg')
+  assert.equal(res.status, 400)
+  assert.equal((res.body as unknown as { error: string }).error, UNREADABLE_IMAGE_REASON)
+  const sub = join(dir, 'attachments', attachmentDir('A1@r'))
+  await mkdir(sub, { recursive: true })
+  const name = `${'d'.repeat(16)}.jpeg`
+  await writeFile(join(sub, name), JPEG_UNREADABLE)
+  const url = `${base}/api/attachments/${attachmentDir('A1@r')}/${name}`
+  assert.equal((await fetch(url)).status, 415)
+  assert.equal((await fetch(url, { method: 'HEAD' })).status, 415)
+})
+
+test('AttachmentStore: 残骸の tmp は起動時に古いものだけ消す。印があっても消す（4 回目のレビュー）', async () => {
+  const d = await mkdtemp(join(tmpdir(), 'sai-att-tmp-'))
+  try {
+    const sub = join(d, attachmentDir('S1@r'))
+    await mkdir(sub, { recursive: true })
+    const old = join(sub, `${'a'.repeat(16)}.jpeg.123.1.tmp`)
+    const oldStrip = join(sub, `${'a'.repeat(16)}.png.123.2.strip.tmp`)
+    const fresh = join(sub, `${'b'.repeat(16)}.jpeg.456.1.tmp`)
+    for (const f of [old, oldStrip, fresh]) await writeFile(f, 'x')
+    await writeFile(join(d, ATTACHMENTS_STRIPPED_MARK), '')
+    const t0 = Date.now()
+    const now = () => t0 + ATTACHMENT_WORK_STALE_MS + 1000
+    await utimes(old, new Date(t0 - 1000), new Date(t0 - 1000))
+    await utimes(oldStrip, new Date(t0 - 1000), new Date(t0 - 1000))
+    await utimes(fresh, new Date(now() - 1000), new Date(now() - 1000))
+    assert.deepEqual(await new AttachmentStore(d, now).ready(), { checked: 0, changed: 0, removed: 2, marked: true })
+    assert.deepEqual((await readdir(sub)).sort(), [`${'b'.repeat(16)}.jpeg.456.1.tmp`], '新しい tmp（別の SAI が書いている最中かもしれない）は残す')
+  } finally {
+    await rm(d, { recursive: true, force: true })
+  }
 })

@@ -154,7 +154,7 @@ test('command approval: availableDecisionsだけを出し、選んだ実値を�
   ])
   assert.deepEqual(app.answer(approval.approval_id, { behavior: 'allow', decision: 'd0' }), { ok: false, status: 400, error: '提示されていないdecisionです' }, 'behaviorの改ざんも拒否')
   assert.deepEqual(app.answer(approval.approval_id, { behavior: 'allow', decision: 'not-offered' }), { ok: false, status: 400, error: '提示されていないdecisionです' })
-  assert.deepEqual(app.answer(approval.approval_id, { behavior: 'allow', decision: 'd1' }), { ok: true })
+  assert.deepEqual(app.answer(approval.approval_id, { behavior: 'allow', decision: 'd1' }), { ok: true, kept: { kind: 'command', scope: 'git status' } }, '規則の追加を押したら、ボタンに書いた範囲を返す（#772）')
   assert.deepEqual(connection.sent.at(-1), { id: 'cmd-rpc', result: { decision: amendment } })
 })
 
@@ -182,7 +182,7 @@ test('command approval: 範囲をボタンに書けない規則の追加は出�
     assert.deepEqual(app.answer(approval.approval_id, { behavior: 'allow', decision: hidden }), { ok: false, status: 400, error: '提示されていないdecisionです' }, hidden)
   }
   assert.deepEqual(app.answer(approval.approval_id, { behavior: 'allow', decision: 'd4' }), { ok: false, status: 400, error: '提示されていないdecisionです' }, '断る規則を許可として送らせない')
-  assert.deepEqual(app.answer(approval.approval_id, { behavior: 'deny', decision: 'd4' }), { ok: true })
+  assert.deepEqual(app.answer(approval.approval_id, { behavior: 'deny', decision: 'd4' }), { ok: true, kept: { kind: 'network', scope: 'example.com' } }, '押した範囲を返す（#772。記録に残すのは app.ts）')
   assert.deepEqual(connection.sent.at(-1), { id: 'cmd-rpc', result: { decision: denyHost } })
 })
 

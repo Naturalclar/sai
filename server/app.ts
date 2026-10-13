@@ -30,6 +30,8 @@ import type { SessionTurnResponse, TurnStepsResponse,
   AgentSessionsResponse,
   AgentWaitResponse,
   Approval,
+  CodexKept,
+  CodexKeptLogged,
   ApprovalAnswer,
   GalleryItem,
   GalleryResponse,
@@ -977,6 +979,22 @@ export function createApp(
       const now = Date.now()
       const waited = Math.max(0, Math.round((now - Date.parse(a.since)) / 1000))
       approvalLog.record({ ts: new Date(now).toISOString(), id: a.id, cwd, tool: a.tool_name, rule, by, behavior, remember, waited_s: Number.isFinite(waited) ? waited : 0, ...(!rule && noRule ? { no_rule: noRule } : {}), ...jevLogged(jevOn ? jevRisk.peek(a.approval_id) : undefined) })
+    } catch {
+      // 記録できなくても答えは止めない
+    }
+  }
+  /**
+   * Codex の「今後も聞かない」「今後も断る」を画面から押したことを記録に足す（#772）。残すのは**ボタンに書いていた範囲**までで、
+   * Codex の `default.rules` は読まない（実際に書かれたかは見ていない）。`rule` は空・`remember` は false なので、[常に許可] を勧める
+   * 回数には数えない。cwd はセッションの行から。書けなくても答えは止めない
+   */
+  const logCodexKept = async (a: Approval | undefined, via: CodexKeptLogged['via'], kept: CodexKept | undefined, behavior: 'allow' | 'deny') => {
+    if (!a || !kept) return
+    try {
+      const cwd = (await store.sessions(90).catch(() => ({ sessions: [] as SessionSummary[] }))).sessions.find((s) => s.id === a.id)?.cwd ?? ''
+      const now = Date.now()
+      const waited = Math.max(0, Math.round((now - Date.parse(a.since)) / 1000))
+      approvalLog.record({ ts: new Date(now).toISOString(), id: a.id, cwd, tool: a.tool_name, rule: '', by: 'human', behavior, remember: false, waited_s: Number.isFinite(waited) ? waited : 0, codex_kept: { via, kind: kept.kind, scope: kept.scope } })
     } catch {
       // 記録できなくても答えは止めない
     }
@@ -4318,8 +4336,11 @@ export function createApp(
     // 端末で開いている Codex のダイアログ（#450）。押された選択肢まで印を動かして Enter を送る
     if (terminalEnabled && codexDialogs.has?.(approvalId)) {
       if (b.remember !== undefined) return error(res, 400, '端末の Codex では提示された選択だけ選べます')
+      // 答えると走査から消えるので、記録に使う中身は先に引いておく（#772）
+      const dialogShown = shownApprovals.get(approvalId) ?? Object.values(codexDialogs.snapshot?.() ?? {}).flat().find((a) => a.approval_id === approvalId)
       const result = await codexDialogs.answer!(approvalId, { behavior: b.behavior, ...(typeof b.decision === 'string' ? { decision: b.decision } : {}) })
       if (!result.ok) return error(res, result.status, result.error)
+      await logCodexKept(dialogShown, 'terminal', result.kept, b.behavior)
       noteAnswered(approvalId, b.behavior, typeof b.decision === 'string' ? b.decision : undefined)
       return json(res, { ok: true, approval_id: approvalId, behavior: b.behavior })
     }
@@ -4341,6 +4362,7 @@ export function createApp(
       }
       const result = codexApp.answer(approvalId, answer)
       if (!result.ok) return error(res, result.status, result.error)
+      await logCodexKept(codexCurrent, 'app-server', result.kept, answer.behavior)
       shownApprovals.set(approvalId, shownApprovals.get(approvalId) ?? codexCurrent)
       noteAnswered(approvalId, answer.behavior, answer.decision)
       return json(res, { ok: true, approval_id: approvalId, behavior: answer.behavior })

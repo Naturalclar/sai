@@ -224,7 +224,7 @@ test('「今後も聞かない」（#741）: 範囲が読めたときだけ、�
     if (keys[0] === 'Enter') tmux.screen = IDLE
     else if (keys[0] === 'Down') tmux.screen = threeScreen(1 + keys.length)
   }
-  assert.deepEqual(await dialogs.answer(approvalId, { behavior: 'allow', decision: 'opt-2' }), { ok: true })
+  assert.deepEqual(await dialogs.answer(approvalId, { behavior: 'allow', decision: 'opt-2' }), { ok: true, kept: { kind: 'command', scope: 'git add' } }, '押した範囲を返す（#772。記録に残すのは app.ts）')
   assert.deepEqual(tmux.keys, ['Down', 'Enter'], '1 つ下げて、印が 2 番に来たのを読んでから確定')
 })
 

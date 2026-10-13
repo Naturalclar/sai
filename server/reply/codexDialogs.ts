@@ -11,13 +11,13 @@
 // 2. 動かしたあとにもう一度読み、**印が狙った選択肢に来たか**を確かめてから `Enter`
 // 3. `Enter` のあとにもう一度読み、**そのダイアログが消えたか**を確かめる。残っていれば「送れなかった」と返す（押し直さない）
 import { createHash } from 'node:crypto'
-import { codexDialogKey, codexDialogText, dialogAnswerable, dialogDecisionIndex, dialogDecisions, dialogSteps, selectedIndex } from '../../shared/codexDialog.ts'
-import type { Approval, ApprovalAnswer, ApprovalMap, SessionSummary, Terminal, TerminalDialog } from '../../shared/types.ts'
+import { codexDialogKey, codexDialogText, dialogAnswerable, dialogDecisionIndex, dialogDecisions, dialogSteps, dontAskScope, selectedIndex } from '../../shared/codexDialog.ts'
+import type { Approval, ApprovalAnswer, ApprovalMap, CodexKept, SessionSummary, Terminal, TerminalDialog } from '../../shared/types.ts'
 import { inspectPrompt, sharedPs, sharedTmux } from './terminal.ts'
 import type { PsFn, Tmux } from './terminal.ts'
 
 /** 答えた結果。`codexAppServer.ts` の `CodexAnswerResult` と同じ形にして、app.ts の分岐を揃える */
-export type DialogAnswerResult = { ok: true } | { ok: false; status: number; error: string }
+export type DialogAnswerResult = { ok: true; kept?: CodexKept } | { ok: false; status: number; error: string }
 
 /** キーを送ってから画面が描き直るのを待つ既定（`terminal.ts` の `SETTLE_MS` と同じ）。テストは 0 */
 const SETTLE_MS = 150
@@ -200,7 +200,9 @@ export class CodexDialogs implements CodexDialogSource {
       return { ok: false, status: 409, error: '答えが届きませんでした（端末で答えてください）' }
     }
     this.active.delete(id)
-    return { ok: true }
+    // 押したのが「今後も聞かない」なら、ボタンに書いていた範囲を返す（#772。記録に残すのは app.ts）
+    const dontAsk = dontAskScope(shown)
+    return dontAsk && shown.options[index] === dontAsk.option ? { ok: true, kept: { kind: 'command', scope: dontAsk.scope } } : { ok: true }
   }
 
   /** いまそのペインに出ているダイアログ。ダイアログでない・読めない・ペインが消えたときは null */

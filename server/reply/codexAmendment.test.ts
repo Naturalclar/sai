@@ -7,7 +7,7 @@ const exec = (words: unknown) => ({ acceptWithExecpolicyAmendment: { execpolicy_
 const network = (rule: unknown) => ({ applyNetworkPolicyAmendment: { network_policy_amendment: rule } })
 
 test('コマンドの規則: 語の並びをそのままボタンに書く', () => {
-  assert.deepEqual(amendmentLabel(exec(['git', 'status'])), { label: '許可して、「git status」で始まるコマンドを今後聞かない', behavior: 'allow' })
+  assert.deepEqual(amendmentLabel(exec(['git', 'status'])), { label: '許可して、「git status」で始まるコマンドを今後聞かない', behavior: 'allow', kept: { kind: 'command', scope: 'git status' } })
   assert.equal(execAmendmentRange(['curl', '-sI', 'https://example.com']), 'curl -sI https://example.com')
 })
 
@@ -35,8 +35,8 @@ test('コマンドの規則: 読めない形・書き切れない長さは出さ
 })
 
 test('ネットワークの規則: ホストと向き（許す・断る）をボタンに書く', () => {
-  assert.deepEqual(amendmentLabel(network({ host: 'example.com', action: 'allow' })), { label: '「example.com」への通信を今後聞かない', behavior: 'allow' })
-  assert.deepEqual(amendmentLabel(network({ host: 'example.com', action: 'deny' })), { label: '「example.com」への通信を今後も断る', behavior: 'deny' })
+  assert.deepEqual(amendmentLabel(network({ host: 'example.com', action: 'allow' })), { label: '「example.com」への通信を今後聞かない', behavior: 'allow', kept: { kind: 'network', scope: 'example.com' } })
+  assert.deepEqual(amendmentLabel(network({ host: 'example.com', action: 'deny' })), { label: '「example.com」への通信を今後も断る', behavior: 'deny', kept: { kind: 'network', scope: 'example.com' } })
   for (const host of ['*.example.com', 'localhost', '127.0.0.1:8080', '[::1]:443', '::1', 'my_service.internal', 'example.com.']) assert.ok(networkAmendmentRange({ host, action: 'allow' }), host)
 })
 

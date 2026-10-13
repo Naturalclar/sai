@@ -26,6 +26,8 @@ test('countsTowardSuggest: 人が許可した・ルールがある・cwd が分�
   assert.equal(countsTowardSuggest(row), true)
   assert.equal(countsTowardSuggest({ ...row, by: 'jev' }), false, 'Jev の自動は人の回数に数えない')
   assert.equal(countsTowardSuggest({ ...row, behavior: 'deny' }), false)
+  // Codex の「今後も聞かない」の行（#772）は rule が空なので、[常に許可] を勧める回数に混ざらない
+  assert.equal(countsTowardSuggest({ ...row, rule: '', remember: false, codex_kept: { via: 'terminal', kind: 'command', scope: 'git add' } }), false)
   assert.equal(countsTowardSuggest({ ...row, rule: '' }), false)
   assert.equal(countsTowardSuggest({ ...row, cwd: '' }), false)
 })

@@ -32,6 +32,7 @@ import { ClaudeAuthBanner } from './ClaudeAuthBanner'
 import { isTypingTarget, navAction, navTarget, type NavTarget } from './sessionNav'
 import { DigestControls } from './DigestControls'
 import { DigestEngineControls } from './DigestEngineControls'
+import { PrBriefEngineControls } from './PrBriefEngineControls'
 import { JevControls } from './JevControls'
 import { PasteControls } from './PasteControls'
 import { PasteToFileContext } from './pasteSetting'
@@ -519,6 +520,8 @@ export function App() {
           <a className="menu-link" href="#/usage">使用量（トークンと費用）</a>
           {/* 一言の入切・口・モデルはどの幅でもここ（#288。前は環境変数）。PUT の失敗もここに出す */}
           {settings && <DigestEngineControls settings={settings} busy={settingsBusy} error={settingsError} onChange={(p) => void updateSettings(p)} />}
+          {/* PR の要約を作る口（#790。既定は一言と同じ口） */}
+          {settings && <PrBriefEngineControls settings={settings} busy={settingsBusy} onChange={(p) => void updateSettings(p)} />}
           {/* 許可の確率を Jev に聞くか（#491。既定は入。鍵が無ければ送らない） */}
           {settings && <JevControls settings={settings} busy={settingsBusy} onChange={(p) => void updateSettings(p)} />}
           {/* 長い貼り付けをファイルにして添えるか（#609。既定は切） */}

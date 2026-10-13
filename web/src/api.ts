@@ -49,6 +49,7 @@ import type {
   UsageResponse,
   PrsResponse,
   UsageReportResponse,
+  PrBriefResponse,
   PrDetailResponse,
   SessionFileResponse,
   PrReviewRequest,
@@ -58,7 +59,7 @@ import { fetchByRev, RevCache } from './revCache.ts'
 import { sessionFileUrl } from '../../shared/files.ts'
 import type { DigestFeedbackReason, DigestFeedbackRequest, DigestFeedbackResponse, DigestUsageReason } from '../../shared/digestFeedback.ts'
 
-export type { Agent, FeedRow, TurnStepsResponse, SessionSource, SessionSummary, SessionMeta, ManagerDraft, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, QueuedReply, ReplyQueue, ReplyQueueMap, ReplyQueueResponse, Loop, LoopMap, LoopRequest, Wait, WaitMap, AgentActivity, AgentActivityMessage, AgentStopResponse,Approval, ApprovalMap, ApprovalAnswer, TerminalDialog, Profile, PersonaId, SettingsResponse, SettingsRequest, ClaudeAuthCheckResponse, Viewer, SessionPermissionsResponse, SessionProgressResponse, ProgressStep, ProgressNote, SessionDiffResponse, SessionDiffSummaryResponse, GalleryResponse, GalleryItem, SearchResponse, SearchHit, DiffPr, DiffSection, DiffFileStat, PrSummary, PrRepo, PrsResponse, PrDetailResponse, PrComment, PrReviewRequest, PrReviewResponse, PrReviewEvent, AttachmentResponse, UsageResponse, UsageReportResponse, UsageReportRow, UsageSessionRow, UsageTotals, UsageWindow, CodexUsage, ClaudeUsage } from '../../shared/types.ts'
+export type { Agent, FeedRow, TurnStepsResponse, SessionSource, SessionSummary, SessionMeta, ManagerDraft, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, QueuedReply, ReplyQueue, ReplyQueueMap, ReplyQueueResponse, Loop, LoopMap, LoopRequest, Wait, WaitMap, AgentActivity, AgentActivityMessage, AgentStopResponse,Approval, ApprovalMap, ApprovalAnswer, TerminalDialog, Profile, PersonaId, SettingsResponse, SettingsRequest, ClaudeAuthCheckResponse, Viewer, SessionPermissionsResponse, SessionProgressResponse, ProgressStep, ProgressNote, SessionDiffResponse, SessionDiffSummaryResponse, GalleryResponse, GalleryItem, SearchResponse, SearchHit, DiffPr, DiffSection, DiffFileStat, PrSummary, PrRepo, PrsResponse, PrDetailResponse, PrBrief, PrBriefResponse, PrComment, PrReviewRequest, PrReviewResponse, PrReviewEvent, AttachmentResponse, UsageResponse, UsageReportResponse, UsageReportRow, UsageSessionRow, UsageTotals, UsageWindow, CodexUsage, ClaudeUsage } from '../../shared/types.ts'
 
 /**
  * `PUT /api/sessions/<id>/meta` のボディ。`SessionMeta` の一部を重ねる。
@@ -300,6 +301,9 @@ export const api = {
   /** GitHub にレビューを投稿する（#526）。SAI が GitHub に書く唯一の口 */
   postPrReview: (repo: string, number: number, body: PrReviewRequest) =>
     sendJSON<PrReviewResponse>('POST', `/api/prs/${repo.split('/').map(encodeURIComponent).join('/')}/${number}/review`, body),
+  /** PR の要約を作る（#790）。押したときだけ。材料も送り先もサーバが決める。`via` は画面に出していた送り先で、いまの口と違えばサーバが 409 で作らない */
+  makePrBrief: (repo: string, number: number, via: string) =>
+    sendJSON<PrBriefResponse>('POST', `/api/prs/${repo.split('/').map(encodeURIComponent).join('/')}/${number}/summary`, { via }),
   /** サーバ側の設定（一言の性格。digest が有効か） */
   settings: () => getJSON<SettingsResponse>('/api/settings'),
   setSettings: (body: SettingsRequest) => sendJSON<SettingsResponse>('PUT', '/api/settings', body),

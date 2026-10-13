@@ -1865,7 +1865,7 @@ test('GET/PUT /api/settings: 性格と Linear の workspace。知らない値は
   assert.ok(Array.isArray(knownProjects))
   assert.deepEqual(
     fixed,
-    { persona: 'ENFP', linear_workspace: '', digest: true, digest_on: false, digest_error: '', next_ask: true, next_ask_on: false, provider: 'claude', digest_model: '', model: 'fake', jev_on: true, jev_ready: false, jev_auto: 0, paste_to_file: false, reply_mode: '', send_across: [] },
+    { persona: 'ENFP', linear_workspace: '', digest: true, digest_on: false, digest_error: '', next_ask: true, next_ask_on: false, provider: 'claude', digest_model: '', model: 'fake', pr_summary_provider: '', pr_summary_model: '', jev_on: true, jev_ready: false, jev_auto: 0, paste_to_file: false, reply_mode: '', send_across: [] },
     '既定は ENFP。digest はテストで差し替えた Digester の状態（有効、口は既定の claude）で、settings.json の入切（既定オフ）では組み直さない。Linear は未設定',
   )
   const put = (body: unknown, headers: Record<string, string> = {}) =>
@@ -1908,7 +1908,7 @@ test('GET/PUT /api/settings: 性格と Linear の workspace。知らない値は
   assert.equal(data.digest_error, '')
   assert.equal(data.digest_model, 'qwen3:8b', '前後の空白は落とす')
   assert.equal(data.model, 'qwen3:8b')
-  assert.deepEqual(JSON.parse(await readFile(join(feedDir, 'settings.json'), 'utf-8')), { persona: 'ISTJ', linear_workspace: '', digest: true, digest_provider: 'openai', digest_model: 'qwen3:8b', jev: true, jev_auto: 0, paste_to_file: false, reply_mode: '', send_across: [] }, '案の入切は押すまで書かない（#561 のレビュー）')
+  assert.deepEqual(JSON.parse(await readFile(join(feedDir, 'settings.json'), 'utf-8')), { persona: 'ISTJ', linear_workspace: '', digest: true, digest_provider: 'openai', digest_model: 'qwen3:8b', pr_summary_provider: '', pr_summary_model: '', jev: true, jev_auto: 0, paste_to_file: false, reply_mode: '', send_across: [] }, '案の入切は押すまで書かない（#561 のレビュー）')
   data = (await (await put({ digest_provider: 'claude', digest_model: '' })).json()) as SettingsResponse
   assert.equal(data.model, 'haiku', 'claude でモデルが空なら haiku')
   assert.equal((await put({ digest: 'yes' })).status, 400)

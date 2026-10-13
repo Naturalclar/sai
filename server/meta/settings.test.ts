@@ -24,7 +24,7 @@ test('SettingsStore: 読めないキーはそのキーだけ既定に落とす�
   const dir = await mkdtemp(join(tmpdir(), 'sai-settings-bad-'))
   try {
     const path = join(dir, 'settings.json')
-    await writeFile(path, JSON.stringify({ persona: 'ISTJ', linear_workspace: 'acme', digest: 'yes', digest_provider: 'gemini', digest_model: '--dangerously-skip-permissions' }))
+    await writeFile(path, JSON.stringify({ persona: 'ISTJ', linear_workspace: 'acme', digest: 'yes', digest_provider: 'gemini', digest_model: '--dangerously-skip-permissions', pr_summary_provider: 'gemini', pr_summary_model: '--dangerously-skip-permissions' }))
     assert.deepEqual(await new SettingsStore(path).get(), { ...DEFAULTS, persona: 'ISTJ', linear_workspace: 'acme' })
     await writeFile(path, '{ broken')
     assert.deepEqual(await new SettingsStore(path).get(), DEFAULTS)

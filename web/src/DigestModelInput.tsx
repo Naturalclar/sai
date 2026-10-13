@@ -5,7 +5,7 @@ import type { KeyboardEvent } from 'react'
  * 一言を作るモデル名の欄（#288）。Enter か欄を離れたときに保存し、空にすれば「口の既定」（claude は haiku）。
  * 形の検査はサーバ（`shared/digestSettings.ts` の `isDigestModel`）で、通らなければ PUT のエラーが出る
  */
-export function DigestModelInput({ value, placeholder, busy, onChange }: { value: string; placeholder: string; busy: boolean; onChange: (next: string) => void }) {
+export function DigestModelInput({ value, placeholder, busy, onChange, label = '一言を作るモデル' }: { value: string; placeholder: string; busy: boolean; onChange: (next: string) => void; label?: string }) {
   const [draft, setDraft] = useState(value)
   const [editing, setEditing] = useState(false)
   const shown = editing ? draft : value
@@ -31,8 +31,8 @@ export function DigestModelInput({ value, placeholder, busy, onChange }: { value
       value={shown}
       disabled={busy}
       placeholder={placeholder}
-      aria-label="一言を作るモデル"
-      title="一言を作るモデル名。空なら口の既定（claude は haiku。openai 互換は既定が無いので必須）"
+      aria-label={label}
+      title={`${label}の名前。空なら口の既定（claude は haiku。openai 互換は既定が無いので必須）`}
       spellCheck={false}
       autoCapitalize="off"
       autoCorrect="off"

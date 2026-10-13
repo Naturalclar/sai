@@ -564,6 +564,38 @@ export interface PrDetailResponse {
   line_comments_omitted?: number
   /** 行コメントだけ読めなかった理由（ほかは出す） */
   line_comments_error?: string
+  /**
+   * 要約（#790）を作れるとき、材料をどこへ送るか（一言と同じ口。例 `claude -p --model …` / 手元のモデルの URL）。
+   * 口が組まれていない（一言も案も切っている・組めなかった）なら省略で、画面は作るボタンを出さない
+   */
+  summary_via?: string
+  /** 覚えている要約（#790）。まだ作っていなければ省略。開いただけでは作らない */
+  summary?: PrBrief
+}
+
+/**
+ * PR 1 本の要約（#790）。押したときだけ作り、手元の `pr-summaries.json` に覚える（派生データ。GitHub には書かない）。
+ * 一言（`digest.jsonl`）とは別の置き場で、口調は付けない
+ */
+export interface PrBrief {
+  /** 要約の本文。**文字として描く**（Markdown にも HTML にもしない） */
+  text: string
+  /** 作ったときの head のコミット。いまの head と違えば、画面は「古い要約」と出す */
+  head_sha: string
+  /** 作った時刻（ISO） */
+  at: string
+  /** 作ったときに付いていたコメントの数（会話・レビュー・行のコメント）。画面はいまの数との差を「増えたコメント」として添える */
+  comments: number
+  /** 削ったこと（差分の一部だけを読んだ、など）。要約の下に出す。削っていなければ空 */
+  notes: string[]
+  /** 作ったときの送り先 */
+  via: string
+}
+
+/** POST /api/prs/<owner>/<repo>/<番号>/summary（#790）の応答。`made` は今回口を呼んだか（同じ材料なら覚えたものを返す） */
+export interface PrBriefResponse {
+  summary: PrBrief
+  made: boolean
 }
 
 /** GitHub のレビューの種類（#526）。既定は COMMENT で、ほかは人が明示的に選んだときだけ */
@@ -1961,6 +1993,13 @@ export interface SettingsResponse {
   digest_model: string
   /** 実際に使うモデル（`digest_model` が空なら口の既定。openai には既定が無いので空） */
   model: string
+  /**
+   * PR の要約（#790）を作る口。空は「一言と同じ口」（既定）。`claude` / `openai` を選ぶと、一言の入切・口とは別に、要約だけその口で作る
+   * （送り先 `SAI_DIGEST_URL` と鍵は一言と同じ環境変数のまま）
+   */
+  pr_summary_provider: DigestProvider | ''
+  /** PR の要約を作るモデル。空は口の既定（claude は haiku。openai は既定が無いので作らない）。`pr_summary_provider` が空なら使わない */
+  pr_summary_model: string
   /** Linear の workspace（URL の linear.app/<workspace>/ の部分）。一言の中の ABC-123 のような識別子のリンク先。空なら組まない */
   linear_workspace: string
   /** 許可を Jev で予想するか（#491。settings.json の `jev`。既定は入） */
@@ -2007,6 +2046,10 @@ export interface SettingsRequest {
   digest_provider?: DigestProvider
   /** 一言を作るモデル。空文字で「口の既定」 */
   digest_model?: string
+  /** PR の要約（#790）を作る口。空文字で「一言と同じ口」 */
+  pr_summary_provider?: DigestProvider | ''
+  /** PR の要約を作るモデル。空文字で「口の既定」 */
+  pr_summary_model?: string
   /** 許可を Jev で予想するか（#491） */
   jev?: boolean
   /** 自動で常に許可する閾値（#499）。0 で「しない」、それ以外は 0.5〜1 */

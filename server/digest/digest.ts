@@ -645,6 +645,14 @@ export class Digester {
     return this.summarizer !== null
   }
 
+  /**
+   * いまの口（#790。PR の要約が同じ口・同じ設定で作る）。一言も案も切っている・組めなかったなら null。
+   * **ここから呼んだ結果は、一言の列・失敗の数え・`digest.jsonl` に混ぜない**（呼ぶ側が自分で持つ）
+   */
+  get mouth(): Summarizer | null {
+    return this.summarizer
+  }
+
   /** 実際に使うモデル（空の設定なら口の既定を入れたもの） */
   get model(): string {
     return this.modelValue

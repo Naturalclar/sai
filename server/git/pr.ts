@@ -2,13 +2,14 @@
 //
 // **ここが SAI で唯一、外のネットワークに問い合わせる場所**なので、次のように閉じてある:
 //
-// - 叩くのは `gh pr view <branch> --json …` の 1 形だけ。他のサブコマンドは組み立てられない（#636 で reviewDecision を足した）
+// - 叩くのは `gh pr view <branch> --json …` の 1 形だけ。他のサブコマンドは組み立てられない（#636 で reviewDecision、#793 で latestReviews / headRefOid を足した）
 // - 認証は `gh` に任せる（SAI は鍵を持たない）。`gh` が無い・ログインしていない・PR が無い・
 //   ネットワークが死んでいる、のどれでも **null を返すだけ**で、差分そのものの表示は落とさない
 // - `SAI_GH=0` で丸ごと切れる。実行ファイルはサーバの PATH の `gh`（#288）
 // - cwd はセッションの行から取り、ブランチ名は git から読む。どちらもリクエストからは受けない
 import { spawn } from 'node:child_process'
 import type { DiffPr } from '../../shared/types.ts'
+import { reviewDecisionOf } from '../../shared/prReviewState.ts'
 
 /** 引くのを諦めるまで。差分の要約はこれを待たせるので短く */
 export const PR_TIMEOUT_MS = 4000
@@ -55,7 +56,8 @@ export function parsePr(stdout: string): DiffPr | null {
     url: typeof o.url === 'string' ? o.url : '',
     state: typeof o.state === 'string' ? o.state : '',
     draft: o.isDraft === true,
-    review_decision: typeof o.reviewDecision === 'string' ? o.reviewDecision : '',
+    // reviewDecision が空なら latestReviews から組む（#793。shared/prReviewState.ts の 1 か所）
+    review_decision: reviewDecisionOf(o),
   }
 }
 
@@ -97,7 +99,7 @@ export class GhPr implements PrLookup {
     return new Promise((resolve) => {
       let child
       try {
-        child = spawn(this.bin, ['pr', 'view', branch, '--json', 'number,url,state,isDraft,reviewDecision'], {
+        child = spawn(this.bin, ['pr', 'view', branch, '--json', 'number,url,state,isDraft,reviewDecision,latestReviews,headRefOid'], {
           cwd,
           stdio: ['ignore', 'pipe', 'ignore'],
         })

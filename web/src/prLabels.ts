@@ -9,14 +9,23 @@ export function checkLabel(state: PrCheckState): { mark: string; title: string }
   return null
 }
 
-/** 承認済みか（GitHub の `reviewDecision` が `APPROVED`）。チェックの印（`ApprovedMark`）を出すかはここ 1 か所で決める（#636） */
+/**
+ * 承認済みか（`review_decision` が `APPROVED`）。チェックの印（`ApprovedMark`）を出すかはここ 1 か所で決める（#636）。
+ * 「承認のあとに更新あり」（`APPROVED_STALE`。#793）は承認済みにしない（緑のチェックは出さない）
+ */
 export function isApproved(decision: string | undefined): boolean {
   return decision === 'APPROVED'
 }
 
-/** レビューの判定。GitHub の `reviewDecision`。無い・知らない値は空 */
+/** 承認のあとに head が進んだ（`APPROVED_STALE`。#793）。一覧と PR 画面では別の色の印、サイドバーのバッジには印を出さない */
+export function isStaleApproval(decision: string | undefined): boolean {
+  return decision === 'APPROVED_STALE'
+}
+
+/** レビューの判定の文言。`review_decision`（サーバが `shared/prReviewState.ts` で組んだもの）。無い・知らない値は空 */
 export function reviewLabel(decision: string): string {
   if (decision === 'APPROVED') return '承認済み'
+  if (decision === 'APPROVED_STALE') return '承認のあとに更新あり'
   if (decision === 'CHANGES_REQUESTED') return '修正の依頼あり'
   if (decision === 'REVIEW_REQUIRED') return 'レビュー待ち'
   return ''

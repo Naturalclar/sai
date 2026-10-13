@@ -85,6 +85,10 @@ test('prLink: PR の url へ GitHub の印 + #番号で飛ぶ。状態は色の�
   assert.equal(prLink({ ...pr, state: 'MERGED', review_decision: 'APPROVED' })?.state, 'merged')
   assert.equal(prLink({ ...pr, review_decision: 'CHANGES_REQUESTED' })?.state, 'open')
   assert.equal(prLink({ ...pr, review_decision: 'CHANGES_REQUESTED' })?.approved, false)
+  // 承認のあとに更新あり（#793）: 色は緑にせず、チェックの印も付けない。言葉は注記に出る
+  assert.equal(prLink({ ...pr, review_decision: 'APPROVED_STALE' })?.state, 'open')
+  assert.equal(prLink({ ...pr, review_decision: 'APPROVED_STALE' })?.approved, false)
+  assert.equal(prLink({ ...pr, review_decision: 'APPROVED_STALE' })?.title, 'PR #531（オープン・承認のあとに更新あり） — Open in GitHub')
 })
 
 test('prLink: PR が無い・url が空・https でない url は出さない（href に javascript: などを入れない）', () => {

@@ -66,8 +66,9 @@ export const VIEWER_MISS_CACHE_MS = 60_000
 /** レビューの投稿を諦めるまで。読むより長く取る（投稿は 1 回きりなので、時間切れで結果が分からなくなるのを避けたい） */
 export const REVIEW_POST_TIMEOUT_MS = 30_000
 
-const LIST_FIELDS = 'number,title,author,headRefName,baseRefName,isDraft,updatedAt,url,additions,deletions,changedFiles,reviewDecision,statusCheckRollup,isCrossRepository'
-const VIEW_FIELDS = `${LIST_FIELDS},body,state,headRefOid`
+/** `latestReviews` と `headRefOid` は、`reviewDecision` が空のリポジトリで承認を組むため（#793。レビューした人の名前は API に出さない） */
+const LIST_FIELDS = 'number,title,author,headRefName,baseRefName,isDraft,updatedAt,url,additions,deletions,changedFiles,reviewDecision,latestReviews,headRefOid,statusCheckRollup,isCrossRepository'
+const VIEW_FIELDS = `${LIST_FIELDS},body,state`
 /** CI が終わったかを確かめるときに読む分だけ（#732。差分も本文も引かない） */
 const CI_FIELDS = 'state,statusCheckRollup'
 /** 会話のコメントとレビュー（#600）。**中身の `gh pr view` とは別に引く**（コメントが大きすぎて上限を超えても、本文と差分は落とさない） */

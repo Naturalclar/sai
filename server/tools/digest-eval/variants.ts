@@ -60,6 +60,17 @@ export const VARIANTS: readonly Variant[] = [
     },
   },
   {
+    // #782 の前の形（物差し）: 「それで何が変わったか」を言わせる行が無い。`--variants two-part-plain,two-part` で前と比べる
+    id: 'two-part-plain',
+    label: '2 つで組む・変わったことを言わせる行なし（#782 の前の形。物差し）',
+    make: async (input, summarize) => {
+      const plan = digestPlan(input.text)
+      if (plan.kind === 'full') return summarize(digestPrompt(input.persona, input.text, { ask: input.ask }))
+      const what = cleanWhat(plan, await summarize(digestWhatPrompt(input.persona, input.text, { ask: input.ask, effect: false })))
+      return joinDigest(what, plan.kind === 'two' ? plan.next : '')
+    },
+  },
+  {
     // 物差し（#713）: LLM を呼ばない。本文の 1 行目 + 頼みの文。1 行目が使えなければ今のプロンプトに落とす。口調は付かない
     id: 'extract',
     label: '要約せずに抜き出す（本文の 1 行目 + 頼みの文。使えなければ今のプロンプト。口調なしの物差し）',

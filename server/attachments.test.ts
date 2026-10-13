@@ -144,6 +144,31 @@ test('配る口: 前から置いてある（落としていない）原本も、
   assert.ok(!(await readdir(sub)).some((n) => n.endsWith('.tmp')), 'put の tmp は残らない')
 })
 
+test('預ける: 同じ中身を同時に置いても全部成功し、tmp は残らない（#791 のレビュー）', async () => {
+  const store = new AttachmentStore(join(dir, 'attachments'))
+  const results = await Promise.all([1, 2, 3].map(() => store.put('A1@r', JPEG_WITH_EXIF, 'same.jpg')))
+  assert.deepEqual(results.map((r) => r.error), ['', '', ''])
+  assert.equal(new Set(results.map((r) => r.attachment?.path)).size, 1, '同じ名前')
+  const names = await readdir(join(dir, 'attachments', attachmentDir('A1@r')))
+  assert.ok(!names.some((n) => n.endsWith('.tmp')), 'tmp は残らない')
+})
+
+test('配る口: 元のまま配るときは no-cache + ETag（前に持った GPS 入りの原本を使わせない）。軽い版は immutable のまま', async () => {
+  const sub = join(dir, 'attachments', attachmentDir('A1@r'))
+  await mkdir(sub, { recursive: true })
+  const name = `${'e'.repeat(16)}.jpeg`
+  await writeFile(join(sub, name), JPEG_WITH_EXIF)
+  const url = `${base}/api/attachments/${attachmentDir('A1@r')}/${name}`
+  const res = await fetch(url)
+  assert.equal(res.headers.get('cache-control'), 'private, no-cache')
+  const etag = res.headers.get('etag')
+  assert.match(etag ?? '', /^"a-[0-9a-f]{16}"$/)
+  assert.deepEqual(Buffer.from(await res.arrayBuffer()), JPEG_STRIPPED)
+  assert.equal((await fetch(url, { headers: { 'If-None-Match': etag! } })).status, 304)
+  await writeFile(join(sub, name), JPEG_STRIPPED)
+  assert.equal((await fetch(url, { headers: { 'If-None-Match': etag! } })).status, 304, '落とした後の中身が同じなら ETag も同じ')
+})
+
 test('AttachmentStore: 前からある添付の画像から起動時に一度だけ落とす。印があれば読み直さない（#791）', async () => {
   const d = await mkdtemp(join(tmpdir(), 'sai-att-strip-'))
   try {

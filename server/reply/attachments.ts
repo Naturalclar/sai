@@ -6,7 +6,7 @@
 import { createHash } from 'node:crypto'
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { stripImageMetadata } from '../local/imageMetadata.ts'
+import { STRIPPED_MARK, stripImageMetadata } from '../local/imageMetadata.ts'
 import { ATTACHMENT_FILE_NAME_RE, ATTACHMENT_NAME_RE, ATTACHMENT_DIR_RE, attachmentLabel, attachmentUrl, isUtf8Text, sniffPdf } from '../../shared/attachments.ts'
 import type { AttachmentKind } from '../../shared/attachments.ts'
 import { ICON_MIME, sniffImageType } from '../../shared/icon.ts'
@@ -34,13 +34,15 @@ export function attachmentDir(id: string): string {
   return createHash('sha1').update(id).digest('hex').slice(0, 16)
 }
 
-/** 前からある添付の画像からメタデータを落とし終えた印（#791）。落とし方を変えたら名前の数字を上げる */
-export const ATTACHMENTS_STRIPPED_MARK = '.metadata-stripped-1'
+/** 前からある添付の画像からメタデータを落とし終えた印（#791）。名前は `METADATA_STRIP_VERSION` から（落とし方を変えたら上がる） */
+export const ATTACHMENTS_STRIPPED_MARK = STRIPPED_MARK
 
 export class AttachmentStore {
   readonly dir: string
   /** 起動時の一括処理（作られたときに始める）。置くときと配るときはこれを待たない（原本の名前は変わらない） */
   private readonly cleaned: Promise<{ checked: number; changed: number; marked: boolean }>
+  /** tmp の連番（同じ中身を同時に置いても、同じ置き場を使う別の SAI と重なっても、tmp の名前が被らない） */
+  private seq = 0
 
   constructor(dir: string) {
     this.dir = dir
@@ -55,7 +57,7 @@ export class AttachmentStore {
   /**
    * 前からある添付の画像（この版より前に置いたもの。EXIF がそのまま）から一度だけメタデータを落とす（#791）。
    * 印があれば何もしない。1 枚ずつ読んで、落ちたものだけ tmp に書いて rename（名前は変えない。本文の行が指している）。
-   * 読めない・書けないものがあれば印は置かず、次の起動でまた。無くなっていたもの（ENOENT）は失敗に数えない
+   * 読めない・書けないものが残っても印は置く（配る口でも落とすので配るものは清い。置かないと、1 枚のせいで起動のたびに全部を読み直す）
    */
   private async stripStored(): Promise<{ checked: number; changed: number; marked: boolean }> {
     const out = { checked: 0, changed: 0, marked: false }
@@ -72,18 +74,16 @@ export class AttachmentStore {
     } catch {
       return out // 置き場がまだ無い（最初の put が作る。そのときの中身は落とした後のもの）
     }
-    let failed = 0
     for (const d of dirs) {
       let names: string[]
       try {
         names = (await readdir(join(this.dir, d))).filter((n) => ATTACHMENT_NAME_RE.test(n))
       } catch {
-        failed++
         continue
       }
       for (const n of names) {
         const path = join(this.dir, d, n)
-        const tmp = `${path}.strip.tmp`
+        const tmp = `${path}.${process.pid}.${++this.seq}.strip.tmp`
         try {
           const bytes = await readFile(path)
           const type = sniffImageType(bytes)
@@ -94,17 +94,13 @@ export class AttachmentStore {
           await writeFile(tmp, r.bytes)
           await rename(tmp, path)
           out.changed++
-        } catch (err) {
-          await rm(tmp, { force: true })
-          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') failed++
+        } catch {
+          await rm(tmp, { force: true }) // 読めない・書けないものは残す（配る口で落とす）
         }
       }
     }
-    if (failed === 0) {
-      await mkdir(this.dir, { recursive: true })
-      await writeFile(mark, '')
-      out.marked = true
-    }
+    await writeFile(mark, '')
+    out.marked = true
     return out
   }
 
@@ -127,10 +123,17 @@ export class AttachmentStore {
     const label = kind === 'image' ? '' : attachmentLabel(originalName)
     try {
       await mkdir(dirPath, { recursive: true })
-      // tmp に書いて rename（起動時の一括処理が、書きかけの原本を読んで途中のまま置き直さないように）
-      const tmp = join(dirPath, `${name}.${process.pid}.tmp`)
+      // tmp に書いて rename（起動時の一括処理が、書きかけの原本を読んで途中のまま置き直さないように）。
+      // 同じ中身を同時に 2 回置くと後の rename が ENOENT になりうるが、名前が中身のハッシュなので「もう置いてある」なら成功
+      const target = join(dirPath, name)
+      const tmp = join(dirPath, `${name}.${process.pid}.${++this.seq}.tmp`)
       await writeFile(tmp, bytes)
-      await rename(tmp, join(dirPath, name))
+      try {
+        await rename(tmp, target)
+      } catch (err) {
+        await rm(tmp, { force: true })
+        if (!(await stat(target).catch(() => null))) throw err
+      }
       // 名前なしで同じ中身を置き直したら、前の名前は消す（#667 のレビュー。残すと、画面は名前なしなのに本文には前の名前が載る）
       if (label) await writeFile(join(dirPath, `${name}${LABEL_SUFFIX}`), label, 'utf-8')
       else if (kind !== 'image') await rm(join(dirPath, `${name}${LABEL_SUFFIX}`), { force: true })

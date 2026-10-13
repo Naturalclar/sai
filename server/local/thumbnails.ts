@@ -13,7 +13,7 @@ import { mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from 'n
 import { join } from 'node:path'
 import type { IconType } from '../../shared/icon.ts'
 import { isBandImage } from '../../shared/images.ts'
-import { stripImageMetadata } from './imageMetadata.ts'
+import { STRIPPED_MARK, stripImageMetadata } from './imageMetadata.ts'
 
 /** これより軽い画像は縮めずに元のまま返す（実測: 100KB 未満が 306 枚中 131 枚。縮める 0.1〜0.5 秒のほうが高い） */
 export const THUMB_MIN_BYTES = 200 * 1024
@@ -44,9 +44,9 @@ export const THUMB_KEEP = 1000
 /**
  * 「前からある軽い版は消した」印（#791）。`sips -Z` は EXIF を落とさないので、この版より前に作った軽い版には元の写真の
  * GPS が残っている。解析して書き直さず、**消して次に求められたときに作り直す**（派生なので消してよい。解析で壊す心配が無い）。
- * 消し終えたらこの名前の空ファイルを置き、次の起動では見ない。落とし方を変えたら名前の数字を上げる（もう一度消える）
+ * 消し終えたらこの名前の空ファイルを置き、次の起動では見ない。名前の数字は `METADATA_STRIP_VERSION`（落とし方を変えたら上げる＝もう一度消える）
  */
-export const THUMB_STRIPPED_MARK = '.metadata-stripped-1'
+export const THUMB_STRIPPED_MARK = STRIPPED_MARK
 /** 軽い版のファイル名の形 */
 const THUMB_NAME_RE = /^[0-9a-f]{32}(-\d+)?\.(jpg|png)$/
 /** 作っている最中のファイル（`make()` の `.src` / `.tmp.*`）。起動時に残っていれば、前の SAI が途中で落ちたもの */

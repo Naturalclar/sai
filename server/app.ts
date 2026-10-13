@@ -4949,8 +4949,10 @@ export function createApp(
         // 履歴の鍵は EXIF を落とした後の中身から（#791）。前から置いてある（落としていない）アイコンでも同じ鍵になるよう、ここでも落としてから
         const raw = await readFile(icon.path)
         const rawKind = sniffImageType(raw)
-        const key = historyKey(rawKind ? stripImageMetadata(raw, rawKind).bytes : raw)
-        if (entries.some((e) => e.key === key)) payload.current = key
+        // 前からある履歴は落とす前の鍵のまま残っているので、落とす前・後のどちらの鍵でも引く
+        const keys = [historyKey(raw), historyKey(rawKind ? stripImageMetadata(raw, rawKind).bytes : raw)]
+        const current = entries.find((e) => keys.includes(e.key))
+        if (current) payload.current = current.key
       } catch {
         // 読めなければ印を付けないだけ
       }
@@ -5257,10 +5259,23 @@ export function createApp(
         }
         // 元のまま配るとき（しきい値未満・ライトボックス・ダウンロード）も EXIF は落とす（#791。前からある原本を起動時の一括処理が
         // まだ通していない間や、置き直せなかったものでも、配るものは清い。落とす物が無ければ同じ Buffer）
-        const out = t.kind === 'thumb' ? { bytes: t.bytes, mime: ICON_MIME[t.type] } : { bytes: kind ? stripImageMetadata(body, kind).bytes : body, mime: found.mime }
-        // 名前が中身のハッシュなので、同じ URL の中身は変わらない
-        res.writeHead(200, { 'Content-Type': out.mime, 'Content-Length': out.bytes.length, 'Cache-Control': 'private, max-age=31536000, immutable' })
-        res.end(req.method === 'HEAD' ? undefined : out.bytes)
+        if (t.kind === 'thumb') {
+          // 軽い版の URL は版（THUMB_VERSION）付きで、名前が中身のハッシュなので、同じ URL の中身は変わらない
+          res.writeHead(200, { 'Content-Type': ICON_MIME[t.type], 'Content-Length': t.bytes.length, 'Cache-Control': 'private, max-age=31536000, immutable' })
+          res.end(req.method === 'HEAD' ? undefined : t.bytes)
+          return
+        }
+        // 元のまま配るときは no-cache + ETag。名前は変わらないのに中身は変わりうる（#791 で前からある原本から EXIF を落とした）ので、
+        // ブラウザが前に持った GPS 入りの原本をそのまま使わせない
+        const original = kind ? stripImageMetadata(body, kind).bytes : body
+        const etag = `"a-${createHash('sha1').update(original).digest('hex').slice(0, 16)}"`
+        if (req.headers['if-none-match'] === etag) {
+          res.writeHead(304, { ETag: etag, 'Cache-Control': 'private, no-cache' })
+          res.end()
+          return
+        }
+        res.writeHead(200, { 'Content-Type': found.mime, 'Content-Length': original.length, 'Cache-Control': 'private, no-cache', ETag: etag })
+        res.end(req.method === 'HEAD' ? undefined : original)
         return
       }
       // セッションに出てきた画像の一覧と、Claude の transcript の画像（#504）。どちらもパスはリクエストから受けない

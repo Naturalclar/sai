@@ -19,10 +19,20 @@ import type { IconType } from '../../shared/icon.ts'
 
 export { crc32 }
 
+/**
+ * 落とし方の版。変えたら上げる。置き場の印（`STRIPPED_MARK`。前からあるものに一度かけ終えた印）の名前がこれから決まるので、
+ * 上げると次の起動でもう一度かかる（軽い版は消して作り直し、添付の原本は落とし直す）
+ */
+export const METADATA_STRIP_VERSION = 1
+/** 置き場（thumbs/・attachments/）に置く「前からあるものにかけ終えた」印のファイル名 */
+export const STRIPPED_MARK = `.metadata-stripped-${METADATA_STRIP_VERSION}`
+
 export interface StripResult {
   bytes: Buffer
   /** 何かを落とした（か、向きを置き直した）。false なら bytes は入力そのもの */
   changed: boolean
+  /** 形が読めず諦めた（bytes は入力そのもので、メタデータが残っているかもしれない）。「落とす物が無かった」とは別 */
+  unreadable?: true
 }
 
 const ICC_HEAD = Buffer.from('ICC_PROFILE\0', 'latin1')
@@ -157,10 +167,8 @@ export function pngChunk(type: string, data: Buffer): Buffer {
 function eoiAfter(b: Buffer, from: number): number {
   let i = from
   while (i + 1 < b.length) {
-    if (b[i] !== 0xff) {
-      i++
-      continue
-    }
+    i = b.indexOf(0xff, i) // 次の FF まで飛ぶ（1 バイトずつの JS のループにしない。10MB の原本を配るたびに通る）
+    if (i < 0 || i + 1 >= b.length) return b.length
     const m = b[i + 1]!
     if (m === 0x00 || m === 0xff || (m >= 0xd0 && m <= 0xd7)) {
       i += m === 0xff ? 1 : 2
@@ -174,14 +182,15 @@ function eoiAfter(b: Buffer, from: number): number {
 }
 
 function stripJpeg(b: Buffer): StripResult {
-  const same = { bytes: b, changed: false }
-  if (b.length < 4 || b[0] !== 0xff || b[1] !== 0xd8) return same
+  const same: StripResult = { bytes: b, changed: false }
+  const unreadable: StripResult = { bytes: b, changed: false, unreadable: true }
+  if (b.length < 4 || b[0] !== 0xff || b[1] !== 0xd8) return unreadable
   const parts: Buffer[] = [b.subarray(0, 2)]
   let orientation: number | undefined
   let changed = false
   let i = 2
   while (i < b.length) {
-    if (b[i] !== 0xff) return same // 形が読めない。触らない
+    if (b[i] !== 0xff) return unreadable // 形が読めない。触らない
     // マーカーの前の詰め物（FF の連続）
     if (b[i + 1] === 0xff) {
       parts.push(b.subarray(i, i + 1))
@@ -189,12 +198,12 @@ function stripJpeg(b: Buffer): StripResult {
       continue
     }
     const marker = b[i + 1]
-    if (marker === undefined) return same
+    if (marker === undefined) return unreadable
     if (marker === 0xda || marker === 0xd9) {
       // SOS からは画素（RST を含む）なので EOI までそのまま。EOI の後ろ（MPF の副画像・Motion Photo の動画）は落とす
       let end = i + 2
       if (marker === 0xda) {
-        if (i + 4 > b.length) return same
+        if (i + 4 > b.length) return unreadable
         end = eoiAfter(b, i + 2 + b.readUInt16BE(i + 2))
       }
       parts.push(b.subarray(i, end))
@@ -206,9 +215,9 @@ function stripJpeg(b: Buffer): StripResult {
       i += 2
       continue
     }
-    if (i + 4 > b.length) return same
+    if (i + 4 > b.length) return unreadable
     const len = b.readUInt16BE(i + 2)
-    if (len < 2 || i + 2 + len > b.length) return same
+    if (len < 2 || i + 2 + len > b.length) return unreadable
     const seg = b.subarray(i, i + 2 + len)
     if (keepJpegSegment(marker, seg.subarray(4))) {
       parts.push(seg)
@@ -225,8 +234,9 @@ function stripJpeg(b: Buffer): StripResult {
 }
 
 function stripPng(b: Buffer): StripResult {
-  const same = { bytes: b, changed: false }
-  if (b.length < 8 || !b.subarray(0, 8).equals(PNG_SIG)) return same
+  const same: StripResult = { bytes: b, changed: false }
+  const unreadable: StripResult = { bytes: b, changed: false, unreadable: true }
+  if (b.length < 8 || !b.subarray(0, 8).equals(PNG_SIG)) return unreadable
   const parts: Buffer[] = [b.subarray(0, 8)]
   let changed = false
   let orientation: number | undefined
@@ -236,7 +246,7 @@ function stripPng(b: Buffer): StripResult {
     const len = b.readUInt32BE(i)
     const type = b.toString('latin1', i + 4, i + 8)
     const end = i + 12 + len
-    if (end > b.length) return same // 壊れている
+    if (end > b.length) return unreadable // 壊れている
     const data = b.subarray(i + 8, i + 8 + len)
     if (type === 'eXIf' && isOrientationOnlyTiff(data)) {
       parts.push(b.subarray(i, end)) // 自分で置いた向きだけの eXIf。落として置き直さない
@@ -266,8 +276,9 @@ function stripPng(b: Buffer): StripResult {
 
 /** WebP（RIFF）。`RIFF` + 長さ + `WEBP` + チャンク（fourcc + 長さ LE + 中身 + 偶数詰め） */
 function stripWebp(b: Buffer): StripResult {
-  const same = { bytes: b, changed: false }
-  if (b.length < 12 || b.toString('latin1', 0, 4) !== 'RIFF' || b.toString('latin1', 8, 12) !== 'WEBP') return same
+  const same: StripResult = { bytes: b, changed: false }
+  const unreadable: StripResult = { bytes: b, changed: false, unreadable: true }
+  if (b.length < 12 || b.toString('latin1', 0, 4) !== 'RIFF' || b.toString('latin1', 8, 12) !== 'WEBP') return unreadable
   const chunks: Buffer[] = []
   let changed = false
   let i = 12
@@ -275,7 +286,7 @@ function stripWebp(b: Buffer): StripResult {
     const fourcc = b.toString('latin1', i, i + 4)
     const len = b.readUInt32LE(i + 4)
     const end = i + 8 + len + (len % 2)
-    if (i + 8 + len > b.length) return same // 壊れている
+    if (i + 8 + len > b.length) return unreadable // 壊れている
     if (DROP_WEBP.has(fourcc)) changed = true
     else chunks.push(b.subarray(i, Math.min(end, b.length)))
     i = end

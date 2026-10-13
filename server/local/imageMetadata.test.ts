@@ -92,9 +92,11 @@ test('JPEG: 落とすものが無ければ入力そのもの。壊れていれ�
   const r = stripImageMetadata(clean, 'jpeg')
   assert.equal(r.changed, false)
   assert.equal(r.bytes, clean, '同じ Buffer')
-  // セグメントの長さがファイルの外を指す
+  // セグメントの長さがファイルの外を指す（読めなかった、の信号が付く。落とす物が無かった clean には付かない）
   const broken = Buffer.concat([SOI, Buffer.from([0xff, 0xe1, 0xff, 0xff, 1, 2])])
   assert.equal(stripImageMetadata(broken, 'jpeg').bytes, broken)
+  assert.equal(stripImageMetadata(broken, 'jpeg').unreadable, true)
+  assert.equal(r.unreadable, undefined)
   // SOI の後にマーカーでないバイト
   const junk = Buffer.concat([SOI, Buffer.from([0x00, 0xe1, 0, 4, 1, 2])])
   assert.equal(stripImageMetadata(junk, 'jpeg').bytes, junk)
@@ -144,6 +146,7 @@ test('PNG: 落とすものが無ければ入力そのもの。壊れていれば
   assert.equal(stripImageMetadata(PNG_STRIPPED, 'png').bytes, PNG_STRIPPED)
   const broken = Buffer.concat([PNG_SIG, Buffer.from([0, 0, 1, 0, 0x74, 0x45, 0x58, 0x74, 1])])
   assert.equal(stripImageMetadata(broken, 'png').bytes, broken)
+  assert.equal(stripImageMetadata(broken, 'png').unreadable, true)
 })
 
 /** WebP のチャンク（fourcc + 長さ LE + 中身 + 偶数詰め） */

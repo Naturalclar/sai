@@ -6,8 +6,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { SKIPPED_MARK } from '../../shared/diff.ts'
-import { changedPaths, clampPatch, NotAGitRepo, parseStats, RealGit, resolveBase, sessionDiff, sessionDiffSummary, validBase } from './diff.ts'
+import { changedPaths, clampPatch, NotAGitRepo, parseStats, RealGit, resolveBase, sessionDiff, sessionDiffSummary, validBase, workState } from './diff.ts'
 import type { Git } from './diff.ts'
+import { FakeWorkGit } from './workStateFake.ts'
 
 const run = promisify(execFile)
 /** テスト用のリポジトリ。名前とメールは環境に依らないよう固定する */
@@ -377,5 +378,88 @@ test('changedPaths: ブランチの差分・未コミット・追跡外のパス
     assert.deepEqual(await changedPaths(new RealGit(), ''), { root: '', paths: [] })
   } finally {
     await rm(dir, { recursive: true, force: true })
+  }
+})
+
+// ---- #795: worktree に作りかけがあるか（「空き」の材料）
+
+test('workState: 未コミットの変更・base に入っていないコミットを見分ける。squash マージ済みのブランチが残っているだけは clean。git でなければ none、読めなければ unknown（#795）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-work-'))
+  const real = new RealGit()
+  try {
+    await git(dir, 'init', '-q', '-b', 'main')
+    await writeFile(join(dir, '.gitignore'), 'ignored/\n')
+    await writeFile(join(dir, 'a.ts'), 'a\n')
+    await git(dir, 'add', '.')
+    await git(dir, 'commit', '-q', '-m', 'init')
+    assert.equal(await workState(real, dir), 'clean', 'main にいて変更なし')
+    // コミットしていない変更・追跡外のファイル（.gitignore 済みは数えない）
+    await run('mkdir', ['-p', join(dir, 'ignored')])
+    await writeFile(join(dir, 'ignored', 'shot.png'), 'x')
+    assert.equal(await workState(real, dir), 'clean')
+    await writeFile(join(dir, 'new.ts'), 'n\n')
+    assert.equal(await workState(real, dir), 'dirty', '追跡外のファイル')
+    await rm(join(dir, 'new.ts'))
+    await writeFile(join(dir, 'a.ts'), 'a2\n')
+    assert.equal(await workState(real, dir), 'dirty')
+    // ブランチにコミットした（PR になっているかは呼び出し側が見る）
+    await git(dir, 'switch', '-q', '-c', 'feat')
+    await git(dir, 'commit', '-q', '-am', 'change a')
+    assert.equal(await workState(real, dir), 'ahead')
+    // cwd がサブディレクトリでも同じ答え（パスはトップからの形で比べる。#795 のレビュー）
+    await run('mkdir', ['-p', join(dir, 'sub')])
+    assert.equal(await workState(real, join(dir, 'sub')), 'ahead')
+    // squash マージ: コミットは main に届かないが、同じ中身が main に入った
+    await git(dir, 'switch', '-q', 'main')
+    await writeFile(join(dir, 'a.ts'), 'a2\n')
+    await writeFile(join(dir, 'other.ts'), 'o\n')
+    await git(dir, 'add', '.')
+    await git(dir, 'commit', '-q', '-m', 'change a (#1) と、別の変更')
+    await git(dir, 'switch', '-q', 'feat')
+    assert.equal(await workState(real, dir), 'clean', 'マージ済みのブランチが残っているだけ')
+    // そのあと main が同じファイルを変えると、入っていない側に倒れる（空きにしない側）
+    await git(dir, 'switch', '-q', 'main')
+    await writeFile(join(dir, 'a.ts'), 'a3\n')
+    await git(dir, 'commit', '-q', '-am', 'change a again')
+    await git(dir, 'switch', '-q', 'feat')
+    assert.equal(await workState(real, dir), 'ahead')
+    // ASCII 以外の名前のファイルだけを足したブランチも、入っていない側（引用符付きのパスで比べ損ねない。#795 のレビュー）
+    await git(dir, 'switch', '-q', 'main')
+    await git(dir, 'switch', '-q', '-c', 'memo')
+    await run('mkdir', ['-p', join(dir, 'docs')])
+    await writeFile(join(dir, 'docs', 'メモ [1].md'), 'm\n')
+    await git(dir, 'add', '.')
+    await git(dir, 'commit', '-q', '-m', 'memo')
+    assert.equal(await workState(real, dir), 'ahead')
+    const plain = await mkdtemp(join(tmpdir(), 'sai-work-plain-'))
+    try {
+      assert.equal(await workState(real, plain), 'none', 'git のリポジトリでない')
+    } finally {
+      await rm(plain, { recursive: true, force: true })
+    }
+    assert.equal(await workState(real, ''), 'unknown')
+    assert.equal(await workState(real, join(dir, 'gone')), 'unknown', 'cwd が消えた')
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('workState: git が落ちた・base が決まらないときは unknown。偽物（workStateFake）の各状態は同じ答えになる（#795）', async () => {
+  const broken = new FakeGit()
+  broken.fail.add('rev-parse --show-toplevel')
+  assert.equal(await workState(broken, '/w'), 'unknown')
+  // トップは読めるが、比べる相手（main / master / origin/*）が無い
+  const noBase: Git = {
+    async run(_cwd, args) {
+      if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') return '/w\n'
+      if (args.includes('status')) return ''
+      throw new Error('no such ref')
+    },
+  }
+  assert.equal(await workState(noBase, '/w'), 'unknown')
+  const fake = new FakeWorkGit()
+  for (const [state, want] of [['none', 'none'], ['clean', 'clean'], ['dirty', 'dirty'], ['ahead', 'ahead'], ['merged', 'clean'], ['unknown', 'unknown']] as const) {
+    fake.states.set('/w', state)
+    assert.equal(await workState(fake, '/w'), want, state)
   }
 })

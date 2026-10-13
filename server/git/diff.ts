@@ -336,6 +336,59 @@ export async function changedPaths(git: Git, cwd: string): Promise<{ root: strin
   return { root, paths: [...new Set([...branch, ...working, ...untracked])] }
 }
 
+/**
+ * `git diff --numstat -z` のパス（`workState()` 用）。`-z` なので、ASCII 以外の名前も引用符・8 進の形にならずにそのまま返る
+ * （付けないと `"docs/\343…"` の形で返り、そのままパスの指定に渡しても当たらない）。`--no-renames` なので 1 件は `足した数\t消した数\tパス\0`
+ */
+async function numstatPathsZ(git: Git, cwd: string, args: string[]): Promise<string[]> {
+  const out = await git.run(cwd, ['diff', '--numstat', '-z', '--no-renames', ...args])
+  return out
+    .split('\0')
+    .map((item) => item.split('\t'))
+    .filter((parts) => parts.length >= 3)
+    .map((parts) => parts.slice(2).join('\t'))
+}
+
+/** `workState()` が、ブランチの触ったファイルを base と比べる数の上限（これより多ければ比べずに「入っていない」側） */
+export const WORK_STATE_MAX_FILES = 200
+
+/**
+ * その worktree に作りかけがあるか（#795。「空き」の材料）。読むだけのサブコマンド（`rev-parse` / `status`（`--no-optional-locks`）/ `merge-base` / `diff`）で見る。
+ * - `none`: git のリポジトリでない（作りかけを見る対象が無い）
+ * - `dirty`: コミットしていない変更・追跡外のファイルがある（`.gitignore` 済みは数えない）
+ * - `ahead`: HEAD に、base に入っていないコミットがあり、**その中身が base にまだ無い**
+ * - `clean`: どれでもない。**squash マージ済みのブランチが残っているだけ**もここ（コミットは base に届かないので、
+ *   ブランチが触ったファイルが base と同じ中身かで見る。あとから base がそのファイルを変えると `ahead` 側に倒れる）
+ * - `unknown`: 読めなかった（git が無い・落ちた・base が決まらない）。**呼び出し側は空きにしない**
+ */
+export async function workState(git: Git, cwd: string): Promise<'none' | 'clean' | 'dirty' | 'ahead' | 'unknown'> {
+  if (!cwd) return 'unknown'
+  try {
+    await git.run(cwd, ['rev-parse', '--show-toplevel'])
+  } catch (err) {
+    return /not a git repository/i.test(err instanceof Error ? err.message : String(err)) ? 'none' : 'unknown'
+  }
+  try {
+    // `--no-optional-locks`: 読むだけにする（付けないと `status` が index を書き直そうとして、相手の `git add` / `commit` とぶつかりうる）
+    if ((await git.run(cwd, ['--no-optional-locks', 'status', '--porcelain'])).trim() !== '') return 'dirty'
+    const base = await resolveBase(git, cwd, '')
+    if (!base) return 'unknown'
+    try {
+      await git.run(cwd, ['merge-base', '--is-ancestor', 'HEAD', base])
+      return 'clean'
+    } catch {
+      // 祖先でない（終了コード 1）= base に入っていないコミットがある。下で中身を比べる
+    }
+    const touched = await numstatPathsZ(git, cwd, [`${base}...HEAD`])
+    if (touched.length === 0) return 'clean'
+    if (touched.length > WORK_STATE_MAX_FILES) return 'ahead'
+    // パスはリポジトリのトップからの形なので `:(top,literal)` で渡す（cwd がサブディレクトリでも当たる。記号入りの名前を glob として読ませない）
+    return (await numstatPathsZ(git, cwd, [base, 'HEAD', '--', ...touched.map((p) => `:(top,literal)${p}`)])).length === 0 ? 'clean' : 'ahead'
+  } catch {
+    return 'unknown'
+  }
+}
+
 async function section(git: Git, cwd: string, args: string[]): Promise<DiffSection> {
   const [numstat, nameStatus, raw] = await Promise.all([
     git.run(cwd, ['diff', '--numstat', ...args]),

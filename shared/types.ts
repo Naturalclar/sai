@@ -1177,14 +1177,27 @@ export interface AgentSessionEntry {
   across?: true
 }
 
+/**
+ * セッションが空きでない理由（#795）。上から順に見て、最初に当たったもの 1 つ:
+ * `busy` = SAI が回しているターン・起動中、`terminal` = 端末で回っているターン、`waiting` = 許可・質問の待ち、`queued` = 預かりあり、
+ * `asked` = 頼まれて返していない依頼、`background` = 止められない `claude --bg`（attach 中・ターン中）、
+ * `dirty` = コミットしていない変更、`unpushed` = PR になっていないコミット、`unknown` = git が読めず確かめられない
+ */
+export type HoldingWhy = 'busy' | 'terminal' | 'waiting' | 'queued' | 'asked' | 'background' | 'dirty' | 'unpushed' | 'unknown'
+
 /** `sai_sessions` の 1 行に足す「いま持っているもの」（#727。組み立ては `shared/holding.ts`）。どれも分かるときだけ */
 export interface SessionHolding {
   /** そのセッションの worktree のブランチから出ている open な PR と、CI の状態 */
   pr?: { number: number; checks: PrCheckState; draft?: true }
   /** 持っていそうな issue の番号（ブランチ名・PR の題名・届いている依頼の 1 行目から引けたもの。古い順に重複なし） */
   issues?: number[]
-  /** 空いている（処理中でない・預かりが無い・待ちが無い・未完の依頼も無い） */
+  /** 空いている（処理中でない・預かりが無い・待ちが無い・未完の依頼も無い・作りかけの変更も無い。#795） */
   free?: true
+  /**
+   * 空きでない理由（#795。`shared/holding.ts` の `HoldingWhy`。頼める相手にだけ付く）。`free` とは同時に付かない。
+   * 別のリポジトリの相手の行には載せない
+   */
+  why?: HoldingWhy
   /** 別のセッションから頼まれて、まだ返していないメッセージの数（まだ送られていない預かりを含む） */
   asked?: number
 }

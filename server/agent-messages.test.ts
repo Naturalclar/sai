@@ -32,6 +32,8 @@ import type { UsageStore } from './local/usage.ts'
 import { AGENT_TOKEN_FILE } from './reply/agentMessages.ts'
 import type { CodexApp } from './reply/codexAppServer.ts'
 import type { ReplyCommand, Runner } from './reply/runner.ts'
+import { workAnswer, type FakeWork } from './git/workStateFake.ts'
+import { grownRefusal, startRefusal } from '../shared/holding.ts'
 import { localDate } from './rows/aggregate.ts'
 import { row } from './rows/aggregate.test.ts'
 import { PNG } from './meta/icons.test.ts'
@@ -92,11 +94,16 @@ const progress = {
  * git の偽物（#564）。worktree ごとに変わっているファイルを返す。base は見つからない扱いで、未コミットの差分だけで答える
  */
 const changedFiles = new Map<string, string[]>()
+/** worktree ごとの作りかけ（#795） */
+const workStates = new Map<string, FakeWork>()
 const changed = {
   async run(cwd: string, args: string[]) {
     if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') return `${cwd}\n`
     if (args[0] === 'diff' && args[1] === '--numstat') return (changedFiles.get(cwd) ?? []).map((p) => `1\t0\t${p}`).join('\n')
     if (args[0] === 'ls-files') return ''
+    // worktree の作りかけ（#795）。置いていない cwd は作りかけ無し
+    const work = workAnswer(workStates.get(cwd) ?? 'clean', args)
+    if (work !== undefined) return work
     throw new Error(`unused: ${args.join(' ')}`)
   },
 }
@@ -216,7 +223,7 @@ test('sai_sessions: 同じ project の、返信できる別のセッションだ
       ['B1@r'],
       '自分・別の project（C1）・別のマシン（R1）・合成 ID（S1）は出さない',
     )
-    assert.deepEqual(body.sessions[0], { id: 'B1@r', name: 'レビューして', project: 'o/r', branch: body.sessions[0]!.branch, agent: 'claude', busy: true, last_text: 'レビューしました', context_tokens: 0, overlap: ['server/app.ts', 'shared/types.ts'], overlap_more: 0 }, 'どちらの worktree でも変わっているファイル。CLAUDE.md と docs/ は数えない（#564）')
+    assert.deepEqual(body.sessions[0], { id: 'B1@r', name: 'レビューして', project: 'o/r', branch: body.sessions[0]!.branch, agent: 'claude', busy: true, last_text: 'レビューしました', context_tokens: 0, overlap: ['server/app.ts', 'shared/types.ts'], overlap_more: 0, holding: { why: 'busy' } }, 'どちらの worktree でも変わっているファイル。CLAUDE.md と docs/ は数えない（#564）')
     contexts.set('B1@r', 120_000)
     const sized = (await (await agent('/api/agent/sessions?from=A1%40r')).json()) as AgentSessionsResponse
     assert.equal(sized.sessions[0]!.context_tokens, 120_000, '相手が読み直す量（直近の呼び出しの入力。#311）')
@@ -980,13 +987,18 @@ test('sai_send: 着手の形でない本文・1 行目に続きを書いた依�
   }
 })
 
-test('sai_send: 相手が処理中なら、着手の形でも要約を挟まずに預かりに並ぶ。要約が失敗したら本文は回さず、送り元には失敗と返る（#624）', async () => {
+test('sai_send: 相手が処理中なら、着手の形の依頼は送らず（#795）、指定で要約を頼んだ依頼は要約を挟まずに預かりに並ぶ。要約が失敗したら本文は回さず、送り元には失敗と返る（#624）', async () => {
   contexts.set('B1@r', 500_000)
   runner.started.length = 0
   turn('A1@r')
   turn('B1@r')
   try {
-    const res = await send('A1@r', 'B1@r', '#624 に着手してください。')
+    // 着手の形は、処理中の相手には送らない（預かりにも並べない。#795）
+    const refused = await send('A1@r', 'B1@r', '#624 に着手してください。')
+    assert.equal(refused.status, 409)
+    assert.equal(((await refused.json()) as { error: string }).error, startRefusal('busy'))
+    assert.equal((((await (await poll()).json()) as SessionsResponse).queued['B1@r']?.items ?? []).length, 0, '預かりに並べない')
+    const res = await sendWith('A1@r', 'B1@r', '続きを見てください。', { compact: true })
     assert.equal(((await res.json()) as AgentSendResponse).via, 'queued', '画面からの送信と同じ（処理中は預かるだけ）')
     assert.equal(runner.started.length, 0)
     idle('B1@r')
@@ -1365,6 +1377,21 @@ test('許した組では、別のリポジトリのセッションが一覧に�
   const c = list.find((s) => s.id === 'C1@r')
   assert.deepEqual(c, { id: 'C1@r', name: '#r', project: 'o/other', branch: '', agent: 'claude', busy: false, last_text: '', context_tokens: 0, overlap: [], overlap_more: 0, across: true, holding: { free: true } }, 'ブランチ・最後の発言・同じファイル・読み直す量・PR は載せない')
   assert.equal(list.at(-1)?.id, 'C1@r', '同じリポジトリの相手が先')
+  // 空きでない別のリポジトリの相手には、理由の中身を出さない（一覧にも、着手の依頼を送らなかったときの文にも。#795）
+  workStates.set(work, 'dirty')
+  try {
+    const hidden = (await sessionsOf('A1@r')).find((s) => s.id === 'C1@r')
+    assert.equal(hidden?.holding, undefined, '空きの印が消えるだけで、理由は載らない')
+    await freshTurn()
+    const refused = await send('A1@r', 'C1@r', '#747 に着手してください。')
+    assert.equal(refused.status, 409)
+    const why = ((await refused.json()) as { error: string }).error
+    assert.equal(why, startRefusal('dirty', true))
+    assert.doesNotMatch(why, /未コミット/)
+  } finally {
+    workStates.delete(work)
+    idle('A1@r')
+  }
   assert.equal(list.find((s) => s.id === 'B1@r')?.across, undefined)
   // 逆向き（o/other → o/r）は許していないので、見えも送れもしない
   assert.deepEqual((await sessionsOf('C1@r')).map((s) => s.id), [])
@@ -1560,6 +1587,45 @@ test('組を外すと、相手の預かりに並んでいた、その向きの�
   idle('C1@r')
   await clearQueue('B1@r')
   idle('B1@r')
+  await humanReply('B1@r')
+  idle('B1@r')
+})
+
+// ---- #795: 着手の依頼は、送る時点で相手が空きでなければ送らない
+
+test('sai_send: 端末でターンの途中の相手には、着手の形の依頼を打ち込まない。一覧で見た量から大きく増えていても送らない。引き直せば送れる（#795）', async () => {
+  await humanReply('B1@r')
+  idle('B1@r')
+  await freshTurn()
+  // 端末で人が回しているターン（transcript の上で動いている）
+  activeIds.add('B1@r')
+  try {
+    assert.equal((await sessionsOf('A1@r')).find((s) => s.id === 'B1@r')?.holding?.why, 'terminal')
+    turn('A1@r')
+    const res = await send('A1@r', 'B1@r', '#795 に着手してください。')
+    assert.equal(res.status, 409)
+    assert.equal(((await res.json()) as { error: string }).error, startRefusal('terminal'))
+    assert.equal(runner.started.length, 0)
+  } finally {
+    activeIds.delete('B1@r')
+  }
+  // 一覧で見たときは小さかった相手が、送る時点で倍を超えて 30 万トークンも超えている
+  contexts.set('B1@r', 170_000)
+  await sessionsOf('A1@r')
+  contexts.set('B1@r', 660_000)
+  turn('A1@r')
+  try {
+    const res = await send('A1@r', 'B1@r', '#795 に着手してください。')
+    assert.equal(res.status, 409)
+    assert.equal(((await res.json()) as { error: string }).error, grownRefusal('約 17 万トークン', '約 66 万トークン'))
+    assert.equal(runner.started.length, 0)
+    // 着手の形でない依頼は、量の差では断らない
+    assert.equal((await send('A1@r', 'B1@r', '状況を教えてください。')).status, 202)
+  } finally {
+    idle('A1@r')
+    contexts.delete('B1@r')
+    await clearQueue('B1@r')
+  }
   await humanReply('B1@r')
   idle('B1@r')
 })

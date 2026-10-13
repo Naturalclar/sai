@@ -184,6 +184,8 @@ export interface JevOnce {
   cwd: string
   /** そのセッションのリポジトリ（GitHub の `owner/repo`）。`gh` が読んでよいのはここだけ。分からなければ省く */
   repo?: string
+  /** そのセッションのリポジトリの worktree のトップ（サーバが git から引いたもの）。ファイルを読んでよいのはこの中だけ。引けなければ省く（#783） */
+  roots?: readonly string[]
 }
 
 /**
@@ -208,7 +210,7 @@ export function jevAutoDecision(
     // 今回だけ許可する。覚えないので、ルールの確率は聞かない（書かれるルールが無い）
     const command = typeof approval.input?.command === 'string' ? approval.input.command : ''
     if (!once.noRule || ONCE_NEVER.has(once.noRule)) return { kind: 'skip', reason: `今回だけの自動の許可も見送り: ルールを作れない理由が ${once.noRule ?? '分からない'}` }
-    const why = command ? notReadOnly(command, once.cwd, once.repo ?? '') : 'syntax'
+    const why = command ? notReadOnly(command, once.cwd, once.repo ?? '', once.roots ?? []) : 'syntax'
     return why ? { kind: 'skip', reason: `今回だけの自動の許可も見送り: ${NOT_READ_ONLY_TEXT[why]}` } : { kind: 'once' }
   }
   if (ruleSafe === undefined) return { kind: 'wait' }

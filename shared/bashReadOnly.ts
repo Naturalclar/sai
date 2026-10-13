@@ -10,7 +10,8 @@
 // - 受ける構文: 語（素の字・`'…'`・`"…"`）、`&&` `||` `;` 改行 `|`、サブシェル `( … )`、コマンド置換 `$( … )`、
 //   捨てるだけのリダイレクト（`2>&1`・`>/dev/null`・`2>/dev/null`・`&>/dev/null`）
 // - 受けるコマンド: 下の `COMMANDS` にあるものだけ。フラグも 1 つずつ「知っているもの」だけ
-// - ファイルを読むコマンドの引数は、cwd の中で、秘密のファイル（`shared/files.ts` の `isSecretPath()`）でないものだけ
+// - ファイルに触るコマンドを受けるのは、cwd がそのセッションのリポジトリの worktree の中のときだけ（`roots`。#783。分かっている置き場だけ受ける）
+// - ファイルを読むコマンドの引数は、cwd の中か同じリポジトリの worktree の中で、秘密のファイル（`shared/files.ts` の `isSecretPath()`）でないものだけ
 // - `$( … )` の結果（中身が分からない語）を渡してよいのは `echo` だけで、二重引用符の中に書いたもの（`echo "$(…)"`）だけ
 // - シェルが展開する語（引用符の外のグロブ・`~`）は受けない（`ls` の引数だけ受ける）
 //
@@ -34,7 +35,7 @@ export type NotReadOnly =
   | 'syntax' // 読める構文でない（変数・バッククォート・リダイレクト・ヒアドキュメント・代入・構文の語など）
   | 'command' // 読むだけと分かっているコマンドでない
   | 'flag' // そのコマンドの、知らないフラグ・引数の形
-  | 'path' // cwd の外・行き先が読めない・グロブ
+  | 'path' // リポジトリの外・cwd が受ける置き場でない・行き先が読めない・グロブ
   | 'secret' // 秘密が入っていそうなファイル（`.env`・鍵・トークン）
   | 'opaque' // `$( … )` の結果を、`echo` 以外に渡している
 
@@ -42,7 +43,7 @@ export const NOT_READ_ONLY_TEXT: Record<NotReadOnly, string> = {
   syntax: '読める構文だけで書かれていない（変数・バッククォート・ファイルへのリダイレクト・ヒアドキュメント・代入・構文の語など）',
   command: '読むだけと分かっているコマンドでない',
   flag: '読むだけと分かっているコマンドだが、知らないフラグ・引数の形',
-  path: '読む先・行き先が cwd の外か、読めない形',
+  path: '読む先・行き先がそのセッションのリポジトリの外か、読めない形',
   secret: '秘密が入っていそうなファイル（.env・鍵・トークンの類）を読む形',
   opaque: 'コマンド置換の結果を、echo 以外に渡している',
 }
@@ -77,6 +78,8 @@ interface Word {
 interface Place {
   dir: string
   root: string
+  /** 読む先に受ける置き場: そのセッションのリポジトリの worktree のトップ（短い順）。cwd がどれにも入っていなければ空（#783） */
+  roots: readonly string[]
   /** そのセッションのリポジトリ（GitHub の `owner/repo`。小文字）。分からなければ空 */
   repo: string
 }
@@ -117,11 +120,13 @@ const HOME_ZONE = new RegExp(String.raw`^${ROOT}\/?$|(?:^|\/)(?:users|home)\/?$|
 /** cwd がホームのあたりか */
 export const inHomeZone = (root: string): boolean => HOME_ZONE.test(root)
 
-/** 読む先のパス。cwd の中で、秘密のファイルでないこと。`glob` はグロブを受けるか（中身を出すコマンドでは受けない） */
+/** 読む先のパス。cwd の中か同じリポジトリの worktree の中で、秘密のファイルでないこと。`glob` はグロブを受けるか（中身を出すコマンドでは受けない） */
 function readPath(w: Word, place: Place, glob = false): string {
   // 名前を並べるだけのコマンド（`ls`）だけ、グロブを受ける
   const text = glob && w.glob && !w.opaque && !w.tilde && !w.xglob ? w.text : lit(w)
   if (!place.root || !text || text.startsWith('~') || text.startsWith('-')) return refuse('path')
+  // グロブの語は相対パスだけ（絶対パスは置き場と字で比べるので、置き場の名前に `[` `?` `*` があると、シェルは別のディレクトリに展開する）
+  if (w.glob && text.startsWith('/')) return refuse('path')
   // cwd がホームのあたりのときは、ファイルを読む形を受けない（`HOME_ZONE`。#754 のレビュー）
   if (inHomeZone(place.root)) return refuse('path')
   // 名前の字は ASCII だけ（大文字小文字を区別しないファイルシステムは、`ſecrets.yml` を `secrets.yml` として開く）
@@ -132,10 +137,13 @@ function readPath(w: Word, place: Place, glob = false): string {
   // `..` はどこにあっても受けない（`link/../x` は、`link` が外へのシンボリックリンクなら外を読む）
   if (text.split('/').includes('..')) return refuse('path')
   const abs = normalize(text.startsWith('/') ? text : `${place.dir}/${text}`)
-  if (!within(abs, place.root)) return refuse('path')
+  // 読む先は cwd の中か、同じリポジトリの worktree の中だけ（#783）
+  const tree = within(abs, place.root) ? place.root : place.roots.find((t) => within(abs, t))
+  if (tree === undefined) return refuse('path')
   // 秘密の判定は、cwd より上の階層の名前では掛けない（`~/work/secrets-app/` の中の普通のファイルを断らない）。
-  // cwd の中は**階層ごとに**名前を見る（`secrets/db.yml`・`.envs/prod`・`.env/..namedfork/data` は、最後の名前だけでは分からない）
-  const inside = abs.slice(place.root.length)
+  // cwd の中は**階層ごとに**名前を見る（`secrets/db.yml`・`.envs/prod`・`.env/..namedfork/data` は、最後の名前だけでは分からない）。
+  // cwd の外（隣の worktree・worktree のトップ寄り）を読むときは、その worktree のトップから下を見る
+  const inside = abs.slice(tree.length)
   if (isSecretPath(inside) || isSecretPath(text) || inside.split('/').some((seg) => seg && isSecretPath(seg))) return refuse('secret')
   return abs
 }
@@ -608,16 +616,29 @@ export const READ_ONLY_MAX_CHARS = 1000
 /**
  * 読むだけと分かっているコマンドか（#749）。そうなら空、違えば理由の種類。**分からないものは全部「違う」**。
  * `cwd` はセッションの行のもの（分からなければ、ファイルを読む形・`cd` は通さない）
+ * `roots` はそのセッションのリポジトリの worktree のトップ（サーバが git から引いたもの。#783）。cwd がこのどれにも入っていなければ、
+ * ファイルに触るコマンドを 1 つも受けない（渡さなければ空 = 受けない）
  */
-export function notReadOnly(command: string, cwd: string, repo = ''): NotReadOnly | '' {
+export function notReadOnly(command: string, cwd: string, repo = '', roots: readonly string[] = []): NotReadOnly | '' {
   // 字の種類を先に絞る: タブ・改行以外の制御文字（`\r` も）は読めない側
   // eslint-disable-next-line no-control-regex
   if (!command.trim() || command.length > READ_ONLY_MAX_CHARS || /[\u0000-\u0008\u000b-\u001f\u007f]/.test(command)) return 'syntax'
   // cwd は絶対パスのときだけ信じる（相対・`~/…` は、どこを指すか分からない）
-  const root = cwd.startsWith('/') ? normalize(cwd) : ''
+  const at = cwd.startsWith('/') ? normalize(cwd) : ''
+  // 受ける置き場は、そのセッションのリポジトリの worktree だけ（#783）。**cwd がどれにも入っていなければ、cwd が分からないときと同じ**に
+  // 扱う（ファイルに触るコマンドを 1 つも受けない）。ホームのあたりそのものが worktree のトップなら（ホームを git で持つ形）、置き場に数えない
+  const trees = roots
+    .filter((t) => t.startsWith('/'))
+    .map((t) => normalize(t))
+    .filter((t) => !inHomeZone(t))
+    .sort((a, b) => a.length - b.length)
+  // cwd が、worktree のトップから下の秘密の名前の階層（`.git`・`secrets` …）の中なら、置き場に数えない
+  // （読む先の秘密の判定は cwd から下の名前だけを見るので、`.git` の中が cwd だと `cat config` が名前では分からない）
+  const open = (t: string) => within(at, t) && !at.slice(t.length).split('/').some((seg) => seg && isSecretPath(seg))
+  const root = at && trees.some((t) => within(at, t)) && trees.every((t) => !within(at, t) || open(t)) ? at : ''
   try {
     const reader = new Reader(command)
-    reader.list({ dir: root, root, repo: /^[\w.-]+\/[\w.-]+$/.test(repo) ? repo.toLowerCase() : '' }, false)
+    reader.list({ dir: root, root, roots: root ? trees : [], repo: /^[\w.-]+\/[\w.-]+$/.test(repo) ? repo.toLowerCase() : '' }, false)
     return reader.done() ? '' : 'syntax'
   } catch (err) {
     if (err instanceof Refused) return err.kind

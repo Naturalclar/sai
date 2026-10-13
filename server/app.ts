@@ -128,7 +128,7 @@ import { isJevAuto, jevAutoAllows, jevAutoDecision, jevAutoEligible, jevLogged, 
 import type { JevJudge } from './approvals/jev.ts'
 import { CodexTerminals, type CodexTerminalSource } from './reply/codexTerminal.ts'
 import { CodexPanes, codexAppServer, type AppServerProbe, type CodexPaneSource } from './reply/codexPanes.ts'
-import { screenWait } from './reply/softWait.ts'
+import { screenWait, softWait } from './reply/softWait.ts'
 import { clearSettled, settledKey, WaitingSettle } from './reply/waitingSettle.ts'
 import type { WaitingSettleSource } from './reply/waitingSettle.ts'
 import type { CodexDialogSource, DialogTarget } from './reply/codexDialogs.ts'
@@ -364,6 +364,8 @@ export const CHANGED_PATHS_TTL_MS = 30_000
 const AGENT_SEND_PATH = '/api/agent/send'
 /** `sai_sessions` の行に PR を足すとき、まだ 1 回も引いていないリポジトリを待つ長さ（#727。前の結果があれば待たない） */
 const HOLDING_PR_WAIT_MS = 1500
+/** 「今回だけ」の判定のために worktree の一覧を待つ長さ（#783）。過ぎたら置き場なし = ファイルに触るコマンドは人に回す */
+const READ_ROOTS_WAIT_MS = 5_000
 /** 前に引いた PR の一覧を「いま」として出してよい古さ（#727）。これより古ければ、まだ引いていないのと同じに扱う（短く待つ） */
 const HOLDING_PR_STALE_MS = 10 * 60_000
 /** 「頼まれて未完」を数える依頼の新しさ（日。#727）。返答の来なかった古い依頼を、いつまでも頼まれ中に数えない */
@@ -1184,6 +1186,25 @@ export function createApp(
       })
     return jevAutoRunning
   }
+  /**
+   * 「今回だけ」の判定に渡す置き場（#783）: そのセッションの cwd（realpath）と、同じリポジトリの worktree のトップ。
+   * **リクエストからは受けない**（セッションの行の cwd から、`git worktree list` を読むだけ）。cwd が git の作業ツリーの中でない・
+   * git が読めないなら空を返し、判定はファイルに触るコマンドを 1 つも受けない。
+   * - 数えるのは、**トップに `.git` があるものだけ**（git の置き場そのものが一覧に並ぶ構成で、その中の `config` を読ませない）
+   * - `READ_ROOTS_WAIT_MS` で見切る（返らない git・落ちたマウントで、自動の許可の列ごと止めない。見切ったら空 = 受けない）
+   */
+  const readRoots = (cwd: string): Promise<{ cwd: string; roots: string[] }> => {
+    const none = { cwd: '', roots: [] as string[] }
+    const read = async () => {
+      const real = cwd ? await realpath(cwd).catch(() => '') : ''
+      const trees = real ? await worktrees.usable(real) : null
+      if (!trees) return none
+      const checked = await Promise.all(trees.map((t) => stat(join(t.path, '.git')).then(() => t, () => null)))
+      const tops = checked.filter((t) => t !== null)
+      return treeOf(real, tops) ? { cwd: real, roots: tops.map((t) => t.path) } : none
+    }
+    return softWait(read().catch(() => none), () => none, READ_ROOTS_WAIT_MS)
+  }
   const jevAutoOnce = async (): Promise<void> => {
     const s = await settingsStore.get()
     if (!s.jev || s.jev_auto <= 0 || !jevRisk.ready) return
@@ -1201,7 +1222,9 @@ export function createApp(
         const asked = jevAutoAllows(a.jev, s.jev_auto) ? labels.map((label) => ({ label, safe: jevRisk.ruleSafe(label, jevRuleState(a, label)) })) : []
         const failed = asked.find((r) => r.safe === undefined && jevRisk.ruleFailed(r.label))?.label
         const lowest = jevLowestRule(asked)
-        const decision = jevAutoDecision(a, s.jev_auto, labels.length > 0 ? (failed ?? lowest?.label ?? rulesKey(labels)) : null, failed ? 'failed' : lowest?.safe, { noRule: plan.reason, cwd, repo: githubRepoOf(owner?.remote) })
+        // git を読むのは「今回だけ」を決めるときだけ（ルールを作れない形で、この回が閾値以上）
+        const place = labels.length === 0 && plan.reason && jevAutoAllows(a.jev, s.jev_auto) ? await readRoots(cwd) : { cwd: '', roots: [] }
+        const decision = jevAutoDecision(a, s.jev_auto, labels.length > 0 ? (failed ?? lowest?.label ?? rulesKey(labels)) : null, failed ? 'failed' : lowest?.safe, { noRule: plan.reason, cwd: place.cwd, roots: place.roots, repo: githubRepoOf(owner?.remote) })
         if (decision.kind === 'skip') {
           // 答えない理由（#553）。同じ許可には 1 回だけ（届くたびに呼ばれるので、覚えないと同じ行が何本も並ぶ）
           if (!jevSkipLogged.has(a.approval_id)) {

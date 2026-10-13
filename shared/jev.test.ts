@@ -147,7 +147,7 @@ test('jevLogged（#749）: 記録に残す形。届いた確率は小数 3 桁�
 
 test('jevAutoDecision（#749）: ルールを作れない Bash は、この回が閾値以上で、読むだけと分かっているコマンドなら「今回だけ許可」。材料を渡さなければ今までどおり答えない', () => {
   const bash = (command: string, jev: number | undefined): Pick<Approval, 'tool_name' | 'agent' | 'answerable' | 'jev' | 'input'> => ({ tool_name: 'Bash', input: { command }, ...(jev === undefined ? {} : { jev }) })
-  const once = { noRule: 'expansion' as const, cwd: '/work/repo' }
+  const once = { noRule: 'expansion' as const, cwd: '/work/repo', roots: ['/work/repo'] }
   const READ = 'echo "at $(git rev-parse HEAD)"'
   assert.deepEqual(jevAutoDecision(bash(READ, 0.95), 0.9, null, undefined, once), { kind: 'once' })
   assert.deepEqual(jevAutoDecision(bash(READ, 0.9), 0.9, null, undefined, once), { kind: 'once' }, '閾値ちょうどは通す（[常に許可] と同じ）')
@@ -161,7 +161,7 @@ test('jevAutoDecision（#749）: ルールを作れない Bash は、この回�
   assert.equal(jevAutoDecision({ ...bash(READ, 0.99), answerable: false }, 0.9, null, undefined, once).kind, 'skip')
   // 読むだけと分かっていないものは、確率が高くても人に回す。理由の種類を残す（コマンドの文字は入れない）
   const reasonOf = (command: string, noRule: typeof once.noRule | 'covered' | 'cd_outside' | undefined = 'expansion') =>
-    (jevAutoDecision(bash(command, 0.99), 0.9, null, undefined, { cwd: '/work/repo', noRule }) as { kind: string; reason?: string }).reason ?? ''
+    (jevAutoDecision(bash(command, 0.99), 0.9, null, undefined, { cwd: '/work/repo', roots: ['/work/repo'], noRule }) as { kind: string; reason?: string }).reason ?? ''
   assert.match(reasonOf('echo $(rm -rf zzsecret)'), /今回だけの自動の許可も見送り: 読むだけと分かっているコマンドでない/)
   assert.ok(!reasonOf('echo $(rm -rf zzsecret)').includes('zzsecret'))
   assert.match(reasonOf('git commit -m x'), /読むだけと分かっているコマンドでない/)
@@ -170,16 +170,20 @@ test('jevAutoDecision（#749）: ルールを作れない Bash は、この回�
   // gh が読んでよいのは、渡されたセッションのリポジトリだけ（渡さなければ、名指しした形は通さない）
   const ghOnce = (repo?: string) => jevAutoDecision(bash('echo "$(gh api repos/o/r/pulls/12)"', 0.99), 0.9, null, undefined, { ...once, ...(repo ? { repo } : {}) }).kind
   assert.deepEqual([ghOnce('o/r'), ghOnce('O/R'), ghOnce('a/b'), ghOnce()], ['once', 'once', 'skip', 'skip'])
+  // ファイルを読んでよいのは、渡された worktree の中だけ（#783。渡さなければ、cwd が分かっていても受けない。echo だけの形は置き場に関係ない）
+  const readOnce = (roots?: string[]) => jevAutoDecision(bash('(cat src/a.ts)', 0.99), 0.9, null, undefined, { noRule: 'expansion', cwd: '/work/repo', ...(roots ? { roots } : {}) }).kind
+  assert.deepEqual([readOnce(['/work/repo']), readOnce(['/work/other']), readOnce([]), readOnce()], ['once', 'skip', 'skip', 'skip'])
+  assert.equal(jevAutoDecision(bash('echo "at $(date +%s)"', 0.99), 0.9, null, undefined, { noRule: 'expansion', cwd: '' }).kind, 'once')
   assert.match(reasonOf('cat .env | head -1 # $(date)'), /秘密が入っていそう/)
-  assert.match(reasonOf('(cat /etc/hosts) # x'), /cwd の外か、読めない形/)
+  assert.match(reasonOf('(cat /etc/hosts) # x'), /そのセッションのリポジトリの外か、読めない形/)
   assert.match(reasonOf('cd /tmp && ls', 'cd_outside'), /読むだけと分かっているコマンドでない/, 'cd は受けない')
   assert.match(reasonOf('git diff $(git rev-parse HEAD)'), /echo 以外に渡している/)
   // ルールがもう設定にあるのに聞かれている形・理由が分からないものは、中身に関係なく人に回す
   assert.match(reasonOf(READ, 'covered'), /ルールを作れない理由が covered/)
-  assert.match((jevAutoDecision(bash(READ, 0.99), 0.9, null, undefined, { cwd: '/work/repo', noRule: undefined }) as { reason: string }).reason, /ルールを作れない理由が 分からない/)
+  assert.match((jevAutoDecision(bash(READ, 0.99), 0.9, null, undefined, { cwd: '/work/repo', roots: ['/work/repo'], noRule: undefined }) as { reason: string }).reason, /ルールを作れない理由が 分からない/)
   assert.equal(jevAutoDecision({ tool_name: 'Bash', input: {}, jev: 0.99 }, 0.9, null, undefined, once).kind, 'skip', 'コマンドが読めない')
   // ルールを作れなかった理由が何であっても、決めるのはコマンドそのもの
-  assert.deepEqual(jevAutoDecision(bash('(git status; git log --oneline -3)', 0.95), 0.9, null, undefined, { cwd: '/work/repo', noRule: 'subshell' }), { kind: 'once' })
+  assert.deepEqual(jevAutoDecision(bash('(git status; git log --oneline -3)', 0.95), 0.9, null, undefined, { cwd: '/work/repo', roots: ['/work/repo'], noRule: 'subshell' }), { kind: 'once' })
   // 材料を渡さなければ今までどおり
   assert.match((jevAutoDecision(bash(READ, 0.99), 0.9, null, undefined) as { reason: string }).reason, /ルールを作れないコマンド/)
   // ルールを作れる形は今までどおり（ルールの確率も見る。今回だけには回さない）

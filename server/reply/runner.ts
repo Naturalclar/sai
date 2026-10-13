@@ -233,7 +233,9 @@ function claudeHead(env: NodeJS.ProcessEnv, approve: ApproveVia | undefined, mod
   // 付いていないセッションには渡さない（端末で付けた名前を空で上書きしない）
   const named = (name ?? '').trim() ? ['-n', (name ?? '').trim()] : []
   // 費用の上限（#388）。**できることを減らす側のフラグ**で、権限は足さない。運用者が自分の額を書いていればそちらを尊重する
-  const budget = maxBudgetUsd !== undefined && maxBudgetUsd > 0 && !extra.includes(MAX_BUDGET_FLAG) ? [MAX_BUDGET_FLAG, String(maxBudgetUsd)] : []
+  // （`--max-budget-usd 5` でも `--max-budget-usd=5` でも。見落として後ろに並べると、メッセージで起こすターンだけ額が上がる）
+  const ownBudget = extra.some((a) => a === MAX_BUDGET_FLAG || a.startsWith(`${MAX_BUDGET_FLAG}=`))
+  const budget = maxBudgetUsd !== undefined && maxBudgetUsd > 0 && !ownBudget ? [MAX_BUDGET_FLAG, String(maxBudgetUsd)] : []
   return [...extra, ...wire, ...(model ? ['--model', model] : []), ...(permissionMode ? ['--permission-mode', permissionMode] : []), ...named, ...budget, ...format]
 }
 

@@ -175,6 +175,9 @@ test('replyCommand: 費用の上限は渡されたときだけ --max-budget-usd 
   const own = replyCommand('claude', 'S', 'hi', '/w', { SAI_CLAUDE_ARGS: '--max-budget-usd 5' }, undefined, undefined, undefined, [], undefined, 50)!.args
   assert.deepEqual(own.filter((a) => a === '--max-budget-usd').length, 1)
   assert.equal(own[own.indexOf('--max-budget-usd') + 1], '5')
+  // `=` でつないだ形も運用者の額として見る（見落とすと後ろに 50 が並ぶ）
+  const joined = replyCommand('claude', 'S', 'hi', '/w', { SAI_CLAUDE_ARGS: '--max-budget-usd=5' }, undefined, undefined, undefined, [], undefined, 50)!.args
+  assert.deepEqual(joined.filter((a) => a.startsWith('--max-budget-usd')), ['--max-budget-usd=5'])
   // Codex / OpenCode に同等のフラグは無い
   assert.equal(replyCommand('codex', 'S', 'hi', '/w', {}, undefined, undefined, undefined, [], undefined, 50)!.args.includes('--max-budget-usd'), false)
   assert.equal(replyCommand('opencode', 'S', 'hi', '/w', {}, undefined, undefined, undefined, [], undefined, 50)!.args.includes('--max-budget-usd'), false)

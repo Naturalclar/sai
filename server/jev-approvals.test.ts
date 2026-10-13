@@ -75,6 +75,8 @@ before(async () => {
     process.env[key] = '0'
   }
   dir = await mkdtemp(join(tmpdir(), 'sai-jev-'))
+  // 作り物の worktree のトップ（`readRoots()` は、トップに `.git` があるものだけ数える）
+  await writeFile(join(dir, '.git'), 'gitdir: /nowhere\n')
   feedDir = join(dir, 'feed')
   await mkdir(feedDir)
   const now = new Date()
@@ -462,4 +464,19 @@ test('自動で今回だけ許可（#749）: ルールを作れない Bash は�
   assert.equal(await bare.wait(noTree, 10), null, 'worktree が分からなければ人に残る')
   assert.equal((await bare.wait(noFiles, 10))?.behavior, 'allow')
   await put(base2, { jev_auto: 0 })
+
+  // 一覧に並んでいても、トップに `.git` が無いもの（git の置き場そのもの）は置き場に数えない
+  const gitDir = join(dir, 'store')
+  await mkdir(gitDir)
+  await writeFile(join(feedDir, `${localDate(new Date().toISOString())}.jsonl`), `${JSON.stringify(row(new Date(), 'S2', { repo: 'r', cwd: gitDir }))}\n`, { flag: 'a' })
+  const storeGit: Git = { run: async (_cwd, args) => (args[0] === 'worktree' ? `worktree ${await realpath(gitDir)}\nHEAD 0000000\nbranch refs/heads/main\n` : Promise.reject(new Error('no'))) }
+  const stored = new Approvals()
+  const base3 = await start(stored, fake, { ...runner, running: (id) => id === 'S2@r' }, storeGit)
+  await put(base3, { jev: true, jev_auto: 0.9 })
+  const res = await fetch(`${base3}/api/approvals`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: 'S2@r', tool_name: 'Bash', input: { command: '(cat config)' }, tool_use_id: 't' }) })
+  assert.equal(res.status, 201)
+  const inStore = ((await res.json()) as { approval_id: string }).approval_id
+  await drain()
+  assert.equal(await stored.wait(inStore, 10), null, 'トップに .git が無ければ人に残る')
+  await put(base3, { jev_auto: 0 })
 })

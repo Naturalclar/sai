@@ -970,6 +970,14 @@ test('notReadOnly: 読む先が隣の worktree を指す形は、同じリポジ
     ['cat /work/repo/secrets/db.yml', 'secret'],
   ]
   for (const [c, want] of no) assert.equal(at(c), want, c)
+  // グロブの語は相対パスだけ（置き場の名前にグロブの字があると、絶対パスの語は別のディレクトリに展開される）
+  for (const [c, cwd, roots] of [
+    ['ls /work/app[1]/*', '/work/app[1]', ['/work/app[1]']],
+    ['ls /work/app?/src', '/work/app?', ['/work/app?']],
+    ['ls /work/repo/*', '/work/repo', TREES],
+    ['ls /work/repo-b/src/*.ts', '/work/repo', TREES],
+  ] as const) assert.equal(notReadOnly(c, cwd, REPO, roots), 'path', c)
+  assert.equal(notReadOnly('ls src/*.ts', '/work/repo', REPO, TREES), '')
   // 置き場を渡さなければ、cwd の中も読めない
   assert.equal(notReadOnly('cat a.ts', '/work/repo/server', REPO), 'path')
 })

@@ -125,6 +125,8 @@ function readPath(w: Word, place: Place, glob = false): string {
   // 名前を並べるだけのコマンド（`ls`）だけ、グロブを受ける
   const text = glob && w.glob && !w.opaque && !w.tilde && !w.xglob ? w.text : lit(w)
   if (!place.root || !text || text.startsWith('~') || text.startsWith('-')) return refuse('path')
+  // グロブの語は相対パスだけ（絶対パスは置き場と字で比べるので、置き場の名前に `[` `?` `*` があると、シェルは別のディレクトリに展開する）
+  if (w.glob && text.startsWith('/')) return refuse('path')
   // cwd がホームのあたりのときは、ファイルを読む形を受けない（`HOME_ZONE`。#754 のレビュー）
   if (inHomeZone(place.root)) return refuse('path')
   // 名前の字は ASCII だけ（大文字小文字を区別しないファイルシステムは、`ſecrets.yml` を `secrets.yml` として開く）

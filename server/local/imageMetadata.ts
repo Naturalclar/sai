@@ -14,7 +14,10 @@
 // - WebP: RIFF の `EXIF` / `XMP ` チャンクを出力しない（`ICCP` / `ALPH` / `ANIM` は残す）。VP8X の印も消し、RIFF の長さを直す。
 // - GIF: 触らない（EXIF を持たない。コメント拡張は落とさない）。
 // 形が読めない（壊れている）ときは触らずに元のまま返す（壊す方が悪い）。
+import { crc32 } from 'node:zlib'
 import type { IconType } from '../../shared/icon.ts'
+
+export { crc32 }
 
 export interface StripResult {
   bytes: Buffer
@@ -29,6 +32,7 @@ function keepJpegSegment(marker: number, payload: Buffer): boolean {
   if (marker === 0xfe) return false
   if (marker < 0xe0 || marker > 0xef) return true // DQT / SOF / DHT など、画像そのもの
   if (marker === 0xe0 || marker === 0xee) return true
+  if (marker === 0xe1) return payload.length === EXIF_HEAD.length + 26 && payload.subarray(0, 6).equals(EXIF_HEAD) && isOrientationOnlyTiff(payload.subarray(6))
   return marker === 0xe2 && payload.subarray(0, ICC_HEAD.length).equals(ICC_HEAD)
 }
 /** 落とす PNG のチャンク */
@@ -50,11 +54,13 @@ export function stripImageMetadata(bytes: Buffer, format: IconType): StripResult
       return stripWebp(bytes)
     case 'gif':
       return { bytes, changed: false }
-    default: {
-      const never: never = format
-      return { bytes, changed: false, ...(never as object) }
-    }
+    default:
+      return assertNever(format)
   }
+}
+
+function assertNever(format: never): never {
+  throw new Error(`知らない画像の種類: ${String(format)}`)
 }
 
 /** JPEG のセグメント（マーカー + 長さ（自分を含む）+ 中身）。テストの作り物も同じ形で作る */
@@ -122,37 +128,47 @@ export function orientationSegment(orientation: number): Buffer {
   return jpegSegment(0xe1, Buffer.concat([EXIF_HEAD, orientationTiff(orientation)]))
 }
 
+/**
+ * この関数が置いた「向きだけの TIFF」そのものか（26 バイトで、中身が orientationTiff と同じ）。
+ * 同じなら落として置き直さない（2 回目に通しても「変わった」にならない＝置き場を毎回書き直さない）
+ */
+function isOrientationOnlyTiff(tiff: Buffer): boolean {
+  if (tiff.length !== 26) return false
+  const o = tiffOrientation(tiff)
+  return o !== undefined && tiff.equals(orientationTiff(o))
+}
+
 /** PNG のチャンク（長さ + 種類 + 中身 + CRC）。テストの作り物も同じ形で作る */
 export function pngChunk(type: string, data: Buffer): Buffer {
   const out = Buffer.alloc(12 + data.length)
   out.writeUInt32BE(data.length, 0)
   out.write(type, 4, 'latin1')
   data.copy(out, 8)
-  out.writeUInt32BE(crc32(out.subarray(4, 8 + data.length)), 8 + data.length)
+  out.writeUInt32BE(crc32(out.subarray(4, 8 + data.length)) >>> 0, 8 + data.length)
   return out
 }
 
-const CRC_TABLE = (() => {
-  const t = new Uint32Array(256)
-  for (let n = 0; n < 256; n++) {
-    let c = n
-    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1
-    t[n] = c >>> 0
-  }
-  return t
-})()
 
-/** PNG のチャンクの CRC（zlib と同じ CRC-32） */
-export function crc32(b: Buffer): number {
-  let c = 0xffffffff
-  for (let i = 0; i < b.length; i++) c = (CRC_TABLE[(c ^ (b[i] ?? 0)) & 0xff] ?? 0) ^ (c >>> 8)
-  return (c ^ 0xffffffff) >>> 0
-}
-
-/** EOI（FFD9）の位置を探す（SOS の後ろから。画素の中の FFD9 は FF00 の詰め物で現れないので最初の FFD9 でよい） */
+/**
+ * SOS の見出しの後ろから EOI（FFD9）の次の位置を探す。画素（エントロピー符号）の中の FF は FF00 の詰め物か RST（FFD0〜D7）
+ * なので飛ばし、それ以外のマーカー（プログレッシブの DQT / DHT / 次の SOS など）は長さぶん飛ばす（セグメントの中身に FFD9 が
+ * あっても EOI と取り違えない）。見つからなければ末尾
+ */
 function eoiAfter(b: Buffer, from: number): number {
-  for (let i = from; i + 1 < b.length; i++) {
-    if (b[i] === 0xff && b[i + 1] === 0xd9) return i + 2
+  let i = from
+  while (i + 1 < b.length) {
+    if (b[i] !== 0xff) {
+      i++
+      continue
+    }
+    const m = b[i + 1]!
+    if (m === 0x00 || m === 0xff || (m >= 0xd0 && m <= 0xd7)) {
+      i += m === 0xff ? 1 : 2
+      continue
+    }
+    if (m === 0xd9) return i + 2
+    if (i + 4 > b.length) return b.length
+    i += 2 + b.readUInt16BE(i + 2) // 長さを持つセグメント（SOS なら見出しの後ろから画素が続く）
   }
   return b.length
 }
@@ -176,7 +192,11 @@ function stripJpeg(b: Buffer): StripResult {
     if (marker === undefined) return same
     if (marker === 0xda || marker === 0xd9) {
       // SOS からは画素（RST を含む）なので EOI までそのまま。EOI の後ろ（MPF の副画像・Motion Photo の動画）は落とす
-      const end = marker === 0xd9 ? i + 2 : eoiAfter(b, i + 2)
+      let end = i + 2
+      if (marker === 0xda) {
+        if (i + 4 > b.length) return same
+        end = eoiAfter(b, i + 2 + b.readUInt16BE(i + 2))
+      }
       parts.push(b.subarray(i, end))
       if (end < b.length) changed = true
       break
@@ -192,6 +212,7 @@ function stripJpeg(b: Buffer): StripResult {
     const seg = b.subarray(i, i + 2 + len)
     if (keepJpegSegment(marker, seg.subarray(4))) {
       parts.push(seg)
+      if (marker === 0xe1 && orientation === undefined) orientation = 1 // 向きだけの APP1 はもう置いてある。入れ直さない
     } else {
       if (marker === 0xe1 && orientation === undefined) orientation = exifOrientation(seg.subarray(4))
       changed = true
@@ -216,8 +237,12 @@ function stripPng(b: Buffer): StripResult {
     const type = b.toString('latin1', i + 4, i + 8)
     const end = i + 12 + len
     if (end > b.length) return same // 壊れている
-    if (DROP_PNG.has(type)) {
-      if (type === 'eXIf' && orientation === undefined) orientation = tiffOrientation(b.subarray(i + 8, i + 8 + len))
+    const data = b.subarray(i + 8, i + 8 + len)
+    if (type === 'eXIf' && isOrientationOnlyTiff(data)) {
+      parts.push(b.subarray(i, end)) // 自分で置いた向きだけの eXIf。落として置き直さない
+      if (orientation === undefined) orientation = 1
+    } else if (DROP_PNG.has(type)) {
+      if (type === 'eXIf' && orientation === undefined) orientation = tiffOrientation(data)
       changed = true
     } else {
       parts.push(b.subarray(i, end))

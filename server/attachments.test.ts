@@ -133,6 +133,17 @@ test('預ける: 写真の EXIF は置く前に落とす（#791）。名前の�
   assert.deepEqual(await readFile(webp.body.path), WEBP_STRIPPED, 'WebP も')
 })
 
+test('配る口: 前から置いてある（落としていない）原本も、元のまま配るときに落としてから配る（#791 のレビュー）', async () => {
+  const sub = join(dir, 'attachments', attachmentDir('A1@r'))
+  await mkdir(sub, { recursive: true })
+  const name = `${'f'.repeat(16)}.jpeg`
+  await writeFile(join(sub, name), JPEG_WITH_EXIF)
+  const res = await fetch(`${base}/api/attachments/${attachmentDir('A1@r')}/${name}`)
+  assert.equal(res.status, 200)
+  assert.deepEqual(Buffer.from(await res.arrayBuffer()), JPEG_STRIPPED)
+  assert.ok(!(await readdir(sub)).some((n) => n.endsWith('.tmp')), 'put の tmp は残らない')
+})
+
 test('AttachmentStore: 前からある添付の画像から起動時に一度だけ落とす。印があれば読み直さない（#791）', async () => {
   const d = await mkdtemp(join(tmpdir(), 'sai-att-strip-'))
   try {

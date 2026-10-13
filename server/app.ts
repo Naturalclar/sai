@@ -244,7 +244,8 @@ import { QUEUE_ROLLOUT_TAIL_BYTES, queuedTextArrived, turnInProgress } from '../
 import { ProgressReader, sessionOf } from './local/progress.ts'
 import { agentListFromEnv, backgroundLive, type AgentList, type ClaudeAgent } from './local/claudeAgents.ts'
 import { isRemoteHost } from '../shared/host.ts'
-import { IMAGES_SEGMENT, THUMB_VERSION } from '../shared/images.ts'
+import { IMAGES_SEGMENT } from '../shared/images.ts'
+import { stripImageMetadata } from './local/imageMetadata.ts'
 import { imageHeaders, imageTable, readSessionImage, realImagePath } from './local/images.ts'
 import { AnsweredApprovals, answeredAfter } from './approvals/answered.ts'
 import { fileTable, readSessionFile } from './local/files.ts'
@@ -468,6 +469,12 @@ const NO_DIST =
   '<h1>SAI</h1><p><code>web/dist/</code> がありません。先にビルドしてください:</p>' +
   '<pre>pnpm install &amp;&amp; pnpm build</pre>' +
   '<p>開発中は <code>pnpm dev</code> で Vite を立てると、このサーバの API に流れます。</p>'
+
+/** `?thumb=` が付いているか。値は URL の版（`THUMB_VERSION`）だが、古い画面の `thumb=1` も受ける（`0` と空は付いていない扱い） */
+export function wantsThumb(q: URLSearchParams): boolean {
+  const v = q.get('thumb')
+  return v !== null && v !== '' && v !== '0'
+}
 
 export function parseDays(raw: string | null, fallback: number): number {
   const n = Number.parseInt(raw ?? '', 10)
@@ -1885,13 +1892,15 @@ export function createApp(
   }
 
   /**
-   * 読み終えた画像を配る（本文のパス・transcript・Codex の生成画像の 3 つの口）。`?thumb=1` なら軽い版（#589）: しきい値未満は元のまま、
+   * 読み終えた画像を配る（本文のパス・transcript・Codex の生成画像の 3 つの口）。`?thumb=<版>` なら軽い版（#589）: しきい値未満は元のまま、
    * 縮めたら JPEG（透過があれば PNG）、縮められなければ 503 と `X-SAI-Thumb: unavailable`（画面は押すまで元を読まない）。
-   * ライトボックスとダウンロードは `?thumb=1` を付けないので元の画像のまま
+   * ライトボックスとダウンロードは `?thumb=` を付けないので元の画像のまま
    */
   const sendImage = async (req: IncomingMessage, res: ServerResponse, img: { bytes: Buffer; type: IconType; name: string; etag: string }, q: URLSearchParams) => {
     const download = q.get('download') === '1'
-    const wantThumb = q.get('thumb') === THUMB_VERSION && !download
+    // `thumb` は版（`THUMB_VERSION`）が付いた URL で来るが、古い画面（ビルドし直す前の dist・隠れていたタブ）の `thumb=1` も軽い版として受ける
+    // （受けないと元の画像を枠に読む。URL の版はブラウザのキャッシュを分けるためだけ）
+    const wantThumb = wantsThumb(q) && !download
     // 軽い版の ETag は元の ETag から作る（元が変われば軽い版も変わる）。`t2` は帯の軽い版の大きさを変えたとき（#709）、
     // `t3` は EXIF を落とすようにしたとき（#791）に上げた（上げないと、ブラウザが持っている古い軽い版が 304 でそのまま使われる）
     const etag = wantThumb && img.bytes.length >= THUMB_MIN_BYTES ? img.etag.replace(/^"/, '"t3-') : img.etag
@@ -4937,7 +4946,10 @@ export function createApp(
     const icon = target ? await iconStore.get(target) : undefined
     if (icon) {
       try {
-        const key = historyKey(await readFile(icon.path))
+        // 履歴の鍵は EXIF を落とした後の中身から（#791）。前から置いてある（落としていない）アイコンでも同じ鍵になるよう、ここでも落としてから
+        const raw = await readFile(icon.path)
+        const rawKind = sniffImageType(raw)
+        const key = historyKey(rawKind ? stripImageMetadata(raw, rawKind).bytes : raw)
         if (entries.some((e) => e.key === key)) payload.current = key
       } catch {
         // 読めなければ印を付けないだけ
@@ -5235,14 +5247,17 @@ export function createApp(
           return error(res, 404, 'attachment not found')
         }
         // 軽い版（#589）。添付は画像だけ受けているが、種類は中身で見る
-        const type = q.get('thumb') === THUMB_VERSION ? sniffImageType(body) : null
+        const kind = sniffImageType(body)
+        const type = wantsThumb(q) ? kind : null
         const t = type ? await thumbs.thumb({ bytes: body, type }) : ({ kind: 'original' } as const)
         if (t.kind === 'unavailable') {
           res.writeHead(503, { 'Cache-Control': 'no-store', 'X-SAI-Thumb': 'unavailable', 'X-SAI-Image-Bytes': body.length, 'Content-Length': 0 })
           res.end()
           return
         }
-        const out = t.kind === 'thumb' ? { bytes: t.bytes, mime: ICON_MIME[t.type] } : { bytes: body, mime: found.mime }
+        // 元のまま配るとき（しきい値未満・ライトボックス・ダウンロード）も EXIF は落とす（#791。前からある原本を起動時の一括処理が
+        // まだ通していない間や、置き直せなかったものでも、配るものは清い。落とす物が無ければ同じ Buffer）
+        const out = t.kind === 'thumb' ? { bytes: t.bytes, mime: ICON_MIME[t.type] } : { bytes: kind ? stripImageMetadata(body, kind).bytes : body, mime: found.mime }
         // 名前が中身のハッシュなので、同じ URL の中身は変わらない
         res.writeHead(200, { 'Content-Type': out.mime, 'Content-Length': out.bytes.length, 'Cache-Control': 'private, max-age=31536000, immutable' })
         res.end(req.method === 'HEAD' ? undefined : out.bytes)

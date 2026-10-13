@@ -127,7 +127,10 @@ export class AttachmentStore {
     const label = kind === 'image' ? '' : attachmentLabel(originalName)
     try {
       await mkdir(dirPath, { recursive: true })
-      await writeFile(join(dirPath, name), bytes)
+      // tmp に書いて rename（起動時の一括処理が、書きかけの原本を読んで途中のまま置き直さないように）
+      const tmp = join(dirPath, `${name}.${process.pid}.tmp`)
+      await writeFile(tmp, bytes)
+      await rename(tmp, join(dirPath, name))
       // 名前なしで同じ中身を置き直したら、前の名前は消す（#667 のレビュー。残すと、画面は名前なしなのに本文には前の名前が載る）
       if (label) await writeFile(join(dirPath, `${name}${LABEL_SUFFIX}`), label, 'utf-8')
       else if (kind !== 'image') await rm(join(dirPath, `${name}${LABEL_SUFFIX}`), { force: true })

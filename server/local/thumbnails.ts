@@ -50,7 +50,7 @@ export const THUMB_STRIPPED_MARK = '.metadata-stripped-1'
 /** 軽い版のファイル名の形 */
 const THUMB_NAME_RE = /^[0-9a-f]{32}(-\d+)?\.(jpg|png)$/
 /** 作っている最中のファイル（`make()` の `.src` / `.tmp.*`）。起動時に残っていれば、前の SAI が途中で落ちたもの */
-const THUMB_WORK_RE = /^[0-9a-f]{32}(\.(src|tmp\.(jpg|png))|(-\d+)?\.(jpg|png)\.tmp)$/
+const THUMB_WORK_RE = /^[0-9a-f]{32}(\.(src|tmp\.(jpg|png))|(-\d+)?\.(jpg|png)\.\d+\.\d+\.tmp)$/
 
 export type ThumbFormat = 'jpeg' | 'png'
 
@@ -147,6 +147,8 @@ export class Thumbnails implements ThumbMaker {
   private made = 0
   /** 縮められなかった中身 → 覚えた時刻 */
   private readonly failed = new Map<string, number>()
+  /** 置き直しの tmp の連番 */
+  private seq = 0
   private readonly now: () => number
 
   /** 起動時の掃除（作られたときに始める）。最初の `thumb()` がこれを待つ（消す前の古い軽い版を配らない） */
@@ -166,8 +168,10 @@ export class Thumbnails implements ThumbMaker {
 
   /**
    * 起動時の掃除（#791）。
-   * 1. 作りかけ（`.src` = 元の画像そのもの、`.tmp.*`）が残っていれば消す（前の SAI が途中で落ちたもの。元の画像に GPS が入っている）
-   * 2. 印（`THUMB_STRIPPED_MARK`）が無ければ、前からある軽い版を全部消して印を置く（1 つでも消せなければ印は置かず、次の起動でまた）
+   * 1. 作りかけ（`.src` = 元の画像そのもの、`.tmp.*`）が残っていれば消す（前の SAI が途中で落ちたもの。元の画像に GPS が入っている）。
+   *    ただし `sips` の締切より新しいものは、同じ置き場を使う別の SAI がいま作っている最中かもしれないので触らない
+   * 2. 印（`THUMB_STRIPPED_MARK`）が無ければ、前からある軽い版を全部消して印を置く。消せなかったものが残っても印は置く
+   *    （置いてあるものは読むときにも落とすので配るものは清い。印を置かないと、消せない 1 枚のせいで毎回全部を消し直す）
    * 置き場が無ければ作って印だけ置く（新しい置き場に古い軽い版は無い）
    */
   private async cleanStored(): Promise<{ removed: number; marked: boolean }> {
@@ -182,17 +186,23 @@ export class Thumbnails implements ThumbMaker {
     }
     const names = await readdir(this.dir)
     let removed = 0
-    let failed = 0
+    const now = this.now()
     for (const n of names) {
-      if (!THUMB_WORK_RE.test(n) && (marked || !THUMB_NAME_RE.test(n))) continue
+      const work = THUMB_WORK_RE.test(n)
+      if (!work && (marked || !THUMB_NAME_RE.test(n))) continue
+      const path = join(this.dir, n)
       try {
-        await unlink(join(this.dir, n))
+        if (work) {
+          const st = await stat(path)
+          if (now - st.mtimeMs < THUMB_TIMEOUT_MS * 2) continue // 別の SAI が作っている最中かもしれない
+        }
+        await unlink(path)
         removed++
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') failed++ // 無いなら消えている。それ以外は次の起動でまた
+      } catch {
+        // 無いなら消えている。消せないものは残す（読むときに落とすので配るものは清い）
       }
     }
-    if (!marked && failed === 0) {
+    if (!marked) {
       await writeFile(mark, '')
       marked = true
     }
@@ -220,10 +230,11 @@ export class Thumbnails implements ThumbMaker {
       // まだ無い
     }
     if (stored) {
-      // 置いてあるものにも落とす（#791。古い SAI が同じ置き場に書いた軽い版が残りうる）。落ちたら置き直す
+      // 置いてあるものにも落とす（#791。古い SAI が同じ置き場に書いた軽い版が残りうる）。落ちたら置き直す。
+      // tmp の名前はプロセスと連番で分ける（同じ軽い版を同時に 2 本が置き直しても、途中の tmp を rename しない）
       const r = stripImageMetadata(stored, format)
       if (r.changed) {
-        const tmp = `${out}.tmp`
+        const tmp = `${out}.${process.pid}.${++this.seq}.tmp`
         await writeFile(tmp, r.bytes).then(() => rename(tmp, out)).catch(() => rm(tmp, { force: true }))
       }
       return this.result(r.bytes, format, img.bytes.length)

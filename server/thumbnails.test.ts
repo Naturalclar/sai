@@ -5,7 +5,7 @@ import { after, before, beforeEach, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, truncate, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, truncate, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
 import { dirname, join } from 'node:path'
@@ -243,6 +243,14 @@ test('Thumbnails: 横に細長い画像（帯）は短辺を保って長辺を�
   }
 })
 
+test('?thumb=1（古い画面）でも軽い版を返す（#791 のレビュー。受けないと元の画像を枠に読む）', async () => {
+  const res = await fetch(`${base}${url('big.png')}?thumb=1`)
+  assert.equal(res.status, 200)
+  assert.deepEqual(Buffer.from(await res.arrayBuffer()), JPEG_THUMB)
+  const off = await fetch(`${base}${url('big.png')}?thumb=0`)
+  assert.equal(Buffer.from(await off.arrayBuffer()).length, THUMB_MIN_BYTES + 1, 'thumb=0 は付いていない扱い')
+})
+
 test('Thumbnails: sips が残した EXIF は置く前に落とす（#791）', async () => {
   const d = await mkdtemp(join(tmpdir(), 'sai-th-exif-'))
   try {
@@ -271,13 +279,19 @@ test('Thumbnails: 前からある軽い版と作りかけは起動時に消し�
     await writeFile(join(d, src), JPEG_WITH_EXIF)
     await writeFile(join(d, work), JPEG_WITH_EXIF)
     await writeFile(join(d, 'notes.txt'), 'x')
+    const stale = new Date(Date.now() - 60_000)
+    await utimes(join(d, src), stale, stale)
+    await utimes(join(d, work), stale, stale)
     assert.deepEqual(await new Thumbnails(d, fake).ready(), { removed: 4, marked: true })
     assert.deepEqual((await readdir(d)).sort(), [THUMB_STRIPPED_MARK, 'notes.txt'], '軽い版・作りかけは消え、ほかは触らない')
-    // 印があれば軽い版は消さない。作りかけ（前の SAI が落ちたもの）は毎回消す
+    // 印があれば軽い版は消さない。作りかけ（前の SAI が落ちたもの）は毎回消す。ただし sips の締切より新しいもの（別の SAI が作っている最中）は残す
     await writeFile(join(d, gps), JPEG_WITH_EXIF)
     await writeFile(join(d, src), JPEG_WITH_EXIF)
+    await writeFile(join(d, work), JPEG_WITH_EXIF)
+    const old = new Date(Date.now() - 60_000)
+    await utimes(join(d, src), old, old)
     assert.deepEqual(await new Thumbnails(d, fake).ready(), { removed: 1, marked: true })
-    assert.deepEqual((await readdir(d)).sort(), [THUMB_STRIPPED_MARK, gps, 'notes.txt'])
+    assert.deepEqual((await readdir(d)).sort(), [THUMB_STRIPPED_MARK, gps, work, 'notes.txt'])
   } finally {
     await rm(d, { recursive: true, force: true })
   }

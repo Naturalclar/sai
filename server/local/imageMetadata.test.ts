@@ -181,3 +181,23 @@ test('GIF は触らない', () => {
   const gif = Buffer.from('GIF89a\x01\0\x01\0\0\0\0;', 'latin1')
   assert.equal(stripImageMetadata(gif, 'gif').bytes, gif)
 })
+
+test('2 回通しても同じ（自分で置いた向きだけの APP1 / eXIf は落として置き直さない。変わった、にもならない）', () => {
+  const once = stripImageMetadata(jpeg(APP0, seg(0xe1, exif(6)), ICC, DQT, SOF), 'jpeg')
+  const twice = stripImageMetadata(once.bytes, 'jpeg')
+  assert.equal(twice.changed, false)
+  assert.equal(twice.bytes, once.bytes, '同じ Buffer')
+  const png1 = stripImageMetadata(Buffer.concat([PNG_SIG, IHDR, pngChunk('eXIf', exif(6).subarray(6)), IDAT, IEND]), 'png')
+  const png2 = stripImageMetadata(png1.bytes, 'png')
+  assert.equal(png2.changed, false)
+  assert.equal(png2.bytes, png1.bytes)
+})
+
+test('JPEG: プログレッシブ（SOS の間に DQT / DHT）で、セグメントの中身の FFD9 を EOI と取り違えない', () => {
+  const dqtWithFfd9 = seg(0xdb, Buffer.concat([Buffer.from([0x10]), Buffer.alloc(60, 0), Buffer.from([0xff, 0xd9]), Buffer.alloc(66, 1)]))
+  const sos = (n: number) => seg(0xda, Buffer.from([1, n, 0, 0, 63, 0]))
+  const scan = Buffer.from([0x12, 0xff, 0x00, 0x34, 0xff, 0xd0, 0x56])
+  const src = Buffer.concat([SOI, APP0, COM, DQT, SOF, sos(1), scan, dqtWithFfd9, sos(2), scan, Buffer.from([0xff, 0xd9]), Buffer.from('trailer')])
+  const r = stripImageMetadata(src, 'jpeg')
+  assert.deepEqual(r.bytes, Buffer.concat([SOI, APP0, DQT, SOF, sos(1), scan, dqtWithFfd9, sos(2), scan, Buffer.from([0xff, 0xd9])]), 'COM と末尾の trailer だけが落ち、2 つ目の走査は残る')
+})

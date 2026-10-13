@@ -970,6 +970,18 @@ test('notReadOnly: 読む先が隣の worktree を指す形は、同じリポジ
     ['cat /work/repo/secrets/db.yml', 'secret'],
   ]
   for (const [c, want] of no) assert.equal(at(c), want, c)
+  // cwd が worktree の中の秘密の名前の階層（`.git` の中など）なら、ファイルに触るコマンドを受けない
+  for (const [cwd, roots] of [
+    ['/work/repo/.git', TREES],
+    ['/work/repo/.git/worktrees/b', TREES],
+    ['/work/repo/.git/modules/sub', TREES],
+    ['/work/repo/secrets', TREES],
+    ['/work/repo/sub/.ssh', TREES],
+    // 入れ子の worktree: 外側のトップから見て秘密の階層の下にある
+    ['/work/repo/.git/x/tree', ['/work/repo', '/work/repo/.git/x/tree']],
+  ] as const) {
+    for (const c of ['cat config', 'cat packed-refs', 'ls', 'git status']) assert.equal(notReadOnly(c, cwd, REPO, roots), 'path', `${cwd}: ${c}`)
+  }
   // グロブの語は相対パスだけ（置き場の名前にグロブの字があると、絶対パスの語は別のディレクトリに展開される）
   for (const [c, cwd, roots] of [
     ['ls /work/app[1]/*', '/work/app[1]', ['/work/app[1]']],

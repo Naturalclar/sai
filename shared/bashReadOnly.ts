@@ -632,7 +632,10 @@ export function notReadOnly(command: string, cwd: string, repo = '', roots: read
     .map((t) => normalize(t))
     .filter((t) => !inHomeZone(t))
     .sort((a, b) => a.length - b.length)
-  const root = at && trees.some((t) => within(at, t)) ? at : ''
+  // cwd が、worktree のトップから下の秘密の名前の階層（`.git`・`secrets` …）の中なら、置き場に数えない
+  // （読む先の秘密の判定は cwd から下の名前だけを見るので、`.git` の中が cwd だと `cat config` が名前では分からない）
+  const open = (t: string) => within(at, t) && !at.slice(t.length).split('/').some((seg) => seg && isSecretPath(seg))
+  const root = at && trees.some((t) => within(at, t)) && trees.every((t) => !within(at, t) || open(t)) ? at : ''
   try {
     const reader = new Reader(command)
     reader.list({ dir: root, root, roots: root ? trees : [], repo: /^[\w.-]+\/[\w.-]+$/.test(repo) ? repo.toLowerCase() : '' }, false)

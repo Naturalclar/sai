@@ -72,7 +72,7 @@ export const REVIEW_POST_TIMEOUT_MS = 30_000
  * （state / authorAssociation / submittedAt / author.login / commit.oid）だけに絞る: 本文を読まない（出力の上限に乗らない）し、
  * レビューした人の名前は API に出さない（人ごとに畳むのに使うだけ）
  */
-const LIST_FIELDS = 'number,title,author,headRefName,baseRefName,isDraft,updatedAt,url,additions,deletions,changedFiles,reviewDecision,reviews,headRefOid,statusCheckRollup,isCrossRepository'
+export const LIST_FIELDS = 'number,title,author,headRefName,baseRefName,isDraft,updatedAt,url,additions,deletions,changedFiles,reviewDecision,reviews,headRefOid,statusCheckRollup,isCrossRepository'
 const VIEW_FIELDS = `${LIST_FIELDS},body,state`
 /** CI が終わったかを確かめるときに読む分だけ（#732。差分も本文も引かない） */
 const CI_FIELDS = 'state,statusCheckRollup'
@@ -146,13 +146,13 @@ export class NoPrs implements PrBrowser {
 /** `gh` を 1 回走らせる。失敗・時間切れ・上限超えは null。テストは偽物を渡す */
 export type GhRun = (args: string[], maxBytes: number) => Promise<string | null>
 
-export function spawnGh(bin: string, timeout = PRS_TIMEOUT_MS): GhRun {
+export function spawnGh(bin: string, timeout = PRS_TIMEOUT_MS, cwd?: string): GhRun {
   return (args, maxBytes) =>
     new Promise((resolve) => {
       let child
       try {
-        // cwd は触らない（--repo で名指しするので、どこで走らせても同じ答え）
-        child = spawn(bin, args, { stdio: ['ignore', 'pipe', 'ignore'] })
+        // 一覧は cwd を触らない（--repo で名指しするので、どこで走らせても同じ答え）。`pr.ts` だけブランチ名から引くので cwd を渡す
+        child = spawn(bin, args, { stdio: ['ignore', 'pipe', 'ignore'], ...(cwd ? { cwd } : {}) })
       } catch {
         return resolve(null)
       }

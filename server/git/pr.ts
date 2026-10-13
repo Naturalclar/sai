@@ -7,14 +7,16 @@
 //   ネットワークが死んでいる、のどれでも **null を返すだけ**で、差分そのものの表示は落とさない
 // - `SAI_GH=0` で丸ごと切れる。実行ファイルはサーバの PATH の `gh`（#288）
 // - cwd はセッションの行から取り、ブランチ名は git から読む。どちらもリクエストからは受けない
-import { spawn } from 'node:child_process'
 import type { DiffPr } from '../../shared/types.ts'
 import { PR_VIEW_REVIEWS_JQ, reviewDecisionOf } from '../../shared/prReviewState.ts'
+import { spawnGh } from './prs.ts'
 
-/** 引くのを諦めるまで。差分の要約はこれを待たせるので短く */
-/** `gh pr view` を諦めるまで。#793 で `reviews` を引くようになり、gh はレビューを続きまで引く（1 ページ 100 件ごとに 1 往復）ので少し長めに */
-export const PR_TIMEOUT_MS = 8000
-/** `gh pr view` の出力をどこまで受けるか。超えたら読めなかった扱い */
+/**
+ * 引くのを諦めるまで。差分の要約（`?summary=1`）はこれを待たせるので短く（#793 で `reviews` を引くようになり、レビューが
+ * 100 件を超える PR では gh が続きを引くぶん往復が増えるが、締切は伸ばさない。間に合わなければ番号が付かないだけ）
+ */
+export const PR_TIMEOUT_MS = 4000
+/** `gh pr view` の出力をどこまで受けるか。超えたら読めなかった扱い（`--jq` で判定に要る件だけに絞るので、ふつうは数 KB） */
 export const PR_VIEW_MAX_BYTES = 1024 * 1024
 /** 同じ (cwd, ブランチ) を引き直さない時間。PR 番号はそう変わらないが、新しく出した PR は出したい */
 export const PR_CACHE_MS = 60_000
@@ -97,39 +99,13 @@ export class GhPr implements PrLookup {
     return pr
   }
 
-  /** 失敗（gh が無い、未ログイン、PR 無し、時間切れ）は空文字。例外は投げない */
-  private run(cwd: string, branch: string): Promise<string> {
-    return new Promise((resolve) => {
-      let child
-      try {
-        child = spawn(this.bin, ['pr', 'view', branch, '--json', 'number,url,state,isDraft,reviewDecision,reviews,headRefOid', '--jq', PR_VIEW_REVIEWS_JQ], {
-          cwd,
-          stdio: ['ignore', 'pipe', 'ignore'],
-        })
-      } catch {
-        return resolve('')
-      }
-      let out = ''
-      let done = false
-      const finish = (value: string) => {
-        if (done) return
-        done = true
-        clearTimeout(timer)
-        resolve(value)
-      }
-      const timer = setTimeout(() => {
-        child.kill('SIGKILL')
-        finish('')
-      }, this.timeout)
-      // 上限を超えたら「読めなかった」（切れた JSON を返して PR 無しと取り違えない）。`--jq` で判定に要る件だけに絞るので、ふつうは数 KB
-      let truncated = false
-      child.stdout.on('data', (c: Buffer) => {
-        if (out.length < PR_VIEW_MAX_BYTES) out += c.toString()
-        else truncated = true
-      })
-      child.once('error', () => finish(''))
-      child.once('close', (code) => finish(code === 0 && !truncated ? out : ''))
-    })
+  /**
+   * 失敗（gh が無い、未ログイン、PR 無し、時間切れ、出力が上限超え）は空文字。例外は投げない。
+   * 起こし方は `prs.ts` の `spawnGh()` と同じ 1 つ（締切・上限で子を止める。ここだけ cwd を渡す＝ブランチ名からリポジトリを引く）
+   */
+  private async run(cwd: string, branch: string): Promise<string> {
+    const out = await spawnGh(this.bin, this.timeout, cwd)(['pr', 'view', branch, '--json', 'number,url,state,isDraft,reviewDecision,reviews,headRefOid', '--jq', PR_VIEW_REVIEWS_JQ], PR_VIEW_MAX_BYTES)
+    return out ?? ''
   }
 }
 

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { latestOpinionated, PR_LIST_REVIEWS_JQ, PR_VIEW_REVIEWS_JQ, reviewDecisionOf, reviewsOf } from './prReviewState.ts'
+import { COUNTED_ASSOCIATIONS, latestOpinionated, OPINIONATED_STATES, PR_LIST_REVIEWS_JQ, PR_VIEW_REVIEWS_JQ, reviewDecisionOf, reviewsOf } from './prReviewState.ts'
 
 let seq = 0
 const review = (state: string, association = 'MEMBER', commit?: string, login = 'reviewer-a') => ({
@@ -76,6 +76,9 @@ test('jq: 判定に関わらないレビュー（COMMENTED・外部の人）は 
   assert.match(PR_LIST_REVIEWS_JQ, /reviews_page_full = \(\(\.reviews \/\/ \[\]\) \| length >= 100\)/)
   assert.doesNotMatch(PR_VIEW_REVIEWS_JQ, /reviews_page_full/, 'pr view は続きまで引くので印は付けない')
   for (const jq of [PR_LIST_REVIEWS_JQ, PR_VIEW_REVIEWS_JQ]) {
+    // 落とす条件は TS の Set から組む（2 つの一覧が食い違わない）
+    assert.ok(jq.includes(`IN(${[...OPINIONATED_STATES].map((v) => JSON.stringify(v)).join(', ')})`), jq)
+    assert.ok(jq.includes(`IN(${[...COUNTED_ASSOCIATIONS].map((v) => JSON.stringify(v)).join(', ')})`), jq)
     assert.match(jq, /IN\("APPROVED", "CHANGES_REQUESTED", "DISMISSED"\)/)
     assert.match(jq, /IN\("MEMBER", "OWNER", "COLLABORATOR"\)/)
   }
@@ -87,6 +90,22 @@ test('latestOpinionated: 人ごとに最新、submittedAt の順（無ければ�
   assert.deepEqual(latestOpinionated([a1, a2]).map((r) => r.state), ['APPROVED'], '並びが逆でも submittedAt で後の方')
   const noName = reviewsOf([{ state: 'APPROVED', authorAssociation: 'MEMBER' }, { state: 'APPROVED', authorAssociation: 'MEMBER' }])
   assert.equal(latestOpinionated(noName).length, 2)
+  // 名前の無い 1 件の鍵は並びの位置。取り消しで Map が縮んだあとの 1 件が、前の 1 件と同じ鍵にならない（3 回目のレビュー）
+  const at = (i: number) => `2026-01-0${i}T00:00:00Z`
+  const mixed = reviewsOf([
+    { state: 'APPROVED', authorAssociation: 'MEMBER', submittedAt: at(1), commit: { oid: HEAD } },
+    { state: 'APPROVED', authorAssociation: 'MEMBER', submittedAt: at(2), author: { login: 'reviewer-a' } },
+    { state: 'DISMISSED', authorAssociation: 'MEMBER', submittedAt: at(3), author: { login: 'reviewer-a' } },
+    { state: 'APPROVED', authorAssociation: 'MEMBER', submittedAt: at(4), commit: { oid: OLD } },
+  ])
+  assert.deepEqual(latestOpinionated(mixed).map((r) => r.commit), [HEAD, OLD], '名前の無い承認は 2 つとも残る（後の方が前を上書きしない）')
+})
+
+test('reviewDecisionOf: コミットの無い承認は、ほかのレビューにコミットがあれば head ではない（PR から消えたコミット）、1 件も無ければ古い gh として承認済み（3 回目のレビュー）', () => {
+  const noCommit = { state: 'APPROVED', authorAssociation: 'MEMBER', author: { login: 'reviewer-a' }, submittedAt: '2026-01-02T00:00:00Z' }
+  assert.equal(reviewDecisionOf({ reviewDecision: '', headRefOid: HEAD, reviews: [noCommit] }), 'APPROVED', 'コミットの項目が無い gh')
+  assert.equal(reviewDecisionOf({ reviewDecision: '', headRefOid: HEAD, reviews: [review('APPROVED', 'MEMBER', OLD, 'reviewer-b'), noCommit] }), 'APPROVED_STALE', 'ほかにコミット入りがあるのに無い＝消えたコミットへの承認（古い承認と並んで、どちらも head ではない）')
+  assert.equal(reviewDecisionOf({ reviewDecision: '', headRefOid: HEAD, reviews: [review('APPROVED', 'MEMBER', HEAD, 'reviewer-b'), noCommit] }), 'APPROVED', '今の head への承認が 1 つでもあれば承認済み')
 })
 
 test('jq は要る項目だけに絞る（本文・リアクション・名前以外の author は読まない）', () => {

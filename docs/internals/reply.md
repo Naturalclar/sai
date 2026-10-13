@@ -163,7 +163,7 @@ SAI が起こした Claude のターンは、使ったトークンと費用も�
 - そこで返信は `launch()` が `ClaudeAgents.background(raw, true)` で見て、生きている間は、誰も `claude attach` で開いていなくてターンも回っていないときだけ `claude stop` してから `-p --resume` する（会話は残り、attach すると SAI から送った分も入った状態で起きる）。どちらかに当たれば預かり（`Launched.retry` で `drain()` は止めずに待つ。見に行くのは `BG_RETRY_MS`（10 秒）おき）か `409`。止めた・終わったものはそのまま `-p --resume`。
 - 開いている端末を見るのは `ps`（`ClaudeBackground.attached()` → `attachedIn()`）。argv に `claude` `attach` `<ID>` が続けて並ぶ行だけを数える。ID は短い ID・UUID・その頭（6 文字以上）のどれでもよい。`ps` が読めなければ「居る」扱いで止めない。
 - ターンが回っているかは transcript で見る（`progress.read().active`。#302）。2.1.278 の `claude agents` はバックグラウンドの行に `state`（`working` / `stopped` / `done`）しか持たない（`status` も `pid` も無い）ため。2.1.276 の `status`（`busy` / `idle` / `waiting`）が来ていればそれも使う。`backgroundLive()` はどちらの版でも読む。
-- 一覧はまず覚えているものを見て、バックグラウンドの行があるときだけ引き直す。
+- 一覧はまず覚えているものを見て、バックグラウンドの行があるときだけ引き直す。覚えたあとに bg になったセッションを見落として `-p --resume` が `That session is running in the background` で落ちたとき（#798）は、その終了理由を `ProcessRunner` のコールバックで受けて一覧を引き直す。止めてよければ同じ起動を **1 回だけ**やり直し、attach 中・ターン中なら失敗を消して元の本文を預かりの先頭へ戻す（要約中なら本文はすでに先頭にあるので増やさない）。ほかの終了コード 1 と、やり直したあとの失敗は今までどおり失敗にする。
 - `ClaudeAgents` は `--all` で引く（止めた bg も `claude attach` で起こし直せる）。`--all` を知らない版は非 0 で断るので、そのときだけ付けずに引き直す（引けないと #418 の打ち消しまで黙って止まる）。
 - 詳細の応答の `background`（`BackgroundSession`）に載せ、`BackgroundAttachBar` がコマンドと状態を出す。
 - SAI の子プロセスではないので `run.start` には載せない。

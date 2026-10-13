@@ -6,6 +6,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { backgroundSessionCommand, childEnv, claudeUserLine, failureOf, hasResultFor, isAlive, newSessionCommand, ProcessRunner, replyCommand, tailFrom } from './runner.ts'
+import type { ReplyFailure } from '../../shared/types.ts'
 import type { TurnUsage } from '../../shared/turnUsage.ts'
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -265,12 +266,13 @@ test('ProcessRunner は非0で終わった返信を、理由つきで少しの�
   const log = join(dir, 'reply.log')
   const runner = new ProcessRunner(log)
   // stderr に理由を書いて 3 で終わる子
+  let exited: ReplyFailure | null | undefined
   await runner.start('F@r', {
     bin: process.execPath,
     args: ['-e', 'console.error("thread-store conflict: already has an active writer"); process.exit(3)'],
     cwd: process.cwd(),
     text: '着手して',
-  })
+  }, (failure) => { exited = failure })
   for (let i = 0; i < 60 && runner.running('F@r'); i++) await wait(50)
 
   assert.equal(runner.running('F@r'), false, '失敗した分は「処理中」ではない（次の返信を止めない）')
@@ -278,6 +280,9 @@ test('ProcessRunner は非0で終わった返信を、理由つきで少しの�
   assert.equal(failed?.text, '着手して')
   assert.equal(failed?.failed?.code, 3)
   assert.match(failed?.failed?.tail ?? '', /active writer/, 'reply.log の末尾が理由になる')
+  assert.deepEqual(exited, failed?.failed, '終了コールバックも同じ理由を受け取る')
+  runner.clearFailure('F@r')
+  assert.equal(runner.snapshot()['F@r'], undefined, '安全に引き取った失敗は画面用の状態から消せる')
   await rm(dir, { recursive: true, force: true })
 })
 

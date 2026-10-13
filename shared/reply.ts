@@ -201,8 +201,14 @@ export function replyFailureText(failed: { code?: number; tail: string; turn_err
   const why = failed.tail.trim()
   // 届いたがターンがエラーで終わった（#475）。理由の文がそのまま「エラーで終わりました: …」になっている
   if (failed.turn_error) return why || 'ターンがエラーで終わりました'
+  if (claudeBackgroundConflict(failed)) return 'バックグラウンドで動いているセッションです。端末で開いているか、ターンの途中です'
   if (failed.code === undefined) return why || '届いていません'
   return why ? `終了コード ${failed.code}: ${why}` : `終了コード ${failed.code}`
+}
+
+/** `claude -p --resume` が、生きている `claude --bg` と同じセッションを開こうとして断られた失敗（#798）。 */
+export function claudeBackgroundConflict(failed: { code?: number; tail: string }): boolean {
+  return failed.code === 1 && failed.tail.includes('That session is running in the background')
 }
 
 /** 本文から表記を外す（送信するときと、✕ で返信先を戻すとき）。残った空白は1つにまとめる */

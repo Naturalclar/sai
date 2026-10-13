@@ -89,10 +89,11 @@ export class ReplyQueueStore {
     }
   }
 
-  /** 後ろに預ける。`QUEUE_MAX` を超えるなら預からずに null */
-  add(id: string, text: string, attachments: readonly string[], url: string, now: Date = new Date(), origin: string = ''): StoredReply | null {
+  private addAt(id: string, text: string, attachments: readonly string[], url: string, now: Date, origin: string, first: boolean): StoredReply | null {
     const q = this.queues.get(id) ?? { items: [] }
-    if (q.items.length >= QUEUE_MAX) return null
+    // すでに起動していた 1 件を失敗後に戻すときは、後続だけで上限まで埋まっていても本文を捨てない。
+    // 同じセッションで起動中は 1 本だけなので、先頭に戻るぶんは最大でも 1 件。
+    if (!first && q.items.length >= QUEUE_MAX) return null
     const item: StoredReply = {
       queue_id: randomBytes(8).toString('hex'),
       text,
@@ -101,10 +102,21 @@ export class ReplyQueueStore {
       url,
       ...(origin ? { origin } : {}),
     }
-    q.items.push(item)
+    if (first) q.items.unshift(item)
+    else q.items.push(item)
     this.queues.set(id, q)
     this.persist()
     return item
+  }
+
+  /** 後ろに預ける。`QUEUE_MAX` を超えるなら預からずに null */
+  add(id: string, text: string, attachments: readonly string[], url: string, now: Date = new Date(), origin: string = ''): StoredReply | null {
+    return this.addAt(id, text, attachments, url, now, origin, false)
+  }
+
+  /** 起動した返信を失敗後に預かりへ戻す。あとから預けた返信を追い越させない（#798） */
+  addFirst(id: string, text: string, attachments: readonly string[], url: string, now: Date = new Date(), origin: string = ''): StoredReply | null {
+    return this.addAt(id, text, attachments, url, now, origin, true)
   }
 
   /** 次に回すもの。起動できるまでは外さない（起動できなければ残して止める） */

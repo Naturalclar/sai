@@ -8,7 +8,7 @@ import { appendFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { deliveredText } from '../shared/agentMessages.ts'
-import type { AgentSendResponse, AgentSessionsResponse, PrSummary, Replying } from '../shared/types.ts'
+import type { AgentSendResponse, AgentSessionsResponse, PrSummary, Replying, SessionDetailResponse } from '../shared/types.ts'
 import { createApp } from './app.ts'
 import { Approvals } from './approvals/approvals.ts'
 import { Authenticator } from './auth.ts'
@@ -316,5 +316,39 @@ test('sai_sessions: 止められない claude --bg（ターン中）が掴んで
     assert.deepEqual((await sessionsFor()).find((s) => s.id === 'C1@r')?.holding, { free: true })
   } finally {
     bgRows.clear()
+  }
+})
+
+test('預かった着手の依頼（1 ターンの回数を超えた分）: 相手が空きなら、送り元のターンが終わってから届く。自分自身を「頼まれ中」に数えて止めない。空きでなくなっていたら送らずに止めて残す（#795 のレビュー）', async () => {
+  const detail = async () => ((await (await fetch(`${base}/api/sessions/${encodeURIComponent('A1@r')}`)).json()) as SessionDetailResponse).agent
+  const post = (to: string, text: string) => agent('/api/agent/send', { method: 'POST', body: JSON.stringify({ from: 'A1@r', to, text }) })
+  runner.busy.set('A1@r', { since: 'turn-held', text: 'やって' })
+  let held: AgentSendResponse[] = []
+  try {
+    // その場で送れる 3 回を使い切る（着手の形でない依頼）
+    for (const n of [1, 2, 3]) assert.equal((await post('D1@r', `状況を教えてください ${n}`)).status, 202)
+    // 4 件目からは預かる。預かる時点では 2 人とも空き
+    held = [
+      (await (await post('B1@r', '#9801 に着手してください。')).json()) as AgentSendResponse,
+      (await (await post('C1@r', '#9802 に着手してください。')).json()) as AgentSendResponse,
+    ]
+    assert.deepEqual(held.map((h) => h.held), [true, true])
+  } finally {
+    runner.busy.delete('A1@r')
+  }
+  // 送る直前に、C1 だけ別のターンを回し始めた（端末で人が始めた作業の代わり）
+  runner.busy.set('C1@r', { since: 'turn-other', text: '別の作業' })
+  const runs = runner.started.length
+  try {
+    await fetch(`${base}/api/sessions?days=7`)
+    const started = runner.started.slice(runs)
+    assert.deepEqual(started.map((x) => x.id), ['B1@r'], '空きの相手には届く。空きでない相手には何もしない')
+    assert.ok(started[0]!.cmd.text.endsWith('#9801 に着手してください。'))
+    const left = (await detail())?.held ?? []
+    assert.deepEqual(left.map((h) => [h.message_id, h.halted]), [[held[1]!.message_id, startRefusal('busy')]], '送らなかった 1 件は、理由を付けて画面に残す')
+  } finally {
+    runner.busy.delete('C1@r')
+    await fetch(`${base}/api/sessions/${encodeURIComponent('A1@r')}/agent/stop`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: '{}' })
+    await fetch(`${base}/api/sessions/${encodeURIComponent('A1@r')}/agent/resume`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: '{}' })
   }
 })

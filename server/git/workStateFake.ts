@@ -21,7 +21,7 @@ export function workAnswer(state: FakeWork, args: string[]): string | undefined 
   }
   // いまの HEAD（マージ済みの PR の head と突き合わせる）
   if (key === 'rev-parse HEAD') return `${FAKE_HEAD}\n`
-  if (key === 'status --porcelain') return state === 'dirty' ? ' M src/a.ts\n' : ''
+  if (key === '--no-optional-locks status --porcelain') return state === 'dirty' ? ' M src/a.ts\n' : ''
   if (args[0] === 'symbolic-ref') throw new Error('not set')
   if (args[0] === 'rev-parse' && args[1] === '--verify') {
     if (args[3] === 'main^{commit}') return 'abc\n'
@@ -31,8 +31,8 @@ export function workAnswer(state: FakeWork, args: string[]): string | undefined 
     if (state === 'ahead' || state === 'merged') throw new Error('git exited 1')
     return ''
   }
-  if (key === 'diff --numstat --no-renames main...HEAD') return state === 'ahead' || state === 'merged' ? '1\t0\tsrc/a.ts\n' : ''
-  if (key === 'diff --numstat --no-renames main HEAD -- src/a.ts') return state === 'ahead' ? '1\t0\tsrc/a.ts\n' : ''
+  if (key === 'diff --numstat -z --no-renames main...HEAD') return state === 'ahead' || state === 'merged' ? '1\t0\tsrc/a.ts\0' : ''
+  if (key === 'diff --numstat -z --no-renames main HEAD -- :(top,literal)src/a.ts') return state === 'ahead' ? '1\t0\tsrc/a.ts\0' : ''
   return undefined
 }
 

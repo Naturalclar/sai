@@ -2910,7 +2910,7 @@ export function createApp(
    * 待ちは行の `waiting` のまま見るので、端末で答えた直後は少しの間「空きではない」側に倒れる
    */
   const agentBusy = (id: string) => run.running(id) || codexApp.running(id) || opencodeApp.running(id) || typed.running(id)
-  const agentHoldingsOf = async (list: readonly SessionSummary[], opts: { prs?: boolean } = {}): Promise<Map<string, SessionHolding>> => {
+  const agentHoldingsOf = async (list: readonly SessionSummary[], opts: { prs?: boolean; sending?: string } = {}): Promise<Map<string, SessionHolding>> => {
     const active = new Map(await Promise.all(list.map(async (s) => [s.id, Boolean((await progress.read(s)).active)] as const)))
     const queued = queue.snapshot()
     return holdingsOf(list, (s) => (agentBusy(s.id) ? 'busy' : active.get(s.id) ? 'terminal' : s.waiting ? 'waiting' : (queued[s.id]?.items.length ?? 0) > 0 ? 'queued' : ''), () => true, opts)
@@ -2941,7 +2941,7 @@ export function createApp(
    * - 頼まれて未完の依頼は、`HOLDING_ASK_DAYS` 日以内に届けたメッセージのうち、返答（そのターンの完了の行）がまだ無いものと、
    *   まだ送っていない預かり。行は 1 回だけ舐める
    */
-  const holdingsOf = async (list: readonly SessionSummary[], occupied: (s: SessionSummary) => HoldingWhy | '', sendable: (s: SessionSummary) => boolean = () => true, opts: { prs?: boolean } = {}): Promise<Map<string, SessionHolding>> => {
+  const holdingsOf = async (list: readonly SessionSummary[], occupied: (s: SessionSummary) => HoldingWhy | '', sendable: (s: SessionSummary) => boolean = () => true, opts: { prs?: boolean; sending?: string } = {}): Promise<Map<string, SessionHolding>> => {
     // 同じリポジトリを書き方の違い（大文字小文字）で 2 回引かない（#533 と同じ。PR の画面が埋めたキャッシュとも揃う）
     const known = knownRepos(list)
     const repos = new Map<string, Promise<PrSummary[] | null | undefined>>()
@@ -3010,7 +3010,8 @@ export function createApp(
         const live = (m: AgentMessage) => inQueue.has(m.message_id) || (turn !== undefined && !turn.failed && isDeliveryOf(turn.text, m.message_id))
         const asks = [
           ...(pending.get(s.id) ?? []).filter((m) => !replied.has(`${s.id}\0${m.message_id}`) && live(m)).map((m) => m.text),
-          ...agents.heldFor(s.id).map((h) => h.text),
+          // いま送ろうとしている預かり自身（`opts.sending`）は数えない（#795 のレビュー。数えると、預かった着手の依頼が自分で「頼まれ中」になって必ず止まる）
+          ...agents.heldFor(s.id).filter((h) => h.message_id !== opts.sending).map((h) => h.text),
         ]
         const remote = isRemoteHost(s.host, selfHost())
         const repo = remote ? '' : githubRepoOf(s.remote)
@@ -3327,7 +3328,7 @@ export function createApp(
               }
               // 預かっている間に相手が空きでなくなった着手の依頼は送らない（#795。送る時点の確かめと同じ判定）
               if (startsNewWork(h.text)) {
-                const holding = (await agentHoldingsOf([target])).get(target.id)
+                const holding = (await agentHoldingsOf([target], { sending: h.message_id })).get(target.id)
                 const no = startAskRefusal(holding, context, 0, Boolean(h.far))
                 if (no) {
                   await halt(no)
@@ -4316,10 +4317,10 @@ export function createApp(
         const window = mcpLimiter.windowKey()
         const overBudget = budgetRefusal(agents.readInTurn(mcpFrom(access), window), context)
         if (overBudget) return textResult(overBudget, true)
-        // 着手の形の依頼は、送る時点で相手が空きでなければ送らない（#795。一覧と同じ `mcpHoldingsOf()` で、一覧と同じ範囲を見る）
+        // 着手の形の依頼は、送る時点で相手が空きでなければ送らない（#795。一覧と同じ `mcpHoldingsOf()`）。
+        // 見る範囲は宛先を引いた窓（一覧の窓より広い。一覧の窓の外に居る相手を、引き直しても直らない「状態不明」で断らない）
         if (startsNewWork(text)) {
-          const { sessions: all } = await sessionsWithMeta(MCP_LIST_DAYS)
-          const { holdings } = await mcpHoldingsOf(all.filter((s) => !s.archived))
+          const { holdings } = await mcpHoldingsOf(sessions.filter((s) => !s.archived))
           const no = startAskRefusal(holdings.get(to), context, seenContext.get(mcpFrom(access))?.get(to) ?? 0, false)
           if (no) return textResult(no, true)
         }

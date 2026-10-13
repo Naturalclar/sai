@@ -406,6 +406,9 @@ test('workState: 未コミットの変更・base に入っていないコミッ�
     await git(dir, 'switch', '-q', '-c', 'feat')
     await git(dir, 'commit', '-q', '-am', 'change a')
     assert.equal(await workState(real, dir), 'ahead')
+    // cwd がサブディレクトリでも同じ答え（パスはトップからの形で比べる。#795 のレビュー）
+    await run('mkdir', ['-p', join(dir, 'sub')])
+    assert.equal(await workState(real, join(dir, 'sub')), 'ahead')
     // squash マージ: コミットは main に届かないが、同じ中身が main に入った
     await git(dir, 'switch', '-q', 'main')
     await writeFile(join(dir, 'a.ts'), 'a2\n')
@@ -419,6 +422,14 @@ test('workState: 未コミットの変更・base に入っていないコミッ�
     await writeFile(join(dir, 'a.ts'), 'a3\n')
     await git(dir, 'commit', '-q', '-am', 'change a again')
     await git(dir, 'switch', '-q', 'feat')
+    assert.equal(await workState(real, dir), 'ahead')
+    // ASCII 以外の名前のファイルだけを足したブランチも、入っていない側（引用符付きのパスで比べ損ねない。#795 のレビュー）
+    await git(dir, 'switch', '-q', 'main')
+    await git(dir, 'switch', '-q', '-c', 'memo')
+    await run('mkdir', ['-p', join(dir, 'docs')])
+    await writeFile(join(dir, 'docs', 'メモ [1].md'), 'm\n')
+    await git(dir, 'add', '.')
+    await git(dir, 'commit', '-q', '-m', 'memo')
     assert.equal(await workState(real, dir), 'ahead')
     const plain = await mkdtemp(join(tmpdir(), 'sai-work-plain-'))
     try {
@@ -441,7 +452,7 @@ test('workState: git が落ちた・base が決まらないときは unknown。�
   const noBase: Git = {
     async run(_cwd, args) {
       if (args[0] === 'rev-parse' && args[1] === '--show-toplevel') return '/w\n'
-      if (args[0] === 'status') return ''
+      if (args.includes('status')) return ''
       throw new Error('no such ref')
     },
   }

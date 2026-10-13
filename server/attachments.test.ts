@@ -120,6 +120,21 @@ test('預ける: 中身で判定する。画像・文字のファイル・PDF �
   assert.equal(names.some((n) => /\.(html|svg|log)$/.test(n)), false)
 })
 
+test('預ける: 写真の EXIF は置く前に落とす（#791）。名前のハッシュは落とした後の中身から', async () => {
+  const exif = Buffer.from('Exif\0\0MM\0\x2a\0\0\0\x08\0\x01\x88\x25\0\x04\0\0\0\x01\0\0\0\x1a\0\0\0\0GPS', 'latin1')
+  const app1 = Buffer.concat([Buffer.from([0xff, 0xe1, 0, 0]), exif])
+  app1.writeUInt16BE(exif.length + 2, 2)
+  const stripped = Buffer.concat([Buffer.from([0xff, 0xd8]), Buffer.from([0xff, 0xe0, 0, 4, 1, 2]), Buffer.from([0xff, 0xda, 0, 2, 7, 0xff, 0xd9])])
+  const withExif = Buffer.concat([Buffer.from([0xff, 0xd8]), app1, stripped.subarray(2)])
+  const res = await upload('A1@r', withExif, 'photo.jpg')
+  assert.equal(res.status, 200)
+  assert.deepEqual(await readFile(res.body.path), stripped, '置いたものに EXIF は無い')
+  assert.equal(res.body.size, stripped.length)
+  assert.equal(res.body.name, '')
+  const again = await upload('A1@r', stripped, 'photo.jpg')
+  assert.equal(again.body.path, res.body.path, '落とした後と同じ中身なら同じ名前（重複を作らない）')
+})
+
 test('配る口は画像だけ（文字のファイル・PDF・元の名前のファイルは返さない）', async () => {
   const png = await upload('A1@r', PNG)
   const log = await upload('A1@r', HTML, 'page.html')

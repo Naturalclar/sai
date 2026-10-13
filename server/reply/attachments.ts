@@ -6,6 +6,7 @@
 import { createHash } from 'node:crypto'
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { stripImageMetadata } from '../local/imageMetadata.ts'
 import { ATTACHMENT_FILE_NAME_RE, ATTACHMENT_NAME_RE, ATTACHMENT_DIR_RE, attachmentLabel, attachmentUrl, isUtf8Text, sniffPdf } from '../../shared/attachments.ts'
 import type { AttachmentKind } from '../../shared/attachments.ts'
 import { ICON_MIME, sniffImageType } from '../../shared/icon.ts'
@@ -46,8 +47,10 @@ export class AttachmentStore {
    * 文字のファイルは元の拡張子に関わらず `.txt` で置く（HTML / SVG も。配る口は画像の名前しか通さない）。
    * 元の名前は隣の `<名前>.name` に置く（#608。画面に出す・本文の行に添えるだけ）
    */
-  async put(id: string, bytes: Buffer, originalName = ''): Promise<{ attachment?: Attachment; error: string }> {
-    const image = sniffImageType(bytes)
+  async put(id: string, input: Buffer, originalName = ''): Promise<{ attachment?: Attachment; error: string }> {
+    const image = sniffImageType(input)
+    // 写真の EXIF（GPS など）は置く前に落とす（#791。JPEG / PNG だけ。ICC と向きは残る）。名前のハッシュも落とした後の中身から
+    const bytes = image ? stripImageMetadata(input, image).bytes : input
     const kind: AttachmentKind | null = image ? 'image' : sniffPdf(bytes) ? 'pdf' : isUtf8Text(bytes) ? 'text' : null
     if (!kind) return { error: '添えられるのは画像（PNG / JPEG / GIF / WebP）・文字のファイル（UTF-8）・PDF だけです' }
     const ext = image ?? (kind === 'pdf' ? 'pdf' : 'txt')

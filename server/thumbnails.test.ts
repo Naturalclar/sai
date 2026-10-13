@@ -13,9 +13,10 @@ import { createApp } from './app.ts'
 import { FeedStore } from './rows/store.ts'
 import { localDate } from './rows/aggregate.ts'
 import { row } from './rows/aggregate.test.ts'
-import { hasAlpha, imageSize, noThumbs, THUMB_BAND_EDGE_MAX, THUMB_BAND_SHORT, THUMB_EDGE, THUMB_EDGE_ALPHA, THUMB_FAILED_TTL_MS, THUMB_MIN_BYTES, thumbTarget, Thumbnails } from './local/thumbnails.ts'
+import { hasAlpha, imageSize, noThumbs, THUMB_BAND_EDGE_MAX, THUMB_BAND_SHORT, THUMB_EDGE, THUMB_EDGE_ALPHA, THUMB_FAILED_TTL_MS, THUMB_MIN_BYTES, THUMB_STRIPPED_MARK, thumbTarget, Thumbnails } from './local/thumbnails.ts'
 import type { Shrinker, ThumbFormat } from './local/thumbnails.ts'
 import { IMAGE_MAX_BYTES, sessionImageUrl, thumbUrl } from '../shared/images.ts'
+import { readFile, stat } from 'node:fs/promises'
 
 /** IHDR の色の種類（2 = RGB、6 = RGBA）を持つ PNG に見えるもの。中身の判定は先頭の印だけを見る */
 const png = (size: number, colorType = 2) => {
@@ -239,6 +240,74 @@ test('Thumbnails: 横に細長い画像（帯）は短辺を保って長辺を�
     assert.deepEqual(made.slice(1).map((m) => m.edge), [THUMB_EDGE, THUMB_EDGE])
   } finally {
     await rm(d, { recursive: true, force: true })
+  }
+})
+
+/** EXIF（GPS 入り）付きの JPEG に見えるもの（APP1 の中身は作り物。`sips` が残す EXIF の代わり） */
+const EXIF_SEG = (() => {
+  const payload = Buffer.from('Exif\0\0MM\0\x2a\0\0\0\x08\0\x01\x88\x25\0\x04\0\0\0\x01\0\0\0\x1a\0\0\0\0GPS', 'latin1')
+  const seg = Buffer.alloc(4 + payload.length)
+  seg[0] = 0xff
+  seg[1] = 0xe1
+  seg.writeUInt16BE(payload.length + 2, 2)
+  payload.copy(seg, 4)
+  return seg
+})()
+const JPEG_WITH_EXIF = Buffer.concat([Buffer.from([0xff, 0xd8]), EXIF_SEG, Buffer.from([0xff, 0xe0, 0, 4, 1, 2]), Buffer.from([0xff, 0xda, 0, 2, 7, 0xff, 0xd9])])
+const JPEG_STRIPPED = Buffer.concat([Buffer.from([0xff, 0xd8]), Buffer.from([0xff, 0xe0, 0, 4, 1, 2]), Buffer.from([0xff, 0xda, 0, 2, 7, 0xff, 0xd9])])
+
+test('Thumbnails: sips が残した EXIF は置く前に落とす（#791）', async () => {
+  const d = await mkdtemp(join(tmpdir(), 'sai-th-exif-'))
+  try {
+    const th = new Thumbnails(d, async (_i, o) => writeFile(o, JPEG_WITH_EXIF))
+    const r = await th.thumb({ bytes: png(THUMB_MIN_BYTES + 1), type: 'png' })
+    assert.equal(r.kind, 'thumb')
+    assert.deepEqual(r.kind === 'thumb' && r.bytes, JPEG_STRIPPED, '返すものにも EXIF は無い')
+    const stored = (await readdir(d)).filter((n) => n.endsWith('.jpg'))
+    assert.equal(stored.length, 1)
+    assert.deepEqual(await readFile(join(d, stored[0]!)), JPEG_STRIPPED, '置いたものにも無い')
+    await stat(join(d, THUMB_STRIPPED_MARK)) // 置き場を作ったときに印も置く
+  } finally {
+    await rm(d, { recursive: true, force: true })
+  }
+})
+
+test('Thumbnails: 前に作った軽い版からメタデータを一度だけ落とす。印があれば読み直さない（#791）', async () => {
+  const d = await mkdtemp(join(tmpdir(), 'sai-th-migrate-'))
+  try {
+    await mkdir(d, { recursive: true })
+    const gps = `${'a'.repeat(32)}.jpg`
+    const band = `${'b'.repeat(32)}-1728.jpg`
+    const clean = `${'c'.repeat(32)}.png`
+    await writeFile(join(d, gps), JPEG_WITH_EXIF)
+    await writeFile(join(d, band), JPEG_WITH_EXIF)
+    await writeFile(join(d, clean), PNG_THUMB)
+    await writeFile(join(d, 'notes.txt'), 'x')
+    const th = new Thumbnails(d, fake)
+    assert.deepEqual(await th.stripStored(), { checked: 3, changed: 2 })
+    assert.deepEqual(await readFile(join(d, gps)), JPEG_STRIPPED)
+    assert.deepEqual(await readFile(join(d, band)), JPEG_STRIPPED, '帯の名前（-長辺）のものも')
+    assert.deepEqual(await readFile(join(d, clean)), PNG_THUMB, '落とすものの無い PNG はそのまま')
+    assert.equal((await readFile(join(d, 'notes.txt'), 'utf-8')), 'x', '軽い版の名前でないものは触らない')
+    await stat(join(d, THUMB_STRIPPED_MARK))
+    assert.ok(!(await readdir(d)).some((n) => n.endsWith('.tmp')), 'tmp は残らない')
+    // 印があれば何もしない（新しく置いた GPS 付きは、この経路では触らない）
+    await writeFile(join(d, `${'d'.repeat(32)}.jpg`), JPEG_WITH_EXIF)
+    assert.deepEqual(await new Thumbnails(d, fake).stripStored(), { checked: 0, changed: 0 })
+    assert.deepEqual(await readFile(join(d, `${'d'.repeat(32)}.jpg`)), JPEG_WITH_EXIF)
+  } finally {
+    await rm(d, { recursive: true, force: true })
+  }
+})
+
+test('Thumbnails: 置き場がまだ無ければ落とす仕事は何もせず、最初の thumb() はそれを待ってから進む（#791）', async () => {
+  const d = join(await mkdtemp(join(tmpdir(), 'sai-th-none-')), 'thumbs')
+  try {
+    const th = new Thumbnails(d, fake)
+    assert.deepEqual(await th.stripStored(), { checked: 0, changed: 0 })
+    assert.equal((await th.thumb({ bytes: png(THUMB_MIN_BYTES + 1), type: 'png' })).kind, 'thumb')
+  } finally {
+    await rm(dirname(d), { recursive: true, force: true })
   }
 })
 

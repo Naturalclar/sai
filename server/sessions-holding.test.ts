@@ -333,6 +333,12 @@ test('預かった着手の依頼（1 ターンの回数を超えた分）: 相�
       (await (await post('C1@r', '#9802 に着手してください。')).json()) as AgentSendResponse,
     ]
     assert.deepEqual(held.map((h) => h.held), [true, true])
+    // 1 つの依頼（items）の中で、着手の依頼と別の依頼を同じ相手に重ねると、1 件も送らず・預からずに断る
+    const twice = await agent('/api/agent/send', { method: 'POST', body: JSON.stringify({ from: 'A1@r', items: [{ to: 'D1@r', text: '#9803 に着手してください。' }, { to: 'D1@r', text: '補足です。' }] }) })
+    assert.equal(twice.status, 409)
+    assert.match(((await twice.json()) as { error: string }).error, /^2 件目: 同じ相手に、着手の依頼とほかの依頼を 1 度に送れません/)
+    // 同じ相手宛ての、着手の形でない続きの 1 件も預かる（別々の送信なら預かれる）。これが後ろにあっても、前の着手の依頼は止まらない
+    assert.equal((((await (await post('B1@r', '補足: 本文と全コメントが正本です。')).json()) as AgentSendResponse).held), true)
   } finally {
     runner.busy.delete('A1@r')
   }
@@ -342,10 +348,11 @@ test('預かった着手の依頼（1 ターンの回数を超えた分）: 相�
   try {
     await fetch(`${base}/api/sessions?days=7`)
     const started = runner.started.slice(runs)
-    assert.deepEqual(started.map((x) => x.id), ['B1@r'], '空きの相手には届く。空きでない相手には何もしない')
-    assert.ok(started[0]!.cmd.text.endsWith('#9801 に着手してください。'))
+    assert.equal(started.some((x) => x.id === 'C1@r'), false, '空きでない相手には何もしない')
+    assert.ok(started.find((x) => x.id === 'B1@r')!.cmd.text.endsWith('#9801 に着手してください。'), '空きの相手には届く')
     const left = (await detail())?.held ?? []
-    assert.deepEqual(left.map((h) => [h.message_id, h.halted]), [[held[1]!.message_id, startRefusal('busy')]], '送らなかった 1 件は、理由を付けて画面に残す')
+    assert.equal(left.find((h) => h.message_id === held[1]!.message_id)?.halted, startRefusal('busy'), '送らなかった 1 件は、理由を付けて画面に残す')
+    assert.equal(left.some((h) => h.message_id === held[0]!.message_id), false, '同じ相手宛ての後ろの預かりがあっても、前の着手の依頼は届いている')
   } finally {
     runner.busy.delete('C1@r')
     await fetch(`${base}/api/sessions/${encodeURIComponent('A1@r')}/agent/stop`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: '{}' })

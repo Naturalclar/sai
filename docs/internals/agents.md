@@ -71,10 +71,10 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 
 ### 着手の依頼は送る時点で確かめる（#795）
 
-- `agentSendOne()`（`POST /api/agent/send`）と `/mcp` の `sai_send` は、本文が**着手の形**（`shared/compact.ts` の `startsNewWork()`。要約の判定と同じ関数）のとき、送る前に `startAskRefusal()` を通す。空きでなければ `409`（`/mcp` は `isError`）で `startRefusal(why)` の文を返し、**相手には何もしない**（`launch()` を呼ばない・預かりにも並べない・記録にも数えない）。複数の宛先（`items`）は、1 つでも当たれば 1 件も送らない（ほかの検査と同じ）。
-- 材料は一覧と同じ道: セッション同士の口は `agentHoldingsOf()`、`/mcp` は `mcpHoldingsOf()`（走査するのは宛先を引いた窓 `QUEUE_DAYS` のセッション。一覧の窓 `MCP_LIST_DAYS` より広い。一覧に出ない古いセッションを、引き直しても直らない理由で断らない）。どちらも `holdingsOf()` → `holdingOf()` で、`free` が無ければ断る。組めなかった（走査が落ちた・一覧の窓の外）ときも断る（`unknown`）。
+- `agentSendOne()`（`POST /api/agent/send`）と `/mcp` の `sai_send` は、本文が**着手の形**（`shared/compact.ts` の `startsNewWork()`。要約の判定と同じ関数）のとき、送る前に `startAskRefusal()` を通す。空きでなければ `409`（`/mcp` は `isError`）で `startRefusal(why)` の文を返し、**相手には何もしない**（`launch()` を呼ばない・預かりにも並べない・記録にも数えない）。複数の宛先（`items`）は、1 つでも当たれば 1 件も送らない（ほかの検査と同じ）。**1 つの依頼の中で、着手の依頼と別の依頼を同じ相手に重ねると `409`**（確かめは 1 件も送る前に済ませるので、重ねると先の 1 件が相手を起こしたあとに、後ろの着手の依頼が空きでない相手の預かりに並ぶ）。
+- 材料は一覧と同じ道: セッション同士の口は `agentHoldingsOf()`、`/mcp` は `mcpHoldingsOf()`（待ちの走査は宛先を引いた窓 `QUEUE_DAYS` のセッションで回す。一覧の窓 `MCP_LIST_DAYS` より広い。一覧に出ない古いセッションを、引き直しても直らない理由で断らない。git・`claude agents`・マージ済みの PR を読むのは宛先の 1 件だけ = `opts.only`）。どちらも `holdingsOf()` → `holdingOf()` で、`free` が無ければ断る。組めなかった（走査が落ちた・一覧の窓の外）ときも断る（`unknown`）。
 - **読み直す量の差**: `seenContext`（送り元 → 相手 → トークン。`sai_sessions` を返すたびに覚える。メモリだけ）と、いまの `context_tokens` を `grownSinceSeen()` で比べる。`SEEN_CONTEXT_FACTOR`（2 倍）を超え、かつ `SEEN_CONTEXT_MIN_TOKENS`（30 万）を超えていれば `grownRefusal()` で返す。見ていない（立て直しで忘れた）相手は比べない。別のリポジトリの相手は量を出していないので覚えず、比べない。
-- 預かった送信（#727）も、送る直前に同じ確かめを通す（`drainBacklog()`。当たれば `haltHeld()` で止めて理由を画面に残す）。このとき、いま送ろうとしている預かり自身は「頼まれ中」に数えない（`holdingsOf()` の `opts.sending`。数えると必ず止まる）。
+- 預かった送信（#727）も、送る直前に同じ確かめを通す（`drainBacklog()`。当たれば `haltHeld()` で止めて理由を画面に残す）。このときは、**まだ送っていない預かりを「頼まれ中」に数えない**（`holdingsOf()` の `opts.draining`。数えると、いま送ろうとしている 1 件が自分で、または同じ相手宛ての後ろの預かりで必ず止まる）。先に送った 1 件が相手を起こせば、後ろの着手の依頼は「処理中」「頼まれ中」で止まる。
 - 別のリポジトリの相手には、理由の中身を返さない（`startRefusal(why, true)`）。
 - 着手の形でない本文は通さない。無理に送る引数は作っていない。人が画面から送る返信（`POST …/reply`）はこの道を通らない。
 - 道具の説明に足す文は `FREE_NOTE` / `START_ASK_NOTE`（セッション同士の口と `/mcp` で同じ文）。

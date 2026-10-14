@@ -1,7 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { Approval, ApprovalMap, Loop, LoopMap, ReplyingMap, SessionSummary, Wait } from './types.ts'
-import { awaitsNext, doneItems, pendingItems, todoItems, todoKey, todoSections } from './todoItems.ts'
+import { awaitsNext, doneItems, pendingItems, TERMINAL_STUCK_TEXT, todoItems, todoKey, todoSections } from './todoItems.ts'
+import { TERMINAL_UNKNOWN_PAUSED } from './agentMessages.ts'
 
 /** このサーバが動いているマシン（#114）。行の host が違えば「別のマシン」 */
 const SELF = 'mac'
@@ -405,4 +406,18 @@ test('todoSections: 終わった待ちは答え待ちのすぐ下の段（未読
   const sessions = [summary({ id: 'a@sai', last_kind: 'turn', last_turn_ts: END, unread: 2 })]
   const s = todoSections(todoItems(sessions, {}, SELF, {}, {}, { 'a@sai': [wait({})] }))
   assert.deepEqual([s.answer.length, s.wait.map((t) => t.wait?.id), s.unread.map((t) => t.kind), s.watch.length, s.done.length], [0, ['w1'], ['done'], 0, 0])
+})
+
+test('todoItems: 端末のターンが閉じたか分からずに止めたメッセージの預かりは watch で 1 行だけ出し、数える。ほかの理由で止めた預かりは出さない（#800）', () => {
+  const s = summary({ id: 's1@sai', waiting: '許可待ち: Bash: ls' })
+  const t = summary({ id: 's2@sai' })
+  const queued = {
+    's1@sai': { items: [{ queue_id: 'q1', text: 'x', since: '2026-10-14T00:00:00.000Z' }], paused: TERMINAL_UNKNOWN_PAUSED },
+    's2@sai': { items: [{ queue_id: 'q2', text: 'y', since: '2026-10-14T00:00:00.000Z' }], paused: '前の返信が失敗したので止めています' },
+  }
+  const items = todoItems([s, t], {}, SELF, {}, {}, {}, queued)
+  const mine = items.filter((i) => i.id === 's1@sai')
+  assert.deepEqual(mine.map((i) => [i.kind, i.text, i.since]), [['watch', TERMINAL_STUCK_TEXT, '2026-10-14T00:00:00.000Z']], '同じセッションの watch と重ねない')
+  assert.equal(pendingItems(mine).length, 1)
+  assert.equal(items.some((i) => i.id === 's2@sai' && i.text === TERMINAL_STUCK_TEXT), false)
 })

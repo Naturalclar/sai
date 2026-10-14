@@ -8,7 +8,8 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { COMPACT_MIN_TOKENS } from '../shared/compact.ts'
-import { sendHow } from '../shared/agentMessages.ts'
+import { sendHow, TERMINAL_UNKNOWN_PAUSED } from '../shared/agentMessages.ts'
+import { pendingItems, TERMINAL_STUCK_TEXT, todoItems } from '../shared/todoItems.ts'
 import type { AgentSendResponse, ReplyFailure, Replying, SessionProgressResponse, SessionSummary, SessionsResponse, UsageResponse } from '../shared/types.ts'
 import { createApp } from './app.ts'
 import { Approvals } from './approvals/approvals.ts'
@@ -172,6 +173,8 @@ const reset = async () => {
   for (const item of (await sessions()).queued['T1@r']?.items ?? []) {
     await fetch(`${base}/api/sessions/T1%40r/queue/${item.queue_id}`, { method: 'DELETE', headers: { Origin: base } })
   }
+  // 止めた印も外す（空の預かりで「続けて送る」）
+  await fetch(`${base}/api/sessions/T1%40r/queue/resume`, { method: 'POST', headers: { Origin: base } })
   runner.started.length = 0
   tmux.calls.length = 0
   tmux.screen = IDLE
@@ -200,21 +203,21 @@ test('sai_send: 端末に打ちかけがあり、端末のターンの外なら�
   assert.match(log, /メッセージを端末に打ち込めなかったので、別プロセスで回す/)
 })
 
-test('sai_send: 端末でターンの途中・ダイアログ中・分からないときは、別プロセスを起こさずに預かる。ターンが終われば回る（#800）', async () => {
+test('sai_send: 端末でターンの途中・ダイアログ中なら、別プロセスを起こさずに預かる。止めずに待ち、ターンが終われば回る（#800）', async () => {
   for (const [name, screen, turn] of [
     ['ターンの途中', TYPED, { active: true }],
     ['ダイアログ中', DIALOG, { closed: true }],
-    ['transcript が読めない', TYPED, undefined],
-    ['閉じたか分からない', TYPED, { active: false }],
   ] as const) {
     await reset()
     tmux.screen = screen
-    if (turn) turns.set('T1@r', turn)
+    turns.set('T1@r', turn)
     const res = await send({ text: `${name}の相手へ` })
     assert.equal(res.status, 202, `${name}: ${JSON.stringify(await res.clone().json())}`)
     const body = (await res.json()) as AgentSendResponse
     assert.equal(body.via, 'queued', name)
     assert.equal(body.past_terminal, true, name)
+    assert.equal(body.stuck, undefined, name)
+    assert.match(sendHow(body.via!, body.past_terminal, body.stuck), /端末でターンの途中なので、終わってから回ります/)
     assert.equal(runner.started.length, 0, `${name}: 同じセッションを 2 つのプロセスで回さない`)
     assert.deepEqual(typedKeys(), [], name)
     // ポーリングが来ても、まだ起こさない（預かりも止めない）
@@ -223,10 +226,50 @@ test('sai_send: 端末でターンの途中・ダイアログ中・分からな�
     assert.equal(during?.paused ?? '', '', name)
     assert.equal(runner.started.length, 0, name)
   }
-  // ターンが閉じて打ちかけだけ残っていれば、次のポーリングで別プロセスで回る
+  // ダイアログが閉じて打ちかけだけ残っていれば、次のポーリングで別プロセスで回る
   tmux.screen = TYPED
   turns.set('T1@r', { closed: true })
   await sessions()
+  assert.equal(runner.started.length, 1)
+  assert.match(runner.started[0]!.cmd.text, /ダイアログ中の相手へ/)
+  assert.deepEqual(typedKeys(), [])
+  assert.equal((await sessions()).queued['T1@r'], undefined)
+})
+
+test('sai_send: 端末のターンが閉じたか分からないなら、預かったまま止めて送り元と要対応に出す。人が「続けて送る」で別プロセスで 1 回だけ回す（#800）', async () => {
+  for (const [name, turn] of [
+    ['transcript が読めない', undefined],
+    ['閉じたか分からない', { active: false }],
+  ] as const) {
+    await reset()
+    tmux.screen = TYPED
+    if (turn) turns.set('T1@r', turn)
+    const res = await send({ text: `${name}の相手へ` })
+    assert.equal(res.status, 202, `${name}: ${JSON.stringify(await res.clone().json())}`)
+    const body = (await res.json()) as AgentSendResponse
+    assert.equal(body.via, 'queued', name)
+    assert.equal(body.stuck, true, name)
+    assert.match(sendHow(body.via!, body.past_terminal, body.stuck), /預かったまま止まっています/, name)
+    const data = await sessions()
+    assert.equal(data.queued['T1@r']?.paused, TERMINAL_UNKNOWN_PAUSED, name)
+    const todo = todoItems(data.sessions, data.approvals, data.host, data.replying, data.loops, data.waits, data.queued).filter((t) => t.id === 'T1@r')
+    assert.deepEqual(todo.map((t) => [t.kind, t.text]), [['watch', TERMINAL_STUCK_TEXT]], `${name}: 要対応に 1 行だけ出す（数える）`)
+    assert.equal(pendingItems(todo).length, 1)
+    assert.equal(runner.started.length, 0, name)
+    assert.deepEqual(typedKeys(), [], name)
+  }
+  // 端末でターンが回っている間は、「続けて送る」を押しても起こさない（押した分は持ち越さない）
+  turns.set('T1@r', { active: true })
+  const resume = () => fetch(`${base}/api/sessions/T1%40r/queue/resume`, { method: 'POST', headers: { Origin: base } })
+  assert.equal((await resume()).status, 200)
+  assert.equal(runner.started.length, 0)
+  // 回っていなくなったが、閉じたかはまだ分からない（止めた預かりはもう一度止まる。押した分は使われていない）
+  turns.set('T1@r', { active: false })
+  await sessions()
+  assert.equal(runner.started.length, 0)
+  assert.equal((await sessions()).queued['T1@r']?.paused, TERMINAL_UNKNOWN_PAUSED)
+  // 人が押せば、分からなくても別プロセスで 1 回だけ回す。端末には何も打たない
+  assert.equal((await resume()).status, 200)
   assert.equal(runner.started.length, 1)
   assert.match(runner.started[0]!.cmd.text, /閉じたか分からないの相手へ/)
   assert.deepEqual(typedKeys(), [])

@@ -1250,6 +1250,8 @@ export interface AgentSendResult {
   via?: ReplyResponse['via']
   /** 端末で開いている相手に、端末を使わずに届けた（#800。`ReplyResponse.past_terminal`） */
   past_terminal?: true
+  /** 預かったまま止まっている（#800。`ReplyResponse.stuck`） */
+  stuck?: true
   /** 預かった（送り元のターンが終わってから送る） */
   held?: true
   context_tokens: number
@@ -1279,6 +1281,8 @@ export interface AgentSendResponse {
   via?: ReplyResponse['via']
   /** 端末で開いている相手に、端末を使わずに届けた（#800。`ReplyResponse.past_terminal`） */
   past_terminal?: true
+  /** 預かったまま止まっている（#800。`ReplyResponse.stuck`） */
+  stuck?: true
   /**
    * 1 ターンの回数（か読み直しの予算）を超えたので、**断らずに預かった**（#727）。送り元のターンが終わってから SAI が順に送る。
    * `message_id` はもう決まっている（返答はいつもどおり画面と次のターンの頭に届く。`sai_wait` では待てない）
@@ -1891,6 +1895,8 @@ export interface ReplyResponse {
    * `compact` = 要約を挟むため別プロセスで回す、`queued` = 端末でターンの途中なので預かった。端末の打ちかけは残っている
    */
   past_terminal?: true
+  /** `past_terminal` で預かったが、端末のターンが閉じたか分からないので止めた（#800。人が要対応で「続けて送る」まで回らない） */
+  stuck?: true
   session: string
   cwd: string
 }

@@ -225,6 +225,7 @@ import {
   SEND_COMPACT_ARG,
   SEND_COMPACT_NOTE,
   SEND_TERMINAL_NOTE,
+  TERMINAL_UNKNOWN_PAUSED,
   ASSIGN_NOTE,
   idleNote,
   sessionLabel,
@@ -2503,30 +2504,42 @@ export function createApp(
   }
 
   /**
-   * 端末で開いている Claude が、いまターンの外だと分かるか（#800）。transcript の最後のターンが閉じていて（`closed_at`）、
-   * 回っておらず、端末に打ち込んだ返信の行を待ってもいないときだけ true。読めない・分からないときは false（起こさない）
+   * 端末で開いている Claude のターンがどうなっているか（#800）。`idle` は transcript の最後のターンが閉じていて（`closed_at`）、
+   * 回っておらず、端末に打ち込んだ返信の行を待ってもいないときだけ。`turn` は回っている（か打ち込んだ返信を待っている）。
+   * 読めない・閉じたか分からないときは `unknown`（起こさない）
    */
-  const terminalIdle = async (id: string, session: SessionSummary): Promise<boolean> => {
-    if (typed.running(id)) return false
+  const terminalTurn = async (id: string, session: SessionSummary): Promise<'idle' | 'turn' | 'unknown'> => {
+    if (typed.running(id)) return 'turn'
     const p = await progress.read(session)
-    return !p.active && !!p.closed_at
+    return p.active ? 'turn' : p.closed_at ? 'idle' : 'unknown'
   }
   /**
-   * 端末でターンの途中の相手へのメッセージ（#800）。別プロセスを起こさずに預かる。drain から（`queue: false`）なら
-   * `retry` で返し、預かりを止めずに `BG_RETRY_MS` おきに見に行かせる
+   * 人が要対応から「続けて送る」を押した、端末のターンが閉じたか分からずに止めた預かり（#800）。次の 1 回だけ、分からなくても
+   * 別プロセスで回す（人の「端末を使わず送る」と同じ）。端末でターンが回っている・ダイアログ中なら、押しても待つ
    */
-  const terminalTurnHold = async (id: string, session: SessionSummary, raw: string, cwd: string, text: string, attachments: string[], o: LaunchOptions): Promise<Launched> => {
+  const terminalForced = new Set<string>()
+  /**
+   * 端末でターンの途中・ダイアログ中・分からない相手へのメッセージ（#800）。別プロセスを起こさずに預かる。
+   * 回っている・ダイアログ中なら止めずに待つ（drain から（`queue: false`）なら `retry` で返し、`BG_RETRY_MS` おきに見に行かせる）。
+   * **閉じたか分からないときは、待っても分かるようにならないことがあるので、預かりを止めて要対応に出す**（`TERMINAL_UNKNOWN_PAUSED`）
+   */
+  const terminalTurnHold = async (id: string, session: SessionSummary, raw: string, cwd: string, text: string, attachments: string[], o: LaunchOptions, unknown: boolean): Promise<Launched> => {
     const log = join(store.directory, 'reply.log')
+    const why = unknown ? '端末のターンが閉じたか分からない' : '端末でターンの途中かダイアログ中'
     if (!o.queue) {
-      await appendFile(log, `--- ${new Date().toISOString()} ${id} 端末でターンの途中（か分からない）なので、別プロセスを起こさずに待つ\n`).catch(() => {})
-      return { ...refuse(409, '相手は端末でターンの途中です（終わってから送ります）'), retry: true }
+      if (unknown) queue.pause(id, TERMINAL_UNKNOWN_PAUSED)
+      await appendFile(log, `--- ${new Date().toISOString()} ${id} ${why}ので、別プロセスを起こさずに${unknown ? '預かりを止めた' : '待つ'}\n`).catch(() => {})
+      return { ...refuse(409, unknown ? TERMINAL_UNKNOWN_PAUSED : '相手は端末でターンの途中です（終わってから送ります）'), retry: true }
     }
     const item = queue.add(id, text, attachments, o.url, new Date(), o.origin ?? '', o.forceProcess)
     if (!item) return refuse(409, `預かれるのは ${QUEUE_MAX} 件までです。取り消すか、前の返信が終わるのを待ってください`)
-    await appendFile(log, `--- ${new Date().toISOString()} ${id} 端末でターンの途中（か分からない）なので、別プロセスを起こさずに預かった（${queue.size(id)} 件目）\n`).catch(() => {})
-    const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd, via: 'queued', queue_id: item.queue_id, past_terminal: true }
+    if (unknown) queue.pause(id, TERMINAL_UNKNOWN_PAUSED)
+    await appendFile(log, `--- ${new Date().toISOString()} ${id} ${why}ので、別プロセスを起こさずに預かった（${queue.size(id)} 件目${unknown ? '。止めて要対応に出す' : ''}）\n`).catch(() => {})
+    const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd, via: 'queued', queue_id: item.queue_id, past_terminal: true, ...(unknown ? { stuck: true as const } : {}) }
     return { status: 202, body: payload }
   }
+  /** 端末のターンの外と分かった（か、人が止めた預かりを「続けて送る」で押した）。押した分はここで 1 回だけ使う */
+  const mayPassTerminal = (id: string, state: 'idle' | 'turn' | 'unknown'): boolean => state === 'idle' || (state === 'unknown' && terminalForced.delete(id))
 
   const launch = async (id: string, text: string, attachments: string[], o: LaunchOptions): Promise<Launched> => {
     const { sessions } = await store.sessions(o.days)
@@ -2600,7 +2613,7 @@ export function createApp(
     // 預かりが残ってもいないときだけ。当たらなければ付いていないのと同じ（下の今までの経路）
     // 端末に打ち込んだ返信がまだ回っているのにペインが見つからないときも回さない（下の経路が 409 にするのと同じ。#590 のレビュー）
     // メッセージ（#800）は、端末で開いていてもターンの外と分かれば別プロセスで要約を挟む（本文も端末に打たずに別プロセスで回す）
-    const compactPastTerminal = !!openTerminal && !!o.terminalFallback && o.compact === true && session.agent === 'claude' && !busy && !bgLive && queue.size(id) === 0 && (await terminalIdle(id, session))
+    const compactPastTerminal = !!openTerminal && !!o.terminalFallback && o.compact === true && session.agent === 'claude' && !busy && !bgLive && queue.size(id) === 0 && (await terminalTurn(id, session)) === 'idle'
     if (o.compact && session.agent === 'claude' && (!openTerminal || compactPastTerminal) && !busy && !typed.running(id) && !bgLive && queue.size(id) === 0) {
       const log = join(store.directory, 'reply.log')
       launching.add(id)
@@ -2667,13 +2680,18 @@ export function createApp(
       const body = withHandedReplies(text, handed.replies)
       const pastTerminal = !!openTerminal && !!o.terminalFallback && session.agent === 'claude'
       // 端末を使わずに回す本文（要約のあと。#800）でも、端末でターンが回り始めていたら起こさない
-      if (pastTerminal && o.forceProcess && !(await terminalIdle(id, session))) return terminalTurnHold(id, session, raw, cwd, text, attachments, o)
+      if (pastTerminal && o.forceProcess) {
+        const state = await terminalTurn(id, session)
+        if (!mayPassTerminal(id, state)) return terminalTurnHold(id, session, raw, cwd, text, attachments, o, state === 'unknown')
+      }
       let out = await startTurn(id, session, raw, cwd, openTerminal, body, attachments, o, { text, attachments })
       // 端末に打ち込めなかった（打ち込む前に断られた。何も打っていない）メッセージは、断らずに別プロセスへ回す（#800）。
       // 端末でターンの途中（ダイアログ中を含む）・分からないときは起こさずに預かる（同じセッションを 2 つのプロセスで回さない）
       if (pastTerminal && !o.forceProcess && out.status === 409 && (out.body as ReplyError).can_process) {
         const why = (out.body as ReplyError).error
-        if ((out.body as ReplyError).code === 'terminal_dialog' || !(await terminalIdle(id, session))) return terminalTurnHold(id, session, raw, cwd, text, attachments, o)
+        if ((out.body as ReplyError).code === 'terminal_dialog') return terminalTurnHold(id, session, raw, cwd, text, attachments, o, false)
+        const state = await terminalTurn(id, session)
+        if (!mayPassTerminal(id, state)) return terminalTurnHold(id, session, raw, cwd, text, attachments, o, state === 'unknown')
         await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} メッセージを端末に打ち込めなかったので、別プロセスで回す（${why}。打ちかけは残す）\n`).catch(() => {})
         out = await startTurn(id, session, raw, cwd, openTerminal, body, attachments, { ...o, forceProcess: true }, { text, attachments })
         if (out.status === 202) out = { ...out, body: { ...(out.body as ReplyResponse), past_terminal: true } }
@@ -3087,8 +3105,15 @@ export function createApp(
       // drain() と同じく、app-server のエラーで終わったターン（#475）も「覚えた失敗」にする
       const last = failedReply(id)
       if (last?.failed) resumedFailure.set(id, last.since)
+      // 端末のターンが閉じたか分からずに止めた預かり（#800）は、人が押したので次の 1 回は分からなくても別プロセスで回す
+      if (queue.paused(id) === TERMINAL_UNKNOWN_PAUSED) {
+        terminalForced.add(id)
+        bgRetryAt.delete(id)
+      }
       queue.resume(id)
       await drain(id)
+      // 回らなかった（端末でターンが回っている・ダイアログ中）なら、押した分を次に持ち越さない
+      terminalForced.delete(id)
     } else {
       if (method !== 'DELETE') return error(res, 405, 'method not allowed')
       // いま起動している先頭は取り消せない（取り消したつもりで回ってしまう）
@@ -3529,14 +3554,14 @@ export function createApp(
         results.push({ ...base, error: why })
         continue
       }
-      const { via, past_terminal } = out.body as ReplyResponse
+      const { via, past_terminal, stuck } = out.body as ReplyResponse
       agents.record(
         { message_id: messageId, from, to, text: p.text, since: new Date().toISOString(), turn: found.turn, ...(p.far ? { far: true as const } : {}), ...(b.wake === true ? { wake: true as const, url: selfUrl(req) } : {}) },
         found.turn,
         p.context,
       )
       await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${from} → ${to} メッセージ ${messageId}（${via}）\n`).catch(() => {})
-      results.push({ ...base, via, ...(past_terminal ? { past_terminal } : {}) })
+      results.push({ ...base, via, ...(past_terminal ? { past_terminal } : {}), ...(stuck ? { stuck } : {}) })
     }
     const counts = {
       sent: agents.sentInTurn(from, found.turn),
@@ -3557,6 +3582,7 @@ export function createApp(
       to_name: one.to_name,
       ...(one.via ? { via: one.via } : {}),
       ...(one.past_terminal ? { past_terminal: true as const } : {}),
+      ...(one.stuck ? { stuck: true as const } : {}),
       ...(one.held ? { held: true as const, held_count: heldCount } : {}),
       ...counts,
       context_tokens: one.context_tokens,
@@ -4640,13 +4666,13 @@ export function createApp(
         const compact = messageCompactOf(target, text, context, args.compact)
         const out = await launch(to, deliveredFromTailnet(access.caller, messageId, text), [], { days: QUEUE_DAYS, replaceTyped: false, forceProcess: false, url: selfUrl(req), queue: true, origin: messageId, terminalFallback: true, ...compact })
         if (out.status !== 202) return textResult(`送れませんでした: ${(out.body as ReplyError).error}`, true)
-        const { via, past_terminal } = out.body as ReplyResponse
+        const { via, past_terminal, stuck } = out.body as ReplyResponse
         mcpLimiter.record(access.caller)
         agents.record({ message_id: messageId, from: mcpFrom(access), to, text, since: new Date().toISOString() }, window, context)
         await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${mcpFrom(access)} → ${to} メッセージ ${messageId}（${via}）\n`).catch(() => {})
         const size = tokensLabel(context)
         return textResult(
-          `${to}「${sessionLabel(target)}」に送りました（message_id: ${messageId}。${sendHow(via, past_terminal === true)}）。` +
+          `${to}「${sessionLabel(target)}」に送りました（message_id: ${messageId}。${sendHow(via, past_terminal === true, stuck === true)}）。` +
             `${size ? `${via === 'compact' ? '要約の前の相手の文脈は' : '相手が読み直す量は'}${size}（予算の残り ${tokensLabel(Math.max(0, AGENT_TURN_READ_BUDGET - agents.readInTurn(mcpFrom(access), window))) || '0'}）。` : ''}返答は sai_wait で受け取れます`,
         )
       },

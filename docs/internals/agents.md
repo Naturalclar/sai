@@ -72,9 +72,10 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 ### 端末で開いている相手へ送る（#800）
 
 - 既定は端末に打ち込む（人の画面からの返信と同じ `startTurn()`）。メッセージの道（`sai_send`・預かった送信の `drainBacklog()`・返答で起こす `wake`・tailnet の MCP・預かりから回す `drain()` の `origin` 付き）だけ、`launch()` に `terminalFallback: true` を渡す。
-- 端末に打ち込めなかった（`can_process: true` の 409。打ちかけ・ダイアログ・読めない）ときは、`typeInto()` が何も打たずに断ったあとなので、Claude なら `terminalIdle()` を見てから同じ本文で `startTurn(…, { forceProcess: true })` をもう 1 回だけ呼ぶ。打ちかけは消さない（`replaceTyped` は `false` のまま）。`claude --bg` の手当て（#798）は `-p` の経路そのままなので、そのまま効く。
-- `terminalIdle()` は、端末に打ち込んだ返信の行を待っておらず（`TerminalReplies.running()`）、transcript の最後のターンが閉じていて（`closed_at`）回っていない（`active`）ときだけ真。読めない・閉じたか分からないときは偽。偽のとき・ダイアログ中（`terminal_dialog`）は別プロセスを起こさずに `terminalTurnHold()` で預かる（`drain()` からは `retry` で返し、預かりを止めずに `BG_RETRY_MS` おきに見る）。
-- 要約してから送る（`compact`）メッセージは、端末で開いている Claude でも `messageCompactOf()` が選べる。`launch()` は端末がターンの外と分かったときだけ要約を別プロセスで挟み、本文を `StoredReply.process` 付きで預かる（`drain()` が `forceProcess: true` で回す。開いている TUI は要約を知らないので、本文を端末に打たない）。本文を回す時点でも `terminalIdle()` を見る。
+- 端末に打ち込めなかった（`can_process: true` の 409。打ちかけ・ダイアログ・読めない）ときは、`typeInto()` が何も打たずに断ったあとなので、Claude なら `terminalTurn()` を見てから同じ本文で `startTurn(…, { forceProcess: true })` をもう 1 回だけ呼ぶ。打ちかけは消さない（`replaceTyped` は `false` のまま）。`claude --bg` の手当て（#798）は `-p` の経路そのままなので、そのまま効く。
+- `terminalTurn()` は、端末に打ち込んだ返信の行を待っておらず（`TerminalReplies.running()`）、transcript の最後のターンが閉じていて（`closed_at`）回っていない（`active`）ときだけ `idle`。回っている・打ち込んだ返信を待っているときは `turn`、読めない・閉じたか分からないときは `unknown`。`turn` とダイアログ中（`terminal_dialog`）は別プロセスを起こさずに `terminalTurnHold()` で預かる（`drain()` からは `retry` で返し、預かりを止めずに `BG_RETRY_MS` おきに見る）。
+- `unknown` は待っても分かるようにならないことがあるので、預かって**止める**（`paused` に `TERMINAL_UNKNOWN_PAUSED` の文そのものを置く）。応答には `stuck: true` を付け、`sendHow()` が「預かったまま止まっています」と返す。要対応は `todoItems()` が `queued` を見て、この文で止まった預かりを `watch` の 1 行（`TERMINAL_STUCK_TEXT`）で出す（そのセッションのほかの `watch` / `done` と重ねない）。人が「続けて送る」（`POST …/queue/resume`）を押したら `terminalForced` に入れ、次の 1 回だけ `unknown` でも別プロセスで回す（`turn`・ダイアログ中なら押しても待ち、押した分は持ち越さない）。
+- 要約してから送る（`compact`）メッセージは、端末で開いている Claude でも `messageCompactOf()` が選べる。`launch()` は端末がターンの外と分かったときだけ要約を別プロセスで挟み、本文を `StoredReply.process` 付きで預かる（`drain()` が `forceProcess: true` で回す。開いている TUI は要約を知らないので、本文を端末に打たない）。本文を回す時点でも `terminalTurn()` を見る。
 - 端末を使わずに届けたときは `ReplyResponse.past_terminal` を付け、`sai_send` の返事（`sendHow()`）がどの道で届けたか（端末に打ち込んだ・打ち込めず別プロセスで起こした・別プロセスで要約を挟む・端末でターンの途中なので預かった）を書く。Codex・OpenCode は今の線のまま（開いている Codex は queue）。
 
 ### 着手の依頼は送る時点で確かめる（#795）

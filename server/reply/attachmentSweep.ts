@@ -18,6 +18,7 @@ import { appendFile, readFile } from 'node:fs/promises'
 import { THUMB_MIN_BYTES } from '../local/thumbnails.ts'
 import type { ThumbMaker } from '../local/thumbnails.ts'
 import { sniffImageType } from '../../shared/icon.ts'
+import { KEPT_THUMB_VERSION } from './attachments.ts'
 import type { AttachmentStore } from './attachments.ts'
 
 /** 寿命の既定（日） */
@@ -66,6 +67,7 @@ export class AttachmentSweeper {
   private lastResult: SweepResult | null = null
   private running: Promise<SweepResult> | null = null
   private timer: ReturnType<typeof setInterval> | undefined
+  private first: ReturnType<typeof setTimeout> | undefined
 
   constructor(store: AttachmentStore, thumbs: ThumbMaker, opts: SweepOptions) {
     this.store = store
@@ -91,15 +93,17 @@ export class AttachmentSweeper {
   start(intervalMs = ATTACHMENT_SWEEP_INTERVAL_MS, firstDelayMs = 0): void {
     this.stop()
     const tick = () => void this.run().catch(() => {})
-    const first = setTimeout(tick, firstDelayMs)
-    first.unref()
+    this.first = setTimeout(tick, firstDelayMs)
+    this.first.unref()
     this.timer = setInterval(tick, intervalMs)
     this.timer.unref()
   }
 
   stop(): void {
     if (this.timer) clearInterval(this.timer)
+    if (this.first) clearTimeout(this.first)
     this.timer = undefined
+    this.first = undefined
   }
 
   /** 1 回回す。同時に 2 回は回さない（走っていればその結果を待つ） */
@@ -116,7 +120,8 @@ export class AttachmentSweeper {
     const now = this.now()
     const r: SweepResult = { at: new Date(now).toISOString(), originals: 0, deleted: 0, freed_bytes: 0, kept_no_thumb: 0, kept_small: 0, failed: 0, thumbs_made: 0, total_bytes: 0, total_files: 0 }
     const files = await this.store.walk()
-    const thumbs = new Set(files.filter((f) => f.kind === 'thumb').map((f) => `${f.dir}/${f.name.slice(0, 16)}`))
+    // 今の版の軽い版だけを「ある」と数える（古い版しか無ければ作り直してから消す）
+    const thumbs = new Set(files.filter((f) => f.kind === 'thumb' && f.name.split('.')[1] === String(KEPT_THUMB_VERSION)).map((f) => `${f.dir}/${f.name.slice(0, 16)}`))
     for (const f of files) {
       r.total_bytes += f.size
       r.total_files++
@@ -158,7 +163,8 @@ export class AttachmentSweeper {
     }
     const type = sniffImageType(bytes)
     if (!type) return false
-    const t = await this.thumbs.thumb({ bytes, type })
+    // 作るだけで `thumbs/` の LRU には置かない（置き場は原本の隣）
+    const t = await (this.thumbs.render ?? this.thumbs.thumb).call(this.thumbs, { bytes, type })
     if (t.kind !== 'thumb') return false
     return (await this.store.keepThumb(dir, name, t.bytes, t.type === 'png' ? 'png' : 'jpeg')) !== null
   }

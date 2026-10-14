@@ -14,7 +14,7 @@ import { BuildFreshness } from './local/buildFreshness.ts'
 import { THUMB_MIN_BYTES } from './local/thumbnails.ts'
 import type { ThumbMaker } from './local/thumbnails.ts'
 import { ATTACHMENT_TTL_DAYS, AttachmentSweeper } from './reply/attachmentSweep.ts'
-import { AttachmentStore, attachmentDir, KEPT_THUMB_SUBDIR } from './reply/attachments.ts'
+import { ATTACHMENT_WORK_STALE_MS, ATTACHMENTS_STRIPPED_MARK, AttachmentStore, attachmentDir, KEPT_THUMB_SUBDIR, KEPT_THUMB_VERSION } from './reply/attachments.ts'
 import { jpegSegment } from './local/imageMetadata.ts'
 import { localDate } from './rows/aggregate.ts'
 import { row } from './rows/aggregate.test.ts'
@@ -28,14 +28,18 @@ const SMALL = jpegOf(1000)
 const THUMB = Buffer.from([0xff, 0xd8, 0xff, 0xd9])
 const DAY = 86_400_000
 
-/** 偽の縮める口。`fail` なら作れない */
+/** 偽の縮める口。`fail` なら作れない。`thumb()`（LRU に置く方）は呼ばれないはず */
 const maker = (fail = false): ThumbMaker & { calls: number } => ({
   calls: 0,
   async thumb() {
+    throw new Error('添付は render() で作る（thumbs/ の LRU に置かない）')
+  },
+  async render() {
     this.calls++
     return fail ? { kind: 'unavailable' } : { kind: 'thumb', bytes: THUMB, type: 'jpeg' }
   },
 })
+const KEPT = (stem: string) => `${stem}.${KEPT_THUMB_VERSION}.jpg`
 
 async function seed(root: string, dir: string, name: string, bytes: Buffer, ageDays: number, now: number) {
   await mkdir(join(root, dir), { recursive: true })
@@ -68,10 +72,11 @@ test('掃除: 寿命を過ぎた大きい原本だけ消し、軽い版が無け
     assert.equal(r.originals, 3)
     assert.equal(thumbs.calls, 1, '軽い版を作ったのは消した 1 枚だけ')
     await assert.rejects(readFile(old), '寿命を過ぎた原本は消える')
-    assert.deepEqual(await readFile(join(root, d, KEPT_THUMB_SUBDIR, `${'a'.repeat(16)}.jpg`)), THUMB, '軽い版は原本の隣に残る')
+    assert.deepEqual(await readFile(join(root, d, KEPT_THUMB_SUBDIR, KEPT('a'.repeat(16)))), THUMB, '軽い版は原本の隣に残る')
     for (const p of [fresh, small, txt]) await readFile(p)
-    assert.equal(await store.usablePath(old), join(root, d, KEPT_THUMB_SUBDIR, `${'a'.repeat(16)}.jpg`), '返信に渡すパスは軽い版に落ちる')
-    assert.equal(await store.usablePath(fresh), fresh)
+    assert.match((await store.missingReason(old)) ?? '', /寿命で消えています/, '返信には渡さず理由を返す（軽い版のパスに差し替えない）')
+    assert.equal(await store.missingReason(fresh), null)
+    assert.match((await store.missingReason(join(root, d, `${'f'.repeat(16)}.txt`))) ?? '', /見つかりません/, '文字のファイルは寿命の文言にしない')
     // 2 回目は消すものが無い。それでもログに 1 行書く
     const again = await sweeper.run()
     assert.equal(again.deleted, 0)
@@ -110,12 +115,41 @@ test('掃除: 軽い版が作れなければ原本を消さない。寿命 0 な
   }
 })
 
-test('attachmentTtlDays: 既定 30。数でなければ既定、負は 0', () => {
+test('attachmentTtlDays: 既定 30。0 以上の整数だけ受け、空白だけ・数でない・負は既定', () => {
   assert.equal(attachmentTtlDays({}), 30)
   assert.equal(attachmentTtlDays({ SAI_ATTACHMENT_TTL_DAYS: '7' }), 7)
+  assert.equal(attachmentTtlDays({ SAI_ATTACHMENT_TTL_DAYS: ' 7 ' }), 7)
   assert.equal(attachmentTtlDays({ SAI_ATTACHMENT_TTL_DAYS: '0' }), 0)
-  assert.equal(attachmentTtlDays({ SAI_ATTACHMENT_TTL_DAYS: '-3' }), 0)
+  assert.equal(attachmentTtlDays({ SAI_ATTACHMENT_TTL_DAYS: ' ' }), 30, '空白だけは 0 にしない')
+  assert.equal(attachmentTtlDays({ SAI_ATTACHMENT_TTL_DAYS: '-3' }), 30)
   assert.equal(attachmentTtlDays({ SAI_ATTACHMENT_TTL_DAYS: 'abc' }), 30)
+})
+
+test('掃除: 古い版の軽い版しか無ければ作り直してから消す。軽い版の置き場の古い tmp も起動時に消す', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'sai-sweep-ver-'))
+  try {
+    const now = Date.UTC(2026, 9, 14)
+    const d = attachmentDir('S1@r')
+    const old = await seed(root, d, `${'a'.repeat(16)}.jpeg`, BIG, 40, now)
+    const sub = join(root, d, KEPT_THUMB_SUBDIR)
+    await mkdir(sub)
+    await writeFile(join(sub, `${'a'.repeat(16)}.0.jpg`), Buffer.from('old'))
+    const staleTmp = join(sub, `${'a'.repeat(16)}.1.jpg.123.1.tmp`)
+    await writeFile(staleTmp, 'x')
+    const at = new Date(now - ATTACHMENT_WORK_STALE_MS - 1000)
+    await utimes(staleTmp, at, at)
+    await writeFile(join(root, ATTACHMENTS_STRIPPED_MARK), '')
+    const store = new AttachmentStore(root, () => now)
+    assert.equal((await store.ready()).removed, 1, '軽い版の置き場の古い tmp も消す')
+    assert.equal((await store.keptThumb(d, `${'a'.repeat(16)}.jpeg`))?.current, false, '古い版は「今の版でない」と分かる')
+    const thumbs = maker()
+    const r = await new AttachmentSweeper(store, thumbs, { ttlMs: 30 * DAY, now: () => now }).run()
+    assert.deepEqual([r.deleted, r.thumbs_made, thumbs.calls], [1, 1, 1], '古い版しか無いので作り直してから消す')
+    await assert.rejects(readFile(old))
+    assert.deepEqual((await readdir(sub)).sort(), [KEPT('a'.repeat(16))], '古い版は消え、今の版だけ残る')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
 })
 
 // 配る口と一覧のバナー
@@ -155,7 +189,7 @@ test('配る口: ?thumb= で作った軽い版は原本の隣に残り、原本�
   const t = await fetch(`${url}?thumb=2`)
   assert.equal(t.status, 200)
   assert.deepEqual(Buffer.from(await t.arrayBuffer()), THUMB)
-  assert.deepEqual(await readFile(join(sub, KEPT_THUMB_SUBDIR, `${'e'.repeat(16)}.jpg`)), THUMB, '原本の隣に残す')
+  assert.deepEqual(await readFile(join(sub, KEPT_THUMB_SUBDIR, KEPT('e'.repeat(16)))), THUMB, '原本の隣に残す')
   assert.equal((await fetch(`${url}?thumb=2`)).status, 200)
   assert.equal(thumbs.calls, before + 1, '2 回目は置いてある軽い版を配る（縮め直さない）')
   assert.equal((await fetch(url)).headers.get('x-sai-attachment'), null, '原本があるうちは原本')
@@ -164,7 +198,9 @@ test('配る口: ?thumb= で作った軽い版は原本の隣に残り、原本�
     const res = await fetch(u)
     assert.equal(res.status, 200, u)
     assert.equal(res.headers.get('x-sai-attachment'), 'thumb', u)
+    assert.equal(res.headers.get('cache-control'), 'private, no-cache', '原本の代わりに配るときは問い合わせさせる（同じ写真を添え直せば原本が戻る）')
     assert.deepEqual(Buffer.from(await res.arrayBuffer()), THUMB)
+    assert.equal((await fetch(u, { headers: { 'If-None-Match': res.headers.get('etag')! } })).status, 304)
   }
   assert.equal((await fetch(`${base}/api/attachments/${d}/${'f'.repeat(16)}.jpeg`)).status, 404, '原本も軽い版も無ければ 404')
   // 置き場がしきい値（1 バイト）を超えているので、次の掃除（テストでは 100ms ごと）のあと一覧に出る

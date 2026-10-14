@@ -141,10 +141,9 @@ export function shutdown(server: Closable, opts: ShutdownOptions = {}): () => vo
 
 /** `SAI_ATTACHMENT_TTL_DAYS`（既定 30）。数でなければ既定、負は 0 */
 export function attachmentTtlDays(env: NodeJS.ProcessEnv = process.env): number {
-  const raw = env.SAI_ATTACHMENT_TTL_DAYS
-  if (raw === undefined || raw === '') return ATTACHMENT_TTL_DAYS
-  const n = Number(raw)
-  return Number.isFinite(n) ? Math.max(0, n) : ATTACHMENT_TTL_DAYS
+  const raw = (env.SAI_ATTACHMENT_TTL_DAYS ?? '').trim()
+  if (!/^\d+$/.test(raw)) return ATTACHMENT_TTL_DAYS // 未設定・空白だけ・数でない（`Number(' ')` は 0 になる）・負は既定
+  return Number(raw)
 }
 
 export function main(argv: string[]): void {

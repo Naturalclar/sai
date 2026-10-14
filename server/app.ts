@@ -157,7 +157,7 @@ import { fillRepo, ProjectResolver } from './git/project.ts'
 import type { Git } from './git/diff.ts'
 import { prLookupFromEnv } from './git/pr.ts'
 import type { PrLookup } from './git/pr.ts'
-import { AttachmentStore } from './reply/attachments.ts'
+import { AttachmentStore, KEPT_THUMB_VERSION } from './reply/attachments.ts'
 import { AttachmentSweeper } from './reply/attachmentSweep.ts'
 import type { SweepOptions } from './reply/attachmentSweep.ts'
 import { PROFILE_FILE, ProfileStore } from './meta/profile.ts'
@@ -1978,10 +1978,10 @@ export function createApp(
     for (const p of asked) {
       const resolved = attachmentStore.resolvePath(id, p)
       if (!resolved) return error(res, 400, 'このセッションに預けた添付ではありません')
-      // 原本が寿命で消えていれば（#792）、残っている軽い版のパスを渡す（無ければ 400。無いパスを CLI に読ませない）
-      const usable = await attachmentStore.usablePath(resolved)
-      if (!usable) return error(res, 400, 'その添付の原本は寿命で消えていて、軽い版も残っていません')
-      attached.push(usable)
+      // 無いパスを CLI に読ませない（#792。画像の原本が寿命で消えていれば、その理由で 400。軽い版のパスには差し替えない）
+      const missing = await attachmentStore.missingReason(resolved)
+      if (missing) return error(res, 400, missing)
+      attached.push(resolved)
       // 画像以外（#608）は元の名前を行に添える。名前は置いたときに隣へ書いたもの（リクエストからは受けない）
       if (!isImageAttachmentPath(resolved)) names.set(resolved, await attachmentStore.labelOf(resolved))
     }
@@ -5464,9 +5464,8 @@ export function createApp(
         const [dir = '', name = '', ...rest] = path.slice(ATTACHMENTS_PREFIX.length).split('/')
         const found = rest.length > 0 ? null : await attachmentStore.find(dir, name)
         // 捨てない軽い版（#792）。原本が寿命で消えたあとはこれを配る（過去の行とギャラリーの画像が虫食いにならない）。
-        // `?thumb=` ならこれがあればそのまま配り、無ければ原本から作って置く
-        const kept = rest.length > 0 ? null : await attachmentStore.keptThumb(dir, name)
-        if (!found && !kept) return error(res, 404, 'attachment not found')
+        // `?thumb=` なら今の版のこれがあればそのまま配り、無ければ原本から作って置く。原本の 304・ダウンロードでは引かない
+        const kept = rest.length > 0 || (found && !wantsThumb(q)) ? null : await attachmentStore.keptThumb(dir, name)
         const sendKept = async (k: NonNullable<typeof kept>, gone: boolean) => {
           let bytes: Buffer
           try {
@@ -5474,14 +5473,25 @@ export function createApp(
           } catch {
             return error(res, 404, 'attachment not found')
           }
-          // 軽い版の中身は変わらない（名前が元の中身のハッシュ）。原本の代わりに配るときは `X-SAI-Attachment: thumb` で知らせる
+          // `?thumb=` の URL は版付きで中身が変わらないので immutable。原本の代わりに配るとき（版の無い元の URL）は
+          // `X-SAI-Attachment: thumb` で知らせ、no-cache + ETag（同じ写真を添え直して原本が戻れば、次は原本が出る）
           const headers: Record<string, string | number> = { 'Content-Type': k.mime, 'Content-Length': bytes.length, 'Cache-Control': 'private, max-age=31536000, immutable' }
-          if (gone) headers['X-SAI-Attachment'] = 'thumb'
+          if (gone) {
+            const tag = `"at${KEPT_THUMB_VERSION}-${name.slice(0, 16)}"`
+            if (req.headers['if-none-match'] === tag) {
+              res.writeHead(304, { ETag: tag, 'Cache-Control': 'private, no-cache', 'X-SAI-Attachment': 'thumb' })
+              res.end()
+              return
+            }
+            headers['X-SAI-Attachment'] = 'thumb'
+            headers['Cache-Control'] = 'private, no-cache'
+            headers.ETag = tag
+          }
           res.writeHead(200, headers)
           res.end(req.method === 'HEAD' ? undefined : bytes)
         }
-        if (!found) return await sendKept(kept!, true)
-        if (wantsThumb(q) && kept) return await sendKept(kept, false)
+        if (!found) return kept ? await sendKept(kept, true) : error(res, 404, 'attachment not found')
+        if (kept?.current) return await sendKept(kept, false)
         // 元のまま配る口の ETag は名前と落とし方の版から決まるので、304 で済むなら読まない
         const etag = `"a${METADATA_STRIP_VERSION}-${name.slice(0, 16)}"`
         if (!wantsThumb(q) && req.headers['if-none-match'] === etag) {
@@ -5493,12 +5503,14 @@ export function createApp(
         try {
           body = await readFile(found.path)
         } catch {
-          return error(res, 404, 'attachment not found')
+          // 見た直後に掃除が原本を消した（軽い版を置いてから消すので、あるはず）
+          const late = await attachmentStore.keptThumb(dir, name)
+          return late ? await sendKept(late, true) : error(res, 404, 'attachment not found')
         }
-        // 軽い版（#589）。添付は画像だけ受けているが、種類は中身で見る
+        // 軽い版（#589）。添付は画像だけ受けているが、種類は中身で見る。作るだけで `thumbs/` の LRU には置かない（置き場は原本の隣。#792）
         const kind = sniffImageType(body)
         const type = wantsThumb(q) ? kind : null
-        const t = type ? await thumbs.thumb({ bytes: body, type }) : ({ kind: 'original' } as const)
+        const t = type ? await (thumbs.render ?? thumbs.thumb).call(thumbs, { bytes: body, type }) : ({ kind: 'original' } as const)
         if (t.kind === 'unavailable') {
           res.writeHead(503, { 'Cache-Control': 'no-store', 'X-SAI-Thumb': 'unavailable', 'X-SAI-Image-Bytes': body.length, 'Content-Length': 0 })
           res.end()
@@ -5840,9 +5852,11 @@ export function createApp(
         const hooks_missing = (localClaude && claudeHooks.missing()) || []
         // Claude のログインが切れていると分かっているときだけ（#685。聞けていない・分からないは false）
         const claude_logged_out = claudeAuth.peek()?.loggedIn === false
+        // 添付の置き場がしきい値を超えている（#792。測っていなければ null）
+        const attachments_over = sweeper?.over() ?? null
         const body: SessionsResponse = {
           // 足りないフックは rev に混ぜる（設定を直したら、次の行を待たずにバナーが消える）
-          rev: revWith(rev, replying, approvalMapKey(pendingApprovals), build_stale, digest.revKey(), `${queue.key()}|${loops.key()}|${waits.key()}`) + (hooks_missing.length ? `~hooks:${hooks_missing.join(',')}` : '') + (claude_logged_out ? '~auth:out' : '') + (sweeper?.over() ? `~att:${sweeper.over()!.bytes}` : ''),
+          rev: revWith(rev, replying, approvalMapKey(pendingApprovals), build_stale, digest.revKey(), `${queue.key()}|${loops.key()}|${waits.key()}`) + (hooks_missing.length ? `~hooks:${hooks_missing.join(',')}` : '') + (claude_logged_out ? '~auth:out' : '') + (attachments_over ? `~att:${attachments_over.bytes}` : ''),
           days,
           total: pool.length,
           sessions: withLastSummary(
@@ -5865,7 +5879,7 @@ export function createApp(
           record_version,
           hooks_missing,
           claude_logged_out,
-          attachments_over: sweeper?.over() ?? null,
+          attachments_over,
           profile: me.profile,
           viewer,
           host: selfHost(),

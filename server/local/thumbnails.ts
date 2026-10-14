@@ -234,16 +234,23 @@ export class Thumbnails implements ThumbMaker {
     const hash = createHash('sha256').update(img.bytes).digest('hex').slice(0, 32)
     // 帯は長辺が違うので名前を分ける（前に長辺 512px で作った帯の軽い版を返さない。#709）
     const ext = format === 'jpeg' ? 'jpg' : 'png'
-    if (!keep) {
-      const out = join(this.dir, `${hash}.render.${process.pid}.${++this.seq}.${ext}`)
-      if (this.missing) return { kind: 'unavailable' }
-      try {
-        return await this.make(img.bytes, hash, out, format, edge)
-      } finally {
-        await rm(out, { force: true })
-      }
-    }
     const out = join(this.dir, `${hash}${target === base ? '' : `-${target}`}.${ext}`)
+    if (!keep) {
+      // 作るだけ。`make()` の作業ファイル（`<hash>.src` / `<hash>.tmp.*`）は hash で名前が決まるので、同じ中身の同時実行は
+      // `thumb()` と同じく `inflight`（鍵は hash）で 1 本にまとめる（まとめないと 2 本が同じ作業ファイルを奪い合い、後の方が
+      // `failed` に入って LRU 側まで 10 分止まる）。`sips` が落ちた hash の 10 分の抑制も同じ
+      if (this.missing) return { kind: 'unavailable' }
+      const failedAt = this.failed.get(hash)
+      if (failedAt !== undefined && this.now() - failedAt < THUMB_FAILED_TTL_MS) return { kind: 'unavailable' }
+      const pending = this.inflight.get(hash)
+      if (pending) return pending
+      const work = join(this.dir, `${hash}.render.${process.pid}.${++this.seq}.${ext}`)
+      const job = this.make(img.bytes, hash, work, format, edge)
+        .finally(() => rm(work, { force: true }))
+        .finally(() => this.inflight.delete(hash))
+      this.inflight.set(hash, job)
+      return job
+    }
     let stored: Buffer | null = null
     try {
       stored = await readFile(out)
@@ -268,10 +275,11 @@ export class Thumbnails implements ThumbMaker {
     if (this.missing) return { kind: 'unavailable' }
     const failedAt = this.failed.get(hash)
     if (failedAt !== undefined && this.now() - failedAt < THUMB_FAILED_TTL_MS) return { kind: 'unavailable' }
-    const pending = this.inflight.get(out)
+    // 鍵は hash（`out` は hash から決まる。`render()` と同じ鍵にして、同じ中身の作業ファイルを 2 本が触らない）
+    const pending = this.inflight.get(hash)
     if (pending) return pending
-    const job = this.make(img.bytes, hash, out, format, edge).finally(() => this.inflight.delete(out))
-    this.inflight.set(out, job)
+    const job = this.make(img.bytes, hash, out, format, edge).finally(() => this.inflight.delete(hash))
+    this.inflight.set(hash, job)
     return job
   }
 

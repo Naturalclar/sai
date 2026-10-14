@@ -400,3 +400,33 @@ test('Thumbnails: 形が読めず落とせたか分からないものは、sips 
     await rm(d, { recursive: true, force: true })
   }
 })
+
+test('Thumbnails.render: 作るだけで置き場に残さず、同じ中身の同時実行は 1 本にまとめ、落ちた hash は 10 分起こさない（#792 のレビュー）', async () => {
+  const d = await mkdtemp(join(tmpdir(), 'sai-thumbs-render-'))
+  try {
+    let n = 0
+    const th = new Thumbnails(d, async (_i, o) => {
+      n++
+      await new Promise((r) => setTimeout(r, 20))
+      await writeFile(o, JPEG_THUMB)
+    })
+    await th.ready()
+    const img = { bytes: png(THUMB_MIN_BYTES + 10), type: 'png' as const }
+    const [a, b] = await Promise.all([th.render(img), th.render(img)])
+    assert.deepEqual([a.kind, b.kind, n], ['thumb', 'thumb', 1])
+    assert.ok(!(await readdir(d)).some((f) => f.endsWith('.jpg') || f.endsWith('.png') || f.includes('.render.')), '置き場には残さない')
+    assert.equal((await th.thumb(img)).kind, 'thumb', 'LRU の道は別に作れる')
+    let m = 0
+    const bad = new Thumbnails(d, async () => {
+      m++
+      throw new Error('sips failed')
+    })
+    await bad.ready()
+    const other = { bytes: png(THUMB_MIN_BYTES + 20), type: 'png' as const }
+    assert.equal((await bad.render(other)).kind, 'unavailable')
+    assert.equal((await bad.render(other)).kind, 'unavailable')
+    assert.equal(m, 1, '落ちた hash はしばらく起こさない')
+  } finally {
+    await rm(d, { recursive: true, force: true })
+  }
+})

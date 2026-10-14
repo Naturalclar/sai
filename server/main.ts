@@ -17,6 +17,7 @@
 //   GET /api/sessions/<id>?days=30
 //   GET /api/feed?days=3&repo=
 import { createServer } from 'node:http'
+import { ATTACHMENT_TTL_DAYS } from './reply/attachmentSweep.ts'
 import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
@@ -138,6 +139,14 @@ export function shutdown(server: Closable, opts: ShutdownOptions = {}): () => vo
   }
 }
 
+/** `SAI_ATTACHMENT_TTL_DAYS`（既定 30）。数でなければ既定、負は 0 */
+export function attachmentTtlDays(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env.SAI_ATTACHMENT_TTL_DAYS
+  if (raw === undefined || raw === '') return ATTACHMENT_TTL_DAYS
+  const n = Number(raw)
+  return Number.isFinite(n) ? Math.max(0, n) : ATTACHMENT_TTL_DAYS
+}
+
 export function main(argv: string[]): void {
   const parsed = parseOptions(argv)
   if (!parsed.ok) {
@@ -161,6 +170,8 @@ export function main(argv: string[]): void {
     claudeLogin: new ClaudeLogin({ shimDir: join(feedDir, 'login-shim'), logDir: feedDir, recheck: () => claudeAuth.refresh() }),
     // [常に許可] で、もう設定にあるルールを足さない（#705）。設定ファイルを読むだけ
     allowedRules: (cwd) => allowRules(cwd, homedir()),
+    // 添付の原本の寿命（#792）。本物の置き場を掃除するのはここで組んだものだけ。`SAI_ATTACHMENT_TTL_DAYS=0` で消さない（計測とログだけ）
+    attachmentSweep: { ttlMs: attachmentTtlDays() * 86_400_000, logPath: join(feedDir, 'attachments.log') },
   })
   const server = createServer((req, res) => {
     void app(req, res)

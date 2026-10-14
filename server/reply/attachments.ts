@@ -28,6 +28,12 @@ export interface Attachment {
 
 /** 元の名前を置く隣のファイルの接尾辞（`<ハッシュ>.txt.name`） */
 const LABEL_SUFFIX = '.name'
+/**
+ * 原本の隣に置く、**捨てない軽い版**の置き場（`attachments/<dir>/thumb/<名前の幹>.jpg|png`。#792）。
+ * `thumbs/` は LRU で古いものから捨てる派生の置き場なので相乗りしない（原本を消したあとは軽い版が記録そのものになる）
+ */
+export const KEPT_THUMB_SUBDIR = 'thumb'
+const KEPT_THUMB_RE = /^[0-9a-f]{16}\.(jpg|png)$/
 
 /** ID → ディレクトリ名。逆引きはしない */
 export function attachmentDir(id: string): string {
@@ -49,6 +55,13 @@ export interface CleanResult {
   /** 消した残骸の tmp の数 */
   removed: number
   marked: boolean
+}
+
+/** 捨てない軽い版（`attachments/<dir>/thumb/`）の 1 枚 */
+export interface KeptThumb {
+  path: string
+  type: 'jpeg' | 'png'
+  mime: string
 }
 
 export class AttachmentStore {
@@ -223,5 +236,113 @@ export class AttachmentStore {
     }
     const ext = name.slice(name.lastIndexOf('.') + 1) as keyof typeof ICON_MIME
     return { path, mime: ICON_MIME[ext] }
+  }
+
+  /** 捨てない軽い版の置き場のパス（`find()` と同じく形を見てから組む。リクエストの文字列は入れない） */
+  private keptThumbPath(dir: string, name: string, type: 'jpeg' | 'png'): string | null {
+    if (!ATTACHMENT_DIR_RE.test(dir) || !ATTACHMENT_NAME_RE.test(name)) return null
+    return join(this.dir, dir, KEPT_THUMB_SUBDIR, `${name.slice(0, 16)}.${type === 'jpeg' ? 'jpg' : 'png'}`)
+  }
+
+  /**
+   * `resolvePath()` を通ったパスのうち、CLI に渡せるもの。原本があればそのまま、寿命で消えていれば（#792）残っている軽い版のパス、
+   * どちらも無ければ null（無いパスを CLI に読ませない）
+   */
+  async usablePath(resolved: string): Promise<string | null> {
+    try {
+      if ((await stat(resolved)).isFile()) return resolved
+    } catch {
+      // 原本が無い
+    }
+    const parts = resolved.split('/')
+    const name = parts.pop() ?? ''
+    const dir = parts.pop() ?? ''
+    return (await this.keptThumb(dir, name))?.path ?? null
+  }
+
+  /** 原本の隣に置いてある捨てない軽い版。無ければ null（#792） */
+  async keptThumb(dir: string, name: string): Promise<KeptThumb | null> {
+    for (const type of ['jpeg', 'png'] as const) {
+      const path = this.keptThumbPath(dir, name, type)
+      if (!path) return null
+      try {
+        if ((await stat(path)).isFile()) return { path, type, mime: ICON_MIME[type] }
+      } catch {
+        // 無い
+      }
+    }
+    return null
+  }
+
+  /** 捨てない軽い版を置く（tmp + rename。もうあれば置き直さない）。置けなければ null（#792） */
+  async keepThumb(dir: string, name: string, bytes: Buffer, type: 'jpeg' | 'png'): Promise<KeptThumb | null> {
+    const path = this.keptThumbPath(dir, name, type)
+    if (!path) return null
+    const tmp = `${path}.${process.pid}.${++this.seq}.tmp`
+    try {
+      await mkdir(join(this.dir, dir, KEPT_THUMB_SUBDIR), { recursive: true })
+      await writeFile(tmp, bytes)
+      await rename(tmp, path)
+    } catch {
+      await rm(tmp, { force: true })
+      return (await this.keptThumb(dir, name)) ?? null
+    }
+    return { path, type, mime: ICON_MIME[type] }
+  }
+
+  /**
+   * 置き場の中身を歩く（掃除と大きさの計測に。#792）。返すのは **SAI が作った形の名前だけ**（原本・軽い版・元の名前・印・tmp）。
+   * 知らない名前は数えない・触らない
+   */
+  async walk(): Promise<{ dir: string; name: string; path: string; kind: 'original' | 'thumb' | 'other'; size: number; mtimeMs: number }[]> {
+    const out: { dir: string; name: string; path: string; kind: 'original' | 'thumb' | 'other'; size: number; mtimeMs: number }[] = []
+    let dirs: string[]
+    try {
+      dirs = (await readdir(this.dir)).filter((d) => ATTACHMENT_DIR_RE.test(d))
+    } catch {
+      return out
+    }
+    const push = async (dir: string, name: string, path: string, kind: 'original' | 'thumb' | 'other') => {
+      try {
+        const st = await stat(path)
+        if (st.isFile()) out.push({ dir, name, path, kind, size: st.size, mtimeMs: st.mtimeMs })
+      } catch {
+        // 一覧を取った直後に消えた
+      }
+    }
+    for (const dir of dirs) {
+      let names: string[]
+      try {
+        names = await readdir(join(this.dir, dir))
+      } catch {
+        continue
+      }
+      for (const n of names) {
+        if (n === KEPT_THUMB_SUBDIR) {
+          let thumbs: string[] = []
+          try {
+            thumbs = (await readdir(join(this.dir, dir, n))).filter((t) => KEPT_THUMB_RE.test(t))
+          } catch {
+            // 無い・読めない
+          }
+          for (const t of thumbs) await push(dir, t, join(this.dir, dir, n, t), 'thumb')
+          continue
+        }
+        const kind = ATTACHMENT_NAME_RE.test(n) ? 'original' : ATTACHMENT_FILE_NAME_RE.test(n) || n.endsWith(LABEL_SUFFIX) || ATTACHMENT_WORK_RE.test(n) ? 'other' : null
+        if (kind) await push(dir, n, join(this.dir, dir, n), kind)
+      }
+    }
+    return out
+  }
+
+  /** 原本を消す（掃除から。`walk()` が返したパスだけを渡す。#792）。消せなければ false */
+  async removeOriginal(dir: string, name: string): Promise<boolean> {
+    if (!ATTACHMENT_DIR_RE.test(dir) || !ATTACHMENT_NAME_RE.test(name)) return false
+    try {
+      await rm(join(this.dir, dir, name))
+      return true
+    } catch {
+      return false
+    }
   }
 }

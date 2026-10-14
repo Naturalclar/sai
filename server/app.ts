@@ -158,6 +158,8 @@ import type { Git } from './git/diff.ts'
 import { prLookupFromEnv } from './git/pr.ts'
 import type { PrLookup } from './git/pr.ts'
 import { AttachmentStore } from './reply/attachments.ts'
+import { AttachmentSweeper } from './reply/attachmentSweep.ts'
+import type { SweepOptions } from './reply/attachmentSweep.ts'
 import { PROFILE_FILE, ProfileStore } from './meta/profile.ts'
 import { READ_MARKS_FILE, ReadStore } from './meta/reads.ts'
 import { SUGGESTIONS_FILE, SuggestionStore } from './mcp/suggestions.ts'
@@ -648,6 +650,8 @@ export interface TerminalDeps {
   codexImages?: CodexImages
   /** 画像の軽い版を作る口（#589）。テストでは偽の縮める口を渡した Thumbnails か noThumbs */
   thumbs?: ThumbMaker
+  /** 添付の原本の掃除（#792）。渡したときだけ回す（本物を組むのは `main.ts`。テストの既定は回さない） */
+  attachmentSweep?: SweepOptions & { intervalMs?: number }
   /**
    * PR の要約（#790）のために、一言とは別の口を組む関数（設定の `pr_summary_provider` を選んだときだけ呼ぶ）。
    * 既定は一言と同じ作り方（`summarizerFactory()`。送り先と鍵は環境変数）。テストは偽物を渡す
@@ -1039,6 +1043,9 @@ export function createApp(
   const iconStore = new IconStore(join(store.directory, ICONS_DIR))
   const iconHistory = new IconHistory(join(store.directory, ICON_HISTORY_DIR), join(store.directory, ICON_HISTORY_FILE), iconStore)
   const attachmentStore = new AttachmentStore(join(store.directory, ATTACHMENTS_DIR))
+  // 原本の寿命（#792）。渡されたときだけ起動時に 1 回と間隔ごとに回す
+  const sweeper = terminal.attachmentSweep ? new AttachmentSweeper(attachmentStore, thumbs, terminal.attachmentSweep) : null
+  sweeper?.start(terminal.attachmentSweep?.intervalMs)
   const profileStore = new ProfileStore(join(store.directory, PROFILE_FILE))
   // 処理中に送った返信の預かり（#305）。replying.json と同じくファイルにも持ち、再起動で消さない
   const queue = new ReplyQueueStore(join(store.directory, QUEUE_FILE))
@@ -1971,7 +1978,10 @@ export function createApp(
     for (const p of asked) {
       const resolved = attachmentStore.resolvePath(id, p)
       if (!resolved) return error(res, 400, 'このセッションに預けた添付ではありません')
-      attached.push(resolved)
+      // 原本が寿命で消えていれば（#792）、残っている軽い版のパスを渡す（無ければ 400。無いパスを CLI に読ませない）
+      const usable = await attachmentStore.usablePath(resolved)
+      if (!usable) return error(res, 400, 'その添付の原本は寿命で消えていて、軽い版も残っていません')
+      attached.push(usable)
       // 画像以外（#608）は元の名前を行に添える。名前は置いたときに隣へ書いたもの（リクエストからは受けない）
       if (!isImageAttachmentPath(resolved)) names.set(resolved, await attachmentStore.labelOf(resolved))
     }
@@ -5223,6 +5233,7 @@ export function createApp(
     opencodeApp.stop()
     if (loopTimer) clearInterval(loopTimer)
     if (waitTimer) clearInterval(waitTimer)
+    sweeper?.stop()
   }
 
   const handler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
@@ -5452,7 +5463,25 @@ export function createApp(
       if (isAttachFile) {
         const [dir = '', name = '', ...rest] = path.slice(ATTACHMENTS_PREFIX.length).split('/')
         const found = rest.length > 0 ? null : await attachmentStore.find(dir, name)
-        if (!found) return error(res, 404, 'attachment not found')
+        // 捨てない軽い版（#792）。原本が寿命で消えたあとはこれを配る（過去の行とギャラリーの画像が虫食いにならない）。
+        // `?thumb=` ならこれがあればそのまま配り、無ければ原本から作って置く
+        const kept = rest.length > 0 ? null : await attachmentStore.keptThumb(dir, name)
+        if (!found && !kept) return error(res, 404, 'attachment not found')
+        const sendKept = async (k: NonNullable<typeof kept>, gone: boolean) => {
+          let bytes: Buffer
+          try {
+            bytes = await readFile(k.path)
+          } catch {
+            return error(res, 404, 'attachment not found')
+          }
+          // 軽い版の中身は変わらない（名前が元の中身のハッシュ）。原本の代わりに配るときは `X-SAI-Attachment: thumb` で知らせる
+          const headers: Record<string, string | number> = { 'Content-Type': k.mime, 'Content-Length': bytes.length, 'Cache-Control': 'private, max-age=31536000, immutable' }
+          if (gone) headers['X-SAI-Attachment'] = 'thumb'
+          res.writeHead(200, headers)
+          res.end(req.method === 'HEAD' ? undefined : bytes)
+        }
+        if (!found) return await sendKept(kept!, true)
+        if (wantsThumb(q) && kept) return await sendKept(kept, false)
         // 元のまま配る口の ETag は名前と落とし方の版から決まるので、304 で済むなら読まない
         const etag = `"a${METADATA_STRIP_VERSION}-${name.slice(0, 16)}"`
         if (!wantsThumb(q) && req.headers['if-none-match'] === etag) {
@@ -5476,6 +5505,8 @@ export function createApp(
           return
         }
         if (t.kind === 'thumb') {
+          // 作れた軽い版は原本の隣に置く（#792。原本が消えたあとも配れる）。置けなくても配る
+          await attachmentStore.keepThumb(dir, name, t.bytes, t.type === 'png' ? 'png' : 'jpeg')
           // 軽い版の URL は版（THUMB_VERSION）付きで、名前が中身のハッシュなので、同じ URL の中身は変わらない
           res.writeHead(200, { 'Content-Type': ICON_MIME[t.type], 'Content-Length': t.bytes.length, 'Cache-Control': 'private, max-age=31536000, immutable' })
           res.end(req.method === 'HEAD' ? undefined : t.bytes)
@@ -5811,7 +5842,7 @@ export function createApp(
         const claude_logged_out = claudeAuth.peek()?.loggedIn === false
         const body: SessionsResponse = {
           // 足りないフックは rev に混ぜる（設定を直したら、次の行を待たずにバナーが消える）
-          rev: revWith(rev, replying, approvalMapKey(pendingApprovals), build_stale, digest.revKey(), `${queue.key()}|${loops.key()}|${waits.key()}`) + (hooks_missing.length ? `~hooks:${hooks_missing.join(',')}` : '') + (claude_logged_out ? '~auth:out' : ''),
+          rev: revWith(rev, replying, approvalMapKey(pendingApprovals), build_stale, digest.revKey(), `${queue.key()}|${loops.key()}|${waits.key()}`) + (hooks_missing.length ? `~hooks:${hooks_missing.join(',')}` : '') + (claude_logged_out ? '~auth:out' : '') + (sweeper?.over() ? `~att:${sweeper.over()!.bytes}` : ''),
           days,
           total: pool.length,
           sessions: withLastSummary(
@@ -5834,6 +5865,7 @@ export function createApp(
           record_version,
           hooks_missing,
           claude_logged_out,
+          attachments_over: sweeper?.over() ?? null,
           profile: me.profile,
           viewer,
           host: selfHost(),

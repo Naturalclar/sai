@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { mbLabel } from './mbLabel.ts'
 import { HIDDEN_POLL_MS, parseRoute, sessionHash, useHashRoute, useLocalState, usePolling, type Route } from './hooks'
 import { closeColumn, EMPTY_LAYOUT, focusColumn, focusedItem, MAX_COLUMNS, nextUnshown, normalizeLayout, openBeside, openInNeighbor, PINNED_HASH, placeItem, replaceItem, routePaneItem, sessionIdsIn, type PaneItem, type PaneLayout } from './paneLayout'
 import { paneKey } from './paneKeys'
@@ -551,6 +552,12 @@ export function App() {
       {/* Claude のログインが切れている（#685）。SAI が起こす claude の仕事が全部失敗するので、理由を先に出す */}
       {list.data?.claude_logged_out && <ClaudeAuthBanner />}
       {/* 配っている web/dist/ がソースより古い（git pull のあと pnpm build していない）。pnpm dev は HMR で常に最新なので出さない */}
+      {/* 添付の置き場が増えている（#792）。原本は寿命で消えるが、増え方を見えるようにする */}
+      {list.data?.attachments_over && (
+        <div className="banner" role="status">
+          添付の置き場が {mbLabel(list.data.attachments_over.bytes)}（しきい値 {mbLabel(list.data.attachments_over.threshold)}）。原本は寿命で消えますが、増え方を <code>~/.agent-feed/attachments.log</code> で見てください
+        </div>
+      )}
       {import.meta.env.PROD && list.data?.build_stale && (
         <div className="banner" role="status">
           画面のビルドが古い。別のターミナルで <code>pnpm build</code> してください（終わると自動で読み直す）

@@ -2537,7 +2537,9 @@ export function createApp(
       await appendFile(log, `--- ${new Date().toISOString()} ${id} メッセージを端末に打ち込めない（${why}）ので、別プロセスを起こさずに${paused ? '預かりを止めた' : '待つ'}\n`).catch(() => {})
       return { ...refuse(409, paused ? TERMINAL_HELD_PAUSED : '相手は端末でターンの途中かダイアログ中です（終わってから送ります）'), retry: true }
     }
-    const item = queue.add(id, text, attachments, o.url, new Date(), o.origin ?? '')
+    // 先頭に置く（#804 のレビュー）。端末を読んでいる間（`launching`）に同じ相手へ来たメッセージは先に預かりへ並んでいるので、
+    // 後ろに置くと、先に送ったこの 1 通が追い越される
+    const item = queue.addFirst(id, text, attachments, o.url, new Date(), o.origin ?? '')
     if (!item) return refuse(409, `預かれるのは ${QUEUE_MAX} 件までです。取り消すか、前の返信が終わるのを待ってください`)
     if (paused) queue.pause(id, TERMINAL_HELD_PAUSED)
     await appendFile(log, `--- ${new Date().toISOString()} ${id} メッセージを端末に打ち込めない（${why}）ので、別プロセスを起こさずに預かった（${queue.size(id)} 件目${paused ? '。止めて要対応に出す' : ''}）\n`).catch(() => {})
@@ -3111,9 +3113,12 @@ export function createApp(
         bgRetryAt.delete(id)
       }
       queue.resume(id)
-      await drain(id)
-      // 回らなかった（端末でターンが回っている・ダイアログ中）なら、押した分を次に持ち越さない
-      terminalForced.delete(id)
+      try {
+        await drain(id)
+      } finally {
+        // 回らなかった（端末でターンが回っている・ダイアログ中・途中で失敗した）なら、押した分を次に持ち越さない
+        terminalForced.delete(id)
+      }
     } else {
       if (method !== 'DELETE') return error(res, 405, 'method not allowed')
       // いま起動している先頭は取り消せない（取り消したつもりで回ってしまう）

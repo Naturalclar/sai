@@ -92,10 +92,15 @@ const DIALOG = IDLE + '  ❯ 1. Yes\n    2. No\n  Enter to confirm · Esc to can
 class FakeTmux implements Tmux {
   calls: string[][] = []
   screen = IDLE
+  /** 画面を読むのをこれが解けるまで待たせる（端末を読んでいる間に次のメッセージが来る形を作る） */
+  gate: Promise<void> | null = null
   async run(args: string[]): Promise<string> {
     this.calls.push(args)
     if (args[0] === 'display-message') return '100\n'
-    if (args[0] === 'capture-pane') return this.screen
+    if (args[0] === 'capture-pane') {
+      if (this.gate) await this.gate
+      return this.screen
+    }
     return ''
   }
 }
@@ -228,6 +233,33 @@ test('sai_send: 止めた預かりの後ろに並んだメッセージにも「�
   const second = (await (await send({ text: '2 通目' })).json()) as AgentSendResponse
   assert.equal(second.via, 'queued')
   assert.equal(second.stuck, true)
+  assert.equal(runner.started.length, 0)
+})
+
+test('sai_send: 端末を読んでいる間に同じ相手へ次の返信が来ても、打ち込めずに預かった先の 1 通を追い越させない（#804 のレビュー）', async () => {
+  await reset()
+  tmux.screen = TYPED
+  turns.set('T1@r', { closed: true })
+  let open = (): void => {}
+  tmux.gate = new Promise<void>((resolve) => (open = resolve))
+  try {
+    const first = send({ text: '先の 1 通' })
+    while (!tmux.calls.some((c) => c[0] === 'capture-pane')) await new Promise((r) => setTimeout(r, 5))
+    // 同じ送り元からの送信は 1 つずつ通すので、あとの 1 通は人の画面から預ける（起動中なので預かりに並ぶ）
+    const second = await fetch(`${base}/api/sessions/T1%40r/reply?days=30`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: base },
+      body: JSON.stringify({ text: 'あとの 1 通', queue: true }),
+    })
+    assert.equal(((await second.json()) as { via?: string }).via, 'queued')
+    open()
+    assert.equal(((await (await first).json()) as AgentSendResponse).stuck, true)
+  } finally {
+    open()
+    tmux.gate = null
+  }
+  const items = (await sessions()).queued['T1@r']?.items ?? []
+  assert.deepEqual(items.map((i) => (i.text.includes('先の 1 通') ? '先' : i.text.includes('あとの 1 通') ? 'あと' : '?')), ['先', 'あと'])
   assert.equal(runner.started.length, 0)
 })
 

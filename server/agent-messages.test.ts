@@ -944,7 +944,7 @@ test('sai_send: 1 行目が着手の形で相手が要約できるなら、/comp
   idle('B1@r')
 })
 
-test('sai_send: 着手の形でない本文・1 行目に続きを書いた依頼・小さい相手は要約しない。指定（compact）があれば指定が勝つ（#624）。間があいて大きい相手には、着手の形でなくても要約を挟む（#761）', async () => {
+test('sai_send: 着手の形でない本文・1 行目に続きを書いた依頼・小さい相手は要約しない。指定（compact）があれば指定が勝つ（#624）。間があいて大きい相手でも、着手の形でなければ要約を挟まない（#761、2026-10-15）', async () => {
   contexts.set('B1@r', 500_000)
   const viaOf = async (text: string, over: Record<string, unknown> = {}) => {
     runner.started.length = 0
@@ -971,12 +971,12 @@ test('sai_send: 着手の形でない本文・1 行目に続きを書いた依�
     assert.equal((await viaOf('#624 に着手してください。', { compact: 'yes' })).via, 'compact', '真偽値でない指定は無いものとして、判定に任せる')
     // 間があいて大きい相手（#761）。B1 の最後のターンは 8 分前なので、時計を境目のぶん進める
     skew = CACHE_COLD_MS
-    const cold = await viaOf('PR をレビューしてマージしてください')
-    assert.equal(cold.via, 'compact', '着手の形でなくても、間があいて大きければ要約する')
-    assert.match(cold.cmd.text, /^\/compact このあと「PR をレビューしてマージしてください」というメッセージが届く.*直近の作業で変えた箇所/)
-    assert.equal((await viaOf('PR をレビューしてマージしてください', { compact: false })).via, 'process', 'false なら要約しない')
-    contexts.set('B1@r', COLD_COMPACT_TOKENS - 1)
-    assert.equal((await viaOf('PR をレビューしてマージしてください')).via, 'process', '間があいていても、閾値より小さければそのまま')
+    contexts.set('B1@r', COLD_COMPACT_TOKENS)
+    assert.equal((await viaOf('PR をレビューしてマージしてください')).via, 'process', '間があいて大きくても、短い依頼はそのまま送る')
+    const coldAsked = await viaOf('PR をレビューしてマージしてください', { compact: true })
+    assert.equal(coldAsked.via, 'compact', '送る側が頼めば要約する')
+    assert.match(coldAsked.cmd.text, /^\/compact このあと「PR をレビューしてマージしてください」というメッセージが届く.*直近の作業で変えた箇所/)
+    assert.equal((await viaOf('#624 に着手してください。')).via, 'compact', '着手の依頼は、間があいていても今どおり要約する')
     skew = 0
     contexts.set('B1@r', 100_000)
     assert.equal((await viaOf('#624 に着手してください。')).via, 'process', '文脈が小さい相手は要約しない')

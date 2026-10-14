@@ -37,6 +37,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
   - 当てるパス（スクリプトの `rules`）: 許可（`server/approvals/`・`shared/` の許可とルールの判定・`feed/record.py`・`feed/opencode/`）、送信（`server/mcp/`・`feed/mcp/`・`.mcp.json`・`shared/` のメッセージ・待ち・ループ・預かり）、認証（`server/` の直下の全部 = `auth` / `app` / `main` / `host` と直下のテスト・`shared/host`・`server/meta/settings`）、外に出る口（`server/git/`・`server/digest/`・`shared/digestSettings`・`shared/` の PR まわり）、起こすコマンド（`server/reply/`・`server/local/claude{Login,Auth,Agents}`・`server/local/thumbnails`）、決まりそのもの（`.claude/`・`.github/`・`CLAUDE.md`・`AGENTS.md`・`scripts/`・`package.json`・`pnpm-workspace.yaml`・`pnpm-lock.yaml`）。`web/src/` と `docs/` は当てていない。
   - テストは `server/mergeScope.test.ts`（stdin から渡す。`gh` は呼ばせない）。
 - レビューを `/code-review` 以外（サブエージェント・別プロセス）に頼むときの文は、SKILL.md の「レビューを頼む文のひな形」から始める。
+- **再レビューは 2 回まで**（#802。最初のレビュー 1 回 + 再レビュー 2 回）。再レビューは `/code-review` を呼び直さず、前にレビューした SHA からいまの head までの差分と前回の指摘だけをひな形に付けて読ませる（`scope=hold` の PR は全体も）。衝突の無い載せ直しは読ませず数えず、衝突を直したときだけ直した所を読ませて 1 回に数える。上限に当たって直すべき指摘か読ませていない直しが残ればマージせずに人に返し、人の「続けて」でもう 1 回ぶん回す。最後の報告には「レビュー N 回・指摘 M 件・直し K 件」を必ず書く。文の正本は SKILL.md の「再レビューは 2 回まで」で、ここ・`AGENTS.md` と揃っているかは `server/docs.test.ts` が見る。
 
 - 積み重ねた PR のベースを `main` に付け替えるとき、`gh pr edit --base` が GraphQL の非推奨エラーで落ちたら `gh api -X PATCH repos/<owner>/<repo>/pulls/<番号> -f base=main`。
 - マージは `gh api -X PUT repos/<owner>/<repo>/pulls/<番号>/merge -f merge_method=squash -f sha=<40 桁>`（HEAD が動いていれば `405`）。`/code-review <番号>` は別プロセスで動く。

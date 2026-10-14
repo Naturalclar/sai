@@ -133,3 +133,36 @@ test('docs/data.md の approvals.jsonl の no_rule の一覧が、コードの�
   for (const m of part.matchAll(/`([a-z_]+)`/g)) assert.ok(known.has(m[1]!), `docs/data.md の ${m[1]} はコードに無い`)
 })
 
+
+test('/merge の再レビューの上限（#802）: スキル・docs/internals/tooling.md・AGENTS.md が同じ回数を書き、ひな形の「実行しない」が残っている', () => {
+  const skill = readFileSync(join(ROOT, '.claude/skills/merge/SKILL.md'), 'utf8')
+  const tooling = readFileSync(join(ROOT, 'docs/internals/tooling.md'), 'utf8')
+  const agents = readFileSync(join(ROOT, 'AGENTS.md'), 'utf8')
+  assert.match(skill, /^### 再レビューは 2 回まで（#802）$/m)
+  assert.match(skill, /最初のレビュー 1 回 \+ 再レビュー 2 回まで/)
+  assert.match(tooling, /再レビューは 2 回まで/)
+  // 載せ直しの数え方（#803 で人が決めた）: 衝突の無い載せ直しは読ませず数えない。衝突を直したときだけ 1 回
+  assert.match(skill, /`main` が進んだだけの載せ直し（衝突なし）は読ませない・回数に数えない/)
+  assert.match(skill, /衝突を直して載せ直したときだけ、直した所[^\n]*1 回に数える/)
+  assert.doesNotMatch(skill, /載せ直しで増えた分を読ませるのも 1 回/)
+  // 載せ直したあとは、その SHA を起点にする（古いままだと main の変更が直した差分に混ざる）
+  assert.match(skill, /載せ直したあとの SHA を「前にレビューした SHA」として扱う/)
+  // ただし起点を移すのは、載せ直す前の head が読ませた SHA だったときだけ（読ませていない直しを読んだことにしない）
+  assert.match(skill, /載せ直す前の head がすでに別の目に読ませた SHA だったときだけ/)
+  assert.match(skill, /読ませていない直しを抱えたまま載せ直したときは、起点を移さない/)
+  assert.match(skill, /読ませていない直しがあれば、それは読ませる/)
+  // 5 の「弾かれたら」も衝突なしの載せ直しは読ませない（「増えた分も読む」だけだと食い違う）
+  assert.doesNotMatch(skill, /弾かれたら 1 に戻る（増えた分も読む）/)
+  // scope=hold は「だけです」の文ごと置き換えて全体を読ませる（後ろの 1 文だけ外すと差分だけになる）
+  assert.match(skill, /2 文を「PR 全体も読んでください。」に置き換えて/)
+  assert.match(tooling, /衝突の無い載せ直しは読ませず数えず/)
+  assert.match(agents, /読ませ直すのは 2 回まで/)
+  // 上限に当たったら止まる側（止めて人に返す一覧に入っている）
+  assert.match(skill, /^5\. 再レビューの上限/m)
+  // 最後の報告に回数を書く
+  assert.match(skill, /レビュー N 回・指摘 M 件・直し K 件/)
+  // レビューを頼む文の書き出しは残す（候補のコマンドを本物のシェルで実行しない）
+  const template = skill.slice(skill.indexOf('### レビューを頼む文のひな形'), skill.indexOf('### 再レビューは 2 回まで'))
+  assert.match(template, /本物のシェル・tmux・エージェントの CLI で実行しない/)
+  assert.match(template, /PR 全体は読み直さないでください/)
+})

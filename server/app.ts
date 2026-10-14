@@ -2764,50 +2764,59 @@ export function createApp(
         // ここで一覧を引き直す（#798）。通常の返信の前では `claude agents` を増やさず、再試行もこの 1 回だけ。
         let recovered = false
         if (failure && !o.backgroundRetried && session.agent === 'claude' && claudeBackgroundConflict(failure) && claudeAgents.background) {
-          const log = join(store.directory, 'reply.log')
-          const fresh = await claudeAgents.background(raw, true).catch(() => undefined)
-          const live = fresh && backgroundLive(fresh) ? fresh : null
-          // 一覧を引いている間に人が次の返信を起こしていたら、同じセッションへ 2 本目を起こさない。
-          // 競合で落ちた本文をその新しい返信より前へ戻し、そちらの終了後に `drain()` で回す。
-          if (run.running(id)) {
-            const existing = retry.queued && queue.peek(id)?.queue_id === retry.queued ? queue.peek(id) : undefined
-            const item = existing ?? queue.addFirst(id, retry.text, retry.attachments, o.url, new Date(), o.origin ?? '')
-            if (item) {
-              await appendFile(log, `--- ${new Date().toISOString()} ${id} bg の一覧を引く間に別の返信が始まったため、競合した本文を預かりの先頭へ戻した\n`).catch(() => {})
-              recovered = true
-            }
-          }
-          const hold = !recovered && live ? await backgroundHold(live, session) : ''
-          if (!recovered && hold) {
-            const existing = retry.queued && queue.peek(id)?.queue_id === retry.queued ? queue.peek(id) : undefined
-            const item = existing ?? queue.addFirst(id, retry.text, retry.attachments, o.url, new Date(), o.origin ?? '')
-            if (item) {
-              run.clearFailure?.(id)
-              bgRetryAt.set(id, Date.now() + (terminal.bgRetryMs ?? BG_RETRY_MS))
-              await appendFile(log, `--- ${new Date().toISOString()} ${id} 見落としていたバックグラウンドのセッションは止められないため、失敗にせず預かった: ${hold}\n`).catch(() => {})
-              recovered = true
-            }
-          } else if (!recovered) {
-            let stopped = true
-            if (live) {
-              await appendFile(log, `--- ${new Date().toISOString()} ${id} 見落としていたバックグラウンドのセッションを止めて 1 回だけやり直す（claude stop ${live.id}）\n`).catch(() => {})
-              try {
-                await background.stop(live.id, cwd)
-              } catch (err) {
-                stopped = false
-                await appendFile(log, `止められなかった: ${err instanceof Error ? err.message : String(err)}\n`).catch(() => {})
+          // 立て直している間は「起動中」にしておく（#801 のレビュー）。runner には失敗の行が残っているので、
+          // この隙にポーリングの `drain()` が来ると預かりを「前の返信が失敗した」で止めてしまい、
+          // やり直しの起動中なら同じセッションへ 2 本目を起こす。最初の await より前に入れる
+          const mine = !launching.has(id)
+          if (mine) launching.add(id)
+          try {
+            const log = join(store.directory, 'reply.log')
+            const fresh = await claudeAgents.background(raw, true).catch(() => undefined)
+            const live = fresh && backgroundLive(fresh) ? fresh : null
+            // 一覧を引いている間に人が次の返信を起こしていたら、同じセッションへ 2 本目を起こさない。
+            // 競合で落ちた本文をその新しい返信より前へ戻し、そちらの終了後に `drain()` で回す。
+            if (run.running(id)) {
+              const existing = retry.queued && queue.peek(id)?.queue_id === retry.queued ? queue.peek(id) : undefined
+              const item = existing ?? queue.addFirst(id, retry.text, retry.attachments, o.url, new Date(), o.origin ?? '')
+              if (item) {
+                await appendFile(log, `--- ${new Date().toISOString()} ${id} bg の一覧を引く間に別の返信が始まったため、競合した本文を預かりの先頭へ戻した\n`).catch(() => {})
+                recovered = true
               }
             }
-            if (stopped) {
-              run.clearFailure?.(id)
-              const again = await startTurn(id, session, raw, cwd, openTerminal, text, attachments, { ...o, backgroundRetried: true }, retry)
-              if (again.status !== 202) {
-                const existing = retry.queued && queue.peek(id)?.queue_id === retry.queued ? queue.peek(id) : undefined
-                const item = existing ?? queue.addFirst(id, retry.text, retry.attachments, o.url, new Date(), o.origin ?? '')
-                if (item) queue.pause(id, `バックグラウンドのセッションとの競合後にやり直せませんでした: ${(again.body as ReplyError).error}`)
+            const hold = !recovered && live ? await backgroundHold(live, session) : ''
+            if (!recovered && hold) {
+              const existing = retry.queued && queue.peek(id)?.queue_id === retry.queued ? queue.peek(id) : undefined
+              const item = existing ?? queue.addFirst(id, retry.text, retry.attachments, o.url, new Date(), o.origin ?? '')
+              if (item) {
+                run.clearFailure?.(id)
+                bgRetryAt.set(id, Date.now() + (terminal.bgRetryMs ?? BG_RETRY_MS))
+                await appendFile(log, `--- ${new Date().toISOString()} ${id} 見落としていたバックグラウンドのセッションは止められないため、失敗にせず預かった: ${hold}\n`).catch(() => {})
+                recovered = true
               }
-              recovered = true
+            } else if (!recovered) {
+              let stopped = true
+              if (live) {
+                await appendFile(log, `--- ${new Date().toISOString()} ${id} 見落としていたバックグラウンドのセッションを止めて 1 回だけやり直す（claude stop ${live.id}）\n`).catch(() => {})
+                try {
+                  await background.stop(live.id, cwd)
+                } catch (err) {
+                  stopped = false
+                  await appendFile(log, `止められなかった: ${err instanceof Error ? err.message : String(err)}\n`).catch(() => {})
+                }
+              }
+              if (stopped) {
+                run.clearFailure?.(id)
+                const again = await startTurn(id, session, raw, cwd, openTerminal, text, attachments, { ...o, backgroundRetried: true }, retry)
+                if (again.status !== 202) {
+                  const existing = retry.queued && queue.peek(id)?.queue_id === retry.queued ? queue.peek(id) : undefined
+                  const item = existing ?? queue.addFirst(id, retry.text, retry.attachments, o.url, new Date(), o.origin ?? '')
+                  if (item) queue.pause(id, `バックグラウンドのセッションとの競合後にやり直せませんでした: ${(again.body as ReplyError).error}`)
+                }
+                recovered = true
+              }
             }
+          } finally {
+            if (mine) launching.delete(id)
           }
         }
         if (!recovered) await drain(id)

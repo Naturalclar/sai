@@ -620,14 +620,17 @@ const claudeAgents = {
   value: undefined as boolean | undefined,
   bg: null as ClaudeAgent | null,
   freshBg: undefined as ClaudeAgent | null | undefined,
+  /** 引き直し（`fresh`）を返すのをこれが解けるまで待たせる（#801 のレビュー。引き直しの間に来るポーリングを見る） */
+  freshGate: null as Promise<void> | null,
   busy: () => Promise.resolve(claudeAgents.value),
   /** `background()` の呼ばれ方（#462。`fresh` を毎回付けると返信のたびに `claude agents` が起きる） */
   calls: [] as boolean[],
-  background: (sessionId: string, fresh = false) => {
+  background: async (sessionId: string, fresh = false) => {
     claudeAgents.calls.push(fresh)
+    if (fresh && claudeAgents.freshGate) await claudeAgents.freshGate
     if (fresh && claudeAgents.freshBg !== undefined) claudeAgents.bg = claudeAgents.freshBg
     const found = claudeAgents.bg
-    return Promise.resolve(found?.sessionId === sessionId ? found : null)
+    return found?.sessionId === sessionId ? found : null
   },
 }
 
@@ -3053,6 +3056,46 @@ test('POST reply: 要約が見落としていた bg と競合しても、元の�
     assert.equal(runner.started[2]!.cmd.text, '798に着手して')
     assert.equal(await queuedOf('C1@r'), undefined)
   } finally {
+    claudeAgents.bg = null
+    claudeAgents.freshBg = undefined
+    runner.busy.delete('C1@r')
+    runner.exits.delete('C1@r')
+    const queued = await queuedOf('C1@r')
+    for (const item of queued?.items ?? []) await del(`/api/sessions/C1%40r/queue/${item.queue_id}`)
+  }
+})
+
+test('POST reply: bg との競合から立て直す間にポーリングが来ても、預かりを止めず 2 本目も起こさない（#801 のレビュー）', async () => {
+  const conflict = { code: 1, tail: 'Error: That session is running in the background (5738db0d).' }
+  runner.started.length = 0
+  runner.busy.delete('C1@r')
+  claudeBackground.stopped.length = 0
+  claudeAgents.bg = null
+  claudeAgents.freshBg = bgAgent('working')
+  let open = (): void => {}
+  claudeAgents.freshGate = new Promise<void>((resolve) => (open = resolve))
+  try {
+    const first = (await (await post('C1@r', { text: '798に着手して', compact: true })).json()) as ReplyResponse
+    assert.equal(first.via, 'compact')
+    runner.busy.set('C1@r', { since: new Date().toISOString(), text: runner.started[0]!.cmd.text, compact: true })
+
+    const exited = runner.finish('C1@r', conflict)
+    // 一覧を引き直している最中のポーリング（drainAll → drain）
+    const during = await queuedOf('C1@r')
+    assert.equal(during?.paused ?? '', '', '残っている失敗の行で預かりを止めない')
+    assert.equal(runner.started.length, 1, '立て直しの最中に預かりの本文を起こさない')
+
+    open()
+    await exited
+    assert.equal(runner.started.length, 2, '要約だけを 1 回やり直す')
+    assert.match(runner.started[1]!.cmd.text, /^\/compact /)
+    runner.busy.set('C1@r', { since: new Date().toISOString(), text: runner.started[1]!.cmd.text, compact: true })
+    const after = await queuedOf('C1@r')
+    assert.deepEqual(after?.items.map((item) => item.text), ['798に着手して'])
+    assert.equal(after?.paused ?? '', '')
+  } finally {
+    open()
+    claudeAgents.freshGate = null
     claudeAgents.bg = null
     claudeAgents.freshBg = undefined
     runner.busy.delete('C1@r')

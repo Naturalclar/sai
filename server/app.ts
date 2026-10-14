@@ -2504,15 +2504,18 @@ export function createApp(
   }
 
   /**
-   * SAI が起こした `-p` が終わった時刻（#800 のレビュー）。`/compact` だけのターンは transcript にターンの終わり（`end_turn`）を
-   * 書かないので、閉じた印が付かず、そのあと 10 分は「回っている」に見える。終わってから transcript が動いていなければ、
-   * 端末の側で何も始まっていないと分かる
+   * SAI がそのセッションに `-p` を起こした時刻（#800）。端末で開いている相手の「ターンの外か」を見るとき、この時刻から後に
+   * 端末の TUI が transcript に書いたかを見る（SAI の `-p` の間に人が端末でターンを始めていたら、閉じた印があっても起こさない）
    */
-  const processEndedAt = new Map<string, number>()
+  const processStartedAt = new Map<string, number>()
   /**
-   * 端末で開いている Claude のターンがどうなっているか（#800）。`idle` は、端末に打ち込んだ返信の行を待っておらず、画面にダイアログが
-   * 出ておらず、transcript の最後のターンが閉じていて（`closed_at`）回っていないか、SAI の `-p` が終わってから transcript が動いていないとき。
-   * 回っている（か打ち込んだ返信を待っている）は `turn`、ダイアログ中は `dialog`、読めない・閉じたか分からないときは `unknown`（起こさない）
+   * 端末で開いている Claude のターンがどうなっているか（#800）。順に見る:
+   * - 端末に打ち込んだ返信の行を待っている → `turn`。画面にダイアログが出ている → `dialog`（`inspectPrompt()`。打ち込まずに読むだけ。
+   *   ペインが消えていれば見ない、読めなければ `unknown`）
+   * - SAI の `-p` を起こしていれば、transcript の中身で見る（`ProgressReader.terminalTail()`）: その後に TUI が書いていれば、TUI のターンが
+   *   閉じているときだけ `idle`（ほかは `turn`）。書いていなくて、最後が SAI の `/compact` の出力なら `idle`（要約だけのターンは閉じた印を書かない）。
+   *   読めない・`-p` の始まりまで届かないなら `unknown`
+   * - 残りは transcript の閉じた印（`closed_at`）と `active` で見る。どちらでもなければ `unknown`（起こさない）
    */
   const terminalTurn = async (id: string, session: SessionSummary, term: Awaited<ReturnType<typeof terminalOf>>): Promise<'idle' | 'turn' | 'dialog' | 'unknown'> => {
     if (typed.running(id)) return 'turn'
@@ -2525,8 +2528,14 @@ export function createApp(
       }
     }
     const p = await progress.read(session)
-    const ended = processEndedAt.get(id) ?? 0
-    if (ended && p.updated_at && Date.parse(p.updated_at) <= ended + 1000) return 'idle'
+    const started = processStartedAt.get(id)
+    if (started !== undefined) {
+      // 起こした時刻と行の時刻の食い違いに備えて、少し前から見る（TUI の行を見落とすより、待つ側に倒す）
+      const tail = await progress.terminalTail(session, started - 2_000)
+      if (!tail) return 'unknown'
+      if (tail.tui) return tail.tuiClosed && !p.active ? 'idle' : 'turn'
+      if (tail.compactOnly) return 'idle'
+    }
     return p.active ? 'turn' : p.closed_at ? 'idle' : 'unknown'
   }
   /**
@@ -2852,10 +2861,9 @@ export function createApp(
       // プロセスが終わったら、そのセッションの答え待ちは deny で片付ける（もう誰も答えを取りに来ない）。
       // 預かっている返信があれば続けて回す（#305）
       startedBin.set(id, cmd.bin)
+      processStartedAt.set(id, Date.now())
       await run.start(id, cmd, async (failure) => {
         approvals.drop(id)
-        // 端末で開いている相手の「ターンの外か」を、このプロセスが終わってから transcript が動いたかで見られるようにする（#800 のレビュー）
-        if (!failure) processEndedAt.set(id, Date.now())
         // `launch()` が覚えている一覧に bg を見つけられず、`-p --resume` があとから競合で落ちた場合だけ、
         // ここで一覧を引き直す（#798）。通常の返信の前では `claude agents` を増やさず、再試行もこの 1 回だけ。
         let recovered = false

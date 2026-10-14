@@ -72,6 +72,51 @@ async function readTail(path: string, size: number, bytes: number): Promise<stri
   }
 }
 
+/**
+ * 端末で開いている Claude の transcript の末尾から、SAI の `-p` が始まってから後に何があったかを読む（#800）。
+ * - `tui`: `since` 以降に、端末の TUI（`entrypoint` が `sdk-cli` 以外）が会話の行（user / assistant）を書いた
+ * - `tuiClosed`: 最後の会話の行が TUI のターンの終わり（assistant の `end_turn`）
+ * - `compactOnly`: 最後の会話の行が SAI の `-p` の `/compact` の出力（`<local-command-stdout>`）で、その前が `/compact` のコマンドの行。
+ *   要約だけのターンは `end_turn` を書かないので、閉じた印（`closed_at`）の代わりにこれで「要約が終わって何も始まっていない」と見る
+ * - `reached`: 読んだ範囲が `since` より前まで届いた（届いていなければ、その前に TUI が書いたかは分からない）
+ */
+export interface TerminalTail {
+  tui: boolean
+  tuiClosed: boolean
+  compactOnly: boolean
+  reached: boolean
+}
+
+export function terminalTail(lines: readonly string[], since: number, fromStart: boolean): TerminalTail {
+  type Row = { type?: string; entrypoint?: string; timestamp?: string; isMeta?: boolean; message?: { content?: unknown; stop_reason?: string } }
+  const rows: Row[] = []
+  for (const line of lines) {
+    if (!line.trim()) continue
+    try {
+      rows.push(JSON.parse(line) as Row)
+    } catch {
+      // 途中まで書かれた行は読み飛ばす
+    }
+  }
+  const at = (r: Row) => Date.parse(r.timestamp ?? '')
+  const firstAt = rows.map(at).find((t) => !Number.isNaN(t))
+  const talk = rows.filter((r) => (r.type === 'user' || r.type === 'assistant') && !r.isMeta)
+  const tui = talk.some((r) => r.entrypoint !== 'sdk-cli' && !(at(r) < since))
+  const text = (r: Row | undefined) => {
+    const c = r?.message?.content
+    if (typeof c === 'string') return c
+    if (Array.isArray(c)) return c.map((b) => (b && typeof b === 'object' && typeof (b as { text?: unknown }).text === 'string' ? (b as { text: string }).text : '')).join('')
+    return ''
+  }
+  const last = talk[talk.length - 1]
+  const before = talk[talk.length - 2]
+  const compactOnly =
+    last?.type === 'user' && last.entrypoint === 'sdk-cli' && text(last).trimStart().startsWith('<local-command-stdout>') &&
+    before?.type === 'user' && before.entrypoint === 'sdk-cli' && text(before).includes('<command-name>/compact</command-name>')
+  const tuiClosed = last?.type === 'assistant' && last.entrypoint !== 'sdk-cli' && last.message?.stop_reason === 'end_turn'
+  return { tui, tuiClosed, compactOnly, reached: fromStart || (firstAt !== undefined && firstAt < since) }
+}
+
 /** 末尾から倍々に読み足して、ターンの始まりが見えたところで止める（見えなければ上限まで読んだぶんで組む） */
 export async function parseTail(path: string, size: number, parse: (lines: readonly string[]) => ParsedProgress, max = PROGRESS_TAIL_MAX): Promise<ParsedProgress> {
   for (let bytes = PROGRESS_TAIL_START; ; bytes *= 2) {
@@ -170,6 +215,28 @@ export class ProgressReader {
       return parser.turns
     } catch {
       this.paths.delete(key)
+      return null
+    }
+  }
+
+  /**
+   * `terminalTail()` を transcript の末尾に当てる（#800）。`since` より前まで倍々に読み足し、`PROGRESS_TAIL_MAX` まで読んでも届かない・
+   * 読めないときは null（分からない）。Claude だけ
+   */
+  async terminalTail(s: Target, since: number): Promise<TerminalTail | null> {
+    const session = sessionOf(s)
+    if (!session || s.agent !== 'claude') return null
+    const path = await this.locate(`claude:${session}`, 'claude', session, s.cwd)
+    if (!path) return null
+    try {
+      const { size } = await stat(path)
+      for (let bytes = PROGRESS_TAIL_START; ; bytes *= 2) {
+        const read = Math.min(bytes, size)
+        const tail = terminalTail(await readTail(path, size, read), since, read >= size)
+        if (tail.reached) return tail
+        if (read >= size || bytes >= PROGRESS_TAIL_MAX) return null
+      }
+    } catch {
       return null
     }
   }

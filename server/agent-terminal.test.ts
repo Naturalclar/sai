@@ -15,7 +15,7 @@ import { createApp } from './app.ts'
 import { Approvals } from './approvals/approvals.ts'
 import { Authenticator } from './auth.ts'
 import { BuildFreshness } from './local/buildFreshness.ts'
-import type { ProgressReader } from './local/progress.ts'
+import type { ProgressReader, TerminalTail } from './local/progress.ts'
 import type { UsageStore } from './local/usage.ts'
 import { AGENT_TOKEN_FILE } from './reply/agentMessages.ts'
 import type { CodexApp } from './reply/codexAppServer.ts'
@@ -67,8 +67,11 @@ const codexApp: CodexApp = {
 }
 const usage = { value: {} as UsageResponse, async get() { return this.value } }
 
-/** 相手の transcript の偽物。`closed` = 最後のターンが閉じている、`active` = 回っている。どちらも無ければ分からない。`at` は最後に書いた時刻（既定は SAI のどのプロセスが終わったよりも後） */
-const turns = new Map<string, { active?: boolean; closed?: boolean; at?: number }>()
+/**
+ * 相手の transcript の偽物。`closed` = 最後のターンが閉じている、`active` = 回っている。どちらも無ければ分からない。
+ * `tail` は SAI の `-p` のあとの中身（`terminalTail()`。既定は「TUI は何も書いておらず、要約だけでもない」）
+ */
+const turns = new Map<string, { active?: boolean; closed?: boolean; tail?: Partial<TerminalTail> }>()
 const contexts = new Map<string, number>()
 const progress = {
   async read(s: Pick<SessionSummary, 'id'>): Promise<SessionProgressResponse> {
@@ -79,10 +82,16 @@ const progress = {
       active: t?.active === true,
       steps: [],
       total: 0,
-      updated_at: t ? new Date(t.at ?? Date.now() + 60_000).toISOString() : '',
+      updated_at: t ? new Date().toISOString() : '',
       ...(t?.closed ? { closed_at: new Date().toISOString() } : {}),
       context_tokens: contexts.get(s.id) ?? 0,
     }
+  },
+  async terminalTail(s: Pick<SessionSummary, 'id'>): Promise<TerminalTail | null> {
+    const t = turns.get(s.id)
+    // 本物（`ProgressReader.terminalTail()`）は、SAI の -p の始まりまで届かなければ null を返す
+    if (!t || t.tail?.reached === false) return null
+    return { tui: false, tuiClosed: false, compactOnly: false, reached: true, ...t.tail }
   },
 }
 
@@ -291,8 +300,8 @@ test('sai_send: 要約を挟む依頼は、端末で開いていても空いて�
   assert.deepEqual(typedKeys(), [], '端末が空いていても打ち込まない（開いている TUI は要約を知らない）')
 
   // 要約が終わったら、本文は端末に打たずに別プロセスで回す。`/compact` だけのターンは transcript に閉じた印を書かず、
-  // しばらく「回っている」に見えるが、要約のプロセスが終わってから transcript が動いていなければ端末の側では何も始まっていない
-  turns.set('T1@r', { active: true, at: Date.now() - 100 })
+  // しばらく「回っている」に見えるが、最後が SAI の要約の出力で TUI が何も書いていなければ、端末の側では何も始まっていない
+  turns.set('T1@r', { active: true, tail: { compactOnly: true } })
   await runner.finish('T1@r')
   assert.equal(runner.started.length, 2)
   assert.match(runner.started[1]!.cmd.text, /続きを見てください/)
@@ -300,25 +309,46 @@ test('sai_send: 要約を挟む依頼は、端末で開いていても空いて�
   await runner.finish('T1@r')
 })
 
-test('sai_send: 要約のあとの本文も、端末でターンが回り始めていたら起こさずに待つ（#800）', async () => {
+test('sai_send: 要約の間に端末でターンが始まっていたら、要約の出力が最後でも本文は起こさずに待ち、TUI のターンが閉じたら回す（#800 のレビュー）', async () => {
+  for (const [name, during] of [
+    // TUI がターンを始めた行を書いたあと、要約の行が最後に来た（TUI は LLM を待っていて何も書いていない）
+    ['要約の出力が最後', { active: false, tail: { tui: true, compactOnly: true } }],
+    ['TUI が書いている', { active: true, tail: { tui: true } }],
+  ] as const) {
+    await reset()
+    turns.set('T1@r', { closed: true })
+    contexts.set('T1@r', COMPACT_MIN_TOKENS)
+    assert.equal(((await (await send({ text: '続きを見てください', compact: true })).json()) as AgentSendResponse).via, 'compact', name)
+    turns.set('T1@r', during)
+    await runner.finish('T1@r')
+    await sessions()
+    assert.equal(runner.started.length, 1, `${name}: 本文は起こさない`)
+    const held = (await sessions()).queued['T1@r']
+    assert.equal(held?.items.length, 1, name)
+    assert.equal(held?.paused ?? '', '', `${name}: 止めずに待つ`)
+    // TUI のターンが閉じた
+    turns.set('T1@r', { closed: true, tail: { tui: true, tuiClosed: true } })
+    await sessions()
+    assert.equal(runner.started.length, 2, name)
+    assert.match(runner.started[1]!.cmd.text, /続きを見てください/)
+    assert.deepEqual(typedKeys(), [], name)
+    await runner.finish('T1@r')
+  }
+})
+
+test('sai_send: SAI の -p のあとに TUI が書いたかが読めない（transcript が届かない）なら、閉じた印があっても起こさない（#800 のレビュー）', async () => {
   await reset()
+  tmux.screen = TYPED
   turns.set('T1@r', { closed: true })
-  contexts.set('T1@r', COMPACT_MIN_TOKENS)
-  assert.equal(((await (await send({ text: '続きを見てください', compact: true })).json()) as AgentSendResponse).via, 'compact')
-  // 要約が終わったあとに、人が端末で次のターンを始めた（transcript が要約のあとに動いた）
-  turns.set('T1@r', { active: true, at: Date.now() + 5_000 })
+  // 1 通目は別プロセスで回り、SAI の -p の時刻が残る
+  assert.equal(((await (await send({ text: '1 通目' })).json()) as AgentSendResponse).via, 'process')
   await runner.finish('T1@r')
-  await sessions()
-  assert.equal(runner.started.length, 1, '本文は起こさない')
-  const held = (await sessions()).queued['T1@r']
-  assert.equal(held?.items.length, 1)
-  assert.equal(held?.paused ?? '', '', '止めずに待つ')
-  turns.set('T1@r', { closed: true })
-  await sessions()
-  assert.equal(runner.started.length, 2)
-  assert.match(runner.started[1]!.cmd.text, /続きを見てください/)
-  assert.deepEqual(typedKeys(), [])
-  await runner.finish('T1@r')
+  turns.set('T1@r', { closed: true, tail: { reached: false } })
+  senderTurn()
+  const body = (await (await send({ text: '2 通目' })).json()) as AgentSendResponse
+  assert.equal(body.via, 'queued')
+  assert.equal(body.stuck, true)
+  assert.equal(runner.started.length, 1)
 })
 
 test('sai_send: 画面にダイアログが出ていれば、transcript のターンが閉じていても要約の別プロセスは起こさずに待つ（#800 のレビュー）', async () => {

@@ -9,8 +9,8 @@ import { createReadStream } from 'node:fs'
 import { open, readdir, stat } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
 import { join } from 'node:path'
-import { claudeProgress, claudeProjectName, codexProgress, PROGRESS_NOTES, PROGRESS_STEPS, progressActive } from '../../shared/progress.ts'
-import type { ParsedProgress } from '../../shared/progress.ts'
+import { claudeProgress, claudeProjectName, claudeTuiState, codexProgress, PROGRESS_NOTES, PROGRESS_STEPS, progressActive } from '../../shared/progress.ts'
+import type { ParsedProgress, TuiState } from '../../shared/progress.ts'
 import { claudeTurns, turnParser, worthParsing } from '../../shared/claudeTurns.ts'
 import type { ClaudeTurn } from '../../shared/claudeTurns.ts'
 import { claudeStepParser, codexStepParser, skipForSteps } from '../../shared/turnSteps.ts'
@@ -171,6 +171,27 @@ export class ProgressReader {
     } catch {
       this.paths.delete(key)
       return null
+    }
+  }
+
+  /**
+   * 端末で開いている Claude（TUI）のターンが閉じているか（#806。`claudeTuiState()`）。末尾から倍々に読み足し、TUI の最後の行が見えたか、
+   * 頭まで・`PROGRESS_TAIL_MAX` まで読んだところで止める（届かなければ `unknown`）。読めない・Claude でなければ `unknown`
+   */
+  async tuiState(s: Target): Promise<TuiState> {
+    const session = sessionOf(s)
+    if (!session || s.agent !== 'claude') return 'unknown'
+    const path = await this.locate(`claude:${session}`, 'claude', session, s.cwd)
+    if (!path) return 'unknown'
+    try {
+      const { size } = await stat(path)
+      for (let bytes = PROGRESS_TAIL_START; ; bytes *= 2) {
+        const read = Math.min(bytes, size)
+        const state = claudeTuiState(await readTail(path, size, read), read >= size)
+        if (state !== 'unknown' || read >= size || bytes >= PROGRESS_TAIL_MAX) return state
+      }
+    } catch {
+      return 'unknown'
     }
   }
 

@@ -579,10 +579,13 @@ interface LaunchOptions {
   backgroundRetried?: boolean
   /**
    * 別のセッション・tailnet の MCP から届いたメッセージ（#800）。端末で開いている Claude に打ち込めなかったとき
-   * （打ちかけ・ダイアログ・読めない = `can_process` の 409）は、断らずに預かって止め、送り元と要対応に出す（自動では別プロセスへ回さない）。
-   * 人が「続けて送る」を押した 1 回だけ別プロセスで回す。人の画面からの返信には付けない
+   * （打ちかけ・ダイアログ・読めない = `can_process` の 409）は、断らずに預かって止め、送り元と要対応に出す。
+   * 打ちかけがあるだけで、端末のターンが閉じていると transcript から言えるときだけ、打ちかけを残したまま別プロセスで回す（#806）。
+   * 人が「続けて送る」を押した 1 回も別プロセスで回す。人の画面からの返信には付けない
    */
   terminalFallback?: boolean
+  /** 端末で開いている相手に、SAI が別プロセスで要約を挟んだあとの本文（#806。`drain()` が付ける）。端末には打ち込まず別プロセスで回す */
+  afterCompact?: boolean
 }
 
 /** `claude --bg` との競合で落ちたプロセスを、重複なく再試行・預かりへ戻すための元の入力（#798）。 */
@@ -2504,22 +2507,30 @@ export function createApp(
   }
 
   /**
-   * 端末で開いている Claude のターンが回っているか（#800）。人が「続けて送る」を押した 1 回で別プロセスを起こしてよいかにだけ使う
-   * （自動では別プロセスへ回さない。人の決定）。端末に打ち込んだ返信の行を待っている・transcript でターンが回っている（`active`）は `turn`、
-   * 画面にダイアログが出ていれば `dialog`（`inspectPrompt()`。打ち込まずに読むだけ）。ほかは `other`（閉じた・分からない）
+   * 端末で開いている Claude のターンが回っているか（#800）。人が「続けて送る」を押した 1 回で別プロセスを起こしてよいかにだけ使う。
+   * 端末に打ち込んだ返信の行を待っている・transcript でターンが回っている（`active`）・TUI の最後の行が閉じていない（`tuiState()` の `busy`。
+   * SAI の `-p` の閉じた印で TUI のターンを見落とさない。#806）は `turn`、画面にダイアログが出ていれば `dialog`（`inspectPrompt()`。
+   * 打ち込まずに読むだけ）。ほかは `other`（閉じた・分からない。押した人に任せる）。画面が読めなくても transcript は見る（#804 で見送った指摘）
    */
   const terminalTurn = async (id: string, session: SessionSummary, term: Awaited<ReturnType<typeof terminalOf>>): Promise<'turn' | 'dialog' | 'other'> => {
     if (typed.running(id)) return 'turn'
     if (term) {
       try {
         if ((await inspectPrompt(terminal.tmux, terminal.ps, term, session.agent)).kind === 'dialog') return 'dialog'
-      } catch (err) {
-        // ペインが消えた・別のプロセスになったなら、端末は会話を握っていない。画面が読めないだけなら、押した人に任せる
-        if (!(err instanceof TerminalGone)) return 'other'
+      } catch {
+        // ペインが消えた・画面が読めない。どちらも下の transcript で見る
       }
     }
-    return (await progress.read(session)).active ? 'turn' : 'other'
+    if ((await progress.read(session)).active) return 'turn'
+    return (await progress.tuiState(session)) === 'busy' ? 'turn' : 'other'
   }
+  /**
+   * 端末のターンの外と確かに言えるか（#806）。SAI が端末に打ち込んだ返信を待っていない、かつ transcript の TUI の最後の行が閉じている
+   * （`tuiState()` の `idle`）ときだけ。言えなければ別プロセスは自動では起こさない
+   */
+  const terminalIdle = async (id: string, session: SessionSummary): Promise<boolean> => !typed.running(id) && (await progress.tuiState(session)) === 'idle'
+  /** 端末で開いている相手に SAI が別プロセスで要約を挟んだ、その本文の預かりの id（#806。本文も端末に打ち込まず別プロセスで回す） */
+  const compactedPast = new Map<string, string>()
   /**
    * 端末に打ち込めずに止めた預かり（#800）で、人が「続けて送る」を押したセッション。押した直後の 1 回だけ、端末を使わず別プロセスで回す
    * （人の「端末を使わず送る」と同じ）。端末でターンが回っている・ダイアログ中なら、押しても起こさない。押した分は `drain()` のあとで捨てる
@@ -2615,16 +2626,18 @@ export function createApp(
     const busy = run.running(id) || codexApp.running(id) || opencodeApp.running(id) || launching.has(id) || bgHold !== ''
     // **要約してから送る**（#579）。本文を預かりの先頭に置いてから `/compact` のターンを起こす。要約のプロセスが終わると
     // `drain()` が本文を回し、要約が失敗すれば預かりは止まる（新しい順番の仕組みは作らない）。
-    // 効くのは Claude で、端末で開いておらず（TUI に打ち込む経路では要約中の入力の扱いを確かめていない）、処理中でも
-    // 預かりが残ってもいないときだけ。当たらなければ付いていないのと同じ（下の今までの経路）
+    // 効くのは Claude で、処理中でも預かりが残ってもいないときだけ。当たらなければ付いていないのと同じ（下の今までの経路）
+    // 端末で開いていれば、メッセージ（`terminalFallback`）で、端末のターンの外と確かに言えるときだけ（#806。`terminalIdle()`）。
+    // 要約も本文も端末には打ち込まず別プロセスで回す（TUI に打ち込む経路では要約中の入力の扱いを確かめていない）。本文の前にもう一度見る
     // 端末に打ち込んだ返信がまだ回っているのにペインが見つからないときも回さない（下の経路が 409 にするのと同じ。#590 のレビュー）
-    if (o.compact && session.agent === 'claude' && !openTerminal && !busy && !typed.running(id) && !bgLive && queue.size(id) === 0) {
+    const compactable = o.compact && session.agent === 'claude' && !busy && !typed.running(id) && !bgLive && queue.size(id) === 0
+    if (compactable && (!openTerminal || (o.terminalFallback && (await terminalIdle(id, session))))) {
       const log = join(store.directory, 'reply.log')
       launching.add(id)
       try {
         const item = queue.add(id, text, attachments, o.url, new Date(), o.origin ?? '')
         if (!item) return refuse(409, `預かれるのは ${QUEUE_MAX} 件までです`)
-        await appendFile(log, `--- ${new Date().toISOString()} ${id} 要約（/compact）してから送る。本文は預かりの先頭に置いた\n`).catch(() => {})
+        await appendFile(log, `--- ${new Date().toISOString()} ${id} 要約（/compact）してから送る。本文は預かりの先頭に置いた${openTerminal ? '（端末で開いているが、ターンの外なので別プロセスで要約する）' : ''}\n`).catch(() => {})
         const out = await startTurn(
           id,
           session,
@@ -2641,15 +2654,16 @@ export function createApp(
           queue.remove(id, item.queue_id)
           return out
         }
+        if (openTerminal) compactedPast.set(id, item.queue_id)
         agents.launched(id, o.origin)
-        const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd, via: 'compact', queue_id: item.queue_id }
+        const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd, via: 'compact', queue_id: item.queue_id, ...(openTerminal ? { past_terminal: true as const } : {}) }
         return { status: 202, body: payload }
       } finally {
         launching.delete(id)
       }
     }
     if (o.compact) {
-      await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} 要約してから送るは当たらない（端末で開いている・処理中・預かりがある・Claude でない）。そのまま送る\n`).catch(() => {})
+      await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} 要約してから送るは当たらない（端末で開いていてターンの外と言えない・処理中・預かりがある・Claude でない）。そのまま送る\n`).catch(() => {})
     }
     // 処理中なら預かる（#305）。処理中でなくても預かりが残っていれば後ろに並べる（先に預けたものを追い越さない）
     if (o.queue && (busy || queue.size(id) > 0)) {
@@ -2685,19 +2699,33 @@ export function createApp(
       const handed = o.origin || /^[/$]/.test(text.trimStart()) ? { replies: [], ids: [] } : await pendingRepliesOf(id)
       const body = withHandedReplies(text, handed.replies)
       const pastTerminal = !!openTerminal && !!o.terminalFallback && session.agent === 'claude'
-      let out = await startTurn(id, session, raw, cwd, openTerminal, body, attachments, o, { text, attachments })
-      // 端末に打ち込めなかった（打ち込む前に断られた。何も打っていない）メッセージ（#800）。**自動では別プロセスへ回さない**（人の決定。
-      // 端末のターンの外かを transcript から確かに言えないため。#806）。預かって止め、送り元と要対応に出す。
-      // 人が「続けて送る」を押した直後の 1 回だけ、端末でターンが回っていなければ別プロセスで回す（押した分はここで使う）
+      /** 端末を使わず別プロセスで回す（打ちかけは残す） */
+      const viaProcess = async (note: string): Promise<Launched> => {
+        await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} ${note}\n`).catch(() => {})
+        const r = await startTurn(id, session, raw, cwd, openTerminal, body, attachments, { ...o, forceProcess: true }, { text, attachments })
+        return r.status === 202 ? { ...r, body: { ...(r.body as ReplyResponse), past_terminal: true } } : r
+      }
+      let out: Launched
+      // 端末で開いている相手に SAI が別プロセスで要約を挟んだあとの本文（#806）。端末の TUI は要約を知らないので、打ち込まず別プロセスで回す。
+      // 要約の間に端末でターンが始まった・分からないなら、預かって止める（人が「続けて送る」を押せば下の今までの経路）
+      if (pastTerminal && o.afterCompact && !terminalForced.has(id)) {
+        if (!(await terminalIdle(id, session))) return terminalTurnHold(id, session, raw, cwd, text, attachments, o, true, '要約のあと、端末のターンの外と言えない')
+        out = await viaProcess('要約のあとの本文を、端末のターンの外なので別プロセスで回す（打ちかけは残す）')
+      } else out = await startTurn(id, session, raw, cwd, openTerminal, body, attachments, o, { text, attachments })
+      // 端末に打ち込めなかった（打ち込む前に断られた。何も打っていない）メッセージ（#800）。預かって止め、送り元と要対応に出す。
+      // 打ちかけがあるだけで、端末のターンの外と transcript から確かに言えるときだけ、打ちかけを残したまま別プロセスで回す（#806。
+      // ダイアログ・画面が読めないときは回さない）。人が「続けて送る」を押した直後の 1 回は、端末でターンが回っていなければ別プロセスで回す
       if (pastTerminal && out.status === 409 && (out.body as ReplyError).can_process) {
         const why = (out.body as ReplyError).error
-        if (!terminalForced.has(id)) return terminalTurnHold(id, session, raw, cwd, text, attachments, o, true, why)
-        const state = (out.body as ReplyError).code === 'terminal_dialog' ? 'dialog' : await terminalTurn(id, session, openTerminal)
-        if (state !== 'other') return terminalTurnHold(id, session, raw, cwd, text, attachments, o, false, why)
-        terminalForced.delete(id)
-        await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} 人の「続けて送る」で、端末に打ち込めないメッセージを別プロセスで回す（${why}。打ちかけは残す）\n`).catch(() => {})
-        out = await startTurn(id, session, raw, cwd, openTerminal, body, attachments, { ...o, forceProcess: true }, { text, attachments })
-        if (out.status === 202) out = { ...out, body: { ...(out.body as ReplyResponse), past_terminal: true } }
+        if (!terminalForced.has(id)) {
+          if ((out.body as ReplyError).code !== 'terminal_typed' || !(await terminalIdle(id, session))) return terminalTurnHold(id, session, raw, cwd, text, attachments, o, true, why)
+          out = await viaProcess(`端末に打ち込めない（${why}）が、端末のターンの外なので別プロセスで回す（打ちかけは残す）`)
+        } else {
+          const state = (out.body as ReplyError).code === 'terminal_dialog' ? 'dialog' : await terminalTurn(id, session, openTerminal)
+          if (state !== 'other') return terminalTurnHold(id, session, raw, cwd, text, attachments, o, false, why)
+          terminalForced.delete(id)
+          out = await viaProcess(`人の「続けて送る」で、端末に打ち込めないメッセージを別プロセスで回す（${why}。打ちかけは残す）`)
+        }
       }
       if (out.status === 202 && handed.ids.length > 0) {
         agents.handed(handed.ids)
@@ -2949,8 +2977,10 @@ export function createApp(
         queue: false,
         // 別のセッションから預かったメッセージなら、回したターンから先へ送らせない（#311）。端末に打てなければ別プロセスへ（#800）
         ...(head.origin ? { origin: head.origin, terminalFallback: true } : {}),
+        ...(compactedPast.get(id) === head.queue_id ? { afterCompact: true } : {}),
       })
       if (out.status === 202) {
+        if (compactedPast.get(id) === head.queue_id) compactedPast.delete(id)
         queue.shift(id, head.queue_id)
         bgRetryAt.delete(id)
       }
@@ -3407,10 +3437,12 @@ export function createApp(
   /**
    * メッセージを要約（`/compact`）してから始めさせるか（#624）。画面からの送信と同じ判定で、渡すのは**見出しを付ける前の文**
    * （着手の形かの判定も、`/compact` に添える指示もそこから作る）。間（#761）は相手の最後のターン完了の行から数えるが、既定には効かない（要約が既定になるのは着手の形だけ。2026-10-15）。相手が処理中・預かりがあるときは `launch()` が今までどおり
-   * 預かりに並べる（画面からの送信と同じ。並んだものの前に要約は挟まない）
+   * 預かりに並べる（画面からの送信と同じ。並んだものの前に要約は挟まない）。
+   * 端末で開いている相手は、ここでは除かない（#806）。要約してよいかは `launch()` が送る時点で見る（端末のターンの外と言えるメッセージだけ。
+   * 言えなければ付いていないのと同じ）
    */
   const messageCompactOf = (target: SessionSummary, text: string, contextTokens: number, asked: unknown): { compact?: true; compactFrom?: string } =>
-    messageCompacts({ text, agent: target.agent, contextTokens, terminal: Boolean(target.terminal), idleMs: idleMsSince(target.last_turn_ts, loopNow()) }, CONTEXT_WARN_TOKENS, typeof asked === 'boolean' ? asked : undefined)
+    messageCompacts({ text, agent: target.agent, contextTokens, terminal: false, idleMs: idleMsSince(target.last_turn_ts, loopNow()) }, CONTEXT_WARN_TOKENS, typeof asked === 'boolean' ? asked : undefined)
       ? { compact: true, compactFrom: text }
       : {}
 

@@ -223,3 +223,26 @@ test('ProgressReader: 途中で書いた文（#680）は手順とは別に末尾
     assert.deepEqual(p.notes?.map((n) => n.text), Array.from({ length: PROGRESS_NOTES }, (_, i) => `途中の文 ${i + 2}`), 'ツールの呼び出しに押し出されず、末尾の分だけ')
   })
 })
+
+test('ProgressReader.tuiState: TUI の最後の行が末尾の 64KB より前にあっても読み足す。Claude でない・ファイルが無いなら分からない（#806）', async () => {
+  await withDirs(async ({ projects, sessions }) => {
+    const cwd = '/w'
+    const dir = join(projects, claudeProjectName(cwd))
+    await mkdir(dir, { recursive: true })
+    const tui = (line: string) => j({ ...JSON.parse(line), entrypoint: 'cli' })
+    const sdk = (line: string) => j({ ...JSON.parse(line), entrypoint: 'sdk-cli' })
+    const path = join(dir, `${SID}.jsonl`)
+    // TUI のターンが閉じたあと、SAI の -p が最初に読む量より長く書いた
+    const head = [tui(prompt(at(0), 'やって')), tui(assistant(at(1), [{ type: 'text', text: '済みました' }], 'end_turn'))]
+    const tail = [sdk(prompt(at(10), '頼む')), sdk(result(at(11), 'a', 'x'.repeat(PROGRESS_TAIL_START))), sdk(assistant(at(12), [{ type: 'text', text: '返答' }], 'end_turn'))]
+    await writeFile(path, [...head, ...tail].join('\n') + '\n')
+    const reader = new ProgressReader(projects, sessions)
+    const s = { id: `${SID}@r`, repo: 'r', agent: 'claude' as const, cwd }
+    assert.equal(await reader.tuiState(s), 'idle')
+    // -p の前から TUI のツールが回っている
+    await writeFile(path, [tui(prompt(at(0), 'やって')), tui(assistant(at(1), [bash('t', 'pnpm test')], 'tool_use')), ...tail].join('\n') + '\n')
+    assert.equal(await reader.tuiState(s), 'busy')
+    assert.equal(await reader.tuiState({ ...s, agent: 'codex' }), 'unknown')
+    assert.equal(await reader.tuiState({ ...s, id: '99999999-2222-3333-4444-555555555555@r' }), 'unknown')
+  })
+})

@@ -254,6 +254,49 @@ export function claudeProgress(lines: readonly string[]): ParsedProgress {
   return { steps, started, open, context, notes, ...(question ? { question } : {}) }
 }
 
+/** 端末で開いている Claude（TUI）のターンが閉じているか（#806）。`unknown` は「分からない」で、空きには数えない */
+export type TuiState = 'idle' | 'busy' | 'unknown'
+
+/**
+ * Claude の transcript の行（古い順）から、端末の TUI のターンが閉じているか（#806）。SAI が起こす `claude -p` も同じ transcript に
+ * 書くので、**TUI の行（`entrypoint` が `sdk-cli` でない）だけ**を見て、その最後の行が閉じた形のときだけ `idle` にする。
+ * `-p` の行の閉じた印は TUI のターンを閉じない（その前から回っている TUI のターンは、長いツールの間は行を書かない）。
+ * - 閉じた形: assistant の `end_turn` / `stop_sequence` でツールの呼び出しが無い・ローカルコマンドの出力（`<local-command-stdout>`）・
+ *   Esc（`[Request interrupted by user`）。ほかの形（入力・tool_result・ツールの呼び出し・要約・`max_tokens` など）は `busy`
+ * - 打ったまま並んでいる入力（`queue-operation` の `enqueue` が `dequeue` / `remove` されていない）があれば `busy`
+ * - 最後の会話の行の `entrypoint` が無い（`-p` か TUI か分からない）・読めた中に TUI の行が無い（頭まで読めていない）なら `unknown`。
+ *   頭まで読めて TUI の行が 1 つも無ければ、TUI はまだ何も送っていないので `idle`
+ * - サブエージェントの行（`isSidechain`）は見ない
+ */
+export function claudeTuiState(lines: readonly string[], fromStart: boolean): TuiState {
+  let last: Obj | null = null
+  let queued = 0
+  for (const line of lines) {
+    const o = parseLine(line)
+    if (!o) continue
+    if (o.type === 'queue-operation') {
+      queued = o.operation === 'enqueue' ? queued + 1 : Math.max(0, queued - 1)
+      continue
+    }
+    if ((o.type !== 'user' && o.type !== 'assistant') || o.isSidechain === true) continue
+    if (o.entrypoint !== 'sdk-cli') last = o
+  }
+  if (queued > 0) return 'busy'
+  if (!last) return fromStart ? 'idle' : 'unknown'
+  if (typeof last.entrypoint !== 'string' || !last.entrypoint) return 'unknown'
+  const message = obj(last.message)
+  const content = message?.content
+  const blocks = Array.isArray(content) ? content.map(obj) : []
+  if (last.type === 'assistant') {
+    const stop = message?.stop_reason
+    const calls = blocks.some((b) => b?.type === 'tool_use')
+    return (stop === 'end_turn' || stop === 'stop_sequence') && !calls ? 'idle' : 'busy'
+  }
+  if (last.isMeta === true || last.isCompactSummary === true || blocks.some((b) => b?.type === 'tool_result')) return 'busy'
+  const text = (typeof content === 'string' ? content : blocks.map((b) => (b?.type === 'text' ? str(b.text) : '')).join('')).trimStart()
+  return text.startsWith('<local-command-stdout>') || text.startsWith('[Request interrupted by user') ? 'idle' : 'busy'
+}
+
 /**
  * Codex の rollout の行（古い順）から、最後のターンの手順。
  * `event_msg` の `task_started` でターンが始まり、`task_complete` で閉じる。

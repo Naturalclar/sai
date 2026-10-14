@@ -160,7 +160,8 @@ export function sendModes(input: SendModeInput, warnTokens: number): { mode: Sen
  * **画面からの送信と同じ判定**（`sendModes()`）で、着手の形の本文で、要約できるときだけ（間があいて大きい相手でも、着手でなければそのまま。#761）。
  * 待ちで起こすターンの本文（待ちの結果）は着手の形にならないので、待ちでは要約しない。
  * `input.text` は**送り元が書いた文そのもの**（見出しを付ける前）を渡す。
- * 送る側の指定（`asked`）があれば指定が勝つが、要約できない相手（端末で開いている・Claude でない・文脈が小さい）は指定しても要約しない
+ * 送る側の指定（`asked`）があれば指定が勝つが、要約できない相手（端末で開いている・Claude でない・文脈が小さい）は指定しても要約しない。
+ * サーバの `messageCompactOf()` は端末で開いている相手も `terminal: false` で渡し、要約してよいかは送る時点で `launch()` が見る（#806）
  */
 export function messageCompacts(input: SendModeInput, warnTokens: number, asked?: boolean): boolean {
   if (asked === false) return false

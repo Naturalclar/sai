@@ -244,7 +244,9 @@ export function claudeProgress(lines: readonly string[]): ParsedProgress {
       }
     }
     const stop = message?.stop_reason
-    if (stop === 'tool_use') open = true
+    // 本文にツールの呼び出しがあれば、`stop_reason` が `end_turn` でもツールが回り、ターンは続く（#804 のレビュー。手元の transcript に実例）
+    const calls = content.some((raw) => obj(raw)?.type === 'tool_use')
+    if (stop === 'tool_use' || calls) open = true
     else if (stop === 'end_turn' || stop === 'stop_sequence') open = false
   }
   // 閉じたターンの最後の文は返答そのもの（行として届く）。途中の文には数えない

@@ -1,7 +1,8 @@
 // 「要対応」（#224）に並べるものを組み立てる。DOM に依存しないので todoItems.test.ts を node:test で回す。
 import { stripMarkdown } from './markdown.ts'
+import { TERMINAL_HELD_PAUSED } from './agentMessages.ts'
 import { replyBlockedReason } from './reply.ts'
-import type { Approval, ApprovalMap, LoopMap, ReplyingMap, SessionSummary, Wait, WaitMap } from './types.ts'
+import type { Approval, ApprovalMap, LoopMap, ReplyingMap, ReplyQueueMap, SessionSummary, Wait, WaitMap } from './types.ts'
 import { waitDoneText, waitNeedsHuman } from './waits.ts'
 
 /**
@@ -65,10 +66,16 @@ export interface TodoItem {
  * **`wait` も絞り込みに関わらず全部出す**（`waits` は `WaitStore.snapshot()` そのもの）。セッションのほかの行（`watch` / `done`）とは別に並ぶ:
  * 待ちの行は「起こすか片付けるか」、`done` の行は「次の指示を送る」で、できることが違う。アーカイブ済みでも出す（片付ける口が要る）
  *
+ * **端末に打ち込めずに止めたメッセージの預かり**（#800。`queued` の `paused` が `TERMINAL_HELD_PAUSED`）は `watch` で出す。
+ * 人が開いて「続けて送る」を押すか端末で確かめるまで何も起きないので数える。そのセッションのほかの `watch` / `done` より先に出し、重ねない
+ *
  * `selfHost` はこのサーバのマシン名（応答の `host`。#114）。別のマシンのセッションは項目としては出すが
  * （待っていることに変わりはない）、ここからは答えられないので `replyable` は false になる。
  */
-export function todoItems(sessions: readonly SessionSummary[], approvals: ApprovalMap, selfHost: string, replying: ReplyingMap = {}, loops: LoopMap = {}, waits: WaitMap = {}): TodoItem[] {
+/** 要対応に出す、止めたメッセージの預かりの 1 行（#800） */
+export const TERMINAL_STUCK_TEXT = '預かったメッセージが止まっています（端末に打ち込めません。打ちかけ・ダイアログを片付けるか、開いて「続けて送る」を押してください）'
+
+export function todoItems(sessions: readonly SessionSummary[], approvals: ApprovalMap, selfHost: string, replying: ReplyingMap = {}, loops: LoopMap = {}, waits: WaitMap = {}, queued: ReplyQueueMap = {}): TodoItem[] {
   const byId = new Map(sessions.map((s) => [s.id, s]))
   const out: TodoItem[] = []
   for (const [id, list] of Object.entries(approvals)) {
@@ -86,6 +93,11 @@ export function todoItems(sessions: readonly SessionSummary[], approvals: Approv
   for (const s of sessions) {
     // 答え待ちが出ているセッションは上で入れてある（そちらの方が新しくて具体的）
     if (answering.has(s.id) || s.archived) continue
+    const held = queued[s.id]
+    if (held?.paused === TERMINAL_HELD_PAUSED && held.items.length > 0) {
+      out.push({ id: s.id, kind: 'watch', text: TERMINAL_STUCK_TEXT, since: held.items[0]!.since, session: s, approval: null, replyable: watchReplyable(s, selfHost) })
+      continue
+    }
     if (s.waiting) {
       if (processReplying(replying[s.id])) continue
       out.push({ id: s.id, kind: 'watch', text: s.waiting, since: s.end, session: s, approval: null, replyable: watchReplyable(s, selfHost) })

@@ -303,3 +303,12 @@ test('codexProgress: ターンの始まり（task_started）の時刻を返す�
   assert.equal(closed.closed, '2026-10-05T03:01:00.000Z')
   assert.equal(open.closed, undefined, '新しいターンが始まったら閉じた時刻は持たない')
 })
+
+test('claudeProgress: end_turn でも本文にツールの呼び出しがあれば、ツールが回るのでターンは開いたまま（#804 のレビュー）', () => {
+  const lines = [
+    prompt(T(0), 'テストを回して'),
+    assistant(T(1), [{ type: 'text', text: '回します' }, { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'pnpm test' } }], 'end_turn'),
+  ]
+  assert.equal(claudeProgress(lines).open, true)
+  assert.equal(claudeProgress([...lines, result(T(30), 't1'), assistant(T(31), [{ type: 'text', text: '通りました' }], 'end_turn')]).open, false)
+})

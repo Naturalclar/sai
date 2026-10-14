@@ -145,6 +145,12 @@ test('/merge の再レビューの上限（#802）: スキル・docs/internals/t
   assert.match(skill, /`main` が進んだだけの載せ直し（衝突なし）は読ませない・回数に数えない/)
   assert.match(skill, /衝突を直して載せ直したときだけ、直した所[^\n]*1 回に数える/)
   assert.doesNotMatch(skill, /載せ直しで増えた分を読ませるのも 1 回/)
+  // 載せ直したあとは、その SHA を起点にする（古いままだと main の変更が直した差分に混ざる）
+  assert.match(skill, /載せ直したあとの SHA を「前にレビューした SHA」として扱う/)
+  // 5 の「弾かれたら」も衝突なしの載せ直しは読ませない（「増えた分も読む」だけだと食い違う）
+  assert.doesNotMatch(skill, /弾かれたら 1 に戻る（増えた分も読む）/)
+  // scope=hold は「だけです」の文ごと置き換えて全体を読ませる（後ろの 1 文だけ外すと差分だけになる）
+  assert.match(skill, /2 文を「PR 全体も読んでください。」に置き換えて/)
   assert.match(tooling, /衝突の無い載せ直しは読ませず数えず/)
   assert.match(agents, /読ませ直すのは 2 回まで/)
   // 上限に当たったら止まる側（止めて人に返す一覧に入っている）

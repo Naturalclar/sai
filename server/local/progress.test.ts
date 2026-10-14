@@ -286,6 +286,15 @@ test('terminalTail: TUI が閉じたかは TUI の最後の会話の行で見る
   assert.deepEqual([tool.tuiClosed, tool.tuiTool], [false, true])
   assert.equal(ended({ type: 'user', message: { content: [{ type: 'tool_result', content: 'ok' }] } }).tuiClosed, false)
   assert.equal(terminalTail([...before, tuiPrompt(20), pEnd], T0, true).tuiClosed, false)
+  // stop_reason が tool_use 以外でもツールの呼び出しがあれば続く。max_tokens・refusal・pause_turn も続くことがある（#804 の 4 回目のレビュー）
+  for (const stop of ['max_tokens', 'end_turn', 'refusal', 'pause_turn']) {
+    const t = ended({ type: 'assistant', message: { stop_reason: stop, content: [{ type: 'tool_use' }] } })
+    assert.equal(t.tuiClosed, false, `${stop} + tool_use`)
+    assert.equal(t.tuiTool, true, `${stop} + tool_use`)
+  }
+  for (const stop of ['max_tokens', 'refusal', 'pause_turn']) {
+    assert.equal(ended({ type: 'assistant', message: { stop_reason: stop, content: [{ type: 'text', text: 'x' }] } }).tuiClosed, false, stop)
+  }
   // 書いている途中の assistant（stop_reason がまだ無い）
   assert.equal(ended({ type: 'assistant', message: { stop_reason: null, content: [{ type: 'text', text: '途中' }] } }).tuiClosed, false)
 })

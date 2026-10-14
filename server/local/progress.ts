@@ -75,7 +75,7 @@ async function readTail(path: string, size: number, bytes: number): Promise<stri
 /**
  * 端末で開いている Claude の transcript の末尾から、SAI の `-p` が始まってから後に何があったかを読む（#800）。
  * - `tui`: `since` 以降に、端末の TUI（`entrypoint` が `sdk-cli` 以外）が会話の行（user / assistant）を書いた
- * - `tuiClosed`: **TUI の最後の会話の行**がターンの終わり。assistant で `stop_reason` が `tool_use` 以外（`end_turn`・API エラーの `stop_sequence` など）、
+ * - `tuiClosed`: **TUI の最後の会話の行**がターンの終わり。assistant で `stop_reason` が `end_turn` / `stop_sequence`（API エラーを含む）かつ本文にツールの呼び出しが無い、
  *   ローカルコマンドの出力（`<local-command-stdout>`）、Esc で止めた印（`[Request interrupted by user`）。後ろに SAI の `-p` の行が続いていてもよい
  * - `tuiTool`: TUI の最後の会話の行がツールを呼んだところ（ツールが回っている。長く書かないことがある）
  * - `compactOnly`: 最後の会話の行が SAI の `-p` の `/compact` の出力（`<local-command-stdout>`）で、その前が `/compact` のコマンドの行。
@@ -120,10 +120,14 @@ export function terminalTail(lines: readonly string[], since: number, fromStart:
   const tuiLast = [...talk].reverse().find((r) => r.entrypoint !== 'sdk-cli' && !(at(r) < since))
   const stop = tuiLast?.message?.stop_reason
   const tuiText = text(tuiLast).trimStart()
+  // 本文にツールの呼び出しがあれば、`stop_reason` が何であってもツールが回る（`max_tokens`・`end_turn` でも続いた実例がある）
+  const content = tuiLast?.message?.content
+  const calls = Array.isArray(content) && content.some((b) => b && typeof b === 'object' && (b as { type?: unknown }).type === 'tool_use')
+  // 閉じた扱いは `claudeProgress()` と同じ `end_turn` / `stop_sequence` だけ（`max_tokens`・`refusal`・`pause_turn` は続くことがある）
   const tuiClosed =
-    (tuiLast?.type === 'assistant' && typeof stop === 'string' && stop !== 'tool_use') ||
+    (tuiLast?.type === 'assistant' && (stop === 'end_turn' || stop === 'stop_sequence') && !calls) ||
     (tuiLast?.type === 'user' && (tuiText.startsWith('<local-command-stdout>') || tuiText.startsWith('[Request interrupted by user')))
-  const tuiTool = tuiLast?.type === 'assistant' && stop === 'tool_use'
+  const tuiTool = tuiLast?.type === 'assistant' && (stop === 'tool_use' || calls)
   return { tui, tuiClosed, tuiTool, compactOnly, reached: fromStart || (firstAt !== undefined && firstAt < since) }
 }
 

@@ -4,7 +4,7 @@ import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { claudeProjectName, PROGRESS_IDLE_MS, PROGRESS_NOTES } from '../../shared/progress.ts'
-import { OPENCODE_CONTEXT_TTL_MS, PROGRESS_TAIL_START, ProgressReader, sessionOf, terminalTail } from './progress.ts'
+import { OPENCODE_CONTEXT_TTL_MS, PROGRESS_TAIL_START, ProgressReader, sessionOf } from './progress.ts'
 
 const SID = '11111111-2222-3333-4444-555555555555'
 const j = (o: unknown) => JSON.stringify(o)
@@ -222,79 +222,4 @@ test('ProgressReader: 途中で書いた文（#680）は手順とは別に末尾
     assert.equal(p.notes_total, PROGRESS_NOTES + 2)
     assert.deepEqual(p.notes?.map((n) => n.text), Array.from({ length: PROGRESS_NOTES }, (_, i) => `途中の文 ${i + 2}`), 'ツールの呼び出しに押し出されず、末尾の分だけ')
   })
-})
-
-// ---- #800: SAI の -p のあとに端末の TUI が書いたか・要約だけのターンか（transcript の中身で見る）
-
-const T0 = Date.parse('2026-10-14T10:00:00.000Z')
-const atSec = (sec: number) => new Date(T0 + sec * 1000).toISOString()
-const line = (o: object) => JSON.stringify(o)
-/** SAI の `claude -p "/compact …"` が transcript に書く形（実際の transcript の並びを写した作り物） */
-const compactBySai = (sec: number) => [
-  line({ type: 'system', subtype: 'compact_boundary', entrypoint: 'sdk-cli', timestamp: atSec(sec) }),
-  line({ type: 'user', isCompactSummary: true, entrypoint: 'sdk-cli', timestamp: atSec(sec), message: { role: 'user', content: 'This session is being continued from a previous conversation.' } }),
-  line({ type: 'user', isMeta: true, entrypoint: 'sdk-cli', timestamp: atSec(sec), message: { role: 'user', content: '<local-command-caveat>The command below was run directly</local-command-caveat>' } }),
-  line({ type: 'user', entrypoint: 'sdk-cli', timestamp: atSec(sec), message: { role: 'user', content: '<command-name>/compact</command-name>\n<command-message>compact</command-message>' } }),
-  line({ type: 'user', entrypoint: 'sdk-cli', timestamp: atSec(sec), message: { role: 'user', content: '<local-command-stdout>Compacted </local-command-stdout>' } }),
-  line({ type: 'attachment', entrypoint: 'sdk-cli', timestamp: atSec(sec) }),
-]
-const tuiPrompt = (sec: number) => line({ type: 'user', entrypoint: 'cli', timestamp: atSec(sec), message: { role: 'user', content: '人が端末で打った' } })
-const tuiEnd = (sec: number) => line({ type: 'assistant', entrypoint: 'cli', timestamp: atSec(sec), message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: '済みました' }] } })
-const before = [tuiPrompt(-60), tuiEnd(-50)]
-
-test('terminalTail: SAI の要約だけで終わっていれば compactOnly、TUI は書いていない（#800）', () => {
-  const t = terminalTail([...before, ...compactBySai(10)], T0, true)
-  assert.deepEqual(t, { tui: false, tuiClosed: false, tuiTool: false, compactOnly: true, reached: true })
-})
-
-test('terminalTail: 要約の間に TUI がターンを始めていれば、要約の出力が最後でも tui（起こさない側）（#800）', () => {
-  const t = terminalTail([...before, tuiPrompt(5), ...compactBySai(10)], T0, true)
-  assert.equal(t.tui, true)
-  assert.equal(t.tuiClosed, false)
-  // TUI のターンが閉じたら tuiClosed
-  assert.equal(terminalTail([...before, tuiPrompt(5), ...compactBySai(10), tuiEnd(30)], T0, true).tuiClosed, true)
-})
-
-test('terminalTail: SAI の -p より前の TUI の行は数えない。読んだ範囲が -p の始まりに届かなければ reached が偽（#800）', () => {
-  assert.equal(terminalTail(before, T0, false).tui, false)
-  assert.equal(terminalTail(before, T0, false).reached, true, '-p より前の行まで読めている')
-  assert.equal(terminalTail(compactBySai(10), T0, false).reached, false, 'ファイルの途中から読んで、最初の行が -p より後')
-  assert.equal(terminalTail(compactBySai(10), T0, true).reached, true, 'ファイルの頭から読めていれば届いている')
-  // 時刻の無い TUI の行は書いた側に数える（見落とすより待つ）
-  assert.equal(terminalTail([line({ type: 'user', entrypoint: 'cli', message: { content: 'x' } })], T0, true).tui, true)
-})
-
-test('terminalTail: 人が端末で打った /compact（entrypoint が cli）は SAI の要約だけのターンにしない（#800）', () => {
-  const byTui = compactBySai(10).map((l) => l.replaceAll('"sdk-cli"', '"cli"'))
-  const t = terminalTail(byTui, T0, true)
-  assert.equal(t.compactOnly, false)
-  assert.equal(t.tui, true)
-})
-
-test('terminalTail: TUI が閉じたかは TUI の最後の会話の行で見る。後ろに -p の行があっても、end_turn 以外の終わり方でも閉じている（#800 のレビュー）', () => {
-  const pEnd = line({ type: 'assistant', entrypoint: 'sdk-cli', timestamp: atSec(60), message: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'SAI から' }] } })
-  // -p の間に TUI のターンが閉じ、あとから -p が閉じた
-  assert.equal(terminalTail([...before, tuiPrompt(20), tuiEnd(25), pEnd], T0, true).tuiClosed, true)
-  // 要約の途中に TUI のターンが閉じた（要約の行が最後）
-  assert.equal(terminalTail([...before, tuiPrompt(5), tuiEnd(8), ...compactBySai(10)], T0, true).tuiClosed, true)
-  const ended = (o: object) => terminalTail([...before, tuiPrompt(20), line({ entrypoint: 'cli', timestamp: atSec(30), ...o })], T0, true)
-  assert.equal(ended({ type: 'assistant', message: { stop_reason: 'stop_sequence', model: '<synthetic>', content: [{ type: 'text', text: 'API Error' }] } }).tuiClosed, true, 'API エラー')
-  assert.equal(ended({ type: 'user', message: { content: '<local-command-stdout>Set model</local-command-stdout>' } }).tuiClosed, true, 'ローカルコマンド')
-  assert.equal(ended({ type: 'user', message: { content: [{ type: 'text', text: '[Request interrupted by user]' }] } }).tuiClosed, true, 'Esc')
-  // 閉じていない: ツールを呼んだところ・ツールの結果・入力だけ
-  const tool = ended({ type: 'assistant', message: { stop_reason: 'tool_use', content: [{ type: 'tool_use' }] } })
-  assert.deepEqual([tool.tuiClosed, tool.tuiTool], [false, true])
-  assert.equal(ended({ type: 'user', message: { content: [{ type: 'tool_result', content: 'ok' }] } }).tuiClosed, false)
-  assert.equal(terminalTail([...before, tuiPrompt(20), pEnd], T0, true).tuiClosed, false)
-  // stop_reason が tool_use 以外でもツールの呼び出しがあれば続く。max_tokens・refusal・pause_turn も続くことがある（#804 の 4 回目のレビュー）
-  for (const stop of ['max_tokens', 'end_turn', 'refusal', 'pause_turn']) {
-    const t = ended({ type: 'assistant', message: { stop_reason: stop, content: [{ type: 'tool_use' }] } })
-    assert.equal(t.tuiClosed, false, `${stop} + tool_use`)
-    assert.equal(t.tuiTool, true, `${stop} + tool_use`)
-  }
-  for (const stop of ['max_tokens', 'refusal', 'pause_turn']) {
-    assert.equal(ended({ type: 'assistant', message: { stop_reason: stop, content: [{ type: 'text', text: 'x' }] } }).tuiClosed, false, stop)
-  }
-  // 書いている途中の assistant（stop_reason がまだ無い）
-  assert.equal(ended({ type: 'assistant', message: { stop_reason: null, content: [{ type: 'text', text: '途中' }] } }).tuiClosed, false)
 })

@@ -234,7 +234,7 @@ import {
 } from '../shared/agentMessages.ts'
 import type { PendingReply } from '../shared/agentMessages.ts'
 import { eventKind } from '../shared/events.ts'
-import { PROGRESS_IDLE_MS, PROGRESS_TOOL_MAX_MS, stepLabel } from '../shared/progress.ts'
+import { stepLabel } from '../shared/progress.ts'
 import { CONTEXT_WARN_TOKENS, contextRevKey } from '../shared/contextSize.ts'
 import { treeOf, Worktrees } from './git/worktrees.ts'
 import { mcpAccess, normalizeOrigin } from './mcp/access.ts'
@@ -583,11 +583,6 @@ interface LaunchOptions {
    * 要約してから送る形も、端末で開いていて空いているなら別プロセスで挟む。人の画面からの返信には付けない
    */
   terminalFallback?: boolean
-  /**
-   * 端末で開いている相手を別プロセスで起こすとき、端末のターンの外と分かっているか（#800。`terminalTurn()` が `idle`）。メッセージの道は
-   * 判定した結果を渡す（「続けて送る」で分からないまま起こすなら false）。渡さなければ（人の「端末を使わず送る」など）起こす前に見る
-   */
-  terminalKnownIdle?: boolean
 }
 
 /** `claude --bg` との競合で落ちたプロセスを、重複なく再試行・預かりへ戻すための元の入力（#798）。 */
@@ -2509,24 +2504,15 @@ export function createApp(
   }
 
   /**
-   * SAI がそのセッションに `-p` を起こした時刻と、そのとき端末のターンの外と分かっていたか（`idle`。#800）。分かっていなかった
-   * （人の「端末を使わず送る」・「続けて送る」で起こした）なら、`-p` より前から回っている TUI のターンが見えないので、TUI が閉じたと
-   * 分かるまで空きにしない。端末で開いている相手の「ターンの外か」を見るとき、この時刻から後に
-   * 端末の TUI が transcript に書いたかを見る（SAI の `-p` の間に人が端末でターンを始めていたら、閉じた印があっても起こさない）
+   * 端末で開いている Claude のターンがどうなっているか（#800）。`idle` は、端末に打ち込んだ返信の行を待っておらず、画面にダイアログが
+   * 出ておらず、transcript の最後のターンが閉じていて（`closed_at`）回っていないときだけ。
+   * `/compact` だけのターンは閉じた印を書かないので、要約のあとは `PROGRESS_IDLE_MS` まで `turn`、そのあと `unknown`（止めて要対応）になる。
+   * transcript の中身で要約のあとと見分けるのは #806（時刻・mtime では、要約の間に始まった端末のターンと区別できない）。
+   * 回っている（か打ち込んだ返信を待っている）は `turn`、ダイアログ中は `dialog`、読めない・閉じたか分からないときは `unknown`（起こさない）
    */
-  const processStartedAt = new Map<string, { at: number; idle: boolean }>()
-  /**
-   * 端末で開いている Claude のターンがどうなっているか（#800）。順に見る:
-   * - 端末に打ち込んだ返信の行を待っている → `turn`。画面にダイアログが出ている → `dialog`（`inspectPrompt()`。打ち込まずに読むだけ。
-   *   ペインが消えていれば見ない、読めなければ `unknown`）
-   * - SAI の `-p` を起こしていれば、transcript の中身で見る（`ProgressReader.terminalTail()`）: その後に TUI が書いていれば、TUI のターンが
-   *   閉じているときだけ `idle`（ほかは `turn`）。書いていなくて、最後が SAI の `/compact` の出力なら `idle`（要約だけのターンは閉じた印を書かない）。
-   *   読めない・`-p` の始まりまで届かないなら `unknown`
-   * - 残りは transcript の閉じた印（`closed_at`）と `active` で見る。どちらでもなければ `unknown`（起こさない）
-   */
-  const terminalTurn = async (id: string, session: SessionSummary, term: Awaited<ReturnType<typeof terminalOf>>, screen = true): Promise<'idle' | 'turn' | 'dialog' | 'unknown'> => {
+  const terminalTurn = async (id: string, session: SessionSummary, term: Awaited<ReturnType<typeof terminalOf>>): Promise<'idle' | 'turn' | 'dialog' | 'unknown'> => {
     if (typed.running(id)) return 'turn'
-    if (term && screen) {
+    if (term) {
       try {
         if ((await inspectPrompt(terminal.tmux, terminal.ps, term, session.agent)).kind === 'dialog') return 'dialog'
       } catch (err) {
@@ -2535,30 +2521,6 @@ export function createApp(
       }
     }
     const p = await progress.read(session)
-    const started = processStartedAt.get(id)
-    if (started !== undefined) {
-      // 起こした時刻と行の時刻の食い違いに備えて、少し前から見る（TUI の行を見落とすより、待つ側に倒す）
-      const tail = await progress.terminalTail(session, started.at - 2_000)
-      if (!tail) return 'unknown'
-      if (tail.tui) {
-        if (tail.tuiClosed) {
-          // TUI のターンも SAI の -p も閉じた。次からは見る起点を外す（transcript が伸びて -p の始まりまで届かなくなるのを避ける）
-          processStartedAt.delete(id)
-          return 'idle'
-        }
-        // TUI のターンが閉じていない。書かないまま長く経ったら、待ち続けずに分からないにする（止めて要対応に出す）
-        const quiet = Date.now() - Date.parse(p.updated_at || '')
-        return Number.isNaN(quiet) || quiet > (tail.tuiTool ? PROGRESS_TOOL_MAX_MS : PROGRESS_IDLE_MS) ? 'unknown' : 'turn'
-      }
-      // -p の始まりまで届かず、読めた中に TUI の行も無い。または -p を起こしたとき端末が空いていると分かっていなかった
-      if (!tail.reached || !started.idle) return 'unknown'
-      if (tail.compactOnly) return 'idle'
-      // TUI は書いておらず、-p のターンが閉じた。次からは見る起点を外す
-      if (!p.active && p.closed_at) {
-        processStartedAt.delete(id)
-        return 'idle'
-      }
-    }
     return p.active ? 'turn' : p.closed_at ? 'idle' : 'unknown'
   }
   /**
@@ -2677,7 +2639,7 @@ export function createApp(
           null,
           compactPrompt(o.compactFrom ?? text),
           [],
-          { ...o, forceProcess: true, compact: true, terminalKnownIdle: compactPastTerminal },
+          { ...o, forceProcess: true, compact: true },
           { text, attachments, queued: item.queue_id },
         )
         if (out.status !== 202) {
@@ -2729,15 +2691,12 @@ export function createApp(
       const handed = o.origin || /^[/$]/.test(text.trimStart()) ? { replies: [], ids: [] } : await pendingRepliesOf(id)
       const body = withHandedReplies(text, handed.replies)
       const pastTerminal = !!openTerminal && !!o.terminalFallback && session.agent === 'claude'
-      let known = false
       // 端末を使わずに回す本文（要約のあと。#800）でも、端末でターンが回り始めていたら起こさない
       if (pastTerminal && o.forceProcess) {
         const state = await terminalTurn(id, session, openTerminal)
         if (!mayPassTerminal(id, state)) return terminalTurnHold(id, session, raw, cwd, text, attachments, o, state === 'unknown')
-        known = state === 'idle'
       }
-      // 端末を使わずに回す本文だけ、判定した結果を渡す（ほかは、別プロセスに落ちたら起こす前に見る）
-      let out = await startTurn(id, session, raw, cwd, openTerminal, body, attachments, pastTerminal && o.forceProcess ? { ...o, terminalKnownIdle: known } : o, { text, attachments })
+      let out = await startTurn(id, session, raw, cwd, openTerminal, body, attachments, o, { text, attachments })
       // 端末に打ち込めなかった（打ち込む前に断られた。何も打っていない）メッセージは、断らずに別プロセスへ回す（#800）。
       // 端末でターンの途中（ダイアログ中を含む）・分からないときは起こさずに預かる（同じセッションを 2 つのプロセスで回さない）
       if (pastTerminal && !o.forceProcess && out.status === 409 && (out.body as ReplyError).can_process) {
@@ -2745,9 +2704,8 @@ export function createApp(
         if ((out.body as ReplyError).code === 'terminal_dialog') return terminalTurnHold(id, session, raw, cwd, text, attachments, o, false)
         const state = await terminalTurn(id, session, openTerminal)
         if (!mayPassTerminal(id, state)) return terminalTurnHold(id, session, raw, cwd, text, attachments, o, state === 'unknown')
-        known = state === 'idle'
         await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} メッセージを端末に打ち込めなかったので、別プロセスで回す（${why}。打ちかけは残す）\n`).catch(() => {})
-        out = await startTurn(id, session, raw, cwd, openTerminal, body, attachments, { ...o, forceProcess: true, terminalKnownIdle: known }, { text, attachments })
+        out = await startTurn(id, session, raw, cwd, openTerminal, body, attachments, { ...o, forceProcess: true }, { text, attachments })
         if (out.status === 202) out = { ...out, body: { ...(out.body as ReplyResponse), past_terminal: true } }
       }
       if (out.status === 202 && handed.ids.length > 0) {
@@ -2888,10 +2846,6 @@ export function createApp(
       // プロセスが終わったら、そのセッションの答え待ちは deny で片付ける（もう誰も答えを取りに来ない）。
       // 預かっている返信があれば続けて回す（#305）
       startedBin.set(id, cmd.bin)
-      // 端末で開いている Claude なら、起こす時点で端末のターンの外かを覚える（メッセージの道は判定済み。人の「端末を使わず送る」はここで
-      // transcript だけで見る。端末には capture-pane も送らない）
-      const idleAtStart = !openTerminal || session.agent !== 'claude' || o.terminalKnownIdle === true || (o.terminalKnownIdle === undefined && (await terminalTurn(id, session, openTerminal, false)) === 'idle')
-      processStartedAt.set(id, { at: Date.now(), idle: idleAtStart })
       await run.start(id, cmd, async (failure) => {
         approvals.drop(id)
         // `launch()` が覚えている一覧に bg を見つけられず、`-p --resume` があとから競合で落ちた場合だけ、

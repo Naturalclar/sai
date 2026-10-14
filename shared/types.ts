@@ -1614,6 +1614,8 @@ export interface SessionsResponse {
   build_stale: boolean
   /** 窓の中の一番新しい行の v（無い行は 1、行が無ければ 0）。RECORD_VERSION より小さければ記録側の record.py が古い */
   record_version: number
+  /** 添付の置き場がしきい値を超えている（#792）。超えていない・まだ測っていないなら null。これが変わると rev も変わる */
+  attachments_over: { bytes: number; threshold: number } | null
   /**
    * 記録に届いていない Claude Code のフック（#567。`shared/hooks.ts` の `hookGapLabel()` の 1 行ずつ）。空なら出さない。
    * `~/.claude/settings.json` を README のあるべき一覧と突き合わせたもので、分からない（設定が読めない・届くフックが 1 つも

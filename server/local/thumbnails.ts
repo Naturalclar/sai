@@ -50,7 +50,7 @@ export const THUMB_STRIPPED_MARK = STRIPPED_MARK
 /** 軽い版のファイル名の形 */
 const THUMB_NAME_RE = /^[0-9a-f]{32}(-\d+)?\.(jpg|png)$/
 /** 作っている最中のファイル（`make()` の `.src` / `.tmp.*`）。起動時に残っていれば、前の SAI が途中で落ちたもの */
-const THUMB_WORK_RE = /^[0-9a-f]{32}(\.(src|tmp\.(jpg|png))|(-\d+)?\.(jpg|png)\.\d+\.\d+\.tmp)$/
+const THUMB_WORK_RE = /^[0-9a-f]{32}(\.(src|tmp\.(jpg|png))|(-\d+)?\.(jpg|png)\.\d+\.\d+\.tmp|\.render\.\d+\.\d+\.(jpg|png))$/
 
 export type ThumbFormat = 'jpeg' | 'png'
 
@@ -68,6 +68,8 @@ export type ThumbResult = { kind: 'original' } | { kind: 'thumb'; bytes: Buffer;
 
 export interface ThumbMaker {
   thumb(img: { bytes: Buffer; type: IconType }): Promise<ThumbResult>
+  /** 作るだけで `thumbs/` の LRU には置かない（置き場を別に持つ呼び手＝添付の捨てない軽い版。#792）。無ければ `thumb()` を使う */
+  render?(img: { bytes: Buffer; type: IconType }): Promise<ThumbResult>
 }
 
 /** 軽い版を作らない（`createApp` にこれを渡すと、重い画像は押すまで読まない形になる） */
@@ -210,6 +212,15 @@ export class Thumbnails implements ThumbMaker {
   }
 
   async thumb(img: { bytes: Buffer; type: IconType }): Promise<ThumbResult> {
+    return this.thumbOrRender(img, true)
+  }
+
+  /** 作って返すだけ（`thumbs/` には残さない）。作業ファイルは `.render.<pid>.<連番>.jpg|png` で、途中で落ちた分は起動時の掃除が拾う */
+  async render(img: { bytes: Buffer; type: IconType }): Promise<ThumbResult> {
+    return this.thumbOrRender(img, false)
+  }
+
+  private async thumbOrRender(img: { bytes: Buffer; type: IconType }, keep: boolean): Promise<ThumbResult> {
     if (img.bytes.length < THUMB_MIN_BYTES) return { kind: 'original' }
     await this.cleaned
     const format: ThumbFormat = hasAlpha(img.bytes, img.type) ? 'png' : 'jpeg'
@@ -222,7 +233,24 @@ export class Thumbnails implements ThumbMaker {
     const edge = longest > 0 ? Math.min(target, longest) : target
     const hash = createHash('sha256').update(img.bytes).digest('hex').slice(0, 32)
     // 帯は長辺が違うので名前を分ける（前に長辺 512px で作った帯の軽い版を返さない。#709）
-    const out = join(this.dir, `${hash}${target === base ? '' : `-${target}`}.${format === 'jpeg' ? 'jpg' : 'png'}`)
+    const ext = format === 'jpeg' ? 'jpg' : 'png'
+    const out = join(this.dir, `${hash}${target === base ? '' : `-${target}`}.${ext}`)
+    if (!keep) {
+      // 作るだけ。`make()` の作業ファイル（`<hash>.src` / `<hash>.tmp.*`）は hash で名前が決まるので、同じ中身の同時実行は
+      // `thumb()` と同じく `inflight`（鍵は hash）で 1 本にまとめる（まとめないと 2 本が同じ作業ファイルを奪い合い、後の方が
+      // `failed` に入って LRU 側まで 10 分止まる）。`sips` が落ちた hash の 10 分の抑制も同じ
+      if (this.missing) return { kind: 'unavailable' }
+      const failedAt = this.failed.get(hash)
+      if (failedAt !== undefined && this.now() - failedAt < THUMB_FAILED_TTL_MS) return { kind: 'unavailable' }
+      const pending = this.inflight.get(hash)
+      if (pending) return pending
+      const work = join(this.dir, `${hash}.render.${process.pid}.${++this.seq}.${ext}`)
+      const job = this.make(img.bytes, hash, work, format, edge)
+        .finally(() => rm(work, { force: true }))
+        .finally(() => this.inflight.delete(hash))
+      this.inflight.set(hash, job)
+      return job
+    }
     let stored: Buffer | null = null
     try {
       stored = await readFile(out)
@@ -247,10 +275,11 @@ export class Thumbnails implements ThumbMaker {
     if (this.missing) return { kind: 'unavailable' }
     const failedAt = this.failed.get(hash)
     if (failedAt !== undefined && this.now() - failedAt < THUMB_FAILED_TTL_MS) return { kind: 'unavailable' }
-    const pending = this.inflight.get(out)
+    // 鍵は hash（`out` は hash から決まる。`render()` と同じ鍵にして、同じ中身の作業ファイルを 2 本が触らない）
+    const pending = this.inflight.get(hash)
     if (pending) return pending
-    const job = this.make(img.bytes, hash, out, format, edge).finally(() => this.inflight.delete(out))
-    this.inflight.set(out, job)
+    const job = this.make(img.bytes, hash, out, format, edge).finally(() => this.inflight.delete(hash))
+    this.inflight.set(hash, job)
     return job
   }
 

@@ -323,6 +323,7 @@ rsync -a --include='????-??-??.*.jsonl' --exclude='*' mini:~/.agent-feed/ ~/.age
 | --- | --- |
 | `SAI_HOME` | このリポジトリの場所。上のフック設定例が `$SAI_HOME/feed/record.py` として使い、OpenCode のプラグイン（`feed/opencode/sai.js`）も `record.py` を探すのに読む（無ければ置いたファイルの隣から辿る）。`record.py` とサーバ自身は読まない |
 | `AGENT_FEED_DIR` | 出力先（既定 `~/.agent-feed`）。`record.py` とサーバの両方が見る |
+| `SAI_ATTACHMENT_TTL_DAYS` | SAI から添えた画像の**原本**を消すまでの日数（既定 `30`。#792）。消すのは軽い版が置けた 200KB 以上の画像だけで、軽い版は残る（過去の行とギャラリーには軽い版が出る）。`0` で消さない（置き場の大きさを測って `attachments.log` に書くだけ） |
 | `SAI_PORT` | サーバの既定ポート（既定 `8787`）。`pnpm dev` の `/api` の proxy 先もこれ（`--port` は見ない。#146） |
 | `AGENT_FEED_HOST` | このマシンの名前（既定は `gethostname()` の短い形）。複数のマシンの JSONL を 1 か所に集めるときに、行の出どころを分ける。**設定すると書き込み先も `YYYY-MM-DD.<host>.jsonl` に分かれる**（同期フォルダで同じファイルに追記して壊れるのを避けるため。サーバは両方の形を全部読む）。**サーバも自分の名前をこれで決め**、行の `host` と違うセッションは「別のマシン」として印を付け、返信の口を出さない（記録側とサーバを同じ環境から起動すれば揃う。前はサーバ側だけ `SAI_HOST` だった。#288） |
 | `SAI_DIGEST_URL` | 一言の口を「OpenAI 互換」にしたときの base URL（既定 `http://127.0.0.1:11434/v1` = Ollama。LM Studio は `http://127.0.0.1:1234/v1`）。末尾に `/chat/completions` を足して叩く。入切・口・モデルと違って**画面からは変えられない**（本文の送り先なので） |

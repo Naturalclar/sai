@@ -122,8 +122,8 @@ export class ReplyQueueStore {
   }
 
   /** 起動した返信を失敗後に預かりへ戻す。あとから預けた返信を追い越させない（#798） */
-  addFirst(id: string, text: string, attachments: readonly string[], url: string, now: Date = new Date(), origin: string = ''): StoredReply | null {
-    return this.addAt(id, text, attachments, url, now, origin, true)
+  addFirst(id: string, text: string, attachments: readonly string[], url: string, now: Date = new Date(), origin: string = '', process = false): StoredReply | null {
+    return this.addAt(id, text, attachments, url, now, origin, true, process)
   }
 
   /** 次に回すもの。起動できるまでは外さない（起動できなければ残して止める） */

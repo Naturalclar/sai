@@ -265,7 +265,7 @@ import { searchRows } from './rows/search.ts'
 import { searchWords } from '../shared/search.ts'
 import { olderPrompts, parseRecent, recentRows } from '../shared/recentRows.ts'
 import { codexTurnErrorReason, queuedTurnError } from '../shared/codexTurnError.ts'
-import { alive, isDescendant, parsePs, RealTmux, realPs, TerminalBusy, TerminalGone, TerminalReplies, typeInto } from './reply/terminal.ts'
+import { alive, inspectPrompt, isDescendant, parsePs, RealTmux, realPs, TerminalBusy, TerminalGone, TerminalReplies, typeInto } from './reply/terminal.ts'
 import type { DeliveryAnswer, DeliveryQuery, PsFn, Tmux } from './reply/terminal.ts'
 import type { Runner } from './reply/runner.ts'
 import { Authenticator, isLoopbackHostHeader, isServeHostHeader, tailscaleWhois } from './auth.ts'
@@ -2504,13 +2504,29 @@ export function createApp(
   }
 
   /**
-   * 端末で開いている Claude のターンがどうなっているか（#800）。`idle` は transcript の最後のターンが閉じていて（`closed_at`）、
-   * 回っておらず、端末に打ち込んだ返信の行を待ってもいないときだけ。`turn` は回っている（か打ち込んだ返信を待っている）。
-   * 読めない・閉じたか分からないときは `unknown`（起こさない）
+   * SAI が起こした `-p` が終わった時刻（#800 のレビュー）。`/compact` だけのターンは transcript にターンの終わり（`end_turn`）を
+   * 書かないので、閉じた印が付かず、そのあと 10 分は「回っている」に見える。終わってから transcript が動いていなければ、
+   * 端末の側で何も始まっていないと分かる
    */
-  const terminalTurn = async (id: string, session: SessionSummary): Promise<'idle' | 'turn' | 'unknown'> => {
+  const processEndedAt = new Map<string, number>()
+  /**
+   * 端末で開いている Claude のターンがどうなっているか（#800）。`idle` は、端末に打ち込んだ返信の行を待っておらず、画面にダイアログが
+   * 出ておらず、transcript の最後のターンが閉じていて（`closed_at`）回っていないか、SAI の `-p` が終わってから transcript が動いていないとき。
+   * 回っている（か打ち込んだ返信を待っている）は `turn`、ダイアログ中は `dialog`、読めない・閉じたか分からないときは `unknown`（起こさない）
+   */
+  const terminalTurn = async (id: string, session: SessionSummary, term: Awaited<ReturnType<typeof terminalOf>>): Promise<'idle' | 'turn' | 'dialog' | 'unknown'> => {
     if (typed.running(id)) return 'turn'
+    if (term) {
+      try {
+        if ((await inspectPrompt(terminal.tmux, terminal.ps, term, session.agent)).kind === 'dialog') return 'dialog'
+      } catch (err) {
+        // ペインが消えた・別のプロセスになったなら、端末は会話を握っていない。画面が読めないだけなら分からない
+        if (!(err instanceof TerminalGone)) return 'unknown'
+      }
+    }
     const p = await progress.read(session)
+    const ended = processEndedAt.get(id) ?? 0
+    if (ended && p.updated_at && Date.parse(p.updated_at) <= ended + 1000) return 'idle'
     return p.active ? 'turn' : p.closed_at ? 'idle' : 'unknown'
   }
   /**
@@ -2539,7 +2555,7 @@ export function createApp(
     return { status: 202, body: payload }
   }
   /** 端末のターンの外と分かった（か、人が止めた預かりを「続けて送る」で押した）。押した分はここで 1 回だけ使う */
-  const mayPassTerminal = (id: string, state: 'idle' | 'turn' | 'unknown'): boolean => state === 'idle' || (state === 'unknown' && terminalForced.delete(id))
+  const mayPassTerminal = (id: string, state: 'idle' | 'turn' | 'dialog' | 'unknown'): boolean => state === 'idle' || (state === 'unknown' && terminalForced.delete(id))
 
   const launch = async (id: string, text: string, attachments: string[], o: LaunchOptions): Promise<Launched> => {
     const { sessions } = await store.sessions(o.days)
@@ -2613,7 +2629,7 @@ export function createApp(
     // 預かりが残ってもいないときだけ。当たらなければ付いていないのと同じ（下の今までの経路）
     // 端末に打ち込んだ返信がまだ回っているのにペインが見つからないときも回さない（下の経路が 409 にするのと同じ。#590 のレビュー）
     // メッセージ（#800）は、端末で開いていてもターンの外と分かれば別プロセスで要約を挟む（本文も端末に打たずに別プロセスで回す）
-    const compactPastTerminal = !!openTerminal && !!o.terminalFallback && o.compact === true && session.agent === 'claude' && !busy && !bgLive && queue.size(id) === 0 && (await terminalTurn(id, session)) === 'idle'
+    const compactPastTerminal = !!openTerminal && !!o.terminalFallback && o.compact === true && session.agent === 'claude' && !busy && !bgLive && queue.size(id) === 0 && (await terminalTurn(id, session, openTerminal)) === 'idle'
     if (o.compact && session.agent === 'claude' && (!openTerminal || compactPastTerminal) && !busy && !typed.running(id) && !bgLive && queue.size(id) === 0) {
       const log = join(store.directory, 'reply.log')
       launching.add(id)
@@ -2652,7 +2668,9 @@ export function createApp(
       const item = queue.add(id, text, attachments, o.url, new Date(), o.origin ?? '')
       if (!item) return refuse(409, `預かれるのは ${QUEUE_MAX} 件までです。取り消すか、前の返信が終わるのを待ってください`)
       await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} 処理中なので預かった（${queue.size(id)} 件目）\n`).catch(() => {})
-      const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd, via: 'queued', queue_id: item.queue_id }
+      // 端末のターンが閉じたか分からずに止めた預かりの後ろに並んだメッセージも、止まっていると返す（#800 のレビュー）
+      const stuck = !!o.terminalFallback && queue.paused(id) === TERMINAL_UNKNOWN_PAUSED
+      const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd, via: 'queued', queue_id: item.queue_id, ...(stuck ? { past_terminal: true as const, stuck: true as const } : {}) }
       return { status: 202, body: payload }
     }
     // 端末（tmux）で開いていれば、前のターンが動いていても打ち込んでよい。TUI が次のターンに回すので、
@@ -2681,7 +2699,7 @@ export function createApp(
       const pastTerminal = !!openTerminal && !!o.terminalFallback && session.agent === 'claude'
       // 端末を使わずに回す本文（要約のあと。#800）でも、端末でターンが回り始めていたら起こさない
       if (pastTerminal && o.forceProcess) {
-        const state = await terminalTurn(id, session)
+        const state = await terminalTurn(id, session, openTerminal)
         if (!mayPassTerminal(id, state)) return terminalTurnHold(id, session, raw, cwd, text, attachments, o, state === 'unknown')
       }
       let out = await startTurn(id, session, raw, cwd, openTerminal, body, attachments, o, { text, attachments })
@@ -2690,7 +2708,7 @@ export function createApp(
       if (pastTerminal && !o.forceProcess && out.status === 409 && (out.body as ReplyError).can_process) {
         const why = (out.body as ReplyError).error
         if ((out.body as ReplyError).code === 'terminal_dialog') return terminalTurnHold(id, session, raw, cwd, text, attachments, o, false)
-        const state = await terminalTurn(id, session)
+        const state = await terminalTurn(id, session, openTerminal)
         if (!mayPassTerminal(id, state)) return terminalTurnHold(id, session, raw, cwd, text, attachments, o, state === 'unknown')
         await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} メッセージを端末に打ち込めなかったので、別プロセスで回す（${why}。打ちかけは残す）\n`).catch(() => {})
         out = await startTurn(id, session, raw, cwd, openTerminal, body, attachments, { ...o, forceProcess: true }, { text, attachments })
@@ -2836,6 +2854,8 @@ export function createApp(
       startedBin.set(id, cmd.bin)
       await run.start(id, cmd, async (failure) => {
         approvals.drop(id)
+        // 端末で開いている相手の「ターンの外か」を、このプロセスが終わってから transcript が動いたかで見られるようにする（#800 のレビュー）
+        if (!failure) processEndedAt.set(id, Date.now())
         // `launch()` が覚えている一覧に bg を見つけられず、`-p --resume` があとから競合で落ちた場合だけ、
         // ここで一覧を引き直す（#798）。通常の返信の前では `claude agents` を増やさず、再試行もこの 1 回だけ。
         let recovered = false
@@ -2853,7 +2873,7 @@ export function createApp(
             // 競合で落ちた本文をその新しい返信より前へ戻し、そちらの終了後に `drain()` で回す。
             if (run.running(id)) {
               const existing = retry.queued && queue.peek(id)?.queue_id === retry.queued ? queue.peek(id) : undefined
-              const item = existing ?? queue.addFirst(id, retry.text, retry.attachments, o.url, new Date(), o.origin ?? '')
+              const item = existing ?? queue.addFirst(id, retry.text, retry.attachments, o.url, new Date(), o.origin ?? '', !!o.forceProcess && !!o.terminalFallback)
               if (item) {
                 await appendFile(log, `--- ${new Date().toISOString()} ${id} bg の一覧を引く間に別の返信が始まったため、競合した本文を預かりの先頭へ戻した\n`).catch(() => {})
                 recovered = true
@@ -2862,7 +2882,7 @@ export function createApp(
             const hold = !recovered && live ? await backgroundHold(live, session) : ''
             if (!recovered && hold) {
               const existing = retry.queued && queue.peek(id)?.queue_id === retry.queued ? queue.peek(id) : undefined
-              const item = existing ?? queue.addFirst(id, retry.text, retry.attachments, o.url, new Date(), o.origin ?? '')
+              const item = existing ?? queue.addFirst(id, retry.text, retry.attachments, o.url, new Date(), o.origin ?? '', !!o.forceProcess && !!o.terminalFallback)
               if (item) {
                 run.clearFailure?.(id)
                 bgRetryAt.set(id, Date.now() + (terminal.bgRetryMs ?? BG_RETRY_MS))
@@ -2885,7 +2905,7 @@ export function createApp(
                 const again = await startTurn(id, session, raw, cwd, openTerminal, text, attachments, { ...o, backgroundRetried: true }, retry)
                 if (again.status !== 202) {
                   const existing = retry.queued && queue.peek(id)?.queue_id === retry.queued ? queue.peek(id) : undefined
-                  const item = existing ?? queue.addFirst(id, retry.text, retry.attachments, o.url, new Date(), o.origin ?? '')
+                  const item = existing ?? queue.addFirst(id, retry.text, retry.attachments, o.url, new Date(), o.origin ?? '', !!o.forceProcess && !!o.terminalFallback)
                   if (item) queue.pause(id, `バックグラウンドのセッションとの競合後にやり直せませんでした: ${(again.body as ReplyError).error}`)
                 }
                 recovered = true
@@ -3405,8 +3425,9 @@ export function createApp(
    * 預かりに並べる（画面からの送信と同じ。並んだものの前に要約は挟まない）
    */
   // 端末で開いている Claude でも、メッセージは別プロセスで要約を挟める（#800。挟むかは `launch()` が端末のターンの外と分かったときだけ）
-  const messageCompactOf = (target: SessionSummary, text: string, contextTokens: number, asked: unknown): { compact?: true; compactFrom?: string } =>
-    messageCompacts({ text, agent: target.agent, contextTokens, terminal: Boolean(target.terminal) && target.agent !== 'claude', idleMs: idleMsSince(target.last_turn_ts, loopNow()) }, CONTEXT_WARN_TOKENS, typeof asked === 'boolean' ? asked : undefined)
+  // 待ち（#732）は `terminalFallback` を渡さないので、`pastTerminal` を付けずに今までどおり端末で開いている相手には選ばない
+  const messageCompactOf = (target: SessionSummary, text: string, contextTokens: number, asked: unknown, pastTerminal = false): { compact?: true; compactFrom?: string } =>
+    messageCompacts({ text, agent: target.agent, contextTokens, terminal: Boolean(target.terminal) && !(pastTerminal && target.agent === 'claude'), idleMs: idleMsSince(target.last_turn_ts, loopNow()) }, CONTEXT_WARN_TOKENS, typeof asked === 'boolean' ? asked : undefined)
       ? { compact: true, compactFrom: text }
       : {}
 
@@ -3544,7 +3565,7 @@ export function createApp(
         continue
       }
       const delivered = deliveredText({ label: sessionLabel(found.session), project: found.session.project }, messageId, p.text)
-      const compact = messageCompactOf(p.target, p.text, p.context, p.compact)
+      const compact = messageCompactOf(p.target, p.text, p.context, p.compact, true)
       const out = await launch(to, delivered, [], { days: QUEUE_DAYS, replaceTyped: false, forceProcess: false, url: selfUrl(req), queue: true, origin: messageId, terminalFallback: true, ...compact })
       if (out.status !== 202) {
         // 別のリポジトリの相手（#747）の起動の失敗は、理由を返さない（相手の作業ディレクトリのパスなどが文に入る）。理由は reply.log に残る
@@ -3675,7 +3696,7 @@ export function createApp(
               if (budgetRefusal(readNow, context)) break
               if (!agents.beginHeld(h.message_id)) continue
               const delivered = deliveredText({ label: sessionLabel(sender), project: sender.project }, h.message_id, h.text)
-              const compact = messageCompactOf(target, h.text, context, h.compact)
+              const compact = messageCompactOf(target, h.text, context, h.compact, true)
               const out = await launch(h.to, delivered, [], { days: QUEUE_DAYS, replaceTyped: false, forceProcess: false, url: h.url, queue: true, origin: h.message_id, terminalFallback: true, ...compact })
               if (out.status !== 202) {
                 await halt(`送れませんでした: ${(out.body as ReplyError).error}`)
@@ -4663,7 +4684,7 @@ export function createApp(
           if (no) return textResult(no, true)
         }
         const messageId = agents.newId()
-        const compact = messageCompactOf(target, text, context, args.compact)
+        const compact = messageCompactOf(target, text, context, args.compact, true)
         const out = await launch(to, deliveredFromTailnet(access.caller, messageId, text), [], { days: QUEUE_DAYS, replaceTyped: false, forceProcess: false, url: selfUrl(req), queue: true, origin: messageId, terminalFallback: true, ...compact })
         if (out.status !== 202) return textResult(`送れませんでした: ${(out.body as ReplyError).error}`, true)
         const { via, past_terminal, stuck } = out.body as ReplyResponse

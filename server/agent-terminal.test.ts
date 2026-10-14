@@ -67,8 +67,8 @@ const codexApp: CodexApp = {
 }
 const usage = { value: {} as UsageResponse, async get() { return this.value } }
 
-/** 相手の transcript の偽物。`closed` = 最後のターンが閉じている、`active` = 回っている。どちらも無ければ分からない */
-const turns = new Map<string, { active?: boolean; closed?: boolean }>()
+/** 相手の transcript の偽物。`closed` = 最後のターンが閉じている、`active` = 回っている。どちらも無ければ分からない。`at` は最後に書いた時刻（既定は SAI のどのプロセスが終わったよりも後） */
+const turns = new Map<string, { active?: boolean; closed?: boolean; at?: number }>()
 const contexts = new Map<string, number>()
 const progress = {
   async read(s: Pick<SessionSummary, 'id'>): Promise<SessionProgressResponse> {
@@ -79,7 +79,7 @@ const progress = {
       active: t?.active === true,
       steps: [],
       total: 0,
-      updated_at: t ? new Date().toISOString() : '',
+      updated_at: t ? new Date(t.at ?? Date.now() + 60_000).toISOString() : '',
       ...(t?.closed ? { closed_at: new Date().toISOString() } : {}),
       context_tokens: contexts.get(s.id) ?? 0,
     }
@@ -290,7 +290,9 @@ test('sai_send: 要約を挟む依頼は、端末で開いていても空いて�
   assert.match(runner.started[0]!.cmd.text, /^\/compact /)
   assert.deepEqual(typedKeys(), [], '端末が空いていても打ち込まない（開いている TUI は要約を知らない）')
 
-  // 要約が終わったら、本文は端末に打たずに別プロセスで回す
+  // 要約が終わったら、本文は端末に打たずに別プロセスで回す。`/compact` だけのターンは transcript に閉じた印を書かず、
+  // しばらく「回っている」に見えるが、要約のプロセスが終わってから transcript が動いていなければ端末の側では何も始まっていない
+  turns.set('T1@r', { active: true, at: Date.now() - 100 })
   await runner.finish('T1@r')
   assert.equal(runner.started.length, 2)
   assert.match(runner.started[1]!.cmd.text, /続きを見てください/)
@@ -303,9 +305,10 @@ test('sai_send: 要約のあとの本文も、端末でターンが回り始め�
   turns.set('T1@r', { closed: true })
   contexts.set('T1@r', COMPACT_MIN_TOKENS)
   assert.equal(((await (await send({ text: '続きを見てください', compact: true })).json()) as AgentSendResponse).via, 'compact')
-  // 要約の間に、人が端末で次のターンを始めた
-  turns.set('T1@r', { active: true })
+  // 要約が終わったあとに、人が端末で次のターンを始めた（transcript が要約のあとに動いた）
+  turns.set('T1@r', { active: true, at: Date.now() + 5_000 })
   await runner.finish('T1@r')
+  await sessions()
   assert.equal(runner.started.length, 1, '本文は起こさない')
   const held = (await sessions()).queued['T1@r']
   assert.equal(held?.items.length, 1)
@@ -316,6 +319,32 @@ test('sai_send: 要約のあとの本文も、端末でターンが回り始め�
   assert.match(runner.started[1]!.cmd.text, /続きを見てください/)
   assert.deepEqual(typedKeys(), [])
   await runner.finish('T1@r')
+})
+
+test('sai_send: 画面にダイアログが出ていれば、transcript のターンが閉じていても要約の別プロセスは起こさずに待つ（#800 のレビュー）', async () => {
+  await reset()
+  tmux.screen = DIALOG
+  turns.set('T1@r', { closed: true })
+  contexts.set('T1@r', COMPACT_MIN_TOKENS)
+  const res = await send({ text: '続きを見てください', compact: true })
+  assert.equal(res.status, 202, JSON.stringify(await res.clone().json()))
+  const body = (await res.json()) as AgentSendResponse
+  assert.equal(body.via, 'queued')
+  assert.equal(body.stuck, undefined, '止めずに待つ')
+  assert.equal(runner.started.length, 0)
+  assert.deepEqual(typedKeys(), [])
+})
+
+test('sai_send: 止めた預かりの後ろに並んだメッセージにも「預かったまま止まっています」を返す（#800 のレビュー）', async () => {
+  await reset()
+  tmux.screen = TYPED
+  turns.set('T1@r', { active: false })
+  assert.equal(((await (await send({ text: '1 通目' })).json()) as AgentSendResponse).stuck, true)
+  senderTurn()
+  const second = (await (await send({ text: '2 通目' })).json()) as AgentSendResponse
+  assert.equal(second.via, 'queued')
+  assert.equal(second.stuck, true)
+  assert.equal(runner.started.length, 0)
 })
 
 test('人の画面からの返信は今までどおり: 打ちかけがあれば 409 と can_process で、別プロセスへは回さない（#800）', async () => {

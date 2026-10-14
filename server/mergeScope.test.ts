@@ -40,6 +40,7 @@ test('許可・送信・外に出る口・決まりそのものは、1 つでも
     'server/main.ts',
     'server/git/pr.ts',
     'server/digest/digest.ts',
+    'server/digest/summarizers.ts',
     'server/reply/runner.ts',
     'server/reply/codexDialogs.ts',
     'server/local/claudeLogin.ts',

@@ -167,7 +167,7 @@ OpenCode (feed/opencode/sai.js) ─┘                           │
 
 ### 一言（digest）
 
-- **一言（digest）**は `server/digest/digest.ts`（仕組み → docs/internals/digest.md、経緯 → docs/history/digest.md）。
+- **一言（digest）**は `server/digest/digest.ts`、要約の口（`claude -p` / OpenAI 互換）は `server/digest/summarizers.ts`（仕組み → docs/internals/digest.md、経緯 → docs/history/digest.md）。
   - 送り先 `SAI_DIGEST_URL` と鍵は環境変数だけ。`settings.json` にも PUT にも入れない。モデル名は `isDigestModel()` を通す（`-` 始まりは不可）。
   - セッションで切るのは `digest_off`（`true` があることが状態）。`persona: 'off'` は作らない。
   - 一言の `claude -p` には `AGENT_FEED_SKIP=1` を渡す。道具・MCP・スキル・思考は外して起こす（#740。**足すのは減らす側だけ**で権限のフラグは足さない。利用者の設定ファイルは読むまま）。

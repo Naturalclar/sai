@@ -247,7 +247,7 @@ SAI が起こした Claude のターンは、使ったトークンと費用も�
 
 - `promptState()` は `kind`（idle / typed / dialog / unknown）を返し、`typed` のときだけ 409 の body に `code: terminal_typed` と `typed` を載せる（`shared/types.ts` の `ReplyError`）。
 - 画面（`useReply` → `ReplaceConfirm`）が確認して `replace_typed: true` で送り直すと、`typeInto()` が `C-u` を送り、再度 `capture-pane` で空を確かめてから貼る。dialog / unknown は消させない。
-- 端末に打てない 409 は `can_process: true` を付け、画面に「端末を使わず送る」（`via: 'process'`）を出す。Claude は別プロセスで再開し、開いている Codex は queue へ送る。
+- 端末に打てない 409 は `can_process: true` を付け、画面に「端末を使わず送る」（`via: 'process'`）を出す。Claude は別プロセスで再開し、開いている Codex は queue へ送る。セッション同士のメッセージだけは、端末のターンの外と分かれば 409 にせずにそのまま別プロセスへ回す（#800 → `docs/internals/agents.md#端末で開いている相手へ送る800`）。
 - 入力欄は区切り線の直上の `❯` で見て、スラッシュコマンドの候補メニューは `Escape` で閉じてから `C-u`。
 
 ### 確認から送り直したら入力欄を空にする（#338）

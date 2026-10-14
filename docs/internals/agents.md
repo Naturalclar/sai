@@ -69,6 +69,14 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 受け取った側の目印は見出しそのもの（画面は触っていない）。
 - 見出しの「返答はどこへ行くか」は `REPLY_NOTE`（「このターンの最後の発言が返答として送り元の画面に出ます（送り元が sai_wait で待っていれば、そのまま受け取ります）」）。送り元が待たないこともあるので「送り元に返ります」とは言い切らない（#588）。
 
+### 端末で開いている相手へ送る（#800）
+
+- 既定は端末に打ち込む（人の画面からの返信と同じ `startTurn()`）。メッセージの道（`sai_send`・預かった送信の `drainBacklog()`・返答で起こす `wake`・tailnet の MCP・預かりから回す `drain()` の `origin` 付き）だけ、`launch()` に `terminalFallback: true` を渡す。
+- 端末に打ち込めなかった（`can_process: true` の 409。打ちかけ・ダイアログ・読めない）ときは、`typeInto()` が何も打たずに断ったあとなので、Claude なら `terminalIdle()` を見てから同じ本文で `startTurn(…, { forceProcess: true })` をもう 1 回だけ呼ぶ。打ちかけは消さない（`replaceTyped` は `false` のまま）。`claude --bg` の手当て（#798）は `-p` の経路そのままなので、そのまま効く。
+- `terminalIdle()` は、端末に打ち込んだ返信の行を待っておらず（`TerminalReplies.running()`）、transcript の最後のターンが閉じていて（`closed_at`）回っていない（`active`）ときだけ真。読めない・閉じたか分からないときは偽。偽のとき・ダイアログ中（`terminal_dialog`）は別プロセスを起こさずに `terminalTurnHold()` で預かる（`drain()` からは `retry` で返し、預かりを止めずに `BG_RETRY_MS` おきに見る）。
+- 要約してから送る（`compact`）メッセージは、端末で開いている Claude でも `messageCompactOf()` が選べる。`launch()` は端末がターンの外と分かったときだけ要約を別プロセスで挟み、本文を `StoredReply.process` 付きで預かる（`drain()` が `forceProcess: true` で回す。開いている TUI は要約を知らないので、本文を端末に打たない）。本文を回す時点でも `terminalIdle()` を見る。
+- 端末を使わずに届けたときは `ReplyResponse.past_terminal` を付け、`sai_send` の返事（`sendHow()`）がどの道で届けたか（端末に打ち込んだ・打ち込めず別プロセスで起こした・別プロセスで要約を挟む・端末でターンの途中なので預かった）を書く。Codex・OpenCode は今の線のまま（開いている Codex は queue）。
+
 ### 着手の依頼は送る時点で確かめる（#795）
 
 - `agentSendOne()`（`POST /api/agent/send`）と `/mcp` の `sai_send` は、本文が**着手の形**（`shared/compact.ts` の `startsNewWork()`。要約の判定と同じ関数）のとき、送る前に `startAskRefusal()` を通す。空きでなければ `409`（`/mcp` は `isError`）で `startRefusal(why)` の文を返し、**相手には何もしない**（`launch()` を呼ばない・預かりにも並べない・記録にも数えない）。複数の宛先（`items`）は、1 つでも当たれば 1 件も送らない（ほかの検査と同じ）。**1 つの依頼の中で、着手の依頼と別の依頼を同じ相手に重ねると `409`**（確かめは 1 件も送る前に済ませるので、重ねると先の 1 件が相手を起こしたあとに、後ろの着手の依頼が空きでない相手の預かりに並ぶ）。

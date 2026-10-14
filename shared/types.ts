@@ -1248,6 +1248,8 @@ export interface AgentSendResult {
   to_name: string
   /** その場で送れたときの回し方 */
   via?: ReplyResponse['via']
+  /** 端末で開いている相手に、端末を使わずに届けた（#800。`ReplyResponse.past_terminal`） */
+  past_terminal?: true
   /** 預かった（送り元のターンが終わってから送る） */
   held?: true
   context_tokens: number
@@ -1275,6 +1277,8 @@ export interface AgentSendResponse {
   to_name: string
   /** 相手のターンをどう回したか。`queued` なら相手は処理中で、終わってから回る。`compact` なら要約してから本文を回す（#624）。**預かったときは無い** */
   via?: ReplyResponse['via']
+  /** 端末で開いている相手に、端末を使わずに届けた（#800。`ReplyResponse.past_terminal`） */
+  past_terminal?: true
   /**
    * 1 ターンの回数（か読み直しの予算）を超えたので、**断らずに預かった**（#727）。送り元のターンが終わってから SAI が順に送る。
    * `message_id` はもう決まっている（返答はいつもどおり画面と次のターンの頭に届く。`sai_wait` では待てない）
@@ -1882,6 +1886,11 @@ export interface ReplyResponse {
   queue_id?: string
   /** 送り方についての一言（#678。開いている Codex に画像を添えたとき）。画面が入力欄の上に出す */
   note?: string
+  /**
+   * 端末で開いている相手だが、端末には打ち込まなかった（#800。メッセージだけ）。`process` = 打ち込めなかったので別プロセスで起こした、
+   * `compact` = 要約を挟むため別プロセスで回す、`queued` = 端末でターンの途中なので預かった。端末の打ちかけは残っている
+   */
+  past_terminal?: true
   session: string
   cwd: string
 }

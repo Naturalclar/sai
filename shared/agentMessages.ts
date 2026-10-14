@@ -544,9 +544,18 @@ export const SEND_COMPACT_ARG =
 export const SEND_TO_ARG =
   '送り先。セッションの id か、呼び名（表示名・worktree 名・sai_sessions に出る呼び名。完全一致で、大文字小文字と前後の空白は無視）。呼び名がちょうど 1 つに決まったときだけ送り、決まらなければ送らずに候補を返す'
 
-/** `sai_send` の返事の、相手のターンをどう回したか（#624。`via` は `ReplyResponse` のもの） */
-export function sendHow(via: string): string {
-  if (via === 'queued') return '相手は処理中なので、終わってから回ります（要約は挟みません）'
-  if (via === 'compact') return '相手は要約（/compact）してから始めます'
+/** 端末で開いている相手への届き方（#800）。`sai_send` の説明（SAI が起こしたターンと tailnet の MCP の両方）に載せる */
+export const SEND_TERMINAL_NOTE =
+  '相手が端末で開いていれば、ふだんは端末に打ち込む。打ち込めないとき（入力欄に打ちかけがある・ダイアログが出ている・画面が読めない）は断られずに、相手が端末でターンの外なら別プロセス（claude -p --resume）で起こし、ターンの途中か分からなければ預かって終わってから回す。要約を挟む着手の依頼は、端末で開いていても空いていれば別プロセスで回す。どちらでも端末の打ちかけは消さない（どの道で届いたかは返事に出る）'
+
+/**
+ * `sai_send` の返事の、相手のターンをどう回したか（#624。`via` は `ReplyResponse` のもの）。
+ * `pastTerminal` は、端末で開いている相手に端末を使わず届けたとき（#800）
+ */
+export function sendHow(via: string, pastTerminal = false): string {
+  if (via === 'queued') return pastTerminal ? '相手は端末でターンの途中なので、終わってから回ります（要約は挟みません）' : '相手は処理中なので、終わってから回ります（要約は挟みません）'
+  if (via === 'compact') return pastTerminal ? '相手は端末で開いていますが、別プロセス（claude -p）で要約（/compact）してから始めます（端末の打ちかけは残ります）' : '相手は要約（/compact）してから始めます'
+  if (via === 'terminal') return '相手の端末に打ち込みました'
+  if (via === 'process' && pastTerminal) return '相手の端末に打ち込めなかったので、別プロセス（claude -p）で相手のターンを始めました（端末の打ちかけは残ります。開いている端末にはその場では流れません）'
   return '相手のターンを始めました'
 }

@@ -275,6 +275,11 @@ test('sendHow: sai_send の返事に、相手のターンをどう回したか�
   assert.match(sendHow('compact'), /要約（\/compact）してから始めます/)
   assert.match(sendHow('queued'), /終わってから回ります/)
   assert.equal(sendHow('process'), '相手のターンを始めました')
+  assert.equal(sendHow('terminal'), '相手の端末に打ち込みました')
+  // 端末で開いている相手に、端末を使わず届けたとき（#800）
+  assert.match(sendHow('process', true), /打ち込めなかったので、別プロセス（claude -p）で相手のターンを始めました（端末の打ちかけは残ります/)
+  assert.match(sendHow('compact', true), /端末で開いていますが、別プロセス（claude -p）で要約/)
+  assert.match(sendHow('queued', true), /端末でターンの途中なので、終わってから回ります/)
 })
 
 test('resolveTarget: id・表示名・worktree 名・題名の完全一致で、ちょうど 1 つのときだけ当てる（#625）', () => {

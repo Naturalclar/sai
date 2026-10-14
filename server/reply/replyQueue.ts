@@ -23,6 +23,11 @@ export interface StoredReply extends QueuedReply {
   url: string
   /** 別のセッションから送られたメッセージなら、その message_id（#310）。起動したターンから先へ送らせない（連鎖 1 段） */
   origin?: string
+  /**
+   * 端末で開いている相手でも、端末に打ち込まず別プロセスで回す（#800）。要約（`/compact`）を別プロセスで挟んだあとの本文だけに付く
+   * （開いている TUI は要約を知らないので、本文を端末に打つと要約が無駄になる）
+   */
+  process?: true
 }
 
 interface Queue {
@@ -45,6 +50,7 @@ function storedFrom(v: unknown): StoredReply | null {
     attachments: isStrings(r.attachments) ? r.attachments : [],
     url: typeof r.url === 'string' ? r.url : '',
     ...(typeof r.origin === 'string' && r.origin ? { origin: r.origin } : {}),
+    ...(r.process === true ? { process: true as const } : {}),
   }
 }
 
@@ -89,7 +95,7 @@ export class ReplyQueueStore {
     }
   }
 
-  private addAt(id: string, text: string, attachments: readonly string[], url: string, now: Date, origin: string, first: boolean): StoredReply | null {
+  private addAt(id: string, text: string, attachments: readonly string[], url: string, now: Date, origin: string, first: boolean, process = false): StoredReply | null {
     const q = this.queues.get(id) ?? { items: [] }
     // すでに起動していた 1 件を失敗後に戻すときは、後続だけで上限まで埋まっていても本文を捨てない。
     // 同じセッションで起動中は 1 本だけなので、先頭に戻るぶんは最大でも 1 件。
@@ -101,6 +107,7 @@ export class ReplyQueueStore {
       attachments: [...attachments],
       url,
       ...(origin ? { origin } : {}),
+      ...(process ? { process: true as const } : {}),
     }
     if (first) q.items.unshift(item)
     else q.items.push(item)
@@ -109,9 +116,9 @@ export class ReplyQueueStore {
     return item
   }
 
-  /** 後ろに預ける。`QUEUE_MAX` を超えるなら預からずに null */
-  add(id: string, text: string, attachments: readonly string[], url: string, now: Date = new Date(), origin: string = ''): StoredReply | null {
-    return this.addAt(id, text, attachments, url, now, origin, false)
+  /** 後ろに預ける。`QUEUE_MAX` を超えるなら預からずに null。`process` は端末を使わず回す印（#800） */
+  add(id: string, text: string, attachments: readonly string[], url: string, now: Date = new Date(), origin: string = '', process = false): StoredReply | null {
+    return this.addAt(id, text, attachments, url, now, origin, false, process)
   }
 
   /** 起動した返信を失敗後に預かりへ戻す。あとから預けた返信を追い越させない（#798） */

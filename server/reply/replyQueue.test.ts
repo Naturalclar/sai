@@ -34,6 +34,13 @@ test('ReplyQueueStore: 古い順に預かり、起動できた先頭だけを外
   assert.deepEqual(q.snapshot(), {}, '空になったセッションは載せない')
 })
 
+test('ReplyQueueStore: 起動後に預かりへ戻す返信は、あとから来たものより前に置く（#798）', () => {
+  const q = new ReplyQueueStore(null)
+  q.add('A@r', 'あとから来た', [], URL)
+  q.addFirst('A@r', '先に起動して失敗した', [], URL)
+  assert.deepEqual(q.snapshot()['A@r']?.items.map((item) => item.text), ['先に起動して失敗した', 'あとから来た'])
+})
+
 test('ReplyQueueStore: 画面に出す形には添付の絶対パスと宛先を載せない', () => {
   const q = new ReplyQueueStore(null)
   const a = q.add('A@r', '見て', ['/feed/attachments/x/y.png'], URL, new Date('2026-09-10T07:00:00.000Z'))!
@@ -87,6 +94,9 @@ test('ReplyQueueStore: 1 セッションに QUEUE_MAX 件まで。超えたら�
   for (let i = 0; i < QUEUE_MAX; i++) assert.ok(q.add('A@r', `${i}`, [], URL))
   assert.equal(q.add('A@r', 'あふれた', [], URL), null)
   assert.equal(q.size('A@r'), QUEUE_MAX)
+  assert.ok(q.addFirst('A@r', '起動後に戻す 1 件', [], URL), '受理済みの本文は、後続が上限まで埋めても捨てない')
+  assert.equal(q.peek('A@r')?.text, '起動後に戻す 1 件')
+  assert.equal(q.size('A@r'), QUEUE_MAX + 1)
   assert.ok(q.add('B@r', '別のセッションは別に数える', [], URL))
 })
 

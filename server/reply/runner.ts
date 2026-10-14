@@ -362,7 +362,9 @@ export interface Runner {
   /** 処理中の返信を全部。API に載せて画面に伝える */
   snapshot(): ReplyingMap
   /** 起動する。プロセスが立ち上がらなければ（ENOENT など）reject。onExit はプロセスが終わったとき（答え待ちの片付けに使う） */
-  start(id: string, cmd: ReplyCommand, onExit?: () => void): Promise<void>
+  start(id: string, cmd: ReplyCommand, onExit?: (failure: ReplyFailure | null) => void | Promise<void>): Promise<void>
+  /** 非0で終わって画面用に残している失敗だけを消す。失敗を安全に引き取って再試行・預かりに戻すときに使う */
+  clearFailure?(id: string): void
   /**
    * 答え終わってもプロセスが終わらない CLI のために、**行が届いたら終わりにする**（#375）。
    * `lastTurn` はそのセッションの一番新しいターン完了の行の `ts`（**当てたいエージェントの分だけ**返す）。
@@ -583,6 +585,13 @@ export class ProcessRunner implements Runner {
     )
   }
 
+  clearFailure(id: string): void {
+    const entry = this.active.get(id)
+    if (!entry?.failed || entry.failedAt === undefined) return
+    this.active.delete(id)
+    this.persist()
+  }
+
   interrupt(id: string): boolean {
     this.pollResult(id)
     const entry = this.active.get(id)
@@ -629,7 +638,7 @@ export class ProcessRunner implements Runner {
     }
   }
 
-  async start(id: string, cmd: ReplyCommand, onExit?: () => void): Promise<void> {
+  async start(id: string, cmd: ReplyCommand, onExit?: (failure: ReplyFailure | null) => void | Promise<void>): Promise<void> {
     let fd: number | null = null
     // 子が書き始める位置。非0で終わったとき、ここから末尾を読んで理由にする（#172）
     let logOffset = 0
@@ -669,6 +678,13 @@ export class ProcessRunner implements Runner {
     this.active.set(id, entry)
     let released = false
     let watch: ReturnType<typeof setInterval> | null = null
+    const notifyExit = (failure: ReplyFailure | null): void => {
+      try {
+        void Promise.resolve(onExit?.(failure)).catch(() => {})
+      } catch {
+        // 終了後の片付けが失敗しても、子プロセスの exit ハンドラからサーバを落とさない
+      }
+    }
     /**
      * プロセスが終わった。非0（かシグナル）なら、画面が理由を出せるように少し残す。
      * 0 なら今までどおり消す（記録が増えたかは画面が行数で見る）
@@ -693,7 +709,7 @@ export class ProcessRunner implements Runner {
         // `Stop` フックが鳴らず結ぶ行が無いので、使用量も残さない（前のターンのバブルに付いてしまう）
         this.active.delete(id)
         this.persist()
-        onExit?.()
+        notifyExit(null)
         if (fd !== null) {
           try {
             closeSync(fd)
@@ -716,7 +732,7 @@ export class ProcessRunner implements Runner {
         this.active.delete(id)
       }
       this.persist()
-      onExit?.()
+      notifyExit(failure)
       if (fd !== null) {
         try {
           closeSync(fd)

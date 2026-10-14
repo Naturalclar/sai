@@ -10,7 +10,7 @@ import { ATTACHMENT_MAX_BYTES, ATTACHMENT_MAX_COUNT, ATTACHMENTS_DIR, isImageAtt
 import { isArchivedAt, mergeMeta, META_NAME_MAX } from '../shared/meta.ts'
 import { mergeProfile, PROFILE_ICON_ID, profileIconUrl } from '../shared/profile.ts'
 import { isPersonaId } from '../shared/persona.ts'
-import { canSteer, replyBlockedReason, replyFailureText } from '../shared/reply.ts'
+import { canSteer, claudeBackgroundConflict, replyBlockedReason, replyFailureText } from '../shared/reply.ts'
 import { compactPrompt, idleMsSince, messageCompacts, startsNewWork } from '../shared/compact.ts'
 import { handoffFirstText, handoffReady } from '../shared/handoff.ts'
 import { selfHost } from './host.ts'
@@ -571,6 +571,16 @@ interface LaunchOptions {
   compactFrom?: string
   /** ループの周として SAI が起こすターン（#634）。MCP に `sai_loop_next` を出す */
   loop?: boolean
+  /** `claude --bg` との競合を受けて起こし直した 1 回。もう同じ失敗で再試行しない（#798） */
+  backgroundRetried?: boolean
+}
+
+/** `claude --bg` との競合で落ちたプロセスを、重複なく再試行・預かりへ戻すための元の入力（#798）。 */
+interface BackgroundRetryInput {
+  text: string
+  attachments: string[]
+  /** 要約の前にすでに預けた元の本文。あれば新しい項目を足さない */
+  queued?: string
 }
 
 /** 起動の結果。HTTP には書かずに返すので、POST はそのまま応答にし、drain は預かりを止める理由にする */
@@ -2553,7 +2563,17 @@ export function createApp(
         const item = queue.add(id, text, attachments, o.url, new Date(), o.origin ?? '')
         if (!item) return refuse(409, `預かれるのは ${QUEUE_MAX} 件までです`)
         await appendFile(log, `--- ${new Date().toISOString()} ${id} 要約（/compact）してから送る。本文は預かりの先頭に置いた\n`).catch(() => {})
-        const out = await startTurn(id, session, raw, cwd, null, compactPrompt(o.compactFrom ?? text), [], { ...o, forceProcess: true, compact: true })
+        const out = await startTurn(
+          id,
+          session,
+          raw,
+          cwd,
+          null,
+          compactPrompt(o.compactFrom ?? text),
+          [],
+          { ...o, forceProcess: true, compact: true },
+          { text, attachments, queued: item.queue_id },
+        )
         if (out.status !== 202) {
           // 要約を起こせなければ本文も預からない（画面が入力欄に戻す）
           queue.remove(id, item.queue_id)
@@ -2599,7 +2619,7 @@ export function createApp(
       // 別のセッションから届いたメッセージで起こすターンには足さない（見出しが頭に無いと、送り元が返答を引き当てられない）。
       // `/` のスキル・コマンドと Codex の `$` も、頭に無いと CLI が展開しないので足さない（未渡しのまま次のターンへ）
       const handed = o.origin || /^[/$]/.test(text.trimStart()) ? { replies: [], ids: [] } : await pendingRepliesOf(id)
-      const out = await startTurn(id, session, raw, cwd, openTerminal, withHandedReplies(text, handed.replies), attachments, o)
+      const out = await startTurn(id, session, raw, cwd, openTerminal, withHandedReplies(text, handed.replies), attachments, o, { text, attachments })
       if (out.status === 202 && handed.ids.length > 0) {
         agents.handed(handed.ids)
         rememberHanded(id, handed.ids, Date.now())
@@ -2623,6 +2643,7 @@ export function createApp(
     text: string,
     attachments: string[],
     o: LaunchOptions,
+    retry: BackgroundRetryInput,
   ): Promise<Launched> => {
     const { replaceTyped, forceProcess } = o
     // 新しい返信を送るので、前のターンのエラー（#475）は片付ける（どの経路で送っても）
@@ -2737,12 +2758,71 @@ export function createApp(
       // プロセスが終わったら、そのセッションの答え待ちは deny で片付ける（もう誰も答えを取りに来ない）。
       // 預かっている返信があれば続けて回す（#305）
       startedBin.set(id, cmd.bin)
-      await run.start(id, cmd, () => {
+      await run.start(id, cmd, async (failure) => {
         approvals.drop(id)
-        void drain(id)
+        // `launch()` が覚えている一覧に bg を見つけられず、`-p --resume` があとから競合で落ちた場合だけ、
+        // ここで一覧を引き直す（#798）。通常の返信の前では `claude agents` を増やさず、再試行もこの 1 回だけ。
+        let recovered = false
+        if (failure && !o.backgroundRetried && session.agent === 'claude' && claudeBackgroundConflict(failure) && claudeAgents.background) {
+          // 立て直している間は「起動中」にしておく（#801 のレビュー）。runner には失敗の行が残っているので、
+          // この隙にポーリングの `drain()` が来ると預かりを「前の返信が失敗した」で止めてしまい、
+          // やり直しの起動中なら同じセッションへ 2 本目を起こす。最初の await より前に入れる
+          const mine = !launching.has(id)
+          if (mine) launching.add(id)
+          try {
+            const log = join(store.directory, 'reply.log')
+            const fresh = await claudeAgents.background(raw, true).catch(() => undefined)
+            const live = fresh && backgroundLive(fresh) ? fresh : null
+            // 一覧を引いている間に人が次の返信を起こしていたら、同じセッションへ 2 本目を起こさない。
+            // 競合で落ちた本文をその新しい返信より前へ戻し、そちらの終了後に `drain()` で回す。
+            if (run.running(id)) {
+              const existing = retry.queued && queue.peek(id)?.queue_id === retry.queued ? queue.peek(id) : undefined
+              const item = existing ?? queue.addFirst(id, retry.text, retry.attachments, o.url, new Date(), o.origin ?? '')
+              if (item) {
+                await appendFile(log, `--- ${new Date().toISOString()} ${id} bg の一覧を引く間に別の返信が始まったため、競合した本文を預かりの先頭へ戻した\n`).catch(() => {})
+                recovered = true
+              }
+            }
+            const hold = !recovered && live ? await backgroundHold(live, session) : ''
+            if (!recovered && hold) {
+              const existing = retry.queued && queue.peek(id)?.queue_id === retry.queued ? queue.peek(id) : undefined
+              const item = existing ?? queue.addFirst(id, retry.text, retry.attachments, o.url, new Date(), o.origin ?? '')
+              if (item) {
+                run.clearFailure?.(id)
+                bgRetryAt.set(id, Date.now() + (terminal.bgRetryMs ?? BG_RETRY_MS))
+                await appendFile(log, `--- ${new Date().toISOString()} ${id} 見落としていたバックグラウンドのセッションは止められないため、失敗にせず預かった: ${hold}\n`).catch(() => {})
+                recovered = true
+              }
+            } else if (!recovered) {
+              let stopped = true
+              if (live) {
+                await appendFile(log, `--- ${new Date().toISOString()} ${id} 見落としていたバックグラウンドのセッションを止めて 1 回だけやり直す（claude stop ${live.id}）\n`).catch(() => {})
+                try {
+                  await background.stop(live.id, cwd)
+                } catch (err) {
+                  stopped = false
+                  await appendFile(log, `止められなかった: ${err instanceof Error ? err.message : String(err)}\n`).catch(() => {})
+                }
+              }
+              if (stopped) {
+                run.clearFailure?.(id)
+                const again = await startTurn(id, session, raw, cwd, openTerminal, text, attachments, { ...o, backgroundRetried: true }, retry)
+                if (again.status !== 202) {
+                  const existing = retry.queued && queue.peek(id)?.queue_id === retry.queued ? queue.peek(id) : undefined
+                  const item = existing ?? queue.addFirst(id, retry.text, retry.attachments, o.url, new Date(), o.origin ?? '')
+                  if (item) queue.pause(id, `バックグラウンドのセッションとの競合後にやり直せませんでした: ${(again.body as ReplyError).error}`)
+                }
+                recovered = true
+              }
+            }
+          } finally {
+            if (mine) launching.delete(id)
+          }
+        }
+        if (!recovered) await drain(id)
         // 終わったターンが誰かへの返答なら、送り元へ渡す（#594）
-        void deliverReplies()
-        void drainBacklog()
+        await deliverReplies()
+        await drainBacklog()
       })
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code

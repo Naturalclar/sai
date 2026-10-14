@@ -326,3 +326,9 @@ test('replyFailureText: 届いたがターンがエラーで終わったもの�
   assert.equal(replyFailureText({ tail: '', turn_error: true }), 'ターンがエラーで終わりました')
   assert.equal(replyFailureText({ tail: '' }), '届いていません', '印が無ければ今までどおり')
 })
+
+test('replyFailureText: 生きている bg と競合した失敗は、終了コードや生の JSON でなく理由を出す（#798）', () => {
+  const tail = 'Error: That session is running in the background (5738db0d). Run `claude attach 5738db0d` to open it, or `claude stop 5738db0d` first to resume it here.'
+  assert.equal(replyFailureText({ code: 1, tail }), 'バックグラウンドで動いているセッションです。端末で開いているか、ターンの途中です')
+  assert.equal(replyFailureText({ code: 1, tail: 'ほかの失敗' }), '終了コード 1: ほかの失敗', 'ほかの終了コード 1 は変えない')
+})

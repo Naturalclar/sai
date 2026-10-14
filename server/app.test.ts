@@ -7,7 +7,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { IconHistoryResponse } from '../shared/types.ts'
 import { handoffFirstText, HANDOFF_PROMPT } from '../shared/handoff.ts'
-import type { ApprovalAnswer, ApprovalLogRow, ApprovalMap, CodexKept, NewSessionResponse, Replying, ReplyQueueResponse, ReplyResponse,SessionsResponse, SessionDetailResponse, SessionIconResponse, SessionMetaResponse, FeedResponse, SettingsResponse, HealthResponse, SessionSkillsResponse, SessionPermissionsResponse, SearchResponse, UsageReportResponse, UsageResponse } from '../shared/types.ts'
+import { replyFailureText } from '../shared/reply.ts'
+import type { ApprovalAnswer, ApprovalLogRow, ApprovalMap, CodexKept, NewSessionResponse, ReplyFailure, Replying, ReplyQueueResponse, ReplyResponse,SessionsResponse, SessionDetailResponse, SessionIconResponse, SessionMetaResponse, FeedResponse, SettingsResponse, HealthResponse, SessionSkillsResponse, SessionPermissionsResponse, SearchResponse, UsageReportResponse, UsageResponse } from '../shared/types.ts'
 import { DEFAULT_SETTINGS } from './meta/settings.ts'
 import { createApp, parseDays, revWith, selfUrl, sessionIdFrom, stripThinking } from './app.ts'
 import { BuildFreshness } from './local/buildFreshness.ts'
@@ -46,6 +47,7 @@ let auth: Authenticator
 class FakeRunner implements Runner {
   started: { id: string; cmd: ReplyCommand }[] = []
   busy = new Map<string, Replying>()
+  exits = new Map<string, (failure: ReplyFailure | null) => void | Promise<void>>()
   fail: Error | null = null
   running(id: string) {
     // 本物（ProcessRunner）と同じく、失敗して残っているだけの分は処理中ではない
@@ -55,9 +57,20 @@ class FakeRunner implements Runner {
   snapshot() {
     return Object.fromEntries(this.busy)
   }
-  async start(id: string, cmd: ReplyCommand) {
+  async start(id: string, cmd: ReplyCommand, onExit?: (failure: ReplyFailure | null) => void | Promise<void>) {
     if (this.fail) throw this.fail
     this.started.push({ id, cmd })
+    if (onExit) this.exits.set(id, onExit)
+  }
+  async finish(id: string, failed?: ReplyFailure) {
+    if (failed) this.busy.set(id, { since: new Date().toISOString(), text: this.started.at(-1)?.cmd.text ?? '', failed })
+    else this.busy.delete(id)
+    const onExit = this.exits.get(id)
+    this.exits.delete(id)
+    await onExit?.(failed ?? null)
+  }
+  clearFailure(id: string) {
+    if (this.busy.get(id)?.failed) this.busy.delete(id)
   }
   /** 入力の口に足した・止めた分（#386）。本物と同じく `interruptible` が付いているときだけ受ける */
   steered: { id: string; text: string }[] = []
@@ -606,12 +619,18 @@ test('thinking はセッション詳細の行には載り、フィードの行�
 const claudeAgents = {
   value: undefined as boolean | undefined,
   bg: null as ClaudeAgent | null,
+  freshBg: undefined as ClaudeAgent | null | undefined,
+  /** 引き直し（`fresh`）を返すのをこれが解けるまで待たせる（#801 のレビュー。引き直しの間に来るポーリングを見る） */
+  freshGate: null as Promise<void> | null,
   busy: () => Promise.resolve(claudeAgents.value),
   /** `background()` の呼ばれ方（#462。`fresh` を毎回付けると返信のたびに `claude agents` が起きる） */
   calls: [] as boolean[],
-  background: (sessionId: string, fresh = false) => {
+  background: async (sessionId: string, fresh = false) => {
     claudeAgents.calls.push(fresh)
-    return Promise.resolve(claudeAgents.bg?.sessionId === sessionId ? claudeAgents.bg : null)
+    if (fresh && claudeAgents.freshGate) await claudeAgents.freshGate
+    if (fresh && claudeAgents.freshBg !== undefined) claudeAgents.bg = claudeAgents.freshBg
+    const found = claudeAgents.bg
+    return found?.sessionId === sessionId ? found : null
   },
 }
 
@@ -2939,6 +2958,150 @@ test('POST reply: バックグラウンドの行が無いセッションでは c
     assert.deepEqual(claudeAgents.calls, [false, true], '覚えている分 → 引き直し')
   } finally {
     claudeAgents.bg = null
+  }
+})
+
+test('POST reply: 覚えていない bg との競合で落ちたら、一覧を引き直して止めてから 1 回だけやり直す（#798）', async () => {
+  const conflict = {
+    code: 1,
+    tail: 'Error: That session is running in the background (5738db0d). Run `claude attach 5738db0d` to open it, or `claude stop 5738db0d` first to resume it here. Add --fork-session to branch off a copy instead.',
+  }
+  runner.started.length = 0
+  runner.busy.delete('C1@r')
+  claudeBackground.stopped.length = 0
+  claudeAgents.calls.length = 0
+  claudeAgents.bg = null
+  claudeAgents.freshBg = bgAgent('working')
+  try {
+    const res = await post('C1@r', { text: '続けて', queue: true })
+    assert.equal(res.status, 202)
+    assert.equal(runner.started.length, 1)
+    assert.deepEqual(claudeAgents.calls, [false], '最初は覚えている一覧だけを見る')
+
+    await runner.finish('C1@r', conflict)
+
+    assert.deepEqual(claudeAgents.calls, [false, true], '固有の失敗を受けて初めて引き直す')
+    assert.deepEqual(claudeBackground.stopped, ['5738db0d'])
+    assert.equal(runner.started.length, 2, '止めたあと 1 回だけ起こし直す')
+    assert.equal(runner.started[1]!.cmd.text, '続けて')
+
+    await runner.finish('C1@r', conflict)
+    assert.equal(runner.started.length, 2, 'やり直したプロセスが同じ理由で落ちても 3 回目は起こさない')
+    assert.equal(
+      replyFailureText(runner.snapshot()['C1@r']!.failed!),
+      'バックグラウンドで動いているセッションです。端末で開いているか、ターンの途中です',
+    )
+  } finally {
+    claudeAgents.bg = null
+    claudeAgents.freshBg = undefined
+    runner.busy.delete('C1@r')
+    runner.exits.delete('C1@r')
+  }
+})
+
+test('POST reply: 見落としていた bg を止められなければ、失敗にせず元の本文を預かりの先頭へ戻す（#798）', async () => {
+  const conflict = { code: 1, tail: 'Error: That session is running in the background (5738db0d).' }
+  runner.started.length = 0
+  runner.busy.delete('C1@r')
+  claudeBackground.stopped.length = 0
+  claudeBackground.attachedNow = true
+  claudeAgents.bg = null
+  claudeAgents.freshBg = bgAgent('working')
+  try {
+    assert.equal((await post('C1@r', { text: '先に届ける', queue: true })).status, 202)
+    runner.busy.set('C1@r', { since: new Date().toISOString(), text: '先に届ける' })
+    assert.equal(((await (await post('C1@r', { text: 'あとから預けた', queue: true })).json()) as ReplyResponse).via, 'queued')
+
+    await runner.finish('C1@r', conflict)
+
+    assert.deepEqual(claudeBackground.stopped, [], 'attach 中の bg は止めない')
+    assert.equal(runner.snapshot()['C1@r'], undefined, '競合を失敗として残さない')
+    const queued = await queuedOf('C1@r')
+    assert.deepEqual(queued?.items.map((item) => item.text), ['先に届ける', 'あとから預けた'], '失敗した本文を後続より前へ 1 件だけ戻す')
+    assert.equal(queued?.paused ?? '', '', '人が「続けて送る」を押さなくても bg が空けば回る')
+    for (const item of queued?.items ?? []) assert.equal((await del(`/api/sessions/C1%40r/queue/${item.queue_id}`)).status, 200)
+  } finally {
+    claudeBackground.attachedNow = false
+    claudeAgents.bg = null
+    claudeAgents.freshBg = undefined
+    runner.busy.delete('C1@r')
+    runner.exits.delete('C1@r')
+  }
+})
+
+test('POST reply: 要約が見落としていた bg と競合しても、元の本文を重ねずに 1 回だけやり直す（#798）', async () => {
+  const conflict = { code: 1, tail: 'Error: That session is running in the background (5738db0d).' }
+  runner.started.length = 0
+  runner.busy.delete('C1@r')
+  claudeBackground.stopped.length = 0
+  claudeAgents.bg = null
+  claudeAgents.freshBg = bgAgent('working')
+  try {
+    const first = (await (await post('C1@r', { text: '798に着手して', compact: true })).json()) as ReplyResponse
+    assert.equal(first.via, 'compact')
+    assert.equal(runner.started.length, 1)
+    assert.match(runner.started[0]!.cmd.text, /^\/compact /)
+    runner.busy.set('C1@r', { since: new Date().toISOString(), text: runner.started[0]!.cmd.text, compact: true })
+    assert.deepEqual((await queuedOf('C1@r'))?.items.map((item) => item.text), ['798に着手して'])
+
+    await runner.finish('C1@r', conflict)
+    assert.equal(runner.started.length, 2, '要約だけを 1 回やり直す')
+    assert.match(runner.started[1]!.cmd.text, /^\/compact /)
+    runner.busy.set('C1@r', { since: new Date().toISOString(), text: runner.started[1]!.cmd.text, compact: true })
+    assert.deepEqual((await queuedOf('C1@r'))?.items.map((item) => item.text), ['798に着手して'], '元の本文は 1 件のまま')
+
+    claudeAgents.freshBg = bgAgent('stopped')
+    await runner.finish('C1@r')
+    assert.equal(runner.started.length, 3, '要約が終わったら元の本文を送る')
+    assert.equal(runner.started[2]!.cmd.text, '798に着手して')
+    assert.equal(await queuedOf('C1@r'), undefined)
+  } finally {
+    claudeAgents.bg = null
+    claudeAgents.freshBg = undefined
+    runner.busy.delete('C1@r')
+    runner.exits.delete('C1@r')
+    const queued = await queuedOf('C1@r')
+    for (const item of queued?.items ?? []) await del(`/api/sessions/C1%40r/queue/${item.queue_id}`)
+  }
+})
+
+test('POST reply: bg との競合から立て直す間にポーリングが来ても、預かりを止めず 2 本目も起こさない（#801 のレビュー）', async () => {
+  const conflict = { code: 1, tail: 'Error: That session is running in the background (5738db0d).' }
+  runner.started.length = 0
+  runner.busy.delete('C1@r')
+  claudeBackground.stopped.length = 0
+  claudeAgents.bg = null
+  claudeAgents.freshBg = bgAgent('working')
+  let open = (): void => {}
+  claudeAgents.freshGate = new Promise<void>((resolve) => (open = resolve))
+  try {
+    const first = (await (await post('C1@r', { text: '798に着手して', compact: true })).json()) as ReplyResponse
+    assert.equal(first.via, 'compact')
+    runner.busy.set('C1@r', { since: new Date().toISOString(), text: runner.started[0]!.cmd.text, compact: true })
+
+    const exited = runner.finish('C1@r', conflict)
+    // 一覧を引き直している最中のポーリング（drainAll → drain）
+    const during = await queuedOf('C1@r')
+    assert.equal(during?.paused ?? '', '', '残っている失敗の行で預かりを止めない')
+    assert.equal(runner.started.length, 1, '立て直しの最中に預かりの本文を起こさない')
+
+    open()
+    await exited
+    assert.equal(runner.started.length, 2, '要約だけを 1 回やり直す')
+    assert.match(runner.started[1]!.cmd.text, /^\/compact /)
+    runner.busy.set('C1@r', { since: new Date().toISOString(), text: runner.started[1]!.cmd.text, compact: true })
+    const after = await queuedOf('C1@r')
+    assert.deepEqual(after?.items.map((item) => item.text), ['798に着手して'])
+    assert.equal(after?.paused ?? '', '')
+  } finally {
+    open()
+    claudeAgents.freshGate = null
+    claudeAgents.bg = null
+    claudeAgents.freshBg = undefined
+    runner.busy.delete('C1@r')
+    runner.exits.delete('C1@r')
+    const queued = await queuedOf('C1@r')
+    for (const item of queued?.items ?? []) await del(`/api/sessions/C1%40r/queue/${item.queue_id}`)
   }
 })
 

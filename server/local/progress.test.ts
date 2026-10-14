@@ -244,7 +244,7 @@ const before = [tuiPrompt(-60), tuiEnd(-50)]
 
 test('terminalTail: SAI の要約だけで終わっていれば compactOnly、TUI は書いていない（#800）', () => {
   const t = terminalTail([...before, ...compactBySai(10)], T0, true)
-  assert.deepEqual(t, { tui: false, tuiClosed: false, compactOnly: true, reached: true })
+  assert.deepEqual(t, { tui: false, tuiClosed: false, tuiTool: false, compactOnly: true, reached: true })
 })
 
 test('terminalTail: 要約の間に TUI がターンを始めていれば、要約の出力が最後でも tui（起こさない側）（#800）', () => {
@@ -269,4 +269,23 @@ test('terminalTail: 人が端末で打った /compact（entrypoint が cli）は
   const t = terminalTail(byTui, T0, true)
   assert.equal(t.compactOnly, false)
   assert.equal(t.tui, true)
+})
+
+test('terminalTail: TUI が閉じたかは TUI の最後の会話の行で見る。後ろに -p の行があっても、end_turn 以外の終わり方でも閉じている（#800 のレビュー）', () => {
+  const pEnd = line({ type: 'assistant', entrypoint: 'sdk-cli', timestamp: atSec(60), message: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'SAI から' }] } })
+  // -p の間に TUI のターンが閉じ、あとから -p が閉じた
+  assert.equal(terminalTail([...before, tuiPrompt(20), tuiEnd(25), pEnd], T0, true).tuiClosed, true)
+  // 要約の途中に TUI のターンが閉じた（要約の行が最後）
+  assert.equal(terminalTail([...before, tuiPrompt(5), tuiEnd(8), ...compactBySai(10)], T0, true).tuiClosed, true)
+  const ended = (o: object) => terminalTail([...before, tuiPrompt(20), line({ entrypoint: 'cli', timestamp: atSec(30), ...o })], T0, true)
+  assert.equal(ended({ type: 'assistant', message: { stop_reason: 'stop_sequence', model: '<synthetic>', content: [{ type: 'text', text: 'API Error' }] } }).tuiClosed, true, 'API エラー')
+  assert.equal(ended({ type: 'user', message: { content: '<local-command-stdout>Set model</local-command-stdout>' } }).tuiClosed, true, 'ローカルコマンド')
+  assert.equal(ended({ type: 'user', message: { content: [{ type: 'text', text: '[Request interrupted by user]' }] } }).tuiClosed, true, 'Esc')
+  // 閉じていない: ツールを呼んだところ・ツールの結果・入力だけ
+  const tool = ended({ type: 'assistant', message: { stop_reason: 'tool_use', content: [{ type: 'tool_use' }] } })
+  assert.deepEqual([tool.tuiClosed, tool.tuiTool], [false, true])
+  assert.equal(ended({ type: 'user', message: { content: [{ type: 'tool_result', content: 'ok' }] } }).tuiClosed, false)
+  assert.equal(terminalTail([...before, tuiPrompt(20), pEnd], T0, true).tuiClosed, false)
+  // 書いている途中の assistant（stop_reason がまだ無い）
+  assert.equal(ended({ type: 'assistant', message: { stop_reason: null, content: [{ type: 'text', text: '途中' }] } }).tuiClosed, false)
 })

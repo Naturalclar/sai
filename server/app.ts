@@ -234,7 +234,7 @@ import {
 } from '../shared/agentMessages.ts'
 import type { PendingReply } from '../shared/agentMessages.ts'
 import { eventKind } from '../shared/events.ts'
-import { stepLabel } from '../shared/progress.ts'
+import { PROGRESS_IDLE_MS, PROGRESS_TOOL_MAX_MS, stepLabel } from '../shared/progress.ts'
 import { CONTEXT_WARN_TOKENS, contextRevKey } from '../shared/contextSize.ts'
 import { treeOf, Worktrees } from './git/worktrees.ts'
 import { mcpAccess, normalizeOrigin } from './mcp/access.ts'
@@ -2533,8 +2533,24 @@ export function createApp(
       // 起こした時刻と行の時刻の食い違いに備えて、少し前から見る（TUI の行を見落とすより、待つ側に倒す）
       const tail = await progress.terminalTail(session, started - 2_000)
       if (!tail) return 'unknown'
-      if (tail.tui) return tail.tuiClosed && !p.active ? 'idle' : 'turn'
+      if (tail.tui) {
+        if (tail.tuiClosed) {
+          // TUI のターンも SAI の -p も閉じた。次からは見る起点を外す（transcript が伸びて -p の始まりまで届かなくなるのを避ける）
+          processStartedAt.delete(id)
+          return 'idle'
+        }
+        // TUI のターンが閉じていない。書かないまま長く経ったら、待ち続けずに分からないにする（止めて要対応に出す）
+        const quiet = Date.now() - Date.parse(p.updated_at || '')
+        return Number.isNaN(quiet) || quiet > (tail.tuiTool ? PROGRESS_TOOL_MAX_MS : PROGRESS_IDLE_MS) ? 'unknown' : 'turn'
+      }
+      // -p の始まりまで届かず、読めた中に TUI の行も無い
+      if (!tail.reached) return 'unknown'
       if (tail.compactOnly) return 'idle'
+      // TUI は書いておらず、-p のターンが閉じた。次からは見る起点を外す
+      if (!p.active && p.closed_at) {
+        processStartedAt.delete(id)
+        return 'idle'
+      }
     }
     return p.active ? 'turn' : p.closed_at ? 'idle' : 'unknown'
   }

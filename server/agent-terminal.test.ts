@@ -69,9 +69,9 @@ const usage = { value: {} as UsageResponse, async get() { return this.value } }
 
 /**
  * 相手の transcript の偽物。`closed` = 最後のターンが閉じている、`active` = 回っている。どちらも無ければ分からない。
- * `tail` は SAI の `-p` のあとの中身（`terminalTail()`。既定は「TUI は何も書いておらず、要約だけでもない」）
+ * `tail` は SAI の `-p` のあとの中身（`terminalTail()`。既定は「TUI は何も書いておらず、要約だけでもない」）。`quietMs` は最後に書いてからの時間
  */
-const turns = new Map<string, { active?: boolean; closed?: boolean; tail?: Partial<TerminalTail> }>()
+const turns = new Map<string, { active?: boolean; closed?: boolean; tail?: Partial<TerminalTail>; quietMs?: number }>()
 const contexts = new Map<string, number>()
 const progress = {
   async read(s: Pick<SessionSummary, 'id'>): Promise<SessionProgressResponse> {
@@ -82,16 +82,15 @@ const progress = {
       active: t?.active === true,
       steps: [],
       total: 0,
-      updated_at: t ? new Date().toISOString() : '',
+      updated_at: t ? new Date(Date.now() - (t.quietMs ?? 0)).toISOString() : '',
       ...(t?.closed ? { closed_at: new Date().toISOString() } : {}),
       context_tokens: contexts.get(s.id) ?? 0,
     }
   },
   async terminalTail(s: Pick<SessionSummary, 'id'>): Promise<TerminalTail | null> {
     const t = turns.get(s.id)
-    // 本物（`ProgressReader.terminalTail()`）は、SAI の -p の始まりまで届かなければ null を返す
-    if (!t || t.tail?.reached === false) return null
-    return { tui: false, tuiClosed: false, compactOnly: false, reached: true, ...t.tail }
+    if (!t) return null
+    return { tui: false, tuiClosed: false, tuiTool: false, compactOnly: false, reached: true, ...t.tail }
   },
 }
 
@@ -375,6 +374,38 @@ test('sai_send: 止めた預かりの後ろに並んだメッセージにも「�
   assert.equal(second.via, 'queued')
   assert.equal(second.stuck, true)
   assert.equal(runner.started.length, 0)
+})
+
+test('sai_send: -p の間に TUI が書いて閉じていれば、あとから -p が閉じても空き。閉じないまま長く書かなければ止めて要対応に出す（#800 のレビュー）', async () => {
+  await reset()
+  tmux.screen = TYPED
+  turns.set('T1@r', { closed: true })
+  assert.equal(((await (await send({ text: '1 通目' })).json()) as AgentSendResponse).via, 'process')
+  await runner.finish('T1@r')
+  // TUI のターンが閉じたあと、-p が閉じた（最後の行は -p）
+  turns.set('T1@r', { closed: true, tail: { tui: true, tuiClosed: true } })
+  senderTurn()
+  assert.equal(((await (await send({ text: '2 通目' })).json()) as AgentSendResponse).via, 'process')
+  await runner.finish('T1@r')
+
+  // TUI のターンが閉じないまま（ツールでもなく）10 分を超えて何も書かれていない
+  for (const [name, tail, quietMs, stuck] of [
+    ['書いたばかり', { tui: true }, 60_000, false],
+    ['10 分を超えた', { tui: true }, 11 * 60_000, true],
+    ['ツールが回って 1 時間', { tui: true, tuiTool: true }, 60 * 60_000, false],
+  ] as const) {
+    await reset()
+    tmux.screen = TYPED
+    turns.set('T1@r', { closed: true })
+    assert.equal(((await (await send({ text: `${name}の前` })).json()) as AgentSendResponse).via, 'process', name)
+    await runner.finish('T1@r')
+    turns.set('T1@r', { active: false, tail, quietMs })
+    senderTurn()
+    const body = (await (await send({ text: name })).json()) as AgentSendResponse
+    assert.equal(body.via, 'queued', name)
+    assert.equal(body.stuck === true, stuck, name)
+    assert.equal(runner.started.length, 1, name)
+  }
 })
 
 test('人の画面からの返信は今までどおり: 打ちかけがあれば 409 と can_process で、別プロセスへは回さない（#800）', async () => {

@@ -141,6 +141,11 @@ test('/merge の再レビューの上限（#802）: スキル・docs/internals/t
   assert.match(skill, /^### 再レビューは 2 回まで（#802）$/m)
   assert.match(skill, /最初のレビュー 1 回 \+ 再レビュー 2 回まで/)
   assert.match(tooling, /再レビューは 2 回まで/)
+  // 載せ直しの数え方（#803 で人が決めた）: 衝突の無い載せ直しは読ませず数えない。衝突を直したときだけ 1 回
+  assert.match(skill, /`main` が進んだだけの載せ直し（衝突なし）は読ませない・回数に数えない/)
+  assert.match(skill, /衝突を直して載せ直したときだけ、直した所[^\n]*1 回に数える/)
+  assert.doesNotMatch(skill, /載せ直しで増えた分を読ませるのも 1 回/)
+  assert.match(tooling, /衝突の無い載せ直しは読ませず数えず/)
   assert.match(agents, /読ませ直すのは 2 回まで/)
   // 上限に当たったら止まる側（止めて人に返す一覧に入っている）
   assert.match(skill, /^5\. 再レビューの上限/m)

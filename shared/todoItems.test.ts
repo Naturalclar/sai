@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { Approval, ApprovalMap, Loop, LoopMap, ReplyingMap, SessionSummary, Wait } from './types.ts'
 import { awaitsNext, doneItems, pendingItems, TERMINAL_STUCK_TEXT, todoItems, todoKey, todoSections } from './todoItems.ts'
-import { TERMINAL_UNKNOWN_PAUSED } from './agentMessages.ts'
+import { TERMINAL_HELD_PAUSED } from './agentMessages.ts'
 
 /** このサーバが動いているマシン（#114）。行の host が違えば「別のマシン」 */
 const SELF = 'mac'
@@ -412,7 +412,7 @@ test('todoItems: 端末のターンが閉じたか分からずに止めたメッ
   const s = summary({ id: 's1@sai', waiting: '許可待ち: Bash: ls' })
   const t = summary({ id: 's2@sai' })
   const queued = {
-    's1@sai': { items: [{ queue_id: 'q1', text: 'x', since: '2026-10-14T00:00:00.000Z' }], paused: TERMINAL_UNKNOWN_PAUSED },
+    's1@sai': { items: [{ queue_id: 'q1', text: 'x', since: '2026-10-14T00:00:00.000Z' }], paused: TERMINAL_HELD_PAUSED },
     's2@sai': { items: [{ queue_id: 'q2', text: 'y', since: '2026-10-14T00:00:00.000Z' }], paused: '前の返信が失敗したので止めています' },
   }
   const items = todoItems([s, t], {}, SELF, {}, {}, {}, queued)

@@ -190,7 +190,7 @@ export async function agentTool(
           const who = `${r.to}${r.to_name ? `「${r.to_name}」` : ''}`
           if (r.error) return `- ${who}: 送れませんでした（${r.error}）`
           if (r.held) return `- ${who}: 預かりました（message_id: ${r.message_id}）`
-          return `- ${who}: 送りました（message_id: ${r.message_id}。${sendHow(r.via ?? '', r.past_terminal === true, r.stuck === true)}）`
+          return `- ${who}: 送りました（message_id: ${r.message_id}。${sendHow(r.via ?? '', r.stuck === true)}）`
         })
         const held = body.results.filter((r) => r.held).length
         return textResult(`${lines.join('\n')}\n${held > 0 ? `${HELD_NOTE} ` : ''}${wakeNote}`)
@@ -204,7 +204,7 @@ export async function agentTool(
       const who = `${body.to}${body.to_name ? `「${body.to_name}」` : ''}`
       // 1 ターンの回数を超えた分は断られずに預かられる（#727）。**送り直さない**ように、はっきり伝える
       if (body.held) return textResult(`${who}への送信を預かりました（message_id: ${body.message_id}。預かりは ${body.held_count ?? 1} 件）。${HELD_NOTE} ${wakeNote}`)
-      const how = sendHow(body.via ?? '', body.past_terminal === true, body.stuck === true)
+      const how = sendHow(body.via ?? '', body.stuck === true)
       // 読み直す量が分かっていれば、使ったぶんと予算の残りも伝える（次に送るかをエージェントが決められるように。#311）
       const read = body.context_tokens > 0 ? `${body.via === 'compact' ? `要約の前の相手の文脈は${tokensLabel(body.context_tokens)}です` : `相手は${tokensLabel(body.context_tokens)}を読み直します`}（このターンの予算の残りは${tokensLabel(Math.max(0, body.read_budget - body.read_tokens)) || ' 0'}）。` : ''
       const left = Math.max(0, body.limit - body.sent)

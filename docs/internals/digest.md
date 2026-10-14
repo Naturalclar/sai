@@ -7,7 +7,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 ## 口と設定
 
 - 本体は `server/digest/digest.ts`。入にしているとき（`settings.json` の `digest`。自分のメニューの `DigestEngineControls`）、入にしたあとに増えたターン完了の行を言い換えて `~/.agent-feed/digest.jsonl` に追記する（JSONL は触らない）。
-- 口は `digest_provider` で選ぶ: `claude`（既定。`ClaudeSummarizer`）か `openai`（`OpenAISummarizer`。`SAI_DIGEST_URL` の `/chat/completions` を `fetch`。`digest_model` 必須、鍵は `SAI_DIGEST_API_KEY`）。どちらも `Summarizer`（`summarize(prompt)`）の実装で、`summarizerFactory()` が口とモデルから組む。
+- 口は `digest_provider` で選ぶ: `claude`（既定。`ClaudeSummarizer`）か `openai`（`OpenAISummarizer`。`SAI_DIGEST_URL` の `/chat/completions` を `fetch`。`digest_model` 必須、鍵は `SAI_DIGEST_API_KEY`）。どちらも `Summarizer`（`summarize(prompt)`）の実装で、`summarizerFactory()` が口とモデルから組む。口（型・2 つのクラスと補助の関数・定数・`isTimeout()`・`summarizerFactory()`）は `server/digest/summarizers.ts` に置き（#811。PR の要約と `pnpm digest:eval` も使う）、`digest.ts` からも同じ名前で出し直している。`summarizers.ts` は `digest.ts` を import しない。
 - `openai` の要求には `REASONING_OFF`（`reasoning_effort: 'none'`）を付ける。付けたまま 400 / 422 なら（`mayRetryWithoutReasoning()`）外して 1 回だけ送り直し、**通ったときだけ**その口には付けずに送る（サーバの stderr に 1 行）。この覚えは `OpenAISummarizer` のインスタンス限りで、`configure()` が口を作り直したらもう一度確かめる。送り直しを含めて 1 件の上限は `DIGEST_TIMEOUT_MS`（`AbortSignal` は 1 つ）。それでも返る `<think>…</think>` は `stripThinking()` で落とす。
 - 入切・口・モデルは立て直さずに切り替わる（#288）: `createApp` が起動時に `settings.json` を `Digester.configure()` に渡し、`PUT /api/settings` がそのキーを変えたらもう一度渡す。
 - 切から入にしたら境目（`sinceMs`）を「いま」に進める。切ったら列を捨てる（作りかけの 1 件だけは終わらせる）。openai でモデルが空なら作らずに `SettingsResponse.digest_error` に理由を出す（`digest` = いま作っているか、`digest_on` = 入にしているか）。

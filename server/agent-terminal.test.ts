@@ -183,9 +183,13 @@ const reset = async () => {
   }
   // 止めた印も外す（空の預かりで「続けて送る」）
   await fetch(`${base}/api/sessions/T1%40r/queue/resume`, { method: 'POST', headers: { Origin: base } })
+  // 前のテストの -p（「続けて送る」で分からないまま起こした分など）の印を、端末が空いていると分かっている -p で上書きする
+  turns.set('T1@r', { closed: true, tail: { tui: true, tuiClosed: true } })
+  tmux.screen = IDLE
+  await fetch(`${base}/api/sessions/T1%40r/reply?days=30`, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: base }, body: JSON.stringify({ text: '片付け', via: 'process' }) })
+  await runner.finish('T1@r')
   runner.started.length = 0
   tmux.calls.length = 0
-  tmux.screen = IDLE
   turns.clear()
   contexts.clear()
   senderTurn()
@@ -406,6 +410,32 @@ test('sai_send: -p の間に TUI が書いて閉じていれば、あとから -
     assert.equal(body.stuck === true, stuck, name)
     assert.equal(runner.started.length, 1, name)
   }
+})
+
+test('sai_send: 端末が空いていると分からないまま起こした -p（人の「端末を使わず送る」など）のあとは、TUI が書いていなくても閉じた印だけでは空きにしない（#804 のレビュー）', async () => {
+  await reset()
+  tmux.screen = TYPED
+  // 端末のターンが閉じたか分からないときに、人が画面から「端末を使わず送る」を押した
+  turns.set('T1@r', { active: false })
+  const human = await fetch(`${base}/api/sessions/T1%40r/reply?days=30`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: base },
+    body: JSON.stringify({ text: '人から', via: 'process' }),
+  })
+  assert.equal(human.status, 202)
+  await runner.finish('T1@r')
+  // -p のあと TUI は何も書いていない（-p より前から長いツールが回っているかもしれない）
+  turns.set('T1@r', { closed: true, tail: { tui: false } })
+  senderTurn()
+  const body = (await (await send({ text: 'そのあとのメッセージ' })).json()) as AgentSendResponse
+  assert.equal(body.via, 'queued')
+  assert.equal(body.stuck, true, '分からないので止めて要対応に出す')
+  assert.equal(runner.started.length, 1, '人の 1 回だけ')
+  // TUI が書いて閉じたと分かれば空き
+  turns.set('T1@r', { closed: true, tail: { tui: true, tuiClosed: true } })
+  await fetch(`${base}/api/sessions/T1%40r/queue/resume`, { method: 'POST', headers: { Origin: base } })
+  assert.equal(runner.started.length, 2)
+  assert.deepEqual(typedKeys(), [])
 })
 
 test('人の画面からの返信は今までどおり: 打ちかけがあれば 409 と can_process で、別プロセスへは回さない（#800）', async () => {

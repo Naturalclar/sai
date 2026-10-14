@@ -133,3 +133,21 @@ test('docs/data.md の approvals.jsonl の no_rule の一覧が、コードの�
   for (const m of part.matchAll(/`([a-z_]+)`/g)) assert.ok(known.has(m[1]!), `docs/data.md の ${m[1]} はコードに無い`)
 })
 
+
+test('/merge の再レビューの上限（#802）: スキル・docs/internals/tooling.md・AGENTS.md が同じ回数を書き、ひな形の「実行しない」が残っている', () => {
+  const skill = readFileSync(join(ROOT, '.claude/skills/merge/SKILL.md'), 'utf8')
+  const tooling = readFileSync(join(ROOT, 'docs/internals/tooling.md'), 'utf8')
+  const agents = readFileSync(join(ROOT, 'AGENTS.md'), 'utf8')
+  assert.match(skill, /^### 再レビューは 2 回まで（#802）$/m)
+  assert.match(skill, /最初のレビュー 1 回 \+ 再レビュー 2 回まで/)
+  assert.match(tooling, /再レビューは 2 回まで/)
+  assert.match(agents, /読ませ直すのは 2 回まで/)
+  // 上限に当たったら止まる側（止めて人に返す一覧に入っている）
+  assert.match(skill, /^5\. 再レビューの上限/m)
+  // 最後の報告に回数を書く
+  assert.match(skill, /レビュー N 回・指摘 M 件・直し K 件/)
+  // レビューを頼む文の書き出しは残す（候補のコマンドを本物のシェルで実行しない）
+  const template = skill.slice(skill.indexOf('### レビューを頼む文のひな形'), skill.indexOf('### 再レビューは 2 回まで'))
+  assert.match(template, /本物のシェル・tmux・エージェントの CLI で実行しない/)
+  assert.match(template, /PR 全体は読み直さないでください/)
+})

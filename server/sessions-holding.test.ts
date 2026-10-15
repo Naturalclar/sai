@@ -161,13 +161,13 @@ test('sai_sessions: ブランチから出ている open な PR と CI・ブラ�
   prs.lists.set('o/repo-x', [pr(9101, 'issue-9100-stock-filter', { checks: 'failure' }), pr(9400, 'someone-else')])
   const list = await sessionsFor()
   const of = (id: string) => list.find((s) => s.id === id)?.holding
-  assert.deepEqual(of('B1@r'), { pr: { number: 9101, checks: 'failure' }, issues: [9100], free: true })
+  assert.deepEqual(of('B1@r'), { pr: { number: 9101, checks: 'failure' }, issues: [9100], why: 'pr' }, 'ブランチの PR がマージ前なら空きではない（#816）')
   assert.deepEqual(of('C1@r'), { free: true }, '番号の無いブランチ・PR の無いブランチは、空きだけ')
   assert.deepEqual(of('D1@r'), { issues: [9300], free: true }, 'どのリポジトリか分からなければ PR は引かない（ブランチ名の番号は出る）')
   assert.deepEqual(prs.asked, [], '前の結果があれば gh を待たない')
   // tailnet の口も同じ印
   const line = await mcpLine('B1@r')
-  assert.match(line, /issue-9100-stock-filter （空き） PR #9101（CI 赤） issue #9100 最後のターン: \d+ 分前 最後の記録: /)
+  assert.match(line, /issue-9100-stock-filter PR #9101（CI 赤） issue #9100 （PR がマージ前） 最後のターン: \d+ 分前 最後の記録: /)
   assert.doesNotMatch(line, /題名は出さない/)
   assert.match(await mcpLine('C1@r'), /dev-worktree-c （空き） 最後のターン: \d+ 分前 最後の記録: /)
 })
@@ -217,6 +217,8 @@ test('sai_sessions: PR をまだ 1 回も引いていないリポジトリは短
 })
 
 test('sai_sessions: 失敗した・止められた依頼（返答が来ないまま、相手がもう回っていない）は頼まれ中に数えない（#727 のレビュー）', async () => {
+  // 相手の PR はマージされた（open な PR に無い）。マージ前の PR があると着手の依頼が通らない（#816）
+  prs.lists.set('o/repo-x', [])
   runner.busy.set('A1@r', { since: 'turn-2', text: 'やって' })
   try {
     assert.equal((await agent('/api/agent/send', { method: 'POST', body: JSON.stringify({ from: 'A1@r', to: 'B1@r', text: '#9500 に着手してください。' }) })).status, 202)
@@ -255,7 +257,7 @@ test('sai_sessions: コミットしていない変更・PR になっていない
     assert.deepEqual(await holdingOfId('B1@r'), { pr: { number: 9101, checks: 'success' }, issues: [9100], why: 'dirty' }, 'PR が出ていても、未コミットの変更があれば空きではない')
     assert.match(await mcpLine('C1@r'), /dev-worktree-c （未コミットの変更） /)
     git.states.set(work, 'ahead')
-    assert.equal((await holdingOfId('B1@r'))?.free, true, 'open な PR になっているコミットは作りかけに数えない')
+    assert.deepEqual(await holdingOfId('B1@r'), { pr: { number: 9101, checks: 'success' }, issues: [9100], why: 'pr' }, 'open な PR になっているコミットは、PR がマージされるまで空きではない（#816）')
     assert.deepEqual(await holdingOfId('C1@r'), { why: 'unpushed' })
     assert.match(await mcpLine('C1@r'), /dev-worktree-c （PR 前のコミット） /)
     // マージ済みの PR の head がいまの HEAD そのものなら、残っているだけのブランチ（main がそのファイルをあとで変えていても）

@@ -266,8 +266,9 @@ export type TuiState = 'idle' | 'busy' | 'unknown'
  *   （`<local-command-stdout>`）・Esc（`[Request interrupted by user`）。ほかの形（入力・tool_result・ツールの呼び出し・要約・
  *   `max_tokens` など）は `busy`
  * - 打ったまま並んでいる入力（`queue-operation` の `enqueue` が `dequeue` / `remove` されていない）があれば `busy`
- * - TUI が起こしたバックグラウンドの作業（tool_result の `backgroundTaskId`）で、終わりの知らせ（`<task-notification>` の
- *   `<task-id>`）がまだ来ていないものがあれば `busy`（知らせで TUI が自分でターンを始める）。数えるのは `since`（TUI のプロセスの
+ * - TUI が起こしたバックグラウンドの作業（tool_result の `backgroundTaskId`、非同期のサブエージェントの `isAsync` の `agentId`）で、
+ *   終わりの知らせ（`<task-notification>` の `<task-id>`。ターンの途中に届いた知らせは `queued_command` の attachment に入る）が
+ *   まだ来ていないものがあれば `busy`（知らせで TUI が自分でターンを始める）。数えるのは `since`（TUI のプロセスの
  *   起動時刻。ミリ秒）より後の行だけ（前のプロセスの作業はプロセスと一緒に終わっている）
  * - `idle` と言えるのは、読めた範囲が `since` より前まで届いている（`since` が分からなければ `null` で、頭まで読めたときだけ）とき。
  *   届いていなければ、その前に起こしたバックグラウンドの作業が見えていないので `unknown`
@@ -292,6 +293,12 @@ export function claudeTuiState(lines: readonly string[], fromStart: boolean, sin
       continue
     }
     if (o.type === 'system' && o.entrypoint === 'cli' && o.subtype === 'turn_duration') endedAt = i
+    // ターンの途中に届いた終わりの知らせ（並んだ入力として attachment に書かれる）
+    const queuedCommand = obj(o.attachment)
+    if (o.type === 'attachment' && o.entrypoint !== 'sdk-cli' && queuedCommand?.type === 'queued_command' && queuedCommand.commandMode === 'task-notification') {
+      for (const id of taskIds(str(queuedCommand.prompt))) background.delete(id)
+      continue
+    }
     if ((o.type !== 'user' && o.type !== 'assistant') || o.isSidechain === true) continue
     if (o.entrypoint === 'sdk-cli') continue
     last = o
@@ -299,10 +306,11 @@ export function claudeTuiState(lines: readonly string[], fromStart: boolean, sin
     if (o.type !== 'user') continue
     // 時刻の読めない行は、いまのプロセスのものとして数える（空きにしない側）
     const current = since === null || Number.isNaN(ts) || ts >= since
-    const id = str(obj(o.toolUseResult)?.backgroundTaskId)
+    const result = obj(o.toolUseResult)
+    const id = str(result?.backgroundTaskId) || (result?.isAsync === true ? str(result.agentId) : '')
     if (id && current) background.add(id)
-    const done = textOf(o.message).trimStart().startsWith('<task-notification>') ? textOf(o.message).match(/<task-id>([^<\s]+)<\/task-id>/) : null
-    if (done) background.delete(done[1]!)
+    const text = textOf(o.message)
+    if (text.includes('<task-notification>')) for (const done of taskIds(text)) background.delete(done)
   }
   if (queued > 0 || background.size > 0) return 'busy'
   if (!last) return fromStart ? 'idle' : 'unknown'
@@ -322,6 +330,11 @@ export function claudeTuiState(lines: readonly string[], fromStart: boolean, sin
   if (!closed) return 'busy'
   const reached = fromStart || (since !== null && firstTs < since)
   return reached ? 'idle' : 'unknown'
+}
+
+/** 終わりの知らせの `<task-id>`（1 つの行に複数入ることがある） */
+function taskIds(text: string): string[] {
+  return [...text.matchAll(/<task-id>([^<\s]+)<\/task-id>/g)].map((m) => m[1]!)
 }
 
 /** 会話の行の本文（文字列か、text の塊を繋いだもの） */

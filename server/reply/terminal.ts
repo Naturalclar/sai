@@ -325,7 +325,8 @@ export function parseLstart(output: string): number | null {
 /** そのプロセスの起動時刻（ミリ秒。#806）。`ps` が読めなければ null。秒までしか出ないので、1 秒前に倒す（空きにしない側） */
 export const realStartedAt = (pid: number): Promise<number | null> =>
   new Promise((resolve) => {
-    const child = spawn('ps', ['-p', String(pid), '-o', 'lstart='], { stdio: ['ignore', 'pipe', 'ignore'] })
+    // lstart はロケールに従うので、読める形（英語の曜日・月）に固定する
+    const child = spawn('ps', ['-p', String(pid), '-o', 'lstart='], { stdio: ['ignore', 'pipe', 'ignore'], env: { ...process.env, LC_ALL: 'C' } })
     let out = ''
     child.stdout.on('data', (c: Buffer) => (out += c.toString()))
     child.once('error', () => resolve(null))
@@ -379,12 +380,10 @@ export async function readScreen(tmux: Tmux, ps: PsFn, terminal: Terminal): Prom
 
 /** Claude Code の処理中の印（回る記号と、動詞のあとの `…`。例: `✻ Compacting conversation… (12s)`）。終わったあとの `✻ Worked for 12s` には `…` が無い */
 const CLAUDE_WORKING = /^\s*[·✢✳✶✻✽*]\s+\S.*…/
-/** 入力欄の上の何行まで、処理中の印を探すか（印の下に手順の行・ヒントが出ることがある） */
-const WORKING_ROWS = 6
-
 /**
  * Claude Code の画面に処理中の印が出ているか（#806。端末の `/compact` の間は transcript に何も書かれないので、画面で見る）。
- * 入力欄（一番下の `❯` の行）の上の区切り線から上へ `WORKING_ROWS` 行を見る。入力欄が見つからなければ null（読めない = 空きにしない）。
+ * 入力欄（一番下の `❯` の行）の上の区切り線より上を全部見る（印の下に手順の一覧・ヒントが何行も並ぶことがある。取り違えても
+ * 空きにしない側）。入力欄が見つからなければ null（読めない = 空きにしない）。
  * 印の形は Claude Code の版で変わりうる（2.1.296 の回る記号は `· ✢ ✳ ✶ ✻ ✽ *`）ので、見つからないことを「空き」の決め手にはしない
  */
 export function claudeWorking(screen: string): boolean | null {
@@ -403,7 +402,7 @@ export function claudeWorking(screen: string): boolean | null {
   let top = input - 1
   while (top >= 0 && !SEPARATOR.test(lines[top]!)) top--
   const from = top >= 0 ? top : input
-  return lines.slice(Math.max(0, from - WORKING_ROWS), from).some((l) => CLAUDE_WORKING.test(l))
+  return lines.slice(0, from).some((l) => CLAUDE_WORKING.test(l))
 }
 
 export interface TypeOptions {

@@ -379,27 +379,18 @@ test('sai_send: 画面に処理中の印が出ていれば、TUI の行で閉じ
   await runner.finish('T1@r')
 })
 
-test('sai_send: 「続けて送る」を押しても、TUI のターンが閉じていない（SAI の -p の閉じた印があっても）なら起こさない（#806。#804 で見送った指摘）', async () => {
-  for (const [name, screen] of [
-    ['打ちかけ', TYPED],
-    ['画面が読めない', '$ ls\n$ '],
-  ] as const) {
-    await reset()
-    tmux.screen = screen
-    turns.set('T1@r', { closed: true })
-    tui.set('T1@r', 'busy')
-    assert.equal(((await (await send({ text: `${name}の相手へ` })).json()) as AgentSendResponse).stuck, true, name)
-    assert.equal((await resume()).status, 200, name)
-    assert.equal(runner.started.length, 0, `${name}: 押しても起こさない`)
-    assert.deepEqual(typedKeys(), [], name)
-    await sessions()
-    assert.equal((await sessions()).queued['T1@r']?.paused, TERMINAL_HELD_PAUSED, name)
-    // TUI のターンが閉じてから押せば回る
-    tui.set('T1@r', 'idle')
-    assert.equal((await resume()).status, 200, name)
-    assert.equal(runner.started.length, 1, name)
-    await runner.finish('T1@r')
-  }
+test('sai_send: 「続けて送る」は、TUI の行で閉じていると言えない（知らせの来ない作業・turn_duration の無いターン）だけでは止めない。自動では回さない（#815 のレビュー）', async () => {
+  await reset()
+  tmux.screen = TYPED
+  turns.set('T1@r', { closed: true })
+  tui.set('T1@r', 'busy')
+  assert.equal(((await (await send({ text: '止まる相手へ' })).json()) as AgentSendResponse).stuck, true, '自動では回さない')
+  assert.equal(runner.started.length, 0)
+  // 押した人に任せる（画面に処理中の印・ダイアログ・transcript の active が無ければ回す）
+  assert.equal((await resume()).status, 200)
+  assert.equal(runner.started.length, 1, '押した 1 回は回す')
+  assert.deepEqual(typedKeys(), [])
+  await runner.finish('T1@r')
 })
 
 test('sai_send: 端末で開いていても、ターンの外と言えれば要約を別プロセスで挟み、本文も端末に打たず別プロセスで回す（#806）', async () => {

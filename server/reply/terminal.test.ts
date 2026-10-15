@@ -407,8 +407,8 @@ test('claudeWorking: 入力欄の上に処理中の印（回る記号と …）�
   // 終わったあとの行（… が無い）・返答の本文は印ではない
   assert.equal(claudeWorking(above('✻ Worked for 12s')), false)
   assert.equal(claudeWorking(above('⏺ 済みました…')), false)
-  // 入力欄より上の離れた所の印は見ない（スクロールの上の方に残った行）
-  assert.equal(claudeWorking(above(['✻ Thinking… (3s)', 'a', 'b', 'c', 'd', 'e', 'f', 'g'].join('\n'))), false)
+  // 印の下に手順の一覧が何行も並んでも見る（#815 のレビュー）
+  assert.equal(claudeWorking(above(['✻ Compacting conversation… (12s)', ...Array.from({ length: 9 }, (_, n) => `  ⎿  ☐ 手順 ${n}`)].join('\n'))), true)
   // 入力欄が見えない・ダイアログの選択肢だけ
   assert.equal(claudeWorking('$ ls\n$ '), null)
   assert.equal(claudeWorking('  ❯ 1. Yes\n    2. No'), null)

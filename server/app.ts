@@ -2512,9 +2512,9 @@ export function createApp(
   const startedAt = terminal.startedAt ?? realStartedAt
   /**
    * 端末で開いている Claude のターンが回っているか（#800）。人が「続けて送る」を押した 1 回で別プロセスを起こしてよいかにだけ使う。
-   * 端末に打ち込んだ返信の行を待っている・transcript でターンが回っている（`active`）・TUI の最後の行が閉じていない（`tuiState()` の `busy`。
-   * SAI の `-p` の閉じた印で TUI のターンを見落とさない。#806）・画面に処理中の印（`claudeWorking()`）は `turn`、画面にダイアログが出ていれば `dialog`（`readScreen()` → `promptState()`。
-   * 打ち込まずに読むだけ）。ほかは `other`（閉じた・分からない。押した人に任せる）。画面が読めなくても transcript は見る（#804 で見送った指摘）
+   * 端末に打ち込んだ返信の行を待っている・transcript でターンが回っている（`active`）・画面に処理中の印（`claudeWorking()`。#806）は `turn`、画面にダイアログが出ていれば `dialog`（`readScreen()` → `promptState()`。
+   * 打ち込まずに読むだけ）。ほかは `other`（閉じた・分からない。押した人に任せる）。画面が読めなくても transcript は見る。
+   * `tuiState()` は見ない（知らせの来ない作業・`turn_duration` の無いターンで `busy` に寄り、人が押しても進まなくなる。#815 のレビュー）
    */
   const terminalTurn = async (id: string, session: SessionSummary, term: Awaited<ReturnType<typeof terminalOf>>): Promise<'turn' | 'dialog' | 'other'> => {
     if (typed.running(id)) return 'turn'
@@ -2528,8 +2528,7 @@ export function createApp(
         // ペインが消えた・画面が読めない。どちらも下の transcript で見る
       }
     }
-    if ((await progress.read(session)).active) return 'turn'
-    return (await progress.tuiState(session, term ? await startedAt(term.pid) : null)) === 'busy' ? 'turn' : 'other'
+    return (await progress.read(session)).active ? 'turn' : 'other'
   }
   /**
    * 端末のターンの外と確かに言えるか（#806）。次が全部そろったときだけ。言えなければ別プロセスは自動では起こさない

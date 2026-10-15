@@ -15,8 +15,9 @@ export const COMPACT_MIN_TOKENS = 150_000
 export const CACHE_COLD_MS = 50 * 60_000
 
 /**
- * キャッシュが切れている見込みで、文脈がこれ以上なら、本文が着手の形でなくても「要約してから送る」を既定にする（#761）。
- * **仮の値**（見出しの警告 `CONTEXT_WARN_TOKENS` と同じ区切り）。変えるならここ
+ * キャッシュが切れている見込みで、文脈がこれ以上なら「要約してから送る」を**選べるようにする**（#761。見出しの警告
+ * `CONTEXT_WARN_TOKENS` と同じ区切り）。**自動の判定（既定）には使わない**: 要約を既定にするのは着手の依頼だけで、
+ * 「マージして」・質問・待ちの結果のような短い依頼は、間があいてこれを超えていてもそのまま送る（2026-10-15 に人が決めた）
  */
 export const COLD_COMPACT_TOKENS = 400_000
 
@@ -128,15 +129,16 @@ export function canCompact(input: Pick<SendModeInput, 'agent' | 'contextTokens' 
 
 /**
  * 間があいて大きいか（#761）: キャッシュが切れている見込みで、文脈が `COLD_COMPACT_TOKENS` 以上。
- * 短い返信でも文脈をほぼ全部書き直すので、要約できる相手なら要約が既定になる
+ * 短い返信でも文脈をほぼ全部書き直すので、要約できる相手なら要約を**選べる**ようにする（既定にはしない）
  */
 export function coldAndLarge(input: Pick<SendModeInput, 'contextTokens' | 'idleMs'>): boolean {
   return cacheCold(input.idleMs) && input.contextTokens >= COLD_COMPACT_TOKENS
 }
 
 /**
- * 既定の送り方と、出す選択肢。**着手の形か、間があいて大きい（`coldAndLarge()`。#761）ときに、要約できるなら要約が既定**、
- * それ以外はそのまま。どちらでもなくても `warnTokens`（#441 の警告の区切り）を超えていれば要約を横に出す（既定はそのまま）。
+ * 既定の送り方と、出す選択肢。**着手の形で、要約できるときだけ要約が既定**、それ以外はそのまま。
+ * 間があいて大きい（`coldAndLarge()`。#761）か `warnTokens`（#441 の警告の区切り）を超えていれば、要約を横に出す（既定はそのまま。
+ * 短い依頼に要約を挟むと、要約そのものが大きい文脈を読んで書くので、1 行の仕事のために 2 回払うことになる）。
  * 新しいセッションは既定にしない（Claude のときだけ出す。まっさらが要るときに人が選ぶ）。
  * **画面からの送信・`sai_send`・待ちで起こすとき（#732）の 3 つが、この 1 つを見る**
  */
@@ -150,12 +152,13 @@ export function sendModes(input: SendModeInput, warnTokens: number): { mode: Sen
   if (claude && (offerCompact || work)) choices.push('new')
   // 分岐（#405 / #398）は既定にしない。Codex・OpenCode で分岐できるときに、そのままの横に出すだけ
   if ((input.agent === 'codex' || input.agent === 'opencode') && input.forkable && !input.terminal) choices.push('fork')
-  return { mode: offerCompact && (work || cold) ? 'compact' : 'plain', choices: choices.length > 1 ? choices : [] }
+  return { mode: offerCompact && work ? 'compact' : 'plain', choices: choices.length > 1 ? choices : [] }
 }
 
 /**
  * 別のセッションからのメッセージ（`sai_send`。#624）・待ちで起こすターン（#732）を、要約してから始めるか。
- * **画面からの送信と同じ判定**（`sendModes()`）で、着手の形の本文か、間があいて大きい相手（#761）で、要約できるときだけ。
+ * **画面からの送信と同じ判定**（`sendModes()`）で、着手の形の本文で、要約できるときだけ（間があいて大きい相手でも、着手でなければそのまま。#761）。
+ * 待ちで起こすターンの本文（待ちの結果）は着手の形にならないので、待ちでは要約しない。
  * `input.text` は**送り元が書いた文そのもの**（見出しを付ける前）を渡す。
  * 送る側の指定（`asked`）があれば指定が勝つが、要約できない相手（端末で開いている・Claude でない・文脈が小さい）は指定しても要約しない
  */
@@ -171,7 +174,7 @@ export const COMPACT_HEAD_CHARS = 200
 /**
  * `/compact` に添える指示（サーバが 1 か所で持つ）。
  * - **着手の形**（`startsNewWork()`）: 次に取りかかることは本文の 1 行目から。前の作業の細部は捨てさせる（新しい作業に要らない）
- * - **着手の形でない本文**（質問・「マージして」・待ちの結果。#761 で、間があいて大きい相手にはこれも要約が既定になった）:
+ * - **着手の形でない本文**（質問・「マージして」など。既定では要約しないので、人が「要約してから送る」を選んだ・`sai_send` に `compact: true` が付いたときだけ）:
  *   このあと届くのはいまの作業の続きなので、**直近の作業で変えた箇所・決めたこと・分かったことは残させる**
  *   （着手の指示のまま当てると、「どこをどう変えたか」と聞く前に、答えに要る細部を捨てさせてしまう）
  */

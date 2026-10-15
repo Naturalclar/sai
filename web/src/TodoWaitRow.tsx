@@ -45,7 +45,7 @@ export function TodoWaitRow({ item, wait, now }: Props) {
           <span className="sub">起きたら: {wait.then}</span>
         </div>
         <span className="wait-actions">
-          <button type="button" className="primary" disabled={busy} onClick={wake} title="結果を渡して、いまこのセッションを起こす（キャッシュが切れているので、文脈を読み直す。大きければ要約してから）">
+          <button type="button" className="primary" disabled={busy} onClick={wake} title="結果を渡して、いまこのセッションを起こす（キャッシュが切れているので、文脈をそのまま読み直す。要約は挟まない）">
             いま起こす
           </button>
           <button type="button" disabled={busy} onClick={stop} title="この待ちをやめる（起こさない）">

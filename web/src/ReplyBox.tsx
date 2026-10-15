@@ -96,7 +96,7 @@ interface Props {
   sendMode?: { agent: string; contextTokens: number; terminal: boolean; forkable?: boolean }
   /**
    * 送る前に見せる大きさと間（#761）。最後のターン完了の時刻（`SessionSummary.last_turn_ts`）と、分かっていれば読み直す量。
-   * 間は `now` から数えるので、`now` を渡していないと出ない。**送り方の既定（間があいて大きければ要約）にも同じ間を使う**
+   * 間は `now` から数えるので、`now` を渡していないと出ない。**要約を選べるか（間があいて大きければ選べる。既定は着手の形のときだけ要約）にも同じ間を使う**
    */
   warmth?: { agent: string; lastTurnAt: string | undefined; contextTokens?: number }
   /** 本文が空でないかが変わったら知らせる。FeedView は入力中に既定の返信先を動かさないために使う */

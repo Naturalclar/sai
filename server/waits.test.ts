@@ -647,7 +647,7 @@ test('待ち始めてから決めた時間のうちに終わった待ちは自�
   assert.equal((await act('W13', redone.id, 'stop')).status, 200)
 })
 
-test('自動では起こさない待ちは、間があいているので、読み直す量が大きければ要約してから起こす（#761）。本文は預かりの先頭に置かれる。押されないまま長く経ったら見に行くのをやめる', async () => {
+test('自動では起こさない待ちは、間があいて読み直す量が大きくても、要約せずに本文で起こす（待ちは短い依頼。#761、2026-10-15）。押されないまま長く経ったら見に行くのをやめる', async () => {
   await turnEndedNow('W14')
   const w = await held('W14', 610)
   advance(WAIT_AUTO_WAKE_MS)
@@ -656,9 +656,11 @@ test('自動では起こさない待ちは、間があいているので、読�
   contexts.set(eid('W14'), COLD_COMPACT_TOKENS)
   try {
     assert.equal((await act('W14', w.id, 'wake')).status, 200)
-    assert.ok(runner.sent(eid('W14')).at(-1)!.cmd.text.startsWith('/compact'), '先に要約を回す')
+    const sent = runner.sent(eid('W14'))
+    assert.equal(sent.filter((s) => s.cmd.text.startsWith('/compact')).length, 0, '要約は挟まない')
+    assert.ok(sent.at(-1)!.cmd.text.startsWith(WAIT_MARK), '本文のターンで起こす')
     const list = (await (await fetch(`${base}/api/sessions`)).json()) as SessionsResponse
-    assert.ok(list.queued[eid('W14')]!.items[0]!.text.startsWith(WAIT_MARK), '本文は預かりの先頭')
+    assert.equal(list.queued[eid('W14')]?.items.length ?? 0, 0, '預かりには残らない')
   } finally {
     contexts.delete(eid('W14'))
     runner.finish(eid('W14'))

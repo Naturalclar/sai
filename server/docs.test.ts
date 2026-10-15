@@ -166,3 +166,9 @@ test('/merge の再レビューの上限（#802）: スキル・docs/internals/t
   assert.match(template, /本物のシェル・tmux・エージェントの CLI で実行しない/)
   assert.match(template, /PR 全体は読み直さないでください/)
 })
+
+test('待ちで起こすときは要約を挟まない（#761、2026-10-15）: 画面の「いま起こす」の説明と docs/screen.md に「大きければ要約してから」を残さない', () => {
+  const files = ['web/src/WaitBar.tsx', 'web/src/TodoWaitRow.tsx', 'docs/screen.md']
+  for (const f of files) assert.doesNotMatch(readFileSync(join(ROOT, f), 'utf8'), /大きければ要約してから/, f)
+  for (const f of ['web/src/WaitBar.tsx', 'web/src/TodoWaitRow.tsx']) assert.match(readFileSync(join(ROOT, f), 'utf8'), /要約は挟まない/, f)
+})

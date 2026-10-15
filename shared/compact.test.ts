@@ -112,14 +112,16 @@ test('idleMsSince / cacheCold: 間が分からなければ切れていない側�
   assert.equal(cacheCold(CACHE_COLD_MS + 1), true)
 })
 
-test('sendModes: 間があいて大きい Claude のセッションは、着手の形でなくても要約が既定。人は「そのまま」を選べる（#761）', () => {
+test('sendModes: 間があいて大きい Claude のセッションでも、着手の形でない短い依頼はそのまま送るのが既定。要約は選べる（#761、2026-10-15）', () => {
   const cold = { ...claude, text: 'マージして', contextTokens: COLD_COMPACT_TOKENS, idleMs: COLD }
-  assert.deepEqual(sendModes(cold, CONTEXT_WARN_TOKENS), { mode: 'compact', choices: ['compact', 'plain', 'new'] })
-  assert.equal(sendModes({ ...cold, idleMs: CACHE_COLD_MS }, CONTEXT_WARN_TOKENS).mode, 'plain', '温かければそのまま（選べるのは今までどおり）')
-  assert.equal(sendModes({ ...cold, contextTokens: COLD_COMPACT_TOKENS - 1 }, CONTEXT_WARN_TOKENS).mode, 'plain', '小さければそのまま')
-  const { idleMs: _idle, ...unknown } = cold
-  assert.equal(sendModes(unknown, CONTEXT_WARN_TOKENS).mode, 'plain', '間が分からなければそのまま')
   assert.equal(coldAndLarge(cold), true)
+  assert.deepEqual(sendModes(cold, CONTEXT_WARN_TOKENS), { mode: 'plain', choices: ['compact', 'plain', 'new'] })
+  // 区切りを警告とずらしても、間があいて大きければ要約を選べる（既定にはしない）
+  assert.deepEqual(sendModes(cold, Number.MAX_SAFE_INTEGER), { mode: 'plain', choices: ['compact', 'plain', 'new'] })
+  assert.deepEqual(sendModes({ ...cold, idleMs: CACHE_COLD_MS }, Number.MAX_SAFE_INTEGER), { mode: 'plain', choices: [] }, '温かければ要約は出さない')
+  // 着手の依頼は今どおり（15 万から、間に依らず要約が既定）
+  assert.equal(sendModes({ ...cold, text: '#12 に着手してください。' }, CONTEXT_WARN_TOKENS).mode, 'compact')
+  assert.equal(sendModes({ ...cold, text: '#12 に着手してください。', contextTokens: COMPACT_MIN_TOKENS, idleMs: 0 }, CONTEXT_WARN_TOKENS).mode, 'compact')
 })
 
 test('sendModes: 間があいて大きくても、要約できない相手（端末で開いている・Claude 以外）には何もしない（#761）', () => {
@@ -128,10 +130,12 @@ test('sendModes: 間があいて大きくても、要約できない相手（端
   assert.deepEqual(sendModes({ agent: 'opencode', terminal: false, text: 'マージして', contextTokens: 800_000, idleMs: COLD }, CONTEXT_WARN_TOKENS), { mode: 'plain', choices: [] })
 })
 
-test('messageCompacts: 着手の形でなくても、間があいて大きい相手には要約を挟む。compact: false で外せる（#761）', () => {
+test('messageCompacts: 間があいて大きい相手でも、着手の形でない依頼には要約を挟まない。compact: true なら挟む（#761、2026-10-15）', () => {
   const cold = { agent: 'claude', terminal: false, contextTokens: 800_000, idleMs: COLD, text: 'PR をレビューしてマージしてください' }
-  assert.equal(messageCompacts(cold, CONTEXT_WARN_TOKENS), true)
-  assert.equal(messageCompacts(cold, CONTEXT_WARN_TOKENS, false), false)
+  assert.equal(messageCompacts(cold, CONTEXT_WARN_TOKENS), false)
+  assert.equal(messageCompacts(cold, CONTEXT_WARN_TOKENS, true), true, '送る側が頼めば挟む')
+  assert.equal(messageCompacts({ ...cold, text: '#12 に着手してください。' }, CONTEXT_WARN_TOKENS), true, '着手の依頼は挟む')
+  assert.equal(messageCompacts({ ...cold, text: '#12 に着手してください。' }, CONTEXT_WARN_TOKENS, false), false)
   assert.equal(messageCompacts({ ...cold, idleMs: 5 * 60_000 }, CONTEXT_WARN_TOKENS), false, '温かい相手はそのまま')
   assert.equal(messageCompacts({ ...cold, terminal: true }, CONTEXT_WARN_TOKENS), false)
   assert.equal(messageCompacts({ ...cold, agent: 'codex' }, CONTEXT_WARN_TOKENS, true), false)

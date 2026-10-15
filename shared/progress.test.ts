@@ -350,6 +350,8 @@ test('claudeTuiState: 端末の TUI の行だけを見て、その最後の行�
     ['バックグラウンドの作業の終わりの知らせが来て、そのターンも閉じた', [said(T(0), 'やって', tui), launched(1, 'b1'), ...finished(2), notified(30, 'b1'), ...finished(31)], false, since, 'idle'],
     ['ターンの途中に届いた知らせ（queued_command の attachment）', [said(T(0), 'やって', tui), launched(1, 'b1'), j({ type: 'attachment', timestamp: T(20), ...tui, attachment: { type: 'queued_command', commandMode: 'task-notification', prompt: '<task-notification>\n<task-id>b1</task-id>\n</task-notification>' } }), ...finished(30)], false, since, 'idle'],
     ['1 つの行に知らせが 2 つ', [said(T(0), 'やって', tui), launched(1, 'b1'), launched(2, 'b2'), ...finished(3), said(T(30), '<task-notification>\n<task-id>b1</task-id>\n</task-notification>\n<task-notification>\n<task-id>b2</task-id>\n</task-notification>', tui), ...finished(31)], false, since, 'idle'],
+    ['同期の fork（background が無い）は知らせを待たない', [said(T(0), 'やって', tui), j({ ...JSON.parse(result(T(1), 'x')), ...tui, toolUseResult: { status: 'forked', agentId: 'f2' } }), ...finished(2)], false, since, 'idle'],
+    ['TaskStop で止めた作業（知らせが来ない）', [said(T(0), 'やって', tui), launched(1, 'b1'), j({ ...JSON.parse(result(T(2), 'stop')), ...tui, toolUseResult: { message: 'stopped', task_id: 'b1' } }), ...finished(3)], false, since, 'idle'],
     ['前のプロセスで起こしたバックグラウンドの作業（プロセスと一緒に終わっている）', [launched(0, 'b0'), said(T(1), 'やって', tui), ...finished(2)], false, since, 'idle'],
     // 回っている
     ['-p より前から回っている TUI のターン（長いツールの間は行を書かない）', [said(T(0), 'やって', tui), call(T(1), tui), ...compacted(10)], false, since, 'busy'],
@@ -368,6 +370,11 @@ test('claudeTuiState: 端末の TUI の行だけを見て、その最後の行�
     ['API エラー（stop_sequence）で、turn_duration がまだ', [said(T(0), 'やって', tui), answered(T(1), [{ type: 'text', text: 'API Error' }], 'stop_sequence', tui)], false, since, 'busy'],
     ['バックグラウンドの作業を待って end_turn で閉じた（知らせで TUI が自分で次のターンを始める）', [said(T(0), 'やって', tui), launched(1, 'b1'), ...finished(2)], false, since, 'busy'],
     ['非同期のサブエージェント（isAsync の agentId）の知らせがまだ', [said(T(0), 'やって', tui), j({ ...JSON.parse(result(T(1), 'ag')), ...tui, toolUseResult: { isAsync: true, status: 'async_launched', agentId: 'a1' } }), ...finished(2)], false, since, 'busy'],
+    ...([
+      ['バックグラウンドで fork したスキル', { status: 'forked', background: true, agentId: 'f1' }],
+      ['起こし直したサブエージェント（SendMessage）', { resumedAgentId: 'r1', success: true }],
+      ['Monitor', { taskId: 'm1', persistent: false, timeoutMs: 60000 }],
+    ] as const).map(([name, r]): [string, string[], boolean, number | null, string] => [`${name}の知らせがまだ`, [said(T(0), 'やって', tui), j({ ...JSON.parse(result(T(1), 'x')), ...tui, toolUseResult: r }), ...finished(2)], false, since, 'busy']),
     ['別の作業の知らせは、まだの作業を終わりにしない', [said(T(0), 'やって', tui), launched(1, 'b1'), launched(2, 'b2'), ...finished(3), notified(30, 'b2'), ...finished(31)], false, since, 'busy'],
     // 分からない
     ['読めた中に TUI の行が無い（頭まで読めていない）', [said(T(0), '頼む', sdk), done(T(1), sdk)], false, since, 'unknown'],

@@ -266,7 +266,7 @@ export type TuiState = 'idle' | 'busy' | 'unknown'
  *   （`<local-command-stdout>`）・Esc（`[Request interrupted by user`）。ほかの形（入力・tool_result・ツールの呼び出し・要約・
  *   `max_tokens` など）は `busy`
  * - 打ったまま並んでいる入力（`queue-operation` の `enqueue` が `dequeue` / `remove` されていない）があれば `busy`
- * - TUI が起こしたバックグラウンドの作業（tool_result の `backgroundTaskId`、非同期のサブエージェントの `isAsync` の `agentId`）で、
+ * - TUI が起こしたバックグラウンドの作業（`backgroundId()`）で、
  *   終わりの知らせ（`<task-notification>` の `<task-id>`。ターンの途中に届いた知らせは `queued_command` の attachment に入る）が
  *   まだ来ていないものがあれば `busy`（知らせで TUI が自分でターンを始める）。数えるのは `since`（TUI のプロセスの
  *   起動時刻。ミリ秒）より後の行だけ（前のプロセスの作業はプロセスと一緒に終わっている）
@@ -307,8 +307,11 @@ export function claudeTuiState(lines: readonly string[], fromStart: boolean, sin
     // 時刻の読めない行は、いまのプロセスのものとして数える（空きにしない側）
     const current = since === null || Number.isNaN(ts) || ts >= since
     const result = obj(o.toolUseResult)
-    const id = str(result?.backgroundTaskId) || (result?.isAsync === true ? str(result.agentId) : '')
+    const id = backgroundId(result)
     if (id && current) background.add(id)
+    // 止めた作業（`TaskStop`）には知らせが来ないことが多い
+    const stopped = str(result?.task_id)
+    if (stopped && result?.backgroundTaskId === undefined) background.delete(stopped)
     const text = textOf(o.message)
     if (text.includes('<task-notification>')) for (const done of taskIds(text)) background.delete(done)
   }
@@ -330,6 +333,20 @@ export function claudeTuiState(lines: readonly string[], fromStart: boolean, sin
   if (!closed) return 'busy'
   const reached = fromStart || (since !== null && firstTs < since)
   return reached ? 'idle' : 'unknown'
+}
+
+/**
+ * tool_result（`toolUseResult`）が、あとで終わりの知らせ（`<task-notification>`）が届く作業を起こしたなら、その id（#815 のレビュー）。
+ * バックグラウンドの Bash（`backgroundTaskId`）・非同期のサブエージェント（`isAsync` の `agentId`）・バックグラウンドで fork した
+ * スキル（`background` の `agentId`）・起こし直したサブエージェント（`resumedAgentId`）・`Monitor`（`persistent` の付いた `taskId`）
+ */
+function backgroundId(result: Obj | null): string {
+  if (!result) return ''
+  if (str(result.backgroundTaskId)) return str(result.backgroundTaskId)
+  if ((result.isAsync === true || result.background === true) && str(result.agentId)) return str(result.agentId)
+  if (str(result.resumedAgentId)) return str(result.resumedAgentId)
+  if ('persistent' in result && str(result.taskId)) return str(result.taskId)
+  return ''
 }
 
 /** 終わりの知らせの `<task-id>`（1 つの行に複数入ることがある） */

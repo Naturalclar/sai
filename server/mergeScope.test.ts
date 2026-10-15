@@ -14,6 +14,9 @@ function run(args: string[], stdin = ''): Promise<{ code: number; out: string }>
     let out = ''
     child.stdout.on('data', (b: Buffer) => (out += b.toString()))
     child.on('close', (code) => resolve({ code: code ?? -1, out }))
+    // 引数が無い・形が違う呼び方ではスクリプトが stdin を読まずに終わり、書き込みが遅れると EPIPE になる（#812）。
+    // 見たいのは終了コードと出力なので、stdin への書き込みの失敗は捨てる
+    child.stdin.on('error', () => {})
     child.stdin.end(stdin)
   })
 }

@@ -72,21 +72,22 @@ export type WorkState = 'none' | 'clean' | 'dirty' | 'ahead' | 'unknown'
 /**
  * 空きでない理由（#795）。空きなら空文字。**分からないとき（`unknown`）は空きにしない**。
  * - コミットしていない変更（`dirty`）は、PR が出ていても空きにしない
- * - base に入っていないコミット（`ahead`）は、そのブランチから open な PR が出ていれば作りかけに数えない
- *   （PR の一覧が引けなかったときは PR が無いのと同じ扱い = 空きにしない）
- * - マージ済みのブランチが残っているだけ（`clean`）・git のリポジトリでない（`none`）は空き
+ * - いまのブランチから open な PR（下書きも）が出ていれば、マージされるまで空きにしない（`pr`。#816。続きのレビューの直し・マージが残っている）
+ * - base に入っていないコミット（`ahead`）で PR が無ければ `unpushed`（PR の一覧が引けなかったときも PR が無いのと同じ扱い = 空きにしない）
+ * - PR が出ていない・マージ済みのブランチが残っているだけ（`clean`）・git のリポジトリでない（`none`）は空き
  */
 export function notFreeWhy(input: { occupied: HoldingWhy | ''; asked: number; work?: WorkState | undefined; inPr: boolean }): HoldingWhy | '' {
   if (input.occupied) return input.occupied
   if (input.asked > 0) return 'asked'
   if (input.work === 'dirty') return 'dirty'
-  if (input.work === 'ahead' && !input.inPr) return 'unpushed'
+  if (input.inPr) return 'pr'
+  if (input.work === 'ahead') return 'unpushed'
   if (input.work === 'unknown') return 'unknown'
   return ''
 }
 
 /** `sai_sessions` の説明に足す文（#795。セッション同士の口と `/mcp` で同じ文） */
-export const FREE_NOTE = '「（空き）」＝処理中でも待ちでもなく、頼まれて未完のものも、コミットしていない変更・PR になっていないコミットも無い。空きでない相手には短い理由が 1 つ付く（「（端末で作業中）」「（未コミットの変更）」など）'
+export const FREE_NOTE = '「（空き）」＝処理中でも待ちでもなく、頼まれて未完のものも、コミットしていない変更・PR になっていないコミットも、マージ前の PR も無い。空きでない相手には短い理由が 1 つ付く（「（端末で作業中）」「（未コミットの変更）」など）'
 /** `sai_send` の説明に足す文（#795。同上） */
 export const START_ASK_NOTE = '**着手の依頼（1 行目が「#N に着手してください。」の形）は、送る時点で相手が空きでなければ送らずに理由を返す**（相手には何も届かない。一覧で見たときから相手の読み直す量が大きく増えていたときも同じ）。断られたら sai_sessions を引き直して空きの相手を選ぶか、人に確かめる（無理に送る引数は無い）'
 
@@ -99,6 +100,7 @@ export const WHY_LABEL: Record<HoldingWhy, string> = {
   asked: '頼まれ中',
   background: '裏で動作中',
   dirty: '未コミットの変更',
+  pr: 'PR がマージ前',
   unpushed: 'PR 前のコミット',
   unknown: '状態不明',
 }

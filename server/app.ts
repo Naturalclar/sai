@@ -265,7 +265,7 @@ import { searchRows } from './rows/search.ts'
 import { searchWords } from '../shared/search.ts'
 import { olderPrompts, parseRecent, recentRows } from '../shared/recentRows.ts'
 import { codexTurnErrorReason, queuedTurnError } from '../shared/codexTurnError.ts'
-import { alive, inspectPrompt, isDescendant, parsePs, RealTmux, realPs, TerminalBusy, TerminalGone, TerminalReplies, typeInto } from './reply/terminal.ts'
+import { alive, claudeWorking, isDescendant, parsePs, promptState, readScreen, RealTmux, realPs, realStartedAt, TerminalBusy, TerminalGone, TerminalReplies, typeInto } from './reply/terminal.ts'
 import type { DeliveryAnswer, DeliveryQuery, PsFn, Tmux } from './reply/terminal.ts'
 import type { Runner } from './reply/runner.ts'
 import { Authenticator, isLoopbackHostHeader, isServeHostHeader, tailscaleWhois } from './auth.ts'
@@ -614,6 +614,8 @@ export interface TerminalDeps {
   replies?: TerminalReplies
   /** pid の生存確認。テストでは差し替える */
   alive?: (pid: number) => boolean
+  /** プロセスの起動時刻（ミリ秒。読めなければ null。#806）。テストでは差し替える */
+  startedAt?: (pid: number) => Promise<number | null>
   /** Codex の thread writer lock。テストでは差し替える */
   codexWriterActive?: (session: string) => Promise<boolean>
   /** 開いている Codex への queue。テストでは差し替える */
@@ -2506,29 +2508,49 @@ export function createApp(
     return ''
   }
 
+  /** 端末の TUI のプロセスの起動時刻（#806。transcript をどこまで遡れば、いま生きているバックグラウンドの作業が全部見えるか） */
+  const startedAt = terminal.startedAt ?? realStartedAt
   /**
    * 端末で開いている Claude のターンが回っているか（#800）。人が「続けて送る」を押した 1 回で別プロセスを起こしてよいかにだけ使う。
    * 端末に打ち込んだ返信の行を待っている・transcript でターンが回っている（`active`）・TUI の最後の行が閉じていない（`tuiState()` の `busy`。
-   * SAI の `-p` の閉じた印で TUI のターンを見落とさない。#806）は `turn`、画面にダイアログが出ていれば `dialog`（`inspectPrompt()`。
+   * SAI の `-p` の閉じた印で TUI のターンを見落とさない。#806）・画面に処理中の印（`claudeWorking()`）は `turn`、画面にダイアログが出ていれば `dialog`（`readScreen()` → `promptState()`。
    * 打ち込まずに読むだけ）。ほかは `other`（閉じた・分からない。押した人に任せる）。画面が読めなくても transcript は見る（#804 で見送った指摘）
    */
   const terminalTurn = async (id: string, session: SessionSummary, term: Awaited<ReturnType<typeof terminalOf>>): Promise<'turn' | 'dialog' | 'other'> => {
     if (typed.running(id)) return 'turn'
     if (term) {
       try {
-        if ((await inspectPrompt(terminal.tmux, terminal.ps, term, session.agent)).kind === 'dialog') return 'dialog'
+        const screen = await readScreen(terminal.tmux, terminal.ps, term)
+        if (promptState(screen, session.agent).kind === 'dialog') return 'dialog'
+        // 画面に処理中の印が出ている（端末の `/compact` の間など。#806）
+        if (session.agent === 'claude' && claudeWorking(screen) === true) return 'turn'
       } catch {
         // ペインが消えた・画面が読めない。どちらも下の transcript で見る
       }
     }
     if ((await progress.read(session)).active) return 'turn'
-    return (await progress.tuiState(session)) === 'busy' ? 'turn' : 'other'
+    return (await progress.tuiState(session, term ? await startedAt(term.pid) : null)) === 'busy' ? 'turn' : 'other'
   }
   /**
-   * 端末のターンの外と確かに言えるか（#806）。SAI が端末に打ち込んだ返信を待っていない、かつ transcript の TUI の最後の行が閉じている
-   * （`tuiState()` の `idle`）ときだけ。言えなければ別プロセスは自動では起こさない
+   * 端末のターンの外と確かに言えるか（#806）。次が全部そろったときだけ。言えなければ別プロセスは自動では起こさない
+   * - SAI が端末に打ち込んだ返信を待っていない
+   * - 画面が読めて、入力欄が見え（空か打ちかけ）、処理中の印（`claudeWorking()`）が出ていない
+   * - transcript の TUI の最後の行が閉じていて、終わっていないバックグラウンドの作業も無い（`tuiState()` の `idle`。TUI のプロセスの起動時刻まで遡る）
    */
-  const terminalIdle = async (id: string, session: SessionSummary): Promise<boolean> => !typed.running(id) && (await progress.tuiState(session)) === 'idle'
+  const terminalIdle = async (id: string, session: SessionSummary, term: Awaited<ReturnType<typeof terminalOf>>): Promise<boolean> => {
+    if (typed.running(id) || !term || session.agent !== 'claude') return false
+    // 画面: 入力欄が読めて（空か打ちかけ）、処理中の印が出ていない（端末の `/compact` の間は transcript に何も書かれない）。
+    // 読めない・入力欄が見つからない・印の形が分からないときは空きにしない
+    let screen = ''
+    try {
+      screen = await readScreen(terminal.tmux, terminal.ps, term)
+    } catch {
+      return false
+    }
+    const prompt = promptState(screen, session.agent).kind
+    if ((prompt !== 'idle' && prompt !== 'typed') || claudeWorking(screen) !== false) return false
+    return (await progress.tuiState(session, await startedAt(term.pid))) === 'idle'
+  }
   /** 端末で開いている相手に SAI が別プロセスで要約を挟んだ、その本文の預かりの id（#806。本文も端末に打ち込まず別プロセスで回す） */
   const compactedPast = new Map<string, string>()
   /**
@@ -2631,7 +2653,7 @@ export function createApp(
     // 要約も本文も端末には打ち込まず別プロセスで回す（TUI に打ち込む経路では要約中の入力の扱いを確かめていない）。本文の前にもう一度見る
     // 端末に打ち込んだ返信がまだ回っているのにペインが見つからないときも回さない（下の経路が 409 にするのと同じ。#590 のレビュー）
     const compactable = o.compact && session.agent === 'claude' && !busy && !typed.running(id) && !bgLive && queue.size(id) === 0
-    if (compactable && (!openTerminal || (o.terminalFallback && (await terminalIdle(id, session))))) {
+    if (compactable && (!openTerminal || (o.terminalFallback && (await terminalIdle(id, session, openTerminal))))) {
       const log = join(store.directory, 'reply.log')
       launching.add(id)
       try {
@@ -2709,7 +2731,7 @@ export function createApp(
       // 端末で開いている相手に SAI が別プロセスで要約を挟んだあとの本文（#806）。端末の TUI は要約を知らないので、打ち込まず別プロセスで回す。
       // 要約の間に端末でターンが始まった・分からないなら、預かって止める（人が「続けて送る」を押せば下の今までの経路）
       if (pastTerminal && o.afterCompact && !terminalForced.has(id)) {
-        if (!(await terminalIdle(id, session))) return terminalTurnHold(id, session, raw, cwd, text, attachments, o, true, '要約のあと、端末のターンの外と言えない')
+        if (!(await terminalIdle(id, session, openTerminal))) return terminalTurnHold(id, session, raw, cwd, text, attachments, o, true, '要約のあと、端末のターンの外と言えない')
         out = await viaProcess('要約のあとの本文を、端末のターンの外なので別プロセスで回す（打ちかけは残す）')
       } else out = await startTurn(id, session, raw, cwd, openTerminal, body, attachments, o, { text, attachments })
       // 端末に打ち込めなかった（打ち込む前に断られた。何も打っていない）メッセージ（#800）。預かって止め、送り元と要対応に出す。
@@ -2718,7 +2740,7 @@ export function createApp(
       if (pastTerminal && out.status === 409 && (out.body as ReplyError).can_process) {
         const why = (out.body as ReplyError).error
         if (!terminalForced.has(id)) {
-          if ((out.body as ReplyError).code !== 'terminal_typed' || !(await terminalIdle(id, session))) return terminalTurnHold(id, session, raw, cwd, text, attachments, o, true, why)
+          if ((out.body as ReplyError).code !== 'terminal_typed' || !(await terminalIdle(id, session, openTerminal))) return terminalTurnHold(id, session, raw, cwd, text, attachments, o, true, why)
           out = await viaProcess(`端末に打ち込めない（${why}）が、端末のターンの外なので別プロセスで回す（打ちかけは残す）`)
         } else {
           const state = (out.body as ReplyError).code === 'terminal_dialog' ? 'dialog' : await terminalTurn(id, session, openTerminal)

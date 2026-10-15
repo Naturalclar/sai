@@ -313,6 +313,28 @@ export function sharedTmux(tmux: Tmux, panes: readonly string[], mark: string = 
   }
 }
 
+/** `ps -p <pid> -o lstart=` の 1 行（`Thu Oct 15 09:12:03 2026`）をミリ秒に。読めない形なら null */
+export function parseLstart(output: string): number | null {
+  const m = output.trim().match(/^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2})\s+(\d{2}):(\d{2}):(\d{2})\s+(\d{4})$/)
+  if (!m) return null
+  const month = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].indexOf(m[1]!)
+  const at = new Date(Number(m[6]), month, Number(m[2]), Number(m[3]), Number(m[4]), Number(m[5])).getTime()
+  return Number.isNaN(at) ? null : at
+}
+
+/** そのプロセスの起動時刻（ミリ秒。#806）。`ps` が読めなければ null。秒までしか出ないので、1 秒前に倒す（空きにしない側） */
+export const realStartedAt = (pid: number): Promise<number | null> =>
+  new Promise((resolve) => {
+    const child = spawn('ps', ['-p', String(pid), '-o', 'lstart='], { stdio: ['ignore', 'pipe', 'ignore'] })
+    let out = ''
+    child.stdout.on('data', (c: Buffer) => (out += c.toString()))
+    child.once('error', () => resolve(null))
+    child.once('close', () => {
+      const at = parseLstart(out)
+      resolve(at === null ? null : at - 1000)
+    })
+  })
+
 export const realPs: PsFn = () =>
   new Promise((resolve, reject) => {
     const child = spawn('ps', ['-axo', 'pid=,ppid='], { stdio: ['ignore', 'pipe', 'ignore'] })
@@ -339,6 +361,11 @@ export class TerminalGone extends Error {}
  * 能動監視でも返信直前と同じ所有者確認を通し、別のプロセスの画面を誤って表示しない。
  */
 export async function inspectPrompt(tmux: Tmux, ps: PsFn, terminal: Terminal, agent: Agent): Promise<PromptState> {
+  return promptState(await readScreen(tmux, ps, terminal), agent)
+}
+
+/** ペインが今も同じセッションのものか確かめて、画面をそのまま読む（`capture-pane`。何も打たない）。確かめ方は `inspectPrompt()` と同じ */
+export async function readScreen(tmux: Tmux, ps: PsFn, terminal: Terminal): Promise<string> {
   let panePid = 0
   try {
     panePid = Number((await tmux.run(['display-message', '-p', '-t', terminal.pane, '#{pane_pid}'])).trim())
@@ -347,7 +374,36 @@ export async function inspectPrompt(tmux: Tmux, ps: PsFn, terminal: Terminal, ag
   }
   if (!panePid) throw new TerminalGone(`ペイン ${terminal.pane} の pid が取れない`)
   if (!isDescendant(terminal.pid, panePid, parsePs(await ps()))) throw new TerminalGone(`ペイン ${terminal.pane} で動いているのは別のプロセス`)
-  return promptState(await tmux.run(['capture-pane', '-p', '-t', terminal.pane]), agent)
+  return tmux.run(['capture-pane', '-p', '-t', terminal.pane])
+}
+
+/** Claude Code の処理中の印（回る記号と、動詞のあとの `…`。例: `✻ Compacting conversation… (12s)`）。終わったあとの `✻ Worked for 12s` には `…` が無い */
+const CLAUDE_WORKING = /^\s*[·✢✳✶✻✽*]\s+\S.*…/
+/** 入力欄の上の何行まで、処理中の印を探すか（印の下に手順の行・ヒントが出ることがある） */
+const WORKING_ROWS = 6
+
+/**
+ * Claude Code の画面に処理中の印が出ているか（#806。端末の `/compact` の間は transcript に何も書かれないので、画面で見る）。
+ * 入力欄（一番下の `❯` の行）の上の区切り線から上へ `WORKING_ROWS` 行を見る。入力欄が見つからなければ null（読めない = 空きにしない）。
+ * 印の形は Claude Code の版で変わりうる（2.1.296 の回る記号は `· ✢ ✳ ✶ ✻ ✽ *`）ので、見つからないことを「空き」の決め手にはしない
+ */
+export function claudeWorking(screen: string): boolean | null {
+  const lines = screen
+    .split('\n')
+    .map((l) => l.replace(/[\s\u00a0]+$/, ''))
+    .filter((l) => l.trim())
+  let input = -1
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (/^\s*(?:│\s*)?❯/.test(lines[i]!) && !/^\s*❯\s*\d+\.\s/.test(lines[i]!)) {
+      input = i
+      break
+    }
+  }
+  if (input < 0) return null
+  let top = input - 1
+  while (top >= 0 && !SEPARATOR.test(lines[top]!)) top--
+  const from = top >= 0 ? top : input
+  return lines.slice(Math.max(0, from - WORKING_ROWS), from).some((l) => CLAUDE_WORKING.test(l))
 }
 
 export interface TypeOptions {

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { CLEAR_RECAPTURES, isDescendant, MAX_CLEAR_KEYS, parsePs, promptState, sharedTmux, TerminalBusy, TerminalGone, TerminalReplies, typeInto, TERMINAL_REPLY_TTL_MS } from './terminal.ts'
+import { CLEAR_RECAPTURES, claudeWorking, isDescendant, parseLstart, MAX_CLEAR_KEYS, parsePs, promptState, sharedTmux, TerminalBusy, TerminalGone, TerminalReplies, typeInto, TERMINAL_REPLY_TTL_MS } from './terminal.ts'
 import type { Tmux } from './terminal.ts'
 
 const CLAUDE_IDLE = [
@@ -391,4 +391,31 @@ test('sharedTmux: まとめて取れなければ 1 つずつ聞く（list-panes 
   const c = sharedTmux(spoof, ['%1', '%2'], 'MARK')
   assert.equal(await c.run(['capture-pane', '-p', '-t', '%1']), 'x\n<<MARK>>\ny\n')
   assert.equal(await c.run(['capture-pane', '-p', '-t', '%2']), 'two\n')
+})
+
+test('claudeWorking: 入力欄の上に処理中の印（回る記号と …）が出ていれば true、出ていなければ false、入力欄が見えなければ null（#806）', () => {
+  const above = (line: string) => CLAUDE_IDLE.replace('──────────────────────────────────────\n❯', `${line}\n──────────────────────────────────────\n❯`)
+  for (const glyph of ['·', '✢', '✳', '✶', '✻', '✽', '*']) {
+    assert.equal(claudeWorking(above(`${glyph} Compacting conversation… (12s)`)), true, glyph)
+  }
+  assert.equal(claudeWorking(above('✻ Thinking… (3s · ↓ 120 tokens)')), true)
+  // 印の下に手順やヒントが並ぶ
+  assert.equal(claudeWorking(above('✶ Running… (40s)\n  ⎿  Tip: 何か\n  ⎿  ☐ 手順')), true)
+  // 打ちかけがあっても見る
+  assert.equal(claudeWorking(above('✻ Compacting conversation… (1s)').replace('❯ Try "refactor <filepath>"', '❯ 打ちかけ')), true)
+  assert.equal(claudeWorking(CLAUDE_IDLE), false)
+  // 終わったあとの行（… が無い）・返答の本文は印ではない
+  assert.equal(claudeWorking(above('✻ Worked for 12s')), false)
+  assert.equal(claudeWorking(above('⏺ 済みました…')), false)
+  // 入力欄より上の離れた所の印は見ない（スクロールの上の方に残った行）
+  assert.equal(claudeWorking(above(['✻ Thinking… (3s)', 'a', 'b', 'c', 'd', 'e', 'f', 'g'].join('\n'))), false)
+  // 入力欄が見えない・ダイアログの選択肢だけ
+  assert.equal(claudeWorking('$ ls\n$ '), null)
+  assert.equal(claudeWorking('  ❯ 1. Yes\n    2. No'), null)
+})
+
+test('parseLstart: ps の lstart をミリ秒に。読めない形は null（#806）', () => {
+  assert.equal(parseLstart('Thu Oct 15 09:12:03 2026\n'), new Date(2026, 9, 15, 9, 12, 3).getTime())
+  assert.equal(parseLstart(''), null)
+  assert.equal(parseLstart('Thu Oct 15 09:12:03 2026 claude'), null)
 })

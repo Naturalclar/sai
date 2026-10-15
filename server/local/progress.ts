@@ -175,10 +175,11 @@ export class ProgressReader {
   }
 
   /**
-   * 端末で開いている Claude（TUI）のターンが閉じているか（#806。`claudeTuiState()`）。末尾から倍々に読み足し、TUI の最後の行が見えたか、
-   * 頭まで・`PROGRESS_TAIL_MAX` まで読んだところで止める（届かなければ `unknown`）。読めない・Claude でなければ `unknown`
+   * 端末で開いている Claude（TUI）のターンが閉じているか（#806。`claudeTuiState()`）。`since` は TUI のプロセスの起動時刻（ミリ秒。
+   * 分からなければ null）。末尾から倍々に読み足し、答えが出たか（`idle` は `since` より前まで届いたとき）、頭まで・`PROGRESS_TAIL_MAX`
+   * まで読んだところで止める（届かなければ `unknown`）。読めない・Claude でなければ `unknown`
    */
-  async tuiState(s: Target): Promise<TuiState> {
+  async tuiState(s: Target, since: number | null): Promise<TuiState> {
     const session = sessionOf(s)
     if (!session || s.agent !== 'claude') return 'unknown'
     const path = await this.locate(`claude:${session}`, 'claude', session, s.cwd)
@@ -187,7 +188,7 @@ export class ProgressReader {
       const { size } = await stat(path)
       for (let bytes = PROGRESS_TAIL_START; ; bytes *= 2) {
         const read = Math.min(bytes, size)
-        const state = claudeTuiState(await readTail(path, size, read), read >= size)
+        const state = claudeTuiState(await readTail(path, size, read), read >= size, since)
         if (state !== 'unknown' || read >= size || bytes >= PROGRESS_TAIL_MAX) return state
       }
     } catch {

@@ -314,7 +314,7 @@ test('claudeProgress: end_turn でも本文にツールの呼び出しがあれ�
   assert.equal(claudeProgress([...lines, result(T(30), 't1'), assistant(T(31), [{ type: 'text', text: '通りました' }], 'end_turn')]).open, false)
 })
 
-test('claudeTuiState: 端末の TUI の行だけを見て、その最後の行が閉じた形のときだけ空き（#806。#804 のレビューで出た形を全部並べる）', () => {
+test('claudeTuiState: 端末の TUI の行だけを見て、その最後の行が閉じた形のときだけ空き（#806。#804・#815 のレビューで出た形を全部並べる）', () => {
   // TUI（端末）と SAI の -p は同じ transcript に書く。entrypoint で分ける
   const tui = { entrypoint: 'cli' }
   const sdk = { entrypoint: 'sdk-cli' }
@@ -322,6 +322,13 @@ test('claudeTuiState: 端末の TUI の行だけを見て、その最後の行�
   const answered = (ts: string, blocks: unknown[], stop: string, e: object) => j({ ...JSON.parse(assistant(ts, blocks, stop)), ...e })
   const done = (ts: string, e: object) => answered(ts, [{ type: 'text', text: '済みました' }], 'end_turn', e)
   const call = (ts: string, e: object, stop = 'tool_use') => answered(ts, [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'pnpm test' } }], stop, e)
+  // TUI のターンが閉じたときの並び: end_turn → Stop フック → turn_duration
+  const hooks = (ts: string) => j({ type: 'system', subtype: 'stop_hook_summary', timestamp: ts, ...tui })
+  const ended = (ts: string) => j({ type: 'system', subtype: 'turn_duration', timestamp: ts, ...tui })
+  const finished = (s: number) => [done(T(s), tui), hooks(T(s)), ended(T(s))]
+  // バックグラウンドの作業を起こした・終わりの知らせが来た（作り物）
+  const launched = (s: number, id: string) => j({ ...JSON.parse(result(T(s), 'bg')), ...tui, toolUseResult: { stdout: '', backgroundTaskId: id } })
+  const notified = (s: number, id: string) => said(T(s), `<task-notification>\n<task-id>${id}</task-id>\n<status>completed</status>\n</task-notification>`, { ...tui, origin: { kind: 'task-notification' } })
   // SAI の claude -p "/compact …" が書く並び（作り物）
   const compacted = (s: number) => [
     j({ type: 'system', subtype: 'compact_boundary', timestamp: T(s), compactMetadata: { postTokens: 1000 } }),
@@ -329,35 +336,45 @@ test('claudeTuiState: 端末の TUI の行だけを見て、その最後の行�
     said(T(s + 1), '<command-name>/compact</command-name>\n<command-message>compact</command-message>', sdk),
     said(T(s + 1), '<local-command-stdout>Compacted </local-command-stdout>', sdk),
   ]
-  const cases: [string, string[], boolean, string][] = [
+  // TUI のプロセスは最初の行のすぐあとに起動した（最初の行より前まで読めている）
+  const since = Date.parse(T(0)) + 500
+  const cases: [string, string[], boolean, number | null, string][] = [
     // 空き
-    ['TUI のターンが閉じたあと、SAI の -p が要約した', [said(T(0), 'やって', tui), done(T(5), tui), ...compacted(10)], false, 'idle'],
-    ['-p の間に TUI のターンが閉じ、あとから -p が閉じた', [said(T(0), '頼む', sdk), said(T(1), 'やって', tui), done(T(5), tui), done(T(9), sdk)], false, 'idle'],
-    ['TUI のターンが API エラー（stop_sequence）で終わった', [said(T(0), 'やって', tui), answered(T(1), [{ type: 'text', text: 'API Error' }], 'stop_sequence', tui)], false, 'idle'],
-    ['TUI のローカルコマンド（/model）', [said(T(0), '<command-name>/model</command-name>', tui), said(T(1), '<local-command-stdout>Set model</local-command-stdout>', tui)], false, 'idle'],
-    ['TUI で Esc で止めた', [said(T(0), 'やって', tui), call(T(1), tui), said(T(2), '[Request interrupted by user for tool use]', tui)], false, 'idle'],
-    ['頭まで読めて TUI の行が無い（端末ではまだ何も送っていない）', [said(T(0), '頼む', sdk), done(T(1), sdk)], true, 'idle'],
-    ['打ったまま並んでいた入力が取り出された', [said(T(0), 'やって', tui), done(T(5), tui), j({ type: 'queue-operation', operation: 'enqueue', content: '次' }), j({ type: 'queue-operation', operation: 'remove', content: '次' })], false, 'idle'],
-    ['サブエージェントの行は見ない', [said(T(0), 'やって', tui), done(T(5), tui), j({ ...JSON.parse(call(T(6), tui)), isSidechain: true })], false, 'idle'],
+    ['TUI のターンが閉じたあと、SAI の -p が要約した', [said(T(0), 'やって', tui), ...finished(5), ...compacted(10)], false, since, 'idle'],
+    ['-p の間に TUI のターンが閉じ、あとから -p が閉じた', [said(T(0), '頼む', sdk), said(T(1), 'やって', tui), ...finished(5), done(T(9), sdk)], false, since, 'idle'],
+    ['TUI のローカルコマンド（/model）', [said(T(0), '<command-name>/model</command-name>', tui), said(T(1), '<local-command-stdout>Set model</local-command-stdout>', tui)], false, since, 'idle'],
+    ['TUI で Esc で止めた', [said(T(0), 'やって', tui), call(T(1), tui), said(T(2), '[Request interrupted by user for tool use]', tui)], false, since, 'idle'],
+    ['頭まで読めて TUI の行が無い（端末ではまだ何も送っていない）', [said(T(0), '頼む', sdk), done(T(1), sdk)], true, null, 'idle'],
+    ['打ったまま並んでいた入力が取り出された', [said(T(0), 'やって', tui), ...finished(5), j({ type: 'queue-operation', operation: 'enqueue', content: '次' }), j({ type: 'queue-operation', operation: 'remove', content: '次' })], false, since, 'idle'],
+    ['サブエージェントの行は見ない', [said(T(0), 'やって', tui), ...finished(5), j({ ...JSON.parse(call(T(6), tui)), isSidechain: true })], false, since, 'idle'],
+    ['バックグラウンドの作業の終わりの知らせが来て、そのターンも閉じた', [said(T(0), 'やって', tui), launched(1, 'b1'), ...finished(2), notified(30, 'b1'), ...finished(31)], false, since, 'idle'],
+    ['前のプロセスで起こしたバックグラウンドの作業（プロセスと一緒に終わっている）', [launched(0, 'b0'), said(T(1), 'やって', tui), ...finished(2)], false, since, 'idle'],
     // 回っている
-    ['-p より前から回っている TUI のターン（長いツールの間は行を書かない）', [said(T(0), 'やって', tui), call(T(1), tui), ...compacted(10)], false, 'busy'],
-    ['TUI が入力のあと LLM を待っている', [said(T(0), 'やって', tui), done(T(9), sdk)], false, 'busy'],
-    ['-p の間に TUI のターンが始まった', [said(T(0), '頼む', sdk), said(T(1), 'やって', tui), done(T(9), sdk)], false, 'busy'],
-    ['end_turn でもツールの呼び出しがある', [said(T(0), 'やって', tui), call(T(1), tui, 'end_turn')], false, 'busy'],
-    ['max_tokens でツールの呼び出しがある', [said(T(0), 'やって', tui), call(T(1), tui, 'max_tokens')], false, 'busy'],
-    ['max_tokens（続きを書く）', [said(T(0), 'やって', tui), answered(T(1), [{ type: 'text', text: '途中' }], 'max_tokens', tui)], false, 'busy'],
-    ['refusal（あとに続く形がある）', [said(T(0), 'やって', tui), answered(T(1), [{ type: 'text', text: '…' }], 'refusal', tui)], false, 'busy'],
-    ['ツールの結果が返ったところ', [said(T(0), 'やって', tui), call(T(1), tui), j({ ...JSON.parse(result(T(2), 't1')), ...tui })], false, 'busy'],
-    ['TUI の自動の要約のあと（ターンは続く）', [said(T(0), 'やって', tui), said(T(1), '要約', { ...tui, isCompactSummary: true })], false, 'busy'],
-    ['スキルを展開した（このあとモデルが回る）', [said(T(0), '<command-name>/merge</command-name>', tui), said(T(0), 'Base directory for this skill', { ...tui, isMeta: true })], false, 'busy'],
-    ['打ったまま並んでいる入力がある', [said(T(0), 'やって', tui), done(T(5), tui), j({ type: 'queue-operation', operation: 'enqueue', content: '次' })], false, 'busy'],
+    ['-p より前から回っている TUI のターン（長いツールの間は行を書かない）', [said(T(0), 'やって', tui), call(T(1), tui), ...compacted(10)], false, since, 'busy'],
+    ['TUI が入力のあと LLM を待っている', [said(T(0), 'やって', tui), done(T(9), sdk)], false, since, 'busy'],
+    ['-p の間に TUI のターンが始まった', [said(T(0), '頼む', sdk), said(T(1), 'やって', tui), done(T(9), sdk)], false, since, 'busy'],
+    ['end_turn でもツールの呼び出しがある', [said(T(0), 'やって', tui), call(T(1), tui, 'end_turn')], false, since, 'busy'],
+    ['max_tokens でツールの呼び出しがある', [said(T(0), 'やって', tui), call(T(1), tui, 'max_tokens')], false, since, 'busy'],
+    ['max_tokens（続きを書く）', [said(T(0), 'やって', tui), answered(T(1), [{ type: 'text', text: '途中' }], 'max_tokens', tui)], false, since, 'busy'],
+    ['refusal（あとに続く形がある）', [said(T(0), 'やって', tui), answered(T(1), [{ type: 'text', text: '…' }], 'refusal', tui)], false, since, 'busy'],
+    ['ツールの結果が返ったところ', [said(T(0), 'やって', tui), call(T(1), tui), j({ ...JSON.parse(result(T(2), 't1')), ...tui })], false, since, 'busy'],
+    ['TUI の自動の要約のあと（ターンは続く）', [said(T(0), 'やって', tui), said(T(1), '要約', { ...tui, isCompactSummary: true })], false, since, 'busy'],
+    ['スキルを展開した（このあとモデルが回る）', [said(T(0), '<command-name>/merge</command-name>', tui), said(T(0), 'Base directory for this skill', { ...tui, isMeta: true })], false, since, 'busy'],
+    ['打ったまま並んでいる入力がある', [said(T(0), 'やって', tui), ...finished(5), j({ type: 'queue-operation', operation: 'enqueue', content: '次' })], false, since, 'busy'],
+    ['end_turn のあと Stop フックが回っている（turn_duration がまだ）', [said(T(0), 'やって', tui), done(T(5), tui)], false, since, 'busy'],
+    ['Stop フックが終わってもターンを続けさせた（turn_duration がまだ）', [said(T(0), 'やって', tui), done(T(5), tui), hooks(T(6))], false, since, 'busy'],
+    ['API エラー（stop_sequence）で、turn_duration がまだ', [said(T(0), 'やって', tui), answered(T(1), [{ type: 'text', text: 'API Error' }], 'stop_sequence', tui)], false, since, 'busy'],
+    ['バックグラウンドの作業を待って end_turn で閉じた（知らせで TUI が自分で次のターンを始める）', [said(T(0), 'やって', tui), launched(1, 'b1'), ...finished(2)], false, since, 'busy'],
+    ['別の作業の知らせは、まだの作業を終わりにしない', [said(T(0), 'やって', tui), launched(1, 'b1'), launched(2, 'b2'), ...finished(3), notified(30, 'b2'), ...finished(31)], false, since, 'busy'],
     // 分からない
-    ['読めた中に TUI の行が無い（頭まで読めていない）', [said(T(0), '頼む', sdk), done(T(1), sdk)], false, 'unknown'],
-    ['最後の会話の行に entrypoint が無い（-p か TUI か分からない）', [said(T(0), 'やって', tui), done(T(5), tui), done(T(9), {})], false, 'unknown'],
+    ['読めた中に TUI の行が無い（頭まで読めていない）', [said(T(0), '頼む', sdk), done(T(1), sdk)], false, since, 'unknown'],
+    ['最後の会話の行に entrypoint が無い（-p か TUI か分からない）', [said(T(0), 'やって', tui), ...finished(5), done(T(9), {})], false, since, 'unknown'],
+    ['TUI のプロセスの起動より前まで読めていない（その前に起こした作業が見えない）', [said(T(1), 'やって', tui), ...finished(5)], false, since, 'unknown'],
+    ['TUI のプロセスの起動時刻が分からず、頭まで読めていない', [said(T(0), 'やって', tui), ...finished(5)], false, null, 'unknown'],
   ]
-  for (const [name, lines, fromStart, want] of cases) {
-    assert.equal(claudeTuiState(lines, fromStart), want, name)
+  for (const [name, lines, fromStart, from, want] of cases) {
+    assert.equal(claudeTuiState(lines, fromStart, from), want, name)
     // 書きかけの行（読めない行）は読み飛ばす
-    assert.equal(claudeTuiState([...lines, '{"type":"user","entry'], fromStart), want, `${name}（書きかけの行）`)
+    assert.equal(claudeTuiState([...lines, '{"type":"user","entry'], fromStart, from), want, `${name}（書きかけの行）`)
   }
 })

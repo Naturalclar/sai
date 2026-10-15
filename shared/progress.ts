@@ -261,40 +261,74 @@ export type TuiState = 'idle' | 'busy' | 'unknown'
  * Claude の transcript の行（古い順）から、端末の TUI のターンが閉じているか（#806）。SAI が起こす `claude -p` も同じ transcript に
  * 書くので、**TUI の行（`entrypoint` が `sdk-cli` でない）だけ**を見て、その最後の行が閉じた形のときだけ `idle` にする。
  * `-p` の行の閉じた印は TUI のターンを閉じない（その前から回っている TUI のターンは、長いツールの間は行を書かない）。
- * - 閉じた形: assistant の `end_turn` / `stop_sequence` でツールの呼び出しが無い・ローカルコマンドの出力（`<local-command-stdout>`）・
- *   Esc（`[Request interrupted by user`）。ほかの形（入力・tool_result・ツールの呼び出し・要約・`max_tokens` など）は `busy`
+ * - 閉じた形: assistant の `end_turn` / `stop_sequence` でツールの呼び出しが無く、**そのあとに TUI の `turn_duration` がある**
+ *   （Stop フックが終わってターンが閉じた印。フックの間は `end_turn` のあとでもターンが続きうる）・ローカルコマンドの出力
+ *   （`<local-command-stdout>`）・Esc（`[Request interrupted by user`）。ほかの形（入力・tool_result・ツールの呼び出し・要約・
+ *   `max_tokens` など）は `busy`
  * - 打ったまま並んでいる入力（`queue-operation` の `enqueue` が `dequeue` / `remove` されていない）があれば `busy`
+ * - TUI が起こしたバックグラウンドの作業（tool_result の `backgroundTaskId`）で、終わりの知らせ（`<task-notification>` の
+ *   `<task-id>`）がまだ来ていないものがあれば `busy`（知らせで TUI が自分でターンを始める）。数えるのは `since`（TUI のプロセスの
+ *   起動時刻。ミリ秒）より後の行だけ（前のプロセスの作業はプロセスと一緒に終わっている）
+ * - `idle` と言えるのは、読めた範囲が `since` より前まで届いている（`since` が分からなければ `null` で、頭まで読めたときだけ）とき。
+ *   届いていなければ、その前に起こしたバックグラウンドの作業が見えていないので `unknown`
  * - 最後の会話の行の `entrypoint` が無い（`-p` か TUI か分からない）・読めた中に TUI の行が無い（頭まで読めていない）なら `unknown`。
  *   頭まで読めて TUI の行が 1 つも無ければ、TUI はまだ何も送っていないので `idle`
  * - サブエージェントの行（`isSidechain`）は見ない
  */
-export function claudeTuiState(lines: readonly string[], fromStart: boolean): TuiState {
+export function claudeTuiState(lines: readonly string[], fromStart: boolean, since: number | null): TuiState {
   let last: Obj | null = null
+  let lastAt = -1
+  let endedAt = -1
   let queued = 0
-  for (const line of lines) {
+  let firstTs = Number.NaN
+  const background = new Set<string>()
+  for (const [i, line] of lines.entries()) {
     const o = parseLine(line)
     if (!o) continue
+    const ts = Date.parse(str(o.timestamp))
+    if (Number.isNaN(firstTs) && !Number.isNaN(ts)) firstTs = ts
     if (o.type === 'queue-operation') {
       queued = o.operation === 'enqueue' ? queued + 1 : Math.max(0, queued - 1)
       continue
     }
+    if (o.type === 'system' && o.entrypoint === 'cli' && o.subtype === 'turn_duration') endedAt = i
     if ((o.type !== 'user' && o.type !== 'assistant') || o.isSidechain === true) continue
-    if (o.entrypoint !== 'sdk-cli') last = o
+    if (o.entrypoint === 'sdk-cli') continue
+    last = o
+    lastAt = i
+    if (o.type !== 'user') continue
+    // 時刻の読めない行は、いまのプロセスのものとして数える（空きにしない側）
+    const current = since === null || Number.isNaN(ts) || ts >= since
+    const id = str(obj(o.toolUseResult)?.backgroundTaskId)
+    if (id && current) background.add(id)
+    const done = textOf(o.message).trimStart().startsWith('<task-notification>') ? textOf(o.message).match(/<task-id>([^<\s]+)<\/task-id>/) : null
+    if (done) background.delete(done[1]!)
   }
-  if (queued > 0) return 'busy'
+  if (queued > 0 || background.size > 0) return 'busy'
   if (!last) return fromStart ? 'idle' : 'unknown'
   if (typeof last.entrypoint !== 'string' || !last.entrypoint) return 'unknown'
   const message = obj(last.message)
-  const content = message?.content
-  const blocks = Array.isArray(content) ? content.map(obj) : []
+  const blocks = Array.isArray(message?.content) ? (message.content as unknown[]).map(obj) : []
+  let closed: boolean
   if (last.type === 'assistant') {
     const stop = message?.stop_reason
     const calls = blocks.some((b) => b?.type === 'tool_use')
-    return (stop === 'end_turn' || stop === 'stop_sequence') && !calls ? 'idle' : 'busy'
+    closed = (stop === 'end_turn' || stop === 'stop_sequence') && !calls && endedAt > lastAt
+  } else if (last.isMeta === true || last.isCompactSummary === true || blocks.some((b) => b?.type === 'tool_result')) closed = false
+  else {
+    const text = textOf(last.message).trimStart()
+    closed = text.startsWith('<local-command-stdout>') || text.startsWith('[Request interrupted by user')
   }
-  if (last.isMeta === true || last.isCompactSummary === true || blocks.some((b) => b?.type === 'tool_result')) return 'busy'
-  const text = (typeof content === 'string' ? content : blocks.map((b) => (b?.type === 'text' ? str(b.text) : '')).join('')).trimStart()
-  return text.startsWith('<local-command-stdout>') || text.startsWith('[Request interrupted by user') ? 'idle' : 'busy'
+  if (!closed) return 'busy'
+  const reached = fromStart || (since !== null && firstTs < since)
+  return reached ? 'idle' : 'unknown'
+}
+
+/** 会話の行の本文（文字列か、text の塊を繋いだもの） */
+function textOf(message: unknown): string {
+  const content = obj(message)?.content
+  if (typeof content === 'string') return content
+  return Array.isArray(content) ? content.map((b) => (obj(b)?.type === 'text' ? str(obj(b)!.text) : '')).join('') : ''
 }
 
 /**

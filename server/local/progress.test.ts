@@ -233,16 +233,19 @@ test('ProgressReader.tuiState: TUI の最後の行が末尾の 64KB より前に
     const sdk = (line: string) => j({ ...JSON.parse(line), entrypoint: 'sdk-cli' })
     const path = join(dir, `${SID}.jsonl`)
     // TUI のターンが閉じたあと、SAI の -p が最初に読む量より長く書いた
-    const head = [tui(prompt(at(0), 'やって')), tui(assistant(at(1), [{ type: 'text', text: '済みました' }], 'end_turn'))]
+    const head = [tui(prompt(at(0), 'やって')), tui(assistant(at(1), [{ type: 'text', text: '済みました' }], 'end_turn')), j({ type: 'system', subtype: 'turn_duration', timestamp: at(1), entrypoint: 'cli' })]
     const tail = [sdk(prompt(at(10), '頼む')), sdk(result(at(11), 'a', 'x'.repeat(PROGRESS_TAIL_START))), sdk(assistant(at(12), [{ type: 'text', text: '返答' }], 'end_turn'))]
     await writeFile(path, [...head, ...tail].join('\n') + '\n')
     const reader = new ProgressReader(projects, sessions)
     const s = { id: `${SID}@r`, repo: 'r', agent: 'claude' as const, cwd }
-    assert.equal(await reader.tuiState(s), 'idle')
+    // TUI のプロセスは最初の行のすぐあとに起動した
+    const since = Date.parse(at(0)) + 500
+    assert.equal(await reader.tuiState(s, since), 'idle')
+    assert.equal(await reader.tuiState(s, Date.parse(at(0)) - 60_000), 'idle', '頭まで読めれば、起動がもっと前でも空き')
     // -p の前から TUI のツールが回っている
     await writeFile(path, [tui(prompt(at(0), 'やって')), tui(assistant(at(1), [bash('t', 'pnpm test')], 'tool_use')), ...tail].join('\n') + '\n')
-    assert.equal(await reader.tuiState(s), 'busy')
-    assert.equal(await reader.tuiState({ ...s, agent: 'codex' }), 'unknown')
-    assert.equal(await reader.tuiState({ ...s, id: '99999999-2222-3333-4444-555555555555@r' }), 'unknown')
+    assert.equal(await reader.tuiState(s, since), 'busy')
+    assert.equal(await reader.tuiState({ ...s, agent: 'codex' }, since), 'unknown')
+    assert.equal(await reader.tuiState({ ...s, id: '99999999-2222-3333-4444-555555555555@r' }, since), 'unknown')
   })
 })

@@ -74,7 +74,10 @@ const contexts = new Map<string, number>()
 /** 端末の TUI のターンが閉じているか（`ProgressReader.tuiState()`。#806）。無ければ分からない */
 const tui = new Map<string, TuiState>()
 const progress = {
-  async tuiState(s: Pick<SessionSummary, 'id'>): Promise<TuiState> {
+  /** 渡された TUI のプロセスの起動時刻も覚える（`startedAt` の偽物が返したものが届くか） */
+  since: [] as (number | null)[],
+  async tuiState(s: Pick<SessionSummary, 'id'>, since: number | null): Promise<TuiState> {
+    this.since.push(since)
     return tui.get(s.id) ?? 'unknown'
   },
   async read(s: Pick<SessionSummary, 'id'>): Promise<SessionProgressResponse> {
@@ -93,6 +96,10 @@ const progress = {
 }
 
 const IDLE = '──────\n❯ Try "refactor <filepath>"\n──────\n'
+/** 端末の TUI のプロセスの起動時刻（作り物） */
+const STARTED = Date.UTC(2026, 9, 15, 0, 0, 0)
+/** 処理中の印が出ている画面（端末の `/compact` の間など。打ちかけあり） */
+const WORKING = '✻ Compacting conversation… (12s)\n' + IDLE.replace('❯ Try "refactor <filepath>"', '❯ 人の打ちかけ')
 const TYPED = IDLE.replace('❯ Try "refactor <filepath>"', '❯ 人の打ちかけ')
 const DIALOG = IDLE + '  ❯ 1. Yes\n    2. No\n  Enter to confirm · Esc to cancel\n'
 class FakeTmux implements Tmux {
@@ -142,6 +149,8 @@ before(async () => {
       ps: async () => ' 100     1\n 200   100\n',
       replies: new TerminalReplies(),
       alive: (pid) => pid === 200,
+      // 端末の TUI のプロセスの起動時刻（本物の ps は起こさない）
+      startedAt: async (pid) => (pid === 200 ? STARTED : null),
       scanTtlMs: 0,
       // 端末でターンの途中で待っている預かりを、ポーリングのたびに見に行かせる
       bgRetryMs: 0,
@@ -208,6 +217,8 @@ test('sai_send: 端末に打ち込めず、端末のターンの外と言えな�
     ['打ちかけ・ターンの途中', TYPED, { active: true }, 'busy'],
     ['ダイアログ中（TUI の行では閉じている）', DIALOG, { closed: true }, 'idle'],
     ['画面が読めない（TUI の行では閉じている）', '$ ls\n$ ', undefined, 'idle'],
+    // 端末の `/compact` の間は transcript に何も書かれない（#815 のレビュー）。画面の処理中の印で見る
+    ['打ちかけ・画面に処理中の印（TUI の行では閉じている）', WORKING, { closed: true }, 'idle'],
   ] as const) {
     await reset()
     tmux.screen = screen
@@ -342,6 +353,29 @@ test('sai_send: 打ちかけがあるだけで、端末のターンの外と言�
   assert.equal(tmux.screen, TYPED)
   assert.equal((await sessions()).queued['T1@r'], undefined, '預からない')
   assert.match(await readFile(join(dir, 'reply.log'), 'utf-8'), /端末のターンの外なので別プロセスで回す（打ちかけは残す）/)
+  assert.ok(progress.since.includes(STARTED), 'transcript は TUI のプロセスの起動時刻まで遡って見る')
+  await runner.finish('T1@r')
+})
+
+test('sai_send: 画面に処理中の印が出ていれば、TUI の行で閉じていても、要約も別プロセスも起こさない。「続けて送る」でも待つ（#815 のレビュー）', async () => {
+  await reset()
+  tmux.screen = WORKING
+  turns.set('T1@r', { closed: true })
+  tui.set('T1@r', 'idle')
+  contexts.set('T1@r', COMPACT_MIN_TOKENS)
+  const body = (await (await send({ text: '#9 に着手してください。', compact: true })).json()) as AgentSendResponse
+  assert.equal(body.via, 'queued')
+  assert.equal(body.stuck, true)
+  assert.equal(runner.started.length, 0, '要約も本文も起こさない')
+  // 押しても、印が出ている間は起こさない
+  assert.equal((await resume()).status, 200)
+  assert.equal(runner.started.length, 0)
+  assert.deepEqual(typedKeys(), [])
+  await sessions()
+  // 印が消えてから押せば回る
+  tmux.screen = TYPED
+  assert.equal((await resume()).status, 200)
+  assert.equal(runner.started.length, 1)
   await runner.finish('T1@r')
 })
 

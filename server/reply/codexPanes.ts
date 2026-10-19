@@ -380,6 +380,17 @@ export function rolloutSessionAtStart(
     const own = await startThread(pid, cwd)
     if (!own) return ''
     const { session, path } = own
+    // 同じ cwd のほかの TUI の起動の幅にも入る名前なら、その TUI の会話かもしれないので当てない（#819 のレビュー）。
+    // 起動時刻だけで見る（引数付きで起動した TUI や、相手の側の裏が取れなかった TUI も数える）。読めなければ当てない
+    const named = rolloutStampOf(path)
+    if (!named) return ''
+    for (const peer of peers) {
+      if (peer.pid === pid) continue
+      const theirs = parseCodexStart(await ps(peer.pid))
+      if (!theirs) return ''
+      const lag = (named - theirs.startedAt.getTime()) / 1000
+      if (lag >= 0 && lag <= START_SLACK_S) return ''
+    }
 
     // 2. その rollout を開いている app-server の客か
     const mine = await sockets(pid)
@@ -422,6 +433,14 @@ export function rolloutSessionAtStart(
     // 4. そのスレッドから離れた印がスクロールバックに無いか（読めなければ当てない）
     return (await stillOn(pane, session)) ? session : ''
   }
+}
+
+/** rollout の名前の時刻（`rollout-YYYY-MM-DDTHH-MM-SS-…`。手元の時刻で書かれる）。読めなければ 0 */
+export function rolloutStampOf(path: string): number {
+  const m = basename(path).match(/^rollout-(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})-/)
+  if (!m) return 0
+  const at = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6]))
+  return Number.isNaN(at.getTime()) ? 0 : at.getTime()
 }
 
 /** ファイルの頭だけを読む（rollout は手元で 12MB ある。`session_meta` は 1 行目） */

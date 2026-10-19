@@ -411,6 +411,22 @@ test('rolloutSessionAtStart: 同じ app-server が読み込む同じ cwd のス�
   assert.equal(await find(peerLeft, [me, peer]), '', 'ほかの TUI がそのスレッドから離れていれば、その TUI の持ち物とはみなさない')
 })
 
+test('rolloutSessionAtStart: 同じ cwd のほかの TUI の起動の幅にも入る名前なら当てない（引数付きで起動した TUI も。#819 のレビュー）', async () => {
+  const PEER = 102
+  const { home, dir } = await codexHome()
+  const path = await writeRollout(dir, `rollout-2026-09-11T15-28-54-${SESSION}.jsonl`, SESSION, '/repo/one')
+  const at = (peerStart: string) =>
+    rolloutSessionAtStart({ CODEX_HOME: home }, probe({ opened: [path], ps: async (pid) => (pid === PEER ? `${peerStart} codex -m gpt\n` : 'Fri Sep 11 15:28:51 2026 codex\n') }))(
+      TUI,
+      '/repo/one',
+      '%1',
+      [{ pid: TUI, pane: '%1' }, { pid: PEER, pane: '%2' }],
+    )
+  assert.equal(await at('Fri Sep 11 15:28:52 2026'), '', '2 秒後に起動した TUI の会話かもしれない')
+  assert.equal(await at('Fri Sep 11 15:28:40 2026'), SESSION, '幅の外で起動した TUI は構わない')
+  assert.equal(await at(''), '', 'ほかの TUI の起動時刻が読めなければ当てない')
+})
+
 test('rolloutSessionAtStart: 起動後に書かれた同じ cwd の別の会話でも、その app-server が読み込んでいなければ当てる（#568）', async () => {
   // 手元の実例: dev-codex の TUI（起動 9/11）と同じ worktree の別の会話が 9/30 に書かれていたが、誰も開いておらず、
   // 行の pid も別のプロセスだった。#557 の「起動後に書かれていれば当てない」ではここで空に倒れていた

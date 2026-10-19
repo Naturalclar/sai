@@ -7,7 +7,7 @@ import { isRemoteHost } from '../../shared/host.ts'
 import { sessionImageUrl } from '../../shared/images.ts'
 import { digestKey } from '../../shared/digestFeedback.ts'
 import { eventKind } from '../../shared/events.ts'
-import { ImageSourceContext } from './imageContext'
+import { ImageNoSourceContext, ImageSourceContext } from './imageContext'
 import { LightboxProvider } from './LightboxProvider'
 import { FileViewerProvider } from './FileViewerProvider'
 import { FileSessionContext } from './fileContext'
@@ -359,6 +359,8 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
                         : null
                       // 本文の画像はサーバが配る（#321）。別のマシンのセッションのファイルはこちらに無いので、印と名前だけ
                       const imageUrl = u.speaker !== 'me' && !isRemoteHost(g.host, selfHost) ? (src: string) => sessionImageUrl(id, src) : null
+                      // 名前の横に「別のマシン」と理由を出す（#820）
+                      const noImageSource = u.speaker !== 'me' && !imageUrl ? 'remote' : null
                       // 返答の中のファイルのパスも SAI の中で読める（#603）。**ターン完了の返答だけ**（サーバの表がそこからしか拾わない。
                       // 待ちのバブルや別のセッションからの返答のパスを押せるようにすると、必ず「出てきていないファイル」になる）
                       const fileSession = imageUrl && !u.waiting && !u.reply && eventKind(u.row.event, u.row.text) === 'turn' ? id : null
@@ -381,6 +383,7 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
                       // 一言があるバブルには「変？」を出す（#346）。鍵はサーバ（作る側）と同じ関数で作る
                       return (
                       <ImageSourceContext key={u.key} value={imageUrl}>
+                      <ImageNoSourceContext value={noImageSource}>
                       <FileSessionContext value={fileSession}>
                       {u.key === unreadKey && <UnreadLine />}
                       {u.handedReplies ? (
@@ -430,6 +433,7 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
                         defaultOpen={longOpen}
                       />
                       </FileSessionContext>
+                      </ImageNoSourceContext>
                       </ImageSourceContext>
                       )
                     })}

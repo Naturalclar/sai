@@ -1,15 +1,15 @@
 import { useState } from 'react'
-import { formatImageBytes, thumbUrl } from '../../shared/images.ts'
+import { formatImageBytes, thumbUrl, type ImageUnavailable } from '../../shared/images.ts'
 import { ImageMark } from './ImageMark'
 import { probeThumb } from './thumb'
 
 /**
  * 枠に出す画像（#589）。`<img src>` は軽い版（`?thumb=<版>`。`shared/images.ts` の `thumbUrl()`）で、元の画像はライトボックス・ダウンロードで開いたときだけ読む。
  * 軽い版を作れない（`sips` が無いなど）ときは、画像の印・名前・大きさだけを出す（包んでいる `<a>` を押せば元を開く）。
- * 読めない（ファイルが無い・作業ディレクトリの外・画像でない）ときは `onBroken` で親に返し、親が今までどおり名前だけにする。
+ * 読めない（ファイルが無い・作業ディレクトリの外・画像でない）ときは `onBroken` で親に返し、親が名前だけにする（サーバが付けた理由の区分も渡す。#820）。
  * 読めたら `onSize` に絵の大きさを返す（#702。軽い版も縦横比は元と同じ）
  */
-export function ThumbImage({ url, alt, onBroken, onSize }: { url: string; alt: string; onBroken?: () => void; onSize?: (width: number, height: number) => void }) {
+export function ThumbImage({ url, alt, onBroken, onSize }: { url: string; alt: string; onBroken?: (why: ImageUnavailable | null) => void; onSize?: (width: number, height: number) => void }) {
   const [heavy, setHeavy] = useState<number | null>(null)
   // HEAD が 200 を返したら 1 回だけ読み直す（URL を変えてブラウザの失敗を引かない）
   const [retried, setRetried] = useState(false)
@@ -34,7 +34,7 @@ export function ThumbImage({ url, alt, onBroken, onSize }: { url: string; alt: s
         void probeThumb(src).then((f) => {
           if (f.kind === 'heavy') setHeavy(f.bytes)
           else if (f.kind === 'retry' && !retried) setRetried(true)
-          else onBroken?.()
+          else onBroken?.(f.kind === 'broken' ? f.why : null)
         })
       }}
     />

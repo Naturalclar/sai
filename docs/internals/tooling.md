@@ -7,6 +7,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - clone した直後の配線（フック / `notify` / OpenCode のプラグイン / `statusLine` → ビルド → 1 ターン届くかの確認）。
 - 既存の設定を上書きしないのが主眼で、まず結果（`~/.agent-feed` の一番新しい行、使用率なら `usage-claude*.json`）を見て「もう届いているか」から入る（設定を辿るのはその後）。
 - 1 つしか持てない枠（Codex の `notify`、Claude の `statusLine`）は特に、読んで見せてから畳む。書き込み無しの点検にも同じ手順を使う。
+- 画像の置き場（#820。5.6）: 利用者の全体の指示（`~/.codex/AGENTS.md`・`~/.claude/CLAUDE.md`）に置き場の 1 行が無いとき、直近 7 日に記録のあるほかのリポジトリが `.screenshots/` を無視していないときに、案を出すだけ。書くのは人が「足して」と言ったとき。
 
 ## `/sync-main`（`.claude/skills/sync-main/SKILL.md`）
 
@@ -113,7 +114,7 @@ pnpm -s decisions --json       # 1 行 1 項目の JSON
 - 落ちたものは、落ちた所だけを `SUITE_MAX_LINES`（既定 40）行まで出す: `test` は `not ok` の行、`test:feed` は `FAIL:` / `ERROR:` の行、`lint` は `[Error/…]` の行（警告は数だけ。oxlint の出力の形はエージェントの環境変数の有無で変わるので、`--format=unix` を指定して数える）、`typecheck` は `error TS` の行、`build` は末尾。全文は一時ディレクトリの `<名前>.log`（全部通れば消す）。
 - どれかが落ちても残りは回す（1 回で全部の落ち方が分かる）。落ちたら exit 1。
 - `package.json` のスクリプトにはしていない（CI は今までどおり 4 つを別々に回す。人が読むときは全文のほうがよい）。偽の `pnpm` で確かめるテストは `server/suite.test.ts`。
-- `/setup-sai` の点検（一番新しい行・届いているフック・使用率のファイル・`statusLine`）は `.claude/skills/setup-sai/doctor.py`（読むだけ）。SKILL.md の本文に埋めていた Python を出したもの。
+- `/setup-sai` の点検（一番新しい行・届いているフック・使用率のファイル・`statusLine`・画像の置き場）は `.claude/skills/setup-sai/doctor.py`（読むだけ）。SKILL.md の本文に埋めていた Python を出したもの。
 
 ## テストを単体で回す
 

@@ -9,6 +9,21 @@ export const IMAGE_MAX_BYTES = 20 * 1024 * 1024
 /** `GET /api/sessions/<id>/images/<key>` の区切り。id は `/` を含まないので、最初の `/images/` が区切り */
 export const IMAGES_SEGMENT = '/images/'
 
+/**
+ * 本文の画像を配れなかった理由の区分（#820）。サーバが `IMAGE_UNAVAILABLE_HEADER` に載せ、画面が名前の横に短く出す。
+ * **パスは載せない**（区分だけ）。どうすれば出るかが区分ごとに違うので分ける。分からない失敗には付けない
+ */
+export const IMAGE_UNAVAILABLE = ['outside', 'missing', 'not-image', 'too-big', 'remote'] as const
+export type ImageUnavailable = (typeof IMAGE_UNAVAILABLE)[number]
+
+/** 配れなかった理由の区分を載せるヘッダ（失敗の応答だけに付く） */
+export const IMAGE_UNAVAILABLE_HEADER = 'X-SAI-Image-Unavailable'
+
+/** ヘッダの値を区分に読む。知らない値・無いものは null（理由を出さない） */
+export function parseImageUnavailable(value: string | null | undefined): ImageUnavailable | null {
+  return (IMAGE_UNAVAILABLE as readonly string[]).includes(value ?? '') ? (value as ImageUnavailable) : null
+}
+
 export interface ImageRef {
   /** 本文に書かれたパスそのもの（絶対パスか、行の cwd からの相対パス） */
   src: string

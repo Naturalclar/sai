@@ -57,6 +57,12 @@ const status = async (src: string, max?: number) => {
   return r.ok ? 200 : r.status
 }
 
+/** 画面に出す理由の区分（#820） */
+const why = async (src: string, max?: number) => {
+  const r = await readSessionImage({ src, cwd }, max)
+  return r.ok ? 'ok' : (r.why ?? null)
+}
+
 test('readSessionImage: cwd からの相対パスと、cwd の中の絶対パスは読む', async () => {
   const rel = await readSessionImage({ src: 'docs/icon.png', cwd })
   assert.ok(rel.ok)
@@ -96,4 +102,18 @@ test('imageHeaders: 種類は中身から、推測と実行はさせず、ダウ
   assert.equal(view['X-Content-Type-Options'], 'nosniff')
   assert.equal(view['Content-Disposition'], undefined)
   assert.equal(imageHeaders(img, true)['Content-Disposition'], contentDisposition('a.png'))
+})
+
+test('readSessionImage: 配れない理由の区分（#820）。外・無い・画像でない・大きすぎる、cwd が分からないときは付けない', async () => {
+  assert.equal(await why(join(outside, 'secret.png')), 'outside')
+  assert.equal(await why('link.png'), 'outside', '外を指すシンボリックリンクも外')
+  assert.equal(await why('docs/missing.png'), 'missing')
+  assert.equal(await why(join(outside, 'gone.png')), 'outside', '外の消えたファイルは「外」（置き直しても出ない）')
+  assert.equal(await why('dir.png'), 'not-image')
+  assert.equal(await why('fake.png'), 'not-image')
+  assert.equal(await why('docs/icon.png', 4), 'too-big')
+  const noCwd = await readSessionImage({ src: 'docs/icon.png', cwd: '' })
+  assert.equal(noCwd.ok ? 'ok' : (noCwd.why ?? null), null)
+  const goneCwd = await readSessionImage({ src: 'docs/icon.png', cwd: join(cwd, 'no-such-worktree') })
+  assert.equal(goneCwd.ok ? 'ok' : (goneCwd.why ?? null), null, '作業ディレクトリごと無いときは付けない')
 })

@@ -12,6 +12,7 @@ import type { FeedRow } from '../../shared/types.ts'
 import { eventKind } from '../../shared/events.ts'
 import { imageName } from '../../shared/markdown.ts'
 import { IMAGE_MAX_BYTES, imageKey, imageRefs } from '../../shared/images.ts'
+import type { ImageUnavailable } from '../../shared/images.ts'
 import { userImageSrcs } from '../../shared/gallery.ts'
 import { ICON_MIME, sniffImageType } from '../../shared/icon.ts'
 import type { IconType } from '../../shared/icon.ts'
@@ -41,9 +42,10 @@ export function imageTable(rows: FeedRow[], fallbackCwd = ''): Map<string, Image
 
 export type ImageRead =
   | { ok: true; bytes: Buffer; type: IconType; name: string; etag: string }
-  | { ok: false; status: number; reason: string }
+  | { ok: false; status: number; reason: string; why?: ImageUnavailable }
 
-const fail = (status: number, reason: string): ImageRead => ({ ok: false, status, reason })
+/** `why` は画面に出す理由の区分（#820）。作業ディレクトリが分からない・無い、開けない（権限・差し替え）のように、区分にできない失敗には付けない */
+const fail = (status: number, reason: string, why?: ImageUnavailable): ImageRead => ({ ok: false, status, reason, ...(why ? { why } : {}) })
 
 /** `root` の中か（root そのものは画像ではないので、中身だけ） */
 const inside = (root: string, path: string) => path.startsWith(root.endsWith(sep) ? root : root + sep)
@@ -63,13 +65,16 @@ export async function readSessionImage(source: ImageSource, max = IMAGE_MAX_BYTE
   } catch {
     return fail(404, '作業ディレクトリがありません')
   }
+  const target = isAbsolute(source.src) ? source.src : resolve(source.cwd, source.src)
   let real: string
   try {
-    real = await realpath(isAbsolute(source.src) ? source.src : resolve(source.cwd, source.src))
+    real = await realpath(target)
   } catch {
-    return fail(404, 'ファイルがありません')
+    // 消えたファイルでも、書かれたパスが作業ディレクトリの外なら「外」と出す（置き直しても出ないので。#820 のレビュー）
+    const outsideAsWritten = !inside(resolve(source.cwd), target) && !inside(root, target)
+    return fail(404, 'ファイルがありません', outsideAsWritten ? 'outside' : 'missing')
   }
-  if (!inside(root, real)) return fail(403, '作業ディレクトリの外のファイルは配りません')
+  if (!inside(root, real)) return fail(403, '作業ディレクトリの外のファイルは配りません', 'outside')
   let fh: FileHandle
   try {
     // realpath で確かめたあとに差し替えられたシンボリックリンクは開かない
@@ -79,13 +84,13 @@ export async function readSessionImage(source: ImageSource, max = IMAGE_MAX_BYTE
   }
   try {
     const st = await fh.stat()
-    if (!st.isFile()) return fail(404, 'ファイルではありません')
-    const tooBig = fail(413, `画像は ${max / 1024 / 1024}MB までです`)
+    if (!st.isFile()) return fail(404, 'ファイルではありません', 'not-image')
+    const tooBig = fail(413, `画像は ${max / 1024 / 1024}MB までです`, 'too-big')
     if (st.size > max) return tooBig
     const bytes = await fh.readFile()
     if (bytes.length > max) return tooBig
     const type = sniffImageType(bytes)
-    if (!type) return fail(415, '画像として読めません（PNG / JPEG / GIF / WebP）')
+    if (!type) return fail(415, '画像として読めません（PNG / JPEG / GIF / WebP）', 'not-image')
     return { ok: true, bytes, type, name: imageName(source.src), etag: `"${st.size.toString(16)}-${Math.floor(st.mtimeMs).toString(16)}"` }
   } finally {
     await fh.close()

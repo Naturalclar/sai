@@ -252,7 +252,7 @@ import { QUEUE_ROLLOUT_TAIL_BYTES, queuedTextArrived, turnInProgress } from '../
 import { ProgressReader, sessionOf } from './local/progress.ts'
 import { agentListFromEnv, backgroundLive, type AgentList, type ClaudeAgent } from './local/claudeAgents.ts'
 import { isRemoteHost } from '../shared/host.ts'
-import { IMAGES_SEGMENT } from '../shared/images.ts'
+import { IMAGES_SEGMENT, IMAGE_UNAVAILABLE_HEADER } from '../shared/images.ts'
 import { METADATA_STRIP_VERSION, stripImageMetadata, UNREADABLE_IMAGE_REASON } from './local/imageMetadata.ts'
 import { imageHeaders, imageTable, readSessionImage, realImagePath } from './local/images.ts'
 import { AnsweredApprovals, answeredAfter } from './approvals/answered.ts'
@@ -5827,12 +5827,19 @@ export function createApp(
         const session = sessions.find((s) => s.id === id)
         if (!session) return error(res, 404, 'session not found in window')
         // 別のマシンのセッションのファイルはこちらに無い（同じパスのファイルがあっても別物）
-        if (isRemoteHost(session.host, selfHost())) return error(res, 404, `別のマシン（${session.host}）のファイルは配れません`)
+        if (isRemoteHost(session.host, selfHost())) {
+          res.setHeader(IMAGE_UNAVAILABLE_HEADER, 'remote')
+          return error(res, 404, `別のマシン（${session.host}）のファイルは配れません`)
+        }
         const own = (await rowsNow(days)).filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id)
         const source = imageTable(own, session.cwd).get(path.slice(imagesAt + IMAGES_SEGMENT.length))
         if (!source) return error(res, 404, 'このセッションの本文に無い画像です')
         const img = await readSessionImage(source)
-        if (!img.ok) return error(res, img.status, img.reason)
+        if (!img.ok) {
+          // 画面が名前の横に理由を出すための区分（#820。パスは載せない）。HEAD の見分け（`probeThumb()`）でも読める
+          if (img.why) res.setHeader(IMAGE_UNAVAILABLE_HEADER, img.why)
+          return error(res, img.status, img.reason)
+        }
         return await sendImage(req, res, img, q)
       }
       if (path.startsWith(SESSIONS_PREFIX) && path.endsWith(TURN_STEPS_SUFFIX) && method === 'GET') {

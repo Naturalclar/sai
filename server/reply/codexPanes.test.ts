@@ -19,7 +19,7 @@ import {
   rolloutSessionAtStart,
   sessionRoots,
 } from './codexPanes.ts'
-import type { CodexPaneDeps, StartProbe } from './codexPanes.ts'
+import type { CodexPaneDeps, CodexPeer, StartProbe } from './codexPanes.ts'
 import type { Tmux } from './terminal.ts'
 
 /** ペイン 2 つ（%1 のシェル 100、%2 のシェル 200）と、その下の codex */
@@ -131,18 +131,75 @@ test('rollout を 1 つも開いていない codex は、当てずに空で返�
 })
 
 test('rollout を閉じた TUI は、起動時刻で裏を取れたセッションを返す（#448）', async () => {
-  const calls: [number, string, string][] = []
+  const calls: [number, string, string, readonly CodexPeer[]][] = []
   const panes = new CodexPanes(
     deps({
       openOf: async () => ({ cwd: '/repo/one', rollouts: [] }),
-      sessionAtStart: async (pid, cwd, pane) => {
-        calls.push([pid, cwd, pane])
+      sessionAtStart: async (pid, cwd, pane, peers) => {
+        calls.push([pid, cwd, pane, peers])
         return SESSION
       },
     }),
   )
   assert.equal((await panes.scan())[0]?.session, SESSION)
-  assert.deepEqual(calls, [[101, '/repo/one', '%1']], 'ペインも渡す（スクロールバックを読むため）')
+  assert.deepEqual(calls, [[101, '/repo/one', '%1', [{ pid: 101, pane: '%1' }]]], 'ペインも渡す（スクロールバックを読むため）。peers は同じ cwd のペインの Codex')
+})
+
+/** ペイン 3 つの codex（%1 = 101・%2 = 201 は /repo/one、%3 = 301 は /repo/two） */
+const THREE_PANES = '%1 100\n%2 200\n%3 300\n'
+const THREE_PS = ['  100     1 -zsh', '  101   100 codex', '  200     1 -zsh', '  201   200 codex', '  300     1 -zsh', '  301   300 codex'].join('\n')
+
+test('起動時刻の補欠に渡す peers は同じ cwd のペインの Codex だけ（#819）', async () => {
+  const seen = new Map<number, readonly CodexPeer[]>()
+  const panes = new CodexPanes(
+    deps({
+      tmux: fakeTmux(THREE_PANES),
+      ps: async () => THREE_PS,
+      openOf: async (pid) => ({ cwd: pid === 301 ? '/repo/two' : '/repo/one', rollouts: [] }),
+      sessionAtStart: async (pid, _cwd, _pane, peers) => {
+        seen.set(pid, peers)
+        return ''
+      },
+    }),
+  )
+  await panes.scan()
+  assert.deepEqual(seen.get(101), [{ pid: 101, pane: '%1' }, { pid: 201, pane: '%2' }])
+  assert.deepEqual(seen.get(301), [{ pid: 301, pane: '%3' }])
+})
+
+test('cwd が読めなかったペインの Codex も peers に入れる（同じ worktree かもしれない。#819 のレビュー）', async () => {
+  const seen = new Map<number, readonly CodexPeer[]>()
+  const panes = new CodexPanes(
+    deps({
+      tmux: fakeTmux(THREE_PANES),
+      ps: async () => THREE_PS,
+      openOf: async (pid) => ({ cwd: pid === 201 ? '' : pid === 301 ? '/repo/two' : '/repo/one', rollouts: [] }),
+      sessionAtStart: async (pid, _cwd, _pane, peers) => {
+        seen.set(pid, peers)
+        return ''
+      },
+    }),
+  )
+  await panes.scan()
+  assert.deepEqual(seen.get(101), [{ pid: 101, pane: '%1' }, { pid: 201, pane: '%2' }])
+})
+
+test('起動時刻で推したセッションがほかのペインと重なれば、推した方は当てない（#819 のレビュー）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-panes-'))
+  const rollout = await writeRollout(dir, `rollout-2026-09-04T14-40-23-${SESSION}.jsonl`, SESSION, '/repo/one')
+  const scan = (opened: number[]) =>
+    new CodexPanes(
+      deps({
+        tmux: fakeTmux(THREE_PANES),
+        ps: async () => THREE_PS,
+        openOf: async (pid) => ({ cwd: '/repo/one', rollouts: opened.includes(pid) ? [rollout] : [] }),
+        sessionAtStart: async (pid) => (pid === 301 ? OTHER : SESSION),
+      }),
+    ).scan()
+  const both = await scan([])
+  assert.deepEqual(both.map((p) => p.session), ['', '', OTHER], '2 つとも推しただけなら、どちらも当てない')
+  const one = await scan([201])
+  assert.deepEqual(one.map((p) => p.session), ['', SESSION, OTHER], 'rollout を開いている方は残す')
 })
 
 test('開いている rollout があれば起動時刻の補欠は呼ばない（#429 を優先）', async () => {
@@ -289,12 +346,21 @@ test('parseUnixSockets / isClientOf: 相手の番地がサーバの番地にあ�
   assert.equal(isClientOf(TUI_SOCKETS, ''), false, 'サーバのソケットが読めなければ客とはみなさない')
 })
 
-test('rolloutSessionAtStart: 起動秒〜2 秒後・cwd・目印が揃った 1 本を、客である app-server が開いていれば当てる', async () => {
+test('rolloutSessionAtStart: 起動秒〜5 秒後・cwd・目印が揃った 1 本を、客である app-server が開いていれば当てる', async () => {
   const { home, dir } = await codexHome()
   const path = await writeRollout(dir, `rollout-2026-09-11T15-28-52-${SESSION}.jsonl`, SESSION, '/repo/one')
   const find = rolloutSessionAtStart({ CODEX_HOME: home }, probe({ opened: [path] }))
   assert.equal(await find(TUI, '/repo/one', '%1'), SESSION, '起動の 1 秒後の名前でも当てる（実測で 1 秒ずれた）')
   assert.equal(await find(TUI, '/repo/other', '%1'), '', 'cwd が違えば当てない')
+})
+
+test('rolloutSessionAtStart: 起動の 3 秒後の名前でも当て、6 秒後は当てない（#819）', async () => {
+  const { home, dir } = await codexHome()
+  const path = await writeRollout(dir, `rollout-2026-09-11T15-28-54-${SESSION}.jsonl`, SESSION, '/repo/one')
+  assert.equal(await rolloutSessionAtStart({ CODEX_HOME: home }, probe({ opened: [path] }))(TUI, '/repo/one', '%1'), SESSION, '実測で 3 秒ずれた')
+  const late = await codexHome()
+  const after = await writeRollout(late.dir, `rollout-2026-09-11T15-28-57-${SESSION}.jsonl`, SESSION, '/repo/one')
+  assert.equal(await rolloutSessionAtStart({ CODEX_HOME: late.home }, probe({ opened: [after] }))(TUI, '/repo/one', '%1'), '')
 })
 
 test('rolloutSessionAtStart: 目印の無いスレッド（TUI が作っていない）は当てない', async () => {
@@ -332,6 +398,50 @@ test('rolloutSessionAtStart: その app-server が同じ cwd の別のスレッ�
   const find = (opened: string[]) => rolloutSessionAtStart({ CODEX_HOME: home }, probe({ opened }))(TUI, '/repo/one', '%1')
   assert.equal(await find([path, elsewhere]), SESSION, 'ほかの worktree のスレッド（別の TUI の会話）は構わない')
   assert.equal(await find([path, elsewhere, sameCwd]), '', '同じ worktree のスレッドも読み込んでいれば、どちらを映しているか分からない')
+})
+
+test('rolloutSessionAtStart: 同じ app-server が読み込む同じ cwd のスレッドが、客のほかの TUI の起動時のものなら当てる（#819）', async () => {
+  const PEER = 102
+  const PEER_SOCKETS = 'p102\nf36\nd0x1111\nn->0x790df1f8a636a54a\n'
+  const { home, dir } = await codexHome([SESSION, OTHER, THIRD])
+  const path = await writeRollout(dir, `rollout-2026-09-11T15-28-51-${SESSION}.jsonl`, SESSION, '/repo/one')
+  const peerPath = await writeRollout(dir, `rollout-2026-09-11T16-00-01-${OTHER}.jsonl`, OTHER, '/repo/one')
+  const later = join(home, 'sessions', '2026', '09', '12')
+  await mkdir(later, { recursive: true })
+  const stray = await writeRollout(later, `rollout-2026-09-12T09-00-00-${THIRD}.jsonl`, THIRD, '/repo/one')
+  const both = (over: Partial<StartProbe> = {}) =>
+    probe({
+      ps: async (pid) => (pid === PEER ? 'Fri Sep 11 16:00:00 2026 codex\n' : 'Fri Sep 11 15:28:51 2026 codex\n'),
+      sockets: async (pid) => (pid === SERVER ? SERVER_SOCKETS : pid === TUI ? TUI_SOCKETS : pid === PEER ? PEER_SOCKETS : ''),
+      openRollouts: async () => [path, peerPath],
+      ...over,
+    })
+  const me = { pid: TUI, pane: '%1' }
+  const peer = { pid: PEER, pane: '%2' }
+  const find = (p: Partial<StartProbe>, peers: CodexPeer[]) => rolloutSessionAtStart({ CODEX_HOME: home }, p)(TUI, '/repo/one', '%1', peers)
+  assert.equal(await find(both(), [me, peer]), SESSION, 'ほかの TUI の起動時のスレッドは、その TUI の持ち物')
+  assert.equal(await rolloutSessionAtStart({ CODEX_HOME: home }, both())(PEER, '/repo/one', '%2', [me, peer]), OTHER, '相手の側からも当たる')
+  assert.equal(await find(both(), [me]), '', 'その TUI が居なければ、どちらを映しているか分からない')
+  assert.equal(await find(both({ sockets: async (pid) => (pid === SERVER ? SERVER_SOCKETS : pid === TUI ? TUI_SOCKETS : STRANGER_SOCKETS) }), [me, peer]), '', '別の app-server の客の TUI では裏が取れない')
+  assert.equal(await find(both({ openRollouts: async () => [path, peerPath, stray] }), [me, peer]), '', '誰の起動時のものでもないスレッド（/new・/resume）が残れば当てない')
+  const peerLeft = both({ scrollback: async (pane) => (pane === '%2' ? `codex resume ${OTHER}\n` : '') })
+  assert.equal(await find(peerLeft, [me, peer]), '', 'ほかの TUI がそのスレッドから離れていれば、その TUI の持ち物とはみなさない')
+})
+
+test('rolloutSessionAtStart: 同じ cwd のほかの TUI の起動の幅にも入る名前なら当てない（引数付きで起動した TUI も。#819 のレビュー）', async () => {
+  const PEER = 102
+  const { home, dir } = await codexHome()
+  const path = await writeRollout(dir, `rollout-2026-09-11T15-28-54-${SESSION}.jsonl`, SESSION, '/repo/one')
+  const at = (peerStart: string) =>
+    rolloutSessionAtStart({ CODEX_HOME: home }, probe({ opened: [path], ps: async (pid) => (pid === PEER ? `${peerStart} codex -m gpt\n` : 'Fri Sep 11 15:28:51 2026 codex\n') }))(
+      TUI,
+      '/repo/one',
+      '%1',
+      [{ pid: TUI, pane: '%1' }, { pid: PEER, pane: '%2' }],
+    )
+  assert.equal(await at('Fri Sep 11 15:28:52 2026'), '', '2 秒後に起動した TUI の会話かもしれない')
+  assert.equal(await at('Fri Sep 11 15:28:40 2026'), SESSION, '幅の外で起動した TUI は構わない')
+  assert.equal(await at(''), '', 'ほかの TUI の起動時刻が読めなければ当てない')
 })
 
 test('rolloutSessionAtStart: 起動後に書かれた同じ cwd の別の会話でも、その app-server が読み込んでいなければ当てる（#568）', async () => {

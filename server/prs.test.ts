@@ -551,7 +551,7 @@ test('GhPrs.mergedHeads: 決まった形の gh pr list --state merged を 1 本�
   assert.equal(parseMergedHeads('{}'), null)
 })
 
-test('GhPrs.commitParents: 決まった形の gh api -X GET repos/<repo>/commits/<sha> を 1 本だけ。引けた親は覚え、引けなかったことは少しの間だけ覚える（#821）', async () => {
+test('GhPrs.commitParents: 決まった形の gh api -X GET repos/<repo>/git/commits/<sha> を 1 本だけ。引けた親は覚え、引けなかったことは少しの間だけ覚える（#821）', async () => {
   const sha = 'c'.repeat(40)
   const parents = ['a'.repeat(40), 'd'.repeat(40)]
   const calls: string[][] = []
@@ -564,8 +564,8 @@ test('GhPrs.commitParents: 決まった形の gh api -X GET repos/<repo>/commits
   out = JSON.stringify(parents)
   assert.deepEqual(await gh.commitParents('o/r', sha), parents, '引けなかったことは覚える時間（ここでは 0）が過ぎれば引き直す')
   assert.deepEqual(calls, [
-    ['api', '-X', 'GET', `repos/o/r/commits/${sha}`, '--jq', PARENTS_JQ],
-    ['api', '-X', 'GET', `repos/o/r/commits/${sha}`, '--jq', PARENTS_JQ],
+    ['api', '-X', 'GET', `repos/o/r/git/commits/${sha}`, '--jq', PARENTS_JQ],
+    ['api', '-X', 'GET', `repos/o/r/git/commits/${sha}`, '--jq', PARENTS_JQ],
   ])
   out = null
   assert.deepEqual(await gh.commitParents('o/r', sha), parents, '引けた親は変わらないので、時間が過ぎても引き直さない')

@@ -65,7 +65,7 @@ export const PARENTS_JQ = '[.parents[].sha]'
 /** 引けた親を何本まで覚えるか（#821。コミットの親は変わらないので、引けたものは時間で捨てない） */
 export const PARENTS_KEEP = 500
 
-/** `gh api repos/<repo>/commits/<sha> --jq '[.parents[].sha]'` の出力を読む（#821）。40 桁の SHA の並びでなければ null */
+/** `gh api repos/<repo>/git/commits/<sha> --jq '[.parents[].sha]'` の出力を読む（#821）。40 桁の SHA の並びでなければ null */
 export function parseParents(out: string): string[] | null {
   let list: unknown
   try {
@@ -123,7 +123,7 @@ export interface PrBrowser {
   mergedHeads?(repo: string): Promise<ReadonlySet<string> | null>
   /**
    * コミットの親の SHA（#821。GitHub 上で base を取り込んでからマージされた PR の head が、手元の HEAD の 1 つ先のマージコミットかを見る）。
-   * `gh api -X GET repos/<repo>/commits/<sha> --jq '[.parents[].sha]'` の決まった形の 1 本だけ。引けなければ null。持たない実装は「引けない」と同じ
+   * `gh api -X GET repos/<repo>/git/commits/<sha> --jq '[.parents[].sha]'` の決まった形の 1 本だけ。引けなければ null。持たない実装は「引けない」と同じ
    */
   commitParents?(repo: string, sha: string): Promise<readonly string[] | null>
   view(repo: string, number: number): Promise<PrView | null>
@@ -328,7 +328,7 @@ export class GhPrs implements PrBrowser {
     const key = `${repo}\0${sha}`
     const hit = this.parents.get(key)
     if (hit && (hit.at === Infinity || Date.now() - hit.at < this.ttl)) return hit.parents
-    const parents = this.run(['api', '-X', 'GET', `repos/${repo}/commits/${sha}`, '--jq', PARENTS_JQ], 64 * 1024)
+    const parents = this.run(['api', '-X', 'GET', `repos/${repo}/git/commits/${sha}`, '--jq', PARENTS_JQ], 64 * 1024)
       .then((out) => (out === null ? null : parseParents(out)))
       .catch(() => null)
     const entry = { at: Date.now(), parents }

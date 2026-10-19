@@ -370,6 +370,8 @@ export const CHANGED_PATHS_TTL_MS = 30_000
 const AGENT_SEND_PATH = '/api/agent/send'
 /** `sai_sessions` の行に PR を足すとき、まだ 1 回も引いていないリポジトリを待つ長さ（#727。前の結果があれば待たない） */
 const HOLDING_PR_WAIT_MS = 1500
+/** 同じブランチのマージ済みの PR の head の親を、何本まで引くか（#821。ふつうは 1 本。新しい順に見る） */
+const MERGED_PARENTS_MAX = 3
 /** 「今回だけ」の判定のために worktree の一覧を待つ長さ（#783）。過ぎたら置き場なし = ファイルに触るコマンドは人に回す */
 const READ_ROOTS_WAIT_MS = 5_000
 /** 前に引いた PR の一覧を「いま」として出してよい古さ（#727）。これより古ければ、まだ引いていないのと同じに扱う（短く待つ） */
@@ -3294,21 +3296,40 @@ export function createApp(
       repos.set(repo, job)
       return job
     }
-    // マージ済みの PR の head（#795）。応答を gh に待たせない（open の一覧と同じ長さだけ待ち、間に合わなければ「引けない」）
+    // マージ済みの PR の head（#795）。応答を gh に待たせない（open の一覧と同じ長さだけ待ち、間に合わなければ「引けない」）。
+    // 待つ長さは、マージ済みの一覧と head の親（#821）を合わせて `HOLDING_PR_WAIT_MS` まで
     const mergedLeftover = async (s: SessionSummary, asked: string): Promise<boolean> => {
       const repo = asked ? pickKnownRepo(known, asked) || asked : ''
-      if (!repo || !s.branch || !prs.available || !prs.mergedHeads || opts.prs === false) return false
-      let timer: NodeJS.Timeout | undefined
-      const heads = await Promise.race([
-        prs.mergedHeads(repo).catch(() => null),
-        new Promise<null>((done) => {
-          timer = setTimeout(() => done(null), HOLDING_PR_WAIT_MS)
-          timer.unref()
-        }),
-      ]).finally(() => clearTimeout(timer))
+      const branch = s.branch ?? ''
+      if (!repo || !branch || !prs.available || !prs.mergedHeads || opts.prs === false) return false
+      const deadline = Date.now() + HOLDING_PR_WAIT_MS
+      const within = <T,>(job: Promise<T | null>): Promise<T | null> => {
+        let timer: NodeJS.Timeout | undefined
+        return Promise.race([
+          job.catch(() => null),
+          new Promise<null>((done) => {
+            timer = setTimeout(() => done(null), Math.max(0, deadline - Date.now()))
+            timer.unref()
+          }),
+        ]).finally(() => clearTimeout(timer))
+      }
+      const heads = await within(prs.mergedHeads(repo))
       if (!heads) return false
       const head = await git.run(s.cwd, ['rev-parse', 'HEAD']).then((out) => out.trim()).catch(() => '')
-      return head !== '' && heads.has(mergedKey(s.branch, head))
+      if (head === '') return false
+      if (heads.has(mergedKey(branch, head))) return true
+      // GitHub 上で base を取り込んでからマージされた PR（#821。「Update branch」など）: head は手元に無い取り込みのコミットで、
+      // 手元の HEAD の 1 つ先。**親が 2 つで、1 つ目がいまの HEAD** なら、足りないのは GitHub が作った取り込みだけ（手元の HEAD より
+      // 先に作りかけは無い）。2 つ目の親が base 側かは見ない（手元に無いことが多く、見ても手元の作りかけの有無は変わらない）。
+      // 親を引くのは、ここまで来た（作りかけに見え、open な PR も無い）セッションの、同じブランチのマージ済みの head だけ
+      const prefix = mergedKey(branch, '')
+      const candidates = [...heads].filter((k) => k.startsWith(prefix)).map((k) => k.slice(prefix.length)).slice(0, MERGED_PARENTS_MAX)
+      if (candidates.length === 0 || !prs.commitParents) return false
+      for (const sha of candidates) {
+        const parents = await within(prs.commitParents(repo, sha))
+        if (parents && parents.length === 2 && parents[0] === head) return true
+      }
+      return false
     }
     // 返答の済んだメッセージの id（行を 1 回だけ舐める。見るのは依頼の新しさの分だけ）
     const notBefore = Date.now() - HOLDING_ASK_DAYS * 86_400_000

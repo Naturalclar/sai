@@ -18,7 +18,7 @@ import { FeedStore } from './rows/store.ts'
 import { localDate } from './rows/aggregate.ts'
 import { row } from './rows/aggregate.test.ts'
 import { PR_LIST_REVIEWS_JQ, PR_VIEW_REVIEWS_JQ } from '../shared/prReviewState.ts'
-import { GhPrs, LIST_FIELDS, MERGED_LIMIT, mergedKey, parseMergedHeads } from './git/prs.ts'
+import { GhPrs, LIST_FIELDS, MERGED_LIMIT, mergedKey, PARENTS_JQ, parseMergedHeads, parseParents } from './git/prs.ts'
 import type { GhRun, GhSend, PrBrowser, PrView } from './git/prs.ts'
 
 const summary = (number: number, extra: Partial<PrSummary> = {}): PrSummary => ({
@@ -549,4 +549,35 @@ test('GhPrs.mergedHeads: 決まった形の gh pr list --state merged を 1 本�
   assert.equal(await new GhPrs(async () => out).mergedHeads('o/r'), null)
   assert.equal(parseMergedHeads('{'), null)
   assert.equal(parseMergedHeads('{}'), null)
+})
+
+test('GhPrs.commitParents: 決まった形の gh api -X GET repos/<repo>/git/commits/<sha> を 1 本だけ。引けた親は覚え、引けなかったことは少しの間だけ覚える（#821）', async () => {
+  const sha = 'c'.repeat(40)
+  const parents = ['a'.repeat(40), 'd'.repeat(40)]
+  const calls: string[][] = []
+  let out: string | null = null
+  const gh = new GhPrs(async (args) => {
+    calls.push(args)
+    return out
+  }, 0)
+  assert.equal(await gh.commitParents('o/r', sha), null, '引けなければ null')
+  out = JSON.stringify(parents)
+  assert.deepEqual(await gh.commitParents('o/r', sha), parents, '引けなかったことは覚える時間（ここでは 0）が過ぎれば引き直す')
+  assert.deepEqual(calls, [
+    ['api', '-X', 'GET', `repos/o/r/git/commits/${sha}`, '--jq', PARENTS_JQ],
+    ['api', '-X', 'GET', `repos/o/r/git/commits/${sha}`, '--jq', PARENTS_JQ],
+  ])
+  out = null
+  assert.deepEqual(await gh.commitParents('o/r', sha), parents, '引けた親は変わらないので、時間が過ぎても引き直さない')
+  assert.equal(calls.length, 2)
+  // 形の悪い名前・SHA では gh を起こさない
+  assert.equal(await gh.commitParents('-x/y', sha), null)
+  assert.equal(await gh.commitParents('o/r', 'HEAD'), null)
+  assert.equal(await gh.commitParents('o/r', `${sha}/../x`), null)
+  assert.equal(calls.length, 2)
+  // 親の並びでない出力は読めない
+  assert.equal(parseParents('{'), null)
+  assert.equal(parseParents('{}'), null)
+  assert.equal(parseParents('["abc"]'), null)
+  assert.deepEqual(parseParents('[]'), [])
 })

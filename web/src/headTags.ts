@@ -4,7 +4,8 @@ import { contextWarns } from '../../shared/contextSize.ts'
 import { isRemoteHost } from '../../shared/host.ts'
 import { projectName } from '../../shared/project.ts'
 import { returnedFromArchive } from '../../shared/archiveReturn.ts'
-import type { SessionSummary, Terminal } from '../../shared/types.ts'
+import type { AgentWaitCount, SessionSummary, Terminal } from '../../shared/types.ts'
+import { agentWaitShown } from '../../shared/agentWaiting.ts'
 import { withSuffix } from '../../shared/sessionLabels.ts'
 
 /** 印 1 つ分。並びはこの順で出す */
@@ -20,6 +21,7 @@ export type HeadTag =
   | { kind: 'returned'; at: string }
   | { kind: 'stop_missing' }
   | { kind: 'wait_unset'; pr: number }
+  | { kind: 'agent_waiting'; count: AgentWaitCount }
   | { kind: 'mode'; mode: string }
   | { kind: 'context'; tokens: number }
 
@@ -39,6 +41,8 @@ export interface HeadTagInput {
   compact: boolean
   /** いまのコンテキスト量（#441。詳細の応答の `context_tokens`）。分からなければ 0 */
   contextTokens: number
+  /** 別のセッションへ送って返答を待っている数（#823。`agentWaitCount()`）。無ければ null */
+  agentWaiting: AgentWaitCount | null
 }
 
 export function headTags(s: HeadTagSession, input: HeadTagInput): HeadTag[] {
@@ -54,6 +58,8 @@ export function headTags(s: HeadTagSession, input: HeadTagInput): HeadTag[] {
   if (s.stop_missing && !input.replyingSince) tags.push({ kind: 'stop_missing' })
   // 「待ちます」と言って終わったのに、起こす予定が無い（#732）。返信中は出さない（もう次が回っている）。狭い画面の 1 行目にも残す
   if (s.wait_unset && !input.replyingSince) tags.push({ kind: 'wait_unset', pr: s.wait_unset.pr })
+  // 別のセッションの返答を待っている（#823）。狭い画面の 1 行目にも残す
+  if (agentWaitShown(input.agentWaiting)) tags.push({ kind: 'agent_waiting', count: input.agentWaiting })
   if (s.archived) tags.push({ kind: 'archived' })
   // アーカイブしたのに行が増えて戻ってきた（#583）。狭い画面の 1 行目にも残す（片付けたはずの方に送り続けるのを止めたい）
   const returned = returnedFromArchive(s)

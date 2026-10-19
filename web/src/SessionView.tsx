@@ -21,6 +21,7 @@ import { codexTurnSince, openPromptSince } from './openPrompt'
 import { isRemoteHost } from '../../shared/host.ts'
 import { QueuedBubble } from './QueuedBubble'
 import { AgentActivityBar } from './AgentActivityBar'
+import { agentActivityShown, agentWaitCount } from '../../shared/agentWaiting.ts'
 import { LoopBar } from './LoopBar'
 import { WaitBar } from './WaitBar'
 import { WaitUnsetBar } from './WaitUnsetBar'
@@ -277,7 +278,11 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
   const [loopFormFor, setLoopFormFor] = useState('')
   const canLoop = Boolean(s && s.agent === 'claude' && !s.archived && !blocked && !s.terminal && !(loop && loopLive(loop.status)))
   const onLoop = canLoop ? () => setLoopFormFor(id) : undefined
-  const tagInput = { serverHost: data?.host ?? '', approval: approvals[0]?.text ?? '', replyingSince: mine?.since ?? '', contextTokens }
+  // 別のセッションへのメッセージ（#823）。枠を出すのは返答待ち・預かり・失敗があるか止めているときだけ。出さないときの「送信を止める」は見出しの操作に置く
+  const agent = data?.agent
+  const agentShown = agentActivityShown(agent)
+  const agentStop = agent && !agentShown ? { stopped: agent.stopped } : undefined
+  const tagInput = { serverHost: data?.host ?? '', approval: approvals[0]?.text ?? '', replyingSince: mine?.since ?? '', contextTokens, agentWaiting: agent ? agentWaitCount(agent) : null }
   const thinking = { has: hasThinking, open: thinkingUi.open, toggle: () => setThinkingUi({ open: !thinkingUi.open }) }
   const label = s ? headName(s) : { name: '', project: '' }
   const returned = s ? returnedFromArchive(s) : ''
@@ -302,7 +307,7 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
                 <code>{s.id}</code>
                 {s.session_source && s.session_source !== 'synth' && <span className="tag">{s.session_source}</span>}
               </span>
-              <SessionHeadActions s={s} settings={settings} thinking={thinking} peers={peers} onHandoff={onHandoff} onLoop={onLoop} />
+              <SessionHeadActions s={s} settings={settings} thinking={thinking} peers={peers} onHandoff={onHandoff} onLoop={onLoop} agentStop={agentStop} />
             </SessionHeadMenu>
           </div>
           {s.title_full && <SessionTitle key={`title:${s.id}`} text={s.title_full} />}
@@ -314,7 +319,7 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
           <h1><span className="hash">#</span>{label.project}</h1>
           <SessionHeadInfo s={s} contextTokens={contextTokens} />
           <SessionStatusTags tags={headTags(s, { ...tagInput, compact: false })} now={now} title={s.id} />
-          <SessionHeadActions s={s} settings={settings} thinking={thinking} peers={peers} onHandoff={onHandoff} onLoop={onLoop} />
+          <SessionHeadActions s={s} settings={settings} thinking={thinking} peers={peers} onHandoff={onHandoff} onLoop={onLoop} agentStop={agentStop} />
           {s.title_full && <div className="meta wide">{s.title_full}</div>}
         </div>
       )}
@@ -436,7 +441,7 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
                 <QueuedBubble key={q.queue_id} id={id} item={q} order={i + 1} paused={queuedHere.paused ?? ''} now={now} profile={data.profile} />
               ))}
               {/* このセッションから別のセッションへのメッセージ（#311）。送ったことがあるか止めているときだけ */}
-              {data.agent && <AgentActivityBar id={id} activity={data.agent} now={now} />}
+              {agent && agentShown && <AgentActivityBar id={id} activity={agent} now={now} />}
               {loop && <LoopBar key={`loop:${id}`} id={id} loop={loop} now={now} />}
               {/* 預けた待ち（#732）。古いサーバ（waits を返さない）では出さない */}
               {(data?.waits?.[id] ?? []).map((w) => (

@@ -814,6 +814,9 @@
   .tag.session-pr.draft { color: var(--muted); }
   .tag.session-pr.failing { background: color-mix(in srgb, var(--claude) 16%, transparent); color: var(--claude); }
   .tag.session-pr.approved { background: color-mix(in srgb, var(--codex) 16%, transparent); color: var(--codex); }
+  /* 別のセッションの返答を待っている数（#823）。相手の番なので控えめに。失敗があれば色を変える */
+  .tag.agent-waiting { background: color-mix(in srgb, var(--codex) 14%, transparent); color: var(--codex); font-variant-numeric: tabular-nums; }
+  .tag.agent-waiting.failed { background: color-mix(in srgb, var(--claude) 16%, transparent); color: var(--claude); font-weight: 600; }
   /* 未読の返答の数（#502） */
   .tag.unread { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
   /* 「終わって次を待っている」（#438）。詰まっていないので待機中より目立たせない */
@@ -1189,7 +1192,7 @@
   .agent-activity.stopped { border-color: color-mix(in srgb, var(--claude) 45%, var(--line)); }
   .agent-activity .head { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
   .agent-activity .title { color: var(--ink); font-weight: 600; }
-  .agent-activity .head button { margin-left: auto; font: inherit; font-size: 12px; padding: 2px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; }
+  .agent-activity .head button { font: inherit; font-size: 12px; padding: 2px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; }
   .agent-activity .head button:disabled { opacity: .5; cursor: default; }
   .agent-activity .note, .agent-activity .err { color: var(--claude); margin-top: 6px; }
   /* ループ（#634）。枠は別のセッションへのメッセージと同じで、中身だけ足す */
@@ -1234,8 +1237,21 @@
   /* 狭い画面はバブルの本文の列（8px + 28px + 10px）に揃える。上の狭い画面のまとめに置くと、後ろにあるこの枠の既定の margin に負ける */
   @media (max-width: 900px) {
     .agent-activity { margin: 6px 8px 10px 46px; }
+    /* 送り先の名前を状態の語で潰さない（#823）。入り切らなければ折り返す */
+    .agent-activity .recent li { flex-wrap: wrap; column-gap: 8px; }
+    .agent-activity .recent .to { flex: 0 1 auto; }
   }
   .agent-activity .recent li.failed .status { color: var(--claude); }
+  /* 送り先の名前から相手の画面へ（#823）。相手の状態の語は返答待ちの行だけ */
+  .agent-activity .recent a.to { text-decoration: none; }
+  .agent-activity .recent a.to:hover { text-decoration: underline; }
+  .agent-activity .recent .why { white-space: nowrap; flex-shrink: 0; color: var(--ink); }
+  .agent-activity .agent-stop { margin-left: auto; display: inline-flex; gap: 6px; align-items: center; }
+  .agent-activity .agent-stop .err { color: var(--claude); }
+  /* 枠を出していないときの「送信を止める」（#823）。見出しの操作に並ぶので、ほかの操作と同じ見た目 */
+  .chat-head .agent-stop button { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-size: 12px; cursor: pointer; }
+  .chat-head .agent-stop button:hover:not(:disabled) { text-decoration: underline; }
+  .chat-head .agent-stop .err { color: var(--claude); margin-left: 6px; }
   /* 5分を超えて処理中。長引いていることが見えるように時刻の色を変える */
   .group.pending.long .gh .time { color: var(--synth); font-weight: 600; }
   .pending-line { display: flex; gap: 8px; align-items: baseline; padding: 2px 16px 10px 62px; color: var(--muted); font-size: 12px; }

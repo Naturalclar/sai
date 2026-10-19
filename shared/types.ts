@@ -1320,7 +1320,25 @@ export interface AgentActivityMessage {
   since: string
   /** 相手のそのターンが終わったか。`failed` は相手のターンが失敗した・預かりのまま止まった */
   status: 'pending' | 'done' | 'failed'
+  /**
+   * 返答待ち（`pending`）の相手がいま何をしているか（#823。語は `WHY_LABEL` と同じ）。処理中・端末で作業中・待ち・預かりありのどれか。
+   * 分からない・どれでもない・別のリポジトリの相手（#747）なら省略。詳細の応答にだけ載る（一覧には載せない）
+   */
+  to_why?: HoldingWhy
+  /** 別のリポジトリの相手（#747）。呼び名までしか出さない */
+  far?: true
 }
+
+/** そのセッションが送って、まだ終わっていないメッセージの数（#823。数えるのは `shared/agentWaiting.ts` の `agentWaitCount()` だけ） */
+export interface AgentWaitCount {
+  /** 返答待ち（送って返答がまだ）＋預かり（まだ送っていない。止まっているものは除く） */
+  waiting: number
+  /** 失敗した・預かりのまま止まった */
+  failed: number
+}
+
+/** エンティティID → そのセッションの返答待ちの数（#823）。どちらも 0 のセッションは載せない */
+export type AgentWaitingMap = Record<string, AgentWaitCount>
 
 /**
  * そのセッション（送り元）の、別のセッションへのメッセージのようす（#311）。詳細の応答に、送ったことがあるか止めているときだけ載る。
@@ -1618,6 +1636,11 @@ export interface SessionsResponse {
   waits: WaitMap
   /** 返信中のエージェントが待っている許可・質問（ID → 古い順）。これが変わると rev も変わる */
   approvals: ApprovalMap
+  /**
+   * 別のセッションへ送って返答を待っている数（#823）。サイドバーの「返答待ち N」に使う。**数だけ**で、送り先・本文は載せない（#688）。
+   * これが変わると rev も変わる
+   */
+  agent_waiting: AgentWaitingMap
   /** 配っている web/dist/ が web/src / shared より古い（git pull のあと pnpm build していない）。これが変わると rev も変わる */
   build_stale: boolean
   /** 窓の中の一番新しい行の v（無い行は 1、行が無ければ 0）。RECORD_VERSION より小さければ記録側の record.py が古い */

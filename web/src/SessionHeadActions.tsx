@@ -1,4 +1,5 @@
 import type { SessionSummary, SettingsResponse } from './api'
+import { AgentStopButton } from './AgentStopButton'
 import { ArchiveButton } from './ArchiveButton'
 import { ContinuedLinks } from './ContinuedLinks'
 import { HandoffButton } from './HandoffButton'
@@ -17,13 +18,18 @@ interface Props {
   onHandoff?: (() => void) | undefined
   /** ループを組む画面を開く（#634）。組めないセッション・もう組んであるセッションでは渡さない（ボタンを出さない） */
   onLoop?: (() => void) | undefined
+  /**
+   * 別のセッションへの送信を止める・再開する（#823）。枠（`AgentActivityBar`）を出していないときだけ渡す（止める口を無くさない）。
+   * 送ったことが無く止めてもいないセッションでは渡さない
+   */
+  agentStop?: { stopped: boolean } | undefined
 }
 
 /**
  * チャット見出しの「操作」（アーカイブ・表示名とアイコン・許可されているもの・一言の性格・思考を全部開く）。
  * 広い画面では見出しにそのまま並び、狭い画面では「⋯」のパネルの中に入る（#274）
  */
-export function SessionHeadActions({ s, settings, thinking, peers, onHandoff, onLoop }: Props) {
+export function SessionHeadActions({ s, settings, thinking, peers, onHandoff, onLoop, agentStop }: Props) {
   return (
     <>
       {/*
@@ -43,6 +49,11 @@ export function SessionHeadActions({ s, settings, thinking, peers, onHandoff, on
           <button type="button" className="linkish" onClick={onLoop} title="目的と終わりの条件を決めて、このセッションを何周も回す（次にいつ起きるかはエージェントが決め、上限は SAI が止める）">
             ループを組む
           </button>
+        </span>
+      )}
+      {agentStop && (
+        <span className="meta" key={`agentstop:${s.id}`}>
+          <AgentStopButton id={s.id} stopped={agentStop.stopped} />
         </span>
       )}
       {/* 一言が有効なときだけ。このセッションの性格（無ければヘッダの既定に従う） */}

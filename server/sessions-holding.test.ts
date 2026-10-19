@@ -68,6 +68,14 @@ class FakePrs extends NoPrs {
   mergedHeads(): Promise<ReadonlySet<string> | null> {
     return Promise.resolve(this.merged)
   }
+  /** コミットの親（#821。SHA → 親の並び）。置いていないものは引けない。`parentsSlow` は返らない */
+  parents = new Map<string, string[]>()
+  parentsAsked: string[] = []
+  parentsSlow = false
+  commitParents(_repo: string, sha: string): Promise<readonly string[] | null> {
+    this.parentsAsked.push(sha)
+    return this.parentsSlow ? new Promise(() => {}) : Promise.resolve(this.parents.get(sha) ?? null)
+  }
   override list(repo?: string): Promise<PrSummary[] | null> {
     this.asked.push(repo ?? '')
     return this.slow ? new Promise(() => {}) : Promise.resolve(this.lists.get(repo ?? '') ?? null)
@@ -265,6 +273,35 @@ test('sai_sessions: コミットしていない変更・PR になっていない
     assert.deepEqual(await holdingOfId('C1@r'), { free: true }, 'マージ済みのブランチが残っているだけ（PR の head と同じ）')
     prs.merged = new Set([mergedKey('dev-worktree-c', 'b'.repeat(40))])
     assert.deepEqual(await holdingOfId('C1@r'), { why: 'unpushed' }, 'マージのあとにコミットが足されている')
+    // GitHub 上で base を取り込んでからマージされた（#821）: head は手元の HEAD を 1 つ目の親に持つマージコミット
+    const update = 'c'.repeat(40)
+    const base = 'd'.repeat(40)
+    prs.merged = new Set([mergedKey('dev-worktree-c', update), mergedKey('dev-worktree-x', 'e'.repeat(40))])
+    prs.parents.set(update, [FAKE_HEAD, base])
+    prs.parentsAsked = []
+    assert.deepEqual(await holdingOfId('C1@r'), { free: true }, 'GitHub が作った取り込みのコミットだけが手元に無い')
+    assert.deepEqual(prs.parentsAsked, [update], '親を引くのは同じブランチのマージ済みの head だけ')
+    prs.parents.set(update, [base, FAKE_HEAD])
+    assert.deepEqual(await holdingOfId('C1@r'), { why: 'unpushed' }, 'いまの HEAD が 2 つ目の親（別のブランチに取り込まれた側）')
+    prs.parents.set(update, [FAKE_HEAD])
+    assert.deepEqual(await holdingOfId('C1@r'), { why: 'unpushed' }, 'いまの HEAD の上に、別の所から足されたただのコミット')
+    prs.parents.set(update, ['b'.repeat(40), base])
+    assert.deepEqual(await holdingOfId('C1@r'), { why: 'unpushed' }, '親が手元の HEAD と関係ない')
+    prs.parents.delete(update)
+    assert.deepEqual(await holdingOfId('C1@r'), { why: 'unpushed' }, '親が引けなければ、空きにしない')
+    prs.parents.set(update, [FAKE_HEAD, base])
+    prs.parentsSlow = true
+    try {
+      assert.deepEqual(await holdingOfId('C1@r'), { why: 'unpushed' }, '親が時間内に返らなければ、空きにしない')
+    } finally {
+      prs.parentsSlow = false
+    }
+    prs.lists.set('o/repo-x', [pr(9101, 'issue-9100-stock-filter'), pr(9102, 'dev-worktree-c')])
+    prs.parentsAsked = []
+    assert.equal((await holdingOfId('C1@r'))?.why, 'pr', 'open な PR があれば、今までどおりマージ前')
+    assert.deepEqual(prs.parentsAsked, [], 'open な PR があれば親を引かない')
+    prs.lists.set('o/repo-x', [pr(9101, 'issue-9100-stock-filter')])
+    prs.parents.clear()
     prs.merged = null
     assert.deepEqual(await holdingOfId('C1@r'), { why: 'unpushed' }, 'マージ済みの一覧が引けなければ、空きにしない')
     prs.merged = new Set()

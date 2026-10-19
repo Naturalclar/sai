@@ -59,6 +59,23 @@ export function parseMergedHeads(out: string): Set<string> | null {
   }
   return heads
 }
+
+/** コミットの親を引く形（#821）。`--jq` で親の SHA だけにする（本文・差分を受けない） */
+export const PARENTS_JQ = '[.parents[].sha]'
+/** 引けた親を何本まで覚えるか（#821。コミットの親は変わらないので、引けたものは時間で捨てない） */
+export const PARENTS_KEEP = 500
+
+/** `gh api repos/<repo>/commits/<sha> --jq '[.parents[].sha]'` の出力を読む（#821）。40 桁の SHA の並びでなければ null */
+export function parseParents(out: string): string[] | null {
+  let list: unknown
+  try {
+    list = JSON.parse(out)
+  } catch {
+    return null
+  }
+  if (!Array.isArray(list) || !list.every((p) => typeof p === 'string' && /^[0-9a-f]{40}$/.test(p))) return null
+  return list as string[]
+}
 /** `gh pr diff` の出力をどこまで受けるか。差分の上限（2MB）より大きく取り、切るのは diff.ts の clampPatch() */
 export const PR_DIFF_MAX_BYTES = 16 * 1024 * 1024
 /** `gh` でログインしている人を覚える時間。引けなかったこと（未ログイン）は短く覚える */
@@ -104,6 +121,11 @@ export interface PrBrowser {
    * `gh pr list --repo <repo> --state merged` の決まった形の 1 本だけ。引けなければ null。持たない実装は「引けない」と同じ
    */
   mergedHeads?(repo: string): Promise<ReadonlySet<string> | null>
+  /**
+   * コミットの親の SHA（#821。GitHub 上で base を取り込んでからマージされた PR の head が、手元の HEAD の 1 つ先のマージコミットかを見る）。
+   * `gh api -X GET repos/<repo>/commits/<sha> --jq '[.parents[].sha]'` の決まった形の 1 本だけ。引けなければ null。持たない実装は「引けない」と同じ
+   */
+  commitParents?(repo: string, sha: string): Promise<readonly string[] | null>
   view(repo: string, number: number): Promise<PrView | null>
   /** 会話のコメントとレビュー（#600）。読めなければ null（「無い」の空と分ける）。画面を開いたときと「更新」のときだけ呼ぶ */
   comments(repo: string, number: number): Promise<PrCommentList | null>
@@ -296,6 +318,27 @@ export class GhPrs implements PrBrowser {
       .catch(() => null)
     this.merged.set(repo, { at: Date.now(), heads })
     return heads
+  }
+
+  /** 引けた親は捨てない（変わらない）。引けなかったことは一覧と同じ間だけ覚える */
+  private readonly parents = new Map<string, { at: number; parents: Promise<readonly string[] | null> }>()
+
+  commitParents(repo: string, sha: string): Promise<readonly string[] | null> {
+    if (!isRepoName(repo) || !/^[0-9a-f]{40}$/.test(sha)) return Promise.resolve(null)
+    const key = `${repo}\0${sha}`
+    const hit = this.parents.get(key)
+    if (hit && (hit.at === Infinity || Date.now() - hit.at < this.ttl)) return hit.parents
+    const parents = this.run(['api', '-X', 'GET', `repos/${repo}/commits/${sha}`, '--jq', PARENTS_JQ], 64 * 1024)
+      .then((out) => (out === null ? null : parseParents(out)))
+      .catch(() => null)
+    const entry = { at: Date.now(), parents }
+    this.parents.set(key, entry)
+    void parents.then((got) => {
+      if (got && this.parents.get(key) === entry) entry.at = Infinity
+    })
+    // 古いものから捨てる（Map は入れた順）
+    while (this.parents.size > PARENTS_KEEP) this.parents.delete(this.parents.keys().next().value as string)
+    return parents
   }
 
   async list(repo: string, fresh = false): Promise<PrSummary[] | null> {

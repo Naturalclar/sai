@@ -25,9 +25,9 @@ export function MarkdownImage({ src, alt }: { src: string; alt: string }) {
   const [band, setBand] = useState<BandLayout | null>(null)
   const name = alt || imageName(src)
   const url = urlOf?.(src)
-  if (!url) return <UnavailableImage name={name} src={src} why={noSource} title={src} />
+  if (!url) return <UnavailableImage name={name} src={src} why={noSource} />
   if (failed !== undefined) {
-    return <UnavailableImage name={name} src={src} why={failed} title={failed ? src : `${src}\n表示できません（ファイルが無い・作業ディレクトリの外・画像でない）`} />
+    return <UnavailableImage name={name} src={src} why={failed} broken />
   }
   // 読めなかったら名前（と理由）だけにし、同じ発言のライトボックスの並びからも外す
   const broken = (why: ImageUnavailable | null) => {

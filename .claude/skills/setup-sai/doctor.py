@@ -125,7 +125,9 @@ def git(args, cwd):
 
 
 def recent_cwds(days=7):
-    files = sorted(glob.glob(os.path.join(FEED, '20??-??-??*.jsonl')), key=os.path.getmtime)[-days:]
+    # 日付はファイル名から見る（<host> 付きのファイルもあるので、ファイルの数で切ると日数が縮む）
+    since = time.strftime('%Y-%m-%d', time.localtime(time.time() - (days - 1) * 86400))
+    files = [p for p in glob.glob(os.path.join(FEED, '20??-??-??*.jsonl')) if os.path.basename(p)[:10] >= since]
     seen = set()
     for path in files:
         try:
@@ -133,7 +135,10 @@ def recent_cwds(days=7):
                 for line in f:
                     m = re.search(r'"cwd":\s*"((?:[^"\\]|\\.)*)"', line)
                     if m:
-                        seen.add(json.loads('"%s"' % m.group(1)))
+                        try:
+                            seen.add(json.loads('"%s"' % m.group(1)))
+                        except ValueError:
+                            continue  # 書きかけの行
         except OSError:
             continue
     return seen
@@ -149,7 +154,7 @@ def images():
         print(f'{agent}: {path} → ' + ('画像の置き場の 1 行がある' if IMAGE_LINE.search(body) else '画像の置き場の 1 行が無い → 案として出す'))
     here = git(['rev-parse', '--git-common-dir'], '.')
     here = os.path.realpath(here.stdout.strip()) if here and here.returncode == 0 else ''
-    tops = set()
+    tops = {}  # 共通の git ディレクトリ → 見せる toplevel（同じリポジトリの worktree は 1 つに数える）
     for cwd in recent_cwds():
         if not os.path.isdir(cwd):
             continue
@@ -160,9 +165,9 @@ def images():
         common = os.path.realpath(os.path.join(cwd, lines[1])) if len(lines) > 1 else ''
         if common and common == here:
             continue  # SAI 自身（.gitignore 済み）
-        tops.add(lines[0])
+        tops.setdefault(common or lines[0], lines[0])
     missing = []
-    for top in sorted(tops):
+    for top in sorted(tops.values()):
         r = git(['check-ignore', '-q', '.screenshots/probe.png'], top)
         if r is not None and r.returncode == 1:
             missing.append(top)

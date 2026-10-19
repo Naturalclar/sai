@@ -44,7 +44,7 @@ export type ImageRead =
   | { ok: true; bytes: Buffer; type: IconType; name: string; etag: string }
   | { ok: false; status: number; reason: string; why?: ImageUnavailable }
 
-/** `why` は画面に出す理由の区分（#820）。作業ディレクトリが分からないときのように、区分にできない失敗には付けない */
+/** `why` は画面に出す理由の区分（#820）。作業ディレクトリが分からない・無い、開けない（権限・差し替え）のように、区分にできない失敗には付けない */
 const fail = (status: number, reason: string, why?: ImageUnavailable): ImageRead => ({ ok: false, status, reason, ...(why ? { why } : {}) })
 
 /** `root` の中か（root そのものは画像ではないので、中身だけ） */
@@ -63,13 +63,16 @@ export async function readSessionImage(source: ImageSource, max = IMAGE_MAX_BYTE
   try {
     root = await realpath(source.cwd)
   } catch {
-    return fail(404, '作業ディレクトリがありません', 'missing')
+    return fail(404, '作業ディレクトリがありません')
   }
+  const target = isAbsolute(source.src) ? source.src : resolve(source.cwd, source.src)
   let real: string
   try {
-    real = await realpath(isAbsolute(source.src) ? source.src : resolve(source.cwd, source.src))
+    real = await realpath(target)
   } catch {
-    return fail(404, 'ファイルがありません', 'missing')
+    // 消えたファイルでも、書かれたパスが作業ディレクトリの外なら「外」と出す（置き直しても出ないので。#820 のレビュー）
+    const outsideAsWritten = !inside(resolve(source.cwd), target) && !inside(root, target)
+    return fail(404, 'ファイルがありません', outsideAsWritten ? 'outside' : 'missing')
   }
   if (!inside(root, real)) return fail(403, '作業ディレクトリの外のファイルは配りません', 'outside')
   let fh: FileHandle
@@ -77,7 +80,7 @@ export async function readSessionImage(source: ImageSource, max = IMAGE_MAX_BYTE
     // realpath で確かめたあとに差し替えられたシンボリックリンクは開かない
     fh = await open(real, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
   } catch {
-    return fail(404, 'ファイルを開けません', 'missing')
+    return fail(404, 'ファイルを開けません')
   }
   try {
     const st = await fh.stat()

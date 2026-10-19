@@ -8,7 +8,7 @@ export type ThumbFailure = { kind: 'heavy'; bytes: number } | { kind: 'retry' } 
 
 export function thumbFailure(status: number, headers: Pick<Headers, 'get'>): ThumbFailure {
   if (status === 200) return { kind: 'retry' }
-  if (status !== 503 || headers.get('x-sai-thumb') !== 'unavailable') return { kind: 'broken', why: status === 200 ? null : parseImageUnavailable(headers.get(IMAGE_UNAVAILABLE_HEADER)) }
+  if (status !== 503 || headers.get('x-sai-thumb') !== 'unavailable') return { kind: 'broken', why: parseImageUnavailable(headers.get(IMAGE_UNAVAILABLE_HEADER)) }
   const bytes = Number(headers.get('x-sai-image-bytes'))
   return { kind: 'heavy', bytes: Number.isFinite(bytes) && bytes > 0 ? bytes : 0 }
 }

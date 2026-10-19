@@ -24,7 +24,7 @@ export function MessageImages({ items }: { items: GalleryItem[] }) {
             name={item.name}
             src={item.name}
             why={failed.get(item.url) ?? null}
-            title={failed.get(item.url) ? item.name : `${item.name}\n表示できません（ファイルが無い・作業ディレクトリの外・画像でない）`}
+            broken
           />
         ) : (
           <a

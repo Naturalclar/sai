@@ -19,7 +19,7 @@ import {
   rolloutSessionAtStart,
   sessionRoots,
 } from './codexPanes.ts'
-import type { CodexPaneDeps, StartProbe } from './codexPanes.ts'
+import type { CodexPaneDeps, CodexPeer, StartProbe } from './codexPanes.ts'
 import type { Tmux } from './terminal.ts'
 
 /** ペイン 2 つ（%1 のシェル 100、%2 のシェル 200）と、その下の codex */
@@ -131,7 +131,7 @@ test('rollout を 1 つも開いていない codex は、当てずに空で返�
 })
 
 test('rollout を閉じた TUI は、起動時刻で裏を取れたセッションを返す（#448）', async () => {
-  const calls: [number, string, string, readonly number[]][] = []
+  const calls: [number, string, string, readonly CodexPeer[]][] = []
   const panes = new CodexPanes(
     deps({
       openOf: async () => ({ cwd: '/repo/one', rollouts: [] }),
@@ -142,7 +142,47 @@ test('rollout を閉じた TUI は、起動時刻で裏を取れたセッショ�
     }),
   )
   assert.equal((await panes.scan())[0]?.session, SESSION)
-  assert.deepEqual(calls, [[101, '/repo/one', '%1', [101]]], 'ペインも渡す（スクロールバックを読むため）。peers はペインの Codex の pid')
+  assert.deepEqual(calls, [[101, '/repo/one', '%1', [{ pid: 101, pane: '%1' }]]], 'ペインも渡す（スクロールバックを読むため）。peers は同じ cwd のペインの Codex')
+})
+
+/** ペイン 3 つの codex（%1 = 101・%2 = 201 は /repo/one、%3 = 301 は /repo/two） */
+const THREE_PANES = '%1 100\n%2 200\n%3 300\n'
+const THREE_PS = ['  100     1 -zsh', '  101   100 codex', '  200     1 -zsh', '  201   200 codex', '  300     1 -zsh', '  301   300 codex'].join('\n')
+
+test('起動時刻の補欠に渡す peers は同じ cwd のペインの Codex だけ（#819）', async () => {
+  const seen = new Map<number, readonly CodexPeer[]>()
+  const panes = new CodexPanes(
+    deps({
+      tmux: fakeTmux(THREE_PANES),
+      ps: async () => THREE_PS,
+      openOf: async (pid) => ({ cwd: pid === 301 ? '/repo/two' : '/repo/one', rollouts: [] }),
+      sessionAtStart: async (pid, _cwd, _pane, peers) => {
+        seen.set(pid, peers)
+        return ''
+      },
+    }),
+  )
+  await panes.scan()
+  assert.deepEqual(seen.get(101), [{ pid: 101, pane: '%1' }, { pid: 201, pane: '%2' }])
+  assert.deepEqual(seen.get(301), [{ pid: 301, pane: '%3' }])
+})
+
+test('起動時刻で推したセッションがほかのペインと重なれば、推した方は当てない（#819 のレビュー）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-panes-'))
+  const rollout = await writeRollout(dir, `rollout-2026-09-04T14-40-23-${SESSION}.jsonl`, SESSION, '/repo/one')
+  const scan = (opened: number[]) =>
+    new CodexPanes(
+      deps({
+        tmux: fakeTmux(THREE_PANES),
+        ps: async () => THREE_PS,
+        openOf: async (pid) => ({ cwd: '/repo/one', rollouts: opened.includes(pid) ? [rollout] : [] }),
+        sessionAtStart: async (pid) => (pid === 301 ? OTHER : SESSION),
+      }),
+    ).scan()
+  const both = await scan([])
+  assert.deepEqual(both.map((p) => p.session), ['', '', OTHER], '2 つとも推しただけなら、どちらも当てない')
+  const one = await scan([201])
+  assert.deepEqual(one.map((p) => p.session), ['', SESSION, OTHER], 'rollout を開いている方は残す')
 })
 
 test('開いている rollout があれば起動時刻の補欠は呼ばない（#429 を優先）', async () => {
@@ -359,12 +399,16 @@ test('rolloutSessionAtStart: 同じ app-server が読み込む同じ cwd のス�
       openRollouts: async () => [path, peerPath],
       ...over,
     })
-  const find = (p: Partial<StartProbe>, peers: number[]) => rolloutSessionAtStart({ CODEX_HOME: home }, p)(TUI, '/repo/one', '%1', peers)
-  assert.equal(await find(both(), [TUI, PEER]), SESSION, 'ほかの TUI の起動時のスレッドは、その TUI の持ち物')
-  assert.equal(await rolloutSessionAtStart({ CODEX_HOME: home }, both())(PEER, '/repo/one', '%2', [TUI, PEER]), OTHER, '相手の側からも当たる')
-  assert.equal(await find(both(), [TUI]), '', 'その TUI が居なければ、どちらを映しているか分からない')
-  assert.equal(await find(both({ sockets: async (pid) => (pid === SERVER ? SERVER_SOCKETS : pid === TUI ? TUI_SOCKETS : STRANGER_SOCKETS) }), [TUI, PEER]), '', '別の app-server の客の TUI では裏が取れない')
-  assert.equal(await find(both({ openRollouts: async () => [path, peerPath, stray] }), [TUI, PEER]), '', '誰の起動時のものでもないスレッド（/new・/resume）が残れば当てない')
+  const me = { pid: TUI, pane: '%1' }
+  const peer = { pid: PEER, pane: '%2' }
+  const find = (p: Partial<StartProbe>, peers: CodexPeer[]) => rolloutSessionAtStart({ CODEX_HOME: home }, p)(TUI, '/repo/one', '%1', peers)
+  assert.equal(await find(both(), [me, peer]), SESSION, 'ほかの TUI の起動時のスレッドは、その TUI の持ち物')
+  assert.equal(await rolloutSessionAtStart({ CODEX_HOME: home }, both())(PEER, '/repo/one', '%2', [me, peer]), OTHER, '相手の側からも当たる')
+  assert.equal(await find(both(), [me]), '', 'その TUI が居なければ、どちらを映しているか分からない')
+  assert.equal(await find(both({ sockets: async (pid) => (pid === SERVER ? SERVER_SOCKETS : pid === TUI ? TUI_SOCKETS : STRANGER_SOCKETS) }), [me, peer]), '', '別の app-server の客の TUI では裏が取れない')
+  assert.equal(await find(both({ openRollouts: async () => [path, peerPath, stray] }), [me, peer]), '', '誰の起動時のものでもないスレッド（/new・/resume）が残れば当てない')
+  const peerLeft = both({ scrollback: async (pane) => (pane === '%2' ? `codex resume ${OTHER}\n` : '') })
+  assert.equal(await find(peerLeft, [me, peer]), '', 'ほかの TUI がそのスレッドから離れていれば、その TUI の持ち物とはみなさない')
 })
 
 test('rolloutSessionAtStart: 起動後に書かれた同じ cwd の別の会話でも、その app-server が読み込んでいなければ当てる（#568）', async () => {

@@ -173,6 +173,7 @@ export function SessionList({ list, filters, setFilters, active, creating = fals
                     pr={prForSession(s, prs)?.pr ?? null}
                     loop={data?.loops[s.id] ?? null}
                     doneWait={data?.waits?.[s.id]?.find(waitNeedsHuman) ?? null}
+                    agentWaiting={data?.agent_waiting?.[s.id] ?? null}
                     beside={shown.includes(s.id)}
                     onOpenBeside={onOpenBeside ? () => onOpenBeside({ kind: 'session', id: s.id }) : undefined}
                   />

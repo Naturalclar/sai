@@ -16,6 +16,8 @@ import { handoffFirstText, handoffReady } from '../shared/handoff.ts'
 import { selfHost } from './host.ts'
 import type { SessionTurnResponse, TurnStepsResponse,
   AgentActivity,
+  AgentWaitingMap,
+  ReplyQueueMap,
   AgentFollowupLine,
   AgentHeldMessage,
   SendAcrossPair,
@@ -151,6 +153,7 @@ import { briefNotes, cleanBrief, prBriefPrompt } from '../shared/prBrief.ts'
 import { diffStats, githubRepoOf, isPrNumber, knownRepos, pickKnownRepo } from '../shared/prs.ts'
 import { addPair, mayCross, removePair } from '../shared/sendAcross.ts'
 import { WAITING_SAID_FRESH_MS, WAIT_HUMAN_THEN, saysWaiting, waitingUnscheduled } from '../shared/waitingSaid.ts'
+import { agentWaitCount, agentWaitShown, answeredIds } from '../shared/agentWaiting.ts'
 import { FREE_NOTE, grownRefusal, grownSinceSeen, holdingLabel, holdingOf, prOfBranch, START_ASK_NOTE, startRefusal } from '../shared/holding.ts'
 import { githubReview, parseReviewRequest } from '../shared/prReview.ts'
 import { fillRepo, ProjectResolver } from './git/project.ts'
@@ -177,7 +180,7 @@ import { BackgroundLookupError, ClaudeBackground, type BackgroundSessions } from
 import { TURN_USAGE_FILE, TurnUsageLog } from './reply/turnUsage.ts'
 import { usageReport, usageReportDays } from '../shared/usageReport.ts'
 import { QUEUE_FILE, QUEUE_MAX, ReplyQueueStore } from './reply/replyQueue.ts'
-import { AGENT_MESSAGES_FILE, AGENT_TOKEN_FILE, AGENT_TOKEN_HEADER, AgentMessages, ensureAgentToken, tokenMatches } from './reply/agentMessages.ts'
+import { AGENT_MESSAGES_FILE, AGENT_MESSAGES_KEEP, AGENT_TOKEN_FILE, AGENT_TOKEN_HEADER, AgentMessages, ensureAgentToken, tokenMatches } from './reply/agentMessages.ts'
 import type { AgentMessage } from './reply/agentMessages.ts'
 import { LOOP_TICK_MS, LOOPS_FILE, LoopStore } from './reply/loops.ts'
 import { WAITS_FILE, WAIT_TICK_MS, WaitStore } from './reply/waits.ts'
@@ -3244,7 +3247,7 @@ export function createApp(
   const agentHoldingsOf = async (list: readonly SessionSummary[], opts: { prs?: boolean; draining?: boolean; only?: string } = {}): Promise<Map<string, SessionHolding>> => {
     const active = new Map(await Promise.all(list.map(async (s) => [s.id, Boolean((await progress.read(s)).active)] as const)))
     const queued = queue.snapshot()
-    return holdingsOf(list, (s) => (agentBusy(s.id) ? 'busy' : active.get(s.id) ? 'terminal' : s.waiting ? 'waiting' : (queued[s.id]?.items.length ?? 0) > 0 ? 'queued' : ''), () => true, opts)
+    return holdingsOf(list, (s) => agentOccupied(s, Boolean(active.get(s.id)), queued), () => true, opts)
   }
   /**
    * 送り元が最後に `sai_sessions` で見た、相手の読み直す量（#795。送り元 → 相手 → トークン）。メモリだけで、立て直すと忘れる
@@ -3786,17 +3789,61 @@ export function createApp(
    */
   const agentResult = async (message: AgentMessage): Promise<AgentWaitResponse | null> => {
     const base = { message_id: message.message_id, to: message.to }
-    const answered = replyOf(await rowsNow(QUEUE_DAYS), message.to, message.message_id)
-    if (answered) return { ...base, status: 'done', text: clipReply(answered.text ?? '') }
+    const replyRow = replyOf(await rowsNow(QUEUE_DAYS), message.to, message.message_id)
+    if (replyRow) return { ...base, status: 'done', text: clipReply(replyRow.text ?? '') }
+    const failure = agentFailure(message)
+    return failure ? { ...base, status: 'failed', error: failure } : null
+  }
+  /** 送ったメッセージが失敗した・止まったなら、その理由（まだなら空）。返答があるかは見ない（呼び出し側が先に見る） */
+  const agentFailure = (message: AgentMessage): string => {
     const turn = run.snapshot()[message.to]
-    if (turn?.failed && isDeliveryOf(turn.text, message.message_id)) {
-      return { ...base, status: 'failed', error: message.far ? AGENT_FAR_FAILED : replyFailureText(turn.failed) }
-    }
+    if (turn?.failed && isDeliveryOf(turn.text, message.message_id)) return message.far ? AGENT_FAR_FAILED : replyFailureText(turn.failed)
     // 預かりの先頭のまま止まった（前の返信が失敗した・起動できなかった）
     const paused = queue.paused(message.to)
-    if (paused && isDeliveryOf(queue.peek(message.to)?.text, message.message_id)) return { ...base, status: 'failed', error: message.far ? AGENT_FAR_FAILED : paused }
-    return null
+    if (paused && isDeliveryOf(queue.peek(message.to)?.text, message.message_id)) return message.far ? AGENT_FAR_FAILED : paused
+    return ''
   }
+  /** 返答のあったメッセージの id（#823）。返答ありは変わらないので覚えておき、次からは行を舐めない（古いものから忘れる） */
+  const agentAnswered = new Set<string>()
+  /**
+   * 送ったメッセージの状態（#311 / #823）。`agentResult()` と同じ順（返答 → 失敗・止まった → 返答待ち）に見るが、返答の本文は引かず、
+   * 行は全部のメッセージで 1 回だけ舐める。**詳細の枠と一覧の数が同じこれを通す**
+   */
+  const agentStatuses = async (messages: readonly AgentMessage[]): Promise<Map<string, AgentActivityMessage['status']>> => {
+    const out = new Map<string, AgentActivityMessage['status']>()
+    const open = messages.filter((m) => !agentAnswered.has(m.message_id))
+    const repliedNow = answeredIds(open, open.length > 0 ? await rowsNow(QUEUE_DAYS) : [])
+    for (const m of messages) {
+      if (repliedNow.has(m.message_id)) agentAnswered.add(m.message_id)
+      out.set(m.message_id, agentAnswered.has(m.message_id) ? 'done' : agentFailure(m) ? 'failed' : 'pending')
+    }
+    for (const id of agentAnswered) {
+      if (agentAnswered.size <= AGENT_MESSAGES_KEEP * 2) break
+      agentAnswered.delete(id)
+    }
+    return out
+  }
+  /**
+   * 送り元ごとの、まだ終わっていない数（#823。サイドバーの「返答待ち N」）。数え方は枠と同じ `agentWaitCount()`。
+   * 見るのは各送り元の直近の分（枠に並べるのと同じ `sentBy()` の数）と預かりだけ
+   */
+  const agentWaitingOf = async (): Promise<AgentWaitingMap> => {
+    const froms = agents.senders()
+    const recent = new Map(froms.map((from) => [from, agents.sentBy(from)] as const))
+    const statuses = await agentStatuses([...recent.values()].flat())
+    const out: AgentWaitingMap = {}
+    for (const from of froms) {
+      const count = agentWaitCount({ recent: (recent.get(from) ?? []).map((m) => ({ status: statuses.get(m.message_id) ?? 'pending' })), held: agents.heldBy(from) })
+      if (agentWaitShown(count)) out[from] = count
+    }
+    return out
+  }
+  /**
+   * 返答待ちの相手がいま何をしているか（#823。語は `WHY_LABEL`）。`sai_sessions` の「空きでない理由」と同じ判定のうち、
+   * 回っているターン・端末・待ち・預かりだけを見る（git・PR は見ない）。どれでもなければ空
+   */
+  const agentOccupied = (s: SessionSummary, active: boolean, queued: ReplyQueueMap): HoldingWhy | '' =>
+    agentBusy(s.id) ? 'busy' : active ? 'terminal' : s.waiting ? 'waiting' : (queued[s.id]?.items.length ?? 0) > 0 ? 'queued' : ''
 
   /**
    * GET /api/agent/wait?from=&message_id=&wait=1。**送った本人だけ**が待てる。wait なら最大 WAIT_MS までサーバ側で待ち、
@@ -3830,11 +3877,16 @@ export function createApp(
     if (!agents.hasActivity(id)) return undefined
     const current = run.snapshot()[id]
     const turn = current && !current.failed && run.running(id) ? current.since : ''
+    const sent = agents.sentBy(id)
+    const statuses = await agentStatuses(sent)
+    const queued = queue.snapshot()
     const recent = await Promise.all(
-      agents.sentBy(id).map(async (m): Promise<AgentActivityMessage> => {
-        const result = await agentResult(m)
+      sent.map(async (m): Promise<AgentActivityMessage> => {
+        const status = statuses.get(m.message_id) ?? 'pending'
         const target = sessions.find((s) => s.id === m.to)
-        return { message_id: m.message_id, to: m.to, to_name: target ? sessionLabel(target) : m.to, since: m.since, status: result ? result.status : 'pending' }
+        // 返答待ちの相手の状態（#823）。この画面を開いているときだけ引く。別のリポジトリの相手には細かい語を出さない（#747）
+        const why = status === 'pending' && target && !m.far ? agentOccupied(target, Boolean((await progress.read(target)).active), queued) : ''
+        return { message_id: m.message_id, to: m.to, to_name: target ? sessionLabel(target) : m.to, since: m.since, status, ...(why ? { to_why: why } : {}), ...(m.far ? { far: true as const } : {}) }
       }),
     )
     const held: AgentHeldMessage[] = agents.heldBy(id).map((h) => {
@@ -5957,9 +6009,12 @@ export function createApp(
         const claude_logged_out = claudeAuth.peek()?.loggedIn === false
         // 添付の置き場がしきい値を超えている（#792。測っていなければ null）
         const attachments_over = sweeper?.over() ?? null
+        // 別のセッションへ送って返答を待っている数（#823）。数だけで、送り先・本文は載せない。変わったら rev も変える
+        const agent_waiting = await agentWaitingOf()
+        const waitingKey = Object.entries(agent_waiting).map(([k, c]) => `${k}:${c.waiting}:${c.failed}`).join(',')
         const body: SessionsResponse = {
           // 足りないフックは rev に混ぜる（設定を直したら、次の行を待たずにバナーが消える）
-          rev: revWith(rev, replying, approvalMapKey(pendingApprovals), build_stale, digest.revKey(), `${queue.key()}|${loops.key()}|${waits.key()}`) + (hooks_missing.length ? `~hooks:${hooks_missing.join(',')}` : '') + (claude_logged_out ? '~auth:out' : '') + (attachments_over ? `~att:${attachments_over.bytes}` : ''),
+          rev: revWith(rev, replying, approvalMapKey(pendingApprovals), build_stale, digest.revKey(), `${queue.key()}|${loops.key()}|${waits.key()}`) + (hooks_missing.length ? `~hooks:${hooks_missing.join(',')}` : '') + (claude_logged_out ? '~auth:out' : '') + (attachments_over ? `~att:${attachments_over.bytes}` : '') + (waitingKey ? `~aw:${waitingKey}` : ''),
           days,
           total: pool.length,
           sessions: withLastSummary(
@@ -5978,6 +6033,7 @@ export function createApp(
           loops: loops.snapshot(),
           waits: waits.snapshot(),
           approvals: pendingApprovals,
+          agent_waiting,
           build_stale,
           record_version,
           hooks_missing,
@@ -6063,7 +6119,7 @@ export function createApp(
         const answeredSince = answeredAfter(session.last_turn_ts ?? '', progressNow)
         const answeredHere = answered.of(id, answeredSince)
         const body: SessionDetailResponse = {
-          rev: revWith(`${sessionsRev}~${me.rev}~${settled}~${terminalKey(sessions)}~${question?.asked_at ?? ''}~${bg ? `${bg.attach}:${bg.status}` : ''}~${contextRevKey(context)}~${allReplies.map((r) => r.agent_reply?.message_id).join(',')}~${answeredHere.map((a) => `${a.approval_id}:${a.behavior}`).join(',')}`, replying, approvalMapKey(pendingApprovals), false, `${digest.revKey()}|${usage.rev()}`, `${queue.key()}|${agents.key()}|${loops.key()}|${waits.key()}`),
+          rev: revWith(`${sessionsRev}~${me.rev}~${settled}~${terminalKey(sessions)}~${question?.asked_at ?? ''}~${bg ? `${bg.attach}:${bg.status}` : ''}~${contextRevKey(context)}~${allReplies.map((r) => r.agent_reply?.message_id).join(',')}~${answeredHere.map((a) => `${a.approval_id}:${a.behavior}`).join(',')}~${(activity?.recent ?? []).map((m) => `${m.status}:${m.to_why ?? ''}`).join(',')}`, replying, approvalMapKey(pendingApprovals), false, `${digest.revKey()}|${usage.rev()}`, `${queue.key()}|${agents.key()}|${loops.key()}|${waits.key()}`),
           session: withLastSummary([session])[0]!,
           rows,
           older,

@@ -386,6 +386,11 @@ export class AgentMessages {
     return this.followups.filter((f) => f.from === from)
   }
 
+  /** 送ったか預かっている送り元（#823。一覧の「返答待ち N」を数える相手） */
+  senders(): string[] {
+    return [...new Set([...[...this.messages.values()].map((m) => m.from), ...this.backlog.map((h) => h.from)])]
+  }
+
   /** 画面に出すか（一度でも送ったか、止めている） */
   hasActivity(from: string): boolean {
     return this.stopped.has(from) || this.backlog.some((h) => h.from === from) || [...this.messages.values()].some((m) => m.from === from)

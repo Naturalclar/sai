@@ -172,7 +172,10 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 
 ### 人が止める（#311）
 
-- `SessionView` のチャットの末尾の `AgentActivityBar`。出すのは詳細の応答の `agent`（`agentActivityOf()`）があるとき＝送ったことがあるか止めているセッションだけ。いま回しているターンの往復数・読み直させた量と、直近 5 件の送り先（`AgentMessages.sentBy()`。状態は `agentResult()`）を出す。
+- `SessionView` のチャットの末尾の `AgentActivityBar`。サーバが詳細の応答に `agent`（`agentActivityOf()`）を載せるのは送ったことがあるか止めているセッションで、**画面が枠を出すのは `shared/agentWaiting.ts` の `agentActivityShown()` が真のときだけ**（#823。返答待ち・預かり・失敗があるか止めている）。並べるのは `openMessages()`（返答ありを除く）と預かり。往復数・読み直させた量は `sentNear()` / `readNear()`（`AGENT_SENT_NEAR` = 2/3、`AGENT_READ_NEAR` = 1/2）を越えたときだけ。枠を出さないときの「送信を止める」は `SessionHeadActions` の `agentStop`（どちらも `AgentStopButton`）。
+- 状態は `agentStatuses()`（#823。`agentResult()` と同じ順＝返答 → 失敗・止まった（`agentFailure()`）→ 返答待ち。本文は引かない）。返答は `answeredIds()` で行を 1 回だけ舐め、**一番古い送った時刻（`ANSWER_SLACK_MS` = 5 分の余白つき）より前は見ない**。返答ありは変わらないので `agentAnswered` に覚え、次からは舐めない。
+- 返答待ちの行の相手の状態（`to_why`）は `agentOccupied()`（`sai_sessions` の空きでない理由のうち、回っているターン・端末（`progress.read()` の `active`）・待ち・預かりだけ。git・PR は見ない）。**詳細の応答でだけ引く**（一覧のポーリングでは引かない）。別のリポジトリの相手（`far`）には付けない。
+- 一覧の「返答待ち N」は `agentWaitingOf()`（`AgentMessages.senders()` の送り元ごとに、直近 5 件の状態と預かりを `agentWaitCount()` で数える）を `SessionsResponse.agent_waiting` に載せ、数を rev に混ぜる。見出しは詳細の `agent` を同じ `agentWaitCount()` で数える（`headTags()` の `agent_waiting`）。要対応（`pendingItems()`）には渡さない。
 - 「送信を止める」は `POST /api/sessions/<id>/agent/stop`（同一オリジン）。`AgentMessages.stop()` により `refusal()` が真っ先に断り、`ReplyQueueStore.removeWhere()` がそのセッションから送られて預かりに並んでいた分（`StoredReply.origin` のメッセージの送り元で見る）を取り消す。相手でもう回っているターンは止めない。
 - 送った・止めた・再開したは `agents.key()` を詳細の rev に混ぜる。
 - 端末のセッションから送る・Codex / OpenCode から送る、は次（#310）。

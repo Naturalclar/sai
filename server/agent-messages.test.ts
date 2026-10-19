@@ -199,6 +199,45 @@ test('エージェント用の口: トークンが無い・違う・ブラウザ
   }
 })
 
+test('返答待ちの数（#823）: 一覧の応答に数だけ載り、返答の行が届いたら消える。詳細の返答待ちの行には相手の状態が付く', async () => {
+  const listOf = async () => (await (await fetch(`${base}/api/sessions?days=7`)).json()) as SessionsResponse
+  const detailOf = async (id: string) => (await (await fetch(`${base}/api/sessions/${encodeURIComponent(id)}?days=7`)).json()) as SessionDetailResponse
+  // このファイルで最初に送るテスト（A1 の直近の送り先が、ほかのテストの分で埋まっていない）
+  assert.equal((await listOf()).agent_waiting['A1@r'], undefined, '送っていなければ載らない')
+  turn('A1@r')
+  let delivered = ''
+  try {
+    assert.equal((await send('A1@r', 'B1@r', '見て')).status, 202)
+    delivered = runner.started.at(-1)!.cmd.text
+  } finally {
+    idle('A1@r')
+  }
+  const listed = await listOf()
+  assert.deepEqual(listed.agent_waiting['A1@r'], { waiting: 1, failed: 0 })
+  assert.deepEqual(Object.keys(listed.agent_waiting), ['A1@r'], '送り先・本文は載せない（数だけ）')
+  // 相手がそのメッセージのターンを回している → 返答待ちの行に「処理中」
+  turn('B1@r', 'waiting-reply', { text: delivered })
+  try {
+    const detail = await detailOf('A1@r')
+    assert.equal(detail.agent?.recent[0]?.status, 'pending')
+    assert.equal(detail.agent?.recent[0]?.to_why, 'busy')
+  } finally {
+    idle('B1@r')
+  }
+  // 返答の行は、確かめたら消す（B1 の題名・最後の返答が変わると、あとのテストの一覧が変わる）
+  const original = await readFile(feedFile, 'utf-8')
+  await appendFile(feedFile, JSON.stringify(row(new Date(), 'B1', { repo: 'r', cwd: work2, project: 'o/r', user_text: delivered, text: '見ました' })) + '\n')
+  const answered = await listOf()
+  assert.equal(answered.agent_waiting['A1@r'], undefined, '返答が届いたら数えない')
+  assert.notEqual(answered.rev, listed.rev)
+  const done = await detailOf('A1@r')
+  assert.equal(done.agent?.recent[0]?.status, 'done')
+  assert.equal(done.agent?.recent[0]?.to_why, undefined, '返答ありの行に相手の状態は付けない')
+  await writeFile(feedFile, original)
+  await humanReply('B1@r')
+  idle('B1@r')
+})
+
 test('送り元は、SAI から起動していまターンを回しているセッションだけ（止まっている・失敗して残っているだけは 409）', async () => {
   assert.equal((await agent('/api/agent/sessions?from=A1%40r')).status, 409)
   turn('A1@r', 's1', { failed: { code: 1, tail: '' } })

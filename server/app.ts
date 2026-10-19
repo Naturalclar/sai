@@ -361,6 +361,8 @@ const QUEUE_SEGMENT = '/queue/'
 const QUEUE_RESUME = 'resume'
 /** 預かった返信を起動するときに見る窓（POST の reply の既定と同じ） */
 const QUEUE_DAYS = 90
+/** 送ったメッセージが生きていない（相手の預かりにも回っているターンにも無い）まま返答が来なければ、これで失敗に決める（#823。返答の行の遅れを待つ） */
+const AGENT_GONE_MS = 60_000
 /** `claude --bg` のターンを待っている預かりを、次に見に行くまで（#462。画面のポーリングは 3 秒で、画面が複数あれば何倍にもなる） */
 const BG_RETRY_MS = 10_000
 /** エージェント用の口（#310）。SAI の MCP サーバ（approve-mcp.ts）の sai_* のツールだけが叩く。トークンを要り、ブラウザからは通さない */
@@ -3803,24 +3805,65 @@ export function createApp(
     if (paused && isDeliveryOf(queue.peek(message.to)?.text, message.message_id)) return message.far ? AGENT_FAR_FAILED : paused
     return ''
   }
-  /** 返答のあったメッセージの id（#823）。返答ありは変わらないので覚えておき、次からは行を舐めない（古いものから忘れる） */
-  const agentAnswered = new Set<string>()
   /**
-   * 送ったメッセージの状態（#311 / #823）。`agentResult()` と同じ順（返答 → 失敗・止まった → 返答待ち）に見るが、返答の本文は引かず、
-   * 行は全部のメッセージで 1 回だけ舐める。**詳細の枠と一覧の数が同じこれを通す**
+   * 状態が決まったメッセージ（#823）。返答ありと、生きていない（相手の預かりにも回っているターンにも無い）まま返答の来なかったものを覚え、
+   * 次からは行を舐めない（古いものから忘れる）
+   */
+  const agentSettled = new Map<string, 'done' | 'failed'>()
+  /** 生きていないのに返答がまだ見えないメッセージ → 最初にそう見えた時刻。`AGENT_GONE_MS` 続いたら失敗に決める（返答の行の遅れを待つ） */
+  const agentGone = new Map<string, number>()
+  /**
+   * 送ったメッセージの状態（#311 / #823）。返答 → 失敗・止まった（`agentFailure()`）→ 生きている（相手の預かりに並んでいるか、相手がその
+   * メッセージのターンを回している）なら返答待ち → 生きていないまま `AGENT_GONE_MS` 返答が来なければ失敗。**失敗の印（`FAILED_TTL_MS`）が
+   * 消えたあとも返答待ちに戻さない**（一覧の「返答待ち N」がいつまでも残る。#825 のレビュー）。返答の本文は引かず、行は全部のメッセージで
+   * 1 回だけ、まだ決まっていないものの一番古い送った時刻の日から読む（3 秒のポーリングで 90 日ぶんを読まない）。**詳細の枠と一覧の数が同じこれを通す**
    */
   const agentStatuses = async (messages: readonly AgentMessage[]): Promise<Map<string, AgentActivityMessage['status']>> => {
     const out = new Map<string, AgentActivityMessage['status']>()
-    const open = messages.filter((m) => !agentAnswered.has(m.message_id))
-    const repliedNow = answeredIds(open, open.length > 0 ? await rowsNow(QUEUE_DAYS) : [])
+    const open = messages.filter((m) => !agentSettled.has(m.message_id))
+    const oldest = Math.min(...open.map((m) => Date.parse(m.since)).map((ms) => (Number.isFinite(ms) ? ms : 0)))
+    const days = Math.min(QUEUE_DAYS, Math.max(1, Math.ceil((Date.now() - oldest) / 86_400_000) + 1))
+    const repliedNow = answeredIds(open, open.length > 0 ? await rowsNow(days) : [])
+    const turns: ReplyingMap = { ...typed.snapshot(), ...run.snapshot(), ...codexApp.replying(), ...opencodeApp.replying() }
+    const nowMs = loopNow()
     for (const m of messages) {
-      if (repliedNow.has(m.message_id)) agentAnswered.add(m.message_id)
-      out.set(m.message_id, agentAnswered.has(m.message_id) ? 'done' : agentFailure(m) ? 'failed' : 'pending')
+      const settled = agentSettled.get(m.message_id)
+      if (settled) {
+        out.set(m.message_id, settled)
+        continue
+      }
+      if (repliedNow.has(m.message_id)) {
+        agentSettled.set(m.message_id, 'done')
+        agentGone.delete(m.message_id)
+        out.set(m.message_id, 'done')
+        continue
+      }
+      if (agentFailure(m)) {
+        out.set(m.message_id, 'failed')
+        continue
+      }
+      const turn = turns[m.to]
+      const live = queue.origins(m.to).includes(m.message_id) || (turn !== undefined && !turn.failed && isDeliveryOf(turn.text, m.message_id))
+      if (live) {
+        agentGone.delete(m.message_id)
+        out.set(m.message_id, 'pending')
+        continue
+      }
+      const first = agentGone.get(m.message_id) ?? nowMs
+      if (nowMs - first >= AGENT_GONE_MS) {
+        agentSettled.set(m.message_id, 'failed')
+        agentGone.delete(m.message_id)
+        out.set(m.message_id, 'failed')
+      } else {
+        agentGone.set(m.message_id, first)
+        out.set(m.message_id, 'pending')
+      }
     }
-    for (const id of agentAnswered) {
-      if (agentAnswered.size <= AGENT_MESSAGES_KEEP * 2) break
-      agentAnswered.delete(id)
+    for (const id of agentSettled.keys()) {
+      if (agentSettled.size <= AGENT_MESSAGES_KEEP * 2) break
+      agentSettled.delete(id)
     }
+    for (const id of agentGone.keys()) if (!agents.get(id)) agentGone.delete(id)
     return out
   }
   /**

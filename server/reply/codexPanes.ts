@@ -594,8 +594,9 @@ export class CodexPanes implements CodexPaneSource {
         const guessed = new Set<PaneCodex>()
         for (const { pane, pid, cwd, rollouts } of files) {
           const opened = await rolloutSession(rollouts)
-          // 同じ worktree のペインの Codex だけを渡す（#819。別の cwd の TUI はその cwd のスレッドを持てない）
-          const peers = files.filter((f) => f.cwd === cwd).map((f) => ({ pid: f.pid, pane: f.pane }))
+          // 同じ worktree のペインの Codex だけを渡す（#819。別の cwd の TUI はその cwd のスレッドを持てない）。
+          // cwd が読めなかった Codex も渡す（同じ worktree かもしれない。起動時刻の確認から落とさない）
+          const peers = files.filter((f) => f.cwd === cwd || !f.cwd).map((f) => ({ pid: f.pid, pane: f.pane }))
           const entry = { pane, pid, cwd, session: opened || (await this.sessionAtStart(pid, cwd, pane, peers)) }
           if (!opened && entry.session) guessed.add(entry)
           panes.push(entry)

@@ -167,6 +167,23 @@ test('起動時刻の補欠に渡す peers は同じ cwd のペインの Codex �
   assert.deepEqual(seen.get(301), [{ pid: 301, pane: '%3' }])
 })
 
+test('cwd が読めなかったペインの Codex も peers に入れる（同じ worktree かもしれない。#819 のレビュー）', async () => {
+  const seen = new Map<number, readonly CodexPeer[]>()
+  const panes = new CodexPanes(
+    deps({
+      tmux: fakeTmux(THREE_PANES),
+      ps: async () => THREE_PS,
+      openOf: async (pid) => ({ cwd: pid === 201 ? '' : pid === 301 ? '/repo/two' : '/repo/one', rollouts: [] }),
+      sessionAtStart: async (pid, _cwd, _pane, peers) => {
+        seen.set(pid, peers)
+        return ''
+      },
+    }),
+  )
+  await panes.scan()
+  assert.deepEqual(seen.get(101), [{ pid: 101, pane: '%1' }, { pid: 201, pane: '%2' }])
+})
+
 test('起動時刻で推したセッションがほかのペインと重なれば、推した方は当てない（#819 のレビュー）', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'sai-panes-'))
   const rollout = await writeRollout(dir, `rollout-2026-09-04T14-40-23-${SESSION}.jsonl`, SESSION, '/repo/one')

@@ -12,7 +12,7 @@ import { createApp } from './app.ts'
 import { FeedStore } from './rows/store.ts'
 import { localDate } from './rows/aggregate.ts'
 import { row } from './rows/aggregate.test.ts'
-import { sessionImageUrl } from '../shared/images.ts'
+import { IMAGE_UNAVAILABLE_HEADER, sessionImageUrl, thumbUrl } from '../shared/images.ts'
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0])
 
@@ -40,7 +40,7 @@ before(async () => {
     row(now, 'S1', {
       repo: 'repo',
       cwd,
-      text: `できました [codex-agent-icon.png](docs/codex-agent-icon.png)\n\n外 ![s](${secret})`,
+      text: `できました [codex-agent-icon.png](docs/codex-agent-icon.png)\n\n外 ![s](${secret})\n\n消えた ![g](docs/gone.png)`,
       user_text: '![typed](docs/typed.png) を見て',
     }),
     // 別のマシンで記録された行。同じパスのファイルがこちらにあっても別物
@@ -89,4 +89,16 @@ test('別のマシンのセッション・知らないセッションは 404、�
   assert.equal((await get('S2@repo', 'docs/codex-agent-icon.png')).status, 404)
   assert.equal((await get('nope@repo', 'docs/codex-agent-icon.png')).status, 404)
   assert.equal((await get('S1@repo', 'docs/codex-agent-icon.png', { method: 'POST' })).status, 405)
+})
+
+test('配れないときは理由の区分だけをヘッダに載せる（#820）。パスは載せず、軽い版の HEAD（画面の見分け）でも読める', async () => {
+  const why = async (id: string, src: string, init?: RequestInit, query = '') => (await get(id, src, init, query)).headers.get(IMAGE_UNAVAILABLE_HEADER)
+  assert.equal(await why('S1@repo', secret), 'outside')
+  assert.equal(await why('S1@repo', 'docs/gone.png'), 'missing')
+  assert.equal(await why('S2@repo', 'docs/codex-agent-icon.png'), 'remote')
+  const head = await fetch(`${base}${thumbUrl(sessionImageUrl('S1@repo', secret))}`, { method: 'HEAD' })
+  assert.equal(head.status, 403)
+  assert.equal(head.headers.get(IMAGE_UNAVAILABLE_HEADER), 'outside')
+  assert.equal(await why('S1@repo', 'docs/codex-agent-icon.png'), null, '配れたものには付けない')
+  assert.equal(await why('S1@repo', 'docs/never-written.png'), null, '本文に無い鍵には付けない（理由を探らせない）')
 })

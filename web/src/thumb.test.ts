@@ -11,8 +11,8 @@ const headers = (h: Record<string, string>) => new Headers(h)
 test('thumbFailure: 503 + X-SAI-Thumb: unavailable だけが「押すまで読まない」。ほかは表示できません', () => {
   assert.deepEqual(thumbFailure(503, headers({ 'X-SAI-Thumb': 'unavailable', 'X-SAI-Image-Bytes': '2400000' })), { kind: 'heavy', bytes: 2400000 })
   assert.deepEqual(thumbFailure(503, headers({ 'X-SAI-Thumb': 'unavailable' })), { kind: 'heavy', bytes: 0 })
-  assert.deepEqual(thumbFailure(503, headers({})), { kind: 'broken' })
-  assert.deepEqual(thumbFailure(404, headers({ 'X-SAI-Thumb': 'unavailable' })), { kind: 'broken' })
+  assert.deepEqual(thumbFailure(503, headers({})), { kind: 'broken', why: null })
+  assert.deepEqual(thumbFailure(404, headers({ 'X-SAI-Thumb': 'unavailable' })), { kind: 'broken', why: null })
   assert.deepEqual(thumbFailure(200, headers({})), { kind: 'retry' }, '見分けている間に出来たなら読み直す（#593 のレビュー）')
 })
 
@@ -30,4 +30,10 @@ test('枠の <img> は軽い版（ThumbImage）、ライトボックスとダウ
     assert.doesNotMatch(src, /<img /, `${name} は元の URL を <img> に直接渡さない`)
     assert.doesNotMatch(src, /thumbUrl|thumb=/, `${name} はライトボックス・ダウンロードに軽い版の URL を渡さない`)
   }
+})
+
+test('thumbFailure: 読めなかった理由の区分（#820）を拾い、知らない値は捨てる', () => {
+  assert.deepEqual(thumbFailure(403, headers({ 'X-SAI-Image-Unavailable': 'outside' })), { kind: 'broken', why: 'outside' })
+  assert.deepEqual(thumbFailure(404, headers({ 'X-SAI-Image-Unavailable': 'missing' })), { kind: 'broken', why: 'missing' })
+  assert.deepEqual(thumbFailure(404, headers({ 'X-SAI-Image-Unavailable': '/tmp/a.png' })), { kind: 'broken', why: null })
 })

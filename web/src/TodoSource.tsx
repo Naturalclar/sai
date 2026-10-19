@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Markdown } from './Markdown'
 import { ClippedNote } from './ClippedNote'
-import { ImageSourceContext } from './imageContext'
+import { ImageNoSourceContext, ImageSourceContext } from './imageContext'
 import { wasClipped } from '../../shared/clipped.ts'
 import { isLong } from './longText.ts'
 import { useTurnText } from './useTurnText'
@@ -21,9 +21,9 @@ export function TodoSource({ id, ts }: { id: string; ts: string }) {
   return (
     <div className="todo-source">
       <div className={`body${long && !open ? ' clamped' : ''}`}>
-        <ImageSourceContext value={null}>
+        <ImageSourceContext value={null}><ImageNoSourceContext value={null}>
           <Markdown text={text} />
-        </ImageSourceContext>
+        </ImageNoSourceContext></ImageSourceContext>
       </div>
       {long && (
         <button type="button" className="linkish more" onClick={() => setOpen((v) => !v)} aria-expanded={open}>

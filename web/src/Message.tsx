@@ -16,7 +16,7 @@ import { TurnSteps } from './TurnSteps'
 import { DigestFeedback } from './DigestFeedback'
 import { SourceImages } from './SourceImages'
 import { BodyImagesProvider } from './BodyImagesProvider'
-import { ImageSourceContext } from './imageContext'
+import { ImageNoSourceContext, ImageSourceContext } from './imageContext'
 import { FileSessionContext } from './fileContext'
 import { QuestionPreview } from './QuestionPreview'
 import { ClippedNote } from './ClippedNote'
@@ -151,7 +151,7 @@ export function Message({ ts, text: raw, markdown, waiting, questions, resolved,
           {/* source に元の本文を渡すと、そこに無い番号はリンクにならない（#268。一言は LLM が書くので、
               本文に無い番号を書くことがある。押すと無関係の issue に飛ぶ） */}
           {/* 一言の中の画像は名前だけ（LLM が本文から写したもの）。画像そのものは下に元の本文から並べる（#321） */}
-          <span className="line"><ImageSourceContext value={null}><FileSessionContext value={null}><Inlines nodes={linkifyRefs(summary, { remote, linear, source: sourceAsk ? `${text}\n${sourceAsk}` : text })} /></FileSessionContext></ImageSourceContext></span>
+          <span className="line"><ImageSourceContext value={null}><ImageNoSourceContext value={null}><FileSessionContext value={null}><Inlines nodes={linkifyRefs(summary, { remote, linear, source: sourceAsk ? `${text}\n${sourceAsk}` : text })} /></FileSessionContext></ImageNoSourceContext></ImageSourceContext></span>
           <button
             type="button"
             className="linkish details-toggle"
@@ -168,7 +168,7 @@ export function Message({ ts, text: raw, markdown, waiting, questions, resolved,
         </div>
         {/* 人が次にすること（#713）。本文の文そのままなので、一言と同じく番号はリンクにする */}
         {summaryNext && (
-          <div className="summary-next"><ImageSourceContext value={null}><FileSessionContext value={null}><Inlines nodes={linkifyRefs(summaryNext, { remote, linear, source: sourceAsk ? `${text}\n${sourceAsk}` : text })} /></FileSessionContext></ImageSourceContext></div>
+          <div className="summary-next"><ImageSourceContext value={null}><ImageNoSourceContext value={null}><FileSessionContext value={null}><Inlines nodes={linkifyRefs(summaryNext, { remote, linear, source: sourceAsk ? `${text}\n${sourceAsk}` : text })} /></FileSessionContext></ImageNoSourceContext></ImageSourceContext></div>
         )}
         {/* 詳細を開いたら本文の中に出るので、ここでは二重に出さない */}
         {!details && <SourceImages text={text} />}

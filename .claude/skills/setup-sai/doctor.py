@@ -5,6 +5,7 @@
   doctor.py hooks       ~/.claude/settings.json と ./.claude/settings.json の、record.py に届くフック
   doctor.py usage       ~/.agent-feed/usage-claude*.json（Claude の使用率）が新しいか
   doctor.py statusline  ~/.claude/settings.json の statusLine が statusline.py に届くか
+  doctor.py images      全体の指示に画像の置き場の 1 行があるか・ほかのリポジトリが .screenshots/ を無視しているか（#820）
 
 何も書かない。標準ライブラリのみ。判定はサーバと同じ規則（server/local/usage.ts の isClaudeUsageFile、
 shared/usage.ts の STATUS_MAX_AGE_MS）に合わせる。
@@ -14,6 +15,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import time
 
@@ -104,7 +106,72 @@ def statusline():
     print('  statusline.py に届くか:', reaches(cmd, 'statusline.py') or '届かない → 別のものに取られている')
 
 
-COMMANDS = {'last': last, 'hooks': hooks, 'usage': usage, 'statusline': statusline}
+# 画像の置き場の 1 行（#820）。SAI が配るのは作業ディレクトリの中の画像だけなので、ほかのリポジトリで動くエージェントにも
+# 「.screenshots/ に置いて ![名前](パス) と書く」を伝える。見るのは利用者の全体の指示だけで、書くのは人が「足して」と言ったとき
+IMAGE_LINE = re.compile(r'\.screenshots|SAI[^\n]*画像|画像[^\n]*SAI')
+
+
+def global_instructions():
+    codex_home = os.environ.get('CODEX_HOME') or os.path.expanduser('~/.codex')
+    return [('codex', os.path.join(codex_home, 'AGENTS.md')), ('claude', os.path.expanduser('~/.claude/CLAUDE.md'))]
+
+
+def git(args, cwd):
+    try:
+        r = subprocess.run(['git', *args], cwd=cwd, capture_output=True, text=True, timeout=5)
+    except Exception:
+        return None
+    return r
+
+
+def recent_cwds(days=7):
+    files = sorted(glob.glob(os.path.join(FEED, '20??-??-??*.jsonl')), key=os.path.getmtime)[-days:]
+    seen = set()
+    for path in files:
+        try:
+            with open(path, encoding='utf-8', errors='replace') as f:
+                for line in f:
+                    m = re.search(r'"cwd":\s*"((?:[^"\\]|\\.)*)"', line)
+                    if m:
+                        seen.add(json.loads('"%s"' % m.group(1)))
+        except OSError:
+            continue
+    return seen
+
+
+def images():
+    for agent, path in global_instructions():
+        try:
+            body = open(path, encoding='utf-8', errors='replace').read()
+        except OSError:
+            print(f'{agent}: {path} は無い → 画像の置き場の 1 行を案として出す')
+            continue
+        print(f'{agent}: {path} → ' + ('画像の置き場の 1 行がある' if IMAGE_LINE.search(body) else '画像の置き場の 1 行が無い → 案として出す'))
+    here = git(['rev-parse', '--git-common-dir'], '.')
+    here = os.path.realpath(here.stdout.strip()) if here and here.returncode == 0 else ''
+    tops = set()
+    for cwd in recent_cwds():
+        if not os.path.isdir(cwd):
+            continue
+        top = git(['rev-parse', '--show-toplevel', '--git-common-dir'], cwd)
+        if not top or top.returncode != 0:
+            continue
+        lines = top.stdout.strip().split('\n')
+        common = os.path.realpath(os.path.join(cwd, lines[1])) if len(lines) > 1 else ''
+        if common and common == here:
+            continue  # SAI 自身（.gitignore 済み）
+        tops.add(lines[0])
+    missing = []
+    for top in sorted(tops):
+        r = git(['check-ignore', '-q', '.screenshots/probe.png'], top)
+        if r is not None and r.returncode == 1:
+            missing.append(top)
+    print(f'直近 7 日に記録のあるほかのリポジトリ {len(tops)} 個のうち、.screenshots/ を無視していない {len(missing)} 個（案として出すだけ）')
+    for top in missing:
+        print(f'   {top}')
+
+
+COMMANDS = {'last': last, 'hooks': hooks, 'usage': usage, 'statusline': statusline, 'images': images}
 
 if __name__ == '__main__':
     name = sys.argv[1] if len(sys.argv) > 1 else ''

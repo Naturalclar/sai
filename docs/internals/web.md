@@ -266,6 +266,13 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - `<img>` の `onError` からは状態が見えないので、同じ URL に HEAD を投げて `thumbFailure()`（`web/src/thumb.ts`）で見分ける: `503` + `X-SAI-Thumb: unavailable` なら画像の印・名前・大きさ（`formatImageBytes()`）だけを出し（包んでいる `<a>` を押せば元を開く）、`200` なら（見分けている間に出来た）1 回だけ URL を変えて読み直し、それ以外は親の `onBroken` で今までどおり「表示できません」。
 - 送る前の入力欄の画像（`AttachmentStrip`）は手元で選んだばかりなので、軽い版にしない。
 
+### 出せない理由（#820）
+
+- 本文の画像の口（`/images/<key>`）は、配れなかったときに理由の区分を `X-SAI-Image-Unavailable` に載せる（`shared/images.ts` の `IMAGE_UNAVAILABLE`: `outside` / `missing` / `not-image` / `too-big` / `remote`）。区分は `readSessionImage()` の `why`（`server/local/images.ts`）と、別のマシンのセッションのとき `app.ts` が付ける `remote`。**パスは載せない**。表に無い鍵・作業ディレクトリが分からないときは付けない。
+- 画面は `probeThumb()` の HEAD で `thumbFailure()` が区分を拾い（知らない値は `parseImageUnavailable()` が捨てる）、`ThumbImage` の `onBroken(why)` → `MarkdownImage` / `MessageImages` → `UnavailableImage` が名前の横に短い理由（`web/src/imageUnavailable.ts` の `imageUnavailableText()`）を出す。どうすれば出るかの 1 行は `title`。`/tmp` かどうかは画面が本文に書かれたパスから見る（サーバからは受けない）。
+- 別のマシンのセッションは画像を取りに行かないので、`Chat` が `ImageNoSourceContext` を `remote` にして渡す。一言の中・`TodoSource`・`FileViewer` は `ImageSourceContext` と一緒に null に戻す（理由を出さない）。
+- 置き場は広げない（`/tmp` は今までどおり配らない）。ほかのリポジトリで動くエージェントに置き場を伝えるのは `/setup-sai` の 5.6（全体の指示に足す 1 行・`.gitignore` の案を出すだけ）。
+
 ### ライトボックス（#507 / #509）
 
 - 画像を押すとページの中のライトボックスで開く。`LightboxProvider` を `Chat` が持ち、`MarkdownImage` / `AttachedImages` / `MessageImages` が `LightboxContext` を読む。別のタブは開かない。⌘ クリック・中クリックは `opensInPage()` が見送ってブラウザの既定のまま。

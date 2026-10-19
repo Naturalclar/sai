@@ -6,7 +6,7 @@ import { CloseMark } from './CloseMark'
 import { FileSessionContext } from './fileContext'
 import { FILE_LINE_H, fileLines, fileSizeLabel, initialMode, isMarkdownFile, lineNumbers, scrollTopFor, targetLine, type FileMode } from './fileView'
 import { IconButton } from './IconButton'
-import { ImageSourceContext } from './imageContext'
+import { ImageNoSourceContext, ImageSourceContext } from './imageContext'
 import { Markdown } from './Markdown'
 
 /**
@@ -85,9 +85,9 @@ export function FileViewer({ id, file, onClose }: { id: string; file: FileRef; o
           {data && mode === 'rendered' && (
             <div className="file-md body">
               <FileSessionContext value={null}>
-                <ImageSourceContext value={null}>
+                <ImageSourceContext value={null}><ImageNoSourceContext value={null}>
                   <Markdown text={data.text} />
-                </ImageSourceContext>
+                </ImageNoSourceContext></ImageSourceContext>
               </FileSessionContext>
             </div>
           )}

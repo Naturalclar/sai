@@ -1069,6 +1069,9 @@
      配る口が無い（一言の中・別のマシン）か読めなければ、画像の印と名前だけ（.md-image。パスは title） */
   .md-image { display: inline-flex; align-items: center; gap: 4px; padding: 0 6px; border-radius: 4px; background: var(--chip); color: var(--ink); font-size: 0.95em; vertical-align: baseline; overflow-wrap: anywhere; }
   .md-image svg { flex: none; width: 13px; height: 13px; color: var(--muted); }
+  /* 出せない理由（#820）。名前の横に小さく。どうすれば出るかは title */
+  .md-image .md-image-why { color: var(--muted); font-size: 0.85em; }
+  .md-image .md-image-why::before { content: '・'; }
   .md-img { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 2px; margin: 4px 0; vertical-align: top; max-width: 100%; white-space: normal; }
   .md-img img { display: block; max-width: 100%; max-height: 320px; border-radius: 8px; border: 1px solid var(--line); background: var(--chip); }
   /* 押せる場所は絵の大きさに頼らない（#702。高さ 8px の帯でも指で当たる）。絵はその中で縦の中央に置く。

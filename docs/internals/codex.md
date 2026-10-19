@@ -49,9 +49,9 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 
 - `codexPanes.ts` の `rolloutSessionAtStart()`。ペインの側からの引き当ての補欠
 - 次の材料が全部合うときだけ当てる（1 つでも合わなければ当てない）:
-  1. 起動秒〜 `START_SLACK_S`（2 秒）後の名前・同じ cwd・TUI が作った目印（`~/.codex/tui-thread-reference-capabilities/<id>`。起動と `/new` のときだけできる）の rollout がちょうど 1 つ
+  1. 起動秒〜 `START_SLACK_S`（5 秒）後の名前・同じ cwd・TUI が作った目印（`~/.codex/tui-thread-reference-capabilities/<id>`。起動と `/new` のときだけできる）の rollout がちょうど 1 つ
   2. その rollout を開いている app-server の客である（`lsof -U` の番地。`isClientOf()`）
-  3. その app-server が同じ cwd の別のスレッドを読み込んでいない（`/new`・`/resume` したスレッドは読み込まれたまま残る）
+  3. その app-server が同じ cwd の別のスレッドを読み込んでいない（`/new`・`/resume` したスレッドは読み込まれたまま残る）。ただし、そのスレッドが**同じ app-server の客であるほかの TUI** が起動したときに作ったもの（その TUI について 1 と 2 が成り立つ）なら数えない（#819）。ほかの TUI は `CodexPanes.scan()` がペインの Codex の pid を `peers` として渡す。誰の起動時のものでもないスレッドが 1 つでも残れば当てない
   4. ペインのスクロールバックに `codex resume <その id>`（離れたときに出る）が無い
 - `/resume` で映している会話は取りこぼす（起動時刻が合わない。上流に口が要る）
 

@@ -62,8 +62,11 @@ export interface CodexPaneDeps {
   ps?: PsFn
   /** その pid が開いているファイル（既定は `lsof`）。cwd と rollout を 1 回で取る */
   openOf?: (pid: number) => Promise<PaneFiles>
-  /** rollout を開かない TUI のセッション（既定は起動時刻・目印・読み込み中のスレッドで推定する。#448 / #568） */
-  sessionAtStart?: (pid: number, cwd: string, pane: string) => Promise<string>
+  /**
+   * rollout を開かない TUI のセッション（既定は起動時刻・目印・読み込み中のスレッドで推定する。#448 / #568）。
+   * `peers` はペインで動いているほかの Codex の pid（同じ worktree の別の TUI のスレッドを見分ける。#819）
+   */
+  sessionAtStart?: (pid: number, cwd: string, pane: string, peers: readonly number[]) => Promise<string>
   /** その pid が `codex app-server` か（#653。既定は `ps` で引数を読む）。そうならペインの Codex に数えない */
   appServer?: AppServerProbe
   now?: () => number
@@ -289,8 +292,8 @@ export interface StartProbe {
   scrollback: (pane: string) => Promise<string>
 }
 
-/** 起動秒から何秒あとまでを「起動したときに作ったスレッド」とみなすか（実測で同じ秒か 1 秒後） */
-export const START_SLACK_S = 2
+/** 起動秒から何秒あとまでを「起動したときに作ったスレッド」とみなすか（実測で同じ秒〜 3 秒後。#819） */
+export const START_SLACK_S = 5
 
 /**
  * rollout を開かない Codex TUI（共有の `codex app-server --listen` の客）が**起動したときに作った会話**（#448 / #568）。
@@ -300,8 +303,9 @@ export const START_SLACK_S = 2
  * 1. 起動秒〜 `START_SLACK_S` 秒後の名前で、cwd が同じで、TUI が作った目印（`tui-thread-reference-capabilities/<id>`）の
  *    ある rollout がちょうど 1 つ
  * 2. その rollout を開いている app-server に、この TUI が unix ソケットで繋いでいる（客である）
- * 3. その app-server が**同じ cwd の別のスレッド**を読み込んでいない（`/new`・`/resume` したスレッドは読み込まれたまま残る。
- *    同じ worktree の別の TUI のスレッドでも曖昧になるので当てない）
+ * 3. その app-server が**同じ cwd の別のスレッド**を読み込んでいない（`/new`・`/resume` したスレッドは読み込まれたまま残る）。
+ *    ただし、そのスレッドが**同じ app-server の客であるほかの TUI（`peers`）が起動したときに作った会話**だと 1〜2 で
+ *    裏が取れれば、その TUI の持ち物として数えない（#819。同じ worktree で TUI を何本も開くと、互いのスレッドで全員が当たらなかった）
  * 4. ペインのスクロールバックに `codex resume <その id>`（`/new`・`/resume` で離れたときに出る）が無い
  *
  * 引数付きの `codex "…"` や subcommand は対話 TUI ではないので除く。`/resume` で映している会話は取りこぼす。
@@ -309,7 +313,7 @@ export const START_SLACK_S = 2
 export function rolloutSessionAtStart(
   env: NodeJS.ProcessEnv = process.env,
   probe: Partial<StartProbe> = {},
-): (pid: number, cwd: string, pane: string) => Promise<string> {
+): (pid: number, cwd: string, pane: string, peers?: readonly number[]) => Promise<string> {
   const root = codexSessionsDir(env)
   const markers = join(dirname(root), 'tui-thread-reference-capabilities')
   const ps = probe.ps ?? runPsStart
@@ -317,14 +321,12 @@ export function rolloutSessionAtStart(
   const sockets = probe.sockets ?? runUnixSockets
   const openRollouts = probe.openRollouts ?? (async (pid: number) => (await lsofPaneFiles(env)(pid)).rollouts)
   const scrollback = probe.scrollback ?? (async () => '')
-  return async (pid: number, cwd: string, pane: string): Promise<string> => {
-    if (!cwd) return ''
+  /** 1. 起動時刻と cwd と目印で、その TUI が起動したときに作ったスレッドを 1 つに絞る。絞れなければ null */
+  const startThread = async (pid: number, cwd: string): Promise<{ session: string; path: string } | null> => {
     const info = parseCodexStart(await ps(pid))
-    if (!info) return ''
+    if (!info) return null
     const executable = info.command.split(/\s+/, 1)[0] ?? ''
-    if (basename(executable) !== 'codex' || info.command !== executable) return ''
-
-    // 1. 起動時刻と cwd と目印
+    if (basename(executable) !== 'codex' || info.command !== executable) return null
     const found = new Map<string, string>()
     for (let offset = 0; offset <= START_SLACK_S; offset++) {
       const at = new Date(info.startedAt.getTime() + offset * 1000)
@@ -349,26 +351,52 @@ export function rolloutSessionAtStart(
         found.set(parsed.session, path)
       }
     }
-    if (found.size !== 1) return ''
+    if (found.size !== 1) return null
     const [session, path] = [...found][0]!
+    return { session, path }
+  }
+
+  return async (pid: number, cwd: string, pane: string, peers: readonly number[] = []): Promise<string> => {
+    if (!cwd) return ''
+    const own = await startThread(pid, cwd)
+    if (!own) return ''
+    const { session, path } = own
 
     // 2. その rollout を開いている app-server の客か
     const mine = await sockets(pid)
     if (!mine) return ''
     let server = 0
+    let serverSockets = ''
     for (const holder of await holders(path)) {
-      if (holder !== pid && isClientOf(mine, await sockets(holder))) {
+      if (holder === pid) continue
+      const theirs = await sockets(holder)
+      if (isClientOf(mine, theirs)) {
         server = holder
+        serverSockets = theirs
         break
       }
     }
     if (!server) return ''
 
-    // 3. その app-server が同じ cwd の別のスレッドを読み込んでいないか
+    // 3. その app-server が同じ cwd の別のスレッドを読み込んでいないか。同じ app-server の客のほかの TUI が
+    //    起動したときに作ったスレッドは、その TUI の持ち物として数えない（#819）
+    const peerThreads = new Map<number, string>()
+    const peerOwns = async (other: string): Promise<boolean> => {
+      for (const peer of peers) {
+        if (peer === pid) continue
+        if (!peerThreads.has(peer)) {
+          const theirs = (await startThread(peer, cwd))?.session ?? ''
+          peerThreads.set(peer, theirs && isClientOf(await sockets(peer), serverSockets) ? theirs : '')
+        }
+        if (peerThreads.get(peer) === other) return true
+      }
+      return false
+    }
     for (const other of await openRollouts(server)) {
       if (other === path) continue
       const parsed = parseRolloutHead(await head(other), UUID.exec(basename(other))?.[1] ?? '')
-      if (parsed.session !== session && (!parsed.cwd || parsed.cwd === cwd)) return ''
+      if (parsed.session === session || (parsed.cwd && parsed.cwd !== cwd)) continue
+      if (!parsed.session || !(await peerOwns(parsed.session))) return ''
     }
 
     // 4. そのスレッドから離れた印がスクロールバックに無いか（読めなければ当てない）
@@ -468,7 +496,7 @@ export class CodexPanes implements CodexPaneSource {
   private readonly tmux: Tmux
   private readonly ps: PsFn
   private readonly openOf: (pid: number) => Promise<PaneFiles>
-  private readonly sessionAtStart: (pid: number, cwd: string, pane: string) => Promise<string>
+  private readonly sessionAtStart: (pid: number, cwd: string, pane: string, peers: readonly number[]) => Promise<string>
   private readonly appServer: AppServerProbe
   private readonly now: () => number
 
@@ -520,6 +548,7 @@ export class CodexPanes implements CodexPaneSource {
       if (shells.length) {
         const rows = parsePsCommands(await this.ps())
         const parents = new Map(rows.map((r) => [r.pid, r.ppid]))
+        const found: { pane: string; pid: number }[] = []
         for (const row of rows) {
           if (row.comm !== 'codex') continue
           const shell = shells.find((s) => isDescendant(row.pid, s.pid, parents))
@@ -527,10 +556,14 @@ export class CodexPanes implements CodexPaneSource {
           // ペインの中にいる共有のデーモン（#653）。回している全スレッドの rollout を開いているので、
           // 数えると「一番新しい名前の rollout」がそのペインの会話に化ける
           if (await this.appServer(row.pid)) continue
-          const { cwd, rollouts } = await this.openOf(row.pid)
+          found.push({ pane: shell.pane, pid: row.pid })
+        }
+        const peers = found.map((f) => f.pid)
+        for (const { pane, pid } of found) {
+          const { cwd, rollouts } = await this.openOf(pid)
           const opened = await rolloutSession(rollouts)
-          const session = opened || (await this.sessionAtStart(row.pid, cwd, shell.pane))
-          panes.push({ pane: shell.pane, pid: row.pid, cwd, session })
+          const session = opened || (await this.sessionAtStart(pid, cwd, pane, peers))
+          panes.push({ pane, pid, cwd, session })
         }
       }
     } catch {

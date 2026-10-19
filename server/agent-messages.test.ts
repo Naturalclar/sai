@@ -238,7 +238,7 @@ test('返答待ちの数（#823）: 一覧の応答に数だけ載り、返答�
   idle('B1@r')
 })
 
-test('返答待ちの数（#823）: 相手のターンが失敗したものは、失敗の印が消えたあとも返答待ちに戻さない（#825 のレビュー）', async () => {
+test('返答待ちの数（#823）: 相手のターンが失敗したものは、失敗の印が消えたあとも返答待ちに戻さない。遅れて返答が来れば返答ありにする（#825 のレビュー）', async () => {
   const listOf = async () => (await (await fetch(`${base}/api/sessions?days=7`)).json()) as SessionsResponse
   turn('A1@r')
   let delivered = ''
@@ -255,13 +255,18 @@ test('返答待ちの数（#823）: 相手のターンが失敗したものは�
   // 失敗の印は 2 分で消える（FAILED_TTL_MS）。消えても、生きていない（預かりにもターンにも無い）ので少し待って失敗に決める
   idle('B1@r')
   assert.deepEqual((await listOf()).agent_waiting['A1@r'], { waiting: 1, failed: 0 }, '返答の行の遅れを待つあいだは返答待ち')
+  const original = await readFile(feedFile, 'utf-8')
   try {
     skew = 61_000
     assert.deepEqual((await listOf()).agent_waiting['A1@r'], { waiting: 0, failed: 1 })
+    assert.deepEqual((await listOf()).agent_waiting['A1@r'], { waiting: 0, failed: 1 }, '返答待ちには戻さない')
+    // 見失っただけ（端末に打ち込んだあと後の文に上書きされた、など）で返答が遅れて来たら、返答ありに戻す
+    await appendFile(feedFile, JSON.stringify(row(new Date(), 'B1', { repo: 'r', cwd: work2, project: 'o/r', user_text: delivered, text: '遅れて返した' })) + '\n')
+    assert.equal((await listOf()).agent_waiting['A1@r'], undefined, '返答が来たら数えない')
   } finally {
     skew = 0
+    await writeFile(feedFile, original)
   }
-  assert.deepEqual((await listOf()).agent_waiting['A1@r'], { waiting: 0, failed: 1 }, '一度決めたら返答待ちに戻さない')
   await humanReply('B1@r')
   idle('B1@r')
 })

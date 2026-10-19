@@ -363,6 +363,8 @@ const QUEUE_RESUME = 'resume'
 const QUEUE_DAYS = 90
 /** 送ったメッセージが生きていない（相手の預かりにも回っているターンにも無い）まま返答が来なければ、これで失敗に決める（#823。返答の行の遅れを待つ） */
 const AGENT_GONE_MS = 60_000
+/** 上のまま返答が来なければ、これで失敗に決めて覚え、返答の行を探すのをやめる（#825 のレビュー。返答が遅れて来たら返答ありに戻せるあいだ） */
+const AGENT_GONE_SETTLE_MS = 24 * 60 * 60_000
 /** `claude --bg` のターンを待っている預かりを、次に見に行くまで（#462。画面のポーリングは 3 秒で、画面が複数あれば何倍にもなる） */
 const BG_RETRY_MS = 10_000
 /** エージェント用の口（#310）。SAI の MCP サーバ（approve-mcp.ts）の sai_* のツールだけが叩く。トークンを要り、ブラウザからは通さない */
@@ -3806,15 +3808,15 @@ export function createApp(
     return ''
   }
   /**
-   * 状態が決まったメッセージ（#823）。返答ありと、生きていない（相手の預かりにも回っているターンにも無い）まま返答の来なかったものを覚え、
-   * 次からは行を舐めない（古いものから忘れる）
+   * 状態が決まったメッセージ（#823）。返答ありと、生きていない（相手の預かりにも回っているターンにも無い）まま `AGENT_GONE_SETTLE_MS`
+   * 返答の来なかったものを覚え、次からは行を舐めない（古いものから忘れる）
    */
   const agentSettled = new Map<string, 'done' | 'failed'>()
   /** 生きていないのに返答がまだ見えないメッセージ → 最初にそう見えた時刻。`AGENT_GONE_MS` 続いたら失敗に決める（返答の行の遅れを待つ） */
   const agentGone = new Map<string, number>()
   /**
    * 送ったメッセージの状態（#311 / #823）。返答 → 失敗・止まった（`agentFailure()`）→ 生きている（相手の預かりに並んでいるか、相手がその
-   * メッセージのターンを回している）なら返答待ち → 生きていないまま `AGENT_GONE_MS` 返答が来なければ失敗。**失敗の印（`FAILED_TTL_MS`）が
+   * メッセージのターンを回している）なら返答待ち → 生きていないまま `AGENT_GONE_MS` 返答が来なければ失敗（あとで返答が来れば返答ありに戻す）。**失敗の印（`FAILED_TTL_MS`）が
    * 消えたあとも返答待ちに戻さない**（一覧の「返答待ち N」がいつまでも残る。#825 のレビュー）。返答の本文は引かず、行は全部のメッセージで
    * 1 回だけ、まだ決まっていないものの一番古い送った時刻の日から読む（3 秒のポーリングで 90 日ぶんを読まない）。**詳細の枠と一覧の数が同じこれを通す**
    */
@@ -3849,15 +3851,16 @@ export function createApp(
         out.set(m.message_id, 'pending')
         continue
       }
+      // 生きていないと見えても、端末に打ち込んだメッセージは後の文に上書きされて見失うことがある（#825 のレビュー）。
+      // 失敗に見せても、返答が来れば返答ありに戻す（`AGENT_GONE_SETTLE_MS` までは行を舐め直す。過ぎたら失敗に決めて舐めない）
       const first = agentGone.get(m.message_id) ?? nowMs
-      if (nowMs - first >= AGENT_GONE_MS) {
+      if (nowMs - first >= AGENT_GONE_SETTLE_MS) {
         agentSettled.set(m.message_id, 'failed')
         agentGone.delete(m.message_id)
-        out.set(m.message_id, 'failed')
       } else {
         agentGone.set(m.message_id, first)
-        out.set(m.message_id, 'pending')
       }
+      out.set(m.message_id, nowMs - first >= AGENT_GONE_MS ? 'failed' : 'pending')
     }
     for (const id of agentSettled.keys()) {
       if (agentSettled.size <= AGENT_MESSAGES_KEEP * 2) break

@@ -65,8 +65,13 @@ class FakePrs extends NoPrs {
   }
   /** マージ済みの PR の head（#795。`mergedKey()` の集合）。null は引けない */
   merged: Set<string> | null = new Set()
+  /** わざと遅い答え（#828。ミリ秒。0 はすぐ） */
+  delay = { list: 0, merged: 0, parents: 0 }
+  private later<T>(ms: number, value: T): Promise<T> {
+    return ms > 0 ? new Promise((done) => setTimeout(() => done(value), ms).unref()) : Promise.resolve(value)
+  }
   mergedHeads(): Promise<ReadonlySet<string> | null> {
-    return Promise.resolve(this.merged)
+    return this.later(this.delay.merged, this.merged)
   }
   /** コミットの親（#821。SHA → 親の並び）。置いていないものは引けない。`parentsSlow` は返らない */
   parents = new Map<string, string[]>()
@@ -74,11 +79,11 @@ class FakePrs extends NoPrs {
   parentsSlow = false
   commitParents(_repo: string, sha: string): Promise<readonly string[] | null> {
     this.parentsAsked.push(sha)
-    return this.parentsSlow ? new Promise(() => {}) : Promise.resolve(this.parents.get(sha) ?? null)
+    return this.parentsSlow ? new Promise(() => {}) : this.later(this.delay.parents, this.parents.get(sha) ?? null)
   }
   override list(repo?: string): Promise<PrSummary[] | null> {
     this.asked.push(repo ?? '')
-    return this.slow ? new Promise(() => {}) : Promise.resolve(this.lists.get(repo ?? '') ?? null)
+    return this.slow ? new Promise(() => {}) : this.later(this.delay.list, this.lists.get(repo ?? '') ?? null)
   }
 }
 const prs = new FakePrs()
@@ -272,6 +277,7 @@ test('sai_sessions: コミットしていない変更・PR になっていない
     prs.merged = new Set([mergedKey('dev-worktree-c', FAKE_HEAD)])
     assert.deepEqual(await holdingOfId('C1@r'), { free: true }, 'マージ済みのブランチが残っているだけ（PR の head と同じ）')
     prs.merged = new Set([mergedKey('dev-worktree-c', 'b'.repeat(40))])
+    prs.parents.set('b'.repeat(40), ['e'.repeat(40)])
     assert.deepEqual(await holdingOfId('C1@r'), { why: 'unpushed' }, 'マージのあとにコミットが足されている')
     // GitHub 上で base を取り込んでからマージされた（#821）: head は手元の HEAD を 1 つ目の親に持つマージコミット
     const update = 'c'.repeat(40)
@@ -288,11 +294,11 @@ test('sai_sessions: コミットしていない変更・PR になっていない
     prs.parents.set(update, ['b'.repeat(40), base])
     assert.deepEqual(await holdingOfId('C1@r'), { why: 'unpushed' }, '親が手元の HEAD と関係ない')
     prs.parents.delete(update)
-    assert.deepEqual(await holdingOfId('C1@r'), { why: 'unpushed' }, '親が引けなければ、空きにしない')
+    assert.deepEqual(await holdingOfId('C1@r'), { why: 'pr_unknown' }, '親が引けなければ、空きにしない（確かめられなかったと出す。#828）')
     prs.parents.set(update, [FAKE_HEAD, base])
     prs.parentsSlow = true
     try {
-      assert.deepEqual(await holdingOfId('C1@r'), { why: 'unpushed' }, '親が時間内に返らなければ、空きにしない')
+      assert.deepEqual(await holdingOfId('C1@r'), { why: 'pr_unknown' }, '親が時間内に返らなければ、空きにしない（#828）')
     } finally {
       prs.parentsSlow = false
     }
@@ -303,7 +309,8 @@ test('sai_sessions: コミットしていない変更・PR になっていない
     prs.lists.set('o/repo-x', [pr(9101, 'issue-9100-stock-filter')])
     prs.parents.clear()
     prs.merged = null
-    assert.deepEqual(await holdingOfId('C1@r'), { why: 'unpushed' }, 'マージ済みの一覧が引けなければ、空きにしない')
+    assert.deepEqual(await holdingOfId('C1@r'), { why: 'pr_unknown' }, 'マージ済みの一覧が引けなければ、空きにしない（#828）')
+    assert.match(await mcpLine('C1@r'), /dev-worktree-c （PR を確かめられず） /)
     prs.merged = new Set()
     git.states.set(work, 'merged')
     assert.deepEqual(await holdingOfId('C1@r'), { free: true }, 'マージ済みのブランチが残っているだけ（中身が base と同じ。gh が無くても分かる）')
@@ -337,6 +344,71 @@ test('sai_send: 着手の形の依頼は、送る時点で相手が空きでな�
     assert.equal(runner.started.length, runs + 1)
   } finally {
     git.states.delete(work)
+  }
+})
+
+test('送る時点の確かめは PR の状態を長く待つ。一覧は短いまま。確かめ切れなければ「PR を確かめられず」で断る（#828）', async () => {
+  const update = 'c'.repeat(40)
+  prs.lists.set('o/repo-x', [pr(9101, 'issue-9100-stock-filter')])
+  prs.merged = new Set([mergedKey('dev-worktree-c', update)])
+  prs.parents.set(update, [FAKE_HEAD, 'd'.repeat(40)])
+  const holdingOfId = async (id: string) => (await sessionsFor()).find((s) => s.id === id)?.holding
+  const ask = '#9600 に着手してください。\n本文と全コメントが正本です。'
+  try {
+    git.states.set(work, 'ahead')
+    assert.deepEqual(await holdingOfId('C1@r'), { free: true }, 'すぐ返れば #821 の形で空き')
+    // マージ済みの一覧と親を合わせて、一覧の待ち（1.5 秒）は超え、送る時点の待ち（5 秒）の手前で返る
+    prs.delay = { list: 0, merged: 1200, parents: 800 }
+    let at = Date.now()
+    assert.deepEqual(await holdingOfId('C1@r'), { why: 'pr_unknown' }, '一覧では今までどおり引けない扱い（PR 前のコミットとは言わない）')
+    assert.ok(Date.now() - at < 3000, '一覧の応答は遅くならない')
+    let runs = runner.started.length
+    at = Date.now()
+    assert.equal((await sendStart('C1@r', ask)).status, 202, '送る時点では待ち切って空き')
+    assert.ok(Date.now() - at >= 1500)
+    assert.equal(runner.started.length, runs + 1)
+    runner.busy.delete('C1@r')
+    // open な PR の一覧が遅いときも同じ（前に引いた一覧は無いものとする）
+    prs.age = Infinity
+    prs.delay = { list: 2000, merged: 0, parents: 0 }
+    assert.equal((await holdingOfId('C1@r'))?.why, 'pr_unknown', 'open な PR の一覧が間に合わなければ、確かめられなかったと出す')
+    runs = runner.started.length
+    assert.equal((await sendStart('C1@r', ask)).status, 202, 'open な PR の一覧も送る時点では長く待つ')
+    assert.equal(runner.started.length, runs + 1)
+    runner.busy.delete('C1@r')
+    // 送る時点の上限も超える → 断る。文は「PR 前のコミット」ではなく、送り直せば通ることがあると言う
+    prs.age = 0
+    prs.delay = { list: 0, merged: 5500, parents: 0 }
+    runs = runner.started.length
+    let res = await sendStart('C1@r', ask)
+    assert.equal(res.status, 409)
+    let error = ((await res.json()) as { error: string }).error
+    assert.equal(error, startRefusal('pr_unknown'))
+    assert.match(error, /PR を確かめられず.*数秒後にもう一度送れば通ることがあります/)
+    assert.doesNotMatch(error, /PR 前のコミット/)
+    assert.equal(runner.started.length, runs, '相手には何もしない')
+    // gh が落ちる → 同じく確かめられない
+    prs.delay = { list: 0, merged: 0, parents: 0 }
+    prs.merged = null
+    res = await sendStart('C1@r', ask)
+    assert.equal(res.status, 409)
+    assert.equal(((await res.json()) as { error: string }).error, startRefusal('pr_unknown'))
+    // 本当に PR になっていないコミット（マージ済みの head にも当たらない）は、今までどおり「PR 前のコミット」
+    prs.merged = new Set([mergedKey('dev-worktree-c', 'b'.repeat(40))])
+    prs.parents.set('b'.repeat(40), ['e'.repeat(40)])
+    res = await sendStart('C1@r', ask)
+    assert.equal(res.status, 409)
+    error = ((await res.json()) as { error: string }).error
+    assert.equal(error, startRefusal('unpushed'))
+    assert.doesNotMatch(error, /数秒後/)
+  } finally {
+    prs.age = 0
+    prs.delay = { list: 0, merged: 0, parents: 0 }
+    prs.merged = new Set()
+    prs.parents.clear()
+    prs.lists.clear()
+    git.states.delete(work)
+    runner.busy.delete('C1@r')
   }
 })
 

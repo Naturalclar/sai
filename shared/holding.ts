@@ -52,11 +52,16 @@ export function holdingOf(input: {
   work?: WorkState
   /** 頼める相手か（別のマシン・送れないセッションは false。省けば true）。頼めない相手に「空き」は付けない */
   sendable?: boolean
+  /**
+   * `gh` で PR の状態（open な PR・マージ済みの head・その親）を引こうとして、時間切れ・失敗で確かめられなかったか（#828）。
+   * `gh` を使わない・GitHub のリポジトリでないときは false（確かめようがないのは「引けなかった」ではない）
+   */
+  prUnknown?: boolean
 }): SessionHolding {
   const pr = prOfBranch(input.prs, input.branch)
   const issues = issueNumbers(input.branch, pr, input.asks)
   // **「空き」はここ 1 か所で決める**（#795。一覧の印も、送る時点の確かめも、この答えを読む）
-  const why = notFreeWhy({ occupied: input.occupied, asked: input.asks.length, work: input.work, inPr: Boolean(pr) })
+  const why = notFreeWhy({ occupied: input.occupied, asked: input.asks.length, work: input.work, inPr: Boolean(pr), prUnknown: input.prUnknown === true })
   return {
     ...(pr ? { pr: { number: pr.number, checks: pr.checks, ...(pr.draft ? { draft: true as const } : {}) } } : {}),
     ...(issues.length > 0 ? { issues } : {}),
@@ -73,15 +78,16 @@ export type WorkState = 'none' | 'clean' | 'dirty' | 'ahead' | 'unknown'
  * 空きでない理由（#795）。空きなら空文字。**分からないとき（`unknown`）は空きにしない**。
  * - コミットしていない変更（`dirty`）は、PR が出ていても空きにしない
  * - いまのブランチから open な PR（下書きも）が出ていれば、マージされるまで空きにしない（`pr`。#816。続きのレビューの直し・マージが残っている）
- * - base に入っていないコミット（`ahead`）で PR が無ければ `unpushed`（PR の一覧が引けなかったときも PR が無いのと同じ扱い = 空きにしない）
+ * - base に入っていないコミット（`ahead`）で PR が無ければ `unpushed`。PR の状態を `gh` で確かめようとして時間切れ・失敗したときは
+ *   `pr_unknown`（#828。空きにしないのは同じ。「作りかけがある」と「確かめられなかった」を分けて出す）
  * - PR が出ていない・マージ済みのブランチが残っているだけ（`clean`）・git のリポジトリでない（`none`）は空き
  */
-export function notFreeWhy(input: { occupied: HoldingWhy | ''; asked: number; work?: WorkState | undefined; inPr: boolean }): HoldingWhy | '' {
+export function notFreeWhy(input: { occupied: HoldingWhy | ''; asked: number; work?: WorkState | undefined; inPr: boolean; prUnknown?: boolean }): HoldingWhy | '' {
   if (input.occupied) return input.occupied
   if (input.asked > 0) return 'asked'
   if (input.work === 'dirty') return 'dirty'
   if (input.inPr) return 'pr'
-  if (input.work === 'ahead') return 'unpushed'
+  if (input.work === 'ahead') return input.prUnknown ? 'pr_unknown' : 'unpushed'
   if (input.work === 'unknown') return 'unknown'
   return ''
 }
@@ -102,6 +108,7 @@ export const WHY_LABEL: Record<HoldingWhy, string> = {
   dirty: '未コミットの変更',
   pr: 'PR がマージ前',
   unpushed: 'PR 前のコミット',
+  pr_unknown: 'PR を確かめられず',
   unknown: '状態不明',
 }
 
@@ -111,7 +118,9 @@ export const WHY_LABEL: Record<HoldingWhy, string> = {
  */
 export function startRefusal(why: HoldingWhy, hidden = false): string {
   const reason = hidden ? '別のリポジトリの相手の理由は出しません' : WHY_LABEL[why]
-  return `相手は空きではないので、着手の依頼は送りませんでした（${reason}）。相手には何も届いていません。sai_sessions を引き直して空きの相手を選ぶか、人に確かめてください`
+  // PR の状態を確かめられなかった（#828）: gh の結果はあとから覚えられるので、少し待って送り直せば通ることがある
+  const retry = !hidden && why === 'pr_unknown' ? '。PR の状態を gh で確かめ切れませんでした。結果は覚えるので、数秒後にもう一度送れば通ることがあります' : ''
+  return `相手は空きではないので、着手の依頼は送りませんでした（${reason}）${retry}。相手には何も届いていません。sai_sessions を引き直して空きの相手を選ぶか、人に確かめてください`
 }
 
 /** 送り元が一覧で見た量から、これを超えて増えていたら（倍率）着手の依頼を送らない（#795。仮の既定） */

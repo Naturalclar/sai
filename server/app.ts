@@ -377,6 +377,11 @@ export const CHANGED_PATHS_TTL_MS = 30_000
 const AGENT_SEND_PATH = '/api/agent/send'
 /** `sai_sessions` の行に PR を足すとき、まだ 1 回も引いていないリポジトリを待つ長さ（#727。前の結果があれば待たない） */
 const HOLDING_PR_WAIT_MS = 1500
+/**
+ * 着手の依頼を送る時点の 1 人ぶんの確かめ（`opts.only`）で、PR の状態を `gh` に待つ長さ（#828）。PR の多いリポジトリでは、
+ * マージ済みの一覧と head の親を合わせて 2 秒ほどかかり、一覧と同じ 1.5 秒では「引けない」に倒れていた。1 人ぶんなので gh を起こす数は増えない
+ */
+const HOLDING_SEND_PR_WAIT_MS = 5000
 /** 同じブランチのマージ済みの PR の head の親を、何本まで引くか（#821。ふつうは 1 本。新しい順に見る） */
 const MERGED_PARENTS_MAX = 3
 /** 「今回だけ」の判定のために worktree の一覧を待つ長さ（#783）。過ぎたら置き場なし = ファイルに触るコマンドは人に回す */
@@ -3274,7 +3279,7 @@ export function createApp(
    * セッションがいま何を持っているか（#727 の案 D の読む側）。`sai_sessions` の 2 つの口（SAI が渡す `sai` と tailnet の `/mcp`）が
    * 1 行に足す。**SAI は持ち場を書いて持たない**: ブランチ・open な PR・届いている依頼から機械で引けるものだけ。
    * - PR は記録で知っているリポジトリ（セッションの remote）だけを、`gh pr list` の決まった形で読む。**応答を待たせない**:
-   *   前の結果があればそれを返し（古ければ裏で引き直す）、まだ 1 回も引いていないときだけ `HOLDING_PR_WAIT_MS` 待つ。
+   *   前の結果があればそれを返し（古ければ裏で引き直す）、まだ 1 回も引いていないときだけ `HOLDING_PR_WAIT_MS`（送る時点の 1 人ぶんの確かめは `HOLDING_SEND_PR_WAIT_MS`。#828）待つ。
    *   引けなくても行は落とさない（PR の印が付かないだけ）
    * - 頼まれて未完の依頼は、`HOLDING_ASK_DAYS` 日以内に届けたメッセージのうち、返答（そのターンの完了の行）がまだ無いものと、
    *   まだ送っていない預かり。行は 1 回だけ舐める
@@ -3282,6 +3287,10 @@ export function createApp(
   const holdingsOf = async (list: readonly SessionSummary[], occupied: (s: SessionSummary) => HoldingWhy | '', sendable: (s: SessionSummary) => boolean = () => true, opts: { prs?: boolean; draining?: boolean; only?: string } = {}): Promise<Map<string, SessionHolding>> => {
     // 同じリポジトリを書き方の違い（大文字小文字）で 2 回引かない（#533 と同じ。PR の画面が埋めたキャッシュとも揃う）
     const known = knownRepos(list)
+    // 送る時点の 1 人ぶんの確かめ（#828）だけ長く待つ。一覧（3 秒のポーリングで引かれる）は短いまま
+    const prWait = opts.only !== undefined ? HOLDING_SEND_PR_WAIT_MS : HOLDING_PR_WAIT_MS
+    // `gh` で PR を引くリポジトリか（#828。引こうとして引けなかったのか、引きようがないのかを分ける）
+    const ghRepo = (asked: string): string => (asked && prs.available && opts.prs !== false ? pickKnownRepo(known, asked) || asked : '')
     const repos = new Map<string, Promise<PrSummary[] | null | undefined>>()
     const prsOf = (asked: string): Promise<PrSummary[] | null | undefined> => {
       const repo = asked ? pickKnownRepo(known, asked) || asked : ''
@@ -3296,7 +3305,7 @@ export function createApp(
           : Promise.race([
               prs.list(repo).catch(() => null),
               new Promise<null>((done) => {
-                timer = setTimeout(() => done(null), HOLDING_PR_WAIT_MS)
+                timer = setTimeout(() => done(null), prWait)
                 timer.unref()
               }),
             ]).finally(() => clearTimeout(timer))
@@ -3304,12 +3313,13 @@ export function createApp(
       return job
     }
     // マージ済みの PR の head（#795）。応答を gh に待たせない（open の一覧と同じ長さだけ待ち、間に合わなければ「引けない」）。
-    // 待つ長さは、マージ済みの一覧と head の親（#821）を合わせて `HOLDING_PR_WAIT_MS` まで
-    const mergedLeftover = async (s: SessionSummary, asked: string): Promise<boolean> => {
-      const repo = asked ? pickKnownRepo(known, asked) || asked : ''
+    // 待つ長さは、マージ済みの一覧と head の親（#821）を合わせて `prWait` まで。
+    // `yes` = マージ済みのブランチが残っているだけ、`no` = そうではない（引きようがない も含む）、`unknown` = gh が時間切れ・失敗で確かめられない（#828）
+    const mergedLeftover = async (s: SessionSummary, asked: string): Promise<'yes' | 'no' | 'unknown'> => {
+      const repo = ghRepo(asked)
       const branch = s.branch ?? ''
-      if (!repo || !branch || !prs.available || !prs.mergedHeads || opts.prs === false) return false
-      const deadline = Date.now() + HOLDING_PR_WAIT_MS
+      if (!repo || !branch || !prs.mergedHeads) return 'no'
+      const deadline = Date.now() + prWait
       const within = <T,>(job: Promise<T | null>): Promise<T | null> => {
         let timer: NodeJS.Timeout | undefined
         return Promise.race([
@@ -3321,22 +3331,24 @@ export function createApp(
         ]).finally(() => clearTimeout(timer))
       }
       const heads = await within(prs.mergedHeads(repo))
-      if (!heads) return false
+      if (!heads) return 'unknown'
       const head = await git.run(s.cwd, ['rev-parse', 'HEAD']).then((out) => out.trim()).catch(() => '')
-      if (head === '') return false
-      if (heads.has(mergedKey(branch, head))) return true
+      if (head === '') return 'no'
+      if (heads.has(mergedKey(branch, head))) return 'yes'
       // GitHub 上で base を取り込んでからマージされた PR（#821。「Update branch」など）: head は手元に無い取り込みのコミットで、
       // 手元の HEAD の 1 つ先。**親が 2 つで、1 つ目がいまの HEAD** なら、足りないのは GitHub が作った取り込みだけ（手元の HEAD より
       // 先に作りかけは無い）。2 つ目の親が base 側かは見ない（手元に無いことが多く、見ても手元の作りかけの有無は変わらない）。
       // 親を引くのは、ここまで来た（作りかけに見え、open な PR も無い）セッションの、同じブランチのマージ済みの head だけ
       const prefix = mergedKey(branch, '')
       const candidates = [...heads].filter((k) => k.startsWith(prefix)).map((k) => k.slice(prefix.length)).slice(0, MERGED_PARENTS_MAX)
-      if (candidates.length === 0 || !prs.commitParents) return false
+      if (candidates.length === 0 || !prs.commitParents) return 'no'
+      let missed = false
       for (const sha of candidates) {
         const parents = await within(prs.commitParents(repo, sha))
-        if (parents && parents.length === 2 && parents[0] === head) return true
+        if (parents && parents.length === 2 && parents[0] === head) return 'yes'
+        if (!parents) missed = true
       }
-      return false
+      return missed ? 'unknown' : 'no'
     }
     // 返答の済んだメッセージの id（行を 1 回だけ舐める。見るのは依頼の新しさの分だけ）
     const notBefore = Date.now() - HOLDING_ASK_DAYS * 86_400_000
@@ -3386,9 +3398,18 @@ export function createApp(
         let work = look && !held ? await workState(git, s.cwd) : undefined
         // base に入っていないコミットがあり、open な PR も無い: **マージ済みの PR の head がいまの HEAD そのもの**なら、
         // マージ済みのブランチが残っているだけ（squash マージではコミットが base に届かず、base がそのファイルをあとで変えると
-        // git だけでは見分けられない）。引けない・違うなら作りかけの側のまま
-        if (work === 'ahead' && !prOfBranch(open, s.branch ?? '') && (await mergedLeftover(s, repo))) work = 'clean'
-        out.set(s.id, holdingOf({ branch: s.branch ?? '', prs: open, asks, occupied: first || held, sendable: can, ...(work ? { work } : {}) }))
+        // git だけでは見分けられない）。違うなら作りかけの側のまま。
+        // gh で確かめようとして時間切れ・失敗した（open な PR の一覧・マージ済みの head・その親）なら、空きにしないまま理由を分ける（#828）
+        let prUnknown = false
+        if (work === 'ahead' && ghRepo(repo)) {
+          if (open === null) prUnknown = true
+          else if (!prOfBranch(open, s.branch ?? '')) {
+            const left = await mergedLeftover(s, repo)
+            if (left === 'yes') work = 'clean'
+            else prUnknown = left === 'unknown'
+          }
+        }
+        out.set(s.id, holdingOf({ branch: s.branch ?? '', prs: open, asks, occupied: first || held, sendable: can, prUnknown, ...(work ? { work } : {}) }))
       }),
     )
     return out
@@ -3536,7 +3557,7 @@ export function createApp(
         return error(res, 409, nth(n) + '同じ相手に、着手の依頼とほかの依頼を 1 度に送れません（着手の依頼は、相手が空きのときに 1 件だけ）。分けて送ってください')
       }
       if (starts) {
-        const holding = (await agentHoldingsOf([resolved.target])).get(resolved.target.id)
+        const holding = (await agentHoldingsOf([resolved.target], { only: resolved.target.id })).get(resolved.target.id)
         const no = startAskRefusal(holding, context, seenContext.get(from)?.get(resolved.target.id) ?? 0, far)
         if (no) {
           await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${from} → ${resolved.target.id} 着手の依頼を送らなかった（相手が空きでない: ${holding?.why ?? (holding?.free ? '読み直す量が増えた' : 'unknown')}）\n`).catch(() => {})
@@ -3696,7 +3717,7 @@ export function createApp(
               }
               // 預かっている間に相手が空きでなくなった着手の依頼は送らない（#795。送る時点の確かめと同じ判定）
               if (startsNewWork(h.text)) {
-                const holding = (await agentHoldingsOf([target], { draining: true })).get(target.id)
+                const holding = (await agentHoldingsOf([target], { draining: true, only: target.id })).get(target.id)
                 const no = startAskRefusal(holding, context, 0, Boolean(h.far))
                 if (no) {
                   await halt(no)

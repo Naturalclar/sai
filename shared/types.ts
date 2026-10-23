@@ -1189,7 +1189,7 @@ export interface AgentSessionEntry {
  * `asked` = 頼まれて返していない依頼、`background` = 止められない `claude --bg`（attach 中・ターン中）、
  * `dirty` = コミットしていない変更、`pr` = いまのブランチの PR がマージ前（#816）、`unpushed` = PR になっていないコミット、`unknown` = git が読めず確かめられない
  */
-export type HoldingWhy = 'busy' | 'terminal' | 'waiting' | 'queued' | 'asked' | 'background' | 'dirty' | 'pr' | 'unpushed' | 'unknown'
+export type HoldingWhy = 'busy' | 'terminal' | 'waiting' | 'queued' | 'asked' | 'background' | 'dirty' | 'pr' | 'unpushed' | 'pr_unknown' | 'unknown'
 
 /** `sai_sessions` の 1 行に足す「いま持っているもの」（#727。組み立ては `shared/holding.ts`）。どれも分かるときだけ */
 export interface SessionHolding {

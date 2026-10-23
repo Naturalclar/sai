@@ -71,6 +71,10 @@ test('notFreeWhy: 作りかけがあれば空きにしない。マージ済み�
   assert.equal(of({ work: 'clean', inPr: true }), 'pr', '作業の状態に関わらず、open な PR があれば空きではない（#816）')
   assert.equal(of({ inPr: true }), 'pr', '作業の状態を見ない相手でも、open な PR があれば空きではない（#816）')
   assert.equal(of({ work: 'unknown' }), 'unknown', 'git が読めないときは空きにしない')
+  assert.equal(of({ work: 'ahead', prUnknown: true }), 'pr_unknown', 'PR の状態を gh で確かめ切れなければ、空きにしないまま理由を分ける（#828）')
+  assert.equal(of({ work: 'ahead', prUnknown: true, inPr: true }), 'pr', '分かっている open な PR が先')
+  assert.equal(of({ work: 'dirty', prUnknown: true }), 'dirty', '未コミットの変更が先')
+  assert.equal(of({ work: 'clean', prUnknown: true }), '', '作りかけが無ければ PR を確かめる要が無い')
   // 理由は最初に当たった 1 つ（回っているターン → 頼まれ中 → 作りかけ）
   assert.equal(of({ occupied: 'terminal', asked: 1, work: 'dirty' }), 'terminal')
   assert.equal(of({ asked: 1, work: 'dirty' }), 'asked')
@@ -97,6 +101,10 @@ test('startRefusal: 送らなかった理由を 1 つ返す。別のリポジト
   const hidden = startRefusal('dirty', true)
   assert.doesNotMatch(hidden, /未コミット|変更/)
   assert.match(hidden, /別のリポジトリの相手の理由は出しません/)
+  // PR の状態を確かめ切れなかった（#828）: 送り直せば通ることがあると言う。別のリポジトリの相手には言わない（理由の中身になる）
+  assert.match(startRefusal('pr_unknown'), /（PR を確かめられず）。.*数秒後にもう一度送れば通ることがあります。相手には何も届いていません/)
+  assert.doesNotMatch(startRefusal('unpushed'), /数秒後/)
+  assert.doesNotMatch(startRefusal('pr_unknown', true), /数秒後|PR/)
 })
 
 test('grownSinceSeen: 一覧で見た値の倍を超え、かつ下限を超えたときだけ。見ていなければ言わない（#795）', () => {

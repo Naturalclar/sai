@@ -94,6 +94,7 @@ OpenCode (feed/opencode/sai.js) ─┘                           │
 ### サーバ（server/）
 
 - **`server/`** は node:http 直書きで依存ゼロを保つ（検索も索引を持たない）。ルーティングは `createApp()` にあり、テストはこれを直接叩く。C-c / SIGTERM では必ず終わる（`shutdown()`）。SAI が起こした `opencode serve` は回していなければ落とし、回していれば次のサーバへ渡す。`codex app-server --stdio` は触らない → docs/internals/server.md#終わり方shutdown
+- **区分を外に出したファイル**（`server/reply/loopRoutes.ts` など。#807）は `server/appContext.ts` の `AppContext` で `createApp()` の値の参照を受け、`app.ts` を import しない。状態の持ち主・初期化の順番は `createApp()` のまま（`create…(ctx)` は作るだけ） → docs/internals/server.md#骨組みmaintscreateapp
 - **`server/rows/store.ts`** の読む先は日付から組み立てず `readdir` + `feedFiles()` で拾う（`<host>` 付きも読む）。同時の同じ読みは 1 つにまとめる（`rows()` / `sessions()` を `async` にしない。集計の鍵は行を読んだときの署名から作り、別に取らない） → docs/internals/server.md#行の読み込みstorets
 - **`server/rows/search.ts`** は `thinking` と待ちの行を見ず、アーカイブ済みも出す。判定と抜粋は `shared/search.ts` を画面と共用する → docs/internals/server.md#本文の検索rowssearchts
 - **`server/local/usage.ts`** は API を叩かない（読むのはローカルのファイルだけ）。`UsageStore` のコンストラクタは置き場に既定値を持たせない。チップの出し方は `web/src/usageChips.ts` の 1 か所だけ → docs/internals/server.md#使用量localusagets

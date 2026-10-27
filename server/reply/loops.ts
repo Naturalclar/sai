@@ -1,5 +1,5 @@
 // セッションに組んだループ（#634）の置き場。決まりごと（検査・周の文・周の終わりの状態）は `shared/loops.ts`、
-// 起こす・止めるのは app.ts の `tickLoops()`。ここは持つだけ。
+// 起こす・止めるのは `server/reply/loopRoutes.ts` の `tickLoops()`。ここは持つだけ。
 //
 // メモリだけだと、サーバの立て直しで回っていたループが黙って消える。`replying.json` / `reply-queue.json` と同じく
 // `<feed dir>/loops.json` にも書き、起動時に読み戻す。**周を送る前に「送った」を書く**ので、立て直しても同じ周を 2 回は送らない

@@ -343,7 +343,8 @@ SAI が起こした Claude のターンは、使ったトークンと費用も�
 
 - **決まりごとは `shared/loops.ts`**（純粋関数）: 組むときの検査 `loopFromRequest()`、周の頭の文 `loopPrompt()`（頭は `LOOP_MARK`＝`【SAI ループ】`）、周が終わったあとの状態 `loopAfterRound()`、止める `loopHalt()`、画面に出す形 `loopView()` と 1 行 `loopStatusLine()`。数字は `LOOP_*`（既定 10 周・2 時間・10 分、間隔 60〜3600 秒、`LOOP_STALL_ROUNDS` = 3）。
 - **置き場は `server/reply/loops.ts` の `LoopStore`**（`<feed dir>/loops.json`。tmp → rename、0600）。持つのは `LoopState`（画面に出す `Loop` ＋ 回っている周のターン `turn`・この周で言われたこと `said`・同じ申し送りの数 `stalled`・起こすときの宛先 `url`）。
-- **起こすのは `app.ts` の `tickLoops()` → `tickLoop()`**。呼ぶのは `drainAll()`（画面のポーリングのついで）と、見に行く相手がいる間だけ立てるタイマー（`LOOP_TICK_MS` = 5 秒。`unref()`。`dispose()` で消す。`TerminalDeps.loopTickMs` を 0 にすると立てない＝テスト）。時計は `TerminalDeps.loopNow`。
+- **口と時計の 1 回ぶんは `server/reply/loopRoutes.ts`**（#807。`createLoopRoutes(ctx)` が `tickLoops()`・`loopRefusal()`・`pauseLoop()`・`loopAction()`・`agentLoopNext()` などを返し、`createApp()` が振り分けと時計につなぐ。状態の持ち主は `createApp()` のまま、`AppContext` で参照を渡す）。
+- **起こすのは `loopRoutes.ts` の `tickLoops()` → `tickLoop()`**。呼ぶのは `drainAll()`（画面のポーリングのついで）と、見に行く相手がいる間だけ立てるタイマー（`LOOP_TICK_MS` = 5 秒。`unref()`。`dispose()` で消す。`TerminalDeps.loopTickMs` を 0 にすると立てない＝テスト）。時計は `TerminalDeps.loopNow`。
   - 周のターン（`turn`）が終わっていれば `loopAfterRound()`（失敗していれば `stopped`）。
   - 時刻が来ていれば、終わりの時刻 → 周の上限 → 処理中・預かり（待つ）→ 前の返信の失敗（一時停止）→ `loopRefusal()`（一時停止）→ `usageRefusal()`（止める）の順に見て、`launch()` に `loop: true`・`forceProcess: true`・`queue: false` で渡す。
   - **送る前に `round + 1` と `turn: 'pending'` を書く**。起動できたら `turn` を `Replying.since` にする。立て直したあと子が居なければ「その周は終わった」として次の時刻を待つので、同じ周を 2 回は送らない。

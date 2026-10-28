@@ -515,21 +515,20 @@ const limitsAnswer = (used: number) => ({
   rateLimitUpsell: null,
 })
 
-test('readRateLimits: 繋いでいない app-server は起こさない。繋いでいれば account/rateLimits/read を 1 回聞く（#832）', async () => {
+test('readRateLimits: 押したときに呼ばれ、繋いでいなければ app-server を起こして account/rateLimits/read を聞く（#832）', async () => {
   let connects = 0
   const connection = new FakeConnection()
   const app = new CodexAppServer(async () => {
     connects++
     return connection
   }, () => Date.parse('2026-10-28T03:00:00Z'))
-  assert.equal(await app.readRateLimits(), null)
-  assert.equal(app.rateLimitsSeen(), null)
-  assert.equal(connects, 0, '使用率のためだけに app-server を起こさない')
+  assert.equal(app.rateLimitsSeen(), null, '通知を覚えるだけでは起こさない')
+  assert.equal(connects, 0)
 
-  // 返信などで繋いだあと
-  await app.skills()
   connection.rateLimitsResult = limitsAnswer(42)
   const usage = await app.readRateLimits()
+  assert.equal(connects, 1, '繋いでいなければ起こす（返信と同じ 1 本）')
+  assert.deepEqual(connection.sent.map((m) => m.method), ['initialize', 'initialized', 'account/rateLimits/read'], 'initialize を済ませてから聞く')
   assert.deepEqual(usage, {
     primary: { used_percent: 42, window_minutes: 300, resets_at: 1793000000 },
     secondary: { used_percent: 3, window_minutes: 10080, resets_at: 1793500000 },
@@ -538,6 +537,9 @@ test('readRateLimits: 繋いでいない app-server は起こさない。繋い�
   })
   const ask = connection.sent.find((m) => m.method === 'account/rateLimits/read')
   assert.deepEqual(ask?.params, { excludeResetCreditDetails: true })
+
+  // 繋いだあとは同じ接続に聞く（もう 1 本起こさない）
+  await app.readRateLimits()
   assert.equal(connects, 1)
 
   // 聞けなかったら、覚えている値を返す
@@ -546,13 +548,13 @@ test('readRateLimits: 繋いでいない app-server は起こさない。繋い�
   // 形が違う答えは拾わない（前の値を残す）
   connection.rateLimitsResult = { rateLimits: { primary: { used: 10 } } }
   assert.deepEqual(await app.readRateLimits(), usage)
+})
 
-  // 切れたら聞かない（繋ぎ直さない）
-  connection.disconnect()
-  const before = connection.sent.length
-  assert.deepEqual(await app.readRateLimits(), usage)
-  assert.equal(connection.sent.length, before)
-  assert.equal(connects, 1)
+test('readRateLimits: app-server を起こせなくても落とさず、覚えている値を返す（#832。codex が無い環境）', async () => {
+  const app = new CodexAppServer(async () => {
+    throw new Error('spawn codex ENOENT')
+  }, () => Date.parse('2026-10-28T03:00:00Z'))
+  assert.equal(await app.readRateLimits(), null)
 })
 
 test('rateLimitsSeen: account/rateLimits/updated の通知を覚える。Codex でない枠・形の違う通知は拾わない（#832）', async () => {

@@ -9,8 +9,8 @@
 //            ステータスライン経由で書く。#250）。**これが平常時の割合を知る唯一の口**。
 //            加えて ~/.claude/projects/*/*.jsonl の `quotaLimits` を見る。こちらは
 //            **弾かれたときにしか載らない**ので、戻る時刻がまだ先の記録だけを拾う（＝いま上限中）。
-//   Codex の app-server … SAI がすでに話している app-server の `account/rateLimits/updated` の通知と、
-//            人が「いま取り直す」を押したときの `account/rateLimits/read`（#832。CLI 越し。使用率のためだけに起こさない）。
+//   Codex の app-server … SAI の app-server（返信と同じ 1 本）の `account/rateLimits/updated` の通知と、
+//            人が「いま取り直す」を押したときの `account/rateLimits/read`（#832。CLI 越し。押したときだけは、繋いでいなければ起こす）。
 //            rollout と比べて、受け取った時刻の新しいほうを採る。
 //
 // 3 秒のポーリングには乗せない。画面が開いたときに 1 回取り、CACHE_MS の間は使い回す。
@@ -43,7 +43,7 @@ export const REFRESH_MIN_MS = 10_000
 export interface CodexLiveUsage {
   /** 通知で届いた値。聞きに行かない */
   seen(): CodexUsage | null
-  /** いま聞く。繋いでいる app-server が無ければ聞かずに `seen()` と同じものを返す */
+  /** いま聞く（押したときだけ呼ぶ）。繋いでいなければ app-server を起こす。聞けなければ `seen()` と同じものを返す */
   read(): Promise<CodexUsage | null>
 }
 
@@ -266,7 +266,7 @@ export class UsageStore {
   }
 
   /**
-   * 「いま取り直す」（#832。人が押したときだけ）。キャッシュを捨てて読み直し、繋いでいる app-server があれば Codex の使用率を聞く。
+   * 「いま取り直す」（#832。人が押したときだけ）。キャッシュを捨てて読み直し、Codex の app-server に使用率を聞く（繋いでいなければ起こす）。
    * Claude は聞く口が無い（使用率のためだけの `-p` は作らない）ので、ファイルを読み直すだけ
    */
   async refresh(): Promise<UsageResponse> {

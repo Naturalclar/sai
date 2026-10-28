@@ -133,9 +133,9 @@ export interface CodexApp {
    */
   rateLimitsSeen?(): CodexUsage | null
   /**
-   * 使用率をいま聞く（#832。`account/rateLimits/read`）。**すでに繋いでいる app-server があるときだけ**聞き、
-   * 無ければ聞かずに `rateLimitsSeen()` を返す（**使用率のためだけに app-server を起こさない**）。失敗も同じ。
-   * 偽物は持たなくてよい
+   * 使用率をいま聞く（#832。`account/rateLimits/read`）。**呼ぶのは人が「いま取り直す」を押したときだけ**（`UsageStore.refresh()`）。
+   * 繋いでいなければ app-server を起こして聞く（返信と同じ 1 本。2026-10-29 の決め直し）。聞けない・形が違うときは
+   * `rateLimitsSeen()` と同じものを返す。偽物は持たなくてよい
    */
   readRateLimits?(): Promise<CodexUsage | null>
 }
@@ -337,10 +337,10 @@ export class CodexAppServer implements CodexApp {
   }
 
   async readRateLimits(): Promise<CodexUsage | null> {
-    // 繋いでいなければ聞かない（ensureConnection() を通る request() には渡さない。起こしてしまう）
-    const connection = this.connection
-    if (!connection) return this.limits
     try {
+      // 押したときだけ呼ばれるので、繋いでいなければ起こす（返信と同じ接続。initialize を済ませてから投げる）。
+      // 立て直したあと SAI から Codex に返信するまで、押しても値が進まなかった（#833 のあと）
+      const connection = await this.ensureConnection()
       // 戻す時刻の細かい一覧は使わないので、別に引かせない（schema の excludeResetCreditDetails）
       const result = await this.requestOn(connection, 'account/rateLimits/read', { excludeResetCreditDetails: true }, RATE_LIMITS_TIMEOUT_MS)
       const usage = parseCodexRateLimits(result, new Date(this.now()).toISOString())

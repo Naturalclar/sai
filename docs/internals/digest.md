@@ -31,7 +31,8 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 一言を作る `claude -p` の子プロセスには `AGENT_FEED_SKIP=1` を渡す。
 - **一言の `claude -p` は、要らないものを外して起こす**（#740。`summarizeCommand()`）: `--tools ""`（道具を渡さない）・`--strict-mcp-config --mcp-config '{"mcpServers":{}}'`（MCP を繋がない。claude.ai のコネクタも）・`--disable-slash-commands`（スキルの一覧を載せない）。**利用者の設定ファイルは読むまま**（`--setting-sources ""` は付けない。付けると 2〜3 秒縮むが、設定の `env` の送り先・プロキシ・Bedrock の指定が効かなくなり、OAuth のログインがあると落ちずに別の経路で本文を送る）。環境には `SUMMARIZE_ENV`（`MAX_THINKING_TOKENS=0` と `CLAUDE_CODE_DISABLE_THINKING=1`）を足して**思考を切る**。**足すのは減らす側だけ**で、権限のフラグは足さない。`--bare` は OAuth を読まないので使わない。
 - 軽い形が**起こし方のせいで**落ちたとき（`formFailure()`: CLI が JSON を返さずに終わった = 知らないフラグで即終了する版）だけ、前の形（外すフラグも思考の指定も無し）で 1 回試し、通ったらそのサーバの間は前の形で起こす（`fellBack`。stderr に 1 回知らせる）。API の失敗・空の答え・時間切れでは試さない（試して通ると、以後ずっと遅い前の形に戻る）。待つのは合わせて 1 件ぶんまで。前の形でも落ちたら `FALLBACK_RETRY_MS`（10 分）は試さない（切れている間、毎回 2 本起こさない）。
-- `ClaudeSummarizer.lastStats` に、直前の 1 回の時間とトークン（`--output-format json` の `duration_ms` / `duration_api_ms` / `usage` / `total_cost_usd`）を持つ（`summarizeStats()`。本文は持たない）。読むのは `pnpm digest:eval` だけ。
+- 軽い形の出力は stream-json（#832。`SUMMARIZE_STREAM_ARGS`。`-p` で stream-json を出すには `--verbose` が要る）で、答えは最後の `type: "result"` の行（`resultOf()`。前の形の json の出力も同じ関数で読む）。流れてくる `rate_limit_event` を使用率の置き場に渡す（`docs/internals/server.md` の使用量）。
+- `ClaudeSummarizer.lastStats` に、直前の 1 回の時間とトークン（`result` の `duration_ms` / `duration_api_ms` / `usage` / `total_cost_usd`）を持つ（`summarizeStats()`。本文は持たない）。読むのは `pnpm digest:eval` だけ。
 
 ## 番号のリンク
 

@@ -9,6 +9,9 @@
 //            ステータスライン経由で書く。#250）。**これが平常時の割合を知る唯一の口**。
 //            加えて ~/.claude/projects/*/*.jsonl の `quotaLimits` を見る。こちらは
 //            **弾かれたときにしか載らない**ので、戻る時刻がまだ先の記録だけを拾う（＝いま上限中）。
+//   Codex の app-server … SAI がすでに話している app-server の `account/rateLimits/updated` の通知と、
+//            人が「いま取り直す」を押したときの `account/rateLimits/read`（#832。CLI 越し。使用率のためだけに起こさない）。
+//            rollout と比べて、受け取った時刻の新しいほうを採る。
 //
 // 3 秒のポーリングには乗せない。画面が開いたときに 1 回取り、CACHE_MS の間は使い回す。
 import { open, readdir, readFile, stat } from 'node:fs/promises'
@@ -33,6 +36,16 @@ export const CLAUDE_FILES = 10
 export const CLAUDE_WINDOW_MS = 8 * 24 * 60 * 60 * 1000
 /** 結果を使い回す時間。割合は 1 ターンごとにしか動かないので短くなくてよい */
 export const CACHE_MS = 30_000
+/** 「いま取り直す」（#832）で app-server に聞く間隔の下限。続けて押されても、この間は聞き直さずに覚えている値を使う */
+export const REFRESH_MIN_MS = 10_000
+
+/** Codex の app-server の使用率（#832。`CodexApp` の 2 つの口）。聞きに行くのは `read()` だけ */
+export interface CodexLiveUsage {
+  /** 通知で届いた値。聞きに行かない */
+  seen(): CodexUsage | null
+  /** いま聞く。繋いでいる app-server が無ければ聞かずに `seen()` と同じものを返す */
+  read(): Promise<CodexUsage | null>
+}
 
 /** `~` 始まりを展開する。CODEX_HOME は人が書く値なので（server/reply/codex.ts と同じ扱い） */
 function expand(raw: string, home: string): string {
@@ -222,6 +235,9 @@ export class UsageStore {
   private cached: { at: number; usage: UsageResponse } | null = null
   private pending: Promise<UsageResponse> | null = null
   private readonly now: () => number
+  private codexLive: CodexLiveUsage | null = null
+  /** 最後に app-server に聞いた時刻（`REFRESH_MIN_MS` の間引き） */
+  private askedAt = -Infinity
 
   // パラメータプロパティは server/tsconfig.json の erasableSyntaxOnly で使えないので、素直に代入する。
   // 置き場には既定値を持たせない（#275）。持たせるとテストが省略したときに本物のホームを黙って読み、
@@ -233,27 +249,52 @@ export class UsageStore {
     this.now = now
   }
 
+  /** Codex の app-server の口を繋ぐ（#832。createApp が app-server を組んだあと。`SAI_CODEX_APP_SERVER=0` では繋がない） */
+  useCodexLive(live: CodexLiveUsage): void {
+    this.codexLive = live
+  }
+
   async get(): Promise<UsageResponse> {
     const at = this.now()
     if (this.cached && at - this.cached.at < CACHE_MS) return this.cached.usage
     // 同時に開かれても読むのは 1 回だけ
     if (this.pending) return this.pending
-    this.pending = this.read(at).finally(() => {
+    this.pending = this.read(at, false).finally(() => {
       this.pending = null
     })
     return this.pending
   }
 
-  private async read(at: number): Promise<UsageResponse> {
+  /**
+   * 「いま取り直す」（#832。人が押したときだけ）。キャッシュを捨てて読み直し、繋いでいる app-server があれば Codex の使用率を聞く。
+   * Claude は聞く口が無い（使用率のためだけの `-p` は作らない）ので、ファイルを読み直すだけ
+   */
+  async refresh(): Promise<UsageResponse> {
+    // 読みかけがあれば、それが終わってから読み直す（古い読みを返さない）
+    await this.pending?.catch(() => {})
+    const at = this.now()
+    const ask = at - this.askedAt >= REFRESH_MIN_MS || at < this.askedAt
+    if (ask) this.askedAt = at
+    this.pending = this.read(at, ask).finally(() => {
+      this.pending = null
+    })
+    return this.pending
+  }
+
+  private async read(at: number, ask: boolean): Promise<UsageResponse> {
+    const live = this.codexLive
     // 割合（ステータスライン）と「上限中」（transcript）は出どころが別なので、両方読んで重ねる
-    const [codex, statusLine, replies, limited] = await Promise.all([
+    const [rollout, appServer, statusLine, replies, limited] = await Promise.all([
       readCodexUsage(this.codexDir),
+      live ? (ask ? live.read() : Promise.resolve(live.seen())).catch(() => null) : Promise.resolve(null),
       readStatusLineUsage(this.feedDir, at),
       readReplyLimits(this.feedDir, at),
       readClaudeUsage(this.claudeDir, at),
     ])
     // 割合の出どころは 2 つ（端末のステータスライン・SAI から回した返信の出力。#694）。どちらも口座の値なので窓ごとにまとめる
     const claude = mergeClaudeUsage(mergeUsageWindows(statusLine, replies), limited)
+    // Codex は rollout と app-server のどちらも口座の値なので、受け取った時刻の新しいほうを採る
+    const codex = newer(rollout, appServer)
     const usage: UsageResponse = {}
     if (codex) usage.codex = codex
     if (claude) usage.claude = claude

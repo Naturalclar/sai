@@ -117,6 +117,10 @@
   /* 復帰時刻を過ぎた枠（#726）。割合ではないので薄く出す */
   header .usage-chip .usage-waiting { color: var(--muted); }
   .usage-panel { position: absolute; top: calc(100% + 6px); right: 0; width: 16em; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, .18); padding: 10px 12px; z-index: 15; font-size: 12px; }
+  /* 見出しの行と「いま取り直す」（#832）。文字は出さずアイコンだけ（説明は aria-label / title）。取っている間はアイコンを回す */
+  .usage-panel-head { display: flex; align-items: center; justify-content: space-between; margin: -4px -6px 6px 0; color: var(--muted); }
+  .usage-panel-head.busy .refresh-mark { animation: refresh-spin 1s linear infinite; }
+  @media (prefers-reduced-motion: reduce) { .usage-panel-head.busy .refresh-mark { animation: none; } }
   .usage-panel section + section { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
   .usage-panel h3 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; margin: 0 0 6px; font-size: 12px; }
   .usage-panel h3 .usage-plan { padding: 0 5px; background: var(--chip); border-radius: 4px; font-weight: 400; color: var(--muted); }

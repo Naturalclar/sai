@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtemp, mkdir, rm, writeFile, utimes } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { CodexUsage } from '../../shared/types.ts'
 import {
   CACHE_MS,
   claudeProjectsDir,
@@ -13,6 +14,7 @@ import {
   readCodexUsage,
   recentRollouts,
   recentTranscripts,
+  REFRESH_MIN_MS,
   tailLines,
   TAIL_BYTES,
   UsageStore,
@@ -178,6 +180,62 @@ test('UsageStore: 同時に呼ばれても読むのは 1 回（画面を開き�
   const [a, b] = await Promise.all([store.get(), store.get()])
   assert.equal(a, b, '同じ結果を返す（読み直していない）')
   assert.equal(a.codex?.primary.used_percent, 7)
+})
+
+/** 偽の app-server の口（#832）。聞かれた回数を数える */
+const fakeLive = (seen: CodexUsage | null, read: CodexUsage | null) => {
+  const calls = { read: 0 }
+  return {
+    calls,
+    live: {
+      seen: () => seen,
+      read: async () => {
+        calls.read++
+        return read
+      },
+    },
+  }
+}
+const liveUsage = (percent: number, at: string): CodexUsage => ({ primary: { used_percent: percent, window_minutes: 300 }, at })
+
+test('UsageStore: Codex は rollout と app-server の新しいほうを採る。押さなければ app-server には聞かない（#832）', async () => {
+  const root = await tmp()
+  await writeRollout(join(root, '2026', '10', '28'), 'rollout-a.jsonl', [tokenCount(30, '2026-10-28T02:00:00.000Z')])
+  let now = 2_000_000
+  const store = new UsageStore(root, join(root, 'none'), join(root, 'feed'), () => now)
+  const { live, calls } = fakeLive(liveUsage(31, '2026-10-28T02:30:00.000Z'), liveUsage(35, '2026-10-28T03:00:00.000Z'))
+  store.useCodexLive(live)
+  assert.equal((await store.get()).codex?.primary.used_percent, 31, '通知で届いた値のほうが新しい')
+  now += CACHE_MS
+  await store.get()
+  assert.equal(calls.read, 0, '開いただけ・5 分おきの取り直しでは聞かない')
+
+  // 押したら聞く。キャッシュも捨てる
+  assert.equal((await store.refresh()).codex?.primary.used_percent, 35)
+  assert.equal(calls.read, 1)
+  assert.equal((await store.get()).codex?.primary.used_percent, 35, '取り直した値をキャッシュに残す')
+  // 続けて押しても REFRESH_MIN_MS の間は聞き直さない（ファイルは読み直す）
+  now += 1000
+  await store.refresh()
+  assert.equal(calls.read, 1)
+  now += REFRESH_MIN_MS
+  await store.refresh()
+  assert.equal(calls.read, 2)
+})
+
+test('UsageStore: rollout のほうが新しければ rollout。app-server が聞けない・繋いでいないときも rollout のまま（#832）', async () => {
+  const root = await tmp()
+  await writeRollout(join(root, '2026', '10', '28'), 'rollout-a.jsonl', [tokenCount(40, '2026-10-28T05:00:00.000Z')])
+  const older = new UsageStore(root, join(root, 'none'), join(root, 'feed'))
+  older.useCodexLive(fakeLive(liveUsage(31, '2026-10-28T02:30:00.000Z'), null).live)
+  assert.equal((await older.refresh()).codex?.primary.used_percent, 40)
+
+  const failing = new UsageStore(root, join(root, 'none'), join(root, 'feed'))
+  failing.useCodexLive({ seen: () => null, read: () => Promise.reject(new Error('切れた')) })
+  assert.equal((await failing.refresh()).codex?.primary.used_percent, 40, '聞けなくても落とさない')
+
+  const none = new UsageStore(root, join(root, 'none'), join(root, 'feed'))
+  assert.equal((await none.refresh()).codex?.primary.used_percent, 40, '口を繋いでいなければ今までどおり')
 })
 
 // ---- ステータスライン経由の割合（#250）。feed/statusline.py が feed dir に置くファイル

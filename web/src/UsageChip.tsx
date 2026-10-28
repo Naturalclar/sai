@@ -12,7 +12,7 @@ import { useUsage } from './useUsage'
  * 押すと詳細のパネルが開き、そのときに取り直す。Esc と外側クリックで閉じる
  */
 export function UsageChip() {
-  const { usage, at, reload } = useUsage()
+  const { usage, at, reload, refresh, refreshing } = useUsage()
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
@@ -85,7 +85,7 @@ export function UsageChip() {
           </span>
         ))}
       </button>
-      {open && <UsagePanel usage={usage} now={at} onNavigate={() => setOpen(false)} />}
+      {open && <UsagePanel usage={usage} now={at} onNavigate={() => setOpen(false)} onRefresh={refresh} refreshing={refreshing} />}
     </div>
   )
 }

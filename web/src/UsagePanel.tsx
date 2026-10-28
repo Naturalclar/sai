@@ -1,4 +1,6 @@
 import { limitKindLabel, resetLabel } from '../../shared/usage.ts'
+import { IconButton } from './IconButton'
+import { RefreshMark } from './RefreshMark'
 import { UsageBar } from './UsageBar'
 import type { UsageResponse } from './api'
 import { claudeFreshness, CLAUDE_USAGE_WHY, codexFreshness } from './usageChips'
@@ -6,15 +8,24 @@ import { claudeFreshness, CLAUDE_USAGE_WHY, codexFreshness } from './usageChips'
 /**
  * 使用量の詳細（UsageChip を押すと出る）。どちらも 5時間 / 週のゲージ。
  * **Claude の割合はステータスラインを設定している人しか取れない**ので、無いときは設定の場所を案内する
- * （割合が出ないのは不具合ではない。#250）
+ * （割合が出ないのは不具合ではない。#250）。
+ * 右上の更新のアイコンで「いま取り直す」（#832。押したときだけ。Codex は SAI が繋いでいる app-server に聞き、Claude はファイルを読み直す）
  */
-export function UsagePanel({ usage, now, onNavigate }: { usage: UsageResponse; now: number; onNavigate?: () => void }) {
+export function UsagePanel({ usage, now, onNavigate, onRefresh, refreshing = false }: { usage: UsageResponse; now: number; onNavigate?: () => void; onRefresh?: () => void; refreshing?: boolean }) {
   // Claude の割合がいつの値か・5 時間が欠けているか（#694）。判定は usageChips.ts の 1 か所
   const fresh = claudeFreshness(usage.claude, now)
   // Codex も同じ閾値で「古い」と出す（#726。使っていないあいだは rollout が増えず、値が進まない）
   const codexFresh = codexFreshness(usage.codex, now)
   return (
     <div className="usage-panel" role="dialog" aria-label="使用量">
+      {onRefresh && (
+        <div className={`usage-panel-head${refreshing ? ' busy' : ''}`}>
+          <span>使用量</span>
+          <IconButton label={refreshing ? '使用量を取り直しています…' : '使用量をいま取り直す'} onClick={onRefresh} disabled={refreshing}>
+            <RefreshMark />
+          </IconButton>
+        </div>
+      )}
       {usage.codex && (
         <section>
           <h3>

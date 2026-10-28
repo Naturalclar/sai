@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
-import { isTimeout, ClaudeSummarizer, SUMMARIZE_ENV, formFailure, summarizeStats, DEFAULT_OPENAI_URL, DIGEST_ALERT_FAILS, DIGEST_BREAK_MS, DIGEST_MAX_TRIES, DIGEST_RETRY_DELAYS_MS, DigestStore, Digester, OpenAISummarizer, createDigester, digestKey, digestable, partsOf, personaResolver, stripThinking, summarizeCommand, summarizeRequest, summarizerFactory, mayRetryWithoutReasoning } from './digest.ts'
+import { isTimeout, resultOf, ClaudeSummarizer, SUMMARIZE_ENV, formFailure, summarizeStats, DEFAULT_OPENAI_URL, DIGEST_ALERT_FAILS, DIGEST_BREAK_MS, DIGEST_MAX_TRIES, DIGEST_RETRY_DELAYS_MS, DigestStore, Digester, OpenAISummarizer, createDigester, digestKey, digestable, partsOf, personaResolver, stripThinking, summarizeCommand, summarizeRequest, summarizerFactory, mayRetryWithoutReasoning } from './digest.ts'
 import type { Summarizer } from './digest.ts'
 import { row } from '../rows/aggregate.test.ts'
 import type { PersonaId } from '../../shared/types.ts'
@@ -64,11 +64,11 @@ test('isTimeout: fetch の時間切れと claude -p の時間切れだけ（#639
   assert.equal(isTimeout(new Error('HTTP 500: x')), false)
 })
 
-test('summarizeCommand: -p / --model / json 出力に、道具・MCP・スキルを外すフラグを足す。--bare と権限のフラグは使わない（#740）', () => {
+test('summarizeCommand: -p / --model / stream-json 出力（#832）に、道具・MCP・スキルを外すフラグを足す。--bare と権限のフラグは使わない（#740）', () => {
   const c = summarizeCommand('haiku')
   assert.equal(c.bin, 'claude', 'サーバの PATH の claude（SAI_CLAUDE_BIN は無い。#288）')
   assert.deepEqual(c.args, [
-    '-p', '--model', 'haiku', '--output-format', 'json', '--no-session-persistence',
+    '-p', '--model', 'haiku', '--output-format', 'stream-json', '--verbose', '--no-session-persistence',
     '--tools', '', '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disable-slash-commands',
   ])
   assert.ok(!c.args.includes('--setting-sources'), '利用者の設定ファイルは読むまま（設定の env の送り先・プロキシを黙って迂回しない）')
@@ -95,6 +95,7 @@ cat > /dev/null
 [ -f "$d/slow" ] && exec sleep 5
 [ -n "$FAKE_API_ERROR" ] && { echo '{"type":"result","is_error":true,"result":"API Error: Overloaded"}'; exit 1; }
 for a in "$@"; do if [ -n "$FAKE_REJECT" ] && [ "$a" = "$FAKE_REJECT" ]; then echo "error: unknown option '$a'" >&2; exit 1; fi; done
+[ -n "$FAKE_STREAM" ] && { echo '{"type":"system","subtype":"init"}'; echo '{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","unifiedWindows":{"five_hour":{"utilization":0.25,"resetsAt":1793000000},"seven_day":{"utilization":0.5,"resetsAt":1793500000}}}}'; echo '{"type":"assistant","message":{"content":[{"type":"text","text":"できました"}]}}'; }
 echo '{"type":"result","is_error":false,"result":" できました ","duration_ms":1200,"duration_api_ms":900,"total_cost_usd":0.002,"usage":{"input_tokens":3,"cache_creation_input_tokens":0,"cache_read_input_tokens":7000,"output_tokens":40}}'
 `
 
@@ -118,6 +119,27 @@ test('ClaudeSummarizer: 軽い形で起こし、思考を切る指定と AGENT_F
     const [line] = await calls()
     assert.match(line!, /--tools  --strict-mcp-config --mcp-config \{"mcpServers":\{\}\} --disable-slash-commands \| think=0\/1 skip=1$/)
   })
+})
+
+test('ClaudeSummarizer: stream-json の最後の result を読み、流れてきた使用率（rate_limit_event）を渡す（#832）', async () => {
+  await withFakeClaude(async (bin, _calls, dir) => {
+    const seen: string[] = []
+    let flushed = 0
+    const limits = { observe: (text: string) => void seen.push(text), flush: () => void flushed++ }
+    const s = new ClaudeSummarizer('haiku', dir, { FAKE_STREAM: '1' }, { bin, limits })
+    assert.equal(await s.summarize('言い換えて'), 'できました')
+    assert.equal(s.lastStats?.output_tokens, 40, '数字は result の行から')
+    assert.equal(seen.length, 1)
+    assert.match(seen[0]!, /"rate_limit_event"/)
+    assert.equal(flushed, 1, '終わったら書き切る')
+    // 使用率を渡す先が落ちても、一言は止めない
+    const broken = new ClaudeSummarizer('haiku', dir, { FAKE_STREAM: '1' }, { bin, limits: { observe: () => { throw new Error('x') }, flush: () => {} } })
+    assert.equal(await broken.summarize('x'), 'できました')
+  })
+  assert.deepEqual(resultOf('{"type":"result","result":"a"}'), { type: 'result', result: 'a' }, 'json の出力（前の形）')
+  assert.deepEqual(resultOf('{"type":"system"}\n{"type":"result","result":"b"}\n'), { type: 'result', result: 'b' })
+  assert.equal(resultOf('{"type":"system"}\n{"type":"assistant"}\n'), null, 'result が無ければ読めない（exit N にする）')
+  assert.equal(resultOf('error: unknown option'), null)
 })
 
 test('ClaudeSummarizer: 軽い形が知らないフラグで落ちる版では、前の形で 1 回試し、通ったら以後は前の形で起こす', async () => {

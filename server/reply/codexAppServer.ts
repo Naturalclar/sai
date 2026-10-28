@@ -3,9 +3,10 @@
 import { randomBytes } from 'node:crypto'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createInterface } from 'node:readline'
-import type { Approval, ApprovalAnswer, ApprovalMap, CodexKept, Replying, ReplyingMap, ReviewTarget } from '../../shared/types.ts'
+import type { Approval, ApprovalAnswer, ApprovalMap, CodexKept, CodexUsage, Replying, ReplyingMap, ReviewTarget } from '../../shared/types.ts'
 import { codexErrorText, codexTurnErrorReason } from '../../shared/codexTurnError.ts'
 import { parseCodexSkills, type Skill } from '../../shared/skills.ts'
+import { parseCodexRateLimits } from '../../shared/usage.ts'
 import { amendmentLabel } from './codexAmendment.ts'
 import { childEnv, splitArgs } from './runner.ts'
 
@@ -126,6 +127,17 @@ export interface CodexApp {
    * 偽物は持たなくてよい
    */
   steer?(id: string, text: string, attachments?: readonly string[]): Promise<boolean>
+  /**
+   * 使用率（#832）。`account/rateLimits/updated` の通知で最後に届いた値（受け取った時刻つき）。聞きには行かない。
+   * 偽物は持たなくてよい（持たなければ rollout だけで出す）
+   */
+  rateLimitsSeen?(): CodexUsage | null
+  /**
+   * 使用率をいま聞く（#832。`account/rateLimits/read`）。**すでに繋いでいる app-server があるときだけ**聞き、
+   * 無ければ聞かずに `rateLimitsSeen()` を返す（**使用率のためだけに app-server を起こさない**）。失敗も同じ。
+   * 偽物は持たなくてよい
+   */
+  readRateLimits?(): Promise<CodexUsage | null>
 }
 
 /**
@@ -170,6 +182,8 @@ interface WaitingRpc {
 }
 
 const REQUEST_TIMEOUT_MS = 30_000
+/** 使用率を聞く待ちの上限（#832）。人がパネルで押して待つので、ほかの要求より短く切る */
+export const RATE_LIMITS_TIMEOUT_MS = 5_000
 /** スキルの一覧を覚えておく長さ。`/` を打つたびに app-server へ聞きに行かないため（増減は次に打った時に拾う） */
 const SKILLS_TTL_MS = 60_000
 const keyOf = (id: RpcId) => `${typeof id}:${String(id)}`
@@ -279,6 +293,8 @@ export class CodexAppServer implements CodexApp {
    */
   private fresh = new Set<string>()
   private skillsCache: { at: number; skills: Skill[] } | null = null
+  /** 最後に届いた使用率（#832。通知か、聞いた答え） */
+  private limits: CodexUsage | null = null
   private readonly connect: CodexConnector
   private readonly now: () => number
 
@@ -314,6 +330,25 @@ export class CodexAppServer implements CodexApp {
     }
     this.skillsCache = { at: this.now(), skills }
     return skills
+  }
+
+  rateLimitsSeen(): CodexUsage | null {
+    return this.limits
+  }
+
+  async readRateLimits(): Promise<CodexUsage | null> {
+    // 繋いでいなければ聞かない（ensureConnection() を通る request() には渡さない。起こしてしまう）
+    const connection = this.connection
+    if (!connection) return this.limits
+    try {
+      // 戻す時刻の細かい一覧は使わないので、別に引かせない（schema の excludeResetCreditDetails）
+      const result = await this.requestOn(connection, 'account/rateLimits/read', { excludeResetCreditDetails: true }, RATE_LIMITS_TIMEOUT_MS)
+      const usage = parseCodexRateLimits(result, new Date(this.now()).toISOString())
+      if (usage) this.limits = usage
+    } catch {
+      // 聞けなくても、知っている値を返す（rollout の値と比べるのは UsageStore）
+    }
+    return this.limits
   }
 
   onTurnEnd(listener: (id: string) => void): void {
@@ -572,13 +607,18 @@ export class CodexAppServer implements CodexApp {
 
   private async request(method: string, params: JsonObject): Promise<unknown> {
     const connection = method === 'initialize' && this.connection ? this.connection : await this.ensureConnection()
+    return this.requestOn(connection, method, params)
+  }
+
+  /** 決まった接続に 1 つ投げる（繋ぎ直さない） */
+  private requestOn(connection: CodexConnection, method: string, params: JsonObject, timeoutMs = REQUEST_TIMEOUT_MS): Promise<unknown> {
     const id = this.nextId++
     return new Promise((resolve, reject) => {
       const key = keyOf(id)
       const timer = setTimeout(() => {
         this.pending.delete(key)
         reject(new Error(`Codex app-serverの${method}がタイムアウトしました`))
-      }, REQUEST_TIMEOUT_MS)
+      }, timeoutMs)
       this.pending.set(key, { resolve, reject, timer })
       try {
         connection.send({ id, method, params })
@@ -700,6 +740,12 @@ export class CodexAppServer implements CodexApp {
   private onNotification(method: string, rawParams: unknown): void {
     const params = object(rawParams)
     if (!params) return
+    if (method === 'account/rateLimits/updated') {
+      // 使用率（#832）。スレッドに依らない通知。形が違えば拾わない（前の値を残す）
+      const usage = parseCodexRateLimits(params, new Date(this.now()).toISOString())
+      if (usage) this.limits = usage
+      return
+    }
     if (method === 'item/started') {
       const item = object(params.item)
       if (typeof params.threadId === 'string' && typeof item?.id === 'string') this.items.set(`${params.threadId}\n${item.id}`, item)

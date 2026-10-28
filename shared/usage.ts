@@ -65,6 +65,45 @@ export function parseCodexUsage(line: unknown): CodexUsage | null {
   return usage
 }
 
+/** app-server の枠 1 つ分（`usedPercent` / `windowDurationMins` / epoch 秒の `resetsAt`。#832）→ `UsageWindow` */
+function parseAppServerWindow(value: unknown): UsageWindow | null {
+  if (!value || typeof value !== 'object') return null
+  const o = value as Record<string, unknown>
+  const percent = num(o.usedPercent)
+  if (percent === null) return null
+  const window: UsageWindow = { used_percent: Math.min(100, Math.max(0, percent)), window_minutes: num(o.windowDurationMins) ?? 0 }
+  const resets = num(o.resetsAt)
+  if (resets !== null && resets > 0) window.resets_at = resets
+  return window
+}
+
+/** app-server の `RateLimitSnapshot` 1 つ → 使用量。Codex の枠（`limitId` が `codex` か無い）でなければ null */
+function parseAppServerSnapshot(value: unknown, at: string): CodexUsage | null {
+  if (!value || typeof value !== 'object') return null
+  const o = value as Record<string, unknown>
+  if (o.limitId !== undefined && o.limitId !== null && o.limitId !== 'codex') return null
+  const primary = parseAppServerWindow(o.primary)
+  if (!primary) return null
+  const usage: CodexUsage = { primary, at }
+  const secondary = parseAppServerWindow(o.secondary)
+  if (secondary) usage.secondary = secondary
+  if (typeof o.planType === 'string' && o.planType) usage.plan = o.planType
+  return usage
+}
+
+/**
+ * Codex の app-server の答え → 使用量（#832）。`account/rateLimits/read` の結果と、`account/rateLimits/updated` の通知の
+ * params のどちらも渡せる（どちらも `rateLimits` を持つ。答えは `rateLimitsByLimitId.codex` もあれば、そちらを先に見る）。
+ * `at` は**受け取った時刻**（答えには時刻が無い）。形が違う・Codex の枠でない・割合が無いときは null（拾わない）
+ */
+export function parseCodexRateLimits(value: unknown, at: string): CodexUsage | null {
+  if (!value || typeof value !== 'object') return null
+  const o = value as Record<string, unknown>
+  const byId = o.rateLimitsByLimitId
+  const codex = byId && typeof byId === 'object' ? (byId as Record<string, unknown>).codex : undefined
+  return parseAppServerSnapshot(codex, at) ?? parseAppServerSnapshot(o.rateLimits, at)
+}
+
 /**
  * Claude の transcript の 1 行 → 上限に当たった記録。`quotaLimits` が `status: "rejected"` のときだけ。
  * 空の `{}`（普段の行）と、既に戻っている（resetsAt が過ぎた）ものは null。**割合はここには無い**

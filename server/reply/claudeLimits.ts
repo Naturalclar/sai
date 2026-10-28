@@ -1,11 +1,11 @@
-// SAI から回した Claude の返信（`claude -p`）の出力に載る使用率を `<feed dir>/usage-claude-replies.json` に残す（#694）。
+// SAI から回した Claude の `claude -p`（返信。#832 から一言・PR の要約も）の出力に載る使用率を `<feed dir>/usage-claude-replies.json` に残す（#694）。
 //
 // 端末の Claude Code はステータスラインで使用率を渡してくる（`feed/statusline.py` → `usage-claude.json`）が、`-p` は
 // ステータスラインを描かない。代わりに stream-json の出力へ API の応答ごとに `rate_limit_event` を出すので、
 // reply.log に流れてきたそれを読む。**API は叩かない**（読むのは SAI が起こした子の出力だけ）。
 // 形は `usage-claude.json` と同じにして、読む側（`server/local/usage.ts`）は同じ `parseStatusLineUsage()` で読む。
 // 派生のファイルなので、消しても次の返信でまた出来る。
-import { mkdirSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { lastRateLimitEvent, type RateLimitWindows } from '../../shared/usage.ts'
 import { selfHost } from '../host.ts'
@@ -69,6 +69,13 @@ export class ClaudeLimitsFile implements ClaudeLimitsSink {
     const pending = this.pending
     if (!pending) return
     try {
+      // 書き手は 1 つでない（返信・一言・PR の要約がそれぞれ持つ。#832）。置いてある値のほうが新しければ、古い値で上書きしない。
+      // ただし置いてある時刻が今より先なら信じない（時計が戻ったとき、戻った先の時刻まで黙らない）
+      const onDisk = writtenAt(this.path)
+      if (onDisk > pending.at && onDisk <= this.now()) {
+        this.pending = null
+        return
+      }
       mkdirSync(dirname(this.path), { recursive: true })
       const tmp = `${this.path}.${process.pid}.tmp`
       writeFileSync(tmp, JSON.stringify(limitsRecord(pending.windows, pending.at)))
@@ -79,6 +86,17 @@ export class ClaudeLimitsFile implements ClaudeLimitsSink {
     } catch {
       // あれば嬉しい程度のもの
     }
+  }
+}
+
+/** 置いてあるファイルの `ts`（epoch ミリ秒）。無い・読めなければ -Infinity（書いてよい） */
+function writtenAt(path: string): number {
+  try {
+    const ts = (JSON.parse(readFileSync(path, 'utf-8')) as { ts?: unknown }).ts
+    const t = typeof ts === 'string' ? Date.parse(ts) : NaN
+    return Number.isNaN(t) ? -Infinity : t
+  } catch {
+    return -Infinity
   }
 }
 

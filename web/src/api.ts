@@ -293,6 +293,8 @@ export const api = {
   clearProfileIcon: () => sendRaw<ProfileResponse>('DELETE', '/api/profile/icon'),
   /** 各エージェントの使用量。ローカルのファイルから読むだけ（ポーリングには乗せない） */
   usage: () => getJSON<UsageResponse>('/api/usage'),
+  /** 使用量の「いま取り直す」（#832）。押したときだけ。繋いでいる Codex の app-server があれば聞き直す */
+  usageRefresh: () => sendRaw<UsageResponse>('POST', '/api/usage/refresh'),
   /** 使用量の画面の集計（#602）。SAI が起こした Claude のターンだけ。開いたときと期間を切り替えたときだけ取る */
   usageReport: (days: number) => getJSON<UsageReportResponse>(`/api/usage/report?days=${days}`),
   /** GitHub に出ている PR（#524）。`fresh` のときだけサーバの覚えを捨てて gh で読み直す */

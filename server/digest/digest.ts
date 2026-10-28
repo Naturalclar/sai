@@ -23,7 +23,7 @@ import type { ComposedNextAsk } from '../../shared/nextAsk.ts'
 import type { NextAskIssueCode } from '../../shared/nextAskCheck.ts'
 import { cleanWhat, digestPlan, joinDigest } from '../../shared/digestParts.ts'
 import type { DigestIssueCode } from '../../shared/digestCheck.ts'
-import { isTimeout, summarizerFactory } from './summarizers.ts'
+import { isTimeout, summarizeLimits, summarizerFactory } from './summarizers.ts'
 import type { Summarizer, SummarizerFactory } from './summarizers.ts'
 import type { DigestProvider, FeedRow, PersonaId } from '../../shared/types.ts'
 
@@ -133,13 +133,16 @@ export {
   REASONING_OFF,
   SUMMARIZE_ENV,
   SUMMARIZE_LIGHT_ARGS,
+  SUMMARIZE_STREAM_ARGS,
   formFailure,
   isTimeout,
   mayRetryWithoutReasoning,
+  resultOf,
   stripThinking,
   summarizeCommand,
   summarizeRequest,
   summarizeStats,
+  summarizeLimits,
   summarizerFactory,
 } from './summarizers.ts'
 export type { ClaudeSummarizerOptions, OpenAISummarizerOptions, SummarizeStats, Summarizer, SummarizerFactory } from './summarizers.ts'
@@ -730,7 +733,7 @@ export function createDigester(
   env: NodeJS.ProcessEnv = process.env,
   log: (line: string) => void = (line) => console.error(line),
 ): Digester {
-  return new Digester(store, summarizerFactory(feedDir, env, log), {
+  return new Digester(store, summarizerFactory(feedDir, env, log, summarizeLimits(feedDir, env)), {
     enabled: false,
     model: '',
     ownDir: feedDir,

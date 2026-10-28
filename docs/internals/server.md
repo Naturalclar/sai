@@ -45,7 +45,9 @@ C-c / SIGTERM では必ず終わる（#296。`main.ts` の `shutdown()`）。
 
 ## 使用量（local/usage.ts）
 
-`GET /api/usage` は `server/local/usage.ts` の `UsageStore` がローカルのファイルを読むだけ（#216 / #250）。
+`GET /api/usage` は `server/local/usage.ts` の `UsageStore` がローカルのファイルを読むだけ（#216 / #250）。Codex だけは、SAI がすでに話している app-server が通知で渡してきた値も重ねる（#832。下の「Codex の app-server」）。
+
+`POST /api/usage/refresh`（#832。パネルの更新のアイコン）は**押したときだけ**: キャッシュを捨てて読み直し（`UsageStore.refresh()`）、繋いでいる app-server があれば `account/rateLimits/read` を 1 回聞く。同一オリジンのみ・GET は 405。読みかけがあれば終わるのを待ってから読み直す。app-server に聞くのは `REFRESH_MIN_MS`（10 秒）に 1 回まで（続けて押されたらファイルだけ読み直す）。Claude には聞く口が無い（使用率のためだけの `-p` は作らない）ので、ファイルを読み直すだけ。
 
 ### Claude
 
@@ -58,6 +60,8 @@ C-c / SIGTERM では必ず終わる（#296。`main.ts` の `shutdown()`）。
 ### Codex
 
 - rollout は `tailLines()` で末尾 64KB だけ読む。
+- **Codex の app-server**（#832。`server/reply/codexAppServer.ts`）: `CodexApp.rateLimitsSeen()` は `account/rateLimits/updated` の通知で最後に届いた値（スレッドに依らない通知なので、`threadId` を見る前に拾う）、`readRateLimits()` は `account/rateLimits/read`（params は `{ excludeResetCreditDetails: true }`）。**`readRateLimits()` は `this.connection` があるときだけ聞く**（`request()` は `ensureConnection()` を通って app-server を起こすので、決まった接続に投げる `requestOn()` を使う。待ちは `RATE_LIMITS_TIMEOUT_MS` = 5 秒）。繋いでいない・聞けない・形が違うときは覚えている値を返す。`createApp` は `SAI_CODEX_APP_SERVER` が `0` でなく、2 つの口を持つ `CodexApp` のときだけ `UsageStore.useCodexLive()` に繋ぐ。`GET` は `seen()` だけ、`refresh()` だけが `read()` を呼ぶ。rollout の値と比べて、`at`（app-server の値は受け取った時刻）の新しいほうを採る（どちらも口座の値なので枠ごとには混ぜない）。
+  - 答えの形（0.165 で実測）: `{ rateLimits: RateLimitSnapshot, rateLimitsByLimitId: { codex: RateLimitSnapshot }, ordinaryUsageAllowed, rateLimitResetCredits, accountId, rateLimitUpsell }`。`RateLimitSnapshot` は `{ limitId, primary: { usedPercent, windowDurationMins, resetsAt }, secondary, planType, credits, … }`（`secondary` は `null` のことがある）。読むのは `shared/usage.ts` の `parseCodexRateLimits()`: `rateLimitsByLimitId.codex` を先に、無ければ `rateLimits`。`limitId` が `codex` でも無いのでもない枠・`usedPercent` の無い枠は拾わない。通知の params も `{ rateLimits }` なので同じ関数で読む。`accountId` などは持たない。
 - 候補は mtime の新しい順に数件。開きっぱなしのセッションは古い日付のディレクトリに追記され続けるので、日付の新しさで打ち切らない。
 - **復帰時刻を過ぎた枠は、画面が割合を出さない**（#726）。サーバは rollout の値をそのまま返し、判定は `shared/usage.ts` の `windowExpired()`。チップは `usageChips()` が `waiting` を立てて「更新待ち」と出し（色にも数えない）、パネルの `UsageBar` はゲージの代わりに「更新待ち」と、下の行に「10/5 15:38 に戻った・次に使うと更新」を出す。0% とは出さない（別の端末で使い切っていると嘘になる）。説明の文は `waitingNote()` の 1 つ（ゲージとチップの title が同じ文）。5 時間の枠が過ぎていても、週の枠が生きていて `USAGE_WARN` 以上なら、チップは週の割合を出す（`CodexFreshness.week`）。Claude の枠も `usageChips()` と `UsageBar` が同じ判定を通す（サーバは過ぎた枠を落とすが、30 秒のキャッシュのあいだに過ぎることがある）。
 - 値を拾ってから `USAGE_STALE_MS`（30 分。Claude と同じ）を過ぎたら「古い」の印を付ける（`codexFreshness()`。#726）。チップでは、復帰時刻を過ぎた枠に重ねない（パネルの見出しの「◯ 時点 · ◯前の値」は出したまま。週のゲージがいつの値かを言う）。
@@ -82,6 +86,8 @@ C-c / SIGTERM では必ず終わる（#296。`main.ts` の `shutdown()`）。
   - 読む: `readReplyLimits()` と `readStatusLineUsage()` は同じ `readUsageFiles()`（名前の述語だけ違う）で、当たるものを全部読んで新しいものを採る（同じ `parseStatusLineUsage()`。期限切れの窓・8 日より古いものは落ちる）。
   - まとめる: `UsageStore.read()` が `mergeUsageWindows(ステータスライン, 返信)` → `mergeClaudeUsage()`（上限中を重ねる）。窓ごとに選ぶ。**返信のほうが新しければ返信の窓**（高いステータスラインの値は混ぜない。返信に無い窓だけステータスラインから）。ステータスラインのほうが新しければそちらの窓だが、同じ窓（`SAME_WINDOW_SECONDS` = 60）で返信より低いものは持ち回りの古い値なので返信のほう、無い窓も返信から。**混ぜたときの `at` は古いほうの出どころの時刻**（新しく見せない）。
   - `createApp` に runner を渡すテストでは何も書かれない（本物の `ProcessRunner` を組むのは既定のときだけ）。
+  - **一言と PR の要約の `claude -p` からも拾う**（#832）。軽い形の出力を stream-json（`SUMMARIZE_STREAM_ARGS` = `--output-format stream-json --verbose`）にして、子が終わったら出力を `ClaudeSummarizer` の `limits`（`summarizeLimits()` = 同じ置き場の `ClaudeLimitsFile`）に渡して `flush()` する。答えが失敗でも渡す。前の形（`light: false`）は json のまま（流れない）。口を持つのは `createDigester()` と `app.ts` の PR の要約だけで、`pnpm digest:eval` は渡さない（手元の評価で置き場に書かない）。
+  - **書き手が複数いる**（返信・一言・PR の要約がそれぞれ `ClaudeLimitsFile` を持つ）ので、`flush()` は置いてあるファイルの `ts` のほうが新しければ書かずに捨てる（古い値で上書きしない）。置いてある `ts` が今より先なら信じない（時計が戻ったとき）。
 - パネルの「ステータスラインを設定すると出ます」の案内は、割合が 1 つも無いときだけ出す。
 
 ## rev が同じなら 304（#592）

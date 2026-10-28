@@ -168,13 +168,14 @@ Slack と同じ形。左のサイドバーがチャンネル一覧（先頭に�
 
 | | 何が出るか | 出どころ |
 | --- | --- | --- |
-| Codex | 5 時間と週の**使用率**（`Codex 59%`。80% から色が変わる）と復帰時刻、プラン | `CODEX_HOME/sessions/**/rollout-*.jsonl` の `token_count` の行の `rate_limits`。ほぼ毎ターン載る |
+| Codex | 5 時間と週の**使用率**（`Codex 59%`。80% から色が変わる）と復帰時刻、プラン | `CODEX_HOME/sessions/**/rollout-*.jsonl` の `token_count` の行の `rate_limits`。ほぼ毎ターン載る。SAI が Codex の app-server と話していれば、その通知と、パネルの更新のアイコンを押したときの問い合わせ（#832）からも |
 | Claude | 5 時間と週の**使用率**（SAI から Claude に返信していれば出る。端末だけで使う人はステータスラインを設定していれば）と、**上限に当たっているとき**はその復帰時刻 | 割合は **SAI から回した返信の出力**（`<feed dir>/usage-claude-replies.json`。#694）と `<feed dir>/usage-claude[.<host>].json`（`feed/statusline.py` が書く。#250）。上限中かどうかは `~/.claude/projects/*/*.jsonl` の `quotaLimits` |
 
+- **パネルの右上の更新のアイコンで、いま取り直す**（#832）。押したときだけ取りに行く。Codex は、SAI が返信などで Codex の app-server と話していればその app-server に聞く（使用率のためだけに app-server を起こさないので、話していなければ rollout を読み直すだけ）。Claude には聞く口が無いので、置いてあるファイルを読み直すだけ（使用率のためだけの `claude -p` は起こさない。枠を少し使うため）
 - **Claude の割合はステータスライン経由でしか取れない**（#250）。`claude` CLI に `usage` のサブコマンドは無く、TUI の `/usage` が叩いている API は OAuth のトークンが要るので使わない。`statusLine` に `feed/statusline.py` を向けると、Claude Code が描画のたびに渡してくる JSON の `rate_limits` を SAI が受け取れる。設定していなければ今までどおり「上限中」だけ（パネルに設定の案内を出す）。設定の仕方は [README](../README.md)
 - **割合は Claude が動いている間しか更新されない**（Codex は rollout に毎ターン載るのと非対称）。枠の復帰時刻を過ぎたものは出さないので、古い数字が残り続けることはない。復帰時刻を過ぎた割合を持ったままのセッション（再開した古いセッション）が描画しても、取れている割合は消えない（#683）。同じ枠の中では高いほうの割合を残し、「時点」は割合が最後に変わった時刻（#689）。**実際（`/usage`）より低く出ることがある**: Claude Code が割合を渡してくる描画は一部だけなので、新しい値が来るまでは前の値のまま
 - **Claude の割合は 2 つの口から届く**（#694）。どちらも Claude Code が API を呼んだときだけで、SAI は API を叩かない。
-  - **SAI から回した返信**（`claude -p`）: 出力（stream-json）に API の応答ごとに流れる `rate_limit_event` を読む。5 時間と週の両方が載り、ターンの途中でも進む。`<feed dir>/usage-claude-replies.json` に置く（10 秒に 1 回まで。`AGENT_FEED_HOST` を設定していればマシンごと）。`SAI_CLAUDE_ARGS` で `--output-format` を変えていると出ない
+  - **SAI から回した返信・一言・PR の要約**（`claude -p`。一言と PR の要約は #832 から）: 出力（stream-json）に API の応答ごとに流れる `rate_limit_event` を読む。5 時間と週の両方が載り、ターンの途中でも進む。`<feed dir>/usage-claude-replies.json` に置く（10 秒に 1 回まで。`AGENT_FEED_HOST` を設定していればマシンごと）。`SAI_CLAUDE_ARGS` で `--output-format` を変えていると出ない
   - **端末の Claude Code**: ステータスライン（`feed/statusline.py` → `usage-claude.json`）。`-p` はステータスラインを描かないので、前はこちらしか無く、SAI から回しているあいだ値が止まっていた
   - 2 つのまとめ方: 返信の値のほうが新しければ返信の値を出す（返信に無い枠だけ端末の値）。端末の値のほうが新しければ枠ごとに端末の値を出すが、同じ枠で返信の値より低いもの（古い値を持ち回っている端末が書いたもの）は返信の値のまま。2 つを混ぜて出すときの「時点」は古いほう
   - 拾えるのは、SAI が入力の口を開けて回している返信だけ（サーバを立て直したときに引き取った走りかけのターン・端末に打ち込んだ返信の出力は読まない）

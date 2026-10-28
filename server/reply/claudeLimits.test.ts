@@ -83,3 +83,31 @@ test('置くファイルの名前: AGENT_FEED_HOST を設定したときだけ�
   assert.equal(isReplyLimitsFile('usage-claude.json'), false)
   assert.equal(isReplyLimitsFile('usage-claude-replies.json.123.tmp'), false)
 })
+
+test('書き手が複数いても、置いてある新しい値を古い値で上書きしない（#832。返信・一言・PR の要約）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-limits-multi-'))
+  try {
+    let now = Date.parse('2026-10-28T05:00:00Z')
+    const path = join(dir, CLAUDE_REPLY_LIMITS_FILE)
+    const reply = new ClaudeLimitsFile(path, () => now)
+    const digest = new ClaudeLimitsFile(path, () => now)
+    const read = async () => JSON.parse(await readFile(path, 'utf-8')) as { ts: string; rate_limits: { five_hour: { used_percentage: number } } }
+    // 返信が先に受け取ったが、間引かれて書いていない（10 秒の中）
+    reply.observe(`${event(0.1, 0.5, 1793000000)}\n`)
+    now += 1000
+    reply.observe(`${event(0.2, 0.5, 1793000000)}\n`)
+    now += 1000
+    // 一言があとから受け取って書く
+    digest.observe(`${event(0.3, 0.5, 1793000000)}\n`)
+    assert.equal((await read()).rate_limits.five_hour.used_percentage, 30)
+    // 返信が終わって書き切っても、古い値で戻さない
+    reply.flush()
+    assert.equal((await read()).rate_limits.five_hour.used_percentage, 30)
+    // 次に届いた新しい値は書ける
+    now += LIMITS_WRITE_MS
+    reply.observe(`${event(0.4, 0.5, 1793000000)}\n`)
+    assert.equal((await read()).rate_limits.five_hour.used_percentage, 40)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})

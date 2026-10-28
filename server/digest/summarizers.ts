@@ -4,7 +4,9 @@
 // 口を openai にすると OpenAI 互換の HTTP（Ollama / LM Studio / llama.cpp / vLLM）を Node の fetch で叩く。
 // 一言の都合（作り直し・2 つで組む・性格）は digest.ts に置き、ここは digest.ts を import しない（循環させない）。
 import { spawn } from 'node:child_process'
+import { join } from 'node:path'
 import { childEnv } from '../reply/runner.ts'
+import { ClaudeLimitsFile, replyLimitsFile, type ClaudeLimitsSink } from '../reply/claudeLimits.ts'
 import type { DigestProvider } from '../../shared/types.ts'
 
 /** 口が openai のときの既定の base URL（Ollama。LM Studio は http://127.0.0.1:1234/v1）。変えるのは SAI_DIGEST_URL だけ */
@@ -88,15 +90,48 @@ export const SUMMARIZE_LIGHT_ARGS: readonly string[] = [
 export const SUMMARIZE_ENV: Readonly<Record<string, string>> = { MAX_THINKING_TOKENS: '0', CLAUDE_CODE_DISABLE_THINKING: '1' }
 
 /**
+ * 軽い形の出力の形（#832）。stream-json にすると、API の応答ごとの `rate_limit_event`（使用率）が出力に流れるので、
+ * 返信と同じく `usage-claude-replies.json` に残せる（使用率のためだけの `-p` は作らない）。`-p` で stream-json を出すには
+ * `--verbose` が要る（返信の `CLAUDE_STREAM_ARGS` と同じ）。最後の `result` の行は json の出力と同じ中身
+ */
+export const SUMMARIZE_STREAM_ARGS: readonly string[] = ['--output-format', 'stream-json', '--verbose']
+
+/**
  * `claude -p` の起動引数。テストで並びを見る。実行ファイルはサーバの PATH の `claude`（#288）。
- * `light: false` は外すフラグを付けない前の形（知らないフラグで落ちる版の CLI のための戻り先）
+ * `light: false` は外すフラグを付けない前の形（知らないフラグで落ちる版の CLI のための戻り先。出力も前の json のまま）
  */
 export function summarizeCommand(model: string, light = true): { bin: string; args: string[] } {
   // --bare は OAuth を読まないので使えない（Not logged in になる）。フックは AGENT_FEED_SKIP=1 で黙らせる
   return {
     bin: 'claude',
-    args: ['-p', '--model', model, '--output-format', 'json', '--no-session-persistence', ...(light ? SUMMARIZE_LIGHT_ARGS : [])],
+    args: light
+      ? ['-p', '--model', model, ...SUMMARIZE_STREAM_ARGS, '--no-session-persistence', ...SUMMARIZE_LIGHT_ARGS]
+      : ['-p', '--model', model, '--output-format', 'json', '--no-session-persistence'],
   }
+}
+
+/**
+ * `claude -p` の出力 → 結果の 1 つ（#832）。json の出力（全体で 1 つ）と stream-json（1 行 1 つ。最後の `type: "result"` の行）の
+ * どちらも読む。読めなければ null（呼び出し側が `exit N: …` にする）
+ */
+export function resultOf(stdout: string): { is_error?: boolean; result?: unknown } | null {
+  try {
+    const whole = JSON.parse(stdout) as unknown
+    if (whole && typeof whole === 'object' && !Array.isArray(whole)) return whole as { is_error?: boolean; result?: unknown }
+  } catch {
+    // stream-json（複数行）
+  }
+  let found: { is_error?: boolean; result?: unknown } | null = null
+  for (const line of stdout.split('\n')) {
+    if (!line.includes('"result"')) continue
+    try {
+      const row = JSON.parse(line) as { type?: unknown }
+      if (row && typeof row === 'object' && row.type === 'result') found = row as { is_error?: boolean; result?: unknown }
+    } catch {
+      // 書きかけの行
+    }
+  }
+  return found
 }
 
 /** 前の形でも通らなかったあと、次に前の形を試すまで */
@@ -119,6 +154,8 @@ export interface ClaudeSummarizerOptions {
   timeoutMs?: number
   /** 実行ファイル。既定はサーバの PATH の `claude`。テストは偽物を渡す */
   bin?: string
+  /** 出力に流れた使用率（`rate_limit_event`）を渡す先（#832）。無ければ捨てる */
+  limits?: ClaudeLimitsSink
 }
 
 /** 本物。`claude -p` にプロンプトを stdin で渡し、JSON の result を取る */
@@ -130,6 +167,7 @@ export class ClaudeSummarizer implements Summarizer {
   private readonly onFallback: (reason: string) => void
   private readonly timeoutMs: number
   private readonly bin: string | undefined
+  private readonly limits: ClaudeLimitsSink | undefined
   /**
    * 軽い形が通らなかったので、前の形で起こしている（このプロセスの間は覚える。毎回 2 本起こさない）。
    * 知らないフラグで落ちる版の CLI のため
@@ -151,6 +189,7 @@ export class ClaudeSummarizer implements Summarizer {
     this.onFallback = opts.onFallback ?? (() => {})
     this.timeoutMs = opts.timeoutMs ?? DIGEST_TIMEOUT_MS
     this.bin = opts.bin
+    this.limits = opts.limits
   }
 
   async summarize(prompt: string): Promise<string> {
@@ -207,12 +246,16 @@ export class ClaudeSummarizer implements Summarizer {
       child.once('close', (code) => {
         clearTimeout(timer)
         const stdout = Buffer.concat(out).toString('utf-8')
-        let parsed: { is_error?: boolean; result?: unknown } | null = null
-        try {
-          parsed = JSON.parse(stdout) as { is_error?: boolean; result?: unknown }
-        } catch {
-          parsed = null
+        // 使用率は答えが失敗でも拾う（API が返していれば口座の値）。書けなくても一言は止めない
+        if (this.limits) {
+          try {
+            this.limits.observe(stdout)
+            this.limits.flush()
+          } catch {
+            // あれば嬉しい程度のもの
+          }
         }
+        const parsed = resultOf(stdout)
         if (!parsed) return reject(new Error(`exit ${code}: ${(Buffer.concat(err).toString('utf-8') || stdout).trim().slice(0, 200)}`))
         this.lastStats = summarizeStats(parsed)
         const result = typeof parsed.result === 'string' ? parsed.result.trim() : ''
@@ -361,7 +404,12 @@ export type SummarizerFactory = (provider: DigestProvider, model: string) => Sum
  * **送り先を settings.json に入れないのは意図的**（#288）: 入れると同一オリジンの PUT 1 つで、作業の本文を任意の URL に流せるようになる。
  * 組んだら log（既定 stderr）に口とモデルを出す（サーバのペインから、いま何で作っているかが分かる）
  */
-export function summarizerFactory(feedDir: string, env: NodeJS.ProcessEnv = process.env, log: (line: string) => void = (line) => console.error(line)): SummarizerFactory {
+export function summarizerFactory(
+  feedDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+  log: (line: string) => void = (line) => console.error(line),
+  limits?: ClaudeLimitsSink,
+): SummarizerFactory {
   return (provider, model) => {
     if (provider === 'openai') {
       const url = env.SAI_DIGEST_URL || DEFAULT_OPENAI_URL
@@ -369,6 +417,11 @@ export function summarizerFactory(feedDir: string, env: NodeJS.ProcessEnv = proc
       return new OpenAISummarizer(url, model, { apiKey: env.SAI_DIGEST_API_KEY || undefined, log })
     }
     log(`digest: claude model=${model}`)
-    return new ClaudeSummarizer(model, feedDir, env, { onFallback: (reason) => log(`digest: claude の軽い形が通らなかったので、前の形で起こします（${reason}）`) })
+    return new ClaudeSummarizer(model, feedDir, env, { limits, onFallback: (reason) => log(`digest: claude の軽い形が通らなかったので、前の形で起こします（${reason}）`) })
   }
+}
+
+/** 一言・PR の要約の `claude -p` の出力から拾った使用率の置き場（#832）。返信と同じ `usage-claude-replies[.<host>].json` */
+export function summarizeLimits(feedDir: string, env: NodeJS.ProcessEnv = process.env): ClaudeLimitsSink {
+  return new ClaudeLimitsFile(join(feedDir, replyLimitsFile(env)))
 }

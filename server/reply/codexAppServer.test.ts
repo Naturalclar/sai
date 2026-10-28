@@ -15,6 +15,8 @@ class FakeConnection implements CodexConnection {
   forked: string | null = 'thread-forked'
   /** true なら `turn/steer` を断る（#404。実測のエラーは `no active turn to steer`） */
   failSteer = false
+  /** `account/rateLimits/read` の応答（#832）。null ならエラーを返す */
+  rateLimitsResult: unknown = null
   private messages: ((message: Message) => void)[] = []
   private closes: ((error?: Error) => void)[] = []
 
@@ -39,6 +41,12 @@ class FakeConnection implements CodexConnection {
     if (message.method === 'skills/list') {
       const id = message.id
       const result = this.skillsResult
+      queueMicrotask(() => this.emit(result === null ? { id, error: { message: '読めない' } } : { id, result }))
+      return
+    }
+    if (message.method === 'account/rateLimits/read') {
+      const id = message.id
+      const result = this.rateLimitsResult
       queueMicrotask(() => this.emit(result === null ? { id, error: { message: '読めない' } } : { id, result }))
       return
     }
@@ -495,4 +503,65 @@ test('fork: 新しい id が取れない応答は失敗にする（元のスレ�
   await assert.rejects(app.fork('thread-src'), /thread\/fork/)
   connection.forked = 'thread-src'
   await assert.rejects(app.fork('thread-src'), /thread\/fork/, '元と同じ id が返ったら分岐できていない')
+})
+
+/** `account/rateLimits/read` の答えの形（0.165 で実測。数字は作り物） */
+const limitsAnswer = (used: number) => ({
+  ordinaryUsageAllowed: true,
+  rateLimits: { limitId: 'codex', primary: { usedPercent: used, windowDurationMins: 300, resetsAt: 1793000000 }, secondary: null, planType: 'plus', credits: null },
+  rateLimitsByLimitId: { codex: { limitId: 'codex', primary: { usedPercent: used, windowDurationMins: 300, resetsAt: 1793000000 }, secondary: { usedPercent: 3, windowDurationMins: 10080, resetsAt: 1793500000 }, planType: 'plus' } },
+  rateLimitResetCredits: { availableCount: 0, credits: null },
+  accountId: 'acct',
+  rateLimitUpsell: null,
+})
+
+test('readRateLimits: 繋いでいない app-server は起こさない。繋いでいれば account/rateLimits/read を 1 回聞く（#832）', async () => {
+  let connects = 0
+  const connection = new FakeConnection()
+  const app = new CodexAppServer(async () => {
+    connects++
+    return connection
+  }, () => Date.parse('2026-10-28T03:00:00Z'))
+  assert.equal(await app.readRateLimits(), null)
+  assert.equal(app.rateLimitsSeen(), null)
+  assert.equal(connects, 0, '使用率のためだけに app-server を起こさない')
+
+  // 返信などで繋いだあと
+  await app.skills()
+  connection.rateLimitsResult = limitsAnswer(42)
+  const usage = await app.readRateLimits()
+  assert.deepEqual(usage, {
+    primary: { used_percent: 42, window_minutes: 300, resets_at: 1793000000 },
+    secondary: { used_percent: 3, window_minutes: 10080, resets_at: 1793500000 },
+    plan: 'plus',
+    at: '2026-10-28T03:00:00.000Z',
+  })
+  const ask = connection.sent.find((m) => m.method === 'account/rateLimits/read')
+  assert.deepEqual(ask?.params, { excludeResetCreditDetails: true })
+  assert.equal(connects, 1)
+
+  // 聞けなかったら、覚えている値を返す
+  connection.rateLimitsResult = null
+  assert.deepEqual(await app.readRateLimits(), usage)
+  // 形が違う答えは拾わない（前の値を残す）
+  connection.rateLimitsResult = { rateLimits: { primary: { used: 10 } } }
+  assert.deepEqual(await app.readRateLimits(), usage)
+
+  // 切れたら聞かない（繋ぎ直さない）
+  connection.disconnect()
+  const before = connection.sent.length
+  assert.deepEqual(await app.readRateLimits(), usage)
+  assert.equal(connection.sent.length, before)
+  assert.equal(connects, 1)
+})
+
+test('rateLimitsSeen: account/rateLimits/updated の通知を覚える。Codex でない枠・形の違う通知は拾わない（#832）', async () => {
+  const { app, connection } = await started()
+  assert.equal(app.rateLimitsSeen(), null)
+  connection.emit({ method: 'account/rateLimits/updated', params: { rateLimits: { limitId: 'codex', primary: { usedPercent: 12, windowDurationMins: 300, resetsAt: 1793000000 } } } })
+  assert.deepEqual(app.rateLimitsSeen(), { primary: { used_percent: 12, window_minutes: 300, resets_at: 1793000000 }, at: '2026-09-09T12:00:00.000Z' })
+  connection.emit({ method: 'account/rateLimits/updated', params: { rateLimits: { limitId: 'other-model', primary: { usedPercent: 99, windowDurationMins: 300 } } } })
+  connection.emit({ method: 'account/rateLimits/updated', params: { rateLimits: 'x' } })
+  assert.equal(app.rateLimitsSeen()?.primary.used_percent, 12)
+  assert.ok(!connection.sent.some((m) => m.method === 'account/rateLimits/read'), '通知を受けるだけでは聞きに行かない')
 })

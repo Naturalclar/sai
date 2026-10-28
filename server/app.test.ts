@@ -823,6 +823,14 @@ test('GET /api/usage: ローカルのファイルから読むだけ。Claude は
   assert.equal((await fetch(`${base}/api/usage`, { method: 'POST' })).status, 405, '読むだけ')
 })
 
+test('POST /api/usage/refresh: 押したときだけ読み直す。同一オリジンのみ・GET は受けない（#832）', async () => {
+  const res = await fetch(`${base}/api/usage/refresh`, { method: 'POST' })
+  assert.equal(res.status, 200)
+  assert.equal(((await res.json()) as UsageResponse).codex?.primary.used_percent, 59)
+  assert.equal((await fetch(`${base}/api/usage/refresh`, { method: 'POST', headers: { Origin: 'http://evil.local:8787' } })).status, 403)
+  assert.equal((await fetch(`${base}/api/usage/refresh`)).status, 405, 'GET では取り直さない（ポーリング・先読みで叩かれない）')
+})
+
 test('GET /api/usage/report: SAI が起こしたターンの使用量を期間で切って足す。読むだけ（#602）', async () => {
   const res = await get('/api/usage/report?days=1')
   assert.equal(res.status, 200)

@@ -132,7 +132,7 @@ import { screenWait, softWait } from './reply/softWait.ts'
 import { clearSettled, settledKey, WaitingSettle } from './reply/waitingSettle.ts'
 import type { WaitingSettleSource } from './reply/waitingSettle.ts'
 import type { CodexDialogSource, DialogTarget } from './reply/codexDialogs.ts'
-import { DEFAULT_DIGEST_MODEL, DIGEST_FILE, DigestStore, createDigester, isTimeout, summarizerFactory } from './digest/digest.ts'
+import { DEFAULT_DIGEST_MODEL, DIGEST_FILE, DigestStore, createDigester, isTimeout, summarizeLimits, summarizerFactory } from './digest/digest.ts'
 import { FEEDBACK_FILE, FeedbackStore } from './digest/feedback.ts'
 import { DIGEST_NOTE_MAX, isDigestFeedbackReason, isDigestUsageReason } from '../shared/digestFeedback.ts'
 import type { DigestFeedbackRequest, DigestFeedbackResponse } from '../shared/digestFeedback.ts'
@@ -307,6 +307,8 @@ const DIGEST_FEEDBACK_PATH = '/api/digest/feedback'
 const USAGE_PATH = '/api/usage'
 /** 使用量の画面の集計（#602）。SAI が起こしたターンの使用量（turn-usage.jsonl）を期間で切って足す。読むだけ */
 const USAGE_REPORT_PATH = '/api/usage/report'
+/** 使用率の「いま取り直す」（#832。POST・同一オリジンのみ。押したときだけ） */
+const USAGE_REFRESH_PATH = '/api/usage/refresh'
 const SEARCH_PATH = '/api/search'
 // GitHub に出ている PR（#524）。読むだけ
 const PRS_PATH = '/api/prs'
@@ -721,6 +723,12 @@ export function createApp(
   }
   const waitingSettle = terminal.waitingSettle ?? new WaitingSettle(terminal.tmux, terminal.ps, terminal.scanTtlMs ?? DIALOG_SCAN_TTL_MS)
   const codexAppEnabled = process.env.SAI_CODEX_APP_SERVER !== '0'
+  // Codex の使用率を、SAI がすでに話している app-server からも取る（#832。起こさない・聞くのは押したときだけ）
+  if (codexAppEnabled && codexApp.rateLimitsSeen && codexApp.readRateLimits) {
+    const seen = codexApp.rateLimitsSeen.bind(codexApp)
+    const read = codexApp.readRateLimits.bind(codexApp)
+    usageStore.useCodexLive({ seen, read })
+  }
   // OpenCode は `opencode serve` の HTTP に送る（#382）。`0` で今までどおり `opencode run -s` に戻す
   const opencodeServerEnabled = process.env.SAI_OPENCODE_SERVER !== '0'
   const terminalEnabled = process.env.SAI_TERMINAL !== '0'
@@ -1549,7 +1557,7 @@ export function createApp(
   }
 
   // PR の要約（#790）。覚える置き場は記録の隣（派生データ。一言の digest.jsonl とは別）
-  const makeBriefMouth: SummarizerFactory = terminal.briefMouth ?? summarizerFactory(store.directory, process.env, (line) => console.error(line.replace(/^digest:/, 'pr-summary:')))
+  const makeBriefMouth: SummarizerFactory = terminal.briefMouth ?? summarizerFactory(store.directory, process.env, (line) => console.error(line.replace(/^digest:/, 'pr-summary:')), summarizeLimits(store.directory))
   const briefs = new PrBriefStore(join(store.directory, PR_BRIEFS_FILE))
   /** 同じ PR の要約を同時に 2 本作らない（押した直後の二重の要求など）。鍵は repo#番号 */
   const briefJobs = new Map<string, Promise<{ status: number; error: string } | PrBriefResponse>>()
@@ -5275,7 +5283,7 @@ export function createApp(
     // 「設定は PUT」「預かった返信の再開は POST、取り消しは DELETE」だけ。それ以外は GET / HEAD のみ
     const writable =
       (method === 'POST' &&
-        (isNewSession || isAuthCheck || isAuthLogin || isReply || isReview || isFork || isPrReview || isPrBrief || isAsk || isAnswer || isAttachUpload || isQueue || isDigestFeedback || isSuggestion || path === AGENT_SEND_PATH || path === AGENT_LOOP_PATH || path === AGENT_WAIT_FOR_PATH || isAgentStop || isInterrupt || loopSuffix !== undefined || waitSuffix !== undefined)) ||
+        (isNewSession || isAuthCheck || isAuthLogin || isReply || isReview || isFork || isPrReview || isPrBrief || isAsk || isAnswer || isAttachUpload || isQueue || isDigestFeedback || isSuggestion || path === USAGE_REFRESH_PATH || path === AGENT_SEND_PATH || path === AGENT_LOOP_PATH || path === AGENT_WAIT_FOR_PATH || isAgentStop || isInterrupt || loopSuffix !== undefined || waitSuffix !== undefined)) ||
       (method === 'DELETE' && (isQueue || isHistoryIcon || loopSuffix === '/loop')) ||
       (method === 'PUT' && (isMeta || isRead || isProfile || isSettings)) ||
       ((method === 'PUT' || method === 'DELETE') && (isIcon || isProfileIcon))
@@ -5698,6 +5706,14 @@ export function createApp(
       // ファイルを漁るので 3 秒のポーリングには乗せず、画面が開いたときだけ取る（中でも 30 秒キャッシュ）
       if (path === USAGE_PATH) {
         const payload: UsageResponse = await usageStore.get()
+        return json(res, payload)
+      }
+      // 「いま取り直す」（#832）。押したときだけ。キャッシュを捨てて読み直し、繋いでいる Codex の app-server があれば聞く
+      // （起こさない）。Claude は聞く口が無いのでファイルを読み直すだけ。同一オリジンのみ（画面から叩く書き込みの口と同じ扱い）
+      if (path === USAGE_REFRESH_PATH) {
+        if (method !== 'POST') return error(res, 405, 'method not allowed')
+        if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
+        const payload: UsageResponse = await usageStore.refresh()
         return json(res, payload)
       }
       // 使用量の画面（#602）。メモリに持っている turn-usage.jsonl の中身を足すだけ（ファイルは読み直さない・記録は触らない・API は叩かない）。

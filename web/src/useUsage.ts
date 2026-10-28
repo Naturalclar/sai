@@ -21,6 +21,17 @@ export function useUsage() {
   // これを進めると取り直す（取得そのものは effect の中に 1 つだけ置く）
   const [nonce, setNonce] = useState(0)
   const reload = useCallback(() => setNonce((n) => n + 1), [])
+  // 「いま取り直す」（#832）を押してから答えが来るまで
+  const [refreshing, setRefreshing] = useState(false)
+  const refresh = useCallback(() => {
+    setRefreshing(true)
+    void api.usageRefresh().then(
+      (next) => setState({ usage: next, at: Date.now() }),
+      () => {
+        // 取り直せなくても、前の値は出したまま
+      },
+    ).finally(() => setRefreshing(false))
+  }, [])
 
   useEffect(() => {
     let alive = true
@@ -54,5 +65,5 @@ export function useUsage() {
     return () => clearInterval(timer)
   }, [reload])
 
-  return { usage: state.usage, at: state.at, reload }
+  return { usage: state.usage, at: state.at, reload, refresh, refreshing }
 }

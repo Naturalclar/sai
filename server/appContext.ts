@@ -6,18 +6,25 @@
 // - 循環 import を作らない: このファイルと区分のファイルは `app.ts` を import しない（型もここか `shared/` に置く）
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Replying, ReplyError, ReplyResponse, SessionMeta, SessionSummary } from '../shared/types.ts'
+import type { PrBrowser } from './git/prs.ts'
+import type { ProgressReader } from './local/progress.ts'
 import type { UsageStore } from './local/usage.ts'
 import type { MetaStore } from './meta/meta.ts'
+import type { AgentMessages } from './reply/agentMessages.ts'
 import type { CodexApp } from './reply/codexAppServer.ts'
 import type { LoopStore } from './reply/loops.ts'
 import type { OpencodeApp } from './reply/opencodeServer.ts'
 import type { ReplyQueueStore } from './reply/replyQueue.ts'
 import type { Runner } from './reply/runner.ts'
 import type { TerminalReplies } from './reply/terminal.ts'
+import type { WaitStore } from './reply/waits.ts'
 import type { FeedStore } from './rows/store.ts'
 
 /** 預かった返信を起動するときに見る窓（POST の reply の既定と同じ） */
 export const QUEUE_DAYS = 90
+
+/** 前に引いた PR の一覧を「いま」として出してよい古さ（#727）。これより古ければ、まだ引いていないのと同じに扱う（短く待つ） */
+export const HOLDING_PR_STALE_MS = 10 * 60_000
 
 /** 返信 body の上限。指示文なので十分 */
 export const MAX_REPLY_BYTES = 64 * 1024
@@ -79,6 +86,14 @@ export interface AppContext {
   typed: TerminalReplies
   /** 預かり（#305） */
   queue: ReplyQueueStore
+  /** 待ち（#732） */
+  waits: WaitStore
+  /** セッション同士のメッセージ（#310）。送信の停止を見る */
+  agents: AgentMessages
+  /** `gh` で PR を読む口 */
+  prs: PrBrowser
+  /** transcript / rollout の末尾を読む（文脈の大きさ） */
+  progress: ProgressReader
   codexApp: CodexApp
   opencodeApp: OpencodeApp
   metaStore: MetaStore
@@ -87,11 +102,15 @@ export interface AppContext {
   loopNow: () => number
   /** ループを見に行く間隔。0 ならタイマーを立てない（テスト） */
   loopTickMs: number
+  /** 待ちを見に行く間隔。0 ならタイマーを立てない（テスト） */
+  waitTickMs: number
   // ---- createApp() の中の関数
   launch: (id: string, text: string, attachments: string[], o: LaunchOptions) => Promise<Launched>
   sessionsWithMeta: (days: number) => Promise<{ rev: string; sessions: SessionSummary[] }>
   failedReply: (id: string) => Replying | undefined
   replyMode: (meta: Pick<SessionMeta, 'permission_mode'> | undefined | null) => Promise<string>
+  /** メッセージ・待ちで起こすターンの前に要約を挟むか（`messageCompacts()`） */
+  messageCompactOf: (target: SessionSummary, text: string, contextTokens: number, asked: unknown) => { compact?: true; compactFrom?: string }
   terminalOf: (s: SessionSummary, o?: { soft?: boolean }) => Promise<{ pane: string; pid: number } | null>
   agentRefusal: (req: IncomingMessage) => string
   agentFrom: (from: unknown) => Promise<{ session: SessionSummary; sessions: SessionSummary[]; turn: string } | string>
@@ -102,3 +121,6 @@ export interface AppContext {
   isCrossOrigin: (req: IncomingMessage) => boolean
   selfUrl: (req: Pick<IncomingMessage, 'socket'>) => string
 }
+
+/** そのセッションにループを組めない・待ちを預かれない理由（`server/reply/loopRoutes.ts` の `loopRefusal()`）。無ければ空 */
+export type LoopRefusal = (session: SessionSummary, kind?: 'loop' | 'wait') => Promise<string>

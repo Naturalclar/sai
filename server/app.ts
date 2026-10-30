@@ -723,7 +723,7 @@ export function createApp(
   }
   const waitingSettle = terminal.waitingSettle ?? new WaitingSettle(terminal.tmux, terminal.ps, terminal.scanTtlMs ?? DIALOG_SCAN_TTL_MS)
   const codexAppEnabled = process.env.SAI_CODEX_APP_SERVER !== '0'
-  // Codex の使用率を、SAI がすでに話している app-server からも取る（#832。起こさない・聞くのは押したときだけ）
+  // Codex の使用率を、SAI の app-server からも取る（#832。聞く・起こすのは「いま取り直す」を押したときだけ）
   if (codexAppEnabled && codexApp.rateLimitsSeen && codexApp.readRateLimits) {
     const seen = codexApp.rateLimitsSeen.bind(codexApp)
     const read = codexApp.readRateLimits.bind(codexApp)
@@ -5708,8 +5708,8 @@ export function createApp(
         const payload: UsageResponse = await usageStore.get()
         return json(res, payload)
       }
-      // 「いま取り直す」（#832）。押したときだけ。キャッシュを捨てて読み直し、繋いでいる Codex の app-server があれば聞く
-      // （起こさない）。Claude は聞く口が無いのでファイルを読み直すだけ。同一オリジンのみ（画面から叩く書き込みの口と同じ扱い）
+      // 「いま取り直す」（#832）。押したときだけ。キャッシュを捨てて読み直し、Codex の app-server に聞く
+      // （繋いでいなければ起こす。返信と同じ 1 本）。Claude は聞く口が無いのでファイルを読み直すだけ。同一オリジンのみ（画面から叩く書き込みの口と同じ扱い）
       if (path === USAGE_REFRESH_PATH) {
         if (method !== 'POST') return error(res, 405, 'method not allowed')
         if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')

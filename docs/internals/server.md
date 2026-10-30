@@ -6,10 +6,10 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 
 - `server/` は node:http 直書きで依存ゼロ。
 - `main.ts` は引数処理と bind 先チェックだけ。ルーティングは `createApp(store, distDir)` にあり、テストはこれを直接叩く。
-- **区分を外に出すときの形**（#807）: `createApp()` の中の区分は `server/<部品>/<区分>Routes.ts` の `create…(ctx)` に出す（いまはループの `server/reply/loopRoutes.ts`）。`ctx` は `server/appContext.ts` の `AppContext`（`createApp()` が作った店・状態・関数への参照の入れ物）。
+- **区分を外に出すときの形**（#807）: `createApp()` の中の区分は `server/<部品>/<区分>Routes.ts` の `create…(ctx)` に出す（いまはループの `server/reply/loopRoutes.ts` と待ちの `server/reply/waitRoutes.ts`）。`ctx` は `server/appContext.ts` の `AppContext`（`createApp()` が作った店・状態・関数への参照の入れ物）。`createApp()` はこれを 1 つ組んで各区分に渡し、区分が返した関数を別の区分が使うときは足して渡す（待ちは `{ ...ctx, loopRefusal }`。断る線がループと同じ）。
   - 状態（`launching`・`run`・`typed`・`queue` など）の持ち主は `createApp()` のままで、写しを作らない。
   - `create…(ctx)` は関数を作って返すだけ。時計を立てる・ファイルを読むなどは `createApp()` が今までの位置で呼ぶ（初期化の順番を変えない）。
-  - 区分のファイルと `appContext.ts` は `app.ts` を import しない（循環を作らない）。区分のファイル同士で使う型（`LaunchOptions`・`Launched`）と定数（`QUEUE_DAYS`・`MAX_REPLY_BYTES`）は `appContext.ts` に置く。
+  - 区分のファイルと `appContext.ts` は `app.ts` を import しない（循環を作らない）。区分のファイル同士で使う型（`LaunchOptions`・`Launched`）と定数（`QUEUE_DAYS`・`MAX_REPLY_BYTES`・`HOLDING_PR_STALE_MS`）は `appContext.ts` に置く。
 
 ## 終わり方（shutdown）
 

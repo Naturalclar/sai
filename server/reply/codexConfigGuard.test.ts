@@ -94,6 +94,21 @@ test('覚えたファイルを消せば、動いている間でももう一度�
   assert.notEqual(await guard.check(p.sub), null)
 })
 
+test('ハッシュ: 中身に区切りと同じバイト列があっても、別の並びと同じ値にならない', async () => {
+  const p = await place()
+  const hashOf = async () => {
+    const scan = await scanCodexConfig(p.git, p.sub)
+    return scan.kind === 'ok' ? scan.dirs[0]?.hash : ''
+  }
+  const dir = join(p.sub, '.codex')
+  await put(p.sub, 'a', '1')
+  await put(p.sub, 'b', '2')
+  const two = await hashOf()
+  await rm(join(dir, 'b'))
+  await put(p.sub, 'a', `1\0f\0${join('sub', '.codex', 'b')}\x002`)
+  assert.notEqual(await hashOf(), two)
+})
+
 test('見せたものと中身が変わっていれば、押しても通さず覚えない', async () => {
   const p = await place()
   await put(p.sub, 'config.toml', 'one')

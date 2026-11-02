@@ -304,6 +304,18 @@ test('片付けた預かりに新しく届いたら、もう一度確かめて�
   await clear('C1@r')
 })
 
+test('片付けた預かりは、新しく届いても人が押すまで回らない', async () => {
+  ask = ASK
+  await post(session('C1@r', 'reply?days=30'), { text: '1 通目' })
+  await post(session('C1@r', 'codex-config/dismiss'), {})
+  ask = null
+  await post(session('C1@r', 'reply?days=30'), { text: '2 通目', queue: true })
+  const data = await list()
+  assert.deepEqual(calls, [])
+  assert.equal(data.queued['C1@r']?.paused, CODEX_CONFIG_DISMISSED)
+  await clear('C1@r')
+})
+
 test('確かめが通るようになったら、行を消して止めた預かりも回す', async () => {
   ask = ASK
   await post(session('C1@r', 'reply?days=30'), { text: 'こんにちは' })

@@ -63,11 +63,12 @@ async function readCodexDir(dir: string, rel: string): Promise<CodexConfigDir> {
         opaque = true
         continue
       }
-      hash.update(`f\0${shown}\0`)
+      // ファイルごとにハッシュしてから混ぜる（中身に区切りと同じバイト列があっても、別の並びと同じ値にならない）
+      const one = createHash('sha256')
       await pipeline(createReadStream(path), async (source) => {
-        for await (const chunk of source) hash.update(chunk as Buffer)
+        for await (const chunk of source) one.update(chunk as Buffer)
       })
-      hash.update('\0')
+      hash.update(`f\0${shown}\0${one.digest('hex')}\0`)
     }
   }
   try {

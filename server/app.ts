@@ -2747,10 +2747,10 @@ export function createApp(
       await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} 処理中なので預かった（${queue.size(id)} 件目）\n`).catch(() => {})
       // 端末のターンが閉じたか分からずに止めた預かりの後ろに並んだメッセージも、止まっていると返す（#800 のレビュー）
       const stuck = (!!o.terminalFallback && queue.paused(id) === TERMINAL_HELD_PAUSED) || codexConfigPaused(queue.paused(id))
-      // 片付けた預かりに新しく届いたら、回すときにもう一度確かめて行を出し直す（行が無いまま止めない）
-      if (queue.paused(id) === CODEX_CONFIG_DISMISSED) {
-        bgRetryAt.delete(id)
-        queue.resume(id)
+      // 片付けた預かりに新しく届いたら、確かめ直して行を出す。**止めは解かない**（片付けた本文を、人が押さないまま回さない）
+      if (queue.paused(id) === CODEX_CONFIG_DISMISSED && (await codexConfigStop(id, cwd))) {
+        queue.pause(id, CODEX_CONFIG_PAUSED)
+        codexConfigQueued.add(id)
       }
       const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd, via: 'queued', queue_id: item.queue_id, ...(stuck ? { past_terminal: true as const, stuck: true as const } : {}) }
       return { status: 202, body: payload }

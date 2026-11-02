@@ -122,9 +122,13 @@ export interface SendModeInput {
   idleMs?: number
 }
 
-/** 要約を選べるか。Claude で、端末で開いておらず、下限以上のとき（量が分からなければ出さない） */
+/**
+ * 要約を選べるか。Claude か Codex（#837。SAI の app-server が話すスレッド。`thread/compact/start`）で、端末で開いておらず、
+ * 下限以上のとき（量が分からなければ出さない）。Codex の量も「1 回のモデル呼び出しで読んだ入力」で Claude と同じ意味なので、線も同じ。
+ * ほかで開いている Codex・`SAI_CODEX_APP_SERVER=0` は `launch()` が見て、要約せずに今までどおり送る
+ */
 export function canCompact(input: Pick<SendModeInput, 'agent' | 'contextTokens' | 'terminal'>): boolean {
-  return input.agent === 'claude' && !input.terminal && input.contextTokens >= COMPACT_MIN_TOKENS
+  return (input.agent === 'claude' || input.agent === 'codex') && !input.terminal && input.contextTokens >= COMPACT_MIN_TOKENS
 }
 
 /**
@@ -160,7 +164,7 @@ export function sendModes(input: SendModeInput, warnTokens: number): { mode: Sen
  * **画面からの送信と同じ判定**（`sendModes()`）で、着手の形の本文で、要約できるときだけ（間があいて大きい相手でも、着手でなければそのまま。#761）。
  * 待ちで起こすターンの本文（待ちの結果）は着手の形にならないので、待ちでは要約しない。
  * `input.text` は**送り元が書いた文そのもの**（見出しを付ける前）を渡す。
- * 送る側の指定（`asked`）があれば指定が勝つが、要約できない相手（端末で開いている・Claude でない・文脈が小さい）は指定しても要約しない
+ * 送る側の指定（`asked`）があれば指定が勝つが、要約できない相手（端末で開いている・Claude でも Codex でもない・文脈が小さい）は指定しても要約しない
  */
 export function messageCompacts(input: SendModeInput, warnTokens: number, asked?: boolean): boolean {
   if (asked === false) return false

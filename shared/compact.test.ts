@@ -23,11 +23,20 @@ test('sendModes: 着手 × Claude × 下限以上なら要約してから送る�
   assert.deepEqual(sendModes({ ...claude, text: '579着手して', contextTokens: big }, CONTEXT_WARN_TOKENS), { mode: 'compact', choices: ['compact', 'plain', 'new'] })
 })
 
-test('sendModes: 小さい・量が分からない・端末で開いている・Claude でないときは要約しない（#579）', () => {
+test('sendModes: 小さい・量が分からない・端末で開いている・要約できないエージェントのときは要約しない（#579）', () => {
   assert.deepEqual(sendModes({ ...claude, text: '579着手して', contextTokens: COMPACT_MIN_TOKENS - 1 }, CONTEXT_WARN_TOKENS), { mode: 'plain', choices: ['plain', 'new'] }, '新しいセッションは選べる')
   assert.deepEqual(sendModes({ ...claude, text: '579着手して', contextTokens: 0 }, CONTEXT_WARN_TOKENS).mode, 'plain')
   assert.deepEqual(sendModes({ ...claude, terminal: true, text: '579着手して', contextTokens: big }, CONTEXT_WARN_TOKENS).mode, 'plain')
-  assert.deepEqual(sendModes({ agent: 'codex', terminal: false, text: '579着手して', contextTokens: big }, CONTEXT_WARN_TOKENS), { mode: 'plain', choices: [] }, 'Codex は対象外')
+  assert.deepEqual(sendModes({ agent: 'opencode', terminal: false, text: '579着手して', contextTokens: big }, CONTEXT_WARN_TOKENS), { mode: 'plain', choices: [] }, 'OpenCode は対象外')
+})
+
+test('sendModes: Codex も線は Claude と同じ。新しいセッションは出さない（#837）', () => {
+  const codex = { agent: 'codex', terminal: false }
+  assert.deepEqual(sendModes({ ...codex, text: '837着手して', contextTokens: COMPACT_MIN_TOKENS }, CONTEXT_WARN_TOKENS), { mode: 'compact', choices: ['compact', 'plain'] })
+  assert.deepEqual(sendModes({ ...codex, text: '837着手して', contextTokens: COMPACT_MIN_TOKENS, forkable: true }, CONTEXT_WARN_TOKENS), { mode: 'compact', choices: ['compact', 'plain', 'fork'] })
+  assert.deepEqual(sendModes({ ...codex, text: '837着手して', contextTokens: COMPACT_MIN_TOKENS - 1 }, CONTEXT_WARN_TOKENS), { mode: 'plain', choices: [] }, '15 万未満は要約しない')
+  assert.equal(sendModes({ ...codex, text: 'マージして', contextTokens: COMPACT_MIN_TOKENS }, CONTEXT_WARN_TOKENS).mode, 'plain', '短い依頼は要約しない')
+  assert.deepEqual(sendModes({ ...codex, terminal: true, text: '837着手して', contextTokens: COMPACT_MIN_TOKENS }, CONTEXT_WARN_TOKENS), { mode: 'plain', choices: [] }, '端末で開いているものは今までどおり')
 })
 
 test('sendModes: 着手でなければそのまま。警告を超えていれば要約を横に出す（#579）', () => {
@@ -72,7 +81,7 @@ test('messageCompacts: メッセージは画面と同じ判定。指定があれ
   assert.equal(messageCompacts({ ...big, text: 'ここはどう変えましたか？' }, CONTEXT_WARN_TOKENS), false, '警告を超えていても、着手でなければ要約しない')
   assert.equal(messageCompacts({ ...big, text: 'ここはどう変えましたか？' }, CONTEXT_WARN_TOKENS, true), true)
   assert.equal(messageCompacts({ ...big, text: '#624 に着手してください。' }, CONTEXT_WARN_TOKENS, false), false)
-  for (const cannot of [{ ...big, terminal: true }, { ...big, agent: 'codex' }, { ...big, contextTokens: COMPACT_MIN_TOKENS - 1 }, { ...big, contextTokens: 0 }]) {
+  for (const cannot of [{ ...big, terminal: true }, { ...big, agent: 'opencode' }, { ...big, contextTokens: COMPACT_MIN_TOKENS - 1 }, { ...big, contextTokens: 0 }]) {
     assert.equal(messageCompacts({ ...cannot, text: '#624 に着手してください。' }, CONTEXT_WARN_TOKENS), false)
     assert.equal(messageCompacts({ ...cannot, text: '#624 に着手してください。' }, CONTEXT_WARN_TOKENS, true), false)
   }
@@ -124,9 +133,8 @@ test('sendModes: 間があいて大きい Claude のセッションでも、着�
   assert.equal(sendModes({ ...cold, text: '#12 に着手してください。', contextTokens: COMPACT_MIN_TOKENS, idleMs: 0 }, CONTEXT_WARN_TOKENS).mode, 'compact')
 })
 
-test('sendModes: 間があいて大きくても、要約できない相手（端末で開いている・Claude 以外）には何もしない（#761）', () => {
+test('sendModes: 間があいて大きくても、要約できない相手（端末で開いている・OpenCode）には何もしない（#761）', () => {
   assert.equal(sendModes({ ...claude, terminal: true, text: 'マージして', contextTokens: 800_000, idleMs: COLD }, CONTEXT_WARN_TOKENS).mode, 'plain')
-  assert.deepEqual(sendModes({ agent: 'codex', terminal: false, text: 'マージして', contextTokens: 800_000, idleMs: COLD }, CONTEXT_WARN_TOKENS), { mode: 'plain', choices: [] })
   assert.deepEqual(sendModes({ agent: 'opencode', terminal: false, text: 'マージして', contextTokens: 800_000, idleMs: COLD }, CONTEXT_WARN_TOKENS), { mode: 'plain', choices: [] })
 })
 
@@ -138,7 +146,9 @@ test('messageCompacts: 間があいて大きい相手でも、着手の形でな
   assert.equal(messageCompacts({ ...cold, text: '#12 に着手してください。' }, CONTEXT_WARN_TOKENS, false), false)
   assert.equal(messageCompacts({ ...cold, idleMs: 5 * 60_000 }, CONTEXT_WARN_TOKENS), false, '温かい相手はそのまま')
   assert.equal(messageCompacts({ ...cold, terminal: true }, CONTEXT_WARN_TOKENS), false)
-  assert.equal(messageCompacts({ ...cold, agent: 'codex' }, CONTEXT_WARN_TOKENS, true), false)
+  assert.equal(messageCompacts({ ...cold, agent: 'opencode' }, CONTEXT_WARN_TOKENS, true), false)
+  assert.equal(messageCompacts({ ...cold, agent: 'codex' }, CONTEXT_WARN_TOKENS), false, 'Codex も着手の形でなければ要約しない（#837）')
+  assert.equal(messageCompacts({ ...cold, agent: 'codex', text: '#12 に着手してください。' }, CONTEXT_WARN_TOKENS), true, 'Codex も着手の依頼は挟む（#837）')
 })
 
 test('replyIdleMs: 入力欄の間は、時計が無い・処理中か預かりがあるときは分からない扱い（送り方の既定も変えない。#761）', () => {

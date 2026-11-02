@@ -127,6 +127,114 @@ test('start: initializeしてthreadをresumeし、app-serverでturnを開始す�
   assert.deepEqual(app.replying()['thread-1@repo'], { since: '2026-09-09T12:00:00.000Z', text: '続けて', interruptible: true }, 'turnId が入っていれば止められる（#384）')
 })
 
+/** 要約を投げたところまで（#837）。`thread/compact/start` の応答は `{}` で、turn id は `turn/started` で届く（実測 0.166.0） */
+const compacting = async (timeoutMs?: number) => {
+  const connection = new FakeConnection()
+  const app = new CodexAppServer(async () => connection, () => Date.parse('2026-09-09T12:00:00Z'), timeoutMs)
+  const ended: string[] = []
+  app.onTurnEnd((id) => ended.push(id))
+  await app.compact({ id: 'thread-1@repo', threadId: 'thread-1', cwd: '/repo' })
+  return { app, connection, ended }
+}
+const turnStarted = { method: 'turn/started', params: { threadId: 'thread-1', turn: { id: 'compact-turn', status: 'inProgress' } } }
+const turnDone = (status: string, error: unknown = null, id = 'compact-turn') => ({ method: 'turn/completed', params: { threadId: 'thread-1', turn: { id, status, error } } })
+const threadStatus = (type: string) => ({ method: 'thread/status/changed', params: { threadId: 'thread-1', status: { type } } })
+
+test('compact: thread/resume してから thread/compact/start を投げ、turn/completed まで処理中にする（#837）', async () => {
+  const { app, connection, ended } = await compacting()
+  assert.deepEqual(connection.sent.map((message) => message.method), ['initialize', 'initialized', 'thread/resume', 'thread/compact/start'])
+  assert.deepEqual(connection.sent.at(-1)?.params, { threadId: 'thread-1' })
+  assert.equal(app.running('thread-1@repo'), true)
+  assert.deepEqual(app.replying()['thread-1@repo'], { since: '2026-09-09T12:00:00.000Z', text: '/compact', compact: true }, '画面は「要約中」と出せる')
+  connection.emit(turnStarted)
+  assert.equal(app.replying()['thread-1@repo']?.interruptible, true, 'turn id が届けば止められる')
+  // 実測の順番: idle が turn/completed より先に届く。ここで片付けると、要約が終わる前に本文を回す
+  connection.emit(threadStatus('idle'))
+  assert.equal(app.running('thread-1@repo'), true, 'idle では終わらない')
+  assert.deepEqual(ended, [])
+  connection.emit(turnDone('completed'))
+  assert.equal(app.running('thread-1@repo'), false)
+  assert.deepEqual(ended, ['thread-1@repo'], '終わりを知らせる（預かりが本文を回す）')
+  assert.equal(app.replying()['thread-1@repo'], undefined, '失敗は残らない')
+})
+
+test('compact: 要約が失敗したら失敗として残す。systemError が先に届いても中身を落とさない（#837）', async () => {
+  const { app, connection, ended } = await compacting()
+  connection.emit(turnStarted)
+  connection.emit(threadStatus('systemError'))
+  assert.deepEqual(ended, [], 'systemError では終わらない')
+  connection.emit(turnDone('failed', { message: '作り物の失敗' }))
+  assert.deepEqual(ended, ['thread-1@repo'])
+  const failed = app.replying()['thread-1@repo']?.failed
+  assert.match(failed?.tail ?? '', /要約できませんでした.*作り物の失敗/)
+  assert.equal(failed?.turn_error, true)
+})
+
+test('compact: 時間切れなら止めて失敗にする。要約のターンは切れないまま残さない（#837）', async () => {
+  const { app, connection, ended } = await compacting(5)
+  connection.emit(turnStarted)
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.equal(app.running('thread-1@repo'), false)
+  assert.deepEqual(ended, ['thread-1@repo'])
+  assert.match(app.replying()['thread-1@repo']?.failed?.tail ?? '', /要約できませんでした/)
+  assert.deepEqual(connection.sent.at(-1)?.params, { threadId: 'thread-1', turnId: 'compact-turn' })
+  assert.equal(connection.sent.at(-1)?.method, 'turn/interrupt')
+})
+
+test('compact: 終わったら時間切れは鳴らない（#837）', async () => {
+  const { app, connection } = await compacting(5)
+  connection.emit(turnStarted)
+  connection.emit(turnDone('completed'))
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.equal(app.replying()['thread-1@repo'], undefined)
+  assert.equal(connection.sent.some((message) => message.method === 'turn/interrupt'), false)
+})
+
+test('compact: 切断・スレッドが閉じた・途中で切られたは、済んだか分からないので失敗にする（#837）', async () => {
+  const cut = await compacting()
+  cut.connection.disconnect()
+  assert.match(cut.app.replying()['thread-1@repo']?.failed?.tail ?? '', /接続が切れました/)
+  assert.deepEqual(cut.ended, ['thread-1@repo'])
+
+  const closed = await compacting()
+  closed.connection.emit({ method: 'thread/closed', params: { threadId: 'thread-1' } })
+  assert.match(closed.app.replying()['thread-1@repo']?.failed?.tail ?? '', /スレッドが閉じました/)
+
+  const stopped = await compacting()
+  stopped.connection.emit(turnStarted)
+  stopped.connection.emit(turnDone('interrupted'))
+  assert.match(stopped.app.replying()['thread-1@repo']?.failed?.tail ?? '', /interrupted/)
+})
+
+test('compact: 人が止めたときは失敗にしない。止めた預かりは呼ぶ側が持つ（#837）', async () => {
+  const { app, connection } = await compacting()
+  connection.emit(turnStarted)
+  assert.equal(await app.interrupt('thread-1@repo'), true)
+  connection.emit(turnDone('interrupted'))
+  assert.equal(app.replying()['thread-1@repo'], undefined)
+})
+
+test('compact: 要約のターンには足せない。ほかの turn id の終わりでは片付けない（#837）', async () => {
+  const { app, connection } = await compacting()
+  connection.emit(turnStarted)
+  assert.equal(await app.steer('thread-1@repo', '足したい'), false, '呼ぶ側が預かりに落とす')
+  assert.equal(connection.sent.some((message) => message.method === 'turn/steer'), false)
+  connection.emit(turnDone('completed', null, 'old-turn'))
+  assert.equal(app.running('thread-1@repo'), true)
+})
+
+test('compact: 投げられなければ処理中を残さず、呼ぶ側に投げ返す（#837）', async () => {
+  const connection = new FakeConnection()
+  const app = new CodexAppServer(async () => connection)
+  const original = connection.send.bind(connection)
+  connection.send = (message) => {
+    if (message.method === 'thread/compact/start') connection.emit({ id: message.id, error: { message: 'thread not found' } })
+    else original(message)
+  }
+  await assert.rejects(app.compact({ id: 'thread-1@repo', threadId: 'thread-1', cwd: '/repo' }), /thread not found/)
+  assert.equal(app.running('thread-1@repo'), false)
+})
+
 test('requestUserInput: 質問を表示し、question idへ安全に回答して二重回答を拒否する', async () => {
   const { app, connection } = await started()
   connection.emit({

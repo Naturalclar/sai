@@ -123,7 +123,7 @@ OpenCode (feed/opencode/sai.js) ─┘                           │
 
 - **経路**: 可否は `replyBlockedReason()` の 1 つ（第 2 引数の host は省略不可）。子は `childEnv()` で `TMUX_PANE` を落とす（`TMUX` は残す）。SAI は行を起こさない → docs/internals/reply.md#経路
 - **使用量**: 子の stdout は reply.log の fd のまま（pipe 不可）。`turn-usage.jsonl` は派生で記録は触らない。`rev` に `usage.rev()`。終わらない子は `settledByRow()` で終わりにして kill → docs/internals/reply.md#使用量
-- **Codex**: writer lock はファイルでなく開いているプロセスで数え、`CodexApp.holds()` は queue に回さない → docs/internals/reply.md#codex
+- **Codex**: writer lock はファイルでなく開いているプロセスで数え、`CodexApp.holds()` は queue に回さない。要約（`thread/compact/start`）は回っているターンを切るので処理中に投げず、ほかが書いているスレッドにも投げない（#837） → docs/internals/reply.md#codex
 - **OpenCode**: 保留を見るためにサーバを起こさない。`directory` 必須。`always` を出さない。待ちは分からなければ残し時間で畳まない。規則は `shared/` と `sai.js` の二重で両テストの期待文字列を揃える。`share` / `shell`・`pty` / `--mdns`・`--cors` は開かない → docs/internals/reply.md#opencode
 - **新しいセッション**: ID はサーバが決め cwd は `from` から。OpenCode は serve だけ（run に落とさない） → docs/internals/reply.md#新しいセッション
 - **claude --bg**: 置き場は `--settings` の `env`、許可の配線なし。attach 中・ターン中は `claude stop` しない（`ps` が読めなければ居る扱い）。`run.start` に載せない → docs/internals/reply.md#claude---bg

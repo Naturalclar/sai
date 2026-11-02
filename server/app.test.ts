@@ -32,7 +32,7 @@ import { row } from './rows/aggregate.test.ts'
 import type { Git } from './git/diff.ts'
 import { JPEG, PNG } from './meta/icons.test.ts'
 import type { CodexDialogSource } from './reply/codexDialogs.ts'
-import type { CodexApp, CodexTurnInput } from './reply/codexAppServer.ts'
+import type { CodexApp, CodexCompactInput, CodexTurnInput } from './reply/codexAppServer.ts'
 
 let dir: string
 let feedDir: string
@@ -138,6 +138,15 @@ class FakeCodexApp implements CodexApp {
   async start(input: CodexTurnInput) {
     if (this.fail) throw this.fail
     this.started.push(input)
+  }
+  /** 要約だけのターン（#837）。持っていない実装を試すときは `delete` する */
+  compacted: CodexCompactInput[] = []
+  failCompact: Error | null = null
+  compact?: (input: CodexCompactInput) => Promise<void> = async (input) => {
+    if (this.failCompact) throw this.failCompact
+    this.compacted.push(input)
+    // 本物も投げた時点で処理中にする
+    this.busy.set(input.id, { since: new Date().toISOString(), text: '/compact', compact: true })
   }
   /** 走っているターンに足した分（#404）。`steers` が false なら足せなかったことにする */
   steered: { id: string; text: string; attachments: readonly string[] }[] = []
@@ -1105,11 +1114,93 @@ test('POST reply: 要約が失敗したら、預かった本文は回さずに�
   }
 })
 
-test('POST reply: 処理中・Claude でないときは compact を付けても今までどおり送る（#579）', async () => {
+test('POST reply: Codex は本文を預かりの先頭に置いて app-server で要約し、終わってから本文を 1 回だけ回す（#837）', async () => {
+  const drop = async () => {
+    codexApp.busy.delete('X1@r')
+    codexApp.failures.delete('X1@r')
+    for (const item of (await queuedOf('X1@r'))?.items ?? []) {
+      await fetch(`${base}/api/sessions/X1%40r/queue/${item.queue_id}`, { method: 'DELETE', headers: { Origin: base } })
+    }
+    await postJson('/api/sessions/X1%40r/queue/resume', {})
+  }
+  codexApp.started.length = 0
+  codexApp.compacted.length = 0
+  runner.started.length = 0
+  try {
+    const res = await post('X1@r', { text: '837着手して', compact: true })
+    assert.equal(res.status, 202)
+    const body = (await res.json()) as ReplyResponse
+    assert.equal(body.via, 'compact')
+    assert.equal(body.queue_id, (await queuedOf('X1@r'))?.items[0]?.queue_id, '本文は預かりの先頭')
+    assert.deepEqual(codexApp.compacted.map((c) => [c.id, c.threadId]), [['X1@r', 'X1']])
+    assert.equal(codexApp.started.length, 0, '要約のあいだは本文を回さない')
+    assert.equal(runner.started.length, 0, '別プロセスは起こさない')
+    const list = (await (await get('/api/sessions?days=30')).json()) as SessionsResponse
+    assert.equal(list.replying['X1@r']?.compact, true, '画面は「要約中」と出せる')
+    assert.equal(codexApp.started.length, 0)
+    // 要約が終わったら本文を 1 回だけ。もう 1 回見に来ても二重に届かない
+    codexApp.busy.delete('X1@r')
+    await get('/api/sessions?days=30')
+    assert.deepEqual(codexApp.started.map((s) => s.text), ['837着手して'])
+    await get('/api/sessions?days=30')
+    assert.equal(codexApp.started.length, 1)
+    assert.equal(codexApp.compacted.length, 1, 'もう 1 回要約はしない')
+    assert.equal((await queuedOf('X1@r'))?.items.length ?? 0, 0)
+  } finally {
+    await drop()
+  }
+
+  // 要約が失敗: 本文は回さずに止める。「続けて送る」で要約せずに 1 回だけ送る
+  codexApp.started.length = 0
+  codexApp.compacted.length = 0
+  try {
+    await post('X1@r', { text: '838着手して', compact: true })
+    codexApp.busy.delete('X1@r')
+    codexApp.failures.set('X1@r', { since: new Date().toISOString(), text: '/compact', failed: { tail: '要約できませんでした: 作り物', turn_error: true } })
+    const list = (await (await get('/api/sessions?days=30')).json()) as SessionsResponse
+    assert.equal(codexApp.started.length, 0, '本文は回さない')
+    assert.match(list.queued['X1@r']?.paused ?? '', /要約できませんでした/)
+    await postJson('/api/sessions/X1%40r/queue/resume', {})
+    await get('/api/sessions?days=30')
+    assert.deepEqual(codexApp.started.map((s) => s.text), ['838着手して'])
+    assert.equal(codexApp.compacted.length, 1)
+  } finally {
+    await drop()
+  }
+
+  // 要約を始められなければ本文も預からない（画面が入力欄に戻す）
+  codexApp.failCompact = new Error('thread not found')
+  try {
+    const res = await post('X1@r', { text: '839着手して', compact: true })
+    assert.equal(res.status, 500)
+    assert.match(((await res.json()) as { error: string }).error, /要約を始められませんでした.*thread not found/)
+    assert.equal((await queuedOf('X1@r'))?.items.length ?? 0, 0)
+  } finally {
+    codexApp.failCompact = null
+    await drop()
+  }
+
+  // 処理中なら要約せずに預かる（回っているターンの途中に投げない）
+  codexApp.started.length = 0
+  codexApp.compacted.length = 0
+  codexApp.busy.set('X1@r', { since: new Date().toISOString(), text: '前の' })
+  try {
+    const queued = (await (await post('X1@r', { text: '840着手して', compact: true, queue: true })).json()) as ReplyResponse
+    assert.equal(queued.via, 'queued')
+    assert.equal(codexApp.compacted.length, 0)
+  } finally {
+    await drop()
+  }
+})
+
+test('POST reply: 処理中・要約できないエージェントのときは compact を付けても今までどおり送る（#579）', async () => {
   runner.started.length = 0
   codexApp.busy.clear?.()
+  const compact = codexApp.compact
+  delete codexApp.compact
   const res = await post('X1@r', { text: '579着手して', compact: true })
-  assert.notEqual(((await res.json()) as ReplyResponse).via, 'compact', 'Codex は要約しない')
+  codexApp.compact = compact
+  assert.notEqual(((await res.json()) as ReplyResponse).via, 'compact', '要約の口が無い Codex は要約しない')
   runner.busy.set('C1@r', { since: new Date().toISOString(), text: '前の' })
   try {
     const queued = (await (await post('C1@r', { text: '581着手して', compact: true, queue: true })).json()) as ReplyResponse

@@ -97,6 +97,19 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
   - 空白や引用符を含む語は `"…"` で囲む（`/bin/zsh -lc "touch out.txt"`。語の切れ目が分かるように）
 - コマンドに「拒否」が無いことがある（実測 0.160.1 では `accept` / `acceptWithExecpolicyAmendment` / `cancel` だけで、`decline` が来ない）。SAI は来ていない decision を足さないので、そのときは「ターンを中止」しか選べない
 
+## 要約だけのターン
+
+`CodexAppServer.compact()`（#837。`thread/compact/start`）。呼ぶのは `launch()` だけで、判定と順番は docs/internals/reply.md の「要約してから送る」。動きは 0.166.0 の実測:
+
+- 引数は `threadId` だけ（指示を渡せない）。**`thread/resume` した接続でしか投げられない**（`thread not found`）ので `begin()` を通す
+- 応答は `{}` ですぐ返り、turn id は `turn/started` で届く。そのあとは普通のターンと同じ通知で、中身は `contextCompaction` の item 1 つ
+- **終わりは `turn/completed` だけで決める**: `thread/compacted` は届かない（schema にあるが非推奨）。`idle` も失敗の `systemError` も `turn/completed` の直前に届くので、要約のターンではこれらで片付けない
+- **回っているターンの途中に投げると、そのターンが `interrupted` で切られる**（応答は `{}` で断られない）。投げる前に `launch()` が `busy` を見る
+- 要約中の `turn/start` と `turn/steer` は断られる（`ActiveTurnNotSteerable`）。`steer()` は投げずに false を返し、預かりに落とす
+- `turn/completed` が `completed` 以外・切断・`thread/closed`・`CODEX_COMPACT_TIMEOUT_MS`（10 分）切れは失敗にする（`failures`。#475 と同じ置き場）ので、`drain()` が預かりを止める。時間切れは `turn/interrupt` も投げる。人が止めたときは先に片付くので失敗にならない
+- `notify` は鳴らず記録に行は増えない。次のターンの `input-messages` には要約の文が混ざるが、`record.py` は末尾を使う
+- rollout には `compacted` の行が載り、次の `token_count` まで `context_tokens` は 0（分からない）。`turn-usage.jsonl` は Codex の app-server のターンを書かないので、要約も載らない（モデルの呼び出しの量は rollout の `token_count` と `thread/tokenUsage/updated` に載る）
+
 ## ターンを止める
 
 - `POST /api/sessions/<id>/interrupt` → `interrupt()` がどちらが回っているかで振り分ける

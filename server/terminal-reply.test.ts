@@ -16,7 +16,7 @@ import { Authenticator } from './auth.ts'
 import { TerminalReplies } from './reply/terminal.ts'
 import type { Tmux } from './reply/terminal.ts'
 import type { ReplyCommand, Runner } from './reply/runner.ts'
-import type { CodexApp, CodexTurnInput } from './reply/codexAppServer.ts'
+import type { CodexApp, CodexCompactInput, CodexTurnInput } from './reply/codexAppServer.ts'
 
 let dir: string
 let server: Server
@@ -27,6 +27,7 @@ let work: string
 const started: { id: string; cmd: ReplyCommand }[] = []
 const queued: ReplyCommand[] = []
 const codexStarted: CodexTurnInput[] = []
+const codexCompacted: CodexCompactInput[] = []
 const runner: Runner = { running: () => false, snapshot: () => ({}), async start(id, cmd) { started.push({ id, cmd }) } }
 /** tmux のペインで動いている Codex（#417）。X5 は行があり、NOROWS は行が 1 本も無い */
 const codexPanes = {
@@ -64,6 +65,7 @@ const codexApp: CodexApp = {
   snapshot: () => ({}),
   getApproval: () => undefined,
   async start(input) { codexStarted.push(input) },
+  async compact(input) { codexCompacted.push(input) },
   answer: () => ({ ok: false, status: 404, error: 'approval not found' }),
 }
 
@@ -356,6 +358,25 @@ test('返信: 端末に打てない 409 には can_process が付き、via: proc
   tmux.screen = IDLE
 })
 
+test('返信: 端末で開いている Codex には要約を投げず、閉じている Codex だけ要約する（#837）', async () => {
+  started.length = 0
+  queued.length = 0
+  codexCompacted.length = 0
+  tmux.screen = '› \n  gpt-5.6-sol medium · /tmp/repo\n'
+  try {
+    let res = await post('X1@r', '837着手して', { compact: true })
+    assert.notEqual(((await res.json()) as ReplyResponse).via, 'compact', '端末で開いている')
+    assert.equal(codexCompacted.length, 0)
+    res = await post('X3@r', '837着手して', { compact: true })
+    assert.equal(((await res.json()) as ReplyResponse).via, 'compact')
+    assert.deepEqual(codexCompacted.map((c) => c.threadId), ['X3'])
+  } finally {
+    const list = (await (await fetch(`${base}/api/sessions?days=30`)).json()) as SessionsResponse
+    for (const item of list.queued['X3@r']?.items ?? []) await fetch(`${base}/api/sessions/X3%40r/queue/${item.queue_id}`, { method: 'DELETE', headers: { Origin: base } })
+    tmux.screen = IDLE
+  }
+})
+
 test('返信: 開いている Codex は active writer と競合する resume ではなく queue へ送る', async () => {
   started.length = 0
   queued.length = 0
@@ -381,10 +402,12 @@ test('返信: 開いている Codex は active writer と競合する resume で
   assert.match(((await res.json()) as ReplyError).error, /queue rejected/)
   assert.equal(queued.length, 1)
 
-  // tmux 外（Codex アプリなど）で開いていても queue で会話へ届く
-  res = await post('X2@r', 'x')
+  // tmux 外（Codex アプリなど）で開いていても queue で会話へ届く。別のプロセスが書いているスレッドなので要約は投げない（#837）
+  codexCompacted.length = 0
+  res = await post('X2@r', 'x', { compact: true })
   assert.equal(res.status, 202)
   assert.equal(((await res.json()) as ReplyResponse).via, 'queue')
+  assert.equal(codexCompacted.length, 0)
   assert.equal(queued.length, 2)
   assert.equal(started.length, 0)
 

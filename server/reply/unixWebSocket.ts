@@ -97,7 +97,12 @@ export function connectUnixWebSocket(path: string, on: { text: (text: string) =>
             const text = Buffer.concat(parts).toString('utf-8')
             parts = []
             partBytes = 0
-            on.text(text)
+            // 受け手が投げてもソケットのハンドラから抜けさせない（抜けるとサーバごと落ちる）。その 1 通を捨てるだけ
+            try {
+              on.text(text)
+            } catch {
+              /* 読み捨てる */
+            }
           }
         }
       }

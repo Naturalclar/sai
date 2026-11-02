@@ -87,6 +87,8 @@ export class CodexDaemonClient implements CodexDaemonWatch {
   private nextId = 0
   private readonly pending = new Map<number, Pending>()
   private readonly states = new Map<string, DaemonThreadState>()
+  /** `thread/list` を待つ間に通知が届いたスレッド。読み終えたら null */
+  private notified: Set<string> | null = null
 
   constructor(opts: { socketPath: string; retryMs?: number; log?: (line: string) => void }) {
     this.socketPath = opts.socketPath
@@ -122,6 +124,7 @@ export class CodexDaemonClient implements CodexDaemonWatch {
     this.linkState = link
     // 切れている間の状態は分からない（古い `active` を残すと、ずっと空きでないままになる）
     this.states.clear()
+    this.notified = null
     for (const p of this.pending.values()) {
       clearTimeout(p.timer)
       p.reject(new Error('disconnected'))
@@ -158,9 +161,11 @@ export class CodexDaemonClient implements CodexDaemonWatch {
       this.ws = ws
       await this.request('initialize', { clientInfo: { name: 'sai', title: 'SAI', version: '0.2.0' }, capabilities: { experimentalApi: true, requestAttestation: false } })
       ws.send(JSON.stringify({ method: 'initialized' }))
+      this.notified = new Set()
       const list = (await this.request('thread/list', { limit: DAEMON_LIST_LIMIT })) as { data?: { id?: unknown; status?: unknown }[] }
-      // 待っている間に届いた通知の方が新しいので、上書きしない
-      for (const t of list.data ?? []) if (typeof t.id === 'string' && !this.states.has(t.id)) this.note(t.id, t.status)
+      // 待っている間に通知が届いたスレッドは、通知の方が新しいので上書きしない（分からないになった通知も）
+      for (const t of list.data ?? []) if (typeof t.id === 'string' && !this.notified.has(t.id)) this.note(t.id, t.status)
+      this.notified = null
       const loaded = (await this.request('thread/loaded/list', {})) as { data?: unknown[] }
       if (generation !== this.generation) return
       this.linkState = 'connected'
@@ -184,6 +189,11 @@ export class CodexDaemonClient implements CodexDaemonWatch {
     })
   }
 
+  private heard(id: unknown, status: unknown): void {
+    if (typeof id === 'string') this.notified?.add(id)
+    this.note(id, status)
+  }
+
   private note(id: unknown, status: unknown): void {
     if (typeof id !== 'string') return
     const state = threadState(status)
@@ -198,7 +208,7 @@ export class CodexDaemonClient implements CodexDaemonWatch {
     } catch {
       return
     }
-    // 形の違うものは読み捨てる（ここで投げるとソケットのハンドラから抜けて、サーバごと落ちる）
+    // 形の違うものは読み捨てる
     if (!m || typeof m !== 'object') return
     // **サーバからの要求（id と method の両方）には答えない**。読むだけの客なので、許可・質問を受け取らない
     if (m.id !== undefined && m.method !== undefined) return
@@ -211,10 +221,10 @@ export class CodexDaemonClient implements CodexDaemonWatch {
       else p.resolve(m.result)
       return
     }
-    if (m.method === 'thread/status/changed') this.note(m.params?.threadId, m.params?.status)
+    if (m.method === 'thread/status/changed') this.heard(m.params?.threadId, m.params?.status)
     else if (m.method === 'thread/started') {
       const t = m.params?.thread as { id?: unknown; status?: unknown } | undefined
-      this.note(t?.id, t?.status)
+      this.heard(t?.id, t?.status)
     }
   }
 }

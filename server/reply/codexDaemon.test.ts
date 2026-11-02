@@ -167,18 +167,25 @@ test('送るのは許可一覧の要求と initialized だけで、繋いだら 
 
 test('thread/list を待つ間に届いた通知を上書きしない。形の違う文字列では落ちない（#848 のレビュー）', async () => {
   const fake = new FakeDaemon(sockPath())
-  fake.threads = [{ id: 'A', status: { type: 'active', activeFlags: [] } }]
+  fake.threads = [
+    { id: 'A', status: { type: 'active', activeFlags: [] } },
+    { id: 'G', status: { type: 'active', activeFlags: [] } },
+  ]
   await fake.listen()
   const push = fake.push.bind(fake)
   fake.push = (m) => {
     const r = (m as { result?: { data?: unknown[] } }).result
-    if (r?.data?.[0] && typeof r.data[0] === 'object') push({ method: 'thread/status/changed', params: { threadId: 'A', status: { type: 'idle' } } })
+    if (r?.data?.[0] && typeof r.data[0] === 'object') {
+      push({ method: 'thread/status/changed', params: { threadId: 'A', status: { type: 'idle' } } })
+      push({ method: 'thread/status/changed', params: { threadId: 'G', status: { type: 'notLoaded' } } })
+    }
     push(m)
   }
   const c = daemonClient({ socketPath: fake.path })
   c.setEnabled(true)
   await wait(() => c.link() === 'connected')
   assert.equal(c.state('A'), 'idle')
+  assert.equal(c.state('G'), undefined, '分からないになった通知も、古い一覧で戻さない')
   fake.raw(serverFrame(1, 'null'))
   fake.raw(serverFrame(1, '1'))
   fake.raw(serverFrame(1, '[]'))
@@ -237,6 +244,25 @@ test('thread/list が失敗したら failed にして切る（繋がった扱い
   c.setEnabled(true)
   await wait(() => c.link() === 'failed')
   c.stop()
+  await fake.close()
+})
+
+test('unixWebSocket: 受け手が投げても落ちず、次のメッセージを読む（#848 のレビュー）', async () => {
+  const fake = new FakeDaemon(sockPath())
+  await fake.listen()
+  const got: string[] = []
+  const ws = await connectUnixWebSocket(fake.path, {
+    text: (t) => {
+      if (t === 'bad') throw new Error('boom')
+      got.push(t)
+    },
+    close: () => {},
+  })
+  fake.raw(serverFrame(1, 'bad'))
+  fake.raw(serverFrame(1, 'good'))
+  await wait(() => got.length === 1)
+  assert.deepEqual(got, ['good'])
+  ws.close()
   await fake.close()
 })
 

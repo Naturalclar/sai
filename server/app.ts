@@ -247,7 +247,7 @@ import { MCP_SENDS_FILE, McpSendLimiter } from './mcp/sendLimit.ts'
 import { SkillStore } from './local/skills.ts'
 import type { Skill } from '../shared/skills.ts'
 import { claudeProjectsDir, codexSessionsDir, tailLines, UsageStore } from './local/usage.ts'
-import { QUEUE_ROLLOUT_TAIL_BYTES, queuedTextArrived, turnInProgress } from '../shared/codexQueue.ts'
+import { lastTurnClosed, QUEUE_ROLLOUT_TAIL_BYTES, queuedTextArrived, turnInProgress } from '../shared/codexQueue.ts'
 import { ProgressReader, sessionOf } from './local/progress.ts'
 import { agentListFromEnv, backgroundLive, type AgentList, type ClaudeAgent } from './local/claudeAgents.ts'
 import { isRemoteHost } from '../shared/host.ts'
@@ -2492,6 +2492,15 @@ export function createApp(
     return (await progress.read(session)).active ? 'turn' : 'other'
   }
   /**
+   * 開いている Codex のターンが閉じていると rollout から言えるか（#838）。読めなければ false（回っていない・とは言わない）
+   */
+  const codexTurnClosed = async (session: SessionSummary): Promise<boolean> => {
+    const raw = sessionOf(session)
+    const rollout = raw ? await progress.codexRollout?.(raw).catch(() => '') : ''
+    if (!rollout) return false
+    return tailLines(rollout, QUEUE_ROLLOUT_TAIL_BYTES).then(lastTurnClosed).catch(() => false)
+  }
+  /**
    * 端末に打ち込めずに止めた預かり（#800）で、人が「続けて送る」を押したセッション。押した直後の 1 回だけ、端末を使わず別プロセスで回す
    * （人の「端末を使わず送る」と同じ）。端末でターンが回っている・ダイアログ中なら、押しても起こさない。押した分は `drain()` のあとで捨てる
    */
@@ -2753,8 +2762,9 @@ export function createApp(
       } catch (err) {
         if (err instanceof TerminalBusy) {
           // メッセージの道（#838）: 開いている Codex は、打ちかけがあっても queue なら打ちかけを残したまま届く（実測 0.166.0）。
-          // ダイアログ中・画面が読めないときは確かめていないので回さない。人の返信は今までどおり 409 で画面が選ぶ
-          if (err.kind === 'typed' && o.terminalFallback && codexActive) return sendQueue()
+          // 届いたかの追跡はセッションごとに 1 件で、回っているターンの完了の行で消えるので、**ターンが閉じていて追跡中の分も無い 1 通だけ**回す。
+          // 返答を渡す道（noCodexQueue）・ダイアログ中・画面が読めないときは回さない。人の返信は今までどおり 409 で画面が選ぶ
+          if (err.kind === 'typed' && o.terminalFallback && !o.noCodexQueue && codexActive && !typed.running(id) && (await codexTurnClosed(session))) return sendQueue()
           // 画面は code で出し分ける。typed のときだけ「消して送る」の確認を出せる
           // can_process: Claude は exec resume、active Codex は queue へ送り直せる。
           const payload: ReplyError = { error: `端末に打ち込めない: ${err.message}`, code: `terminal_${err.kind}`, can_process: true }
@@ -2932,6 +2942,8 @@ export function createApp(
         queue: false,
         // 別のセッションから預かったメッセージなら、回したターンから先へ送らせない（#311）。端末に打てなければ別プロセスへ（#800）
         ...(head.origin ? { origin: head.origin, terminalFallback: true } : {}),
+        // 返答を渡す「起こす」は queue に回さない（#838。届いた証拠なしに渡した扱いになる）
+        ...([...wakeQueued.values()].some((w) => w.queueId === head.queue_id) ? { noCodexQueue: true } : {}),
       })
       if (out.status === 202) {
         queue.shift(id, head.queue_id)
@@ -3047,6 +3059,8 @@ export function createApp(
           url: first.url ?? '',
           queue: true,
           terminalFallback: true,
+          // 開いている Codex の queue は届いたか分からないので使わない（#838。渡した扱いにすると返答を失う）
+          noCodexQueue: true,
           // メッセージで起こしたターンと同じ扱いにする（このターンからは送らせない。人が止めたら預かりからも取り消される）
           origin: first.message_id,
         })
@@ -3803,8 +3817,10 @@ export function createApp(
   }
   /** 送ったメッセージが失敗した・止まったなら、その理由（まだなら空）。返答があるかは見ない（呼び出し側が先に見る） */
   const agentFailure = (message: AgentMessage): string => {
-    const turn = run.snapshot()[message.to]
-    if (turn?.failed && isDeliveryOf(turn.text, message.message_id)) return message.far ? AGENT_FAR_FAILED : replyFailureText(turn.failed)
+    // queue に渡して届かなかった分（#838。`typed` の失敗）も、送り元に返す
+    for (const turn of [run.snapshot()[message.to], typed.snapshot()[message.to]]) {
+      if (turn?.failed && isDeliveryOf(turn.text, message.message_id)) return message.far ? AGENT_FAR_FAILED : replyFailureText(turn.failed)
+    }
     // 預かりの先頭のまま止まった（前の返信が失敗した・起動できなかった）
     const paused = queue.paused(message.to)
     if (paused && isDeliveryOf(queue.peek(message.to)?.text, message.message_id)) return message.far ? AGENT_FAR_FAILED : paused

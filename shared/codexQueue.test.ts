@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { QUEUE_BUSY_STALE_MS, QUEUED_KEY_CHARS, queuedKey, queuedTextArrived, turnInProgress } from './codexQueue.ts'
+import { lastTurnClosed, QUEUE_BUSY_STALE_MS, QUEUED_KEY_CHARS, queuedKey, queuedTextArrived, turnInProgress } from './codexQueue.ts'
 
 const SINCE = Date.parse('2026-09-22T04:37:17.000Z')
 const line = (timestamp: string, type: string, payload: unknown) => JSON.stringify({ timestamp, type, payload })
@@ -73,3 +73,13 @@ test('turnInProgress: 印が読んだ範囲に無くても、書き込みが続�
   assert.equal(turnInProgress(lines, NOW), true)
   assert.equal(turnInProgress([], NOW), false, '何も読めなければ途中ではない')
 })
+
+test('lastTurnClosed: 最後の印が閉じているときだけ。開いたまま・印が無いなら閉じているとは言わない（#838）', () => {
+  const mark = (type: string) => JSON.stringify({ timestamp: '2026-01-01T00:00:00.000Z', type: 'event_msg', payload: { type } })
+  assert.equal(lastTurnClosed([mark('task_started'), mark('task_complete')]), true)
+  assert.equal(lastTurnClosed([mark('task_started'), mark('turn_aborted')]), true)
+  assert.equal(lastTurnClosed([mark('task_complete'), mark('task_started')]), false, '古くても開いたまま')
+  assert.equal(lastTurnClosed([JSON.stringify({ timestamp: '2026-01-01T00:00:00.000Z', type: 'response_item' })]), false)
+  assert.equal(lastTurnClosed([]), false)
+})
+

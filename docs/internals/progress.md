@@ -81,6 +81,17 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - **途中で書いた文も手順に混ぜる**（#680）。`text` のある `TurnStep`（`tool` は空）で、Claude は `stop_reason` が `end_turn` / `stop_sequence` でない行の文、Codex は `phase: commentary` の文。`total` と `stepCounts()` はツールの呼び出しだけを数え、`TURN_STEPS_MAX` に入り切らなかった数は `more`。
 - 引けない・別のマシン・OpenCode は `found: false`（画面は「記録がありません」）。行（JSONL）には何も足さない。
 
+## 手順の出力と差分（#846）
+
+- `GET /api/sessions/<id>/turn-output?ts=&ref=`（`app.ts` の `getTurnOutput()`）。**手順のボタンを押したときだけ**呼ばれる（`web/src/StepOutput.tsx`）。ターンの引き当ては手順の一覧と同じ `stepTurnAt()` で、`ref` がそのターンの手順の `output_ref` になければ読まない。
+- **中身は `steps` に載せない。** `output_ref` は `claudeStepParser()` / `codexStepParser()` が付ける参照（`tool_use.id` / `call_id`）で、開けるのは `claudeOutputKind()` / `codexOutputKind()` のツールだけ（`Bash`・`BashOutput`・`Edit`・`MultiEdit`・`Write`、`exec` などのコマンドと `apply_patch`）。`sai_progress` は `ProgressStep` を使うので、ここを足しても載らない。
+- 読むのは `ProgressReader.turnOutput()`: 頭から 1 行ずつ読み、`shared/turnOutput.ts` の finder が要らない行を飛ばして、見つけたら止める。**結果は覚えない**（手順のキャッシュとは別）。
+- Claude: `tool_use_id` が `ref` の `tool_result` の行の `toolUseResult`。`stdout` / `stderr`、`structuredPatch`、新しいファイルの `Write` は `content` を全部 `+` に。`toolUseResult` が文字列（失敗）なら `tool_result` の文。`originalFile`（ファイル全体）は読まない。
+- Codex: `exec` 1 回に `item_completed` の `CommandExecution` が 0〜5 個続き、項目の `id` は `call_id` と別物。**呼び出しの行から、自分の戻りのあとの次の呼び出し（か `task_started` / `task_complete`）まで**の `CommandExecution` / `FileChange` を集める。同時に投げた呼び出しは同じ項目が両方に出るが、節の見出しが実際のコマンドなので取り違えない（項目が自分のものとは限らないので、そのときは戻りの文も出す。`apply_patch` は `FileChange` か自分のパッチだけ）。`yield` して `wait` で終わったコマンドは `wait` の手順に出る。ほかの呼び出しが `yield` して戻ったあとに届いた項目は、次の呼び出しの節に混ざることがある（項目に呼び出しの印が無く、見分けられない。見出しのコマンドで分かる）。項目が無ければ呼び出しの戻りの文（`apply_patch` なら呼び出しの本文）。
+- 切り方は `clipOutput()`: 頭 6000 字と末尾 24000 字（結果は末尾に出る）で、切り口はなるべく行の境目。`plainOutput()` が色の制御列を落とす。節は 1 手順で 20 まで。
+- 秘密に見えるパス（`isSecretPath()`）の編集は `withheld` にして中身を返さない。Claude は呼び出しの `file_path` でも見る（失敗した編集は戻りにパスが無く、エラーの文に編集しようとした文字列が入りうる）。コマンドの出力は中身で判定しない（`cat` で出したものは出る）。
+- 出す相手は `refuseDevice()`（返答のファイルと同じ）。断るのはセッションを引く前。
+
 ## 画面
 
 - 処理中のセッションを出している間だけ `web/src/useProgress.ts` が 3 秒おきに取る（一覧のポーリングには乗せない）

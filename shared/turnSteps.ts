@@ -1,10 +1,12 @@
 // 終わったターンで実行したコマンド・ツールを、あとから見る（#605）。
 // Claude の transcript / Codex の rollout をターンに切り、ターンごとに**ツールの呼び出しと、途中で書いた文（#680）**を並べる。
-// 出すのはツール名と「何をしたか」（コマンド・ファイルのパスなど）まで。**ツールの出力は読まない・出さない**。
+// 出すのはツール名と「何をしたか」（コマンド・ファイルのパスなど）まで。**ツールの出力は読まない・出さない**
+// （出力と差分は手順の `output_ref` から、押したときだけ別の口で読む。`shared/turnOutput.ts`。#846）。
 // 最後の返答（Claude は `end_turn` の文、Codex は `phase: commentary` でない文）は行として届いているので入れない。
 // 要約は許可のバブルと同じ作り（`shared/approvals.ts` の `toolSummary()`）。行（JSONL）には載せず、開いたときに派生で読むだけ
 import { toolSummary } from './approvals.ts'
 import { codexToolText, PROGRESS_NOTE_MAX } from './progress.ts'
+import { claudeOutputKind, codexOutputKind } from './turnOutput.ts'
 import type { TurnStep } from './types.ts'
 
 type Obj = Record<string, unknown>
@@ -25,6 +27,9 @@ const clipText = (text: string) => {
   const chars = Array.from(text.trim())
   return chars.length <= PROGRESS_NOTE_MAX ? chars.join('') : `${chars.slice(0, PROGRESS_NOTE_MAX - 1).join('')}…`
 }
+
+/** 出力や差分を開ける手順に付ける参照（#846）。開けないツール・id が無い行には付けない */
+const outputRef = (ref: string, kind: 'output' | 'diff' | null): Pick<TurnStep, 'output_ref' | 'output_kind'> => (ref && kind ? { output_ref: ref, output_kind: kind } : {})
 
 /** 途中で書いた文の手順（#680） */
 const textStep = (text: string, at: string): TurnStep => ({ tool: '', summary: '', at, text: clipText(text) })
@@ -99,7 +104,7 @@ export function claudeStepParser(): StepParser {
       const input = obj(b.input) ?? {}
       const summary = clip(toolSummary(name, input))
       const note = clip(str(input.description))
-      cur.steps.push({ tool: name, summary, at: ts, ...(note && note !== summary ? { note } : {}) })
+      cur.steps.push({ tool: name, summary, at: ts, ...(note && note !== summary ? { note } : {}), ...outputRef(str(b.id), claudeOutputKind(name)) })
     }
   }
   return { push, turns }
@@ -128,7 +133,8 @@ export function codexStepParser(): StepParser {
     if (o.type !== 'response_item' || !cur) return
     if (Number.isFinite(at)) cur.endedAt = at
     if (type === 'custom_tool_call' || type === 'function_call') {
-      cur.steps.push({ tool: str(payload.name), summary: clip(codexToolText(type === 'custom_tool_call' ? payload.input : payload.arguments)), at: ts })
+      const name = str(payload.name)
+      cur.steps.push({ tool: name, summary: clip(codexToolText(type === 'custom_tool_call' ? payload.input : payload.arguments)), at: ts, ...outputRef(str(payload.call_id), codexOutputKind(name)) })
     } else if (type === 'message' && payload.role === 'assistant' && payload.phase === 'commentary') {
       const text = (Array.isArray(payload.content) ? payload.content : []).map((c) => str(obj(c)?.text)).join('\n')
       if (text.trim()) cur.steps.push(textStep(text, ts))

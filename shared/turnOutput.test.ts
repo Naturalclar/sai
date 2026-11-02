@@ -56,6 +56,12 @@ test('秘密に見えるパスの編集は中身を出さない（Claude の差�
     { label: '/w/.env', kind: 'diff', text: '', withheld: true },
     { label: '/w/a.ts', kind: 'diff', text: '@@ -1 +1 @@\n-a\n+b' },
   ])
+  const moved = [item('custom_tool_call', 'c1', 'exec'), done({ type: 'FileChange', changes: { '/w/a.txt': { type: 'update', unified_diff: '@@ -1 +1 @@\n+KEY=作り物', move_path: '/w/.env' } } })]
+  assert.deepEqual(run(codexOutputFinder('c1'), moved).sections, [{ label: '/w/a.txt', kind: 'diff', text: '', withheld: true }], '移動の先も見る')
+  for (const body of ['  *** Update File: .env\n+KEY=作り物', '*** Update File: a.txt\n*** Move to: .env\n+KEY=作り物']) {
+    const secretPatch = run(codexOutputFinder('c1'), [item('custom_tool_call', 'c1', 'apply_patch', { input: body })]).sections
+    assert.deepEqual(secretPatch, [{ label: 'パッチ', kind: 'diff', text: '', withheld: true }], body)
+  }
   const patch = '*** Begin Patch\n*** Add File: config/.env\n+KEY=作り物\n*** End Patch'
   assert.deepEqual(run(codexOutputFinder('c1'), [item('custom_tool_call', 'c1', 'apply_patch', { input: patch })]).sections, [{ label: 'パッチ', kind: 'diff', text: '', withheld: true }])
 })

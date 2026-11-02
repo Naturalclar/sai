@@ -186,6 +186,8 @@ function codexChanges(changes: unknown): TurnOutputSection[] {
     const change = obj(raw)
     const diff = str(change?.unified_diff)
     const content = str(change?.content)
+    // 移動の先が秘密に見えるパスなら、元の名前が普通でも中身は出さない
+    if (isSecretPath(str(change?.move_path))) return { label: path, kind: 'diff', text: '', withheld: true }
     return diffSection(path, diff || (content ? prefixed(change?.type === 'delete' ? '-' : '+', content) : ''))
   })
 }
@@ -198,7 +200,7 @@ function codexPatch(payload: Obj): string {
 
 /** パッチの本文に秘密に見えるパスの編集があるか */
 function patchTouchesSecret(patch: string): boolean {
-  return [...patch.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm), ...patch.matchAll(/^\*\*\* Move to: (.+)$/gm)].some((m) => isSecretPath(str(m[1]).trim()))
+  return [...patch.matchAll(/^\s*\*\*\* (?:(?:Add|Update|Delete) File|Move to): (.+)$/gm)].some((m) => isSecretPath(str(m[1]).trim()))
 }
 
 /**

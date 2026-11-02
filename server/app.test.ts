@@ -2876,6 +2876,10 @@ test('端末の Codex のダイアログに画面から答える（#450。同一
     const stale = await postJson('/api/approvals/codex-dialog-e2e/answer', { behavior: 'allow', decision: 'opt-1' })
     assert.equal(stale.status, 409)
     assert.match(await stale.text(), /画面が変わりました/)
+    // 数えるための 1 行は答えられたときだけで、中身は書かない（#845）
+    const answers = (await readFile(join(feedDir, 'reply.log'), 'utf-8')).split('\n').filter((l) => l.includes('端末のダイアログに答えた'))
+    assert.equal(answers.length, 1)
+    assert.match(answers[0]!, /^--- \S+ S1@repo-a 端末のダイアログに答えた$/)
   } finally {
     codexDialogs.fail = null
     codexDialogs.active = {}

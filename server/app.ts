@@ -267,7 +267,7 @@ import { searchRows } from './rows/search.ts'
 import { searchWords } from '../shared/search.ts'
 import { olderPrompts, parseRecent, recentRows } from '../shared/recentRows.ts'
 import { codexTurnErrorReason, queuedTurnError } from '../shared/codexTurnError.ts'
-import { alive, inspectPrompt, isDescendant, parsePs, RealTmux, realPs, TerminalBusy, TerminalGone, TerminalReplies, typeInto } from './reply/terminal.ts'
+import { alive, inspectPrompt, isDescendant, parsePs, RealTmux, realPs, TERMINAL_DIALOG_LOG, TERMINAL_TYPED_LOG, TerminalBusy, TerminalGone, TerminalReplies, typeInto } from './reply/terminal.ts'
 import type { DeliveryAnswer, DeliveryQuery, PsFn, Tmux } from './reply/terminal.ts'
 import type { Runner } from './reply/runner.ts'
 import { Authenticator, isLoopbackHostHeader, isServeHostHeader, tailscaleWhois } from './auth.ts'
@@ -2780,6 +2780,8 @@ export function createApp(
           // 消した打ちかけは戻せないので、手がかりとして reply.log に残す
           await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} 端末の打ちかけを消して打ち込んだ: ${JSON.stringify(cleared)}\n`).catch(() => {})
         }
+        // 端末の経路がどれだけ使われているかを数えるための 1 行（#845。本文は書かない）
+        await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} ${TERMINAL_TYPED_LOG}\n`).catch(() => {})
         typed.start(id, text)
         const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd, via: 'terminal' }
         return { status: 202, body: payload }
@@ -4406,6 +4408,8 @@ export function createApp(
       const result = await codexDialogs.answer!(approvalId, { behavior: b.behavior, ...(typeof b.decision === 'string' ? { decision: b.decision } : {}) })
       if (!result.ok) return error(res, result.status, result.error)
       await logCodexKept(dialogShown, 'terminal', result.kept, b.behavior)
+      // 端末の経路がどれだけ使われているかを数えるための 1 行（#845。中身は書かない）
+      await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${dialogShown?.id ?? approvalId} ${TERMINAL_DIALOG_LOG}\n`).catch(() => {})
       noteAnswered(approvalId, b.behavior, typeof b.decision === 'string' ? b.decision : undefined)
       return json(res, { ok: true, approval_id: approvalId, behavior: b.behavior })
     }

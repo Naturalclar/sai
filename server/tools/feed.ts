@@ -3,6 +3,7 @@
 //   pnpm feed rows <セッション>      あるセッションの最近の行（時刻・種類・入力と返答の頭）
 //   pnpm feed messages               送ったメッセージと、返答が届いたか
 //   pnpm feed usage                  セッション別・日別の使用量（費用は前の行との差）。末尾に、読み直しの大きいターンの割合（#761）
+//   pnpm feed paths                  週ごとの、ペインの中 / 外のターンと届け方の数（#845）
 //
 // 出力は既定で数行の表に絞る（結果は呼んだ側の文脈に残り続けるので）。全部出すのは `--all` を付けたときだけ。
 // 置き場は `AGENT_FEED_DIR`（無ければ `~/.agent-feed`）。
@@ -34,12 +35,15 @@ import {
   usageTotals,
 } from './feedRead.ts'
 import type { DateRange, PromptKind, ReplyState, UsageRow, UsageTotal } from './feedRead.ts'
+import { pathsRange, readDeliveries, weeklyPaths } from './feedPaths.ts'
+import type { WeekPaths } from './feedPaths.ts'
 
-export const USAGE = `usage: pnpm feed <rows|messages|usage> [options]   （~/.agent-feed を読むだけ。置き場は AGENT_FEED_DIR）
+export const USAGE = `usage: pnpm feed <rows|messages|usage|paths> [options]   （~/.agent-feed を読むだけ。置き場は AGENT_FEED_DIR）
 
   rows <セッション>   あるセッションの最近の行。セッションは ID・表示名・worktree 名・ID の頭
   messages            送ったメッセージと返答が届いたか（--session で送り元・宛先を絞る）
   usage               使用量。費用は前の行との差（--by session|day）
+  paths               週ごとの、ペインの中 / 外のターンと届け方の数（数だけ。既定は今週を含む 4 週）
 
   -n <数>             出す行数（既定 10）        --all        全部出す
   --days <数>         読む日数（既定 7）         --from / --to  YYYY-MM-DD（Asia/Tokyo）
@@ -146,9 +150,10 @@ const ALLOWED: Record<string, readonly string[]> = {
   rows: ['n', 'all', 'json', 'full', 'days', 'from', 'to'],
   messages: ['n', 'all', 'json', 'full', 'days', 'from', 'to', 'session'],
   usage: ['n', 'all', 'json', 'days', 'from', 'to', 'by'],
+  paths: ['json', 'days', 'from', 'to'],
 }
 /** 位置引数の数（コマンドの後ろ） */
-const POSITIONALS: Record<string, number> = { rows: 1, messages: 0, usage: 0 }
+const POSITIONALS: Record<string, number> = { rows: 1, messages: 0, usage: 0, paths: 0 }
 
 function parse(argv: readonly string[], now: Date): { command: string; positionals: string[]; options: Options } | { error: string } {
   let parsed
@@ -358,6 +363,31 @@ async function usageCommand(o: Options, io: Io): Promise<number> {
   return 0
 }
 
+/** ペインの中の割合。ターンが無ければ `-`（線に近い値を比べるので小数 1 桁） */
+const paneShare = (t: { in_pane: number; outside: number }): string => (t.in_pane + t.outside > 0 ? `${((t.in_pane / (t.in_pane + t.outside)) * 100).toFixed(1)}%` : '-')
+
+const weekLabel = (w: WeekPaths): string => `${w.week}${w.partial ? '*' : ''}`
+
+async function pathsCommand(o: Options, io: Io): Promise<number> {
+  const range = o.ranged ? o.range : pathsRange(io.now)
+  const weeks = weeklyPaths({ rows: await readRows(io.dir, range), deliveries: await readDeliveries(io.dir), range })
+  if (o.json) {
+    io.out(JSON.stringify({ range, weeks }))
+    return 0
+  }
+  io.out(`ターン完了 ${rangeNote(range)}・週は月曜始まり（Asia/Tokyo）・* は週の途中まで`)
+  const turns = weeks.flatMap((w) => [...w.turns.map((t) => [weekLabel(w), t.agent, String(t.in_pane), String(t.outside), paneShare(t)]), [weekLabel(w), '合計', String(w.in_pane), String(w.outside), paneShare(w)]])
+  for (const line of table(['週', 'エージェント', 'ペインの中', 'ペインの外', '中の割合'], turns)) io.out(line)
+  io.out('')
+  io.out('届け方は SAI が送った数。? は記録が無い週（端末の打ち込みとダイアログは reply.log に書き始めた次の週から数える）')
+  const paths = weeks.map((w) => {
+    const d = w.deliveries
+    return [weekLabel(w), d.terminal === null ? '?' : String(d.terminal), String(d.process), String(d.app_server), String(d.queue), String(d.parked), w.dialogs === null ? '?' : String(w.dialogs)]
+  })
+  for (const line of table(['週', '端末', '-p / exec', 'app-server', 'queue', '打ち込めず預かった', 'ダイアログに答えた'], paths)) io.out(line)
+  return 0
+}
+
 /** コマンドを 1 回実行する。返すのは終了コード（0 成功・1 決まらなかった・2 使い方の誤り） */
 export async function run(argv: readonly string[], io: Io): Promise<number> {
   const parsed = parse(argv, io.now)
@@ -369,6 +399,7 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
   const { command, positionals, options } = parsed
   if (command === 'rows') return rowsCommand(positionals, options, io)
   if (command === 'messages') return messagesCommand(options, io)
+  if (command === 'paths') return pathsCommand(options, io)
   return usageCommand(options, io)
 }
 

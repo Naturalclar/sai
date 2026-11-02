@@ -2582,31 +2582,35 @@ export function createApp(
     const bgLive = bg && backgroundLive(bg) ? bg : null
     // 止められない理由（無ければ止めてから `-p` で続ける）
     const bgHold = bgLive ? await backgroundHold(bgLive, session) : ''
+    // 要約できる Codex か（#837）。lsof・ps を待つことがあるので、`busy` を見る前に済ませる（見たあとに待つと、同時に来た 2 通目が預かりに回らない）
+    const codexCompact = Boolean(o.compact) && (await codexCompactable(session, raw))
     // 別プロセス（-p / app-server）のターンが動いているか、いま起動している最中か
     const busy = run.running(id) || codexApp.running(id) || opencodeApp.running(id) || launching.has(id) || bgHold !== ''
     // **要約してから送る**（#579）。本文を預かりの先頭に置いてから `/compact` のターンを起こす。要約のプロセスが終わると
     // `drain()` が本文を回し、要約が失敗すれば預かりは止まる（新しい順番の仕組みは作らない）。
-    // 効くのは Claude で、端末で開いておらず（TUI に打ち込む経路では要約中の入力の扱いを確かめていない）、処理中でも
-    // 預かりが残ってもいないときだけ。当たらなければ付いていないのと同じ（下の今までの経路）
+    // 効くのは Claude と SAI の app-server で話す Codex（#837）で、端末で開いておらず（TUI に打ち込む経路では要約中の入力の扱いを
+    // 確かめていない）、処理中でも預かりが残ってもいないときだけ。当たらなければ付いていないのと同じ（下の今までの経路）
     // 端末に打ち込んだ返信がまだ回っているのにペインが見つからないときも回さない（下の経路が 409 にするのと同じ。#590 のレビュー）
-    if (o.compact && session.agent === 'claude' && !openTerminal && !busy && !typed.running(id) && !bgLive && queue.size(id) === 0) {
+    if (o.compact && !openTerminal && !busy && !typed.running(id) && queue.size(id) === 0 && (session.agent === 'claude' ? !bgLive : codexCompact)) {
       const log = join(store.directory, 'reply.log')
       launching.add(id)
       try {
         const item = queue.add(id, text, attachments, o.url, new Date(), o.origin ?? '')
         if (!item) return refuse(409, `預かれるのは ${QUEUE_MAX} 件までです`)
-        await appendFile(log, `--- ${new Date().toISOString()} ${id} 要約（/compact）してから送る。本文は預かりの先頭に置いた\n`).catch(() => {})
-        const out = await startTurn(
-          id,
-          session,
-          raw,
-          cwd,
-          null,
-          compactPrompt(o.compactFrom ?? text),
-          [],
-          { ...o, forceProcess: true, compact: true },
-          { text, attachments, queued: item.queue_id },
-        )
+        await appendFile(log, `--- ${new Date().toISOString()} ${id} 要約（${session.agent === 'codex' ? 'thread/compact/start' : '/compact'}）してから送る。本文は預かりの先頭に置いた\n`).catch(() => {})
+        const out = session.agent === 'codex'
+          ? await startCodexCompact(id, raw, cwd)
+          : await startTurn(
+              id,
+              session,
+              raw,
+              cwd,
+              null,
+              compactPrompt(o.compactFrom ?? text),
+              [],
+              { ...o, forceProcess: true, compact: true },
+              { text, attachments, queued: item.queue_id },
+            )
         if (out.status !== 202) {
           // 要約を起こせなければ本文も預からない（画面が入力欄に戻す）
           queue.remove(id, item.queue_id)
@@ -2620,7 +2624,10 @@ export function createApp(
       }
     }
     if (o.compact) {
-      await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} 要約してから送るは当たらない（端末で開いている・処理中・預かりがある・Claude でない）。そのまま送る\n`).catch(() => {})
+      // ここで待たない（`busy` を見たあとなので、待つと同時に来た 2 通目が二重に起動する）
+      void appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} 要約してから送るは当たらない（端末で開いている・ほかが開いている・処理中・預かりがある・要約できるエージェントでない）。そのまま送る\n`).catch(() => {})
+      // 要約しないので、本文のターンに「要約だけのターン」の印を付けない（付けると画面が「要約中」と出して本文を隠す）
+      o = { ...o, compact: false }
     }
     // 処理中なら預かる（#305）。処理中でなくても預かりが残っていれば後ろに並べる（先に預けたものを追い越さない）
     if (o.queue && (busy || queue.size(id) > 0)) {
@@ -2690,6 +2697,23 @@ export function createApp(
     } finally {
       launching.delete(id)
     }
+  }
+
+  /** Codex のスレッドを SAI の app-server で要約できるか（#837）。**別のプロセスが書いているスレッドには投げない**（`codexHeldElsewhere()`） */
+  const codexCompactable = async (session: SessionSummary, raw: string): Promise<boolean> =>
+    session.agent === 'codex' && codexAppEnabled && Boolean(codexApp.compact) && !(await codexHeldElsewhere(session, raw))
+
+  /** 要約だけのターンを app-server で始める（#837）。終わると `onTurnEnd` → `drain()` が預かった本文を回す。始められなければ断る（呼ぶ側が本文を預かりから外す） */
+  const startCodexCompact = async (id: string, raw: string, cwd: string): Promise<Launched> => {
+    const model = (await metaStore.get(id))?.model
+    try {
+      await codexApp.compact?.({ id, threadId: raw, cwd, model })
+    } catch (err) {
+      const message = `Codex app-serverで要約を始められませんでした: ${err instanceof Error ? err.message : String(err)}`
+      await appendFile(join(store.directory, 'reply.log'), `${message}\n`).catch(() => {})
+      return refuse(500, message)
+    }
+    return { status: 202, body: { accepted: true, id, agent: 'codex', session: raw, cwd, via: 'compact' } }
   }
 
   /** launch() の続き。端末 → 開いている Codex の queue → app-server → 別プロセス、の順に経路を選んで起動する */

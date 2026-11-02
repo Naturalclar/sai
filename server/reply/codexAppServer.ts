@@ -53,6 +53,14 @@ export interface CodexReviewInput {
   base?: string
 }
 
+/** 要約だけのターン（#837）。`thread/compact/start` は指示を受けないので、本文も指示も無い */
+export interface CodexCompactInput {
+  id: string
+  threadId: string
+  cwd: string
+  model?: string
+}
+
 export type CodexAnswerResult =
   /** `kept` は、押したのが規則の追加（今後も聞かない・今後も断る）だったときの、ボタンに書いていた範囲（#772） */
   | { ok: true; kept?: CodexKept }
@@ -138,6 +146,14 @@ export interface CodexApp {
    * `rateLimitsSeen()` と同じものを返す。偽物は持たなくてよい
    */
   readRateLimits?(): Promise<CodexUsage | null>
+  /**
+   * 要約だけのターンを回す（#837。`thread/compact/start`）。普通のターンと同じく `thread/resume` してから投げ、
+   * 終わりは `onTurnEnd`。失敗・時間切れは `replying()` の `failed` に載るので、預かりは `drain()` が止める。
+   * **回っているターンの途中に投げない**（投げると app-server がそのターンを `interrupted` で切る。実測 0.166.0）。
+   * 別のプロセスが書いているスレッドにも投げない（どちらも呼ぶ側の `launch()` が見る）。
+   * 偽物は持たなくてよい（持たなければ Codex は要約せずに今までどおり送る）
+   */
+  compact?(input: CodexCompactInput): Promise<void>
 }
 
 /**
@@ -152,6 +168,10 @@ interface ManagedTurn {
   turnId?: string
   since: string
   text: string
+  /** 要約だけのターン（#837）。画面は「要約中」と出し、終わりは `turn/completed` だけで決める */
+  compact?: true
+  /** 要約の時間切れのタイマー */
+  timer?: ReturnType<typeof setTimeout>
 }
 
 interface Decision {
@@ -182,6 +202,8 @@ interface WaitingRpc {
 }
 
 const REQUEST_TIMEOUT_MS = 30_000
+/** 要約だけのターンを待つ上限（#837）。過ぎたら止めて失敗にする（預かった本文は回さない）。大きいスレッドでも数分で終わる見込みの、十分長い値 */
+export const CODEX_COMPACT_TIMEOUT_MS = 10 * 60_000
 /** 使用率を聞く待ちの上限（#832）。人がパネルで押して待つので、ほかの要求より短く切る */
 export const RATE_LIMITS_TIMEOUT_MS = 5_000
 /** スキルの一覧を覚えておく長さ。`/` を打つたびに app-server へ聞きに行かないため（増減は次に打った時に拾う） */
@@ -297,10 +319,12 @@ export class CodexAppServer implements CodexApp {
   private limits: CodexUsage | null = null
   private readonly connect: CodexConnector
   private readonly now: () => number
+  private readonly compactTimeoutMs: number
 
-  constructor(connect: CodexConnector = realCodexConnector(), now: () => number = Date.now) {
+  constructor(connect: CodexConnector = realCodexConnector(), now: () => number = Date.now, compactTimeoutMs = CODEX_COMPACT_TIMEOUT_MS) {
     this.connect = connect
     this.now = now
+    this.compactTimeoutMs = compactTimeoutMs
   }
 
   running(id: string): boolean {
@@ -378,7 +402,7 @@ export class CodexAppServer implements CodexApp {
     return {
       ...failed,
       ...Object.fromEntries(
-        [...this.turns.values()].map((turn) => [turn.entity, { since: turn.since, text: turn.text, ...(turn.turnId ? { interruptible: true as const } : {}) }]),
+        [...this.turns.values()].map((turn) => [turn.entity, { since: turn.since, text: turn.text, ...(turn.turnId ? { interruptible: true as const } : {}), ...(turn.compact ? { compact: true as const } : {}) }]),
       ),
     }
   }
@@ -435,7 +459,8 @@ export class CodexAppServer implements CodexApp {
   async steer(id: string, text: string, attachments: readonly string[] = []): Promise<boolean> {
     const threadId = this.entityThreads.get(id)
     const turn = threadId ? this.turns.get(threadId) : undefined
-    if (!threadId || !turn?.turnId) return false
+    // 要約のターンには足せない（`ActiveTurnNotSteerable`。実測 0.166.0）。預かりに落ちて、本文のあとに回る
+    if (!threadId || !turn?.turnId || turn.compact) return false
     const message: JsonObject = { type: 'text', text, text_elements: [] }
     const images = attachments.map((path) => ({ type: 'localImage', path }))
     try {
@@ -486,6 +511,18 @@ export class CodexAppServer implements CodexApp {
       await this.request('review/start', { threadId: input.threadId, target }))
   }
 
+  /**
+   * 要約だけのターンを回す（#837）。動きは 0.166.0 の実測で、docs/internals/codex.md に書いた:
+   * - `thread/compact/start` の応答は `{}` ですぐ返り、turn id は `turn/started` で届く
+   * - 終わりは `turn/completed`。**`thread/compacted` は届かない**（`ContextCompactedNotification` は非推奨）ので待たない
+   */
+  async compact(input: CodexCompactInput): Promise<void> {
+    await this.begin(input.id, input.threadId, input.cwd, input.model, '/compact', async () => {
+      await this.request('thread/compact/start', { threadId: input.threadId })
+      return null
+    }, true)
+  }
+
   /** ターンを 1 本始める（返信もレビューも同じ）。thread/resume してから `send` を投げ、turn id を覚える */
   private async begin(
     entity: string,
@@ -494,6 +531,7 @@ export class CodexAppServer implements CodexApp {
     model: string | undefined,
     text: string,
     send: () => Promise<unknown>,
+    compact = false,
   ): Promise<void> {
     if (this.running(entity)) throw new Error('このセッションはまだ前の返信を処理中です')
     const occupied = this.turns.get(threadId)
@@ -503,6 +541,7 @@ export class CodexAppServer implements CodexApp {
       threadId,
       since: new Date(this.now()).toISOString(),
       text,
+      ...(compact ? { compact: true as const } : {}),
     }
     this.turns.set(threadId, turn)
     this.entityThreads.set(entity, threadId)
@@ -520,13 +559,38 @@ export class CodexAppServer implements CodexApp {
       }
       // ここから app-server が writer lock を開いている（ターンが終わっても閉じない。#329）
       this.loaded.add(threadId)
-      const started = object(object(await send())?.turn)
+      const sent = await send()
+      if (compact) {
+        // 応答を待つ間に終わっていれば（通知が先に届いた）、もう片付いている
+        if (this.turns.get(threadId) === turn) {
+          turn.timer = setTimeout(() => this.compactTimedOut(turn), this.compactTimeoutMs)
+          turn.timer.unref?.()
+        }
+        return
+      }
+      const started = object(object(sent)?.turn)
       if (typeof started?.id !== 'string' || !started.id) throw new Error('Codex app-serverの応答にturn idがありません')
       turn.turnId = started.id
     } catch (error) {
       this.clearThread(threadId)
       throw error
     }
+  }
+
+  /** 要約のターンが終わらなかった。失敗として残す（預かりは `drain()` が止める）。投げた `turn/interrupt` の結果は待たない */
+  private compactTimedOut(turn: ManagedTurn): void {
+    if (this.turns.get(turn.threadId) !== turn) return
+    this.compactFailed(turn, `${Math.round(this.compactTimeoutMs / 60_000)} 分待っても終わりませんでした`)
+    if (turn.turnId) void this.request('turn/interrupt', { threadId: turn.threadId, turnId: turn.turnId }).catch(() => {})
+    this.clearThread(turn.threadId)
+  }
+
+  /**
+   * 要約の失敗を残す。本文はまだ届いていないので `turn_error` は付けない（付けると画面が「返信は届きましたが」と出す）。
+   * 本文は預かりに残っているので `text` は空（入力欄に戻すものが無い）
+   */
+  private compactFailed(turn: ManagedTurn, reason: string): void {
+    this.failures.set(turn.entity, { replying: { since: turn.since, text: '', failed: { tail: `要約できませんでした: ${reason}` } }, at: this.now() })
   }
 
   answer(approvalId: string, answer: ApprovalAnswer): CodexAnswerResult {
@@ -768,20 +832,31 @@ export class CodexAppServer implements CodexApp {
       // エラーで終わったターン（`status: "failed"`。上限に当たった・モデルが無い など）は、行が残らないので失敗として残す（#475）
       const done = object(params.turn)
       const turn = this.turns.get(threadId)
-      if (turn && done?.status === 'failed') {
+      // 要約を投げる前のターンの終わりで、要約を片付けない（`turn/started` が必ず先に届く。届かなければ時間切れで失敗になる）
+      if (turn?.compact && done?.id !== turn.turnId) return
+      if (turn?.compact && done?.status !== 'completed') {
+        this.compactFailed(turn, codexTurnErrorReason(codexErrorText(done?.error) || `ターンが ${String(done?.status)} で終わりました`))
+      } else if (turn && done?.status === 'failed') {
         const message = codexErrorText(done.error) || 'エラーの中身は返ってきませんでした'
         this.failures.set(turn.entity, { replying: { since: turn.since, text: turn.text, failed: { tail: codexTurnErrorReason(message), turn_error: true } }, at: this.now() })
       }
     }
     if (method === 'turn/completed' || method === 'thread/closed') {
       // 閉じたスレッドは app-server がもう lock を持っていない
-      if (method === 'thread/closed') this.loaded.delete(threadId)
+      if (method === 'thread/closed') {
+        this.loaded.delete(threadId)
+        const turn = this.turns.get(threadId)
+        if (turn?.compact) this.compactFailed(turn, 'スレッドが閉じました')
+      }
       this.clearThread(threadId)
       return
     }
     if (method === 'thread/status/changed') {
       const status = object(params.status)
       const turn = this.turns.get(threadId)
+      // 要約のターンは `turn/completed` だけで終わりを決める。`idle` も `systemError` もその直前に届くので、
+      // ここで片付けると、成功の前に本文を回し（`turn/start` は要約中なら断られる）、失敗の中身も落とす（実測 0.166.0）
+      if (turn?.compact) return
       // thread/resume直後にもidleが届くことがある。turn/start前（turnIdなし）はまだ片付けない。
       if (turn?.turnId && (status?.type === 'idle' || status?.type === 'notLoaded' || status?.type === 'systemError')) this.clearThread(threadId)
     }
@@ -798,6 +873,11 @@ export class CodexAppServer implements CodexApp {
     this.pending.clear()
     // 切断で終わったターンも「終わった」として知らせる（片付けてから。知らせた先が running() を見るので）
     const ended = [...this.turns.values()].map((turn) => turn.entity)
+    // 要約が済んだか分からないので、預かった本文を回させない
+    for (const turn of this.turns.values()) {
+      if (turn.timer) clearTimeout(turn.timer)
+      if (turn.compact) this.compactFailed(turn, 'Codex app-server との接続が切れました')
+    }
     this.turns.clear()
     this.entityThreads.clear()
     // app-server ごと終わったので、どのスレッドも持っていない（lock のファイルは残ることがある。#329）
@@ -811,6 +891,7 @@ export class CodexAppServer implements CodexApp {
 
   private clearThread(threadId: string): void {
     const turn = this.turns.get(threadId)
+    if (turn?.timer) clearTimeout(turn.timer)
     if (turn) this.entityThreads.delete(turn.entity)
     this.turns.delete(threadId)
     for (const [approvalId, entry] of this.approvals) if (entry.threadId === threadId) this.approvals.delete(approvalId)

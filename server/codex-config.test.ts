@@ -7,7 +7,7 @@ import type { Server } from 'node:http'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { CODEX_CONFIG_PAUSED } from '../shared/agentMessages.ts'
+import { CODEX_CONFIG_DISMISSED, CODEX_CONFIG_PAUSED } from '../shared/agentMessages.ts'
 import type { CodexConfigAsk, ReplyResponse, SessionDiffResponse, SessionDiffSummaryResponse, SessionsResponse } from '../shared/types.ts'
 import { createApp } from './app.ts'
 import { Approvals } from './approvals/approvals.ts'
@@ -193,6 +193,7 @@ test('止まっている間に送った返信は後ろに並び、確かめを�
   const res = await post(session('C1@r', 'reply?days=30'), { text: '2 通目' })
   assert.equal(((await res.json()) as ReplyResponse).stuck, true)
   assert.deepEqual(calls, [])
+  assert.deepEqual((await list()).queued['C1@r']?.items.map((q) => q.text), ['1 通目', '2 通目'], '先に預けたものを追い越さない')
   await clear('C1@r')
 })
 
@@ -260,6 +261,36 @@ test('再起動: 行はメモリだけだが、止めた預かりをもう一度
   await clear('C1@r')
 })
 
+test('再起動: 片付けた預かりは、確かめが通るようになっていても回さない', async () => {
+  ask = ASK
+  await post(session('C1@r', 'reply?days=30'), { text: 'こんにちは' })
+  await post(session('C1@r', 'codex-config/dismiss'), {})
+  assert.equal((await list()).queued['C1@r']?.paused, CODEX_CONFIG_DISMISSED)
+  ask = null
+  const app = createApp(
+    new FeedStore(dir),
+    join(dir, 'dist'),
+    { running: () => false, snapshot: () => ({}), async start() {} },
+    new Approvals(),
+    new BuildFreshness(join(dir, 'dist'), [], 0),
+    undefined,
+    new Authenticator(async () => null),
+    { tmux: { run: async () => '' }, ps: async () => '', alive: () => false, codexAppServer: async () => false, codexWriterActive: async () => false, codexApp, codexConfig: gate },
+    undefined,
+    git,
+  )
+  const other = createServer((req, res) => void app(req, res))
+  await new Promise<void>((resolve) => other.listen(0, '127.0.0.1', resolve))
+  const addr = other.address()
+  try {
+    await fetch(`http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}/api/sessions?days=30`)
+    assert.deepEqual(calls, [])
+  } finally {
+    await new Promise<void>((resolve) => other.close(() => resolve()))
+  }
+  await clear('C1@r')
+})
+
 test('片付けても起こさない。止まっていないセッションへの答えは 404', async () => {
   ask = ASK
   await post(session('C1@r', 'reply?days=30'), { text: 'こんにちは' })
@@ -283,13 +314,28 @@ test('新しいセッション・分岐・レビュー: 断って、要対応に
   assert.deepEqual(calls, ['startThread', 'start:N1'])
 })
 
-test('要約してから送る: 要約も起こさず、本文は入力欄に戻す', async () => {
+test('要約してから送る: 要約も起こさず本文は預かる。押すと要約なしで回る', async () => {
   ask = ASK
   const res = await post(session('C1@r', 'reply?days=30'), { text: 'こんにちは', compact: true })
-  assert.equal(res.status, 409)
+  assert.equal(((await res.json()) as ReplyResponse).stuck, true)
   assert.deepEqual(calls, [])
-  assert.equal((await list()).queued['C1@r'], undefined)
-  await clear('C1@r')
+  assert.equal((await list()).queued['C1@r']?.paused, CODEX_CONFIG_PAUSED)
+  await post(session('C1@r', 'codex-config/allow'), { fingerprint: 'fp1' })
+  assert.deepEqual(calls, ['start:C1'])
+})
+
+test('レビュー: 端末で開いているセッションは今までの断りのままで、確かめの行を出さない', async () => {
+  ask = ASK
+  assert.equal((await post(session('T1@r', 'review?days=30'), { target: 'uncommittedChanges' })).status, 400)
+  assert.equal((await list()).codex_config_holds?.['T1@r'], undefined)
+})
+
+test('預かりを取り消したら、確かめの行も消える', async () => {
+  ask = ASK
+  await post(session('C1@r', 'reply?days=30'), { text: 'こんにちは' })
+  const held = (await list()).queued['C1@r']!.items[0]!
+  await fetch(`${base}${session('C1@r', `queue/${held.queue_id}`)}`, { method: 'DELETE', headers: { Origin: base } })
+  assert.equal((await list()).codex_config_holds?.['C1@r'], undefined)
 })
 
 test('SAI_CODEX_APP_SERVER=0（exec resume）の道でも、別プロセスを起こさない', async () => {

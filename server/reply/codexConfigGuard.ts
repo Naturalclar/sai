@@ -137,7 +137,6 @@ export class CodexConfigGuard implements CodexConfigGate {
   private readonly file: string
   private readonly now: () => number
   private readonly waitMs: number
-  private allowed: Record<string, string> | null = null
   /** 覚えられないものに押した 1 回（`cwd\n指紋` → 期限）。プロセスの中だけで、使ったら消える */
   private readonly once = new Map<string, number>()
 
@@ -149,7 +148,6 @@ export class CodexConfigGuard implements CodexConfigGate {
   }
 
   private async load(): Promise<Record<string, string>> {
-    if (this.allowed) return this.allowed
     let parsed: unknown = null
     try {
       parsed = JSON.parse(await readFile(this.file, 'utf8'))
@@ -160,7 +158,6 @@ export class CodexConfigGuard implements CodexConfigGate {
     if (parsed && typeof parsed === 'object') {
       for (const [dir, hash] of Object.entries(parsed)) if (typeof hash === 'string' && hash) out[dir] = hash
     }
-    this.allowed = out
     return out
   }
 

@@ -230,8 +230,10 @@ import {
   replyOf,
   resolveTarget,
   targetRefusal,
+  CODEX_CONFIG_DISMISSED,
   CODEX_CONFIG_PAUSED,
   CODEX_CONFIG_REFUSED,
+  codexConfigPaused,
   TERMINAL_HELD_PAUSED,
   sessionLabel,
   tokensLabel,
@@ -2147,8 +2149,6 @@ export function createApp(
     } catch {
       return error(res, 400, `cwd が見つかりません: ${cwd || '(空)'}`)
     }
-    const stopped = await codexConfigStop(id, cwd)
-    if (stopped) return error(res, 409, stopped)
     // レビューも 1 本のターンなので、返信と同じ歯止めに乗せる。**預かりには回さない**
     // （預かり（#305）が持てるのは本文だけで、レビューの対象を持ち越せない。押し直せばよい）
     if (run.running(id) || codexApp.running(id) || opencodeApp.running(id) || launching.has(id) || queue.size(id) > 0) {
@@ -2160,6 +2160,8 @@ export function createApp(
     // 端末のペインは先に見る（0.154.0 の TUI は lock を開かないので、lock だけでは取りこぼす。#417）
     if (await terminalOf(session)) return error(res, 400, '端末で開いているセッションにはレビューを頼めません（端末の方で頼んでください）')
     if (await codexHeldElsewhere(session, raw)) return error(res, 400, 'ほかのところ（端末・ほかのアプリ）で開いているセッションにはレビューを頼めません')
+    const stopped = await codexConfigStop(id, cwd)
+    if (stopped) return error(res, 409, stopped)
     // 比べる相手は差分ビューアと同じ選び方（#289）。見つからないブランチを渡すとターンを 1 本無駄にする
     let base = ''
     if (target === 'baseBranch') {
@@ -2606,11 +2608,14 @@ export function createApp(
   /** Codex を起こす前の確かめで止めた返信・メッセージを預かって止める（#856）。人が「このまま起こす」を押すと回る */
   const codexConfigHeld = async (id: string, session: SessionSummary, raw: string, cwd: string, text: string, attachments: string[], o: LaunchOptions): Promise<Launched> => {
     // 預かりを回している途中なら、本文はもう先頭にある（`o.queue` は見ない。処理中でなければ預からない返信も、ここでは落とさず預かる）
+    codexConfigQueued.add(id)
     if (draining.has(id)) {
       queue.pause(id, CODEX_CONFIG_PAUSED)
       return { ...refuse(409, CODEX_CONFIG_PAUSED), retry: true }
     }
-    const item = queue.addFirst(id, text, attachments, o.url, new Date(), o.origin ?? '')
+    // 確かめで止まっている預かりがあれば、その後ろに並べる（先に預けたものを追い越さない）
+    const behind = codexConfigPaused(queue.paused(id))
+    const item = behind ? queue.add(id, text, attachments, o.url, new Date(), o.origin ?? '') : queue.addFirst(id, text, attachments, o.url, new Date(), o.origin ?? '')
     if (!item) return refuse(409, `預かれるのは ${QUEUE_MAX} 件までです。取り消すか、前の返信が終わるのを待ってください`)
     queue.pause(id, CODEX_CONFIG_PAUSED)
     const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd, via: 'queued', queue_id: item.queue_id, stuck: true }
@@ -2710,6 +2715,13 @@ export function createApp(
               { ...o, forceProcess: true, compact: true },
               { text, attachments, queued: item.queue_id },
             )
+        // 確かめで止めた（#856）。要約は諦めて、本文は預かったまま止める（押すと要約なしで回る）
+        if (out.codexConfig) {
+          queue.pause(id, CODEX_CONFIG_PAUSED)
+          codexConfigQueued.add(id)
+          const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd, via: 'queued', queue_id: item.queue_id, stuck: true }
+          return { status: 202, body: payload }
+        }
         if (out.status !== 202) {
           // 要約を起こせなければ本文も預からない（画面が入力欄に戻す）
           queue.remove(id, item.queue_id)
@@ -2734,7 +2746,7 @@ export function createApp(
       if (!item) return refuse(409, `預かれるのは ${QUEUE_MAX} 件までです。取り消すか、前の返信が終わるのを待ってください`)
       await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} 処理中なので預かった（${queue.size(id)} 件目）\n`).catch(() => {})
       // 端末のターンが閉じたか分からずに止めた預かりの後ろに並んだメッセージも、止まっていると返す（#800 のレビュー）
-      const stuck = (!!o.terminalFallback && queue.paused(id) === TERMINAL_HELD_PAUSED) || queue.paused(id) === CODEX_CONFIG_PAUSED
+      const stuck = (!!o.terminalFallback && queue.paused(id) === TERMINAL_HELD_PAUSED) || codexConfigPaused(queue.paused(id))
       const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd, via: 'queued', queue_id: item.queue_id, ...(stuck ? { past_terminal: true as const, stuck: true as const } : {}) }
       return { status: 202, body: payload }
     }
@@ -2803,6 +2815,8 @@ export function createApp(
   const codexConfig = terminal.codexConfig ?? noCodexConfigGate
   /** 確かめで止まっているもの（#856）。メモリだけ（再起動後は、預かりが回るときにもう一度確かめて出し直す） */
   const codexConfigHolds = new Map<string, CodexConfigHold>()
+  /** 預かりを止めた行のセッション。預かりが無くなった（取り消し・送信の停止）ら行も片付ける */
+  const codexConfigQueued = new Set<string>()
   const codexConfigKey = () => [...codexConfigHolds].map(([id, h]) => `${id}:${h.fingerprint}`).join(',')
   /**
    * Codex を起こす前の確かめ（#856）。止めるなら理由の文を返し、要対応に 1 行出す。**Codex を起こす道は、どの接続でも
@@ -2813,7 +2827,10 @@ export function createApp(
     const ask = await codexConfig.check(cwd)
     const before = codexConfigHolds.get(id)
     if (!ask) {
-      if (before?.cwd === cwd) codexConfigHolds.delete(id)
+      if (before?.cwd === cwd) {
+        codexConfigHolds.delete(id)
+        codexConfigQueued.delete(id)
+      }
       return ''
     }
     const same = before?.cwd === cwd && before.fingerprint === ask.fingerprint
@@ -2829,7 +2846,7 @@ export function createApp(
   /** 要約だけのターンを app-server で始める（#837）。終わると `onTurnEnd` → `drain()` が預かった本文を回す。始められなければ断る（呼ぶ側が本文を預かりから外す） */
   const startCodexCompact = async (id: string, raw: string, cwd: string): Promise<Launched> => {
     const stopped = await codexConfigStop(id, cwd)
-    if (stopped) return refuse(409, stopped)
+    if (stopped) return { ...refuse(409, stopped), codexConfig: true }
     const model = (await metaStore.get(id))?.model
     try {
       await codexApp.compact?.({ id, threadId: raw, cwd, model })
@@ -3107,6 +3124,11 @@ export function createApp(
   /** 預かりのあるセッションを全部見る。画面のポーリングのついでに呼ぶ */
   const drainAll = async (): Promise<void> => {
     for (const id of queue.ids()) await drain(id)
+    for (const id of codexConfigQueued) {
+      if (queue.size(id) > 0) continue
+      codexConfigQueued.delete(id)
+      codexConfigHolds.delete(id)
+    }
     await deliverReplies()
     await drainBacklog()
     await tickLoops()
@@ -3257,7 +3279,7 @@ export function createApp(
         bgRetryAt.delete(id)
       }
       // 確かめで止めた預かり（#856）は、もう一度確かめるだけ（「続けて送る」では飛ばせない）。`.codex/` が片付いていれば回る
-      if (queue.paused(id) === CODEX_CONFIG_PAUSED) bgRetryAt.delete(id)
+      if (codexConfigPaused(queue.paused(id))) bgRetryAt.delete(id)
       queue.resume(id)
       try {
         await drain(id)
@@ -3292,6 +3314,9 @@ export function createApp(
     if (!hold) return error(res, 404, '確かめる待ちはありません')
     if (!allow) {
       codexConfigHolds.delete(id)
+      codexConfigQueued.delete(id)
+      // 片付けたものは、再起動のあとも人が「続けて送る」を押すまで回さない
+      if (queue.paused(id) === CODEX_CONFIG_PAUSED) queue.pause(id, CODEX_CONFIG_DISMISSED)
       return json(res, { id })
     }
     const seen = (body as { fingerprint?: unknown } | null)?.fingerprint
@@ -3302,6 +3327,7 @@ export function createApp(
       return error(res, 409, '確かめる中身が変わりました。見直してから押してください')
     }
     codexConfigHolds.delete(id)
+    codexConfigQueued.delete(id)
     if (queue.paused(id) === CODEX_CONFIG_PAUSED) {
       bgRetryAt.delete(id)
       queue.resume(id)

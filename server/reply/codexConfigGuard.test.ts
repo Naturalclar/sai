@@ -83,6 +83,17 @@ test('このまま起こす: 覚えて、再起動のあとも聞かない。中
   assert.notEqual(await again.check(p.sub), null, 'ファイルが増えた')
 })
 
+test('覚えたファイルを消せば、動いている間でももう一度聞く', async () => {
+  const p = await place()
+  await put(p.sub, 'config.toml', 'x')
+  const guard = new CodexConfigGuard(p.git, p.feed)
+  const ask = await guard.check(p.sub)
+  await guard.allow(p.sub, ask!.fingerprint)
+  assert.equal(await guard.check(p.sub), null)
+  await rm(join(p.feed, CODEX_CONFIG_ALLOWED_FILE))
+  assert.notEqual(await guard.check(p.sub), null)
+})
+
 test('見せたものと中身が変わっていれば、押しても通さず覚えない', async () => {
   const p = await place()
   await put(p.sub, 'config.toml', 'one')

@@ -5,12 +5,14 @@
 // - **初期化の順番も `createApp()` のまま**: `create…(ctx)` は関数を作るだけで、時計を立てる・ファイルを読むなどの副作用を持たない
 // - 循環 import を作らない: このファイルと区分のファイルは `app.ts` を import しない（型もここか `shared/` に置く）
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import type { Replying, ReplyError, ReplyResponse, SessionMeta, SessionSummary } from '../shared/types.ts'
+import type { AgentWaitResponse, ApprovalMap, FeedRow, HoldingWhy, Replying, ReplyError, ReplyResponse, SessionHolding, SessionMeta, SessionSummary } from '../shared/types.ts'
 import type { PrBrowser } from './git/prs.ts'
 import type { ProgressReader } from './local/progress.ts'
 import type { UsageStore } from './local/usage.ts'
+import type { SuggestionStore } from './mcp/suggestions.ts'
 import type { MetaStore } from './meta/meta.ts'
-import type { AgentMessages } from './reply/agentMessages.ts'
+import type { SettingsStore } from './meta/settings.ts'
+import type { AgentMessage, AgentMessages } from './reply/agentMessages.ts'
 import type { CodexApp } from './reply/codexAppServer.ts'
 import type { LoopStore } from './reply/loops.ts'
 import type { OpencodeApp } from './reply/opencodeServer.ts'
@@ -25,6 +27,9 @@ export const QUEUE_DAYS = 90
 
 /** 前に引いた PR の一覧を「いま」として出してよい古さ（#727）。これより古ければ、まだ引いていないのと同じに扱う（短く待つ） */
 export const HOLDING_PR_STALE_MS = 10 * 60_000
+
+/** sai_wait をサーバ側で待つ間、相手の返答の行が届いたかを見る間隔 */
+export const AGENT_POLL_MS = 1000
 
 /** 返信 body の上限。指示文なので十分 */
 export const MAX_REPLY_BYTES = 64 * 1024
@@ -100,6 +105,11 @@ export interface AppContext {
   opencodeApp: OpencodeApp
   metaStore: MetaStore
   usageStore: UsageStore
+  settingsStore: SettingsStore
+  /** 入力欄に置く案（#565） */
+  suggestionStore: SuggestionStore
+  /** 送り元が最後に `sai_sessions` で見た、相手の読み直す量（#795。送り元 → 相手 → トークン） */
+  seenContext: Map<string, Map<string, number>>
   // ---- 時計（テストでは進める・止める）
   loopNow: () => number
   /** ループを見に行く間隔。0 ならタイマーを立てない（テスト） */
@@ -116,6 +126,18 @@ export interface AppContext {
   terminalOf: (s: SessionSummary, o?: { soft?: boolean }) => Promise<{ pane: string; pid: number } | null>
   agentRefusal: (req: IncomingMessage) => string
   agentFrom: (from: unknown) => Promise<{ session: SessionSummary; sessions: SessionSummary[]; turn: string } | string>
+  /** 落ちた返答を補った行（#614） */
+  rowsNow: (days: number) => Promise<FeedRow[]>
+  /** 端末で人が答えたぶんの待ちを畳む（#255） */
+  settleWaiting: (sessions: SessionSummary[]) => Promise<{ sessions: SessionSummary[]; key: string }>
+  /** いまの答え待ち（承認のバブル） */
+  approvalsNow: (sessions: SessionSummary[]) => Promise<ApprovalMap>
+  /** セッションがいま持っているもの（#727） */
+  holdingsOf: (list: readonly SessionSummary[], occupied: (s: SessionSummary) => HoldingWhy | '', sendable?: (s: SessionSummary) => boolean, opts?: { prs?: boolean; draining?: boolean; only?: string }) => Promise<Map<string, SessionHolding>>
+  /** 着手の形の依頼を、いまの相手に送ってよいか（#795）。よければ空 */
+  startAskRefusal: (holding: SessionHolding | undefined, context: number, seen: number, hidden: boolean) => string
+  /** 送ったメッセージの返答。まだなら null */
+  agentResult: (message: AgentMessage) => Promise<AgentWaitResponse | null>
   // ---- HTTP の小物（app.ts のものをそのまま渡す）
   json: (res: ServerResponse, payload: unknown, status?: number) => void
   error: (res: ServerResponse, status: number, message: string) => void

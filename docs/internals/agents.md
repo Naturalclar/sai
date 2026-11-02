@@ -196,7 +196,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 ### 口とツール
 
 - `POST /mcp`。Streamable HTTP の最小で JSON を 1 回返すだけ。
-- JSON-RPC は `server/mcp/protocol.ts` の `handleRpc()`（`initialize` / `ping` / `tools/list` / `tools/call`）、ツールの中身は `app.ts` の `mcpTools()`（`sai_sessions` / `sai_session` / `sai_progress` が読む、`sai_suggest` が案を置く、`sai_send` / `sai_wait` が送る・待つ）。
+- JSON-RPC は `server/mcp/protocol.ts` の `handleRpc()`（`initialize` / `ping` / `tools/list` / `tools/call`）、ツールの中身は `server/mcp/mcpRoutes.ts` の `mcpTools()`（`sai_sessions` / `sai_session` / `sai_progress` が読む、`sai_suggest` が案を置く、`sai_send` / `sai_wait` が送る・待つ）。
 - `sai_sessions` の 1 行には、待ちと最後の記録の時刻も載せる（#323）。待ちは画面と同じく、端末で人が答えたぶんは `settleWaiting()` で畳み、返信中の答え待ちの承認 `approvalsNow()` も足す（1 行目だけ）。
 
 ### 誰に何を許すか

@@ -26,7 +26,10 @@ export interface DeliveryEntry {
 const LOG_HEAD = /^--- (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z) \S+ (.*)$/
 
 /** 書く側の文の頭。`server/app.ts` の文を変えたらここも直す（`feedPaths.test.ts` が突き合わせる） */
-/** 預かった行（同じ頭の「待つ」「預かりを止めた」は、同じ 1 通の取り直しなので数えない） */
+/**
+ * 預かった行。同じ頭の「待つ」「預かりを止めた」は取り直しが重なるので数えない。
+ * 預かりに先客がいた 2 通目以降は別の文の行になるので入らず、**この列は下限の目安**
+ */
 export const PARKED_LOG = /^メッセージを端末に打ち込めない（.*ので、別プロセスを起こさずに預かった（/
 export const DELIVERY_LOG_HEADS: readonly (readonly [string, Delivery])[] = [
   ['開いている Codex へ queue ', 'queue'],
@@ -90,7 +93,7 @@ export interface WeekPaths {
     process: number
     app_server: number
     queue: number
-    /** 端末に打ち込めず、別プロセスを起こさずに預かった数 */
+    /** 端末に打ち込めず、別プロセスを起こさずに預かった数（下限の目安。`PARKED_LOG`） */
     parked: number
   }
   /** 端末のダイアログに SAI から答えた数。**記録を始める前の週は null** */

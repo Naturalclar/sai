@@ -585,5 +585,6 @@ export function sendHow(via: string, stuck = false): string {
   if (via === 'queued') return '相手は処理中なので、終わってから回ります（要約は挟みません）'
   if (via === 'compact') return '相手は要約（/compact）してから始めます'
   if (via === 'terminal') return '相手の端末に打ち込みました'
+  if (via === 'queue') return '開いている相手へ渡しました（ターンの途中なら、終わってから始まります）'
   return '相手のターンを始めました'
 }

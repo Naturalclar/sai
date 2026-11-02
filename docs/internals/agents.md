@@ -76,7 +76,8 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 端末で開いている Claude に打ち込めなかった（`can_process: true` の 409。打ちかけ・ダイアログ・読めない。`typeInto()` は何も打たずに断る）ときは、**自動では別プロセスへ回さない**。`terminalTurnHold()` で預かりの先頭に置いて**止め**（`addFirst`。端末を読んでいる間に来た返信に追い越させない。`paused` に `TERMINAL_HELD_PAUSED` の文そのものを置く）、応答に `past_terminal` と `stuck` を付ける。`sendHow()` が「預かったまま止まっています」と返す。止めた預かりの後ろに並んだメッセージにも `stuck` を付ける。打ちかけは消さない（`replaceTyped` は `false` のまま）。
 - 要対応は `todoItems()` が `queued` を見て、この文で止まった預かりを `watch` の 1 行（`TERMINAL_STUCK_TEXT`）で出す（そのセッションのほかの `watch` / `done` と重ねない。画面・バッジ・題名と通知の 3 か所が同じ引数で呼ぶ）。
 - 人が「続けて送る」（`POST …/queue/resume`）を押したら `terminalForced` に入れて `drain()` を回す。端末に打ち込めればそのまま打ち込む。打ち込めなければ `terminalTurn()` を見て、端末でターンが回っている（打ち込んだ返信の行を待っている・`active`）・ダイアログ中（`inspectPrompt()`。打ち込まずに読むだけ）でなければ、その 1 回だけ `startTurn(…, { forceProcess: true })` で別プロセスで回す（`claude --bg` の手当て（#798）は `-p` の経路そのまま）。回っている・ダイアログ中なら起こさずに待つ（`retry`）。押した分は使ったとき・`drain()` のあとで捨てるので、後続のメッセージは、`-p` のあと端末が空いて見えても、また止まる。
-- 端末で開いている相手には、要約（`/compact`）を別プロセスで挟まない（`messageCompactOf()` は端末で開いている相手には選ばない）。自動で別プロセスへ回す道と要約を挟む道は #806（端末のターンの外かを transcript から確かに言えなかった。経緯は `docs/history/agents.md`）。Codex・OpenCode は今の線のまま（開いている Codex は queue）。
+- 端末で開いている相手には、要約（`/compact`）を別プロセスで挟まない（`messageCompactOf()` は端末で開いている相手には選ばない）。自動で別プロセスへ回す道と要約を挟む道は #806（端末のターンの外かを transcript から確かに言えなかった。経緯は `docs/history/agents.md`）。OpenCode は今の線のまま。
+- **開いている Codex に打ちかけがあるときは queue で届ける**（#838）。`startTurn()` が `TerminalBusy` の `typed` を受けたとき、`terminalFallback` が付いていて `codexHeldElsewhere()` が真なら `sendQueue()` に入る（`via: 'queue'`。預からず、止めず、人の確認も待たない。打ちかけは触らない）。ダイアログ中・画面が読めないときは今までどおり `409`、人の返信の道も今までどおり `409` で画面が選ぶ。届いたかの確かめは `typed.start(id, text, 'queue')` のまま。`sendHow('queue')` は「開いている相手へ渡しました（ターンの途中なら、終わってから始まります）」。
 
 ### 着手の依頼は送る時点で確かめる（#795）
 

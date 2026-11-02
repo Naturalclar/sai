@@ -2752,6 +2752,9 @@ export function createApp(
         return { status: 202, body: payload }
       } catch (err) {
         if (err instanceof TerminalBusy) {
+          // メッセージの道（#838）: 開いている Codex は、打ちかけがあっても queue なら打ちかけを残したまま届く（実測 0.166.0）。
+          // ダイアログ中・画面が読めないときは確かめていないので回さない。人の返信は今までどおり 409 で画面が選ぶ
+          if (err.kind === 'typed' && o.terminalFallback && codexActive) return sendQueue()
           // 画面は code で出し分ける。typed のときだけ「消して送る」の確認を出せる
           // can_process: Claude は exec resume、active Codex は queue へ送り直せる。
           const payload: ReplyError = { error: `端末に打ち込めない: ${err.message}`, code: `terminal_${err.kind}`, can_process: true }

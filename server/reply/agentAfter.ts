@@ -33,7 +33,8 @@ export function createAfterTurns(deps: {
   return async (from) => {
     const sent = deps.agents.sentSince(from, Date.now() - AFTER_KEEP_MS)
     // 別のリポジトリの相手には添えない（#827 の決めたこと 4。送ったときの印で見る）
-    const asks = sent.filter((m) => !m.far && !m.after_done)
+    // 閉じたことまで添えた頼み（`after_done`）も 3 日のあいだは見る（閉じる前に始まったターンの完了を添える）
+    const asks = sent.filter((m) => !m.far)
     if (asks.length === 0) return none
     const sessions = await deps.sessions()
     const byId = new Map(sessions.map((s) => [s.id, s]))
@@ -55,7 +56,7 @@ export function createAfterTurns(deps: {
     }
     const [rows, lineOf] = await Promise.all([deps.rows(), deps.lines()])
     const result = afterTurns(
-      live.map((m) => ({ message_id: m.message_id, to: m.to, to_name: replierName(byId.get(m.to)!), text: m.text, since: m.since, ...(m.after_at ? { after_at: m.after_at } : {}) })),
+      live.map((m) => ({ message_id: m.message_id, to: m.to, to_name: replierName(byId.get(m.to)!), text: m.text, since: m.since, ...(m.after_at ? { after_at: m.after_at } : {}), ...(m.after_done ? { after_done: m.after_done } : {}) })),
       rows,
       { lineOf, closed, ownIds: new Set(deps.agents.sentSince(from, 0).map((m) => m.message_id)), told: new Set(sent.filter((m) => m.after_done).flatMap((m) => askRefs(m.text))) },
     )

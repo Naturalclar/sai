@@ -999,12 +999,14 @@ test('Digester: SAI が頭に足した返答・その後の塊は、人が頼ん
     const store = new DigestStore(join(dir, 'digest.jsonl'))
     await store.load()
     const fake = new FakeSummarizer()
-    const d = new Digester(store, fake, { enabled: true, model: 'haiku', since: at(0).toISOString(), persona: async () => 'none', logPath: join(dir, 'digest.log') })
+    const d = new Digester(store, fake, { enabled: true, nextAsk: true, model: 'haiku', since: at(0).toISOString(), persona: async () => 'none', logPath: join(dir, 'digest.log') })
     const user_text = `${AFTER_MARK}動きがありました。\n\n--- 「セッション B」:\n- 10/28 11:00 別の件を進めた\n\n${AFTER_END}\n\nマージして`
     d.scan([row(at(1), 'S1', { repo: 'r', text: '着手しました。', user_text })])
     await d.drain()
     assert.match(fake.prompts[0]!, /人が頼んだこと:\nマージして\n/)
     assert.doesNotMatch(fake.prompts[0]!, /別の件を進めた/)
+    assert.match(fake.nextAsks[0]!, /直前にあなたが送った文:\nマージして\n/, '案の入力からも外す')
+    assert.doesNotMatch(fake.nextAsks[0]!, /別の件を進めた/)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

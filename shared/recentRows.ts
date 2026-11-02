@@ -5,6 +5,7 @@
 // それより前は画面の「前の 7 日を表示」で必要なときに取る。日数は一番新しい行から数える。同じセッションで 7 日より前を見る回は少なく、
 // 手元の一番大きいセッションは 1045 行 → 176 行になる。
 
+import { splitHandedReplies } from './agentMessages.ts'
 import { isCompactSummaryText } from './compactSummary.ts'
 
 /** セッション画面が最初に描く日数。押すたびにこの日数ずつさかのぼる */
@@ -49,7 +50,8 @@ export const OLDER_PROMPTS_MAX = 50
 export function olderPrompts(dropped: readonly { user_text?: string }[], max = OLDER_PROMPTS_MAX): string[] {
   const out: string[] = []
   for (let i = dropped.length - 1; i >= 0 && out.length < max; i--) {
-    const text = (dropped[i]!.user_text ?? '').trim()
+    // SAI が頭に足した返答・その後の塊は人の入力ではない（#827。画面の履歴 `historyFrom()` と同じ）
+    const text = splitHandedReplies(dropped[i]!.user_text ?? '').text.trim()
     // 自動の要約の文が入力として記録された行（#626）は人の入力ではない（画面の履歴 `historyFrom()` と同じ）
     if (text && !isCompactSummaryText(text) && text !== out[out.length - 1]) out.push(text)
   }

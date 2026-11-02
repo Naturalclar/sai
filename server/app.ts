@@ -4143,7 +4143,7 @@ export function createApp(
         return textResult(
           turns
             .slice(-mcpNum(args.turns, 3, 1, 10))
-            .map((r) => `## ${r.ts}\n${r.user_text ? `人: ${clipReply(r.user_text, 500)}\n` : ''}エージェント: ${clipReply(r.text ?? '', 2000)}`)
+            .map((r) => `## ${r.ts}\n${splitHandedReplies(r.user_text ?? '').text ? `人: ${clipReply(splitHandedReplies(r.user_text ?? '').text, 500)}\n` : ''}エージェント: ${clipReply(r.text ?? '', 2000)}`)
             .join('\n\n'),
         )
       },

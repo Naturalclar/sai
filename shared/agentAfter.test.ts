@@ -159,15 +159,40 @@ test('afterTurns: 相手の 1 行に終わりの印の文字があっても、�
   assert.deepEqual(splitHandedReplies(withAfterTurns('人の本文', r.block)), { text: '人の本文', handed: 0, after: 1 })
 })
 
-test('afterTurns: 閉じた時刻が回っているターンの中なら、完了の行が来てから、そのターンと一緒に添える（レビューの指摘）', () => {
+test('afterTurns: 閉じたときに回っていたターンは、閉じたことを先に添えても、完了してから添える（レビューの指摘）', () => {
   const prompt = { ts: '2026-10-28T12:58:00+09:00', session: 'B1', repo: 'r', event: 'UserPromptSubmit', user_text: 'マージして', text: '' } as FeedRow
   const closed: [number, AfterClosed][] = [[900, { kind: 'issue', at: '2026-10-28T12:59:00+09:00' }]]
-  const running = afterTurns([ask({ after_at: '2026-10-28T12:00:00+09:00' })], [...base, prompt], opts(closed))
-  assert.equal(running.block, '')
-  assert.deepEqual(running.updates, [], '終わりにしない')
-  const r = afterTurns([ask({ after_at: '2026-10-28T12:00:00+09:00' })], [...base, prompt, stop('2026-10-28T13:00:00+09:00', 'マージして', 'マージしました')], opts(closed))
-  assert.match(r.block, /マージしました[^]*#900 は閉じました/)
-  assert.equal(r.updates[0]!.done, true)
+  const a = ask({ after_at: '2026-10-28T12:00:00+09:00' })
+  // 完了の行が来ないまま終わっても、閉じたことは届く
+  const first = afterTurns([a], [...base, prompt], opts(closed))
+  assert.match(first.block, /#900 は閉じました/)
+  assert.deepEqual(first.updates, [{ message_id: 'a1', after_at: '2026-10-28T12:00:00+09:00', done: true }])
+  // 完了の行が来たら、そのターンだけを添える（閉じたことは二度添えない）
+  const done = ask({ after_at: '2026-10-28T12:00:00+09:00', after_done: true })
+  const rows = [...base, prompt, stop('2026-10-28T13:00:00+09:00', 'マージして', 'マージしました')]
+  const later = afterTurns([done], rows, { ...opts(closed), told: new Set([900]) })
+  assert.match(later.block, /マージしました/)
+  assert.doesNotMatch(later.block, /#900 は閉じました/)
+  assert.deepEqual(later.updates, [{ message_id: 'a1', after_at: '2026-10-28T13:00:00+09:00', done: true }])
+  // 閉じたあとに始まったターンは添えず、覚えた位置より前も添えない
+  const after = [...rows, stop('2026-10-28T14:00:00+09:00', '次の件', '次の件に移りました')]
+  const none = afterTurns([{ ...done, after_at: '2026-10-28T13:00:00+09:00' }], after, { ...opts(closed), told: new Set([900]) })
+  assert.equal(none.block, '')
+  assert.deepEqual(none.updates, [])
+})
+
+test('afterTurns: 入力の行の無い相手（Codex など）でも、閉じた時刻を含むターンは完了してから添える（レビューの指摘）', () => {
+  const closed: [number, AfterClosed][] = [[900, { kind: 'issue', at: '2026-10-28T12:59:00+09:00' }]]
+  const rows = [...base, stop('2026-10-28T13:00:00+09:00', 'マージして', 'マージしました')]
+  const r = afterTurns([ask({ after_at: '2026-10-28T12:00:00+09:00', after_done: true })], rows, { ...opts(closed), told: new Set([900]) })
+  assert.match(r.block, /マージしました/)
+})
+
+test('afterTurns: 閉じたと添えた頼みは、閉じているか分からないときは見ない（閉じたあとのターンを混ぜない）', () => {
+  const rows = [...base, stop('2026-10-28T14:00:00+09:00', '次の件', '次の件に移りました')]
+  const r = afterTurns([ask({ after_at: '2026-10-28T12:00:00+09:00', after_done: true })], rows, opts())
+  assert.equal(r.block, '')
+  assert.deepEqual(r.updates, [])
 })
 
 test('afterTurns: 先に終わった頼みが添えた「閉じました」は二度添えない（レビューの指摘）', () => {

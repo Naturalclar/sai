@@ -35,6 +35,8 @@ export interface AfterAsk {
   since: string
   /** どこまで添えたか（最後に添えた・数えたターン完了の行の `ts`） */
   after_at?: string
+  /** 頼んだ件が閉じたことまで添えた。そのあとも、閉じる前に始まったターンの完了は添える */
+  after_done?: true
 }
 
 /** 頼んだ issue が閉じた・PR がマージされた（`gh` で引いた結果。開いている・引けない番号は渡さない） */
@@ -116,7 +118,8 @@ interface Turn {
  * 送り元（の頼みごと `asks`）に添える「その後」を組む（#827）。
  * - 添えるのは、相手の**返答のあと**のターン完了のうち、人の入力で始まったもの（`humanTurn()`）と、頼んだ件が閉じた・マージされた
  *   時刻をそのあいだに含むもの。**送り元からのメッセージで起きたターンは添えない**（返答と二重にしない）
- * - 頼んだ件が全部閉じたら、そこまでのターンと「閉じました」の 1 行を添えて終わる（`done`）。閉じたあとに始まったターンは添えない
+ * - 頼んだ件が全部閉じたら、そこまでのターンと「閉じました」の 1 行を添える（`done`）。閉じたあとに始まったターンは添えない。
+ *   閉じる前に始まって、あとで完了したターンは、完了してから添える（閉じたときに回っていたターンの一言を落とさない）
  * - 送ってから `AFTER_KEEP_MS` を過ぎた頼み・別のリポジトリの相手への頼みは見ない（呼ぶ側が渡さない）
  * - 相手ごとに直近 `AFTER_PER_TARGET` ターン、全体で `AFTER_MAX_CHARS` 字まで。超えた分は「ほか N ターン」と数だけ（数えた分も添えた扱い）
  * - 同じ相手への頼みが 2 つあっても、同じターンは 1 回だけ
@@ -169,14 +172,12 @@ export function afterTurns(
     if (mine.length === 0) continue
     const picked: { t: Turn; state: boolean }[] = []
     const ended: { n: number; c: AfterClosed }[] = []
-    // 閉じた時刻がいま回っている相手のターンの中なら、まだ終わりにしない（完了の行が来てから、そのターンと一緒に添える）
-    const running = started.get(to)
-    const finished = (closes: readonly { c: AfterClosed }[], done: boolean) => done && !(running !== undefined && closes.some((x) => running <= Date.parse(x.c.at)))
     for (const a of mine) {
       const from = Math.max(replied.get(a.message_id)!, a.after_at ? Date.parse(a.after_at) : -Infinity)
       // 頼んだ件が全部閉じた時刻（それより後に始まったターンは添えない）
-      const { closes, done: all } = closesOf(a, opts.closed)
-      const done = finished(closes, all)
+      const { closes, done } = closesOf(a, opts.closed)
+      // 閉じたと添えたのに、いま閉じていると分からない（`gh` が引けない）頼みは、閉じたあとのターンを混ぜないように見ない
+      if (a.after_done && !done) continue
       const times = closes.map((x) => Date.parse(x.c.at))
       const end = done ? Math.max(...times) : Infinity
       for (const t of turnsOf.get(to) ?? []) {
@@ -194,10 +195,9 @@ export function afterTurns(
     picked.sort((x, y) => x.t.at - y.t.at)
     const last = picked.at(-1)?.t
     for (const a of mine) {
-      const { closes, done: all } = closesOf(a, opts.closed)
-      const done = finished(closes, all)
+      const { done } = closesOf(a, opts.closed)
       const moved = last !== undefined && (!a.after_at || last.at > Date.parse(a.after_at))
-      if (done || moved) updates.push({ message_id: a.message_id, ...(moved ? { after_at: last.row.ts } : a.after_at ? { after_at: a.after_at } : {}), ...(done ? { done: true as const } : {}) })
+      if ((done && !a.after_done) || moved) updates.push({ message_id: a.message_id, ...(moved ? { after_at: last.row.ts } : a.after_at ? { after_at: a.after_at } : {}), ...(done || a.after_done ? { done: true as const } : {}) })
     }
     if (picked.length === 0 && ended.length === 0) continue
     sections.push({ name: mine[0]!.to_name, refs: [...new Set(mine.flatMap((a) => askRefs(a.text)))], picked, ended })

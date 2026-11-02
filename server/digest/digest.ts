@@ -481,7 +481,7 @@ export class Digester {
     const quoted = quotedNextAsk(row.text ?? '')
     if (quoted) return { next_ask: quoted, first: [], dropped: [] }
     // 作り直す前にもう一度見る（1 回目を待つ間に、画面から切られた・次のターンが来た。#288 と同じ扱い）
-    return composeNextAsk(row.user_text ?? '', row.text ?? '', (prompt) => summarizer.summarize(prompt), { stillWanted: () => this.askOn && this.active && this.isLatest(row) })
+    return composeNextAsk(splitHandedReplies(row.user_text ?? '').text, row.text ?? '', (prompt) => summarizer.summarize(prompt), { stillWanted: () => this.askOn && this.active && this.isLatest(row) })
   }
 
   /** 案を 1 つ。作れなければ空（失敗は digest.log に残し、一言はそのまま出す） */

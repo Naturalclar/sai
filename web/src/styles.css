@@ -797,6 +797,17 @@
   .turn-steps .list .what { flex: 1 1 12em; min-width: 0; font-family: var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink); background: transparent; padding: 0; }
   .turn-steps .list .why { flex: 1 1 100%; padding-left: 0; }
   .turn-steps .list .more { font-style: italic; }
+  /* 手順の出力・差分（#846）。長い行は折り返さず横に送る（ログと差分は桁が揃って読める） */
+  .step-output { flex: 1 1 100%; min-width: 0; }
+  .step-output .out-section { margin-top: 4px; min-width: 0; }
+  .step-output .out-label { font-family: var(--mono); overflow-wrap: anywhere; }
+  .step-output .out-label .bad { margin-left: 6px; color: var(--claude); }
+  .step-output pre { margin: 2px 0 0; padding: 6px 8px; max-height: 30vh; overflow: auto; font-family: var(--mono); font-size: 12px; line-height: 1.45; color: var(--ink); background: color-mix(in srgb, var(--line) 25%, transparent); border-radius: 4px; }
+  .step-output pre span { display: block; min-height: 1.45em; white-space: pre; width: max-content; min-width: 100%; }
+  .step-output pre .add { background: color-mix(in srgb, var(--codex) 14%, transparent); }
+  .step-output pre .del { background: color-mix(in srgb, var(--claude) 14%, transparent); }
+  .step-output pre .head { color: var(--muted); }
+  .step-output .omitted { margin: 2px 0; font-style: italic; }
   /* 途中で書いた文（#680）。ツールの行と見分けがつくよう、本文の色で折り返して出す */
   .turn-steps .list .said { flex-wrap: nowrap; }
   .turn-steps .list .said .body { flex: 1 1 auto; min-width: 0; color: var(--ink); overflow-wrap: anywhere; }

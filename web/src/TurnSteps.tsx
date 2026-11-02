@@ -4,13 +4,14 @@ import type { TurnStepsResponse } from './api'
 import { stepCounts } from '../../shared/turnSteps.ts'
 import { hm } from './format'
 import { Markdown } from './Markdown'
+import { StepOutput } from './StepOutput'
 
 type State = { kind: 'closed' } | { kind: 'loading' } | { kind: 'error'; message: string } | { kind: 'open'; data: TurnStepsResponse }
 
 /**
  * 終わったターンで実行したコマンド・ツールと、途中で書いた文（#605 / #680）。返答のバブルに畳んで付け、**開いたときに 1 回だけ**取る
  * （ポーリングには乗せない。数と種類は取ってからでないと分からないので、畳んでいる間は「手順」とだけ出す）。
- * 出すのはツール名とコマンド・ファイル名まで。出力は出さない。引けなければ「記録がありません」
+ * 一覧に出すのはツール名とコマンド・ファイル名まで。出力と差分は手順ごとのボタンを押したときだけ別の口で取る（#846）。引けなければ「記録がありません」
  */
 export function TurnSteps({ id, ts }: { id: string; ts: string }) {
   const [state, setState] = useState<State>({ kind: 'closed' })
@@ -28,7 +29,7 @@ export function TurnSteps({ id, ts }: { id: string; ts: string }) {
   const data = state.kind === 'open' ? state.data : null
   return (
     <div className="turn-steps">
-      <button type="button" className="linkish" aria-expanded={shown} onClick={toggle} title="このターンで実行したコマンド・ツールを見る（出力は出しません）">
+      <button type="button" className="linkish" aria-expanded={shown} onClick={toggle} title="このターンで実行したコマンド・ツールを見る">
         {shown ? '手順を閉じる' : '手順'}
         {data?.found && data.total > 0 && <span className="counts"> {data.total} 件（{stepCounts(data.steps)}）</span>}
       </button>
@@ -50,6 +51,7 @@ export function TurnSteps({ id, ts }: { id: string; ts: string }) {
                 <span className="tool">{s.tool || 'ツール'}</span>
                 {s.summary && <code className="what">{s.summary}</code>}
                 {s.note && <span className="why">{s.note}</span>}
+                {s.output_ref && <StepOutput id={id} ts={ts} outputRef={s.output_ref} kind={s.output_kind ?? 'output'} />}
               </li>
             ),
           )}

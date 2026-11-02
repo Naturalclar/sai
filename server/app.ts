@@ -14,7 +14,7 @@ import { canSteer, claudeBackgroundConflict, replyBlockedReason, replyFailureTex
 import { compactPrompt, idleMsSince, messageCompacts, startsNewWork } from '../shared/compact.ts'
 import { handoffFirstText, handoffReady } from '../shared/handoff.ts'
 import { selfHost } from './host.ts'
-import type { SessionTurnResponse, TurnStepsResponse,
+import type { SessionTurnResponse, TurnOutputResponse, TurnStepsResponse,
   AgentActivity,
   AgentWaitingMap,
   ReplyQueueMap,
@@ -165,6 +165,8 @@ import { liveManagerDraft } from '../shared/managerDraft.ts'
 import { stopMissing, stopMissingCandidate } from '../shared/stopMissing.ts'
 import { RecoveredTurns } from './local/recovered.ts'
 import { TURN_STEPS_MAX, findStepTurn } from '../shared/turnSteps.ts'
+import type { StepTurn } from '../shared/turnSteps.ts'
+import { TURN_OUTPUT_SECTIONS_MAX, isOutputRef } from '../shared/turnOutput.ts'
 import { readMarkOf, rowMs, unreadCounts, unreadFromMark } from '../shared/unread.ts'
 import { SETTINGS_FILE, SettingsStore, nextAskOn } from './meta/settings.ts'
 import type { Settings } from './meta/settings.ts'
@@ -283,7 +285,7 @@ export const MAX_META_BYTES = 4 * 1024
 
 const SESSIONS_PREFIX = '/api/sessions/'
 /** 返答のファイル（#603 / #768）を出さない相手への断り。**ファイルの有無・名前に触れない**（引く前に返す） */
-const FILE_DEVICE_REFUSAL = 'この端末からは読めません（返答のファイルを開けるのは、SAI を動かしているマシンのブラウザと、tailnet の本人の端末だけです）'
+const FILE_DEVICE_REFUSAL = 'この端末からは読めません（返答のファイルと手順の出力を開けるのは、SAI を動かしているマシンのブラウザと、tailnet の本人の端末だけです）'
 /** 新しいセッションを始める（#314）。エンティティID は必ず `@` を含むので、`/api/sessions/<id>` と取り違えない */
 const NEW_SESSION_PATH = '/api/sessions/new'
 /** 新しいセッションを始められる場所（#319） */
@@ -345,6 +347,8 @@ const GALLERY_SUFFIX = '/gallery'
 const TURN_SUFFIX = '/turn'
 /** `GET /api/sessions/<id>/turn-steps?ts=`（#605）。終わったターンで呼んだツール */
 const TURN_STEPS_SUFFIX = '/turn-steps'
+/** `GET /api/sessions/<id>/turn-output?ts=&ref=`（#846）。手順の 1 つの出力・差分。返答のファイルと同じ相手にだけ出す */
+const TURN_OUTPUT_SUFFIX = '/turn-output'
 /** `GET /api/sessions/<id>/transcript-images/<key>`（#504）。id は `/` を含まないので、最初のこれが区切り */
 const TRANSCRIPT_IMAGES_SEGMENT = '/transcript-images/'
 /** `GET /api/sessions/<id>/codex-images/<key>`（#575）。Codex の画像生成で作った画像。鍵は一覧で見つけたファイル名だけ */
@@ -1893,6 +1897,22 @@ export function createApp(
   const json = (res: ServerResponse, payload: unknown, status = 200) =>
     send(res, status, JSON.stringify(payload), 'application/json; charset=utf-8')
   const error = (res: ServerResponse, status: number, message: string) => json(res, { error: message }, status)
+
+  /**
+   * 返答のファイル（#603）と手順の出力（#846）を出さない相手を断る。断ったら true。**出すのはループバックと、whois で本人と分かった
+   * tailnet のユーザーの端末だけ**（#768）で、Serve 越しは `Host` が Serve の名前のときだけ。セッションを引く前に呼ぶ（有無を漏らさない）
+   */
+  const refuseDevice = (res: ServerResponse, req: IncomingMessage, who: Identity): boolean => {
+    if (who.kind !== 'local' && who.kind !== 'tailnet') {
+      error(res, 403, FILE_DEVICE_REFUSAL)
+      return true
+    }
+    if (who.kind === 'tailnet' && !isServeHostHeader(req.headers.host)) {
+      error(res, 403, `${FILE_DEVICE_REFUSAL}。tailnet からは Serve の名前（https://<このマシン>.<tailnet>.ts.net）で開いてください`)
+      return true
+    }
+    return false
+  }
   /**
    * rev を持つ応答（一覧・詳細・フィード）。**前に渡した rev と同じなら本文を送らず 304**（#592。3 秒のポーリングは
    * 変わっていないことの方が多く、詳細は 0.2〜0.4MB を毎回送っていた）。画面は rev が同じなら元々描き直さないので、
@@ -4579,10 +4599,25 @@ export function createApp(
    */
   const getTurnSteps = async (res: ServerResponse, id: string, ts: string, days: number) => {
     if (!ts) return error(res, 400, 'ts が要ります')
+    const hit = await stepTurnAt(id, ts, days)
+    if (!hit) return error(res, 404, 'session not found in window')
+    const none: TurnStepsResponse = { id, ts, found: false, steps: [], total: 0 }
+    if (!hit.turn) return json(res, none)
+    const { turn } = hit
+    // 数えるのはツールの呼び出しだけ（途中の文は数に入れない。#680）
+    const more = Math.max(0, turn.steps.length - TURN_STEPS_MAX)
+    const payload: TurnStepsResponse = { id, ts, found: true, steps: turn.steps.slice(0, TURN_STEPS_MAX), total: turn.steps.filter((s) => s.text === undefined).length, ...(more > 0 ? { more } : {}) }
+    return json(res, payload)
+  }
+
+  /**
+   * `ts` のターン完了の行に当たるターンと、読む先。窓に無いセッションは null、ターンが引けない・別のマシン・OpenCode は `turn: null`。
+   * 手順の一覧と、手順の出力（#846）が同じターンを見るように 1 か所にしている
+   */
+  const stepTurnAt = async (id: string, ts: string, days: number): Promise<{ turn: StepTurn | null; target: Parameters<typeof progress.turnSteps>[0] } | null> => {
     const { sessions } = await store.sessions(days)
     const session = sessions.find((s) => s.id === id)
-    if (!session) return error(res, 404, 'session not found in window')
-    const none: TurnStepsResponse = { id, ts, found: false, steps: [], total: 0 }
+    if (!session) return null
     const rows = await rowsNow(days)
     // 同じ秒に 2 本あれば、あとに書かれた方（`getTurn` と同じ）
     let at = -1
@@ -4591,9 +4626,10 @@ export function createApp(
       if (r.ts === ts && eventKind(r.event, r.text) === 'turn' && entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === id) at = i
     }
     const row = rows[at]
-    if (!row || isRemoteHost(row.host ?? '', selfHost())) return json(res, none)
-    const turns = await progress.turnSteps({ id, repo: session.repo, agent: row.agent ?? session.agent, cwd: row.cwd || session.cwd })
-    if (!turns) return json(res, none)
+    const target = { id, repo: session.repo, agent: row?.agent ?? session.agent, cwd: row?.cwd || session.cwd }
+    if (!row || isRemoteHost(row.host ?? '', selfHost())) return { turn: null, target }
+    const turns = await progress.turnSteps(target)
+    if (!turns) return { turn: null, target }
     // 前のターン完了の行まで遡り、その間の入力の行を古い順に渡す（#663 のレビュー。途中で足した入力 = steer の行を
     // 始まりにすると、足す前の手順が落ちる）。どれを始まりにするか・Esc で止めた跡で切るのは `findStepTurn()`
     const starts: { ms: number; input: string }[] = []
@@ -4604,12 +4640,24 @@ export function createApp(
       if (kind === 'turn') break
       if (kind === 'resume' && r.user_text?.trim()) starts.unshift({ ms: rowMs(r.ts), input: r.user_text })
     }
-    const turn = findStepTurn(turns, { starts, endMs: rowMs(row.ts) })
-    if (!turn) return json(res, none)
-    // 数えるのはツールの呼び出しだけ（途中の文は数に入れない。#680）
-    const more = Math.max(0, turn.steps.length - TURN_STEPS_MAX)
-    const payload: TurnStepsResponse = { id, ts, found: true, steps: turn.steps.slice(0, TURN_STEPS_MAX), total: turn.steps.filter((s) => s.text === undefined).length, ...(more > 0 ? { more } : {}) }
-    return json(res, payload)
+    return { turn: findStepTurn(turns, { starts, endMs: rowMs(row.ts) }), target }
+  }
+
+  /**
+   * GET /api/sessions/<id>/turn-output?ts=&ref=（#846）。手順の 1 つの出力・差分。**手順の「出力」「差分」を押したときに 1 回だけ**取る。
+   * `ref` は `ts` のターンの手順に載っているものだけ受ける（ほかのターン・開けないツールの戻りは読まない）。
+   * パスはリクエストから受けない。中身はログにも応答のキャッシュにも残さない
+   */
+  const getTurnOutput = async (res: ServerResponse, id: string, ts: string, ref: string, days: number) => {
+    if (!ts || !isOutputRef(ref)) return error(res, 400, 'ts と ref が要ります')
+    const hit = await stepTurnAt(id, ts, days)
+    if (!hit) return error(res, 404, 'session not found in window')
+    const none: TurnOutputResponse = { id, ts, ref, found: false, sections: [] }
+    if (!hit.turn?.steps.some((s) => s.output_ref === ref)) return json(res, none)
+    const sections = await progress.turnOutput(hit.target, ref)
+    if (!sections || sections.length === 0) return json(res, none)
+    const more = Math.max(0, sections.length - TURN_OUTPUT_SECTIONS_MAX)
+    return json(res, { id, ts, ref, found: true, sections: sections.slice(0, TURN_OUTPUT_SECTIONS_MAX), ...(more > 0 ? { more } : {}) } satisfies TurnOutputResponse)
   }
 
   const getTurn = async (res: ServerResponse, id: string, ts: string, days: number) => {
@@ -5322,8 +5370,7 @@ export function createApp(
       // （ループバックの `Host` は入口で見ている）。**断るのはセッションもファイルも引く前**（有無を漏らさない）
       const filesAt = path.startsWith(SESSIONS_PREFIX) ? path.indexOf(FILES_SEGMENT, SESSIONS_PREFIX.length) : -1
       if (filesAt > 0) {
-        if (who.kind !== 'local' && who.kind !== 'tailnet') return error(res, 403, FILE_DEVICE_REFUSAL)
-        if (who.kind === 'tailnet' && !isServeHostHeader(req.headers.host)) return error(res, 403, `${FILE_DEVICE_REFUSAL}。tailnet からは Serve の名前（https://<このマシン>.<tailnet>.ts.net）で開いてください`)
+        if (refuseDevice(res, req, who)) return
         const id = sessionIdFrom(path, path.slice(filesAt))
         if (id === null) return error(res, 400, 'bad session id')
         const days = parseDays(q.get('days'), 90)
@@ -5362,6 +5409,13 @@ export function createApp(
           return error(res, img.status, img.reason)
         }
         return await sendImage(req, res, img, q)
+      }
+      // 手順の出力・差分（#846）。秘密を含みうるので、返答のファイルと同じ相手にだけ出す（断るのはセッションを引く前）
+      if (path.startsWith(SESSIONS_PREFIX) && path.endsWith(TURN_OUTPUT_SUFFIX) && method === 'GET') {
+        if (refuseDevice(res, req, who)) return
+        const id = sessionIdFrom(path, TURN_OUTPUT_SUFFIX)
+        if (id === null) return error(res, 400, 'bad session id')
+        return await getTurnOutput(res, id, q.get('ts') ?? '', q.get('ref') ?? '', parseDays(q.get('days'), 90))
       }
       if (path.startsWith(SESSIONS_PREFIX) && path.endsWith(TURN_STEPS_SUFFIX) && method === 'GET') {
         const id = sessionIdFrom(path, TURN_STEPS_SUFFIX)

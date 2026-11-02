@@ -2294,7 +2294,7 @@ export interface SessionTurnResponse {
   row: FeedRow | null
 }
 
-/** 終わったターンの 1 手順（#605）。ツールの呼び出しと、途中で書いた文（#680）。ツールの出力は載せない */
+/** 終わったターンの 1 手順（#605）。ツールの呼び出しと、途中で書いた文（#680）。ツールの出力は載せない（開いたときに `turn-output` で取る。#846） */
 export interface TurnStep {
   /** ツール名（`Bash` / `Edit` / `exec_command` …）。途中の文（`text` がある）では空 */
   tool: string
@@ -2306,6 +2306,10 @@ export interface TurnStep {
   note?: string
   /** 呼んだ時刻（ISO） */
   at: string
+  /** 出力や差分を開ける手順の参照（#846。Claude の `tool_use.id` / Codex の `call_id`）。中身ではない */
+  output_ref?: string
+  /** 開いたときに出るもの（ボタンの名前）。Codex の `exec` は差分が混ざることがあるが `output` のまま */
+  output_kind?: 'output' | 'diff'
 }
 
 /**
@@ -2322,6 +2326,37 @@ export interface TurnStepsResponse {
   /** そのターンで呼んだツールの数（途中の文は数えない） */
   total: number
   /** steps に入り切らなかった数（ツールと途中の文の合計）。無ければ省く */
+  more?: number
+}
+
+/** 手順の出力・差分の 1 節（#846）。長ければ頭の `text` と末尾の `tail` だけで、間の字数が `omitted` */
+export interface TurnOutputSection {
+  /** `stdout` / `stderr` / 実際のコマンド / ファイルのパス */
+  label: string
+  kind: 'output' | 'diff'
+  text: string
+  tail?: string
+  omitted?: number
+  /** 0 以外で終わったコマンドの終了コード */
+  exit_code?: number
+  /** ツールが失敗を返した */
+  failed?: true
+  /** 秘密に見えるパスの編集なので中身を出さない（`text` は空） */
+  withheld?: true
+}
+
+/**
+ * `GET /api/sessions/<id>/turn-output?ts=&ref=` の応答（#846）。手順の出力・差分。**押したときに 1 回だけ**取る。
+ * 中身は秘密を含みうるので、出す相手は返答のファイルと同じ（ループバックと本人の tailnet）。`/mcp` には無い。
+ * `found: false` は「記録がありません」（そのターンの手順でない・記録が無い・別のマシン・OpenCode）
+ */
+export interface TurnOutputResponse {
+  id: string
+  ts: string
+  ref: string
+  found: boolean
+  sections: TurnOutputSection[]
+  /** `sections` に入り切らなかった節の数。無ければ省く */
   more?: number
 }
 

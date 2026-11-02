@@ -21,6 +21,7 @@ import type {
   SessionDiffSummaryResponse,
   GalleryResponse,
   SessionTurnResponse,
+  TurnOutputResponse,
   TurnStepsResponse,
   SessionFilters,
   SessionIconResponse,
@@ -59,7 +60,7 @@ import { fetchByRev, RevCache } from './revCache.ts'
 import { sessionFileUrl } from '../../shared/files.ts'
 import type { DigestFeedbackReason, DigestFeedbackRequest, DigestFeedbackResponse, DigestUsageReason } from '../../shared/digestFeedback.ts'
 
-export type { Agent, FeedRow, TurnStepsResponse, SessionSource, SessionSummary, SessionMeta, ManagerDraft, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, QueuedReply, ReplyQueue, ReplyQueueMap, ReplyQueueResponse, Loop, LoopMap, LoopRequest, Wait, WaitMap, AgentActivity, AgentActivityMessage, AgentStopResponse,Approval, ApprovalMap, ApprovalAnswer, TerminalDialog, Profile, PersonaId, SettingsResponse, SettingsRequest, ClaudeAuthCheckResponse, Viewer, SessionPermissionsResponse, SessionProgressResponse, ProgressStep, ProgressNote, SessionDiffResponse, SessionDiffSummaryResponse, GalleryResponse, GalleryItem, SearchResponse, SearchHit, DiffPr, DiffSection, DiffFileStat, PrSummary, PrRepo, PrsResponse, PrDetailResponse, PrBrief, PrBriefResponse, PrComment, PrReviewRequest, PrReviewResponse, PrReviewEvent, AttachmentResponse, UsageResponse, UsageReportResponse, UsageReportRow, UsageSessionRow, UsageTotals, UsageWindow, CodexUsage, ClaudeUsage } from '../../shared/types.ts'
+export type { Agent, FeedRow, TurnOutputResponse, TurnOutputSection, TurnStepsResponse, SessionSource, SessionSummary, SessionMeta, ManagerDraft, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, QueuedReply, ReplyQueue, ReplyQueueMap, ReplyQueueResponse, Loop, LoopMap, LoopRequest, Wait, WaitMap, AgentActivity, AgentActivityMessage, AgentStopResponse,Approval, ApprovalMap, ApprovalAnswer, TerminalDialog, Profile, PersonaId, SettingsResponse, SettingsRequest, ClaudeAuthCheckResponse, Viewer, SessionPermissionsResponse, SessionProgressResponse, ProgressStep, ProgressNote, SessionDiffResponse, SessionDiffSummaryResponse, GalleryResponse, GalleryItem, SearchResponse, SearchHit, DiffPr, DiffSection, DiffFileStat, PrSummary, PrRepo, PrsResponse, PrDetailResponse, PrBrief, PrBriefResponse, PrComment, PrReviewRequest, PrReviewResponse, PrReviewEvent, AttachmentResponse, UsageResponse, UsageReportResponse, UsageReportRow, UsageSessionRow, UsageTotals, UsageWindow, CodexUsage, ClaudeUsage } from '../../shared/types.ts'
 
 /**
  * `PUT /api/sessions/<id>/meta` のボディ。`SessionMeta` の一部を重ねる。
@@ -248,6 +249,8 @@ export const api = {
   /** 一言のもとになったターン完了の行（#537）。要対応の「終了」の行で「元の文」を押したときだけ */
   /** 終わったターンで呼んだツール（#605）。開いたときに 1 回だけ */
   turnSteps: (id: string, ts: string) => getJSON<TurnStepsResponse>(`/api/sessions/${encodeURIComponent(id)}/turn-steps?ts=${encodeURIComponent(ts)}`),
+  /** 手順の出力・差分（#846）。押したときに 1 回だけ */
+  turnOutput: (id: string, ts: string, ref: string) => getJSON<TurnOutputResponse>(`/api/sessions/${encodeURIComponent(id)}/turn-output?ts=${encodeURIComponent(ts)}&ref=${encodeURIComponent(ref)}`),
   turn: (id: string, ts: string) => getJSON<SessionTurnResponse>(`/api/sessions/${encodeURIComponent(id)}/turn?ts=${encodeURIComponent(ts)}`),
   /** 処理中のターンがいま何をしているか（#302）。処理中のセッションを出している間だけ取る（一覧のポーリングには乗せない） */
   progress: (id: string) => getJSON<SessionProgressResponse>(`/api/sessions/${encodeURIComponent(id)}/progress`),

@@ -14,8 +14,9 @@ import type { ParsedProgress } from '../../shared/progress.ts'
 import { claudeTurns, turnParser, worthParsing } from '../../shared/claudeTurns.ts'
 import type { ClaudeTurn } from '../../shared/claudeTurns.ts'
 import { claudeStepParser, codexStepParser, skipForSteps } from '../../shared/turnSteps.ts'
+import { claudeOutputFinder, codexOutputFinder } from '../../shared/turnOutput.ts'
 import type { StepTurn } from '../../shared/turnSteps.ts'
-import type { SessionProgressResponse, SessionSummary } from '../../shared/types.ts'
+import type { SessionProgressResponse, SessionSummary, TurnOutputSection } from '../../shared/types.ts'
 import { CODEX_DAYS } from './usage.ts'
 
 /** 最初に読む末尾の量 */
@@ -171,6 +172,34 @@ export class ProgressReader {
     } catch {
       this.paths.delete(key)
       return null
+    }
+  }
+
+  /**
+   * 手順の 1 つの出力・差分（#846）。**人が押したときだけ**呼ぶ。頭から読んで、見つかったところで止める。
+   * 中身は秘密を含みうるので、ここでは覚えない（`turnSteps()` のキャッシュにも載せない）。読めなければ null。
+   * パスは `read()` と同じくセッション ID と cwd から組み立てる（リクエストからは受けない）
+   */
+  async turnOutput(s: Target, ref: string): Promise<TurnOutputSection[] | null> {
+    const session = sessionOf(s)
+    if (!session || (s.agent !== 'claude' && s.agent !== 'codex')) return null
+    const key = `${s.agent}:${session}`
+    const path = await this.locate(key, s.agent, session, s.cwd)
+    if (!path) return null
+    const finder = s.agent === 'claude' ? claudeOutputFinder(ref) : codexOutputFinder(ref)
+    const input = createReadStream(path, { encoding: 'utf-8' })
+    const rl = createInterface({ input, crlfDelay: Infinity })
+    try {
+      for await (const line of rl) {
+        if (!finder.skip(line) && finder.push(line)) break
+      }
+      return finder.sections()
+    } catch {
+      this.paths.delete(key)
+      return null
+    } finally {
+      rl.close()
+      input.destroy()
     }
   }
 

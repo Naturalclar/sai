@@ -5,7 +5,7 @@
 // - 出すのはコマンドの出力と編集の差分まで（`Read` の中身・MCP の戻りは出さない）。秘密に見えるパス（`isSecretPath()`）の編集は中身を出さない
 // - 実測（codex-cli 0.162〜0.166 の rollout）: `custom_tool_call` の `exec` 1 回に、`item_completed` の `CommandExecution` が 0〜5 個続く。
 //   項目の `id` は `call_id` と別物なので、**呼び出しの行から、自分の戻りのあとの次の呼び出しまで**にある項目を集める。
-//   同時に投げた呼び出しは同じ項目が両方に出るが、節の見出しに実際のコマンドを出すので取り違えない
+//   同時に投げた呼び出しは同じ項目が両方に出るが、節の見出しに実際のコマンドを出すので取り違えない（自分の戻りの文も一緒に出す）
 import { isSecretPath } from './files.ts'
 import type { TurnOutputSection } from './types.ts'
 
@@ -99,8 +99,8 @@ function claudePatch(result: Obj): string {
     })
     .join('\n')
   if (body) return body
-  // 新しいファイルの `Write` は hunk が空で、本文が `content` にある
-  return typeof result.content === 'string' ? prefixed('+', result.content) : ''
+  // 新しいファイルの `Write` は hunk が空で、本文が `content` にある（`update` で hunk が空なのは中身が変わっていない）
+  return result.type === 'create' && typeof result.content === 'string' ? prefixed('+', result.content) : ''
 }
 
 /** Claude の `tool_result` の行。`toolUseResult` が読めないとき（失敗は文字列で入る）は戻りの文を出す */
@@ -135,19 +135,30 @@ function parse(line: string): Obj | null {
   }
 }
 
-/** Claude: `tool_use_id` が `ref` の `tool_result` の行だけを見る。見つかったらそこで止める */
+/**
+ * Claude: `tool_use_id` が `ref` の `tool_result` の行だけを見る。見つかったらそこで止める。
+ * 編集が失敗すると戻りにパスが載らず、エラーの文に編集しようとした文字列が入りうるので、秘密のパスは呼び出しの側でも見る
+ */
 export function claudeOutputFinder(ref: string): OutputFinder {
   let found: TurnOutputSection[] = []
+  let secret = ''
   return {
     skip: (line) => !line.includes(ref),
     sections: () => found,
     push: (line) => {
       const o = parse(line)
       const content = obj(o?.message)?.content
-      if (!o || o.type !== 'user' || !Array.isArray(content)) return false
+      if (!o || !Array.isArray(content)) return false
+      if (o.type === 'assistant') {
+        const use = content.map(obj).find((b) => b?.type === 'tool_use' && b.id === ref)
+        const path = str(obj(use?.input)?.file_path)
+        if (use && claudeOutputKind(str(use.name)) === 'diff' && isSecretPath(path)) secret = path
+        return false
+      }
+      if (o.type !== 'user') return false
       const block = content.map(obj).find((b) => b?.type === 'tool_result' && b.tool_use_id === ref)
       if (!block) return false
-      found = claudeSections(o, block)
+      found = secret ? [{ label: secret, kind: 'diff', text: '', withheld: true }] : claudeSections(o, block)
       return true
     },
   }
@@ -192,26 +203,34 @@ function patchTouchesSecret(patch: string): boolean {
 
 /**
  * Codex: `call_id` が `ref` の呼び出しの行から、自分の戻りのあとの次の呼び出し（かターンの切れ目）までを見る。
- * `CommandExecution` / `FileChange` の項目があればそれを出し、無ければ（項目を書かない版）呼び出しの本文と戻りの文を出す
+ * `CommandExecution` / `FileChange` の項目があればそれを出し、無ければ（項目を書かない版）呼び出しの本文と戻りの文を出す。
+ * 同時に投げた呼び出しがあるときは、項目が自分のものとは限らないので戻りの文も出す（自分の分が消えないように）。
+ * `apply_patch` は自分のパッチより先にほかのコマンドの項目を出さない
  */
 export function codexOutputFinder(ref: string): OutputFinder {
   const items: TurnOutputSection[] = []
   let call: Obj | null = null
   let returned = ''
   let closed = false
-  const sections = () => {
-    if (items.length > 0) return items
+  let overlapped = false
+  /** 戻りがまだ来ていない、ほかの呼び出し（同じターンの中だけ） */
+  const others = new Set<string>()
+  const sections = (): TurnOutputSection[] => {
     if (call && str(call.name) === 'apply_patch') {
+      const changes = items.filter((s) => s.kind === 'diff')
+      if (changes.length > 0) return changes
       const patch = codexPatch(call)
-      if (patchTouchesSecret(patch)) return [{ label: 'パッチ', kind: 'diff' as const, text: '', withheld: true as const }]
+      if (patchTouchesSecret(patch)) return [{ label: 'パッチ', kind: 'diff', text: '', withheld: true }]
       if (patch) return [diffSection('パッチ', patch)]
     }
-    return returned ? [textSection('出力', returned)] : []
+    const own = returned ? [textSection(items.length > 0 ? 'この呼び出しの戻り' : '出力', returned)] : []
+    if (items.length === 0) return own
+    return overlapped ? [...own, ...items] : items
   }
   return {
     sections,
-    // 呼び出しの前は `ref` のある行だけ。呼び出しのあとは項目と次の呼び出しを全部見る
-    skip: (line) => !call && !line.includes(ref),
+    // 呼び出しの前は `ref` のある行と、同時に投げた呼び出しを知るためのツールの行だけ。呼び出しのあとは項目と次の呼び出しを全部見る
+    skip: (line) => !call && !line.includes(ref) && !line.includes('_call') && !line.includes('task_started'),
     push: (line) => {
       const o = parse(line)
       const payload = obj(o?.payload)
@@ -220,17 +239,25 @@ export function codexOutputFinder(ref: string): OutputFinder {
       if (o.type === 'response_item' && (type === 'custom_tool_call' || type === 'function_call')) {
         if (payload.call_id === ref && !call) {
           call = payload
+          overlapped = others.size > 0
           return false
         }
         // 自分の戻りより前の呼び出しは、同時に投げたもの。まだ閉じない
-        return call !== null && closed
+        if (call && closed) return true
+        if (call) overlapped = true
+        others.add(str(payload.call_id))
+        return false
       }
-      if (!call) return false
       if (o.type === 'response_item' && (type === 'custom_tool_call_output' || type === 'function_call_output')) {
-        if (payload.call_id === ref) {
+        others.delete(str(payload.call_id))
+        if (call && payload.call_id === ref) {
           returned = codexOutputText(payload.output)
           closed = true
         }
+        return false
+      }
+      if (!call) {
+        if (o.type === 'event_msg' && type === 'task_started') others.clear()
         return false
       }
       if (o.type !== 'event_msg') return false

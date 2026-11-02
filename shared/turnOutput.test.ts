@@ -38,11 +38,19 @@ test('Claude: Edit は structuredPatch を差分に、originalFile は出さな�
   assert.deepEqual(edit, { label: '/w/a.ts', kind: 'diff', text: '@@ -3,2 +3,2 @@\n 前\n-古い\n+新しい' })
   const [write] = run(claudeOutputFinder('t2'), [result('t2', { type: 'create', filePath: '/w/b.ts', content: '一\n二\n', structuredPatch: [] })]).sections
   assert.equal(write?.text, '+一\n+二')
+  const same = run(claudeOutputFinder('t3'), [result('t3', { type: 'update', filePath: '/w/b.ts', content: '一\n', structuredPatch: [] }, '変わりませんでした')]).sections
+  assert.deepEqual(same.map((s) => [s.kind, s.text]), [['output', '変わりませんでした']], '中身の変わらない Write を全部追加に見せない')
 })
 
 test('秘密に見えるパスの編集は中身を出さない（Claude の差分・Codex の変更とも）', () => {
   const claude = run(claudeOutputFinder('t1'), [result('t1', { filePath: '/w/.env', content: 'KEY=作り物', structuredPatch: [] })]).sections
   assert.deepEqual(claude, [{ label: '/w/.env', kind: 'diff', text: '', withheld: true }])
+  // 失敗した編集は戻りにパスが載らず、エラーの文に編集しようとした文字列が入りうる
+  const use = j({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't2', name: 'Edit', input: { file_path: '/w/.env', old_string: 'KEY=作り物' } }] } })
+  const failed = run(claudeOutputFinder('t2'), [use, result('t2', 'Error: 見つかりません', 'String: KEY=作り物', { is_error: true })]).sections
+  assert.deepEqual(failed, [{ label: '/w/.env', kind: 'diff', text: '', withheld: true }])
+  const bash = j({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't3', name: 'Bash', input: { command: 'ls' } }] } })
+  assert.equal(run(claudeOutputFinder('t3'), [bash, result('t3', { stdout: 'ログ' })]).sections[0]?.text, 'ログ', 'コマンドは判定しない')
   const lines = [item('custom_tool_call', 'c1', 'exec'), done({ type: 'FileChange', changes: { '/w/.env': { type: 'add', content: 'KEY=作り物' }, '/w/a.ts': { type: 'update', unified_diff: '@@ -1 +1 @@\n-a\n+b' } } })]
   assert.deepEqual(run(codexOutputFinder('c1'), lines).sections, [
     { label: '/w/.env', kind: 'diff', text: '', withheld: true },
@@ -68,7 +76,18 @@ test('Codex: exec の項目を集める。項目の id は call_id と別で、�
 
 test('Codex: 同時に投げた呼び出しは自分の戻りまで閉じない。ターンの切れ目で止まる', () => {
   const lines = [item('custom_tool_call', 'c1', 'exec'), item('custom_tool_call', 'c2', 'exec'), command('b', '二つ目の分'), output('c2', 'x'), command('a', '一つ目の分'), output('c1', 'y'), j({ type: 'event_msg', payload: { type: 'task_complete' } }), command('次のターン', '混ざらない')]
-  assert.deepEqual(run(codexOutputFinder('c1'), lines).sections.map((s) => s.label), ['b', 'a'])
+  assert.deepEqual(run(codexOutputFinder('c1'), lines).sections.map((s) => s.label), ['この呼び出しの戻り', 'b', 'a'], '項目が自分のものとは限らないので、戻りの文も出す')
+  assert.deepEqual(run(codexOutputFinder('c2'), lines).sections.map((s) => s.label), ['この呼び出しの戻り', 'b', 'a'], 'あとから投げた側も同じ')
+  const next = [item('custom_tool_call', 'c0', 'exec'), j({ type: 'event_msg', payload: { type: 'task_started' } }), item('custom_tool_call', 'c1', 'exec'), command('a', 'ok'), output('c1', 'y')]
+  assert.deepEqual(run(codexOutputFinder('c1'), next).sections.map((s) => s.label), ['a'], '前のターンの戻らなかった呼び出しは同時ではない')
+})
+
+test('Codex: apply_patch は、同時に走ったコマンドの項目より自分のパッチを出す', () => {
+  const patch = '*** Begin Patch\n*** Update File: a.ts\n@@\n-a\n+b\n*** End Patch'
+  const lines = [item('custom_tool_call', 'c1', 'apply_patch', { input: patch }), item('custom_tool_call', 'c2', 'exec'), command('ほかのコマンド', '混ざらない'), output('c2', 'x'), output('c1', 'ok')]
+  assert.deepEqual(run(codexOutputFinder('c1'), lines).sections, [{ label: 'パッチ', kind: 'diff', text: patch }])
+  const changed = [lines[0]!, done({ type: 'FileChange', changes: { '/w/a.ts': { type: 'update', unified_diff: '@@ -1 +1 @@\n-a\n+b' } } }), output('c1', 'ok')]
+  assert.deepEqual(run(codexOutputFinder('c1'), changed).sections.map((s) => s.label), ['/w/a.ts'])
 })
 
 test('Codex: 項目を書かない版は戻りの文を出す（JSON の包みは外す）。apply_patch は本文をパッチとして出す', () => {

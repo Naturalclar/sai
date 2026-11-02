@@ -357,6 +357,9 @@ export interface TypeOptions {
   settleMs?: number
 }
 
+/** 端末に打ち込めたときに reply.log に書く文（本文は書かない）。`pnpm feed paths` がこの文で数える（#845） */
+export const TERMINAL_TYPED_LOG = '端末に打ち込んだ'
+
 export interface TypeResult {
   /** 打ちかけを消してから打ち込んだなら、消した文（reply.log に残す。戻せないので） */
   cleared?: string

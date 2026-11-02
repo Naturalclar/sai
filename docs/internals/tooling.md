@@ -63,6 +63,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 pnpm -s feed rows <セッション>           # あるセッションの最近の行（時刻・種類・入力と返答の頭）
 pnpm -s feed messages                    # 送ったメッセージと、返答が届いたか（--session で送り元・宛先を絞る）
 pnpm -s feed usage                       # セッション別の使用量。--by day で日別。費用は前の行との差。末尾に読み直しの大きいターンの割合（#761）
+pnpm -s feed paths                       # 週ごとの、ペインの中 / 外のターンと届け方の数（数だけ。既定は今週を含む 4 週。#845）
 node --disable-warning=ExperimentalWarning server/tools/feed.ts rows <セッション>   # pnpm を通さない形（別の cwd からはこのパスを絶対で）
 ```
 
@@ -71,6 +72,7 @@ node --disable-warning=ExperimentalWarning server/tools/feed.ts rows <セッシ�
 - **`rows` の入力の欄は人の打った文とは限らない**ので印を付ける: 要約の文は `[要約]`、頭に足した返答の塊は外して `[返答 N 件]`、届いたメッセージは本文の `【SAI】` のまま（`--full` でも同じ）。`--json` は 1 行ごとに `prompt_kind`（`human` / `compact` / `message` / `empty`）と `handed`（足されていた返答の数）を添える。数えるのは `prompt_kind: "human"` だけ。`--json --full` の `user_text` は記録のまま。
 - **`messages` の返答は記録の行で見る**。行があれば時刻と頭、無ければ「行なし」で、送り元に渡してあれば「行なし（… に送り元へ渡した）」（`--json` は `state`: `replied` / `handed` / `none`）。**「行なし」は未着とは限らない**: 完了の行が落ちて transcript から補った返答（#614）は JSONL に書かれないので、画面には出ていてもここでは見えない。
 - `usage` が数えるのは `turn-usage.jsonl`（SAI から回したターンだけ）。画面の `#/usage` で足りるときはそちらを見る。絞ったときは「小計（上の N）」と「合計（全 N）」を分けて出す（`--json` は `shown_sum` と `sum`）。呼び名は表示名で足りればそれで出し、付いていないセッションがあるときだけ題名のために範囲の記録を読む。
+- `paths` は数だけを出す（本文・パス・リポジトリの名前は出さない）。読み方は `server/tools/feedPaths.ts` の純粋関数で、ターンは行の `pane` の有無、届け方は `reply.log` の `--- <時刻> <エンティティ> <文>` の決まった文、ダイアログは `approvals.jsonl` の `tool: CodexDialog`。週は月曜始まり（`Asia/Tokyo`）で、`*` は範囲が週の途中で切れている週。端末の打ち込みは reply.log に書き始めた週の次から数え、それより前は 0 でなく `?`（`--json` は `null`）。`-p / exec` は新しいセッションを起こした数も含む。`claude --bg` は数えない
 - **読み方は `server/tools/feedRead.ts` の関数**で、その場かぎりの問いはこれを import して書く（サブコマンドにはしない）: `readRows(dir, range)`（`<host>` 付きも・SAI 自身の雑音は落とす）/ `dateRange()` / `rowEntity()` / `isTurn()` / `pairTurns()`（入力の行と完了の行の対応。`missing` = 完了の行が落ちた、`empty` = 本文が空、`open` = まだ来ていない）/ `promptKind()` と `humanPrompt()`（要約・届いたメッセージを人の入力から外す）/ `readTurnUsage()` → `usageRows()` → `usageTotals()` / `readAgentMessages()` → `messageReplies()` / `sessionsOf()` → `resolveSession()`。
 
   ```

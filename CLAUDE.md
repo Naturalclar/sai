@@ -195,6 +195,7 @@ OpenCode (feed/opencode/sai.js) ─┘                           │
 - **Serve 越しの認証は whois で突き合わせる**（`server/auth.ts`）。ヘッダがどちらも無いものだけがループバック。タグ付きの端末は画面・REST は 401 で、capability を与えた `/mcp` だけ。「聞けなかった」と「居ない」を混ぜない → `docs/internals/auth.md`
 - **ブラウザから叩く書き込みの口は同一オリジンのみ**（`app.ts` の `isCrossOrigin()` を外さない）: 返信・新しいセッション・承認の答え・レビュー・一言の「変？」・既読・送信の停止など。**`cwd`・パス・ブランチはリクエストから受けず、セッションの行から取る**（新しいセッションも `from` の `cwd`）
 - **SAI 自身は起動するコマンドに権限のフラグを付けない。** 運用者が `SAI_CLAUDE_ARGS` / `SAI_CODEX_ARGS` で渡すのは可（`docs/screen.md` の「返信と許可」の範囲。バイパスは勧めない）
+- **端末の経路（tmux）に新しい機能を足さない。新しい機能は SAI の経路（`-p` / app-server）に足す（#843）**
 - **「処理中の返信」はメモリと `~/.agent-feed/replying.json` の両方**（再起動で忘れると返信が二重に走る）。失敗は `Replying.failed` で画面に出す
 - **セッションの呼び名（SAI の表示名）・実際の worktree 名・ほかのリポジトリの名前は、コミットするファイル・コミットメッセージ・issue・PR に書かない。** 「セッション A」「`dev-worktree-a`」「リポジトリ A」のように書く（テストの作り物の名前も同じ）。詳しくは `AGENTS.md`
 - **SAI に画像を出すには返答の本文に `![名前](パス)` と書く。** 置き場は `.screenshots/`（`.gitignore` 済み）。`/tmp` と `web/dist/` は使わない（#704。`AGENTS.md` と同じ文）

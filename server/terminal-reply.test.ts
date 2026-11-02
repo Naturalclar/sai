@@ -309,6 +309,8 @@ test('返信: replace_typed で打ちかけを消してから打ち込み、repl
   assert.deepEqual(ops, ['display-message', 'capture-pane', 'send-keys C-u', 'capture-pane', 'load-buffer', 'paste-buffer', 'send-keys Enter'])
   const log = await readFile(join(dir, 'reply.log'), 'utf-8')
   assert.match(log, /端末の打ちかけを消して打ち込んだ: "消される文"/)
+  // 数えるための 1 行は本文を書かない（#845）。文は `pnpm feed paths` が読む
+  assert.match(log, /^--- \S+ T1@r 端末に打ち込んだ$/m)
   // 処理中になったので片付ける（ターン完了の行を足す）
   await appendFile(feedFile, JSON.stringify(row(new Date(), 'T1', { repo: 'r', cwd: work, pane: '%9', pid: 200, user_text: '本文', text: 'ok' })) + '\n')
   await sessions()

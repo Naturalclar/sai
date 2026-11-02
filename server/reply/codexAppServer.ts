@@ -170,7 +170,7 @@ interface ManagedTurn {
   text: string
   /** 要約だけのターン（#837）。画面は「要約中」と出し、終わりは `turn/completed` だけで決める */
   compact?: true
-  /** 要約の時間切れのタイマー */
+  /** 要約の時間切れ・`systemError` のあとの待ちのタイマー */
   timer?: ReturnType<typeof setTimeout>
 }
 
@@ -204,6 +204,11 @@ interface WaitingRpc {
 const REQUEST_TIMEOUT_MS = 30_000
 /** 要約だけのターンを待つ上限（#837）。過ぎたら止めて失敗にする（預かった本文は回さない）。大きいスレッドでも数分で終わる見込みの、十分長い値 */
 export const CODEX_COMPACT_TIMEOUT_MS = 10 * 60_000
+/**
+ * `systemError` のあと `turn/completed` を待つ長さ（#849）。失敗の中身は `turn/completed` に載るので、すぐ片付けると失敗が残らない。
+ * ふつうは続けて届く（実測 0.166.0）。届かないまま黙ったら、ここで失敗にして片付ける（処理中のまま残さない）
+ */
+export const CODEX_SYSTEM_ERROR_GRACE_MS = 10_000
 /** 使用率を聞く待ちの上限（#832）。人がパネルで押して待つので、ほかの要求より短く切る */
 export const RATE_LIMITS_TIMEOUT_MS = 5_000
 /** スキルの一覧を覚えておく長さ。`/` を打つたびに app-server へ聞きに行かないため（増減は次に打った時に拾う） */
@@ -320,11 +325,13 @@ export class CodexAppServer implements CodexApp {
   private readonly connect: CodexConnector
   private readonly now: () => number
   private readonly compactTimeoutMs: number
+  private readonly systemErrorGraceMs: number
 
-  constructor(connect: CodexConnector = realCodexConnector(), now: () => number = Date.now, compactTimeoutMs = CODEX_COMPACT_TIMEOUT_MS) {
+  constructor(connect: CodexConnector = realCodexConnector(), now: () => number = Date.now, compactTimeoutMs = CODEX_COMPACT_TIMEOUT_MS, systemErrorGraceMs = CODEX_SYSTEM_ERROR_GRACE_MS) {
     this.connect = connect
     this.now = now
     this.compactTimeoutMs = compactTimeoutMs
+    this.systemErrorGraceMs = systemErrorGraceMs
   }
 
   running(id: string): boolean {
@@ -575,6 +582,13 @@ export class CodexAppServer implements CodexApp {
       this.clearThread(threadId)
       throw error
     }
+  }
+
+  /** `systemError` のあと `turn/completed` が届かなかった（#849）。エラーで終わったものとして残す */
+  private turnEndNeverCame(turn: ManagedTurn): void {
+    if (this.turns.get(turn.threadId) !== turn) return
+    this.failures.set(turn.entity, { replying: { since: turn.since, text: turn.text, failed: { tail: codexTurnErrorReason('エラーの中身は返ってきませんでした'), turn_error: true } }, at: this.now() })
+    this.clearThread(turn.threadId)
   }
 
   /** 要約のターンが終わらなかった。失敗として残す（預かりは `drain()` が止める）。投げた `turn/interrupt` の結果は待たない */
@@ -857,8 +871,20 @@ export class CodexAppServer implements CodexApp {
       // 要約のターンは `turn/completed` だけで終わりを決める。`idle` も `systemError` もその直前に届くので、
       // ここで片付けると、成功の前に本文を回し（`turn/start` は要約中なら断られる）、失敗の中身も落とす（実測 0.166.0）
       if (turn?.compact) return
+      if (!turn?.turnId) return
+      // 失敗の中身は続けて届く `turn/completed` に載るので、ここでは片付けない（片付けると失敗が残らず、預かりも止まらない。#849。実測 0.166.0）
+      if (status?.type === 'systemError') {
+        turn.timer ??= setTimeout(() => this.turnEndNeverCame(turn), this.systemErrorGraceMs)
+        turn.timer.unref?.()
+        return
+      }
+      // 立ち直った（ターンが続いている）
+      if (status?.type === 'active' && turn.timer) {
+        clearTimeout(turn.timer)
+        delete turn.timer
+      }
       // thread/resume直後にもidleが届くことがある。turn/start前（turnIdなし）はまだ片付けない。
-      if (turn?.turnId && (status?.type === 'idle' || status?.type === 'notLoaded' || status?.type === 'systemError')) this.clearThread(threadId)
+      if (status?.type === 'idle' || status?.type === 'notLoaded') this.clearThread(threadId)
     }
   }
 

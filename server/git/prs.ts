@@ -9,6 +9,8 @@
 //   書くのは `gh api -X POST repos/<owner>/<repo>/pulls/<番号>/reviews --input -` の 1 形だけ（中身は shared/prReview.ts の
 //   githubReview() が組み立てたもの。呼ぶ側が同一オリジン・head の SHA・行の位置を確かめてから呼ぶ）。
 //   引数はここで組み立て、任意のサブコマンドは作れない。シェルは通さない
+// - 頼んだ件が閉じたか（#827）は `gh api -X GET repos/<owner>/<repo>/issues/<番号> --jq <決め打ち>` の読むだけの 1 形
+//   （issue と PR のどちらも引ける。状態・閉じた時刻・マージした時刻だけを取る）
 // - リポジトリはサーバが**記録で知っているもの**だけ（shared/prs.ts の knownRepos()。呼び出し側が確かめる）、
 //   番号は数字だけ（isPrNumber()）。ここでも形をもう一度確かめる
 // - 認証は `gh` に任せる（SAI は鍵を持たない）。`gh` が無い・未ログイン・時間切れは **null を返すだけ**
@@ -126,6 +128,11 @@ export interface PrBrowser {
    * `gh api -X GET repos/<repo>/git/commits/<sha> --jq '[.parents[].sha]'` の決まった形の 1 本だけ。引けなければ null。持たない実装は「引けない」と同じ
    */
   commitParents?(repo: string, sha: string): Promise<readonly string[] | null>
+  /**
+   * issue / PR が閉じたか（#827。頼んだ件の「その後」をいつまで添えるか）。`gh api -X GET repos/<repo>/issues/<n>` の決まった形の 1 本だけ。
+   * 引けなければ null。持たない実装は「引けない」と同じ
+   */
+  refState?(repo: string, number: number): Promise<RefState | null>
   view(repo: string, number: number): Promise<PrView | null>
   /** 会話のコメントとレビュー（#600）。読めなければ null（「無い」の空と分ける）。画面を開いたときと「更新」のときだけ呼ぶ */
   comments(repo: string, number: number): Promise<PrCommentList | null>
@@ -140,6 +147,29 @@ export interface PrBrowser {
   ci?(repo: string, number: number): Promise<PrCi | null>
   /** レビューを投稿する（#526）。投稿できたらそのレビューの URL、できなければ理由 */
   postReview(repo: string, number: number, review: GithubReview): Promise<{ ok: true; url: string } | { ok: false; error: string }>
+}
+
+/** issue / PR が閉じたか（#827）。`closed_at` は issue なら閉じた時刻、PR ならマージした時刻（開いている・マージせずに閉じた PR は空） */
+export interface RefState {
+  kind: 'issue' | 'pr'
+  closed_at: string
+}
+
+/** `refState()` の `--jq`。番号が PR なら `pull_request` がある */
+export const REF_STATE_JQ = '[.state, (.closed_at // ""), (.pull_request != null), (.pull_request.merged_at // "")]'
+
+/** `REF_STATE_JQ` の出力を読む。形が違えば null */
+export function parseRefState(out: string): RefState | null {
+  try {
+    const v: unknown = JSON.parse(out)
+    if (!Array.isArray(v) || v.length !== 4) return null
+    const [state, closedAt, isPr, mergedAt] = v as unknown[]
+    if (typeof state !== 'string' || typeof closedAt !== 'string' || typeof isPr !== 'boolean' || typeof mergedAt !== 'string') return null
+    if (isPr) return { kind: 'pr', closed_at: mergedAt }
+    return { kind: 'issue', closed_at: state === 'closed' ? closedAt : '' }
+  } catch {
+    return null
+  }
 }
 
 /** 引かない実装（`SAI_GH=0`、テストの既定） */
@@ -339,6 +369,26 @@ export class GhPrs implements PrBrowser {
     // 古いものから捨てる（Map は入れた順）
     while (this.parents.size > PARENTS_KEEP) this.parents.delete(this.parents.keys().next().value as string)
     return parents
+  }
+
+  /** 閉じた（マージされた）ものは変わらないので捨てない。開いている・引けなかったことは一覧と同じ間だけ覚える */
+  private readonly refs = new Map<string, { at: number; state: Promise<RefState | null> }>()
+
+  refState(repo: string, number: number): Promise<RefState | null> {
+    if (!isRepoName(repo) || !isPrNumber(String(number))) return Promise.resolve(null)
+    const key = `${repo}\0${number}`
+    const hit = this.refs.get(key)
+    if (hit && (hit.at === Infinity || Date.now() - hit.at < this.ttl)) return hit.state
+    const state = this.run(['api', '-X', 'GET', `repos/${repo}/issues/${number}`, '--jq', REF_STATE_JQ], 64 * 1024)
+      .then((out) => (out === null ? null : parseRefState(out)))
+      .catch(() => null)
+    const entry = { at: Date.now(), state }
+    this.refs.set(key, entry)
+    void state.then((got) => {
+      if (got?.closed_at && this.refs.get(key) === entry) entry.at = Infinity
+    })
+    while (this.refs.size > PARENTS_KEEP) this.refs.delete(this.refs.keys().next().value as string)
+    return state
   }
 
   async list(repo: string, fresh = false): Promise<PrSummary[] | null> {

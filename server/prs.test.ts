@@ -18,7 +18,7 @@ import { FeedStore } from './rows/store.ts'
 import { localDate } from './rows/aggregate.ts'
 import { row } from './rows/aggregate.test.ts'
 import { PR_LIST_REVIEWS_JQ, PR_VIEW_REVIEWS_JQ } from '../shared/prReviewState.ts'
-import { GhPrs, LIST_FIELDS, MERGED_LIMIT, mergedKey, PARENTS_JQ, parseMergedHeads, parseParents } from './git/prs.ts'
+import { GhPrs, LIST_FIELDS, MERGED_LIMIT, mergedKey, PARENTS_JQ, parseMergedHeads, parseParents, parseRefState, REF_STATE_JQ } from './git/prs.ts'
 import type { GhRun, GhSend, PrBrowser, PrView } from './git/prs.ts'
 
 const summary = (number: number, extra: Partial<PrSummary> = {}): PrSummary => ({
@@ -549,6 +549,34 @@ test('GhPrs.mergedHeads: 決まった形の gh pr list --state merged を 1 本�
   assert.equal(await new GhPrs(async () => out).mergedHeads('o/r'), null)
   assert.equal(parseMergedHeads('{'), null)
   assert.equal(parseMergedHeads('{}'), null)
+})
+
+test('GhPrs.refState: 決まった形の gh api -X GET repos/<repo>/issues/<n> を 1 本だけ。閉じたものは覚え、開いているものは少しの間だけ覚える（#827）', async () => {
+  const calls: string[][] = []
+  let out: string | null = null
+  const gh = new GhPrs(async (args) => {
+    calls.push(args)
+    return out
+  }, 0)
+  assert.equal(await gh.refState('o/r', 900), null, '引けなければ null')
+  out = JSON.stringify(['open', '', false, ''])
+  assert.deepEqual(await gh.refState('o/r', 900), { kind: 'issue', closed_at: '' }, '引けなかったことは覚える時間（ここでは 0）が過ぎれば引き直す')
+  out = JSON.stringify(['closed', '2026-10-28T03:00:00Z', false, ''])
+  assert.deepEqual(await gh.refState('o/r', 900), { kind: 'issue', closed_at: '2026-10-28T03:00:00Z' })
+  assert.deepEqual(calls.at(-1), ['api', '-X', 'GET', 'repos/o/r/issues/900', '--jq', REF_STATE_JQ])
+  assert.equal(calls.length, 3)
+  out = null
+  assert.deepEqual(await gh.refState('o/r', 900), { kind: 'issue', closed_at: '2026-10-28T03:00:00Z' }, '閉じたものは変わらないので引き直さない')
+  assert.equal(calls.length, 3)
+  // 形の悪い名前・番号では gh を起こさない
+  assert.equal(await gh.refState('-x/y', 900), null)
+  assert.equal(await gh.refState('o/r', 0), null)
+  assert.equal(calls.length, 3)
+  // PR はマージした時刻だけを見る（マージせずに閉じた PR は「終わった」にしない）
+  assert.deepEqual(parseRefState(JSON.stringify(['closed', '2026-10-28T03:00:00Z', true, ''])), { kind: 'pr', closed_at: '' })
+  assert.deepEqual(parseRefState(JSON.stringify(['closed', '2026-10-28T03:00:00Z', true, '2026-10-28T03:00:00Z'])), { kind: 'pr', closed_at: '2026-10-28T03:00:00Z' })
+  assert.equal(parseRefState('{'), null)
+  assert.equal(parseRefState('["open"]'), null)
 })
 
 test('GhPrs.commitParents: 決まった形の gh api -X GET repos/<repo>/git/commits/<sha> を 1 本だけ。引けた親は覚え、引けなかったことは少しの間だけ覚える（#821）', async () => {

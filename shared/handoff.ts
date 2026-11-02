@@ -2,6 +2,7 @@
 // **引き継ぎの文面はエージェントに書かせる**（SAI は transcript を要約しない。一言の口とも混ぜない）。
 // サーバは「引き継ぎを頼んだ」ことを覚えない: 最後のターン完了の行の入力がこの依頼文なら「引き継ぎが書けている」と読む
 // （画面を閉じても・サーバを立て直しても、行から同じ判定になる）。DOM にもプロセスにも触らない純粋関数。handoff.test.ts で回す
+import { splitHandedReplies } from './agentMessages.ts'
 import { eventKind } from './events.ts'
 import type { FeedRow } from './types.ts'
 
@@ -24,9 +25,9 @@ export const HANDOFF_PROMPT = [
   'ファイル名、ブランチ名、issue / PR の番号は省略しないでください。作業はせず、書くだけにしてください。15000 字を超えると切られるので、それより短く。',
 ].join('\n')
 
-/** その入力が引き継ぎの依頼か */
+/** その入力が引き継ぎの依頼か。SAI が頭に足した返答・その後の塊は外して見る（#827） */
 export function isHandoffPrompt(userText: string | undefined): boolean {
-  return (userText ?? '').trimStart().startsWith(HANDOFF_MARK)
+  return splitHandedReplies(userText ?? '').text.trimStart().startsWith(HANDOFF_MARK)
 }
 
 /**

@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { AFTER_END, AFTER_MARK } from './agentMessages.ts'
 import { handoffFirstText, handoffReady, HANDOFF_MARK, HANDOFF_PROMPT, isHandoffPrompt } from './handoff.ts'
 
 const turn = (ts: string, user_text: string, text: string, event = 'Stop') => ({ ts, event, text, user_text })
@@ -36,4 +37,11 @@ test('handoffFirstText: 引き継ぎの本文をそのまま含む', () => {
   const out = handoffFirstText('いまは #1 の途中です')
   assert.ok(out.endsWith('\n\nいまは #1 の途中です'))
   assert.equal(isHandoffPrompt(out), false, '新しいセッションの最初の入力は、引き継ぎの依頼とは読まない')
+})
+
+test('isHandoffPrompt / handoffReady: SAI が頭に足した返答・その後の塊があっても引き継ぎの依頼と読む（#827）', () => {
+  const block = `${AFTER_MARK}動きがありました。\n\n${AFTER_END}`
+  const user_text = `${block}\n\n${HANDOFF_PROMPT}`
+  assert.equal(isHandoffPrompt(user_text), true)
+  assert.equal(handoffReady([{ ts: '2026-10-28T10:00:00+09:00', event: 'Stop', text: '引き継ぎの文', user_text }])?.text, '引き継ぎの文')
 })

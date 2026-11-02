@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { AFTER_END, AFTER_MARK } from './agentMessages.ts'
 import { olderPrompts, parseRecent, recentRows } from './recentRows.ts'
 
 const rows = [
@@ -54,4 +55,8 @@ test('parseRecent: 無い・読めない・0 以下は絞らない', () => {
 test('olderPrompts: 自動の要約の文が入力として記録された行は載せない（#626）', () => {
   const dropped = [{ user_text: '頼み' }, { user_text: 'This session is being continued from a previous conversation that ran out of context.' }]
   assert.deepEqual(olderPrompts(dropped), ['頼み'])
+})
+
+test('olderPrompts: SAI が頭に足したその後の塊は外す（#827）', () => {
+  assert.deepEqual(olderPrompts([{ user_text: `${AFTER_MARK}動きがありました。\n\n${AFTER_END}\n\n人の文` }]), ['人の文'])
 })

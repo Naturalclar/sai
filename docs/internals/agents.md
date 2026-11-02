@@ -99,7 +99,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 
 ### 返答のバブルから、その場で相手へ返信する（#700）
 
-- 送るのは**人**で、口は画面の返信（`POST /api/sessions/<相手>/reply`）のまま。`ReplyRequest.sent_from`（`{ id: 送り元, anchor: どのバブルの下か = その行の ts }`）を添えるだけで、送り方（端末・別プロセス・預かり）は変わらない。`sai_send` は通さないので、送り元のターンは起こさず、返答を送り元の会話にも渡さない（`handed_at` は付かない）。
+- 送るのは**人**で、口は画面の返信（`POST /api/sessions/<相手>/reply`）のまま。`ReplyRequest.sent_from`（`{ id: 送り元, anchor: どのバブルの下か = その行の ts }`）を添えるだけで、送り方（端末・別プロセス・預かり）は変わらない。`sai_send` は通さないので、送り元のターンは起こさず、返答を送り元の会話に返答としては渡さない（`handed_at` は付かない）。人の入力で始まったターンなので、頼んだ件の「その後」の 1 行としては添わる（#827）。
 - サーバは受け付けた（`202`）あとに `AgentMessages.follow()` で覚える（`server/reply/agentMessages.ts`。`agent-messages.json` の `followups`。`AGENT_FOLLOWUPS_KEEP` = 200 件、本文は 500 字まで）。**覚えるのは、送り元がその相手にメッセージを送ったことがあるときだけ**（返答のバブルが出うる組）。そうでない `sent_from` は黙って捨て、返信そのものは届く。`anchor` は表示にしか使わない。
 - 送り元の詳細の応答に 3 つ載せる: `agent_followups`（バブルの下の 1 行。`AgentFollowupLine`。本文は `followupHead()` で 1 行目の頭 40 字）、`agent_replies` に混ぜる相手の返答（`agent_reply.followup: true`）、`agent_reply_sessions`（返答の相手の `SessionSummary`。セッション画面は一覧を持たないので、入力欄・`replyBlockedReason()`・相手の `next_ask`・行数（`turns`）はここから取る。一覧の窓の外の相手は載らず、そのときは返信の口を出さない）。
 - 相手の返答の引き当ては `shared/agentMessages.ts` の `followupReplyRows()`。見出しの id が無いので、**相手のセッションの、送ったあとのターン完了の行のうち、入力（`deliveryMatcher().headOf()`）の頭 `FOLLOWUP_MATCH_CHARS`（200 字）が送った文と同じ最初の 1 つ**を当てる（SAI が頭に足した返答の塊 #594 は `splitHandedReplies()` で外してから比べる）。預かりに並ぶと間に別のターンが終わるので「次のターン完了」では当てない。1 つの行は 1 つの返信にだけ（同じ文を 2 回送ったら古い順に 1 つずつ）。**入力が記録に無いターン（入力の行を書かないエージェント・要約で入力が置き換わった行・スキルの展開で入力が変わる場合）には当たらず、そのときは 1 行だけが残る**（返答は相手のセッションで読む）。
@@ -127,6 +127,16 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
   - `/mcp`（tailnet）の `sai_send` には `wake` を出さない（送り元がセッションではない）。
 - **「渡した」にする時点**（#607 のレビュー）: その場で足した分は、そのターンが失敗したら取り消す（`rememberHanded()` → `replyingOf()`）。**`sai_wait` で待っている返答は入力の口からは足さない**（`waitedAt`。その応答で渡るので、両方から渡すと同じターンで 2 回読ませる）。**預かりに並んだ「起こす」は、回るまで渡した扱いにしない**（`wakeQueued`。人が取り消す・「送信を止める」で消えたら未渡しのまま残し、もう起こさない）。
 - `STEERED_NOTE` / `WAKE_NOTE` だけの入力は人の入力ではないので、題名・一覧の「最後の入力」（`aggregate.ts`）・↑ の履歴には使わない（`isHandedOnly()`）。
+
+
+### 頼んだ件のその後を添える（#827）
+
+- 材料集めは `server/reply/agentAfter.ts` の `createAfterTurns()`、組み方は `shared/agentAfter.ts` の `afterTurns()`（純粋関数）。足すのは `launch()` の返答の塊と同じ 1 か所で、並びは返答の塊 → その後の塊（`AFTER_MARK` 〜 `AFTER_END`）→ 人の本文。`o.origin` のターンと `/`・`$` で始まる本文には足さない。`steer` / `wake` の本文にも足さない。
+- 見るのは送って `AFTER_KEEP_MS`（3 日）以内で、`far` も `after_done` も無い記録だけ。返答の行がまだの頼みには添えない。
+- 添えるターン: 返答の行より後のターン完了のうち、人の入力で始まったもの（`humanTurn()`。届いたメッセージ・ループ・待ち・要約・空は人ではない）と、閉じた時刻をそのあいだに含むもの（ターンの始まりは入力の行、無ければ完了の `AFTER_TURN_SPAN_MS` 前）。送り元からのメッセージのターンは外す。閉じたあとに始まったターンも外す。
+- 頼んだ番号（`askRefs()`）は本文の 1 行目の `#N` だけで、送る前から閉じていた番号は数えず、複数あれば全部閉じたら終わる（`closesOf()`）。閉じたかは `PrBrowser.refState()`（相手の remote のリポジトリ）で、待つのは `AFTER_GH_WAIT_MS` まで。間に合わない・引けない番号は開いている扱いで、3 日で止まる。マージせずに閉じた PR は終わりにしない。
+- どこまで添えたかは `AgentMessage.after_at`、閉じたことまで添えたら `after_done`（`AgentMessages.setAfter()`）。`after_done` のあとも 3 日のあいだは頼みを見て、閉じる前に始まったターンは完了してから添える（「閉じました」は二度添えない）。起動できた（`202`）ときだけ書く。足したターンが失敗したら `rememberHanded()` の覚えから前の値に戻す。返答より前に閉じていた件は、添えずにその場で `after_done` にする。
+- 塊は `splitHandedReplies()` が外す（`after` に件数。ターンと閉じたことの行）ので、画面・題名・↑ の履歴・記録を調べる道具・一言と案の入力・引き継ぎの判定（`isHandoffPrompt()`）・`sai_session` は人の本文を見る。
 
 ### トークンの歯止め（#311）
 

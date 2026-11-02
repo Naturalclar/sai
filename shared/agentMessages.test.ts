@@ -255,9 +255,9 @@ test('withHandedReplies / splitHandedReplies: 返答を本文の頭に足し、�
   assert.ok(!t.startsWith(AGENT_HEADER_MARK), '届けた見出し（【SAI】）と取り違えない')
   assert.equal(deliveredId(t), '', 'deliveredId() は返答の塊を「届いたメッセージ」と読まない')
   assert.match(t, /「セッション B」（message_id: cd）への依頼は失敗しました: 終了コード 1/)
-  assert.deepEqual(splitHandedReplies(t), { text: '579着手して', handed: 2 })
+  assert.deepEqual(splitHandedReplies(t), { text: '579着手して', handed: 2, after: 0 })
   assert.equal(withHandedReplies('そのまま', []), 'そのまま', '返答が無ければ本文だけ')
-  assert.deepEqual(splitHandedReplies('人が 【SAI 返答】と打った'), { text: '人が 【SAI 返答】と打った', handed: 0 })
+  assert.deepEqual(splitHandedReplies('人が 【SAI 返答】と打った'), { text: '人が 【SAI 返答】と打った', handed: 0, after: 0 })
 })
 
 test('withHandedReplies: 件数と合計の字数に上限があり、入りきらない分は名前だけ 1 行（#594）', () => {

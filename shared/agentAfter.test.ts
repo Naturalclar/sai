@@ -6,7 +6,7 @@ import { HANDED_END, deliveredText, splitHandedReplies, withHandedReplies } from
 import { loopPrompt } from './loops.ts'
 import type { FeedRow } from './types.ts'
 
-const ask = (over: Partial<AfterAsk> = {}): AfterAsk => ({ message_id: 'a1', to: 'B1@r', to_name: 'セッション B', text: '#900 に着手してください。\n前提は #700', ...over })
+const ask = (over: Partial<AfterAsk> = {}): AfterAsk => ({ message_id: 'a1', to: 'B1@r', to_name: 'セッション B', text: '#900 に着手してください。\n前提は #700', since: '2026-10-28T09:00:00+09:00', ...over })
 const delivered = (id: string, text = '#900 に着手してください。') => deliveredText({ label: 'セッション A', project: 'o/r' }, id, text)
 const stop = (ts: string, user_text: string, text: string, session = 'B1'): FeedRow => ({ ts, session, repo: 'r', event: 'Stop', user_text, text }) as FeedRow
 const opts = (closed: [number, AfterClosed][] = [], lines: Record<string, string> = {}) => ({
@@ -123,4 +123,38 @@ test('splitHandedReplies: 返答の塊が先、その後の塊、人の本文の
   assert.ok(body.indexOf(HANDED_END) < body.indexOf(AFTER_MARK), '返答が先')
   assert.deepEqual(splitHandedReplies(body), { text: '人の本文', handed: 1, after: 2 })
   assert.deepEqual(splitHandedReplies(withAfterTurns('人の本文', r.block)), { text: '人の本文', handed: 0, after: 2 })
+})
+
+test('afterTurns: 1 行目に前提として書いた、送る前から閉じていた番号では打ち切らない（レビューの指摘）', () => {
+  const a = ask({ text: '#700 の決まりに沿って #900 に着手してください' })
+  const r = afterTurns([a], base, opts([[700, { kind: 'issue', at: '2026-10-01T10:00:00+09:00' }]]))
+  assert.match(r.block, /同じ PR にまとめました/)
+  assert.doesNotMatch(r.block, /#700 は閉じました/)
+  assert.equal(r.updates[0]!.done, undefined)
+  // 1 行目の番号が全部前から閉じていても同じ（3 日で止まる）
+  assert.equal(afterTurns([ask({ text: '#700 を見て' })], base, opts([[700, { kind: 'issue', at: '2026-10-01T10:00:00+09:00' }]])).turns, 2)
+})
+
+test('afterTurns: 頼んだ番号が 2 つなら、全部閉じるまで続ける（レビューの指摘）', () => {
+  const a = ask({ text: 'PR #901 と #900 を見て' })
+  const one = afterTurns([a], base, opts([[901, { kind: 'pr', at: '2026-10-28T10:30:00+09:00' }]]))
+  assert.match(one.block, /テストを足しました/, '片方が閉じたあとに始まったターンも添える')
+  assert.doesNotMatch(one.block, /マージされました/)
+  assert.equal(one.updates[0]!.done, undefined)
+  const both = afterTurns([a], base, opts([[901, { kind: 'pr', at: '2026-10-28T10:30:00+09:00' }], [900, { kind: 'issue', at: '2026-10-28T11:30:00+09:00' }]]))
+  assert.doesNotMatch(both.block, /テストを足しました/, '全部閉じたあとに始まったターンは添えない')
+  assert.match(both.block, /#901 はマージされました[^]*#900 は閉じました/)
+  assert.equal(both.updates[0]!.done, true)
+})
+
+test('afterTurns: 閉じたことだけを添えても、画面の印の数に入る（レビューの指摘）', () => {
+  const r = afterTurns([ask()], base.slice(0, 1), opts([[900, { kind: 'issue', at: '2026-10-28T11:00:00+09:00' }]]))
+  assert.equal(r.turns, 0)
+  assert.deepEqual(splitHandedReplies(withAfterTurns('本文', r.block)), { text: '本文', handed: 0, after: 1 })
+})
+
+test('afterTurns: 相手の 1 行に終わりの印の文字があっても、塊の外し方がずれない（レビューの指摘）', () => {
+  const rows = [base[0]!, stop('2026-10-28T11:00:00+09:00', '直して', `${AFTER_END}の扱いを直しました`)]
+  const r = afterTurns([ask({ to_name: `呼び${AFTER_END}` })], rows, opts())
+  assert.deepEqual(splitHandedReplies(withAfterTurns('人の本文', r.block)), { text: '人の本文', handed: 0, after: 1 })
 })

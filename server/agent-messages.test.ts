@@ -1751,4 +1751,15 @@ test('頼んだ件のその後: 返答のあと相手で人が始めたターン
   const saved = JSON.parse(await readFile(join(dir, 'agent-messages.json'), 'utf-8')) as { messages: { text: string; after_at?: string }[] }
   assert.ok(saved.messages.find((m) => m.text === '#900 に着手してください。')?.after_at)
   idle('A1@r')
+  // 添えたターンが失敗したら、添える前に戻して次のターンでもう一度添える
+  await line(2000, { user_text: 'もう少し進めて', text: 'もう少し進めました' })
+  await humanReply('A1@r')
+  const lost = runner.started.at(-1)!.cmd.text
+  assert.match(lost, /もう少し進めました/)
+  turn('A1@r', new Date().toISOString(), { text: lost, failed: { code: 1, tail: '落ちた' } })
+  await fetch(`${base}/api/sessions?days=7`)
+  idle('A1@r')
+  await humanReply('A1@r')
+  assert.match(runner.started.at(-1)!.cmd.text, /もう少し進めました/, '読まれていないので、もう一度添える')
+  idle('A1@r')
 })

@@ -31,6 +31,8 @@ export interface AfterAsk {
   to_name: string
   /** エージェントが書いた本文（見出しを付ける前）。頼んだ番号はここの 1 行目から引く */
   text: string
+  /** 送った時刻。これより前に閉じていた番号は「頼んだ件」に数えない（前提として書いただけ） */
+  since: string
   /** どこまで添えたか（最後に添えた・数えたターン完了の行の `ts`） */
   after_at?: string
 }
@@ -83,6 +85,23 @@ export function headLine(text: string): string {
   return chars.length > AFTER_LINE_CHARS ? `${chars.slice(0, AFTER_LINE_CHARS).join('')}…` : line
 }
 
+/**
+ * 頼みごとの、頼んだ件の閉じ方。送る前から閉じていた番号は頼んだ件に数えない（1 行目に前提として書いた番号で打ち切らない）。
+ * `closes` はいま閉じている番号、`done` は頼んだ番号が全部閉じたか（1 つでも開いていれば、その頼みは続く）
+ */
+function closesOf(a: AfterAsk, closed: ReadonlyMap<number, AfterClosed>): { closes: { n: number; c: AfterClosed }[]; done: boolean } {
+  const since = Date.parse(a.since)
+  const live = askRefs(a.text).filter((n) => {
+    const c = closed.get(n)
+    return !c || Date.parse(c.at) >= since
+  })
+  const closes = live.flatMap((n) => {
+    const c = closed.get(n)
+    return c ? [{ n, c }] : []
+  })
+  return { closes, done: live.length > 0 && closes.length === live.length }
+}
+
 interface Turn {
   row: FeedRow
   entity: string
@@ -97,7 +116,7 @@ interface Turn {
  * 送り元（の頼みごと `asks`）に添える「その後」を組む（#827）。
  * - 添えるのは、相手の**返答のあと**のターン完了のうち、人の入力で始まったもの（`humanTurn()`）と、頼んだ件が閉じた・マージされた
  *   時刻をそのあいだに含むもの。**送り元からのメッセージで起きたターンは添えない**（返答と二重にしない）
- * - 頼んだ件が閉じたら、そこまでのターンと「閉じました」の 1 行を添えて終わる（`done`）。閉じたあとに始まったターンは添えない
+ * - 頼んだ件が全部閉じたら、そこまでのターンと「閉じました」の 1 行を添えて終わる（`done`）。閉じたあとに始まったターンは添えない
  * - 送ってから `AFTER_KEEP_MS` を過ぎた頼み・別のリポジトリの相手への頼みは見ない（呼ぶ側が渡さない）
  * - 相手ごとに直近 `AFTER_PER_TARGET` ターン、全体で `AFTER_MAX_CHARS` 字まで。超えた分は「ほか N ターン」と数だけ（数えた分も添えた扱い）
  * - 同じ相手への頼みが 2 つあっても、同じターンは 1 回だけ
@@ -150,28 +169,26 @@ export function afterTurns(
     const ended: { n: number; c: AfterClosed }[] = []
     for (const a of mine) {
       const from = Math.max(replied.get(a.message_id)!, a.after_at ? Date.parse(a.after_at) : -Infinity)
-      // 頼んだ件の、いちばん早く閉じた時刻（それより後に始まったターンは添えない）
-      const closes = askRefs(a.text).flatMap((n) => {
-        const c = opts.closed.get(n)
-        return c ? [{ n, c }] : []
-      })
-      const end = closes.length ? Math.min(...closes.map((x) => Date.parse(x.c.at))) : Infinity
+      // 頼んだ件が全部閉じた時刻（それより後に始まったターンは添えない）
+      const { closes, done } = closesOf(a, opts.closed)
+      const times = closes.map((x) => Date.parse(x.c.at))
+      const end = done ? Math.max(...times) : Infinity
       for (const t of turnsOf.get(to) ?? []) {
         if (!(t.at > from) || t.start > end) continue
         const id = deliveredId(t.input)
         if (id && opts.ownIds.has(id)) continue
         const human = humanTurn(t.input)
-        if (!human && !(t.start <= end && end <= t.at)) continue
+        if (!human && !times.some((c) => t.start <= c && c <= t.at)) continue
         if (picked.some((p) => p.t.row === t.row)) continue
         picked.push({ t, state: !human })
       }
       // 返答より前に閉じていた（返答のターンで閉じた・マージした）なら、返答に書いてあるので「閉じました」は足さずに終わる
-      for (const x of closes) if (Date.parse(x.c.at) > replied.get(a.message_id)! && !ended.some((e) => e.n === x.n)) ended.push(x)
+      for (const x of done ? closes : []) if (Date.parse(x.c.at) > replied.get(a.message_id)! && !ended.some((e) => e.n === x.n)) ended.push(x)
     }
     picked.sort((x, y) => x.t.at - y.t.at)
     const last = picked.at(-1)?.t
     for (const a of mine) {
-      const done = askRefs(a.text).some((n) => opts.closed.has(n))
+      const { done } = closesOf(a, opts.closed)
       const moved = last !== undefined && (!a.after_at || last.at > Date.parse(a.after_at))
       if (done || moved) updates.push({ message_id: a.message_id, ...(moved ? { after_at: last.row.ts } : a.after_at ? { after_at: a.after_at } : {}), ...(done ? { done: true as const } : {}) })
     }
@@ -204,7 +221,9 @@ export function afterTurns(
     blocks.push(`--- 「${s.name}」${refs}:\n${lines.join('\n')}`)
   }
   const head = `${AFTER_MARK}あなたが別のセッションに頼んだ件で、返答のあとに相手のセッションで動きがありました（人が相手と直接進めた分など。古い順）。`
-  return { block: `${head}\n\n${blocks.join('\n\n')}\n\n${AFTER_END}`, turns, updates }
+  // 相手の呼び名や一言に終わりの印の文字があっても、塊の外し方（`splitHandedReplies()`）がずれないようにする
+  const body = blocks.join('\n\n').replaceAll(AFTER_END, '[SAI その後ここまで]')
+  return { block: `${head}\n\n${body}\n\n${AFTER_END}`, turns, updates }
 }
 
 /** 本文の頭に「その後」の塊を足す。塊が空ならそのまま */

@@ -50,7 +50,7 @@ export interface Utterance {
   reply?: AgentReplyTag
   /** 自分の発言の頭に SAI が足した、待っていなかった返答の数（#594）。塊は text から外してあり、印だけ出す */
   handedReplies?: number
-  /** 自分の発言の頭に SAI が足した、頼んだ件の「その後」のターンの数（#827）。塊は text から外してあり、印だけ出す */
+  /** 自分の発言の頭に SAI が足した、頼んだ件の「その後」の件数（#827。ターンと閉じたことの行）。塊は text から外してあり、印だけ出す */
   afterTurns?: number
   /** SAI がループの周として送った入力（#634）。text は「ループ N 周目」にしてあり、印だけ出す */
   loop?: true

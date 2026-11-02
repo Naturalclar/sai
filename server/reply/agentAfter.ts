@@ -55,7 +55,7 @@ export function createAfterTurns(deps: {
     }
     const [rows, lineOf] = await Promise.all([deps.rows(), deps.lines()])
     const result = afterTurns(
-      live.map((m) => ({ message_id: m.message_id, to: m.to, to_name: replierName(byId.get(m.to)!), text: m.text, ...(m.after_at ? { after_at: m.after_at } : {}) })),
+      live.map((m) => ({ message_id: m.message_id, to: m.to, to_name: replierName(byId.get(m.to)!), text: m.text, since: m.since, ...(m.after_at ? { after_at: m.after_at } : {}) })),
       rows,
       { lineOf, closed, ownIds: new Set(deps.agents.sentSince(from, 0).map((m) => m.message_id)) },
     )

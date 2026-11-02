@@ -130,7 +130,7 @@ function promptCell(userText: string | undefined, max: number): string {
   const kind = promptKind(userText)
   if (kind === 'compact') return KIND_MARK.compact + head(userText, max)
   const { text, handed, after } = splitHandedReplies(userText ?? '')
-  return (handed > 0 ? `[返答 ${handed} 件] ` : '') + (after > 0 ? `[その後 ${after} ターン] ` : '') + KIND_MARK[kind] + head(text, max)
+  return (handed > 0 ? `[返答 ${handed} 件] ` : '') + (after > 0 ? `[その後 ${after} 件] ` : '') + KIND_MARK[kind] + head(text, max)
 }
 
 const labelOf = (sessions: readonly SessionSummary[]) => {

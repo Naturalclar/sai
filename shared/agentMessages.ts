@@ -520,13 +520,13 @@ export function splitHandedReplies(userText: string): { text: string; handed: nu
     handed = Number(/返答が (\d+) 件届いています/.exec(text.slice(0, 200))?.[1] ?? 0)
     text = text.slice(end + HANDED_END.length).replace(/^\s+/, '')
   }
-  // 頼んだ件の「その後」（#827）は返答の塊のあと（無ければ頭）に置かれる。添えたターンの数は「ほか N ターン」も合わせて数える
+  // 頼んだ件の「その後」（#827）は返答の塊のあと（無ければ頭）に置かれる。数はターンの行・「ほか N ターン」・閉じたことの行を合わせた件数
   let after = 0
   if (text.startsWith(AFTER_MARK)) {
     const end = text.indexOf(AFTER_END)
     if (end >= 0) {
       const block = text.slice(0, end)
-      after = (block.match(/^- \d+\/\d+ /gm) ?? []).length + [...block.matchAll(/^- ほか (\d+) ターン/gm)].reduce((n, m) => n + Number(m[1]), 0)
+      after = (block.match(/^- (?:\d+\/\d+ |#\d+ は)/gm) ?? []).length + [...block.matchAll(/^- ほか (\d+) ターン/gm)].reduce((n, m) => n + Number(m[1]), 0)
       text = text.slice(end + AFTER_END.length).replace(/^\s+/, '')
     }
   }

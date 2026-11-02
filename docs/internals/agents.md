@@ -134,9 +134,9 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 材料集めは `server/reply/agentAfter.ts` の `createAfterTurns()`、組み方は `shared/agentAfter.ts` の `afterTurns()`（純粋関数）。足すのは `launch()` の返答の塊と同じ 1 か所で、並びは返答の塊 → その後の塊（`AFTER_MARK` 〜 `AFTER_END`）→ 人の本文。`o.origin` のターンと `/`・`$` で始まる本文には足さない。`steer` / `wake` の本文にも足さない。
 - 見るのは送って `AFTER_KEEP_MS`（3 日）以内で、`far` も `after_done` も無い記録だけ。返答の行がまだの頼みには添えない。
 - 添えるターン: 返答の行より後のターン完了のうち、人の入力で始まったもの（`humanTurn()`。届いたメッセージ・ループ・待ち・要約・空は人ではない）と、閉じた時刻をそのあいだに含むもの（ターンの始まりは入力の行、無ければ完了の `AFTER_TURN_SPAN_MS` 前）。送り元からのメッセージのターンは外す。閉じたあとに始まったターンも外す。
-- 頼んだ番号（`askRefs()`）は本文の 1 行目の `#N` だけ。閉じたかは `PrBrowser.refState()`（相手の remote のリポジトリ）で、待つのは `AFTER_GH_WAIT_MS` まで。間に合わない・引けない番号は開いている扱いで、3 日で止まる。マージせずに閉じた PR は終わりにしない。
+- 頼んだ番号（`askRefs()`）は本文の 1 行目の `#N` だけで、送る前から閉じていた番号は数えず、複数あれば全部閉じたら終わる（`closesOf()`）。閉じたかは `PrBrowser.refState()`（相手の remote のリポジトリ）で、待つのは `AFTER_GH_WAIT_MS` まで。間に合わない・引けない番号は開いている扱いで、3 日で止まる。マージせずに閉じた PR は終わりにしない。
 - どこまで添えたかは `AgentMessage.after_at`、閉じたことまで添えたら `after_done`（`AgentMessages.setAfter()`）。起動できた（`202`）ときだけ書く。足したターンが失敗したら `rememberHanded()` の覚えから前の値に戻す。返答より前に閉じていた件は、添えずにその場で `after_done` にする。
-- 塊は `splitHandedReplies()` が外す（`after` にターン数）ので、画面・題名・↑ の履歴・記録を調べる道具は人の本文を見る。
+- 塊は `splitHandedReplies()` が外す（`after` に件数。ターンと閉じたことの行）ので、画面・題名・↑ の履歴・記録を調べる道具は人の本文を見る。
 
 ### トークンの歯止め（#311）
 

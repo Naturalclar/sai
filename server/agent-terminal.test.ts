@@ -4,13 +4,13 @@ import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { COMPACT_MIN_TOKENS } from '../shared/compact.ts'
 import { sendHow, TERMINAL_HELD_PAUSED } from '../shared/agentMessages.ts'
 import { pendingItems, TERMINAL_STUCK_TEXT, todoItems } from '../shared/todoItems.ts'
-import type { AgentSendResponse, ReplyFailure, Replying, SessionProgressResponse, SessionSummary, SessionsResponse, UsageResponse } from '../shared/types.ts'
+import type { AgentSendResponse, AgentWaitResponse, ReplyFailure, Replying, SessionProgressResponse, SessionSummary, SessionsResponse, UsageResponse } from '../shared/types.ts'
 import { createApp } from './app.ts'
 import { Approvals } from './approvals/approvals.ts'
 import { Authenticator } from './auth.ts'
@@ -31,6 +31,8 @@ let work: string
 let server: Server
 let base: string
 let token: string
+/** 届いたかの確かめの時計をずらす（#838） */
+let skew = 0
 
 /** 実際には起動しない。busy に入れた id は「処理中」。finish() で終わらせると、預かりの続き（drain）が回る */
 class FakeRunner implements Runner {
@@ -66,11 +68,17 @@ const codexApp: CodexApp = {
   answer: () => ({ ok: false, status: 404, error: 'approval not found' }),
 }
 const usage = { value: {} as UsageResponse, async get() { return this.value } }
+/** `codex queue` に渡した分（起動しない） */
+const queued: ReplyCommand[] = []
 
 /** 相手の transcript の偽物。`closed` = 最後のターンが閉じている、`active` = 回っている。どちらも無ければ分からない */
 const turns = new Map<string, { active?: boolean; closed?: boolean }>()
 const contexts = new Map<string, number>()
 const progress = {
+  /** Codex の rollout の偽物（`setRollout()`） */
+  async codexRollout(session: string) {
+    return rollouts.get(session) ?? ''
+  },
   async read(s: Pick<SessionSummary, 'id'>): Promise<SessionProgressResponse> {
     const t = turns.get(s.id)
     return {
@@ -84,6 +92,21 @@ const progress = {
       context_tokens: contexts.get(s.id) ?? 0,
     }
   },
+}
+
+/** 開いている Codex の画面と rollout の末尾（#838） */
+const CODEX_TYPED = '› 人の打ちかけ\n  gpt-5.6-sol medium · /tmp/repo\n'
+const CODEX_DIALOG = '  Would you like to run the following command?\n\n  $ ls\n\n› 1. Yes, proceed (y)\n  2. No (esc)\n\n  Press enter to confirm or esc to cancel\n'
+const mark = (type: string) => JSON.stringify({ timestamp: new Date().toISOString(), type: 'event_msg', payload: { type } })
+const OPEN = mark('task_started')
+const CLOSED = `${mark('task_started')}\n${mark('task_complete')}`
+const rollouts = new Map<string, string>()
+/** 中身を書いて `codexRollout()` に引かせる。null なら引けない */
+const setRollout = async (session: string, body: string | null) => {
+  if (body === null) return void rollouts.delete(session)
+  const path = join(dir, `rollout-${session}.jsonl.txt`)
+  await writeFile(path, `${body}\n`)
+  rollouts.set(session, path)
 }
 
 const IDLE = '──────\n❯ Try "refactor <filepath>"\n──────\n'
@@ -117,8 +140,20 @@ before(async () => {
     join(dir, `${localDate(now.toISOString())}.jsonl`),
     [
       row(new Date(now.getTime() - 9 * 60_000), 'A1', { repo: 'r', cwd: work, project: 'o/r', user_text: '実装して' }),
+      // 「起こす」のテストで頼む相手（A1 を起こすと、後のテストで A1 から送れなくなる）
+      row(new Date(now.getTime() - 9 * 60_000), 'B1', { repo: 'r', cwd: work, project: 'o/r', user_text: '別の作業' }),
       // 端末で開いている Claude（pid 200 はペインの中で生きている）
       row(new Date(now.getTime() - 8 * 60_000), 'T1', { repo: 'r', cwd: work, project: 'o/r', pane: '%9', pid: 200, user_text: '前の作業', text: '済みました' }),
+      // 端末で開いている Codex（#838）
+      row(new Date(now.getTime() - 7 * 60_000), 'C1', { agent: 'codex', repo: 'r', cwd: work, project: 'o/r', pane: '%10', pid: 201, session_source: 'rollout' }),
+      row(new Date(now.getTime() - 7 * 60_000), 'C2', { agent: 'codex', repo: 'r', cwd: work, project: 'o/r', pane: '%11', pid: 202, session_source: 'rollout' }),
+      row(new Date(now.getTime() - 7 * 60_000), 'C3', { agent: 'codex', repo: 'r', cwd: work, project: 'o/r', pane: '%12', pid: 203, session_source: 'rollout' }),
+      row(new Date(now.getTime() - 7 * 60_000), 'C4', { agent: 'codex', repo: 'r', cwd: work, project: 'o/r', pane: '%13', pid: 204, session_source: 'rollout' }),
+      row(new Date(now.getTime() - 7 * 60_000), 'C5', { agent: 'codex', repo: 'r', cwd: work, project: 'o/r', pane: '%14', pid: 205, session_source: 'rollout' }),
+      row(new Date(now.getTime() - 7 * 60_000), 'C6', { agent: 'codex', repo: 'r', cwd: work, project: 'o/r', pane: '%15', pid: 206, session_source: 'rollout' }),
+      row(new Date(now.getTime() - 7 * 60_000), 'C7', { agent: 'codex', repo: 'r', cwd: work, project: 'o/r', pane: '%16', pid: 207, session_source: 'rollout' }),
+      row(new Date(now.getTime() - 7 * 60_000), 'C8', { agent: 'codex', repo: 'r', cwd: work, project: 'o/r', pane: '%17', pid: 208, session_source: 'rollout' }),
+      row(new Date(now.getTime() - 7 * 60_000), 'C9', { agent: 'codex', repo: 'r', cwd: work, project: 'o/r', pane: '%18', pid: 209, session_source: 'rollout' }),
     ]
       .map((r) => JSON.stringify(r))
       .join('\n') + '\n',
@@ -133,12 +168,18 @@ before(async () => {
     new Authenticator(async () => null),
     {
       tmux,
-      ps: async () => ' 100     1\n 200   100\n',
-      replies: new TerminalReplies(),
-      alive: (pid) => pid === 200,
+      ps: async () => ` 100     1\n${[200, 201, 202, 203, 204, 205, 206, 207, 208, 209].map((p) => ` ${p}   100\n`).join('')}`,
+      replies: new TerminalReplies(() => Date.now() + skew),
+      alive: (pid) => pid >= 200 && pid <= 209,
       scanTtlMs: 0,
       // 端末でターンの途中で待っている預かりを、ポーリングのたびに見に行かせる
       bgRetryMs: 0,
+      // ペインの中の pid は今のまま採る（走査を偽の tmux に通さない）
+      codexTerminals: { pid: async () => 0, owner: async (_pane, pid) => pid },
+      codexWriterActive: async () => true,
+      codexQueue: async (cmd) => {
+        queued.push(cmd)
+      },
       codexApp,
     },
     undefined,
@@ -334,6 +375,96 @@ test('sai_send: 端末で開いている相手には、要約を挟む依頼で�
   assert.equal(body.stuck, true)
   assert.equal(runner.started.length, 0)
   assert.deepEqual(typedKeys(), [])
+})
+
+test('sai_send: 開いている Codex は、ターンが閉じていて追跡中の分が無ければ、打ちかけを残したまま queue で 1 通届ける（#838）', async () => {
+  await reset()
+  queued.length = 0
+  tmux.screen = CODEX_TYPED
+  await setRollout('C1', CLOSED)
+  const res = await send({ to: 'C1@r', text: 'Codex へ' })
+  assert.equal(res.status, 202, JSON.stringify(await res.clone().json()))
+  const body = (await res.json()) as AgentSendResponse
+  assert.equal(body.via, 'queue')
+  assert.equal(body.stuck, undefined, '預かって止めない')
+  assert.match(sendHow(body.via!), /開いている相手へ渡しました/)
+  assert.equal(queued.length, 1)
+  assert.deepEqual(queued[0]!.args.slice(0, 3), ['queue', '--thread', 'C1'])
+  assert.deepEqual(typedKeys(), [], '端末には何も打たず、打ちかけも消さない')
+  assert.equal(runner.started.length, 0, '別プロセスを起こさない')
+
+  // 続けて送ると、追跡が上書きされるので回さない
+  senderTurn()
+  assert.equal((await send({ to: 'C1@r', text: '2 通目' })).status, 409)
+  assert.equal(queued.length, 1)
+})
+
+test('sai_send: 開いている Codex のターンの途中・閉じたと言えない・ダイアログ・読めない画面、人の返信は queue に回さない（#838）', async () => {
+  await reset()
+  queued.length = 0
+  for (const [name, to, screen, rollout] of [
+    ['ターンの途中', 'C2', CODEX_TYPED, OPEN],
+    ['印が無い', 'C3', CODEX_TYPED, ''],
+    ['rollout が無い', 'C4', CODEX_TYPED, null],
+    ['読めない画面', 'C5', '$ ls\n$ ', CLOSED],
+    ['ダイアログ', 'C6', CODEX_DIALOG, CLOSED],
+  ] as const) {
+    senderTurn()
+    tmux.screen = screen
+    await setRollout(to, rollout)
+    const res = await send({ to: `${to}@r`, text: `${name}の相手へ` })
+    assert.equal(res.status, 409, `${name}: ${JSON.stringify(await res.clone().json())}`)
+    assert.equal(queued.length, 0, name)
+    assert.equal(runner.started.length, 0, name)
+  }
+  tmux.screen = CODEX_TYPED
+  await setRollout('C7', CLOSED)
+  const human = await fetch(`${base}/api/sessions/C7%40r/reply?days=30`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: base },
+    body: JSON.stringify({ text: '人から' }),
+  })
+  assert.equal(human.status, 409)
+  assert.equal(queued.length, 0)
+})
+
+test('sai_send: queue に渡して届かなかったことは、送り元の待ちに失敗として返る（#838）', async () => {
+  await reset()
+  queued.length = 0
+  tmux.screen = CODEX_TYPED
+  await setRollout('C9', CLOSED)
+  const res = await send({ to: 'C9@r', text: '届かない' })
+  assert.equal(((await res.clone().json()) as AgentSendResponse).via, 'queue')
+  const { message_id: id } = (await res.json()) as AgentSendResponse
+  skew = 60_000
+  try {
+    await sessions()
+    assert.ok((await sessions()).replying['C9@r']?.failed, '届いていないので失敗にする')
+    const wait = await fetch(`${base}/api/agent/wait?from=${encodeURIComponent('A1@r')}&message_id=${id}`, { headers: { 'X-SAI-Agent-Token': token } })
+    const out = (await wait.json()) as AgentWaitResponse
+    assert.equal(out.status, 'failed', JSON.stringify(out))
+  } finally {
+    skew = 0
+  }
+})
+
+test('wake: 返答を渡す「起こす」は、開いている Codex の queue には回さず、返答を未渡しのまま残す（#838）', async () => {
+  await reset()
+  queued.length = 0
+  await setRollout('C8', CLOSED)
+  runner.busy.set('C8@r', { since: new Date().toISOString(), text: 'やって' })
+  const res = await send({ from: 'C8@r', to: 'B1@r', text: '頼みます', wake: true })
+  assert.equal(res.status, 202, JSON.stringify(await res.clone().json()))
+  const delivered = runner.started.at(-1)!.cmd.text
+  runner.busy.delete('B1@r')
+  await appendFile(join(dir, `${localDate(new Date().toISOString())}.jsonl`), `${JSON.stringify(row(new Date(), 'B1', { repo: 'r', cwd: work, project: 'o/r', user_text: delivered, text: 'そろいました' }))}\n`)
+  runner.busy.delete('C8@r')
+  tmux.screen = CODEX_TYPED
+  await sessions()
+  await sessions()
+  assert.equal(queued.length, 0, '届いた証拠の無い道で返答を渡さない')
+  const log = await readFile(join(dir, 'reply.log'), 'utf-8')
+  assert.match(log, /C8@r 返答がそろったが起こさない/)
 })
 
 test('人の画面からの返信は今までどおり: 打ちかけがあれば 409 と can_process で、預からず別プロセスへも回さない（#800）', async () => {

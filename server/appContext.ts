@@ -59,6 +59,8 @@ export interface LaunchOptions {
    * 人が「続けて送る」を押した 1 回だけ別プロセスで回す。人の画面からの返信には付けない
    */
   terminalFallback?: boolean
+  /** 開いている Codex の `codex queue` に回さない（#838。返答を渡す「起こす」の道） */
+  noCodexQueue?: boolean
 }
 
 /** 起動の結果。HTTP には書かずに返すので、POST はそのまま応答にし、drain は預かりを止める理由にする */

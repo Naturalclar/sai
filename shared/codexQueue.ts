@@ -88,6 +88,17 @@ const TURN_CLOSED = new Set(['task_complete', 'turn_aborted'])
  * より古ければ途中とみなさない
  */
 export function turnInProgress(lines: readonly string[], nowMs: number): boolean {
+  const { last, latest } = lastTurnMark(lines)
+  if (Number.isNaN(latest) || nowMs - latest > QUEUE_BUSY_STALE_MS) return false
+  return last !== 'closed'
+}
+
+/** 末尾の最後のターンの印が閉じているか（#838）。印が無い・古くても開いたままなら false（閉じているとは言わない） */
+export function lastTurnClosed(lines: readonly string[]): boolean {
+  return lastTurnMark(lines).last === 'closed'
+}
+
+function lastTurnMark(lines: readonly string[]): { last: 'open' | 'closed' | null; latest: number } {
   let last: 'open' | 'closed' | null = null
   let latest = Number.NaN
   for (const line of lines) {
@@ -106,6 +117,5 @@ export function turnInProgress(lines: readonly string[], nowMs: number): boolean
     if (kind === 'task_started') last = 'open'
     else if (typeof kind === 'string' && TURN_CLOSED.has(kind)) last = 'closed'
   }
-  if (Number.isNaN(latest) || nowMs - latest > QUEUE_BUSY_STALE_MS) return false
-  return last !== 'closed'
+  return { last, latest }
 }

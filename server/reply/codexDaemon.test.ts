@@ -165,6 +165,29 @@ test('送るのは許可一覧の要求と initialized だけで、繋いだら 
   await fake.close()
 })
 
+test('thread/list を待つ間に届いた通知を上書きしない。形の違う文字列では落ちない（#848 のレビュー）', async () => {
+  const fake = new FakeDaemon(sockPath())
+  fake.threads = [{ id: 'A', status: { type: 'active', activeFlags: [] } }]
+  await fake.listen()
+  const push = fake.push.bind(fake)
+  fake.push = (m) => {
+    const r = (m as { result?: { data?: unknown[] } }).result
+    if (r?.data?.[0] && typeof r.data[0] === 'object') push({ method: 'thread/status/changed', params: { threadId: 'A', status: { type: 'idle' } } })
+    push(m)
+  }
+  const c = daemonClient({ socketPath: fake.path })
+  c.setEnabled(true)
+  await wait(() => c.link() === 'connected')
+  assert.equal(c.state('A'), 'idle')
+  fake.raw(serverFrame(1, 'null'))
+  fake.raw(serverFrame(1, '1'))
+  fake.raw(serverFrame(1, '[]'))
+  fake.push({ method: 'thread/status/changed', params: { threadId: 'A', status: { type: 'active', activeFlags: [] } } })
+  await wait(() => c.state('A') === 'active')
+  c.stop()
+  await fake.close()
+})
+
 test('許可一覧は読む要求だけ（書く要求を足すならこのテストを直す）', () => {
   assert.deepEqual([...DAEMON_METHODS], ['initialize', 'thread/list', 'thread/loaded/list'])
 })
@@ -255,7 +278,7 @@ test('daemonOccupied: 言えるのは空きでないときだけ。idle と分�
 })
 
 test('threadState / daemonGap / daemonSocketPath', () => {
-  assert.equal(threadState({ type: 'notLoaded' }), 'idle')
+  assert.equal(threadState({ type: 'notLoaded' }), undefined, 'daemon の外で回っているスレッドもこの形に見えるので分からない扱い')
   assert.equal(threadState({ type: 'systemError' }), undefined, '知らない形は分からない')
   assert.equal(threadState(null), undefined)
   assert.equal(daemonGap('', 'active'), 'daemon_only')

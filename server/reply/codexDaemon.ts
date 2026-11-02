@@ -52,10 +52,13 @@ export function daemonGap(known: HoldingWhy | '', seen: DaemonThreadState | unde
   return known === 'busy' || known === 'terminal' || known === 'waiting' ? 'sai_only' : ''
 }
 
-/** `ThreadStatus` を読む。知らない形は undefined（分からない）。`notLoaded` は回っていないので `idle` と同じ */
+/**
+ * `ThreadStatus` を読む。知らない形は undefined（分からない）。`notLoaded` も分からない側: daemon の外の app-server（SAI の stdio など）で
+ * 回っているスレッドもこの形に見えうるので、`idle` と同じにすると食い違いの数（`daemonGap()`）が濁る
+ */
 export function threadState(status: unknown): DaemonThreadState | undefined {
   const s = status as { type?: unknown; activeFlags?: unknown } | null | undefined
-  if (s?.type === 'idle' || s?.type === 'notLoaded') return 'idle'
+  if (s?.type === 'idle') return 'idle'
   if (s?.type !== 'active') return undefined
   return Array.isArray(s.activeFlags) && s.activeFlags.length > 0 ? 'waiting' : 'active'
 }
@@ -156,7 +159,8 @@ export class CodexDaemonClient implements CodexDaemonWatch {
       await this.request('initialize', { clientInfo: { name: 'sai', title: 'SAI', version: '0.2.0' }, capabilities: { experimentalApi: true, requestAttestation: false } })
       ws.send(JSON.stringify({ method: 'initialized' }))
       const list = (await this.request('thread/list', { limit: DAEMON_LIST_LIMIT })) as { data?: { id?: unknown; status?: unknown }[] }
-      for (const t of list.data ?? []) this.note(t.id, t.status)
+      // 待っている間に届いた通知の方が新しいので、上書きしない
+      for (const t of list.data ?? []) if (typeof t.id === 'string' && !this.states.has(t.id)) this.note(t.id, t.status)
       const loaded = (await this.request('thread/loaded/list', {})) as { data?: unknown[] }
       if (generation !== this.generation) return
       this.linkState = 'connected'
@@ -188,12 +192,14 @@ export class CodexDaemonClient implements CodexDaemonWatch {
   }
 
   private receive(text: string): void {
-    let m: { id?: unknown; method?: unknown; params?: Record<string, unknown>; result?: unknown; error?: { message?: unknown } }
+    let m: { id?: unknown; method?: unknown; params?: Record<string, unknown>; result?: unknown; error?: { message?: unknown } } | null
     try {
       m = JSON.parse(text)
     } catch {
       return
     }
+    // 形の違うものは読み捨てる（ここで投げるとソケットのハンドラから抜けて、サーバごと落ちる）
+    if (!m || typeof m !== 'object') return
     // **サーバからの要求（id と method の両方）には答えない**。読むだけの客なので、許可・質問を受け取らない
     if (m.id !== undefined && m.method !== undefined) return
     if (typeof m.id === 'number') {

@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { SessionSummary } from '../../shared/types.ts'
+import { AFTER_END, AFTER_MARK, HANDED_END, HANDED_MARK } from '../../shared/handedBlocks.ts'
 import { searchRows } from './search.ts'
 import { row } from './aggregate.test.ts'
 
@@ -53,6 +54,15 @@ test('searchRows: text（返答）と user_text（自分の入力）の両方に
   // 1 行で両方に当たれば 2 件（自分の入力が先）
   const both = searchRows(rows, ['マージ'], [])
   assert.deepEqual(both.hits.map((h) => h.who), ['me', 'agent'])
+})
+
+test('searchRows: SAI が頭に足した塊の中の語には当たらない。人が打った文には当たる（#841）', () => {
+  const user = `${HANDED_MARK}返答が 1 件届いています\n\n塊のなかの語\n\n${HANDED_END}\n\n${AFTER_MARK}その後の語\n\n${AFTER_END}\n\n人が打った語`
+  const rows = [row(at(0), 'S1', { user_text: user })]
+  assert.deepEqual(searchRows(rows, ['塊のなかの語'], []).hits, [])
+  assert.deepEqual(searchRows(rows, ['その後の語'], []).hits, [])
+  const { hits } = searchRows(rows, ['人が打った語'], [])
+  assert.deepEqual(hits.map((h) => [h.who, h.excerpt]), [['me', '人が打った語']])
 })
 
 test('searchRows: 複数の語は AND', () => {

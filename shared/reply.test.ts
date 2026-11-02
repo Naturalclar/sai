@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { AFTER_END, AFTER_MARK, HANDED_END, HANDED_MARK } from './handedBlocks.ts'
 import {
   canSteer,
   defaultReplyTarget,
@@ -94,6 +95,12 @@ test('replyBlockedReason: 別のマシンなら、合成 ID より先にそち�
   // どちらも本当だが、「別のマシン」の方が根本の理由。ID が取れていても、あちらの CLI と履歴には手が届かない。
   // 「IDが合成」だけ出すと「ID さえ取れれば返信できる」と読めてしまう
   assert.match(replyBlockedReason(summary({ host: 'mini', session_source: 'synth' }), SELF), /別のマシン（mini）/)
+})
+
+test('feedReplyTargets: 題名に SAI が頭に足した塊を出さない。塊だけなら最初の入力に落ちる（#841）', () => {
+  const blocks = `${HANDED_MARK}返答が 1 件届いています\n\n相手の返答\n\n${HANDED_END}\n\n${AFTER_MARK}その後\n\n- 1/1 動き\n\n${AFTER_END}\n\n`
+  assert.equal(feedReplyTargets([row({ session: 'h1', user_text: `${blocks}次の作り物の指示` })], SELF)[0]!.title, '次の作り物の指示')
+  assert.equal(feedReplyTargets([row({ session: 'h2', user_text: blocks, first_user_text: '最初の作り物の指示' })], SELF)[0]!.title, '最初の作り物の指示')
 })
 
 test('sessionReplyTargets / feedReplyTargets: 別のマシンのものは blocked が付く（#114）', () => {

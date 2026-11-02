@@ -3,6 +3,7 @@
 import { CACHE_COLD_MS, COLD_COMPACT_TOKENS, cacheCold, idleLabel, idleMsSince } from './compact.ts'
 import { isCompactSummaryText } from './compactSummary.ts'
 import { entityId } from './entity.ts'
+import { AFTER_END, AFTER_MARK, HANDED_END, HANDED_MARK, splitHandedReplies } from './handedBlocks.ts'
 import { isLoopPrompt } from './loops.ts'
 import { isWaitPrompt } from './waits.ts'
 import { replyBlockedReason } from './reply.ts'
@@ -441,16 +442,8 @@ export function requestRefusal(count: number, read: number, sizes: readonly { na
 
 // ---- 返答を送り元の会話に戻す（#594）
 
-/** 送り元の次のターンの頭に足す返答の塊の始まり。`【SAI】` で始めない（`deliveredId()` が届けた見出しと取り違えないように） */
-export const HANDED_MARK = '【SAI 返答】'
-/** 塊の終わり。ここから後ろが人（か預かり）の本文 */
-export const HANDED_END = '【SAI 返答ここまで。以下が今回の指示です】'
-/**
- * 頼んだ件の「その後」（#827。`shared/agentAfter.ts`）の塊の始まりと終わり。返答の塊のあと、人の本文の前に置く。
- * `【SAI】` で始めない（`deliveredId()` が届けた見出しと取り違えないように）。外す側（`splitHandedReplies()`）がここにあるので、ここに置く
- */
-export const AFTER_MARK = '【SAI その後】'
-export const AFTER_END = '【SAI その後ここまで】'
+export { AFTER_END, AFTER_MARK, HANDED_END, HANDED_MARK, splitHandedReplies }
+
 /** 1 回に足す返答の数の上限。超えた分は 1 行で名前だけ知らせる（渡した扱いにする） */
 export const HANDED_MAX_ITEMS = 8
 /** 1 回に足す返答の本文の合計の上限（字）。1 件は `clipReply()` の長さのまま。実データの返答は 1 件 539〜2,060 字 */
@@ -505,32 +498,6 @@ export function withHandedReplies(text: string, replies: readonly PendingReply[]
   if (rest.length > 0) blocks.push(`--- ほか ${rest.length} 件（本文は相手のセッションで読めます）: ${rest.map((r) => `「${r.to_name}」（message_id: ${r.message_id}）`).join('、')}`)
   const head = `${HANDED_MARK}あなたが別のセッションに送ったメッセージへの返答が ${replies.length} 件届いています（待たずにターンを終えたので、ここで渡します）。`
   return `${head}\n\n${blocks.join('\n\n')}\n\n${HANDED_END}\n\n${text}`
-}
-
-/**
- * 本文の頭に足した返答の塊（#594）と「その後」の塊（#827）を外す。画面の自分のバブル・題名・↑ の履歴は人が打った文だけを見せる。
- * 記録の `user_text` には塊ごと残る（SAI は行を書き換えない）。塊が無ければ `handed: 0`・`after: 0` でそのまま
- */
-export function splitHandedReplies(userText: string): { text: string; handed: number; after: number } {
-  let text = userText
-  let handed = 0
-  if (text.startsWith(HANDED_MARK)) {
-    const end = text.indexOf(HANDED_END)
-    if (end < 0) return { text: userText, handed: 0, after: 0 }
-    handed = Number(/返答が (\d+) 件届いています/.exec(text.slice(0, 200))?.[1] ?? 0)
-    text = text.slice(end + HANDED_END.length).replace(/^\s+/, '')
-  }
-  // 頼んだ件の「その後」（#827）は返答の塊のあと（無ければ頭）に置かれる。数はターンの行・「ほか N ターン」・閉じたことの行を合わせた件数
-  let after = 0
-  if (text.startsWith(AFTER_MARK)) {
-    const end = text.indexOf(AFTER_END)
-    if (end >= 0) {
-      const block = text.slice(0, end)
-      after = (block.match(/^- (?:\d+\/\d+ |#\d+ は)/gm) ?? []).length + [...block.matchAll(/^- ほか (\d+) ターン/gm)].reduce((n, m) => n + Number(m[1]), 0)
-      text = text.slice(end + AFTER_END.length).replace(/^\s+/, '')
-    }
-  }
-  return { text, handed, after }
 }
 
 

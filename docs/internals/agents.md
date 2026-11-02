@@ -118,7 +118,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - **足さない場面**: 別のセッションから届いたメッセージで起こすターン（`o.origin`。見出し `【SAI】…` が頭に無いと `deliveredId()` / `replyOf()` が当たらず、送り元が返答を引き当てられない）と、`/`・`$` で始まる指示（スキル・コマンドは頭に無いと CLI が展開しない）。どちらも未渡しのまま残り、次のふつうのターンで渡る。
 - **足したターンが失敗したら「渡した」を取り消す**（`AgentMessages.unhand()`）: `launch()` が `handedTurns` に覚え、`replyingOf()` がそのターンの `failed` を見たら取り消す（エージェントは読んでいないので、次のターンでもう一度足す）。覚えはメモリだけ（立て直しをまたいだ失敗は渡した扱いのまま）。
 - **応答の `replying[].text` からは塊を外す**（`replyingOf()`）。入力欄への戻し（`useReply`）・一覧の 2 行目（`sessionPreview()`）・↑ の履歴の `extra` がこの文を使うため。`promptArrived()` は記録の `user_text` の側も外して比べる。
-- 記録の `user_text` には塊ごと残る（SAI は行を書き換えない）。画面は `splitHandedReplies()` で塊を外して見せる: 自分のバブル（`chatGroups.ts` の `Utterance.handedReplies` →「返答 N 件を添えました」）・仮バブル（`PendingBubble`）・題名と最後の入力（`aggregate.ts`）・↑ の履歴（`replyHistory.ts`）。
+- 記録の `user_text` には塊ごと残る（SAI は行を書き換えない）。画面は `splitHandedReplies()` で塊を外して見せる: 自分のバブル（`chatGroups.ts` の `Utterance.handedReplies` →「返答 N 件を添えました」）・仮バブル（`PendingBubble`）・題名と最後の入力（`aggregate.ts`）・フィードの宛先の題名（`feedReplyTargets()`）・↑ の履歴（`replyHistory.ts`）・本文の検索（`rows/search.ts`）。
 - 返答のバブルの見出しには、送り元の会話に渡したか（`AgentReplyTag.handed_at`）を「会話に渡した / 次のターンで渡す」で出す。
 - 見出しの `REPLY_NOTE` と `sai_send` / `sai_wait` の説明（`approve-mcp.ts` の `AGENT_TOOLS`）は「待たずに終えてよい・返答は次のターンの頭に届く・`sai_wait` はその場で答えが要る短い質問だけ」に合わせた。
 - **送り元がまだ回っていれば、その場で足す**（#594 の 2）: `app.ts` の `deliverReplies()` が、入力の口（#386 の stream-json）が開いている送り元（`run.snapshot()[from].interruptible`。要約だけのターンは除く）に、返答の塊＋`STEERED_NOTE` を `run.steer()` で書く。足せたら「渡した」にする（次のターンには重ねない）。読み直しは増えない。呼ぶのは相手のターンが終わったとき（`-p` の `onExit`・Codex の `onTurnEnd`）と、画面のポーリングのついで（`drainAll()`）。
@@ -137,7 +137,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 添えるターン: 返答の行より後のターン完了のうち、人の入力で始まったもの（`humanTurn()`。届いたメッセージ・ループ・待ち・要約・空は人ではない）と、閉じた時刻をそのあいだに含むもの（ターンの始まりは入力の行、無ければ完了の `AFTER_TURN_SPAN_MS` 前）。送り元からのメッセージのターンは外す。閉じたあとに始まったターンも外す。
 - 頼んだ番号（`askRefs()`）は本文の 1 行目の `#N` だけで、送る前から閉じていた番号は数えず、複数あれば全部閉じたら終わる（`closesOf()`）。閉じたかは `PrBrowser.refState()`（相手の remote のリポジトリ）で、待つのは `AFTER_GH_WAIT_MS` まで。間に合わない・引けない番号は開いている扱いで、3 日で止まる。マージせずに閉じた PR は終わりにしない。
 - どこまで添えたかは `AgentMessage.after_at`、閉じたことまで添えたら `after_done`（`AgentMessages.setAfter()`）。`after_done` のあとも 3 日のあいだは頼みを見て、閉じる前に始まったターンは完了してから添える（「閉じました」は二度添えない）。起動できた（`202`）ときだけ書く。足したターンが失敗したら `rememberHanded()` の覚えから前の値に戻す。返答より前に閉じていた件は、添えずにその場で `after_done` にする。
-- 塊は `splitHandedReplies()` が外す（`after` に件数。ターンと閉じたことの行）ので、画面・題名・↑ の履歴・記録を調べる道具・一言と案の入力・引き継ぎの判定（`isHandoffPrompt()`）・`sai_session` は人の本文を見る。
+- 塊は `splitHandedReplies()` が外す（`after` に件数。ターンと閉じたことの行）ので、画面・題名・フィードの宛先・↑ の履歴・本文の検索・記録を調べる道具・一言と案の入力・引き継ぎの判定（`isHandoffPrompt()`）・`sai_session` は人の本文を見る。
 
 ### トークンの歯止め（#311）
 

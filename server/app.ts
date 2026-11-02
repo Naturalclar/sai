@@ -3420,11 +3420,11 @@ export function createApp(
         // 空きでない理由（#795）。回っているターン・待ち・預かりは呼び出し側が見たもの。ここで足すのは、起動中・止められない
         // `claude --bg`（attach 中・ターン中。`launch()` が預かって待つのと同じ判定）と、worktree の作りかけ。
         // **git と `claude agents` を読むのは、ほかの理由が無い、このマシンの頼める相手だけ**（理由は最初の 1 つしか出さない）
-        const known: HoldingWhy | '' = occupied(s) || (launching.has(s.id) ? 'busy' : '')
+        const judged: HoldingWhy | '' = occupied(s) || (launching.has(s.id) ? 'busy' : '')
         // daemon が見ている状態（#848）。言えるのは「空きでない」だけで、`idle` は空きの証拠にしない。今の判定と食い違ったら数える（古い道を消す材料）
         const seen = s.agent === 'codex' ? codexDaemon?.state(sessionOf(s)) : undefined
-        noteDaemonGap(s.id, known, seen)
-        const first: HoldingWhy | '' = known || daemonOccupied(seen)
+        noteDaemonGap(s.id, judged, seen)
+        const first: HoldingWhy | '' = judged || daemonOccupied(seen)
         // `opts.only` があれば、その 1 件だけ読む（送る時点の確かめ。使うのはその相手の答えだけなので、ほかの相手の worktree に git を回さない）
         const look = can && !remote && !first && asks.length === 0 && (opts.only === undefined || opts.only === s.id)
         const held = look && (await backgroundHeld(s)) ? 'background' : ''

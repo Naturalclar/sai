@@ -5,6 +5,7 @@
 import { entityId } from '../../shared/entity.ts'
 import { projectName } from '../../shared/project.ts'
 import { eventKind } from '../../shared/events.ts'
+import { splitHandedReplies } from '../../shared/handedBlocks.ts'
 import { excerptOf, matchesAll, SEARCH_LIMIT } from '../../shared/search.ts'
 import type { FeedRow, SearchHit, SessionSummary } from '../../shared/types.ts'
 import { withSuffix } from '../../shared/sessionLabels.ts'
@@ -18,7 +19,8 @@ import { withSuffix } from '../../shared/sessionLabels.ts'
  */
 function bodiesOf(row: FeedRow): { who: 'me' | 'agent'; body: string }[] {
   const out: { who: 'me' | 'agent'; body: string }[] = []
-  const user = row.user_text?.trim()
+  // SAI が頭に足した塊（#594 / #827）は人の発言ではなく、飛んだ先のバブルにも出ない。中身は相手のセッションの検索で当たる
+  const user = splitHandedReplies(row.user_text ?? '').text.trim()
   if (user) out.push({ who: 'me', body: user })
   const text = row.text?.trim()
   if (text && eventKind(row.event, row.text) === 'turn') out.push({ who: 'agent', body: text })

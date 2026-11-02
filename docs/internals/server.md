@@ -42,6 +42,7 @@ C-c / SIGTERM では必ず終わる（#296。`main.ts` の `shutdown()`）。
 - 索引は持たず、`store.rows()` が持っているパース済みの行を舐めるだけ。
 - 新しい順に `SEARCH_LIMIT`（100）まで。
 - 当たりの判定と抜粋は `shared/search.ts` を画面と共用する。
+- `user_text` は `splitHandedReplies()` を通す（#841）。SAI が頭に足した塊（【SAI 返答】【SAI その後】）は人の発言ではなく、飛んだ先のバブルにも出ないので、検索しない。中身は相手のセッションの検索で当たる。
 
 ## 使用量（local/usage.ts）
 

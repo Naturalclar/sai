@@ -2,6 +2,7 @@
 // サーバの POST 受付（server/app.ts）と画面の入力欄の出し分け（web/src/SessionView.tsx、web/src/FeedView.tsx）が
 // 同じ関数を使い、ずれない。
 import { entityId } from './entity.ts'
+import { splitHandedReplies } from './handedBlocks.ts'
 import { isRemoteHost } from './host.ts'
 import { projectName, rowProject } from './project.ts'
 import type { FeedRow, Replying, SessionSummary } from './types.ts'
@@ -88,7 +89,7 @@ export function sessionReplyTargets(sessions: SessionSummary[], selfHost: string
 
 /**
  * フィードの行から返信先の候補を作る。エンティティ（entityId）ごとに1件、新しい順（rows は古い順の前提）。
- * ラベルは一番新しい行の repo / branch / user_text（一覧のタイトルと同じく最後の入力に追従する）。
+ * ラベルは一番新しい行の repo / branch / user_text（一覧のタイトルと同じく最後の入力に追従する。SAI が頭に足した塊は外す）。
  * サイドバーとフィードで days や絞り込みが違い、一覧に無いセッションがフィードに出ることがあるので、
  * 一覧から作った候補（sessionReplyTargets）の後ろにこれを足す
  */
@@ -109,7 +110,7 @@ export function feedReplyTargets(rows: FeedRow[], selfHost: string): ReplyTarget
       repo: r.repo,
       project: rowProject(r),
       branch: r.branch,
-      title: clipTitle(r.user_text?.trim() || r.first_user_text?.trim() || r.text || ''),
+      title: clipTitle(splitHandedReplies(r.user_text ?? '').text.trim() || r.first_user_text?.trim() || r.text || ''),
       blocked: replyBlockedReason({ id, agent: r.agent, session_source: r.session_source, host: r.host ?? '' }, selfHost),
     })
   }

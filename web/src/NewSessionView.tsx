@@ -7,7 +7,7 @@ import { BackLink } from './BackLink'
 import { modelChoices, MODEL_DEFAULT_LABEL } from './modelChoices'
 import { NewSessionStarting } from './NewSessionStarting'
 import { NewWorktreeForm } from './NewWorktreeForm'
-import { siblingKey, withSibling, workspaceChoices } from './newSession'
+import { canAddWorktree, siblingKey, withSibling, workspaceChoices } from './newSession'
 import { filterWorkspaces } from './workspaceFilter'
 import { WorkspacePicker } from './WorkspacePicker'
 import { DefaultReplyModeContext } from './replyModeSetting'
@@ -174,7 +174,7 @@ export function NewSessionView({ replying, now, onOpenSidebar, onStarted }: Prop
             onPick={() => textRef.current?.focus()}
             disabled={choices.length === 0}
           />
-          {chosen && all?.places?.addable.includes(chosen.from) && (
+          {chosen && canAddWorktree(all?.places, chosen.from) && (
             <NewWorktreeForm
               key={chosen.from}
               from={chosen.from}

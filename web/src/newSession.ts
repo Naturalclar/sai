@@ -58,6 +58,9 @@ export function workspaceChoices(sessions: readonly SessionSummary[], selfHost: 
 /** 兄弟 worktree の、画面の中の鍵（`Workspace.key`） */
 export const siblingKey = (w: Pick<SiblingWorktree, 'from' | 'worktree'>): string => `${w.from}#${w.worktree}`
 
+/** そのリポジトリに worktree を作れるか（#847）。**新しい画面が古いサーバに当たると `addable` が無い**ので、無ければ出さない */
+export const canAddWorktree = (places: Partial<WorkspacesResponse> | null | undefined, from: string): boolean => places?.addable?.includes(from) ?? false
+
 /** 作った worktree（#847）を候補に足す。一覧を取り直さずに、その場で選べるようにする */
 export function withSibling(places: WorkspacesResponse, sibling: SiblingWorktree): WorkspacesResponse {
   return { ...places, siblings: [...places.siblings.filter((w) => w.worktree !== sibling.worktree), sibling] }

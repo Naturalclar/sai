@@ -21,6 +21,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 置き場は `worktreeParent()`: bare 本体の直下に worktree があれば bare 本体の直下、そうでなければ全部の worktree が同じ親にあるときだけ、その親（普通の clone はその隣）。分からなければ `null` で、画面に作る口を出さない。
 - 起点は `resolveBase()`（手元の新しい方）。`git fetch` は打たない。`--no-track` で、base が `origin/main` でも新しいブランチに上流を付けない。
 - 既にある名前は `409`: 同じ名前のパス・同じ名前の worktree（よその場所も。大文字小文字は区別しない。`repo` が重なるため）・同じ名前のブランチ。同じパスへの同時の要求は 1 つだけ通す。
+- git が非 0 でも一覧に worktree があれば、できたものとして返す（`post-checkout` フックの失敗など）。checkout で落ちると git はブランチを残すが、SAI は `worktree add` しか打たないので消さず、失敗の文で人に伝える。
 - 作るだけでセッションは始めない。返した鍵（`SiblingWorktree.worktree`）を `POST /api/sessions/new` に渡すのは今までの兄弟 worktree と同じ。消す口は作らない（消すのは人が端末で）。
 - テストは `server/worktree-add.test.ts` で、git は偽物。本物のリポジトリに worktree を作らない。
 

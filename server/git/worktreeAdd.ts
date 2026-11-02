@@ -12,7 +12,7 @@ import type { Git } from './diff.ts'
 import { treeOf, worktreeKey } from './worktrees.ts'
 import type { Worktrees } from './worktrees.ts'
 
-/** 作るのを待つ上限。大きいリポジトリでも checkout はこの手前で終わる見込み（切れたら git が途中のものを片付ける） */
+/** 作るのを待つ上限。大きいリポジトリでも checkout はこの手前で終わる見込み */
 export const WORKTREE_ADD_TIMEOUT_MS = 120_000
 
 /** worktree を作る口。本物を組むのは `main.ts` だけで、`createApp` の既定は作らない */
@@ -69,26 +69,38 @@ export function createAddWorktree(deps: { git: Git; worktrees: Worktrees; adder:
       // `repo` は worktree のディレクトリ名なので、別の場所の worktree とも名前を重ねない。macOS は大文字小文字を区別しない
       const taken = trees.some((t) => basename(t.path).toLowerCase() === name.toLowerCase())
       if (taken || (await occupied(path))) return { status: 409, error: `その名前はもうあります: ${name}` }
-      const branch = await deps.git.run(cwd, ['rev-parse', '--verify', '--quiet', `refs/heads/${name}^{commit}`]).then(
-        () => true,
-        () => false,
-      )
-      if (branch) return { status: 409, error: `そのブランチはもうあります: ${name}` }
+      if (await hasBranch(deps.git, cwd, name)) return { status: 409, error: `そのブランチはもうあります: ${name}` }
       const base = await resolveBase(deps.git, cwd).catch(() => '')
       if (!validBase(base)) return { status: 409, error: '切り出す元のブランチ（main など）が見つかりません' }
+      let failure = ''
       try {
         await deps.adder.add(cwd, name, path, base)
       } catch (err) {
-        return { status: 500, error: `worktree を作れませんでした: ${err instanceof Error ? err.message : String(err)}` }
+        failure = err instanceof Error ? err.message : String(err)
       }
       deps.worktrees.forget()
       const real = await realpath(path).catch(() => path)
+      if (failure) {
+        // `post-checkout` フックの失敗など、git が非 0 でも worktree はできていることがある。一覧にあれば使える
+        const made = (await deps.worktrees.usable(cwd, true))?.some((t) => t.path === real)
+        if (!made) {
+          // checkout で落ちると、git はディレクトリを片付けるがブランチを残す。SAI は `worktree add` しか打たないので、消さずに人へ伝える
+          const left = await hasBranch(deps.git, cwd, name)
+          return { status: 500, error: `worktree を作れませんでした: ${failure}${left ? `（ブランチ ${name} が残っています。同じ名前で作り直すなら、端末で消してください）` : ''}` }
+        }
+      }
       return { status: 201, worktree: { from: from.id, worktree: worktreeKey(real), cwd: real, repo: basename(real), branch: name, project: from.project } }
     } finally {
       adding.delete(path)
     }
   }
 }
+
+const hasBranch = (git: Git, cwd: string, name: string): Promise<boolean> =>
+  git.run(cwd, ['rev-parse', '--verify', '--quiet', `refs/heads/${name}^{commit}`]).then(
+    () => true,
+    () => false,
+  )
 
 /** そのパスに何かあるか。読めなければ、ある扱い（作らない） */
 const occupied = (path: string): Promise<boolean> =>

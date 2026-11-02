@@ -57,6 +57,8 @@ let base: string
 const fake = new FakeGit()
 const adds: { cwd: string; name: string; path: string; base: string }[] = []
 let addFails = ''
+/** 失敗したあとに残るもの（`worktree`: できている。`branch`: ブランチだけ残る） */
+let addLeaves: 'worktree' | 'branch' | '' = ''
 const saved = process.env.AGENT_FEED_HOST
 
 const post = (body: unknown, headers: Record<string, string> = { Origin: base }) =>
@@ -90,6 +92,11 @@ before(async () => {
       ps: async () => '',
       worktreeAdder: {
         add: async (cwd, name, path, from) => {
+          if (addLeaves === 'worktree') {
+            await mkdir(path)
+            fake.trees.push(path)
+          }
+          if (addLeaves === 'branch') fake.branches.add(name)
           if (addFails) throw new Error(addFails)
           adds.push({ cwd, name, path, base: from })
           await mkdir(path)
@@ -113,6 +120,7 @@ beforeEach(async () => {
   fake.bases = new Set(['main'])
   adds.length = 0
   addFails = ''
+  addLeaves = ''
   await rm(join(bare, 'new-tree'), { recursive: true, force: true })
 })
 
@@ -190,6 +198,22 @@ test('POST /api/workspaces: 形が分からない・base が無いときは作�
   const failed = await post({ from: 'A1@dev-a', name: 'new-tree' })
   assert.equal(failed.status, 500)
   assert.match(((await failed.json()) as { error: string }).error, /作り物の失敗/)
+})
+
+test('POST /api/workspaces: git が非 0 でも worktree ができていれば使える。ブランチだけ残れば、そう伝える（#847 のレビュー）', async () => {
+  addFails = 'hook failed'
+  addLeaves = 'worktree'
+  const made = await post({ from: 'A1@dev-a', name: 'new-tree' })
+  assert.equal(made.status, 201, 'post-checkout フックの失敗など')
+  assert.equal(((await made.json()) as AddWorktreeResponse).worktree.cwd, join(bare, 'new-tree'))
+  const places = (await (await fetch(`${base}/api/workspaces`)).json()) as WorkspacesResponse
+  assert.ok(places.siblings.some((w) => w.repo === 'new-tree'), '覚えた一覧も捨ててある')
+  await rm(join(bare, 'new-tree'), { recursive: true })
+  fake.trees = [join(bare, 'dev-a')]
+  addLeaves = 'branch'
+  const left = await post({ from: 'A1@dev-a', name: 'new-tree' })
+  assert.equal(left.status, 500)
+  assert.match(((await left.json()) as { error: string }).error, /ブランチ new-tree が残っています/)
 })
 
 test('createAddWorktree: 同じ名前が同時に来たら 1 つだけ作る（#847）', async () => {

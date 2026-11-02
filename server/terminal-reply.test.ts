@@ -377,6 +377,15 @@ test('返信: 端末で開いている Codex には要約を投げず、閉じ�
   }
 })
 
+test('返信: 要約に当たらなかった compact は、本文のターンに要約の印を付けない（#837 のレビュー）', async () => {
+  started.length = 0
+  tmux.screen = IDLE
+  const res = await post('T1@r', '837着手して', { compact: true, via: 'process' })
+  assert.equal(((await res.json()) as ReplyResponse).via, 'process')
+  assert.equal(started[0]!.cmd.text, '837着手して')
+  assert.equal(started[0]!.cmd.compact, undefined, '付くと画面が「要約中」と出して本文を隠す')
+})
+
 test('返信: 開いている Codex は active writer と競合する resume ではなく queue へ送る', async () => {
   started.length = 0
   queued.length = 0

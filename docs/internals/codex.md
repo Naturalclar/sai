@@ -107,6 +107,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - **回っているターンの途中に投げると、そのターンが `interrupted` で切られる**（応答は `{}` で断られない）。投げる前に `launch()` が `busy` を見る
 - 要約中の `turn/start` と `turn/steer` は断られる（`ActiveTurnNotSteerable`）。`steer()` は投げずに false を返し、預かりに落とす
 - `turn/completed` が `completed` 以外・切断・`thread/closed`・`CODEX_COMPACT_TIMEOUT_MS`（10 分）切れは失敗にする（`failures`。#475 と同じ置き場）ので、`drain()` が預かりを止める。時間切れは `turn/interrupt` も投げる。人が止めたときは先に片付くので失敗にならない
+- 要約の途中でサーバを立て直すと、失敗はメモリにしか無いので覚えていない。預かりはファイルに残るので、立て直したあとの `drain()` が本文を 1 回回す（要約が済んだかは見ない）
 - `notify` は鳴らず記録に行は増えない。次のターンの `input-messages` には要約の文が混ざるが、`record.py` は末尾を使う
 - rollout には `compacted` の行が載り、次の `token_count` まで `context_tokens` は 0（分からない）。`turn-usage.jsonl` は Codex の app-server のターンを書かないので、要約も載らない（モデルの呼び出しの量は rollout の `token_count` と `thread/tokenUsage/updated` に載る）
 

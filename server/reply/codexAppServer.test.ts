@@ -223,6 +223,15 @@ test('compact: 要約のターンには足せない。ほかの turn id の終�
   assert.equal(app.running('thread-1@repo'), true)
 })
 
+test('compact: turn/started の前に届いた turn/completed は、前のターンの終わりとして片付けない（#837）', async () => {
+  const { app, connection, ended } = await compacting()
+  // 人が止めたターンの `interrupted` が遅れて届く
+  connection.emit(turnDone('interrupted', null, 'old-turn'))
+  assert.equal(app.running('thread-1@repo'), true)
+  assert.deepEqual(ended, [])
+  assert.equal(app.replying()['thread-1@repo']?.failed, undefined)
+})
+
 test('compact: 投げられなければ処理中を残さず、呼ぶ側に投げ返す（#837）', async () => {
   const connection = new FakeConnection()
   const app = new CodexAppServer(async () => connection)

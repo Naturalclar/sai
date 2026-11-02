@@ -2576,6 +2576,8 @@ export function createApp(
     const bgLive = bg && backgroundLive(bg) ? bg : null
     // 止められない理由（無ければ止めてから `-p` で続ける）
     const bgHold = bgLive ? await backgroundHold(bgLive, session) : ''
+    // 要約できる Codex か（#837）。lsof・ps を待つことがあるので、`busy` を見る前に済ませる（見たあとに待つと、同時に来た 2 通目が預かりに回らない）
+    const codexCompact = Boolean(o.compact) && (await codexCompactable(session, raw))
     // 別プロセス（-p / app-server）のターンが動いているか、いま起動している最中か
     const busy = run.running(id) || codexApp.running(id) || opencodeApp.running(id) || launching.has(id) || bgHold !== ''
     // **要約してから送る**（#579）。本文を預かりの先頭に置いてから `/compact` のターンを起こす。要約のプロセスが終わると
@@ -2583,7 +2585,7 @@ export function createApp(
     // 効くのは Claude と SAI の app-server で話す Codex（#837）で、端末で開いておらず（TUI に打ち込む経路では要約中の入力の扱いを
     // 確かめていない）、処理中でも預かりが残ってもいないときだけ。当たらなければ付いていないのと同じ（下の今までの経路）
     // 端末に打ち込んだ返信がまだ回っているのにペインが見つからないときも回さない（下の経路が 409 にするのと同じ。#590 のレビュー）
-    if (o.compact && !openTerminal && !busy && !typed.running(id) && queue.size(id) === 0 && (session.agent === 'claude' ? !bgLive : await codexCompactable(session, raw))) {
+    if (o.compact && !openTerminal && !busy && !typed.running(id) && queue.size(id) === 0 && (session.agent === 'claude' ? !bgLive : codexCompact)) {
       const log = join(store.directory, 'reply.log')
       launching.add(id)
       try {
@@ -2617,6 +2619,8 @@ export function createApp(
     }
     if (o.compact) {
       await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} 要約してから送るは当たらない（端末で開いている・ほかが開いている・処理中・預かりがある・要約できるエージェントでない）。そのまま送る\n`).catch(() => {})
+      // 要約しないので、本文のターンに「要約だけのターン」の印を付けない（付けると画面が「要約中」と出して本文を隠す）
+      o = { ...o, compact: false }
     }
     // 処理中なら預かる（#305）。処理中でなくても預かりが残っていれば後ろに並べる（先に預けたものを追い越さない）
     if (o.queue && (busy || queue.size(id) > 0)) {

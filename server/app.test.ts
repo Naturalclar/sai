@@ -1180,6 +1180,16 @@ test('POST reply: Codex は本文を預かりの先頭に置いて app-server �
     await drop()
   }
 
+  // 同時に 2 通来ても、要約は 1 回で、後の 1 通は預かりに回る
+  codexApp.compacted.length = 0
+  try {
+    const both = await Promise.all(['841着手して', '842着手して'].map(async (text) => ((await (await post('X1@r', { text, compact: true, queue: true })).json()) as ReplyResponse).via))
+    assert.deepEqual([...both].sort(), ['compact', 'queued'])
+    assert.equal(codexApp.compacted.length, 1)
+  } finally {
+    await drop()
+  }
+
   // 処理中なら要約せずに預かる（回っているターンの途中に投げない）
   codexApp.started.length = 0
   codexApp.compacted.length = 0
@@ -1201,6 +1211,7 @@ test('POST reply: 処理中・要約できないエージェントのときは c
   const res = await post('X1@r', { text: '579着手して', compact: true })
   codexApp.compact = compact
   assert.notEqual(((await res.json()) as ReplyResponse).via, 'compact', '要約の口が無い Codex は要約しない')
+  assert.equal(codexApp.compacted.length, 0)
   runner.busy.set('C1@r', { since: new Date().toISOString(), text: '前の' })
   try {
     const queued = (await (await post('C1@r', { text: '581着手して', compact: true, queue: true })).json()) as ReplyResponse

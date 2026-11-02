@@ -828,8 +828,8 @@ export class CodexAppServer implements CodexApp {
       // エラーで終わったターン（`status: "failed"`。上限に当たった・モデルが無い など）は、行が残らないので失敗として残す（#475）
       const done = object(params.turn)
       const turn = this.turns.get(threadId)
-      // 要約を投げる前のターンの終わりで、要約を片付けない
-      if (turn?.compact && turn.turnId && done?.id !== turn.turnId) return
+      // 要約を投げる前のターンの終わりで、要約を片付けない（`turn/started` が必ず先に届く。届かなければ時間切れで失敗になる）
+      if (turn?.compact && done?.id !== turn.turnId) return
       if (turn?.compact && done?.status !== 'completed') {
         this.compactFailed(turn, codexTurnErrorReason(codexErrorText(done?.error) || `ターンが ${String(done?.status)} で終わりました`))
       } else if (turn && done?.status === 'failed') {

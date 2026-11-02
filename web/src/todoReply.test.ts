@@ -63,3 +63,7 @@ test('replyRowOf: 同じセッションに終わった待ち（wait。#732）の
   assert.equal(replyRowOf(items, 'c@sai')?.kind, 'answer')
   assert.equal(replyRowOf(items, 'x@sai'), undefined)
 })
+
+test('replyRowOf: 確かめの行（#856）は返信の行に数えない', () => {
+  assert.equal(replyRowOf([{ id: 'a', kind: 'config' as const }], 'a'), undefined)
+})

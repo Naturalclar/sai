@@ -31,6 +31,7 @@ test('hasDiff: 変わったファイルか追跡外か PR があれば「ある�
   assert.equal(hasDiff(base), false, '何も無ければボタンを出さない')
   assert.equal(hasDiff({ ...base, files: 1 }), true)
   assert.equal(hasDiff({ ...base, untracked: 1 }), true, '追跡外だけでも出す')
+  assert.equal(hasDiff({ ...base, codex_config: 1 }), true, 'サブディレクトリの .codex/ だけでも出す（#856）')
   assert.equal(hasDiff({ ...base, files: 1, added: 0, removed: 0 }), true, 'バイナリだけ（行が 0）でも出す')
   assert.equal(hasDiff({ ...base, pr: { number: 3, url: '', state: 'OPEN', draft: false } }), true, 'PR があれば出す')
 })

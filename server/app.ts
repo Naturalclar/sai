@@ -90,6 +90,7 @@ import type { SessionTurnResponse, TurnOutputResponse, TurnStepsResponse,
   ForkSessionRequest,
   ReviewRequest,
   ReviewResponse,
+  CodexConfigHold,
   SessionMeta,
   SessionSummary,
   SettingsRequest,
@@ -178,6 +179,8 @@ import { ClaudeLimitsFile, replyLimitsFile } from './reply/claudeLimits.ts'
 import { BackgroundLookupError, ClaudeBackground, type BackgroundSessions } from './reply/claudeBackground.ts'
 import { TURN_USAGE_FILE, TurnUsageLog } from './reply/turnUsage.ts'
 import { usageReport, usageReportDays } from '../shared/usageReport.ts'
+import { noCodexConfigGate } from './reply/codexConfigGuard.ts'
+import type { CodexConfigGate } from './reply/codexConfigGuard.ts'
 import { QUEUE_FILE, QUEUE_MAX, ReplyQueueStore } from './reply/replyQueue.ts'
 import { AGENT_MESSAGES_FILE, AGENT_MESSAGES_KEEP, AGENT_TOKEN_FILE, AGENT_TOKEN_HEADER, AgentMessages, ensureAgentToken, tokenMatches } from './reply/agentMessages.ts'
 import type { AgentMessage } from './reply/agentMessages.ts'
@@ -227,6 +230,8 @@ import {
   replyOf,
   resolveTarget,
   targetRefusal,
+  CODEX_CONFIG_PAUSED,
+  CODEX_CONFIG_REFUSED,
   TERMINAL_HELD_PAUSED,
   sessionLabel,
   tokensLabel,
@@ -237,6 +242,7 @@ import { eventKind } from '../shared/events.ts'
 import { CONTEXT_WARN_TOKENS, contextRevKey } from '../shared/contextSize.ts'
 import { createAddWorktree } from './git/worktreeAdd.ts'
 import type { WorktreeAdder } from './git/worktreeAdd.ts'
+import { subdirCodexFiles } from './git/codexConfigFiles.ts'
 import { treeOf, Worktrees } from './git/worktrees.ts'
 import { createMcpRoutes } from './mcp/mcpRoutes.ts'
 import { MCP_SENDS_FILE, McpSendLimiter } from './mcp/sendLimit.ts'
@@ -356,6 +362,9 @@ const ATTACHMENTS_SUFFIX = '/attachments'
 /** 預かった返信（#305）。`DELETE /api/sessions/<id>/queue/<queue_id>` と `POST /api/sessions/<id>/queue/resume` */
 const QUEUE_SEGMENT = '/queue/'
 const QUEUE_RESUME = 'resume'
+/** Codex を起こす前の確かめ（#856）への人の答え。`POST /api/sessions/<id>/codex-config/allow`・`.../dismiss`。同一オリジンのみ */
+const CODEX_CONFIG_ALLOW_SUFFIX = '/codex-config/allow'
+const CODEX_CONFIG_DISMISS_SUFFIX = '/codex-config/dismiss'
 /** 送ったメッセージが生きていない（相手の預かりにも回っているターンにも無い）まま返答が来なければ、これで失敗に決める（#823。返答の行の遅れを待つ） */
 const AGENT_GONE_MS = 60_000
 /** 上のまま返答が来なければ、これで失敗に決めて覚え、返答の行を探すのをやめる（#825 のレビュー。返答が遅れて来たら返答ありに戻せるあいだ） */
@@ -585,6 +594,8 @@ export interface TerminalDeps {
   codexDialogs?: CodexDialogSource
   /** SAIから開始するCodex turnのapp-server client。テストでは差し替える */
   codexApp?: CodexApp
+  /** Codex を起こす前の確かめ（#856）。**省略は「見ない」**（本物の git とファイルを見るのは main.ts が組んだものだけ） */
+  codexConfig?: CodexConfigGate
   /** OpenCode への返信を送る `opencode serve` の client（#382）。テストでは差し替える */
   opencodeApp?: OpencodeApp
   /** 端末で答えたぶんの待ちを畳む（#255）。テストでは差し替える */
@@ -1031,6 +1042,8 @@ export function createApp(
   const profileStore = new ProfileStore(join(store.directory, PROFILE_FILE))
   // 処理中に送った返信の預かり（#305）。replying.json と同じくファイルにも持ち、再起動で消さない
   const queue = new ReplyQueueStore(join(store.directory, QUEUE_FILE))
+  // 確かめで止めた預かり（#856）の行はメモリだけなので、起動したら止めを解いて回し直す。回るときにもう一度確かめて、要対応に出し直す
+  for (const id of Object.keys(queue.snapshot())) if (queue.paused(id) === CODEX_CONFIG_PAUSED) queue.resume(id)
   // 起動している最中のセッション。POST と drain が同じセッションを同時に起動しないように（spawn までの隙を塞ぐ）
   const launching = new Set<string>()
   // 預かりを回している最中のセッション（exit の知らせとポーリングが重なっても 1 本だけ）
@@ -2134,6 +2147,8 @@ export function createApp(
     } catch {
       return error(res, 400, `cwd が見つかりません: ${cwd || '(空)'}`)
     }
+    const stopped = await codexConfigStop(id, cwd)
+    if (stopped) return error(res, 409, stopped)
     // レビューも 1 本のターンなので、返信と同じ歯止めに乗せる。**預かりには回さない**
     // （預かり（#305）が持てるのは本文だけで、レビューの対象を持ち越せない。押し直せばよい）
     if (run.running(id) || codexApp.running(id) || opencodeApp.running(id) || launching.has(id) || queue.size(id) > 0) {
@@ -2434,6 +2449,8 @@ export function createApp(
     make: { thread: () => Promise<string>; label: string } = { thread: () => codexApp.startThread!(cwd), label: 'Codex の新しいセッション（thread/start → turn/start）' },
   ) => {
     const log = join(store.directory, 'reply.log')
+    const stopped = await codexConfigStop(from.id, cwd)
+    if (stopped) return error(res, 409, stopped)
     let session: string
     try {
       session = await make.thread()
@@ -2586,6 +2603,20 @@ export function createApp(
     return { status: 202, body: payload }
   }
 
+  /** Codex を起こす前の確かめで止めた返信・メッセージを預かって止める（#856）。人が「このまま起こす」を押すと回る */
+  const codexConfigHeld = async (id: string, session: SessionSummary, raw: string, cwd: string, text: string, attachments: string[], o: LaunchOptions): Promise<Launched> => {
+    // 預かりを回している途中なら、本文はもう先頭にある（`o.queue` は見ない。処理中でなければ預からない返信も、ここでは落とさず預かる）
+    if (draining.has(id)) {
+      queue.pause(id, CODEX_CONFIG_PAUSED)
+      return { ...refuse(409, CODEX_CONFIG_PAUSED), retry: true }
+    }
+    const item = queue.addFirst(id, text, attachments, o.url, new Date(), o.origin ?? '')
+    if (!item) return refuse(409, `預かれるのは ${QUEUE_MAX} 件までです。取り消すか、前の返信が終わるのを待ってください`)
+    queue.pause(id, CODEX_CONFIG_PAUSED)
+    const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd, via: 'queued', queue_id: item.queue_id, stuck: true }
+    return { status: 202, body: payload }
+  }
+
   const launch = async (id: string, text: string, attachments: string[], o: LaunchOptions): Promise<Launched> => {
     const { sessions } = await store.sessions(o.days)
     const session = sessions.find((s) => s.id === id)
@@ -2703,7 +2734,7 @@ export function createApp(
       if (!item) return refuse(409, `預かれるのは ${QUEUE_MAX} 件までです。取り消すか、前の返信が終わるのを待ってください`)
       await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} 処理中なので預かった（${queue.size(id)} 件目）\n`).catch(() => {})
       // 端末のターンが閉じたか分からずに止めた預かりの後ろに並んだメッセージも、止まっていると返す（#800 のレビュー）
-      const stuck = !!o.terminalFallback && queue.paused(id) === TERMINAL_HELD_PAUSED
+      const stuck = (!!o.terminalFallback && queue.paused(id) === TERMINAL_HELD_PAUSED) || queue.paused(id) === CODEX_CONFIG_PAUSED
       const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd, via: 'queued', queue_id: item.queue_id, ...(stuck ? { past_terminal: true as const, stuck: true as const } : {}) }
       return { status: 202, body: payload }
     }
@@ -2736,6 +2767,8 @@ export function createApp(
       const body = withHandedReplies(withAfterTurns(text, after?.block ?? ''), handed.replies)
       const pastTerminal = !!openTerminal && !!o.terminalFallback && session.agent === 'claude'
       let out = await startTurn(id, session, raw, cwd, openTerminal, body, attachments, o, { text, attachments })
+      // 確かめで止めた。添えた返答ごと預けると「渡した」にできないので、人の本文だけを預かる
+      if (out.codexConfig) return await codexConfigHeld(id, session, raw, cwd, text, attachments, o)
       // 端末に打ち込めなかった（打ち込む前に断られた。何も打っていない）メッセージ（#800）。**自動では別プロセスへ回さない**（人の決定。
       // 端末のターンの外かを transcript から確かに言えないため。#806）。預かって止め、送り元と要対応に出す。
       // 人が「続けて送る」を押した直後の 1 回だけ、端末でターンが回っていなければ別プロセスで回す（押した分はここで使う）
@@ -2767,12 +2800,36 @@ export function createApp(
     }
   }
 
+  const codexConfig = terminal.codexConfig ?? noCodexConfigGate
+  /** 確かめで止まっているもの（#856）。メモリだけ（再起動後は、預かりが回るときにもう一度確かめて出し直す） */
+  const codexConfigHolds = new Map<string, CodexConfigHold>()
+  const codexConfigKey = () => [...codexConfigHolds].map(([id, h]) => `${id}:${h.fingerprint}`).join(',')
+  /**
+   * Codex を起こす前の確かめ（#856）。止めるなら理由の文を返し、要対応に 1 行出す。**Codex を起こす道は、どの接続でも
+   * `thread/start`・`thread/resume`・`thread/fork` の前にこれを通す**（daemon の道を足すときも同じ）。端末に打ち込む道と、
+   * 開いているスレッドへの `queue` は起こさないので通さない
+   */
+  const codexConfigStop = async (id: string, cwd: string): Promise<string> => {
+    const ask = await codexConfig.check(cwd)
+    const before = codexConfigHolds.get(id)
+    if (!ask) {
+      if (before?.cwd === cwd) codexConfigHolds.delete(id)
+      return ''
+    }
+    const same = before?.cwd === cwd && before.fingerprint === ask.fingerprint
+    codexConfigHolds.set(id, { ...ask, cwd, since: same ? before.since : new Date().toISOString() })
+    await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} Codex を起こさずに止めた（サブディレクトリの .codex/ の確かめ。${ask.reason}） (cwd ${cwd})\n`).catch(() => {})
+    return CODEX_CONFIG_REFUSED
+  }
+
   /** Codex のスレッドを SAI の app-server で要約できるか（#837）。**別のプロセスが書いているスレッドには投げない**（`codexHeldElsewhere()`） */
   const codexCompactable = async (session: SessionSummary, raw: string): Promise<boolean> =>
     session.agent === 'codex' && codexAppEnabled && Boolean(codexApp.compact) && !(await codexHeldElsewhere(session, raw))
 
   /** 要約だけのターンを app-server で始める（#837）。終わると `onTurnEnd` → `drain()` が預かった本文を回す。始められなければ断る（呼ぶ側が本文を預かりから外す） */
   const startCodexCompact = async (id: string, raw: string, cwd: string): Promise<Launched> => {
+    const stopped = await codexConfigStop(id, cwd)
+    if (stopped) return refuse(409, stopped)
     const model = (await metaStore.get(id))?.model
     try {
       await codexApp.compact?.({ id, threadId: raw, cwd, model })
@@ -2864,6 +2921,11 @@ export function createApp(
     }
     // terminalOf() の後にペインが消えた場合も、開いている Codex は resume せず queue へ送る。
     if (codexActive) return sendQueue()
+    // ここから下は Codex を起こす道（app-server の resume と、切っているときの exec resume）
+    if (session.agent === 'codex') {
+      const stopped = await codexConfigStop(id, cwd)
+      if (stopped) return { ...refuse(409, stopped), codexConfig: true }
+    }
     // SAIから開始するCodex turnはapp-serverでresumeする。server requestとresponseを同じ接続で
     // 往復できるので、質問・承認をWeb UIで安全に答えられる。通常起動TUIは上の経路のまま。
     if (session.agent === 'codex' && codexAppEnabled) {
@@ -3194,6 +3256,8 @@ export function createApp(
         terminalForced.add(id)
         bgRetryAt.delete(id)
       }
+      // 確かめで止めた預かり（#856）は、もう一度確かめるだけ（「続けて送る」では飛ばせない）。`.codex/` が片付いていれば回る
+      if (queue.paused(id) === CODEX_CONFIG_PAUSED) bgRetryAt.delete(id)
       queue.resume(id)
       try {
         await drain(id)
@@ -3209,6 +3273,41 @@ export function createApp(
     }
     const payload: ReplyQueueResponse = { id, queue: queue.snapshot()[id] ?? { items: [] } }
     return json(res, payload)
+  }
+
+  /**
+   * 確かめ（#856）への人の答え。`allow` は人が見たものと同じ中身のときだけ覚えて（`fingerprint`）、止めた預かりを回す。
+   * 新しいセッション・分岐・レビューは預かれないので、人が押し直す。`dismiss` は行を片付けるだけで、何も起こさない
+   */
+  const codexConfigAction = async (req: IncomingMessage, res: ServerResponse, id: string, allow: boolean) => {
+    if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
+    if ((req.method ?? 'GET') !== 'POST') return error(res, 405, 'method not allowed')
+    let body: unknown
+    try {
+      body = await readJson(req, MAX_REPLY_BYTES)
+    } catch (err) {
+      return error(res, 400, err instanceof Error ? err.message : 'bad body')
+    }
+    const hold = codexConfigHolds.get(id)
+    if (!hold) return error(res, 404, '確かめる待ちはありません')
+    if (!allow) {
+      codexConfigHolds.delete(id)
+      return json(res, { id })
+    }
+    const seen = (body as { fingerprint?: unknown } | null)?.fingerprint
+    if (seen !== hold.fingerprint) return error(res, 409, '確かめる中身が変わりました。見直してから押してください')
+    const changed = await codexConfig.allow(hold.cwd, hold.fingerprint)
+    if (changed) {
+      codexConfigHolds.set(id, { ...changed, cwd: hold.cwd, since: hold.since })
+      return error(res, 409, '確かめる中身が変わりました。見直してから押してください')
+    }
+    codexConfigHolds.delete(id)
+    if (queue.paused(id) === CODEX_CONFIG_PAUSED) {
+      bgRetryAt.delete(id)
+      queue.resume(id)
+      await drain(id)
+    }
+    return json(res, { id })
   }
 
   /**
@@ -4307,6 +4406,7 @@ export function createApp(
       throw err
     }
     const found = await pr.find(session.cwd, d.head_branch)
+    const codexFiles = (await subdirCodexFiles(git, session.cwd).catch(() => [])).length
     const payload: SessionDiffSummaryResponse = {
       id,
       base: d.base,
@@ -4317,6 +4417,7 @@ export function createApp(
       branch: d.branch,
       working: d.working,
       untracked: d.untracked,
+      ...(codexFiles > 0 ? { codex_config: codexFiles } : {}),
       ...(found ? { pr: found } : {}),
     }
     return json(res, payload)
@@ -4487,6 +4588,8 @@ export function createApp(
       }
       throw err
     }
+    // サブディレクトリの `.codex/`（#856）。読めなくても差分は落とさない
+    const codexFiles = await subdirCodexFiles(git, session.cwd).catch(() => null)
     const payload: SessionDiffResponse = {
       id,
       cwd: session.cwd,
@@ -4497,6 +4600,7 @@ export function createApp(
       branch: d.branch,
       working: d.working,
       untracked: d.untracked,
+      ...(codexFiles ? (codexFiles.length > 0 ? { codex_config: codexFiles } : {}) : { codex_config_unknown: true }),
     }
     return json(res, payload)
   }
@@ -4782,6 +4886,8 @@ export function createApp(
     const isAgentStop = path.startsWith(SESSIONS_PREFIX) && (path.endsWith(AGENT_STOP_SUFFIX) || path.endsWith(AGENT_RESUME_SUFFIX))
     // 処理中のターンを止める（#384）。画面から叩くので同一オリジンで受ける
     const isInterrupt = path.startsWith(SESSIONS_PREFIX) && path.endsWith(INTERRUPT_SUFFIX)
+    // Codex を起こす前の確かめへの人の答え（#856）。画面から叩くので同一オリジンで受ける
+    const isCodexConfig = path.startsWith(SESSIONS_PREFIX) && (path.endsWith(CODEX_CONFIG_ALLOW_SUFFIX) || path.endsWith(CODEX_CONFIG_DISMISS_SUFFIX))
     // ループを組む・止める・再開・いま起こす・片付ける（#634）。画面から叩くので同一オリジンで受ける
     const loopSuffix = path.startsWith(SESSIONS_PREFIX) ? LOOP_SUFFIXES.find((sfx) => path.endsWith(sfx)) : undefined
     // 待ちを止める・いま起こす（#732）。画面から叩くので同一オリジンで受ける
@@ -4816,12 +4922,18 @@ export function createApp(
     // 「設定は PUT」「預かった返信の再開は POST、取り消しは DELETE」だけ。それ以外は GET / HEAD のみ
     const writable =
       (method === 'POST' &&
-        (isNewSession || isWorkspaces || isAuthCheck || isAuthLogin || isReply || isReview || isFork || isPrReview || isPrBrief || isAsk || isAnswer || isAttachUpload || isQueue || isDigestFeedback || isSuggestion || path === USAGE_REFRESH_PATH || path === AGENT_SEND_PATH || path === AGENT_LOOP_PATH || path === AGENT_WAIT_FOR_PATH || isAgentStop || isInterrupt || loopSuffix !== undefined || waitSuffix !== undefined)) ||
+        (isNewSession || isWorkspaces || isAuthCheck || isAuthLogin || isReply || isReview || isFork || isPrReview || isPrBrief || isAsk || isAnswer || isAttachUpload || isQueue || isDigestFeedback || isSuggestion || path === USAGE_REFRESH_PATH || path === AGENT_SEND_PATH || path === AGENT_LOOP_PATH || path === AGENT_WAIT_FOR_PATH || isAgentStop || isInterrupt || isCodexConfig || loopSuffix !== undefined || waitSuffix !== undefined)) ||
       (method === 'DELETE' && (isQueue || isHistoryIcon || loopSuffix === '/loop')) ||
       (method === 'PUT' && (isMeta || isRead || isProfile || isSettings)) ||
       ((method === 'PUT' || method === 'DELETE') && (isIcon || isProfileIcon))
     if (!writable && method !== 'GET' && method !== 'HEAD') return error(res, 405, 'method not allowed')
     try {
+      if (isCodexConfig) {
+        const allow = path.endsWith(CODEX_CONFIG_ALLOW_SUFFIX)
+        const id = sessionIdFrom(path, allow ? CODEX_CONFIG_ALLOW_SUFFIX : CODEX_CONFIG_DISMISS_SUFFIX)
+        if (id === null) return error(res, 400, 'bad session id')
+        return await codexConfigAction(req, res, id, allow)
+      }
       if (isInterrupt) {
         if (method !== 'POST') return error(res, 405, 'method not allowed')
         const id = sessionIdFrom(path, INTERRUPT_SUFFIX)
@@ -5389,7 +5501,7 @@ export function createApp(
         const waitingKey = Object.entries(agent_waiting).map(([k, c]) => `${k}:${c.waiting}:${c.failed}`).join(',')
         const body: SessionsResponse = {
           // 足りないフックは rev に混ぜる（設定を直したら、次の行を待たずにバナーが消える）
-          rev: revWith(rev, replying, approvalMapKey(pendingApprovals), build_stale, digest.revKey(), `${queue.key()}|${loops.key()}|${waits.key()}`) + (hooks_missing.length ? `~hooks:${hooks_missing.join(',')}` : '') + (claude_logged_out ? '~auth:out' : '') + (attachments_over ? `~att:${attachments_over.bytes}` : '') + (waitingKey ? `~aw:${waitingKey}` : ''),
+          rev: revWith(rev, replying, approvalMapKey(pendingApprovals), build_stale, digest.revKey(), `${queue.key()}|${loops.key()}|${waits.key()}|${codexConfigKey()}`) + (hooks_missing.length ? `~hooks:${hooks_missing.join(',')}` : '') + (claude_logged_out ? '~auth:out' : '') + (attachments_over ? `~att:${attachments_over.bytes}` : '') + (waitingKey ? `~aw:${waitingKey}` : ''),
           days,
           total: pool.length,
           sessions: withLastSummary(
@@ -5407,6 +5519,7 @@ export function createApp(
           queued: queue.snapshot(),
           loops: loops.snapshot(),
           waits: waits.snapshot(),
+          codex_config_holds: Object.fromEntries(codexConfigHolds),
           approvals: pendingApprovals,
           agent_waiting,
           build_stale,

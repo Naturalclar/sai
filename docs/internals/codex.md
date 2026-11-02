@@ -97,6 +97,17 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
   - 空白や引用符を含む語は `"…"` で囲む（`/bin/zsh -lc "touch out.txt"`。語の切れ目が分かるように）
 - コマンドに「拒否」が無いことがある（実測 0.160.1 では `accept` / `acceptWithExecpolicyAmendment` / `cancel` だけで、`decline` が来ない）。SAI は来ていない decision を足さないので、そのときは「ターンを中止」しか選べない
 
+## 起こす前の .codex の確かめ
+
+Codex は起動する cwd からリポジトリの一番上までの `.codex/` を読む。一番上ではないディレクトリの `.codex/` に人が気づけるよう、SAI が Codex を起こす前に確かめる（#856）。経緯は [history](../history/codex.md#起こす前の-codex-の確かめ856)。
+
+- **通す場所は `app.ts` の `codexConfigStop(id, cwd)` の 1 つ**。呼ぶのは `startCodexSession()`（`thread/start`・`thread/fork`）、`review`、`startCodexCompact()`、`startTurn()` の app-server と exec resume の手前。**Codex を起こす道を足すとき（daemon の道も）はこれを通す。** 端末に打ち込む道・開いているスレッドへの `queue`・`turn/steer` は起こさないので通さない（端末の分は差分の印だけ）
+- **見る範囲**（`server/reply/codexConfigGuard.ts` の `scanCodexConfig()`）: `git rev-parse --show-toplevel` の下で、cwd からの親を順に。一番上は含めない（`cwd` が一番上なら何も見つからない）。一番上の親のどこかに `.git` があれば（入れ子のリポジトリ・中に置いた worktree）、一番上の `.codex` も含める
+- **分からなければ止める**: git が読めない・5 秒で返らない・cwd が作業ツリーの外は `unknown`
+- **覚え方**: `.codex` の絶対パスごとに中身の SHA-256 を `codex-config-allowed.json` に書く。名前と中身が 1 つでも変われば聞き直す。シンボリックリンク・読めないファイル・2000 項目を超えるもの・`unknown` は覚えず、押した分が 10 分のうちの 1 回だけ効く
+- **止めたあと**: 行は `codexConfigHolds`（メモリだけ）で、一覧の `codex_config_holds` から要対応の `config` の行になる。返信・メッセージは人の本文だけを預かって止める（`CODEX_CONFIG_PAUSED`。起動時に止めを解くので、再起動のあとは回るときにもう一度確かめて行を出し直す）。預かれない起動は `409` で、押してから人が押し直す。`「続けて送る」` は確かめをやり直すだけ
+- **差分の画面**: `server/git/codexConfigFiles.ts` の `subdirCodexFiles()` が `ls-files` を `:(glob)**/.codex/**` に絞って 3 回（追跡・追跡外・無視）読む。**`git ls-files -o` は入れ子のリポジトリの中まで降りない**ので、そこは起動前の確かめだけが見る
+
 ## 要約だけのターン
 
 `CodexAppServer.compact()`（#837。`thread/compact/start`）。呼ぶのは `launch()` だけで、判定と順番は docs/internals/reply.md の「要約してから送る」。動きは 0.166.0 の実測:

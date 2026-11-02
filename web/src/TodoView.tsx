@@ -4,6 +4,7 @@ import type { ReplyingMap, SessionsResponse } from './api'
 import type { Polled } from './hooks'
 import { BackLink } from './BackLink'
 import { TodoRow } from './TodoRow'
+import { TodoConfigRow } from './TodoConfigRow'
 import { TodoWaitRow } from './TodoWaitRow'
 import type { PrRepo } from '../../shared/types.ts'
 import { TodoReplyBox } from './TodoReplyBox'
@@ -60,7 +61,7 @@ export function TodoView({ list, onStatus, onOpenSidebar, onLeaveToSidebar, prs,
   useEffect(() => onStatus(updatedAt, error), [updatedAt, error, onStatus])
 
   // replying を渡すのは、別プロセスの返信を処理中なら「待っている」ではなく「動いている」ため（#232）
-  const items = data ? todoItems(data.sessions, data.approvals, data.host, data.replying, data.loops, data.waits, data.queued) : []
+  const items = data ? todoItems(data.sessions, data.approvals, data.host, data.replying, data.loops, data.waits, data.queued, data.codex_config_holds) : []
   // 数えるのは答えを待っているものだけ（#438）。並びは 答え待ち → 未読 → 待機中 → 終わっているもの（#551）
   const pending = pendingItems(items)
   const sections = todoSections(items)
@@ -196,6 +197,9 @@ export function TodoView({ list, onStatus, onOpenSidebar, onLeaveToSidebar, prs,
     const heading = (id: string, label: string) => out.push(<h2 key={id} className="todo-section">{label}</h2>)
     // ⌘Enter が効くのは一番上の答え待ちだけ（フィードと同じ扱い）
     sections.answer.forEach((t, i) => out.push(rowOf(t, t.id, i === 0 && focused, modeNoteOf(t))))
+    // Codex を起こす前の確かめ（#856）。押すまで動かないので、答え待ちのすぐ下
+    if (sections.config.length > 0) heading('section:config', `起こす前に確かめる（${sections.config.length}）`)
+    for (const t of sections.config) if (t.config) out.push(<TodoConfigRow key={`config-row:${t.id}`} item={t} hold={t.config} now={now} />)
     // 終わったのに自動では起こさない待ち（#732）。押すだけで済むので、答え待ちのすぐ下
     if (sections.wait.length > 0) heading('section:wait', `待ちが終わっている（${sections.wait.length}）`)
     for (const t of sections.wait) if (t.wait) out.push(<TodoWaitRow key={todoKey(t)} item={t} wait={t.wait} now={now} />)

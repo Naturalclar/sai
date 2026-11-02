@@ -139,6 +139,7 @@ OpenCode (feed/opencode/sai.js) ─┘                           │
 
 ### Codex の端末・app-server と処理中の手順
 
+- **起こす前の `.codex` の確かめ**（#856）: Codex を起こす道は、どの接続でも `thread/start`・`thread/resume`・`thread/fork` の前に `codexConfigStop()` を通す。分からなければ止める。SAI は `.codex/` を書き換えない・消さない・中身を画面に出さない → docs/internals/codex.md#起こす前の-codex-の確かめ
 - **Codex の端末のダイアログ**: `CodexDialogs.answer()` は送る前・矢印のあと・`Enter` のあとの 3 回とも画面を読み直し、食い違えば `409` でキーは送らず押し直しもしない。`don't ask again` は範囲が全部読めたときだけ、範囲を書いたボタンにする（`dontAskScope()`。#741。`default.rules` は SAI が書かない・読まない）。中身が読めないダイアログは `answerable: false`。`approval_id` には中身を混ぜ、カーソルの位置は混ぜない → docs/internals/codex.md#ダイアログに画面から答える
 - **共有の app-server を読むだけで見る**（#848）: 送れる要求は `DAEMON_METHODS` の許可一覧だけ。サーバからの要求に答えない。`daemon start` しない。入切は `settings.json` の `codex_daemon`（既定は切）。本物を組むのは `main.ts` だけ。`idle` を見て空きと言わない → docs/internals/codex.md#共有の-app-server-を読むだけで見る848
 - **ペイン → セッションの引き当て**: 分からなければ当てない。cwd の一番新しい rollout からは引かない。`lsof` が無ければ端末扱いにしない。tmux が落ちても前の結果は捨てず、失敗も覚える。前方一致は realpath でも比べ、返すパスは lsof のまま。行の無いセッションはダイアログの監視にだけ足す。`SAI_TERMINAL=0` では `scan()` を呼ばない → docs/internals/codex.md#ペインの側から探す

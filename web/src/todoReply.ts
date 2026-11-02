@@ -14,7 +14,7 @@ export function rowReplyable(t: Pick<TodoItem, 'kind' | 'replyable' | 'session'>
  * 送信失敗を戻す先・「行がまだ並んでいるか」を ID だけで見ると、待ちの行を拾ってしまう（PR #778 のレビュー）
  */
 export function replyRowOf<T extends Pick<TodoItem, 'id' | 'kind'>>(items: readonly T[], id: string): T | undefined {
-  return items.find((t) => t.id === id && t.kind !== 'wait')
+  return items.find((t) => t.id === id && t.kind !== 'wait' && t.kind !== 'config')
 }
 
 /**

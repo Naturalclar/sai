@@ -421,3 +421,16 @@ test('todoItems: 端末のターンが閉じたか分からずに止めたメッ
   assert.equal(pendingItems(mine).length, 1)
   assert.equal(items.some((i) => i.id === 's2@sai' && i.text === TERMINAL_STUCK_TEXT), false)
 })
+
+test('todoItems: Codex を起こす前の確かめ（#856）は config で、絞り込みに関わらず出て数える。ほかの行とは別に並ぶ', () => {
+  const hold = { reason: 'found' as const, files: ['sub/.codex/config.toml'], more: 0, note: '', fingerprint: 'f', cwd: '/w', since: '2026-09-02T10:00:00+09:00' }
+  const items = todoItems([summary({ id: 'a@r', last_kind: 'turn' })], {}, SELF, {}, {}, {}, {}, { 'a@r': hold, 'gone@r': hold })
+  const config = items.filter((t) => t.kind === 'config')
+  assert.deepEqual(config.map((t) => t.id), ['a@r', 'gone@r'])
+  assert.equal(config[1]?.session, null)
+  assert.equal(config[0]?.config, hold)
+  assert.equal(pendingItems(items).length, 2)
+  assert.deepEqual(todoSections(items).config.map((t) => t.id), ['a@r', 'gone@r'])
+  assert.equal(todoKey(config[0]!), 'config:a@r')
+  assert.notEqual(todoKey(config[0]!), todoKey(items.find((t) => t.kind === 'done')!))
+})

@@ -2,7 +2,7 @@
 import { stripMarkdown } from './markdown.ts'
 import { TERMINAL_HELD_PAUSED } from './agentMessages.ts'
 import { replyBlockedReason } from './reply.ts'
-import type { Approval, ApprovalMap, LoopMap, ReplyingMap, ReplyQueueMap, SessionSummary, Wait, WaitMap } from './types.ts'
+import type { Approval, ApprovalMap, CodexConfigHold, CodexConfigHoldMap, LoopMap, ReplyingMap, ReplyQueueMap, SessionSummary, Wait, WaitMap } from './types.ts'
 import { waitDoneText, waitNeedsHuman } from './waits.ts'
 
 /**
@@ -11,11 +11,12 @@ import { waitDoneText, waitNeedsHuman } from './waits.ts'
  *   ボタンは出せないが、**返信欄からは打てることが多い**（`replyable`）
  * - `wait`: 預かった待ち（#732）が終わっているが、**自動では起こさないと決めたもの**（`waitNeedsHuman()`）。人が「いま起こす」か
  *   「片付ける」を押すまで何も起きないので、`answer` / `watch` と同じく数える。1 つの待ち = 1 行（同じセッションに 2 行あることがある）
+ * - `config`: Codex を起こす前の確かめ（#856）で止めている。人が「このまま起こす」か「片付ける」を押すまで起こさないので数える
  * - `done`: **詰まってはいない。ターンが終わって次の指示を待っているだけ**（#438 / #513。判定は `awaitsNext()`）。
  *   `answer` / `watch` と同じ重さで出すと、本当に答えを待っているものが埋もれるので、
  *   画面では下段に置き、**バッジ・タブの題名・通知には数えない**（`pendingItems()`）
  */
-export type TodoKind = 'answer' | 'watch' | 'wait' | 'done'
+export type TodoKind = 'answer' | 'watch' | 'wait' | 'config' | 'done'
 
 export interface TodoItem {
   /** エンティティID */
@@ -42,6 +43,8 @@ export interface TodoItem {
   sub?: string
   /** kind === 'wait' のときだけ。どの待ちか（行のボタンが名指しする） */
   wait?: Wait
+  /** kind === 'config' のときだけ。何を確かめるか（#856） */
+  config?: CodexConfigHold
 }
 
 /**
@@ -72,10 +75,15 @@ export interface TodoItem {
  * `selfHost` はこのサーバのマシン名（応答の `host`。#114）。別のマシンのセッションは項目としては出すが
  * （待っていることに変わりはない）、ここからは答えられないので `replyable` は false になる。
  */
+/** 要対応に出す、Codex を起こす前の確かめの 1 行（#856） */
+export function codexConfigText(h: Pick<CodexConfigHold, 'reason' | 'note'>): string {
+  return h.reason === 'found' ? 'サブディレクトリに .codex/ があるので、Codex を起こさずに止めています' : `.codex/ を確かめられないので、Codex を起こさずに止めています（${h.note}）`
+}
+
 /** 要対応に出す、止めたメッセージの預かりの 1 行（#800） */
 export const TERMINAL_STUCK_TEXT = '預かったメッセージが止まっています（端末に打ち込めません。打ちかけ・ダイアログを片付けるか、開いて「続けて送る」を押してください）'
 
-export function todoItems(sessions: readonly SessionSummary[], approvals: ApprovalMap, selfHost: string, replying: ReplyingMap = {}, loops: LoopMap = {}, waits: WaitMap = {}, queued: ReplyQueueMap = {}): TodoItem[] {
+export function todoItems(sessions: readonly SessionSummary[], approvals: ApprovalMap, selfHost: string, replying: ReplyingMap = {}, loops: LoopMap = {}, waits: WaitMap = {}, queued: ReplyQueueMap = {}, configHolds: CodexConfigHoldMap = {}): TodoItem[] {
   const byId = new Map(sessions.map((s) => [s.id, s]))
   const out: TodoItem[] = []
   for (const [id, list] of Object.entries(approvals)) {
@@ -89,6 +97,10 @@ export function todoItems(sessions: readonly SessionSummary[], approvals: Approv
       if (!waitNeedsHuman(w)) continue
       out.push({ id, kind: 'wait', text: waitDoneText(w), since: w.finished_at ?? w.since, session: byId.get(id) ?? null, approval: null, replyable: false, wait: w })
     }
+  }
+  // `wait` と同じく絞り込みに関わらず全部出す（止まっているのはこの行が片付くまで動かない）
+  for (const [id, h] of Object.entries(configHolds)) {
+    out.push({ id, kind: 'config', text: codexConfigText(h), since: h.since, session: byId.get(id) ?? null, approval: null, replyable: false, config: h })
   }
   for (const s of sessions) {
     // 答え待ちが出ているセッションは上で入れてある（そちらの方が新しくて具体的）
@@ -126,6 +138,7 @@ export function todoItems(sessions: readonly SessionSummary[], approvals: Approv
  */
 export function todoKey(t: Pick<TodoItem, 'id' | 'kind' | 'wait'>): string {
   if (t.kind === 'wait') return `wait:${t.id}:${t.wait?.id ?? ''}`
+  if (t.kind === 'config') return `config:${t.id}`
   return t.kind === 'done' ? `done:${t.id}` : t.id
 }
 
@@ -179,10 +192,12 @@ export function doneItems(items: readonly TodoItem[]): TodoItem[] {
   return items.filter((t) => t.kind === 'done')
 }
 
-/** 要対応の画面の段（#551）。上から `answer` → `wait` → `unread` → `watch` → `done` の順に出す */
+/** 要対応の画面の段（#551）。上から `answer` → `config` → `wait` → `unread` → `watch` → `done` の順に出す */
 export interface TodoSections {
   /** 答え待ち。この画面から答えられるので、未読かどうかに関わらず一番上 */
   answer: TodoItem[]
+  /** Codex を起こす前の確かめ（#856）。押すまで起こさないので答え待ちのすぐ下 */
+  config: TodoItem[]
   /** 終わっていて、自動では起こさない待ち（#732）。押すだけで済むので答え待ちのすぐ下 */
   wait: TodoItem[]
   /** 未読の返答があるセッション（`watch` も `done` も）。読んでいない返答が下段の奥に埋もれないように上げる */
@@ -201,10 +216,11 @@ export interface TodoSections {
  * 今までどおり `done` の行だけ（#522）
  */
 export function todoSections(items: readonly TodoItem[]): TodoSections {
-  const out: TodoSections = { answer: [], wait: [], unread: [], watch: [], done: [] }
+  const out: TodoSections = { answer: [], config: [], wait: [], unread: [], watch: [], done: [] }
   for (const t of items) {
     if (t.kind === 'answer') out.answer.push(t)
     else if (t.kind === 'wait') out.wait.push(t)
+    else if (t.kind === 'config') out.config.push(t)
     else if ((t.session?.unread ?? 0) > 0) out.unread.push(t)
     else out[t.kind].push(t)
   }

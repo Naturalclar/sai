@@ -2069,6 +2069,10 @@ export interface SettingsResponse {
   jev_auto: number
   /** 入力欄への長い貼り付けをファイルにして添えるか（#609。settings.json の `paste_to_file`。既定は切） */
   paste_to_file: boolean
+  /** Codex の共有の app-server（daemon）を読むだけで見るか（#848。settings.json の `codex_daemon`。既定は切） */
+  codex_daemon: boolean
+  /** daemon との繋がり（`off` / `no_socket` / `failed` / `connected`）。入にしたあとの確かめに使う */
+  codex_daemon_link: 'off' | 'no_socket' | 'failed' | 'connected'
   /**
    * 返信の既定の許可モード（#582。settings.json の `reply_mode`）。セッションのメタに許可モードが無いときだけ使う。
    * `REPLY_MODES` のどれかで、空は「決めない」（CLI の既定）
@@ -2115,6 +2119,7 @@ export interface SettingsRequest {
   jev_auto?: number
   /** 入力欄への長い貼り付けをファイルにして添えるか（#609） */
   paste_to_file?: boolean
+  codex_daemon?: boolean
   /** 返信の既定の許可モード（#582）。`REPLY_MODES` のどれか。空文字で「決めない」 */
   reply_mode?: ReplyPermissionMode | ''
   /**

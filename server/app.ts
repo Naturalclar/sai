@@ -2618,7 +2618,8 @@ export function createApp(
       }
     }
     if (o.compact) {
-      await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} 要約してから送るは当たらない（端末で開いている・ほかが開いている・処理中・預かりがある・要約できるエージェントでない）。そのまま送る\n`).catch(() => {})
+      // ここで待たない（`busy` を見たあとなので、待つと同時に来た 2 通目が二重に起動する）
+      void appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} 要約してから送るは当たらない（端末で開いている・ほかが開いている・処理中・預かりがある・要約できるエージェントでない）。そのまま送る\n`).catch(() => {})
       // 要約しないので、本文のターンに「要約だけのターン」の印を付けない（付けると画面が「要約中」と出して本文を隠す）
       o = { ...o, compact: false }
     }

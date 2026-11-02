@@ -585,8 +585,12 @@ export class CodexAppServer implements CodexApp {
     this.clearThread(turn.threadId)
   }
 
+  /**
+   * 要約の失敗を残す。本文はまだ届いていないので `turn_error` は付けない（付けると画面が「返信は届きましたが」と出す）。
+   * 本文は預かりに残っているので `text` は空（入力欄に戻すものが無い）
+   */
   private compactFailed(turn: ManagedTurn, reason: string): void {
-    this.failures.set(turn.entity, { replying: { since: turn.since, text: turn.text, failed: { tail: `要約できませんでした: ${reason}`, turn_error: true } }, at: this.now() })
+    this.failures.set(turn.entity, { replying: { since: turn.since, text: '', failed: { tail: `要約できませんでした: ${reason}` } }, at: this.now() })
   }
 
   answer(approvalId: string, answer: ApprovalAnswer): CodexAnswerResult {

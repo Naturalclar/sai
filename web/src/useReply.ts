@@ -137,7 +137,8 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
       if (countRows(id) <= at.rows) setFailed({ id, message: ENDED_WITHOUT_ROW, text: at.text })
     }
     for (const [id, r] of Object.entries(replying)) {
-      if (!seen.current.has(id)) seen.current.set(id, { rows: countRows(id), text: typedText(r.text) })
+      // 要約だけのターンは行を増やさず本文は預かりにあるので、「記録が増えなかった」とは見ない（#837）
+      if (!seen.current.has(id) && !r.compact) seen.current.set(id, { rows: countRows(id), text: typedText(r.text) })
     }
 
     // ローカルの繋ぎ。サーバが引き継いだら捨てる。202 から少し待っても載らなければ、もう終わっている

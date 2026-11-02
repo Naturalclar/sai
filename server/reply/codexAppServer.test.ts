@@ -167,7 +167,8 @@ test('compact: 要約が失敗したら失敗として残す。systemError が�
   assert.deepEqual(ended, ['thread-1@repo'])
   const failed = app.replying()['thread-1@repo']?.failed
   assert.match(failed?.tail ?? '', /要約できませんでした.*作り物の失敗/)
-  assert.equal(failed?.turn_error, true)
+  assert.equal(failed?.turn_error, undefined, '本文はまだ届いていない。「返信は届きました」と出さない')
+  assert.equal(app.replying()['thread-1@repo']?.text, '', '本文は預かりにあるので、入力欄に戻すものは無い')
 })
 
 test('compact: 時間切れなら止めて失敗にする。要約のターンは切れないまま残さない（#837）', async () => {

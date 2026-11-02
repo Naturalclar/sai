@@ -15,6 +15,9 @@ import type { Worktrees } from './worktrees.ts'
 /** 作るのを待つ上限。大きいリポジトリでも checkout はこの手前で終わる見込み */
 export const WORKTREE_ADD_TIMEOUT_MS = 120_000
 
+/** git が終わったあと、stderr の残りを待つ長さ */
+const STDERR_DRAIN_MS = 200
+
 /** worktree を作る口。本物を組むのは `main.ts` だけで、`createApp` の既定は作らない */
 export interface WorktreeAdder {
   add(cwd: string, name: string, path: string, base: string): Promise<void>
@@ -37,7 +40,18 @@ export class RealWorktreeAdder implements WorktreeAdder {
         if (err.length < 2000) err += c.toString()
       })
       child.once('error', reject)
-      child.once('close', (code, signal) => (code === 0 ? resolve() : reject(new Error(err.trim() || (signal ? `git が時間切れで止まりました（${signal}）` : `git exited ${code}`)))))
+      const settle = (code: number | null, signal: NodeJS.Signals | null) => (code === 0 ? resolve() : reject(new Error(err.trim() || (signal ? `git が時間切れで止まりました（${signal}）` : `git exited ${code}`))))
+      // `close` だけを待たない。フックが起こした子が stderr を持ったままだと、git が終わっても `close` が来ない（時間切れも効かない）
+      child.once('exit', (code, signal) => {
+        const drained = setTimeout(() => {
+          child.stderr.destroy()
+          settle(code, signal)
+        }, STDERR_DRAIN_MS)
+        child.once('close', () => {
+          clearTimeout(drained)
+          settle(code, signal)
+        })
+      })
     })
   }
 }

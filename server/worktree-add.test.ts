@@ -250,3 +250,12 @@ test('RealWorktreeAdder: 起こすのは worktree add の 1 形だけ。失敗�
   assert.deepEqual((await readFile(log, 'utf8')).trim().split('\n'), ['-C', '/w/cwd', '--no-pager', 'worktree', 'add', '--quiet', '--no-track', '-b', 'tree', '/w/tree', 'origin/main'])
   await assert.rejects(adder.add('/w/cwd', 'broken', '/w/broken', 'main'), /fatal: だめ/)
 })
+
+test('RealWorktreeAdder: フックが残した子が stderr を持ったままでも、git が終われば返る（#847 のレビュー）', async () => {
+  const bin = join(dir, 'fake-git-hold')
+  await writeFile(bin, '#!/bin/sh\nsleep 5 &\nexit 0\n')
+  await chmod(bin, 0o755)
+  const at = Date.now()
+  await new RealWorktreeAdder(bin).add('/w/cwd', 'tree', '/w/tree', 'main')
+  assert.ok(Date.now() - at < 3000, '子の終わりを待たない')
+})

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { splitAttachments } from '../../shared/attachments.ts'
-import { api, ApiError, type Replying, type ReplyingMap } from './api'
+import { api, ApiError, type ReplyingMap } from './api'
+import { ENDED_WITHOUT_ROW, newReplyWatch, type ReplyFailed, type ReplyWatch, watchReplies } from './replyWatch'
 
 /** 画面に出す「処理中の返信」。サーバが伝えてきたものと、送った直後のローカルのものを同じ形にする */
 export interface Pending {
@@ -31,28 +31,6 @@ interface Sent {
 /** 202 の後、この時間はサーバの replying に無くても「まだ届いていない」とみなす（ポーリングとの競合） */
 const GRACE_MS = 1000
 
-export const ENDED_WITHOUT_ROW = '返信は終わったが記録が増えなかった（~/.agent-feed/reply.log を見る）'
-
-/** Claude のログインが切れているときの文（#685。バナーと返信の失敗で同じ文を出す） */
-export const CLAUDE_LOGGED_OUT = 'Claude のログインが切れています。画面の上の「SAI からログインする」か、Mac の端末で claude auth login を打ってから送り直してください'
-
-/**
- * サーバが「返信が失敗した」と言っているときの文（#172）。プロセスが非0で終わったときは理由が reply.log の末尾から来る。
- * 端末・開いている Codex の queue に渡して届かなかったとき（#329）は終了コードが無く、理由だけ
- */
-export function replyFailureMessage(failed: NonNullable<Replying['failed']>): string {
-  const why = failed.tail.trim()
-  // Claude のログインが切れている（#685）。CLI の文言より先に、直し方を出す
-  if (failed.logged_out) return `${CLAUDE_LOGGED_OUT}（終了コード ${failed.code}）${why ? `: ${why}` : ''}`
-  // 届いたが、ターンがエラーで終わった（#475）。「届いていません」と出すと、届いた指示を送り直させてしまう
-  if (failed.turn_error) return `返信は届きましたが、${why || 'ターンがエラーで終わりました'}`
-  if (failed.code === undefined) return `返信が届いていません${why ? `: ${why}` : ''}`
-  return `返信が失敗しました（終了コード ${failed.code}）${why ? `: ${why}` : '。~/.agent-feed/reply.log を見てください'}`
-}
-
-/** 送った本文から、添えた画像のパスの塊を外す（打ったままの本文に戻す。#350） */
-const typedText = (text: string): string => splitAttachments(text).body
-
 /**
  * 端末に打ち込めなくて送れなかった。人にどうするかを聞く（#117、#157）。
  * typed: 打ちかけがある（「消して送る」か「端末を使わず送る」）。process: 消せなかった・ダイアログ中・入力欄が読めない（後者だけ）
@@ -74,17 +52,6 @@ export interface ReplaceConfirm {
 
 /** send の結果。confirm のとき呼び出し側は本文を入力欄に戻す */
 export type SendOutcome = 'sent' | 'confirm' | 'failed'
-
-/**
- * 送れなかった返信（#172 / #350）。`text` は打った本文で、画面が「入力欄に戻す」に使う。
- * 添えた画像のパスは本文の末尾に足されているので `splitAttachments()` で外す（画像そのものは戻せない）
- */
-export interface ReplyFailed {
-  id: string
-  message: string
-  /** 打った本文。分からなければ空（そのときは戻すボタンを出さない） */
-  text: string
-}
 
 /**
  * 返信の送信と「処理中」の判定。SessionView と FeedView で共用。
@@ -111,35 +78,13 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
   const [confirmedSentBy, setConfirmedSentBy] = useState<Readonly<Record<string, number>>>({})
   // 受け付けた応答に付いてきた一言（#678。開いている Codex に画像を添えた）。次に送るまで出す
   const [noted, setNoted] = useState<{ id: string; message: string } | null>(null)
-  // サーバが「処理中」と言った id と、最初にそう見えたときの行数・本文。消えたときに行が増えていなければ失敗
-  // （本文は「入力欄に戻す」に使う。#350）
-  const seen = useRef(new Map<string, { rows: number; text: string }>())
-  // 失敗を出した id。サーバは少しの間その分を返し続けるので、毎回のポーリングで出し直さない
-  const reportedFailure = useRef(new Set<string>())
+  const watch = useRef<ReplyWatch>(newReplyWatch())
 
   useEffect(() => {
     if (!updatedAt) return
     const now = updatedAt.getTime()
 
-    // サーバが「プロセスが非0で終わった」と言っている。処理中ではなく理由を出す
-    for (const [id, r] of Object.entries(replying)) {
-      if (!r.failed || reportedFailure.current.has(id)) continue
-      reportedFailure.current.add(id)
-      seen.current.delete(id) // 消えたときに「記録が増えなかった」を重ねて出さない
-      setFailed({ id, message: replyFailureMessage(r.failed), text: typedText(r.text) })
-    }
-    for (const id of reportedFailure.current) if (!replying[id]?.failed) reportedFailure.current.delete(id)
-
-    // サーバが処理中と言っていたものが消えた
-    for (const [id, at] of seen.current) {
-      if (replying[id]) continue
-      seen.current.delete(id)
-      if (countRows(id) <= at.rows) setFailed({ id, message: ENDED_WITHOUT_ROW, text: at.text })
-    }
-    for (const [id, r] of Object.entries(replying)) {
-      // 要約だけのターンは行を増やさず本文は預かりにあるので、「記録が増えなかった」とは見ない（#837）
-      if (!seen.current.has(id) && !r.compact) seen.current.set(id, { rows: countRows(id), text: typedText(r.text) })
-    }
+    for (const failure of watchReplies(watch.current, replying, countRows)) setFailed(failure)
 
     // ローカルの繋ぎ。サーバが引き継いだら捨てる。202 から少し待っても載らなければ、もう終わっている
     const keep = sent.filter((s) => {

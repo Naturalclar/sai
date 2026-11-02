@@ -6,6 +6,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { backgroundSessionCommand, childEnv, claudeUserLine, failureOf, hasResultFor, isAlive, newSessionCommand, ProcessRunner, replyCommand, tailFrom } from './runner.ts'
+import { compactPrompt } from '../../shared/compact.ts'
 import type { ReplyFailure } from '../../shared/types.ts'
 import type { TurnUsage } from '../../shared/turnUsage.ts'
 
@@ -596,6 +597,23 @@ test('要約だけのターン: snapshot に compact を載せ、使用量には
     assert.ok(await until(() => !runner.running('A@r')))
     assert.equal(usage.length, 1)
     assert.equal(usage[0]!.usage.compact, true)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('要約だけのターンが失敗すると、失敗の分の text は /compact の指示のまま、compact の印が残る（画面が戻す文から外す。#851）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-compact-fail-'))
+  try {
+    const runner = new ProcessRunner(join(dir, 'reply.log'), join(dir, 'replying.json'))
+    const text = compactPrompt('作り物の本文')
+    const cmd = replyCommand('claude', 'S', text, dir)!
+    await runner.start('A@r', { ...cmd, bin: process.execPath, args: ['-e', 'process.exit(1)'], compact: true })
+    assert.ok(await until(() => !runner.running('A@r')))
+    const failed = runner.snapshot()['A@r']
+    assert.equal(failed?.failed?.code, 1)
+    assert.equal(failed?.compact, true)
+    assert.match(failed?.text ?? '', /^\/compact /)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

@@ -111,7 +111,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 
 ### 返答を送り元の会話に戻す（#594）
 
-- **送り元の次のターンの頭に、まだ渡していない返答を足す**（既定。ターンは増えない）。`launch()` が `startTurn()` の直前に `pendingRepliesOf(id)` を呼び、`shared/agentMessages.ts` の `withHandedReplies()` で本文の頭に塊を付ける。塊は `HANDED_MARK`（`【SAI 返答】`）で始まり `HANDED_END` で終わる。**`【SAI】` では始めない**（`deliveredId()` が届けた見出しと取り違えないため。id も `message_id: …` と書き、`（id: …）` の形にしない）。
+- **送り元の次のターンの頭に、まだ渡していない返答を足す**（既定。ターンは増えない）。`launch()` が `startTurn()` の直前に `pendingRepliesOf(id)` を呼び、`shared/agentMessages.ts` の `withHandedReplies()` で本文の頭に塊を付ける。塊は `HANDED_MARK`（`【SAI 返答】`）で始まり `HANDED_END` で終わる。**`【SAI】` では始めない**（`deliveredId()` が届けた見出しと取り違えないため。id も `message_id: …` と書き、`（id: …）` の形にしない）。塊の中の文字（返答・呼び名・失敗の理由）に `HANDED_END` があれば `[`〜`]` の括りに置き換える（`splitHandedReplies()` は最初の印で切るので、そのままだと残りが人の入力になる。#852。すでに記録された行は書き換えない）。
 - 足すのは、送ってから `HANDED_KEEP_DAYS`（7 日）以内で、相手のターンが終わった（`agentResult()` が `done`）か失敗した（`failed`。1 行で知らせる）もので、まだ返っていない依頼は足さない。古い順に `HANDED_MAX_ITEMS`（8 件）・本文の合計 `HANDED_MAX_CHARS`（12,000 字）まで本文を載せ、入りきらない分は名前と id だけの 1 行にする。1 件は `clipReply()`（4,000 字）のまま。
 - 起動できたとき（`202`）だけ `AgentMessages.handed()` で `AgentMessage.handed_at` を付け、`agent-messages.json` に残す（立て直しても 2 回は足さない）。**`sai_wait` で受け取ったもの（エージェント用の口と `/mcp` の両方）も渡した扱い**にする。
 - 足す経路は SAI が送り元のターンを起こすものすべて（人の返信・預かりが回る・端末への打ち込み）。**要約だけのターン（#579）には足さない**（`/compact` の本文には付けず、預かりの本文を回すときに足す）。**端末で直接続けたターンには足せない**ので、未渡しのまま残し、次に SAI から回したときに渡す。

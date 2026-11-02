@@ -497,7 +497,9 @@ export function withHandedReplies(text: string, replies: readonly PendingReply[]
   }
   if (rest.length > 0) blocks.push(`--- ほか ${rest.length} 件（本文は相手のセッションで読めます）: ${rest.map((r) => `「${r.to_name}」（message_id: ${r.message_id}）`).join('、')}`)
   const head = `${HANDED_MARK}あなたが別のセッションに送ったメッセージへの返答が ${replies.length} 件届いています（待たずにターンを終えたので、ここで渡します）。`
-  return `${head}\n\n${blocks.join('\n\n')}\n\n${HANDED_END}\n\n${text}`
+  // 返答・呼び名・失敗の理由に終わりの印の文字があると、そこで塊が切れて残りが人の入力として読まれる（#852。`shared/agentAfter.ts` の「その後」の塊と同じ形）
+  const body = blocks.join('\n\n').replaceAll(HANDED_END, '[SAI 返答ここまで。以下が今回の指示です]')
+  return `${head}\n\n${body}\n\n${HANDED_END}\n\n${text}`
 }
 
 

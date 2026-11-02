@@ -95,6 +95,10 @@ export interface AgentMessage {
    * 変わっても、返答の見出し・失敗の理由・読み直す量を送り元のエージェントに出さない）
    */
   far?: true
+  /** 頼んだ件の「その後」（#827）を、相手のどのターン完了（行の `ts`）まで送り元に添えたか */
+  after_at?: string
+  /** 頼んだ件が閉じた・マージされたことまで添えた（#827）。付いていればもう添えない */
+  after_done?: true
 }
 
 /**
@@ -445,6 +449,29 @@ export class AgentMessages {
     if (!changed) return
     this.version++
     this.persist()
+  }
+
+  /**
+   * 頼んだ件の「その後」をどこまで添えたか（#827）を書く。値はそのまま置き換える（`undefined` は消す）ので、
+   * 添えたターンが失敗したときは前の値を渡して戻す
+   */
+  setAfter(updates: readonly { message_id: string; after_at?: string; after_done?: true }[]): void {
+    let changed = false
+    for (const u of updates) {
+      const m = this.messages.get(u.message_id)
+      if (!m || (m.after_at === u.after_at && m.after_done === u.after_done)) continue
+      const { after_at: _at, after_done: _done, ...rest } = m
+      this.messages.set(u.message_id, { ...rest, ...(u.after_at ? { after_at: u.after_at } : {}), ...(u.after_done ? { after_done: true as const } : {}) })
+      changed = true
+    }
+    if (!changed) return
+    this.version++
+    this.persist()
+  }
+
+  /** そのセッションが送った記録（古い順）。`since` がこれより前のものは除く（#827） */
+  sentSince(from: string, notBefore: number): AgentMessage[] {
+    return [...this.messages.values()].filter((m) => m.from === from && Date.parse(m.since) >= notBefore)
   }
 
   /** そのセッションが送って、まだ返答を渡していない記録（古い順）。`since` がこれより前のものは除く */

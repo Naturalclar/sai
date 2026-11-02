@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { FeedRow } from '../../shared/types.ts'
 import { groupRows, groupSpeaker, promptArrived, speakerLabel, toUtterances } from './chatGroups.ts'
-import { withHandedReplies } from '../../shared/agentMessages.ts'
+import { AFTER_END, AFTER_MARK, withHandedReplies } from '../../shared/agentMessages.ts'
 import { loopPrompt } from '../../shared/loops.ts'
 import { entityId } from '../../shared/entity.ts'
 
@@ -237,6 +237,13 @@ test('toUtterances: SAI が頭に足した返答の塊（#594）は自分のバ�
   assert.equal(mine!.handedReplies, 1)
   const [plain] = toUtterances([row(0, { user_text: '人から' })])
   assert.equal(plain!.handedReplies, undefined)
+})
+
+test('toUtterances: SAI が頭に足した「その後」の塊（#827）も外し、ターンの数を添える', () => {
+  const block = `${AFTER_MARK}動きがありました。\n\n--- 「セッション C」:\n- 10/28 11:00 進めた\n- ほか 2 ターン（相手のセッションで読めます）\n- #9 は閉じました（10/28 12:00）。\n\n${AFTER_END}`
+  const [mine] = toUtterances([row(0, { user_text: `${block}\n\n人から` })])
+  assert.equal(mine!.text, '人から')
+  assert.equal(mine!.afterTurns, 3)
 })
 
 test('toUtterances: ループの周の入力（#634）は「ループ N 周目」にして印を付ける。届いたかの判定も同じ形で比べる', () => {

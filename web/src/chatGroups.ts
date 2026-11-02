@@ -50,6 +50,8 @@ export interface Utterance {
   reply?: AgentReplyTag
   /** 自分の発言の頭に SAI が足した、待っていなかった返答の数（#594）。塊は text から外してあり、印だけ出す */
   handedReplies?: number
+  /** 自分の発言の頭に SAI が足した、頼んだ件の「その後」のターンの数（#827）。塊は text から外してあり、印だけ出す */
+  afterTurns?: number
   /** SAI がループの周として送った入力（#634）。text は「ループ N 周目」にしてあり、印だけ出す */
   loop?: true
   /** 待ちが終わって SAI が起こした入力（#732）。text は渡した本文のまま（結果の要点なので読めるように）で、印だけ出す */
@@ -57,11 +59,11 @@ export interface Utterance {
 }
 
 /** 自分の発言の本文。SAI が頭に足した返答の塊（#594）は外し、足した数を添える（記録の `user_text` には残っている） */
-function mineOf(userText: string | undefined): { text: string; handedReplies?: number; loop?: true; wait?: true } {
-  const { text, handed } = splitHandedReplies(userText ?? '')
+function mineOf(userText: string | undefined): { text: string; handedReplies?: number; afterTurns?: number; loop?: true; wait?: true } {
+  const { text, handed, after } = splitHandedReplies(userText ?? '')
   // ループの周の本文（#634）は毎周同じ長い文なので、「ループ N 周目」にする（記録の `user_text` には全文が残っている）
   const loop = isLoopPrompt(text)
-  return { text: loop ? loopPromptLabel(text) : text, ...(handed > 0 ? { handedReplies: handed } : {}), ...(loop ? { loop: true as const } : {}), ...(isWaitPrompt(text) ? { wait: true as const } : {}) }
+  return { text: loop ? loopPromptLabel(text) : text, ...(handed > 0 ? { handedReplies: handed } : {}), ...(after > 0 ? { afterTurns: after } : {}), ...(loop ? { loop: true as const } : {}), ...(isWaitPrompt(text) ? { wait: true as const } : {}) }
 }
 
 export interface Group {

@@ -175,6 +175,9 @@ import { usageReport, usageReportDays } from '../shared/usageReport.ts'
 import { QUEUE_FILE, QUEUE_MAX, ReplyQueueStore } from './reply/replyQueue.ts'
 import { AGENT_MESSAGES_FILE, AGENT_MESSAGES_KEEP, AGENT_TOKEN_FILE, AGENT_TOKEN_HEADER, AgentMessages, ensureAgentToken, tokenMatches } from './reply/agentMessages.ts'
 import type { AgentMessage } from './reply/agentMessages.ts'
+import { createAfterTurns } from './reply/agentAfter.ts'
+import type { AfterPlan } from './reply/agentAfter.ts'
+import { withAfterTurns } from '../shared/agentAfter.ts'
 import { LOOP_TICK_MS, LOOPS_FILE, LoopStore } from './reply/loops.ts'
 import { createLoopRoutes, LOOP_SUFFIXES } from './reply/loopRoutes.ts'
 import { createWaitRoutes, WAIT_SUFFIXES } from './reply/waitRoutes.ts'
@@ -897,11 +900,12 @@ export function createApp(
   }
 
   /** 返答を頭に足して起こしたターン（#594）。失敗したら「渡した」を取り消すために、終わるまで覚える（メモリだけ） */
-  const handedTurns = new Map<string, { ids: string[]; at: number }>()
+  const handedTurns = new Map<string, { ids: string[]; at: number; after?: AfterPlan['prev'] }>()
   /** 同じターンに何度か足す（頭に足したあと、途中でも足す）ので、覚えは足し合わせる。`at` は古い方（ターンの始まり側）を残す */
-  const rememberHanded = (id: string, ids: readonly string[], at: number) => {
+  const rememberHanded = (id: string, ids: readonly string[], at: number, after?: AfterPlan['prev']) => {
     const before = handedTurns.get(id)
-    handedTurns.set(id, { ids: [...(before?.ids ?? []), ...ids], at: Math.min(before?.at ?? at, at) })
+    const prev = [...(before?.after ?? []), ...(after ?? [])]
+    handedTurns.set(id, { ids: [...(before?.ids ?? []), ...ids], at: Math.min(before?.at ?? at, at), ...(prev.length ? { after: prev } : {}) })
   }
   /** `sai_wait` が最後にそのメッセージを待っていた時刻（#594 の 2 で、待っている返答を入力の口からも足さないため） */
   const waitedAt = new Map<string, number>()
@@ -937,6 +941,8 @@ export function createApp(
       const r = all[id]
       if (r?.failed && Date.parse(r.since) >= turn.at - 5000) {
         agents.unhand(turn.ids)
+        // 頼んだ件の「その後」（#827）も、添える前の位置に戻す（次のターンでもう一度添える）
+        if (turn.after) agents.setAfter(turn.after)
         handedTurns.delete(id)
       } else if (!r) handedTurns.delete(id)
     }
@@ -2648,7 +2654,11 @@ export function createApp(
       // 別のセッションから届いたメッセージで起こすターンには足さない（見出しが頭に無いと、送り元が返答を引き当てられない）。
       // `/` のスキル・コマンドと Codex の `$` も、頭に無いと CLI が展開しないので足さない（未渡しのまま次のターンへ）
       const handed = o.origin || /^[/$]/.test(text.trimStart()) ? { replies: [], ids: [] } : await pendingRepliesOf(id)
-      const body = withHandedReplies(text, handed.replies)
+      // 頼んだ件の「その後」（#827）も同じ条件で足す。並びは返答の塊が先、その後、人の本文
+      const after = o.origin || /^[/$]/.test(text.trimStart()) ? null : await afterOf(id).catch(() => null)
+      // 添えるものが無く、終わりにするだけ（返答のターンで閉じていた）のものは、起動を待たずに書く
+      if (after && !after.block && after.next.length > 0) agents.setAfter(after.next)
+      const body = withHandedReplies(withAfterTurns(text, after?.block ?? ''), handed.replies)
       const pastTerminal = !!openTerminal && !!o.terminalFallback && session.agent === 'claude'
       let out = await startTurn(id, session, raw, cwd, openTerminal, body, attachments, o, { text, attachments })
       // 端末に打ち込めなかった（打ち込む前に断られた。何も打っていない）メッセージ（#800）。**自動では別プロセスへ回さない**（人の決定。
@@ -2668,6 +2678,11 @@ export function createApp(
         agents.handed(handed.ids)
         rememberHanded(id, handed.ids, Date.now())
         await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} 待っていなかった返答 ${handed.ids.length} 件を本文の頭に足した（${handed.ids.join(', ')}）\n`).catch(() => {})
+      }
+      if (out.status === 202 && after?.block) {
+        agents.setAfter(after.next)
+        rememberHanded(id, [], Date.now(), after.prev)
+        await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} 頼んだ件のその後 ${after.turns} ターンを本文の頭に足した（${after.next.map((u) => u.message_id).join(', ')}）\n`).catch(() => {})
       }
       // メッセージで起動したターンかを覚える（そのターンからは送らせない。連鎖 1 段。#311）。人の返信で起動したら忘れる
       if (out.status === 202) agents.launched(id, o.origin)
@@ -3758,6 +3773,19 @@ export function createApp(
     }
     return { replies, ids: replies.map((r) => r.message_id) }
   }
+
+  /** 頼んだ件の「その後」（#827）。別のリポジトリの相手・送り元からのメッセージで起きたターンは添えない */
+  const afterOf = createAfterTurns({
+    agents,
+    rows: () => rowsNow(QUEUE_DAYS),
+    sessions: async () => (await store.sessions(QUEUE_DAYS)).sessions,
+    lines: async () => {
+      await scanDigest(QUEUE_DAYS)
+      const off = await digestOffIds()
+      return (entity, row) => (off.has(entity) ? '' : (digest.partsFor(entity, row.ts)?.what ?? ''))
+    },
+    prs,
+  })
 
   /**
    * 送ったメッセージの結果。相手のそのターンが終わっていれば返答、失敗・止まっていれば理由。まだなら null。

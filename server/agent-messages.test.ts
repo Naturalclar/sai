@@ -1209,10 +1209,12 @@ test('返答のバブルの下から人が相手へ送ると、相手のセッ�
   assert.equal(answer?.agent_reply?.message_id, line?.id)
   assert.equal(answer?.agent_reply?.handed_at, undefined)
   assert.equal(answered.agent_followups?.at(-1)?.reply_ts, answer?.ts)
-  // 送り元のエージェントの会話には足さない: 次に送り元へ送る文の頭に、この返答は入らない
+  // 返答の塊としては足さない。人が相手と直接進めた分として、その後の 1 行にだけ出る（#827）
   runner.started.length = 0
   await humanReply('A1@r')
-  assert.ok(!runner.started.at(-1)!.cmd.text.includes('マージしました'))
+  const carried = runner.started.at(-1)!.cmd.text
+  assert.doesNotMatch(carried, new RegExp(`message_id: ${line?.id}`))
+  assert.match(carried, /【SAI その後】[^]*- \S+ \S+ マージしました\n[^]*【SAI その後ここまで】/)
   idle('A1@r')
 
   // 送り元がメッセージを送ったことのない相手・居ない送り元の印は覚えない（返信そのものは届く）
@@ -1700,4 +1702,53 @@ test('sai_send: 端末でターンの途中の相手には、着手の形の依�
   }
   await humanReply('B1@r')
   idle('B1@r')
+})
+
+test('頼んだ件のその後: 返答のあと相手で人が始めたターンを、送り元の次のターンの頭に添える。2 回目には添えない。メッセージで起きたターンには足さない（#827）', async () => {
+  // 前のテストの頼みの分を渡し切る
+  await humanReply('A1@r')
+  idle('A1@r')
+  turn('A1@r')
+  let delivered = ''
+  try {
+    assert.equal((await send('A1@r', 'B1@r', '#900 に着手してください。')).status, 202)
+    delivered = runner.started.at(-1)!.cmd.text
+  } finally {
+    idle('A1@r')
+  }
+  await humanReply('B1@r')
+  idle('B1@r')
+  // 前のテストが少し先の時刻の行を置いているので、それより後にする
+  const at = Date.now() + 10_000
+  const line = (ms: number, over: { user_text: string; text: string }) => appendFile(feedFile, JSON.stringify(row(new Date(at + ms), 'B1', { repo: 'r', cwd: work2, project: 'o/r', ...over })) + '\n')
+  await line(0, { user_text: delivered, text: '着手しました' })
+  // 返答が届いただけなら、その後は無い（返答の塊だけ）
+  await humanReply('A1@r')
+  assert.doesNotMatch(runner.started.at(-1)!.cmd.text, /【SAI その後】/)
+  idle('A1@r')
+  // 相手で人が直接 1 ターン進めた
+  await line(1000, { user_text: '同じ PR で進めて', text: '同じ PR にまとめました\n詳しくは' })
+  // B1 から A1 へのメッセージで起きるターンには足さない（見出しが頭のまま）
+  turn('B1@r')
+  try {
+    assert.equal((await send('B1@r', 'A1@r', 'これ見て')).status, 202)
+    assert.ok(runner.started.at(-1)!.cmd.text.startsWith('【SAI】'))
+  } finally {
+    idle('B1@r')
+    idle('A1@r')
+  }
+  await humanReply('A1@r')
+  const carried = runner.started.at(-1)!.cmd.text
+  assert.ok(carried.startsWith('【SAI その後】'), carried)
+  assert.match(carried, /頼んだ件: [^）]*#900/)
+  assert.match(carried, /同じ PR にまとめました/)
+  assert.doesNotMatch(carried, /詳しくは/)
+  assert.deepEqual(splitHandedReplies(carried), { text: '人から', handed: 0, after: 1 })
+  idle('A1@r')
+  // 2 回目には添えない（どこまで添えたかはファイルに残る）
+  await humanReply('A1@r')
+  assert.equal(runner.started.at(-1)!.cmd.text, '人から')
+  const saved = JSON.parse(await readFile(join(dir, 'agent-messages.json'), 'utf-8')) as { messages: { text: string; after_at?: string }[] }
+  assert.ok(saved.messages.find((m) => m.text === '#900 に着手してください。')?.after_at)
+  idle('A1@r')
 })

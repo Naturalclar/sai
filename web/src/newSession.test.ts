@@ -59,6 +59,7 @@ test('workspaceChoices: 始められる場所（#319）があれば git の作�
   ]
   const places = {
     recorded: ['a@dev-a'],
+    addable: [],
     siblings: [{ from: 'a@dev-a', worktree: 'k1', cwd: '/w/app.git/dev-b', repo: 'dev-b', branch: 'dev-b', project: 'me/app' }],
   }
   const choices = workspaceChoices(sessions, '', places)

@@ -8,11 +8,21 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 
 - `GET /api/sessions/<id>/diff` は `server/git/diff.ts` がセッションの `cwd` で git を読む（#171）。`base...HEAD`（ブランチの差分）と `HEAD` からの未コミット、追跡外のファイル名。
 - base を探す順と「`origin/<x>` と `<x>` が両方あれば新しい方」（#289）は screen.md のとおり。新しい方の判定は `merge-base --is-ancestor` で、同じコミットか分岐なら `origin/<x>`。
-- 読むだけのサブコマンドしか呼ばない: `RealGit.run()` が allowlist で弾く。
+- 読むだけのサブコマンドしか呼ばない: `RealGit.run()` が allowlist で弾く。例外は下の「新しい worktree を作る」の 1 形だけで、別の口にしてある。
 - 上限は 1 ファイル 200KB / 1 セクション 2MB で、超えたら本文を落として `truncated`（ファイルの一覧は常に全部返す）。
 - unified diff を木にするのは `shared/diff.ts` の `parseUnifiedDiff()`（`shared/diff.test.ts`）、描画は `web/src/DiffView.tsx`。
 - 3 秒のポーリングには乗せず、`DiffButton` を押したときだけ取る。
 - テストは `Git` を差し替えるか、本物の一時リポジトリを作る（`server/git/diff.test.ts`）。
+
+### 新しい worktree を作る（#847）
+
+- **SAI が git に書くのはここだけ。** `server/git/worktreeAdd.ts` の `RealWorktreeAdder` が `git -C <cwd> --no-pager worktree add --quiet --no-track -b <名前> <パス> <base>` の 1 形だけを起こす。`RealGit` の allowlist には足さない。本物を組むのは `main.ts` だけで（`TerminalDeps.worktreeAdder`）、`createApp` の既定は作らない（`POST` は `404`、`addable` は空）。
+- 受けるのは `from` と名前だけ。名前は `shared/worktreeName.ts` の `worktreeNameRefusal()`（英数字と `.`・`_`・`-`、先頭は英数字。bare の直下で git が使う名前も断る）を通し、ディレクトリ名とブランチ名の両方にする。`cwd` は `from` の行から取り、別のマシンのセッションからは作らない。
+- 置き場は `worktreeParent()`: bare 本体の直下に worktree があれば bare 本体の直下、そうでなければ全部の worktree が同じ親にあるときだけ、その親（普通の clone はその隣）。分からなければ `null` で、画面に作る口を出さない。
+- 起点は `resolveBase()`（手元の新しい方）。`git fetch` は打たない。`--no-track` で、base が `origin/main` でも新しいブランチに上流を付けない。
+- 既にある名前は `409`: 同じ名前のパス・同じ名前の worktree（よその場所も。大文字小文字は区別しない。`repo` が重なるため）・同じ名前のブランチ。同じパスへの同時の要求は 1 つだけ通す。
+- 作るだけでセッションは始めない。返した鍵（`SiblingWorktree.worktree`）を `POST /api/sessions/new` に渡すのは今までの兄弟 worktree と同じ。消す口は作らない（消すのは人が端末で）。
+- テストは `server/worktree-add.test.ts` で、git は偽物。本物のリポジトリに worktree を作らない。
 
 ### 画面の枠（#190 / #221 / #514）
 

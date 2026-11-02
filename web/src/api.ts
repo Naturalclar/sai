@@ -6,6 +6,8 @@ import type {
   FeedResponse,
   NewSessionRequest,
   WorkspacesResponse,
+  AddWorktreeRequest,
+  AddWorktreeResponse,
   NewSessionResponse,
   Profile,
   ProfileResponse,
@@ -197,6 +199,8 @@ export const api = {
   forkSession: (id: string, text: string, days = 90) => sendJSON<NewSessionResponse>('POST', `/api/sessions/${encodeURIComponent(id)}/fork?days=${days}`, { text }),
   /** 新しいセッションを始められる場所（#319。git の作業ツリーの中の記録と、同じリポジトリの兄弟 worktree）。画面を開いたときだけ */
   workspaces: (days = 90) => getJSON<WorkspacesResponse>(`/api/workspaces?days=${days}`),
+  /** 新しい worktree を作る（#847）。送るのは from と名前だけで、パスは送らない。押したときだけ */
+  addWorktree: (from: string, name: string, days = 90) => sendJSON<AddWorktreeResponse>('POST', `/api/workspaces?days=${days}`, { from, name } satisfies AddWorktreeRequest),
   /** 預けた返信を取り消す（#305。まだ回していないものだけ） */
   cancelQueued: (id: string, queueId: string) =>
     sendRaw<ReplyQueueResponse>('DELETE', `/api/sessions/${encodeURIComponent(id)}/queue/${encodeURIComponent(queueId)}`),

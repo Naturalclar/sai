@@ -6,7 +6,8 @@ import { api } from './api'
 import { BackLink } from './BackLink'
 import { modelChoices, MODEL_DEFAULT_LABEL } from './modelChoices'
 import { NewSessionStarting } from './NewSessionStarting'
-import { workspaceChoices } from './newSession'
+import { NewWorktreeForm } from './NewWorktreeForm'
+import { siblingKey, withSibling, workspaceChoices } from './newSession'
 import { filterWorkspaces } from './workspaceFilter'
 import { WorkspacePicker } from './WorkspacePicker'
 import { DefaultReplyModeContext } from './replyModeSetting'
@@ -173,6 +174,21 @@ export function NewSessionView({ replying, now, onOpenSidebar, onStarted }: Prop
             onPick={() => textRef.current?.focus()}
             disabled={choices.length === 0}
           />
+          {chosen && all?.places?.addable.includes(chosen.from) && (
+            <NewWorktreeForm
+              key={chosen.from}
+              from={chosen.from}
+              project={chosen.project}
+              disabled={busy}
+              onAdded={(sibling) => {
+                setAll((prev) => (prev?.places ? { ...prev, places: withSibling(prev.places, sibling) } : prev))
+                // 作ったものを選んで、最初の指示へ（絞り込みで隠れないように消す）
+                setQuery('')
+                setPicked(siblingKey(sibling))
+                textRef.current?.focus()
+              }}
+            />
+          )}
           {all && choices.length === 0 && <div className="notice">始められる worktree がありません。git のリポジトリで端末からエージェントを 1 ターン回すと、そのリポジトリの worktree がここに出ます</div>}
           {loadError && <div className="notice error">一覧を取れませんでした: {loadError}</div>}
           <div className="opts">

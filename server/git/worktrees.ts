@@ -7,7 +7,7 @@
 // サーバが `git worktree list` を読み直して、その中にある鍵だけを通す
 import { createHash } from 'node:crypto'
 import { realpath, stat } from 'node:fs/promises'
-import { sep } from 'node:path'
+import { dirname, sep } from 'node:path'
 import type { Git } from './diff.ts'
 
 /** `git worktree list --porcelain` の 1 項目 */
@@ -63,6 +63,18 @@ export interface UsableWorktree {
   branch: string
 }
 
+/**
+ * 新しい worktree の置き場（#847。既存の worktree の隣）。形が分からなければ null で、作る口を出さない。
+ * - bare 本体があり、その直下に worktree があるなら bare 本体の直下（`<repo>.git/<name>`。よそにある worktree は数えない）
+ * - そうでなければ、全部の worktree が同じ親にあるときだけ、その親（普通の clone はその隣）
+ */
+export function worktreeParent(bare: string | null, trees: readonly string[]): string | null {
+  if (bare && trees.some((t) => dirname(t) === bare)) return bare
+  const parents = new Set(trees.map((t) => dirname(t)))
+  const [only] = parents
+  return parents.size === 1 && only !== undefined && only !== dirname(only) ? only : null
+}
+
 /** 一覧を覚えておく長さ（候補を出す GET 用。始めるときは覚えたものを使わず読み直す） */
 export const WORKTREES_TTL_MS = 30_000
 
@@ -70,7 +82,7 @@ export class Worktrees {
   private readonly git: Git
   private readonly ttl: number
   private readonly now: () => number
-  private readonly cache = new Map<string, { at: number; value: Promise<UsableWorktree[] | null> }>()
+  private readonly cache = new Map<string, { at: number; value: Promise<{ trees: UsableWorktree[]; parent: string | null } | null> }>()
 
   constructor(git: Git, ttl = WORKTREES_TTL_MS, now: () => number = Date.now) {
     this.git = git
@@ -83,6 +95,20 @@ export class Worktrees {
    * git が読めない（git の外・git が無い）なら null。`fresh` なら覚えたものを使わない（始めるとき）
    */
   usable(cwd: string, fresh = false): Promise<UsableWorktree[] | null> {
+    return this.load(cwd, fresh).then((v) => v?.trees ?? null)
+  }
+
+  /** 新しい worktree の置き場（`worktreeParent()`）。git が読めなければ null */
+  parent(cwd: string): Promise<string | null> {
+    return this.load(cwd, false).then((v) => v?.parent ?? null)
+  }
+
+  /** 覚えたものを捨てる（worktree を作ったとき） */
+  forget(): void {
+    this.cache.clear()
+  }
+
+  private load(cwd: string, fresh: boolean): Promise<{ trees: UsableWorktree[]; parent: string | null } | null> {
     const hit = this.cache.get(cwd)
     if (!fresh && hit && this.now() - hit.at < this.ttl) return hit.value
     const value = this.read(cwd)
@@ -90,7 +116,7 @@ export class Worktrees {
     return value
   }
 
-  private async read(cwd: string): Promise<UsableWorktree[] | null> {
+  private async read(cwd: string): Promise<{ trees: UsableWorktree[]; parent: string | null } | null> {
     let out: string
     try {
       out = await this.git.run(cwd, ['worktree', 'list', '--porcelain'])
@@ -98,7 +124,9 @@ export class Worktrees {
       return null
     }
     const usable: UsableWorktree[] = []
+    let bare: string | null = null
     for (const e of parseWorktreeList(out)) {
+      if (e.bare) bare = await realpath(e.path).catch(() => null)
       if (e.bare || e.prunable) continue
       try {
         const path = await realpath(e.path)
@@ -108,7 +136,7 @@ export class Worktrees {
         // 消えた（prunable と書かれる前に消されたもの）
       }
     }
-    return usable
+    return { trees: usable, parent: worktreeParent(bare, usable.map((t) => t.path)) }
   }
 }
 

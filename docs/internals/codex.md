@@ -111,6 +111,10 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - `notify` は鳴らず記録に行は増えない。次のターンの `input-messages` には要約の文が混ざるが、`record.py` は末尾を使う
 - rollout には `compacted` の行が載り、次の `token_count` まで `context_tokens` は 0（分からない）。`turn-usage.jsonl` は Codex の app-server のターンを書かないので、要約も載らない（モデルの呼び出しの量は rollout の `token_count` と `thread/tokenUsage/updated` に載る）
 
+## エラーで終わったターン
+
+失敗は `turn/completed`（`status: "failed"`）から `failures` に残す（#475）。0.166.0 の実測の順番は `thread/status/changed`（`systemError`）→ `error` → `turn/completed` なので、`systemError` では片付けない（#849）。片付けると `turn/completed` が引くターンが無くなり、失敗が残らず、`drain()` が次の預かりを回す。`CODEX_SYSTEM_ERROR_GRACE_MS`（10 秒）待っても `turn/completed` が届かなければ、失敗にして片付ける。`active` に戻ったら待ちをやめる（ターンは続いている）。
+
 ## ターンを止める
 
 - `POST /api/sessions/<id>/interrupt` → `interrupt()` がどちらが回っているかで振り分ける

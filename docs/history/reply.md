@@ -46,6 +46,7 @@
 
 - codex 0.154.0 で実測: 使い捨ての `CODEX_HOME` で、無いモデルを指定したターンは `turn/completed` が `status: "failed"`・rollout の `task_complete` に `error` が付き、notify は呼ばれなかった。共有の `codex app-server --listen` が回したターンでも、成功すれば notify は鳴ることも同じ手順で確かめた。
 - 実データでは queue に渡して届いた返信の 2 件が `You've hit your usage limit.` で終わり、画面からは「送ったのに返事が来ない」だけに見えていた（9 月の rollout で、エラーで終わったターンは 2 件とも行が無く、成功したターンは 82 件すべて行があった）。
+- 0.166.0 では `systemError` が `turn/completed` より先に届き、そこで片付けていたので、失敗が残っていなかった（#849）。#837 の調査で通知の順番に気づき、使い捨ての app-server と作り物のモデルの口で、本物の `CodexAppServer` でも `replying()` が空になるのを確かめて直した。いつの版から順番が変わったかは調べていない
 
 ### 配送済みの返信を 30 分で消さない（#559）
 

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { ApprovalAnswer } from '../../shared/types.ts'
-import { CODEX_TURN_FAILED_TTL_MS, CodexAppServer, type CodexConnection } from './codexAppServer.ts'
+import { CODEX_COMPACT_TIMEOUT_MS, CODEX_TURN_FAILED_TTL_MS, CodexAppServer, type CodexConnection } from './codexAppServer.ts'
 
 type Message = Record<string, unknown> & { id?: string | number; method?: string; params?: unknown }
 
@@ -139,6 +139,59 @@ const compacting = async (timeoutMs?: number) => {
 const turnStarted = { method: 'turn/started', params: { threadId: 'thread-1', turn: { id: 'compact-turn', status: 'inProgress' } } }
 const turnDone = (status: string, error: unknown = null, id = 'compact-turn') => ({ method: 'turn/completed', params: { threadId: 'thread-1', turn: { id, status, error } } })
 const threadStatus = (type: string) => ({ method: 'thread/status/changed', params: { threadId: 'thread-1', status: { type } } })
+
+const turnError = { method: 'error', params: { threadId: 'thread-1', turnId: 'turn-1', willRetry: false, error: { message: '作り物の失敗' } } }
+/** 普通のターンを回したところまで。`graceMs` は `systemError` のあとの待ち */
+const startedWithGrace = async (graceMs: number) => {
+  const connection = new FakeConnection()
+  const app = new CodexAppServer(async () => connection, () => Date.parse('2026-09-09T12:00:00Z'), CODEX_COMPACT_TIMEOUT_MS, graceMs)
+  const ended: string[] = []
+  app.onTurnEnd((id) => ended.push(id))
+  await app.start({ id: 'thread-1@repo', threadId: 'thread-1', text: '続けて', cwd: '/repo' })
+  return { app, connection, ended }
+}
+
+test('turn: 実測の順番（systemError → error → turn/completed）でも失敗を残す（#849）', async () => {
+  const { app, connection, ended } = await startedWithGrace(1000)
+  connection.emit(threadStatus('systemError'))
+  assert.equal(app.running('thread-1@repo'), true, 'systemError では片付けない')
+  assert.deepEqual(ended, [], '片付けると預かりが次を回す')
+  connection.emit(turnError)
+  connection.emit(turnDone('failed', { message: '作り物の失敗' }, 'turn-1'))
+  assert.equal(app.running('thread-1@repo'), false)
+  assert.deepEqual(ended, ['thread-1@repo'])
+  const reply = app.replying()['thread-1@repo']
+  assert.match(reply?.failed?.tail ?? '', /作り物の失敗/)
+  assert.equal(reply?.failed?.turn_error, true)
+  assert.equal(reply?.text, '続けて')
+})
+
+test('turn: systemError のあと turn/completed が届かなければ、失敗にして片付ける（#849）', async () => {
+  const { app, connection, ended } = await startedWithGrace(5)
+  connection.emit(threadStatus('systemError'))
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.equal(app.running('thread-1@repo'), false, '処理中のまま残さない')
+  assert.deepEqual(ended, ['thread-1@repo'])
+  assert.equal(app.replying()['thread-1@repo']?.failed?.turn_error, true)
+})
+
+test('turn: systemError のあと active に戻ったら、ターンは続いている（#849）', async () => {
+  const { app, connection, ended } = await startedWithGrace(5)
+  connection.emit(threadStatus('systemError'))
+  connection.emit(threadStatus('active'))
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.equal(app.running('thread-1@repo'), true)
+  assert.deepEqual(ended, [])
+  assert.equal(app.replying()['thread-1@repo']?.failed, undefined)
+})
+
+test('turn: systemError のあと人が止めたら、失敗にしない（#849）', async () => {
+  const { app, connection } = await startedWithGrace(5)
+  connection.emit(threadStatus('systemError'))
+  assert.equal(await app.interrupt('thread-1@repo'), true)
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.equal(app.replying()['thread-1@repo'], undefined)
+})
 
 test('compact: thread/resume してから thread/compact/start を投げ、turn/completed まで処理中にする（#837）', async () => {
   const { app, connection, ended } = await compacting()

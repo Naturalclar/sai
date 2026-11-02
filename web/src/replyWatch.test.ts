@@ -33,6 +33,15 @@ test('失敗はサーバが返し続けても 1 回だけ出し、打った本�
   assert.deepEqual(second, [])
 })
 
+test('失敗が残っている間に、次のターンも失敗で終わったら、そちらも出す', () => {
+  const next = failedTurn('次の本文', { since: '2026-01-01T00:01:00.000Z' })
+  const [first, second, third] = polls([failedTurn('前の本文'), next, next])
+  assert.equal(first![0]!.text, '前の本文')
+  assert.equal(second!.length, 1)
+  assert.equal(second![0]!.text, '次の本文')
+  assert.deepEqual(third, [])
+})
+
 test('要約だけのターンは、行が増えずに終わっても「記録が増えなかった」と見ない（#837）', () => {
   assert.deepEqual(polls([turn('/compact 指示', { compact: true }), {}])[1], [])
 })

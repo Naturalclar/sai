@@ -39,11 +39,11 @@ export interface ReplyFailed {
 export interface ReplyWatch {
   /** サーバが「処理中」と言った id と、最初にそう見えたときの行数・本文。消えたときに行が増えていなければ失敗（本文は「入力欄に戻す」に使う。#350） */
   seen: Map<string, { rows: number; text: string }>
-  /** 失敗を出した id。サーバは少しの間その分を返し続けるので、毎回のポーリングで出し直さない */
-  reported: Set<string>
+  /** 失敗を出した id と、そのターンの `since`。サーバは少しの間その分を返し続けるので毎回出し直さず、別のターンの失敗は出す */
+  reported: Map<string, string>
 }
 
-export const newReplyWatch = (): ReplyWatch => ({ seen: new Map(), reported: new Set() })
+export const newReplyWatch = (): ReplyWatch => ({ seen: new Map(), reported: new Map() })
 
 /** 1 回のポーリングぶんを見て、いま出す失敗を返す（古い順。`watch` は更新する） */
 export function watchReplies(watch: ReplyWatch, replying: ReplyingMap, countRows: (id: string) => number): ReplyFailed[] {
@@ -52,13 +52,13 @@ export function watchReplies(watch: ReplyWatch, replying: ReplyingMap, countRows
 
   // サーバが「プロセスが非0で終わった」と言っている。処理中ではなく理由を出す
   for (const [id, r] of Object.entries(replying)) {
-    if (!r.failed || reported.has(id)) continue
-    reported.add(id)
+    if (!r.failed || reported.get(id) === r.since) continue
+    reported.set(id, r.since)
     seen.delete(id)
     // 要約だけのターンの `text` は打った本文でなく `/compact` の指示で、本文は預かりに残っている。戻すものが無い（#851）
     failures.push({ id, message: replyFailureMessage(r.failed), text: r.compact ? '' : typedText(r.text) })
   }
-  for (const id of reported) if (!replying[id]?.failed) reported.delete(id)
+  for (const id of reported.keys()) if (!replying[id]?.failed) reported.delete(id)
 
   // サーバが処理中と言っていたものが消えた
   for (const [id, at] of seen) {

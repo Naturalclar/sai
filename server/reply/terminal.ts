@@ -359,6 +359,8 @@ export interface TypeOptions {
 
 /** 端末に打ち込めたときに reply.log に書く文（本文は書かない）。`pnpm feed paths` がこの文で数える（#845） */
 export const TERMINAL_TYPED_LOG = '端末に打ち込んだ'
+/** 端末のダイアログに答えたときに reply.log に書く文（中身は書かない）。`approvals.jsonl` には今回だけの答えが残らないので別に書く（#845） */
+export const TERMINAL_DIALOG_LOG = '端末のダイアログに答えた'
 
 export interface TypeResult {
   /** 打ちかけを消してから打ち込んだなら、消した文（reply.log に残す。戻せないので） */

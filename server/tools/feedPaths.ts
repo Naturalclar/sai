@@ -1,16 +1,14 @@
 // ペインの中のターンと届け方を週ごとに数える（#845。#843 の段階 3 の線を数字で見る）。`pnpm feed paths` の読み方。
-// **読むだけ**で、出すのは数だけ（本文・パス・リポジトリの名前は返さない）。数える関数は純粋関数で、読むのは 3 つ:
+// **読むだけ**で、出すのは数だけ（本文・パス・リポジトリの名前は返さない）。数える関数は純粋関数で、読むのは 2 つ:
 //   ターン完了     記録の行（`pane` があればペインの中）
 //   届け方         `reply.log` の `--- <時刻> <エンティティ> <文>` の行（`ReplyResponse.via` はどこにも残らない）
-//   ダイアログ     `approvals.jsonl` の `tool: CodexDialog`
+//   ダイアログ     同じく `reply.log`（`approvals.jsonl` には今回だけの答えが残らない）
 import { createReadStream } from 'node:fs'
-import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createInterface } from 'node:readline'
 import { localDate } from '../../shared/entity.ts'
 import type { FeedRow } from '../../shared/types.ts'
-import { APPROVAL_LOG_FILE } from '../approvals/approvalLog.ts'
-import { TERMINAL_TYPED_LOG } from '../reply/terminal.ts'
+import { TERMINAL_DIALOG_LOG, TERMINAL_TYPED_LOG } from '../reply/terminal.ts'
 import { dateRange, datesBetween, inRange, isTurn } from './feedRead.ts'
 import type { DateRange } from './feedRead.ts'
 
@@ -18,7 +16,7 @@ export const REPLY_LOG_FILE = 'reply.log'
 /** 範囲を指定しないときに出す週の数（今週を含む） */
 export const PATHS_WEEKS = 4
 
-export type Delivery = 'terminal' | 'process' | 'app_server' | 'queue' | 'parked'
+export type Delivery = 'terminal' | 'dialog' | 'process' | 'app_server' | 'queue' | 'parked'
 
 export interface DeliveryEntry {
   ts: string
@@ -28,6 +26,8 @@ export interface DeliveryEntry {
 const LOG_HEAD = /^--- (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z) \S+ (.*)$/
 
 /** 書く側の文の頭。`server/app.ts` の文を変えたらここも直す（`feedPaths.test.ts` が突き合わせる） */
+/** 預かった行（同じ頭の「待つ」「預かりを止めた」は、同じ 1 通の取り直しなので数えない） */
+export const PARKED_LOG = /^メッセージを端末に打ち込めない（.*ので、別プロセスを起こさずに預かった（/
 export const DELIVERY_LOG_HEADS: readonly (readonly [string, Delivery])[] = [
   ['開いている Codex へ queue ', 'queue'],
   ['Codex app-server で再開', 'app_server'],
@@ -36,7 +36,6 @@ export const DELIVERY_LOG_HEADS: readonly (readonly [string, Delivery])[] = [
   ['Codex のセッションを分岐', 'app_server'],
   ['OpenCode の新しいセッション', 'app_server'],
   ['OpenCode のセッションを分岐', 'app_server'],
-  ['メッセージを端末に打ち込めない（', 'parked'],
 ]
 
 /**
@@ -48,6 +47,8 @@ export function deliveryOfLogLine(line: string): DeliveryEntry | null {
   if (!m) return null
   const [, ts, rest] = m as unknown as [string, string, string]
   if (rest === TERMINAL_TYPED_LOG) return { ts, delivery: 'terminal' }
+  if (rest === TERMINAL_DIALOG_LOG) return { ts, delivery: 'dialog' }
+  if (PARKED_LOG.test(rest)) return { ts, delivery: 'parked' }
   if (/^(?:claude|codex|opencode) \[/.test(rest)) return { ts, delivery: 'process' }
   const hit = DELIVERY_LOG_HEADS.find(([prefix]) => rest.startsWith(prefix))
   return hit ? { ts, delivery: hit[1] } : null
@@ -89,27 +90,28 @@ export interface WeekPaths {
     process: number
     app_server: number
     queue: number
-    /** 端末に打ち込めず、別プロセスを起こさずに預かった・待った数 */
+    /** 端末に打ち込めず、別プロセスを起こさずに預かった数 */
     parked: number
   }
-  /** 端末のダイアログに SAI から答えた数 */
-  dialogs: number
+  /** 端末のダイアログに SAI から答えた数。**記録を始める前の週は null** */
+  dialogs: number | null
 }
 
 export interface PathsInput {
   /** 記録の行（範囲の外が混ざっていてよい） */
   rows: readonly FeedRow[]
-  /** `reply.log` の全部（端末の記録が始まった週を決めるので、範囲で絞らずに渡す） */
+  /** `reply.log` の全部（記録が始まった週を決めるので、範囲で絞らずに渡す） */
   deliveries: readonly DeliveryEntry[]
-  /** 端末のダイアログに答えた時刻 */
-  dialogs: readonly string[]
   range: DateRange
 }
 
 /** 週ごとに数える。古い順で、行が 1 つも無い週も出す */
-export function weeklyPaths({ rows, deliveries, dialogs, range }: PathsInput): WeekPaths[] {
-  // 端末の行を書き始めた週は途中からしか記録が無いので、数えるのは次の週から
-  const terminalAt = deliveries.filter((d) => d.delivery === 'terminal').map((d) => weekOf(localDate(d.ts))).sort()[0]
+export function weeklyPaths({ rows, deliveries, range }: PathsInput): WeekPaths[] {
+  // 行を書き始めた週は途中からしか記録が無いので、数えるのは次の週から
+  const firstWeek = (delivery: Delivery): string | undefined => deliveries.filter((d) => d.delivery === delivery).map((d) => weekOf(localDate(d.ts))).sort()[0]
+  const startsAfter = (first: string | undefined, week: string): 0 | null => (first !== undefined && week > first ? 0 : null)
+  const terminalAt = firstWeek('terminal')
+  const dialogAt = firstWeek('dialog')
   const weeks = new Map<string, WeekPaths>()
   for (const date of datesBetween(range.from, range.to)) {
     const week = weekOf(date)
@@ -120,8 +122,8 @@ export function weeklyPaths({ rows, deliveries, dialogs, range }: PathsInput): W
       turns: [],
       in_pane: 0,
       outside: 0,
-      deliveries: { terminal: terminalAt !== undefined && week > terminalAt ? 0 : null, process: 0, app_server: 0, queue: 0, parked: 0 },
-      dialogs: 0,
+      deliveries: { terminal: startsAfter(terminalAt, week), process: 0, app_server: 0, queue: 0, parked: 0 },
+      dialogs: startsAfter(dialogAt, week),
     })
   }
   const weekAt = (ts: string): WeekPaths | undefined => (inRange(ts, range) ? weeks.get(weekOf(localDate(ts))) : undefined)
@@ -140,11 +142,9 @@ export function weeklyPaths({ rows, deliveries, dialogs, range }: PathsInput): W
     if (!w) continue
     if (d.delivery === 'terminal') {
       if (w.deliveries.terminal !== null) w.deliveries.terminal += 1
+    } else if (d.delivery === 'dialog') {
+      if (w.dialogs !== null) w.dialogs += 1
     } else w.deliveries[d.delivery] += 1
-  }
-  for (const ts of dialogs) {
-    const w = weekAt(ts)
-    if (w) w.dialogs += 1
   }
   const out = [...weeks.values()]
   for (const w of out) w.turns.sort((a, b) => (a.agent < b.agent ? -1 : 1))
@@ -168,24 +168,4 @@ export async function readDeliveries(dir: string): Promise<DeliveryEntry[]> {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
   }
   return out
-}
-
-/** `approvals.jsonl` の行のうち、端末のダイアログの答えの時刻を取り出す。壊れた行は飛ばす */
-export function dialogAnswers(text: string): string[] {
-  const out: string[] = []
-  for (const line of text.split('\n')) {
-    if (!line.trim()) continue
-    try {
-      const row = JSON.parse(line) as { tool?: unknown; ts?: unknown } | null
-      if (row?.tool === 'CodexDialog' && typeof row.ts === 'string') out.push(row.ts)
-    } catch {
-      // 壊れた行は飛ばす
-    }
-  }
-  return out
-}
-
-/** 端末のダイアログに答えた時刻。ファイルが無ければ空 */
-export async function readDialogAnswers(dir: string): Promise<string[]> {
-  return dialogAnswers(await readFile(join(dir, APPROVAL_LOG_FILE), 'utf-8').catch(() => ''))
 }

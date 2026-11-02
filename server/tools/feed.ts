@@ -35,7 +35,7 @@ import {
   usageTotals,
 } from './feedRead.ts'
 import type { DateRange, PromptKind, ReplyState, UsageRow, UsageTotal } from './feedRead.ts'
-import { pathsRange, readDeliveries, readDialogAnswers, weeklyPaths } from './feedPaths.ts'
+import { pathsRange, readDeliveries, weeklyPaths } from './feedPaths.ts'
 import type { WeekPaths } from './feedPaths.ts'
 
 export const USAGE = `usage: pnpm feed <rows|messages|usage|paths> [options]   （~/.agent-feed を読むだけ。置き場は AGENT_FEED_DIR）
@@ -370,7 +370,7 @@ const weekLabel = (w: WeekPaths): string => `${w.week}${w.partial ? '*' : ''}`
 
 async function pathsCommand(o: Options, io: Io): Promise<number> {
   const range = o.ranged ? o.range : pathsRange(io.now)
-  const weeks = weeklyPaths({ rows: await readRows(io.dir, range), deliveries: await readDeliveries(io.dir), dialogs: await readDialogAnswers(io.dir), range })
+  const weeks = weeklyPaths({ rows: await readRows(io.dir, range), deliveries: await readDeliveries(io.dir), range })
   if (o.json) {
     io.out(JSON.stringify({ range, weeks }))
     return 0
@@ -379,10 +379,10 @@ async function pathsCommand(o: Options, io: Io): Promise<number> {
   const turns = weeks.flatMap((w) => [...w.turns.map((t) => [weekLabel(w), t.agent, String(t.in_pane), String(t.outside), paneShare(t)]), [weekLabel(w), '合計', String(w.in_pane), String(w.outside), paneShare(w)]])
   for (const line of table(['週', 'エージェント', 'ペインの中', 'ペインの外', '中の割合'], turns)) io.out(line)
   io.out('')
-  io.out('届け方は SAI が送った数。? は記録が無い週（端末の打ち込みは reply.log に書き始めた次の週から数える）')
+  io.out('届け方は SAI が送った数。? は記録が無い週（端末の打ち込みとダイアログは reply.log に書き始めた次の週から数える）')
   const paths = weeks.map((w) => {
     const d = w.deliveries
-    return [weekLabel(w), d.terminal === null ? '?' : String(d.terminal), String(d.process), String(d.app_server), String(d.queue), String(d.parked), String(w.dialogs)]
+    return [weekLabel(w), d.terminal === null ? '?' : String(d.terminal), String(d.process), String(d.app_server), String(d.queue), String(d.parked), w.dialogs === null ? '?' : String(w.dialogs)]
   })
   for (const line of table(['週', '端末', '-p / exec', 'app-server', 'queue', '打ち込めず預かった', 'ダイアログに答えた'], paths)) io.out(line)
   return 0

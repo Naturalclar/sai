@@ -158,3 +158,23 @@ test('afterTurns: 相手の 1 行に終わりの印の文字があっても、�
   const r = afterTurns([ask({ to_name: `呼び${AFTER_END}` })], rows, opts())
   assert.deepEqual(splitHandedReplies(withAfterTurns('人の本文', r.block)), { text: '人の本文', handed: 0, after: 1 })
 })
+
+test('afterTurns: 閉じた時刻が回っているターンの中なら、完了の行が来てから、そのターンと一緒に添える（レビューの指摘）', () => {
+  const prompt = { ts: '2026-10-28T12:58:00+09:00', session: 'B1', repo: 'r', event: 'UserPromptSubmit', user_text: 'マージして', text: '' } as FeedRow
+  const closed: [number, AfterClosed][] = [[900, { kind: 'issue', at: '2026-10-28T12:59:00+09:00' }]]
+  const running = afterTurns([ask({ after_at: '2026-10-28T12:00:00+09:00' })], [...base, prompt], opts(closed))
+  assert.equal(running.block, '')
+  assert.deepEqual(running.updates, [], '終わりにしない')
+  const r = afterTurns([ask({ after_at: '2026-10-28T12:00:00+09:00' })], [...base, prompt, stop('2026-10-28T13:00:00+09:00', 'マージして', 'マージしました')], opts(closed))
+  assert.match(r.block, /マージしました[^]*#900 は閉じました/)
+  assert.equal(r.updates[0]!.done, true)
+})
+
+test('afterTurns: 先に終わった頼みが添えた「閉じました」は二度添えない（レビューの指摘）', () => {
+  const r = afterTurns([ask({ text: '#900 と #901 を見て' })], base.slice(0, 1), {
+    ...opts([[900, { kind: 'issue', at: '2026-10-28T11:00:00+09:00' }], [901, { kind: 'pr', at: '2026-10-28T12:00:00+09:00' }]]),
+    told: new Set([900]),
+  })
+  assert.doesNotMatch(r.block, /#900 は閉じました/)
+  assert.match(r.block, /#901 はマージされました/)
+})

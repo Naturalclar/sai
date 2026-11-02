@@ -131,6 +131,8 @@ export function afterTurns(
     lineOf: (entity: string, row: FeedRow) => string
     closed: ReadonlyMap<number, AfterClosed>
     ownIds: ReadonlySet<string>
+    /** もう「閉じました」を添えた番号（先に終わった頼みの分）。二度添えない */
+    told?: ReadonlySet<number>
   },
 ): AfterResult {
   const none: AfterResult = { block: '', turns: 0, updates: [] }
@@ -167,10 +169,14 @@ export function afterTurns(
     if (mine.length === 0) continue
     const picked: { t: Turn; state: boolean }[] = []
     const ended: { n: number; c: AfterClosed }[] = []
+    // 閉じた時刻がいま回っている相手のターンの中なら、まだ終わりにしない（完了の行が来てから、そのターンと一緒に添える）
+    const running = started.get(to)
+    const finished = (closes: readonly { c: AfterClosed }[], done: boolean) => done && !(running !== undefined && closes.some((x) => running <= Date.parse(x.c.at)))
     for (const a of mine) {
       const from = Math.max(replied.get(a.message_id)!, a.after_at ? Date.parse(a.after_at) : -Infinity)
       // 頼んだ件が全部閉じた時刻（それより後に始まったターンは添えない）
-      const { closes, done } = closesOf(a, opts.closed)
+      const { closes, done: all } = closesOf(a, opts.closed)
+      const done = finished(closes, all)
       const times = closes.map((x) => Date.parse(x.c.at))
       const end = done ? Math.max(...times) : Infinity
       for (const t of turnsOf.get(to) ?? []) {
@@ -183,12 +189,13 @@ export function afterTurns(
         picked.push({ t, state: !human })
       }
       // 返答より前に閉じていた（返答のターンで閉じた・マージした）なら、返答に書いてあるので「閉じました」は足さずに終わる
-      for (const x of done ? closes : []) if (Date.parse(x.c.at) > replied.get(a.message_id)! && !ended.some((e) => e.n === x.n)) ended.push(x)
+      for (const x of done ? closes : []) if (Date.parse(x.c.at) > replied.get(a.message_id)! && !opts.told?.has(x.n) && !ended.some((e) => e.n === x.n)) ended.push(x)
     }
     picked.sort((x, y) => x.t.at - y.t.at)
     const last = picked.at(-1)?.t
     for (const a of mine) {
-      const { done } = closesOf(a, opts.closed)
+      const { closes, done: all } = closesOf(a, opts.closed)
+      const done = finished(closes, all)
       const moved = last !== undefined && (!a.after_at || last.at > Date.parse(a.after_at))
       if (done || moved) updates.push({ message_id: a.message_id, ...(moved ? { after_at: last.row.ts } : a.after_at ? { after_at: a.after_at } : {}), ...(done ? { done: true as const } : {}) })
     }

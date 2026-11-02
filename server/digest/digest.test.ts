@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
 import { isTimeout, resultOf, ClaudeSummarizer, SUMMARIZE_ENV, formFailure, summarizeStats, DEFAULT_OPENAI_URL, DIGEST_ALERT_FAILS, DIGEST_BREAK_MS, DIGEST_MAX_TRIES, DIGEST_RETRY_DELAYS_MS, DigestStore, Digester, OpenAISummarizer, createDigester, digestKey, digestable, partsOf, personaResolver, stripThinking, summarizeCommand, summarizeRequest, summarizerFactory, mayRetryWithoutReasoning } from './digest.ts'
+import { AFTER_END, AFTER_MARK } from '../../shared/agentMessages.ts'
 import type { Summarizer } from './digest.ts'
 import { row } from '../rows/aggregate.test.ts'
 import type { PersonaId } from '../../shared/types.ts'
@@ -987,6 +988,23 @@ test('Digester: 文句の無い一言は作り直さない（一言のために�
     assert.equal(fake.nextAsks.length, 0)
     assert.equal(store.get(digestKey(r))?.next_ask, 'マージして')
     assert.equal(store.get(digestKey(r))?.retried, undefined)
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('Digester: SAI が頭に足した返答・その後の塊は、人が頼んだことに入れない（#827）', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-digest-after-'))
+  try {
+    const store = new DigestStore(join(dir, 'digest.jsonl'))
+    await store.load()
+    const fake = new FakeSummarizer()
+    const d = new Digester(store, fake, { enabled: true, model: 'haiku', since: at(0).toISOString(), persona: async () => 'none', logPath: join(dir, 'digest.log') })
+    const user_text = `${AFTER_MARK}動きがありました。\n\n--- 「セッション B」:\n- 10/28 11:00 別の件を進めた\n\n${AFTER_END}\n\nマージして`
+    d.scan([row(at(1), 'S1', { repo: 'r', text: '着手しました。', user_text })])
+    await d.drain()
+    assert.match(fake.prompts[0]!, /人が頼んだこと:\nマージして\n/)
+    assert.doesNotMatch(fake.prompts[0]!, /別の件を進めた/)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

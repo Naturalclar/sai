@@ -10,6 +10,7 @@
 // 続けて DIGEST_ALERT_FAILS 回失敗したら、口の不調を `error`（画面の digest_error）に出し、列を進めずに DIGEST_BREAK_MS 休む（#497）。
 import { appendFile, mkdir, readFile, stat } from 'node:fs/promises'
 import { dirname } from 'node:path'
+import { splitHandedReplies } from '../../shared/agentMessages.ts'
 import { entityId } from '../../shared/entity.ts'
 import { eventKind } from '../../shared/events.ts'
 import { DEFAULT_PERSONA, DIGEST_MAX_CHARS, digestPrompt, digestWhatPrompt } from '../../shared/persona.ts'
@@ -583,7 +584,8 @@ export class Digester {
         }
         try {
           // 人が頼んだこと（#376）。返答だけを渡すと、`12` のような短い返答で作例を書き写していた
-          const ask = row.user_text ?? ''
+          // SAI が頭に足した返答・その後の塊は人が頼んだことではない（#827。頭の字数で切るので、残すと人の文まで届かない）
+          const ask = splitHandedReplies(row.user_text ?? '').text
           // 規則（#638）が当てなかった返答は、一言を作る前に同じ口に「要約で足りるか」を聞く（#639）。
           // **手元の口（openai）のときだけ**（claude は呼び出しが 1 回増えるぶん時間とトークンが掛かる）。
           // 失敗して作り直す行では聞かない（口が重いときに 1 行で 2 回待たない）

@@ -57,7 +57,7 @@ export function createAfterTurns(deps: {
     const result = afterTurns(
       live.map((m) => ({ message_id: m.message_id, to: m.to, to_name: replierName(byId.get(m.to)!), text: m.text, since: m.since, ...(m.after_at ? { after_at: m.after_at } : {}) })),
       rows,
-      { lineOf, closed, ownIds: new Set(deps.agents.sentSince(from, 0).map((m) => m.message_id)) },
+      { lineOf, closed, ownIds: new Set(deps.agents.sentSince(from, 0).map((m) => m.message_id)), told: new Set(sent.filter((m) => m.after_done).flatMap((m) => askRefs(m.text))) },
     )
     if (!result.block && result.updates.length === 0) return none
     const prev = live.filter((m) => result.updates.some((u) => u.message_id === m.message_id)).map((m) => ({ message_id: m.message_id, ...(m.after_at ? { after_at: m.after_at } : {}), ...(m.after_done ? { after_done: m.after_done } : {}) }))

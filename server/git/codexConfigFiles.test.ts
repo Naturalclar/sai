@@ -2,7 +2,7 @@
 import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { subdirCodexFiles } from './codexConfigFiles.ts'
@@ -50,9 +50,12 @@ test('作り物のリポジトリで: 3 つとも拾い、関係ないファイ�
   await writeFile(join(dir, 'hidden/.codex/rules'), 'x')
   await writeFile(join(dir, '.codex/config.toml'), 'x')
   await writeFile(join(dir, 'plain/file'), 'x')
+  await mkdir(join(dir, 'linked'))
+  await symlink('../open/.codex', join(dir, 'linked/.codex'))
   run('add', 'tracked')
   assert.deepEqual(await subdirCodexFiles(new RealGit(), join(dir, 'plain')), [
     { path: 'hidden/.codex/rules', state: 'ignored' },
+    { path: 'linked/.codex', state: 'untracked' },
     { path: 'open/.codex/config.toml', state: 'untracked' },
     { path: 'tracked/.codex/config.toml', state: 'tracked' },
   ])

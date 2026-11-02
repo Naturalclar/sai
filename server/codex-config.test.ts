@@ -291,6 +291,31 @@ test('再起動: 片付けた預かりは、確かめが通るようになって
   await clear('C1@r')
 })
 
+test('片付けた預かりに新しく届いたら、もう一度確かめて行を出す', async () => {
+  ask = ASK
+  await post(session('C1@r', 'reply?days=30'), { text: '1 通目' })
+  await post(session('C1@r', 'codex-config/dismiss'), {})
+  const res = await post(session('C1@r', 'reply?days=30'), { text: '2 通目', queue: true })
+  assert.equal(((await res.json()) as ReplyResponse).stuck, true)
+  const data = await list()
+  assert.ok(data.codex_config_holds?.['C1@r'])
+  assert.deepEqual(data.queued['C1@r']?.items.map((q) => q.text), ['1 通目', '2 通目'])
+  assert.deepEqual(calls, [])
+  await clear('C1@r')
+})
+
+test('確かめが通るようになったら、行を消して止めた預かりも回す', async () => {
+  ask = ASK
+  await post(session('C1@r', 'reply?days=30'), { text: 'こんにちは' })
+  ask = null
+  // 別の起動（同じ cwd の新しいセッション）が確かめを通す
+  assert.equal((await post('/api/sessions/new?days=30', { text: 'はじめて', from: 'C1@r', agent: 'codex' })).status, 202)
+  const data = await list()
+  assert.equal(data.codex_config_holds?.['C1@r'], undefined)
+  assert.equal(data.queued['C1@r'], undefined, '行が無いのに止まったままにしない')
+  assert.deepEqual(calls, ['startThread', 'start:N1', 'start:C1'])
+})
+
 test('片付けても起こさない。止まっていないセッションへの答えは 404', async () => {
   ask = ASK
   await post(session('C1@r', 'reply?days=30'), { text: 'こんにちは' })

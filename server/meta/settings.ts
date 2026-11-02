@@ -63,10 +63,15 @@ export interface Settings {
    * 向きつき。書けるのは同一オリジンの PUT だけ（エージェント用の口・MCP からは触れない）
    */
   send_across: SendAcrossPair[]
+  /**
+   * Codex の共有の app-server（daemon）を読むだけで見るか（#848 の 2）。**既定は切**: 入にするまで SAI は daemon に繋がない
+   * （`server/reply/codexDaemon.ts`）。入でも送るのは読む要求だけ
+   */
+  codex_daemon: boolean
 }
 
 /** 既定。テストもこれを使う（キーを足したらここ 1 か所） */
-export const DEFAULT_SETTINGS: Settings = { persona: DEFAULT_PERSONA, linear_workspace: '', digest: false, digest_provider: 'claude', digest_model: '', pr_summary_provider: '', pr_summary_model: '', jev: true, jev_auto: 0, paste_to_file: false, reply_mode: '', send_across: [] }
+export const DEFAULT_SETTINGS: Settings = { persona: DEFAULT_PERSONA, linear_workspace: '', digest: false, digest_provider: 'claude', digest_model: '', pr_summary_provider: '', pr_summary_model: '', jev: true, jev_auto: 0, paste_to_file: false, codex_daemon: false, reply_mode: '', send_across: [] }
 
 export class SettingsStore {
   readonly path: string
@@ -93,6 +98,7 @@ export class SettingsStore {
       if (raw?.jev === false) settings.jev = false
       if (isJevAuto(raw?.jev_auto)) settings.jev_auto = raw.jev_auto
       if (raw?.paste_to_file === true) settings.paste_to_file = true
+      if (raw?.codex_daemon === true) settings.codex_daemon = true
       if (isReplyPermissionMode(raw?.reply_mode)) settings.reply_mode = raw.reply_mode
       settings.send_across = readPairs(raw?.send_across)
       // Jev を切っていれば自動も切（切っている間に隠れて残った閾値で、入に戻した瞬間に自動で答えない。#499 のレビュー）

@@ -111,6 +111,8 @@ import { BuildFreshness } from './local/buildFreshness.ts'
 import { NoClaudeHooks, type ClaudeHooksReader } from './local/claudeHooks.ts'
 import { NoClaudeAuth, type ClaudeAuthReader } from './local/claudeAuth.ts'
 import { NoClaudeLogin, loginCode, type ClaudeLoginRunner } from './local/claudeLogin.ts'
+import { CODEX_DAEMON_LOG, daemonGap, daemonOccupied } from './reply/codexDaemon.ts'
+import type { CodexDaemonWatch, DaemonGap, DaemonThreadState } from './reply/codexDaemon.ts'
 import { codexLockHolders, codexQueueCommand, codexWriterActive, isAppServer, runCodexQueue } from './reply/codex.ts'
 import type { CodexQueue } from './reply/codex.ts'
 import { CodexAppServer } from './reply/codexAppServer.ts'
@@ -577,6 +579,8 @@ export interface TerminalDeps {
   codexWriterActive?: (session: string) => Promise<boolean>
   /** 開いている Codex への queue。テストでは差し替える */
   codexQueue?: CodexQueue
+  /** Codex の共有の app-server を読むだけで見る口（#848）。本物を組むのは `main.ts` だけで、既定は繋がない */
+  codexDaemon?: CodexDaemonWatch
   /** その pid が `codex app-server`（共有のデーモン）か（#653）。テストでは差し替える */
   codexAppServer?: AppServerProbe
   /** 記録した pid が死んでいる Codex を lock から引き直す（#332）。テストでは差し替える */
@@ -674,6 +678,7 @@ export function createApp(
   const background = terminal.claudeBackground ?? new ClaudeBackground()
   const codexDialogs = terminal.codexDialogs ?? new CodexDialogs(terminal.tmux, terminal.ps, undefined, undefined, terminal.scanTtlMs ?? DIALOG_SCAN_TTL_MS)
   const codexApp = terminal.codexApp ?? new CodexAppServer()
+  const codexDaemon = terminal.codexDaemon
   // 立て直しをまたいで同じ `opencode serve` を使う（#440）。ターンを回している間の C-c では落とさず、次の SAI が引き取る
   const opencodeApp = terminal.opencodeApp ?? new OpencodeServer(fetch, Date.now, undefined, { statePath: join(store.directory, OPENCODE_SERVE_FILE), logPath: join(store.directory, OPENCODE_SERVE_LOG) })
   // OpenCode の相手の大きさ（#396）。transcript が無いので本体に聞く（立っているサーバにだけ。#311 の予算がそのまま効く）。
@@ -1282,6 +1287,17 @@ export function createApp(
   }
 
   const settingsStore = new SettingsStore(join(store.directory, SETTINGS_FILE))
+  // 入切は settings.json の `codex_daemon`（#848。既定は切）。読めなければ繋がない
+  if (codexDaemon) void settingsStore.get().then((s) => codexDaemon.setEnabled(s.codex_daemon), () => {})
+  /** daemon の状態と今の判定の食い違いの直前の種類（#848）。変わったときだけ 1 行残す */
+  const daemonGaps = new Map<string, DaemonGap>()
+  const noteDaemonGap = (id: string, known: HoldingWhy | '', seen: DaemonThreadState | undefined): void => {
+    const gap = daemonGap(known, seen)
+    if ((daemonGaps.get(id) ?? '') === gap) return
+    if (gap) daemonGaps.set(id, gap)
+    else daemonGaps.delete(id)
+    if (gap) void appendFile(join(store.directory, CODEX_DAEMON_LOG), `${JSON.stringify({ at: new Date().toISOString(), id, gap, known, seen })}\n`).catch(() => {})
+  }
   // 一言コメント（digest）。テストは Summarizer を差し替えた Digester を渡す（その入切は渡した値のまま。settings.json では組み直さない）。
   // 既定は settings.json の入切・口・モデルで組む（#288。前は環境変数）。一言の性格は、セッションのメタに persona があればそれ、無ければ全体の既定
   const digest: Digester = digester ?? createDigester(store.directory, new DigestStore(join(store.directory, DIGEST_FILE)), { settings: settingsStore, meta: metaStore })
@@ -1536,6 +1552,8 @@ export function createApp(
       jev_ready: jevRisk.ready,
       jev_auto: s.jev_auto,
       paste_to_file: s.paste_to_file,
+      codex_daemon: s.codex_daemon,
+      codex_daemon_link: codexDaemon?.link() ?? 'off',
       reply_mode: s.reply_mode,
       send_across: s.send_across,
       send_across_projects: await knownProjects(),
@@ -1806,6 +1824,10 @@ export function createApp(
       if (typeof b.paste_to_file !== 'boolean') return error(res, 400, 'paste_to_file は true か false で送ってください')
       patch.paste_to_file = b.paste_to_file
     }
+    if (b.codex_daemon !== undefined) {
+      if (typeof b.codex_daemon !== 'boolean') return error(res, 400, 'codex_daemon は true か false で送ってください')
+      patch.codex_daemon = b.codex_daemon
+    }
     if (b.reply_mode !== undefined) {
       // セッションのメタ（mergeMeta）と同じ一覧。画面から選べないモードは既定にもできない
       if (b.reply_mode !== '' && !isReplyPermissionMode(b.reply_mode)) return error(res, 400, `reply_mode に使えるのは ${REPLY_MODES.join(' / ')} だけです（空文字で「決めない」）`)
@@ -1824,7 +1846,7 @@ export function createApp(
       if (!isJevAuto(b.jev_auto)) return error(res, 400, 'jev_auto は 0（しない）か 0.5〜1 の数で送ってください')
       patch.jev_auto = b.jev_auto
     }
-    if (Object.keys(patch).length === 0) return error(res, 400, 'persona / linear_workspace / digest / next_ask / digest_provider / digest_model / pr_summary_provider / pr_summary_model / paste_to_file / reply_mode / send_across_add / send_across_remove / jev / jev_auto のどれかを送ってください')
+    if (Object.keys(patch).length === 0) return error(res, 400, 'persona / linear_workspace / digest / next_ask / digest_provider / digest_model / pr_summary_provider / pr_summary_model / paste_to_file / codex_daemon / reply_mode / send_across_add / send_across_remove / jev / jev_auto のどれかを送ってください')
     // 起動時の組み立て（settings.json の読み込み）が済んでから書く。後から古い値で組み直されないように
     await digestReady
     const saved = await settingsStore.set(patch)
@@ -1833,6 +1855,7 @@ export function createApp(
     if (patch.digest !== undefined || patch.next_ask !== undefined || patch.digest_provider !== undefined || patch.digest_model !== undefined) digest.configure(saved)
     // 閾値を入れた・下げたら、預かっている分にすぐ効かせる
     if (patch.jev_auto !== undefined || patch.jev !== undefined) void jevAutoTick()
+    if (patch.codex_daemon !== undefined) codexDaemon?.setEnabled(saved.codex_daemon)
     return json(res, await settingsPayload())
   }
 
@@ -3397,7 +3420,11 @@ export function createApp(
         // 空きでない理由（#795）。回っているターン・待ち・預かりは呼び出し側が見たもの。ここで足すのは、起動中・止められない
         // `claude --bg`（attach 中・ターン中。`launch()` が預かって待つのと同じ判定）と、worktree の作りかけ。
         // **git と `claude agents` を読むのは、ほかの理由が無い、このマシンの頼める相手だけ**（理由は最初の 1 つしか出さない）
-        const first: HoldingWhy | '' = occupied(s) || (launching.has(s.id) ? 'busy' : '')
+        const known: HoldingWhy | '' = occupied(s) || (launching.has(s.id) ? 'busy' : '')
+        // daemon が見ている状態（#848）。言えるのは「空きでない」だけで、`idle` は空きの証拠にしない。今の判定と食い違ったら数える（古い道を消す材料）
+        const seen = s.agent === 'codex' ? codexDaemon?.state(sessionOf(s)) : undefined
+        noteDaemonGap(s.id, known, seen)
+        const first: HoldingWhy | '' = known || daemonOccupied(seen)
         // `opts.only` があれば、その 1 件だけ読む（送る時点の確かめ。使うのはその相手の答えだけなので、ほかの相手の worktree に git を回さない）
         const look = can && !remote && !first && asks.length === 0 && (opts.only === undefined || opts.only === s.id)
         const held = look && (await backgroundHeld(s)) ? 'background' : ''
@@ -4924,6 +4951,7 @@ export function createApp(
     stopLoopTimer()
     stopWaitTimer()
     sweeper?.stop()
+    codexDaemon?.stop()
   }
 
   const handler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {

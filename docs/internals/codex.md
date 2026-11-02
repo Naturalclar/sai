@@ -129,3 +129,15 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
   - `prompt_async` が 204 を返した時点で回っているので、`Replying.interruptible` は最初から付く（`turnId` を待たない）
   - 止められるのは SAI が起こしたサーバのターンだけ（#421 と同じ線引き）
 - Claude の `-p` は入力の口（stream-json）が開いていれば同じ口で止める（#386。[reply.md](reply.md) の「Claude の `-p` を止める・足す」）。口の無い `-p`（立て直しで引き取った子）は `400`
+
+## 共有の app-server を読むだけで見る（#848）
+
+- 端末の TUI が客になっている daemon（`$CODEX_HOME/app-server-control/app-server-control.sock`。`0700` のディレクトリの下の `0600` のソケットへの symlink。トークンは無い）に繋ぎ、スレッドの状態の通知を受ける。`server/reply/codexDaemon.ts` の `CodexDaemonClient`。SAI 自身の stdio の app-server（`codexAppServer.ts`）とは別で、そちらは変えていない。
+- 中身は unix ソケットの上の WebSocket で、JSON-RPC は stdio と同じ。Node の組み込みの `WebSocket` は unix ソケットを受けず、依存も足さないので、`server/reply/unixWebSocket.ts` に要る分だけ持つ。
+- **読むだけ**: 送れる要求は `DAEMON_METHODS`（`initialize`・`thread/list`・`thread/loaded/list`）だけで、`request()` の引数の型もこの 3 つ（ほかに送るのは `initialized` の通知だけ）。サーバからの要求（id と method の両方があるもの）には答えない。`thread/resume` しないので、許可・質問の要求はそもそも届かない。
+- 受けるのは `thread/status/changed` と `thread/started` だけ。繋いだとき・繋ぎ直したときは `thread/list`（`DAEMON_LIST_LIMIT` 本）で埋める。その外のスレッドは通知が来るまで分からないまま。状態は `threadState()` が `idle` / `active` / `waiting`（`activeFlags` がある）に読む。知らない形は分からない扱い。切れたら全部捨てる（古い `active` を残さない）。
+- **`daemon start` しない**: ソケットが無ければ `no_socket` で何もせず、`DAEMON_RETRY_MS` ごとに見直す。daemon を止めても SAI の動きは今のまま。
+- **入切は `settings.json` の `codex_daemon`（既定は切）**。起動時と `PUT /api/settings` で `setEnabled()` に渡す。本物を組むのは `main.ts` だけで、`createApp` の既定は繋がない（`terminal.codexDaemon` が無い）。繋がりは `GET /api/settings` の `codex_daemon_link`（`off` / `no_socket` / `failed` / `connected`）で見る。画面の入切はまだ無い。
+- 使い道は `holdingsOf()` の 1 か所。Codex のセッションの `active` を `busy`、`waiting` を `waiting` にする（`daemonOccupied()`）。**`idle` を見て空きとは言わない**（今の判定に任せる）。
+- 今の判定と食い違ったら `codex-daemon.log` に 1 行残す（`daemonGap()`。`daemon_only` / `sai_only`。セッションごとに種類が変わったときだけ）。古い道を消してよいかを数える材料。
+

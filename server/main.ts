@@ -16,6 +16,7 @@
 //   GET /api/sessions?days=7&repo=&agent=&date=
 //   GET /api/sessions/<id>?days=30
 //   GET /api/feed?days=3&repo=
+import { appendFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { ATTACHMENT_TTL_DAYS } from './reply/attachmentSweep.ts'
 import { homedir } from 'node:os'
@@ -29,6 +30,7 @@ import { ClaudeAuth } from './local/claudeAuth.ts'
 import { ClaudeLogin } from './local/claudeLogin.ts'
 import { allowRules } from './approvals/permissions.ts'
 import { jevFromEnv } from './approvals/jev.ts'
+import { CODEX_DAEMON_LOG, CodexDaemonClient, daemonSocketPath } from './reply/codexDaemon.ts'
 import { RealTmux, realPs } from './reply/terminal.ts'
 import { FeedStore } from './rows/store.ts'
 
@@ -171,6 +173,11 @@ export function main(argv: string[]): void {
     allowedRules: (cwd) => allowRules(cwd, homedir()),
     // 添付の原本の寿命（#792）。本物の置き場を掃除するのはここで組んだものだけ。`SAI_ATTACHMENT_TTL_DAYS=0` で消さない（計測とログだけ）
     attachmentSweep: { ttlMs: attachmentTtlDays() * 86_400_000, logPath: join(feedDir, 'attachments.log') },
+    // Codex の共有の app-server を読むだけで見る（#848）。**本物のソケットに繋ぐのはここで組んだものだけ**。繋ぐのは settings.json の `codex_daemon` が入のときだけ
+    codexDaemon: new CodexDaemonClient({
+      socketPath: daemonSocketPath(),
+      log: (line) => void appendFile(join(feedDir, CODEX_DAEMON_LOG), `${JSON.stringify({ at: new Date().toISOString(), note: line })}\n`).catch(() => {}),
+    }),
   })
   const server = createServer((req, res) => {
     void app(req, res)

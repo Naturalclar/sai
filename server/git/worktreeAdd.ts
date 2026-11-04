@@ -3,6 +3,7 @@
 // `from` の行の cwd と検査した名前から作る。`git fetch` は打たない（手元の base から切る）。消す口は作らない
 import { spawn } from 'node:child_process'
 import { lstat, realpath, stat } from 'node:fs/promises'
+import type { Socket } from 'node:net'
 import { basename, join } from 'node:path'
 import { isRemoteHost } from '../../shared/host.ts'
 import type { SessionSummary, SiblingWorktree } from '../../shared/types.ts'
@@ -41,10 +42,12 @@ export class RealWorktreeAdder implements WorktreeAdder {
       })
       child.once('error', reject)
       const settle = (code: number | null, signal: NodeJS.Signals | null) => (code === 0 ? resolve() : reject(new Error(err.trim() || (signal ? `git が時間切れで止まりました（${signal}）` : `git exited ${code}`))))
-      // `close` だけを待たない。フックが起こした子が stderr を持ったままだと、git が終わっても `close` が来ない（時間切れも効かない）
+      // `close` だけを待たない。フックが起こした子が stderr を持ったままだと、git が終わっても `close` が来ない（時間切れも効かない）。
+      // stderr は閉じない（閉じると、その子が次に書いたときに SIGPIPE で死ぬ）。読み捨て続け、サーバの終わりは引き止めない
       child.once('exit', (code, signal) => {
         const drained = setTimeout(() => {
-          child.stderr.destroy()
+          // pipe の stdio は `net.Socket`（型は `Readable`）
+          ;(child.stderr as Socket).unref()
           settle(code, signal)
         }, STDERR_DRAIN_MS)
         child.once('close', () => {

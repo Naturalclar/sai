@@ -251,11 +251,17 @@ test('RealWorktreeAdder: 起こすのは worktree add の 1 形だけ。失敗�
   await assert.rejects(adder.add('/w/cwd', 'broken', '/w/broken', 'main'), /fatal: だめ/)
 })
 
-test('RealWorktreeAdder: フックが残した子が stderr を持ったままでも、git が終われば返る（#847 のレビュー）', async () => {
+test('RealWorktreeAdder: フックが残した子が stderr を持ったままでも、git が終われば返る。その子はあとで書いても死なない（#847 のレビュー）', async () => {
   const bin = join(dir, 'fake-git-hold')
-  await writeFile(bin, '#!/bin/sh\nsleep 5 &\nexit 0\n')
+  const alive = join(dir, 'hold-alive')
+  await writeFile(bin, `#!/bin/sh\n(sleep 1; echo progress >&2; touch ${JSON.stringify(alive)}) &\nexit 0\n`)
   await chmod(bin, 0o755)
   const at = Date.now()
   await new RealWorktreeAdder(bin).add('/w/cwd', 'tree', '/w/tree', 'main')
-  assert.ok(Date.now() - at < 3000, '子の終わりを待たない')
+  assert.ok(Date.now() - at < 900, '子の終わりを待たない')
+  for (let i = 0; i < 30; i++) {
+    if (await readFile(alive).then(() => true, () => false)) break
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  assert.ok(await readFile(alive).then(() => true, () => false), '返ったあとに stderr へ書いた子が、最後まで動いている')
 })

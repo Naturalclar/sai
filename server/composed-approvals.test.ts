@@ -102,7 +102,7 @@ test('部品ごとに見て答える（#863）: 部品が全部許されてい�
   const piped = await ask('tool-a build zzpiped $(tool-b x) | head -5')
   const loop = await ask('for f in zza zzb; do tool-b $f; done')
   const sub = await ask('tool-b "$(tool-a build zzsub)"')
-  const cd = await ask(`cd ${dir}/pkg && tool-a build zzcd "$(git rev-parse HEAD)"`)
+  const cd = await ask(`cd ${dir}/pkg && cd .. && tool-a build zzcd "$(git rev-parse HEAD)"`)
   for (const [id, what] of [[mixed, 'ルール + 読むだけ'], [piped, 'パイプの後ろ'], [loop, 'for'], [sub, '$( … )'], [cd, 'リポジトリの中への cd']] as const) {
     const answer = await approvals.wait(id, 10)
     assert.equal(answer?.behavior, 'allow', what)

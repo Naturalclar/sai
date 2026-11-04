@@ -15,7 +15,7 @@
 //   知らない構文の語）は全部、人に回す。**拒否の一覧ではない**（知っている形だけを受け、分からなければ人に回す）
 //
 // 新しい許可は作らない（設定は読むだけ）。コマンドは実行しない。DOM に依存しないので bashComposed.test.ts を node:test で回す
-import { isShellKeyword, isWrapperCommand, normalize, splitComposed, within } from './bashRules.ts'
+import { bashRulePlan, isNotAfterCd, isShellKeyword, isWrapperCommand, normalize, splitComposed, within } from './bashRules.ts'
 import type { BashNoRuleReason } from './bashRules.ts'
 import { notReadOnly } from './bashReadOnly.ts'
 import type { NotReadOnly } from './bashReadOnly.ts'
@@ -120,10 +120,17 @@ function blocked(words: readonly string[], block: readonly string[], opaque: Rea
 }
 
 /**
- * `body` の中の `$名前` / `${名前}` を `value` に置き換える（`for` の中身）。一重引用符の中・バックスラッシュの次の字は置き換えない
- * （シェルも展開しない）。`value` は `LOOP_ITEM` の字だけなので、置き換えても語の切れ目は変わらない
+ * 置き換えた変数のすぐ後ろに来てよい字（#864 のレビュー）。zsh は `$f:h`・`$f[2]` のように、変数のすぐ後ろの `:` と `[` を
+ * 展開の一部として読む（bash は字のまま）。知っている字（空白・区切り・引用符・`/` `.` `,` `=` `+` `-`）か終わりのときだけ置き換える
  */
-function substitute(body: string, name: string, value: string): string {
+const AFTER_VARIABLE = /^(?:$|[\s;&|"')/.,=+-])/
+
+/**
+ * `body` の中の `$名前` / `${名前}` を `value` に置き換える（`for` の中身）。一重引用符の中・バックスラッシュの次の字は置き換えない
+ * （シェルも展開しない）。`value` は `LOOP_ITEM` の字だけなので、置き換えても語の切れ目は変わらない。
+ * 変数のすぐ後ろが `AFTER_VARIABLE` の字でなければ、読み方がシェルで分かれるので null
+ */
+function substitute(body: string, name: string, value: string): string | null {
   let out = ''
   for (let k = 0; k < body.length; k++) {
     const c = body[k]!
@@ -142,6 +149,7 @@ function substitute(body: string, name: string, value: string): string {
     if (c === '$') {
       const m = /^\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/.exec(body.slice(k))
       if (m && (m[1] ?? m[2]) === name) {
+        if (!AFTER_VARIABLE.test(body.slice(k + m[0].length))) return null
         out += value
         k += m[0].length - 1
         continue
@@ -175,8 +183,15 @@ function cdTarget(target: string | undefined, quoted: boolean, first: boolean, d
   return next
 }
 
-/** コマンドの並びを読んで、部品ごとに確かめる。`top` は外側の並び（`cd` を受けるのはここだけ） */
-function walk(command: string, dir: string, place: ComposedPlace, depth: number, top: boolean, count: Count): void {
+/** 部品の語を、シェルが同じ語に読む文字に戻す（`bashRulePlan()` に渡すため）。中身の分からない語は `X` にする */
+function wordsText(words: readonly string[], opaque: ReadonlySet<number>): string {
+  return words.map((w, n) => (opaque.has(n) ? 'X' : /^[\w./:@%+,=-]+$/.test(w) ? w : `'${w.replaceAll("'", `'\\''`)}'`)).join(' ')
+}
+
+/**
+ * コマンドの並びを読んで、部品ごとに確かめる。`top` は外側の並び（`cd` を受けるのはここだけ）、`moved` は前に `cd` で場所を変えたか
+ */
+function walk(command: string, dir: string, place: ComposedPlace, depth: number, top: boolean, count: Count, moved = false): void {
   if (depth > MAX_DEPTH) refuseForm('nested')
   const split = splitComposed(command)
   if (typeof split === 'string') return refuseForm(split)
@@ -186,6 +201,7 @@ function walk(command: string, dir: string, place: ComposedPlace, depth: number,
   // 失敗したときに元の場所で後ろが走り、判定した場所とずれる。#864 のレビュー）
   if (top && parts.some((w) => w[0] === 'cd') && ops.some((op) => op === '||' || op === ';')) return refuseForm('cd_join')
   let here = dir
+  let cdDone = moved
   for (let k = 0; k < parts.length; k++) {
     const words = parts[k]!
     const first = words[0]!
@@ -213,7 +229,11 @@ function walk(command: string, dir: string, place: ComposedPlace, depth: number,
       if (close < 0 || ops[close] !== ';') return refuseForm('for_form')
       // `do` の語のすぐ後ろから、`done` の前まで
       const body = command.slice(spans[open]!.start + 2, spans[close]!.start)
-      for (const item of items) walk(substitute(body, name, item), here, place, depth + 1, false, count)
+      for (const item of items) {
+        const replaced = substitute(body, name, item)
+        if (replaced === null) return refuseForm('for_form')
+        walk(replaced, here, place, depth + 1, false, count, moved)
+      }
       k = close
       continue
     }
@@ -227,17 +247,24 @@ function walk(command: string, dir: string, place: ComposedPlace, depth: number,
       const next = ops[k + 1]
       if (!top || join === '|' || words.length !== 2 || opaque.size > 0 || (next !== undefined && next !== '&&')) return refuseForm('cd_join')
       here = cdTarget(words[1], quoted.has(`${k}:1`), k === 0, here, place)
+      cdDone = true
       continue
     }
+    // `cd` のあとの書き込み系と `git` は、ルールが揃っていても Claude Code が聞く（`bashRulePlan()` の `cd_then_write`）。
+    // 行き先が worktree のトップのときだけ、いつもの場所と同じに見る（下の階層は、別の git の置き場で設定やフックを持ちうる。#864 のレビュー）
+    if (cdDone && isNotAfterCd(first) && !place.roots.some((root) => root.startsWith('/') && normalize(root) === here)) return refuseForm('cd_then_write')
     const span = spans[k]!
     const text = command.slice(span.start, span.end).trim()
-    const byRule = !isWrapperCommand(first) && place.allow.some((rule) => hits(ruleShape(rule), words, opaque))
+    // ルールで当てるのは、その部品だけなら Claude のルールを組める形のときだけ（場所を変えるフラグ・`python3 -c` のように、部品そのものが
+    // 理由で聞かれるものは当てない。#864 のレビュー）
+    const ruleable = !isWrapperCommand(first) && !('reason' in bashRulePlan(wordsText(words, opaque), here, place.home))
+    const byRule = ruleable && place.allow.some((rule) => hits(ruleShape(rule), words, opaque))
     if (!byRule) {
       const why = notReadOnly(text, here, place.repo, place.roots, join === '|')
       if (why) return refusePart(why)
     }
     // `$( … )` の中身も部品ごとに確かめる（ルールで通した部品の中身は、ここで初めて見る）
-    for (const sub of subs) if (sub.part === k) walk(sub.inner, here, place, depth + 1, false, count)
+    for (const sub of subs) if (sub.part === k) walk(sub.inner, here, place, depth + 1, false, count, cdDone)
     if (byRule) count.rule++
     else count.read++
   }

@@ -120,7 +120,7 @@ test('composedVerdict: 文字の並びを回す for だけ通す（#863）', () 
 test('composedVerdict: そのセッションのリポジトリの中への cd だけ通し、場所を変えて次の部品を見る（#863）', () => {
   ok('cd /work/repo && tool-a build')
   // 同じリポジトリの別の worktree（#783）
-  ok('cd /work/repo-b/src && git status')
+  ok('cd /work/repo-b/src && ls')
   ok('cd .. && tool-c')
   // 外
   assert.deepEqual(no('cd /work/other && tool-a build'), { ok: false, form: 'cd_outside' })
@@ -185,4 +185,30 @@ test('composedVerdict: cd のある並びは && と | だけでつなぐ（#864 
   ok('cd /work/repo && tool-c | tool-b x && tool-a build')
   // cd の部品にも ask / deny を当てる
   no('cd /work/repo && tool-c', { block: ['Bash(cd:*)'] })
+})
+
+test('composedVerdict: for の変数のすぐ後ろに zsh が展開として読む字（: [ など）が来たら人に回す（#864 のレビュー）', () => {
+  for (const c of ['for f in a; do tool-b $f:h; done', 'for f in a; do tool-b $f[1]; done', 'for f in a; do tool-b "${f}[1]"; done', 'for f in a; do tool-b $f*; done', 'for f in a; do tool-b $f~; done']) {
+    assert.deepEqual(no(c), { ok: false, form: 'for_form' }, c)
+  }
+  for (const c of ['for f in a; do tool-b $f.txt; done', 'for f in a; do tool-b "$f"; done', 'for f in a; do tool-b src/$f/x; done', 'for f in a; do tool-b --x=$f; done']) ok(c)
+})
+
+test('composedVerdict: cd のあとの書き込み系と git は、行き先が worktree のトップのときだけ見る（#864 のレビュー）', () => {
+  const over = { allow: ['Bash(git:*)', 'Bash(tool-a:*)'] }
+  ok('cd /work/repo && git status', over)
+  ok('cd /work/repo-b && git log -3', over)
+  assert.deepEqual(no('cd /work/repo/sub && git status', over), { ok: false, form: 'cd_then_write' })
+  no('cd /work/repo/sub && tool-a "$(git rev-parse HEAD)"', over)
+  no('cd /work/repo/sub && for f in a; do git log $f; done', over)
+  // cd のあとでも、書き込み系でも git でもないものは見る
+  ok('cd /work/repo/sub && tool-a x', over)
+})
+
+test('composedVerdict: 部品そのものが理由で聞かれる形（場所を変えるフラグ・コードを渡すフラグ）は、ルールで当てない（#864 のレビュー）', () => {
+  const over = { allow: ['Bash(git:*)', 'Bash(python3:*)', 'Bash(tool-a:*)'] }
+  no('git -C /etc push origin main && tool-a x', over)
+  no('tool-a x && python3 -c "import os"', over)
+  no('git $(tool-a) -C /etc push', over)
+  ok('git log $(tool-a x) -3 && tool-a y', over)
 })

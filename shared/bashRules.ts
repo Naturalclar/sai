@@ -469,6 +469,9 @@ export function isWrapperCommand(first: string): boolean {
   return WRAPPERS.has(base) || MORE_WRAPPERS.has(base) || ARG_RUNNERS.has(base)
 }
 
+/** `cd` のあとにつなぐと、ルールが揃っていても Claude Code が聞くコマンドか（`NOT_AFTER_CD`。#864 のレビュー） */
+export const isNotAfterCd = (first: string): boolean => NOT_AFTER_CD.has(first.slice(first.lastIndexOf('/') + 1))
+
 /** シェルの構文の語か（`for` / `if` / `do` …） */
 export const isShellKeyword = (word: string): boolean => KEYWORDS.has(word)
 

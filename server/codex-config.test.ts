@@ -355,6 +355,33 @@ test('片付ける: 別の worktree の行を片付けても、元の cwd で止
   await clear('C1@r')
 })
 
+test('別の worktree の行の確かめが通っても、元の cwd で止めていた預かりの行は出し直す', async () => {
+  const sibling = await realpath(await mkdtemp(join(tmpdir(), 'sai-codex-config-sibling-')))
+  await mkdir(join(sibling, '.git'))
+  siblingTree = sibling
+  const realCheck = gate.check
+  // 確かめは cwd ごとに答える。元の cwd はずっと止める、兄弟は途中から通す
+  let siblingOk = false
+  gate.check = async (cwd) => (cwd === sibling && siblingOk ? null : ASK)
+  try {
+    await post(session('C1@r', 'reply?days=30'), { text: '止めた返信' })
+    const start = () => post('/api/sessions/new?days=30', { text: 'はじめて', from: 'C1@r', agent: 'codex', worktree: worktreeKey(sibling) })
+    assert.equal((await start()).status, 409)
+    assert.equal((await list()).codex_config_holds?.['C1@r']?.cwd, sibling)
+    siblingOk = true
+    assert.equal((await start()).status, 202)
+    const data = await list()
+    assert.equal(data.codex_config_holds?.['C1@r']?.cwd, work, '止まった預かりの行を出し直す')
+    assert.equal(data.queued['C1@r']?.paused, CODEX_CONFIG_PAUSED)
+    assert.deepEqual(calls, ['startThread', 'start:N1'], '止めた返信は回らない')
+  } finally {
+    gate.check = realCheck
+    siblingTree = ''
+    await rm(sibling, { recursive: true, force: true })
+  }
+  await clear('C1@r')
+})
+
 test('確かめが通るようになったら、行を消して止めた預かりも回す', async () => {
   ask = ASK
   await post(session('C1@r', 'reply?days=30'), { text: 'こんにちは' })

@@ -2829,13 +2829,17 @@ export function createApp(
     const before = codexConfigHolds.get(id)
     if (!ask) {
       if (before?.cwd === cwd) codexConfigHolds.delete(id)
+      const queuedCwd = codexConfigQueued.get(id)
       // 預かりを止めた cwd の確かめが通るようになったら、次のポーリングで回す（行が無いのに止まったままにしない。回る前にもう一度確かめる）
-      if (codexConfigQueued.get(id) === cwd) {
+      if (queuedCwd === cwd) {
         codexConfigQueued.delete(id)
         if (queue.paused(id) === CODEX_CONFIG_PAUSED) {
           bgRetryAt.delete(id)
           queue.resume(id)
         }
+      } else if (queuedCwd !== undefined && before?.cwd === cwd) {
+        // 消したのは別の cwd（新しいセッションなど）の行。預かりは別の cwd の確かめで止まったままなので、その行を出し直す
+        await codexConfigStop(id, queuedCwd)
       }
       return ''
     }

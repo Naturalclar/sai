@@ -62,7 +62,7 @@ import { fetchByRev, RevCache } from './revCache.ts'
 import { sessionFileUrl } from '../../shared/files.ts'
 import type { DigestFeedbackReason, DigestFeedbackRequest, DigestFeedbackResponse, DigestUsageReason } from '../../shared/digestFeedback.ts'
 
-export type { Agent, FeedRow, TurnOutputResponse, TurnOutputSection, TurnStepsResponse, SessionSource, SessionSummary, SessionMeta, ManagerDraft, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, QueuedReply, ReplyQueue, ReplyQueueMap, ReplyQueueResponse, Loop, LoopMap, LoopRequest, Wait, WaitMap, AgentActivity, AgentActivityMessage, AgentStopResponse,Approval, ApprovalMap, ApprovalAnswer, TerminalDialog, Profile, PersonaId, SettingsResponse, SettingsRequest, ClaudeAuthCheckResponse, Viewer, SessionPermissionsResponse, SessionProgressResponse, ProgressStep, ProgressNote, SessionDiffResponse, SessionDiffSummaryResponse, GalleryResponse, GalleryItem, SearchResponse, SearchHit, DiffPr, DiffSection, DiffFileStat, PrSummary, PrRepo, PrsResponse, PrDetailResponse, PrBrief, PrBriefResponse, PrComment, PrReviewRequest, PrReviewResponse, PrReviewEvent, AttachmentResponse, UsageResponse, UsageReportResponse, UsageReportRow, UsageSessionRow, UsageTotals, UsageWindow, CodexUsage, ClaudeUsage } from '../../shared/types.ts'
+export type { Agent, FeedRow, TurnOutputResponse, TurnOutputSection, TurnStepsResponse, SessionSource, SessionSummary, SessionMeta, ManagerDraft, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, QueuedReply, ReplyQueue, ReplyQueueMap, ReplyQueueResponse, Loop, LoopMap, LoopRequest, Wait, WaitMap, CodexConfigFile, CodexConfigHold, AgentActivity, AgentActivityMessage, AgentStopResponse,Approval, ApprovalMap, ApprovalAnswer, TerminalDialog, Profile, PersonaId, SettingsResponse, SettingsRequest, ClaudeAuthCheckResponse, Viewer, SessionPermissionsResponse, SessionProgressResponse, ProgressStep, ProgressNote, SessionDiffResponse, SessionDiffSummaryResponse, GalleryResponse, GalleryItem, SearchResponse, SearchHit, DiffPr, DiffSection, DiffFileStat, PrSummary, PrRepo, PrsResponse, PrDetailResponse, PrBrief, PrBriefResponse, PrComment, PrReviewRequest, PrReviewResponse, PrReviewEvent, AttachmentResponse, UsageResponse, UsageReportResponse, UsageReportRow, UsageSessionRow, UsageTotals, UsageWindow, CodexUsage, ClaudeUsage } from '../../shared/types.ts'
 
 /**
  * `PUT /api/sessions/<id>/meta` のボディ。`SessionMeta` の一部を重ねる。
@@ -223,6 +223,8 @@ export const api = {
   waitAdd: (id: string) => sendJSON<WaitActionResponse>('POST', `/api/sessions/${encodeURIComponent(id)}/wait/add`, {}),
   /** 預かっている待ち（#732）を止める（片付ける）・いま起こす */
   waitAction: (id: string, wait: string, action: 'stop' | 'wake') => sendJSON<WaitActionResponse>('POST', `/api/sessions/${encodeURIComponent(id)}/wait/${action}`, { wait }),
+  /** Codex を起こす前の確かめ（#856）に答える。`allow` は見た中身の指紋を添える（変わっていれば 409）。`dismiss` は行を片付けるだけ */
+  codexConfig: (id: string, action: 'allow' | 'dismiss', fingerprint: string) => sendJSON<{ id: string }>('POST', `/api/sessions/${encodeURIComponent(id)}/codex-config/${action}`, { fingerprint }),
   /** 終わったループを片付ける */
   clearLoop: (id: string) => sendRaw<LoopResponse>('DELETE', `/api/sessions/${encodeURIComponent(id)}/loop`),
   meta: (id: string) => getJSON<SessionMetaResponse>(`/api/sessions/${encodeURIComponent(id)}/meta`),

@@ -401,7 +401,41 @@ export interface SessionDiffResponse {
   working: DiffSection
   /** 追跡外のファイル名（中身は出さない） */
   untracked: string[]
+  /** サブディレクトリの `.codex/` のファイル（#856。名前まで）。無ければ付かない */
+  codex_config?: CodexConfigFile[]
+  /** サブディレクトリの `.codex/` を読めなかった（#856）。差分そのものは落とさない */
+  codex_config_unknown?: boolean
 }
+
+/** サブディレクトリの `.codex/` のファイル 1 つ（#856） */
+export interface CodexConfigFile {
+  /** worktree の一番上からの相対 */
+  path: string
+  state: 'tracked' | 'untracked' | 'ignored'
+}
+
+/** Codex を起こす前の確かめで止めたときに人に見せるもの（#856）。ファイルの中身は持たない */
+export interface CodexConfigAsk {
+  /** `found` は `.codex/` を見つけた、`unknown` は git が読めず確かめられない */
+  reason: 'found' | 'unknown'
+  /** 見つけたファイル（リポジトリの一番上からの相対。先頭の一部） */
+  files: string[]
+  /** `files` に載せなかった数 */
+  more: number
+  /** `unknown` の理由 */
+  note: string
+  /** 中身の指紋。人が見たものと同じときだけ「このまま起こす」を通す */
+  fingerprint: string
+}
+
+/** 確かめで止まっている 1 件（#856） */
+export interface CodexConfigHold extends CodexConfigAsk {
+  cwd: string
+  since: string
+}
+
+/** エンティティID → 確かめで止まっている 1 件（#856） */
+export type CodexConfigHoldMap = Record<string, CodexConfigHold>
 
 /**
  * そのブランチに出ている GitHub の PR（#211）。`gh` が無い・ログインしていない・PR が無ければ
@@ -758,6 +792,8 @@ export interface SessionDiffSummaryResponse {
   working: DiffCounts
   /** 追跡外のファイルの数 */
   untracked: number
+  /** サブディレクトリの `.codex/` のファイルの数（#856）。無ければ省略。差分が無くても差分ボタンを出すのに使う */
+  codex_config?: number
   /** そのブランチに出ている PR。無ければ省略 */
   pr?: DiffPr
 }
@@ -1634,6 +1670,8 @@ export interface SessionsResponse {
   loops: LoopMap
   /** 預かっている待ち（#732）。エンティティID → 古い順 */
   waits: WaitMap
+  /** Codex を起こす前の確かめで止まっているもの（#856） */
+  codex_config_holds?: CodexConfigHoldMap
   /** 返信中のエージェントが待っている許可・質問（ID → 古い順）。これが変わると rev も変わる */
   approvals: ApprovalMap
   /**

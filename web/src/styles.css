@@ -217,6 +217,10 @@
   .diff-section .counts .add { color: var(--codex); margin-right: 6px; }
   .diff-section .counts .del { color: var(--claude); }
   .diff-section .untracked li { font-size: 13px; padding: 2px 2px; }
+  .diff-section.codex-config { border-left: 3px solid var(--claude); padding-left: 8px; }
+  .diff-section.codex-config .why { color: var(--muted); font-size: 12px; margin: 4px 0; }
+  .diff-section.codex-config ul { list-style: none; margin: 0; padding: 0; }
+  .diff-section.codex-config .state { color: var(--muted); font-family: inherit; margin-left: 8px; }
   .diff-section .untracked code, .diff-section .patch .note { font-family: var(--mono); font-size: 12px; }
   .diff-section .patch { border: 1px solid var(--line); border-radius: 6px; margin: 2px 0 8px; overflow-x: auto; background: var(--panel); container-type: inline-size; }
   /*
@@ -442,12 +446,17 @@
   .todo.answer { border-left: 3px solid var(--accent); }
   .todo.watch { border-left: 3px solid var(--synth); }
   /* 終わったのに自動では起こさない待ち（#732）。行から起こす・片付ける */
-  .todo.wait { border-left: 3px solid var(--claude); }
+  .todo.wait, .todo.config { border-left: 3px solid var(--claude); }
+  .todo.config .config-files { list-style: none; margin: 4px 0 0; padding: 0; }
+  .todo.config .config-files li, .diff-section.codex-config li { font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
   .todo .wait-actions { flex: none; display: flex; gap: 6px; margin-top: 4px; }
   .todo .wait-actions button { font: inherit; font-size: 12px; padding: 3px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); cursor: pointer; white-space: nowrap; }
   .todo .wait-actions button.primary { border-color: var(--accent); color: var(--accent); font-weight: 600; }
   .todo .wait-actions button:disabled { opacity: .5; cursor: default; }
-  @media (max-width: 640px) { .todo.wait .why-row { flex-wrap: wrap; } }
+  @media (max-width: 640px) {
+    .todo.wait .why-row { flex-wrap: wrap; }
+    .todo.config .why-row { flex-direction: column; align-items: stretch; }
+  }
   /* 下段（#438）。答えを待っている上段より控えめに出す */
   .todo.done { border-left: 3px solid var(--line); opacity: 0.75; }
   .todo.done:hover { opacity: 1; }
@@ -1454,6 +1463,7 @@
   .reply .diff-float button.diff-btn .add, .msg button.diff-btn .add { color: var(--codex); font-family: var(--mono); }
   .reply .diff-float button.diff-btn .del, .msg button.diff-btn .del { color: var(--claude); font-family: var(--mono); }
   .reply .diff-float button.diff-btn .pr, .msg button.diff-btn .pr { color: var(--accent); font-family: var(--mono); }
+  .reply .diff-float button.diff-btn .codex-config, .msg button.diff-btn .codex-config { color: var(--claude); font-family: var(--mono); }
   /* **入力欄の外に浮かせる**（#351。`.reply` は position: relative）。行として積まないので、差分があっても
      なくても入力欄の高さと位置が変わらない。ヘルプ（`.note`）より上に出る。
      浮かせた先はチャットの一番下に重なるので、背景を塗って影を付ける（下の発言に重なっても読める）。

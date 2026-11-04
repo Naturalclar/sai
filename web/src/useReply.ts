@@ -126,7 +126,11 @@ export function useReply(countRows: (id: string) => number, replying: ReplyingMa
         return 'sent'
       }
       // 預かっただけ（まだ起動していない）。待機中のバブルはサーバの queued から次のポーリングで出る
-      if (accepted.via === 'queued' || accepted.via === 'compact') return 'sent'
+      // `queue` なしの送信でも預かることがある（#856 の確かめ）ので、作った繋ぎは捨てる
+      if (accepted.via === 'queued' || accepted.via === 'compact') {
+        setSent((list) => list.filter((s) => s !== entry))
+        return 'sent'
+      }
       setSent((list) => (list.includes(entry) ? list.map((s) => (s === entry ? { ...s, acceptedAt: Date.now() } : s)) : [...list.filter((s) => s.id !== id), { ...entry, acceptedAt: Date.now() }]))
       return 'sent'
     } catch (err) {

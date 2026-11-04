@@ -77,6 +77,8 @@ export interface Launched {
    * 預かりを回す `drain()` は**止めずに次の機会を待つ**（SAI の外で動いているので、終わりを知らせる口が無い）
    */
   retry?: boolean
+  /** Codex を起こす前の確かめ（#856）で止めた。`launch()` が本文を預かって止める */
+  codexConfig?: boolean
 }
 
 /** `createApp()` の中の値のうち、区分のファイルが使うもの。どれも `createApp()` が作ったものへの参照 */

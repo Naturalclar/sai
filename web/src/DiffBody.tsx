@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { parseUnifiedDiff } from '../../shared/diff.ts'
 import { api, type SessionDiffResponse } from './api'
+import { CodexConfigNote } from './CodexConfigNote'
 import { DiffView } from './DiffView'
 import { ReviewButton } from './ReviewButton'
 import { DiffCommentBar } from './DiffCommentBar'
@@ -79,6 +80,7 @@ export function DiffBody({ id, canReview = false, onInsertComments }: { id: stri
               <div className="warn">このセッションが動いていたのは {data.session_branch} で、いまの worktree は {data.head} にいます</div>
             )}
           </div>
+          <CodexConfigNote files={data.codex_config ?? []} unknown={data.codex_config_unknown === true} />
           {data.base && (
             <DiffView
               section={data.branch}

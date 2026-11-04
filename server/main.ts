@@ -33,6 +33,8 @@ import { allowRules } from './approvals/permissions.ts'
 import { jevFromEnv } from './approvals/jev.ts'
 import { CODEX_DAEMON_LOG, CodexDaemonClient, daemonSocketPath } from './reply/codexDaemon.ts'
 import { RealTmux, realPs } from './reply/terminal.ts'
+import { CodexConfigGuard } from './reply/codexConfigGuard.ts'
+import { RealGit } from './git/diff.ts'
 import { FeedStore } from './rows/store.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -174,6 +176,8 @@ export function main(argv: string[]): void {
     claudeLogin: new ClaudeLogin({ shimDir: join(feedDir, 'login-shim'), logDir: feedDir, recheck: () => claudeAuth.refresh() }),
     // [常に許可] で、もう設定にあるルールを足さない（#705）。設定ファイルを読むだけ
     allowedRules: (cwd) => allowRules(cwd, homedir()),
+    // Codex を起こす前の確かめ（#856）。**本物の git とファイルを見るのはここで組んだものだけ**
+    codexConfig: new CodexConfigGuard(new RealGit(), feedDir),
     // 添付の原本の寿命（#792）。本物の置き場を掃除するのはここで組んだものだけ。`SAI_ATTACHMENT_TTL_DAYS=0` で消さない（計測とログだけ）
     attachmentSweep: { ttlMs: attachmentTtlDays() * 86_400_000, logPath: join(feedDir, 'attachments.log') },
     // Codex の共有の app-server を読むだけで見る（#848）。**本物のソケットに繋ぐのはここで組んだものだけ**。繋ぐのは settings.json の `codex_daemon` が入のときだけ

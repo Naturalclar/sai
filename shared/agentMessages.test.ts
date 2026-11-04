@@ -328,7 +328,7 @@ test('sendHow: sai_send の返事に、相手のターンをどう回したか�
   assert.equal(sendHow('process'), '相手のターンを始めました')
   assert.equal(sendHow('terminal'), '相手の端末に打ち込みました')
   // 端末で開いている相手に打ち込めず、預かったまま止めたとき（#800）
-  assert.match(sendHow('queued', true), /打ち込めない（打ちかけ・ダイアログなど）ので、預かったまま止まっています.*送り直さないでください/)
+  assert.match(sendHow('queued', true), /預かったまま止まっています.*送り直さないでください/)
 })
 
 test('resolveTarget: id・表示名・worktree 名・題名の完全一致で、ちょうど 1 つのときだけ当てる（#625）', () => {

@@ -26,6 +26,7 @@ export function DiffButton({ summary, open, onToggle, prLink }: DiffButtonProps)
         <>
           <span className="add">+{shortCount(summary.added)}</span>
           <span className="del">-{shortCount(summary.removed)}</span>
+          {Boolean(summary.codex_config) && <span className="codex-config">.codex</span>}
           {summary.pr && !prLink && <span className="pr">#{summary.pr.number}</span>}
         </>
       )}

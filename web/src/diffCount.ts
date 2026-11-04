@@ -13,7 +13,7 @@ export function shortCount(n: number): string {
 
 /** 差分があるか。ファイルが変わっていれば行数が 0（バイナリだけ）でも「ある」 */
 export function hasDiff(s: SessionDiffSummaryResponse): boolean {
-  return s.files > 0 || s.untracked > 0 || Boolean(s.pr)
+  return s.files > 0 || s.untracked > 0 || (s.codex_config ?? 0) > 0 || Boolean(s.pr)
 }
 
 /** PR のリンクの見た目の区別（#536）。色だけ変える。開いているものが普段の形
@@ -53,6 +53,7 @@ export function diffTitle(s: SessionDiffSummaryResponse | null, open: boolean): 
   else lines.push('比べる相手のブランチが見つかりません')
   lines.push(`未コミット: ${s.working.files} ファイル +${s.working.added} -${s.working.removed}`)
   if (s.untracked > 0) lines.push(`追跡外: ${s.untracked} ファイル`)
+  if (s.codex_config) lines.push(`サブディレクトリの .codex/: ${s.codex_config} ファイル`)
   if (s.pr) lines.push(`PR #${s.pr.number}（${prState(s.pr)}）`)
   return lines.join('\n')
 }

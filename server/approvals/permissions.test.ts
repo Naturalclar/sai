@@ -237,3 +237,18 @@ test('bashRuleSets: 本物の読み方は、無いファイルだけを無いと
   await assert.rejects(readSettingsStrict('/'), 'ディレクトリのように読めないものは投げる')
   assert.equal(await bashRuleSets('/w/repo', '/home/me', async () => { throw new Error('EACCES') }), null)
 })
+
+test('bashRuleSets: SAI_CLAUDE_ARGS で設定の読み方を変えていれば null（#864 のレビュー）', async () => {
+  const saved = process.env.SAI_CLAUDE_ARGS
+  try {
+    for (const args of ['--settings x.json', '--setting-sources=project', '--model m --settings=x.json']) {
+      process.env.SAI_CLAUDE_ARGS = args
+      assert.equal(await bashRuleSets('/w/repo', '/home/me', async () => null), null, args)
+    }
+    process.env.SAI_CLAUDE_ARGS = '--model m'
+    assert.notEqual(await bashRuleSets('/w/repo', '/home/me', async () => null), null)
+  } finally {
+    if (saved === undefined) delete process.env.SAI_CLAUDE_ARGS
+    else process.env.SAI_CLAUDE_ARGS = saved
+  }
+})

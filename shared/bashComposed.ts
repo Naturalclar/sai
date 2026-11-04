@@ -35,6 +35,11 @@ export interface ComposedPlace {
   repo: string
   /** ホーム（`cd ~/…` を読むため。分からなければ空） */
   home: string
+  /**
+   * パスを実際の場所（realpath）にする（`cd` の行き先がシンボリックリンクで外を指していないか見る。#864 のレビュー）。
+   * 無い・読めないときは null（`cd` は断る）。省略は字の上だけで見る（テスト）。本物を渡すのはサーバ
+   */
+  resolve?: (path: string) => string | null
   /** 効いている許可のルール（`allow`）の表記 */
   allow: readonly string[]
   /** 効いている `ask` と `deny` のルールの表記。当たりうる部品があれば答えない */
@@ -113,6 +118,8 @@ function blocked(words: readonly string[], block: readonly string[], opaque: Rea
     // 中身の分からない語は、空白で割られて何語にもなりうるので、そこから先は全部一致しうる
     for (const [n, w] of shape.words.entries()) {
       if (opaque.has(n)) return true
+      // サブコマンドの前にフラグが挟まった形（`git --no-pager push`・`git -P push`）は、そのフラグが何を取るか知らないので当たりうる扱い
+      if (n > 0 && words[n]?.startsWith('-') && !w.startsWith('-')) return true
       if (words[n] !== w) return false
     }
     return shape.kind === 'prefix' || words.length === shape.words.length || [...opaque].some((n) => n >= shape.words.length)
@@ -190,8 +197,31 @@ function cdTarget(target: string | undefined, quoted: boolean, first: boolean, d
   const from = place.written?.startsWith('/') ? normalize(place.written) : ''
   const to = place.cwd.startsWith('/') ? normalize(place.cwd) : ''
   if (from && to && from !== to && within(next, from)) next = `${to}${next.slice(from.length)}`
+  if (place.resolve) {
+    const real = place.resolve(next)
+    if (!real) return refuseForm('cd_outside')
+    next = normalize(real)
+  }
   if (!place.roots.some((root) => root.startsWith('/') && within(next, normalize(root)))) return refuseForm('cd_outside')
   return next
+}
+
+/**
+ * ルールで当てる部品の引数が、リポジトリの外を指していないか（#864 のレビュー）。ルールは語の前方一致なので、`rm -rf ..`・
+ * `tee /etc/x`・`sed -i … ~/.zshrc` まで当たる。Claude Code は外のパスへの書き込みをルールがあっても聞くので、SAI も答えない。
+ * パスに見える語（`/` を含む・`..`・`~` で始まる。`--x=…` と `-o…` は値の所）は、いまの場所から読んでどれかの worktree の中であること
+ */
+function argsInside(words: readonly string[], here: string, roots: readonly string[]): boolean {
+  if (!here) return words.slice(1).every((w) => !/[/~]|^\.\.?$/.test(w))
+  const trees = roots.filter((r) => r.startsWith('/')).map((r) => normalize(r))
+  return words.slice(1).every((word) => {
+    let w = word.includes('=') ? word.slice(word.indexOf('=') + 1) : word
+    if (w.startsWith('-')) w = w.replace(/^-+[A-Za-z]*/, '')
+    if (w.startsWith('~')) return false
+    if (!w.includes('/') && w !== '..' && w !== '.') return true
+    const at = normalize(w.startsWith('/') ? w : `${here}/${w}`)
+    return trees.some((t) => within(at, t))
+  })
 }
 
 /** 部品の語を、シェルが同じ語に読む文字に戻す（`bashRulePlan()` に渡すため）。中身の分からない語は `X` にする */
@@ -275,7 +305,7 @@ function walk(command: string, dir: string, place: ComposedPlace, depth: number,
     const ruleable = !isWrapperCommand(first) && !('reason' in bashRulePlan(wordsText(words, opaque), here, place.home))
     // 中身の分からない語（`$( … )`）がある部品は、ルールで当てない: 結果がフラグ（`-c`・`-C`）になっても、ルールで当てた先を確かめられない（#864 のレビュー）。
     // 中身の分からない語を受けるのは `notReadOnly()`（`echo "$( … )"` だけ）
-    const byRule = ruleable && opaque.size === 0 && place.allow.some((rule) => hits(ruleShape(rule), words, opaque))
+    const byRule = ruleable && opaque.size === 0 && argsInside(words, here, place.roots) && place.allow.some((rule) => hits(ruleShape(rule), words, opaque))
     if (!byRule) {
       const why = notReadOnly(text, here, place.repo, place.roots, join === '|')
       if (why) return refusePart(why)

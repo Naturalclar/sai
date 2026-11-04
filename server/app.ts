@@ -2,6 +2,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { appendFile, readFile, realpath, stat } from 'node:fs/promises'
+import { realpathSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { basename, extname, join, resolve, sep } from 'node:path'
 import { historyIconUrl, ICON_MAX_BYTES, ICON_MIME, iconUrl, sniffImageType } from '../shared/icon.ts'
@@ -1288,7 +1289,14 @@ export function createApp(
     const top = place.roots.filter((root) => withinDir(place.cwd, root)).sort((x, y) => y.length - x.length)[0]
     const upper = top && top !== place.cwd ? await bashRuleSets(top).catch(() => null) : { allow: [], block: [] }
     if (!upper) return false
-    const verdict = composedVerdict(command, { cwd: place.cwd, written: cwd, roots: place.roots, repo: githubRepoOf(owner?.remote), home: homedir(), allow: rules.allow, block: [...rules.block, ...upper.block] })
+    const realOf = (path: string): string | null => {
+      try {
+        return realpathSync(path)
+      } catch {
+        return null
+      }
+    }
+    const verdict = composedVerdict(command, { cwd: place.cwd, written: cwd, resolve: realOf, roots: place.roots, repo: githubRepoOf(owner?.remote), home: homedir(), allow: rules.allow, block: [...rules.block, ...upper.block] })
     if (!verdict.ok) return false
     if (!approvals.answer(a.approval_id, { behavior: 'allow', updatedInput: a.input })) return false
     logAnswer(a, cwd, '', 'parts', 'allow', false, false, plan.reason, { rule: verdict.rule, read: verdict.read })

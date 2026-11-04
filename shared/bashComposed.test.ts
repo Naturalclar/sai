@@ -228,3 +228,25 @@ test('composedVerdict: 入れ子の for で同じ名前を付け直す形・読�
     no(c, { allow: ['Bash(tool-a:*)', 'Bash(export:*)', 'Bash(source:*)', 'Bash(alias:*)', 'Bash(set:*)', 'Bash(unset:*)'] })
   }
 })
+
+test('composedVerdict: ルールで当てる部品の、パスに見える引数はリポジトリの中であること（#864 のレビュー）', () => {
+  const over = { allow: ['Bash(tool-w:*)', 'Bash(tool-a:*)'] }
+  for (const c of ['echo "$(true)" && tool-w -rf ../..', 'for f in a; do tool-w /etc/$f; done', 'cd /work/repo && tool-w ../other', 'echo hi && tool-w x ~/.zshrc', 'echo hi && tool-w --out=/tmp/x', 'echo hi && tool-w -o/tmp/x', 'echo hi && tool-w a/../../../x']) {
+    no(c, over)
+  }
+  for (const c of ['echo hi && tool-w src/a.ts', 'echo hi && tool-w ./b', 'echo hi && tool-w /work/repo-b/x', 'echo hi && tool-a origin/main']) ok(c, over)
+})
+
+test('composedVerdict: cd の行き先は、渡された resolve で実際の場所にしてから見る（シンボリックリンクで外へ出ない。#864 のレビュー）', () => {
+  const resolve = (p: string) => (p.startsWith('/work/repo/link') ? `/elsewhere${p.slice('/work/repo/link'.length)}` : p.startsWith('/work/repo/gone') ? null : p)
+  assert.deepEqual(no('cd /work/repo/link && tool-c', { resolve }), { ok: false, form: 'cd_outside' })
+  no('cd /work/repo/gone && tool-c', { resolve })
+  ok('cd /work/repo/src && tool-c', { resolve })
+})
+
+test('composedVerdict: サブコマンドの前にフラグが挟まった形は ask / deny に当たりうる扱い（#864 のレビュー）', () => {
+  const over = { allow: ['Bash(tool-g:*)'], block: ['Bash(tool-g push:*)'] }
+  assert.deepEqual(no('echo hi && tool-g --no-pager push', over), { ok: false, part: 'blocked' })
+  no('echo hi && tool-g -P push', over)
+  ok('echo hi && tool-g log', over)
+})

@@ -140,6 +140,9 @@ export async function allowRules(cwd: string, home: string): Promise<string[]> {
  * 読むだけ。読めなければ・JSON として読めない・大きすぎる・権限で読めない設定が 1 つでもあれば null（答えない側に倒す。`allowRules()` と違い、空を「当たらない」と読ませない）
  */
 export async function bashRuleSets(cwd: string, home: string, read?: ReadSettings): Promise<{ allow: string[]; block: string[] } | null> {
+  // 運用者が SAI_CLAUDE_ARGS で設定の読み方を変えている（`--settings` の中の ask / deny・`--setting-sources` で外した設定）なら、
+  // SAI には効いているルールが分からないので答えない（#864 のレビュー）
+  if (/(?:^|\s)--(?:settings|setting-sources)(?:[=\s]|$)/.test(process.env.SAI_CLAUDE_ARGS ?? '')) return null
   try {
     const { sources, rules } = await collectPermissions(cwd, { home, read: read ?? readSettingsStrict })
     // JSON として読めない設定がある（そこに deny があったかもしれない）なら、答えない側に倒す（#864 のレビュー）

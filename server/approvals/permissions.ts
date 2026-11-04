@@ -120,6 +120,19 @@ export async function allowRules(cwd: string, home: string): Promise<string[]> {
   }
 }
 
+/**
+ * その cwd に効いている Bash の判定に使うルールの表記（#863。部品ごとに見て答えるため）。`allow` は許可、`block` は `ask` と `deny`。
+ * 読むだけ。読めなければ null（答えない側に倒す。`allowRules()` と違い、空を「当たらない」と読ませない）
+ */
+export async function bashRuleSets(cwd: string, home: string): Promise<{ allow: string[]; block: string[] } | null> {
+  try {
+    const { rules } = await collectPermissions(cwd, { home })
+    return { allow: rules.filter((r) => r.kind === 'allow').map((r) => r.rule), block: rules.filter((r) => r.kind !== 'allow').map((r) => r.rule) }
+  } catch {
+    return null
+  }
+}
+
 export async function collectPermissions(
   cwd: string,
   options: { home: string; env?: NodeJS.ProcessEnv; platform?: NodeJS.Platform; read?: ReadSettings } ,

@@ -72,6 +72,8 @@ interface Word {
   loose: boolean
   /** 引用符の外に `^` か、頭でない `~` がある（zsh の拡張グロブ。`extendedglob` が入っていると `^README.md` はほかの全部のファイルに展開される） */
   xglob: boolean
+  /** `=` で始まる（素の語なら zsh の `=cmd` の展開）。受けるのは出すだけのコマンド（`echo`）の引数だけ（#863） */
+  eq: boolean
 }
 
 /** いまの場所（`cd` で変わる）と、出てはいけない根 */
@@ -437,9 +439,12 @@ class Reader {
   private readonly text: string
   private i = 0
   private depth = 0
+  /** 最初のコマンドを、パイプの後ろ（前の出力を読む）として読む（#863。組み合わせの部品を 1 つずつ確かめるとき） */
+  private lead: boolean
 
-  constructor(text: string) {
+  constructor(text: string, piped = false) {
     this.text = text
+    this.lead = piped
   }
 
   /** コマンドの並びを読む。`close` があれば `)` まで（サブシェル・コマンド置換の中） */
@@ -494,7 +499,9 @@ class Reader {
         this.list({ ...place }, true)
         pipeline.push('(')
       } else {
-        pipeline.push(this.command(place, pipeline.length > 0))
+        const piped = pipeline.length > 0 || this.lead
+        this.lead = false
+        pipeline.push(this.command(place, piped))
       }
       expectCommand = false
     }
@@ -540,6 +547,8 @@ class Reader {
     if (!NO_FILES.has(name) && inHomeZone(place.root)) return refuse('path')
     // `$( … )` の結果を受けてよいのは、出すだけのコマンドだけ
     if (check !== prints && args.some((w) => w.opaque)) return refuse('opaque')
+    // `=` で始まる語も、出すだけのコマンドだけ（`echo "=== x ==="`。zsh が `=cmd` をパスに変えても、出すだけなので害が無い。#863）
+    if (check !== prints && args.some((w) => w.eq)) return refuse('syntax')
     check(args, place, piped)
     return name
   }
@@ -547,7 +556,7 @@ class Reader {
   /** 語 1 つ。素の字・`'…'`・`"…"`・`$( … )` だけでできていること */
   private word(place: Place): Word {
     const start = this.i
-    const w: Word = { text: '', opaque: false, bare: true, glob: false, tilde: this.text[start] === '~', xglob: false, loose: false }
+    const w: Word = { text: '', opaque: false, bare: true, glob: false, tilde: this.text[start] === '~', xglob: false, loose: false, eq: false }
     for (;;) {
       const c = this.text[this.i]
       if (c === undefined || c === ' ' || c === '\t' || c === '\n' || c === ';' || c === '|' || c === '&' || c === ')') break
@@ -590,8 +599,9 @@ class Reader {
       } else refuse('syntax')
     }
     if (this.i === start) refuse('syntax')
-    // `=cmd`（zsh の展開）は、素の語の頭で意味が変わる。代入（`X=1 cmd`）は、コマンドの名前の形でないので下で断られる
-    if (this.text[start] === '=' || w.text.startsWith('=')) refuse('syntax')
+    // `=cmd`（zsh の展開）は、素の語の頭で意味が変わる。代入（`X=1 cmd`）は、コマンドの名前の形でないので下で断られる。
+    // 受けるのは出すだけのコマンドの引数だけで、決めるのは `command()`（#863）
+    if (this.text[start] === '=' || w.text.startsWith('=')) w.eq = true
     return w
   }
 
@@ -617,9 +627,10 @@ export const READ_ONLY_MAX_CHARS = 1000
  * 読むだけと分かっているコマンドか（#749）。そうなら空、違えば理由の種類。**分からないものは全部「違う」**。
  * `cwd` はセッションの行のもの（分からなければ、ファイルを読む形・`cd` は通さない）
  * `roots` はそのセッションのリポジトリの worktree のトップ（サーバが git から引いたもの。#783）。cwd がこのどれにも入っていなければ、
- * ファイルに触るコマンドを 1 つも受けない（渡さなければ空 = 受けない）
+ * ファイルに触るコマンドを 1 つも受けない（渡さなければ空 = 受けない）。
+ * `piped` は、最初のコマンドをパイプの後ろ（前の出力を読む）として読む（#863。組み合わせの部品を 1 つずつ確かめるとき。`head -5` は単独だと端末を読む）
  */
-export function notReadOnly(command: string, cwd: string, repo = '', roots: readonly string[] = []): NotReadOnly | '' {
+export function notReadOnly(command: string, cwd: string, repo = '', roots: readonly string[] = [], piped = false): NotReadOnly | '' {
   // 字の種類を先に絞る: タブ・改行以外の制御文字（`\r` も）は読めない側
   // eslint-disable-next-line no-control-regex
   if (!command.trim() || command.length > READ_ONLY_MAX_CHARS || /[\u0000-\u0008\u000b-\u001f\u007f]/.test(command)) return 'syntax'
@@ -637,7 +648,7 @@ export function notReadOnly(command: string, cwd: string, repo = '', roots: read
   const open = (t: string) => within(at, t) && !at.slice(t.length).split('/').some((seg) => seg && isSecretPath(seg))
   const root = at && trees.some((t) => within(at, t)) && trees.every((t) => !within(at, t) || open(t)) ? at : ''
   try {
-    const reader = new Reader(command)
+    const reader = new Reader(command, piped)
     reader.list({ dir: root, root, roots: root ? trees : [], repo: /^[\w.-]+\/[\w.-]+$/.test(repo) ? repo.toLowerCase() : '' }, false)
     return reader.done() ? '' : 'syntax'
   } catch (err) {

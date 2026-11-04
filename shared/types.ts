@@ -1471,8 +1471,11 @@ export interface ApprovalLogRow {
   tool: string
   /** 書かれるルールの組（`rulesKey()`。`Bash(pnpm test:*) + Bash(tee:*)`）。作れないツール・コマンドは空 */
   rule: string
-  /** 誰が答えたか。`jev` は自動の「常に許可」（#499） */
-  by: 'human' | 'jev'
+  /**
+   * 誰が答えたか。`jev` は Jev の自動の許可（#499 / #749）、`parts` は SAI が部品ごとに見た今回だけの許可（#863。部品が全部、効いている
+   * 許可のルールか読むだけで、つなぎ方が安全な形）
+   */
+  by: 'human' | 'jev' | 'parts'
   behavior: 'allow' | 'deny'
   /** 「常に許可」で答えた（ルールを書いた） */
   remember: boolean
@@ -1495,6 +1498,10 @@ export interface ApprovalLogRow {
    * `rule` は空・`remember` は false（規則を書くのは Codex で、SAI は書いていない）で、[常に許可] を勧める回数にも数えない
    */
   codex_kept?: CodexKeptLogged
+  /** `by: 'parts'` の行だけ（#863）: 許可のルールに当たった部品の数（`$( … )` の中・`for` の回ごとも数える） */
+  parts_rule?: number
+  /** `by: 'parts'` の行だけ（#863）: 読むだけと分かった部品の数 */
+  parts_read?: number
 }
 
 /**

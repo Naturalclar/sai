@@ -1006,3 +1006,18 @@ test('notReadOnly: Jev が全部を見ていない長さのコマンドは通さ
   // 入れ子が深すぎるものも読めない側
   assert.equal(check('echo ' + '$('.repeat(20) + 'pwd' + ')'.repeat(20)), 'syntax')
 })
+
+test('notReadOnly: piped なら最初のコマンドをパイプの後ろとして読む（#863。組み合わせの部品を 1 つずつ確かめるとき）', () => {
+  for (const c of ['head -5', 'tail -3', 'grep fix', 'wc -l', 'sort -u']) {
+    assert.notEqual(check(c), '', `${c}: 単独では端末を読む`)
+    assert.equal(notReadOnly(c, CWD, REPO, TREES, true), '', `${c}: パイプの後ろなら読むだけ`)
+  }
+  // パイプの後ろでも、知らないコマンド・書く形は今までどおり
+  assert.equal(notReadOnly('tee out.txt', CWD, REPO, TREES, true), 'command')
+  assert.equal(notReadOnly('head -5 > out.txt', CWD, REPO, TREES, true), 'syntax')
+})
+
+test('notReadOnly: = で始まる語は、出すだけのコマンド（echo）の引数だけ受ける（#863）', () => {
+  for (const c of ['echo "=== a ==="', "echo '=x'", 'echo =x']) assert.equal(check(c), '', c)
+  for (const c of ['grep "=x" a.txt', "cat '=x'", 'git log =x', '=echo x']) assert.equal(check(c), 'syntax', c)
+})

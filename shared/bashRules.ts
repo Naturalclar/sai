@@ -200,10 +200,55 @@ interface SplitParts {
   folded: Set<string>
   /** ヒアドキュメントを受けた部品（`parts` の番号）。`python3HeredocRule()` の例外を当てるかに使う */
   heredocs: Set<number>
+  /** 部品ごとの、元の文字の範囲（`[start, end)`。#863 の組み合わせで使う） */
+  spans: { start: number; end: number }[]
+  /** 部品ごとの、前のつなぎ（`''`＝先頭・`&&`・`||`・`;`（改行も）・`|`） */
+  ops: BashJoin[]
+  /** `$( … )`（組み合わせを見るときだけ受ける。#863）。`part` / `word` はそれが入った部品・語の番号、`inner` は中身の文字 */
+  subs: { part: number; word: number; inner: string }[]
+  /** `$名前` / `${名前}` を含む部品（組み合わせを見るときだけ受ける。#863）。番号 → 名前 */
+  vars: Map<number, Set<string>>
 }
 
-/** 部品に分ける。語は引用符を外した文字。切れない・通らない形（展開・サブシェル・ファイルへのリダイレクト・`&`）は理由の種類を返す */
-function splitParts(command: string): SplitParts | BashNoRuleReason {
+/** 部品の前のつなぎ（#863） */
+export type BashJoin = '' | '&&' | '||' | ';' | '|'
+
+/**
+ * `$( … )` の閉じの `)` の位置（`from` は `$(` の直後）。閉じが無ければ -1。引用符の中の `)` は数えない。
+ * 中身は呼び手がもう一度 `splitParts()` に通すので、ここで読み違えても（ヒアドキュメント・`case`）中身の側で断られる
+ */
+function substitutionEnd(text: string, from: number): number {
+  let depth = 1
+  for (let k = from; k < text.length; k++) {
+    const c = text[k]!
+    if (c === '\\') k++
+    else if (c === "'") {
+      k = text.indexOf("'", k + 1)
+      if (k < 0) return -1
+    } else if (c === '"') {
+      for (k++; k < text.length && text[k] !== '"'; k++) {
+        if (text[k] === '\\') k++
+        else if (text.startsWith('$(', k)) {
+          k = substitutionEnd(text, k + 2)
+          if (k < 0) return -1
+        }
+      }
+      if (k >= text.length) return -1
+    } else if (c === '(') depth++
+    else if (c === ')' && --depth === 0) return k
+  }
+  return -1
+}
+
+/** `$名前` / `${名前}`（`rest` は `$` から先）。違えば null */
+const VARIABLE = /^\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/
+
+/**
+ * 部品に分ける。語は引用符を外した文字。切れない・通らない形（展開・サブシェル・ファイルへのリダイレクト・`&`）は理由の種類を返す。
+ * `compose` は、組み合わせを見るとき（#863。`splitComposed()`）: `$( … )` と `$名前` を、中身を `subs` / `vars` に控えて読み進める
+ * （受けてよいかは呼び手が決める）。代わりに、ヒアドキュメント・畳む `"$(cat <<…)"`・コメントは全部断る
+ */
+function splitParts(command: string, compose = false): SplitParts | BashNoRuleReason {
   // 行の継続（`\` + 改行）は下で読み飛ばす。先に空白へ置き換えると、`\` で終わるコメント行の次の行まで捨ててしまう
   // （bash はコメントの中の `\` を継続にしない。#710 のレビュー）
   // `\r` の混ざったコマンドは組まない。bash は `\r` を語の文字として読むので（`EOF\r` の行はヒアドキュメントを閉じない・`a\rb` は 1 語）、
@@ -214,6 +259,18 @@ function splitParts(command: string): SplitParts | BashNoRuleReason {
   const quoted = new Set<string>()
   const folded = new Set<string>()
   const heredocs = new Set<number>()
+  const spans: { start: number; end: number }[] = []
+  const ops: BashJoin[] = []
+  const subs: { part: number; word: number; inner: string }[] = []
+  const vars = new Map<number, Set<string>>()
+  /** いまの部品の頭の位置（まだ字が無ければ -1）と、前のつなぎ */
+  let partStart = -1
+  let join: BashJoin = ''
+  const addVar = (name: string) => {
+    const set = vars.get(parts.length) ?? new Set<string>()
+    set.add(name)
+    vars.set(parts.length, set)
+  }
   // いまの語・いまの部品に、畳んだ `"$(cat <<…)"` が混ざったか
   let wordFolded = false
   let partFolded = false
@@ -233,9 +290,16 @@ function splitParts(command: string): SplitParts | BashNoRuleReason {
     wordQuoted = false
     wordFolded = false
   }
-  const endPart = () => {
+  /** `at` は部品を終えた区切りの位置、`next` はその区切り（次の部品の前のつなぎ）。空の部品はつなぎを上書きしない（`a &&` + 改行 + `b`） */
+  const endPart = (at: number, next: BashJoin = ';') => {
     endWord()
-    if (words.length > 0) parts.push(words)
+    if (words.length > 0) {
+      parts.push(words)
+      spans.push({ start: partStart < 0 ? at : partStart, end: at })
+      ops.push(join)
+      join = next
+    }
+    partStart = -1
     words = []
     partFolded = false
     partRedirected = false
@@ -245,13 +309,16 @@ function splitParts(command: string): SplitParts | BashNoRuleReason {
   for (let i = 0; i < text.length; i++) {
     const c = text[i]!
     if (c === '#' && word === null) {
-      if (!lineStart) return 'comment'
+      if (!lineStart || compose) return 'comment'
       const end = text.indexOf('\n', i)
       i = (end < 0 ? text.length : end) - 1
       continue
     }
     if (c === '\n') lineStart = true
-    else if (c !== ' ' && c !== '\t') lineStart = false
+    else if (c !== ' ' && c !== '\t') {
+      lineStart = false
+      if (partStart < 0 && c !== ';' && c !== '|' && c !== '&') partStart = i
+    }
     // 行の継続（`\\` + 改行）は語に何も足さないので数えない
     if (c === "'" || c === '"' || (c === '\\' && text[i + 1] !== '\n')) wordQuoted = true
     if (c === "'") {
@@ -265,6 +332,7 @@ function splitParts(command: string): SplitParts | BashNoRuleReason {
       // `"$(cat <<'EOF' … EOF)"` は中身ごと空の語として読む（この形だけは展開でも通った）
       // 頭の字面が合うときだけ残りを写して確かめる（引用符のたびに残り全部を写さない）
       const wrapped = text.startsWith('"$(cat <<', i) ? quotedCatHeredocEnd(text.slice(i)) : -1
+      if (wrapped > 0 && compose) return 'heredoc'
       if (wrapped > 0) {
         word = word ?? ''
         wordFolded = true
@@ -276,6 +344,23 @@ function splitParts(command: string): SplitParts | BashNoRuleReason {
       let j = i + 1
       for (; j < text.length && text[j] !== '"'; j++) {
         const d = text[j]!
+        if (d === '$' && compose) {
+          // 組み合わせを見るとき（#863）: `"$( … )"` と `"$名前"` は控えて読み進める（語の字には `$` から先をそのまま足す）
+          if (text[j + 1] === '(' && text[j + 2] !== '(') {
+            const close = substitutionEnd(text, j + 2)
+            if (close < 0) return 'unclosed'
+            subs.push({ part: parts.length, word: words.length, inner: text.slice(j + 2, close) })
+            body += text.slice(j, close + 1)
+            j = close
+            continue
+          }
+          const v = VARIABLE.exec(text.slice(j))
+          if (!v) return 'expansion'
+          addVar(v[1] ?? v[2]!)
+          body += v[0]
+          j += v[0].length - 1
+          continue
+        }
         if (d === '$' || d === '`') return 'expansion' // 引用符の中でも展開される
         if (d === '\\' && j + 1 < text.length) body += text[++j]!
         else body += d
@@ -299,17 +384,17 @@ function splitParts(command: string): SplitParts | BashNoRuleReason {
       continue
     }
     if (c === '\n' || c === ';') {
-      endPart()
+      endPart(i, ';')
       continue
     }
     if (c === '&' && text[i + 1] === '&') {
-      endPart()
+      endPart(i, '&&')
       i++
       continue
     }
     if (c === '|') {
       if (text[i + 1] === '&') return 'redirect'
-      endPart()
+      endPart(i, text[i + 1] === '|' ? '||' : '|')
       if (text[i + 1] === '|') i++
       continue
     }
@@ -319,7 +404,7 @@ function splitParts(command: string): SplitParts | BashNoRuleReason {
       if (!m) {
         // 引用符つきの目印のヒアドキュメントは、本文ごと読み飛ばす（閉じの行が無ければ今までどおり断る）
         const end = quotedHeredocEnd(rest)
-        if (end < 0) return redirectReason(rest) // ファイルへのリダイレクト・読めないヒアドキュメント・`&`（バックグラウンド）
+        if (end < 0 || compose) return redirectReason(rest) // ファイルへのリダイレクト・読めないヒアドキュメント・`&`（バックグラウンド）
         endWord()
         // 渡してよい形かは**ここで**決める（目印のあとに語は続かないので、部品の語はもう全部読めている）。
         // あとで決めると、閉じたあとの行の別の理由が先に返って、記録の「頭から読んで最初に当たった 1 つ」が崩れる（#751 のレビュー）
@@ -337,15 +422,55 @@ function splitParts(command: string): SplitParts | BashNoRuleReason {
       i += m[0].length - 1
       continue
     }
+    // 組み合わせを見るとき（#863）: `$( … )` と `$名前` は控えて読み進める。語には、受けたかが分かるように `$` から先をそのまま足す
+    if (c === '$' && compose) {
+      wordQuoted = true
+      if (text[i + 1] === '(' && text[i + 2] !== '(') {
+        const close = substitutionEnd(text, i + 2)
+        if (close < 0) return 'unclosed'
+        subs.push({ part: parts.length, word: words.length, inner: text.slice(i + 2, close) })
+        word = (word ?? '') + text.slice(i, close + 1)
+        i = close
+        continue
+      }
+      const v = VARIABLE.exec(text.slice(i))
+      if (!v) return 'expansion'
+      addVar(v[1] ?? v[2]!)
+      word = (word ?? '') + v[0]
+      i += v[0].length - 1
+      continue
+    }
     // 展開・サブシェル・波括弧
     if (c === '$' || c === '`') return 'expansion'
     if (c === '(' || c === ')') return 'subshell'
     if (c === '{' || c === '}') return 'brace'
     word = (word ?? '') + c
   }
-  endPart()
-  return { parts, quoted, folded, heredocs }
+  endPart(text.length)
+  return { parts, quoted, folded, heredocs, spans, ops, subs, vars }
 }
+
+/**
+ * 組み合わせを見るための分け方（#863。`shared/bashComposed.ts` だけが使う）。分け方は `bashRulePlan()` と同じ 1 つ（`splitParts()`）で、
+ * 違うのは `$( … )` と `$名前` を控えて読み進めることと、ヒアドキュメント・コメントを全部断ること。
+ * 部品ごとの元の文字の範囲・前のつなぎ・`$( … )` の中身・`$名前` の名前を返す
+ */
+export function splitComposed(command: string): Omit<SplitParts, 'folded' | 'heredocs'> | BashNoRuleReason {
+  if (command.includes('\r')) return 'odd_command'
+  const split = splitParts(command, true)
+  if (typeof split === 'string') return split
+  const { parts, quoted, spans, ops, subs, vars } = split
+  return { parts, quoted, spans, ops, subs, vars }
+}
+
+/** 前に付くだけの語・権限を上げる語・引数をコマンドとして走らせる語か（#755 の `wrapper`。#863 はこの頭の部品をルールで当てない） */
+export function isWrapperCommand(first: string): boolean {
+  const base = first.slice(first.lastIndexOf('/') + 1)
+  return WRAPPERS.has(base) || MORE_WRAPPERS.has(base) || ARG_RUNNERS.has(base)
+}
+
+/** シェルの構文の語か（`for` / `if` / `do` …） */
+export const isShellKeyword = (word: string): boolean => KEYWORDS.has(word)
 
 /**
  * ヒアドキュメントの本文が終わる所（閉じの行の終わり）を、`from`（本文の頭の直前の改行）から探す。無ければ -1。

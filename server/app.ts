@@ -57,6 +57,7 @@ import type { SessionTurnResponse, TurnOutputResponse, TurnStepsResponse,
   Replying,
   ReplyingMap,
   ReplyQueueResponse,
+  ApprovalLogRow,
   ReplyRequest,
   ReplyResponse,
   SessionDetailResponse,
@@ -122,6 +123,8 @@ import type { OpencodeApp } from './reply/opencodeServer.ts'
 import { OpencodePermissions } from './reply/opencodePermissions.ts'
 import { approvalMapKey, CodexDialogs, DIALOG_SCAN_TTL_MS, mergeApprovalMaps } from './reply/codexDialogs.ts'
 import { JevRisk } from './approvals/jev.ts'
+import { composedVerdict } from '../shared/bashComposed.ts'
+import { within as withinDir } from '../shared/bashRules.ts'
 import { isJevAuto, jevAutoAllows, jevAutoDecision, jevAutoEligible, jevLogged, jevLowestRule, jevPercent, jevRuleState } from '../shared/jev.ts'
 import type { JevJudge } from './approvals/jev.ts'
 import { CodexTerminals, type CodexTerminalSource } from './reply/codexTerminal.ts'
@@ -610,6 +613,11 @@ export interface TerminalDeps {
    * （本物の `~/.claude/settings.json` を読むのは main.ts だけ。既定で読むと、テストの結果が回したマシンの設定で変わる）
    */
   allowedRules?: (cwd: string) => Promise<string[]>
+  /**
+   * その cwd に効いている Bash のルール（#863。`allow` と、`ask` / `deny` をまとめた `block`）。ルールを作れない Bash を部品ごとに見て
+   * 答えるのに使う。**省略は「答えない」**（本物の設定を読むのは main.ts だけ）。読めなければ null
+   */
+  bashRuleSets?: (cwd: string) => Promise<{ allow: string[]; block: string[] } | null>
   /** Codex の画像生成で作った画像の置き場（#575）。テストでは一時ディレクトリを指す */
   codexImages?: CodexImages
   /** 画像の軽い版を作る口（#589）。テストでは偽の縮める口を渡した Thumbnails か noThumbs */
@@ -683,6 +691,7 @@ export function createApp(
   const claudeAuth = terminal.claudeAuth ?? new NoClaudeAuth()
   const claudeLogin = terminal.claudeLogin ?? new NoClaudeLogin()
   const allowedRules = terminal.allowedRules ?? (async () => [] as string[])
+  const bashRuleSets = terminal.bashRuleSets
   // ログインを聞き直した失敗（`<id>\n<since>` → その問い合わせ）。同じ失敗で何度も `claude` を起こさない。
   // 問い合わせそのものを持つのは、同時に来た応答（一覧と詳細）の後の方も答えを待つため（待たないと、印の無い失敗を先に返す）
   const authAsked = new Map<string, Promise<unknown>>()
@@ -984,11 +993,11 @@ export function createApp(
    * その許可に Jev が付けていた確率（届いていなければ理由）も残す（#749。控えを見るだけで、ここからは聞かない）。
    * `jevOn` は答えたときの設定（`settings.json` の `jev`）: 切っていれば、前に聞いた控えが残っていても `not_asked`（画面にも出していない）
    */
-  const logAnswer = (a: Approval, cwd: string, rule: string, by: 'human' | 'jev', behavior: 'allow' | 'deny', remember: boolean, jevOn: boolean, noRule?: NoRuleReason) => {
+  const logAnswer = (a: Approval, cwd: string, rule: string, by: ApprovalLogRow['by'], behavior: 'allow' | 'deny', remember: boolean, jevOn: boolean, noRule?: NoRuleReason, parts?: { rule: number; read: number }) => {
     try {
       const now = Date.now()
       const waited = Math.max(0, Math.round((now - Date.parse(a.since)) / 1000))
-      approvalLog.record({ ts: new Date(now).toISOString(), id: a.id, cwd, tool: a.tool_name, rule, by, behavior, remember, waited_s: Number.isFinite(waited) ? waited : 0, ...(!rule && noRule ? { no_rule: noRule } : {}), ...jevLogged(jevOn ? jevRisk.peek(a.approval_id) : undefined) })
+      approvalLog.record({ ts: new Date(now).toISOString(), id: a.id, cwd, tool: a.tool_name, rule, by, behavior, remember, waited_s: Number.isFinite(waited) ? waited : 0, ...(!rule && noRule ? { no_rule: noRule } : {}), ...(parts ? { parts_rule: parts.rule, parts_read: parts.read } : {}), ...jevLogged(jevOn ? jevRisk.peek(a.approval_id) : undefined) })
     } catch {
       // 記録できなくても答えは止めない
     }
@@ -1250,6 +1259,42 @@ export function createApp(
     if (lines.length > 0) void appendFile(join(store.directory, 'reply.log'), lines.join('')).catch(() => {})
   }
   jevRisk.onArrive = () => void jevAutoTick()
+
+  /**
+   * ルールを作れない Bash の許可を、部品ごとに見て答える（#863。判定は `shared/bashComposed.ts` の `composedVerdict()` の 1 つ）。
+   * 部品が全部、効いている許可のルールに当たるか読むだけと分かり、つなぎ方が知っている安全な形だけなら、**今回だけ許可**で答える
+   * （覚えない＝`updatedPermissions` を付けない。新しい許可を作らない）。Jev には聞かない（Jev の自動とは別の道・別の記録 `by: 'parts'`）。
+   * - 呼ぶのは許可を預かった時（POST /api/approvals）だけ。**読む経路からは呼ばない**。預かるのは SAI が起こしたターンの許可だけ
+   *   （端末の Claude は自分の画面で聞く。#843）。許可を聞かないモードのターンからは、そもそも許可が来ない
+   * - Claude の Bash だけ（`jevAutoEligible()` と同じ線）。「常に許可」のルールを組める形（`alwaysPlan()` がルールを返す）は人に回す
+   * - cwd・置き場・ルールはセッションの行と設定から（リクエストからは受けない）。どれかが読めなければ答えない
+   * - 記録に残すのは、部品ごとの根拠の数だけ（コマンドの全文は書かない）
+   */
+  const composedAuto = async (a: Approval): Promise<boolean> => {
+    if (!bashRuleSets || !jevAutoEligible(a)) return false
+    const command = typeof a.input.command === 'string' ? a.input.command : ''
+    if (!command) return false
+    const { sessions } = await store.sessions(90)
+    const owner = sessions.find((session) => session.id === a.id)
+    const cwd = owner?.cwd ?? ''
+    if (!cwd) return false
+    const plan = await alwaysPlan(a, cwd)
+    if (plan.rules.length > 0 || !plan.reason || plan.reason === 'not_bash') return false
+    const [place, rules] = await Promise.all([readRoots(cwd), bashRuleSets(cwd).catch(() => null)])
+    if (!rules) return false
+    // 許可のルールは「効いている許可」と同じ cwd から読む。止める側（ask / deny）は、cwd がトップより下なら worktree のトップの分も足す
+    // （Claude がトップの設定も読んでいたときに、そこの deny を見落とさない。多く読むのは答えない側）
+    const top = place.roots.filter((root) => withinDir(place.cwd, root)).sort((x, y) => y.length - x.length)[0]
+    const upper = top && top !== place.cwd ? await bashRuleSets(top).catch(() => null) : { allow: [], block: [] }
+    if (!upper) return false
+    const verdict = composedVerdict(command, { cwd: place.cwd, written: cwd, roots: place.roots, repo: githubRepoOf(owner?.remote), home: homedir(), allow: rules.allow, block: [...rules.block, ...upper.block] })
+    if (!verdict.ok) return false
+    if (!approvals.answer(a.approval_id, { behavior: 'allow', updatedInput: a.input })) return false
+    logAnswer(a, cwd, '', 'parts', 'allow', false, false, plan.reason, { rule: verdict.rule, read: verdict.read })
+    answered.add(a, 'allow', 'SAI が部品ごとに見て許可')
+    void appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${a.id} SAI が部品ごとに見て今回だけ許可（ルールに当たる部品 ${verdict.rule}・読むだけの部品 ${verdict.read}。ルールを作れない形: ${plan.reason}）\n`).catch(() => {})
+    return true
+  }
 
   /**
    * 質問（AskUserQuestion）で止まっているセッションの、選択肢まで入った質問（#333）。フックの待ちの行には質問の文しか無いので、
@@ -4129,8 +4174,10 @@ export function createApp(
     if (!b.input || typeof b.input !== 'object' || Array.isArray(b.input)) return error(res, 400, 'input must be an object')
     if (!run.running(b.id)) return error(res, 409, 'このセッションは返信を処理中ではありません')
     const approval = approvals.ask(b.id, b.tool_name, b.input, typeof b.tool_use_id === 'string' ? b.tool_use_id : '')
+    // 部品ごとに見て答えられるものは、Jev に聞く前に答える（#863）。答えられなければ今までどおり
+    const composed = await composedAuto(approval).catch(() => false)
     // 自動の「常に許可」（#499）はここから動き出す（Jev に聞く → 届いたら答える）。画面のポーリングを待たない
-    void jevAutoTick()
+    if (!composed) void jevAutoTick()
     return json(res, { approval_id: approval.approval_id }, 201)
   }
 

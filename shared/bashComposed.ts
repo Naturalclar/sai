@@ -245,7 +245,7 @@ function walk(command: string, dir: string, place: ComposedPlace, depth: number,
       for (const item of items) {
         const replaced = substitute(body, name, item)
         if (replaced === null) return refuseForm('for_form')
-        walk(replaced, here, place, depth + 1, false, count, moved)
+        walk(replaced, here, place, depth + 1, false, count, cdDone)
       }
       k = close
       continue

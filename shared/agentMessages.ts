@@ -551,14 +551,6 @@ export const TERMINAL_HELD_PAUSED =
 export const CODEX_CONFIG_PAUSED =
   'サブディレクトリの .codex/ を人が確かめるまで、Codex を起こさずに預かっています。要対応で中身を確かめて「このまま起こす」を押すと送ります'
 
-/** 確かめの行を人が片付けたあとの `paused`（#856）。起動しても回さない。「続けて送る」で確かめ直す */
-export const CODEX_CONFIG_DISMISSED = '確かめの行を片付けたので止めています。送るなら「続けて送る」でもう一度確かめます'
-
-/** 確かめ（#856）で止めている預かりか */
-export function codexConfigPaused(reason: string): boolean {
-  return reason === CODEX_CONFIG_PAUSED || reason === CODEX_CONFIG_DISMISSED
-}
-
 /** Codex を起こす前の確かめ（#856）で、預かれない起動（新しいセッション・分岐・レビュー）を断るときの文 */
 export const CODEX_CONFIG_REFUSED = 'サブディレクトリの .codex/ を人が確かめるまで、Codex を起こしません。要対応で確かめて「このまま起こす」を押してから、もう一度送ってください'
 

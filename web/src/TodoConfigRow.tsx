@@ -54,7 +54,7 @@ export function TodoConfigRow({ item, hold, now }: Props) {
           <button type="button" className="primary" disabled={busy} onClick={allow} title="中身を確かめたので、Codex を起こす（中身が変わるまで覚える。確かめられないものは今回だけ）">
             このまま起こす
           </button>
-          <button type="button" disabled={busy} onClick={dismiss} title="この行を片付ける（起こさない。預かった返信は止まったまま）">
+          <button type="button" disabled={busy} onClick={dismiss} title="この行を片付ける（起こさない。確かめで止めていた預かりの返信も取り消す）">
             片付ける
           </button>
         </span>

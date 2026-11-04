@@ -230,10 +230,8 @@ import {
   replyOf,
   resolveTarget,
   targetRefusal,
-  CODEX_CONFIG_DISMISSED,
   CODEX_CONFIG_PAUSED,
   CODEX_CONFIG_REFUSED,
-  codexConfigPaused,
   TERMINAL_HELD_PAUSED,
   sessionLabel,
   tokensLabel,
@@ -2614,7 +2612,7 @@ export function createApp(
       return { ...refuse(409, CODEX_CONFIG_PAUSED), retry: true }
     }
     // 確かめで止まっている預かりがあれば、その後ろに並べる（先に預けたものを追い越さない）
-    const behind = codexConfigPaused(queue.paused(id))
+    const behind = queue.paused(id) === CODEX_CONFIG_PAUSED
     const item = behind ? queue.add(id, text, attachments, o.url, new Date(), o.origin ?? '') : queue.addFirst(id, text, attachments, o.url, new Date(), o.origin ?? '')
     if (!item) return refuse(409, `預かれるのは ${QUEUE_MAX} 件までです。取り消すか、前の返信が終わるのを待ってください`)
     queue.pause(id, CODEX_CONFIG_PAUSED)
@@ -2746,10 +2744,7 @@ export function createApp(
       if (!item) return refuse(409, `預かれるのは ${QUEUE_MAX} 件までです。取り消すか、前の返信が終わるのを待ってください`)
       await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} 処理中なので預かった（${queue.size(id)} 件目）\n`).catch(() => {})
       // 端末のターンが閉じたか分からずに止めた預かりの後ろに並んだメッセージも、止まっていると返す（#800 のレビュー）
-      const stuck = (!!o.terminalFallback && queue.paused(id) === TERMINAL_HELD_PAUSED) || codexConfigPaused(queue.paused(id))
-      // 片付けた預かりに新しく届いたら、確かめ直して行を出す。**止めの理由は片付けたまま**（`CODEX_CONFIG_PAUSED` に戻すと、
-      // 確かめが通ったときに片付けた本文まで人が押さないまま回る）。回すのは人の「このまま起こす」か「続けて送る」だけ
-      if (queue.paused(id) === CODEX_CONFIG_DISMISSED && (await codexConfigStop(id, cwd))) codexConfigQueued.add(id)
+      const stuck = (!!o.terminalFallback && queue.paused(id) === TERMINAL_HELD_PAUSED) || queue.paused(id) === CODEX_CONFIG_PAUSED
       const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd, via: 'queued', queue_id: item.queue_id, ...(stuck ? { past_terminal: true as const, stuck: true as const } : {}) }
       return { status: 202, body: payload }
     }
@@ -3287,7 +3282,7 @@ export function createApp(
         bgRetryAt.delete(id)
       }
       // 確かめで止めた預かり（#856）は、もう一度確かめるだけ（「続けて送る」では飛ばせない）。`.codex/` が片付いていれば回る
-      if (codexConfigPaused(queue.paused(id))) bgRetryAt.delete(id)
+      if (queue.paused(id) === CODEX_CONFIG_PAUSED) bgRetryAt.delete(id)
       queue.resume(id)
       try {
         await drain(id)
@@ -3323,8 +3318,11 @@ export function createApp(
     if (!allow) {
       codexConfigHolds.delete(id)
       codexConfigQueued.delete(id)
-      // 片付けたものは、再起動のあとも人が「続けて送る」を押すまで回さない
-      if (queue.paused(id) === CODEX_CONFIG_PAUSED) queue.pause(id, CODEX_CONFIG_DISMISSED)
+      // 確かめで止めていた預かりも取り消す（止めたまま残すと、あとで確かめが通ったときに人が押さないまま回る道ができる）
+      if (queue.paused(id) === CODEX_CONFIG_PAUSED) {
+        queue.removeWhere((to) => to === id)
+        bgRetryAt.delete(id)
+      }
       return json(res, { id })
     }
     const seen = (body as { fingerprint?: unknown } | null)?.fingerprint
@@ -3336,8 +3334,7 @@ export function createApp(
     }
     codexConfigHolds.delete(id)
     codexConfigQueued.delete(id)
-    // 人が押したので、片付けたあとに出し直した行（`CODEX_CONFIG_DISMISSED`）でも回す
-    if (codexConfigPaused(queue.paused(id))) {
+    if (queue.paused(id) === CODEX_CONFIG_PAUSED) {
       bgRetryAt.delete(id)
       queue.resume(id)
       await drain(id)

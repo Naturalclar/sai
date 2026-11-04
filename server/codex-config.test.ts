@@ -7,7 +7,7 @@ import type { Server } from 'node:http'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { CODEX_CONFIG_DISMISSED, CODEX_CONFIG_PAUSED } from '../shared/agentMessages.ts'
+import { CODEX_CONFIG_PAUSED } from '../shared/agentMessages.ts'
 import type { CodexConfigAsk, ReplyResponse, SessionDiffResponse, SessionDiffSummaryResponse, SessionsResponse } from '../shared/types.ts'
 import { createApp } from './app.ts'
 import { Approvals } from './approvals/approvals.ts'
@@ -261,68 +261,14 @@ test('再起動: 行はメモリだけだが、止めた預かりをもう一度
   await clear('C1@r')
 })
 
-test('再起動: 片付けた預かりは、確かめが通るようになっていても回さない', async () => {
-  ask = ASK
-  await post(session('C1@r', 'reply?days=30'), { text: 'こんにちは' })
-  await post(session('C1@r', 'codex-config/dismiss'), {})
-  assert.equal((await list()).queued['C1@r']?.paused, CODEX_CONFIG_DISMISSED)
-  ask = null
-  const app = createApp(
-    new FeedStore(dir),
-    join(dir, 'dist'),
-    { running: () => false, snapshot: () => ({}), async start() {} },
-    new Approvals(),
-    new BuildFreshness(join(dir, 'dist'), [], 0),
-    undefined,
-    new Authenticator(async () => null),
-    { tmux: { run: async () => '' }, ps: async () => '', alive: () => false, codexAppServer: async () => false, codexWriterActive: async () => false, codexApp, codexConfig: gate },
-    undefined,
-    git,
-  )
-  const other = createServer((req, res) => void app(req, res))
-  await new Promise<void>((resolve) => other.listen(0, '127.0.0.1', resolve))
-  const addr = other.address()
-  try {
-    await fetch(`http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}/api/sessions?days=30`)
-    assert.deepEqual(calls, [])
-  } finally {
-    await new Promise<void>((resolve) => other.close(() => resolve()))
-  }
-  await clear('C1@r')
-})
-
-test('片付けた預かりに新しく届いたら、もう一度確かめて行を出す', async () => {
+test('片付ける: 確かめで止めていた預かりも取り消す。あとで確かめが通っても、再起動しても回らない', async () => {
   ask = ASK
   await post(session('C1@r', 'reply?days=30'), { text: '1 通目' })
-  await post(session('C1@r', 'codex-config/dismiss'), {})
-  const res = await post(session('C1@r', 'reply?days=30'), { text: '2 通目', queue: true })
-  assert.equal(((await res.json()) as ReplyResponse).stuck, true)
-  const data = await list()
-  assert.ok(data.codex_config_holds?.['C1@r'])
-  assert.deepEqual(data.queued['C1@r']?.items.map((q) => q.text), ['1 通目', '2 通目'])
-  assert.deepEqual(calls, [])
-  await clear('C1@r')
-})
-
-test('片付けた預かりは、新しく届いても人が押すまで回らない', async () => {
-  ask = ASK
-  await post(session('C1@r', 'reply?days=30'), { text: '1 通目' })
-  await post(session('C1@r', 'codex-config/dismiss'), {})
-  ask = null
   await post(session('C1@r', 'reply?days=30'), { text: '2 通目', queue: true })
+  assert.equal((await post(session('C1@r', 'codex-config/dismiss'), {})).status, 200)
   const data = await list()
-  assert.deepEqual(calls, [])
-  assert.equal(data.queued['C1@r']?.paused, CODEX_CONFIG_DISMISSED)
-  await clear('C1@r')
-})
-
-test('片付けたあとに出し直した行: 確かめが通るようになっても、再起動しても回らない。押せば回る', async () => {
-  ask = ASK
-  await post(session('C1@r', 'reply?days=30'), { text: '1 通目' })
-  await post(session('C1@r', 'codex-config/dismiss'), {})
-  await post(session('C1@r', 'reply?days=30'), { text: '2 通目', queue: true })
-  assert.ok((await list()).codex_config_holds?.['C1@r'], '行は出し直す')
-  assert.equal((await list()).queued['C1@r']?.paused, CODEX_CONFIG_DISMISSED)
+  assert.equal(data.queued['C1@r'], undefined, '本文は残さない')
+  assert.equal(data.codex_config_holds?.['C1@r'], undefined)
   ask = null
   // 同じ cwd の新しいセッションが確かめを通す
   assert.equal((await post('/api/sessions/new?days=30', { text: 'はじめて', from: 'C1@r', agent: 'codex' })).status, 202)
@@ -348,12 +294,39 @@ test('片付けたあとに出し直した行: 確かめが通るようになっ
   }
   await list()
   assert.deepEqual(calls, ['startThread', 'start:N1'], '片付けた本文は回らない')
-  assert.equal((await list()).queued['C1@r']?.items.length, 2)
-  // 行が残っていれば、押して回せる
+})
+
+test('片付けたあとに届いた返信は、もう一度確かめて行を出す', async () => {
   ask = ASK
-  await post(session('C1@r', 'reply?days=30'), { text: '3 通目', queue: true })
-  await post(session('C1@r', 'codex-config/allow'), { fingerprint: 'fp1' })
-  assert.deepEqual(calls, ['startThread', 'start:N1', 'start:C1'])
+  await post(session('C1@r', 'reply?days=30'), { text: '1 通目' })
+  await post(session('C1@r', 'codex-config/dismiss'), {})
+  await post(session('C1@r', 'reply?days=30'), { text: '2 通目' })
+  const data = await list()
+  assert.ok(data.codex_config_holds?.['C1@r'])
+  assert.deepEqual(data.queued['C1@r']?.items.map((q) => q.text), ['2 通目'])
+  assert.deepEqual(calls, [])
+  await clear('C1@r')
+})
+
+test('別の cwd の行で「このまま起こす」を押しても、止めた預かりは確かめを飛ばさない', async () => {
+  ask = ASK
+  await post(session('C1@r', 'reply?days=30'), { text: 'こんにちは' })
+  // 同じセッションを元にした新しいセッションが止まり、行が新しい cwd のものに置き換わる（ここでは確かめの結果は同じ形）
+  assert.equal((await post('/api/sessions/new?days=30', { text: 'はじめて', from: 'C1@r', agent: 'codex' })).status, 409)
+  allowAnswer = null
+  // 押すと預かりは回しに行くが、回る前にもう一度確かめる。まだ通らなければ止まったまま
+  const realAllow = gate.allow
+  gate.allow = async (_cwd, fingerprint) => {
+    allowed.push(fingerprint)
+    return null
+  }
+  try {
+    await post(session('C1@r', 'codex-config/allow'), { fingerprint: 'fp1' })
+  } finally {
+    gate.allow = realAllow
+  }
+  assert.deepEqual(calls, [])
+  assert.equal((await list()).queued['C1@r']?.paused, CODEX_CONFIG_PAUSED)
   await clear('C1@r')
 })
 

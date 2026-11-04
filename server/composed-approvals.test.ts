@@ -37,7 +37,7 @@ const jev: JevJudge = async (state) => {
   return 0.1
 }
 
-async function start(approvals: Approvals, rules: TerminalDeps['bashRuleSets']): Promise<string> {
+async function start(approvals: Approvals, rules: TerminalDeps['bashRuleSets'], extra: Partial<TerminalDeps> = {}): Promise<string> {
   const app = createApp(
     new FeedStore(feedDir),
     join(dir, 'dist'),
@@ -46,7 +46,7 @@ async function start(approvals: Approvals, rules: TerminalDeps['bashRuleSets']):
     undefined,
     undefined,
     undefined,
-    { tmux: { run: async () => '' }, ps: async () => '', jev, ...(rules ? { bashRuleSets: rules } : {}) },
+    { tmux: { run: async () => '' }, ps: async () => '', jev, ...(rules ? { bashRuleSets: rules } : {}), ...extra },
     undefined,
     repoGit,
   )
@@ -98,11 +98,11 @@ test('部品ごとに見て答える（#863）: 部品が全部許されてい�
   const had = (await rows()).length
 
   // どれも「常に許可」のルールを組めない形（$( … )・for）。ルールの部品と読むだけの部品の組み合わせ・パイプの後ろ・for・$( … )・リポジトリの中への cd
-  const mixed = await ask('tool-a build zzmixed "$(git rev-parse HEAD)" && git status')
-  const piped = await ask('tool-a build zzpiped $(tool-b x) | head -5')
+  const mixed = await ask('echo "$(git rev-parse HEAD)" && tool-a build zzmixed && git status')
+  const piped = await ask('echo "zzpiped $(git log -1)" && tool-a build x | head -5')
   const loop = await ask('for f in zza zzb; do tool-b $f; done')
-  const sub = await ask('tool-b "$(tool-a build zzsub)"')
-  const cd = await ask(`cd ${dir}/pkg && cd .. && tool-a build zzcd "$(git rev-parse HEAD)"`)
+  const sub = await ask('echo "zzsub $(git rev-parse HEAD)"; tool-b y')
+  const cd = await ask(`cd ${dir}/pkg && cd .. && tool-a build zzcd && echo "$(git rev-parse HEAD)"`)
   for (const [id, what] of [[mixed, 'ルール + 読むだけ'], [piped, 'パイプの後ろ'], [loop, 'for'], [sub, '$( … )'], [cd, 'リポジトリの中への cd']] as const) {
     const answer = await approvals.wait(id, 10)
     assert.equal(answer?.behavior, 'allow', what)
@@ -132,11 +132,11 @@ test('部品ごとに見て答える（#863）: 部品が全部許されてい�
   for (let i = 0; i < 50 && (await rows()).length < had + 5; i++) await settle()
   const mine = (await rows()).slice(had)
   assert.deepEqual(mine.map((r) => [r.by, r.behavior, r.remember, r.rule, r.parts_rule, r.parts_read]), [
+    ['parts', 'allow', false, '', 1, 3],
+    ['parts', 'allow', false, '', 1, 3],
+    ['parts', 'allow', false, '', 2, 0],
     ['parts', 'allow', false, '', 1, 2],
-    ['parts', 'allow', false, '', 2, 1],
-    ['parts', 'allow', false, '', 2, 0],
-    ['parts', 'allow', false, '', 2, 0],
-    ['parts', 'allow', false, '', 1, 1],
+    ['parts', 'allow', false, '', 1, 2],
   ])
   assert.ok(mine.every((r) => r.no_rule), 'ルールを作れなかった理由の種類を添える')
   const text = JSON.stringify(mine)
@@ -166,9 +166,19 @@ test('部品ごとに見て答える（#863）: cwd が worktree のトップよ
     read.push(at)
     return at === sub ? { allow: ['Bash(tool-a build:*)'], block: [] } : { allow: [], block: ['Bash(tool-a:*)'] }
   })
-  const res = await fetch(`${base}/api/approvals`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: 'S1@r', tool_name: 'Bash', input: { command: 'tool-a build "$(git rev-parse HEAD)"' }, tool_use_id: 't' }) })
+  const res = await fetch(`${base}/api/approvals`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: 'S1@r', tool_name: 'Bash', input: { command: 'echo "$(git rev-parse HEAD)" && tool-a build x' }, tool_use_id: 't' }) })
   const id = ((await res.json()) as { approval_id: string }).approval_id
   for (let i = 0; i < 5; i++) await settle()
   assert.equal(await approvals.wait(id, 10), null, 'トップの deny に当たるので人に残る')
   assert.deepEqual([...new Set(read)].sort(), [await realpath(dir), sub].sort())
+})
+
+test('部品ごとに見て答える（#863）: 組めるルールが全部もう設定にあるのに聞かれた許可（covered）には答えない（#864 のレビュー）', async () => {
+  const approvals = new Approvals()
+  const allow = ['Bash(tool-a:*)', 'Bash(tool-b:*)']
+  const base = await start(approvals, async () => ({ allow, block: [] }), { allowedRules: async () => allow })
+  const res = await fetch(`${base}/api/approvals`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: 'S1@r', tool_name: 'Bash', input: { command: 'tool-a x && tool-b y' }, tool_use_id: 't' }) })
+  const id = ((await res.json()) as { approval_id: string }).approval_id
+  for (let i = 0; i < 5; i++) await settle()
+  assert.equal(await approvals.wait(id, 10), null, 'Claude 自身の別の確かめで止まった回なので、人に残る')
 })

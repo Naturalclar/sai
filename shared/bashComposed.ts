@@ -42,7 +42,7 @@ export interface ComposedPlace {
 }
 
 /** 受けなかったつなぎ方の種類。`shared/bashRules.ts` の理由に、ここで足す種類を加えたもの */
-export type ComposedForm = BashNoRuleReason | 'assign' | 'for_form' | 'cd_join' | 'nested' | 'too_long'
+export type ComposedForm = BashNoRuleReason | 'assign' | 'for_form' | 'cd_join' | 'nested' | 'too_long' | 'shell_state'
 
 /**
  * 判定の結果。`ok` のときは、部品ごとの根拠の数（`rule` = ルールに当たった、`read` = 読むだけと分かった）。
@@ -163,7 +163,18 @@ function substitute(body: string, name: string, value: string): string | null {
 interface Count {
   rule: number
   read: number
+  /** 確かめた部品の数（入れ子の `for` は回ごとに読み直すので、掛け算で増える。`MAX_STEPS` で止める） */
+  steps: number
 }
+
+/** 確かめる部品の数の上限（#864 のレビュー。入れ子の `for` でサーバを止めない）。超えたら人に回す */
+export const MAX_STEPS = 200
+
+/**
+ * シェルの状態（PATH・別名・関数・オプション・環境）を変える組み込み（#864 のレビュー）。前の部品がこれだと、後ろの部品を
+ * 「読むだけ」「ルールに当たる」と見た前提（いつもの PATH・別名の無いコマンド）が崩れるので、組み合わせでは受けない
+ */
+const SHELL_STATE = new Set(['export', 'source', '.', 'alias', 'unalias', 'set', 'unset', 'shopt', 'setopt', 'unsetopt', 'declare', 'typeset', 'local', 'readonly', 'hash', 'rehash', 'enable', 'disable', 'function', 'trap', 'ulimit', 'umask', 'emulate', 'autoload', 'zmodload', 'bindkey', 'pushd', 'popd', 'dirs'])
 
 /** `cd` の行き先（語）を、いまの場所から読む。読めない形・リポジトリの外は断る */
 function cdTarget(target: string | undefined, quoted: boolean, first: boolean, dir: string, place: ComposedPlace): string {
@@ -229,6 +240,8 @@ function walk(command: string, dir: string, place: ComposedPlace, depth: number,
       if (close < 0 || ops[close] !== ';') return refuseForm('for_form')
       // `do` の語のすぐ後ろから、`done` の前まで
       const body = command.slice(spans[open]!.start + 2, spans[close]!.start)
+      // 中で同じ名前の `for` が付け直すと、外側の置き換えが内側の本文まで書き換えてしまう（判定した語と走る語がずれる。#864 のレビュー）
+      if (new RegExp(`(?:^|[\\s;&|(])for[ \\t]+${name}(?![A-Za-z0-9_])`).test(body)) return refuseForm('for_form')
       for (const item of items) {
         const replaced = substitute(body, name, item)
         if (replaced === null) return refuseForm('for_form')
@@ -241,6 +254,8 @@ function walk(command: string, dir: string, place: ComposedPlace, depth: number,
     if (/^[A-Za-z_][A-Za-z0-9_]*\+?=/.test(first)) return refuseForm('assign')
     if (vars.has(k)) return refuseForm('expansion')
     const opaque = new Set(subs.filter((s) => s.part === k).map((s) => s.word))
+    if (++count.steps > MAX_STEPS) return refuseForm('too_long')
+    if (SHELL_STATE.has(first)) return refuseForm('shell_state')
     if (blocked(words, place.block, opaque)) return refusePart('blocked')
     if (first === 'cd') {
       // 行き先が確かに変わってから次を走らせる形（`cd x && …`）だけ。`;` / `||` / `|` だと、`cd` に失敗した元の場所で次が走る
@@ -258,7 +273,9 @@ function walk(command: string, dir: string, place: ComposedPlace, depth: number,
     // ルールで当てるのは、その部品だけなら Claude のルールを組める形のときだけ（場所を変えるフラグ・`python3 -c` のように、部品そのものが
     // 理由で聞かれるものは当てない。#864 のレビュー）
     const ruleable = !isWrapperCommand(first) && !('reason' in bashRulePlan(wordsText(words, opaque), here, place.home))
-    const byRule = ruleable && place.allow.some((rule) => hits(ruleShape(rule), words, opaque))
+    // 中身の分からない語（`$( … )`）がある部品は、ルールで当てない: 結果がフラグ（`-c`・`-C`）になっても、ルールで当てた先を確かめられない（#864 のレビュー）。
+    // 中身の分からない語を受けるのは `notReadOnly()`（`echo "$( … )"` だけ）
+    const byRule = ruleable && opaque.size === 0 && place.allow.some((rule) => hits(ruleShape(rule), words, opaque))
     if (!byRule) {
       const why = notReadOnly(text, here, place.repo, place.roots, join === '|')
       if (why) return refusePart(why)
@@ -277,7 +294,7 @@ function walk(command: string, dir: string, place: ComposedPlace, depth: number,
 export function composedVerdict(command: string, place: ComposedPlace): ComposedVerdict {
   if (!command.trim()) return { ok: false, form: 'empty' }
   if (command.length > COMPOSED_MAX_CHARS) return { ok: false, form: 'too_long' }
-  const count: Count = { rule: 0, read: 0 }
+  const count: Count = { rule: 0, read: 0, steps: 0 }
   try {
     walk(command, place.cwd.startsWith('/') ? normalize(place.cwd) : '', place, 0, true, count)
   } catch (err) {
@@ -285,5 +302,5 @@ export function composedVerdict(command: string, place: ComposedPlace): Composed
     return { ok: false, form: 'odd_command' }
   }
   if (count.rule + count.read === 0) return { ok: false, form: 'empty' }
-  return { ok: true, ...count }
+  return { ok: true, rule: count.rule, read: count.read }
 }

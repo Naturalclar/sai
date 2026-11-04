@@ -1279,7 +1279,8 @@ export function createApp(
     const cwd = owner?.cwd ?? ''
     if (!cwd) return false
     const plan = await alwaysPlan(a, cwd)
-    if (plan.rules.length > 0 || !plan.reason || plan.reason === 'not_bash') return false
+    // `covered`（組めるルールが全部もう設定にあるのに聞かれた）は、Claude 自身の別の確かめで止まった回なので答えない（#749 と同じ線。#864 のレビュー）
+    if (plan.rules.length > 0 || !plan.reason || plan.reason === 'not_bash' || plan.reason === 'covered') return false
     const [place, rules] = await Promise.all([readRoots(cwd), bashRuleSets(cwd).catch(() => null)])
     if (!rules) return false
     // 許可のルールは「効いている許可」と同じ cwd から読む。止める側（ask / deny）は、cwd がトップより下なら worktree のトップの分も足す

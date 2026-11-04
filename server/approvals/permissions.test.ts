@@ -230,3 +230,10 @@ test('bashRuleSets: allow と ask / deny を分けて返す。JSON として読�
   files['/home/me/.claude/settings.json'] = '{ not json'
   assert.equal(await bashRuleSets('/w/repo', '/home/me', read), null)
 })
+
+test('bashRuleSets: 本物の読み方は、無いファイルだけを無いとみなす（大きすぎる・読めない設定は null。#864 のレビュー）', async () => {
+  const { readSettingsStrict } = await import('./permissions.ts')
+  assert.equal(await readSettingsStrict('/nonexistent-sai-test/settings.json'), null)
+  await assert.rejects(readSettingsStrict('/'), 'ディレクトリのように読めないものは投げる')
+  assert.equal(await bashRuleSets('/w/repo', '/home/me', async () => { throw new Error('EACCES') }), null)
+})

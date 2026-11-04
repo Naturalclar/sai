@@ -106,6 +106,21 @@ export const readSettingsFile: ReadSettings = async (path) => {
   }
 }
 
+/**
+ * 答える側の判定（#863）のための読み方: **無いときだけ** null。大きすぎる・権限で読めないものは投げる（そこにある deny を「無い」と読まない）
+ */
+export const readSettingsStrict: ReadSettings = async (path) => {
+  let raw: string
+  try {
+    raw = await readFile(path, 'utf-8')
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw err
+  }
+  if (raw.length > MAX_SETTINGS_BYTES) throw new Error('settings too large')
+  return raw
+}
+
 /** その cwd に効いている許可ルールと、読んだファイルの一覧 */
 /**
  * その cwd に効いている**許可**のルールの表記だけ（#705。[常に許可] でもう設定にある部品を足さないために見る）。
@@ -122,11 +137,11 @@ export async function allowRules(cwd: string, home: string): Promise<string[]> {
 
 /**
  * その cwd に効いている Bash の判定に使うルールの表記（#863。部品ごとに見て答えるため）。`allow` は許可、`block` は `ask` と `deny`。
- * 読むだけ。読めなければ・JSON として読めない設定が 1 つでもあれば null（答えない側に倒す。`allowRules()` と違い、空を「当たらない」と読ませない）
+ * 読むだけ。読めなければ・JSON として読めない・大きすぎる・権限で読めない設定が 1 つでもあれば null（答えない側に倒す。`allowRules()` と違い、空を「当たらない」と読ませない）
  */
 export async function bashRuleSets(cwd: string, home: string, read?: ReadSettings): Promise<{ allow: string[]; block: string[] } | null> {
   try {
-    const { sources, rules } = await collectPermissions(cwd, { home, ...(read ? { read } : {}) })
+    const { sources, rules } = await collectPermissions(cwd, { home, read: read ?? readSettingsStrict })
     // JSON として読めない設定がある（そこに deny があったかもしれない）なら、答えない側に倒す（#864 のレビュー）
     if (sources.some((s) => s.broken)) return null
     return { allow: rules.filter((r) => r.kind === 'allow').map((r) => r.rule), block: rules.filter((r) => r.kind !== 'allow').map((r) => r.rule) }

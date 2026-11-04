@@ -85,9 +85,11 @@ test('composedVerdict: ファイルに書く・ヒアドキュメント・代入
 })
 
 test('composedVerdict: $( … ) は中身の部品も許されているときだけ通す（#863）', () => {
-  assert.deepEqual(ok('tool-b "$(tool-a build x)"'), { ok: true, rule: 2, read: 0 })
-  ok('tool-b $(git rev-parse HEAD)')
-  ok('echo "at $(git rev-parse --short HEAD)"')
+  // 中身の分からない語を受けるのは、読むだけの echo だけ（ルールで当てる部品には受けない。結果がフラグになっても確かめられない。#864 のレビュー）
+  assert.deepEqual(ok('echo "at $(git rev-parse --short HEAD)" && tool-a build x'), { ok: true, rule: 1, read: 2 })
+  assert.deepEqual(no('tool-b "$(tool-a build x)"'), { ok: false, part: 'command' })
+  no('tool-b $(git rev-parse HEAD)')
+  no('echo "$(tool-a build x)"')
   // 中身が許されていない
   assert.deepEqual(no('tool-b "$(tool-z x)"'), { ok: false, part: 'command' })
   // 中身の分からない語は、ルールの語に使えない
@@ -166,7 +168,8 @@ test('composedVerdict: 中身の分からない語（$( … )）は ask / deny �
   no('tool-b $(echo "x y")', over)
   no('tool-b x $(echo y)', over)
   // ルールの語の前で食い違えば当たらない
-  ok('tool-a safe $(echo z)', over)
+  // ルールの語の前で食い違えば当たらない（ただし中身の分からない語のある部品は、そもそもルールで当てない）
+  ok('tool-a safe && echo "$(echo z)"', over)
   // Bash の字を含むのに読めない書き方のルール（コンマでつないだものなど）は、全部に当たる扱い
   no('tool-a x', { allow: ['Bash(tool-a:*)'], block: ['Bash(tool-z:*),Read'] })
 })
@@ -210,5 +213,18 @@ test('composedVerdict: 部品そのものが理由で聞かれる形（場所を
   no('git -C /etc push origin main && tool-a x', over)
   no('tool-a x && python3 -c "import os"', over)
   no('git $(tool-a) -C /etc push', over)
-  ok('git log $(tool-a x) -3 && tool-a y', over)
+  no('git log $(tool-a x) -3 && tool-a y', over)
+  no('python3 "$(echo -c)" x', over)
+  no('git "$(echo -C)" /etc status', over)
+})
+
+test('composedVerdict: 入れ子の for で同じ名前を付け直す形・読み直しが多すぎる形・シェルの状態を変える部品は人に回す（#864 のレビュー）', () => {
+  assert.deepEqual(no('for f in tool-a; do\nfor f in tool-z; do\n$f x\ndone\ndone'), { ok: false, form: 'for_form' })
+  // 名前が違えば入れ子でも見る
+  ok('for f in a; do\nfor g in b; do\ntool-b $f $g\ndone\ndone')
+  const many = Array.from({ length: 40 }, (_, n) => `w${n}`).join(' ')
+  assert.deepEqual(no(`for f in ${many}; do\nfor g in ${many}; do\ntool-b $f $g\ndone\ndone`), { ok: false, form: 'too_long' })
+  for (const c of ['export PATH=/work/repo/bin && echo "$(ls)"', 'source ./x.sh && tool-a x', 'alias ls=tool-z && ls', 'set -x && tool-a x', 'unset X && tool-a x']) {
+    no(c, { allow: ['Bash(tool-a:*)', 'Bash(export:*)', 'Bash(source:*)', 'Bash(alias:*)', 'Bash(set:*)', 'Bash(unset:*)'] })
+  }
 })

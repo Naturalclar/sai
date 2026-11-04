@@ -1986,6 +1986,22 @@ export interface SiblingWorktree {
 export interface WorkspacesResponse {
   recorded: string[]
   siblings: SiblingWorktree[]
+  /** `recorded` のうち、新しい worktree を作れるリポジトリのもの（#847。置き場の形が分かるときだけ。分からなければ作る口を出さない） */
+  addable: string[]
+}
+
+/**
+ * POST /api/workspaces。新しい worktree を作る（#847）。**受けるのは名前だけ**で、リポジトリと置き場は `from` の行の cwd からサーバが決める。
+ * 名前はディレクトリ名とブランチ名の両方になる（`shared/worktreeName.ts`）
+ */
+export interface AddWorktreeRequest {
+  from: string
+  name: string
+}
+
+/** できた worktree。`worktree` の鍵で `POST /api/sessions/new` から始める */
+export interface AddWorktreeResponse {
+  worktree: SiblingWorktree
 }
 
 export interface NewSessionResponse {

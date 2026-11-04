@@ -50,6 +50,8 @@ import type { SessionTurnResponse, TurnOutputResponse, TurnStepsResponse,
   NewSessionRequest,
   SiblingWorktree,
   WorkspacesResponse,
+  AddWorktreeRequest,
+  AddWorktreeResponse,
   NewSessionResponse,
   Profile,
   ProfileResponse,
@@ -233,6 +235,8 @@ import {
 import type { PendingReply } from '../shared/agentMessages.ts'
 import { eventKind } from '../shared/events.ts'
 import { CONTEXT_WARN_TOKENS, contextRevKey } from '../shared/contextSize.ts'
+import { createAddWorktree } from './git/worktreeAdd.ts'
+import type { WorktreeAdder } from './git/worktreeAdd.ts'
 import { treeOf, Worktrees } from './git/worktrees.ts'
 import { createMcpRoutes } from './mcp/mcpRoutes.ts'
 import { MCP_SENDS_FILE, McpSendLimiter } from './mcp/sendLimit.ts'
@@ -605,6 +609,8 @@ export interface TerminalDeps {
   claudeAuth?: ClaudeAuthReader
   /** SAI からのログイン（#577）。既定は起こさない（`NoClaudeLogin`）。本物を渡すのは `main.ts` だけ */
   claudeLogin?: ClaudeLoginRunner
+  /** 新しい worktree を作る口（#847）。本物を組むのは `main.ts` だけで、無ければ作らない */
+  worktreeAdder?: WorktreeAdder
   /**
    * その cwd にもう効いている許可のルール（#705。[常に許可] で同じ部品を足さないために見る）。**省略は「読まない」**
    * （本物の `~/.claude/settings.json` を読むのは main.ts だけ。既定で読むと、テストの結果が回したマシンの設定で変わる）
@@ -652,6 +658,8 @@ export function createApp(
   const distRoot = resolve(distDir)
   // 新しいセッションを始められる場所（#319）。`git worktree list` を読むだけ
   const worktrees = new Worktrees(git)
+  // 新しい worktree を作る（#847）。git に書くのはここだけで、形は `server/git/worktreeAdd.ts` の 1 つ
+  const addWorktreeTo = terminal.worktreeAdder ? createAddWorktree({ git, worktrees, adder: terminal.worktreeAdder, selfHost }) : null
   // Claude の transcript の画像（#504）。transcript ごとに読んだところを覚えて、増えた分だけ読み足す
   const transcriptImages = new TranscriptImages()
   // Codex の画像生成で作った画像（#575）。rollout の item_completed から拾い、CODEX_HOME/generated_images/<スレッド>/ の中だけ配る
@@ -2223,7 +2231,29 @@ export function createApp(
         siblings.push({ from: r.s.id, worktree: t.key, cwd: t.path, repo: basename(t.path), branch: t.branch, project: r.s.project })
       }
     }
-    return { recorded, siblings }
+    const addable = addWorktreeTo ? (await Promise.all(read.filter((r) => r.own).map(async (r) => ((await worktrees.parent(r.real)) ? r.s.id : '')))).filter(Boolean) : []
+    return { recorded, siblings, addable }
+  }
+
+  /** POST /api/workspaces（#847）。名前だけを受け、`from` の行の cwd のリポジトリに worktree を作る。始めるのは `POST /api/sessions/new` のまま */
+  const addWorktree = async (req: IncomingMessage, res: ServerResponse, days: number) => {
+    if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
+    if (!addWorktreeTo) return error(res, 404, 'worktree を作る口がありません')
+    let body: unknown
+    try {
+      body = await readJson(req, MAX_REPLY_BYTES)
+    } catch (err) {
+      return error(res, 400, err instanceof Error ? err.message : 'bad body')
+    }
+    const asked = (body && typeof body === 'object' ? body : {}) as Partial<AddWorktreeRequest>
+    if (typeof asked.from !== 'string' || !asked.from || typeof asked.name !== 'string') return error(res, 400, 'from と name が要ります')
+    const { sessions } = await store.sessions(days)
+    const from = sessions.find((s) => s.id === asked.from)
+    if (!from) return error(res, 404, 'session not found in window')
+    const result = await addWorktreeTo(from, asked.name)
+    if ('error' in result) return error(res, result.status, result.error)
+    const payload: AddWorktreeResponse = { worktree: result.worktree }
+    return json(res, payload, 201)
   }
 
   /**
@@ -4766,6 +4796,7 @@ export function createApp(
     const isAuthLogin = path === CLAUDE_LOGIN_PATH
     const isDigestFeedback = path === DIGEST_FEEDBACK_PATH
     const isNewSession = path === NEW_SESSION_PATH
+    const isWorkspaces = path === WORKSPACES_PATH
     // GitHub へのレビューの投稿（#526）。SAI が GitHub に書く唯一の口
     const isPrReview = path.startsWith(`${PRS_PATH}/`) && path.endsWith(PR_REVIEW_SUFFIX)
     // PR の要約を作る（#790）。材料が一言の口に渡る（口が外を向いていれば外に出る）ので、押したときの POST だけ
@@ -4781,11 +4812,11 @@ export function createApp(
     }
     // タグ付きの端末（ユーザーがいない）は画面・REST を使えない。capability を与えた /mcp だけ
     if (who.kind === 'tagged') return error(res, 401, 'unauthorized: タグ付きの端末から使えるのは /mcp だけです')
-    // 書き込みは「返信と新しいセッションと PR のレビューの投稿（#526）は POST」「表示名は PUT」「アイコンは PUT / DELETE」「承認の預かりと答えは POST」「Manager の案を捨てる・入れた（#565）は POST」「自分の表示名は PUT、アイコンは PUT / DELETE」
+    // 書き込みは「返信と新しいセッションと新しい worktree（#847）と PR のレビューの投稿（#526）は POST」「表示名は PUT」「アイコンは PUT / DELETE」「承認の預かりと答えは POST」「Manager の案を捨てる・入れた（#565）は POST」「自分の表示名は PUT、アイコンは PUT / DELETE」
     // 「設定は PUT」「預かった返信の再開は POST、取り消しは DELETE」だけ。それ以外は GET / HEAD のみ
     const writable =
       (method === 'POST' &&
-        (isNewSession || isAuthCheck || isAuthLogin || isReply || isReview || isFork || isPrReview || isPrBrief || isAsk || isAnswer || isAttachUpload || isQueue || isDigestFeedback || isSuggestion || path === USAGE_REFRESH_PATH || path === AGENT_SEND_PATH || path === AGENT_LOOP_PATH || path === AGENT_WAIT_FOR_PATH || isAgentStop || isInterrupt || loopSuffix !== undefined || waitSuffix !== undefined)) ||
+        (isNewSession || isWorkspaces || isAuthCheck || isAuthLogin || isReply || isReview || isFork || isPrReview || isPrBrief || isAsk || isAnswer || isAttachUpload || isQueue || isDigestFeedback || isSuggestion || path === USAGE_REFRESH_PATH || path === AGENT_SEND_PATH || path === AGENT_LOOP_PATH || path === AGENT_WAIT_FOR_PATH || isAgentStop || isInterrupt || loopSuffix !== undefined || waitSuffix !== undefined)) ||
       (method === 'DELETE' && (isQueue || isHistoryIcon || loopSuffix === '/loop')) ||
       (method === 'PUT' && (isMeta || isRead || isProfile || isSettings)) ||
       ((method === 'PUT' || method === 'DELETE') && (isIcon || isProfileIcon))
@@ -4839,6 +4870,7 @@ export function createApp(
         return await queueAction(req, res, id, path.slice(queueAt + QUEUE_SEGMENT.length))
       }
       // `/api/sessions/<id>`（詳細）より先に見る
+      if (isWorkspaces && method === 'POST') return await addWorktree(req, res, parseDays(q.get('days'), 90))
       if (isNewSession) {
         if (method !== 'POST') return error(res, 405, 'method not allowed')
         return await startSession(req, res, parseDays(q.get('days'), 90))

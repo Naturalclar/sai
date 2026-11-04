@@ -27,6 +27,7 @@ import { DEFAULT_PORT, parsePort } from '../shared/port.ts'
 import { createApp } from './app.ts'
 import { ClaudeHooks } from './local/claudeHooks.ts'
 import { ClaudeAuth } from './local/claudeAuth.ts'
+import { RealWorktreeAdder } from './git/worktreeAdd.ts'
 import { ClaudeLogin } from './local/claudeLogin.ts'
 import { allowRules } from './approvals/permissions.ts'
 import { jevFromEnv } from './approvals/jev.ts'
@@ -168,6 +169,8 @@ export function main(argv: string[]): void {
     claudeHooks: new ClaudeHooks(),
     claudeAuth,
     // SAI からログインし直す（#577）。**本物の `claude auth login` を起こすのはここで組んだものだけ**
+    // 新しい worktree を作る（#847）。**git に書く口を組むのはここだけ**
+    worktreeAdder: new RealWorktreeAdder(),
     claudeLogin: new ClaudeLogin({ shimDir: join(feedDir, 'login-shim'), logDir: feedDir, recheck: () => claudeAuth.refresh() }),
     // [常に許可] で、もう設定にあるルールを足さない（#705）。設定ファイルを読むだけ
     allowedRules: (cwd) => allowRules(cwd, homedir()),

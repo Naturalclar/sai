@@ -422,6 +422,16 @@
   .new-session .workspace-list .label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .new-session .workspace-list .cwd { font-family: var(--mono); font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .new-session .workspace-list mark { background: color-mix(in srgb, var(--accent) 28%, transparent); color: var(--ink); border-radius: 3px; padding: 0 1px; }
+  /* 新しい worktree を作る（#847） */
+  .new-session .new-worktree { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+  .new-session .new-worktree .row { display: flex; align-items: center; gap: 8px; width: 100%; }
+  .new-session .new-worktree input { flex: 1; min-width: 0; box-sizing: border-box; font: inherit; font-size: 14px; font-family: var(--mono); color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; }
+  .new-session .new-worktree input:focus { outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent); border-color: var(--accent); }
+  .new-session .new-worktree button { flex: none; font: inherit; font-size: 13px; padding: 5px 12px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--ink); cursor: pointer; }
+  .new-session .new-worktree button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  .new-session .new-worktree button:disabled { opacity: .5; cursor: default; }
+  .new-session .new-worktree button.open { border: 0; padding: 2px 0; color: var(--accent); }
+  .new-session .new-worktree button.open:hover:not(:disabled) { text-decoration: underline; }
   .new-session .actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
   .new-session .actions button { font: inherit; font-weight: 600; padding: 6px 16px; border: 0; border-radius: 8px; background: var(--accent); color: #fff; cursor: pointer; }
   .new-session .actions button:disabled { opacity: .5; cursor: default; }
@@ -675,7 +685,7 @@
        入力欄が全幅なのは幅に関係なく（下の .reply の定義） */
     .reply .row textarea { font-size: 16px; }
     /* 新しいセッションの画面（#314）も同じ理由で幅の条件でも 16px にする */
-    .new-session select, .new-session textarea, .new-session .workspace-picker input { font-size: 16px; }
+    .new-session select, .new-session textarea, .new-session .workspace-picker input, .new-session .new-worktree input { font-size: 16px; }
   }
 
   /* -- タッチ端末: 指で押せる大きさにする。幅ではなく pointer で当てる（タブレットも対象） */

@@ -1,7 +1,7 @@
 // 新しいセッションを始める画面（#314）の判定。DOM に依存しないので newSession.test.ts を node:test で回す。
 // 画面は NewSessionView（選んで送る）と NewSessionStarting（最初の行を待って移る）。
 import { isRemoteHost } from '../../shared/host.ts'
-import type { Replying, SessionSummary, WorkspacesResponse } from '../../shared/types.ts'
+import type { Replying, SessionSummary, SiblingWorktree, WorkspacesResponse } from '../../shared/types.ts'
 
 /** 始められる worktree 1 つ */
 export interface Workspace {
@@ -43,7 +43,7 @@ export function workspaceChoices(sessions: readonly SessionSummary[], selfHost: 
     .sort((a, b) => Date.parse(b.end) - Date.parse(a.end))
     .map((s) => ({ key: s.id, from: s.id, cwd: s.cwd, project: s.project, repo: s.repo, branch: s.branch, end: s.end }))
   const siblings: Workspace[] = (places?.siblings ?? []).map((w) => ({
-    key: `${w.from}#${w.worktree}`,
+    key: siblingKey(w),
     from: w.from,
     worktree: w.worktree,
     cwd: w.cwd,
@@ -53,6 +53,17 @@ export function workspaceChoices(sessions: readonly SessionSummary[], selfHost: 
     end: '',
   }))
   return [...recorded, ...siblings]
+}
+
+/** 兄弟 worktree の、画面の中の鍵（`Workspace.key`） */
+export const siblingKey = (w: Pick<SiblingWorktree, 'from' | 'worktree'>): string => `${w.from}#${w.worktree}`
+
+/** そのリポジトリに worktree を作れるか（#847）。**新しい画面が古いサーバに当たると `addable` が無い**ので、無ければ出さない */
+export const canAddWorktree = (places: Partial<WorkspacesResponse> | null | undefined, from: string): boolean => places?.addable?.includes(from) ?? false
+
+/** 作った worktree（#847）を候補に足す。一覧を取り直さずに、その場で選べるようにする */
+export function withSibling(places: WorkspacesResponse, sibling: SiblingWorktree): WorkspacesResponse {
+  return { ...places, siblings: [...places.siblings.filter((w) => w.worktree !== sibling.worktree), sibling] }
 }
 
 /**

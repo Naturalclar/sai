@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { START_SILENT_MS, startStatus, workspaceChoices, workspaceLabel } from './newSession.ts'
+import { canAddWorktree, START_SILENT_MS, startStatus, workspaceChoices, workspaceLabel } from './newSession.ts'
 import type { SessionSummary } from '../../shared/types.ts'
 
 const s = (over: Partial<SessionSummary>): SessionSummary =>
@@ -59,6 +59,7 @@ test('workspaceChoices: 始められる場所（#319）があれば git の作�
   ]
   const places = {
     recorded: ['a@dev-a'],
+    addable: [],
     siblings: [{ from: 'a@dev-a', worktree: 'k1', cwd: '/w/app.git/dev-b', repo: 'dev-b', branch: 'dev-b', project: 'me/app' }],
   }
   const choices = workspaceChoices(sessions, '', places)
@@ -69,4 +70,11 @@ test('workspaceChoices: 始められる場所（#319）があれば git の作�
   assert.equal(workspaceLabel(choices[1]!), 'me/app · dev-b（dev-b） · 記録なし')
   // 取れなかった（null）ときは今までどおり絞らない（サーバが始めるときに断る）
   assert.deepEqual(workspaceChoices(sessions, '', null).map((w) => w.key), ['tmp@tmp', 'a@dev-a'])
+})
+
+test('canAddWorktree: addable にあるものだけ。古いサーバの応答（addable が無い）では出さず、落ちない（#847 のレビュー）', () => {
+  assert.equal(canAddWorktree({ recorded: [], siblings: [], addable: ['a@dev-a'] }, 'a@dev-a'), true)
+  assert.equal(canAddWorktree({ recorded: [], siblings: [], addable: ['a@dev-a'] }, 'b@dev-b'), false)
+  assert.equal(canAddWorktree({ recorded: [], siblings: [] }, 'a@dev-a'), false)
+  assert.equal(canAddWorktree(null, 'a@dev-a'), false)
 })

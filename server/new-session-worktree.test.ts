@@ -90,7 +90,9 @@ test('GET /api/workspaces: 記録にある cwd は git の作業ツリーの中�
     [['B1@dev-b', 'dev-c', 'dev-c', join(bare, 'dev-c'), worktreeKey(join(bare, 'dev-c')), 'me/app']],
     '記録のある dev-a・下のディレクトリで記録のある dev-b・bare 本体は出さない',
   )
-  assert.equal((await fetch(`${base}/api/workspaces`, { method: 'POST', headers: { Origin: base } })).status, 405, '読むだけ')
+  assert.deepEqual(data.addable, [], '作る口（`worktreeAdder`）が無ければ出さない')
+  assert.equal((await fetch(`${base}/api/workspaces`, { method: 'POST', headers: { Origin: base } })).status, 404, '`createApp` の既定は作らない')
+  assert.equal((await fetch(`${base}/api/workspaces`, { method: 'PUT', headers: { Origin: base } })).status, 405)
 })
 
 test('POST /api/sessions/new: 兄弟 worktree は鍵で選び、サーバが一覧を読み直して引き当てる。ID の repo はその worktree 名', async () => {

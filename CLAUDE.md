@@ -157,7 +157,7 @@ OpenCode (feed/opencode/sai.js) ─┘                           │
 
 ### 差分・PR・メタ・未読・スキル
 
-- **差分**: git は読むだけのサブコマンドだけ（`RealGit` の allowlist）。cwd・ブランチ・パスはリクエストから受けない → docs/internals/diff.md#差分ビューア
+- **差分**: git は読むだけのサブコマンドだけ（`RealGit` の allowlist）。cwd・ブランチ・パスはリクエストから受けない。**例外は `git worktree add` の 1 形だけ**（#847。`server/git/worktreeAdd.ts`。allowlist には足さない。受けるのは検査した名前だけ、本物を組むのは `main.ts` だけ、`git fetch` と消す口は作らない） → docs/internals/diff.md#新しい-worktree-を作る847
 - **Codex のレビュー**: 同一オリジンのみ。預かりに回さない。ほかで開いているスレッドは返信と同じ `codexHeldElsewhere()` で断る → docs/internals/diff.md#codex-にレビューさせる
 - **差分・PR の行コメント**: 画面から直接送らず、返信欄（打ちかけ）に足すだけ → docs/internals/diff.md#差分の行へのコメント
 - **PR と gh**: 外に出る数少ない口。認証は `gh` 任せ、組み立てる形は決め打ち。並べるのは記録で知っている repo だけ（任意の名前を `gh` に渡さない）。失敗しても差分は落とさない → docs/internals/diff.md#github-の-pr-を読む

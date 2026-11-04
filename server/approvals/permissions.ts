@@ -122,11 +122,13 @@ export async function allowRules(cwd: string, home: string): Promise<string[]> {
 
 /**
  * その cwd に効いている Bash の判定に使うルールの表記（#863。部品ごとに見て答えるため）。`allow` は許可、`block` は `ask` と `deny`。
- * 読むだけ。読めなければ null（答えない側に倒す。`allowRules()` と違い、空を「当たらない」と読ませない）
+ * 読むだけ。読めなければ・JSON として読めない設定が 1 つでもあれば null（答えない側に倒す。`allowRules()` と違い、空を「当たらない」と読ませない）
  */
-export async function bashRuleSets(cwd: string, home: string): Promise<{ allow: string[]; block: string[] } | null> {
+export async function bashRuleSets(cwd: string, home: string, read?: ReadSettings): Promise<{ allow: string[]; block: string[] } | null> {
   try {
-    const { rules } = await collectPermissions(cwd, { home })
+    const { sources, rules } = await collectPermissions(cwd, { home, ...(read ? { read } : {}) })
+    // JSON として読めない設定がある（そこに deny があったかもしれない）なら、答えない側に倒す（#864 のレビュー）
+    if (sources.some((s) => s.broken)) return null
     return { allow: rules.filter((r) => r.kind === 'allow').map((r) => r.rule), block: rules.filter((r) => r.kind !== 'allow').map((r) => r.rule) }
   } catch {
     return null

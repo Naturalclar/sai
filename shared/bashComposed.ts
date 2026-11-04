@@ -56,7 +56,11 @@ export const COMPOSED_MAX_CHARS = 4000
 const MAX_DEPTH = 4
 /** `for` の並びに受ける語: 展開もグロブも空白も無い文字だけ（`-` で始まるものも、書いたとおりに渡るだけ） */
 const LOOP_ITEM = /^[\w./:@%+,-]+$/
-const LOOP_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
+/**
+ * `for` の変数に受ける名前: 小文字 3 字までと、よく使う名前だけ（#864 のレビュー）。`for` はその名前に代入するので、`PATH`・`HOME`・
+ * zsh の `path`（`PATH` と結び付いている）のような、シェルや後ろのコマンドの振る舞いを変える名前に当たらないようにする（知っている名前だけ受ける）
+ */
+const LOOP_NAME = /^(?:[a-z]{1,3}|file|name|item|dir|branch|word)$/
 
 class Refused extends Error {
   readonly verdict: ComposedVerdict
@@ -97,14 +101,21 @@ function hits(shape: RuleShape, words: readonly string[], opaque: ReadonlySet<nu
   return shape.words.every((w, n) => !opaque.has(n) && words[n] === w)
 }
 
-/** `ask` / `deny` に当たりうるか。当てる形が分からない Bash のルールは、全部に当たる扱い */
-function blocked(words: readonly string[], block: readonly string[]): boolean {
+/**
+ * `ask` / `deny` に当たりうるか。当てる形が分からない Bash のルール（`Bash` の字を含むのに読めない書き方も）は、全部に当たる扱い。
+ * 中身の分からない語（`opaque`。`$( … )`）は、ルールのどの語とも一致しうるものとして見る（`git $(echo push)` は `Bash(git push:*)` に当たりうる。#864 のレビュー）
+ */
+function blocked(words: readonly string[], block: readonly string[], opaque: ReadonlySet<number>): boolean {
   return block.some((rule) => {
     const shape = ruleShape(rule)
-    if (shape.kind === 'other') return false
+    if (shape.kind === 'other') return rule.includes('Bash')
     if (shape.kind === 'unknown' || shape.kind === 'all') return true
-    // 前方一致の判定は、中身の分からない語があっても字で比べる（当たりうる側に倒す）
-    return shape.words.every((w, n) => words[n] === w) && (shape.kind === 'prefix' || words.length === shape.words.length)
+    // 中身の分からない語は、空白で割られて何語にもなりうるので、そこから先は全部一致しうる
+    for (const [n, w] of shape.words.entries()) {
+      if (opaque.has(n)) return true
+      if (words[n] !== w) return false
+    }
+    return shape.kind === 'prefix' || words.length === shape.words.length || [...opaque].some((n) => n >= shape.words.length)
   })
 }
 
@@ -171,6 +182,9 @@ function walk(command: string, dir: string, place: ComposedPlace, depth: number,
   if (typeof split === 'string') return refuseForm(split)
   const { parts, quoted, spans, ops, subs, vars } = split
   if (parts.length === 0) return refuseForm('empty')
+  // `cd` のある並びは、つなぎが `&&` と `|` だけのときだけ受ける（`cd a && x || y`・`x || cd a && y`・`cd a && x; y` は、`cd` が走らない・
+  // 失敗したときに元の場所で後ろが走り、判定した場所とずれる。#864 のレビュー）
+  if (top && parts.some((w) => w[0] === 'cd') && ops.some((op) => op === '||' || op === ';')) return refuseForm('cd_join')
   let here = dir
   for (let k = 0; k < parts.length; k++) {
     const words = parts[k]!
@@ -207,6 +221,7 @@ function walk(command: string, dir: string, place: ComposedPlace, depth: number,
     if (/^[A-Za-z_][A-Za-z0-9_]*\+?=/.test(first)) return refuseForm('assign')
     if (vars.has(k)) return refuseForm('expansion')
     const opaque = new Set(subs.filter((s) => s.part === k).map((s) => s.word))
+    if (blocked(words, place.block, opaque)) return refusePart('blocked')
     if (first === 'cd') {
       // 行き先が確かに変わってから次を走らせる形（`cd x && …`）だけ。`;` / `||` / `|` だと、`cd` に失敗した元の場所で次が走る
       const next = ops[k + 1]
@@ -214,7 +229,6 @@ function walk(command: string, dir: string, place: ComposedPlace, depth: number,
       here = cdTarget(words[1], quoted.has(`${k}:1`), k === 0, here, place)
       continue
     }
-    if (blocked(words, place.block)) return refusePart('blocked')
     const span = spans[k]!
     const text = command.slice(span.start, span.end).trim()
     const byRule = !isWrapperCommand(first) && place.allow.some((rule) => hits(ruleShape(rule), words, opaque))

@@ -158,3 +158,31 @@ test('composedVerdict: ルールが無く読むだけでもない・空は答え
   no('')
   no('   ')
 })
+
+test('composedVerdict: 中身の分からない語（$( … )）は ask / deny のどの語とも一致しうるものとして見る（#864 のレビュー）', () => {
+  const over = { allow: ['Bash(tool-a:*)', 'Bash(tool-b *)'], block: ['Bash(tool-a danger:*)', 'Bash(tool-b x y)'] }
+  assert.deepEqual(no('tool-a $(echo danger)', over), { ok: false, part: 'blocked' })
+  no('tool-a "da"$(echo nger) z', over)
+  no('tool-b $(echo "x y")', over)
+  no('tool-b x $(echo y)', over)
+  // ルールの語の前で食い違えば当たらない
+  ok('tool-a safe $(echo z)', over)
+  // Bash の字を含むのに読めない書き方のルール（コンマでつないだものなど）は、全部に当たる扱い
+  no('tool-a x', { allow: ['Bash(tool-a:*)'], block: ['Bash(tool-z:*),Read'] })
+})
+
+test('composedVerdict: for の変数は知っている名前だけ（PATH・HOME・zsh の path を変えさせない。#864 のレビュー）', () => {
+  for (const name of ['PATH', 'HOME', 'path', 'IFS', 'GIT_DIR', 'fpath', 'cdpath']) {
+    assert.deepEqual(no(`for ${name} in a; do tool-b x; done`), { ok: false, form: 'for_form' }, name)
+  }
+  for (const name of ['f', 'pr', 'n', 'file', 'name']) ok(`for ${name} in a; do tool-b $${name}; done`)
+})
+
+test('composedVerdict: cd のある並びは && と | だけでつなぐ（#864 のレビュー）', () => {
+  assert.deepEqual(no('cd /work/repo && tool-c || tool-b'), { ok: false, form: 'cd_join' })
+  no('tool-c || cd /work/repo && tool-b')
+  no('cd /work/repo && tool-c; tool-b')
+  ok('cd /work/repo && tool-c | tool-b x && tool-a build')
+  // cd の部品にも ask / deny を当てる
+  no('cd /work/repo && tool-c', { block: ['Bash(cd:*)'] })
+})

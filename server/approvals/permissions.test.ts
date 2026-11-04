@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { argsRules, collectPermissions, managedSettingsPath, orderRules, parseSettings, settingsPaths } from './permissions.ts'
+import { argsRules, bashRuleSets, collectPermissions, managedSettingsPath, orderRules, parseSettings, settingsPaths } from './permissions.ts'
 import { defaultModeHint, isReplyPermissionMode, launchedModeNote, MODE_HINT, MODE_LABEL, modeEmphasis, modeLabel, modeName, modeSkipsRules, REPLY_MODES, replyModeOf, shortReplyMode, skipModeInArgs } from '../../shared/permissions.ts'
 
 test('MODE_HINT / modeLabel: 何が起きるかは日本語で添え、タグ・モーダル用は「名前 — 説明」（#271）', () => {
@@ -219,4 +219,14 @@ test('launchedModeNote: 処理中のターンが今の設定と違うモード�
     '',
     '失敗して残っているだけ（もう動いていない）',
   )
+})
+
+test('bashRuleSets: allow と ask / deny を分けて返す。JSON として読めない設定が 1 つでもあれば null（答えない側。#864 のレビュー）', async () => {
+  const files: Record<string, string> = {
+    '/w/repo/.claude/settings.json': JSON.stringify({ permissions: { allow: ['Bash(tool-a:*)'], ask: ['Bash(tool-b:*)'], deny: ['Bash(tool-c:*)'] } }),
+  }
+  const read = async (path: string) => files[path] ?? null
+  assert.deepEqual(await bashRuleSets('/w/repo', '/home/me', read), { allow: ['Bash(tool-a:*)'], block: ['Bash(tool-c:*)', 'Bash(tool-b:*)'] })
+  files['/home/me/.claude/settings.json'] = '{ not json'
+  assert.equal(await bashRuleSets('/w/repo', '/home/me', read), null)
 })

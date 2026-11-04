@@ -2606,7 +2606,7 @@ export function createApp(
   /** Codex を起こす前の確かめで止めた返信・メッセージを預かって止める（#856）。人が「このまま起こす」を押すと回る */
   const codexConfigHeld = async (id: string, session: SessionSummary, raw: string, cwd: string, text: string, attachments: string[], o: LaunchOptions): Promise<Launched> => {
     // 預かりを回している途中なら、本文はもう先頭にある（`o.queue` は見ない。処理中でなければ預からない返信も、ここでは落とさず預かる）
-    codexConfigQueued.add(id)
+    codexConfigQueued.set(id, cwd)
     if (draining.has(id)) {
       queue.pause(id, CODEX_CONFIG_PAUSED)
       return { ...refuse(409, CODEX_CONFIG_PAUSED), retry: true }
@@ -2716,7 +2716,7 @@ export function createApp(
         // 確かめで止めた（#856）。要約は諦めて、本文は預かったまま止める（押すと要約なしで回る）
         if (out.codexConfig) {
           queue.pause(id, CODEX_CONFIG_PAUSED)
-          codexConfigQueued.add(id)
+          codexConfigQueued.set(id, cwd)
           const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd, via: 'queued', queue_id: item.queue_id, stuck: true }
           return { status: 202, body: payload }
         }
@@ -2813,8 +2813,11 @@ export function createApp(
   const codexConfig = terminal.codexConfig ?? noCodexConfigGate
   /** 確かめで止まっているもの（#856）。メモリだけ（再起動後は、預かりが回るときにもう一度確かめて出し直す） */
   const codexConfigHolds = new Map<string, CodexConfigHold>()
-  /** 預かりを止めた行のセッション。預かりが無くなった（取り消し・送信の停止）ら行も片付ける */
-  const codexConfigQueued = new Set<string>()
+  /**
+   * 確かめで預かりを止めたセッションと、その確かめの cwd。行は 1 セッション 1 つで、新しいセッション（別の worktree）の行で
+   * 上書きされることがあるので、預かりがどの cwd の確かめで止まっているかはここで持つ。預かりが無くなれば行も片付ける
+   */
+  const codexConfigQueued = new Map<string, string>()
   const codexConfigKey = () => [...codexConfigHolds].map(([id, h]) => `${id}:${h.fingerprint}`).join(',')
   /**
    * Codex を起こす前の確かめ（#856）。止めるなら理由の文を返し、要対応に 1 行出す。**Codex を起こす道は、どの接続でも
@@ -2825,10 +2828,10 @@ export function createApp(
     const ask = await codexConfig.check(cwd)
     const before = codexConfigHolds.get(id)
     if (!ask) {
-      if (before?.cwd === cwd) {
-        codexConfigHolds.delete(id)
+      if (before?.cwd === cwd) codexConfigHolds.delete(id)
+      // 預かりを止めた cwd の確かめが通るようになったら、次のポーリングで回す（行が無いのに止まったままにしない。回る前にもう一度確かめる）
+      if (codexConfigQueued.get(id) === cwd) {
         codexConfigQueued.delete(id)
-        // 確かめが通るようになったので、止めた預かりは次のポーリングで回す（行が無いのに止まったままにしない）
         if (queue.paused(id) === CODEX_CONFIG_PAUSED) {
           bgRetryAt.delete(id)
           queue.resume(id)
@@ -3127,10 +3130,10 @@ export function createApp(
   /** 預かりのあるセッションを全部見る。画面のポーリングのついでに呼ぶ */
   const drainAll = async (): Promise<void> => {
     for (const id of queue.ids()) await drain(id)
-    for (const id of codexConfigQueued) {
+    for (const [id, cwd] of [...codexConfigQueued]) {
       if (queue.size(id) > 0) continue
       codexConfigQueued.delete(id)
-      codexConfigHolds.delete(id)
+      if (codexConfigHolds.get(id)?.cwd === cwd) codexConfigHolds.delete(id)
     }
     await deliverReplies()
     await drainBacklog()
@@ -3317,11 +3320,17 @@ export function createApp(
     if (!hold) return error(res, 404, '確かめる待ちはありません')
     if (!allow) {
       codexConfigHolds.delete(id)
-      codexConfigQueued.delete(id)
-      // 確かめで止めていた預かりも取り消す（止めたまま残すと、あとで確かめが通ったときに人が押さないまま回る道ができる）
-      if (queue.paused(id) === CODEX_CONFIG_PAUSED) {
-        queue.removeWhere((to) => to === id)
-        bgRetryAt.delete(id)
+      const queuedCwd = codexConfigQueued.get(id)
+      if (queuedCwd === hold.cwd) {
+        // この行の確かめで止めていた預かりも取り消す（止めたまま残すと、あとで確かめが通ったときに人が押さないまま回る道ができる）
+        codexConfigQueued.delete(id)
+        if (queue.paused(id) === CODEX_CONFIG_PAUSED) {
+          queue.removeWhere((to) => to === id)
+          bgRetryAt.delete(id)
+        }
+      } else if (queuedCwd !== undefined) {
+        // 片付けたのは別の cwd（新しいセッションなど）の行。預かりは見ていないので消さず、その cwd の行を出し直す
+        await codexConfigStop(id, queuedCwd)
       }
       return json(res, { id })
     }

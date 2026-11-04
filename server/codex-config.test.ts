@@ -4,7 +4,7 @@ import { after, before, beforeEach, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { CODEX_CONFIG_PAUSED } from '../shared/agentMessages.ts'
@@ -19,6 +19,7 @@ import { localDate } from './rows/aggregate.ts'
 import { row } from './rows/aggregate.test.ts'
 import { FeedStore } from './rows/store.ts'
 import type { Git } from './git/diff.ts'
+import { worktreeKey } from './git/worktrees.ts'
 
 const ASK: CodexConfigAsk = { reason: 'found', files: ['sub/.codex/config.toml'], more: 0, note: '', fingerprint: 'fp1' }
 
@@ -33,6 +34,8 @@ let ask: CodexConfigAsk | null = null
 const allowed: string[] = []
 let allowAnswer: CodexConfigAsk | null = null
 const typedInto: string[][] = []
+/** 兄弟の worktree（あるときだけ `git worktree list` に足す） */
+let siblingTree = ''
 /** `.gitignore` 済みの `.codex/` のファイルとして git が返すもの */
 let codexIgnored = ''
 
@@ -74,7 +77,7 @@ const codexApp: CodexApp = {
 }
 const git: Git = {
   async run(cwd, args) {
-    if (args[0] === 'worktree') return `worktree ${cwd}\nHEAD abc\nbranch refs/heads/main\n\n`
+    if (args[0] === 'worktree') return `worktree ${cwd}\nHEAD abc\nbranch refs/heads/main\n\n${siblingTree ? `worktree ${siblingTree}\nHEAD abc\nbranch refs/heads/other\n\n` : ''}`
     if (args[0] === 'rev-parse' && args.includes('--show-toplevel')) return `${cwd}\n`
     if (args[0] === 'rev-parse') return 'abc\n'
     if (args[0] === 'ls-files' && args.includes('--ignored')) return codexIgnored
@@ -327,6 +330,28 @@ test('別の cwd の行で「このまま起こす」を押しても、止めた
   }
   assert.deepEqual(calls, [])
   assert.equal((await list()).queued['C1@r']?.paused, CODEX_CONFIG_PAUSED)
+  await clear('C1@r')
+})
+
+test('片付ける: 別の worktree の行を片付けても、元の cwd で止めていた預かりは消さず、その行を出し直す', async () => {
+  ask = ASK
+  await post(session('C1@r', 'reply?days=30'), { text: '止めた返信' })
+  const sibling = await realpath(await mkdtemp(join(tmpdir(), 'sai-codex-config-sibling-')))
+  await mkdir(join(sibling, '.git'))
+  siblingTree = sibling
+  try {
+    // 別の worktree で新しいセッションを始めて止まると、行はその cwd のものに置き換わる
+    assert.equal((await post('/api/sessions/new?days=30', { text: 'はじめて', from: 'C1@r', agent: 'codex', worktree: worktreeKey(sibling) })).status, 409)
+    assert.equal((await list()).codex_config_holds?.['C1@r']?.cwd, sibling)
+    await post(session('C1@r', 'codex-config/dismiss'), {})
+    const data = await list()
+    assert.deepEqual(data.queued['C1@r']?.items.map((q) => q.text), ['止めた返信'], '見ていない預かりは消さない')
+    assert.equal(data.codex_config_holds?.['C1@r']?.cwd, work, '元の cwd の行を出し直す')
+    assert.deepEqual(calls, [])
+  } finally {
+    siblingTree = ''
+    await rm(sibling, { recursive: true, force: true })
+  }
   await clear('C1@r')
 })
 

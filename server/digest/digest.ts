@@ -397,9 +397,10 @@ export class Digester {
     return Number.isNaN(ms) || ms < this.sinceMs
   }
 
-  /** 対象の行か。ターン完了で本文があり、自分が回した子（cwd がフィードのディレクトリ）ではない */
+  /** 対象の行か。ターン完了で本文があり、自分が回した子（cwd がフィードのディレクトリ）でも、一言を断った行（`no_digest`）でもない */
   private wants(row: FeedRow): boolean {
     if (!digestable(row)) return false
+    if (row.no_digest) return false
     const cwd = row.cwd ?? ''
     return !this.ownDir || (cwd !== this.ownDir && !cwd.startsWith(this.ownDir + '/'))
   }

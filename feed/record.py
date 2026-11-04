@@ -1724,6 +1724,10 @@ def build_row(payload: dict, now: datetime, directory: Path, declared: str = "")
             clipped.append("questions")
     if clipped:
         row["clipped"] = clipped
+    # 一言（digest）を作らせない印。定時のジョブ（launchd の `claude -p` など）が、フィードには報告を載せたいが
+    # 要約はいらない、というときに `AGENT_FEED_NO_DIGEST=1` を立てて回す。`AGENT_FEED_SKIP` と違い、行そのものは書く
+    if os.environ.get("AGENT_FEED_NO_DIGEST") == "1":
+        row["no_digest"] = True
     return row
 
 

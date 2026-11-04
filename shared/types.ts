@@ -95,6 +95,11 @@ export interface FeedRow {
    * text は文だけなので、選択肢はここから出す。無い古い行は #333 の transcript から読む方に落ちる
    */
   questions?: RowQuestion[]
+  /**
+   * 一言（digest）を作らない行。記録したプロセスに `AGENT_FEED_NO_DIGEST=1` が立っていたときだけ `true` が入る
+   * （定時のジョブなど、フィードに載せたいが要約はいらないもの）。無ければ普段どおり作る
+   */
+  no_digest?: boolean
   first_user_text?: string
   /**
    * text をチャットの一言コメントに言い換えたもの（性格つき）。JSONL には無く、サーバが応答時に

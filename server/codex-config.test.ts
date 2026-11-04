@@ -316,6 +316,47 @@ test('片付けた預かりは、新しく届いても人が押すまで回ら�
   await clear('C1@r')
 })
 
+test('片付けたあとに出し直した行: 確かめが通るようになっても、再起動しても回らない。押せば回る', async () => {
+  ask = ASK
+  await post(session('C1@r', 'reply?days=30'), { text: '1 通目' })
+  await post(session('C1@r', 'codex-config/dismiss'), {})
+  await post(session('C1@r', 'reply?days=30'), { text: '2 通目', queue: true })
+  assert.ok((await list()).codex_config_holds?.['C1@r'], '行は出し直す')
+  assert.equal((await list()).queued['C1@r']?.paused, CODEX_CONFIG_DISMISSED)
+  ask = null
+  // 同じ cwd の新しいセッションが確かめを通す
+  assert.equal((await post('/api/sessions/new?days=30', { text: 'はじめて', from: 'C1@r', agent: 'codex' })).status, 202)
+  const app = createApp(
+    new FeedStore(dir),
+    join(dir, 'dist'),
+    { running: () => false, snapshot: () => ({}), async start() {} },
+    new Approvals(),
+    new BuildFreshness(join(dir, 'dist'), [], 0),
+    undefined,
+    new Authenticator(async () => null),
+    { tmux: { run: async () => '' }, ps: async () => '', alive: () => false, codexAppServer: async () => false, codexWriterActive: async () => false, codexApp, codexConfig: gate },
+    undefined,
+    git,
+  )
+  const other = createServer((req, res) => void app(req, res))
+  await new Promise<void>((resolve) => other.listen(0, '127.0.0.1', resolve))
+  const addr = other.address()
+  try {
+    await fetch(`http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}/api/sessions?days=30`)
+  } finally {
+    await new Promise<void>((resolve) => other.close(() => resolve()))
+  }
+  await list()
+  assert.deepEqual(calls, ['startThread', 'start:N1'], '片付けた本文は回らない')
+  assert.equal((await list()).queued['C1@r']?.items.length, 2)
+  // 行が残っていれば、押して回せる
+  ask = ASK
+  await post(session('C1@r', 'reply?days=30'), { text: '3 通目', queue: true })
+  await post(session('C1@r', 'codex-config/allow'), { fingerprint: 'fp1' })
+  assert.deepEqual(calls, ['startThread', 'start:N1', 'start:C1'])
+  await clear('C1@r')
+})
+
 test('確かめが通るようになったら、行を消して止めた預かりも回す', async () => {
   ask = ASK
   await post(session('C1@r', 'reply?days=30'), { text: 'こんにちは' })

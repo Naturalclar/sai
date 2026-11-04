@@ -2747,11 +2747,9 @@ export function createApp(
       await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${id} 処理中なので預かった（${queue.size(id)} 件目）\n`).catch(() => {})
       // 端末のターンが閉じたか分からずに止めた預かりの後ろに並んだメッセージも、止まっていると返す（#800 のレビュー）
       const stuck = (!!o.terminalFallback && queue.paused(id) === TERMINAL_HELD_PAUSED) || codexConfigPaused(queue.paused(id))
-      // 片付けた預かりに新しく届いたら、確かめ直して行を出す。**止めは解かない**（片付けた本文を、人が押さないまま回さない）
-      if (queue.paused(id) === CODEX_CONFIG_DISMISSED && (await codexConfigStop(id, cwd))) {
-        queue.pause(id, CODEX_CONFIG_PAUSED)
-        codexConfigQueued.add(id)
-      }
+      // 片付けた預かりに新しく届いたら、確かめ直して行を出す。**止めの理由は片付けたまま**（`CODEX_CONFIG_PAUSED` に戻すと、
+      // 確かめが通ったときに片付けた本文まで人が押さないまま回る）。回すのは人の「このまま起こす」か「続けて送る」だけ
+      if (queue.paused(id) === CODEX_CONFIG_DISMISSED && (await codexConfigStop(id, cwd))) codexConfigQueued.add(id)
       const payload: ReplyResponse = { accepted: true, id, agent: session.agent, session: raw, cwd, via: 'queued', queue_id: item.queue_id, ...(stuck ? { past_terminal: true as const, stuck: true as const } : {}) }
       return { status: 202, body: payload }
     }
@@ -3338,7 +3336,8 @@ export function createApp(
     }
     codexConfigHolds.delete(id)
     codexConfigQueued.delete(id)
-    if (queue.paused(id) === CODEX_CONFIG_PAUSED) {
+    // 人が押したので、片付けたあとに出し直した行（`CODEX_CONFIG_DISMISSED`）でも回す
+    if (codexConfigPaused(queue.paused(id))) {
       bgRetryAt.delete(id)
       queue.resume(id)
       await drain(id)

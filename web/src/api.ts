@@ -61,6 +61,7 @@ import type {
 import { fetchByRev, RevCache } from './revCache.ts'
 import { sessionFileUrl } from '../../shared/files.ts'
 import type { DigestFeedbackReason, DigestFeedbackRequest, DigestFeedbackResponse, DigestUsageReason } from '../../shared/digestFeedback.ts'
+import type { DotsPostRequest, DotsPostResponse, DotsResponse } from '../../shared/dots.ts'
 
 export type { Agent, FeedRow, TurnOutputResponse, TurnOutputSection, TurnStepsResponse, SessionSource, SessionSummary, SessionMeta, ManagerDraft, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, QueuedReply, ReplyQueue, ReplyQueueMap, ReplyQueueResponse, Loop, LoopMap, LoopRequest, Wait, WaitMap, CodexConfigFile, CodexConfigHold, AgentActivity, AgentActivityMessage, AgentStopResponse,Approval, ApprovalMap, ApprovalAnswer, TerminalDialog, Profile, PersonaId, SettingsResponse, SettingsRequest, ClaudeAuthCheckResponse, Viewer, SessionPermissionsResponse, SessionProgressResponse, ProgressStep, ProgressNote, SessionDiffResponse, SessionDiffSummaryResponse, GalleryResponse, GalleryItem, SearchResponse, SearchHit, DiffPr, DiffSection, DiffFileStat, PrSummary, PrRepo, PrsResponse, PrDetailResponse, PrBrief, PrBriefResponse, PrComment, PrReviewRequest, PrReviewResponse, PrReviewEvent, AttachmentResponse, UsageResponse, UsageReportResponse, UsageReportRow, UsageSessionRow, UsageTotals, UsageWindow, CodexUsage, ClaudeUsage } from '../../shared/types.ts'
 
@@ -306,6 +307,11 @@ export const api = {
   usageRefresh: () => sendRaw<UsageResponse>('POST', '/api/usage/refresh'),
   /** 使用量の画面の集計（#602）。SAI が起こした Claude のターンだけ。開いたときと期間を切り替えたときだけ取る */
   usageReport: (days: number) => getJSON<UsageReportResponse>(`/api/usage/report?days=${days}`),
+  /** dots との会話ログ（#872）。受信箱を読むだけ */
+  dots: () => getJSON<DotsResponse>('/api/dots'),
+  /** dots への投稿を受信箱に足す（#872。いまは配信しないので「未配信」のまま）。`conversation_id` が無ければ新しい会話 */
+  dotsPost: (text: string, conversationId?: string) =>
+    sendJSON<DotsPostResponse>('POST', '/api/dots', { text, ...(conversationId ? { conversation_id: conversationId } : {}) } satisfies DotsPostRequest),
   /** GitHub に出ている PR（#524）。`fresh` のときだけサーバの覚えを捨てて gh で読み直す */
   prs: (fresh = false) => getJSON<PrsResponse>(`/api/prs${fresh ? '?fresh=1' : ''}`),
   pr: (repo: string, number: number) => getJSON<PrDetailResponse>(`/api/prs/${repo.split('/').map(encodeURIComponent).join('/')}/${number}`),

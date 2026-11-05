@@ -135,6 +135,35 @@
   header .user-menu .menu a.menu-link:hover { background: var(--chip); }
   /* 使用量の画面（#602）。表は列が多いので、狭い画面では表だけを横に送る（画面全体は横に送らない）。名前の列は左に貼り付ける */
   .usage-view { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
+  /* dots との会話ログ（#872）。フィードと同じバブルの並びに、会話ごとの見出しと依頼の状態を足す */
+  .dots-view { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
+  .dots-log { padding-bottom: 8px; }
+  .dots-conv { padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+  .dots-conv:last-child { border-bottom: 0; }
+  .dots-conv-head { position: sticky; top: 0; z-index: 2; display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; padding: 8px 16px; background: var(--panel); border-bottom: 1px solid var(--line); font-size: 12px; }
+  .dots-conv.selected .dots-conv-head { box-shadow: inset 3px 0 0 var(--accent); }
+  .dots-conv-title { font-weight: 700; font-size: 13px; overflow-wrap: anywhere; }
+  .dots-conv-head .time { color: var(--muted); }
+  .dots-conv-here { margin-left: auto; color: var(--accent); }
+  .dots-conv-continue { margin-left: auto; padding: 2px 8px; font: inherit; color: var(--accent); background: transparent; border: 1px solid var(--line); border-radius: 999px; cursor: pointer; }
+  .dots-conv-continue:hover { border-color: var(--accent); }
+  .avatar.dots { background: var(--muted); }
+  .dots-state { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--chip); color: var(--muted); white-space: nowrap; }
+  .dots-state.accepted, .dots-state.awaiting { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .dots-state.done { color: var(--ink); }
+  .dots-state.failed { color: var(--claude); background: color-mix(in srgb, var(--claude) 14%, transparent); }
+  .dots-state.unknown { color: var(--synth); background: color-mix(in srgb, var(--synth) 14%, transparent); }
+  .dots-reason { margin-top: 4px; font-size: 12px; color: var(--muted); }
+  .dots-orphan { font-size: 11px; color: var(--synth); }
+  .dots-composer { flex: none; display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+  .dots-target { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; color: var(--muted); min-width: 0; }
+  .dots-target span { overflow-wrap: anywhere; }
+  .dots-target button { padding: 2px 8px; font: inherit; color: var(--accent); background: transparent; border: 1px solid var(--line); border-radius: 999px; cursor: pointer; }
+  .dots-input { display: flex; gap: 8px; align-items: flex-end; }
+  .dots-input textarea { flex: 1; min-width: 0; resize: vertical; padding: 8px 10px; font: inherit; font-size: 16px; color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+  .dots-input button.primary { padding: 8px 16px; font: inherit; font-weight: 600; color: #fff; background: var(--accent); border: 0; border-radius: 8px; cursor: pointer; }
+  .dots-input button.primary:disabled { opacity: .5; cursor: default; }
+  .dots-error { font-size: 12px; color: var(--claude); }
   .usage-body { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; padding-bottom: 12px; }
   .usage-body > .note { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
   .usage-total { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; }
@@ -656,7 +685,7 @@
     header .sidebar-toggle { display: none; }
     main.layout, main.layout.sidebar-closed, main.layout.diff-open, main.layout.sidebar-closed.diff-open { grid-template-columns: minmax(0, 1fr); transition: none; }
     .diff-pane { display: none; }
-    main.route-feed .sidebar, main.route-session .sidebar, main.route-todo .sidebar, main.route-new .sidebar, main.route-prs .sidebar, main.route-pr .sidebar, main.route-usage .sidebar { display: none; }
+    main.route-feed .sidebar, main.route-session .sidebar, main.route-todo .sidebar, main.route-new .sidebar, main.route-prs .sidebar, main.route-pr .sidebar, main.route-usage .sidebar, main.route-dots .sidebar { display: none; }
     /* 「閉じた」を無視して、#/ では一覧を必ず出す */
     main.layout.route-list .sidebar { display: block; visibility: visible; }
     main.route-list .pane { display: none; }

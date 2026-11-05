@@ -17,6 +17,7 @@ import { useNarrow } from './useNarrow'
 import { nextDiff, visibleDiff, type DiffOrigin, type OpenDiff } from './feedDiff.ts'
 import { FeedView } from './FeedView'
 import { TodoView } from './TodoView'
+import { DotsView } from './DotsView'
 import { NewSessionView } from './NewSessionView'
 import { PrListView } from './PrListView'
 import { UsageView } from './UsageView'
@@ -374,10 +375,10 @@ export function App() {
       }
       if (action === 'feed') {
         const name = parseRoute(location.hash).name
-        if (name !== 'session' && name !== 'todo' && name !== 'new' && name !== 'prs' && name !== 'pr' && name !== 'usage') return
+        if (name !== 'session' && name !== 'todo' && name !== 'new' && name !== 'prs' && name !== 'pr' && name !== 'usage' && name !== 'dots') return
         e.preventDefault()
-        // 全幅の画面（PR 1 本・使用量）からは、並びのフォーカスのあるペインへ戻る（並べておいたペインをフィードに入れ替えない。#759）
-        const back = name === 'pr' || name === 'usage' ? focusedItem(layout) : null
+        // 全幅の画面（PR 1 本・使用量・dots との会話）からは、並びのフォーカスのあるペインへ戻る（並べておいたペインをフィードに入れ替えない。#759）
+        const back = name === 'pr' || name === 'usage' || name === 'dots' ? focusedItem(layout) : null
         if (back) goTo(back)
         else location.hash = '#/feed'
         return
@@ -519,6 +520,8 @@ export function App() {
         <UserMenu profile={list.data?.profile} viewer={list.data?.viewer ?? null} notify={notify} onOpen={refreshSettings}>
           {/* 使用量の画面（#602）。帯の使用量（UsageChip）は取れないと出ないので、ここからも開けるようにする */}
           <a className="menu-link" href="#/usage">使用量（トークンと費用）</a>
+          {/* dots との会話ログ（#872） */}
+          <a className="menu-link" href="#/dots">dots との会話</a>
           {/* 一言の入切・口・モデルはどの幅でもここ（#288。前は環境変数）。PUT の失敗もここに出す */}
           {settings && <DigestEngineControls settings={settings} busy={settingsBusy} error={settingsError} onChange={(p) => void updateSettings(p)} />}
           {/* PR の要約を作る口（#790。既定は一言と同じ口） */}
@@ -618,12 +621,14 @@ export function App() {
               )
             })
           ) : (
-            // ペインに入れない画面（PR 1 本・使用量）と `#/`（フィード）は全幅。並びには触らないので、戻れば並びが戻る
+            // ペインに入れない画面（PR 1 本・使用量・dots との会話）と `#/`（フィード）は全幅。並びには触らないので、戻れば並びが戻る
             <ChatPane focused>
             {route.name === 'pr' ? (
               <PrView key={`${route.repo}#${route.number}`} repo={route.repo} number={route.number} onStatus={onStatus} onInsertToSession={insertToSession} />
             ) : route.name === 'usage' ? (
               <UsageView onStatus={onStatus} onOpenSidebar={openSidebar} />
+            ) : route.name === 'dots' ? (
+              <DotsView onStatus={onStatus} onOpenSidebar={openSidebar} />
             ) : (
               feedView(true)
             )}

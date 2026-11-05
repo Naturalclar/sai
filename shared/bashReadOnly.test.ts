@@ -1006,3 +1006,37 @@ test('notReadOnly: Jev が全部を見ていない長さのコマンドは通さ
   // 入れ子が深すぎるものも読めない側
   assert.equal(check('echo ' + '$('.repeat(20) + 'pwd' + ')'.repeat(20)), 'syntax')
 })
+
+test('notReadOnly: 引数が全部文字だけの echo は、引用符で囲んだ = 始まりの語（区切りの出力）も受ける（#866）', () => {
+  for (const c of ['echo "=== a ==="', 'echo done', "echo 'a b'", "echo '=x'", 'echo "== a" b "=="', 'echo "=== a ===" && git status', 'git status; echo "=== b ==="', 'echo "=== c ===" | head -1', 'echo "=" 2>/dev/null']) {
+    assert.equal(check(c), '', c)
+  }
+  const human = [
+    'echo $X',
+    'echo "$(id)"',
+    'echo `id`',
+    'echo a > f',
+    'echo a >> f',
+    'echo *',
+    'echo <<EOF\na\nEOF',
+    // = 始まりの語に、展開・グロブ・~ が混ざる
+    'echo "=== $(git status) ==="',
+    'echo "=== a" "$(git status)"',
+    'echo "=== a" *',
+    'echo "=== a" ~',
+    'echo "=$X"',
+    // 引用符の外の = 始まり（zsh の =cmd）・空の引用符のあとの =
+    'echo =ls',
+    'echo ""=ls',
+    "echo ''=ls",
+    // echo 以外は今までどおり
+    'cat "=x"',
+    'git log "=x"',
+    'grep "=== a" README.md',
+    'printf "=== a ==="',
+    // パイプ・&& の後ろが読むだけでなければ今までどおり人に回る
+    'echo "=== a ===" && rm x',
+    'echo "=== a ===" | sh',
+  ]
+  assert.deepEqual(human.map((c) => [c, check(c)]).filter(([, got]) => got === ''), [])
+})

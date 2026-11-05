@@ -72,6 +72,8 @@ interface Word {
   loose: boolean
   /** 引用符の外に `^` か、頭でない `~` がある（zsh の拡張グロブ。`extendedglob` が入っていると `^README.md` はほかの全部のファイルに展開される） */
   xglob: boolean
+  /** 引用符で囲んだ `=` で始まる（`"=== a ==="`。#866）。受けるのは、引数が全部文字だけの `echo` だけ */
+  equals: boolean
 }
 
 /** いまの場所（`cd` で変わる）と、出てはいけない根 */
@@ -249,12 +251,17 @@ const sedCheck: Check = (args, place, piped) => {
  * bash では添字の中の式が実行される）
  */
 const prints: Check = (args) => {
+  // 引用符で囲んだ `=` 始まりの語（区切りの `echo "=== a ==="`）は、引数が全部、展開・グロブを含まない文字のときだけ受ける（#866）
+  if (args.some((w) => w.equals) && !args.every(plainText)) refuse('syntax')
   for (const w of args) {
     if (w.glob || w.tilde || w.xglob) refuse('path')
     // `$( … )` は二重引用符の中だけ（`echo "$(…)"`）。外だと bash は結果をグロブとして展開する（`echo $(echo '/etc/*')` が名前を並べる）
     if (w.loose) refuse('opaque')
   }
 }
+
+/** 展開（`$( … )`）・グロブ・`~` を含まない、文字だけの語 */
+const plainText = (w: Word) => !w.opaque && !w.loose && !w.glob && !w.tilde && !w.xglob
 
 /** 引数を取らないか、中身の分かる語だけを取る（ファイルは開かない） */
 const literals = (spec: FlagSpec = {}, max = Infinity): Check => (args, place) => {
@@ -540,6 +547,8 @@ class Reader {
     if (!NO_FILES.has(name) && inHomeZone(place.root)) return refuse('path')
     // `$( … )` の結果を受けてよいのは、出すだけのコマンドだけ
     if (check !== prints && args.some((w) => w.opaque)) return refuse('opaque')
+    // 引用符で囲んだ `=` 始まりの語を受けるのは `echo` だけ（中で引数を確かめる。#866）
+    if (check !== prints && args.some((w) => w.equals)) return refuse('syntax')
     check(args, place, piped)
     return name
   }
@@ -547,7 +556,7 @@ class Reader {
   /** 語 1 つ。素の字・`'…'`・`"…"`・`$( … )` だけでできていること */
   private word(place: Place): Word {
     const start = this.i
-    const w: Word = { text: '', opaque: false, bare: true, glob: false, tilde: this.text[start] === '~', xglob: false, loose: false }
+    const w: Word = { text: '', opaque: false, bare: true, glob: false, tilde: this.text[start] === '~', xglob: false, loose: false, equals: false }
     for (;;) {
       const c = this.text[this.i]
       if (c === undefined || c === ' ' || c === '\t' || c === '\n' || c === ';' || c === '|' || c === '&' || c === ')') break
@@ -590,8 +599,14 @@ class Reader {
       } else refuse('syntax')
     }
     if (this.i === start) refuse('syntax')
-    // `=cmd`（zsh の展開）は、素の語の頭で意味が変わる。代入（`X=1 cmd`）は、コマンドの名前の形でないので下で断られる
-    if (this.text[start] === '=' || w.text.startsWith('=')) refuse('syntax')
+    // `=cmd`（zsh の展開）は、素の語の頭で意味が変わる。代入（`X=1 cmd`）は、コマンドの名前の形でないので下で断られる。
+    // 引用符の頭がそのまま `=` の語（`"=== a ==="`・`'=x'`）だけは字のままと分かるので印を付け、`echo` の引数でだけ受ける（#866）。
+    // `''=ls` のような、空の引用符のあとの `=` は読めない側のまま
+    if (w.text.startsWith('=')) {
+      if (this.text[start] !== '"' && this.text[start] !== "'") refuse('syntax')
+      if (this.text[start + 1] !== '=') refuse('syntax')
+      w.equals = true
+    }
     return w
   }
 

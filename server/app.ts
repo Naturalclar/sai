@@ -135,6 +135,8 @@ import type { WaitingSettleSource } from './reply/waitingSettle.ts'
 import type { CodexDialogSource, DialogTarget } from './reply/codexDialogs.ts'
 import { DEFAULT_DIGEST_MODEL, DIGEST_FILE, DigestStore, createDigester, isTimeout, summarizeLimits, summarizerFactory } from './digest/digest.ts'
 import { FEEDBACK_FILE, FeedbackStore } from './digest/feedback.ts'
+import { createDotsRoutes, DOTS_PATH } from './dots/dotsRoutes.ts'
+import { DOTS_INBOX_FILE, DotsInbox } from './dots/inbox.ts'
 import { DIGEST_NOTE_MAX, isDigestFeedbackReason, isDigestUsageReason } from '../shared/digestFeedback.ts'
 import type { DigestFeedbackRequest, DigestFeedbackResponse } from '../shared/digestFeedback.ts'
 import { isDigestModel, isDigestProvider } from '../shared/digestSettings.ts'
@@ -1315,6 +1317,8 @@ export function createApp(
   const digestReady = (digester ? Promise.resolve() : settingsStore.get().then((s) => digest.configure(s))).then(() => digest.store.load())
   // 一言への「これは変」（#346）。溜めるだけで、読むのは人と手で走らせる物差しのスクリプト
   const feedback = new FeedbackStore(join(store.directory, FEEDBACK_FILE))
+  // dots との会話の受信箱（#872）。書くのはこのサーバだけ。外には出さない（配信は受信箱のアダプター #873）
+  const dotsInbox = new DotsInbox(join(store.directory, DOTS_INBOX_FILE))
 
   /** 一言の対象を探して列に積む。3 秒ごとの応答のついでに呼ぶので軽い（無効なら何もしない） */
   const scanDigest = async (days: number): Promise<void> => {
@@ -4278,6 +4282,9 @@ export function createApp(
   const { tickWaits, syncWaitTimer, stopWaitTimer, agentWaitFor, waitAction, waitUnsetHandled, branchPrs } = createWaitRoutes({ ...ctx, loopRefusal })
   syncWaitTimer()
 
+  // ---- dots との会話ログ（#872）: 中身は `server/dots/dotsRoutes.ts`。受信箱に足して読むだけ
+  const { getDots, postDots } = createDotsRoutes({ json, error, readJson, isCrossOrigin, dotsInbox })
+
   // ---- tailnet から MCP で呼ぶ口（#312）: 中身は `server/mcp/mcpRoutes.ts`（#809）。状態の持ち主はここのまま
 
   /** tailnet から送った回数（呼んだ人ごと） */
@@ -4946,6 +4953,8 @@ export function createApp(
     const isAuthCheck = path === CLAUDE_AUTH_CHECK_PATH
     const isAuthLogin = path === CLAUDE_LOGIN_PATH
     const isDigestFeedback = path === DIGEST_FEEDBACK_PATH
+    // dots との会話ログ（#872）。読むのは GET、人の投稿は POST（同一オリジンのみ）
+    const isDots = path === DOTS_PATH
     const isNewSession = path === NEW_SESSION_PATH
     const isWorkspaces = path === WORKSPACES_PATH
     // GitHub へのレビューの投稿（#526）。SAI が GitHub に書く唯一の口
@@ -4967,7 +4976,7 @@ export function createApp(
     // 「設定は PUT」「預かった返信の再開は POST、取り消しは DELETE」だけ。それ以外は GET / HEAD のみ
     const writable =
       (method === 'POST' &&
-        (isNewSession || isWorkspaces || isAuthCheck || isAuthLogin || isReply || isReview || isFork || isPrReview || isPrBrief || isAsk || isAnswer || isAttachUpload || isQueue || isDigestFeedback || isSuggestion || path === USAGE_REFRESH_PATH || path === AGENT_SEND_PATH || path === AGENT_LOOP_PATH || path === AGENT_WAIT_FOR_PATH || isAgentStop || isInterrupt || isCodexConfig || loopSuffix !== undefined || waitSuffix !== undefined)) ||
+        (isNewSession || isWorkspaces || isAuthCheck || isAuthLogin || isReply || isReview || isFork || isPrReview || isPrBrief || isAsk || isAnswer || isAttachUpload || isQueue || isDigestFeedback || isDots || isSuggestion || path === USAGE_REFRESH_PATH || path === AGENT_SEND_PATH || path === AGENT_LOOP_PATH || path === AGENT_WAIT_FOR_PATH || isAgentStop || isInterrupt || isCodexConfig || loopSuffix !== undefined || waitSuffix !== undefined)) ||
       (method === 'DELETE' && (isQueue || isHistoryIcon || loopSuffix === '/loop')) ||
       (method === 'PUT' && (isMeta || isRead || isProfile || isSettings)) ||
       ((method === 'PUT' || method === 'DELETE') && (isIcon || isProfileIcon))
@@ -5361,6 +5370,7 @@ export function createApp(
         if (method !== 'POST') return error(res, 405, 'method not allowed')
         return await postDigestFeedback(req, res)
       }
+      if (isDots) return method === 'POST' ? await postDots(req, res) : await getDots(res)
       if (isAuthLogin) {
         if (method !== 'GET' && method !== 'POST') return error(res, 405, 'method not allowed')
         if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')

@@ -63,11 +63,12 @@ export interface PaneProps extends StatusProps {
   linear: string
 }
 
-/** サイドバーで選ばれている項目。固定の「フィード」「要対応」「PR」もセッションと同じ 1 項目として扱う（PR 1 本は「PR」の下） */
+/** サイドバーで選ばれている項目。固定の「フィード」「要対応」「PR」「dots」もセッションと同じ 1 項目として扱う（PR 1 本は「PR」の下） */
 function navOf(route: Route): NavTarget {
   if (route.name === 'session') return { kind: 'session', id: route.id }
   if (route.name === 'todo') return { kind: 'todo' }
   if (route.name === 'prs' || route.name === 'pr') return { kind: 'prs' }
+  if (route.name === 'dots') return { kind: 'dots' }
   return { kind: 'feed' }
 }
 

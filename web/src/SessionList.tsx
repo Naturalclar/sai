@@ -136,6 +136,11 @@ export function SessionList({ list, filters, setFilters, active, creating = fals
           <span className="t">PR</span>
           <span className="last">GitHub に出ている PR を見る</span>
         </a>
+        {/* dots との会話（#872）。全幅の画面なので横には並べない。件数は数えない（返答が届くのは #873 から） */}
+        <a className={`item dots${active.kind === 'dots' ? ' active' : ''}`} href="#/dots">
+          <span className="t">dots</span>
+          <span className="last">dots との会話を見る</span>
+        </a>
         {archived && <div className="head">アーカイブ済み（薄く出る。開いて「戻す」か、新しい行が届けば自動で戻る）</div>}
         {/* リポジトリごとの塊（#364）。**塊が 1 つでも見出しを出す**（並びが場合によって変わらない方が読みやすく、
             畳む場所もいつも同じになる）。畳んでいても中の「要対応」の数は見出しに残す（畳んで見落とさないため） */}

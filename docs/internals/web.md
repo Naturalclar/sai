@@ -39,7 +39,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 
 ## dots との会話ログ（DotsView。#872）
 
-- `#/dots` は使用量・PR 1 本と同じ**ペインに入れない全幅の画面**（`routePaneItem()` は null。Esc は並びのフォーカスのあるペインへ戻る）。入口は自分のメニューの「dots との会話」
+- `#/dots` は使用量・PR 1 本と同じ**ペインに入れない全幅の画面**（`routePaneItem()` は null。Esc は並びのフォーカスのあるペインへ戻る）。入口はサイドバーの固定項目「dots」（`NavTarget` の `dots`。↑↓ の並びは `sessionNav.ts` の `PINNED`）と自分のメニューの「dots との会話」
 - 部品は `DotsView`（取得と送り先）→ `DotsConversationBlock`（会話 1 つ）→ `DotsRequestItem`（人の投稿と状態）・`DotsReply`（dots の返答。`Markdown` で描く）、入力欄は `DotsComposer`。並び・題名・送り先の決まりは `dotsLog.ts`（`dotsLog.test.ts`。`DotsView.tsx` と大文字小文字だけ違う名前は Mac で同じファイルになるので別の名前にした）
 - 取得は `usePolling(api.dots)`（`rev` が同じなら描き直さない）。送ったあとは deps の `nonce` を進めて待たずに取り直す（`resetKey` が同じなので出ているものは消さない）
 - 送り先は `target`（会話の id。null は新しい会話）。一覧に無い id は新しい会話に落とすが、送った直後の会話（`pending`）は一覧が追いつくまで残す（`dotsTarget()`）。下まで送るのは並びの最後の時刻が変わったときだけ

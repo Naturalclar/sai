@@ -339,6 +339,22 @@ test('Digester: 自分が回した子（cwd がフィードのディレクトリ
   }
 })
 
+test('Digester: 一言を断った行（no_digest）は作らない', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'sai-digest-'))
+  try {
+    const store = new DigestStore(join(dir, 'digest.jsonl'))
+    const fake = new FakeSummarizer()
+    const d = new Digester(store, fake, { enabled: true, model: 'haiku', since: at(0).toISOString(), persona: async () => 'none' })
+    const cron = { ...row(at(0), 'cron', { text: '定時の報告' }), no_digest: true }
+    const real = row(at(1), 'S1', { text: '本物' })
+    d.scan([cron, real])
+    await d.drain()
+    assert.deepEqual(fake.prompts.map(promptBody), ['本物'])
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
 test('Digester: 無効なら何もしない', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'sai-digest-'))
   try {

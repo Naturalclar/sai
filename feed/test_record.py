@@ -114,6 +114,18 @@ class RecordTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertEqual(len(read_rows(self.feed_dir)), 1)
 
+    def test_no_digest_env_records_the_row_with_a_mark(self):
+        # 定時のジョブ。行は書くが、一言（digest）を作らせない印を付ける
+        payload = {"hook_event_name": "Stop", "session_id": "nd-1", "transcript_path": "/nonexistent", "cwd": str(self.cwd)}
+        result = run(stdin=json.dumps(payload), env={"AGENT_FEED_DIR": str(self.feed_dir), "AGENT_FEED_NO_DIGEST": "1"})
+        self.assertEqual(result.returncode, 0)
+        rows = read_rows(self.feed_dir)
+        self.assertEqual(len(rows), 1)
+        self.assertIs(rows[0].get("no_digest"), True)
+        # 立っていなければ印は付かない（キーごと無い）
+        result = run(stdin=json.dumps({**payload, "session_id": "nd-2"}), env={"AGENT_FEED_DIR": str(self.feed_dir), "AGENT_FEED_NO_DIGEST": ""})
+        self.assertNotIn("no_digest", read_rows(self.feed_dir)[-1])
+
     # -- remote（origin の URL）
 
     def test_normalize_remote(self):

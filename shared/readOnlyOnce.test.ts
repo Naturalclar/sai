@@ -13,6 +13,13 @@ test('guardMayMatch: Bash のパターンの最初の語がコマンドに出れ
   for (const rule of ['Bash', 'Bash()', 'Bash(*)', 'Bash(:*)', 'Bash(* --force)', ' Bash ', 'Read Bash']) assert.equal(guardMayMatch([rule], 'pwd'), true, rule)
   assert.equal(guardMayMatch(['Read(./secret/**)', 'Edit', 'WebFetch', 'BashOutput', 'mcp__x__Bash_like'], 'pwd'), false)
   assert.equal(guardMayMatch([], 'pwd'), false)
+  // 語の単位で比べる（語の一部では当たらない）。パスの形は最後の階層でも比べる
+  assert.equal(guardMayMatch(['Bash(rm:*)'], 'git log --format=%H | head'), false)
+  assert.equal(guardMayMatch(['Bash(git push:*)'], 'echo "digit"'), false)
+  assert.equal(guardMayMatch(['Bash(git:*)'], '/usr/bin/git log'), true)
+  assert.equal(guardMayMatch(['Bash(/usr/bin/git:*)'], 'git log'), true)
+  assert.equal(guardMayMatch(['Bash(git log:*)'], 'echo "$(git log -1)"'), true)
+  assert.equal(guardMayMatch(['Bash(cat:*)'], 'ls|cat'), true)
 })
 
 test('onceBlocked / onceNotReadOnly: ルールを作れない Claude の Bash だけ。止める側のルールを先に見て、読むだけかは最後', () => {

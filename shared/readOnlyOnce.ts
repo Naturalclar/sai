@@ -22,17 +22,23 @@ export function isClaudeBash(approval: Pick<Approval, 'tool_name' | 'agent' | 'a
 /**
  * `ask` / `deny` のルールのうち、このコマンドに当たりうるものがあるか。**当たりうる側に倒す**:
  * ルールの文字の中の `Bash` を全部見て（運用者の引数で 1 つの語に並べた形・`,` で区切った形もある）、
- * パターンの最初の語（`Bash(git log:*)` なら `git`。引用符・バックスラッシュは外す）がコマンドのどこかに字として出てくれば当たりうる
- * （大文字小文字は見ない）。括弧の無い `Bash`・空・最初の語にワイルドカードがあるパターンは、何にでも当たりうる。Bash 以外のルールは見ない
+ * パターンの最初の語（`Bash(git log:*)` なら `git`。引用符・バックスラッシュは外す）が、コマンドを語に割ったどれかと同じなら当たりうる
+ * （大文字小文字は見ない。パスの形は最後の階層でも比べる。`--format=%H` の中の `rm` のような語の一部では当たらない）。括弧の無い `Bash`・空・最初の語にワイルドカードがあるパターンは、何にでも当たりうる。Bash 以外のルールは見ない
  * （`Read` / `Edit` の `deny` に当たる Bash は Claude が自分で断るので、許可の預かりに来ない）
  */
 export function guardMayMatch(rules: readonly string[], command: string): boolean {
-  const text = command.toLowerCase()
+  // コマンドを語に割る（引用符・区切り・`$( … )`・`=` で割る。パスの形 `/usr/bin/git` は最後の階層でも比べる）
+  const words = new Set<string>()
+  for (const w of command.toLowerCase().split(/[^a-z0-9_./+@%-]+/)) {
+    if (!w) continue
+    words.add(w)
+    words.add(w.slice(w.lastIndexOf('/') + 1))
+  }
   for (const rule of rules) {
     for (const m of rule.matchAll(/(?:^|[^A-Za-z0-9_])Bash(?![A-Za-z0-9_])(\(([^)]*)\)?)?/g)) {
       if (m[1] === undefined) return true
-      const first = (m[2] ?? '').replace(/["'\\]/g, '').trim().split(/[\s:]/)[0] ?? ''
-      if (!first || /[*?[\]]/.test(first) || text.includes(first.toLowerCase())) return true
+      const first = (m[2] ?? '').replace(/["'\\]/g, '').trim().split(/[\s:]/)[0]?.toLowerCase() ?? ''
+      if (!first || /[*?[\]]/.test(first) || words.has(first) || words.has(first.slice(first.lastIndexOf('/') + 1))) return true
     }
   }
   return false

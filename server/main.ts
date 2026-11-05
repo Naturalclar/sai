@@ -177,7 +177,7 @@ export function main(argv: string[]): void {
     // [常に許可] で、もう設定にあるルールを足さない（#705）。設定ファイルを読むだけ
     allowedRules: (cwd) => allowRules(cwd, homedir()),
     // 読むだけなら今回だけ許可（#863）が見る、止める側のルール（ask / deny）。設定ファイルを読むだけ
-    guardRules: (cwd) => guardRules(cwd, { home: homedir() }),
+    guardRules: (cwd, top) => guardRules(cwd, { home: homedir(), ...(top ? { top } : {}) }),
     // Codex を起こす前の確かめ（#856）。**本物の git とファイルを見るのはここで組んだものだけ**
     codexConfig: new CodexConfigGuard(new RealGit(), feedDir),
     // 添付の原本の寿命（#792）。本物の置き場を掃除するのはここで組んだものだけ。`SAI_ATTACHMENT_TTL_DAYS=0` で消さない（計測とログだけ）

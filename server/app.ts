@@ -636,7 +636,7 @@ export interface TerminalDeps {
    * その cwd に効いている止める側のルール（`ask` / `deny`。#863 の「読むだけなら今回だけ許可」が見る）。null は読めなかった。
    * **省略は null**（読めない＝今回だけの許可をしない。本物の設定を読むのは main.ts だけ）
    */
-  guardRules?: (cwd: string) => Promise<string[] | null>
+  guardRules?: (cwd: string, top?: string) => Promise<string[] | null>
   /** Codex の画像生成で作った画像の置き場（#575）。テストでは一時ディレクトリを指す */
   codexImages?: CodexImages
   /** 画像の軽い版を作る口（#589）。テストでは偽の縮める口を渡した Thumbnails か noThumbs */
@@ -1236,6 +1236,9 @@ export function createApp(
     }
     return softWait(read().catch(() => none), () => none, READ_ROOTS_WAIT_MS)
   }
+  /** 置き場のうち、cwd を含む一番深い worktree のトップ（止める側のルールでトップの `.claude` も足すため。#863）。無ければ undefined */
+  const topOf = (place: { cwd: string; roots: string[] }): string | undefined =>
+    place.cwd ? place.roots.filter((r) => place.cwd === r || place.cwd.startsWith(`${r}/`)).sort((x, y) => y.length - x.length)[0] : undefined
   const jevAutoOnce = async (): Promise<void> => {
     const s = await settingsStore.get()
     if (!s.jev || s.jev_auto <= 0 || !jevRisk.ready) return
@@ -1257,7 +1260,7 @@ export function createApp(
         const onceAsked = labels.length === 0 && !!plan.reason && jevAutoAllows(a.jev, s.jev_auto)
         const place = onceAsked ? await readRoots(cwd) : { cwd: '', roots: [] }
         // 止める側のルール（ask / deny）に当たりうるものは、今回だけの許可をしない（#863。読むだけなら今回だけ許可と同じ線）
-        const guards = onceAsked && cwd ? await guardRules(cwd).catch(() => null) : null
+        const guards = onceAsked && cwd ? await guardRules(cwd, topOf(place)).catch(() => null) : null
         const decision = jevAutoDecision(a, s.jev_auto, labels.length > 0 ? (failed ?? lowest?.label ?? rulesKey(labels)) : null, failed ? 'failed' : lowest?.safe, { noRule: plan.reason, cwd: place.cwd, roots: place.roots, repo: githubRepoOf(owner?.remote), guards })
         if (decision.kind === 'skip') {
           // 答えない理由（#553）。同じ許可には 1 回だけ（届くたびに呼ばれるので、覚えないと同じ行が何本も並ぶ）
@@ -1308,9 +1311,12 @@ export function createApp(
         void appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${a.id} 読むだけの今回だけの許可を見送り: ${d.reason}\n`).catch(() => {})
       }
       if (plan.rules.length > 0) return
-      const blocked = onceBlocked(a, plan.reason, cwd && plan.reason ? await guardRules(cwd).catch(() => null) : null)
-      if (blocked) return skip(blocked)
+      // 安い条件を先に見る（止める側のルールは、まだ読まない＝空として）。通ったら置き場を引き、トップの分も足して止める側を読む
+      const cheap = onceBlocked(a, plan.reason, [])
+      if (cheap) return skip(cheap)
       const place = await readRoots(cwd)
+      const blocked = onceBlocked(a, plan.reason, cwd ? await guardRules(cwd, topOf(place)).catch(() => null) : null)
+      if (blocked) return skip(blocked)
       const why = onceNotReadOnly(a, { cwd: place.cwd, roots: place.roots, repo: githubRepoOf(owner?.remote) })
       if (why) return skip({ reason: why })
       // 読んでいる間に人が切っていたら答えない

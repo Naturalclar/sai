@@ -190,7 +190,6 @@ export interface JevOnce {
   guards?: readonly string[] | null
 }
 
-
 export function jevAutoDecision(
   approval: Pick<Approval, 'tool_name' | 'agent' | 'answerable' | 'jev'> & Partial<Pick<Approval, 'input'>>,
   threshold: number,

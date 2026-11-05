@@ -6,8 +6,8 @@
 // なので画面には「出どころの階段」ではなく「deny → ask → allow」の順に、各ルールの出どころを添えて出す。
 //
 // コマンドライン（`claude --settings`）は端末側の起動引数なので SAI からは分からない。読まない。
-import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { readdir, readFile, stat } from 'node:fs/promises'
+import { basename, dirname, join } from 'node:path'
 import { splitArgs } from '../reply/runner.ts'
 import type { PermissionKind, PermissionRuleEntry, PermissionSource, PermissionSourceKind } from '../../shared/types.ts'
 import { PERMISSION_KINDS, SOURCE_ORDER } from '../../shared/permissions.ts'
@@ -141,6 +141,34 @@ export async function collectPermissions(
 }
 
 /**
+ * managed の置き場に、`managed-settings.json` のほかの配り方があるか（あれば中身を読まずに「分からない」にする）。
+ * 見るのは、managed の置き場のほかのファイル・ディレクトリ（drop-in の置き場など）と、macOS の MDM の plist。
+ * サーバから配る managed settings は手元から見えないので、ここでは分からない（`docs/internals/approvals.md` の限界）
+ */
+export async function otherManagedSettings(
+  platform: NodeJS.Platform = process.platform,
+  at: { file?: string; mdm?: string } = {},
+): Promise<boolean> {
+  const file = at.file ?? managedSettingsPath(platform)
+  const dir = dirname(file)
+  const entries = await readdir(dir).catch((err: NodeJS.ErrnoException) => (err.code === 'ENOENT' || err.code === 'ENOTDIR' ? [] : null))
+  if (entries === null) return true
+  if (entries.some((name) => name !== basename(file) && name !== '.DS_Store')) return true
+  if (platform === 'darwin') {
+    // MDM の plist（`/Library/Managed Preferences/` の直下と、利用者ごとの 1 つ下）。名前に claude を含むものがあれば配られている
+    const root = at.mdm ?? '/Library/Managed Preferences'
+    const top = await readdir(root).catch((err: NodeJS.ErrnoException) => (err.code === 'ENOENT' ? [] : null))
+    if (top === null) return true
+    for (const name of top) {
+      if (/claude/i.test(name)) return true
+      const inner = await stat(join(root, name)).then((st) => (st.isDirectory() ? readdir(join(root, name)).catch(() => null) : []), () => [])
+      if (inner === null || inner.some((n) => /claude/i.test(n))) return true
+    }
+  }
+  return false
+}
+
+/**
  * 止める側のルールを読むための読み方。**無い（`ENOENT` / `ENOTDIR`）ときだけ null**（missing）で、大きすぎる・権限が無い・
  * 読めないは投げる（`guardRules()` が null＝分からない、にする。`readSettingsFile()` はどれも missing にするので使わない）
  */
@@ -161,12 +189,23 @@ export const readSettingsStrict: ReadSettings = async (path) => {
  * - 設定ファイルが壊れている（`broken`）・大きすぎる・読めない（`readSettingsStrict()`）
  * - 運用者の引数（`SAI_CLAUDE_ARGS`）に、別の設定を足す・読む先を変えるフラグ（`--settings` / `--setting-sources`）か、
  *   `argsRules()` が読まない書き方の許可のフラグ（`--disallowedTools=…`・`--disallowed-tools`）がある
- * 読む先は `settingsPaths()` と、環境に `CLAUDE_CONFIG_DIR` があればその下の `settings.json`（ユーザーの設定がそこにある）。
- * Claude は起こした cwd の `.claude` だけを読み、リポジトリのトップの `.claude` は読まない（2.1.318 で確かめた）ので、トップは足さない
+ * - managed の置き場に、1 つのファイルのほかの配り方がある（`otherManagedSettings()`）
+ * 読む先は `settingsPaths()` と、環境に `CLAUDE_CONFIG_DIR` があればその下の `settings.json`（ユーザーの設定がそこにある）と、
+ * cwd を含む worktree のトップの `.claude`（`top`）。Claude 2.1.318 はトップの `.claude` を読まなかったが、止める側は足しても
+ * 厳しくなるだけなので、版によって読み方が違っても見落とさない側に倒す（許す側の `allowRules()` は cwd のまま）
  */
 export async function guardRules(
   cwd: string,
-  options: { home: string; env?: NodeJS.ProcessEnv; platform?: NodeJS.Platform; read?: ReadSettings },
+  options: {
+    home: string
+    /** cwd を含む worktree のトップ（分かれば）。cwd と違えば、その `.claude` の分も足す（止める側だけ。厳しくなるだけなので） */
+    top?: string
+    env?: NodeJS.ProcessEnv
+    platform?: NodeJS.Platform
+    read?: ReadSettings
+    /** managed の置き場に、1 つのファイルのほかの配り方（drop-in の置き場・MDM の plist）があるか。あれば分からない（null） */
+    otherManaged?: () => Promise<boolean>
+  },
 ): Promise<string[] | null> {
   try {
     const env = options.env ?? process.env
@@ -174,10 +213,16 @@ export async function guardRules(
     const odd = (arg: string) => /^--setting(s|-sources)(=|$)/.test(arg) || (/^--(dis)?allowed[-_]?tools/i.test(arg) && arg !== '--disallowedTools' && arg !== '--allowedTools')
     if (splitArgs(env.SAI_CLAUDE_ARGS).some(odd)) return null
     const read = options.read ?? readSettingsStrict
+    if (await (options.otherManaged ?? (() => otherManagedSettings(options.platform)))()) return null
     const { sources, rules } = await collectPermissions(cwd, { ...options, env, read })
-    const extra = env.CLAUDE_CONFIG_DIR ? parseSettings('user', join(env.CLAUDE_CONFIG_DIR, 'settings.json'), await read(join(env.CLAUDE_CONFIG_DIR, 'settings.json'))) : null
-    if (sources.some((s) => s.broken) || extra?.source.broken) return null
-    return [...rules, ...(extra?.rules ?? [])].filter((r) => r.kind === 'ask' || r.kind === 'deny').map((r) => r.rule)
+    const more: { kind: PermissionSourceKind; path: string }[] = []
+    if (env.CLAUDE_CONFIG_DIR) more.push({ kind: 'user', path: join(env.CLAUDE_CONFIG_DIR, 'settings.json') })
+    if (options.top && options.top !== cwd) {
+      more.push({ kind: 'local', path: join(options.top, '.claude', 'settings.local.json') }, { kind: 'project', path: join(options.top, '.claude', 'settings.json') })
+    }
+    const extra = await Promise.all(more.map(async (f) => parseSettings(f.kind, f.path, await read(f.path))))
+    if (sources.some((s) => s.broken) || extra.some((e) => e.source.broken)) return null
+    return [...rules, ...extra.flatMap((e) => e.rules)].filter((r) => r.kind === 'ask' || r.kind === 'deny').map((r) => r.rule)
   } catch {
     return null
   }

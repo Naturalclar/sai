@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { argsRules, collectPermissions, guardRules, MAX_SETTINGS_BYTES, readSettingsStrict, managedSettingsPath, orderRules, parseSettings, settingsPaths } from './permissions.ts'
+import { argsRules, collectPermissions, guardRules, otherManagedSettings, MAX_SETTINGS_BYTES, readSettingsStrict, managedSettingsPath, orderRules, parseSettings, settingsPaths } from './permissions.ts'
 import { defaultModeHint, isReplyPermissionMode, launchedModeNote, MODE_HINT, MODE_LABEL, modeEmphasis, modeLabel, modeName, modeSkipsRules, REPLY_MODES, replyModeOf, shortReplyMode, skipModeInArgs } from '../../shared/permissions.ts'
 
 test('MODE_HINT / modeLabel: 何が起きるかは日本語で添え、タグ・モーダル用は「名前 — 説明」（#271）', () => {
@@ -228,13 +228,20 @@ test('guardRules（#863）: ask / deny だけを返す。CLAUDE_CONFIG_DIR の�
     '/cfg/settings.json': JSON.stringify({ permissions: { ask: ['Bash(gh:*)'] } }),
   }
   const read = async (path: string) => files[path] ?? null
-  const base = { home: '/home/me', platform: 'linux' as const, read }
+  const base = { home: '/home/me', platform: 'linux' as const, read, otherManaged: async () => false }
   assert.deepEqual((await guardRules('/w/repo', { ...base, env: {} }))?.sort(), ['Bash(git log:*)', 'Bash(rm:*)'])
   assert.deepEqual((await guardRules('/w/repo', { ...base, env: { CLAUDE_CONFIG_DIR: '/cfg' } }))?.sort(), ['Bash(gh:*)', 'Bash(git log:*)', 'Bash(rm:*)'])
   assert.deepEqual((await guardRules('/w/repo', { ...base, env: { SAI_CLAUDE_ARGS: '--disallowedTools Bash(curl:*)' } }))?.sort(), ['Bash(curl:*)', 'Bash(git log:*)', 'Bash(rm:*)'], '運用者の引数の deny も')
   for (const args of ['--settings x.json', '--settings=x.json', '--setting-sources user', '--disallowedTools=Bash(git:*)', '--disallowed-tools Bash(git:*)', '--allowed-tools Bash(ls)']) assert.equal(await guardRules('/w/repo', { ...base, env: { SAI_CLAUDE_ARGS: args } }), null, args)
   assert.equal(await guardRules('/w/repo', { ...base, env: {}, read: async (path) => (path === '/w/repo/.claude/settings.local.json' ? '{' : read(path)) }), null, '壊れた設定')
   assert.equal(await guardRules('/w/repo', { ...base, env: { CLAUDE_CONFIG_DIR: '/cfg' }, read: async (path) => (path === '/cfg/settings.json' ? '{' : read(path)) }), null)
+  // トップの .claude の止める側も足す（cwd がトップより下のとき）。managed のほかの配り方があれば分からない
+  files['/w/.claude/settings.json'] = JSON.stringify({ permissions: { allow: ['Bash(cat:*)'], deny: ['Bash(curl:*)'] } })
+  assert.deepEqual((await guardRules('/w/repo', { ...base, env: {}, top: '/w' }))?.sort(), ['Bash(curl:*)', 'Bash(git log:*)', 'Bash(rm:*)'])
+  assert.deepEqual((await guardRules('/w/repo', { ...base, env: {}, top: '/w/repo' }))?.sort(), ['Bash(git log:*)', 'Bash(rm:*)'])
+  files['/w/.claude/settings.local.json'] = '{'
+  assert.equal(await guardRules('/w/repo', { ...base, env: {}, top: '/w' }), null, 'トップの壊れた設定')
+  assert.equal(await guardRules('/w/repo', { ...base, env: {}, otherManaged: async () => true }), null)
   assert.equal(await guardRules('/w/repo', { ...base, env: {}, read: async (path) => { if (path === '/home/me/.claude/settings.json') throw new Error('EACCES'); return read(path) } }), null, '読めない')
 })
 
@@ -252,6 +259,32 @@ test('readSettingsStrict（#863）: 無いときだけ null。大きすぎる・
     await assert.rejects(readSettingsStrict(join(dir, 'big.json')))
     await mkdir(join(dir, 'adir.json'))
     await assert.rejects(readSettingsStrict(join(dir, 'adir.json')))
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('otherManagedSettings（#863）: managed の置き場に 1 つのファイルのほかがある・MDM の plist に claude の名前があれば true', async () => {
+  const { mkdtemp, writeFile, rm, mkdir } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = await mkdtemp(join(tmpdir(), 'sai-managed-'))
+  try {
+    const managed = join(dir, 'ClaudeCode')
+    const mdm = join(dir, 'Managed Preferences')
+    const at = { file: join(managed, 'managed-settings.json'), mdm }
+    assert.equal(await otherManagedSettings('darwin', at), false, 'どちらも無い')
+    await mkdir(managed)
+    await writeFile(at.file, '{}')
+    await mkdir(mdm)
+    await writeFile(join(mdm, 'com.example.other.plist'), '')
+    assert.equal(await otherManagedSettings('darwin', at), false, 'ファイル 1 つだけ・ほかの plist')
+    await mkdir(join(mdm, 'someone'))
+    await writeFile(join(mdm, 'someone', 'com.anthropic.claudecode.plist'), '')
+    assert.equal(await otherManagedSettings('darwin', at), true, '利用者ごとの plist')
+    assert.equal(await otherManagedSettings('linux', at), false, 'macOS 以外は plist を見ない')
+    await mkdir(join(managed, 'managed-settings.d'))
+    assert.equal(await otherManagedSettings('linux', at), true, 'drop-in の置き場')
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

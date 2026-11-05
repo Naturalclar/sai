@@ -75,6 +75,19 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 行の `permission_mode`（Claude のフックのペイロード）を `aggregate.ts` が `SessionSummary.permission_mode` に出す。
 - 3 秒のポーリングには乗せない（見出しの盾を押したときだけ取る）。
 
+## 読むだけなら今回だけ許可（#863）
+
+- 入切は `settings.json` の `read_only_once`（**既定は切**。自分のメニューの `ReadOnlyOnceControls`）。**Jev は使わない**（外に出さない。Jev の入切・閾値とは別）。
+- 判定は `shared/readOnlyOnce.ts` の `readOnlyOnce()` の 1 つ。読むだけかは `notReadOnly()` だけで決め、**ルールで当てる道は持たない**（新しい読み方を作らない・拒否の一覧にしない・設定は読むだけ・新しい許可を作らない）。順に:
+  - Claude の `-p` の Bash で、画面から答えられるもの（`jevAutoEligible()`）
+  - 「常に許可」のルールを作れない形（`alwaysPlan()` の `reason` がある）。ルールを作れる形は人の [常に許可] に任せる。`covered` / `not_bash` は回さない（`ONCE_NEVER`。#749 と同じ）
+  - 止める側のルール（`ask` / `deny`）に当たりうるものが無い（`guardMayMatch()`。Bash のルールのパターンの**最初の語がコマンドのどこかに字として出れば当たりうる**側に倒す。大文字小文字は見ない。素の `Bash`・空・最初の語にワイルドカードは何にでも当たる。Bash 以外のルールは見ない）
+  - ここまで通ったら置き場（`readRoots()`。#783 と同じ）を引き、`notReadOnly(command, cwd, repo, roots)` が空
+- 止める側のルールは `server/approvals/permissions.ts` の `guardRules()`（`TerminalDeps.guardRules`。本物を組むのは `main.ts` だけで、**`createApp` の既定は null＝読めない＝答えない**）。読む先は `settingsPaths()`（cwd の `.claude` とユーザーと managed）と、環境に `CLAUDE_CONFIG_DIR` があればその下の `settings.json`、運用者の `SAI_CLAUDE_ARGS` の `--disallowedTools`。設定が壊れている・`SAI_CLAUDE_ARGS` に `--settings` / `--setting-sources` があるときは null。**リポジトリのトップの `.claude` は足さない**（Claude は起こした cwd の `.claude` しか読まない）
+- 動かすのは `server/app.ts` の `readOnlyAuto()`。呼ぶのは許可を預かった時（`POST /api/approvals`。答えなかったものだけ、そのあと `jevAutoTick()` に回す）と、`read_only_once` を入れた時（預かっている分）だけ。読む経路からは呼ばない
+- 答えは画面の [許可] と同じ（`updatedPermissions` を付けない）。記録は `by: read_only`・`remember: false`・`no_rule`。画面には「答えた許可」（#693）として「読むだけなので SAI が今回だけ許可」。答えなかった理由は `reply.log` に同じ許可に 1 行だけ（対象外＝Bash でない・ルールを作れる形は書かない）。コマンドの文字はどこにも書かない
+- **テストは文字列を判定に渡すだけ**（コマンドを実行しない）
+
 ## Jev
 
 ### 表示

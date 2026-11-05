@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { argsRules, collectPermissions, managedSettingsPath, orderRules, parseSettings, settingsPaths } from './permissions.ts'
+import { argsRules, collectPermissions, guardRules, managedSettingsPath, orderRules, parseSettings, settingsPaths } from './permissions.ts'
 import { defaultModeHint, isReplyPermissionMode, launchedModeNote, MODE_HINT, MODE_LABEL, modeEmphasis, modeLabel, modeName, modeSkipsRules, REPLY_MODES, replyModeOf, shortReplyMode, skipModeInArgs } from '../../shared/permissions.ts'
 
 test('MODE_HINT / modeLabel: 何が起きるかは日本語で添え、タグ・モーダル用は「名前 — 説明」（#271）', () => {
@@ -219,4 +219,20 @@ test('launchedModeNote: 処理中のターンが今の設定と違うモード�
     '',
     '失敗して残っているだけ（もう動いていない）',
   )
+})
+
+test('guardRules（#863）: ask / deny だけを返す。CLAUDE_CONFIG_DIR の下も読む。壊れた設定・別の設定を足す引数は null', async () => {
+  const files: Record<string, string> = {
+    '/w/repo/.claude/settings.json': JSON.stringify({ permissions: { allow: ['Bash(ls:*)'], ask: ['Bash(git log:*)'] } }),
+    '/home/me/.claude/settings.json': JSON.stringify({ permissions: { deny: ['Bash(rm:*)'] } }),
+    '/cfg/settings.json': JSON.stringify({ permissions: { ask: ['Bash(gh:*)'] } }),
+  }
+  const read = async (path: string) => files[path] ?? null
+  const base = { home: '/home/me', platform: 'linux' as const, read }
+  assert.deepEqual((await guardRules('/w/repo', { ...base, env: {} }))?.sort(), ['Bash(git log:*)', 'Bash(rm:*)'])
+  assert.deepEqual((await guardRules('/w/repo', { ...base, env: { CLAUDE_CONFIG_DIR: '/cfg' } }))?.sort(), ['Bash(gh:*)', 'Bash(git log:*)', 'Bash(rm:*)'])
+  assert.deepEqual((await guardRules('/w/repo', { ...base, env: { SAI_CLAUDE_ARGS: '--disallowedTools Bash(curl:*)' } }))?.sort(), ['Bash(curl:*)', 'Bash(git log:*)', 'Bash(rm:*)'], '運用者の引数の deny も')
+  for (const args of ['--settings x.json', '--settings=x.json', '--setting-sources user']) assert.equal(await guardRules('/w/repo', { ...base, env: { SAI_CLAUDE_ARGS: args } }), null, args)
+  assert.equal(await guardRules('/w/repo', { ...base, env: {}, read: async (path) => (path === '/w/repo/.claude/settings.local.json' ? '{' : read(path)) }), null, '壊れた設定')
+  assert.equal(await guardRules('/w/repo', { ...base, env: { CLAUDE_CONFIG_DIR: '/cfg' }, read: async (path) => (path === '/cfg/settings.json' ? '{' : read(path)) }), null)
 })

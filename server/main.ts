@@ -29,7 +29,7 @@ import { ClaudeHooks } from './local/claudeHooks.ts'
 import { ClaudeAuth } from './local/claudeAuth.ts'
 import { RealWorktreeAdder } from './git/worktreeAdd.ts'
 import { ClaudeLogin } from './local/claudeLogin.ts'
-import { allowRules } from './approvals/permissions.ts'
+import { allowRules, guardRules } from './approvals/permissions.ts'
 import { jevFromEnv } from './approvals/jev.ts'
 import { CODEX_DAEMON_LOG, CodexDaemonClient, daemonSocketPath } from './reply/codexDaemon.ts'
 import { RealTmux, realPs } from './reply/terminal.ts'
@@ -176,6 +176,8 @@ export function main(argv: string[]): void {
     claudeLogin: new ClaudeLogin({ shimDir: join(feedDir, 'login-shim'), logDir: feedDir, recheck: () => claudeAuth.refresh() }),
     // [常に許可] で、もう設定にあるルールを足さない（#705）。設定ファイルを読むだけ
     allowedRules: (cwd) => allowRules(cwd, homedir()),
+    // 読むだけなら今回だけ許可（#863）が見る、止める側のルール（ask / deny）。設定ファイルを読むだけ
+    guardRules: (cwd) => guardRules(cwd, { home: homedir() }),
     // Codex を起こす前の確かめ（#856）。**本物の git とファイルを見るのはここで組んだものだけ**
     codexConfig: new CodexConfigGuard(new RealGit(), feedDir),
     // 添付の原本の寿命（#792）。本物の置き場を掃除するのはここで組んだものだけ。`SAI_ATTACHMENT_TTL_DAYS=0` で消さない（計測とログだけ）

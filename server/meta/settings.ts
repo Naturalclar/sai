@@ -68,10 +68,15 @@ export interface Settings {
    * （`server/reply/codexDaemon.ts`）。入でも送るのは読む要求だけ
    */
   codex_daemon: boolean
+  /**
+   * ルールを作れない Claude の Bash を、`notReadOnly()` が読むだけと分かれば SAI が今回だけ許可するか（#863。`shared/readOnlyOnce.ts`）。
+   * **既定は切**（SAI が許可を自動で返す口なので、人が入れたときだけ）。Jev は使わない（外に出ない）
+   */
+  read_only_once: boolean
 }
 
 /** 既定。テストもこれを使う（キーを足したらここ 1 か所） */
-export const DEFAULT_SETTINGS: Settings = { persona: DEFAULT_PERSONA, linear_workspace: '', digest: false, digest_provider: 'claude', digest_model: '', pr_summary_provider: '', pr_summary_model: '', jev: true, jev_auto: 0, paste_to_file: false, codex_daemon: false, reply_mode: '', send_across: [] }
+export const DEFAULT_SETTINGS: Settings = { persona: DEFAULT_PERSONA, linear_workspace: '', digest: false, digest_provider: 'claude', digest_model: '', pr_summary_provider: '', pr_summary_model: '', jev: true, jev_auto: 0, paste_to_file: false, read_only_once: false, codex_daemon: false, reply_mode: '', send_across: [] }
 
 export class SettingsStore {
   readonly path: string
@@ -99,6 +104,7 @@ export class SettingsStore {
       if (isJevAuto(raw?.jev_auto)) settings.jev_auto = raw.jev_auto
       if (raw?.paste_to_file === true) settings.paste_to_file = true
       if (raw?.codex_daemon === true) settings.codex_daemon = true
+      if (raw?.read_only_once === true) settings.read_only_once = true
       if (isReplyPermissionMode(raw?.reply_mode)) settings.reply_mode = raw.reply_mode
       settings.send_across = readPairs(raw?.send_across)
       // Jev を切っていれば自動も切（切っている間に隠れて残った閾値で、入に戻した瞬間に自動で答えない。#499 のレビュー）

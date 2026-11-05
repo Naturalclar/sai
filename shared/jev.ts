@@ -193,7 +193,7 @@ export interface JevOnce {
  * `covered` はルールがもう設定にあるのに聞かれている形（Claude の側が当てていない何かがある）、`not_bash` は Bash でない。
  * ほかの理由（展開・サブシェル・cwd の外への `cd` …）は、コマンドそのものを `notReadOnly()` が読んで決める
  */
-const ONCE_NEVER = new Set<string>(['covered', 'not_bash'])
+export const ONCE_NEVER = new Set<string>(['covered', 'not_bash'])
 
 export function jevAutoDecision(
   approval: Pick<Approval, 'tool_name' | 'agent' | 'answerable' | 'jev'> & Partial<Pick<Approval, 'input'>>,

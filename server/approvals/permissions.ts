@@ -139,3 +139,27 @@ export async function collectPermissions(
   rules.push(...fromArgs.rules)
   return { sources, rules: orderRules(rules) }
 }
+
+/**
+ * 「読むだけなら今回だけ許可」（#863）が見る、止める側のルール（`ask` / `deny`）。**分からなければ null**（答えない）:
+ * - 設定ファイルが壊れている（`broken`）
+ * - 運用者の引数（`SAI_CLAUDE_ARGS`）に、別の設定を足す・読む先を変えるフラグ（`--settings` / `--setting-sources`）がある
+ * 読む先は `settingsPaths()` と、環境に `CLAUDE_CONFIG_DIR` があればその下の `settings.json`（ユーザーの設定がそこにある）。
+ * Claude は起こした cwd の `.claude` だけを読み、リポジトリのトップの `.claude` は読まない（2.1.318 で確かめた）ので、トップは足さない
+ */
+export async function guardRules(
+  cwd: string,
+  options: { home: string; env?: NodeJS.ProcessEnv; platform?: NodeJS.Platform; read?: ReadSettings },
+): Promise<string[] | null> {
+  try {
+    const env = options.env ?? process.env
+    if (splitArgs(env.SAI_CLAUDE_ARGS).some((arg) => /^--setting(s|-sources)(=|$)/.test(arg))) return null
+    const read = options.read ?? readSettingsFile
+    const { sources, rules } = await collectPermissions(cwd, { ...options, env, read })
+    const extra = env.CLAUDE_CONFIG_DIR ? parseSettings('user', join(env.CLAUDE_CONFIG_DIR, 'settings.json'), await read(join(env.CLAUDE_CONFIG_DIR, 'settings.json'))) : null
+    if (sources.some((s) => s.broken) || extra?.source.broken) return null
+    return [...rules, ...(extra?.rules ?? [])].filter((r) => r.kind === 'ask' || r.kind === 'deny').map((r) => r.rule)
+  } catch {
+    return null
+  }
+}

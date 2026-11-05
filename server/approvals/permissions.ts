@@ -141,9 +141,26 @@ export async function collectPermissions(
 }
 
 /**
+ * 止める側のルールを読むための読み方。**無い（`ENOENT` / `ENOTDIR`）ときだけ null**（missing）で、大きすぎる・権限が無い・
+ * 読めないは投げる（`guardRules()` が null＝分からない、にする。`readSettingsFile()` はどれも missing にするので使わない）
+ */
+export const readSettingsStrict: ReadSettings = async (path) => {
+  try {
+    const raw = await readFile(path, 'utf-8')
+    if (raw.length > MAX_SETTINGS_BYTES) throw new Error('too large')
+    return raw
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | null)?.code
+    if (code === 'ENOENT' || code === 'ENOTDIR') return null
+    throw err
+  }
+}
+
+/**
  * 「読むだけなら今回だけ許可」（#863）が見る、止める側のルール（`ask` / `deny`）。**分からなければ null**（答えない）:
- * - 設定ファイルが壊れている（`broken`）
- * - 運用者の引数（`SAI_CLAUDE_ARGS`）に、別の設定を足す・読む先を変えるフラグ（`--settings` / `--setting-sources`）がある
+ * - 設定ファイルが壊れている（`broken`）・大きすぎる・読めない（`readSettingsStrict()`）
+ * - 運用者の引数（`SAI_CLAUDE_ARGS`）に、別の設定を足す・読む先を変えるフラグ（`--settings` / `--setting-sources`）か、
+ *   `argsRules()` が読まない書き方の許可のフラグ（`--disallowedTools=…`・`--disallowed-tools`）がある
  * 読む先は `settingsPaths()` と、環境に `CLAUDE_CONFIG_DIR` があればその下の `settings.json`（ユーザーの設定がそこにある）。
  * Claude は起こした cwd の `.claude` だけを読み、リポジトリのトップの `.claude` は読まない（2.1.318 で確かめた）ので、トップは足さない
  */
@@ -153,8 +170,10 @@ export async function guardRules(
 ): Promise<string[] | null> {
   try {
     const env = options.env ?? process.env
-    if (splitArgs(env.SAI_CLAUDE_ARGS).some((arg) => /^--setting(s|-sources)(=|$)/.test(arg))) return null
-    const read = options.read ?? readSettingsFile
+    // 別の設定を足す・読む先を変えるフラグと、`argsRules()` が読まない書き方の許可のフラグ（`--disallowedTools=…`・`--disallowed-tools`）は分からない
+    const odd = (arg: string) => /^--setting(s|-sources)(=|$)/.test(arg) || (/^--(dis)?allowed[-_]?tools/i.test(arg) && arg !== '--disallowedTools' && arg !== '--allowedTools')
+    if (splitArgs(env.SAI_CLAUDE_ARGS).some(odd)) return null
+    const read = options.read ?? readSettingsStrict
     const { sources, rules } = await collectPermissions(cwd, { ...options, env, read })
     const extra = env.CLAUDE_CONFIG_DIR ? parseSettings('user', join(env.CLAUDE_CONFIG_DIR, 'settings.json'), await read(join(env.CLAUDE_CONFIG_DIR, 'settings.json'))) : null
     if (sources.some((s) => s.broken) || extra?.source.broken) return null

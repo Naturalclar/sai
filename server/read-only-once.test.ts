@@ -145,7 +145,19 @@ test('読むだけなら今回だけ許可（#863）: 既定は切。入にす�
   for (const word of ['zzgone', 'ZZVAR', 'zzout', 'zzmark', 'zzfirst']) assert.ok(!log.includes(word), word)
   assert.ok(log.includes('読むだけの今回だけの許可を見送り: 止める側のルール（ask / deny）に当たりうる'))
   assert.equal(judged.length, 0, 'Jev には送らない')
-  await put(base, { read_only_once: false })
+
+  // Jev の自動（#749 の今回だけ）も、止める側のルールに当たりうるものは通さない（片方の道だけ守る形にしない）
+  guards = ['Bash(git log:*)']
+  await put(base, { jev: true, jev_auto: 0.9 })
+  const viaJev = await post('(git status; git log -5)')
+  await drain()
+  assert.ok(judged.length > 0, 'Jev には聞いた')
+  assert.equal(await approvals.wait(viaJev, 10), null, 'Jev の道でも ask に当たりうるものは人に残る')
+  guards = []
+  const jevOk = await post('(git status; git log -7)')
+  await drain()
+  assert.equal((await approvals.wait(jevOk, 10))?.behavior, 'allow')
+  await put(base, { read_only_once: false, jev: false })
 })
 
 test('読むだけなら今回だけ許可（#863）: createApp の既定は止める側のルールを「読めない」扱いにして、入でも答えない', async () => {

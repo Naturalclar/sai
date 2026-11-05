@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { argsRules, collectPermissions, guardRules, managedSettingsPath, orderRules, parseSettings, settingsPaths } from './permissions.ts'
+import { argsRules, collectPermissions, guardRules, MAX_SETTINGS_BYTES, readSettingsStrict, managedSettingsPath, orderRules, parseSettings, settingsPaths } from './permissions.ts'
 import { defaultModeHint, isReplyPermissionMode, launchedModeNote, MODE_HINT, MODE_LABEL, modeEmphasis, modeLabel, modeName, modeSkipsRules, REPLY_MODES, replyModeOf, shortReplyMode, skipModeInArgs } from '../../shared/permissions.ts'
 
 test('MODE_HINT / modeLabel: 何が起きるかは日本語で添え、タグ・モーダル用は「名前 — 説明」（#271）', () => {
@@ -232,7 +232,27 @@ test('guardRules（#863）: ask / deny だけを返す。CLAUDE_CONFIG_DIR の�
   assert.deepEqual((await guardRules('/w/repo', { ...base, env: {} }))?.sort(), ['Bash(git log:*)', 'Bash(rm:*)'])
   assert.deepEqual((await guardRules('/w/repo', { ...base, env: { CLAUDE_CONFIG_DIR: '/cfg' } }))?.sort(), ['Bash(gh:*)', 'Bash(git log:*)', 'Bash(rm:*)'])
   assert.deepEqual((await guardRules('/w/repo', { ...base, env: { SAI_CLAUDE_ARGS: '--disallowedTools Bash(curl:*)' } }))?.sort(), ['Bash(curl:*)', 'Bash(git log:*)', 'Bash(rm:*)'], '運用者の引数の deny も')
-  for (const args of ['--settings x.json', '--settings=x.json', '--setting-sources user']) assert.equal(await guardRules('/w/repo', { ...base, env: { SAI_CLAUDE_ARGS: args } }), null, args)
+  for (const args of ['--settings x.json', '--settings=x.json', '--setting-sources user', '--disallowedTools=Bash(git:*)', '--disallowed-tools Bash(git:*)', '--allowed-tools Bash(ls)']) assert.equal(await guardRules('/w/repo', { ...base, env: { SAI_CLAUDE_ARGS: args } }), null, args)
   assert.equal(await guardRules('/w/repo', { ...base, env: {}, read: async (path) => (path === '/w/repo/.claude/settings.local.json' ? '{' : read(path)) }), null, '壊れた設定')
   assert.equal(await guardRules('/w/repo', { ...base, env: { CLAUDE_CONFIG_DIR: '/cfg' }, read: async (path) => (path === '/cfg/settings.json' ? '{' : read(path)) }), null)
+  assert.equal(await guardRules('/w/repo', { ...base, env: {}, read: async (path) => { if (path === '/home/me/.claude/settings.json') throw new Error('EACCES'); return read(path) } }), null, '読めない')
+})
+
+test('readSettingsStrict（#863）: 無いときだけ null。大きすぎる・ディレクトリは投げる', async () => {
+  const { mkdtemp, writeFile, rm, mkdir } = await import('node:fs/promises')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const dir = await mkdtemp(join(tmpdir(), 'sai-strict-'))
+  try {
+    assert.equal(await readSettingsStrict(join(dir, 'none.json')), null)
+    assert.equal(await readSettingsStrict(join(dir, 'none', 'deeper.json')), null)
+    await writeFile(join(dir, 'ok.json'), '{}')
+    assert.equal(await readSettingsStrict(join(dir, 'ok.json')), '{}')
+    await writeFile(join(dir, 'big.json'), ' '.repeat(MAX_SETTINGS_BYTES + 1))
+    await assert.rejects(readSettingsStrict(join(dir, 'big.json')))
+    await mkdir(join(dir, 'adir.json'))
+    await assert.rejects(readSettingsStrict(join(dir, 'adir.json')))
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
 })

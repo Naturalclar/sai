@@ -4,7 +4,7 @@
 // **Jev は外部 API なので、ここで組み立てた文が外に出る**（「SAI は外に出さない」の例外。入切できて既定は入、
 // 鍵 JEV_API_KEY が無ければ何も送らない）。そのため送るものを絞る: ツール名・コマンド・パス・理由・Codex のダイアログの中身まで。
 // **ファイルの中身（Write / Edit の本文）・メッセージの本文と cwd は送らない**（input は丸ごと送らず、拾う項目を名指しする）
-import { NOT_READ_ONLY_TEXT, notReadOnly } from './bashReadOnly.ts'
+import { isClaudeBash, onceBlocked, onceNotReadOnly } from './readOnlyOnce.ts'
 import type { Approval, JevNone, NoRuleReason } from './types.ts'
 
 /**
@@ -159,7 +159,7 @@ export function jevPercent(safe: number): number {
  * Codex / OpenCode の許可には「常に許可」が無い
  */
 export function jevAutoEligible(approval: Pick<Approval, 'tool_name' | 'agent' | 'answerable'>): boolean {
-  return (approval.agent ?? 'claude') === 'claude' && approval.answerable !== false && approval.tool_name === 'Bash'
+  return isClaudeBash(approval)
 }
 
 /**
@@ -186,14 +186,10 @@ export interface JevOnce {
   repo?: string
   /** そのセッションのリポジトリの worktree のトップ（サーバが git から引いたもの）。ファイルを読んでよいのはこの中だけ。引けなければ省く（#783） */
   roots?: readonly string[]
+  /** 止める側のルール（`ask` / `deny`。#863 の `guardRules()`）。null / 省略は読めなかった（今回だけの許可をしない） */
+  guards?: readonly string[] | null
 }
 
-/**
- * ルールが空だった理由のうち、「今回だけ許可」に回さないもの（#749）。
- * `covered` はルールがもう設定にあるのに聞かれている形（Claude の側が当てていない何かがある）、`not_bash` は Bash でない。
- * ほかの理由（展開・サブシェル・cwd の外への `cd` …）は、コマンドそのものを `notReadOnly()` が読んで決める
- */
-export const ONCE_NEVER = new Set<string>(['covered', 'not_bash'])
 
 export function jevAutoDecision(
   approval: Pick<Approval, 'tool_name' | 'agent' | 'answerable' | 'jev'> & Partial<Pick<Approval, 'input'>>,
@@ -208,10 +204,12 @@ export function jevAutoDecision(
     if (!once) return { kind: 'skip', reason: '「常に許可」のルールを作れないコマンド（展開・構文・ファイルへのリダイレクト・cd のあとの書き込みなど）か、もう設定にある' }
     // ルールを作れない形（#749）: この回の確率が閾値以上で、**読むだけと分かっているコマンド**（`notReadOnly()` が空）なら、
     // 今回だけ許可する。覚えないので、ルールの確率は聞かない（書かれるルールが無い）
-    const command = typeof approval.input?.command === 'string' ? approval.input.command : ''
-    if (!once.noRule || ONCE_NEVER.has(once.noRule)) return { kind: 'skip', reason: `今回だけの自動の許可も見送り: ルールを作れない理由が ${once.noRule ?? '分からない'}` }
-    const why = command ? notReadOnly(command, once.cwd, once.repo ?? '', once.roots ?? []) : 'syntax'
-    return why ? { kind: 'skip', reason: `今回だけの自動の許可も見送り: ${NOT_READ_ONLY_TEXT[why]}` } : { kind: 'once' }
+    // 判定は「読むだけなら今回だけ許可」（#863）と同じ 1 つ（`shared/readOnlyOnce.ts`）。止める側のルール（ask / deny）に当たりうるものも答えない
+    if (!once.noRule) return { kind: 'skip', reason: '今回だけの自動の許可も見送り: ルールを作れない理由が 分からない' }
+    const blocked = onceBlocked(approval, once.noRule, once.guards)
+    if (blocked) return { kind: 'skip', reason: `今回だけの自動の許可も見送り: ${blocked.reason}` }
+    const why = onceNotReadOnly(approval, once)
+    return why ? { kind: 'skip', reason: `今回だけの自動の許可も見送り: ${why}` } : { kind: 'once' }
   }
   if (ruleSafe === undefined) return { kind: 'wait' }
   if (ruleSafe === 'failed') return { kind: 'skip', reason: `ルール ${rule} の確率を Jev に聞けなかった` }

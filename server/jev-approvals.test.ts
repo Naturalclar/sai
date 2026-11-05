@@ -52,6 +52,8 @@ async function start(approvals: Approvals, jev?: JevJudge | null, run: Runner = 
     {
       tmux: { run: async () => '' },
       ps: async () => '',
+      // 止める側のルール（ask / deny）は無い（#863。既定の null だと今回だけの許可をしない）
+      guardRules: async () => [],
       ...(jev === undefined ? {} : { jev }),
     },
     undefined,

@@ -1,8 +1,9 @@
 // dots との会話の受信箱（#872）。`~/.agent-feed/dots-inbox.jsonl` に 1 行ずつ足すだけ。
 //
-// - **書くのは SAI のサーバだけ**。人が画面で書いた投稿（いま）と、アダプターが受けた dots の返答・依頼の状態（#873）
+// - **書くのは SAI のサーバと受信箱のアダプター（#873。`server/dots/adapter.ts`）だけ**。サーバは人が画面で書いた投稿、
+//   アダプターは dots の返答と依頼の状態。どちらも 1 行ずつ足すだけ（書き直さない）
 // - 行の記録（`record.py` の `YYYY-MM-DD.jsonl`）とは混ぜない。名前が日付の形ではないので `feedFiles()` にも拾われない
-// - セッションの本文・cwd・ファイルは入れない。**外には出さない**（この issue では配信しない）
+// - セッションの本文・cwd・ファイルは入れない。外へ配るのはアダプターで、購読された会話の人の投稿だけ
 import { randomUUID } from 'node:crypto'
 import { appendFile, mkdir, readFile, stat } from 'node:fs/promises'
 import { dirname } from 'node:path'
@@ -88,14 +89,14 @@ export class DotsInbox {
     return message
   }
 
-  /** dots の返答を足す（アダプター #873 が使う。いまはテストだけ） */
+  /** dots の返答を足す（アダプター #873 の `inbox_reply`） */
   async reply(conversationId: string, replyTo: string, text: string): Promise<DotsMessage> {
     const message: DotsMessage = { type: 'message', id: this.newId(), conversation_id: conversationId, reply_to: replyTo, source: 'dots', at: this.now().toISOString(), text }
     await this.append(message)
     return message
   }
 
-  /** 依頼の状態を足す（アダプター #873 が使う。いまはテストだけ）。進めない遷移も書くが、読むときに捨てる */
+  /** 依頼の状態を足す（アダプター #873）。進めない遷移も書くが、読むときに捨てる */
   async setState(requestId: string, state: DotsState, reason?: string): Promise<DotsStateChange> {
     const change: DotsStateChange = { type: 'state', request_id: requestId, state, at: this.now().toISOString(), ...(reason ? { reason } : {}) }
     await this.append(change)

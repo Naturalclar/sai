@@ -185,3 +185,15 @@ C-c / SIGTERM では必ず終わる（#296。`main.ts` の `shutdown()`）。
 - 口は `server/dots/dotsRoutes.ts` の `createDotsRoutes()`（`GET` / `POST /api/dots`。POST は `isCrossOrigin()` で断る）。会話の id はサーバが作る UUID の形だけ受け、無い会話は `404`
 - いまは `post()` しか口から呼ばない。`reply()` と `setState()` はアダプター（#873）のためのもので、いまはテストが作り物の返答・状態を書くのに使う。**この部品から外には何も出さない**
 
+
+## 受信箱のアダプター（dots/adapter.ts。#873）
+
+SAI のサーバとは別のプロセスで動かす MCP サーバ（Streamable HTTP。JSON で答え、SSE は持たない）。**本物を組む入口はまだ無い**（`createDotsAdapter()` を作るのはテストだけ。プロセスとして立てて ChatGPT につなぐのは #874）。
+
+- **読み書きするもの**: 受信箱（`DotsInbox`）と自分の覚え（`AdapterState`。`dots-adapter.json`、`0600`、一時ファイルから rename）だけ。SAI の `/mcp`・`/api` は呼ばない
+- **口**: `POST /mcp`（Bearer のトークンを `verifyToken` に渡す。無い・違えば 401 と `WWW-Authenticate: Bearer resource_metadata=…`。`Origin` 付きは 403。batch は 400）と `GET /.well-known/oauth-protected-resource`（`resource`・`authorization_servers` を出すだけ。認可サーバはここに無い）
+- **ツール**: `inbox_read(conversation_id)` は会話を時系列で返し、受付済みの依頼を返答待ちにする。`inbox_reply(request_id, text)` は依頼ごとに 1 件（同じ中身の 2 回目は `duplicate: true` で同じ id、違う中身は断る）。返答を書いたら、未配信・結果不明なら受付済みを挟んで完了にする。返答の書き込みと配信の 1 周は `serial()` で 1 本ずつ流す
+- **イベント**: `message.created` だけ（`arguments.conversation_id` で絞る）。`events/subscribe` は鍵（`whsec_`）・callback（`resolveCallback()`）を確かめ、challenge（`{"type":"verification","challenge"}`。2xx で同じ値が JSON の `challenge` か本文で返る）を通してから残す。失敗は `-32015`。id は `subscriptionId()`（持ち主・イベント・会話・送り先のハッシュ）なので何度作っても同じで、呼び直しで期限（24 時間）が延びる。鍵が替わったら前の鍵も `SECRET_GRACE_MS`（24 時間）は一緒に署名する。購読したときにあった投稿（`before`）は配らない。`events/unsubscribe` は何度呼んでも `{}`（ほかの持ち主の購読は消さない）
+- **配信**（`tick()`。時計の 1 回ぶん。立てるのは #874 の入口）: 期限切れの購読と、`isActive(subject)` が false の購読は消す。購読した会話の人の投稿（`sai-human`。dots の返答は依頼に付くので対象にならない＝往復しない）を、`eventId` = 投稿の id で送る。2xx で受付済み。届かない・見切った・ほかの状態は `RETRY_BASE_MS` から 2 倍ずつあけて同じ `eventId` で送り直し（時刻と署名は作り直す）、`MAX_ATTEMPTS`（5 回）で失敗。410 は購読を消して失敗、413 は再送せず失敗（その投稿をほかの購読が届けていれば失敗にしない）。1 つの会話で 1 日 `MAX_EVENTS_PER_CONVERSATION_PER_DAY`（50 件）を超えたら失敗。受付済み・返答待ちのまま `REPLY_DEADLINE_MS`（30 分）を過ぎたら結果不明
+- **本文が大きいとき**: 1 件が 256 KiB（`WEBHOOK_MAX_BYTES`）に収まるところまで本文を切り詰めて `truncated: true` を付ける（`eventBody()`。言語モデルで要約はしない）。全文は `inbox_read` で読む
+- **送る口**（`dots/webhook.ts`）: 署名は Standard Webhooks（`webhook-id`・`webhook-timestamp`・`webhook-signature: v1,<base64>`。鍵が 2 つなら空白で並べる）。送り先は https で、名前を引いた先が**全部** public なアドレスのときだけ（`isPrivateAddress()`。IPv4 を埋めた IPv6・NAT64・6to4 も private 扱い）。本物の口 `httpsTransport` は検査したアドレスに固定して繋ぐ（引き直さない）・10 秒で見切る・リダイレクトを追わない。テストは `Transport` と `Lookup` を偽物に差し替える（`adapter.test.ts` の偽の ChatGPT）

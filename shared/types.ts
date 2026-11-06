@@ -616,6 +616,37 @@ export interface PrDetailResponse {
   summary_via?: string
   /** 覚えている要約（#790）。まだ作っていなければ省略。開いただけでは作らない */
   summary?: PrBrief
+  /**
+   * 解説（#881。`/brief-pr`）を回せるか。このマシンにそのリポジトリの記録のある worktree があり、Claude で回せるときだけ true。
+   * 無ければ画面は「解説を作る」を出さない
+   */
+  explain_available?: boolean
+  /** 最後に回した解説（#881）。回していなければ省略 */
+  explain?: PrExplain
+}
+
+/**
+ * PR の解説（#881）。人が押したときだけ `/brief-pr` を SAI の `claude -p` で裏で回し、できた HTML を
+ * `GET /api/pr-explain/<key>` で配る（パスは渡さない）
+ */
+export interface PrExplain {
+  /** `running` 回している / `ready` 開ける / `gone` 一時フォルダから消えた / `failed` 回し終えたが HTML が見つからなかった */
+  state: 'running' | 'ready' | 'gone' | 'failed'
+  /** 回したときから PR の head が進んだ（PR の GET のときだけ見る。状態だけの GET では false のまま。画面は `head_sha` で比べる） */
+  stale: boolean
+  /** 回したときの PR の head */
+  head_sha: string
+  /** 回したセッションのエンティティ ID（途中経過・許可・失敗の理由はそのセッションの画面に出る） */
+  session: string
+  /** 回し始めた時刻（ISO） */
+  at: string
+  /** 配る口の鍵（`ready` のときだけ） */
+  key?: string
+}
+
+/** POST /api/prs/<owner>/<repo>/<番号>/explain（#881）の応答 */
+export interface PrExplainResponse {
+  explain: PrExplain
 }
 
 /**

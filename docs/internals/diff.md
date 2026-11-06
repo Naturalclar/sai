@@ -139,6 +139,18 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 画面は押すときに、出していた送り先を body の `via` で送る。いまの口（`briefMouth()`）と違えば 409（PR を開いたまま設定で口を替えた画面から、表示と違う口へ渡さない）。
 - 古いか・増えたコメントの数は画面が `briefState()` で出す（コメントの数は `prCommentCount()`。サーバが覚えるときの数え方と同じ）。
 
+### PR の解説を作る（#881。`/brief-pr`）
+
+- `POST /api/prs/<owner>/<repo>/<番号>/explain`（同一オリジンのみ。`app.ts` の `postPrExplain()`）。**押したときだけ**、利用者のスキル `/brief-pr` を新しい Claude のセッションとして起こす（返信と同じ `newSessionCommand()`。`spawnNewClaude()` を `POST /api/sessions/new` と共用）。最初の指示は `explainPrompt()`（`/brief-pr <PR の URL>`）で、URL は `gh` で読み直した PR のもの（リクエストからは受けない）。**権限のフラグは足さない**。許可・質問は返信と同じ配線で画面と要対応に出る。画面は回したセッションへ移らない（裏で回して、結果のリンクだけを PR に出す）。
+- 回す場所は `explainFrom()`（そのリポジトリの remote を持つ、このマシンの一番新しいセッション）→ `explainPlace()`（そのリポジトリの `main`、無ければ `master` の worktree。無ければ元のセッションの worktree）。検査は新しいセッションと同じ `startPlace()`。記録のある worktree が無いリポジトリでは `explain_available` を載せず、ボタンを出さない。
+- 同じ PR は 1 本ずつ（回している間・起こしている間の 2 本目は 409。`explainStarting` と `run.running()`）。
+- 覚えるのは `server/git/prExplains.ts` の `PrExplainStore`（`pr-explains.json`。PR ごとに最後の 1 つ。`session`・`head_sha`・`at`・見つけた `path`）。**パスは画面に渡さない**。
+- 状態は `explainNow()` が PR の GET（`explain`）と `GET …/explain`（状態だけ。gh を叩かない。回している間に画面が `pollLoop()` で見に来る）で読む。回し終えてまだ見つけていなければ、そのセッションのターン完了の本文から `briefHtmlIn()` で拾って覚え、無ければ `failed`。状態の形は `explainView()`（`running` / `ready` / `gone` / `failed`、head が進んだら `stale`）。
+- 拾ってよいのは `briefHtmlIn()` / `briefHtmlOk()` が通すものだけ: 本文の `file://…/brief-pr-…/brief.html` で、**フォルダの親の realpath が一時フォルダ（`os.tmpdir()` の realpath。スキルの `render.py` と同じ `TMPDIR`）と同じ**、フォルダもファイルも lstat でリンクでない普通のファイル、`PR_EXPLAIN_MAX_BYTES` 以下。名前違い・深い所・リポジトリの中・リンクは拾わない。
+- **HTML を配るのはこの口だけの例外**: `GET /api/pr-explain/<鍵>`（`getPrExplain()`）。鍵は覚えたパスの sha1 の頭 16 桁で、表に無ければ 404。配る前に `briefHtmlOk()` で確かめ直し、`PR_EXPLAIN_HEADERS`（`Content-Security-Policy: sandbox`・`nosniff`・`no-store`・`no-referrer`）を付ける。出す相手は返答のファイル（#603 / #768）と同じ `refuseDevice()`（ループバックと whois で本人と分かった tailnet のユーザーだけ。タグ付きの端末は入口で 401、`/mcp` にこの口は無い）。
+- 一時フォルダの中身は OS に任せる（消えていたら `gone` にして作り直しのボタンにする）。SAI は写しを持たない。
+- 画面は `web/src/PrExplainBox.tsx`（`PrView` の要約の下）。文言は `web/src/prExplainLabels.ts`。
+
 ### GitHub にレビューを投稿する
 
 - `POST /api/prs/<owner>/<repo>/<番号>/review`（同一オリジンのみ）。画面は題名の行の `PrHeadActions` → 確認の画面 `PrReviewModal`。全体のコメントの下書きは `web/src/prReviewDraft.ts` の `sai.prReviewBody`。

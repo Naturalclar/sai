@@ -7,7 +7,7 @@ import { explainButtonLabel, explainHref, explainNote } from './prExplainLabels'
 /**
  * PR の解説（#881）。押したときだけ利用者のスキル `/brief-pr` を SAI の新しいセッションとして回し、できた HTML を開くリンクを出す。
  *
- * - 途中経過・許可・失敗は回したセッションと要対応に出る（欄にそのセッションへのリンクを出す）。状態は「更新」で PR を読み直したときに変わる
+ * - 途中経過・質問・失敗は回したセッションと要対応に出る（許可モードは bypassPermissions なので許可は聞かない。欄にそのセッションへのリンクを出す）。状態は「更新」で PR を読み直したときに変わる
  * - 開く先は SAI の口（`/api/pr-explain/<鍵>`）なので、tailnet 越しの画面からも開ける。サーバは `CSP: sandbox` で配る
  */
 export function PrExplainBox({ repo, number, data, now }: { repo: string; number: number; data: PrDetailResponse; now: number }) {

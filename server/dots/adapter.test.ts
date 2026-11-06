@@ -292,7 +292,7 @@ test('410 は再送せず購読を消す。413 は再送しない', async () => 
   assert.equal((await conv(m.conversation_id)).requests.find((r) => r.message.id === m2.id)?.state, 'failed')
 })
 
-test('解除は 2 回しても同じ結果。ほかの持ち主の購読は消さない。解除したら配らない', async () => {
+test('解除は 2 回しても同じ結果。ほかの持ち主の購読は消さない。解除したら配らず、配るはずだった依頼は失敗にする', async () => {
   const { m, sub } = await started()
   assert.deepEqual((await rpc('events/unsubscribe', { id: sub }, 'other-token')).result, {})
   assert.ok(adapter.state.subscription(sub))
@@ -300,7 +300,8 @@ test('解除は 2 回しても同じ結果。ほかの持ち主の購読は消�
   assert.deepEqual((await rpc('events/unsubscribe', { id: sub })).result, {})
   await adapter.tick()
   assert.equal(chatgpt.events().length, 0)
-  assert.equal((await conv(m.conversation_id)).requests[1]?.state, 'queued')
+  assert.equal((await conv(m.conversation_id)).requests[1]?.state, 'failed')
+  assert.equal((await conv(m.conversation_id)).requests[0]?.state, 'queued', '購読より前の投稿は触らない')
 })
 
 test('期限切れ・失効した購読には配らずに消す', async () => {
@@ -392,6 +393,33 @@ test('410 で購読を消したら、同じ周の残りの投稿へは送らず�
   await adapter.tick()
   assert.equal(chatgpt.events().length, 1)
   assert.equal(adapter.state.allDeliveries().filter((d) => d.status === 'pending').length, 0)
+  // 配れなくなった残りの依頼も、未配信のまま止めずに失敗にする（購読し直しても before に入って配られないので）
+  assert.deepEqual((await conv(m.conversation_id)).requests.slice(1).map((r) => r.state), ['failed', 'failed', 'failed'])
+})
+
+test('再送の途中で購読の期限が切れたら、その依頼は失敗にする', async () => {
+  const { m } = await started()
+  chatgpt.reply = () => 503
+  await adapter.tick()
+  advance(SUBSCRIPTION_TTL_MS)
+  await adapter.tick()
+  const r = (await conv(m.conversation_id)).requests[1]
+  assert.equal(r?.state, 'failed')
+  assert.match(r?.reason ?? '', /期限/)
+})
+
+test('配信のときに名前が一度引けなくても、送り直す側に入れて次で届ける', async () => {
+  const { m } = await started()
+  let fail = true
+  // 名前を引く口だけ差し替えたアダプター（1 回目だけ引けない）
+  adapter = createDotsAdapter({ feedDir: dir, verifyToken: async () => ({ subject: 'user-a' }), isActive: async () => true, transport: chatgpt.transport, lookup: async (h) => (fail ? ((fail = false), Promise.reject(new Error('SERVFAIL'))) : lookup(h)), resource: 'https://inbox.example/mcp', authorizationServers: [], now: () => clock })
+  await adapter.tick()
+  assert.equal(chatgpt.events().length, 0)
+  assert.equal((await conv(m.conversation_id)).requests[1]?.state, 'queued')
+  advance(RETRY_BASE_MS)
+  await adapter.tick()
+  assert.equal(chatgpt.events().length, 1)
+  assert.equal((await conv(m.conversation_id)).requests[1]?.state, 'accepted')
 })
 
 test('30 日たっても、返答の無い依頼を配り直さない', async () => {

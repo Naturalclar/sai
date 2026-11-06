@@ -110,6 +110,9 @@ export type Lookup = (host: string) => Promise<string[]>
 
 export const realLookup: Lookup = async (host) => (await dnsLookup(host, { all: true, verbatim: true })).map((a) => a.address)
 
+/** 名前が引けなかった（一時的なことがあるので、配信では送り直す側に入れる） */
+export const LOOKUP_FAILED = 'callback の名前を引けません'
+
 export interface Target {
   url: URL
   /** 繋ぐアドレス（検査を通ったもの。引き直さない） */
@@ -132,9 +135,9 @@ export async function resolveCallback(raw: string, lookup: Lookup): Promise<Targ
   try {
     addresses = isIP(host) ? [host] : await lookup(host)
   } catch {
-    return 'callback の名前を引けません'
+    return LOOKUP_FAILED
   }
-  if (addresses.length === 0) return 'callback の名前を引けません'
+  if (addresses.length === 0) return LOOKUP_FAILED
   // 1 つでも private を指していれば送らない（どれに繋がるかを相手に選ばせない）
   if (addresses.some(isPrivateAddress)) return 'callback が private なアドレスを指しています'
   return { url, address: addresses[0]! }

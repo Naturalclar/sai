@@ -15,7 +15,7 @@ import type { McpToolResult } from '../mcp/protocol.ts'
 import { AdapterState, DOTS_ADAPTER_FILE, subscriptionId } from './adapterState.ts'
 import type { Delivery, Subscription } from './adapterState.ts'
 import { DOTS_INBOX_FILE, DotsInbox } from './inbox.ts'
-import { resolveCallback, secretBytes, WEBHOOK_MAX_BYTES, WEBHOOK_TIMEOUT_MS, webhookHeaders } from './webhook.ts'
+import { LOOKUP_FAILED, resolveCallback, secretBytes, WEBHOOK_MAX_BYTES, WEBHOOK_TIMEOUT_MS, webhookHeaders } from './webhook.ts'
 import type { Lookup, Target, Transport } from './webhook.ts'
 
 export const EVENT_NAME = 'message.created'
@@ -231,11 +231,14 @@ export function createDotsAdapter(o: DotsAdapterOptions) {
   const unsubscribe = async (owner: TokenOwner, params: Obj) => {
     const id = typeof params.id === 'string' ? params.id : ''
     if (!id) throw new RpcError(-32602, 'id を渡してください')
-    await state.load()
-    const s = state.subscription(id)
-    // 無い購読・ほかの持ち主の購読は消さないが、同じ結果を返す（何度呼んでもよい）
-    if (s && s.subject === owner.subject) await state.removeSubscription(id)
-    return {}
+    // 配信の周と重ならないように 1 本ずつ（周の途中で解除した callback へ送らない）
+    return serial(async () => {
+      await state.load()
+      const s = state.subscription(id)
+      // 無い購読・ほかの持ち主の購読は消さないが、同じ結果を返す（何度呼んでもよい）
+      if (s && s.subject === owner.subject) await dropSubscription(s, await inbox.conversations(), '購読が解除されました')
+      return {}
+    })
   }
 
   // ---- 配信（時計の 1 回ぶん）
@@ -249,11 +252,24 @@ export function createDotsAdapter(o: DotsAdapterOptions) {
     if (!delivered) await move(req, 'failed', reason)
   }
 
+  /**
+   * 購読を消す。その購読で配るはずだった依頼（購読したあとの投稿で、まだ未配信のもの）は、同じ会話を配るほかの購読が無ければ
+   * 失敗にする（未配信のまま止まって動かないものを残さない）
+   */
+  const dropSubscription = async (s: Subscription, convs: DotsConversation[], reason: string) => {
+    await state.removeSubscription(s.id)
+    if (state.subscriptions().some((x) => x.conversation_id === s.conversation_id)) return
+    const conv = convs.find((c) => c.id === s.conversation_id)
+    for (const req of conv?.requests ?? []) {
+      if (req.state === 'queued' && !s.before.includes(req.message.id)) await move(req, 'failed', reason)
+    }
+  }
+
   /** 1 件送る。購読を消したら true（同じ購読の残りの投稿へはもう送らない） */
   const deliver = async (s: Subscription, req: DotsRequest, d: Delivery, t: number): Promise<boolean> => {
     const target = await resolveCallback(s.url, o.lookup)
     const attempt = d.attempts + 1
-    if (typeof target === 'string') {
+    if (typeof target === 'string' && target !== LOOKUP_FAILED) {
       // 名前の向きが private に変わったなどは送らずに止める
       const done: Delivery = { ...d, attempts: attempt, status: 'failed', last_status: 0, reason: target }
       await state.putDelivery(done)
@@ -264,10 +280,13 @@ export function createDotsAdapter(o: DotsAdapterOptions) {
     // 同じ eventId で送り直す（時刻と署名は作り直す）
     const body = eventBody(d.message_id, iso(t), req.message)
     let status = 0
-    try {
-      status = (await o.transport(target, webhookHeaders(secretsNow(s, t), d.message_id, timestamp, body), body, WEBHOOK_TIMEOUT_MS)).status
-    } catch {
-      status = 0
+    // 名前が引けないのは一時的なことがあるので、届かなかったのと同じに送り直す側へ
+    if (typeof target !== 'string') {
+      try {
+        status = (await o.transport(target, webhookHeaders(secretsNow(s, t), d.message_id, timestamp, body), body, WEBHOOK_TIMEOUT_MS)).status
+      } catch {
+        status = 0
+      }
     }
     if (status >= 200 && status < 300) {
       await state.putDelivery({ ...d, attempts: attempt, status: 'delivered', delivered_at: iso(t), last_status: status })
@@ -278,8 +297,8 @@ export function createDotsAdapter(o: DotsAdapterOptions) {
       // もう要らない、と言われた購読は消す
       const done: Delivery = { ...d, attempts: attempt, status: 'failed', last_status: status, reason: '購読先が無くなりました（410）' }
       await state.putDelivery(done)
-      await state.removeSubscription(s.id)
       await settleFailure(req, done, done.reason!)
+      await dropSubscription(s, await inbox.conversations(), done.reason!)
       return true
     }
     if (status === 413) {
@@ -306,11 +325,11 @@ export function createDotsAdapter(o: DotsAdapterOptions) {
       const convs = await inbox.conversations()
       for (const s of state.subscriptions()) {
         if (ms(s.expires_at) <= t) {
-          await state.removeSubscription(s.id)
+          await dropSubscription(s, convs, '購読の期限が切れました')
           continue
         }
         if (!(await o.isActive(s.subject))) {
-          await state.removeSubscription(s.id)
+          await dropSubscription(s, convs, '購読の権限が無くなりました')
           continue
         }
         const conv = convs.find((c) => c.id === s.conversation_id)

@@ -253,15 +253,18 @@ export function createDotsAdapter(o: DotsAdapterOptions) {
   }
 
   /**
-   * 購読を消す。その購読で配るはずだった依頼（購読したあとの投稿で、まだ未配信のもの）は、同じ会話を配るほかの購読が無ければ
-   * 失敗にする（未配信のまま止まって動かないものを残さない）
+   * 購読を消す。その購読で配るはずだった依頼（購読したあとの投稿で、まだ未配信のもの）は、残った購読のどれも配らない
+   * （どれの before にも入っている）なら失敗にする（未配信のまま止まって動かないものを残さない）
    */
   const dropSubscription = async (s: Subscription, convs: DotsConversation[], reason: string) => {
     await state.removeSubscription(s.id)
-    if (state.subscriptions().some((x) => x.conversation_id === s.conversation_id)) return
+    const others = state.subscriptions().filter((x) => x.conversation_id === s.conversation_id)
     const conv = convs.find((c) => c.id === s.conversation_id)
     for (const req of conv?.requests ?? []) {
-      if (req.state === 'queued' && !s.before.includes(req.message.id)) await move(req, 'failed', reason)
+      if (req.state !== 'queued' || s.before.includes(req.message.id)) continue
+      // 残った購読がこの依頼を配るなら（その購読の before に入っていなければ）任せる。どれも配らないなら失敗
+      if (others.some((x) => !x.before.includes(req.message.id))) continue
+      await move(req, 'failed', reason)
     }
   }
 

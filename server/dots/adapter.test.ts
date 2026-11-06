@@ -447,3 +447,21 @@ test('立ち上げ直後に読み込みと書き込みが重なっても、書�
   await reading
   assert.equal(st.subscription(sub)?.expires_at, '2099-01-01T00:00:00.000Z')
 })
+
+test('同じ会話に別の購読があっても、その購読が配らない依頼は、購読を消すときに失敗にする', async () => {
+  const first = await inbox.post('前の投稿')
+  await subscribe(first.conversation_id, KEY_A, HOOK)
+  advance(1000)
+  await inbox.post('R1', first.conversation_id)
+  await inbox.post('R2', first.conversation_id)
+  // あとから別の送り先で購読（R1・R2 は before に入る）
+  await subscribe(first.conversation_id, KEY_A, 'https://hooks.chatgpt.example/other')
+  advance(1000)
+  await inbox.post('R3', first.conversation_id)
+  chatgpt.reply = (n) => (n === 0 ? 410 : 503)
+  await adapter.tick()
+  const states = Object.fromEntries((await conv(first.conversation_id)).requests.map((r) => [r.message.text, r.state]))
+  assert.equal(states.R1, 'failed')
+  assert.equal(states.R2, 'failed', 'R2 はどの購読も配らない')
+  assert.equal(states.R3, 'queued', 'R3 は残った購読が配る（送り直し中）')
+})

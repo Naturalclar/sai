@@ -224,6 +224,12 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - セルはエスケープされていない `|` で分けて `\|` を `|` に戻し（コードの中も）、列の過不足は `fitCells()` で見出しに合わせる。本文の行は空行・`|` の無い行・別のブロックの始まり（`isTableRow()`）で終わる。`|` の無い `---` は罫線のまま。
 - 描画は `web/src/MarkdownTable.tsx`（`.table-wrap` の中だけ横に流す）。セルでは本文の `overflow-wrap: anywhere` / `word-break` を外す（継がせると狭い画面でセルが 1 文字幅まで縮んで縦に伸びる。代わりに `min-width`）。
 
+### コードブロックのコピー（#877）
+
+- `BlockView` の `code` は `web/src/CodeBlock.tsx`。`.code-wrap`（flex）に `pre` とボタンを並べ、ボタンは `pre` の横の別の列にする（中身に重ねると、横に長い行を送ったときや長押しで選ぶときに隠れる）。地の色は `.code-wrap` が持つ。
+- 渡す文字列は `web/src/codeCopy.ts` の `codeCopyText()`（`block.text` そのまま）、文言は `codeCopyView()`。書くのは `messageLink.ts` の `copyText()`（書けなければ `false`）で、押したときだけ。済んだ印は `CODE_COPIED_MS`（1.5 秒）で戻し、書けなかったら下に `role="status"` の案内を出す。
+- `BlockView`（`<Markdown>`）を通る所には全部出る（フィード・セッション画面・要対応の本文のほか、PR の本文・コメント・行のスレッド、`FileViewer` の描画モード、dots の返答、手順の発言、進み具合のメモ）。手順の出力（`OutputSection`）・`FileViewer` の元の文字・許可の `detail` は通らないので出ない。
+
 ### 長い本文の折りたたみ（#365 / #369）
 
 - 長い本文（`Message.tsx` の `isLong()`。600 字か 9 行超）の折りたたみは、フィードでもセッション画面でも開いた状態で始める（`Chat` の `longOpen` → `Message` の `defaultOpen` → `useState(defaultOpen)`。`showThinking` / `thinkingOpen` と同じ、画面ごとの表示の指定）。

@@ -1,4 +1,5 @@
 import type { Block } from '../../shared/markdown.ts'
+import { CodeBlock } from './CodeBlock'
 import { Inlines } from './Inlines'
 import { Lines } from './Lines'
 import { MarkdownListItem } from './MarkdownListItem'
@@ -14,7 +15,7 @@ export function BlockView({ block }: { block: Block }) {
     case 'list':
       return <ul>{block.items.map((item, i) => <MarkdownListItem key={i} item={item} />)}</ul>
     case 'code':
-      return <pre data-lang={block.lang || undefined}><code>{block.text}</code></pre>
+      return <CodeBlock block={block} />
     case 'quote':
       return <blockquote><Lines lines={block.lines} /></blockquote>
     case 'rule':

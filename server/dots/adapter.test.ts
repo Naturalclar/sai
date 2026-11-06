@@ -465,3 +465,21 @@ test('同じ会話に別の購読があっても、その購読が配らない�
   assert.equal(states.R2, 'failed', 'R2 はどの購読も配らない')
   assert.equal(states.R3, 'queued', 'R3 は残った購読が配る（送り直し中）')
 })
+
+test('1 つの購読が 410 を返しても、同じ投稿をほかの購読が配れるなら失敗にせず、そちらで届ける', async () => {
+  const first = await inbox.post('前の投稿')
+  await subscribe(first.conversation_id, KEY_A, HOOK)
+  await subscribe(first.conversation_id, KEY_A, 'https://hooks.chatgpt.example/other')
+  advance(1000)
+  const m = await inbox.post('R3', first.conversation_id)
+  chatgpt.reply = (n) => (n === 0 ? 410 : 200)
+  await adapter.tick()
+  assert.equal(chatgpt.events().length, 2)
+  assert.equal((await conv(m.conversation_id)).requests.find((r) => r.message.id === m.id)?.state, 'accepted')
+  // どちらも配れなければ失敗
+  const m2 = await inbox.post('R4', first.conversation_id)
+  chatgpt.reply = () => 413
+  await adapter.tick()
+  assert.equal((await conv(m.conversation_id)).requests.find((r) => r.message.id === m2.id)?.state, 'failed')
+})
+

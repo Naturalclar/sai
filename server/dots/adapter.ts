@@ -245,11 +245,16 @@ export function createDotsAdapter(o: DotsAdapterOptions) {
 
   const secretsNow = (s: Subscription, t: number) => s.secrets.filter((x) => !(ms(x.until) <= t)).map((x) => x.secret)
 
-  /** 送った結果で状態を決める（その投稿をほかの購読が届けていれば、失敗にしない） */
+  /** 送った結果で状態を決める（その投稿をほかの購読が届けた・まだ配れるなら、失敗にしない） */
   const settleFailure = async (req: DotsRequest | undefined, d: Delivery, reason: string) => {
     if (!req) return
     const delivered = state.allDeliveries().some((x) => x.message_id === d.message_id && x.status === 'delivered')
-    if (!delivered) await move(req, 'failed', reason)
+    if (delivered) return
+    // ほかの購読がまだこの投稿を配れる（その購読の before に入っていず、そちらの配信も失敗していない）なら任せる
+    const another = state
+      .subscriptions()
+      .some((x) => x.id !== d.subscription && x.conversation_id === d.conversation_id && !x.before.includes(d.message_id) && state.delivery(x.id, d.message_id)?.status !== 'failed')
+    if (!another) await move(req, 'failed', reason)
   }
 
   /**

@@ -245,15 +245,19 @@ export function createDotsAdapter(o: DotsAdapterOptions) {
 
   const secretsNow = (s: Subscription, t: number) => s.secrets.filter((x) => !(ms(x.until) <= t)).map((x) => x.secret)
 
+  /**
+   * その購読が、この投稿をまだ配れるか: 購読したときにあった投稿ではなく、その購読のこの投稿の配信が失敗で終わっていない。
+   * 「失敗にしてよいか」を決める 2 か所（`settleFailure` と `dropSubscription`）はこれ 1 つで見る（ずれると未配信のまま止まる）
+   */
+  const canStillDeliver = (x: Subscription, messageId: string): boolean => !x.before.includes(messageId) && state.delivery(x.id, messageId)?.status !== 'failed'
+
   /** 送った結果で状態を決める（その投稿をほかの購読が届けた・まだ配れるなら、失敗にしない） */
   const settleFailure = async (req: DotsRequest | undefined, d: Delivery, reason: string) => {
     if (!req) return
     const delivered = state.allDeliveries().some((x) => x.message_id === d.message_id && x.status === 'delivered')
     if (delivered) return
-    // ほかの購読がまだこの投稿を配れる（その購読の before に入っていず、そちらの配信も失敗していない）なら任せる
-    const another = state
-      .subscriptions()
-      .some((x) => x.id !== d.subscription && x.conversation_id === d.conversation_id && !x.before.includes(d.message_id) && state.delivery(x.id, d.message_id)?.status !== 'failed')
+    // ほかの購読がまだこの投稿を配れるなら任せる
+    const another = state.subscriptions().some((x) => x.id !== d.subscription && x.conversation_id === d.conversation_id && canStillDeliver(x, d.message_id))
     if (!another) await move(req, 'failed', reason)
   }
 
@@ -267,8 +271,8 @@ export function createDotsAdapter(o: DotsAdapterOptions) {
     const conv = convs.find((c) => c.id === s.conversation_id)
     for (const req of conv?.requests ?? []) {
       if (req.state !== 'queued' || s.before.includes(req.message.id)) continue
-      // 残った購読がこの依頼を配るなら（その購読の before に入っていなければ）任せる。どれも配らないなら失敗
-      if (others.some((x) => !x.before.includes(req.message.id))) continue
+      // 残った購読がこの依頼をまだ配れるなら任せる。どれも配れないなら失敗
+      if (others.some((x) => canStillDeliver(x, req.message.id))) continue
       await move(req, 'failed', reason)
     }
   }

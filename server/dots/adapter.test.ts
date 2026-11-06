@@ -483,3 +483,17 @@ test('1 つの購読が 410 を返しても、同じ投稿をほかの購読が�
   assert.equal((await conv(m.conversation_id)).requests.find((r) => r.message.id === m2.id)?.state, 'failed')
 })
 
+test('1 つの購読に任せた投稿は、その購読が消えたら失敗にする（未配信のまま止めない）', async () => {
+  const first = await inbox.post('前の投稿')
+  await subscribe(first.conversation_id, KEY_A, HOOK)
+  const s2 = (await subscribe(first.conversation_id, KEY_A, 'https://hooks.chatgpt.example/other')).result?.id as string
+  advance(1000)
+  const m = await inbox.post('R', first.conversation_id)
+  // 1 つ目は 413 で終わり、2 つ目に任せる（2 つ目は送り直し中）
+  chatgpt.reply = (n) => (n === 0 ? 413 : 500)
+  await adapter.tick()
+  assert.equal((await conv(m.conversation_id)).requests.find((r) => r.message.id === m.id)?.state, 'queued')
+  await rpc('events/unsubscribe', { id: s2 })
+  assert.equal((await conv(m.conversation_id)).requests.find((r) => r.message.id === m.id)?.state, 'failed')
+})
+

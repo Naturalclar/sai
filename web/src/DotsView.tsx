@@ -50,7 +50,7 @@ export function DotsView({ onStatus, onOpenSidebar }: Pick<PaneProps, 'onStatus'
       <BackLink onOpenSidebar={onOpenSidebar} />
       <div className="chat-head">
         <h1>dots との会話</h1>
-        <span className="meta">まだ dots には届けていません（受信箱に置くだけ）</span>
+        <span className="meta">SAI から送った分は、まだ dots に届けていません（受信箱に置くだけ）</span>
       </div>
       <div className="chat dots-log" ref={listRef}>
         {timeline.length === 0 ? (

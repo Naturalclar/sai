@@ -19,12 +19,13 @@
 import { appendFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { ATTACHMENT_TTL_DAYS } from './reply/attachmentSweep.ts'
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { DEFAULT_PORT, parsePort } from '../shared/port.ts'
 import { createApp } from './app.ts'
+import { DOTS_DROP_DIR } from './dots/drop.ts'
 import { ClaudeHooks } from './local/claudeHooks.ts'
 import { ClaudeAuth } from './local/claudeAuth.ts'
 import { RealWorktreeAdder } from './git/worktreeAdd.ts'
@@ -182,6 +183,8 @@ export function main(argv: string[]): void {
     codexConfig: new CodexConfigGuard(new RealGit(), feedDir),
     // 添付の原本の寿命（#792）。本物の置き場を掃除するのはここで組んだものだけ。`SAI_ATTACHMENT_TTL_DAYS=0` で消さない（計測とログだけ）
     attachmentSweep: { ttlMs: attachmentTtlDays() * 86_400_000, logPath: join(feedDir, 'attachments.log') },
+    // dots で直接話した会話の取り込み（#878）。**本物の `$TMPDIR/sai-dots` を見るのはここで組んだものだけ**
+    dotsDrop: { dir: join(tmpdir(), DOTS_DROP_DIR) },
     // Codex の共有の app-server を読むだけで見る（#848）。**本物のソケットに繋ぐのはここで組んだものだけ**。繋ぐのは settings.json の `codex_daemon` が入のときだけ
     codexDaemon: new CodexDaemonClient({
       socketPath: daemonSocketPath(),

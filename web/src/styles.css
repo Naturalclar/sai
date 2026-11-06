@@ -145,6 +145,7 @@
   .dots-conv-title { font-weight: 700; font-size: 13px; overflow-wrap: anywhere; }
   .dots-conv-head .time { color: var(--muted); }
   .dots-conv-here { margin-left: auto; color: var(--accent); }
+  .dots-conv-imported { margin-left: auto; padding: 1px 6px; font-size: 11px; color: var(--muted); background: var(--chip); border-radius: 4px; }
   .dots-conv-continue { margin-left: auto; padding: 2px 8px; font: inherit; color: var(--accent); background: transparent; border: 1px solid var(--line); border-radius: 999px; cursor: pointer; }
   .dots-conv-continue:hover { border-color: var(--accent); }
   .avatar.dots { background: var(--muted); }

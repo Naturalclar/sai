@@ -5,7 +5,7 @@ import assert from 'node:assert/strict'
 import { createHmac } from 'node:crypto'
 import { createServer } from 'node:http'
 import type { Server } from 'node:http'
-import { mkdtemp, rm, stat } from 'node:fs/promises'
+import { appendFile, mkdtemp, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createDotsAdapter, ERROR_CALLBACK, MAX_ATTEMPTS, MAX_EVENTS_PER_CONVERSATION_PER_DAY, REPLY_DEADLINE_MS, RETRY_BASE_MS, SECRET_GRACE_MS, SUBSCRIPTION_TTL_MS } from './adapter.ts'
@@ -497,3 +497,14 @@ test('1 つの購読に任せた投稿は、その購読が消えたら失敗に
   assert.equal((await conv(m.conversation_id)).requests.find((r) => r.message.id === m.id)?.state, 'failed')
 })
 
+
+test('dots が書き置いた記録から取り込んだ投稿（chatgpt-human）は、購読していても配らない（往復しない）', async () => {
+  await inbox.importExchange({ id: 'drop-a', conversationId: 'drop-conv', at: new Date(clock).toISOString(), userText: '前の質問', replyText: '前の答え' })
+  assert.ok((await subscribe('drop-conv')).result)
+  advance(1000)
+  await inbox.importExchange({ id: 'drop-b', conversationId: 'drop-conv', at: new Date(clock).toISOString(), userText: '次の質問', replyText: '次の答え' })
+  // 返答の付いていない取り込みの投稿（状態は unknown。完了で飛ばされるのに頼らない）
+  await appendFile(join(dir, DOTS_INBOX_FILE), JSON.stringify({ type: 'message', id: 'drop-c-u', conversation_id: 'drop-conv', request_id: 'drop-c-req', source: 'chatgpt-human', at: new Date(clock).toISOString(), text: '返答の無い質問' }) + '\n')
+  await adapter.tick()
+  assert.equal(chatgpt.events().length, 0)
+})

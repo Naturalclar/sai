@@ -197,3 +197,12 @@ SAI のサーバとは別のプロセスで動かす MCP サーバ（Streamable 
 - **配信**（`tick()`。時計の 1 回ぶん。立てるのは #874 の入口）: 期限切れの購読と、`isActive(subject)` が false の購読は消す。購読を消すとき（期限切れ・失効・410・解除）は、その購読で配るはずだった未配信の依頼を、残った購読のどれも配らない（どれの `before` にも入っている）なら失敗にする（`dropSubscription()`。未配信のまま止まったものを残さない）。解除も周と同じ `serial()` で流す。名前が一時的に引けない（`LOOKUP_FAILED`）ときは届かなかったのと同じに送り直す（private を指すようになったときは送らずに失敗）。購読した会話の人の投稿（`sai-human`。dots の返答は依頼に付くので対象にならない＝往復しない）を、`eventId` = 投稿の id で送る。2xx で受付済み。届かない・見切った・ほかの状態は `RETRY_BASE_MS` から 2 倍ずつあけて同じ `eventId` で送り直し（時刻と署名は作り直す）、`MAX_ATTEMPTS`（5 回）で失敗。410 は購読を消して失敗（同じ周の残りの投稿もその callback へは送らない）、413 は再送せず失敗（その投稿をほかの購読が届けた・まだ配れるなら失敗にしない）。1 つの会話で 1 日 `MAX_EVENTS_PER_CONVERSATION_PER_DAY`（50 件）を超えたら失敗。受付済み・返答待ちのまま `REPLY_DEADLINE_MS`（30 分）を過ぎたら結果不明。配信の記録は、購読が無いか依頼が完了・失敗のものだけ 30 日で捨てる（返答の無い依頼の記録を捨てると、配っていないように見えて配り直す）。`AdapterState.load()` は同時に呼ばれても読み込みは 1 回で、読み終えるまで待たせる
 - **本文が大きいとき**: 1 件が 256 KiB（`WEBHOOK_MAX_BYTES`）に収まるところまで本文を切り詰めて `truncated: true` を付ける（`eventBody()`。言語モデルで要約はしない）。全文は `inbox_read` で読む
 - **送る口**（`dots/webhook.ts`）: 署名は Standard Webhooks（`webhook-id`・`webhook-timestamp`・`webhook-signature: v1,<base64>`。鍵が 2 つなら空白で並べる）。送り先は https で、名前を引いた先が**全部** public なアドレスのときだけ（`isPrivateAddress()`。IPv4 を埋めた IPv6・NAT64・6to4 も private 扱い）。本物の口 `httpsTransport` は検査したアドレスに固定して繋ぐ（`pinnedLookup()`。引き直さない。Node 22 は `{ all: true }` で呼ぶので配列でも返す）・10 秒で見切る・リダイレクトを追わない。テストは `Transport` と `Lookup` を偽物に差し替える（`adapter.test.ts` の偽の ChatGPT）
+
+## dots が書き置いた記録の取り込み（dots/drop.ts。#878）
+
+- `DotsDrop` が `$TMPDIR/sai-dots/`（`DOTS_DROP_DIR`。本物を組むのは `main.ts` の `tmpdir()` だけで、`createApp` は `TerminalDeps.dotsDrop` を渡されたときだけ見る）を `DOTS_DROP_INTERVAL_MS`（5 秒）ごとに見る。止めるのは `dispose()`。同時の呼び出しは 1 回にまとめる
+- フォルダは `O_NOFOLLOW | O_DIRECTORY` で開き、持ち主が自分で、group / other が書けないときだけ読む。ファイルは `O_NOFOLLOW` で開いてから `fstat` で普通のファイル・持ち主を確かめる（確かめてから開くと差し替えられる）。読むのは `.json` だけ（`.tmp` は書きかけ）、1 回に `DROP_MAX_FILES`（200）まで
+- 中身は `parseExchange()`（`user_text`・`reply_text` は空でなく `DOTS_TEXT_MAX` まで、`thread` は空白を詰めて 120 字まで、`at` は読めれば使い、無ければファイルの更新時刻）。読めない・`DROP_FILE_MAX_BYTES`（256 KiB）を超えるものは消す
+- 受信箱には `importExchange()` で 2 行（`chatgpt-human` の投稿と `dots` の返答）。id は中身の SHA-256 から作るので、同じものを 2 回置かれても・消す前に落ちて読み直しても重ならない。会話の id は `dropConversationId()`（名前ごと、無ければ Asia/Tokyo の日ごと。`drop-` で始まり、UUID ではないので `POST /api/dots` で続けて送れない）
+- `shared/dots.ts` は `chatgpt-human` の状態の行を見ず、返答の有無で `done` / `unknown` にする。**配る（#873 のイベントを作る）のは `sai-human` だけ**なので、取り込んだ投稿が dots へ送り返されることはない
+- 本物の `main.ts` を立てるテスト（`main.test.ts`）は `TMPDIR` を一時ディレクトリに向ける（向けないと本物の置き場を取り込んで消す）。捨てのサーバも同じ

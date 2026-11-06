@@ -20,7 +20,10 @@ export function DotsConversationBlock({ conversation: c, selected, onSelect }: P
         <span className="time" title={c.started_at}>
           {ymd(c.started_at)} {hm(c.started_at)}
         </span>
-        {selected ? (
+        {c.imported ? (
+          // dots が書き置いた記録（#878）。SAI からは続けて送れない
+          <span className="dots-conv-imported" title="dots が書き置いた記録から取り込んだ会話。抜けや書き換えがありえます">ChatGPT で話した記録</span>
+        ) : selected ? (
           <span className="dots-conv-here">この会話に続けて送ります</span>
         ) : (
           <button type="button" className="dots-conv-continue" onClick={onSelect}>

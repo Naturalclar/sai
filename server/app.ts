@@ -140,6 +140,7 @@ import { DEFAULT_DIGEST_MODEL, DIGEST_FILE, DigestStore, createDigester, isTimeo
 import { FEEDBACK_FILE, FeedbackStore } from './digest/feedback.ts'
 import { createDotsRoutes, DOTS_PATH } from './dots/dotsRoutes.ts'
 import { DOTS_INBOX_FILE, DotsInbox } from './dots/inbox.ts'
+import { DOTS_DROP_INTERVAL_MS, DotsDrop } from './dots/drop.ts'
 import { DIGEST_NOTE_MAX, isDigestFeedbackReason, isDigestUsageReason } from '../shared/digestFeedback.ts'
 import type { DigestFeedbackRequest, DigestFeedbackResponse } from '../shared/digestFeedback.ts'
 import { isDigestModel, isDigestProvider } from '../shared/digestSettings.ts'
@@ -643,6 +644,8 @@ export interface TerminalDeps {
   thumbs?: ThumbMaker
   /** 添付の原本の掃除（#792）。渡したときだけ回す（本物を組むのは `main.ts`。テストの既定は回さない） */
   attachmentSweep?: SweepOptions & { intervalMs?: number }
+  /** dots で直接話した会話を取り込む置き場（#878。`$TMPDIR/sai-dots`）。渡したときだけ見る（本物を組むのは `main.ts`。テストの既定は見ない） */
+  dotsDrop?: { dir: string; intervalMs?: number }
   /**
    * PR の要約（#790）のために、一言とは別の口を組む関数（設定の `pr_summary_provider` を選んだときだけ呼ぶ）。
    * 既定は一言と同じ作り方（`summarizerFactory()`。送り先と鍵は環境変数）。テストは偽物を渡す
@@ -1375,6 +1378,9 @@ export function createApp(
   const feedback = new FeedbackStore(join(store.directory, FEEDBACK_FILE))
   // dots との会話の受信箱（#872）。書くのはこのサーバだけ。外には出さない（配信は受信箱のアダプター #873）
   const dotsInbox = new DotsInbox(join(store.directory, DOTS_INBOX_FILE))
+  // dots で直接話した会話の取り込み（#878）。dots が `$TMPDIR/sai-dots/` に置いたファイルを数秒ごとに受信箱へ（外には出さない）
+  const dotsDrop = terminal.dotsDrop ? new DotsDrop(terminal.dotsDrop.dir, dotsInbox) : null
+  dotsDrop?.start(terminal.dotsDrop?.intervalMs ?? DOTS_DROP_INTERVAL_MS)
 
   /** 一言の対象を探して列に積む。3 秒ごとの応答のついでに呼ぶので軽い（無効なら何もしない） */
   const scanDigest = async (days: number): Promise<void> => {
@@ -4961,6 +4967,7 @@ export function createApp(
     stopWaitTimer()
     sweeper?.stop()
     codexDaemon?.stop()
+    dotsDrop?.stop()
   }
 
   const handler = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {

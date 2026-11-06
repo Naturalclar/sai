@@ -249,7 +249,8 @@ export function createDotsAdapter(o: DotsAdapterOptions) {
     if (!delivered) await move(req, 'failed', reason)
   }
 
-  const deliver = async (s: Subscription, req: DotsRequest, d: Delivery, t: number): Promise<void> => {
+  /** 1 件送る。購読を消したら true（同じ購読の残りの投稿へはもう送らない） */
+  const deliver = async (s: Subscription, req: DotsRequest, d: Delivery, t: number): Promise<boolean> => {
     const target = await resolveCallback(s.url, o.lookup)
     const attempt = d.attempts + 1
     if (typeof target === 'string') {
@@ -257,7 +258,7 @@ export function createDotsAdapter(o: DotsAdapterOptions) {
       const done: Delivery = { ...d, attempts: attempt, status: 'failed', last_status: 0, reason: target }
       await state.putDelivery(done)
       await settleFailure(req, done, target)
-      return
+      return false
     }
     const timestamp = Math.floor(t / 1000)
     // 同じ eventId で送り直す（時刻と署名は作り直す）
@@ -271,7 +272,7 @@ export function createDotsAdapter(o: DotsAdapterOptions) {
     if (status >= 200 && status < 300) {
       await state.putDelivery({ ...d, attempts: attempt, status: 'delivered', delivered_at: iso(t), last_status: status })
       if (req.state === 'queued' || req.state === 'unknown') await move(req, 'accepted')
-      return
+      return false
     }
     if (status === 410) {
       // もう要らない、と言われた購読は消す
@@ -279,21 +280,22 @@ export function createDotsAdapter(o: DotsAdapterOptions) {
       await state.putDelivery(done)
       await state.removeSubscription(s.id)
       await settleFailure(req, done, done.reason!)
-      return
+      return true
     }
     if (status === 413) {
       const done: Delivery = { ...d, attempts: attempt, status: 'failed', last_status: status, reason: '大きすぎて受け取られませんでした（413）' }
       await state.putDelivery(done)
       await settleFailure(req, done, done.reason!)
-      return
+      return false
     }
     if (attempt >= MAX_ATTEMPTS) {
       const done: Delivery = { ...d, attempts: attempt, status: 'failed', last_status: status, reason: `届けられませんでした（${MAX_ATTEMPTS} 回）` }
       await state.putDelivery(done)
       await settleFailure(req, done, done.reason!)
-      return
+      return false
     }
     await state.putDelivery({ ...d, attempts: attempt, last_status: status, next_at: iso(t + RETRY_BASE_MS * 2 ** (attempt - 1)) })
+    return false
   }
 
   /** 1 周: 期限切れ・失効の購読を消し、配る投稿を送り、返答の来ない依頼を「結果不明」にする */
@@ -330,7 +332,8 @@ export function createDotsAdapter(o: DotsAdapterOptions) {
             }
           }
           if (d.status !== 'pending' || ms(d.next_at) > t) continue
-          await deliver(s, req, d, t)
+          // 410 で購読を消したら、同じ周の残りの投稿もその callback へは送らない
+          if (await deliver(s, req, d, t)) break
         }
       }
       // 受け取られたのに返答が来ないまま期限を過ぎた依頼
@@ -346,9 +349,13 @@ export function createDotsAdapter(o: DotsAdapterOptions) {
           if (at !== undefined && t - at > REPLY_DEADLINE_MS) await move(req, 'unknown', '期限までに返答がありません')
         }
       }
-      // 終わった配信の古い記録は捨てる
+      // 古い配信の記録は、もう配り直す見込みが無いものだけ捨てる（購読が無い・依頼が完了か失敗）。
+      // 返答の無い依頼の記録を捨てると、「まだ配っていない」に見えて配り直してしまう
+      const finished = new Set(fresh.flatMap((c) => c.requests.filter((r) => r.state === 'done' || r.state === 'failed').map((r) => r.message.id)))
       for (const d of state.allDeliveries()) {
-        if (d.status !== 'pending' && t - ms(d.delivered_at ?? d.next_at) > DELIVERY_KEEP_MS) await state.removeDeliveryRecord(d)
+        const orphan = !state.subscription(d.subscription)
+        if (orphan && d.status === 'pending') await state.removeDeliveryRecord(d)
+        else if (d.status !== 'pending' && (orphan || finished.has(d.message_id)) && t - ms(d.delivered_at ?? d.next_at) > DELIVERY_KEEP_MS) await state.removeDeliveryRecord(d)
       }
     })
 

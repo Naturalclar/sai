@@ -2,7 +2,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHmac } from 'node:crypto'
-import { isPrivateAddress, resolveCallback, secretBytes, signWebhook } from './webhook.ts'
+import { isPrivateAddress, pinnedLookup, resolveCallback, secretBytes, signWebhook } from './webhook.ts'
 
 const KEY_A = `whsec_${Buffer.from('a'.repeat(24)).toString('base64')}`
 const KEY_B = `whsec_${Buffer.from('b'.repeat(24)).toString('base64')}`
@@ -38,4 +38,13 @@ test('callback は https で、引いた先が全部 public のときだけ。1 
   assert.match(String(await resolveCallback('https://none.example/hook', lookup)), /引けません/)
   assert.match(String(await resolveCallback('https://gone.example/hook', lookup)), /引けません/)
   assert.match(String(await resolveCallback('https://u:p@ok.example/hook', lookup)), /パスワード/)
+})
+
+test('検査したアドレスに固定する lookup は、Node が { all: true } で呼んでも配列で返す', () => {
+  const got: unknown[] = []
+  const lk = pinnedLookup('8.8.8.8')
+  lk('hooks.example', { all: true }, (_e, a, f) => got.push([a, f]))
+  lk('hooks.example', {}, (_e, a, f) => got.push([a, f]))
+  lk('hooks.example', 4, (_e, a, f) => got.push([a, f]))
+  assert.deepEqual(got, [[[{ address: '8.8.8.8', family: 4 }], undefined], ['8.8.8.8', 4], ['8.8.8.8', 4]])
 })

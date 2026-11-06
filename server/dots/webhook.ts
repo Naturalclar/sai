@@ -148,6 +148,20 @@ export interface Sent {
 /** 1 回送る。届かなかった・見切った・壊れた応答は throw */
 export type Transport = (t: Target, headers: Record<string, string>, body: string, timeoutMs: number) => Promise<Sent>
 
+type LookupCallback = (err: NodeJS.ErrnoException | null, address: string | { address: string; family: number }[], family?: number) => void
+
+/**
+ * 名前を引かずに、検査したアドレスを返す `lookup`。Node 22 は `autoSelectFamily` で `{ all: true }` を付けて呼び、
+ * そのときは配列を求める（文字列を返すと `ERR_INVALID_IP_ADDRESS` で落ちる）ので、両方の形で返す
+ */
+export function pinnedLookup(address: string) {
+  const family = isIP(address)
+  return (_host: string, opts: { all?: boolean } | number | undefined, cb: LookupCallback): void => {
+    if (typeof opts === 'object' && opts?.all) cb(null, [{ address, family }])
+    else cb(null, address, family)
+  }
+}
+
 /** 本物の送る口。検査を通ったアドレスに固定して https で繋ぐ（証明書は URL の名前で確かめる）。リダイレクトは追わない */
 export const httpsTransport: Transport = (t, headers, body, timeoutMs) =>
   new Promise<Sent>((resolve, reject) => {
@@ -156,7 +170,7 @@ export const httpsTransport: Transport = (t, headers, body, timeoutMs) =>
       {
         method: 'POST',
         headers: { ...headers, 'content-type': 'application/json', 'content-length': String(Buffer.byteLength(body)) },
-        lookup: (_host, _opts, cb) => cb(null, t.address, isIP(t.address)),
+        lookup: pinnedLookup(t.address),
         servername: isIP(t.url.hostname) ? undefined : t.url.hostname,
         timeout: timeoutMs,
       },

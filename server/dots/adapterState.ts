@@ -62,16 +62,20 @@ export class AdapterState {
   readonly path: string
   private subs = new Map<string, Subscription>()
   private deliveries = new Map<string, Delivery>()
-  private loaded = false
+  private loading: Promise<void> | null = null
   private writing: Promise<unknown> = Promise.resolve()
 
   constructor(path: string) {
     this.path = path
   }
 
-  async load(): Promise<void> {
-    if (this.loaded) return
-    this.loaded = true
+  /** 読み終わるまで、同時に呼ばれても同じ 1 回を待たせる（読み終える前に書いたものを、古い中身で被せない） */
+  load(): Promise<void> {
+    this.loading ??= this.read()
+    return this.loading
+  }
+
+  private async read(): Promise<void> {
     let raw: unknown
     try {
       raw = JSON.parse(await readFile(this.path, 'utf-8'))

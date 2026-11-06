@@ -9,7 +9,7 @@ import { mkdtemp, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createDotsAdapter, ERROR_CALLBACK, MAX_ATTEMPTS, MAX_EVENTS_PER_CONVERSATION_PER_DAY, REPLY_DEADLINE_MS, RETRY_BASE_MS, SECRET_GRACE_MS, SUBSCRIPTION_TTL_MS } from './adapter.ts'
-import { DOTS_ADAPTER_FILE } from './adapterState.ts'
+import { AdapterState, DOTS_ADAPTER_FILE } from './adapterState.ts'
 import { DOTS_INBOX_FILE, DotsInbox } from './inbox.ts'
 import { secretBytes, WEBHOOK_MAX_BYTES } from './webhook.ts'
 import type { Sent, Target } from './webhook.ts'
@@ -382,4 +382,40 @@ test('1 つの会話で 1 日に配る数には上限がある', async () => {
   const failed = (await conv(m.conversation_id)).requests.filter((r) => r.state === 'failed')
   assert.equal(failed.length, 1)
   assert.match(failed[0]?.reason ?? '', /1 日/)
+})
+
+test('410 で購読を消したら、同じ周の残りの投稿へは送らず、止まったままの配信も残さない', async () => {
+  const { m } = await started('1 つ目')
+  await inbox.post('2 つ目', m.conversation_id)
+  await inbox.post('3 つ目', m.conversation_id)
+  chatgpt.reply = () => 410
+  await adapter.tick()
+  assert.equal(chatgpt.events().length, 1)
+  assert.equal(adapter.state.allDeliveries().filter((d) => d.status === 'pending').length, 0)
+})
+
+test('30 日たっても、返答の無い依頼を配り直さない', async () => {
+  const { first, m } = await started()
+  await adapter.tick()
+  advance(REPLY_DEADLINE_MS + 1000)
+  await adapter.tick()
+  assert.equal((await conv(m.conversation_id)).requests[1]?.state, 'unknown')
+  advance(31 * 24 * 60 * 60_000)
+  // ChatGPT が呼び直し続けている購読
+  await subscribe(first.conversation_id)
+  await adapter.tick()
+  await adapter.tick()
+  assert.equal(chatgpt.events().length, 1)
+  assert.equal((await conv(m.conversation_id)).requests[1]?.state, 'unknown')
+})
+
+test('立ち上げ直後に読み込みと書き込みが重なっても、書いたものを古い中身で被せない', async () => {
+  const { sub } = await started()
+  const st = new AdapterState(join(dir, DOTS_ADAPTER_FILE))
+  const reading = st.load()
+  await st.load()
+  const s = st.subscription(sub)!
+  await st.putSubscription({ ...s, expires_at: '2099-01-01T00:00:00.000Z' })
+  await reading
+  assert.equal(st.subscription(sub)?.expires_at, '2099-01-01T00:00:00.000Z')
 })

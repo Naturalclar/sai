@@ -33,6 +33,7 @@ import type { SessionTurnResponse, TurnOutputResponse, TurnStepsResponse,
   AgentSessionsResponse,
   AgentWaitResponse,
   Approval,
+  ApprovalLogRow,
   CodexKept,
   CodexKeptLogged,
   ApprovalAnswer,
@@ -125,6 +126,8 @@ import type { OpencodeApp } from './reply/opencodeServer.ts'
 import { OpencodePermissions } from './reply/opencodePermissions.ts'
 import { approvalMapKey, CodexDialogs, DIALOG_SCAN_TTL_MS, mergeApprovalMaps } from './reply/codexDialogs.ts'
 import { JevRisk } from './approvals/jev.ts'
+import { isClaudeBash, onceBlocked, onceNotReadOnly } from '../shared/readOnlyOnce.ts'
+import type { OnceSkip } from '../shared/readOnlyOnce.ts'
 import { isJevAuto, jevAutoAllows, jevAutoDecision, jevAutoEligible, jevLogged, jevLowestRule, jevPercent, jevRuleState } from '../shared/jev.ts'
 import type { JevJudge } from './approvals/jev.ts'
 import { CodexTerminals, type CodexTerminalSource } from './reply/codexTerminal.ts'
@@ -629,6 +632,11 @@ export interface TerminalDeps {
    * （本物の `~/.claude/settings.json` を読むのは main.ts だけ。既定で読むと、テストの結果が回したマシンの設定で変わる）
    */
   allowedRules?: (cwd: string) => Promise<string[]>
+  /**
+   * その cwd に効いている止める側のルール（`ask` / `deny`。#863 の「読むだけなら今回だけ許可」が見る）。null は読めなかった。
+   * **省略は null**（読めない＝今回だけの許可をしない。本物の設定を読むのは main.ts だけ）
+   */
+  guardRules?: (cwd: string, top?: string) => Promise<string[] | null>
   /** Codex の画像生成で作った画像の置き場（#575）。テストでは一時ディレクトリを指す */
   codexImages?: CodexImages
   /** 画像の軽い版を作る口（#589）。テストでは偽の縮める口を渡した Thumbnails か noThumbs */
@@ -704,6 +712,7 @@ export function createApp(
   const claudeAuth = terminal.claudeAuth ?? new NoClaudeAuth()
   const claudeLogin = terminal.claudeLogin ?? new NoClaudeLogin()
   const allowedRules = terminal.allowedRules ?? (async () => [] as string[])
+  const guardRules = terminal.guardRules ?? (async () => null)
   // ログインを聞き直した失敗（`<id>\n<since>` → その問い合わせ）。同じ失敗で何度も `claude` を起こさない。
   // 問い合わせそのものを持つのは、同時に来た応答（一覧と詳細）の後の方も答えを待つため（待たないと、印の無い失敗を先に返す）
   const authAsked = new Map<string, Promise<unknown>>()
@@ -1005,7 +1014,7 @@ export function createApp(
    * その許可に Jev が付けていた確率（届いていなければ理由）も残す（#749。控えを見るだけで、ここからは聞かない）。
    * `jevOn` は答えたときの設定（`settings.json` の `jev`）: 切っていれば、前に聞いた控えが残っていても `not_asked`（画面にも出していない）
    */
-  const logAnswer = (a: Approval, cwd: string, rule: string, by: 'human' | 'jev', behavior: 'allow' | 'deny', remember: boolean, jevOn: boolean, noRule?: NoRuleReason) => {
+  const logAnswer = (a: Approval, cwd: string, rule: string, by: ApprovalLogRow['by'], behavior: 'allow' | 'deny', remember: boolean, jevOn: boolean, noRule?: NoRuleReason) => {
     try {
       const now = Date.now()
       const waited = Math.max(0, Math.round((now - Date.parse(a.since)) / 1000))
@@ -1227,6 +1236,9 @@ export function createApp(
     }
     return softWait(read().catch(() => none), () => none, READ_ROOTS_WAIT_MS)
   }
+  /** 置き場のうち、cwd を含む一番深い worktree のトップ（止める側のルールでトップの `.claude` も足すため。#863）。無ければ undefined */
+  const topOf = (place: { cwd: string; roots: string[] }): string | undefined =>
+    place.cwd ? place.roots.filter((r) => place.cwd === r || place.cwd.startsWith(`${r}/`)).sort((x, y) => y.length - x.length)[0] : undefined
   const jevAutoOnce = async (): Promise<void> => {
     const s = await settingsStore.get()
     if (!s.jev || s.jev_auto <= 0 || !jevRisk.ready) return
@@ -1245,8 +1257,11 @@ export function createApp(
         const failed = asked.find((r) => r.safe === undefined && jevRisk.ruleFailed(r.label))?.label
         const lowest = jevLowestRule(asked)
         // git を読むのは「今回だけ」を決めるときだけ（ルールを作れない形で、この回が閾値以上）
-        const place = labels.length === 0 && plan.reason && jevAutoAllows(a.jev, s.jev_auto) ? await readRoots(cwd) : { cwd: '', roots: [] }
-        const decision = jevAutoDecision(a, s.jev_auto, labels.length > 0 ? (failed ?? lowest?.label ?? rulesKey(labels)) : null, failed ? 'failed' : lowest?.safe, { noRule: plan.reason, cwd: place.cwd, roots: place.roots, repo: githubRepoOf(owner?.remote) })
+        const onceAsked = labels.length === 0 && !!plan.reason && jevAutoAllows(a.jev, s.jev_auto)
+        const place = onceAsked ? await readRoots(cwd) : { cwd: '', roots: [] }
+        // 止める側のルール（ask / deny）に当たりうるものは、今回だけの許可をしない（#863。読むだけなら今回だけ許可と同じ線）
+        const guards = onceAsked && cwd ? await guardRules(cwd, topOf(place)).catch(() => null) : null
+        const decision = jevAutoDecision(a, s.jev_auto, labels.length > 0 ? (failed ?? lowest?.label ?? rulesKey(labels)) : null, failed ? 'failed' : lowest?.safe, { noRule: plan.reason, cwd: place.cwd, roots: place.roots, repo: githubRepoOf(owner?.remote), guards })
         if (decision.kind === 'skip') {
           // 答えない理由（#553）。同じ許可には 1 回だけ（届くたびに呼ばれるので、覚えないと同じ行が何本も並ぶ）
           if (!jevSkipLogged.has(a.approval_id)) {
@@ -1273,6 +1288,47 @@ export function createApp(
     if (lines.length > 0) void appendFile(join(store.directory, 'reply.log'), lines.join('')).catch(() => {})
   }
   jevRisk.onArrive = () => void jevAutoTick()
+
+  /**
+   * 読むだけなら今回だけ許可（#863。`shared/readOnlyOnce.ts`）。settings.json の `read_only_once` が入のときだけ、**Jev なしで**、
+   * ルールを作れない Claude の Bash を `notReadOnly()` が読むだけと分かったときだけ、画面の [許可] と同じ答え（覚えない）を返す。
+   * 呼ぶのは許可を預かった時と、設定を入れた時だけ（読む経路からは呼ばない）。cwd・置き場はセッションの行から引き、リクエストから受けない。
+   * 答えたら記録（`by: read_only`）と reply.log に残し、画面には「答えた許可」として出す。答えないものは理由を reply.log に 1 行だけ
+   */
+  const readOnlySkipLogged = new Set<string>()
+  const readOnlyAuto = async (a: Approval): Promise<void> => {
+    try {
+      // 対象外（Claude の Bash でない）は、セッションの集計も設定も読まずに返す
+      if (!isClaudeBash(a) || !(await settingsStore.get()).read_only_once) return
+      const { sessions } = await store.sessions(90)
+      const owner = sessions.find((session) => session.id === a.id)
+      const cwd = owner?.cwd ?? ''
+      const plan = await alwaysPlan(a, cwd)
+      const skip = (d: OnceSkip) => {
+        if (d.quiet || readOnlySkipLogged.has(a.approval_id)) return
+        if (readOnlySkipLogged.size >= 1000) readOnlySkipLogged.clear()
+        readOnlySkipLogged.add(a.approval_id)
+        void appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${a.id} 読むだけの今回だけの許可を見送り: ${d.reason}\n`).catch(() => {})
+      }
+      if (plan.rules.length > 0) return
+      // 安い条件を先に見る（止める側のルールは、まだ読まない＝空として）。通ったら置き場を引き、トップの分も足して止める側を読む
+      const cheap = onceBlocked(a, plan.reason, [])
+      if (cheap) return skip(cheap)
+      const place = await readRoots(cwd)
+      const blocked = onceBlocked(a, plan.reason, cwd ? await guardRules(cwd, topOf(place)).catch(() => null) : null)
+      if (blocked) return skip(blocked)
+      const why = onceNotReadOnly(a, { cwd: place.cwd, roots: place.roots, repo: githubRepoOf(owner?.remote) })
+      if (why) return skip({ reason: why })
+      // 読んでいる間に人が切っていたら答えない
+      if (!(await settingsStore.get()).read_only_once) return
+      if (!approvals.answer(a.approval_id, { behavior: 'allow', updatedInput: a.input })) return
+      logAnswer(a, cwd, '', 'read_only', 'allow', false, false, plan.reason)
+      answered.add(a, 'allow', '読むだけなので SAI が今回だけ許可')
+      await appendFile(join(store.directory, 'reply.log'), `--- ${new Date().toISOString()} ${a.id} 読むだけなので SAI が今回だけ許可（ルールを作れない形: ${plan.reason ?? '?'}）\n`).catch(() => {})
+    } catch {
+      // 判定に失敗したら答えない（人に回る）
+    }
+  }
 
   /**
    * 質問（AskUserQuestion）で止まっているセッションの、選択肢まで入った質問（#333）。フックの待ちの行には質問の文しか無いので、
@@ -1567,6 +1623,7 @@ export function createApp(
       jev_ready: jevRisk.ready,
       jev_auto: s.jev_auto,
       paste_to_file: s.paste_to_file,
+      read_only_once: s.read_only_once,
       codex_daemon: s.codex_daemon,
       codex_daemon_link: codexDaemon?.link() ?? 'off',
       reply_mode: s.reply_mode,
@@ -1839,6 +1896,10 @@ export function createApp(
       if (typeof b.paste_to_file !== 'boolean') return error(res, 400, 'paste_to_file は true か false で送ってください')
       patch.paste_to_file = b.paste_to_file
     }
+    if (b.read_only_once !== undefined) {
+      if (typeof b.read_only_once !== 'boolean') return error(res, 400, 'read_only_once は true か false で送ってください')
+      patch.read_only_once = b.read_only_once
+    }
     if (b.codex_daemon !== undefined) {
       if (typeof b.codex_daemon !== 'boolean') return error(res, 400, 'codex_daemon は true か false で送ってください')
       patch.codex_daemon = b.codex_daemon
@@ -1861,7 +1922,7 @@ export function createApp(
       if (!isJevAuto(b.jev_auto)) return error(res, 400, 'jev_auto は 0（しない）か 0.5〜1 の数で送ってください')
       patch.jev_auto = b.jev_auto
     }
-    if (Object.keys(patch).length === 0) return error(res, 400, 'persona / linear_workspace / digest / next_ask / digest_provider / digest_model / pr_summary_provider / pr_summary_model / paste_to_file / codex_daemon / reply_mode / send_across_add / send_across_remove / jev / jev_auto のどれかを送ってください')
+    if (Object.keys(patch).length === 0) return error(res, 400, 'persona / linear_workspace / digest / next_ask / digest_provider / digest_model / pr_summary_provider / pr_summary_model / paste_to_file / read_only_once / codex_daemon / reply_mode / send_across_add / send_across_remove / jev / jev_auto のどれかを送ってください')
     // 起動時の組み立て（settings.json の読み込み）が済んでから書く。後から古い値で組み直されないように
     await digestReady
     const saved = await settingsStore.set(patch)
@@ -1871,6 +1932,8 @@ export function createApp(
     // 閾値を入れた・下げたら、預かっている分にすぐ効かせる
     if (patch.jev_auto !== undefined || patch.jev !== undefined) void jevAutoTick()
     if (patch.codex_daemon !== undefined) codexDaemon?.setEnabled(saved.codex_daemon)
+    // 入れたら、預かっている分にもすぐ効かせる（Claude の Bash だけ。1 つずつ）
+    if (patch.read_only_once) void (async () => { for (const list of Object.values(approvals.snapshot())) for (const a of list) if (isClaudeBash(a)) await readOnlyAuto(a) })()
     return json(res, await settingsPayload())
   }
 
@@ -4310,8 +4373,9 @@ export function createApp(
     if (!b.input || typeof b.input !== 'object' || Array.isArray(b.input)) return error(res, 400, 'input must be an object')
     if (!run.running(b.id)) return error(res, 409, 'このセッションは返信を処理中ではありません')
     const approval = approvals.ask(b.id, b.tool_name, b.input, typeof b.tool_use_id === 'string' ? b.tool_use_id : '')
-    // 自動の「常に許可」（#499）はここから動き出す（Jev に聞く → 届いたら答える）。画面のポーリングを待たない
-    void jevAutoTick()
+    // 読むだけなら今回だけ許可（#863。入のときだけ）を先に見て、答えなかったものだけ自動の「常に許可」（#499）に回す
+    // （Jev に聞く → 届いたら答える）。どちらも画面のポーリングを待たない
+    void readOnlyAuto(approval).finally(() => void jevAutoTick())
     return json(res, { approval_id: approval.approval_id }, 201)
   }
 

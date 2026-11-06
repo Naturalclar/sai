@@ -37,6 +37,7 @@ import { DigestEngineControls } from './DigestEngineControls'
 import { PrBriefEngineControls } from './PrBriefEngineControls'
 import { JevControls } from './JevControls'
 import { PasteControls } from './PasteControls'
+import { ReadOnlyOnceControls } from './ReadOnlyOnceControls'
 import { PasteToFileContext } from './pasteSetting'
 import { ReplyModeControls } from './ReplyModeControls'
 import { SendAcrossControls } from './SendAcrossControls'
@@ -529,6 +530,8 @@ export function App() {
           {settings && <PrBriefEngineControls settings={settings} busy={settingsBusy} onChange={(p) => void updateSettings(p)} />}
           {/* 許可の確率を Jev に聞くか（#491。既定は入。鍵が無ければ送らない） */}
           {settings && <JevControls settings={settings} busy={settingsBusy} onChange={(p) => void updateSettings(p)} />}
+          {/* 読むだけのコマンドを今回だけ自動で許可するか（#863。既定は切。Jev は使わない） */}
+          {settings && <ReadOnlyOnceControls settings={settings} busy={settingsBusy} onChange={(p) => void updateSettings(p)} />}
           {/* 長い貼り付けをファイルにして添えるか（#609。既定は切） */}
           {settings && <PasteControls settings={settings} busy={settingsBusy} onChange={(p) => void updateSettings(p)} />}
           {/* 返信の既定の許可モード（#582。既定は「決めない」。セッションごとに選んだものが勝つ） */}

@@ -75,6 +75,19 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 行の `permission_mode`（Claude のフックのペイロード）を `aggregate.ts` が `SessionSummary.permission_mode` に出す。
 - 3 秒のポーリングには乗せない（見出しの盾を押したときだけ取る）。
 
+## 読むだけなら今回だけ許可（#863）
+
+- 入切は `settings.json` の `read_only_once`（**既定は切**。自分のメニューの `ReadOnlyOnceControls`）。**判定に Jev は使わない**（Jev の入切・閾値とは別）。ただし Jev が入（既定）なら、画面に確率を出すために許可の中身は今までどおり Jev に送られる（`approvalsNow()` の `annotate()`）。送らせたくなければ Jev を切る
+- 判定は `shared/readOnlyOnce.ts` の `onceBlocked()`（置き場を引く前の分）と `onceNotReadOnly()`（置き場を引いたあと）で、**#749 の Jev の今回だけ（`jevAutoDecision()` の `once`）も同じ 2 つを呼ぶ**（Jev の道も、止める側のルールに当たりうるものは通さない。`JevOnce.guards`）。読むだけかは `notReadOnly()` だけで決め、**ルールで当てる道は持たない**（新しい読み方を作らない・拒否の一覧にしない・設定は読むだけ・新しい許可を作らない）。順に:
+  - Claude の `-p` の Bash で、画面から答えられるもの（`isClaudeBash()`。`jevAutoEligible()` も同じ）
+  - 「常に許可」のルールを作れない形（`alwaysPlan()` の `reason` がある）。ルールを作れる形は人の [常に許可] に任せる。`covered` / `not_bash` は回さない（`ONCE_NEVER`。#749 と同じ）
+  - 止める側のルール（`ask` / `deny`）に当たりうるものが無い（`guardMayMatch()`。ルールの文字の中の `Bash` を全部見て、パターンの**最初の語（引用符を外す）が、コマンドを語に割ったどれかと同じなら当たりうる**側に倒す。パスの形は最後の階層でも比べ、語の一部（`--format=%H` の中の `rm`）では当たらない。大文字小文字は見ない。素の `Bash`・空・最初の語にワイルドカードは何にでも当たる。Bash 以外のルールは見ない）
+  - ここまで通ったら置き場（`readRoots()`。#783 と同じ）を引き、`notReadOnly(command, cwd, repo, roots)` が空。答える直前に入切をもう一度見る（読んでいる間に切ったら答えない）
+- 止める側のルールは `server/approvals/permissions.ts` の `guardRules()`（`TerminalDeps.guardRules`。本物を組むのは `main.ts` だけで、**`createApp` の既定は null＝読めない＝答えない**）。読む先は `settingsPaths()`（cwd の `.claude` とユーザーと managed）と、環境に `CLAUDE_CONFIG_DIR` があればその下の `settings.json`、運用者の `SAI_CLAUDE_ARGS` の `--disallowedTools`。設定が壊れている・大きすぎる・権限が無いなどで読めない（`readSettingsStrict()`。無いときだけ missing）・`SAI_CLAUDE_ARGS` に `--settings` / `--setting-sources`、または `argsRules()` が読まない書き方の許可のフラグ（`--disallowedTools=…`・`--disallowed-tools`）があるときは null。**cwd を含む worktree のトップの `.claude` も足す**（Claude 2.1.318 はトップを読まなかったが、止める側は足しても厳しくなるだけなので、版の違いで見落とさない側に倒す。許す側の `allowedRules()` は cwd のまま）。managed の置き場に `managed-settings.json` のほかのもの（drop-in の置き場など）や、macOS の MDM の plist（名前に claude を含むもの）があれば null（`otherManagedSettings()`）。**限界**: サーバから配る managed settings は手元から見えない
+- 動かすのは `server/app.ts` の `readOnlyAuto()`。呼ぶのは許可を預かった時（`POST /api/approvals`。答えなかったものだけ、そのあと `jevAutoTick()` に回す）と、`read_only_once` を入れた時（預かっている分）だけ。読む経路からは呼ばない
+- 答えは画面の [許可] と同じ（`updatedPermissions` を付けない）。記録は `by: read_only`・`remember: false`・`no_rule`。画面には「答えた許可」（#693）として「読むだけなので SAI が今回だけ許可」。答えなかった理由は `reply.log` に同じ許可に 1 行だけ（対象外＝Bash でない・ルールを作れる形は書かない）。コマンドの文字はどこにも書かない
+- **テストは文字列を判定に渡すだけ**（コマンドを実行しない）
+
 ## Jev
 
 ### 表示

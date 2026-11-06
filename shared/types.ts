@@ -1512,8 +1512,8 @@ export interface ApprovalLogRow {
   tool: string
   /** 書かれるルールの組（`rulesKey()`。`Bash(pnpm test:*) + Bash(tee:*)`）。作れないツール・コマンドは空 */
   rule: string
-  /** 誰が答えたか。`jev` は自動の「常に許可」（#499） */
-  by: 'human' | 'jev'
+  /** 誰が答えたか。`jev` は自動の「常に許可」（#499）、`read_only` は読むだけなので SAI が今回だけ許可したもの（#863。`remember` は false） */
+  by: 'human' | 'jev' | 'read_only'
   behavior: 'allow' | 'deny'
   /** 「常に許可」で答えた（ルールを書いた） */
   remember: boolean
@@ -2128,6 +2128,8 @@ export interface SettingsResponse {
   jev_auto: number
   /** 入力欄への長い貼り付けをファイルにして添えるか（#609。settings.json の `paste_to_file`。既定は切） */
   paste_to_file: boolean
+  /** ルールを作れない Claude の Bash を、読むだけと分かれば SAI が今回だけ許可するか（#863。settings.json の `read_only_once`。既定は切。Jev は使わない） */
+  read_only_once: boolean
   /** Codex の共有の app-server（daemon）を読むだけで見るか（#848。settings.json の `codex_daemon`。既定は切） */
   codex_daemon: boolean
   /** daemon との繋がり（`off` / `no_socket` / `failed` / `connected`）。入にしたあとの確かめに使う */
@@ -2178,6 +2180,8 @@ export interface SettingsRequest {
   jev_auto?: number
   /** 入力欄への長い貼り付けをファイルにして添えるか（#609） */
   paste_to_file?: boolean
+  /** 読むだけなら今回だけ許可するか（#863） */
+  read_only_once?: boolean
   codex_daemon?: boolean
   /** 返信の既定の許可モード（#582）。`REPLY_MODES` のどれか。空文字で「決めない」 */
   reply_mode?: ReplyPermissionMode | ''

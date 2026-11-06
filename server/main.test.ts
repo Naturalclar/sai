@@ -222,6 +222,8 @@ test('main: 開いたままの接続があっても、C-c で終わる（#296）
   const port = await freePort()
   const child = spawn(process.execPath, ['--disable-warning=ExperimentalWarning', MAIN, '--port', String(port), '--feed-dir', feedDir], {
     stdio: ['ignore', 'ignore', 'pipe'],
+    // 本物の main は `$TMPDIR/sai-dots/` を取り込んで消す（#878）。本物の置き場に触らないよう、一時ディレクトリに向ける
+    env: { ...process.env, TMPDIR: feedDir },
   })
   const exited = new Promise<number | null>((resolve) => child.on('exit', (code) => resolve(code)))
   // 画面と同じ keep-alive の接続を 1 本、ポーリングさせたまま保つ

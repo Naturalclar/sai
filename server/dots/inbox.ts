@@ -89,6 +89,21 @@ export class DotsInbox {
     return message
   }
 
+  /**
+   * dots が書き置いたやり取り 1 回（#878）を足す。人の投稿（`chatgpt-human`）と dots の返答の 2 行。
+   * id は呼び手が中身から決める（同じものを 2 回取り込んでも、読むときに先の行だけ使われる）
+   */
+  async importExchange(e: { id: string; conversationId: string; at: string; thread?: string; userText: string; replyText: string }): Promise<void> {
+    const requestId = `${e.id}-req`
+    await this.append({ type: 'message', id: `${e.id}-u`, conversation_id: e.conversationId, request_id: requestId, source: 'chatgpt-human', at: e.at, text: e.userText, ...(e.thread ? { thread: e.thread } : {}) })
+    await this.append({ type: 'message', id: `${e.id}-d`, conversation_id: e.conversationId, reply_to: requestId, source: 'dots', at: e.at, text: e.replyText })
+  }
+
+  /** いま受信箱にある行の id（取り込みで同じものを重ねないため） */
+  async ids(): Promise<Set<string>> {
+    return new Set((await this.lines()).flatMap((l) => (l.type === 'message' ? [l.id] : [])))
+  }
+
   /** dots の返答を足す（アダプター #873 の `inbox_reply`） */
   async reply(conversationId: string, replyTo: string, text: string): Promise<DotsMessage> {
     const message: DotsMessage = { type: 'message', id: this.newId(), conversation_id: conversationId, reply_to: replyTo, source: 'dots', at: this.now().toISOString(), text }

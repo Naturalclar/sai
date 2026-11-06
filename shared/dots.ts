@@ -3,9 +3,16 @@
 //
 // - 受信箱を書くのは SAI のサーバと受信箱のアダプター（#873）だけ。行の記録（`record.py` の JSONL）とは混ぜない
 // - いまは配信しない（#872）。届ける口と返答を受ける口は受信箱のアダプター（#873）で作る
+// - dots で直接話した会話は、dots が `$TMPDIR/sai-dots/` に置いたファイルから取り込む（#878。`server/dots/drop.ts`）
 
-/** 誰が書いたか。人が SAI の画面で書いた投稿か、dots の返答か */
-export type DotsSource = 'sai-human' | 'dots'
+/**
+ * 誰が書いたか。`sai-human` = 人が SAI の画面で書いた投稿、`chatgpt-human` = 人が ChatGPT（dots）で直接書いたもの
+ * （dots が書き置いた記録から取り込む。#878）、`dots` = dots の返答。**配る（イベントを作る）のは `sai-human` だけ**
+ */
+export type DotsSource = 'sai-human' | 'chatgpt-human' | 'dots'
+
+/** 人の投稿か（依頼として並べる側） */
+export const isHumanSource = (s: DotsSource): boolean => s === 'sai-human' || s === 'chatgpt-human'
 
 /**
  * 依頼（人の投稿 1 つ）の状態。
@@ -58,6 +65,8 @@ export interface DotsMessage {
   /** ISO 8601 */
   at: string
   text: string
+  /** dots が付けた会話の名前（`chatgpt-human` だけ。#878） */
+  thread?: string
 }
 
 /** 受信箱の 1 行: 依頼の状態が変わった */
@@ -88,6 +97,11 @@ export interface DotsConversation {
   requests: DotsRequest[]
   /** どの依頼にも付けられない返答（`reply_to` の先がこの会話に無い）。捨てずに末尾に出す */
   orphans: DotsMessage[]
+  /**
+   * dots が書き置いた記録から取り込んだ会話（#878。人の投稿が `chatgpt-human`）。dots 任せなので抜け・書き換えがありうる。
+   * SAI から続けて送ることはできない
+   */
+  imported: boolean
 }
 
 /** 本文の上限（字）。画面から書く投稿の長さ */
@@ -104,9 +118,10 @@ export function parseDotsLine(raw: unknown): DotsLine | null {
   }
   if (r.type !== 'message') return null
   if (!str(r.id) || !str(r.conversation_id) || !str(r.at) || typeof r.text !== 'string') return null
-  if (r.source === 'sai-human') {
+  if (r.source === 'sai-human' || r.source === 'chatgpt-human') {
     if (!str(r.request_id)) return null
-    return { type: 'message', id: r.id, conversation_id: r.conversation_id, request_id: r.request_id, source: 'sai-human', at: r.at, text: r.text }
+    const thread = r.source === 'chatgpt-human' && str(r.thread) ? { thread: r.thread } : {}
+    return { type: 'message', id: r.id, conversation_id: r.conversation_id, request_id: r.request_id, source: r.source, at: r.at, text: r.text, ...thread }
   }
   if (r.source === 'dots') {
     if (!str(r.reply_to)) return null
@@ -122,6 +137,7 @@ const byAt = (a: { at: string }, b: { at: string }) => (a.at < b.at ? -1 : a.at 
  *
  * - 返答は `reply_to` で依頼に付ける（書かれた順・時刻の順が入れ替わっても、付く先は変わらない）
  * - 状態は、その依頼の状態の行を時刻の順に `canMoveDots()` で当てていく（進めない遷移は捨てる）。行が無ければ `queued`
+ * - 取り込んだ投稿（`chatgpt-human`。#878）は配らないので状態の行を見ず、返答があれば `done`、無ければ `unknown`
  * - 同じ `id` の行が 2 度あれば先のものだけ使う（書き直しで重ねない）
  */
 export function dotsConversations(lines: readonly DotsLine[]): DotsConversation[] {
@@ -141,12 +157,13 @@ export function dotsConversations(lines: readonly DotsLine[]): DotsConversation[
   const convs = new Map<string, DotsConversation>()
   const requests = new Map<string, { conv: string; req: DotsRequest }>()
   for (const m of messages) {
-    if (m.source !== 'sai-human' || !m.request_id || requests.has(m.request_id)) continue
+    if (!isHumanSource(m.source) || !m.request_id || requests.has(m.request_id)) continue
     let c = convs.get(m.conversation_id)
     if (!c) {
-      c = { id: m.conversation_id, started_at: m.at, updated_at: m.at, requests: [], orphans: [] }
+      c = { id: m.conversation_id, started_at: m.at, updated_at: m.at, requests: [], orphans: [], imported: false }
       convs.set(c.id, c)
     }
+    if (m.source === 'chatgpt-human') c.imported = true
     const req: DotsRequest = { message: m, state: 'queued', replies: [] }
     c.requests.push(req)
     if (m.at > c.updated_at) c.updated_at = m.at
@@ -160,7 +177,7 @@ export function dotsConversations(lines: readonly DotsLine[]): DotsConversation[
     else {
       let c = convs.get(m.conversation_id)
       if (!c) {
-        c = { id: m.conversation_id, started_at: m.at, updated_at: m.at, requests: [], orphans: [] }
+        c = { id: m.conversation_id, started_at: m.at, updated_at: m.at, requests: [], orphans: [], imported: false }
         convs.set(c.id, c)
       }
       c.orphans.push(m)
@@ -168,9 +185,12 @@ export function dotsConversations(lines: readonly DotsLine[]): DotsConversation[
     const c = convs.get(m.conversation_id)
     if (c && m.at > c.updated_at) c.updated_at = m.at
   }
+  for (const { req } of requests.values()) {
+    if (req.message.source === 'chatgpt-human') req.state = req.replies.length > 0 ? 'done' : 'unknown'
+  }
   for (const ch of changes) {
     const hit = requests.get(ch.request_id)
-    if (!hit || !canMoveDots(hit.req.state, ch.state)) continue
+    if (!hit || hit.req.message.source === 'chatgpt-human' || !canMoveDots(hit.req.state, ch.state)) continue
     hit.req.state = ch.state
     if (ch.reason) hit.req.reason = ch.reason
     else delete hit.req.reason

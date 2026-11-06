@@ -12,9 +12,13 @@ export function dotsTimeline(conversations: readonly DotsConversation[]): DotsCo
   return [...conversations].sort((a, b) => (a.updated_at < b.updated_at ? -1 : a.updated_at > b.updated_at ? 1 : 0))
 }
 
-/** 会話の題名: 最初の投稿の 1 行目を縮めたもの。投稿が無い（返答だけの）会話は「（題名なし）」 */
+/**
+ * 会話の題名: dots が付けた会話の名前（取り込んだ会話。#878）があればそれ、無ければ最初の投稿の 1 行目を縮めたもの。
+ * 投稿が無い（返答だけの）会話は「（題名なし）」
+ */
 export function dotsTitle(c: DotsConversation): string {
-  const first = c.requests[0]?.message.text.split('\n').find((l) => l.trim())?.trim() ?? ''
+  const named = c.requests.find((r) => r.message.thread)?.message.thread
+  const first = named ?? c.requests[0]?.message.text.split('\n').find((l) => l.trim())?.trim() ?? ''
   if (!first) return '（題名なし）'
   const chars = [...first]
   return chars.length > TITLE_MAX ? `${chars.slice(0, TITLE_MAX).join('')}…` : first

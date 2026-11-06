@@ -86,3 +86,15 @@ test('受信箱の行として読めないものは null（人の投稿は reque
   // 余計なフィールドは持ち込まない
   assert.deepEqual(parseDotsLine({ ...ok, cwd: '/x' }), ok)
 })
+
+test('ChatGPT で直接話した投稿（chatgpt-human）: 名前を持ち、状態は返答の有無で決まり、状態の行は見ない', () => {
+  const m: DotsMessage = { type: 'message', id: 'u1', conversation_id: 'drop-x', request_id: 'r1', source: 'chatgpt-human', at: '2026-11-06T01:00:00Z', text: '質問', thread: '予定' }
+  assert.deepEqual(parseDotsLine(m), m)
+  assert.deepEqual(parseDotsLine({ ...human('h', 'c', 'r', 'x'), thread: '名前' }), human('h', 'c', 'r', 'x'), 'SAI の投稿には名前を持ち込まない')
+  const none = dotsConversations([m, state('r1', 'accepted', '2026-11-06T01:00:01Z')])[0]
+  assert.equal(none?.imported, true)
+  assert.equal(none?.requests[0]?.state, 'unknown')
+  const done = dotsConversations([m, dots('d1', 'drop-x', 'r1', '2026-11-06T01:00:02Z')])[0]
+  assert.equal(done?.requests[0]?.state, 'done')
+  assert.equal(dotsConversations([human('h1', 'c1', 'r9', 'x')])[0]?.imported, false)
+})

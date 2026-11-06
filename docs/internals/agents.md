@@ -150,7 +150,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
   - `sai_sessions` と `sai_send` の返事にも出す（エージェントが小さい相手を選べるように）。
 - 走り出したターンの費用の上限 `AGENT_TURN_MAX_BUDGET_USD`（50 ドル。#388）:
   - `launch()` の続き（`startTurn()`）が、`LaunchOptions.origin` があるときだけ `replyCommand()` の最後の引数に渡し、`claudeHead()` が `--max-budget-usd 50` を足す。`origin` が付くのは `sai_send`・預かった送信（`drainBacklog()`）・`/mcp` の `sai_send`・返答がそろって送り元を起こすターン・それらが預かりから回るとき。要約を挟むとき（#624）は要約のターンにも本文のターンにも付く。**人の返信（`POST …/reply`）・ループ・待ち・新しいセッションは `origin` を持たないので付かない**。
-  - **「SAI 自身は起動するコマンドに権限のフラグを付けない」との関係**: あの決まりが止めているのは、できることを**増やす**フラグ（`--dangerously-skip-permissions`・`--allowedTools`・`--permission-mode` を SAI の判断で足すこと）。`--max-budget-usd` は許可にも道具にも触らず、ターンを**早く終わらせる側**にしか働かないので、決まりの外に置いている（一言の `claude -p` が道具・MCP を外して起こす #740 と同じ「足すのは減らす側だけ」）。
+  - **権限のフラグとの関係**: `--max-budget-usd` は許可にも道具にも触らず、ターンを**早く終わらせる側**にしか働かない（一言の `claude -p` が道具・MCP を外して起こす #740 と同じ「足すのは減らす側だけ」）。
   - 運用者が `SAI_CLAUDE_ARGS` に自分の `--max-budget-usd` を書いていれば足さない（2 つ並べない。`--max-budget-usd=5` の形も見る）。その額は人の返信にも効く。
   - 上限は起動 1 回ぶんなので、メッセージで起きたターンに人がその場で足した指示（steer）や、そこへ足された返答も同じ上限の内側で走る。
   - 付くのは Claude の別プロセスの経路だけ。端末（tmux）に打ち込む経路・Codex（app-server / queue / `exec resume`）・OpenCode には同じ口が無い。

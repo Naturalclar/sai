@@ -165,7 +165,7 @@ OpenCode (feed/opencode/sai.js) ─┘                           │
 - **PR と gh**: 外に出る数少ない口。認証は `gh` 任せ、組み立てる形は決め打ち。並べるのは記録で知っている repo だけ（任意の名前を `gh` に渡さない）。失敗しても差分は落とさない → docs/internals/diff.md#github-の-pr-を読む
 - **レビューの投稿**: GitHub に書く唯一の口。同一オリジンのみ。head が違えば 409、行はいまの差分で探し直し中身が同じときだけ送る → docs/internals/diff.md#github-にレビューを投稿する
 - **PR の要約**（#790）: 押したときだけ作る（GET・ポーリングでは作らない）。同一オリジンのみ、GitHub には書かない、`gh` の形を足さない。口は既定で一言と同じ（設定で要約だけ別の口を選べる）で、送り先を画面に書く。PR の本文・差分・コメントは囲みに入れて指示として読ませず、秘密に見えるパスは渡さない。要約は文字として描く。一言の記録とは混ぜない → docs/internals/diff.md#pr-の要約を作る790
-- **PR の解説**（#881。`/brief-pr`）: 押したときだけ新しい Claude のセッションとして回す（権限のフラグを足さない・URL はリクエストから受けない）。**HTML を配るのは `GET /api/pr-explain/<鍵>` だけの例外**で、配るのは一時フォルダの直下の `brief-pr-…/brief.html`（realpath・リンクでない）だけ、`CSP: sandbox` と `default-src 'none'` を必ず付ける（中身の CSP に頼らない）。出す相手は返答のファイルと同じ `refuseDevice()`。ほかの HTML は今までどおり描かない → docs/internals/diff.md#pr-の解説を作る881brief-pr
+- **PR の解説**（#881。`/brief-pr`）: 押したときだけ新しい Claude のセッションとして `bypassPermissions` で回す（URL はリクエストから受けない）。**HTML を配るのは `GET /api/pr-explain/<鍵>` だけの例外**で、配るのは一時フォルダの直下の `brief-pr-…/brief.html`（realpath・リンクでない）だけ、`CSP: sandbox` と `default-src 'none'` を必ず付ける（中身の CSP に頼らない）。出す相手は返答のファイルと同じ `refuseDevice()`。ほかの HTML は今までどおり描かない → docs/internals/diff.md#pr-の解説を作る881brief-pr
 - **メタ**: PUT の意味は `mergeMeta()` が正本。表示名が無ければ `-n` を渡さない → docs/internals/meta.md#セッションのメタ
 - **アイコン**: パスは ID から組み立てない。履歴の鍵は `^[0-9a-f]{16}$` だけ、パスは受けずサーバの置き場から読む。自分のアイコンは鍵 `me` → docs/internals/meta.md#アイコンの履歴
 - **未読**: PUT は同一オリジンのみ。既読は前にしか進めない。数えるのはターン完了だけ → docs/internals/meta.md#未読の印
@@ -199,7 +199,6 @@ OpenCode (feed/opencode/sai.js) ─┘                           │
 - **SAI は外に出さない。** `127.0.0.1` / `localhost` / `::1` 以外への bind は `main.ts` が拒否する。デプロイ・ホスティング・Slack への送信はしない。出してよいのは tailnet までで `tailscale serve` 経由だけ（bind は変えない、funnel は使わない）。**例外は 2 つだけ**: `JEV_API_KEY` を置いたときの許可の予想（#491。`settings.json` の `jev` で切れる）と、人が確認の画面で押したときの PR のレビューの投稿（#526）。外に問い合わせる `gh` は `server/git/` の決まった形だけ
 - **Serve 越しの認証は whois で突き合わせる**（`server/auth.ts`）。ヘッダがどちらも無いものだけがループバック。タグ付きの端末は画面・REST は 401 で、capability を与えた `/mcp` だけ。「聞けなかった」と「居ない」を混ぜない → `docs/internals/auth.md`
 - **ブラウザから叩く書き込みの口は同一オリジンのみ**（`app.ts` の `isCrossOrigin()` を外さない）: 返信・新しいセッション・承認の答え・レビュー・一言の「変？」・既読・送信の停止など。**`cwd`・パス・ブランチはリクエストから受けず、セッションの行から取る**（新しいセッションも `from` の `cwd`）
-- **SAI 自身は起動するコマンドに権限のフラグを付けない。** 運用者が `SAI_CLAUDE_ARGS` / `SAI_CODEX_ARGS` で渡すのは可（`docs/screen.md` の「返信と許可」の範囲。バイパスは勧めない）
 - **端末の経路（tmux）に新しい機能を足さない。新しい機能は SAI の経路（`-p` / app-server）に足す（#843）**
 - **「処理中の返信」はメモリと `~/.agent-feed/replying.json` の両方**（再起動で忘れると返信が二重に走る）。失敗は `Replying.failed` で画面に出す
 - **セッションの呼び名（SAI の表示名）・実際の worktree 名・ほかのリポジトリの名前は、コミットするファイル・コミットメッセージ・issue・PR に書かない。** 「セッション A」「`dev-worktree-a`」「リポジトリ A」のように書く（テストの作り物の名前も同じ）。詳しくは `AGENTS.md`

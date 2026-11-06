@@ -187,7 +187,7 @@ test('別オリジン・知らないリポジトリは断る。GET では回さ�
   assert.equal(runner.started.length, 0)
 })
 
-test('押すと /brief-pr <PR の URL> を新しいセッションで回す。権限のフラグは足さない。回している間は 2 本目を断る', async () => {
+test('押すと /brief-pr <PR の URL> を新しいセッションで回す。許可モードは bypassPermissions。回している間は 2 本目を断る', async () => {
   const res = await post('/api/prs/o/known/7/explain')
   assert.equal(res.status, 202)
   const body = (await res.json()) as PrExplainResponse
@@ -197,6 +197,8 @@ test('押すと /brief-pr <PR の URL> を新しいセッションで回す。�
   assert.equal(body.explain.session, id)
   assert.match(id, /@known$/)
   assert.equal(cmd.text, '/brief-pr https://github.com/o/known/pull/7')
+  // 許可モードは bypassPermissions（人が決めた）。ほかの権限のフラグは足さない
+  assert.equal(cmd.args[cmd.args.indexOf('--permission-mode') + 1], 'bypassPermissions')
   for (const flag of ['--dangerously-skip-permissions', '--allowedTools', '--allowed-tools']) assert.ok(!cmd.args.includes(flag), flag)
   assert.equal(prs.posted, 0, 'GitHub には書かない')
   assert.equal((await post('/api/prs/o/known/7/explain')).status, 409)

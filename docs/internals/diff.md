@@ -141,7 +141,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 
 ### PR の解説を作る（#881。`/brief-pr`）
 
-- `POST /api/prs/<owner>/<repo>/<番号>/explain`（同一オリジンのみ。`app.ts` の `postPrExplain()`）。**押したときだけ**、利用者のスキル `/brief-pr` を新しい Claude のセッションとして起こす（返信と同じ `newSessionCommand()`。`spawnNewClaude()` を `POST /api/sessions/new` と共用）。最初の指示は `explainPrompt()`（`/brief-pr <PR の URL>`）で、URL は `gh` で読み直した PR のもの（リクエストからは受けない）。**権限のフラグは足さない**。許可・質問は返信と同じ配線で画面と要対応に出る。回したセッションは一覧に普通のセッションとして並ぶ（表示名「PR #N の解説」）。PR の欄にはそのセッションへのリンクを出す。
+- `POST /api/prs/<owner>/<repo>/<番号>/explain`（同一オリジンのみ。`app.ts` の `postPrExplain()`）。**押したときだけ**、利用者のスキル `/brief-pr` を新しい Claude のセッションとして起こす（返信と同じ `newSessionCommand()`。`spawnNewClaude()` を `POST /api/sessions/new` と共用）。最初の指示は `explainPrompt()`（`/brief-pr <PR の URL>`）で、URL は `gh` で読み直した PR のもの（リクエストからは受けない）。**許可モードは `bypassPermissions`**（`EXPLAIN_PERMISSION_MODE`。セッションのメタの `permission_mode` に書くので、`--permission-mode bypassPermissions` で起き、続きの返信も同じモード）。許可は聞かれず、質問だけが返信と同じ配線で画面と要対応に出る。回したセッションは一覧に普通のセッションとして並ぶ（表示名「PR #N の解説」）。PR の欄にはそのセッションへのリンクを出す。
 - 回す場所は `explainFrom()`（そのリポジトリの remote を持つ、このマシンの一番新しいセッション）→ `explainPlace()`（そのリポジトリの `main`、無ければ `master` の worktree。無ければ元のセッションの worktree）。検査は新しいセッションと同じ `startPlace()`。記録のある worktree が無いリポジトリでは `explain_available` を載せず、ボタンを出さない。
 - 同じ PR は 1 本ずつ（回している間・起こしている間の 2 本目は 409。`explainStarting` と `run.running()`）。
 - 覚えるのは `server/git/prExplains.ts` の `PrExplainStore`（`pr-explains.json`。PR ごとに最後の 1 つ。`session`・`head_sha`・`at`・見つけた `path`）。**パスは画面に渡さない**。

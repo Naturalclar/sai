@@ -331,6 +331,8 @@ const PR_BRIEF_SUFFIX = '/summary'
 const PR_EXPLAIN_SUFFIX = '/explain'
 /** できた解説の HTML を配る（#881）。`/api/pr-explain/<鍵>` */
 const PR_EXPLAIN_PATH = '/api/pr-explain/'
+/** 解説のセッションの許可モード（人が決めた。許可を聞かずに最後まで回す） */
+const EXPLAIN_PERMISSION_MODE = 'bypassPermissions'
 /** 設定 body の上限 */
 export const MAX_SETTINGS_BYTES = 4 * 1024
 /** レビューの投稿（#526）の body の上限。文字数の上限（shared/prReview.ts）は parseReviewRequest() が見る */
@@ -1747,7 +1749,9 @@ export function createApp(
   /**
    * POST /api/prs/<owner>/<repo>/<番号>/explain（#881）。**人が押したときだけ** `/brief-pr <PR の URL>` を新しい Claude のセッションとして
    * 起こす（SAI のセッションとして一覧に並び、途中経過・許可・失敗はそのセッションの画面と要対応に出る）。URL は `gh` で読んだ PR のもの
-   * で、リクエストからは受けない。権限のフラグは足さない（返信と同じ `newSessionCommand()`）
+   * で、リクエストからは受けない。起こし方は返信と同じ `newSessionCommand()` で、**許可モードは `bypassPermissions`**
+   * （人が決めた。許可を聞かずに最後まで回す。スキルは読むだけと決めているが、PR の本文・コメントは他人が書けるので、
+   * 指示の差し込みに乗せられると聞かれずに通る。そのぶんは承知のうえ）
    */
   const postPrExplain = async (res: ServerResponse, req: IncomingMessage, filled: readonly SessionSummary[], known: string[], rest: string) => {
     const parts = rest.split('/')
@@ -1769,7 +1773,7 @@ export function createApp(
       if (!view) return error(res, 502, 'gh で PR を読めませんでした')
       const session = randomUUID()
       const id = entityId(session, place.repo, '')
-      const meta: SessionMeta = { name: `PR #${number} の解説` }
+      const meta: SessionMeta = { name: `PR #${number} の解説`, permission_mode: EXPLAIN_PERMISSION_MODE }
       await metaStore.set(id, meta)
       const failed = await spawnNewClaude(req, id, session, place.cwd, explainPrompt(view.pr.url), meta)
       if (failed) return error(res, 500, failed)

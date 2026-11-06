@@ -1,15 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { api, type PrDetailResponse, type PrExplain } from './api'
 import { sessionHash } from './hooks'
 import { agoLabel } from './prLabels'
-import { EXPLAIN_POLL_MS, explainButtonLabel, explainHref, explainNote } from './prExplainLabels'
-import { pollLoop } from './pollLoop'
+import { explainButtonLabel, explainHref, explainNote } from './prExplainLabels'
 
 /**
- * PR の解説（#881）。押したときだけ利用者のスキル `/brief-pr` を SAI の `claude -p` で裏で回し、できた HTML を開くリンクを出す。
+ * PR の解説（#881）。押したときだけ利用者のスキル `/brief-pr` を SAI の新しいセッションとして回し、できた HTML を開くリンクを出す。
  *
- * - 画面は回したセッションへ移らない（途中経過・許可・失敗はそのセッションと要対応に出る。リンクで開ける）
- * - 回している間だけ、状態を `pollLoop()` で見に行く（gh は叩かない）
+ * - 途中経過・許可・失敗は回したセッションと要対応に出る（欄にそのセッションへのリンクを出す）。状態は「更新」で PR を読み直したときに変わる
  * - 開く先は SAI の口（`/api/pr-explain/<鍵>`）なので、tailnet 越しの画面からも開ける。サーバは `CSP: sandbox` で配る
  */
 export function PrExplainBox({ repo, number, data, now }: { repo: string; number: number; data: PrDetailResponse; now: number }) {
@@ -19,26 +17,9 @@ export function PrExplainBox({ repo, number, data, now }: { repo: string; number
   const [error, setError] = useState('')
   const explain = mine && mine.data === data ? mine.explain : (data.explain ?? null)
   const running = explain?.state === 'running'
-  useEffect(() => {
-    if (!running) return
-    let alive = true
-    const tick = async () => {
-      try {
-        const r = await api.prExplain(repo, number)
-        if (alive) setMine({ explain: r.explain, data })
-      } catch {
-        // 聞けなければ次の周期でもう一度
-      }
-    }
-    const loop = pollLoop(tick, () => EXPLAIN_POLL_MS)
-    return () => {
-      alive = false
-      loop.stop()
-    }
-  }, [running, repo, number, data])
   if (!data.explain_available && !explain) return null
   const label = data.explain_available ? explainButtonLabel(explain) : ''
-  const note = explainNote(explain, data.pr.head_sha)
+  const note = explainNote(explain)
   const make = () => {
     setBusy(true)
     setError('')
@@ -74,7 +55,7 @@ export function PrExplainBox({ repo, number, data, now }: { repo: string; number
       )}
       {note && <div className="note">{note}</div>}
       {error && <div className="warn">{error}</div>}
-      {!explain && label && <div className="note">押すと、この PR の URL で /brief-pr を裏で回します（読むだけ。GitHub には書きません）</div>}
+      {!explain && label && <div className="note">押すと、この PR の URL で /brief-pr を新しいセッションで回します（読むだけ。GitHub には書きません）</div>}
     </div>
   )
 }

@@ -1,4 +1,4 @@
-// PR の解説（#881）。利用者のスキル `/brief-pr` を SAI の `claude -p` で裏で回し、できた `brief.html` を鍵で配る。
+// PR の解説（#881）。利用者のスキル `/brief-pr` を SAI の新しいセッションとして回し、できた `brief.html` を鍵で配る。
 //
 // - **回すのは人が押したときだけ**（`POST /api/prs/<owner>/<repo>/<番号>/explain`）。一覧・詳細の GET・ポーリングでは回さない
 // - スキルの出力は OS の一時フォルダの直下の `brief-pr-*/brief.html`（スキル同梱の `render.py` が作る）。拾ってよいのは
@@ -114,7 +114,7 @@ export async function briefHtmlOk(path: string, root: string): Promise<boolean> 
  * `failed` は回し終えたのに見つからなかった。`stale` は回したときから PR の head が進んだ
  */
 export function explainView(rec: PrExplainRecord, o: { running: boolean; exists: boolean; head: string }): PrExplain {
-  const base = { session: rec.session, at: rec.at, head_sha: rec.head_sha, stale: !!o.head && o.head !== rec.head_sha }
+  const base = { session: rec.session, at: rec.at, stale: !!o.head && o.head !== rec.head_sha }
   if (o.running) return { ...base, state: 'running' }
   if (rec.path) return o.exists ? { ...base, state: 'ready', key: explainKey(rec.path) } : { ...base, state: 'gone' }
   return { ...base, state: rec.missing ? 'failed' : 'running' }

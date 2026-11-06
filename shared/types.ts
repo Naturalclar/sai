@@ -626,16 +626,14 @@ export interface PrDetailResponse {
 }
 
 /**
- * PR の解説（#881）。人が押したときだけ `/brief-pr` を SAI の `claude -p` で裏で回し、できた HTML を
+ * PR の解説（#881）。人が押したときだけ `/brief-pr` を SAI の新しいセッションとして回し、できた HTML を
  * `GET /api/pr-explain/<key>` で配る（パスは渡さない）
  */
 export interface PrExplain {
   /** `running` 回している / `ready` 開ける / `gone` 一時フォルダから消えた / `failed` 回し終えたが HTML が見つからなかった */
   state: 'running' | 'ready' | 'gone' | 'failed'
-  /** 回したときから PR の head が進んだ（PR の GET のときだけ見る。状態だけの GET では false のまま。画面は `head_sha` で比べる） */
+  /** 回したときから PR の head が進んだ */
   stale: boolean
-  /** 回したときの PR の head */
-  head_sha: string
   /** 回したセッションのエンティティ ID（途中経過・許可・失敗の理由はそのセッションの画面に出る） */
   session: string
   /** 回し始めた時刻（ISO） */

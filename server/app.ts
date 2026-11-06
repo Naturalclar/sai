@@ -1745,7 +1745,7 @@ export function createApp(
   }
   /**
    * POST /api/prs/<owner>/<repo>/<番号>/explain（#881）。**人が押したときだけ** `/brief-pr <PR の URL>` を新しい Claude のセッションとして
-   * `claude -p` で裏で回す（画面は移らない。途中経過・許可・失敗はそのセッションの画面と要対応に出る）。URL は `gh` で読んだ PR のもの
+   * 起こす（SAI のセッションとして一覧に並び、途中経過・許可・失敗はそのセッションの画面と要対応に出る）。URL は `gh` で読んだ PR のもの
    * で、リクエストからは受けない。権限のフラグは足さない（返信と同じ `newSessionCommand()`）
    */
   const postPrExplain = async (res: ServerResponse, req: IncomingMessage, filled: readonly SessionSummary[], known: string[], rest: string) => {
@@ -1779,16 +1779,6 @@ export function createApp(
     } finally {
       explainStarting.delete(key)
     }
-  }
-  /** GET /api/prs/<owner>/<repo>/<番号>/explain（#881）。いまの状態だけ（gh で PR を読み直さないので、古いかは画面が head で比べる）。回していなければ 404 */
-  const getPrExplainState = async (res: ServerResponse, known: string[], rest: string) => {
-    const parts = rest.split('/')
-    const [owner = '', name = '', n = ''] = parts
-    const repo = parts.length === 3 ? pickKnownRepo(known, `${owner}/${name}`) : ''
-    if (!repo || !isPrNumber(n)) return error(res, 404, 'not found')
-    const explain = await explainNow(repo, Number(n), '')
-    if (!explain) return error(res, 404, 'この PR の解説はまだ作っていません')
-    return json(res, { explain } satisfies PrExplainResponse)
   }
   /**
    * GET /api/pr-explain/<鍵>（#881）。**HTML を配るのはこの口だけの例外**。鍵で覚えたパスを引き、一時フォルダの直下の
@@ -5669,17 +5659,15 @@ export function createApp(
       // GitHub に出ている PR（#524）。**読むだけ**で、並べるのは記録で知っているリポジトリ（セッションの remote）だけ。
       // 3 秒のポーリングには乗せない（開いたとき・「読み直す」のときだけ）
       if (path === PRS_PATH || path.startsWith(`${PRS_PATH}/`)) {
-        // 解説（#881）は POST で回し、GET でいまの状態だけを読む（回している間の画面が見に来る。gh は叩かない）
-        if (isPrReview || isPrBrief ? method !== 'POST' : isPrExplain ? method !== 'POST' && method !== 'GET' : method !== 'GET') return error(res, 405, 'method not allowed')
+        if (isPrReview || isPrBrief || isPrExplain ? method !== 'POST' : method !== 'GET') return error(res, 405, 'method not allowed')
         // GitHub に書く唯一の口（#526）と、材料を一言の口に渡す要約（#790）と、解説を回す口（#881）。ほかの検査より先に、同一オリジンだけに絞る
-        if ((isPrReview || isPrBrief || (isPrExplain && method === 'POST')) && isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
+        if ((isPrReview || isPrBrief || isPrExplain) && isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
         const { sessions: raw } = await store.sessions(PRS_REPO_DAYS)
         const filled = await fillRepo(projects, raw)
         const known = knownRepos(filled)
         if (isPrReview) return await postPrReview(req, res, known, path.slice(PRS_PATH.length + 1, -PR_REVIEW_SUFFIX.length))
         if (isPrBrief) return await postPrBrief(req, res, known, path.slice(PRS_PATH.length + 1, -PR_BRIEF_SUFFIX.length))
-        if (isPrExplain && method === 'POST') return await postPrExplain(res, req, filled, known, path.slice(PRS_PATH.length + 1, -PR_EXPLAIN_SUFFIX.length))
-        if (isPrExplain) return await getPrExplainState(res, known, path.slice(PRS_PATH.length + 1, -PR_EXPLAIN_SUFFIX.length))
+        if (isPrExplain) return await postPrExplain(res, req, filled, known, path.slice(PRS_PATH.length + 1, -PR_EXPLAIN_SUFFIX.length))
         if (path === PRS_PATH) {
           const fresh = q.get('fresh') === '1'
           const repos: PrRepo[] = await Promise.all(

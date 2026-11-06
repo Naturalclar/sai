@@ -183,11 +183,11 @@ test('開いただけでは回さない。記録のある worktree があれば�
 test('別オリジン・知らないリポジトリは断る。GET では回さない', async () => {
   assert.equal((await post('/api/prs/o/known/7/explain', { Origin: 'http://evil.example' })).status, 403)
   assert.equal((await post('/api/prs/o/unknown/7/explain')).status, 404)
-  assert.equal((await fetch(`${base}/api/prs/o/known/7/explain`)).status, 404, 'GET は状態を読むだけ（まだ回していない）')
+  assert.equal((await fetch(`${base}/api/prs/o/known/7/explain`)).status, 405, 'GET では回さない')
   assert.equal(runner.started.length, 0)
 })
 
-test('押すと /brief-pr <PR の URL> を新しいセッションで裏で回す。権限のフラグは足さない。回している間は 2 本目を断る', async () => {
+test('押すと /brief-pr <PR の URL> を新しいセッションで回す。権限のフラグは足さない。回している間は 2 本目を断る', async () => {
   const res = await post('/api/prs/o/known/7/explain')
   assert.equal(res.status, 202)
   const body = (await res.json()) as PrExplainResponse
@@ -201,10 +201,6 @@ test('押すと /brief-pr <PR の URL> を新しいセッションで裏で回�
   assert.equal(prs.posted, 0, 'GitHub には書かない')
   assert.equal((await post('/api/prs/o/known/7/explain')).status, 409)
   assert.equal((await detail(7)).explain?.state, 'running')
-  // 状態だけの GET（別オリジンでも読むだけ。回さない）
-  const polled = (await (await fetch(`${base}/api/prs/o/known/7/explain`)).json()) as PrExplainResponse
-  assert.equal(polled.explain.state, 'running')
-  assert.equal(runner.started.length, 1)
 })
 
 test('回し終えたら返答の file:// から拾って鍵で配る。CSP: sandbox・nosniff・no-store。消えたら gone、head が進んだら古い', async () => {

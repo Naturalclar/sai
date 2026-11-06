@@ -322,11 +322,9 @@ export const api = {
   /** PR の要約を作る（#790）。押したときだけ。材料も送り先もサーバが決める。`via` は画面に出していた送り先で、いまの口と違えばサーバが 409 で作らない */
   makePrBrief: (repo: string, number: number, via: string) =>
     sendJSON<PrBriefResponse>('POST', `/api/prs/${repo.split('/').map(encodeURIComponent).join('/')}/${number}/summary`, { via }),
-  /** PR の解説（#881。`/brief-pr`）を裏で回す。押したときだけ */
+  /** PR の解説（#881。`/brief-pr`）を新しいセッションで回す。押したときだけ */
   makePrExplain: (repo: string, number: number) =>
     sendJSON<PrExplainResponse>('POST', `/api/prs/${repo.split('/').map(encodeURIComponent).join('/')}/${number}/explain`, {}),
-  /** 解説のいまの状態だけを読む（回している間に見に行く。gh は叩かない） */
-  prExplain: (repo: string, number: number) => getJSON<PrExplainResponse>(`/api/prs/${repo.split('/').map(encodeURIComponent).join('/')}/${number}/explain`),
   /** サーバ側の設定（一言の性格。digest が有効か） */
   settings: () => getJSON<SettingsResponse>('/api/settings'),
   setSettings: (body: SettingsRequest) => sendJSON<SettingsResponse>('PUT', '/api/settings', body),

@@ -1722,21 +1722,22 @@ export function createApp(
   }
   /**
    * 画面に渡す解説の状態（PR の GET が読むだけ。**ここでは回さない**）。回し終えてまだ HTML を見つけていなければ、
-   * そのセッションのターン完了の本文から拾って覚える（見つからなければ `failed`）
+   * そのセッションのターン完了の本文から拾って覚える（見つからなければ `failed`）。**`failed` でも開くたびに読み直す**
+   * （そのセッションで人が「続けて」と返し、次のターンでできることがある。#882 のレビュー）
    */
   const explainNow = async (repo: string, number: number, head: string) => {
     const rec = await explains.get(repo, number)
     if (!rec) return undefined
     const running = explainStarting.has(`${repo.toLowerCase()}#${number}`) || launching.has(rec.session) || run.running(rec.session)
-    if (!running && !rec.path && !rec.missing) {
+    if (!running && !rec.path) {
       const texts = (await rowsNow(7))
         .filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === rec.session && eventKind(r.event, r.text ?? '') === 'turn')
         .map((r) => r.text ?? '')
         .reverse()
       let path = ''
       for (const t of texts) if ((path = await briefHtmlIn(t, explainTmp))) break
-      const next = path ? { ...rec, path } : { ...rec, missing: true }
-      await explains.set(repo, number, next).catch(() => {})
+      const next = path ? { ...rec, path, missing: undefined } : { ...rec, missing: true }
+      if (path || !rec.missing) await explains.set(repo, number, next).catch(() => {})
       Object.assign(rec, next)
     }
     const root = await realpath(explainTmp).catch(() => '')

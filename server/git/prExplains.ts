@@ -16,10 +16,15 @@ export const PR_EXPLAINS_FILE = 'pr-explains.json'
 export const PR_EXPLAINS_MAX = 200
 /** 配る HTML の上限。`render.py` の出力は数百 KB までなので十分 */
 export const PR_EXPLAIN_MAX_BYTES = 5 * 1024 * 1024
-/** 配る口の応答ヘッダ。**スクリプトを動かさない・同じオリジンとして扱わせない**（`sandbox`）、種類を推し量らせない、覚えさせない */
+/**
+ * 配る口の応答ヘッダ。**スクリプトを動かさない・同じオリジンとして扱わせない**（`sandbox`）、**外から何も読み込ませない**
+ * （`default-src 'none'`。インラインの CSS と `data:` の画像だけ。スキルの `render.py` が HTML に書く CSP と同じかそれより狭い。
+ * 中身の CSP には頼らない: 形が合えば `render.py` を通らないファイルでも拾うので。#882 のレビュー）、種類を推し量らせない、覚えさせない
+ */
+export const PR_EXPLAIN_CSP = "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'"
 export const PR_EXPLAIN_HEADERS = {
   'content-type': 'text/html; charset=utf-8',
-  'content-security-policy': 'sandbox',
+  'content-security-policy': PR_EXPLAIN_CSP,
   'x-content-type-options': 'nosniff',
   'cache-control': 'no-store',
   'referrer-policy': 'no-referrer',

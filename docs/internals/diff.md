@@ -145,9 +145,9 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 回す場所は `explainFrom()`（そのリポジトリの remote を持つ、このマシンの一番新しいセッション）→ `explainPlace()`（そのリポジトリの `main`、無ければ `master` の worktree。無ければ元のセッションの worktree）。検査は新しいセッションと同じ `startPlace()`。記録のある worktree が無いリポジトリでは `explain_available` を載せず、ボタンを出さない。
 - 同じ PR は 1 本ずつ（回している間・起こしている間の 2 本目は 409。`explainStarting` と `run.running()`）。
 - 覚えるのは `server/git/prExplains.ts` の `PrExplainStore`（`pr-explains.json`。PR ごとに最後の 1 つ。`session`・`head_sha`・`at`・見つけた `path`）。**パスは画面に渡さない**。
-- 状態は `explainNow()` が PR の GET（`explain`）で読む（見に来るのは PR を開いた・「更新」を押したときだけ。状態だけの口やポーリングは持たない）。回し終えてまだ見つけていなければ、そのセッションのターン完了の本文から `briefHtmlIn()` で拾って覚え、無ければ `failed`。状態の形は `explainView()`（`running` / `ready` / `gone` / `failed`、head が進んだら `stale`）。
+- 状態は `explainNow()` が PR の GET（`explain`）で読む（見に来るのは PR を開いた・「更新」を押したときだけ。状態だけの口やポーリングは持たない）。回し終えてまだ見つけていなければ、そのセッションのターン完了の本文から `briefHtmlIn()` で拾って覚え、無ければ `failed`（`failed` でも開くたびに読み直す。そのセッションの次のターンでできることがある）。状態の形は `explainView()`（`running` / `ready` / `gone` / `failed`、head が進んだら `stale`）。
 - 拾ってよいのは `briefHtmlIn()` / `briefHtmlOk()` が通すものだけ: 本文の `file://…/brief-pr-…/brief.html` で、**フォルダの親の realpath が一時フォルダ（`os.tmpdir()` の realpath。スキルの `render.py` と同じ `TMPDIR`）と同じ**、フォルダもファイルも lstat でリンクでない普通のファイル、`PR_EXPLAIN_MAX_BYTES` 以下。名前違い・深い所・リポジトリの中・リンクは拾わない。
-- **HTML を配るのはこの口だけの例外**: `GET /api/pr-explain/<鍵>`（`getPrExplain()`）。鍵は覚えたパスの sha1 の頭 16 桁で、表に無ければ 404。配る前に `briefHtmlOk()` で確かめ直し、`PR_EXPLAIN_HEADERS`（`Content-Security-Policy: sandbox`・`nosniff`・`no-store`・`no-referrer`）を付ける。出す相手は返答のファイル（#603 / #768）と同じ `refuseDevice()`（ループバックと whois で本人と分かった tailnet のユーザーだけ。タグ付きの端末は入口で 401、`/mcp` にこの口は無い）。
+- **HTML を配るのはこの口だけの例外**: `GET /api/pr-explain/<鍵>`（`getPrExplain()`）。鍵は覚えたパスの sha1 の頭 16 桁で、表に無ければ 404。配る前に `briefHtmlOk()` で確かめ直し、`PR_EXPLAIN_HEADERS`（`Content-Security-Policy` は `PR_EXPLAIN_CSP` = `sandbox` に `default-src 'none'`（インラインの CSS と `data:` の画像だけ）を足したもの。HTML の中の CSP には頼らない。ほかに `nosniff`・`no-store`・`no-referrer`）を付ける。出す相手は返答のファイル（#603 / #768）と同じ `refuseDevice()`（ループバックと whois で本人と分かった tailnet のユーザーだけ。タグ付きの端末は入口で 401、`/mcp` にこの口は無い）。
 - 一時フォルダの中身は OS に任せる（消えていたら `gone` にして作り直しのボタンにする）。SAI は写しを持たない。
 - 画面は `web/src/PrExplainBox.tsx`（`PrView` の要約の下）。文言は `web/src/prExplainLabels.ts`。
 

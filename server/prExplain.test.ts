@@ -17,7 +17,7 @@ import { localDate } from './rows/aggregate.ts'
 import { row } from './rows/aggregate.test.ts'
 import type { PrBrowser, PrView } from './git/prs.ts'
 import type { ReplyCommand, Runner } from './reply/runner.ts'
-import { briefHtmlIn, explainView } from './git/prExplains.ts'
+import { PR_EXPLAIN_CSP, briefHtmlIn, explainView } from './git/prExplains.ts'
 
 const summary = (number: number): PrSummary => ({
   number,
@@ -215,7 +215,9 @@ test('回し終えたら返答の file:// から拾って鍵で配る。CSP: san
   assert.ok(!JSON.stringify(shown).includes(tmpRoot), 'パスは画面に渡さない')
   const got = await fetch(`${base}/api/pr-explain/${shown?.key}`)
   assert.equal(got.status, 200)
-  assert.equal(got.headers.get('content-security-policy'), 'sandbox')
+  assert.equal(got.headers.get('content-security-policy'), PR_EXPLAIN_CSP)
+  for (const part of ['sandbox', "default-src 'none'"]) assert.ok(PR_EXPLAIN_CSP.includes(part), part)
+  assert.ok(!/https?:|\*/.test(PR_EXPLAIN_CSP), '外の読み込みを許さない')
   assert.equal(got.headers.get('x-content-type-options'), 'nosniff')
   assert.equal(got.headers.get('cache-control'), 'no-store')
   assert.match(got.headers.get('content-type') ?? '', /^text\/html/)
@@ -235,9 +237,14 @@ test('回し終えたら返答の file:// から拾って鍵で配る。CSP: san
   assert.equal((await fetch(`${base}/api/pr-explain/${shown?.key}`)).status, 404)
 })
 
-test('回し終えても HTML が見つからなければ failed', async () => {
+test('回し終えても HTML が見つからなければ failed。そのセッションの次のターンでできたら拾い直す', async () => {
   assert.equal((await post('/api/prs/o/known/8/explain')).status, 202)
   const { id } = runner.started.at(-1)!
   runner.busy.delete(id)
   assert.equal((await detail(8)).explain?.state, 'failed')
+  // 人がそのセッションで「続けて」と返し、次のターンで HTML ができた
+  const path = await brief('brief-pr-later')
+  const later: FeedRow = row(new Date(), id.split('@')[0]!, { repo: 'known', cwd: repoDir, project: 'o/known', remote: 'https://github.com/o/known', text: `📄 [brief.html を開く](file://${path})` })
+  await appendFile(join(feedDir, `${localDate(new Date().toISOString())}.jsonl`), `${JSON.stringify(later)}\n`)
+  assert.equal((await detail(8)).explain?.state, 'ready')
 })

@@ -228,7 +228,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 
 - `BlockView` の `code` は `web/src/CodeBlock.tsx`。`.code-wrap`（flex）に `pre` とボタンを並べ、ボタンは `pre` の横の別の列にする（中身に重ねると、横に長い行を送ったときや長押しで選ぶときに隠れる）。地の色は `.code-wrap` が持つ。
 - 渡す文字列は `web/src/codeCopy.ts` の `codeCopyText()`（`block.text` そのまま）、文言は `codeCopyView()`。書くのは `messageLink.ts` の `copyText()`（書けなければ `false`）で、押したときだけ。済んだ印は `CODE_COPIED_MS`（1.5 秒）で戻し、書けなかったら下に `role="status"` の案内を出す。
-- `BlockView` を通る所（フィード・セッション画面・要対応の本文）に出る。手順の出力（`OutputSection`）・`FileViewer`・許可の `detail` は通らないので出ない。
+- `BlockView`（`<Markdown>`）を通る所には全部出る（フィード・セッション画面・要対応の本文のほか、PR の本文・コメント・行のスレッド、`FileViewer` の描画モード、dots の返答、手順の発言、進み具合のメモ）。手順の出力（`OutputSection`）・`FileViewer` の元の文字・許可の `detail` は通らないので出ない。
 
 ### 長い本文の折りたたみ（#365 / #369）
 

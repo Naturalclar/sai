@@ -1,6 +1,6 @@
 // ルーティング。main.ts が node:http に載せ、テストは createApp() を直接叩く。
 import { createHash, randomUUID } from 'node:crypto'
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { appendFile, readFile, realpath, stat } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { basename, extname, join, resolve, sep } from 'node:path'
@@ -83,6 +83,7 @@ import type { SessionTurnResponse, TurnOutputResponse, TurnStepsResponse,
   SearchResponse,
   PrBrief,
   PrBriefResponse,
+  PrExplainResponse,
   PrDetailResponse,
   PrReviewResponse,
   PrRepo,
@@ -153,6 +154,7 @@ import { changedPaths, clampPatch, NotAGitRepo, RealGit, resolveBase, sessionDif
 import { mergedKey, prBrowserFromEnv } from './git/prs.ts'
 import type { PrBrowser } from './git/prs.ts'
 import { PR_BRIEFS_FILE, PrBriefStore } from './git/prBriefs.ts'
+import { briefHtmlIn, briefHtmlOk, explainPrompt, explainView, PR_EXPLAIN_HEADERS, PR_EXPLAINS_FILE, PrExplainStore } from './git/prExplains.ts'
 import { briefNotes, cleanBrief, prBriefPrompt } from '../shared/prBrief.ts'
 import { diffStats, githubRepoOf, isPrNumber, knownRepos, pickKnownRepo } from '../shared/prs.ts'
 import { addPair, mayCross, removePair } from '../shared/sendAcross.ts'
@@ -325,6 +327,10 @@ const PRS_REPO_DAYS = 30
 const PR_REVIEW_SUFFIX = '/review'
 /** `/api/prs/<owner>/<repo>/<番号>/summary`（#790）。PR の要約を作る。GitHub には書かない */
 const PR_BRIEF_SUFFIX = '/summary'
+/** PR の解説を回す（#881）。`/api/prs/<owner>/<repo>/<番号>/explain` */
+const PR_EXPLAIN_SUFFIX = '/explain'
+/** できた解説の HTML を配る（#881）。`/api/pr-explain/<鍵>` */
+const PR_EXPLAIN_PATH = '/api/pr-explain/'
 /** 設定 body の上限 */
 export const MAX_SETTINGS_BYTES = 4 * 1024
 /** レビューの投稿（#526）の body の上限。文字数の上限（shared/prReview.ts）は parseReviewRequest() が見る */
@@ -651,6 +657,8 @@ export interface TerminalDeps {
    * 既定は一言と同じ作り方（`summarizerFactory()`。送り先と鍵は環境変数）。テストは偽物を渡す
    */
   briefMouth?: SummarizerFactory
+  /** 解説（#881）の `brief.html` を探す一時フォルダ（既定 `os.tmpdir()`。スキルの `render.py` と同じ `TMPDIR`）。テストは作り物の置き場を渡す */
+  briefTmp?: string
   /** ループ（#634）が見る時計。テストでは進める */
   loopNow?: () => number
   /** ループを見に行く間隔（既定 `LOOP_TICK_MS`）。テストは 0 にしてタイマーを立てず、ポーリングのついでだけで回す */
@@ -1689,6 +1697,105 @@ export function createApp(
    * 口は一言と同じ（`digest.mouth`）だが、列・失敗の数え・`digest.jsonl` には混ぜない。
    * 同じ head・同じコメントの数・同じ送り先で覚えていれば、口を呼ばずにそれを返す
    */
+  // ---- PR の解説（#881。`/brief-pr`）
+  const explains = new PrExplainStore(join(store.directory, PR_EXPLAINS_FILE))
+  const explainTmp = terminal.briefTmp ?? tmpdir()
+  /** 回し始めている PR（同じ PR を 2 回押しても 2 本起こさない。起こすまでの間の 2 本目もここで断る） */
+  const explainStarting = new Set<string>()
+  /** そのリポジトリの解説を回す元にする、このマシンの記録のあるセッション（新しい順に最初の 1 つ）。無ければ null */
+  const explainFrom = (filled: readonly SessionSummary[], repo: string): SessionSummary | null => {
+    const want = repo.toLowerCase()
+    let best: SessionSummary | null = null
+    for (const s of filled) {
+      if (!s.cwd || isRemoteHost(s.host, selfHost())) continue
+      if (githubRepoOf(s.remote).toLowerCase() !== want) continue
+      if (!best || Date.parse(s.end) > Date.parse(best.end)) best = s
+    }
+    return best
+  }
+  /** 回す場所。そのリポジトリの main（無ければ master）の worktree、無ければ元のセッションの worktree（#881 の決めること 2） */
+  const explainPlace = async (from: SessionSummary): Promise<{ cwd: string; repo: string } | { reason: string }> => {
+    const real = await realpath(from.cwd).catch(() => '')
+    const trees = real ? await worktrees.usable(real, true) : null
+    const main = trees?.find((t) => t.branch === 'main') ?? trees?.find((t) => t.branch === 'master')
+    return startPlace(from, main?.key ?? '')
+  }
+  /**
+   * 画面に渡す解説の状態（PR の GET が読むだけ。**ここでは回さない**）。回し終えてまだ HTML を見つけていなければ、
+   * そのセッションのターン完了の本文から拾って覚える（見つからなければ `failed`）。**`failed` でも開くたびに読み直す**
+   * （そのセッションで人が「続けて」と返し、次のターンでできることがある。#882 のレビュー）
+   */
+  const explainNow = async (repo: string, number: number, head: string) => {
+    const rec = await explains.get(repo, number)
+    if (!rec) return undefined
+    const running = explainStarting.has(`${repo.toLowerCase()}#${number}`) || launching.has(rec.session) || run.running(rec.session)
+    if (!running && !rec.path) {
+      const texts = (await rowsNow(7))
+        .filter((r) => entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) === rec.session && eventKind(r.event, r.text ?? '') === 'turn')
+        .map((r) => r.text ?? '')
+        .reverse()
+      let path = ''
+      for (const t of texts) if ((path = await briefHtmlIn(t, explainTmp))) break
+      const next = path ? { ...rec, path, missing: undefined } : { ...rec, missing: true }
+      if (path || !rec.missing) await explains.set(repo, number, next).catch(() => {})
+      Object.assign(rec, next)
+    }
+    const root = await realpath(explainTmp).catch(() => '')
+    const exists = !!rec.path && !!root && (await briefHtmlOk(rec.path, root))
+    return explainView(rec, { running, exists, head })
+  }
+  /**
+   * POST /api/prs/<owner>/<repo>/<番号>/explain（#881）。**人が押したときだけ** `/brief-pr <PR の URL>` を新しい Claude のセッションとして
+   * 起こす（SAI のセッションとして一覧に並び、途中経過・許可・失敗はそのセッションの画面と要対応に出る）。URL は `gh` で読んだ PR のもの
+   * で、リクエストからは受けない。権限のフラグは足さない（返信と同じ `newSessionCommand()`）
+   */
+  const postPrExplain = async (res: ServerResponse, req: IncomingMessage, filled: readonly SessionSummary[], known: string[], rest: string) => {
+    const parts = rest.split('/')
+    const [owner = '', name = '', n = ''] = parts
+    const repo = parts.length === 3 ? pickKnownRepo(known, `${owner}/${name}`) : ''
+    if (!repo || !isPrNumber(n)) return error(res, 404, 'not found')
+    if (!prs.available) return error(res, 404, 'gh を使わない設定です（SAI_GH=0）')
+    const number = Number(n)
+    const key = `${repo.toLowerCase()}#${number}`
+    const had = await explains.get(repo, number)
+    if (explainStarting.has(key) || (had && (launching.has(had.session) || run.running(had.session)))) return error(res, 409, 'この PR の解説はいま作っています')
+    const from = explainFrom(filled, repo)
+    if (!from) return error(res, 400, 'このマシンにこのリポジトリの記録のある worktree が無いので、解説を作れません')
+    explainStarting.add(key)
+    try {
+      const place = await explainPlace(from)
+      if ('reason' in place) return error(res, 400, place.reason)
+      const view = await prs.view(repo, number)
+      if (!view) return error(res, 502, 'gh で PR を読めませんでした')
+      const session = randomUUID()
+      const id = entityId(session, place.repo, '')
+      const meta: SessionMeta = { name: `PR #${number} の解説` }
+      await metaStore.set(id, meta)
+      const failed = await spawnNewClaude(req, id, session, place.cwd, explainPrompt(view.pr.url), meta)
+      if (failed) return error(res, 500, failed)
+      agents.launched(id, undefined)
+      const rec = { session: id, head_sha: view.pr.head_sha, at: new Date().toISOString(), path: '' }
+      await explains.set(repo, number, rec).catch(() => {})
+      return json(res, { explain: explainView(rec, { running: true, exists: false, head: view.pr.head_sha }) } satisfies PrExplainResponse, 202)
+    } finally {
+      explainStarting.delete(key)
+    }
+  }
+  /**
+   * GET /api/pr-explain/<鍵>（#881）。**HTML を配るのはこの口だけの例外**。鍵で覚えたパスを引き、一時フォルダの直下の
+   * `brief-pr-…/brief.html` であることを配る前に確かめ直す。`CSP: sandbox`（スクリプトを動かさない・別オリジン扱い）・`nosniff`・`no-store` を付ける
+   */
+  const getPrExplain = async (res: ServerResponse, key: string) => {
+    if (!/^[0-9a-f]{16}$/.test(key)) return error(res, 404, 'not found')
+    const path = await explains.pathOf(key)
+    const root = await realpath(explainTmp).catch(() => '')
+    if (!path || !root || !(await briefHtmlOk(path, root))) return error(res, 404, '解説はもうありません（PR の画面から作り直してください）')
+    const body = await readFile(path).catch(() => null)
+    if (!body) return error(res, 404, '解説はもうありません（PR の画面から作り直してください）')
+    res.writeHead(200, { ...PR_EXPLAIN_HEADERS, 'content-length': body.length })
+    res.end(body)
+  }
+
   const postPrBrief = async (req: IncomingMessage, res: ServerResponse, known: string[], rest: string) => {
     const parts = rest.split('/')
     const [owner = '', name = '', n = ''] = parts
@@ -2345,6 +2452,31 @@ export function createApp(
   }
 
   /**
+   * 新しい Claude のセッションを `claude -p --session-id` で起こす（#314）。`POST /api/sessions/new` と PR の解説（#881）が使う。
+   * 起こせなければ理由を返す（起こせたら空）
+   */
+  const spawnNewClaude = async (req: IncomingMessage, id: string, session: string, cwd: string, text: string, meta: SessionMeta): Promise<string> => {
+    const via = { url: selfUrl(req), entity: id, tokenFile: agentTokenPath }
+    // 許可モードを選ばずに始めたら設定の既定で回す（#582）。**メタには書かない**（既定を変えたら次の返信から付いてくるように）
+    const cmd = newSessionCommand(session, text, cwd, process.env, via, meta.model, await replyMode(meta) || undefined, meta.name)
+    try {
+      startedBin.set(id, cmd.bin)
+      await run.start(id, cmd, () => {
+        approvals.drop(id)
+        void drain(id)
+        // 終わったターンが誰かへの返答なら、送り元へ渡す（#594）
+        void deliverReplies()
+        void drainBacklog()
+      })
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      const hint = code === 'ENOENT' ? `${cmd.bin} が見つかりません（サーバを起動した環境の PATH に ${cmd.bin} があるか確かめてください）` : ''
+      return hint || (err instanceof Error ? err.message : String(err))
+    }
+    return ''
+  }
+
+  /**
    * POST /api/sessions/new（#314）。SAI の画面から新しいセッションを始めるのを投げっぱなしにし、202 を返す。
    * **パスは受け取らない**: `from`（既存のセッション）の `cwd` を使う。返信と同じく、同一オリジンの検査が破られても
    * 走る場所を記録にある worktree に閉じる。ID は `--session-id` でサーバが決めるので、最初の行が届く前から
@@ -2447,23 +2579,8 @@ export function createApp(
     }
     if (handoff) meta.continued_from = from.id
     if (Object.keys(meta).length > 0) await metaStore.set(id, meta)
-    const via = { url: selfUrl(req), entity: id, tokenFile: agentTokenPath }
-    // 許可モードを選ばずに始めたら設定の既定で回す（#582）。**メタには書かない**（既定を変えたら次の返信から付いてくるように）
-    const cmd = newSessionCommand(session, text, cwd, process.env, via, meta.model, await replyMode(meta) || undefined, meta.name)
-    try {
-      startedBin.set(id, cmd.bin)
-      await run.start(id, cmd, () => {
-        approvals.drop(id)
-        void drain(id)
-        // 終わったターンが誰かへの返答なら、送り元へ渡す（#594）
-        void deliverReplies()
-        void drainBacklog()
-      })
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code
-      const hint = code === 'ENOENT' ? `${cmd.bin} が見つかりません（サーバを起動した環境の PATH に ${cmd.bin} があるか確かめてください）` : ''
-      return refuse(500, hint || (err instanceof Error ? err.message : String(err)))
-    }
+    const failed = await spawnNewClaude(req, id, session, cwd, text, meta)
+    if (failed) return refuse(500, failed)
     // 前のセッションに「→ 続き」を書く（#442）。アーカイブはしない（人が決める）
     if (handoff) await metaStore.set(from.id, { ...((await metaStore.get(from.id)) ?? {}), continued_to: id, continued_at: handoffTs })
     // 人が始めたターン（メッセージの連鎖ではない。#311）
@@ -5032,6 +5149,8 @@ export function createApp(
     const isPrReview = path.startsWith(`${PRS_PATH}/`) && path.endsWith(PR_REVIEW_SUFFIX)
     // PR の要約を作る（#790）。材料が一言の口に渡る（口が外を向いていれば外に出る）ので、押したときの POST だけ
     const isPrBrief = path.startsWith(`${PRS_PATH}/`) && path.endsWith(PR_BRIEF_SUFFIX)
+    // PR の解説を回す（#881）。押したときの POST だけ
+    const isPrExplain = path.startsWith(`${PRS_PATH}/`) && path.endsWith(PR_EXPLAIN_SUFFIX)
     const method = req.method ?? 'GET'
     // tailnet から MCP で呼ぶ口（#312）。POST / OPTIONS（CORS）を受けるので、下の書き込みの判定より先に分ける
     if (path === MCP_PATH) {
@@ -5047,7 +5166,7 @@ export function createApp(
     // 「設定は PUT」「預かった返信の再開は POST、取り消しは DELETE」だけ。それ以外は GET / HEAD のみ
     const writable =
       (method === 'POST' &&
-        (isNewSession || isWorkspaces || isAuthCheck || isAuthLogin || isReply || isReview || isFork || isPrReview || isPrBrief || isAsk || isAnswer || isAttachUpload || isQueue || isDigestFeedback || isDots || isSuggestion || path === USAGE_REFRESH_PATH || path === AGENT_SEND_PATH || path === AGENT_LOOP_PATH || path === AGENT_WAIT_FOR_PATH || isAgentStop || isInterrupt || isCodexConfig || loopSuffix !== undefined || waitSuffix !== undefined)) ||
+        (isNewSession || isWorkspaces || isAuthCheck || isAuthLogin || isReply || isReview || isFork || isPrReview || isPrBrief || isPrExplain || isAsk || isAnswer || isAttachUpload || isQueue || isDigestFeedback || isDots || isSuggestion || path === USAGE_REFRESH_PATH || path === AGENT_SEND_PATH || path === AGENT_LOOP_PATH || path === AGENT_WAIT_FOR_PATH || isAgentStop || isInterrupt || isCodexConfig || loopSuffix !== undefined || waitSuffix !== undefined)) ||
       (method === 'DELETE' && (isQueue || isHistoryIcon || loopSuffix === '/loop')) ||
       (method === 'PUT' && (isMeta || isRead || isProfile || isSettings)) ||
       ((method === 'PUT' || method === 'DELETE') && (isIcon || isProfileIcon))
@@ -5519,6 +5638,13 @@ export function createApp(
         return json(res, await workspacesOf(sessions))
       }
 
+      // できた解説の HTML（#881）。出す相手は返答のファイル（#603 / #768）と同じ: ループバックと whois で本人と分かった tailnet のユーザーだけ。
+      // 断るのは鍵を引く前（有無を漏らさない）。書き込みの口ではないので GET / HEAD だけ（上の `writable` で絞っている）
+      if (path.startsWith(PR_EXPLAIN_PATH)) {
+        if (refuseDevice(res, req, who)) return
+        return await getPrExplain(res, path.slice(PR_EXPLAIN_PATH.length))
+      }
+
       if (path === SEARCH_PATH) {
         const days = parseDays(q.get('days'), 90)
         const rawQuery = q.get('q') ?? ''
@@ -5534,13 +5660,15 @@ export function createApp(
       // GitHub に出ている PR（#524）。**読むだけ**で、並べるのは記録で知っているリポジトリ（セッションの remote）だけ。
       // 3 秒のポーリングには乗せない（開いたとき・「読み直す」のときだけ）
       if (path === PRS_PATH || path.startsWith(`${PRS_PATH}/`)) {
-        if (isPrReview || isPrBrief ? method !== 'POST' : method !== 'GET') return error(res, 405, 'method not allowed')
-        // GitHub に書く唯一の口（#526）と、材料を一言の口に渡す要約（#790）。ほかの検査より先に、同一オリジンだけに絞る
-        if ((isPrReview || isPrBrief) && isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
+        if (isPrReview || isPrBrief || isPrExplain ? method !== 'POST' : method !== 'GET') return error(res, 405, 'method not allowed')
+        // GitHub に書く唯一の口（#526）と、材料を一言の口に渡す要約（#790）と、解説を回す口（#881）。ほかの検査より先に、同一オリジンだけに絞る
+        if ((isPrReview || isPrBrief || isPrExplain) && isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
         const { sessions: raw } = await store.sessions(PRS_REPO_DAYS)
-        const known = knownRepos(await fillRepo(projects, raw))
+        const filled = await fillRepo(projects, raw)
+        const known = knownRepos(filled)
         if (isPrReview) return await postPrReview(req, res, known, path.slice(PRS_PATH.length + 1, -PR_REVIEW_SUFFIX.length))
         if (isPrBrief) return await postPrBrief(req, res, known, path.slice(PRS_PATH.length + 1, -PR_BRIEF_SUFFIX.length))
+        if (isPrExplain) return await postPrExplain(res, req, filled, known, path.slice(PRS_PATH.length + 1, -PR_EXPLAIN_SUFFIX.length))
         if (path === PRS_PATH) {
           const fresh = q.get('fresh') === '1'
           const repos: PrRepo[] = await Promise.all(
@@ -5571,6 +5699,10 @@ export function createApp(
         const via = (await briefMouth())?.via
         if (via) out.summary_via = via
         if (brief) out.summary = brief
+        // 解説（#881）。ボタンはこのマシンに記録のある worktree があるときだけ。**ここでは回さない**
+        if (prs.available && explainFrom(filled, repo)) out.explain_available = true
+        const explain = await explainNow(repo, Number(n), view.pr.head_sha)
+        if (explain) out.explain = explain
         if (comments) {
           out.comments = comments.comments
           if (comments.omitted) out.comments_omitted = comments.omitted

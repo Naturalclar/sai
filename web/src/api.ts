@@ -53,6 +53,7 @@ import type {
   PrsResponse,
   UsageReportResponse,
   PrBriefResponse,
+  PrExplainResponse,
   PrDetailResponse,
   SessionFileResponse,
   PrReviewRequest,
@@ -63,7 +64,7 @@ import { sessionFileUrl } from '../../shared/files.ts'
 import type { DigestFeedbackReason, DigestFeedbackRequest, DigestFeedbackResponse, DigestUsageReason } from '../../shared/digestFeedback.ts'
 import type { DotsPostRequest, DotsPostResponse, DotsResponse } from '../../shared/dots.ts'
 
-export type { Agent, FeedRow, TurnOutputResponse, TurnOutputSection, TurnStepsResponse, SessionSource, SessionSummary, SessionMeta, ManagerDraft, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, QueuedReply, ReplyQueue, ReplyQueueMap, ReplyQueueResponse, Loop, LoopMap, LoopRequest, Wait, WaitMap, CodexConfigFile, CodexConfigHold, AgentActivity, AgentActivityMessage, AgentStopResponse,Approval, ApprovalMap, ApprovalAnswer, TerminalDialog, Profile, PersonaId, SettingsResponse, SettingsRequest, ClaudeAuthCheckResponse, Viewer, SessionPermissionsResponse, SessionProgressResponse, ProgressStep, ProgressNote, SessionDiffResponse, SessionDiffSummaryResponse, GalleryResponse, GalleryItem, SearchResponse, SearchHit, DiffPr, DiffSection, DiffFileStat, PrSummary, PrRepo, PrsResponse, PrDetailResponse, PrBrief, PrBriefResponse, PrComment, PrReviewRequest, PrReviewResponse, PrReviewEvent, AttachmentResponse, UsageResponse, UsageReportResponse, UsageReportRow, UsageSessionRow, UsageTotals, UsageWindow, CodexUsage, ClaudeUsage } from '../../shared/types.ts'
+export type { Agent, FeedRow, TurnOutputResponse, TurnOutputSection, TurnStepsResponse, SessionSource, SessionSummary, SessionMeta, ManagerDraft, SessionsResponse, Facets, SessionFilters, FeedFilters, Replying, ReplyingMap, QueuedReply, ReplyQueue, ReplyQueueMap, ReplyQueueResponse, Loop, LoopMap, LoopRequest, Wait, WaitMap, CodexConfigFile, CodexConfigHold, AgentActivity, AgentActivityMessage, AgentStopResponse,Approval, ApprovalMap, ApprovalAnswer, TerminalDialog, Profile, PersonaId, SettingsResponse, SettingsRequest, ClaudeAuthCheckResponse, Viewer, SessionPermissionsResponse, SessionProgressResponse, ProgressStep, ProgressNote, SessionDiffResponse, SessionDiffSummaryResponse, GalleryResponse, GalleryItem, SearchResponse, SearchHit, DiffPr, DiffSection, DiffFileStat, PrSummary, PrRepo, PrsResponse, PrDetailResponse, PrBrief, PrBriefResponse, PrExplain, PrExplainResponse, PrComment, PrReviewRequest, PrReviewResponse, PrReviewEvent, AttachmentResponse, UsageResponse, UsageReportResponse, UsageReportRow, UsageSessionRow, UsageTotals, UsageWindow, CodexUsage, ClaudeUsage } from '../../shared/types.ts'
 
 /**
  * `PUT /api/sessions/<id>/meta` のボディ。`SessionMeta` の一部を重ねる。
@@ -321,6 +322,9 @@ export const api = {
   /** PR の要約を作る（#790）。押したときだけ。材料も送り先もサーバが決める。`via` は画面に出していた送り先で、いまの口と違えばサーバが 409 で作らない */
   makePrBrief: (repo: string, number: number, via: string) =>
     sendJSON<PrBriefResponse>('POST', `/api/prs/${repo.split('/').map(encodeURIComponent).join('/')}/${number}/summary`, { via }),
+  /** PR の解説（#881。`/brief-pr`）を新しいセッションで回す。押したときだけ */
+  makePrExplain: (repo: string, number: number) =>
+    sendJSON<PrExplainResponse>('POST', `/api/prs/${repo.split('/').map(encodeURIComponent).join('/')}/${number}/explain`, {}),
   /** サーバ側の設定（一言の性格。digest が有効か） */
   settings: () => getJSON<SettingsResponse>('/api/settings'),
   setSettings: (body: SettingsRequest) => sendJSON<SettingsResponse>('PUT', '/api/settings', body),

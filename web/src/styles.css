@@ -567,6 +567,14 @@
   .pr-brief > .foot code { font-size: 11px; }
   .pr-brief > .foot button { font: inherit; font-size: 12px; padding: 3px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--chip); color: var(--ink); font-weight: 600; cursor: pointer; }
   .pr-brief > .foot button:hover:not(:disabled) { background: var(--hover); }
+  /* PR の解説（#881）。要約の下の 1 行。ボタンとリンクを並べ、添え書きは次の行 */
+  .pr-explain { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; background: var(--panel); font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+  .pr-explain > .title { font-weight: 700; }
+  .pr-explain > .open { font-weight: 700; color: var(--accent); }
+  .pr-explain > button { font: inherit; font-size: 12px; padding: 3px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--chip); color: var(--ink); font-weight: 600; cursor: pointer; }
+  .pr-explain > button:hover:not(:disabled) { background: var(--hover); }
+  .pr-explain > .session { color: var(--muted); text-decoration: underline; text-underline-offset: 2px; }
+  .pr-explain > .note, .pr-explain > .warn { flex-basis: 100%; }
   .pr-brief > .foot button:disabled { opacity: .6; cursor: default; }
   .pr-comments { display: flex; flex-direction: column; gap: 8px; }
   .pr-comments > h2 { margin: 0; font-size: 12px; font-weight: 700; color: var(--muted); }

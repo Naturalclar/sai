@@ -145,11 +145,25 @@ Codex は起動する cwd からリポジトリの一番上までの `.codex/` �
 
 - 端末の TUI が客になっている daemon（`$CODEX_HOME/app-server-control/app-server-control.sock`。`0700` のディレクトリの下の `0600` のソケットへの symlink。トークンは無い）に繋ぎ、スレッドの状態の通知を受ける。`server/reply/codexDaemon.ts` の `CodexDaemonClient`。SAI 自身の stdio の app-server（`codexAppServer.ts`）とは別で、そちらは変えていない。
 - 中身は unix ソケットの上の WebSocket で、JSON-RPC は stdio と同じ。Node の組み込みの `WebSocket` は unix ソケットを受けず、依存も足さないので、`server/reply/unixWebSocket.ts` に要る分だけ持つ。
-- **読むだけ**: 送れる要求は `DAEMON_METHODS`（`initialize`・`thread/list`・`thread/loaded/list`）だけで、`request()` の引数の型もこの 3 つ（ほかに送るのは `initialized` の通知だけ）。サーバからの要求（id と method の両方があるもの）には答えない。`thread/resume` しないので、許可・質問の要求はそもそも届かない。
+- **送れる要求は `DAEMON_METHODS`（`initialize`・`thread/list`・`thread/loaded/list`・`thread/resume`）だけ**で、`request()` の引数の型もこの 4 つ（ほかに送るのは `initialized` の通知と、人が押した許可の答えだけ）。`thread/resume` は下の「許可・質問を daemon で受ける」のためだけ。`turn/start`・`turn/steer` は無い（届ける道は別の段）。
 - **読むだけの例外が 1 つある**: 客の `initialize` の `clientInfo.name` は daemon 全体の User-Agent の末尾に使われるので、SAI が繋ぐと、ほかの客のターンのモデルへの要求の末尾も `(sai; <clientInfo.version>)` に変わる（0.166.0 で作り物の名前と版で実測。頭と `originator` は変わらない）。切っても戻るかは確かめていない（次の客が繋ぐか daemon を立て直すまで残る見込み）。スレッドにも許可にも触らない。
 - 受けるのは `thread/status/changed` と `thread/started` だけ。繋いだとき・繋ぎ直したときは `thread/list`（`DAEMON_LIST_LIMIT` 本）で埋める。その外のスレッドは通知が来るまで分からないまま。状態は `threadState()` が `idle` / `active` / `waiting`（`activeFlags` がある）に読む。知らない形と `notLoaded`（daemon の外の app-server で回っているスレッドもこう見えうる）は分からない扱い。`thread/list` を待つ間に通知が届いたスレッド（`notified`）は上書きしない。切れたら全部捨てる（古い `active` を残さない）。
 - **`daemon start` しない**: ソケットが無ければ `no_socket` で何もせず、`DAEMON_RETRY_MS` ごとに見直す。daemon を止めても SAI の動きは今のまま。
 - **入切は `settings.json` の `codex_daemon`（既定は切）**。起動時と `PUT /api/settings` で `setEnabled()` に渡す。本物を組むのは `main.ts` だけで、`createApp` の既定は繋がない（`terminal.codexDaemon` が無い）。繋がりは `GET /api/settings` の `codex_daemon_link`（`off` / `no_socket` / `failed` / `connected`）で見る。画面の入切はまだ無い。
 - 使い道は `holdingsOf()` の 1 か所。Codex のセッションの `active` を `busy`、`waiting` を `waiting` にする（`daemonOccupied()`）。**`idle` を見て空きとは言わない**（今の判定に任せる）。
 - 今の判定と食い違ったら `codex-daemon.log` に 1 行残す（`daemonGap()`。`daemon_only` / `sai_only`。セッションごとに種類が変わったときだけ）。古い道を消してよいかを数える材料。
+- 応答の `error` は `errorMessage()` で文字列の `message` だけを取る（ほかの形は `error`）。前は `String()` に任せていて、文字列にできない形だと受けの中で投げ、待っている要求が返らないまま繋ぎ直しにも進まなかった（#859 のレビューで見送った分）。
+
+### 許可・質問を daemon で受ける（#848 の 3）
+
+- 同じ入切（`codex_daemon`）の下。切なら繋がないので、resume も預かりも起きない。
+- **resume するのは待ちになったスレッドだけ**: `thread/status/changed`（と繋いだときの `thread/list`）で `waiting` になったスレッドを、この接続でまだ resume していなければ `onWaiting` で `app.ts` に知らせる。`app.ts` の `daemonResume()` は、**行のあるローカルの Codex のセッションで、SAI 自身の app-server が持っていない（`codexApp.holds()`）スレッドを、`codexConfigStop()` が通ったときだけ** `resume(threadId, エンティティ)` する。どれかが分からなければ resume せず、今までどおり端末の画面の読み取りが出す（行の無い最初のターンもそちら）。
+- `thread/resume` に渡すのは `threadId` と `excludeTurns: true` だけ（cwd・model・許可の向きは渡さない。TUI が開いているスレッドの設定を変えない）。
+- **預かるのは resume したスレッドの `DAEMON_ANSWERABLE`（コマンドの許可・ファイル変更の許可・質問）だけ**。許可の形は SAI 自身の app-server と同じ `buildCodexApproval()`（`server/reply/codexApproval.ts`）で組み、答えも同じ `codexAnswerResult()` で出した候補・出した質問の答えだけを通す。追加の権限・MCP の問い合わせなどほかの要求は預からない。**どの要求にも自分からは答えない**（エラーも返さない。返すと TUI のダイアログまで閉じる）。
+- resume の応答より先に届いた要求も預かる（許可の途中で resume すると先に届きうる）が、画面に出すのは resume が通ってから。通らなければ捨てる。
+- TUI にも同じダイアログが出ていて、先に答えた方が効く。どこで答えても `serverRequest/resolved` が届くので畳む。`turn/completed`・`thread/closed` でもそのターン・スレッドの分を捨てる。切れたら resume・預かりを全部忘れる（daemon を立て直すと読み込み済みのスレッドは消える）。
+- **resume したスレッドは端末の画面の読み取り（`CodexDialogs`）に渡さない**（`approvalsNow()` の `daemonHolds()`。締切に間に合わず前の走査を使うときも、そのセッションの分は落とす）。切れれば `holds()` が偽になり、画面の読み取りに戻る。
+- 答えは `POST /api/approvals/<id>/answer`（同一オリジンのみ）。「常に許可」（`remember`）は 400。規則の追加の候補を押したら `codex_kept` の `via: 'daemon'` で記録する。答えたことは `codex-daemon.log` に種類だけ 1 行残す（中身は書かない）。
+- **自動では答えない**: Jev の自動・「読むだけなら今回だけ許可」は Claude の Bash だけが相手なので、daemon で受けた許可には広がらない。
+- ファイル変更の差分は、同じ id の `item/started` を resume のあとに受けたときだけ出る。許可の途中で resume した（`excludeTurns`）ものは差分が無く、パスの代わりに理由か「ファイル変更」と出る。
 

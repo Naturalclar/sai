@@ -1156,13 +1156,20 @@ export function createApp(
     if (!shown) return
     answered.add(shown, behavior, shown.decisions?.find((d) => d.id === decision)?.label ?? '')
   }
+  /** daemon で許可・質問を受けているセッションか（#848 の 3） */
+  const daemonHolds = (s: SessionSummary): boolean => s.agent === 'codex' && (codexDaemon?.holds?.(sessionOf(s)) ?? false)
   const approvalsNow = async (sessions: SessionSummary[]) => {
     const [dialogs, opencode] = await Promise.all([
       // 締切までに見終わらなければ前回の走査で見えていたダイアログ（#495）
-      terminalEnabled ? screenWait(codexDialogs.scan(sessions, await paneOnlyTargets(sessions)), () => codexDialogs.snapshot?.() ?? {}, codexDialogs.known?.() ?? false) : Promise.resolve({} as ApprovalMap),
+      // daemon で許可を受けているスレッド（#848 の 3）は画面の読み取りから外す（同じ許可を二重に出さない。daemon の方が出す）
+      terminalEnabled ? screenWait(codexDialogs.scan(sessions.filter((s) => !daemonHolds(s)), await paneOnlyTargets(sessions)), () => codexDialogs.snapshot?.() ?? {}, codexDialogs.known?.() ?? false) : Promise.resolve({} as ApprovalMap),
       opencodeServerEnabled ? opencodePerms.scan(sessions) : Promise.resolve({} as ApprovalMap),
     ])
-    const all = mergeApprovalMaps(mergeApprovalMaps(mergeApprovalMaps(approvals.snapshot(), codexApp.snapshot()), dialogs), opencode)
+    const fromDaemon = codexDaemon?.snapshot?.() ?? {}
+    // 前の走査で見えていたダイアログ（締切に間に合わなかったとき）も、daemon が出しているセッションの分は落とす
+    const dialogsLeft: ApprovalMap = {}
+    for (const [id, list] of Object.entries(dialogs)) if (!fromDaemon[id] && !sessions.some((s) => s.id === id && daemonHolds(s))) dialogsLeft[id] = list
+    const all = mergeApprovalMaps(mergeApprovalMaps(mergeApprovalMaps(mergeApprovalMaps(approvals.snapshot(), codexApp.snapshot()), dialogsLeft), opencode), fromDaemon)
     // [常に許可] で書かれるルール（#705）と、同じ cwd で同じ組の何回目か（#445）。数えるのは人が許可した回数で、
     // 決めた回数からは「常に許可」を勧める（勧めるだけ）
     const merged: ApprovalMap = {}
@@ -1371,6 +1378,22 @@ export function createApp(
   const settingsStore = new SettingsStore(join(store.directory, SETTINGS_FILE))
   // 入切は settings.json の `codex_daemon`（#848。既定は切）。読めなければ繋がない
   if (codexDaemon) void settingsStore.get().then((s) => codexDaemon.setEnabled(s.codex_daemon), () => {})
+  /**
+   * 許可・質問を daemon で受ける（#848 の 3）。待ちになったスレッドだけ、**行のあるローカルの Codex のセッションで、
+   * `.codex/` の確かめ（`codexConfigStop()`）が通ったときだけ** `thread/resume` する。どれかが分からなければ resume せず、
+   * 今までどおり端末の画面の読み取り（`CodexDialogs`）が出す。答えるのは人が画面で押したときだけ（自動では答えない）
+   */
+  const daemonResume = async (threadId: string): Promise<void> => {
+    if (!codexDaemon?.resume) return
+    const { sessions } = await store.sessions(90).catch(() => ({ sessions: [] as SessionSummary[] }))
+    const s = sessions.find((x) => x.agent === 'codex' && sessionOf(x) === threadId)
+    if (!s?.cwd || isRemoteHost(s.host, selfHost())) return
+    // SAI 自身の app-server が持っているスレッドは、そちらで受けている
+    if (codexAppEnabled && (codexApp.holds?.(threadId) ?? false)) return
+    if (await codexConfigStop(s.id, s.cwd)) return
+    await codexDaemon.resume(threadId, s.id)
+  }
+  codexDaemon?.onWaiting?.((threadId) => void daemonResume(threadId).catch(() => {}))
   /** daemon の状態と今の判定の食い違いの直前の種類（#848）。変わったときだけ 1 行残す */
   const daemonGaps = new Map<string, DaemonGap>()
   const noteDaemonGap = (id: string, known: HoldingWhy | '', seen: DaemonThreadState | undefined): void => {
@@ -4546,6 +4569,22 @@ export function createApp(
       if (!result.ok) return error(res, result.status, result.error)
       noteAnswered(approvalId, b.behavior, typeof b.decision === 'string' ? b.decision : undefined)
       return json(res, { ok: true, approval_id: approvalId, behavior: b.behavior })
+    }
+    // daemon で受けた許可・質問（#848 の 3）。出した候補・出した質問の答えだけを返す。TUI で先に答えられていたら何も起きない
+    const daemonCurrent = codexDaemon?.getApproval?.(approvalId)
+    if (daemonCurrent && codexDaemon?.answer) {
+      if (b.remember !== undefined) return error(res, 400, 'Codexでは提示されたdecisionだけ選べます')
+      const answer: ApprovalAnswer = {
+        behavior: b.behavior,
+        ...(typeof b.decision === 'string' ? { decision: b.decision } : {}),
+        ...(b.updatedInput && typeof b.updatedInput === 'object' && !Array.isArray(b.updatedInput) ? { updatedInput: b.updatedInput } : {}),
+      }
+      const result = codexDaemon.answer(approvalId, answer)
+      if (!result.ok) return error(res, result.status, result.error)
+      await logCodexKept(daemonCurrent, 'daemon', result.kept, answer.behavior)
+      shownApprovals.set(approvalId, shownApprovals.get(approvalId) ?? daemonCurrent)
+      noteAnswered(approvalId, answer.behavior, answer.decision)
+      return json(res, { ok: true, approval_id: approvalId, behavior: answer.behavior })
     }
     const codexCurrent = codexApp.getApproval(approvalId)
     if (codexCurrent) {

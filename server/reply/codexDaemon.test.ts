@@ -7,7 +7,7 @@ import { createServer } from 'node:net'
 import type { Server, Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { CodexDaemonClient, DAEMON_METHODS, daemonGap, daemonOccupied, daemonSocketPath, threadState } from './codexDaemon.ts'
+import { CodexDaemonClient, DAEMON_ANSWERABLE, DAEMON_METHODS, daemonGap, errorMessage, daemonOccupied, daemonSocketPath, threadState } from './codexDaemon.ts'
 import { acceptKey, connectUnixWebSocket, encodeFrame } from './unixWebSocket.ts'
 
 let dir: string
@@ -195,8 +195,119 @@ test('thread/list を待つ間に届いた通知を上書きしない。形の�
   await fake.close()
 })
 
-test('許可一覧は読む要求だけ（書く要求を足すならこのテストを直す）', () => {
-  assert.deepEqual([...DAEMON_METHODS], ['initialize', 'thread/list', 'thread/loaded/list'])
+test('許可一覧は読む要求と thread/resume だけ。turn/* は足さない（足すならこのテストを直す。#848 の 3）', () => {
+  assert.deepEqual([...DAEMON_METHODS], ['initialize', 'thread/list', 'thread/loaded/list', 'thread/resume'])
+  assert.deepEqual([...DAEMON_ANSWERABLE], ['item/commandExecution/requestApproval', 'item/fileChange/requestApproval', 'item/tool/requestUserInput'])
+})
+
+const cmdRequest = (id: number | string, threadId: string, extra: object = {}) => ({
+  id,
+  method: 'item/commandExecution/requestApproval',
+  params: { threadId, turnId: 'T1', itemId: 'I1', command: 'ls', availableDecisions: ['accept', 'decline'], ...extra },
+})
+
+test('待ちを知らせ、resume したスレッドの要求だけを預かる。自分からは答えず、押された候補だけを返す。TUI で答えられたら畳む（#848 の 3）', async () => {
+  const fake = new FakeDaemon(sockPath())
+  fake.threads = [
+    { id: 'W', status: { type: 'active', activeFlags: ['waitingOnApproval'] } },
+    { id: 'B', status: { type: 'idle' } },
+  ]
+  await fake.listen()
+  const c = daemonClient({ socketPath: fake.path })
+  const told: string[] = []
+  c.onWaiting((id) => told.push(id))
+  c.setEnabled(true)
+  await wait(() => c.link() === 'connected' && told.length === 1)
+  assert.deepEqual(told, ['W'], '繋ぐ前から待っていたスレッドも知らせる')
+  fake.push({ method: 'thread/status/changed', params: { threadId: 'B', status: { type: 'active', activeFlags: ['waitingOnUserInput'] } } })
+  await wait(() => told.length === 2)
+  assert.deepEqual(told, ['W', 'B'])
+
+  // resume していないスレッドの要求は預からない
+  fake.push(cmdRequest(500, 'W'))
+  await new Promise((r) => setTimeout(r, 20))
+  assert.equal(await c.resume('W', 'W@r'), true)
+  assert.equal(c.holds('W'), true)
+  const resume = fake.sent.find((m) => m.method === 'thread/resume') as { params?: unknown }
+  assert.deepEqual(resume.params, { threadId: 'W', excludeTurns: true }, '上書きは渡さない')
+  assert.deepEqual(c.snapshot(), {})
+
+  fake.push(cmdRequest(501, 'W'))
+  fake.push({ id: 502, method: 'item/permissions/requestApproval', params: { threadId: 'W', turnId: 'T1', itemId: 'I2' } })
+  fake.push({ id: 503, method: 'mcpServer/elicitation/request', params: { threadId: 'W', turnId: 'T1', itemId: 'I3' } })
+  fake.push(cmdRequest(501, 'W'))
+  await wait(() => (c.snapshot()['W@r'] ?? []).length === 1)
+  await new Promise((r) => setTimeout(r, 20))
+  const [a] = c.snapshot()['W@r']!
+  assert.equal(a!.text, '許可待ち: コマンド: ls')
+  assert.equal(c.snapshot()['W@r']!.length, 1, '知らない形は預からず、同じ要求は 1 つ')
+  assert.ok(!fake.sent.some((m) => m.id !== undefined && m.method === undefined), '自分からは答えない（エラーも返さない）')
+
+  // 出していない候補・向きの違う答えは送らない
+  assert.equal(c.answer(a!.approval_id, { behavior: 'allow', decision: 'd9' }).ok, false)
+  assert.equal(c.answer(a!.approval_id, { behavior: 'deny', decision: 'd0' }).ok, false)
+  assert.deepEqual(c.answer(a!.approval_id, { behavior: 'allow', decision: 'd0' }), { ok: true })
+  await wait(() => fake.sent.some((m) => m.id === 501 && m.method === undefined))
+  assert.deepEqual(fake.sent.filter((m) => m.method === undefined && m.id !== undefined), [{ id: 501, result: { decision: 'accept' } }])
+  assert.equal((c.answer(a!.approval_id, { behavior: 'allow', decision: 'd0' }) as { status?: number }).status, 404, '二度は答えない')
+
+  // TUI で先に答えられたら畳む
+  fake.push(cmdRequest('r-7', 'W'))
+  await wait(() => (c.snapshot()['W@r'] ?? []).length === 1)
+  fake.push({ method: 'serverRequest/resolved', params: { threadId: 'W', requestId: 'r-7' } })
+  await wait(() => (c.snapshot()['W@r'] ?? []).length === 0)
+
+  // 切れたら預かりも resume も忘れる
+  await fake.close()
+  await wait(() => c.link() !== 'connected')
+  assert.equal(c.holds('W'), false)
+  assert.deepEqual(c.snapshot(), {})
+  c.stop()
+})
+
+test('resume の応答より先に届いた要求も預かる。resume が通らなければ出さない（#848 の 3）', async () => {
+  const fake = new FakeDaemon(sockPath())
+  await fake.listen()
+  const push = fake.push.bind(fake)
+  let failResume = false
+  fake.push = (m) => {
+    const id = (m as { id?: number }).id
+    const sent = fake.sent.find((x) => x.id === id && x.method === 'thread/resume')
+    if (sent) {
+      // 応答の前に、待っていた許可が届く
+      push(cmdRequest(700 + (id ?? 0), (sent as { params?: { threadId?: string } }).params!.threadId!))
+      return push(failResume ? { id, error: { message: 'no thread' } } : m)
+    }
+    push(m)
+  }
+  const c = daemonClient({ socketPath: fake.path })
+  c.setEnabled(true)
+  await wait(() => c.link() === 'connected')
+  assert.equal(await c.resume('W', 'W@r'), true)
+  await wait(() => (c.snapshot()['W@r'] ?? []).length === 1)
+  failResume = true
+  assert.equal(await c.resume('V', 'V@r'), false)
+  await new Promise((r) => setTimeout(r, 20))
+  assert.equal(c.snapshot()['V@r'], undefined)
+  assert.equal(c.holds('V'), false)
+  c.stop()
+  await fake.close()
+})
+
+test('応答の error が文字列にできない形でも、待っている要求は返り、繋ぎ直しに進む（#859 で見送った分）', async () => {
+  const fake = new FakeDaemon(sockPath())
+  await fake.listen()
+  const push = fake.push.bind(fake)
+  fake.push = (m) => push((m as { result?: { data?: unknown } }).result?.data ? { id: (m as { id: number }).id, error: { message: { toString: 1 } } } : m)
+  const c = daemonClient({ socketPath: fake.path, retryMs: 60_000 })
+  c.setEnabled(true)
+  await wait(() => c.link() === 'failed')
+  c.stop()
+  await fake.close()
+  assert.equal(errorMessage({ message: 'x' }), 'x')
+  assert.equal(errorMessage({ message: { toString: 1 } }), 'error')
+  assert.equal(errorMessage(null), 'error')
+  assert.equal(errorMessage('boom'), 'boom')
 })
 
 test('切のままなら繋がない。ソケットが無ければ no_socket で、できたら繋ぐ。切れたら忘れて繋ぎ直す（#848）', async () => {

@@ -7,7 +7,7 @@ import { createServer } from 'node:net'
 import type { Server, Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { CodexDaemonClient, DAEMON_ANSWERABLE, DAEMON_METHODS, daemonGap, errorMessage, daemonOccupied, daemonSocketPath, threadState } from './codexDaemon.ts'
+import { CodexDaemonClient, DAEMON_ANSWERABLE, DAEMON_METHODS, DAEMON_SETTLE_MS, daemonGap, errorMessage, daemonOccupied, daemonSocketPath, threadState } from './codexDaemon.ts'
 import { acceptKey, connectUnixWebSocket, encodeFrame } from './unixWebSocket.ts'
 
 let dir: string
@@ -281,6 +281,38 @@ test('差分の分からないファイル変更の許可は預からない。it
   const list = c.snapshot()['W@r']!
   assert.equal(list.length, 1, '差分の無い方は預からない（画面の読み取りに任せる）')
   assert.equal(list[0]!.text, '許可待ち: ファイル変更: a.txt')
+  c.stop()
+  await fake.close()
+})
+
+test('畳んだあと少しの間は settling に出す。resume し直すと新しいエンティティに出す。item はターンの単位で捨てる（#848 の 3 のレビュー）', async () => {
+  const fake = new FakeDaemon(sockPath())
+  await fake.listen()
+  let clock = 1_000_000
+  const c = daemonClient({ socketPath: fake.path, now: () => clock })
+  c.setEnabled(true)
+  await wait(() => c.link() === 'connected')
+  assert.equal(await c.resume('W', 'W@r'), true)
+  fake.push(cmdRequest(901, 'W'))
+  await wait(() => (c.snapshot()['W@r'] ?? []).length === 1)
+  assert.deepEqual([...c.settling()], [])
+  c.answer(c.snapshot()['W@r']![0]!.approval_id, { behavior: 'deny', decision: 'd1' })
+  assert.deepEqual([...c.settling()], ['W'], '答えた直後')
+  clock += DAEMON_SETTLE_MS
+  assert.deepEqual([...c.settling()], [], '時間が経てば外す')
+  fake.push(cmdRequest(902, 'W'))
+  await wait(() => (c.snapshot()['W@r'] ?? []).length === 1)
+  fake.push({ method: 'serverRequest/resolved', params: { threadId: 'W', requestId: 902 } })
+  await wait(() => c.settling().has('W'))
+
+  assert.equal(await c.resume('W', 'W@r2'), true)
+  // 前のターンの終わりが遅れて届いても、次のターンの item は消さない
+  fake.push({ method: 'item/started', params: { threadId: 'W', turnId: 'T2', item: { id: 'F9', type: 'fileChange', changes: [{ path: 'b.txt' }] } } })
+  fake.push({ method: 'turn/completed', params: { threadId: 'W', turn: { id: 'T1' } } })
+  fake.push({ id: 903, method: 'item/fileChange/requestApproval', params: { threadId: 'W', turnId: 'T2', itemId: 'F9' } })
+  await wait(() => (c.snapshot()['W@r2'] ?? []).length === 1)
+  assert.equal(c.snapshot()['W@r2']![0]!.text, '許可待ち: ファイル変更: b.txt')
+  assert.equal(c.snapshot()['W@r'], undefined)
   c.stop()
   await fake.close()
 })

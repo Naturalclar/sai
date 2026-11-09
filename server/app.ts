@@ -1159,15 +1159,20 @@ export function createApp(
   const approvalsNow = async (sessions: SessionSummary[]) => {
     // daemon が許可・質問を預かっているセッション（#848 の 3）は画面の読み取りから外す（同じ許可を二重に出さない。daemon の方が出す）。
     // 外すのは預かっている間だけ: daemon で受けない種類のダイアログ（追加の権限など）は、これまでどおり画面の読み取りが出す
+    // 外すのはスレッドの単位（同じスレッドの行が別のリポジトリにもあれば、そちらのエンティティも）。畳んだ直後（`settling()`）も、
+    // TUI のダイアログが閉じるまで外したままにする
     const fromDaemon = codexDaemon?.snapshot?.() ?? {}
+    const quiet = codexDaemon?.settling?.() ?? new Set<string>()
+    for (const s of sessions) if (fromDaemon[s.id] && s.agent === 'codex') quiet.add(sessionOf(s))
+    const daemonOwns = (id: string) => Boolean(fromDaemon[id]) || sessions.some((s) => s.id === id && s.agent === 'codex' && quiet.has(sessionOf(s)))
     const [dialogs, opencode] = await Promise.all([
       // 締切までに見終わらなければ前回の走査で見えていたダイアログ（#495）
-      terminalEnabled ? screenWait(codexDialogs.scan(sessions.filter((s) => !fromDaemon[s.id]), await paneOnlyTargets(sessions)), () => codexDialogs.snapshot?.() ?? {}, codexDialogs.known?.() ?? false) : Promise.resolve({} as ApprovalMap),
+      terminalEnabled ? screenWait(codexDialogs.scan(sessions.filter((s) => !daemonOwns(s.id)), await paneOnlyTargets(sessions)), () => codexDialogs.snapshot?.() ?? {}, codexDialogs.known?.() ?? false) : Promise.resolve({} as ApprovalMap),
       opencodeServerEnabled ? opencodePerms.scan(sessions) : Promise.resolve({} as ApprovalMap),
     ])
     // 前の走査で見えていたダイアログ（締切に間に合わなかったとき）も、daemon が出しているセッションの分は落とす
     const dialogsLeft: ApprovalMap = {}
-    for (const [id, list] of Object.entries(dialogs)) if (!fromDaemon[id]) dialogsLeft[id] = list
+    for (const [id, list] of Object.entries(dialogs)) if (!daemonOwns(id)) dialogsLeft[id] = list
     const all = mergeApprovalMaps(mergeApprovalMaps(mergeApprovalMaps(mergeApprovalMaps(approvals.snapshot(), codexApp.snapshot()), dialogsLeft), opencode), fromDaemon)
     // [常に許可] で書かれるルール（#705）と、同じ cwd で同じ組の何回目か（#445）。数えるのは人が許可した回数で、
     // 決めた回数からは「常に許可」を勧める（勧めるだけ）

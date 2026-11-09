@@ -56,6 +56,10 @@ class FakeDaemon implements CodexDaemonWatch {
   resumeCalls: string[] = []
   answers: { approvalId: string; answer: ApprovalAnswer }[] = []
   pending = new Map<string, Approval>()
+  quiet = new Set<string>()
+  settling() {
+    return new Set(this.quiet)
+  }
   setEnabled() {}
   link() {
     return 'connected' as const
@@ -126,6 +130,7 @@ before(async () => {
   await writeFile(
     join(dir, `${localDate(now.toISOString())}.jsonl`),
     [
+      row(new Date(now.getTime() - 10 * 60_000), 'X1', { ...base0, repo: 'r2', user_text: '前の worktree', text: 'はい' }),
       row(new Date(now.getTime() - 9 * 60_000), 'X1', { ...base0, user_text: '見て', text: '見ました' }),
       row(new Date(now.getTime() - 8 * 60_000), 'X2', { ...base0, user_text: '直して', text: '直しました' }),
       row(new Date(now.getTime() - 7 * 60_000), 'R1', { ...base0, host: 'othermac', user_text: '別のマシン', text: 'はい' }),
@@ -197,6 +202,8 @@ test('daemon が許可を預かっている間だけ端末の画面の読み取�
   daemon.pending.set('dmn-1', approvalOf('dmn-1', 'X1@r', 'daemon の許可'))
   const shown = await approvalsNow()
   assert.ok(!dialogs.scanned.at(-1)!.includes('X1@r'), '画面の読み取りに渡さない')
+  assert.ok(!dialogs.scanned.at(-1)!.includes('X1@r2'), '同じスレッドの別のリポジトリの行も渡さない')
+  assert.equal(shown['X1@r2'], undefined)
   assert.ok(dialogs.scanned.at(-1)!.includes('X2@r'), 'ほかの Codex はこれまでどおり')
   assert.deepEqual(shown['X1@r']?.map((a) => a.approval_id), ['dmn-1'], '二重に出さない')
   assert.deepEqual(shown['X2@r']?.map((a) => a.approval_id), ['dialog-X2@r'])
@@ -209,6 +216,10 @@ test('daemon が許可を預かっている間だけ端末の画面の読み取�
   assert.deepEqual(daemon.answers, [{ approvalId: 'dmn-1', answer: { behavior: 'allow', decision: 'd0' } }])
   assert.equal((await answer('dmn-1', { behavior: 'allow', decision: 'd0' })).status, 404, '二度は答えない')
 
+  // 畳んだ直後は、TUI のダイアログが閉じるまで画面の読み取りを抑える
+  daemon.quiet.add('X1')
+  assert.equal((await approvalsNow())['X1@r'], undefined, '畳んだ直後は画面の文字から出し直さない')
+  daemon.quiet.clear()
   // 預かりが無くなったら（答えた・TUI で答えられた・切れた）、画面の読み取りに戻す
   const back = await approvalsNow()
   assert.deepEqual(back['X1@r']?.map((a) => a.approval_id), ['dialog-X1@r'])

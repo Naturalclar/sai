@@ -23,6 +23,8 @@ export type DaemonMethod = (typeof DAEMON_METHODS)[number]
 
 /** 繋いだとき・繋ぎ直したときに読む `thread/list` の 1 回の数。外のスレッドは通知が来るまで分からないまま（空きの判定は今までどおり） */
 export const DAEMON_LIST_LIMIT = 200
+/** daemon の許可を畳んだ（答えた・TUI で答えられた）あと、端末の画面の読み取りを抑える時間。TUI のダイアログが閉じるまでに、同じ許可を画面の文字から出し直さない */
+export const DAEMON_SETTLE_MS = 5_000
 /** ソケットが無い・切れたときに見直す間隔 */
 export const DAEMON_RETRY_MS = 30_000
 const REQUEST_TIMEOUT_MS = 8_000
@@ -57,6 +59,8 @@ export interface CodexDaemonWatch {
   holds?(threadId: string): boolean
   /** 預かっている許可・質問。偽物は持たなくてよい */
   snapshot?(): ApprovalMap
+  /** 許可を畳んでから `DAEMON_SETTLE_MS` が経っていないスレッド（端末の画面の読み取りをまだ抑える）。偽物は持たなくてよい */
+  settling?(): Set<string>
   getApproval?(approvalId: string): Approval | undefined
   /** 人が画面で押した答えを返す。出した候補・出した質問の答えだけ。偽物は持たなくてよい */
   answer?(approvalId: string, answer: ApprovalAnswer): DaemonAnswerResult
@@ -139,8 +143,10 @@ export class CodexDaemonClient implements CodexDaemonWatch {
   private readonly resuming = new Map<string, string>()
   private readonly approvals = new Map<string, DaemonApproval>()
   /** ファイル変更の item（要求の `params` に差分が無いので、同じ id の `item/started` から引く）。鍵は `スレッド\nitem` */
-  private readonly items = new Map<string, Record<string, unknown>>()
+  private readonly items = new Map<string, { item: Record<string, unknown>; turnId: unknown }>()
   private readonly now: () => number
+  /** 許可を畳んだスレッド → 時刻 */
+  private readonly settled = new Map<string, number>()
 
   constructor(opts: { socketPath: string; retryMs?: number; log?: (line: string) => void; now?: () => number }) {
     this.socketPath = opts.socketPath
@@ -155,7 +161,11 @@ export class CodexDaemonClient implements CodexDaemonWatch {
 
   async resume(threadId: string, entity: string): Promise<boolean> {
     if (this.linkState !== 'connected' || !threadId || !entity) return false
-    if (this.resumed.has(threadId)) return true
+    if (this.resumed.has(threadId)) {
+      // 同じスレッドが別のリポジトリの行で続いていたら、これからの許可はそちらに出す
+      this.resumed.set(threadId, entity)
+      return true
+    }
     if (this.resuming.has(threadId)) return false
     const generation = this.generation
     this.resuming.set(threadId, entity)
@@ -189,6 +199,16 @@ export class CodexDaemonClient implements CodexDaemonWatch {
     return out
   }
 
+  settling(): Set<string> {
+    const out = new Set<string>()
+    const at = this.now()
+    for (const [threadId, when] of this.settled) {
+      if (at - when < DAEMON_SETTLE_MS) out.add(threadId)
+      else this.settled.delete(threadId)
+    }
+    return out
+  }
+
   getApproval(approvalId: string): Approval | undefined {
     const entry = this.approvals.get(approvalId)
     return entry && this.resumed.has(entry.threadId) ? entry.approval : undefined
@@ -211,6 +231,7 @@ export class CodexDaemonClient implements CodexDaemonWatch {
     }
     // 答えは 1 回だけ。同じ approval id の二重回答は以後 404。TUI で先に答えていたら daemon は何もしない（実測）
     this.approvals.delete(approvalId)
+    this.settled.set(entry.threadId, this.now())
     this.log(`画面から答えた: ${entry.method}`)
     const kept = picked.decision?.kept
     return kept ? { ok: true, kept } : { ok: true }
@@ -250,6 +271,7 @@ export class CodexDaemonClient implements CodexDaemonWatch {
     this.resuming.clear()
     this.approvals.clear()
     this.items.clear()
+    this.settled.clear()
     for (const p of this.pending.values()) {
       clearTimeout(p.timer)
       p.reject(new Error('disconnected'))
@@ -353,7 +375,7 @@ export class CodexDaemonClient implements CodexDaemonWatch {
     const requestKey = keyOf(id)
     // 同じ要求が二度届いても（繋ぎ直し・resume のやり直し）、1 つだけ出す
     for (const entry of this.approvals.values()) if (entry.requestKey === requestKey && entry.threadId === threadId) return
-    const item = this.items.get(`${threadId}\n${itemId}`)
+    const item = this.items.get(`${threadId}\n${itemId}`)?.item
     // 差分の分からないファイル変更（許可の途中で resume したもの。要求の `params` に差分は無い）は預からない。中身を見せずに押させないため、
     // これまでどおり端末の画面の読み取りに任せる
     if (method === 'item/fileChange/requestApproval' && !(Array.isArray(item?.changes) && item.changes.length > 0)) return
@@ -364,7 +386,7 @@ export class CodexDaemonClient implements CodexDaemonWatch {
 
   private forgetTurn(threadId: string, turnId: unknown): void {
     for (const [approvalId, entry] of this.approvals) if (entry.threadId === threadId && (typeof turnId !== 'string' || entry.turnId === turnId)) this.approvals.delete(approvalId)
-    for (const key of this.items.keys()) if (key.startsWith(`${threadId}\n`)) this.items.delete(key)
+    for (const [key, entry] of this.items) if (key.startsWith(`${threadId}\n`) && (typeof turnId !== 'string' || entry.turnId === turnId)) this.items.delete(key)
   }
 
   private receive(text: string): void {
@@ -402,11 +424,15 @@ export class CodexDaemonClient implements CodexDaemonWatch {
       if (typeof rid !== 'string' && typeof rid !== 'number') return
       const key = keyOf(rid)
       const threadId = typeof params?.threadId === 'string' ? params.threadId : ''
-      for (const [approvalId, entry] of this.approvals) if (entry.requestKey === key && (!threadId || entry.threadId === threadId)) this.approvals.delete(approvalId)
+      for (const [approvalId, entry] of this.approvals) {
+        if (entry.requestKey !== key || (threadId && entry.threadId !== threadId)) continue
+        this.approvals.delete(approvalId)
+        if (this.resumed.has(entry.threadId)) this.settled.set(entry.threadId, this.now())
+      }
     } else if (m.method === 'item/started') {
       const threadId = params?.threadId
       const item = params?.item as Record<string, unknown> | undefined
-      if (typeof threadId === 'string' && (this.resumed.has(threadId) || this.resuming.has(threadId)) && item?.type === 'fileChange' && typeof item.id === 'string') this.items.set(`${threadId}\n${item.id}`, item)
+      if (typeof threadId === 'string' && (this.resumed.has(threadId) || this.resuming.has(threadId)) && item?.type === 'fileChange' && typeof item.id === 'string') this.items.set(`${threadId}\n${item.id}`, { item, turnId: params?.turnId })
     } else if (m.method === 'turn/completed') {
       const threadId = params?.threadId
       if (typeof threadId === 'string') this.forgetTurn(threadId, (params?.turn as { id?: unknown } | undefined)?.id)

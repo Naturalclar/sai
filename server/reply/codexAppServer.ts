@@ -2,12 +2,12 @@
 // 通常起動のTUIはこの接続の所有物ではないので、従来どおりtmux / queueへ任せる。
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createInterface } from 'node:readline'
-import type { Approval, ApprovalAnswer, ApprovalMap, CodexKept, CodexUsage, Replying, ReplyingMap, ReviewTarget } from '../../shared/types.ts'
+import type { Approval, ApprovalAnswer, ApprovalMap, CodexUsage, Replying, ReplyingMap, ReviewTarget } from '../../shared/types.ts'
 import { codexErrorText, codexTurnErrorReason } from '../../shared/codexTurnError.ts'
 import { parseCodexSkills, type Skill } from '../../shared/skills.ts'
 import { parseCodexRateLimits } from '../../shared/usage.ts'
-import { buildCodexApproval, codexAnswerResult } from './codexApproval.ts'
-import type { CodexDecision } from './codexApproval.ts'
+import { buildCodexApproval, codexAnswerRefusal, codexAnswerResult } from './codexApproval.ts'
+import type { CodexAnswerResult, CodexDecision } from './codexApproval.ts'
 import { childEnv, splitArgs } from './runner.ts'
 
 type RpcId = string | number
@@ -61,10 +61,7 @@ export interface CodexCompactInput {
   model?: string
 }
 
-export type CodexAnswerResult =
-  /** `kept` は、押したのが規則の追加（今後も聞かない・今後も断る）だったときの、ボタンに書いていた範囲（#772） */
-  | { ok: true; kept?: CodexKept }
-  | { ok: false; status: 400 | 404 | 409; error: string }
+export type { CodexAnswerResult } from './codexApproval.ts'
 
 /** app.tsが使う境界。テストではプロセスを立てない偽物へ差し替える */
 export interface CodexApp {
@@ -605,9 +602,7 @@ export class CodexAppServer implements CodexApp {
       return { ok: false, status: 409, error: 'この質問は現在のCodex turnのものではありません' }
     }
     const picked = codexAnswerResult(entry.approval, entry.method, entry.decisions, answer)
-    if (!picked) {
-      return { ok: false, status: 400, error: entry.method === 'item/tool/requestUserInput' ? '質問の回答が不足しているか、自由入力できない値です' : '提示されていないdecisionです' }
-    }
+    if (!picked) return { ok: false, status: 400, error: codexAnswerRefusal(entry.method) }
     try {
       this.connection?.send({ id: entry.requestId, result: picked.result })
     } catch (error) {

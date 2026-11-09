@@ -8,9 +8,9 @@
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import type { Approval, ApprovalAnswer, ApprovalMap, CodexKept, HoldingWhy } from '../../shared/types.ts'
-import { buildCodexApproval, codexAnswerResult } from './codexApproval.ts'
-import type { CodexDecision } from './codexApproval.ts'
+import type { Approval, ApprovalAnswer, ApprovalMap, HoldingWhy } from '../../shared/types.ts'
+import { buildCodexApproval, codexAnswerRefusal, codexAnswerResult } from './codexApproval.ts'
+import type { CodexAnswerResult, CodexDecision } from './codexApproval.ts'
 import { connectUnixWebSocket } from './unixWebSocket.ts'
 import type { UnixWebSocket } from './unixWebSocket.ts'
 
@@ -30,8 +30,8 @@ const REQUEST_TIMEOUT_MS = 8_000
 /** 預かって画面に出し、答えてよいサーバからの要求の全部。ここに無いもの（追加の権限・MCP の問い合わせなど）は預からず答えない（TUI で答える） */
 export const DAEMON_ANSWERABLE = ['item/commandExecution/requestApproval', 'item/fileChange/requestApproval', 'item/tool/requestUserInput'] as const
 
-/** `answer()` の結果。`codexAppServer.ts` の `CodexAnswerResult` と同じ形 */
-export type DaemonAnswerResult = { ok: true; kept?: CodexKept } | { ok: false; status: 400 | 404 | 409; error: string }
+/** `answer()` の結果。SAI 自身の app-server と同じ形 */
+export type DaemonAnswerResult = CodexAnswerResult
 
 /** daemon から見たスレッドの状態。`idle` は「空き」の証拠にしない（`daemonOccupied()`） */
 export type DaemonThreadState = 'idle' | 'active' | 'waiting'
@@ -162,7 +162,8 @@ export class CodexDaemonClient implements CodexDaemonWatch {
     try {
       // 上書き（cwd・model・許可の向き）は渡さない: 端末の TUI が開いているスレッドの設定を変えない。履歴も要らない
       await this.request('thread/resume', { threadId, excludeTurns: true })
-      if (generation !== this.generation) return false
+      // 待っている間に閉じた（`thread/closed` が `resuming` から外した）なら、受けるスレッドにしない
+      if (generation !== this.generation || !this.resuming.has(threadId)) return false
       this.resumed.set(threadId, entity)
       this.log(`受けるスレッドを足した（${this.resumed.size} 本）`)
       return true
@@ -202,9 +203,7 @@ export class CodexDaemonClient implements CodexDaemonWatch {
       return { ok: false, status: 409, error: 'Codex の共有の app-server との接続が切れています。端末で答えてください' }
     }
     const picked = codexAnswerResult(entry.approval, entry.method, entry.decisions, answer)
-    if (!picked) {
-      return { ok: false, status: 400, error: entry.method === 'item/tool/requestUserInput' ? '質問の回答が不足しているか、自由入力できない値です' : '提示されていないdecisionです' }
-    }
+    if (!picked) return { ok: false, status: 400, error: codexAnswerRefusal(entry.method) }
     try {
       ws.send(JSON.stringify({ id: entry.requestId, result: picked.result }))
     } catch (err) {
@@ -355,6 +354,9 @@ export class CodexDaemonClient implements CodexDaemonWatch {
     // 同じ要求が二度届いても（繋ぎ直し・resume のやり直し）、1 つだけ出す
     for (const entry of this.approvals.values()) if (entry.requestKey === requestKey && entry.threadId === threadId) return
     const item = this.items.get(`${threadId}\n${itemId}`)
+    // 差分の分からないファイル変更（許可の途中で resume したもの。要求の `params` に差分は無い）は預からない。中身を見せずに押させないため、
+    // これまでどおり端末の画面の読み取りに任せる
+    if (method === 'item/fileChange/requestApproval' && !(Array.isArray(item?.changes) && item.changes.length > 0)) return
     const built = buildCodexApproval({ entity, method, params, itemId, now: this.now(), ...(item ? { item } : {}) })
     if (!built) return
     this.approvals.set(built.approval.approval_id, { approval: built.approval, requestId: id, requestKey, threadId, turnId, method, decisions: built.decisions })
@@ -413,6 +415,7 @@ export class CodexDaemonClient implements CodexDaemonWatch {
       if (typeof threadId === 'string') {
         this.forgetTurn(threadId, undefined)
         this.resumed.delete(threadId)
+        this.resuming.delete(threadId)
       }
     }
   }

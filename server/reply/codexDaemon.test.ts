@@ -265,6 +265,44 @@ test('待ちを知らせ、resume したスレッドの要求だけを預かる�
   c.stop()
 })
 
+test('差分の分からないファイル変更の許可は預からない。item/started で差分を受けていれば出す（#848 の 3 のレビュー）', async () => {
+  const fake = new FakeDaemon(sockPath())
+  await fake.listen()
+  const c = daemonClient({ socketPath: fake.path })
+  c.setEnabled(true)
+  await wait(() => c.link() === 'connected')
+  assert.equal(await c.resume('W', 'W@r'), true)
+  const fileReq = (id: number, itemId: string) => ({ id, method: 'item/fileChange/requestApproval', params: { threadId: 'W', turnId: 'T1', itemId, reason: 'r' } })
+  fake.push(fileReq(801, 'F1'))
+  fake.push({ method: 'item/started', params: { threadId: 'W', item: { id: 'F2', type: 'fileChange', changes: [{ path: 'a.txt', diff: '+x' }] } } })
+  fake.push(fileReq(802, 'F2'))
+  await wait(() => (c.snapshot()['W@r'] ?? []).length === 1)
+  await new Promise((r) => setTimeout(r, 20))
+  const list = c.snapshot()['W@r']!
+  assert.equal(list.length, 1, '差分の無い方は預からない（画面の読み取りに任せる）')
+  assert.equal(list[0]!.text, '許可待ち: ファイル変更: a.txt')
+  c.stop()
+  await fake.close()
+})
+
+test('resume の応答を待つ間にスレッドが閉じたら、受けるスレッドにしない（#848 の 3 のレビュー）', async () => {
+  const fake = new FakeDaemon(sockPath())
+  await fake.listen()
+  const push = fake.push.bind(fake)
+  fake.push = (m) => {
+    const id = (m as { id?: number }).id
+    if (fake.sent.some((x) => x.id === id && x.method === 'thread/resume')) push({ method: 'thread/closed', params: { threadId: 'W' } })
+    push(m)
+  }
+  const c = daemonClient({ socketPath: fake.path })
+  c.setEnabled(true)
+  await wait(() => c.link() === 'connected')
+  assert.equal(await c.resume('W', 'W@r'), false)
+  assert.equal(c.holds('W'), false)
+  c.stop()
+  await fake.close()
+})
+
 test('resume の応答より先に届いた要求も預かる。resume が通らなければ出さない（#848 の 3）', async () => {
   const fake = new FakeDaemon(sockPath())
   await fake.listen()

@@ -185,12 +185,15 @@ test('待ちになったスレッドは .codex/ の確かめを通してから r
 
   daemon.listener!('X1')
   await wait(() => daemon.resumeCalls.length === 1)
+  daemon.resumed.clear()
   assert.deepEqual(daemon.resumeCalls, ['X1=X1@r'])
   assert.equal(configChecked.length, 2, 'resume の前に確かめる')
 })
 
-test('resume したスレッドは端末の画面の読み取りから外し、daemon の許可だけを出す。答えは daemon に渡す（#848 の 3）', async () => {
+test('daemon が許可を預かっている間だけ端末の画面の読み取りから外し、daemon の許可だけを出す。答えは daemon に渡す（#848 の 3）', async () => {
   daemon.resumed.set('X1', 'X1@r')
+  const held = await approvalsNow()
+  assert.deepEqual(held['X1@r']?.map((a) => a.approval_id), ['dialog-X1@r'], 'resume していても、預かりが無ければ画面の読み取りのまま（daemon で受けない種類のダイアログ）')
   daemon.pending.set('dmn-1', approvalOf('dmn-1', 'X1@r', 'daemon の許可'))
   const shown = await approvalsNow()
   assert.ok(!dialogs.scanned.at(-1)!.includes('X1@r'), '画面の読み取りに渡さない')
@@ -206,8 +209,8 @@ test('resume したスレッドは端末の画面の読み取りから外し、d
   assert.deepEqual(daemon.answers, [{ approvalId: 'dmn-1', answer: { behavior: 'allow', decision: 'd0' } }])
   assert.equal((await answer('dmn-1', { behavior: 'allow', decision: 'd0' })).status, 404, '二度は答えない')
 
-  // 繋がりが切れて holds が偽になったら、画面の読み取りに戻す
-  daemon.resumed.clear()
+  // 預かりが無くなったら（答えた・TUI で答えられた・切れた）、画面の読み取りに戻す
   const back = await approvalsNow()
   assert.deepEqual(back['X1@r']?.map((a) => a.approval_id), ['dialog-X1@r'])
+  daemon.resumed.clear()
 })

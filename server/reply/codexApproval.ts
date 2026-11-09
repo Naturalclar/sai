@@ -17,6 +17,14 @@ export interface CodexDecision {
   kept?: CodexKept
 }
 
+/** 画面の答えを返した結果（SAI 自身の app-server と daemon で同じ形）。`kept` は、押したのが規則の追加だったときのボタンに書いていた範囲（#772） */
+export type CodexAnswerResult = { ok: true; kept?: CodexKept } | { ok: false; status: 400 | 404 | 409; error: string }
+
+/** `codexAnswerResult()` が null を返したときの断りの文 */
+export function codexAnswerRefusal(method: string): string {
+  return method === 'item/tool/requestUserInput' ? '質問の回答が不足しているか、自由入力できない値です' : '提示されていないdecisionです'
+}
+
 export interface CodexApprovalInput {
   /** 画面のエンティティ ID */
   entity: string

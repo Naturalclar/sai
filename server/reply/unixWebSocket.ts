@@ -13,6 +13,7 @@ const OP_PING = 9
 const OP_PONG = 10
 
 export interface UnixWebSocket {
+  /** 閉じた・閉じかけのソケットには送らずに投げる（黙って捨てると、許可の答えを送れたと思い込む。#848 の 3 のレビュー） */
   send(text: string): void
   close(): void
 }
@@ -122,7 +123,10 @@ export function connectUnixWebSocket(path: string, on: { text: (text: string) =>
         clearTimeout(timer)
         buffer = buffer.subarray(end + 4)
         resolve({
-          send: (text) => write(OP_TEXT, Buffer.from(text, 'utf-8')),
+          send: (text) => {
+            if (closed || socket.destroyed || !socket.writable) throw new Error('socket closed')
+            write(OP_TEXT, Buffer.from(text, 'utf-8'))
+          },
           close: () => socket.destroy(),
         })
       }

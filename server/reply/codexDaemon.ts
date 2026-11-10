@@ -443,8 +443,14 @@ export class CodexDaemonClient implements CodexDaemonWatch {
       const turnId = (params?.turn as { id?: unknown } | undefined)?.id
       if (typeof threadId === 'string' && typeof turnId === 'string' && (this.resumed.has(threadId) || this.resuming.has(threadId))) this.turnNow.set(threadId, turnId)
     } else if (m.method === 'turn/completed') {
+      // 形の違う通知（ターンの id が無い）では何も捨てない（いまのターンの許可まで消さない）
       const threadId = params?.threadId
-      if (typeof threadId === 'string') this.forgetTurn(threadId, (params?.turn as { id?: unknown } | undefined)?.id)
+      const turnId = (params?.turn as { id?: unknown } | undefined)?.id
+      if (typeof threadId === 'string' && typeof turnId === 'string') {
+        this.forgetTurn(threadId, turnId)
+        // 終わったターンを「いまのターン」に残さない（次のターンの `turn/started` が届かなくても、次の要求から埋め直す）
+        if (this.turnNow.get(threadId) === turnId) this.turnNow.delete(threadId)
+      }
     } else if (m.method === 'thread/closed') {
       const threadId = params?.threadId
       if (typeof threadId === 'string') {

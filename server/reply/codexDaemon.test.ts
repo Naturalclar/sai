@@ -383,6 +383,18 @@ test('前のターンの許可は断る。遅れて届いた古いターンの�
   await wait(() => fake.sent.some((m) => m.id === 961 && m.method === undefined))
   assert.ok(!fake.sent.some((m) => m.id === 960 && m.method === undefined))
 
+  // 形の違う turn/completed（id が無い）では捨てない。終わったターンはいまのターンに残さない（次の turn/started が届かなくても答えられる）
+  fake.push(cmdRequest(962, 'W', { turnId: 'T2', itemId: 'I3' }))
+  await wait(() => (c.snapshot()['W@r'] ?? []).length === 1)
+  fake.push({ method: 'turn/completed', params: { threadId: 'W', turn: {} } })
+  await new Promise((r) => setTimeout(r, 20))
+  assert.equal((c.snapshot()['W@r'] ?? []).length, 1)
+  fake.push({ method: 'turn/completed', params: { threadId: 'W', turn: { id: 'T2' } } })
+  await wait(() => (c.snapshot()['W@r'] ?? []).length === 0)
+  fake.push(cmdRequest(963, 'W', { turnId: 'T3', itemId: 'I4' }))
+  await wait(() => (c.snapshot()['W@r'] ?? []).length === 1)
+  assert.deepEqual(c.answer(c.snapshot()['W@r']![0]!.approval_id, { behavior: 'allow', decision: 'd0' }), { ok: true })
+
   // 待っていない・知らないスレッドは新しく resume しない
   fake.push({ method: 'thread/status/changed', params: { threadId: 'Z', status: { type: 'idle' } } })
   await wait(() => c.state('Z') === 'idle')
@@ -550,6 +562,16 @@ test('unixWebSocket: ping に pong を返し、分割されたテキストをつ
   await bad.listen()
   await assert.rejects(connectUnixWebSocket(bad.path, { text: () => {}, close: () => {} }), /handshake refused/)
   await bad.close()
+})
+
+test('unixWebSocket: 閉じたソケットへの send は黙って捨てずに投げる（#848 の 3 のレビュー）', async () => {
+  const fake = new FakeDaemon(sockPath())
+  await fake.listen()
+  const ws = await connectUnixWebSocket(fake.path, { text: () => {}, close: () => {} })
+  ws.send(JSON.stringify({ method: 'initialized' }))
+  ws.close()
+  assert.throws(() => ws.send('{}'), /closed/)
+  await fake.close()
 })
 
 test('encodeFrame: 長さの 3 つの形とマスク', () => {

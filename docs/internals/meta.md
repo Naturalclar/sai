@@ -73,14 +73,15 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 
 ## `/` のスキルの候補
 
-- `GET /api/sessions/<id>/skills`。`SkillStore` が `~/.claude/skills/` とそのセッションの `cwd` の `.claude/skills/` から `SKILL.md` を読む（ディレクトリの mtime で覚える。説明だけの書き換えは拾わない）。プロジェクト側が先で、同じ名前はプロジェクトが勝つ。
+- `GET /api/sessions/<id>/skills`。`SkillStore` が `~/.claude/skills/` とそのセッションのプロジェクト側の `.claude/skills/` から `SKILL.md` を読む（ディレクトリごとに mtime で覚える。説明だけの書き換えは拾わない）。プロジェクト側が先で、同じ名前はプロジェクトが勝つ。
+- プロジェクト側は**行の `cwd` から worktree の一番上まで上へ辿り**、途中の各ディレクトリの置き場も読む（#885。`skillPlaces()`）。同じ名前は `cwd` に近いほうが勝つ。一番上より上へは辿らない。一番上は読むだけの `git rev-parse --show-toplevel` で引き、引けない・`cwd` が一番上の外なら `cwd` だけ。Codex の置き場も同じ辿り方。
 - frontmatter の読み方と `/` の検出・絞り込みは `shared/skills.ts`（`parseSkill` / `slashQuery` / `filterSkills` / `skillInvocation`）にあり、`shared/skills.test.ts` で回す。
 - 画面は `web/src/useSkills.ts` が `/` を打った時に 1 回だけ取り（一覧のポーリングには載せない）、`ReplyBox` が `@` と同じ候補メニューに出す。
 - 候補を選ぶと Codex は `$<name> `、Claude / OpenCode は `/<name> ` を本文に入れ、展開は CLI に任せる。Grok は空。
 
 ### Codex（#402）
 
-- リポジトリ側は `SkillStore` が `<cwd>/.codex/skills/` と `<cwd>/.agents/skills/` から読む（`.claude/skills/` は Codex が読まないので出さない）。
+- リポジトリ側は `SkillStore` が `.codex/skills/` と `.agents/skills/` から読む（`cwd` から一番上まで。同じディレクトリでは `.codex/skills/` が勝つ）（`.claude/skills/` は Codex が読まないので出さない）。
 - cwd に依らない分（`$CODEX_HOME/skills/`・プラグイン・組み込み）は app-server の `skills/list`（`CodexApp.skills()`。60 秒覚える）から足す。
 - `skills/list` は app-server を起こした場所のリポジトリのスキルも返すが、SAI の app-server はサーバの cwd で長く生きている 1 本なので、`scope` が `repo` のものは `shared/skills.ts` の `parseCodexSkills()` が落とす。
 - `SAI_CODEX_APP_SERVER=0` のときは聞きに行かない（リポジトリ側だけ）。

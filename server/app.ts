@@ -773,12 +773,12 @@ export function createApp(
    * 同じ名前ならリポジトリ側が勝つ。OpenCode と Grok にはスキルの仕組みが無いので空
    */
   const sessionSkills = async (s: SessionSummary): Promise<Skill[]> => {
-    if (s.agent === 'claude') return await skillStore.forCwd(s.cwd)
+    if (s.agent === 'claude') return await skillStore.forCwd(s.cwd, 'claude', git)
     // OpenCode は手元を読まずに**本体に聞く**（#393。`/command` がスキルもスラッシュコマンドも 1 本で返す）。
     // サーバを切っていれば（SAI_OPENCODE_SERVER=0）聞きに行かない（`/` の候補のためだけにサーバを起こさない）
     if (s.agent === 'opencode') return opencodeServerEnabled ? await opencodeApp.skills(s.cwd).catch(() => []) : []
     if (s.agent !== 'codex') return []
-    const repo = await skillStore.forCwd(s.cwd, 'codex')
+    const repo = await skillStore.forCwd(s.cwd, 'codex', git)
     if (!codexAppEnabled) return repo
     const seen = new Set(repo.map((skill) => skill.name))
     return [...repo, ...(await codexApp.skills?.() ?? []).filter((skill) => !seen.has(skill.name))]

@@ -1,9 +1,10 @@
 import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { CODEX_PROJECT_SKILLS_DIRS, PROJECT_SKILLS_DIR, SkillStore, userSkillsDir } from './skills.ts'
+import type { Git } from '../git/diff.ts'
+import { CODEX_PROJECT_SKILLS_DIRS, PROJECT_SKILLS_DIR, SkillStore, skillPlaces, userSkillsDir } from './skills.ts'
 
 let dir: string
 let userDir: string
@@ -86,4 +87,75 @@ test('Codex は .codex/skills と .agents/skills だけを読む（.claude/skill
   assert.equal(skills.some((s) => s.name === 'issue-triage'), false, 'cwd に依らない分は app-server から取るのでここでは出さない')
   assert.deepEqual(await store.forCwd('', 'codex'), [], 'cwd が空なら空')
   assert.deepEqual(await store.forCwd(join(dir, 'nowhere'), 'codex'), [], '置き場が無ければ空')
+})
+
+// #885: 作業ディレクトリが worktree の一番上より下でも、一番上までの置き場を読む
+/** `rev-parse --show-toplevel` にだけ答える偽の git。ほかは断る。聞かれた形を覚える */
+const fakeGit = (top: string | Error) => {
+  const asked: string[][] = []
+  const git: Git = {
+    run: async (_cwd, args) => {
+      asked.push(args)
+      if (args.join(' ') !== 'rev-parse --show-toplevel') throw new Error(`知らない形: ${args.join(' ')}`)
+      if (top instanceof Error) throw top
+      return `${top}\n`
+    },
+  }
+  return { git, asked }
+}
+
+test('上へ辿る: 作業ディレクトリから一番上まで途中も読み、近いほうが勝つ。一番上より上は読まない', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'sai-skills-walk-')))
+  try {
+    const top = join(root, 'tree')
+    const deep = join(top, 'pkg', 'src')
+    await mkdir(deep, { recursive: true })
+    await put(join(root, PROJECT_SKILLS_DIR), 'above-top', '一番上より上')
+    await put(join(top, PROJECT_SKILLS_DIR), 'at-top', '一番上')
+    await put(join(top, PROJECT_SKILLS_DIR), 'same-name', '一番上の同名')
+    await put(join(top, 'pkg', PROJECT_SKILLS_DIR), 'at-middle', '途中')
+    await put(join(deep, PROJECT_SKILLS_DIR), 'same-name', '作業ディレクトリの同名')
+    await put(join(top, CODEX_PROJECT_SKILLS_DIRS[0]!), 'codex-top', '.codex の一番上')
+    await put(join(top, 'pkg', CODEX_PROJECT_SKILLS_DIRS[1]!), 'codex-middle', '.agents の途中')
+    await put(join(root, CODEX_PROJECT_SKILLS_DIRS[1]!), 'codex-above', '一番上より上')
+    const { git, asked } = fakeGit(top)
+    const store = new SkillStore(join(root, 'no-home'))
+
+    const claude = await store.forCwd(deep, 'claude', git)
+    assert.deepEqual(claude.map((s) => s.name), ['same-name', 'at-middle', 'at-top'], '近い順。一番上より上は出さない')
+    assert.equal(claude[0]?.description, '作業ディレクトリの同名', '同じ名前は作業ディレクトリに近いほうが勝つ')
+    assert.ok(claude.every((s) => s.source === 'project'))
+
+    const codex = await store.forCwd(deep, 'codex', git)
+    assert.deepEqual(codex.map((s) => s.name), ['codex-middle', 'codex-top'], 'Codex も同じ範囲（.claude/skills は読まない）')
+
+    assert.deepEqual(asked, [['rev-parse', '--show-toplevel'], ['rev-parse', '--show-toplevel']], 'git は読むだけの 1 形だけ')
+
+    await put(join(top, PROJECT_SKILLS_DIR), 'added-later', '後から足した')
+    assert.ok((await store.forCwd(deep, 'claude', git)).some((s) => s.name === 'added-later'), '辿った各ディレクトリの mtime で拾い直す')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test('上へ辿る: 一番上が引けない・cwd が一番上の外・git を渡さないときは cwd だけ', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'sai-skills-walk-')))
+  try {
+    const top = join(root, 'tree')
+    const deep = join(top, 'pkg')
+    await mkdir(deep, { recursive: true })
+    await put(join(top, PROJECT_SKILLS_DIR), 'at-top', '一番上')
+    await put(join(deep, PROJECT_SKILLS_DIR), 'here', '作業ディレクトリ')
+    const store = new SkillStore(join(root, 'no-home'))
+    const names = async (git?: Git) => (await store.forCwd(deep, 'claude', git)).map((s) => s.name)
+
+    assert.deepEqual(await names(fakeGit(new Error('not a git repository')).git), ['here'], 'git が読めなければ cwd だけ')
+    assert.deepEqual(await names(fakeGit(join(root, 'other')).git), ['here'], '一番上が実在しなければ cwd だけ')
+    await mkdir(join(root, 'elsewhere'))
+    assert.deepEqual(await names(fakeGit(join(root, 'elsewhere')).git), ['here'], 'cwd が一番上の外なら cwd だけ')
+    assert.deepEqual(await names(), ['here'], 'git を渡さなければ cwd だけ')
+    assert.deepEqual(await skillPlaces(top, fakeGit(top).git), [top], 'cwd が一番上ならそこだけ')
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
 })

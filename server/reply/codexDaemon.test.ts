@@ -129,6 +129,12 @@ class FakeDaemon {
 /** 許可を受けて画面に出すスレッドか（中の状態を見る。本番のコードはこれを使わず、預かった許可だけを見る） */
 const receives = (c: CodexDaemonClient, threadId: string) => (c as unknown as { resumed: Map<string, string> }).resumed.has(threadId)
 
+/** スレッドを待ちにして、客がそれを見るまで待つ（新しく resume するのは待っているスレッドだけ） */
+const waitingOn = async (fake: FakeDaemon, c: CodexDaemonClient, threadId: string) => {
+  fake.push({ method: 'thread/status/changed', params: { threadId, status: { type: 'active', activeFlags: ['waitingOnApproval'] } } })
+  await wait(() => c.state(threadId) === 'waiting')
+}
+
 let n = 0
 const sockPath = () => join(dir, `s${++n}.sock`)
 
@@ -281,6 +287,7 @@ test('差分の分からないファイル変更の許可は預からない。it
   const c = daemonClient({ socketPath: fake.path })
   c.setEnabled(true)
   await wait(() => c.link() === 'connected')
+  await waitingOn(fake, c, 'W')
   assert.equal(await c.resume('W', 'W@r'), true)
   const fileReq = (id: number, itemId: string) => ({ id, method: 'item/fileChange/requestApproval', params: { threadId: 'W', turnId: 'T1', itemId, reason: 'r' } })
   fake.push(fileReq(801, 'F1'))
@@ -302,6 +309,7 @@ test('畳んだあと少しの間は settling に出す。resume し直すと新
   const c = daemonClient({ socketPath: fake.path, now: () => clock })
   c.setEnabled(true)
   await wait(() => c.link() === 'connected')
+  await waitingOn(fake, c, 'W')
   assert.equal(await c.resume('W', 'W@r'), true)
   fake.push(cmdRequest(901, 'W'))
   await wait(() => (c.snapshot()['W@r'] ?? []).length === 1)
@@ -338,17 +346,25 @@ test('resume 済みのスレッドも待ちのたびに知らせ、確かめ直�
   })
   c.setEnabled(true)
   await wait(() => c.link() === 'connected')
+  await waitingOn(fake, c, 'W')
   assert.equal(await c.resume('W', 'W@r'), true)
   const resumes = () => fake.sent.filter((m) => m.method === 'thread/resume').length
   assert.equal(resumes(), 1)
 
   const waitingNow = (threadId: string) => fake.push({ method: 'thread/status/changed', params: { threadId, status: { type: 'active', activeFlags: ['waitingOnApproval'] } } })
   const idleNow = (threadId: string) => fake.push({ method: 'thread/status/changed', params: { threadId, status: { type: 'idle' } } })
+  // 同じ待ちの中で届いた要求では確かめ直さない（1 つの待ちで二度確かめない）
+  fake.push(cmdRequest(950, 'W'))
+  await wait(() => (c.snapshot()['W@r'] ?? []).length === 1)
+  assert.deepEqual(told, ['W'])
+  // 次の待ち
+  idleNow('W')
   waitingNow('W')
   fake.push(cmdRequest(951, 'W'))
-  await wait(() => told.length === 1)
+  await wait(() => told.length === 2)
   await new Promise((r) => setTimeout(r, 20))
-  assert.deepEqual(told, ['W'], 'resume 済みでも知らせる')
+  assert.deepEqual(told, ['W', 'W'], 'resume 済みでも知らせる')
+  assert.ok(c.settling().has('W'), '確かめ直しの間は画面の読み取りも抑える')
   assert.deepEqual(c.snapshot(), {}, '確かめ直すまでは出さない')
   assert.equal(await c.resume('W', 'W@r2'), true)
   assert.equal(resumes(), 1, 'resume 済みなら送り直さない')
@@ -357,7 +373,7 @@ test('resume 済みのスレッドも待ちのたびに知らせ、確かめ直�
   // 確かめ直しが通らなければ、受けるのをやめる（daemon には何も送らない）
   idleNow('W')
   waitingNow('W')
-  await wait(() => told.length === 2)
+  await wait(() => told.length === 3)
   const sentBefore = fake.sent.length
   c.release('W')
   assert.deepEqual(c.snapshot(), {})
@@ -368,7 +384,8 @@ test('resume 済みのスレッドも待ちのたびに知らせ、確かめ直�
   assert.equal(fake.sent.length, sentBefore, '何も送らない')
 
   // 押せる候補が無い許可は預からない
-  assert.equal(await c.resume('V', 'V@r'), true)
+  await waitingOn(fake, c, 'V')
+  await wait(() => receives(c, 'V'))
   fake.push(cmdRequest(953, 'V', { availableDecisions: [{ unknownAmendment: {} }] }))
   fake.push(cmdRequest(954, 'V'))
   await wait(() => (c.snapshot()['V@r'] ?? []).length === 1)
@@ -388,7 +405,12 @@ test('確かめ直しの間は押しても消さずに 409。古いターンの�
   })
   c.setEnabled(true)
   await wait(() => c.link() === 'connected')
+  await waitingOn(fake, c, 'W')
   assert.equal(await c.resume('W', 'W@r'), true)
+  // 待ちを抜けたあと、状態の通知より先に次の要求が届く: 要求で確かめ直しに回す
+  fake.push({ method: 'thread/status/changed', params: { threadId: 'W', status: { type: 'active', activeFlags: [] } } })
+  await wait(() => c.state('W') === 'active')
+  confirm = null
   fake.push(cmdRequest(961, 'W'))
   await wait(() => confirm !== null)
   // 確かめ直しの間は snapshot に出ないので、預かりの中から引く
@@ -412,6 +434,13 @@ test('確かめ直しの間は押しても消さずに 409。古いターンの�
     if (fake.sent.some((x) => x.id === rid && x.method === 'thread/resume')) held = m
     else push(m)
   }
+  await waitingOn(fake, c, 'V')
+  // 待っていない（確かめの間に答えられた・閉じた）スレッドは新しく resume しない
+  fake.push({ method: 'thread/status/changed', params: { threadId: 'Z', status: { type: 'idle' } } })
+  await wait(() => c.state('Z') === 'idle')
+  assert.equal(await c.resume('Z', 'Z@r'), false)
+  assert.equal(await c.resume('Q', 'Q@r'), false)
+  assert.ok(!fake.sent.some((m) => m.method === 'thread/resume' && ['Z', 'Q'].includes((m as { params?: { threadId?: string } }).params?.threadId ?? '')))
   const pending = c.resume('V', 'V@r')
   await wait(() => held !== null)
   c.release('V')
@@ -434,6 +463,7 @@ test('resume の応答を待つ間にスレッドが閉じたら、受けるス�
   const c = daemonClient({ socketPath: fake.path })
   c.setEnabled(true)
   await wait(() => c.link() === 'connected')
+  await waitingOn(fake, c, 'W')
   assert.equal(await c.resume('W', 'W@r'), false)
   assert.equal(receives(c, 'W'), false)
   c.stop()
@@ -458,9 +488,11 @@ test('resume の応答より先に届いた要求も預かる。resume が通ら
   const c = daemonClient({ socketPath: fake.path })
   c.setEnabled(true)
   await wait(() => c.link() === 'connected')
+  await waitingOn(fake, c, 'W')
   assert.equal(await c.resume('W', 'W@r'), true)
   await wait(() => (c.snapshot()['W@r'] ?? []).length === 1)
   failResume = true
+  await waitingOn(fake, c, 'V')
   assert.equal(await c.resume('V', 'V@r'), false)
   await new Promise((r) => setTimeout(r, 20))
   assert.equal(c.snapshot()['V@r'], undefined)

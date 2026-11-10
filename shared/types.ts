@@ -1578,9 +1578,9 @@ export interface CodexKept {
   scope: string
 }
 
-/** 記録に書く形。どちらの道で押したか（`terminal` = 端末のダイアログ、`app-server` = SAI が回しているターン）を添える */
+/** 記録に書く形。どの道で押したか（`terminal` = 端末のダイアログ、`app-server` = SAI が回しているターン、`daemon` = 共有の app-server で受けた許可。#848）を添える */
 export interface CodexKeptLogged extends CodexKept {
-  via: 'terminal' | 'app-server'
+  via: 'terminal' | 'app-server' | 'daemon'
 }
 
 /**

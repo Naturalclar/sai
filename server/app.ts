@@ -1157,12 +1157,25 @@ export function createApp(
     answered.add(shown, behavior, shown.decisions?.find((d) => d.id === decision)?.label ?? '')
   }
   const approvalsNow = async (sessions: SessionSummary[]) => {
+    // daemon が許可・質問を預かっているセッション（#848 の 3）は画面の読み取りから外す（同じ許可を二重に出さない。daemon の方が出す）。
+    // 外すのは預かっている間だけ: daemon で受けない種類のダイアログ（追加の権限など）は、これまでどおり画面の読み取りが出す
+    // 外すのはスレッドの単位（同じスレッドの行が別のリポジトリにもあれば、そちらのエンティティも）。畳んだ直後（`settling()`）も、
+    // TUI のダイアログが閉じるまで外したままにする
+    const fromDaemon = codexDaemon?.snapshot?.() ?? {}
+    const quiet = codexDaemon?.settling?.() ?? new Set<string>()
+    for (const s of sessions) if (fromDaemon[s.id] && s.agent === 'codex') quiet.add(sessionOf(s))
+    const owned = new Set(Object.keys(fromDaemon))
+    for (const s of sessions) if (s.agent === 'codex' && quiet.has(sessionOf(s))) owned.add(s.id)
+    const daemonOwns = (id: string) => owned.has(id)
     const [dialogs, opencode] = await Promise.all([
       // 締切までに見終わらなければ前回の走査で見えていたダイアログ（#495）
-      terminalEnabled ? screenWait(codexDialogs.scan(sessions, await paneOnlyTargets(sessions)), () => codexDialogs.snapshot?.() ?? {}, codexDialogs.known?.() ?? false) : Promise.resolve({} as ApprovalMap),
+      terminalEnabled ? screenWait(codexDialogs.scan(sessions.filter((s) => !daemonOwns(s.id)), await paneOnlyTargets(sessions)), () => codexDialogs.snapshot?.() ?? {}, codexDialogs.known?.() ?? false) : Promise.resolve({} as ApprovalMap),
       opencodeServerEnabled ? opencodePerms.scan(sessions) : Promise.resolve({} as ApprovalMap),
     ])
-    const all = mergeApprovalMaps(mergeApprovalMaps(mergeApprovalMaps(approvals.snapshot(), codexApp.snapshot()), dialogs), opencode)
+    // 前の走査で見えていたダイアログ（締切に間に合わなかったとき）も、daemon が出しているセッションの分は落とす
+    const dialogsLeft: ApprovalMap = {}
+    for (const [id, list] of Object.entries(dialogs)) if (!daemonOwns(id)) dialogsLeft[id] = list
+    const all = mergeApprovalMaps(mergeApprovalMaps(mergeApprovalMaps(mergeApprovalMaps(approvals.snapshot(), codexApp.snapshot()), dialogsLeft), opencode), fromDaemon)
     // [常に許可] で書かれるルール（#705）と、同じ cwd で同じ組の何回目か（#445）。数えるのは人が許可した回数で、
     // 決めた回数からは「常に許可」を勧める（勧めるだけ）
     const merged: ApprovalMap = {}
@@ -1371,6 +1384,33 @@ export function createApp(
   const settingsStore = new SettingsStore(join(store.directory, SETTINGS_FILE))
   // 入切は settings.json の `codex_daemon`（#848。既定は切）。読めなければ繋がない
   if (codexDaemon) void settingsStore.get().then((s) => codexDaemon.setEnabled(s.codex_daemon), () => {})
+  /**
+   * 許可・質問を daemon で受ける（#848 の 3）。待ちになったスレッドだけ、**行のあるローカルの Codex のセッションで、
+   * `.codex/` の確かめ（`codexConfigStop()`）が通ったときだけ** `thread/resume` する。どれかが分からなければ resume せず、
+   * 今までどおり端末の画面の読み取り（`CodexDialogs`）が出す。答えるのは人が画面で押したときだけ（自動では答えない）
+   */
+  // まだ resume していないスレッドが待ちになったときに呼ばれる。resume したら、その接続の間は受け続ける（待ちのたびには確かめ直さない）
+  const daemonResume = async (threadId: string): Promise<void> => {
+    if (!codexDaemon?.resume) return
+    const { sessions } = await store.sessions(90).catch(() => ({ sessions: [] as SessionSummary[] }))
+    // 同じスレッドが別のリポジトリの行にもあるときは、一番新しい行のもの（いま動いている cwd）
+    const s = sessions.filter((x) => x.agent === 'codex' && sessionOf(x) === threadId).sort((a, b) => b.end.localeCompare(a.end))[0]
+    const ok = Boolean(s?.cwd) && !isRemoteHost(s!.host, selfHost())
+      // SAI 自身の app-server が持っているスレッドは、そちらで受けている
+      && !(codexAppEnabled && (codexApp.holds?.(threadId) ?? false))
+      && !(await codexConfigStop(s!.id, s!.cwd))
+    if (!ok) return
+    await codexDaemon.resume(threadId, s!.id)
+  }
+  // 同じスレッドの確かめは順に回す（並べて回さない）。確かめが投げたら resume しない（画面の読み取りのまま）
+  const daemonChecks = new Map<string, Promise<void>>()
+  codexDaemon?.onWaiting?.((threadId) => {
+    const check = (daemonChecks.get(threadId) ?? Promise.resolve())
+      .then(() => daemonResume(threadId))
+      .catch(() => {})
+      .finally(() => { if (daemonChecks.get(threadId) === check) daemonChecks.delete(threadId) })
+    daemonChecks.set(threadId, check)
+  })
   /** daemon の状態と今の判定の食い違いの直前の種類（#848）。変わったときだけ 1 行残す */
   const daemonGaps = new Map<string, DaemonGap>()
   const noteDaemonGap = (id: string, known: HoldingWhy | '', seen: DaemonThreadState | undefined): void => {
@@ -4547,7 +4587,10 @@ export function createApp(
       noteAnswered(approvalId, b.behavior, typeof b.decision === 'string' ? b.decision : undefined)
       return json(res, { ok: true, approval_id: approvalId, behavior: b.behavior })
     }
-    const codexCurrent = codexApp.getApproval(approvalId)
+    // daemon で受けた許可・質問（#848 の 3）と、SAI が回している Codex のターンの許可。どちらも出した候補・出した質問の答えだけを返す
+    // （daemon の分は、TUI で先に答えられていたら何も起きない）
+    const daemonCurrent = codexDaemon?.answer ? codexDaemon.getApproval?.(approvalId) : undefined
+    const codexCurrent = daemonCurrent ?? codexApp.getApproval(approvalId)
     if (codexCurrent) {
       if (b.remember !== undefined) return error(res, 400, 'Codexでは提示されたdecisionだけ選べます')
       const answer: ApprovalAnswer = {
@@ -4555,9 +4598,9 @@ export function createApp(
         ...(typeof b.decision === 'string' ? { decision: b.decision } : {}),
         ...(b.updatedInput && typeof b.updatedInput === 'object' && !Array.isArray(b.updatedInput) ? { updatedInput: b.updatedInput } : {}),
       }
-      const result = codexApp.answer(approvalId, answer)
+      const result = daemonCurrent ? codexDaemon!.answer!(approvalId, answer) : codexApp.answer(approvalId, answer)
       if (!result.ok) return error(res, result.status, result.error)
-      await logCodexKept(codexCurrent, 'app-server', result.kept, answer.behavior)
+      await logCodexKept(codexCurrent, daemonCurrent ? 'daemon' : 'app-server', result.kept, answer.behavior)
       shownApprovals.set(approvalId, shownApprovals.get(approvalId) ?? codexCurrent)
       noteAnswered(approvalId, answer.behavior, answer.decision)
       return json(res, { ok: true, approval_id: approvalId, behavior: answer.behavior })

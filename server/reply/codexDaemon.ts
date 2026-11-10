@@ -49,21 +49,16 @@ export interface CodexDaemonWatch {
   state(threadId: string): DaemonThreadState | undefined
   stop(): void
   /**
-   * スレッドが許可・質問の待ちになったたびに（繋いだときの一覧で待っていたものも）呼ぶ。**resume 済みのスレッドでも呼ぶ**:
-   * 呼ばれた側がそのたびに `.codex/` などを確かめ直し、通れば `resume()`、通らなければ `release()` する。確かめ直すまでは、
-   * そのスレッドに届いた許可を画面に出さない。偽物は持たなくてよい
+   * スレッドが許可・質問の待ちになったとき（繋いだときの一覧で待っていたものも）に呼ぶ。この接続でまだ resume していないものだけ。
+   * 呼ばれた側が `.codex/` などを確かめてから `resume()` する（呼ばなければ何も受けない）。**resume したら、その接続の間は受け続ける**
+   * （待ちのたびには確かめ直さない。繋ぎ直したらやり直す）。偽物は持たなくてよい
    */
   onWaiting?(listener: (threadId: string) => void): void
-  /**
-   * 許可・質問を受ける。まだならこのとき `thread/resume` する（resume 済みなら送らない）。`entity` は預かった許可を出す画面のエンティティ
-   * （確かめ直しで変わっていれば、預かっている分もそちらに移す）。通れば true。偽物は持たなくてよい
-   */
+  /** 許可・質問を受けるために `thread/resume` する。いまも待っているスレッドだけ。`entity` は預かった許可を出す画面のエンティティ。通れば true。偽物は持たなくてよい */
   resume?(threadId: string, entity: string): Promise<boolean>
-  /** 確かめ直しが通らなかったスレッドを、SAI の中だけで受けるのをやめる（daemon には何も送らない。端末の画面の読み取りに戻る）。偽物は持たなくてよい */
-  release?(threadId: string): void
   /** 預かっている許可・質問。偽物は持たなくてよい */
   snapshot?(): ApprovalMap
-  /** 確かめ直しの間か、許可を畳んでから `DAEMON_SETTLE_MS` が経っていないスレッド（端末の画面の読み取りをまだ抑える）。偽物は持たなくてよい */
+  /** 許可を畳んでから `DAEMON_SETTLE_MS` が経っていないスレッド（端末の画面の読み取りをまだ抑える）。偽物は持たなくてよい */
   settling?(): Set<string>
   getApproval?(approvalId: string): Approval | undefined
   /** 人が画面で押した答えを返す。出した候補・出した質問の答えだけ。偽物は持たなくてよい */
@@ -145,12 +140,8 @@ export class CodexDaemonClient implements CodexDaemonWatch {
    * （許可の途中で resume すると、resume の応答より先に要求が届きうる）
    */
   private readonly resuming = new Map<string, string>()
-  /** resume 済みで、待ちになったので確かめ直している間のスレッド → エンティティ。届いた要求は預かるが画面には出さない */
-  private readonly confirming = new Map<string, string>()
-  /** 受けているスレッドのいまのターン（`turn/started` と、届いた要求の `turnId` から）。分からなければ無い */
+  /** 受けているスレッドのいまのターン（`turn/started` から。まだ届いていなければ最初に届いた要求の `turnId`）。分からなければ無い */
   private readonly turnNow = new Map<string, string>()
-  /** いまの待ちで確かめが通ったスレッド。待ちを抜けたら外す（次の待ちでまた確かめる。1 つの待ちで二度確かめない） */
-  private readonly confirmedWait = new Set<string>()
   private readonly approvals = new Map<string, DaemonApproval>()
   /** ファイル変更の item（要求の `params` に差分が無いので、同じ id の `item/started` から引く）。鍵は `スレッド\nitem` */
   private readonly items = new Map<string, { item: Record<string, unknown>; turnId: unknown }>()
@@ -171,15 +162,7 @@ export class CodexDaemonClient implements CodexDaemonWatch {
 
   async resume(threadId: string, entity: string): Promise<boolean> {
     if (this.linkState !== 'connected' || !threadId || !entity) return false
-    const known = this.resumed.get(threadId) ?? this.confirming.get(threadId)
-    if (known !== undefined) {
-      // 確かめ直しが通った。同じスレッドが別のリポジトリの行で続いていたら、預かっている分もこれからの許可もそちらに出す
-      this.confirming.delete(threadId)
-      this.resumed.set(threadId, entity)
-      this.confirmedWait.add(threadId)
-      if (known !== entity) for (const entry of this.approvals.values()) if (entry.threadId === threadId) entry.approval = { ...entry.approval, id: entity }
-      return true
-    }
+    if (this.resumed.has(threadId)) return true
     if (this.resuming.has(threadId)) return false
     // 新しく resume するのは、いまも待っているスレッドだけ（確かめの間に TUI で答えられた・閉じたものは起こさない）
     if (this.states.get(threadId) !== 'waiting') return false
@@ -191,7 +174,6 @@ export class CodexDaemonClient implements CodexDaemonWatch {
       // 待っている間に閉じた（`thread/closed` が `resuming` から外した）なら、受けるスレッドにしない
       if (generation !== this.generation || !this.resuming.has(threadId)) return false
       this.resumed.set(threadId, entity)
-      this.confirmedWait.add(threadId)
       this.log(`受けるスレッドを足した（${this.resumed.size} 本）`)
       return true
     } catch (err) {
@@ -205,16 +187,6 @@ export class CodexDaemonClient implements CodexDaemonWatch {
     }
   }
 
-  release(threadId: string): void {
-    // 投げかけの resume も取り消す（応答が来ても受けるスレッドにしない）
-    const had = [this.resumed.delete(threadId), this.confirming.delete(threadId), this.resuming.delete(threadId)].some(Boolean)
-    this.forgetTurn(threadId, undefined)
-    this.settled.delete(threadId)
-    this.turnNow.delete(threadId)
-    this.confirmedWait.delete(threadId)
-    if (had) this.log('確かめ直しが通らず、受けるのをやめた')
-  }
-
   snapshot(): ApprovalMap {
     const out: ApprovalMap = {}
     // 出すのは resume が通ったスレッドの分だけ（通る前は端末の画面の読み取りが出している。二重に出さない）
@@ -223,8 +195,7 @@ export class CodexDaemonClient implements CodexDaemonWatch {
   }
 
   settling(): Set<string> {
-    // 確かめ直しの間も、画面の文字の写しを出さない（通れば daemon が出し、通らなければ release で画面の読み取りに戻る）
-    const out = new Set<string>(this.confirming.keys())
+    const out = new Set<string>()
     const at = this.now()
     for (const [threadId, when] of this.settled) {
       if (at - when < DAEMON_SETTLE_MS) out.add(threadId)
@@ -235,15 +206,13 @@ export class CodexDaemonClient implements CodexDaemonWatch {
 
   getApproval(approvalId: string): Approval | undefined {
     const entry = this.approvals.get(approvalId)
-    return entry && (this.resumed.has(entry.threadId) || this.confirming.has(entry.threadId)) ? entry.approval : undefined
+    return entry && this.resumed.has(entry.threadId) ? entry.approval : undefined
   }
 
   answer(approvalId: string, answer: ApprovalAnswer): DaemonAnswerResult {
     const entry = this.approvals.get(approvalId)
     if (!entry) return { ok: false, status: 404, error: 'approval not found' }
     const ws = this.ws
-    // 確かめ直している間は答えない（消さずに残し、通れば押し直せる）
-    if (ws && this.confirming.has(entry.threadId)) return { ok: false, status: 409, error: '確かめ直しています。少し待ってから押し直してください' }
     // いまのターンのものでなければ断る（SAI 自身の app-server と同じ）
     const turnNow = this.turnNow.get(entry.threadId)
     if (turnNow && turnNow !== entry.turnId) {
@@ -301,9 +270,7 @@ export class CodexDaemonClient implements CodexDaemonWatch {
     // 繋ぎ直したら `thread/resume` からやり直す（daemon を立て直すと読み込み済みのスレッドは消える。実測）。預かった要求は答えられない
     this.resumed.clear()
     this.resuming.clear()
-    this.confirming.clear()
     this.turnNow.clear()
-    this.confirmedWait.clear()
     this.approvals.clear()
     this.items.clear()
     this.settled.clear()
@@ -384,19 +351,12 @@ export class CodexDaemonClient implements CodexDaemonWatch {
     const state = threadState(status)
     if (state) this.states.set(id, state)
     else this.states.delete(id)
-    if (state !== 'waiting') this.confirmedWait.delete(id)
     // 繋ぎ終えるまでは知らせない（繋ぎ終えたところでまとめて知らせる）
     if (state === 'waiting' && before !== 'waiting' && this.linkState === 'connected') this.tellWaiting(id)
   }
 
   private tellWaiting(threadId: string): void {
-    if (this.resuming.has(threadId) || this.confirming.has(threadId) || this.confirmedWait.has(threadId) || !this.waitingListener) return
-    // resume 済みのスレッドも、確かめ直すまでは画面に出さない（最初の待ちの確かめだけで、接続の間ずっと受けない）
-    const entity = this.resumed.get(threadId)
-    if (entity !== undefined) {
-      this.resumed.delete(threadId)
-      this.confirming.set(threadId, entity)
-    }
+    if (this.resumed.has(threadId) || this.resuming.has(threadId) || !this.waitingListener) return
     try {
       this.waitingListener(threadId)
     } catch {
@@ -412,7 +372,7 @@ export class CodexDaemonClient implements CodexDaemonWatch {
     const threadId = typeof params?.threadId === 'string' ? params.threadId : ''
     const turnId = typeof params?.turnId === 'string' ? params.turnId : ''
     const itemId = typeof params?.itemId === 'string' ? params.itemId : ''
-    const entity = this.resumed.get(threadId) ?? this.resuming.get(threadId) ?? this.confirming.get(threadId)
+    const entity = this.resumed.get(threadId) ?? this.resuming.get(threadId)
     if (!params || !entity || !turnId || !itemId) return
     const requestKey = keyOf(id)
     // 同じ要求が二度届いても（繋ぎ直し・resume のやり直し）、1 つだけ出す
@@ -424,10 +384,9 @@ export class CodexDaemonClient implements CodexDaemonWatch {
     const built = buildCodexApproval({ entity, method, params, itemId, now: this.now(), ...(item ? { item } : {}) })
     // 押せる候補が 1 つも無いもの（範囲を書けない規則の追加だけ など）も預からない。画面の読み取りなら答えられることがある
     if (!built || built.approval.answerable === false) return
-    this.turnNow.set(threadId, turnId)
+    // 遅れて届いた古いターンの要求で、いまのターンを巻き戻さない（`turn/started` が正。まだ無いときだけ要求から埋める）
+    if (!this.turnNow.has(threadId)) this.turnNow.set(threadId, turnId)
     this.approvals.set(built.approval.approval_id, { approval: built.approval, requestId: id, requestKey, threadId, turnId, method, decisions: built.decisions })
-    // resume 済みのスレッドに届いた要求は、状態の通知を待たずにここで確かめ直しに回す（通知より先に届くと、確かめ直す前に出てしまう）
-    if (this.resumed.has(threadId) && !this.confirmedWait.has(threadId)) this.tellWaiting(threadId)
   }
 
   private forgetTurn(threadId: string, turnId: unknown): void {
@@ -473,16 +432,16 @@ export class CodexDaemonClient implements CodexDaemonWatch {
       for (const [approvalId, entry] of this.approvals) {
         if (entry.requestKey !== key || (threadId && entry.threadId !== threadId)) continue
         this.approvals.delete(approvalId)
-        if (this.resumed.has(entry.threadId) || this.confirming.has(entry.threadId)) this.settled.set(entry.threadId, this.now())
+        if (this.resumed.has(entry.threadId)) this.settled.set(entry.threadId, this.now())
       }
     } else if (m.method === 'item/started') {
       const threadId = params?.threadId
       const item = params?.item as Record<string, unknown> | undefined
-      if (typeof threadId === 'string' && (this.resumed.has(threadId) || this.resuming.has(threadId) || this.confirming.has(threadId)) && item?.type === 'fileChange' && typeof item.id === 'string') this.items.set(`${threadId}\n${item.id}`, { item, turnId: params?.turnId })
+      if (typeof threadId === 'string' && (this.resumed.has(threadId) || this.resuming.has(threadId)) && item?.type === 'fileChange' && typeof item.id === 'string') this.items.set(`${threadId}\n${item.id}`, { item, turnId: params?.turnId })
     } else if (m.method === 'turn/started') {
       const threadId = params?.threadId
       const turnId = (params?.turn as { id?: unknown } | undefined)?.id
-      if (typeof threadId === 'string' && typeof turnId === 'string' && (this.resumed.has(threadId) || this.confirming.has(threadId))) this.turnNow.set(threadId, turnId)
+      if (typeof threadId === 'string' && typeof turnId === 'string' && (this.resumed.has(threadId) || this.resuming.has(threadId))) this.turnNow.set(threadId, turnId)
     } else if (m.method === 'turn/completed') {
       const threadId = params?.threadId
       if (typeof threadId === 'string') this.forgetTurn(threadId, (params?.turn as { id?: unknown } | undefined)?.id)
@@ -492,8 +451,10 @@ export class CodexDaemonClient implements CodexDaemonWatch {
         this.forgetTurn(threadId, undefined)
         this.resumed.delete(threadId)
         this.resuming.delete(threadId)
-        this.confirming.delete(threadId)
         this.turnNow.delete(threadId)
+        // 閉じたスレッドの「待ち」を残さない（並んでいた確かめが、閉じたスレッドに resume を送らないように）
+        this.states.delete(threadId)
+        this.settled.delete(threadId)
       }
     }
   }

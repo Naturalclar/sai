@@ -76,11 +76,6 @@ class FakeDaemon implements CodexDaemonWatch {
     this.resumed.set(threadId, entity)
     return true
   }
-  released: string[] = []
-  release(threadId: string) {
-    this.released.push(threadId)
-    this.resumed.delete(threadId)
-  }
   snapshot(): ApprovalMap {
     const out: ApprovalMap = {}
     for (const a of this.pending.values()) (out[a.id] ??= []).push(a)
@@ -181,16 +176,14 @@ test('待ちになったスレッドは .codex/ の確かめを通してから r
   await wait(() => configChecked.length === 1)
   await new Promise((r) => setTimeout(r, 20))
   assert.deepEqual(daemon.resumeCalls, [], '確かめで止まったら resume しない')
-  assert.deepEqual(daemon.released, ['X2'], '受けるのをやめる（resume 済みでも、確かめ直しが通らなければ）')
   assert.equal(configChecked[0], work)
 
   configAsk = null
   daemon.listener!('NOPE')
   daemon.listener!('R1')
   await new Promise((r) => setTimeout(r, 30))
-  await wait(() => daemon.released.length === 3)
+  await new Promise((r) => setTimeout(r, 30))
   assert.deepEqual(daemon.resumeCalls, [], '行の無いスレッド・別のマシンのセッションは resume しない')
-  assert.deepEqual(daemon.released, ['X2', 'NOPE', 'R1'])
   assert.equal(configChecked.length, 1, '確かめにも行かない')
 
   daemon.listener!('X1')
@@ -198,12 +191,12 @@ test('待ちになったスレッドは .codex/ の確かめを通してから r
   daemon.resumed.clear()
   assert.deepEqual(daemon.resumeCalls, ['X1=X1@r'])
   assert.equal(configChecked.length, 2, 'resume の前に確かめる')
-  // 確かめが投げたら、受けない側に倒す
+  // 確かめが投げたら resume しない（画面の読み取りのまま）
   const check = codexConfig.check
   codexConfig.check = async () => { throw new Error('boom') }
-  daemon.listener!('X1')
-  await wait(() => daemon.released.length === 4)
-  assert.equal(daemon.released.at(-1), 'X1')
+  daemon.listener!('X2')
+  await new Promise((r) => setTimeout(r, 30))
+  assert.deepEqual(daemon.resumeCalls, ['X1=X1@r'])
   codexConfig.check = check
 })
 

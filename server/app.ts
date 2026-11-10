@@ -1389,7 +1389,7 @@ export function createApp(
    * `.codex/` の確かめ（`codexConfigStop()`）が通ったときだけ** `thread/resume` する。どれかが分からなければ resume せず、
    * 今までどおり端末の画面の読み取り（`CodexDialogs`）が出す。答えるのは人が画面で押したときだけ（自動では答えない）
    */
-  // 待ちになるたびに呼ばれる（resume 済みのスレッドも）。そのたびに確かめ直し、通らなければ SAI の中だけで受けるのをやめる
+  // まだ resume していないスレッドが待ちになったときに呼ばれる。resume したら、その接続の間は受け続ける（待ちのたびには確かめ直さない）
   const daemonResume = async (threadId: string): Promise<void> => {
     if (!codexDaemon?.resume) return
     const { sessions } = await store.sessions(90).catch(() => ({ sessions: [] as SessionSummary[] }))
@@ -1399,16 +1399,15 @@ export function createApp(
       // SAI 自身の app-server が持っているスレッドは、そちらで受けている
       && !(codexAppEnabled && (codexApp.holds?.(threadId) ?? false))
       && !(await codexConfigStop(s!.id, s!.cwd))
-    if (!ok) return codexDaemon.release?.(threadId)
+    if (!ok) return
     await codexDaemon.resume(threadId, s!.id)
   }
-  // 同じスレッドの確かめは順に回す（後の結果が先の結果を上書きする。並ぶと、通らなかった確かめのあとに通った分が受けてしまう）。
-  // 確かめが投げたら受けない側に倒す（確かめ直しの途中のまま止めない）
+  // 同じスレッドの確かめは順に回す（並べて回さない）。確かめが投げたら resume しない（画面の読み取りのまま）
   const daemonChecks = new Map<string, Promise<void>>()
   codexDaemon?.onWaiting?.((threadId) => {
     const check = (daemonChecks.get(threadId) ?? Promise.resolve())
       .then(() => daemonResume(threadId))
-      .catch(() => codexDaemon.release?.(threadId))
+      .catch(() => {})
       .finally(() => { if (daemonChecks.get(threadId) === check) daemonChecks.delete(threadId) })
     daemonChecks.set(threadId, check)
   })

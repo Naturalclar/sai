@@ -159,13 +159,15 @@ Codex は起動する cwd からリポジトリの一番上までの `.codex/` �
 ### 許可・質問を daemon で受ける（#848 の 3）
 
 - 同じ入切（`codex_daemon`）の下。切なら繋がないので、resume も預かりも起きない。
-- **resume するのは待ちになったスレッドだけ**: `thread/status/changed`（と繋いだときの `thread/list`）で `waiting` になるたびに、`onWaiting` で `app.ts` に知らせる。**resume 済みのスレッドも知らせ、確かめ直すまでは届いた許可を画面に出さない**（`confirming`。最初の待ちの確かめだけで、接続の間ずっと受けない）。状態の通知より先に要求が届くこともあるので、resume 済みのスレッドに要求が届いたときも確かめ直しに回す。確かめ直すのは 1 つの待ちに 1 回（`confirmedWait`。待ちを抜けたら外す）。確かめ直しの間は `settling()` にも出し、画面の文字の写しも出さない。確かめ直しの間に押された答えは、消さずに `409` で断る。`app.ts` は同じスレッドの確かめを順に回し、確かめが投げたら `release()` する。`app.ts` の `daemonResume()` は、**行のあるローカルの Codex のセッション（同じスレッドの行が別のリポジトリにもあれば一番新しいもの）で、SAI 自身の app-server が持っていない（`codexApp.holds()`）スレッドを、`codexConfigStop()` が通ったときだけ** `resume(threadId, エンティティ)` する（新しく resume するのは、そのときも待っているスレッドだけ。resume 済みなら `thread/resume` は送り直さず、エンティティが変わっていれば預かっている分も移す）。通らなければ `release()` で SAI の中だけで受けるのをやめる（投げかけの resume も取り消す。daemon には何も送らない。`thread/unsubscribe` は無い）。どれかが分からなければ resume せず、今までどおり端末の画面の読み取りが出す（行の無い最初のターンもそちら）。
+- **resume するのは待ちになったスレッドだけ**: `thread/status/changed`（と繋いだときの `thread/list`）で `waiting` になったスレッドを、この接続でまだ resume していなければ `onWaiting` で `app.ts` に知らせる。`app.ts` の `daemonResume()` は、**行のあるローカルの Codex のセッション（同じスレッドの行が別のリポジトリにもあれば一番新しいもの）で、SAI 自身の app-server が持っていない（`codexApp.holds()`）スレッドを、`codexConfigStop()` が通ったときだけ** `resume(threadId, エンティティ)` する。同じスレッドの確かめは順に回し、確かめが投げたら resume しない。どれかが分からなければ resume せず、今までどおり端末の画面の読み取りが出す（行の無い最初のターンもそちら）。
+- 新しく resume するのは、そのときも待っているスレッドだけ（確かめの間に TUI で答えられた・閉じたスレッドは起こさない。`thread/closed` で状態も捨てる）。
+- **resume したら、その接続の間は受け続ける**（待ちのたびには確かめ直さない。エンティティも最初のまま）。繋ぎ直したら resume からやり直すので、そのときにまた確かめる。待ちのたびに確かめ直す形は、確かめの途中の状態どうしの競り合いがレビューのたびに見つかったのでやめた（[history](../history/codex.md#共有の-app-server-を読むだけで見る848)）。
 - `thread/resume` に渡すのは `threadId` と `excludeTurns: true` だけ（cwd・model・許可の向きは渡さない。TUI が開いているスレッドの設定を変えない）。
 - **預かるのは resume したスレッドの `DAEMON_ANSWERABLE`（コマンドの許可・ファイル変更の許可・質問）だけ**。許可の形は SAI 自身の app-server と同じ `buildCodexApproval()`（`server/reply/codexApproval.ts`）で組み、答えも同じ `codexAnswerResult()` で出した候補・出した質問の答えだけを通す。追加の権限・MCP の問い合わせなどほかの要求と、押せる候補が 1 つも残らない許可（`answerable: false`）は預からない（画面の読み取りなら答えられることがある）。**どの要求にも自分からは答えない**（エラーも返さない。返すと TUI のダイアログまで閉じる）。
 - resume の応答より先に届いた要求も預かる（許可の途中で resume すると先に届きうる）が、画面に出すのは resume が通ってから。通らなければ捨てる。
 - TUI にも同じダイアログが出ていて、先に答えた方が効く。どこで答えても `serverRequest/resolved` が届くので畳む。`turn/completed`・`thread/closed` でもそのターン・スレッドの分を捨てる（resume の応答を待つ間に閉じたスレッドは、受けるスレッドにしない）。切れたら resume・預かりを全部忘れる（daemon を立て直すと読み込み済みのスレッドは消える）。
 - **daemon が許可・質問を預かっている間だけ、そのスレッドのセッションを端末の画面の読み取り（`CodexDialogs`）に渡さない**（`approvalsNow()`。同じスレッドの行が別のリポジトリにもあればそちらも。締切に間に合わず前の走査を使うときも落とす）。畳んだあと `DAEMON_SETTLE_MS`（5 秒）の間（`settling()`）も外したままにする（TUI のダイアログが閉じる前に、同じ許可を画面の文字から出し直さない）。確かめ直しでエンティティが変わったら、そちらに出す。resume していても預かりが無ければ画面の読み取りのままなので、daemon で受けない種類のダイアログ（追加の権限など）はこれまでどおり出る。
-- `turn/started` と届いた要求の `turnId` からいまのターンを覚え、前のターンの許可には答えない（`409`。SAI 自身の app-server と同じ）。
+- いまのターンは `turn/started` から覚える（まだ届いていなければ最初に届いた要求の `turnId`。遅れて届いた古いターンの要求では巻き戻さない）。前のターンの許可には答えない（`409`。SAI 自身の app-server と同じ）。
 - 答えは `POST /api/approvals/<id>/answer`（同一オリジンのみ）。「常に許可」（`remember`）は 400。規則の追加の候補を押したら `codex_kept` の `via: 'daemon'` で記録する。答えたことは `codex-daemon.log` に種類だけ 1 行残す（中身は書かない）。
 - **自動では答えない**: Jev の自動・「読むだけなら今回だけ許可」は Claude の Bash だけが相手なので、daemon で受けた許可には広がらない。
 - **差分の分からないファイル変更の許可は預からない**。差分は要求の `params` に無く、同じ id の `item/started` から引くので、resume のあとに始まった変更だけが分かる。許可の途中で resume したものは中身を見せずに押させないよう、これまでどおり画面の読み取りに任せる。item はターンの単位で捨てる。

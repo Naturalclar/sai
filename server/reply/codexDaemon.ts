@@ -336,7 +336,14 @@ export class CodexDaemonClient implements CodexDaemonWatch {
         reject(new Error(`${method} timed out`))
       }, REQUEST_TIMEOUT_MS)
       this.pending.set(id, { resolve, reject, timer })
-      ws.send(JSON.stringify({ id, method, params }))
+      try {
+        ws.send(JSON.stringify({ id, method, params }))
+      } catch (err) {
+        // 送れなかった要求の待ちを残さない
+        clearTimeout(timer)
+        this.pending.delete(id)
+        reject(err instanceof Error ? err : new Error(String(err)))
+      }
     })
   }
 

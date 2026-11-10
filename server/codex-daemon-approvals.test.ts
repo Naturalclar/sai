@@ -76,8 +76,10 @@ class FakeDaemon implements CodexDaemonWatch {
     this.resumed.set(threadId, entity)
     return true
   }
-  holds(threadId: string) {
-    return this.resumed.has(threadId)
+  released: string[] = []
+  release(threadId: string) {
+    this.released.push(threadId)
+    this.resumed.delete(threadId)
   }
   snapshot(): ApprovalMap {
     const out: ApprovalMap = {}
@@ -179,13 +181,16 @@ test('待ちになったスレッドは .codex/ の確かめを通してから r
   await wait(() => configChecked.length === 1)
   await new Promise((r) => setTimeout(r, 20))
   assert.deepEqual(daemon.resumeCalls, [], '確かめで止まったら resume しない')
+  assert.deepEqual(daemon.released, ['X2'], '受けるのをやめる（resume 済みでも、確かめ直しが通らなければ）')
   assert.equal(configChecked[0], work)
 
   configAsk = null
   daemon.listener!('NOPE')
   daemon.listener!('R1')
   await new Promise((r) => setTimeout(r, 30))
+  await wait(() => daemon.released.length === 3)
   assert.deepEqual(daemon.resumeCalls, [], '行の無いスレッド・別のマシンのセッションは resume しない')
+  assert.deepEqual(daemon.released, ['X2', 'NOPE', 'R1'])
   assert.equal(configChecked.length, 1, '確かめにも行かない')
 
   daemon.listener!('X1')

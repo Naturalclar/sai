@@ -1164,7 +1164,9 @@ export function createApp(
     const fromDaemon = codexDaemon?.snapshot?.() ?? {}
     const quiet = codexDaemon?.settling?.() ?? new Set<string>()
     for (const s of sessions) if (fromDaemon[s.id] && s.agent === 'codex') quiet.add(sessionOf(s))
-    const daemonOwns = (id: string) => Boolean(fromDaemon[id]) || sessions.some((s) => s.id === id && s.agent === 'codex' && quiet.has(sessionOf(s)))
+    const owned = new Set(Object.keys(fromDaemon))
+    for (const s of sessions) if (s.agent === 'codex' && quiet.has(sessionOf(s))) owned.add(s.id)
+    const daemonOwns = (id: string) => owned.has(id)
     const [dialogs, opencode] = await Promise.all([
       // 締切までに見終わらなければ前回の走査で見えていたダイアログ（#495）
       terminalEnabled ? screenWait(codexDialogs.scan(sessions.filter((s) => !daemonOwns(s.id)), await paneOnlyTargets(sessions)), () => codexDialogs.snapshot?.() ?? {}, codexDialogs.known?.() ?? false) : Promise.resolve({} as ApprovalMap),
@@ -1387,16 +1389,18 @@ export function createApp(
    * `.codex/` の確かめ（`codexConfigStop()`）が通ったときだけ** `thread/resume` する。どれかが分からなければ resume せず、
    * 今までどおり端末の画面の読み取り（`CodexDialogs`）が出す。答えるのは人が画面で押したときだけ（自動では答えない）
    */
+  // 待ちになるたびに呼ばれる（resume 済みのスレッドも）。そのたびに確かめ直し、通らなければ SAI の中だけで受けるのをやめる
   const daemonResume = async (threadId: string): Promise<void> => {
     if (!codexDaemon?.resume) return
     const { sessions } = await store.sessions(90).catch(() => ({ sessions: [] as SessionSummary[] }))
     // 同じスレッドが別のリポジトリの行にもあるときは、一番新しい行のもの（いま動いている cwd）
     const s = sessions.filter((x) => x.agent === 'codex' && sessionOf(x) === threadId).sort((a, b) => b.end.localeCompare(a.end))[0]
-    if (!s?.cwd || isRemoteHost(s.host, selfHost())) return
-    // SAI 自身の app-server が持っているスレッドは、そちらで受けている
-    if (codexAppEnabled && (codexApp.holds?.(threadId) ?? false)) return
-    if (await codexConfigStop(s.id, s.cwd)) return
-    await codexDaemon.resume(threadId, s.id)
+    const ok = Boolean(s?.cwd) && !isRemoteHost(s!.host, selfHost())
+      // SAI 自身の app-server が持っているスレッドは、そちらで受けている
+      && !(codexAppEnabled && (codexApp.holds?.(threadId) ?? false))
+      && !(await codexConfigStop(s!.id, s!.cwd))
+    if (!ok) return codexDaemon.release?.(threadId)
+    await codexDaemon.resume(threadId, s!.id)
   }
   codexDaemon?.onWaiting?.((threadId) => void daemonResume(threadId).catch(() => {}))
   /** daemon の状態と今の判定の食い違いの直前の種類（#848）。変わったときだけ 1 行残す */

@@ -218,7 +218,13 @@ test('待ちを知らせ、resume したスレッドの要求だけを預かる�
   await fake.listen()
   const c = daemonClient({ socketPath: fake.path })
   const told: string[] = []
-  c.onWaiting((id) => told.push(id))
+  // 確かめ直しが通る役（app.ts の代わり）。一度 resume したスレッドは、知らされるたびに通す
+  const passes = new Map<string, string>()
+  c.onWaiting((id) => {
+    told.push(id)
+    const entity = passes.get(id)
+    if (entity) void c.resume(id, entity)
+  })
   c.setEnabled(true)
   await wait(() => c.link() === 'connected' && told.length === 1)
   assert.deepEqual(told, ['W'], '繋ぐ前から待っていたスレッドも知らせる')
@@ -230,6 +236,7 @@ test('待ちを知らせ、resume したスレッドの要求だけを預かる�
   fake.push(cmdRequest(500, 'W'))
   await new Promise((r) => setTimeout(r, 20))
   assert.equal(await c.resume('W', 'W@r'), true)
+  passes.set('W', 'W@r')
   assert.equal(receives(c, 'W'), true)
   const resume = fake.sent.find((m) => m.method === 'thread/resume') as { params?: unknown }
   assert.deepEqual(resume.params, { threadId: 'W', excludeTurns: true }, '上書きは渡さない')
@@ -325,7 +332,10 @@ test('resume 済みのスレッドも待ちのたびに知らせ、確かめ直�
   await fake.listen()
   const c = daemonClient({ socketPath: fake.path })
   const told: string[] = []
-  c.onWaiting((id) => told.push(id))
+  c.onWaiting((id) => {
+    told.push(id)
+    if (id === 'V') void c.resume('V', 'V@r')
+  })
   c.setEnabled(true)
   await wait(() => c.link() === 'connected')
   assert.equal(await c.resume('W', 'W@r'), true)
@@ -364,6 +374,50 @@ test('resume 済みのスレッドも待ちのたびに知らせ、確かめ直�
   await wait(() => (c.snapshot()['V@r'] ?? []).length === 1)
   await new Promise((r) => setTimeout(r, 20))
   assert.equal(c.snapshot()['V@r']!.length, 1)
+  c.stop()
+  await fake.close()
+})
+
+test('確かめ直しの間は押しても消さずに 409。古いターンの許可は断る。投げかけの resume は release で取り消す（#848 の 3 のレビュー）', async () => {
+  const fake = new FakeDaemon(sockPath())
+  await fake.listen()
+  const c = daemonClient({ socketPath: fake.path })
+  let confirm: (() => void) | null = null
+  c.onWaiting((id) => {
+    confirm = () => void c.resume(id, 'W@r')
+  })
+  c.setEnabled(true)
+  await wait(() => c.link() === 'connected')
+  assert.equal(await c.resume('W', 'W@r'), true)
+  fake.push(cmdRequest(961, 'W'))
+  await wait(() => confirm !== null)
+  // 確かめ直しの間は snapshot に出ないので、預かりの中から引く
+  const id = [...(c as unknown as { approvals: Map<string, unknown> }).approvals.keys()][0]!
+  assert.ok(c.getApproval(id), '確かめ直しの間も答える口は引ける')
+  assert.equal((c.answer(id, { behavior: 'allow', decision: 'd0' }) as { status?: number }).status, 409)
+  assert.ok(!fake.sent.some((m) => m.id === 961 && m.method === undefined), '送らない')
+  confirm!()
+  await wait(() => (c.snapshot()['W@r'] ?? []).length === 1)
+  // 新しいターンが始まったら、前のターンの許可には答えない
+  fake.push({ method: 'turn/started', params: { threadId: 'W', turn: { id: 'T2' } } })
+  await new Promise((r) => setTimeout(r, 20))
+  assert.equal((c.answer(id, { behavior: 'allow', decision: 'd0' }) as { status?: number }).status, 409)
+  assert.ok(!fake.sent.some((m) => m.id === 961 && m.method === undefined), '古いターンには送らない')
+
+  // 投げかけの resume は release で取り消す
+  const push = fake.push.bind(fake)
+  let held: unknown = null
+  fake.push = (m) => {
+    const rid = (m as { id?: number }).id
+    if (fake.sent.some((x) => x.id === rid && x.method === 'thread/resume')) held = m
+    else push(m)
+  }
+  const pending = c.resume('V', 'V@r')
+  await wait(() => held !== null)
+  c.release('V')
+  push(held)
+  assert.equal(await pending, false)
+  assert.equal(receives(c, 'V'), false)
   c.stop()
   await fake.close()
 })

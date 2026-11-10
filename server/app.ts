@@ -1402,7 +1402,16 @@ export function createApp(
     if (!ok) return codexDaemon.release?.(threadId)
     await codexDaemon.resume(threadId, s!.id)
   }
-  codexDaemon?.onWaiting?.((threadId) => void daemonResume(threadId).catch(() => {}))
+  // 同じスレッドの確かめは順に回す（後の結果が先の結果を上書きする。並ぶと、通らなかった確かめのあとに通った分が受けてしまう）。
+  // 確かめが投げたら受けない側に倒す（確かめ直しの途中のまま止めない）
+  const daemonChecks = new Map<string, Promise<void>>()
+  codexDaemon?.onWaiting?.((threadId) => {
+    const check = (daemonChecks.get(threadId) ?? Promise.resolve())
+      .then(() => daemonResume(threadId))
+      .catch(() => codexDaemon.release?.(threadId))
+      .finally(() => { if (daemonChecks.get(threadId) === check) daemonChecks.delete(threadId) })
+    daemonChecks.set(threadId, check)
+  })
   /** daemon の状態と今の判定の食い違いの直前の種類（#848）。変わったときだけ 1 行残す */
   const daemonGaps = new Map<string, DaemonGap>()
   const noteDaemonGap = (id: string, known: HoldingWhy | '', seen: DaemonThreadState | undefined): void => {

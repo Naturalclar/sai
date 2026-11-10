@@ -198,6 +198,13 @@ test('待ちになったスレッドは .codex/ の確かめを通してから r
   daemon.resumed.clear()
   assert.deepEqual(daemon.resumeCalls, ['X1=X1@r'])
   assert.equal(configChecked.length, 2, 'resume の前に確かめる')
+  // 確かめが投げたら、受けない側に倒す
+  const check = codexConfig.check
+  codexConfig.check = async () => { throw new Error('boom') }
+  daemon.listener!('X1')
+  await wait(() => daemon.released.length === 4)
+  assert.equal(daemon.released.at(-1), 'X1')
+  codexConfig.check = check
 })
 
 test('daemon が許可を預かっている間だけ端末の画面の読み取りから外し、daemon の許可だけを出す。答えは daemon に渡す（#848 の 3）', async () => {

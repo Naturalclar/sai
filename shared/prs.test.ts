@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { checkState, diffStats, githubRepoOf, isPrNumber, isRepoName, knownRepos, parsePrList, parseRequested, pickKnownRepo, prForSession, prFromGh, prHash, sortPrs } from './prs.ts'
+import { checkState, diffStats, githubRepoOf, isPrNumber, isRepoName, knownRepos, parsePrList, parseRequested, pickKnownRepo, prForHeading, prForSession, prFromGh, prHash, prUrlsIn, REPLY_PRS_MAX, sortPrs } from './prs.ts'
 import type { PrRepo, PrSummary } from './types.ts'
 
 test('isRepoName: owner/repo だけを通し、フラグや .. や空白は断る', () => {
@@ -206,3 +206,59 @@ test('prFromGh: fork のブランチから出た PR（isCrossRepository）に cr
   assert.equal(prFromGh({ number: 1, isCrossRepository: true })?.cross, true)
   assert.equal(prFromGh({ number: 1, isCrossRepository: false })?.cross, undefined)
 })
+
+test('prUrlsIn: 本文の PR の URL を出てきた順・重複なしで拾う。形の違うものは拾わない（#888）', () => {
+  const text = [
+    'PR を出しました: https://github.com/owner-a/repo-a/pull/12',
+    '前の https://github.com/Owner-A/Repo-A/pull/12 と同じ。別のは <https://github.com/owner-b/repo-b/pull/3>。',
+    'issue は https://github.com/owner-a/repo-a/issues/5、番号の無い https://github.com/owner-a/repo-a/pull/、0 番 https://github.com/owner-a/repo-a/pull/0',
+    'ほかのホスト https://gitlab.com/owner-a/repo-a/pull/7、続きの付いた https://github.com/owner-a/repo-a/pull/8/files',
+  ].join('\n')
+  assert.deepEqual(prUrlsIn(text), [
+    { repo: 'owner-a/repo-a', number: 12 },
+    { repo: 'owner-b/repo-b', number: 3 },
+    { repo: 'owner-a/repo-a', number: 8 },
+  ])
+  assert.deepEqual(prUrlsIn(''), [])
+  const many = Array.from({ length: REPLY_PRS_MAX + 3 }, (_, i) => `https://github.com/owner-a/repo-a/pull/${i + 1}`).join(' ')
+  assert.equal(prUrlsIn(many).length, REPLY_PRS_MAX, '上限で止める')
+})
+
+test('セッションの PR: リモートとブランチで結べなければ、返答に出てきた PR の URL から一覧にあるものだけ結ぶ（#888）', () => {
+  const open = (number: number, head: string): PrSummary => ({
+    number, title: `t${number}`, author: 'me', head, base: 'main', draft: false, updated_at: '2026-09-30T00:00:00Z', url: '', additions: 0,
+    deletions: 0, changed_files: 0, review_decision: '', checks: '', requested: false,
+  })
+  const repos: PrRepo[] = [
+    { repo: 'owner-a/repo-a', prs: [open(21, 'feat-x'), open(22, 'feat-y')] },
+    { repo: 'owner-b/repo-b', prs: [open(31, 'feat-z')] },
+  ]
+  // リモートが空・ブランチは外側の main（作業ディレクトリと PR のリポジトリが別の場所）
+  const outer = { remote: '', branch: 'main' }
+  assert.deepEqual(prForSession({ ...outer, reply_prs: [{ repo: 'OWNER-A/repo-a', number: 22 }] }, repos), { repo: 'owner-a/repo-a', pr: repos[0]!.prs[1] })
+  // 一覧に無いリポジトリ・一覧に無い番号は結ばない
+  assert.equal(prForSession({ ...outer, reply_prs: [{ repo: 'owner-c/repo-c', number: 22 }] }, repos), null)
+  assert.equal(prForSession({ ...outer, reply_prs: [{ repo: 'owner-a/repo-a', number: 99 }] }, repos), null)
+  assert.equal(prForSession(outer, repos), null, 'URL が無ければ今までどおり結ばない')
+  // 1 つの返答に複数あれば、あとに出てきた方（一覧に無いものは飛ばす）
+  assert.equal(prForSession({ ...outer, reply_prs: [{ repo: 'owner-a/repo-a', number: 21 }, { repo: 'owner-b/repo-b', number: 31 }, { repo: 'owner-a/repo-a', number: 99 }] }, repos)?.pr.number, 31)
+  // リモートとブランチで結べるときはそちらが先（URL は見ない）
+  const matched = prForSession({ remote: 'https://github.com/owner-a/repo-a', branch: 'feat-x', reply_prs: [{ repo: 'owner-b/repo-b', number: 31 }] }, repos)
+  assert.equal(matched?.pr.number, 21)
+})
+
+test('フィードの見出しの PR: 見出しのブランチで引き、返答の URL はリモートの無いセッションだけ（#888 / #889 のレビュー）', () => {
+  const open = (number: number, head: string): PrSummary => ({
+    number, title: `t${number}`, author: 'me', head, base: 'main', draft: false, updated_at: '2026-09-30T00:00:00Z', url: '', additions: 0,
+    deletions: 0, changed_files: 0, review_decision: '', checks: '', requested: false,
+  })
+  const repos: PrRepo[] = [{ repo: 'owner-a/repo-a', prs: [open(7, 'feat-new')] }]
+  const reply_prs = [{ repo: 'owner-a/repo-a', number: 7 }]
+  const withRemote = { remote: 'https://github.com/owner-a/repo-a', reply_prs }
+  assert.equal(prForHeading(withRemote, 'feat-new', repos)?.pr.number, 7, '見出しのブランチで結べる')
+  assert.equal(prForHeading(withRemote, 'feat-old', repos), null, 'リモートのあるセッションの前のブランチの見出しに、いまの PR を付けない')
+  assert.equal(prForHeading(withRemote, 'main', repos), null)
+  assert.equal(prForHeading({ remote: '', reply_prs }, 'main', repos)?.pr.number, 7, 'リモートが無ければ返答の URL から')
+  assert.equal(prForHeading({ remote: '' }, 'main', repos), null)
+})
+

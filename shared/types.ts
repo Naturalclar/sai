@@ -176,6 +176,12 @@ export interface AgentReplyTag {
 }
 
 /** 行をセッション単位にまとめたもの。GET /api/sessions の1件 */
+/** PR の名指し（#888。`owner/repo` と番号） */
+export interface PrRef {
+  repo: string
+  number: number
+}
+
 export interface SessionSummary {
   id: string
   start: string
@@ -270,6 +276,12 @@ export interface SessionSummary {
   last_user_text?: string
   /** その行の ts。ターン完了の行に載っている入力なら `last_turn_ts` と同じになる */
   last_user_ts?: string
+  /**
+   * 返答に出てきた GitHub の PR（#888）。PR の URL が出てきた一番新しい返答（ターン完了の行の `text`）の分だけ、出てきた順・重複なし。
+   * 人の入力（`user_text`）は見ない。リモートとブランチで結べないセッション（作業ディレクトリと PR のリポジトリが別の場所）に
+   * PR の印を出すために `prForSession()` が使う。無ければ省略
+   */
+  reply_prs?: PrRef[]
   /** 一番新しいターン完了の行のモデル。無ければ空。途中で変わった全部は models に（出てきた順） */
   model: string
   models: string[]

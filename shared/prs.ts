@@ -221,6 +221,16 @@ export function prForSession(session: { remote?: string; branch?: string; reply_
   return prByBranch(session, repos) ?? prByReply(session.reply_prs, repos)
 }
 
+/**
+ * フィードの見出しの PR（#554 / #888）。**見出しのブランチ（その発言を書いたときのもの）で引く**。返答の URL の道（いまの `reply_prs`）を
+ * 使うのは、**セッションに GitHub のリモートが無いとき**だけ（リモートのあるセッションでは、ブランチを移る前の発言にいまの PR を付けない。
+ * #889 のレビュー）
+ */
+export function prForHeading(session: { remote?: string; reply_prs?: readonly PrRef[] }, branch: string, repos: readonly PrRepo[]): { repo: string; pr: PrSummary } | null {
+  const viaReply = !githubRepoOf(session.remote) && session.reply_prs ? { reply_prs: session.reply_prs } : {}
+  return prForSession({ remote: session.remote ?? '', branch, ...viaReply }, repos)
+}
+
 function prByBranch(session: { remote?: string; branch?: string }, repos: readonly PrRepo[]): { repo: string; pr: PrSummary } | null {
   const repo = githubRepoOf(session.remote)
   const branch = session.branch ?? ''

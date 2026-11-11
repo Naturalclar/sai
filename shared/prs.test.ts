@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { checkState, diffStats, githubRepoOf, isPrNumber, isRepoName, knownRepos, parsePrList, parseRequested, pickKnownRepo, prForSession, prFromGh, prHash, prUrlsIn, REPLY_PRS_MAX, sortPrs } from './prs.ts'
+import { checkState, diffStats, githubRepoOf, isPrNumber, isRepoName, knownRepos, parsePrList, parseRequested, pickKnownRepo, prForHeading, prForSession, prFromGh, prHash, prUrlsIn, REPLY_PRS_MAX, sortPrs } from './prs.ts'
 import type { PrRepo, PrSummary } from './types.ts'
 
 test('isRepoName: owner/repo だけを通し、フラグや .. や空白は断る', () => {
@@ -245,5 +245,20 @@ test('セッションの PR: リモートとブランチで結べなければ、
   // リモートとブランチで結べるときはそちらが先（URL は見ない）
   const matched = prForSession({ remote: 'https://github.com/owner-a/repo-a', branch: 'feat-x', reply_prs: [{ repo: 'owner-b/repo-b', number: 31 }] }, repos)
   assert.equal(matched?.pr.number, 21)
+})
+
+test('フィードの見出しの PR: 見出しのブランチで引き、返答の URL はリモートの無いセッションだけ（#888 / #889 のレビュー）', () => {
+  const open = (number: number, head: string): PrSummary => ({
+    number, title: `t${number}`, author: 'me', head, base: 'main', draft: false, updated_at: '2026-09-30T00:00:00Z', url: '', additions: 0,
+    deletions: 0, changed_files: 0, review_decision: '', checks: '', requested: false,
+  })
+  const repos: PrRepo[] = [{ repo: 'owner-a/repo-a', prs: [open(7, 'feat-new')] }]
+  const reply_prs = [{ repo: 'owner-a/repo-a', number: 7 }]
+  const withRemote = { remote: 'https://github.com/owner-a/repo-a', reply_prs }
+  assert.equal(prForHeading(withRemote, 'feat-new', repos)?.pr.number, 7, '見出しのブランチで結べる')
+  assert.equal(prForHeading(withRemote, 'feat-old', repos), null, 'リモートのあるセッションの前のブランチの見出しに、いまの PR を付けない')
+  assert.equal(prForHeading(withRemote, 'main', repos), null)
+  assert.equal(prForHeading({ remote: '', reply_prs }, 'main', repos)?.pr.number, 7, 'リモートが無ければ返答の URL から')
+  assert.equal(prForHeading({ remote: '' }, 'main', repos), null)
 })
 

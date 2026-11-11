@@ -21,7 +21,7 @@ import { Message } from './Message'
 import { SessionEndLine } from './SessionEndLine'
 import { UnreadLine } from './UnreadLine'
 import { SessionPrLink } from './SessionPrLink'
-import { prForSession } from '../../shared/prs.ts'
+import { prForHeading } from '../../shared/prs.ts'
 import type { PrRepo } from '../../shared/types.ts'
 import { firstUnreadKey } from './unreadMarks.ts'
 import { JumpToBottom } from './JumpToBottom'
@@ -140,7 +140,7 @@ interface Props {
  * 一覧に居ない・PR が無ければ何も出さない
  */
 function prLinkOf(session: SessionSummary | undefined, branch: string, prs: readonly PrRepo[]) {
-  const hit = session ? prForSession({ remote: session.remote, branch, ...(session.reply_prs ? { reply_prs: session.reply_prs } : {}) }, prs) : null
+  const hit = session ? prForHeading(session, branch, prs) : null
   return hit ? <SessionPrLink repo={hit.repo} pr={hit.pr} /> : null
 }
 

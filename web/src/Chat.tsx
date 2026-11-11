@@ -140,7 +140,7 @@ interface Props {
  * 一覧に居ない・PR が無ければ何も出さない
  */
 function prLinkOf(session: SessionSummary | undefined, branch: string, prs: readonly PrRepo[]) {
-  const hit = session ? prForSession({ remote: session.remote, branch }, prs) : null
+  const hit = session ? prForSession({ remote: session.remote, branch, ...(session.reply_prs ? { reply_prs: session.reply_prs } : {}) }, prs) : null
   return hit ? <SessionPrLink repo={hit.repo} pr={hit.pr} /> : null
 }
 

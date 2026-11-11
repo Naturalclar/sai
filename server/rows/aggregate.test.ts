@@ -409,3 +409,22 @@ test('入力が自動の要約の文になっている行は、題名にも last
   assert.equal(s!.last_user_ts, t0.toISOString().replace(/\.\d{3}Z$/, '+00:00'), '入力した瞬間の行のもの')
   assert.equal(s!.last_text, '追加しました')
 })
+
+test('reply_prs: PR の URL が出てきた一番新しい返答の分だけ。人の入力と待ちの行は見ない（#888）', () => {
+  const t0 = new Date('2026-09-10T03:00:00Z')
+  const at = (m: number) => new Date(t0.getTime() + min(m))
+  const [s] = aggregate([
+    row(at(0), 's1', { text: '出しました https://github.com/owner-a/repo-a/pull/1' }),
+    row(at(1), 's1', { text: '直しました https://github.com/owner-a/repo-a/pull/2 と https://github.com/owner-b/repo-b/pull/3' }),
+    row(at(2), 's1', { text: 'CI を待っています' }),
+    row(at(3), 's1', { event: 'UserPromptSubmit', user_text: 'https://github.com/owner-c/repo-c/pull/9 も見て', text: '' }),
+    row(at(4), 's1', { event: 'PermissionRequest', user_text: '', text: '許可待ち: Bash: gh pr view https://github.com/owner-c/repo-c/pull/8' }),
+  ])
+  assert.deepEqual(s!.reply_prs, [
+    { repo: 'owner-a/repo-a', number: 2 },
+    { repo: 'owner-b/repo-b', number: 3 },
+  ])
+  const [none] = aggregate([row(at(0), 's2', { user_text: 'https://github.com/owner-a/repo-a/pull/1 を見て', text: '見ました' })])
+  assert.equal('reply_prs' in none!, false, '人の入力にだけ URL があれば載せない')
+})
+

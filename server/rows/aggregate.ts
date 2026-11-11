@@ -5,7 +5,8 @@ import { matchesProjects } from '../../shared/projectFilter.ts'
 import { eventKind } from '../../shared/events.ts'
 import { isCompactSummaryText } from '../../shared/compactSummary.ts'
 import { isHandedOnly, splitHandedReplies } from '../../shared/agentMessages.ts'
-import type { Agent, Facets, FeedRow, SessionSource, SessionSummary } from '../../shared/types.ts'
+import { prUrlsIn } from '../../shared/prs.ts'
+import type { Agent, Facets, FeedRow, PrRef, SessionSource, SessionSummary } from '../../shared/types.ts'
 
 export { entityId, localDate, TIME_ZONE } from '../../shared/entity.ts'
 
@@ -129,6 +130,9 @@ export function aggregate(rows: FeedRow[]): SessionSummary[] {
     const lastModelRow = [...turnRows].reverse().find((r) => r.model?.trim())
     // 許可モードは待ちや再開の行にも載る（フックのペイロード）。一番新しい、値のある行のもの
     const lastModeRow = [...items].reverse().find((r) => r.permission_mode?.trim())
+    // 返答に出てきた PR（#888）。URL が出てきた一番新しい返答の分だけ（人の入力は見ない）
+    let replyPrs: PrRef[] = []
+    for (let i = turnRows.length - 1; i >= 0 && replyPrs.length === 0; i--) replyPrs = prUrlsIn(turnRows[i]!.text ?? '')
 
     sessions.push({
       id,
@@ -168,6 +172,7 @@ export function aggregate(rows: FeedRow[]): SessionSummary[] {
       model: lastModelRow?.model?.trim() ?? '',
       models,
       permission_mode: lastModeRow?.permission_mode?.trim() ?? '',
+      ...(replyPrs.length > 0 ? { reply_prs: replyPrs } : {}),
     })
   }
   sessions.sort((a, b) => (a.end < b.end ? 1 : a.end > b.end ? -1 : 0))

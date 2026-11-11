@@ -5,7 +5,7 @@
 import { parseUnifiedDiff } from './diff.ts'
 import { normalizeRemote, projectFromRemote, remoteHost } from './project.ts'
 import { reviewDecisionOf } from './prReviewState.ts'
-import type { DiffFileStat, PrCheckState, PrRepo, PrSummary } from './types.ts'
+import type { DiffFileStat, PrCheckState, PrRef, PrRepo, PrSummary } from './types.ts'
 import type { PrCi } from './waits.ts'
 
 /** `owner/repo` の形か。`gh --repo` に渡すので、フラグに化けるもの（先頭の `-`）や空白・`..` は通さない */
@@ -16,6 +16,28 @@ export function isRepoName(repo: string): boolean {
 /** PR 番号として受けてよい形か（数字だけ。0 と桁の多すぎるものは断る） */
 export function isPrNumber(n: string): boolean {
   return /^[1-9][0-9]{0,8}$/.test(n)
+}
+
+/** 1 つの返答から拾う PR の数の上限（#888） */
+export const REPLY_PRS_MAX = 10
+
+/**
+ * 本文に出てきた GitHub の PR の URL（`https://github.com/<owner>/<repo>/pull/<番号>`。#888）。出てきた順・重複なし（大文字小文字を見ない）。
+ * 拾うのは URL の形だけ。名前と番号は `isRepoName()` / `isPrNumber()` を通ったものだけ
+ */
+export function prUrlsIn(text: string): PrRef[] {
+  const out: PrRef[] = []
+  const seen = new Set<string>()
+  for (const m of (text ?? '').matchAll(/https?:\/\/(?:www\.)?github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/pull\/([0-9]+)(?![0-9])/gi)) {
+    const [, repo = '', n = ''] = m
+    if (!isRepoName(repo) || !isPrNumber(n)) continue
+    const key = `${repo.toLowerCase()}#${n}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push({ repo, number: Number(n) })
+    if (out.length >= REPLY_PRS_MAX) break
+  }
+  return out
 }
 
 /**
@@ -190,8 +212,16 @@ export function prHash(repo: string, number: number): string {
  * **fork のブランチから出た PR（`cross`）は結ばない**（`head` はブランチ名だけなので、同じ名前の他人のブランチを拾う）。
  * 既定のブランチ（PR の base と同じ名前。`main` など）にいるセッションも結ばない。
  * 同じブランチに 2 本あれば新しく動いた方。リポジトリ名は大文字小文字を見ない（`knownRepos()` と同じ）
+ *
+ * **リモートとブランチで結べなければ、返答に出てきた PR の URL から結ぶ**（#888。`reply_prs`）。作業ディレクトリと PR のリポジトリが
+ * 別の場所にあるセッション（リモートの無いフォルダの中に置いたクローンで PR を作る形）のため。結ぶのは**一覧（記録で知っている
+ * リポジトリの open な PR）にあるものだけ**で、無ければ結ばない（`gh` に聞きに行かない）。1 つの返答に複数あれば、あとに出てきた方
  */
-export function prForSession(session: { remote?: string; branch?: string }, repos: readonly PrRepo[]): { repo: string; pr: PrSummary } | null {
+export function prForSession(session: { remote?: string; branch?: string; reply_prs?: readonly PrRef[] }, repos: readonly PrRepo[]): { repo: string; pr: PrSummary } | null {
+  return prByBranch(session, repos) ?? prByReply(session.reply_prs, repos)
+}
+
+function prByBranch(session: { remote?: string; branch?: string }, repos: readonly PrRepo[]): { repo: string; pr: PrSummary } | null {
   const repo = githubRepoOf(session.remote)
   const branch = session.branch ?? ''
   if (!repo || !branch) return null
@@ -201,4 +231,15 @@ export function prForSession(session: { remote?: string; branch?: string }, repo
   if (hits.length === 0) return null
   const pr = hits.reduce((a, b) => (b.updated_at > a.updated_at ? b : a))
   return { repo: found.repo, pr }
+}
+
+function prByReply(refs: readonly PrRef[] | undefined, repos: readonly PrRepo[]): { repo: string; pr: PrSummary } | null {
+  if (!refs) return null
+  for (let i = refs.length - 1; i >= 0; i--) {
+    const ref = refs[i]!
+    const found = repos.find((r) => r.repo.toLowerCase() === ref.repo.toLowerCase())
+    const pr = found?.prs.find((p) => p.number === ref.number)
+    if (found && pr) return { repo: found.repo, pr }
+  }
+  return null
 }

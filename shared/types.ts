@@ -277,9 +277,9 @@ export interface SessionSummary {
   /** その行の ts。ターン完了の行に載っている入力なら `last_turn_ts` と同じになる */
   last_user_ts?: string
   /**
-   * 返答に出てきた GitHub の PR（#888）。PR の URL が出てきた一番新しい返答（ターン完了の行の `text`）の分だけ、出てきた順・重複なし。
-   * 人の入力（`user_text`）は見ない。リモートとブランチで結べないセッション（作業ディレクトリと PR のリポジトリが別の場所）に
-   * PR の印を出すために `prForSession()` が使う。無ければ省略
+   * 返答に出てきた GitHub の PR（#888 / #890）。全部の返答（ターン完了の行の `text`）の PR の URL と素の `PR #N` / `#N`（その行の
+   * GitHub のリモートの番号として読む）を、あとに出てきた順・重複なしで、新しい方から 30 件（`REPLY_PRS_MAX`）。issue の番号も混ざる。
+   * 人の入力（`user_text`）は見ない。PR の印を決めるために `prForSession()` が使う。無ければ省略
    */
   reply_prs?: PrRef[]
   /** 一番新しいターン完了の行のモデル。無ければ空。途中で変わった全部は models に（出てきた順） */

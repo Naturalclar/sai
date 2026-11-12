@@ -5,12 +5,27 @@ import { matchesProjects } from '../../shared/projectFilter.ts'
 import { eventKind } from '../../shared/events.ts'
 import { isCompactSummaryText } from '../../shared/compactSummary.ts'
 import { isHandedOnly, splitHandedReplies } from '../../shared/agentMessages.ts'
-import { prUrlsIn } from '../../shared/prs.ts'
+import { githubRepoOf, prRefsIn, REPLY_PRS_MAX } from '../../shared/prs.ts'
 import type { Agent, Facets, FeedRow, PrRef, SessionSource, SessionSummary } from '../../shared/types.ts'
 
 export { entityId, localDate, TIME_ZONE } from '../../shared/entity.ts'
 
 export const TITLE_LEN = 60
+
+/**
+ * 行の返答に出てきた PR（#890）。行のオブジェクトで覚える（store は変わっていないファイルの行を使い回すので、
+ * 集計のたびに全部の返答を正規表現にかけ直さない）。素の `#N` はその行のリモートで読むので、行だけで決まる
+ */
+const prRefsByRow = new WeakMap<FeedRow, PrRef[]>()
+function rowPrRefs(r: FeedRow): PrRef[] {
+  let refs = prRefsByRow.get(r)
+  if (!refs) {
+    const text = r.text ?? ''
+    refs = text.includes('#') || text.includes('/pull/') ? prRefsIn(text, githubRepoOf(r.remote)) : []
+    prRefsByRow.set(r, refs)
+  }
+  return refs
+}
 export const TITLE_FULL_LEN = 300
 
 /** 今日（Asia/Tokyo）から days 日ぶんの YYYY-MM-DD を新しい順に */
@@ -130,9 +145,17 @@ export function aggregate(rows: FeedRow[]): SessionSummary[] {
     const lastModelRow = [...turnRows].reverse().find((r) => r.model?.trim())
     // 許可モードは待ちや再開の行にも載る（フックのペイロード）。一番新しい、値のある行のもの
     const lastModeRow = [...items].reverse().find((r) => r.permission_mode?.trim())
-    // 返答に出てきた PR（#888）。URL が出てきた一番新しい返答の分だけ（人の入力は見ない）
-    let replyPrs: PrRef[] = []
-    for (let i = turnRows.length - 1; i >= 0 && replyPrs.length === 0; i--) replyPrs = prUrlsIn(turnRows[i]!.text ?? '')
+    // 返答に出てきた PR（#888 / #890）。全部の返答から、あとに出てきた順・重複なしで、新しい方から REPLY_PRS_MAX 件（人の入力は見ない）。
+    // 素の `#N` は、その行のリモートが GitHub のときだけ、そのリポジトリの番号として読む
+    const seenPrs = new Map<string, PrRef>()
+    for (const r of turnRows) {
+      for (const ref of rowPrRefs(r)) {
+        const key = `${ref.repo.toLowerCase()}#${ref.number}`
+        seenPrs.delete(key)
+        seenPrs.set(key, ref)
+      }
+    }
+    const replyPrs = [...seenPrs.values()].slice(-REPLY_PRS_MAX)
 
     sessions.push({
       id,

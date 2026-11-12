@@ -114,7 +114,12 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 ### セッションに PR の印を出す（#548 / #554）
 
 - サイドバーは `SessionPrTag`。結び付けは `shared/prs.ts` の `prForSession()`（remote の `owner/repo` とブランチが PR のリポジトリと `head` に一致。fork から出た PR＝`isCrossRepository` → `PrSummary.cross` と、PR の base と同じブランチのセッションは結ばない。同じブランチに 2 本なら新しく動いた方）。
-- **リモートとブランチで結べなければ、返答に出てきた PR の URL から結ぶ**（#888）。集計（`server/rows/aggregate.ts`）が、PR の URL が出てきた一番新しいターン完了の行の `text` から `shared/prs.ts` の `prUrlsIn()` で拾い、`SessionSummary.reply_prs` に載せる（出てきた順・重複なし・10 件まで。人の入力と待ちの行は見ない）。`prForSession()` はその中で**一覧にある PR だけ**を、あとに出てきた方から選ぶ。一覧に無いリポジトリ・番号は結ばない（`gh` には聞かない）。サイドバー・要対応・フィードとも同じ `prForSession()` を通る（フィードの見出しは `prForHeading()` で、見出しのブランチで引く。`reply_prs` を使うのはセッションに GitHub のリモートが無いときだけ）。
+- **返答に出てきた PR からも結ぶ**（#888 / #890）。集計（`server/rows/aggregate.ts`）が、全部のターン完了の行の `text` から `shared/prs.ts` の `prRefsIn()` で拾い、`SessionSummary.reply_prs` に載せる（あとに出てきた順・重複なし・新しい方から `REPLY_PRS_MAX`＝30 件。人の入力と待ちの行は見ない）。拾うのは PR の URL と、素の `PR #N` / `#N`（その行の `remote` が GitHub のときだけ、そのリポジトリの番号として読む。`owner/repo#N`・URL の中の `#…`・`&#N;` のように前に文字が付いたものは読まない）。素の番号には issue の番号も混ざるが、結ぶのは一覧の open な PR に当たるものだけ。`prForSession()` は返答の中で**一覧にある PR だけ**を、あとに出てきた方から選ぶ。一覧に無いリポジトリ・番号は結ばない（`gh` には聞かない）。
+  - ブランチで結べないときは返答の PR（#888）。
+  - **ブランチで当たった PR が返答に一度も出てこず、返答に一覧の別の PR があれば、そちら**（#890。作業ディレクトリの中の別の worktree で PR を出すセッション・同じ worktree をブランチを切り替えて使うセッションのため）。ブランチの PR が返答に出てきていれば、ブランチの方。
+  - 返答に一覧の PR が無ければブランチの PR（PR の番号を書かないセッションは今までどおり）。
+  - 行ごとの拾い（`rowPrRefs()`）は行のオブジェクトをキーにした `WeakMap` で覚える（store は変わっていないファイルの行を使い回す）。
+  - フィードの見出しでリモートの無いセッションが引く `reply_prs` も全部の返答の分になったので、一番新しい URL の PR が一覧から消えていれば、前の返答のまだ open な PR が付く。サイドバー・要対応・フィードとも同じ `prForSession()` を通る（フィードの見出しは `prForHeading()` で、見出しのブランチで引く。`reply_prs` を使うのはセッションに GitHub のリモートが無いときだけ）。
 - 材料は同じ `GET /api/prs`。`web/src/useSessionPrs.ts` が開いたとき・見えている間の 60 秒おき・タブに戻ったときだけ取る。色と説明は `web/src/sessionPrState.ts`。
 - 印はリンクにしない（項目そのものが `<a>`）。1 行目（リポジトリ / ブランチ）には置かない（長いブランチ名の省略に隠れる）。
 - 要対応の行とフィードの見出しは `SessionPrLink`（同じ見た目で、押すと SAI の PR 画面 `prHash()`）。`App` の `sessionPrs` を `TodoView` → `TodoRow` と `FeedView` → `Chat`（`showChannel` のときだけ）に渡すだけで、取得は増やさない。

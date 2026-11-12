@@ -18,26 +18,37 @@ export function isPrNumber(n: string): boolean {
   return /^[1-9][0-9]{0,8}$/.test(n)
 }
 
-/** 1 つの返答から拾う PR の数の上限（#888） */
-export const REPLY_PRS_MAX = 10
+/** セッションの返答から集める PR の名指しの上限（#888 / #890。あとに出てきたものを残す） */
+export const REPLY_PRS_MAX = 30
 
 /**
- * 本文に出てきた GitHub の PR の URL（`https://github.com/<owner>/<repo>/pull/<番号>`。#888）。出てきた順・重複なし（大文字小文字を見ない）。
- * 拾うのは URL の形だけ。名前と番号は `isRepoName()` / `isPrNumber()` を通ったものだけ
+ * 本文に出てきた PR の名指し（#888 / #890）。あとに出てきた順・重複なし（大文字小文字を見ない。もう一度出てきたものは後ろへ）・
+ * 後ろから `REPLY_PRS_MAX` 件。
+ * - GitHub の PR の URL（`https://github.com/<owner>/<repo>/pull/<番号>`）
+ * - 素の `PR #N` / `#N`。**`repo`（その行のセッションの GitHub のリモート）が空でないときだけ**、そのリポジトリの番号として読む。
+ *   `owner/repo#N`・URL の `#…`・`&#N;` のように前に文字が付いたものは読まない。issue の番号も拾うが、結ぶのは一覧の open な PR に
+ *   当たるものだけなので（`prForSession()`）、番号の取り違えは起きない（GitHub の issue と PR は同じ番号の並び）。
+ *   `PR #N` の形だけに絞るなら、下の `(?:PR\s?)?` を必須にする（#890 の「決めること」1）
+ *
+ * 名前と番号は `isRepoName()` / `isPrNumber()` を通ったものだけ
  */
-export function prUrlsIn(text: string): PrRef[] {
+export function prRefsIn(text: string, repo: string): PrRef[] {
   const out: PrRef[] = []
   const seen = new Set<string>()
-  for (const m of (text ?? '').matchAll(/https?:\/\/(?:www\.)?github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/pull\/([0-9]+)(?![0-9])/gi)) {
-    const [, repo = '', n = ''] = m
-    if (!isRepoName(repo) || !isPrNumber(n)) continue
-    const key = `${repo.toLowerCase()}#${n}`
-    if (seen.has(key)) continue
+  const bareRepo = isRepoName(repo) ? repo : ''
+  const re = /https?:\/\/(?:www\.)?github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/pull\/([0-9]+)(?![0-9])|(?<![A-Za-z0-9_/#&.-])(?:PR\s?)?#([0-9]+)(?![0-9A-Za-z_])/gi
+  for (const m of (text ?? '').matchAll(re)) {
+    const [, urlRepo = '', urlN = '', bareN = ''] = m
+    const ref = urlRepo ? { repo: urlRepo, n: urlN } : { repo: bareRepo, n: bareN }
+    if (!ref.repo || !isRepoName(ref.repo) || !isPrNumber(ref.n)) continue
+    const key = `${ref.repo.toLowerCase()}#${ref.n}`
+    // もう一度出てきたものは後ろへ（あとに出てきた方を優先するので）
+    if (seen.has(key)) out.splice(out.findIndex((p) => `${p.repo.toLowerCase()}#${p.number}` === key), 1)
     seen.add(key)
-    out.push({ repo, number: Number(n) })
-    if (out.length >= REPLY_PRS_MAX) break
+    out.push({ repo: ref.repo, number: Number(ref.n) })
   }
-  return out
+  // 上限は新しい方（後ろ）を残す
+  return out.slice(-REPLY_PRS_MAX)
 }
 
 /**
@@ -213,12 +224,25 @@ export function prHash(repo: string, number: number): string {
  * 既定のブランチ（PR の base と同じ名前。`main` など）にいるセッションも結ばない。
  * 同じブランチに 2 本あれば新しく動いた方。リポジトリ名は大文字小文字を見ない（`knownRepos()` と同じ）
  *
- * **リモートとブランチで結べなければ、返答に出てきた PR の URL から結ぶ**（#888。`reply_prs`）。作業ディレクトリと PR のリポジトリが
- * 別の場所にあるセッション（リモートの無いフォルダの中に置いたクローンで PR を作る形）のため。結ぶのは**一覧（記録で知っている
- * リポジトリの open な PR）にあるものだけ**で、無ければ結ばない（`gh` に聞きに行かない）。1 つの返答に複数あれば、あとに出てきた方
+ * **返答に出てきた PR からも結ぶ**（#888 / #890。`reply_prs`）。結ぶのは**一覧（記録で知っているリポジトリの open な PR）にあるものだけ**で、
+ * 無ければ結ばない（`gh` に聞きに行かない）。返答の中では、あとに出てきた方。
+ * - ブランチで結べないとき（作業ディレクトリと PR のリポジトリが別の場所にあるセッション。#888）は返答の PR。
+ * - **ブランチで当たった PR がそのセッションの返答に一度も出てこず、返答に一覧の別の PR があれば、そちら**（#890）。作業ディレクトリの
+ *   中の別の worktree・別のブランチで PR を出すセッションと、同じ worktree を別のセッションがブランチを切り替えて使う形で、
+ *   記録のブランチ（作業ディレクトリのその時点のもの）がそのセッションの PR を指さないため。
+ * - 返答に一覧の PR が 1 つも無ければ、ブランチの PR（PR の番号を書かないセッションは今までどおり）
  */
 export function prForSession(session: { remote?: string; branch?: string; reply_prs?: readonly PrRef[] }, repos: readonly PrRepo[]): { repo: string; pr: PrSummary } | null {
-  return prByBranch(session, repos) ?? prByReply(session.reply_prs, repos)
+  const byBranch = prByBranch(session, repos)
+  const byReply = prByReply(session.reply_prs, repos)
+  if (!byBranch || !byReply) return byBranch ?? byReply
+  // どちらも当たれば、ブランチの PR が返答に出てきたときだけブランチの方（#890）
+  return mentions(session.reply_prs, byBranch) ? byBranch : byReply
+}
+
+function mentions(refs: readonly PrRef[] | undefined, hit: { repo: string; pr: PrSummary }): boolean {
+  const repo = hit.repo.toLowerCase()
+  return (refs ?? []).some((r) => r.number === hit.pr.number && r.repo.toLowerCase() === repo)
 }
 
 /**

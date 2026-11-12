@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { checkState, diffStats, githubRepoOf, isPrNumber, isRepoName, knownRepos, parsePrList, parseRequested, pickKnownRepo, prForHeading, prForSession, prFromGh, prHash, prUrlsIn, REPLY_PRS_MAX, sortPrs } from './prs.ts'
+import { checkState, diffStats, githubRepoOf, isPrNumber, isRepoName, knownRepos, parsePrList, parseRequested, pickKnownRepo, prForHeading, prForSession, prFromGh, prHash, prRefsIn, REPLY_PRS_MAX, sortPrs } from './prs.ts'
 import type { PrRepo, PrSummary } from './types.ts'
 
 test('isRepoName: owner/repo だけを通し、フラグや .. や空白は断る', () => {
@@ -207,21 +207,35 @@ test('prFromGh: fork のブランチから出た PR（isCrossRepository）に cr
   assert.equal(prFromGh({ number: 1, isCrossRepository: false })?.cross, undefined)
 })
 
-test('prUrlsIn: 本文の PR の URL を出てきた順・重複なしで拾う。形の違うものは拾わない（#888）', () => {
+test('prRefsIn: 本文の PR の URL を出てきた順・重複なしで拾う。形の違うものは拾わない（#888）', () => {
   const text = [
     'PR を出しました: https://github.com/owner-a/repo-a/pull/12',
     '前の https://github.com/Owner-A/Repo-A/pull/12 と同じ。別のは <https://github.com/owner-b/repo-b/pull/3>。',
     'issue は https://github.com/owner-a/repo-a/issues/5、番号の無い https://github.com/owner-a/repo-a/pull/、0 番 https://github.com/owner-a/repo-a/pull/0',
     'ほかのホスト https://gitlab.com/owner-a/repo-a/pull/7、続きの付いた https://github.com/owner-a/repo-a/pull/8/files',
   ].join('\n')
-  assert.deepEqual(prUrlsIn(text), [
+  assert.deepEqual(prRefsIn(text, ''), [
     { repo: 'owner-a/repo-a', number: 12 },
     { repo: 'owner-b/repo-b', number: 3 },
     { repo: 'owner-a/repo-a', number: 8 },
   ])
-  assert.deepEqual(prUrlsIn(''), [])
+  assert.deepEqual(prRefsIn('', 'owner-a/repo-a'), [])
   const many = Array.from({ length: REPLY_PRS_MAX + 3 }, (_, i) => `https://github.com/owner-a/repo-a/pull/${i + 1}`).join(' ')
-  assert.equal(prUrlsIn(many).length, REPLY_PRS_MAX, '上限で止める')
+  assert.equal(prRefsIn(many, '').length, REPLY_PRS_MAX, '上限で止める')
+})
+
+test('prRefsIn: 素の PR #N / #N はリモートのリポジトリの番号として読む。リモートが無ければ読まない（#890）', () => {
+  const text = 'PR #4 を出しました（#3 の続き）。PR#5、https://github.com/owner-b/repo-b/pull/6 も。#4 はもう一度。'
+  assert.deepEqual(prRefsIn(text, 'owner-a/repo-a'), [
+    { repo: 'owner-a/repo-a', number: 4 },
+    { repo: 'owner-a/repo-a', number: 3 },
+    { repo: 'owner-a/repo-a', number: 5 },
+    { repo: 'owner-b/repo-b', number: 6 },
+  ])
+  assert.deepEqual(prRefsIn(text, ''), [{ repo: 'owner-b/repo-b', number: 6 }], 'リモートが無ければ URL だけ')
+  // 前に文字が付いたもの（別のリポジトリの名指し・URL の中・HTML の文字参照）、16 進の色、0 番は読まない
+  const noise = 'owner-b/repo-b#7 https://example.com/a#8 &#9; x#10 #abc123 #12ab #0 ## 見出し #14'
+  assert.deepEqual(prRefsIn(noise, 'owner-a/repo-a'), [{ repo: 'owner-a/repo-a', number: 14 }])
 })
 
 test('セッションの PR: リモートとブランチで結べなければ、返答に出てきた PR の URL から一覧にあるものだけ結ぶ（#888）', () => {
@@ -242,9 +256,31 @@ test('セッションの PR: リモートとブランチで結べなければ、
   assert.equal(prForSession(outer, repos), null, 'URL が無ければ今までどおり結ばない')
   // 1 つの返答に複数あれば、あとに出てきた方（一覧に無いものは飛ばす）
   assert.equal(prForSession({ ...outer, reply_prs: [{ repo: 'owner-a/repo-a', number: 21 }, { repo: 'owner-b/repo-b', number: 31 }, { repo: 'owner-a/repo-a', number: 99 }] }, repos)?.pr.number, 31)
-  // リモートとブランチで結べるときはそちらが先（URL は見ない）
-  const matched = prForSession({ remote: 'https://github.com/owner-a/repo-a', branch: 'feat-x', reply_prs: [{ repo: 'owner-b/repo-b', number: 31 }] }, repos)
+  // リモートとブランチで結べて、その PR が返答に出てきていればブランチの方（出てこないときは #890 のテスト）
+  const matched = prForSession({ remote: 'https://github.com/owner-a/repo-a', branch: 'feat-x', reply_prs: [{ repo: 'owner-a/repo-a', number: 21 }, { repo: 'owner-b/repo-b', number: 31 }] }, repos)
   assert.equal(matched?.pr.number, 21)
+})
+
+test('セッションの PR: ブランチの PR が返答に一度も出てこず、返答に一覧の別の PR があれば、そちら（#890）', () => {
+  const open = (number: number, head: string): PrSummary => ({
+    number, title: `t${number}`, author: 'me', head, base: 'main', draft: false, updated_at: '2026-09-30T00:00:00Z', url: '', additions: 0,
+    deletions: 0, changed_files: 0, review_decision: '', checks: '', requested: false,
+  })
+  const repos: PrRepo[] = [
+    { repo: 'owner-a/repo-a', prs: [open(4, 'feat-z'), open(5, 'feat-w')] },
+    { repo: 'owner-b/repo-b', prs: [open(31, 'feat-x')] },
+  ]
+  // 同じ worktree をブランチ feat-z に切り替えた別のセッションのあとで動いた（記録のブランチは feat-z）
+  const shared = { remote: 'https://github.com/owner-a/repo-a', branch: 'feat-z' }
+  assert.equal(prForSession({ ...shared, reply_prs: [{ repo: 'owner-a/repo-a', number: 4 }, { repo: 'owner-a/repo-a', number: 5 }] }, repos)?.pr.number, 4, 'ブランチの PR が返答に出てきていればブランチの方')
+  assert.equal(prForSession({ ...shared, reply_prs: [{ repo: 'Owner-A/Repo-A', number: 4 }] }, repos)?.pr.number, 4, 'リポジトリ名の大文字小文字は見ない')
+  assert.equal(prForSession({ ...shared, reply_prs: [{ repo: 'owner-a/repo-a', number: 5 }] }, repos)?.pr.number, 5, '素の番号（リモートの番号）で出てきた別の PR')
+  assert.equal(prForSession({ ...shared, reply_prs: [{ repo: 'owner-b/repo-b', number: 31 }] }, repos)?.pr.number, 31, '別のリポジトリの URL で出てきた PR')
+  // 返答に一覧の PR が無ければ、今までどおりブランチの PR
+  assert.equal(prForSession(shared, repos)?.pr.number, 4)
+  assert.equal(prForSession({ ...shared, reply_prs: [{ repo: 'owner-a/repo-a', number: 99 }, { repo: 'owner-c/repo-c', number: 5 }] }, repos)?.pr.number, 4, '一覧に無い番号・リポジトリは数えない')
+  // 別のリポジトリの同じ番号は「出てきた」に数えない
+  assert.equal(prForSession({ ...shared, reply_prs: [{ repo: 'owner-b/repo-b', number: 4 }, { repo: 'owner-a/repo-a', number: 5 }] }, repos)?.pr.number, 5)
 })
 
 test('フィードの見出しの PR: 見出しのブランチで引き、返答の URL はリモートの無いセッションだけ（#888 / #889 のレビュー）', () => {

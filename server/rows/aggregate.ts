@@ -5,7 +5,7 @@ import { matchesProjects } from '../../shared/projectFilter.ts'
 import { eventKind } from '../../shared/events.ts'
 import { isCompactSummaryText } from '../../shared/compactSummary.ts'
 import { isHandedOnly, splitHandedReplies } from '../../shared/agentMessages.ts'
-import { prUrlsIn } from '../../shared/prs.ts'
+import { githubRepoOf, prRefsIn, REPLY_PRS_MAX } from '../../shared/prs.ts'
 import type { Agent, Facets, FeedRow, PrRef, SessionSource, SessionSummary } from '../../shared/types.ts'
 
 export { entityId, localDate, TIME_ZONE } from '../../shared/entity.ts'
@@ -130,9 +130,19 @@ export function aggregate(rows: FeedRow[]): SessionSummary[] {
     const lastModelRow = [...turnRows].reverse().find((r) => r.model?.trim())
     // 許可モードは待ちや再開の行にも載る（フックのペイロード）。一番新しい、値のある行のもの
     const lastModeRow = [...items].reverse().find((r) => r.permission_mode?.trim())
-    // 返答に出てきた PR（#888）。URL が出てきた一番新しい返答の分だけ（人の入力は見ない）
-    let replyPrs: PrRef[] = []
-    for (let i = turnRows.length - 1; i >= 0 && replyPrs.length === 0; i--) replyPrs = prUrlsIn(turnRows[i]!.text ?? '')
+    // 返答に出てきた PR（#888 / #890）。全部の返答から、あとに出てきた順・重複なしで、新しい方から REPLY_PRS_MAX 件（人の入力は見ない）。
+    // 素の `#N` は、その行のリモートが GitHub のときだけ、そのリポジトリの番号として読む
+    const seenPrs = new Map<string, PrRef>()
+    for (const r of turnRows) {
+      const text = r.text ?? ''
+      if (!text.includes('#') && !text.includes('/pull/')) continue
+      for (const ref of prRefsIn(text, githubRepoOf(r.remote))) {
+        const key = `${ref.repo.toLowerCase()}#${ref.number}`
+        seenPrs.delete(key)
+        seenPrs.set(key, ref)
+      }
+    }
+    const replyPrs = [...seenPrs.values()].slice(-REPLY_PRS_MAX)
 
     sessions.push({
       id,

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import type { FeedRow } from '../../shared/types.ts'
 import { aggregate, clip, facets, filterSessions, localDate, recentDates, recordVersionOf } from './aggregate.ts'
 import { STEERED_NOTE, withHandedReplies } from '../../shared/agentMessages.ts'
+import { REPLY_PRS_MAX } from '../../shared/prs.ts'
 
 export function row(ts: Date, session: string, over: Partial<FeedRow> = {}): FeedRow {
   return {
@@ -410,7 +411,7 @@ test('入力が自動の要約の文になっている行は、題名にも last
   assert.equal(s!.last_text, '追加しました')
 })
 
-test('reply_prs: PR の URL が出てきた一番新しい返答の分だけ。人の入力と待ちの行は見ない（#888）', () => {
+test('reply_prs: 全部の返答の PR の URL を、あとに出てきた順で。人の入力と待ちの行は見ない（#888 / #890）', () => {
   const t0 = new Date('2026-09-10T03:00:00Z')
   const at = (m: number) => new Date(t0.getTime() + min(m))
   const [s] = aggregate([
@@ -421,10 +422,33 @@ test('reply_prs: PR の URL が出てきた一番新しい返答の分だけ。�
     row(at(4), 's1', { event: 'PermissionRequest', user_text: '', text: '許可待ち: Bash: gh pr view https://github.com/owner-c/repo-c/pull/8' }),
   ])
   assert.deepEqual(s!.reply_prs, [
+    { repo: 'owner-a/repo-a', number: 1 },
     { repo: 'owner-a/repo-a', number: 2 },
     { repo: 'owner-b/repo-b', number: 3 },
   ])
   const [none] = aggregate([row(at(0), 's2', { user_text: 'https://github.com/owner-a/repo-a/pull/1 を見て', text: '見ました' })])
   assert.equal('reply_prs' in none!, false, '人の入力にだけ URL があれば載せない')
+})
+
+test('reply_prs: 素の #N はその行の GitHub のリモートの番号として読み、もう一度出てきたものは後ろへ。上限は新しい方を残す（#890）', () => {
+  const t0 = new Date('2026-09-10T03:00:00Z')
+  const at = (m: number) => new Date(t0.getTime() + min(m))
+  const remote = 'https://github.com/owner-a/repo-a'
+  const [s] = aggregate([
+    row(at(0), 's1', { remote, text: 'PR #4 を出しました' }),
+    row(at(1), 's1', { remote, text: '#5 を直しました。https://github.com/owner-b/repo-b/pull/6' }),
+    row(at(2), 's1', { remote, text: 'PR #4 の CI が通りました' }),
+    row(at(3), 's1', { remote: '', text: '#7 はリモートの無い行' }),
+  ])
+  assert.deepEqual(s!.reply_prs, [
+    { repo: 'owner-a/repo-a', number: 5 },
+    { repo: 'owner-b/repo-b', number: 6 },
+    { repo: 'owner-a/repo-a', number: 4 },
+  ])
+  const many = Array.from({ length: REPLY_PRS_MAX + 5 }, (_, i) => row(at(i), 's2', { remote, text: `#${i + 1}` }))
+  const [m] = aggregate(many)
+  assert.equal(m!.reply_prs!.length, REPLY_PRS_MAX)
+  assert.deepEqual(m!.reply_prs!.at(-1), { repo: 'owner-a/repo-a', number: REPLY_PRS_MAX + 5 })
+  assert.deepEqual(m!.reply_prs![0], { repo: 'owner-a/repo-a', number: 6 }, '古い方から落とす')
 })
 

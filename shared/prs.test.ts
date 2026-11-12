@@ -215,23 +215,24 @@ test('prRefsIn: 本文の PR の URL を出てきた順・重複なしで拾う�
     'ほかのホスト https://gitlab.com/owner-a/repo-a/pull/7、続きの付いた https://github.com/owner-a/repo-a/pull/8/files',
   ].join('\n')
   assert.deepEqual(prRefsIn(text, ''), [
-    { repo: 'owner-a/repo-a', number: 12 },
+    { repo: 'Owner-A/Repo-A', number: 12 }, // 同じものは大文字小文字を見ずに 1 つにし、あとの書き方を残す
     { repo: 'owner-b/repo-b', number: 3 },
     { repo: 'owner-a/repo-a', number: 8 },
   ])
   assert.deepEqual(prRefsIn('', 'owner-a/repo-a'), [])
   const many = Array.from({ length: REPLY_PRS_MAX + 3 }, (_, i) => `https://github.com/owner-a/repo-a/pull/${i + 1}`).join(' ')
   assert.equal(prRefsIn(many, '').length, REPLY_PRS_MAX, '上限で止める')
+  assert.deepEqual(prRefsIn(many, '').at(-1), { repo: 'owner-a/repo-a', number: REPLY_PRS_MAX + 3 }, '上限は新しい方（後ろ）を残す')
 })
 
 test('prRefsIn: 素の PR #N / #N はリモートのリポジトリの番号として読む。リモートが無ければ読まない（#890）', () => {
   const text = 'PR #4 を出しました（#3 の続き）。PR#5、https://github.com/owner-b/repo-b/pull/6 も。#4 はもう一度。'
   assert.deepEqual(prRefsIn(text, 'owner-a/repo-a'), [
-    { repo: 'owner-a/repo-a', number: 4 },
     { repo: 'owner-a/repo-a', number: 3 },
     { repo: 'owner-a/repo-a', number: 5 },
     { repo: 'owner-b/repo-b', number: 6 },
-  ])
+    { repo: 'owner-a/repo-a', number: 4 },
+  ], 'もう一度出てきたものは後ろへ')
   assert.deepEqual(prRefsIn(text, ''), [{ repo: 'owner-b/repo-b', number: 6 }], 'リモートが無ければ URL だけ')
   // 前に文字が付いたもの（別のリポジトリの名指し・URL の中・HTML の文字参照）、16 進の色、0 番は読まない
   const noise = 'owner-b/repo-b#7 https://example.com/a#8 &#9; x#10 #abc123 #12ab #0 ## 見出し #14'
@@ -279,6 +280,8 @@ test('セッションの PR: ブランチの PR が返答に一度も出てこ�
   // 返答に一覧の PR が無ければ、今までどおりブランチの PR
   assert.equal(prForSession(shared, repos)?.pr.number, 4)
   assert.equal(prForSession({ ...shared, reply_prs: [{ repo: 'owner-a/repo-a', number: 99 }, { repo: 'owner-c/repo-c', number: 5 }] }, repos)?.pr.number, 4, '一覧に無い番号・リポジトリは数えない')
+  // ブランチの PR が一度でも出てきていれば、あとで別の PR が出てきてもブランチの方（決定どおり）
+  assert.equal(prForSession({ ...shared, reply_prs: [{ repo: 'owner-a/repo-a', number: 4 }, { repo: 'owner-b/repo-b', number: 31 }] }, repos)?.pr.number, 4)
   // 別のリポジトリの同じ番号は「出てきた」に数えない
   assert.equal(prForSession({ ...shared, reply_prs: [{ repo: 'owner-b/repo-b', number: 4 }, { repo: 'owner-a/repo-a', number: 5 }] }, repos)?.pr.number, 5)
 })

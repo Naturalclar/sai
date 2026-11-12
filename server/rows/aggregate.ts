@@ -11,6 +11,21 @@ import type { Agent, Facets, FeedRow, PrRef, SessionSource, SessionSummary } fro
 export { entityId, localDate, TIME_ZONE } from '../../shared/entity.ts'
 
 export const TITLE_LEN = 60
+
+/**
+ * 行の返答に出てきた PR（#890）。行のオブジェクトで覚える（store は変わっていないファイルの行を使い回すので、
+ * 集計のたびに全部の返答を正規表現にかけ直さない）。素の `#N` はその行のリモートで読むので、行だけで決まる
+ */
+const prRefsByRow = new WeakMap<FeedRow, PrRef[]>()
+function rowPrRefs(r: FeedRow): PrRef[] {
+  let refs = prRefsByRow.get(r)
+  if (!refs) {
+    const text = r.text ?? ''
+    refs = text.includes('#') || text.includes('/pull/') ? prRefsIn(text, githubRepoOf(r.remote)) : []
+    prRefsByRow.set(r, refs)
+  }
+  return refs
+}
 export const TITLE_FULL_LEN = 300
 
 /** 今日（Asia/Tokyo）から days 日ぶんの YYYY-MM-DD を新しい順に */
@@ -134,9 +149,7 @@ export function aggregate(rows: FeedRow[]): SessionSummary[] {
     // 素の `#N` は、その行のリモートが GitHub のときだけ、そのリポジトリの番号として読む
     const seenPrs = new Map<string, PrRef>()
     for (const r of turnRows) {
-      const text = r.text ?? ''
-      if (!text.includes('#') && !text.includes('/pull/')) continue
-      for (const ref of prRefsIn(text, githubRepoOf(r.remote))) {
+      for (const ref of rowPrRefs(r)) {
         const key = `${ref.repo.toLowerCase()}#${ref.number}`
         seenPrs.delete(key)
         seenPrs.set(key, ref)

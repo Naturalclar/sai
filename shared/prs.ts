@@ -22,7 +22,8 @@ export function isPrNumber(n: string): boolean {
 export const REPLY_PRS_MAX = 30
 
 /**
- * 本文に出てきた PR の名指し（#888 / #890）。出てきた順・重複なし（大文字小文字を見ない）。
+ * 本文に出てきた PR の名指し（#888 / #890）。あとに出てきた順・重複なし（大文字小文字を見ない。もう一度出てきたものは後ろへ）・
+ * 後ろから `REPLY_PRS_MAX` 件。
  * - GitHub の PR の URL（`https://github.com/<owner>/<repo>/pull/<番号>`）
  * - 素の `PR #N` / `#N`。**`repo`（その行のセッションの GitHub のリモート）が空でないときだけ**、そのリポジトリの番号として読む。
  *   `owner/repo#N`・URL の `#…`・`&#N;` のように前に文字が付いたものは読まない。issue の番号も拾うが、結ぶのは一覧の open な PR に
@@ -41,12 +42,13 @@ export function prRefsIn(text: string, repo: string): PrRef[] {
     const ref = urlRepo ? { repo: urlRepo, n: urlN } : { repo: bareRepo, n: bareN }
     if (!ref.repo || !isRepoName(ref.repo) || !isPrNumber(ref.n)) continue
     const key = `${ref.repo.toLowerCase()}#${ref.n}`
-    if (seen.has(key)) continue
+    // もう一度出てきたものは後ろへ（あとに出てきた方を優先するので）
+    if (seen.has(key)) out.splice(out.findIndex((p) => `${p.repo.toLowerCase()}#${p.number}` === key), 1)
     seen.add(key)
     out.push({ repo: ref.repo, number: Number(ref.n) })
-    if (out.length >= REPLY_PRS_MAX) break
   }
-  return out
+  // 上限は新しい方（後ろ）を残す
+  return out.slice(-REPLY_PRS_MAX)
 }
 
 /**

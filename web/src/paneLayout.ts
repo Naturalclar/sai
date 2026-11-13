@@ -3,6 +3,7 @@
 //
 // **URL（hash）はフォーカスのあるペインの 1 つを指す**（`parseRoute()` は変えない）。並びは URL に載せないので、
 // 「戻る」で戻るのは見ているものだけで、並びは戻らない。
+import { PR_REPO_NAME } from '../../shared/prs.ts'
 
 /**
  * ペインに出すもの。種類つきで持つ。
@@ -71,8 +72,8 @@ function itemOf(raw: unknown): PaneItem | null {
   // 知らない種類は落とす（新しい種類を足したタブと localStorage を共有しても、古いタブが壊れない）
   if (typeof kind === 'string' && (PINNED_KINDS as readonly string[]).includes(kind)) return { kind: kind as PinnedKind }
   if (kind === 'session' && typeof id === 'string' && id !== '') return { kind: 'session', id }
-  // PR の解説は、URL（`parseRoute()`）が受ける形と同じものだけ（`owner/repo` で、番号は正の整数）
-  if (kind === 'pr-explain' && typeof repo === 'string' && /^[^/?#]+\/[^/?#]+$/.test(repo) && typeof number === 'number' && Number.isInteger(number) && number > 0 && number < 1e9) {
+  // PR の解説は、URL（`parseRoute()`）が受ける形と同じものだけ（`PR_REPO_NAME` の `owner/repo` で、番号は正の整数）
+  if (kind === 'pr-explain' && typeof repo === 'string' && PR_REPO_NAME.test(repo) && typeof number === 'number' && Number.isInteger(number) && number > 0 && number < 1e9) {
     return { kind: 'pr-explain', repo, number }
   }
   return null

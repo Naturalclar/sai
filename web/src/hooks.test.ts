@@ -77,4 +77,15 @@ test('parseRoute: PR の解説のペイン（#887）。形は PR 1 本と同じ�
   }
   assert.deepEqual(parseRoute(prExplainHash('owner-a/repo.a', 7)), { name: 'pr-explain', repo: 'owner-a/repo.a', number: 7 })
   assert.deepEqual(parseRoute(prHash('owner-a/repo.a', 7)), { name: 'pr', repo: 'owner-a/repo.a', number: 7 })
+  // `%` や空白など GitHub の名前に入らない文字は受けない。受けると、`prExplainHash()`（エンコードしない）で組み直した hash が
+  // 読めず（`a%b` は decodeURIComponent が投げる）、フォーカスを動かしたときに解説のペインが PR の一覧に入れ替わる
+  for (const bad of ['#/pr-explain/a%25b/c/1', '#/pr-explain/a%20b/c/1', '#/pr-explain/a/c%2Bd/1', '#/pr/a%25b/c/1']) {
+    assert.deepEqual(parseRoute(bad), { name: 'prs' }, bad)
+  }
+  // 受けた名前は、組み直しても同じものに読み戻る
+  for (const repo of ['Owner_A/repo-a.js', 'o.o/r_r-1']) {
+    const at = parseRoute(prExplainHash(repo, 3))
+    assert.deepEqual(at, { name: 'pr-explain', repo, number: 3 })
+    assert.deepEqual(parseRoute(prExplainHash((at as { repo: string }).repo, 3)), at)
+  }
 })

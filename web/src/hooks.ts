@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { pollLoop } from './pollLoop.ts'
+import { PR_REPO_NAME } from '../../shared/prs.ts'
 
 export const POLL_MS = 3000
 
@@ -64,15 +65,16 @@ export function parseRoute(hash: string): Route {
 
 /**
  * `<owner>/<repo>/<番号>` を読む。番号は数字だけ。壊れていれば null（呼ぶ側は PR の一覧へ）。
- * ほどいた名前に `/` `?` `#` が入るものも受けない（解説のペインの並び（localStorage）の検査 `paneLayout.ts` の `itemOf()` と揃える。
- * 受けると、再読み込みでペインが消えて URL とずれる）
+ * 名前は `PR_REPO_NAME`（GitHub の名前に使える文字）だけ受ける。解説のペインの並び（localStorage）の検査 `paneLayout.ts` の `itemOf()` と同じで、
+ * `prExplainHash()` で組み直しても読み戻せる（受けると、再読み込みやフォーカスの移動でペインが消えて URL とずれる）
  */
 function prPath(rest: string): { repo: string; number: number } | null {
   const m = rest.match(/^([^/?#]+)\/([^/?#]+)\/([1-9][0-9]{0,8})$/)
   if (!m) return null
   try {
     const [owner, name] = [decodeURIComponent(m[1]!), decodeURIComponent(m[2]!)]
-    return /[/?#]/.test(owner + name) ? null : { repo: `${owner}/${name}`, number: Number(m[3]) }
+    const repo = `${owner}/${name}`
+    return PR_REPO_NAME.test(repo) ? { repo, number: Number(m[3]) } : null
   } catch {
     return null
   }

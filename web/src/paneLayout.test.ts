@@ -275,7 +275,7 @@ test('PR の解説のペイン（#887）: URL から引き、localStorage から
   assert.equal(routePaneItem({ name: 'pr-explain' }), null)
   const read = normalizeLayout({ columns: [[s('a')], [ex('o/r', 3)]], focus: 1, keys: [0, 1] })
   assert.deepEqual([read.columns, read.focus], [[[s('a')], [ex('o/r', 3)]], 1])
-  for (const bad of [{ kind: 'pr-explain' }, { kind: 'pr-explain', repo: 'o', number: 3 }, { kind: 'pr-explain', repo: 'o/r/x', number: 3 }, { kind: 'pr-explain', repo: 'o/r', number: 0 }, { kind: 'pr-explain', repo: 'o/r', number: 1.5 }, { kind: 'pr-explain', repo: 'o/r', number: '3' }]) {
+  for (const bad of [{ kind: 'pr-explain' }, { kind: 'pr-explain', repo: 'o', number: 3 }, { kind: 'pr-explain', repo: 'o/r/x', number: 3 }, { kind: 'pr-explain', repo: 'o/r', number: 0 }, { kind: 'pr-explain', repo: 'o/r', number: 1.5 }, { kind: 'pr-explain', repo: 'o/r', number: '3' }, { kind: 'pr-explain', repo: 'a%b/c', number: 3 }, { kind: 'pr-explain', repo: 'a b/c', number: 3 }]) {
     assert.deepEqual(normalizeLayout({ columns: [[bad]] }), EMPTY_LAYOUT, JSON.stringify(bad))
   }
   assert.deepEqual(sessionIdsIn(read), ['a'], 'セッションの並びには数えない')

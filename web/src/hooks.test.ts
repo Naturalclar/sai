@@ -66,6 +66,7 @@ test('parseRoute: GitHub の PR（#524）。1 本は owner/repo/番号、壊れ�
   assert.deepEqual(parseRoute('#/pr/Naturalclar/sai/abc'), { name: 'prs' })
   assert.deepEqual(parseRoute('#/pr/Naturalclar/524'), { name: 'prs' })
   assert.deepEqual(parseRoute('#/pr/a/%E0%A4%A/1'), { name: 'prs' })
+  assert.deepEqual(parseRoute('#/pr/a%2Fb/c/3'), { name: 'prs' }, '名前に / が入るものは受けない（解説のペインと同じ読み方）')
 })
 
 test('parseRoute: PR の解説のペイン（#887）。形は PR 1 本と同じで、壊れていれば一覧へ。hash から組んだものは読み戻せる', () => {

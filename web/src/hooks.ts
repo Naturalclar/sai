@@ -53,28 +53,29 @@ export function parseRoute(hash: string): Route {
   if (hash === '#/dots') return { name: 'dots' }
   // GitHub の PR（#524）。1 本は `#/pr/<owner>/<repo>/<番号>`（番号は数字だけ。壊れていれば一覧へ）
   if (hash === '#/prs') return { name: 'prs' }
-  const pr = hash.match(/^#\/pr\/([^/?#]+)\/([^/?#]+)\/([1-9][0-9]{0,8})$/)
-  if (pr) {
-    try {
-      return { name: 'pr', repo: `${decodeURIComponent(pr[1]!)}/${decodeURIComponent(pr[2]!)}`, number: Number(pr[3]) }
-    } catch {
-      return { name: 'prs' }
-    }
+  // PR の解説のペイン（#887）も同じ形（`#/pr-explain/<owner>/<repo>/<番号>`）
+  for (const name of ['pr', 'pr-explain'] as const) {
+    if (!hash.startsWith(`#/${name}/`)) continue
+    const at = prPath(hash.slice(name.length + 3))
+    return at ? { name, ...at } : { name: 'prs' }
   }
-  if (hash.startsWith('#/pr/')) return { name: 'prs' }
-  // PR の解説のペイン（#887）。形は PR 1 本と同じ。壊れていれば PR の一覧へ。並び（localStorage）に置いて読み戻せる形
-  // （`paneLayout.ts` の `itemOf()`）と揃えるため、ほどいた名前に `/` `?` `#` が入るものは受けない
-  const explain = hash.match(/^#\/pr-explain\/([^/?#]+)\/([^/?#]+)\/([1-9][0-9]{0,8})$/)
-  if (explain) {
-    try {
-      const [owner, name] = [decodeURIComponent(explain[1]!), decodeURIComponent(explain[2]!)]
-      return /[/?#]/.test(owner + name) ? { name: 'prs' } : { name: 'pr-explain', repo: `${owner}/${name}`, number: Number(explain[3]) }
-    } catch {
-      return { name: 'prs' }
-    }
-  }
-  if (hash.startsWith('#/pr-explain/')) return { name: 'prs' }
   return { name: 'list' }
+}
+
+/**
+ * `<owner>/<repo>/<番号>` を読む。番号は数字だけ。壊れていれば null（呼ぶ側は PR の一覧へ）。
+ * ほどいた名前に `/` `?` `#` が入るものも受けない（解説のペインの並び（localStorage）の検査 `paneLayout.ts` の `itemOf()` と揃える。
+ * 受けると、再読み込みでペインが消えて URL とずれる）
+ */
+function prPath(rest: string): { repo: string; number: number } | null {
+  const m = rest.match(/^([^/?#]+)\/([^/?#]+)\/([1-9][0-9]{0,8})$/)
+  if (!m) return null
+  try {
+    const [owner, name] = [decodeURIComponent(m[1]!), decodeURIComponent(m[2]!)]
+    return /[/?#]/.test(owner + name) ? null : { repo: `${owner}/${name}`, number: Number(m[3]) }
+  } catch {
+    return null
+  }
 }
 
 /**

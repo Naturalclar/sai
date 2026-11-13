@@ -4,7 +4,7 @@ import { BackLink } from './BackLink'
 import { sessionHash } from './hooks'
 import { prHash } from '../../shared/prs.ts'
 import { agoLabel } from './prLabels'
-import { explainHref, explainPaneEmpty } from './prExplainLabels'
+import { explainOpenHref, explainPaneEmpty } from './prExplainLabels'
 import { RefreshButton } from './RefreshButton'
 import type { PaneProps } from './App'
 
@@ -56,7 +56,7 @@ export function PrExplainView({ repo, number, onStatus, onOpenSidebar }: { repo:
   const pr = loaded?.data.pr
   const explain = loaded?.data.explain ?? null
   const empty = loaded ? explainPaneEmpty(explain, loaded.data.explain_available === true) : ''
-  const href = explain?.state === 'ready' && explain.key ? explainHref(explain.key) : ''
+  const href = explainOpenHref(explain)
 
   return (
     <section className="pr-explain-view">

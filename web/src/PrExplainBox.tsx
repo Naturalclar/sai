@@ -4,7 +4,7 @@ import { sessionHash } from './hooks'
 import { prExplainHash } from '../../shared/prs.ts'
 import type { PaneItem } from './paneLayout'
 import { agoLabel } from './prLabels'
-import { explainButtonLabel, explainHref, explainNote } from './prExplainLabels'
+import { explainButtonLabel, explainNote, explainOpenHref } from './prExplainLabels'
 
 /**
  * PR の解説（#881）。押したときだけ利用者のスキル `/brief-pr` を SAI の新しいセッションとして回し、できた HTML を開くリンクを出す。
@@ -24,6 +24,7 @@ export function PrExplainBox({ repo, number, data, now, onOpenBeside }: { repo: 
   if (!data.explain_available && !explain) return null
   const label = data.explain_available ? explainButtonLabel(explain) : ''
   const note = explainNote(explain)
+  const href = explainOpenHref(explain)
   const openPane = (e: MouseEvent<HTMLAnchorElement>) => {
     if (!onOpenBeside || !(e.metaKey || e.ctrlKey)) return
     e.preventDefault()
@@ -46,12 +47,12 @@ export function PrExplainBox({ repo, number, data, now, onOpenBeside }: { repo: 
   return (
     <div className="pr-explain">
       <span className="title">解説</span>
-      {explain?.state === 'ready' && explain.key && (
-        <a className="open" href={explainHref(explain.key)} target="_blank" rel="noopener noreferrer">
+      {href && (
+        <a className="open" href={href} target="_blank" rel="noopener noreferrer">
           解説を開く
         </a>
       )}
-      {explain?.state === 'ready' && explain.key && (
+      {href && (
         <a className="pane-open" href={prExplainHash(repo, number)} onClick={openPane} title={onOpenBeside ? '⌘ + クリックで横に並べて開く' : undefined}>
           ペインで開く
         </a>

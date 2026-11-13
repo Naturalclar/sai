@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api, type PrDetailResponse } from './api'
 import { BackLink } from './BackLink'
-import { prHash, sessionHash } from './hooks'
+import { sessionHash } from './hooks'
+import { prHash } from '../../shared/prs.ts'
 import { agoLabel } from './prLabels'
 import { explainHref, explainPaneEmpty } from './prExplainLabels'
 import { RefreshButton } from './RefreshButton'
@@ -54,7 +55,7 @@ export function PrExplainView({ repo, number, onStatus, onOpenSidebar }: { repo:
 
   const pr = loaded?.data.pr
   const explain = loaded?.data.explain ?? null
-  const empty = loaded ? explainPaneEmpty(explain) : ''
+  const empty = loaded ? explainPaneEmpty(explain, loaded.data.explain_available === true) : ''
   const href = explain?.state === 'ready' && explain.key ? explainHref(explain.key) : ''
 
   return (

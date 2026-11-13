@@ -1,6 +1,7 @@
 import { useState, type MouseEvent } from 'react'
 import { api, type PrDetailResponse, type PrExplain } from './api'
-import { prExplainHash, sessionHash } from './hooks'
+import { sessionHash } from './hooks'
+import { prExplainHash } from '../../shared/prs.ts'
 import type { PaneItem } from './paneLayout'
 import { agoLabel } from './prLabels'
 import { explainButtonLabel, explainHref, explainNote } from './prExplainLabels'

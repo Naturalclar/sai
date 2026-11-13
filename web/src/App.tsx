@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { formatImageBytes } from '../../shared/images.ts'
-import { HIDDEN_POLL_MS, parseRoute, prExplainHash, sessionHash, useHashRoute, useLocalState, usePolling, type Route } from './hooks'
+import { HIDDEN_POLL_MS, parseRoute, sessionHash, useHashRoute, useLocalState, usePolling, type Route } from './hooks'
 import { closeColumn, EMPTY_LAYOUT, focusColumn, focusedItem, MAX_COLUMNS, nextUnshown, normalizeLayout, openBeside, openInNeighbor, PINNED_HASH, placeItem, replaceItem, routePaneItem, sessionIdsIn, type PaneItem, type PaneLayout, type PinnedKind } from './paneLayout'
 import { paneKey } from './paneKeys'
 import { ChatPane } from './ChatPane'
@@ -23,6 +23,7 @@ import { PrListView } from './PrListView'
 import { UsageView } from './UsageView'
 import { PrView } from './PrView'
 import { PrExplainView } from './PrExplainView'
+import { prExplainHash } from '../../shared/prs.ts'
 import { loadDraft, saveDraft } from './replyDrafts'
 import { appendInsert } from './replyRestore'
 import { hm } from './format'
@@ -242,7 +243,7 @@ export function App() {
     },
     [openBesideItem],
   )
-  // 要対応・PR の一覧・フィードのペインの中の、セッションへ飛ぶリンク（#633 / #759）。**元のペインは残して、隣のペインに開く**。
+  // 要対応・PR の一覧・フィード・PR の解説（#887）のペインの中の、セッションへ飛ぶリンク（#633 / #759）。**元のペインは残して、隣のペインに開く**。
   // 修飾キー付き（新しいタブなど）はブラウザに残す。`index` は押されたペインの列
   const openFromPinned = useCallback(
     (e: ReactMouseEvent<HTMLDivElement>, index: number) => {
@@ -592,8 +593,8 @@ export function App() {
                   focused={here}
                   onFocusPane={split ? () => focusPane(index) : undefined}
                   onClose={split ? () => closePane(index) : undefined}
-                  // 要対応・PR の一覧・フィードの中の、セッションへ飛ぶリンクは隣のペインに開く（狭い画面は今までどおり移るだけ）
-                  onClickCapture={(item.kind === 'todo' || item.kind === 'prs' || item.kind === 'feed') && !narrow ? (e) => openFromPinned(e, index) : undefined}
+                  // 要対応・PR の一覧・フィード・PR の解説の中の、セッションへ飛ぶリンクは隣のペインに開く（狭い画面は今までどおり移るだけ）
+                  onClickCapture={(item.kind === 'todo' || item.kind === 'prs' || item.kind === 'feed' || item.kind === 'pr-explain') && !narrow ? (e) => openFromPinned(e, index) : undefined}
                 >
                   {item.kind === 'todo' ? (
                     <TodoView list={list} onStatus={here ? onStatus : NO_STATUS} onOpenSidebar={openSidebar} onLeaveToSidebar={focusSidebar} linear={linear} settings={settings} prs={sessionPrs} focused={here} shown={paneIds} onInsertToShown={insertToShown} />

@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseRoute, prExplainHash, prHash, sessionHash } from './hooks.ts'
+import { parseRoute, sessionHash } from './hooks.ts'
+import { prExplainHash, prHash } from '../../shared/prs.ts'
 
 test('parseRoute: 画面の振り分け', () => {
   assert.deepEqual(parseRoute('#/feed'), { name: 'feed' })
@@ -69,9 +70,10 @@ test('parseRoute: GitHub の PR（#524）。1 本は owner/repo/番号、壊れ�
 
 test('parseRoute: PR の解説のペイン（#887）。形は PR 1 本と同じで、壊れていれば一覧へ。hash から組んだものは読み戻せる', () => {
   assert.deepEqual(parseRoute('#/pr-explain/owner-a/repo-a/12'), { name: 'pr-explain', repo: 'owner-a/repo-a', number: 12 })
-  for (const bad of ['#/pr-explain/owner-a/repo-a/0', '#/pr-explain/owner-a/repo-a/x', '#/pr-explain/owner-a/12', '#/pr-explain/a/%E0%A4%A/1', '#/pr-explain/']) {
+  // 並び（localStorage）に置けない名前（ほどくと `/` `?` `#` が入る）も受けない。受けると、再読み込みでペインが消えて URL とずれる
+  for (const bad of ['#/pr-explain/owner-a/repo-a/0', '#/pr-explain/owner-a/repo-a/x', '#/pr-explain/owner-a/12', '#/pr-explain/a/%E0%A4%A/1', '#/pr-explain/', '#/pr-explain/a%2Fb/c/3', '#/pr-explain/a/b%3Fc/3', '#/pr-explain/a/b%23c/3']) {
     assert.deepEqual(parseRoute(bad), { name: 'prs' }, bad)
   }
-  assert.deepEqual(parseRoute(prExplainHash('owner a/repo.a', 7)), { name: 'pr-explain', repo: 'owner a/repo.a', number: 7 })
-  assert.deepEqual(parseRoute(prHash('owner a/repo.a', 7)), { name: 'pr', repo: 'owner a/repo.a', number: 7 })
+  assert.deepEqual(parseRoute(prExplainHash('owner-a/repo.a', 7)), { name: 'pr-explain', repo: 'owner-a/repo.a', number: 7 })
+  assert.deepEqual(parseRoute(prHash('owner-a/repo.a', 7)), { name: 'pr', repo: 'owner-a/repo.a', number: 7 })
 })

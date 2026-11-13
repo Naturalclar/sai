@@ -217,6 +217,11 @@ export function prHash(repo: string, number: number): string {
   return `#/pr/${repo}/${number}`
 }
 
+/** PR の解説のペイン（#887）の hash。形は `prHash()` と同じ */
+export function prExplainHash(repo: string, number: number): string {
+  return `#/pr-explain/${repo}/${number}`
+}
+
 /**
  * セッションに紐づく PR（#548）。**セッションの remote の `owner/repo` とブランチが、PR のリポジトリと head のブランチに
  * 一致するもの**。一覧（`GET /api/prs`）の open な PR から引くので、セッションごとに `gh` を叩かない。

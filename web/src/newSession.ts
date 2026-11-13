@@ -1,7 +1,8 @@
 // 新しいセッションを始める画面（#314）の判定。DOM に依存しないので newSession.test.ts を node:test で回す。
 // 画面は NewSessionView（選んで送る）と NewSessionStarting（最初の行を待って移る）。
 import { isRemoteHost } from '../../shared/host.ts'
-import type { Replying, SessionSummary, SiblingWorktree, WorkspacesResponse } from '../../shared/types.ts'
+import { liveStartDraft } from '../../shared/startDraft.ts'
+import type { AddWorktreeResponse, NewSessionRequest, NewSessionResponse, Replying, SessionSummary, SiblingWorktree, StartDraft, StartDraftActionRequest, WorkspacesResponse } from '../../shared/types.ts'
 
 /** 始められる worktree 1 つ */
 export interface Workspace {
@@ -101,4 +102,68 @@ export function startStatus(arrived: boolean, replying: Replying | undefined, si
   if (replying?.failed) return { kind: 'failed', message: `${replying.failed.logged_out ? 'Claude のログインが切れています（画面の上の「SAI からログインする」か、Mac の端末で claude auth login）。' : ''}${replying.failed.tail || `終了コード ${replying.failed.code}`}` }
   if (!replying && now - since > START_SILENT_MS) return { kind: 'silent' }
   return { kind: 'running' }
+}
+
+/**
+ * 要対応の「開く」から、どの案を開いたかを「新しいセッション」のペインへ渡す置き場（#892）。sessionStorage に置き、ペインが読んだら消す
+ * （hash は書き換えない。`<a href="#/new">` を押す前にここへ書く）
+ */
+export const START_DRAFT_PICK_KEY = 'sai.startDraftPick'
+
+/** 「新しいセッション」のペインに並べる、セッションが置いた案（#892）。置いたセッション = 置き場を決める `from` */
+export interface StartDraftChoice {
+  from: string
+  /** 置いたセッション（呼び名・リポジトリを添えるため） */
+  session: SessionSummary
+  draft: StartDraft
+}
+
+/** 出してよい案（24 時間以内・アーカイブ済みでない・このマシンのもの）を新しい順に */
+export function startDraftChoices(sessions: readonly SessionSummary[], selfHost: string, now: number): StartDraftChoice[] {
+  const out: StartDraftChoice[] = []
+  for (const s of sessions) {
+    const draft = liveStartDraft(s.start_draft, now)
+    if (!draft || s.archived || isRemoteHost(s.host, selfHost)) continue
+    out.push({ from: s.id, session: s, draft })
+  }
+  return out.sort((a, b) => b.draft.at - a.draft.at)
+}
+
+/** 案から始めるのに使う口。画面は `api` をそのまま渡し、テストは偽物を渡す */
+export interface StartFromDraftApi {
+  addWorktree: (from: string, name: string) => Promise<AddWorktreeResponse>
+  startSession: (body: NewSessionRequest) => Promise<NewSessionResponse>
+  startDraftAction: (id: string, body: StartDraftActionRequest) => Promise<unknown>
+}
+
+export type StartFromDraftResult =
+  | { ok: true; res: NewSessionResponse; sibling: SiblingWorktree }
+  /** `sibling` があれば worktree はもうできている（押し直すときは作らずにそれで始める） */
+  | { ok: false; error: string; sibling?: SiblingWorktree }
+
+/**
+ * 案から始める（#892）。**今の画面と同じ 2 つの口を順に通すだけ**: `POST /api/workspaces`（置き場は案を置いたセッションの行の cwd から
+ * サーバが組む。名前だけ送る）→ できた worktree の鍵で `POST /api/sessions/new`。始められたら案を片付ける（片付けに失敗しても始めたことは変えない）。
+ * worktree を作ったあとで始められなければ、できた worktree を返す（押し直しで 2 つ目を作ろうとして「もうある」で断られないように）
+ */
+export async function startFromDraft(
+  api: StartFromDraftApi,
+  plan: { from: string; draft: Pick<StartDraft, 'name' | 'at'>; created: SiblingWorktree | null; body: Omit<NewSessionRequest, 'from' | 'worktree'> },
+): Promise<StartFromDraftResult> {
+  let sibling = plan.created
+  if (!sibling) {
+    try {
+      sibling = (await api.addWorktree(plan.from, plan.draft.name)).worktree
+    } catch (err) {
+      return { ok: false, error: `worktree を作れませんでした: ${err instanceof Error ? err.message : String(err)}` }
+    }
+  }
+  let res: NewSessionResponse
+  try {
+    res = await api.startSession({ ...plan.body, from: sibling.from, worktree: sibling.worktree })
+  } catch (err) {
+    return { ok: false, error: `worktree「${sibling.repo}」は作りました。始められませんでした: ${err instanceof Error ? err.message : String(err)}`, sibling }
+  }
+  await api.startDraftAction(plan.from, { at: plan.draft.at }).catch(() => undefined)
+  return { ok: true, res, sibling }
 }

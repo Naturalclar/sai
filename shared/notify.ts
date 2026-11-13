@@ -78,7 +78,7 @@ export function notifyPlan(items: readonly TodoItem[]): NotifyPlan | null {
   if (items.length === 1) {
     const item = items[0]!
     return {
-      title: item.kind === 'answer' ? `答え待ち: ${labelOf(item)}` : item.kind === 'wait' ? `待ちが終わった: ${labelOf(item)}` : `待機中: ${labelOf(item)}`,
+      title: item.kind === 'answer' ? `答え待ち: ${labelOf(item)}` : item.kind === 'wait' ? `待ちが終わった: ${labelOf(item)}` : item.kind === 'start' ? `新しいセッションの案: ${labelOf(item)}` : `待機中: ${labelOf(item)}`,
       body: item.text,
       hash: '#/todo',
       tag: notifyKey(item),

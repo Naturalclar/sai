@@ -34,6 +34,8 @@ import type {
   ReadResponse,
   SuggestionActionRequest,
   SuggestionActionResponse,
+  StartDraftActionRequest,
+  StartDraftActionResponse,
   SessionPermissionsResponse,
   SessionProgressResponse,
   SessionModelsResponse,
@@ -275,6 +277,9 @@ export const api = {
   /** Manager が置いた案（#565）を捨てる・入力欄に入れた。どちらも案を取り除くだけで送らない */
   suggestionAction: (id: string, body: SuggestionActionRequest) =>
     sendJSON<SuggestionActionResponse>('POST', `/api/sessions/${encodeURIComponent(id)}/suggestion`, body),
+  /** 新しいセッションの案（#892）を片付ける（始めた・捨てた）。`at` が置いてあるものと違えば何もしない */
+  startDraftAction: (id: string, body: StartDraftActionRequest) =>
+    sendJSON<StartDraftActionResponse>('POST', `/api/sessions/${encodeURIComponent(id)}/start-draft`, body),
   setMeta: (id: string, meta: MetaPatch, days = 90) =>
     sendJSON<SessionMetaResponse>('PUT', `/api/sessions/${encodeURIComponent(id)}/meta?days=${days}`, meta),
   /** アイコン画像を置く。返ってくる icon が新しい URL */

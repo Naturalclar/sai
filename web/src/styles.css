@@ -466,6 +466,15 @@
   .new-session .new-worktree button:disabled { opacity: .5; cursor: default; }
   .new-session .new-worktree button.open { border: 0; padding: 2px 0; color: var(--accent); }
   .new-session .new-worktree button.open:hover:not(:disabled) { text-decoration: underline; }
+  /* セッションが置いた案（#892） */
+  .new-session .start-drafts ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  .new-session .start-drafts li { display: flex; align-items: center; gap: 8px; justify-content: space-between; font-size: 13px; }
+  .new-session .start-drafts li .text { min-width: 0; overflow-wrap: anywhere; }
+  .new-session .start-drafts li .where { color: var(--muted); }
+  .new-session .start-draft-banner { display: flex; align-items: center; gap: 8px; justify-content: space-between; flex-wrap: wrap; font-size: 13px; padding: 8px 10px; border: 1px solid var(--accent); border-radius: 8px; overflow-wrap: anywhere; }
+  .new-session .start-draft-banner .draft-actions { display: flex; gap: 6px; }
+  .new-session .start-drafts button, .new-session .start-draft-banner button { flex: none; font: inherit; font-size: 12px; padding: 3px 10px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: var(--ink); cursor: pointer; white-space: nowrap; }
+  .new-session .start-drafts button:disabled, .new-session .start-draft-banner button:disabled { opacity: .5; cursor: default; }
   .new-session .actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
   .new-session .actions button { font: inherit; font-weight: 600; padding: 6px 16px; border: 0; border-radius: 8px; background: var(--accent); color: #fff; cursor: pointer; }
   .new-session .actions button:disabled { opacity: .5; cursor: default; }
@@ -476,7 +485,10 @@
   .todo.answer { border-left: 3px solid var(--accent); }
   .todo.watch { border-left: 3px solid var(--synth); }
   /* 終わったのに自動では起こさない待ち（#732）。行から起こす・片付ける */
-  .todo.wait, .todo.config { border-left: 3px solid var(--claude); }
+  .todo.wait, .todo.config, .todo.start-draft { border-left: 3px solid var(--claude); }
+  /* 新しいセッションの案（#892）。最初の指示は 3 行まで見せる */
+  .todo.start-draft .start-draft-text { flex-basis: 100%; margin-top: 4px; font-size: 12px; color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .todo .wait-actions a.open-new { font-size: 12px; padding: 3px 10px; border: 1px solid var(--accent); border-radius: 6px; background: var(--panel); color: var(--accent); font-weight: 600; text-decoration: none; white-space: nowrap; }
   .todo.config .config-files { list-style: none; margin: 4px 0 0; padding: 0; }
   .todo.config .config-files li, .diff-section.codex-config li { font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
   .todo .wait-actions { flex: none; display: flex; gap: 6px; margin-top: 4px; }
@@ -485,7 +497,7 @@
   .todo .wait-actions button:disabled { opacity: .5; cursor: default; }
   @media (max-width: 640px) {
     .todo.wait .why-row { flex-wrap: wrap; }
-    .todo.config .why-row { flex-direction: column; align-items: stretch; }
+    .todo.config .why-row, .todo.start-draft .why-row { flex-direction: column; align-items: stretch; }
   }
   /* 下段（#438）。答えを待っている上段より控えめに出す */
   .todo.done { border-left: 3px solid var(--line); opacity: 0.75; }

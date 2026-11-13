@@ -270,6 +270,11 @@ export interface SessionSummary {
    */
   manager_draft?: ManagerDraft
   /**
+   * このセッションが置いた、新しい worktree と新しいセッションの案（#892。`sai_start`）。置いてから 24 時間以内のものだけ
+   * サーバが `start-drafts.json` から載せる（`shared/startDraft.ts`）。要対応に出し、人が押すと始まる
+   */
+  start_draft?: StartDraft
+  /**
    * 一番新しい自分の入力（ターン完了の行か入力の行の `user_text`）の 1 行目（#300）。
    * 一覧の 2 行目で「最後に言ったのが自分か」を決めるのに使う（`web/src/sessionPreview.ts`）。集計が付けるので、手で組む fixture では省略可
    */
@@ -332,6 +337,44 @@ export interface ManagerDraft {
   at: number
   /** 置いたときに宛先のターンが回っていたか。回っていたターンが終わっただけでは消さない（`shared/managerDraft.ts`） */
   busy: boolean
+}
+
+/** 案に書けるエージェント（#892。画面の「新しいセッション」で始められるもの） */
+export type StartAgent = 'claude' | 'codex' | 'opencode'
+
+/** 新しい worktree と新しいセッションの案（#892 の段階 1。`sai_start`）。1 セッションに 1 つで、置き直すと前のものは消える */
+export interface StartDraft {
+  /** 作る worktree の名前（`worktreeNameRefusal()` を通したもの）。置き場は置いたセッションの行の cwd から、押したときに組む */
+  name: string
+  agent: StartAgent
+  /** 最初の指示 */
+  text: string
+  /** 置いた時刻（ミリ秒）。捨てる・始めたときに「同じ案か」の鍵にもする */
+  at: number
+}
+
+/** `POST /api/agent/start`（`sai_start`）の body。`from` は MCP が付ける置き手。**パス・リポジトリ・ブランチ・base は受けない** */
+export interface AgentStartRequest {
+  from: string
+  name: string
+  agent?: string
+  text: string
+}
+
+/** `POST /api/agent/start` の応答 */
+export interface AgentStartResponse {
+  placed: true
+  draft: StartDraft
+}
+
+/** `POST /api/sessions/<id>/start-draft`（案を片付ける。始めた・捨てた）の body。`at` が置いてあるものと違えば何もしない */
+export interface StartDraftActionRequest {
+  at: number
+}
+
+export interface StartDraftActionResponse {
+  id: string
+  taken: boolean
 }
 
 /** セッションに人が付けるもの。~/.agent-feed/session-meta.json に JSONL とは別で持つ（アイコン画像はファイルで別、SessionSummary.icon） */

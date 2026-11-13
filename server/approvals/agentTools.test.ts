@@ -20,6 +20,8 @@ const seen: { method: string; url: string; token: string; body: string }[] = []
 /** /api/agent/loop が返すもの（#634） */
 let loopReply: { status: number; body: unknown } = { status: 200, body: {} }
 let waitForReply: { status: number; body: unknown } = { status: 200, body: {} }
+/** /api/agent/start が返すもの（#892） */
+let startReply: { status: number; body: unknown } = { status: 201, body: {} }
 /** /api/agent/send が次に返すもの（無ければいつもの 1 件ぶん）。1 回使ったら戻る */
 let sendReply: { status: number; body: unknown } | null = null
 /** /api/agent/sessions が次に返す一覧（無ければいつもの 1 件）。1 回使ったら戻る */
@@ -62,6 +64,7 @@ before(async () => {
         return reply(202, { message_id: 'm1', to: 'B1@r', to_name: 'レビュー', via: 'queued', sent: 1, limit: 3, context_tokens: 900_000, read_tokens: 900_000, read_budget: 3_000_000 })
       }
       if (req.url === '/api/agent/wait-for') return reply(waitForReply.status, waitForReply.body)
+      if (req.url === '/api/agent/start') return reply(startReply.status, startReply.body)
       if (req.url?.startsWith('/api/agent/wait')) {
         const next = waits.shift() ?? { status: 404, body: { error: 'そのメッセージは見つかりません' } }
         return reply(next.status, next.body)
@@ -192,9 +195,9 @@ test('approve-mcp.ts: トークンの置き場を渡されたときだけ sai_* 
   const without = await names({ SAI_URL: base, SAI_ENTITY: 'A1@r' })
   assert.deepEqual(without.tools, ['approve'], 'トークンの置き場が無ければ、叩いても断られるツールを見せない')
   const withToken = await names({ SAI_URL: base, SAI_ENTITY: 'A1@r', SAI_TOKEN_FILE: tokenFile })
-  assert.deepEqual(withToken.tools, ['approve', 'sai_sessions', 'sai_send', 'sai_wait', 'sai_wait_for'], 'ループの周でないターンには sai_loop_next を見せない（#634）')
+  assert.deepEqual(withToken.tools, ['approve', 'sai_sessions', 'sai_send', 'sai_wait', 'sai_wait_for', 'sai_start'], 'ループの周でないターンには sai_loop_next を見せない（#634）')
   const inLoop = await names({ SAI_URL: base, SAI_ENTITY: 'A1@r', SAI_TOKEN_FILE: tokenFile, SAI_LOOP: '1' })
-  assert.deepEqual(inLoop.tools, ['approve', 'sai_sessions', 'sai_send', 'sai_wait', 'sai_wait_for', 'sai_loop_next'])
+  assert.deepEqual(inLoop.tools, ['approve', 'sai_sessions', 'sai_send', 'sai_wait', 'sai_wait_for', 'sai_start', 'sai_loop_next'])
   const text = ((withToken.call!.result as { content: { text: string }[] }).content[0]!.text)
   assert.match(text, /B1@r「レビュー」/)
 })
@@ -258,6 +261,8 @@ test('AGENT_TOOLS: 説明を書き直しても、ツールの名前と引数は�
       ['sai_send', ['to', 'text', 'wake', 'compact', 'items'], []],
       ['sai_wait', ['message_id'], ['message_id']],
       ['sai_wait_for', ['pr', 'then'], ['pr', 'then']],
+      // 名前・エージェント・最初の指示だけ（パス・リポジトリ・ブランチ・base は引数に無い。#892）
+      ['sai_start', ['name', 'agent', 'text'], ['name', 'text']],
     ],
   )
   const send = AGENT_TOOLS.find((t) => t.name === 'sai_send')!.description
@@ -313,3 +318,22 @@ test('sai_wait_for: 送り元・PR の番号・起きたときにやることだ
   assert.match(refused.content[0]!.text, /預かれませんでした: 同時に待てるのは 2 件まで/)
 })
 
+
+test('sai_start: 送り元・名前・エージェント・最初の指示だけを送り、置いただけ（まだ何も作っていない）と返す（#892）', async () => {
+  seen.length = 0
+  startReply = { status: 201, body: { placed: true, draft: { name: 'task-a', agent: 'codex', text: 'やって', at: 1 } } }
+  const placed = await agentTool('sai_start', { name: 'task-a', agent: 'codex', text: 'やって', cwd: '/etc', repo: 'owner-b/repo-b', base: '--force', path: '/tmp/x' }, base, 'A1@r', tokenFile)
+  assert.equal(placed.isError, undefined)
+  assert.match(placed.content[0]!.text, /案を置きました: 新しい worktree「task-a」で Codex CLI を始める。まだ何も作っていません/)
+  const sent = seen.at(-1)!
+  assert.deepEqual([sent.method, sent.url, sent.token], ['POST', '/api/agent/start', 'secret-token'])
+  assert.deepEqual(JSON.parse(sent.body), { from: 'A1@r', name: 'task-a', text: 'やって', agent: 'codex' }, 'パス・リポジトリ・base は送らない')
+  // エージェントを書かなければ送らない（サーバが claude にする）
+  await agentTool('sai_start', { name: 'task-a', text: 'やって' }, base, 'A1@r', tokenFile)
+  assert.deepEqual(JSON.parse(seen.at(-1)!.body), { from: 'A1@r', name: 'task-a', text: 'やって' })
+  startReply = { status: 403, body: { error: '許可を聞かないモード（Bypass permissions）のセッションからは、新しいセッションの案を置けません' } }
+  const refused = await agentTool('sai_start', { name: 'task-a', text: 'x' }, base, 'A1@r', tokenFile)
+  assert.equal(refused.isError, true)
+  assert.match(refused.content[0]!.text, /^置けませんでした: 許可を聞かないモード/)
+  assert.match(AGENT_TOOLS.find((t) => t.name === 'sai_start')!.description, /置くだけで、worktree も作らずセッションも起こさない/)
+})

@@ -50,6 +50,7 @@ test('notifyPlan: 1 件はその中身、2 件以上はまとめて 1 通', () =
   assert.equal(one?.hash, '#/todo')
 
   assert.equal(notifyPlan([item({ kind: 'answer' })])?.title, '答え待ち: CI の整備')
+  assert.equal(notifyPlan([item({ kind: 'start' })])?.title, '新しいセッションの案: CI の整備', '#892')
 
   const many = notifyPlan([item({ id: 'A@dev' }), item({ id: 'B@dev', kind: 'answer' })])
   assert.equal(many?.title, '2 件があなたを待っています')

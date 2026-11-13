@@ -2,7 +2,8 @@
 import { stripMarkdown } from './markdown.ts'
 import { TERMINAL_HELD_PAUSED } from './agentMessages.ts'
 import { replyBlockedReason } from './reply.ts'
-import type { Approval, ApprovalMap, CodexConfigHold, CodexConfigHoldMap, LoopMap, ReplyingMap, ReplyQueueMap, SessionSummary, Wait, WaitMap } from './types.ts'
+import { startDraftText } from './startDraft.ts'
+import type { Approval, ApprovalMap, CodexConfigHold, CodexConfigHoldMap, LoopMap, ReplyingMap, ReplyQueueMap, SessionSummary, StartDraft, Wait, WaitMap } from './types.ts'
 import { waitDoneText, waitNeedsHuman } from './waits.ts'
 
 /**
@@ -12,11 +13,13 @@ import { waitDoneText, waitNeedsHuman } from './waits.ts'
  * - `wait`: 預かった待ち（#732）が終わっているが、**自動では起こさないと決めたもの**（`waitNeedsHuman()`）。人が「いま起こす」か
  *   「片付ける」を押すまで何も起きないので、`answer` / `watch` と同じく数える。1 つの待ち = 1 行（同じセッションに 2 行あることがある）
  * - `config`: Codex を起こす前の確かめ（#856）で止めている。人が「このまま起こす」か「片付ける」を押すまで起こさないので数える
+ * - `start`: セッションが置いた、新しい worktree と新しいセッションの案（#892。`sai_start`）。人が開いて押すまで何も起きないので数える。
+ *   1 つの案 = 1 行（置いたセッションのほかの行とは別に並ぶ）
  * - `done`: **詰まってはいない。ターンが終わって次の指示を待っているだけ**（#438 / #513。判定は `awaitsNext()`）。
  *   `answer` / `watch` と同じ重さで出すと、本当に答えを待っているものが埋もれるので、
  *   画面では下段に置き、**バッジ・タブの題名・通知には数えない**（`pendingItems()`）
  */
-export type TodoKind = 'answer' | 'watch' | 'wait' | 'config' | 'done'
+export type TodoKind = 'answer' | 'watch' | 'wait' | 'config' | 'start' | 'done'
 
 export interface TodoItem {
   /** エンティティID */
@@ -45,6 +48,8 @@ export interface TodoItem {
   wait?: Wait
   /** kind === 'config' のときだけ。何を確かめるか（#856） */
   config?: CodexConfigHold
+  /** kind === 'start' のときだけ。置かれた案（#892） */
+  start?: StartDraft
 }
 
 /**
@@ -102,6 +107,11 @@ export function todoItems(sessions: readonly SessionSummary[], approvals: Approv
   for (const [id, h] of Object.entries(configHolds)) {
     out.push({ id, kind: 'config', text: codexConfigText(h), since: h.since, session: byId.get(id) ?? null, approval: null, replyable: false, config: h })
   }
+  // 新しいセッションの案（#892）。置いたセッションの行（`watch` / `done`）とは別に並ぶ。アーカイブ済みのセッションの案は出さない
+  for (const s of sessions) {
+    if (!s.start_draft || s.archived) continue
+    out.push({ id: s.id, kind: 'start', text: startDraftText(s.start_draft), since: new Date(s.start_draft.at).toISOString(), session: s, approval: null, replyable: false, start: s.start_draft })
+  }
   for (const s of sessions) {
     // 答え待ちが出ているセッションは上で入れてある（そちらの方が新しくて具体的）
     if (answering.has(s.id) || s.archived) continue
@@ -139,6 +149,7 @@ export function todoItems(sessions: readonly SessionSummary[], approvals: Approv
 export function todoKey(t: Pick<TodoItem, 'id' | 'kind' | 'wait'>): string {
   if (t.kind === 'wait') return `wait:${t.id}:${t.wait?.id ?? ''}`
   if (t.kind === 'config') return `config:${t.id}`
+  if (t.kind === 'start') return `start:${t.id}`
   return t.kind === 'done' ? `done:${t.id}` : t.id
 }
 
@@ -192,7 +203,7 @@ export function doneItems(items: readonly TodoItem[]): TodoItem[] {
   return items.filter((t) => t.kind === 'done')
 }
 
-/** 要対応の画面の段（#551）。上から `answer` → `config` → `wait` → `unread` → `watch` → `done` の順に出す */
+/** 要対応の画面の段（#551）。上から `answer` → `config` → `wait` → `start` → `unread` → `watch` → `done` の順に出す */
 export interface TodoSections {
   /** 答え待ち。この画面から答えられるので、未読かどうかに関わらず一番上 */
   answer: TodoItem[]
@@ -200,6 +211,8 @@ export interface TodoSections {
   config: TodoItem[]
   /** 終わっていて、自動では起こさない待ち（#732）。押すだけで済むので答え待ちのすぐ下 */
   wait: TodoItem[]
+  /** 新しいセッションの案（#892）。押すまで何も起きない */
+  start: TodoItem[]
   /** 未読の返答があるセッション（`watch` も `done` も）。読んでいない返答が下段の奥に埋もれないように上げる */
   unread: TodoItem[]
   /** 未読の無い待機中 */
@@ -216,11 +229,12 @@ export interface TodoSections {
  * 今までどおり `done` の行だけ（#522）
  */
 export function todoSections(items: readonly TodoItem[]): TodoSections {
-  const out: TodoSections = { answer: [], config: [], wait: [], unread: [], watch: [], done: [] }
+  const out: TodoSections = { answer: [], config: [], wait: [], start: [], unread: [], watch: [], done: [] }
   for (const t of items) {
     if (t.kind === 'answer') out.answer.push(t)
     else if (t.kind === 'wait') out.wait.push(t)
     else if (t.kind === 'config') out.config.push(t)
+    else if (t.kind === 'start') out.start.push(t)
     else if ((t.session?.unread ?? 0) > 0) out.unread.push(t)
     else out[t.kind].push(t)
   }

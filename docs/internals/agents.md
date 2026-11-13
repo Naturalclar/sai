@@ -10,6 +10,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 
 - SAI が起動した `claude -p` の MCP サーバ（`server/approvals/approve-mcp.ts`）が、承認の `approve` に加えて `sai_sessions` / `sai_send` / `sai_wait` を出す。出すのは `SAI_TOKEN_FILE` を渡されたときだけ（叩いても断られるツールを見せない）。
 - ツールはエージェント用の口 `GET /api/agent/sessions`・`POST /api/agent/send`・`GET /api/agent/wait` を叩く（中身は `agentTool()`）。
+- **口と時計の 1 回ぶんは `server/reply/agentRoutes.ts`**（#810。`createAgentRoutes(ctx)` が `agentSessions()`・`agentSend()`・`agentWait()`・`agentStop()`・`drainBacklog()`・`holdingsOf()`・`agentResult()`・`pendingRepliesOf()` などを返し、`createApp()` が振り分け・一覧・ポーリングにつなぐ）。状態の持ち主（処理中・預かり・起動中の印・`seenContext`）は `createApp()` のまま参照を渡し、前のサーバが残した預かりを送り始める `scheduleBacklog()` も `createApp()` が今までの位置で呼ぶ。純粋な部分は `shared/agentMessages.ts` と `server/reply/agentMessages.ts` のまま。
 - 鍵は `~/.agent-feed/agent-token`（`server/reply/agentMessages.ts` の `ensureAgentToken()`。0600）の中身で、`X-SAI-Agent-Token` で送る。MCP サーバには中身ではなく場所を渡す。
 
 ### 送り元と送り先
@@ -39,12 +40,12 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 「変わっているファイル」は差分ビューアと同じ範囲（`base...HEAD` + 未コミット + 追跡外）で、`server/git/diff.ts` の `changedPaths()` が `--numstat` だけを読む（本文は作らない。`RealGit` の読むだけの allowlist の中）。**cwd は行から取り**、リクエストからは受けない。別のマシンのセッションは空。**`gh` で PR の files は引かない**（外へ問い合わせる場所を増やさない）。
 - パスはどれも**リポジトリのトップからの形**（追跡外は `--full-name`。サブディレクトリで開いたセッションでも `diff` と揃う）、**リネームは `--no-renames` で消した・足した 2 つのパス**にする（`{old => new}` の形では相手の編集と突き合わない）。
 - 数えないもの: `CLAUDE.md` / `README.md`（どの階層でも）/ `docs/`（`overlapIgnored()`。ほぼ全部の PR が触る）、同じ worktree の相手（**cwd ではなく `rev-parse --show-toplevel` で比べる**。サブディレクトリで開いたセッションを別の worktree と取り違えると、差分が全部「重なり」になる）。`main` にいる worktree は差分が無いので自然に空になる。
-- **ツールが呼ばれたときだけ**計算し（ポーリングには乗せない）、`app.ts` の `changedOf()` が `(cwd, last_turn_ts)` で `CHANGED_PATHS_TTL_MS`（30 秒）覚える。時間でも切るのは、呼んだ側はターンの途中で編集していて `last_turn_ts` が変わらないため。
+- **ツールが呼ばれたときだけ**計算し（ポーリングには乗せない）、`agentRoutes.ts` の `changedOf()` が `(cwd, last_turn_ts)` で `CHANGED_PATHS_TTL_MS`（30 秒）覚える。時間でも切るのは、呼んだ側はターンの途中で編集していて `last_turn_ts` が変わらないため。
 - **知らせるだけで、自動では送らない**。送るかはエージェントが決める（ツールの説明に「使う場面・使わない場面」を先に書いてある。`approve-mcp.ts` の `AGENT_TOOLS`）。MCP の `sai_sessions`（`/mcp`。Manager・tailnet 用）には出さない（呼び出し元に「自分の worktree」が無い）。
 
 ### いま何を持っているか（#727 の案 D の読む側）
 
-- `sai_sessions` の 2 つの口（SAI が渡す `sai` = `GET /api/agent/sessions` と、tailnet の `/mcp`）の 1 行に、そのセッションが**いま持っているもの**を足す。組み立ては `shared/holding.ts`（純粋関数）で、`app.ts` の `holdingsOf()` が材料を集める。**SAI は持ち場を書いて持たない**（登録する口は無い）。機械で引けたものだけで、引けなければ付けない。
+- `sai_sessions` の 2 つの口（SAI が渡す `sai` = `GET /api/agent/sessions` と、tailnet の `/mcp`）の 1 行に、そのセッションが**いま持っているもの**を足す。組み立ては `shared/holding.ts`（純粋関数）で、`agentRoutes.ts` の `holdingsOf()` が材料を集める。**SAI は持ち場を書いて持たない**（登録する口は無い）。機械で引けたものだけで、引けなければ付けない。
 - `pr`: そのセッションのブランチ（`SessionSummary.branch`）から出ている open な PR の番号と CI（`PrSummary.checks`）・下書きか（`prOfBranch()`。fork の同じ名前のブランチは結ばない）。リポジトリは記録の `remote`（`githubRepoOf()`）で、別のマシンのセッションと remote の無いセッションでは引かない。読むのは今ある `gh pr list` の決まった形（`PrBrowser`）だけ。
 - **応答を `gh` に待たせない**: `PrBrowser.cached()` が前に引いた一覧をそのまま返し、古ければ（`PRS_CACHE_MS`）裏で引き直す。まだ 1 回も引いていない・前の結果が `HOLDING_PR_STALE_MS`（10 分）より古いリポジトリだけ `HOLDING_PR_WAIT_MS`（1.5 秒）待ち（何時間も前の CI を今の状態として出さない）、間に合わなければ PR の印を付けずに返す（行は落とさない）。**着手の依頼を送る時点の 1 人ぶんの確かめ（`opts.only`）だけは `HOLDING_SEND_PR_WAIT_MS`（5 秒）まで待つ**（#828。open な PR の一覧・マージ済みの一覧・head の親のどれも）。同じリポジトリは 1 回の呼び出しで 1 回しか聞かない（書き方の違いは `knownRepos()` / `pickKnownRepo()` で揃える）。`SAI_GH=0` では引かない。
 - `issues`: `issueNumbers()` が、ブランチ名の `issue-<番号>`・PR の題名の**括弧の中**の `#<番号>`（`… (#727)`。その PR 自身の番号・括弧の外の番号・`PR #N` は除く）・届いていてまだ返していない依頼の 1 行目の、**行の頭の `#<番号>`** か **`issue #<番号>`** から引く（`HOLDING_ISSUES_MAX` = 3 件まで）。`PR #734 をレビューして` の番号や、本文の途中の番号は拾わない。
@@ -170,7 +171,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - **預かる前に数える**: 宛先を全部引き当て、相手の使用量の枠と読み直す量（`progress.read().context_tokens`）を見てから、`requestRefusal()`（`shared/agentMessages.ts`）が依頼 1 つの上限を見る。依頼＝送り元のそのターンで頼んだ分（もう送った分 + 預かっている分 + 今回）で、上限は **`AGENT_REQUEST_MAX`（8 件）と `AGENT_REQUEST_READ_BUDGET`（600 万トークン）**。超えるなら 1 件も送らず・預からずに `429`（宛先ごとの量を理由に書く）。**仮の値で、変えるならこの 2 つの定数**（と巡の間 `AGENT_BACKLOG_ROUND_MS`）。
 - 複数の宛先を 1 つの依頼として渡す形（body の `items: [{ to, text, compact? }]`。ツールでは `sai_send` の `items`）は、同じ道を通る: 全部を確かめてから、上から順にその場で送れる分を送り、残りを預かる。応答は `AgentSendManyResponse`（1 件ずつ `via` / `held` / `error`）。
 - 人が止めている・受け取ったメッセージで回っているターン（連鎖）からは、預かりもしない（`AgentMessages.refusal(from, turn, Infinity)`。回数だけを見ない）。
-- 送るのは `drainBacklog()`（`server/app.ts`）: **送り元のターンが終わってから**（`run.running(from)` の間は送らない）、1 巡に `AGENT_SEND_MAX` 件・`AGENT_TURN_READ_BUDGET` まで、巡と巡の間は `AGENT_BACKLOG_ROUND_MS`（60 秒）空ける。呼ばれるのはターンの終わり・画面のポーリング（`drainAll()`）・前の巡が掛けたタイマー（`unref()`）。送り方は `sai_send` と同じ `launch()`（相手が処理中なら相手の預かりに並ぶ。権限のフラグは足さない）で、送れたらいつもの記録に載る（`recordHeld()`。返答は送り元の画面と次のターンの頭に届く。1 ターンの回数・量 `sends` には足さない＝送り元がいま回している別のターンの数を潰さない）。巡の途中で呼ばれたら終わったあとにもう 1 回見る（`backlogAgain`）。立て直したあとは `BACKLOG_STARTUP_MS`（5 秒）後に、前のサーバが残した預かりを見始める。
+- 送るのは `drainBacklog()`（`server/reply/agentRoutes.ts`）: **送り元のターンが終わってから**（`run.running(from)` の間は送らない）、1 巡に `AGENT_SEND_MAX` 件・`AGENT_TURN_READ_BUDGET` まで、巡と巡の間は `AGENT_BACKLOG_ROUND_MS`（60 秒）空ける。呼ばれるのはターンの終わり・画面のポーリング（`drainAll()`）・前の巡が掛けたタイマー（`unref()`）。送り方は `sai_send` と同じ `launch()`（相手が処理中なら相手の預かりに並ぶ。権限のフラグは足さない）で、送れたらいつもの記録に載る（`recordHeld()`。返答は送り元の画面と次のターンの頭に届く。1 ターンの回数・量 `sends` には足さない＝送り元がいま回している別のターンの数を潰さない）。巡の途中で呼ばれたら終わったあとにもう 1 回見る（`backlogAgain`）。立て直したあとは `BACKLOG_STARTUP_MS`（5 秒）後に、前のサーバが残した預かりを見始める。
 - 送る直前にもう一度確かめる: 相手がまだ送ってよい相手か・相手の使用量の枠・相手が 1 件で 1 巡の予算を超えていないか。通らない 1 件・起動できなかった 1 件・途中で例外になった 1 件は、**捨てずに理由を付けて止める**（`haltHeld()`。エージェントには「預かった」と返してあるので黙って消さない。画面に「送っていません」と出て、`reply.log` にも残る）。止まった分は自動では送らず、人が「送信を止める」で捨てる。
 - 置き場は `AgentMessages` の `backlog`（メモリと `agent-messages.json`）。**送る前に送りかけの印を書く**（`beginHeld()`）。印が付いたまま立て直されたものは、届いたか分からないので送り直さず、理由（`HALTED_ON_RESTART`）を付けて残す（画面に「送っていません」と出る。人が「送信を止める」で捨てる）。記録の済んだ預かりは読み込むときに捨てる。順番待ちの預かりはそのまま残り、立て直したあとの最初の巡で送る。
 - 「返答が来たら起こす」（`wake`）は、同じ依頼の `wake` 付きの預かりが残っている間は起こさない（送り切って、その返答がそろってから 1 回）。

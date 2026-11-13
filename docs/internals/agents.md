@@ -192,6 +192,17 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 送った・止めた・再開したは `agents.key()` を詳細の rev に混ぜる。
 - 端末のセッションから送る・Codex / OpenCode から送る、は次（#310）。
 
+### 新しいセッションの案を置く（`sai_start`。#892 の段階 1）
+
+- ツールは `approve-mcp.ts` の `AGENT_TOOLS` の `sai_start`（名前は `shared/startDraft.ts` の `START_TOOL`）→ `POST /api/agent/start`（`server/reply/startRoutes.ts` の `agentStart()`）。送るのは送り元・名前・エージェント・最初の指示だけ。
+- 置き手は `agentFrom()`（SAI が起こしていま回しているターン）。断るのは、送信を止めたセッション（`agents.isStopped()`）・許可を聞かないモード（`replyModeOf()` + `modeSkipsRules()`。`/mcp` の `mcpSendRefusal()` と同じ読み方で、既定のモードは Claude にだけ当てる）・cwd の無い行・worktree を作る口（`addWorktreeTo`）の無い SAI。引数は `startDraftOf()`（`worktreeNameRefusal()`・`START_AGENTS`・`AGENT_TEXT_MAX_CHARS`）。
+- **置くだけ**: `StartDraftStore`（`server/reply/startDrafts.ts`。`~/.agent-feed/start-drafts.json`、置いたセッションの ID ごとに 1 つ、24 時間と 200 件で捨てる）に書き、`reply.log` に長さだけ残す。git もプロセスも起こさない。
+- 置き場とリポジトリは受けない。押したときに `POST /api/workspaces` がそのセッションの行の cwd から組むので、ほかのリポジトリ（`mayCross()` の組の先も）には作れない。同じ名前があるかは置くときには見ない（押したときに 409）。
+- 一覧（`sessionsWithMeta()`）が `liveStartDraft()` を通ったものを `SessionSummary.start_draft` に載せ、`id:at` を rev に混ぜる。要対応は `todoItems()` の `start`（数えるぶんに入る）。
+- 画面: 行は `TodoStartRow`（「開く」は `sessionStorage` の `START_DRAFT_PICK_KEY` に置いたセッションの ID を書いて `#/new` へ）。`NewSessionView` が読んだら消して `startDraftChoices()` から引き、`StartDraftBanner` を出す。押すと `startFromDraft()` が `api.addWorktree()` → `api.startSession()`（できた鍵）→ `api.startDraftAction()` の順に呼ぶ。始められなかったら、できた worktree を覚えて押し直しで使う。
+- 片付けは `POST /api/sessions/<id>/start-draft`（`startDraftAction()`。同一オリジンのみ。`at` が同じときだけ）。
+- 段階 2（`send` の capability がある呼び手が直接始める）は作っていない。`/mcp`（tailnet）には出していない（呼び手のセッションが無いので、置き場を決める行が無い）。
+
 ## tailnet から MCP で呼ぶ口
 
 ### 口とツール

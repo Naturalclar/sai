@@ -23,7 +23,8 @@ import { ACROSS_HEADING, ACROSS_NOTE, AGENT_REQUEST_MAX, AGENT_SEND_MAX, HELD_NO
 import { FREE_NOTE, holdingLabel, START_ASK_NOTE } from '../../shared/holding.ts'
 import { LOOP_MAX_INTERVAL_S, LOOP_MIN_INTERVAL_S, LOOP_TOOL } from '../../shared/loops.ts'
 import { WAIT_AUTO_WAKE_MS, WAIT_FOR_TOOL, WAIT_MAX_MS, WAIT_MAX_PER_SESSION, waitResultText } from '../../shared/waits.ts'
-import type { LoopNextResponse, WaitForResponse } from '../../shared/types.ts'
+import { START_AGENT_LABEL, START_AGENTS, START_TOOL } from '../../shared/startDraft.ts'
+import type { AgentStartResponse, LoopNextResponse, WaitForResponse } from '../../shared/types.ts'
 import type { AgentSendManyResponse, AgentSendResponse, AgentSessionEntry, AgentSessionsResponse, AgentWaitResponse, ApprovalAnswer, ApprovalRequest } from '../../shared/types.ts'
 
 export const TOOL_NAME = 'approve'
@@ -85,6 +86,20 @@ export const AGENT_TOOLS = [
         then: { type: 'string', description: '起きたときにやることを 1 文で（例: 結果を読んで、落ちていれば原因を報告する）' },
       },
       required: ['pr', 'then'],
+    },
+  },
+  {
+    name: START_TOOL,
+    description:
+      `新しい worktree を作って、そこで新しいセッションを始める「案」を、人の画面（要対応）に置く（#892）。**置くだけで、worktree も作らずセッションも起こさない**: 人が要対応から開いて押すと、SAI がその名前の worktree をこのセッションのリポジトリに作り、最初の指示で新しいセッションを始める。**使う場面**: 割り振る相手に空いているセッションが無く、別の作業の場所ごと用意して渡したいとき。**使わない場面**: 空いているセッションに頼めるとき（sai_send を使う）／このセッションで続けられる作業。渡すのは worktree の名前（英数字と . _ - で先頭は英数字、64 字まで。そのままブランチ名にもなる）・エージェント（${START_AGENTS.map((a) => `"${a}"＝${START_AGENT_LABEL[a]}`).join('、')}。既定は claude）・最初の指示だけ。置き場とリポジトリはこのセッションのものに決まる（ほかのリポジトリには作れない）。1 セッションに 1 つで、置き直すと前の案は消える。24 時間で消える。同じ名前の worktree が既にあれば、人が押したときに断られる。最初の指示は、新しいセッションが何も知らない前提で、それだけで動けるように書く（何を・どこまで・何を返すか）。許可を聞かないモードのセッションからは置けない`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: '作る worktree の名前（ブランチ名にもなる）' },
+        agent: { type: 'string', enum: [...START_AGENTS], description: '始めるエージェント（既定は claude）' },
+        text: { type: 'string', description: '新しいセッションへの最初の指示' },
+      },
+      required: ['name', 'text'],
     },
   },
 ]
@@ -235,6 +250,13 @@ export async function agentTool(
         return textResult(`預かっていません。もう終わっています: ${waitResultText(body.result)}${failing}。このターンで結果を確かめて報告してください`)
       }
       return textResult(`預かりました。PR #${body.wait?.pr} の CI が終わったら（通っても落ちても）1 回だけ起こします。${Math.round(WAIT_AUTO_WAKE_MS / 60_000)} 分を過ぎて終わったときは自動では起こさず、結果を人の画面に出します（人が押したら起きます）。${body.wait?.deadline ?? ''} までに終わらなければ起こさず、人の画面に出します。待たずにこのターンを終えてください（あと ${body.left} 件預けられます）`)
+    }
+    if (name === START_TOOL) {
+      // 名前・エージェント・最初の指示だけを送る（パス・リポジトリ・ブランチ・base は引数にあっても送らない）
+      const res = await agentFetch(base, file, '/api/agent/start', { method: 'POST', body: JSON.stringify({ from, name: args.name, text: args.text, ...(args.agent !== undefined ? { agent: args.agent } : {}) }) })
+      if (!res.ok) return textResult(`置けませんでした: ${await errorOf(res)}`, true)
+      const body = (await res.json()) as AgentStartResponse
+      return textResult(`人の画面（要対応）に案を置きました: 新しい worktree「${body.draft.name}」で ${START_AGENT_LABEL[body.draft.agent]} を始める。まだ何も作っていません（人が押したら作って始まります）。人には「要対応の案を押してください」と伝えて、このターンを終えてください`)
     }
     if (name === LOOP_TOOL) {
       const action = typeof args.action === 'string' ? args.action : ''

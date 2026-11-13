@@ -156,6 +156,9 @@ import type { SweepOptions } from './reply/attachmentSweep.ts'
 import { PROFILE_FILE, ProfileStore } from './meta/profile.ts'
 import { READ_MARKS_FILE, ReadStore } from './meta/reads.ts'
 import { SUGGESTIONS_FILE, SuggestionStore } from './mcp/suggestions.ts'
+import { START_DRAFTS_FILE, StartDraftStore } from './reply/startDrafts.ts'
+import { createStartRoutes } from './reply/startRoutes.ts'
+import { liveStartDraft } from '../shared/startDraft.ts'
 import { liveManagerDraft } from '../shared/managerDraft.ts'
 import { stopMissing, stopMissingCandidate } from '../shared/stopMissing.ts'
 import { RecoveredTurns } from './local/recovered.ts'
@@ -353,6 +356,10 @@ const AGENT_WAIT_PATH = '/api/agent/wait'
 const AGENT_LOOP_PATH = '/api/agent/loop'
 /** `sai_wait_for`（#732）。エージェントが「PR の CI が終わったら起こして」を預ける口 */
 const AGENT_WAIT_FOR_PATH = '/api/agent/wait-for'
+/** `sai_start`（#892）。エージェントが新しい worktree と新しいセッションの案を置く口（置くだけ） */
+const AGENT_START_PATH = '/api/agent/start'
+/** 人が新しいセッションの案を片付ける口（#892）。`POST /api/sessions/<id>/start-draft`。同一オリジンのみ */
+const START_DRAFT_SUFFIX = '/start-draft'
 /** 処理中のターンを止める口（#384）。`POST /api/sessions/<id>/interrupt`。同一オリジンのみ */
 const INTERRUPT_SUFFIX = '/interrupt'
 /** 止めたあと、預かりを自動で回さないでおく理由（画面の `QueuedBubble` に出て、「続けて送る」で人が回す） */
@@ -997,6 +1004,7 @@ export function createApp(
   const readStore = new ReadStore(join(store.directory, READ_MARKS_FILE))
   // Manager が入力欄に置いた案（#565）。1 セッションに 1 つ
   const suggestionStore = new SuggestionStore(join(store.directory, SUGGESTIONS_FILE))
+  const startDrafts = new StartDraftStore(join(store.directory, START_DRAFTS_FILE))
   const iconStore = new IconStore(join(store.directory, ICONS_DIR))
   const iconHistory = new IconHistory(join(store.directory, ICON_HISTORY_DIR), join(store.directory, ICON_HISTORY_FILE), iconStore)
   const attachmentStore = new AttachmentStore(join(store.directory, ATTACHMENTS_DIR))
@@ -1419,7 +1427,7 @@ export function createApp(
   const rowsNow = async (days: number): Promise<FeedRow[]> => (await recovered.apply(await store.rows(days))).rows as FeedRow[]
 
   const sessionsWithMeta = async (days: number): Promise<{ rev: string; sessions: SessionSummary[] }> => {
-    const [{ rev, sessions: raw }, meta, icons, reads, rows, drafts] = await Promise.all([store.sessions(days), metaStore.all(), iconStore.all(), readStore.get(), store.rows(days), suggestionStore.all()])
+    const [{ rev, sessions: raw }, meta, icons, reads, rows, drafts, starts] = await Promise.all([store.sessions(days), metaStore.all(), iconStore.all(), readStore.get(), store.rows(days), suggestionStore.all(), startDrafts.all()])
     // project / remote の無い古い行のセッションは cwd から git で引いて埋める（cwd ごとに 1 回だけ。#182、#212）
     const sessions = await fillRepo(projects, raw)
     // 補った返答（#614）を重ねた行。未読はこちらで数える（終わったことを知らせる）。`turns` は集計のまま進めない
@@ -1461,6 +1469,9 @@ export function createApp(
         if (n) out.unread = n
         const draft = live.get(s.id)
         if (draft) out.manager_draft = draft
+        // 新しいセッションの案（#892）。出すのは 24 時間以内のものだけ（rev には下で「いま出している案」を混ぜる）
+        const start = liveStartDraft(starts[s.id], nowMs)
+        if (start) out.start_draft = start
         out.read_at = readMarkOf(reads.marks, s.id)
         return out
       }))
@@ -1565,7 +1576,7 @@ export function createApp(
         unset.push(`${id}:${number}:${blocked ? 1 : 0}`)
       }
     }
-    return { rev: `${rev}-${meta.rev}-${icons.rev}-${reads.rev}-${[...live].map(([id, d]) => `${id}:${d.at}`).join(',')}-${missing.join(',')}-${unset.join(',')}-${shown.key}`, sessions: built }
+    return { rev: `${rev}-${meta.rev}-${icons.rev}-${reads.rev}-${[...live].map(([id, d]) => `${id}:${d.at}`).join(',')}-${built.filter((b) => b.start_draft).map((b) => `${b.id}:${b.start_draft!.at}`).join(',')}-${missing.join(',')}-${unset.join(',')}-${shown.key}`, sessions: built }
   }
 
   /**
@@ -3672,6 +3683,9 @@ export function createApp(
   const { tickWaits, syncWaitTimer, stopWaitTimer, agentWaitFor, waitAction, waitUnsetHandled, branchPrs } = createWaitRoutes({ ...ctx, loopRefusal })
   syncWaitTimer()
 
+  // ---- 新しいセッションの案（#892 の段階 1）: 中身は `server/reply/startRoutes.ts`。置くだけで、作って始めるのは人が押したときの今の道
+  const { agentStart, startDraftAction } = createStartRoutes({ ...ctx, startDrafts, worktreeAddable: addWorktreeTo !== null })
+
   // ---- dots との会話ログ（#872）: 中身は `server/dots/dotsRoutes.ts`。受信箱に足して読むだけ
   const { getDots, postDots } = createDotsRoutes({ json, error, readJson, isCrossOrigin, dotsInbox })
 
@@ -4316,6 +4330,7 @@ export function createApp(
     const isMeta = path.startsWith(SESSIONS_PREFIX) && path.endsWith(META_SUFFIX)
     const isRead = path.startsWith(SESSIONS_PREFIX) && path.endsWith(READ_SUFFIX)
     const isSuggestion = path.startsWith(SESSIONS_PREFIX) && path.endsWith(SUGGESTION_SUFFIX)
+    const isStartDraft = path.startsWith(SESSIONS_PREFIX) && path.endsWith(START_DRAFT_SUFFIX)
     const isIcon = path.startsWith(SESSIONS_PREFIX) && path.endsWith(ICON_SUFFIX)
     const isSkills = path.startsWith(SESSIONS_PREFIX) && path.endsWith(SKILLS_SUFFIX)
     const isModels = path.startsWith(SESSIONS_PREFIX) && path.endsWith(MODELS_SUFFIX)
@@ -4373,7 +4388,7 @@ export function createApp(
     // 「設定は PUT」「預かった返信の再開は POST、取り消しは DELETE」だけ。それ以外は GET / HEAD のみ
     const writable =
       (method === 'POST' &&
-        (isNewSession || isWorkspaces || isAuthCheck || isAuthLogin || isReply || isReview || isFork || isPrReview || isPrBrief || isPrExplain || isAsk || isAnswer || isAttachUpload || isQueue || isDigestFeedback || isDots || isSuggestion || path === USAGE_REFRESH_PATH || path === AGENT_SEND_PATH || path === AGENT_LOOP_PATH || path === AGENT_WAIT_FOR_PATH || isAgentStop || isInterrupt || isCodexConfig || loopSuffix !== undefined || waitSuffix !== undefined)) ||
+        (isNewSession || isWorkspaces || isAuthCheck || isAuthLogin || isReply || isReview || isFork || isPrReview || isPrBrief || isPrExplain || isAsk || isAnswer || isAttachUpload || isQueue || isDigestFeedback || isDots || isSuggestion || isStartDraft || path === USAGE_REFRESH_PATH || path === AGENT_SEND_PATH || path === AGENT_LOOP_PATH || path === AGENT_WAIT_FOR_PATH || path === AGENT_START_PATH || isAgentStop || isInterrupt || isCodexConfig || loopSuffix !== undefined || waitSuffix !== undefined)) ||
       (method === 'DELETE' && (isQueue || isHistoryIcon || loopSuffix === '/loop')) ||
       (method === 'PUT' && (isMeta || isRead || isProfile || isSettings)) ||
       ((method === 'PUT' || method === 'DELETE') && (isIcon || isProfileIcon))
@@ -4416,6 +4431,10 @@ export function createApp(
         if (path === AGENT_WAIT_FOR_PATH) {
           if (method !== 'POST') return error(res, 405, 'method not allowed')
           return await agentWaitFor(req, res)
+        }
+        if (path === AGENT_START_PATH) {
+          if (method !== 'POST') return error(res, 405, 'method not allowed')
+          return await agentStart(req, res)
         }
         if (path === AGENT_SEND_PATH) {
           if (method !== 'POST') return error(res, 405, 'method not allowed')
@@ -4471,6 +4490,12 @@ export function createApp(
         // 画面はポーリングのついでにこれを見て、別ターミナルで pnpm build されたらリロードする
         const build = await buildId()
         if (build) res.setHeader('X-SAI-Build', build)
+      }
+      if (isStartDraft && !isQueue) {
+        if (method !== 'POST') return error(res, 405, 'method not allowed')
+        const id = sessionIdFrom(path, START_DRAFT_SUFFIX)
+        if (id === null) return error(res, 400, 'bad session id')
+        return await startDraftAction(req, res, id)
       }
       if (isSuggestion && !isQueue) {
         if (method !== 'POST') return error(res, 405, 'method not allowed')

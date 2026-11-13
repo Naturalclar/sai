@@ -6,6 +6,7 @@ import { BackLink } from './BackLink'
 import { TodoRow } from './TodoRow'
 import { TodoConfigRow } from './TodoConfigRow'
 import { TodoWaitRow } from './TodoWaitRow'
+import { TodoStartRow } from './TodoStartRow'
 import type { PrRepo } from '../../shared/types.ts'
 import { TodoReplyBox } from './TodoReplyBox'
 import { ReplaceConfirm } from './ReplaceConfirm'
@@ -203,6 +204,9 @@ export function TodoView({ list, onStatus, onOpenSidebar, onLeaveToSidebar, prs,
     // 終わったのに自動では起こさない待ち（#732）。押すだけで済むので、答え待ちのすぐ下
     if (sections.wait.length > 0) heading('section:wait', `待ちが終わっている（${sections.wait.length}）`)
     for (const t of sections.wait) if (t.wait) out.push(<TodoWaitRow key={todoKey(t)} item={t} wait={t.wait} now={now} />)
+    // 新しいセッションの案（#892）。押すまで何も作らない
+    if (sections.start.length > 0) heading('section:start', `新しいセッションの案（${sections.start.length}）`)
+    for (const t of sections.start) if (t.start) out.push(<TodoStartRow key={`start-row:${t.id}`} item={t} draft={t.start} now={now} />)
     // 読んでいない返答があるもの（#551）。終わっているものも、下段の奥に埋もれないようにここへ上げる
     if (sections.unread.length > 0) heading('section:unread', `未読（${sections.unread.length}）`)
     for (const t of sections.unread) out.push(rowOf(t, todoKey(t), false, modeNoteOf(t)))

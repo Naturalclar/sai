@@ -434,3 +434,16 @@ test('todoItems: Codex を起こす前の確かめ（#856）は config で、絞
   assert.equal(todoKey(config[0]!), 'config:a@r')
   assert.notEqual(todoKey(config[0]!), todoKey(items.find((t) => t.kind === 'done')!))
 })
+
+test('todoItems: セッションが置いた新しいセッションの案は start の行。数えるぶんに入り、置いたセッションの done とは別に並ぶ（#892）', () => {
+  const draft = { name: 'task-a', agent: 'codex' as const, text: '続きをやって', at: Date.parse('2026-09-02T01:20:00Z') }
+  const placed = summary({ id: 'a@repo-a', last_kind: 'turn', start_draft: draft })
+  const items = todoItems([placed, summary({ id: 'b@repo-a', archived: true, start_draft: draft })], {}, SELF)
+  const start = items.filter((t) => t.kind === 'start')
+  assert.deepEqual(start.map((t) => [t.id, t.start?.name, t.since]), [['a@repo-a', 'task-a', '2026-09-02T01:20:00.000Z']], 'アーカイブ済みのセッションの案は出さない')
+  assert.match(start[0]!.text, /worktree「task-a」で Codex CLI を始める案/)
+  assert.ok(items.some((t) => t.kind === 'done' && t.id === 'a@repo-a'), '置いたセッションの done も残る')
+  assert.equal(pendingItems(items).filter((t) => t.kind === 'start').length, 1, 'バッジ・題名・通知に数える')
+  assert.equal(todoKey(start[0]!), 'start:a@repo-a')
+  assert.deepEqual(todoSections(items).start.map((t) => t.id), ['a@repo-a'])
+})

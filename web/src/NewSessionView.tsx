@@ -1,13 +1,16 @@
 import { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { MODE_LABEL, REPLY_MODES } from '../../shared/permissions.ts'
-import type { ReplyingMap, ReplyPermissionMode, SessionSummary, WorkspacesResponse } from '../../shared/types.ts'
+import type { ReplyingMap, ReplyPermissionMode, SessionSummary, SiblingWorktree, WorkspacesResponse } from '../../shared/types.ts'
 import { api } from './api'
 import { BackLink } from './BackLink'
 import { modelChoices, MODEL_DEFAULT_LABEL } from './modelChoices'
 import { NewSessionStarting } from './NewSessionStarting'
 import { NewWorktreeForm } from './NewWorktreeForm'
-import { canAddWorktree, siblingKey, withSibling, workspaceChoices } from './newSession'
+import { canAddWorktree, siblingKey, START_DRAFT_PICK_KEY, startDraftChoices, startFromDraft, withSibling, workspaceChoices } from './newSession'
+import type { StartDraftChoice } from './newSession'
+import { StartDraftBanner } from './StartDraftBanner'
+import { StartDraftPicker } from './StartDraftPicker'
 import { filterWorkspaces } from './workspaceFilter'
 import { WorkspacePicker } from './WorkspacePicker'
 import { DefaultReplyModeContext } from './replyModeSetting'
@@ -73,6 +76,21 @@ export function NewSessionView({ replying, now, onOpenSidebar, onStarted }: Prop
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [started, setStarted] = useState<Started | null>(null)
+  // セッションが置いた案（#892）で埋めているとき。置き場は案を置いたセッションのリポジトリに決まり、worktree は押したときに作る
+  const [fromDraft, setFromDraft] = useState<StartDraftChoice | null>(null)
+  // 案から押して worktree だけできたもの（押し直しは作らずにこれで始める）
+  const [created, setCreated] = useState<SiblingWorktree | null>(null)
+  // 案を捨てた・始めたもの（一覧を取り直すまで候補から外す）
+  const [doneDrafts, setDoneDrafts] = useState<string[]>([])
+
+  const applyDraft = (c: StartDraftChoice) => {
+    setFromDraft(c)
+    setCreated(null)
+    setAgent(c.draft.agent)
+    setModel('')
+    setText(c.draft.text)
+    setError('')
+  }
 
   // 候補は絞り込み無しの一覧から 1 回だけ（⌘K と同じ。サイドバーの絞り込みで worktree が隠れないように。3 秒のポーリングには乗せない）
   useEffect(() => {
@@ -81,7 +99,17 @@ export function NewSessionView({ replying, now, onOpenSidebar, onStarted }: Prop
     const places = api.workspaces().catch(() => null)
     Promise.all([api.sessions({ ...ALL, archived: '' }), api.sessions({ ...ALL, archived: '1' }), places])
       .then(([live, archived, where]) => {
-        if (alive) setAll({ sessions: [...live.sessions, ...archived.sessions], host: live.host, places: where })
+        if (!alive) return
+        setAll({ sessions: [...live.sessions, ...archived.sessions], host: live.host, places: where })
+        // 要対応の「開く」から来たら、その案で埋める（#892）。読んだら消す（次に開いたときに引きずらない）
+        const pick = sessionStorage.getItem(START_DRAFT_PICK_KEY)
+        sessionStorage.removeItem(START_DRAFT_PICK_KEY)
+        const hit = pick ? startDraftChoices(live.sessions, live.host, Date.now()).find((c) => c.from === pick) : undefined
+        if (hit) {
+          setFromDraft(hit)
+          setAgent(hit.draft.agent)
+          setText(hit.draft.text)
+        }
       })
       .catch((err: unknown) => {
         if (alive) setLoadError(err instanceof Error ? err.message : String(err))
@@ -100,9 +128,58 @@ export function NewSessionView({ replying, now, onOpenSidebar, onStarted }: Prop
   const matches = useMemo(() => filterWorkspaces(choices, query), [choices, query])
   // 絞った候補の中で選んだもの。選んでいない（か絞って見えなくなった）なら一番上（打っていなければ一番新しい worktree）
   const chosen = (matches.find((m) => m.workspace.key === picked) ?? matches[0])?.workspace ?? null
+  const drafts = useMemo(() => (all ? startDraftChoices(all.sessions, all.host, now).filter((c) => !doneDrafts.includes(`${c.from}:${c.draft.at}`)) : []), [all, doneDrafts, now])
+
+  const discardDraft = async (c: StartDraftChoice) => {
+    setBusy(true)
+    setError('')
+    try {
+      await api.startDraftAction(c.from, { at: c.draft.at })
+      setDoneDrafts((d) => [...d, `${c.from}:${c.draft.at}`])
+      setFromDraft(null)
+      setText('')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /** 案から始める（#892）。今の画面と同じ口（worktree を作る → 始める）を順に通す */
+  const startDraft = async (c: StartDraftChoice, body: string) => {
+    setBusy(true)
+    setError('')
+    try {
+      const out = await startFromDraft(api, {
+        from: c.from,
+        draft: c.draft,
+        created,
+        body: {
+          text: body,
+          ...(agent === 'claude' ? {} : { agent }),
+          ...(model ? { model } : {}),
+          ...(mode && agent === 'claude' ? { permission_mode: mode } : {}),
+          ...(background && agent === 'claude' ? { background: true } : {}),
+        },
+      })
+      if (!out.ok) {
+        if (out.sibling) setCreated(out.sibling)
+        setError(out.error)
+        return
+      }
+      setDoneDrafts((d) => [...d, `${c.from}:${c.draft.at}`])
+      setStarted({ id: out.res.id, text: body, since: Date.now(), ...(out.res.attach ? { attach: out.res.attach } : {}) })
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const start = async () => {
     const body = text.trim()
+    if (fromDraft) {
+      if (body && !busy) await startDraft(fromDraft, body)
+      return
+    }
     if (!body || !chosen || busy) return
     setBusy(true)
     setError('')
@@ -160,6 +237,20 @@ export function NewSessionView({ replying, now, onOpenSidebar, onStarted }: Prop
             void start()
           }}
         >
+          {!fromDraft && <StartDraftPicker choices={drafts} onPick={applyDraft} />}
+          {fromDraft ? (
+            <StartDraftBanner
+              choice={fromDraft}
+              created={created}
+              disabled={busy}
+              onClear={() => {
+                setFromDraft(null)
+                setCreated(null)
+              }}
+              onDiscard={() => void discardDraft(fromDraft)}
+            />
+          ) : (
+          <>
           <div className="field-label">worktree</div>
           <WorkspacePicker
             query={query}
@@ -189,7 +280,9 @@ export function NewSessionView({ replying, now, onOpenSidebar, onStarted }: Prop
               }}
             />
           )}
-          {all && choices.length === 0 && <div className="notice">始められる worktree がありません。git のリポジトリで端末からエージェントを 1 ターン回すと、そのリポジトリの worktree がここに出ます</div>}
+          </>
+          )}
+          {all && choices.length === 0 && !fromDraft && <div className="notice">始められる worktree がありません。git のリポジトリで端末からエージェントを 1 ターン回すと、そのリポジトリの worktree がここに出ます</div>}
           {loadError && <div className="notice error">一覧を取れませんでした: {loadError}</div>}
           <div className="opts">
             <label>
@@ -251,8 +344,8 @@ export function NewSessionView({ replying, now, onOpenSidebar, onStarted }: Prop
             aria-label="最初の指示"
           />
           <div className="actions">
-            <button type="submit" disabled={busy || !text.trim() || !chosen}>
-              {busy ? '始めています…' : '始める'}
+            <button type="submit" disabled={busy || !text.trim() || (!chosen && !fromDraft)}>
+              {busy ? '始めています…' : fromDraft && !created ? 'worktree を作って始める' : '始める'}
             </button>
             <span className="note">{agent === 'claude' && background ? BACKGROUND_NOTE : AGENTS.find((a) => a.id === agent)?.note}</span>
           </div>

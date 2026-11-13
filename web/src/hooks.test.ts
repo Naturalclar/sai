@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseRoute, sessionHash } from './hooks.ts'
+import { parseRoute, prExplainHash, prHash, sessionHash } from './hooks.ts'
 
 test('parseRoute: 画面の振り分け', () => {
   assert.deepEqual(parseRoute('#/feed'), { name: 'feed' })
@@ -65,4 +65,13 @@ test('parseRoute: GitHub の PR（#524）。1 本は owner/repo/番号、壊れ�
   assert.deepEqual(parseRoute('#/pr/Naturalclar/sai/abc'), { name: 'prs' })
   assert.deepEqual(parseRoute('#/pr/Naturalclar/524'), { name: 'prs' })
   assert.deepEqual(parseRoute('#/pr/a/%E0%A4%A/1'), { name: 'prs' })
+})
+
+test('parseRoute: PR の解説のペイン（#887）。形は PR 1 本と同じで、壊れていれば一覧へ。hash から組んだものは読み戻せる', () => {
+  assert.deepEqual(parseRoute('#/pr-explain/owner-a/repo-a/12'), { name: 'pr-explain', repo: 'owner-a/repo-a', number: 12 })
+  for (const bad of ['#/pr-explain/owner-a/repo-a/0', '#/pr-explain/owner-a/repo-a/x', '#/pr-explain/owner-a/12', '#/pr-explain/a/%E0%A4%A/1', '#/pr-explain/']) {
+    assert.deepEqual(parseRoute(bad), { name: 'prs' }, bad)
+  }
+  assert.deepEqual(parseRoute(prExplainHash('owner a/repo.a', 7)), { name: 'pr-explain', repo: 'owner a/repo.a', number: 7 })
+  assert.deepEqual(parseRoute(prHash('owner a/repo.a', 7)), { name: 'pr', repo: 'owner a/repo.a', number: 7 })
 })

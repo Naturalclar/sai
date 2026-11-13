@@ -5,10 +5,14 @@
 // 「戻る」で戻るのは見ているものだけで、並びは戻らない。
 
 /**
- * ペインに出すもの。種類つきで持つ。セッションのほかは 1 つずつしか無い固定の画面（#759）:
- * 要対応・PR の一覧・フィード・新しいセッション。PR 1 本（差分とレビュー）と使用量は入れない（全幅のまま）
+ * ペインに出すもの。種類つきで持つ。
+ * - セッション（`id`）
+ * - PR の解説（#887。#881 の `/brief-pr` でできた HTML。PR の `repo`（`owner/repo`）と `number` で名指しする）
+ * - 1 つずつしか無い固定の画面（#759）: 要対応・PR の一覧・フィード・新しいセッション
+ *
+ * PR 1 本（差分とレビュー）と使用量は入れない（全幅のまま）
  */
-export type PaneItem = { kind: 'session'; id: string } | { kind: PinnedKind }
+export type PaneItem = { kind: 'session'; id: string } | { kind: 'pr-explain'; repo: string; number: number } | { kind: PinnedKind }
 
 /** セッション以外の、ペインに出せる画面。**同じものは 2 つ並べない**（`sameItem()` が種類だけで比べる） */
 export const PINNED_KINDS = ['todo', 'prs', 'feed', 'new'] as const
@@ -22,8 +26,9 @@ export const PINNED_HASH: Record<PinnedKind, string> = { todo: '#/todo', prs: '#
  * **`#/`（`list`）も null**: 広い画面ではフィードを全幅で出すが、並びには触らない（ルートの URL を開いただけ・狭い画面の
  * 「← 一覧」で、並べておいたペインをフィードに入れ替えない）。フィードをペインに入れるのは `#/feed`
  */
-export function routePaneItem(route: { name: string; id?: string }): PaneItem | null {
+export function routePaneItem(route: { name: string; id?: string; repo?: string; number?: number }): PaneItem | null {
   if (route.name === 'session') return route.id ? { kind: 'session', id: route.id } : null
+  if (route.name === 'pr-explain') return route.repo && route.number ? { kind: 'pr-explain', repo: route.repo, number: route.number } : null
   return (PINNED_KINDS as readonly string[]).includes(route.name) ? { kind: route.name as PinnedKind } : null
 }
 
@@ -47,17 +52,29 @@ export const MAX_COLUMNS = 3
 
 export const EMPTY_LAYOUT: PaneLayout = { columns: [], focus: 0, keys: [] }
 
-export const sameItem = (a: PaneItem, b: PaneItem): boolean => a.kind === b.kind && (a.kind !== 'session' || a.id === (b as { id: string }).id)
+/**
+ * 同じものか。セッションは id、PR の解説は PR（リポジトリ名は大文字小文字を見ない。GitHub と同じ）で比べ、固定の画面は種類だけ。
+ * **同じものは 2 つ並べない**
+ */
+export function sameItem(a: PaneItem, b: PaneItem): boolean {
+  if (a.kind === 'session') return b.kind === 'session' && a.id === b.id
+  if (a.kind === 'pr-explain') return b.kind === 'pr-explain' && a.number === b.number && a.repo.toLowerCase() === b.repo.toLowerCase()
+  return a.kind === b.kind
+}
 
 /** まだ使っていない列の番号 */
 const nextKey = (keys: readonly number[]): number => keys.reduce((max, k) => Math.max(max, k), -1) + 1
 
 function itemOf(raw: unknown): PaneItem | null {
   if (typeof raw !== 'object' || raw === null) return null
-  const { kind, id } = raw as { kind?: unknown; id?: unknown }
+  const { kind, id, repo, number } = raw as { kind?: unknown; id?: unknown; repo?: unknown; number?: unknown }
   // 知らない種類は落とす（新しい種類を足したタブと localStorage を共有しても、古いタブが壊れない）
   if (typeof kind === 'string' && (PINNED_KINDS as readonly string[]).includes(kind)) return { kind: kind as PinnedKind }
   if (kind === 'session' && typeof id === 'string' && id !== '') return { kind: 'session', id }
+  // PR の解説は、URL（`parseRoute()`）が受ける形と同じものだけ（`owner/repo` で、番号は正の整数）
+  if (kind === 'pr-explain' && typeof repo === 'string' && /^[^/?#]+\/[^/?#]+$/.test(repo) && typeof number === 'number' && Number.isInteger(number) && number > 0 && number < 1e9) {
+    return { kind: 'pr-explain', repo, number }
+  }
   return null
 }
 
@@ -158,7 +175,7 @@ export function focusColumn(layout: PaneLayout, index: number): PaneLayout {
   return index === layout.focus || index < 0 || index >= layout.columns.length ? layout : { ...layout, focus: index }
 }
 
-/** 並んでいるセッションの ID（左から）。固定の画面（要対応・PR の一覧・フィード・新しいセッション）のペインは含めない */
+/** 並んでいるセッションの ID（左から）。PR の解説・固定の画面（要対応・PR の一覧・フィード・新しいセッション）のペインは含めない */
 export function sessionIdsIn(layout: PaneLayout): string[] {
   return paneItems(layout).flatMap((item) => (item.kind === 'session' ? [item.id] : []))
 }

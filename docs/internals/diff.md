@@ -156,6 +156,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - **HTML を配るのはこの口だけの例外**: `GET /api/pr-explain/<鍵>`（`getPrExplain()`）。鍵は覚えたパスの sha1 の頭 16 桁で、表に無ければ 404。配る前に `briefHtmlOk()` で確かめ直し、`PR_EXPLAIN_HEADERS`（`Content-Security-Policy` は `PR_EXPLAIN_CSP` = `sandbox` に `default-src 'none'`（インラインの CSS と `data:` の画像だけ）を足したもの。HTML の中の CSP には頼らない。ほかに `nosniff`・`no-store`・`no-referrer`）を付ける。出す相手は返答のファイル（#603 / #768）と同じ `refuseDevice()`（ループバックと whois で本人と分かった tailnet のユーザーだけ。タグ付きの端末は入口で 401、`/mcp` にこの口は無い）。
 - 一時フォルダの中身は OS に任せる（消えていたら `gone` にして作り直しのボタンにする）。SAI は写しを持たない。
 - 画面は `web/src/PrExplainBox.tsx`（`PrView` の要約の下）。文言は `web/src/prExplainLabels.ts`。
+- **ペインで開く（#887）**: `ready` のとき `PrExplainBox` に「ペインで開く」（`#/pr-explain/…` へのリンク。⌘ + クリックは `PrView` に渡る `onOpenBeside` で横に足す。広い画面のときだけ渡す）。ペインは `web/src/PrExplainView.tsx` で、PR の GET（`api.pr()`）の `explain` から鍵を引き、**今の `GET /api/pr-explain/<鍵>` をそのまま** `sandbox=""` の iframe で開く（配る口・`PR_EXPLAIN_HEADERS`・`refuseDevice()` は変えていない。応答に `frame-ancestors` / `X-Frame-Options` は無いので同じオリジンの枠に入る）。取るのは開いたときと「更新」だけ。開けないときの文は `explainPaneEmpty()`。
 
 ### GitHub にレビューを投稿する
 

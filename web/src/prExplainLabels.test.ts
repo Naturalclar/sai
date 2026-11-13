@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { PrExplain } from '../../shared/types.ts'
-import { explainButtonLabel, explainHref, explainNote } from './prExplainLabels.ts'
+import { explainButtonLabel, explainHref, explainNote, explainPaneEmpty } from './prExplainLabels.ts'
 
 const ex = (o: Partial<PrExplain>): PrExplain => ({ state: 'ready', stale: false, session: 's@r', at: '', key: '0123456789abcdef', ...o })
 
@@ -23,4 +23,14 @@ test('explainNote: 古い・消えた・見つからない・作っている', (
 
 test('explainHref: 鍵だけで開く（パスを含めない）', () => {
   assert.equal(explainHref('0123456789abcdef'), '/api/pr-explain/0123456789abcdef')
+})
+
+test('explainPaneEmpty: 開けるときだけ空。ほかは理由と作り直す道を出す（#887）', () => {
+  assert.equal(explainPaneEmpty(ex({})), '')
+  assert.equal(explainPaneEmpty(ex({ stale: true })), '', '古くても開ける（古いことは見出しに出す）')
+  assert.match(explainPaneEmpty(null), /まだありません/)
+  assert.match(explainPaneEmpty(ex({ state: 'running' })), /作っています/)
+  assert.match(explainPaneEmpty(ex({ state: 'gone' })), /もうありません.*作り直せます/)
+  assert.match(explainPaneEmpty(ex({ state: 'failed' })), /見つかりません.*作り直せます/)
+  assert.match(explainPaneEmpty(ex({ key: undefined })), /作り直せます/, '鍵が無ければ開かない')
 })

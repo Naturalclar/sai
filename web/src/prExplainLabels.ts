@@ -27,3 +27,14 @@ export function explainNote(explain: PrExplain | null): string {
 export function explainHref(key: string): string {
   return `/api/pr-explain/${encodeURIComponent(key)}`
 }
+
+/**
+ * 解説のペイン（#887）で、HTML の代わりに出す 1 行。開けるとき（`ready` で鍵がある）は空。
+ * まだ作っていない・作っている・消えた・見つからなかったは、作り直す道（PR の画面）を添える
+ */
+export function explainPaneEmpty(explain: PrExplain | null): string {
+  if (!explain) return 'この PR の解説はまだありません。PR の画面の「解説を作る」から作れます'
+  if (explain.state === 'ready' && explain.key) return ''
+  if (explain.state === 'running') return '作っています。終わったら「更新」で読み直してください'
+  return `${explainNote(explain)}。PR の画面から作り直せます`
+}

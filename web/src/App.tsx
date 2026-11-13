@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { formatImageBytes } from '../../shared/images.ts'
-import { HIDDEN_POLL_MS, parseRoute, sessionHash, useHashRoute, useLocalState, usePolling, type Route } from './hooks'
-import { closeColumn, EMPTY_LAYOUT, focusColumn, focusedItem, MAX_COLUMNS, nextUnshown, normalizeLayout, openBeside, openInNeighbor, PINNED_HASH, placeItem, replaceItem, routePaneItem, sessionIdsIn, type PaneItem, type PaneLayout } from './paneLayout'
+import { HIDDEN_POLL_MS, parseRoute, prExplainHash, sessionHash, useHashRoute, useLocalState, usePolling, type Route } from './hooks'
+import { closeColumn, EMPTY_LAYOUT, focusColumn, focusedItem, MAX_COLUMNS, nextUnshown, normalizeLayout, openBeside, openInNeighbor, PINNED_HASH, placeItem, replaceItem, routePaneItem, sessionIdsIn, type PaneItem, type PaneLayout, type PinnedKind } from './paneLayout'
 import { paneKey } from './paneKeys'
 import { ChatPane } from './ChatPane'
 import { pendingItems, todoItems } from '../../shared/todoItems.ts'
@@ -22,6 +22,7 @@ import { NewSessionView } from './NewSessionView'
 import { PrListView } from './PrListView'
 import { UsageView } from './UsageView'
 import { PrView } from './PrView'
+import { PrExplainView } from './PrExplainView'
 import { loadDraft, saveDraft } from './replyDrafts'
 import { appendInsert } from './replyRestore'
 import { hm } from './format'
@@ -68,7 +69,7 @@ export interface PaneProps extends StatusProps {
 function navOf(route: Route): NavTarget {
   if (route.name === 'session') return { kind: 'session', id: route.id }
   if (route.name === 'todo') return { kind: 'todo' }
-  if (route.name === 'prs' || route.name === 'pr') return { kind: 'prs' }
+  if (route.name === 'prs' || route.name === 'pr' || route.name === 'pr-explain') return { kind: 'prs' }
   if (route.name === 'dots') return { kind: 'dots' }
   return { kind: 'feed' }
 }
@@ -109,7 +110,7 @@ const NO_PINNED: never[] = []
 
 /** フォーカスを移した・ペインを閉じたあと、URL をフォーカスのあるペインに合わせる */
 function goTo(item: PaneItem | null) {
-  if (item) location.hash = item.kind === 'session' ? sessionHash(item.id) : PINNED_HASH[item.kind]
+  if (item) location.hash = item.kind === 'session' ? sessionHash(item.id) : item.kind === 'pr-explain' ? prExplainHash(item.repo, item.number) : PINNED_HASH[item.kind]
 }
 
 /**
@@ -128,7 +129,7 @@ export function App() {
   const [storedPanes, setStoredPanes] = useLocalState<PaneLayout>('sai.panes', EMPTY_LAYOUT)
   const layout = useMemo(() => normalizeLayout(storedPanes), [storedPanes])
   const [placed, setPlaced] = useState<Route | null>(null)
-  // ペインに出せるのはセッションと、固定の画面（要対応・PR の一覧・フィード・新しいセッション。#759）。
+  // ペインに出せるのはセッションと、PR の解説（#887）と、固定の画面（要対応・PR の一覧・フィード・新しいセッション。#759）。
   // PR 1 本（差分とレビュー）と使用量は全幅で、戻れば並びも戻る
   const routeItem = useMemo<PaneItem | null>(() => routePaneItem(route), [route])
   if (placed !== route) {
@@ -156,7 +157,7 @@ export function App() {
   )
   const paneIds = useMemo(() => panes.flatMap((p) => (p.item.kind === 'session' ? [p.item.id] : [])), [panes])
   // 横に出ている固定の画面（サイドバーの印）。並べているときだけ
-  const pinnedShown = useMemo(() => (split ? panes.flatMap((p) => (p.item.kind === 'session' ? [] : [p.item.kind])) : NO_PINNED), [split, panes])
+  const pinnedShown = useMemo(() => (split ? panes.flatMap((p): PinnedKind[] => (p.item.kind === 'session' || p.item.kind === 'pr-explain' ? [] : [p.item.kind])) : NO_PINNED), [split, panes])
   // ヘッダの「更新 hh:mm」は右側（チャット）の分だけ。サイドバーは自分の失敗を自分の中に出す
   const [status, setStatus] = useState<{ at: Date | null; error: string | null }>({ at: null, error: null })
   // 子の useEffect の依存に入るので、毎回作り直すと無限に再描画する
@@ -377,7 +378,7 @@ export function App() {
       }
       if (action === 'feed') {
         const name = parseRoute(location.hash).name
-        if (name !== 'session' && name !== 'todo' && name !== 'new' && name !== 'prs' && name !== 'pr' && name !== 'usage' && name !== 'dots') return
+        if (name !== 'session' && name !== 'todo' && name !== 'new' && name !== 'prs' && name !== 'pr' && name !== 'pr-explain' && name !== 'usage' && name !== 'dots') return
         e.preventDefault()
         // 全幅の画面（PR 1 本・使用量・dots との会話）からは、並びのフォーカスのあるペインへ戻る（並べておいたペインをフィードに入れ替えない。#759）
         const back = name === 'pr' || name === 'usage' || name === 'dots' ? focusedItem(layout) : null
@@ -603,6 +604,9 @@ export function App() {
                     <NewSessionView replying={list.data?.replying} now={list.updatedAt?.getTime() ?? 0} onOpenSidebar={openSidebar} onStarted={startedInPane} />
                   ) : item.kind === 'feed' ? (
                     feedView(here)
+                  ) : item.kind === 'pr-explain' ? (
+                    // 開いたときと「更新」だけ取る（PR 1 本と同じ。3 秒のポーリングには乗せない）。PR が変わったら作り直す
+                    <PrExplainView key={`${item.repo}#${item.number}`} repo={item.repo} number={item.number} onStatus={here ? onStatus : NO_STATUS} onOpenSidebar={openSidebar} />
                   ) : (
                     <SessionView
                       id={id}
@@ -628,7 +632,7 @@ export function App() {
             // ペインに入れない画面（PR 1 本・使用量・dots との会話）と `#/`（フィード）は全幅。並びには触らないので、戻れば並びが戻る
             <ChatPane focused>
             {route.name === 'pr' ? (
-              <PrView key={`${route.repo}#${route.number}`} repo={route.repo} number={route.number} onStatus={onStatus} onInsertToSession={insertToSession} />
+              <PrView key={`${route.repo}#${route.number}`} repo={route.repo} number={route.number} onStatus={onStatus} onInsertToSession={insertToSession} {...(narrow ? {} : { onOpenBeside: openBesideItem })} />
             ) : route.name === 'usage' ? (
               <UsageView onStatus={onStatus} onOpenSidebar={openSidebar} />
             ) : route.name === 'dots' ? (

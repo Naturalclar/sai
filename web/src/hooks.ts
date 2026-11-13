@@ -22,6 +22,8 @@ export type Route =
   | { name: 'dots' }
   /** PR 1 本（#524）。`repo` は `owner/repo` */
   | { name: 'pr'; repo: string; number: number }
+  /** PR の解説（#881 の `/brief-pr`）をペインで見る（#887）。`repo` は `owner/repo` */
+  | { name: 'pr-explain'; repo: string; number: number }
 
 /** 発言のどちら側か（#503）。`me` = 自分の入力、`agent` = エージェントの発言 */
 export type MessageSide = 'me' | 'agent'
@@ -60,6 +62,16 @@ export function parseRoute(hash: string): Route {
     }
   }
   if (hash.startsWith('#/pr/')) return { name: 'prs' }
+  // PR の解説のペイン（#887）。形は PR 1 本と同じ。壊れていれば PR の一覧へ
+  const explain = hash.match(/^#\/pr-explain\/([^/?#]+)\/([^/?#]+)\/([1-9][0-9]{0,8})$/)
+  if (explain) {
+    try {
+      return { name: 'pr-explain', repo: `${decodeURIComponent(explain[1]!)}/${decodeURIComponent(explain[2]!)}`, number: Number(explain[3]) }
+    } catch {
+      return { name: 'prs' }
+    }
+  }
+  if (hash.startsWith('#/pr-explain/')) return { name: 'prs' }
   return { name: 'list' }
 }
 
@@ -72,6 +84,16 @@ export function sessionHash(id: string, ts = '', side?: MessageSide): string {
   const base = `#/s/${encodeURIComponent(id)}`
   if (!ts) return base
   return `${base}?ts=${encodeURIComponent(ts)}${side ? `&side=${side}` : ''}`
+}
+
+/** PR 1 本の hash（`#/pr/<owner>/<repo>/<番号>`） */
+export function prHash(repo: string, number: number): string {
+  return `#/pr/${repo.split('/').map(encodeURIComponent).join('/')}/${number}`
+}
+
+/** PR の解説のペインの hash（#887。`#/pr-explain/<owner>/<repo>/<番号>`） */
+export function prExplainHash(repo: string, number: number): string {
+  return `#/pr-explain/${repo.split('/').map(encodeURIComponent).join('/')}/${number}`
 }
 
 export function useHashRoute(): Route {

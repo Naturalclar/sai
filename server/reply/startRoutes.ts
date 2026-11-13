@@ -16,7 +16,7 @@ import { splitArgs } from './runner.ts'
 import type { StartDraftStore } from './startDrafts.ts'
 
 export function createStartRoutes(ctx: AppContext & { startDrafts: StartDraftStore; worktreeAddable: boolean }) {
-  const { store, run, agents, settingsStore, startDrafts, worktreeAddable, agentRefusal, agentFrom, readJson, json, error, isCrossOrigin } = ctx
+  const { store, run, loops, agents, settingsStore, startDrafts, worktreeAddable, agentRefusal, agentFrom, readJson, json, error, isCrossOrigin } = ctx
 
   /**
    * `POST /api/agent/start`（`sai_start`）。**置けるのは、SAI が起こしていま回しているターンの自分のセッションだけ**（`agentFrom()`）。
@@ -42,8 +42,8 @@ export function createStartRoutes(ctx: AppContext & { startDrafts: StartDraftSto
     const turnText = splitHandedReplies(run.snapshot()[session.id]?.text ?? '').text
     if (isWaitPrompt(turnText)) return error(res, 409, '待ちで起きたターンからは、新しいセッションの案を置けません（結果を報告して終えてください）')
     // 回数の上限は見ない（案は送信ではない）。見るのはメッセージで回っているターンか（連鎖は 1 段まで）だけ
-    const chained = agents.refusal(session.id, found.turn, Number.POSITIVE_INFINITY)
-    if (chained) return error(res, 409, `${chained}（新しいセッションの案も置けません）`)
+    if (agents.refusal(session.id, found.turn, Number.POSITIVE_INFINITY)) return error(res, 409, '別のセッションから受け取ったメッセージで回っているターンからは、新しいセッションの案を置けません')
+    if (loops.get(session.id)?.turn) return error(res, 409, 'ループの周からは、新しいセッションの案を置けません')
     // 素通しで回っているターンからは置かせない。見るのは 3 つ: いまのメタ（既定が素通しなら、メタに何も無いセッションも素通しで回る。#582。
     // 既定が付くのは Claude だけ）・**いま回っているターンを起こしたときのモード**（起こしたあとでメタを戻しても、そのターンは素通しのまま）・
     // 運用者が `SAI_CLAUDE_ARGS` で渡しているモード（ループの断り `loopRefusal()` と同じ）

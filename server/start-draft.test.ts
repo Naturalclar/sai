@@ -144,7 +144,7 @@ before(async () => {
   const lines = [
     row(new Date(now.getTime() - 60_000), 'A1', { repo: 'dev-a', project: 'owner-a/repo-a', remote: 'https://github.com/owner-a/repo-a', cwd, host: 'testmac' }),
     row(new Date(now.getTime() - 50_000), 'P1', { repo: 'dev-a', project: 'owner-a/repo-a', remote: 'https://github.com/owner-a/repo-a', cwd, host: 'testmac' }),
-    ...['Q1', 'S1', 'W1', 'E1'].map((id, i) => row(new Date(now.getTime() - 40_000 + i * 1000), id, { repo: 'dev-a', project: 'owner-a/repo-a', remote: 'https://github.com/owner-a/repo-a', cwd, host: 'testmac' })),
+    ...['Q1', 'S1', 'W1', 'E1', 'M1'].map((id, i) => row(new Date(now.getTime() - 40_000 + i * 1000), id, { repo: 'dev-a', project: 'owner-a/repo-a', remote: 'https://github.com/owner-a/repo-a', cwd, host: 'testmac' })),
   ]
   await writeFile(join(feedDir, `${localDate(now.toISOString())}.jsonl`), lines.map((l) => JSON.stringify(l)).join('\n') + '\n')
   app = make(new FeedStore(feedDir), runner, true)
@@ -336,4 +336,16 @@ test('一覧の rev: 案を置いた・片付けたで変わる（3 秒のポー
   assert.notEqual(withDraft, revBefore)
   await post(`${base}/api/sessions/${encodeURIComponent('A1@dev-a')}/start-draft`, { at: placed.draft.at }, { Origin: base })
   assert.notEqual(await revOf(), withDraft)
+})
+
+test('POST /api/agent/start: 別のセッションのメッセージで回っているターンからは置けない（連鎖は 1 段まで。#895 の再レビュー）', async () => {
+  await turn(base, 'A1@dev-a')
+  const sent = await post(`${base}/api/agent/send`, { from: 'A1@dev-a', to: 'M1@dev-a', text: '見てください' }, { 'X-SAI-Agent-Token': token })
+  assert.equal(sent.status, 202, await sent.clone().text())
+  runner.finish('A1@dev-a')
+  assert.equal(runner.running('M1@dev-a'), true, 'メッセージで M1 のターンが回っている')
+  const chained = await place({ from: 'M1@dev-a', name: 'task-x', text: 'x' })
+  assert.equal(chained.status, 409)
+  assert.match(await errorOf(chained), /メッセージで回っているターンからは、新しいセッションの案を置けません/)
+  runner.finish('M1@dev-a')
 })

@@ -157,6 +157,7 @@ SAIから開始したCodex turnの待機もJSONLにはせず、`CodexAppServer` 
 | `codex-config-allowed.json` | `.codex` の絶対パス → 中身の SHA-256 | Codex を起こす前の確かめ（#856）で人が「このまま起こす」を押したもの。中身は持たない。消すともう一度聞く |
 | `reply-queue.json` | エンティティ ID → `items` | 処理中に預かった返信: `queue_id`・`text`・`since`・`attachments`・`url`・`origin`。`paused` は自動で回さない理由 |
 | `waits.json` | `{ waits, wakes }` | 預かっている待ち（#732）。`waits`: エンティティ ID → 古い順の配列（`id`・`repo`・`pr`・`then`・`status`（`waiting` / `ready` / `waking` / `expired` / `halted`）・`result`・`reason`・`since`・`deadline`・`checked_at`・`next_check_at`・`seen_once`・`failing`・`url`。`shared/waits.ts` の `WaitState`）。`wakes`: エンティティ ID → 自動で起こした時刻（ms）の配列（1 日の回数の上限に使う）。起こせた待ちは消える |
+| `start-drafts.json` | エンティティ ID → 1 件 | セッションが `sai_start` で置いた新しいセッションの案（#892）。置いたセッションの ID → `{ name, agent, text, at }`。1 セッションに 1 つ（置き直すと上書き）。24 時間と 200 件で捨てる（`server/reply/startDrafts.ts`）。始めた・捨てたら消える |
 | `loops.json` | エンティティ ID → 1 件 | 組んだループの状態（`goal`・`until`・`max_rounds`・`round`・`status` など。`shared/loops.ts` の `LoopState`） |
 | `reply.log` | 追記の文字のログ | SAI が起こした子の stdout / stderr と、SAI が足す 1 行（`--- <時刻> <エンティティ ID> <何をしたか>`） |
 | `digest.log` | 追記の文字のログ | 一言を作る子の出力と、諦めた・作り直した理由 |

@@ -195,7 +195,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 ### 新しいセッションの案を置く（`sai_start`。#892 の段階 1）
 
 - ツールは `approve-mcp.ts` の `AGENT_TOOLS` の `sai_start`（名前は `shared/startDraft.ts` の `START_TOOL`）→ `POST /api/agent/start`（`server/reply/startRoutes.ts` の `agentStart()`）。送るのは送り元・名前・エージェント・最初の指示だけ。
-- 置き手は `agentFrom()`（SAI が起こしていま回しているターン）。断るのは、送信を止めたセッション（`agents.isStopped()`）・許可を聞かないモード（`replyModeOf()` + `modeSkipsRules()`。`/mcp` の `mcpSendRefusal()` と同じ読み方で、既定のモードは Claude にだけ当てる）・cwd の無い行・worktree を作る口（`addWorktreeTo`）の無い SAI。引数は `startDraftOf()`（`worktreeNameRefusal()`・`START_AGENTS`・`AGENT_TEXT_MAX_CHARS`）。
+- 置き手は `agentFrom()`（SAI が起こしていま回しているターン）。断るのは、送信を止めたセッション（`agents.isStopped()`）・待ちで起きたターン（`isWaitPrompt()`）・別のセッションのメッセージで回っているターン（`agents.refusal()` を回数の上限なしで）・許可を聞かないモード（3 つを見る: いまのメタ（`replyModeOf()`。既定のモードは Claude にだけ当てる）・いま回っているターンを起こしたときのモード（`run.snapshot()[id].permission_mode`）・`SAI_CLAUDE_ARGS`（`skipModeInArgs()`）。どれかが `modeSkipsRules()` なら断る）・cwd の無い行・worktree を作る口（`addWorktreeTo`）の無い SAI。引数は `startDraftOf()`（`worktreeNameRefusal()`・`START_AGENTS`・`AGENT_TEXT_MAX_CHARS`）。
 - **置くだけ**: `StartDraftStore`（`server/reply/startDrafts.ts`。`~/.agent-feed/start-drafts.json`、置いたセッションの ID ごとに 1 つ、24 時間と 200 件で捨てる）に書き、`reply.log` に長さだけ残す。git もプロセスも起こさない。
 - 置き場とリポジトリは受けない。押したときに `POST /api/workspaces` がそのセッションの行の cwd から組むので、ほかのリポジトリ（`mayCross()` の組の先も）には作れない。同じ名前があるかは置くときには見ない（押したときに 409）。
 - 一覧（`sessionsWithMeta()`）が `liveStartDraft()` を通ったものを `SessionSummary.start_draft` に載せ、`id:at` を rev に混ぜる。要対応は `todoItems()` の `start`（数えるぶんに入る）。

@@ -67,3 +67,9 @@ test('replyRowOf: 同じセッションに終わった待ち（wait。#732）の
 test('replyRowOf: 確かめの行（#856）は返信の行に数えない', () => {
   assert.equal(replyRowOf([{ id: 'a', kind: 'config' as const }], 'a'), undefined)
 })
+
+test('replyRowOf: 新しいセッションの案（start。#892）は返信に関わる行として拾わない（#895 のレビュー）', () => {
+  assert.equal(replyRowOf([item('a', 'start'), item('a', 'done')], 'a')?.kind, 'done', '案と done が並べば done')
+  assert.equal(replyRowOf([item('a', 'start')], 'a'), undefined, '処理中で done が消えていれば、行は無い')
+  assert.equal(replyRowOf([item('a', 'config'), item('a', 'wait'), item('a', 'answer')], 'a')?.kind, 'answer')
+})

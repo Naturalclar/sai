@@ -10,11 +10,12 @@ export function rowReplyable(t: Pick<TodoItem, 'kind' | 'replyable' | 'session'>
 }
 
 /**
- * そのセッションの、返信に関わる行（`watch` / `done`）。**ID だけで引かない**: 終わった待ち（`wait`。#732）の行が同じ ID で並ぶので、
- * 送信失敗を戻す先・「行がまだ並んでいるか」を ID だけで見ると、待ちの行を拾ってしまう（PR #778 のレビュー）
+ * そのセッションの、返信に関わる行（`answer` / `watch` / `done`）。**ID だけで引かない**: 終わった待ち（`wait`。#732）・確かめ（`config`。#856）・
+ * 新しいセッションの案（`start`。#892）の行が同じ ID で並ぶので、送信失敗を戻す先・「行がまだ並んでいるか」を ID だけで見ると、そちらを拾ってしまう
+ * （PR #778・#895 のレビュー）。種類が増えても拾わないよう、返信に関わる種類だけを受ける
  */
 export function replyRowOf<T extends Pick<TodoItem, 'id' | 'kind'>>(items: readonly T[], id: string): T | undefined {
-  return items.find((t) => t.id === id && t.kind !== 'wait' && t.kind !== 'config')
+  return items.find((t) => t.id === id && (t.kind === 'answer' || t.kind === 'watch' || t.kind === 'done'))
 }
 
 /**

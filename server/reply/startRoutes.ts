@@ -5,15 +5,18 @@
 import { appendFile } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { join } from 'node:path'
-import { modeName, modeSkipsRules, replyModeOf } from '../../shared/permissions.ts'
+import { splitHandedReplies } from '../../shared/agentMessages.ts'
+import { modeName, modeSkipsRules, replyModeOf, skipModeInArgs } from '../../shared/permissions.ts'
+import { isWaitPrompt } from '../../shared/waits.ts'
 import { startDraftOf } from '../../shared/startDraft.ts'
 import type { AgentStartRequest, AgentStartResponse, StartDraftActionRequest, StartDraftActionResponse } from '../../shared/types.ts'
 import { MAX_REPLY_BYTES } from '../appContext.ts'
 import type { AppContext } from '../appContext.ts'
+import { splitArgs } from './runner.ts'
 import type { StartDraftStore } from './startDrafts.ts'
 
 export function createStartRoutes(ctx: AppContext & { startDrafts: StartDraftStore; worktreeAddable: boolean }) {
-  const { store, agents, settingsStore, startDrafts, worktreeAddable, agentRefusal, agentFrom, readJson, json, error, isCrossOrigin } = ctx
+  const { store, run, agents, settingsStore, startDrafts, worktreeAddable, agentRefusal, agentFrom, readJson, json, error, isCrossOrigin } = ctx
 
   /**
    * `POST /api/agent/start`（`sai_start`）。**置けるのは、SAI が起こしていま回しているターンの自分のセッションだけ**（`agentFrom()`）。
@@ -35,9 +38,19 @@ export function createStartRoutes(ctx: AppContext & { startDrafts: StartDraftSto
     if (typeof found === 'string') return error(res, 409, found)
     const { session } = found
     if (agents.isStopped(session.id)) return error(res, 409, '人がこのセッションからの送信を止めているので、案も置けません')
-    // 既定が素通しなら、メタに何も無いセッションも素通しで回る（#582）。既定が付くのは Claude だけ（`/mcp` の `mcpSendRefusal()` と同じ読み方）
+    // 人が見ていない間に SAI が起こしたターン（待ちで起きた・別のセッションのメッセージで回っている）からは置かせない（`sai_send` / `sai_wait_for` と同じ線）
+    const turnText = splitHandedReplies(run.snapshot()[session.id]?.text ?? '').text
+    if (isWaitPrompt(turnText)) return error(res, 409, '待ちで起きたターンからは、新しいセッションの案を置けません（結果を報告して終えてください）')
+    // 回数の上限は見ない（案は送信ではない）。見るのはメッセージで回っているターンか（連鎖は 1 段まで）だけ
+    const chained = agents.refusal(session.id, found.turn, Number.POSITIVE_INFINITY)
+    if (chained) return error(res, 409, `${chained}（新しいセッションの案も置けません）`)
+    // 素通しで回っているターンからは置かせない。見るのは 3 つ: いまのメタ（既定が素通しなら、メタに何も無いセッションも素通しで回る。#582。
+    // 既定が付くのは Claude だけ）・**いま回っているターンを起こしたときのモード**（起こしたあとでメタを戻しても、そのターンは素通しのまま）・
+    // 運用者が `SAI_CLAUDE_ARGS` で渡しているモード（ループの断り `loopRefusal()` と同じ）
     const mode = replyModeOf(session.meta?.permission_mode, session.agent === 'claude' ? (await settingsStore.get()).reply_mode : '')
-    if (modeSkipsRules(mode)) return error(res, 403, `許可を聞かないモード（${modeName(mode)}）のセッションからは、新しいセッションの案を置けません`)
+    const launched = run.snapshot()[session.id]?.permission_mode ?? ''
+    const skips = modeSkipsRules(mode) ? mode : modeSkipsRules(launched) ? launched : skipModeInArgs(splitArgs(process.env.SAI_CLAUDE_ARGS))
+    if (skips) return error(res, 403, `許可を聞かないモード（${modeName(skips)}）のセッションからは、新しいセッションの案を置けません`)
     if (!session.cwd) return error(res, 409, 'このセッションの作業ディレクトリが分からないので、worktree の置き場を決められません')
     if (!worktreeAddable) return error(res, 409, 'この SAI には worktree を作る口がありません（画面の「新しい worktree を作る」も出ません）')
     const made = startDraftOf(b)

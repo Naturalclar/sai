@@ -8,6 +8,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promi
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { START_DRAFT_TTL_MS } from '../shared/startDraft.ts'
+import { WAIT_MARK } from '../shared/waits.ts'
 import type { AddWorktreeResponse, AgentStartResponse, NewSessionResponse, Replying, SessionsResponse, SessionSummary, StartDraftActionResponse } from '../shared/types.ts'
 import { createApp } from './app.ts'
 import type { App } from './app.ts'
@@ -43,7 +44,8 @@ class FakeRunner implements Runner {
   }
   async start(id: string, cmd: ReplyCommand) {
     this.started.push({ id, cmd })
-    this.busy.set(id, { since: new Date().toISOString(), text: cmd.text })
+    // 本物と同じく、起こしたときの許可モードを覚える（#895 のレビュー）
+    this.busy.set(id, { since: new Date().toISOString(), text: cmd.text, ...(cmd.permissionMode !== undefined ? { permission_mode: cmd.permissionMode } : {}) })
   }
   finish(id: string) {
     this.busy.delete(id)
@@ -142,6 +144,7 @@ before(async () => {
   const lines = [
     row(new Date(now.getTime() - 60_000), 'A1', { repo: 'dev-a', project: 'owner-a/repo-a', remote: 'https://github.com/owner-a/repo-a', cwd, host: 'testmac' }),
     row(new Date(now.getTime() - 50_000), 'P1', { repo: 'dev-a', project: 'owner-a/repo-a', remote: 'https://github.com/owner-a/repo-a', cwd, host: 'testmac' }),
+    ...['Q1', 'S1', 'W1', 'E1'].map((id, i) => row(new Date(now.getTime() - 40_000 + i * 1000), id, { repo: 'dev-a', project: 'owner-a/repo-a', remote: 'https://github.com/owner-a/repo-a', cwd, host: 'testmac' })),
   ]
   await writeFile(join(feedDir, `${localDate(now.toISOString())}.jsonl`), lines.map((l) => JSON.stringify(l)).join('\n') + '\n')
   app = make(new FeedStore(feedDir), runner, true)
@@ -174,8 +177,8 @@ after(async () => {
 
 const post = (target: string, body: unknown = {}, headers: Record<string, string> = {}) => fetch(target, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) })
 const errorOf = async (res: Response) => ((await res.json()) as { error: string }).error
-const turn = async (at: string, id: string) => {
-  const res = await post(`${at}/api/sessions/${encodeURIComponent(id)}/reply`, { text: '割り振って' })
+const turn = async (at: string, id: string, text = '割り振って') => {
+  const res = await post(`${at}/api/sessions/${encodeURIComponent(id)}/reply`, { text })
   assert.equal(res.status, 202, await res.clone().text())
 }
 const place = (body: unknown, headers: Record<string, string> = { 'X-SAI-Agent-Token': token }, at = base) => post(`${at}/api/agent/start`, body, headers)
@@ -277,4 +280,60 @@ test('POST /api/sessions/<id>/start-draft: 同一オリジンのみ。24 時間�
   stored['A1@dev-a']!.at = Date.now() - START_DRAFT_TTL_MS - 1000
   await writeFile(file, JSON.stringify(stored) + '\n')
   assert.equal((await sessionOf('A1@dev-a'))?.start_draft, undefined)
+})
+
+const putMeta = async (id: string, permission_mode: string) => {
+  const res = await fetch(`${base}/api/sessions/${encodeURIComponent(id)}/meta`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ permission_mode }) })
+  assert.equal(res.status, 200, await res.clone().text())
+}
+
+test('POST /api/agent/start: 素通しで起こしたターンは、あとでメタを戻しても置けない。運用者が SAI_CLAUDE_ARGS で素通しにしていても置けない（#895 のレビュー）', async () => {
+  await putMeta('Q1@dev-a', 'bypassPermissions')
+  await turn(base, 'Q1@dev-a')
+  await putMeta('Q1@dev-a', 'acceptEdits')
+  const res = await place({ from: 'Q1@dev-a', name: 'task-x', text: 'x' })
+  assert.equal(res.status, 403)
+  assert.match(await errorOf(res), /許可を聞かないモード/)
+  runner.finish('Q1@dev-a')
+
+  await turn(base, 'E1@dev-a')
+  const savedArgs = process.env.SAI_CLAUDE_ARGS
+  process.env.SAI_CLAUDE_ARGS = '--dangerously-skip-permissions'
+  try {
+    const env = await place({ from: 'E1@dev-a', name: 'task-x', text: 'x' })
+    assert.equal(env.status, 403)
+  } finally {
+    if (savedArgs === undefined) delete process.env.SAI_CLAUDE_ARGS
+    else process.env.SAI_CLAUDE_ARGS = savedArgs
+  }
+  assert.equal((await sessionOf('E1@dev-a'))?.start_draft, undefined)
+  runner.finish('E1@dev-a')
+})
+
+test('POST /api/agent/start: 送信を止めたセッション・待ちで起きたターンからは置けない（#895 のレビュー）', async () => {
+  await turn(base, 'S1@dev-a')
+  assert.equal((await post(`${base}/api/sessions/${encodeURIComponent('S1@dev-a')}/agent/stop`, {}, { Origin: base })).status, 200)
+  const stopped = await place({ from: 'S1@dev-a', name: 'task-x', text: 'x' })
+  assert.equal(stopped.status, 409)
+  assert.match(await errorOf(stopped), /送信を止めている/)
+  await post(`${base}/api/sessions/${encodeURIComponent('S1@dev-a')}/agent/resume`, {}, { Origin: base })
+  runner.finish('S1@dev-a')
+
+  await turn(base, 'W1@dev-a', `${WAIT_MARK} PR の CI が終わりました`)
+  const woke = await place({ from: 'W1@dev-a', name: 'task-x', text: 'x' })
+  assert.equal(woke.status, 409)
+  assert.match(await errorOf(woke), /待ちで起きたターン/)
+  runner.finish('W1@dev-a')
+})
+
+test('一覧の rev: 案を置いた・片付けたで変わる（3 秒のポーリングが再描画する）（#895 のレビュー）', async () => {
+  const revOf = async () => ((await (await fetch(`${base}/api/sessions`)).json()) as SessionsResponse).rev
+  const revBefore = await revOf()
+  await turn(base, 'A1@dev-a')
+  const placed = (await (await place({ from: 'A1@dev-a', name: 'task-r', text: 'x' })).json()) as AgentStartResponse
+  runner.finish('A1@dev-a')
+  const withDraft = await revOf()
+  assert.notEqual(withDraft, revBefore)
+  await post(`${base}/api/sessions/${encodeURIComponent('A1@dev-a')}/start-draft`, { at: placed.draft.at }, { Origin: base })
+  assert.notEqual(await revOf(), withDraft)
 })

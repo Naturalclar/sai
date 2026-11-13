@@ -1,16 +1,20 @@
-import { useState } from 'react'
+import { useState, type MouseEvent } from 'react'
 import { api, type PrDetailResponse, type PrExplain } from './api'
 import { sessionHash } from './hooks'
+import { prExplainHash } from '../../shared/prs.ts'
+import type { PaneItem } from './paneLayout'
 import { agoLabel } from './prLabels'
-import { explainButtonLabel, explainHref, explainNote } from './prExplainLabels'
+import { explainButtonLabel, explainNote, explainOpenHref } from './prExplainLabels'
 
 /**
  * PR の解説（#881）。押したときだけ利用者のスキル `/brief-pr` を SAI の新しいセッションとして回し、できた HTML を開くリンクを出す。
  *
  * - 途中経過・質問・失敗は回したセッションと要対応に出る（許可モードは bypassPermissions なので許可は聞かない。欄にそのセッションへのリンクを出す）。状態は「更新」で PR を読み直したときに変わる
  * - 開く先は SAI の口（`/api/pr-explain/<鍵>`）なので、tailnet 越しの画面からも開ける。サーバは `CSP: sandbox` で配る
+ * - 「ペインで開く」（#887）は解説のペイン（`#/pr-explain/…`）へ移る。ふつうのクリックはフォーカスのあるペインを入れ替え、
+ *   ⌘ + クリックは横に足す（サイドバーと同じ。`onOpenBeside` は広い画面のときだけ渡る）
  */
-export function PrExplainBox({ repo, number, data, now }: { repo: string; number: number; data: PrDetailResponse; now: number }) {
+export function PrExplainBox({ repo, number, data, now, onOpenBeside }: { repo: string; number: number; data: PrDetailResponse; now: number; onOpenBeside?: (item: PaneItem) => void }) {
   // この画面で押した・見に行った結果。PR を読み直したら（data が変わったら）そちらを使う
   const [mine, setMine] = useState<{ explain: PrExplain; data: PrDetailResponse } | null>(null)
   const [busy, setBusy] = useState(false)
@@ -20,6 +24,12 @@ export function PrExplainBox({ repo, number, data, now }: { repo: string; number
   if (!data.explain_available && !explain) return null
   const label = data.explain_available ? explainButtonLabel(explain) : ''
   const note = explainNote(explain)
+  const href = explainOpenHref(explain)
+  const openPane = (e: MouseEvent<HTMLAnchorElement>) => {
+    if (!onOpenBeside || !(e.metaKey || e.ctrlKey)) return
+    e.preventDefault()
+    onOpenBeside({ kind: 'pr-explain', repo, number })
+  }
   const make = () => {
     setBusy(true)
     setError('')
@@ -37,9 +47,14 @@ export function PrExplainBox({ repo, number, data, now }: { repo: string; number
   return (
     <div className="pr-explain">
       <span className="title">解説</span>
-      {explain?.state === 'ready' && explain.key && (
-        <a className="open" href={explainHref(explain.key)} target="_blank" rel="noopener noreferrer">
+      {href && (
+        <a className="open" href={href} target="_blank" rel="noopener noreferrer">
           解説を開く
+        </a>
+      )}
+      {href && (
+        <a className="pane-open" href={prExplainHash(repo, number)} onClick={openPane} title={onOpenBeside ? '⌘ + クリックで横に並べて開く' : undefined}>
+          ペインで開く
         </a>
       )}
       {label && (

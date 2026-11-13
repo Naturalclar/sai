@@ -268,6 +268,31 @@ test('routePaneItem / PINNED_HASH: URL が指すのはフォーカスのある�
   assert.deepEqual(PINNED_HASH, { todo: '#/todo', prs: '#/prs', feed: '#/feed', new: '#/new' })
 })
 
+const ex = (repo: string, number: number): PaneItem => ({ kind: 'pr-explain', repo, number })
+
+test('PR の解説のペイン（#887）: URL から引き、localStorage から読み戻す。壊れた形は落とす', () => {
+  assert.deepEqual(routePaneItem({ name: 'pr-explain', repo: 'o/r', number: 3 }), ex('o/r', 3))
+  assert.equal(routePaneItem({ name: 'pr-explain' }), null)
+  const read = normalizeLayout({ columns: [[s('a')], [ex('o/r', 3)]], focus: 1, keys: [0, 1] })
+  assert.deepEqual([read.columns, read.focus], [[[s('a')], [ex('o/r', 3)]], 1])
+  for (const bad of [{ kind: 'pr-explain' }, { kind: 'pr-explain', repo: 'o', number: 3 }, { kind: 'pr-explain', repo: 'o/r/x', number: 3 }, { kind: 'pr-explain', repo: 'o/r', number: 0 }, { kind: 'pr-explain', repo: 'o/r', number: 1.5 }, { kind: 'pr-explain', repo: 'o/r', number: '3' }, { kind: 'pr-explain', repo: 'a%b/c', number: 3 }, { kind: 'pr-explain', repo: 'a b/c', number: 3 }]) {
+    assert.deepEqual(normalizeLayout({ columns: [[bad]] }), EMPTY_LAYOUT, JSON.stringify(bad))
+  }
+  assert.deepEqual(sessionIdsIn(read), ['a'], 'セッションの並びには数えない')
+})
+
+test('PR の解説のペイン: 同じ PR の解説は 2 つ並べない（リポジトリ名の大文字小文字は見ない）。別の PR なら並べられる', () => {
+  const base: PaneLayout = { columns: [[s('a')], [ex('Owner/Repo', 3)]], focus: 0, keys: [0, 1] }
+  for (const move of [placeItem, openBeside, openInNeighbor]) {
+    const next = move(base, ex('owner/repo', 3))
+    assert.deepEqual([next.columns.length, next.focus], [2, 1], move.name)
+  }
+  assert.equal(normalizeLayout({ columns: [[ex('o/r', 3)], [ex('O/R', 3)]] }).columns.length, 1)
+  const two = openBeside(base, ex('owner/repo', 4))
+  assert.deepEqual([two.columns.length, two.focus], [3, 1], '別の番号は横に足せる')
+  assert.deepEqual(placeItem(full(['a']), ex('o/r', 3)).columns, [[ex('o/r', 3)]], 'ふつうに開くとフォーカスのあるペインが入れ替わる')
+})
+
 test('nextUnshown: 固定の画面から分けるときは、サイドバーの先頭から探す', () => {
   assert.equal(nextUnshown(['a', 'b'], ['a'], ''), 'b')
 })

@@ -218,6 +218,18 @@ export function prHash(repo: string, number: number): string {
 }
 
 /**
+ * 画面の URL（`#/pr/…` / `#/pr-explain/…`）と解説のペインの並び（localStorage）で受ける `owner/repo` の形。
+ * GitHub の名前に使える文字（英数字と `.` `_` `-`）だけ。`prHash()` / `prExplainHash()` はエンコードしないので、
+ * これ以外の文字（`%`・空白など）を受けると、組んだ hash を読み戻せない（#887）
+ */
+export const PR_REPO_NAME = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/
+
+/** PR の解説のペイン（#887）の hash。形は `prHash()` と同じ */
+export function prExplainHash(repo: string, number: number): string {
+  return `#/pr-explain/${repo}/${number}`
+}
+
+/**
  * セッションに紐づく PR（#548）。**セッションの remote の `owner/repo` とブランチが、PR のリポジトリと head のブランチに
  * 一致するもの**。一覧（`GET /api/prs`）の open な PR から引くので、セッションごとに `gh` を叩かない。
  * **fork のブランチから出た PR（`cross`）は結ばない**（`head` はブランチ名だけなので、同じ名前の他人のブランチを拾う）。

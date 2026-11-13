@@ -12,9 +12,9 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 
 ### セッションを横に並べる（#633）
 
-- 並びの形と動かし方は `web/src/paneLayout.ts` の純粋関数（`paneLayout.test.ts`）。`PaneLayout` は **列の配列で、各列が上から下への配列**（いまはどの列も 1 つ。上下を足すための形）と `focus`（フォーカスのある列）、`keys`（列ごとの番号）。要素は種類つき（`session` と、固定の画面 `PINNED_KINDS` = `todo` / `prs` / `feed` / `new`。#759）で、上限は `MAX_COLUMNS` の 1 つ。固定の画面は種類だけで比べるので 2 つ並ばない（`sameItem()`）。`normalizeLayout()` は知らない種類を落とす。
+- 並びの形と動かし方は `web/src/paneLayout.ts` の純粋関数（`paneLayout.test.ts`）。`PaneLayout` は **列の配列で、各列が上から下への配列**（いまはどの列も 1 つ。上下を足すための形）と `focus`（フォーカスのある列）、`keys`（列ごとの番号）。要素は種類つき（`session` と、PR の解説 `pr-explain`（`repo` と `number`。#887）と、固定の画面 `PINNED_KINDS` = `todo` / `prs` / `feed` / `new`。#759）で、上限は `MAX_COLUMNS` の 1 つ。`sameItem()` はセッションを id、PR の解説を PR（リポジトリ名は大文字小文字を見ない）、固定の画面を種類だけで比べるので、同じものは 2 つ並ばない。`normalizeLayout()` は知らない種類と、`parseRoute()` が受けない形の `pr-explain` を落とす（名前は両方とも `shared/prs.ts` の `PR_REPO_NAME` = GitHub の名前に使える文字だけ。hash はエンコードしないので、ほかの文字を受けると組み直した hash を読み戻せない）。
 - 持つのは `App.tsx`（`useLocalState('sai.panes')`。読んだものは毎回 `normalizeLayout()` を通す）。**URL はフォーカスのあるペインの 1 つを指し、`parseRoute()` は変えていない。**
-- URL が指すペインの中身は `routePaneItem(route)`（PR 1 本・使用量・`#/` は null ＝全幅で、並びに触らない。`#/` の全幅のフィードとペインのフィードは `App.tsx` の `feedView()` の 1 つ。`.panes` には `ChatPane` 1 枚だけを描く。戻れば並びが戻る）。並び → URL の固定の画面の hash は `PINNED_HASH`。
+- URL が指すペインの中身は `routePaneItem(route)`（`#/pr-explain/<owner>/<repo>/<番号>` は `pr-explain`。hash は `shared/prs.ts` の `prExplainHash()`。PR 1 本・使用量・`#/` は null ＝全幅で、並びに触らない。`#/` の全幅のフィードとペインのフィードは `App.tsx` の `feedView()` の 1 つ。`.panes` には `ChatPane` 1 枚だけを描く。戻れば並びが戻る）。並び → URL の固定の画面の hash は `PINNED_HASH`。
 - URL → 並びは `placeItem()`。**route が変わったときだけ**描画中に合わせる（`placed` に前の route を覚える。effect の中で setState しない）。並び → URL は、操作（`openBeside()` / `focusColumn()` / `closeColumn()`）のあとに `location.hash` を書く。
 - 「いま開いているセッション」は `currentId`（route がセッションのとき、並びのフォーカスの ID）。題名・差分・`SessionView` の `focused` はこれを見る。**`route.id` を直接見るのは `focusTs` / `focusSide`（発言への飛び先）だけ。**
 - 描くのは `.panes` の中の `ChatPane`（`.pane`）で、並べているときだけ `.panes.split`。`ChatPane` の key は並びが持つ列の番号（`PaneLayout.keys`。列の位置ではない）: 中身を入れ替えても番号は変わらず（1 つのときは今までどおり同じ `SessionView` が `id` だけ変わる）、左を閉じた・間に足したときも残った列の番号は動かない。× は見出しでなく `ChatPane` に置く（読み込み中・取得に失敗したペインも閉じられる）。

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { pollLoop } from './pollLoop.ts'
+import { PR_REPO_NAME } from '../../shared/prs.ts'
 
 export const POLL_MS = 3000
 
@@ -22,6 +23,8 @@ export type Route =
   | { name: 'dots' }
   /** PR 1 本（#524）。`repo` は `owner/repo` */
   | { name: 'pr'; repo: string; number: number }
+  /** PR の解説（#881 の `/brief-pr`）をペインで見る（#887）。`repo` は `owner/repo` */
+  | { name: 'pr-explain'; repo: string; number: number }
 
 /** 発言のどちら側か（#503）。`me` = 自分の入力、`agent` = エージェントの発言 */
 export type MessageSide = 'me' | 'agent'
@@ -51,16 +54,30 @@ export function parseRoute(hash: string): Route {
   if (hash === '#/dots') return { name: 'dots' }
   // GitHub の PR（#524）。1 本は `#/pr/<owner>/<repo>/<番号>`（番号は数字だけ。壊れていれば一覧へ）
   if (hash === '#/prs') return { name: 'prs' }
-  const pr = hash.match(/^#\/pr\/([^/?#]+)\/([^/?#]+)\/([1-9][0-9]{0,8})$/)
-  if (pr) {
-    try {
-      return { name: 'pr', repo: `${decodeURIComponent(pr[1]!)}/${decodeURIComponent(pr[2]!)}`, number: Number(pr[3]) }
-    } catch {
-      return { name: 'prs' }
-    }
+  // PR の解説のペイン（#887）も同じ形（`#/pr-explain/<owner>/<repo>/<番号>`）
+  for (const name of ['pr', 'pr-explain'] as const) {
+    if (!hash.startsWith(`#/${name}/`)) continue
+    const at = prPath(hash.slice(name.length + 3))
+    return at ? { name, ...at } : { name: 'prs' }
   }
-  if (hash.startsWith('#/pr/')) return { name: 'prs' }
   return { name: 'list' }
+}
+
+/**
+ * `<owner>/<repo>/<番号>` を読む。番号は数字だけ。壊れていれば null（呼ぶ側は PR の一覧へ）。
+ * 名前は `PR_REPO_NAME`（GitHub の名前に使える文字）だけ受ける。解説のペインの並び（localStorage）の検査 `paneLayout.ts` の `itemOf()` と同じで、
+ * `prExplainHash()` で組み直しても読み戻せる（受けると、再読み込みやフォーカスの移動でペインが消えて URL とずれる）
+ */
+function prPath(rest: string): { repo: string; number: number } | null {
+  const m = rest.match(/^([^/?#]+)\/([^/?#]+)\/([1-9][0-9]{0,8})$/)
+  if (!m) return null
+  try {
+    const [owner, name] = [decodeURIComponent(m[1]!), decodeURIComponent(m[2]!)]
+    const repo = `${owner}/${name}`
+    return PR_REPO_NAME.test(repo) ? { repo, number: Number(m[3]) } : null
+  } catch {
+    return null
+  }
 }
 
 /**

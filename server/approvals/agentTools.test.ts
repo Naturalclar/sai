@@ -331,9 +331,9 @@ test('sai_start: 送り元・名前・エージェント・最初の指示だけ
   // エージェントを書かなければ送らない（サーバが claude にする）
   await agentTool('sai_start', { name: 'task-a', text: 'やって' }, base, 'A1@r', tokenFile)
   assert.deepEqual(JSON.parse(seen.at(-1)!.body), { from: 'A1@r', name: 'task-a', text: 'やって' })
-  startReply = { status: 403, body: { error: '許可を聞かないモード（Bypass permissions）のセッションからは、新しいセッションの案を置けません' } }
+  startReply = { status: 403, body: { error: '素通しのモード（Bypass permissions）のセッションからは、新しいセッションの案を置けません' } }
   const refused = await agentTool('sai_start', { name: 'task-a', text: 'x' }, base, 'A1@r', tokenFile)
   assert.equal(refused.isError, true)
-  assert.match(refused.content[0]!.text, /^置けませんでした: 許可を聞かないモード/)
+  assert.match(refused.content[0]!.text, /^置けませんでした: 素通しのモード/)
   assert.match(AGENT_TOOLS.find((t) => t.name === 'sai_start')!.description, /置くだけで、worktree も作らずセッションも起こさない/)
 })

@@ -6,7 +6,7 @@ import { appendFile } from 'node:fs/promises'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { join } from 'node:path'
 import { splitHandedReplies } from '../../shared/agentMessages.ts'
-import { modeName, modeSkipsRules, replyModeOf, skipModeInArgs } from '../../shared/permissions.ts'
+import { modeName, modeRefusesStartDraft, replyModeOf, skipModeInArgs } from '../../shared/permissions.ts'
 import { isWaitPrompt } from '../../shared/waits.ts'
 import { startDraftOf } from '../../shared/startDraft.ts'
 import type { AgentStartRequest, AgentStartResponse, StartDraftActionRequest, StartDraftActionResponse } from '../../shared/types.ts'
@@ -22,7 +22,8 @@ export function createStartRoutes(ctx: AppContext & { startDrafts: StartDraftSto
    * `POST /api/agent/start`（`sai_start`）。**置けるのは、SAI が起こしていま回しているターンの自分のセッションだけ**（`agentFrom()`）。
    * 受けるのは worktree の名前・エージェント・最初の指示だけで、置き場は押したときに**このセッションの行の cwd のリポジトリ**から組む
    * （パス・リポジトリ・ブランチ・base は受けない）。そのため、ほかのリポジトリ（送れる相手の組 `mayCross()` の外も中も）には作れない。
-   * 許可を聞かないモードのセッションからは置かせない（#892。`/mcp` が素通しのセッションに送らないのと同じ線）
+   * 素通し（`bypassPermissions`）のセッションからは置かせない（#892）。Auto mode からは置ける（#896。案は人が見て押すまで何も起こさないので、
+   * `/mcp`・ループ・待ちの modeSkipsRules() とは分けて modeRefusesStartDraft() で見る）
    */
   const agentStart = async (req: IncomingMessage, res: ServerResponse) => {
     const refusal = agentRefusal(req)
@@ -44,13 +45,13 @@ export function createStartRoutes(ctx: AppContext & { startDrafts: StartDraftSto
     // 回数の上限は見ない（案は送信ではない）。見るのはメッセージで回っているターンか（連鎖は 1 段まで）だけ
     if (agents.refusal(session.id, found.turn, Number.POSITIVE_INFINITY)) return error(res, 409, '別のセッションから受け取ったメッセージで回っているターンからは、新しいセッションの案を置けません')
     if (loops.get(session.id)?.turn) return error(res, 409, 'ループの周からは、新しいセッションの案を置けません')
-    // 素通しで回っているターンからは置かせない。見るのは 3 つ: いまのメタ（既定が素通しなら、メタに何も無いセッションも素通しで回る。#582。
+    // 素通しで回っているターンからは置かせない（Auto mode は通す。#896）。見るのは 3 つ: いまのメタ（既定が素通しなら、メタに何も無いセッションも素通しで回る。#582。
     // 既定が付くのは Claude だけ）・**いま回っているターンを起こしたときのモード**（起こしたあとでメタを戻しても、そのターンは素通しのまま）・
     // 運用者が `SAI_CLAUDE_ARGS` で渡しているモード（ループの断り `loopRefusal()` と同じ）
     const mode = replyModeOf(session.meta?.permission_mode, session.agent === 'claude' ? (await settingsStore.get()).reply_mode : '')
     const launched = run.snapshot()[session.id]?.permission_mode ?? ''
-    const skips = modeSkipsRules(mode) ? mode : modeSkipsRules(launched) ? launched : skipModeInArgs(splitArgs(process.env.SAI_CLAUDE_ARGS))
-    if (skips) return error(res, 403, `許可を聞かないモード（${modeName(skips)}）のセッションからは、新しいセッションの案を置けません`)
+    const skips = modeRefusesStartDraft(mode) ? mode : modeRefusesStartDraft(launched) ? launched : skipModeInArgs(splitArgs(process.env.SAI_CLAUDE_ARGS), modeRefusesStartDraft)
+    if (skips) return error(res, 403, `素通しのモード（${modeName(skips)}）のセッションからは、新しいセッションの案を置けません`)
     if (!session.cwd) return error(res, 409, 'このセッションの作業ディレクトリが分からないので、worktree の置き場を決められません')
     if (!worktreeAddable) return error(res, 409, 'この SAI には worktree を作る口がありません（画面の「新しい worktree を作る」も出ません）')
     const made = startDraftOf(b)

@@ -251,7 +251,7 @@ test('POST /api/agent/start: トークン無し・ブラウザから・回して
   runner.finish('A1@dev-a')
 })
 
-test('POST /api/agent/start: 許可を聞かないモードのセッションからは置かせない。worktree を作る口が無い SAI でも置かない（#892）', async () => {
+test('POST /api/agent/start: 素通しのセッションからは置かせない。worktree を作る口が無い SAI でも置かない（#892）', async () => {
   const meta = await fetch(`${base}/api/sessions/${encodeURIComponent('P1@dev-a')}/meta`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ permission_mode: 'bypassPermissions' }) })
   assert.equal(meta.status, 200, await meta.clone().text())
   await turn(base, 'P1@dev-a')

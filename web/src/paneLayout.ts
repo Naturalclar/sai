@@ -3,7 +3,7 @@
 //
 // **URL（hash）はフォーカスのあるペインの 1 つを指す**（`parseRoute()` は並びを知らない）。並びは URL に載せないので、
 // 「戻る」で戻るのは見ているものだけで、並びは戻らない。
-import { PR_REPO_NAME } from '../../shared/prs.ts'
+import { pickKnownRepo, PR_REPO_NAME } from '../../shared/prs.ts'
 
 /**
  * ペインに出すもの。種類つきで持つ。
@@ -111,13 +111,36 @@ export const focusedItem = (layout: PaneLayout): PaneItem | null => layout.colum
 const columnOf = (layout: PaneLayout, item: PaneItem): number => layout.columns.findIndex((c) => sameItem(c[0]!, item))
 
 /**
+ * もう並びにあるもの（`at` の列）を指されたとき: そのペインにフォーカスを移す。PR の解説で名前の書き方（大文字小文字）だけが
+ * 違えば、列の中身も指された書き方に替える（並びと URL の書き方を同じにする。#897）。**変わらなければ同じオブジェクトを返す**
+ */
+function present(layout: PaneLayout, at: number, item: PaneItem): PaneLayout {
+  const shown = layout.columns[at]![0]!
+  const respell = shown.kind === 'pr-explain' && item.kind === 'pr-explain' && shown.repo !== item.repo
+  if (!respell) return at === layout.focus ? layout : { ...layout, focus: at }
+  return { ...layout, columns: layout.columns.map((c, i) => (i === at ? [item] : c)), focus: at }
+}
+
+/**
+ * URL から来た PR の解説の名前を、知っている書き方にそろえる（#897。GitHub の名前は大文字小文字を区別しないので、
+ * 記録と違う書き方の URL でも同じ PR）。先に記録で知っているリポジトリ（`pickKnownRepo()`）、無ければもう並んでいる同じ PR の解説の書き方。
+ * どちらにも無ければそのまま。ほかの種類はそのまま返す
+ */
+export function canonicalItem(item: PaneItem, known: readonly string[], layout: PaneLayout): PaneItem {
+  if (item.kind !== 'pr-explain') return item
+  const shown = paneItems(layout).find((p) => sameItem(p, item))
+  const repo = pickKnownRepo(known, item.repo) || (shown?.kind === 'pr-explain' ? shown.repo : '')
+  return repo && repo !== item.repo ? { ...item, repo } : item
+}
+
+/**
  * URL が指すものを並びに反映する（ふつうのクリック・`↑↓`・「戻る」）。**変わらなければ同じオブジェクトを返す。**
  * - もう並びにあれば、そのペインにフォーカスを移す（同じものを 2 つ並べない）
  * - 無ければ、フォーカスのあるペインの中身を入れ替える
  */
 export function placeItem(layout: PaneLayout, item: PaneItem): PaneLayout {
   const at = columnOf(layout, item)
-  if (at >= 0) return at === layout.focus ? layout : { ...layout, focus: at }
+  if (at >= 0) return present(layout, at, item)
   if (layout.columns.length === 0) return { columns: [[item]], focus: 0, keys: [0] }
   return { ...layout, columns: layout.columns.map((c, i) => (i === layout.focus ? [item] : c)) }
 }
@@ -130,7 +153,7 @@ export function placeItem(layout: PaneLayout, item: PaneItem): PaneLayout {
  */
 export function openBeside(layout: PaneLayout, item: PaneItem): PaneLayout {
   const at = columnOf(layout, item)
-  if (at >= 0) return at === layout.focus ? layout : { ...layout, focus: at }
+  if (at >= 0) return present(layout, at, item)
   if (layout.columns.length === 0) return { columns: [[item]], focus: 0, keys: [0] }
   if (layout.columns.length < MAX_COLUMNS) {
     const columns = [...layout.columns]
@@ -189,7 +212,7 @@ export function sessionIdsIn(layout: PaneLayout): string[] {
  */
 export function openInNeighbor(layout: PaneLayout, item: PaneItem): PaneLayout {
   const at = columnOf(layout, item)
-  if (at >= 0) return at === layout.focus ? layout : { ...layout, focus: at }
+  if (at >= 0) return present(layout, at, item)
   if (layout.columns.length === 0) return { columns: [[item]], focus: 0, keys: [0] }
   const right = layout.focus + 1
   if (right >= layout.columns.length && layout.columns.length < MAX_COLUMNS) {

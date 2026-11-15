@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { closeColumn, EMPTY_LAYOUT, focusColumn, focusedItem, MAX_COLUMNS, nextUnshown, normalizeLayout, openBeside, openInNeighbor, PINNED_HASH, PINNED_KINDS, placeItem, replaceItem, routePaneItem, sessionIdsIn, type PaneItem, type PaneLayout } from './paneLayout.ts'
+import { canonicalItem, closeColumn, EMPTY_LAYOUT, focusColumn, focusedItem, MAX_COLUMNS, nextUnshown, normalizeLayout, openBeside, openInNeighbor, PINNED_HASH, PINNED_KINDS, placeItem, replaceItem, routePaneItem, sessionIdsIn, type PaneItem, type PaneLayout } from './paneLayout.ts'
 
 const s = (id: string): PaneItem => ({ kind: 'session', id })
 /** 番号は見ずに並びとフォーカスだけを比べる形（番号は下の「列の番号」のテストで見る） */
@@ -291,6 +291,30 @@ test('PR の解説のペイン: 同じ PR の解説は 2 つ並べない（リ�
   const two = openBeside(base, ex('owner/repo', 4))
   assert.deepEqual([two.columns.length, two.focus], [3, 1], '別の番号は横に足せる')
   assert.deepEqual(placeItem(full(['a']), ex('o/r', 3)).columns, [[ex('o/r', 3)]], 'ふつうに開くとフォーカスのあるペインが入れ替わる')
+})
+
+test('canonicalItem: PR の解説の名前を、記録で知っている書き方、無ければ並んでいる同じ PR の書き方にそろえる（#897）', () => {
+  const none = full([])
+  assert.deepEqual(canonicalItem(ex('owner-a/repo-a', 3), ['Owner-A/Repo-A'], none), ex('Owner-A/Repo-A', 3), '記録の書き方')
+  const shown: PaneLayout = { columns: [[s('a')], [ex('OWNER-A/repo-a', 3)]], focus: 0, keys: [0, 1] }
+  assert.deepEqual(canonicalItem(ex('owner-a/repo-a', 3), [], shown), ex('OWNER-A/repo-a', 3), '記録に無ければ並んでいる書き方')
+  assert.deepEqual(canonicalItem(ex('owner-a/repo-a', 3), ['Owner-A/Repo-A'], shown), ex('Owner-A/Repo-A', 3), '記録が先')
+  assert.deepEqual(canonicalItem(ex('owner-a/repo-a', 4), [], shown), ex('owner-a/repo-a', 4), '別の番号はそろえない')
+  const same = ex('Owner-A/Repo-A', 3)
+  assert.equal(canonicalItem(same, ['Owner-A/Repo-A'], none), same, '同じ書き方なら同じものを返す')
+  const sess = s('a')
+  assert.equal(canonicalItem(sess, ['Owner-A/Repo-A'], none), sess, 'ほかの種類はそのまま')
+})
+
+test('PR の解説: 書き方だけ違うものを指されたら、そのペインへ移り、中身も指された書き方にする（並びと URL を同じにする。#897）', () => {
+  const base: PaneLayout = { columns: [[s('a')], [ex('Owner/Repo', 3)]], focus: 0, keys: [0, 1] }
+  for (const move of [placeItem, openBeside, openInNeighbor]) {
+    const next = move(base, ex('owner/repo', 3))
+    assert.deepEqual([next.columns, next.focus, next.keys], [[[s('a')], [ex('owner/repo', 3)]], 1, [0, 1]], move.name)
+  }
+  // 同じ書き方なら今までどおり（フォーカスがもうあれば同じオブジェクト）
+  const here = { ...base, focus: 1 }
+  assert.equal(placeItem(here, ex('Owner/Repo', 3)), here)
 })
 
 test('nextUnshown: 固定の画面から分けるときは、サイドバーの先頭から探す', () => {

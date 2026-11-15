@@ -1,5 +1,6 @@
-import type { MouseEvent, ReactNode, SyntheticEvent } from 'react'
+import { useEffect, useRef, type MouseEvent, type ReactNode, type SyntheticEvent } from 'react'
 import { CloseMark } from './CloseMark'
+import { frameFocusedIn } from './paneFrameFocus'
 
 interface Props {
   /** フォーカスのあるペインか。入力・`↑↓`・許可の ⌘Enter・題名はここに向く */
@@ -24,8 +25,26 @@ export function ChatPane({ focused, onFocusPane, onClose, onClickCapture, childr
     if (e.target instanceof Element && e.target.closest('.pane-close')) return
     onFocusPane()
   }
+  // 枠（解説のペインの iframe。#897）の中を押したとき。枠の中のイベントは親に届かないので、親の窓の blur のあとに
+  // フォーカスがこのペインの枠に入ったかを見る（判定は paneFrameFocus.ts）。blur の時点では activeElement がまだ動いていないことがあるので、次の番で見る
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (focused || !onFocusPane) return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const onBlur = () => {
+      clearTimeout(timer)
+      timer = setTimeout(() => {
+        if (frameFocusedIn<Element>(document.activeElement, ref.current)) onFocusPane()
+      }, 0)
+    }
+    window.addEventListener('blur', onBlur)
+    return () => {
+      window.removeEventListener('blur', onBlur)
+      clearTimeout(timer)
+    }
+  }, [focused, onFocusPane])
   return (
-    <div className={`pane${focused ? ' focused' : ''}`} onPointerDownCapture={onEnter} onFocusCapture={onEnter} onClickCapture={onClickCapture}>
+    <div ref={ref} className={`pane${focused ? ' focused' : ''}`} onPointerDownCapture={onEnter} onFocusCapture={onEnter} onClickCapture={onClickCapture}>
       {onClose && (
         <button type="button" className="iconbtn pane-close" onClick={onClose} aria-label="このペインを閉じる" title="このペインを閉じる">
           <CloseMark />

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { formatImageBytes } from '../../shared/images.ts'
 import { HIDDEN_POLL_MS, parseRoute, sessionHash, useHashRoute, useLocalState, usePolling, type Route } from './hooks'
-import { closeColumn, EMPTY_LAYOUT, focusColumn, focusedItem, MAX_COLUMNS, nextUnshown, normalizeLayout, openBeside, openInNeighbor, PINNED_HASH, placeItem, replaceItem, routePaneItem, sessionIdsIn, type PaneItem, type PaneLayout, type PinnedKind } from './paneLayout'
+import { canonicalItem, closeColumn, EMPTY_LAYOUT, focusColumn, focusedItem, MAX_COLUMNS, nextUnshown, normalizeLayout, openBeside, openInNeighbor, PINNED_HASH, placeItem, replaceItem, routePaneItem, sessionIdsIn, type PaneItem, type PaneLayout, type PinnedKind } from './paneLayout'
 import { paneKey } from './paneKeys'
 import { ChatPane } from './ChatPane'
 import { pendingItems, todoItems } from '../../shared/todoItems.ts'
@@ -23,7 +23,7 @@ import { PrListView } from './PrListView'
 import { UsageView } from './UsageView'
 import { PrView } from './PrView'
 import { PrExplainView } from './PrExplainView'
-import { prExplainHash } from '../../shared/prs.ts'
+import { knownRepos, prExplainHash } from '../../shared/prs.ts'
 import { loadDraft, saveDraft } from './replyDrafts'
 import { appendInsert } from './replyRestore'
 import { hm } from './format'
@@ -177,6 +177,15 @@ export function App() {
   // タブが裏にある間も間隔を空けて叩き続ける（#231）。待ちが増えたことを題名と通知で伝えるため。
   // チャットとフィードは見ていないので今までどおり止まる
   const list = usePolling(() => api.sessions(filters), [projectsKey, filters.repo, filters.agent, filters.date, filters.host, filters.days, filters.archived], { hiddenMs: HIDDEN_POLL_MS })
+  // PR の解説の URL（#897）を、記録で知っているリポジトリの書き方（無ければ並んでいる同じ PR の解説の書き方）にそろえる。
+  // 大文字小文字だけ違う URL で開いたとき、並びと URL の書き方を同じにする（`canonicalItem()`）。そろえた URL は履歴を増やさず置き換え、
+  // route が変われば上の `placeItem()` がペインの中身も同じ書き方にする
+  const known = useMemo(() => knownRepos(list.data?.sessions ?? []), [list.data?.sessions])
+  useEffect(() => {
+    if (route.name !== 'pr-explain') return
+    const want = canonicalItem({ kind: 'pr-explain', repo: route.repo, number: route.number }, known, layout)
+    if (want.kind === 'pr-explain' && want.repo !== route.repo) location.replace(prExplainHash(want.repo, want.number))
+  }, [route, known, layout])
   // サイドバーのセッションに付ける PR（#548）。一覧のポーリングとは別に 60 秒おき
   const sessionPrs = useSessionPrs()
 

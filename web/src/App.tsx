@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { formatImageBytes } from '../../shared/images.ts'
 import { HIDDEN_POLL_MS, parseRoute, sessionHash, useHashRoute, useLocalState, usePolling, type Route } from './hooks'
-import { canonicalItem, closeColumn, EMPTY_LAYOUT, focusColumn, focusedItem, MAX_COLUMNS, nextUnshown, normalizeLayout, openBeside, openInNeighbor, PINNED_HASH, placeItem, replaceItem, routePaneItem, sessionIdsIn, type PaneItem, type PaneLayout, type PinnedKind } from './paneLayout'
+import { closeColumn, EMPTY_LAYOUT, focusColumn, focusedItem, MAX_COLUMNS, nextUnshown, normalizeLayout, openBeside, openInNeighbor, PINNED_HASH, placeItem, replaceItem, respellItem, routePaneItem, sessionIdsIn, shownSpelling, type PaneItem, type PaneLayout, type PinnedKind } from './paneLayout'
 import { paneKey } from './paneKeys'
 import { ChatPane } from './ChatPane'
 import { pendingItems, todoItems } from '../../shared/todoItems.ts'
@@ -23,7 +23,7 @@ import { PrListView } from './PrListView'
 import { UsageView } from './UsageView'
 import { PrView } from './PrView'
 import { PrExplainView } from './PrExplainView'
-import { knownRepos, prExplainHash } from '../../shared/prs.ts'
+import { prExplainHash } from '../../shared/prs.ts'
 import { loadDraft, saveDraft } from './replyDrafts'
 import { appendInsert } from './replyRestore'
 import { hm } from './format'
@@ -130,6 +130,25 @@ export function App() {
   const [storedPanes, setStoredPanes] = useLocalState<PaneLayout>('sai.panes', EMPTY_LAYOUT)
   const layout = useMemo(() => normalizeLayout(storedPanes), [storedPanes])
   const [placed, setPlaced] = useState<Route | null>(null)
+  // PR の解説（#897）: URL が指す PR が、書き方（大文字小文字）だけ違う形で並んでいれば、URL を並んでいる方の書き方に置き換える
+  // （履歴は増やさない）。並んでいる方は、解説のペインが PR を読んだときにサーバの書き方（記録から引いた `pickKnownRepo()`）にそろえる（`respellExplain`）
+  useEffect(() => {
+    if (route.name !== 'pr-explain') return
+    const repo = shownSpelling(layout, { kind: 'pr-explain', repo: route.repo, number: route.number })
+    if (repo) location.replace(prExplainHash(repo, route.number))
+  }, [route, layout])
+  // 解説のペインの取得が返ったときに呼ばれるので、そのときの並びを見る（取っている間に並びが動いていても、古い並びで上書きしない）
+  const layoutNow = useRef(layout)
+  useEffect(() => {
+    layoutNow.current = layout
+  }, [layout])
+  const respellExplain = useCallback(
+    (repo: string, number: number) => {
+      const next = respellItem(layoutNow.current, { kind: 'pr-explain', repo, number })
+      if (next !== layoutNow.current) setStoredPanes(next)
+    },
+    [setStoredPanes],
+  )
   // ペインに出せるのはセッションと、PR の解説（#887）と、固定の画面（要対応・PR の一覧・フィード・新しいセッション。#759）。
   // PR 1 本（差分とレビュー）と使用量は全幅で、戻れば並びも戻る
   const routeItem = useMemo<PaneItem | null>(() => routePaneItem(route), [route])
@@ -177,15 +196,6 @@ export function App() {
   // タブが裏にある間も間隔を空けて叩き続ける（#231）。待ちが増えたことを題名と通知で伝えるため。
   // チャットとフィードは見ていないので今までどおり止まる
   const list = usePolling(() => api.sessions(filters), [projectsKey, filters.repo, filters.agent, filters.date, filters.host, filters.days, filters.archived], { hiddenMs: HIDDEN_POLL_MS })
-  // PR の解説の URL（#897）を、記録で知っているリポジトリの書き方（無ければ並んでいる同じ PR の解説の書き方）にそろえる。
-  // 大文字小文字だけ違う URL で開いたとき、並びと URL の書き方を同じにする（`canonicalItem()`）。そろえた URL は履歴を増やさず置き換え、
-  // route が変われば上の `placeItem()` がペインの中身も同じ書き方にする
-  const known = useMemo(() => knownRepos(list.data?.sessions ?? []), [list.data?.sessions])
-  useEffect(() => {
-    if (route.name !== 'pr-explain') return
-    const want = canonicalItem({ kind: 'pr-explain', repo: route.repo, number: route.number }, known, layout)
-    if (want.kind === 'pr-explain' && want.repo !== route.repo) location.replace(prExplainHash(want.repo, want.number))
-  }, [route, known, layout])
   // サイドバーのセッションに付ける PR（#548）。一覧のポーリングとは別に 60 秒おき
   const sessionPrs = useSessionPrs()
 
@@ -616,7 +626,8 @@ export function App() {
                     feedView(here)
                   ) : item.kind === 'pr-explain' ? (
                     // 開いたときと「更新」だけ取る（PR 1 本と同じ。3 秒のポーリングには乗せない）。PR が変わったら作り直す
-                    <PrExplainView key={`${item.repo}#${item.number}`} repo={item.repo} number={item.number} onStatus={here ? onStatus : NO_STATUS} onOpenSidebar={openSidebar} />
+                    // key は名前の小文字: 書き方だけ替えたとき（#897）に作り直さない（取り直し・枠の読み直しをしない）
+                    <PrExplainView key={`${item.repo.toLowerCase()}#${item.number}`} repo={item.repo} number={item.number} onStatus={here ? onStatus : NO_STATUS} onOpenSidebar={openSidebar} onRepo={respellExplain} />
                   ) : (
                     <SessionView
                       id={id}

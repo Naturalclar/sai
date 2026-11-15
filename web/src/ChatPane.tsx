@@ -27,14 +27,21 @@ export function ChatPane({ focused, onFocusPane, onClose, onClickCapture, childr
   }
   // 枠（解説のペインの iframe。#897）の中を押したとき。枠の中のイベントは親に届かないので、親の窓の blur のあとに
   // フォーカスがこのペインの枠に入ったかを見る（判定は paneFrameFocus.ts）。blur の時点では activeElement がまだ動いていないことがあるので、次の番で見る
+  // App は onFocusPane を描くたびに作り直すので、最新を ref に持ち、窓の listener は張り直さない（3 秒のポーリングの描き直しで、
+  // blur と次の番の間の確かめを取り消さない。#897 のレビュー）
   const ref = useRef<HTMLDivElement>(null)
+  const focusNow = useRef(onFocusPane)
   useEffect(() => {
-    if (focused || !onFocusPane) return
+    focusNow.current = onFocusPane
+  }, [onFocusPane])
+  const watch = !focused && !!onFocusPane
+  useEffect(() => {
+    if (!watch) return
     let timer: ReturnType<typeof setTimeout> | undefined
     const onBlur = () => {
       clearTimeout(timer)
       timer = setTimeout(() => {
-        if (frameFocusedIn<Element>(document.activeElement, ref.current)) onFocusPane()
+        if (frameFocusedIn<Element>(document.activeElement, ref.current)) focusNow.current?.()
       }, 0)
     }
     window.addEventListener('blur', onBlur)
@@ -42,7 +49,7 @@ export function ChatPane({ focused, onFocusPane, onClose, onClickCapture, childr
       window.removeEventListener('blur', onBlur)
       clearTimeout(timer)
     }
-  }, [focused, onFocusPane])
+  }, [watch])
   return (
     <div ref={ref} className={`pane${focused ? ' focused' : ''}`} onPointerDownCapture={onEnter} onFocusCapture={onEnter} onClickCapture={onClickCapture}>
       {onClose && (

@@ -220,9 +220,10 @@ export function prHash(repo: string, number: number): string {
 /**
  * 画面の URL（`#/pr/…` / `#/pr-explain/…`）と解説のペインの並び（localStorage）で受ける `owner/repo` の形。
  * GitHub の名前に使える文字（英数字と `.` `_` `-`）だけ。`prHash()` / `prExplainHash()` はエンコードしないので、
- * これ以外の文字（`%`・空白など）を受けると、組んだ hash を読み戻せない（#887）
+ * これ以外の文字（`%`・空白など）を受けると、組んだ hash を読み戻せない（#887）。**点だけの名前（`.` / `..`）も受けない**
+ * （`/api/prs/../../1` のように取得先のパスが正規化されて別の口に向く）
  */
-export const PR_REPO_NAME = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/
+export const PR_REPO_NAME = /^(?!\.+\/)[A-Za-z0-9._-]+\/(?!\.+$)[A-Za-z0-9._-]+$/
 
 /** PR の解説のペイン（#887）の hash。形は `prHash()` と同じ */
 export function prExplainHash(repo: string, number: number): string {

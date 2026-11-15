@@ -1,7 +1,7 @@
 // チャットの領域を左右に分けて、複数のセッションを並べて見る（#633）。並びの形と、その動かし方。
 // DOM に依存しないので paneLayout.test.ts を node:test で回す。並びを持つのは App.tsx（localStorage の `sai.panes`）。
 //
-// **URL（hash）はフォーカスのあるペインの 1 つを指す**（`parseRoute()` は変えない）。並びは URL に載せないので、
+// **URL（hash）はフォーカスのあるペインの 1 つを指す**（`parseRoute()` は並びを知らない）。並びは URL に載せないので、
 // 「戻る」で戻るのは見ているものだけで、並びは戻らない。
 import { PR_REPO_NAME } from '../../shared/prs.ts'
 

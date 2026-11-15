@@ -137,16 +137,9 @@ export function App() {
     const repo = shownSpelling(layout, { kind: 'pr-explain', repo: route.repo, number: route.number })
     if (repo) location.replace(prExplainHash(repo, route.number))
   }, [route, layout])
-  // 解説のペインの取得が返ったときに呼ばれるので、そのときの並びを見る（取っている間に並びが動いていても、古い並びで上書きしない）
-  const layoutNow = useRef(layout)
-  useEffect(() => {
-    layoutNow.current = layout
-  }, [layout])
+  // 解説のペインの取得が返ったときに呼ばれるので、そのときの並びの上で組む（取っている間・同じ番に並びが動いていても、古い並びで上書きしない）
   const respellExplain = useCallback(
-    (repo: string, number: number) => {
-      const next = respellItem(layoutNow.current, { kind: 'pr-explain', repo, number })
-      if (next !== layoutNow.current) setStoredPanes(next)
-    },
+    (repo: string, number: number) => setStoredPanes((prev) => respellItem(normalizeLayout(prev), { kind: 'pr-explain', repo, number })),
     [setStoredPanes],
   )
   // ペインに出せるのはセッションと、PR の解説（#887）と、固定の画面（要対応・PR の一覧・フィード・新しいセッション。#759）。
@@ -610,6 +603,8 @@ export function App() {
                 <ChatPane
                   key={`pane:${key}`}
                   focused={here}
+                  // 枠（iframe）を持つのは PR の解説のペインだけ（#897。枠の中を押したことを親の窓の blur で拾う）
+                  hasFrame={item.kind === 'pr-explain'}
                   onFocusPane={split ? () => focusPane(index) : undefined}
                   onClose={split ? () => closePane(index) : undefined}
                   // 要対応・PR の一覧・フィード・PR の解説の中の、セッションへ飛ぶリンクは隣のペインに開く（狭い画面は今までどおり移るだけ）

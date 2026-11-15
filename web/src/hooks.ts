@@ -101,7 +101,16 @@ export function useHashRoute(): Route {
   return route
 }
 
-/** `next` は足す分か、前の値から足す分を作る関数（非同期の結果で直すとき、前の値の上で組む。#897） */
+/**
+ * `useLocalState` の次の値。`next` は足す分か、前の値から足す分を作る関数。**関数が前の値をそのまま返したら前の値を返す**
+ * （呼ぶ側は同じ値で描き直さず、localStorage にも書かない。#897）
+ */
+export function mergeLocal<T extends object>(prev: T, next: Partial<T> | ((prev: T) => Partial<T>)): T {
+  const add = typeof next === 'function' ? next(prev) : next
+  return add === prev ? prev : { ...prev, ...add }
+}
+
+/** `next` は足す分か、前の値から足す分を作る関数（非同期の結果で直すとき、前の値の上で組む。#897）。関数が前の値をそのまま返したら何もしない */
 export function useLocalState<T extends object>(key: string, fallback: T): [T, (next: Partial<T> | ((prev: T) => Partial<T>)) => void] {
   const [value, setValue] = useState<T>(() => {
     try {
@@ -114,7 +123,8 @@ export function useLocalState<T extends object>(key: string, fallback: T): [T, (
   const update = useCallback(
     (next: Partial<T> | ((prev: T) => Partial<T>)) => {
       setValue((prev) => {
-        const merged = { ...prev, ...(typeof next === 'function' ? next(prev) : next) }
+        const merged = mergeLocal(prev, next)
+        if (merged === prev) return prev
         try {
           localStorage.setItem(key, JSON.stringify(merged))
         } catch {

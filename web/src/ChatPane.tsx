@@ -16,8 +16,9 @@ interface Props {
   children: ReactNode
 }
 
-/** 親の窓にフォーカスが無い間、枠から枠へ移ったかを見る間隔（#897） */
+/** フォーカスがこのページの枠の中にある間、枠から別のペインの枠へ移ったかを見る間隔と、見続ける上限（#897） */
 const FRAME_POLL_MS = 300
+const FRAME_POLL_LIMIT_MS = 10 * 60_000
 
 /**
  * チャットの領域の 1 枚（#633）。並べていないときは今までの `.pane` と同じ箱で、並べているときだけ
@@ -33,7 +34,7 @@ export function ChatPane({ focused, onFocusPane, onClose, onClickCapture, hasFra
   // 枠（解説のペインの iframe。#897）の中を押したとき。枠の中のイベントは親に届かないので、親の document の
   // `activeElement` が**このペインの中の枠に変わった**ことを見る（判定は paneFrameFocus.ts）:
   // - 親の窓の blur のあと（親 → 枠）。blur の時点では activeElement がまだ動いていないことがあるので、次の番で見る
-  // - 親の窓にフォーカスが無い間は短い間隔で（枠 → 別のペインの枠。親の窓に blur が来ない）
+  // - フォーカスがこのページの枠の中にある間は短い間隔で（枠 → 別のペインの枠。親の窓に blur が来ない）。枠の外に出た・上限の時間を過ぎたら止める
   // フォーカスを失ったとき自分の枠がまだフォーカスを持っていれば、枠から外す（外さないと、同じ枠をもう一度押しても何も変わらず拾えない）。
   // App は onFocusPane を描くたびに作り直すので、最新を ref に持ち、listener は張り直さない（3 秒のポーリングの描き直しで確かめを取り消さない）
   const ref = useRef<HTMLDivElement>(null)
@@ -49,32 +50,44 @@ export function ChatPane({ focused, onFocusPane, onClose, onClickCapture, hasFra
       last.blur()
       last = document.activeElement
     }
+    let poll: ReturnType<typeof setInterval> | undefined
+    let pollUntil = 0
+    const stopPoll = () => {
+      clearInterval(poll)
+      poll = undefined
+    }
     const check = () => {
       const now = document.activeElement
+      // 間隔で見るのは、フォーカスがこのページの枠の中にある間と、上限の時間まで（別のアプリにいる間は回し続けない）
+      if (poll !== undefined && (now?.tagName !== 'IFRAME' || Date.now() > pollUntil)) stopPoll()
       if (now === last) return
       last = now
       if (frameFocusedIn<Element>(now, ref.current)) focusNow.current?.()
     }
     let timer: ReturnType<typeof setTimeout> | undefined
-    let poll: ReturnType<typeof setInterval> | undefined
-    const onBlur = () => {
-      clearTimeout(timer)
-      timer = setTimeout(check, 0)
+    const startPoll = () => {
+      pollUntil = Date.now() + FRAME_POLL_LIMIT_MS
       poll ??= setInterval(check, FRAME_POLL_MS)
     }
+    const onBlur = () => {
+      clearTimeout(timer)
+      timer = setTimeout(() => {
+        check()
+        if (document.activeElement?.tagName === 'IFRAME') startPoll()
+      }, 0)
+    }
     const onFocus = () => {
-      clearInterval(poll)
-      poll = undefined
+      stopPoll()
       last = document.activeElement
     }
     window.addEventListener('blur', onBlur)
     window.addEventListener('focus', onFocus)
-    if (!document.hasFocus()) poll = setInterval(check, FRAME_POLL_MS)
+    if (document.activeElement?.tagName === 'IFRAME') startPoll()
     return () => {
       window.removeEventListener('blur', onBlur)
       window.removeEventListener('focus', onFocus)
       clearTimeout(timer)
-      clearInterval(poll)
+      stopPoll()
     }
   }, [watch])
   return (

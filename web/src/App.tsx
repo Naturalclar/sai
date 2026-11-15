@@ -139,7 +139,13 @@ export function App() {
   }, [route, layout])
   // 解説のペインの取得が返ったときに呼ばれるので、そのときの並びの上で組む（取っている間・同じ番に並びが動いていても、古い並びで上書きしない）
   const respellExplain = useCallback(
-    (repo: string, number: number) => setStoredPanes((prev) => respellItem(normalizeLayout(prev), { kind: 'pr-explain', repo, number })),
+    (repo: string, number: number) =>
+      setStoredPanes((prev) => {
+        const now = normalizeLayout(prev)
+        const next = respellItem(now, { kind: 'pr-explain', repo, number })
+        // 書き方がもう同じなら前の値をそのまま返す（読み込み・「更新」のたびに並びを書き直さない）
+        return next === now ? prev : next
+      }),
     [setStoredPanes],
   )
   // ペインに出せるのはセッションと、PR の解説（#887）と、固定の画面（要対応・PR の一覧・フィード・新しいセッション。#759）。

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseRoute, sessionHash } from './hooks.ts'
+import { mergeLocal, parseRoute, sessionHash } from './hooks.ts'
 import { prExplainHash, prHash } from '../../shared/prs.ts'
 
 test('parseRoute: 画面の振り分け', () => {
@@ -89,4 +89,12 @@ test('parseRoute: PR の解説のペイン（#887）。形は PR 1 本と同じ�
     assert.deepEqual(at, { name: 'pr-explain', repo, number: 3 })
     assert.deepEqual(parseRoute(prExplainHash((at as { repo: string }).repo, 3)), at)
   }
+})
+
+test('mergeLocal: 足す分を重ね、関数が前の値をそのまま返したら前の値を返す（書き直さない。#897）', () => {
+  const prev = { a: 1, b: 2 }
+  assert.deepEqual(mergeLocal(prev, { b: 3 }), { a: 1, b: 3 })
+  assert.deepEqual(mergeLocal(prev, (p) => ({ b: p.b + 1 })), { a: 1, b: 3 }, '前の値の上で組む')
+  assert.equal(mergeLocal(prev, (p) => p), prev, '変わらなければ同じオブジェクト')
+  assert.notEqual(mergeLocal(prev, {}), prev, '足す分を渡したときは今までどおり新しい値')
 })

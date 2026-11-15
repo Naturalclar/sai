@@ -27,6 +27,7 @@ import type { PrComment } from './api'
 import { agoLabel, checkLabel } from './prLabels'
 import { ReviewBadge } from './ReviewBadge'
 import type { PaneProps } from './App'
+import type { PaneItem } from './paneLayout'
 import { withSuffix } from '../../shared/sessionLabels.ts'
 
 interface Loaded {
@@ -48,7 +49,7 @@ const STATE_LABEL: Record<string, string> = { OPEN: 'open', MERGED: 'マージ�
  * GitHub に載る形を見せ、押したときだけ送る。書いたセッションが見つかる PR では入力欄に入れる方が既定で、投稿は控えめに並べる。
  * **2 つのボタンは題名の行に置く**（#646。`PrHeadActions`。題名の行は流れないので、差分のどこを読んでいても押せる）
  */
-export function PrView({ repo, number, onStatus, onInsertToSession }: { repo: string; number: number; onInsertToSession?: (id: string, text: string) => void } & Pick<PaneProps, 'onStatus'>) {
+export function PrView({ repo, number, onStatus, onInsertToSession, onOpenBeside }: { repo: string; number: number; onInsertToSession?: (id: string, text: string) => void; onOpenBeside?: (item: PaneItem) => void } & Pick<PaneProps, 'onStatus'>) {
   const [loaded, setLoaded] = useState<Loaded | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(true)
@@ -194,7 +195,7 @@ export function PrView({ repo, number, onStatus, onInsertToSession }: { repo: st
             <span className="repo">{loaded.data.repo}</span>
           </div>
           <PrBriefBox repo={knownRepo || repo} number={number} data={loaded.data} now={loaded.at.getTime()} />
-          <PrExplainBox repo={knownRepo || repo} number={number} data={loaded.data} now={loaded.at.getTime()} />
+          <PrExplainBox repo={knownRepo || repo} number={number} data={loaded.data} now={loaded.at.getTime()} {...(onOpenBeside ? { onOpenBeside } : {})} />
           <div className="pr-description body">{pr.body.trim() ? <Markdown text={pr.body} /> : <span className="none">本文はありません</span>}</div>
           <PrComments data={loaded.data} now={loaded.at.getTime()} {...(quoteTo ? { onQuote: quoteComment } : {})} />
           {loaded.data.diff_error && <div className="warn">{loaded.data.diff_error}</div>}

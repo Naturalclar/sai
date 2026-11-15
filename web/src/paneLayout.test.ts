@@ -300,6 +300,9 @@ test('respellItem: 並んでいる PR の解説の書き方だけを替え、フ
   assert.equal(respellItem(next, ex('Owner-A/Repo-A', 3)), next, '書き方が同じなら同じオブジェクト')
   assert.equal(respellItem(base, ex('owner-a/repo-a', 5)), base, '並んでいなければ何もしない（足さない）')
   assert.equal(respellItem(base, s('a')), base)
+  // 列の中のほかの項目は残す（上下に分けるのを足したとき）
+  const stacked: PaneLayout = { columns: [[ex('owner-a/repo-a', 3), s('a')]], focus: 0, keys: [0] }
+  assert.deepEqual(respellItem(stacked, ex('Owner-A/Repo-A', 3)).columns, [[ex('Owner-A/Repo-A', 3), s('a')]])
 })
 
 test('shownSpelling: URL の PR が書き方だけ違う形で並んでいれば、並んでいる方の書き方（#897）', () => {

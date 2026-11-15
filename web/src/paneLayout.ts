@@ -119,7 +119,8 @@ export function respellItem(layout: PaneLayout, item: PaneItem): PaneLayout {
   const at = columnOf(layout, item)
   const shown = at >= 0 ? layout.columns[at]![0]! : null
   if (shown?.kind !== 'pr-explain' || shown.repo === item.repo) return layout
-  return { ...layout, columns: layout.columns.map((c, i) => (i === at ? [item] : c)) }
+  // 列の中のほかの項目は残す（列は上から下への配列。上下に分けるのを後で足すための形）
+  return { ...layout, columns: layout.columns.map((c, i) => (i === at ? c.map((p) => (sameItem(p, item) ? item : p)) : c)) }
 }
 
 /**

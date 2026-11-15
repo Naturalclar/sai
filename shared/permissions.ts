@@ -117,6 +117,15 @@ export function modeSkipsRules(mode: string): boolean {
 }
 
 /**
+ * 新しいセッションの案（`sai_start`）を置かせないモード（#896）。**断るのは素通し（`bypassPermissions`）だけ**で、Auto mode からは置ける。
+ * 案は置くだけで git もプロセスも起こさず、始まるのは人が中身を見て押したとき（始まるモードも人が画面で選ぶ）なので、
+ * 人が見ていない所から動かす口（`/mcp` の送信・ループ・待ち）の modeSkipsRules() とは分ける（あちらの線は変えない）
+ */
+export function modeRefusesStartDraft(mode: string): boolean {
+  return mode === 'bypassPermissions'
+}
+
+/**
  * 目立たせる強さ（#691）。`loud` = 素通し（赤）、`caution` = Auto mode（赤より 1 段弱い色）、空 = 目立たせない。
  * 「目立たせるか」は modeSkipsRules()、「どの強さか」はこちら（CSS のクラス名にそのまま使う）
  */
@@ -128,17 +137,18 @@ export function modeEmphasis(mode: string): '' | 'caution' | 'loud' {
 /**
  * 運用者が渡した引数（`SAI_CLAUDE_ARGS`）の中の、ルールに関係なく通るモード。無ければ空。
  * `--permission-mode auto`（2 語）・`--permission-mode=auto`（1 語）・`--dangerously-skip-permissions` と、
- * `--settings` に JSON で渡した `"defaultMode": "…"` を見る（値に名前を含むだけの別の引数では当てない）
+ * `--settings` に JSON で渡した `"defaultMode": "…"` を見る（値に名前を含むだけの別の引数では当てない）。
+ * どのモードを拾うかは `skips`（既定は modeSkipsRules()。`sai_start` は modeRefusesStartDraft() を渡して素通しだけを拾う。#896）
  */
-export function skipModeInArgs(args: readonly string[]): string {
+export function skipModeInArgs(args: readonly string[], skips: (mode: string) => boolean = modeSkipsRules): string {
   if (args.includes('--dangerously-skip-permissions')) return 'bypassPermissions'
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!
     const mode = a === '--permission-mode' ? (args[i + 1] ?? '') : a.startsWith('--permission-mode=') ? a.slice('--permission-mode='.length) : ''
-    if (mode && modeSkipsRules(mode)) return mode
+    if (mode && skips(mode)) return mode
     // `--settings '{"permissions":{"defaultMode":"bypassPermissions"}}'`（1 語でも `--settings=` でも、引数の中身を見る）
     const byDefault = /"defaultMode"\s*:\s*"([A-Za-z]+)"/.exec(a)?.[1] ?? ''
-    if (modeSkipsRules(byDefault)) return byDefault
+    if (byDefault && skips(byDefault)) return byDefault
   }
   return ''
 }

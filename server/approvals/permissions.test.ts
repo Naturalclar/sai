@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { argsRules, collectPermissions, guardRules, otherManagedSettings, MAX_SETTINGS_BYTES, readSettingsStrict, managedSettingsPath, orderRules, parseSettings, settingsPaths } from './permissions.ts'
-import { defaultModeHint, isReplyPermissionMode, launchedModeNote, MODE_HINT, MODE_LABEL, modeEmphasis, modeLabel, modeName, modeSkipsRules, REPLY_MODES, replyModeOf, shortReplyMode, skipModeInArgs } from '../../shared/permissions.ts'
+import { defaultModeHint, isReplyPermissionMode, launchedModeNote, MODE_HINT, MODE_LABEL, modeEmphasis, modeLabel, modeName, modeRefusesStartDraft, modeSkipsRules, REPLY_MODES, replyModeOf, shortReplyMode, skipModeInArgs } from '../../shared/permissions.ts'
 
 test('MODE_HINT / modeLabel: 何が起きるかは日本語で添え、タグ・モーダル用は「名前 — 説明」（#271）', () => {
   // 名前を英語にしても、説明が消えてはいけない（メニューの補足と見出しのタグが空になる）
@@ -288,4 +288,18 @@ test('otherManagedSettings（#863）: managed の置き場に 1 つのファイ�
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
+})
+
+test('modeRefusesStartDraft: sai_start が断るのは素通しだけ。SAI_CLAUDE_ARGS も素通しだけを拾い、modeSkipsRules の線は変えない（#896）', () => {
+  assert.equal(modeRefusesStartDraft('bypassPermissions'), true)
+  for (const m of ['auto', 'acceptEdits', 'plan', 'default', '']) assert.equal(modeRefusesStartDraft(m), false, m)
+  assert.equal(skipModeInArgs(['--permission-mode', 'auto'], modeRefusesStartDraft), '')
+  assert.equal(skipModeInArgs(['--permission-mode=auto'], modeRefusesStartDraft), '')
+  assert.equal(skipModeInArgs(['--settings', '{"permissions":{"defaultMode":"auto"}}'], modeRefusesStartDraft), '')
+  assert.equal(skipModeInArgs(['--dangerously-skip-permissions'], modeRefusesStartDraft), 'bypassPermissions')
+  assert.equal(skipModeInArgs(['--permission-mode', 'bypassPermissions'], modeRefusesStartDraft), 'bypassPermissions')
+  // Auto mode の引数が先にあっても、あとの素通しを見落とさない
+  assert.equal(skipModeInArgs(['--permission-mode', 'auto', '--settings', '{"permissions":{"defaultMode":"bypassPermissions"}}'], modeRefusesStartDraft), 'bypassPermissions')
+  // 既定（modeSkipsRules）はいままでどおり Auto mode も拾う
+  assert.equal(skipModeInArgs(['--permission-mode', 'auto']), 'auto')
 })

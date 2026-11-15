@@ -144,7 +144,7 @@ before(async () => {
   const lines = [
     row(new Date(now.getTime() - 60_000), 'A1', { repo: 'dev-a', project: 'owner-a/repo-a', remote: 'https://github.com/owner-a/repo-a', cwd, host: 'testmac' }),
     row(new Date(now.getTime() - 50_000), 'P1', { repo: 'dev-a', project: 'owner-a/repo-a', remote: 'https://github.com/owner-a/repo-a', cwd, host: 'testmac' }),
-    ...['Q1', 'S1', 'W1', 'E1', 'M1'].map((id, i) => row(new Date(now.getTime() - 40_000 + i * 1000), id, { repo: 'dev-a', project: 'owner-a/repo-a', remote: 'https://github.com/owner-a/repo-a', cwd, host: 'testmac' })),
+    ...['Q1', 'S1', 'W1', 'E1', 'M1', 'U1', 'V1', 'X1', 'Y1'].map((id, i) => row(new Date(now.getTime() - 40_000 + i * 1000), id, { repo: 'dev-a', project: 'owner-a/repo-a', remote: 'https://github.com/owner-a/repo-a', cwd, host: 'testmac' })),
   ]
   await writeFile(join(feedDir, `${localDate(now.toISOString())}.jsonl`), lines.map((l) => JSON.stringify(l)).join('\n') + '\n')
   app = make(new FeedStore(feedDir), runner, true)
@@ -257,7 +257,7 @@ test('POST /api/agent/start: 許可を聞かないモードのセッションか
   await turn(base, 'P1@dev-a')
   const res = await place({ from: 'P1@dev-a', name: 'task-x', text: 'x' })
   assert.equal(res.status, 403)
-  assert.match(await errorOf(res), /許可を聞かないモード/)
+  assert.match(await errorOf(res), /素通しのモード/)
   assert.equal((await sessionOf('P1@dev-a'))?.start_draft, undefined)
   runner.finish('P1@dev-a')
 
@@ -293,7 +293,7 @@ test('POST /api/agent/start: 素通しで起こしたターンは、あとでメ
   await putMeta('Q1@dev-a', 'acceptEdits')
   const res = await place({ from: 'Q1@dev-a', name: 'task-x', text: 'x' })
   assert.equal(res.status, 403)
-  assert.match(await errorOf(res), /許可を聞かないモード/)
+  assert.match(await errorOf(res), /素通しのモード/)
   runner.finish('Q1@dev-a')
 
   await turn(base, 'E1@dev-a')
@@ -308,6 +308,69 @@ test('POST /api/agent/start: 素通しで起こしたターンは、あとでメ
   }
   assert.equal((await sessionOf('E1@dev-a'))?.start_draft, undefined)
   runner.finish('E1@dev-a')
+})
+
+test('POST /api/agent/start: Auto mode のセッションからは置ける（メタ・Auto mode で起こしたターン・SAI_CLAUDE_ARGS）。素通しの引数は今どおり断る（#896）', async () => {
+  await putMeta('U1@dev-a', 'auto')
+  await turn(base, 'U1@dev-a')
+  assert.equal(runner.snapshot()['U1@dev-a']?.permission_mode, 'auto', 'Auto mode で起こしたターン')
+  const byMeta = await place({ from: 'U1@dev-a', name: 'task-u', text: 'x' })
+  assert.equal(byMeta.status, 201, await byMeta.clone().text())
+  runner.finish('U1@dev-a')
+
+  // Auto mode で起こしたあとでメタを戻しても置ける（起こしたときのモードが Auto mode のまま）
+  await putMeta('V1@dev-a', 'auto')
+  await turn(base, 'V1@dev-a')
+  await putMeta('V1@dev-a', 'acceptEdits')
+  const byLaunch = await place({ from: 'V1@dev-a', name: 'task-v', text: 'x' })
+  assert.equal(byLaunch.status, 201, await byLaunch.clone().text())
+  runner.finish('V1@dev-a')
+
+  await turn(base, 'X1@dev-a')
+  const savedArgs = process.env.SAI_CLAUDE_ARGS
+  try {
+    for (const args of ['--permission-mode auto', '--permission-mode=auto']) {
+      process.env.SAI_CLAUDE_ARGS = args
+      const res = await place({ from: 'X1@dev-a', name: 'task-x', text: 'x' })
+      assert.equal(res.status, 201, args)
+    }
+    for (const args of ['--permission-mode bypassPermissions', '--permission-mode auto --dangerously-skip-permissions']) {
+      process.env.SAI_CLAUDE_ARGS = args
+      const res = await place({ from: 'X1@dev-a', name: 'task-x', text: 'x' })
+      assert.equal(res.status, 403, args)
+      assert.match(await errorOf(res), /素通しのモード/)
+    }
+  } finally {
+    if (savedArgs === undefined) delete process.env.SAI_CLAUDE_ARGS
+    else process.env.SAI_CLAUDE_ARGS = savedArgs
+  }
+  runner.finish('X1@dev-a')
+})
+
+test('POST /api/agent/start: Auto mode のセッションが置いた案から始めても、置いた側のモードは新しいセッションに付かない（始まるモードは人が画面で選ぶ。#896）', async () => {
+  await putMeta('Y1@dev-a', 'auto')
+  await turn(base, 'Y1@dev-a')
+  const placed = (await (await place({ from: 'Y1@dev-a', name: 'task-y1', text: 'はじめて' })).json()) as AgentStartResponse
+  runner.finish('Y1@dev-a')
+  // 画面（`startFromDraft()`）と同じ順に。許可モードを選ばずに押す
+  const made = await post(`${base}/api/workspaces`, { from: 'Y1@dev-a', name: placed.draft.name }, { Origin: base })
+  assert.equal(made.status, 201, await made.clone().text())
+  const { worktree } = (await made.json()) as AddWorktreeResponse
+  const begun = await post(`${base}/api/sessions/new`, { from: worktree.from, worktree: worktree.worktree, text: placed.draft.text }, { Origin: base })
+  assert.equal(begun.status, 202, await begun.clone().text())
+  const started = runner.started.at(-1)!
+  assert.equal(started.cmd.permissionMode || '', '', '置いた側の Auto mode を付けない（空 = --permission-mode を付けない）')
+  const { id } = (await begun.json()) as NewSessionResponse
+  const meta = (await (await fetch(`${base}/api/sessions/${encodeURIComponent(id)}/meta`)).json()) as { permission_mode?: string }
+  assert.equal(meta.permission_mode, undefined, '新しいセッションのメタにも書かない')
+  runner.finish(started.id)
+  // 人が画面で選んだモードは付く
+  const made2 = await post(`${base}/api/workspaces`, { from: 'Y1@dev-a', name: 'task-y2' }, { Origin: base })
+  const w2 = ((await made2.json()) as AddWorktreeResponse).worktree
+  const chosen = await post(`${base}/api/sessions/new`, { from: w2.from, worktree: w2.worktree, text: 'x', permission_mode: 'acceptEdits' }, { Origin: base })
+  assert.equal(chosen.status, 202, await chosen.clone().text())
+  assert.equal(runner.started.at(-1)!.cmd.permissionMode, 'acceptEdits')
+  runner.finish(runner.started.at(-1)!.id)
 })
 
 test('POST /api/agent/start: 送信を止めたセッション・待ちで起きたターンからは置けない（#895 のレビュー）', async () => {

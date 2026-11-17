@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { formatImageBytes } from '../../shared/images.ts'
 import { HIDDEN_POLL_MS, parseRoute, sessionHash, useHashRoute, useLocalState, usePolling, type Route } from './hooks'
-import { closeColumn, EMPTY_LAYOUT, focusColumn, focusedItem, MAX_COLUMNS, nextUnshown, normalizeLayout, openBeside, openInNeighbor, PINNED_HASH, placeItem, replaceItem, routePaneItem, sessionIdsIn, type PaneItem, type PaneLayout, type PinnedKind } from './paneLayout'
+import { closeColumn, EMPTY_LAYOUT, focusColumn, focusedItem, MAX_COLUMNS, nextUnshown, normalizeLayout, openBeside, openInNeighbor, PINNED_HASH, placeItem, replaceItem, respellItem, routePaneItem, sessionIdsIn, type PaneItem, type PaneLayout, type PinnedKind } from './paneLayout'
 import { paneKey } from './paneKeys'
 import { ChatPane } from './ChatPane'
 import { pendingItems, todoItems } from '../../shared/todoItems.ts'
@@ -23,6 +23,7 @@ import { PrListView } from './PrListView'
 import { UsageView } from './UsageView'
 import { PrView } from './PrView'
 import { PrExplainView } from './PrExplainView'
+import { explainUrlFix } from './explainUrl'
 import { prExplainHash } from '../../shared/prs.ts'
 import { loadDraft, saveDraft } from './replyDrafts'
 import { appendInsert } from './replyRestore'
@@ -130,6 +131,25 @@ export function App() {
   const [storedPanes, setStoredPanes] = useLocalState<PaneLayout>('sai.panes', EMPTY_LAYOUT)
   const layout = useMemo(() => normalizeLayout(storedPanes), [storedPanes])
   const [placed, setPlaced] = useState<Route | null>(null)
+  // PR の解説（#897）: URL が指す PR が、書き方（大文字小文字）だけ違う形で並んでいれば、URL を並んでいる方の書き方に置き換える
+  // （履歴は増やさない）。並んでいる方は、解説のペインが PR を読んだときにサーバの書き方（記録から引いた `pickKnownRepo()`）にそろえる（`respellExplain`）
+  // 見るのは route でなく、いまの `location.hash`（フォーカスを移した直後は hash が先に変わる。古い route で見ると、移った先の URL を上書きする）
+  useEffect(() => {
+    if (route.name !== 'pr-explain') return
+    const fix = explainUrlFix(location.hash, layout)
+    if (fix) location.replace(fix)
+  }, [route, layout])
+  // 解説のペインの取得が返ったときに呼ばれるので、そのときの並びの上で組む（取っている間・同じ番に並びが動いていても、古い並びで上書きしない）
+  const respellExplain = useCallback(
+    (repo: string, number: number) =>
+      setStoredPanes((prev) => {
+        const now = normalizeLayout(prev)
+        const next = respellItem(now, { kind: 'pr-explain', repo, number })
+        // 書き方がもう同じなら前の値をそのまま返す（読み込み・「更新」のたびに並びを書き直さない）
+        return next === now ? prev : next
+      }),
+    [setStoredPanes],
+  )
   // ペインに出せるのはセッションと、PR の解説（#887）と、固定の画面（要対応・PR の一覧・フィード・新しいセッション。#759）。
   // PR 1 本（差分とレビュー）と使用量は全幅で、戻れば並びも戻る
   const routeItem = useMemo<PaneItem | null>(() => routePaneItem(route), [route])
@@ -591,6 +611,8 @@ export function App() {
                 <ChatPane
                   key={`pane:${key}`}
                   focused={here}
+                  // 枠（iframe）を持つのは PR の解説のペインだけ（#897。枠の中を押したことを親の窓の blur で拾う）
+                  hasFrame={item.kind === 'pr-explain'}
                   onFocusPane={split ? () => focusPane(index) : undefined}
                   onClose={split ? () => closePane(index) : undefined}
                   // 要対応・PR の一覧・フィード・PR の解説の中の、セッションへ飛ぶリンクは隣のペインに開く（狭い画面は今までどおり移るだけ）
@@ -607,7 +629,8 @@ export function App() {
                     feedView(here)
                   ) : item.kind === 'pr-explain' ? (
                     // 開いたときと「更新」だけ取る（PR 1 本と同じ。3 秒のポーリングには乗せない）。PR が変わったら作り直す
-                    <PrExplainView key={`${item.repo}#${item.number}`} repo={item.repo} number={item.number} onStatus={here ? onStatus : NO_STATUS} onOpenSidebar={openSidebar} />
+                    // key は名前の小文字: 書き方だけ替えたとき（#897）に作り直さない（取り直し・枠の読み直しをしない）
+                    <PrExplainView key={`${item.repo.toLowerCase()}#${item.number}`} repo={item.repo} number={item.number} onStatus={here ? onStatus : NO_STATUS} onOpenSidebar={openSidebar} onRepo={respellExplain} />
                   ) : (
                     <SessionView
                       id={id}

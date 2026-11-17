@@ -111,6 +111,29 @@ export const focusedItem = (layout: PaneLayout): PaneItem | null => layout.colum
 const columnOf = (layout: PaneLayout, item: PaneItem): number => layout.columns.findIndex((c) => sameItem(c[0]!, item))
 
 /**
+ * 並んでいる PR の解説の名前の書き方を替える（#897。サーバが記録から引いた書き方 `PrDetailResponse.repo` にそろえる）。
+ * 同じ PR（`sameItem()`）の列だけを替え、フォーカスは動かさない。並んでいない・書き方が同じなら同じオブジェクトを返す
+ */
+export function respellItem(layout: PaneLayout, item: PaneItem): PaneLayout {
+  if (item.kind !== 'pr-explain') return layout
+  // 列の中の全部の項目で探す（`shownSpelling()` と同じ。列は上から下への配列で、上下に分けるのを後で足すための形）。ほかの項目は残す
+  const shown = layout.columns.flat().find((p) => sameItem(p, item))
+  if (shown?.kind !== 'pr-explain' || shown.repo === item.repo) return layout
+  return { ...layout, columns: layout.columns.map((c) => (c.some((p) => p === shown) ? c.map((p) => (p === shown ? item : p)) : c)) }
+}
+
+/**
+ * URL が指す PR の解説と同じ PR が、書き方（大文字小文字）だけ違う形で並んでいれば、並んでいる方の書き方（#897）。無ければ空。
+ * URL をこれで置き換えて、並びと URL の書き方を同じにする（並んでいる方はサーバが記録から引いた書き方にそろえてある）
+ */
+export function shownSpelling(layout: PaneLayout, item: PaneItem): string {
+  if (item.kind !== 'pr-explain') return ''
+  // 列の中の全部の項目で探す（`respellItem()` と同じ）
+  const shown = layout.columns.flat().find((p) => sameItem(p, item))
+  return shown?.kind === 'pr-explain' && shown.repo !== item.repo ? shown.repo : ''
+}
+
+/**
  * URL が指すものを並びに反映する（ふつうのクリック・`↑↓`・「戻る」）。**変わらなければ同じオブジェクトを返す。**
  * - もう並びにあれば、そのペインにフォーカスを移す（同じものを 2 つ並べない）
  * - 無ければ、フォーカスのあるペインの中身を入れ替える

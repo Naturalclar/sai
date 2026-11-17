@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { closeColumn, EMPTY_LAYOUT, focusColumn, focusedItem, MAX_COLUMNS, nextUnshown, normalizeLayout, openBeside, openInNeighbor, PINNED_HASH, PINNED_KINDS, placeItem, replaceItem, routePaneItem, sessionIdsIn, type PaneItem, type PaneLayout } from './paneLayout.ts'
+import { closeColumn, EMPTY_LAYOUT, focusColumn, focusedItem, MAX_COLUMNS, nextUnshown, normalizeLayout, openBeside, openInNeighbor, PINNED_HASH, PINNED_KINDS, placeItem, replaceItem, respellItem, routePaneItem, sessionIdsIn, shownSpelling, type PaneItem, type PaneLayout } from './paneLayout.ts'
 
 const s = (id: string): PaneItem => ({ kind: 'session', id })
 /** 番号は見ずに並びとフォーカスだけを比べる形（番号は下の「列の番号」のテストで見る） */
@@ -291,6 +291,38 @@ test('PR の解説のペイン: 同じ PR の解説は 2 つ並べない（リ�
   const two = openBeside(base, ex('owner/repo', 4))
   assert.deepEqual([two.columns.length, two.focus], [3, 1], '別の番号は横に足せる')
   assert.deepEqual(placeItem(full(['a']), ex('o/r', 3)).columns, [[ex('o/r', 3)]], 'ふつうに開くとフォーカスのあるペインが入れ替わる')
+})
+
+test('respellItem: 並んでいる PR の解説の書き方だけを替え、フォーカスと列の番号は動かさない（#897）', () => {
+  const base: PaneLayout = { columns: [[s('a')], [ex('owner-a/repo-a', 3)], [ex('owner-a/repo-a', 4)]], focus: 0, keys: [0, 1, 2] }
+  const next = respellItem(base, ex('Owner-A/Repo-A', 3))
+  assert.deepEqual([next.columns, next.focus, next.keys], [[[s('a')], [ex('Owner-A/Repo-A', 3)], [ex('owner-a/repo-a', 4)]], 0, [0, 1, 2]], '別の番号は替えない')
+  assert.equal(respellItem(next, ex('Owner-A/Repo-A', 3)), next, '書き方が同じなら同じオブジェクト')
+  assert.equal(respellItem(base, ex('owner-a/repo-a', 5)), base, '並んでいなければ何もしない（足さない）')
+  assert.equal(respellItem(base, s('a')), base)
+  // 列の中のほかの項目は残す（上下に分けるのを足したとき）
+  const stacked: PaneLayout = { columns: [[ex('owner-a/repo-a', 3), s('a')]], focus: 0, keys: [0] }
+  assert.deepEqual(respellItem(stacked, ex('Owner-A/Repo-A', 3)).columns, [[ex('Owner-A/Repo-A', 3), s('a')]])
+  // 列の先頭でなくても探す（shownSpelling と同じ探し方。食い違うと URL と並びの書き方がそろわない）
+  const below: PaneLayout = { columns: [[s('a'), ex('owner-a/repo-a', 3)]], focus: 0, keys: [0] }
+  assert.deepEqual(respellItem(below, ex('Owner-A/Repo-A', 3)).columns, [[s('a'), ex('Owner-A/Repo-A', 3)]])
+  assert.equal(shownSpelling(below, ex('OWNER-A/repo-a', 3)), 'owner-a/repo-a')
+})
+
+test('shownSpelling: URL の PR が書き方だけ違う形で並んでいれば、並んでいる方の書き方（#897）', () => {
+  const base: PaneLayout = { columns: [[s('a')], [ex('Owner-A/Repo-A', 3)]], focus: 0, keys: [0, 1] }
+  assert.equal(shownSpelling(base, ex('owner-a/repo-a', 3)), 'Owner-A/Repo-A')
+  assert.equal(shownSpelling(base, ex('Owner-A/Repo-A', 3)), '', '同じ書き方')
+  assert.equal(shownSpelling(base, ex('owner-a/repo-a', 4)), '', '並んでいない')
+  assert.equal(shownSpelling(base, s('a')), '')
+})
+
+test('PR の解説: 書き方だけ違うものを指されても、並んでいる方へフォーカスを移すだけで中身は替えない（URL の方を並びにそろえる。#897）', () => {
+  const base: PaneLayout = { columns: [[s('a')], [ex('Owner/Repo', 3)]], focus: 0, keys: [0, 1] }
+  for (const move of [placeItem, openBeside, openInNeighbor]) {
+    const next = move(base, ex('owner/repo', 3))
+    assert.deepEqual([next.columns, next.focus], [base.columns, 1], move.name)
+  }
 })
 
 test('nextUnshown: 固定の画面から分けるときは、サイドバーの先頭から探す', () => {

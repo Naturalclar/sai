@@ -19,17 +19,21 @@ interface Loaded {
  *
  * - 鍵と状態は PR 1 本の取得（`api.pr()`）の `explain` から引く。取るのは開いたときと「更新」だけ（PR 1 本と同じ。ポーリングしない）
  * - 解説を作る・作り直すのは PR の画面（`PrExplainBox`）。ここには置かない
+ * - 取るのは名前の小文字で（サーバは大文字小文字を見ずに記録から引く）、返った書き方（`data.repo`）が渡された書き方と違えば `onRepo` で知らせる
+ *   （並びと URL をその書き方にそろえる。#897）。書き方が替わっても取り直さない
  */
-export function PrExplainView({ repo, number, onStatus, onOpenSidebar }: { repo: string; number: number } & Pick<PaneProps, 'onStatus' | 'onOpenSidebar'>) {
+export function PrExplainView({ repo, number, onStatus, onOpenSidebar, onRepo }: { repo: string; number: number; onRepo?: (repo: string, number: number) => void } & Pick<PaneProps, 'onStatus' | 'onOpenSidebar'>) {
+  const repoKey = repo.toLowerCase()
   const [loaded, setLoaded] = useState<Loaded | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(true)
 
   const load = useCallback(() => {
     setBusy(true)
-    return api.pr(repo, number).then(
+    return api.pr(repoKey, number).then(
       (data) => {
         setLoaded({ data, at: new Date() })
+        onRepo?.(data.repo, number)
         setError('')
         setBusy(false)
       },
@@ -38,19 +42,25 @@ export function PrExplainView({ repo, number, onStatus, onOpenSidebar }: { repo:
         setBusy(false)
       },
     )
-  }, [repo, number])
+  }, [repoKey, number, onRepo])
 
   // PR が変われば key で作り直すので、ここでは 1 回取るだけ
   useEffect(() => {
     let alive = true
-    void api.pr(repo, number).then(
-      (data) => alive && (setLoaded({ data, at: new Date() }), setBusy(false)),
+    void api.pr(repoKey, number).then(
+      (data) => {
+        if (!alive) return
+        setLoaded({ data, at: new Date() })
+        setBusy(false)
+        onRepo?.(data.repo, number)
+      },
       (err: unknown) => alive && (setError(err instanceof Error ? err.message : String(err)), setBusy(false)),
     )
     return () => {
       alive = false
     }
-  }, [repo, number])
+    // 書き方が替わっても（repoKey が同じなら）取り直さない。onRepo は App の useCallback で変わらない
+  }, [repoKey, number, onRepo])
   useEffect(() => onStatus(loaded?.at ?? null, error || null), [loaded, error, onStatus])
 
   const pr = loaded?.data.pr

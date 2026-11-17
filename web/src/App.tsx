@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { formatImageBytes } from '../../shared/images.ts'
 import { HIDDEN_POLL_MS, parseRoute, sessionHash, useHashRoute, useLocalState, usePolling, type Route } from './hooks'
-import { closeColumn, EMPTY_LAYOUT, focusColumn, focusedItem, MAX_COLUMNS, nextUnshown, normalizeLayout, openBeside, openInNeighbor, PINNED_HASH, placeItem, replaceItem, respellItem, routePaneItem, sessionIdsIn, shownSpelling, type PaneItem, type PaneLayout, type PinnedKind } from './paneLayout'
+import { closeColumn, EMPTY_LAYOUT, focusColumn, focusedItem, MAX_COLUMNS, nextUnshown, normalizeLayout, openBeside, openInNeighbor, PINNED_HASH, placeItem, replaceItem, respellItem, routePaneItem, sessionIdsIn, type PaneItem, type PaneLayout, type PinnedKind } from './paneLayout'
 import { paneKey } from './paneKeys'
 import { ChatPane } from './ChatPane'
 import { pendingItems, todoItems } from '../../shared/todoItems.ts'
@@ -23,6 +23,7 @@ import { PrListView } from './PrListView'
 import { UsageView } from './UsageView'
 import { PrView } from './PrView'
 import { PrExplainView } from './PrExplainView'
+import { explainUrlFix } from './explainUrl'
 import { prExplainHash } from '../../shared/prs.ts'
 import { loadDraft, saveDraft } from './replyDrafts'
 import { appendInsert } from './replyRestore'
@@ -132,10 +133,11 @@ export function App() {
   const [placed, setPlaced] = useState<Route | null>(null)
   // PR の解説（#897）: URL が指す PR が、書き方（大文字小文字）だけ違う形で並んでいれば、URL を並んでいる方の書き方に置き換える
   // （履歴は増やさない）。並んでいる方は、解説のペインが PR を読んだときにサーバの書き方（記録から引いた `pickKnownRepo()`）にそろえる（`respellExplain`）
+  // 見るのは route でなく、いまの `location.hash`（フォーカスを移した直後は hash が先に変わる。古い route で見ると、移った先の URL を上書きする）
   useEffect(() => {
     if (route.name !== 'pr-explain') return
-    const repo = shownSpelling(layout, { kind: 'pr-explain', repo: route.repo, number: route.number })
-    if (repo) location.replace(prExplainHash(repo, route.number))
+    const fix = explainUrlFix(location.hash, layout)
+    if (fix) location.replace(fix)
   }, [route, layout])
   // 解説のペインの取得が返ったときに呼ばれるので、そのときの並びの上で組む（取っている間・同じ番に並びが動いていても、古い並びで上書きしない）
   const respellExplain = useCallback(

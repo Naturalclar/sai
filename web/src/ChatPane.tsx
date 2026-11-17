@@ -78,9 +78,11 @@ export function ChatPane({ focused, onFocusPane, onClose, onClickCapture, hasFra
       timer = setTimeout(check, 0)
       startPoll()
     }
+    // 窓にフォーカスが戻ったときも、先に確かめる（別のアプリから枠を直接押して戻ったとき、ブラウザによっては窓の focus が先に来て、
+    // そのときにはもう activeElement が枠になっている。確かめずに覚え直すと、そのクリックを取りこぼす）。枠の中にいる間は回し続ける
     const onFocus = () => {
-      stopPoll()
-      last = document.activeElement
+      check()
+      if (document.activeElement?.tagName !== 'IFRAME') stopPoll()
     }
     window.addEventListener('blur', onBlur)
     window.addEventListener('focus', onFocus)

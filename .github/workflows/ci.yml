@@ -56,12 +56,17 @@ jobs:
   # フック（Python）。record.py は 3.9+ 標準ライブラリのみが前提なので、下限と最新の両方で回す。
   feed:
     name: feed (python ${{ matrix.python }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 5
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.9", "3.x"]
+        include:
+          # Ubuntu 26.04（ubuntu-latest）には setup-python の 3.9 が無いので、3.9 だけ 24.04 に固定する（#900。24.04 の終了か下限を上げるときに見直す）
+          - python: "3.9"
+            os: ubuntu-24.04
+          - python: "3.x"
+            os: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 

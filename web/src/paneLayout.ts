@@ -116,11 +116,10 @@ const columnOf = (layout: PaneLayout, item: PaneItem): number => layout.columns.
  */
 export function respellItem(layout: PaneLayout, item: PaneItem): PaneLayout {
   if (item.kind !== 'pr-explain') return layout
-  const at = columnOf(layout, item)
-  const shown = at >= 0 ? layout.columns[at]![0]! : null
+  // 列の中の全部の項目で探す（`shownSpelling()` と同じ。列は上から下への配列で、上下に分けるのを後で足すための形）。ほかの項目は残す
+  const shown = layout.columns.flat().find((p) => sameItem(p, item))
   if (shown?.kind !== 'pr-explain' || shown.repo === item.repo) return layout
-  // 列の中のほかの項目は残す（列は上から下への配列。上下に分けるのを後で足すための形）
-  return { ...layout, columns: layout.columns.map((c, i) => (i === at ? c.map((p) => (sameItem(p, item) ? item : p)) : c)) }
+  return { ...layout, columns: layout.columns.map((c) => (c.some((p) => p === shown) ? c.map((p) => (p === shown ? item : p)) : c)) }
 }
 
 /**
@@ -129,7 +128,8 @@ export function respellItem(layout: PaneLayout, item: PaneItem): PaneLayout {
  */
 export function shownSpelling(layout: PaneLayout, item: PaneItem): string {
   if (item.kind !== 'pr-explain') return ''
-  const shown = paneItems(layout).find((p) => sameItem(p, item))
+  // 列の中の全部の項目で探す（`respellItem()` と同じ）
+  const shown = layout.columns.flat().find((p) => sameItem(p, item))
   return shown?.kind === 'pr-explain' && shown.repo !== item.repo ? shown.repo : ''
 }
 

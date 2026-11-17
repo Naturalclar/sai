@@ -303,6 +303,10 @@ test('respellItem: 並んでいる PR の解説の書き方だけを替え、フ
   // 列の中のほかの項目は残す（上下に分けるのを足したとき）
   const stacked: PaneLayout = { columns: [[ex('owner-a/repo-a', 3), s('a')]], focus: 0, keys: [0] }
   assert.deepEqual(respellItem(stacked, ex('Owner-A/Repo-A', 3)).columns, [[ex('Owner-A/Repo-A', 3), s('a')]])
+  // 列の先頭でなくても探す（shownSpelling と同じ探し方。食い違うと URL と並びの書き方がそろわない）
+  const below: PaneLayout = { columns: [[s('a'), ex('owner-a/repo-a', 3)]], focus: 0, keys: [0] }
+  assert.deepEqual(respellItem(below, ex('Owner-A/Repo-A', 3)).columns, [[s('a'), ex('Owner-A/Repo-A', 3)]])
+  assert.equal(shownSpelling(below, ex('OWNER-A/repo-a', 3)), 'owner-a/repo-a')
 })
 
 test('shownSpelling: URL の PR が書き方だけ違う形で並んでいれば、並んでいる方の書き方（#897）', () => {

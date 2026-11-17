@@ -33,7 +33,9 @@ export function ChatPane({ focused, onFocusPane, onClose, onClickCapture, hasFra
   // 枠（解説のペインの iframe。#897）の中を押したとき。枠の中のイベントは親に届かないので、親の document の
   // `activeElement` が**このペインの中の枠に変わった**ことを見る（判定は paneFrameFocus.ts）:
   // - 親の窓の blur のあと（親 → 枠）。blur の時点では activeElement がまだ動いていないことがあるので、次の番で見る
-  // - フォーカスがこのページの枠の中にある間は短い間隔で（枠 → 別のペインの枠。親の窓に blur が来ない）。枠の外に出たら止め、別のアプリにいる間は何もしない
+  // - 窓の blur から、窓にフォーカスが戻る（またはフォーカスが枠の外に出たのを見る）までは短い間隔で。枠 → 別のペインの枠と、
+  //   別のアプリから枠を直接押して戻ったときは、親の窓に blur も focus も来ないので。activeElement が枠に移るのが遅れても、次の間隔で拾う。
+  //   別のアプリにいる間は張ったまま何もしない（`hasFocus()` を 1 回見るだけ）
   // フォーカスを失ったとき自分の枠がまだフォーカスを持っていれば、枠から外す（外さないと、同じ枠をもう一度押しても何も変わらず拾えない）。
   // App は onFocusPane を描くたびに作り直すので、最新を ref に持ち、listener は張り直さない（3 秒のポーリングの描き直しで確かめを取り消さない）
   const ref = useRef<HTMLDivElement>(null)
@@ -56,27 +58,25 @@ export function ChatPane({ focused, onFocusPane, onClose, onClickCapture, hasFra
     }
     const check = () => {
       const now = document.activeElement
-      // 間隔で見るのは、フォーカスがこのページの枠の中にある間だけ（枠の外に出たら止める）
-      if (poll !== undefined && now?.tagName !== 'IFRAME') stopPoll()
       if (now === last) return
       last = now
       if (frameFocusedIn<Element>(now, ref.current)) focusNow.current?.()
     }
     let timer: ReturnType<typeof setTimeout> | undefined
-    // 別のアプリにいる間（窓にフォーカスが無い）は何もしない。時間で止めると、長く読んだあとに枠から別の枠へ移ったのを拾えなくなる
-    // （枠から枠へは親の窓に blur も focus も来ないので、止めたら張り直す手がかりが無い。#897 の再レビュー）
+    // 時間では止めない（長く読んだあとに枠から別の枠へ移ったのを拾えなくなる。止めたら張り直す手がかりが無い。#897 の再レビュー）
     const tick = () => {
-      if (document.hasFocus()) check()
+      if (!document.hasFocus()) return
+      check()
+      // このページにフォーカスがあって枠の外（親の document）にいるなら、もう見なくてよい（次に枠へ入るときは窓の blur が来る）
+      if (document.activeElement?.tagName !== 'IFRAME') stopPoll()
     }
     const startPoll = () => {
       poll ??= setInterval(tick, FRAME_POLL_MS)
     }
     const onBlur = () => {
       clearTimeout(timer)
-      timer = setTimeout(() => {
-        check()
-        if (document.activeElement?.tagName === 'IFRAME') startPoll()
-      }, 0)
+      timer = setTimeout(check, 0)
+      startPoll()
     }
     const onFocus = () => {
       stopPoll()
@@ -84,7 +84,7 @@ export function ChatPane({ focused, onFocusPane, onClose, onClickCapture, hasFra
     }
     window.addEventListener('blur', onBlur)
     window.addEventListener('focus', onFocus)
-    if (document.activeElement?.tagName === 'IFRAME') startPoll()
+    if (!document.hasFocus() || document.activeElement?.tagName === 'IFRAME') startPoll()
     return () => {
       window.removeEventListener('blur', onBlur)
       window.removeEventListener('focus', onFocus)

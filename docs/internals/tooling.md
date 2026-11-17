@@ -45,7 +45,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 
 ## CI（`.github/workflows/ci.yml`）
 
-- コミット前の一式（`bash scripts/suite.sh` が回す `pnpm test` / `test:feed` / `lint` / `typecheck`）＋ `pnpm build` を `main` への push と PR で回す。Node 22 系の最新、Python 3.9 と最新。
+- コミット前の一式（`bash scripts/suite.sh` が回す `pnpm test` / `test:feed` / `lint` / `typecheck`）＋ `pnpm build` を `main` への push と PR で回す。Node 22 系の最新、Python 3.9 と最新。実行環境は `ubuntu-latest` で、Python 3.9 のジョブだけ `ubuntu-24.04` に固定している（26.04 に 3.9 が無い。#900）。
 
 ## 子プロセスを数える（`scripts/count-spawns.mjs`。#592）
 

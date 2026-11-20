@@ -6,8 +6,9 @@ import type { AgentRequest, FeedRow } from '../../shared/types.ts'
 const item = (message_id: string, status: AgentRequest['items'][number]['status'], extra: Partial<AgentRequest['items'][number]> = {}) => ({ message_id, to: 'b@r', to_name: 'セッション B', status, at: '2026-11-20T01:00:05Z', ...extra })
 
 test('見出しは件数と状態ごとの数（0 件の状態は出さない）', () => {
-  assert.equal(requestSummary({ items: [item('a', 'done'), item('b', 'pending'), item('c', 'held'), item('d', 'pending')] }), '4 件 · 返答あり 1 · 返答待ち 2 · 預かり 1')
+  assert.equal(requestSummary({ items: [item('a', 'done', { reply_ts: '2026-11-20T01:10:00Z' }), item('b', 'pending'), item('c', 'held'), item('d', 'pending')] }), '4 件 · 返答あり 1 · 返答待ち 2 · 預かり 1')
   assert.equal(requestSummary({ items: [item('a', 'failed')] }), '1 件 · 失敗 1')
+  assert.equal(requestSummary({ items: [item('a', 'done', { reply_ts: '2026-11-20T01:10:00Z' }), item('b', 'done')] }), '2 件 · 返答あり 1 · 返答の行なし 1', '返答の行が見つからないものは返答ありに数えない')
 })
 
 test('返答ありでも返答の行が見つからなければそう書く。止まった預かりは送っていないと書く', () => {
@@ -32,4 +33,19 @@ test('依頼したターンの次のターン完了の行に置く。いま回�
   assert.deepEqual(placed.tail, [t3], 'ターン完了の行がまだ無い依頼は末尾')
   const running = placeRequests([t1, t2], rows, t2.turn)
   assert.deepEqual(running.tail, [t2], 'いま回しているターンの依頼は、前のターンの行があっても末尾')
+})
+
+test('前のターンのターン完了の行と同じ秒に始まったターンの依頼は、前のターンのバブルに付けない', () => {
+  const rows = [turnRow('2026-11-20T01:00:00Z'), turnRow('2026-11-20T01:00:30Z')]
+  const r: AgentRequest = { turn: '2026-11-20T01:00:00.950Z', items: [item('a', 'done')] }
+  assert.deepEqual([...placeRequests([r], rows).at.keys()], ['2026-11-20T01:00:30Z'])
+})
+
+test('描いている最初の行よりずっと前に始まったターンの依頼は、どこにも置かない（窓の中のバブルに付けない）', () => {
+  const rows = [turnRow('2026-11-20T01:00:00Z', 'UserPromptSubmit'), turnRow('2026-11-20T01:05:00Z')]
+  const old: AgentRequest = { turn: '2026-11-10T01:00:00Z', items: [item('a', 'done')] }
+  const edge: AgentRequest = { turn: '2026-11-20T00:59:59.500Z', items: [item('b', 'done')] }
+  const placed = placeRequests([old, edge], rows)
+  assert.deepEqual([...placed.at.values()].flat().map((x) => x.turn), [edge.turn], '最初の入力の行の少し前に始まったターンは置く')
+  assert.deepEqual(placed.tail, [])
 })

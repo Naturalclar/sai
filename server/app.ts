@@ -180,7 +180,7 @@ import { QUEUE_FILE, QUEUE_MAX, ReplyQueueStore } from './reply/replyQueue.ts'
 import { AGENT_MESSAGES_FILE, AGENT_TOKEN_FILE, AgentMessages, ensureAgentToken } from './reply/agentMessages.ts'
 import type { AfterPlan } from './reply/agentAfter.ts'
 import { withAfterTurns } from '../shared/agentAfter.ts'
-import { agentRequestsKey } from '../shared/agentRequests.ts'
+import { agentRequestsKey, REQUESTS_SLACK_MS } from '../shared/agentRequests.ts'
 import { LOOP_TICK_MS, LOOPS_FILE, LoopStore } from './reply/loops.ts'
 import { createAgentRoutes } from './reply/agentRoutes.ts'
 import { createLoopRoutes, LOOP_SUFFIXES } from './reply/loopRoutes.ts'
@@ -5071,7 +5071,10 @@ export function createApp(
         const replies = repliedAll.filter((r) => Date.parse(r.ts) >= shownFrom)
         // 別のセッションへのメッセージのようす（#311）。送った・止めた・再開したは agents.key() で rev に混ぜる。
         // 依頼ごとの進み具合（#902）は、描いている窓の中で始まったターンの分だけ、上で引いた返答の行の ts を添えて付ける
-        const activity = await agentActivityOf(id, sessions, { replyTs: new Map(repliedAll.map((r) => [r.agent_reply?.message_id ?? '', r.ts] as const)), notBefore: shownFrom })
+        // 窓の頭は、前の行を落としていなくても描いている最初の行にする（送った記録は日数で切られないので、窓より前のターンの依頼を
+        // 窓の中のバブルに付けない）。ターンの始まりは最初の入力の行より少し前なので、余白を取る
+        const requestsFrom = shown[0] ? Date.parse(shown[0].ts) - REQUESTS_SLACK_MS : -Infinity
+        const activity = await agentActivityOf(id, sessions, { replyTs: new Map(repliedAll.map((r) => [r.agent_reply?.message_id ?? '', r.ts] as const)), notBefore: requestsFrom })
         // 人がこの画面の返答のバブルの下から相手へ送った返信（#700）と、相手がそれに返した行。返した行は同じ並びに混ぜる
         const nameOfTarget = (to: string) => {
           const target = sessions.find((s) => s.id === to)

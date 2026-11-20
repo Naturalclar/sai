@@ -846,10 +846,12 @@ export function createAgentRoutes(ctx: AgentRoutesContext) {
     if (!agents.hasActivity(id)) return undefined
     const current = run.snapshot()[id]
     const turn = current && !current.failed && run.running(id) ? current.since : ''
-    // 状態はまとめて 1 回で引く（決まったものは覚えてあるので、行を舐めるのはまだ決まっていない分だけ）
+    // 状態はまとめて 1 回で引く。依頼の進み具合（#902）のために足すのは、窓の中で始まったターンの記録だけ
+    // （窓の外の古い記録まで渡すと、返答の来ないものが決まるまで、ポーリングのたびに古い日から行を舐め直す）
     const all = requests ? agents.sentBy(id, Infinity) : agents.sentBy(id)
     const sent = all.slice(0, AGENT_RECENT)
-    const statuses = await agentStatuses(all)
+    const inWindow = requests ? all.filter((m, i) => i < AGENT_RECENT || (m.turn !== undefined && !(Date.parse(m.turn) < requests.notBefore))) : sent
+    const statuses = await agentStatuses(inWindow)
     const queued = queue.snapshot()
     const recent = await Promise.all(
       sent.map(async (m): Promise<AgentActivityMessage> => {
@@ -867,7 +869,7 @@ export function createAgentRoutes(ctx: AgentRoutesContext) {
     // 依頼ごとの進み具合（#902）。古い順に送った記録を渡す（同じ時刻でも送った順が崩れない）
     const byId = new Map(sessions.map((s) => [s.id, s] as const))
     const requestList = requests
-      ? agentRequests([...all].reverse(), agents.heldBy(id), (messageId) => statuses.get(messageId), (to) => {
+      ? agentRequests([...inWindow].reverse(), agents.heldBy(id), (messageId) => statuses.get(messageId), (to) => {
           const target = byId.get(to)
           return target ? sessionLabel(target) : to
         }, requests.replyTs, requests.notBefore)

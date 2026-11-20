@@ -3,6 +3,9 @@
 // （毎回ここで組み立てる）。行は舐めない（状態も返答の行も呼び出し側が 1 回で引いたものを渡す）ので、3 秒のポーリングを重くしない
 import type { AgentActivityMessage, AgentRequest, AgentRequestItem } from './types.ts'
 
+/** 窓の頭（描いている最初の行）からこれだけ前までに始まったターンは載せる（ターンの始まりは最初の入力の行より少し前。行の時刻は秒まで） */
+export const REQUESTS_SLACK_MS = 60_000
+
 /** 束ねるのに要る送った記録の形（`server/reply/agentMessages.ts` の `AgentMessage` の一部） */
 export interface RequestSent {
   message_id: string

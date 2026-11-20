@@ -374,22 +374,19 @@ test('notReadOnly: 読む先・行き先は cwd の中だけ。秘密が入っ�
   assert.equal(check('cat environment.ts'), '')
 })
 
-test('notReadOnly: 入れていないコマンドと形は通さない（printf・jq・rg・cd・sleep・git grep・git -C・gh の jq 式 …。多機能で、読むだけと言い切れない）', () => {
+test('notReadOnly: 入れていないコマンドと形は通さない（printf・jq・rg・cd・git grep・git -C・gh の jq の関数 …。多機能で、読むだけと言い切れない）', () => {
   const removed = [
     'printf "%s\\n" "$(git log -1 --format=%s)"',
-    'echo "$(gh pr view 12 --json state --jq .state)"',
     '(cd sub && git status)',
     '(cd sub && ls -la) && git log --oneline -5',
     'cat package.json | jq .scripts',
     "rg -n 'export function' src",
     'rg --files',
     "git grep -n 'TODO' -- 'src/*.ts'",
-    'sleep 2 && git status',
     'cd sub && cat a.txt && ls',
     'git -C sub status',
     'git remote -v',
     'git blame -L 10,20 src/index.ts',
-    "gh api repos/o/r/pulls/12 --jq '.head.sha'",
     'cd sub | cat',
     'rg --pre cat x',
     'rg -u x',
@@ -445,7 +442,6 @@ test('notReadOnly: 入れていないコマンドと形は通さない（printf�
     "jq -n 'repeat(1)'",
     "jq 'recurse(.)' package.json",
     "gh pr view 1 --json title --jq 'repeat(1)'",
-    'gh pr view 1 --json title -q .title',
     "gh pr view 1 --template '{{.title}}'",
     'rg KEY',
     'rg KEY .',
@@ -1039,4 +1035,78 @@ test('notReadOnly: 引数が全部文字だけの echo は、引用符で囲ん�
     'echo "=== a ===" | sh',
   ]
   assert.deepEqual(human.map((c) => [c, check(c)]).filter(([, got]) => got === ''), [])
+})
+
+test('notReadOnly: git の FETCH_HEAD・sleep の秒・gh の --jq のパスだけの式を受ける（#582）', () => {
+  const ok = [
+    'git rev-parse FETCH_HEAD',
+    'git rev-parse --short FETCH_HEAD',
+    'git rev-list --count FETCH_HEAD',
+    'echo "$(git rev-parse FETCH_HEAD)"',
+    'sleep 5',
+    'sleep 0',
+    'sleep 60',
+    'sleep 15 && gh pr checks 12',
+    'gh pr view 12 --json headRefOid -q .headRefOid',
+    'gh pr view 12 --json headRefOid --jq .headRefOid',
+    'gh pr view 12 --json headRefOid --jq=.headRefOid',
+    "gh pr list --state open --json number -q '.[].number'",
+    "gh run view 7 --json jobs -q '.jobs[0].databaseId'",
+    "gh api repos/o/r/pulls/12 --jq '.head.sha'",
+    'gh api repos/o/r/pulls/12 --paginate --jq .number',
+    'gh pr view 12 --json title --jq .',
+    'gh pr view 12 --json env --jq .env',
+    'echo "$(gh pr view 12 --json state --jq .state)"',
+  ]
+  assert.deepEqual(ok.map((c) => [c, check(c)]).filter(([, got]) => got !== ''), [])
+  const refused: Array<[string, string]> = [
+    // FETCH_HEAD も HEAD と同じ線（1 つだけ・パス・範囲・ほかのサブコマンドは受けない）
+    ['git rev-parse FETCH_HEAD HEAD', 'flag'],
+    ['git show FETCH_HEAD:pnpm-lock.yaml', 'flag'],
+    ['git rev-parse FETCH_HEAD..HEAD', 'flag'],
+    ['git log FETCH_HEAD', 'flag'],
+    ['git diff FETCH_HEAD', 'flag'],
+    ['git fetch -q origin main', 'command'],
+    ['git rev-parse ORIG_HEAD', 'flag'],
+    // sleep は秒の整数 1 つで 60 まで
+    ['sleep 61', 'flag'],
+    ['sleep 999999', 'flag'],
+    ['sleep infinity', 'flag'],
+    ['sleep 1.5', 'flag'],
+    ['sleep 5m', 'flag'],
+    ['sleep 05', 'flag'],
+    ['sleep -1', 'flag'],
+    ['sleep 1 2', 'flag'],
+    ['sleep', 'flag'],
+    ['sleep $(echo 5)', 'opaque'],
+    ['sleep "$n"', 'syntax'],
+    // --jq は、関数・変数・パイプ・文字列・括弧の入った式を受けない
+    ["gh pr view 1 --json title --jq 'env'", 'flag'],
+    ['gh pr view 1 --json title --jq env.GH_TOKEN', 'flag'],
+    ["gh pr view 1 --json title --jq '$ENV.GH_TOKEN'", 'flag'],
+    ["gh pr view 1 --json title --jq '.title|env'", 'flag'],
+    ["gh pr view 1 --json title --jq '.$ENV'", 'flag'],
+    ["gh pr view 1 --json title --jq '.a.$__loc__'", 'flag'],
+    ["gh pr view 1 --json title --jq '.[] | .title'", 'flag'],
+    ["gh pr view 1 --json title --jq 'repeat(1)'", 'flag'],
+    ["gh pr view 1 --json title --jq '.title,env'", 'flag'],
+    ["gh pr view 1 --json title --jq '.[]?'", 'flag'],
+    ["gh pr view 1 --json title --jq '.[-1]'", 'flag'],
+    ["gh pr view 1 --json title --jq '.[0:2]'", 'flag'],
+    ["gh pr view 1 --json title --jq '.\"a\"'", 'flag'],
+    ["gh pr view 1 --json title --jq '..'", 'flag'],
+    ["gh pr view 1 --json title --jq '.a .b'", 'flag'],
+    ["gh pr view 1 --json jobs --jq '.jobs[]|select(.name==\"x\")|.databaseId'", 'flag'],
+    ['gh pr view 1 --json title --jq', 'flag'],
+    ['gh pr view 1 --json title --jq=', 'flag'],
+    ['gh pr view 1 --json title -q', 'flag'],
+    ['gh pr view 1 --json title -q -w', 'flag'],
+    ["gh pr view 1 --json title --template '{{.title}}'", 'flag'],
+    ['gh pr view 1 --json title --jq "$q"', 'syntax'],
+    ['gh pr view 1 --json title --jq $(echo .title)', 'opaque'],
+    // ほかのリポジトリを名指しする形は、--jq があっても今までどおり断る
+    ['gh api repos/other/x/pulls/1 --jq .number', 'flag'],
+    ['gh api repos/o/r/hooks --jq .url', 'flag'],
+  ]
+  assert.deepEqual(refused.map(([c, want]) => [c, check(c), want]).filter(([, got, want]) => got !== want), [])
 })

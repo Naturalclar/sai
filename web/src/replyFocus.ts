@@ -29,3 +29,16 @@ export function leavesToSidebar(e: KeyLike, state: LeaveState): boolean {
   if (e.isComposing || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return false
   return !state.menuOpen && state.text === ''
 }
+
+/**
+ * `Esc` で入力欄からフォーカスを外すか（#904）。候補メニューが閉じていて、IME 変換中でも修飾キー付きでもないときだけ true。
+ * 本文があっても外す（打ちかけと添付は消さないので、`→` で戻ればそのまま続きを書ける）。
+ * メニューが開いているときの `Esc` はメニューを閉じるだけ（1 回目でメニュー、2 回目で外れる）。
+ * 外した同じ 1 回の `Esc` ではフィードへ移らない: window の `navAction()` は押した時点の `e.target`（入力欄）を
+ * `isTypingTarget()` で見て捨てるので、フィードへはもう 1 回押したときに移る（その判定は App.tsx 側で、ここのテストでは見ていない）
+ */
+export function blursOnEscape(e: KeyLike, state: Pick<LeaveState, 'menuOpen'>): boolean {
+  if (e.key !== 'Escape') return false
+  if (e.isComposing || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return false
+  return !state.menuOpen
+}

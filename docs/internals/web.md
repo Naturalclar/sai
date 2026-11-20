@@ -120,7 +120,7 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 ## キーボード
 
 - セッション移動は `sessionNav.ts` の純粋関数（`navAction` / `navTarget`）を `App.tsx` の keydown が呼ぶ（`sessionNav.test.ts`）。`navTarget()` は `NavTarget`（`feed` / `todo` / `session`）を起点にも行き先にも取り、固定項目 `PINNED` をセッションより上に並べた仮想の一覧で隣を返す。
-- 入力欄との行き来（`→` で入力欄、空の入力欄で `←` で一覧。#204）は判定が 2 か所に分かれる: `→` は `navAction()` の `'input'`（window 側）、`←` は本文の中身を知っている入力欄しか判断できないので `web/src/replyFocus.ts` の `leavesToSidebar()` を `ReplyBox` の `onKeyDown` が呼ぶ（window 側は `isTypingTarget()` で入力欄のキーを捨てるため）。
+- 入力欄との行き来（`→` で入力欄、空の入力欄で `←` で一覧。#204）は判定が 2 か所に分かれる: `→` は `navAction()` の `'input'`（window 側）、`←` は本文の中身を知っている入力欄しか判断できないので `web/src/replyFocus.ts` の `leavesToSidebar()` を `ReplyBox` の `onKeyDown` が呼ぶ（window 側は `isTypingTarget()` で入力欄のキーを捨てるため）。入力欄の `Esc`（#904）も同じ形で、`blursOnEscape()`（候補メニューが閉じていて IME 変換中でも修飾キー付きでもない）なら `ReplyBox` が `blur()` してから `onLeaveToSidebar` を呼ぶ（`←` と同じ当て方）。同じ `Esc` が window の `navAction()` の `'feed'` に届いても、`e.target` は入力欄のままなので `isTypingTarget()` で捨てられ、フィードへはもう 1 回押したときに移る。
 - フォーカスの当て先は `App.tsx` が `focusLater` の ref で持ち、その場で当たらなければ描画のあとにもう一度探して `FOCUS_WAIT_MS` で諦める（effect の中で setState しない）。サイドバーの当て先はフィードが `<a class="item feed">` そのもの、セッションは `<div class="item">` の中の `<a class="link">` の 2 種類ある。
 
 ## サイドバーの塊（#364）

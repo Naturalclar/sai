@@ -12,7 +12,7 @@ import { IconButton } from './IconButton'
 import { ReplyModelPicker, type ReplyModelProps } from './ReplyModelPicker'
 import { TargetLabel } from './TargetLabel'
 import { ReplyPermissionPicker, type ReplyPermissionProps } from './ReplyPermissionPicker'
-import { leavesToSidebar } from './replyFocus'
+import { blursOnEscape, leavesToSidebar } from './replyFocus'
 import { DiffButton, type DiffButtonProps } from './DiffButton'
 import { acceptsSuggestion, suggestionFor, suggestionLabel } from './replySuggest'
 import { NEXT_ASK_MAX_CHARS } from '../../shared/nextAsk.ts'
@@ -559,6 +559,14 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
     if (onLeaveToSidebar && leavesToSidebar({ ...keyOf(e), isComposing: composing }, { text, menuOpen: open })) {
       e.preventDefault()
       onLeaveToSidebar()
+      return
+    }
+    // メニューが閉じていれば Esc で入力欄から外れ、← と同じくサイドバーの項目へ（#904）。本文・添付は消さない。
+    // 一覧のキー（↑↓ / j k / →）は外れたあとに効く。同じ Esc でフィードへ移らないのは window 側が e.target で捨てるから
+    if (blursOnEscape({ ...keyOf(e), isComposing: composing }, { menuOpen: open })) {
+      e.preventDefault()
+      e.currentTarget.blur()
+      onLeaveToSidebar?.()
       return
     }
     // 候補メニューが閉じているときの ↑ / ↓ は履歴。本文が空か、カーソルが 1 行目（↓ は最終行）のときだけ。

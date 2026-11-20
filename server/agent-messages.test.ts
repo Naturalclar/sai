@@ -1822,11 +1822,16 @@ test('依頼ごとの進み具合（#902）: 前の行を落とした窓（recen
   const turnBefore = new Date(Date.now() - 20 * 86_400_000).toISOString()
   // 落とした行より後・窓の最初の行より前に始まったターン（入力の行を書かないエージェントの最初のターンと同じ形）
   const turnAfter = new Date(Date.now() - 2 * 86_400_000).toISOString()
+  // 7 日の切れ目をまたぐターン: 入力の行だけが窓の外に落ちる（落とした行の一番新しいものがこの入力の行になるが、線はターン完了の行で引く）
+  const straddleAt = new Date(Date.now() - 8 * 86_400_000)
+  const turnStraddle = straddleAt.toISOString()
+  const straddleFile = join(dir, `${localDate(new Date(straddleAt.getTime() + 1000).toISOString())}.jsonl`)
+  await appendFile(straddleFile, JSON.stringify(row(new Date(straddleAt.getTime() + 1000), 'A1', { repo: 'r', cwd: work, project: 'o/r', event: 'UserPromptSubmit', user_text: 'またぐ依頼', text: '' })) + '\n')
   try {
-    for (const t of [turnBefore, turnAfter]) {
+    for (const t of [turnBefore, turnStraddle, turnAfter]) {
       turn('A1@r', t)
       try {
-        assert.equal((await send('A1@r', 'B1@r', t === turnBefore ? 'ずっと前の依頼' : '少し前の依頼')).status, 202)
+        assert.equal((await send('A1@r', 'B1@r', t === turnBefore ? 'ずっと前の依頼' : t === turnStraddle ? 'またぐ依頼' : '少し前の依頼')).status, 202)
       } finally {
         idle('A1@r')
       }
@@ -1837,7 +1842,9 @@ test('依頼ごとの進み具合（#902）: 前の行を落とした窓（recen
     assert.ok(detail.older > 0, '前の行を落としている')
     assert.equal(detail.agent?.requests?.find((r) => r.turn === turnBefore), undefined, '落としたターン完了の行より前に始まったターンは載せない')
     assert.ok(detail.agent?.requests?.find((r) => r.turn === turnAfter), '落とした行より後に始まったターンは、窓の最初の行より前でも載せる')
+    assert.ok(detail.agent?.requests?.find((r) => r.turn === turnStraddle), '入力の行だけが落ちた（切れ目をまたぐ）ターンも載せる')
   } finally {
     await rm(oldFile, { force: true })
+    await rm(straddleFile, { force: true })
   }
 })

@@ -7,6 +7,7 @@ import { isRemoteHost } from '../../shared/host.ts'
 import { sessionImageUrl } from '../../shared/images.ts'
 import { digestKey } from '../../shared/digestFeedback.ts'
 import { eventKind } from '../../shared/events.ts'
+import { afterTurnKey } from './agentRequests.ts'
 import { ImageNoSourceContext, ImageSourceContext } from './imageContext'
 import { LightboxProvider } from './LightboxProvider'
 import { FileViewerProvider } from './FileViewerProvider'
@@ -298,8 +299,7 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
   // 離れている間に増えた行。フィルタが変わって行が減ることもあるので 0 で止める。trailer（仮バブル）は数えない
   const arrived = atBottom || awayAt === null ? 0 : Math.max(0, rows.length - awayAt)
 
-  // ターン完了の返答のバブルの下に足すもの（#902）は、同じ `ts` のバブルが 2 つあっても（補った行と本物の行など）1 回だけ出す。
-  // 描くたびに作り直すので、描画の中で詰めてよい（外に漏れない）
+  // ターン完了の返答のバブルの下に足すもの（#902）。同じ `ts` のバブルには 1 回だけ（`afterTurnKey()`）。描くたびに作り直す
   const afterTurnShown = new Set<string>()
   // 画像はページの中のライトボックスで開く（#507）。バブルの中の画像・添付・バブルの下の画像のどれも
   return (
@@ -445,7 +445,7 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
                         thinkingClipped={showThinking && wasClipped(u.row, 'thinking')}
                         defaultOpen={longOpen}
                       />
-                      {renderAfterTurn && side === 'agent' && !u.waiting && !u.reply && eventKind(u.row.event, u.row.text) === 'turn' && !afterTurnShown.has(u.row.ts) && afterTurnShown.add(u.row.ts) ? renderAfterTurn(u.row.ts) : null}
+                      {renderAfterTurn && afterTurnKey(u, side, afterTurnShown) ? renderAfterTurn(u.row.ts) : null}
                       </FileSessionContext>
                       </ImageNoSourceContext>
                       </ImageSourceContext>

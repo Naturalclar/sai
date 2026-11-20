@@ -64,3 +64,14 @@ export function placeRequests(requests: readonly AgentRequest[], rows: readonly 
   }
   return { at, tail }
 }
+
+/**
+ * このバブルの下に依頼のカードを出すなら、その鍵（行の `ts`）。出さなければ空（#902）。
+ * 出すのはこのセッションのターン完了の返答のバブルだけ（別のセッションからの返答・待ちのバブル・自分の入力には出さない）。
+ * 同じ `ts` のバブルが 2 つあっても（補った行と本物の行など）最初の 1 つにだけ出す（`shown` に覚える。描くたびに作り直す）
+ */
+export function afterTurnKey(u: { waiting?: boolean; reply?: unknown; row: Pick<FeedRow, 'ts' | 'event' | 'text'> }, side: 'me' | 'agent', shown: Set<string>): string {
+  if (side !== 'agent' || u.waiting || u.reply || eventKind(u.row.event, u.row.text) !== 'turn' || shown.has(u.row.ts)) return ''
+  shown.add(u.row.ts)
+  return u.row.ts
+}

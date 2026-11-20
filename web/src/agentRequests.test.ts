@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { placeRequests, requestItemLabel, requestSummary } from './agentRequests.ts'
+import { afterTurnKey, placeRequests, requestItemLabel, requestSummary } from './agentRequests.ts'
 import type { AgentRequest, FeedRow } from '../../shared/types.ts'
 
 const item = (message_id: string, status: AgentRequest['items'][number]['status'], extra: Partial<AgentRequest['items'][number]> = {}) => ({ message_id, to: 'b@r', to_name: 'セッション B', status, at: '2026-11-20T01:00:05Z', ...extra })
@@ -45,4 +45,16 @@ test('入力の行を書かないエージェント（最初の行がターン�
   const rows = [turnRow('2026-11-20T01:03:00Z'), turnRow('2026-11-20T01:10:00Z')]
   const r: AgentRequest = { turn: '2026-11-20T01:00:00.000Z', items: [item('a', 'pending')] }
   assert.deepEqual([...placeRequests([r], rows).at.keys()], ['2026-11-20T01:03:00Z'])
+})
+
+test('カードを出すのはこのセッションのターン完了の返答のバブルだけで、同じ ts には 1 回だけ', () => {
+  const shown = new Set<string>()
+  const ts = '2026-11-20T01:05:00Z'
+  assert.equal(afterTurnKey({ reply: { message_id: 'm' }, row: turnRow(ts) }, 'agent', shown), '', '別のセッションからの返答には出さない（鍵も使わない）')
+  assert.equal(afterTurnKey({ waiting: true, row: turnRow(ts) }, 'agent', shown), '', '待ちのバブルには出さない')
+  assert.equal(afterTurnKey({ row: turnRow(ts) }, 'me', shown), '', '自分の入力には出さない')
+  assert.equal(afterTurnKey({ row: turnRow(ts, 'UserPromptSubmit') }, 'agent', shown), '', 'ターン完了でない行には出さない')
+  assert.equal(afterTurnKey({ row: turnRow(ts) }, 'agent', shown), ts)
+  assert.equal(afterTurnKey({ row: turnRow(ts) }, 'agent', shown), '', '同じ ts の 2 つ目には出さない')
+  assert.equal(afterTurnKey({ row: turnRow('2026-11-20T01:06:00Z') }, 'agent', shown), '2026-11-20T01:06:00Z')
 })

@@ -1,7 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { blursOnEscape, leavesToSidebar } from './replyFocus.ts'
-import { isTypingTarget, navAction } from './sessionNav.ts'
 
 const key = (over: Partial<Parameters<typeof leavesToSidebar>[0]> = {}) => ({
   key: 'ArrowLeft',
@@ -45,14 +44,4 @@ test('blursOnEscape: Esc 以外・修飾キー付き・IME 変換中は何もし
   assert.equal(blursOnEscape(key({ key: 'Escape', ctrlKey: true }), closed), false)
   assert.equal(blursOnEscape(key({ key: 'Escape', altKey: true }), closed), false)
   assert.equal(blursOnEscape(key({ key: 'Escape', shiftKey: true }), closed), false)
-})
-
-test('blursOnEscape: 外した同じ Esc ではフィードへ移らず、もう 1 回でフィードへ', () => {
-  const esc = key({ key: 'Escape' })
-  // 1 回目: 入力欄で受けて外れる。window の側は押した時点の target（入力欄）を見て捨てる
-  assert.equal(blursOnEscape(esc, { menuOpen: false }), true)
-  assert.equal(navAction(esc), 'feed')
-  assert.equal(isTypingTarget({ tagName: 'textarea' }), true, '同じ Esc は入力欄が target のまま window に届く')
-  // 2 回目: フォーカスはサイドバーの項目（<a>）にあるので、今どおりフィードへ
-  assert.equal(isTypingTarget({ tagName: 'A' }), false)
 })

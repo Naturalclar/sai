@@ -6,6 +6,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { join } from 'node:path'
 import { AGENT_SEND_MAX, AGENT_TEXT_MAX_CHARS, AGENT_TURN_READ_BUDGET, AGENT_BACKLOG_ROUND_MS, AGENT_REQUEST_MAX, requestRefusal, agentEntry, agentOverlap, acrossEntry, acrossLabel, acrossNames, targetNames, isAcross, deliveredId, deliveryMatcher, HANDED_KEEP_DAYS, splitHandedReplies, replierName, agentTargets, budgetRefusal, clipReply, deliveredText, isDeliveryOf, replyOf, resolveTarget, targetRefusal, sessionLabel, tokensLabel, usageRefusal } from '../../shared/agentMessages.ts'
 import type { PendingReply } from '../../shared/agentMessages.ts'
+import { agentRequests } from '../../shared/agentRequests.ts'
 import { agentWaitCount, agentWaitShown, answeredIds } from '../../shared/agentWaiting.ts'
 import { idleMsSince, messageCompacts, startsNewWork } from '../../shared/compact.ts'
 import { CONTEXT_WARN_TOKENS } from '../../shared/contextSize.ts'
@@ -28,7 +29,7 @@ import type { AgentList, ClaudeAgent } from '../local/claudeAgents.ts'
 import { sessionOf } from '../local/progress.ts'
 import { entityId } from '../rows/aggregate.ts'
 import { createAfterTurns } from './agentAfter.ts'
-import { AGENT_MESSAGES_KEEP, AGENT_TOKEN_HEADER, tokenMatches } from './agentMessages.ts'
+import { AGENT_MESSAGES_KEEP, AGENT_RECENT, AGENT_TOKEN_HEADER, tokenMatches } from './agentMessages.ts'
 import type { AgentMessage } from './agentMessages.ts'
 import { daemonOccupied } from './codexDaemon.ts'
 import type { CodexDaemonWatch, DaemonThreadState } from './codexDaemon.ts'
@@ -837,14 +838,20 @@ export function createAgentRoutes(ctx: AgentRoutesContext) {
 
   /**
    * そのセッション（送り元）から別のセッションへのメッセージのようす（#311）。送ったことが無く止めてもいなければ undefined。
-   * 往復数と読み直させた量は**いま回しているターン**のもの（回していなければ 0）。直近の送り先は状態も付ける
+   * 往復数と読み直させた量は**いま回しているターン**のもの（回していなければ 0）。直近の送り先は状態も付ける。
+   * `requests` を渡したとき（詳細の応答）だけ、依頼ごとの進み具合（#902）も付ける。返答の行の `ts`（`replyTs`）と、それより前に
+   * 始まったターンを載せない線（`notBefore`。`requestsWindowStart()`＝描いていないターン完了の行の一番新しい時刻）は呼び出し側が渡す（返答の行は詳細の応答が 1 回で引いたものを使う）
    */
-  const agentActivityOf = async (id: string, sessions: SessionSummary[]): Promise<AgentActivity | undefined> => {
+  const agentActivityOf = async (id: string, sessions: SessionSummary[], requests?: { replyTs: ReadonlyMap<string, string>; notBefore: number }): Promise<AgentActivity | undefined> => {
     if (!agents.hasActivity(id)) return undefined
     const current = run.snapshot()[id]
     const turn = current && !current.failed && run.running(id) ? current.since : ''
-    const sent = agents.sentBy(id)
-    const statuses = await agentStatuses(sent)
+    // 状態はまとめて 1 回で引く。依頼の進み具合（#902）のために足すのは、線（`notBefore`）より後に始まったターンの記録だけ
+    // （窓の外の古い記録まで渡すと、返答の来ないものが決まるまで、ポーリングのたびに古い日から行を舐め直す）
+    const all = requests ? agents.sentBy(id, Infinity) : agents.sentBy(id)
+    const sent = all.slice(0, AGENT_RECENT)
+    const inWindow = requests ? all.filter((m, i) => i < AGENT_RECENT || (m.turn !== undefined && !(Date.parse(m.turn) < requests.notBefore))) : sent
+    const statuses = await agentStatuses(inWindow)
     const queued = queue.snapshot()
     const recent = await Promise.all(
       sent.map(async (m): Promise<AgentActivityMessage> => {
@@ -859,6 +866,14 @@ export function createAgentRoutes(ctx: AgentRoutesContext) {
       const target = sessions.find((s) => s.id === h.to)
       return { message_id: h.message_id, to: h.to, to_name: target ? sessionLabel(target) : h.to, at: h.at, ...(h.halted ? { halted: h.halted } : {}) }
     })
+    // 依頼ごとの進み具合（#902）。古い順に送った記録を渡す（同じ時刻でも送った順が崩れない）
+    const byId = new Map(sessions.map((s) => [s.id, s] as const))
+    const requestList = requests
+      ? agentRequests([...inWindow].reverse(), agents.heldBy(id), (messageId) => statuses.get(messageId), (to) => {
+          const target = byId.get(to)
+          return target ? sessionLabel(target) : to
+        }, requests.replyTs, requests.notBefore)
+      : undefined
     return {
       stopped: agents.isStopped(id),
       sent: turn ? agents.sentInTurn(id, turn) : 0,
@@ -867,6 +882,7 @@ export function createAgentRoutes(ctx: AgentRoutesContext) {
       read_budget: AGENT_TURN_READ_BUDGET,
       recent,
       ...(held.length > 0 ? { held } : {}),
+      ...(requestList && requestList.length > 0 ? { requests: requestList } : {}),
     }
   }
 

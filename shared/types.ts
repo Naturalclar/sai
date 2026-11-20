@@ -1485,6 +1485,40 @@ export interface AgentActivity {
    * 「送信を止める」で全部捨てる。無ければ省略
    */
   held?: AgentHeldMessage[]
+  /**
+   * 依頼ごとの進み具合（#902）。送り元の**ターンごと**（`AgentMessage.turn` = そのターンの `Replying.since`）に、送った・預かった
+   * 相手をまとめる。直近 `AGENT_RECENT` 件に限らず、送った記録に残っている分（と預かり）から作る。詳細の応答にだけ載り、
+   * 返答のバブル（ターン完了の行）を描いていないターンの分は載せない（`requestsWindowStart()`）。新しいタスク台帳は持たない（送った記録と返答の突き合わせから毎回作る）。無ければ省略
+   */
+  requests?: AgentRequest[]
+}
+
+/** 1 つの依頼（送り元の 1 ターン）で振った先の状態（#902）。`held` は預かり（まだ送っていない） */
+export type AgentRequestStatus = 'held' | 'pending' | 'done' | 'failed'
+
+/** 1 つの依頼で振った先 1 件（#902） */
+export interface AgentRequestItem {
+  message_id: string
+  to: string
+  /** 相手の呼び名（`sessionLabel()`。別のリポジトリの相手もここまで） */
+  to_name: string
+  status: AgentRequestStatus
+  /** 送った時刻（預かりなら預かった時刻） */
+  at: string
+  /** 返答の行の `ts`（送り元の画面に返答として並ぶ行。#588）。見つからなければ無い（`done` でも無いことがある） */
+  reply_ts?: string
+  /** 預かりのまま止まっている理由（`failed` のとき。#727） */
+  halted?: string
+  /** 別のリポジトリの相手（#747） */
+  far?: true
+}
+
+/** 送り元の 1 ターンの依頼（#902） */
+export interface AgentRequest {
+  /** 送り元のターン（`Replying.since`）。依頼の鍵 */
+  turn: string
+  /** 送った順（古い順） */
+  items: AgentRequestItem[]
 }
 
 /** 預かっている送信 1 件（#727） */

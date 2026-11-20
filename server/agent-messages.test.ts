@@ -1763,3 +1763,88 @@ test('頼んだ件のその後: 返答のあと相手で人が始めたターン
   assert.match(runner.started.at(-1)!.cmd.text, /もう少し進めました/, '読まれていないので、もう一度添える')
   idle('A1@r')
 })
+
+test('依頼ごとの進み具合（#902）: 詳細の応答に送り元のターンごとに束ねて載り、返答が届くと返答あり・返答の行の ts が付く', async () => {
+  const detailOf = async () => (await (await fetch(`${base}/api/sessions/${encodeURIComponent('A1@r')}?days=7`)).json()) as SessionDetailResponse
+  const turnA = new Date(Date.now() - 2000).toISOString()
+  const turnB = new Date(Date.now() - 1000).toISOString()
+  // 読んだ日数（days=7）より前に始まったターン（前の行を落としていなくても、窓の中のバブルに付けない）
+  const turnOld = new Date(Date.now() - 30 * 86_400_000).toISOString()
+  const ids: string[] = []
+  const texts: string[] = []
+  for (const t of [turnOld, turnA, turnB]) {
+    turn('A1@r', t)
+    try {
+      const res = await send('A1@r', 'B1@r', t === turnA ? '1 つ目の依頼' : t === turnB ? '2 つ目の依頼' : '古い依頼')
+      assert.equal(res.status, 202)
+      ids.push(((await res.json()) as AgentSendResponse).message_id)
+      texts.push(runner.started.at(-1)!.cmd.text)
+    } finally {
+      idle('A1@r')
+    }
+    await humanReply('B1@r')
+    idle('B1@r')
+  }
+  const before902 = await detailOf()
+  const groupA = before902.agent?.requests?.find((r) => r.turn === turnA)
+  const groupB = before902.agent?.requests?.find((r) => r.turn === turnB)
+  ids.shift()
+  texts.shift()
+  assert.deepEqual(groupA?.items.map((i) => i.message_id), [ids[0]], '別のターンの依頼は混ざらない')
+  assert.deepEqual(groupB?.items.map((i) => i.message_id), [ids[1]])
+  assert.equal(before902.agent?.requests?.find((r) => r.turn === turnOld), undefined, '読んだ日数より前に始まったターンは載せない')
+  assert.equal(groupA?.items[0]?.to_name, before902.agent?.recent.find((m) => m.message_id === ids[0])?.to_name, '呼び名は直近の行と同じ')
+  assert.ok(groupA?.items[0]?.to_name)
+  assert.equal(groupA?.items[0]?.reply_ts, undefined, '返答が無ければ返答の行の ts は付けない')
+  const original = await readFile(feedFile, 'utf-8')
+  const replyAt = new Date()
+  await appendFile(feedFile, JSON.stringify(row(replyAt, 'B1', { repo: 'r', cwd: work2, project: 'o/r', user_text: texts[0], text: '1 つ目を見ました' })) + '\n')
+  try {
+    const answered = await detailOf()
+    assert.notEqual(answered.rev, before902.rev, '返答が届いたら rev が変わる')
+    const a = answered.agent?.requests?.find((r) => r.turn === turnA)?.items[0]
+    assert.equal(a?.status, 'done')
+    assert.equal(a?.reply_ts, answered.agent_replies?.find((r) => r.agent_reply?.message_id === ids[0])?.ts, '飛び先はこの画面に並ぶ返答の行')
+    assert.ok(a?.reply_ts)
+    assert.equal(answered.agent?.requests?.find((r) => r.turn === turnB)?.items[0]?.reply_ts, undefined, '別の依頼の返答にはしない')
+  } finally {
+    await writeFile(feedFile, original)
+    await humanReply('B1@r')
+    idle('B1@r')
+  }
+})
+
+test('依頼ごとの進み具合（#902）: 前の行を落とした窓（recent）では、落としたターン完了の行より後に始まったターンだけを載せる', async () => {
+  // 窓（7 日）の外に落ちる A1 のターン完了の行
+  const oldAt = new Date(Date.now() - 10 * 86_400_000)
+  const oldFile = join(dir, `${localDate(oldAt.toISOString())}.jsonl`)
+  await writeFile(oldFile, JSON.stringify(row(oldAt, 'A1', { repo: 'r', cwd: work, project: 'o/r', user_text: '前の作業', text: '前の作業を終えました' })) + '\n')
+  const turnBefore = new Date(Date.now() - 20 * 86_400_000).toISOString()
+  // 落とした行より後・窓の最初の行より前に始まったターン（入力の行を書かないエージェントの最初のターンと同じ形）
+  const turnAfter = new Date(Date.now() - 2 * 86_400_000).toISOString()
+  // 7 日の切れ目をまたぐターン: 入力の行だけが窓の外に落ちる（落とした行の一番新しいものがこの入力の行になるが、線はターン完了の行で引く）
+  const straddleAt = new Date(Date.now() - 8 * 86_400_000)
+  const turnStraddle = straddleAt.toISOString()
+  const straddleFile = join(dir, `${localDate(new Date(straddleAt.getTime() + 1000).toISOString())}.jsonl`)
+  await appendFile(straddleFile, JSON.stringify(row(new Date(straddleAt.getTime() + 1000), 'A1', { repo: 'r', cwd: work, project: 'o/r', event: 'UserPromptSubmit', user_text: 'またぐ依頼', text: '' })) + '\n')
+  try {
+    for (const t of [turnBefore, turnStraddle, turnAfter]) {
+      turn('A1@r', t)
+      try {
+        assert.equal((await send('A1@r', 'B1@r', t === turnBefore ? 'ずっと前の依頼' : t === turnStraddle ? 'またぐ依頼' : '少し前の依頼')).status, 202)
+      } finally {
+        idle('A1@r')
+      }
+      await humanReply('B1@r')
+      idle('B1@r')
+    }
+    const detail = (await (await fetch(`${base}/api/sessions/${encodeURIComponent('A1@r')}?days=30&recent=7`)).json()) as SessionDetailResponse
+    assert.ok(detail.older > 0, '前の行を落としている')
+    assert.equal(detail.agent?.requests?.find((r) => r.turn === turnBefore), undefined, '落としたターン完了の行より前に始まったターンは載せない')
+    assert.ok(detail.agent?.requests?.find((r) => r.turn === turnAfter), '落とした行より後に始まったターンは、窓の最初の行より前でも載せる')
+    assert.ok(detail.agent?.requests?.find((r) => r.turn === turnStraddle), '入力の行だけが落ちた（切れ目をまたぐ）ターンも載せる')
+  } finally {
+    await rm(oldFile, { force: true })
+    await rm(straddleFile, { force: true })
+  }
+})

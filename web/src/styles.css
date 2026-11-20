@@ -1351,6 +1351,13 @@
   .agent-activity .recent a.to { text-decoration: none; }
   .agent-activity .recent a.to:hover { text-decoration: underline; }
   .agent-activity .recent .why { white-space: nowrap; flex-shrink: 0; color: var(--ink); }
+  /* 依頼ごとの進み具合（#902）。依頼したターンの返答のバブルの下に、枠は別のセッションへのメッセージと同じで畳んで置く */
+  .request-progress { margin-top: 4px; }
+  .request-progress > summary { cursor: pointer; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; }
+  .request-progress .summary { color: var(--muted); }
+  .agent-activity .recent li.held .status { color: var(--ink); }
+  .agent-activity .recent li.done .status { color: var(--accent); }
+  .agent-activity .recent a.reply-link { white-space: nowrap; flex-shrink: 0; }
   .agent-activity .agent-stop { margin-left: auto; display: inline-flex; gap: 6px; align-items: center; }
   .agent-activity .agent-stop .err { color: var(--claude); }
   /* 枠を出していないときの「送信を止める」（#823）。見出しの操作に並ぶので、ほかの操作と同じ見た目 */

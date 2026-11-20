@@ -89,7 +89,7 @@ import type { SessionTurnResponse, TurnOutputResponse, TurnStepsResponse,
   UsageResponse,
   Viewer,
 } from '../shared/types.ts'
-import { clip, entityId, facets, filterSessions, firstLine, recordVersionOf } from './rows/aggregate.ts'
+import { clip, entityId, facets, filterSessions, firstLine, recentDates, recordVersionOf } from './rows/aggregate.ts'
 import { rowProject } from '../shared/project.ts'
 import { cleanProjects, matchesProjects } from '../shared/projectFilter.ts'
 import { ICONS_DIR, IconStore, iconKey } from './meta/icons.ts'
@@ -180,6 +180,7 @@ import { QUEUE_FILE, QUEUE_MAX, ReplyQueueStore } from './reply/replyQueue.ts'
 import { AGENT_MESSAGES_FILE, AGENT_TOKEN_FILE, AgentMessages, ensureAgentToken } from './reply/agentMessages.ts'
 import type { AfterPlan } from './reply/agentAfter.ts'
 import { withAfterTurns } from '../shared/agentAfter.ts'
+import { agentRequestsKey, requestsFloor, requestsWindowStart } from '../shared/agentRequests.ts'
 import { LOOP_TICK_MS, LOOPS_FILE, LoopStore } from './reply/loops.ts'
 import { createAgentRoutes } from './reply/agentRoutes.ts'
 import { createLoopRoutes, LOOP_SUFFIXES } from './reply/loopRoutes.ts'
@@ -5045,8 +5046,6 @@ export function createApp(
         await drainAll()
         const replying = await withAuth(await replyingOf(sessions), sessions)
         const pendingApprovals = await approvalsNow(sessions)
-        // 別のセッションへのメッセージのようす（#311）。送った・止めた・再開したは agents.key() で rev に混ぜる
-        const activity = await agentActivityOf(id, sessions)
         // 端末で開いた Claude が質問で止まっていれば、選択肢を transcript から（#333）。transcript に書かれる時刻は
         // 待ちの行と前後するので、rev に混ぜて後から届いたぶんも画面が拾う
         const question = await pendingQuestion(session, pendingApprovals)
@@ -5057,7 +5056,7 @@ export function createApp(
         const shownFrom = older > 0 && shown[0] ? Date.parse(shown[0].ts) : -Infinity
         // 相手のアイコン（#666）は置き場から引く（相手がアーカイブ済み・一覧の窓の外でも、ファイルがあれば出る）
         const replyIcons = (await iconStore.all()).entries
-        const replies = agentReplyRows(
+        const repliedAll = agentReplyRows(
           agents.sentBy(id, Infinity),
           every,
           (to) => {
@@ -5068,7 +5067,15 @@ export function createApp(
             const icon = replyIcons.get(iconKey(to))
             return icon ? iconUrl(to, icon.version) : undefined
           },
-        ).filter((r) => Date.parse(r.ts) >= shownFrom)
+        )
+        const replies = repliedAll.filter((r) => Date.parse(r.ts) >= shownFrom)
+        // 別のセッションへのメッセージのようす（#311）。送った・止めた・再開したは agents.key() で rev に混ぜる。
+        // 依頼ごとの進み具合（#902）は、上で引いた返答の行の ts を添えて付ける
+        // 線は「描いていないターン完了の行の一番新しい時刻」。それより後に始まったターンのターン完了の行は全部描いている（入力の行を
+        // 書かない Codex / OpenCode のターンも、7 日の切れ目をまたぐターンも落とさない）。落としていなければ読んだ日の頭（送った記録は
+        // 日数で切られないので、それより古い依頼を窓の中のバブルに付けない）
+        const requestsFrom = requestsWindowStart(dropped, requestsFloor(recentDates(days).at(-1)))
+        const activity = await agentActivityOf(id, sessions, { replyTs: new Map(repliedAll.map((r) => [r.agent_reply?.message_id ?? '', r.ts] as const)), notBefore: requestsFrom })
         // 人がこの画面の返答のバブルの下から相手へ送った返信（#700）と、相手がそれに返した行。返した行は同じ並びに混ぜる
         const nameOfTarget = (to: string) => {
           const target = sessions.find((s) => s.id === to)
@@ -5097,7 +5104,7 @@ export function createApp(
         const answeredSince = answeredAfter(session.last_turn_ts ?? '', progressNow)
         const answeredHere = answered.of(id, answeredSince)
         const body: SessionDetailResponse = {
-          rev: revWith(`${sessionsRev}~${me.rev}~${settled}~${terminalKey(sessions)}~${question?.asked_at ?? ''}~${bg ? `${bg.attach}:${bg.status}` : ''}~${contextRevKey(context)}~${allReplies.map((r) => r.agent_reply?.message_id).join(',')}~${answeredHere.map((a) => `${a.approval_id}:${a.behavior}`).join(',')}~${(activity?.recent ?? []).map((m) => `${m.status}:${m.to_why ?? ''}`).join(',')}`, replying, approvalMapKey(pendingApprovals), false, `${digest.revKey()}|${usage.rev()}`, `${queue.key()}|${agents.key()}|${loops.key()}|${waits.key()}`),
+          rev: revWith(`${sessionsRev}~${me.rev}~${settled}~${terminalKey(sessions)}~${question?.asked_at ?? ''}~${bg ? `${bg.attach}:${bg.status}` : ''}~${contextRevKey(context)}~${allReplies.map((r) => r.agent_reply?.message_id).join(',')}~${answeredHere.map((a) => `${a.approval_id}:${a.behavior}`).join(',')}~${(activity?.recent ?? []).map((m) => `${m.status}:${m.to_why ?? ''}`).join(',')}~${agentRequestsKey(activity?.requests)}`, replying, approvalMapKey(pendingApprovals), false, `${digest.revKey()}|${usage.rev()}`, `${queue.key()}|${agents.key()}|${loops.key()}|${waits.key()}`),
           session: withLastSummary([session])[0]!,
           rows,
           older,

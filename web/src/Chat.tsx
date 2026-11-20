@@ -7,6 +7,7 @@ import { isRemoteHost } from '../../shared/host.ts'
 import { sessionImageUrl } from '../../shared/images.ts'
 import { digestKey } from '../../shared/digestFeedback.ts'
 import { eventKind } from '../../shared/events.ts'
+import { afterTurnKey } from './agentRequests.ts'
 import { ImageNoSourceContext, ImageSourceContext } from './imageContext'
 import { LightboxProvider } from './LightboxProvider'
 import { FileViewerProvider } from './FileViewerProvider'
@@ -65,6 +66,11 @@ interface Props {
    * セッション画面だけが渡す（フィードには出さない）
    */
   renderReplyFooter?: (target: string, tss: string[], toName: string) => ReactNode
+  /**
+   * このセッションのターン完了の返答のバブルの下に足すもの（#902。そのターンで別のセッションに振った依頼の進み具合）。
+   * 行の `ts` を渡す。別のセッションからの返答（#588）・待ちのバブルには呼ばない。セッション画面だけが渡す
+   */
+  renderAfterTurn?: (ts: string) => ReactNode
   /** エージェントのバブルに思考の折りたたみを出す（セッション画面だけ。フィードは出さない） */
   showThinking?: boolean
   /** 思考を最初から開いておく（ヘッダの「思考を全部開く」） */
@@ -155,7 +161,7 @@ function flash(el: HTMLElement) {
   window.setTimeout(() => el.classList.remove('found'), JUMP_FLASH_MS)
 }
 
-export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_SESSIONS, trailer, renderReplyFooter, showThinking = false, thinkingOpen = false, longOpen = false, profile, linear = '', focusTs = '', focusSide: askedSide, diffs, jumpTo = null, question, answerable = NO_IDS, images, imagesBySession, unreadAfter, onSeenBottom, onMarkUnread, prs, onQuote }: Props) {
+export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_SESSIONS, trailer, renderReplyFooter, renderAfterTurn, showThinking = false, thinkingOpen = false, longOpen = false, profile, linear = '', focusTs = '', focusSide: askedSide, diffs, jumpTo = null, question, answerable = NO_IDS, images, imagesBySession, unreadAfter, onSeenBottom, onMarkUnread, prs, onQuote }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   // 返答の一部を選んだら「引用して返信」を出す（#604）。出すかの判定は quoteReply.ts の quotable()
   const quote = useQuoteSelection(ref, Boolean(onQuote))
@@ -293,6 +299,8 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
   // 離れている間に増えた行。フィルタが変わって行が減ることもあるので 0 で止める。trailer（仮バブル）は数えない
   const arrived = atBottom || awayAt === null ? 0 : Math.max(0, rows.length - awayAt)
 
+  // ターン完了の返答のバブルの下に足すもの（#902）。同じ `ts` のバブルには 1 回だけ（`afterTurnKey()`）。描くたびに作り直す
+  const afterTurnShown = new Set<string>()
   // 画像はページの中のライトボックスで開く（#507）。バブルの中の画像・添付・バブルの下の画像のどれも
   return (
     <LightboxProvider>
@@ -437,6 +445,7 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
                         thinkingClipped={showThinking && wasClipped(u.row, 'thinking')}
                         defaultOpen={longOpen}
                       />
+                      {renderAfterTurn && afterTurnKey(u, side, afterTurnShown) ? renderAfterTurn(u.row.ts) : null}
                       </FileSessionContext>
                       </ImageNoSourceContext>
                       </ImageSourceContext>

@@ -1,5 +1,4 @@
 // 依頼ごとの進み具合（#902）の、画面の文言と置き場所。DOM に依らないので node:test で回す（agentRequests.test.ts）
-import { REQUESTS_SLACK_MS } from '../../shared/agentRequests.ts'
 import { eventKind } from '../../shared/events.ts'
 import type { AgentRequest, AgentRequestItem, AgentRequestStatus, FeedRow } from '../../shared/types.ts'
 
@@ -45,16 +44,14 @@ const seconds = (s: string) => Math.floor(Date.parse(s) / 1000)
  * このセッションの行のうち、`turn` の秒より**後の秒**の最初のターン完了の行（`eventKind() === 'turn'`）。同じ秒は数えない
  * （行の時刻は秒までで、前のターンのターン完了の行と同じ秒に次のターンが始まりうる。依頼したターンは送るまでに 1 秒より長くかかる）。
  * いま回しているターン（`runningTurn`）の依頼と、ターン完了の行がまだ・見つからない依頼は `tail`（チャットの末尾）に置く。
- * 描いている最初の行より `REQUESTS_SLACK_MS` 以上前に始まったターンの依頼はどこにも置かない（窓の外。サーバも載せない）。
+ * 窓より前に始まったターンの依頼はサーバが載せない（`requestsWindowStart()`）ので、ここでは絞らない。
  * `rows` はこのセッションの行（古い順。別のセッションからの返答の行は混ぜない）
  */
 export function placeRequests(requests: readonly AgentRequest[], rows: readonly FeedRow[], runningTurn = ''): { at: Map<string, AgentRequest[]>; tail: AgentRequest[] } {
   const at = new Map<string, AgentRequest[]>()
   const tail: AgentRequest[] = []
   const turns = rows.filter((r) => eventKind(r.event, r.text) === 'turn')
-  const first = rows[0] ? Date.parse(rows[0].ts) : NaN
   for (const r of requests) {
-    if (Number.isFinite(first) && Date.parse(r.turn) < first - REQUESTS_SLACK_MS) continue
     const start = seconds(r.turn)
     const anchor = r.turn === runningTurn || !Number.isFinite(start) ? undefined : turns.find((row) => seconds(row.ts) > start)
     if (!anchor) {

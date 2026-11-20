@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { agentRequests, agentRequestsKey } from './agentRequests.ts'
+import { agentRequests, agentRequestsKey, requestsWindowStart } from './agentRequests.ts'
 import type { AgentActivityMessage } from './types.ts'
 
 const T1 = '2026-11-20T01:00:00.000Z'
@@ -60,4 +60,10 @@ test('rev の鍵は状態と返答の行で変わる', () => {
   assert.notEqual(agentRequestsKey(base), agentRequestsKey(done))
   assert.notEqual(agentRequestsKey(done), agentRequestsKey(linked))
   assert.equal(agentRequestsKey(undefined), '')
+})
+
+test('載せる線は描いていない一番新しい行。落とした行が無ければ読んだ日数の頭', () => {
+  assert.equal(requestsWindowStart([{ ts: '2026-11-10T00:00:00Z' }, { ts: '2026-11-12T00:00:00Z' }, { ts: 'x' }], 0), Date.parse('2026-11-12T00:00:00Z'))
+  assert.equal(requestsWindowStart([], 123), 123)
+  assert.equal(requestsWindowStart([{ ts: '' }], 123), 123, '時刻の読めない行しか無ければ日数の頭')
 })

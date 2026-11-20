@@ -1768,8 +1768,8 @@ test('依頼ごとの進み具合（#902）: 詳細の応答に送り元のタ�
   const detailOf = async () => (await (await fetch(`${base}/api/sessions/${encodeURIComponent('A1@r')}?days=7`)).json()) as SessionDetailResponse
   const turnA = new Date(Date.now() - 2000).toISOString()
   const turnB = new Date(Date.now() - 1000).toISOString()
-  // 描いている最初の行より前に始まったターン（前の行を落としていなくても、窓の中のバブルに付けない）
-  const turnOld = new Date(Date.now() - 3 * 86_400_000).toISOString()
+  // 読んだ日数（days=7）より前に始まったターン（前の行を落としていなくても、窓の中のバブルに付けない）
+  const turnOld = new Date(Date.now() - 30 * 86_400_000).toISOString()
   const ids: string[] = []
   const texts: string[] = []
   for (const t of [turnOld, turnA, turnB]) {
@@ -1792,7 +1792,7 @@ test('依頼ごとの進み具合（#902）: 詳細の応答に送り元のタ�
   texts.shift()
   assert.deepEqual(groupA?.items.map((i) => i.message_id), [ids[0]], '別のターンの依頼は混ざらない')
   assert.deepEqual(groupB?.items.map((i) => i.message_id), [ids[1]])
-  assert.equal(before902.agent?.requests?.find((r) => r.turn === turnOld), undefined, '描いている最初の行より前に始まったターンは載せない')
+  assert.equal(before902.agent?.requests?.find((r) => r.turn === turnOld), undefined, '読んだ日数より前に始まったターンは載せない')
   assert.equal(groupA?.items[0]?.to_name, before902.agent?.recent.find((m) => m.message_id === ids[0])?.to_name, '呼び名は直近の行と同じ')
   assert.ok(groupA?.items[0]?.to_name)
   assert.equal(groupA?.items[0]?.reply_ts, undefined, '返答が無ければ返答の行の ts は付けない')

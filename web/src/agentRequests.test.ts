@@ -41,11 +41,8 @@ test('前のターンのターン完了の行と同じ秒に始まったター�
   assert.deepEqual([...placeRequests([r], rows).at.keys()], ['2026-11-20T01:00:30Z'])
 })
 
-test('描いている最初の行よりずっと前に始まったターンの依頼は、どこにも置かない（窓の中のバブルに付けない）', () => {
-  const rows = [turnRow('2026-11-20T01:00:00Z', 'UserPromptSubmit'), turnRow('2026-11-20T01:05:00Z')]
-  const old: AgentRequest = { turn: '2026-11-10T01:00:00Z', items: [item('a', 'done')] }
-  const edge: AgentRequest = { turn: '2026-11-20T00:59:59.500Z', items: [item('b', 'done')] }
-  const placed = placeRequests([old, edge], rows)
-  assert.deepEqual([...placed.at.values()].flat().map((x) => x.turn), [edge.turn], '最初の入力の行の少し前に始まったターンは置く')
-  assert.deepEqual(placed.tail, [])
+test('入力の行を書かないエージェント（最初の行がターン完了の行）でも、最初のターンの依頼をそのバブルに置く', () => {
+  const rows = [turnRow('2026-11-20T01:03:00Z'), turnRow('2026-11-20T01:10:00Z')]
+  const r: AgentRequest = { turn: '2026-11-20T01:00:00.000Z', items: [item('a', 'pending')] }
+  assert.deepEqual([...placeRequests([r], rows).at.keys()], ['2026-11-20T01:03:00Z'])
 })

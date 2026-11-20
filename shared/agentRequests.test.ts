@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { agentRequests, agentRequestsKey, requestsWindowStart } from './agentRequests.ts'
+import { agentRequests, agentRequestsKey, requestsFloor, requestsWindowStart } from './agentRequests.ts'
 import type { AgentActivityMessage } from './types.ts'
 
 const T1 = '2026-11-20T01:00:00.000Z'
@@ -62,8 +62,17 @@ test('rev の鍵は状態と返答の行で変わる', () => {
   assert.equal(agentRequestsKey(undefined), '')
 })
 
-test('載せる線は描いていない一番新しい行。落とした行が無ければ読んだ日数の頭', () => {
-  assert.equal(requestsWindowStart([{ ts: '2026-11-10T00:00:00Z' }, { ts: '2026-11-12T00:00:00Z' }, { ts: 'x' }], 0), Date.parse('2026-11-12T00:00:00Z'))
+test('載せる線は描いていないターン完了の行の一番新しい時刻。落としていなければ読んだ日の頭', () => {
+  const stop = (ts: string) => ({ ts, event: 'Stop', text: '返答' })
+  const prompt = (ts: string) => ({ ts, event: 'UserPromptSubmit', text: '' })
+  assert.equal(requestsWindowStart([stop('2026-11-10T00:00:00Z'), stop('2026-11-12T00:00:00Z'), stop('x'), prompt('2026-11-13T00:00:00Z')], 0), Date.parse('2026-11-12T00:00:00Z'), '入力の行だけが落ちた（切れ目をまたぐ）ターンは線を押し上げない')
   assert.equal(requestsWindowStart([], 123), 123)
-  assert.equal(requestsWindowStart([{ ts: '' }], 123), 123, '時刻の読めない行しか無ければ日数の頭')
+  assert.equal(requestsWindowStart([prompt('2026-11-13T00:00:00Z'), stop('')], 123), 123, 'ターン完了の行が落ちていない・時刻が読めなければ読んだ日の頭')
+  const many = Array.from({ length: 200_000 }, (_, i) => stop(new Date(Date.parse('2026-01-01T00:00:00Z') + i * 1000).toISOString()))
+  assert.equal(requestsWindowStart(many, 0), Date.parse(many.at(-1)!.ts), '行が多くても引数の上限に当たらない')
+})
+
+test('読んだ日の頭は Asia/Tokyo の 0 時', () => {
+  assert.equal(requestsFloor('2026-11-14'), Date.parse('2026-11-13T15:00:00Z'))
+  assert.equal(requestsFloor(undefined), -Infinity)
 })

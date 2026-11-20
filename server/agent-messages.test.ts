@@ -1813,3 +1813,31 @@ test('依頼ごとの進み具合（#902）: 詳細の応答に送り元のタ�
     idle('B1@r')
   }
 })
+
+test('依頼ごとの進み具合（#902）: 前の行を落とした窓（recent）では、落としたターン完了の行より後に始まったターンだけを載せる', async () => {
+  // 窓（7 日）の外に落ちる A1 のターン完了の行
+  const oldAt = new Date(Date.now() - 10 * 86_400_000)
+  const oldFile = join(dir, `${localDate(oldAt.toISOString())}.jsonl`)
+  await writeFile(oldFile, JSON.stringify(row(oldAt, 'A1', { repo: 'r', cwd: work, project: 'o/r', user_text: '前の作業', text: '前の作業を終えました' })) + '\n')
+  const turnBefore = new Date(Date.now() - 20 * 86_400_000).toISOString()
+  // 落とした行より後・窓の最初の行より前に始まったターン（入力の行を書かないエージェントの最初のターンと同じ形）
+  const turnAfter = new Date(Date.now() - 2 * 86_400_000).toISOString()
+  try {
+    for (const t of [turnBefore, turnAfter]) {
+      turn('A1@r', t)
+      try {
+        assert.equal((await send('A1@r', 'B1@r', t === turnBefore ? 'ずっと前の依頼' : '少し前の依頼')).status, 202)
+      } finally {
+        idle('A1@r')
+      }
+      await humanReply('B1@r')
+      idle('B1@r')
+    }
+    const detail = (await (await fetch(`${base}/api/sessions/${encodeURIComponent('A1@r')}?days=30&recent=7`)).json()) as SessionDetailResponse
+    assert.ok(detail.older > 0, '前の行を落としている')
+    assert.equal(detail.agent?.requests?.find((r) => r.turn === turnBefore), undefined, '落としたターン完了の行より前に始まったターンは載せない')
+    assert.ok(detail.agent?.requests?.find((r) => r.turn === turnAfter), '落とした行より後に始まったターンは、窓の最初の行より前でも載せる')
+  } finally {
+    await rm(oldFile, { force: true })
+  }
+})

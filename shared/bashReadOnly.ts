@@ -317,8 +317,8 @@ const gitCheck: Check = (args) => {
   for (const w of rest) {
     const text = lit(w)
     if (form.flags.has(text) || form.shapes?.some((re) => re.test(text))) continue
-    // フラグでない語は `HEAD` だけ・1 つだけ（ブランチの名前・パス・`HEAD:path`・`a..b`・`--` は受けない）
-    if (form.head && text === 'HEAD' && ++heads === 1) continue
+    // フラグでない語は `HEAD` か `FETCH_HEAD`（#582）だけ・1 つだけ（ブランチの名前・パス・`HEAD:path`・`a..b`・`--` は受けない）
+    if (form.head && (text === 'HEAD' || text === 'FETCH_HEAD') && ++heads === 1) continue
     refuse('flag')
   }
 }
@@ -339,11 +339,18 @@ const GH_READS: Record<string, Set<string>> = {
  */
 const GH_BARE = new Set(['--comments', '--paginate', '--name-only', '--patch', '--required'])
 /**
- * `--jq` / `-q` / `--template` は入れない（jq の式は環境変数を出せて、終わらない式も書ける。式の中身を読み切れない）。
+ * `--template` は入れない。`--jq` / `-q` は、式が**パスをたどるだけの形**（`GH_JQ_PATH`）のときだけ受ける（#582）。
+ * jq の式は環境変数を出せて（`env`・`$ENV`）、終わらない式も書ける（`repeat`・`recurse`）ので、関数・変数・パイプの入った式は読み切れない。
  * `--search` / `-S` も入れない（値に `repo:a/b` と書けば、ほかのリポジトリの issue・PR が並ぶ）
  */
 const GH_VALUE = new Set(['--json', '--limit', '-L', '--state', '-s', '--author', '-A', '--assignee', '--label', '-l', '--base', '-B', '--head', '-H', '--branch', '-b', '--workflow', '--user', '--event', '--status', '--commit', '--milestone'])
 const GH_REPO = /^[\w.-]+\/[\w.-]+$/
+/**
+ * `--jq` / `-q` で受ける式（#582）。`.` か、`.名前` と `[]` / `[数]` の並び（`.headRefOid`・`.[].number`・`.jobs[0].databaseId`）だけ。
+ * 名前は英数字と `_` だけで、関数（`env`・`select`）・変数（`$ENV`）・パイプ・文字列・括弧は書けない。`.env` は `env` という名前の項目を引くだけ
+ */
+const GH_JQ_PATH = /^\.(?:(?:[A-Za-z_][A-Za-z0-9_]*|\[\d{0,4}\])(?:\.[A-Za-z_][A-Za-z0-9_]*|\[\d{0,4}\])*)?$/
+const GH_JQ = new Set(['--jq', '-q'])
 /**
  * `gh api` で読む先。GET だけ（メソッド・フィールド・入力・ヘッダのフラグは、受けるフラグに無いので通らない）。
  * リポジトリの下の、決まった口だけ（`hooks`・`keys`・`secrets` のように URL や鍵の名前が出る口は入れない）。`%` と、`.` で始まる階層は受けない
@@ -383,10 +390,13 @@ const ghCheck: Check = (args, place) => {
     }
     const eq = text.startsWith('--') ? text.indexOf('=') : -1
     const name = eq < 0 ? text : text.slice(0, eq)
-    if (api && name !== '--paginate') return refuse('flag')
+    if (api && name !== '--paginate' && !GH_JQ.has(name)) return refuse('flag')
     if (name === '-R' || name === '--repo') {
       const named = eq < 0 ? (words[++k] ?? '') : text.slice(eq + 1)
       if (!GH_REPO.test(named) || !ownRepo(named, place)) return refuse('flag')
+    } else if (GH_JQ.has(name)) {
+      const value = eq < 0 ? words[++k] : text.slice(eq + 1)
+      if (value === undefined || !GH_JQ_PATH.test(value)) return refuse('flag')
     } else if (GH_VALUE.has(name)) {
       // 値が `-` で始まるものは受けない（サブコマンドによって値を取る・取らないが違うフラグで、読み方が gh とずれない）
       const value = eq < 0 ? words[++k] : text.slice(eq + 1)
@@ -411,6 +421,8 @@ const COMMANDS: Record<string, Check> = {
   whoami: literals({}, 0),
   which: literals({ bare: /^-a$/ }),
   basename: literals({}, 2),
+  // 待つだけ（#582）。終わるように、秒の整数で 60 まで（`infinity`・小数・単位付き・複数の引数は受けない）
+  sleep: (args) => void ((args.length === 1 && /^(?:[1-5]?\d|60)$/.test(lit(args[0]))) || refuse('flag')),
   dirname: literals({}),
   cat: reads({ bare: /^-[nbsveEtTAu]+$/ }),
   head: reads({ bare: /^-(?:\d+|[nc]\d+|q|v)$/, value: { '-n': numeric, '-c': numeric }, eq: { '--lines': numberText, '--bytes': numberText } }),
@@ -433,7 +445,7 @@ const COMMANDS: Record<string, Check> = {
 }
 
 /** ファイルにも cwd にも触らないコマンド（cwd がホームのあたりでも受ける）。`gh` は cwd のリポジトリを引くので入れない */
-const NO_FILES = new Set(['echo', 'true', 'false', 'date', 'uname', 'whoami', 'which', 'basename', 'dirname', 'pwd'])
+const NO_FILES = new Set(['echo', 'true', 'false', 'date', 'uname', 'whoami', 'which', 'basename', 'dirname', 'pwd', 'sleep'])
 
 /** 読むだけと分かっているコマンドの名前（文書・テスト用） */
 export const READ_ONLY_COMMANDS: readonly string[] = Object.keys(COMMANDS)

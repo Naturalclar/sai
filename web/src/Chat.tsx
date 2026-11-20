@@ -65,6 +65,11 @@ interface Props {
    * セッション画面だけが渡す（フィードには出さない）
    */
   renderReplyFooter?: (target: string, tss: string[], toName: string) => ReactNode
+  /**
+   * このセッションのターン完了の返答のバブルの下に足すもの（#902。そのターンで別のセッションに振った依頼の進み具合）。
+   * 行の `ts` を渡す。別のセッションからの返答（#588）・待ちのバブルには呼ばない。セッション画面だけが渡す
+   */
+  renderAfterTurn?: (ts: string) => ReactNode
   /** エージェントのバブルに思考の折りたたみを出す（セッション画面だけ。フィードは出さない） */
   showThinking?: boolean
   /** 思考を最初から開いておく（ヘッダの「思考を全部開く」） */
@@ -155,7 +160,7 @@ function flash(el: HTMLElement) {
   window.setTimeout(() => el.classList.remove('found'), JUMP_FLASH_MS)
 }
 
-export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_SESSIONS, trailer, renderReplyFooter, showThinking = false, thinkingOpen = false, longOpen = false, profile, linear = '', focusTs = '', focusSide: askedSide, diffs, jumpTo = null, question, answerable = NO_IDS, images, imagesBySession, unreadAfter, onSeenBottom, onMarkUnread, prs, onQuote }: Props) {
+export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_SESSIONS, trailer, renderReplyFooter, renderAfterTurn, showThinking = false, thinkingOpen = false, longOpen = false, profile, linear = '', focusTs = '', focusSide: askedSide, diffs, jumpTo = null, question, answerable = NO_IDS, images, imagesBySession, unreadAfter, onSeenBottom, onMarkUnread, prs, onQuote }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   // 返答の一部を選んだら「引用して返信」を出す（#604）。出すかの判定は quoteReply.ts の quotable()
   const quote = useQuoteSelection(ref, Boolean(onQuote))
@@ -437,6 +442,7 @@ export function Chat({ rows, leader, showChannel, selfHost = '', sessions = NO_S
                         thinkingClipped={showThinking && wasClipped(u.row, 'thinking')}
                         defaultOpen={longOpen}
                       />
+                      {renderAfterTurn && side === 'agent' && !u.waiting && !u.reply && eventKind(u.row.event, u.row.text) === 'turn' ? renderAfterTurn(u.row.ts) : null}
                       </FileSessionContext>
                       </ImageNoSourceContext>
                       </ImageSourceContext>

@@ -21,6 +21,8 @@ import { codexTurnSince, openPromptSince } from './openPrompt'
 import { isRemoteHost } from '../../shared/host.ts'
 import { QueuedBubble } from './QueuedBubble'
 import { AgentActivityBar } from './AgentActivityBar'
+import { placeRequests } from './agentRequests'
+import { RequestProgressCard } from './RequestProgressCard'
 import { agentActivityShown, agentWaitCount } from '../../shared/agentWaiting.ts'
 import { LoopBar } from './LoopBar'
 import { WaitBar } from './WaitBar'
@@ -73,6 +75,7 @@ const NO_PROMPTS: string[] = []
 const NO_REPLYING = {}
 const NO_APPROVALS: never[] = []
 const NO_FOLLOWUPS: never[] = []
+const NO_REQUESTS: never[] = []
 const NO_TARGETS: Readonly<Record<string, readonly string[]>> = {}
 
 /** 返答のバブルの下から相手へ送る返信（#700）の、この画面だけの状態 */
@@ -282,6 +285,8 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
   const agent = data?.agent
   const agentShown = agentActivityShown(agent)
   const agentStop = agent && !agentShown ? { stopped: agent.stopped } : undefined
+  // 依頼ごとの進み具合（#902）。依頼したターンの返答のバブルの下に置き、いま回しているターンの分とまだ置けない分は末尾に
+  const placed = useMemo(() => placeRequests(agent?.requests ?? NO_REQUESTS, data?.rows ?? NO_ROWS, mine?.since ?? ''), [agent?.requests, data?.rows, mine?.since])
   const tagInput = { serverHost: data?.host ?? '', approval: approvals[0]?.text ?? '', replyingSince: mine?.since ?? '', contextTokens, agentWaiting: agent ? agentWaitCount(agent) : null }
   const thinking = { has: hasThinking, open: thinkingUi.open, toggle: () => setThinkingUi({ open: !thinkingUi.open }) }
   const label = s ? headName(s) : { name: '', project: '' }
@@ -346,6 +351,7 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
           onMarkUnread={onMarkUnread}
           {...(focusSide ? { focusSide } : {})}
           {...(data.question ? { question: data.question } : {})}
+          renderAfterTurn={(ts) => placed.at.get(ts)?.map((r) => <RequestProgressCard key={`request:${r.turn}`} id={id} request={r} />)}
           renderReplyFooter={(target, tss, toName) => {
             const session = targets.get(target)
             const anchor = tss[tss.length - 1] ?? ''
@@ -441,6 +447,9 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
                 <QueuedBubble key={q.queue_id} id={id} item={q} order={i + 1} paused={queuedHere.paused ?? ''} now={now} profile={data.profile} />
               ))}
               {/* このセッションから別のセッションへのメッセージ（#311）。送ったことがあるか止めているときだけ */}
+              {placed.tail.map((r) => (
+                <RequestProgressCard key={`request:${r.turn}`} id={id} request={r} />
+              ))}
               {agent && agentShown && <AgentActivityBar id={id} activity={agent} now={now} />}
               {loop && <LoopBar key={`loop:${id}`} id={id} loop={loop} now={now} />}
               {/* 預けた待ち（#732）。古いサーバ（waits を返さない）では出さない */}

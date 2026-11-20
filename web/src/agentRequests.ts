@@ -44,7 +44,7 @@ const seconds = (s: string) => Math.floor(Date.parse(s) / 1000)
  * このセッションの行のうち、`turn` の秒より**後の秒**の最初のターン完了の行（`eventKind() === 'turn'`）。同じ秒は数えない
  * （行の時刻は秒までで、前のターンのターン完了の行と同じ秒に次のターンが始まりうる。依頼したターンは送るまでに 1 秒より長くかかる）。
  * いま回しているターン（`runningTurn`）の依頼と、ターン完了の行がまだ・見つからない依頼は `tail`（チャットの末尾）に置く。
- * 窓より前に始まったターンの依頼はサーバが載せない（`requestsWindowStart()`）ので、ここでは絞らない。
+ * 返答のバブルを描いていないターンの依頼はサーバが載せない（線は `requestsWindowStart()`）ので、ここでは絞らない。
  * `rows` はこのセッションの行（古い順。別のセッションからの返答の行は混ぜない）
  */
 export function placeRequests(requests: readonly AgentRequest[], rows: readonly FeedRow[], runningTurn = ''): { at: Map<string, AgentRequest[]>; tail: AgentRequest[] } {

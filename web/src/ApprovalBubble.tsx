@@ -89,7 +89,7 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false, modeNote =
       const deny = denyArmed && denyKey(e)
       if (!action && !deny) return
       // 別のセッションの返信欄・モーダルの中・フォーカスの無いペインの中で押されたものは受けない（#538・#633）
-      if (!hotkeyAppliesAt(e.target instanceof Element ? e.target : null, approval.id)) return
+      if (!hotkeyAppliesAt(e.target instanceof Element ? e.target : null, approval.id, document.querySelector('.modal-backdrop') !== null)) return
       e.preventDefault()
       e.stopPropagation()
       if (deny) void send(denyId !== null ? { behavior: 'deny', decision: denyId } : { behavior: 'deny' })

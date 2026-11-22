@@ -13,6 +13,8 @@ interface KeyLike {
   altKey: boolean
   shiftKey: boolean
   isComposing: boolean
+  /** 押しっぱなしの繰り返し。拒否・数字・質問の ⌘Enter は 1 回押した分だけ受ける（押しっぱなしで次の問いまで答えない） */
+  repeat?: boolean
 }
 
 /**
@@ -53,7 +55,7 @@ export function hotkeyApplies(replyFor: string | null, approvalEntity: string, e
  * `⌘Enter` と同じく `hotkeyApplies()` で見る
  */
 export function denyKey(e: KeyLike): boolean {
-  if (e.key !== '.' || e.isComposing || e.altKey || e.shiftKey) return false
+  if (e.key !== '.' || e.repeat || e.isComposing || e.altKey || e.shiftKey) return false
   return e.metaKey || e.ctrlKey
 }
 
@@ -76,7 +78,7 @@ export function denyDecision(decisions: readonly { id: string; label: string; be
  * **入力欄で打っている間（`typing`）は何もしない**（数字は文字のまま。「その他」の記入欄も入力欄）
  */
 export function optionIndex(e: KeyLike, count: number, typing: boolean): number | null {
-  if (typing || e.isComposing || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return null
+  if (typing || e.repeat || e.isComposing || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return null
   if (!/^[1-9]$/.test(e.key)) return null
   const index = Number(e.key) - 1
   return index < count ? index : null
@@ -84,11 +86,12 @@ export function optionIndex(e: KeyLike, count: number, typing: boolean): number 
 
 /**
  * 質問のバブルで `⌘Enter` を押したときにすること（#909）。いまの問いに答えが無ければ何もしない（null）。
+ * **質問の外の入力欄（返信欄など）で押したものは取らない**（`typingElsewhere`。選びかけの有無で送信になったりならなかったりしないように）。
  * 最後の問いでなければ次へ、最後の問いで**全部そろっていれば**送る。そろっていなければ null で、
  * 呼び出し側はキーを横取りしない（入力欄の送信に任せる）
  */
-export function askEnterAction(last: boolean, currentAnswered: boolean, allReady: boolean): 'next' | 'send' | null {
-  if (!currentAnswered) return null
+export function askEnterAction(last: boolean, currentAnswered: boolean, allReady: boolean, typingElsewhere = false): 'next' | 'send' | null {
+  if (typingElsewhere || !currentAnswered) return null
   if (!last) return 'next'
   return allReady ? 'send' : null
 }
@@ -100,9 +103,12 @@ interface PlaceLike {
 
 /**
  * 押された場所（`e.target`）で、許可・質問のキーを受けてよいか。`hotkeyApplies()` に渡す値を DOM から読む:
- * いちばん近い返信欄の印・モーダルの中か・フォーカスの無いペインの中か（#633）
+ * いちばん近い返信欄の印・モーダルの中か・フォーカスの無いペインの中か（#633）。
+ * `modalOpen`（`.modal-backdrop` がある）なら、どこで押されても受けない（Safari はリンクを押してもフォーカスが移らず、
+ * モーダルを開いたままの数字が裏の質問に届くため。ペインのキーと同じ扱い）
  */
-export function hotkeyAppliesAt(target: PlaceLike | null, approvalEntity: string): boolean {
+export function hotkeyAppliesAt(target: PlaceLike | null, approvalEntity: string, modalOpen = false): boolean {
+  if (modalOpen) return false
   if (!target) return hotkeyApplies(null, approvalEntity)
   const owner = target.closest(`[${REPLY_FOR_ATTR}]`)
   const pane = target.closest('.pane')

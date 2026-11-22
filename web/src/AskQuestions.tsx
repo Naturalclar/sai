@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { answersReady, joinAnswer, questionKey, type AskQuestion } from '../../shared/approvals.ts'
 import { approvalAction, askEnterAction, hotkeyAppliesAt, optionIndex } from './approvalKeys'
 import { isTypingTarget } from './sessionNav'
@@ -43,6 +43,8 @@ const answerOf = (p: Pick) => joinAnswer(p.labels, p.otherOn ? p.other : '')
 export function AskQuestions({ questions, hotkey = false, entity = '', busy, done, onAnswer, onDecline }: Props) {
   const [step, setStep] = useState(0)
   const [picks, setPicks] = useState<Record<string, Pick>>({})
+  // 「その他」を開いたら記入欄へ当てる（押したとき・キーで選んだときだけ。「戻る」で記入欄が描き直されたときは当てない）
+  const otherRef = useRef<HTMLInputElement>(null)
 
   // 問いが無いときは何も描かない（下の return の手前）。フックを早い return より前に置くため、ここでは空の問いで埋める
   const q = questions[Math.min(step, questions.length - 1)] ?? NO_QUESTION
@@ -66,8 +68,10 @@ export function AskQuestions({ questions, hotkey = false, entity = '', busy, don
       update({ labels: pick.labels[0] === label ? [] : [label], otherOn: false, other: pick.other })
     }
   }
-  const toggleOther = () =>
+  const toggleOther = () => {
     update(q.multiSelect ? { ...pick, otherOn: !pick.otherOn } : { labels: [], otherOn: !pick.otherOn, other: pick.other })
+    if (!pick.otherOn) requestAnimationFrame(() => otherRef.current?.focus())
+  }
 
   // キーで答える（#909）。数字は入力欄の外だけ（入力欄の数字は文字のまま）。単一選択は選んで次の問いへ、いくつでも選べる問いは
   // 付け外しだけ（進むのは ⌘Enter）。最後の数字（「その他」があるとき）は記入欄を開く。⌘Enter は全部そろうまで送らない。
@@ -76,10 +80,13 @@ export function AskQuestions({ questions, hotkey = false, entity = '', busy, don
     if (!hotkey || frozen || q === NO_QUESTION) return
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target instanceof Element ? e.target : null
-      const index = optionIndex(e, q.options.length + (q.other ? 1 : 0), isTypingTarget(target as HTMLElement | null))
-      const enter = index === null && approvalAction(e, false) !== null ? askEnterAction(last, !!answers[key]!.trim(), answersReady(questions, answers)) : null
+      const typing = isTypingTarget(target as HTMLElement | null)
+      const index = optionIndex(e, q.options.length + (q.other ? 1 : 0), typing)
+      // 質問の外の入力欄（返信欄）の ⌘Enter は取らない。「その他」の記入欄の中なら取る
+      const typingElsewhere = typing && target?.closest('.questions') == null
+      const enter = index === null && !e.repeat && approvalAction(e, false) !== null ? askEnterAction(last, !!answers[key]!.trim(), answersReady(questions, answers), typingElsewhere) : null
       if (index === null && enter === null) return
-      if (!hotkeyAppliesAt(target, entity)) return
+      if (!hotkeyAppliesAt(target, entity, document.querySelector('.modal-backdrop') !== null)) return
       e.preventDefault()
       e.stopPropagation()
       if (enter === 'next') setStep(step + 1)
@@ -115,7 +122,7 @@ export function AskQuestions({ questions, hotkey = false, entity = '', busy, don
               onClick={() => toggle(o.label)}
             >
               <span className="label">
-                {hotkey && i < 9 && <kbd className="num">{i + 1}</kbd>}
+                {hotkey && !frozen && i < 9 && <kbd className="num">{i + 1}</kbd>}
                 {o.label}
                 {o.recommended && <span className="rec">推奨</span>}
               </span>
@@ -125,7 +132,7 @@ export function AskQuestions({ questions, hotkey = false, entity = '', busy, don
           {q.other && (
             <button type="button" className={pick.otherOn ? 'picked' : ''} disabled={frozen} onClick={toggleOther}>
               <span className="label">
-                {hotkey && q.options.length < 9 && <kbd className="num">{q.options.length + 1}</kbd>}
+                {hotkey && !frozen && q.options.length < 9 && <kbd className="num">{q.options.length + 1}</kbd>}
                 その他
               </span>
               <span className="desc">選択肢に無い答えを書く</span>
@@ -137,8 +144,7 @@ export function AskQuestions({ questions, hotkey = false, entity = '', busy, don
             type={q.secret ? 'password' : 'text'}
             className="other"
             placeholder="答えをそのまま書く（エージェントにこの文字列が届く）"
-            // 開いたら記入欄へ（キーで「その他」を選んだときも、そのまま打てるように）
-            autoFocus
+            ref={otherRef}
             value={pick.other}
             disabled={frozen}
             onChange={(e) => update({ ...pick, other: e.target.value })}

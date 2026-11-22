@@ -70,6 +70,7 @@ test('denyKey: 素の . ・⇧ / Alt 付き・IME 変換中・ほかのキーは
   assert.equal(denyKey(key({ key: '.', metaKey: true, isComposing: true })), false)
   assert.equal(denyKey(key({ key: 'Backspace', metaKey: true })), false, '⌘⌫ は行頭まで消す')
   assert.equal(denyKey(key({ metaKey: true })), false, '⌘Enter は許可')
+  assert.equal(denyKey(key({ key: '.', metaKey: true, repeat: true })), false, '押しっぱなしの繰り返し')
 })
 
 test('denyDecision: 今回だけの拒否を 1 つ選ぶ。「今後も断る」は押さない', () => {
@@ -94,6 +95,7 @@ test('optionIndex: 入力欄の外で 1〜9 → その選択肢（#909）', () =
   assert.equal(optionIndex(key({ key: '1', metaKey: true }), 3, false), null)
   assert.equal(optionIndex(key({ key: '1', isComposing: true }), 3, false), null)
   assert.equal(optionIndex(key({ key: 'j' }), 3, false), null)
+  assert.equal(optionIndex(key({ key: '1', repeat: true }), 3, false), null, '押しっぱなしで次の問いまで答えない')
 })
 
 test('askEnterAction: 全部そろうまで送らない', () => {
@@ -101,6 +103,8 @@ test('askEnterAction: 全部そろうまで送らない', () => {
   assert.equal(askEnterAction(false, true, false), 'next')
   assert.equal(askEnterAction(true, true, false), null, '最後でも欠けがあれば送らない')
   assert.equal(askEnterAction(true, true, true), 'send')
+  assert.equal(askEnterAction(true, true, true, true), null, '返信欄の ⌘Enter は取らない（送信のまま）')
+  assert.equal(askEnterAction(false, true, false, true), null)
 })
 
 test('hotkeyAppliesAt: 別のセッションの返信欄・モーダル・フォーカスの無いペインでは受けない', () => {
@@ -118,6 +122,8 @@ test('hotkeyAppliesAt: 別のセッションの返信欄・モーダル・フォ
   assert.equal(hotkeyAppliesAt(place({ '[role="dialog"]': {} }), 'e1'), false)
   assert.equal(hotkeyAppliesAt(place({ '.pane': { focused: false } }), 'e1'), false)
   assert.equal(hotkeyAppliesAt(place({ '.pane': { focused: true } }), 'e1'), true)
+  assert.equal(hotkeyAppliesAt(place({}), 'e1', true), false, 'モーダルを開いている間はどこで押しても受けない')
+  assert.equal(hotkeyAppliesAt(null, 'e1', true), false)
 })
 
 test('新しいキーは一覧・ペイン・入力欄のキーと当たらない（#909）', () => {

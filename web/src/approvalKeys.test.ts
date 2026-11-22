@@ -1,6 +1,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { approvalAction, hotkeyApplies } from './approvalKeys.ts'
+import { approvalAction, askEnterAction, denyDecision, denyKey, denyPlaceOk, hotkeyApplies, hotkeyAppliesAt, keyBlocked, optionIndex } from './approvalKeys.ts'
+import { navAction } from './sessionNav.ts'
+import { paneKey } from './paneKeys.ts'
+import { blursOnEscape, leavesToSidebar } from './replyFocus.ts'
 
 const key = (over: Partial<Parameters<typeof approvalAction>[0]> = {}) => ({
   key: 'Enter',
@@ -53,4 +56,103 @@ test('hotkeyApplies: 別のセッションの返信欄で押した ⌘Enter は�
   assert.equal(hotkeyApplies('a@repo', 'a@repo'), true)
   // 別のセッションの返信欄では、その返信欄の送信に任せる
   assert.equal(hotkeyApplies('b@repo', 'a@repo'), false)
+})
+
+test('denyKey: Mac は ⌘.、ほかは Ctrl+. だけ（#909）', () => {
+  assert.equal(denyKey(key({ key: '.', metaKey: true }), true), true)
+  assert.equal(denyKey(key({ key: '.', ctrlKey: true }), true), false, 'Mac の Ctrl+. は受けない')
+  assert.equal(denyKey(key({ key: '.', ctrlKey: true }), false), true)
+  assert.equal(denyKey(key({ key: '.', metaKey: true }), false), false, 'Windows の Win+. は絵文字パネル')
+})
+
+test('denyKey: 素の . ・⇧ / Alt 付き・IME 変換中・ほかのキーは何もしない', () => {
+  assert.equal(denyKey(key({ key: '.' }), true), false, '入力欄の句点')
+  assert.equal(denyKey(key({ key: '.', metaKey: true, shiftKey: true }), true), false)
+  assert.equal(denyKey(key({ key: '.', metaKey: true, altKey: true }), true), false)
+  assert.equal(denyKey(key({ key: '.', metaKey: true, isComposing: true }), true), false)
+  assert.equal(denyKey(key({ key: 'Backspace', metaKey: true }), true), false, '⌘⌫ は行頭まで消す')
+  assert.equal(denyKey(key({ metaKey: true }), true), false, '⌘Enter は許可')
+  assert.equal(denyKey(key({ key: '.', metaKey: true, repeat: true }), true), false, '押しっぱなしの繰り返し')
+})
+
+test('denyDecision: 今回だけの拒否を 1 つ選ぶ。「今後も断る」は押さない', () => {
+  const allow = { id: 'a', label: '許可', behavior: 'allow' as const }
+  const decline = { id: 'd', label: '拒否', behavior: 'deny' as const }
+  const cancel = { id: 'c', label: 'ターンを中止', behavior: 'deny' as const }
+  const forever = { id: 'f', label: '今後も断る', behavior: 'deny' as const, persists: true as const }
+  assert.equal(denyDecision([allow, decline, cancel]), 'd', '「拒否」と「ターンを中止」なら「拒否」')
+  assert.equal(denyDecision([allow, { id: 'n', label: 'No, and tell Codex', behavior: 'deny' }]), 'n', '今回だけの拒否が 1 つならそれ')
+  assert.equal(denyDecision([allow, forever]), null, '残る拒否しか無ければキーでは押さない')
+  assert.equal(denyDecision([allow, cancel, { id: 'n', label: 'No', behavior: 'deny' }]), null, '決められなければ押さない')
+  assert.equal(denyDecision([allow]), null)
+})
+
+test('optionIndex: 入力欄の外で 1〜9 → その選択肢（#909）', () => {
+  assert.equal(optionIndex(key({ key: '1' }), 3, false), 0)
+  assert.equal(optionIndex(key({ key: '3' }), 3, false), 2)
+  assert.equal(optionIndex(key({ key: '4' }), 3, false), null, '範囲の外')
+  assert.equal(optionIndex(key({ key: '0' }), 10, false), null)
+  assert.equal(optionIndex(key({ key: '1' }), 3, true), null, '入力欄の数字は文字のまま')
+  assert.equal(optionIndex(key({ key: '1', ctrlKey: true }), 3, false), null, 'Ctrl+1 はペインのキー')
+  assert.equal(optionIndex(key({ key: '1', metaKey: true }), 3, false), null)
+  assert.equal(optionIndex(key({ key: '1', isComposing: true }), 3, false), null)
+  assert.equal(optionIndex(key({ key: 'j' }), 3, false), null)
+  assert.equal(optionIndex(key({ key: '1', repeat: true }), 3, false), null, '押しっぱなしで次の問いまで答えない')
+})
+
+test('askEnterAction: 全部そろうまで送らない', () => {
+  assert.equal(askEnterAction(false, false, false), null, 'いまの問いに答えが無ければ進まない')
+  assert.equal(askEnterAction(false, true, false), 'next')
+  assert.equal(askEnterAction(true, true, false), null, '最後でも欠けがあれば送らない')
+  assert.equal(askEnterAction(true, true, true), 'send')
+  assert.equal(askEnterAction(true, true, true, true), null, '返信欄の ⌘Enter は取らない（送信のまま）')
+  assert.equal(askEnterAction(false, true, false, true), null)
+})
+
+test('hotkeyAppliesAt: 別のセッションの返信欄・モーダル・フォーカスの無いペインでは受けない', () => {
+  const place = (hits: Record<string, { reply?: string; focused?: boolean }>) => ({
+    closest: (selector: string) => {
+      const hit = hits[selector]
+      if (!hit) return null
+      return { getAttribute: () => hit.reply ?? null, classList: { contains: (name: string) => name === 'focused' && hit.focused === true } }
+    },
+  })
+  assert.equal(hotkeyAppliesAt(null, 'e1'), true)
+  assert.equal(hotkeyAppliesAt(place({}), 'e1'), true, 'サイドバー・body など')
+  assert.equal(hotkeyAppliesAt(place({ '[data-reply-for]': { reply: 'e2' } }), 'e1'), false)
+  assert.equal(hotkeyAppliesAt(place({ '[data-reply-for]': { reply: 'e1' } }), 'e1'), true)
+  assert.equal(hotkeyAppliesAt(place({ '[role="dialog"]': {} }), 'e1'), false)
+  assert.equal(hotkeyAppliesAt(place({ '.pane': { focused: false } }), 'e1'), false)
+  assert.equal(hotkeyAppliesAt(place({ '.pane': { focused: true } }), 'e1'), true)
+  assert.equal(hotkeyAppliesAt(place({}), 'e1', true), false, 'モーダルを開いている間はどこで押しても受けない')
+  assert.equal(hotkeyAppliesAt(null, 'e1', true), false)
+})
+
+test('新しいキーは一覧・ペイン・入力欄のキーと当たらない（#909）', () => {
+  const keys = [
+    key({ key: '.', metaKey: true }),
+    key({ key: '.', ctrlKey: true }),
+    ...'123456789'.split('').map((k) => key({ key: k })),
+  ]
+  for (const k of keys) {
+    assert.equal(navAction(k), null, `一覧: ${k.key}`)
+    assert.equal(paneKey(k, false), null, `ペイン: ${k.key}`)
+    assert.equal(approvalAction(k, true), null, `許可: ${k.key}`)
+    assert.equal(blursOnEscape(k, { menuOpen: false }), false)
+    assert.equal(leavesToSidebar(k, { text: '', menuOpen: false }), false)
+  }
+})
+
+test('keyBlocked: モーダル・隠れたバブル・ほかのバブルの中では受けない（#909 のレビュー）', () => {
+  const none = { modalOpen: false, hidden: false, inOtherBubble: false }
+  assert.equal(keyBlocked(none), false)
+  assert.equal(keyBlocked({ ...none, modalOpen: true }), true)
+  assert.equal(keyBlocked({ ...none, hidden: true }), true, '狭い画面の一覧の裏に隠れたペイン')
+  assert.equal(keyBlocked({ ...none, inOtherBubble: true }), true, '下の質問の「その他」の ⌘Enter')
+})
+
+test('denyPlaceOk: 拒否は入力欄の外か、そのセッションの返信欄だけ', () => {
+  assert.equal(denyPlaceOk(false, false), true, 'サイドバー・body')
+  assert.equal(denyPlaceOk(true, true), true, 'そのセッションの返信欄')
+  assert.equal(denyPlaceOk(true, false), false, '検索欄・ほかのバブルの記入欄・相手への入力欄')
 })

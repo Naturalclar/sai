@@ -48,8 +48,10 @@ export const SHORTCUT_GROUPS: readonly ShortcutGroup[] = [
   {
     title: '許可・質問',
     items: [
-      { keys: ['⌘Enter'], what: '一番上の許可を許可' },
+      { keys: ['⌘Enter'], what: '一番上の許可を許可。質問は次の問いへ・全部そろったら送る' },
       { keys: ['⌘⇧Enter'], what: '常に許可（「常に許可」が無い許可では許可）' },
+      { keys: ['⌘.'], what: '一番上の許可を拒否（入力欄の外か、そのセッションの返信欄で）' },
+      { keys: ['1〜9'], what: '質問の選択肢を選ぶ（入力欄の外で。1 つだけ選ぶ問いは次へ進む）' },
     ],
   },
   {

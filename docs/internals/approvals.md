@@ -22,7 +22,9 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 
 ### キーボード
 
-- 判定は `web/src/approvalKeys.ts` の `approvalAction()`。
+- 判定は `web/src/approvalKeys.ts` の `approvalAction()`。拒否の `⌘.` は `denyKey()`、Codex の候補からキーで押す 1 つは `denyDecision()`（#909）。
+- 質問のキー（#909）は `AskQuestions` が持つ（いまの問いと選びかけを持っているのはそこだけ）。数字は `optionIndex()`（入力欄の中は `isTypingTarget()` で外す）、`⌘Enter` は `askEnterAction()`。描くたびに張り直す。
+- 押した場所の扱い（別のセッションの返信欄・モーダル・フォーカスの無いペイン）は、許可も質問も `hotkeyAppliesAt()` の 1 つ。
 - 受けるのは描画順の先頭のバブルだけで、親（`FeedView` / `SessionView`）が `hotkey` を渡して決める。
 - window の keydown を capture で張り、拾ったときだけ `stopPropagation()` する。
 

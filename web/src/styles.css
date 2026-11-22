@@ -890,6 +890,9 @@
   .step-output pre .del { background: color-mix(in srgb, var(--claude) 14%, transparent); }
   .step-output pre .head { color: var(--muted); }
   .step-output .omitted { margin: 2px 0; font-style: italic; }
+  /* 処理中の手順の「途中の出力」（#846）。いまの手順の 1 行の下に出す */
+  .progress .live-output { margin-top: 2px; font-style: normal; }
+  .progress .live-output pre { white-space: pre-wrap; overflow-wrap: anywhere; }
   /* 途中で書いた文（#680）。ツールの行と見分けがつくよう、本文の色で折り返して出す */
   .turn-steps .list .said { flex-wrap: nowrap; }
   .turn-steps .list .said .body { flex: 1 1 auto; min-width: 0; color: var(--ink); overflow-wrap: anywhere; }

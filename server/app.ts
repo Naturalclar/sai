@@ -164,7 +164,7 @@ import { stopMissing, stopMissingCandidate } from '../shared/stopMissing.ts'
 import { RecoveredTurns } from './local/recovered.ts'
 import { TURN_STEPS_MAX, findStepTurn } from '../shared/turnSteps.ts'
 import type { StepTurn } from '../shared/turnSteps.ts'
-import { TURN_OUTPUT_SECTIONS_MAX, isOutputRef } from '../shared/turnOutput.ts'
+import { TURN_OUTPUT_SECTIONS_MAX, isOutputRef, liveSection } from '../shared/turnOutput.ts'
 import { readMarkOf, rowMs, unreadCounts, unreadFromMark } from '../shared/unread.ts'
 import { SETTINGS_FILE, SettingsStore, nextAskOn } from './meta/settings.ts'
 import type { Settings } from './meta/settings.ts'
@@ -3966,6 +3966,23 @@ export function createApp(
     return json(res, { id, ts, ref, found: true, sections: sections.slice(0, TURN_OUTPUT_SECTIONS_MAX), ...(more > 0 ? { more } : {}) } satisfies TurnOutputResponse)
   }
 
+  /**
+   * GET /api/sessions/<id>/turn-output?live=1（#846 の 2 つ目）。走っている Codex のコマンドの途中の出力。
+   * **処理中の手順の「途中の出力」を開いている間だけ**取り直す（3 秒のポーリング・`steps`・`/mcp` には載せない）。
+   * 持っているのは SAI の app-server が回しているターンの分だけで、メモリにしか無い（`server/reply/codexLiveOutput.ts`）。
+   * 中身はログにも応答のキャッシュにも残さない
+   */
+  const getLiveOutput = async (res: ServerResponse, id: string, days: number) => {
+    const { sessions } = await store.sessions(days)
+    const session = sessions.find((s) => s.id === id)
+    if (!session) return error(res, 404, 'session not found in window')
+    const none: TurnOutputResponse = { id, ts: '', ref: '', found: false, sections: [], live: true }
+    if (session.agent !== 'codex' || !codexAppEnabled || isRemoteHost(session.host, selfHost())) return json(res, none)
+    const running = codexApp.liveOutput?.(id) ?? []
+    if (running.length === 0) return json(res, none)
+    return json(res, { id, ts: '', ref: '', found: true, sections: running.map((c) => liveSection(c.command, c.text, c.dropped)), live: true } satisfies TurnOutputResponse)
+  }
+
   const getTurn = async (res: ServerResponse, id: string, ts: string, days: number) => {
     const { sessions } = await store.sessions(days)
     if (!sessions.some((s) => s.id === id)) return error(res, 404, 'session not found in window')
@@ -3996,6 +4013,8 @@ export function createApp(
     // transcript は**端末で Esc を押して止めたターンを閉じないまま残す**（#302 の実測で 536 件中 13 件）ので、
     // CLI 側の実測で打ち消す（#418）。**`busy` が false と分かったときだけ**落とし、
     // 聞けなかった（`undefined`）ときは今までどおり transcript の判定を使う
+    // 走っている Codex のコマンドの途中の出力を開けるか（#846）。中身は載せず、印だけ。rev にも混ぜる（印だけ変わっても描き直す）
+    if (session.agent === 'codex' && codexAppEnabled && (codexApp.liveOutput?.(id).length ?? 0) > 0) return json(res, { ...parsed, live_output: true, rev: `${parsed.rev}|live` })
     if (!parsed.active || session.agent !== 'claude') return json(res, parsed)
     const busy = await claudeAgents.busy(sessionOf(session))
     if (busy !== false) return json(res, parsed)
@@ -4757,6 +4776,7 @@ export function createApp(
         if (refuseDevice(res, req, who)) return
         const id = sessionIdFrom(path, TURN_OUTPUT_SUFFIX)
         if (id === null) return error(res, 400, 'bad session id')
+        if (q.get('live') === '1') return await getLiveOutput(res, id, parseDays(q.get('days'), 90))
         return await getTurnOutput(res, id, q.get('ts') ?? '', q.get('ref') ?? '', parseDays(q.get('days'), 90))
       }
       if (path.startsWith(SESSIONS_PREFIX) && path.endsWith(TURN_STEPS_SUFFIX) && method === 'GET') {

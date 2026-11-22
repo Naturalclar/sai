@@ -838,6 +838,11 @@ export interface SessionProgressResponse {
    * セッション同士のメッセージの予算に使う。読めなければ 0
    */
   context_tokens: number
+  /**
+   * 走っているコマンドの途中の出力を開ける（#846。Codex を SAI の app-server で回しているときだけ）。中身は載せない
+   * （開いたときに `turn-output?live=1` で取る）。無ければ省く
+   */
+  live_output?: true
   /** いま答えを待っている `AskUserQuestion`（#333。Claude だけ）。無ければ省く */
   question?: PendingQuestion
   /**
@@ -2571,6 +2576,11 @@ export interface TurnOutputResponse {
   sections: TurnOutputSection[]
   /** `sections` に入り切らなかった節の数。無ければ省く */
   more?: number
+  /**
+   * 走っているコマンドの途中の出力（`?live=1`。#846 の 2 つ目）。`ts` と `ref` は空で、節は走っているコマンドごとに 1 つ
+   * （見出しはコマンド、本文は末尾だけ）。`found: false` は「走っているコマンドが無い」（終わった・ターンが終わった・SAI の経路でない）
+   */
+  live?: true
 }
 
 /** GET /api/sessions/<id>/gallery。そのセッションに出てきた画像（新しい順）。開いたときと新しいターンが記録されたときだけ取る */

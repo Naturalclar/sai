@@ -265,6 +265,8 @@ export const api = {
   turnSteps: (id: string, ts: string) => getJSON<TurnStepsResponse>(`/api/sessions/${encodeURIComponent(id)}/turn-steps?ts=${encodeURIComponent(ts)}`),
   /** 手順の出力・差分（#846）。押したときに 1 回だけ */
   turnOutput: (id: string, ts: string, ref: string) => getJSON<TurnOutputResponse>(`/api/sessions/${encodeURIComponent(id)}/turn-output?ts=${encodeURIComponent(ts)}&ref=${encodeURIComponent(ref)}`),
+  /** 走っている Codex のコマンドの途中の出力（#846）。「途中の出力」を開いている間だけ取り直す */
+  liveOutput: (id: string) => getJSON<TurnOutputResponse>(`/api/sessions/${encodeURIComponent(id)}/turn-output?live=1`),
   turn: (id: string, ts: string) => getJSON<SessionTurnResponse>(`/api/sessions/${encodeURIComponent(id)}/turn?ts=${encodeURIComponent(ts)}`),
   /** 処理中のターンがいま何をしているか（#302）。処理中のセッションを出している間だけ取る（一覧のポーリングには乗せない） */
   progress: (id: string) => getJSON<SessionProgressResponse>(`/api/sessions/${encodeURIComponent(id)}/progress`),

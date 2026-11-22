@@ -61,6 +61,18 @@ const prevLine = (text: string, at: number) => {
   return i >= 0 && at - i <= LINE_SNAP ? i + 1 : at
 }
 
+/**
+ * 走っているコマンドの途中の出力の 1 節（#846 の 2 つ目）。**末尾だけ**を出す（頭はもう流れた分なので、`clipOutput()` の頭は使わない）。
+ * `dropped` はサーバのメモリの上限で先に捨てた字数で、省いた字数に足す
+ */
+export function liveSection(command: string, raw: string, dropped = 0): TurnOutputSection {
+  const text = plainOutput(raw)
+  const label = command || 'コマンド'
+  if (text.length <= TURN_OUTPUT_TAIL) return { label, kind: 'output', text: dropped > 0 ? '' : text, ...(dropped > 0 ? { tail: text, omitted: dropped } : {}) }
+  const start = nextLine(text, text.length - TURN_OUTPUT_TAIL)
+  return { label, kind: 'output', text: '', tail: text.slice(start), omitted: dropped + start }
+}
+
 /** 長い本文を頭と末尾だけにする。切り口はなるべく行の境目に寄せる */
 export function clipOutput(text: string): Pick<TurnOutputSection, 'text' | 'tail' | 'omitted'> {
   if (text.length <= TURN_OUTPUT_HEAD + TURN_OUTPUT_TAIL) return { text }

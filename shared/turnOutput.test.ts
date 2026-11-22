@@ -1,7 +1,7 @@
 // 手順の出力・差分（#846）。行の形は作り物
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { TURN_OUTPUT_HEAD, TURN_OUTPUT_TAIL, claudeOutputFinder, clipOutput, codexOutputFinder, diffLineKind, isOutputRef, plainOutput } from './turnOutput.ts'
+import { TURN_OUTPUT_HEAD, TURN_OUTPUT_TAIL, claudeOutputFinder, clipOutput, codexOutputFinder, diffLineKind, isOutputRef, liveSection, plainOutput } from './turnOutput.ts'
 import type { OutputFinder } from './turnOutput.ts'
 
 const run = (finder: OutputFinder, lines: string[]) => {
@@ -121,4 +121,16 @@ test('色の制御列と CR を落とす。ref の形を見る。差分の行の
   assert.deepEqual(['toolu_01Ab-c', 'call_x.y:1'].map(isOutputRef), [true, true])
   assert.deepEqual(['', '../x', 'a b', 'a/b', 'x'.repeat(201)].map(isOutputRef), [false, false, false, false, false])
   assert.deepEqual(['+a', '-a', ' a', '@@ -1 +1 @@', '+++ b/a', '--- a/a', '*** Begin Patch'].map(diffLineKind), ['add', 'del', 'ctx', 'head', 'head', 'head', 'head'])
+})
+
+test('liveSection: 走っているコマンドの出力は末尾だけ。サーバで捨てた分も省いた字数に足す（#846）', () => {
+  assert.deepEqual(liveSection('pnpm test', 'a\u001b[32mok\u001b[0m\r\n'), { label: 'pnpm test', kind: 'output', text: 'aok\n' })
+  assert.deepEqual(liveSection('', 'b'), { label: 'コマンド', kind: 'output', text: 'b' }, 'コマンドが分からなければ見出しは「コマンド」')
+  assert.deepEqual(liveSection('x', '末尾', 100), { label: 'x', kind: 'output', text: '', tail: '末尾', omitted: 100 }, '頭を捨てていれば、残りは末尾として出す')
+  const long = Array.from({ length: 5000 }, (_, i) => `line ${i}`).join('\n')
+  const got = liveSection('x', long, 7)
+  assert.equal(got.text, '', '頭は出さない')
+  assert.ok(got.tail && got.tail.length <= TURN_OUTPUT_TAIL && got.tail.endsWith('line 4999'))
+  assert.ok(got.tail.startsWith('line '), '切り口は行の頭')
+  assert.equal((got.omitted ?? 0) + got.tail.length, long.length + 7)
 })

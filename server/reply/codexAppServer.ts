@@ -9,6 +9,7 @@ import { parseCodexRateLimits } from '../../shared/usage.ts'
 import { buildCodexApproval, codexAnswerRefusal, codexAnswerResult } from './codexApproval.ts'
 import type { CodexAnswerResult, CodexDecision } from './codexApproval.ts'
 import { childEnv, splitArgs } from './runner.ts'
+import { CodexLiveOutputs, type LiveCommandOutput } from './codexLiveOutput.ts'
 
 type RpcId = string | number
 type JsonObject = Record<string, unknown>
@@ -151,6 +152,12 @@ export interface CodexApp {
    * 偽物は持たなくてよい（持たなければ Codex は要約せずに今までどおり送る）
    */
   compact?(input: CodexCompactInput): Promise<void>
+  /**
+   * SAI が回しているターンで、いま走っているコマンドの途中の出力（#846。`item/commandExecution/outputDelta` をメモリにだけためたもの。
+   * `server/reply/codexLiveOutput.ts`）。走っていなければ空。**中身はログに書かない・`steps` と `/mcp` に載せない**。
+   * 偽物は持たなくてよい（持たなければ「途中の出力」を出さない）
+   */
+  liveOutput?(id: string): LiveCommandOutput[]
 }
 
 /**
@@ -295,6 +302,8 @@ export class CodexAppServer implements CodexApp {
   private entityThreads = new Map<string, string>()
   private approvals = new Map<string, PendingApproval>()
   private items = new Map<string, JsonObject>()
+  /** 走っているコマンドの途中の出力（#846）。メモリだけ */
+  private live = new CodexLiveOutputs()
   private turnEndListeners: ((id: string) => void)[] = []
   /** エラーで終わったターン（エンティティ → 失敗の付いた Replying と、終わった時刻）。次のターンを始めたら消す（#475） */
   private failures = new Map<string, { replying: Replying; at: number }>()
@@ -322,6 +331,11 @@ export class CodexAppServer implements CodexApp {
 
   running(id: string): boolean {
     return this.entityThreads.has(id)
+  }
+
+  liveOutput(id: string): LiveCommandOutput[] {
+    const threadId = this.entityThreads.get(id)
+    return threadId ? this.live.of(threadId) : []
   }
 
   holds(threadId: string): boolean {
@@ -720,7 +734,22 @@ export class CodexAppServer implements CodexApp {
     }
     if (method === 'item/started') {
       const item = object(params.item)
-      if (typeof params.threadId === 'string' && typeof item?.id === 'string') this.items.set(`${params.threadId}\n${item.id}`, item)
+      if (typeof params.threadId === 'string' && typeof item?.id === 'string') {
+        this.items.set(`${params.threadId}\n${item.id}`, item)
+        // 途中の出力をためるのは、SAI が回しているターンのコマンドだけ（#846）
+        if (item.type === 'commandExecution' && this.turns.has(params.threadId)) {
+          this.live.start(params.threadId, item.id, typeof item.command === 'string' ? item.command : '', new Date(this.now()).toISOString())
+        }
+      }
+      return
+    }
+    if (method === 'item/commandExecution/outputDelta') {
+      if (typeof params.threadId === 'string' && typeof params.itemId === 'string' && typeof params.delta === 'string') this.live.append(params.threadId, params.itemId, params.delta)
+      return
+    }
+    if (method === 'item/completed') {
+      const item = object(params.item)
+      if (typeof params.threadId === 'string' && typeof item?.id === 'string') this.live.end(params.threadId, item.id)
       return
     }
     if (method === 'serverRequest/resolved' && params.requestId !== undefined && (typeof params.requestId === 'string' || typeof params.requestId === 'number')) {
@@ -806,6 +835,7 @@ export class CodexAppServer implements CodexApp {
     this.fresh.clear()
     this.approvals.clear()
     this.items.clear()
+    this.live.clear()
     for (const entity of ended) this.turnEnded(entity)
   }
 
@@ -816,6 +846,7 @@ export class CodexAppServer implements CodexApp {
     this.turns.delete(threadId)
     for (const [approvalId, entry] of this.approvals) if (entry.threadId === threadId) this.approvals.delete(approvalId)
     for (const key of this.items.keys()) if (key.startsWith(`${threadId}\n`)) this.items.delete(key)
+    this.live.clearThread(threadId)
     // 片付けてから知らせる（知らせた先が running() を見て次の返信を起動する）
     if (turn) this.turnEnded(turn.entity)
   }

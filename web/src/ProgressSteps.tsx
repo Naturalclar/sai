@@ -1,11 +1,13 @@
 import { useState } from 'react'
 import { PROGRESS_LONG_STEP_MS, progressDuration, stepLabel, stepsSince } from '../../shared/progress.ts'
 import type { SessionProgressResponse } from './api'
+import { LiveOutput } from './LiveOutput'
 
 /**
  * 処理中のターンがいま何をしているか（#302）。「処理中 N分」の横に、いまの手順を 1 行（`Bash: pnpm test 42秒`）。
  * 押すと直近の手順が開く。since より前に始まった手順（前のターン）は出さない。手順が無ければ何も出さない。
  * now はポーリングの updatedAt（描画中に Date.now() を呼ばない。3 秒ごとに進めば十分）
+ * 走っている Codex のコマンドの途中の出力を開けるとき（`live_output`。#846）は、いまの手順の下に「途中の出力」を出す
  */
 export function ProgressSteps({ progress, since, now }: { progress: SessionProgressResponse | null; since: string; now: number }) {
   const [open, setOpen] = useState(false)
@@ -23,6 +25,7 @@ export function ProgressSteps({ progress, since, now }: { progress: SessionProgr
         <span className="label">{stepLabel(current)}</span>
         {running && now > 0 && <span className="dur">{progressDuration(current.started, now)}</span>}
       </button>
+      {running && progress.live_output && <LiveOutput id={progress.id} />}
       {open && (
         <ol className="steps">
           {earlier > 0 && <li className="more">ほか {earlier} 手順</li>}

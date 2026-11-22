@@ -4,6 +4,7 @@ import { countNote, rulesKey } from '../../shared/approvalCounts.ts'
 import { AlwaysRules } from './AlwaysRules'
 import { approvalAction, denyDecision, denyKey, denyPlaceOk, hotkeyAppliesAt, keyBlocked, REPLY_FOR_ATTR } from './approvalKeys'
 import { isTypingTarget } from './sessionNav'
+import { isMacPlatform } from './shortcuts'
 import { decisionClass } from './approvalDecisionClass'
 import { api, type Approval } from './api'
 import { AskQuestions } from './AskQuestions'
@@ -13,8 +14,8 @@ import { elapsedLabel, hm } from './format'
 import { AGENT_INITIAL, AGENT_LABEL } from './chatGroups.ts'
 import { Avatar } from './Avatar'
 
-/** 拒否のキーを OS で分ける（Mac は ⌘.、ほかは Ctrl+.）。iPad の Safari も Mac と名乗る */
-const MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform)
+/** 拒否のキーを OS で分ける（Mac は ⌘.、ほかは Ctrl+.）。判定はショートカットの一覧（#910）と同じ `isMacPlatform()` */
+const MAC = isMacPlatform(typeof navigator !== 'undefined' ? navigator : undefined)
 
 interface Props {
   approval: Approval

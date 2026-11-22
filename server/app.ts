@@ -209,6 +209,7 @@ import {
   usageRefusal,
 } from '../shared/agentMessages.ts'
 import { eventKind } from '../shared/events.ts'
+import { rowMakesBubble } from '../shared/chatBubbles.ts'
 import { contextRevKey } from '../shared/contextSize.ts'
 import { createAddWorktree } from './git/worktreeAdd.ts'
 import type { WorktreeAdder } from './git/worktreeAdd.ts'
@@ -5105,8 +5106,8 @@ export function createApp(
           notBefore: requestsFrom,
           replies: new Map(repliedAll.map((r) => [r.agent_reply?.message_id ?? '', { ts: r.ts, text: r.text, to: entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) }] as const)),
           followups: followed.map((f) => ({ to: f.to, anchor: f.anchor, reply: followedReplies.get(f.id) })),
-          // 画面が返答のバブルをまとめるのを切る、自分の行（チャットに出さない種類の行は除く）
-          selfTs: shown.filter((r) => eventKind(r.event, r.text) !== 'other').map((r) => r.ts),
+          // 画面が返答のバブルをまとめるのを切る、自分の行（バブルを立てる行だけ。`toUtterances()` と同じ線。窓で絞る前の行から）
+          selfTs: own.filter(rowMakesBubble).map((r) => r.ts),
         })
         const followups: AgentFollowupLine[] = followed
           .filter((f) => Date.parse(f.at) >= shownFrom)

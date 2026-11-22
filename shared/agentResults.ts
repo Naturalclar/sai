@@ -2,6 +2,7 @@
 // 確認は SAI の上の記録だけ（`result-checks.json`。CLI の許可・GitHub のレビューの承認・マージ・公開・頼み直しはしない）。
 // 確認は**その返答の行に**紐づける（鍵に行の `ts` を入れる）。直してもらった新しい返答は別の鍵なので、前の確認を引き継がない。
 // DOM にもプロセスにも触らない純粋関数（サーバが詳細の応答を作るときに呼ぶ。行は舐めない＝呼び出し側が 1 回で引いたものを渡す）
+import { localDate } from './entity.ts'
 import { isPrNumber, isRepoName } from './prs.ts'
 import type { AgentRequest, AgentRequestItem, AgentRequestResult, PrRef } from './types.ts'
 
@@ -64,19 +65,20 @@ interface TimelineRow {
 
 /**
  * `anchor` の行が、`ts` の行と同じ返答のバブルにまとまっているか（#903 のレビュー）。画面は同じ相手の返答が 10 分より短い間で続き、
- * 間にほかの行（送り元自身の行・別の相手の返答）が無ければ 1 つのバブルにまとめ、その下から送った返信の `anchor` は**バブルの最後の行**の `ts` にする
- * （`SessionView` の `sendAcross()`）。`timeline` は古い順
+ * 間にほかの行（送り元自身の行・別の相手の返答）が無く、日付が変わらなければ 1 つのバブルにまとめ、その下から送った返信の `anchor` は**バブルの最後の行**の `ts` にする
+ * （`SessionView` の `sendAcross()`）。`timeline` は古い順。日付は `Asia/Tokyo` で切る（画面はブラウザの時刻帯で切るので、別の時刻帯のブラウザから送った直しはずれうる）
  */
 export function sameBubble(timeline: readonly TimelineRow[], to: string, ts: string, anchor: string): boolean {
   const start = Date.parse(ts)
   const end = Date.parse(anchor)
   if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return false
   if (end === start) return true
+  const day = localDate(new Date(start).toISOString())
   let prev = start
   for (const r of timeline) {
     if (r.ms <= start) continue
     if (r.ms > end) break
-    if (r.to !== to || r.ms - prev >= BUBBLE_GAP_MS) return false
+    if (r.to !== to || r.ms - prev >= BUBBLE_GAP_MS || localDate(new Date(r.ms).toISOString()) !== day) return false
     prev = r.ms
   }
   return prev === end

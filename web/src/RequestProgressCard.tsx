@@ -49,7 +49,7 @@ export function RequestProgressCard({ id, request }: Props) {
                     PR #{p.number}
                   </a>
                 ))}
-                <ResultCheckButton id={id} to={item.to} result={item.result} />
+                <ResultCheckButton key={`check:${item.result.ts}`} id={id} to={item.to} result={item.result} />
               </span>
             )}
           </li>

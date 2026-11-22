@@ -101,4 +101,8 @@ test('sameBubble: 同じ相手の行が 10 分より短い間で続き、間に�
   assert.equal(sameBubble(tl([[0, 'B'], [5, 'B']]), 'B', at(5), at(0)), false, 'anchor が前')
   assert.equal(sameBubble(tl([[0, 'B'], [5, 'B']]), 'B', at(0), at(4)), false, 'anchor が行に当たらない')
   assert.equal(sameBubble(tl([]), 'B', at(0), at(0)), true)
+  // 日付（Asia/Tokyo）が変わると分かれる: 23:58 と 00:03（日本時間）
+  const jst = (h: number, m: number, d = 1) => ({ ms: Date.UTC(2026, 10, d, h - 9, m), to: 'B' })
+  const night = [jst(23, 58), jst(24, 3)]
+  assert.equal(sameBubble(night, 'B', new Date(night[0]!.ms).toISOString(), new Date(night[1]!.ms).toISOString()), false)
 })

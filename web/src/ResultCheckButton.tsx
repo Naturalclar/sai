@@ -13,20 +13,23 @@ interface Props {
 /**
  * 成果を「確認済み」にする・取り消す（#903）。**SAI の上の記録だけ**で、相手のセッション・CLI の許可・GitHub（承認・マージ）には何もしない。
  * 確認はこの返答の行に紐づく（直してもらった新しい返答には付かない）。押して通ったら、ボタンの語は次のポーリングを待たずに変える
- * （`done` は押したときの `checked_at` を覚え、ポーリングで `checked_at` が変われば props の方に戻る。effect は使わない）
+ * （`done` は押したときの成果の `ts` と `checked_at` を覚え、ポーリングでどちらかが変われば捨てて props の方に戻る。描画中に捨てる。effect は使わない）
  */
 export function ResultCheckButton({ id, to, result }: Props) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [done, setDone] = useState<{ was: string | undefined; checked: boolean } | null>(null)
-  const checked = done && done.was === result.checked_at ? done.checked : Boolean(result.checked_at)
+  const [done, setDone] = useState<{ ts: string; was: string | undefined; checked: boolean } | null>(null)
+  const fresh = done !== null && done.ts === result.ts && done.was === result.checked_at
+  // 一度でも props が追いついた（変わった）ら捨てる。あとで同じ値に戻っても、古い押した結果を出さない
+  if (done !== null && !fresh) setDone(null)
+  const checked = fresh ? done.checked : Boolean(result.checked_at)
   const toggle = async () => {
     setBusy(true)
     setError('')
     try {
-      const was = result.checked_at
-      await api.checkAgentResult(id, { to, ts: result.ts, checked: !checked })
-      setDone({ was, checked: !checked })
+      const { ts, checked_at: was } = result
+      await api.checkAgentResult(id, { to, ts, checked: !checked })
+      setDone({ ts, was, checked: !checked })
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {

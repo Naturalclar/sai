@@ -48,6 +48,8 @@ import { DefaultReplyModeContext } from './replyModeSetting'
 import { useSettings } from './useSettings'
 import { useCommandPalette } from './useCommandPalette'
 import { CommandPalette } from './CommandPalette'
+import { useShortcutHelp } from './useShortcutHelp'
+import { ShortcutHelp } from './ShortcutHelp'
 import { RECORD_VERSION } from '../../shared/types.ts'
 import { storedProjects } from '../../shared/projectFilter.ts'
 import { useSessionPrs } from './useSessionPrs'
@@ -486,6 +488,9 @@ export function App() {
   // ⌘K でフィードとセッションを名前で探して移動する（#197）。開いたときに絞り込み無しで取り直す
   const palette = useCommandPalette()
 
+  // `?` でキーボードショートカットの一覧を出す（#910。キーの一覧は shortcuts.ts）
+  const shortcutHelp = useShortcutHelp()
+
   // フィードは 2 か所で描く: ペインの 1 つ（`#/feed`）と、`#/` の全幅。`here` はフォーカスのあるペインか
   const feedView = (here: boolean) => (
     <FeedView
@@ -512,6 +517,7 @@ export function App() {
       {palette.open && (
         <CommandPalette sessions={palette.all ?? list.data?.sessions ?? EMPTY_SESSIONS} loading={palette.all === null} onClose={palette.close} onOpenBeside={narrow ? undefined : openBesideHash} />
       )}
+      {shortcutHelp.open && <ShortcutHelp onClose={shortcutHelp.close} />}
       <header>
         <button
           type="button"
@@ -541,6 +547,10 @@ export function App() {
             <GitHubMark />
           </a>
         )}
+        {/* キーボードを使わない人・携帯にも一覧の在りかが分かるように（#910） */}
+        <button type="button" className="shortcut-help-button" onClick={shortcutHelp.show} aria-keyshortcuts="?" aria-label="キーボードショートカット" title="キーボードショートカット (?)">
+          ?
+        </button>
         <UserMenu profile={list.data?.profile} viewer={list.data?.viewer ?? null} notify={notify} onOpen={refreshSettings}>
           {/* 使用量の画面（#602）。帯の使用量（UsageChip）は取れないと出ないので、ここからも開けるようにする */}
           <a className="menu-link" href="#/usage">使用量（トークンと費用）</a>

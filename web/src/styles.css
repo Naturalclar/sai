@@ -50,6 +50,9 @@
   .banner.auth .auth-login .note.err { color: var(--synth); }
   .banner.auth .auth-login > .linkish { margin-left: 0; }
   header .github:hover { color: var(--ink); text-decoration: none; }
+  /* キーボードショートカットの一覧を開くボタン（#910）。目立たせない */
+  header .shortcut-help-button { background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 50%; width: 22px; height: 22px; padding: 0; font-size: 12px; line-height: 1; cursor: pointer; flex: none; }
+  header .shortcut-help-button:hover { color: var(--ink); border-color: var(--muted); }
   header .sidebar-toggle { display: inline-flex; margin-left: -6px; padding: 4px; background: transparent; border: 0; border-radius: 6px; color: var(--muted); cursor: pointer; }
   header .sidebar-toggle:hover { background: var(--hover); color: var(--ink); }
   /* 右端の自分のアイコンとメニュー（UserMenu） */
@@ -983,6 +986,17 @@
   .modal-backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, .45); display: flex; align-items: center; justify-content: center; z-index: 20; }
   .modal { background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 10px; padding: 16px; box-shadow: 0 12px 40px rgba(0, 0, 0, .3); max-width: calc(100vw - 24px); outline: none; }
   .modal .title { font-weight: 700; margin-bottom: 10px; }
+  /* キーボードショートカットの一覧（#910） */
+  .shortcut-help { width: 640px; max-height: calc(100vh - 48px); overflow-y: auto; }
+  .shortcut-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px 20px; }
+  .shortcut-group h3 { font-size: 13px; margin: 0 0 6px; }
+  .shortcut-group h3 small { color: var(--muted); font-weight: 400; margin-left: 6px; }
+  .shortcut-group dl { margin: 0; }
+  .shortcut-row { display: flex; gap: 10px; align-items: baseline; padding: 3px 0; font-size: 13px; }
+  .shortcut-row dt { flex: none; min-width: 92px; display: flex; gap: 4px; flex-wrap: wrap; }
+  .shortcut-row dd { margin: 0; color: var(--muted); }
+  .shortcut-row kbd { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; background: var(--bg); color: var(--ink); }
+  .shortcut-help .actions { margin-top: 12px; text-align: right; }
   /* -- ⌘K の移動用モーダル（#197）。画面の上の方に出す（一覧が下に伸びるので中央だと落ち着かない） */
   .modal-backdrop:has(.modal.palette) { align-items: flex-start; padding-top: 12vh; }
   /* 今まで使ったアイコン画像（#465）。格子に並べ、隅にゴミ箱。いまのアイコンは枠で示す */

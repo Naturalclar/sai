@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { approvalAction, askEnterAction, denyDecision, denyKey, hotkeyApplies, hotkeyAppliesAt, optionIndex } from './approvalKeys.ts'
+import { approvalAction, askEnterAction, denyDecision, denyKey, denyPlaceOk, hotkeyApplies, hotkeyAppliesAt, keyBlocked, optionIndex } from './approvalKeys.ts'
 import { navAction } from './sessionNav.ts'
 import { paneKey } from './paneKeys.ts'
 import { blursOnEscape, leavesToSidebar } from './replyFocus.ts'
@@ -139,4 +139,18 @@ test('新しいキーは一覧・ペイン・入力欄のキーと当たらな�
     assert.equal(blursOnEscape(k, { menuOpen: false }), false)
     assert.equal(leavesToSidebar(k, { text: '', menuOpen: false }), false)
   }
+})
+
+test('keyBlocked: モーダル・隠れたバブル・ほかのバブルの中では受けない（#909 のレビュー）', () => {
+  const none = { modalOpen: false, hidden: false, inOtherBubble: false }
+  assert.equal(keyBlocked(none), false)
+  assert.equal(keyBlocked({ ...none, modalOpen: true }), true)
+  assert.equal(keyBlocked({ ...none, hidden: true }), true, '狭い画面の一覧の裏に隠れたペイン')
+  assert.equal(keyBlocked({ ...none, inOtherBubble: true }), true, '下の質問の「その他」の ⌘Enter')
+})
+
+test('denyPlaceOk: 拒否は入力欄の外か、そのセッションの返信欄だけ', () => {
+  assert.equal(denyPlaceOk(false, false), true, 'サイドバー・body')
+  assert.equal(denyPlaceOk(true, true), true, 'そのセッションの返信欄')
+  assert.equal(denyPlaceOk(true, false), false, '検索欄・ほかのバブルの記入欄・相手への入力欄')
 })

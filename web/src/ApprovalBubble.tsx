@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { answerAsk, askQuestions } from '../../shared/approvals.ts'
 import { countNote, rulesKey } from '../../shared/approvalCounts.ts'
 import { AlwaysRules } from './AlwaysRules'
-import { approvalAction, denyDecision, denyKey, hotkeyAppliesAt } from './approvalKeys'
+import { approvalAction, denyDecision, denyKey, denyPlaceOk, hotkeyAppliesAt, keyBlocked } from './approvalKeys'
+import { isTypingTarget } from './sessionNav'
 import { decisionClass } from './approvalDecisionClass'
 import { api, type Approval } from './api'
 import { AskQuestions } from './AskQuestions'
@@ -45,6 +46,8 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false, modeNote =
   const [busy, setBusy] = useState(false)
   const [done, setDone] = useState<'allow' | 'always' | 'deny' | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // このバブルの外枠。見えているか・ほかのバブルの中で押されたかをキーの判定で見る
+  const rootRef = useRef<HTMLDivElement>(null)
   const questions = approval.tool_name === 'AskUserQuestion' ? askQuestions(approval.input) : []
   const elapsed = elapsedLabel(approval.since, now)
   const agent = approval.agent ?? 'claude'
@@ -79,17 +82,28 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false, modeNote =
   const hasAlways = always !== null
   const live = answerable && hotkey && !busy && done === null && questions.length === 0
   const armed = agent === 'claude' && live
-  // 拒否のキーで押す候補（Codex の app-server・端末のダイアログ）。決められなければキーでは拒否しない
+  // 拒否のキーで押す候補（Codex の app-server）。決められなければキーでは拒否しない。
+  // 端末の Codex のダイアログ（`dialog` がある）には足さない（端末の経路に新しい機能を足さない。#843）
   const denyId = decisions.length > 0 ? denyDecision(decisions) : null
-  const denyArmed = live && (decisions.length > 0 ? denyId !== null : agent === 'claude')
+  const denyArmed = live && !approval.dialog && (decisions.length > 0 ? denyId !== null : agent === 'claude')
   useEffect(() => {
     if (!armed && !denyArmed) return
     const onKeyDown = (e: KeyboardEvent) => {
+      const target = e.target instanceof Element ? e.target : null
       const action = armed ? approvalAction(e, hasAlways) : null
-      const deny = denyArmed && denyKey(e)
+      // 拒否は入力欄の外か、このセッションの返信欄（返答の下の相手への入力欄は除く）で押したときだけ
+      const ownReply = target !== null && target.closest('.reply') !== null && target.closest('.reply-footer') === null
+      const deny = denyArmed && denyKey(e) && denyPlaceOk(isTypingTarget(target as HTMLElement | null), ownReply)
       if (!action && !deny) return
+      const root = rootRef.current
+      const blocked = keyBlocked({
+        modalOpen: document.querySelector('.modal-backdrop') !== null,
+        // display:none の祖先（隠れたペイン）の中なら offsetParent が null
+        hidden: root === null || root.offsetParent === null,
+        inOtherBubble: target !== null && target.closest('.group.approval') !== null && !root?.contains(target),
+      })
       // 別のセッションの返信欄・モーダルの中・フォーカスの無いペインの中で押されたものは受けない（#538・#633）
-      if (!hotkeyAppliesAt(e.target instanceof Element ? e.target : null, approval.id, document.querySelector('.modal-backdrop') !== null)) return
+      if (!hotkeyAppliesAt(target, approval.id, blocked)) return
       e.preventDefault()
       e.stopPropagation()
       if (deny) void send(denyId !== null ? { behavior: 'deny', decision: denyId } : { behavior: 'deny' })
@@ -101,7 +115,7 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false, modeNote =
 
   const detail = detailOf(approval)
   return (
-    <div className={`group approval${done ? ' done' : ''}`}>
+    <div className={`group approval${done ? ' done' : ''}`} ref={rootRef}>
       <Avatar kind={agent} icon={icon} mark={AGENT_INITIAL[agent] ?? 'C'} />
       <div>
         <div className="gh">

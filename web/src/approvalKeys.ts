@@ -105,14 +105,32 @@ interface PlaceLike {
 /**
  * 押された場所（`e.target`）で、許可・質問のキーを受けてよいか。`hotkeyApplies()` に渡す値を DOM から読む:
  * いちばん近い返信欄の印・モーダルの中か・フォーカスの無いペインの中か（#633）。
- * `modalOpen`（`.modal-backdrop` がある）なら、どこで押されても受けない（Safari はリンクを押してもフォーカスが移らず、
- * モーダルを開いたままの数字が裏の質問に届くため。ペインのキーと同じ扱い）
+ * `blocked`（`keyBlocked()` が true）なら、どこで押されても受けない
  */
-export function hotkeyAppliesAt(target: PlaceLike | null, approvalEntity: string, modalOpen = false): boolean {
-  if (modalOpen) return false
+export function hotkeyAppliesAt(target: PlaceLike | null, approvalEntity: string, blocked = false): boolean {
+  if (blocked) return false
   if (!target) return hotkeyApplies(null, approvalEntity)
   const owner = target.closest(`[${REPLY_FOR_ATTR}]`)
   const pane = target.closest('.pane')
   const elsewhere = target.closest('[role="dialog"]') !== null || (pane !== null && !pane.classList.contains('focused'))
   return hotkeyApplies(owner?.getAttribute(REPLY_FOR_ATTR) ?? null, approvalEntity, elsewhere)
+}
+
+/**
+ * 押した場所に関わらず、そのバブルがキーを受けないとき（#909 のレビュー）:
+ * - `modalOpen`: `.modal-backdrop` がある（Safari はリンクを押してもフォーカスが移らず、モーダルを開いたままの数字が裏に届く。ペインのキーと同じ扱い）
+ * - `hidden`: バブルが画面に出ていない（狭い画面の `#/` では、隠れたペインも `focused` のまま残る）
+ * - `inOtherBubble`: ほかの許可・質問のバブルの中で押された（下の質問の「その他」の ⌘Enter は、一番上のバブルのものではない）
+ */
+export function keyBlocked(p: { modalOpen: boolean; hidden: boolean; inOtherBubble: boolean }): boolean {
+  return p.modalOpen || p.hidden || p.inOtherBubble
+}
+
+/**
+ * 拒否のキー（`⌘.`）を受けてよい場所か（#909 のレビュー）。拒否は取り消せないので許可のキーより狭くする:
+ * 入力欄の外か、**そのバブルのセッションの返信欄**（`ownReply`）で押したときだけ。検索欄・ほかのバブルの記入欄・
+ * 返答の下の相手への入力欄（#700）では受けない
+ */
+export function denyPlaceOk(typing: boolean, ownReply: boolean): boolean {
+  return !typing || ownReply
 }

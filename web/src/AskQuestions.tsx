@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { answersReady, joinAnswer, questionKey, type AskQuestion } from '../../shared/approvals.ts'
-import { approvalAction, askEnterAction, hotkeyAppliesAt, optionIndex } from './approvalKeys'
+import { approvalAction, askEnterAction, hotkeyAppliesAt, keyBlocked, optionIndex } from './approvalKeys'
 import { isTypingTarget } from './sessionNav'
 
 interface Props {
@@ -92,7 +92,14 @@ export function AskQuestions({ questions, hotkey = false, entity = '', busy, don
       const typingElsewhere = typing && !inside
       const enter = index === null && !e.repeat && approvalAction(e, false) !== null ? askEnterAction(last, !!answers[key]!.trim(), answersReady(questions, answers), typingElsewhere) : null
       if (index === null && enter === null) return
-      if (!hotkeyAppliesAt(target, entity, document.querySelector('.modal-backdrop') !== null)) return
+      const root = rootRef.current
+      const blocked = keyBlocked({
+        modalOpen: document.querySelector('.modal-backdrop') !== null,
+        // display:none の祖先（隠れたペイン）の中なら offsetParent が null
+        hidden: root === null || root.offsetParent === null,
+        inOtherBubble: target !== null && target.closest('.group.approval') !== null && !root?.closest('.group.approval')?.contains(target),
+      })
+      if (!hotkeyAppliesAt(target, entity, blocked)) return
       e.preventDefault()
       e.stopPropagation()
       if (enter === 'next') setStep(step + 1)

@@ -92,6 +92,18 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 秘密に見えるパス（`isSecretPath()`）の編集は `withheld` にして中身を返さない。Claude は呼び出しの `file_path` でも見る（失敗した編集は戻りにパスが無く、エラーの文に編集しようとした文字列が入りうる）。コマンドの出力は中身で判定しない（`cat` で出したものは出る）。
 - 出す相手は `refuseDevice()`（返答のファイルと同じ）。断るのはセッションを引く前。
 
+### 走っている Codex のコマンドの途中の出力（#846 の 2 つ目）
+
+- ためるのは `server/reply/codexLiveOutput.ts` の `CodexLiveOutputs`（`CodexAppServer` が 1 つ持つ）。**メモリだけ**で、ファイルにもログにも書かない。
+  - `item/started` の `commandExecution` で始める。SAI が回しているターンのスレッド（`turns` にあるもの）だけ。
+  - `item/commandExecution/outputDelta` の `delta`（文字列）を足す。始まりを見ていない項目の分は捨てる。
+  - コマンドごとに末尾 `LIVE_OUTPUT_MAX_CHARS`（64K 字。仮に置いた値）まで。倍まで溜まったら切り、捨てた字数を `dropped` に数える。同時にためるのは 1 スレッド `LIVE_COMMANDS_MAX`（8）本まで。
+  - 捨てるのは `item/completed`（その項目）・`clearThread()`（ターンの終わり・`thread/closed`・`idle`）・切断（全部）。
+- 読むのは `CodexApp.liveOutput(id)`（エンティティ → `entityThreads` → スレッド）。
+- 口は `GET /api/sessions/<id>/turn-output?live=1`（`app.ts` の `getLiveOutput()`）。`refuseDevice()` は今の `turn-output` と同じ所で先に通す。Codex でない・別のマシン・`SAI_CODEX_APP_SERVER=0` なら app-server に聞かずに `found: false`。節は `shared/turnOutput.ts` の `liveSection()`（`plainOutput()` のあと末尾 `TURN_OUTPUT_TAIL` 字だけ。頭は出さない。`dropped` は `omitted` に足す）。
+- 処理中の手順（`getProgress()`）は、走っているコマンドがあれば `live_output: true` だけを足し、`rev` に `|live` を混ぜる。`steps` と `sai_progress` には何も足さない。
+- 画面は `web/src/LiveOutput.tsx`。`ProgressSteps` のいまの手順が走っているツールで `live_output` があるときだけ出す。押したときから `pollLoop()` で 2 秒ごと（隠れたタブでは取らない）、閉じる・手順が消えると止める。`pre` は下端に送り、人が上へ戻した欄は追わない。
+
 ## 画面
 
 - 処理中のセッションを出している間だけ `web/src/useProgress.ts` が 3 秒おきに取る（一覧のポーリングには乗せない）

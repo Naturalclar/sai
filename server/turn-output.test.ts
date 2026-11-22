@@ -19,7 +19,9 @@ import { ProgressReader } from './local/progress.ts'
 import { Approvals } from './approvals/approvals.ts'
 import { UsageStore } from './local/usage.ts'
 import { claudeProjectName } from '../shared/progress.ts'
-import type { TurnOutputResponse } from '../shared/types.ts'
+import type { SessionProgressResponse, TurnOutputResponse } from '../shared/types.ts'
+import type { CodexApp } from './reply/codexAppServer.ts'
+import type { LiveCommandOutput } from './reply/codexLiveOutput.ts'
 
 let dir: string
 let server: Server
@@ -31,6 +33,22 @@ const TAILNET = { 'Tailscale-User-Login': 'me@example.com', 'Tailscale-User-Name
 const TAGGED_ADDR = '100.64.0.7'
 const DOWN_ADDR = '100.64.0.8'
 const now = new Date()
+/** 偽の app-server が「いま走っている」と返すコマンドの途中の出力（#846）。テストごとに入れ替える */
+const LIVE = 'LIVE-作り物の途中の出力'
+let liveFor: Record<string, LiveCommandOutput[]> = {}
+const liveAsked: string[] = []
+const fakeCodex: CodexApp = {
+  running: () => false,
+  replying: () => ({}),
+  snapshot: () => ({}),
+  getApproval: () => undefined,
+  start: async () => {},
+  answer: () => ({ ok: false, status: 404, error: 'none' }) as ReturnType<CodexApp['answer']>,
+  liveOutput: (id) => {
+    liveAsked.push(id)
+    return liveFor[id] ?? []
+  },
+}
 const ago = (minutes: number) => new Date(now.getTime() - minutes * 60_000)
 const tsOf = (at: Date) => row(at, 'x').ts
 const j = (v: unknown) => JSON.stringify(v)
@@ -90,6 +108,7 @@ before(async () => {
     row(ago(26), 'R1', { ...c, host: 'far-away-machine', text: 'y' }),
     row(ago(26), 'X1', { repo: 'r', cwd: dir, agent: 'codex', session_source: 'rollout', text: '終わりました' }),
     row(ago(26), 'O1', { repo: 'r', cwd: dir, agent: 'opencode', text: '終わり' }),
+    row(ago(26), 'XR', { repo: 'r', cwd: dir, agent: 'codex', host: 'far-away-machine', text: '別のマシン' }),
   ]
   await writeFile(join(feedDir, `${localDate(now.toISOString())}.jsonl`), lines.map((l) => j(l)).join('\n') + '\n')
   const auth = new Authenticator(async (addr): Promise<WhoisInfo | null> => {
@@ -99,7 +118,7 @@ before(async () => {
   }, 30_000)
   const app = createApp(
     new FeedStore(feedDir), join(dir, 'dist'), undefined, new Approvals(), undefined, undefined, auth,
-    { tmux: { run: async () => '' }, ps: async () => '' }, undefined, undefined, undefined,
+    { tmux: { run: async () => '' }, ps: async () => '', codexApp: fakeCodex }, undefined, undefined, undefined,
     new UsageStore(join(dir, 'codex'), join(dir, 'projects'), feedDir),
     new ProgressReader(join(dir, 'projects'), join(dir, 'codex')),
   )
@@ -193,4 +212,72 @@ test('/mcp に出力を読む道具は無い。sai_progress の手順にも出�
   assert.equal(progress.body.includes('SECRET'), false)
   assert.equal(progress.body.includes('pnpm test'), true, '手順そのものは読めている（空振りのテストにしない）')
   assert.equal((await send(`/mcp/sessions/C1%40r/turn-output?ts=x&ref=toolu_bash`, headers)).status, 401)
+})
+
+// ---- 走っている Codex のコマンドの途中の出力（#846 の 2 つ目）。偽の app-server が返すものを、`?live=1` でだけ出す
+const liveUrl = (id: string) => `/api/sessions/${encodeURIComponent(id)}/turn-output?live=1&days=2`
+const running = (text: string, dropped = 0): LiveCommandOutput => ({ itemId: 'item-1', command: 'cargo test', started: ago(1).toISOString(), text, dropped })
+
+test('live: 走っているコマンドの途中の出力を、コマンドごとの節で末尾だけ返す。応答はキャッシュさせない', async () => {
+  liveFor = { 'X1@r': [running(`\u001b[32m${LIVE}\u001b[0m\n`, 10)] }
+  const res = await send(liveUrl('X1@r'))
+  const body = JSON.parse(res.body) as TurnOutputResponse
+  assert.deepEqual([res.status, body.found, body.live, body.ts, body.ref], [200, true, true, '', ''])
+  assert.deepEqual(body.sections, [{ label: 'cargo test', kind: 'output', text: '', tail: `${LIVE}\n`, omitted: 10 }])
+  assert.equal(res.headers['cache-control'], 'no-store')
+  liveFor = {}
+})
+
+test('live: 走っていない・Codex でない・別のマシンは found: false。Codex でないセッションのためには app-server に聞かない', async () => {
+  liveFor = { 'C1@r': [running(LIVE)], 'XR@r': [running(LIVE)], 'O1@r': [running(LIVE)] }
+  liveAsked.length = 0
+  for (const id of ['X1@r', 'C1@r', 'XR@r', 'O1@r']) {
+    const res = await send(liveUrl(id))
+    const body = JSON.parse(res.body) as TurnOutputResponse
+    assert.deepEqual([res.status, body.found, body.sections, body.live], [200, false, [], true], id)
+    assert.equal(res.body.includes('LIVE'), false, id)
+  }
+  assert.deepEqual(liveAsked, ['X1@r'])
+  assert.equal((await send(liveUrl('nope@r'))).status, 404)
+  assert.equal((await send(liveUrl('X1@r'), {}, 'POST')).status, 405)
+  liveFor = {}
+})
+
+test('live: 処理中の手順には「開ける」印だけを載せ、中身は載せない。sai_progress にも載らない', async () => {
+  const progress = async () => {
+    const res = await send('/api/sessions/X1%40r/progress?days=2')
+    return { raw: res.body, body: JSON.parse(res.body) as SessionProgressResponse }
+  }
+  const idle = await progress()
+  assert.equal(idle.body.live_output, undefined, '走っていなければ印は無い')
+  liveFor = { 'X1@r': [running(LIVE)] }
+  const live = await progress()
+  assert.equal(live.body.live_output, true)
+  assert.notEqual(live.body.rev, idle.body.rev, '印だけ変わっても描き直す')
+  assert.equal(live.raw.includes('LIVE'), false)
+  const headers = { 'X-Forwarded-For': TAGGED_ADDR, 'X-Forwarded-Proto': 'https', Host: SERVE_HOST, 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' }
+  const mcp = await send('/mcp', headers, 'POST', j({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'sai_progress', arguments: { id: 'X1@r' } } }))
+  assert.equal(mcp.status, 200, mcp.body)
+  assert.equal(mcp.body.includes('LIVE'), false)
+  liveFor = {}
+})
+
+test('live: 出す相手は返答のファイルと同じ。本人の tailnet には出し、タグ付き・whois が聞けない・Host が違う要求には出さない', async () => {
+  liveFor = { 'X1@r': [running(LIVE)] }
+  const far = await send(liveUrl('X1@r'), TAILNET)
+  assert.equal(far.status, 200)
+  assert.equal(far.body.includes(LIVE), true)
+  for (const [name, headers, status] of [
+    ['タグ付き（capability があっても）', { 'X-Forwarded-For': TAGGED_ADDR, 'X-Forwarded-Proto': 'https', Host: SERVE_HOST }, 401],
+    ['whois が聞けなかった', { ...TAILNET, 'X-Forwarded-For': DOWN_ADDR }, 401],
+    ['Serve の名前でない Host', { ...TAILNET, Host: 'evil.example.com' }, 403],
+  ] as const) {
+    const res = await send(liveUrl('X1@r'), headers)
+    assert.equal(res.status, status, name)
+    assert.equal(res.body.includes('LIVE'), false, name)
+    const other = await send(liveUrl('nope@r'), headers)
+    assert.deepEqual([other.status, other.body], [res.status, res.body], `${name}: セッションの有無を漏らさない`)
+  }
+  assert.equal((await send('/mcp/sessions/X1%40r/turn-output?live=1', { 'X-Forwarded-For': TAGGED_ADDR, 'X-Forwarded-Proto': 'https', Host: SERVE_HOST })).status, 401)
+  liveFor = {}
 })

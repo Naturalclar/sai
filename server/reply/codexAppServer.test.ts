@@ -738,3 +738,55 @@ test('rateLimitsSeen: account/rateLimits/updated の通知を覚える。Codex �
   assert.equal(app.rateLimitsSeen()?.primary.used_percent, 12)
   assert.ok(!connection.sent.some((m) => m.method === 'account/rateLimits/read'), '通知を受けるだけでは聞きに行かない')
 })
+
+// ---- 走っているコマンドの途中の出力（#846 の 2 つ目）。通知は作り物
+const cmdStarted = (itemId: string, threadId = 'thread-1', command = 'pnpm test') => ({ method: 'item/started', params: { threadId, turnId: 'turn-1', item: { type: 'commandExecution', id: itemId, command, status: 'inProgress', aggregatedOutput: null } } })
+const cmdDelta = (itemId: string, delta: string, threadId = 'thread-1') => ({ method: 'item/commandExecution/outputDelta', params: { threadId, turnId: 'turn-1', itemId, delta } })
+const cmdDone = (itemId: string, threadId = 'thread-1') => ({ method: 'item/completed', params: { threadId, turnId: 'turn-1', item: { type: 'commandExecution', id: itemId, command: 'pnpm test', status: 'completed', aggregatedOutput: '全部' } } })
+
+test('liveOutput: SAI が回しているターンのコマンドの outputDelta をためて、項目が終わったら捨てる（#846）', async () => {
+  const { app, connection } = await started()
+  assert.deepEqual(app.liveOutput('thread-1@repo'), [], '走っていなければ空')
+  connection.emit(cmdStarted('item-a'))
+  connection.emit(cmdDelta('item-a', 'ok 1\n'))
+  connection.emit(cmdDelta('item-a', 'ok 2\n'))
+  assert.deepEqual(app.liveOutput('thread-1@repo'), [{ itemId: 'item-a', command: 'pnpm test', started: '2026-09-09T12:00:00.000Z', text: 'ok 1\nok 2\n', dropped: 0 }])
+  // 始まりを見ていない項目・ファイル変更の項目・ほかのスレッドの分はためない
+  connection.emit(cmdDelta('item-x', '知らない項目'))
+  connection.emit({ method: 'item/started', params: { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'fileChange', id: 'item-f', changes: [] } } })
+  connection.emit(cmdDelta('item-f', 'ファイル変更'))
+  connection.emit(cmdStarted('item-o', 'other'))
+  connection.emit(cmdDelta('item-o', 'ほかのスレッド', 'other'))
+  assert.deepEqual(app.liveOutput('thread-1@repo').map((c) => c.itemId), ['item-a'])
+  assert.deepEqual(app.liveOutput('other@repo'), [])
+  connection.emit(cmdDone('item-a'))
+  assert.deepEqual(app.liveOutput('thread-1@repo'), [], '終わった項目は捨てる（終わった出力は rollout から読む）')
+})
+
+test('liveOutput: ターンの終わり・スレッドが閉じた・切断で、そのスレッドの分を全部捨てる（#846）', async () => {
+  const { app, connection } = await started()
+  connection.emit(cmdStarted('item-a'))
+  connection.emit(cmdDelta('item-a', 'x'))
+  connection.emit({ method: 'turn/completed', params: { threadId: 'thread-1', turn: { id: 'turn-1', status: 'completed' } } })
+  assert.deepEqual(app.liveOutput('thread-1@repo'), [])
+  // 終わったあとに遅れて届いた分もためない（もう SAI のターンではない）
+  connection.emit(cmdStarted('item-b'))
+  connection.emit(cmdDelta('item-b', 'y'))
+  assert.deepEqual(app.liveOutput('thread-1@repo'), [])
+
+  await app.start({ id: 'thread-1@repo', threadId: 'thread-1', text: '再開', cwd: '/repo' })
+  connection.emit(cmdStarted('item-c'))
+  connection.emit(cmdDelta('item-c', 'z'))
+  assert.equal(app.liveOutput('thread-1@repo').length, 1)
+  connection.emit({ method: 'thread/closed', params: { threadId: 'thread-1' } })
+  assert.deepEqual(app.liveOutput('thread-1@repo'), [])
+
+  await app.start({ id: 'thread-1@repo', threadId: 'thread-1', text: 'もう一度', cwd: '/repo' })
+  connection.emit(cmdStarted('item-d'))
+  connection.emit(cmdDelta('item-d', 'w'))
+  connection.disconnect()
+  assert.deepEqual(app.liveOutput('thread-1@repo'), [])
+  // 繋ぎ直して同じスレッドで次のターンを始めても、切れる前の分は出てこない（メモリに残さない）
+  await app.start({ id: 'thread-1@repo', threadId: 'thread-1', text: '繋ぎ直し', cwd: '/repo' })
+  assert.deepEqual(app.liveOutput('thread-1@repo'), [])
+})

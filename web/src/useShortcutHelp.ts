@@ -14,14 +14,14 @@ export function useShortcutHelp() {
     const onKeyDown = (e: KeyboardEvent) => {
       // 開いているパネル自身（.shortcut-help）は「ほかのモーダル」に数えない
       const modal = document.querySelector('.modal-backdrop:not(.shortcut-help-backdrop)') !== null
-      const action = helpAction(e, { typing: isTypingTarget(e.target as HTMLElement | null), open, modal })
+      const typing = isTypingTarget(e.target as HTMLElement | null)
+      const action = helpAction(e, { typing, open, modal })
       if (!action) {
         // 開いている間は、後ろの一覧の移動（↑↓ / j k / →）も止める。App のその keydown はモーダルを見ないので、
-        // 止めないとパネルの後ろでセッションが変わり、→ で後ろの入力欄にフォーカスが移る（#911 のレビュー）
-        if (open && navAction(e)) {
-          e.preventDefault()
-          e.stopPropagation()
-        }
+        // 止めないとパネルの後ろでセッションが変わり、→ で後ろの入力欄にフォーカスが移る（#911 のレビュー）。
+        // 止めるのは App へ届くことだけで、preventDefault はしない（↑↓ でパネルの中を送れるように）。
+        // 入力欄（上に開いた ⌘K の検索など）のキーは App も捨てるので、そのまま通す
+        if (open && !typing && navAction(e)) e.stopPropagation()
         return
       }
       e.preventDefault()

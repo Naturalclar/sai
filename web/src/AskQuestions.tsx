@@ -45,6 +45,8 @@ export function AskQuestions({ questions, hotkey = false, entity = '', busy, don
   const [picks, setPicks] = useState<Record<string, Pick>>({})
   // 「その他」を開いたら記入欄へ当てる（押したとき・キーで選んだときだけ。「戻る」で記入欄が描き直されたときは当てない）
   const otherRef = useRef<HTMLInputElement>(null)
+  // このバブルの外枠。「その他」の記入欄の ⌘Enter・数字を、ほかの質問のバブルのものと取り違えないため
+  const rootRef = useRef<HTMLDivElement>(null)
 
   // 問いが無いときは何も描かない（下の return の手前）。フックを早い return より前に置くため、ここでは空の問いで埋める
   const q = questions[Math.min(step, questions.length - 1)] ?? NO_QUESTION
@@ -81,9 +83,13 @@ export function AskQuestions({ questions, hotkey = false, entity = '', busy, don
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target instanceof Element ? e.target : null
       const typing = isTypingTarget(target as HTMLElement | null)
-      const index = optionIndex(e, q.options.length + (q.other ? 1 : 0), typing)
-      // 質問の外の入力欄（返信欄）の ⌘Enter は取らない。「その他」の記入欄の中なら取る
-      const typingElsewhere = typing && target?.closest('.questions') == null
+      const inside = target !== null && rootRef.current?.contains(target) === true
+      // 数字を受けるのは、どこにもフォーカスが無い・サイドバー（Esc で外したあと）・このバブルの中だけ。
+      // ほかの行のボタンやメニューにフォーカスがあるときの数字は、裏の質問に使わない
+      const digitPlace = target === null || target === document.body || inside || target.closest('.channels') !== null
+      const index = optionIndex(e, q.options.length + (q.other ? 1 : 0), typing || !digitPlace)
+      // 質問の外の入力欄（返信欄・ほかの質問の記入欄）の ⌘Enter は取らない。このバブルの「その他」の記入欄の中なら取る
+      const typingElsewhere = typing && !inside
       const enter = index === null && !e.repeat && approvalAction(e, false) !== null ? askEnterAction(last, !!answers[key]!.trim(), answersReady(questions, answers), typingElsewhere) : null
       if (index === null && enter === null) return
       if (!hotkeyAppliesAt(target, entity, document.querySelector('.modal-backdrop') !== null)) return
@@ -104,7 +110,7 @@ export function AskQuestions({ questions, hotkey = false, entity = '', busy, don
 
   if (q === NO_QUESTION) return null
   return (
-    <div className="questions">
+    <div className="questions" ref={rootRef}>
       <div className="question">
         <div className="q">
           {questions.length > 1 && <span className="step">{step + 1} / {questions.length}</span>}

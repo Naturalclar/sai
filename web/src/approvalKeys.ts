@@ -75,7 +75,8 @@ export function denyDecision(decisions: readonly { id: string; label: string; be
 /**
  * 質問（AskUserQuestion）の選択肢を数字で選ぶ（#909）。`1`〜`9` で、いまの問いの何番目か（0 始まり）を返す。
  * `count` は押せるものの数（選択肢に「その他」があればその分も足す）。範囲の外・修飾キー付き・IME 変換中は null。
- * **入力欄で打っている間（`typing`）は何もしない**（数字は文字のまま。「その他」の記入欄も入力欄）
+ * **入力欄で打っている間（`typing`）は何もしない**（数字は文字のまま。「その他」の記入欄も入力欄）。呼び出し側は、
+ * ほかの行のボタン・メニューにフォーカスがあるときも `typing` に含めて渡す（`AskQuestions`）
  */
 export function optionIndex(e: KeyLike, count: number, typing: boolean): number | null {
   if (typing || e.repeat || e.isComposing || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return null

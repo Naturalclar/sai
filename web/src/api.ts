@@ -1,5 +1,7 @@
 // serve 側の実装は server/。型は shared/types.ts に1つだけ置いて両方から import する
 import type {
+  AgentCheckRequest,
+  AgentCheckResponse,
   ApprovalAnswer,
   AttachmentResponse,
   FeedFilters,
@@ -217,6 +219,8 @@ export const api = {
   interrupt: (id: string) => sendJSON<ReplyQueueResponse>('POST', `/api/sessions/${encodeURIComponent(id)}/interrupt`, {}),
   /** そのセッションが別のセッションへ送るのを止める（#311）。預かりに並んでいたそのセッションからの分も取り消す */
   stopAgent: (id: string) => sendJSON<AgentStopResponse>('POST', `/api/sessions/${encodeURIComponent(id)}/agent/stop`, {}),
+  /** 別のセッションの成果を確認済みにする・取り消す（#903）。SAI の上の記録だけ（相手・GitHub には何もしない） */
+  checkAgentResult: (id: string, body: AgentCheckRequest) => sendJSON<AgentCheckResponse>('PUT', `/api/sessions/${encodeURIComponent(id)}/agent/check`, body),
   /** 止めた送信を再開する */
   resumeAgent: (id: string) => sendJSON<AgentStopResponse>('POST', `/api/sessions/${encodeURIComponent(id)}/agent/resume`, {}),
   /** ループを組む（#634）。目的と終わりの条件は必須で、上限は省略すると既定値 */

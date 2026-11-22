@@ -7,6 +7,8 @@ import { join } from 'node:path'
 import { AGENT_SEND_MAX, AGENT_TEXT_MAX_CHARS, AGENT_TURN_READ_BUDGET, AGENT_BACKLOG_ROUND_MS, AGENT_REQUEST_MAX, requestRefusal, agentEntry, agentOverlap, acrossEntry, acrossLabel, acrossNames, targetNames, isAcross, deliveredId, deliveryMatcher, HANDED_KEEP_DAYS, splitHandedReplies, replierName, agentTargets, budgetRefusal, clipReply, deliveredText, isDeliveryOf, replyOf, resolveTarget, targetRefusal, sessionLabel, tokensLabel, usageRefusal } from '../../shared/agentMessages.ts'
 import type { PendingReply } from '../../shared/agentMessages.ts'
 import { agentRequests } from '../../shared/agentRequests.ts'
+import { attachResults, checkKey } from '../../shared/agentResults.ts'
+import type { ResultFollowup, ResultRow } from '../../shared/agentResults.ts'
 import { agentWaitCount, agentWaitShown, answeredIds } from '../../shared/agentWaiting.ts'
 import { idleMsSince, messageCompacts, startsNewWork } from '../../shared/compact.ts'
 import { CONTEXT_WARN_TOKENS } from '../../shared/contextSize.ts'
@@ -14,7 +16,7 @@ import { grownRefusal, grownSinceSeen, holdingOf, prOfBranch, startRefusal } fro
 import { isRemoteHost } from '../../shared/host.ts'
 import { githubRepoOf, knownRepos, pickKnownRepo } from '../../shared/prs.ts'
 import { replyFailureText } from '../../shared/reply.ts'
-import type { AgentActivity, AgentWaitingMap, ReplyQueueMap, AgentHeldMessage, PrSummary, HoldingWhy, SessionHolding, AgentSendManyResponse, AgentSendResult, AgentActivityMessage, AgentStopResponse, AgentSendRequest, AgentSendResponse, AgentSessionsResponse, AgentWaitResponse, ReplyError, ReplyingMap, ReplyResponse, SessionSummary } from '../../shared/types.ts'
+import type { AgentActivity, AgentCheckResponse, AgentWaitingMap, ReplyQueueMap, AgentHeldMessage, PrSummary, HoldingWhy, SessionHolding, AgentSendManyResponse, AgentSendResult, AgentActivityMessage, AgentStopResponse, AgentSendRequest, AgentSendResponse, AgentSessionsResponse, AgentWaitResponse, ReplyError, ReplyingMap, ReplyResponse, SessionSummary } from '../../shared/types.ts'
 import { isWaitPrompt } from '../../shared/waits.ts'
 import { AGENT_POLL_MS, HOLDING_PR_STALE_MS, MAX_REPLY_BYTES, QUEUE_DAYS } from '../appContext.ts'
 import type { AppContext } from '../appContext.ts'
@@ -32,6 +34,7 @@ import { createAfterTurns } from './agentAfter.ts'
 import { AGENT_MESSAGES_KEEP, AGENT_RECENT, AGENT_TOKEN_HEADER, tokenMatches } from './agentMessages.ts'
 import type { AgentMessage } from './agentMessages.ts'
 import { daemonOccupied } from './codexDaemon.ts'
+import type { ResultChecks } from './resultChecks.ts'
 import type { CodexDaemonWatch, DaemonThreadState } from './codexDaemon.ts'
 
 /** 送ったメッセージが生きていない（相手の預かりにも回っているターンにも無い）まま返答が来なければ、これで失敗に決める（#823。返答の行の遅れを待つ） */
@@ -72,12 +75,14 @@ export type AgentRoutesContext = Pick<
   scanDigest: (days: number) => Promise<void>
   digestOffIds: () => Promise<Set<string>>
   digest: Digester
+  /** 成果の確認の記録（#903。`result-checks.json`） */
+  resultChecks: ResultChecks
 }
 
 export function createAgentRoutes(ctx: AgentRoutesContext) {
   const { store, run, launching, typed, queue, agents, prs, progress, codexApp, opencodeApp, usageStore, settingsStore, seenContext, loopNow } = ctx
   const { launch, sessionsWithMeta, rowsNow, json, error, readJson, isCrossOrigin, selfUrl } = ctx
-  const { agentToken, git, claudeAgents, codexDaemon, noteDaemonGap, backgroundHold, waitedAt, scanDigest, digestOffIds, digest } = ctx
+  const { agentToken, git, claudeAgents, codexDaemon, noteDaemonGap, backgroundHold, waitedAt, scanDigest, digestOffIds, digest, resultChecks } = ctx
 
   /**
    * エージェント用の口（`/api/agent/*`）に通してよいか。通さないなら理由。
@@ -840,9 +845,15 @@ export function createAgentRoutes(ctx: AgentRoutesContext) {
    * そのセッション（送り元）から別のセッションへのメッセージのようす（#311）。送ったことが無く止めてもいなければ undefined。
    * 往復数と読み直させた量は**いま回しているターン**のもの（回していなければ 0）。直近の送り先は状態も付ける。
    * `requests` を渡したとき（詳細の応答）だけ、依頼ごとの進み具合（#902）も付ける。返答の行の `ts`（`replyTs`）と、それより前に
-   * 始まったターンを載せない線（`notBefore`。`requestsWindowStart()`＝描いていないターン完了の行の一番新しい時刻）は呼び出し側が渡す（返答の行は詳細の応答が 1 回で引いたものを使う）
+   * 始まったターンを載せない線（`notBefore`。`requestsWindowStart()`＝描いていないターン完了の行の一番新しい時刻）は呼び出し側が渡す（返答の行は詳細の応答が 1 回で引いたものを使う）。
+   * 確かめる成果（#903）は、返答の行の本文（`replies`）と返答のバブルの下からの返信（`followups`。#700）を渡したときだけ付ける。
+   * `selfTs` はこの画面に並ぶ自分の行の時刻（返答のバブルのまとまりを切る。`sameBubble()`）
    */
-  const agentActivityOf = async (id: string, sessions: SessionSummary[], requests?: { replyTs: ReadonlyMap<string, string>; notBefore: number }): Promise<AgentActivity | undefined> => {
+  const agentActivityOf = async (
+    id: string,
+    sessions: SessionSummary[],
+    requests?: { replyTs: ReadonlyMap<string, string>; notBefore: number; replies?: ReadonlyMap<string, ResultRow>; followups?: readonly ResultFollowup[]; selfTs?: readonly string[] },
+  ): Promise<AgentActivity | undefined> => {
     if (!agents.hasActivity(id)) return undefined
     const current = run.snapshot()[id]
     const turn = current && !current.failed && run.running(id) ? current.since : ''
@@ -874,6 +885,12 @@ export function createAgentRoutes(ctx: AgentRoutesContext) {
           return target ? sessionLabel(target) : to
         }, requests.replyTs, requests.notBefore)
       : undefined
+    // 確かめる成果（#903）。確認の記録は (mtime, size) で覚えているので、ポーリングのたびに読み直さない
+    const checks = requestList && requestList.length > 0 && requests?.replies ? await resultChecks.all() : undefined
+    const withResults =
+      requestList && checks && requests?.replies
+        ? attachResults(requestList, id, requests.replies, requests.followups ?? [], (key) => checks.get(key), (to) => githubRepoOf(byId.get(to)?.remote), requests.selfTs)
+        : requestList
     return {
       stopped: agents.isStopped(id),
       sent: turn ? agents.sentInTurn(id, turn) : 0,
@@ -882,7 +899,7 @@ export function createAgentRoutes(ctx: AgentRoutesContext) {
       read_budget: AGENT_TURN_READ_BUDGET,
       recent,
       ...(held.length > 0 ? { held } : {}),
-      ...(requestList && requestList.length > 0 ? { requests: requestList } : {}),
+      ...(withResults && withResults.length > 0 ? { requests: withResults } : {}),
     }
   }
 
@@ -909,5 +926,29 @@ export function createAgentRoutes(ctx: AgentRoutesContext) {
     return json(res, payload)
   }
 
-  return { agentRefusal, agentFrom, holdingsOf, startAskRefusal, messageCompactOf, agentSessions, agentSend, drainBacklog, scheduleBacklog, pendingRepliesOf, afterOf, agentResult, agentWaitingOf, agentWait, agentActivityOf, agentStop }
+  /**
+   * `PUT /api/sessions/<id>/agent/check`（#903）。人が画面から、別のセッションの成果を「確認済み」にする・取り消す。**同一オリジンのみ**。
+   * 書くのは SAI の上の記録（`result-checks.json`）だけで、相手のセッション・CLI の許可・GitHub（承認・マージ）には何もしない。
+   * 受けるのは、このセッションが送ったことのある相手と、時刻として読める `ts` だけ（パス・cwd は受けない）
+   */
+  const agentCheck = async (req: IncomingMessage, res: ServerResponse, id: string) => {
+    if (isCrossOrigin(req)) return error(res, 403, 'cross-origin request rejected')
+    let body: unknown
+    try {
+      body = await readJson(req, 4096)
+    } catch (err) {
+      return error(res, 400, err instanceof Error ? err.message : 'bad body')
+    }
+    if (!body || typeof body !== 'object') return error(res, 400, 'bad json')
+    const { to, ts, checked } = body as { to?: unknown; ts?: unknown; checked?: unknown }
+    if (typeof to !== 'string' || !to || to.length > 400 || to.includes('\n')) return error(res, 400, 'bad to')
+    if (typeof ts !== 'string' || ts.length > 64 || !Number.isFinite(Date.parse(ts))) return error(res, 400, 'bad ts')
+    if (typeof checked !== 'boolean') return error(res, 400, 'bad checked')
+    if (!agents.sentBy(id, Infinity).some((m) => m.to === to)) return error(res, 404, 'no message to that session')
+    const at = await resultChecks.set(checkKey(id, to, ts), checked)
+    const payload: AgentCheckResponse = at ? { checked_at: at } : {}
+    return json(res, payload)
+  }
+
+  return { agentRefusal, agentFrom, holdingsOf, startAskRefusal, messageCompactOf, agentSessions, agentSend, drainBacklog, scheduleBacklog, pendingRepliesOf, afterOf, agentResult, agentWaitingOf, agentWait, agentActivityOf, agentStop, agentCheck }
 }

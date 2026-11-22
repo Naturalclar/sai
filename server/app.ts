@@ -183,6 +183,7 @@ import { withAfterTurns } from '../shared/agentAfter.ts'
 import { agentRequestsKey, requestsFloor, requestsWindowStart } from '../shared/agentRequests.ts'
 import { LOOP_TICK_MS, LOOPS_FILE, LoopStore } from './reply/loops.ts'
 import { createAgentRoutes } from './reply/agentRoutes.ts'
+import { RESULT_CHECKS_FILE, ResultChecks } from './reply/resultChecks.ts'
 import { createLoopRoutes, LOOP_SUFFIXES } from './reply/loopRoutes.ts'
 import { createWaitRoutes, WAIT_SUFFIXES } from './reply/waitRoutes.ts'
 import { AGENT_POLL_MS, MAX_REPLY_BYTES, QUEUE_DAYS } from './appContext.ts'
@@ -208,6 +209,7 @@ import {
   usageRefusal,
 } from '../shared/agentMessages.ts'
 import { eventKind } from '../shared/events.ts'
+import { rowMakesBubble } from '../shared/chatBubbles.ts'
 import { contextRevKey } from '../shared/contextSize.ts'
 import { createAddWorktree } from './git/worktreeAdd.ts'
 import type { WorktreeAdder } from './git/worktreeAdd.ts'
@@ -368,6 +370,8 @@ const INTERRUPT_PAUSE = '前のターンを止めたので、預かった返信�
 /** 人が画面から送信を止める・再開する口（#311）。`POST /api/sessions/<id>/agent/stop`・`.../agent/resume`。同一オリジンのみ */
 const AGENT_STOP_SUFFIX = '/agent/stop'
 const AGENT_RESUME_SUFFIX = '/agent/resume'
+/** 人が画面から、別のセッションの成果を確認済みにする・取り消す口（#903）。`PUT /api/sessions/<id>/agent/check`。同一オリジンのみ */
+const AGENT_CHECK_SUFFIX = '/agent/check'
 /** 配る側。GET /api/attachments/<dir>/<name> */
 const ATTACHMENTS_PREFIX = `/api/${ATTACHMENTS_DIR}/`
 const PROFILE_PATH = '/api/profile'
@@ -1003,6 +1007,8 @@ export function createApp(
   const metaStore = new MetaStore(join(store.directory, META_FILE))
   // 未読の印（#502）。立て直しても消えないようにファイルに持つ
   const readStore = new ReadStore(join(store.directory, READ_MARKS_FILE))
+  // 成果の確認の記録（#903）。SAI の上の記録だけ
+  const resultChecks = new ResultChecks(join(store.directory, RESULT_CHECKS_FILE))
   // Manager が入力欄に置いた案（#565）。1 セッションに 1 つ
   const suggestionStore = new SuggestionStore(join(store.directory, SUGGESTIONS_FILE))
   const startDrafts = new StartDraftStore(join(store.directory, START_DRAFTS_FILE))
@@ -3594,7 +3600,7 @@ export function createApp(
    * （忘れたら量の差では断らない）。別のリポジトリの相手の量は一覧に出していないので、覚えない
    */
   const seenContext = new Map<string, Map<string, number>>()
-  const { agentRefusal, agentFrom, holdingsOf, startAskRefusal, messageCompactOf, agentSessions, agentSend, drainBacklog, scheduleBacklog, pendingRepliesOf, afterOf, agentResult, agentWaitingOf, agentWait, agentActivityOf, agentStop } = createAgentRoutes({
+  const { agentRefusal, agentFrom, holdingsOf, startAskRefusal, messageCompactOf, agentSessions, agentSend, drainBacklog, scheduleBacklog, pendingRepliesOf, afterOf, agentResult, agentWaitingOf, agentWait, agentActivityOf, agentStop, agentCheck } = createAgentRoutes({
     store,
     run,
     launching,
@@ -3627,6 +3633,7 @@ export function createApp(
     scanDigest,
     digestOffIds,
     digest,
+    resultChecks,
   })
   // 前のサーバが残した預かりを、画面が開かれなくても送り始める（立て直したあとに忘れない）
   for (const from of agents.heldFroms()) scheduleBacklog(from, BACKLOG_STARTUP_MS)
@@ -4347,6 +4354,7 @@ export function createApp(
     const isAgent = path.startsWith(AGENT_PREFIX)
     // 人が画面から送信を止める・再開する口（#311）。画面から叩くので、エージェント用の口とは別に同一オリジンで受ける
     const isAgentStop = path.startsWith(SESSIONS_PREFIX) && (path.endsWith(AGENT_STOP_SUFFIX) || path.endsWith(AGENT_RESUME_SUFFIX))
+    const isAgentCheck = path.startsWith(SESSIONS_PREFIX) && path.endsWith(AGENT_CHECK_SUFFIX)
     // 処理中のターンを止める（#384）。画面から叩くので同一オリジンで受ける
     const isInterrupt = path.startsWith(SESSIONS_PREFIX) && path.endsWith(INTERRUPT_SUFFIX)
     // Codex を起こす前の確かめへの人の答え（#856）。画面から叩くので同一オリジンで受ける
@@ -4386,12 +4394,12 @@ export function createApp(
     // タグ付きの端末（ユーザーがいない）は画面・REST を使えない。capability を与えた /mcp だけ
     if (who.kind === 'tagged') return error(res, 401, 'unauthorized: タグ付きの端末から使えるのは /mcp だけです')
     // 書き込みは「返信と新しいセッションと新しい worktree（#847）と PR のレビューの投稿（#526）は POST」「表示名は PUT」「アイコンは PUT / DELETE」「承認の預かりと答えは POST」「Manager の案を捨てる・入れた（#565）は POST」「自分の表示名は PUT、アイコンは PUT / DELETE」
-    // 「設定は PUT」「預かった返信の再開は POST、取り消しは DELETE」だけ。それ以外は GET / HEAD のみ
+    // 「設定は PUT」「預かった返信の再開は POST、取り消しは DELETE」「成果の確認済み（#903）は PUT」だけ。それ以外は GET / HEAD のみ
     const writable =
       (method === 'POST' &&
         (isNewSession || isWorkspaces || isAuthCheck || isAuthLogin || isReply || isReview || isFork || isPrReview || isPrBrief || isPrExplain || isAsk || isAnswer || isAttachUpload || isQueue || isDigestFeedback || isDots || isSuggestion || isStartDraft || path === USAGE_REFRESH_PATH || path === AGENT_SEND_PATH || path === AGENT_LOOP_PATH || path === AGENT_WAIT_FOR_PATH || path === AGENT_START_PATH || isAgentStop || isInterrupt || isCodexConfig || loopSuffix !== undefined || waitSuffix !== undefined)) ||
       (method === 'DELETE' && (isQueue || isHistoryIcon || loopSuffix === '/loop')) ||
-      (method === 'PUT' && (isMeta || isRead || isProfile || isSettings)) ||
+      (method === 'PUT' && (isMeta || isRead || isProfile || isSettings || isAgentCheck)) ||
       ((method === 'PUT' || method === 'DELETE') && (isIcon || isProfileIcon))
     if (!writable && method !== 'GET' && method !== 'HEAD') return error(res, 405, 'method not allowed')
     try {
@@ -4413,6 +4421,12 @@ export function createApp(
         const id = sessionIdFrom(path, stop ? AGENT_STOP_SUFFIX : AGENT_RESUME_SUFFIX)
         if (id === null) return error(res, 400, 'bad session id')
         return await agentStop(req, res, id, stop)
+      }
+      if (isAgentCheck) {
+        if (method !== 'PUT') return error(res, 405, 'method not allowed')
+        const id = sessionIdFrom(path, AGENT_CHECK_SUFFIX)
+        if (id === null) return error(res, 400, 'bad session id')
+        return await agentCheck(req, res, id)
       }
       if (loopSuffix !== undefined) {
         const id = sessionIdFrom(path, loopSuffix)
@@ -5074,8 +5088,6 @@ export function createApp(
         // 線は「描いていないターン完了の行の一番新しい時刻」。それより後に始まったターンのターン完了の行は全部描いている（入力の行を
         // 書かない Codex / OpenCode のターンも、7 日の切れ目をまたぐターンも落とさない）。落としていなければ読んだ日の頭（送った記録は
         // 日数で切られないので、それより古い依頼を窓の中のバブルに付けない）
-        const requestsFrom = requestsWindowStart(dropped, requestsFloor(recentDates(days).at(-1)))
-        const activity = await agentActivityOf(id, sessions, { replyTs: new Map(repliedAll.map((r) => [r.agent_reply?.message_id ?? '', r.ts] as const)), notBefore: requestsFrom })
         // 人がこの画面の返答のバブルの下から相手へ送った返信（#700）と、相手がそれに返した行。返した行は同じ並びに混ぜる
         const nameOfTarget = (to: string) => {
           const target = sessions.find((s) => s.id === to)
@@ -5085,6 +5097,17 @@ export function createApp(
         const followedUp = followupReplyRows(followed, every, nameOfTarget, (to) => {
           const icon = replyIcons.get(iconKey(to))
           return icon ? iconUrl(to, icon.version) : undefined
+        })
+        const requestsFrom = requestsWindowStart(dropped, requestsFloor(recentDates(days).at(-1)))
+        // 確かめる成果（#903）は、返答の行の本文と、返答のバブルの下からの返信（#700）に相手が返した行から
+        const followedReplies = new Map(followedUp.rows.map((r) => [r.agent_reply?.message_id ?? '', { ts: r.ts, text: r.text }] as const))
+        const activity = await agentActivityOf(id, sessions, {
+          replyTs: new Map(repliedAll.map((r) => [r.agent_reply?.message_id ?? '', r.ts] as const)),
+          notBefore: requestsFrom,
+          replies: new Map(repliedAll.map((r) => [r.agent_reply?.message_id ?? '', { ts: r.ts, text: r.text, to: entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) }] as const)),
+          followups: followed.map((f) => ({ to: f.to, anchor: f.anchor, reply: followedReplies.get(f.id) })),
+          // 画面が返答のバブルをまとめるのを切る、自分の行（バブルを立てる行だけ。`toUtterances()` と同じ線。窓で絞る前の行から）
+          selfTs: own.filter(rowMakesBubble).map((r) => r.ts),
         })
         const followups: AgentFollowupLine[] = followed
           .filter((f) => Date.parse(f.at) >= shownFrom)

@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AGENT_SEND_MAX, AGENT_TURN_MAX_BUDGET_USD, HANDED_MARK, splitHandedReplies, STEERED_NOTE, WAKE_NOTE } from '../shared/agentMessages.ts'
 import type {
+  AgentCheckResponse,
   AgentSendManyResponse,
   AgentSendResponse,
   AgentSessionsResponse,
@@ -1809,6 +1810,68 @@ test('依頼ごとの進み具合（#902）: 詳細の応答に送り元のタ�
     assert.equal(answered.agent?.requests?.find((r) => r.turn === turnB)?.items[0]?.reply_ts, undefined, '別の依頼の返答にはしない')
   } finally {
     await writeFile(feedFile, original)
+    await humanReply('B1@r')
+    idle('B1@r')
+  }
+})
+
+test('成果の確認（#903）: PR を名指しした返答だけ確認待ちになり、確認済みは同一オリジンの PUT で記録に残る（読んだだけでは変わらない）', async () => {
+  const detailOf = async () => (await (await fetch(`${base}/api/sessions/${encodeURIComponent('A1@r')}?days=7`)).json()) as SessionDetailResponse
+  const check = (body: unknown, headers: Record<string, string> = {}) =>
+    fetch(`${base}/api/sessions/${encodeURIComponent('A1@r')}/agent/check`, { method: 'PUT', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) })
+  const turnP = new Date(Date.now() - 2000).toISOString()
+  const turnQ = new Date(Date.now() - 1000).toISOString()
+  const ids: string[] = []
+  const texts: string[] = []
+  for (const t of [turnP, turnQ]) {
+    turn('A1@r', t)
+    try {
+      const res = await send('A1@r', 'B1@r', t === turnP ? '成果の出る依頼' : '進捗だけの依頼')
+      assert.equal(res.status, 202)
+      ids.push(((await res.json()) as AgentSendResponse).message_id)
+      texts.push(runner.started.at(-1)!.cmd.text)
+    } finally {
+      idle('A1@r')
+    }
+    await humanReply('B1@r')
+    idle('B1@r')
+  }
+  const original = await readFile(feedFile, 'utf-8')
+  const checksFile = join(dir, 'result-checks.json')
+  await appendFile(feedFile, JSON.stringify(row(new Date(), 'B1', { repo: 'r', cwd: work2, project: 'o/r', user_text: texts[0], text: 'https://github.com/o/r/pull/12 を出しました' })) + '\n')
+  await appendFile(feedFile, JSON.stringify(row(new Date(), 'B1', { repo: 'r', cwd: work2, project: 'o/r', user_text: texts[1], text: '読み始めました' })) + '\n')
+  try {
+    const before903 = await detailOf()
+    const p = before903.agent?.requests?.find((r) => r.turn === turnP)?.items[0]
+    const q = before903.agent?.requests?.find((r) => r.turn === turnQ)?.items[0]
+    assert.equal(p?.status, 'done')
+    assert.equal(p?.result?.ts, p?.reply_ts, '成果は返答の行に紐づく')
+    assert.equal(p?.result?.checked_at, undefined, '確認待ち')
+    assert.deepEqual(p?.result?.prs, [{ repo: 'o/r', number: 12 }], '確かめる先の PR')
+    assert.equal(q?.status, 'done')
+    assert.equal(q?.result, undefined, '進捗の報告は確認待ちにしない')
+    // 既読にしても確認待ちのまま
+    assert.equal((await fetch(`${base}/api/sessions/${encodeURIComponent('A1@r')}/read`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ts: p!.result!.ts }) })).ok, true)
+    assert.equal((await detailOf()).agent?.requests?.find((r) => r.turn === turnP)?.items[0]?.result?.checked_at, undefined, '読んだだけでは確認済みにならない')
+    // 別オリジン・送ったことのない相手・形の崩れたものは断る
+    assert.equal((await check({ to: 'B1@r', ts: p!.result!.ts, checked: true }, { Origin: 'http://evil.example' })).status, 403)
+    assert.equal((await check({ to: 'Z9@r', ts: p!.result!.ts, checked: true })).status, 404)
+    assert.equal((await check({ to: 'B1@r', ts: 'きのう', checked: true })).status, 400)
+    assert.equal((await check({ to: 'B1@r', ts: p!.result!.ts, checked: 'yes' })).status, 400)
+    await assert.rejects(readFile(checksFile, 'utf-8'), '断ったものは書かない')
+    const ok = await check({ to: 'B1@r', ts: p!.result!.ts, checked: true })
+    assert.equal(ok.status, 200)
+    assert.ok(((await ok.json()) as AgentCheckResponse).checked_at)
+    const checked = await detailOf()
+    assert.notEqual(checked.rev, before903.rev, '確認済みにしたら rev が変わる')
+    assert.ok(checked.agent?.requests?.find((r) => r.turn === turnP)?.items[0]?.result?.checked_at)
+    assert.equal(checked.agent?.requests?.find((r) => r.turn === turnQ)?.items[0]?.result, undefined)
+    // 取り消すと確認待ちに戻る
+    assert.equal((await check({ to: 'B1@r', ts: p!.result!.ts, checked: false })).status, 200)
+    assert.equal((await detailOf()).agent?.requests?.find((r) => r.turn === turnP)?.items[0]?.result?.checked_at, undefined)
+  } finally {
+    await writeFile(feedFile, original)
+    await rm(checksFile, { force: true })
     await humanReply('B1@r')
     idle('B1@r')
   }

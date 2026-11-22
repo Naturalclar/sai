@@ -200,6 +200,16 @@ CLAUDE.md から移した「どう動くか」。守る決まりは CLAUDE.md、
 - 別のリポジトリの相手（`far`）は呼び名と状態まで（直近の行と同じ）。
 - 画面は `web/src/agentRequests.ts` の `placeRequests()` で置き場所を決める: そのターンの始まりの秒より**後の秒**の、このセッションの最初のターン完了の行のバブルの下（`Chat` の `renderAfterTurn`）。同じ秒は数えない（行の時刻は秒までで、前のターンのターン完了の行と同じ秒に次のターンが始まりうる。依頼したターンは送るまでに 1 秒より長くかかる）。いま回しているターン（`Replying.since` が同じ）の依頼と、ターン完了の行がまだ見つからない依頼はチャットの末尾（「別のセッションへのメッセージ」の枠の上）。カードは `RequestProgressCard`（`<details>`。見出しに件数と状態ごとの数、開くと相手ごとに相手の画面へのリンク・状態・返答のバブルへの `返答へ`）。**読むだけ**で、送る・頼み直す・止めるは置かない。返答ありでも返答の行の `ts` が無ければ「返答の行が見つかりません」と書き、飛び先を出さない。
 
+### 成果の確認（#903）
+
+- 依頼の進捗（#902）の上に作る。`shared/agentResults.ts` の `attachResults()` が、`agentRequests()` の結果の `done` の項目のうち、返答の行の本文が `resultNeedsCheck()`（GitHub の PR の URL・`PR #N`・`![名前](パス)`。仮の線）に当たるものに `result` を付ける。本文は詳細の応答が `agent_replies` のために引いた `agentReplyRows()` の結果から渡し、行を舐め直さない。
+- 直したあとの成果: 返答のバブルの下からの返信（#700。`agents.followupsBy()` と `followupReplyRows()`）のうち、相手が同じで、`anchor` が今の成果の行と同じ返答のバブルにある（`sameBubble()`。画面は同じ相手の返答が 10 分より短い間で続き、間に自分の行・別の相手の返答が無ければ 1 つのバブルにまとめ、その下から送った返信の `anchor` はバブルの最後の行。日付（`Asia/Tokyo`）が変わっても分かれる。自分の行は `shared/chatBubbles.ts` の `rowMakesBubble()`（`toUtterances()` と同じ線。`web/src/chatBubbles.test.ts` が突き合わせる）でバブルを立てるものだけを、窓で絞る前の行から `selfTs` で渡す。画面はブラウザの時刻帯で日を切るので、別の時刻帯のブラウザから送った直しはずれうる）ものに返答があれば、成果はその行に移る（同じバブルの下に複数返っていれば一番新しいもの。`RESULT_CHAIN_MAX` まで鎖をたどる）。新しい返答が PR を名指ししていなければ前の PR を引き継ぐ。
+- 確認の記録は `server/reply/resultChecks.ts` の `ResultChecks`（`result-checks.json`。(mtime, size) で覚え、書くのは tmp → rename を 1 本ずつ）。鍵は `checkKey(送り元, 相手, 成果の ts)` なので、直したあとの成果は別の鍵になり前の確認は付かない。持ち主は `createApp()` で、`createAgentRoutes()` に参照で渡す。
+- 書く口は `PUT /api/sessions/<id>/agent/check`（`agentCheck()`）。同一オリジンのみ（`isCrossOrigin()`）。受けるのは相手（送り元が送ったことのある相手だけ）・時刻として読める `ts`・真偽だけで、パス・cwd は受けない。相手・CLI・GitHub には何もしない。
+- `prs` は `resultPrs()`（URL と、相手の GitHub のリモートが分かるときの `PR #N`。`#N` だけは読まない）。別のリポジトリの相手（`far`）には付けない。画面は `prHash()` で SAI の PR 画面へ。
+- rev: `agentRequestsKey()` に成果の `ts`・`checked_at`・PR を混ぜる。
+- 画面: `RequestProgressCard` の項目の 2 段目（`resultLabel()`・返答へ・PR・`ResultCheckButton`）。見出しの `成果確認待ち N` は `uncheckedCount()`。要対応（`todoItems()`）には足さない。
+
 ### 新しいセッションの案を置く（`sai_start`。#892 の段階 1）
 
 - ツールは `approve-mcp.ts` の `AGENT_TOOLS` の `sai_start`（名前は `shared/startDraft.ts` の `START_TOOL`）→ `POST /api/agent/start`（`server/reply/startRoutes.ts` の `agentStart()`）。送るのは送り元・名前・エージェント・最初の指示だけ。

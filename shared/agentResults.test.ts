@@ -1,7 +1,7 @@
 // 成果の確認（#903）の純粋関数。どの返答を確認待ちにするか・直したあとの返答に移るか・確認を引き継がないか
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { attachResults, checkKey, resultNeedsCheck, resultPrs, uncheckedCount } from './agentResults.ts'
+import { attachResults, checkKey, resultNeedsCheck, resultPrs, sameBubble, uncheckedCount } from './agentResults.ts'
 import type { AgentRequest } from './types.ts'
 
 test('resultNeedsCheck: PR の URL・PR #N・画像を出した返答だけ（#N だけ・進捗・質問は入れない）', () => {
@@ -71,4 +71,34 @@ test('attachResults: 別のリポジトリの相手には PR を付けない（�
   const [r] = attachResults(req([done('m1', 'B@x', { far: true })]), 'A@r', replies, loop, () => undefined, () => 'owner-b/repo-b')
   assert.deepEqual(r!.items[0]!.result, { ts: t1 })
   assert.equal(uncheckedCount(r!.items), 1)
+})
+
+test('attachResults: 返答がまとまったバブル（10 分より短い間で続いた同じ相手の返答）の下から直しを頼んでも、直したあとの成果に移る（#903 のレビュー）', () => {
+  const t1 = '2026-11-01T00:01:00+00:00'
+  const t2 = '2026-11-01T00:04:00+00:00'
+  const t3 = '2026-11-01T00:20:00+00:00'
+  const replies = new Map([
+    ['m1', { ts: t1, text: 'PR #7 を出しました', to: 'B@r' }],
+    ['m2', { ts: t2, text: '読みました', to: 'B@r' }],
+  ])
+  // 画面はバブルの最後の行（m2 の返答）を anchor にする
+  const followups = [{ to: 'B@r', anchor: t2, reply: { ts: t3, text: '直しました' } }]
+  const [r] = attachResults(req([done('m1'), done('m2')]), 'A@r', replies, followups, () => undefined, () => 'owner-a/repo-a')
+  assert.deepEqual(r!.items[0]!.result, { ts: t3, revised: true, prs: [{ repo: 'owner-a/repo-a', number: 7 }] })
+  assert.equal(r!.items[1]!.result, undefined, '進捗の報告はそのまま')
+  // 間に自分の行があればバブルは分かれる（m1 のバブルの下から送ったのではない）
+  const [split] = attachResults(req([done('m1'), done('m2')]), 'A@r', replies, followups, () => undefined, () => 'owner-a/repo-a', ['2026-11-01T00:02:00+00:00'])
+  assert.deepEqual(split!.items[0]!.result, { ts: t1, prs: [{ repo: 'owner-a/repo-a', number: 7 }] })
+})
+
+test('sameBubble: 同じ相手の行が 10 分より短い間で続き、間にほかの行が無いときだけ', () => {
+  const at = (m: number) => new Date(Date.UTC(2026, 10, 1, 0, m)).toISOString()
+  const tl = (rows: [number, string][]) => rows.map(([m, to]) => ({ ms: Date.parse(at(m)), to }))
+  assert.equal(sameBubble(tl([[0, 'B'], [5, 'B'], [14, 'B']]), 'B', at(0), at(14)), true)
+  assert.equal(sameBubble(tl([[0, 'B'], [10, 'B']]), 'B', at(0), at(10)), false, '10 分あくと分かれる')
+  assert.equal(sameBubble(tl([[0, 'B'], [3, 'C'], [5, 'B']]), 'B', at(0), at(5)), false, '別の相手の返答が挟まる')
+  assert.equal(sameBubble(tl([[0, 'B'], [3, ''], [5, 'B']]), 'B', at(0), at(5)), false, '自分の行が挟まる')
+  assert.equal(sameBubble(tl([[0, 'B'], [5, 'B']]), 'B', at(5), at(0)), false, 'anchor が前')
+  assert.equal(sameBubble(tl([[0, 'B'], [5, 'B']]), 'B', at(0), at(4)), false, 'anchor が行に当たらない')
+  assert.equal(sameBubble(tl([]), 'B', at(0), at(0)), true)
 })

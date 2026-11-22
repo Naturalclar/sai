@@ -846,12 +846,13 @@ export function createAgentRoutes(ctx: AgentRoutesContext) {
    * 往復数と読み直させた量は**いま回しているターン**のもの（回していなければ 0）。直近の送り先は状態も付ける。
    * `requests` を渡したとき（詳細の応答）だけ、依頼ごとの進み具合（#902）も付ける。返答の行の `ts`（`replyTs`）と、それより前に
    * 始まったターンを載せない線（`notBefore`。`requestsWindowStart()`＝描いていないターン完了の行の一番新しい時刻）は呼び出し側が渡す（返答の行は詳細の応答が 1 回で引いたものを使う）。
-   * 確かめる成果（#903）は、返答の行の本文（`replies`）と返答のバブルの下からの返信（`followups`。#700）を渡したときだけ付ける
+   * 確かめる成果（#903）は、返答の行の本文（`replies`）と返答のバブルの下からの返信（`followups`。#700）を渡したときだけ付ける。
+   * `selfTs` はこの画面に並ぶ自分の行の時刻（返答のバブルのまとまりを切る。`sameBubble()`）
    */
   const agentActivityOf = async (
     id: string,
     sessions: SessionSummary[],
-    requests?: { replyTs: ReadonlyMap<string, string>; notBefore: number; replies?: ReadonlyMap<string, ResultRow>; followups?: readonly ResultFollowup[] },
+    requests?: { replyTs: ReadonlyMap<string, string>; notBefore: number; replies?: ReadonlyMap<string, ResultRow>; followups?: readonly ResultFollowup[]; selfTs?: readonly string[] },
   ): Promise<AgentActivity | undefined> => {
     if (!agents.hasActivity(id)) return undefined
     const current = run.snapshot()[id]
@@ -888,7 +889,7 @@ export function createAgentRoutes(ctx: AgentRoutesContext) {
     const checks = requestList && requestList.length > 0 && requests?.replies ? await resultChecks.all() : undefined
     const withResults =
       requestList && checks && requests?.replies
-        ? attachResults(requestList, id, requests.replies, requests.followups ?? [], (key) => checks.get(key), (to) => githubRepoOf(byId.get(to)?.remote))
+        ? attachResults(requestList, id, requests.replies, requests.followups ?? [], (key) => checks.get(key), (to) => githubRepoOf(byId.get(to)?.remote), requests.selfTs)
         : requestList
     return {
       stopped: agents.isStopped(id),

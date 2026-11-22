@@ -5103,8 +5103,10 @@ export function createApp(
         const activity = await agentActivityOf(id, sessions, {
           replyTs: new Map(repliedAll.map((r) => [r.agent_reply?.message_id ?? '', r.ts] as const)),
           notBefore: requestsFrom,
-          replies: new Map(repliedAll.map((r) => [r.agent_reply?.message_id ?? '', { ts: r.ts, text: r.text }] as const)),
+          replies: new Map(repliedAll.map((r) => [r.agent_reply?.message_id ?? '', { ts: r.ts, text: r.text, to: entityId(r.session ?? '', r.repo ?? '', String(r.ts ?? '')) }] as const)),
           followups: followed.map((f) => ({ to: f.to, anchor: f.anchor, reply: followedReplies.get(f.id) })),
+          // 画面が返答のバブルをまとめるのを切る、自分の行（チャットに出さない種類の行は除く）
+          selfTs: shown.filter((r) => eventKind(r.event, r.text) !== 'other').map((r) => r.ts),
         })
         const followups: AgentFollowupLine[] = followed
           .filter((f) => Date.parse(f.at) >= shownFrom)

@@ -12,17 +12,21 @@ interface Props {
 
 /**
  * 成果を「確認済み」にする・取り消す（#903）。**SAI の上の記録だけ**で、相手のセッション・CLI の許可・GitHub（承認・マージ）には何もしない。
- * 確認はこの返答の行に紐づく（直してもらった新しい返答には付かない）。押したあとの印は次のポーリングで描き直す
+ * 確認はこの返答の行に紐づく（直してもらった新しい返答には付かない）。押して通ったら、ボタンの語は次のポーリングを待たずに変える
+ * （`done` は押したときの `checked_at` を覚え、ポーリングで `checked_at` が変われば props の方に戻る。effect は使わない）
  */
 export function ResultCheckButton({ id, to, result }: Props) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const checked = Boolean(result.checked_at)
+  const [done, setDone] = useState<{ was: string | undefined; checked: boolean } | null>(null)
+  const checked = done && done.was === result.checked_at ? done.checked : Boolean(result.checked_at)
   const toggle = async () => {
     setBusy(true)
     setError('')
     try {
+      const was = result.checked_at
       await api.checkAgentResult(id, { to, ts: result.ts, checked: !checked })
+      setDone({ was, checked: !checked })
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {

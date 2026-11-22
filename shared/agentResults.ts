@@ -49,12 +49,43 @@ export function checkKey(from: string, to: string, ts: string): string {
 export interface ResultRow {
   ts: string
   text: string
+  /** どの相手の行か（エンティティ ID）。返答のバブルのまとまり（`sameBubble()`）を見るのに使う。無ければまとまりに数えない */
+  to?: string
+}
+
+/** 画面が同じ相手の返答を 1 つのバブルにまとめる間（`web/src/chatGroups.ts` の `GROUP_GAP_MIN` と同じ 10 分） */
+export const BUBBLE_GAP_MS = 10 * 60_000
+
+/** 画面に並ぶ行 1 つ（バブルのまとまりを見る材料）。`to` が空なのは送り元自身の行 */
+interface TimelineRow {
+  ms: number
+  to: string
+}
+
+/**
+ * `anchor` の行が、`ts` の行と同じ返答のバブルにまとまっているか（#903 のレビュー）。画面は同じ相手の返答が 10 分より短い間で続き、
+ * 間にほかの行（送り元自身の行・別の相手の返答）が無ければ 1 つのバブルにまとめ、その下から送った返信の `anchor` は**バブルの最後の行**の `ts` にする
+ * （`SessionView` の `sendAcross()`）。`timeline` は古い順
+ */
+export function sameBubble(timeline: readonly TimelineRow[], to: string, ts: string, anchor: string): boolean {
+  const start = Date.parse(ts)
+  const end = Date.parse(anchor)
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return false
+  if (end === start) return true
+  let prev = start
+  for (const r of timeline) {
+    if (r.ms <= start) continue
+    if (r.ms > end) break
+    if (r.to !== to || r.ms - prev >= BUBBLE_GAP_MS) return false
+    prev = r.ms
+  }
+  return prev === end
 }
 
 /** 人が返答のバブルの下から相手へ送った返信（#700）と、相手がそれに返した行（あれば） */
 export interface ResultFollowup {
   to: string
-  /** どのバブルの下から送ったか（その行の `ts`） */
+  /** どのバブルの下から送ったか（そのバブルの最後の行の `ts`） */
   anchor: string
   reply?: ResultRow
 }
@@ -63,7 +94,8 @@ export interface ResultFollowup {
  * 依頼の進捗（`agentRequests()` の結果）に、確かめる成果（`result`）を付ける（#903）。
  * - 返答の行（`replies`。message_id → 行）が `resultNeedsCheck()` に当たる依頼だけ。当たらなければ何も付けない
  * - その返答のバブルの下から直しを頼み（`followups`）、相手が返していれば、成果はその新しい返答の行に移る（鎖をたどる。同じバブルの下に
- *   いくつも返っていれば一番新しいもの）。新しい返答が PR を名指ししていなければ、前の PR を確かめる先として引き継ぐ（同じ PR に直しを積むので）
+ *   いくつも返っていれば一番新しいもの）。バブルは画面と同じまとめ方で見る（`sameBubble()`。`selfTs` は送り元自身の画面に並ぶ行の時刻で、
+ *   まとまりを切る）。新しい返答が PR を名指ししていなければ、前の PR を確かめる先として引き継ぐ（同じ PR に直しを積むので）
  * - 確認済みかは `checkedAt(checkKey(from, to, ts))`。直したあとの返答は鍵が違うので、前の確認は付かない
  * - PR は `repoOf(to)`（相手の GitHub のリモート）で読む。別のリポジトリの相手（`far`）には付けない（#747 の表示の範囲を広げない）
  */
@@ -74,14 +106,25 @@ export function attachResults(
   followups: readonly ResultFollowup[],
   checkedAt: (key: string) => string | undefined,
   repoOf: (to: string) => string,
+  selfTs: readonly string[] = [],
 ): AgentRequest[] {
-  // 相手 → バブルの ts → そこから返った一番新しい返答
-  const next = new Map<string, ResultRow>()
-  for (const f of followups) {
-    if (!f.reply) continue
-    const k = `${f.to}\n${f.anchor}`
-    const prev = next.get(k)
-    if (!prev || Date.parse(f.reply.ts) > Date.parse(prev.ts)) next.set(k, f.reply)
+  const answered = followups.filter((f): f is ResultFollowup & { reply: ResultRow } => Boolean(f.reply))
+  // 画面に並ぶ行（送り元自身の行・返答の行・直しに返った行）。返答のバブルのまとまりを見るのに使う
+  const timeline: TimelineRow[] = [
+    ...selfTs.map((ts) => ({ ms: Date.parse(ts), to: '' })),
+    ...[...replies.values()].map((r) => ({ ms: Date.parse(r.ts), to: r.to ?? '' })),
+    ...answered.map((f) => ({ ms: Date.parse(f.reply.ts), to: f.to })),
+  ]
+    .filter((r) => Number.isFinite(r.ms))
+    .sort((a, b) => a.ms - b.ms)
+  // `cur` の行のバブルの下から送った直しに、相手が返した一番新しい行
+  const nextOf = (to: string, cur: ResultRow): ResultRow | undefined => {
+    let best: ResultRow | undefined
+    for (const f of answered) {
+      if (f.to !== to || !(Date.parse(f.reply.ts) > Date.parse(cur.ts)) || !sameBubble(timeline, to, cur.ts, f.anchor)) continue
+      if (!best || Date.parse(f.reply.ts) > Date.parse(best.ts)) best = f.reply
+    }
+    return best
   }
   const withResult = (item: AgentRequestItem): AgentRequestItem => {
     const first = item.status === 'done' ? replies.get(item.message_id) : undefined
@@ -92,7 +135,7 @@ export function attachResults(
     let prs = item.far ? [] : resultPrs(first.text, repo)
     const seen = new Set([first.ts])
     for (let i = 0; i < RESULT_CHAIN_MAX; i++) {
-      const later = next.get(`${item.to}\n${cur.ts}`)
+      const later = nextOf(item.to, cur)
       if (!later || seen.has(later.ts)) break
       seen.add(later.ts)
       cur = later

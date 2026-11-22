@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { answerAsk, askQuestions } from '../../shared/approvals.ts'
 import { countNote, rulesKey } from '../../shared/approvalCounts.ts'
 import { AlwaysRules } from './AlwaysRules'
-import { approvalAction, hotkeyApplies, REPLY_FOR_ATTR } from './approvalKeys'
+import { approvalAction, denyDecision, denyKey, hotkeyAppliesAt } from './approvalKeys'
 import { decisionClass } from './approvalDecisionClass'
 import { api, type Approval } from './api'
 import { AskQuestions } from './AskQuestions'
@@ -73,29 +73,31 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false, modeNote =
     [approval.approval_id],
   )
 
-  // ⌘Enter で許可、⌘⇧Enter で常に許可。答えるだけの質問（AskUserQuestion）と、処理中・答え済みのバブルは受けない。
-  // **capture** で張るので、入力欄（ReplyBox）が ⌘Enter を「送信」として扱うより先に来る。
+  // ⌘Enter で許可、⌘⇧Enter で常に許可、⌘. で拒否（#909）。答えるだけの質問（AskUserQuestion）と、処理中・答え済みのバブルは受けない
+  // （質問のキーは AskQuestions が持つ）。**capture** で張るので、入力欄（ReplyBox）が ⌘Enter を「送信」として扱うより先に来る。
   // 拾ったときだけ stopPropagation するので、答え待ちのバブルが無ければ入力欄の ⌘Enter は今までどおり
   const hasAlways = always !== null
-  const armed = agent === 'claude' && answerable && hotkey && !busy && done === null && questions.length === 0
+  const live = answerable && hotkey && !busy && done === null && questions.length === 0
+  const armed = agent === 'claude' && live
+  // 拒否のキーで押す候補（Codex の app-server・端末のダイアログ）。決められなければキーでは拒否しない
+  const denyId = decisions.length > 0 ? denyDecision(decisions) : null
+  const denyArmed = live && (decisions.length > 0 ? denyId !== null : agent === 'claude')
   useEffect(() => {
-    if (!armed) return
+    if (!armed && !denyArmed) return
     const onKeyDown = (e: KeyboardEvent) => {
-      const action = approvalAction(e, hasAlways)
-      if (!action) return
-      // 別のセッションの返信欄で押された ⌘Enter は、その返信欄の送信に任せる（要対応の行の下の返信欄）
-      const owner = e.target instanceof Element ? e.target.closest(`[${REPLY_FOR_ATTR}]`) : null
-      // モーダルの中・フォーカスの無いペインの中で押されたものは受けない（#633）
-      const pane = e.target instanceof Element ? e.target.closest('.pane') : null
-      const elsewhere = (e.target instanceof Element && e.target.closest('[role="dialog"]') !== null) || (pane !== null && !pane.classList.contains('focused'))
-      if (!hotkeyApplies(owner?.getAttribute(REPLY_FOR_ATTR) ?? null, approval.id, elsewhere)) return
+      const action = armed ? approvalAction(e, hasAlways) : null
+      const deny = denyArmed && denyKey(e)
+      if (!action && !deny) return
+      // 別のセッションの返信欄・モーダルの中・フォーカスの無いペインの中で押されたものは受けない（#538・#633）
+      if (!hotkeyAppliesAt(e.target instanceof Element ? e.target : null, approval.id)) return
       e.preventDefault()
       e.stopPropagation()
-      void send(action === 'always' ? { behavior: 'allow', remember: 'local' } : { behavior: 'allow' })
+      if (deny) void send(denyId !== null ? { behavior: 'deny', decision: denyId } : { behavior: 'deny' })
+      else void send(action === 'always' ? { behavior: 'allow', remember: 'local' } : { behavior: 'allow' })
     }
     window.addEventListener('keydown', onKeyDown, true)
     return () => window.removeEventListener('keydown', onKeyDown, true)
-  }, [armed, hasAlways, send, approval.id])
+  }, [armed, denyArmed, denyId, hasAlways, send, approval.id])
 
   const detail = detailOf(approval)
   return (
@@ -127,6 +129,8 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false, modeNote =
           ) : questions.length > 0 ? (
             <AskQuestions
               questions={questions}
+              hotkey={answerable && hotkey}
+              entity={approval.id}
               busy={busy}
               done={done !== null}
               onAnswer={(answers) => void send(answerAsk(approval, answers))}
@@ -141,6 +145,7 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false, modeNote =
                   // 残る候補（#741 の「今後聞かない」「今後も断る」）は、今回だけのボタンと同じ見た目にしない
                   className={decisionClass(decision)}
                   disabled={busy || done !== null}
+                  {...(denyArmed && decision.id === denyId ? { title: `${decision.label}（⌘. / Ctrl+.）` } : {})}
                   onClick={() => void send({ behavior: decision.behavior, decision: decision.id })}
                 >
                   {decision.label}
@@ -169,7 +174,7 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false, modeNote =
                   {done === 'always' ? '常に許可した' : '常に許可'}
                 </button>
               )}
-              <button type="button" className="deny" disabled={busy || done !== null} onClick={() => void send({ behavior: 'deny' })}>
+              <button type="button" className="deny" disabled={busy || done !== null} title={denyArmed ? '拒否（⌘. / Ctrl+.）' : '拒否'} onClick={() => void send({ behavior: 'deny' })}>
                 {done === 'deny' ? '拒否した' : '拒否'}
               </button>
             </div>

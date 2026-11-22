@@ -1436,6 +1436,8 @@
   .group.approval .options button { font: inherit; font-size: 13px; text-align: left; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; }
   .group.approval .options button.picked { background: color-mix(in srgb, var(--accent) 16%, transparent); border-color: var(--accent); color: var(--accent); }
   .group.approval .options .label { font-weight: 600; }
+  /* キーで選ぶときの番号（#909）。キーで答えられるバブル（フォーカスのあるペインの一番上）にだけ出す */
+  .group.approval .options .num { display: inline-block; min-width: 1.4em; margin-right: 6px; padding: 0 4px; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); font: 600 11px/1.5 ui-monospace, monospace; text-align: center; }
   .group.approval .options .rec { margin-left: 6px; padding: 1px 6px; border-radius: 8px; background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); font-size: 11px; font-weight: 600; }
   .group.approval .options .desc { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; font-weight: 400; }
   .group.approval .questions .other { margin-top: 6px; width: 100%; box-sizing: border-box; font: inherit; font-size: 16px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); }

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { answerAsk, askQuestions } from '../../shared/approvals.ts'
 import { countNote, rulesKey } from '../../shared/approvalCounts.ts'
 import { AlwaysRules } from './AlwaysRules'
-import { approvalAction, denyDecision, denyKey, denyPlaceOk, hotkeyAppliesAt, keyBlocked } from './approvalKeys'
+import { approvalAction, denyDecision, denyKey, denyPlaceOk, hotkeyAppliesAt, keyBlocked, REPLY_FOR_ATTR } from './approvalKeys'
 import { isTypingTarget } from './sessionNav'
 import { decisionClass } from './approvalDecisionClass'
 import { api, type Approval } from './api'
@@ -12,6 +12,9 @@ import { JevTag } from './JevTag'
 import { elapsedLabel, hm } from './format'
 import { AGENT_INITIAL, AGENT_LABEL } from './chatGroups.ts'
 import { Avatar } from './Avatar'
+
+/** 拒否のキーを OS で分ける（Mac は ⌘.、ほかは Ctrl+.）。iPad の Safari も Mac と名乗る */
+const MAC = typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.platform)
 
 interface Props {
   approval: Approval
@@ -91,9 +94,9 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false, modeNote =
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target instanceof Element ? e.target : null
       const action = armed ? approvalAction(e, hasAlways) : null
-      // 拒否は入力欄の外か、このセッションの返信欄（返答の下の相手への入力欄は除く）で押したときだけ
-      const ownReply = target !== null && target.closest('.reply') !== null && target.closest('.reply-footer') === null
-      const deny = denyArmed && denyKey(e) && denyPlaceOk(isTypingTarget(target as HTMLElement | null), ownReply)
+      // 拒否は入力欄の外か、このセッション宛ての入力欄（印が許可と同じ）で押したときだけ
+      const ownReply = target?.closest(`[${REPLY_FOR_ATTR}]`)?.getAttribute(REPLY_FOR_ATTR) === approval.id
+      const deny = denyArmed && denyKey(e, MAC) && denyPlaceOk(isTypingTarget(target as HTMLElement | null), ownReply)
       if (!action && !deny) return
       const root = rootRef.current
       const blocked = keyBlocked({
@@ -159,7 +162,7 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false, modeNote =
                   // 残る候補（#741 の「今後聞かない」「今後も断る」）は、今回だけのボタンと同じ見た目にしない
                   className={decisionClass(decision)}
                   disabled={busy || done !== null}
-                  {...(denyArmed && decision.id === denyId ? { title: `${decision.label}（⌘. / Ctrl+.）` } : {})}
+                  {...(denyArmed && decision.id === denyId ? { title: `${decision.label}（${MAC ? '⌘.' : 'Ctrl+.'}）` } : {})}
                   onClick={() => void send({ behavior: decision.behavior, decision: decision.id })}
                 >
                   {decision.label}
@@ -188,7 +191,7 @@ export function ApprovalBubble({ approval, now, repo, hotkey = false, modeNote =
                   {done === 'always' ? '常に許可した' : '常に許可'}
                 </button>
               )}
-              <button type="button" className="deny" disabled={busy || done !== null} title={denyArmed ? '拒否（⌘. / Ctrl+.）' : '拒否'} onClick={() => void send({ behavior: 'deny' })}>
+              <button type="button" className="deny" disabled={busy || done !== null} title={denyArmed ? `拒否（${MAC ? '⌘.' : 'Ctrl+.'}）` : '拒否'} onClick={() => void send({ behavior: 'deny' })}>
                 {done === 'deny' ? '拒否した' : '拒否'}
               </button>
             </div>

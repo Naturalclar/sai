@@ -58,19 +58,21 @@ test('hotkeyApplies: 別のセッションの返信欄で押した ⌘Enter は�
   assert.equal(hotkeyApplies('b@repo', 'a@repo'), false)
 })
 
-test('denyKey: ⌘. / Ctrl+. で拒否（#909）', () => {
-  assert.equal(denyKey(key({ key: '.', metaKey: true })), true)
-  assert.equal(denyKey(key({ key: '.', ctrlKey: true })), true)
+test('denyKey: Mac は ⌘.、ほかは Ctrl+. だけ（#909）', () => {
+  assert.equal(denyKey(key({ key: '.', metaKey: true }), true), true)
+  assert.equal(denyKey(key({ key: '.', ctrlKey: true }), true), false, 'Mac の Ctrl+. は受けない')
+  assert.equal(denyKey(key({ key: '.', ctrlKey: true }), false), true)
+  assert.equal(denyKey(key({ key: '.', metaKey: true }), false), false, 'Windows の Win+. は絵文字パネル')
 })
 
 test('denyKey: 素の . ・⇧ / Alt 付き・IME 変換中・ほかのキーは何もしない', () => {
-  assert.equal(denyKey(key({ key: '.' })), false, '入力欄の句点')
-  assert.equal(denyKey(key({ key: '.', metaKey: true, shiftKey: true })), false)
-  assert.equal(denyKey(key({ key: '.', metaKey: true, altKey: true })), false)
-  assert.equal(denyKey(key({ key: '.', metaKey: true, isComposing: true })), false)
-  assert.equal(denyKey(key({ key: 'Backspace', metaKey: true })), false, '⌘⌫ は行頭まで消す')
-  assert.equal(denyKey(key({ metaKey: true })), false, '⌘Enter は許可')
-  assert.equal(denyKey(key({ key: '.', metaKey: true, repeat: true })), false, '押しっぱなしの繰り返し')
+  assert.equal(denyKey(key({ key: '.' }), true), false, '入力欄の句点')
+  assert.equal(denyKey(key({ key: '.', metaKey: true, shiftKey: true }), true), false)
+  assert.equal(denyKey(key({ key: '.', metaKey: true, altKey: true }), true), false)
+  assert.equal(denyKey(key({ key: '.', metaKey: true, isComposing: true }), true), false)
+  assert.equal(denyKey(key({ key: 'Backspace', metaKey: true }), true), false, '⌘⌫ は行頭まで消す')
+  assert.equal(denyKey(key({ metaKey: true }), true), false, '⌘Enter は許可')
+  assert.equal(denyKey(key({ key: '.', metaKey: true, repeat: true }), true), false, '押しっぱなしの繰り返し')
 })
 
 test('denyDecision: 今回だけの拒否を 1 つ選ぶ。「今後も断る」は押さない', () => {

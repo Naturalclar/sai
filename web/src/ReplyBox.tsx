@@ -13,6 +13,7 @@ import { ReplyModelPicker, type ReplyModelProps } from './ReplyModelPicker'
 import { TargetLabel } from './TargetLabel'
 import { ReplyPermissionPicker, type ReplyPermissionProps } from './ReplyPermissionPicker'
 import { blursOnEscape, leavesToSidebar } from './replyFocus'
+import { REPLY_FOR_ATTR } from './approvalKeys'
 import { DiffButton, type DiffButtonProps } from './DiffButton'
 import { acceptsSuggestion, suggestionFor, suggestionLabel } from './replySuggest'
 import { NEXT_ASK_MAX_CHARS } from '../../shared/nextAsk.ts'
@@ -66,6 +67,11 @@ export interface Picked {
 }
 
 interface Props {
+  /**
+   * どのセッション宛ての入力欄かの印（`data-reply-for`）。セッション画面の入力欄だけ付ける。許可の拒否のキー（`⌘.`。#909）は、
+   * 許可と同じセッション宛ての入力欄で押されたときだけ効く（フィードの入力欄は選んだ別のセッション宛てなので付けない）
+   */
+  replyFor?: string
   repo: string
   /** 返信先が端末（tmux）で開いている = 打ち込む。false は -p で別プロセス。省略はどちらか分からない（フィード） */
   terminal?: boolean
@@ -174,7 +180,7 @@ const NO_HISTORY: readonly string[] = []
 const keyOf = (e: KeyboardEvent<HTMLTextAreaElement>) => ({ key: e.key, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, shiftKey: e.shiftKey })
 
 /** 入力欄。Enter で送信、Shift+Enter で改行。IME 変換中の Enter は送らない */
-export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerable = false, now = 0, onSend, sendMode, warmth, onDraft, model, permission, diff, skillsId, skillsAgent, attachId, draftKey, sentFromConfirm = 0, restore, insert, quote, history = NO_HISTORY, nextAsk, nextAskKey, managerDraft, onManagerDraft, onLeaveToSidebar, mention, focusOnOpen = false }: Props) {
+export function ReplyBox({ replyFor, repo, terminal, busy, busySince, queued = 0, steerable = false, now = 0, onSend, sendMode, warmth, onDraft, model, permission, diff, skillsId, skillsAgent, attachId, draftKey, sentFromConfirm = 0, restore, insert, quote, history = NO_HISTORY, nextAsk, nextAskKey, managerDraft, onManagerDraft, onLeaveToSidebar, mention, focusOnOpen = false }: Props) {
   // 前に打ちかけて離れた分（#306）。作ったときに 1 回だけ読む
   const [initial] = useState(() => (draftKey ? loadDraft(draftKey) : EMPTY_DRAFT))
   const [text, setText] = useState(initial.text)
@@ -587,6 +593,7 @@ export function ReplyBox({ repo, terminal, busy, busySince, queued = 0, steerabl
   return (
     <form
       className={`reply${dropping ? ' dropping' : ''}`}
+      {...(replyFor ? { [REPLY_FOR_ATTR]: replyFor } : {})}
       onSubmit={(e) => {
         e.preventDefault()
         submit()

@@ -485,6 +485,7 @@ export function SessionView({ id, focusTs = '', focusSide, onStatus, onOpenSideb
             // 1 回の描画では A の data のまま id だけ B になっている。作り直さないと A の打ちかけを B に送れてしまう
             key={`reply:${id}`}
             draftKey={id}
+            replyFor={id}
             // 相手への返信（#700）を確認から送り直しても、この入力欄は空にしない（数は返信先ごと）
             sentFromConfirm={confirmedSentBy[id] ?? 0}
             repo={s.repo}

@@ -49,18 +49,20 @@ export function hotkeyApplies(replyFor: string | null, approvalEntity: string, e
 }
 
 /**
- * 拒否のキー（#909）。`⌘.`（Windows / Linux は `Ctrl+.`）。Mac のダイアログの「キャンセル」と同じキーで、
+ * 拒否のキー（#909）。Mac は `⌘.`、それ以外は `Ctrl+.`（`mac` で分ける）。Mac のダイアログの「キャンセル」と同じキーで、
  * 入力欄の編集のキー（`⌘⌫` = 行頭まで消す）とも、許可の `⌘Enter` とも離れているので押し間違えにくい。
- * ⇧・Alt 付き・IME 変換中は何もしない。押した場所の扱い（別のセッションの返信欄・モーダル・ほかのペイン）は
- * `⌘Enter` と同じく `hotkeyApplies()` で見る
+ * **OS ごとに片方だけ受ける**: Windows の `metaKey` は Windows キーで、Win+. は絵文字パネル。Mac の `Ctrl+.` も受けない。
+ * ⇧・Alt 付き・IME 変換中・押しっぱなしの繰り返しは何もしない。押した場所は `hotkeyAppliesAt()` と、
+ * それより狭い `denyPlaceOk()`（入力欄の外か、そのセッション宛ての入力欄だけ）の両方で見る
  */
-export function denyKey(e: KeyLike): boolean {
+export function denyKey(e: KeyLike, mac: boolean): boolean {
   if (e.key !== '.' || e.repeat || e.isComposing || e.altKey || e.shiftKey) return false
-  return e.metaKey || e.ctrlKey
+  return mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey
 }
 
 /**
- * 候補（Codex の app-server・端末のダイアログ）から、拒否のキーで押す 1 つを選ぶ（#909）。
+ * Codex の app-server（SAI が回すもの・共有の app-server）の候補から、拒否のキーで押す 1 つを選ぶ（#909）。
+ * 端末のダイアログには使わない（端末の経路に新しい機能を足さない。#843）。
  * **この 1 回だけの拒否**（`persists` の無い `deny`）に限る。「今後も断る」は押さない。
  * 名前が「拒否」のものがあればそれ（app-server は「拒否」と「ターンを中止」を並べる）、無ければ今回だけの拒否が
  * ちょうど 1 つのときだけそれ。決められなければ null（キーでは押さない）
@@ -128,8 +130,8 @@ export function keyBlocked(p: { modalOpen: boolean; hidden: boolean; inOtherBubb
 
 /**
  * 拒否のキー（`⌘.`）を受けてよい場所か（#909 のレビュー）。拒否は取り消せないので許可のキーより狭くする:
- * 入力欄の外か、**そのバブルのセッションの返信欄**（`ownReply`）で押したときだけ。検索欄・ほかのバブルの記入欄・
- * 返答の下の相手への入力欄（#700）では受けない
+ * 入力欄の外か、**そのバブルのセッション宛ての入力欄**（`ownReply`。`data-reply-for` が許可と同じ）で押したときだけ。
+ * 検索欄・ほかのバブルの記入欄・フィードの入力欄（選んだ別のセッション宛て）・返答の下の相手への入力欄（#700）では受けない
  */
 export function denyPlaceOk(typing: boolean, ownReply: boolean): boolean {
   return !typing || ownReply

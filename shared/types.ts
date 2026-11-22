@@ -1511,6 +1511,38 @@ export interface AgentRequestItem {
   halted?: string
   /** 別のリポジトリの相手（#747） */
   far?: true
+  /**
+   * 確かめる成果（#903）。返答が成果を出したもの（`resultNeedsCheck()`）のときだけ付く。直してもらった（返答のバブルの下からの返信 #700 に
+   * 相手が返した）ら、その新しい返答の行に移る（前の確認は引き継がない）。無ければ確かめる成果ではない（進捗の報告・まだ返答が無い）
+   */
+  result?: AgentRequestResult
+}
+
+/** 確かめる成果 1 つ（#903）。確認は**この返答の行に**紐づく（SAI の上の記録だけ。許可・GitHub の承認・マージはしない） */
+export interface AgentRequestResult {
+  /** 成果の返答の行の `ts`（相手のターン完了の行。送り元の画面にも同じ `ts` の返答のバブルで並ぶ） */
+  ts: string
+  /** 直してもらったあとの返答（最初の返答ではない） */
+  revised?: true
+  /** 人が「確認済み」にした時刻。無ければ成果確認待ち */
+  checked_at?: string
+  /** 返答に出てきた PR（確かめる先）。別のリポジトリの相手（#747）には付けない */
+  prs?: PrRef[]
+}
+
+/** `PUT /api/sessions/<id>/agent/check` の本文（#903。同一オリジンのみ）。`id` は送り元 */
+export interface AgentCheckRequest {
+  /** 相手（`AgentRequestItem.to`） */
+  to: string
+  /** 成果の返答の行の `ts`（`AgentRequestResult.ts`） */
+  ts: string
+  /** true で確認済みにする、false で取り消す */
+  checked: boolean
+}
+
+/** `PUT /api/sessions/<id>/agent/check` の応答 */
+export interface AgentCheckResponse {
+  checked_at?: string
 }
 
 /** 送り元の 1 ターンの依頼（#902） */

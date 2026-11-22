@@ -5,6 +5,7 @@ import type { AgentActivityMessage } from './types.ts'
 
 const T1 = '2026-11-20T01:00:00.000Z'
 const T2 = '2026-11-20T02:00:00.000Z'
+const T3 = '2026-11-20T03:00:00.000Z'
 const names: Record<string, string> = { 'a@r': 'セッション A', 'b@r': 'セッション B', 'c@r': 'セッション C', 'far@x': 'セッション D' }
 const nameOf = (to: string) => names[to] ?? to
 
@@ -59,6 +60,10 @@ test('rev の鍵は状態と返答の行で変わる', () => {
   const linked = [{ turn: T1, items: [{ ...done[0]!.items[0]!, reply_ts: T2 }] }]
   assert.notEqual(agentRequestsKey(base), agentRequestsKey(done))
   assert.notEqual(agentRequestsKey(done), agentRequestsKey(linked))
+  // 確かめる成果（#903）: 付いた・直したあとの返答に移った・確認済みにした・PR が変わったで変わる
+  const withResult = (result: object) => [{ turn: T1, items: [{ ...linked[0]!.items[0]!, result: { ts: T2, ...result } }] }]
+  const keys = [linked, withResult({}), withResult({ ts: T3 }), withResult({ checked_at: T3 }), withResult({ prs: [{ repo: 'o/r', number: 1 }] })].map(agentRequestsKey)
+  assert.equal(new Set(keys).size, keys.length)
   assert.equal(agentRequestsKey(undefined), '')
 })
 

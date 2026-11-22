@@ -1,6 +1,7 @@
 // 依頼ごとの進み具合（#902）の、画面の文言と置き場所。DOM に依らないので node:test で回す（agentRequests.test.ts）
+import { uncheckedCount } from '../../shared/agentResults.ts'
 import { eventKind } from '../../shared/events.ts'
-import type { AgentRequest, AgentRequestItem, AgentRequestStatus, FeedRow } from '../../shared/types.ts'
+import type { AgentRequest, AgentRequestItem, AgentRequestResult, AgentRequestStatus, FeedRow } from '../../shared/types.ts'
 
 /** 数える順（見出しに並べる順） */
 const ORDER: readonly AgentRequestStatus[] = ['done', 'pending', 'held', 'failed']
@@ -16,14 +17,16 @@ export function requestCounts(items: readonly Pick<AgentRequestItem, 'status'>[]
 }
 
 /**
- * 見出しの 1 行。`3 件 · 返答あり 1 · 返答待ち 1 · 預かり 1`（0 件の状態は出さない）。
- * 返答ありでも返答の行が見つからないものは「返答あり」に数えず、`返答の行なし N` と別に書く（畳んだままで成果があるように見せない）
+ * 見出しの 1 行。`3 件 · 成果確認待ち 1 · 返答あり 1 · 返答待ち 1 · 預かり 1`（0 件の状態は出さない）。
+ * 返答ありでも返答の行が見つからないものは「返答あり」に数えず、`返答の行なし N` と別に書く（畳んだままで成果があるように見せない）。
+ * 成果確認待ち（#903）は人が「確認済み」にするまで数える（読んだだけでは減らない）
  */
 export function requestSummary(r: Pick<AgentRequest, 'items'>): string {
+  const unchecked = uncheckedCount(r.items)
   const lost = r.items.filter((i) => i.status === 'done' && !i.reply_ts).length
   const counts = requestCounts(r.items)
   counts.done -= lost
-  return [`${r.items.length} 件`, ...ORDER.filter((s) => counts[s] > 0).map((s) => `${REQUEST_STATUS_LABEL[s]} ${counts[s]}`), ...(lost > 0 ? [`返答の行なし ${lost}`] : [])].join(' · ')
+  return [`${r.items.length} 件`, ...(unchecked > 0 ? [`成果確認待ち ${unchecked}`] : []), ...ORDER.filter((s) => counts[s] > 0).map((s) => `${REQUEST_STATUS_LABEL[s]} ${counts[s]}`), ...(lost > 0 ? [`返答の行なし ${lost}`] : [])].join(' · ')
 }
 
 /**
@@ -34,6 +37,12 @@ export function requestItemLabel(i: Pick<AgentRequestItem, 'status' | 'reply_ts'
   if (i.status === 'done' && !i.reply_ts) return '返答あり（返答の行が見つかりません）'
   if (i.status === 'failed' && i.halted) return '失敗（送っていません）'
   return REQUEST_STATUS_LABEL[i.status]
+}
+
+/** 成果の状態の語（#903）。確認済みは SAI の上の印だけ（許可・承認・マージではない） */
+export function resultLabel(r: Pick<AgentRequestResult, 'checked_at' | 'revised'>): string {
+  const what = r.revised ? '直したあとの成果' : '成果'
+  return r.checked_at ? `${what}: 確認済み` : `${what}: 確認待ち`
 }
 
 /** 秒に丸める（行の `ts` は秒まで） */

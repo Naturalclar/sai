@@ -86,7 +86,8 @@ export function agentRequests(
     .sort((a, b) => at(a.turn) - at(b.turn))
 }
 
-/** 詳細の rev に混ぜる鍵（#902）。状態と返答の行が変わったときだけ変わる */
+/** 詳細の rev に混ぜる鍵（#902）。状態・返答の行・確かめる成果（#903。直したあとの返答に移った・確認済みにした・PR）が変わったときだけ変わる */
 export function agentRequestsKey(requests: readonly AgentRequest[] | undefined): string {
-  return (requests ?? []).map((r) => `${r.turn}:${r.items.map((i) => `${i.message_id}=${i.status}${i.reply_ts ? `@${i.reply_ts}` : ''}`).join('+')}`).join(',')
+  const resultKey = (i: AgentRequest['items'][number]) => (i.result ? `!${i.result.ts}${i.result.checked_at ? `✓${i.result.checked_at}` : ''}${(i.result.prs ?? []).map((p) => `|${p.repo}#${p.number}`).join('')}` : '')
+  return (requests ?? []).map((r) => `${r.turn}:${r.items.map((i) => `${i.message_id}=${i.status}${i.reply_ts ? `@${i.reply_ts}` : ''}${resultKey(i)}`).join('+')}`).join(',')
 }

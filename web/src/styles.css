@@ -1358,6 +1358,17 @@
   .agent-activity .recent li.held .status { color: var(--ink); }
   .agent-activity .recent li.done .status { color: var(--accent); }
   .agent-activity .recent a.reply-link { white-space: nowrap; flex-shrink: 0; }
+  /* 成果の確認（#903）。行は「相手・状態」の 1 段と「成果・確かめる先・確認済みにする」の 1 段。狭い画面でも押せる大きさで折り返す */
+  .request-progress .recent li { flex-direction: column; gap: 2px; }
+  .request-progress .recent .line { display: flex; gap: 8px; min-width: 0; flex-wrap: wrap; }
+  .request-progress .recent .result { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; padding-left: 14px; }
+  .request-progress .result-state { color: var(--claude); font-weight: 600; white-space: nowrap; }
+  .request-progress .result.checked .result-state { color: var(--muted); font-weight: normal; }
+  .request-progress.unchecked { border-color: color-mix(in srgb, var(--claude) 45%, var(--line)); }
+  .request-progress .result-check { display: inline-flex; gap: 6px; align-items: center; }
+  .request-progress .result-check button { font: inherit; font-size: 12px; padding: 4px 12px; min-height: 28px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; }
+  .request-progress .result-check button:disabled { opacity: .5; cursor: default; }
+  .request-progress .result-check .err { color: var(--claude); }
   .agent-activity .agent-stop { margin-left: auto; display: inline-flex; gap: 6px; align-items: center; }
   .agent-activity .agent-stop .err { color: var(--claude); }
   /* 枠を出していないときの「送信を止める」（#823）。見出しの操作に並ぶので、ほかの操作と同じ見た目 */

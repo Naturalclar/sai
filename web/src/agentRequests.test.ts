@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { afterTurnKey, placeRequests, requestItemLabel, requestSummary } from './agentRequests.ts'
-import type { AgentRequest, FeedRow } from '../../shared/types.ts'
+import { afterTurnKey, placeRequests, requestItemLabel, requestSummary, resultLabel } from './agentRequests.ts'
+import type { AgentRequest, AgentRequestResult, FeedRow } from '../../shared/types.ts'
 
 const item = (message_id: string, status: AgentRequest['items'][number]['status'], extra: Partial<AgentRequest['items'][number]> = {}) => ({ message_id, to: 'b@r', to_name: 'セッション B', status, at: '2026-11-20T01:00:05Z', ...extra })
 
@@ -57,4 +57,16 @@ test('カードを出すのはこのセッションのターン完了の返答�
   assert.equal(afterTurnKey({ row: turnRow(ts) }, 'agent', shown), ts)
   assert.equal(afterTurnKey({ row: turnRow(ts) }, 'agent', shown), '', '同じ ts の 2 つ目には出さない')
   assert.equal(afterTurnKey({ row: turnRow('2026-11-20T01:06:00Z') }, 'agent', shown), '2026-11-20T01:06:00Z')
+})
+
+test('成果確認待ち（#903）は見出しの件数のすぐ後に数え、確認済みにしたら数えない。成果の語は直したあとかどうかも書く', () => {
+  const r: AgentRequestResult = { ts: '2026-11-20T01:10:00Z' }
+  assert.equal(
+    requestSummary({ items: [item('a', 'done', { reply_ts: r.ts, result: r }), item('b', 'done', { reply_ts: r.ts, result: { ...r, checked_at: '2026-11-20T02:00:00Z' } }), item('c', 'pending')] }),
+    '3 件 · 成果確認待ち 1 · 返答あり 2 · 返答待ち 1',
+  )
+  assert.equal(requestSummary({ items: [item('b', 'done', { reply_ts: r.ts, result: { ...r, checked_at: '2026-11-20T02:00:00Z' } })] }), '1 件 · 返答あり 1')
+  assert.equal(resultLabel(r), '成果: 確認待ち')
+  assert.equal(resultLabel({ ...r, revised: true }), '直したあとの成果: 確認待ち')
+  assert.equal(resultLabel({ ...r, checked_at: '2026-11-20T02:00:00Z' }), '成果: 確認済み')
 })
